@@ -386,6 +386,9 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
     else
         oflags = parent->flags &~ be_openurl_flag_NOCACHE;
 
+    if (flags & fe_open_url_NO_ENCODING_OVERRIDE)
+	oflags |= be_openurl_flag_NO_ENCODING_OVERRIDE;
+    
     if ((flags & fe_open_url_FROM_HISTORY) || (parent->browser_mode == fe_browser_mode_HISTORY))
 	oflags |= be_openurl_flag_HISTORY;
 
@@ -416,6 +419,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, fe_post_inf
     /* Abort the current fetch before getting the new page */
     if ((flags & fe_open_url_FROM_FRAME) == 0)
 	fe_abort_fetch(parent, TRUE);
+
 
     STBDBG(("frontend_open_url: backend IN transient %d\n", parent->open_transient));
     ep = backend_open_url(parent, &parent->fetching, url, bfile, flags & fe_open_url_NO_REFERER ? NULL : referer, oflags);
@@ -841,6 +845,21 @@ void view_dump(const char *name)
     DBG(("scolling:    type %d bars %d,%d\n", v->scrolling, v->x_scroll_bar, v->y_scroll_bar));
     DBG(("stretch:     %d\n", v->stretch_document));
     DBG(("\n"));
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+void fe_save_text(fe_view v)
+{
+    if (v->displaying)
+    {
+	char buffer[128];
+	char *s = "<Wimp$ScrapDir>.NCFtext";
+#if DEBUG
+	backend_doc_saver_text(s, v->displaying);
+	sprintf(buffer, "filer_run %s", s);
+#endif
+    }
 }
 
 /* ------------------------------------------------------------------------------------------- */

@@ -54,8 +54,9 @@ def get_cvs_entries_dictionary(dirname):
 			while whole and whole[-1] in string.whitespace:
 				whole = whole[:-1]
 			#print '"%s"' % whole
-			[d1, name, rev, date, d2, d3] = string.splitfields(whole, '/')
-			dict[name] = [ rev, date ]
+			if whole != 'D':
+				[d1, name, rev, date, d2, d3] = string.splitfields(whole, '/')
+				dict[name] = [ rev, date ]
 		fobj.close()
 	except IOError:
 		pass

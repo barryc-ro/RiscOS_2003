@@ -40,6 +40,10 @@
 #include "memflex.h"
 #include "printing.h"
 
+#if UNICODE
+#include "Unicode/charsets.h"
+#endif
+
 /* ----------------------------------------------------------------------------------------------------- */
 
 static fe_view get_source_view(const char *query, BOOL default_top);
@@ -62,14 +66,40 @@ static char *checked(int flag)
     return flag ? "CHECKED" : "";
 }
 
+static char *selected(int flag)
+{
+    return flag ? "SELECTED" : "";
+}
+
+static int limit(int val, int low, int high)
+{
+    if (val < low)
+	return low;
+    if (val > high)
+	return high;
+    return val;
+}    
+
 static void get_form_size(int *width, int *height)
 {
     int char_height;
 
-    *width = webfont_tty_width(text_safe_box.x1 - text_safe_box.x0, 0) - 8;
+    *width = (text_safe_box.x1 - text_safe_box.x0) / webfonts[WEBFONT_TTY].space_width - 8;
+/*  *width = webfont_tty_width(text_safe_box.x1 - text_safe_box.x0, 0) - 8; */
 
     char_height = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
     *height = (text_safe_box.y1 - text_safe_box.y0)/char_height - 12;
+}
+
+static void write_charset(FILE *f)
+{
+#if UNICODE
+    fprintf(f, "<META NAME=Content-Type CONTENT='text/html; charset=%s'>\n",
+	    config_encoding_internal == 0 ? "ISO-8859-1" :
+	    config_encoding_internal == 1 || config_encoding_internal == 2 ? "UTF-8" :
+	    config_encoding_internal == 3 ? "SHIFT_JIS" :
+	    config_encoding_internal == 4 ? "EUC-JP" : "US-ASCII");
+#endif
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -130,10 +160,13 @@ static void write_url_with_breaks(FILE *f, const char *url)
 static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 {
     char *qlink, *qtitle;
-
+    const char *lang;
+    
     qlink = extract_value(query, "url=");
     qtitle = extract_value(query, "title=");
 
+    lang = lang_num_to_name(backend_doc_item_language(doc, NULL));
+    
     fputs(msgs_lookup("versionT"), f);
     fprintf(f, msgs_lookup("version1"), ""/*fresco_version*/);
 
@@ -147,7 +180,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	backend_doc_info(doc, NULL, NULL, &url, &title);
 
 	if (title)
-	    fprintf(f, msgs_lookup("version2"), title);
+	    fprintf(f, msgs_lookup("version2"), lang, title);
 
 	if (should_we_display_url(url))
 	{
@@ -155,7 +188,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	    write_url_with_breaks(f, url);
 	}
 
-	if (access_get_header_info(url, NULL, &last_modified, &expires))
+	if (access_get_header_info(url, NULL, &last_modified, &expires, NULL))
 	{
 	    char rbuf[32];
 	    int dst, timezone;
@@ -182,13 +215,39 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	}
 
 	if ((s = backend_check_meta(doc, "author")) != NULL)
-	    fprintf(f, msgs_lookup("version6"), s);
+	    fprintf(f, msgs_lookup("version6"), lang, s);
 
 	if ((s = backend_check_meta(doc, "description")) != NULL)
-	    fprintf(f, msgs_lookup("version7"), s);
+	    fprintf(f, msgs_lookup("version7"), lang, s);
 
 	if ((s = backend_check_meta(doc, "copyright")) != NULL)
-	    fprintf(f, msgs_lookup("version8"), s);
+	    fprintf(f, msgs_lookup("version8"), lang, s);
+
+#if UNICODE
+	{
+	    char buf[32];
+	    int enc = backend_doc_encoding(doc, NULL, NULL);
+	    sprintf(buf, "encoding%d:", enc);
+	    s = msgs_lookup(buf);
+	    if (!s || !s[0])
+	    {
+		const char *ctype = backend_check_meta(doc, "content-type");
+		if (ctype)
+		{
+		    char *enc = parse_content_type_header_charset(s);
+		    if (enc)
+		    {
+			sprintf(buf, msgs_lookup("encodingX"), enc);
+			mm_free(enc);
+			s = buf;
+		    }
+		}
+	    }
+
+	    if (s && s[0])
+		fprintf(f, msgs_lookup("version9"), s);
+	}
+#endif
     }
 
     if (qlink)
@@ -208,7 +267,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	}
 
 	if (qtitle)
-	    fprintf(f, msgs_lookup("version2"), qtitle);
+	    fprintf(f, msgs_lookup("version2"), lang, qtitle);
 
 	if (link != qlink)
 	    mm_free(link);
@@ -301,16 +360,20 @@ static int internal_decode_print_options(const char *query, char **url)
 
 	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
 	}
+
 	if ((s = extract_value(query, "bg=")) != NULL)
 	{
 	    config_print_nobg = strcmp(s, "yes") != 0;
 	    mm_free(s);
+
 	    nvram_write(NVRAM_PRINT_BG_TAG, !config_print_nobg);
 	}
+
 	if ((s = extract_value(query, "images=")) != NULL)
 	{
 	    config_print_nopics = strcmp(s, "yes") != 0;
 	    mm_free(s);
+
 	    nvram_write(NVRAM_PRINT_IMAGES_TAG, !config_print_nopics);
 	}
 
@@ -340,10 +403,87 @@ static os_error *fe_print_options_write_file(FILE *f)
     fprintf(f, msgs_lookup("print.2"), checked(!config_print_nocol), checked(config_print_nocol));
     fprintf(f, msgs_lookup("print.3"), checked(!config_print_nobg), checked(config_print_nobg));
     fprintf(f, msgs_lookup("print.4"), checked(!config_print_nopics), checked(config_print_nopics));
+
     fputs(msgs_lookup("print.F"), f);
 
     /* center the print head - ignore errors */
     awp_command(printer_command_CENTRE_HEAD);
+
+    return NULL;
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
+static int internal_decode_options(const char *query, char **new_url)
+{
+    char *option = extract_value(query, "option=");
+
+    if (strcasecomp(option, "text") == NULL)
+    {
+	char *scale = extract_value(query, "scale=");
+	char *fit = extract_value(query, "fit=");
+
+	config_display_scale = config_display_scales[limit(atoi(scale), 0, 2)];
+	config_display_scale_fit = atoi(fit);
+
+	mm_free(scale);
+	mm_free(fit);
+    }
+    else if (strcasecomp(option, "fonts") == NULL)
+    {
+	char *encoding = extract_value(query, "encoding=");
+	char *override = extract_value(query, "override=");
+
+	config_encoding_user = atoi(encoding);
+	config_encoding_user_override = atoi(override);
+
+	mm_free(encoding);
+	mm_free(override);
+    }
+
+    mm_free(option);
+
+    *new_url = strdup("ncint:current");
+
+    return fe_internal_url_REDIRECT;
+}
+
+static os_error *fe_options_write_file(FILE *f, const char *option)
+{
+    fprintf(f, msgs_lookup("options.T"), option);
+    fprintf(f, msgs_lookup("options.1"), option);
+
+    if (strcasecomp(option, "text") == NULL)
+    {
+	fprintf(f, msgs_lookup("options.text.1"),
+		checked(config_display_scale == config_display_scales[0]),
+		checked(config_display_scale == config_display_scales[1]),
+		checked(config_display_scale == config_display_scales[2]));
+
+	fprintf(f, msgs_lookup("options.text.2"),
+		checked(config_display_scale_fit),
+		checked(!config_display_scale_fit));
+    }
+    else if (strcasecomp(option, "fonts") == NULL)
+    {
+#if UNICODE
+	fprintf(f, msgs_lookup("options.fonts.1"),
+		selected(config_encoding_user == csWindows1252),
+		selected(config_encoding_user == csAutodetectJP),
+		selected(config_encoding_user == csEUCPkdFmtJapanese),
+		selected(config_encoding_user == csShiftJIS),
+		selected(config_encoding_user == csISO2022JP),
+		selected(config_encoding_user == csGB2312),
+		selected(config_encoding_user == csBig5),
+		selected(config_encoding_user == csEUCKR),
+		selected(config_encoding_user == csISO2022KR));
+	fprintf(f, msgs_lookup("options.fonts.2"),
+		checked(config_encoding_user_override),
+		checked(!config_encoding_user_override));
+#endif
+    }
+
+    fprintf(f, msgs_lookup("options.F"), option);
 
     return NULL;
 }
@@ -1299,6 +1439,9 @@ static int internal_url_openpanel(const char *query, const fe_post_info *bfile, 
 	FILE *f = mmfopen(file, "w");
 	os_error *e = NULL;
 
+	/* add a meta tag with the internal encoding used */
+	write_charset(f);
+	
 	if (strcasecomp(panel_name, "displayoptions") == 0)
 	{
 	    sound_event(snd_DISPLAY_OPTIONS_SHOW);
@@ -1478,6 +1621,16 @@ static int internal_url_openpanel(const char *query, const fe_post_info *bfile, 
 	{
 	    sound_event(snd_ERROR);
 	    e = fe_error_write_file(f, query);
+	}
+	else if (strcasecomp(panel_name, "options") == 0)
+	{
+	    char *option = extract_value(query, "option=");
+
+	    sound_event(snd_MENU_SHOW);
+
+ 	    e = fe_options_write_file(f, option);
+
+	    mm_free(option);
 	}
 
 	mmfclose(f);
@@ -2137,6 +2290,10 @@ static int internal_decode_process(const char *query, const fe_post_info *bfile,
     {
 	generated = internal_decode_history_recent(query, new_url, flags);
     }
+    else if (strcasecomp(page, "options") == 0)
+    {
+	generated = internal_decode_options(query, new_url);
+    }
 
     mm_free(page);
 
@@ -2332,10 +2489,12 @@ os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args
         STBDBG(("fe_internal_toggle_panel(%s): opening '%s'\n", panel_name,
                 url));
 
-	e = frontend_open_url(url, NULL, target, NULL, fe_open_url_NO_CACHE);
+	e = frontend_open_url(url, NULL, target, NULL, fe_open_url_NO_CACHE | fe_open_url_NO_ENCODING_OVERRIDE);
     }
     else
+    {
         STBDBG(("fe_internal_toggle_panel(%s): NOT opening\n", panel_name));
+    }
 
     return e;
 }

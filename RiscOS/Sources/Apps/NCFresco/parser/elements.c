@@ -100,7 +100,7 @@ extern BOOL default_attributes(SGMLCTX *context, ELEMENT *element, VALUES *value
     return TRUE;
 }
 
-typedef VALUE (*parse_table_fn) (SGMLCTX *, ATTRIBUTE *, STRING);
+typedef VALUE (*parse_table_fn) (SGMLCTX *, ATTRIBUTE *, USTRING);
 static parse_table_fn parse_table [] =
 {
     sgml_do_parse_void ,
@@ -115,7 +115,6 @@ static parse_table_fn parse_table [] =
     sgml_do_parse_stdunit_void,
     sgml_do_parse_stdunit_list,
     sgml_do_parse_enum_string,
-    sgml_do_parse_enum_case,
     sgml_do_parse_bool,
     sgml_do_parse_colour
 };
@@ -924,9 +923,9 @@ extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 
 static void parse_then_perform_element_open(SGMLCTX *context)
 {
-    STRING s, attribute_string, value_string;
+    USTRING s, attribute_string, value_string;
     ELEMENT *element;
-    char *inhand = context->inhand.data;
+    UCHARACTER *inhand = context->inhand.data;
     int six = 1, eix = 2, nix, elem_number, attribute_number, ap = 1;
     VALUES values;
     int guessed[(SGML_MAXIMUM_ATTRIBUTES+31)/32];
@@ -944,13 +943,13 @@ static void parse_then_perform_element_open(SGMLCTX *context)
 	eix++;
 
     s.ptr = inhand + six;
-    s.bytes = eix - six;
+    s.nchars = eix - six;
     elem_number = find_element(context, s);
 
     if (elem_number == SGML_NO_ELEMENT)
     {
 #if SGML_REPORTING
-	sgml_note_unknown_element(context, "Unknown element <%.*s>", min(s.bytes, MAXSTRING), s.ptr);
+	sgml_note_unknown_element(context, "Unknown element <%.*s>", min(s.nchars, MAXSTRING), usafe(s));
 #endif
 
 	/* Zero the attribute values; the 'done' code tries to free them! */
@@ -985,7 +984,7 @@ static void parse_then_perform_element_open(SGMLCTX *context)
 	    eix ++;
 
 	attribute_string.ptr = &inhand[six];
-	attribute_string.bytes = eix - six;
+	attribute_string.nchars = eix - six;
 
 	six = eix;
 	while ( is_whitespace( inhand [six] ) )
@@ -1050,7 +1049,7 @@ static void parse_then_perform_element_open(SGMLCTX *context)
 	}
 
 	value_string.ptr = &inhand[six];
-	value_string.bytes = eix - six;
+	value_string.nchars = eix - six;
 
 	attribute_number = find_attribute (context, element, attribute_string, &this_guessed);
 
@@ -1059,8 +1058,8 @@ static void parse_then_perform_element_open(SGMLCTX *context)
 #if SGML_REPORTING
 	    sgml_note_unknown_attribute(context, "Unknown attribute in <%s %.*s>",
 					element->name.ptr,
-					min(attribute_string.bytes, MAXSTRING),
-					attribute_string.ptr);
+					min(attribute_string.nchars, MAXSTRING),
+					usafe(attribute_string));
 #endif
 	}
 	/* only ignore if duplicated and the first try wasn't a guess */
@@ -1069,8 +1068,8 @@ static void parse_then_perform_element_open(SGMLCTX *context)
 #if SGML_REPORTING
 	    sgml_note_message(context, "Duplicated attribute in <%s %.*s>%s",
 			      element->name.ptr,
-			      min(attribute_string.bytes, MAXSTRING),
-			      attribute_string.ptr,
+			      min(attribute_string.nchars, MAXSTRING),
+			      usafe(attribute_string),
 			      this_guessed ? " (guessed)" : "");
 #endif
 	}
@@ -1084,10 +1083,10 @@ static void parse_then_perform_element_open(SGMLCTX *context)
 		BIT_SET(guessed, attribute_number);
 	    }
 	    
-#if 1	    /* This should supply attribute values expanding entities */
-	    value_string.bytes = sgml_translation(context, value_string.ptr, value_string.bytes,
-				     SGMLTRANS_AMPERSAND | SGMLTRANS_HASH | SGMLTRANS_STRIP_NEWLINES);
-#endif
+	    /* This should supply attribute values expanding entities */
+ 	    value_string.nchars = sgml_translation(context, value_string.ptr, value_string.nchars,
+ 				     SGMLTRANS_AMPERSAND | SGMLTRANS_HASH | SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_STRICT);
+
 	    values.value [attribute_number] =
 		(*parse_table [attribute->parse])
 		(context, attribute, value_string );
@@ -1108,28 +1107,33 @@ done:
 
 static void parse_then_perform_element_close(SGMLCTX *context)
 {
-    STRING s;
+    USTRING s;
     ELEMENT *element;
-    char *inhand = context->inhand.data;
+    UCHARACTER *inhand = context->inhand.data;
     int six = 2, eix = 3;
     int elem_number;
 
     ASSERT(context->magic == SGML_MAGIC);
 
-    PRSDBGN(("\n-----------------------------------------------------------------------------\nparse_then_perform_element_close '%.*s'\n", context->inhand.ix, inhand));
-
+#if DEBUG
+    s.ptr = inhand;
+    s.nchars = context->inhand.ix;
+    PRSDBGN(("\n-----------------------------------------------------------------------------\nparse_then_perform_element_close '%.*s'\n",
+	     context->inhand.ix, usafe(s)));
+#endif
+    
     while ( is_element_body_character( inhand[eix] ) )
 	eix++;
 
     s.ptr = inhand + six;
-    s.bytes = eix - six;
+    s.nchars = eix - six;
 
     elem_number = find_element (context, s);
 
     if ( elem_number == SGML_NO_ELEMENT )
     {
 #if SGML_REPORTING
-	sgml_note_unknown_element(context, "Unknown element <%.*s>", min(s.bytes, MAXSTRING), s.ptr);
+	sgml_note_unknown_element(context, "Unknown element <%.*s>", min(s.nchars, MAXSTRING), usafe(s));
 #endif
 	goto done;
     }
@@ -1195,12 +1199,12 @@ done:
 
 extern void do_got_element(SGMLCTX *context)
 {
-    static STRING s = { NULL, 0 };
+    static USTRING s = { NULL, 0 };
 
     /* inhand holds precisely the open < to the close > */
 
-    BUFFER *inhand = &context->inhand;
-    char sw = inhand->data[1];
+    UBUFFER *inhand = &context->inhand;
+    UCHARACTER sw = inhand->data[1];
 
     ASSERT(context->magic == SGML_MAGIC);
     ASSERT( inhand->data != NULL );
@@ -1212,7 +1216,7 @@ extern void do_got_element(SGMLCTX *context)
     {
 	(*context->deliver) (context,
 			     DELIVER_SGML,
-			     mkstring(context->inhand.data, context->inhand.ix), NULL );
+			     mkstringu(context->encoding_write, context->inhand.data, context->inhand.ix), NULL );
 	clear_inhand(context);
     }
     else if (sw == '/')

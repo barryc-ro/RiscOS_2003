@@ -66,16 +66,17 @@
 
 /* ----------------------------------------------------------------------------- */
 
-static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int fwidth, int *iw, int *ih, int scalefactor )
+static void oimage_size_alt_text(antweb_doc *doc, const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, const rid_text_item *ti, int fwidth, int *iw, int *ih, int scalefactor )
 {
     font_string fs;
+    int whichfont;
     struct webfont *wf;
     int imw, imh;
 
     IMGDBG(("Sizing alt text: %d,%d\n", *iw, *ih));
 
     /* if we are not deferring images and either have alt text or both sizes are specified then use what we've got */
-    if (alt == NULL || (!defer_images && req_ww->type != value_none && req_hh->type == value_absunit))
+    if (alt == NULL || (/* !defer_images &&  */req_ww->type != value_none && req_hh->type == value_absunit))
     {
 	switch (req_ww->type)
 	{
@@ -96,13 +97,18 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 
 #ifndef BUILDERS
     {
-	wf = &webfonts[ALT_FONT];
-
-	font_setfont(wf->handle);
+	whichfont = antweb_getwebfont(doc, (rid_text_item *)ti, ALT_FONT);
+	wf = &webfonts[whichfont];
+/* 	wf = &webfonts[ALT_FONT]; */
 
         /* if no width given then use what we need */
-        if (defer_images || req_ww->type == value_none)
+        if (/* defer_images ||  */req_ww->type == value_none)
         {
+#if 1
+	    fs.x = webfont_font_width(whichfont, alt ? alt : NONE_STRING);
+#else
+	    font_setfont(wf->handle);
+
 	    fs.x = 1 << 30;
 	    fs.y = 1 << 30;
 	    fs.split = -1;
@@ -112,9 +118,9 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 	    font_strwidth(&fs);
 
 	    fs.x /= MILIPOINTS_PER_OSUNIT;
-
+#endif
 	    imw = fs.x + PLINTH_PAD;
-	    imh = (defer_images || req_hh->type != value_absunit)
+	    imh = (/* defer_images ||  */req_hh->type != value_absunit)
 	             ? (wf->max_up + wf->max_down + PLINTH_PAD*2)
 	             : (int)(req_hh->u.f * scalefactor / 50.0); /* "*2/100" */
         }
@@ -138,7 +144,7 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 
 	    if (ww > PLINTH_PAD)
 	    {
-		write_text_in_box_height(alt, ww - PLINTH_PAD, wf->handle, &height);
+		write_text_in_box_height(alt, ww - PLINTH_PAD, whichfont, &height);
 		imh = height + PLINTH_PAD;
 	    }
 	    else
@@ -157,14 +163,14 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
     IMGDBG(("Done sizing alt text: %d,%d\n", *iw, *ih));
 }
 
-void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int fwidth, int *iw, int *ih)
+void oimage_size_image(antweb_doc *doc, const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, rid_text_item *ti, int scale_value, int fwidth, int *iw, int *ih)
 {
     int width, height;
 
     width = (*iw * scale_value)/100;
     height = (*ih * scale_value)/100;
 
-    IMGDBG(("oimage_size_image: old width %d, height %d, scale %d%% rid flags 0x%x\n", *iw, *ih, scale_value, flags));
+    IMGDBG(("oimage_size_image: old width %d, height %d, scale %d%% rid flags 0x%x text_flags 0x%x\n", *iw, *ih, scale_value, flags, ti->flag));
 
     /* if we have an image
      *   if two sizes specified then use those
@@ -220,7 +226,7 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
     {
         /* if not real then size from the text */
 #ifndef BUILDERS
-	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, fwidth, &width, &height, scale_value);
+	oimage_size_alt_text(doc, alt, req_ww, req_hh, flags, ti, fwidth, &width, &height, scale_value);
 #else
 	width = 16;
 	height = 16;
@@ -279,17 +285,21 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
     if (text)
     {
 	wimp_box box;
-	struct webfont *wf;
+	int whichfont;
+/* 	struct webfont *wf; */
 	int tfc;
 
-	wf = &webfonts[ALT_FONT];
+	whichfont = antweb_getwebfont(doc, ti, ALT_FONT);
+#if 0
+ 	wf = &webfonts[whichfont];
+/* 	wf = &webfonts[ALT_FONT]; */
 
 	if (fs->lf != wf->handle)
 	{
 	    fs->lf = wf->handle;
 	    font_setfont(fs->lf);
 	}
-
+#endif
 	if (fs->lfc != (tfc = render_link_colour(ti, doc) ) || fs->lbc != render_colour_BACK)
 	{
 	    fs->lfc = tfc;
@@ -302,7 +312,7 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
 	box.x1 = bbox->x1 - PLINTH_PAD/2;
 	box.y0 = bbox->y0 + PLINTH_PAD/2;
 	box.y1 = bbox->y1 - PLINTH_PAD/2;
-	write_text_in_box(fs->lf, text, &box);
+	write_text_in_box(whichfont, text, &box);
     }
 }
 #endif
@@ -483,9 +493,7 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     if (fl & image_flag_REALTHING)
 	tii->flags |= rid_image_flag_REAL;
 
-    antweb_doc_ensure_font( doc, ALT_FONT );
-
-    oimage_size_image(tii->alt, &tii->ww, &tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
+    oimage_size_image(doc, tii->alt, &tii->ww, &tii->hh, tii->flags, ti, doc->scale_value, fwidth, &width, &height);
 
     /* DAF: Formatter doesn't invisible objects please */
     if (width < 1)

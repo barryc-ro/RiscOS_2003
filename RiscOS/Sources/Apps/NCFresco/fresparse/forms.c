@@ -12,8 +12,13 @@
 
 
 #include "htmlparser.h"
+#include "webfonts.h"
 
-extern void translate_escaped_text(char *src, char *dest, int len);
+#if UNICODE
+#include "Unicode/charsets.h"
+#endif
+
+/* extern void translate_escaped_text(char *src, char *dest, int len); */
 
 extern void startform (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
@@ -24,7 +29,8 @@ extern void startform (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 		  &attributes->value[HTML_FORM_METHOD],
 		  &attributes->value[HTML_FORM_TARGET],
 		  &attributes->value[HTML_FORM_ID],
-		  &attributes->value[HTML_FORM_ENCTYPE]);
+		  &attributes->value[HTML_FORM_ENCTYPE],
+		  &attributes->value[HTML_FORM_ACCEPT_CHARSET]);
 }
 
 #if 0
@@ -251,21 +257,29 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	break;
     case rid_it_TEXT:
     case rid_it_PASSWD:
-	in->data.str = mm_malloc(in->max_len + 1); /* SJM: Add 1 for the terminating null, was added to max_len originally */
+#if UNICODE
+	if (context->enc_num_write == csUTF8)
+	    in->data.str = mm_malloc(in->max_len*6 + 1); /* allocate maximum possible in UTF8 */
+	else
+#endif
+	    in->data.str = mm_malloc(in->max_len + 1); /* SJM: Add 1 for the terminating null, was added to max_len originally */
 	if (in->value)
 	{
-	    translate_escaped_text(in->value, in->data.str, in->max_len + 1); /* add one here as len is len of output buffer */
+/* 	    translate_escaped_text(in->value, in->data.str, in->max_len + 1); */ /* add one here as len is len of output buffer */
+	    strcpy(in->data.str, in->value);
 	}
 	else
 	{
 	    in->data.str[0] = 0;
 	}
 
+#ifdef STBWEB
 	/* we've used WIDTH as a pixel width and some morons out there use WIDTH when they mean SIZE
 	 * so WIDTH is only understood if SIZE is also specified
 	 */
 	if (in->ww.type != value_none && in->xsize == -1)
 	    in->ww.type = value_none;
+#endif
 	break;
     case rid_it_IMAGE:
     {
@@ -280,12 +294,24 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	nb->tag = rid_tag_INPUT;
 /* 	if (flags & rid_flag_LINE_BREAK) */
 /* 	    nb->flag |= rid_flag_LINE_BREAK; */
+#if NEW_BREAKS
+	if (me->mode == HTMLMODE_PRE || me->no_break) /* We need to be able to have both flags set */
+	    SET_BREAK(nb->flag, rid_break_MUST_NOT);
+#else
 	if (me->mode == HTMLMODE_PRE || me->no_break) /* We need to be able to have both flags set */
 	    nb->flag |= rid_flag_NO_BREAK;
+#endif
+
+#if UNICODE
+	if (in->value && webfont_need_wide_font(in->value, strlen(in->value)))
+	    nb->flag |= rid_flag_WIDE_FONT;
+#endif
+
 	nb->aref = me->aref;	/* Current anchor, or NULL */
 	if (me->aref && me->aref->first == NULL)
 	    me->aref->first = nb;
 	GET_ROSTYLE(nb->st);
+	nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
 	rid_text_item_connect(me->rh->curstream, nb);
     }
@@ -296,6 +322,8 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 extern void startselect (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     generic_start (context, element, attributes);
+
+    set_lang(context, &attributes->value[HTML_SELECT_LANG]);
 
     text_item_push_select(htmlctxof(context),
 			  &attributes->value[HTML_SELECT_NAME],
@@ -360,8 +388,9 @@ extern void startoption (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 
     new_option_item(me,
 		    &attributes->value[HTML_OPTION_VALUE],
+		    &attributes->value[HTML_OPTION_LANG],
 		    (attributes->value[HTML_OPTION_DISABLED].type != value_none ? rid_if_DISABLED : 0) +
-		    (attributes->value[HTML_OPTION_SELECTED].type != value_none ? rid_if_CHECKED : 0) );
+		    (attributes->value[HTML_OPTION_SELECTED].type != value_none ? rid_if_CHECKED : 0));
 
     ASSERT(me->last_mode == HTMLMODE_BOGUS);
 
@@ -382,15 +411,27 @@ extern void finishoption (SGMLCTX * context, ELEMENT * element)
         STRING s;
 
 	opt = me->form->last_select->last_option;
-
-	PRSDBG(("Option text='%.*s'\n", me->inhand_string.bytes, me->inhand_string.ptr));
-
         s = me->inhand_string;
 
         /* Expand the entities and strip newlines */
-        s.bytes = sgml_translation(context, s.ptr, s.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL);
+/*       s.nchars = sgml_translation(context, s.ptr, s.nchars, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL); */
 
+	/* SJM: FIXME: check this still works, entity translation should have been done in state machine */
 	opt->text = stringdup(string_strip_space(s));
+
+	PRSDBG(("Option text='%s'\n", opt->text));
+
+	/* check for wide font necessity and record in main item */
+	PRSDBG(("finishoption: item %p flags %x\n", me->rh->curstream->text_last, me->rh->curstream->text_last->flag));
+
+	if ((me->rh->curstream->text_last->flag & rid_flag_WIDE_FONT) == 0)
+	{
+	    if (webfont_need_wide_font(s.ptr, s.nchars))
+	    {
+		PRSDBG(("finishoption: wide\n"));
+		me->rh->curstream->text_last->flag |= rid_flag_WIDE_FONT;
+	    }
+	}
     }
     else
     {

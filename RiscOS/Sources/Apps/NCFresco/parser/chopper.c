@@ -2,6 +2,9 @@
 /* (C) Copyright ANT Limited 1996. All rights reserved. */
 
 #include "sgmlparser.h"
+#if UNICODE
+# include "unictype.h"
+#endif
 
 /*****************************************************************************
 
@@ -37,7 +40,7 @@
 
   */
 
-static void eol_sm(sgml_chopper_state *st, char c, int *line)
+static void eol_sm(sgml_chopper_state *st, UCHARACTER c, int *line)
 {
     /* end of line spotting and counting state machine */
     switch (st->s2)
@@ -76,14 +79,269 @@ static void eol_sm(sgml_chopper_state *st, char c, int *line)
 
  */
 
-extern void sgml_fmt_word_chopper(SGMLCTX *context, STRING input)
+#if UNICODE
+
+/*
+ * s1 = chop_state
+ * s2 = eol state
+ * s3 = was last non-space char ideographic
+ * s4 = was last char nobreaking
+ */
+
+typedef enum
+{
+    UNDECIDED,			/* first three as old state machine */
+    LETTER,
+    SPACE,
+    PSTART,
+    PEND,
+    MARK
+} chop_state;
+
+static chop_state decode_ctype(int ctype)
+{
+    switch (ctype)
+    {
+    case unictype_SEPARATOR_SPACE:
+    case unictype_SEPARATOR_PARA:
+	return SPACE;
+    case unictype_PUNCTUATION_OPEN:
+	return PSTART;
+    case unictype_PUNCTUATION_CLOSE:
+	return PEND;
+    case unictype_PUNCTUATION_DASH:
+    case unictype_UNKNOWN:
+    case unictype_LETTER:
+    case unictype_NUMBER:
+    case unictype_SYMBOL:
+    case unictype_OTHER:
+	return LETTER;
+    case unictype_MARK:
+	return MARK;
+    }
+    return LETTER;
+}
+
+extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 {
     sgml_chopper_state *st = &context->chopper_state;
     int ix;
 
-    /*PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.bytes, input.ptr));*/
+    /*PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.nchars, input.ptr));*/
 
-    if (input.bytes == 0)
+    if (input.nchars == 0)
+    {
+	/*PRSDBGN(("sgml_fmt_word_chopper(): flushing\n"));*/
+
+	switch ((chop_state)st->s1)
+	{
+	case UNDECIDED:
+	    break;
+
+	case LETTER:
+	case PSTART:
+	case PEND:
+	case MARK:
+	    ASSERT(context->prechop.ix > 0);
+
+	    (*context->deliver)
+		(
+		    context,
+		    st->s4 ? DELIVER_WORD_NOBREAK : DELIVER_WORD,
+		    mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
+		    NULL
+		    );
+	    break;
+
+	case SPACE:
+	    if (!st->s3)
+		context->deliver(context, DELIVER_SPACE, space_string, NULL);
+	    break;
+	}
+
+	context->prechop.ix = 0;
+	st->s1 = UNDECIDED;
+	return;
+    }
+
+    for (ix = 0; ix < input.nchars; ix++)
+    {
+	UCHARACTER c = input.ptr[ix];
+	int ctype;		/* the type of this character */
+	chop_state new_state;	/* the state after this character */
+	BOOL deliver = FALSE;	/* shall er deliver the inhand data */
+	BOOL ideo;		/* is this character ideographic */
+	BOOL nobreak = FALSE;	/* we'd like this letter to stick to the last one */
+	
+	eol_sm(st, c, &context->line);
+
+	ctype = unictype_lookup((UCS2)c);
+	new_state = decode_ctype(ctype);
+	ideo = unictype_is_ideograph((UCS2)c);
+
+
+	if (new_state == SPACE)
+	{
+	    if (c > ' ')	/* SPACE > ' ' means nbsp or ideographic so maintain */
+		new_state = LETTER;
+	    else
+		c = ' ';
+	}
+
+	/* if changing between ideo and non-ideo then always create new word */
+	if (st->s1 != SPACE && new_state != SPACE)
+	{
+	    if (ideo != st->s3)
+		deliver = TRUE;
+	}
+
+	/* then check for whether word splitting should occur */
+	switch ((chop_state)st->s1)
+	{
+	case UNDECIDED:
+	    ASSERT(context->prechop.ix == 0);
+	    break;
+
+	case LETTER:			/* in a word */
+	    switch (new_state)
+	    {
+	    case PSTART:
+	    case LETTER:
+		if (ideo)
+		    deliver = TRUE;
+		break;
+
+	    case MARK:
+	    case PEND:
+		nobreak = TRUE;
+		break;
+		
+	    case SPACE:
+		deliver = TRUE;
+		break;
+	    }
+	    break;
+
+	case PSTART:
+	    switch (new_state)
+	    {
+	    case LETTER:
+	    case PSTART:
+	    case PEND:
+	    case MARK:
+		nobreak = TRUE;
+		break;
+
+	    case SPACE:
+		deliver = TRUE;
+		break;
+	    }
+	    break;
+	    
+	case PEND:
+	    switch (new_state)
+	    {
+	    case LETTER:
+	    case PSTART:
+		if (ideo)
+		    deliver = TRUE;
+		break;
+
+	    case MARK:
+	    case PEND:
+		nobreak = TRUE;
+		break;
+
+	    case SPACE:
+		deliver = TRUE;
+		break;
+	    }
+	    break;
+	    
+	case MARK:
+	    switch (new_state)
+	    {
+	    case LETTER:
+	    case PSTART:
+		if (ideo)
+		    deliver = TRUE;
+		break;
+
+	    case PEND:
+	    case MARK:
+		nobreak = TRUE;
+		break;
+
+	    case SPACE:
+		deliver = TRUE;
+		break;
+	    }
+	    break;
+	    
+	case SPACE:
+	    switch (new_state)
+	    {
+	    case LETTER:
+	    case PSTART:
+	    case PEND:
+	    case MARK:
+		deliver = TRUE;
+		break;
+
+	    case SPACE:
+		break;
+	    }
+	    break;
+	}
+
+	if (deliver)
+	{
+	    /* We only want to deliver this space if either
+	     *   The non-space before it was non-ideo, or
+	     *   The current char is non-ideo
+	     */
+	    if ((chop_state)st->s1 == SPACE)
+	    {
+		if (!ideo || !st->s3)
+		    context->deliver(
+			context,
+			DELIVER_SPACE,
+			space_string,
+			NULL
+			);
+	    }
+	    else
+	    {
+		context->deliver(
+		    context,
+		    st->s4 ? DELIVER_WORD_NOBREAK : DELIVER_WORD,
+		    mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
+		    NULL
+		    );
+	    }
+
+	    context->prechop.ix = 0;
+	}
+
+	st->s1 = (int)new_state;
+	if (new_state != SPACE)
+	    st->s3 = ideo;
+	st->s4 = nobreak;
+	
+	add_to_prechop_buffer(context, c);
+    }
+}
+
+#else
+
+extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
+{
+    sgml_chopper_state *st = &context->chopper_state;
+    int ix;
+
+    /*PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.nchars, input.ptr));*/
+
+    if (input.nchars == 0)
     {
 	/*PRSDBGN(("sgml_fmt_word_chopper(): flushing\n"));*/
 
@@ -99,7 +357,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, STRING input)
 		(
 		    context,
 		    DELIVER_WORD,
-		    mkstring(context->prechop.data, context->prechop.ix),
+		    mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
 		    NULL
 		    );
 	    break;
@@ -114,9 +372,9 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, STRING input)
 	return;
     }
 
-    for (ix = 0; ix < input.bytes; ix++)
+    for (ix = 0; ix < input.nchars; ix++)
     {
-	char c = input.ptr[ix];
+	UCHARACTER c = input.ptr[ix];
 	const BOOL ws = c < 33 || c == 127;
 
 	eol_sm(st, c, &context->line);
@@ -138,7 +396,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, STRING input)
 		    (
 			context,
 			DELIVER_WORD,
-			mkstring(context->prechop.data, context->prechop.ix),
+			mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
 			NULL
 			);
 		st->s1 = 2;	/* space */
@@ -163,9 +421,10 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, STRING input)
 	    break;
 	}
 
-	add_to_buffer(&context->prechop, c);
+	add_to_prechop_buffer(context, c);
     }
 }
+#endif
 
 /*****************************************************************************
 
@@ -178,15 +437,15 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, STRING input)
 
   */
 
-extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input)
+extern void sgml_pre_word_chopper(SGMLCTX *context, USTRING input)
 {
     sgml_chopper_state *st = &context->chopper_state;
     int ix;
 
     PRSDBGN(("sgml_pre_word_chopper(): '%.*s' (%d,%d,%d,%d)\n",
-	     input.bytes, input.ptr, st->s1,st->s2,st->s3,st->s4 ));
+	     input.nchars, input.ptr, st->s1,st->s2,st->s3,st->s4 ));
 
-    if (input.bytes == 0)
+    if (input.nchars == 0)
     {
 	PRSDBGN(("sgml_pre_word_chopper(): flushing\n"));
 
@@ -201,7 +460,7 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input)
 	    break;
 
 	case 3:
-	    context->deliver ( context, DELIVER_WORD, mkstring(context->prechop.data, context->prechop.ix), NULL );
+	    context->deliver ( context, DELIVER_WORD, mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix), NULL );
 	    break;
 	}
 
@@ -211,9 +470,9 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input)
 	return;
     }
 
-    for (ix = 0; ix < input.bytes && !context->pending_close; ix++) /* SJM: added check for close pending */
+    for (ix = 0; ix < input.nchars && !context->pending_close; ix++) /* SJM: added check for close pending */
     {
-	char c = input.ptr[ix];
+	UCHARACTER c = input.ptr[ix];
 	BOOL discard = FALSE;
 
 	eol_sm(st, c, &context->line);
@@ -298,14 +557,14 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input)
 	    ASSERT(context->prechop.ix > 0);
 	    if (c == '\r')
 	    {
-		(*context->deliver) ( context, DELIVER_WORD, mkstring(context->prechop.data, context->prechop.ix), NULL );
+		(*context->deliver) ( context, DELIVER_WORD, mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix), NULL );
 		context->prechop.ix = 0;
 		st->s1 = 1;
 		discard = TRUE;
 	    }
 	    else if (c == '\n')
 	    {
-		(*context->deliver) ( context, DELIVER_WORD, mkstring(context->prechop.data, context->prechop.ix), NULL );
+		(*context->deliver) ( context, DELIVER_WORD, mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix), NULL );
 		context->prechop.ix = 0;
 		st->s1 = 2;
 		discard = TRUE;
@@ -314,12 +573,12 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input)
 	}
 
 	if (! discard)
-	    add_to_buffer(&context->prechop, TIDY(c));
+	    add_to_prechop_buffer(context, TIDY(c));
     }
 #if DEBUG
     if (context->pending_close)
     {
-	PRSDBG(("sgml_pre_word_chopper(%p): aborted after %d of %d bytes\n", context, ix, input.bytes));
+	PRSDBG(("sgml_pre_word_chopper(%p): aborted after %d of %d nchars\n", context, ix, input.nchars));
     }
 #endif
 }
@@ -335,14 +594,14 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input)
 
 */
 
-extern void sgml_str_word_chopper(SGMLCTX *context, STRING input)
+extern void sgml_str_word_chopper(SGMLCTX *context, USTRING input)
 {
     sgml_chopper_state *st = &context->chopper_state;
     int ix;
 
-    /*PRSDBGN(("sgml_str_word_chopper(): %.*s\n", input.bytes, input.ptr));*/
+    /*PRSDBGN(("sgml_str_word_chopper(): %.*s\n", input.nchars, input.ptr));*/
 
-    if (input.bytes == 0)
+    if (input.nchars == 0)
     {
 	/* Flush actions */
 
@@ -353,9 +612,9 @@ extern void sgml_str_word_chopper(SGMLCTX *context, STRING input)
 
     context->prechop.ix = 0;
 
-    for (ix = 0; ix < input.bytes; ix++)
+    for (ix = 0; ix < input.nchars; ix++)
     {
-	const char c = input.ptr[ix];
+	const UCHARACTER c = input.ptr[ix];
 
 	eol_sm(st, c, &context->line);
 
@@ -364,10 +623,10 @@ extern void sgml_str_word_chopper(SGMLCTX *context, STRING input)
         /* pdh: translate tabs to spaces here */
         /* sjm: removed translation as that will prevent tab expansion later */
 	if (c != 0)
-	    add_to_buffer(&context->prechop, c);
+	    add_to_prechop_buffer(context, c);
     }
 
-    (*context->deliver) ( context, DELIVER_WORD, mkstring(context->prechop.data, context->prechop.ix), NULL );
+    (*context->deliver) ( context, DELIVER_WORD, mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix), NULL );
 
     context->prechop.ix = 0;
 }

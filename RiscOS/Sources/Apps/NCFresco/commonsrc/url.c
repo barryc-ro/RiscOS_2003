@@ -608,7 +608,7 @@ char *url_escape_chars(const char *s, const char *escapes)
     return strtrim(buffer); /* trim to exact length */
 }
 
-#define URL_UNRESERVED_CHARS	"$-_.+!*'(),"
+/* #define URL_UNRESERVED_CHARS	"$-_.+!*'()," */
 /* #define FORM_UNRESERVED_CHARS	"$-_.!*'()," */ /* don't want + as it is used for ' ' */
 #define FORM_UNRESERVED_CHARS	"*-.@_"
 
@@ -721,6 +721,67 @@ BOOL url_escape_file_to_file(FILE *in, FILE *out)
     }
 
     return !ferror(out) && !ferror(in);
+}
+
+#define HEXVAL(c1) ( (c1 > '9') ? (c1 - 'a' + 10) : (c1 - '0') )
+
+char *url_unescape_cat_n(char *output, const char *in, int output_size, int in_size, BOOL plus_translate)
+{
+    char *s, *end;
+    int i, sl;
+
+    sl = strlen(output);
+    
+    s = output + sl;			/* start wrinting */
+    end = s + output_size - 1;		/* end writing */
+    i = 0;				/* i=0,len from in */
+    
+    while (i < in_size && s < end)
+    {
+	int c = in[i++];
+
+	if (c == '%')
+	{
+	    if (in_size - i >= 2)
+	    {
+		int c1 = in[i++];
+		int c2 = in[i++];
+		if ( isxdigit(c1) && isxdigit(c2) )
+		{
+		    c1 = tolower(c1);
+		    c2 = tolower(c2);
+
+		    c = HEXVAL(c1) * 16 + HEXVAL(c2);
+		    if (c == 127 || (c < ' ' && !isspace(c)))
+			c = -1;
+		}
+	    }
+	}
+	else if (c == '+' && plus_translate)
+	{
+	    c = ' ';
+	}
+	else if (c == '\0')
+	    break;
+
+	if (c != -1)
+	    *s++ = c;
+    }
+    *s = 0;
+    return output;
+}
+
+char *url_unescape_cat(char *output, const char *in, int output_size, BOOL plus_translate)
+{
+    return url_unescape_cat_n(output, in, output_size, INT_MAX, plus_translate);
+}
+
+char *url_unescape(const char *url, BOOL plus_translate)
+{
+    int len = strlen(url) + 1;
+    char *s = mm_calloc(len, 1);
+
+    return url_unescape_cat_n(s, url, len, INT_MAX, plus_translate);
 }
 
 /*

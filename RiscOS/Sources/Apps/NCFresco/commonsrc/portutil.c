@@ -19,6 +19,10 @@
 #include "sgmlparser.h"
 #include "akbd.h"
 
+#if UNICODE
+# include "Unicode/languages.h"
+#endif
+
 #define MAX_LINE	256
 
 /* pmatch2 always does a case sensitive match and calls itself recursively */
@@ -498,8 +502,6 @@ static int find_tag(const char *tags[], const char *name)
 
  */
 
-#if 1
-
 static int add_tag(char *name, int name_len, char *value, int value_len, const char *tags[], name_value_pair *output, int free_offset)
 {
     int tag_num;
@@ -717,59 +719,6 @@ int parse_http_header(char *header_data, const char *tags[], name_value_pair *ou
     return unknown;
 }
 
-#else
-
-#define SEPARATORS ";\n\r"
-
-
-void parse_http_header(char *header_data, const char *tags[], char *values[])
-{
-    char *s;
-    int i;
-
-    /* zero the output array first */
-    for (i = 0; tags[i]; i++)
-        values[i] = NULL;
-
-    s = strtok(header_data, SEPARATORS);
-    if (s) do
-    {
-        char *name;
-        char *equals, *value;
-        int tag_num;
-
-        /* s is either NAME or VALUE or NAME=VALUE, whitespace can be anywhere */
-        name = skip_space(s);
-        value = "";
-        equals = strchr(s, '=');
-
-        if (equals)
-        {
-            *equals = '\0';
-            value = equals + 1;
-        }
-
-        tag_num = find_tag(tags, name);
-        if (tag_num != -1)
-        {
-            values[tag_num] = skip_space(value);
-        }
-        else
-        {
-            /* if searching for the null entry use full NAME=VALUE */
-            if (equals)
-                *equals = '=';
-
-            tag_num = find_tag(tags, "");
-            if (tag_num != -1)
-                values[tag_num] = name;
-        }
-    }
-    while ((s = strtok(NULL, SEPARATORS)) != NULL);
-}
-
-#endif
-
 /* ---------------------------------------------------------------------------------------------------------- */
 
 char *skip_space(const char *s)
@@ -779,8 +728,23 @@ char *skip_space(const char *s)
     return (char *)s;
 }
 
+char *skip_space_or_comma(const char *s)
+{
+    if (s) while (isspace(*s) || *s == ',')
+	s++;
+    return (char *)s;
+}
+
+char *skip_to_space_or_comma(const char *s)
+{
+    if (s) while (!isspace(*s) && *s != ',')
+	s++;
+    return (char *)s;
+}
+
 /* ---------------------------------------------------------------------------------------------------- */
 
+#if 0
 /* As originally used.
  * 'src' is a null-terminated string
  * 'dest' is an output buffer of size 'len' bytes.
@@ -800,20 +764,6 @@ extern void translate_escaped_text(char *src, char *dest, int len)
     dest[new_len] = 0;
 }
 
-extern char *strdup_unescaped(const char *src)
-{
-    char *dest = strdup(src);
-    int new_len;
-
-    new_len = sgml_translation(NULL,
-			       dest,
-			       strlen(dest), SGMLTRANS_PERCENT | SGMLTRANS_HASH );
-    dest[new_len] = 0;
-
-    return strtrim(dest);
-}
-
-
 #ifdef STBWEB
 extern void translate_escaped_form_text(char *src, char *dest, int len)
 {
@@ -829,7 +779,7 @@ extern void translate_escaped_form_text(char *src, char *dest, int len)
     dest[new_len] = 0;
 }
 #endif
-
+#endif
 
 /*****************************************************************************
 
@@ -1537,6 +1487,7 @@ void fskipline(FILE *in)
 /* ---------------------------------------------------------------------------------------------------- */
 
 #if 0
+/* SJM: wrote this lot but didn't use it - leave it here just in case */
 BOOL quoted_printable_necessary_n(const char *s, int len)
 {
     while (len-- && (c = *s++) != 0)
@@ -1595,6 +1546,82 @@ void quoted_printable_to_file(FILE *f, const char *s, int *pos)
     quoted_printable_to_file(f, s, INT_MAX, pos);    
 }
 #endif
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+#if UNICODE
+
+typedef struct
+{
+    char name[3];
+    char code;
+} lang_spec;
+
+/*
+ * This table must be in alphabetic order of language name (2 lwtter)
+ * For now the code number must agree with the font definition table in backend.c
+ */
+
+static lang_spec languages[] =
+{
+    { lang_GREEK	/* el */, 5 },
+    { lang_ENGLISH	/* en */, 1 },	
+    { lang_HEBREW	/* iw */, 7 },
+    { lang_JAPANESE	/* ja */, 2 },
+    { lang_KOREAN	/* ko */, 4 },
+    { lang_RUSSIAN	/* ru */, 6 },
+    { lang_CHINESE	/* zh */, 3 },
+};
+
+static int lang_compare_function(const void *ain, const void *bin)
+{
+    const char *ap = (const char *) ain;
+    const lang_spec *bp = (const lang_spec *) bin;
+
+    /* DBG(("lang_compare: '%s' with '%s'\n", ap, bp->name)); */
+
+    return strncasecomp( ap, bp->name, 2 );
+}
+
+#endif
+
+int lang_name_to_num(const char *s)
+{
+#if UNICODE
+    lang_spec *matchp = NULL;
+
+    if (s && s[0])
+	matchp = bsearch(s,
+			 languages,
+			 sizeof(languages) / sizeof(languages[0]),
+			 sizeof(languages[0]),
+			 lang_compare_function);
+
+    DBG(("lang_name_to_num: '%s' returns %d\n", s, matchp ? matchp->code : 0));
+    
+    return matchp ? matchp->code : 0;
+#else
+    return NULL;
+#endif
+}
+
+const char *lang_num_to_name(int num)
+{
+    char *out = "";
+#if UNICODE
+    int i;
+    for (i = 0; i < sizeof(languages) / sizeof(languages[0]); i++)
+	if (languages[i].code == num)
+	{
+	    out = languages[i].name;
+	    break;
+	}
+
+    DBG(("lang_num_to_name: %d returns '%s'\n", num, out));
+    
+#endif
+    return out;
+}
 
 /* ---------------------------------------------------------------------------------------------------- */
 

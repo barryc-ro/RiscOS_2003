@@ -44,3 +44,4 @@ os_error *makeerrorf(int n, ...);
 #define ERR_DEMO_VERSION        37
 #define ERR_NO_DISC_SPACE       38
 #define ERR_BAD_FILE_TYPE	39
+#define ERR_CANT_READ_URL_FILE	40

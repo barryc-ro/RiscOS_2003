@@ -43,10 +43,17 @@
 
 #include "htmlparser.h"
 
+#if UNICODE
+#include "Unicode/charsets.h"
+#include "autojp.h"
+#include "config.h"
+#endif
+
 #ifndef PARSE_DEBUG
 #define PARSE_DEBUG 0
 #endif
 
+#define DEFAULT_CHARSET csWindows1250
 
 static BOOL include_frames = FALSE;
 
@@ -120,6 +127,77 @@ static SGMLBACK def_callback =
 
 #endif
 
+#if UNICODE
+static void html_feed_characters(HTMLCTX *htmlctx, const char *buffer, int bytes)
+{
+    SGMLCTX *context = htmlctx->sgmlctx;
+    rid_header *rh;
+    
+    if (context->enc_num == csAutodetectJP)
+    {
+	int left = bytes;
+	int state = autojp_consume_string(&context->autodetect.enc_num, &context->autodetect.state, buffer, &left);
+
+	switch (state)
+	{
+	case autojp_ASCII:
+	    /* pass through as is */
+	    PRSDBG(("sgml_feed_characters: ASCII pass through '%.*s'\n", bytes, buffer));
+	    break;
+
+	case autojp_DECIDED:
+	    PRSDBG(("sgml_feed_characters: DECIDED %d pass through '%.*s' '%.*s'\n",
+		    context->autodetect.enc_num, 
+		    context->autodetect.inhand.ix,
+		    context->autodetect.inhand.data,
+		    bytes, buffer));
+
+	    DBG(("set_encoding AUTODETECT %d (inhand %d) language %d\n",
+		 context->autodetect.enc_num, context->autodetect.inhand.ix,
+		 lang_name_to_num(encoding_default_language(context->autodetect.enc_num))));
+
+	    rh = htmlctx->rh;
+	    
+	    /* set the encoding */
+	    sgml_set_encoding(context, context->autodetect.enc_num);
+
+ 	    /* tell frontend encoding and this base language - used to be after process pending (was there a good reason?) */
+	    rh->encoding = context->autodetect.enc_num;
+	    mm_free(rh->language);
+	    rh->language = strdup(encoding_default_language(context->autodetect.enc_num));
+	    rh->language_num = lang_name_to_num(rh->language);
+
+	    /* process the stuff pending */
+	    if (context->autodetect.inhand.ix)
+	    {
+		/* recurse in case we hit a META tag and need to change encoding again */
+		sgml_feed_characters(context, 
+				     context->autodetect.inhand.data,
+				     context->autodetect.inhand.ix);
+
+		/* mark buffer as used */
+		context->autodetect.inhand.ix = 0;
+	    }
+	    break;
+	
+	case autojp_UNDECIDED:
+	    PRSDBG(("sgml_feed_characters: UNDECIDED pass through '%.*s' adding last %d to inhand\n", bytes - left, buffer, left));
+
+	    /* add the undecided stuff to inhand */
+	    add_to_buffer(&context->autodetect.inhand, buffer + bytes - left, left);
+
+	    /* process the safe part of the buffer */
+	    bytes = bytes - left;
+	    break;
+	}
+    }
+
+    sgml_feed_characters( htmlctx->sgmlctx, buffer, bytes );
+}
+#else
+#define html_feed_characters(a,b,c) sgml_feed_characters((a)->sgmlctx, b, c)
+#endif
+
 /*****************************************************************************/
 
 /*	Character handling
@@ -130,7 +208,7 @@ static void HTRISCOS_put_character (HTMLCTX * me, char c)
 {
     PRSDBG(("HTRISCOS_put_character()\n"));
 
-    sgml_feed_characters( me->sgmlctx, &c, 1 );
+    html_feed_characters( me, &c, 1 );
 }
 
 /*	String handling
@@ -140,7 +218,7 @@ static void HTRISCOS_put_string (HTMLCTX * me, const char* s)
 {
     PRSDBG(("HTRISCOS_put_string()\n"));
     
-    sgml_feed_characters( me->sgmlctx, s, strlen(s) );
+    html_feed_characters( me, s, strlen(s) );
 }
 
 
@@ -148,7 +226,7 @@ static void HTRISCOS_write (HTMLCTX * me, const char* s, int l)
 {
     PRSDBG(("HTRISCOS_write()\n"));
 
-    sgml_feed_characters( me->sgmlctx, s, l );
+    html_feed_characters( me, s, l );
 }
 
 /*****************************************************************************/
@@ -198,7 +276,7 @@ static const HTMLCTXClass HTRISCOSeration = /* As opposed to print etc */
   */
 
 
-static HTMLCTX * core_HTMLToRiscos (void /*HTStream * output */ )
+static HTMLCTX * core_HTMLToRiscos (int encoding )
 {
     HTMLCTX* me = (HTMLCTX*) mm_calloc(1, sizeof(*me));
     rid_header *rh;
@@ -240,6 +318,17 @@ static HTMLCTX * core_HTMLToRiscos (void /*HTStream * output */ )
     rh->margin.top = rh->margin.left = -1;
     rh->stream.parent = rh;
 
+#if UNICODE
+    /* decide what encoding to start off in */
+    if (encoding == 0 || encoding == csAutodetectJP)	/* no HTTP + user set to auto - use ASCII */
+	rh->encoding = csASCII;
+    else						/* HTTP or override set - use it */
+	rh->encoding = encoding;
+
+    rh->language = strdup(encoding_default_language(rh->encoding));
+    rh->language_num = lang_name_to_num(rh->language);
+#endif
+    
 #if 0
     /*me->write_ptr = &(me->buf[0]);*/
     /* me->white_count = 0 */
@@ -258,10 +347,12 @@ static HTMLCTX * core_HTMLToRiscos (void /*HTStream * output */ )
     return me;
 }
 
-static SGMLCTX * SGML_new(HTMLCTX *me)
+static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 {
     SGMLCTX *context = sgml_new_context();
 
+    PRSDBG(("SGML_new: htmlctx %p sgmlctx %p encoding %d\n", me, context, encoding));
+    
     if (context == NULL)
     {
 	/* FIXME: better handling */
@@ -277,6 +368,67 @@ static SGMLCTX * SGML_new(HTMLCTX *me)
     context->deliver = sgml_deliver;
     context->callback = def_callback;
 
+#if UNICODE
+    /* initialiase encoding to what's decided in HTML init, this value will come from user or HTTP header */
+    PRSDBG(("set_encoding: encoding set to %d language %s (%d)\n", me->rh->encoding, me->rh->language, me->rh->language_num));
+    context->encoding = encoding_new(me->rh->encoding, encoding_READ);
+
+    /* be safe - if can't load encoding then use ASCII - guaranteed to work */
+    if (context->encoding == NULL)
+    {
+	PRSDBG(("set_encoding: default to ASCII\n"));
+	me->rh->encoding = csASCII;
+	context->encoding = encoding_new(me->rh->encoding, encoding_READ);
+    }
+	
+    context->enc_num = encoding;
+
+    /* initialiase autodetect routines */
+    if (encoding == csAutodetectJP)
+    {
+	PRSDBG(("set_encoding: jp autodetect enabled\n"));
+	context->autodetect.state = autojp_state_INIT;
+	context->autodetect.enc_num = csAutodetectJP;
+    }
+
+    /* select format to store in internally */
+    {
+	int enc = 0;
+	switch (config_encoding_internal)
+	{
+	case 0:
+	    enc = csAcornLatin1;
+	    break;
+	case 1:
+	case 2:
+	    enc = csUTF8;
+	    break;
+	case 3:
+	    enc = csShiftJIS;
+	    break;
+	case 4:
+	    enc = csEUCPkdFmtJapanese;
+	    break;
+	}
+
+	PRSDBG(("set_encoding: write encoding set to %d\n", enc));
+	
+	if (enc)
+	{
+	    context->encoding_write = encoding_new(enc, encoding_WRITE);
+	    context->enc_num_write = enc;
+	}
+    }
+
+    if (context->encoding_write == NULL)
+    {
+	PRSDBG(("set_encoding: write encoding default to ASCII\n"));
+
+	context->encoding_write = encoding_new(csASCII, encoding_WRITE);
+	context->enc_num_write = csASCII;
+    }
+#endif
+    
 #if SGML_REPORTING
     context->report.output = DBGOUT;
     (*context->callback.reset_report) (context);
@@ -293,17 +445,17 @@ static SGMLCTX * SGML_new(HTMLCTX *me)
 /* Create an SGMLCTX and  an HTMLCTX, bind and initialise them, */
 /* and return the HTMLCTX pointer. */
 
-static HTMLCTX *create_new_html(void)
+static HTMLCTX *create_new_html(int encoding)
 {
     SGMLCTX *sgmlctx;
     HTMLCTX *htmlctx;
 
-    htmlctx = core_HTMLToRiscos();
+    htmlctx = core_HTMLToRiscos(encoding);
 
     if (htmlctx == NULL)
 	return NULL;
 
-    sgmlctx = SGML_new( htmlctx );
+    sgmlctx = SGML_new( htmlctx, encoding );
 
     /* FIXME:  should free HTMLCTX and descendent data */
     if (sgmlctx == NULL)
@@ -313,13 +465,20 @@ static HTMLCTX *create_new_html(void)
     ASSERT(sgmlctx->magic == SGML_MAGIC);
 
     htmlctx->sgmlctx = sgmlctx;
-
+#if UNICODE
+    htmlctx->rh->encoding = sgmlctx->enc_num;
+    htmlctx->rh->encoding_write = sgmlctx->enc_num_write;
+#endif
     return htmlctx;
 }
 
 /*****************************************************************************/
 
 #define FREAD_BUFSIZE	4096
+
+/*
+ * SJM: Hopefully this isn't used anymore. Doesn't support encodings.
+ */
 
 static rid_header *parse_some_file(char *fname, char *url, int ft)
 {
@@ -338,7 +497,7 @@ static rid_header *parse_some_file(char *fname, char *url, int ft)
 	return 0;
     }
 
-    h = ppd->new(url, ft);
+    h = ppd->new(url, ft, 0);
     if (h == NULL)
     {
 	usrtrc( "Can't create pparse_details\n" );
@@ -386,12 +545,12 @@ static rid_header *parse_html_file(char *fname, char *url)
 
   */
 
-static void *pparse_html_new(char *url, int ft)
+static void *pparse_html_new(char *url, int ft, int encoding)
 {
     SGMLCTX *sgmlctx;
     HTMLCTX *htmlctx;
 
-    htmlctx = create_new_html();
+    htmlctx = create_new_html(encoding);
 
     if (htmlctx == NULL)
 	return NULL;
@@ -529,12 +688,12 @@ static rid_header *pparse_html_close(void *h, char *cfile)
 
   */
 
-static void *pparse_text_new(char *url, int ft)
+static void *pparse_text_new(char *url, int ft, int encoding)
 {
     SGMLCTX *sgmlctx;
     HTMLCTX *htmlctx;
 
-    htmlctx = create_new_html();
+    htmlctx = create_new_html(encoding);
 
     if (htmlctx == NULL)
 	return NULL;
@@ -572,15 +731,15 @@ static int pparse_text_data(void *h, char *buffer, int len, int more)
     /* SJM: mark as threaded */
     sgmlctx->threaded = 1;
     
-#if 0
+#if UNICODE
     /* Correct, but horendously slow */
     sgml_feed_characters(sgmlctx, buffer, len);
 #else
     {
-	STRING s;
+	USTRING s;
 
 	s.ptr = buffer;
-	s.bytes = len;
+	s.nchars = len;
 
 	(*sgmlctx->chopper) (sgmlctx, s);
     }
@@ -711,7 +870,7 @@ static int pparse_image_data(void *h, char *buffer, int len, int more)
     return TRUE;
 }
 
-static void *pparse_image_new(char *url, int ft)
+static void *pparse_image_new(char *url, int ft, int encoding)
 {
     imp_str *impp;
 
@@ -719,7 +878,7 @@ static void *pparse_image_new(char *url, int ft)
 
     if (impp)
     {
-	impp->me = create_new_html();
+	impp->me = create_new_html(0);
 
 	if (impp->me == NULL)
 	{
@@ -734,6 +893,7 @@ static void *pparse_image_new(char *url, int ft)
     }
 
     return impp;
+    encoding = encoding;
 }
 
 /*****************************************************************************/
@@ -743,7 +903,7 @@ static rid_header *parse_gif_file(char *fname, char *url)
     HTMLCTX* me;
     rid_header *result;
 
-    me = create_new_html();
+    me = create_new_html(0);
 
     if (me == NULL)
 	return NULL;
@@ -772,14 +932,14 @@ typedef struct {
     char buffer[1024];
 } gparse_str;
 
-static void *pparse_gopher_new(char *url, int ft)
+static void *pparse_gopher_new(char *url, int ft, int encoding)
 {
     gparse_str *gp;
 
     gp = mm_malloc(sizeof(*gp));
     if (gp)
     {
-	gp->me = create_new_html();
+	gp->me = create_new_html(0);
 
 	if (gp->me == NULL)
 	{

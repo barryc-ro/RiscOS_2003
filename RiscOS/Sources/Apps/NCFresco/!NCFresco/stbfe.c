@@ -90,6 +90,11 @@
 #include "memheap.h"
 #endif
 
+#if UNICODE
+#include "encoding.h"
+#include "unictype.h"
+#endif
+
 #ifdef HierProf_PROFILE
 #include "hierprof/HierProf.h"
 #endif
@@ -181,6 +186,11 @@
 #define PPP_Status			0x4B621
 
 #define MESSAGE_OFFER_FOCUS		0x14
+
+#define MESSAGE_URI_MPROCESS		0x4E383
+#define MESSAGE_URI_MPROCESSACK		0x4E384
+
+#define URI_RequestURI			0x4E382
 
 /* #define Service_NVRAM			0xE0 */
 /* #define nvram_INITIALISED		0 */
@@ -770,7 +780,8 @@ static const char *content_tag_list[] =
     "FASTLOAD", "URL", "USER", "USERNAME",
     "BLANKRESET", "ONLOAD", "ONUNLOAD", "ENSURETOOLBAR",
     "ONBLUR", "SUBMITONUNLOAD", "SELECTBUTTON", "SPECIALSELECT",
-    "NOANTITWITTER"
+    "NOANTITWITTER",
+    NULL
 };
 
 /*
@@ -942,7 +953,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    static const char *on_off_list[] = { "OFF", "ON" };
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" };			/* order must agree with #defines in stbview.h */
 	    static const char *position_list[] = { "FULLSCREEN", "CENTERED", "TOOLBAR" };	/* order must agree with #defines in stbview.h */
-	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0])];
+	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0]) - 1];
 	    wimp_box box;
 	    int new_keyboard_state;
 
@@ -1966,7 +1977,9 @@ int fe_check_download_finished(fe_view v)
 		_kernel_setenv(PROFILE_NUM_VAR, buffer);
 
 		/* set the user name variable */
-		translate_escaped_text(strsafe(v->pending_user_name), buffer, sizeof(buffer));
+/* 		translate_escaped_text(strsafe(v->pending_user_name), buffer, sizeof(buffer)); */
+		url_unescape_cat(buffer, strsafe(v->pending_user_name), sizeof(buffer), FALSE);
+
 		_kernel_setenv(PROFILE_NAME_VAR, buffer);
 
 		/* re read the config and flush the cache */
@@ -2801,12 +2814,68 @@ os_error *fe_paste_url(fe_view v)
 /* key handlers */
 /* ------------------------------------------------------------------------------------------- */
 
+#if 0
+static int get_input_encoding(void)
+{
+    static int encoding_list[] =
+    {
+	csISOLatin1,
+	csAcornLatin1,
+	csISOLatin2,
+	csISOLatin3,
+	csISOLatin4,
+	csISOLatinCyrillic,
+	csISOLatinArabic,
+	csISOLatinGreek,
+	csISOLatinHebrew
+    };
+    int alphabet = 101;
+    int encoding = csISOLatin1;
+
+    _swix(Territory_Alphabet, _IN(0), _OUT(0), -1, &alphabet);
+
+    alphabet -= 100;
+
+    if (alphabet >= 0 && alphabet < sizeof(encoding_list)/sizeof(encoding_list[0]))
+	encoding = encoding_list[alphabet];
+
+    return encoding;
+}
+#endif
+
+static int convert_key_latin1(int key)
+{
+    static unsigned short keys[] =
+    {
+	0xFFFD, 0x0174, 0x0175, 0xFFFD, 0xFFFD, 0x0176, 0x0177, 0xFFFD,
+	0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0x2026, 0x2122, 0x2030, 0x2022,
+	0x2018, 0x2019, 0x2039, 0x203A, 0x201C, 0x201D, 0x201E, 0x2013,
+	0x2014, 0x2212, 0x0152, 0x0153, 0x2020, 0x2021, 0xFB01, 0xFB02
+    };
+
+    if (key >= 128 && key < 160)
+	key = keys[key-128];
+
+    return key;    
+}
+
 BOOL fe_writeable_handle_keys(fe_view v, int key)
 {
     int used = FALSE;
 
     if (v && v->displaying)
-        backend_doc_key(v->displaying, key, &used);
+    {
+	int k;
+	
+	/* Need to translate this keycode to UCS4 - unles a function key */
+	if (key > 256 && key < 512)
+	    k = -key;
+	else
+	    k = convert_key_latin1(key);
+	
+	if (k != 0xFFFD)
+	    backend_doc_key(v->displaying, k, &used);
+    }
 
     STBDBG(("fe_writeable_handle_keys: v %p key %d used %d\n", v, key, used));
 
@@ -3118,7 +3187,7 @@ os_error *fe_hotlist_add(fe_view v)
 	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_UNPRESSED);
     }
 
-    frontend_complain(hotlist_add(url, title));
+    frontend_complain(hotlist_add(url, title, lang_num_to_name(backend_doc_item_language(v->displaying, NULL))));
 
     while (time(NULL) < t)
 	;
@@ -4666,18 +4735,12 @@ int fe_encoding(fe_view v, int encoding)
 {
     STBDBG(("fe_encoding: v %p encoding %d\n", v, encoding));
 
-    if (encoding == be_encoding_READ)
-	return backend_doc_encoding(v ? v->displaying : NULL, encoding);
+    if (encoding == fe_encoding_READ)
+	return backend_doc_encoding(v ? v->displaying : NULL, NULL, NULL);
 
-    /* should do this for all frames really */
-    backend_doc_encoding(v ? v->displaying : NULL, encoding);
+    config_encoding_user = encoding;
 
-/*     frontend_view_redraw(v, NULL); */
-    if (v && v->displaying)
-    {
-	backend_reset_width(v->displaying, 0);
-	fe_refresh_window(v->w, NULL);
-    }
+    frontend_open_url("ncint:current", v, NULL, NULL, 0 /* fe_open_URL_FROM_HISTORY | fe_open_url_NO_HISTORY */);
 
     return 0;
 }
@@ -4984,8 +5047,10 @@ static void fe_handle_datasave(wimp_msgstr *msg)
         case FILETYPE_HTML:
         case FILETYPE_GOPHER:
         case FILETYPE_URL:
+        case FILETYPE_URI:
 	    msg->hdr.your_ref = msg->hdr.my_ref;
     	    msg->hdr.action = wimp_MDATASAVEOK;
+	    strcpy(msg->data.datasave.leaf, "<Wimp$ScrapFile>");
     	    frontend_fatal_error(wimp_sendmessage(wimp_ESEND, msg, msg->hdr.task));
             break;
     }
@@ -5011,6 +5076,7 @@ static void fe_handle_dataload(wimp_msgstr *msg)
         case FILETYPE_HTML:
         case FILETYPE_GOPHER:
         case FILETYPE_URL:
+        case FILETYPE_URI:
         case FILETYPE_DIRECTORY:
         case 0x2000:
 	    frontend_complain(fe_show_file(v, msg->data.dataload.name, FALSE));
@@ -5160,12 +5226,50 @@ static int offer_window_focus_handler(wimp_w w, int flags)
 
 /* ------------------------------------------------------------------------------------------- */
 
+static BOOL uri_mprocess(int flags, const char *uri, int uri_handle)
+{
+    char *scheme;
+    BOOL supported = FALSE;
+    
+    url_parse(uri, &scheme, NULL, NULL, NULL, NULL, NULL);
+
+    if (access_is_scheme_supported(scheme))
+    {
+	supported = TRUE;
+
+	if ((flags & 0x01) == 0)
+	{
+	    int len;
+	    char *url = NULL;
+	    os_error *e;
+
+	    e = (os_error *)_swix(URI_RequestURI, _INR(0,1) | _IN(3) | _OUT(2), 0, 0, uri_handle, &len);
+	    if (!e)
+	    {
+		url = malloc(len);
+		e = (os_error *)_swix(URI_RequestURI, _INR(0,3), 0, url, len, uri_handle);
+	    }
+	    if (!e)
+		e = frontend_open_url(url, NULL, "_top", NULL, fe_open_url_NO_REFERER);
+
+	    frontend_complain(e);
+	    mm_free(url);
+	}
+    }
+
+    mm_free(scheme);
+
+    return supported;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
 void fe_user_unload(void)
 {
     BOOL toolbar = tb_is_status_showing();
 
     STBDBG(("fe_user_unload:\n"));
-
+    
     /* on a shutdown flush the cache and stuff */
     re_read_config(ncfresco_loaddata_NOT_ALL | ncfresco_loaddata_FLUSH);
 
@@ -5545,7 +5649,7 @@ static void check_error(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if DEBUG
+#if DEBUG && 0
 extern void *my_kernel_alloc(unsigned int size);
 
 static void setup_allocs(void)
@@ -5921,6 +6025,15 @@ void fe_event_process(void)
 		offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]);
 		break;
 
+	    case MESSAGE_URI_MPROCESS:
+		if (uri_mprocess(msg->data.words[0], (char *)msg->data.words[1], msg->data.words[2]))
+		{
+		    msg->hdr.your_ref = msg->hdr.my_ref;
+		    msg->hdr.action = MESSAGE_URI_MPROCESSACK;
+		    wimp_sendmessage(wimp_ESEND, msg, msg->hdr.task);
+		}
+		break;
+		
 #if DEBUG
 	    case wimp_MINITTASK:
 	    {
@@ -5994,7 +6107,7 @@ void fe_event_process(void)
     dbgpoll();
     mm_poll();
 
-#if DEBUG
+#if 0
     {
 	extern int stack_extensions;
 	static int old_stack_extensions = 0;
@@ -6201,6 +6314,11 @@ static BOOL fe_initialise(void)
 
     dbginit();
 
+#if UNICODE
+    encoding_set_alloc_fns(mm_malloc, mm_free);
+    unictype_init();
+#endif
+
     _swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 7, &wimp_version);
     if (wimp_version < 380)
 	wimp_version = 350;
@@ -6318,6 +6436,8 @@ static BOOL fe_initialise(void)
     plugin_list_read_file();
     hotlist_init();
 
+    keywatch_from_handset = config_mode_keyboard == 0;
+
     /* init toolbar state using the buttons field of config */
     user_status_open = config_display_control_buttons;
 
@@ -6416,14 +6536,11 @@ int __root_stack_size = 4*1024;
 /* extern int disable_stack_extension; */
 #endif
 
-#undef DBG
-#define DBG(a) usrtrc(a)
-
 int main(int argc, char **argv)
 {
     int init_ok;
 
-#if DEBUG
+#if DEBUG && 0
     setup_allocs();
 #endif
 
@@ -6435,7 +6552,11 @@ int main(int argc, char **argv)
     HierProf_ProfileAllFunctions();
 #endif
 
+#if UNICODE
+    setlocale(LC_ALL, "C");
+#else
     setlocale(LC_ALL, "");
+#endif
     setbuf(stderr, NULL);   /* no caching   */
 
     MemCheck_Init();
@@ -6454,10 +6575,7 @@ int main(int argc, char **argv)
 /*     Trace_InterceptAllFunctions(); */
 /*   Trace_Stacker_SetOutputFunction((Trace_Stacker_outputfn)vfdbg, db_sess); */
 #endif
-    DBG(("main\n"));
     init_usrtrc();
-
-    DBG(("main0\n"));
 
     progname = argv[0];
     argv++;
@@ -6472,12 +6590,9 @@ int main(int argc, char **argv)
     }
 #endif
 
-    DBG(("main2\n"));
     os_cli("pointer 0");
 
-    DBG(("fe_initialise+\n"));
     init_ok = fe_initialise();
-    DBG(("fe_initialise-\n"));
 
     if (init_ok)
     {

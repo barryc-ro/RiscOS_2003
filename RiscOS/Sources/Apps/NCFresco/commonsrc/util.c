@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <ctype.h>
 #include <time.h>
+#include <limits.h>
 
 #include "memwatch.h"
 
@@ -29,8 +30,16 @@
 
 #include "unwind.h"
 #include "util.h"
+#include "webfonts.h"
 
 #include "sgmlparser.h"
+#include "interface.h"
+#include "render.h"
+
+#if UNICODE
+#include "Unicode/charsets.h"
+#include "Unicode/utf8.h"
+#endif
 
 #ifndef UTIL_DEBUG
 #define UTIL_DEBUG 0
@@ -471,73 +480,40 @@ typedef struct
     int width;                          /* Width of this segment in millipoints */
 } LineRec, *LinePtr;
 
-static struct
-{
-    int xs, ys, xl, yl, splitchar;
-} coordblock = {0, 0, 0, 0, 32};
-
-static os_error *split_message(const char *str, int width, int handle, int *numlines, LineRec *lines)
+static os_error *split_message(const char *str, int width, int font_index, int *numlines, LineRec *lines)
 {
     int segwidth;
-    const char *seg = str, *splitpoint;
+    const char *seg = str;
     os_error *e = NULL;
 
     while (!e && *numlines < LINEMAX && *seg)
     {
-        os_regset r;
-        r.r[0] = handle;
-        r.r[1] = (int)seg;
-        r.r[2] = (1<<5) | (1<<8) | (1<<9);
-        r.r[3] = width;
-        r.r[4] = 0;
-        r.r[5] = (int) &coordblock;
-	coordblock.splitchar = ' ';			/* split on space */
-        e = os_swix(Font_ScanString, &r);
-        if (!e)
-        {
-	    /* If the next word is too long, ie cannot be split in the space available,
-	     * then segwidth will be 0 and splitpoint == seg. In this case we want to just
-	     * skip to the next space.
-	     */
-	    if (r.r[3] == 0)
-	    {
-		r.r[3] = width;
-		r.r[4] = 0;
-		coordblock.splitchar = -1;		/* split on any character */
-		e = os_swix(Font_ScanString, &r);
-	    }
+	int split = webfont_split_point_char(font_index, seg, width, ' ', &segwidth);
+	if (split == -1)
+	    split = webfont_split_point_char(font_index, seg, width, -1, &segwidth);
+	
+	if (lines)
+	{
+	    lines[*numlines].text = seg;
+	    lines[*numlines].length = split;
+	    lines[*numlines].width = segwidth;
+	}
+	
+	seg += split;
 
-            splitpoint = (char *)r.r[1];
-            segwidth = r.r[3];
+	/* skip to the next space */
+	while (*seg && *seg != ' ')
+	    seg++;
 
-/* 	    DBG(("ScanString: '%s' w %d = split leaves '%s' w %d\n", seg, width, splitpoint, segwidth)); */
+	seg = skip_space(seg);
 
-            /* splitpoint should now point to a space, or the end of the string */
-            if (lines)
-            {
-                lines[*numlines].text = seg;
-                lines[*numlines].length = splitpoint - seg;
-                lines[*numlines].width = segwidth;
-            }
-
-	    seg = splitpoint;
-
-	    /* skip to the next space */
- 	    while (*seg && *seg != ' ')
-		seg++;
-
-	    /* skip any spaces in the text */
-	    while (*seg == ' ')
-		seg++;
-
-            (*numlines)++;
-        }
+	(*numlines)++;
     }
 
     return e;
 }
 
-os_error *write_text_in_box_height(const char *str, int width, int handle, int *height)
+os_error *write_text_in_box_height(const char *str, int width, int font_index, int *height)
 {
     int numlines;
     font_info info;
@@ -546,8 +522,8 @@ os_error *write_text_in_box_height(const char *str, int width, int handle, int *
 
     numlines = 0;
     e = font_converttopoints(width, width, &ww, &ww);
-    if (!e) e = split_message(str, ww, handle, &numlines, NULL);
-    if (!e) e = font_readinfo(handle, &info);
+    if (!e) e = split_message(str, ww, font_index, &numlines, NULL);
+    if (!e) e = font_readinfo(webfonts[font_index].handle, &info);
 
     if (!e) *height = (info.maxy - info.miny) * numlines + info.maxy;
 
@@ -559,7 +535,7 @@ os_error *write_text_in_box_height(const char *str, int width, int handle, int *
  * the text.  They are in OS Units.
  */
 
-os_error *write_text_in_box(int handle, const char *str, void *bbox)
+os_error *write_text_in_box(int font_index, const char *str, void *bbox)
 {
     os_error *e;
     int i, y, space_x, spacing;
@@ -569,12 +545,13 @@ os_error *write_text_in_box(int handle, const char *str, void *bbox)
     LineRec lines[LINEMAX];
     wimp_box *box = (wimp_box*)bbox;
     int maxy, miny;
+    int handle = webfonts[font_index].handle;
 
     e = font_converttopoints(box->x0, box->y0, &x0, &y0);
     if (!e) e = font_converttopoints(box->x1, box->y1, &x1, &y1);
 
     numlines = 0;
-    if (!e) e = split_message (str, x1 - x0, handle, &numlines, lines);
+    if (!e) e = split_message (str, x1 - x0, font_index, &numlines, lines);
 
     if (!e) e = font_readinfo(handle, &info);
     if (!e) e = font_converttopoints(info.maxx - info.minx, info.maxy, &space_x, &maxy);
@@ -594,7 +571,13 @@ os_error *write_text_in_box(int handle, const char *str, void *bbox)
     /* Actually display the segments */
     for (i = 0; !e && i < numlines && y > y0 - miny; i++)
     {
-        os_regset r;
+#if 1
+	int xpos = x0 + (x1 - x0) / 2 - lines[i].width / 2;
+/* 	font_setfont(handle); */
+	if (xpos >= x0)
+	    render_text_full(NULL, font_index, lines[i].text, xpos, y, NULL, lines[i].length);
+#else
+	os_regset r;
         r.r[0] = handle;
         r.r[1] = (int)lines[i].text;
         r.r[2] = (1<<7) | (1<<8) | (1<<9);
@@ -605,7 +588,7 @@ os_error *write_text_in_box(int handle, const char *str, void *bbox)
 	/* don't display if the line starts outside the bounding box */
 	if (r.r[3] >= x0)
 	    e = os_swix(Font_Paint, &r);
-
+#endif
         y -= spacing;
     }
 
@@ -998,6 +981,112 @@ int get_free_memory_size(void)
     _swix(Wimp_SlotSize, _INR(0,1) | _OUT(2), -1, -1, &free);
     return free;
 }
+
+/*****************************************************************************/
+
+#if UNICODE
+
+extern char *parse_content_type_header_charset(const char *value)
+{
+    static const char *tags[] = { "CHARSET", 0 };
+    name_value_pair output[1];
+    char *s = strdup(value);
+    char *encoding;
+		    
+    parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
+
+    encoding = strdup(output[0].value);
+    
+    mm_free(s);
+
+    return encoding;
+}
+
+extern int parse_content_type_header(const char *value)
+{
+    char *s = parse_content_type_header_charset(value);
+    int encoding = 0;
+
+    if (s)
+    {
+	encoding = encoding_number_from_name(s);
+
+#ifdef STBWEB
+	/* PC people are dumb and say ASCII or ISO-8859-1 and then use
+           Windows chars from 128-159 - so override their choice */
+	switch (encoding)
+	{
+	case csASCII:
+	case csISOLatin1:
+	    encoding = csWindows1252;
+	    break;
+	}
+#endif
+    }
+    
+    mm_free(s);
+
+    return encoding;
+}
+
+os_error *process_utf8_as_latin1(const char *text, int in_n, process_utf8_callback_fn fn, void *handle)
+{
+    static Encoding *latin1_encoding = NULL;
+
+    if (latin1_encoding == NULL)
+	latin1_encoding = encoding_new(csAcornFuzzy, encoding_WRITE);
+
+    return process_utf8(text, in_n, latin1_encoding, fn, handle);
+}
+
+os_error *process_utf8(const char *text, int n, Encoding *enc, process_utf8_callback_fn fn, void *handle)
+{
+    os_error *e = NULL;
+    int in_n = 0;
+
+    if (n < 0)
+	n = INT_MAX;
+
+    /* while we have more input */
+    while (in_n < n && text[in_n] && !e)
+    {
+	char buffer[256], *bufptr = buffer;
+	int bufsize = sizeof(buffer) - 1;
+	
+	/* while we have more input */
+	while (in_n < n && text[in_n])
+	{
+	    UCS4 u;
+	    int read;
+	    
+	    /* read the next UCS4 char */
+	    read = UTF8_to_UCS4(text + in_n, &u);
+
+	    /* try to reencode it to buffer[] */
+	    if (encoding_write(enc, u, &bufptr, &bufsize) > 0)
+	    {
+		/* if we could then consume the input value */
+		in_n += read;
+	    }
+	    else
+	    {
+		/* if we couldn't then break out this loop to
+		   write out what we've got */
+		break;
+	    }
+	}
+
+	/* terminate */
+	*bufptr = 0;
+	
+	if (fn)
+	    e = fn(buffer, in_n == n, handle);
+    }
+
+    return e;
+}
+
+#endif
 
 /*****************************************************************************/
 

@@ -179,20 +179,20 @@ VALUE colour_lookup(STRING name)
     colour_info test, *match;
     VALUE v;
 
-    PRSDBGN(("colour_lookup: %.*s\n", name.bytes, name.ptr));
+    PRSDBGN(("colour_lookup: %.*s\n", name.nchars, name.ptr));
 
     /* special processing for grey */
-    if (name.bytes >= 4 &&
+    if (name.nchars >= 4 &&
 	(strncasecomp(name.ptr, "grey", 4) == 0 ||
 	 strncasecomp(name.ptr, "gray", 4) == 0))
     {
 	v.type = value_tuple;
 
-	if (name.bytes > 4 && isdigit(name.ptr[4]))
+	if (name.nchars > 4 && isdigit(name.ptr[4]))
 	{
 	    int n;
 	    n = name.ptr[4] - '0';
-	    if (name.bytes > 5 && isdigit(name.ptr[5]))
+	    if (name.nchars > 5 && isdigit(name.ptr[5]))
 		n = n*10 + (name.ptr[5] - '0');
 	    n = (n*255 + 50)/99;
 	    v.u.b = (n<<16) | (n<<8) | n;
@@ -220,12 +220,12 @@ VALUE colour_lookup(STRING name)
         {
             colour_info *c = colour_array+i;
 
-            if ( strnearly( name.ptr, name.bytes,
+            if ( strnearly( name.ptr, name.nchars,
                             c->name, strlen(c->name), 2 ) )
             {
                 match = c;
                 PRSDBGN(("colour_lookup: guessed %s for %.*s\n",
-                          c->name, name.bytes, name.ptr ));
+                          c->name, name.nchars, name.ptr ));
                 break;
             }
         }

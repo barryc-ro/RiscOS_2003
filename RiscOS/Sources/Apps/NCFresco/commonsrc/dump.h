@@ -29,7 +29,7 @@ extern void dump_textarea_item(rid_textarea_item *ptr);
 extern void dump_select_item(rid_select_item *ptr);
 extern void dump_form_item(rid_form_item *ptr);
 extern void dump_header(rid_header *ptr);
-extern void dump_buffer(BUFFER *ptr);
+extern void dump_buffer(UBUFFER *ptr);
 extern void dump_sgmlctx(SGMLCTX *ptr);
 extern void dump_table_width_details(rid_table_item *table);
 extern void dump_htmlctx(HTMLCTX *ptr);

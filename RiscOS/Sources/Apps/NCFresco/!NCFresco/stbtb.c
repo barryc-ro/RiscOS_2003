@@ -1521,10 +1521,10 @@ static void mshow_tools(fe_view v, int obj)
 
 static void mshow_encoding(fe_view v, int obj)
 {
-    int encoding = fe_encoding(v, be_encoding_READ);
+    int encoding = fe_encoding(v, fe_encoding_READ);
     int i;
 
-/*     STBDBG(("mshow_encoding: v %p encoding %d\n", v, encoding)); */
+/*  STBDBG(("mshow_encoding: v %p encoding %d\n", v, encoding)); */
 
     for (i = 0; i < 4; i++)
     {
@@ -2093,8 +2093,9 @@ int tb_status_redraw(wimp_redrawstr *r)
                         (config_display_blending ? 0x800: 0) | (1<<8) | (1<<9),
                         x0, y0 + 4000);
 
-                    _swix(Font_ScanString, _INR(0,2) | _OUT(3), status_line_font, prefix,
-                        (1<<8) | (1<<9), &width);
+		    /* must use own routine since webfont only takes index */
+		    _swix(Font_ScanString, _INR(0,2) | _OUT(3), status_line_font, prefix,
+                         (1<<8) | (1<<9), &width);
                 }
 
                 _swix(Font_Paint, _INR(1,4), msg,

@@ -35,8 +35,14 @@ extern void startblockquote (SGMLCTX * context, ELEMENT * element, VALUES * attr
 #ifndef STBWEB
     SET_EFFECTS(context->tos, STYLE_WF_INDEX, WEBFONT_BLOCK);
 #endif
+
 #ifdef STBWEB
-    text_item_push_word(htmlctxof(context), rid_flag_LINE_BREAK, FALSE);
+#if NEW_BREAKS
+    rid_scaff_item_push(htmlctxof(context)->rh->curstream, rid_break_MUST);
+#else
+    rid_scaff_item_push(htmlctxof(context)->rh->curstream, rid_flag_LINE_BREAK);
+#endif
+/*  text_item_push_word(htmlctxof(context), rid_flag_LINE_BREAK, FALSE); */
 #endif
     bump_current_indent(context);
     bump_current_rindent(context);
@@ -53,6 +59,8 @@ extern void finishblockquote (SGMLCTX * context, ELEMENT * element)
 extern void startdiv (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     generic_start (context, element, attributes);
+
+    set_lang(context, &attributes->value[HTML_DIV_LANG]);
 
     std_lcr_align(context, &attributes->value[HTML_DIV_ALIGN]);
 }
@@ -77,6 +85,8 @@ extern void startcentre (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 extern void startpre (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     generic_start (context, element, attributes);
+
+    set_lang(context, &attributes->value[HTML_PRE_LANG]);
 
 #ifdef STBWEB
     add_fixed_to_font(context);

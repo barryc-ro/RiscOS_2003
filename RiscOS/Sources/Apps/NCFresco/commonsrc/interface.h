@@ -58,6 +58,7 @@ extern int frontend_dx, frontend_dy;
 #define fe_open_url_FROM_HISTORY	(1<<2)	/* url was pulled from history list */
 #define fe_open_url_FROM_FRAME		(1<<3)	/* url was initiated from a frameset */
 #define fe_open_url_NO_REFERER		(1<<4)	/* url is unrelated to current document */
+#define fe_open_url_NO_ENCODING_OVERRIDE (1<<5)	/* don't let user override encoding */
 
 typedef struct			/* note must be the same as access_post_info */
 {
@@ -209,12 +210,14 @@ extern void frontend_saver_last_name(char *fname);
 
 typedef struct _frontend_menu_handle *fe_menu;
 typedef struct {
-    int flags;
+    char flags;
+    char language;
     char *name;
 } fe_menu_item;
 
 #define fe_menu_flag_CHECKED	(1 << 0)
 #define fe_menu_flag_SHADED	(1 << 1)
+#define fe_menu_flag_WIDE	(1 << 2) /* wide font necessary */
 
 typedef void (*be_menu_callback)(fe_menu mh, void *handle, int item, int right);
 
@@ -336,6 +339,7 @@ os_error *backend_open_url(fe_view v, be_doc *docp,
 #define be_openurl_flag_HISTORY		(1 << 4) /* url was pulled from history list */
 #define be_openurl_flag_SOLID_HIGHLIGHT	(1 << 5)
 #define be_openurl_flag_FAST_LOAD	(1 << 6)
+#define be_openurl_flag_NO_ENCODING_OVERRIDE (1 << 7)	/* don't let user override encoding */
 
 /* Jump the document to the fragment given */
 extern os_error *backend_goto_fragment(be_doc doc, char *frag);
@@ -606,14 +610,12 @@ extern void backend_mark_page_visited( const char *url );
 
 extern be_item backend_locate_id(be_doc doc, const char *id);
 
-#define be_encoding_READ	(-1)
-#define be_encoding_LATIN1	0
-#define be_encoding_SJIS	1
-#define be_encoding_JIS		2
-#define be_encoding_UNICODE	8
-#define be_encoding_EUC		9
+extern int backend_doc_encoding(be_doc doc, int *encoding_user, int *encoding_user_override);
 
-extern int backend_doc_encoding(be_doc doc, int encoding);
+/* Return the language code for this item or the document if item is
+ * NULL or has no language of its own.
+ */
+extern int backend_doc_item_language(be_doc doc, be_item item);
 
 /* Functions in layout.c */
 /* Write out frame layout as a table, return the number of frames */
@@ -621,6 +623,8 @@ extern int backend_doc_encoding(be_doc doc, int encoding);
 typedef void (*be_layout_write_table_fn)(FILE *f, const char *frame_specifier, int w, int h);
 
 extern void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix, int w, int h);
+
+extern int backend_getwebfont(be_doc doc, BOOL wide, int language, int font1, int base);
 
 #endif /* __interface_h */
 

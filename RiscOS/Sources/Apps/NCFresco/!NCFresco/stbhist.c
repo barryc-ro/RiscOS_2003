@@ -56,7 +56,8 @@ struct fe_history_item
 
     char n_frames;   	    	    /* number of frames appended */
     char is_offline;
-    char reserved[2];
+    char language_num;
+    char reserved;
     char *title;		    /* if top frame then this is it's title */
 
     fe_history_frame_item frame[1];
@@ -77,6 +78,7 @@ struct fe_global_history_item
 
     char *url;
     char *title;
+    char language_num;
     unsigned int url_hash;		/* hash lookup of title string */
 
     time_t date;			/* time added to list */
@@ -196,7 +198,7 @@ static void fe_global_remove_oldest(void)
 
 /* ---------------------------------------------------------------------------------------------*/
 
-static void fe_global__add(const char *bare_url, const char *fragment, const char *title)
+static void fe_global__add(const char *bare_url, const char *fragment, const char *title, int language_num)
 {
     fe_global_history_item *item, *prev;
     fe_global_history_item *new_item;
@@ -248,6 +250,7 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
         new_item->url = mm_strdup(bare_url);
         new_item->url_hash = h;
 	new_item->date = time(NULL);
+	new_item->language_num = language_num;
 
         if (prev)
         {
@@ -282,12 +285,12 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
 	global_count++;
 }
 
-static void fe_global_add(const char *url, const char *title)
+static void fe_global_add(const char *url, const char *title, int language_num)
 {
     char *bare_url, *fragment;
     fragment_parse(url, &bare_url, &fragment);
 
-    fe_global__add(bare_url, fragment, title);
+    fe_global__add(bare_url, fragment, title, language_num);
 
     mm_free(bare_url);
     mm_free(fragment);
@@ -303,9 +306,10 @@ static void fe__global_write_list(FILE *f, void *handle)
 
     for (item = global_hist_list, i = 0; item; item = item->next, i++)
     {
-	char *s = item->title ? item->title : item->url;
+	const char *s = item->title ? item->title : item->url;
+	const char *lang = lang_num_to_name(item->language_num);
 
-	fprintf(f, msgs_lookup("histA.I"), i, i, s);
+	fprintf(f, msgs_lookup("histA.I"), lang, i, i, s);
 
         fputc('\n', f);
     }
@@ -436,7 +440,7 @@ static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
 
 #if 1
     /* This must always use the recent list item as it may encode which list to read it from */
-    fprintf(f, msgs_lookup("histR.I"), i, i, item->title ? item->title : hfi->url);
+    fprintf(f, msgs_lookup("histR.I"), lang_num_to_name(item->language_num), i, i, item->title ? item->title : hfi->url);
 #else
     if (item->title)
     {
@@ -618,7 +622,8 @@ static fe_history_item *fe_history_add(fe_view v, const char *url, const char *t
     strcpy(h->frame[0].specifier, specifier);
 
     h->n_frames = 1;
-    h->title = mm_strdup(title);
+    h->title = strdup(title);
+    h->language_num = backend_doc_item_language(v->displaying, NULL);
 
     v->hist_count++;
 
@@ -905,7 +910,7 @@ int fe_history_visit(fe_view v, const char *url, const char *title)
 
     /* and to the global history if not a frame element */
     if (v == top && v->offline_mode == fe_keyboard_ONLINE)
-        fe_global_add(url, title);
+        fe_global_add(url, title, backend_doc_item_language(v->displaying, NULL));
 
     return 0;
 }

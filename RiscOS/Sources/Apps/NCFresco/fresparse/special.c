@@ -17,6 +17,8 @@ extern void starthtml (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 {
     generic_start (context, element, attributes);
 
+    set_lang(context, &attributes->value[HTML_HTML_LANG]);
+    
     htmlctxof(context)->done_auto_body = TRUE;
 
     TASSERT(htmlctxof(context)->aref == NULL);
@@ -182,7 +184,7 @@ extern void startimg (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 			 &attributes->value[HTML_IMG_VSPACE]));
 #endif
 
-    text_item_push_image(me, 0,
+    text_item_push_image(me,
 			 &attributes->value[HTML_IMG_SRC],
 			 &attributes->value[HTML_IMG_ALT],
 			 &attributes->value[HTML_IMG_ALIGN],
@@ -245,6 +247,8 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 {
     HTMLCTX *me = htmlctxof(context);
     int colour = -1;
+
+    set_lang(context, &attributes->value[HTML_FONT_LANG]);
 
     generic_start (context, element, attributes);
 
@@ -431,7 +435,11 @@ extern void finisha (SGMLCTX * context, ELEMENT * element)
 	if (me->rh->curstream->text_last)
 	    me->aref->first = me->rh->curstream->text_last;
 	else if (me->rh->curstream != &me->rh->stream)			/* only if not top level stream */
+#if NEW_BREAKS
+	    text_item_push_word(me, rid_break_MUST_NOT, FALSE);
+#else
 	    text_item_push_word(me, rid_flag_NO_BREAK, FALSE);
+#endif
     }
 
     me->aref = NULL;

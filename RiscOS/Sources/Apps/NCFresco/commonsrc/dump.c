@@ -1245,9 +1245,9 @@ extern void dump_header(rid_header *ptr)
 	/*dump_textual_formatting(ptr);*/
 }
 
-extern void dump_buffer(BUFFER *ptr)
+extern void dump_buffer(UBUFFER *ptr)
 {
-    my_print("BUFFER [:%d] = '%.*s', max %d",
+    my_print("UBUFFER [:%d] = '%.*s', max %d",
 	      ptr->ix, ptr->ix, ptr->data, ptr->max);
 }
 

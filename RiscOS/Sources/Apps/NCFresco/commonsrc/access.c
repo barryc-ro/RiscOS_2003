@@ -117,6 +117,10 @@ extern void translate_escaped_text(char *in, char *out, int len);
 #define LOCK_FILES 0
 #endif
 
+#ifndef FANCY_RESOLVE
+#define FANCY_RESOLVE 1
+#endif
+
 #ifndef POLL_INTERVAL
 #define POLL_INTERVAL	10	/* centi-seconds */
 #endif
@@ -175,6 +179,7 @@ typedef struct _access_item {
 	    unsigned last_modified;	/* from headers */
 	    unsigned expires;		/* from headers */
 	    unsigned date;		/* from headers */
+	    int encoding;		/* from headers */
 #if SSL_UI
 	    struct
 	    {
@@ -336,6 +341,12 @@ static http_header_item nocache_hdr = {
     "no-cache"
     };
 
+static http_header_item accept_charset_hdr = {
+    NULL,
+    "Accept-Charset",
+    NULL
+    };
+
 #if SEND_HOST
 static http_header_item host_hdr = {
     NULL,
@@ -458,7 +469,7 @@ static void access_redial_alarm(int at, void *h)
 
 /* ------------------------------------------------------------------------------------- */
 
-#ifndef FILEONLY
+#if !defined(FILEONLY) && FANCY_RESOLVE
 /*
 Fancy DNS resolving
 
@@ -573,6 +584,8 @@ static BOOL access_try_fancy_resolve(access_handle d, const char *prefix)
 
     return TRUE;
 }
+#else
+#define access_try_fancy_resolve(d, prefix) FALSE
 #endif
 
 /* ------------------------------------------------------------------------------------- */
@@ -829,8 +842,6 @@ static access_complete_flags access_redirect_complete(void *h, int status, char 
 
     ACCDBG(("acc%p: access_redirect_complete(status=%d) realacc=%p\n", d, status, d->h ));
 
-    ACCDBG(("access_redirect_complete: ah%p\n", d));
-
     cache_it = d->complete(d->h, status, cfile, url); /* Pass up the real URL, not the one they requested */
     d->redirect = NULL;
 
@@ -1007,6 +1018,14 @@ static os_error *access_http_fetch_start(access_handle d)
         hlist = &accept_language_hdr;
     }
 
+    /* accept charset */
+    if ( config_encoding_accept )
+    {
+        accept_charset_hdr.next = hlist;
+        accept_charset_hdr.value = config_encoding_accept;
+        hlist = &accept_charset_hdr;
+    }
+    
     /* normal authentication */
     if ((authenticate_hdr.value = auth_lookup_string(d->url)) != NULL)
     {
@@ -1480,7 +1499,7 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
             cache->update_size(cfile);
 
 	if (cache->header_info)
-	    cache->header_info(d->url, d->data.http.date, d->data.http.last_modified, d->data.http.expires);
+	    cache->header_info(d->url, d->data.http.date, d->data.http.last_modified, d->data.http.expires, d->data.http.encoding);
     }
 
     mm_free(cfile);
@@ -1730,6 +1749,12 @@ static void access_http_fetch_alarm(int at, void *h)
 		{
 		    d->data.http.date = (unsigned)HTParseTime(list->value);
 		}
+#if UNICODE
+		else if (strcasecomp("CONTENT-TYPE", list->key) == 0)
+		{
+		    d->data.http.encoding = parse_content_type_header(list->value);
+		}
+#endif
 	    }
 
 
@@ -2441,7 +2466,7 @@ static BOOL access_file_fetch(access_handle d)
 #ifndef FILEONLY
 	/* only update the header info if this is a file: read, not from the cache */
 	if ((d->flags & access_FROM_CACHE) == 0 && cache->header_info)
-	    cache->header_info(d->url, time(NULL), d->data.file.last_modified, UINT_MAX);
+	    cache->header_info(d->url, time(NULL), d->data.file.last_modified, UINT_MAX, 0);
 #endif
 	d->complete(d->h, status_COMPLETED_FILE, d->ofile ? d->ofile : d->data.file.fname, d->url);
 
@@ -2948,7 +2973,7 @@ static void access_internal_fetch_alarm(int at, void *h)
 	if (cache->header_info)
 	{
 	    unsigned now = (unsigned)time(NULL);
-	    cache->header_info(d->url, now, now, 0);
+	    cache->header_info(d->url, now, now, 0, 0);
 	}
     }
 
@@ -3111,27 +3136,53 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 }
 #endif
 
-#if 0
-static void write_buf(char *buffer, const char *path, const char *params, const char *query)
+static char *uri_next_line(FILE *in)
 {
-    if (path)
-	strcpy(buffer, path);
-    else
-	strcpy(buffer, "/");
+    char *s = NULL;
+    BOOL skip, terminate;
+    int c;
+    char buffer[128];
+    int blen;
 
-    if (params)
+    do
     {
-	strcat(buffer, ";");
-	strcat(buffer, params);
-    }
+	/* skip control chars */
+	do
+	    c = fgetc(in);
+	while (c != EOF && c < ' ');
 
-    if (query)
-    {
-	strcat(buffer, "?");
-	strcat(buffer, query);
+	skip = c == '#';
+	blen = 0;
+
+	do
+	{
+	    terminate = c == EOF || c < ' ';
+
+	    if (!skip)
+	    {
+		if (!terminate)
+		    buffer[blen++] = c;
+
+		if (terminate || blen == sizeof(buffer) - 1)
+		{
+		    /* add to buffer */
+		    buffer[blen] = 0;
+		    s = strcatx(s, buffer);
+
+		    /* reset byte count */
+		    blen = 0;
+		}
+	    }
+
+	    if (!terminate)
+		c = fgetc(in);
+	}
+	while (!terminate);
     }
+    while (skip);
+    
+    return s;
 }
-#endif
 
 extern char timeoutbuf[20];
 os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post_info *bfile, char *referer,
@@ -3363,13 +3414,43 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post
 		/* cfile will be freed at end of section */
 		*result = NULL;
 	    }
-	    else if (ft == FILETYPE_URL)
+	    else if (ft == FILETYPE_URL || ft == FILETYPE_URI)
 	    {
-		char *new_url;	/* SJM removed auto array */
+		char *new_url = NULL;
 		FILE *fh;
 
-		fh = mmfopen(cfile, "r");
-		if (fh && (new_url = xfgets(fh)) != NULL)
+		if ((fh = mmfopen(cfile, "r")) != NULL)
+		{
+		    if (ft == FILETYPE_URL)
+		    {
+			new_url = xfgets(fh);
+		    }
+		    else
+		    {
+			char *s = uri_next_line(fh);
+			if (s && strcmp(s, "URI") == 0)
+			{
+			    /* free line 1 (id) */
+			    mm_free(s);
+
+			    /* get and free line 2 (version) */
+			    s = uri_next_line(fh);
+			    mm_free(s);
+
+			    /* get line 3 (URL) */
+			    new_url = uri_next_line(fh);
+			    if (new_url && strcmp(new_url, "*") == 0)
+			    {
+				mm_free(new_url);
+				new_url = NULL;
+			    }
+			}
+		    }
+
+		    mmfclose(fh);
+		}
+
+		if (new_url)
 		{
 		    d = mm_calloc(1, sizeof(*d));
 
@@ -3391,11 +3472,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post
 		}
 		else
 		{
-		    ep = makeerrorf(ERR_CANT_READ_FILE, url);
+		    ep = makeerrorf(ERR_CANT_READ_URL_FILE, url);
 		}
-
-		if (fh)
-		    mmfclose(fh);
 	    }
 	    else if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))
 	    {
@@ -3596,7 +3674,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, access_post
 
 		    if (path && path[0] && path[1])
 		    {
-			buffer = strcatx1(strdup_unescaped(path + 2), NULL);
+			buffer = strcatx1(url_unescape(path + 2, FALSE), NULL);
+/* 			buffer = strcatx1(strdup_unescaped(path + 2), NULL); */
 /* 			translate_escaped_text(path + 2, buffer, sizeof(buffer)); */
 			d->data.gopher.gopher_tag = path[1];
 		    }
@@ -4083,20 +4162,20 @@ void access_flush_cache(void)
 #endif
 
 #ifdef STBWEB
-void access_set_header_info(char *url, unsigned date, unsigned last_modified, unsigned expires)
+void access_set_header_info(char *url, unsigned date, unsigned last_modified, unsigned expires, int encoding)
 {
 #ifndef FILEONLY
     if (cache->header_info)
-	cache->header_info(url, date, last_modified, expires);
+	cache->header_info(url, date, last_modified, expires, encoding);
 #endif
 }
 #endif
 
-BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
+BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires, int *encoding)
 {
 #ifndef FILEONLY
     if (cache->get_header_info)
-	return cache->get_header_info(url, date, last_modified, expires);
+	return cache->get_header_info(url, date, last_modified, expires, encoding);
 #endif
     return FALSE;
 }
@@ -4160,6 +4239,38 @@ BOOL access_was_directory( access_handle d )
 int access_get_ftype(access_handle d)
 {
     return d ? d->ftype : -1;
+}
+
+int access_get_encoding(access_handle d)
+{
+    int enc = 0;
+#if UNICODE
+    if (d)
+    {
+	switch (d->access_type)
+	{
+	case access_type_HTTP:
+	{
+	    http_header_item *list = access_get_headers(d);
+    
+	    for (; list; list = list->next)
+	    {
+		if (strcasecomp(list->key, "CONTENT-TYPE") == 0)
+		{
+		    enc = parse_content_type_header(list->value);
+		    break;
+		}
+	    }
+	    break;
+	}
+
+	case access_type_FILE:
+	    access_get_header_info(d->url, NULL, NULL, NULL, &enc);
+	    break;
+	}
+    }
+#endif    
+    return 0;
 }
 
 /* eof access.c */

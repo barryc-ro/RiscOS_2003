@@ -39,13 +39,15 @@
 #include "stream.h"
 #include "gbf.h"
 
-#define TXTDBG(a)
+#if UNICODE
+#include "Unicode/utf8.h"
+#else
+#define UTF8_codelen(a) 1
+#define UTF8_seqlen(a) 1
+#endif
 
-#if !NEW_TEXTAREA
-#ifndef MAX_TEXT_LINE
-#define MAX_TEXT_LINE 1024
-#endif
-#endif
+#define TXTDBG(a) DBG(a)
+#define TXTDBGN(a)
 
 #ifndef BUILDERS
 static rid_header *ot_stored_rh;
@@ -53,12 +55,13 @@ static antweb_doc *ot_stored_doc;
 static int ot_stored_hpos, ot_stored_bline;
 #endif
 
-#if NEW_TEXTAREA
-static void insert_char(rid_textarea_item *tai, int point, int c)
+static int insert_char(rid_textarea_item *tai, int point, int c)
 {
+    int nbytes = UTF8_codelen(c);
+
     TXTDBG(("insert_char: tai%p point %d '%c'\n", tai, point, c));
 
-    if (memzone_alloc(&tai->text, 1) != -1)
+    if (memzone_alloc(&tai->text, nbytes) != -1)
     {
 	int n_to_move;
 
@@ -70,20 +73,24 @@ static void insert_char(rid_textarea_item *tai, int point, int c)
 	if (point > tai->text.used-1)
 	    point = tai->text.used-1;
 
-	n_to_move = tai->text.used - (point + 1);
+	n_to_move = tai->text.used - (point + nbytes);
 	if (n_to_move > 0)
-	    memmove(tai->text.data + point + 1, tai->text.data + point, n_to_move);
+	    memmove(tai->text.data + point + nbytes, tai->text.data + point, n_to_move);
+#if UNICODE
+	UCS4_to_UTF8(tai->text.data + point, c);
+#else
 	tai->text.data[point] = c;
-
+#endif
 	flexmem_shift();
     }
+    return nbytes;
 }
 
-static void delete_chars(rid_textarea_item *tai, int point, int n)
+static void delete_bytes(rid_textarea_item *tai, int point, int n)
 {
     int n_to_move;
 
-    TXTDBG(("delete_chars: tai%p point %d n %d\n", tai, point, n));
+    TXTDBG(("delete_bytes: tai%p point %d n %d\n", tai, point, n));
 
     flexmem_noshift();
 
@@ -103,6 +110,33 @@ static void delete_chars(rid_textarea_item *tai, int point, int n)
     flexmem_shift();
 }
 
+static int move_point(rid_textarea_item *tai, int dir)
+{
+    int moved;
+#if UNICODE
+    if (config_encoding_internal == 1)
+    {
+	char *s, *p;
+
+	flexmem_noshift();
+
+	p = s = tai->text.data + tai->lines[tai->cy] + tai->cx;
+	if (dir < 0)
+	    p = UTF8_prev(s);
+	else if (dir > 0)
+	    p = UTF8_next(s);
+	moved = p - s;
+
+	flexmem_shift();
+    }
+    else
+	moved = dir;
+#else
+    moved = dir;
+#endif
+    return moved;
+}
+
 /*
  * If no wrapping then next break is where the next newline is
  * Otherwise it is after the last white space that is within the
@@ -114,8 +148,8 @@ static void delete_chars(rid_textarea_item *tai, int point, int n)
 static int find_next_break(rid_textarea_item *tai, int offset)
 {
     char *s;
-    int i, n, ws;
-
+    int i, n, ws, column;
+    
     TXTDBG(("find_next_break: tai%p offset %d data %p used %d\n", tai, offset, tai->text.data, tai->text.used));
 
     flexmem_noshift();
@@ -123,11 +157,26 @@ static int find_next_break(rid_textarea_item *tai, int offset)
     s = tai->text.data + offset;
     n = tai->text.used - offset;
     ws = -1;
-
-    for (i = 0; i < n; i++)
+    i = 0;
+    column = 0;
+    
+    while (i < n)
     {
-	int c = *s++;
-
+	int c, nbytes;
+	/* get next char */
+#if UNICODE
+	if (config_encoding_internal == 1)
+	    nbytes = UTF8_to_UCS4(s, (UCS4 *)&c);
+	else
+	{
+	    c = *s;
+	    nbytes = 1;
+	}
+#else
+	c = *s;
+	nbytes = 1;
+#endif
+	
 	if (c == '\n')
 	{
 	    /* increment past the newline */
@@ -141,16 +190,21 @@ static int find_next_break(rid_textarea_item *tai, int offset)
 		ws = i;
 
 	    /* if in last column */
-	    if (i == tai->useable_cols - 1)
+	    if (column == tai->useable_cols - 1)
 	    {
 		/* if has some whitespace reset to one past last whitespace */
 		if (ws != -1)
 		    i = ws + 1;
 		else
-		    i++;
+		    i += nbytes;
 		break;
 	    }
 	}
+
+	/* increment column number */
+	column++;
+	i += nbytes;
+	s += nbytes;
     }
 
     flexmem_shift();
@@ -254,30 +308,74 @@ static int check_line_list(rid_textarea_item *tai, int offset, int apply_after)
     return changed_from;
 }
 
+/*
+ * convert from a character offset to a byte offset
+ */
+
+static int chars_to_bytes(rid_textarea_item *tai, int nchars)
+{
+    int cx;
+#if UNICODE
+    char *s;
+    flexmem_noshift();
+
+    s = tai->text.data + tai->lines[tai->cy];
+    cx = UTF8_next_n(s, nchars) - s;
+
+    flexmem_shift();
+#else
+    cx = nchars;
+#endif
+    return cx;
+}
+
+static int bytes_to_chars(rid_textarea_item *tai, int nbytes)
+{
+    int cx;
+#if UNICODE
+    char *s;
+    flexmem_noshift();
+
+    s = tai->text.data + tai->lines[tai->cy];
+    cx = UTF8_strlen_n(s, nbytes);
+
+    flexmem_shift();
+#else
+    cx = nbytes;
+#endif
+    return cx;
+}
+
 /* return length of displayable characters */
-static int line_length(rid_textarea_item *tai, int line)
+int otextarea_line_length(rid_textarea_item *tai, int line, BOOL *terminated)
 {
     int this_off = tai->lines[line];
     int next_off = tai->lines[line+1];
     int len = next_off - this_off;
+    BOOL term = FALSE;
 
     if (len > 0 && next_off > 0)
     {
 	flexmem_noshift();
 
 	if (tai->text.data[next_off-1] == '\n')
-	    len--;
+	    term = TRUE;
 
 	flexmem_shift();
     }
+
+    if (terminated)
+	*terminated = term;
+    
+    if (term)
+	len--;
+
     return len;
 }
 
-static void font_paint_n(const char *text, int n, int x, int y)
+static int line_length(rid_textarea_item *tai, int line)
 {
-    TXTDBG(("paint: '%.*s'\n", n, text));
-
-    _swix(Font_Paint, _INR(1,4) | _IN(7), text, (1<<7) | font_OSCOORDS, x, y, n);
+    return otextarea_line_length(tai, line, NULL);
 }
 
 static void decode_offset(rid_textarea_item *tai, int cpos, SHORTISH *xpos, SHORTISH *ypos)
@@ -299,36 +397,15 @@ static void decode_offset(rid_textarea_item *tai, int cpos, SHORTISH *xpos, SHOR
 static void ensure_one_newline(rid_textarea_item *tai)
 {
     if (tai->text.used == 0)
-	insert_char(tai, 0, '\n');
-}
-#endif
-
-#if !NEW_TEXTAREA
-static void otextarea_free_lines(rid_textarea_item *tai)
-{
-    rid_textarea_line *tal, *tal2;
-
-    tal = tai->lines;
-
-    while(tal)
     {
-	tal2 = tal->next;
-
-	if (tal->text)
-	    mm_free(tal->text);
-	mm_free(tal);
-
-	tal = tal2;
+	TXTDBG(("ensure_one_newline: tai%p\n", tai));
+	insert_char(tai, 0, '\n');
     }
-
-    tai->lines = tai->last_line = tai->caret_line = NULL;
 }
-#endif
 
 #ifndef BUILDERS
 static void otextarea_copy_defaults(rid_textarea_item *tai)
 {
-#if NEW_TEXTAREA
     int off = -2;
 
     TXTDBG(("otextarea_copy_defaults: tai%p default text %p used %d\n", tai, tai->default_text.data, tai->default_text.used));
@@ -350,47 +427,6 @@ static void otextarea_copy_defaults(rid_textarea_item *tai)
 	memzone_tidy(&tai->text);
     }
     TXTDBG(("otextarea_copy_defaults: off %d\n", off));
-#else
-    rid_textarea_line *def, *new_ta;
-
-    if (tai->lines)
-	otextarea_free_lines(tai);
-
-    def = tai->default_lines;
-
-    new_ta = mm_calloc(1, sizeof(*new_ta));
-    new_ta->text = mm_malloc(MAX_TEXT_LINE);
-    if (new_ta->text)
-	new_ta->text[0] = 0;
-
-    if (def)
-    {
-	if (def->text)
-	    strncpy(new_ta->text, def->text, MAX_TEXT_LINE);
-	def = def->next;
-    }
-
-    tai->lines = tai->last_line = new_ta;
-
-    while (def)
-    {
-	new_ta = mm_calloc(1, sizeof(*new_ta));
-	new_ta->text = mm_malloc(MAX_TEXT_LINE);
-
-	if (def->text)
-	    strncpy(new_ta->text, def->text, MAX_TEXT_LINE);
-	else
-	    new_ta->text[0] = 0;
-
-	tai->last_line->next = new_ta;
-	new_ta->prev = tai->last_line;
-	tai->last_line = new_ta;
-
-	def = def->next;
-    }
-
-    tai->caret_line = tai->lines;
-#endif
     tai->cx = tai->cy = tai->sx = tai->sy = 0;
 }
 #endif /* BUILDERS */
@@ -417,51 +453,25 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 #else /* BUILDERS */
 
     rid_textarea_item *tai;
-    font_string fs;
-    char *buffer;		/* SJM: changed from auto to malloc */
+    int whichfont;
 
-    if ( !GETFONTUSED( doc, WEBFONT_TTY ) )
-    {
-        webfont_find_font( WEBFONT_TTY );
-        SETFONTUSED( doc, WEBFONT_TTY );
-    }
+    whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
 
     tai = ((rid_text_item_textarea *)ti)->area;
 
     otextarea_copy_defaults(tai);
 
     tai->useable_cols = useable_columns(tai, doc);
-
-    buffer = mm_malloc(tai->useable_cols + 1);
-    memset(buffer, ' ', tai->useable_cols);
-    buffer[tai->useable_cols] = 0;
-
-/*     for(i=0; i < tai->cols; i++) */
-/* 	buffer[i] = ' '; */
-/*     buffer[i] =0; */
-
-    fs.s = buffer;
-    fs.x = fs.y = (1 << 30);
-    fs.split = -1;
-    fs.term = tai->useable_cols;
-
-    if ( font_setfont(webfonts[WEBFONT_TTY].handle) == NULL && font_strwidth(&fs) == NULL)
-	ti->width = (fs.x / MILIPOINTS_PER_OSUNIT);
-    else
-	ti->width = tai->useable_cols * webfonts[WEBFONT_TTY].space_width;
+    
+    ti->width = webfont_nominal_width(whichfont, tai->useable_cols);
     ti->width += 20;
-    ti->max_up = webfonts[WEBFONT_TTY].max_up + 10;
-    ti->max_down = tai->rows * (webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down) -
-	webfonts[WEBFONT_TTY].max_up + 10;
+    ti->max_up = webfonts[whichfont].max_up + 10;
+    ti->max_down = tai->rows * (webfonts[whichfont].max_up + webfonts[whichfont].max_down) -
+	webfonts[whichfont].max_up + 10;
 
-    mm_free(buffer);
-
-#if NEW_TEXTAREA
     ensure_one_newline(tai);
 
     build_line_list(tai);
-#endif
-
 #endif /* BUILDERS */
 }
 
@@ -469,12 +479,10 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 {
 #ifndef BUILDERS
     rid_textarea_item *tai;
-#if !NEW_TEXTAREA
-    rid_textarea_line *tal;
-#endif
     int i;
     int h;
-    int line_gap = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
+    int whichfont;
+    int line_gap;
     int dx = frontend_dx, dy = frontend_dy;
     wimp_box ta_box, gwind_box;
     int fg, bg;
@@ -491,7 +499,10 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 
     if (update == object_redraw_BACKGROUND)
 	return;
-    
+
+    whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
+    line_gap = webfonts[whichfont].max_up + webfonts[whichfont].max_down;
+
     tai = ((rid_text_item_textarea *)ti)->area;
     has_caret = be_item_has_caret(doc, ti);
 
@@ -502,12 +513,6 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     bg = tai->base.colours.back == -1 ? render_colour_WRITE :
 	has_caret && tai->base.colours.select != -1 ?
 	tai->base.colours.select | render_colour_RGB : tai->base.colours.back | render_colour_RGB;
-
-    if (fs->lf != webfonts[WEBFONT_TTY].handle)
-    {
-	fs->lf = webfonts[WEBFONT_TTY].handle;
-	font_setfont(fs->lf);
-    }
 
     if (fs->lfc != fg || fs->lbc != bg)
     {
@@ -530,15 +535,9 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 		  ti->width, (ti->max_up + ti->max_down), doc );
 #endif
 
-#if !NEW_TEXTAREA
-    for(i=tai->sy, tal = tai->lines; tal && i; i--, tal = tal->next)
-	;
-#endif
+    TXTDBGN(("otextarea_redraw: gwind %d,%d,%d,%d\n", g->x0, g->y0, g->x1, g->y1));
+    TXTDBGN(("otextarea_redraw: box   %d,%d,%d,%d\n", hpos+8, bline-ti->max_down+8, hpos+ti->width-8, bline+ti->max_up-8));
 
-#if 0
-    fprintf(stderr, "otextarea_redraw: gwind %d,%d,%d,%d\n", g->x0, g->y0, g->x1, g->y1);
-    fprintf(stderr, "otextarea_redraw: box   %d,%d,%d,%d\n", hpos+8, bline-ti->max_down+8, hpos+ti->width-8, bline+ti->max_up-8);
-#endif
     /* Check for whether the text needs redrawing if it does
      * use the intersection of graphics window and text box
      */
@@ -548,37 +547,31 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     ta_box.y1 = bline+ti->max_up-8;
     if (coords_intersection(&ta_box, g, &gwind_box))
     {
-#if NEW_TEXTAREA
 	int *this_line = &tai->lines[tai->sy];
 	int end = tai->n_lines - tai->sy;
 	if (end > tai->rows)
 	    end = tai->rows;
 
-	TXTDBG(("otexarea_redraw: rows %d n_lines %d sy %d end %d\n", tai->rows, tai->n_lines, tai->sy, end));
-#endif
-
+	TXTDBG(("otextarea_redraw: rows %d n_lines %d sy %d end %d\n", tai->rows, tai->n_lines, tai->sy, end));
+	
 	bbc_gwindow(gwind_box.x0, gwind_box.y0, gwind_box.x1-dx, gwind_box.y1-dy);
 
-#if NEW_TEXTAREA
 	flexmem_noshift();
 	for(i=0, h = bline; i < end; i++, h -= line_gap, this_line++)
 	{
-	    if (h - webfonts[WEBFONT_TTY].max_down < g->y1 && h + webfonts[WEBFONT_TTY].max_up > g->y0 )
+	    if (h - webfonts[whichfont].max_down < g->y1 && h + webfonts[whichfont].max_up > g->y0 )
 	    {
 		int len = this_line[1] - this_line[0] - tai->sx;
 		if (len > 0)
-		    font_paint_n(tai->text.data + this_line[0] + tai->sx, len, hpos + 10, h);
+		{
+		    TXTDBG(("otextarea_redraw: this[1] %d this[0] %d sx %d = len %d\n", this_line[1], this_line[0], tai->sx, len));
+		    TXTDBG(("otextarea_redraw: '%.*s'\n", len, tai->text.data + this_line[0] + tai->sx));
+		    render_text_full(doc, whichfont, tai->text.data + this_line[0] + tai->sx, hpos + 10, h, NULL, len);
+		}
 	    }
 	}
 	flexmem_shift();
-#else
-	for(i=tai->rows, h = bline; tal && i; i--, tal = tal->next, h -= line_gap)
-	{
-	    if (h - webfonts[WEBFONT_TTY].max_down < g->y1 && h + webfonts[WEBFONT_TTY].max_up > g->y0 )
-		if (tal->text && strlen(tal->text) > tai->sx)
-		    font_paint(tal->text + tai->sx, font_OSCOORDS, hpos + 10, h);
-	}
-#endif
+
 	bbc_gwindow(g->x0, g->y0, g->x1-dx, g->y1-dy);
     }
 #endif /* BUILDERS */
@@ -604,7 +597,11 @@ static int otextarea_fast_redraw_fn(wimp_redrawstr *r, void *h, int update)
 static void otextarea_update_lines(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int top, int bottom)
 {
     wimp_box box;
-    int line_gap = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
+    int line_gap;
+    int whichfont;
+
+    whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
+    line_gap = webfonts[whichfont].max_up + webfonts[whichfont].max_down;
 
     stream_find_item_location(ti, &ot_stored_hpos, &ot_stored_bline);
 
@@ -619,8 +616,8 @@ static void otextarea_update_lines(rid_text_item *ti, rid_header *rh, antweb_doc
     box.x0 = ot_stored_hpos + 8;
     box.x1 = ot_stored_hpos + ti->width - 8;
 
-    box.y1 = ot_stored_bline - (top    * line_gap) + webfonts[WEBFONT_TTY].max_up;
-    box.y0 = ot_stored_bline - (bottom * line_gap) - webfonts[WEBFONT_TTY].max_down;
+    box.y1 = ot_stored_bline - (top    * line_gap) + webfonts[whichfont].max_up;
+    box.y0 = ot_stored_bline - (bottom * line_gap) - webfonts[whichfont].max_down;
 
     frontend_view_update(doc->parent, &box, &otextarea_fast_redraw_fn, ti, FALSE);
 }
@@ -628,11 +625,14 @@ static void otextarea_update_lines(rid_text_item *ti, rid_header *rh, antweb_doc
 static void otextarea_scroll_lines(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int top, int bottom, int new_bottom)
 {
     rid_textarea_item *tai;
-    int line_gap = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
+    int line_gap;
     int hpos, vpos;
     wimp_box box;
     int new_y;
+    int whichfont;
 
+    whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
+    line_gap = webfonts[whichfont].max_up + webfonts[whichfont].max_down;
     tai = ((rid_text_item_textarea *)ti)->area;
 
     stream_find_item_location(ti, &hpos, &vpos);
@@ -645,10 +645,10 @@ static void otextarea_scroll_lines(rid_text_item *ti, rid_header *rh, antweb_doc
     box.x0 = hpos + 8;
     box.x1 = hpos + ti->width - 8;
 
-    box.y1 = vpos - (top    * line_gap) + webfonts[WEBFONT_TTY].max_up;
-    box.y0 = vpos - (bottom * line_gap) - webfonts[WEBFONT_TTY].max_down;
+    box.y1 = vpos - (top    * line_gap) + webfonts[whichfont].max_up;
+    box.y0 = vpos - (bottom * line_gap) - webfonts[whichfont].max_down;
 
-    new_y  = vpos - (new_bottom * line_gap) - webfonts[WEBFONT_TTY].max_down;
+    new_y  = vpos - (new_bottom * line_gap) - webfonts[whichfont].max_down;
 
     frontend_view_block_move(doc->parent, &box, box.x0, new_y);
 }
@@ -659,54 +659,31 @@ void otextarea_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     rid_textarea_item *tai;
 
     tai = ((rid_text_item_textarea *)ti)->area;
-#if NEW_TEXTAREA
     memzone_destroy(&tai->text);
-#else
-    otextarea_free_lines(tai);
-#endif
 }
 
 char *otextarea_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int y, wimp_bbits bb)
 {
 #ifndef BUILDERS
-    int line_gap = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
+    int line_gap, whichfont;
     rid_textarea_item *tai;
-#if !NEW_TEXTAREA
-    rid_textarea_line *tal;
-    int i;
-#endif
-    os_error *ep;
-    os_regset r;
 
+    whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
+    line_gap = webfonts[whichfont].max_up + webfonts[whichfont].max_down;
     tai = ((rid_text_item_textarea *)ti)->area;
 
     /* Remember that our Y coordinate is relative to the base line. */
 
     y -= 10;
-    y = webfonts[WEBFONT_TTY].max_up - y;
+    y = webfonts[whichfont].max_up - y;
     y /= line_gap;
     y += tai->sy;
 
-#if !NEW_TEXTAREA
-    for (i = y, tal = tai->lines; i && tal->next; i--, tal = tal->next)
-	;
-
-    tai->caret_line = tal;
-#endif
-
-#if NEW_TEXTAREA
     if (y >= tai->n_lines)
     {
 	tai->cy = tai->n_lines-1;
 	tai->cx = line_length(tai, tai->cy);
     }
-#else
-    if (i)
-    {
-	tai->cy = y - i;
-	tai->cx = strlen(tal->text);
-    }
-#endif
     else
     {
 	int len, start_offset;
@@ -714,44 +691,24 @@ char *otextarea_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x,
 
 	tai->cy = y;
 
-#if NEW_TEXTAREA
 	flexmem_noshift();
 
 	len = line_length(tai, y);
 	start_offset = tai->lines[y];
 	text = tai->text.data + start_offset;
-#else
-	text = tal->text;
-	len = strlen(text);
-#endif
+
 	if (tai->sx >= len)
 	    tai->cx = len;
 	else
 	{
 	    x -= 12;
 
-	    r.r[0] = (int) (long) webfonts[WEBFONT_TTY].handle;
-	    r.r[1] = (int) (long) text + tai->sx;
-	    r.r[2] = (1 << 17) | (1 << 8) | (1 << 7);
-	    r.r[3] = x * MILIPOINTS_PER_OSUNIT;
-	    r.r[4] = r.r[5] = r.r[6] = 0;
-	    r.r[7] = len - tai->sx;
+	    tai->cx = webfont_get_offset(whichfont, text + tai->sx, x, NULL, len - tai->sx);
 
-	    ep = os_swix(Font_ScanString, &r);
-
-	    if (ep == NULL)
-	    {
-		/* By taking the offset from the begining of the string the X scroll is taken into account */
-		tai->cx = ((char*) (long) r.r[1]) - text;
-	    }
-	    else
-	    {
-		tai->cx = len;
-	    }
+	    TXTDBG(("otextarea_click: x %d len %d out %d\n", x, len - tai->sx, tai->cx));
 	}
-#if NEW_TEXTAREA
+
 	flexmem_shift();
-#endif
     }
 
     antweb_place_caret(doc, ti, doc_selection_offset_UNKNOWN);
@@ -769,14 +726,10 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
 #ifndef BUILDERS
     int cx, cy;
     rid_textarea_item *tai;
-    os_error *ep;
     char *text;
-    font_string fs;
-#if !NEW_TEXTAREA
-    rid_textarea_line *tal;
-    int i;
-#endif
     int h;
+    int term;
+    int whichfont;
 
     tai = ((rid_text_item_textarea *)ti)->area;
 
@@ -806,49 +759,30 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
 	repos = object_caret_REPOSITION;
     }
 
-#if NEW_TEXTAREA
     if (tai->cy > tai->n_lines-1)
 	tai->cy = tai->n_lines-1;
     text = tai->text.data + tai->lines[tai->cy];
-#else
-    for(tal = tai->lines, i = tai->cy; i && tal->next; i--, tal = tal->next)
-	;
-    if (i)
-	tai->cy -= i;
-    text = tal->text;
-#endif
 
     stream_find_item_location(ti, &cx, &cy);
 
-    fs.s = text + tai->sx;
-    fs.x = fs.y = (1 << 30);
-    fs.split = -1;
-#if NEW_TEXTAREA
-    fs.term = line_length(tai, tai->cy);
-    if (fs.term > tai->cx)
-	fs.term = tai->cx;
-    fs.term -= tai->sx;
-#else
-    fs.term = tai->cx - tai->sx;
-#endif
-    ep = font_setfont(webfonts[WEBFONT_TTY].handle);
-    if (ep)
-	return FALSE;
+    term = line_length(tai, tai->cy);
+    if (term > tai->cx)
+	term = tai->cx;
+    term -= tai->sx;
 
-    ep = font_strwidth(&fs);
-    if (ep)
-	return FALSE;
-    cx += (fs.x / MILIPOINTS_PER_OSUNIT);
+    whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
+	    
+    cx += webfont_font_width_n(whichfont, text + tai->sx, term);
     cx += 10;
 
-    cy -= webfonts[WEBFONT_TTY].max_down;
-    cy -= (tai->cy - tai->sy) * (webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down);
+    cy -= webfonts[whichfont].max_down;
+    cy -= (tai->cy - tai->sy) * (webfonts[whichfont].max_up + webfonts[whichfont].max_down);
 
 #if USE_MARGINS
     cx += doc->margin.x0;
     cy += doc->margin.y1;
 #endif
-    h = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
+    h = webfonts[whichfont].max_up + webfonts[whichfont].max_down;
     h |= render_caret_colour(doc, tai->base.colours.back, tai->base.colours.cursor);
 
     frontend_view_caret(doc->parent, cx, cy, h, repos == object_caret_REPOSITION || repos == object_caret_FOCUS);
@@ -871,38 +805,35 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 #ifndef BUILDERS
     int flags = 0;
     rid_textarea_item *tai;
-#if NEW_TEXTAREA
     int dpoint, dchar;
     int changed_from;
-#else
-    rid_textarea_line *tal;
-#endif
     int len;
     int osx, osy;
     int cols;
+    int cxpos, sxpos;
 
     tai = ((rid_text_item_textarea *)ti)->area;
-#if NEW_TEXTAREA
+
     if (tai->cy < 0)				/* just for safety */
 	tai->cy = 0;
     if (tai->cy > tai->n_lines - 1)
 	tai->cy = tai->n_lines - 1;
 
-    len = line_length(tai, tai->cy);		/* this is the printable line length */
-    dchar = 0;					/* this is the number of chars added or removed (from dpoint) */
+    len = line_length(tai, tai->cy);		/* this is the printable line length (in bytes) */
+    dchar = 0;					/* this is the number of bytes added or removed (from dpoint) */
     dpoint = -1;				/* this is the point of insertion/deletion */
     changed_from = 0;
-#else
-    tal = tai->caret_line;
-    len = strlen(tal->text);
-#endif
 
     osx = tai->sx;
     osy = tai->sy;
 
     flags |= CHAR_USED;
 
-    if (key >= 32 && key < 256 && key != 127)
+    if (key >= 32 && key != 127
+#if !UNICODE
+	&& key < 256
+#endif
+	)
     {
 	if (tai->cx > len)
 	{
@@ -910,28 +841,20 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    flags |= REPOS_CARET;
 	}
 
-#if NEW_TEXTAREA
-	dchar = 1;
+/* 	dchar = 1; */
 	dpoint = tai->lines[tai->cy] + tai->cx;
-	insert_char(tai, dpoint, key);
-/* 	tai->cx++; */
+	dchar = insert_char(tai, dpoint, key);
 
 	flags |= (REDRAW_LINE | REPOS_CARET);
-#else
-	if (len + 1 < MAX_TEXT_LINE)
-	{
-	    memmove(tal->text + tai->cx + 1, tal->text + tai->cx, len + 1 - tai->cx );
-
-	    tal->text[tai->cx] = key;
-	    tai->cx++;
-
-	    flags |= (REDRAW_LINE | REPOS_CARET);
-	}
-#endif
     }
     else
     {
-	input_key_action action = lookup_key_action(key);
+	input_key_action action;
+#if UNICODE
+	if (key < 0)
+	    key = -key;
+#endif
+	action = lookup_key_action(key);
 
 /* 	DBG(("otextarea_key: key %d action %d\n", key, action)); */
 
@@ -940,57 +863,19 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	case key_action_NEWLINE:
 	case key_action_NEWLINE_SUBMIT_ALWAYS:
 	case key_action_NEWLINE_SUBMIT_LAST:
-#if NEW_TEXTAREA
 	    if (tai->cx > len)
 	    {
 		tai->cx = len;
 		flags |= REPOS_CARET;
 	    }
 
-	    dchar = 1;
+/* 	    dchar = 1; */
 	    dpoint = tai->lines[tai->cy] + tai->cx;	/* this is the caret point at the start */
-	    insert_char(tai, dpoint, '\n');
-/* 	    tai->cy++; */
-/* 	    tai->cx = 0; */
+	    dchar = insert_char(tai, dpoint, '\n');
 
 	    flags |= (SPLIT_DOWN | REDRAW_LINE | REPOS_CARET);
-#else
-	    {
-		rid_textarea_line *new_tal;
-
-		if (tai->cx > len)
-		{
-		    tai->cx = len;
-		    flags |= REPOS_CARET;
-		}
-
-		new_tal = mm_calloc(1, sizeof(*new_tal));
-		new_tal->text = mm_malloc(MAX_TEXT_LINE);
-		if (new_tal->text)
-		    new_tal->text[0] = 0;
-
-		new_tal->prev = tal;
-		new_tal->next = tal->next;
-		if (tal->next)
-		    tal->next->prev = new_tal;
-		else
-		    tai->last_line = new_tal;
-		tal->next = new_tal;
-
-		if (tai->cx != len)
-		{
-		    strcpy(new_tal->text, tal->text + tai->cx);
-		    tal->text[tai->cx] = 0;
-		}
-
-		tai->caret_line = new_tal;
-		tai->cy++;
-		tai->cx = 0;
-
-		flags |= (SPLIT_DOWN | REDRAW_LINE | REPOS_CARET);
-	    }
-#endif
 	    break;
+
 	case key_action_DELETE_LEFT:
 	    if (tai->cx > len)
 	    {
@@ -998,61 +883,28 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		flags |= REPOS_CARET;
 	    }
 
-#if NEW_TEXTAREA
 	    if (tai->cx > 0)
 	    {
-		dchar = -1;
-		dpoint = tai->lines[tai->cy] + tai->cx - 1;	/* this is the caret point at the start */
-		delete_chars(tai, dpoint, 1);
+/* 		dchar = -1; */
+		dpoint = tai->lines[tai->cy] + tai->cx /* + dchar */;	/* this is the caret point at the start */
+		dchar = move_point(tai, -1);
+		dpoint += dchar;
+		delete_bytes(tai, dpoint, -dchar);
 
-/* 		tai->cx--; */
 		flags |= (REDRAW_LINE | REPOS_CARET);
 	    }
 	    else if (tai->cy > 0)
 	    {
-/* 		tai->cy --; */
-/* 		tai->cx = line_length(tai, tai->cy); */  /* do first to get point where lines join up */
-
-		dchar = -1;
-		dpoint = tai->lines[tai->cy] + tai->cx - 1;	/* this is the caret point at the start */
-		delete_chars(tai, dpoint, 1);
-
-		flags |= (REDRAW_LINE | REPOS_CARET | JOIN_LINES);
-	    }
-#else
-	    if (tai->cx > 0)
-	    {
-		memmove(tal->text + tai->cx - 1, tal->text + tai->cx, len + 1 - tai->cx);
-		tai->cx--;
-		flags |= (REDRAW_LINE | REPOS_CARET);
-	    }
-	    else if (tal->prev)
-	    {
-		rid_textarea_line *tal2 = tal->prev;
-		int ll;
-
-		ll = strlen(tal2->text);
-
-		strncpy(tal2->text + ll, tal->text, MAX_TEXT_LINE - ll - 1);
-		tal2->text[MAX_TEXT_LINE -1] = 0;
-
-		mm_free(tal->text);
-		tal2->next = tal->next;
-		if (tal->next)
-		    tal->next->prev = tal2;
-		else
-		    tai->last_line = tal2;
-
-		mm_free(tal);
-
-		tai->cx = ll;
-		tai->cy--;
-		tai->caret_line = tal2;
+/* 		dchar = -1; */
+		dpoint = tai->lines[tai->cy] + tai->cx /* + dchar */;	/* this is the caret point at the start */
+		dchar = move_point(tai, -1);
+		dpoint += dchar;
+		delete_bytes(tai, dpoint, -dchar);
 
 		flags |= (REDRAW_LINE | REPOS_CARET | JOIN_LINES);
 	    }
-#endif
 	    break;
+
 	case key_action_DELETE_TO_END:
 	    if (tai->cx > len)
 	    {
@@ -1060,24 +912,14 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		flags |= REPOS_CARET;
 	    }
 
-#if NEW_TEXTAREA
 	    if (tai->cx < len)
 	    {
 		dchar = - (len - tai->cx);
 		dpoint = tai->lines[tai->cy] + tai->cx;	/* this is the caret point at the start */
-		delete_chars(tai, dpoint, len - tai->cx);
+		delete_bytes(tai, dpoint, -dchar);
 		flags |= REDRAW_LINE;
 		break;
 	    }
-#else
-	    if (tal->text[tai->cx] != 0)
-	    {
-		tal->text[tai->cx] = 0;	/* Truncate the line */
-
-		flags |= REDRAW_LINE;
-		break;
-	    }
-#endif
 	    /* Otherwise, fall throught and do a ctrl-D to the end of line */
 	case key_action_DELETE_RIGHT:
 	    if (tai->cx > len)
@@ -1086,91 +928,47 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		flags |= REPOS_CARET;
 	    }
 
-#if NEW_TEXTAREA
 	    if (tai->cx < len || tai->cy < tai->n_lines-1)
 	    {
-		dchar = -1;
 		dpoint = tai->lines[tai->cy] + tai->cx;	/* this is the caret point at the start */
-		delete_chars(tai, dpoint, 1);
+		dchar = - move_point(tai, +1);
+		delete_bytes(tai, dpoint, - dchar);
 		if (tai->cx < len)
 		    flags |= REDRAW_LINE;
 		else
 		    flags |= (REDRAW_LINE | REPOS_CARET | JOIN_LINES);
 	    }
-#else
-	    if (tai->cx < len)
-	    {
-		memmove(tal->text + tai->cx, tal->text + tai->cx + 1, len - tai->cx);
-		flags |= REDRAW_LINE;
-	    }
-	    else if (tal->next)
-	    {
-		rid_textarea_line *tal2 = tal->next;
-		int ll;
-
-		ll = strlen(tal2->text);
-
-		strncpy(tal->text + tai->cx, tal2->text, MAX_TEXT_LINE - len - 1);
-		tal->text[MAX_TEXT_LINE -1] = 0;
-
-		mm_free(tal2->text);
-		tal->next = tal2->next;
-		if (tal2->next)
-		    tal2->next->prev = tal;
-		else
-		    tai->last_line = tal;
-
-		mm_free(tal2);
-
-		flags |= (REDRAW_LINE | REPOS_CARET | JOIN_LINES);
-	    }
-#endif
 	    break;
 	case key_action_DELETE_ALL:
-#if NEW_TEXTAREA
 	    dpoint = tai->lines[tai->cy];
 	    dchar = -len;
-	    delete_chars(tai, dpoint, len);
-#else
-	    tal->text[0] = 0;
-#endif
+	    delete_bytes(tai, dpoint, len);
 	    tai->cx = 0;
 	    flags |= (REDRAW_LINE | REPOS_CARET);
 	    break;
 	case key_action_DELETE_ALL_AREA:
 	{
-#if NEW_TEXTAREA
 	    dpoint = 0;
 	    dchar = - tai->text.used;
-	    delete_chars(tai, 0, tai->text.used);
+	    delete_bytes(tai, 0, tai->text.used);
 
 	    ensure_one_newline(tai);
-#else
-	    rid_textarea_line *line = tai->lines;
-	    while (line)
-	    {
-		line->text[0] = 0;
-		line = line->next;
-	    }
-
-	    tai->caret_line = tai->lines;
-#endif
 	    tai->cx = tai->cy = 0;
 	    flags |= (REDRAW_ALL | REPOS_CARET);
 	    break;
 	}
 	case key_action_LEFT:
 	case key_action_LEFT_OR_OFF:
-#if NEW_TEXTAREA
 	    if (tai->cx > len)
 	    {
 		tai->cx = len;
 		flags |= REPOS_CARET;
 	    }
-#endif
+
 	    if (tai->cx > 0)
 	    {
-		tai->cx--;
+/* 		tai->cx--; */
+		tai->cx += move_point(tai, -1);
 	        flags |= REPOS_CARET;
 	    }
             else if (action == key_action_LEFT_OR_OFF)
@@ -1181,7 +979,8 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	case key_action_RIGHT_OR_OFF:
 	    if (tai->cx < len /* MAX_TEXT_LINE */) /* SJM: 11/5/97: don't allow movement off the RH edge of text */
 	    {
-		tai->cx++;
+		tai->cx += move_point(tai, +1);
+/* 		tai->cx++; */
 	        flags |= REPOS_CARET;
 	    }
             else if (action == key_action_RIGHT_OR_OFF)
@@ -1200,62 +999,36 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
 	case key_action_START_OF_AREA:
 	    tai->cx = tai->cy = 0;
-#if !NEW_TEXTAREA
-	    tai->caret_line = tai->lines;
-#endif
 	    flags |= REPOS_CARET;
 	    break;
 
 	case key_action_END_OF_AREA:
-#if NEW_TEXTAREA
 	    tai->cy = tai->n_lines - 1;
 	    tai->cx = line_length(tai, tai->cy);
-#else
-	    while (tai->caret_line->next)
-	    {
-		tai->cy++;
-		tai->caret_line = tai->caret_line->next;
-	    }
-	    tai->cx = strlen(tai->caret_line->text);
-#endif
 	    flags |= REPOS_CARET;
 	    break;
 
 	case key_action_UP:
-#if NEW_TEXTAREA
 	    if (tai->cy)
 	    {
 		tai->cy--;
+		tai->cx = chars_to_bytes(tai, bytes_to_chars(tai, tai->cx));
+		tai->sx = chars_to_bytes(tai, bytes_to_chars(tai, tai->sx));
 		flags |= REPOS_CARET;
 	    }
-#else
-	    if (tal->prev)
-	    {
-		tai->cy--;
-		tai->caret_line = tal->prev;
-		flags |= REPOS_CARET;
-	    }
-#endif
 	    else
 	    {
 		flags &= ~CHAR_USED;
 	    }
 	    break;
 	case key_action_DOWN:
-#if NEW_TEXTAREA
 	    if (tai->cy < tai->n_lines - 1)
 	    {
 		tai->cy++;
+		tai->cx = chars_to_bytes(tai, bytes_to_chars(tai, tai->cx));
+		tai->sx = chars_to_bytes(tai, bytes_to_chars(tai, tai->sx));
 		flags |= REPOS_CARET;
 	    }
-#else
-	    if (tal->next)
-	    {
-		tai->cy++;
-		tai->caret_line = tal->next;
-		flags |= REPOS_CARET;
-	    }
-#endif
 	    else
 	    {
 		flags &= ~CHAR_USED;
@@ -1270,7 +1043,6 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	}
     }
 
-#if NEW_TEXTAREA
     /* see if any characters have been added */
     if (dchar != 0)
     {
@@ -1292,21 +1064,18 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	if (tai->wrap != rid_ta_wrap_NONE && changed_from != -1)
 	    flags |= REDRAW_DOWN;
     }
-#endif
 
     cols = tai->useable_cols;
+    cxpos = bytes_to_chars(tai, tai->cx);
+    sxpos = bytes_to_chars(tai, tai->sx);
 
     /* force the horizontal scroll position to be visible */
-    if (tai->cx < tai->sx || tai->cx > (tai->sx + cols))
+    if (cxpos < sxpos || cxpos > (sxpos + cols))
     {
-	if (tai->cx < (cols / 2))
+	if (cxpos < (cols / 2))
 	    tai->sx = 0;
-#if !NEW_TEXTAREA
-	else if (tai->cx > MAX_TEXT_LINE - (cols / 2))
-	    tai->sx = MAX_TEXT_LINE - cols;
-#endif
 	else
-	    tai->sx = tai->cx - (cols / 2);
+	    tai->sx = chars_to_bytes(tai, cxpos - (cols / 2));
 
 	flags |= REDRAW_ALL;
     }
@@ -1329,13 +1098,10 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
         box.y0 =   2*5;
 	antweb_update_item_trim(doc, ti, &box, FALSE);
     }
-#if NEW_TEXTAREA
     else if (flags & REDRAW_DOWN)
     {
-/* 	int cy = tai->cy < ocy ? tai->cy : ocy; */
 	otextarea_update_lines(ti, rh, doc, changed_from - tai->sy, tai->rows-1);
     }
-#endif
     else if (flags & JOIN_LINES)
     {
 	/* We want to move the caret out of the area that gets block-copied before the copy */
@@ -1377,64 +1143,11 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
 int otextarea_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
-/*  rid_textarea_item *tai = ((rid_text_item_textarea *) ti)->area; */
-
     if (box)
 	memset(box, 0, sizeof(*box));
 
     return TRUE;
 }
-
-#if NEW_TEXTAREA
-void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *blen)
-{
-    int i;
-
-    flexmem_noshift();
-
-    for (i = 0; i < tai->n_lines; i++)
-    {
-	int len = line_length(tai, i);
-	BOOL terminated = (tai->lines[i+1] - tai->lines[i]) != len;
-
-	be_ensure_buffer_space(buffer, blen, 3 * len + 2);
-
-	url_escape_cat_n(*buffer, tai->text.data + tai->lines[i], *blen, len);
-
-	if (i != tai->n_lines-1 &&
-	    (tai->wrap == rid_ta_wrap_HARD || terminated))
-	    strcat(*buffer, "%0D%0A");
-    }
-
-    flexmem_shift();
-}
-
-void otextarea_write_to_file(rid_textarea_item *tai, FILE *f, BOOL raw)
-{
-    int i;
-
-    flexmem_noshift();
-
-    for (i = 0; i < tai->n_lines; i++)
-    {
-	int len = line_length(tai, i);
-	BOOL terminated = (tai->lines[i+1] - tai->lines[i]) != len;
-
-	if (raw)
-	    fwrite(tai->text.data + tai->lines[i], len, 1, f);
-	else
-	    url_escape_to_file_n(tai->text.data + tai->lines[i], f, len);
-
-	if ((i != tai->n_lines-1 || raw) &&
-	    (tai->wrap == rid_ta_wrap_HARD || terminated))
-	{
-	    fputs(raw ? "\r\n" : "%0D%0A", f);
-	}
-    }
-    
-    flexmem_shift();
-}
-#endif
 
 /*
 

@@ -63,12 +63,26 @@ static void fmt_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 {
     HTMLCTX *htmlctx = context->clictx;
 
-    if (htmlctx->inhand_reason == DELIVER_WORD)
+    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK)
     {
+#if UNICODE
+	PRSDBGN(("fmt_deliver_word(): word already stashed - push word %s\n", reason == DELIVER_WORD_NOBREAK ? "nobreak" : ""));
+
+#if NEW_BREAKS
+	text_item_push_word(htmlctx, reason == DELIVER_WORD_NOBREAK ? rid_break_MUST_NOT : 0, WITHOUT_SPACE);
+#else
+	text_item_push_word(htmlctx, reason == DELIVER_WORD_NOBREAK ? rid_flag_NO_BREAK : 0, WITHOUT_SPACE);
+#endif
+
+	/* No free - data retained for later */
+	htmlctx->inhand_string = item;
+	htmlctx->inhand_reason = reason;
+#else
 	/* Could push word with text_item_push_word(htmlctx, rid_flag_NO_BREAK, WITHOUT_SPACE); */
 	PRSDBGN(("fmt_deliver_word(): word already stashed - appending\n"));
 	/* Freeing done in append_new() */
 	append_new(htmlctx, DELIVER_WORD, item);
+#endif
     }
     else if (htmlctx->inhand_reason == DELIVER_SPACE)
     {
@@ -106,7 +120,7 @@ static void fmt_deliver_space(SGMLCTX *context, int reason, STRING item, ELEMENT
 {
     HTMLCTX *htmlctx = context->clictx;
 	
-    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_SPACE)
+    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_SPACE || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK)
     {
 	if (htmlctx->strip_space)
 	{
@@ -128,7 +142,12 @@ static void fmt_deliver_space(SGMLCTX *context, int reason, STRING item, ELEMENT
 
 	if (stream != NULL && 
 	    stream->text_last != NULL &&
-	    (stream->text_last->flag & rid_flag_LINE_BREAK) == 0)
+#if NEW_BREAKS
+	    GET_BREAK(stream->text_last->flag) != rid_break_MUST
+#else
+	    (stream->text_last->flag & rid_flag_LINE_BREAK) == 0
+#endif
+	    )
 	{
 #if 1
 	    /* This bit tries to stop multiple spaces separated only by markup from occurring
@@ -139,6 +158,10 @@ static void fmt_deliver_space(SGMLCTX *context, int reason, STRING item, ELEMENT
 	    /* if last item was a word with a space at the end then we drop this space */
 	    if (stream->text_last->tag == rid_tag_TEXT)
 	    {
+#if NEW_BREAKS
+		if (stream->text_last->flag & rid_flag_SPACE)
+		    reason = DELIVER_NOP;
+#else
 		char *s;
 		flexmem_noshift();
 
@@ -147,8 +170,9 @@ static void fmt_deliver_space(SGMLCTX *context, int reason, STRING item, ELEMENT
 		    reason = DELIVER_NOP;
 
 		flexmem_shift();
+#endif	    
 	    }
-	    
+
 	    if (reason == DELIVER_NOP)
 	    {
 		PRSDBGN(("fmt_deliver_space(): previous word has space so dropping\n"));
@@ -201,7 +225,7 @@ static void fmt_deliver_pre_open_markup(SGMLCTX *context, int reason, STRING ite
 	want_break = TRUE;
 	want_space = FALSE;
     }
-    else if (htmlctx->inhand_reason == DELIVER_WORD && (elem->flags & FLAG_PRE_BREAK) == 0 )
+    else if ((htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK) && (elem->flags & FLAG_PRE_BREAK) == 0 )
     {
 	want_space = FALSE;
 	want_nobreak = TRUE;
@@ -213,12 +237,19 @@ static void fmt_deliver_pre_open_markup(SGMLCTX *context, int reason, STRING ite
     PRSDBGN(("fmt_deliver_pre_open_markup(): want_space %d, want_break %d, want_nobreak %d\n",
 	     want_space, want_break, want_nobreak));
 
-    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_SPACE)
+    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_SPACE || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK)
     {
+#if NEW_BREAKS
+	text_item_push_word(htmlctx, 
+			    (want_break ? rid_break_MUST : want_nobreak ? rid_break_MUST_NOT : 0),
+			    want_space ? WITH_SPACE : WITHOUT_SPACE);
+	
+#else
 	text_item_push_word(htmlctx, 
 			    (want_break ? rid_flag_LINE_BREAK : 0) |
 			    (want_nobreak ? rid_flag_NO_BREAK : 0),
 			    want_space ? WITH_SPACE : WITHOUT_SPACE);
+#endif
     }
 
     /* if (want_break || elem->flags & FLAG_BLOCK_LEVEL) != 0) */
@@ -252,7 +283,7 @@ static void fmt_deliver_pre_close_markup(SGMLCTX *context, int reason, STRING it
 	want_break = FALSE;
 	want_space = FALSE;
     }
-    else if (htmlctx->inhand_reason == DELIVER_WORD)
+    else if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK)
     {
 	want_nobreak = TRUE;
 	want_space = FALSE;
@@ -268,12 +299,19 @@ static void fmt_deliver_pre_close_markup(SGMLCTX *context, int reason, STRING it
     PRSDBGN(("fmt_deliver_pre_close_markup(%s): want_space %d, want_break %d\n",
 	     elem->name.ptr, want_space, want_break));
 
-    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_SPACE)
+    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_SPACE || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK)
+#if NEW_BREAKS
+	text_item_push_word(htmlctx, 
+			    (want_break ? rid_break_MUST : want_nobreak ? rid_break_MUST_NOT : 0),
+			    want_space ? WITH_SPACE : WITHOUT_SPACE);
+	
+#else
 	text_item_push_word(htmlctx, 
 			    (want_break ? rid_flag_LINE_BREAK : 0) |
 			    (want_nobreak ? rid_flag_NO_BREAK : 0),
 			    want_space ? WITH_SPACE : WITHOUT_SPACE);
-
+#endif
+    
     htmlctx->inhand_reason = DELIVER_NOP;
 
     /* Space stripping from before the markup does not alter */
@@ -309,7 +347,11 @@ static void fmt_deliver_post_open_markup(SGMLCTX *context, int reason, STRING it
 	htmlctx->rh->curstream->text_last != htmlctx->rh->curstream->text_list )
     {
 	PRSDBG(("fmt_deliver_post_open_markup(): setting rid_flag_LINE_BREAK\n"));
+#if NEW_BREAKS
+	SET_BREAK(htmlctx->rh->curstream->text_last->flag, rid_break_MUST);
+#else
 	htmlctx->rh->curstream->text_last->flag |= rid_flag_LINE_BREAK;
+#endif
     }
 
     htmlctx->inhand_reason = DELIVER_NOP;
@@ -346,7 +388,11 @@ static void fmt_deliver_post_close_markup(SGMLCTX *context, int reason, STRING i
 	htmlctx->rh->curstream->text_last != htmlctx->rh->curstream->text_list )
     {
 	PRSDBGN(("fmt_deliver_post_close_markup(): setting rid_flag_LINE_BREAK\n"));
+#if NEW_BREAKS
+	SET_BREAK(htmlctx->rh->curstream->text_last->flag, rid_break_MUST);
+#else
 	htmlctx->rh->curstream->text_last->flag |= rid_flag_LINE_BREAK;
+#endif
     }
 
     /* if ( (elem->flags & FLAG_BLOCK_LEVEL) != 0 ) */
@@ -373,7 +419,7 @@ static void fmt_deliver_sgml(SGMLCTX *context, int reason, STRING item, ELEMENT 
 {
     static STRING s = { NULL, 0 };
 
-    PRSDBGN(("fmt_deliver_sgml(): pretending had <SGML>\n"));
+    PRSDBGN(("fmt_deliver_sgml(): pretending had <SGML> item '%.*s'\n", item.nchars, item.ptr));
 
     fmt_deliver_pre_open_markup( context, DELIVER_PRE_OPEN_MARKUP,  s, &context->elements[HTML_SGML] );
     nullfree((void**)&item.ptr);
@@ -414,20 +460,20 @@ static void deliver_unexpected(SGMLCTX *context, int reason, STRING orig_item, E
     HTMLCTX *me = htmlctxof(context);
     STRING item = orig_item;
 
-    PRSDBGN(("deliver_unexpected(): '%.*s'\n", item.bytes, item.ptr ));
+    PRSDBGN(("deliver_unexpected(): '%.*s'\n", item.nchars, item.ptr ));
 
-    while (item.bytes > 0)
+    while (item.nchars > 0)
     {
 	if ( *item.ptr <= 32 )
 	{
 	    item.ptr++;
-	    item.bytes--;
+	    item.nchars--;
 	}
 	else
 	    break;
     }
 
-    if (item.bytes != 0)
+    if (item.nchars != 0)
     {
 	STACK_ITEM *stacked = context->tos;
 	int i, tag = SGML_NO_ELEMENT;
@@ -452,7 +498,7 @@ static void deliver_unexpected(SGMLCTX *context, int reason, STRING orig_item, E
 		/* Fully unstacked - cater for phantom closure */
 		if (context->tos != NULL && context->tos->element >= 0)
 		{
-		    sgml_feed_characters(context, item.ptr, item.bytes);
+		    sgml_feed_characters_ascii(context, item.ptr, item.nchars);
 		}
 		else
 		{
@@ -489,7 +535,7 @@ static void fmt_deliver_eos(SGMLCTX *context, int reason, STRING item, ELEMENT *
 {
     HTMLCTX *htmlctx = context->clictx;
 
-    if (htmlctx->inhand_reason == DELIVER_WORD)
+    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK)
     {
 	text_item_push_word(htmlctx, 0, WITHOUT_SPACE);
     }
@@ -519,6 +565,8 @@ static void fmt_deliver_eos(SGMLCTX *context, int reason, STRING item, ELEMENT *
   SJM: 11/05/97: separated out the routines to do tab expansions and concatenation
   to ensure TEXTAREA and OPTION are expanded and fixed memory leaks due to not always
   freeing the item passed in.
+
+  Then added new textarea code.
   
   */
 
@@ -528,52 +576,37 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 
     if (context->tos->element == HTML_TEXTAREA)
     {
-	PRSDBG(("Textarea line='%.*s'\n", item.bytes, item.ptr));
+	PRSDBG(("Textarea line='%.*s'\n", item.nchars, item.ptr));
 
 	if (htmlctx->form && htmlctx->form->last_text)
 	{
 	    rid_textarea_item *tai;
 	    STRING null;
 
-#if NEW_TEXTAREA
 	    STRING text;
 	    int off;
 	    tai = htmlctx->form->last_text;
 
-	    null.bytes = 0;
+	    PRSDBG(("pre_deliver_word: mz.used %d\n", tai->default_text.used));
+
+	    null.nchars = 0;
 	    text = get_tab_expanded_string(item, null);
-	    if ((off = memzone_alloc(&tai->default_text, text.bytes + 1)) != -1)
+	    if ((off = memzone_alloc(&tai->default_text, text.nchars + 1)) != -1)
 	    {
 		char *s;
 
 		flexmem_noshift();
 
 		s = tai->default_text.data + off;
-		memcpy(s, text.ptr, text.bytes);
-		s[text.bytes] = '\n';
+		memcpy(s, text.ptr, text.nchars);
+		s[text.nchars] = '\n';
 
 		flexmem_shift();
 	    }
+
+	    PRSDBG(("pre_deliver_word: text.nchars %d mz.used %d off %d\n", text.nchars, tai->default_text.used, off));
+
 	    string_free(&text);
-#else
-	    rid_textarea_line *tal;
-	    tai = htmlctx->form->last_text;
-	    tal = mm_calloc(1, sizeof(*tal));
-
-	    null.bytes = 0;
-	    tal->text = get_tab_expanded_string(item, null).ptr;
-
-	    if (tai->default_lines)
-	    {
-		tai->def_last_line->next = tal;
-		tal->prev = tai->def_last_line;
-		tai->def_last_line = tal;
-	    }
-	    else
-	    {
-		tai->default_lines = tai->def_last_line = tal;
-	    }
-#endif
 	}
 	else
 	{
@@ -582,52 +615,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	}
 	string_free(&item);
     }
-#if 0
-    /* SJM: guess what, this bit never seems to get used, finishoption() does all the work instead */
-    else if (context->tos->element == HTML_SELECT)
-    {
-	if (htmlctx->form && htmlctx->form->last_select && htmlctx->form->last_select->last_option)
-	{
-	    rid_option_item *opt = htmlctx->form->last_select->last_option;
-	    STRING current;
-	    
-	    PRSDBG(("Option line='%.*s'\n", 
-		    htmlctx->inhand_string.bytes,
-		    htmlctx->inhand_string.ptr));
-
-#if 1
-	    current.bytes = opt->text ? strlen(opt->text) : /*NULL*/ 0;
-	    current.ptr = opt->text;
-
-	    /* strip space from start and end of OPTION string */
-	    opt->text = get_tab_expanded_string(string_strip_space(item), current).ptr;
-
-	    mm_free(current.ptr);
-#else
-	    if (opt->text)
-	    {
-		int len;
-		char *new_text;
-
-		len = strlen(opt->text) + item.bytes + 1;
-
-		new_text = mm_malloc(len);
-		strcpy(new_text, opt->text);
-		strncat(new_text, item.ptr, item.bytes);
-		new_text[len-1] = 0;
-		mm_free(opt->text);
-		opt->text = new_text;
-	    }
-	    else
-	    {
-		opt->text = stringdup(item);
-	    }
-#endif
-	}
-	string_free(&item);
-    }
-#endif
-    else if (htmlctx->inhand_reason == DELIVER_WORD)
+    else if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK)
     {
 	/* Need to free new data once used. Need to expand */
 	/* tabs according to how many characters in hand */
@@ -647,7 +635,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	STRING t;
 	STRING null;
 
-	null.bytes = 0;
+	null.nchars = 0;
 	t = get_tab_expanded_string(item, null);
 
 	string_free(&item);
@@ -687,9 +675,13 @@ static void pre_deliver_pre_open_markup(SGMLCTX *context, int reason, STRING ite
 {
     HTMLCTX *htmlctx = context->clictx;
 
-    if (htmlctx->inhand_reason == DELIVER_WORD)
+    if (htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK)
     {
+#if NEW_BREAKS
+	text_item_push_word(htmlctx, rid_break_MUST_NOT, WITHOUT_SPACE);
+#else
 	text_item_push_word(htmlctx, rid_flag_NO_BREAK, WITHOUT_SPACE);
+#endif
     }
 
     htmlctx->inhand_reason = DELIVER_NOP;
@@ -731,8 +723,12 @@ static void pre_deliver_eol(SGMLCTX *context, int reason, STRING item, ELEMENT *
     
     /* SJM: 07Aug97 don't want newlines from textareas being displayed! */
     if (context->tos->element != HTML_TEXTAREA)
+#if NEW_BREAKS
+	text_item_push_word(htmlctx, rid_break_MUST, WITHOUT_SPACE);
+#else
 	text_item_push_word(htmlctx, rid_flag_LINE_BREAK, WITHOUT_SPACE);
-
+#endif
+	
     htmlctx->inhand_reason = DELIVER_NOP;
 }
 
@@ -743,9 +739,13 @@ static void pre_deliver_eos(SGMLCTX *context, int reason, STRING item, ELEMENT *
     HTMLCTX *htmlctx = context->clictx;
 
     /* SJM: 07Aug97 not sure what this does but we'll exclude textarea's from it anyway */
-    if (htmlctx->inhand_reason == DELIVER_WORD && context->tos->element != HTML_TEXTAREA)
+    if ((htmlctx->inhand_reason == DELIVER_WORD || htmlctx->inhand_reason == DELIVER_WORD_NOBREAK) && context->tos->element != HTML_TEXTAREA)
     {
+#if NEW_BREAKS
+	text_item_push_word(htmlctx, rid_break_MUST_NOT, WITHOUT_SPACE);
+#else
 	text_item_push_word(htmlctx, rid_flag_NO_BREAK, WITHOUT_SPACE);
+#endif
     }
 
     htmlctx->inhand_reason = DELIVER_NOP;
@@ -821,6 +821,9 @@ extern void my_sgml_pre_open(SGMLCTX *context, ELEMENT *element)
     freeing. Such deliveries might get hardcoded out if not wanted at all.
 
     DELIVER_SGML gets the <!whatever> string passed and this needs freeing.
+
+    These are UTF8 strings so treat with care.
+
 */
 
 extern void sgml_deliver(SGMLCTX *context, int reason, STRING item, ELEMENT *elem)
@@ -832,7 +835,8 @@ extern void sgml_deliver(SGMLCTX *context, int reason, STRING item, ELEMENT *ele
 	"PREO ", "PSTO", 
 	"PREC ", "PSTC", 
 	"UNXP",
-	"SGML", "EOL ", "EOS "
+	"SGML", "EOL ", "EOS ",
+	"WDNB"
     };
 #endif
 
@@ -849,7 +853,8 @@ extern void sgml_deliver(SGMLCTX *context, int reason, STRING item, ELEMENT *ele
 	fmt_deliver_unexpected, pre_deliver_unexpected, str_deliver_unexpected,
 	fmt_deliver_sgml,       pre_deliver_sgml,       str_deliver_sgml,
 	fmt_deliver_eol,        pre_deliver_eol,        str_deliver_eol,
-	fmt_deliver_eos,        pre_deliver_eos,        str_deliver_eos
+	fmt_deliver_eos,        pre_deliver_eos,        str_deliver_eos,
+	fmt_deliver_word,       pre_deliver_word,       str_deliver_word
     };
 
     HTMLCTX *me = htmlctxof(context);
@@ -860,7 +865,7 @@ extern void sgml_deliver(SGMLCTX *context, int reason, STRING item, ELEMENT *ele
     PRSDBGN(("sgml_deliver(%p, %s, '%.*s')\n",
 	    context,
 	    names[reason],
-	    reason == DELIVER_UNEXPECTED ? 0 : item.bytes, item.ptr
+	    reason == DELIVER_UNEXPECTED ? 0 : item.nchars, item.ptr
 	    ));
 
     /* Choose and invoke the appropriate handler */

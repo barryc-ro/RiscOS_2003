@@ -99,14 +99,17 @@ typedef struct
 } name_value_pair;
 
 extern int parse_http_header(char *header_data, const char *tags[], name_value_pair *output, int output_size);
+extern char *parse_content_type_header_charset(const char *value);
+extern int parse_content_type_header(const char *value);
 
 extern char *skip_space(const char *s);
-
+extern char *skip_space_or_comma(const char *s);
+extern char *skip_to_space_or_comma(const char *s);
 
 extern int pmatch2(char *s, char *p);
 extern int pattern_match(char *s, char *pat, int cs);
-extern void translate_escaped_text(char *src, char *dest, int len);
-extern void translate_escaped_form_text(char *src, char *dest, int len);
+/* extern void translate_escaped_text(char *src, char *dest, int len); */
+/* extern void translate_escaped_form_text(char *src, char *dest, int len); */
 
 extern os_error *write_text_in_box(int handle, const char *str, void *box);
 extern os_error *write_text_in_box_height(const char *str, int width, int handle, int *height);
@@ -325,6 +328,7 @@ os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor );
 
 
 extern char *xfgets(FILE *in);
+extern char *xfgets_ctrl(FILE *in);
 extern void fskipline(FILE *in);
 
 extern int get_free_memory_size(void);
@@ -347,9 +351,24 @@ extern void mmfclose(FILE *f);
 int mkdir( const char *dir, int mode );
 #endif
 
+#if 0
 extern void quoted_printable_to_file_n(FILE *f, const char *s, int len, int *pos);
 extern void quoted_printable_to_file(FILE *f, const char *s, int *pos);
 extern BOOL quoted_printable_necessary_n(const char *s, int len);
 extern BOOL quoted_printable_necessary(const char *s);
+#endif
+
+#if UNICODE
+
+#include "Unicode/encoding.h"
+
+typedef os_error *(*process_utf8_callback_fn)(const char *text, BOOL last, void *handle);
+extern os_error *process_utf8_as_latin1(const char *text, int in_n, process_utf8_callback_fn fn, void *handle);
+extern os_error *process_utf8(const char *text, int in_n, Encoding *enc, process_utf8_callback_fn fn, void *handle);
+
+#endif
+
+extern int lang_name_to_num(const char *en);
+extern const char *lang_num_to_name(int num);
 
 /* eof util.h */

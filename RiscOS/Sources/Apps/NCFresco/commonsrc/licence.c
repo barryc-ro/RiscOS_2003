@@ -189,7 +189,8 @@ extern os_error *licence_init(void)
 	    len--;
 
 	/* decide what format to use */
-	fmt = msgs_lookup(config_netscape_fake ? "uahdr1" : "uahdr0");
+	/* fmt = msgs_lookup(config_netscape_fake ? "uahdr1" : "uahdr0"); */
+	fmt = config_header_useragent[config_netscape_fake ? 1 : 0];
 
 	/* NCFresco has an extra field for the base Fresco version number */
 #ifdef STBWEB

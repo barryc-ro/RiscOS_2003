@@ -26,12 +26,15 @@ AS=             armasm
 RUN=		../abs/ncfresco
 MODULE=		../rm/ncfresco
 AOF=		../aof/ncfresco
+FLASH=		../aof/ncf_flash
 
 NCFRESCO_RISCOS:	$(RUN)
 
 NCFRESCO_MODULE:	$(MODULE)
 
 NCFRESCO_AOF:		$(AOF)
+
+NCFRESCO_FLASH:		$(FLASH)
 
 # empty normal, -debug debug
 D=		# -debug
@@ -51,6 +54,10 @@ $(AOF): $(OBJS) $(LIBS)
 		@$(LD) $(LDFLAGS) $(D) -aof -o $@ $(OBJS) $(LIBS)
 		ls -l $@
 
+$(FLASH): $(OBJS) $(LIBS)
+		@echo "Partial linking aof $(@)"
+		@$(LD) $(LDFLAGS) $(D) -aof -o $@ $(OBJS) $(LIBS)
+		ls -l $@
 
 #############################################################################
 

@@ -134,6 +134,11 @@
 
 #include "guarded.h"
 
+#if UNICODE
+#include "Unicode/encoding.h"
+#include "Unicode/languages.h"
+#endif
+
 #ifndef ITERATIVE_PANIC
 #define ITERATIVE_PANIC 0
 #endif
@@ -169,10 +174,6 @@ static
 void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_width);
 
 /**********************************************************************/
-
-#ifndef Font_WideFormat
-#define Font_WideFormat	0x400A9
-#endif
 
 static be_doc document_list = NULL;
 
@@ -530,7 +531,7 @@ the baseline.
 
 os_error *backend_doc_locate_item(be_doc doc, int *x, int *y, be_item *ti)
 {
-    RENDBG(("Locate item: doc = %p, x=%d, y=%d\n", doc, *x, *y));
+    RENDBGN(("Locate item: doc = %p, x=%d, y=%d\n", doc, *x, *y));
 
     *ti = NULL;
 
@@ -1015,6 +1016,72 @@ extern os_error *antweb_doc_ensure_font( be_doc doc, int whichfont )
     }
 #endif
     return NULL;
+}
+
+int antweb_getwebfont(antweb_doc *doc, rid_text_item *ti, int base)
+{
+    return backend_getwebfont(doc, ti->flag & rid_flag_WIDE_FONT, ti->language, ti->st.wf_index, base);
+}
+
+int backend_getwebfont(be_doc doc, BOOL wide, int language, int font1, int base)
+{
+    int whichfont = -1;
+
+#if UNICODE
+    if (wide)
+    {
+	static int fonts[] =
+	{
+	    -1,	/* unknown/any */
+	    -1, /* WEBFONT_ENGLISH */
+	    WEBFONT_JAPANESE,
+	    WEBFONT_CHINESE,
+	    WEBFONT_KOREAN,
+	    WEBFONT_GREEK,
+	    WEBFONT_RUSSIAN,
+	    WEBFONT_HEBREW
+	};
+
+	int lang = language ? language : doc->rh->language_num;
+	whichfont = (font1 & WEBFONT_SIZE_MASK) | fonts[lang];
+    }
+#else
+    if (wide)
+	whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
+#endif
+
+    if (whichfont == -1)
+    {
+	if (base != -1)
+	    whichfont = base;
+	else
+	    whichfont = font1;
+    }
+    
+    /* pdh: autofit bodge */
+    if ( gbf_active( GBF_AUTOFIT ) )
+    {
+        if ( doc->scale_value < 100
+             && ( (whichfont & WEBFONT_FLAG_SPECIAL) == 0 )
+             && ( gbf_active(GBF_AUTOFIT_ALL_TEXT) || (whichfont & WEBFONT_FLAG_FIXED) == WEBFONT_FLAG_FIXED )
+             && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
+        {
+           /* make it one size smaller */
+           TASSERT( WEBFONT_SIZE_SHIFT == 0 );
+
+           whichfont -= 1;
+        }
+    }
+
+    antweb_doc_ensure_font( doc, whichfont );
+
+#if UNICODE && defined(RISCOS)
+    /* if we are claiming a wide font then set it to the appropriate encoding */
+    if (wide)
+	webfont_set_wide_format(whichfont);
+#endif
+
+    return whichfont;
 }
 
 os_error *backend_image_size_info(be_doc doc, void *imh, int *width, int *height, int *bpp)
@@ -1609,15 +1676,9 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 #if USE_MARGINS
     ox += doc->margin.x0;
     oy += doc->margin.y1;
-    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, doc->margin.x0, doc->margin.y1));
+    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding_user, doc->margin.x0, doc->margin.y1));
 #else
-    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, 0, 0));
-#endif
-
-
-#ifdef RISCOS
-    if (doc->encoding != be_encoding_LATIN1)
-	_swix(Font_WideFormat, _IN(0), doc->encoding);
+    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding_user, 0, 0));
 #endif
 
     if (rh)
@@ -1651,11 +1712,6 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 	highlight_render(rr, doc);
 #endif
     }
-
-#ifdef RISCOS
-    if (doc->encoding != be_encoding_LATIN1)
-	_swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
-#endif
 
     RENDBG(("Render done\n"));
 
@@ -1703,459 +1759,6 @@ void antweb_update_item_trim(antweb_doc *doc, rid_text_item *ti,
 void antweb_update_item(antweb_doc *doc, rid_text_item *ti)
 {
     antweb_update_item_trim(doc, ti, NULL, TRUE);
-}
-
-#define LEEWAY 64
-void be_ensure_buffer_space(char **buffer, int *len, int more)
-{
-    int curlen = strlen(*buffer);
-
-    if (curlen + more >= *len)
-    {
-	*len = *len + more + LEEWAY;
-	*buffer = (char*) mm_realloc(*buffer, *len);
-    }
-}
-
-static void antweb_append_query(char **buffer, char *name, char *value, int *len)
-{
-    /* Worst case the value will be three time its original size when escaped */
-    if (value == NULL)
-	value = "";
-
-    be_ensure_buffer_space(buffer, len, (name ? strlen(name) : 0) + 3 * strlen(value) + 2);
-
-    strcat(*buffer, "&");
-
-    if (name)
-    {
-	url_escape_cat(*buffer, name, *len);
-
-/* 	int i; */
-/* 	char *s; */
-/* 	char c; */
-
-/* 	s = *buffer + strlen(*buffer); */
-/* 	for(i=0; (c = name[i]) != 0; i++) */
-/* 	{ */
-/* 	    if (isspace(c)) */
-/* 		c = '+'; */
-/* 	    *s++ = c; */
-/* 	} */
-
-	strcat(*buffer, "=");		/* Put termination on too */
-    }
-    url_escape_cat(*buffer, value, *len);
-}
-
-static void antweb_append_textarea(char **buffer, rid_textarea_item *tai, int *len)
-{
-    char *n;
-    char *s;
-    char c;
-#if !NEW_TEXTAREA
-    rid_textarea_line *tal;
-#endif
-
-    if (tai->name == NULL)
-	return;
-
-    be_ensure_buffer_space(buffer, len, strlen(tai->name) + 2);
-
-    strcat(*buffer, "&");
-
-    url_escape_cat(*buffer, tai->name, *len);
-/*     s = *buffer + strlen(*buffer); */
-/*     for(n = tai->name; (c = *n) != 0; n++) */
-/*     { */
-/* 	if (isspace(c)) */
-/* 	    c = '+'; */
-/* 	*s++ = c; */
-/*     } */
-
-    strcat(*buffer, "=");		/* Put termination on too */
-
-#if NEW_TEXTAREA
-    otextarea_append_to_buffer(tai, buffer, len);
-#else
-    for(tal = tai->lines; tal; tal = tal->next)
-    {
-	be_ensure_buffer_space(buffer, len, 3 * strlen(tal->text) + 2);
-
-	url_escape_cat(*buffer, tal->text, *len);
-
-	/* pdh: capitalised 'D' and 'A' for the benefit of wonky Otago boys
-	 */
-	if (tal->next)
-	    strcat(*buffer, "%0D%0A");
-    }
-#endif
-}
-
-static const char MIME_TYPE[] = "multipart/form-data; boundary=49305B2Fantfresco658FBF78";
-                               /*012345678901234567890123456789*/
-#define MIME_BOUNDARY (MIME_TYPE+30)
-
-static void antweb_write_query(FILE *f, char *name, char *value, int *first, BOOL bMime)
-{
-    if (value == NULL)
-	value = "";
-
-    if ( bMime )
-    {
-        /* RFC1867 MIME multipart/form-data response */
-        fprintf( f, "--%s\r\n", MIME_BOUNDARY );
-
-        /* RFC1867 para5.11 says url-escape the name, but Netscape doesn't
-         * so nor do we
-         */
-        fprintf( f, "Content-disposition: form-data; name=\"%s\"\r\n\r\n", name );
-
-        DBG(("  %s(%d) = %s\n", name, strlen(name), value ));
-
-        fprintf( f, "%s\r\n", value );
-    }
-    else
-    {
-        if (*first)
-        {
-	    *first = FALSE;
-        }
-        else
-        {
-	    fprintf(f, "&");
-        }
-
-        if (name)
-        {
-	    url_escape_to_file(name, f);
-	    fputc('=', f);
-        }
-        url_escape_to_file(value, f);
-    }
-}
-
-static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first, BOOL bMime)
-{
-    char *n;
-    char c;
-#if !NEW_TEXTAREA
-    rid_textarea_line *tal;
-#endif
-    if (tai->name == NULL)
-	return;
-
-    if ( bMime )
-    {
-        /* RFC1867 MIME multipart/form-data response */
-        fprintf( f, "--%s\r\n", MIME_BOUNDARY );
-
-        /* RFC1867 para5.11 says url-escape the name, but Netscape doesn't
-         * so nor do we
-         */
-        fprintf( f, "Content-disposition: form-data; name=\"%s\"\r\n\r\n", tai->name );
-
-#if NEW_TEXTAREA
-        otextarea_write_to_file( tai, f, TRUE );
-#else
-        /* FIXME: doesn't cope with NEW_TEXTAREA */
-        for(tal = tai->lines; tal; tal = tal->next)
-        {
-	    fprintf( f, "%s\r\n", tal->text);
-        }
-#endif
-    }
-    else
-    {
-        if (*first)
-        {
-	    *first = FALSE;
-        }
-        else
-        {
-	    fprintf(f, "&");
-        }
-
-        url_escape_to_file(tai->name, f);
-/*     for(n = tai->name; (c = *n) != 0; n++) */
-/*     { */
-/* 	if (isspace(c)) */
-/* 	    c = '+'; */
-/* 	fputc(c, f); */
-/*     } */
-        fputc('=', f);
-
-#if NEW_TEXTAREA
-        otextarea_write_to_file(tai, f, FALSE);
-#else
-        for(tal = tai->lines; tal; tal = tal->next)
-        {
-	    url_escape_to_file(tal->text, f);
-	    /* pdh: capitalised 'D' and 'A' for the benefit of wonky Otago boys
-	     */
-	    if (tal->next)
-	        fputs("%0D%0A", f);
-        }
-#endif
-    }
-}
-
-#ifdef STBWEB
-BOOL backend_submit_form(be_doc doc, const char *id, int right)
-{
-    rid_form_item *form;
-
-    for (form = doc->rh->form_list; form; form = form->next)
-    {
-	if (strcmp(form->id, id) == 0)
-	{
-	    antweb_submit_form(doc, form, right);
-	    return TRUE;
-	}
-    }
-
-    return FALSE;
-}
-#endif
-
-/* The 'right' flag indicates a right click */
-
-void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
-{
-    os_error *ep = NULL;
-    rid_form_element *fis;
-    char *target = right ? "_blank" : form->target;
-
-    BENDBG(( "Submit form: action='%s', method='%s'\n",
-	    form->action ? form->action : "<none>",
-	    (form->method == rid_fm_GET ?
-	     "GET" :
-	     (form->method == rid_fm_POST ?
-	      "POST" :
-	      "<unknown>") ) ));
-
-    switch(form->method)
-    {
-    case rid_fm_GET:
-        {
-	    char *buffer;
-	    char *dest, *dest2;
-	    int buf_size = 1000;
-
-	    dest = url_join(BASE(doc), form->action);
-
-	    buffer = (char*) mm_malloc(buf_size);
-	    buffer[0] = 0;
-	    for (fis = form->kids; fis; fis = fis->next)
-	    {
-		switch (fis->tag)
-		{
-		case rid_form_element_INPUT:
-		{
-		    rid_input_item *iis = (rid_input_item *)fis;
-		    switch (iis->tag)
-		    {
-		    case rid_it_HIDDEN:
-			antweb_append_query(&buffer, iis->name, iis->value, &buf_size);
-			break;
-		    case rid_it_IMAGE:
-			if ((iis->name != NULL) && (iis->data.image.x != -1))
-			{
-			    char buf2[12];
-			    char buf3[128];
-
-			    strcpy(buf3, strsafe(iis->name));
-
-			    /* pdh: duplicate NS3's behaviour with missing
-			     * names
-			     */
-			    strcat( buf3, (*buf3) ? ".x" : "x" );
-			    sprintf(buf2, "%d", iis->data.image.x);
-			    antweb_append_query(&buffer, buf3, buf2, &buf_size);
-
-			    buf3[strlen(buf3)-1] = 'y';
-			    sprintf(buf2, "%d", iis->data.image.y);
-			    antweb_append_query(&buffer, buf3, buf2, &buf_size);
-			}
-			break;
-		    case rid_it_TEXT:
-		    case rid_it_PASSWD:
-			antweb_append_query(&buffer, iis->name, iis->data.str, &buf_size);
-			break;
-		    case rid_it_CHECK:
-		    case rid_it_RADIO:
-			if (iis->data.radio.tick)
-			{
-			    antweb_append_query(&buffer, iis->name, iis->value ? iis->value : "on", &buf_size);
-			}
-			break;
-		    case rid_it_SUBMIT:
-			if (iis->data.button.tick && iis->name)
-			{
-			    antweb_append_query(&buffer, iis->name, strsafe(iis->value), &buf_size);
-			}
-			break;
-		    }
-		    break;
-		}
-
-		case rid_form_element_SELECT:
-		{
-		    rid_select_item *sis = (rid_select_item *)fis;
-		    rid_option_item *ois;
-		    for(ois = sis->options; ois; ois = ois->next)
-			if (ois->flags & rid_if_SELECTED)
-			    antweb_append_query(&buffer, sis->name,
-						ois->value ? ois->value : ois->text, &buf_size);
-		    break;
-		}
-
-		case rid_form_element_TEXTAREA:
-		{
-		    rid_textarea_item *tai = (rid_textarea_item *)fis;
-		    antweb_append_textarea(&buffer, tai, &buf_size);
-		    break;
-		}
-		}
-	    }
-	    if (buffer[0] == 0)
-		buffer[1] = 0;
-	    buffer[0] = '?';
-	    dest2 = url_join(dest, buffer);
-	    mm_free(dest);
-	    mm_free(buffer);
-
-	    /* In theory the URL join can fail */
-	    if (dest2)
-	    {
-		BENDBG(( "Query string is:\n'%s'\n", dest2));
-
-		/* Never get a form query from the cache */
-		ep = frontend_complain(frontend_open_url(dest2, doc->parent, target, NULL, fe_open_url_NO_CACHE));
-
-		mm_free(dest2);
-	    }
-	    else
-	    {
-		frontend_complain(makeerror(ERR_BAD_FORM));
-	    }
-	}
-	break;
-    case rid_fm_POST:
-        {
-	    FILE *f;
-	    char *fname;
-	    int first = TRUE;
-	    char *dest;
-	    BOOL bMime;
-
-	    fname = strdup(rs_tmpnam(0));
-	    dest = strrchr(fname, 'x');
-	    if (dest)
-		*dest = 'y';
-	    f = mmfopen(fname, "w");
-
-            bMime = form->enc_type && !strcasecomp( form->enc_type, mimetype_MULTIPART_FORM );
-
-	    for (fis = form->kids; fis; fis = fis->next)
-	    {
-		switch (fis->tag)
-		{
-		case rid_form_element_INPUT:
-		{
-		    rid_input_item *iis = (rid_input_item *)fis;
-		    switch (iis->tag)
-		    {
-		    case rid_it_HIDDEN:
-			antweb_write_query(f, iis->name, iis->value, &first, bMime);
-			break;
-
-		    case rid_it_IMAGE:
-			if (iis->data.image.x != -1)
-			{
-			    char buf2[12];
-			    char buf3[128];
-
-			    strcpy(buf3, strsafe(iis->name));
-
-			    /* pdh: duplicate NS3's behaviour with missing
-			     * names
-			     */
-			    strcat( buf3, (*buf3) ? ".x" : "x" );
-			    sprintf(buf2, "%d", iis->data.image.x);
-			    antweb_write_query(f, buf3, buf2, &first, bMime);
-
-			    buf3[strlen(buf3)-1] = 'y';
-			    sprintf(buf2, "%d", iis->data.image.y);
-			    antweb_write_query(f, buf3, buf2, &first, bMime);
-			}
-			break;
-		    case rid_it_TEXT:
-		    case rid_it_PASSWD:
-			antweb_write_query(f, iis->name, iis->data.str, &first, bMime);
-			break;
-		    case rid_it_CHECK:
-		    case rid_it_RADIO:
-			if (iis->data.radio.tick)
-			{
-			    antweb_write_query(f, iis->name, iis->value ? iis->value : "on", &first, bMime);
-			}
-			break;
-		    case rid_it_SUBMIT:
-			if (iis->data.button.tick && iis->name)
-			    antweb_write_query(f, iis->name, strsafe(iis->value), &first, bMime);
-			break;
-		    }
-		}
-		break;
-
-		case rid_form_element_SELECT:
-		{
-		    rid_select_item *sis = (rid_select_item *)fis;
-		    rid_option_item *ois;
-		    for(ois = sis->options; ois; ois = ois->next)
-			if (ois->flags & rid_if_SELECTED)
-			    antweb_write_query(f, sis->name, ois->value ? ois->value : ois->text, &first, bMime);
-		    break;
-		}
-
-		case rid_form_element_TEXTAREA:
-		{
-		    rid_textarea_item *tai = (rid_textarea_item *)fis;
-		    antweb_write_textarea(f, tai, &first, bMime);
-		    break;
-		}
-		}
-	    }
-
-#if 0
-	    fputs("\r\n", f);
-#endif
-            if ( bMime )
-            {
-                fprintf( f, "--%s--\r\n", MIME_BOUNDARY );
-            }
-
-	    mmfclose(f);
-
-	    dest = url_join(BASE(doc), form->action);
-
-	    /* Never get a form query from the cache */
-	    {
-		fe_post_info post;
-		post.body_file = fname;
-		post.content_type = bMime ? (char *)MIME_TYPE : NULL;
-			
-		ep = frontend_complain(frontend_open_url(dest, doc->parent, target, &post, fe_open_url_NO_CACHE));
-	    }
-
-	    mm_free(dest);
-	}
-	break;
-    default:
-	break;
-    }
-
 }
 
 /*****************************************************************************/
@@ -2234,130 +1837,6 @@ extern os_error *antweb_trigger_fetching(antweb_doc *doc)
     return NULL;
 }
 
-#if 0
-static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int width, int display_width)
-{
-    int spare;
-
-    /* 24/9/96: Borris: Added new->first check */
-    if (new == NULL || new->first == NULL)
-    {
-	usrtrc( "**** Tried to tidy NULL pos line ****\n");
-#ifdef PLOTCHECK
-	 plotcheck_boom();
-#endif
-	return 0;
-    }
-
-    spare = (display_width - width);
-
-    switch (new->first->st.flags & rid_sf_ALIGN_MASK)
-    {
-    case rid_sf_ALIGN_JUSTIFY:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
-	{
-	    rid_text_item *ti, *lti;
-	    int n;
-
-	    for(n=0, lti = NULL, ti = new->first; ti; ti = ti->next)
-	    {
-		FMTDBG(("Item=%p, pos=%p, line=%p, flags=0x%02x\n",
-			ti, new, ti->line, ti->flag));
-
-		if (((ti->flag & rid_flag_CLEARING) != 0) ||
-		    ((ti->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) == 0) )
-		{
-		    /* Not a floater */
-		    if (ti->line != new)
-			break;
-		    n++;
-		    lti = ti;
-		}
-	    }
-
-	    FMTDBG(("Spare=%d, n=%d\n", spare, n));
-
-	    /* Have more than one word on the line and not the end of the paragraph */
-	    if ((n > 1) &&
-		((lti->flag & (rid_flag_CLEARING | rid_flag_LINE_BREAK)) == 0) &&
-		ti != NULL )
-	    {
-		new->leading = spare / (n-1);
-
-		FMTDBG(("Leading=%d\n", new->leading));
-	    }
-	}
-	break;
-    case rid_sf_ALIGN_CENTER:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
-	{
-	    /* Only center things that can fit on the display */
-
-	    FMTDBGN(("center, %d %d\n", width, display_width));
-
-	    if (width < display_width)
-		new->left_margin += (spare >> 1);
-	}
-	break;
-    case rid_sf_ALIGN_RIGHT:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
-	{
-	    FMTDBGN(("Right aligned\n"));
-
-	    new->left_margin += spare;
-	}
-	break;
-    }
-
-    return (new->max_up + new->max_down);
-}
-#endif
-
-
-#if 0
-
-/* DAF: 970317: Was #if DEBUG */
-#if 1
-static void stomp_contained_widths(rid_text_stream *st)
-{
-    rid_text_item *ti;
-
-    FMTDBG(("stomp_contained_widths(%p) entered\n", st));
-
-    for (ti = st->text_list; ti; ti = ti->next)
-    {
-	if (ti->tag == rid_tag_TABLE)
-	{
-	    rid_text_item_table *tit = (rid_text_item_table *) ti;
-	    rid_table_item *table = tit->table;
-	    int x, y;
-	    rid_table_cell *cell;
-
-	    for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
-	    {
-		cell->flags &= ~rid_cf_NOWRAP;
-		cell->userwidth.type = value_none;
-		cell->userheight.type = value_none;
-		stomp_contained_widths(&cell->stream);
-	    }
-
-	    for (x = 0; x < table->cells.x; x++)
-	    {
-		table->colhdrs[x]->userwidth.type = value_none;
-	    }
-
-	    for (x = 0; x < table->num_groups.x; x++)
-	    {
-		table->colgroups[x]->userwidth.type = value_none;
-	    }
-	}
-    }
-
-    FMTDBG(("stomp_contained_widths() finished\n"));
-}
-#endif
-#endif
-
 static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti, int scale_value)
 {
         rid_text_stream *st = &rh->stream;
@@ -2367,11 +1846,6 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
         memset(&st->width_info, 0, sizeof(st->width_info));
 
         FMTDBG(("be_formater_loop - building\n"));
-
-#ifdef RISCOS
-	if (doc->encoding != be_encoding_LATIN1)
-	    _swix(Font_WideFormat, _IN(0), doc->encoding);
-#endif
 
 /*     fvpr_progress_stream(&doc->rh->stream); */
 
@@ -2386,10 +1860,6 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 	antweb_build_selection_list(doc);
 #endif
 
-#ifdef RISCOS
-	if (doc->encoding != be_encoding_LATIN1)
-	    _swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
-#endif
         FMTDBG(("be_formater_loop done\n"));
 
 #if DEBUG > 2
@@ -3522,13 +2992,15 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     rid_text_item *ti;
     rid_header *rh;
 
-    if (doc->rh == NULL)
-	doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
+    /* SJM: 28Oct97: unnecessary - removed */
+/*  if (doc->rh == NULL) */
+/* 	doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph); */
 
     buffer = mm_malloc(PPARSE_BUFSIZE);
 
     rh = doc->rh;
-    rh->doc = doc;
+    /* SJM: 28Oct97: unnecessary - removed */
+/*  rh->doc = doc; */
 
     ti = rh->stream.text_last;
     PPDBG(("Old last item is 0x%p\n", ti));
@@ -3610,8 +3082,6 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 
         ti = rid_scanf(ti);
     }
-
-
     PPDBG(("Done sizing\n"));
 }
 
@@ -3834,15 +3304,42 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 	    lastptr = 0;
 
 	PPDBG(("Data arriving; type = 0x%03x, file=%d, last had %d, now got %d\n",
-		ftype, fh, lastptr, so_far));
+	       ftype, fh, lastptr, so_far));
 
+	/* lookup the parser */
 	if (doc->pd == NULL)
 	    doc->pd = be_lookup_parser(ftype);
 
 	if (doc->ph == NULL && ((pparse_details*)doc->pd)->new)
 	{
+	    int encoding = 0;
+	    int encoding_source = rid_encoding_source_USER;
+
+#if UNICODE
+	    /* work out what encoding to start in */
+	    encoding = doc->encoding_user;
+	    DBG(("set_encoding USER%s %d\n", doc->encoding_user_override ? "_FIXED" : "", encoding));
+
+	    if (doc->encoding_user_override)
+		encoding_source = rid_encoding_source_USER_FIXED;
+	    else
+	    {
+		int enc = access_get_encoding(doc->ah);
+		if (enc)
+		{
+		    encoding = enc;
+		    encoding_source = rid_encoding_source_HTTP;
+		}
+	    }
+#endif
 	    PPDBG(("About to make a new parser stream\n"));
-	    doc->ph = (((pparse_details*)doc->pd)->new)(url, ftype);
+
+	    PPDBG(("antweb_doc_progress: encoding user %d override %d - set %d rh %d source %d\n",
+		 doc->encoding_user, doc->encoding_user_override,
+		 encoding, doc->rh->encoding, encoding_source));
+
+	    /* initialise the parser */
+	    doc->ph = (((pparse_details*)doc->pd)->new)(url, ftype, encoding);
 	    if (doc->ph)
 	    {
 		/* new: check if URL has changed - since we set the URL on entry now */
@@ -3852,44 +3349,52 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 		    doc->url = strdup(url);
 		}
 
+		/* get the rid_header handle */
 		doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
 
-		/* can this ever be called? */
+		/* SJM: 28Oct97: set up back pointer here */
+		doc->rh->doc = doc;
+		doc->rh->encoding_source = encoding_source;
+		
+#if 0
+		/* can this ever be called? SJM: 28Oct97: No - removed */
 		if (doc->rh->stream.text_last)
 		{
 		    PPDBG(("Sizing the first few items...\n"));
 		    antweb_trigger_fetching(doc);
 		    PPDBG(("... done\n"));
 		}
+#endif
 	    }
 	}
+
+#ifndef BUILDERS
+	/* can't put this code in complete as http_close will have been called */
+	if (doc->rh && (doc->flags & doc_flag_HAD_HEADERS) == 0)
+	{
+	    http_header_item *list = access_get_headers(doc->ah);
+
+	    BENDBG(( "doc%p: add meta ah %p list %p\n", doc, doc->ah, list));
+
+	    for (; list; list = list->next)
+	    {
+		rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
+		
+		BENDBG(( "doc%p: add meta rh %p list %p\n", doc, doc->rh, list));
+
+		m->httpequiv = strdup(list->key);
+		m->content = strdup(list->value);
+
+		rid_meta_connect(doc->rh, m);
+	    }
+
+	    doc->flags |= doc_flag_HAD_HEADERS;
+	}
+#endif
 
 	if (doc->ph)
 	    progress_parse_and_format(doc, fh, lastptr, so_far);
     }
-
-#ifndef BUILDERS
-    /* can't put this code in complete as http_close will have been called */
-    if (status == status_GETTING_BODY && doc->rh && (doc->flags & doc_flag_HAD_HEADERS) == 0)
-    {
-	http_header_item *list = access_get_headers(doc->ah);
-
-	BENDBG(( "doc%p: add meta ah %p list %p\n", doc, doc->ah, list));
-
-	for (; list; list = list->next)
-	{
-	    rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
-
-	    BENDBG(( "doc%p: add meta rh %p list %p\n", doc, doc->rh, list));
-
-	    m->httpequiv = strdup(list->key);
-	    m->content = strdup(list->value);
-
-	    rid_meta_connect(doc->rh, m);
-	}
-	doc->flags |= doc_flag_HAD_HEADERS;
-    }
-#endif
 
     doc->lstatus = status;
     doc->lbytes = so_far;
@@ -4451,7 +3956,8 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->magic = ANTWEB_DOC_MAGIC;
     new->parent = v;
     new->scale_value = config_display_scale_image;
-    new->encoding = config_encoding_internal;
+    new->encoding_user = config_encoding_user;
+    new->encoding_user_override = flags & be_openurl_flag_NO_ENCODING_OVERRIDE ? FALSE : config_encoding_user_override;
 
     /* new: add the url here */
     new->url = strdup(url);
@@ -4981,26 +4487,22 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 }
 
 #ifdef STBWEB
-extern int backend_doc_encoding(be_doc doc, int encoding)
+extern int backend_doc_encoding(be_doc doc, int *encoding_user, int *encoding_user_override)
 {
-    int old_encoding;
+    if (encoding_user)
+	*encoding_user = doc ? doc->encoding_user : config_encoding_user;
 
-    if (doc == NULL)
-    {
-	old_encoding = config_encoding_internal;
-	if (encoding != be_encoding_READ)
-	    config_encoding_internal = encoding;
-    }
-    else
-    {
-	old_encoding = doc->encoding;
-	if (encoding != be_encoding_READ)
-	    config_encoding_internal = doc->encoding = encoding;
-    }
+    if (encoding_user_override)
+	*encoding_user_override = doc ? doc->encoding_user_override : config_encoding_user_override;
 
-    return old_encoding;
+    return doc ? doc->rh->encoding : 0;
 }
 #endif
+
+extern int backend_doc_item_language(be_doc doc, be_item ti)
+{
+    return ti && ti->language ? ti->language : doc ? doc->rh->language_num : 0;
+}
 
 void antweb_uncache_image_info(antweb_doc *doc)
 {

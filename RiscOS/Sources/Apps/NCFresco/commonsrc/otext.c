@@ -42,6 +42,10 @@
 #include "dfsupport.h"
 #include "gbf.h"
 
+#if UNICODE
+#include "Unicode/encoding.h"
+#endif
+
 /* Make this 1 to see item boundaries */
 #define DEBUG_ITEMS 0
 
@@ -62,34 +66,6 @@ static void dump_data(const char *s, int len)
 }
 #endif
 
-static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
-{
-    int whichfont;
-
-    if (doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT))
-	whichfont = (ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
-    else
-	whichfont = ti->st.wf_index;
-
-    /* pdh: autofit bodge */
-    if ( gbf_active( GBF_AUTOFIT ) )
-    {
-        if ( doc->scale_value < 100
-             && ( (whichfont & WEBFONT_FLAG_SPECIAL) == 0 )
-             && ( gbf_active(GBF_AUTOFIT_ALL_TEXT) || (whichfont & WEBFONT_FLAG_FIXED) == WEBFONT_FLAG_FIXED )
-             && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
-        {
-           /* make it one size smaller */
-           TASSERT( WEBFONT_SIZE_SHIFT == 0 );
-           whichfont -= 1;
-        }
-    }
-
-    antweb_doc_ensure_font( doc, whichfont );
-
-    return &webfonts[whichfont];
-}
-
 /* An empty text object does not have any padding either. */
 /* This is so the object inserted by <BR> has no effective width */
 
@@ -105,6 +81,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     ti->max_up = 1;
     ti->max_down = rh->cwidth == 1 ? 0 : 1;
 #else /* BUILDERS */
+    int whichfont;
     struct webfont *wf;
     char *s;
 
@@ -113,38 +90,34 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     s = rh->texts.data + tit->data_off;
     str_len = strlen(s);
 
-    /* check to see if there are any wide characters in there */
-    if (doc->encoding != be_encoding_LATIN1)
-    {
-	int i;
-	for (i = 0; i < str_len; i++)
-	    if ((s[i] & 0x80) && s[i] != 0xA0)
-	    {
-		ti->flag |= rid_flag_WIDE_FONT;
-		break;
-	    }
-
-	if (ti->flag & rid_flag_WIDE_FONT)
-	{
-	    for (i = str_len-1; i >= 0; i--)
-		if (s[i] == ' ')
-		    s[i] = 0;
-		else
-		    break;
-	}
-    }
-
     /* get font descriptor */
-    wf = getwebfont(doc, ti);
+    whichfont = antweb_getwebfont(doc, ti, -1);
+    wf = &webfonts[whichfont];
+
+#if UNICODE
+    RENDBGN(("otext: enc %d lang '%s' f %d f1 %d\n", doc->rh->encoding, encoding_default_language(doc->rh->encoding), whichfont, ti->st.wf_index));
+#endif
 
     if (str_len == 0)
     {
 	ti->width = 0;
+#if NEW_BREAKS
+	ti->pad = ti->flag & rid_flag_SPACE ? wf->space_width : 0;
+#else
 	ti->pad = 0;
+#endif
     }
     else
     {
-	int flags = doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT) ? 1<<12 : 0;
+#if NEW_BREAKS
+	int width = webfont_font_width(whichfont, s);
+
+	ti->width = width;
+	ti->pad = ti->flag & rid_flag_SPACE ? wf->space_width : 0;
+
+	RENDBGN(("otext: scanstring '%s' str_len %d width %d pad %d font %d enc %d\n", s, str_len, ti->width, ti->pad, whichfont, doc->rh->encoding));
+#else
+	int flags; 
 	int width1, width2;
 	int len;
 
@@ -180,8 +153,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	
 	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 	ti->pad = (width1 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT - ti->width;
-
-/* 	DBG(("otext: scanstring '%s' wide %d str_len %d width1 %d width2 %d\n", s, ti->flag & rid_flag_WIDE_FONT ? 1 : 0, str_len, width1, width2)); */
+#endif
     }
 
     flexmem_shift();		/* shiftable */
@@ -227,6 +199,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 #ifndef BUILDERS
     rid_text_item_text *tit = (rid_text_item_text *) ti;
     int tfc, tbc;
+    int whichfont;
     struct webfont *wf;
     int b;
     BOOL no_text, draw_highlight_box;
@@ -243,7 +216,8 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED);
 #endif
 
-    wf = getwebfont(doc, ti);
+    whichfont = antweb_getwebfont(doc, ti, -1);
+    wf = &webfonts[whichfont];
 
     /* adjust base line for subscipts and superscripts */
     b = bline;
@@ -267,10 +241,10 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     /* quick exit if there is no text to display */
     /* removed because it upsets the highligt box drawing */
-#if 1
+
     if (rh->texts.data[tit->data_off] == 0)
 	return;
-#endif
+
     tfc = render_text_link_colour(ti, doc);
     tbc = render_background(ti, doc);
 
@@ -286,12 +260,6 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     }
 #endif
 
-    if (fs->lf != wf->handle)
-    {
-	fs->lf = wf->handle;
-	font_setfont(fs->lf);
-    }
-
     if ( fs->lfc != tfc || fs->lbc != tbc )
     {
 	fs->lfc = tfc;
@@ -306,13 +274,11 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     flexmem_noshift();
 
-    RENDBG(("otext_redraw: fg %08x bg %08x text '%s' w %d vlink=%08x - %08x\n", tfc, tbc, rh->texts.data + tit->data_off, ti->width, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word));
+    RENDBGN(("otext_redraw: font %d fg %08x bg %08x text '%s' w %d vlink=%08x - %08x\n", whichfont, tfc, tbc, rh->texts.data + tit->data_off, ti->width, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word));
 
-#if 0
-    dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off));
-#endif
+    /* dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off)); */
 
-    no_text = !render_text(doc, rh->texts.data + tit->data_off, hpos, b);
+    no_text = !render_text(doc, whichfont, rh->texts.data + tit->data_off, hpos, b);
 
     if (ti->pad)
 	no_text = FALSE;
@@ -395,9 +361,8 @@ void otext_astext(rid_text_item *ti, rid_header *rh, FILE *f)
 {
     rid_text_item_text *tit = (rid_text_item_text *) ti;
 
-#if 0
-    fprintf(stderr, "rh = 0x%p, texts = 0x%p, data = 0x%p\n", rh, &(rh->texts), rh->texts.data);
-#endif
+/*  fprintf(stderr, "rh = 0x%p, texts = 0x%p, data = 0x%p\n", rh, &(rh->texts), rh->texts.data); */
+
     flexmem_noshift();
     fputs(rh->texts.data + tit->data_off, f);
     flexmem_shift();
@@ -465,14 +430,6 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 
 int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
-#if 0
-    if (box)
-    {
-	memset(box, 0, sizeof(*box));
-
-	box->x1 = ti->pad + 2;
-    }
-#else
     if (box)
     {
 	int d = config_display_highlight_width*2 + 4;
@@ -485,7 +442,7 @@ int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_
 	    box->x1 = d;
 	box->y0 = -d;
     }
-#endif
+
     return FALSE;
 }
 

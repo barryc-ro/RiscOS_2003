@@ -34,9 +34,20 @@ Borris totally dislikes the use of ti->width for bullets!
 #include "indent.h"
 #include "gbf.h"
 
-#ifndef BULLET_CHAR
-#define BULLET_CHAR '\x8F'
+#define BULLET_CHAR		"\x8F"
+#define HARD_SPACE		"\xA0"
+
+#define BULLET_STRING		BULLET_CHAR HARD_SPACE
+
+#if UNICODE
+#define UTF8_HARD_SPACE		"\xC2\xA0"	/* 0xA0 */
+#define UTF8_BULLET		"\xE2\x80\xA2"	/* 2022 */
+#define UTF8_BULLET_STRING	UTF8_BULLET UTF8_HARD_SPACE
 #endif
+
+#define SYMBOL_DISC_STRING	"\x6C" HARD_SPACE
+#define SYMBOL_SQUARE_STRING	"\x6E" HARD_SPACE
+#define SYMBOL_CIRCLE_STRING	"\x6D" HARD_SPACE
 
 /* You don't want to set this to 1 */
 #define DEBUG_DLCOMPACT 0
@@ -71,8 +82,6 @@ static void roman_one_five_ten(char *s, int n, char *oft)
     *p = 0;
 }
 
-
-
 static char *roman_numeral(int n, int caps)
 {
     /* Worst case 3888 = "MMMDCCCLXXXVIII" = 15 chars */
@@ -103,8 +112,6 @@ static char *roman_numeral(int n, int caps)
     return buffer;
 }
 
-
-
 static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 {
     static char buffer[24];		/* Big enough that it can be padded to a full word. */
@@ -112,9 +119,13 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
     switch (tib->list_type)
     {
     case HTML_UL:
-	buffer[0] = BULLET_CHAR;
-	buffer[1] = (char)160;
-	buffer[2] = 0;
+#if UNICODE
+	if (config_encoding_internal == 1)
+	    strcpy(buffer, UTF8_BULLET_STRING);
+	else
+#endif
+	    strcpy(buffer, BULLET_STRING);
+
 	switch (tib->item_type)
 	{
 	case 0:     /* PLAIN */
@@ -125,15 +136,17 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 	    /* only override the standard bullet if we know the symbol font is available */
 	case HTML_UL_TYPE_DISC:
 	    if (symfont)
-		buffer[0] = 108;
+		strcpy(buffer, SYMBOL_DISC_STRING);
 	    break;
+
 	case HTML_UL_TYPE_SQUARE:
 	    if (symfont)
-		buffer[0] = 110;
+		strcpy(buffer, SYMBOL_SQUARE_STRING);
 	    break;
+
 	case HTML_UL_TYPE_CIRCLE:
 	    if (symfont)
-		buffer[0] = 109;
+		strcpy(buffer, SYMBOL_CIRCLE_STRING);
 	    break;
 	}
 	break;
@@ -157,10 +170,15 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 	case rid_bullet_ol_I:
 	case rid_bullet_ol_i:
 	    sprintf(buffer, "%s", roman_numeral(tib->list_no,
-						  (tib->item_type == rid_bullet_ol_i) ? 0 : 1 ));
+						(tib->item_type == rid_bullet_ol_i) ? 0 : 1 ));
 	    break;
 	}
-	strcat(buffer, ")\240");
+#if UNICODE
+	if (config_encoding_internal == 1)
+	    strcat(buffer, ")" UTF8_HARD_SPACE);
+	else
+#endif
+	    strcat(buffer, ")" HARD_SPACE);
 	break;
 
     case HTML_DL:       /* fake bullet for transferring info to formatter */
@@ -174,9 +192,12 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
     case HTML_MENU:
     case HTML_DIR:
     default:
-	buffer[0] = BULLET_CHAR;
-	buffer[1] = (char)160;
-	buffer[2] = 0;
+#if UNICODE
+	if (config_encoding_internal == 1)
+	    strcpy(buffer, UTF8_BULLET_STRING);
+	else
+#endif
+	    strcpy(buffer, BULLET_STRING);
 	break;
     }
 
@@ -184,7 +205,7 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 }
 
 static BOOL getbulletfont( antweb_doc *doc, const rid_text_item_bullet *tib,
-                           webfont **ppfont )
+                           int *ppfont )
 {
     int which;
 
@@ -203,7 +224,7 @@ static BOOL getbulletfont( antweb_doc *doc, const rid_text_item_bullet *tib,
 
         if ( webfonts[which].handle > 0 )
         {
-            *ppfont = webfonts+which;
+            *ppfont = which;
             return TRUE;
         }
     }
@@ -217,16 +238,18 @@ static BOOL getbulletfont( antweb_doc *doc, const rid_text_item_bullet *tib,
     }
 
     antweb_doc_ensure_font( doc, which );
-    *ppfont = webfonts+which;
+    *ppfont = which;
     return FALSE;
 }
 
 void obullet_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
+    int whichfont;
     webfont *wf;
     rid_text_item_bullet *tib = (rid_text_item_bullet*) ti;
 
-    getbulletfont( doc, tib, &wf );
+    getbulletfont( doc, tib, &whichfont );
+    wf = &webfonts[whichfont];
 
     /* Width comes from preformatted size */
     switch (tib->list_type)
@@ -261,6 +284,7 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     font fh;
     rid_text_item_bullet *tib = (rid_text_item_bullet*) ti;
     BOOL symfont;
+    int whichfont;
     webfont *wf;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
@@ -277,25 +301,11 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (update == object_redraw_BACKGROUND)
 	return;
     
-    symfont = getbulletfont( doc, tib, &wf );
-    fh = wf->handle;
-
-    if (fs->lf != fh)
-    {
-	fs->lf = fh;
-	font_setfont(fs->lf);
-    }
-
+    symfont = getbulletfont( doc, tib, &whichfont );
     buffer = obullet_string(tib, symfont);
 
-    fstr.x = 1 << 30;
-    fstr.y = 1 << 30;
-    fstr.split = -1;
-
-    fstr.term = strlen(buffer);
-    fstr.s = buffer;
-    font_strwidth(&fstr);
-
+    fstr.x = webfont_font_width(whichfont, buffer);
+    
     tfc = render_text_link_colour(ti, doc);
     tbc = render_background(ti, doc);
 
@@ -306,8 +316,8 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	render_set_font_colours(tfc, tbc, doc);
     }
 
-    font_paint(buffer, font_OSCOORDS | (config_display_blending ? 0x800 : 0),
-	       hpos + ti->width - (fstr.x / MILIPOINTS_PER_OSUNIT), bline);
+    RENDBG(("obullet_redraw: font %d '%s'\n", whichfont, buffer));
+    render_text(doc, whichfont, buffer, hpos + ti->width - fstr.x, bline);
 #endif /* BUILDERS */
 }
 
@@ -362,8 +372,10 @@ void obullet_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     for (len = strlen(buffer)+1; (len % 4) != 0 ; len++)
 	buffer[len] = 0;
 
+#if 1
+    fstr.x = webfont_font_width(ti->st.wf_index, buffer);
+#else
     font_setfont(webfonts[ti->st.wf_index].handle);
-
     fstr.x = 1 << 30;
     fstr.y = 1 << 30;
     fstr.split = -1;
@@ -371,12 +383,13 @@ void obullet_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     fstr.term = strlen(buffer);
     fstr.s = buffer;
     font_strwidth(&fstr);
-
+    fstr.x /= MILIPOINTS_PER_OSUNIT;
+#endif
     size = WEBFONT_SIZEOF(ti->st.wf_index);
     size = config_font_sizes[size-1];
     size *= 640;
 
-    hp = x + ti->width - (fstr.x / MILIPOINTS_PER_OSUNIT);
+    hp = x + ti->width - fstr.x;
 
     txt.tag = draw_OBJTEXT;
     txt.size = sizeof(txt) + len;

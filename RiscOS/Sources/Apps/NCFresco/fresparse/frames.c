@@ -210,7 +210,6 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     if (attr->type != value_none)
     {
 	htmlriscos_colour( attr, &container->bordercolour);
-
     }
 
     /* use the outermost frameset to set the background colour for the page */
@@ -250,25 +249,49 @@ extern void finishframeset (SGMLCTX * context, ELEMENT * element)
 
     generic_finish (context, element);
 
-    /* unstack frameset, check level as we may be skipping framesets */
     if (me->frameset)
     {
-        me->frameset = me->frameset->data.frameset.old_frameset;
+#if 0
+	/* SJM: this is some code to move excess frames to somewhere
+           sensible but it's not finished as need some reverse
+           engineering first */
+	rid_frame *frame, *frame_last;
+	int i, n;
+
+	frame = me->frameset;
+	frame_last = NULL;
+	n = frame->data.frameset->ncols * frame->data.frameset->nrows;
+
+	/* count through the frames in this frameset */
+	for (i = 0; i < n && frame; i++)
+	{
+	    frame_last = frame;
+	    frame = frame->next;
+	}
+
+	/* if there are any frames left at this point then we need to move them */
+	if (frame)
+	{
+	    /* unlink */
+	    if (frame_last)
+		frame_last->next = NULL;
+
+	    /* link */
+	    rid_frame_connect(me->frameset, frame);
+	}
+#endif	
+	/* unstack frameset, check level as we may be skipping framesets */
+	me->frameset = me->frameset->data.frameset.old_frameset;
 	me->object_nesting--;
 
-#if 1
 	/* If unstack to the end then discard everything else in the file */
 	if (me->frameset == NULL)
 	{
-#if 0
-	    pseudo_html(me, "<NOFRAMES>");
-#else
 	    /* Replace the delivery mechanism with the noframes variant */
+	    /* pseudo_html(me, "<NOFRAMES>"); */
 	    me->object_nesting = 1;
 	    sgml_install_deliver(context, &noframes_deliver);
-#endif
 	}
-#endif
     }
 }
 

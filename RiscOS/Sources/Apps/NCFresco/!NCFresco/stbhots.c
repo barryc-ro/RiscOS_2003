@@ -27,6 +27,12 @@
 #include "url.h"
 #include "urlopen.h"
 
+#if UNICODE
+# include "Unicode/utf8.h"
+# include "Unicode/charsets.h"
+# include "Unicode/encoding.h"
+#endif
+
 typedef struct hotlist_item hotlist_item;
 typedef struct hotlist_info hotlist_info;
 
@@ -37,6 +43,7 @@ struct hotlist_item
     hotlist_item *next;
     char *url;
     char *title;
+    char language[3];
     time_t last_used;
     int flags;
 };
@@ -56,12 +63,44 @@ static int hotlist_count = 0;
 #define NVRAM_Read	0x4EE00
 #define NVRAM_Write	0x4EE01
 
+#define CURRENT_RECORD_SIZE	5
+#define CURRENT_FORMAT		2
+
 /* ---------------------------------------------------------------------- */
 
 static char *title_or_url(const hotlist_item *item)
 {
     return item->title ? item->title : item->url;
 }
+
+static int get_format(void)
+{
+#if UNICODE
+    return config_encoding_internal == 0 ? 1 : 2;
+#else
+    return 1;
+#endif
+}
+
+#if UNICODE
+static int callback_fn(void *handle, UCS4 c)
+{
+    char **ps = handle;
+    *ps = UCS4_to_UTF8(*ps, c);
+    return 0;
+}
+
+static void latin1_to_utf8(Encoding *encoding, char **ps)
+{
+    int len = strlen(*ps);
+    char *out = calloc(len*6 + 1, 1);
+    char *current = out;
+
+    encoding_read(encoding, callback_fn, *ps, len, &current);
+
+    *ps = realloc(out, current - out + 1);
+}
+#endif
 
 /* ---------------------------------------------------------------------- */
 
@@ -142,7 +181,7 @@ static void hotlist__unlink_and_free(hotlist_item *last, hotlist_item *item)
     hotlist_count--;
 }
 
-static void hotlist__add(char *url, char *title, time_t t, BOOL in_order)
+static void hotlist__add(char *url, char *title, const char *language, time_t t, BOOL in_order)
 {
     hotlist_item *item;
 
@@ -166,6 +205,8 @@ static void hotlist__add(char *url, char *title, time_t t, BOOL in_order)
     /* fill in data */
     item->url = url;
     item->title = title;
+    if (language)
+	strncpysafe(item->language, language, sizeof(item->language));
     item->last_used = t;
 
     hotlist_changed = TRUE;
@@ -364,17 +405,31 @@ static void hotlist__read_header(FILE *in, hotlist_info *info)
 static void hotlist__read(FILE *in)
 {
     hotlist_info info;
+#if UNICODE
+    Encoding *encoding;
+#endif
 
     hotlist__read_header(in, &info);
 
+#if UNICODE
+    if (info.format == 1 && config_encoding_internal == 1)
+	encoding = encoding_new(csWindows1252, encoding_READ);
+    else
+	encoding = NULL;
+#endif
+    
     while (!feof(in) && !ferror(in))
     {
-	char *url, *title;
+	char *url, *title, *language = NULL;
 	int i, last_used = 0;
 
 	url = xfgets(in);
 	title = xfgets(in);
 
+#if UNICODE
+	if (encoding)
+	    latin1_to_utf8(encoding, &title);
+#endif
 	if (info.record_size >= 3)
 	    fskipline(in);
 
@@ -385,20 +440,31 @@ static void hotlist__read(FILE *in)
 	    mm_free(s);
 	}
 
+	if (info.record_size >= 5)
+	    language = xfgets(in);
+
 	if (url)
-	    hotlist__add(url, title, last_used, FALSE);
+	    hotlist__add(url, title, language, last_used, FALSE);
 
 	/* skip any extra unused records */
-	for (i = 4; i < info.record_size; i++)
+	for (i = CURRENT_RECORD_SIZE; i < info.record_size; i++)
 	    fskipline(in);
+
+	/* free any strings that are copied into static (not malloced) buffers */
+	mm_free(language);
     }
+
+#if UNICODE
+    if (encoding)
+	encoding_delete(encoding);
+#endif
 }
 
 static void hotlist__write_header(FILE *in)
 {
     fprintf(in, "# "PROGRAM_NAME" favorites\n");
-    fprintf(in, "Format: 1\n");
-    fprintf(in, "Record: 4\n");
+    fprintf(in, "Format: %d\n", get_format());
+    fprintf(in, "Record: %d\n", CURRENT_RECORD_SIZE);
     fprintf(in, "Data\n");
 }
 
@@ -410,10 +476,10 @@ static void hotlist__write(FILE *out)
 
     for (item = hotlist_list; item; item = item->next)
     {
-	STBDBG(("hotlist__write: item %p url %p title %p\n", item, item->url, item->title));
+	STBDBG(("hotlist__write: item %p url %p title %p language '%s'\n", item, item->url, item->title, item->language));
 
-	STBDBG(("hotlist__write: url %s\n", item->url));
-	STBDBG(("hotlist__write: title %s\n", item->title));
+	STBDBG(("hotlist__write: url '%s'\n", item->url));
+	STBDBG(("hotlist__write: title '%s'\n", strsafe(item->title)));
 
 	if (item->url)
 	{
@@ -429,6 +495,9 @@ static void hotlist__write(FILE *out)
 
 	    /* Extra information */
 	    fprintf(out, "%08x\n", item->last_used);
+
+	    fputs(item->language, out);
+	    fputc('\n', out);
 	}
     }
 }
@@ -461,24 +530,25 @@ static BOOL hotlist__write_nvram(void)
     data = mm_calloc(size, 1);
 
     /* write header */
-    data[0] = 1;		/* format */
-    data[1] = 4;		/* record size */
+    data[0] = get_format();		/* format */
+    data[1] = CURRENT_RECORD_SIZE;	/* record size */
     used = 2;
 
     /* add items into buffer if room */
     for (item = hotlist_list; item; item = item->next)
     {
-	int need = strlen(item->url) + 1 +
-	    (item->title ? strlen(item->title) : 0) + 1 +
-	    1 +
-	    8 + 1;
+	int need = strlen(item->url) + 1 +				/* url */
+	    (item->title ? strlen(item->title) : 0) + 1 +		/* title */
+	    1 +								/* icon name */
+	    8 + 1 +							/* last used */
+	    (item->language ? strlen(item->language) : 0) + 1;		/* language */
 
 	STBDBG(("hotlist__write_nvram: need %d used %d\n", need, used));
 
 	if (used + need <= size)
 	{
-	    used += sprintf(data + used, "%s\n%s\n\n%08x\n",
-		    item->url, strsafe(item->title), item->last_used);
+	    used += sprintf(data + used, "%s\n%s\n\n%08x\n%s\n",
+		    item->url, strsafe(item->title), item->last_used, strsafe(item->language));
 
 	    STBDBG(("hotlist__write_nvram: wrote '%s'\n", data+used-need));
 	}
@@ -504,7 +574,7 @@ static BOOL hotlist__write_nvram(void)
 static BOOL hotlist__read_nvram(void)
 {
     hotlist_info info;
-    int size, rc;
+    int size;
     char *data, *s;
 
     STBDBG(("hotlist__read_nvram: enter\n"));
@@ -528,17 +598,28 @@ static BOOL hotlist__read_nvram(void)
     if (_swix(NVRAM_Read, _INR(0,2) | _OUT(0), NVRAM_FAVORITES, data, size, &size) == NULL &&
 	size > 0)
     {
+#if UNICODE
+	Encoding *encoding;
+#endif
+
 	info.format = data[0];
 	info.record_size = data[1];
 
 	STBDBG(("hotlist__read_nvram: format %d record size %d\n", data[0], data[1]));
 
+#if UNICODE
+	if (info.format == 1 && config_encoding_internal == 1)
+	    encoding = encoding_new(csWindows1252, encoding_READ);
+	else
+	    encoding = NULL;
+#endif
+	
 	/* carry on reading until reached end of buffer or a null byte is found */
 	s = &data[2];
 	while (s && *s)
 	{
 	    int i;
-	    char *url = NULL, *title = NULL;
+	    char *url = NULL, *title = NULL, *language = NULL;
 	    int last_used = 0;
 
 	    for (i = 0; i < info.record_size; i++)
@@ -563,6 +644,9 @@ static BOOL hotlist__read_nvram(void)
 		case 3:
 		    last_used = (time_t)strtoul(s, NULL, 16);
 		    break;
+		case 4:
+		    language = s;
+		    break;
 		}
 
 		s = nl ? nl + 1 : NULL;
@@ -570,9 +654,18 @@ static BOOL hotlist__read_nvram(void)
 
 	    STBDBG(("hotlist__read_nvram: '%s' '%s' 0x%08x\n", url, title, last_used));
 
+#if UNICODE
+	    if (encoding)
+		latin1_to_utf8(encoding, &title);
+#endif
 	    if (url)
-		hotlist__add(strdup(url), strdup(title), last_used, FALSE);
+		hotlist__add(strdup(url), strdup(title), language, last_used, FALSE);
 	}
+
+#if UNICODE
+	if (encoding)
+	    encoding_delete(encoding);
+#endif
     }
 
     STBDBG(("hotlist__read_nvram: size read %d\n", size));
@@ -669,14 +762,12 @@ BOOL hotlist_write(const char *file)
     return rc;
 }
 
-os_error *hotlist_add(const char *url, const char *title)
+os_error *hotlist_add(const char *url, const char *title, const char *language)
 {
-    os_error *ep;
-
     if (url == NULL)
 	return NULL;
 
-    hotlist__add(mm_strdup(url), mm_strdup(title), time(NULL), TRUE);
+    hotlist__add(mm_strdup(url), mm_strdup(title), language, time(NULL), TRUE);
     hotlist__trim_length();
     hotlist__sort(hotlist__compare_alpha);
 
@@ -693,8 +784,6 @@ os_error *hotlist_add(const char *url, const char *title)
 
 os_error *hotlist_remove(const char *url)
 {
-    os_error *ep;
-
     hotlist__remove(NULL, url);
 
 /*     if ((ep = ensure_modem_line()) != NULL) */
@@ -710,8 +799,6 @@ os_error *hotlist_remove(const char *url)
 
 os_error *hotlist_flush_pending_delete(void)
 {
-    os_error *ep;
-
     hotlist__flush_pending_delete();
 
 /*     if ((ep = ensure_modem_line()) != NULL) */
@@ -731,11 +818,12 @@ static void hotlist__write_list(FILE *fout, BOOL del)
     for (item = hotlist_list, i = 0; item; item = item->next, i++)
     {
 	char *ttl = item->title ? item->title : item->url;
+	char *lang = item->language;
 
 	if (del)
- 	    fprintf(fout, msgs_lookup("favsd.I"), i, i, ttl, i, i, item->flags & hotlist_DELETE_PENDING ? "CHECKED" : "");
+ 	    fprintf(fout, msgs_lookup("favsd.I"), lang, i, i, ttl, i, i, item->flags & hotlist_DELETE_PENDING ? "CHECKED" : "");
 	else
- 	    fprintf(fout, msgs_lookup("favs.I"), i, i, ttl);
+ 	    fprintf(fout, msgs_lookup("favs.I"), lang, i, i, ttl);
     }
 }
 

@@ -23,19 +23,19 @@
 
   */
 
-extern void state_stuck_text(SGMLCTX *context, char input)
+extern void state_stuck_text(SGMLCTX *context, UCHARACTER input)
 {
     push_inhand(context);
 
     if (input < 32)
     {
-	static STRING s = { NULL, 0 };
+	static USTRING s = { NULL, 0 };
 
 	(*context->chopper) (context, s); /* Flush */
     }
 }
 
-extern void state_end_found_element (SGMLCTX *context, char input)
+extern void state_end_found_element (SGMLCTX *context, UCHARACTER input)
 {
         if ( is_whitespace (input) )
         {
@@ -53,15 +53,15 @@ extern void state_end_found_element (SGMLCTX *context, char input)
 }
 
 
-extern void state_end_find_element_body (SGMLCTX *context, char input)
+extern void state_end_find_element_body (SGMLCTX *context, UCHARACTER input)
 {
         if ( is_element_body_character (input))
         {
                 ;
         }
-        else if ( strnicmp(&context->inhand.data[2],
+        else if ( strnicmpu(&context->inhand.data[2],
                   context->elements[context->tos->element].name.ptr,
-                  context->elements[context->tos->element].name.bytes ) == 0 )
+                  context->elements[context->tos->element].name.nchars ) == 0 )
         {
                 if ( is_whitespace (input) )
                 {
@@ -84,13 +84,23 @@ extern void state_end_find_element_body (SGMLCTX *context, char input)
         }
 }
 
-extern void state_end_find_element (SGMLCTX *context, char input)
+extern void state_end_find_element (SGMLCTX *context, UCHARACTER input)
 {
         if ( is_element_start_character (input) )
         {
                 context->state = state_end_find_element_body;
         }
-        else
+#if 0
+	/* SJM: this might be needed but I;m not sure right now */
+	else if ( is_whitespace (input) )
+	{
+	    /* SJM: allow whitespace in close tag </   element>
+	     *      remove it to make rest easier
+	     */
+	    context->inhand.ix--;
+	}
+#endif
+	else
         {
                 push_inhand (context);
                 context->state = state_end_tag_only;
@@ -100,7 +110,7 @@ extern void state_end_find_element (SGMLCTX *context, char input)
 /*****************************************************************************/
 
 
-extern void state_end_find_slash (SGMLCTX *context, char input)
+extern void state_end_find_slash (SGMLCTX *context, UCHARACTER input)
 {
         if ( input == '/' )
         {
@@ -113,7 +123,7 @@ extern void state_end_find_slash (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_some_sgml_command (SGMLCTX *context, char input)
+extern void state_some_sgml_command (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='>' )
 	{
@@ -123,124 +133,6 @@ extern void state_some_sgml_command (SGMLCTX *context, char input)
 
 
 /*****************************************************************************/
-
-#if OLD_COMMENTS
-extern void state_comment_pre_weak_strong (SGMLCTX *context, char input)
-{
-	if ( input =='-' )
-	{
-		context->state = state_comment_pre_weak_1;
-	}
-	else
-	{
-		context->state = state_comment_strong;
-	}
-}
-
-
-extern void state_comment_strong (SGMLCTX *context, char input)
-{
-	if ( input =='-' )
-	{
-		context->state = state_comment_pre_weak_strong;
-	}
-}
-
-
-extern void state_comment_pre_strong_1(SGMLCTX *context, char input)
-{
-	if ( input =='-')
-	{
-		;
-	}
-	else if ( input =='>')
-	{
-		do_got_element (context);
-	}
-	else
-	{
-		context->state = state_comment_strong;
-	}
-}
-
-
-extern void state_comment_pre_strong (SGMLCTX *context, char input)
-{
-	if ( input =='-')
-	{
-		context->state = state_comment_pre_strong_1;
-	}
-	else
-	{
-		context->state = state_comment_weak;
-	}
-}
-
-
-extern void state_comment_weak (SGMLCTX *context, char input)
-{
-	if (   input =='>')
-	{ do_got_element (context);
-	} else if ( input =='-')
-	{ context->state = state_comment_pre_strong; }
-}
-
-
-extern void state_comment_pre_weak_1 (SGMLCTX *context, char input)
-{
-	if ( input =='-' )
-	{ ; }
-	else if ( input =='>' )
-	{ do_got_element (context); }
-	else
-	{ context->state = state_comment_weak; }
-}
-
-extern void state_comment_pre_weak_initial (SGMLCTX *context, char input)
-{
-	if ( input =='-' )
-	{ context->state = state_comment_pre_weak_1; }
-	else
-	{ context->state = state_comment_initial; }
-}
-
-extern void state_comment_initial (SGMLCTX *context, char input)
-{
-	if ( input =='-' )
-	{ context->state = state_comment_pre_weak_initial; }
-	else if ( input =='>' )
-	{ do_got_element (context); }
-	else if ( input =='<' )
-	{ context->state = state_comment_strong; }
-}
-
-extern void state_comment_pre_initial_1 (SGMLCTX *context, char input)
-{
-	if ( input =='-' )
-	{ ; }
-	else if ( input =='>' )
-	{ do_got_element (context); }
-	/* FIXME: This case fixes the problem of <!--<B> Text --> ending at the B> 
-	 * I'm not convinced this is the correct thing to do though
-	 */
-	else if ( input =='<' )
-	{ context->state = state_comment_strong; }
-	else
-	{ context->state = state_comment_initial; }
-}
-extern void state_comment_pre_initial (SGMLCTX *context, char input)
-{
-	if ( input =='-' )
-	{ context->state = state_comment_pre_initial_1; }
-	else
-	{
-		context->state = state_comment_maybe;
-#if SGML_REPORTING
-		sgml_note_message (context, ("Perhaps a ''-'' was omitted?")) ;
-#endif
-	}
-}
-#else
 
 /* new scheme that correctly parses correct comments
  * and doesn't try and do anything clever with bad comments.
@@ -274,7 +166,7 @@ extern void state_comment_pre_initial (SGMLCTX *context, char input)
  */
 
 /* <!-- ... -- */
-extern void state_comment_wait_close (SGMLCTX *context, char input)
+extern void state_comment_wait_close (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='>' )
 	{ do_got_element(context); }
@@ -288,7 +180,7 @@ extern void state_comment_wait_close (SGMLCTX *context, char input)
 }
 
 /* <!-- ... - */
-extern void state_comment_wait_dash_2 (SGMLCTX *context, char input)
+extern void state_comment_wait_dash_2 (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='-' )
 	{
@@ -307,7 +199,7 @@ extern void state_comment_wait_dash_2 (SGMLCTX *context, char input)
 }
 
 /* <!--- waiting for - or > having got here through unbroken series of dashes */
-extern void state_comment_wait_dash_2_0 (SGMLCTX *context, char input)
+extern void state_comment_wait_dash_2_0 (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='-' )
 	{
@@ -326,7 +218,7 @@ extern void state_comment_wait_dash_2_0 (SGMLCTX *context, char input)
 }
 
 /* <!-- ... swallow anything except another dash */
-extern void state_comment_wait_dash_1 (SGMLCTX *context, char input)
+extern void state_comment_wait_dash_1 (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='-' )
 	{ context->state = state_comment_wait_dash_2; }
@@ -337,7 +229,7 @@ extern void state_comment_wait_dash_1 (SGMLCTX *context, char input)
 }
 
 /* <!-- swallow anything except another dash or closing > otherwise go to state dash_1 */
-extern void state_comment_wait_dash_1_0 (SGMLCTX *context, char input)
+extern void state_comment_wait_dash_1_0 (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='-' )
 	{ context->state = state_comment_wait_dash_2_0; }
@@ -348,7 +240,7 @@ extern void state_comment_wait_dash_1_0 (SGMLCTX *context, char input)
 }
 
 /* <!- */
-extern void state_comment_pre_initial (SGMLCTX *context, char input)
+extern void state_comment_pre_initial (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='-' )
 	{
@@ -367,10 +259,9 @@ extern void state_comment_pre_initial (SGMLCTX *context, char input)
 #endif
 	}
 }
-#endif
 
 /* <! */
-extern void state_comment_maybe (SGMLCTX *context, char input)
+extern void state_comment_maybe (SGMLCTX *context, UCHARACTER input)
 {
 #if WHITESPACE_BEFORE_COMMENT_START
     if ( is_whitespace (input) )
@@ -388,7 +279,7 @@ extern void state_comment_maybe (SGMLCTX *context, char input)
 /*****************************************************************************/
 
 
-extern void state_unquoted_value (SGMLCTX *context, char input)
+extern void state_unquoted_value (SGMLCTX *context, UCHARACTER input)
 {
 	if ( is_value_body_character (input) )
 	{ ; }
@@ -413,7 +304,7 @@ extern void state_unquoted_value (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_single_quoted_value (SGMLCTX *context, char input)
+extern void state_single_quoted_value (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input ==single_quote )
 	{ context->state = state_find_attribute_name; }
@@ -425,7 +316,7 @@ extern void state_single_quoted_value (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_double_quoted_value (SGMLCTX *context, char input)
+extern void state_double_quoted_value (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input ==double_quote )
 	{ context->state = state_find_attribute_name; }
@@ -437,7 +328,7 @@ extern void state_double_quoted_value (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_find_attribute_value (SGMLCTX *context, char input)
+extern void state_find_attribute_value (SGMLCTX *context, UCHARACTER input)
 {
 	if ( is_whitespace (input) )
 	{ ; }
@@ -461,7 +352,7 @@ extern void state_find_attribute_value (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_find_attribute_equals (SGMLCTX *context, char input)
+extern void state_find_attribute_equals (SGMLCTX *context, UCHARACTER input)
 {
 	if ( is_whitespace (input) )
 	{ ; }
@@ -481,7 +372,7 @@ extern void state_find_attribute_equals (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_in_attribute_name (SGMLCTX *context, char input)
+extern void state_in_attribute_name (SGMLCTX *context, UCHARACTER input)
 {
 	if ( is_attribute_body_character (input) )
 	{ ; }
@@ -501,7 +392,7 @@ extern void state_in_attribute_name (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_find_attribute_name (SGMLCTX *context, char input)
+extern void state_find_attribute_name (SGMLCTX *context, UCHARACTER input)
 {
 	if ( is_attribute_start_character (input) )
 	{ context->state = state_in_attribute_name; }
@@ -521,7 +412,7 @@ extern void state_find_attribute_name (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_in_element_name (SGMLCTX *context, char input)
+extern void state_in_element_name (SGMLCTX *context, UCHARACTER input)
 {
 	if ( is_element_body_character (input) )
 	{ ; }
@@ -538,12 +429,33 @@ extern void state_in_element_name (SGMLCTX *context, char input)
 	}
 }
 
+/* Seen the </ for some closing markup */
+
+extern void state_had_markup_open_slash (SGMLCTX *context, UCHARACTER input)
+{
+	if ( is_element_start_character (input) )
+	{ context->state = state_in_element_name; }
+	else if ( is_whitespace (input) )
+	{ ; }
+	else if ( input =='>' )
+	{ do_got_element (context); }
+	else
+	{
+		/* Not valid, so assume not markup */
+#if SGML_REPORTING
+		sgml_note_message (context, ("Does not look like markup"));
+#endif
+		push_inhand (context);
+		context->state = state_all_tags ;
+	}
+}
+
 /* Seen the < for some markup. Decide what's happening */
 
-extern void state_had_markup_open (SGMLCTX *context, char input)
+extern void state_had_markup_open (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='/' )
-	{ ; }
+	{ context->state = state_had_markup_open_slash; }
 	else if ( input =='!'  )
 	{ context->state = state_comment_maybe; }
 	else if ( is_element_start_character (input) )
@@ -571,7 +483,7 @@ on a character by character basis.
 
 */
 
-static void state_find_entity(SGMLCTX *context, char input)
+static void state_find_entity(SGMLCTX *context, UCHARACTER input)
 {
         if ( ! is_entity_character(input) )
         {
@@ -583,7 +495,9 @@ static void state_find_entity(SGMLCTX *context, char input)
 #endif
 /*printf("entity '%.*s' -- ", min(MAXSTRING, context->inhand.ix), context->inhand.data);*/
                 entity_recognition(context);
+	PRSDBG(("state_find_entity: done recog\n"));
                 context->state = get_state_proc(context);
+	PRSDBG(("state_find_entity: got state %p\n", context->state));
                 if (input != ';')
                 {
         		add_char_to_inhand(context, input);
@@ -595,7 +509,7 @@ static void state_find_entity(SGMLCTX *context, char input)
 /*****************************************************************************/
 
 
-extern void state_badly_formed_tag (SGMLCTX *context, char input)
+extern void state_badly_formed_tag (SGMLCTX *context, UCHARACTER input)
 {
     /* SJM: idea to get round bad markup dumping whole tag.
      * When in bad markup state we stay here until we find whitespace
@@ -619,27 +533,35 @@ extern void state_badly_formed_tag (SGMLCTX *context, char input)
 	}
 }
 
-extern void state_really_badly_formed_tag (SGMLCTX *context, char input)
+extern void state_really_badly_formed_tag (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='>' )
 	{
 #if SGML_REPORTING
+	    {
+		USTRING s;
+		s.ptr = context->inhand.data;
+		s.nchars = context->inhand.ix;
 		sgml_note_message (context, "Badly formed markup '%.*s'",
-				   min(MAXSTRING, context->inhand.ix), context->inhand.data);
+				   min(MAXSTRING, context->inhand.ix), usafe(s));
+	    }
 #endif
 		clear_inhand (context);
 		context->state = get_state_proc (context);
 	}
 }
 
-extern void state_end_tag_only (SGMLCTX *context, char input)
+extern void state_end_tag_only (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='<' )
 	{
 		push_bar_last_inhand (context);
 		context->state = state_end_find_slash ;
 	}
-#if 0				/* I don't think this should be active */
+#if 1
+	/* I don't think this should be active - reenabled 'cos I
+	 * don't know what I took it out and it saves later processing
+	 */
 	else if (input == '&' )
 	{
                 push_bar_last_inhand (context);
@@ -650,7 +572,7 @@ extern void state_end_tag_only (SGMLCTX *context, char input)
 	{ push_inhand (context); }
 }
 
-extern void state_markup_only (SGMLCTX *context, char input)
+extern void state_markup_only (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='<' )
 	{
@@ -659,27 +581,27 @@ extern void state_markup_only (SGMLCTX *context, char input)
 	}
 	else
 	{
+#if SGML_REPORTING
 		if ( ! is_whitespace (input) )
 		{
-#if SGML_REPORTING
 			sgml_note_message (context, "Text is not valid at this point");
 			sgml_note_unexpected_character (context) ;
-#endif
 		}
+#endif
 
                 /* String will be freed */                
                 (*context->deliver)
                 (
                         context,
                         DELIVER_UNEXPECTED,
-                        mkstring(context->inhand.data, context->inhand.ix),
+                        mkstringu(context->encoding_write, context->inhand.data, context->inhand.ix),
 			NULL
                 );
 		clear_inhand (context) ;
 	}
 }
 
-extern void state_all_tags (SGMLCTX *context, char input)
+extern void state_all_tags (SGMLCTX *context, UCHARACTER input)
 {
 	if ( input =='<' )
 	{
@@ -709,23 +631,11 @@ static state_name_str state_names[] =
     { state_really_badly_formed_tag, "state_really_badly_formed_tag" },
     { state_comment_maybe, "state_comment_maybe" },
     { state_comment_pre_initial, "state_comment_pre_initial" },
-#if OLD_COMMENTS
-    { state_comment_initial, "state_comment_initial" },
-    { state_comment_pre_initial_1, "state_comment_pre_initial_1" },
-    { state_comment_pre_strong, "state_comment_pre_strong" },
-    { state_comment_pre_strong_1, "state_comment_pre_strong_1" },
-    { state_comment_pre_weak_1, "state_comment_pre_weak_1" },
-    { state_comment_pre_weak_initial, "state_comment_pre_weak_initial" },
-    { state_comment_pre_weak_strong, "state_comment_pre_weak_strong" },
-    { state_comment_strong, "state_comment_strong" },
-    { state_comment_weak, "state_comment_weak" },
-#else
     { state_comment_wait_dash_1, "state_comment_wait_dash_1" },
     { state_comment_wait_dash_2, "state_comment_wait_dash_2" },
     { state_comment_wait_dash_1_0, "state_comment_wait_dash_1_0" },
     { state_comment_wait_dash_2_0, "state_comment_wait_dash_2_0" },
     { state_comment_wait_close, "state_comment_wait_close" },
-#endif
     { state_double_quoted_value, "state_double_quoted_value" },
     { state_end_find_element, "state_end_find_element" },
     { state_end_find_element_body, "state_end_find_element_body" },
@@ -744,6 +654,7 @@ static state_name_str state_names[] =
     { state_some_sgml_command, "state_some_sgml_command" },
     { state_stuck_text, "state_stuck_text" },
     { state_unquoted_value, "state_unquoted_value" },
+    { state_had_markup_open_slash, "state_had_markup_open_slash" },
     { 0, 0 }
 };
 

@@ -214,6 +214,32 @@ extern void set_font_type(SGMLCTX *context, int type)
 
 /*****************************************************************************/
 
+static int string_lang_name_to_num(const STRING *lang)
+{
+    char s[3];
+
+    s[0] = lang->nchars >= 1 ? (char) lang->ptr[0] : 0;
+    s[1] = lang->nchars >= 2 ? (char) lang->ptr[1] : 0;
+    s[2] = 0;
+	
+    return lang_name_to_num(s);
+}
+
+/* This sets the LANG_NUM field
+ */
+
+extern void set_lang(SGMLCTX *context, VALUE *lang)
+{
+    if (lang->type == value_string)
+    {
+	int code = string_lang_name_to_num(&lang->u.s);
+	if (code)
+	    SET_EFFECTS(context->tos, LANG_NUM, code);
+    }
+}
+
+/*****************************************************************************/
+
 /* Setting the LCR alignment is now potentially very common */
 
 extern void std_lcr_align(SGMLCTX *context, VALUE *align)
@@ -320,15 +346,31 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 /*    char *alignp = NULL;*/
 /*    int i;*/
     char *ptr = me->inhand_string.ptr;
-    int bytes = me->inhand_string.bytes;
+    int nchars = me->inhand_string.nchars;
     int rindent;
 
     ASSERT(me->magic == HTML_MAGIC);
 
     PRSDBGN(("text_item_push_word(%p,%x,%d:%s): '%.*s' (%d,%p)\n",
-	    me, xf, space, space ? "WITH SPACE" : "WITHOUT SPACE", bytes, ptr ? ptr : "**NULL**",
-	    bytes, ptr));
+	    me, xf, space, space ? "WITH SPACE" : "WITHOUT SPACE", nchars, ptr ? ptr : "**NULL**",
+	    nchars, ptr));
 
+#if UNICODE
+    if (webfont_need_wide_font(ptr, nchars))
+	xf |= rid_flag_WIDE_FONT;
+#endif
+    
+#if NEW_BREAKS
+    if (me->no_break && GET_BREAK(xf) == rid_break_CAN)
+	SET_BREAK(xf, rid_break_MUST_NOT);
+
+    if (space)
+    {
+	/* set the space flag, rather than adding text */
+	xf |= rid_flag_SPACE;
+	space = FALSE;
+    }
+#else
     if (me->no_break)
 	xf |= rid_flag_NO_BREAK;
 
@@ -337,10 +379,11 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	PRSDBG(("\ntext_item_push_word(): both LINE_BREAK and NO_BREAK - clearing NO_BREAK\n\n"));
 	xf &= ~rid_flag_NO_BREAK;
     }
+#endif
 
 #if DEBUG
     flexmem_noshift();
-    PRSDBG(("PUSH WORD '%.*s'\n", bytes, ptr));
+    PRSDBG(("PUSH WORD '%.*s'\n", nchars, ptr));
     flexmem_shift();
 #endif
 
@@ -356,10 +399,10 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     {
 	PRSDBG(("text_item_push_word(%p,%x): looking for '%c', 0x%02X alignment character\n", me, flags, ac, ac));
 
-	for (alignp = ptr, i = 0; i < bytes && alignp[i] != ac; i++)
+	for (alignp = ptr, i = 0; i < nchars && alignp[i] != ac; i++)
 	    ;
 
-	if (i == bytes)
+	if (i == nchars)
 	{
 	    alignp = NULL;
 	}
@@ -385,10 +428,10 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	nb2 = &(new2->base);
 	/* 123.567 */
 	new->data_off = memzone_alloc(&me->rh->texts, alignp - ptr + 1);
-	new2->data_off = memzone_alloc(&me->rh->texts, bytes - (alignp - ptr) + 1 + space);
+	new2->data_off = memzone_alloc(&me->rh->texts, nchars - (alignp - ptr) + 1 + space);
 	if (new->data_off == -1 || new2->data_off == -1 )
 	{
-	    usrtrc( "Memzone alloc failed for sting length %d ('%s')\n", bytes+1, ptr);
+	    usrtrc( "Memzone alloc failed for sting length %d ('%s')\n", nchars+1, ptr);
 	}
 	else
 	{
@@ -400,9 +443,9 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	    memcpy(me->rh->texts.data + new->data_off, ptr, alignp - ptr);
 	    (me->rh->texts.data + new->data_off)[alignp - ptr] = 0;
 
-	    memcpy(me->rh->texts.data + new->data_off, alignp, bytes - (alignp - ptr) );
-	    (me->rh->texts.data + new->data_off)[bytes] = " ";
-	    (me->rh->texts.data + new->data_off)[bytes_space] = 0;
+	    memcpy(me->rh->texts.data + new->data_off, alignp, nchars - (alignp - ptr) );
+	    (me->rh->texts.data + new->data_off)[nchars] = " ";
+	    (me->rh->texts.data + new->data_off)[nchars_space] = 0;
 
 	    *alignp = 0;
 	    strcpy(me->rh->texts.data + new->data_off, ptr);
@@ -420,19 +463,19 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     else
 #endif
     {
-	new->data_off = memzone_alloc(&me->rh->texts, bytes+1+space);
+	new->data_off = memzone_alloc(&me->rh->texts, nchars+1+space);
 
 	if (new->data_off == -1)
 	{
-	    usrtrc( "Memzone alloc failed for sting length %d ('%s')\n", bytes+1, ptr);
+	    usrtrc( "Memzone alloc failed for sting length %d ('%s')\n", nchars+1, ptr);
 	}
 	else
 	{
 	    flexmem_noshift();
 
-	    memcpy(me->rh->texts.data + new->data_off, ptr, bytes);
-	    (me->rh->texts.data + new->data_off)[bytes] = ' ';
-	    (me->rh->texts.data + new->data_off)[bytes + space] = 0;
+	    memcpy(me->rh->texts.data + new->data_off, ptr, nchars);
+	    (me->rh->texts.data + new->data_off)[nchars] = ' ';
+	    (me->rh->texts.data + new->data_off)[nchars + space] = 0;
 
 	    flexmem_shift();
 	}
@@ -446,7 +489,10 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
+    PRSDBGN(("text_item_push_word: wide %d flags %x font %x\n", nb->flag & rid_flag_WIDE_FONT ? 1 : 0, nb->st.flags, nb->st.wf_index));
+    
     /* pdh: bodge warning: only one level of right indent supported */
     rindent = UNPACK(me->sgmlctx->tos->effects_active, STYLE_RINDENT);
     if ( rindent != 0 )
@@ -466,6 +512,8 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
             nb->flag |= rid_flag_RINDENT;
 
 	GET_ROSTYLE(nb2->st);
+	nb2->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
+
 	rid_text_item_connect(me->rh->curstream, nb2);
     }
 
@@ -479,13 +527,21 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 
 extern void text_item_revoke_break( HTMLCTX *me )
 {
+#if NEW_BREAKS
+    if ( me->rh && me->rh->curstream && me->rh->curstream->text_last  &&
+	 GET_BREAK(me->rh->curstream->text_last->flag) == rid_break_MUST )
+    {
+	SET_BREAK(me->rh->curstream->text_last->flag, rid_break_CAN);
+    }
+#else
     if ( me->rh && me->rh->curstream && me->rh->curstream->text_last )
         me->rh->curstream->text_last->flag &= ~rid_flag_LINE_BREAK;
+#endif
 }
 
 /*****************************************************************************/
 
-extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target, VALUE *id, VALUE *enctype)
+extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target, VALUE *id, VALUE *enctype, VALUE *accept_charset)
 {
     rid_form_item *new;
 
@@ -512,6 +568,9 @@ extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *tar
     if (enctype->type == value_string)
 	new->enc_type = stringdup(enctype->u.s);
 
+    if (accept_charset->type == value_string)
+	new->accept_charset = stringdup(accept_charset->u.s);
+    
     rid_form_item_connect(me->rh, new);
     me->form = new;
 }
@@ -560,7 +619,6 @@ extern void decode_img_align(int align, rid_image_flags *img_flags, rid_flag *it
 }
 
 extern void text_item_push_image(HTMLCTX * me,
-				 int flags,
 				 VALUE *src,
 				 VALUE *alt,
 				 VALUE *align,
@@ -575,7 +633,7 @@ extern void text_item_push_image(HTMLCTX * me,
     rid_text_item_image *new;
     rid_text_item *nb;
 
-    PRSDBG(("text_item_push_image(%p,%x,etc): width=%p\n", me, flags, ww));
+    PRSDBG(("text_item_push_image(%p): width=%p\n", me, ww));
 
     new = mm_calloc(1, sizeof(*new));
     nb = &(new->base);
@@ -635,14 +693,26 @@ extern void text_item_push_image(HTMLCTX * me,
 
     nb->tag = rid_tag_IMAGE;
 
-    nb->flag |= rid_flag_LINE_BREAK & flags;
+/*     nb->flag |= rid_flag_LINE_BREAK & flags; */
+#if NEW_BREAKS
+    if (me->mode == HTMLMODE_PRE || me->no_break)
+	SET_BREAK(nb->flag, rid_break_MUST_NOT);
+#else
     if (me->mode == HTMLMODE_PRE || me->no_break)
 	nb->flag |= rid_flag_NO_BREAK;
+#endif
+
+#if UNICODE
+    if (new->alt && webfont_need_wide_font(new->alt, strlen(new->alt)))
+	nb->flag |= rid_flag_WIDE_FONT;
+#endif
+
     nb->aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
 
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     rid_text_item_connect(me->rh->curstream, nb);
 
@@ -707,7 +777,11 @@ extern rid_aref_item *new_aref_item(HTMLCTX* me,
      */
     if (new->href == NULL)
     {
+#if NEW_BREAKS
+	text_item_push_word(me, rid_break_MUST_NOT, FALSE);
+#else
 	text_item_push_word(me, rid_flag_NO_BREAK, FALSE);
+#endif
 	me->aref = NULL;
     }
 
@@ -716,7 +790,7 @@ extern rid_aref_item *new_aref_item(HTMLCTX* me,
 
 /*****************************************************************************/
 
-extern void new_option_item(HTMLCTX * me, VALUE *value, rid_input_flags flags)
+extern void new_option_item(HTMLCTX * me, VALUE *value, VALUE *lang, rid_input_flags flags)
 {
     rid_option_item *new;
 
@@ -728,6 +802,11 @@ extern void new_option_item(HTMLCTX * me, VALUE *value, rid_input_flags flags)
 
     new->flags = flags;
     new->value = valuestringdup(value);
+
+    if (lang->type == value_string)
+	new->language = string_lang_name_to_num(&lang->u.s);
+    else
+	new->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     rid_option_item_connect(me->form->last_select, new);
 }
@@ -884,14 +963,20 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
     rid_form_element_connect(me->form, &sel->base);
     me->form->last_select = sel;
 
+#if NEW_BREAKS
+    if (me->no_break)
+	SET_BREAK(nb->flag, rid_break_MUST_NOT);
+#else
     if (me->no_break)
 	nb->flag |= rid_flag_NO_BREAK;
+#endif
 
     nb->tag = rid_tag_SELECT;
     nb->aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     rid_text_item_connect(me->rh->curstream, nb);
 }
@@ -954,180 +1039,29 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
     rid_form_element_connect(me->form, &ta->base);
     me->form->last_text = ta;
 
+#if NEW_BREAKS
+    if (me->no_break)
+	SET_BREAK(nb->flag, rid_break_MUST_NOT);
+#else
     if (me->no_break)
 	nb->flag |= rid_flag_NO_BREAK;
-
+#endif
+    
     nb->tag = rid_tag_TEXTAREA;
     nb->aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
-
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
+    if (me->rh->language_num > 1)
+	nb->flag |= rid_flag_WIDE_FONT;
+    
 #if NEW_TEXTAREA
     memzone_init(&ta->default_text, MEMZONE_CHUNKS);
     memzone_init(&ta->text, MEMZONE_CHUNKS);
 #endif
     rid_text_item_connect(me->rh->curstream, nb);
 }
-
-/*****************************************************************************/
-
-#if 0				/* moved to forms.c */
-extern void text_item_push_input(HTMLCTX * me, int flags,
-				 VALUE *align,
-				 VALUE *checked,
-				 VALUE *disabled,
-				 VALUE *maxlength,
-				 VALUE *name,
-				 VALUE *size,
-				 VALUE *src,
-				 VALUE *type,
-				 VALUE *value,
-				 VALUE *id,
-				 VALUE *bgcolor,
-				 VALUE *selcolor,
-				 VALUE *cursor,
-				 VALUE *nocursor,
-				 VALUE *numbers,
-				 VALUE *selimage)
-{
-    rid_text_item_input *new;
-    rid_text_item *nb = NULL;
-    rid_input_item *in;
-    rid_input_tag tag = (rid_input_tag) -1;
-
-    PRSDBG(("text_item_push_input(%p, %x, etc)\n", me, flags));
-
-    switch (type->type == value_enum ? type->u.i : HTML_INPUT_TYPE_TEXT)
-    {
-    case HTML_INPUT_TYPE_TEXT:
-	tag = rid_it_TEXT;
-	break;
-    case HTML_INPUT_TYPE_PASSWORD:
-	tag = rid_it_PASSWD;
-	break;
-    case HTML_INPUT_TYPE_CHECKBOX:
-	tag = rid_it_CHECK;
-	break;
-    case HTML_INPUT_TYPE_RADIO:
-	tag = rid_it_RADIO;
-	break;
-    case HTML_INPUT_TYPE_IMAGE:
-	tag = rid_it_IMAGE;
-	break;
-    case HTML_INPUT_TYPE_HIDDEN:
-	tag = rid_it_HIDDEN;
-	break;
-    case HTML_INPUT_TYPE_SUBMIT:
-	tag = rid_it_SUBMIT;
-	break;
-    case HTML_INPUT_TYPE_RESET:
-	tag = rid_it_RESET;
-	break;
-    case HTML_INPUT_TYPE_BUTTON:
-	tag = rid_it_BUTTON;
-	break;
-    }
-
-    in = mm_calloc(1, sizeof(*in));
-
-    if (tag != rid_it_HIDDEN)
-    {
-	new = mm_calloc(1, sizeof(*new));
-	new->input = in;
-	nb = &(new->base);
-	in->base.display = nb;
-    }
-    else
-	new = NULL;
-
-    in->base.tag = rid_form_element_INPUT;
-    in->tag = tag;
-
-    in->base.id = valuestringdup(id);
-    htmlriscos_colour(bgcolor, &in->base.colours.back);
-    htmlriscos_colour(selcolor, &in->base.colours.select);
-    htmlriscos_colour(cursor, &in->base.colours.cursor);
-
-    if (nocursor->type != value_none)
-	in->flags |= rid_if_NOCURSOR;
-    if (numbers->type != value_none)
-	in->flags |= rid_if_NUMBERS;
-
-    if (checked->type != value_none)
-	in->flags |= rid_if_CHECKED;
-    if (disabled->type != value_none)
-	in->flags |= rid_if_DISABLED;
-
-    in->name = valuestringdup(name);
-    in->value = valuestringdup(value);
-    in->src = valuestringdup(src);
-    in->src_sel = valuestringdup(selimage);
-
-
-#if 0
-    in->xsize = in->ysize = -1;
-    /* NOTE: If SHORTISH is defined as short, rather than int, then */
-    /* this scanf needs to be %hd if stray memory is not to be written! */
-
-    if (size->type == value_string)
-    {
-	sscanf(size->u.s.ptr, "%hd,%hd", &in->xsize, &in->ysize);
-    }
-    if (in->xsize == -1)
-	in->xsize = 20;
-#else
-    in->xsize = size->type == value_integer ? size->u.i : -1;
-#endif
-
-    if (maxlength->type == value_integer)
-	in->max_len = maxlength->u.i;
-
-    if (in->max_len == 0)
-	in->max_len = 256;
-
-    if (me->form)
-	rid_form_element_connect(me->form, &in->base);
-
-    switch (tag)
-    {
-    case rid_it_CHECK:
-    case rid_it_RADIO:
-	in->data.tick = ((in->flags & rid_if_CHECKED) != 0);
-	break;
-    case rid_it_TEXT:
-    case rid_it_PASSWD:
-	in->data.str = mm_malloc(in->max_len + 1); /* SJM: Add 1 for the terminating null, was added to max_len originally */
-	if (in->value)
-	{
-	    translate_escaped_text(in->value, in->data.str, in->max_len + 1); /* add one here as len is len of output buffer */
-	}
-	else
-	{
-	    in->data.str[0] = 0;
-	}
-	break;
-    case rid_it_IMAGE:
-	decode_img_align(align->type == value_enum ? align->u.i : -1, &in->data.image.flags, &nb->flag);
-	break;
-    }
-
-    if (nb)
-    {
-	nb->tag = rid_tag_INPUT;
-	if (flags & rid_flag_LINE_BREAK)
-	    nb->flag |= rid_flag_LINE_BREAK;
-	if (me->mode == HTMLMODE_PRE || me->no_break) /* We need to be able to have both flags set */
-	    nb->flag |= rid_flag_NO_BREAK;
-	nb->aref = me->aref;	/* Current anchor, or NULL */
-	if (me->aref && me->aref->first == NULL)
-	    me->aref->first = nb;
-	GET_ROSTYLE(nb->st);
-
-	rid_text_item_connect(me->rh->curstream, nb);
-    }
-}
-#endif
 
 /*****************************************************************************
 
@@ -1196,11 +1130,19 @@ extern void text_item_push_break(HTMLCTX * me)
     {
 	/* if previous has a line break and isn't an explicitly pushed break
 	   then don't push break item but mark that we had it */
+#if NEW_BREAKS
+	if (GET_BREAK(nb->flag) == rid_break_MUST)
+	{
+	    SET_BREAK(nb->flag, rid_break_EXPLICIT);
+	    add_break = FALSE;
+	}
+#else
 	if ((nb->flag & (rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK)) == rid_flag_LINE_BREAK)
 	{
 	    nb->flag |= rid_flag_EXPLICIT_BREAK;
 	    add_break = FALSE;
 	}
+#endif
     }
 
     if (add_break)
@@ -1212,7 +1154,11 @@ extern void text_item_push_break(HTMLCTX * me)
 	nb = (rid_text_item *) ti;
 
 	nb->tag = rid_tag_TEXT;
+#if NEW_BREAKS
+	SET_BREAK(nb->flag, rid_break_EXPLICIT);
+#else
 	nb->flag |= rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK;
+#endif
 	nb->aref = me->aref;	/* Current anchor, or NULL */
 	if (me->aref && me->aref->first == NULL)
 	    me->aref->first = nb;
@@ -1253,7 +1199,11 @@ extern void text_item_ensure_break(HTMLCTX * me)
         nb = mm_calloc(1, sizeof(*nb));
 
 	nb->tag = rid_tag_PBREAK;
+#if NEW_BREAKS
+	SET_BREAK(nb->flag, rid_break_MUST);
+#else
 	nb->flag |= rid_flag_LINE_BREAK;
+#endif
 	nb->aref = me->aref;	/* Current anchor, or NULL */
 	if (me->aref && me->aref->first == NULL)
 	    me->aref->first = nb;
@@ -1275,11 +1225,21 @@ extern void text_item_push_hr(HTMLCTX *me, VALUE *align, VALUE *noshade, VALUE *
     /* This implies LINE_BREAK overrides NO_BREAK. Don't forget this
        when altering the formatter! */
     if ( (ti = me->rh->curstream->text_last) != NULL )
+#if NEW_BREAKS
+	SET_BREAK(ti->flag, rid_break_MUST);
+#else
 	ti->flag |= rid_flag_LINE_BREAK;
+#endif
 
     item = mm_calloc(1, sizeof(*item));
     item->base.tag = rid_tag_HLINE;
+
+#if NEW_BREAKS
+    SET_BREAK(item->base.flag, rid_break_MUST);
+#else
     item->base.flag |= rid_flag_LINE_BREAK;
+#endif
+    
     item->base.aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
         me->aref->first = &item->base;
@@ -1373,7 +1333,7 @@ extern void pseudo_html(HTMLCTX *ctx, const char *fmt, ...)
     context->state = get_state_proc(context);
     clear_inhand(context);
 
-    sgml_feed_characters(context, buffer, strlen(buffer));
+    sgml_feed_characters_ascii(context, buffer, strlen(buffer));
 
     sgml_recursion_warning_post(context);
     va_end(arglist);

@@ -28,7 +28,7 @@ static int decode_ol_type(VALUE *attr)
     if (attr->type == value_string)
     {
         STRING s = string_strip_space(attr->u.s);
-        if (s.bytes == 1)
+        if (s.nchars == 1)
         {
             char *ss = memchr(ol_type_match, s.ptr[0], strlen(ol_type_match));
             if (ss)

@@ -13,6 +13,10 @@
 #include "util.h"
 #include "htmlparser.h"
 
+#if UNICODE
+#include "encoding.h"
+#endif
+
 /* Collect text into a temporary string */
 
 extern void starttitle (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -36,21 +40,22 @@ extern void finishtitle (SGMLCTX * context, ELEMENT * element)
 
     ss = string_strip_space(htmlctx->inhand_string);
 
-    if (ss.bytes)
+    if (ss.nchars)
     {
         /* Expand the entities and strip newlines (we've already stripped spaces) */
-        ss.bytes = sgml_translation(context, ss.ptr, ss.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL);
+	/* removed as entities are already expanded and space and controls are already stripped */
+/*         ss.nchars = sgml_translation(context, ss.ptr, ss.nchars, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL); */
 
 	if (htmlctx->rh->title != NULL)
 	{
 	    const int o = strlen(htmlctx->rh->title);
-	    char *new = mm_realloc(htmlctx->rh->title, o + ss.bytes + 1);
+	    char *new = mm_realloc(htmlctx->rh->title, o + ss.nchars + 1);
 
 	    if (new != NULL)
 	    {
 		htmlctx->rh->title = new;
-		memcpy(new + o, ss.ptr, ss.bytes);
-		new[o + ss.bytes] = 0;
+		memcpy(new + o, ss.ptr, ss.nchars);
+		new[o + ss.nchars] = 0;
 	    }
 	}
 	else
@@ -137,6 +142,36 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	m->httpequiv = valuestringdup(&attributes->value[HTML_META_HTTP_EQUIV]);
 	m->content = valuestringdup(&attributes->value[HTML_META_CONTENT]);
 	rid_meta_connect(me->rh, m);
+
+#if UNICODE
+	/* only set encoding from here if not set by HTTP header or user */
+	if (strcasecomp((m->httpequiv ? m->httpequiv : m->name), "CONTENT-TYPE") == 0)
+	{
+	    int encoding = parse_content_type_header(m->content);
+	    rid_header *rh = me->rh;
+
+	    /* encoding could return 0 if it's unsupported - in which case ignore it */
+	    if (encoding && rh->encoding_source == rid_encoding_source_USER)
+	    {
+		/* write value into the rid header */
+		rh->encoding = encoding;
+		rh->encoding_source = rid_encoding_source_META;
+
+		mm_free(rh->language);
+		rh->language = strdup(encoding_default_language(encoding));
+		rh->language_num = lang_name_to_num(rh->language);
+
+		DBG(("set_encoding META %d language %s (%d)\n", encoding, rh->language, rh->language_num));
+		
+		/* set stream to have encoding updated */
+		sgml_set_encoding(context, encoding);
+	    }
+	    else
+	    {
+		DBG(("set_encoding META %d ignored\n", encoding));
+	    }
+	}
+#endif
     }
 }
 
@@ -146,8 +181,18 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 extern void startlink (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *me = htmlctxof(context);
+    VALUE none;
 
-    starta (context, element, attributes);
+    generic_start (context, element, attributes);
+
+    none.type = value_none;
+    new_aref_item(me,
+		  &attributes->value[HTML_LINK_HREF],
+		  &attributes->value[HTML_LINK_NAME],
+		  &attributes->value[HTML_LINK_REL],
+		  &none,
+		  &attributes->value[HTML_LINK_TITLE]);
+    /* starta (context, element, attributes); */
 
     /* SJM: stop the rest of the document getting linked... */
     me->aref = NULL;

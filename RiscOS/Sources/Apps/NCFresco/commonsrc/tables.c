@@ -1567,7 +1567,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
     switch (reason)
     {
     case DELIVER_WORD:
-	PRSDBGN(("table_deliver(): got DELIVER_WORD !! '%.*s'\n", item.bytes, item.ptr));
+	PRSDBGN(("table_deliver(): got DELIVER_WORD !! '%.*s'\n", item.nchars, item.ptr));
 	string_free(&item);
 	break;
 
@@ -1581,20 +1581,20 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
     {
 	BOOL empty = FALSE;
 	STRING i = item;
-	PRSDBG(("table_deliver(): unexpected characters '%.*s'\n", item.bytes, item.ptr));
+	PRSDBG(("table_deliver(): unexpected characters '%.*s'\n", item.nchars, item.ptr));
 
-	while (i.bytes > 0)
+	while (i.nchars > 0)
 	{
 	    if ( *i.ptr <= 32 )
 	    {
 		i.ptr++;
-		i.bytes--;
+		i.nchars--;
 	    }
 	    else
 		break;
 	}
 
-	empty = i.bytes == 0;
+	empty = i.nchars == 0;
 	if (! empty)
 	{
 	    sgml_remove_deliver(context, &table_deliver);
@@ -1611,7 +1611,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
         break;
 
     case DELIVER_SGML:
-	PRSDBGN(("table_deliver(): passing on <%.*s>\n", item.bytes, item.ptr));
+	PRSDBGN(("table_deliver(): passing on <%.*s>\n", item.nchars, item.ptr));
 	(*context->dlist->this_fn) (context, reason, item, element);
 	break;
 
@@ -1720,6 +1720,8 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     int x;
 
     generic_start(context, element, attributes);
+
+    set_lang(context, &attributes->value[HTML_TABLE_LANG]);
 
     if ( !config_display_tables )
     {
@@ -1833,7 +1835,12 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	{
 	    rid_text_item *ti;
 	    if ( (ti = me->rh->curstream->text_last) != NULL )
+#if NEW_BREAKS
+		if (GET_BREAK(ti->flag) == rid_break_CAN)
+		    SET_BREAK(ti->flag, rid_break_MUST);
+#else
 		ti->flag |= rid_flag_LINE_BREAK;
+#endif    
 	    /* DAF: 970319: don't put back with NEW_UNEXP_TABLE */
 /* 	text_item_ensure_break(me); */
 	}
@@ -2034,7 +2041,12 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 	{
 	    rid_text_item *ti;
 	    if ( (ti = me->rh->curstream->text_last) != NULL )
+#if NEW_BREAKS
+		if (GET_BREAK(ti->flag) == rid_break_CAN)
+		    SET_BREAK(ti->flag, rid_break_MUST);
+#else
 		ti->flag |= rid_flag_LINE_BREAK;
+#endif    
 	}
 	rid_text_item_connect(me->rh->curstream, &table->parent->base);
     }
@@ -2064,11 +2076,16 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 
     /* SJM: tables now have to manage their own breaks so ensure one if we are not floating */
     /* SJM: push null item for convenience of scanning */
+#if NEW_BREAKS
+    rid_scaff_item_push(me->rh->curstream,
+			(table->parent->base.flag & (rid_flag_LEFTWARDS|rid_flag_RIGHTWARDS)) == 0 ? rid_break_MUST : rid_break_CAN);
+#else
     if ((table->parent->base.flag & (rid_flag_LEFTWARDS|rid_flag_RIGHTWARDS)) == 0)
 	text_item_push_word(me, rid_flag_LINE_BREAK, FALSE);
     else
 	text_item_push_word(me, 0, FALSE);
-
+#endif
+    
 #if DEBUG == 3
     dump_cell_map(table, "</TABLE>");
 #endif
@@ -2757,6 +2774,8 @@ extern void starttr(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     generic_start(context, element, attributes);
 
+    set_lang(context, &attributes->value[HTML_TR_LANG]);
+
     if ( !config_display_tables )
     {
         TABDBG(("starttr: ignoring\n"));
@@ -2907,6 +2926,8 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     TABDBGN(("\n"));
 
     generic_start(context, element, attributes);
+
+    set_lang(context, &attributes->value[HTML_TD_LANG]);
 
     if ( !config_display_tables )
     {

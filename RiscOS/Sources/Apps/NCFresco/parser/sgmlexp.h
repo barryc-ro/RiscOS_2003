@@ -39,11 +39,21 @@ extern void sgml_do_parser_fixups(void);
 /* sgmlparser.c **************************************************************
 
     Feed new characters into the SGML parser.  Any number of characters can
-    be supplied.
+    be supplied. The characters should be in the encoding specified in SGML_new
+    or in the last call to sgml_set_encoding.
 
+    sgml_feed_characters_ascii passes the characters through direct without using the
+    encoding code. They must be 7 bit ascii or strange results may occur.
+    
 */
 
 extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes);
+
+#if UNICODE
+extern void sgml_feed_characters_ascii(SGMLCTX *context, const char *buffer, int bytes);
+#else
+#define sgml_feed_characters_ascii(a,b,c) sgml_feed_characters(a,b,c) 
+#endif
 
 /*****************************************************************************
 
@@ -83,6 +93,16 @@ extern void sgml_free_context(SGMLCTX *context);
 extern SGMLCTX * sgml_new_context(void);
 
 
+#if UNICODE
+/*****************************************************************************
+
+    Change the character encoding that the stream uses. The old one is stopped
+    and the new one started with no further fixes or backtracking.
+*/
+
+extern void sgml_set_encoding(SGMLCTX *context, int enc_num);
+#endif
+
 /* attrparse.c ***************************************************************
 
     Functions for parsing the different structures of attributes.  You can
@@ -92,23 +112,23 @@ extern SGMLCTX * sgml_new_context(void);
 
 */
 
-extern VALUE sgml_do_parse_void(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_enum(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_string_void(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_string(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_integer_void(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_integer(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_stdunit(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_colour_tuple(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_enum_tuple(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_stdunit(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_enum_string(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_enum_case(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
-extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
+extern VALUE sgml_do_parse_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_enum(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_string_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_string(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_integer_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_integer(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_stdunit(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_colour_tuple(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_enum_tuple(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_stdunit(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_enum_string(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_enum_case(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
+extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, USTRING string);
 
 /* chopper.c *****************************************************************
 
@@ -135,11 +155,11 @@ In pre mode, the sequences are seperate into one or more spaces, and precisely o
 
 */
 
-extern void sgml_fmt_word_chopper(SGMLCTX *context, STRING input);
+extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input);
 
-extern void sgml_pre_word_chopper(SGMLCTX *context, STRING input);
+extern void sgml_pre_word_chopper(SGMLCTX *context, USTRING input);
 
-extern void sgml_str_word_chopper(SGMLCTX *context, STRING input);
+extern void sgml_str_word_chopper(SGMLCTX *context, USTRING input);
 
 /* Use after changing chopper mode */
 extern void sgml_reset_chopper_state(SGMLCTX *context);
@@ -180,23 +200,23 @@ extern void sgml_recursion_warning_post(SGMLCTX *context);
 
   */
 
-#define SGMLTRANS_PERCENT	    (1<<0) /* Do %41 => A */
+/* #define SGMLTRANS_PERCENT	    (1<<0) */ /* Do %41 => A */
 #define SGMLTRANS_AMPERSAND	    (1<<1) /* Do &entity; => entity's ISO Latin1 character */
 #define SGMLTRANS_HASH		    (1<<2) /* Do #41; => A */
-#define SGMLTRANS_PLUS_TO_SPACE     (1<<3) /* Do '+' to ' ' */
-#define SGMLTRANS_STRIP_NEWLINES    (1<<4) /* Strip \n and \r */
-#define SGMLTRANS_STRIP_CTRL	    (1<<5) /* Remove chars 1-31 */
+/* #define SGMLTRANS_PLUS_TO_SPACE  (1<<3) */ /* Do '+' to ' ' */
+#define SGMLTRANS_STRIP_NEWLINES    (1<<4)    /* Strip \n and \r */
+/* #define SGMLTRANS_STRIP_CTRL	    (1<<5) */ /* Remove chars 1-31 */
 
 #define SGMLTRANS_WARNINGS	    (1<<6) /* Send warnings down sgml_note_message() */
-#define SGMLTRANS_STRICT	    (1<<7) /* Remove invalid translations */
+#define SGMLTRANS_STRICT	    (1<<7) /* Insist on ';' in entities */
 
-extern int sgml_translation(SGMLCTX *context, char *ptr, int bytes, int rules);
+extern int sgml_translation(SGMLCTX *context, UCHARACTER *ptr, int count, int rules);
 
 /* This function will convert an undefined Latin1 character into the
  * the character that A.N.Other platform gives you. yuk!
  */
 
-extern char convert_undefined_key_code(char c);
+extern UCHARACTER convert_undefined_key_code(UCHARACTER c);
 
 /*****************************************************************************
 
@@ -219,7 +239,7 @@ extern STRING empty_string, space_string, eol_string;
 
 extern void sgml_free_stack (STACK_ITEM *item);
 
-extern void free_buffer(BUFFER *bp);
+extern void free_buffer(UBUFFER *bp);
 
 /*****************************************************************************/
 

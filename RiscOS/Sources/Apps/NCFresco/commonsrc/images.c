@@ -2341,7 +2341,7 @@ os_error *image_expire(image i)
 
     IMGDBGN(("image: expire %p\n", i));
 
-    access_set_header_info(i->url, 1, 0, 0); /* date > expires */
+    access_set_header_info(i->url, 1, 0, 0, 0); /* date > expires */
 
     return NULL;
 }
@@ -3429,7 +3429,7 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 
     image_reduce_scales(&facs);
 
-    IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d\n", i->width, i->height, w, h, i->xdpi, i->ydpi));
+    IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d flags %d\n", i->width, i->height, w, h, i->xdpi, i->ydpi, config_display_jpeg));
 
     /* SJM: workaround for OS bug with slow dithering on small images
      * the bug may be more extensive than this...

@@ -1004,12 +1004,12 @@ char *extract_value(const char *s, const char *tag)
 {
     char *tagpos, *terminator;
     char *translated;
-    int len;
+/*     int len; */
     char *copy;
 
     copy = mm_strdup(s);
 
-    /* search for tag*/
+    /* search for tag */
     tagpos = strstr(copy, tag);
     if (tagpos == NULL)
     {
@@ -1017,18 +1017,19 @@ char *extract_value(const char *s, const char *tag)
         return NULL;
     }
 
-    /* inc over tag*/
+    /* inc over tag */
     tagpos += strlen(tag);
 
-    /* look for end*/
+    /* look for end */
     terminator = strchr(tagpos, '&');
     if (terminator)
         *terminator = 0;
-    len = strlen(tagpos) + 1;
+/*     len = strlen(tagpos) + 1; */
 
-    translated = mm_malloc(len);
-    if (s)
-        translate_escaped_form_text((char *)tagpos, translated, len);
+    translated = url_unescape(tagpos, TRUE);
+/*     translated = mm_malloc(len); */
+/*     if (s) */
+/*         translate_escaped_form_text((char *)tagpos, translated, len); */
 
     mm_free(copy);
 

@@ -14,6 +14,7 @@
 #define FILETYPE_XBM		0xb61
 #define FILETYPE_PNG		0xb60
 #define FILETYPE_URL		0xb28
+#define FILETYPE_URI		0xf91
 #define FILETYPE_DRAWFILE	0xAFF
 #define FILETYPE_GIF		0x695
 #define FILETYPE_XPM		0x301

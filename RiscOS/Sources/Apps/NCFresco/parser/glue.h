@@ -232,7 +232,12 @@ Second word - other items
 #define STYLE_RINDENT_MASK      0x000000ff
 #define STYLE_RINDENT_SHIFT     44
 
-/* 20..31 spare */
+/* 20..27 spare */
+
+#define LANG_NUM_MASK		0x000000ff
+#define LANG_NUM_SHIFT		52
+
+/* 28..31 spare */
 
 /* Third word - list item number */
 

@@ -598,6 +598,8 @@ extern void rid_free_form(rid_form_item *p)
 
 	mm_free(p->enc_type);
 
+	mm_free(p->accept_charset);
+
 	mm_free(p);
 
 	p = next;
@@ -788,6 +790,8 @@ extern void rid_free(rid_header *rh)
     if (rh->refreshurl)
 	mm_free(rh->refreshurl);
 
+    mm_free(rh->language);
+    
     mm_free(rh);
 }
 
@@ -855,33 +859,14 @@ extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
     }
 
     if (st->text_list == NULL)
+#if NEW_BREAKS
+	rid_scaff_item_push(st, rid_break_MUST_NOT);
+#else
 	rid_scaff_item_push(st, rid_flag_NO_BREAK);
-
-#if 1
+#endif
+    
     st->text_last->next = t;
     st->text_last = t;
-#else
-    /* moved to separate function called before the main push */
-    if (st->text_list)
-    {
-	st->text_last->next = t;
-	st->text_last = t;
-    }
-    else
-    {
-	/* This is the first item in the stream. Insert a magic
-           scaffold object first. */
-	rid_text_item *scaff = mm_calloc(1, sizeof(*scaff));
-
-	FMTDBGN(("rid_text_item_connect: inserted rid_tag_SCAFF object\n"));
-
-	scaff->tag = rid_tag_SCAFF;
-	scaff->flag = rid_flag_NO_BREAK;
-	scaff->next = t;
-	st->text_list = scaff;
-	st->text_last = t;
-    }
-#endif
 }
 
 extern void rid_pos_item_connect(rid_text_stream *st, rid_pos_item *p)

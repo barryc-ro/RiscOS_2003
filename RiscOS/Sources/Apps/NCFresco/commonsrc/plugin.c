@@ -23,6 +23,12 @@
 #define LOCK_FILES 0
 #endif
 
+#if UNICODE
+#include "Unicode/utf8.h"
+#include "Unicode/charsets.h"
+#include "config.h"
+#endif
+
 /* ----------------------------------------------------------------------------- */
 
 typedef enum
@@ -252,7 +258,7 @@ static void unlink(plugin *root, plugin pp)
  * write padding null characters to pad len to a word boundary
  */
 
-static void write_padding(int len, FILE *f)
+static void write_padding(FILE *f, int len)
 {
     len &= 3;
     if (len)
@@ -320,7 +326,38 @@ static plugin_parameter_type convert_valuetype(int valuetype)
 
 /* ----------------------------------------------------------------------------- */
 
-static void plugin_write_parameter_record(FILE *f, plugin_parameter_type paramtype, const char *name, const char *value, const char *type)
+typedef struct
+{
+    FILE *f;
+#if UNICODE
+    Encoding *e;
+#endif
+} plugin_FILE;
+
+#if UNICODE
+static os_error *put_string_fn(const char *text, BOOL last, void *handle)
+{
+    plugin_FILE *f = handle;
+    fputs(text, f->f);
+    return NULL;
+}
+#endif
+
+static void put_string(plugin_FILE *f, const char *val)
+{
+#if UNICODE
+    if (f->e)
+    {
+	process_utf8(val, -1, f->e, put_string_fn, f);
+    }
+    else
+#endif
+    {
+	fputs(val, f->f);
+    }
+}
+
+static void plugin_write_parameter_record(plugin_FILE *f, plugin_parameter_type paramtype, const char *name, const char *value, const char *type)
 {
     int nlen, vlen, tlen;
     int val[2];
@@ -336,22 +373,22 @@ static void plugin_write_parameter_record(FILE *f, plugin_parameter_type paramty
 
     val[0] = paramtype;
     val[1] = (4 + ROUND4(nlen)) + (4 + ROUND4(vlen)) + (4 + ROUND4(tlen));
-    fwrite(&val, sizeof(val), 1, f);
+    fwrite(&val, sizeof(val), 1, f->f);
 
-    fwrite(&nlen, sizeof(nlen), 1, f);
-    fputs(name, f);
-    write_padding(nlen, f);
+    fwrite(&nlen, sizeof(nlen), 1, f->f);
+    put_string(f, name);
+    write_padding(f->f, nlen);
 
-    fwrite(&vlen, sizeof(vlen), 1, f);
-    fputs(value, f);
-    write_padding(vlen, f);
+    fwrite(&vlen, sizeof(vlen), 1, f->f);
+    put_string(f, value);
+    write_padding(f->f, vlen);
 
-    fwrite(&tlen, sizeof(tlen), 1, f);
-    fputs(type, f);
-    write_padding(tlen, f);
+    fwrite(&tlen, sizeof(tlen), 1, f->f);
+    put_string(f, type);
+    write_padding(f->f, tlen);
 }
 
-static void plugin_write_parameter_numeric(FILE *f, const char *name, const rid_stdunits *val)
+static void plugin_write_parameter_numeric(plugin_FILE *f, const char *name, const rid_stdunits *val)
 {
     char buf[32];
 
@@ -379,12 +416,12 @@ static void plugin_write_parameter_numeric(FILE *f, const char *name, const rid_
     plugin_write_parameter_record(f, plugin_parameter_DATA, name, buf, NULL);
 }
 
-static void plugin_write_parameter_string(FILE *f, const char *name, const char *value)
+static void plugin_write_parameter_string(plugin_FILE *f, const char *name, const char *value)
 {
     plugin_write_parameter_record(f, plugin_parameter_DATA, name, value, NULL);
 }
 
-static void plugin_write_parameter_url(FILE *f, const char *name, const char *value, const char *type)
+static void plugin_write_parameter_url(plugin_FILE *f, const char *name, const char *value, const char *type)
 {
     plugin_write_parameter_record(f, plugin_parameter_URL, name, value, type);
 }
@@ -396,56 +433,66 @@ static void plugin_write_parameter_url(FILE *f, const char *name, const char *va
  * FIXME: this doesn't write out the alignment as we don't have the original string available.
  */
 
-static void plugin_write_parameter_file(FILE *f, rid_object_item *obj, const char *base_href)
+static void plugin_write_parameter_file(FILE *f, rid_object_item *obj, const char *base_href, int enc_source, int enc_internal)
 {
     rid_object_param *param;
+    plugin_FILE file;
 
-    plugin_write_parameter_record(f, plugin_parameter_SPECIAL, plugin_parameter_BASE_HREF, base_href, NULL);
-    plugin_write_parameter_record(f, plugin_parameter_SPECIAL, plugin_parameter_USER_AGENT, program_name, NULL);
-    plugin_write_parameter_record(f, plugin_parameter_SPECIAL, plugin_parameter_UA_VERSION, VERSION_NUMBER, NULL);
-    plugin_write_parameter_record(f, plugin_parameter_SPECIAL, plugin_parameter_API_VERSION, plugin_API_VERSION, NULL);
+    file.f = f;
+#if UNICODE
+    file.e = config_encoding_internal == 1 && enc_internal == csUTF8 ? encoding_new(enc_source, encoding_WRITE) : NULL;
+#endif
+    plugin_write_parameter_record(&file, plugin_parameter_SPECIAL, plugin_parameter_BASE_HREF, base_href, NULL);
+    plugin_write_parameter_record(&file, plugin_parameter_SPECIAL, plugin_parameter_USER_AGENT, program_name, NULL);
+    plugin_write_parameter_record(&file, plugin_parameter_SPECIAL, plugin_parameter_UA_VERSION, VERSION_NUMBER, NULL);
+    plugin_write_parameter_record(&file, plugin_parameter_SPECIAL, plugin_parameter_API_VERSION, plugin_API_VERSION, NULL);
 
-    plugin_write_parameter_string(f, "ID", obj->id);
+    plugin_write_parameter_string(&file, "ID", obj->id);
 /*
-    plugin_write_parameter_string(f, "CLASS", obj->classname);
-    plugin_write_parameter_string(f, "STYLE", obj->style);
-    plugin_write_parameter_string(f, "LANG", obj->lang);
-    plugin_write_parameter_string(f, "DIR", obj->dir);
-    */
-    plugin_write_parameter_string(f, "DECLARE", obj->oflags & rid_object_flag_DECLARE ? "" : NULL);
+    plugin_write_parameter_string(&file, "CLASS", obj->classname);
+    plugin_write_parameter_string(&file, "STYLE", obj->style);
+    plugin_write_parameter_string(&file, "LANG", obj->lang);
+    plugin_write_parameter_string(&file, "DIR", obj->dir);
+*/
+    plugin_write_parameter_string(&file, "DECLARE", obj->oflags & rid_object_flag_DECLARE ? "" : NULL);
 
-    plugin_write_parameter_url(f,
+    plugin_write_parameter_url(&file,
 	obj->element == HTML_APPLET ? "CODE" : "CLASSID",
         obj->classid, obj->classid_mime_type);
 
-    plugin_write_parameter_url(f, "CODEBASE", obj->codebase, NULL);
+    plugin_write_parameter_url(&file, "CODEBASE", obj->codebase, NULL);
 
-    plugin_write_parameter_url(f,
+    plugin_write_parameter_url(&file,
 	obj->element == HTML_EMBED ? "SRC" : "DATA",
 	obj->data, obj->data_mime_type);
 
-    plugin_write_parameter_string(f,
+    plugin_write_parameter_string(&file,
         obj->element == HTML_OBJECT ? "STANDBY" : "ALT",
         obj->standby);
 
-/*     plugin_write_parameter_string(f, "ALIGN", align_name(obj->align)); */
-    plugin_write_parameter_numeric(f, "HEIGHT", &obj->userheight);
-    plugin_write_parameter_numeric(f, "WIDTH", &obj->userwidth);
-    plugin_write_parameter_numeric(f, "BORDER", &obj->userborder);
-    plugin_write_parameter_numeric(f, "HSPACE", &obj->userhspace);
-    plugin_write_parameter_numeric(f, "VSPACE", &obj->uservspace);
-    plugin_write_parameter_url(f, "USEMAP", obj->usemap, NULL);
-    plugin_write_parameter_string(f, "SHAPES", obj->oflags & rid_object_flag_SHAPES ? "" : NULL);
-    plugin_write_parameter_url(f, "NAME", obj->name, NULL);
+/*  plugin_write_parameter_string(&file, "ALIGN", align_name(obj->align)); */
+    plugin_write_parameter_numeric(&file, "HEIGHT", &obj->userheight);
+    plugin_write_parameter_numeric(&file, "WIDTH", &obj->userwidth);
+    plugin_write_parameter_numeric(&file, "BORDER", &obj->userborder);
+    plugin_write_parameter_numeric(&file, "HSPACE", &obj->userhspace);
+    plugin_write_parameter_numeric(&file, "VSPACE", &obj->uservspace);
+    plugin_write_parameter_url(&file, "USEMAP", obj->usemap, NULL);
+    plugin_write_parameter_string(&file, "SHAPES", obj->oflags & rid_object_flag_SHAPES ? "" : NULL);
+    plugin_write_parameter_url(&file, "NAME", obj->name, NULL);
 
     for (param = obj->params; param; param = param->next)
-	plugin_write_parameter_record(f, convert_valuetype(param->valuetype), param->name, param->value, param->type);
+	plugin_write_parameter_record(&file, convert_valuetype(param->valuetype), param->name, param->value, param->type);
 
     /* write terminator */
     {
 	int c = plugin_parameter_TERMINATOR;
 	fwrite(&c, sizeof(c), 1, f);
     }
+
+#if UNICODE
+    if (file.e)
+	encoding_delete(file.e);
+#endif
 }
 
 static void remove_parameter_file(plugin_private *pp)
@@ -1127,7 +1174,7 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
 	return NULL;
     }
 
-    plugin_write_parameter_file(f, obj, doc ? BASE(doc) : NULL);
+    plugin_write_parameter_file(f, obj, doc ? BASE(doc) : NULL, doc->rh->encoding, doc->rh->encoding_write);
     mmfclose(f);
 
 #if LOCK_FILES

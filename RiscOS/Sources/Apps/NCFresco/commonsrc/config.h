@@ -137,8 +137,9 @@ struct config_str
     /* Font configuration */
 
     int font_sizes[7];
-
-    char *font_names[16];   /* only 15 used thus far */
+    char *font_names[20];
+    int font_scales[9];
+    int font_aspects[9];
 
     int mode_keyboard;
     int mode_cursor_toolbar;
@@ -183,6 +184,8 @@ struct config_str
     char *toolbar_name;
 
     int *url_suffix;
+
+    char *header_useragent[2];
 };
 
 extern struct config_str config_array;
@@ -286,6 +289,8 @@ extern struct config_str config_array;
 #define config_colours (config_array.colours)
 #define config_colour_list (config_array.colour_list)
 
+#define config_font_scales (config_array.font_scales)
+#define config_font_aspects (config_array.font_aspects)
 #define config_font_sizes (config_array.font_sizes)
 #define config_font_names (config_array.font_names)
 
@@ -357,6 +362,8 @@ extern struct config_str config_array;
 
 #define config_image_blacklist (config_array.image_blacklist)
 #define config_url_suffix (config_array.url_suffix)
+
+#define config_header_useragent (config_array.header_useragent)
 
 #endif
 

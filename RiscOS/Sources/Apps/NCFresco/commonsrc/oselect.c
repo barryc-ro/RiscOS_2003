@@ -36,6 +36,10 @@
 #include "object.h"
 #include "gbf.h"
 
+#if UNICODE
+#include "Unicode/languages.h"
+#endif
+
 /* Option to use current font rather than fixed font */
 #ifndef SELECT_CURRENT_FONT
 #ifdef STBWEB
@@ -57,6 +61,13 @@
 #define SELECT_SPACE_Y		4
 
 #define GRIGHT_SIZE		48
+
+#if SELECT_CURRENT_FONT
+#define BASE_FONT WEBFONT_TTY
+#else
+#define BASE_FONT (-1)
+#endif
+
 
 #ifndef BUILDERS
 static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
@@ -121,32 +132,6 @@ static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 }
 #endif /* BUILDERS */
 
-static int getwebfont(antweb_doc *doc, rid_text_item *ti)
-{
-    int whichfont;
-
-#ifdef SELECT_CURRENT_FONT
-    whichfont = ti->st.wf_index;
-#else
-    whichfont = WEBFONT_TTY;
-#endif
-
-    /* pdh: autofit bodge */
-    if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) )
-    {
-        if ( doc->scale_value < 100
-             && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
-        {
-           /* make it one size smaller */
-           TASSERT( WEBFONT_SIZE_SHIFT == 0 );
-           whichfont -= 1;
-        }
-    }
-
-    antweb_doc_ensure_font( doc, whichfont );
-
-    return whichfont;
-}
 
 void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
@@ -168,54 +153,31 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     sel->doc = doc;
 
-    whichfont = getwebfont(doc, ti);
+    whichfont = antweb_getwebfont(doc, ti, BASE_FONT);
     wf = &webfonts[whichfont];
 
     line_space = wf->max_up + wf->max_down;
 
-#if 1
     /* This is better? */
     if (sel->flags & rid_sf_MULTIPLE)
 	width = webfont_font_width(whichfont, "<None>");
     else
 	width = 0;
-#else
-    /* This isn't quite right but it will do for now */
-    width = webfont_tty_width(6, 1); /* Length of '<none>' in chars */
-#endif
     
-    if (font_setfont(wf->handle) != 0)
-	return;
-
     height = 0;
 
     for(oi = sel->options; oi; oi = oi->next)
     {
-	/* @@@@ Borris asks if this will get freed correctly. 15/10/96 */
-
-        /* #*$@ Peter discovers that it doesn't. 9/6/97 */
-
+	/* oi->text pointers never get freed as they are copies of other pointers which are */
 	if (oi->text == NULL)
-#if 0
-	    oi->text = strdup("");
-#else
-            oi->text = "";
-#endif
+	    oi->text = "";
 
-	/* Start at the end; while not before the start and on a space; work backwards */
-	for(i = strlen(oi->text)-1; i>=0 && isspace(oi->text[i]); i--)
-	    oi->text[i] = 0;
+	fs.x = webfont_font_width(whichfont, oi->text);
+	if (width < fs.x)
+	    width = fs.x;
 
-	fs.s = oi->text;
-	fs.x = fs.y = fs.term = (1 << 30);
-	fs.split = -1;
-
-	if (font_strwidth(&fs) == NULL)
-	{
-	    if (width < (fs.x / MILIPOINTS_PER_OSUNIT))
-		width = (fs.x / MILIPOINTS_PER_OSUNIT);
-	}
-
+	BENDBG(("oselect_size: ti %p font %d %s opt '%s' size %d (max %d)\n", ti, whichfont, ti->flag & rid_flag_WIDE_FONT ? "WIDE" : "NARROW", oi->text, fs.x, width));
+	
 	height ++;
     }
 
@@ -231,8 +193,8 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
                 mm_free( sel->items );
 
             sel->items = mm_calloc(sizeof(fe_menu_item), height);
-
-            for(i=0, oi = sel->options; oi; i++, oi = oi->next)
+	    
+            for (i=0, oi = sel->options; oi; i++, oi = oi->next)
             {
                 fe_menu_item *ii = ((fe_menu_item*)sel->items) + i;
                 ii->name = oi->text;
@@ -243,8 +205,23 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
                 }
                 else
                     oi->flags &= ~rid_if_SELECTED;
-            }
-        }
+	    }
+
+	    /* use the first menu item to pass the flags and language for the entire menu */
+	    if (
+		(ti->flag & rid_flag_WIDE_FONT)
+#if UNICODE
+		&& (ti->language > 1 || rh->language_num > 1)
+#endif
+		)
+	    {
+		fe_menu_item *first = &((fe_menu_item *)sel->items)[0];
+		first->flags |= fe_menu_flag_WIDE;
+		first->language = ti->language ? ti->language : rh->language_num;
+		
+		BENDBG(("oselect_size: set wide font flag\n"));
+	    }
+	}
 
         /* pdh: in view of the fact we may come through here twice on the same
          * select item (if it straddles a packet boundary) it's unwise to do
@@ -351,14 +328,8 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (checked > 1)
 	str = "<Many>";
 
-    whichfont = getwebfont(doc, ti);
+    whichfont = antweb_getwebfont(doc, ti, BASE_FONT);
     
-    if (fs->lf != webfonts[whichfont].handle)
-    {
-	fs->lf = webfonts[whichfont].handle;
-	font_setfont(fs->lf);
-    }
-
     if (fs->lfc != fg || fs->lbc != bg)
     {
 	fs->lfc = fg;
@@ -366,15 +337,9 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	render_set_font_colours(fg, bg, doc);
     }
 
-    fstr.s = str;
-    fstr.x = fstr.y = fstr.term = (1 << 30);
-    fstr.split = -1;
+    fstr.x = webfont_font_width(whichfont, str);
 
-    font_strwidth(&fstr);
-
-    font_paint(str, font_OSCOORDS,
-	       hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1),
-	       bline);
+    render_text(doc, whichfont, str, hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - fstr.x) >> 1), bline);
 
     if ((sel->flags & rid_if_NOPOPUP) == 0)
 	render_plot_icon("gright",

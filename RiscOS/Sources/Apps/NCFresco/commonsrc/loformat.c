@@ -160,7 +160,11 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 
 		/* Have more than one word on the line and not the end of the paragraph */
 		if ((n > 1) &&
+#if NEW_BREAKS
+		    ((lti->flag & (rid_flag_CLEARING | rid_flag_BREAK)) == 0) &&
+#else
 		    ((lti->flag & (rid_flag_CLEARING | rid_flag_LINE_BREAK)) == 0) &&
+#endif
 		    ti != NULL )
 		{
 		    new_pos->leading = spare / (n-1);
@@ -2237,7 +2241,11 @@ static void scaffold_check(rid_text_item *ti, rid_header *rh)
 		ti = ti->next;
 		FMTDBG(("scaffold_check: convert %p to rid_tag_SCAFF\n", ti));
 		ti->tag = rid_tag_SCAFF;
+#if NEW_BREAKS
+		ti->flag = rid_break_MUST_NOT;
+#else
 		ti->flag = rid_flag_NO_BREAK;
+#endif
 		ti->max_up = ti->max_down = 0;
 		ti->pad = ti->width = 0;
 	    } while (ti != other);

@@ -26,6 +26,7 @@
 #define GBF_AUTOFIT_ALL_TEXT		0x00010000 /* shrink all text on autofit */
 #define GBF_FILES_IN_ONE_GO             0x00020000 /* local files loaded in one lump */
 #define GBF_RELATIVE_TABLE		0x00040000 /* Handle relative widths in tables */
+#define GBF_UTF8			0x00080000 /* Store UTF8 in  */
 
 /*****************************************************************************/
 

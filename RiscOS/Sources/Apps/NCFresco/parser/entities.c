@@ -19,464 +19,564 @@
 #include "gbf.h"
 #include "util.h"
 
-/** THIS TABLE MUST BE IN strncmp() ORDER FOR THIS TO WORK **/
+/** THIS TABLE MUST BE IN strcasecmp() ORDER FOR THIS TO WORK **/
 /** ALSO, NO NAME MAY ALSO BE A STEM OF ANOTHER NAME */
+/** also, no name may only differ in case from another */
 
-#if 1
-
-/** entities all in lower case */
-
-static const char * const entity_names[] =
+typedef struct
 {
-  "aacute",     /* small a, acute accent */
-  "acirc",      /* small a, circumflex accent */
-  "acute",      /* acute accent */
-  "aelig",      /* small ae diphthong (ligature) */
-  "agrave",     /* small a, grave accent */
-  "amp",       	/* ampersand */
-  "aring",      /* small a, ring */
-  "atilde",     /* small a, tilde */
-  "auml",       /* small a, dieresis or umlaut mark */
-  "bdquo",      /* bottom double quote (note name inconsistency with sbquo) */
-  "brvbar",     /* broken (vertical) bar */
-  "ccedil",     /* small c, cedilla */
-  "cedil",      /* cedilla */
-  "cent",       /* cent sign */
-  "copy",       /* copyright sign */
-  "curren",     /* general currency sign */
-  "dagger",     /* dagger (UC is double-dagger) */
-  "deg",        /* degree sign */
-  "divide",     /* divide sign */
-  "eacute",     /* small e, acute accent */
-  "ecirc",      /* small e, circumflex accent */
-  "egrave",     /* small e, grave accent */
-  "eth",        /* small eth, Icelandic */
-  "euml",       /* small e, dieresis or umlaut mark */
-  "frac12",     /* fraction one-half */
-  "frac14",     /* fraction one-quarter */
-  "frac34",     /* fraction three-quarters */
-  "gt",        	/* greater than */
-  "iacute",     /* small i, acute accent */
-  "icirc",      /* small i, circumflex accent */
-  "iexcl",      /* inverted exclamation mark */
-  "igrave",     /* small i, grave accent */
-  "iquest",     /* inverted question mark */
-  "iuml",       /* small i, dieresis or umlaut mark */
-  "laquo",      /* angle quotation mark, left */
-  "ldquo",      /* left double quote (66) */
-  "lsaquo",     /* left single angle quote */
-  "lsquo",      /* left single quote (6) */
-  "lt",        	/* greater than */
-  "macr",       /* macron */
-  "mdash",      /* em rule (v long dash) */
-  "micro",      /* micro sign */
-  "middot",     /* middle dot */
-  "nbsp",       /* no-break space */
-  "ndash",      /* en rule (long dash) */
-  "not",        /* not sign */
-  "ntilde",     /* small n, tilde */
-  "oacute",     /* small o, acute accent */
-  "ocirc",      /* small o, circumflex accent */
-  "oelig",      /* oe ligature (diphthong) */
-  "ograve",     /* small o, grave accent */
-  "ordf",       /* ordinal indicator, feminine */
-  "ordm",       /* ordinal indicator, masculine */
-  "oslash",     /* small o, slash */
-  "otilde",     /* small o, tilde */
-  "ouml",       /* small o, dieresis or umlaut mark */
-  "para",       /* pilcrow (paragraph sign) */
-  "permil",     /* per mille */
-  "plusmn",     /* plus-or-minus sign */
-  "pound",      /* pound sterling sign */
-  "quot",       /* double quote sign - June 94 */
-  "raquo",      /* angle quotation mark, right */
-  "rdquo",      /* right double quote (99) */
-  "reg",        /* registered sign */
-  "rsaquo",     /* right single angle quote */
-  "rsquo",      /* right single quote (9) */
-  "sbquo",      /* single bottom quote (note name inconsistency width dbquo) */
-  "sect",       /* section sign */
-  "shy",        /* soft hyphen */
-  "sup1",       /* superscript one */
-  "sup2",       /* superscript two */
-  "sup3",       /* superscript three */
-  "szlig",      /* small sharp s, German (sz ligature) */
-  "thorn",      /* small thorn, Icelandic */
-  "times",      /* multiply sign */
-  "trade",      /* trademark sign */
-  "uacute",     /* small u, acute accent */
-  "ucirc",      /* small u, circumflex accent */
-  "ugrave",     /* small u, grave accent */
-  "uml",        /* umlaut (dieresis) */
-  "uuml",       /* small u, dieresis or umlaut mark */
-  "yacute",     /* small y, acute accent */
-  "yen",        /* yen sign */
-  "yuml"       /* small y, dieresis or umlaut mark */
-};
+    const char *name, *name_upper;
+    UCHARACTER lower, upper;	/* maybe char or short depending on UNICODE */
+    char match;
+} entity_t;
 
-/* 	Entity values -- for ISO Latin 1 local representation
-**
-**	This MUST match exactly the table above
-**	lower case / upper case
-*/
-static const char ISO_Latin1[] = {
-	'\341', '\301', /* small a, acute accent */
-	'\342', '\302', /* small a, circumflex accent */
-	'\264', '\264', /* acute accent */
-	'\346', '\306', /* small ae diphthong (ligature) */
-	'\340', '\300', /* small a, grave accent */
-	'\046', '\046',	/* ampersand */
-	'\345', '\305', /* small a, ring */
-	'\343', '\303', /* small a, tilde */
-	'\344', '\304', /* small a, dieresis or umlaut mark */
-#ifdef __acorn
-        '\x96', '\x96', /* bottom double quote */
-#else
-        '\x84', '\x84',
-#endif
-	'\246', '\246', /* broken (vertical) bar */
-	'\347', '\307', /* small c, cedilla */
-	'\270', '\270', /* cedilla */
-	'\242', '\242', /* cent sign */
-	'\251', '\251', /* copyright sign */
-	'\244', '\244', /* general currency sign */
-#ifdef __acorn
-        '\x9C', '\x9D', /* dagger/double dagger */
-#else
-        '\x86', '\x87',
-#endif
-	'\260', '\260', /* degree sign */
-	'\367', '\367', /* divide sign */
-	'\351', '\311', /* small e, acute accent */
-	'\352', '\312', /* small e, circumflex accent */
-	'\350', '\310', /* small e, grave accent */
-	'\360', '\320', /* small eth, Icelandic */
-	'\353', '\313', /* small e, dieresis or umlaut mark */
-	'\275', '\275', /* fraction one-half */
-	'\274', '\274', /* fraction one-quarter */
-	'\276', '\276', /* fraction three-quarters */
-	'\076', '\076',	/* greater than */
-	'\355', '\315', /* small i, acute accent */
-	'\356', '\316', /* small i, circumflex accent */
-	'\241', '\241', /* inverted exclamation mark */
-	'\354', '\314', /* small i, grave accent */
-	'\277', '\277', /* inverted question mark */
-	'\357', '\317', /* small i, dieresis or umlaut mark */
-	'\253', '\253', /* angle quotation mark, left */
-#ifdef __acorn      /* Acorn Extended Latin */
-        '\x94', '\x94', /* left double quote (66) */
-        '\x92', '\x92', /* left single angle quote */
-        '\x90', '\x90', /* left single quote (6) */
-#else               /* Certainly right on PC and Mac, maybe elsewhere too */
-        '\x93', '\x93', /* left double quote (66) */
-        '\x8B', '\x8B', /* left single angle quote */
-        '\x91', '\x91', /* left single quote (6) */
-#endif
-	'\074', '\074',	/* less than */
-	'\257', '\257', /* macron */
-#ifdef __acorn
-	'\x98', '\x98', /* em rule */
-#else
-	'\x97', '\x97', /* em rule */
-#endif
-	'\265', '\265', /* micro sign */
-	'\267', '\267', /* middle dot */
-	'\240', '\240', /* no-break space */
-#ifdef __acorn
-	'\x99', '\x99', /* en rule */
-#else
-	'\x96', '\x96', /* en rule */
-#endif
-	'\254', '\254', /* not sign */
-	'\361', '\321', /* small n, tilde */
-	'\363', '\323', /* small o, acute accent */
-	'\364', '\324', /* small o, circumflex accent */
-#ifdef __acorn
-        '\x9B', '\x9A', /* oe ligature */
-#else
-        '\x9C', '\x8C', /* oe ligature */
-#endif
-	'\362', '\322', /* small o, grave accent */
-	'\252', '\252', /* ordinal indicator, feminine */
-	'\272', '\272', /* ordinal indicator, masculine */
-	'\370', '\330', /* small o, slash */
-	'\365', '\325', /* small o, tilde */
-	'\366', '\326', /* small o, dieresis or umlaut mark */
-	'\266', '\266', /* pilcrow (paragraph sign) */
-#ifdef __acorn
-        '\x8E', '\x8E', /* per mille */
-#else
-        '\x89', '\x89',
-#endif
-	'\261', '\261', /* plus-or-minus sign */
-	'\243', '\243', /* pound sterling sign */
-	'\042', '\042', /* double quote sign - June 94 */
-	'\273', '\273', /* angle quotation mark, right */
-#ifdef __acorn
-        '\x95', '\x95', /* right double quote (99) */
-#else
-        '\x94', '\x94', /* right double quote (99) */
-#endif
-	'\256', '\256', /* registered sign */
-#ifdef __acorn
-        '\x93', '\x93', /* right single angle quote */
-        '\x91', '\x91', /* right single quote (9) */
-        '\x2C', '\x2C', /* single bottom quote (not in Acorn Extended Latin, we use comma) */
-#else
-        '\x9B', '\x9B', /* right single angle quote */
-        '\x92', '\x92', /* right single quote (9) */
-        '\x82', '\x82', /* single bottom quote */
-#endif
-	'\247', '\247', /* section sign */
-	'\255', '\255', /* soft hyphen */
-	'\271', '\271', /* superscript one */
-	'\262', '\262', /* superscript two */
-	'\263', '\263', /* superscript three */
-	'\337', '\337', /* small sharp s, German (sz ligature) */
-	'\376', '\336', /* small thorn, Icelandic */
-	'\327', '\327', /* multiply sign */
-#ifdef __acorn
-	'\215', '\215', /* trademark sign */
-#else
-	'\x99', '\x99', /* trademark sign */
-#endif
-	'\372', '\332', /* small u, acute accent */
-	'\373', '\333', /* small u, circumflex accent */
-	'\371', '\331', /* small u, grave accent */
-	'\250', '\250', /* umlaut (dieresis) */
-	'\374', '\334', /* small u, dieresis or umlaut mark */
-	'\375', '\335', /* small y, acute accent */
-	'\245', '\245', /* yen sign */
-#ifdef __acorn
-	'\377', '\377' /* small y, dieresis or umlaut mark */
-#else
-	'\377', '\x9F' /* small y, dieresis or umlaut mark */
-#endif
-};
+#define case_EXACT		0	/* must match the case exactly always, reserved for some known future entities */
+#define case_IRRELEVANT		1	/* exact=must match as is */
+#define case_UPPER_FIRST	2	/* first char determines case of result. exact=rest oif chars must be lower case also */
+#define case_UPPER_ALL		3	/* first char determines case of result. exact=rest of chars must match that case */
 
-#else
-
-char *entity_names[] =
+static entity_t entity_names[] =
 {
-  "AElig",      /* capital AE diphthong (ligature) */
-  "Aacute",     /* capital A, acute accent */
-  "Acirc",      /* capital A, circumflex accent */
-  "Agrave",     /* capital A, grave accent */
-  "Aring",      /* capital A, ring */
-  "Atilde",     /* capital A, tilde */
-  "Auml",       /* capital A, dieresis or umlaut mark */
-  "Ccedil",     /* capital C, cedilla */
-  "ETH",        /* capital Eth, Icelandic */
-  "Eacute",     /* capital E, acute accent */
-  "Ecirc",      /* capital E, circumflex accent */
-  "Egrave",     /* capital E, grave accent */
-  "Euml",       /* capital E, dieresis or umlaut mark */
-  "Iacute",     /* capital I, acute accent */
-  "Icirc",      /* capital I, circumflex accent */
-  "Igrave",     /* capital I, grave accent */
-  "Iuml",       /* capital I, dieresis or umlaut mark */
-  "Ntilde",     /* capital N, tilde */
-  "Oacute",     /* capital O, acute accent */
-  "Ocirc",      /* capital O, circumflex accent */
-  "Ograve",     /* capital O, grave accent */
-  "Oslash",     /* capital O, slash */
-  "Otilde",     /* capital O, tilde */
-  "Ouml",       /* capital O, dieresis or umlaut mark */
-  "THORN",      /* capital THORN, Icelandic */
-  "Uacute",     /* capital U, acute accent */
-  "Ucirc",      /* capital U, circumflex accent */
-  "Ugrave",     /* capital U, grave accent */
-  "Uuml",       /* capital U, dieresis or umlaut mark */
-  "Yacute",     /* capital Y, acute accent */
-  "aacute",     /* small a, acute accent */
-  "acirc",      /* small a, circumflex accent */
-  "acute",      /* acute accent */
-  "aelig",      /* small ae diphthong (ligature) */
-  "agrave",     /* small a, grave accent */
-  "amp",       	/* ampersand */
-  "aring",      /* small a, ring */
-  "atilde",     /* small a, tilde */
-  "auml",       /* small a, dieresis or umlaut mark */
-  "brvbar",     /* broken (vertical) bar */
-  "ccedil",     /* small c, cedilla */
-  "cedil",      /* cedilla */
-  "cent",       /* cent sign */
-  "copy",       /* copyright sign */
-  "curren",     /* general currency sign */
-  "deg",        /* degree sign */
-  "divide",     /* divide sign */
-  "eacute",     /* small e, acute accent */
-  "ecirc",      /* small e, circumflex accent */
-  "egrave",     /* small e, grave accent */
-  "eth",        /* small eth, Icelandic */
-  "euml",       /* small e, dieresis or umlaut mark */
-  "frac12",     /* fraction one-half */
-  "frac14",     /* fraction one-quarter */
-  "frac34",     /* fraction three-quarters */
-  "gt",        	/* greater than */
-  "iacute",     /* small i, acute accent */
-  "icirc",      /* small i, circumflex accent */
-  "iexcl",      /* inverted exclamation mark */
-  "igrave",     /* small i, grave accent */
-  "iquest",     /* inverted question mark */
-  "iuml",       /* small i, dieresis or umlaut mark */
-  "laquo",      /* angle quotation mark, left */
-  "lt",        	/* greater than */
-  "macr",       /* macron */
-  "micro",      /* micro sign */
-  "middot",     /* middle dot */
-  "nbsp",       /* no-break space */
-  "not",        /* not sign */
-  "ntilde",     /* small n, tilde */
-  "oacute",     /* small o, acute accent */
-  "ocirc",      /* small o, circumflex accent */
-  "ograve",     /* small o, grave accent */
-  "ordf",       /* ordinal indicator, feminine */
-  "ordm",       /* ordinal indicator, masculine */
-  "oslash",     /* small o, slash */
-  "otilde",     /* small o, tilde */
-  "ouml",       /* small o, dieresis or umlaut mark */
-  "para",       /* pilcrow (paragraph sign) */
-  "plusmn",     /* plus-or-minus sign */
-  "pound",      /* pound sterling sign */
-  "quot",       /* double quote sign - June 94 */
-  "raquo",      /* angle quotation mark, right */
-  "reg",        /* registered sign */
-  "sect",       /* section sign */
-  "shy",        /* soft hyphen */
-  "sup1",       /* superscript one */
-  "sup2",       /* superscript two */
-  "sup3",       /* superscript three */
-  "szlig",      /* small sharp s, German (sz ligature) */
-  "thorn",      /* small thorn, Icelandic */
-  "times",      /* multiply sign */
-  "trade",      /* trademark sign */
-  "uacute",     /* small u, acute accent */
-  "ucirc",      /* small u, circumflex accent */
-  "ugrave",     /* small u, grave accent */
-  "uml",        /* umlaut (dieresis) */
-  "uuml",       /* small u, dieresis or umlaut mark */
-  "yacute",     /* small y, acute accent */
-  "yen",        /* yen sign */
-  "yuml"       /* small y, dieresis or umlaut mark */
-};
-
-/* 	Entity values -- for ISO Latin 1 local representation
-**
-**	This MUST match exactly the table above
-*/
-char * ISO_Latin1[] = {
- 	"\306", /* capital AE diphthong (ligature) */
-	"\301", /* capital A, acute accent */
-	"\302", /* capital A, circumflex accent */
-	"\300", /* capital A, grave accent */
-	"\305", /* capital A, ring */
-	"\303", /* capital A, tilde */
-	"\304", /* capital A, dieresis or umlaut mark */
-	"\307", /* capital C, cedilla */
-	"\320", /* capital Eth, Icelandic */
-	"\311", /* capital E, acute accent */
-	"\312", /* capital E, circumflex accent */
-	"\310", /* capital E, grave accent */
-	"\313", /* capital E, dieresis or umlaut mark */
-	"\315", /* capital I, acute accent */
-	"\316", /* capital I, circumflex accent */
-	"\314", /* capital I, grave accent */
-	"\317", /* capital I, dieresis or umlaut mark */
-	"\321", /* capital N, tilde */
-	"\323", /* capital O, acute accent */
-	"\324", /* capital O, circumflex accent */
-	"\322", /* capital O, grave accent */
-	"\330", /* capital O, slash */
-	"\325", /* capital O, tilde */
-	"\326", /* capital O, dieresis or umlaut mark */
-	"\336", /* capital THORN, Icelandic */
-	"\332", /* capital U, acute accent */
-	"\333", /* capital U, circumflex accent */
-	"\331", /* capital U, grave accent */
-	"\334", /* capital U, dieresis or umlaut mark */
-	"\335", /* capital Y, acute accent */
-	"\341", /* small a, acute accent */
-	"\342", /* small a, circumflex accent */
-	"\264", /* acute accent */
-	"\346", /* small ae diphthong (ligature) */
-	"\340", /* small a, grave accent */
-	"\046",	/* ampersand */
-	"\345", /* small a, ring */
-	"\343", /* small a, tilde */
-	"\344", /* small a, dieresis or umlaut mark */
-	"\246", /* broken (vertical) bar */
-	"\347", /* small c, cedilla */
-	"\270", /* cedilla */
-	"\242", /* cent sign */
-	"\251", /* copyright sign */
-	"\244", /* general currency sign */
-	"\260", /* degree sign */
-	"\367", /* divide sign */
-	"\351", /* small e, acute accent */
-	"\352", /* small e, circumflex accent */
-	"\350", /* small e, grave accent */
-	"\360", /* small eth, Icelandic */
-	"\353", /* small e, dieresis or umlaut mark */
-	"\275", /* fraction one-half */
-	"\274", /* fraction one-quarter */
-	"\276", /* fraction three-quarters */
-	"\076",	/* greater than */
-	"\355", /* small i, acute accent */
-	"\356", /* small i, circumflex accent */
-	"\241", /* inverted exclamation mark */
-	"\354", /* small i, grave accent */
-	"\277", /* inverted question mark */
-	"\357", /* small i, dieresis or umlaut mark */
-	"\253", /* angle quotation mark, left */
-	"\074",	/* less than */
-	"\257", /* macron */
-	"\265", /* micro sign */
-	"\267", /* middle dot */
-	"\240", /* no-break space */
-	"\254", /* not sign */
-	"\361", /* small n, tilde */
-	"\363", /* small o, acute accent */
-	"\364", /* small o, circumflex accent */
-	"\362", /* small o, grave accent */
-	"\252", /* ordinal indicator, feminine */
-	"\272", /* ordinal indicator, masculine */
-	"\370", /* small o, slash */
-	"\365", /* small o, tilde */
-	"\366", /* small o, dieresis or umlaut mark */
-	"\266", /* pilcrow (paragraph sign) */
-	"\261", /* plus-or-minus sign */
-	"\243", /* pound sterling sign */
-	"\042", /* double quote sign - June 94 */
-	"\273", /* angle quotation mark, right */
-	"\256", /* registered sign */
-	"\247", /* section sign */
-	"\255", /* soft hyphen */
-	"\271", /* superscript one */
-	"\262", /* superscript two */
-	"\263", /* superscript three */
-	"\337", /* small sharp s, German (sz ligature) */
-	"\376", /* small thorn, Icelandic */
-	"\327", /* multiply sign */
-	"\215", /* trademark sign */
-	"\372", /* small u, acute accent */
-	"\373", /* small u, circumflex accent */
-	"\371", /* small u, grave accent */
-	"\250", /* umlaut (dieresis) */
-	"\374", /* small u, dieresis or umlaut mark */
-	"\375", /* small y, acute accent */
-	"\245", /* yen sign */
-	"\377" /* small y, dieresis or umlaut mark */
-};
-
+  {
+      "aacute",	NULL,	/* small a, acute accent */
+      '\341', '\301',	/* small a, acute accent */
+      case_UPPER_FIRST
+  },
+  {
+      "acirc",	NULL,	/* small a, circumflex accent */
+      '\342', '\302',	/* small a, circumflex accent */
+      case_UPPER_FIRST
+  },
+  {
+      "acute",	NULL,	/* acute accent */
+      '\264', '\264',	/* acute accent */
+      case_IRRELEVANT
+  },
+  {
+      "aelig",	"AElig",/* small ae diphthong (ligature) */
+      '\346', '\306',	/* small ae diphthong (ligature) */
+      case_UPPER_FIRST
+  },
+  {
+      "agrave",	NULL,	/* small a, grave accent */
+      '\340', '\300',	/* small a, grave accent */
+      case_UPPER_FIRST
+  },
+  {
+      "amp", NULL,      	/* ampersand */
+      '\046', '\046',	/* ampersand */
+      case_IRRELEVANT
+  },
+  {
+      "aring",	NULL,	/* small a, ring */
+      '\345', '\305',	/* small a, ring */
+      case_UPPER_FIRST
+  },
+  {
+      "atilde",	NULL,	/* small a, tilde */
+      '\343', '\303',	/* small a, tilde */
+      case_UPPER_FIRST
+  },
+  {
+      "auml",	NULL,	/* small a, dieresis or umlaut mark */
+      '\344', '\304',	/* small a, dieresis or umlaut mark */
+      case_UPPER_FIRST
+  },
+  {
+      "bdquo",	NULL,	/* double low quote */
+#if UNICODE
+      8222, 8222,	/* double quote, low */
+#elif defined(__acorn)
+      '\x96', '\x96',
+#else
+      '\x84', '\x84',
 #endif
+      case_IRRELEVANT
+  },
+  {
+      "brvbar", NULL,    /* broken (vertical) bar */
+      '\246', '\246', /* broken (vertical) bar */
+      case_IRRELEVANT
+  },
+  {
+      "ccedil", NULL,    /* small c, cedilla */
+      '\347', '\307', /* small c, cedilla */
+      case_UPPER_FIRST
+  },
+  {
+      "cedil", NULL,     /* cedilla */
+      '\270', '\270', /* cedilla */
+      case_IRRELEVANT
+  },
+  {
+      "cent", NULL,      /* cent sign */
+      '\242', '\242', /* cent sign */
+      case_IRRELEVANT
+  },
+  {
+      "copy", NULL,      /* copyright sign */
+      '\251', '\251', /* copyright sign */
+      case_IRRELEVANT
+  },
+  {
+      "curren", NULL,    /* general currency sign */
+      '\244', '\244', /* general currency sign */
+      case_IRRELEVANT
+  },
+  {
+      "dagger", NULL,
+#if UNICODE
+      8224, 8225,	/* dagger, Dagger */
+#elif defined(__acorn)
+      '\x9C', '\x9D', /* dagger/double dagger */
+#else
+      '\x86', '\x87',
+#endif
+      case_UPPER_FIRST
+  },
+  {
+      "deg", NULL,       /* degree sign */
+      '\260', '\260', /* degree sign */
+      case_IRRELEVANT
+  },
+  {
+      "divide", NULL,    /* divide sign */
+      '\367', '\367', /* divide sign */
+      case_IRRELEVANT
+  },
+  {
+      "eacute", NULL,    /* small e, acute accent */
+      '\351', '\311', /* small e, acute accent */
+      case_UPPER_FIRST
+  },
+  {
+      "ecirc", NULL,     /* small e, circumflex accent */
+      '\352', '\312', /* small e, circumflex accent */
+      case_UPPER_FIRST
+  },
+  {
+      "egrave", NULL,    /* small e, grave accent */
+      '\350', '\310', /* small e, grave accent */
+      case_UPPER_FIRST
+  },
+  {
+      "eth", "ETH",	/* small eth, Icelandic */
+      '\360', '\320',	/* small eth, Icelandic */
+      case_UPPER_ALL
+  },
+  {
+      "euml", NULL,      /* small e, dieresis or umlaut mark */
+      '\353', '\313', /* small e, dieresis or umlaut mark */
+      case_UPPER_FIRST
+  },
+  {
+      "frac12", NULL,    /* fraction one-half */
+      '\275', '\275', /* fraction one-half */
+      case_IRRELEVANT
+  },
+  {
+      "frac14", NULL,    /* fraction one-quarter */
+      '\274', '\274', /* fraction one-quarter */
+      case_IRRELEVANT
+  },
+  {
+      "frac34", NULL,    /* fraction three-quarters */
+      '\276', '\276', /* fraction three-quarters */
+      case_IRRELEVANT
+  },
+  {
+      "gt", NULL,       	/* greater than */
+      '\076', '\076',	/* greater than */
+      case_IRRELEVANT
+  },
+  {
+      "hellip", NULL,  	/* horizontal ellipsis */
+#if UNICODE
+      0x2026, 0x2026,
+#else
+      140, 140,
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "iacute", NULL,    /* small i, acute accent */
+      '\355', '\315', /* small i, acute accent */
+      case_UPPER_FIRST
+  },
+  {
+      "icirc", NULL,     /* small i, circumflex accent */
+      '\356', '\316', /* small i, circumflex accent */
+      case_UPPER_FIRST
+  },
+  {
+      "iexcl", NULL,     /* inverted exclamation mark */
+      '\241', '\241', /* inverted exclamation mark */
+      case_IRRELEVANT
+  },
+  {
+      "igrave", NULL,    /* small i, grave accent */
+      '\354', '\314', /* small i, grave accent */
+      case_UPPER_FIRST
+  },
+  {
+      "iquest", NULL,    /* inverted question mark */
+      '\277', '\277', /* inverted question mark */
+      case_IRRELEVANT
+  },
+  {
+      "iuml", NULL,      /* small i, dieresis or umlaut mark */
+      '\357', '\317', /* small i, dieresis or umlaut mark */
+      case_UPPER_FIRST
+  },
+  {
+      "laquo", NULL,     /* angle quotation mark, left */
+      '\253', '\253', /* angle quotation mark, left */
+      case_IRRELEVANT
+  },
+  {
+      "ldquo",	NULL,/* double quote, left */
+#if UNICODE
+      8220, 8220,	/* double quote, left */
+#elif defined(__acorn)
+      '\x94', '\x94', /* left double quote (66) */
+#else
+      '\x93', '\x93', /* left double quote (66) */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "lsaquo", NULL,    /* single angle quotation mark, left */
+#if UNICODE
+      8249, 8249,	/* single angle quotation mark, left */
+#elif defined(__acorn)
+      '\x92', '\x92', /* left single angle quote */
+#else
+      '\x8B', '\x8B', /* left single angle quote */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "lsquo", NULL,/* single quote, left */
+#if UNICODE
+      8216, 8216,	/* single quote, left */
+#elif defined(__acorn)
+      '\x90', '\x90', /* left single quote (6) */
+#else
+      '\x91', '\x91', /* left single quote (6) */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "lt", NULL,       	/* greater than */
+      '\074', '\074',	/* less than */
+      case_IRRELEVANT
+  },
+  {
+      "macr", NULL,      /* macron */
+      '\257', '\257', /* macron */
+      case_IRRELEVANT
+  },
+  {
+      "mdash",	NULL,/* mdash */
+#if UNICODE
+      8212, 8212,	/* mdash */
+#elif defined(__acorn)
+      '\x98', '\x98', /* em rule */
+#else
+      '\x97', '\x97', /* em rule */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "micro", NULL,     /* micro sign */
+      '\265', '\265', /* micro sign */
+      case_IRRELEVANT
+  },
+  {
+      "middot", NULL,    /* middle dot */
+      '\267', '\267', /* middle dot */
+      case_IRRELEVANT
+  },
+  {
+      "nbsp", NULL,      /* no-break space */
+      '\240', '\240', /* no-break space */
+      case_IRRELEVANT
+  },
+  {
+      "ndash",	NULL,/* en dash */
+#if UNICODE
+      8211, 8211,	/* en dash */
+#elif defined(__acorn)
+      '\x99', '\x99', /* en rule */
+#else
+      '\x96', '\x96', /* en rule */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "not", NULL,       /* not sign */
+      '\254', '\254', /* not sign */
+      case_IRRELEVANT
+  },
+  {
+      "ntilde", NULL,    /* small n, tilde */
+      '\361', '\321', /* small n, tilde */
+      case_UPPER_FIRST
+  },
+  {
+      "oacute", NULL,    /* small o, acute accent */
+      '\363', '\323', /* small o, acute accent */
+      case_UPPER_FIRST
+  },
+  {
+      "ocirc", NULL,     /* small o, circumflex accent */
+      '\364', '\324', /* small o, circumflex accent */
+      case_UPPER_FIRST
+  },
+  {
+      "oelig", "OElig",  /* small oe diphthong (ligature) */
+#if UNICODE
+      339, 338,	/* oe, OE */
+#elif defined(__acorn)
+      '\x9B', '\x9A', /* oe ligature */
+#else
+      '\x9C', '\x8C', /* oe ligature */
+#endif
+      case_UPPER_FIRST
+  },
+  {
+      "ograve", NULL,    /* small o, grave accent */
+      '\362', '\322', /* small o, grave accent */
+      case_UPPER_FIRST
+  },
+  {
+      "ordf", NULL,      /* ordinal indicator, feminine */
+      '\252', '\252', /* ordinal indicator, feminine */
+      case_IRRELEVANT
+  },
+  {
+      "ordm", NULL,      /* ordinal indicator, masculine */
+      '\272', '\272', /* ordinal indicator, masculine */
+      case_IRRELEVANT
+  },
+  {
+      "oslash", NULL,    /* small o, slash */
+      '\370', '\330', /* small o, slash */
+      case_UPPER_FIRST
+  },
+  {
+      "otilde", NULL,    /* small o, tilde */
+      '\365', '\325', /* small o, tilde */
+      case_UPPER_FIRST
+  },
+  {
+      "ouml", NULL,      /* small o, dieresis or umlaut mark */
+      '\366', '\326', /* small o, dieresis or umlaut mark */
+      case_UPPER_FIRST
+  },
+  {
+      "para", NULL,      /* pilcrow (paragraph sign) */
+      '\266', '\266', /* pilcrow (paragraph sign) */
+      case_IRRELEVANT
+  },
+  {
+      "permil",	NULL,		/* per mille */
+#if UNICODE
+      8240, 8240,	/* permille */
+#elif defined(__acorn)
+      '\x8E', '\x8E', /* per mille */
+#else
+      '\x89', '\x89',
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "plusmn", NULL,    /* plus-or-minus sign */
+      '\261', '\261', /* plus-or-minus sign */
+      case_IRRELEVANT
+  },
+  {
+      "pound", NULL,     /* pound sterling sign */
+      '\243', '\243', /* pound sterling sign */
+      case_IRRELEVANT
+  },
+  {
+      "quot", NULL,      /* double quote sign - June 94 */
+      '\042', '\042', /* double quote sign - June 94 */
+      case_IRRELEVANT
+  },
+  {
+      "raquo",	NULL,/* angle quotation mark, right */
+      '\273', '\273', /* angle quotation mark, right */
+      case_IRRELEVANT
+  },
+  {
+      "rdquo",	NULL,/* double quote, right */
+#if UNICODE
+      8221, 8221,	/* double quote, right */
+#elif defined(__acorn)
+      '\x95', '\x95', /* right double quote (99) */
+#else
+      '\x94', '\x94', /* right double quote (99) */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "reg", NULL,       /* registered sign */
+      '\256', '\256', /* registered sign */
+      case_IRRELEVANT
+  },
+  {
+      "rsaquo", NULL,    /* single angle quotation mark, right */
+#if UNICODE
+      8250, 8250,	/* single angle quotation mark, right */
+#elif defined(__acorn)
+      '\x93', '\x93', /* right single angle quote */
+#else
+      '\x9B', '\x9B', /* right single angle quote */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "rsquo", NULL, /* single quote, right */
+#if UNICODE
+      8217, 8217,	/* single quote, right */
+#elif defined(__acorn)
+      '\x91', '\x91', /* right single quote (9) */
+#else
+      '\x92', '\x92', /* right single quote (9) */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "sbquo", NULL, /* low single quote */
+#if UNICODE
+      8218, 8218,	/* low single quote, right */
+#elif defined(__acorn)
+      '\x2C', '\x2C', /* single bottom quote (not in Acorn Extended Latin, we use comma) */
+#else
+      '\x82', '\x82', /* single bottom quote */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "sect", NULL,      /* section sign */
+      '\247', '\247', /* section sign */
+      case_IRRELEVANT
+  },
+  {
+      "shy", NULL,       /* soft hyphen */
+      '\255', '\255', /* soft hyphen */
+      case_IRRELEVANT
+  },
+  {
+      "sup1", NULL,      /* superscript one */
+      '\271', '\271', /* superscript one */
+      case_IRRELEVANT
+  },
+  {
+      "sup2", NULL,      /* superscript two */
+      '\262', '\262', /* superscript two */
+      case_IRRELEVANT
+  },
+  {
+      "sup3", NULL,      /* superscript three */
+      '\263', '\263', /* superscript three */
+      case_IRRELEVANT
+  },
+  {
+      "szlig", NULL,     /* small sharp s, German (sz ligature) */
+      '\337', '\337', /* small sharp s, German (sz ligature) */
+      case_UPPER_FIRST
+  },
+  {
+      "thorn", "THORN", /* small thorn, Icelandic */
+      '\376', '\336',	/* small thorn, Icelandic */
+      case_UPPER_ALL
+  },
+  {
+      "times", NULL,     /* multiply sign */
+      '\327', '\327', /* multiply sign */
+      case_IRRELEVANT
+  },
+  {
+      "trade", NULL,     /* trademark sign */
+#if UNICODE
+      8482, 8482,	/* trademark sign */
+#elif defined(__acorn)
+      '\215', '\215', /* trademark sign */
+#else
+      '\x99', '\x99', /* trademark sign */
+#endif
+      case_IRRELEVANT
+  },
+  {
+      "uacute", NULL,    /* small u, acute accent */
+      '\372', '\332', /* small u, acute accent */
+      case_UPPER_FIRST
+  },
+  {
+      "ucirc", NULL,     /* small u, circumflex accent */
+      '\373', '\333', /* small u, circumflex accent */
+      case_UPPER_FIRST
+  },
+  {
+      "ugrave", NULL,    /* small u, grave accent */
+      '\371', '\331', /* small u, grave accent */
+      case_UPPER_FIRST
+  },
+  {
+      "uml", NULL,       /* umlaut (dieresis) */
+      '\250', '\250', /* umlaut (dieresis) */
+      case_IRRELEVANT
+  },
+  {
+      "uuml", NULL,      /* small u, dieresis or umlaut mark */
+      '\374', '\334',	/* small u, dieresis or umlaut mark */
+      case_UPPER_FIRST
+  },
+  {
+      "yacute", NULL,   /* small y, acute accent */
+      '\375', '\335',	/* small y, acute accent */
+      case_UPPER_FIRST
+  },
+  {
+      "yen", NULL,      /* yen sign */
+      '\245', '\245',	/* yen sign */
+      case_IRRELEVANT
+  },
+  {
+      "yuml", NULL,     /* small y, dieresis or umlaut mark */
+#if UNICODE
+      '\377', 376,	/* small y, dieresis or umlaut mark */
+#elif defined(__acorn)
+      '\377', 'Y',	/* small y, dieresis or umlaut mark (no capital) */
+#else
+      '\377', '\x9F'	/* small y, dieresis or umlaut mark */
+#endif
+      case_UPPER_FIRST
+  }
+};
 
+
+#if UNICODE
+
+/* An excerpt from the Micorsoft.cp1252 table */
+static UCHARACTER pc_translate_keys[32] =
+{
+    0xFFFD, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0xFFFD, 0xFFFD, 
+    0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0xFFFD, 0x0178
+};
+
+#else
 /*
  * keys with names below have been translated to the appropriate key
  * in the PC/Mac keyset.
  */
 
-static char pc_translate_keys[32] =
+static UCHARACTER pc_translate_keys[32] =
 {
     ' ',    /* 128: */
     ' ',    /* 129: */
@@ -511,8 +611,9 @@ static char pc_translate_keys[32] =
     ' ',    /* 158: */
     ' '     /* 159: */
 };
+#endif
 
-char convert_undefined_key_code(char c)
+UCHARACTER convert_undefined_key_code(UCHARACTER c)
 {
     if (c >= 128 && c < 160)
 	return pc_translate_keys[c-128];
@@ -526,26 +627,22 @@ char convert_undefined_key_code(char c)
 
 static int entity_compare_function(const void *ain, const void *bin)
 {
-    char *ap = (char *) ain, **bp = (char **)bin;
+    const UCHARACTER *ap = (const UCHARACTER *) ain;
+    const entity_t *bp = (const entity_t *)bin;
 
-    PRSDBGN(("entity_compare_function('%s', '%s')\n", ap, *bp));
+    PRSDBGN(("entity_compare_function('%s', '%s')\n", ap, bp->name));
 
-    return strncasecomp( ap, *bp, strlen(*bp));
+    return strnicmpu( ap, bp->name, strlen(bp->name));
 }
 
-/* FIXME: THESE NEED TO ALTER THE BEHAVIOUR */
-#if 0
-#define SGMLTRANS_WARNINGS	16 /* Send warnings down sgml_note_message() */
-#define SGMLTRANS_STRICT	32 /* Remove invalid translations */
-#endif
-
-extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int rules)
+extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_nchars, int rules)
 {
 #if DEBUG
-    char *orig_ptr = in_ptr;
+    UCHARACTER *orig_ptr = in_ptr;
+    USTRING ds;
 #endif
-    char *out_ptr;
-    int out_bytes;
+    UCHARACTER *out_ptr;
+    int out_nchars;
 
     if (context == NULL)
     {
@@ -556,113 +653,88 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 	ASSERT(context->magic == SGML_MAGIC);
     }
 #if 1
-    if (in_ptr == NULL || in_bytes == 0)
+    if (in_ptr == NULL || in_nchars == 0)
 	return 0;
 #endif
     /* Someone is triggering this. They shouldn't */
     ASSERT(in_ptr != NULL);
 
+#if DEBUG
+    ds.ptr = in_ptr;
+    ds.nchars = in_nchars;
+#endif
     PRSDBGN(("sgml_translation('%.*s', %d, 0x%x)\n",
-	    in_bytes, in_ptr, in_bytes, rules));
+	    in_nchars, usafe(ds), in_nchars, rules));
 
-    for (out_ptr = in_ptr, out_bytes = 0; in_bytes > 0; in_bytes--)
+    for (out_ptr = in_ptr, out_nchars = 0; in_nchars > 0; in_nchars--)
     {
 	BOOL used = FALSE;
-	const char c = *in_ptr++;
 
+	const UCHARACTER c = *in_ptr++;
+	
 	if ((c == '\n' || c == '\r') && (rules & SGMLTRANS_STRIP_NEWLINES) != 0)
 	{
             /* throw them away */
 	    used = TRUE;
 	}
-	if (c == '+' && (rules & SGMLTRANS_PLUS_TO_SPACE) != 0)
-	{
-	    *out_ptr++ = ' ';
-	    out_bytes++;
-	    used = TRUE;
-	}
-	else if (c == '%' && (rules & SGMLTRANS_PERCENT) != 0)
-	{
-	    if (in_bytes >= 2)
-	    {
-		const char c1 = tolower(in_ptr[0]), c2 = tolower(in_ptr[1]);
-		if ( isxdigit((int)c1) && isxdigit((int)c2) )
-		{
-		    const char x =
-			(char)
-			(
-			    (
-				( (c1 > '9') ? (c1 - 'a' + 10) : (c1 - '0') )
-				* 16
-				) +
-			    (
-				(c2 > '9') ? (c2 - 'a' + 10) : (c2 - '0')
-
-				)
-			    );
-		    if ( ! ( x == 127 || ( x < 32 && ! isspace((int)(char) x) ) ) )
-		    {
-			*out_ptr++ = x;
-			out_bytes++;
-			used = TRUE;
-			in_ptr += 2;
-			in_bytes -= 2;
-#if 0
-			PRSDBG(("Recognised as '%c'\n", x));
-#endif
-		    }
-		}
-	    }
-
-#if SGML_REPORTING
-	    if ( !used && (rules & SGMLTRANS_WARNINGS) != 0 )
-		sgml_note_message(context,
-				  "Insufficient characters to expand %%XX sequence");
-#endif
-	}
-	else if (c == '&' &&
-		 (rules & SGMLTRANS_HASH) != 0 &&
-		 in_bytes > 1 &&
-		 (in_ptr[0] == '#'/*  || isdigit(in_ptr[0]) */))
+	if (c == '&' &&
+	    (rules & SGMLTRANS_HASH) != 0 &&
+	    in_nchars > 1 &&
+	    (in_ptr[0] == '#'/*  || isdigit(in_ptr[0]) */))
 	    /* SJM: 30/09/97. Don't allow numbers without a hash. I
 	       don't know why I put this in in the first place but
 	       NS doesn't do it */
 	{
-	    char *end;
+	    UCHARACTER *end;
 	    long x;
+	    int base;
 
 	    PRSDBG(("Trying to do numeric entity\n"));
 
-	    if (in_ptr[0] == '#')
+	    /* strip hash char */
+	    in_nchars--;
+	    in_ptr++;
+
+	    base = 10;
+	    if (in_nchars > 0 && in_ptr[0] == 'x')
 	    {
-		in_bytes--;
+		in_nchars--;
 		in_ptr++;
+		base = 16;
 	    }
 
-	    x = in_bytes >= 1 ? strtol(in_ptr, &end, 10) : (end = in_ptr, -1);
+	    x = in_nchars >= 1 ? ustrtol(in_ptr, &end, base) : (end = in_ptr, -1);
+
+	    PRSDBG(("got entity '0x%lx' in %p end %p\n", x, in_ptr, end));
 
 	    if (end != in_ptr &&
 		x > 0 &&
 		x != 127 &&
+#if !UNICODE
 		x < 256 &&
 		(x >= 32 || isspace((char)x))
+#else
+		(x >= 32 || (x < 256 && isspace((char)x)))
+#endif
 		)
 	    {
-		if (gbf_active(GBF_TRANSLATE_UNDEF_CHARS))
-		    x = convert_undefined_key_code((int)x);
+#ifdef STBWEB
+		/* unfortunately we still need this whether unicode tables in use or not */
+		x = convert_undefined_key_code((int)x);
+#endif
+		*out_ptr++ = (UCHARACTER) x;
+		out_nchars++;
 
-		*out_ptr++ = (char) x;
-		out_bytes++;
-		in_bytes -= end - in_ptr;
+		in_nchars -= end - in_ptr;
 		in_ptr = end;
 
                 /* pdh: added this 'if' because &#163; was leaving the ;
                  * in titles
                  */
-		if (in_bytes > 0 && *in_ptr == ';')
+		if (in_nchars > 0 && *in_ptr == ';')
 		{
 		    in_ptr++;
-		    in_bytes--;
+		    in_nchars--;
 		}
 
 		used = TRUE;
@@ -670,25 +742,29 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 
 #if SGML_REPORTING
 	    if ( !used && (rules & SGMLTRANS_WARNINGS) != 0 )
+	    {
+		ds.ptr = in_ptr - 1;
+		ds.nchars = in_nchars;
 		sgml_note_message(context,
 				  "Unrecognised character entity (&entity;) name '%.*s'",
-				  min(MAXSTRING, in_bytes),
-				  in_ptr - 1);
+				  min(MAXSTRING, in_nchars),
+				  usafe(ds));
+	    }
 #endif
 	}
 	else if (c == '&' && (rules & SGMLTRANS_AMPERSAND) != 0)
 	{
-	    if (in_bytes >= 1)
+	    if (in_nchars >= 1)
 	    {
 		/* This could, theoretically, touch characters beyond */
 		/* allocated space. This would require something that */
 		/* appeared to be an entity for ALL it's characters (ie */
-		/* no trailling ; or NULL bytes) and the very next bytes */
+		/* no trailling ; or NULL nchars) and the very next nchars */
 		/* was not valid memory. I think this is unlikely. */
 		/* Also relies upon there being no entity name that is */
 		/* also a stem for another entity name. */
-		BOOL upper_case = isupper(in_ptr[0]);
-		char **matchp = bsearch(in_ptr,
+		BOOL upper_case = FALSE;
+		const entity_t *matchp = bsearch(in_ptr,
 					entity_names,
 					sizeof(entity_names) / sizeof(entity_names[0]),
 					sizeof(entity_names[0]),
@@ -696,62 +772,106 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 
 		if (matchp != NULL)
 		{
-		    const int len = strlen( *matchp );
-		    in_ptr += len;
-		    in_bytes -= len;
-		    if (in_bytes > 0 && *in_ptr == ';')
+		    if ((rules & SGMLTRANS_STRICT) || matchp->match == case_EXACT)
 		    {
-			in_ptr++;
-			in_bytes--;
+			int namelen = strlen(matchp->name);
+			if (strncmpu(in_ptr, matchp->name, namelen) == 0)
+			    upper_case = FALSE;
+			else
+			{
+			    if (matchp->name_upper)
+			    {
+				if (strncmpu(in_ptr, matchp->name_upper, strlen(matchp->name_upper)) == 0)
+				    upper_case = TRUE;
+				else
+				    matchp = NULL;
+			    }
+			    else if (matchp->match == case_UPPER_FIRST)
+			    {
+				if (in_ptr[0] < 128 && isupper(in_ptr[0]) && 
+				    strncmpu(&in_ptr[1], &matchp->name[1], namelen-1) == 0)
+				    upper_case = TRUE;
+				else
+				    matchp = NULL;
+			    }
+			    else
+				matchp = NULL;
+			}
 		    }
-		    *out_ptr++ = ISO_Latin1[ (matchp - (char**)(entity_names))*2 + (upper_case ? 1 : 0) ];
-		    out_bytes++;
-		    used = TRUE;
+		    else
+		    {
+			switch (matchp->match)
+			{
+			case case_IRRELEVANT:
+			    break;
+
+			case case_UPPER_ALL:
+			case case_UPPER_FIRST:
+			    upper_case = in_ptr[0] < 128 && isupper(in_ptr[0]);
+			    break;
+			}
+		    }
+		}
+		
+		if (matchp != NULL)
+		{
+		    int len = strlen( matchp->name );
+		    BOOL semicolon = in_nchars > len && in_ptr[len] == ';';
+
+		    if (semicolon || (rules & SGMLTRANS_STRICT) == 0)
+		    {
+			if (semicolon)
+			    len++;
+
+			in_ptr += len;
+			in_nchars -= len;
+
+			*out_ptr++ = upper_case ? matchp->upper : matchp->lower;
+			out_nchars++;
+
+			used = TRUE;
+		    }
 		}
 	    }
 
 #if SGML_REPORTING
 	    if (! used && (rules & SGMLTRANS_WARNINGS) != 0 )
+	    {
+		ds.ptr = in_ptr - 1;
+		ds.nchars = in_nchars;
 		sgml_note_message(context,
 				  "Unrecognised character entity (&entity;) name '%.*s'",
-				  min(MAXSTRING, in_bytes),
-				  in_ptr - 1);
+				  min(MAXSTRING, in_nchars), usafe(ds));
+	    }
 #endif
        	}
-	else if ((c < 32 || c == 127) && (rules & SGMLTRANS_STRIP_CTRL) != 0)
-	{
-	    /* SJM: I'm not sure whether taking NULLs out would mess stuff up */
-	    if (c != 0)
-	    {
-		*out_ptr++ = ' ';
-		out_bytes++;
-		used = TRUE;
-	    }
-	}
-
+	
 	if (! used)
 	{
 	    *out_ptr++ = c;
-	    out_bytes++;
+	    out_nchars++;
 	}
     }
 
-    PRSDBGN(("sgml_translation() returns '%.*s', %d bytes\n",
-	     out_bytes, orig_ptr, out_bytes));
-
-    return out_bytes;
+#if DEBUG
+    ds.ptr = orig_ptr;
+    ds.nchars = out_nchars;
+    PRSDBGN(("sgml_translation() returns '%.*s', %d nchars\n", out_nchars, usafe(ds), out_nchars));
+#endif
+    
+    return out_nchars;
 }
 
 extern void entity_recognition(SGMLCTX *context)
 {
-    const int new_entity = sgml_translation(context,
+    const int len = sgml_translation(context,
 				     context->inhand.data,
 				     context->inhand.ix,
-/*				     SGMLTRANS_PERCENT | */ /* Precent shouldn't be expanded in HTML I don't think*/
 				     SGMLTRANS_AMPERSAND |
 				     SGMLTRANS_HASH |
 				     SGMLTRANS_WARNINGS);
-    context->inhand.ix = new_entity;
+    context->inhand.ix = len;
+
     push_inhand(context);
 }
 

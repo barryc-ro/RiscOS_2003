@@ -23,6 +23,7 @@ struct _frontend_menu_handle {
     int highlight;      /* item number highlighted currently */
 
     fe_view parent;
+    int line_space;
 };
 
 extern BOOL stbmenu_check_mouse(wimp_mousestr *mp);

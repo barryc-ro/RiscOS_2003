@@ -11,6 +11,7 @@
 #include "util.h"
 #include "memwatch.h"
 #include "htmlparser.h"
+#include "webfonts.h"
 
 #include "objects.h"
 
@@ -30,7 +31,7 @@ static int mimetype_to_filetype(STRING s)
 
 static int extension_to_filetype(STRING s)
 {
-    char *ss = s.ptr + s.bytes;
+    char *ss = s.ptr + s.nchars;
     char *dot = NULL;
     char suffix[8];
     int len;
@@ -48,11 +49,11 @@ static int extension_to_filetype(STRING s)
 
     if (dot == NULL)
     {
-	PRSDBG(("objparse: extension no dot in '%.*s'\n", s.bytes, s.ptr));
+	PRSDBG(("objparse: extension no dot in '%.*s'\n", s.nchars, s.ptr));
 	return -1;
     }
 
-    len = s.ptr + s.bytes - dot;
+    len = s.ptr + s.nchars - dot;
     if (len == 0)
     {
 	PRSDBG(("objparse: null extension\n"));
@@ -157,6 +158,7 @@ static rid_text_item_object *connect_object(HTMLCTX *me, rid_object_item *obj)
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     /* insert parent ptr */
     obj->text_item = nb;
@@ -171,7 +173,7 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 			  const VALUE *width, const VALUE *height, const VALUE *align, 
 			 const VALUE *hspace, const VALUE *vspace, const VALUE *codebase)
 {
-    rid_flag flag;
+    rid_flag flag = 0;
 
     obj->standby = valuestringdup(standby);
 #if 0				/* moved to redraw routine */
@@ -183,6 +185,12 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 	    obj->standby = strdup(s);
     }
 #endif
+
+#if UNICODE
+    if (obj->standby && webfont_need_wide_font(obj->standby, strlen(obj->standby)))
+	flag |= rid_flag_WIDE_FONT;
+#endif
+
     obj->name = valuestringdup(name);
 
     obj->userwidth = *width;
@@ -192,7 +200,6 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 
     obj->codebase = valuestringdup(codebase);
 
-    flag = 0;
     decode_img_align(align->type == value_enum ? align->u.i : -1, &obj->iflags, &flag);
 
     return flag;
@@ -352,7 +359,7 @@ extern void startapplet (SGMLCTX * context, ELEMENT * element, VALUES * attribut
     generic_start (context, element, attributes);
 
     java_type.type = value_string;
-    java_type.u.s.bytes = sizeof(MIME_TYPE_JAVA)-1;
+    java_type.u.s.nchars = sizeof(MIME_TYPE_JAVA)-1;
     java_type.u.s.ptr = MIME_TYPE_JAVA;
 
     none.type = value_none;
@@ -625,8 +632,8 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	fprintf(stderr, "element %p\n->attributes %p\nstring %p %d '%.*s'",
 		element, element->attributes, 
 		(element->attributes[HTML_EMBED_PALETTE])->name.ptr,
-		(element->attributes[HTML_EMBED_PALETTE])->name.bytes,
-		(element->attributes[HTML_EMBED_PALETTE])->name.bytes,
+		(element->attributes[HTML_EMBED_PALETTE])->name.nchars,
+		(element->attributes[HTML_EMBED_PALETTE])->name.nchars,
 		(element->attributes[HTML_EMBED_PALETTE])->name.ptr);
 	
 #endif

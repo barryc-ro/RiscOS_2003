@@ -179,8 +179,9 @@ typedef struct _antweb_doc
     int threaded;
     int pending_delete;
 
-    int encoding;		/* charset encoding - defined in interface.h */
-
+    int encoding_user;		/* user set encoding (from config) */
+    int encoding_user_override;	/* user really wants encoding */
+    
     unsigned int fontusage[8];  /* 8x32=256-bit array of font usage */
 
     BOOL bHighlightPersistent;  /* highlight is actually a selection */
@@ -214,6 +215,7 @@ extern int antweb_render_background(wimp_redrawstr *rr, void *h, int update);
 extern int antweb_doc_abort_all(int level);
 extern os_error *antweb_trigger_fetching(antweb_doc *doc);
 extern void antweb_uncache_image_info(antweb_doc *doc);
+extern int antweb_getwebfont(antweb_doc *doc, rid_text_item *ti, int base);
 
 /* backend.c */
 
@@ -237,6 +239,8 @@ extern void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, i
 
 extern void highlight_boundary_build(antweb_doc *doc);
 extern void highlight_boundary_clear(antweb_doc *doc);
+
+
 
 #endif
 

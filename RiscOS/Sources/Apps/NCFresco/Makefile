@@ -102,7 +102,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		oobject.o objects.o plugin.o pluginfile.o \
 		files.o remote.o keyhl.o \
 		buildtime.o format.o colspan.o loformat.o cs2.o \
-		highlight.o frameutils.o csgraph.o rdebug.o
+		highlight.o frameutils.o csgraph.o rdebug.o submit.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -724,8 +724,7 @@ WEBGOPHER:
 # NB: CURE THE PROBLEM - DON'T JUST STOP THIS REPORTING IT!
 
 sanity:		cvs-checks.py cvs-checks
-		echo not sanity checking due to CVS format change
-		echo @./cvs-checks
+		@./cvs-checks
 
 #############################################################################
 
@@ -804,11 +803,12 @@ NCFRESCO_BUILD_INCS=		-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 				-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
 				-I$(RISCOS_BUILD_EXPORT)/Lib \
 				-I$(RISCOS_BUILD_EXPORT)/C \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/Unicode \
 				-J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
 NCFRESCO_BASE_CFLAGS=		-DNEW_TEXTAREA=1 -DBOCA=0 -wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 \
 				$(NCFRESCO_INCS) -DFRAMES=1 -DITERATIVE_PANIC=1 -DNO_LICENSEE -DLOCK_FILES=1 -DNEW_HL=0 -DUSE_FILEWATCH=1 -DSSL_UI=0 \
-				-DIGNORE_CAPTION=1
+				-DIGNORE_CAPTION=1 -DUNICODE=0 -DNEW_BREAKS=1
 
 # several alternative flag sets
 NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG -Fn -Ospace
@@ -868,25 +868,28 @@ NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				../RISC_OSLib/risc_oslib \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibd.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/debug/remote.o
 
+#				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 #				$(RISCOS_BUILD_EXPORT)/Lib/Trace/T_PL.o \
 #				../memcheck/mclib
-#				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 
 NCFRESCO_REL_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelib.o
 
 NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibz.o
 
 NCFRESCO_RAM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
@@ -894,7 +897,8 @@ NCFRESCO_RAM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/debug/remotezm.o
+				$(RISCOS_BUILD_EXPORT)/Lib/debug/remotezm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibz.o
 
 # --------------------
 
@@ -1063,7 +1067,7 @@ NCFRESCO_NT:
 # NCFresco softload module in the new style CVS controlled RISC OS build tree
 NCFRESCO_RAM:	$(PREDEPS)
 		@echo "Making NCFRESCO module for RISCOS"
-		@cd ./ncfresco; $(MAKE) NCFRESCO_MODULE \
+		@cd ./ncfresco_zm; $(MAKE) NCFRESCO_MODULE \
 		LIBS="$(NCFRESCO_RAM_LIBS)" \
 		OBJS="$(NCFRESCO_RAM_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \

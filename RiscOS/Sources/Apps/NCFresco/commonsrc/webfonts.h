@@ -41,10 +41,20 @@ typedef struct webfont {
 #define WEBFONT_SPECIAL_TYPE_SYMBOL	(0 << WEBFONT_SPECIAL_TYPE_SHIFT)
 #define WEBFONT_SPECIAL_TYPE_MENU	(1 << WEBFONT_SPECIAL_TYPE_SHIFT)
 #define WEBFONT_SPECIAL_TYPE_JAPANESE	(2 << WEBFONT_SPECIAL_TYPE_SHIFT)
-#define WEBFONT_SPECIAL_COUNT		3
+#define WEBFONT_SPECIAL_TYPE_CHINESE	(3 << WEBFONT_SPECIAL_TYPE_SHIFT)
+#define WEBFONT_SPECIAL_TYPE_KOREAN	(4 << WEBFONT_SPECIAL_TYPE_SHIFT)
+#define WEBFONT_SPECIAL_TYPE_RUSSIAN	(5 << WEBFONT_SPECIAL_TYPE_SHIFT)
+#define WEBFONT_SPECIAL_TYPE_GREEK	(6 << WEBFONT_SPECIAL_TYPE_SHIFT)
+#define WEBFONT_SPECIAL_TYPE_HEBREW	(7 << WEBFONT_SPECIAL_TYPE_SHIFT)
+#define WEBFONT_SPECIAL_COUNT		7
 
 #define WEBFONT_SYMBOL(n)	(WEBFONT_SIZE(n) + WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_SYMBOL)
 #define WEBFONT_JAPANESE	(WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_JAPANESE)
+#define WEBFONT_CHINESE		(WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_CHINESE)
+#define WEBFONT_KOREAN		(WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_KOREAN)
+#define WEBFONT_RUSSIAN		(WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_RUSSIAN)
+#define WEBFONT_GREEK		(WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_GREEK)
+#define WEBFONT_HEBREW		(WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_HEBREW)
 
 /* this knows the ordering of the flag bits */
 #define WEBFONT_COUNT		(WEBFONT_FLAG_SPECIAL + (WEBFONT_SPECIAL_COUNT << WEBFONT_SPECIAL_TYPE_SHIFT))
@@ -104,7 +114,7 @@ extern os_error *webfonts_initialise(void);
 extern os_error *webfonts_reinitialise(void);
 
 extern os_error *webfonts_tidyup(void);
-extern int webfont_tty_width(int w, int in_chars);
+/* extern int webfont_tty_width(int w, int in_chars); */
 extern os_error *webfont_declare_printer_fonts(void);
 extern os_error *webfont_drawfile_fontlist(int fh, int *writeptr);
 extern int webfont_font_width(int f, const char *s);
@@ -115,3 +125,9 @@ extern os_error *webfont_lose_font( int n );
 
 extern int webfont_font_width_n(int f, const char *s, int n);
 extern int webfont_split_point(int f, const char *s, int width);
+extern int webfont_need_wide_font(const char *s, int n_bytes);
+extern void webfont_set_wide_format(int fh);
+extern int webfont_get_offset(int f, const char *s, int x, const int *coords, int len);
+extern int webfont_split_point_char(int f, const char *s, int width, int c, int *segwidth);
+extern int webfont_latin(int index);
+extern int webfont_nominal_width(int font_index, int n_chars);
