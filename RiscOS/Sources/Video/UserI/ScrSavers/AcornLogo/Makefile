@@ -101,13 +101,3 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.acornlogo:	c.acornlogo
-o.acornlogo:	tbox:h.wimp
-o.acornlogo:	tbox:h.wimplib
-o.acornlogo:	C:h.kernel
-o.acornlogo:	C:h.swis
-o.acornlogo:	tbox:h.wimplib
-o.acornlogo:	tbox:h.toolbox
-o.acornlogo:	tbox:h.event
-o.acornlogo:	tbox:h.window
-o.acornlogo:	tbox:h.gadgets
