@@ -6,8 +6,9 @@
 # When		Who	What
 # ----		---	----
 # 17-Jun-96	JRH	Created
-# 24-Nov-98	jmf	Switch to DebugLib for debugging
-# 12-Jan-99	jmf	Add support for EUROPEAN_DST_BODGE
+# 24-Nov-98	JMF	Switch to DebugLib for debugging
+# 12-Jan-99	JMF	Add support for EUROPEAN_DST_BODGE
+# 09-Jun-99     SBF	Added support for StripDepnd tool
 
 #
 # Paths
@@ -28,6 +29,7 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+STRIP   = -StripDepnd
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
 CCFLAGS  = -c -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp ${DFLAGS} ${DSTFLAGS}
@@ -102,6 +104,8 @@ clean:
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${RM} h.header
+        @echo Stripping dependencies from makefile...
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
