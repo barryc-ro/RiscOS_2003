@@ -19,7 +19,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -ff ${INCLUDES} -DFORCE_OWN_WINDOW=1 ${DFLAGS}
+CFLAGS  = -c -depend !Depend -ff ${INCLUDES} -DFORCE_OWN_WINDOW=1 ${DFLAGS} -wp
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -27,8 +27,6 @@ WFLAGS  = ~c~v
 # Libraries
 #
 CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.C_AbsSym
@@ -41,10 +39,11 @@ INCLUDES = -Itbox:,C:
 
 LIBS     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
 LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
-LIBSZRAM = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
+LIBSZRAM = ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 
+# Swap these lines to choose which version to make.
+DFLAGS   = -DDEBUG=1 -throwback
 DFLAGS   =
-#DFLAGS   = -DDEBUG=4
 
 #
 # Program specific options:
@@ -59,7 +58,7 @@ OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap
 OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1
 # CodecCtl was System specific but not any more.
 RDIR      = Resources.RCA.${LOCALE}
-EXPORTS   = 
+EXPORTS   =
 
 .SUFFIXES: .oz
 
@@ -120,9 +119,11 @@ resources:
 #
 ${APP}: ${OBJS} ${LIBS}
 	${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
+	Access $@ rw/rw
 
 ${RAMTARGET}: ${OBJSZRAM} ${LIBSZRAM}
 	${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAM} ${LIBSZRAM}
+	Access $@ rw/rw
 
 oz.ModuleWrap: s.ModuleWrap s.AppName
 	${AS} ${AFLAGS} s.ModuleWrap $@
@@ -138,6 +139,7 @@ s.ModuleWrap: ${WRAPPER}
 #
 ${TARGET}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ}
         ${LD} -o $@ -aof ${OBJSZ} ${LIBSZ}
+	Access $@ rw/rw
 
 #
 # Final link for the ROM Image (using given base address)
@@ -154,6 +156,61 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+oz.ModuleWrap: s.ModuleWrap
+oz.ModuleWrap: s.AppName
+oz.ModuleWrap: Hdr:ListOpts
+oz.ModuleWrap: Hdr:Macros
+oz.ModuleWrap: Hdr:System
+oz.ModuleWrap: Hdr:SWIs
+oz.ModuleWrap: Hdr:CPU.Generic26
+oz.ModuleWrap: Hdr:IO.GenericIO
+oz.ModuleWrap: Hdr:RISCOS
+oz.ModuleWrap: Hdr:ModHand
+oz.ModuleWrap: Hdr:EnvNumbers
+oz.ModuleWrap: Hdr:Proc
+oz.ModuleWrap: Hdr:FSNumbers
+oz.ModuleWrap: Hdr:NewErrors
+oz.ModuleWrap: Hdr:Services
+oz.ModuleWrap: Hdr:ResourceFS
+oz.ModuleWrap: Hdr:MsgTrans
+oz.ModuleWrap: Hdr:Variables
+oz.ModuleWrap: Hdr:UpCall
+oz.ModuleWrap: s.ResFiles
+oz.event:	c.event
+oz.event:	C:h.kernel
+oz.event:	h.utils
+oz.event:	h.types
+oz.event:	tbox:h.wimp
+oz.event:	tbox:h.toolbox
+oz.event:	h.event
+oz.event:	h.event
+oz.event:	h.wimpevent
+oz.event:	h.tbevent
+oz.event:	h.wimpmsg
+oz.tbevent:	c.tbevent
+oz.tbevent:	C:h.kernel
+oz.tbevent:	h.event
+oz.tbevent:	tbox:h.wimp
+oz.tbevent:	tbox:h.toolbox
+oz.tbevent:	h.utils
+oz.tbevent:	h.types
+oz.tbevent:	h.tbevent
+oz.wimpevent:	c.wimpevent
+oz.wimpevent:	C:h.kernel
+oz.wimpevent:	h.utils
+oz.wimpevent:	h.event
+oz.wimpevent:	tbox:h.wimp
+oz.wimpevent:	tbox:h.toolbox
+oz.wimpevent:	h.types
+oz.wimpevent:	h.wimpevent
+oz.wimpmsg:	c.wimpmsg
+oz.wimpmsg:	C:h.kernel
+oz.wimpmsg:	h.utils
+oz.wimpmsg:	h.event
+oz.wimpmsg:	tbox:h.wimp
+oz.wimpmsg:	tbox:h.toolbox
+oz.wimpmsg:	h.types
+oz.wimpmsg:	h.wimpmsg
 o.plugclient:	c.plugclient
 o.plugclient:	C:h.swis
 o.plugclient:	C:h.kernel
@@ -162,7 +219,7 @@ o.plugclient:	tbox:h.wimp
 o.plugclient:	tbox:h.window
 o.plugclient:	tbox:h.gadgets
 o.plugclient:	tbox:h.quit
-o.plugclient:	tbox:h.event
+o.plugclient:	h.event
 o.plugclient:	tbox:h.wimplib
 o.plugclient:	h.plugin
 o.plugclient:	h.plugclient
@@ -186,7 +243,7 @@ o.client_rep:	tbox:h.wimp
 o.client_rep:	tbox:h.window
 o.client_rep:	tbox:h.toolbox
 o.client_rep:	tbox:h.gadgets
-o.client_rep:	tbox:h.event
+o.client_rep:	h.event
 o.client_rep:	h.plugclient
 o.client_rep:	h.plugin
 o.client_rep:	h.client
@@ -200,33 +257,13 @@ o.clientmidi:	tbox:h.wimp
 o.clientmidi:	tbox:h.window
 o.clientmidi:	tbox:h.toolbox
 o.clientmidi:	tbox:h.gadgets
-o.clientmidi:	tbox:h.event
+o.clientmidi:	h.event
 o.clientmidi:	h.plugclient
 o.clientmidi:	h.plugin
 o.clientmidi:	h.client
 o.clientmidi:	h.utils
 o.clientmidi:	h.version
 o.clientmidi:	h.utils
-oz.ModuleWrap: s.ModuleWrap
-oz.ModuleWrap: s.AppName
-oz.ModuleWrap: Hdr:ListOpts
-oz.ModuleWrap: Hdr:Macros
-oz.ModuleWrap: Hdr:System
-oz.ModuleWrap: Hdr:SWIs
-oz.ModuleWrap: Hdr:CPU.Generic26
-oz.ModuleWrap: Hdr:IO.GenericIO
-oz.ModuleWrap: Hdr:RISCOS
-oz.ModuleWrap: Hdr:ModHand
-oz.ModuleWrap: Hdr:EnvNumbers
-oz.ModuleWrap: Hdr:Proc
-oz.ModuleWrap: Hdr:FSNumbers
-oz.ModuleWrap: Hdr:NewErrors
-oz.ModuleWrap: Hdr:Services
-oz.ModuleWrap: Hdr:ResourceFS
-oz.ModuleWrap: Hdr:MsgTrans
-oz.ModuleWrap: Hdr:Variables
-oz.ModuleWrap: Hdr:UpCall
-oz.ModuleWrap: s.ResFiles
 oz.plugclient:	c.plugclient
 oz.plugclient:	C:h.swis
 oz.plugclient:	C:h.kernel
@@ -235,7 +272,7 @@ oz.plugclient:	tbox:h.wimp
 oz.plugclient:	tbox:h.window
 oz.plugclient:	tbox:h.gadgets
 oz.plugclient:	tbox:h.quit
-oz.plugclient:	tbox:h.event
+oz.plugclient:	h.event
 oz.plugclient:	tbox:h.wimplib
 oz.plugclient:	h.plugin
 oz.plugclient:	h.plugclient
@@ -251,20 +288,6 @@ oz.utils:	tbox:h.wimplib
 oz.utils:	C:h.kernel
 oz.utils:	h.version
 oz.utils:	h.utils
-oz.client_rep:	c.client_rep
-oz.client_rep:	C:h.swis
-oz.client_rep:	C:h.kernel
-oz.client_rep:	tbox:h.wimplib
-oz.client_rep:	tbox:h.wimp
-oz.client_rep:	tbox:h.window
-oz.client_rep:	tbox:h.toolbox
-oz.client_rep:	tbox:h.gadgets
-oz.client_rep:	tbox:h.event
-oz.client_rep:	h.plugclient
-oz.client_rep:	h.plugin
-oz.client_rep:	h.client
-oz.client_rep:	h.utils
-oz.client_rep:	h.utils
 oz.clientmidi:	c.clientmidi
 oz.clientmidi:	C:h.swis
 oz.clientmidi:	C:h.kernel
@@ -273,7 +296,7 @@ oz.clientmidi:	tbox:h.wimp
 oz.clientmidi:	tbox:h.window
 oz.clientmidi:	tbox:h.toolbox
 oz.clientmidi:	tbox:h.gadgets
-oz.clientmidi:	tbox:h.event
+oz.clientmidi:	h.event
 oz.clientmidi:	h.plugclient
 oz.clientmidi:	h.plugin
 oz.clientmidi:	h.client
@@ -300,3 +323,17 @@ oz.ModuleWra1: Hdr:MsgTrans
 oz.ModuleWra1: Hdr:Variables
 oz.ModuleWra1: Hdr:UpCall
 oz.ModuleWra1: s.ResFiles
+oz.client_rep:	c.client_rep
+oz.client_rep:	C:h.swis
+oz.client_rep:	C:h.kernel
+oz.client_rep:	tbox:h.wimplib
+oz.client_rep:	tbox:h.wimp
+oz.client_rep:	tbox:h.window
+oz.client_rep:	tbox:h.toolbox
+oz.client_rep:	tbox:h.gadgets
+oz.client_rep:	h.event
+oz.client_rep:	h.plugclient
+oz.client_rep:	h.plugin
+oz.client_rep:	h.client
+oz.client_rep:	h.utils
+oz.client_rep:	h.utils
