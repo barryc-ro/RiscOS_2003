@@ -58,6 +58,13 @@
 
 #define GRIGHT_SIZE		48
 
+#if SELECT_CURRENT_FONT
+#define BASE_FONT WEBFONT_TTY
+#else
+#define BASE_FONT (-1)
+#endif
+
+
 #ifndef BUILDERS
 static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 {
@@ -121,43 +128,6 @@ static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 }
 #endif /* BUILDERS */
 
-static int getwebfont(antweb_doc *doc, rid_text_item *ti)
-{
-    int whichfont;
-
-    if (ti->flag & rid_flag_WIDE_FONT)
-	whichfont = (ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
-    else
-    {
-#ifdef SELECT_CURRENT_FONT
-	whichfont = ti->st.wf_index;
-#else
-	whichfont = WEBFONT_TTY;
-#endif
-    }
-
-    /* pdh: autofit bodge */
-    if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) )
-    {
-        if ( doc->scale_value < 100
-             && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
-        {
-           /* make it one size smaller */
-           TASSERT( WEBFONT_SIZE_SHIFT == 0 );
-           whichfont -= 1;
-        }
-    }
-
-    antweb_doc_ensure_font( doc, whichfont );
-
-#if UNICODE && defined(RISCOS)
-    /* if we are claiming a wide font then always set it to Unicode encoding */
-    if (ti->flag & rid_flag_WIDE_FONT)
-	webfont_set_wide_format(webfonts[whichfont].handle);
-#endif
-
-    return whichfont;
-}
 
 void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
@@ -179,7 +149,7 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     sel->doc = doc;
 
-    whichfont = getwebfont(doc, ti);
+    whichfont = antweb_getwebfont(doc, ti, BASE_FONT);
     wf = &webfonts[whichfont];
 
     line_space = wf->max_up + wf->max_down;
@@ -363,7 +333,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (checked > 1)
 	str = "<Many>";
 
-    whichfont = getwebfont(doc, ti);
+    whichfont = antweb_getwebfont(doc, ti, BASE_FONT);
     
     if (fs->lf != webfonts[whichfont].handle)
     {

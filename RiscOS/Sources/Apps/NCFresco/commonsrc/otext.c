@@ -62,40 +62,6 @@ static void dump_data(const char *s, int len)
 }
 #endif
 
-static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
-{
-    int whichfont;
-
-    if (ti->flag & rid_flag_WIDE_FONT)
-	whichfont = (ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
-    else
-	whichfont = ti->st.wf_index;
-
-    /* pdh: autofit bodge */
-    if ( gbf_active( GBF_AUTOFIT ) )
-    {
-        if ( doc->scale_value < 100
-             && ( (whichfont & WEBFONT_FLAG_SPECIAL) == 0 )
-             && ( gbf_active(GBF_AUTOFIT_ALL_TEXT) || (whichfont & WEBFONT_FLAG_FIXED) == WEBFONT_FLAG_FIXED )
-             && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
-        {
-           /* make it one size smaller */
-           TASSERT( WEBFONT_SIZE_SHIFT == 0 );
-           whichfont -= 1;
-        }
-    }
-
-    antweb_doc_ensure_font( doc, whichfont );
-
-#if UNICODE && defined(RISCOS)
-    /* if we are claiming a wide font then always set it to Unicode encoding */
-    if (ti->flag & rid_flag_WIDE_FONT)
-	webfont_set_wide_format(webfonts[whichfont].handle);
-#endif
-
-    return &webfonts[whichfont];
-}
-
 /* An empty text object does not have any padding either. */
 /* This is so the object inserted by <BR> has no effective width */
 
@@ -111,6 +77,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     ti->max_up = 1;
     ti->max_down = rh->cwidth == 1 ? 0 : 1;
 #else /* BUILDERS */
+    int whichfont;
     struct webfont *wf;
     const char *s;
 
@@ -120,7 +87,8 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     str_len = strlen(s);
 
     /* get font descriptor */
-    wf = getwebfont(doc, ti);
+    whichfont = antweb_getwebfont(doc, ti, -1);
+    wf = &webfonts[whichfont];
 
     if (str_len == 0)
     {
@@ -220,6 +188,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 #ifndef BUILDERS
     rid_text_item_text *tit = (rid_text_item_text *) ti;
     int tfc, tbc;
+    int whichfont;
     struct webfont *wf;
     int b;
     BOOL no_text, draw_highlight_box;
@@ -236,7 +205,8 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED);
 #endif
 
-    wf = getwebfont(doc, ti);
+    whichfont = antweb_getwebfont(doc, ti, -1);
+    wf = &webfonts[whichfont];
 
     /* adjust base line for subscipts and superscripts */
     b = bline;

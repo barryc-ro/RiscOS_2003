@@ -146,10 +146,6 @@
 /* Not that this is a good excuse. */
 extern void rid_zero_widest_height_from_item(rid_text_item *item);
 
-/* and these two are here 'cos I'm lazy tonight which is worse */
-extern void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *len);
-extern void otextarea_write_to_file(rid_textarea_item *tai, FILE *f);
-
 /**********************************************************************/
 
 rid_text_item *antweb_prev_text_item(rid_text_item *ti);
@@ -1017,6 +1013,43 @@ extern os_error *antweb_doc_ensure_font( be_doc doc, int whichfont )
     return NULL;
 }
 
+int antweb_getwebfont(antweb_doc *doc, rid_text_item *ti, int base)
+{
+    int whichfont;
+
+    if (ti->flag & rid_flag_WIDE_FONT)
+	whichfont = (ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
+    else if (base != -1)
+	whichfont = base;
+    else
+	whichfont = ti->st.wf_index;
+
+    /* pdh: autofit bodge */
+    if ( gbf_active( GBF_AUTOFIT ) )
+    {
+        if ( doc->scale_value < 100
+             && ( (whichfont & WEBFONT_FLAG_SPECIAL) == 0 )
+             && ( gbf_active(GBF_AUTOFIT_ALL_TEXT) || (whichfont & WEBFONT_FLAG_FIXED) == WEBFONT_FLAG_FIXED )
+             && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
+        {
+           /* make it one size smaller */
+           TASSERT( WEBFONT_SIZE_SHIFT == 0 );
+
+           whichfont -= 1;
+        }
+    }
+
+    antweb_doc_ensure_font( doc, whichfont );
+
+#if UNICODE && defined(RISCOS)
+    /* if we are claiming a wide font then set it to the appropriate encoding */
+    if (ti->flag & rid_flag_WIDE_FONT)
+	webfont_set_wide_format(webfonts[whichfont].handle);
+#endif
+
+    return whichfont;
+}
+
 os_error *backend_image_size_info(be_doc doc, void *imh, int *width, int *height, int *bpp)
 {
     image im = (image) imh;
@@ -1694,403 +1727,6 @@ void antweb_update_item(antweb_doc *doc, rid_text_item *ti)
     antweb_update_item_trim(doc, ti, NULL, TRUE);
 }
 
-#define LEEWAY 64
-void be_ensure_buffer_space(char **buffer, int *len, int more)
-{
-    int curlen = strlen(*buffer);
-
-    if (curlen + more >= *len)
-    {
-	*len = *len + more + LEEWAY;
-	*buffer = (char*) mm_realloc(*buffer, *len);
-    }
-}
-
-static void antweb_append_query(char **buffer, char *name, char *value, int *len)
-{
-    /* Worst case the value will be three time its original size when escaped */
-    if (value == NULL)
-	value = "";
-
-    be_ensure_buffer_space(buffer, len, (name ? strlen(name) : 0) + 3 * strlen(value) + 2);
-
-    strcat(*buffer, "&");
-
-    if (name)
-    {
-	int i;
-	char *s;
-	char c;
-
-	s = *buffer + strlen(*buffer);
-	for(i=0; (c = name[i]) != 0; i++)
-	{
-	    if (isspace(c))
-		c = '+';
-	    *s++ = c;
-	}
-
-	strcpy(s, "=");		/* Put termination on too */
-    }
-    url_escape_cat(*buffer, value, *len);
-}
-
-static void antweb_append_textarea(char **buffer, rid_textarea_item *tai, int *len)
-{
-    char *n;
-    char *s;
-    char c;
-#if !NEW_TEXTAREA
-    rid_textarea_line *tal;
-#endif
-
-    if (tai->name == NULL)
-	return;
-
-    be_ensure_buffer_space(buffer, len, strlen(tai->name) + 2);
-
-    strcat(*buffer, "&");
-
-    s = *buffer + strlen(*buffer);
-    for(n = tai->name; (c = *n) != 0; n++)
-    {
-	if (isspace(c))
-	    c = '+';
-	*s++ = c;
-    }
-
-    strcpy(s, "=");		/* Put termination on too */
-
-#if NEW_TEXTAREA
-    otextarea_append_to_buffer(tai, buffer, len);
-#else
-    for(tal = tai->lines; tal; tal = tal->next)
-    {
-	be_ensure_buffer_space(buffer, len, 3 * strlen(tal->text) + 2);
-
-	url_escape_cat(*buffer, tal->text, *len);
-
-	/* pdh: capitalised 'D' and 'A' for the benefit of wonky Otago boys
-	 */
-	if (tal->next)
-	    strcat(*buffer, "%0D%0A");
-    }
-#endif
-}
-
-static void antweb_write_query(FILE *f, char *name, char *value, int *first)
-{
-    if (value == NULL)
-	value = "";
-
-    if (*first)
-    {
-	*first = FALSE;
-    }
-    else
-    {
-	fprintf(f, "&");
-    }
-    if (name)
-    {
-	char c;
-
-	while ((c = *name++) != 0)
-	{
-	    if (isspace(c))
-		c = '+';
-	    fputc(c, f);
-	}
-	fputc('=', f);
-    }
-    url_escape_to_file(value, f);
-}
-
-static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
-{
-    char *n;
-    char c;
-#if !NEW_TEXTAREA
-    rid_textarea_line *tal;
-#endif
-    if (tai->name == NULL)
-	return;
-
-    if (*first)
-    {
-	*first = FALSE;
-    }
-    else
-    {
-	fprintf(f, "&");
-    }
-
-    for(n = tai->name; (c = *n) != 0; n++)
-    {
-	if (isspace(c))
-	    c = '+';
-	fputc(c, f);
-    }
-    fputc('=', f);
-
-#if NEW_TEXTAREA
-    otextarea_write_to_file(tai, f);
-#else
-    for(tal = tai->lines; tal; tal = tal->next)
-    {
-	url_escape_to_file(tal->text, f);
-	/* pdh: capitalised 'D' and 'A' for the benefit of wonky Otago boys
-	 */
-	if (tal->next)
-	    fputs("%0D%0A", f);
-    }
-#endif
-}
-
-#ifdef STBWEB
-BOOL backend_submit_form(be_doc doc, const char *id, int right)
-{
-    rid_form_item *form;
-
-    for (form = doc->rh->form_list; form; form = form->next)
-    {
-	if (strcmp(form->id, id) == 0)
-	{
-	    antweb_submit_form(doc, form, right);
-	    return TRUE;
-	}
-    }
-
-    return FALSE;
-}
-#endif
-
-/* The 'right' flag indicates a right click */
-
-void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
-{
-    os_error *ep = NULL;
-    rid_form_element *fis;
-    char *target = right ? "_blank" : form->target;
-
-    BENDBG(( "Submit form: action='%s', method='%s'\n",
-	    form->action ? form->action : "<none>",
-	    (form->method == rid_fm_GET ?
-	     "GET" :
-	     (form->method == rid_fm_POST ?
-	      "POST" :
-	      "<unknown>") ) ));
-
-    switch(form->method)
-    {
-    case rid_fm_GET:
-        {
-	    char *buffer;
-	    char *dest, *dest2;
-	    int buf_size = 1000;
-
-	    dest = url_join(BASE(doc), form->action);
-
-	    buffer = (char*) mm_malloc(buf_size);
-	    buffer[0] = 0;
-	    for (fis = form->kids; fis; fis = fis->next)
-	    {
-		switch (fis->tag)
-		{
-		case rid_form_element_INPUT:
-		{
-		    rid_input_item *iis = (rid_input_item *)fis;
-		    switch (iis->tag)
-		    {
-		    case rid_it_HIDDEN:
-			antweb_append_query(&buffer, iis->name, iis->value, &buf_size);
-			break;
-		    case rid_it_IMAGE:
-			if ((iis->name != NULL) && (iis->data.image.x != -1))
-			{
-			    char buf2[12];
-			    char buf3[128];
-
-			    strcpy(buf3, strsafe(iis->name));
-
-			    /* pdh: duplicate NS3's behaviour with missing
-			     * names
-			     */
-			    strcat( buf3, (*buf3) ? ".x" : "x" );
-			    sprintf(buf2, "%d", iis->data.image.x);
-			    antweb_append_query(&buffer, buf3, buf2, &buf_size);
-
-			    buf3[strlen(buf3)-1] = 'y';
-			    sprintf(buf2, "%d", iis->data.image.y);
-			    antweb_append_query(&buffer, buf3, buf2, &buf_size);
-			}
-			break;
-		    case rid_it_TEXT:
-		    case rid_it_PASSWD:
-			antweb_append_query(&buffer, iis->name, iis->data.str, &buf_size);
-			break;
-		    case rid_it_CHECK:
-		    case rid_it_RADIO:
-			if (iis->data.radio.tick)
-			{
-			    antweb_append_query(&buffer, iis->name, iis->value ? iis->value : "on", &buf_size);
-			}
-			break;
-		    case rid_it_SUBMIT:
-			if (iis->data.button.tick && iis->name)
-			{
-			    antweb_append_query(&buffer, iis->name, strsafe(iis->value), &buf_size);
-			}
-			break;
-		    }
-		    break;
-		}
-
-		case rid_form_element_SELECT:
-		{
-		    rid_select_item *sis = (rid_select_item *)fis;
-		    rid_option_item *ois;
-		    for(ois = sis->options; ois; ois = ois->next)
-			if (ois->flags & rid_if_SELECTED)
-			    antweb_append_query(&buffer, sis->name,
-						ois->value ? ois->value : ois->text, &buf_size);
-		    break;
-		}
-
-		case rid_form_element_TEXTAREA:
-		{
-		    rid_textarea_item *tai = (rid_textarea_item *)fis;
-		    antweb_append_textarea(&buffer, tai, &buf_size);
-		    break;
-		}
-		}
-	    }
-	    if (buffer[0] == 0)
-		buffer[1] = 0;
-	    buffer[0] = '?';
-	    dest2 = url_join(dest, buffer);
-	    mm_free(dest);
-	    mm_free(buffer);
-
-	    /* In theory the URL join can fail */
-	    if (dest2)
-	    {
-		BENDBG(( "Query string is:\n'%s'\n", dest2));
-
-		/* Never get a form query from the cache */
-		ep = frontend_complain(frontend_open_url(dest2, doc->parent, target, NULL, fe_open_url_NO_CACHE));
-
-		mm_free(dest2);
-	    }
-	    else
-	    {
-		frontend_complain(makeerror(ERR_BAD_FORM));
-	    }
-	}
-	break;
-    case rid_fm_POST:
-        {
-	    FILE *f;
-	    char *fname;
-	    int first = TRUE;
-	    char *dest;
-
-	    fname = strdup(rs_tmpnam(0));
-	    dest = strrchr(fname, 'x');
-	    if (dest)
-		*dest = 'y';
-	    f = mmfopen(fname, "w");
-
-	    for (fis = form->kids; fis; fis = fis->next)
-	    {
-		switch (fis->tag)
-		{
-		case rid_form_element_INPUT:
-		{
-		    rid_input_item *iis = (rid_input_item *)fis;
-		    switch (iis->tag)
-		    {
-		    case rid_it_HIDDEN:
-			antweb_write_query(f, iis->name, iis->value, &first);
-			break;
-		    case rid_it_IMAGE:
-			if (iis->data.image.x != -1)
-			{
-			    char buf2[12];
-			    char buf3[128];
-
-			    strcpy(buf3, strsafe(iis->name));
-
-			    /* pdh: duplicate NS3's behaviour with missing
-			     * names
-			     */
-			    strcat( buf3, (*buf3) ? ".x" : "x" );
-			    sprintf(buf2, "%d", iis->data.image.x);
-			    antweb_write_query(f, buf3, buf2, &first);
-
-			    buf3[strlen(buf3)-1] = 'y';
-			    sprintf(buf2, "%d", iis->data.image.y);
-			    antweb_write_query(f, buf3, buf2, &first);
-			}
-			break;
-		    case rid_it_TEXT:
-		    case rid_it_PASSWD:
-			antweb_write_query(f, iis->name, iis->data.str, &first);
-			break;
-		    case rid_it_CHECK:
-		    case rid_it_RADIO:
-			if (iis->data.radio.tick)
-			{
-			    antweb_write_query(f, iis->name, iis->value ? iis->value : "on", &first);
-			}
-			break;
-		    case rid_it_SUBMIT:
-			if (iis->data.button.tick && iis->name)
-			{
-			    antweb_write_query(f, iis->name, strsafe(iis->value), &first);
-			}
-			break;
-		    }
-		}
-		break;
-
-		case rid_form_element_SELECT:
-		{
-		    rid_select_item *sis = (rid_select_item *)fis;
-		    rid_option_item *ois;
-		    for(ois = sis->options; ois; ois = ois->next)
-			if (ois->flags & rid_if_SELECTED)
-			    antweb_write_query(f, sis->name, ois->value ? ois->value : ois->text, &first);
-		    break;
-		}
-
-		case rid_form_element_TEXTAREA:
-		{
-		    rid_textarea_item *tai = (rid_textarea_item *)fis;
-		    antweb_write_textarea(f, tai, &first);
-		    break;
-		}
-		}
-	    }
-
-#if 0
-	    fputs("\r\n", f);
-#endif
-	    mmfclose(f);
-
-	    dest = url_join(BASE(doc), form->action);
-
-	    /* Never get a form query from the cache */
-	    ep = frontend_complain(frontend_open_url(dest, doc->parent, target, fname, fe_open_url_NO_CACHE));
-	    mm_free(dest);
-	}
-	break;
-    default:
-	break;
-    }
-
-}
-
 /*****************************************************************************/
 
 static void be_tfetch_stream(antweb_doc *doc, rid_text_item *ti)
@@ -2166,130 +1802,6 @@ extern os_error *antweb_trigger_fetching(antweb_doc *doc)
 
     return NULL;
 }
-
-#if 0
-static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int width, int display_width)
-{
-    int spare;
-
-    /* 24/9/96: Borris: Added new->first check */
-    if (new == NULL || new->first == NULL)
-    {
-	usrtrc( "**** Tried to tidy NULL pos line ****\n");
-#ifdef PLOTCHECK
-	 plotcheck_boom();
-#endif
-	return 0;
-    }
-
-    spare = (display_width - width);
-
-    switch (new->first->st.flags & rid_sf_ALIGN_MASK)
-    {
-    case rid_sf_ALIGN_JUSTIFY:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
-	{
-	    rid_text_item *ti, *lti;
-	    int n;
-
-	    for(n=0, lti = NULL, ti = new->first; ti; ti = ti->next)
-	    {
-		FMTDBG(("Item=%p, pos=%p, line=%p, flags=0x%02x\n",
-			ti, new, ti->line, ti->flag));
-
-		if (((ti->flag & rid_flag_CLEARING) != 0) ||
-		    ((ti->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) == 0) )
-		{
-		    /* Not a floater */
-		    if (ti->line != new)
-			break;
-		    n++;
-		    lti = ti;
-		}
-	    }
-
-	    FMTDBG(("Spare=%d, n=%d\n", spare, n));
-
-	    /* Have more than one word on the line and not the end of the paragraph */
-	    if ((n > 1) &&
-		((lti->flag & (rid_flag_CLEARING | rid_flag_LINE_BREAK)) == 0) &&
-		ti != NULL )
-	    {
-		new->leading = spare / (n-1);
-
-		FMTDBG(("Leading=%d\n", new->leading));
-	    }
-	}
-	break;
-    case rid_sf_ALIGN_CENTER:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
-	{
-	    /* Only center things that can fit on the display */
-
-	    FMTDBGN(("center, %d %d\n", width, display_width));
-
-	    if (width < display_width)
-		new->left_margin += (spare >> 1);
-	}
-	break;
-    case rid_sf_ALIGN_RIGHT:
-	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
-	{
-	    FMTDBGN(("Right aligned\n"));
-
-	    new->left_margin += spare;
-	}
-	break;
-    }
-
-    return (new->max_up + new->max_down);
-}
-#endif
-
-
-#if 0
-
-/* DAF: 970317: Was #if DEBUG */
-#if 1
-static void stomp_contained_widths(rid_text_stream *st)
-{
-    rid_text_item *ti;
-
-    FMTDBG(("stomp_contained_widths(%p) entered\n", st));
-
-    for (ti = st->text_list; ti; ti = ti->next)
-    {
-	if (ti->tag == rid_tag_TABLE)
-	{
-	    rid_text_item_table *tit = (rid_text_item_table *) ti;
-	    rid_table_item *table = tit->table;
-	    int x, y;
-	    rid_table_cell *cell;
-
-	    for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
-	    {
-		cell->flags &= ~rid_cf_NOWRAP;
-		cell->userwidth.type = value_none;
-		cell->userheight.type = value_none;
-		stomp_contained_widths(&cell->stream);
-	    }
-
-	    for (x = 0; x < table->cells.x; x++)
-	    {
-		table->colhdrs[x]->userwidth.type = value_none;
-	    }
-
-	    for (x = 0; x < table->num_groups.x; x++)
-	    {
-		table->colgroups[x]->userwidth.type = value_none;
-	    }
-	}
-    }
-
-    FMTDBG(("stomp_contained_widths() finished\n"));
-}
-#endif
-#endif
 
 static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti, int scale_value)
 {
@@ -3444,13 +2956,15 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     rid_text_item *ti;
     rid_header *rh;
 
-    if (doc->rh == NULL)
-	doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
+    /* SJM: 28Oct97: unnecessary - removed */
+/*  if (doc->rh == NULL) */
+/* 	doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph); */
 
     buffer = mm_malloc(PPARSE_BUFSIZE);
 
     rh = doc->rh;
-    rh->doc = doc;
+    /* SJM: 28Oct97: unnecessary - removed */
+/*  rh->doc = doc; */
 
     ti = rh->stream.text_last;
     PPDBG(("Old last item is 0x%p\n", ti));
@@ -3532,8 +3046,6 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 
         ti = rid_scanf(ti);
     }
-
-
     PPDBG(("Done sizing\n"));
 }
 
@@ -3750,15 +3262,22 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 	PPDBG(("Data arriving; type = 0x%03x, file=%d, last had %d, now got %d\n",
 	       ftype, fh, lastptr, so_far));
 
+	/* lookup the parser */
 	if (doc->pd == NULL)
 	    doc->pd = be_lookup_parser(ftype);
 
 	if (doc->ph == NULL && ((pparse_details*)doc->pd)->new)
 	{
 	    int encoding = 0;
+	    int encoding_source = rid_encoding_source_USER;
+
 #if UNICODE
+	    /* work out what encoding to start in */
+	    encoding = config_encoding_user;
+	    DBG(("set_encoding USER%s %d\n", config_encoding_user_override ? "_FIXED" : "", encoding));
+
 	    if (config_encoding_user_override)
-		encoding = config_encoding_user;
+		encoding_source = rid_encoding_source_USER_FIXED;
 	    else
 	    {
 		http_header_item *list = access_get_headers(doc->ah);
@@ -3773,9 +3292,14 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 		    
 			parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
 
-			if (output[0].name)
+			if (output[0].value)
+			{
 			    encoding = encoding_number_from_name(output[0].value);
+			    encoding_source = rid_encoding_source_HTTP;
 
+			    DBG(("set_encoding HTTP %d\n", encoding));
+			}
+			
 			mm_free(s);
 			break;
 		    }
@@ -3784,6 +3308,11 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 #endif
 	    PPDBG(("About to make a new parser stream\n"));
 
+	    PPDBG(("antweb_doc_progress: encoding user %d override %d - set %d rh %d source %d\n",
+		 config_encoding_user, config_encoding_user_override,
+		 encoding, doc->rh->encoding, encoding_source));
+
+	    /* initialise the parser */
 	    doc->ph = (((pparse_details*)doc->pd)->new)(url, ftype, encoding);
 	    if (doc->ph)
 	    {
@@ -3794,15 +3323,22 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 		    doc->url = strdup(url);
 		}
 
+		/* get the rid_header handle */
 		doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
 
-		/* can this ever be called? */
+		/* SJM: 28Oct97: set up back pointer here */
+		doc->rh->doc = doc;
+		doc->rh->encoding_source = encoding_source;
+		
+#if 0
+		/* can this ever be called? SJM: 28Oct97: No - removed */
 		if (doc->rh->stream.text_last)
 		{
 		    PPDBG(("Sizing the first few items...\n"));
 		    antweb_trigger_fetching(doc);
 		    PPDBG(("... done\n"));
 		}
+#endif
 	    }
 	}
 

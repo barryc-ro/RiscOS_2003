@@ -473,7 +473,7 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
     p.y = y;
     coords_point_toscreen(&p, &cvt);
 
-    if (pointer_mode == fe_pointermode_OFF)
+    if (pointer_mode == pointermode_OFF)
 	mh->highlight = first_checked(mh);
 
     if (mh->wh)

@@ -108,15 +108,18 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item);
 extern void pull_stack_item_to_top_correcting_effects (SGMLCTX *context, STACK_ITEM *item);
 extern void clear_inhand(SGMLCTX *context);
 extern void reset_tokeniser_state(SGMLCTX *context);
-/* extern void add_to_buffer(BUFFER *buffer, int input); */
+extern void add_to_buffer(BUFFER *buffer, const char *input, int len);
 extern void add_to_prechop_buffer(SGMLCTX *context, UCHARACTER input);
 extern void add_char_to_inhand(SGMLCTX *context, UCHARACTER input);
 extern void push_inhand(SGMLCTX *context);
 extern void push_bar_last_inhand(SGMLCTX *context);
 #if UNICODE
 extern char *usafe(USTRING s);
+extern BOOL ustrnearly( const UCHARACTER *input, size_t ilen,
+                const char *pattern, size_t plen, size_t hownear );
 #else
 #define usafe(a) ((a).ptr)
+#define ustrnearly(a,b,c,d,e) strnearly(a,b,c,d,e)
 #endif
 
 extern long ustrtol(UCHARACTER *u, UCHARACTER **end, int base);

@@ -438,10 +438,21 @@ struct SGMLCTX
     BITS dont_stack_elements_open[words_of_elements_bitpack];
 
 #if UNICODE
+    Encoding *encoding;
     Encoding *encoding_write;
 
-    Encoding *encoding;
     int enc_num;
+
+    int pending_enc_num;
+
+    int encoding_threaded;
+
+    struct
+    {
+	int enc_num;
+	int state;
+	BUFFER inhand;
+    } autodetect;
 #endif
 };
 

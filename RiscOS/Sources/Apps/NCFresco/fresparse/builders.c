@@ -509,7 +509,7 @@ extern void text_item_revoke_break( HTMLCTX *me )
 
 /*****************************************************************************/
 
-extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target, VALUE *id)
+extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target, VALUE *id, VALUE *accept_charset)
 {
     rid_form_item *new;
 
@@ -533,6 +533,9 @@ extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *tar
     if (id->type == value_string)
 	new->id = stringdup(id->u.s);
 
+    if (accept_charset->type == value_string)
+	new->accept_charset = stringdup(accept_charset->u.s);
+    
     rid_form_item_connect(me->rh, new);
     me->form = new;
 }

@@ -255,22 +255,35 @@ static int check_line_list(rid_textarea_item *tai, int offset, int apply_after)
 }
 
 /* return length of displayable characters */
-static int line_length(rid_textarea_item *tai, int line)
+int otextarea_line_length(rid_textarea_item *tai, int line, BOOL *terminated)
 {
     int this_off = tai->lines[line];
     int next_off = tai->lines[line+1];
     int len = next_off - this_off;
+    BOOL term = FALSE;
 
     if (len > 0 && next_off > 0)
     {
 	flexmem_noshift();
 
 	if (tai->text.data[next_off-1] == '\n')
-	    len--;
+	    term = TRUE;
 
 	flexmem_shift();
     }
+
+    if (terminated)
+	*terminated = term;
+    
+    if (term)
+	len--;
+
     return len;
+}
+
+static int line_length(rid_textarea_item *tai, int line)
+{
+    return otextarea_line_length(tai, line, NULL);
 }
 
 static void font_paint_n(const char *text, int n, int x, int y)
@@ -1385,51 +1398,7 @@ int otextarea_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, w
     return TRUE;
 }
 
-#if NEW_TEXTAREA
-void otextarea_append_to_buffer(rid_textarea_item *tai, char **buffer, int *blen)
-{
-    int i;
 
-    flexmem_noshift();
-    
-    for (i = 0; i < tai->n_lines; i++)
-    {
-	int len = line_length(tai, i);
-	BOOL terminated = (tai->lines[i+1] - tai->lines[i]) != len;
-
-	be_ensure_buffer_space(buffer, blen, 3 * len + 2);
-
-	url_escape_cat_n(*buffer, tai->text.data + tai->lines[i], *blen, len);
-
-	if (i != tai->n_lines-1 &&
-	    (tai->wrap == rid_ta_wrap_HARD || terminated))
-	    strcat(*buffer, "%0D%0A");
-    }
-
-    flexmem_shift();
-}
-
-void otextarea_write_to_file(rid_textarea_item *tai, FILE *f)
-{
-    int i;
-
-    flexmem_noshift();
-    
-    for (i = 0; i < tai->n_lines; i++)
-    {
-	int len = line_length(tai, i);
-	BOOL terminated = (tai->lines[i+1] - tai->lines[i]) != len;
-
-	url_escape_to_file_n(tai->text.data + tai->lines[i], f, len);
-
-	if (i != tai->n_lines-1 &&
-	    (tai->wrap == rid_ta_wrap_HARD || terminated))
-	    fputs("%0D%0A", f);
-    }
-
-    flexmem_shift();
-}
-#endif
 
 /*
 

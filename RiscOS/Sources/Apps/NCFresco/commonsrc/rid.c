@@ -596,6 +596,8 @@ extern void rid_free_form(rid_form_item *p)
 
 	mm_free(p->id);
 
+	mm_free(p->accept_charset);
+
 	mm_free(p);
 
 	p = next;

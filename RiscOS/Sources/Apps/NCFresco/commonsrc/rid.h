@@ -501,6 +501,7 @@ typedef struct rid_form_item {
     char *action;
     char *target;
     char *id;
+    char *accept_charset;
 } rid_form_item;
 
 
@@ -939,6 +940,12 @@ typedef int rid_header_flags;
 #define rid_hf_HTML_ERRS        0x02   /* The document has errors in the source */
 #define rid_hf_FULL_REFORMAT	0x04   /* No progressive formatting */
 
+typedef int rid_encoding_source;
+#define rid_encoding_source_USER	0 /* user supplied value, override off */
+#define rid_encoding_source_USER_FIXED	1 /* user supplied value, override on */
+#define rid_encoding_source_HTTP	2 /* from content-type http header */
+#define rid_encoding_source_META	3 /* from content-type meta element */
+
 typedef int rid_bgt;
 #define rid_bgt_COLOURS 0x01    /* We have a background colour */
 #define rid_bgt_IMAGE   0x02    /* We have a background tiled image */
@@ -1000,7 +1007,9 @@ typedef struct rid_header {
 #endif
 
     struct _antweb_doc *doc;            /* link back upward */
-
+    
+    rid_encoding_source encoding_source;
+    int encoding;			/* encoding number actually in use (from Unicode/charsets.h) */
 } rid_header;
 
 typedef struct {

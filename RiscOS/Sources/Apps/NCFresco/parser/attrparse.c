@@ -94,17 +94,11 @@ VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING st
 	}
     }
 
-#if UNICODE
-    {
-	static int unicode_not_done_yet;
-    }
-#else
     if (gbf_active(GBF_GUESS_ENUMERATIONS))
     {
 	int dist;
-	PRSDBGN(("Attempting to guess enumeration '%.*s'\n", string.bytes, string.ptr));
+	PRSDBGN(("Attempting to guess enumeration '%.*s'\n", string.bytes, usafe(string)));
 
-#if 1
         /* pdh: less OOC guessing. Note that this is always case-insensitive.
          */
  	/* sjm: even less keen, tries distance 1 before 2 */
@@ -114,8 +108,8 @@ VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING st
 
 	    for ( v.u.i = 0; list->ptr; list++, v.u.i++ )
 	    {
-		if ( strnearly( list->ptr, list->bytes,
-				string.ptr, string.bytes, dist ) )
+		if ( ustrnearly( string.ptr, string.bytes, 
+				list->ptr, list->bytes, dist ) )
 		{
 		    v.type = value_enum;
 		    v.u.i++;		/* enumerations from one */
@@ -125,32 +119,9 @@ VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING st
 		}
 	    }
 	}
-#else
-	for (w = string.bytes - 1; w > 0; w--)
-	{
-	    list = attribute->templates;
-
-	    for (v.u.i = 0; list->ptr != NULL; list++, v.u.i++)
-	    {
-		if ( list->bytes >= w &&
-		     ( case_sense ?
-		       strncmp(list->ptr, string.ptr, w) :
-		       strnicmp(list->ptr, string.ptr, w)
-			 )  == 0)
-		{
-		    v.type = value_enum;
-		    v.u.i++;		/* enumerations from one */
-		    PRSDBGN(("Guessed '%.*s' for '%.*s'\n",
-			     list->bytes, list->ptr, string.bytes, string.ptr));
-		    return v;
-		}
-	    }
-	}
-#endif
 
 	PRSDBGN(("Could not guess a matching enumeration\n"));
     }
-#endif
     
     v.type = value_none;
     v.u.i = 0;

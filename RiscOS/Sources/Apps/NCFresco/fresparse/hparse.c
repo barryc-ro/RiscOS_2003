@@ -45,6 +45,7 @@
 
 #if UNICODE
 #include "Unicode/charsets.h"
+#include "autojp.h"
 #include "config.h"
 #endif
 
@@ -52,6 +53,7 @@
 #define PARSE_DEBUG 0
 #endif
 
+#define DEFAULT_CHARSET csWindows1250
 
 static BOOL include_frames = FALSE;
 
@@ -203,7 +205,7 @@ static const HTMLCTXClass HTRISCOSeration = /* As opposed to print etc */
   */
 
 
-static HTMLCTX * core_HTMLToRiscos (void /*HTStream * output */ )
+static HTMLCTX * core_HTMLToRiscos (int encoding )
 {
     HTMLCTX* me = (HTMLCTX*) mm_calloc(1, sizeof(*me));
     rid_header *rh;
@@ -245,6 +247,14 @@ static HTMLCTX * core_HTMLToRiscos (void /*HTStream * output */ )
     rh->margin.top = rh->margin.left = -1;
     rh->stream.parent = rh;
 
+#if UNICODE
+    /* decide what encoding to start off in */
+    if (encoding == 0 || encoding == csAutodetectJP)	/* no HTTP + user set to auto - use ASCII */
+	rh->encoding = csASCII;
+    else						/* HTTP or override set - use it */
+	rh->encoding = encoding;
+#endif
+    
 #if 0
     /*me->write_ptr = &(me->buf[0]);*/
     /* me->white_count = 0 */
@@ -285,20 +295,36 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
     context->callback = def_callback;
 
 #if UNICODE
-    /* set encoding to 4 (Latin1) if not set, this value will come from user or HTTP header */
-    context->encoding = encoding_new(encoding == 0 || encoding == csAutodetectJP ? csWindows1250 : encoding);
+    /* initialiase encoding to what's decided in HTML init, this value will come from user or HTTP header */
+    context->encoding = encoding_new(me->rh->encoding, FALSE);
+
+    /* be safe - if can't load encoding then use ASCII - guaranteed to work */
+    if (context->encoding == NULL)
+    {
+	me->rh->encoding = csASCII;
+	context->encoding = encoding_new(me->rh->encoding, FALSE);
+    }
+	
     context->enc_num = encoding;
 
+    /* initialiase autodetect routines */
+    if (encoding == csAutodetectJP)
+    {
+	context->autodetect.state = autojp_state_INIT;
+	context->autodetect.enc_num = csAutodetectJP;
+    }
+
+    /* select format to store in internally */
     switch (config_encoding_internal)
     {
     case 0:
-	context->encoding_write = encoding_new(csAcornLatin1);
+	context->encoding_write = encoding_new(csAcornLatin1, TRUE);
 	break;
     case 3:
-	context->encoding_write = encoding_new(csShiftJIS);
+	context->encoding_write = encoding_new(csShiftJIS, TRUE);
 	break;
     case 4:
-	context->encoding_write = encoding_new(csEUCPkdFmtJapanese);
+	context->encoding_write = encoding_new(csEUCPkdFmtJapanese, TRUE);
 	break;
     }
 #endif
@@ -324,7 +350,7 @@ static HTMLCTX *create_new_html(int encoding)
     SGMLCTX *sgmlctx;
     HTMLCTX *htmlctx;
 
-    htmlctx = core_HTMLToRiscos();
+    htmlctx = core_HTMLToRiscos(encoding);
 
     if (htmlctx == NULL)
 	return NULL;
@@ -339,7 +365,8 @@ static HTMLCTX *create_new_html(int encoding)
     ASSERT(sgmlctx->magic == SGML_MAGIC);
 
     htmlctx->sgmlctx = sgmlctx;
-
+    htmlctx->rh->encoding = sgmlctx->enc_num;
+    
     return htmlctx;
 }
 

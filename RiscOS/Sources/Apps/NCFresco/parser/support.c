@@ -307,7 +307,7 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	}
 
 	/* allocate space */
-	if ( (s.ptr = mm_malloc(s.bytes)) == NULL )
+	if ( (s.ptr = mm_malloc(s.bytes+1)) == NULL )
 	{
 	    s.bytes = 0;
 	}
@@ -336,9 +336,12 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	    if (s.bytes != ss - s.ptr)
 	    {
 		s.bytes = ss - s.ptr;
-		s.ptr = mm_realloc(s.ptr, s.bytes);
+		s.ptr = mm_realloc(s.ptr, s.bytes+1);
 	    }
 	    PRSDBGN(("mkstringu: written %d chars\n", ss - s.ptr));
+
+	    /* ensure terminated for safety */
+	    s.ptr[s.bytes] = 0;
 	}
 
  	PRSDBGN(("mkstringu: %d chars become %d bytes '%.*s'\n", n, s.bytes, s.bytes, s.ptr));
@@ -1027,17 +1030,11 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, USTRING s, BOOL *g
 	attributep++;
     }
 
-#if UNICODE
-    {
-	static int unicode_not_done_yet;
-    }
-#else
     if (gbf_active(GBF_GUESS_ATTRIBUTES))
     {
 	int dist;
-	PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.bytes, s.ptr));
+	PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.bytes, usafe(s)));
 
-#if 1
         /* pdh: less keen on giving out-of-control matches */
 	/* sjm: even less keen, tries distance 1 before 2 */
 	for (dist = 1; dist <= 2; dist++)
@@ -1046,7 +1043,7 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, USTRING s, BOOL *g
 	    ix = 0;
 	    while ( (attribute = *attributep)->name.ptr != NULL )
 	    {
-		if ( strnearly( s.ptr, s.bytes,
+		if ( ustrnearly( s.ptr, s.bytes,
 				attribute->name.ptr, attribute->name.bytes,
 				dist ) )
 		{
@@ -1057,32 +1054,8 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, USTRING s, BOOL *g
 		attributep++;
 	    }
         }
-#else
-	for (len = s.bytes; len > 0; len--)
-	{
-	    attributep = element->attributes;
-	    ix = 0;
-
-	    while ( (attribute = *attributep)->name.ptr != NULL )
-	    {
-		if ( strnicmp(s.ptr, attribute->name.ptr, len) == 0 )
-		{
-		    PRSDBGN(("Guessed attribute '%.*s' is %d ('%.*s')\n",
-			     s.bytes, s.ptr, ix, attribute->name.bytes, attribute->name.ptr));
-
-		    *guessed = TRUE;
-		    return ix;
-		}
-
-		ix++;
-		attributep++;
-	    }
-	}
-#endif
-
 	PRSDBGN(("Failed to make any form of guess on the attribute!\n"));
     }
-#endif
     
     return SGML_NO_ATTRIBUTE;
 }
@@ -1530,6 +1503,30 @@ static void add_to_ubuffer(UBUFFER *buffer, UCHARACTER input)
     buffer->data[ buffer->ix++ ] = input;
 }
 
+extern void add_to_buffer(BUFFER *buffer, const char *input, int len)
+{
+    ASSERT( buffer->max >= buffer->ix );
+    ASSERT( buffer->ix >= 0 );
+
+    if (buffer->max <= buffer->ix + len)
+    {
+	void *newptr;
+	int new_max = (buffer->max + len + 255) &~ 255;
+	
+	if ((newptr = mm_realloc( buffer->data, new_max * sizeof(buffer->data[0]) )) == NULL)
+	{
+	    usrtrc( "Not enough memory to extend buffer");
+	    return;
+	}
+
+	buffer->data = newptr;
+	buffer->max = new_max;
+    }
+
+    memcpy(buffer->data + buffer->ix, input, len);
+    buffer->ix += len;
+}
+
 extern void add_to_prechop_buffer(SGMLCTX *context, UCHARACTER input)
 {
     UBUFFER *buffer;
@@ -1785,5 +1782,46 @@ long ustrtol(UCHARACTER *u, UCHARACTER **end, int base)
 }
 
 /*****************************************************************************/
+
+#if UNICODE
+/*---------------------------------------------------------------------------*
+ * strnearly(s1,s2,n)                                                        *
+ * Returns TRUE if s1 is within edit distance n of s2, where edit distance   *
+ * is defined as number of additions or deletions of characters. O(mn) where *
+ * m is length of shorter string and n is n.                                 *
+ *---------------------------------------------------------------------------*/
+
+BOOL ustrnearly( const UCHARACTER *input, size_t ilen,
+                const char *pattern, size_t plen, size_t hownear )
+{
+    while ( ilen && plen )
+    {
+	UCHARACTER c = *input;
+	if (c < 128) c = toupper(*input);
+        if ( c != toupper(*pattern) )
+        {
+            if ( !hownear )
+                return FALSE;
+
+            /* case bgXcolor */
+            if ( ustrnearly( input+1, ilen-1, pattern, plen, hownear-1 ) )
+                return TRUE;
+            /* case bgcolr */
+            if ( ustrnearly( input, ilen, pattern+1, plen-1, hownear-1 ) )
+                return TRUE;
+
+            /* case bgcoXor */
+            hownear--;
+        }
+        input++;
+        ilen--;
+        pattern++;
+        plen--;
+    }
+
+    return hownear >= (ilen + plen);
+}
+
+#endif
 
 /* eof support.c */

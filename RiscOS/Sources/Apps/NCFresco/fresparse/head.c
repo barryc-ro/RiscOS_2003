@@ -145,8 +145,7 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 
 #if UNICODE
 	/* only set encoding from here if not set by HTTP header or user */
-	if (context->enc_num == 0 && 
-	    strcasecomp((m->httpequiv ? m->httpequiv : m->name), "CONTENT-TYPE") == 0)
+	if (strcasecomp((m->httpequiv ? m->httpequiv : m->name), "CONTENT-TYPE") == 0)
 	{
 	    static const char *tags[] = { "CHARSET", 0 };
 	    name_value_pair output[1];
@@ -154,12 +153,25 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 		    
 	    parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
 
-	    if (output[0].name)
+	    if (output[0].value)
 	    {
 		int encoding = encoding_number_from_name(output[0].value);
+		
+		if (me->rh->encoding_source == rid_encoding_source_USER)
+		{
+		    /* write value into the rid header */
+		    me->rh->encoding = encoding;
+		    me->rh->encoding_source = rid_encoding_source_META;
 
-		context->enc_num = encoding;
-		sgml_set_encoding(context, encoding);
+		    DBG(("set_encoding META %d\n", encoding));
+		
+		    /* set stream to have encoding updated */
+		    sgml_set_encoding(context, encoding);
+		}
+		else
+		{
+		    DBG(("set_encoding META %d ignored\n", encoding));
+		}
 	    }
 
 	    mm_free(s);

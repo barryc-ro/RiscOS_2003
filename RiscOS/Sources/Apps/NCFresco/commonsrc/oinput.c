@@ -250,6 +250,9 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     int height, width;
     image_flags fl;
 
+    int whichfont;
+    webfont *wf;
+
     ii = tii->input;
 
     switch (ii->tag)
@@ -292,16 +295,8 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
     case rid_it_TEXT:
     case rid_it_PASSWD:
-    {
-	int whichfont = WEBFONT_TTY;
+	whichfont = WEBFONT_TTY;
 
-#if 0
-	if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
-	     doc->scale_value < 100 )
-	{
-	    whichfont -= (1<<WEBFONT_SIZE_SHIFT);
-	}
-#endif
         antweb_doc_ensure_font( doc, whichfont );
 
 	if (ii->ww.type == value_absunit)
@@ -322,13 +317,18 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	    ti->max_down += extra/2;
 	}
 	break;
-    }
 
     case rid_it_BUTTON:
     case rid_it_SUBMIT:
     case rid_it_RESET:
 
-        antweb_doc_ensure_font( doc, WEBFONT_BUTTON );
+#ifdef STBWEB
+	whichfont = antweb_getwebfont(doc, ti, -1);
+#else
+	whichfont = ii->src ? ALT_FONT : WEBFONT_BUTTON;
+        antweb_doc_ensure_font( doc, whichfont );
+#endif
+	wf = &webfonts[whichfont];
 
 	t = button_text(ii);
 	if (ii->src)
@@ -344,8 +344,6 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	    if (fl & image_flag_REALTHING)
 		ii->data.button.flags |= rid_image_flag_REAL;
 
-	    antweb_doc_ensure_font( doc, ALT_FONT );
-
 	    oimage_size_image(t, &ii->ww, &ii->hh, ii->data.button.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
 
 	    ti->width = width;
@@ -355,19 +353,6 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	else
 	{
 #ifdef STBWEB
-	    int whichfont = ti->st.wf_index;
-	    struct webfont *wf;
-
-	    if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
-		 doc->scale_value < 100
-		 && (whichfont & WEBFONT_SIZE_MASK) > 0 )
-	    {
-		whichfont -= (1<<WEBFONT_SIZE_SHIFT);
-	    }
-
-	    antweb_doc_ensure_font( doc, whichfont );
-
-	    wf = &webfonts[whichfont];
 	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(whichfont, t) + INPUT_BUTTON_BORDER_X*2;
 	    if (ii->hh.type != value_absunit)
 	    {
@@ -459,6 +444,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     int slen;
     int fg, bg;
     char *t;
+    int whichfont;
     struct webfont *wf;
     BOOL selected;
 
@@ -515,7 +501,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_PASSWD:
     {
 	int has_caret;
-	int whichfont = WEBFONT_TTY;
+	whichfont = WEBFONT_TTY;
 #if 0
 	if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
 	     doc->scale_value < 100 )
@@ -643,7 +629,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_BUTTON:
     {
 	int split, width, t_len;
-	int fontnum;
 
 	fg = ii->base.colours.back == -1 && ii->base.colours.select == -1 && ii->data.button.im == NULL ? render_colour_INPUT_F :
 	    render_text_link_colour(ti, doc);
@@ -652,7 +637,13 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	t = button_text(ii);
 	t_len = strlen(t);
 
-	fontnum = WEBFONT_BUTTON;
+#ifdef STBWEB
+	whichfont = antweb_getwebfont(doc, ti, -1);
+#else
+	whichfont = ii->src ? ALT_FONT : WEBFONT_BUTTON;
+        antweb_doc_ensure_font( doc, whichfont );
+#endif
+	wf = &webfonts[whichfont];
 
 	if (ii->data.button.im)
 	{
@@ -682,8 +673,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	    }
 
-	    fontnum = ti->st.wf_index;
-	    plotx = (ti->width - webfont_font_width(ti->st.wf_index, t))/2;
+	    plotx = (ti->width - webfont_font_width(whichfont, t))/2;
 	    if (plotx < INPUT_BUTTON_BORDER_X)
 		plotx = INPUT_BUTTON_BORDER_X;
 	}
@@ -712,7 +702,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 				    0,
 				    hpos, bline - ti->max_down,
 				    ti->width, (ti->max_up + ti->max_down), doc );
-	    fontnum = ti->st.wf_index;
 #else
 	    render_plinth(bg,
 			  ii->data.button.tick ? render_plinth_IN : 0,
@@ -722,14 +711,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    plotx = INPUT_BUTTON_BORDER_X;
 	}
 
-	if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
-	     doc->scale_value < 100
-	     && (fontnum & WEBFONT_SIZE_MASK) > 0 )
-	{
-	    fontnum -= (1<<WEBFONT_SIZE_SHIFT);
-	}
-
-	wf = &webfonts[fontnum];
 	if (fs->lf != wf->handle)
 	{
 	    fs->lf = wf->handle;
@@ -748,13 +729,13 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	width = 0;
 	if (ii->data.button.im || ii->ww.type == value_absunit)
 	{
-	    split = webfont_split_point(fontnum, t, ti->width - INPUT_BUTTON_BORDER_X*2);
+	    split = webfont_split_point(whichfont, t, ti->width - INPUT_BUTTON_BORDER_X*2);
 
 	    /* if not then make room for the ... */
 	    if (split != t_len)
 	    {
 		split -= 3;
-		width = webfont_font_width_n(fontnum, t, split);
+		width = webfont_font_width_n(whichfont, t, split);
 	    }
 	}
 

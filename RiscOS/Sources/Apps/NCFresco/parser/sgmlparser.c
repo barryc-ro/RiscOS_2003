@@ -6,6 +6,8 @@
 #include "profile.h"
 #if UNICODE
 #include "Unicode/charsets.h"
+#include "autojp.h"
+#include "config.h"
 #endif
 
 /*****************************************************************************/
@@ -53,21 +55,32 @@ extern void sgml_note_message(SGMLCTX * context, const char *fmt, ... )
 static int sgml_handle_char(void *handle, UCS4 c)
 {
     SGMLCTX *context = handle;
+
+/*   PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20)); */
     
     add_char_to_inhand(context, (UCS2) c);
 
     (*context->state)(context, (UCS2) c);
 
-    return context->pending_close;
+    return context->pending_close || context->pending_enc_num;
 }
 
 extern void sgml_set_encoding(SGMLCTX *context, int enc_num)
 {
-    PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d\n", context, enc_num));
-    
-    if (context->encoding)
-	encoding_delete(context->encoding);
-    context->encoding = encoding_new(enc_num);
+    if (context->encoding_threaded)
+    {
+	PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d PENDING\n", context, enc_num));
+	context->pending_enc_num = enc_num;
+    }
+    else
+    {
+	PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d\n", context, enc_num));
+	if (context->encoding)
+	    encoding_delete(context->encoding);
+
+	context->enc_num = enc_num;
+	context->encoding = encoding_new(enc_num, FALSE);
+    }
 }
 
 extern void sgml_feed_characters_ascii(SGMLCTX *context, const char *buffer, int bytes)
@@ -98,9 +111,84 @@ extern void sgml_feed_characters_ascii(SGMLCTX *context, const char *buffer, int
 extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes)
 {
 #if UNICODE
-    PRSDBGN(("sgml_feed_characters(): '%.*s'\n", bytes, buffer));
+    int consumed;
 
-    encoding_read(context->encoding, sgml_handle_char, buffer, bytes, context);
+    PRSDBGN(("sgml_feed_characters(): '%.*s' enc %d\n", bytes, buffer, context->enc_num));
+
+    if (context->enc_num == csAutodetectJP)
+    {
+	int left = bytes;
+	int state = autojp_consume_string(&context->autodetect.enc_num, &context->autodetect.state, buffer, &left);
+
+	switch (state)
+	{
+	case autojp_ASCII:
+	    /* pass through as is */
+	    PRSDBG(("sgml_feed_characters: ASCII pass through '%.*s'\n", bytes, buffer));
+	    break;
+
+	case autojp_DECIDED:
+	    PRSDBG(("sgml_feed_characters: DECIDED %d pass through '%.*s' '%.*s'\n",
+		    context->autodetect.enc_num, 
+		    context->autodetect.inhand.ix,
+		    context->autodetect.inhand.data,
+		    bytes, buffer));
+
+	    DBG(("set_encoding AUTODETECT %d\n", context->autodetect.enc_num));
+
+	    /* set the encoding */
+	    sgml_set_encoding(context, context->autodetect.enc_num);
+
+	    /* process the stuff pending */
+	    if (context->autodetect.inhand.ix)
+	    {
+		/* recurse in case we hit a META tag and need to change encoding again */
+		sgml_feed_characters(context, 
+				     context->autodetect.inhand.data,
+				     context->autodetect.inhand.ix);
+
+		/* mark buffer as used */
+		context->autodetect.inhand.ix = 0;
+	    }
+	    
+/* 	    tell frontend encoding somehow ?? */
+	    break;
+	
+	case autojp_UNDECIDED:
+	    PRSDBG(("sgml_feed_characters: UNDECIDED pass through '%.*s' adding last %d to inhand\n", bytes - left, buffer, left));
+
+	    /* add the undecided stuff to inhand */
+	    add_to_buffer(&context->autodetect.inhand, buffer + bytes - left, left);
+
+	    /* process the safe part of the buffer */
+	    bytes = bytes - left;
+	    break;
+	}
+    }
+    
+    context->encoding_threaded++;
+    consumed = encoding_read(context->encoding, sgml_handle_char, buffer, bytes, context);
+    context->encoding_threaded--;
+
+    /* if we have a pending encoding change do it now */
+    if (context->pending_enc_num)
+    {
+	/* add one to consumed as halting the encoding is assumed to
+         * have been done _before_ the character is used */
+	consumed++;
+	
+	sgml_set_encoding(context, context->pending_enc_num);
+	context->pending_enc_num = 0;
+    
+	/* restart the encoding if necessary */
+	/* note we can only change encoding once so this is good enough */
+	if (consumed < bytes)
+	{
+	    context->encoding_threaded++;
+	    consumed = encoding_read(context->encoding, sgml_handle_char, buffer + consumed, bytes - consumed, context);
+	    context->encoding_threaded--;
+	}
+    }
 #else
     int i;
     BOOL convert_char = gbf_active(GBF_TRANSLATE_UNDEF_CHARS);
@@ -152,6 +240,19 @@ extern void sgml_stream_finished (SGMLCTX *context)
     
     ASSERT(context->magic == SGML_MAGIC);
 
+#if UNICODE
+    if (context->enc_num == csAutodetectJP && context->autodetect.inhand.ix)
+    {
+	PRSDBG(("sgml_stream_finished: encoding still undecided - choosing ShiftJIS and parsing rest"));
+
+	sgml_set_encoding(context, csShiftJIS);
+
+        sgml_feed_characters (context, context->autodetect.inhand.data, context->autodetect.inhand.ix );
+
+        sgml_stream_finished (context);
+    }
+    else
+#endif
     if ((context->state == state_comment_wait_dash_1 || context->state == state_comment_wait_dash_2) 
         && context->comment_anchor != -1)
     {
@@ -164,7 +265,7 @@ extern void sgml_stream_finished (SGMLCTX *context)
         PRSDBG(("Recovering in %s\n", get_state_name (context->state)));
 
 #if UNICODE
-	/* kill current encoding and restart as Unicode11 (UCS2) */
+	/* kill current encoding and restart as Unicode11 (UCS2) - don't record this change anywhere */
 	sgml_set_encoding(context, csUnicode11);
 #endif
 
@@ -225,6 +326,7 @@ extern void sgml_free_context(SGMLCTX *context)
     sgml_free_report(context);
 
 #if UNICODE
+    free_buffer((UBUFFER *)&context->autodetect.inhand);
     if (context->encoding)
 	encoding_delete(context->encoding);
 #endif
