@@ -313,7 +313,6 @@ OBJS = \
  o.SaveSHelp		\
  o.SaveText		\
  o.SetPBoxes		\
- od.svcprint		\
  o.Tables		\
  o.TGutils		\
  o.TokenUtils		\
