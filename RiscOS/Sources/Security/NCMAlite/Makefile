@@ -91,8 +91,8 @@ NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 #
 
 #NCTARGETARCH = ${ETHERNETDB}
-NCTARGETARCH = ${ZIPDB}
-#NCTARGETARCH = ${NODB}
+#NCTARGETARCH = ${ZIPDB}
+NCTARGETARCH = ${NODB}
 
 CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} 
 
@@ -250,6 +250,21 @@ o.vectors:	h.vectors
 o.vectors:	h.module
 o.vectors:	C:h.DBUG
 o.vectors:	C:h.scinter
+o.ncma_cmds:	c.ncma_cmds
+o.ncma_cmds:	C:h.kernel
+o.ncma_cmds:	C:h.swis
+o.ncma_cmds:	h.ncma_cmds
+o.ncma_cmds:	h.ncma_ncma
+o.ncma_cmds:	h.ncma_utils
+o.ncma_cmds:	h.ncma_url
+o.ncma_cmds:	h.ncma_scard
+o.ncma_cmds:	h.ncma_cache
+o.ncma_cmds:	h.ncma_dial
+o.ncma_cmds:	h.machine
+o.ncma_cmds:	h.vectors
+o.ncma_cmds:	h.kprintf
+o.ncma_cmds:	h.dynalloc
+o.ncma_cmds:	C:h.DBUG
 o.ncma_swis:	c.ncma_swis
 o.ncma_swis:	C:h.kernel
 o.ncma_swis:	C:h.swis
@@ -278,56 +293,6 @@ o.ncma_ncma:	C:h.kernel
 o.ncma_ncma:	C:h.swis
 o.ncma_ncma:	h.machine
 o.ncma_ncma:	h.vectors
-o.ncma_url:	c.ncma_url
-o.ncma_url:	C:h.kernel
-o.ncma_url:	C:h.swis
-o.ncma_url:	h.ncma_ncma
-o.ncma_url:	h.ncma_url
-o.ncma_url:	h.ncma_scard
-o.ncma_url:	h.ncma_cache
-o.ncma_url:	h.ncma_tags
-o.ncma_url:	h.ncma_bootb
-o.ncma_url:	h.ncma_uid
-o.ncma_url:	h.ncma_net
-o.ncma_url:	h.smcard
-o.ncma_url:	h.dynalloc
-o.ncma_url:	C:h.DBUG
-o.ncma_dial:	c.ncma_dial
-o.ncma_dial:	C:h.kernel
-o.ncma_dial:	C:h.swis
-o.ncma_dial:	h.machine
-o.ncma_dial:	h.vectors
-o.ncma_dial:	h.ncma_dial
-o.ncma_dial:	C:h.DBUG
-o.kprintf:	c.kprintf
-o.kprintf:	C:h.kernel
-o.kprintf:	C:h.swis
-o.kprintf:	h.kprintf
-o.ncma_uid:	c.ncma_uid
-o.ncma_uid:	C:h.kernel
-o.ncma_uid:	C:h.swis
-o.ncma_uid:	h.smcard
-o.ncma_uid:	h.ncma_uid
-o.ncma_uid:	C:h.DBUG
-o.ncma_fx:	c.ncma_fx
-o.ncma_fx:	C:h.kernel
-o.ncma_fx:	C:h.swis
-o.ncma_fx:	h.ncma_fx
-o.ncma_cmds:	c.ncma_cmds
-o.ncma_cmds:	C:h.kernel
-o.ncma_cmds:	C:h.swis
-o.ncma_cmds:	h.ncma_cmds
-o.ncma_cmds:	h.ncma_ncma
-o.ncma_cmds:	h.ncma_utils
-o.ncma_cmds:	h.ncma_url
-o.ncma_cmds:	h.ncma_scard
-o.ncma_cmds:	h.ncma_cache
-o.ncma_cmds:	h.ncma_dial
-o.ncma_cmds:	h.machine
-o.ncma_cmds:	h.vectors
-o.ncma_cmds:	h.kprintf
-o.ncma_cmds:	h.dynalloc
-o.ncma_cmds:	C:h.DBUG
 o.machine:	c.machine
 o.machine:	C:h.kernel
 o.machine:	C:h.swis
@@ -344,6 +309,20 @@ o.machine:	h.ncma_net
 o.machine:	h.ncma_fx
 o.machine:	h.vectors
 o.machine:	C:h.DBUG
+o.ncma_url:	c.ncma_url
+o.ncma_url:	C:h.kernel
+o.ncma_url:	C:h.swis
+o.ncma_url:	h.ncma_ncma
+o.ncma_url:	h.ncma_url
+o.ncma_url:	h.ncma_scard
+o.ncma_url:	h.ncma_cache
+o.ncma_url:	h.ncma_tags
+o.ncma_url:	h.ncma_bootb
+o.ncma_url:	h.ncma_uid
+o.ncma_url:	h.ncma_net
+o.ncma_url:	h.smcard
+o.ncma_url:	h.dynalloc
+o.ncma_url:	C:h.DBUG
 o.ncma_scard:	c.ncma_scard
 o.ncma_scard:	C:h.kernel
 o.ncma_scard:	C:h.swis
@@ -369,6 +348,17 @@ o.ncma_utils:	h.ncma_bootb
 o.ncma_utils:	h.ncma_url
 o.ncma_utils:	h.smcard
 o.ncma_utils:	C:h.DBUG
+o.ncma_dial:	c.ncma_dial
+o.ncma_dial:	C:h.kernel
+o.ncma_dial:	C:h.swis
+o.ncma_dial:	h.machine
+o.ncma_dial:	h.vectors
+o.ncma_dial:	h.ncma_dial
+o.ncma_dial:	C:h.DBUG
+o.kprintf:	c.kprintf
+o.kprintf:	C:h.kernel
+o.kprintf:	C:h.swis
+o.kprintf:	h.kprintf
 o.ncma_bootb:	c.ncma_bootb
 o.ncma_bootb:	C:h.kernel
 o.ncma_bootb:	C:h.swis
@@ -396,6 +386,12 @@ o.ncma_cache:	h.ncma_tags
 o.ncma_cache:	h.ncma_bootb
 o.ncma_cache:	h.kprintf
 o.ncma_cache:	C:h.DBUG
+o.ncma_uid:	c.ncma_uid
+o.ncma_uid:	C:h.kernel
+o.ncma_uid:	C:h.swis
+o.ncma_uid:	h.smcard
+o.ncma_uid:	h.ncma_uid
+o.ncma_uid:	C:h.DBUG
 o.ncma_net:	c.ncma_net
 o.ncma_net:	C:h.kernel
 o.ncma_net:	C:h.swis
@@ -409,3 +405,7 @@ o.ncma_net:	h.ncma_bootb
 o.ncma_net:	h.ncma_url
 o.ncma_net:	h.smcard
 o.ncma_net:	C:h.DBUG
+o.ncma_fx:	c.ncma_fx
+o.ncma_fx:	C:h.kernel
+o.ncma_fx:	C:h.swis
+o.ncma_fx:	h.ncma_fx
