@@ -8,6 +8,8 @@ INSTAPP      = ${INSTDIR}.!${COMPONENT}
 LOCALRES     = Resources.${UserIF}.${Locale}
 TRANSRES     = Translate.${UserIF}.${Locale}
 TRANSMAP     = ${TRANSRES}.Mappings
+NOP          = |
+CP2FLAGS     = F~R~C~V~N
 
 CHMODFLAGS   = -R 0755
 TRANSFLAGS   = ${THROWBACK} -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë"
@@ -17,32 +19,81 @@ include Makefiles:StdTools
 clean:
 	@echo Component ${COMPONENT} cleaned.
 
-install: translate dirs
-	${CP} ${LOCALRES}.Applet     ${INSTAPP}            ${CPFLAGS}
-	${CP} ${LOCALRES}.Choices    ${INSTAPP}.Choices    ${CPFLAGS}
-	${CP} ${LOCALRES}.Desktop    ${INSTAPP}.Desktop    ${CPFLAGS}
-	${CP} ${LOCALRES}.Library    ${INSTAPP}.Library    ${CPFLAGS}
-	${CP} ${LOCALRES}.PreDesktop ${INSTAPP}.PreDesktop ${CPFLAGS}
-	${CP} ${LOCALRES}.Utilities  ${INSTAPP}.Utilities  ${CPFLAGS}
+install: install_${TYPE} translate_${TYPE} dirs_${TYPE}
 	${CHMOD} ${CHMODFLAGS} ${INSTAPP}
-	@echo Locale ${COMPONENT} installed (disc).
+	@echo Component ${COMPONENT} installed (disc).
 
-dirs:
+install_Core:
+	${CP} ${LOCALRES}.Applet     ${INSTAPP}            ${CPFLAGS}
+	${CP} ${LOCALRES}.Choices    ${INSTAPP}.Choices    ${CP2FLAGS}
+	${CP} ${LOCALRES}.Desktop    ${INSTAPP}.Desktop    ${CP2FLAGS}
+	${CP} ${LOCALRES}.Library    ${INSTAPP}.Library    ${CPFLAGS}
+	${CP} ${LOCALRES}.PreDesktop ${INSTAPP}.PreDesktop ${CP2FLAGS}
+	${CP} ${LOCALRES}.Utilities  ${INSTAPP}.Utilities  ${CPFLAGS}
+
+install_STB3:
+	${CP} ${LOCALRES}.PreDesktop.300      ${INSTAPP}.PreDesktop.300 ${CPFLAGS}
+
+install_STB4:
+	${CP} ${LOCALRES}.PreDesktop.400      ${INSTAPP}.PreDesktop.400 ${CPFLAGS}
+
+install_Teletext:
+	${CP} ${LOCALRES}.PreDesktop.Teletext ${INSTAPP}.PreDesktop.400 ${CPFLAGS}
+
+install_USB:
+	${CP} ${LOCALRES}.PreDesktop.USB      ${INSTAPP}.PreDesktop.400 ${CPFLAGS}
+
+install_RCMM:
+	${CP} ${LOCALRES}.Choices.RCMM        ${INSTAPP}.Choices        ${CPFLAGS}
+	${CP} ${LOCALRES}.PreDesktop.RCMM     ${INSTAPP}.PreDesktop.400 ${CPFLAGS}
+
+dirs_Core:
 	${MKDIR} ${INSTAPP}.Choices
-	${MKDIR} ${INSTAPP}.Desktop.300
-	${MKDIR} ${INSTAPP}.Desktop.400
+	${MKDIR} ${INSTAPP}.Desktop
 	${MKDIR} ${INSTAPP}.Library
-	${MKDIR} ${INSTAPP}.PreDesktop.300
-	${MKDIR} ${INSTAPP}.PreDesktop.400
+	${MKDIR} ${INSTAPP}.PreDesktop
 	${MKDIR} ${INSTAPP}.Resources
-	${MKDIR} ${INSTAPP}.Resources.300.Misc
-	${MKDIR} ${INSTAPP}.Resources.400.Misc
 	${MKDIR} ${INSTAPP}.Utilities
 
-translate:
+dirs_STB3:
+	${MKDIR} ${INSTAPP}.Desktop.300
+	${MKDIR} ${INSTAPP}.PreDesktop.300
+	${MKDIR} ${INSTAPP}.Resources.300.Misc
+
+dirs_STB4:
+	${MKDIR} ${INSTAPP}.Desktop.400
+	${MKDIR} ${INSTAPP}.PreDesktop.400
+	${MKDIR} ${INSTAPP}.Resources.400.Misc
+
+dirs_Teletext:
+	${MKDIR} ${INSTAPP}.PreDesktop.400
+
+dirs_USB:
+	${MKDIR} ${INSTAPP}.PreDesktop.400
+
+dirs_RCMM:
+	${MKDIR} ${INSTAPP}.Choices
+	${MKDIR} ${INSTAPP}.PreDesktop.400
+
+translate_Core:
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Applet.!Run          -o ${INSTAPP}.!Run
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Desktop.NCFresco     -o ${INSTAPP}.Desktop.NCFresco
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Utilities.Desktop    -o ${INSTAPP}.Utilities.Desktop
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Utilities.PreDesktop -o ${INSTAPP}.Utilities.PreDesktop
+
+translate_STB3:
+	${NOP}
+
+translate_STB4:
+	${NOP}
+
+translate_Teletext:
+	${NOP}
+
+translate_USB:
+	${NOP}
+
+translate_RCMM:
+	${NOP}
 
 # Dynamic dependencies:
