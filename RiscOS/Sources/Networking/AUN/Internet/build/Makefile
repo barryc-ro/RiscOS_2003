@@ -127,6 +127,7 @@ all: ${TARGET}
 ${TARGET}: ${OBJS} ${CLIB}
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         ${MODSQZ} $@
+        Access $@ WR/r
 
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
