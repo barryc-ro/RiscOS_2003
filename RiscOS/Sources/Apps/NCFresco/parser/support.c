@@ -1285,17 +1285,58 @@ extern void push_inhand(SGMLCTX *context)
     s.ptr = context->inhand.data;
     s.bytes = context->inhand.ix;
 
-    if (context->strip_initial_newline && s.bytes > 0 && (s.ptr[0] == '\n' || s.ptr[0] == '\r'))
+    PRSDBG(("push_inhand: bytes %d (%02x) strip initial nl %d cr %d\n", s.bytes, s.ptr[0], context->strip_initial_nl, context->strip_initial_cr));
+    
+    while ((context->strip_initial_nl || context->strip_initial_cr) && s.bytes > 0)
     {
-	s.ptr++;
-	s.bytes--;
-    }
+	if (context->strip_initial_nl && s.ptr[0] == '\n')
+	{
+	    PRSDBG(("push_inhand: strip initial nl\n"));
 
-    if (context->strip_final_newline && s.bytes > 0 && (s.ptr[s.bytes-1] == '\n' || s.ptr[s.bytes-1] == '\r'))
+	    context->strip_initial_nl = 0;
+	    s.ptr++;
+	    s.bytes--;
+	}
+	else if (context->strip_initial_cr && s.ptr[0] == '\r')
+	{
+	    PRSDBG(("push_inhand: strip initial cr\n"));
+
+	    context->strip_initial_cr = 0;
+	    s.ptr++;
+	    s.bytes--;
+	}
+	else
+	{
+	    context->strip_initial_nl = 0;
+	    context->strip_initial_cr = 0;
+	}
+    }
+#if 0    
+    while ((context->strip_final_nl || context->strip_final_cr) && s.bytes > 0)
     {
-	s.bytes--;
-    }
+	if (context->strip_final_nl && s.ptr[0] == '\n')
+	{
+	    PRSDBG(("push_inhand: strip final nl\n"));
 
+	    context->strip_final_nl = 0;
+	    s.ptr++;
+	    s.bytes--;
+	}
+	else if (context->strip_final_cr && s.ptr[0] == '\r')
+	{
+	    PRSDBG(("push_inhand: strip final cr\n"));
+
+	    context->strip_final_cr = 0;
+	    s.ptr++;
+	    s.bytes--;
+	}
+	else
+	{
+	    context->strip_final_nl = 0;
+	    context->strip_final_cr = 0;
+	}
+    }
+#endif
     /* chopper doesn't free strings itself */
     /* Avoid empty strings when might not be appropriate */
     /* to flush chopper state */
@@ -1309,6 +1350,12 @@ extern void push_bar_last_inhand(SGMLCTX *context)
 {
     ASSERT(context->magic == SGML_MAGIC);
 
+    PRSDBG(("push_bar_last_inhand: bytes %d strip initial nl %d cr %d\n", context->inhand.ix, context->strip_initial_nl, context->strip_initial_cr));
+
+    context->strip_initial_nl = context->strip_initial_cr = 0;
+#if 0
+    context->strip_final_nl = context->strip_final_cr = 0;
+#endif
     if (context->inhand.ix > 1)
     {
 	STRING s;

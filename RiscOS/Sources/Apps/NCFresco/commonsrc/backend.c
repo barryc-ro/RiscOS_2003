@@ -822,7 +822,7 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	    case rid_it_PASSWD:
 		f |= be_item_info_INPUT;
 		/* Nasty NCFresco stuff. Set bit if the input doesn't require a keyboard */
-		if ((ii->flags & (rid_if_NUMBERS|rid_if_PABX)) == rid_if_NUMBERS)
+		if ((ii->flags & (rid_if_NUMBERS|rid_if_PBX)) == rid_if_NUMBERS)
 		    f |= be_item_info_NUMBERS;
 		break;
 	    case rid_it_IMAGE:

@@ -868,7 +868,6 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     rid_textarea_item *tai;
 #if NEW_TEXTAREA
     int dpoint, dchar;
-    int ocy;
     int changed_from;
 #else
     rid_textarea_line *tal;
@@ -895,7 +894,6 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
     osx = tai->sx;
     osy = tai->sy;
-/*  ocy = tai->cy; */
 
     flags |= CHAR_USED;
 

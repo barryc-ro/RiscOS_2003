@@ -1230,7 +1230,8 @@ extern void do_got_element(SGMLCTX *context)
     {
 	parse_then_perform_element_open(context);
 
-	context->strip_initial_newline = 1;
+	PRSDBG(("do_got_element: set strip initial new line, mode=%d\n", context->tos->matching_mode));
+	context->strip_initial_nl = context->strip_initial_cr = 1;
     }
 
     clear_inhand(context);

@@ -149,6 +149,7 @@ char *suffix_or_mime_to_type_name(const char *suffix, const char *mime)
 {
     char *name = NULL;
     suffix_or_mime_to_file_type(suffix, mime, &name);
+    return name;
 }
 
 int suffix_to_file_type(const char *suffix)

@@ -180,6 +180,23 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
     return scrolled;
 }
 
+BOOL fe_view_scroll_possible(fe_view v, int dx, int dy)
+{
+    wimp_wstate state;
+    wimp_openstr *o;
+    wimp_get_wind_state(v->w, &state);
+    o = &state.o;
+    if (dx < 0)
+	return o->x > -v->margin.x0;
+    if (dx > 0)
+	return o->x < v->doc_width + (o->box.x1 - o->box.x0) - v->margin.x1;
+    if (dy < 0)
+	return o->y > v->doc_height + (o->box.y1 - o->box.y0) - v->margin.y0;
+    if (dy > 0)
+	return o->y < -v->margin.y1;
+    return FALSE;
+}
+
 #if 0
 static void draw_view_outline(wimp_w w)
 {
@@ -198,6 +215,8 @@ static void draw_view_outline(wimp_w w)
 #endif
 
 /* ----------------------------------------------------------------------------*/
+
+
 
 int fe_view_scroll_x(fe_view v, int val, int flags)
 {

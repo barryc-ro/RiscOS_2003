@@ -65,7 +65,6 @@ extern int fe_print_possible(fe_view v);
 
 extern os_error *fe_print(fe_view v, int size);
 
-extern os_error *fe_print_options_open(fe_view v);
 extern const char *fe_printer_name(void);
 
 extern int fe_abort_fetch_possible(fe_view v);
@@ -83,10 +82,6 @@ extern void fe_find_again(fe_view v);
 extern os_error *fe_hotlist_add(fe_view v);
 extern int fe_hotlist_add_possible(fe_view v);
 extern os_error *fe_hotlist_remove(fe_view v);
-
-extern os_error *fe_hotlist_open(fe_view v);
-extern os_error *fe_hotlist_and_url_open(fe_view v);
-extern os_error *fe_url_open(fe_view v);
 
 extern os_error *fe_status_toggle(fe_view v);
 extern void fe_status_clear_fetch_only(void);
@@ -106,9 +101,6 @@ extern void fe_show_mem_dump(void);
 
 extern os_error *fe_open_version(fe_view v);
 extern void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle);
-
-
-extern os_error *fe_display_options_open(fe_view v);
 
 extern void fe_event_process(void);
 
@@ -168,13 +160,15 @@ extern fe_passwd fe_current_passwd;
 
 extern BOOL fe_passwd_abort(void);
 extern void fe_internal_deleting_view(fe_view v);
-extern os_error *fe_internal_toggle_panel(const char *panel_name);
-extern os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args);
+extern os_error *fe_internal_toggle_panel(const char *panel_name, int clear);
+extern os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args, int clear);
 extern void fe_internal_flush(void);
 extern void fe_internal_optimise(void);
+extern os_error *fe_internal_open_page(fe_view v, const char *page_name, int clear);
 
 typedef void (*write_list_fn)(FILE *f, void *handle);
 extern void fe_internal_write_page(FILE *f, const char *base_tag, int initial, int frame, write_list_fn write_list, void *handle);
+extern BOOL fe_internal_check_popups(BOOL clear);
 
 /* from stbredraw.c*/
 
@@ -183,12 +177,14 @@ extern void fe_internal_write_page(FILE *f, const char *base_tag, int initial, i
 
 extern int fe_view_scroll_x(fe_view v, int val, int flags);
 extern int fe_view_scroll_y(fe_view v, int val, int flags);
+extern BOOL fe_view_scroll_possible(fe_view v, int dx, int dy);
 
 extern int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y);
 
 /* from stbevents.c*/
 
 extern void fevent_handler(int event, fe_view v);
+extern BOOL fevent_possible(int event, fe_view v);
 
 /* from stbmap.c*/
 
@@ -220,9 +216,6 @@ extern void ncreg_decode(void);
 extern char *ncreg_enquiry(const char *tag);
 
 /* from stbopen.c */
-
-extern os_error *fe_search_page(fe_view v);
-extern os_error *fe_offline_page(fe_view v);
 
 /* From stblinks.c */
 

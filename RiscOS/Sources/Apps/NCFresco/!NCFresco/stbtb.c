@@ -76,6 +76,9 @@ typedef struct tb_bar_descriptor tb_bar_descriptor;
 typedef struct tb_bar_info tb_bar_info;
 typedef struct tb_button_info tb_button_info;
 
+#define tb_bar_CAN_GREY		0x01
+#define tb_bar_MOVE_OFF_ACTIVE	0x02
+
 /* This describes the bars available */
 
 struct tb_bar_descriptor
@@ -94,7 +97,7 @@ struct tb_bar_descriptor
     int return_bar;		/*  -1 means stack */
     int return_component;
 
-    int can_grey;
+    int flags;
 
     char *name;
 };
@@ -594,7 +597,7 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
     int active = get_active(tbi);
 
     /* if there is an active highlight then can only move off it - unless on the codec toolbar */
-    if (active != -1 && active != highlight && tbi->type != bar_type_CODEC)
+    if ((find_bar_from_number(tbi->num)->flags & tb_bar_MOVE_OFF_ACTIVE) != 0 && active != -1 && active != highlight)
 	return FALSE;
     
     /* get the position of the item we are moving off */
@@ -771,7 +774,7 @@ typedef struct
     int return_component;
 
     /* optional */
-    int can_grey;
+    int flags;
 
 } config_toolbar_info;
 
@@ -800,7 +803,7 @@ void tb_bar_add(const void *info)
     tbd->return_component = ti->return_component;
 
     if (ti->count > 8)
-	tbd->can_grey = ti->can_grey;
+	tbd->flags = ti->flags;
 
     /* add to head of list */
     tbd->next = bar_descriptor_list;
@@ -1568,8 +1571,18 @@ void tb_menu_refresh(fe_view v)
 
 void tb_status_update_fades(fe_view v)
 {
-    if (v && bar_list && find_bar_from_number(bar_list->num)->can_grey)
+    tb_bar_info *tbi = bar_list;
+    if (v && tbi && (find_bar_from_number(tbi->num)->flags & tb_bar_CAN_GREY))
     {
+#if 1
+	int i;
+	int obj = tbi->object_handle;
+	for (i = 0; i < tbi->n_buttons; i++)
+	{
+	    int cmp = tbi->buttons[i].cmp;
+	    gfade(obj, cmp, !fevent_possible(cmp, v));
+	}
+#else
 	int obj = bar_list->object_handle;
 	gfade(obj, fevent_HISTORY_BACK, !fe_history_possible(v, history_PREV));
 	gfade(obj, fevent_HISTORY_FORWARD, !fe_history_possible(v, history_NEXT));
@@ -1579,6 +1592,7 @@ void tb_status_update_fades(fe_view v)
 	gfade(obj, fevent_STOP_LOADING, !fe_abort_fetch_possible(v));
 
 	gfade(obj, fevent_TOOLBAR_EXIT, !fe_status_unstack_possible(v));
+#endif
     }
 }
 

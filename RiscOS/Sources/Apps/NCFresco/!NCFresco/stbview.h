@@ -169,6 +169,8 @@ struct _frontend_view
 
     char *onload, *onunload,	/* ncfrescointernal functions to be called after loading and unloading */
 	*onblur;
+
+    char *submitonunload;
 };
 
 /* ----------------------------------------------------------------------------- */

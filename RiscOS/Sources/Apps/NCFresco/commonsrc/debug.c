@@ -6,6 +6,10 @@
 #include <string.h>
 #include "debug.h"
 
+#ifdef REMOTE_DEBUG
+#include "debug/remote.h"
+#endif
+
 /* ----------------------------------------------------------------------------- */
 
 #if DEBUG

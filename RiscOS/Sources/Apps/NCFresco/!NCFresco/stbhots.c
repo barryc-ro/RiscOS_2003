@@ -542,7 +542,7 @@ static void hotlist__write_list(FILE *fout, BOOL del)
 	if (del)
  	    fprintf(fout, msgs_lookup("favsd.I"), i, i, ttl, i, i, item->flags & hotlist_DELETE_PENDING ? "CHECKED" : "");
 	else
- 	    fprintf(fout, msgs_lookup("favs.I"), i, ttl);
+ 	    fprintf(fout, msgs_lookup("favs.I"), i, i, ttl);
     }
 }
 

@@ -33,8 +33,6 @@ extern void state_stuck_text(SGMLCTX *context, char input)
 
 	(*context->chopper) (context, s); /* Flush */
     }
-
-    context->strip_initial_newline = 0;
 }
 
 extern void state_end_found_element (SGMLCTX *context, char input)
@@ -650,8 +648,6 @@ extern void state_end_tag_only (SGMLCTX *context, char input)
 #endif
 	else
 	{ push_inhand (context); }
-
-	context->strip_initial_newline = 0;
 }
 
 extern void state_markup_only (SGMLCTX *context, char input)
@@ -681,7 +677,6 @@ extern void state_markup_only (SGMLCTX *context, char input)
                 );
 		clear_inhand (context) ;
 	}
-	context->strip_initial_newline = 0;
 }
 
 extern void state_all_tags (SGMLCTX *context, char input)
@@ -698,8 +693,6 @@ extern void state_all_tags (SGMLCTX *context, char input)
 	}
 	else
 	{ push_inhand (context); }
-
-	context->strip_initial_newline = 0;
 }
 
 

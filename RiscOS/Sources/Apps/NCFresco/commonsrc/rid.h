@@ -360,7 +360,7 @@ typedef int rid_input_flags;
 #define rid_if_NOCURSOR	0x10		/* with IMAGE, don't need x,y coords */
 #define rid_if_NOPOPUP	0x20		/* with SELECT, don't popup menu */
 #define rid_if_NUMBERS	0x40		/* with TEXT, PASSWORD, only allow numbers */
-#define rid_if_PABX	0x80		/* with TEXT, PASSWORD, only allow numbers and '#,*' */
+#define rid_if_PBX	0x80		/* with TEXT, PASSWORD, only allow numbers and '#,*' */
 
 typedef int rid_image_flags;
 #define rid_image_flag_ISMAP    0x01

@@ -384,8 +384,10 @@ struct SGMLCTX
 	applying_rules:1,
 	threaded:1,		/* inside the 'data' function */
 	pending_close:1,	/* close called whilst threaded */
-	strip_initial_newline:1,/* strip newline immediately after start tag */
-	strip_final_newline:1,	/* strip newline immediately before end tag  */
+	strip_initial_nl:1,	/* strip newline immediately after start tag */
+	strip_initial_cr:1,	/* strip cr immediately after start tag */
+	strip_final_nl:1,	/* strip newline immediately before end tag  */
+	strip_final_cr:1,	/* strip cr immediately before end tag  */
 	:0;			/* placeholder */
     
     /* Context operating within */

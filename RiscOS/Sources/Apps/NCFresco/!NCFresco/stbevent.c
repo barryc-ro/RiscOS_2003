@@ -29,45 +29,45 @@
 
 static void global_event_handler(int event)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
-        case fevent_GLOBAL_TOGGLE_ANTI_TWITTER:
-            toggle_anti_twitter();
-            fe_refresh_screen(NULL);
-            break;
+    case fevent_GLOBAL_TOGGLE_ANTI_TWITTER:
+	toggle_anti_twitter();
+	fe_refresh_screen(NULL);
+	break;
 
-        case fevent_GLOBAL_QUIT:
-            fe_message(msgs_lookup("goodbye:"));
-            exit(0);
-            break;
+    case fevent_GLOBAL_QUIT:
+	fe_message(msgs_lookup("goodbye:"));
+	exit(0);
+	break;
 
-        case fevent_GLOBAL_SHOW_HELP:
-	    sound_event(snd_HELP_SHOW);
-	    frontend_complain(fe_show_file_in_frame(main_view, config_help_file, TARGET_HELP));
-            break;
+    case fevent_GLOBAL_SHOW_HELP:
+	sound_event(snd_HELP_SHOW);
+	frontend_complain(fe_show_file_in_frame(main_view, config_help_file, TARGET_HELP));
+	break;
 
-        case fevent_GLOBAL_SHOW_VERSION:
-            frontend_complain(fe_open_version(main_view));
-            break;
+    case fevent_GLOBAL_SHOW_VERSION:
+	frontend_complain(fe_open_version(main_view));
+	break;
 
-        case fevent_GLOBAL_OPEN_URL:
-            tb_open_url();
-            break;
+    case fevent_GLOBAL_OPEN_URL:
+	tb_open_url();
+	break;
 
-        case fevent_GLOBAL_RESIZE_ABORT:
-            fe_resize_abort();
-            break;
+    case fevent_GLOBAL_RESIZE_ABORT:
+	fe_resize_abort();
+	break;
 
-        case fevent_GLOBAL_TOGGLE_COOLING:
+    case fevent_GLOBAL_TOGGLE_COOLING:
 #ifdef IMAGE_COOLING
-            image_toggle_cooling();
+	image_toggle_cooling();
 #endif
-            image_palette_change();
-            fe_refresh_screen(NULL);
-            break;
+	image_palette_change();
+	fe_refresh_screen(NULL);
+	break;
 
     case fevent_GLOBAL_OPEN_MEM_DUMP:
-	fe_show_mem_dump();
+	fe_internal_toggle_panel("memdump", event & fevent_CLEAR_POPUPS);
 	break;
 
     case fevent_GLOBAL_CYCLE_JPEG:
@@ -85,7 +85,6 @@ static void global_event_handler(int event)
     case fevent_GLOBAL_DEICONISE:
 	fe_iconise(FALSE);
 	break;
-
 
     case fevent_GLOBAL_FONT_INC:
 	fe_font_size_set(+1, FALSE);
@@ -108,7 +107,7 @@ extern void parse_frames(int state);
 
 static void toggle_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
         case fevent_TOGGLE_FRAMES:
             parse_frames(-1);
@@ -135,68 +134,80 @@ static void toggle_event_handler(int event, fe_view v)
 
 static void history_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
-        case fevent_HISTORY_SHOW:
-            frontend_complain(fe_history_show(v));
-            break;
+    case fevent_HISTORY_SHOW:
+	frontend_complain(fe_internal_toggle_panel("historycombined", event & fevent_CLEAR_POPUPS));
+	break;
 
-        case fevent_HISTORY_BACK:
+    case fevent_HISTORY_BACK:
+	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	{
 	    sound_event(snd_HISTORY_BACK);
-            frontend_complain(fe_history_move(v, history_PREV));
-            break;
+	    frontend_complain(fe_history_move(v, history_PREV));
+	}
+	break;
 
-        case fevent_HISTORY_BACK_ALL:
+    case fevent_HISTORY_BACK_ALL:
+	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	{
 	    sound_event(snd_HISTORY_BACK);
-            frontend_complain(fe_history_move(v, history_FIRST));
-            break;
+	    frontend_complain(fe_history_move(v, history_FIRST));
+	}
+	break;
 
-        case fevent_HISTORY_FORWARD:
+    case fevent_HISTORY_FORWARD:
+	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	{
 	    sound_event(snd_HISTORY_FORWARD);
-            frontend_complain(fe_history_move(v, history_NEXT));
-            break;
+	    frontend_complain(fe_history_move(v, history_NEXT));
+	}
+	break;
 
-        case fevent_HISTORY_FORWARD_ALL:
+    case fevent_HISTORY_FORWARD_ALL:
+	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	{
 	    sound_event(snd_HISTORY_FORWARD);
-            frontend_complain(fe_history_move(v, history_LAST));
-            break;
+	    frontend_complain(fe_history_move(v, history_LAST));
+	}
+	break;
 
     case fevent_HISTORY_SHOW_ALPHA:
-	frontend_complain(fe_internal_toggle_panel("historyalpha"));
+	frontend_complain(fe_internal_toggle_panel("historyalpha", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HISTORY_SHOW_RECENT:
-	frontend_complain(fe_internal_toggle_panel("historyrecent"));
+	frontend_complain(fe_internal_toggle_panel("historyrecent", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HISTORY_SHOW_SWITCHABLE:
-	frontend_complain(fe_internal_toggle_panel("historyswitch"));
+	frontend_complain(fe_internal_toggle_panel("historyswitch", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HISTORY_SHOW_ALPHA_FRAMES:
-	frontend_complain(fe_internal_toggle_panel_args("historyalpha", "frame=0"));
+	frontend_complain(fe_internal_toggle_panel_args("historyalpha", "frame=0", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HISTORY_SHOW_RECENT_FRAMES:
-	frontend_complain(fe_internal_toggle_panel_args("historyrecent", "frame=0"));
+	frontend_complain(fe_internal_toggle_panel_args("historyrecent", "frame=0", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HISTORY_SHOW_SWITCHABLE_FRAMES:
-	frontend_complain(fe_internal_toggle_panel_args("historyswitch", "frame=0"));
+	frontend_complain(fe_internal_toggle_panel_args("historyswitch", "frame=0", event & fevent_CLEAR_POPUPS));
 	break;
     }
 }
 
 static void hotlist_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
     case fevent_HOTLIST_SHOW:
-	frontend_complain(fe_hotlist_open(v));
+	frontend_complain(fe_internal_toggle_panel("favs", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HOTLIST_SHOW_WITH_URL:
-	frontend_complain(fe_hotlist_and_url_open(v));
+	frontend_complain(fe_internal_toggle_panel("urlfavs", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HOTLIST_ADD:
@@ -214,7 +225,7 @@ static void hotlist_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HOTLIST_SHOW_DELETE:
-	frontend_complain(fe_internal_toggle_panel("favsdelete"));
+	frontend_complain(fe_internal_toggle_panel("favsdelete", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HOTLIST_FLUSH_DELETE:
@@ -222,19 +233,19 @@ static void hotlist_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HOTLIST_SHOW_SWITCHABLE:
-	frontend_complain(fe_internal_toggle_panel("favswitch"));
+	frontend_complain(fe_internal_toggle_panel("favswitch", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HOTLIST_SHOW_FRAMES:
-	frontend_complain(fe_internal_toggle_panel_args("favs", "frame=0"));
+	frontend_complain(fe_internal_toggle_panel_args("favs", "frame=0", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HOTLIST_SHOW_DELETE_FRAMES:
-	frontend_complain(fe_internal_toggle_panel_args("favsdelete", "frame=0"));
+	frontend_complain(fe_internal_toggle_panel_args("favsdelete", "frame=0", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_HOTLIST_SHOW_SWITCHABLE_FRAMES:
-	frontend_complain(fe_internal_toggle_panel_args("favswitch", "frame=0"));
+	frontend_complain(fe_internal_toggle_panel_args("favswitch", "frame=0", event & fevent_CLEAR_POPUPS));
 	break;
 
     }
@@ -242,80 +253,71 @@ static void hotlist_event_handler(int event, fe_view v)
 
 static void misc_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
-        case fevent_RELOAD:
-            frontend_complain(fe_reload(v));
-            break;
+    case fevent_RELOAD:
+	frontend_complain(fe_reload(v));
+	break;
 
-        case fevent_STOP_LOADING:
-            frontend_complain(fe_abort_fetch(v));
-            break;
+    case fevent_STOP_LOADING:
+	frontend_complain(fe_abort_fetch(v));
+	break;
 
-        case fevent_HOME:
-	    if (!fe_locate_view("__url") && !on_screen_kbd)
-		frontend_complain(fe_home(v));
-	    else
-		sound_event(snd_WARN_BAD_KEY);
-            break;
+    case fevent_HOME:
+	frontend_complain(fe_internal_open_page(v, "home", event & fevent_CLEAR_POPUPS));
+	break;
 
-        case fevent_PRINT:
-            frontend_complain(fe_print(v, fe_print_DEFAULT));
-            break;
+    case fevent_PRINT:
+	frontend_complain(fe_print(v, fe_print_DEFAULT));
+	break;
 
-        case fevent_CLOSE:
-            if (v->app_return_page)
-            {
-                frontend_complain(frontend_open_url(v->app_return_page, v, NULL, NULL, 0));
-            }
-            else if (v->return_page)
-            {
-                frontend_complain(frontend_open_url(v->return_page, v, NULL, NULL, 0));
-            }
-            else if (config_mode_platform == platform_RISCOS_DESKTOP)
-            {
-                fe_message(msgs_lookup("goodbye:"));
-                exit(0);
-            }
-            break;
+    case fevent_CLOSE:
+	if (v->app_return_page)
+	{
+	    frontend_complain(frontend_open_url(v->app_return_page, v, NULL, NULL, 0));
+	}
+	else if (v->return_page)
+	{
+	    frontend_complain(frontend_open_url(v->return_page, v, NULL, NULL, 0));
+	}
+	else if (config_mode_platform == platform_RISCOS_DESKTOP)
+	{
+	    fe_message(msgs_lookup("goodbye:"));
+	    exit(0);
+	}
+	break;
 
-        case fevent_MENU:
-            tb_menu_show(v, 0);
-            break;
+    case fevent_MENU:
+	tb_menu_show(v, 0);
+	break;
 
-        case fevent_FIND_AGAIN:
-            fe_find_again(v);
-            break;
+    case fevent_FIND_AGAIN:
+	fe_find_again(v);
+	break;
 
-        case fevent_MENU_DEBUG:
-            tb_menu_show(v, 1);
-            break;
+    case fevent_MENU_DEBUG:
+	tb_menu_show(v, 1);
+	break;
 
-        case fevent_DBOX_CANCEL:
-            fe_dbox_cancel();
-            break;
+    case fevent_DBOX_CANCEL:
+	fe_dbox_cancel();
+	break;
 
-       case fevent_OPEN_URL:
-	   /* if the on screen keyboard is open already then don't open the  */
-	   if (on_screen_kbd == 0)
-	       frontend_complain(fe_url_open(v));
-	   else
-	       sound_event(snd_WARN_BAD_KEY);
-	   break;
+    case fevent_OPEN_URL:
+	/* if the on screen keyboard is open already then don't open the url window */
+	frontend_complain(fe_internal_toggle_panel("url", event & fevent_CLEAR_POPUPS));
+	break;
 
     case fevent_SEARCH_PAGE:
-	if (!fe_popup_open() && on_screen_kbd == 0)
-	    frontend_complain(fe_search_page(v));
-	else
-	    sound_event(snd_WARN_BAD_KEY);
+	frontend_complain(fe_internal_open_page(v, "search", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_OFFLINE_PAGE:
 	fe_status_unstack_all();
-	frontend_complain(fe_offline_page(v));
+	frontend_complain(fe_internal_open_page(v, "offline", event & fevent_CLEAR_POPUPS));
 	break;
 
-    case fevent_INFO_PAGE: /* this just opens the info page and not the toolbar */
+    case fevent_INFO_PAGE:
  	frontend_complain(fe_open_version(v));
 	break;
 
@@ -336,12 +338,14 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_STOP_OR_RELOAD:
-	if (fe_popup_open() || on_screen_kbd)
-	    sound_event(snd_WARN_BAD_KEY);
-	else if (fe_abort_fetch_possible(v))
-	    frontend_complain(fe_abort_fetch(v));
-	else
-	    frontend_complain(fe_reload(v));
+	/* do the operation */
+	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	{
+	    if (fe_abort_fetch_possible(v))
+		frontend_complain(fe_abort_fetch(v));
+	    else
+		frontend_complain(fe_reload(v));
+	}
 	break;
 
     case fevent_SOUND_TOGGLE:
@@ -387,7 +391,7 @@ static void misc_event_handler(int event, fe_view v)
 
 static void clipboard_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
         case fevent_COPY_IMAGE:
             fe_copy_image_to_clipboard(v);
@@ -406,7 +410,7 @@ static void clipboard_event_handler(int event, fe_view v)
 
 static void scroll_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
         case fevent_SCROLL_LEFT:
             fe_view_scroll_x(v, -1, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
@@ -455,38 +459,38 @@ static void scroll_event_handler(int event, fe_view v)
 
 static void highlight_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
-        case fevent_HIGHLIGHT_BACK:
-            fe_move_highlight(v, be_link_BACK | be_link_VISIBLE);
-            break;
+    case fevent_HIGHLIGHT_BACK:
+	fe_move_highlight(v, be_link_BACK | be_link_VISIBLE);
+	break;
 
-        case fevent_HIGHLIGHT_FORWARD:
-            fe_move_highlight(v, be_link_VISIBLE);
-            break;
+    case fevent_HIGHLIGHT_FORWARD:
+	fe_move_highlight(v, be_link_VISIBLE);
+	break;
 
-        case fevent_HIGHLIGHT_UP:
-            fe_move_highlight(v, be_link_VERT | be_link_BACK | be_link_VISIBLE);
-            break;
+    case fevent_HIGHLIGHT_UP:
+	fe_move_highlight(v, be_link_VERT | be_link_BACK | be_link_VISIBLE);
+	break;
 
-        case fevent_HIGHLIGHT_DOWN:
-            fe_move_highlight(v, be_link_VERT | be_link_VISIBLE);
-            break;
+    case fevent_HIGHLIGHT_DOWN:
+	fe_move_highlight(v, be_link_VERT | be_link_VISIBLE);
+	break;
 
-        case fevent_HIGHLIGHT_REMOVE:
-            break;
+    case fevent_HIGHLIGHT_REMOVE:
+	break;
 
-        case fevent_HIGHLIGHT_ACTIVATE:
-            frontend_complain(fe_handle_enter(v));
-            break;
+    case fevent_HIGHLIGHT_ACTIVATE:
+	frontend_complain(fe_handle_enter(v));
+	break;
 
-        case fevent_HIGHLIGHT_NEXT_FRAME:
-            fe_move_highlight_frame(v, TRUE);
-            break;
+    case fevent_HIGHLIGHT_NEXT_FRAME:
+	fe_move_highlight_frame(v, TRUE);
+	break;
 
-        case fevent_HIGHLIGHT_PREV_FRAME:
-            fe_move_highlight_frame(v, FALSE);
-            break;
+    case fevent_HIGHLIGHT_PREV_FRAME:
+	fe_move_highlight_frame(v, FALSE);
+	break;
 
     case fevent_HIGHLIGHT_FRAME_UP:
 	fe_move_highlight_frame_direction(v, be_link_VERT | be_link_BACK);
@@ -508,7 +512,7 @@ static void highlight_event_handler(int event, fe_view v)
 
 static void focus_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
         case fevent_GIVE_FOCUS:
             break;
@@ -519,23 +523,23 @@ static void focus_event_handler(int event, fe_view v)
 
 static void open_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
-        case fevent_OPEN_PRINT_OPTIONS:
-            frontend_complain(fe_print_options_open(v));
-            break;
+    case fevent_OPEN_PRINT_OPTIONS:
+	frontend_complain(fe_internal_toggle_panel("printoptions", event & fevent_CLEAR_POPUPS));
+	break;
 
-        case fevent_OPEN_FIND:
-            frontend_complain(fe_find_open(v));
-            break;
+    case fevent_OPEN_FIND:
+	frontend_complain(fe_find_open(v));
+	break;
 
-        case fevent_OPEN_DISPLAY_OPTIONS:
-            frontend_complain(fe_display_options_open(v));
-            break;
+    case fevent_OPEN_DISPLAY_OPTIONS:
+	frontend_complain(fe_internal_toggle_panel("displayoptions", event & fevent_CLEAR_POPUPS));
+	break;
 
-        case fevent_OPEN_KEYBOARD:
-	    fe_keyboard_open(v);
-            break;
+    case fevent_OPEN_KEYBOARD:
+	fe_keyboard_open(v);
+	break;
 
     case fevent_OPEN_RELATED_STUFF:
 	fe_dispose_view(fe_locate_view(TARGET_INFO));
@@ -543,19 +547,19 @@ static void open_event_handler(int event, fe_view v)
 	break;
 
     case fevent_OPEN_FONT_SIZE:
-	frontend_complain(fe_internal_toggle_panel("customfonts"));
+	frontend_complain(fe_internal_toggle_panel("customfonts", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_OPEN_SOUND:
-	frontend_complain(fe_internal_toggle_panel("customsound"));
+	frontend_complain(fe_internal_toggle_panel("customsound", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_OPEN_BEEPS:
-	frontend_complain(fe_internal_toggle_panel("custombeeps"));
+	frontend_complain(fe_internal_toggle_panel("custombeeps", event & fevent_CLEAR_POPUPS));
 	break;
 
     case fevent_OPEN_SCALING:
-	frontend_complain(fe_internal_toggle_panel("customscaling"));
+	frontend_complain(fe_internal_toggle_panel("customscaling", event & fevent_CLEAR_POPUPS));
 	break;
     }
 }
@@ -571,29 +575,20 @@ static void toolbar_event_handler(int event, fe_view v)
     {
 	sound_event(snd_GENERIC_BACK);
 	frontend_complain(fe_status_unstack(v));
+	return;
     }
-#if !DEBUG
-    else if (fe_popup_open() || on_screen_kbd )
-    {
-	sound_event(snd_WARN_BAD_KEY);
-    }
-#endif
-    else
-    {
-	frontend_complain(fe_status_open_toolbar(v, event - fevent_TOOLBAR_MAIN));
 
-#if 0
-	if (event == fevent_TOOLBAR_DETAILS)
-	    fe_open_version(v);
-	else
-#endif
-	    sound_event(soundfx_ACTION_OK);
+    /* open toolbar and make noise */
+    if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+    {
+	frontend_complain(fe_status_open_toolbar(v, (event &~ fevent_CLEAR_POPUPS) - fevent_TOOLBAR_MAIN));
+	sound_event(soundfx_ACTION_OK);
     }
 }
 
 static void frame_link_event_handler(int event, fe_view v)
 {
-    switch (event)
+    switch (event &~ fevent_CLEAR_POPUPS)
     {
     case fevent_FRAME_LINK_LEFT:
 	fe_frame_link_move(v, be_link_BACK);
@@ -708,8 +703,8 @@ void fevent_handler(int event, fe_view v)
 	    encoding_event_handler(event, v);
 	    break;
 	}
-	if (event & fevent_UNSTACK_TOOLBAR)
-	    tb_status_unstack(TRUE);
+/* 	if (event & fevent_UNSTACK_TOOLBAR) */
+/* 	    tb_status_unstack(TRUE); */
 	break;
 
     case fevent_CLASS_MENU:
@@ -724,6 +719,202 @@ void fevent_handler(int event, fe_view v)
 	fe_plugin_event_handler(event, v);
 	break;
     }
+}
+
+BOOL fevent_possible(int event, fe_view v)
+{
+    BOOL possible = TRUE;
+
+    event &= ~fevent_CLEAR_POPUPS;
+    
+    switch (event & fevent_CLASS_MASK)
+    {
+    case fevent_CLASS_GLOBAL:
+	break;
+
+    case fevent_CLASS_WINDOW:
+	event &= ~fevent_WINDOW;
+	v = fe_find_top_nopopup(v);
+	/* fall-through */
+
+    case fevent_CLASS_FRAME:
+	switch (event & fevent_FRAME_CLASS_MASK)
+	{
+	case fevent_FRAME_CLASS_ACTIONS:
+            switch (event & fevent_SUB_CLASS_MASK)
+            {
+	    case fevent_SUB_CLASS_TOGGLE:
+		break;
+
+	    case fevent_SUB_CLASS_HISTORY:
+		switch (event)
+		{
+		case fevent_HISTORY_SHOW:
+		case fevent_HISTORY_SHOW_ALPHA:
+		case fevent_HISTORY_SHOW_RECENT:
+		case fevent_HISTORY_SHOW_SWITCHABLE:
+		case fevent_HISTORY_SHOW_ALPHA_FRAMES:
+		case fevent_HISTORY_SHOW_RECENT_FRAMES:
+		case fevent_HISTORY_SHOW_SWITCHABLE_FRAMES:
+		    break;
+		    
+		case fevent_HISTORY_BACK:
+		    possible = fe_history_possible(v, history_PREV);
+		    break;
+		
+		case fevent_HISTORY_BACK_ALL:
+		    possible = fe_history_possible(v, history_FIRST);
+		    break;
+
+		case fevent_HISTORY_FORWARD:
+		    possible = fe_history_possible(v, history_NEXT);
+		    break;
+
+		case fevent_HISTORY_FORWARD_ALL:
+		    possible = fe_history_possible(v, history_LAST);
+		    break;
+		}
+		break;
+	    
+	    case fevent_SUB_CLASS_HOTLIST:
+		switch (event)
+		{
+		case fevent_HOTLIST_SHOW:
+		case fevent_HOTLIST_SHOW_WITH_URL:
+		case fevent_HOTLIST_REMOVE:
+		case fevent_HOTLIST_WIPE:
+		case fevent_HOTLIST_SHOW_DELETE:
+		case fevent_HOTLIST_FLUSH_DELETE:
+		case fevent_HOTLIST_SHOW_SWITCHABLE:
+		case fevent_HOTLIST_SHOW_FRAMES:
+		case fevent_HOTLIST_SHOW_DELETE_FRAMES:
+		case fevent_HOTLIST_SHOW_SWITCHABLE_FRAMES:
+		    break;
+
+		case fevent_HOTLIST_ADD:
+		    possible = !fe_popup_open() || fe_locate_view(TARGET_INFO); /* can add to hotlist when the info window is open */
+		    break;
+		}
+		break;
+
+	    case fevent_SUB_CLASS_MISC:
+	    case fevent_SUB_CLASS_MISC2:
+		switch (event)
+		{
+		case fevent_RELOAD:
+		    possible = fe_reload_possible(v);
+		    break;
+
+		case fevent_STOP_LOADING:
+		    possible = fe_abort_fetch_possible(v);
+		    break;
+
+		case fevent_PRINT:
+		case fevent_PRINT_LETTER:
+		case fevent_PRINT_LEGAL:
+		    possible = fe_print_possible(v);
+		    break;
+
+		case fevent_HOME:
+		case fevent_OPEN_URL:
+		case fevent_SEARCH_PAGE:
+		case fevent_STOP_OR_RELOAD:
+		    possible = !fe_popup_open() && on_screen_kbd == 0;
+		    break;
+
+		case fevent_CLOSE:
+		case fevent_MENU:
+		case fevent_FIND_AGAIN:
+		case fevent_MENU_DEBUG:
+		case fevent_DBOX_CANCEL:
+		case fevent_INFO_PAGE:
+		case fevent_OFFLINE_PAGE:
+		case fevent_SEND_URL:
+		case fevent_OPEN_WRITEABLE:
+		case fevent_SOUND_TOGGLE:
+		case fevent_SOUND_OFF:
+		case fevent_SOUND_ON:
+		case fevent_BEEPS_TOGGLE:
+		case fevent_BEEPS_OFF:
+		case fevent_BEEPS_ON:
+		case fevent_SCALING_TOGGLE:
+		case fevent_SCALING_OFF:
+		case fevent_SCALING_ON:
+		    break;
+		}
+
+	    case fevent_SUB_CLASS_CLIPBOARD:
+		break;
+
+	    case fevent_SUB_CLASS_SCROLL:
+		switch (event)
+		{
+		case fevent_SCROLL_LEFT:
+		case fevent_SCROLL_PAGE_LEFT:
+		case fevent_SCROLL_FAR_LEFT:
+		    possible = fe_view_scroll_possible(v, -1, 0);
+		    break;
+
+		case fevent_SCROLL_RIGHT:
+		case fevent_SCROLL_PAGE_RIGHT:
+		case fevent_SCROLL_FAR_RIGHT:
+		    possible = fe_view_scroll_possible(v, +1, 0);
+		    break;
+
+		case fevent_SCROLL_UP:
+		case fevent_SCROLL_PAGE_UP:
+		case fevent_SCROLL_TOP:
+		    possible = fe_view_scroll_possible(v, 0, +1);
+		    break;
+
+		case fevent_SCROLL_DOWN:
+		case fevent_SCROLL_PAGE_DOWN:
+		case fevent_SCROLL_BOTTOM:
+		    possible = fe_view_scroll_possible(v, 0, -1);
+		    break;
+
+		case fevent_SCROLL_OR_CURSOR_UP:
+		case fevent_SCROLL_OR_CURSOR_DOWN:
+		    break;
+		}
+		break;
+
+	    case fevent_SUB_CLASS_HIGHLIGHT:
+		break;
+	    case fevent_SUB_CLASS_FOCUS:
+		break;
+
+	    case fevent_SUB_CLASS_OPEN:
+		/* these are all toggle options so it's always true */
+		break;
+		
+	    case fevent_SUB_CLASS_STATUS:
+		break;
+	    case fevent_SUB_CLASS_TOOLBAR:
+		break;
+	    case fevent_SUB_CLASS_CODEC:
+		break;
+	    case fevent_SUB_CLASS_TOOLBAR2:
+		break;
+	    case fevent_SUB_CLASS_FRAME_LINK:
+		break;
+            }
+	    break;
+
+	case fevent_FRAME_CLASS_URLS:
+	    break;
+
+	case fevent_FRAME_CLASS_ENCODING:
+	    break;
+	}
+	break;
+
+    case fevent_CLASS_MENU:
+    case fevent_CLASS_MAP:
+    case fevent_CLASS_PLUGIN:
+	break;
+    }
+    return possible;
 }
 
 /* stbevent.c */

@@ -527,12 +527,6 @@ os_error *fe_history_write_combined_list(FILE *f, const fe_history_item *start, 
     return NULL;
 }
 
-os_error *fe_history_show(fe_view v)
-{
-    return fe_internal_toggle_panel("historycombined");
-/*  return frontend_open_url("ncint:openpanel?name=historycombined", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE); */
-}
-
 /* ---------------------------------------------------------------------------------------------*/
 
 /* history functions */

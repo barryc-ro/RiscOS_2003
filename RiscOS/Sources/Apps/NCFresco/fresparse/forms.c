@@ -176,8 +176,8 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     if (numbers->type != value_none)
     {
 	in->flags |= rid_if_NUMBERS;
-	if (numbers->type == value_enum && numbers->u.i == HTML_INPUT_NUMBERS_PABX)
-	    in->flags |= rid_if_PABX;
+	if (numbers->type == value_enum && numbers->u.i == HTML_INPUT_NUMBERS_PBX)
+	    in->flags |= rid_if_PBX;
     }
 
     checked = &attributes->value[HTML_INPUT_CHECKED];
@@ -455,6 +455,7 @@ extern void startlabel (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     generic_start (context, element, attributes);
 
     none.type = value_none;
+    empty.type = value_void;
     aref = new_aref_item(htmlctx,
 			 attributes->value[HTML_LABEL_FOR].type == value_string ? &attributes->value[HTML_LABEL_FOR] : &empty,
 			 attributes->value[HTML_LABEL_ID].type == value_string ? &attributes->value[HTML_LABEL_ID] : &empty,

@@ -80,6 +80,7 @@
 #define key_map_FRAME_LINK	9
 #define key_map_EXTERNAL_POPUP	10
 #define key_map_WRITEABLES	11
+#define key_map_RISCOS		12
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -944,12 +945,15 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 	break;
     }
 
-#if 0
+#if 1
+    if (event == -1 && config_mode_platform == platform_RISCOS_DESKTOP)
+	event = fe_key_lookup(chcode, key_map_RISCOS);
+#else
     /* check for special mode dependant keys */
     if (event == -1) switch (config_mode_platform)
     {
     case platform_RISCOS_DESKTOP:
-	event = fe_key_lookup(chcode, platform_riscos_keys);
+	event = fe_key_lookup(chcode, platform_riscos_keys);	
 	break;
     case platform_NC:
 	event = fe_key_lookup(chcode, platform_nc_keys);

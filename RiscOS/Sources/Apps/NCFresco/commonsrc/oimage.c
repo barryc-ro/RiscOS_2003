@@ -748,12 +748,12 @@ void oimage_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 
 int oimage_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
-    rid_text_item_image *tii = (rid_text_item_image *)ti;
-
     if (box)
     {
 	memset(box, 0, sizeof(*box));
 #if 0
+	rid_text_item_image *tii = (rid_text_item_image *)ti;
+
 	box->x0 =   tii->hspace*2 + tii->bwidth*2;
 	box->x1 = - box->x0;
 	box->y0 =   tii->vspace*2 + tii->bwidth*2;

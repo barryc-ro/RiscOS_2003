@@ -268,13 +268,14 @@ static os_error *fe_display_options_write_file(FILE *f)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static int internal_decode_print_options(const char *query)
+static int internal_decode_print_options(const char *query, char **url)
 {
     char *s;
-    BOOL cancel;
+    BOOL cancel, print;
 
     s = extract_value(query, "action=");
     cancel = strcasestr(s, "cancel") != 0;
+    print = strcasestr(s, "print") != 0;
     mm_free(s);
 
     if (!cancel)
@@ -328,28 +329,32 @@ static int internal_decode_print_options(const char *query)
 #endif
     }
 
+    if (print)
+    {
+	*url = strdup("ncint:printpage");
+	return fe_internal_url_REDIRECT;
+    }
+    
     return fe_internal_url_NO_ACTION;
 }
 
 static os_error *fe_print_options_write_file(FILE *f)
 {
-    fputs(msgs_lookup("printT"), f);
-    fputc('\n', f);
+    fputs(msgs_lookup("print.T"), f);
 
 #if 1
-    fprintf(f, msgs_lookup("print1"), checked(!config_print_sideways), checked(config_print_sideways));
-    fprintf(f, msgs_lookup("print2"), checked(!config_print_nocol), checked(config_print_nocol));
+    fprintf(f, msgs_lookup("print.1"), checked(!config_print_sideways), checked(config_print_sideways));
+    fprintf(f, msgs_lookup("print.2"), checked(!config_print_nocol), checked(config_print_nocol));
 #else
-    fprintf(f, msgs_lookup("print1"), print__copies, checked(config_print_collated), checked(config_print_reversed));
-    fprintf(f, msgs_lookup("print2"), checked(!config_print_sideways), checked(config_print_sideways));
-    fprintf(f, msgs_lookup("print3"), config_print_scale);
-    fprintf(f, msgs_lookup("print4"), checked(!config_print_nopics));
-    fprintf(f, msgs_lookup("print5"), checked(!config_print_nocol));
-    fprintf(f, msgs_lookup("print6"), checked(!config_print_nobg));
-    fprintf(f, msgs_lookup("print7"), checked(print__ul));
+    fprintf(f, msgs_lookup("print.1"), print__copies, checked(config_print_collated), checked(config_print_reversed));
+    fprintf(f, msgs_lookup("print.2"), checked(!config_print_sideways), checked(config_print_sideways));
+    fprintf(f, msgs_lookup("print.3"), config_print_scale);
+    fprintf(f, msgs_lookup("print.4"), checked(!config_print_nopics));
+    fprintf(f, msgs_lookup("print.5"), checked(!config_print_nocol));
+    fprintf(f, msgs_lookup("print.6"), checked(!config_print_nobg));
+    fprintf(f, msgs_lookup("print.7"), checked(print__ul));
 #endif
-    fputs(msgs_lookup("printF"), f);
-    fputc('\n', f);
+    fputs(msgs_lookup("print.F"), f);
 
     return NULL;
 }
@@ -471,22 +476,20 @@ static os_error *fe_hotlist_delete_write_file(FILE *f, BOOL switchable, int fram
     return NULL;
 }
 
-static os_error *fe_openurl_write_file(FILE *f, const char *def)
+static os_error *fe_openurl_write_file(FILE *f, const char *def, const char *current)
 {
     int width, height;
 
-    fputs(msgs_lookup("openT"), f);
-    fputc('\n', f);
+    fputs(msgs_lookup("open.T"), f);
 
     get_form_size(&width, &height);
 
     width -= 12;
-    fprintf(f, msgs_lookup("open1"));
-    fprintf(f, msgs_lookup("open2"), width, def);
-    fprintf(f, msgs_lookup("open3"), loadurl_last ? loadurl_last : "");
+    fprintf(f, msgs_lookup("open.1"), width, def);
+    fprintf(f, msgs_lookup("open.2"), strsafe(loadurl_last), strsafe(current));
+    fprintf(f, msgs_lookup("open.3"), strsafe(current), strsafe(current));
 
-    fputs(msgs_lookup("openF"), f);
-    fputc('\n', f);
+    fputs(msgs_lookup("open.F"), f);
 
     return NULL;
 }
@@ -812,12 +815,14 @@ static int internal_decode_hotlist_delete(const char *query)
 {
     char *id = extract_value(query, "select.");
     char *source = extract_value(query, "source=");
+    char *action = extract_value(query, "action=");
+
+    fe_view v = fe_find_target(main_view, source);
+    if (!v) v = fe_selected_view();
+    if (!v) v = main_view;
 
     if (id)
     {
-	fe_view v = fe_find_target(main_view, source);
-	if (!v) v = fe_selected_view();
-	if (!v) v = main_view;
 
 	strtok(id, "=");
 
@@ -834,8 +839,15 @@ static int internal_decode_hotlist_delete(const char *query)
     else
     {
 	hotlist_remove_list(query);
+
+	if (action)
+	{
+	    hotlist_flush_pending_delete();
+	    fe_dispose_view(v);
+	}
     }
 
+    mm_free(action);
     mm_free(id);
     mm_free(source);
     return fe_internal_url_NO_ACTION;
@@ -1277,6 +1289,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	{
 	    sound_event(snd_PRINT_OPTIONS_SHOW);
 	    tb_status_button(fevent_OPEN_PRINT_OPTIONS, TRUE);
+
 	    e = fe_print_options_write_file(f);
 	}
 	else if (strcasecomp(panel_name, "printframes") == 0)
@@ -1299,10 +1312,19 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "url") == 0)
 	{
 	    char *def = extract_value(query, "def=");
+	    char *url = extract_value(query, "current=");
 
+	    if (url == NULL)
+	    {
+		v = get_source_view(query, TRUE);
+		if (v && v->displaying)
+		    backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
+	    }
+	    
 	    sound_event(snd_OPEN_URL_SHOW);
 	    tb_status_button(fevent_OPEN_URL, TRUE);
-	    e = fe_openurl_write_file(f, def ? def : msgs_lookup("opendef"));
+
+	    e = fe_openurl_write_file(f, def ? def : msgs_lookup("opendef"), url);
 
 	    mm_free(def);
 	}
@@ -1910,7 +1932,7 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     }
     else if (strcasecomp(page, "printoptions") == 0)
     {
-	generated = internal_decode_print_options(query);
+	generated = internal_decode_print_options(query, new_url);
     }
     else if (strcasecomp(page, "find") == 0)
     {
@@ -2036,6 +2058,13 @@ void fe_internal_deleting_view(fe_view v)
 	v->onunload = NULL;
     }
 
+    if (v->submitonunload)
+    {
+ 	backend_submit_form(v->displaying, v->submitonunload, FALSE); 
+	mm_free(v->submitonunload);
+	v->submitonunload = NULL;
+    }
+
     /* check for special stuff */
     if (strcasecomp(v->name, "__favs") == 0)
     {
@@ -2047,7 +2076,7 @@ void fe_internal_deleting_view(fe_view v)
     }
     else if (strcasecomp(v->name, "__favsdelete") == 0)
     {
-	backend_submit_form(v->displaying, "favsd", FALSE);
+/* 	backend_submit_form(v->displaying, "favsd", FALSE); */
 
 	tb_status_button(fevent_HOTLIST_SHOW_DELETE, tb_status_button_INACTIVE);
     }
@@ -2144,12 +2173,12 @@ void fe_internal_deleting_view(fe_view v)
 /* { */
 /* } */
 
-os_error *fe_internal_toggle_panel(const char *panel_name)
+os_error *fe_internal_toggle_panel(const char *panel_name, int clear)
 {
-    return fe_internal_toggle_panel_args(panel_name, NULL);
+    return fe_internal_toggle_panel_args(panel_name, NULL, clear);
 }
 
-os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args)
+os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args, int clear)
 {
     char url[48];
     char target[16];
@@ -2167,16 +2196,16 @@ os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args
     strcpy(target, "__");
     strcat(target, panel_name);
 
-    /* if this view name is already open the close it */
+    /* if this view name is already open then close it */
     if ((v = fe_locate_view(target)) != NULL)
     {
 	sound_event(snd_MENU_HIDE);
 	fe_dispose_view(v);
+	return NULL;
     }
+
     /* if any different popup is open then close it */
-    else if (fe_popup_open())
-	sound_event(snd_WARN_BAD_KEY);
-    else
+    if (fe_internal_check_popups(clear))
     {
 	/* force open the toolbar */
 	if (!tb_is_status_showing())
@@ -2190,57 +2219,48 @@ os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args
 
 /* ------------------------------------------------------------------------------------------- */
 
+BOOL fe_internal_check_popups(BOOL clear)
+{
+    fe_view popup;
+
+    /* check for closing other window or aborting */
+    popup = main_view->next;
+    if (clear)
+    {
+	if (popup)
+	    fe_dispose_view(popup);
+	if (on_screen_kbd)
+	    fe_keyboard_close();
+    }
+    else if (popup || on_screen_kbd != 0)
+    {
+	sound_event(snd_WARN_BAD_KEY);
+	return FALSE;
+    }
+    return TRUE;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
 os_error *fe_open_version(fe_view v)
 {
     fe_open_info(v, backend_read_highlight(v->displaying, NULL), 0, 0, TRUE);
     return NULL;
 }
 
-os_error *fe_display_options_open(fe_view v)
-{
-    return fe_internal_toggle_panel("displayoptions");
-}
-
-os_error *fe_print_options_open(fe_view v)
-{
-    return fe_internal_toggle_panel("printoptions");
-}
-
-os_error *fe_hotlist_open(fe_view v)
-{
-    return fe_internal_toggle_panel("favs");
-}
-
-os_error *fe_hotlist_and_url_open(fe_view v)
-{
-    return fe_internal_toggle_panel("urlfavs");
-}
-
-os_error *fe_url_open(fe_view v)
-{
-    return fe_internal_toggle_panel("url");
-}
-
-void fe_show_mem_dump(void)
-{
-    fe_internal_toggle_panel("memdump");
-}
-
 /* ------------------------------------------------------------------------------------------- */
 
-os_error *fe_search_page(fe_view v)
+os_error *fe_internal_open_page(fe_view v, const char *page_name, int clear)
 {
-    return frontend_open_url("ncint:openpage?name=search", v, NULL, NULL, fe_open_url_NO_REFERER);
-}
+    char url[48];
 
-os_error *fe_home(fe_view v)
-{
-    return frontend_open_url("ncint:openpage?name=home", v, NULL, NULL, fe_open_url_NO_REFERER);
-}
+    strcpy(url, "ncint:openpage?name=");
+    strcat(url, page_name);
 
-os_error *fe_offline_page(fe_view v)
-{
-    return frontend_open_url("ncint:openpage?name=offline", v, NULL, NULL, fe_open_url_NO_REFERER);
+    if (fe_internal_check_popups(clear))
+	return frontend_open_url(url, v, NULL, NULL, fe_open_url_NO_REFERER);
+
+    return NULL;
 }
 
 /* ------------------------------------------------------------------------------------------- */

@@ -175,6 +175,11 @@
 
 #define MESSAGE_OFFER_FOCUS		0x14
 
+#define Service_NVRAM			0xE0
+#define nvram_INITIALISED		0
+#define nvram_DYING			1
+#define nvram_CHANGED			2
+
 /* -------------------------------------------------------------------------- */
 
 
@@ -744,7 +749,8 @@ enum
     content_tag_ONLOAD,
     content_tag_ONUNLOAD,
     content_tag_ENSURETOOLBAR,
-    content_tag_ONBLUR
+    content_tag_ONBLUR,
+    content_tag_SUBMITONUNLOAD
 };
 
 static const char *content_tag_list[] =
@@ -752,7 +758,8 @@ static const char *content_tag_list[] =
     "SELECTED", "TOOLBAR", "MODE", "LINEDROP",
     "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL",
     "FASTLOAD", "URL", "USER", "USERNAME",
-    "BLANKRESET", "ONLOAD", "ONUNLOAD", "ENSURETOOLBAR", "ONBLUR"
+    "BLANKRESET", "ONLOAD", "ONUNLOAD", "ENSURETOOLBAR",
+    "ONBLUR", "SUBMITONUNLOAD"
 };
 
 /*
@@ -1019,6 +1026,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    
 	    mm_free(v->onblur);
 	    v->onblur = strdup(vals[content_tag_ONBLUR].value);
+	    
+	    mm_free(v->submitonunload);
+	    v->submitonunload = strdup(vals[content_tag_SUBMITONUNLOAD].value);
 	    
 	    mm_free(ncmode);
 	}
@@ -2969,7 +2979,7 @@ os_error *fe_hotlist_remove(fe_view v)
         if (!e && selected_url)
         {
             e = hotlist_remove(selected_url);
-            if (!e) e = fe_hotlist_open(v);
+	    if (!e) e = fe_internal_toggle_panel("favs", TRUE); /* I don't thuink this works anymore */
         }
     }
     else
@@ -5078,6 +5088,44 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 	    tb_status_hide(FALSE);
 	break;
     }
+
+    case Service_NVRAM:
+    {
+	int reason = r->r[0];
+
+	if (reason == nvram_CHANGED)
+	{
+	    const char *tag = (const char *)r->r[2];
+	    int old = r->r[3];
+	    int new_val = r->r[4];
+
+	    if (old != new_val)	/* since we don't use any string elements */
+	    {
+		if (strcasecomp(tag, NVRAM_FONTS_TAG) == 0)
+		{
+		    fe_font_size_set(new_val, TRUE);
+		}
+		else if (strcasecomp(tag, NVRAM_SOUND_TAG) == 0)
+		{
+		    fe_bgsound_set(new_val);
+		}
+		else if (strcasecomp(tag, NVRAM_BEEPS_TAG) == 0)
+		{
+		    fe_beeps_set(new_val, FALSE);
+		}
+		else if (strcasecomp(tag, NVRAM_SCALING_TAG) == 0)
+		{
+		    fe_scaling_set(new_val);
+		}
+		else if (strcasecomp(tag, NVRAM_PRINT_COLOUR_TAG) == 0)
+		{
+		    config_print_nocol = !new_val;
+		}
+	    }
+	}
+	
+	break;
+    }
     }
 }
 
@@ -5638,7 +5686,7 @@ static void fe_tidyup(void)
 #endif
     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_SmartCard, task_handle);
     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_ShutdownComplete, task_handle);
-
+    _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_NVRAM, task_handle);
 
     /* disable keywatch stuff */
     if (keywatch_pollword)
@@ -5917,6 +5965,8 @@ static BOOL fe_initialise(void)
 	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_SmartCard, task_handle);
     if (!e)
 	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_ShutdownComplete, task_handle);
+    if (!e)
+	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_NVRAM, task_handle);
 #if DEBUG
     if (e)
     {
@@ -6026,7 +6076,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            fe_home(main_view);
+	    frontend_complain(fe_internal_open_page(main_view, "home", FALSE));
         }
 
 	/* The main event loop */

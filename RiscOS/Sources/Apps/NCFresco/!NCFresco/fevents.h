@@ -6,7 +6,7 @@
 
 /* add this to a frame event to make it apply to the whole window */
 #define fevent_WINDOW                       0x1000
-#define fevent_UNSTACK_TOOLBAR              0x0800
+#define fevent_CLEAR_POPUPS		    0x0800
 
 #define fevent_CLASS_MASK                   0xf000
 #define fevent_CLASS_GLOBAL                 0x1000

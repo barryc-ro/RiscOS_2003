@@ -186,14 +186,14 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 
 	if (flags & be_link_TEXT)
 	    return tag == rid_it_TEXT || tag == rid_it_PASSWD ?
-		((tii->flags & (rid_if_NUMBERS|rid_if_PABX)) == rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
+		((tii->flags & (rid_if_NUMBERS|rid_if_PBX)) == rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
 	    match_item_NONE;
 
 	if (aref_valid && !aref_changed_enough)
 	    return match_item_NONE;
 
 	return tag == rid_it_TEXT || tag == rid_it_PASSWD ? 
-		((tii->flags & (rid_if_NUMBERS|rid_if_PABX)) == rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
+		((tii->flags & (rid_if_NUMBERS|rid_if_PBX)) == rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
 	    match_item_LINK;
     }
 

@@ -99,7 +99,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		resolve.o rid.o tables.o threads.o gbf.o oscaff.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
-		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
+		oobject.o objects.o plugin.o pluginfile.o \
 		files.o remote.o keyhl.o \
 		buildtime.o format.o colspan.o loformat.o cs2.o \
 		highlight.o frameutils.o csgraph.o rdebug.o
@@ -775,7 +775,7 @@ NCFRESCO_BUILD_INCS=		-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 				-J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
 NCFRESCO_BASE_CFLAGS=		-DNEW_TEXTAREA=1 -DBOCA=0 -wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 \
-				$(NCFRESCO_INCS) -DFRAMES=1 -DITERATIVE_PANIC=1 -DNO_LICENSEE -DLOCK_FILES=1 -DNEW_HL=0
+				$(NCFRESCO_INCS) -DFRAMES=1 -DITERATIVE_PANIC=1 -DNO_LICENSEE -DLOCK_FILES=1 -DNEW_HL=0 -DUSE_FILEWATCH=1
 
 # several alternative flag sets
 NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG

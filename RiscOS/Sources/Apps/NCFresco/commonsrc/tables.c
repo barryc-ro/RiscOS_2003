@@ -3197,7 +3197,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		/*table->flags |= rid_tf_NO_MORE_CELLS;*/
 		TABDBG(("cell %d,%d wanted span.x %d, but table is %d,%d, so limited to %d\n",
 			cell->cell.x, cell->cell.y,
-			cell->swant.x, cell->swant.y,
+			cell->swant.x/* , cell->swant.y */,
 			table->cells.x, table->cells.y,
 			table->cells.x - cell->cell.x));
 		cell->span.x = table->cells.x - cell->cell.x;

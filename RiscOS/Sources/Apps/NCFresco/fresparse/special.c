@@ -386,7 +386,6 @@ extern void finishnobr (SGMLCTX * context, ELEMENT * element)
 extern void startwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *htmlctx = htmlctxof(context);
-    BOOL old_no_break;
 
     generic_start (context, element, attributes);
 
@@ -395,6 +394,8 @@ extern void startwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 #if 1
     rid_scaff_item_push(htmlctx->rh->curstream, 0);
 #else
+    BOOL old_no_break;
+
     /* cancel the NOBR stuff */
     old_no_break = htmlctx->no_break;
     htmlctx->no_break = FALSE;

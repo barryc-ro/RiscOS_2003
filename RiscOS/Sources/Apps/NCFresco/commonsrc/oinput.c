@@ -1281,7 +1281,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    if (ii->flags & rid_if_NUMBERS)
 	    {
 		if ( isdigit(key) ||
-		    ((ii->flags & rid_if_PABX) && (key == '#' || key == ',' || key == '*')) )
+		    ((ii->flags & rid_if_PBX) && (key == '#' || key == ',' || key == '*')) )
 		{
 		    if (i >= ii->max_len)
 			i = ii->max_len-1;
