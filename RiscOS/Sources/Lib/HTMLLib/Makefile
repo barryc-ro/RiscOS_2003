@@ -29,7 +29,7 @@ LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
 
-CCFLAGS = -c -depend !Depend -ffah -throwback ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -Ws -ffah -throwback ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
@@ -49,6 +49,8 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Include files
 #
 INCLUDES  = -Itbox:,C:,TCPIPLibs:
+#DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables -DUSE_NSPRLIB_MALLOC_REGISTRATION
+#DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables -DUNIFONT
 DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables
 
 #
