@@ -407,6 +407,7 @@ clean:		sanity
 		-@cd ./rm && $(RM) *
 		-@cd ./fresco_rel && $(RM) *.o
 		-@cd ./fresco_mc && $(RM) *.o
+		-@cd ./fresco_file && $(RM) *.o
 		-@cd ./plotcheck ; $(RM) plotcheck *.o
 		@echo "Removing some build control files"
 		@$(RM) */builddate.h $(PREDEPS)
@@ -471,6 +472,8 @@ frel:		FRESCO_REL
 
 fmc:		FRESCO_MC
 
+ffo:            FRESCO_FILEONLY
+
 fp:		FRESCO_NT
 
 FRESCO:		FRESCO_RISCOS
@@ -492,6 +495,15 @@ FRESCO_REL:	$(PREDEPS)
 		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(FRESCO_CFLAGS_REL) $(RISCOS_CFLAGS_REL)"
+		$(POSTACTS)
+
+FRESCO_FILEONLY:	$(PREDEPS)
+		@echo "Making FRESCO for RISCOS file only version"
+		@cd ./fresco_file; $(MAKE) FRESCO_RISCOS \
+		LIBS="$(FRESCO_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(FRESCO_CFLAGS_REL) $(RISCOS_CFLAGS_REL) -DFILEONLY"
 		$(POSTACTS)
 
 FRESCO_MC:      $(PREDEPS)
@@ -829,7 +841,7 @@ NCFRESCO_REL_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o
 
 NCFRESCO_ANT_LIBS=		../webimage/webimage1
 
-NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1ff.o \
+NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 				../RISC_OSLib/risc_oslib \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \

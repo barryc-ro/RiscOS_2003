@@ -793,7 +793,7 @@ int fe_history_move_recent_index(fe_view v, int index, char **new_url)
 
 int fe_history_move_recent_steps(fe_view v, int steps, char **new_url)
 {
-    fe_history_item *item = NULL;
+    fe_history_item *item = v->hist_at;
 
     if (steps < 0)
     {

@@ -175,10 +175,10 @@
 
 #define MESSAGE_OFFER_FOCUS		0x14
 
-#define Service_NVRAM			0xE0
-#define nvram_INITIALISED		0
-#define nvram_DYING			1
-#define nvram_CHANGED			2
+/* #define Service_NVRAM			0xE0 */
+/* #define nvram_INITIALISED		0 */
+/* #define nvram_DYING			1 */
+/* #define nvram_CHANGED			2 */
 
 /* -------------------------------------------------------------------------- */
 
@@ -750,7 +750,8 @@ enum
     content_tag_ONUNLOAD,
     content_tag_ENSURETOOLBAR,
     content_tag_ONBLUR,
-    content_tag_SUBMITONUNLOAD
+    content_tag_SUBMITONUNLOAD,
+    content_tag_SELECTBUTTON
 };
 
 static const char *content_tag_list[] =
@@ -759,7 +760,7 @@ static const char *content_tag_list[] =
     "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL",
     "FASTLOAD", "URL", "USER", "USERNAME",
     "BLANKRESET", "ONLOAD", "ONUNLOAD", "ENSURETOOLBAR",
-    "ONBLUR", "SUBMITONUNLOAD"
+    "ONBLUR", "SUBMITONUNLOAD", "SELECTBUTTON"
 };
 
 /*
@@ -892,6 +893,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     linedrop = -1;
     old_keyboard_state = keyboard_state;
+
+    v->select_button = 0;
     
     /* check for special page instructions - not all relevant to child pages */
     {
@@ -1029,6 +1032,11 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    
 	    mm_free(v->submitonunload);
 	    v->submitonunload = strdup(vals[content_tag_SUBMITONUNLOAD].value);
+
+	    if (vals[content_tag_SELECTBUTTON].value)
+		v->select_button = (int)strtoul(vals[content_tag_SELECTBUTTON].value, NULL, 0);
+
+	    STBDBG(("selectbutton: 0x%x\n", v->select_button));
 	    
 	    mm_free(ncmode);
 	}
@@ -1125,10 +1133,17 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	{
 	    fe_status_mode(v, mode, toolbar_state);
 	    fe_status_open_toolbar(v, toolbar_pending);
+/* 	    tb_status_set_active(); */
 	}
 	else
 	    /* ensure mode is set so that keys are passed through OK */
 	    v->browser_mode = mode;
+
+	/* new scheme is embed info about the button to select into the HTML */
+	if (v->select_button)
+	{
+	    tb_status_button(v->select_button, tb_status_button_ACTIVE);
+	}
     }
     else
     {
@@ -1346,6 +1361,13 @@ static char *print_targets[] =
     "__printletter"
 };
 
+static char *print_sizes[] =
+{
+    "",
+    "legal",
+    "letter"
+};
+
 static int print_events[] =
 {
     fevent_PRINT,
@@ -1431,7 +1453,7 @@ os_error *fe_print(fe_view v, int size)
 	char buffer[64];
 	fe_view vv;
 
-	sprintf(buffer, "ncint:openpanel?name=printframes&size=%s", size == fe_print_LEGAL ? "legal" : "letter");
+	sprintf(buffer, "ncint:openpanel?name=printframes&size=%s", print_sizes[size]);
 
 	if ((vv = fe_locate_view(print_targets[size])) != NULL)
 	{
@@ -1461,7 +1483,7 @@ os_error *fe_print(fe_view v, int size)
 	    char buf[128];
 
 	    sprintf(buf, "ncint:printpage?size=");
-	    strcat(buf, size == fe_print_LEGAL ? "legal" : "letter");
+	    strcat(buf, print_sizes[size]);
 	    strcat(buf, "&source=");
 	    fe_frame_specifier_create(v, buf, sizeof(buf));
 
@@ -2760,7 +2782,7 @@ os_error *fe_abort_fetch(fe_view v)
 
 #define INFO_BUFSIZE	2048
 
-void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
+void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL clear_others)
 {
     if (v && v->displaying && keyboard_state == fe_keyboard_ONLINE)
     {
@@ -2798,22 +2820,15 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	    }
 	}
 
-	STBDBG(("fe_open_info: toggle %d current %p url '%s' buf '%s'\n", toggle, current, strsafe(current_url), buffer));
+	STBDBG(("fe_open_info: clear_others %d current %p url '%s' buf '%s'\n", clear_others, current, strsafe(current_url), buffer));
 
-	if (toggle)
-	{
-	    if (current)
-	    {
-		sound_event(snd_MENU_HIDE);
-		fe_dispose_view(current);
-	    }
-	    else
-		frontend_open_url(buffer, NULL, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
-	}
-	else
+	if (current_url != NULL ||
+	    fe_internal_check_popups(clear_others))
 	{
 	    if (current_url == NULL || strcmp(current_url, buffer) != 0)
+	    {
 		frontend_open_url(buffer, NULL, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	    }
 	    else if (current)
 	    {
 		sound_event(snd_MENU_HIDE);
@@ -4267,7 +4282,7 @@ static void fe_keyboard_closed(void)
 
     on_screen_kbd = 0;
 
-    fe_status_set_margins(main_view, FALSE);
+    fe_status_set_margins(main_view, TRUE);
 
     if (pointer_mode == pointermode_OFF)
     {
@@ -4411,7 +4426,11 @@ void fe_keyboard_close(void)
 void fe_keyboard_open(fe_view v)
 {
     if (on_screen_kbd)
+    {
+	fe_dispose_view(main_view->next);
+	
 	fe_keyboard_close();
+    }
     else
 	fe_keyboard__open();
 }
@@ -4952,6 +4971,27 @@ static BOOL fe_config_filter(int phase, const char *name, const void *value)
     return discard;
 }
 
+static void read_nvram(void)
+{
+    int t;
+
+    /* Update from NVRAM */
+    if (nvram_read(NVRAM_PRINT_COLOUR_TAG, &t))
+	config_print_nocol = !t;
+
+    if (nvram_read(NVRAM_FONTS_TAG, &t))
+	fe_font_size_set(t, TRUE);
+
+    if (nvram_read(NVRAM_BEEPS_TAG, &t))
+	fe_beeps_set(t, FALSE);
+    
+    if (nvram_read(NVRAM_SOUND_TAG, &t))
+	fe_bgsound_set(t);
+
+    if (nvram_read(NVRAM_SCALING_TAG, &t))
+	fe_scaling_set(t);
+}
+
 static void re_read_config(int flags)
 {
     STBDBG(("stbfe: reading config flags %x\n", flags));
@@ -5003,6 +5043,9 @@ static void re_read_config(int flags)
 
     if (flags & ncfresco_loaddata_HOTLIST)
 	hotlist_init();
+
+    if (flags & ncfresco_loaddata_NVRAM)
+	read_nvram();
 }
 
 static void re_read_config_data(int flags, const char *filename)
@@ -5089,6 +5132,7 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 	break;
     }
 
+#if 0
     case Service_NVRAM:
     {
 	int reason = r->r[0];
@@ -5126,6 +5170,7 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 	
 	break;
     }
+#endif
     }
 }
 
@@ -5686,7 +5731,7 @@ static void fe_tidyup(void)
 #endif
     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_SmartCard, task_handle);
     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_ShutdownComplete, task_handle);
-    _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_NVRAM, task_handle);
+/*     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_NVRAM, task_handle); */
 
     /* disable keywatch stuff */
     if (keywatch_pollword)
@@ -5965,8 +6010,8 @@ static BOOL fe_initialise(void)
 	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_SmartCard, task_handle);
     if (!e)
 	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_ShutdownComplete, task_handle);
-    if (!e)
-	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_NVRAM, task_handle);
+/*     if (!e) */
+/* 	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_NVRAM, task_handle); */
 #if DEBUG
     if (e)
     {

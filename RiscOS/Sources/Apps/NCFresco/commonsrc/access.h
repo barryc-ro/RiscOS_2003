@@ -31,10 +31,11 @@ typedef int access_url_flags;
 #define access_INTERNAL_FLAGS	0x0ffff
 
 /* Flags used internally but not used in the initial call */
-#define access_SECURE		0x10000	/* The access will be started on a secure socket */
-#define access_PROXY		0x20000	/* The access goes via a proxy */
-#define access_PENDING_FREE	0x40000	/* It will die when it unthreads */
-#define access_FROM_CACHE	0x80000	/* This stream is from the cache */
+#define access_SECURE		0x010000	/* The access will be started on a secure socket */
+#define access_PROXY		0x020000	/* The access goes via a proxy */
+#define access_PENDING_FREE	0x040000	/* It will die when it unthreads */
+#define access_IS_DIRECTORY     0x080000	/* FTP fetched a directory */
+#define access_FROM_CACHE	0x100000	/* This stream is from the cache */
 
 /* A list of the schemes we support */
 extern char *access_schemes[];
@@ -122,6 +123,7 @@ extern void access_optimise_cache( void );
 extern void access_abort_all_items(void);
 extern BOOL access_is_scheme_supported(const char *scheme);
 extern void access_set_streaming(access_handle d, int stream);
+extern BOOL access_was_directory( access_handle d );
 
 /*
  * Calls HTTP_Status to read the headers for the current connection

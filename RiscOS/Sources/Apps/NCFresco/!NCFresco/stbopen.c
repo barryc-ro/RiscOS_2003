@@ -213,6 +213,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     os_error *ep;
     char *referer = NULL, *title = NULL;
     int oflags;
+    BOOL is_internal;
 
     DBG(("frontend_open_url '%s' in window '%s' parent v%p '%s' flags %x\n", url ? url : "<none>", target ? target : "<none>", parent, parent ? parent->name : "", flags));
 
@@ -351,13 +352,23 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     
     session_log(url, session_REQUESTED);
 
-    /* open the fetch status*/
+    /* open the fetch status */
     if (keyboard_state == fe_keyboard_ONLINE)
 	fe_status_open_fetch_only(parent);
 
+    is_internal = strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0 ||
+	strncmp(url, "ncint:", sizeof("ncint:")-1) == 0;
+    
     /* move the highlight */
-    if ((flags & fe_open_url_FROM_FRAME) == 0 && !parent->open_transient && pointer_mode == pointermode_OFF && tb_is_status_showing() && config_mode_cursor_toolbar)
+    if ((flags & fe_open_url_FROM_FRAME) == 0 &&
+	!parent->open_transient &&
+	!is_internal &&
+	pointer_mode == pointermode_OFF &&
+	tb_is_status_showing() &&
+	config_mode_cursor_toolbar)
+    {
 	tb_status_highlight_stop();
+    }
 
     /* setup the opening flags */
     if (flags & fe_open_url_NO_CACHE)
@@ -368,8 +379,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     if ((flags & fe_open_url_FROM_HISTORY) || (parent->browser_mode == fe_browser_mode_HISTORY))
 	oflags |= be_openurl_flag_HISTORY;
 
-     if (strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0 ||
-	 strncmp(url, "ncint:", sizeof("ncint:")-1) == 0)
+     if (is_internal)
         oflags |= be_openurl_flag_BODY_COLOURS;
 
      if (keyboard_state == fe_keyboard_OFFLINE)
@@ -721,11 +731,20 @@ void fe_dispose_view(fe_view v)
 	/* FIXME: do something with selection */
     }
 
-
+    fe_frame_link_array_free(v);
+    
     mm_free(v->selected_id);
     mm_free(v->name);
     mm_free(v->return_page);
+    mm_free(v->app_return_page);
 
+    mm_free(v->pending_user_name);
+    mm_free(v->onload);
+    mm_free(v->onunload);
+    mm_free(v->onblur);
+    mm_free(v->submitonunload);
+    mm_free(v->real_url);
+    
     v->magic = 0;
     mm_free(v);
 }

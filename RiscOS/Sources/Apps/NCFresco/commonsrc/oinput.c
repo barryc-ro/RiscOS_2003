@@ -690,14 +690,16 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 		    bg = render_colour_INPUT_S;
 		else
 		    bg = ii->base.colours.select | render_colour_RGB;
-		fg = render_colour_INPUT_B;
+		fg = render_colour_INPUT_FS;
 	    }
 	    else
 		bg = (ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB);
 
 #ifdef STBWEB
 	    render_plinth_from_list(bg,
-				    selected ? config_colour_list[render_colour_list_BUTTON_HIGHLIGHT] : config_colour_list[render_colour_list_BUTTON],
+				    selected && config_colour_list[render_colour_list_BUTTON_HIGHLIGHT] ?
+					config_colour_list[render_colour_list_BUTTON_HIGHLIGHT] :
+					config_colour_list[render_colour_list_BUTTON],
 				    0,
 				    hpos, bline - ti->max_down,
 				    ti->width, (ti->max_up + ti->max_down), doc );
@@ -1657,7 +1659,8 @@ int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp
     case rid_it_RESET:
 	own_hl = (ii->data.button.im && ii->data.button.im_sel) ||
 	    ii->base.colours.select != -1 ||
-	    config_colours[render_colour_INPUT_S].word != config_colours[render_colour_INPUT_B].word;
+	    config_colours[render_colour_INPUT_S].word != config_colours[render_colour_INPUT_B].word ||
+	    config_colour_list[render_colour_list_BUTTON_HIGHLIGHT] != NULL;
 	break;
 
     case rid_it_CHECK:

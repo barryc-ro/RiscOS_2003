@@ -20,14 +20,15 @@
 #define render_colour_INPUT_S	10	/* selected bg colour for SELECT & SUBMIT, RESET, BUTTON items */
 #define render_colour_HIGHLIGHT 11	/* col for highlight box */
 #define render_colour_ACTIVATED 12	/* col for activating links (alink) */
-#define render_colour_BEVEL	13	/* col for activating links (alink) */
-#define render_colour_RGB       14
+#define render_colour_BEVEL	13	/* col for interior of 3D bevel */
+#define render_colour_INPUT_FS	14	/* selected bg colour for SELECT & SUBMIT, RESET, BUTTON items */
+#define render_colour_RGB       15
 
 /* pdh: render_colour_RGB in the bottom byte means that the top three bytes
  * are an RGB colour
  */
 
-#define render_colour_COUNT	15
+#define render_colour_COUNT	16
 
 /* ---------------------------------------------------------------------- */
 
@@ -43,7 +44,8 @@
 #define render_colour_list_HIGHLIGHT		7
 #define render_colour_list_ACTIVATED		8
 #define render_colour_list_WINDOW_BORDER	9
-#define render_colour_list_COUNT		10
+#define render_colour_list_TEXT_HIGHLIGHT	10
+#define render_colour_list_COUNT		11
 
 /* ---------------------------------------------------------------------- */
 

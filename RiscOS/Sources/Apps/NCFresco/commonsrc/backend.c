@@ -1083,6 +1083,37 @@ void backend_defer_images( be_doc doc )
     }
 }
 
+void backend_stop_animation( be_doc doc )
+{
+    rid_text_item *ti;
+    rid_header *rh = doc->rh;
+
+    if ( rh )
+    {
+        ti = rh->stream.text_list;
+
+        while ( ti )
+        {
+	    if (object_table[ti->tag].imh != NULL)
+	    {
+	        image i;
+
+	        i = (image) (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
+
+#ifndef BUILDERS
+	        image_stop_animation( i );
+#endif
+	    }
+
+            ti = rid_scanfr(ti);
+        }
+#ifndef BUILDERS
+        if ( rh->tile.im )
+            image_stop_animation( rh->tile.im );    /* scary */
+#endif
+    }
+}
+
 os_error *backend_doc_flush_image(be_doc doc, void *imh, int flags)
 {
     rid_text_item *ti;
@@ -3835,12 +3866,12 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 
     frontend_view_status(doc->parent, sb_status_PROGRESS, status);
 
-    doc->ah = NULL;
-
     BENDBG(("doc%p: antweb_doc_complete(%d) called\n", doc, status ));
 
     ACCDBG(("Access completed, doc=%p, status=%d, file='%s', url='%s'\n",
 	    doc, status, strsafe(cfile), url));
+
+    doc->flags &= ~doc_flag_DIRECTORY;
 
     /* moved this to the start so we can abort if the file size is 0 */
     if (status == status_COMPLETED_FILE)
@@ -3855,7 +3886,13 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 	doc->file_load_addr = ofs.loadaddr;
 	doc->file_exec_addr = ofs.execaddr;
 	doc->file_size = ofs.start;
+#ifndef BUILDERS
+	if ( doc->ah && access_was_directory( doc->ah ) )
+	    doc->flags |= doc_flag_DIRECTORY;
+#endif
     }
+
+    doc->ah = NULL;
 
     if (status != status_COMPLETED_FILE || doc->file_size == 0)
     {

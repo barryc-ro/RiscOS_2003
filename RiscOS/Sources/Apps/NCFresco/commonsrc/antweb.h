@@ -48,6 +48,7 @@ typedef struct awp_page_str {
 #define doc_flag_SECURE		(1<<18)	/* A secure method, such as SSL, was used. */
 #define doc_flag_HAD_HEADERS	(1<<19)	/* Have we transferred HTTP headers into the META list */
 #define doc_flag_WRECKED	(1<<20)	/* A dreadful memory problem has occurred */
+#define doc_flag_DIRECTORY      (1<<21) /* FTP fetched us a directory */
 
 #define doc_selection_tag_NONE	0
 #define doc_selection_tag_TEXT	1

@@ -24,6 +24,7 @@ extern void tb_status_hide(int only_if_small);
 extern int tb_is_status_showing(void);
 extern int tb_status_height(void);
 extern int tb_status_w(void);
+extern BOOL tb_status_has_highlight(void);
 extern void tb_status_update_fades(fe_view v);
 extern void tb_status_resize(int xdiff, int ydiff);
 extern int tb_status_redraw(wimp_redrawstr *r);

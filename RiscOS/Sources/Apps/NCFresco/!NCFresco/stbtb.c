@@ -1727,6 +1727,8 @@ int tb_is_status_showing(void)
     return status_state == status_OPEN;
 }
 
+/* This returns the height (+ve) of the status bar not counting the safe area */
+
 int tb_status_height(void)
 {
     return bar_list ? bar_list->height : 0;
@@ -1735,6 +1737,11 @@ int tb_status_height(void)
 int tb_status_w(void)
 {
     return bar_list ? window_handle(bar_list->object_handle) : 0;
+}
+
+BOOL tb_status_has_highlight(void)
+{
+    return bar_list && havefocus(bar_list);
 }
 
 void tb_status_refresh_if_small(void)

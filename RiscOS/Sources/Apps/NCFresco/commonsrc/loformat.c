@@ -28,6 +28,8 @@
 #include "webfonts.h"
 #include "gbf.h"
 #include "profile.h"
+#include "images.h"
+#include "oimage.h"
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -885,7 +887,7 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
     {
 	if ( fmt->fmt_method == MUST )
 	{
-	    if ( have_floaters || have_text ) 
+	    if ( have_floaters || have_text )
 	    {
 		FMTDBGN(("unbreakable_sequence_fits: forcing fits=FALSE\n"));
 		fits = FALSE;
@@ -1247,8 +1249,6 @@ static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
   floating lines. Floating items are always added at the end of the
   stream, so only one float pointer (float_line) is needed.  */
 
-extern void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
-
 static void close_down_current_line(RID_FMT_STATE *fmt)
 {
     rid_pos_item *pi = fmt->text_line;
@@ -1427,7 +1427,9 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
   ubs needs attaching to the current line - note that there may be
   floaters in the sequence. If the ubs indicates it must be followed
   by a break, we perform this NOW. Having a break overrides not having
-  a break. */
+  a break.
+
+ */
 
 static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
 {

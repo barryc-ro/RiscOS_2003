@@ -411,8 +411,6 @@ void heapda_free(void *heapptr)
 #endif
 
 
-#if DEBUG
-
 /*
  * Heap description
 
@@ -445,6 +443,7 @@ typedef struct
     int end_offset;
 } heap_descr_t;
 
+#if DEBUG
 
 static int scan_usedlist(char *base, int from, int to, FILE *f)
 {
@@ -554,12 +553,27 @@ void heap__info(FILE *f)
 
 void heap__dump(FILE *f)
 {
-    FDBG((f, "Heap debugging not compiled in\n"));
+    heap_descr_t *hp = heap__base;
+#ifdef MemCheck_MEMCHECK
+    MemCheck_checking checking = MemCheck_SetChecking(0, 0);
+#endif
+    fprintf(f, "\nHeap word   %x\n"
+	    "Free offset %x (%d)\n"
+	    "Base offset %x (%d)\n"
+	    "End  offset %x (%d)\n\n",
+	    hp->HeapWord,
+	    hp->free_offset, hp->free_offset,
+	    hp->base_offset, hp->base_offset,
+	    hp->end_offset, hp->end_offset);
+
+#ifdef MemCheck_MEMCHECK
+    MemCheck_RestoreChecking(checking);
+#endif
 }
 
 void heap__info(FILE *f)
 {
-    FDBG((f, "Heap debugging not compiled in\n"));
+    fprintf(f, "Heap debugging not compiled in\n");
 }
 
 #endif

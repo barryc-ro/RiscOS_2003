@@ -4542,6 +4542,12 @@ static void image_animation_render(image i, int x, int y, int w, int h, int scal
 
 static void image_startup_animation(image i);
 
+extern void image_stop_animation( image i )
+{
+    i->repeats = 1;
+    i->cur_repeat = 2;
+}
+
 static void image_animation_alarm(int at, void *h)
 {
     image i = (image) h;

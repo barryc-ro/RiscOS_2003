@@ -74,6 +74,7 @@ typedef struct
 #define ncfresco_loaddata_PLUGINS	0x00000020
 #define ncfresco_loaddata_ALLOW		0x00000040
 #define ncfresco_loaddata_FLUSH		0x00000080 /* flush is assumed if NOT_ALL is clear */
+#define ncfresco_loaddata_NVRAM		0x00000100
 
 typedef struct {
     BOOL indirected;

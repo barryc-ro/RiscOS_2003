@@ -171,6 +171,8 @@ struct _frontend_view
 	*onblur;
 
     char *submitonunload;
+
+    int select_button;		/* event number of probabl;e triggering event, button should be selected */
 };
 
 /* ----------------------------------------------------------------------------- */

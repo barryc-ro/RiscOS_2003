@@ -740,8 +740,8 @@ void stream_iterate_box(be_doc doc, rid_text_item *ti, stream_iterate_box_fn fn,
 		if (pi->st->partype == rid_pt_HEADER)
 		{
 		    pi = next_ti->line;
-		    x += pi->left_margin;
-		    y += pi->top - pi->max_up;
+		    x = pi->left_margin;
+		    y = pi->top - pi->max_up;
 		}
 		else
 		{

@@ -1078,8 +1078,9 @@ void backend_set_highlight(be_doc doc, be_item item)
 
 	doc->selection.tag = doc_selection_tag_AREF;
 	doc->selection.data.aref = item->aref;
-
+#ifndef BUILDERS
 	highlight_boundary_build(doc);
+#endif
     }
     else
     {
@@ -1093,7 +1094,9 @@ void backend_set_highlight(be_doc doc, be_item item)
 	doc->selection.data.text.item = item;
 	doc->selection.data.text.input_offset = doc_selection_offset_NO_CARET;
 
+#ifndef BUILDERS
 	highlight_boundary_build(doc);
+#endif
     }
 
 #if NEW_HL
@@ -1120,7 +1123,9 @@ void backend_set_caret(be_doc doc, be_item ti, int offset)
 	doc->selection.tag = doc_selection_tag_TEXT;
 	doc->selection.data.text.item = ti;
 
+#ifndef BUILDERS
 	highlight_boundary_build(doc);
+#endif
 
 	repos = object_caret_FOCUS;
     }

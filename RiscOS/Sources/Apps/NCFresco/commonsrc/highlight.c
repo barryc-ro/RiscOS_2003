@@ -436,7 +436,7 @@ void highlight_offset_border(wimp_box *box)
 
 static int get_colour_text(int i)
 {
-    wimp_paletteword *cols = config_colour_list[render_colour_list_HIGHLIGHT];
+    wimp_paletteword *cols = config_colour_list[render_colour_list_TEXT_HIGHLIGHT];
     return i > cols[0].word ? cols[1].word : cols[i+1].word;
 }
 
@@ -698,10 +698,7 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 	
 	ypos =  b - ti->max_down;
 
-	/* for now limit the text border width to 4 pixels */
-	n = config_colour_list[render_colour_list_HIGHLIGHT][0].word/2;
-	if (n > 4)
-	    n = 4;
+	n = config_colour_list[render_colour_list_TEXT_HIGHLIGHT][0].word/2;
 
 	/* raise first line by width + gap */
 	if (on_first_line)

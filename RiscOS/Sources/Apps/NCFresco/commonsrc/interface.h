@@ -383,6 +383,9 @@ os_error *backend_doc_flush_image(be_doc doc, void *imh, int flags);
 /* Defer all images. Doesn't abort fetches which have already started */
 void backend_defer_images( be_doc doc );
 
+/* Stop all GIF animations */
+void backend_stop_animation( be_doc doc );
+
 /* Given a position within a document, locate the item as the position
  * given in *x and *y.  The item at *ti is filled in and *x and *y are
  * updated to show the offset within the item.  If the position is not

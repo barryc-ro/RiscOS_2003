@@ -307,7 +307,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	    bg = sel->base.colours.select | render_colour_RGB;
 	else
 	    bg = render_colour_INPUT_S;
-	fg = render_colour_INPUT_B;
+	fg = render_colour_INPUT_FS;
     }
     else
     {
@@ -316,7 +316,9 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
 #ifdef STBWEB
     render_plinth_from_list(bg,
-			    selected ? config_colour_list[render_colour_list_SELECT_HIGHLIGHT] : config_colour_list[render_colour_list_SELECT],
+			    selected && config_colour_list[render_colour_list_SELECT_HIGHLIGHT] ?
+				config_colour_list[render_colour_list_SELECT_HIGHLIGHT] :
+				config_colour_list[render_colour_list_SELECT],
 			    0,
 			    hpos + SELECT_SPACE_X, bline - ti->max_down + SELECT_SPACE_Y,
 			    ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_SPACE_X*2,
@@ -459,8 +461,9 @@ int oselect_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wim
 	memset(box, 0, sizeof(*box));
 
     draw_box = sel->base.colours.select == -1 &&
-	config_colours[render_colour_INPUT_S].word == config_colours[render_colour_INPUT_B].word;
-
+	config_colours[render_colour_INPUT_S].word == config_colours[render_colour_INPUT_B].word &&
+	config_colour_list[render_colour_list_SELECT_HIGHLIGHT] == NULL;
+    
     return draw_box;
 }
 

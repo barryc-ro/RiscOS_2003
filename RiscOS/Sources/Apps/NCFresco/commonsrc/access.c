@@ -87,6 +87,12 @@
 #include "cbtoolbar.h"
 #endif
 
+
+/* A file which gets displayed instead of all remote connections in file-
+ * only versions of Fresco
+ */
+#define FILEONLY_EXCUSE "<Fresco$Dir>.Docs.nonet/html"
+
 extern void translate_escaped_text(char *in, char *out, int len);
 
 #ifndef DUMP_HEADERS
@@ -216,6 +222,7 @@ static void access_free_item(access_handle d);
 static void access_unlink(access_handle h);
 static void access_link(access_handle h);
 static void access_reschedule(alarm_handler fn, access_handle d, int dt);
+
 #ifndef FILEONLY
 static os_error *gopher_set_file_type(char *fname, char tag, int *ftptr);
 static void access_redirect_progress(void *h, int status, int size, int so_far, int fh, int ftype, char *url);
@@ -226,19 +233,17 @@ static void access_gopher_dns_alarm(int at, void *h);
 static void access_gopher_fetch_alarm(int at, void *h);
 static void access_ftp_dns_alarm(int at, void *h);
 static void access_ftp_fetch_alarm(int at, void *h);
-static void access_file_fetch_alarm(int at, void *h);
 static os_error *access_http_fetch_start(access_handle d);
 static void access_reschedule(alarm_handler fn, access_handle d, int dt);
 static void access_http_fetch_done(access_handle d, http_status_args *si);
 static os_error *gopher_set_file_type(char *fname, char tag, int *ftptr);
-
 #endif
+
+static void access_file_fetch_alarm(int at, void *h);
 
 /***************************************************************************/
 
-#ifndef FILEONLY
 static cache_functions *cache = NULL;
-#endif
 
 /***************************************************************************/
 
@@ -1918,7 +1923,10 @@ static void access_ftp_fetch_alarm(int at, void *h)
 	cache->insert(d->url, cfile, cache_flag_OURS);
 
 	if (status == status_COMPLETED_DIR)
+	{
+	    d->flags |= access_IS_DIRECTORY;
 	    status = status_COMPLETED_FILE;
+	}
 
 	if (status == status_COMPLETED_FILE && d->progress)
 	{
@@ -2172,10 +2180,11 @@ static BOOL access_file_fetch(access_handle d)
 	    d->data.file.ofh = 0;
 	}
 
+#ifndef FILEONLY
 	/* only update the header info if this is a file: read, not from the cache */
 	if ((d->flags & access_FROM_CACHE) == 0 && cache->header_info)
 	    cache->header_info(d->url, time(NULL), d->data.file.last_modified, UINT_MAX);
-
+#endif
 	d->complete(d->h, status_COMPLETED_FILE, d->ofile ? d->ofile : d->data.file.fname, d->url);
 
 	access_unlink(d);
@@ -3022,18 +3031,16 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		char *path;
 
 		path = cfile;
-#ifdef FILEONLY
-		cfile = strdup(ofile ? ofile : "<Wimp$Scrap>");
-#else
-		cfile = strdup(ofile ? ofile : cache->scrapfile_name());
-#endif
+		cfile = strdup(ofile ? ofile : cache->scrapfile_name() );
 
 		ep = dir2html(path, cfile, 0);
 
 		if (ep == NULL)
 		{
 #ifdef FILEONLY
+		    access_progress_flush(h, cfile, url, progress);
                     complete( h, status_COMPLETED_FILE, cfile, url );
+                    remove( cfile );
 #else
                     /* never cache in fileonly version */
 		    access_complete_flags fl;
@@ -3142,32 +3149,34 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    if (ep == NULL)
 	    {
 #ifdef FILEONLY
+		access_progress_flush(h, cfile, url, progress);
                 complete( h, status_COMPLETED_FILE, cfile, url );
+                remove( cfile );
 #else
 		cache->insert(url, cfile, cache_flag_OURS);
 
 		access_progress_flush(h, cfile, url, progress);
 		fl = complete(h, status_COMPLETED_FILE, cfile, url);
+
+	        if (fl & access_OURS)
+		    cache->not_ours(cfile);
+
+                if ((fl & access_CACHE) == 0)
+    		    cache->remove(url);
 #endif
-	    }
-	    else
-	    {
-		fl = 0;
-	    }
-
-	    if (fl & access_OURS)
-		cache->not_ours(cfile);
-
-	    if ((fl & access_CACHE) == 0)
-		cache->remove(url);
+            }
 
             mm_free(cfile);
 
 	    *result = NULL;
 	}
-#ifndef FILEONLY
 	else if (strcasecomp(scheme, "http") == 0)
 	{
+#ifdef FILEONLY
+	    access_progress_flush(h, FILEONLY_EXCUSE, url, progress);
+            complete( h, status_COMPLETED_FILE, FILEONLY_EXCUSE, url );
+            *result = NULL;
+#else
 	    if (config_proxy_http_on &&
 		config_proxy_http &&
 		!access_match_host(netloc, config_proxy_http_ignore))
@@ -3180,9 +3189,15 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		ep = access_new_http(url, flags, ofile, bfile, referer, progress, complete, h, result, netloc, buffer);
 		mm_free(buffer);
 	    }
+#endif /* ndef FILEONLY */
 	}
 	else if (strcasecomp(scheme, "https") == 0)
 	{
+#ifdef FILEONLY
+	    access_progress_flush(h, FILEONLY_EXCUSE, url, progress);
+            complete( h, status_COMPLETED_FILE, FILEONLY_EXCUSE, url );
+            *result = NULL;
+#else
 	    flags |= access_SECURE;
 
 	    /* pdh: Fixed this to support a different proxy for https */
@@ -3199,9 +3214,15 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		ep = access_new_http(url, flags, ofile, bfile, referer, progress, complete, h, result, netloc, buffer);
 		mm_free(buffer);
 	    }
+#endif /* ndef FILEONLY */
 	}
 	else if (strcasecomp(scheme, "gopher") == 0)
 	{
+#ifdef FILEONLY
+	    access_progress_flush(h, FILEONLY_EXCUSE, url, progress);
+            complete( h, status_COMPLETED_FILE, FILEONLY_EXCUSE, url );
+            *result = NULL;
+#else
 	    if (config_proxy_gopher_on &&
 		config_proxy_gopher &&
 		!access_match_host(netloc, config_proxy_gopher_ignore))
@@ -3315,9 +3336,15 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    }
 		}
 	    }
+#endif /* ndef FILEONLY */
 	}
 	else if (strcasecomp(scheme, "ftp") == 0 /* && path[strlen(path)-1] != '/' */ )
 	{
+#ifdef FILEONLY
+	    access_progress_flush(h, FILEONLY_EXCUSE, url, progress);
+            complete( h, status_COMPLETED_FILE, FILEONLY_EXCUSE, url );
+            *result = NULL;
+#else
 	    char *at, *colon;
 
 	    at = strchr(netloc, '@');
@@ -3384,12 +3411,15 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 				    progress, complete, h,
 				    result, netloc, path);
 	    }
+#endif /* ndef FILEONLY */
 	}
-
-#endif /*ndef FILEONLY */
-
 	else if (strcasecomp(scheme, "mailto") == 0)
 	{
+#ifdef FILEONLY
+	    access_progress_flush(h, FILEONLY_EXCUSE, url, progress);
+            complete( h, status_COMPLETED_FILE, FILEONLY_EXCUSE, url );
+            *result = NULL;
+#else
 	    char *proxy = NULL;
 	    if (config_proxy_mailto_on &&
 		config_proxy_mailto &&
@@ -3458,7 +3488,9 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    proxy ? proxy : "<null>"));
 
 	    mm_free(proxy);
+#endif /*ndef FILEONLY */
 	}
+
 #if INTERNAL_URLS
 	else if (strcasecomp(scheme, "ncfrescointernal") == 0 || strcasecomp(scheme, "ncint") == 0)
 	{
@@ -3474,6 +3506,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
             /* moved this function into backend_open_url() so can include fe_view */
             frontend_url_punt(url, bfile);
 #endif
+
 	    ep = makeerror(ERR_USED_HELPER);
 	}
 	ACCDBGN(( "Freeing parts\n"));
@@ -3493,9 +3526,6 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 static os_error *access_cache_init(int size)
 {
-#ifdef FILEONLY
-    return NULL;
-#else
     char *scrap;
 
     cache = &old_cache_functions;
@@ -3504,12 +3534,13 @@ static os_error *access_cache_init(int size)
     if (scrap == NULL || scrap[0] == 0)
 	return makeerror(ERR_NO_SCRAP_DIR);
 
+#ifndef FILEONLY
 /*    if (strncasecomp(scrap, "cache:", 6) == 0) */
     if (config_cache_items > 48)
         cache = &cachefs_cache_functions;
+#endif
 
     return cache->init(size);
-#endif
 }
 
 os_error *access_init(int size)
@@ -3799,6 +3830,11 @@ void access_set_streaming(access_handle d, int stream)
 	d->flags &= ~access_NO_STREAM;
     else
 	d->flags |= access_NO_STREAM;
+}
+
+BOOL access_was_directory( access_handle d )
+{
+    return ( d->flags & access_IS_DIRECTORY ) != 0;
 }
 
 /* eof access.c */

@@ -141,7 +141,11 @@ static void history_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HISTORY_BACK:
-	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	if (!fe_history_possible(v, history_PREV))
+	{
+	    sound_event(snd_WARN_BAD_KEY);
+	}
+	else if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
 	{
 	    sound_event(snd_HISTORY_BACK);
 	    frontend_complain(fe_history_move(v, history_PREV));
@@ -149,7 +153,11 @@ static void history_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HISTORY_BACK_ALL:
-	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	if (!fe_history_possible(v, history_FIRST))
+	{
+	    sound_event(snd_WARN_BAD_KEY);
+	}
+	else if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
 	{
 	    sound_event(snd_HISTORY_BACK);
 	    frontend_complain(fe_history_move(v, history_FIRST));
@@ -157,7 +165,11 @@ static void history_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HISTORY_FORWARD:
-	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	if (!fe_history_possible(v, history_NEXT))
+	{
+	    sound_event(snd_WARN_BAD_KEY);
+	}
+	else if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
 	{
 	    sound_event(snd_HISTORY_FORWARD);
 	    frontend_complain(fe_history_move(v, history_NEXT));
@@ -165,7 +177,11 @@ static void history_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HISTORY_FORWARD_ALL:
-	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	if (!fe_history_possible(v, history_NEXT))
+	{
+	    sound_event(snd_WARN_BAD_KEY);
+	}
+	else if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
 	{
 	    sound_event(snd_HISTORY_FORWARD);
 	    frontend_complain(fe_history_move(v, history_LAST));
@@ -318,7 +334,7 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_INFO_PAGE:
- 	frontend_complain(fe_open_version(v));
+	fe_open_info(v, backend_read_highlight(v->displaying, NULL), 0, 0, event & fevent_CLEAR_POPUPS);
 	break;
 
     case fevent_SEND_URL:
@@ -614,18 +630,22 @@ static void frame_link_event_handler(int event, fe_view v)
 
 static void url_event_handler(int event, fe_view v)
 {
-    char buf[32], *s;
+    if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+    {
+	char buf[32], *s;
 
-    sprintf(buf, PROGRAM_NAME"$EventURL%02x", event & fevent_URLS_MASK);
+	sprintf(buf, PROGRAM_NAME"$EventURL%02x", event & fevent_URLS_MASK);
 
-    s = getenv(buf);
-    if (s && s[0])
-	frontend_complain(frontend_open_url(s, v, NULL, NULL, fe_open_url_NO_REFERER));
+	s = getenv(buf);
+	if (s && s[0])
+	    frontend_complain(frontend_open_url(s, v, NULL, NULL, fe_open_url_NO_REFERER));
+    }
 }
 
 static void encoding_event_handler(int event, fe_view v)
 {
-    fe_encoding(v, event & fevent_ENCODING_MASK);
+    if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
+	fe_encoding(v, event & fevent_ENCODING_MASK);
 }
 
 void fevent_handler(int event, fe_view v)

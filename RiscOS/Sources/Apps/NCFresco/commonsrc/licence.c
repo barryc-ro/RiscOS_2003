@@ -20,6 +20,7 @@
 #endif
 
 
+#ifndef FILEONLY
 /*                            0123456789012345678901234567 89012345678901234567 */
 #if STBWEB_ROM || (defined(STBWEB) && PRODUCTION)
 static char key_string[48] = "Acorn Network Computer ROM\0    YWqg=*g&LNA&Wqcn\0"; /* This is OK */
@@ -30,6 +31,7 @@ static char key_string[48] = "ANT Ltd. Internal use only.\0   YDh8R$DhHSrPH4SJ\0
 #else /* installable */
 /*                            012345678901234567890123456789012345678901234567 */
 static char key_string[48] = "MARK twain STNG c   0   4   8   c   0   4   8   ";
+#endif
 #endif
 
 typedef struct {
@@ -54,6 +56,9 @@ char *ua_name;
 
 extern os_error *licence_init(void)
 {
+#ifdef FILEONLY
+    licensee_name = "File-only version";
+#else
     char buffer[48];
 
 #if TIMEOUT
@@ -85,7 +90,7 @@ extern os_error *licence_init(void)
 #endif /* TIMEOUT */
 
 /*#ifndef MemCheck_MEMCHECK*/
-#if !DEVELOPMENT && !defined(MemCheck_MEMCHECK)
+#if !DEVELOPMENT && !defined(MemCheck_MEMCHECK) && !defined(FILEONLY)
     if (VerifySerial(key_string) == 0)
     {
 	os_error *ep = (os_error *) &key_string;
@@ -152,6 +157,7 @@ extern os_error *licence_init(void)
 #endif
     }
 
+#endif /* ndef FILEONLY */
     return NULL;
 }
 

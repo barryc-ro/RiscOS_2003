@@ -142,4 +142,7 @@ extern os_error *image_expire(image i);
 /* force the cached version (for tiles and animations) and translation tables to be refetched */
 extern void image_uncache_info(image i);
 
+/* Stop the animation */
+extern void image_stop_animation( image i );
+
 #endif /* __images_h */
