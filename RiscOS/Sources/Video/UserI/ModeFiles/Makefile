@@ -15,16 +15,19 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -Stamp -quit -module ${THROWBACK} -To ${TARGET} -From
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 #
 # Program specific options:
 #
 COMPONENT = ModeFiles
 SOURCE    = s.ModeFiles
-TARGET    = rm.ModeFiles
+TDIR      = rm.${MACHINE}
+TARGET    = ${TDIR}.MF${TYPE}
 RDIR      = ${RESDIR}.Monitors
 #
 # Generic rules:
@@ -40,34 +43,24 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${RM} ${TARGET}
+        ${WIPE} ${TDIR} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
         ${MKDIR} ${RDIR}
-        ${CP} Resources.${LOCALE}.PALTV   ${RDIR}.PALTV   ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.NTSCTV  ${RDIR}.NTSCTV  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.VGA     ${RDIR}.VGA     ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.VGAPlus ${RDIR}.VGAPlus ${CPFLAGS}
+        ${CP} LocalRes:${MACHINE} ${RDIR} ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+${TDIR}.MFPAL: ${SOURCE} s.PAL
+        ${MKDIR} ${TDIR}
+        ${AS} ${ASFLAGS} s.PAL
+
+${TDIR}.MFNTSC: ${SOURCE} s.NTSC
+        ${MKDIR} ${TDIR}
+        ${AS} ${ASFLAGS} s.NTSC
+
+${TDIR}.MF: ${SOURCE} s.ModeFiles
+        ${MKDIR} ${TDIR}
+        ${AS} ${ASFLAGS} s.ModeFiles
 
 # Dynamic dependencies:
-rm.ModeFiles: Hdr:ListOpts
-rm.ModeFiles: Hdr:Macros
-rm.ModeFiles: Hdr:System
-rm.ModeFiles: Hdr:SWIs
-rm.ModeFiles: Hdr:CPU.Generic26
-rm.ModeFiles: Hdr:IO.GenericIO
-rm.ModeFiles: Hdr:RISCOS
-rm.ModeFiles: Hdr:ModHand
-rm.ModeFiles: Hdr:Machine.<Machine>
-rm.ModeFiles: Hdr:Proc
-rm.ModeFiles: Hdr:Services
-rm.ModeFiles: Hdr:FSNumbers
-rm.ModeFiles: Hdr:HighFSI
-rm.ModeFiles: Hdr:NewErrors
-rm.ModeFiles: Hdr:MsgTrans
-rm.ModeFiles: Version

@@ -15,13 +15,15 @@ Module_BaseAddr
         GET     Hdr:System
         GET     Hdr:ModHand
 	GET	Hdr:Machine.<Machine>
+	$GetIO
+	GET	Hdr:CMOS
         GET     Hdr:Proc
         GET	Hdr:Services
         GET     Hdr:FSNumbers
         GET     Hdr:HighFSI
         GET     Hdr:NewErrors
         GET     Hdr:MsgTrans
-        GET     Version
+        GET     VersionASM
 
 TAB     *       9
 
@@ -29,6 +31,35 @@ MonitorResolutionBits   *       &1F
 MonitorDepthShift       *       5
 MonitorDepthBits        *       &60
 MonitorFrameRateBit     *       &80
+
+; Sort out PAL/NTSC build type.
+		GBLL	PAL_Support
+		GBLL	NTSC_Support
+ [ :LNOT: :DEF: BuildForPAL
+		GBLL	BuildForPAL
+		GBLS	TVStandard
+
+		ASSERT	IOMD_C_PALNTSCType <> 0 ; Must build PAL or NTSC on this machine.
+ |
+PAL_Support	SETL	BuildForPAL
+NTSC_Support	SETL	:LNOT: BuildForPAL
+   [ IOMD_C_PALNTSCType <> 0
+		! 0, "Building hardware-detect version."
+   ]
+ ]
+
+ [ IOMD_C_PALNTSCType <> 0
+PAL_Support	SETL	{TRUE}
+NTSC_Support	SETL	{TRUE}
+TVStandard	SETS	"Auto"
+ ]
+
+		GBLL	Monitor_Support
+ [ IOMD_C_MonitorType <> 0
+Monitor_Support	SETL	{TRUE}
+ |
+Monitor_Support	SETL	{FALSE}
+ ]
 
 ; *****************************************************************************
 ;
@@ -71,7 +102,7 @@ Mod_SWIDecode
         =       0
 
 Mod_HelpStr
-        =       "ModeFiles", TAB, TAB, "$VString ($Date)", 0
+        =       "ModeFiles", TAB, "$Module_MajorVersion ($Module_Date) $TVStandard $Module_MinorVersion", 0
         ALIGN
 
 
@@ -96,32 +127,66 @@ Mod_Init
 01
         MOV     r12, r2
 
-	MOV	R0, #1
-	SWI	XOS_ReadSysInfo                 ; R1 = Monitor Type
-	EXIT	VS
+	; Determine TV/Monitor type
+ [ IOMD_C_PALNTSCType <> 0 :LOR: IOMD_C_MonitorType <> 0
+	MOV	r0, #IOMD_Base			; Read the IOMD 8 bit port.
+	LDR	r0, [r0, #IOMD_CLINES]
+ ]
 
-        STRB    r1, monitor_type
-        
-	CMP     R1, #0
+ [ IOMD_C_PALNTSCType = 0
+   [ BuildForPAL
+	MOV	r1, #0
+   |
+	MOV	r1, #8
+   ]
+ |
+	TST	r0, #IOMD_C_PALNTSCType		; Check for PAL/NTSC
+	MOVEQ	r1, #0				; 0 = PALTV
+	MOVNE	r1, #8				; 8 = NTSCTV
+ ]
+
+ [ IOMD_C_MonitorType <> 0
+	ASSERT	Monitor_Support
+	TST	r0, #IOMD_C_MonitorType		; Check for monitor/TV
+	MOVEQ	r1, #3				; 3 = VGA
+ |
+	ASSERT	:LNOT:Monitor_Support
+	! 0, "Assuming TV only"
+ ]
+
+	STRB    r1, monitor_type
+
+ [ :LNOT: ChrontelSupport
+   [ PAL_Support
+	CMP     R1, #0				; 0 = PALTV
 	ADREQ   R0, PALTV
 	ADREQ   R1, PALText
 	MOVEQ   R2, #PALTextEnd-PALText
 	BEQ     DoLoad
-	CMP     R1, #8
+   ]
+   [ NTSC_Support
+	CMP     R1, #8				; 8 = NTSCTV
 	ADREQ   R0, NTSCTV
 	ADREQ   R1, NTSCText
 	MOVEQ   R2, #NTSCTextEnd-NTSCText
 	BEQ     DoLoad
-	CMP     R1, #3
-	EXIT    NE
-	MOV     R0, #161                        ; set VGA or VGAPlus mode file depending on CMOS
-	MOV     R1, #&6C
+   ]
+   [ Monitor_Support
+	CMP     R1, #3				; 3 = VGA
+   ]
+	EXIT    NE				; This should never happen
+ ]
+
+ [ Monitor_Support :LOR: ChrontelSupport
+	MOV     R0, #ReadCMOS                   ; set VGA or VGAPlus mode file depending on CMOS
+	MOV     R1, #MonitorModeCMOS
 	SWI     XOS_Byte
 	TST     R2, #MonitorFrameRateBit
 	ADREQ   R0, VGA
 	ADRNE   R0, VGAPlus
 	ADR     R1, VGAText
 	MOV     R2, #VGATextEnd-VGAText
+ ]
 
 DoLoad
 	SWI	XOS_CLI                         ; do the LoadModeFile
@@ -131,12 +196,18 @@ DoLoad
 	SWI     XOS_SetVarVal
 	EXIT
 
+ [ :LNOT: ChrontelSupport
+   [ PAL_Support
 PALTV           = "LoadModeFile Resources:Resources.Monitors.PALTV", 0
 PALText         = "PAL"
 PALTextEnd      = 0
+   ]
+   [ NTSC_Support
 NTSCTV          = "LoadModeFile Resources:Resources.Monitors.NTSCTV", 0
 NTSCText        = "NTSC"
 NTSCTextEnd     = 0
+   ]
+ ]
 VGA             = "LoadModeFile Resources:Resources.Monitors.VGA", 0
 VGAPlus         = "LoadModeFile Resources:Resources.Monitors.VGAPlus", 0
 VGAText         = "VGA"
@@ -145,37 +216,6 @@ TVTypeVar       = "TV$Type", 0
         ALIGN
 
 
- [ {FALSE}
- 
-ReadTVType
-; Out:  r1 = 0 (PAL), 3 (VGA - default) or 8 (NTSC)
-;
-        ENTRY   "r0,r2-r4"
-        ADR     r0, TVTypeVar
-        SUB     sp, sp, #8                      ; create local buffer
-        MOV     r1, sp
-        MOV     r2, #7
-        MOV     r3, #0
-        SWI     XOS_ReadVarVal
-        MOV     r1, #3                          ; default to VGA
-        Pull    "r3,lr"                         ; get result and balance stack
-        EXIT    VS
-        TEQ     r2, #0                          ; return default if not set
-        EXIT    EQ
-        TEQ     r4, #0                          ; return default if not set correctly
-        EXIT    NE
-        AND     r3, r3, #&FF                    ; only check first character
-        LDRB    r0, PALText
-        TEQ     r3, r0
-        MOVEQ   r1, #0                          ; return 0 for PAL
-        EXIT    EQ
-        LDRB    r0, NTSCText
-        TEQ     r3, r0
-        MOVEQ   r1, #8                          ; return 8 for NTSC
-        EXIT
-        
- ]
-
 ; *****************************************************************************
 ;
 ;       Mod_Service - obvious really
@@ -183,64 +223,93 @@ ReadTVType
 
 Mod_Service
 	TEQ	r1, #Service_MonitorLeadTranslation
+	TEQNE	r1, #Service_PostInit
 	MOVNES	pc, lr
 
-	ENTRY	"r0"
+	TEQ	r1, #Service_MonitorLeadTranslation
+	BEQ	MonitorLeadTranslation
+
+; Service_PostInit (PRM 1-264)
+;   Exit:
+;     All registers preserved
+
+	; Eaugh!  On PostInit, set the screen mode.
+	ENTRY	"r0-r2"
+	MOV	r0, #1				; Read configured mode
+	SWI	OS_ReadSysInfo
+
+	MOV	r1, r0
+	MOV	r0, #0				; Set the mode
+	SWI	OS_ScreenMode
+	EXITS
+
+; Service_MonitorLeadTranslation (PRM 1-625)
+;     r2 = monitor lead ID
+;   Exit:
+;     r1 = 0
+;     r3 = Mode selector (PRM 5a-102)
+;        0: Flags = 1
+;        4: X resolution
+;        8: Y resolution
+;       12: depth
+;       16: Frame rate
+;       20: Terminator = -1
+;     r4 = Monitor number
+;     r5 = Sync type
+MonitorLeadTranslation	ENTRY	"r0"
 
         LDR     r12, [r12]
 
-        ADR     r0, MonitorLeadList
-        ADR     r3, ModeList
-10
-        LDR     r14, [r0], #4
-        EOR     r1, r2, r14, LSR #24            ; differences
-        EOR     r14, r14, #&FF000000            ; make don't cares into zero
-        TST     r14, #&C0000000
-        BICEQ   r1, r1, #&C0                    ; knock out difference pairs if don't care
-        TST     r14, #&30000000
-        BICEQ   r1, r1, #&30
-        TST     r14, #&0C000000
-        BICEQ   r1, r1, #&0C
-        TST     r14, #&03000000
-        BICEQ   r1, r1, #&03
-        TEQ     r1, #0                          ; if still have differences, then loop
-        ADDNE   r3, r3, #24
-        BNE     %BT10
+ 	MOV	r5, #0				; Normal sync.
+	LDRB	r4, monitor_type		; Load monitor type
 
-        MOV     r0, #&FF
-        AND     r4, r0, r14, LSR #8             ; monitortype in bits 8..15
-        AND     r5, r0, r14, LSR #16            ; sync in bits 16..23
-        ; r1 = 0 from above => claim service
+	ADR	r3, VGAMode
+ [ PAL_Support
+	CMP	r4, #0				; 0 = PALTV
+	ADREQ	r3, PALMode
+ ]
 
-        TEQ     r4, #3                          ; if monitor then
-        BLEQ    CheckConfiguredMode             ; default mode may be overridden
-        
-        EXIT
+ [ NTSC_Support
+	CMP	r4, #8				; 8 = NTSCTV
+	ADREQ	r3, NTSCMode
+ ]
 
-        MACRO
-        MonitorLeadItem $lead, $monitortype, $sync
-        ASSERT $lead < 256
-        ASSERT $monitortype < 256
-        ASSERT $sync < 256
-        DCD     (($lead):SHL:24):OR:(($sync):SHL:16):OR:(($monitortype):SHL:8)
-        MEND
+ [ Monitor_Support :LOR: ChrontelSupport
+	CMP	r4, #3
+	BLEQ	CheckConfiguredMode
+ ]
 
-MonitorLeadList
-	MonitorLeadItem 4_0331, 0, 0
-	MonitorLeadItem 4_1331, 8, 0
-	MonitorLeadItem 4_3333, 3, 0
+ [ ChrontelSupport
+	MOV	r4, #3				; Fake VGA if Chrontel present.
+ ]
 
-ModeList
-	DCD	1, 768, 576, 4, -1, -1
-	DCD	1, 640, 480, 4, -1, -1
-	DCD	1, 640, 480, 3, 60, -1
-        
+	MOV	r1, #0
+	EXITS
 
+; Mode selectors for basic modes.
+VGAMode		DCD	1, 640, 480, 4, -1, -1
+ [ PAL_Support
+   [ ChrontelSupport
+PALMode		DCD	1, 768, 576, 3, 50, -1
+   |
+PALMode		DCD	1, 768, 576, 4, -1, -1
+   ]
+ ]
+ [ NTSC_Support
+   [ ChrontelSupport
+NTSCMode	DCD	1, 640, 480, 3, 60, -1
+   |
+NTSCMode	DCD	1, 640, 480, 4, -1, -1
+   ]
+ ]
+
+
+ [ Monitor_Support :LOR: ChrontelSupport
 CheckConfiguredMode
 ; Out:  r3 = configured mode if valid (else preserved)
 ;
         ENTRY   "r0-r2,r4,r5"
-        
+
         MOV     r0, #161                ; read configured display mode
         MOV     r1, #&6C
         SWI     XOS_Byte
@@ -250,28 +319,57 @@ CheckConfiguredMode
         TEQ     r4, #3
         EXIT    EQ
 
-        AND     r2, r2, #MonitorResolutionBits  ; extract resolution index
-        CMP     r2, #(EndResolutions-Resolutions)/8
-        EXIT    CS
+        ANDS    r2, r2, #MonitorResolutionBits  ; extract resolution index
+   [ IOMD_C_PALNTSCType <> 0
+ 	ASSERT	PAL_Support :LAND: NTSC_Support
+	; Z bit set if selected resolution 0
+	MOVEQ	r0, #IOMD_Base			; If resolution zero,
+	LDREQ	r0, [r0, #IOMD_CLINES]
+	TSTEQ	r0, #IOMD_C_PALNTSCType		; Check PAL/NTSC type
+	ADREQ	lr, PALRes			; If resolution zero and PAL, use alternate...
+	BEQ	%FT10				; ...and skip the next bit.
+   ]
+	CMP     r2, #(EndResolutions-Resolutions)/12
+	EXIT    CS
 
-        ADR     lr, Resolutions         ; get x,y resolution
-        ADD     lr, lr, r2, LSL #3
-        LDMIA   lr, {r1,r2}
+	ADR     lr, Resolutions         ; get x,y resolution
+	ADD     lr, lr, r2, LSL #3
+	ADD     lr, lr, r2, LSL #2
+10	LDMIA   lr, {r1,r2,r5}          ; load x,y and frame rate
 
         MOV     r0, #1                  ; construct display mode and return it
         ADD     r4, r4, #3
-        MOV     r5, #-1
         MOV     lr, #-1
         ADR     r3, display_mode
-        STMIA   r3, {r0-r2,r4,r5,lr}
+        STMIA   r3, {r0-r2,r4,r5,lr}	; 1, x_res, y_res, depth, rate, -1
         EXIT
 
 Resolutions
-        DCD     640, 480
-        DCD     800, 600
-        DCD     1024, 768
+   [ ChrontelSupport
+     [ NTSC_Support
+	DCD	640, 480, 60		; Resolution 0 (TV mode)
+     |
+	DCD	768, 576, 50
+     ]
+   |
+     [ NTSC_Support
+	DCD	640, 480, -1
+     |
+	DCD	768, 576, -1
+     ]
+   ]
+	DCD	800, 600, -1		; Resolution 1
+	DCD	1024, 768, -1		; Resolution 2
 EndResolutions
 
+   [ PAL_Support :LAND: NTSC_Support
+     [ ChrontelSupport
+PALRes	DCD	768, 576, 50
+     |
+PALRes	DCD	768, 576, -1
+     ]
+   ]
+ ]
 
 ; *****************************************************************************
 ;
@@ -313,9 +411,13 @@ Divide
         EXIT
 
 MonitorType
+ [ ChrontelSupport
+	MOV	r0, #3			; Always fake VGA
+ |
         LDRB    r0, monitor_type
+ ]
         MOVS    pc, lr
-        
+
 SafeArea
         ENTRY   "r4-r8"
 
@@ -335,6 +437,7 @@ SafeArea
         ADD     r3, r3, #1
 
         LDRB    r6, monitor_type
+
         TEQ     r6, #0                  ; if not PAL
         TEQNE   r6, #8                  ; and not NTSC
         MOVNE   r0, #0                  ; then return full screen
@@ -345,9 +448,9 @@ SafeArea
         ADREQ   lr, PALPercentages
         ADRNE   lr, NTSCPercentages
         LDMIA   lr, {r6-r8,lr}
-        
+
         MOV     r1, #100                ; divisor is always 100
-        
+
         MUL     r0, lr, r3              ; calculate max y
         BL      Divide
         MUL     lr, r7, r3
@@ -371,16 +474,15 @@ SafeArea
         MOV     r1, r1, LSL r5
         MOV     r2, r2, LSL r4
         MOV     r3, r3, LSL r5
-        
+
         EXIT
 
 ; Percentages for left, bottom, right, top of screen giving borders round safe area.
 ;
 PALPercentages
-        DCD     8, 8, 8, 8
+        DCD     $PALSafeArea
 
 NTSCPercentages
-        DCD     3, 6, 3, 6
-        
+        DCD     $NTSCSafeArea
 
         END
