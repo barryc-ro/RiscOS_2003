@@ -129,18 +129,11 @@ translate: dirs
         
 resources: translate
 	@echo ** Exporting non-translatable resource files
-        IfThere Resources.$(USERIF).$(LOCALE).$(APP) Then \
-          $(CP) Resources.$(USERIF).$(LOCALE).$(APP) $(RESAPP) $(CPFLAGS) \
-        Else \
-          $(CP) Resources.$(USERIF).UK.$(APP) $(RESAPP) $(CPFLAGS)
-        IfThere Resources.$(USERIF).$(LOCALE).NVRAM Then \
-          $(CP) Resources.$(USERIF).$(LOCALE).NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS) \
-        Else \
-          $(CP) Resources.$(USERIF).UK.NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
-        IfThere Resources.$(USERIF).$(LOCALE).STBPrint Then \
-          $(CP) Resources.$(USERIF).$(LOCALE).STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS) \
-        Else \
-          $(CP) Resources.$(USERIF).UK.STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
+	SetMacro LazUILocalRes$path Resources.$(USERIF).$(LOCALE).,Resources.$(USERIF).UK.
+        $(CP) LazUILocalRes:$(APP) $(RESAPP) $(CPFLAGS)
+        $(CP) LazUILocalRes:NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
+        $(CP) LazUILocalRes:STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
+        UnSet LazUILocalRes$path
         
 # Dynamic dependencies:
