@@ -40,7 +40,7 @@ DEBUG_TARGET	= $(COMPONENT)d
 #
 
 RESDIR          = $(RESDIR).$(RES_COMPONENT)
-RESAPP          = <Resource$Dir>.Apps.$(APP)
+RESAPP          := <Resource$Dir>.Apps.$(APP)
 
 
 # -----------------------------------------------------------------------------
