@@ -106,12 +106,13 @@ install: dirs
 
 dirs:
 	$(MKDIR) $(OUTRESDIR)
-	$(MKDIR) $(OUTRESDIR).220.Modules.Network
-	$(MKDIR) $(OUTRESDIR).220.Modules.Toolbox
+	$(MKDIR) $(OUTRESDIR).300.Modules.VideoCtrl
 	$(MKDIR) $(OUTRESDIR).300.Modules.Network
 	$(MKDIR) $(OUTRESDIR).300.Modules.Toolbox
+	$(MKDIR) $(OUTRESDIR).400.Modules.VideoCtrl
 	$(MKDIR) $(OUTRESDIR).400.Modules.Network
 	$(MKDIR) $(OUTRESDIR).400.Modules.Toolbox
+	$(MKDIR) $(OUTRESDIR).Modules.VideoCtrl
 	$(MKDIR) $(OUTRESDIR).Modules.Network
 	$(MKDIR) $(OUTRESDIR).Modules.Toolbox
 	$(MKDIR) $(OUTVSNDIR)
