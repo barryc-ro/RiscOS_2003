@@ -103,6 +103,10 @@ rm.STB3.Interlace: rm.Interlr
 	${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
 	
+rm.STB400.Interlace: rm.Interlq
+	${MKDIR} rm.${MACHINE}
+	${CP} $? $@ ${CPFLAGS}
+	
 .Hdr.rm:; ${AS} ${ASFLAGS} -From $< -To $@
 
 # Dynamic dependencies:
