@@ -24,18 +24,13 @@ Date      Who     Description of change
 class Source;
 #include "NECstruct.h"
 
-#ifdef DEBUG
-//#define MEM_SANE_CHECK
+#ifdef DEBUGLIB
+//#define MEM_SANE_CHECK	// this will dump the layout of the dynamic area it will also do
+				// checks on locations of allocated datagrams etc.  this will ensure
+				// that memory maps as it should
 #endif
 
-// these are used to determine the type of callback
-
-typedef enum {
-  callback_foreground = 0x01,
-  callback_background = 0x02
-} callback_flag;
-
-extern "C" {
+#define MAX_NAKS 10
 
 // NECBlock data structure.
 typedef struct {
@@ -44,353 +39,147 @@ typedef struct {
 } NECBlock;
 
 // Payload data is opaque to us
-typedef void *NECPayload;
+typedef void *NECPayload;	// this is the datagram
 
 // This macro returns the size of an NECBlock structure with iov_size
 // entries in the s/g array.
 #define sizeof_NECBlock(iov_size) \
 	(offsetof(NECBlock, iov) + sizeof(struct iovec) * (iov_size))
 
+// The following structures are private to c++.Source defined in SourceP and are used in the 
+// memmap class as such invisible to outside classes.
 
-// The following structures are private to c++.Source
 typedef struct MemBlock MemBlock;
 typedef struct DynamicAreaHeader DynamicAreaHeader;
-
-} // C structures
-
 class DatagramBitfield;
 
-
-class Source : public Error
+// ---------------------------------------------------------- Source Memory map ------------------
+// this class controls the dynamic area used by the source class
+//
+class SourceMemMap : public Error
 {
-	// this class maintains the window and returns a pointer to a data
-	// block when it is requested.
-
-  public:
-//
-// Public Methods
-// --------------
-//
-        Source(size_t max_blocks);
-//
-// Constructor. this creates a local socket it creates an unallocated error
-// this avoids any call to the source object until allocation has been done.
- 
-        ~Source();
-//
-// Destructor.  Frees any memory associated with the object.
-//
-// Errors: None.
-//
-//   
-        int Allocate( size_t max_block_size, size_t initial_block_num, size_t datagram_size);
-        
-// allocate creates the dynamic area max_blocks is the maximum number of blocks to be held
-// simultaneously.  Typically a value of 10 is used here.  max_block_size
-// is the maximum size of each block.  This will be rounded up to be an
-// exact multiple of the UDP datagram length.
-//
-// Errors: VSP_Alloc: the required buffers could not be claimed
-//
-//
-        int setServerDetails(const char *hostname, int port);
-        int setServerDetails(const char *hostname, const char *port);
-        int setServerDetails(struct in_addr address, int port);
-//
-// Declares where the UDP packets are going to be coming from.  Port number
-// may be specified as a number or a well-known service name.  Quoting a
-// service "name" which is actually a string representation of a numeric value
-// is treated as an explicit port selection.  If an int port is given, then
-// this value is in host-order.
-//
-// Errors: TCP_BadPortSpecification, TCP_UnknownServer, TCP_SocketError
-//         TCP_ServerRefusedConnection
-//
-//
-        int getLocalPort(int *port);
-//
-// Returns the local port number being used by this Source object.  This
-// information is required by the Server class for Asset Presentation Request
-// messages.
-//
-// Errors: TCP_SocketError: Unable to bind to local port.
-//
-//
-        int getBlockStatus(size_t *num_blocks, size_t *max_blocks, size_t *num_free);
-//
-// Gets Misc Header information as per spec
-
-	int getMiscInfo(int flags);
-//
-// this sets the final block to request in response to a start end notification
-
-	void setFinalBlock(ULONG final_block) { stream_end_block = final_block; }
-	int getFinalBlock(void) { return (int)stream_end_block; }
-	
-// Gets the number of full blocks pending and the maximum number of bufferable
-// blocks as set in the constructor, number of currently free blocks.
-//
-// Errors: None.
-//
-//
-        int getBlock(NECBlock **block);
-//
-// Gets a pointer to the next completed complete block.  Changes to the
-// data structures associated with the block are locked out until the
-// block is freed with a call to the freeBlock method.
-//
-// Errors: VSP_NoDataAvailable
-//
-//
-        int freeBlock(const NECBlock *block);
-        int freeBlock_background(const NECBlock *block, Server *server = NULL);
-//
-// Releases the specifed block structure.  The data structures associated
-// with the block are marked available for re-use.
-//
-// Errors: VSP_InvalidValue: the block was invalid or did not belong to this
-//         Source object.
-//
-//
-        int backgroundExecute(callback_flag *callback_flags, Server *server);
-//
-// Informs the Source object that an external signal has occurred (event or
-// interrupt) that may be relevant to the Source object.  Source object can
-// handle it as it pleases.  Use of private_handle is not yet defined.
-// What this method may and may not do depends upon the host environment.
-// Code that may not be executed in this method due to environment (eg. being
-// in an interrupt handler) must be placed inside the foregroundExecute method.
-//
-// Errors: None.
-//
-//
-        int foregroundExecute(callback_flag *callback_flags, Server *server, int *full_blocks);
-//
-// Allows the Source object foreground execution time so that it can perform
-// operations not permitted in the interrupt method.  Use of private_handle is
-// not yet defined.
-//
-// Errors: None.
-//
-//
-	int getSocket(Socket *);
-//
-// Gets the underlying socket object being used for UDP datagram reception
-// by the Source class.
-//
-// Errors: None.
-//
-	int serviceDynamicAreaRenumber(int old_id, int new_id);
-//
-// Informs a Source object that a dynamic area has been renumbered.  Each
-// object needs to check whether its own dynamic area is the one being
-// renumbered and note the change for future reference.
-//
-// Errors: None.
-//
-
+  friend Source;	// Originally these two classes were one however due to the complexity of supporting two
+  			// concepts within one class I believe it better to seperate it into the memory management
+  			// and the block management as such the source class consults the source memory map for
+  			// memory allocation and destruction.  I is ideal if we can get rid of the friend clause.
+  
   private:
-//
-// Private Methods
-// ---------------
-//
-        int memMemBlockToNECBlock(const MemBlock *block, NECBlock **nec_block);
-//
-// Maps an internal MemBlock object to an externally visible NECBlock object.
-//
-// Errors: VSP_InvalidValue: the block was invalid or did not belong to this
-//         Source object.
-//
-//
-        int memNECBlockToMemBlock(const NECBlock *block, MemBlock **mem_block);
-//
-// Maps an externally visible NECBlock object to an internal memBlock object.
-//
-// Errors: VSP_InvalidValue: the block was invalid or did not belong to this
-//         Source object.
-//
-//
-        int memAllocateBlock(MemBlock **block, size_t *block_num = 0);
-//
-// Reserves an MemBlock data structure from the block pool.  Returns NULL if
-// none were available, otherwise the returned block is re-initialised ready
-// for receiving information from the network.  If block_num is non-NULL,
-// it is filled in with the ordinal position of the returned block.
-//
-//
-        int memReleaseBlock(MemBlock *block);
-//
-// Releases a previous block allocation.  Datagram buffers for the block also
-// released.
-//
-// Errors: VSP_InvalidValue: the block was invalid or did not belong to this
-//         Source object.
-//
-//
-        int memFindFreeDatagramBuffer(NECDatagram **datagram);
-//
-// Locates a free datagram buffer
-//
-// Errors: VSP_Alloc: Datagram store has been exhausted.  This
-//         error should never occur unless faulty configuration information has
-//         been supplied on object instantiation.
-//
-//
-        int memReadDatagram(callback_flag *flags, int *size, Server *tcp_link);
-//
-// Reads a pending datagram into a free datagram buffer and links it into the
-// block's scatter array.
-//
-// Errors: TCP_ReadFail, VSP_Alloc
-//
-//
-        int memOptimiseBlock(MemBlock *block);
-//
-// Examines a completed block and attempts to minimise the size of the scatter
-// array by merging contiguous blocks into single blocks.  This is an
-// optimisation which is performed in order to minimise the number of separate
-// calls that the Stream object will have to make to the Sink object.  This
-// optimisation will work best when the communication channel between the server
-// and client is mostly reliable and delivers datagrams in order.
-//
-// Errors: None.
-//
-//
-	int linkDatagramToBlock(callback_flag *flags, NECDatagram *, Server *tcp_link);
-	int linkDatagramToBlock(NECDatagram *, MemBlock *mb, Server *tcp_link);
-//
-// Link a received datagram to its matching block.  Allocate the block if
-// possible.  If it is a duplicate, free the datagram and return NoError.
-// If block is now completed, set the flag in the MemBlock indicating this.
-//
-// Errors: VSP_Alloc: no free block buffers
-//
-        int setSocketError(int result);
-//
-// Converts the current value of errno into a VSP module error code if result
-// was less than zero.  If result was >= 0, then there was no error.
-// This method allows setSocketError(some_system_call()) to wrap system calls.
-//
-// Errors: TCP_BadPortSpecification, TCP_UnknownServer, TCP_SocketError
-//         TCP_ServerRefusedConnection
-//
-	int validateNECBlock(const NECBlock *);
-//
-// This function validates a given NECBlock pointer by checking the magic word
-// which immediately precedes the structure in memory.
-//
-// Errors: VSP_InvalidValue
-//
-	int validateMemBlock(const MemBlock *);
-//
-// This function validates a given MemBlock pointer by checking the magic word
-// which occurs within the structure.
-//
-// Errors: VSP_InvalidValue
-//
-	MemBlock *getBlock(size_t n); //const;
-	
-// same as free block but as in user mode	
-        int freeBlock_background(MemBlock *mb);
-
-// calculate the largest block_id for full blocks, this means that no block_id
-// smaller shall be incomplete and no block_id greater shall be complete.
-
-	int calculateMaxCompleteBlock(void);
-	
-// this routine calculates if there are any acks to be sent.
-// calculate possible ack sequence.
-// the idea is to maintain a window of NEC_databurstval from the last complete block 
-
-	int calculatePosAckSequence(Server *server);
-//
-// this calculates all outstanding NAKs on received blocks
-
-	int calculatePosNAKSequence(callback_flag *callback_flags, Server *server, ULONG max_block);
-
-// This function maps a block offset number (not a block ID!) to a pointer
-// to the block.  It does not validate n.
-//
-// Errors: None.
-//
-	int memFreeDatagram(const NECDatagram *);
-	int memFreeDatagram(size_t);
-//
-// Frees the specified datagram buffer.
-//
-// Errors: VSP_BadErr: block pointer/number was illegal - this is a fatal
-// internal error
-//
-
-// Utility methods which do not use the standard error report mechanism
-  private:
-        size_t sizeof_MemBlock() const;
-// Returns the size of a MemBlock stucture (depends on dgrams_per_block)
-	int initLimits(size_t datagram_size);
-// Calculate the memory requirements - used during object construction
-	int createDynamicArea();
-// Request memory block from the OS.
-	int initDynamicArea();
-// Final initialisation of Source objects - caches some useful constants
-
-	NECPayload *findPayloadBuffer(size_t n) const;
-	NECPayload *findPayloadBuffer(NECDatagram *dgram) const;
-// Locate the payload buffer for the particular datagram
-
-	size_t findDatagramNumber(NECDatagram *dgram) const;
-	size_t findDatagramNumber(NECPayload *dgram) const;
-// Discover the datagram buffer number of the given pointer
-
-	MemBlock *findBlock(ULONG id, size_t *block_num = 0);
-	MemBlock *findExistingBlock(ULONG id, size_t *block_num = 0);
-//
-// This function looks to see if the block with the identifier of id
-// has been allocated, and if so, what its address is.  If the block
-// is not found, then it is created if possible.  If that was not
-// possible, then NULL is returned.  If block_num is non-NULL, it is
-// filled in with the ordinal position of the MemBlock in the memblock
-// buffer array.
-//
-	MemBlock *locateBlock(ULONG id);
-//
-// This function looks to see if the block with the identifier of id
-// has been allocated, and if so, where
-//
-
-
-  private:
-        // Private data members
-
-        // Overall memory limits
-        size_t total_memory;		// Total size of dynamic area
         size_t max_blocks;		// Number of blocks to be able to hold
 	size_t max_block_size;		// maximum size of each block
 
-	size_t dgrams_per_block;	// max dgrams making up one block
+	size_t dgrams_per_block;	// max dgrams making up one block size of iov vector
 	size_t total_dgrams;		// total dgram buffers for object
 	size_t dgram_size;		// UDP datagram payload size
-	size_t dgram_sendto_size;	// returned from asset presentation AR
 
 	DatagramBitfield *dgram_use;	// Quick lookup bitfields
 
 	// Dynamic area information
-	int da_number;			// dynamic area number
-	void *da_base;			// base address in memory
-        size_t size_limit;		// D.A. size limit
+	int    da_number;		// dynamic area number
+	void  *da_base;			// base address in memory
+        size_t total_memory;		// Total size of dynamic area
 
         // Quick lookup pointers
         MemBlock *block_hd;     	// Memory block header buffer start
         NECDatagram *dgram_hd;  	// Datagram header buffer start
         NECPayload *dgram_data_hd;    	// Datagram payload buffer start
 
+   private:		// constructive
+	error_flag 	initLimits(void);
+	error_flag 	createDynamicArea(void);
+	error_flag 	initDynamicArea(void);
+
+   			// validation and assignment
+	error_flag 	validateNECBlock(const NECBlock *);			// checks the signiture
+	error_flag 	validateMemBlock(const MemBlock *);			// checks the signiture
+ 	error_flag 	memMemBlockToNECBlock(const MemBlock *block, NECBlock **nec_block);
+        error_flag 	memNECBlockToMemBlock(const NECBlock *block, MemBlock **mem_block);
+        
+        		// methodic
+        error_flag	memFindFreeDatagramBuffer(NECDatagram **datagram);	// returns a free datagram header, indicating a free area
+	error_flag 	memFreeDatagram(const NECDatagram *);
+	error_flag 	memFreeDatagram(size_t);
+			
+			// locational
+	NECPayload 	*findPayloadBuffer(size_t n) const;
+	NECPayload 	*findPayloadBuffer(NECDatagram *dgram) const;
+	size_t 		findDatagramNumber(NECDatagram *dgram) const;
+	size_t 		findDatagramNumber(NECPayload *dgram) const;
+	
+	MemBlock 	*findExistingBlock(ULONG id, size_t *block_num = 0);	// finds a block based on an allocated block id, null on error
+	MemBlock 	*findBlock(ULONG id, size_t *block_num = 0);		// finds a block, if it cannot find it allocate it, null on error
+	
+	MemBlock 	*getBlock(size_t n) const;		// returns a block addressed by its array offset in the dynamic area 
+         
+        error_flag 	freeBlock_background(MemBlock *mb);	// free block when called from user mode, ie not re-entered
+	
+  public:
+  	SourceMemMap() {};
+  	~SourceMemMap() {};
+};
+// ---------------------------------------------------------- Source Class ------------------
+// this class maintains a three way relationship.  Between the stream through the stream owning it
+// through the socket as it owning it and the memory map, an intermate relationship where the source
+// will request memory etc.
+//
+
+class Source : public Error
+{
+  private:
 	// Stream related data
 	ULONG last_block_sent;		// ID of the last block returned to caller
 	ULONG max_block_received;	// ID of HWM used block in stream
 	ULONG max_completed_block;	// ID of the greatest completed block in source.
-	ULONG stream_end_block;
-
+	
+	
+	int current_play_id;		// this is the trickplay flag this changes with each new trickplay
+	
 	// Network information
-	Socket sd;
+	Socket 		sd;
+	
+	SourceMemMap	mem_map;
+     
+     public:
+	ULONG stream_end_block;		// this is set when we know what the last block in the stream is
+	int full_blocks;
+	
+      private:	// object manipulation
+	
+	error_flag calculateMaxCompleteBlock(void);
+	error_flag calculatePosAckSequence(Server *server);
+	error_flag calculatePosNAKSequence(int *naks_sent, Server *server, int max_block);
 
+      public:	// object creation destruction
+        Source(size_t max_blocks);
+        ~Source();
+        error_flag Allocate( size_t max_block_size, size_t initial_block_num, size_t datagram_size);
+
+        	// processor entry points
+        error_flag calculate_freeBlocks(void);
+        error_flag foregroundExecute(callback_flag *callback_flags, Server *server);
+	error_flag serviceDynamicAreaRenumber(int old_id, int new_id);
+	
+        error_flag ReadDatagrams(callback_flag *flags);			// reads off the socket
+
+		// block manipulation
+	ULONG 	   getAckSeq(void) { return max_completed_block; }
+	int	   getCurrentPlayId() {return current_play_id; }
+  	error_flag getMiscInfo(int flags);
+  	
+  	error_flag setNewPlayState(int *play_state, int *max_complete);
+        error_flag getBlockStatus(size_t *num_blocks, size_t *max_blocks, size_t *num_free);
+	void 	   setFinalBlock(ULONG final_block) { stream_end_block = final_block; }
+	int  	   getFinalBlock(void) { return (int)stream_end_block; }
+	
+        error_flag getBlock(NECBlock **block);		// give block to stream object
+        error_flag freeBlock(const NECBlock *block);	// flag block as returned under interrupt
+		
+      		// socket manipulation 
+        error_flag setServerDetails(const char *hostname, int port);
+        error_flag setServerDetails(const char *hostname, const char *port);
+        error_flag setServerDetails(struct in_addr address, int port);
+        error_flag getLocalPort(int *port);
+	error_flag getSocket(Socket *);
+        error_flag setSocketError(int socket_result);
 };
+
 #endif

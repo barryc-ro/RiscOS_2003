@@ -25,14 +25,8 @@ Date      Who     Description of change
 #include "Source.h"	// Source Element
 
 #define NUM_MPEG_Tokens 	2	// this is the number of tokens passed between source and stream
-#define STREAM_NAK_period	400	// centiseconds, I would suggest that this is larger than one block
-
-#define FINISHED	1
-#define NOTFINISHED	(~FINISHED)
-#define STREAM_inet_inuse 	1
-#define CLAIMED		1
-#define UNCLAIMED	(~CLAIMED)
-
+#define STREAM_NAK_timeout	200	// centiseconds, timeout after sending a nak before having a problem
+#define STREAM_comms_timeout	25	// timeout by which we suppose no more information on its way.
 // query 5.8
 typedef enum {
 	state_stop = 1,
@@ -45,9 +39,11 @@ typedef enum {
 	state_back_skip,
 	state_slow,
 	state_step,
-	state_still
+	state_still,			// beyond here is differing states of play
+	state_endreceived,
+	state_prestart
 } state_of_play;
- 
+
 // query 5.9
 #define trick_fast_forward 	0x0001
 #define trick_fast_rewind	0x0002
@@ -66,35 +62,37 @@ typedef enum {
 
 class StreamToken : public Error{
   public:
-   int 			in_use;	 // this is a claimed not claimed boolean
-   int 			list_size;
+   semaphor			in_use;	 // this is a claimed not claimed boolean
+   int	 			list_size;
+   int 				num_blocks, blocks_returned;
    Bitstream_buffer_descriptor	*list;
    NECBlock			*block;
    NECBlockHeader		*block_header;
-   int 				num_blocks, blocks_returned;
   
   StreamToken(void);
   ~StreamToken(void);
   
-  int AllocList(int max_dgrams);
+  error_flag AllocList(int max_dgrams);
 };
 
 typedef PlayElementRequest* PlayList;
 
 typedef struct{
-  USHORT h_pixels;	// 16 bits
-  USHORT v_pixels;
-  ULONG	 play_time;	// 32 bits
-  USHORT status_word;
-  USHORT scene_number;
-  ULONG	 head_time;
-  ULONG	 end_time;
-  ULONG  encode_time;
-  ULONG  bitrate;
+  	USHORT h_pixels;	// 16 bits
+  	USHORT v_pixels;
+  	ULONG  play_time;	// 32 bits
+  	USHORT status_word;
+  	USHORT scene_number;
+  	ULONG  head_time;
+  	ULONG  end_time;
+  	ULONG  encode_time;
+  	ULONG  bitrate;
 } misc_5_10;
 
 class Stream : public Error
 {
+  friend StreamList;
+  
   /* 
   This defines a dynamic stream it is instantiated while a stream
   is to be expected from the server.  It contains a state that indicates
@@ -107,47 +105,46 @@ class Stream : public Error
   	
   	NECBlockHeader	most_significant_block;
   	
-  	int full_blocks;			// if the mpeg player stalls it is better to start with
-  	int from, to;
-  					// full blocks
-  	void *pw;			// for callbacks
-  	state_of_play state;		// state of play, FF, RW etc. STATE_ declarations
-  	Sink    *mysink;          	// pointer to sink
-  	Source  *mysource;		// pointer to source
+  	int buffer_blocks;			// if the mpeg player stalls it is better to start with
+   	int from, to;				// time criteria
+   	int fast_playback_ratio;
+  	int source_sd, server_sd;		// search criteria
 
-  	int init_buffers(void);
-   	int test_empty_buffers(void);
-   	int NECBlockToMPEGBufferList(StreamToken *buffer);
-	int MPEGBufferListToNECBlock(StreamToken *buffer);
+  	void 		*pw;			// for callbacks
+  	state_of_play 	state;			// state of play, current state of the stream
+  	Sink    	*mysink;          	// pointer to sink
+  	Source  	*mysource;		// pointer to source
+  	callback_flag 	callback_pending;		// this is used by the Stream List class
+  	semaphor 	source_flag, server_flag;	// flags are to avoid inet re-entrancy
+
+   	error_flag test_empty_buffers(void);
+   	error_flag NECBlockToMPEGBufferList(StreamToken *buffer);
+	error_flag MPEGBufferListToNECBlock(StreamToken *buffer);
+ 
+	error_flag timeslice(void);
+	error_flag server_inetevent(void);
+
+	error_flag MPEGInterrupt(int buffer_descriptor, claim_flag *claim);
+	error_flag DummyAckCall(void);
+	error_flag ServiceDynamicAreaRenumber(int old_id, int new_id);
 	  	
   public:
-  	callback_flag callback_pending;		// this is used by the Stream List class
-
-  	int source_full_blocks;
-  	Server  *myserver;
-  	int source_flag, server_flag;	// flags are to avoid inet re-entrancy
-  	int source_sd, server_sd;	// search criteria
- 	Stream(int MPEGid, PlayList playlist, int play_num, Server* server, int NumBlocks, 
+ 	Server  *myserver;
+  	
+ 	Stream(int initial_block, int MPEGid, PlayList playlist, int play_num, Server* server, int NumBlocks, 
  					int BufferBlocks, void *pwork, int in_from = 0, int in_to = 0);
  	~Stream();
  					// delete only if MPEG modules don't own any memory
- 	int change_state(state_of_play new_state);
- 	state_of_play get_state(void) { return state; } 
+ 	error_flag change_state(state_of_play new_state);
  		
- 	int GetSinkHandle(void);	// call to Decoder
- 	int CheckEOS(int *play_state);	// returns the state of the stream
- 	int SetSpeed(int direction, int speed);	// call to Decoder
- 	int SetPosition(int flags, int pos_time);  // call to Decoder
- 	int ReadNPT(int *time);		// call to Decoder
- 	int GetMiscInfo(int *reg_r0, misc_5_10 *ptr, int size);
+ 	error_flag GetSinkHandle(void);	// call to Decoder
+ 	error_flag CheckEOS(int *play_state);	// returns the state of the stream
+ 	error_flag SetSpeed(int direction, int speed);	// call to Decoder
+ 	error_flag SetPosition(int flags, int pos_time);  // call to Decoder
+ 	error_flag ReadNPT(int *NPT_time);		// call to Decoder
+ 	error_flag GetMiscInfo(int *reg_r0, misc_5_10 *ptr, int size);
+ 	int getBlockVal(void);			// returns the greatest block used
  	
-	int source_inetevent(void);
-	int server_inetevent(void);
-	int NakCall(void);
-
-	int MPEGInterrupt(int buffer_descriptor, int *claim);
-	int DummyAckCall(void);
-	int ServiceDynamicAreaRenumber(int old_id, int new_id);
 };
 
 
@@ -162,16 +159,15 @@ class StreamList : public List
   public:
   	StreamList(void);
   	~StreamList(void);
-  	Stream *identify(int identifier);
-  	int Add(Stream *, int *);
-  	int Remove(int identifier);	// returns a boolean success value
+  	error_flag identify(Stream **item, int identifier);
+  	error_flag Add(Stream *, int *);
+  	error_flag Remove(int identifier);	// returns a boolean success value
   	
 	// poll events
-	int inetEvent(int code, int identifier, int *claim, void *pw);
-	int TimeSliceCall(void *pw);
-	int NAKCallBack(void);
-	int MPEGInterrupt(int buffer_descriptor);
-	int DummyAckPoll(void);
-	int ServiceDynamicAreaRenumber(int old_id, int new_id);
+	error_flag inetEvent(int code, int identifier, claim_flag *claim, void *pw);
+	error_flag TimeSliceCall(void *pw);
+	error_flag MPEGInterrupt(int buffer_descriptor);
+	error_flag DummyAckPoll(void);
+	error_flag ServiceDynamicAreaRenumber(int old_id, int new_id);
 };
 #endif //_Stream_H_
