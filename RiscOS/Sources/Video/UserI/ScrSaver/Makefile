@@ -66,6 +66,16 @@ EXPORTS   =
 #
 all: ${RAMTARGET} ${APPTARGET}
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic-resources-get-alias
+  ${MKDIR} ${BBEDIR}.Resources
+  BBE_Export_Dir abs
+  BBE_Export_File Resources.!Run
+  BBE_Export_File Resources.Templates
+  BBE_Export_Dir  Resources.${LOCALE}.${USERIF}.${UI_VARIANT}
+  BBE_Export_Dir  Resources.UK.${USERIF}
+
 #
 # RISC OS ROM build rules:
 #
