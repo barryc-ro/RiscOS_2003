@@ -21,7 +21,7 @@ AS      = objasm
 CC      = cc
 CMHG    = cmhg
 CP      = copy
-LD      = link -v -map
+LD      = link
 RM      = remove
 WIPE    = -wipe
 
@@ -47,13 +47,14 @@ SSLDIR    = C:SSLeay
 REMOTEDB  = C:debug.o.lremotezm
 
 INSECURELIBS= ${INETLIB} ${SOCKLIB}
-BASESECURELIBS=C:CryptoBox.o.cryptolib $(SSLDIR).o.libcrypto ${UNIXLIB} ${INSECURELIBS}
+BASESECURELIBS=$(SSLDIR).o.libcrypto ${UNIXLIB} ${INSECURELIBS}
 SECURELIBS= $(SSLDIR).o.ssl ${BASESECURELIBS}
 SECUREXLIBS= $(SSLDIR).o.sslx ${BASESECURELIBS}
+PKCS11LIB=C:CryptoBox.o.cryptolib
 #
 # Include files
 #
-INCLUDES  = -IC:CryptoBox,C:,C:TCPIPLibs.,${SSLDIR}.
+INCLUDES  = -IC:,C:TCPIPLibs.,${SSLDIR}.
 DFLAGS =  ${DB} -DCOMPAT_INET4 -DFLAVOUR_TRANSPORT_MODULES=0 -DHTTPMOD -DRISCOS -DACORN_BUILD ${D}
 #
 # Program specific options:
@@ -61,29 +62,31 @@ DFLAGS =  ${DB} -DCOMPAT_INET4 -DFLAVOUR_TRANSPORT_MODULES=0 -DHTTPMOD -DRISCOS 
 COMPONENT = http
 TARGET    = aof.${COMPONENT}
 OBJS      = ModHead.o mimemap.o files.o file.o http.o module.o csfs.o certs.o layershttp.o
-BASESECUREOBJS= os.ModHead os.mimemap os.files os.file os.http os.module os.csfs os.certs os.predirect os.layershttp os.client
-SECUREOBJS=  ${BASESECUREOBJS}
-SECUREXOBJS= ${BASESECUREOBJS}
+SECUREOBJS= os.ModHead os.mimemap os.files os.file os.http os.module os.csfs os.certs os.predirect os.layershttp os.client
+PKCS11OBJS= op.ModHead op.mimemap op.files op.file op.http op.module op.csfs op.certs op.predirect op.layershttp op.client
+
 PREPROOBJS= p.mimemap p.files p.file p.http p.module p.csfs p.certs p.predirect p.layershttp p.client
 
 EXPORTS   = h.httppub h.pads
 
-.SUFFIXES:   .os
+.SUFFIXES:   .os .op
 
 #
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DNO_SECURE
 .c.os:;     ${CC} ${CFLAGS} -o $@ $< 
+.c.op:;     ${CC} ${CFLAGS} -o $@ $< -DFLAVOUR_PKCS11=1 -IC:CryptoBox
 .c.p:;      ${CC} ${CFLAGS} -E -C $< > p.$*
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< -DNO_SECURE
 .cmhg.os:;  ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.op:;  ${CMHG} ${CMHGFLAGS} -o $@ $< -DFLAVOUR_PKCS11=1 
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
-all: rm.${COMPONENT}mod rm.${COMPONENT}smod rm.${COMPONENT}sxmod
+all: rm.${COMPONENT}mod rm.${COMPONENT}smod rm.${COMPONENT}sxmod rm.${COMPONENT}spmod rm.${COMPONENT}spxmod
 
 prepro: ${PREPROOBJS}
 	@echo preprocessed module made
@@ -111,6 +114,7 @@ install: rm.${COMPONENT}mod rm.${COMPONENT}smod
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} os.* ${WFLAGS}
+        ${WIPE} op.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
@@ -122,1001 +126,66 @@ resources:
 #        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
 #        @echo ${COMPONENT}: resource files copied
 
+local_dirs:
+	${MKDIR} o	
+	${MKDIR} op
+	${MKDIR} os
+	${MKDIR} aof
+	${MKDIR} rm
+	echo Made local dirs
+
+dirs:
+	${MKDIR} linked
+	echo Made dirs
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
 
-rom_strong: ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
+rom_pkcs11_strong: ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECURELIBS} local_dirs
+        ${LD} -o ${TARGET} -aof ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECURELIBS}
+
+rom_pkcs11_secure: ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECUREXLIBS} local_dirs
+        ${LD} -o ${TARGET} -aof ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECUREXLIBS}
+
+rom_strong: ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS} local_dirs
         ${LD} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
 
-rom_secure: ${SECUREXOBJS} ${ROMCSTUBS} ${SECUREXLIBS}
-        ${LD} -o ${TARGET} -aof ${SECUREXOBJS} ${ROMCSTUBS} ${SECUREXLIBS}
+rom_secure: ${SECUREOBJS} ${ROMCSTUBS} ${SECUREXLIBS} local_dirs
+        ${LD} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECUREXLIBS}
 
-rom_ rom_insecure: ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
+rom_ rom_insecure: ${OBJS} ${ROMCSTUBS} ${INSECURELIBS} local_dirs
         ${LD} -o ${TARGET} -aof ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
 
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_link:
+rom_link: dirs
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}mod: ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS}
+rm.${COMPONENT}mod: ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS} local_dirs
         ${LD} -o $@ -module ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}smod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS}
+rm.${COMPONENT}smod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS} local_dirs
         ${LD} -o $@ -module ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}sxmod: ${SECUREXOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS}
-        ${LD} -o $@ -module ${SECUREXOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS}
+rm.${COMPONENT}sxmod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS} local_dirs
+        ${LD} -o $@ -module ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS}
+        Access $@ RW/R
+
+rm.${COMPONENT}spmod: ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECURELIBS} local_dirs
+        ${LD} -o $@ -module ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECURELIBS}
+        Access $@ RW/R
+
+rm.${COMPONENT}spxmod: ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS} local_dirs
+        ${LD} -o $@ -module ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS}
         Access $@ RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-os.mimemap:	c.mimemap
-os.mimemap:	C:h.kernel
-os.mimemap:	h.mimemap
-os.files:	c.files
-os.files:	C:h.kernel
-os.files:	h.types
-os.files:	h.files
-os.file:	c.file
-os.file:	C:h.swis
-os.file:	C:h.kernel
-os.file:	C:h.kernel
-os.file:	h.types
-os.file:	h.file
-os.module:	c.module
-os.module:	h.http
-os.module:	C:h.swis
-os.module:	C:h.kernel
-os.module:	h.types
-os.module:	C:ssleay.h.objects
-os.module:	C:ssleay.h.bio
-os.module:	C:ssleay.h.crypto
-os.module:	C:ssleay.h.stack
-os.module:	C:ssleay.h.asn1
-os.module:	C:ssleay.h.bn
-os.module:	C:ssleay.h.stack
-os.module:	C:ssleay.h.pem
-os.module:	C:ssleay.h.evp
-os.module:	C:ssleay.h.md2
-os.module:	C:ssleay.h.md5
-os.module:	C:ssleay.h.sha
-os.module:	C:ssleay.h.ripemd
-os.module:	C:ssleay.h.des
-os.module:	C:ssleay.h.rc4
-os.module:	C:ssleay.h.rc2
-os.module:	C:ssleay.h.rc5
-os.module:	C:ssleay.h.blowfish
-os.module:	C:ssleay.h.cast
-os.module:	C:ssleay.h.idea
-os.module:	C:ssleay.h.mdc2
-os.module:	C:ssleay.h.des
-os.module:	C:ssleay.h.rsa
-os.module:	C:ssleay.h.bn
-os.module:	C:ssleay.h.crypto
-os.module:	C:ssleay.h.dsa
-os.module:	C:ssleay.h.bn
-os.module:	C:ssleay.h.dh
-os.module:	C:ssleay.h.objects
-os.module:	C:ssleay.h.x509
-os.module:	C:ssleay.h.stack
-os.module:	C:ssleay.h.asn1
-os.module:	C:ssleay.h.rsa
-os.module:	C:ssleay.h.dsa
-os.module:	C:ssleay.h.dh
-os.module:	C:ssleay.h.evp
-os.module:	C:ssleay.h.x509_vfy
-os.module:	C:ssleay.h.bio
-os.module:	C:ssleay.h.crypto
-os.module:	C:ssleay.h.pkcs7
-os.module:	C:ssleay.h.bio
-os.module:	C:ssleay.h.x509
-os.module:	C:ssleay.h.rsa
-os.module:	C:ssleay.h.ssl
-os.module:	C:ssleay.h.crypto
-os.module:	C:ssleay.h.lhash
-os.module:	C:ssleay.h.buffer
-os.module:	C:ssleay.h.bio
-os.module:	C:ssleay.h.x509
-os.module:	C:ssleay.h.ssl2
-os.module:	C:ssleay.h.ssl3
-os.module:	C:ssleay.h.buffer
-os.module:	C:ssleay.h.tls1
-os.module:	C:ssleay.h.buffer
-os.module:	C:ssleay.h.ssl23
-os.module:	C:ssleay.h.x509
-os.module:	C:ssleay.h.crypto
-os.module:	C:ssleay.h.err
-os.module:	C:CryptoBox.h.pkcs11
-os.module:	C:CryptoBox.h.pkcs11t
-os.module:	C:CryptoBox.h.pkcs11f
-os.module:	C:CryptoBox.h.pkcs11f
-os.module:	C:CryptoBox.h.pkcs11f
-os.module:	C:TCPIPLibs.sys.h.types
-os.module:	C:TCPIPLibs.sys.h.cdefs
-os.module:	C:TCPIPLibs.machine.h.endian
-os.module:	C:TCPIPLibs.machine.h.ansi
-os.module:	C:TCPIPLibs.machine.h.types
-os.module:	C:TCPIPLibs.sys.h.socket
-os.module:	C:TCPIPLibs.sys.h.cdefs
-os.module:	C:TCPIPLibs.sys.h.errno
-os.module:	C:h.kernel
-os.module:	C:TCPIPLibs.net.h.if
-os.module:	C:TCPIPLibs.sys.h.socket
-os.module:	C:TCPIPLibs.sys.h.time
-os.module:	C:TCPIPLibs.sys.h.cdefs
-os.module:	C:TCPIPLibs.net.h.if_arp
-os.module:	C:TCPIPLibs.sys.h.socket
-os.module:	C:TCPIPLibs.netinet.h.in
-os.module:	C:TCPIPLibs.sys.h.ioctl
-os.module:	C:TCPIPLibs.sys.h.ttycom
-os.module:	C:TCPIPLibs.sys.h.ioccom
-os.module:	C:TCPIPLibs.sys.h.ioccom
-os.module:	C:TCPIPLibs.sys.h.filio
-os.module:	C:TCPIPLibs.sys.h.ioccom
-os.module:	C:TCPIPLibs.sys.h.sockio
-os.module:	C:TCPIPLibs.sys.h.ioccom
-os.module:	C:TCPIPLibs.sys.h.cdefs
-os.module:	C:TCPIPLibs.h.netdb
-os.module:	C:TCPIPLibs.sys.h.cdefs
-os.module:	C:TCPIPLibs.netns.h.ns
-os.module:	C:TCPIPLibs.sys.h.cdefs
-os.module:	C:TCPIPLibs.sys.h.time
-os.module:	C:TCPIPLibs.h.socklib
-os.module:	C:TCPIPLibs.sys.h.types
-os.module:	C:TCPIPLibs.sys.h.socket
-os.module:	C:TCPIPLibs.sys.h.stat
-os.module:	C:TCPIPLibs.sys.h.time
-os.module:	C:TCPIPLibs.sys.h.cdefs
-os.module:	C:TCPIPLibs.sys.h.time
-os.module:	C:TCPIPLibs.sys.h.uio
-os.module:	C:TCPIPLibs.sys.h.cdefs
-os.module:	C:h.kernel
-os.module:	C:TCPIPLibs.h.inetlib
-os.module:	C:TCPIPLibs.sys.h.types
-os.module:	C:TCPIPLibs.netinet.h.in
-os.module:	h.files
-os.module:	h.file
-os.module:	h.notlayer
-os.module:	h.mimemap
-os.module:	h.status
-os.module:	h.httppub
-os.module:	h.pads
-os.module:	C:debug.h.remote
-os.csfs:	c.csfs
-os.csfs:	h.http
-os.csfs:	C:h.swis
-os.csfs:	C:h.kernel
-os.csfs:	h.types
-os.csfs:	C:ssleay.h.objects
-os.csfs:	C:ssleay.h.bio
-os.csfs:	C:ssleay.h.crypto
-os.csfs:	C:ssleay.h.stack
-os.csfs:	C:ssleay.h.asn1
-os.csfs:	C:ssleay.h.bn
-os.csfs:	C:ssleay.h.stack
-os.csfs:	C:ssleay.h.pem
-os.csfs:	C:ssleay.h.evp
-os.csfs:	C:ssleay.h.md2
-os.csfs:	C:ssleay.h.md5
-os.csfs:	C:ssleay.h.sha
-os.csfs:	C:ssleay.h.ripemd
-os.csfs:	C:ssleay.h.des
-os.csfs:	C:ssleay.h.rc4
-os.csfs:	C:ssleay.h.rc2
-os.csfs:	C:ssleay.h.rc5
-os.csfs:	C:ssleay.h.blowfish
-os.csfs:	C:ssleay.h.cast
-os.csfs:	C:ssleay.h.idea
-os.csfs:	C:ssleay.h.mdc2
-os.csfs:	C:ssleay.h.des
-os.csfs:	C:ssleay.h.rsa
-os.csfs:	C:ssleay.h.bn
-os.csfs:	C:ssleay.h.crypto
-os.csfs:	C:ssleay.h.dsa
-os.csfs:	C:ssleay.h.bn
-os.csfs:	C:ssleay.h.dh
-os.csfs:	C:ssleay.h.objects
-os.csfs:	C:ssleay.h.x509
-os.csfs:	C:ssleay.h.stack
-os.csfs:	C:ssleay.h.asn1
-os.csfs:	C:ssleay.h.rsa
-os.csfs:	C:ssleay.h.dsa
-os.csfs:	C:ssleay.h.dh
-os.csfs:	C:ssleay.h.evp
-os.csfs:	C:ssleay.h.x509_vfy
-os.csfs:	C:ssleay.h.bio
-os.csfs:	C:ssleay.h.crypto
-os.csfs:	C:ssleay.h.pkcs7
-os.csfs:	C:ssleay.h.bio
-os.csfs:	C:ssleay.h.x509
-os.csfs:	C:ssleay.h.rsa
-os.csfs:	C:ssleay.h.ssl
-os.csfs:	C:ssleay.h.crypto
-os.csfs:	C:ssleay.h.lhash
-os.csfs:	C:ssleay.h.buffer
-os.csfs:	C:ssleay.h.bio
-os.csfs:	C:ssleay.h.x509
-os.csfs:	C:ssleay.h.ssl2
-os.csfs:	C:ssleay.h.ssl3
-os.csfs:	C:ssleay.h.buffer
-os.csfs:	C:ssleay.h.tls1
-os.csfs:	C:ssleay.h.buffer
-os.csfs:	C:ssleay.h.ssl23
-os.csfs:	C:ssleay.h.x509
-os.csfs:	C:ssleay.h.crypto
-os.csfs:	C:ssleay.h.err
-os.csfs:	C:CryptoBox.h.pkcs11
-os.csfs:	C:CryptoBox.h.pkcs11t
-os.csfs:	C:CryptoBox.h.pkcs11f
-os.csfs:	C:CryptoBox.h.pkcs11f
-os.csfs:	C:CryptoBox.h.pkcs11f
-os.csfs:	C:TCPIPLibs.sys.h.types
-os.csfs:	C:TCPIPLibs.sys.h.cdefs
-os.csfs:	C:TCPIPLibs.machine.h.endian
-os.csfs:	C:TCPIPLibs.machine.h.ansi
-os.csfs:	C:TCPIPLibs.machine.h.types
-os.csfs:	C:TCPIPLibs.sys.h.socket
-os.csfs:	C:TCPIPLibs.sys.h.cdefs
-os.csfs:	C:TCPIPLibs.sys.h.errno
-os.csfs:	C:h.kernel
-os.csfs:	C:TCPIPLibs.net.h.if
-os.csfs:	C:TCPIPLibs.sys.h.socket
-os.csfs:	C:TCPIPLibs.sys.h.time
-os.csfs:	C:TCPIPLibs.sys.h.cdefs
-os.csfs:	C:TCPIPLibs.net.h.if_arp
-os.csfs:	C:TCPIPLibs.sys.h.socket
-os.csfs:	C:TCPIPLibs.netinet.h.in
-os.csfs:	C:TCPIPLibs.sys.h.ioctl
-os.csfs:	C:TCPIPLibs.sys.h.ttycom
-os.csfs:	C:TCPIPLibs.sys.h.ioccom
-os.csfs:	C:TCPIPLibs.sys.h.ioccom
-os.csfs:	C:TCPIPLibs.sys.h.filio
-os.csfs:	C:TCPIPLibs.sys.h.ioccom
-os.csfs:	C:TCPIPLibs.sys.h.sockio
-os.csfs:	C:TCPIPLibs.sys.h.ioccom
-os.csfs:	C:TCPIPLibs.sys.h.cdefs
-os.csfs:	C:TCPIPLibs.h.netdb
-os.csfs:	C:TCPIPLibs.sys.h.cdefs
-os.csfs:	C:TCPIPLibs.netns.h.ns
-os.csfs:	C:TCPIPLibs.sys.h.cdefs
-os.csfs:	C:TCPIPLibs.sys.h.time
-os.csfs:	C:TCPIPLibs.h.socklib
-os.csfs:	C:TCPIPLibs.sys.h.types
-os.csfs:	C:TCPIPLibs.sys.h.socket
-os.csfs:	C:TCPIPLibs.sys.h.stat
-os.csfs:	C:TCPIPLibs.sys.h.time
-os.csfs:	C:TCPIPLibs.sys.h.cdefs
-os.csfs:	C:TCPIPLibs.sys.h.time
-os.csfs:	C:TCPIPLibs.sys.h.uio
-os.csfs:	C:TCPIPLibs.sys.h.cdefs
-os.csfs:	C:h.kernel
-os.csfs:	C:TCPIPLibs.h.inetlib
-os.csfs:	C:TCPIPLibs.sys.h.types
-os.csfs:	C:TCPIPLibs.netinet.h.in
-os.csfs:	h.files
-os.csfs:	h.file
-os.csfs:	h.notlayer
-os.csfs:	h.mimemap
-os.csfs:	h.status
-os.csfs:	h.httppub
-os.csfs:	h.pads
-os.certs:	c.certs
-os.certs:	h.http
-os.certs:	C:h.swis
-os.certs:	C:h.kernel
-os.certs:	h.types
-os.certs:	C:ssleay.h.objects
-os.certs:	C:ssleay.h.bio
-os.certs:	C:ssleay.h.crypto
-os.certs:	C:ssleay.h.stack
-os.certs:	C:ssleay.h.asn1
-os.certs:	C:ssleay.h.bn
-os.certs:	C:ssleay.h.stack
-os.certs:	C:ssleay.h.pem
-os.certs:	C:ssleay.h.evp
-os.certs:	C:ssleay.h.md2
-os.certs:	C:ssleay.h.md5
-os.certs:	C:ssleay.h.sha
-os.certs:	C:ssleay.h.ripemd
-os.certs:	C:ssleay.h.des
-os.certs:	C:ssleay.h.rc4
-os.certs:	C:ssleay.h.rc2
-os.certs:	C:ssleay.h.rc5
-os.certs:	C:ssleay.h.blowfish
-os.certs:	C:ssleay.h.cast
-os.certs:	C:ssleay.h.idea
-os.certs:	C:ssleay.h.mdc2
-os.certs:	C:ssleay.h.des
-os.certs:	C:ssleay.h.rsa
-os.certs:	C:ssleay.h.bn
-os.certs:	C:ssleay.h.crypto
-os.certs:	C:ssleay.h.dsa
-os.certs:	C:ssleay.h.bn
-os.certs:	C:ssleay.h.dh
-os.certs:	C:ssleay.h.objects
-os.certs:	C:ssleay.h.x509
-os.certs:	C:ssleay.h.stack
-os.certs:	C:ssleay.h.asn1
-os.certs:	C:ssleay.h.rsa
-os.certs:	C:ssleay.h.dsa
-os.certs:	C:ssleay.h.dh
-os.certs:	C:ssleay.h.evp
-os.certs:	C:ssleay.h.x509_vfy
-os.certs:	C:ssleay.h.bio
-os.certs:	C:ssleay.h.crypto
-os.certs:	C:ssleay.h.pkcs7
-os.certs:	C:ssleay.h.bio
-os.certs:	C:ssleay.h.x509
-os.certs:	C:ssleay.h.rsa
-os.certs:	C:ssleay.h.ssl
-os.certs:	C:ssleay.h.crypto
-os.certs:	C:ssleay.h.lhash
-os.certs:	C:ssleay.h.buffer
-os.certs:	C:ssleay.h.bio
-os.certs:	C:ssleay.h.x509
-os.certs:	C:ssleay.h.ssl2
-os.certs:	C:ssleay.h.ssl3
-os.certs:	C:ssleay.h.buffer
-os.certs:	C:ssleay.h.tls1
-os.certs:	C:ssleay.h.buffer
-os.certs:	C:ssleay.h.ssl23
-os.certs:	C:ssleay.h.x509
-os.certs:	C:ssleay.h.crypto
-os.certs:	C:ssleay.h.err
-os.certs:	C:CryptoBox.h.pkcs11
-os.certs:	C:CryptoBox.h.pkcs11t
-os.certs:	C:CryptoBox.h.pkcs11f
-os.certs:	C:CryptoBox.h.pkcs11f
-os.certs:	C:CryptoBox.h.pkcs11f
-os.certs:	C:TCPIPLibs.sys.h.types
-os.certs:	C:TCPIPLibs.sys.h.cdefs
-os.certs:	C:TCPIPLibs.machine.h.endian
-os.certs:	C:TCPIPLibs.machine.h.ansi
-os.certs:	C:TCPIPLibs.machine.h.types
-os.certs:	C:TCPIPLibs.sys.h.socket
-os.certs:	C:TCPIPLibs.sys.h.cdefs
-os.certs:	C:TCPIPLibs.sys.h.errno
-os.certs:	C:h.kernel
-os.certs:	C:TCPIPLibs.net.h.if
-os.certs:	C:TCPIPLibs.sys.h.socket
-os.certs:	C:TCPIPLibs.sys.h.time
-os.certs:	C:TCPIPLibs.sys.h.cdefs
-os.certs:	C:TCPIPLibs.net.h.if_arp
-os.certs:	C:TCPIPLibs.sys.h.socket
-os.certs:	C:TCPIPLibs.netinet.h.in
-os.certs:	C:TCPIPLibs.sys.h.ioctl
-os.certs:	C:TCPIPLibs.sys.h.ttycom
-os.certs:	C:TCPIPLibs.sys.h.ioccom
-os.certs:	C:TCPIPLibs.sys.h.ioccom
-os.certs:	C:TCPIPLibs.sys.h.filio
-os.certs:	C:TCPIPLibs.sys.h.ioccom
-os.certs:	C:TCPIPLibs.sys.h.sockio
-os.certs:	C:TCPIPLibs.sys.h.ioccom
-os.certs:	C:TCPIPLibs.sys.h.cdefs
-os.certs:	C:TCPIPLibs.h.netdb
-os.certs:	C:TCPIPLibs.sys.h.cdefs
-os.certs:	C:TCPIPLibs.netns.h.ns
-os.certs:	C:TCPIPLibs.sys.h.cdefs
-os.certs:	C:TCPIPLibs.sys.h.time
-os.certs:	C:TCPIPLibs.h.socklib
-os.certs:	C:TCPIPLibs.sys.h.types
-os.certs:	C:TCPIPLibs.sys.h.socket
-os.certs:	C:TCPIPLibs.sys.h.stat
-os.certs:	C:TCPIPLibs.sys.h.time
-os.certs:	C:TCPIPLibs.sys.h.cdefs
-os.certs:	C:TCPIPLibs.sys.h.time
-os.certs:	C:TCPIPLibs.sys.h.uio
-os.certs:	C:TCPIPLibs.sys.h.cdefs
-os.certs:	C:h.kernel
-os.certs:	C:TCPIPLibs.h.inetlib
-os.certs:	C:TCPIPLibs.sys.h.types
-os.certs:	C:TCPIPLibs.netinet.h.in
-os.certs:	h.files
-os.certs:	h.file
-os.certs:	h.notlayer
-os.certs:	h.mimemap
-os.certs:	h.status
-os.certs:	h.httppub
-os.certs:	h.pads
-os.predirect:	c.predirect
-os.predirect:	h.http
-os.predirect:	C:h.swis
-os.predirect:	C:h.kernel
-os.predirect:	h.types
-os.predirect:	C:ssleay.h.objects
-os.predirect:	C:ssleay.h.bio
-os.predirect:	C:ssleay.h.crypto
-os.predirect:	C:ssleay.h.stack
-os.predirect:	C:ssleay.h.asn1
-os.predirect:	C:ssleay.h.bn
-os.predirect:	C:ssleay.h.stack
-os.predirect:	C:ssleay.h.pem
-os.predirect:	C:ssleay.h.evp
-os.predirect:	C:ssleay.h.md2
-os.predirect:	C:ssleay.h.md5
-os.predirect:	C:ssleay.h.sha
-os.predirect:	C:ssleay.h.ripemd
-os.predirect:	C:ssleay.h.des
-os.predirect:	C:ssleay.h.rc4
-os.predirect:	C:ssleay.h.rc2
-os.predirect:	C:ssleay.h.rc5
-os.predirect:	C:ssleay.h.blowfish
-os.predirect:	C:ssleay.h.cast
-os.predirect:	C:ssleay.h.idea
-os.predirect:	C:ssleay.h.mdc2
-os.predirect:	C:ssleay.h.des
-os.predirect:	C:ssleay.h.rsa
-os.predirect:	C:ssleay.h.bn
-os.predirect:	C:ssleay.h.crypto
-os.predirect:	C:ssleay.h.dsa
-os.predirect:	C:ssleay.h.bn
-os.predirect:	C:ssleay.h.dh
-os.predirect:	C:ssleay.h.objects
-os.predirect:	C:ssleay.h.x509
-os.predirect:	C:ssleay.h.stack
-os.predirect:	C:ssleay.h.asn1
-os.predirect:	C:ssleay.h.rsa
-os.predirect:	C:ssleay.h.dsa
-os.predirect:	C:ssleay.h.dh
-os.predirect:	C:ssleay.h.evp
-os.predirect:	C:ssleay.h.x509_vfy
-os.predirect:	C:ssleay.h.bio
-os.predirect:	C:ssleay.h.crypto
-os.predirect:	C:ssleay.h.pkcs7
-os.predirect:	C:ssleay.h.bio
-os.predirect:	C:ssleay.h.x509
-os.predirect:	C:ssleay.h.rsa
-os.predirect:	C:ssleay.h.ssl
-os.predirect:	C:ssleay.h.crypto
-os.predirect:	C:ssleay.h.lhash
-os.predirect:	C:ssleay.h.buffer
-os.predirect:	C:ssleay.h.bio
-os.predirect:	C:ssleay.h.x509
-os.predirect:	C:ssleay.h.ssl2
-os.predirect:	C:ssleay.h.ssl3
-os.predirect:	C:ssleay.h.buffer
-os.predirect:	C:ssleay.h.tls1
-os.predirect:	C:ssleay.h.buffer
-os.predirect:	C:ssleay.h.ssl23
-os.predirect:	C:ssleay.h.x509
-os.predirect:	C:ssleay.h.crypto
-os.predirect:	C:ssleay.h.err
-os.predirect:	C:CryptoBox.h.pkcs11
-os.predirect:	C:CryptoBox.h.pkcs11t
-os.predirect:	C:CryptoBox.h.pkcs11f
-os.predirect:	C:CryptoBox.h.pkcs11f
-os.predirect:	C:CryptoBox.h.pkcs11f
-os.predirect:	C:TCPIPLibs.sys.h.types
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.machine.h.endian
-os.predirect:	C:TCPIPLibs.machine.h.ansi
-os.predirect:	C:TCPIPLibs.machine.h.types
-os.predirect:	C:TCPIPLibs.sys.h.socket
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.sys.h.errno
-os.predirect:	C:h.kernel
-os.predirect:	C:TCPIPLibs.net.h.if
-os.predirect:	C:TCPIPLibs.sys.h.socket
-os.predirect:	C:TCPIPLibs.sys.h.time
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.net.h.if_arp
-os.predirect:	C:TCPIPLibs.sys.h.socket
-os.predirect:	C:TCPIPLibs.netinet.h.in
-os.predirect:	C:TCPIPLibs.sys.h.ioctl
-os.predirect:	C:TCPIPLibs.sys.h.ttycom
-os.predirect:	C:TCPIPLibs.sys.h.ioccom
-os.predirect:	C:TCPIPLibs.sys.h.ioccom
-os.predirect:	C:TCPIPLibs.sys.h.filio
-os.predirect:	C:TCPIPLibs.sys.h.ioccom
-os.predirect:	C:TCPIPLibs.sys.h.sockio
-os.predirect:	C:TCPIPLibs.sys.h.ioccom
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.h.netdb
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.netns.h.ns
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.sys.h.time
-os.predirect:	C:TCPIPLibs.h.socklib
-os.predirect:	C:TCPIPLibs.sys.h.types
-os.predirect:	C:TCPIPLibs.sys.h.socket
-os.predirect:	C:TCPIPLibs.sys.h.stat
-os.predirect:	C:TCPIPLibs.sys.h.time
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:TCPIPLibs.sys.h.time
-os.predirect:	C:TCPIPLibs.sys.h.uio
-os.predirect:	C:TCPIPLibs.sys.h.cdefs
-os.predirect:	C:h.kernel
-os.predirect:	C:TCPIPLibs.h.inetlib
-os.predirect:	C:TCPIPLibs.sys.h.types
-os.predirect:	C:TCPIPLibs.netinet.h.in
-os.predirect:	h.files
-os.predirect:	h.file
-os.predirect:	h.notlayer
-os.predirect:	h.mimemap
-os.predirect:	h.status
-os.predirect:	h.httppub
-os.predirect:	h.pads
-os.layershttp:	c.layershttp
-os.layershttp:	h.http
-os.layershttp:	C:h.swis
-os.layershttp:	C:h.kernel
-os.layershttp:	h.types
-os.layershttp:	C:ssleay.h.objects
-os.layershttp:	C:ssleay.h.bio
-os.layershttp:	C:ssleay.h.crypto
-os.layershttp:	C:ssleay.h.stack
-os.layershttp:	C:ssleay.h.asn1
-os.layershttp:	C:ssleay.h.bn
-os.layershttp:	C:ssleay.h.stack
-os.layershttp:	C:ssleay.h.pem
-os.layershttp:	C:ssleay.h.evp
-os.layershttp:	C:ssleay.h.md2
-os.layershttp:	C:ssleay.h.md5
-os.layershttp:	C:ssleay.h.sha
-os.layershttp:	C:ssleay.h.ripemd
-os.layershttp:	C:ssleay.h.des
-os.layershttp:	C:ssleay.h.rc4
-os.layershttp:	C:ssleay.h.rc2
-os.layershttp:	C:ssleay.h.rc5
-os.layershttp:	C:ssleay.h.blowfish
-os.layershttp:	C:ssleay.h.cast
-os.layershttp:	C:ssleay.h.idea
-os.layershttp:	C:ssleay.h.mdc2
-os.layershttp:	C:ssleay.h.des
-os.layershttp:	C:ssleay.h.rsa
-os.layershttp:	C:ssleay.h.bn
-os.layershttp:	C:ssleay.h.crypto
-os.layershttp:	C:ssleay.h.dsa
-os.layershttp:	C:ssleay.h.bn
-os.layershttp:	C:ssleay.h.dh
-os.layershttp:	C:ssleay.h.objects
-os.layershttp:	C:ssleay.h.x509
-os.layershttp:	C:ssleay.h.stack
-os.layershttp:	C:ssleay.h.asn1
-os.layershttp:	C:ssleay.h.rsa
-os.layershttp:	C:ssleay.h.dsa
-os.layershttp:	C:ssleay.h.dh
-os.layershttp:	C:ssleay.h.evp
-os.layershttp:	C:ssleay.h.x509_vfy
-os.layershttp:	C:ssleay.h.bio
-os.layershttp:	C:ssleay.h.crypto
-os.layershttp:	C:ssleay.h.pkcs7
-os.layershttp:	C:ssleay.h.bio
-os.layershttp:	C:ssleay.h.x509
-os.layershttp:	C:ssleay.h.rsa
-os.layershttp:	C:ssleay.h.ssl
-os.layershttp:	C:ssleay.h.crypto
-os.layershttp:	C:ssleay.h.lhash
-os.layershttp:	C:ssleay.h.buffer
-os.layershttp:	C:ssleay.h.bio
-os.layershttp:	C:ssleay.h.x509
-os.layershttp:	C:ssleay.h.ssl2
-os.layershttp:	C:ssleay.h.ssl3
-os.layershttp:	C:ssleay.h.buffer
-os.layershttp:	C:ssleay.h.tls1
-os.layershttp:	C:ssleay.h.buffer
-os.layershttp:	C:ssleay.h.ssl23
-os.layershttp:	C:ssleay.h.x509
-os.layershttp:	C:ssleay.h.crypto
-os.layershttp:	C:ssleay.h.err
-os.layershttp:	C:CryptoBox.h.pkcs11
-os.layershttp:	C:CryptoBox.h.pkcs11t
-os.layershttp:	C:CryptoBox.h.pkcs11f
-os.layershttp:	C:CryptoBox.h.pkcs11f
-os.layershttp:	C:CryptoBox.h.pkcs11f
-os.layershttp:	C:TCPIPLibs.sys.h.types
-os.layershttp:	C:TCPIPLibs.sys.h.cdefs
-os.layershttp:	C:TCPIPLibs.machine.h.endian
-os.layershttp:	C:TCPIPLibs.machine.h.ansi
-os.layershttp:	C:TCPIPLibs.machine.h.types
-os.layershttp:	C:TCPIPLibs.sys.h.socket
-os.layershttp:	C:TCPIPLibs.sys.h.cdefs
-os.layershttp:	C:TCPIPLibs.sys.h.errno
-os.layershttp:	C:h.kernel
-os.layershttp:	C:TCPIPLibs.net.h.if
-os.layershttp:	C:TCPIPLibs.sys.h.socket
-os.layershttp:	C:TCPIPLibs.sys.h.time
-os.layershttp:	C:TCPIPLibs.sys.h.cdefs
-os.layershttp:	C:TCPIPLibs.net.h.if_arp
-os.layershttp:	C:TCPIPLibs.sys.h.socket
-os.layershttp:	C:TCPIPLibs.netinet.h.in
-os.layershttp:	C:TCPIPLibs.sys.h.ioctl
-os.layershttp:	C:TCPIPLibs.sys.h.ttycom
-os.layershttp:	C:TCPIPLibs.sys.h.ioccom
-os.layershttp:	C:TCPIPLibs.sys.h.ioccom
-os.layershttp:	C:TCPIPLibs.sys.h.filio
-os.layershttp:	C:TCPIPLibs.sys.h.ioccom
-os.layershttp:	C:TCPIPLibs.sys.h.sockio
-os.layershttp:	C:TCPIPLibs.sys.h.ioccom
-os.layershttp:	C:TCPIPLibs.sys.h.cdefs
-os.layershttp:	C:TCPIPLibs.h.netdb
-os.layershttp:	C:TCPIPLibs.sys.h.cdefs
-os.layershttp:	C:TCPIPLibs.netns.h.ns
-os.layershttp:	C:TCPIPLibs.sys.h.cdefs
-os.layershttp:	C:TCPIPLibs.sys.h.time
-os.layershttp:	C:TCPIPLibs.h.socklib
-os.layershttp:	C:TCPIPLibs.sys.h.types
-os.layershttp:	C:TCPIPLibs.sys.h.socket
-os.layershttp:	C:TCPIPLibs.sys.h.stat
-os.layershttp:	C:TCPIPLibs.sys.h.time
-os.layershttp:	C:TCPIPLibs.sys.h.cdefs
-os.layershttp:	C:TCPIPLibs.sys.h.time
-os.layershttp:	C:TCPIPLibs.sys.h.uio
-os.layershttp:	C:TCPIPLibs.sys.h.cdefs
-os.layershttp:	C:h.kernel
-os.layershttp:	C:TCPIPLibs.h.inetlib
-os.layershttp:	C:TCPIPLibs.sys.h.types
-os.layershttp:	C:TCPIPLibs.netinet.h.in
-os.layershttp:	h.files
-os.layershttp:	h.file
-os.layershttp:	h.notlayer
-os.layershttp:	h.mimemap
-os.layershttp:	h.status
-os.layershttp:	h.httppub
-os.layershttp:	h.pads
-os.http:	c.http
-os.http:	h.http
-os.http:	C:h.swis
-os.http:	C:h.kernel
-os.http:	h.types
-os.http:	C:ssleay.h.objects
-os.http:	C:ssleay.h.bio
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.stack
-os.http:	C:ssleay.h.asn1
-os.http:	C:ssleay.h.bn
-os.http:	C:ssleay.h.stack
-os.http:	C:ssleay.h.pem
-os.http:	C:ssleay.h.evp
-os.http:	C:ssleay.h.md2
-os.http:	C:ssleay.h.md5
-os.http:	C:ssleay.h.sha
-os.http:	C:ssleay.h.ripemd
-os.http:	C:ssleay.h.des
-os.http:	C:ssleay.h.rc4
-os.http:	C:ssleay.h.rc2
-os.http:	C:ssleay.h.rc5
-os.http:	C:ssleay.h.blowfish
-os.http:	C:ssleay.h.cast
-os.http:	C:ssleay.h.idea
-os.http:	C:ssleay.h.mdc2
-os.http:	C:ssleay.h.des
-os.http:	C:ssleay.h.rsa
-os.http:	C:ssleay.h.bn
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.dsa
-os.http:	C:ssleay.h.bn
-os.http:	C:ssleay.h.dh
-os.http:	C:ssleay.h.objects
-os.http:	C:ssleay.h.x509
-os.http:	C:ssleay.h.stack
-os.http:	C:ssleay.h.asn1
-os.http:	C:ssleay.h.rsa
-os.http:	C:ssleay.h.dsa
-os.http:	C:ssleay.h.dh
-os.http:	C:ssleay.h.evp
-os.http:	C:ssleay.h.x509_vfy
-os.http:	C:ssleay.h.bio
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.pkcs7
-os.http:	C:ssleay.h.bio
-os.http:	C:ssleay.h.x509
-os.http:	C:ssleay.h.rsa
-os.http:	C:ssleay.h.ssl
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.lhash
-os.http:	C:ssleay.h.buffer
-os.http:	C:ssleay.h.bio
-os.http:	C:ssleay.h.x509
-os.http:	C:ssleay.h.ssl2
-os.http:	C:ssleay.h.ssl3
-os.http:	C:ssleay.h.buffer
-os.http:	C:ssleay.h.tls1
-os.http:	C:ssleay.h.buffer
-os.http:	C:ssleay.h.ssl23
-os.http:	C:ssleay.h.x509
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.err
-os.http:	C:CryptoBox.h.pkcs11
-os.http:	C:CryptoBox.h.pkcs11t
-os.http:	C:CryptoBox.h.pkcs11f
-os.http:	C:CryptoBox.h.pkcs11f
-os.http:	C:CryptoBox.h.pkcs11f
-os.http:	C:TCPIPLibs.sys.h.types
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.machine.h.endian
-os.http:	C:TCPIPLibs.machine.h.ansi
-os.http:	C:TCPIPLibs.machine.h.types
-os.http:	C:TCPIPLibs.sys.h.socket
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.sys.h.errno
-os.http:	C:h.kernel
-os.http:	C:TCPIPLibs.net.h.if
-os.http:	C:TCPIPLibs.sys.h.socket
-os.http:	C:TCPIPLibs.sys.h.time
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.net.h.if_arp
-os.http:	C:TCPIPLibs.sys.h.socket
-os.http:	C:TCPIPLibs.netinet.h.in
-os.http:	C:TCPIPLibs.sys.h.ioctl
-os.http:	C:TCPIPLibs.sys.h.ttycom
-os.http:	C:TCPIPLibs.sys.h.ioccom
-os.http:	C:TCPIPLibs.sys.h.ioccom
-os.http:	C:TCPIPLibs.sys.h.filio
-os.http:	C:TCPIPLibs.sys.h.ioccom
-os.http:	C:TCPIPLibs.sys.h.sockio
-os.http:	C:TCPIPLibs.sys.h.ioccom
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.h.netdb
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.netns.h.ns
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.sys.h.time
-os.http:	C:TCPIPLibs.h.socklib
-os.http:	C:TCPIPLibs.sys.h.types
-os.http:	C:TCPIPLibs.sys.h.socket
-os.http:	C:TCPIPLibs.sys.h.stat
-os.http:	C:TCPIPLibs.sys.h.time
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.sys.h.time
-os.http:	C:TCPIPLibs.sys.h.uio
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:h.kernel
-os.http:	C:TCPIPLibs.h.inetlib
-os.http:	C:TCPIPLibs.sys.h.types
-os.http:	C:TCPIPLibs.netinet.h.in
-os.http:	h.files
-os.http:	h.file
-os.http:	h.notlayer
-os.http:	h.mimemap
-os.http:	h.status
-os.http:	h.httppub
-os.http:	h.pads
-os.http:	c.http
-os.http:	h.http
-os.http:	C:h.swis
-os.http:	C:h.kernel
-os.http:	h.types
-os.http:	C:ssleay.h.objects
-os.http:	C:ssleay.h.bio
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.stack
-os.http:	C:ssleay.h.asn1
-os.http:	C:ssleay.h.bn
-os.http:	C:ssleay.h.stack
-os.http:	C:ssleay.h.pem
-os.http:	C:ssleay.h.evp
-os.http:	C:ssleay.h.md2
-os.http:	C:ssleay.h.md5
-os.http:	C:ssleay.h.sha
-os.http:	C:ssleay.h.ripemd
-os.http:	C:ssleay.h.des
-os.http:	C:ssleay.h.rc4
-os.http:	C:ssleay.h.rc2
-os.http:	C:ssleay.h.rc5
-os.http:	C:ssleay.h.blowfish
-os.http:	C:ssleay.h.cast
-os.http:	C:ssleay.h.idea
-os.http:	C:ssleay.h.mdc2
-os.http:	C:ssleay.h.des
-os.http:	C:ssleay.h.rsa
-os.http:	C:ssleay.h.bn
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.dsa
-os.http:	C:ssleay.h.bn
-os.http:	C:ssleay.h.dh
-os.http:	C:ssleay.h.objects
-os.http:	C:ssleay.h.x509
-os.http:	C:ssleay.h.stack
-os.http:	C:ssleay.h.asn1
-os.http:	C:ssleay.h.rsa
-os.http:	C:ssleay.h.dsa
-os.http:	C:ssleay.h.dh
-os.http:	C:ssleay.h.evp
-os.http:	C:ssleay.h.x509_vfy
-os.http:	C:ssleay.h.bio
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.pkcs7
-os.http:	C:ssleay.h.bio
-os.http:	C:ssleay.h.x509
-os.http:	C:ssleay.h.rsa
-os.http:	C:ssleay.h.ssl
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.lhash
-os.http:	C:ssleay.h.buffer
-os.http:	C:ssleay.h.bio
-os.http:	C:ssleay.h.x509
-os.http:	C:ssleay.h.ssl2
-os.http:	C:ssleay.h.ssl3
-os.http:	C:ssleay.h.buffer
-os.http:	C:ssleay.h.tls1
-os.http:	C:ssleay.h.buffer
-os.http:	C:ssleay.h.ssl23
-os.http:	C:ssleay.h.x509
-os.http:	C:ssleay.h.crypto
-os.http:	C:ssleay.h.err
-os.http:	C:CryptoBox.h.pkcs11
-os.http:	C:CryptoBox.h.pkcs11t
-os.http:	C:CryptoBox.h.pkcs11f
-os.http:	C:CryptoBox.h.pkcs11f
-os.http:	C:CryptoBox.h.pkcs11f
-os.http:	C:TCPIPLibs.sys.h.types
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.machine.h.endian
-os.http:	C:TCPIPLibs.machine.h.ansi
-os.http:	C:TCPIPLibs.machine.h.types
-os.http:	C:TCPIPLibs.sys.h.socket
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.sys.h.errno
-os.http:	C:h.kernel
-os.http:	C:TCPIPLibs.net.h.if
-os.http:	C:TCPIPLibs.sys.h.socket
-os.http:	C:TCPIPLibs.sys.h.time
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.net.h.if_arp
-os.http:	C:TCPIPLibs.sys.h.socket
-os.http:	C:TCPIPLibs.netinet.h.in
-os.http:	C:TCPIPLibs.sys.h.ioctl
-os.http:	C:TCPIPLibs.sys.h.ttycom
-os.http:	C:TCPIPLibs.sys.h.ioccom
-os.http:	C:TCPIPLibs.sys.h.ioccom
-os.http:	C:TCPIPLibs.sys.h.filio
-os.http:	C:TCPIPLibs.sys.h.ioccom
-os.http:	C:TCPIPLibs.sys.h.sockio
-os.http:	C:TCPIPLibs.sys.h.ioccom
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.h.netdb
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.netns.h.ns
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.sys.h.time
-os.http:	C:TCPIPLibs.h.socklib
-os.http:	C:TCPIPLibs.sys.h.types
-os.http:	C:TCPIPLibs.sys.h.socket
-os.http:	C:TCPIPLibs.sys.h.stat
-os.http:	C:TCPIPLibs.sys.h.time
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:TCPIPLibs.sys.h.time
-os.http:	C:TCPIPLibs.sys.h.uio
-os.http:	C:TCPIPLibs.sys.h.cdefs
-os.http:	C:h.kernel
-os.http:	C:TCPIPLibs.h.inetlib
-os.http:	C:TCPIPLibs.sys.h.types
-os.http:	C:TCPIPLibs.netinet.h.in
-os.http:	h.files
-os.http:	h.file
-os.http:	h.notlayer
-os.http:	h.mimemap
-os.http:	h.status
-os.http:	h.httppub
-os.http:	h.pads
-os.client:	c.client
-os.client:	h.http
-os.client:	C:h.swis
-os.client:	C:h.kernel
-os.client:	h.types
-os.client:	C:ssleay.h.objects
-os.client:	C:ssleay.h.bio
-os.client:	C:ssleay.h.crypto
-os.client:	C:ssleay.h.stack
-os.client:	C:ssleay.h.asn1
-os.client:	C:ssleay.h.bn
-os.client:	C:ssleay.h.stack
-os.client:	C:ssleay.h.pem
-os.client:	C:ssleay.h.evp
-os.client:	C:ssleay.h.md2
-os.client:	C:ssleay.h.md5
-os.client:	C:ssleay.h.sha
-os.client:	C:ssleay.h.ripemd
-os.client:	C:ssleay.h.des
-os.client:	C:ssleay.h.rc4
-os.client:	C:ssleay.h.rc2
-os.client:	C:ssleay.h.rc5
-os.client:	C:ssleay.h.blowfish
-os.client:	C:ssleay.h.cast
-os.client:	C:ssleay.h.idea
-os.client:	C:ssleay.h.mdc2
-os.client:	C:ssleay.h.des
-os.client:	C:ssleay.h.rsa
-os.client:	C:ssleay.h.bn
-os.client:	C:ssleay.h.crypto
-os.client:	C:ssleay.h.dsa
-os.client:	C:ssleay.h.bn
-os.client:	C:ssleay.h.dh
-os.client:	C:ssleay.h.objects
-os.client:	C:ssleay.h.x509
-os.client:	C:ssleay.h.stack
-os.client:	C:ssleay.h.asn1
-os.client:	C:ssleay.h.rsa
-os.client:	C:ssleay.h.dsa
-os.client:	C:ssleay.h.dh
-os.client:	C:ssleay.h.evp
-os.client:	C:ssleay.h.x509_vfy
-os.client:	C:ssleay.h.bio
-os.client:	C:ssleay.h.crypto
-os.client:	C:ssleay.h.pkcs7
-os.client:	C:ssleay.h.bio
-os.client:	C:ssleay.h.x509
-os.client:	C:ssleay.h.rsa
-os.client:	C:ssleay.h.ssl
-os.client:	C:ssleay.h.crypto
-os.client:	C:ssleay.h.lhash
-os.client:	C:ssleay.h.buffer
-os.client:	C:ssleay.h.bio
-os.client:	C:ssleay.h.x509
-os.client:	C:ssleay.h.ssl2
-os.client:	C:ssleay.h.ssl3
-os.client:	C:ssleay.h.buffer
-os.client:	C:ssleay.h.tls1
-os.client:	C:ssleay.h.buffer
-os.client:	C:ssleay.h.ssl23
-os.client:	C:ssleay.h.x509
-os.client:	C:ssleay.h.crypto
-os.client:	C:ssleay.h.err
-os.client:	C:CryptoBox.h.pkcs11
-os.client:	C:CryptoBox.h.pkcs11t
-os.client:	C:CryptoBox.h.pkcs11f
-os.client:	C:CryptoBox.h.pkcs11f
-os.client:	C:CryptoBox.h.pkcs11f
-os.client:	C:TCPIPLibs.sys.h.types
-os.client:	C:TCPIPLibs.sys.h.cdefs
-os.client:	C:TCPIPLibs.machine.h.endian
-os.client:	C:TCPIPLibs.machine.h.ansi
-os.client:	C:TCPIPLibs.machine.h.types
-os.client:	C:TCPIPLibs.sys.h.socket
-os.client:	C:TCPIPLibs.sys.h.cdefs
-os.client:	C:TCPIPLibs.sys.h.errno
-os.client:	C:h.kernel
-os.client:	C:TCPIPLibs.net.h.if
-os.client:	C:TCPIPLibs.sys.h.socket
-os.client:	C:TCPIPLibs.sys.h.time
-os.client:	C:TCPIPLibs.sys.h.cdefs
-os.client:	C:TCPIPLibs.net.h.if_arp
-os.client:	C:TCPIPLibs.sys.h.socket
-os.client:	C:TCPIPLibs.netinet.h.in
-os.client:	C:TCPIPLibs.sys.h.ioctl
-os.client:	C:TCPIPLibs.sys.h.ttycom
-os.client:	C:TCPIPLibs.sys.h.ioccom
-os.client:	C:TCPIPLibs.sys.h.ioccom
-os.client:	C:TCPIPLibs.sys.h.filio
-os.client:	C:TCPIPLibs.sys.h.ioccom
-os.client:	C:TCPIPLibs.sys.h.sockio
-os.client:	C:TCPIPLibs.sys.h.ioccom
-os.client:	C:TCPIPLibs.sys.h.cdefs
-os.client:	C:TCPIPLibs.h.netdb
-os.client:	C:TCPIPLibs.sys.h.cdefs
-os.client:	C:TCPIPLibs.netns.h.ns
-os.client:	C:TCPIPLibs.sys.h.cdefs
-os.client:	C:TCPIPLibs.sys.h.time
-os.client:	C:TCPIPLibs.h.socklib
-os.client:	C:TCPIPLibs.sys.h.types
-os.client:	C:TCPIPLibs.sys.h.socket
-os.client:	C:TCPIPLibs.sys.h.stat
-os.client:	C:TCPIPLibs.sys.h.time
-os.client:	C:TCPIPLibs.sys.h.cdefs
-os.client:	C:TCPIPLibs.sys.h.time
-os.client:	C:TCPIPLibs.sys.h.uio
-os.client:	C:TCPIPLibs.sys.h.cdefs
-os.client:	C:h.kernel
-os.client:	C:TCPIPLibs.h.inetlib
-os.client:	C:TCPIPLibs.sys.h.types
-os.client:	C:TCPIPLibs.netinet.h.in
-os.client:	h.files
-os.client:	h.file
-os.client:	h.notlayer
-os.client:	h.mimemap
-os.client:	h.status
-os.client:	h.httppub
-os.client:	h.pads
-os.client:	C:CryptoBox.h.rsa_id2
-os.client:	C:SSLeay.h.rsa
-os.client:	C:CryptoBox.h.pkcs11
