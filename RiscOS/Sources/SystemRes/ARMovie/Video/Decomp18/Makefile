@@ -21,12 +21,12 @@ LD              = link
 WIPE            = -wipe
 
 CFLAGS          = -c -depend !Depend $(THROWBACK) -Otime -zps1 $(INCLUDES)
-CFLAGS2         = -gflv -DTQDEBUG $(CFLAGS)
+CFLAGS2         = -gflv $(CFLAGS)
 CFLAGS3         = -DHierProf_PROFILE $(CFLAGS)
 AFLAGS          = -depend !Depend $(THROWBACK)
 AFLAGS2         = -g $(AFLAGS)
 CPFLAGS         = ~CFR~V
-LDFLAGS         = -rmf -first veneer$(VARIANT) -o $@
+LDFLAGS         = -rmf -first D$(VARIANT) -o $@
 LDFLAGS2        = -aif -d -o $@
 LDFLAGS3        = -aif -o $@
 WFLAGS          = ~CFR~V
@@ -44,86 +44,118 @@ INCLUDES        = -IC:
 COMPONENT       = Decomp18
 TARGET          = Dec$(VARIANT)
 LIBS            =
-OBJS            = o.veneer$(VARIANT) \
-                  o.control \
-                  o.getblk \
-                  o.getvlc \
-                  o.getbits \
-                  o.sac \
-                  o.recon \
-                  o.gethdr \
-                  o.store \
-                  o.jrevdct \
-                  o.getpic \
-                  o.dy_malloc \
-                  o.mallarr \
-                  o.arecon \
-                  o.i2c \
-                  o.agetbits \
-                  o.idct \
-                  o.aaddb \
-                  o.amemset64 \
+OBJS            = o.D$(VARIANT) \
+                  o.addblock \
                   o.ady_malloc \
+                  o.adecodetc \
+                  o.agetbits \
+                  o.amemset64 \
+                  o.arecon \
+                  o.filter \
+                  o.mkedgeimg \
+                  o.doedgefilt \
+                  o.dy_malloc \
+                  o.entry \
+                  o.getblk \
+                  o.gethdr \
+                  o.getpic \
+                  o.getpicsub \
+                  o.getvlc \
+                  o.mallarr \
+                  o.store \
                   o.miniClib
-TARGETDEB       = Deb$(VARIANT)
+TARGETDEB       = DebugDec
 LIBSDEB         = C:o.stubs
 OBJSDEB         = od.testdecomp \
-                  od.control \
-                  od.getblk \
-                  od.getvlc \
-                  od.getbits \
-                  od.sac \
-                  od.recon \
-                  od.gethdr \
-                  od.store \
-                  od.testven$(VARIANT) \
-                  od.jrevdct \
-                  od.getpic \
-                  od.dy_malloc \
-                  od.mallarr \
-                  od.arecon \
-                  od.i2c \
+                  od.D \
+                  od.testpatch \
+                  od.addblock \
+                  od.debug \
+                  od.ady_malloc \
+                  od.adecodetc \
                   od.agetbits \
-                  od.idct \
-                  od.aaddb \
                   od.amemset64 \
-                  od.ady_malloc
-TARGETPROF      = Pro$(VARIANT)
-LIBSPROF        = C:o.stubs
-OBJSPROF        = op.testdecomp \
-                  op.control \
-                  op.getblk \
-                  op.getvlc \
-                  op.getbits \
-                  op.sac \
-                  op.recon \
-                  op.gethdr \
-                  op.store \
-                  op.testven$(VARIANT) \
-                  op.jrevdct \
-                  op.getpic \
-                  op.dy_malloc \
-                  op.mallarr \
-                  op.arecon \
-                  op.i2c \
-                  op.agetbits \
-                  op.idct \
-                  op.aaddb \
-                  HierProf:o.hp_t1 \
-                  op.amemset64 \
-                  op.ady_malloc
+                  od.arecon \
+                  od.filter \
+                  od.mkedgeimg \
+                  od.doedgefilt \
+                  od.dy_malloc \
+                  od.entry \
+                  od.getblk \
+                  od.gethdr \
+                  od.getpic \
+                  od.getpicsub \
+                  od.getvlc \
+                  od.mallarr \
+                  od.store
+TARGETPROF      = ProfDec
+LIBSPROF        = HierProf:HP_T1.o \
+                  C:o.stubs
+OBJSPROF        = oh.testdecomp \
+                  oh.D \
+                  oh.testpatch \
+                  oh.addblock \
+                  oh.debug \
+                  oh.ady_malloc \
+                  oh.adecodetc \
+                  oh.agetbits \
+                  oh.amemset64 \
+                  oh.arecon \
+                  oh.filter \
+                  oh.mkedgeimg \
+                  oh.doedgefilt \
+                  oh.dy_malloc \
+                  oh.entry \
+                  oh.getblk \
+                  oh.gethdr \
+                  oh.getpic \
+                  oh.getpicsub \
+                  oh.getvlc \
+                  oh.mallarr \
+                  oh.store
+TARGETMEM       = MemDec
+LIBSMEM         = MemCheck:MC.o \
+                  C:o.stubs
+OBJSMEM         = om.testdecomp \
+                  om.D \
+                  om.testpatch \
+                  om.addblock \
+                  om.debug \
+                  om.ady_malloc \
+                  om.adecodetc \
+                  om.agetbits \
+                  om.amemset64 \
+                  om.arecon \
+                  om.filter \
+                  om.mkedgeimg \
+                  om.doedgefilt \
+                  om.dy_malloc \
+                  om.entry \
+                  om.getblk \
+                  om.gethdr \
+                  om.getpic \
+                  om.getpicsub \
+                  om.getvlc \
+                  om.mallarr \
+                  om.store
 
 # ------------------------------------------------------------------------------
 # Rule patterns
 #
 
-.SUFFIXES: .o .od .op .s .c
+.SUFFIXES: .o .od .oh .om .s .hdr .c
 .c.o:;     $(CC) $(CFLAGS) -o $@ $<
 .c.od:;    $(CC) $(CFLAGS2) -o $@ $<
-.c.op:;    $(CC) $(CFLAGS3) -o $@ $<
+.c.oh:;    $(CC) $(CFLAGS3) -o $@ $<
+.c.om:;    MemCheck.cc $(CC) $(CFLAGS) -o $@ $<
 .s.o:;     $(AS) $(AFLAGS) -o $@ $<
 .s.od:;    $(AS) $(AFLAGS2) -o $@ $<
-.s.op:;    $(AS) $(AFLAGS) -o $@ $<
+.s.oh:;    $(AS) $(AFLAGS) -o $@ $<
+.s.om:;    $(AS) $(AFLAGS) -o $@ $<
+.hdr.o:;   $(AS) $(AFLAGS) -o $@ $<
+.hdr.od:;  $(AS) $(AFLAGS2) -o $@ $<
+.hdr.oh:;  $(AS) $(AFLAGS) -o $@ $<
+.hdr.om:;  $(AS) $(AFLAGS) -o $@ $<
 
 # ------------------------------------------------------------------------------
 # Build rules
@@ -138,62 +170,48 @@ debug: $(TARGETDEB)
 profile: $(TARGETPROF)
         @echo $(COMPONENT): decoder profile build complete
 
+memcheck: $(TARGETMEM)
+        @echo $(COMPONENT): decoder memcheck build complete
+
 clean:
         $(WIPE) o $(WFLAGS)
         $(WIPE) od $(WFLAGS)
-        $(WIPE) op $(WFLAGS)
+        $(WIPE) oh $(WFLAGS)
+        $(WIPE) om $(WFLAGS)
         $(RM) Dec
-        $(RM) Deb
-        $(RM) Pro
-        $(RM) DecH
-        $(RM) DebH
-        $(RM) ProH
-        $(RM) DecB
-        $(RM) DebB
-        $(RM) ProB
-        $(RM) Dec24
-        $(RM) Deb24
-        $(RM) Pro24
-        $(RM) Dec21
-        $(RM) Deb21
-        $(RM) Pro21
-        $(RM) Dec246Y5UV
-        $(RM) Deb246Y5UV
-        $(RM) Pro246Y5UV
-        $(RM) Dec216Y5UV
-        $(RM) Deb216Y5UV
-        $(RM) Pro216Y5UV
         $(RM) Dec16
-        $(RM) Deb16
-        $(RM) Pro16
+        $(RM) Dec216Y5UV
+        $(RM) Dec246Y5UV
+        $(RM) DecB
+        $(RM) DecFast21
+        $(RM) DecFast24
+        $(RM) DecFastYUV
+        $(RM) DecH
+        $(RM) Dec21
+        $(RM) Dec24
+        $(RM) DebugDec
+        $(RM) ProfDec
+        $(RM) MemDec
         @echo $(COMPONENT): cleaned
 
 local_dirs:
         $(MKDIR) o
         $(MKDIR) od
-        $(MKDIR) op
-        Set Decomp18$Variant "$(VARIANT)"
+        $(MKDIR) oh
+        $(MKDIR) om
 
 $(TARGET): $(OBJS) local_dirs
         $(LD) $(LDFLAGS) $(LIBS) $(OBJS)
-        Unset Decomp18$Variant
+        SetType $(TARGET) FFD
 
 $(TARGETDEB): $(OBJSDEB) local_dirs
         $(LD) $(LDFLAGS2) $(LIBSDEB) $(OBJSDEB)
-        Unset Decomp18$Variant
 
 $(TARGETPROF): $(OBJSPROF) local_dirs
         $(LD) $(LDFLAGS3) $(LIBSPROF) $(OBJSPROF)
-        Unset Decomp18$Variant
 
-o.veneer$(VARIANT): s.veneer
-        $(AS) $(AFLAGS) -o $@ s.veneer
-
-od.testven$(VARIANT): s.testven
-        $(AS) $(AFLAGS2) -o $@ s.testven
-
-op.testven$(VARIANT): s.testven
-        $(AS) $(AFLAGS) -o $@ s.testven
+$(TARGETMEM): $(OBJSMEM) local_dirs
+        $(LD) $(LDFLAGS3) $(LIBSMEM) $(OBJSMEM)
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:

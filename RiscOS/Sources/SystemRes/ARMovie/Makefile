@@ -90,6 +90,82 @@ VIDDIR          = $(ROOTDIR)
 all:
         @echo $(COMPONENT): all complete
 
+export: export_$(PHASE)
+
+export_hdrs:
+        @Dir Sound16.adpcm
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
+        @Dir Sound16.g721
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
+        @Dir Sound16.g723_24
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
+        @Dir Sound16.g723_40
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
+        @Dir Sound16.g726_16
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
+        @Dir Sound16.gsm
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
+        @Dir Sound16.mpadec
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
+        @Dir Sound16.mpaenc
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
+        @echo $(COMPONENT): export complete (hdrs)
+
+export_libs:
+        @Dir Sound16.adpcm
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.g721
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.g723_24
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.g723_40
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.g726_16
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.gsm
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.mpadec
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.mpaenc
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.Type1
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @echo $(COMPONENT): export complete (libs)
+
 install:
         @echo Starting ARMovie install phase
         @set Alias$MMD $(MKDIR) $(INSTDIR).%0
@@ -186,6 +262,10 @@ clean:
         @amu_machine clean
         @stripdepnd
         @Up 2
+        @Dir Tools.Join4
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
         $(RM) crunched.CompLib
         |
         $(RM) Colour.8yuv11
@@ -200,6 +280,61 @@ clean:
         $(WIPE) Resources.Shapes.ZoomUp.Box* $(WFLAGS)
         $(WIPE) Resources.Shapes.ZoomUp.Scale* $(WFLAGS)
         $(RM) Resources.Trajectory.Circle        
+        |
+        @Dir Sound16.adpcm_1
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.adpcm
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.g721
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.g723_24
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.g723_40
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.g726_16
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.gsm
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.mpadec
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.mpaenc
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.mpeg-I
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.mpeg-II
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
         |
         @Dir Sound16.Type1
         @amu_machine clean
@@ -402,7 +537,7 @@ Core_Encode:          Filters.DirectY \
                       Filters.TClamp4 \
                       Filters.TClamp8 \
                       Tools.Extract.Extract \
-                      Tools.Join.Join \
+                      Tools.Join4.Join \
                       crunched.CompLib
         MMD $(FILTERDIR)
         CMF Filters.DirectY                        $(FILTERDIR).DirectY
@@ -419,7 +554,7 @@ Core_Encode:          Filters.DirectY \
         CMF Filters.TClamp8                        $(FILTERDIR).TClamp8
         MMD $(TOOLSDIR)
         CMF Tools.Extract.Extract                  $(TOOLSDIR).Extract
-        CMF Tools.Join.Join                        $(TOOLSDIR).Join
+        CMF Tools.Join4.Join                       $(TOOLSDIR).Join
         CMF crunched.CompLib                       $(TOOLSDIR).CompLib
 Filters.DirectY: Filters.bas.DirectY
         /Filters.bas.DirectY
@@ -449,8 +584,8 @@ Tools.Extract.Extract:
         @Dir Tools.Extract
         @amu_machine
         @Up 2
-Tools.Join.Join:
-        @Dir Tools.Join
+Tools.Join4.Join:
+        @Dir Tools.Join4
         @amu_machine
         @Up 2
 crunched.CompLib: bas.CompLib
@@ -1684,24 +1819,46 @@ Resources.Shapes.ZoomUp.Scale04: Resources.Shapes.ZoomUp.bas.MakeScale
 Resources.Trajectory.Circle: Resources.Trajectory.bas.MakeCircle
         /Resources.Trajectory.bas.MakeCircle
 
-adpcm_Decode_16:      Sound16.Type1.adpcm.play \
-                      Sound16.Type1.Resources.Info
+adpcm_1_Decode_16:    Sound16.adpcm_1.Play \
+                      Sound16.adpcm_1.Resources.Info
         MMD $(AUD16DIR).adpcm
-        CMF Sound16.Type1.adpcm.play               $(AUD16DIR).adpcm.Play
-        CMF Sound16.Type1.adpcm.playx2             $(AUD16DIR).adpcm.Playx2
-        CMF Sound16.Type1.Resources.Info           $(AUD16DIR).adpcm.Info
-Sound16.Type1.adpcm.play:
-        @Dir Sound16.Type1
+        CMF Sound16.adpcm_1.Play                   $(AUD16DIR).adpcm.Play
+        CMF Sound16.adpcm_1.Playx2                 $(AUD16DIR).adpcm.Playx2
+        CMF Sound16.adpcm_1.Resources.Info         $(AUD16DIR).adpcm.Info
+Sound16.adpcm_1.Play:
+        @Dir Sound16.adpcm_1
         @amu_machine
         @Up 2
 
-adpcm_Decode_8:       Sound.Type1.adpcm.Play \
+adpcm_1_Decode_8:     Sound.Type1.adpcm.Play \
                       Sound.Type1.adpcm.Playx2 \
                       Sound.Type1.Resources.Info
         MMD $(AUD8DIR).adpcm
         CMF Sound.Type1.adpcm.Play                 $(AUD8DIR).adpcm.Play
         CMF Sound.Type1.adpcm.Playx2               $(AUD8DIR).adpcm.Playx2
         CMF Sound.Type1.Resources.Info             $(AUD8DIR).adpcm.Info
+
+adpcm_Decode_16:      Sound16.adpcm.Play \
+                      Sound16.adpcm.Resources.Info
+        MMD $(AUD16DIR).adpcm
+        CMF Sound16.adpcm.Play                     $(AUD16DIR).adpcm.Play
+        CMF Sound16.adpcm.Playx2                   $(AUD16DIR).adpcm.Playx2
+        CMF Sound16.adpcm.Resources.Info           $(AUD16DIR).adpcm.Info
+Sound16.adpcm.Play:
+        @Dir Sound16.adpcm
+        @amu_machine
+        @Up 2
+
+adpcm_Encode_16:      Sound16.adpcm.Decode \
+                      Sound16.adpcm.Decodex2 \
+                      Sound16.adpcm.Encode \
+                      Sound16.adpcm.Encodex2 \
+                      Sound16.adpcm.Resources.CInfo
+        CMF Sound16.adpcm.Decode                   $(AUD16DIR).adpcm.Decode
+        CMF Sound16.adpcm.Decodex2                 $(AUD16DIR).adpcm.Decodex2
+        CMF Sound16.adpcm.Encode                   $(AUD16DIR).adpcm.Encode
+        CMF Sound16.adpcm.Encodex2                 $(AUD16DIR).adpcm.Encodex2
+        CMF Sound16.adpcm.Resources.CInfo          $(AUD16DIR).adpcm.CInfo
 
 Alaw_Decode_16:       Sound16.Alaw.Play \
                       Sound16.Alaw.Playx2 \
@@ -1726,12 +1883,15 @@ AlawWve_Decode_8:     Sound.AlawWve.Play \
         CMF Sound.AlawWve.Resources.Info           $(AUD8DIR).AlawWve.Info
 
 g721_Decode_16:       Sound16.g721.Play \
-                      Sound16.g721.Playx2 \
                       Sound16.g721.Resources.Info
         MMD $(AUD16DIR).g721
         CMF Sound16.g721.Play                      $(AUD16DIR).g721.Play
         CMF Sound16.g721.Playx2                    $(AUD16DIR).g721.Playx2
         CMF Sound16.g721.Resources.Info            $(AUD16DIR).g721.Info
+Sound16.g721.Play:
+        @Dir Sound16.g721
+        @amu_machine
+        @Up 2
 
 g721_Encode_16:       Sound16.g721.Decode \
                       Sound16.g721.Decodex2 \
@@ -1760,12 +1920,15 @@ G723-1_Encode_16:     Sound16.G723-1.Decode \
         CMF Sound16.G723-1.Resources.Flags         $(AUD16DIR).G723-1.Flags
 
 g723_24_Decode_16:    Sound16.g723_24.Play \
-                      Sound16.g723_24.Playx2 \
                       Sound16.g723_24.Resources.Info
         MMD $(AUD16DIR).g723_24
         CMF Sound16.g723_24.Play                   $(AUD16DIR).g723_24.Play
         CMF Sound16.g723_24.Playx2                 $(AUD16DIR).g723_24.Playx2
         CMF Sound16.g723_24.Resources.Info         $(AUD16DIR).g723_24.Info
+Sound16.g723_24.Play:
+        @Dir Sound16.g723_24
+        @amu_machine
+        @Up 2
 
 g723_24_Encode_16:    Sound16.g723_24.Decode \
                       Sound16.g723_24.Decodex2 \
@@ -1779,12 +1942,15 @@ g723_24_Encode_16:    Sound16.g723_24.Decode \
         CMF Sound16.g723_24.Resources.CInfo        $(AUD16DIR).g723_24.CInfo
 
 g723_40_Decode_16:    Sound16.g723_40.Play \
-                      Sound16.g723_40.Playx2 \
                       Sound16.g723_40.Resources.Info
         MMD $(AUD16DIR).g723_40
         CMF Sound16.g723_40.Play                   $(AUD16DIR).g723_40.Play
         CMF Sound16.g723_40.Playx2                 $(AUD16DIR).g723_40.Playx2
         CMF Sound16.g723_40.Resources.Info         $(AUD16DIR).g723_40.Info
+Sound16.g723_40.Play:
+        @Dir Sound16.g723_40
+        @amu_machine
+        @Up 2
 
 g723_40_Encode_16:    Sound16.g723_40.Decode \
                       Sound16.g723_40.Decodex2 \
@@ -1798,12 +1964,15 @@ g723_40_Encode_16:    Sound16.g723_40.Decode \
         CMF Sound16.g723_40.Resources.CInfo        $(AUD16DIR).g723_40.CInfo
 
 g726_16_Decode_16:    Sound16.g726_16.Play \
-                      Sound16.g726_16.Playx2 \
                       Sound16.g726_16.Resources.Info
         MMD $(AUD16DIR).g726_16
         CMF Sound16.g726_16.Play                   $(AUD16DIR).g726_16.Play
         CMF Sound16.g726_16.Playx2                 $(AUD16DIR).g726_16.Playx2
         CMF Sound16.g726_16.Resources.Info         $(AUD16DIR).g726_16.Info
+Sound16.g726_16.Play:
+        @Dir Sound16.g726_16
+        @amu_machine
+        @Up 2
 
 g726_16_Encode_16:    Sound16.g726_16.Decode \
                       Sound16.g726_16.Decodex2 \
@@ -1817,12 +1986,15 @@ g726_16_Encode_16:    Sound16.g726_16.Decode \
         CMF Sound16.g726_16.Resources.CInfo        $(AUD16DIR).g726_16.CInfo
 
 gsm_Decode_16:        Sound16.gsm.Play \
-                      Sound16.gsm.Playx2 \
                       Sound16.gsm.Resources.Info
         MMD $(AUD16DIR).gsm
         CMF Sound16.gsm.Play                       $(AUD16DIR).gsm.Play
         CMF Sound16.gsm.Playx2                     $(AUD16DIR).gsm.Playx2
         CMF Sound16.gsm.Resources.Info             $(AUD16DIR).gsm.Info
+Sound16.gsm.Play:
+        @Dir Sound16.gsm
+        @amu_machine
+        @Up 2
 
 gsm_Encode_16:        Sound16.gsm.Decode \
                       Sound16.gsm.Decodex2 \
@@ -1860,12 +2032,15 @@ Lin16bes_Decode_8:    Sound.Lin16bes.Play \
         CMF Sound.Lin16bes.Resources.Info          $(AUD8DIR).Lin16bes.Info
 
 mpeg-I_Decode_16:     Sound16.mpeg-I.Play \
-                      Sound16.mpeg-I.Playx2 \
                       Sound16.mpeg-I.Resources.Info
         MMD $(AUD16DIR).mpeg-I
         CMF Sound16.mpeg-I.Play                    $(AUD16DIR).mpeg-I.Play
         CMF Sound16.mpeg-I.Playx2                  $(AUD16DIR).mpeg-I.Playx2
         CMF Sound16.mpeg-I.Resources.Info          $(AUD16DIR).mpeg-I.Info
+Sound16.mpeg-I.Play:
+        @Dir Sound16.mpeg-I
+        @amu_machine
+        @Up 2
 
 mpeg-I_Encode_16:     Sound16.mpeg-I.Decode \
                       Sound16.mpeg-I.Decodex2 \
@@ -1879,12 +2054,15 @@ mpeg-I_Encode_16:     Sound16.mpeg-I.Decode \
         CMF Sound16.mpeg-I.Resources.CInfo         $(AUD16DIR).mpeg-I.CInfo
 
 mpeg-II_Decode_16:    Sound16.mpeg-II.Play \
-                      Sound16.mpeg-II.Playx2 \
                       Sound16.mpeg-II.Resources.Info
         MMD $(AUD16DIR).mpeg-II
         CMF Sound16.mpeg-II.Play                   $(AUD16DIR).mpeg-II.Play
         CMF Sound16.mpeg-II.Playx2                 $(AUD16DIR).mpeg-II.Playx2
         CMF Sound16.mpeg-II.Resources.Info         $(AUD16DIR).mpeg-II.Info
+Sound16.mpeg-II.Play:
+        @Dir Sound16.mpeg-II
+        @amu_machine
+        @Up 2
 
 mpeg-II_Encode_16:    Sound16.mpeg-II.Decode \
                       Sound16.mpeg-II.Decodex2 \
@@ -2287,6 +2465,9 @@ Decomp18_Decode:      Video.Decomp18.Dec \
                       Video.Decomp18.Dec216Y5UV \
                       Video.Decomp18.Dec246Y5UV \
                       Video.Decomp18.DecB \
+                      Video.Decomp18.DecFast21 \
+                      Video.Decomp18.DecFast24 \
+                      Video.Decomp18.DecFastYUV \
                       Video.Decomp18.DecH \
                       Video.Decomp18.Resources.Info
         MMD $(VIDDIR).Decomp18
@@ -2295,6 +2476,9 @@ Decomp18_Decode:      Video.Decomp18.Dec \
         If32bpp CMF Video.Decomp18.Dec216Y5UV      $(VIDDIR).Decomp18.Dec216Y5UV
         If32bpp CMF Video.Decomp18.Dec246Y5UV      $(VIDDIR).Decomp18.Dec246Y5UV
         If1˜8bpp CMF Video.Decomp18.DecB           $(VIDDIR).Decomp18.DecompresB
+        If32bpp CMF Video.Decomp18.DecFast21       $(VIDDIR).Decomp18.FastDec21
+        If32bpp CMF Video.Decomp18.DecFast24       $(VIDDIR).Decomp18.FastDec24
+        If32bpp CMF Video.Decomp18.DecFastYUV      $(VIDDIR).Decomp18.FastDecYUV
         If4˜16bpp CMF Video.Decomp18.DecH          $(VIDDIR).Decomp18.DecompresH
         CMF Video.Decomp18.Resources.Info          $(VIDDIR).Decomp18.Info
 Video.Decomp18.Dec:
@@ -2316,6 +2500,18 @@ Video.Decomp18.Dec246Y5UV:
 Video.Decomp18.DecB:
         @Dir Video.Decomp18
         @amu_machine VARIANT=B
+        @Up 2
+Video.Decomp18.DecFast21:
+        @Dir Video.Decomp18
+        @amu_machine VARIANT=Fast21
+        @Up 2
+Video.Decomp18.DecFast24:
+        @Dir Video.Decomp18
+        @amu_machine VARIANT=Fast24
+        @Up 2
+Video.Decomp18.DecFastYUV:
+        @Dir Video.Decomp18
+        @amu_machine VARIANT=FastYUV
         @Up 2
 Video.Decomp18.DecH:
         @Dir Video.Decomp18

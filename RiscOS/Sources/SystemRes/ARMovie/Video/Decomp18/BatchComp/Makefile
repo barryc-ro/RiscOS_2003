@@ -6,6 +6,7 @@
 # Date          Name            Description
 # ----          ----            -----------
 # 21 Dec 2000   BJGA            Created
+# 13 Mar 2001   BJGA            Substantially altered
 #
 
 # ------------------------------------------------------------------------------
@@ -20,11 +21,11 @@ RM              = remove
 LD              = link
 WIPE            = -wipe
 
-CFLAGS          = -c -depend !Depend $(THROWBACK) -Otime -DFASTIDCT -DOLD_SAD -DAIDCT $(INCLUDES)
-CFLAGS2         = -gflv $(CFLAGS)
-CFLAGS3         = -DMemCheck_MEMCHECK $(CFLAGS2)
+CFLAGS          = -c -depend !Depend $(THROWBACK) $(INCLUDES) -Otime -DOFFLINE_RATE_CONTROL -DFASTIDCT -DAIDCT
+CFLAGS2         = $(CFLAGS) -DLOGGING
+CFLAGS3         = $(CFLAGS2) -g -DMemCheck_MEMCHECK
+CFLAGS4         = $(CFLAGS) -g -DHierProf_PROFILE
 AFLAGS          = -depend !Depend $(THROWBACK)
-AFLAGS2         = -g $(AFLAGS)
 CPFLAGS         = ~CFR~V
 LDFLAGS         = -aif -o $@
 LDFLAGS2        = -aif -d -o $@
@@ -42,150 +43,163 @@ INCLUDES        = -IC:
 
 COMPONENT       = Decomp18 BatchComp
 TARGET          = BatchComp
-LIBS            = C:o.stubs
-OBJS            = o.filestuff \
-                  o.mainplan \
-                  o.reader \
-                  o.do8YUV2CIF \
-                  o.blatasm \
-                  o.cdir \
-                  o.coder \
-                  o.countbit \
-                  o.dct \
-                  o.io \
-                  o.mot_est \
-                  o.pred \
-                  o.quant \
-                  o.putvlc \
-                  o.putbits \
-                  o.ratectrl \
-                  o.sac \
-                  o.snr \
-                  o.tmnmain \
-                  o.tmnarg \
-                  o.getargs \
-                  o.error \
+LIBS            = C:o.stubs \
+                  TMN.h263CLib
+OBJS            = o.mainplan \
                   o.batchcomp \
-                  o.Logger \
+                  o.cdir \
                   o.checkpoint \
+                  o.do8YUV2CIF \
+                  o.error \
+                  o.filestuff \
+                  o.getargs \
+                  o.h263_compi \
                   o.inkey \
+                  o.io \
+                  o.Logger \
+                  o.reader \
                   o.setenv \
-                  o.jrevdct \
-                  o.h263_compif \
-                  o.flushc
-TARGETDEB       = BatchCompDeb
-LIBSDEB         = C:o.stubs
-OBJSDEB         = od.filestuff \
-                  od.mainplan \
-                  od.reader \
-                  od.do8YUV2CIF \
-                  od.blatasm \
-                  od.cdir \
-                  od.coder \
-                  od.countbit \
-                  od.dct \
-                  od.io \
-                  od.mot_est \
-                  od.pred \
-                  od.quant \
-                  od.putvlc \
-                  od.putbits \
-                  od.ratectrl \
-                  od.sac \
-                  od.snr \
-                  od.tmnmain \
-                  od.tmnarg \
-                  od.getargs \
-                  od.error \
-                  od.batchcomp \
-                  od.Logger \
-                  od.checkpoint \
-                  od.inkey \
-                  od.setenv \
-                  od.jrevdct \
-                  od.h263_compif \
-                  od.flushc
-TARGETMEM       = BatchCompMem
+                  o.tmall \
+                  o.tmnmain
+TARGETLOG       = BatchCompL
+LIBSLOG         = C:o.stubs \
+                  TMN.h263CLibL
+OBJSLOG         = ol.mainplan \
+                  ol.batchcomp \
+                  ol.cdir \
+                  ol.checkpoint \
+                  ol.do8YUV2CIF \
+                  ol.error \
+                  ol.filestuff \
+                  ol.getargs \
+                  ol.h263_compi \
+                  ol.inkey \
+                  ol.io \
+                  ol.Logger \
+                  ol.reader \
+                  ol.setenv \
+                  ol.tmall \
+                  ol.tmnmain
+TARGETMEM       = BatchCompM
 LIBSMEM         = C:o.stubs \
-                  MemCheck:o.MC \
-                  HierProf:o.HP
-OBJSMEM         = om.filestuff \
-                  om.mainplan \
-                  om.reader \
-                  om.do8YUV2CIF \
-                  od.blatasm \
-                  om.cdir \
-                  om.coder \
-                  om.countbit \
-                  om.dct \
-                  om.io \
-                  om.mot_est \
-                  om.pred \
-                  om.quant \
-                  om.putvlc \
-                  om.putbits \
-                  om.ratectrl \
-                  om.sac \
-                  om.snr \
-                  om.tmnmain \
-                  om.tmnarg \
-                  om.getargs \
-                  om.error \
+                  TMN.h263CLibM \
+                  MemCheck:o.MC
+OBJSMEM         = om.mainplan \
                   om.batchcomp \
-                  om.Logger \
+                  om.cdir \
                   om.checkpoint \
+                  om.do8YUV2CIF \
+                  om.error \
+                  om.filestuff \
+                  om.getargs \
+                  om.h263_compi \
                   om.inkey \
+                  om.io \
+                  om.Logger \
+                  om.reader \
                   om.setenv \
-                  od.jrevdct \
-                  om.h263_compif \
-                  od.flushc
+                  om.tmall \
+                  om.tmnmain
+TARGETPRO       = BatchCompH
+LIBSPRO         = C:o.stubs \
+                  TMN.h263CLibH \
+                  HierProf:o.HP_T1
+OBJSPRO         = oh.mainplan \
+                  ol.batchcomp \
+                  ol.cdir \
+                  ol.checkpoint \
+                  ol.do8YUV2CIF \
+                  ol.error \
+                  ol.filestuff \
+                  ol.getargs \
+                  ol.h263_compi \
+                  ol.inkey \
+                  ol.io \
+                  ol.Logger \
+                  ol.reader \
+                  ol.setenv \
+                  ol.tmall \
+                  ol.tmnmain
 
 # ------------------------------------------------------------------------------
 # Rule patterns
 #
 
-.SUFFIXES: .o .od .om .s .c
+.SUFFIXES: .o .ol .om .oh .s .c
 .c.o:;     $(CC) $(CFLAGS) -o $@ $<
-.c.od:;    $(CC) $(CFLAGS2) -o $@ $<
+.c.ol:;    $(CC) $(CFLAGS2) -o $@ $<
 .c.om:;    MemCheck.CC $(CC) $(CFLAGS3) -o $@ $<
+.c.oh:;    $(CC) $(CFLAGS4) -o $@ $<
 .s.o:;     $(AS) $(AFLAGS) -o $@ $<
-.s.od:;    $(AS) $(AFLAGS2) -o $@ $<
 
 # ------------------------------------------------------------------------------
 # Build rules
 #
 
 all: $(TARGET)
-        @echo $(COMPONENT): decoder build complete
+        @echo $(COMPONENT): batchcomp build complete
 
-debug: $(TARGETDEB)
-        @echo $(COMPONENT): decoder debug build complete
+logging: $(TARGETLOG)
+        @echo $(COMPONENT): batchcomp logging build complete
 
 memcheck: $(TARGETMEM)
-        @echo $(COMPONENT): decoder memcheck build complete
+        @echo $(COMPONENT): batchcomp memcheck build complete
+
+profile: $(TARGETPRO)
+        @echo $(COMPONENT): batchcomp profiling build complete
 
 clean:
         $(WIPE) o $(WFLAGS)
-        $(WIPE) od $(WFLAGS)
+        $(WIPE) ol $(WFLAGS)
         $(WIPE) om $(WFLAGS)
+        $(WIPE) oh $(WFLAGS)
         $(RM) BatchComp
-        $(RM) BatchCompDeb
-        $(RM) BatchCompMem
+        $(RM) BatchCompL
+        $(RM) BatchCompM
+        $(RM) BatchCompH
+        @Dir TMN
+        @amu_machine clean
+        @stripdepnd
+        @Up
         @echo $(COMPONENT): cleaned
 
 local_dirs:
         $(MKDIR) o
-        $(MKDIR) od
+        $(MKDIR) ol
         $(MKDIR) om
+        $(MKDIR) oh
 
-$(TARGET): $(OBJS) local_dirs
+$(TARGET): $(LIBS) $(OBJS) local_dirs
         $(LD) $(LDFLAGS) $(LIBS) $(OBJS)
 
-$(TARGETDEB): $(OBJSDEB) local_dirs
-        $(LD) $(LDFLAGS2) $(LIBSDEB) $(OBJSDEB)
+$(TARGETLOG): $(LIBSLOG) $(OBJSLOG) local_dirs
+        $(LD) $(LDFLAGS) $(LIBSLOG) $(OBJSLOG)
 
-$(TARGETMEM): $(OBJSMEM) local_dirs
+$(TARGETMEM): $(LIBSMEM) $(OBJSMEM) local_dirs
         $(LD) $(LDFLAGS2) $(LIBSMEM) $(OBJSMEM)
+
+$(TARGETPRO): $(LIBSPRO) $(OBJSPRO) local_dirs
+        $(LD) $(LDFLAGS2) $(LIBSPRO) $(OBJSPRO)
+
+TMN.h263CLib:
+        @Dir TMN
+        @amu_machine
+        @Up
+
+TMN.h263CLibL:
+        @Dir TMN
+        @amu_machine logging
+        @Up
+
+TMN.h263CLibM:
+        @Dir TMN
+        @amu_machine memcheck
+        @Up
+
+TMN.h263CLibH:
+        @Dir TMN
+        @amu_machine profile
+        @Up
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
