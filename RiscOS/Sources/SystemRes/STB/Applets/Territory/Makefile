@@ -47,11 +47,12 @@ dirs:
 	${MKDIR} ${INSTHTML}
 	${MKDIR} ${INSTCHOI}
 	${MKDIR} ${INSTAPP}
-	${MKDIR} ${INSTAPP}.Canada1
-	${MKDIR} ${INSTAPP}.France
-	${MKDIR} ${INSTAPP}.Germany
-	${MKDIR} ${INSTAPP}.Norway
-	${MKDIR} ${INSTAPP}.Spain
+	${MKDIR} ${INSTAPP}.Canada1.Canada1
+	${MKDIR} ${INSTAPP}.Finland.Finland
+	${MKDIR} ${INSTAPP}.France.France
+	${MKDIR} ${INSTAPP}.Germany.Germany
+	${MKDIR} ${INSTAPP}.Norway.Norway
+	${MKDIR} ${INSTAPP}.Spain.Spain
 	${MKDIR} ${CMNLOCDIR}.CheckURL
 	${MKDIR} ${CMNLOCDIR}.FilterMgr
 	${MKDIR} ${CMNLOCDIR}.Parallel
@@ -117,14 +118,16 @@ resources: res_pprimer res_parallel res_filter res_check build_message_files
 	${IFTHERE} TerrRes:JScript    ${IFTHEN} ${CP} TerrRes:JScript    ${INSTHTML}.JScript         ${CPFLAGS}
 	${IFTHERE} TerrRes:SendMsg    ${IFTHEN} ${CP} TerrRes:SendMsg    ${INSTHTML}.SendMsg         ${CPFLAGS}
 	${IFTHERE} TerrRes:Test       ${IFTHEN} ${CP} TerrRes:Test       ${INSTHTML}.Test            ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.Canada1 ${IFTHEN} ${CP} ${MSGSDIR}.Canada1 ${INSTAPP}.Canada1.Messages ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.France  ${IFTHEN} ${CP} ${MSGSDIR}.France  ${INSTAPP}.France.Messages  ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.Germany ${IFTHEN} ${CP} ${MSGSDIR}.Germany ${INSTAPP}.Germany.Messages ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.Norway  ${IFTHEN} ${CP} ${MSGSDIR}.Norway  ${INSTAPP}.Norway.Messages  ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.Spain   ${IFTHEN} ${CP} ${MSGSDIR}.Spain   ${INSTAPP}.Spain.Messages   ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Canada1 ${IFTHEN} ${CP} ${MSGSDIR}.Canada1 ${INSTAPP}.Canada1.Canada1.Messages ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Finland ${IFTHEN} ${CP} ${MSGSDIR}.Finland ${INSTAPP}.Finland.Finland.Messages ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.France  ${IFTHEN} ${CP} ${MSGSDIR}.France  ${INSTAPP}.France.France.Messages   ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Germany ${IFTHEN} ${CP} ${MSGSDIR}.Germany ${INSTAPP}.Germany.Germany.Messages ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Norway  ${IFTHEN} ${CP} ${MSGSDIR}.Norway  ${INSTAPP}.Norway.Norway.Messages   ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Spain   ${IFTHEN} ${CP} ${MSGSDIR}.Spain   ${INSTAPP}.Spain.Spain.Messages     ${CPFLAGS}
 
 build_message_files:
 	@Update Canada1
+	@Update Finland
 	@Update France
 	@Update Germany
 	@Update Norway
