@@ -7,19 +7,14 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <signal.h>
 #include <ctype.h>
-#include <stddef.h>
 #include <stdbool.h>
 
 #include "kernel.h"
-#include "swis.h"
 
 /* From CLX */
 #include "hash.h"
 #include "filestamp.h"
-#include "fname.h"
-#include "host.h"
 #include "err.h"
 #include "wholefls.h"
 
@@ -39,19 +34,14 @@ void md_start_cmd(void) { }
 void md_end_cmd(void) { }
 void md_merge(Makefile *mf) { (void) mf; }
 int  md_check_magic_string(const char *data) { (void) data; return 1; }
-int  dde_extended_cmdline(void) { return 0; }
+int  dde_extended_cmdline(void) { return 1; }
 void dde_prefix_used(void) { }
 void dde_prefix_init(char *fname) { (void) fname; }
 
 #else
 
-/* Local headers */
-#include "VersionNum"
-
-#define  VERSION          Module_FullVersion
-#define  DATE             Module_Date
-#define  SELFNAME         "AMU"
-
+/* Import the SWI numbers that we need */
+#include "swis.h"
 
 #define DEPENDENCY_FILE "!Depend"
 #define COMMENT_DYNAMIC_DEPENDENCIES "# Dynamic dependencies:"
@@ -68,7 +58,6 @@ typedef struct Target_List {
 
 static Dependency_File_List *depend_list = 0;
 static int prefix_used;
-
 static TimeStamp md_time;
 
 static int md_cistrcmp(char *s, char *t)
@@ -89,8 +78,7 @@ void md_end_cmd(void)
   t0 = filestamp_get(DEPENDENCY_FILE);
   if (t0 != FILESTAMP_NEVER && t0 >= md_time) { {
       int32 size = wf_filesize(DEPENDENCY_FILE);
-      depend_file = malloc(sizeof(Dependency_File_List) + (size_t)size + 1);
-      if (!depend_file) err_fail("out of memory");
+      depend_file = safe_malloc(sizeof(Dependency_File_List) + (size_t)size + 1);
       if (wf_load(DEPENDENCY_FILE, depend_file->depend_file_contents, size)<0)
         err_fail("unable to read dependency file " DEPENDENCY_FILE);
       depend_file->depend_file_contents[size] = 0;
@@ -126,8 +114,7 @@ void md_end_cmd(void)
       if (f) {
           old_depend_file = depend_file;
           size += d;
-          depend_file = malloc(sizeof(Dependency_File_List) + (size_t)size);
-          if (!depend_file) err_fail("out of memory");
+          depend_file = safe_malloc(sizeof(Dependency_File_List) + (size_t)size);
           s = old_depend_file->depend_file_contents;
           ds = depend_file->depend_file_contents;
           while (1) {
@@ -225,124 +212,118 @@ static void merge_dependencies(Makefile *mf)
     long seek_target;
     bool write_initial_newline = false;
 
-    if (depend_list) {
-        dl = depend_list;
-        tl = 0;
-        do {
-            fcp = dl->depend_file_contents;
-            while (1) {
-                while (isspace(*fcp)) fcp++;
-                if (!*fcp) break;
-                target = fcp;
-                while ((c = *fcp) != 0 && c != ':' && !isspace(c)) fcp++;
-                if (fcp == target) err_fail("null target in " DEPENDENCY_FILE);
-                if (c != ':') err_fail("':' expected after target in " DEPENDENCY_FILE);
-                *fcp = 0;
-                nt = tl;
-                while (nt) {
-                    if (!md_cistrcmp(target, nt->name))
-                        break;
-                    nt = nt->next;
-                }
-                if (!nt) {
-                    nt = malloc(sizeof(Target_List) + (fcp - target));
-                    if (!nt) err_fail("out of memory");
-                    strcpy(nt->name, target);
-                    nt->next = tl;
-                    tl = nt;
-                }
-                *fcp++ = c;
-                while (*fcp && *fcp != '\n') fcp++;
-            }
-            dl = dl->next;
-        } while (dl);
-
-        if (wf_filesize(mf->name) != mf->file_size) {
-          err_report("%s has been edited since %s was invoked!  "
-                     "Ignoring dynamic dependency file.", mf->name, amu);
-          return;
-        }
-
-        if (mf->dynamic_dependencies_magic_comment) {
-          /* Shit - need to reload the makefile now and re-parse it simply from
-           * mf->dynamic_dependencies_magic_comment->file_position onwards.
-           */
-          char *const contents = safe_malloc((size_t) mf->file_size + 1);
-
-          if (wf_load(mf->name, contents, mf->file_size)) {
-            err_report("Unable to re-read makefile '%s'", mf->name);
-            return;
-          }
-
-          contents[mf->file_size] = '\0';
-          seek_target = mf->dynamic_dependencies_magic_comment->file_position;
-          ac = contents + seek_target;
-          while (*ac && *ac++ != '\n'); /* Skip the magic comment itself */
-          seek_target = ac - contents;
-          fcp = ac;
-          for (;;) {
+    for (tl = 0, dl = depend_list; dl; dl = dl->next) {
+        fcp = dl->depend_file_contents;
+        while (1) {
             while (isspace(*fcp)) fcp++;
             if (!*fcp) break;
             target = fcp;
             while ((c = *fcp) != 0 && c != ':' && !isspace(c)) fcp++;
-            if (fcp == target) err_fail("null target in Makefile");
-            if (c != ':') err_fail("':' expected after target in Makefile");
+            if (fcp == target) err_fail("null target in " DEPENDENCY_FILE);
+            if (c != ':') err_fail("':' expected after target in " DEPENDENCY_FILE);
             *fcp = 0;
             nt = tl;
             while (nt) {
-              if (!md_cistrcmp(target, nt->name)) break;
-              nt = nt->next;
+                if (!md_cistrcmp(target, nt->name))
+                    break;
+                nt = nt->next;
             }
-            *fcp = c;
-            while (*fcp && *fcp++ != '\n');
-            if (nt) {
-              s = target;
-              while ((*s++ = *fcp++) != 0) ;;
-              fcp = target;
+            if (!nt) {
+                nt = safe_malloc(sizeof(Target_List) + (fcp - target));
+                strcpy(nt->name, target);
+                nt->next = tl;
+                tl = nt;
             }
-          }
-
-          write_initial_newline = false;
-          old_data = memmove(contents, ac, fcp + 1 - ac);
+            *fcp++ = c;
+            while (*fcp && *fcp != '\n') fcp++;
         }
-        else {
-          seek_target = mf->file_size;
-          write_initial_newline = true;
-          old_data = NULL;
-        }
-
-        if ((f = fopen(mf->name, "r+")) == NULL) {
-          err_report("Error opening %s for update", mf->name);
-          return;
-        }
-
-        if (fseek(f, seek_target, SEEK_SET)) {
-          (void) fclose(f);
-          err_report("Error writing dynamic dependencies to %s", mf->name);
-          return;
-        }
-
-        if (write_initial_newline) {
-          fputc('\n', f);
-          fputs(COMMENT_DYNAMIC_DEPENDENCIES "\n", f);
-        }
-
-        if (old_data) {
-          fputs(old_data, f);
-          free(old_data);
-        }
-
-        for (dl = depend_list; dl; dl = dl->next) {
-            md_flatten(dl->depend_file_contents);
-            fputs(dl->depend_file_contents, f);
-        }
-
-        size = ftell(f);
-        if (fclose(f) || size < 0) {
-          err_fail("Error writing dynamic dependencies to %s", mf->name);
-        }
-        wf_truncate(mf->name, size);
     }
+
+    if (wf_filesize(mf->name) != mf->file_size) {
+      err_report("%s has been edited since %s was invoked!  "
+                 "Ignoring dynamic dependency file.", mf->name, amu);
+      return;
+    }
+
+    if (mf->dynamic_dependencies_magic_comment) {
+      /* Shit - need to reload the makefile now and re-parse it simply from
+       * mf->dynamic_dependencies_magic_comment->file_position onwards.
+       */
+      char *const contents = safe_malloc((size_t) mf->file_size + 1);
+
+      if (wf_load(mf->name, contents, mf->file_size)) {
+        err_report("Unable to re-read makefile '%s'", mf->name);
+        return;
+      }
+
+      contents[mf->file_size] = '\0';
+      seek_target = mf->dynamic_dependencies_magic_comment->file_position;
+      ac = contents + seek_target;
+      while (*ac && *ac++ != '\n'); /* Skip the magic comment itself */
+      seek_target = ac - contents;
+      fcp = ac;
+      for (;;) {
+        while (isspace(*fcp)) fcp++;
+        if (!*fcp) break;
+        target = fcp;
+        while ((c = *fcp) != 0 && c != ':' && !isspace(c)) fcp++;
+        if (fcp == target) err_fail("null target in Makefile");
+        if (c != ':') err_fail("':' expected after target in Makefile");
+        *fcp = 0;
+        nt = tl;
+        while (nt) {
+          if (!md_cistrcmp(target, nt->name)) break;
+          nt = nt->next;
+        }
+        *fcp = c;
+        while (*fcp && *fcp++ != '\n');
+        if (nt) {
+          s = target;
+          while ((*s++ = *fcp++) != 0) ;;
+          fcp = target;
+        }
+      }
+
+      write_initial_newline = false;
+      old_data = memmove(contents, ac, fcp + 1 - ac);
+    }
+    else {
+      seek_target = mf->file_size;
+      write_initial_newline = true;
+      old_data = NULL;
+    }
+
+    if ((f = fopen(mf->name, "r+")) == NULL) {
+      err_report("Error opening %s for update", mf->name);
+      return;
+    }
+
+    if (fseek(f, seek_target, SEEK_SET)) {
+      (void) fclose(f);
+      err_report("Error writing dynamic dependencies to %s", mf->name);
+      return;
+    }
+
+    if (write_initial_newline) {
+      fputc('\n', f);
+      fputs(COMMENT_DYNAMIC_DEPENDENCIES "\n", f);
+    }
+
+    if (old_data) {
+      fputs(old_data, f);
+      free(old_data);
+    }
+
+    for (dl = depend_list; dl; dl = dl->next) {
+        md_flatten(dl->depend_file_contents);
+        fputs(dl->depend_file_contents, f);
+    }
+
+    size = ftell(f);
+    if (fclose(f) || size < 0) {
+      err_fail("Error writing dynamic dependencies to %s", mf->name);
+    }
+    wf_truncate(mf->name, size);
 }
 
 void md_start_cmd(void)
@@ -380,13 +361,10 @@ int dde_extended_cmdline(void)
 
 static void dde_exit(void)
 {
-    _kernel_swi_regs r;
-
     md_delete();
 
     if (desktop_prefix) {
-        r.r[0] = 0;
-        _kernel_swi(DDEUtils_Prefix, &r, &r);
+        _swix(DDEUtils_Prefix, _IN(0), 0);
     }
 }
 
