@@ -78,7 +78,7 @@ OBJS =\
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
-.cmhg.o:;   ${CMHG} $< $@
+.cmhg.o:;   ${CMHG} -p $< $@
 
 #
 # Build rules: Disc
@@ -131,8 +131,7 @@ ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
 # Final link for the ROM Image {using given base address}
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${ROM_MODULE} ${C_ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${C_ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -140,61 +139,3 @@ ${MSGSMOD}: ${MESSAGES} Makefile
         ${MODGEN} $@ ${MODNAME} ${HELPSTR} ${VERSION} ${MESSAGES} ${RESPATH}
 
 # Dynamic dependencies:
-o.debug:	c.debug
-o.debug:	C:h.swis
-o.debug:	C:h.kernel
-o.debug:	C:h.kernel
-o.eventqueue:	c.eventqueue
-o.eventqueue:	C:h.kernel
-o.eventqueue:	C:h.swis
-o.eventqueue:	h.RemPrnSpt
-o.eventqueue:	h.debug
-o.eventqueue:	h.msgs
-o.eventqueue:	h.List
-o.eventqueue:	h.EventQueue
-o.init: hdr:ListOpts
-o.init: hdr:Macros
-o.init: hdr:System
-o.init: Hdr:SWIs
-o.init: Hdr:CPU.Generic26
-o.init: Hdr:IO.GenericIO
-o.init: Hdr:RISCOS
-o.init: hdr:ModHand
-o.init: hdr:Services
-o.init: hdr:FSNumbers
-o.init: hdr:HighFSI
-o.init: hdr:NewErrors
-o.init: hdr:MsgTrans
-o.init: hdr:PDriver
-o.list:	c.list
-o.list:	C:h.kernel
-o.list:	h.RemPrnSpt
-o.list:	h.Debug
-o.list:	h.Errors
-o.list:	h.ListP
-o.list:	h.Msgs
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.Module
-o.module:	h.Freeway
-o.module:	h.Pollword
-o.module:	h.Debug
-o.module:	h.Msgs
-o.module:	h.StrExtra
-o.module:	h.EventQueue
-o.msgs:	c.msgs
-o.msgs:	C:h.kernel
-o.msgs:	C:h.swis
-o.msgs:	h.debug
-o.msgs:	h.msgs
-o.msgs:	h.MsgTrans
-o.msgs:	h.Module
-o.msgtrans:	c.msgtrans
-o.msgtrans:	C:h.kernel
-o.msgtrans:	C:h.swis
-o.msgtrans:	h.MsgTrans
-o.msgtrans:	h.debug
-o.strextra:	c.strextra
-o.strextra:	C:h.kernel
-o.strextra:	C:h.swis
