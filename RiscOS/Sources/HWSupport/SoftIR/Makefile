@@ -135,7 +135,7 @@ clean:
         ${STRIP}
         @echo ${COMPONENT}: cleaned
 
-o.module od.module od.MsgHandler o.MsgHandler od.IntHandler o.IntHandler: h.header
+o.module od.module od.MsgHandler o.MsgHandler od.IntHandler o.IntHandler o.DevFSIntFc od.DevFSIntFc: h.header
 
 
 ${DIRS}:
