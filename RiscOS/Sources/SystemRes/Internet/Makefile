@@ -6,6 +6,8 @@
 # Date           Name   Description
 # ----           ----   -----------
 # 03-Jul-96      KJB    Derived from Scrap makefile
+# 05-Oct-99      SNB    Updated to allow slimmed down STB !Internet to be built.
+#                       Passing OPTIONS=STB builds a cut down structure.
 #
 
 #
@@ -30,28 +32,31 @@ WIPE    = -wipe
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
-FILES=\
- ${RDIR}.!Boot\
+
+COMMONFILES=\
+ ${SDIR}.arp.ARP\
+ ${SDIR}.ifconfig.IfConfig\
+ ${SDIR}.inetstat.InetStat\
+ ${SDIR}.ipvars.IPVars\
+ ${SDIR}.ping.Ping\
+ ${SDIR}.route.Route\
+ ${SDIR}.showstat.ShowStat\
+ ${SDIR}.sysctl.SysCtl\
+ ${SDIR}.traceroute.TraceRoute\
+ ${SDIR}.utils.utl.X\
+
+DISCFILES= ${RDIR}.!Boot\
  ${LDIR}.!Help\
  ${RDIR}.!Run\
  ${RDIR}.!Sprites\
  ${RDIR}.!Sprites22\
- ${SDIR}.arp.ARP\
  ${RDIR}.bin.GetHost\
  ${RDIR}.bin.Host\
- ${SDIR}.ifconfig.IfConfig\
- ${SDIR}.inetstat.InetStat\
  ${SDIR}.map-mbone.Map-MBone\
  ${SDIR}.mrinfo.MRInfo\
  ${SDIR}.mtrace.MTrace\
- ${SDIR}.ping.Ping\
  ${SDIR}.pong.Pong\
  ${SDIR}.utils.utl.RMFind\
- ${SDIR}.route.Route\
- ${SDIR}.traceroute.TraceRoute\
- ${SDIR}.showstat.ShowStat\
- ${SDIR}.sysctl.SysCtl\
- ${SDIR}.utils.utl.X\
  ${RDIR}.files.AUNMap\
  ${RDIR}.files.Hosts\
  ${RDIR}.files.Networks\
@@ -63,10 +68,15 @@ FILES=\
  ${SDIR}.utils.utl.ReadCMOSIP\
  ${SDIR}.utils.utl.TriggerCBs
 
+FILES=\
+  ${COMMONFILES} \
+  ${DISCFILES}
+  
 NETUTILS = \
         ${SDIR}.arp.ARP              \
         ${SDIR}.ifconfig.IfConfig    \
         ${SDIR}.inetstat.InetStat    \
+        ${SDIR}.ipvars.IPVars        \
         ${SDIR}.map-mbone.Map-MBone  \
         ${SDIR}.mrinfo.MRInfo        \
         ${SDIR}.mtrace.MTrace        \
@@ -89,9 +99,31 @@ NETUTILS = \
 all: ${FILES}
         @echo ${COMPONENT}: All built (Disc)
 
-install: ${FILES}
-        ${MKDIR} ${INSTDIR}
-        |
+install: install_${OPTIONS} install_common dirs
+        ${ATTR} -directories +wr -ww ${INSTDIR}
+        ${ATTR} -files +or +ow +wr -ww ${INSTDIR}
+        @echo ${COMPONENT}: All installed (Disc)
+
+install_common: ${COMMONFILES}
+        ${CP} ${SDIR}.arp.ARP               ${INSTDIR}.bin.ARP          ${CPFLAGS}
+        ${CP} ${SDIR}.ifconfig.IfConfig     ${INSTDIR}.bin.IfConfig     ${CPFLAGS}
+        ${CP} ${SDIR}.inetstat.InetStat     ${INSTDIR}.bin.InetStat     ${CPFLAGS}
+        ${CP} ${SDIR}.ipvars.IPVars         ${INSTDIR}.bin.IPVars       ${CPFLAGS}
+        ${CP} ${SDIR}.ping.Ping             ${INSTDIR}.bin.Ping         ${CPFLAGS}
+        ${CP} ${SDIR}.route.Route           ${INSTDIR}.bin.Route        ${CPFLAGS}
+        ${CP} ${SDIR}.showstat.ShowStat     ${INSTDIR}.bin.ShowStat     ${CPFLAGS}
+        ${CP} ${SDIR}.sysctl.SysCtl         ${INSTDIR}.bin.SysCtl       ${CPFLAGS}
+        ${CP} ${SDIR}.traceroute.TraceRoute ${INSTDIR}.bin.TraceRoute   ${CPFLAGS}
+        ${CP} ${SDIR}.utils.utl.X           ${INSTDIR}.bin.X            ${CPFLAGS}
+
+install_STB:
+        ${MKDIR} ${INSTDIR}.etc
+        ${CP} LocalUserIFRes:!Boot     ${INSTDIR}.!Boot         ${CPFLAGS}
+        ${CP} ${RDIR}.files.Hosts      ${INSTDIR}.etc.hosts     ${CPFLAGS}
+        ${CP} ${RDIR}.files.protocols  ${INSTDIR}.etc.protocols ${CPFLAGS}
+        ${CP} ${RDIR}.files.services   ${INSTDIR}.etc.services  ${CPFLAGS}
+
+install_: ${DISCFILES} dirs
         ${CP} ${RDIR}.!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
         ${CP} ${LDIR}.!Help      ${INSTDIR}.!Help      ${CPFLAGS}
         ${CP} ${RDIR}.!Run       ${INSTDIR}.!Run       ${CPFLAGS}
@@ -101,29 +133,19 @@ install: ${FILES}
         ${CP} ${RDIR}.files      ${INSTDIR}.files      ${CPFLAGS}
         ${CP} ${RDIR}.utils      ${INSTDIR}.utils      ${CPFLAGS}
         |
-        ${CP} ${SDIR}.arp.ARP               ${INSTDIR}.bin.ARP          ${CPFLAGS}
-        ${CP} ${SDIR}.ifconfig.IfConfig     ${INSTDIR}.bin.IfConfig     ${CPFLAGS}
-        ${CP} ${SDIR}.inetstat.InetStat     ${INSTDIR}.bin.InetStat     ${CPFLAGS}
         ${CP} ${SDIR}.map-mbone.Map-MBone   ${INSTDIR}.bin.Map-MBone    ${CPFLAGS}
         ${CP} ${SDIR}.mrinfo.MRInfo         ${INSTDIR}.bin.MRInfo       ${CPFLAGS}
         ${CP} ${SDIR}.mtrace.MTrace         ${INSTDIR}.bin.MTrace       ${CPFLAGS}
-        ${CP} ${SDIR}.ping.Ping             ${INSTDIR}.bin.Ping         ${CPFLAGS}
         ${CP} ${SDIR}.pong.Pong             ${INSTDIR}.bin.Pong         ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.RMFind      ${INSTDIR}.bin.RMFind       ${CPFLAGS}
-        ${CP} ${SDIR}.route.Route           ${INSTDIR}.bin.Route        ${CPFLAGS}
-        ${CP} ${SDIR}.showstat.ShowStat     ${INSTDIR}.bin.ShowStat     ${CPFLAGS}
-        ${CP} ${SDIR}.sysctl.SysCtl         ${INSTDIR}.bin.SysCtl       ${CPFLAGS}
-        ${CP} ${SDIR}.traceroute.TraceRoute ${INSTDIR}.bin.TraceRoute   ${CPFLAGS}
-        ${CP} ${SDIR}.utils.utl.X           ${INSTDIR}.bin.X            ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.CheckMem    ${INSTDIR}.utils.CheckMem   ${CPFLAGS}
         ${CP} ${SDIR}.newfiler.NewFiler     ${INSTDIR}.utils.NewFiler   ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.ReadCMOSIP  ${INSTDIR}.utils.ReadCMOSIP ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.TriggerCBs  ${INSTDIR}.utils.TriggerCBs ${CPFLAGS}
-        |
-        ${ATTR} -directories +wr -ww ${INSTDIR}
-        ${ATTR} -files +or +ow +wr -ww ${INSTDIR}
-        |
-        @echo ${COMPONENT}: All installed (Disc)
+
+dirs:
+        ${MKDIR} ${INSTDIR}
+        ${MKDIR} ${INSTDIR}.bin
 
 clean:
 	dir ${SDIR}
@@ -142,6 +164,7 @@ resources-NetUtils: ${NETUTILS}
 	${MKDIR} ${RESD}.files
         ${CP} ${SDIR}.arp.ARP               ${RESD}.bin.ARP          ${CPFLAGS}
         ${CP} ${SDIR}.ifconfig.IfConfig     ${RESD}.bin.IfConfig     ${CPFLAGS}
+        ${CP} ${SDIR}.ipvars.IPVars         ${RESD}.bin.IPVars       ${CPFLAGS}
         ${CP} ${SDIR}.inetstat.InetStat     ${RESD}.bin.InetStat     ${CPFLAGS}
         ${CP} ${SDIR}.map-mbone.Map-MBone   ${RESD}.bin.Map-MBone    ${CPFLAGS}
         ${CP} ${SDIR}.mrinfo.MRInfo         ${RESD}.bin.MRInfo       ${CPFLAGS}
@@ -172,6 +195,12 @@ ${SDIR}.arp.ARP: ${SDIR}.arp.c.ARP
 
 ${SDIR}.ifconfig.IfConfig: ${SDIR}.ifconfig.c.IfConfig
 	dir ${SDIR}.ifconfig
+	@amu_machine
+	@up
+	@up
+
+${SDIR}.ipvars.IPVars: ${SDIR}.ipvars.c.ipvars
+	dir ${SDIR}.ipvars
 	@amu_machine
 	@up
 	@up
