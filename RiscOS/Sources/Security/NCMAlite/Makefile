@@ -107,14 +107,14 @@ OBJSI  = i.module header.o i.vectors i.ncma_cmds i.ncma_swis \
 	    usermode.o areacode.o i.dbugzm i.ncma_fx i.init
 
 
-ROMOBJS = oz.resources ${BASEOBJS}
-NOTROMOBJS = oz.resources ${BASEOBJS}
+ROMOBJS = ${BASEOBJS}
+NOTROMOBJS = ${BASEOBJS}
 
 #
 # Component build rules
 #
-o.resources: s.resources ${NOTROMRESDEP}
-oz.resources: s.resources ${ROMRESDEP}
+#o.resources: s.resources ${NOTROMRESDEP}
+#oz.resources: s.resources ${ROMRESDEP}
 
 
 #
