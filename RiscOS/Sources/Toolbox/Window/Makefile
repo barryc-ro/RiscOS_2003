@@ -132,7 +132,7 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 ${WIMPLIB}:
-        ${CD} ^.^.wimplib
+        ${CD} ^.wimplib
         ${MAKE} @.wimplib
         back
 
