@@ -7,7 +7,7 @@ COMPONENT = Territory
 INSTAPP   = ${INSTDIR}.!${COMPONENT}
 INSTOPTS  = ${INSTAPP}.<STB$OS>.${Locale}
 INSTPICS  = ${INSTOPTS}.pics
-HTMLDIR   = ${INSTHTML}.<STB$OS>
+HTMLDIR   = ${INSTHTML}.<STB$OS>.${Locale}
 
 IFTHERE    = IfThere
 IFTHEN     = Then
