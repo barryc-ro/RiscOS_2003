@@ -57,6 +57,8 @@ static int timer(enum reason_code,int units);
 static int e_check(int rc,int line);
 static int decomp(void);
 static int program_flash(void);
+static int check_write(unsigned int byte_offset);
+static void vandalize_main_os(void);
 
 #ifndef FTP_SIMULATION
 int read_amt = FTP_BUFFER_SIZE;
@@ -400,13 +402,13 @@ static int idle_handler(int reason)
                   }
                   flash.sizeof_flash = regs.r[0];  /* byte size */
                   flash.blocksize = regs.r[2];     /* byte size */
-                  /*
+
                   if ((er = _kernel_swi(FlashWrite_EraseFlash,&regs,&regs)) != NULL)
                   {
                        error_handler(__FILE__,__LINE__,"idle_handler()",er->errnum,er->errmess,WARNING);
                        return FLASH_PROGRAMMING_ERR;
                   }
-                  */
+
                   rc = ftp_stateMachine(START);
                   switch (rc)
                   {
@@ -638,11 +640,17 @@ extern int decomp_init(void)
     }
     flash.sizeof_flash = regs.r[0];  /* byte size */
     flash.blocksize = regs.r[2];     /* byte size */
+
+    /*
+
     if ((er = _kernel_swi(FlashWrite_EraseFlash,&regs,&regs)) != NULL)
     {
          error_handler(__FILE__,__LINE__,"idle_handler()",er->errnum,er->errmess,WARNING);
          return FLASH_PROGRAMMING_ERR;
     }
+
+    */
+
     #endif
 
     sizeof_flash_buffer = flash.blocksize;
@@ -899,7 +907,11 @@ static int program_flash(void)
         regs.r[0] = byte_offset;       /* Offset from base of Flash */
         regs.r[1] = (int)flash_buf;    /* Block of data             */
 
+        #ifdef CHECK_VERIFY
+        if ((er = _kernel_swi(FlashWrite_WriteWord,&regs,&regs)) != NULL)
+        #else
         if ((er = _kernel_swi(FlashWrite_WriteBlock,&regs,&regs)) != NULL)
+        #endif
         {
              error_handler(__FILE__,__LINE__,"program_flash()",er->errnum,er->errmess,WARNING);
              if (er->errnum == FLASH_WRITEBUFF_BUFFERBUSY)
@@ -912,6 +924,11 @@ static int program_flash(void)
              {
                  return FLASH_PROGRAMMING_ERR;
              }
+        }
+
+        if ((check_write(byte_offset)) != SUCCESS)
+        {
+             return FLASH_PROGRAMMING_ERR;
         }
 
         bytes_programmed += sizeof_flash_buffer;
@@ -928,6 +945,112 @@ static int program_flash(void)
     }
 
     return DONE;
+}
+
+/************************************************************************************/
+/* Function:  check_write()                                                         */
+/* Behaviour: Checks that what we think we've written to Flash really has been      */
+/*            written to Flash.                                                     */
+/* Requires: */
+/* Returns:   SUCCESS, or FAILURE.                                                  */
+/************************************************************************************/
+static int check_write(unsigned int byte_offset)
+{
+  char *verification_buffer = NULL;
+  int i;
+  _kernel_swi_regs regs;
+  _kernel_oserror *er = NULL;
+
+    if ((verification_buffer = calloc(flash.blocksize,1)) == NULL)
+    {
+         error_handler(__FILE__,__LINE__,"check_write()",flash.blocksize,
+           "Insufficient memory for validating what's been programmed to Flash",WARNING);
+         return FAILURE;
+    }
+
+    regs.r[0] = byte_offset;
+    regs.r[1] = (int)verification_buffer;
+    if ((er = _kernel_swi(FlashWrite_ReadBlock,&regs,&regs)) != NULL)
+    {
+         error_handler(__FILE__,__LINE__,"check_write()",er->errnum,er->errmess,WARNING);
+         if (verification_buffer != NULL)
+         {
+             free(verification_buffer);
+         }
+         return FAILURE;
+    }
+
+    /* Now compare what we've read back from Flash with our original Flash write buffer. */
+    for (i = 0; i < flash.blocksize; i++)
+    {
+         if ((*flash_buf) != (*verification_buffer))
+         {
+              error_handler(__FILE__,__LINE__,"check_write()",i,"Flash verification failed.",WARNING);
+              if (verification_buffer != NULL)
+              {
+                  free(verification_buffer);
+              }
+              vandalize_main_os();
+              return FAILURE;
+         }
+    }
+
+    if (verification_buffer != NULL)
+    {
+        free(verification_buffer);
+    }
+
+    return SUCCESS;
+}
+
+/************************************************************************************/
+/* Function:  vandalize_main_os()                                                   */
+/* Behaviour: If one of our Flash write verification checks fail, we want to be     */
+/*            certain that the kernel will not think there is a valid Main OS       */
+/*            present on start up.  (This has already happened once when the Flash  */
+/*            module was only programming the start of each block - the kernel      */
+/*            still thought there was a valid Main OS present).  Regardless of the  */
+/*            amt of padding in an image, the magic string "NCOS" will always appear*/
+/*            16 bytes from the end of the image.  Remove this and the kernel will  */
+/*            know for certain that there is no valid Main OS present.              */
+/************************************************************************************/
+static void vandalize_main_os(void)
+{
+  int garbage = 0;
+  int verification = -1;
+  _kernel_swi_regs regs;
+  _kernel_oserror *er = NULL;
+
+    regs.r[0] = IMAGESIZE - 16;  /* Byte offset from Flash base. */
+    regs.r[1] = garbage;
+    if ((er = _kernel_swi(FlashWrite_WriteWord,&regs,&regs)) != NULL)
+    {
+         error_handler(__FILE__,__LINE__,"vandalize_main_os()",er->errnum,er->errmess,WARNING);
+      /* error_handler() notes the error for the attention of engineers during development,
+         but this isn't something the user needs to be concerned about since we've already
+         reported a Flash programming error.  */
+         return;
+    }
+
+    /* Check that we really have written over the magic string "NCOS" */
+    regs.r[0] = IMAGESIZE - 16;
+    if ((er = _kernel_swi(FlashWrite_ReadWord,&regs,&regs)) != NULL)
+    {
+         error_handler(__FILE__,__LINE__,"vandalize_main_os()",er->errnum,er->errmess,WARNING);
+      /* error_handler() notes the error for the attention of engineers during development,
+         but this isn't something the user needs to be concerned about since we've already
+         reported a Flash programming error.  */
+         return;
+    }
+    verification = regs.r[1];
+
+    if (verification != garbage)
+    {
+        error_handler(__FILE__,__LINE__,"vandalize_main_os()",0,"Garbage data overwrite of magic word NCOS has failed.",
+          WARNING);
+    }
+
+    return;
 }
 
 #endif
