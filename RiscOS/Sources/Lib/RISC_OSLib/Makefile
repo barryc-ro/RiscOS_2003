@@ -23,6 +23,11 @@
 # 28-Sep-94  AMcC         Now exports some internal headers for Edit
 #
 
+# Set default component and target.
+# Alternative possible target is RISC_OSLib
+COMPONENT .= SharedCLibrary
+TARGET    .= CLib
+
 #
 # Paths
 #
@@ -226,8 +231,7 @@ EXPORTED_LIBS =\
 
 MODWRAP   = RISC_OSLib:s.modulewrap
 
-COMPONENT = RISC_OSLib
-TARGET    = aof.RISC_OSLib
+OBJECT    = aof.${TARGET}
 EXPORTS   = ${MODWRAP} \
             ${EXPORTED_LIBS} \
             ${HEADERS} \
@@ -268,6 +272,14 @@ RM_OBJS =\
 # Objects for lib.clib (relocatable module)
 #
 CLIB_MOD_OBJS =\
+ rm_o.cl_rmhdr \
+ o.initmodule \
+ ${RM_OBJS}
+
+#
+# Objects for a C library only ROM shared library
+#
+CLIB_ROM_OBJS =\
  rm_o.cl_rmhdr \
  rm_o.initmodule \
  ${RM_OBJS}
@@ -370,7 +382,7 @@ RLIB_MOD_OBJS =\
 #
 # Build rules:
 #
-rom: ${TARGET}
+rom: ${OBJECT}
         @echo ${COMPONENT}: rom library built
 
 export: export_${PHASE}
@@ -380,8 +392,8 @@ export_hdrs: ${EXP_HDR}.SharedCLib; @
 
 export_libs: ${EXPORTS} dirs; @
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+install_rom: ${OBJECT}
+        ${CP} ${OBJECT} ${INSTDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: rom library installed
 
 clean:
@@ -395,20 +407,19 @@ clean_all:
         ${WIPE} rm_o_rl.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
-        ${RM} syms.RISC_OSLib
-        ${RM} syms.Entries
-        ${RM} syms.C_Entries
+        ${WIPE} aof.* ${WFLAGS}
+        ${WIPE} syms.* ${WFLAGS}
         ${RM} derived.swis
         ${RM} s.swioptions
         ${RM} s.abssym
         ${RM} s.c_abssym
         ${RM} s.a_abssym
+        ${RM} rlib.s.asmdefs
         ${WIPE} lib.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
+        ${MKDIR} ${RESDIR}.RISC_OSLib
         ${MKDIR} ${RESDIR}.CLib
         IfThere clib.Resources.${LOCALE}.<System>.Messages Then Set MessagesFile clib.Resources.${LOCALE}.<System>.Messages else Set MessagesFile clib.Resources.${LOCALE}.Messages
         ${CP} <MessagesFile> ${RESDIR}.CLib.Messages ${CPFLAGS}
@@ -430,27 +441,42 @@ dirs:
 #
 # ROM target {re-linked at ROM Image build time}
 #
-${TARGET}: ${ROM_OBJS}
+aof.RISC_OSLib: ${ROM_OBJS}
         ${LD} -o $@ -aof ${ROM_OBJS}
+
+aof.CLib: ${CLIB_ROM_OBJS}
+        ${LD} -o $@ -aof ${CLIB_ROM_OBJS}
 
 #
 # Final link for the ROM Image {using given base address}
 #
-rom_link:
-        ${LD} -o linked.RISC_OSLib ${ROM_OBJS} \
-              -symbols syms.RISC_OSLib \
+linked.RISC_OSLib: ${ROM_OBJS}
+        ${LD} -o $@ ${ROM_OBJS} \
+              -symbols syms.${TARGET} \
               -bin -base ${ADDRESS} \
-              -map > map.RISC_OSLib
-        ${CP} linked.RISC_OSLib ${LINKDIR}.RISC_OSLib ${CPFLAGS}
+              -map > map.${TARGET}
+
+linked.CLib: ${CLIB_ROM_OBJS}
+        ${LD} -o $@ ${CLIB_ROM_OBJS} \
+              -symbols syms.${TARGET} \
+              -bin -base ${ADDRESS} \
+              -map > map.${TARGET}
+
+rom_link: linked.${TARGET}
+        ${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}
         |
-        xtentries syms.Entries kernel.s.k_entries clib.s.cl_entries rlib.s.rl_entries
+        if "${TARGET}"="RISC_OSLib" Then Set ExtraLibs$xtentries rlib.s.rl_entries Else Unset ExtraLibs$xtentries
+        do xtentries syms.Entries kernel.s.k_entries clib.s.cl_entries <ExtraLibs$xtentries>
+        unset ExtraLibs$xtentries
         print rlib.swi { >> syms.Entries }
         xtentries syms.C_Entries kernel.s.k_entries clib.s.cl_entries
         print rlib.swi { >> syms.C_Entries }
+        | C_Entries *currently* only adds _swi/_swix to RO2 symbols.
+        egrep -v "^_swix?$" < syms.C_Entries > syms.A_Entries
         |
-        symgen syms.Entries syms.RISC_OSLib s.abssym
-        symgen syms.C_Entries syms.RISC_OSLib s.c_abssym
-        symgen syms.A_Entries syms.RISC_OSLib s.a_abssym
+        symgen syms.Entries syms.${TARGET} s.abssym
+        symgen syms.C_Entries syms.${TARGET} s.c_abssym
+        symgen syms.A_Entries syms.${TARGET} s.a_abssym
         |
         ${OBJASM} ${AFLAGS} -from s.abssym -to o.abssym
         ${OBJASM} ${AFLAGS} -from s.c_abssym -to o.c_abssym
@@ -622,6 +648,7 @@ rm_o.clib:  clib.s.cl_obj_r
         ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.cl_obj_r -to $@
 
 rm_o.cl_modbody: clib.s.cl_mod_r
+        ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.cl_mod_r -to $@
 
 rm_o_rl.rl_modbody: rlib.s.rl_mod_r
@@ -633,8 +660,11 @@ rm_o.k_modbody: kernel.s.k_mod_r
 rm_o.memcpy: s.memcpy s.h_regs
         ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from s.memcpy -to $@
 
-rm_o.initmodule: clib.s.initmod_r
+o.initmodule: clib.s.initmod_r
         ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.initmod_r -to $@
+
+rm_o.initmodule: clib.s.initmod_rm
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.initmod_rm -to $@
 
 rm_o_rl.initmodule: rlib.s.initmod_r
         ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from rlib.s.initmod_r -to $@
