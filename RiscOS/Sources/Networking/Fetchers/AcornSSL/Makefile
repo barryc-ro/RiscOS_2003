@@ -60,7 +60,7 @@ ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.c_abssym
 TCPIPLIBS = TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm
 CRYPTLIBS = <Lib$Dir>.SSLeay.o.ssl <Lib$Dir>.SSLeay.o.libcrypto
-DEBLIBS   = <syslog$dir>.c-veneer.o.syslog
+# DEBLIBS   = <syslog$dir>.c-veneer.o.syslog
 ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 
 
