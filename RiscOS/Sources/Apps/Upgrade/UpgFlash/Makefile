@@ -96,6 +96,7 @@ resources: ${TARGET}
         ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
         ${CP} UpgFlashRes:!Boot ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
         ${CP} UpgFlashRes:!Run ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+        ${CP} UpgFlashRes:messages ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
         UnSet UpgFlashRes$path
         @echo ${COMPONENT}: all complete
 
@@ -105,6 +106,7 @@ install:   ${TARGET}
         ${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
         ${CP} UpgFlashRes:!Boot ${APP}.* ${CPFLAGS}
         ${CP} UpgFlashRes:!Run ${APP}.* ${CPFLAGS}
+        ${CP} UpgFlashRes:messages ${APP}.* ${CPFLAGS}
         UnSet UpgFlashRes$path
         @echo ${COMPONENT}: all complete
 
