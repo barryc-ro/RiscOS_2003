@@ -12,12 +12,14 @@
         GET     hdr:System
         GET     hdr:ModHand
         GET     hdr:Services
-        GET     hdr:Switcher
         GET     hdr:Proc
         GET     hdr:Wimp
         GET     hdr:Sprite
         GET     hdr:DragASprit
-	GET	VersionASM
+        GET     hdr:MsgTrans
+        GET     hdr:FSNumbers
+        GET     hdr:NewErrors
+        GET     VersionASM
 
 ;;-----------------------------------------------------------------------------
 ;; Define the workspace layout
@@ -45,12 +47,14 @@ module_base
         & MySWIBase
         & swidecode - module_base
         & swinames - module_base
+        & 0
+  [ :LNOT: No32bitCode
+        & 0
+        & flags -module_base
+  ]
 
-title   = "DragAnObject",0
 help    = "Drag an Object",9,"$Module_FullVersion ($Module_Date)",0
         ALIGN
-
-
 
 ;;-----------------------------------------------------------------------------
 ;;-----------------------------------------------------------------------------
@@ -64,32 +68,42 @@ help    = "Drag an Object",9,"$Module_FullVersion ($Module_Date)",0
 
 
 swidecode
+        ; Fast dispatch as we only have two SWIs
+        CMP     R11,#1
+        BEQ     SWIDragAnObjectStart
         Push    "lr"
+        BCS     swidecode_badswi
+        SWI     XDragASprite_Stop
+        Pull    "pc"
 
-        CMP     R11,#2
-        ADDCC   R14,R11,#(jptable-Exit-4)/4    ; bodge factor
-        ADDCC   PC,PC,R14,ASL #2                ; go!
+swidecode_badswi
+        ADR     r0, ErrorBlock_BadSWI
+        MOV     r1, #0
+        MOV     r2, #0
+        MOV     r3, #0
+        ADR     r4, title
+        MOV     r5, #0
+        MOV     r6, #0
+        MOV     r7, #0
+        SWI     XMessageTrans_ErrorLookup
+        Pull    "pc"
 
-Exit
-        Pull    "PC"
+ErrorNumber_BadSWI * &1E6
+        MakeInternatErrorBlock BadSWI, noalign
 
-jptable
-        B       SWIDragAnObjectStart
-        B       SWIDragAnObjectStop
-
-
-
+title
 swinames
         DCB     "DragAnObject",0
         DCB     "Start",0
         DCB     "Stop",0
         DCB     0
-
+my_sp
+        DCB     "0",0
         ALIGN
 
-SWIDragAnObjectStop
-        SWI     XDragASprite_Stop
-        B       Exit
+  [ :LNOT: No32bitCode
+flags   DCD     ModuleFlag_32bit
+  ]
 
 ; bbox
 xmin    RN      R4
@@ -104,7 +118,7 @@ area1   #       4
 area2   #       4
 
 SWIDragAnObjectStart
-        Push    "R0-R10"                        ; SWI should preserve all registers unless error
+        Entry   "R0-R10"                        ; SWI should preserve all registers unless error
         MOV     R12,R13
         MOV     R1,#0
         Push    "R1"                            ; our variables for memory storage
@@ -143,9 +157,9 @@ SWIDragAnObjectStart
         MOV     R0,#0
         STR     R0,area2
 
-        LDR     R0,[R12]
-        LDR     R3,[R12,#12]
-        LDR     R4,[R12,#16]
+        LDR     R0,[R12, #Proc_RegOffset]
+        LDR     R3,[R12, #Proc_RegOffset + 12]
+        LDR     R4,[R12, #Proc_RegOffset + 16]
         LDR     R1,area1
         ADR     R2,my_sp
 
@@ -154,7 +168,7 @@ SWIDragAnObjectStart
 
 daoexit
         STRVS   R0,[R12]
-        MOV     R4,PC                           ; preserve error condition
+        SavePSR R4                              ; preserve error condition
 
         LDR     R2,area1
         TEQ     R2,#0
@@ -167,13 +181,9 @@ daoexit
         SWINE   XOS_Module                      ; ignore errors as we're trying to free up memory
 
         MOV     R13,R12
-        MOV     R14,R4                          ; restore error condition, why are we exiting?
-        Pull    "R0-R10"
-        B       Exit
-
-my_sp
-        DCB     "0",0
-        ALIGN
+        RestPSR R4,,f                           ; restore error condition
+        NOP
+        EXIT
 
 initarea
 ; R1 -> sprite area
@@ -264,9 +274,6 @@ output
 
         Pull    "R0-R3,PC"
 
-retins
-        Pull    "PC"
-
 setupvduvars
 ; after switching output to a sprite, the vdu 5 char size is reset to the kernel default
 ; the wimp expects differently! To get Wimp_PlotIcon to work properly this needs changing.
@@ -308,30 +315,11 @@ render
         TST     R0,# 1:SHL:16
         BNE     renderfunc
 
-  [ {TRUE}  ;StrongARM - avoid dynamic code
         LDR     R14,[R12,#8]
         LDMIA   R14,{R0-R9}
         LDR     R10,[R12,#4]
         SWI     XOS_CallASWI
         Pull    "R0-R10,PC"
-  |
-        LDR     R0,retins
-        Push    "R0"
-        LDR     R14,[R12,#8]
-        LDMIA   R14,{R0-R9}
-
-        LDR     R14,[R12,#4]
-        ORR     R14,R14,#&EF000000                              ; construct a SWI ins
-        Push    "R14"
-        Push    "PC"
-
-        MOV     PC,SP                                           ; call our routine
-        NOP
-
-        ADD     SP,SP,#8                                        ; skip routine
-
-        Pull    "R0-R10,PC"
-  ]
 
 renderfunc
         TST     R0,#1:SHL:17
@@ -345,15 +333,13 @@ renderfunc
         MOV     R10,R10, LSL #20
         ADD     R10,R10,#540
 
-        LDR     R4,[R12,#4]
-        MOV     R5,PC
-        MOV     R6,#&03fffffc
-        BIC     R5,R5,R6
-        ORR     R4,R4,R5
+        LDR     R4,[R12,#4]                                     ; get code address
 
-        MOV     R14,PC
-        MOVS    PC,R4
-        NOP
+        ADR     r14, renderfuncreturn
+        TEQ     pc, pc                                          ; in a 32-bit mode?  EQ if so
+        BICNE   pc, r4, #ARM_CC_Mask                            ; in a 26-bit mode - strip flags
+        MOV     pc, r4
+renderfuncreturn
         Pull    "R12"
         Pull    "R0-R10,PC"
 
@@ -361,7 +347,6 @@ notamod
         MOV     R10,#0                                          ; for stack limit checking
         MOV     R14,PC
         LDR     PC,[R12,#4]
-        NOP
         Pull    "R12"
         Pull    "R0-R10,PC"
 
@@ -471,7 +456,7 @@ workoutsize
 ; xmin-ymax have size in OS units
 ; R10 says whether mask (ie 2x required)
 ; R3 out has memory required.
-        Push    "R0-R2,R4-R5,LR"
+        Entry   "R0-R2,R4-R5"
         SUB     R4,xmax,xmin
         SUB     R3,ymax,ymin
 
@@ -496,8 +481,7 @@ workoutsize
         BIC     R4,R4,#63
         MOV     R4,R4, LSR #3                   ; bytes per line
 
-        ADD     R3,R3,#1
-        MUL     R3,R4,R3
+        MLA     R3,R4,R3,R4
 
         ADD     R3,R3,#64                      ; sprite overhead + a bit
 
@@ -506,6 +490,6 @@ workoutsize
 
         ADD     R3,R3,#64                       ; CB overhead...
 
-        Pull    "R0-R2,R4-R5,PC"
+        EXIT
 
         END
