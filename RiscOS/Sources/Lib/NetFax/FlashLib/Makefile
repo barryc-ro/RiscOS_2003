@@ -15,8 +15,8 @@
 
 EXP_HDR		= <export$dir>
 LIBDIR		= <Lib$Dir>
-NFXLIBDIR	= <Lib$Dir>.Netfax
-EXPORT_DIR	= <Lib$Dir>.Netfax.FlashLib
+NFXLIBDIR	= <Lib$Dir>.NetFax
+EXPORT_DIR	= <Lib$Dir>.NetFax.FlashLib
 
 
 # ------------------------------------------------------------------------------
