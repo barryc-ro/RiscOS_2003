@@ -20,4 +20,12 @@ speedtest: speedtest.c
 FTPProxy: FTPPrxSrc
 	FTPPrxSrc
 
+clean:
+        -delete FTPProxy
+        -delete PrintWrite
+        -delete speedtest
+        -delete URLClient
+        -wipe o.* fr~c~v
+
+
 .c.o:; cc -c -throwback $*.c
