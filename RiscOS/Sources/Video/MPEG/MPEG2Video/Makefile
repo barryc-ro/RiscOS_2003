@@ -29,7 +29,7 @@ CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -pd "tvtype SETS \"${TV}\""
 CPFLAGS = ~cfr~v
 LDFLAGS = -bin -o ${TARGET}
-WFLAGS  = ~fr~v
+WFLAGS  = ~c~fr~v
 
 #
 # Program specific options:
