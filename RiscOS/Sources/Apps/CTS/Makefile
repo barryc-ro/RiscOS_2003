@@ -42,10 +42,11 @@ INCLUDES = -Itbox:,TCPIPLibs:,C:
 #
 # Libraries
 #
+LIBDIR	  = <Lib$Dir>
 CLIB	  = CLIB:o.stubs
 TBOXLIBS  = TBox:o.eventlib TBox:o.wimplib TBox:o.toolboxlib
 TCPIPLIBS = TCPIPLIBS:o.inetlib TCPIPLIBS:o.socklib5 TCPIPLIBS:o.unixlib
-DEBUGLIB  = C:DebugLib.o.DebugLib
+DEBUGLIB  = ${LIBDIR}.DebugLib.o.DebugLib
 
 OBJS =\
  o.client\
@@ -66,8 +67,8 @@ DIRS=o._dirs
 #
 # Rule patterns
 #
-.c.o:;	  ${CC} ${CFLAGS} -o $@ $<
-.c.od:;	  ${CC} ${CFLAGS} -DDEBUGLIB -fn -o $@ $<
+.c.o:;	  ${CC} ${CFLAGS} ${EXTRAFLAGS} -o $@ $<
+.c.od:;	  ${CC} ${CFLAGS} ${EXTRAFLAGS} -DDEBUGLIB -fn -o $@ $<
 
 #
 # Main rules:
