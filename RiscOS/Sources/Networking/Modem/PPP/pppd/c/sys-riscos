@@ -40,6 +40,7 @@
 #include "netinet/if_ether.h"
 
 #include "^.if_ppp.h"
+#include "^.pppmodule.h"
 #include "pppd.h"
 
 #include "minixlib.h"
@@ -323,29 +324,51 @@ int sifdown(int u)
 
     IGNORE(u);
 
-    rv = 1;
-    if (pppioctl(fd, PPPIOCGFLAGS, (caddr_t) &x) < 0) {
-	syslog(LOG_ERR, "ioctl (PPPIOCGFLAGS): %m");
-	rv = 0;
-    } else {
-	x &= ~SC_ENABLE_IP;
-	if (pppioctl(fd, PPPIOCSFLAGS, (caddr_t) &x) < 0) {
-	    syslog(LOG_ERR, "ioctl(PPPIOCSFLAGS): %m");
-	    rv = 0;
-	}
+    if ((dialler_flags & DiallerFlags_UsingDialler) == 0 || finalising)
+    {
+        rv = 1;
+        if (pppioctl(fd, PPPIOCGFLAGS, (caddr_t) &x) < 0)
+        {
+            syslog(LOG_ERR, "ioctl (PPPIOCGFLAGS): %m");
+            rv = 0;
+        }
+
+        else
+        {
+            x &= ~SC_ENABLE_IP;
+            if (pppioctl(fd, PPPIOCSFLAGS, (caddr_t) &x) < 0)
+            {
+                syslog(LOG_ERR, "ioctl(PPPIOCSFLAGS): %m");
+                rv = 0;
+            }
+        }
+        strncpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
+
+        if (socketioctl(s, SIOCGIFFLAGS, (caddr_t) &ifr) < 0)
+        {
+            syslog(LOG_ERR, "ioctl (SIOCGIFFLAGS): %m");
+            rv = 0;
+        }
+
+        else
+        {
+            ifr.ifr_flags &= ~IFF_UP;
+            ppp_softc[u].moreflags &= ~IFF_UP;
+
+            if (socketioctl(s, SIOCSIFFLAGS, (caddr_t) &ifr) < 0)
+            {
+                syslog(LOG_ERR, "ioctl(SIOCSIFFLAGS): %m");
+                rv = 0;
+            }
+        }
     }
-    strncpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
-    if (socketioctl(s, SIOCGIFFLAGS, (caddr_t) &ifr) < 0) {
-	syslog(LOG_ERR, "ioctl (SIOCGIFFLAGS): %m");
-	rv = 0;
-    } else {
-	ifr.ifr_flags &= ~IFF_UP;
+
+    else
+    {
         ppp_softc[u].moreflags &= ~IFF_UP;
-	if (socketioctl(s, SIOCSIFFLAGS, (caddr_t) &ifr) < 0) {
-	    syslog(LOG_ERR, "ioctl(SIOCSIFFLAGS): %m");
-	    rv = 0;
-	}
     }
+
+
     return rv;
 }
 
@@ -535,7 +558,7 @@ int sifdefaultroute(int u, u_long g)
     IGNORE(u);
 
     if (internet_version >= 414)
-        return dodefaultroute(g, 's');
+        return dodefaultroute(g, 'a');
 
     /*if (defaultroute_exists())
         return 0;*/
@@ -564,7 +587,7 @@ int cifdefaultroute(int u, u_long g)
     IGNORE(u);
 
     if (internet_version >= 414)
-        return dodefaultroute(g, 'c');
+        return dodefaultroute(g, 'd');
 
     SET_SA_FAMILY (rt.rt_dst,     AF_INET);
     SET_SA_FAMILY (rt.rt_gateway, AF_INET);
@@ -579,10 +602,32 @@ int cifdefaultroute(int u, u_long g)
     return 1;
 }
 
+/*
+ * chifdefaultroute - change a default route through the address given.
+ */
+int chifdefaultroute(int u, u_long g)
+{
+    int result;
+
+    IGNORE(u);
+
+    if (internet_version >= 414)
+        return dodefaultroute(g, 'c');
+
+    /* delete then add the route */
+    if ((result = cifdefaultroute (u, g)) == 1);
+        result = sifdefaultroute (u, g);
+
+    return result;
+}
+
+
+
+
 static int rtm_seq;
 
 /*
- * dodefaultroute - talk to a routing socket to add/delete a default route.
+ * dodefaultroute - talk to a routing socket to add/delete/change a default route.
  */
 static int
 dodefaultroute(g, cmd)
@@ -603,7 +648,24 @@ dodefaultroute(g, cmd)
     }
 
     memset(&rtmsg, 0, sizeof(rtmsg));
-    rtmsg.hdr.rtm_type = cmd == 's'? RTM_ADD: RTM_DELETE;
+    switch (cmd)
+    {
+        case 'a':
+            rtmsg.hdr.rtm_type = RTM_ADD;
+            break;
+
+        case 'c':
+            rtmsg.hdr.rtm_type = RTM_CHANGE;
+            break;
+
+        case 'd':
+            rtmsg.hdr.rtm_type = RTM_DELETE;
+            break;
+
+        default:
+            rtmsg.hdr.rtm_type = RTM_DELETE;
+            break;
+    }
     rtmsg.hdr.rtm_flags = RTF_UP | RTF_GATEWAY;
     rtmsg.hdr.rtm_version = RTM_VERSION;
     rtmsg.hdr.rtm_seq = ++rtm_seq;
@@ -618,7 +680,29 @@ dodefaultroute(g, cmd)
 
     rtmsg.hdr.rtm_msglen = sizeof(rtmsg);
     if (socketwrite(routes, &rtmsg, sizeof(rtmsg)) < 0) {
-	syslog(LOG_ERR, "%s default route: %m", cmd=='s'? "add": "delete");
+        char *cmd_str[] = {"add", "change", "delete"};
+        int cmd_i = 0;
+
+        switch (cmd)
+        {
+            case 'a':
+                cmd_i = 0;
+                break;
+
+            case 'c':
+                cmd_i = 1;
+                break;
+
+            case 'd':
+                cmd_i = 2;
+                break;
+
+            default:
+                cmd_i = 2;
+                break;
+        }
+
+	syslog(LOG_ERR, "%s default route: %m", cmd_str[cmd_i]);
 	socketclose(routes);
 	return 0;
     }
@@ -810,4 +894,3 @@ get_ether_addr(ipaddr, hwaddr)
 
     return 0;
 }
-
