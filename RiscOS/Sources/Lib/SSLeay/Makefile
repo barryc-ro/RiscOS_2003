@@ -5,7 +5,6 @@
 #
 # Author: SNB   30/03/98
 #
-# Note -zpz0 used to disable compiler's common subexpression elimination.
 
 AR=libfile
 CP=copy
@@ -15,7 +14,7 @@ WIPE=-wipe
 
 LIBDIR=<Lib$Dir>.SSLeay
 
-CFLAGS=-throwback -Wpand -I${INCLUDES} ${DEFINES} ${EFLAGS} 
+CFLAGS=-throwback -Wpand -I${INCLUDES} ${DEFINES} ${EFLAGS}
 CPFLAGS=FR~C~V~S~N~T~L
 WPFLAGS=FR~C~V
 
@@ -24,15 +23,7 @@ WPFLAGS=FR~C~V
 
 INCLUDES = C:SSLeay,C:TCPIPLibs,C:
 DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA -DNO_MD2 -DNO_DSA ${DFLAGS}
-
-#  Use -zpz0 to disable common subexpression elimination.
-#  This is essential to fix a bug in cc 5.17 when compiling BN_div.
-#  Without it this code is generated:
-#        LDR      a4,[sp,#&4c]!	  ; mul64 macro: qh*t2l
-#        LDR      lr,[sp,#-4]!	  ; **
-#        SUB      sp,sp,#&50
-#  This will crash if an interrupt occurs while sp is changed (**)
-EFLAGS   = -zM -zps1 -Wpand -zpz0
+EFLAGS   = -zM -zps1 -Wpand
 CC       = cc
 
 
