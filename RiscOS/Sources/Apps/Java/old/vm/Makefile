@@ -41,7 +41,7 @@ ANSILIB   = CLib:o.ansilib
 CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.abssym
+ABSSYM    = RISC_OSLib:o.c_abssym
 
 OBJ       = image
 SYM       = symbols
@@ -107,21 +107,23 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 $(SYMBOLS): $(OBJS)
-        ${LD} -o $(ROM_MODULE) -aof -symbols syms0 ${OBJS} ${ROMCSTUBS}
+	$(MKDIR) aof
+	$(FIDDLE) fiddle_syms $(ROMCSTUBS) fiddled
+        ${LD} -o $(ROM_MODULE) -aof -symbols syms0 ${OBJS} fiddled
 	awk "$1~/(._stub$)|(^__DLL__ENTRIES_.)/ {print $1, $2}" syms0 \
 	    { > $@ }
 	
 ${ROM_MODULE}: $(OBJS)
 	$(MKDIR) aof
-        ${LD} -o $@ -symbols $(SYMBOLS) -aof ${OBJS} ${ROMCSTUBS}
+	$(FIDDLE) fiddle_syms $(ROMCSTUBS) fiddled
+        ${LD} -o $@ -symbols $(SYMBOLS) -aof ${OBJS} fiddled
 
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-	$(FIDDLE) fiddle_syms $(ABSSYM) fiddled
         ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} \
-		fiddled ${ROM_MODULE} -map > map.${COMPONENT}
+		$(ABSSYM) ${ROM_MODULE} -map > map.${COMPONENT}
 	truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
