@@ -65,7 +65,21 @@
 #define         PUCHAR unsigned char *
 
 /* keyboard/country numbers */
+#define         UK              1
+#define         SPAIN           5
+#define         ESPERANTO       9
+#define         GREECE          10
+#define         NORWAY          15
+#define         ICELAND         16
+#define         RUSSIA          24
 #define         JAPAN           32
+#define         SWITZERLAND     35
+#define         WALES           36
+#define         WALES2          49
+#define         DVORAKUK        70
+
+/* alphabet numbers */
+#define         UTF8            111
 
 #define         ERR_BadSWI      76
 #define         ERR_NoDict      77
@@ -129,6 +143,7 @@ static int      JapanIME_LastAttrLen;
 static int      JapanIME_DictOpen;  /* initialised to 0; 1 if in ROM; -1 if in dynamic area */
 static int      JapanIME_DynAreaNumber;
 static int      JapanIME_KeyboardNumber;
+static int      JapanIME_AlphabetNumber;
 static int      JapanIME_KanaLockState;
 static Encoding *JapanIME_Enc;
 
@@ -306,6 +321,10 @@ static int JapanIME__CvtAttr(char *op, int *cursorPos)
       attr++;                               /* and skip over its attr byte too    */
     }
   }
+
+  if (JapanIME_Bdata.cchCurPosition == src - (char *)JapanIME_Bdata.lpchDisplay)
+    cursor = op - opStart;                /* the cursor is at the end */
+
   *op = 0;
   *cursorPos = (JapanIME_Bdata.cchCurAttr ? cursor : -1);
   return op - opStart;                      /* return the number of bytes needed */
@@ -449,38 +468,63 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
   {
     if ((inFlags & IME_UCSinput) == 0)                              /* need to convert from UTF-8 */
     {
-      /* inCode may be just part of a character. We need to buffer up until a complete character  */
-      /* has been assembled, and convert it to a UCS value. While an incomplete UTF-8 buffer      */
-      /* exists return an 'key claimed' result to the caller                                      */
+      /* Code is in the current alphabet - either an 8-bit one, or UTF-8. */
+      JapanIME_AlphabetNumber = _kernel_osbyte(71, 127, 0) & 0xFF;
+      if (JapanIME_AlphabetNumber == UTF8)
+      {
+        /* inCode may be just part of a character. We need to buffer up until a complete character  */
+        /* has been assembled, and convert it to a UCS value. While an incomplete UTF-8 buffer      */
+        /* exists return an 'key claimed' result to the caller                                      */
 
-      if (rawKey < 0x80)
-      {
-        /* trivial convert to UCS :-) */
+        if (rawKey < 0x80)
+        {
+          /* trivial convert to UCS :-) */
+        }
+        else if (rawKey >= 0x100)               /* not a UTF8 code, so must be a Function key, etc. */
+        {
+          rawKey = 0x80000000 + rawKey - 0x100;
+        }
+        else if (JapanIME_UTF8index == 0 && (rawKey & 0xC0) == 0x80)   /* leading continuation byte */
+          return NULL;
+        else
+        {
+          if (JapanIME_UTF8index > 0 && (rawKey & 0xC0) != 0x80)        /* start byte in the middle */
+            JapanIME_UTF8index = 0;
+
+          if (JapanIME_UTF8index > 6)
+            return NULL;              /* UTF8_to_UCS4 is misbehaving? do this until next start code */
+
+          JapanIME_UTF8input[JapanIME_UTF8index++] = rawKey;
+          JapanIME_UTF8input[JapanIME_UTF8index] = 0;
+
+          if (UTF8_to_UCS4(JapanIME_UTF8input, &rawKey) == 1)         /* returns 1 if not ready yet */
+          {
+            r->r[0] = IME_KeyClaimed;
+            return NULL;                               /* claimed, but we are not processing it yet */
+          }
+        }
+        JapanIME_UTF8index = 0;                             /* clear ready for next input character */
       }
-      else if (rawKey >= 0x100)               /* not a UTF8 code, so must be a Function key, etc. */
-      {
-        rawKey = 0x80000000 + rawKey - 0x100;
-      }
-      else if (JapanIME_UTF8index == 0 && (rawKey & 0xC0) == 0x80)   /* leading continuation byte */
-        return NULL;
       else
       {
-        if (JapanIME_UTF8index > 0 && (rawKey & 0xC0) != 0x80)        /* start byte in the middle */
-          JapanIME_UTF8index = 0;
+        JapanIME_UTF8index = 0;                   /* alphabet isn't UTF-8. */
 
-        if (JapanIME_UTF8index > 6)
-          return NULL;              /* UTF8_to_UCS4 is misbehaving? do this until next start code */
-
-        JapanIME_UTF8input[JapanIME_UTF8index++] = rawKey;
-        JapanIME_UTF8input[JapanIME_UTF8index] = 0;
-
-        if (UTF8_to_UCS4(JapanIME_UTF8input, &rawKey) == 1)         /* returns 1 if not ready yet */
+        if (rawKey >= 0x100)                      /* function keys are function keys */
         {
-          r->r[0] = IME_KeyClaimed;
-          return NULL;                               /* claimed, but we are not processing it yet */
+          rawKey = 0x80000000 + rawKey - 0x100;
+        }
+        else
+        {
+          int unclaimed=1;                        /* get a UCS table using Service_International */
+          const unsigned int *alphabet_table;
+          _swix(OS_ServiceCall, _INR(1,3)|_OUT(1)|_OUT(4), 0x43, 8, JapanIME_AlphabetNumber,
+                                                           &unclaimed, &alphabet_table);
+          if (!unclaimed)
+          {
+            rawKey = alphabet_table[rawKey];      /* use the table, otherwise assume direct codes */
+          }
         }
       }
-      JapanIME_UTF8index = 0;                             /* clear ready for next input character */
     }
 
     /* we now have the UCS code from the 'keyboard': convert it to a Compact VJE virtual key.     */
@@ -557,17 +601,23 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
         case 0x9D:        // Shift-Right # after convert
           wVkey = F_CNV_BUNL;
           break;
+        case 0xAC:        // Ctrl-Left
+          wVkey = F_LLIM;
+          break;
+        case 0xAD:        // Ctrl-Right
+          wVkey = F_RLIM;
+          break;
         case 0x9E:        // PageDown (also Shift-Down!) # after convert
-          if ((inFlags & IME_ListSelection) != 0)    /* check mouse button down in list selection */
+          //if ((inFlags & IME_ListSelection) != 0)    /* check mouse button down in list selection */
             wVkey = F_CNV_NBLK;
-          else
-            wVkey = F_RLIM;
+          //else
+            //wVkey = F_RLIM;
           break;
         case 0x9F:        // PageUp (also Shift-Up!) # after convert
-          if ((inFlags & IME_ListSelection) != 0)      /* check mouse button up in list selection */
+          //if ((inFlags & IME_ListSelection) != 0)      /* check mouse button up in list selection */
             wVkey = F_CNV_BBLK;
-          else
-            wVkey = F_LLIM;
+          //else
+           // wVkey = F_LLIM;
           break;
         case 0xc2:        // Zen/han toggle
         case 0xd2:        // Shift-Zen/han toggle
@@ -600,6 +650,20 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
           wVkey = JapanIME__CheckCNV();
           if (wVkey >= 0)
             break;        // else return unprocessed
+        case 0xC8:        // All Candidates
+          if (JapanIME_Bdata.wMainStage & (PRC_CNV | PRC_RCNV))
+          {
+            wVkey = F_CNV_NBLK; // brings up candidate list in CNV and RCNV states
+            break;
+          }
+          else
+            return NULL;
+        case 0xC9:        // Kanji Number
+          wVkey = F_CODE;
+          break;
+        case 0xD9:        // Shift-Kanji Number
+          wVkey = F_CODE_CNT;
+          break;
       /* ---- return the following 'function keys' unhandled
         case 0x80:        // F0/Print
         case 0x81:        // F1
@@ -628,6 +692,8 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
     {
       if (rawKey == 0x7f)                                                /* DEL key # after input */
         wVkey = F_DEL;
+      else if (rawKey == 0x203e)     /* overline - tilde/overline are sort of unified in Shift-JIS */
+        rawKey = 0x7e;
       else if (rawKey >= 0x3000 && rawKey < 0x3100)       /* Row 30: Punct, Hiragana and Katakana */
       {
         if (rawKey >= 0x3040)      /* convert Hiragana and Katakana to half-width Shift-JIS codes */
@@ -640,11 +706,11 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
             rawKey = newKey;            /* Compact VJE can handle it by mapping to a h/w katakana */
         }
         /* deal with punctuation in Row 30 on an ad-hoc basis */
-        else if (rawKey == 0x3000)    /* the Row 30 space - treat as h/w space or CNV virtual key */
+        else if (rawKey == 0x3000)    /* the Row 30 space - treat as space or CNV virtual key */
         {
           if (JapanIME_KeyboardNumber != JAPAN)
             wVkey = F_CNV;
-          rawKey = 0xa0;
+          rawKey = 0x20;
         }
         else if (rawKey == 0x3001)                  /* Japanese comma -> halfwidth Shift-JIS code */
           rawKey = 0xa4;
@@ -661,16 +727,17 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
       {
         rawKey = 0xa0 + rawKey - 0xff60;                         /* convert to the Shift-JIS code */
       }
-      else if (rawKey == 0xffa0)                   /* halfwidth space -> halfwidth Shift-JIS code */
-      {
-        rawKey = 0xa0;                                            /* or should this set F_CNV ??? */
-      }
       else if (rawKey == 0xa5)                        /* &5c is what Compact VJE regards as a Yen */
         rawKey = 0x5c;
-      else if (rawKey == 0xa6 && JapanIME_KeyboardNumber != JAPAN)
-                                                /* Alt-grave on UK/US keyboard toggles IME on/off */
-                                                /* need to test for other keyboard's top rt key!! */
-        wVkey = F_SCRN;
+      else if ((rawKey == 0xa6   && (JapanIME_KeyboardNumber == UK ||
+                                     JapanIME_KeyboardNumber == DVORAKUK ||
+                                     JapanIME_KeyboardNumber == ESPERANTO ||
+                                     JapanIME_KeyboardNumber == NORWAY ||
+                                     JapanIME_KeyboardNumber == WALES ||
+                                     JapanIME_KeyboardNumber == WALES2))
+            || (rawKey == 0x2020 && (JapanIME_KeyboardNumber == ICELAND))
+            || (rawKey == 0xac   && (JapanIME_KeyboardNumber != JAPAN)))
+        wVkey = F_SCRN; /* Alt+key to left of 1 - assume "not sign" for other keyboards */
       else
         wVkey = -1;                         /* 'illegal' range as far as Compact-VJE is concerned */
     }
@@ -703,6 +770,8 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
     if (wVkey < 0 && (JapanIME_Bdata.wMainStage & PRC_EMP) == 0)
       return NULL;                                        /* ignore character if buffer non-empty */
 #endif
+    if (wVkey < 0 && (JapanIME_Bdata.wMainStage & (PRC_RCNV|PRC_CODE)) != 0)
+      return NULL;
 #define NOKEY   (wVkey >= 0)
 #else
     if (wVkey < 0)
@@ -724,7 +793,7 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
 
   IMEstate = JapanIME_Bdata.wVjeModeFlag;
 
-  ret = JapanIME__PutVkey(NOKEY ? wVkey : F_NO_CNV2);
+  ret = JapanIME__PutVkey(NOKEY ? wVkey : F_CHRK /*F_NO_CNV2*/);
 
   JapanIME__CheckIMEState(IMEstate);
 
@@ -766,9 +835,10 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
 
       uLen = JapanIME__CvtToUTF8((char *)JapanIME_Bdata.lpchDisplay,
                                     JapanIME_Bdata.cchDisplay, JapanIME_UTF8display);
-
+      #if !THIN_CSR
       if (uLen && JapanIME_UTF8display[--uLen] == 0x20)
         JapanIME_UTF8display[uLen] = 0;     /* knock off trailing space representing block cursor */
+      #endif
 
       if (strcmp(JapanIME_UTF8output, JapanIME_UTF8display) != 0)
         r->r[0] |= IME_DisplayChanged;
@@ -866,10 +936,34 @@ _kernel_oserror *JapanIME__GetCandidateListInfo(_kernel_swi_regs *r)
   {
     if ((JapanIME_Bdata.wMainStage & PRC_CODE) != 0)
     {
-      int firstCode = (*(char *)JapanIME_Bdata.lpchLBList << 8) +
-                                                     ((char *)JapanIME_Bdata.lpchLBList)[1];
+      int ch1 = ((char *)JapanIME_Bdata.lpchLBList)[0];
+      int ch2 = ((char *)JapanIME_Bdata.lpchLBList)[1];
+      int index;
 
-      sprintf(JapanIME_UTF8candidate, "%X", firstCode + JapanIME_Bdata.cLBItemNum - 1);
+      /* Convert to kuten */
+      if (ch1 >= 0xE0) ch1 -= 0xC1; else ch1 -= 0x81;
+      if (ch2 >= 0x80) ch2 -= 0x41; else ch2 -= 0x40;
+      index = 188 * ch1 + ch2;
+
+      /* Offset to current character */
+      index += JapanIME_Bdata.cLBItemNum - 1;
+
+      ch1 = index / 94;
+      ch2 = index % 94;
+
+      /* Convert to current coding */
+      if (JapanIME_Bdata.wHenModFlag & MOD_KUTEN)
+        sprintf(JapanIME_UTF8candidate, "%02d%02d", ch1+1, ch2+1);
+      else if (JapanIME_Bdata.wHenModFlag & MOD_JIS)
+        sprintf(JapanIME_UTF8candidate, "%02X%02X", ch1+0x21, ch2+0x21);
+      else
+      {
+        ch1 = index / 188;
+        ch2 = index % 188;
+        if (ch1 <= 0x1E) ch1 += 0x81; else ch1 += 0xE0-0x1F;
+        if (ch2 <= 0x3E) ch2 += 0x40; else ch2 += 0x80-0x3F;
+        sprintf(JapanIME_UTF8candidate, "%02X%02X", ch1, ch2);
+      }
     }
     else
       sprintf(JapanIME_UTF8candidate, "%i/%i",
@@ -1004,13 +1098,22 @@ _kernel_oserror *JapanIME__SWIHandler(int swi_no, _kernel_swi_regs *r, void *pw)
 _kernel_oserror *JapanIME__Initialisation(char *cmd_tail, int podule_base, void *pw)
 {
   /* set path variable if not already set */
-  int path_defined=0;
-  _swix(OS_ReadVarVal, _IN(0)|_INR(2,4)|_OUT(2),
-                       JapanIME_Path, -1, 0, 3, &path_defined);
-  if (!path_defined)
-    _swix(OS_SetVarVal, _INR(0,4),
-                        JapanIME_Path, JapanIME_DefaultPath, sizeof JapanIME_DefaultPath - 1,
-                        0, 0);
+  _kernel_swi_regs r;
+  r.r[0] = (int) JapanIME_Path;
+  r.r[2] = -1;
+  r.r[3] = 0;
+  r.r[4] = 3;
+  _kernel_swi(OS_ReadVarVal, &r, &r); /* Must use _kernel_swi because of silly error behaviour */
+
+  if (r.r[2] == 0)
+  {
+    r.r[0] = (int) JapanIME_Path;
+    r.r[1] = (int) JapanIME_DefaultPath;
+    r.r[2] = sizeof JapanIME_DefaultPath - 1;
+    r.r[3] = 0;
+    r.r[4] = 0;
+    _kernel_swi(OS_SetVarVal, &r, &r);
+  }
 
   /* initialise input fields in bdata - See VACS spec */
   JapanIME_Bdata.lpchResult = (PUCHAR) JapanIME_ChResult;

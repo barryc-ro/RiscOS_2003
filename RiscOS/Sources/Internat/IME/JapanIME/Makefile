@@ -21,11 +21,12 @@ WIPE    = -wipe
 CD	= dir
 AR	= libfile
 TOUCH   = create
+MODSQZ  = modsqz
 
 # defines for CHINA, TAIWAN, KOREA, TANKANJI_CNV, TANBUN, RENBUN1 and DEBUG added because
 # VJE code does, for example, #IF CHINA == 1 which swamps the throwback with warnings
 OPTIONS = -Dunix=1 -DSTRCT_CN=1 -DPROTO=1 -DROMDIC=1 -DCHINA=0 -DTAIWAN=0 -DKOREA=0 \
-          -DTANKANJI_CNV=0 -DTANBUN=0 -DRENBUN1=0 -DDEBUG=0
+          -DTANKANJI_CNV=0 -DTANBUN=0 -DRENBUN1=0 -DDEBUG=0 -DTHIN_CSR=1
 
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ffa -ec -Wp ${INCLUDES} ${OPTIONS}
 CMHGFLAGS = -p
@@ -144,9 +145,12 @@ rom_link:
 #
 # Target
 #
-rm.${COMPONENT}: ${OBJS} ${ULIB} ${CLIB}
+rm.${COMPONENT}u: ${OBJS} ${ULIB} ${CLIB}
 	${MKDIR} rm
         ${LD} -rmf -o $@ ${OBJS} ${ULIB} ${CLIB}
+
+rm.${COMPONENT}: rm.${COMPONENT}u
+        ${MODSQZ} rm.${COMPONENT}u $@
 
 #
 # Special rules
