@@ -603,7 +603,7 @@ static os_error *paint_fn(const char *text, BOOL last, void *handle)
 	int w, h;
 	
 	e = (os_error *)_swix(Font_ScanString, _INR(0,4) | _OUTR(3,4),
-			      pi->fh, text, pi->flags, INT_MAX, INT_MAX, &w, &h);
+			      pi->fh, text, pi->flags &~ (1<<11), INT_MAX, INT_MAX, &w, &h);
 	
 	pi->x += w;
 	/* pi->y += h; */

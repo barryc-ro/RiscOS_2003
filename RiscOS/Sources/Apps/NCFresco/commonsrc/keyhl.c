@@ -795,6 +795,9 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 
     LNKDBG(("Highlight from item %p, flags=0x%x, line=%p\n", item, flags, item ? item->line : NULL));
 
+    if (!doc)
+	return NULL;
+    
     /* get the screen bounds for visibility */
     frontend_view_bounds(doc->parent, &bounds);
 #if USE_MARGINS
@@ -964,7 +967,7 @@ void backend_update_link_activate(be_doc doc, be_item item, int activate)
 {
     be_item ti;
 
-    if (item == NULL || item->aref == NULL)
+    if (doc == NULL || item == NULL || item->aref == NULL)
         return;
 
 #if 0				/* This is too often wrong to be useful */
@@ -989,7 +992,8 @@ void backend_update_link_activate(be_doc doc, be_item item, int activate)
 
 void antweb_default_caret(antweb_doc *doc, BOOL take_caret)
 {
-    if (take_caret || frontend_view_has_caret(doc->parent))
+    BENDBG(("doc%p: antweb_default_caret(%d)\n", doc, take_caret ));
+    if (!doc && (take_caret || frontend_view_has_caret(doc->parent)))
     {
 	rid_text_item *ti = be_doc_read_caret(doc);
 #ifdef STBWEB
@@ -1007,6 +1011,12 @@ os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
 {
     rid_text_item *ti, *old_ti;
 
+    if (!doc)
+    {
+	*used = 0;
+	return NULL;
+    }
+    
     old_ti = be_doc_read_caret(doc);
     if (old_ti == NULL)
     {
@@ -1051,7 +1061,7 @@ os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
 
 be_item be_doc_read_caret(be_doc doc)
 {
-    return doc->selection.tag == doc_selection_tag_TEXT &&
+    return doc && doc->selection.tag == doc_selection_tag_TEXT &&
 	doc->selection.data.text.input_offset != doc_selection_offset_NO_CARET ?
 	doc->selection.data.text.item : NULL;
 }
@@ -1065,6 +1075,9 @@ BOOL be_item_has_caret(be_doc doc, be_item ti)
 
 void backend_set_highlight(be_doc doc, be_item item)
 {
+    if (!doc)
+	return;
+
     if (item == NULL)
 	backend_remove_highlight(doc);
 
@@ -1109,6 +1122,11 @@ void backend_set_highlight(be_doc doc, be_item item)
 void backend_set_caret(be_doc doc, be_item ti, int offset)
 {
     int repos = object_caret_REPOSITION;
+
+    BENDBG(("doc%p: backend_set_caret, ti=%p\n", doc, ti ));
+
+    if (!doc)
+	return;
 
     if (ti == NULL)
     {
@@ -1200,8 +1218,13 @@ be_item backend_read_highlight(be_doc doc, BOOL *had_caret)
 
 int backend_is_selected(be_doc doc, be_item ti)
 {
-    antweb_selection_t *sel = &doc->selection;
+    antweb_selection_t *sel;
     BOOL selected = FALSE;
+
+    if (!doc)
+	return FALSE;
+
+    sel = &doc->selection;
 
     if (sel) switch (sel->tag)
     {
