@@ -331,12 +331,10 @@ Server::get_assetlist_response(size_t *number, AssetIDDescriptor *buffer, size_t
 
   UCHAR event = 0;
   while ((result = PeekHeaderWait(&event)) != ErrorOccurred){ 
-    ULINT event_result;
-    
-    if ((event == COMMAND_assetlist_response)||((result = inetevent(&event, &event_result, 0)) == ErrorOccurred))
+    if ((event == COMMAND_assetlist_response)||((result = asyncInetEventHandler(&event)) == ErrorOccurred))
     	break;
   }
-  
+
   if (result != ErrorOccurred)
   	result = GetData(&header, sizeof(PacketHeader));
   	
@@ -432,10 +430,8 @@ Server::get_scenelist_response(size_t *number, SceneInformationDescriptor *buffe
   size_t asset_count;
 
   UCHAR event;
-  while ((result = PeekHeaderWait(&event)) != ErrorOccurred){ 
-    ULINT event_result;
-    
-    if ((event == COMMAND_scenelist_response)||((result = inetevent(&event, &event_result, 0)) == ErrorOccurred))
+  while ((result = PeekHeaderWait(&event)) != ErrorOccurred){     
+    if ((event == COMMAND_scenelist_response)||((result = asyncInetEventHandler(&event)) == ErrorOccurred))
     	break;
   }
  
@@ -565,10 +561,8 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
   UCHAR *buffer;
 
   UCHAR event;
-  while (PeekHeaderWait(&event) != ErrorOccurred){ 
-  	ULINT event_result;
-    
-    	if ((event == COMMAND_assetpres_response)||(inetevent(&event, &event_result, 0) == ErrorOccurred))
+  while (PeekHeaderWait(&event) != ErrorOccurred){    
+    	if ((event == COMMAND_assetpres_response)||(asyncInetEventHandler(&event) == ErrorOccurred))
     		break;
   }
   
@@ -665,37 +659,54 @@ Server::send_playback_request(ULINT state_id, ULINT MAX_storableBlock, ULONG Ack
 
   if (hton_structure((void*)&request, map_PlayBackRequest, PlayBackRequest) == ErrorOccurred){
   	return MakeError(IP_SendFail);
-  }	
-  
-  if (SendData((void*)&request, sizeof(PlayBackRequest)) == ErrorOccurred)
-  	return ErrorOccurred;
+  }
+  	
+  if (inuse != claim_token){
+  	inuse = claim_token;
+  	
+  	if (SendData((void*)&request, sizeof(PlayBackRequest)) == ErrorOccurred)
+  		return ErrorOccurred;
+  	/*	
+  	Debug("sent play request");
+  	
+  	UCHAR event;
+  	while (PeekHeaderWait(&event) != ErrorOccurred){
+  	  	//Debug("play request %i err %8.8X", event, ErrorNum());
+    		if ((event == COMMAND_playback_response)||(asyncInetEventHandler(&event) == ErrorOccurred))
+    			break;
+  	}
+	*/	
+  	inuse = free_token;
+  }
   	    
-  return NoError;
+  return ErrorState();
 }
 
 error_flag
-Server::get_playback_response(ULINT *result)
+Server::get_playback_response(ULINT *comms_result)
 {
-  error_flag  e_result = NoError;
+  error_flag  result = NoError;
   PlayBackResponse response;
   
   if (GetData((void*)&response, sizeof(PlayBackResponse)) == ErrorOccurred)
-  	e_result = ErrorOccurred;	//Null
+  	result = ErrorOccurred;	//Null
 
-  if ((e_result != ErrorOccurred)&&(ntoh_structure(&response, map_PlayBackResponse, PlayBackResponse) == ErrorOccurred)) {
-    	e_result = MakeError(IP_ReadFail);
+  if ((result != ErrorOccurred)&&(ntoh_structure(&response, map_PlayBackResponse, PlayBackResponse) == ErrorOccurred)) {
+    	result = MakeError(IP_ReadFail);
   }
   
-  if ((e_result != ErrorOccurred)&&(response.certification_code != certification_code++)){
-  	e_result = MakeError(VSP_ServerCertError);
+  if ((result != ErrorOccurred)&&(response.certification_code != certification_code++)){
+  	result = MakeError(VSP_ServerCertError);
   }
+   
+  if (*comms_result != NULL)
+    	*comms_result = response.result;
   
-  if ((e_result != ErrorOccurred)&&(response.result != 0)){
-    *result = response.result;
-    e_result = MakeError(VSP_ServerError, response.result);
+  if ((result != ErrorOccurred)&&(response.result != 0)){
+  	result = MakeError(VSP_ServerError, response.result);
   }
 
-  return e_result;
+  return result;
 }
  
 //--------------------------------------------------------public methods---------------
@@ -916,7 +927,7 @@ Server::PeekHeaderWait(UCHAR *command)
    	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
     	  	
     	int data_read = SocketDescriptor.read(&header, sizeof(PacketHeader), MSG_PEEK);
-    	   	  
+    	    	   	  
     	if (data_read < 0){
     		result = setSocketError(data_read);
     	}
@@ -926,8 +937,11 @@ Server::PeekHeaderWait(UCHAR *command)
     	}	
 
 	if (result != ErrorOccurred){
-    		if ( data_read != (int)(sizeof(PacketHeader)) )
+    		if ( data_read != (int)(sizeof(PacketHeader)) ){
+    		  	//Debug("wait+ %i", (unsigned int)((timeout_period+50)/100));
     			setSocketError(SocketDescriptor.wait_read((unsigned int)((timeout_period+50)/100)));
+    			//Debug("wait-");
+    		}
     		else {
     		  	*command = header.command_number;
     			break;
@@ -938,87 +952,90 @@ Server::PeekHeaderWait(UCHAR *command)
 } 
 
 error_flag
-Server::inetevent(UCHAR *event, ULINT *result, ULINT play_mode)
+Server::asyncInetEventHandler(UCHAR *event, ULINT *comms_result, ULINT play_mode)
 {
+  UCHAR local_event = 0;
+  ULINT local_result= 0;
+  error_flag result = ErrorState();
   
-  *event = (UCHAR)(*result = 0);
-  error_flag err_result = ErrorState();
-  
-  if ((err_result != ErrorOccurred)&&(inuse != claim_token)) {
-    	inuse = claim_token;
-   	
-  	if (PeekHeader(event) == ErrorOccurred){
-    		err_result = NoError;	// no data
-  	}
-  	else
-  	switch (*event) {
-  		case COMMAND_startend_notification:
-	  		{
-		  		StartEndNotification notify;
+  if ((result != ErrorOccurred)&&(PeekHeader(&local_event) != ErrorOccurred)){ // no real error just no event
+  	
+  		switch (local_event) {
+    			case COMMAND_playback_response:
+    				result = get_playback_response(&local_result);
+    				break;
+  			case COMMAND_startend_notification:
+	  			{
+		  			StartEndNotification notify;
   		
-  				if (GetData(&notify, sizeof(StartEndNotification)) == ErrorOccurred)
-    					err_result = ErrorOccurred;
-    				else {
-    				  	if (ntoh_structure(&notify, map_StartEndNotification, StartEndNotification) == ErrorOccurred){
-    						err_result = MakeError(IP_ReadFail);
-    					}
+  					if (GetData(&notify, sizeof(StartEndNotification)) == ErrorOccurred)
+    						result = ErrorOccurred;
     					else {
-    						if (notify.special_playbackID == play_mode)
-    							*result = (int)notify.trans_block_num;
-    						else
-    							(*event) = 0;
+    					  	if (ntoh_structure(&notify, map_StartEndNotification, StartEndNotification) == ErrorOccurred)
+    							result = MakeError(IP_ReadFail);
+    						else {
+    							if (notify.special_playbackID == play_mode)
+    								local_result = (int)notify.trans_block_num;
+    							else
+    								local_event = 0; // it is out of date.
+    						}
     					}
     				}
-    			}
-    	        	break;
-    		case COMMAND_playback_response:
-    			if (get_playback_response(result) == ErrorOccurred)
-    				err_result = ErrorOccurred;
-    			break;
-    		case COMMAND_assetend_response:
-   			{
-#ifdef DEBUGLIB   		  
-   			  	Debug("asset end");
-#endif   		  	
-   				AssetEndResponse response;
+    	        		break;
+    			case COMMAND_assetend_response:
+   				{
+   					AssetEndResponse response;
    				
-   				if ((GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred))
-   					err_result = ErrorOccurred;
-   				else {
-					if ((ntoh_structure(&response, map_AssetEndResponse, AssetEndResponse) == ErrorOccurred)) {
-     						err_result = MakeError(IP_ReadFail);
-   					}
-   	                                else {
-   						if ((response.certification_code != certification_code++)){
-   							err_result = MakeError(VSP_ServerCertError);
-   						}
-   			                        else {
-   			                        	clear_streamrunning();
-   							*result = response.result;
-   						}
-   					}
-   				}
-  
-                	}
-    			break;
-    		default:
+   					if ((GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred))
+   						result = ErrorOccurred;
+   					else {
+						if ((ntoh_structure(&response, map_AssetEndResponse, AssetEndResponse) == ErrorOccurred))
+     							result = MakeError(IP_ReadFail);
+   						else {
+   							if ((response.certification_code != certification_code++))
+   								result = MakeError(VSP_ServerCertError);
+   			                        	else {
+   			                        		clear_streamrunning();
+   								local_result = response.result;
+   							}
+   					        }
+   				        }
+                	        }
+    				break;
+    			default:
 #ifdef DEBUGLIB    
-    			Debug("TCP: inet ignore unknown command %2.2X\n", *event);
-    				ReadDataToDebug();
+    				Debug("TCP: inet ignore unknown command %2.2X\n", local_event);
+    					ReadDataToDebug();
 #else
-			{
-  			int buffer;
-    				while (SocketDescriptor.read(&buffer, 4)==4);
-    			}
+				{
+  					int buffer;
+    					while (SocketDescriptor.read(&buffer, 4)==4);
+    				}
 #endif    		
-    			break;	
-    	}
+    				break;	
+    	        }
+#ifdef DEBUGLIB    	
+    		Debug("async event (%2.2X)", local_event);
+#endif    	
+  }
+  if (event != NULL) *event = local_event;
+  if (comms_result != NULL) *comms_result = local_result;
+  
+  return result;
+}
+
+error_flag
+Server::inetevent(UCHAR *event, ULINT *result, ULINT play_mode)
+{
+  error_flag err_result = ErrorState();
+  
+   if ((err_result != ErrorOccurred)&&(inuse != claim_token)) {
+    	inuse = claim_token;
+    	
+    	err_result = asyncInetEventHandler(event, result, play_mode);
+ 
     	inuse = free_token;
   }
-#ifdef DEBUGLIB    	
-	if (*event != 0)
-    		Debug("inet event(%2.2X)", *event);
-#endif    	
   return err_result;
 }
 
@@ -1192,7 +1209,6 @@ Server::AssetPresentation(ULINT init_value, PlayElementRequest playlist[], size_
   
   if (inuse != claim_token){
   	inuse = claim_token;
-  	//Debug("pres claim");
   	
   	if (  (result != ErrorExists())
   		&&(
@@ -1202,7 +1218,6 @@ Server::AssetPresentation(ULINT init_value, PlayElementRequest playlist[], size_
  	    		result = ErrorOccurred;
  	    		
  	set_streamrunning();
- 	//Debug("pres free");
      	inuse = free_token;
   }
   else
@@ -1212,7 +1227,7 @@ Server::AssetPresentation(ULINT init_value, PlayElementRequest playlist[], size_
 }
 
 error_flag
-Server::AssetEnd(ULINT status, ULINT)
+Server::AssetEnd(ULINT status, ULINT endflag)
 {
    AssetEndRequest request;   
    error_flag result = ErrorState();
@@ -1240,21 +1255,19 @@ Server::AssetEnd(ULINT status, ULINT)
    	request.command_number = COMMAND_assetend_request;
    	request.command_length = sizeof(AssetEndRequest) - 8;
    	request.certification_code = certification_code;
-   	//if (endflag != 0)
-   	//	request.end_flag = 1;
-   	//else
+   	
+   	if (endflag != 0)
+   		request.end_flag = 1;
+   	else
    	   	request.end_flag = 0;
    	
    	request.asset_status = status;
    	request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0;
    
-   	if ( hton_structure(&request, map_AssetEndRequest, AssetEndRequest) == ErrorOccurred) {
+   	if ( hton_structure(&request, map_AssetEndRequest, AssetEndRequest) == ErrorOccurred)
      		result = MakeError(IP_SendFail);
-   	}
-   	else {
+   	else
    		result = SendData(&request, sizeof(AssetEndRequest));
-	
-    	}
    }
    return result;
 }
