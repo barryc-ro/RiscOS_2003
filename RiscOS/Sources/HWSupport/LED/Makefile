@@ -28,7 +28,7 @@ WIPE    = -wipe
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} -D${MACHINE}=1 ${DFLAGS}
 CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
+WFLAGS  = ~cfr~v
 
 #
 # Libraries
@@ -51,19 +51,24 @@ DFLAGS   =
 # Program specific options:
 #
 COMPONENT = LED
+OM        = o${MACHINE}
 TDIR      = aof.${MACHINE}
 TARGET    = ${TDIR}.${COMPONENT}
 RAMTDIR   = rm.${MACHINE}
 RAMTARGET = ${RAMTDIR}.${COMPONENT}
-OBJS      = header.o module.o veneer.o led.o
+LINKEDDIR = linked.${MACHINE}
+MAPDIR    = map.${MACHINE}
+OBJS      = ${OM}.header ${OM}.module ${OM}.veneer ${OM}.led
 EXPORTS   = ${EXP_HDR}.${COMPONENT}
+
+.SUFFIXES: .${OM}
 
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
-.s.o:;      ${AS} ${AFLAGS} $< $@
+.c.${OM}:;      ${CC} ${CFLAGS} -o $@ $<
+.cmhg.${OM}:;   ${CMHG} -o $@ $<
+.s.${OM}:;      ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
@@ -84,22 +89,20 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
-        ${RM} ${RAMTARGET}
+        ${WIPE} ${OM} ${WFLAGS}
+        ${WIPE} ${LINKEDDIR} ${WFLAGS}
+        ${WIPE} ${MAPDIR} ${WFLAGS}
+        ${WIPE} ${TDIR} ${WFLAGS}
+        ${WIPE} ${RAMTDIR} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
-#        ${MKDIR} ${RESDIR}.LED
-#        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.LED.Messages  ${CPFLAGS}
 #        @echo ${COMPONENT}: resource files copied
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${OM}
         ${MKDIR} ${TDIR}
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
@@ -107,39 +110,67 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        ${MKDIR} ${LINKEDDIR}
+        ${MKDIR} ${MAPDIR}
+        ${LD} -o ${LINKEDDIR}.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > ${MAPDIR}.${COMPONENT}
+        truncate ${MAPDIR}.${COMPONENT} ${LINKEDDIR}.${COMPONENT}
+        ${CP} ${LINKEDDIR}.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${RAMTARGET}: ${OBJS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${CLIB} ${OM}
         ${MKDIR} ${RAMTDIR}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 ${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
+${OM}:
+        ${MKDIR} ${OM}
+
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.led
-o.module:	h.error
-o.veneer: s.veneer
-o.veneer: Hdr:ListOpts
-o.veneer: Hdr:Macros
-o.veneer: Hdr:System
-o.veneer: Hdr:SWIs
-o.veneer: Hdr:CPU.Generic26
-o.veneer: Hdr:IO.GenericIO
-o.veneer: Hdr:RISCOS
-o.veneer: Hdr:ModHand
-o.led:	c.led
-o.led:	C:h.kernel
-o.led:	C:h.swis
-o.led:	h.module
-o.led:	h.led
-o.led:	h.veneer
-o.led:	h.iomd
-o.led:	h.error
+oRCA.module:	c.module
+oRCA.module:	C:h.kernel
+oRCA.module:	C:h.swis
+oRCA.module:	h.module
+oRCA.module:	h.led
+oRCA.module:	h.error
+oRCA.veneer: s.veneer
+oRCA.veneer: Hdr:ListOpts
+oRCA.veneer: Hdr:Macros
+oRCA.veneer: Hdr:System
+oRCA.veneer: Hdr:SWIs
+oRCA.veneer: Hdr:CPU.Generic26
+oRCA.veneer: Hdr:IO.GenericIO
+oRCA.veneer: Hdr:RISCOS
+oRCA.veneer: Hdr:ModHand
+oRCA.led:	c.led
+oRCA.led:	C:h.kernel
+oRCA.led:	C:h.swis
+oRCA.led:	h.module
+oRCA.led:	h.led
+oRCA.led:	h.veneer
+oRCA.led:	h.iomd
+oRCA.led:	h.error
+oOmega.module:	c.module
+oOmega.module:	C:h.kernel
+oOmega.module:	C:h.swis
+oOmega.module:	h.module
+oOmega.module:	h.led
+oOmega.module:	h.error
+oOmega.veneer: s.veneer
+oOmega.veneer: Hdr:ListOpts
+oOmega.veneer: Hdr:Macros
+oOmega.veneer: Hdr:System
+oOmega.veneer: Hdr:SWIs
+oOmega.veneer: Hdr:CPU.Generic26
+oOmega.veneer: Hdr:IO.GenericIO
+oOmega.veneer: Hdr:RISCOS
+oOmega.veneer: Hdr:ModHand
+oOmega.led:	c.led
+oOmega.led:	C:h.kernel
+oOmega.led:	C:h.swis
+oOmega.led:	h.module
+oOmega.led:	h.led
+oOmega.led:	h.veneer
+oOmega.led:	h.iomd
+oOmega.led:	h.error
