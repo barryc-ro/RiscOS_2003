@@ -5,7 +5,12 @@
 # History:
 #
 # 1998-08-28: BAL
-# Created.
+#   Created.
+# 1998-09-28: RDW
+#   install_rom target removed, not required.
+#   rom target removed, not required.
+#   all target changed to make RAM version for development builds
+#   Mailboxz target added to export 
 
 
 
@@ -32,9 +37,7 @@ COMPONENT	= Mailbox
 # Build rules
 #
 
-all: rom
-
-rom:
+all:
 	@amu -f MainMake $(MFLAGS) TARGET=Mailbox EXT=o
 
 debug:
@@ -45,9 +48,7 @@ preprocess:
 
 export:
 	@amu -f MainMake $(MFLAGS) TARGET=Mailbox EXT=o
-
-install_rom:
-	@amu -f MainMake $(MFLAGS) TARGET=Mailbox
+	@amu -f MainMake $(MFLAGS) TARGET=Mailboxzm EXT=z
 
 clean:
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
