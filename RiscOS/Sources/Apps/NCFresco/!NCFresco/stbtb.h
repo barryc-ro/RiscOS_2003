@@ -6,6 +6,7 @@
 extern int tb_init(int *m_list);
 extern void tb_events(int *event, fe_view v);
 extern void tb_cleanup(void);
+extern BOOL tb_key_handler(wimp_caretstr *cs, int key);
 
 /* emulation calls for Risco_OSLib stuff */
 extern void *tb_resspr_area(void);
@@ -23,6 +24,7 @@ extern int tb_status_w(void);
 extern void tb_status_update_fades(fe_view v);
 extern void tb_status_resize(int xdiff, int ydiff);
 extern int tb_status_redraw(wimp_redrawstr *r);
+extern void tb_status_refresh_if_small(void);
 
 #define light_state_OFF         0
 #define light_state_CONNECTING  1
@@ -47,7 +49,12 @@ extern void tb_status_rotate(void);
 extern void tb_status_rotate_reset(void);
 extern void tb_status_init(void);
 
+extern void tb_status_unstack(void);
+extern void tb_status_new(fe_view v, int bar_num);
+extern BOOL tb_status_highlight(BOOL gain);
+
 extern void tb_open_url(void);
+extern void tb_open_url_and_close(void);
 
 /* menu control */
 extern int tb_menu_showing(void);

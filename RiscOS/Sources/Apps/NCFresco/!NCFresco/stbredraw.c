@@ -35,6 +35,8 @@ static int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
     int smooth_scroll = config_display_smooth_scrolling;
     int mask = smooth_scroll ? smooth_scroll - 1 : 0;
     BOOL scrolled = FALSE;
+    int old_x = o->x;
+    int old_y = o->y;
 
     signx = +1;
     dx = 0;
@@ -75,7 +77,7 @@ static int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
         {
             o->x += MIN(dx, smooth_scroll)*signx;
             frontend_fatal_error(wimp_open_wind(o));
-            fe_event_process();
+/*             fe_event_process(); */
         }
 
 
@@ -88,8 +90,8 @@ static int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
             /* deliberate*/
         case 2:
             dy = ( ( (o->box.y1+v->margin.y1) - (o->box.y0+v->margin.y0) ) &~ mask ) - 32;
-            if (dy < 0)
-	        dy = 32;
+/*             if (dy < 0) */
+/*  	        dy = 32; */
             break;
 
         case -1:
@@ -120,23 +122,21 @@ static int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
         {
             o->y += MIN(dy, smooth_scroll)*signy;
             frontend_fatal_error(wimp_open_wind(o));
-            fe_event_process();
+/*             fe_event_process(); */
         }
 
     if (!smooth_scroll)
     {
-        int old_x = o->x;
-        int old_y = o->y;
-
         o->x += dx*signx;
         o->y += dy*signy;
         frontend_fatal_error(wimp_open_wind(o));
-
-        if (o->x != old_x || o->y != old_y)
-            scrolled = TRUE;
-
-        fe_scroll_changed(v);
     }
+    
+    if (o->x != old_x || o->y != old_y)
+	scrolled = TRUE;
+
+    if (scrolled)
+	fe_scroll_changed(v);
 
     if (v->stretch_document && signy > 0)
     {
@@ -159,6 +159,7 @@ static int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
     return scrolled;
 }
 
+#if 0
 static void draw_view_outline(wimp_w w)
 {
     wimp_redrawstr outline;
@@ -173,6 +174,7 @@ static void draw_view_outline(wimp_w w)
     bbc_rectangle(outline.box.x0-2, outline.box.y0-2, outline.box.x1-outline.box.x0+2*2-1, outline.box.y1-outline.box.y0+2*2-1);
     bbc_rectangle(outline.box.x0-4, outline.box.y0-4, outline.box.x1-outline.box.x0+2*4-1, outline.box.y1-outline.box.y0+2*4-1);
 }
+#endif
 
 /* ----------------------------------------------------------------------------*/
 
@@ -204,6 +206,9 @@ int frontend_view_redraw(fe_view v, wimp_box *bb)
 {
     wimp_redrawstr r;
 
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+
     if (!v->w)
         return 0;
 
@@ -233,6 +238,9 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 {
     int            more;
     wimp_redrawstr r;
+
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 1;
 
     if (!v->w)
         return 1;
@@ -271,6 +279,9 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 
 int frontend_view_block_move(fe_view v, wimp_box *bb, int newx, int newy)
 {
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+
     if (v->w)
         frontend_fatal_error(wimp_blockcopy(v->w, bb, newx, newy));
 
@@ -308,6 +319,9 @@ static void get_dimensions(fe_view v, const wimp_openstr *op, fe_view_dimensions
 
 int frontend_view_get_dimensions(fe_view v, fe_view_dimensions *fvd)
 {
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+
     if (v->w)
     {
         wimp_wstate state;
@@ -329,7 +343,12 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
     wimp_redrawstr r;
     int bbh, sbh;
     wimp_wstate ws;
-    BOOL old_y_scroll_bar = v->y_scroll_bar;
+    BOOL old_y_scroll_bar;
+
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+
+    old_y_scroll_bar = v->y_scroll_bar;
 
     if (width)
 	v->doc_width = width;
@@ -351,7 +370,7 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
         {
             if (v->w)
             {
-    STBDBG(("delete window %x of %p\n", v->w, v));
+    STBDBGN(("delete window %x of %p\n", v->w, v));
                 wimp_delete_wind(v->w);
                 v->w = 0;
 
@@ -366,7 +385,7 @@ int frontend_view_set_dimensions(fe_view v, int width, int height)
             {
                 wimp_box box = v->box;
                 feutils_window_create(&box, &v->margin, NULL, fe_bg_colour(v), &v->w);
-    STBDBG(("recreate win %x from view %p\n", v->w, v));
+    STBDBGN(("recreate win %x from view %p\n", v->w, v));
             }
         }
     }
@@ -459,6 +478,9 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
 {
     wimp_wstate ws;
 
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+
     if (v->w)
         frontend_fatal_error(wimp_get_wind_state(v->w, &ws));
     else
@@ -468,8 +490,14 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
         ws.o.y = -v->margin.y1;
     }
 
-    box->y1 = ws.o.y - fe_status_height_top(v);
+    box->y1 = ws.o.y;
     box->y0 = ws.o.y - (ws.o.box.y1 - ws.o.box.y0);
+
+    if (config_display_control_top)
+	box->y1 -= fe_status_height_top(v);
+    else
+	box->y0 += fe_status_height_top(v);
+
     box->x0 = ws.o.x;
     box->x1 = ws.o.x + (ws.o.box.x1 - ws.o.box.x0);
 #if 0
@@ -480,6 +508,9 @@ fprintf(stderr, "stbredraw: view bounds  %d,%d %d,%d (status %d)\n", box->x0, bo
 
 int frontend_view_margins(fe_view v, wimp_box *box)
 {
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+
 #if USE_MARGINS
     *box = v->backend_margin;
 #else
@@ -502,10 +533,13 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
     int need_to_set_dims = 0;
     int bbh, sbh;
 
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 1;
+
     if (!v->w)
         return 1;
 
-    frontend_fatal_error(wimp_get_wind_state(v->w,&state));
+    frontend_fatal_error(wimp_get_wind_state(v->w, &state));
 
     bbh = - v->margin.y1;
     sbh =   v->margin.y0;
@@ -519,9 +553,9 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
         need_to_set_dims = 1;
     }
 
-    if (top == bottom && top - h < -mh - sbh)
+    if (top == bottom && top - h < -mh /*- sbh*/)
     {
-        v->stretch_document = (-mh - sbh) - (top - h);
+        v->stretch_document = (-mh/* - sbh*/) - (top - h);
         need_to_set_dims = 1;
     }
 
@@ -529,14 +563,6 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 	top > (state.o.y - bbh) ||
 	bottom < (state.o.y + sbh - (state.o.box.y1 - state.o.box.y0)) )
     {
-/*
-	if (h > mh )
-	{
-	    h = mh;
-	    state.o.box.y0 = (state.o.box.y1 - bbh) - h - sbh;
-	}
- */
-/*	state.o.y = (top < (-mh - sbh) + h) ? (-mh - sbh) + h : top;*/
         state.o.y = top;
 	state.o.y += bbh;
 
@@ -564,11 +590,10 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 
     if (need_to_reopen)
     {
-#if DEBUG
-    fprintf(stderr, "ensure %d-%d visible %d,%d %d,%d (%d,%d) height %d\n",
-        top, bottom,
-        state.o.box.x0, state.o.box.y0, state.o.box.x1, state.o.box.y1, state.o.x, state.o.y, v->doc_height);
-#endif
+	STBDBGN(("ensure %d-%d visible %d,%d %d,%d (%d,%d) height %d\n",
+		 top, bottom,
+		 state.o.box.x0, state.o.box.y0, state.o.box.x1, state.o.box.y1, state.o.x, state.o.y, v->doc_height));
+
 	frontend_fatal_error(wimp_open_wind(&state.o));
 
         fe_scroll_changed(v);
@@ -584,10 +609,13 @@ int frontend_view_caret(fe_view v, int x, int y, int height, int on_screen)
     wimp_caretstr cs;
     int r;
 
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 1;
+
     if (!v->w)
         return 1;
 
-    STBDBG(("viewcaret: @ %d,%d h %d on %d current %p\n", x, y, height, on_screen, v->current_link));
+    STBDBGN(("viewcaret: @ %d,%d h %d on %d current %p\n", x, y, height, on_screen, v->current_link));
 
     if (on_screen && height > 0)
     {
@@ -612,7 +640,7 @@ int frontend_view_caret(fe_view v, int x, int y, int height, int on_screen)
         v->current_link = backend_place_caret(v->displaying, backend_place_caret_READ);
     }
 
-    STBDBG(("viewcaret: end %p \n", v->current_link));
+    STBDBGN(("viewcaret: end %p \n", v->current_link));
 
     return r;
 }
@@ -620,6 +648,9 @@ int frontend_view_caret(fe_view v, int x, int y, int height, int on_screen)
 int frontend_view_has_caret(fe_view v)
 {
     wimp_caretstr cs;
+
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
 
     return (wimp_get_caret_pos(&cs) == NULL && cs.w == v->w);
 }

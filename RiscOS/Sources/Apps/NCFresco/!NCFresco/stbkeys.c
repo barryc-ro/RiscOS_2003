@@ -226,7 +226,7 @@ static key_list nc_menu_keys[] =
 static key_list nc_web_keys[] =
 {
     { akbd_Fn+1,            fevent_GLOBAL_SHOW_HELP },
-    { akbd_Fn+2,            fevent_MENU_KBD },
+    { akbd_Fn+2,            fevent_MENU },
     { akbd_Fn12,            fevent_TOGGLE_STATUS },
     { ctrl('p'),            fevent_PRINT },
 /*     { ctrl('c'),            fevent_COPY_TEXT }, */
@@ -236,7 +236,7 @@ static key_list nc_web_keys[] =
     { 27,                   fevent_STOP_LOADING+fevent_WINDOW },
 
     { kbd_handset_HELP,             fevent_GLOBAL_SHOW_HELP },
-    { kbd_handset_MENU,             fevent_MENU_KBD },
+    { kbd_handset_MENU,             fevent_MENU },
     { kbd_handset_OPEN,             fevent_HOTLIST_SHOW_WITH_URL+fevent_WINDOW },
     { kbd_handset_STOP,             fevent_STOP_LOADING+fevent_WINDOW },
     { akbd_Ctl+kbd_handset_STOP,    fevent_STOP_LOADING },
@@ -269,8 +269,6 @@ static key_list nc_web_keys[] =
 
     { akbd_Ctl + akbd_Fn+3, fevent_TOGGLE_COLOURS },
     { akbd_Ctl + akbd_Fn+4, fevent_TOGGLE_IMAGES },
-/*     { akbd_Ctl + akbd_Fn+6, fevent_TOGGLE_FRAMES }, */
-/*     { akbd_Ctl + akbd_Fn+7, fevent_GLOBAL_TOGGLE_COOLING }, */
 
     { 0 }
 };

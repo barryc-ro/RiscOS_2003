@@ -6,14 +6,19 @@
 
 /* add this to a frame event to make it apply to the whole window */
 #define fevent_WINDOW                       0x1000
+#define fevent_UNSTACK_TOOLBAR              0x0800
 
 #define fevent_CLASS_MASK                   0xf000
 #define fevent_CLASS_GLOBAL                 0x1000
 #define fevent_CLASS_FRAME                  0x2000
 #define fevent_CLASS_WINDOW                 (fevent_CLASS_FRAME + fevent_WINDOW)
-#define fevent_CLASS_MENU                   0x4000
-#define fevent_CLASS_MAP                    0x5000
-#define fevent_CLASS_PLUGIN                 0x6000
+#define fevent_CLASS_MENU                   0x8000
+#define fevent_CLASS_MAP                    0x9000
+#define fevent_CLASS_PLUGIN                 0xA000
+
+#define fevent_FRAME_CLASS_MASK		    0x0700
+#define fevent_FRAME_CLASS_ACTIONS	    0x0000 /* fevent_SUB_CLASS_MASK */
+#define fevent_FRAME_CLASS_URLS		    0x0100 /* 256 URLs */
 
 #define fevent_SUB_CLASS_MASK               0x00f0
 #define fevent_SUB_CLASS_TOGGLE             0x0000
@@ -26,6 +31,8 @@
 #define fevent_SUB_CLASS_FOCUS              0x0070
 #define fevent_SUB_CLASS_OPEN               0x0080
 #define fevent_SUB_CLASS_STATUS             0x0090
+#define fevent_SUB_CLASS_TOOLBAR            0x00A0
+#define fevent_SUB_CLASS_MISC2              0x00B0
 
 /* global events */
 
@@ -37,6 +44,15 @@
 #define fevent_GLOBAL_TOGGLE_COOLING        0x1005
 #define fevent_GLOBAL_SHOW_VERSION          0x1006
 #define fevent_GLOBAL_OPEN_MEM_DUMP	    0x1007
+#define fevent_GLOBAL_CYCLE_JPEG	    0x1008
+#define fevent_GLOBAL_TOGGLE_FORCE_FIT	    0x1009
+#define fevent_GLOBAL_ICONISE		    0x100A
+#define fevent_GLOBAL_DEICONISE		    0x100B
+
+#define fevent_GLOBAL_FONT_MASK		    0x000f
+#define fevent_GLOBAL_FONT_SET		    0x1100 /* up to 14 different font settings */
+#define fevent_GLOBAL_FONT_INC		    0x110e
+#define fevent_GLOBAL_FONT_DEC		    0x110f
 
 /* frame or window events */
 
@@ -46,17 +62,20 @@
 #define fevent_TOGGLE_COLOURS               0x2003
 #define fevent_TOGGLE_IMAGES                0x2004
 
-#define fevent_HISTORY_SHOW                 0x2010
+#define fevent_HISTORY_SHOW                 0x2010 /* show combined list */
 #define fevent_HISTORY_BACK                 0x2011
 #define fevent_HISTORY_BACK_ALL             0x2012
 #define fevent_HISTORY_FORWARD              0x2013
 #define fevent_HISTORY_FORWARD_ALL          0x2014
+#define fevent_HISTORY_SHOW_ALPHA           0x2015
+#define fevent_HISTORY_SHOW_RECENT          0x2016
 
 #define fevent_HOTLIST_SHOW                 0x2020  /* just show the hotlist */
 #define fevent_HOTLIST_ADD                  0x2021
 #define fevent_HOTLIST_REMOVE               0x2022
 #define fevent_HOTLIST_WIPE                 0x2023
 #define fevent_HOTLIST_SHOW_WITH_URL        0x2024  /* show the hotlist with the URL line */
+#define fevent_HOTLIST_SHOW_DELETE	    0x2025
 
 #define fevent_RELOAD                       0x2030
 #define fevent_STOP_LOADING                 0x2031
@@ -65,9 +84,15 @@
 #define fevent_CLOSE                        0x2034
 #define fevent_MENU                         0x2035
 #define fevent_FIND_AGAIN                   0x2036
-#define fevent_MENU_KBD                     0x2037
+#define fevent_MENU_DEBUG                   0x2037
 #define fevent_DBOX_CANCEL                  0x2038
 #define fevent_OPEN_URL                     0x2039
+#define fevent_FORCE_FIT		    0x203A
+#define fevent_UNFORCE_FIT		    0x203B
+#define fevent_SEARCH_PAGE		    0x203C
+#define fevent_OFFLINE_PAGE		    0x203D
+#define fevent_INFO_PAGE		    0x203E
+#define fevent_SEND_URL			    0x203F
 
 #define fevent_COPY_IMAGE                   0x2040
 #define fevent_COPY_TEXT                    0x2041
@@ -104,8 +129,28 @@
 #define fevent_OPEN_PRINT_OPTIONS           0x2080
 #define fevent_OPEN_FIND                    0x2081
 #define fevent_OPEN_DISPLAY_OPTIONS         0x2082
+#define fevent_OPEN_KEYBOARD		    0x2083
+#define fevent_OPEN_RELATED_STUFF	    0x2084
 
 #define fevent_STATUS_INFO_LEVEL            0x2090  /* +F */
+
+#define fevent_TOOLBAR_MAIN		    0x20A0
+#define fevent_TOOLBAR_FAVS		    0x20A1
+#define fevent_TOOLBAR_EXTRAS		    0x20A2
+#define fevent_TOOLBAR_HISTORY		    0x20A3
+#define fevent_TOOLBAR_PRINT		    0x20A4
+#define fevent_TOOLBAR_DETAILS		    0x20A5
+#define fevent_TOOLBAR_RELATED		    0x20A6
+#define fevent_TOOLBAR_OPENURL		    0x20A7
+#define fevent_TOOLBAR_NC1		    0x20A8
+#define fevent_TOOLBAR_EXIT		    0x20AF /* unstack */
+
+#define fevent_PRINT_LETTER		    0x20B0
+#define fevent_PRINT_LEGAL		    0x20B1
+#define fevent_OPEN_WRITEABLE		    0x20B2
+#define fevent_STOP_OR_RELOAD		    0x20B3
+
+#define fevent_URLS_MASK	            0x00ff
 
 /* menu events */
 #define fevent_MENU_UP                      0x4001

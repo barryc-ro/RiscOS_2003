@@ -13,11 +13,13 @@
 #include "makeerror.h"
 #include "memwatch.h"
 #include "filetypes.h"
+#include "url.h"
 #include "util.h"
 
 #include "stbview.h"
 #include "stbhist.h"
 #include "stbutils.h"
+#include "stbopen.h"
 
 #define HISTORY_LEN	32
 
@@ -180,7 +182,7 @@ static void fe_global_add(const char *url, const char *title)
     mm_free(fragment);
 }
 
-static void fe_global_write_list(FILE *f)
+os_error *fe__global_write_list(FILE *f)
 {
     fe_global_history_item *item;
 
@@ -193,9 +195,30 @@ static void fe_global_write_list(FILE *f)
             fprintf(stderr, "hist: frag '%s'\n", fp->fragment);
 #endif
 
-        fprintf(f, msgs_lookup("histI1"), item->url, item->title ? item->title : item->url);
+	fprintf(f, msgs_lookup("histIa"));
+
+	url_escape_to_file(item->url, f);
+
+        fprintf(f, msgs_lookup("histI1b"), item->title ? item->title : item->url);
         fputc('\n', f);
     }
+
+    return NULL;
+}
+
+os_error *fe_global_write_list(FILE *f)
+{
+    os_error *e;
+
+    fputs(msgs_lookup("histT"), f);
+    fputc('\n', f);
+
+    e = fe__global_write_list(f);
+    
+    fputs(msgs_lookup("histF"), f);
+    fputc('\n', f);
+
+    return e;
 }
 
 static int fe_global__find_url(const char *bare_url, const char *fragment)
@@ -249,23 +272,47 @@ void fe_global_history_dispose(void)
 
 static void fe_hist_write_item(FILE *f, const fe_history_item *item)
 {
+    fprintf(f, msgs_lookup("histIa"));
+
+    url_escape_to_file(item->url, f);
+
     if (item->title)
     {
         char *frag = strrchr(item->url, '#');
         if (frag)
-            fprintf(f, msgs_lookup("histI2"), item->url, item->title, frag);
+            fprintf(f, msgs_lookup("histI2b"), item->title, frag);
         else
-            fprintf(f, msgs_lookup("histI1"), item->url, item->title);
+            fprintf(f, msgs_lookup("histI1b"), item->title);
     }
     else
     {
-        fprintf(f, msgs_lookup("histI1"), item->url, item->url);
+        fprintf(f, msgs_lookup("histI1b"), item->url);
     }
 
     fputc('\n', f);
 }
 
-static os_error *fe_hist_write_file(FILE *f, void *handle)
+os_error *fe_history_write_list(FILE *f, void *handle)
+{
+    const fe_history_item *item;
+    const fe_history_item *current = (const fe_history_item *)handle;
+
+    fputs(msgs_lookup("histT"), f);
+    fputc('\n', f);
+
+    for (item = current; item; item = item->next)
+    {
+        fe_hist_write_item(f, item);
+/*         fprintf(f, msgs_lookup("histI"), item->url, item->title ? item->title : item->url); */
+/*         fputc('\n', f); */
+    }
+
+    fputs(msgs_lookup("histF"), f);
+    fputc('\n', f);
+    return NULL;
+}
+
+os_error *fe_history_write_combined_list(FILE *f, void *handle)
 {
     const fe_history_item *item;
     const fe_history_item *current = (const fe_history_item *)handle;
@@ -274,7 +321,6 @@ static os_error *fe_hist_write_file(FILE *f, void *handle)
     fputs(msgs_lookup("histT"), f);
     fputc('\n', f);
 
-#if 1
     fputs(msgs_lookup("hist1"), f);
     fputc('\n', f);
 
@@ -299,14 +345,7 @@ static os_error *fe_hist_write_file(FILE *f, void *handle)
     fputc('\n', f);
 
     /* write global list */
-    fe_global_write_list(f);
-#else
-    for (item = current; item; item = item->next)
-    {
-        fprintf(f, msgs_lookup("histI"), item->url, item->title ? item->title : item->url);
-        fputc('\n', f);
-    }
-#endif
+    fe__global_write_list(f);
 
     fputs(msgs_lookup("histF"), f);
     fputc('\n', f);
@@ -315,8 +354,7 @@ static os_error *fe_hist_write_file(FILE *f, void *handle)
 
 os_error *fe_history_show(fe_view v)
 {
-    fe_open_temp_file(v, fe_hist_write_file, (void *)v->hist_at, "dbHistory");
-    return NULL;
+    return frontend_open_url("ncfrescointernal:openpanel?name=historycombined", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE);
 }
 
 /* ---------------------------------------------------------------------------------------------*/
@@ -437,15 +475,12 @@ static fe_history_item *fe_history_add(fe_view v, const char *url, const char *t
 
 /* ---------------------------------------------------------------------------------------------*/
 
-static os_error *get_url_if_different(fe_view v, int a, char **url_out)
+char *fe_history_get_url(fe_view v, int a)
 {
     fe_history_item *dest;
 
     if (!v || !v->displaying)
-    {
-        *url_out = NULL;
-	return makeerror(ERR_NO_HISTORY);
-    }
+	return NULL;
 
     dest = v->hist_at;
 
@@ -470,20 +505,16 @@ static os_error *get_url_if_different(fe_view v, int a, char **url_out)
 	    break;
 	}
     }
-    if (dest == 0 || dest->url == 0)
-	return makeerror(ERR_NO_HISTORY);
 
-    *url_out = dest->url;
+    if (dest == NULL)
+	return NULL;
 
-    return NULL;
+    return dest->url;
 }
 
 int fe_history_possible(fe_view v, int direction)
 {
-    char *url;
-    os_error *e;
-    e = get_url_if_different(v, direction, &url);
-    return e == NULL && url != NULL;
+    return fe_history_get_url(v, direction) != NULL;
 }
 
 /*
@@ -491,11 +522,10 @@ int fe_history_possible(fe_view v, int direction)
 
  */
 
-os_error *fe_history_move(fe_view v, int a)
+os_error *fe_history_move(fe_view v, int direction)
 {
-    char *url;
-    os_error *e = get_url_if_different(v, a, &url);
-    return e ? e : frontend_open_url(url, v, NULL, 0, fe_open_url_FROM_HISTORY);
+    char *url = fe_history_get_url(v, direction);
+    return url == NULL ? makeerror(ERR_NO_HISTORY) : frontend_open_url(url, v, NULL, 0, fe_open_url_FROM_HISTORY);
 }
 
 void fe_history_dispose(fe_view v)

@@ -6,8 +6,47 @@
 #############################################################################
 #
 # $Log$
+# Revision 1.1.2.2  1997/02/18 19:41:28  smiddle
+# Fixed up makefile and include so it would compile with external resources
+#
+# Revision 1.116  1997/02/18 18:57:30  borris
+# realclean target removes all links. fresh target creates links, HTML and TAGS
+#
 # Revision 1.1.2.1  1997/02/18 15:40:07  smiddle
 # NCFresco 1.06 in cross-compile form (!RunImage form only)
+#
+# Revision 1.115  1997/02/18 18:02:23  borris
+# First commit after major merge.
+#
+# Revision 1.114  1997/02/14 10:40:13  borris
+# Merged Peter\'s recent changes. symlink tweaks
+#
+# Revision 1.113  1997/02/13 23:22:02  borris
+# Added dave-970213-a changes
+#
+# Revision 1.112  1997/02/07 15:48:11  borris
+# minc/maxc fudge
+#
+# Revision 1.111  1997/01/29 16:02:48  borris
+# rid.h change, minor tweaks.
+#
+# Revision 1.110  1997/01/13 11:43:45  fresco
+# Minor changes - start of new formatter
+#
+# Revision 1.109  1996/12/10 00:45:08  fresco
+# Fixed couple of minor bugs from Fresco Problem pages
+#
+# Revision 1.108  1996/12/09 13:51:31  fresco
+# Added CBFresco-related targets (principally CBFRESCO_ZM)
+#
+# Revision 1.107  1996/11/13 14:03:23  fresco
+# Merged SI_961112
+#
+# Revision 1.106  1996/11/07 17:19:05  fresco
+# Updated Help file version number
+#
+# Revision 1.105  1996/11/05 11:42:47  fresco
+# NT build in separate directory
 #
 # Revision 1.104  1996/10/28 18:01:25  fresco
 # Version frozen for NCFresco for ROM
@@ -336,14 +375,17 @@
 # Support targets:
 #
 # clean		Delete intermediate and final binaries and objects
+# checkers	Build the checker programs (UNIX initially)
 # depends	Build dependency information
 # dist		Directory suitable for distributing
 # fixme		Search for comments indicating work needs doing
 # fresco	Cross-build RISC OS Fresco executables (FRESCO)
+# fresh		Useful after a make realclean
 # ffu		Fresco for Unix - (FFU)
 # html		Run attrgen.py on attrconf, generating basic SGML tables
 # links		Build any necessary soft links
 # realclean	Clean and also delete generated source files/state
+# sanity	Perform directory tree sanity checks
 # srclist	File holding filename of each source file
 # stdalone	Stand alone version of parser (STDALONE)
 # ncfresco	Cross-build STB Web executables (NCFRESCO)
@@ -358,11 +400,11 @@
 #
 #############################################################################
 
-POSS_TARGETS=	br bu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX clean \
+POSS_TARGETS=	br bu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX CHECKERS_UNIX clean \
 		depends DIST FIXME FRESCO FRESCO_RISCOS HTML hr hu \
 		HTMLCHECK HTMLCHECK_RISCOS HTMLCHECK_UNIX links    \
 		memlib mu \
-		MOST MOST_UNIX realclean srclist sr NCFRESCO \
+		MOST MOST_UNIX realclean sanity srclist sr NCFRESCO \
 		NCFRESCO_RISCOS TAGS TESTS xref
 
 all:
@@ -387,7 +429,7 @@ RM=		rm -f
 
 #############################################################################
 
-PREDEPS=	builddate.h
+PREDEPS=	builddate.h sanity
 POSTACTS=	@$(RM) $(PREDEPS)
 #PREDEPS=
 #POSTACTS=
@@ -409,7 +451,8 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		resolve.o rid.o tables.o threads.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
-		tablesize.o oobject.o objects.o plugin.o pluginfile.o
+		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
+		files.o rlib_alloc.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser -I../memlib
@@ -421,7 +464,7 @@ BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser -I../memlib
 RISCOS_INCS=	-I../RISC_OSLib -I../include/unix -I../tcpiplibs $(BASE_INCS) -J../clib
 #RISCOS_INCS=	-I../RISC_OSLib -I../tcpiplibs $(BASE_INCS) -I../clib
 # -Fn *includes* function names (at least for this option set)
-#RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -apcs1 3/26/hardfp -Fn
+#RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
 RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -Fn
 RISCOS_VPATH=	$(BASE_VPATH)
 RISCOS_OBJS=	$(BASE_OBJS)
@@ -467,46 +510,82 @@ UNIX_VPATH=	../rocompat:../RISC_OSLib:$(BASE_VPATH)
 UNIX_OBJS=	basic1.o $(BASE_OBJS)
 UNIX_LIBS=	-lc -lm
 
+PC_CFLAGS =     -apcs 3/26/hardfp
+
 FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
-FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
+#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
+FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
-		listfonts2.o rlib_alloc.o \
+		listfonts2.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
+# ----------------------------------------------------------------------
+
 NCFRESCO_INCS=	-I../\!NCFresco
-NCFRESCO_BASECFLAGS= -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0
+NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0
 
 # Production flag set
-NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
+# NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
 
 # standard debug set
-# NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -DUTIL_DEBUG=0
+NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -DUTIL_DEBUG=0
 
 # MemCheck debug set
 # NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -zpc1 -DMemCheck_MEMCHECK -fw -g
 
+# Hierprof debug set
+#NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
+
 NCFRESCO_VPATH=	../!NCFresco
 NCFRESCO_OBJS=	clipboard.o flex.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 		stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
-		sutil.o heap.o da.o alarm.o \
+		heap.o da.o alarm.o sutil.o ncreg.o internal.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
+
 NCFRESCO_LIBS=	../webimage/webimage1
 # NCFRESCO_LIBS=	../webimage/webimage1m ../memcheck/MC
 NCFRESCO_LDFLAGS=
 
+# -------------
+#
+# C compiler flags for CBFresco (v similar to NCFresco)
+#
+
+CBFRESCO_VPATH = ../!CBFresco/source
+
+CBFRESCO_INCS=	-I../plingcbfresco/source
+CBFRESCO_BASECFLAGS= -DSTBWEB $(CBFRESCO_INCS) $(RISCOS_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0 -DCBPROJECT -Duse_toolbox=1
+
+# Production flag set
+CBFRESCO_CFLAGSN= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
+
+# standard debug set
+CBFRESCO_CFLAGSD= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -DUTIL_DEBUG=0
+
+#
+# end CBFresco C compiler flags
+#
+# -------------
+
 BUILDERS_INCS=	-I../bunix -I../RISC_OSLib
-BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=1
+BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=1 -g
 BUILDERS_VPATH=	$(RISCOS_VPATH)
 BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
-		oobject.o objects.o usrtrc.o textplot.o
-BUILDERS_LIBS=
+		oobject.o objects.o usrtrc.o textplot.o rectplot.o
+BUILDERS_LIBS=	-lefence
+CHECKERS_CFLAGS=-DCHECKER -DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=1 -DSGML_REPORTING=0
+CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
+		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
+		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
+		otext.o otextarea.o basic2.o stream.o object.o config.o \
+		oobject.o objects.o usrtrc.o textplot.o rectplot.o
 
 HTMLCHECK_INCS=	-I../stdalone
 HTMLCHECK_CFLAGS= -DHTMLCHECK $(HTMLCHECK_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=1
@@ -590,6 +669,21 @@ BUILDERS_UNIX:	$(PREDEPS)
 		CFLAGS="$(BUILDERS_CFLAGS) $(UNIX_CFLAGS)"
 		$(POSTACTS)
 
+# HTML is just symbolic. Historically, "make HTML" has been run
+# manually when necessary. It normally is only required after
+# a "make realclean" which should be rare itself.
+# CHECKERS_UNIX:	$(PREDEPS) HTML
+CHECKERS_UNIX:	$(PREDEPS)
+		@echo "Making CHECKERS for UNIX"
+		@cd ./cunix; $(MAKE) CHECKERS_UNIX \
+		LIBS="$(BUILDERS_LIBS) $(UNIX_LIBS)" \
+		OBJS="$(CHECKERS_OBJS) $(UNIX_OBJS)" \
+		VPATH="$(BUILDERS_VPATH):$(UNIX_VPATH)" \
+		CFLAGS="$(CHECKERS_CFLAGS) $(UNIX_CFLAGS)"
+		$(POSTACTS)
+
+cu:		CHECKERS_UNIX
+
 # A circular dependency spanning two executions of make is
 # used to ensure that builddate.h is always out of date. The
 # problem to be avoid is an error preventing individual targets
@@ -608,13 +702,15 @@ buildstamp-trigger:
 		@echo "Hi there" > buildstamp-trigger
 
 # Arrange that all files will be recompiled. See also realclean
-clean:
+clean:		sanity
 		@echo "Cleaning out objects and executables"
+		-cd ./fresco_pc ; $(RM) *.o *,ff8 *,fd3
 		cd ./fresco ; $(RM) *.o *,ff8 *,fd3
 		cd ./unix ; $(RM) *.o
 		cd ./ncfresco ; $(RM) *.o *,ff8 *,fd3
 		cd ./stdalone; $(RM) *.o htmlcheck
 		cd ./bunix ; $(RM) *.o builders
+		cd ./cunix ; $(RM) builders parse_check format_check check_all
 		cd ./hriscos ; $(RM) *.o htmlcheck,ff8
 		cd ./\!Fresco ; $(RM) *,ff8 *,fd3
 		cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
@@ -676,7 +772,7 @@ FIXME:		srclist
 
 fr:		FRESCO_RISCOS
 
-fp:		FRESCO_PC
+fp:		FRESCO_NT
 
 FRESCO:		FRESCO_RISCOS
 
@@ -690,14 +786,14 @@ FRESCO_RISCOS:	$(PREDEPS)
 		CFLAGS="$(FRESCO_CFLAGS) $(RISCOS_CFLAGS)"
 		$(POSTACTS)
 
-FRESCO_PC:
-	@echo Making FRESCO on NT
-	@cd fresco
-	@nmake /nologo /f Makepc FRESCO_PC \
+FRESCO_NT:	$(PREDEPS)
+		@echo Making FRESCO on NT
+		@cd fresco_pc
+		@nmake /nologo /f Makepc FRESCO_PC \
 		LIBS="$(FRESCO_LIBS) $(RISCOS_LIBS)" \
 		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(FRESCO_CFLAGS) $(RISCOS_CFLAGS)"
+		CFLAGS="$(FRESCO_CFLAGS) $(RISCOS_CFLAGS) $(PC_CFLAGS)"
 
 hr:		HTMLCHECK_RISCOS
 
@@ -752,14 +848,15 @@ mr:		MOST_RISCOS
 
 mu:		MOST_UNIX
 
-realclean:	clean
+realclean:	clean sanity
 		@echo "Cleaning generated files (eg htmldefs.c)"
 		$(RM) -r $(ATTREXTRA) srclist RELEASE buildstamp TAGS
+		find . -type l -exec rm {} \;
 
 # File holding filenames of each source file. These are the files
 # that are considered for searching with tools, etc.
 srclist:
-		@for dir in fresco parser commonsrc ./!Fresco ./!NCFresco \
+		@for dir in fresco parser commonsrc ./!Fresco ./!NCFresco ./plingcbfresco \
 		fresparse ncfresco stdalone unix bunix rocompat html http libs mimemapmod \
 		tabtests webftp webgopher webimage clib RISC_OSLib include \
 		tcpiplibs ; do find $$dir -type f \
@@ -785,7 +882,7 @@ STDALONE:	HTMLCHECK_UNIX BUILDERS_UNIX
 
 sr:		NCFRESCO_RISCOS
 
-NCFRESCO:		NCFRESCO_RISCOS
+NCFRESCO:	NCFRESCO_RISCOS
 
 NCFRESCO_BUILD_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
@@ -811,6 +908,7 @@ NCFRESCO_ROM_LDFLAGS=	-aof
 # This one is for NCFresco in the new style CVS controlled RISC OS build tree
 NCFRESCO_BUILD:		$(PREDEPS)
 		@echo "Making NCFRESCO for RISCOS in the build tree"
+		@-mkdir abs
 		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
 		LIBS="$(NCFRESCO_BUILD_LIBS)" \
 		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
@@ -821,6 +919,7 @@ NCFRESCO_BUILD:		$(PREDEPS)
 
 NCFRESCO_BUILD_ROM:	$(PREDEPS)
 		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
+		@-mkdir aof
 		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
 		LIBS="$(NCFRESCO_ROM_LIBS)" \
 		OBJS="$(NCFRESCO_ROM_OBJS) $(RISCOS_OBJS)" \
@@ -838,6 +937,62 @@ NCFRESCO_RISCOS:	$(PREDEPS)
 		CFLAGS="$(NCFRESCO_CFLAGS) $(RISCOS_CFLAGS)" \
 		LDFLAGS="$(NCFRESCO_LDFLAGS)"
 		$(POSTACTS)
+
+
+NCFRESCO_NT:
+		@echo Making NCFRESCO on NT
+		@cd ncfresco_pc
+		@nmake /nologo /f Makepc NCFRESCO_PC \
+		LIBS="$(NCFRESCO_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(NCFRESCO_CFLAGS) $(RISCOS_CFLAGS)" \
+		LDFLAGS="$(NCFRESCO_LDFLAGS)" \
+		$(POSTACTS)
+
+NCFRESCO_MODULE:	$(PREDEPS)
+		@echo "Making NCFRESCO module for RISCOS"
+		@cd ./ncfresco; $(MAKE) NCFRESCO_MODULE \
+		LIBS="$(NCFRESCO_MODLIBS)" \
+		OBJS="$(NCFRESCO_MODOBJS) $(RISCOS_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(NCFRESCO_MODCFLAGS) $(RISCOS_CFLAGS)" \
+		ASFLAGS="$(NCFRESCO_ASFLAGS)" \
+		LDFLAGS="$(NCFRESCO_MODLDFLAGS)"
+		$(POSTACTS)
+
+
+CBFRESCO:	CBFRESCO_RISCOS
+
+CBFRESCO_RISCOS:	$(PREDEPS)
+		@echo "Making CBFRESCO for RISCOS"
+		@cd ./cbfresco; $(MAKE) CBFRESCO_RISCOS \
+		LIBS="$(NCFRESCO_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(CBFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(CBFRESCO_CFLAGSN) $(RISCOS_CFLAGS)" \
+		LDFLAGS="$(NCFRESCO_LDFLAGS)"
+		$(POSTACTS)
+
+CBFRESCO_ZM:	$(PREDEPS)
+		@echo "Making CBFRESCO module for RISCOS"
+		@cd ./cbfresco_zm; $(MAKE) CBFRESCO_RISCOS \
+		LIBS="$(NCFRESCO_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(CBFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(CBFRESCO_CFLAGSN) $(RISCOS_CFLAGS)" \
+		LDFLAGS="$(NCFRESCO_LDFLAGS)"
+		$(POSTACTS)
+
+CBFRESCO_NT:
+		@echo Making CBFRESCO on NT
+		@cd cbfresco_pc
+		@nmake /nologo /f Makepc CBFRESCO_PC \
+		LIBS="$(NCFRESCO_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(CBFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(CBFRESCO_CFLAGSD) $(RISCOS_CFLAGS) $(PC_CFLAGS)"
+
 
 NCFRESCO_BUILDSTAMP:
 		@cp -f ../buildstamp .
@@ -956,6 +1111,21 @@ wg:		WEBGOPHER
 WEBGOPHER:
 		@echo "Building WebGopher module"
 		@cd webgopher ; $(MAKE) WEBGOPHER
+
+#############################################################################
+
+# This runs checks that look for potential problems with the source/CVS
+# tree. Please use every so often.
+
+# NB: CURE THE PROBLEM - DON'T JUST STOP THIS REPORTING IT!
+
+sanity:		cvs-checks.py cvs-checks
+		@./cvs-checks
+
+#############################################################################
+
+fresh:		HTML TAGS
+		./makelinks
 
 #############################################################################
 

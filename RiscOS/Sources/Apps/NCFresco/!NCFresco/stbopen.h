@@ -11,9 +11,15 @@
 /* Targets defined for internal use */
 #define TARGET_HELP	"__help"
 #define TARGET_VERY_TOP	"__top"
+#define TARGET_DBOX	"__dbox"
+#define TARGET_PASSWORD	"__passwd"
+#define TARGET_FAVS	"__favs"
+#define TARGET_HISTORY	"__history"
+#define TARGET_INFO	"__info"
 
 extern fe_view fe_find_top(fe_view v);
 extern fe_view fe_find_window(fe_view start, wimp_w w);
+extern fe_view fe_find_target(fe_view start, const char *target);
 
 extern os_error *fe_show_file_in_frame(fe_view v, char *file, char *frame);
 extern os_error *fe_show_file(fe_view v, char *file, int no_history);

@@ -80,6 +80,8 @@
 #include "stbopen.h"
 #include "fevents.h"
 
+#include "hierprof/HierProf.h"
+
 #ifndef NEW_WEBIMAGE
 #define NEW_WEBIMAGE	1
 #endif
@@ -101,13 +103,13 @@
 #define STBWEB_ROM 0
 #endif
 
+#define USE_DIALLER_STATUS 1
+
+#define LINK_DBOX 1
+
 #ifndef CHECK_IF_WITH_REGISTRY
 #define CHECK_IF_WITH_REGISTRY 0
 #endif
-
-#define USE_DIALLER_STATUS 1
-
-#define LINK_DBOX 0
 
 /* -------------------------------------------------------------------------- */
 
@@ -119,8 +121,10 @@
 #define Y_SCROLL_LINE   32
 #define X_SCROLL        100
 
+#if 0
 #define INTERNAL_PREFIX         PROGRAM_NAME"internal:"
 #define INTERNAL_PREFIX_SIZE    (sizeof(INTERNAL_PREFIX)-1)
+#endif
 
 #define CLIP_FILE       "<Wimp$ScrapDir>."PROGRAM_NAME"Clip"
 #define CLIP_FILE_LEN   sizeof(CLIP_FILE)
@@ -155,11 +159,6 @@ static os_error *fe_status_state(fe_view v, int state);
 static void check_pending_scroll(fe_view v);
 
 static int fe_check_resize(fe_view start, int x, int y, wimp_box *box, int *handle, fe_view *resizing_v);
-static os_error *fe_find_decode(const char *data);
-
-static void fe_passwd_abort(void);
-static void fe_passwd_decode(const char *query);
-
 static void fe_update_page_info(fe_view v);
 
 static fe_view fe_next_frame(fe_view v, BOOL next);
@@ -175,18 +174,20 @@ int debug_level;
 
 /* Used to point to a block in the RMA for a long URL */
 static char *fe_stored_url = NULL;
-static fe_passwd fe_current_passwd = NULL;
 
+#if 0
 static char *fe_pending_url = NULL;
 static char *fe_pending_bfile = NULL;
+#endif
 static int fe_pending_key = 0;
 
 fe_view main_view = 0;
 fe_view selected_view = 0;
 static fe_view dbox_view = 0;
 
+/* only used by ncfrescointernal:playmovie I think */
 fe_view last_click_view = NULL;
-static int last_click_x, last_click_y;
+int last_click_x, last_click_y;
 
 static be_item highlight_last_link = NULL;
 
@@ -200,6 +201,8 @@ static int connection_count = 0;
 static int toolbar_pending_mode_change = FALSE;
 
 static fe_message_handler_item *message_handlers = NULL;
+
+static int user_status_open = TRUE;
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -407,6 +410,63 @@ void frontend_saver_last_name(char *fname)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+#define FADE_LINE_SPACING		8
+
+#define ScreenFade_FadeRectangle	0x4e5c0
+#define ScreenFade_ProcessorUsage	0x4e5c1
+#define ScreenFade_GetFadeInfo		0x4e5c2
+#define ScreenFade_ReleaseFade		0x4e5c3
+
+void frontend_fade_frame(fe_view v, wimp_paletteword colour)
+{
+    wimp_wstate state;
+    int ref, status;
+
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return;
+    
+    if (config_display_time_fade == 0)
+	return;
+    
+    if (v->w)
+	wimp_get_wind_state(v->w, &state);
+    else
+	state.o.box = v->box;
+
+    if (v->parent == NULL && use_toolbox && tb_is_status_showing())
+    {
+	if (config_display_control_top)
+	    state.o.box.y1 -= tb_status_height() + (screen_box.y1 - text_safe_box.y1);
+	else
+	    state.o.box.y0 += tb_status_height() + (text_safe_box.y0 - screen_box.y0);
+    }
+    
+
+    if (_swix(ScreenFade_FadeRectangle, _INR(0,7) | _OUT(1),
+	  0 + (1<<8),
+	  state.o.box.x0, state.o.box.y0, state.o.box.x1, state.o.box.y1,
+	  config_display_time_fade,
+	  colour.word,
+	  FADE_LINE_SPACING,
+	  &ref) != NULL)
+    {
+	return;
+    }
+    
+    do
+    {
+	_swix(ScreenFade_GetFadeInfo, _INR(0,1) | _OUT(0),
+	      0, ref, &status);
+    }
+    while ((status & 0xff) != 0xff);
+
+    _swix(ScreenFade_ReleaseFade, _INR(0,1), 0, ref);
+    
+    tb_status_refresh_if_small();
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
 /*
  * If there is a fragment id then 'url' parameter will always contain it.
  */
@@ -418,6 +478,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     
     STBDBG(( "frontend_view_visit url '%s' title '%s' doc %p\n", strsafe(url), strsafe(title), doc));
 
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+    
     if (doc == NULL)    /* lookup failed re visit the current one   */
     {
 	char *durl;
@@ -477,6 +540,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     if (frontend_view_has_caret(v))
 	backend_place_caret(v->displaying, NULL);
     
+    if (previous_url)
+	frontend_fade_frame(v, render_get_colour(render_colour_BACK, v->displaying));
+
     /* check for special page instructions - but only on top page   */
     if (v->parent == NULL)
     {
@@ -560,31 +626,12 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     STBDBG(( "stbfe: fetching lights\n"));
     
-    tb_status_set_lights(light_state_FETCHING);
+    if (use_toolbox)
+	tb_status_set_lights(light_state_FETCHING);
 
     mm_free(previous_url);
         
     return 1;
-}
-
-/* ----------------------------------------------------------------------------------------------------- */
-
-static char *checked(int flag)
-{
-    return flag ? "CHECKED" : "";
-}
-
-static void get_form_size(int *width, int *height)
-{
-    int char_height;
-/*
-    int char_width = webfonts[WEBFONT_TTY].space_width;
-    *width = (text_safe_box.x1 - text_safe_box.x0)/char_width - 8;
- */
-    *width = webfont_tty_width(text_safe_box.x1 - text_safe_box.x0, 0) - 8;
-
-    char_height = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
-    *height = (text_safe_box.y1 - text_safe_box.y0)/char_height - 12;
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -597,7 +644,7 @@ void fe_dbox_dispose(void)
     {
 	STBDBG(( "fe_dbox_dispose: sel %p db %p\n", selected_view, dbox_view));
 
-#if LINK_DBOX
+#if LINK_DBOX && 0
 	/* unlink from chain */
 	if (dbox_view->prev)
 	    dbox_view->prev->next = dbox_view->next;
@@ -627,40 +674,75 @@ void fe_dbox_dispose(void)
     }
 }
 
-fe_view fe_dbox_view(void)
+fe_view fe_dbox_view(const char *name)
 {
     fe_frame_info info;
+    wimp_box box;
+    fe_view view;
 
-    fe_dbox_dispose();
+/*     fe_dbox_dispose(); */
 
     STBDBG(( "fe_dbox_view: \n"));
 
-    info.name = "__dbox";
+    info.name = (char *)name;
     info.noresize = TRUE;
     info.scrolling = fe_scrolling_NO;
     info.margin = margin_box;
 
     if (use_toolbox && tb_is_status_showing())
-        info.margin.y1 -= tb_status_height() + STATUS_TOP_MARGIN;
+    {
+	if (config_display_control_top)
+	    info.margin.y1 -= tb_status_height() + STATUS_TOP_MARGIN;
+	else
+	    info.margin.y0 += tb_status_height() + STATUS_TOP_MARGIN;
+    }
 
     if (use_toolbox)
 	tb_menu_hide();
 
-    frontend_complain(fe_new_view(NULL, &screen_box, &info, &dbox_view));
-
-    if (dbox_view && dbox_view->w)
+    if (strcasecomp(name, TARGET_PASSWORD) == 0 ||
+	strcasecomp(name, TARGET_DBOX) == 0)
     {
-	wimp_get_caret_pos(&dbox_saved_caret);
-	fe_get_wimp_caret(dbox_view->w);
+	box.x0 = (text_safe_box.x0*3 + text_safe_box.x1  )/4;
+	box.x1 = (text_safe_box.x0   + text_safe_box.x1*3)/4;
+	box.y0 = (text_safe_box.y0*3 + text_safe_box.y1  )/4;
+	box.y1 = (text_safe_box.y0   + text_safe_box.y1*3)/4;
+    }
+    else if (strcasecomp(name, TARGET_INFO) == 0)
+    {
+	box.x0 = text_safe_box.x0;
+	box.x1 = text_safe_box.x1;
+	box.y0 = text_safe_box.y0 + tb_status_height() + 32;
+	box.y1 = (text_safe_box.y0 + text_safe_box.y1)/2;
+    }
+    else			/* favs, history, help */
+    {
+	box.x0 = text_safe_box.x0;
+	box.x1 = (text_safe_box.x0 + text_safe_box.x1*3)/4;
+	box.y0 = text_safe_box.y0 + tb_status_height() + 32;
+	box.y1 = text_safe_box.y1 - 32;
+    }	
+
+    frontend_complain(fe_new_view(NULL, &box, &info, &view));
+
+    if (view)
+    {
+	fe_view v;
+/* 	wimp_get_caret_pos(&dbox_saved_caret); */
+	if (view->w)
+	    fe_get_wimp_caret(view->w);
 
 #if LINK_DBOX
-	/* chain onto main_view */
-	dbox_view->prev = main_view;
-	main_view->next = dbox_view;
+	/* chain onto end of main_view */
+	for (v = main_view; v->next; v = v->next)
+	    ;
+
+	v->next = view;
+	view->prev = v;
 #endif
     }
 
-    return dbox_view;
+    return view;
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -675,125 +757,15 @@ void fe_dbox_cancel(void)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static os_error *fe_mailto_decode(const char *bfile)
+fe_view fe_locate_view(const char *name)
 {
-    fe_dbox_dispose();
-    return NULL;
+    return fe_find_target(main_view, name);
 }
 
-static os_error *fe_mailto_write_file(FILE *f, void *handle)
+void fe_submit_form(fe_view v, const char *id)
 {
-    int width, height;
-    const char *to = (const char *)handle;
-
-    fputs(msgs_lookup("mailT"), f);
-    fputc('\n', f);
-
-    get_form_size(&width, &height);
-
-    fprintf(f, msgs_lookup("mail1"), width, to);
-    fprintf(f, msgs_lookup("mail2"), width, "");
-    fprintf(f, msgs_lookup("mail3"), width, height);
-
-    fputs(msgs_lookup("mailF"), f);
-    fputc('\n', f);
-
-    return NULL;
-}
-
-static os_error *fe_open_mailto(const char *to)
-{
-    fe_view v = fe_dbox_view();
-    fe_open_temp_file(v, fe_mailto_write_file, (void *)to, "dbEMail");
-    return NULL;
-}
-
-static BOOL can_do_mailto(void)
-{
-    char *s = msgs_lookup("mailT:");
-    return s && s[0];
-}
-
-/* ----------------------------------------------------------------------------------------------------- */
-
-static os_error *fe_version_write_file(FILE *f, void *handle)
-{
-    be_doc doc = handle;
-    char *url, *title;
-
-    fputs(msgs_lookup("versionT"), f);
-    fputc('\n', f);
-
-    url = title = NULL;
-    backend_doc_info(doc, NULL, NULL, &url, &title);
-
-    fprintf(f, msgs_lookup("version1"), fresco_version);
-    fprintf(f, msgs_lookup("version2"),
-        title ? title : "None",
-        url);
-    fprintf(f, msgs_lookup("version3"));
-
-    fputs(msgs_lookup("versionF"), f);
-    fputc('\n', f);
-
-    return NULL;
-    handle = handle;
-}
-
-os_error *fe_open_version(fe_view m)
-{
-    fe_view v = fe_dbox_view();
-    fe_open_temp_file(v, fe_version_write_file, m->displaying, "dbVersion");
-    return NULL;
-}
-
-/* ----------------------------------------------------------------------------------------------------- */
-
-static os_error *fe_display_options_decode(const char *data)
-{
-    fe_view v;
-
-    fe_dbox_dispose();
-
-    config_display_body_colours = strstr(data, "opt=bg") != 0;
-    config_defer_images = strstr(data, "opt=img") == 0;
-
-    v = main_view;
-    v->flags &= ~(be_openurl_flag_BODY_COLOURS | be_openurl_flag_DEFER_IMAGES);
-    v->flags |= (config_display_body_colours ? be_openurl_flag_BODY_COLOURS : 0) |
-        (config_defer_images ? be_openurl_flag_DEFER_IMAGES : 0);
-
-    if (v->browser_mode == fe_browser_mode_WEB)
-    {
-        backend_doc_set_flags(v->displaying,
-            be_openurl_flag_BODY_COLOURS | be_openurl_flag_DEFER_IMAGES,
-            v->flags & (be_openurl_flag_BODY_COLOURS | be_openurl_flag_DEFER_IMAGES));
-        fe_refresh_screen(NULL);
-    }
-
-    return NULL;
-}
-
-static os_error *fe_display_options_write_file(FILE *f, void *handle)
-{
-    fputs(msgs_lookup("dispT"), f);
-    fputc('\n', f);
-
-    fprintf(f, msgs_lookup("disp1"), checked(config_display_body_colours));
-    fprintf(f, msgs_lookup("disp2"), checked(!config_defer_images));
-
-    fputs(msgs_lookup("dispF"), f);
-    fputc('\n', f);
-
-    return NULL;
-    handle = handle;
-}
-
-os_error *fe_display_options_open(fe_view v)
-{
-    fe_view dv = fe_dbox_view();
-    fe_open_temp_file(dv, fe_display_options_write_file, v, "dbDisplay");
-    return NULL;
+    if (v && v->displaying)
+	backend_submit_form(v->displaying, id, FALSE);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -829,89 +801,11 @@ os_error *fe_doc_flag_toggle(fe_view v, int flags)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-static int print__copies = 1, print__ul = 1;
-
-static os_error *fe_print_options_decode(const char *data)
-{
-    char *s;
-    BOOL cancel;
-
-    fe_dbox_dispose();
-
-    s = extract_value(data, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
-    mm_free(s);
-
-    if (!cancel)
-    {
-	s = extract_value(data, "copies=");
-	print__copies = atoi(s);
-	mm_free(s);
-
-	if (print__copies < 1)
-	    print__copies = 1;
-
-	s = extract_value(data, "scaling=");
-	config_print_scale = atoi(s);
-	mm_free(s);
-
-	if (config_print_scale < 5)
-	    config_print_scale = 5;
-
-	s = extract_value(data, "orient=");
-	config_print_sideways = strcmp(s, "side") == 0;
-	mm_free(s);
-
-	config_print_nopics = strstr(data, "f=pic") == 0;
-/* 	config_print_nocol = strstr(data, "f=col") == 0; */
-	config_print_nobg = strstr(data, "f=bg") == 0;
-	config_print_collated = strstr(data, "f=collate") != 0;
-	config_print_reversed = strstr(data, "f=rev") != 0;
-
-	print__ul = strstr(data, "f=ul") != 0;
-    }
-    return NULL;
-}
-
-static os_error *fe_print_options_write_file(FILE *f, void *handle)
-{
-    fputs(msgs_lookup("printT"), f);
-    fputc('\n', f);
-
-    fprintf(f, msgs_lookup("print1"), print__copies, checked(config_print_collated), checked(config_print_reversed));
-    fprintf(f, msgs_lookup("print2"), checked(!config_print_sideways), checked(config_print_sideways));
-    fprintf(f, msgs_lookup("print3"), config_print_scale);
-    fprintf(f, msgs_lookup("print4"), checked(!config_print_nopics));
-    fprintf(f, msgs_lookup("print5"), checked(!config_print_nocol));
-    fprintf(f, msgs_lookup("print6"), checked(!config_print_nobg));
-    fprintf(f, msgs_lookup("print7"), checked(print__ul));
-
-    fputs(msgs_lookup("printF"), f);
-    fputc('\n', f);
-
-    return NULL;
-    handle = handle;
-}
-
-os_error *fe_print_options_open(fe_view v)
-{
-#if 1
-    fe_view dv = fe_dbox_view();
-    fe_open_temp_file(dv, fe_print_options_write_file, v, "dbPrint");
-#else
-    return tb_print_options_open(v);
-#endif
-    return NULL;
-}
+int print__copies = 1, print__ul = 1;
 
 int fe_print_possible(fe_view v)
 {
-#if 1
-    return _swix(PDriver_Info, 0) == NULL;
-#else
-    char *s = getenv("Printer$");
-    return v && v->displaying && s != NULL && s[0] != 0;
-#endif
+    return v && v->displaying && _swix(PDriver_Info, 0) == NULL;
 }
 
 const char *fe_printer_name(void)
@@ -939,403 +833,6 @@ os_error *fe_print(fe_view v)
         (config_print_collated ? awp_print_COLLATED : 0) |
         (config_print_reversed ? awp_print_REVERSED : 0),
         print__copies);
-}
-
-/* ----------------------------------------------------------------------------------------------------- */
-
-static void fe_openurl_decode(char *query)
-{
-    char *url;
-/*
-    char *action;
-    action = extract_value(query, "action=");
-    if (action && strcasestr(action, "clear") != NULL)
-	reload
- */
-
-    url = extract_value(query, "url=");
-    if (url)
-    {
-        char *url1 = check_url_prefix(url);
-
-	STBDBG(( "stbfe: openurl '%s' as '%s'\n", url, url1));
-
-        frontend_open_url(url1, main_view, NULL, NULL, 0);
-        mm_free(url1);
-        mm_free(url);
-    }
-}
-
-extern void hotlist_write_list(FILE *fout);
-
-static os_error *fe_hotlist_and_openurl_write_file(FILE *f, void *handle)
-{
-    int width, height;
-/*     const char *url = (const char *)handle; */
-
-    fputs(msgs_lookup("openhT"), f);
-    fputc('\n', f);
-
-    get_form_size(&width, &height);
-
-    width -= 12;
-    fprintf(f, msgs_lookup("openh1"));
-    fprintf(f, msgs_lookup("openh2"), width, msgs_lookup("opendef"));
-    fprintf(f, msgs_lookup("openh3"));
-
-    hotlist_write_list(f);
-
-    fputs(msgs_lookup("openhF"), f);
-    fputc('\n', f);
-
-    return NULL;
-}
-
-static os_error *fe_hotlist_write_file(FILE *f, void *handle)
-{
-    fputs(msgs_lookup("hotsT"), f);
-    fputc('\n', f);
-
-    fprintf(f, msgs_lookup("hots1"));
-
-    hotlist_write_list(f);
-
-    fputs(msgs_lookup("hotsF"), f);
-    fputc('\n', f);
-
-    return NULL;
-}
-
-static os_error *fe_openurl_write_file(FILE *f, void *handle)
-{
-    int width, height;
-/*     const char *url = (const char *)handle; */
-
-    fputs(msgs_lookup("openT"), f);
-    fputc('\n', f);
-
-    get_form_size(&width, &height);
-
-    width -= 12;
-    fprintf(f, msgs_lookup("open1"));
-    fprintf(f, msgs_lookup("open2"), width, msgs_lookup("opendef"));
-    fprintf(f, msgs_lookup("open3"));
-
-    fputs(msgs_lookup("openF"), f);
-    fputc('\n', f);
-
-    return NULL;
-}
-
-os_error *fe_hotlist_open(fe_view v)
-{
-    os_error *e = NULL;
-    fe_open_temp_file(v, fe_hotlist_write_file, NULL, "dbHotlist");
-    return e;
-}
-
-os_error *fe_hotlist_and_url_open(fe_view v)
-{
-    os_error *e = NULL;
-    char *url = NULL;
-    if (v->displaying)
-        e = backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
-    if (!e) fe_open_temp_file(v, fe_hotlist_and_openurl_write_file, url, "dbHotlistURL");
-    return e;
-}
-
-os_error *fe_url_open(fe_view v)
-{
-    os_error *e = NULL;
-    char *url = NULL;
-    if (v->displaying)
-        e = backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
-    if (!e) fe_open_temp_file(v, fe_openurl_write_file, url, "dbURL");
-    return e;
-}
-
-/* ----------------------------------------------------------------------------------------------------- */
-
-static char *auth_code = "U21hcnQga2lkUw==";
-
-static void fe_handle_pending_url(char *url, char *bfile)
-{
-    char *scheme, *netloc, *path, *params, *query, *fragment;
-    os_error *e;
-
-    url_parse(url, &scheme, &netloc, &path, &params, &query, &fragment);
-
-    if (strcasecomp(scheme, PROGRAM_NAME"internal") != 0)
-    {
-        frontend_open_url(url, NULL, NULL, NULL, 1);
-    }
-    /* dbox type actions    */
-    else if (strcasecomp(path, "cancel") == 0)
-    {
-        fe_dbox_cancel();
-    }
-    else if (strcasecomp(path, "displayoptions") == 0)
-    {
-        fe_display_options_decode(query);
-    }
-    else if (strcasecomp(path, "find") == 0)
-    {
-        fe_find_decode(query);
-    }
-    else if (strcasecomp(path, "mailto") == 0)
-    {
-        fe_mailto_decode(bfile);
-    }
-    else if (strcasecomp(path, "password") == 0)
-    {
-        fe_passwd_decode(query);
-    }
-    else if (strcasecomp(path, "printoptions") == 0)
-    {
-        fe_print_options_decode(query);
-    }
-    /* internal commands    */
-    else if (strcasecomp(path, "back") == 0)
-    {
-        fevent_handler(fevent_HISTORY_BACK+fevent_WINDOW, main_view);
-    }
-    else if (strcasecomp(path, "close") == 0)
-    {
-        fevent_handler(fevent_CLOSE+fevent_WINDOW, main_view);
-    }
-    else if (strcasecomp(path, "home") == 0)
-    {
-        fevent_handler(fevent_HOME+fevent_WINDOW, main_view);
-    }
-    else if (strcasecomp(path, "hotlist") == 0)
-    {
-        fevent_handler(fevent_HOTLIST_SHOW+fevent_WINDOW, main_view);
-    }
-    else if (strcasecomp(path, "loadurl") == 0)
-    {
-        fe_openurl_decode(query);
-    }
-    else if (strcasecomp(path, "playmovie") == 0)
-    {
-        int x, y;
-        fe_view v;
-        be_item ti;
-        wimp_box box;
-
-        x = last_click_x;
-        y = last_click_y;
-        v = last_click_view;
-
-        ti = NULL;
-        e = NULL;
-        if (v)
-            e = backend_doc_locate_item(v->displaying, &x, &y, &ti);
-
-        if (!e && ti)
-            e = backend_doc_item_bbox(v->displaying, ti, &box);
-
-        if (!e && ti)
-        {
-            char *file, *args, *offset;
-            char *scheme1, *netloc1, *path1, *params1, *query1, *fragment1;
-            char buffer[256];
-
-            file = extract_value(query, "url=");
-            args = extract_value(query, "args=");
-            offset = extract_value(query, "offset=");
-            url_parse(file, &scheme1, &netloc1, &path1, &params1, &query1, &fragment1);
-
-            if (strcasecomp(scheme1, "file") == 0)
-            {
-                char *path2 = url_path_to_riscos(path1);
-                coords_cvtstr cvt = fe_get_cvt(v);
-		coords_pointstr off;
-
-		off.x = off.y = 0;
-		if (offset)
-		    sscanf(offset, "%d,%d", &off.x, &off.y);
-		
-                coords_point_toscreen((coords_pointstr *)&box.x0, &cvt);
-
-                sprintf(buffer, "/%s -at %d,%d", path2, box.x0 + off.x/2, box.y0 + off.y/2);
-                if (args)
-                {
-                    strcat(buffer, " ");
-                    strcat(buffer, args);
-                }
-                fe_start_task(buffer, NULL);
-                mm_free(path2);
-            }
-
-            url_free_parts(scheme1, netloc1, path1, params1, query1, fragment1);
-            mm_free(file);
-            mm_free(args);
-            mm_free(offset);
-        }
-    }
-    else
-    {
-#ifdef GROSS_SECURITY_LOOPHOLE
-	char buffer[256];
-	
-	sprintf(buffer, "%s %s", path, bfile ? bfile : query ? query : "");
-	fe_start_task(buffer, NULL);
-#endif
-    }
-
-    url_free_parts(scheme, netloc, path, params, query, fragment);
-
-    if (bfile)
-        remove(bfile);
-}
-
-/* ------------------------------------------------------------------------------------------- */
-/* password handling    */
-/* ------------------------------------------------------------------------------------------- */
-
-static void fe_passwd_decode(const char *query)
-{
-    char *name, *pass, *s;
-    fe_passwd pw;
-    BOOL cancel;
-
-    if (!fe_current_passwd)
-        return;
-
-    s = extract_value(query, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
-    mm_free(s);
-
-    if (cancel)
-	fe_passwd_abort();
-    else
-    {	
-	name = extract_value(query, "name=");
-	pass = extract_value(query, "pass=");
-
-	STBDBG(( "name='%s'\n", name));
-	STBDBG(( "pass='%s'\n", pass));
-
-	pw = fe_current_passwd;
-
-	/* do the callback and return control   */
-	if (pw->cb)
-	    (pw->cb)(pw, pw->h, name, pass);
-
-	frontend_passwd_dispose(pw);
-
-	mm_free(name);
-	mm_free(pass);
-    }
-}
-
-static os_error *fe_passwd_write_file(FILE *f, void *handle)
-{
-    fe_passwd pw = handle;
-    int width, height;
-
-    fputs(msgs_lookup("passwdT"), f);
-    fputc('\n', f);
-
-    get_form_size(&width, &height);
-
-    fprintf(f, msgs_lookup("passwd1"), pw->realm ? pw->realm : "unknown", strsafe(pw->site));
-    fprintf(f, msgs_lookup("passwd2"), width, width);
-
-    fputs(msgs_lookup("passwdF"), f);
-    fputc('\n', f);
-
-    return NULL;
-}
-
-static void fe_passwd_abort(void)
-{
-    fe_passwd pw = fe_current_passwd;
-    if (pw)
-    {
-        if (pw->cb)
-            (pw->cb)(pw, pw->h, NULL, NULL);
-
-        frontend_passwd_dispose(pw);
-    }
-}
-
-fe_passwd frontend_passwd_raise(backend_passwd_callback cb, void *handle,
-				char *user, char *realm, char *site)
-{
-    fe_passwd pw;
-    fe_view dv;
-
-    STBDBG(("passwd_raise user '%s' realm '%s' site '%s'\n",
-	    user ? user : "", realm ? realm : "", site ? site : ""));
-
-    pw = mm_calloc(sizeof(*pw), 1);
-
-    pw->cb = cb;
-    pw->h = handle;
-
-    pw->user = strdup(user);
-    pw->realm = strdup(realm);
-    pw->site = strdup(site);
-
-    dv = fe_dbox_view();
-    fe_open_temp_file(dv, fe_passwd_write_file, pw, "dbPassword");
-
-    fe_current_passwd = pw;
-
-    return pw;
-}
-
-void frontend_passwd_dispose(fe_passwd pw)
-{
-    STBDBG(( "passwd_dispose %p\n", pw));
-
-    fe_dbox_dispose();
-
-    mm_free(pw->user);
-    mm_free(pw->realm);
-    mm_free(pw->site);
-
-    mm_free(pw);
-    fe_current_passwd = NULL;
-}
-
-/* ------------------------------------------------------------------------------------------- */
-
-static os_error *fe_mem_dump_write_file(FILE *f, void *handle)
-{
-    int us = -1, next = -1, free;
-
-    fprintf(f, "<TITLE>NCFresco memory dump</TITLE>\n");
-    fprintf(f, "<META NAME=BrowserMode CONTENT=DBox\n");
-    fprintf(f, "<H1>NCFresco memory dump</H1>\n");
-
-    fprintf(f, "<MENU><LI><A HREF='#wimp'>Wimp slot</A><LI><A HREF='#malloc'>Malloc heap</A><LI><A HREF='#image'>Image heap</A></MENU>\n");
-
-    wimp_slotsize(&us, &next, &free);
-    fprintf(f, "<H2><A NAME='wimp'>Wimp slot usage</A></H2><TABLE>");
-    fprintf(f, "<TR><TD>Us<TD ALIGN=RIGHT>%d bytes<TD ALIGN=RIGHT>%d K", us, us/1024);
-    fprintf(f, "<TR><TD>Next<TD ALIGN=RIGHT>%d bytes<TD ALIGN=RIGHT>%d K", next, next/1024);
-    fprintf(f, "<TR><TD>Free<TD ALIGN=RIGHT>%d bytes<TD ALIGN=RIGHT>%d K", free, free/1024);
-    fprintf(f, "</TABLE>");
-
-    fprintf(f, "<H2><A NAME='malloc'>Malloc heap</A></H2><PRE>");
-    mm__dump(f);
-    fprintf(f, "</PRE>");
-
-    fprintf(f, "<H2><A NAME='image'>Image heap</A></H2><PRE>");
-    heap__dump(f);
-    fprintf(f, "</PRE>");
-
-    return NULL;
-    handle = handle;
-}
-
-void fe_show_mem_dump(void)
-{
-    fe_view dv;
-    dv = fe_dbox_view();
-    fe_open_temp_file(dv, fe_mem_dump_write_file, NULL, "dbDebug");
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -1533,6 +1030,9 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
     va_list ap;
     fe_view v;
 
+    if (!v_orig || v_orig->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+    
     /* go to top of stack   */
     v = fe_find_top(v_orig);
 
@@ -1729,6 +1229,9 @@ int frontend_test_history(char *url)
 int frontend_can_handle_file_type(int ft)
 {
     char *s, buffer[32];
+
+    STBDBG(("frontend_can_handle_file_type(): ft %x (%03x)\n", ft, ft));
+
     sprintf(buffer, "Alias$@RunType_%03x", ft);
     s = getenv(buffer);
     if (s && *s)
@@ -1741,85 +1244,6 @@ int frontend_can_handle_file_type(int ft)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#define NCRegistry_Write                    0x4d385
-
-
-
-#if CHECK_IF_WITH_REGISTRY
-
-/*
- * Check with the registry to see if the interface is down.
- * Returns true if
-  - primary interface is down
- */
-
-typedef struct dib
-{
-   unsigned int         dib_swibase;    /* Module's SWI chunk number */
-   char                *dib_name;       /* Eg "ea" and "slip" */
-   unsigned int         dib_unit;       /* Unit number. First is 0, then consecutive */
-   unsigned char       *dib_address;    /* 6 bytes of hardware address */
-   char                *dib_module;     /* Eg "Ether3" */
-   char                *dib_location;   /* Eg "Network expansion slot" */
-/*   struct slot          dib_slot;        See above defintion */
-} dci4_dib;
-
-typedef struct mydiblist {
-
-  unsigned int flags;     /* flag bits - see below */
-  dci4_dib *dib_ptr;      /* pointer to a DCI4 compliant driver information block */
-  struct mydiblist *next; /* next entry, or NULL for end of list */
-} mydci4_diblist;
-
-#define DIB_FLAG_PRIMARY 0x1   /* this is the primary interface as far as the registry is concerned */
-#define DIB_FLAG_STATS   0x2   /* device driver supports statistics */
-#define DIB_FLAG_STATUS  0x4   /* interface is working OK */
-#define DIB_FLAG_UP      0x8   /* interface is UP */
-#define DIB_FLAG_PTP     0x10  /* interface is point2point */
-#define DIB_FLAG_SCOK    0x20
-#define DIB_FLAG_IGNORE  0x40
-
-#define NCRegistry_EnumerateNetworkDrivers  0x4d380
-
-static BOOL interface_is_down(void)
-{
-    mydci4_diblist *dib;
-    _kernel_oserror *e;
-    
-    /* if no registry then assume interface is OK */
-    if ((e = _swix(NCRegistry_EnumerateNetworkDrivers, _OUT(0), &dib)) != NULL)
-    {
-    STBDBG(("interface_is_down: registry error %x %s\n", e->errnum, e->errmess));
-        return FALSE;
-    }
-
-    for (; dib; dib = dib->next)
-    {
-    STBDBG(("interface_is_down: if flags=%x\n", dib->flags));
-
-    /* only concerned with the primary (ptp currently) interface  */
-        if (dib->flags & DIB_FLAG_PTP)
-        {
-	    STBDBG(("interface_is_down: PTP if, flags %x, name='%s'\n",
-		    dib->flags, dib->dib_ptr ? dib->dib_ptr->dib_name : "<none>"));
-
-            /* if ppp and status OK and down */
-            if (dib->dib_ptr && strcasecomp(dib->dib_ptr->dib_name, "ppp") == 0 &&
-                (dib->flags & DIB_FLAG_STATUS) &&
-                (dib->flags & DIB_FLAG_UP) == 0)
-            {
-                return TRUE;
-            }
-
-            break;
-        }
-    }
-
-    STBDBG(("interface_is_down: no matching dib\n"));
-    return FALSE;
-}
-
-#endif
 
 #if USE_DIALLER_STATUS
 int frontend_is_interface_up(void)
@@ -1831,12 +1255,12 @@ int frontend_is_interface_up(void)
 int frontend_is_interface_down(void)
 {
 #if CHECK_IF_WITH_REGISTRY
-    STBDBG(("is_interface_down: var=%d fn=%d\n", connection_up, interface_is_down()));
+    STBDBG(("is_interface_down: var=%d fn=%d\n", connection_up, ncreg_interface_is_down()));
     
     if (!connection_up)
         return 1;
 
-    if (interface_is_down())
+    if (ncreg_interface_is_down())
     {
         connection_up = 0;
         return 1;
@@ -1851,28 +1275,11 @@ int frontend_is_interface_down(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-static void fe_registry_decode(void)
-{
-    void *buf = mm_malloc(40*1024);
-    int error;
-
-    STBDBG(( "registry decode\n"));
-    
-    _swix(NCRegistry_Write, _INR(0,2) | _OUT(0), "NCD_INFO", buf, 40*1024, &error);
-
-    if (error == -2)
-        frontend_open_url(buf, main_view, NULL, NULL, 0);
-
-    mm_free(buf);
-}
-
-/* ------------------------------------------------------------------------------------------- */
-
 void frontend_pass_doc(fe_view v, char *url, char *cfile, int ftype)
 {
     wimp_msgstr msg;
 
-    STBDBG(( "frontend_pass_doc url '%s'\n", url));
+    STBDBG(( "frontend_pass_doc url '%s' cfile '%s' ft %x\n", url, cfile, ftype));
 
     memset(&msg, 0, sizeof(msg));
     msg.hdr.size = sizeof(wimp_msgstr);
@@ -1909,13 +1316,15 @@ void frontend_url_punt(fe_view v, char *url, char *bfile)
 	fe_check_download_finished(v);
     }
 
+#if 0
     if (strncasecomp(url, INTERNAL_PREFIX, INTERNAL_PREFIX_SIZE) == 0)
     {
         fe_pending_url = strdup(url);
         fe_pending_bfile = strdup(bfile);
         return;
     }
-
+#endif
+    
     if (fe_stored_url)
     {
 	rma_free(fe_stored_url);
@@ -1998,10 +1407,10 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
     coords_cvtstr cvt;
     fe_view child = NULL;
 
-    if (!v)
-        return;
-
-    /* get rid of the old layout before creating the new one */
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return;
+    
+  /* get rid of the old layout before creating the new one */
     if (refresh_only)
         child = v->children;
     else
@@ -2039,12 +1448,143 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
             frontend_complain(fe_new_view(v, &box, ip, &vv));
             if (ip->src)
 	    {
-                frontend_complain(frontend_open_url(ip->src, vv, NULL, NULL, fe_open_url_FROM_FRAME));
+                os_error *e = frontend_open_url(ip->src, vv, NULL, NULL, fe_open_url_FROM_FRAME);
+		if (e && e->errnum != ANTWEB_ERROR_BASE + ERR_NO_SUCH_FRAG)
+		    frontend_complain(e);
 /* 		if (vv->fetching) */
 /* 		    backend_set_margin(vv->fetching, &vv->backend_margin); */
 	    }
 	}
     }
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+static int font_size_value = 0;
+
+BOOL fe_font_size_set_possible(int value, BOOL absolute)
+{
+    if (!absolute)
+	value += font_size_value;
+
+    return value >= 0 && value < config_SCALES;
+}
+
+void fe_font_size_set(int value, BOOL absolute)
+{
+    fe_view v;
+
+    if (absolute)
+    {
+	if (value >= 0 && value < config_SCALES)
+	    font_size_value = value;
+    }
+    else
+    {
+	font_size_value += value;
+
+	if (font_size_value < 0)
+	    font_size_value = 0;
+	else if (font_size_value >= config_SCALES)
+	    font_size_value = config_SCALES - 1;
+    }
+
+    config_display_scale = config_display_scales[font_size_value];
+
+    visdelay_begin();
+    
+    frontend_complain(webfonts_init());
+
+    v = main_view;
+    if (v->children)
+    {
+	do
+	{
+	    
+	    v = fe_next_frame(v, TRUE);
+	    if (v)
+	    {
+		backend_doc_reformat(v->displaying);
+		fe_refresh_window(v->w, NULL);
+	    }
+	}	    
+	while (v);
+    }
+    else
+    {
+	backend_doc_reformat(v->displaying);
+	fe_refresh_window(v->w, NULL);
+    }
+
+    visdelay_end();
+}
+
+/*
+ * Initial font size scaling is in % so this function initialises the index correctly.
+ */
+
+static void fe_font_size_init(void)
+{
+    int i;
+    for (i = 0; i < config_SCALES; i++)
+	if (config_display_scales[i] >= config_display_scale)
+	{
+	    font_size_value = i;
+	    break;
+	}
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+/* 
+ * Force this window to have no horizontal scrolling
+ */
+
+void fe_force_fit(fe_view v, BOOL force)
+{
+    int scale_value = 100;
+
+    v = fe_find_top(v);
+    
+    if (!v->displaying)
+	return;
+
+    v = main_view;
+    if (v->children)
+    {
+	do
+	{
+	    v = fe_next_frame(v, TRUE);
+	    if (v)
+	    {
+		scale_value = force && v->doc_width > 0 ?
+		    ((v->box.x1 + v->backend_margin.x1) - (v->box.x0 + v->backend_margin.x0)) * 100 / v->doc_width :
+		    100;
+
+		STBDBG(("fe_force_fit: v %p force %d scaling %d %%\n", v, force, scale_value));
+    
+		backend_doc_set_scaling(v->displaying, scale_value);
+		backend_doc_reformat(v->displaying);
+		fe_refresh_window(v->w, NULL);
+	    }
+	}	    
+	while (v);
+    }
+    else
+    {
+	scale_value = force && v->doc_width > 0 ?
+	    ((v->box.x1 + v->backend_margin.x1) - (v->box.x0 + v->backend_margin.x0)) * 100 / v->doc_width :
+	    100;
+
+	STBDBG(("fe_force_fit: v %p force %d scaling %d %%\n", v, force, scale_value));
+    
+	backend_doc_set_scaling(v->displaying, scale_value);
+	backend_doc_reformat(v->displaying);
+	fe_refresh_window(v->w, NULL);
+    }
+
+    visdelay_end();
+
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -2266,6 +1806,30 @@ os_error *fe_home(fe_view v)
     return e;
 }
 
+os_error *fe_search_page(fe_view v)
+{
+    os_error *e;
+    char *url;
+
+    e = fe_file_to_url(config_document_search, &url);
+    if (!e && url)
+	e = frontend_open_url(url, v, NULL, NULL, 0);
+
+    return e;
+}
+
+os_error *fe_offline_page(fe_view v)
+{
+    os_error *e;
+    char *url;
+
+    e = fe_file_to_url(config_document_offline, &url);
+    if (!e && url)
+	e = frontend_open_url(url, v, NULL, NULL, 0);
+
+    return e;
+}
+
 /* ------------------------------------------------------------------------------------------- */
 
 static fe_view fe_next_frame(fe_view v, BOOL next)
@@ -2377,6 +1941,14 @@ void fe_move_highlight(fe_view v, int flags)
     }
 
     STBDBG(( "fe_move_highlight: old_link %p old_v %p new_link %p new_v %p\n", old_link, v, new_link, new_v));
+
+    /* check for moving to the status bar */
+    if (new_link == NULL && config_mode_cursor_toolbar && (flags & be_link_VERT) &&
+	((config_display_control_top && (flags & be_link_BACK)) || (!config_display_control_top && (flags & be_link_BACK) == 0)))
+    {
+	if (tb_status_highlight(TRUE))
+	    return;
+    }
 
     /* if we have reached top/bottom of page then scroll and try again for a highlight  */
     if (new_link)
@@ -2558,144 +2130,6 @@ void fe_copy_image_to_clipboard(fe_view v)
 
 /* ------------------------------------------------------------------------------------------- */
 
-/*
- *
- */
-
-static char *find__string = NULL;
-static int find__backwards;
-static int find__casesense;
-static fe_view find__v = NULL;
-
-static os_error *fe_find_decode(const char *data)
-{
-    char *text, *dir, *casesense, *s;
-    BOOL cancel;
-    
-    fe_dbox_dispose();
-
-    if (!find__v || find__v->magic != ANTWEB_VIEW_MAGIC)
-	return NULL;
-
-    s = extract_value(data, "action=");
-    cancel = strcasestr(s, "cancel") != 0;
-    mm_free(s);
-
-    if (!cancel)
-    {
-	BOOL back, cases;
-	char buffer[16];
-
-	text = extract_value(data, "for=");
-
-	dir = extract_value(data, "dir=");
-	back = dir && strcmp(dir, "back") == 0;
-
-	casesense = extract_value(data, "case=");
-	cases = casesense && strcmp(casesense, "sense") == 0;
-
-        uudecode(auth_code, (unsigned char *)buffer, sizeof(buffer));
-	if (find__v->browser_mode == fe_browser_mode_HISTORY && cases && back && strcmp(buffer, text) == 0)
-	{
-	    fe_registry_decode();
-	}
-	else
-	{
-	    fe_find(find__v, text, back, cases);
-	}
-    
-	mm_free(text);
-	mm_free(dir);
-	mm_free(casesense);
-    }
-    return NULL;
-}
-
-static os_error *fe_find_write_file(FILE *f, void *handle)
-{
-    fputs(msgs_lookup("findT"), f);
-    fputc('\n', f);
-
-    fprintf(f, msgs_lookup("find1"));
-    fprintf(f, msgs_lookup("find2"), strsafe(find__string), checked(find__casesense));
-    fprintf(f, msgs_lookup("find3"), checked(!find__backwards),
-        checked(find__backwards));
-
-    fputs(msgs_lookup("findF"), f);
-    fputc('\n', f);
-
-    return NULL;
-    handle = handle;
-}
-
-int fe_find_again_possible(fe_view v)
-{
-    return v && v->displaying && find__string && find__string[0];
-}
-
-void fe_find_again(fe_view v)
-{
-    char *s = strdup(find__string);
-    fe_find(v, s, find__backwards, find__casesense);
-    mm_free(s);
-}
-
-int fe_find_possible(fe_view v)
-{
-    return v && v->displaying;
-}
-
-os_error *fe_find_open(fe_view v)
-{
-    os_error *e = NULL;
-    if (fe_find_possible(v))
-    {
-        wimp_box bb;
-        fe_view dv;
-
-        frontend_view_bounds(v, &bb);
-
-        STBDBG(( "find: bounds %d,%d %d,%d\n", bb.x0, bb.y0, bb.x1, bb.y1));
-
-        bb.x0 = -1000;		/* Get the first on the line ignoring margins */
-        backend_doc_locate_item(v->displaying, &bb.x0, &bb.y1, &v->find_last_item);
-
-	/* store the frame that we started in */
-	find__v = v;	
-#if 1
-        dv = fe_dbox_view();
-        fe_open_temp_file(dv, fe_find_write_file, v, "dbFind");
-#else
-        e = tb_find_open(v);
-#endif
-    }
-    return e;
-}
-
-void fe_find(fe_view v, const char *text, int backwards, int casesense)
-{
-    if (!v || !v->displaying)
-        return;
-
-    STBDBG(( "find: start item %p\n", v->find_last_item));
-
-    mm_free(find__string);
-    find__string = strdup(text);
-    find__backwards = backwards;
-    find__casesense = casesense;
-
-    v->find_last_item = backend_find(v->displaying, v->find_last_item, (char *)text,
-        (backwards ? be_find_BACKWARDS : 0) | (casesense ? 0 : be_find_CASELESS));
-
-    STBDBG(( "find: find item %p\n", v->find_last_item));
-
-    if (v->find_last_item == NULL)
-    {
-        bbc_vdu(7);
-        frontend_complain(makeerror(ERR_FIND_FAILED));
-    }
-}
-
 /* ------------------------------------------------------------------------------------------- */
 
 int fe_hotlist_add_possible(fe_view v)
@@ -2763,22 +2197,36 @@ static os_error *fe_status_state(fe_view v, int state)
     if (new_state_open != is_open)
     {
         wimp_wstate state;
-	int movement;
+	int movement = 0;
 	
         /* reopen window tiled with status window   */
         wimp_get_wind_state(v->w, &state);
         if (new_state_open)
         {
-            v->margin.y1 = margin_box.y1 - (tb_status_height() + STATUS_TOP_MARGIN);
-	    movement = tb_status_height() + STATUS_TOP_MARGIN;
+	    if (config_display_control_top)
+	    {
+		v->margin.y1 = margin_box.y1 - (tb_status_height() + STATUS_TOP_MARGIN);
+		movement = tb_status_height() + STATUS_TOP_MARGIN;
+	    }
+	    else
+	    {
+		v->margin.y0 = margin_box.y0 + tb_status_height() + STATUS_TOP_MARGIN;
+	    }
 	}
         else
         {
-            v->margin.y1 = margin_box.y1;
-	    movement = -tb_status_height() - STATUS_TOP_MARGIN;
-	    if (state.o.y > -margin_box.y1)
-		movement = state.o.y + margin_box.y1;
-        }
+	    if (config_display_control_top)
+	    {
+		v->margin.y1 = margin_box.y1;
+		movement = -tb_status_height() - STATUS_TOP_MARGIN;
+		if (state.o.y > -margin_box.y1)
+		    movement = state.o.y + margin_box.y1;
+	    }
+	    else
+	    {
+		v->margin.y0 = margin_box.y0;
+	    }
+	}
         wimp_open_wind(&state.o);
 
         /* cause a reformat */
@@ -2810,7 +2258,7 @@ static os_error *fe_status_state(fe_view v, int state)
 #endif
 	}
 	
-/*         v->status_open = new_state_open; */
+/*         user_status_open = new_state_open; */
     }
     return NULL;
 }
@@ -2830,10 +2278,10 @@ os_error *fe_status_toggle(fe_view v)
 
     v = fe_find_top(v);
 
-    v->status_open = !v->status_open;
+    user_status_open = !user_status_open;
 
     if (use_toolbox)
-        e = fe_status_state(v, v->status_open);
+        e = fe_status_state(v, user_status_open);
     else
         statuswin_toggle(v);
 
@@ -2842,7 +2290,7 @@ os_error *fe_status_toggle(fe_view v)
 
 int fe_status_open(fe_view v)
 {
-    return v && v->status_open;
+    return v && user_status_open;
 }
 
 void fe_status_clear_fetch_only(void)
@@ -2897,14 +2345,14 @@ static void fe_status_mode(fe_view v, int mode)
 	    {
 		/* if desktop mode then disable toolbar */
 	    case fe_browser_mode_DESKTOP:
-	    case fe_browser_mode_DBOX:
+/* 	    case fe_browser_mode_DBOX: leave it on for RCA use */
 	    case fe_browser_mode_APP:
 		fe_status_state(fe_find_top(v), 0);
 		break;
 
 		/* otherwise leave it in previous state */
 	    default:
-		fe_status_state(fe_find_top(v), v->status_open);
+		fe_status_state(fe_find_top(v), user_status_open);
 		break;
 	    }
 	}
@@ -2925,6 +2373,24 @@ os_error *fe_status_info_level(fe_view v, int level)
     {
         return statuswin_info_level(v, level);
     }
+    return NULL;
+}
+
+os_error *fe_status_unstack(fe_view v)
+{
+    tb_status_unstack();
+    return NULL;
+    NOT_USED(v);
+}
+
+/*
+ * bar is from 0 to however many toolbars there are
+ */
+
+os_error *fe_status_open_toolbar(fe_view v, int bar)
+{
+    tb_status_new(v, bar);
+    tb_status_update_fades(v);
     return NULL;
 }
 
@@ -3351,7 +2817,7 @@ if (pointer_moved)
                 break;
         }
 
-        if (type != be_resize_NONE)
+        if (use_toolbox && type != be_resize_NONE)
             tb_status_set_message(status_type_HELP, msgs_lookup("hrsz1"));
 
         return;
@@ -3428,7 +2894,8 @@ static void fe_dragging_start(fe_view v, const wimp_mousestr *m)
         STBDBG(( "dragging: started at %d,%d\n", m->x, m->y));
 
         fe_set_pointer(fe_pointer_DRAG);
-        tb_status_set_message(status_type_HELP, msgs_lookup("hscrl"));
+	if (use_toolbox)
+	    tb_status_set_message(status_type_HELP, msgs_lookup("hscrl"));
         fast_poll++;
     }
 }
@@ -3439,7 +2906,8 @@ static void fe_drag(const wimp_mousestr *m)
     {
         dragging_view = NULL;
         fe_set_pointer(0);
-        tb_status_set_message(status_type_HELP, NULL);
+	if (use_toolbox)
+	    tb_status_set_message(status_type_HELP, NULL);
         fast_poll--;
 
         STBDBG(( "dragging: buttons released\n"));
@@ -3466,7 +2934,8 @@ static void fe_drag(const wimp_mousestr *m)
 
             dragging_view = NULL;
             fe_set_pointer(0);
-	    tb_status_set_message(status_type_HELP, NULL);
+	    if (use_toolbox)
+		tb_status_set_message(status_type_HELP, NULL);
             fast_poll--;
         }
     }
@@ -3497,9 +2966,9 @@ static void fe_resizing_start(fe_view v, const wimp_mousestr *m, const wimp_box 
         dragging_last_y = m->y;
 
 	resizing_view = v;                  /* record the view containing the framese we are resizing   */
-
-	tb_status_set_message(status_type_HELP, msgs_lookup("hrsz2"));
-
+	if (use_toolbox)
+	    tb_status_set_message(status_type_HELP, msgs_lookup("hrsz2"));
+	
         STBDBG(( "resizing: started at %d,%d\n", m->x, m->y));
     }
 }
@@ -3511,8 +2980,9 @@ static BOOL fe_resize(const wimp_mousestr *m)
         fe_view v = resizing_view;
         coords_cvtstr cvt = fe_get_cvt(v);
 
-        resizing_view = NULL;
-	tb_status_set_message(status_type_HELP, NULL);
+        resizing_view = NULL;	
+	if (use_toolbox)
+	    tb_status_set_message(status_type_HELP, NULL);
 
         STBDBG(( "resizing: buttons released\n"));
 
@@ -3545,7 +3015,8 @@ void fe_resize_abort(void)
 
         resizing_view = NULL;
         fe_set_pointer(0);
-	tb_status_set_message(status_type_HELP, NULL);
+	if (use_toolbox)
+	    tb_status_set_message(status_type_HELP, NULL);
     }
 }
 
@@ -3702,7 +3173,8 @@ static void fe_redraw_handler(fe_view v, wimp_w w)
         }
         else
         {
-            tb_status_redraw(&r);
+	    if (use_toolbox)
+		tb_status_redraw(&r);
 
 /*          tb_find_redraw(&r) && */
 /*          tb_print_redraw(&r)) */
@@ -3731,7 +3203,7 @@ static void fe_redraw_handler(fe_view v, wimp_w w)
 
 static char *get_ptr(urlopen_data *u, string_value sv)
 {
-    return sv.offset <= 236 ? (char *)u + sv.offset : sv.ptr;
+    return sv.offset == 0 ? 0 : sv.offset <= 236 ? (char *)u + sv.offset : sv.ptr;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -3814,6 +3286,9 @@ int frontend_message_remove_handler(frontend_message_handler fn, void *handle)
 
 wimp_w frontend_get_window_handle(fe_view v)
 {
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+    
     return v->w;
 }
 
@@ -3836,6 +3311,14 @@ static BOOL fe_send_message(wimp_eventstr *e)
 
 static void fe_doc_bounce(wimp_msgdataopen *dataopen)
 {
+    STBDBG(("fe_doc_bounce(): w %x\n", dataopen->w));
+    STBDBG(("fe_doc_bounce(): i %x\n", dataopen->i));
+    STBDBG(("fe_doc_bounce(): x %x\n", dataopen->x));
+    STBDBG(("fe_doc_bounce(): y %x\n", dataopen->y));
+    STBDBG(("fe_doc_bounce(): size %x\n", dataopen->size));
+    STBDBG(("fe_doc_bounce(): type %x\n", dataopen->type));
+    STBDBG(("fe_doc_bounce(): name '%s'\n", dataopen->name));
+
     if (frontend_can_handle_file_type(dataopen->type))
     {
         char buffer[256];
@@ -3971,11 +3454,13 @@ static void fe_url_bounce(wimp_msgstr *msg)
 		mm_free(s);
 	    }
 	}
+#if 0
 	/* check for internal helper    */
 	else if (strcasecomp(scheme, "mailto") == 0 && can_do_mailto())
 	{
 	    frontend_complain(fe_open_mailto(path));
 	}
+#endif
 	else
 	{    /* give error  */
 	    char tag[32], *s;
@@ -4154,9 +3639,8 @@ static void fe__handle_openurl(wimp_msgstr *msg, char *url, char *target, char *
 static void fe_handle_openurl(wimp_msgstr *msg)
 {
     urlopen_data *ud = (urlopen_data*) &msg->data;
-    char *scheme, *netloc, *path, *params, *query, *fragment;
+    char *scheme;
     char *url, *body_file, *target;
-    int i;
 
     body_file = target = NULL;
     if (ud->indirect.tag == 0)
@@ -4175,19 +3659,15 @@ static void fe_handle_openurl(wimp_msgstr *msg)
 
     STBDBG(( "stbfe: openurl url='%s' bfile='%s' target='%s'\n", url, strsafe(body_file), strsafe(target)));
 
-    url_parse(url, &scheme, &netloc, &path, &params, &query, &fragment);
+    url_parse(url, &scheme, NULL, NULL, NULL, NULL, NULL);
 
-    if (strcasecomp(scheme, "ncfrescointernal") == 0)
+    if (/* strcasecomp(scheme, "ncfrescointernal") == 0 || */
+	access_is_scheme_supported(scheme))
     {
 	fe__handle_openurl(msg, url, target, body_file);
     }
-    else for (i=0; access_schemes[i]; i++)
-    {
-        if (strcasecomp(scheme, access_schemes[i]) == 0)
-	    fe__handle_openurl(msg, url, target, body_file);
-    }
 
-    url_free_parts(scheme, netloc, path, params, query, fragment);
+    mm_free(scheme);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -4202,6 +3682,7 @@ static void re_read_config(int flags)
 	cookie_read_file(config_cookie_file);
 
     plugin_list_read_file();
+    hotlist_init();
 
     if (file_type("<"PROGRAM_NAME"$Config>") != -1)
     {
@@ -4287,15 +3768,16 @@ void fe_event_process(void)
 {
     wimp_eventstr e;
 
+#if 0
     if (fe_pending_url)
     {
-        fe_handle_pending_url(fe_pending_url, fe_pending_bfile);
+        fe_internal_url(fe_pending_url, fe_pending_bfile);
         mm_free(fe_pending_bfile);
         mm_free(fe_pending_url);
         fe_pending_bfile = NULL;
         fe_pending_url = NULL;
     }
-
+#endif
     if (fe_pending_key)
     {
         fe_view v = selected_view;
@@ -4355,9 +3837,14 @@ void fe_event_process(void)
 		{
 		    v->margin = margin_box;
 
-		    if (tb_is_status_showing())
-			v->margin.y1 -= tb_status_height() + STATUS_TOP_MARGIN;
-		
+		    if (use_toolbox && tb_is_status_showing())
+		    {
+			if (config_display_control_top)
+			    v->margin.y1 -= tb_status_height() + STATUS_TOP_MARGIN;
+			else
+			    v->margin.y0 += tb_status_height() + STATUS_TOP_MARGIN;
+		    }
+			
 		    feutils_resize_window(&v->w, &v->margin, &screen_box, &v->x_scroll_bar, &v->y_scroll_bar, 0, 0, v->scrolling, fe_bg_colour(v));
 
 		    if (v->displaying)
@@ -4368,7 +3855,7 @@ void fe_event_process(void)
 		if (v->w)
 		    fe_refresh_window(v->w, NULL);
 	    }
-	    else if (e.data.o.w == tb_status_w() && toolbar_pending_mode_change)
+	    else if (toolbar_pending_mode_change && e.data.o.w == tb_status_w())
 	    {
 		tb_status_hide(FALSE);
 		tb_status_show(FALSE);
@@ -4390,11 +3877,11 @@ void fe_event_process(void)
         case wimp_EKEY:
         {
             fe_view v = find_view(e.data.key.c.w);
-#if 0
-            STBDBG(( "key: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
-#endif
 
-            fe_key_handler(v, &e, use_toolbox, v->browser_mode);
+            STBDBG(( "key: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
+
+	    if (v || !tb_key_handler(&e.data.key.c, e.data.key.chcode))
+		fe_key_handler(v, &e, use_toolbox, v->browser_mode);
             break;
         }
 
@@ -4426,6 +3913,10 @@ void fe_event_process(void)
                         fe_refresh_window(v_top->w, NULL);
                 }
             }
+	    else
+	    {
+		tb_status_highlight(FALSE);
+	    }
             break;
         }
 
@@ -4512,7 +4003,8 @@ void fe_event_process(void)
         }
 
         case wimp_EACK:
-            if (!clipboard_eventhandler(&e, NULL) &&
+
+	    if (!clipboard_eventhandler(&e, NULL) &&
 		!fe_send_message(&e))
 	        switch (e.data.msg.hdr.action)
 	    {
@@ -4525,13 +4017,15 @@ void fe_event_process(void)
                     break;
 
 	    case wimp_MHELPREQUEST:
-		tb_status_set_message(status_type_HELP, NULL);
+		if (use_toolbox)
+		    tb_status_set_message(status_type_HELP, NULL);
 		break;
 	    }
 	    break;
 
         case 0x200: /* toolbox events   */
-            tb_events((int *)&e.data, selected_view ? selected_view : main_view);
+	    if (use_toolbox)
+		tb_events((int *)&e.data, selected_view ? selected_view : main_view);
             break;
     }
 }
@@ -4613,7 +4107,8 @@ static void fe_tidyup(void)
 	dbox_view = 0;
     }
 
-    tb_cleanup();
+    if (use_toolbox)
+	tb_cleanup();
     
     clipboard_Destroy();
 
@@ -4630,6 +4125,8 @@ static void fe_tidyup(void)
 
     auth_write_realms(config_auth_file, config_auth_file_crypt ? auth_passwd_UUCODE : auth_passwd_PLAIN);
     auth_dispose();
+
+    hotlist_shutdown();
     
     if (fe_stored_url)
 	rma_free(fe_stored_url);
@@ -4697,6 +4194,8 @@ static BOOL fe_initialise(void)
 
     signal_init();
 
+    dbginit();
+
     if (use_toolbox)
     {
         task_handle = tb_init(message_codes);
@@ -4714,8 +4213,6 @@ static BOOL fe_initialise(void)
         msgs_init();
     }
 
-    dbginit();
-
     /* Now bring up the flex system->.. */
     flex_init(program_name);
     heap_init(program_name);
@@ -4726,6 +4223,7 @@ static BOOL fe_initialise(void)
 
     /* Init our configuration */
     config_init();
+    fe_font_size_init();
 
     feutils_init_1();
     feutils_init_2();
@@ -4741,6 +4239,7 @@ static BOOL fe_initialise(void)
     image_init();
     auth_init();
     plugin_list_read_file();
+    hotlist_init();
     
     /* Check the licence */
     if (frontend_complain(licence_init()) != NULL)
@@ -4768,7 +4267,7 @@ static BOOL fe_initialise(void)
 
     {
         fe_frame_info info;
-        info.name = "__top";
+        info.name = TARGET_VERY_TOP;
         info.noresize = TRUE;
         info.scrolling = fe_scrolling_NO;
         *(wimp_box *)&info.margin = margin_box;
@@ -4821,6 +4320,8 @@ int main(int argc, char **argv)
     disable_stack_extension = 1;
 #endif
 
+    HierProf_ProfileAllFunctions();
+    
     setlocale(LC_ALL, "");
     setbuf(stderr, NULL);   /* no caching   */
 

@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "akbd.h"
 #include "alarm.h"
 #include "bbc.h"
 #include "colourtran.h"
@@ -62,15 +63,16 @@
 /* Some toolbox headers from OSLib for convenience*/
 
 struct toolbox_resource_file_object
-   {  int class_no;
-      int flags;
-      int version;
-      char name [12];
-      int size;
-      int header_size;
-      int body_size;
-/*      int object [UNKNOWN];*/
-   };
+{
+    int class_no;
+    int flags;
+    int version;
+    char name [12];
+    int size;
+    int header_size;
+    int body_size;
+/*  int object [UNKNOWN];*/
+};
 
 typedef char *toolbox_msg_reference;
 typedef char *toolbox_string_reference;
@@ -78,16 +80,17 @@ typedef void *toolbox_sprite_area_reference;
 typedef int *toolbox_object_offset;
 
 struct menu_object
-   {  int flags;
-      toolbox_msg_reference title;
-      int title_limit;
-      toolbox_msg_reference help;
-      int help_limit;
-      int show_action;
-      int hide_action;
-      int entry_count;
-/*      menu_entry_object entries [UNKNOWN];*/
-   };
+{
+    int flags;
+    toolbox_msg_reference title;
+    int title_limit;
+    toolbox_msg_reference help;
+    int help_limit;
+    int show_action;
+    int hide_action;
+    int entry_count;
+/*  menu_entry_object entries [UNKNOWN];*/
+};
 
 typedef struct
 {
@@ -96,87 +99,102 @@ typedef struct
 
 typedef struct
 {
-  int     size;
-  int     ref_no;
-  int     action_no;
-  int     flags;
-  union
-  {
-    char          bytes [212];
-    int           words [53];
-  } data;
+    int     size;
+    int     ref_no;
+    int     action_no;
+    int     flags;
+    union
+    {
+	char          bytes [212];
+	int           words [53];
+    } data;
 } toolbox_action;
 
 union window_icon_data
-   {  struct
-      {  toolbox_msg_reference text;
-         toolbox_string_reference validation;
-         int size;
-      }
-      indirected_text;
-   };
-
-struct window_window
-   {  wimp_box visible;
-      int xscroll;
-      int yscroll;
-      wimp_w next;
-      int flags;
-      char title_fg;
-      char title_bg;
-      char work_fg;
-      char work_bg;
-      char scroll_outer;
-      char scroll_inner;
-      char highlight_bg;
-      char reserved;
-      wimp_box extent;
-      int title_flags;
-      int work_flags;
-      toolbox_sprite_area_reference sprite_area;
-      short xmin;
-      short ymin;
-      union window_icon_data title_data;
-      int icon_count;
-   };
-
-struct window_object
-   {  int flags;
-      toolbox_msg_reference help_message;
-      int help_limit;
-      toolbox_string_reference sprite_name;
-      int pointer_limit;
-      os_coord hotspot;
-      toolbox_string_reference menu_name;
-      int shortcut_count;
-      toolbox_object_offset shortcuts;
-      int gadget_count;
-      toolbox_object_offset gadgets;
-      int default_focus;
-      int show_action;
-      int hide_action;
-      toolbox_string_reference toolbar_ibl;
-      toolbox_string_reference toolbar_itl;
-      toolbox_string_reference toolbar_ebl;
-      toolbox_string_reference toolbar_etl;
-      struct window_window window;
-/*      int data [UNKNOWN];*/
-   };
-
-struct menu_entry_object
-   {  int flags;
-      int cmp;
-      char *text;
-      int text_limit;
-      char *click_object_name;
-      char *sub_menu_object_name;
-      int sub_menu_action;
-      int click_action;
-      char *help;
-      int help_limit;
+{
+    struct
+    {
+	toolbox_msg_reference text;
+	toolbox_string_reference validation;
+	int size;
+    }
+    indirected_text;
 };
 
+struct window_window
+{
+    wimp_box visible;
+    int xscroll;
+    int yscroll;
+    wimp_w next;
+    int flags;
+    char title_fg;
+    char title_bg;
+    char work_fg;
+    char work_bg;
+    char scroll_outer;
+    char scroll_inner;
+    char highlight_bg;
+    char reserved;
+    wimp_box extent;
+    int title_flags;
+    int work_flags;
+    toolbox_sprite_area_reference sprite_area;
+    short xmin;
+    short ymin;
+    union window_icon_data title_data;
+    int icon_count;
+};
 
+struct window_object
+{
+    int flags;
+    toolbox_msg_reference help_message;
+    int help_limit;
+    toolbox_string_reference sprite_name;
+    int pointer_limit;
+    os_coord hotspot;
+    toolbox_string_reference menu_name;
+    int shortcut_count;
+    toolbox_object_offset shortcuts;
+    int gadget_count;
+    toolbox_object_offset gadgets;
+    int default_focus;
+    int show_action;
+    int hide_action;
+    toolbox_string_reference toolbar_ibl;
+    toolbox_string_reference toolbar_itl;
+    toolbox_string_reference toolbar_ebl;
+    toolbox_string_reference toolbar_etl;
+    struct window_window window;
+/*  int data [UNKNOWN];*/
+};
+
+struct menu_entry_object
+{
+    int flags;
+    int cmp;
+    char *text;
+    int text_limit;
+    char *click_object_name;
+    char *sub_menu_object_name;
+    int sub_menu_action;
+    int click_action;
+    char *help;
+    int help_limit;
+};
+
+struct gadget_object
+{   int flags;
+    int class_no;
+    wimp_box bbox;
+    int cmp;
+    toolbox_msg_reference help_message;
+    int help_limit;
+/*     int gadget [UNKNOWN]; */
+};
+
+/* --------------------------------------------------------------------------*/
 /* --------------------------------------------------------------------------*/
 
 typedef enum
@@ -186,6 +204,55 @@ typedef enum
     status_OPEN_SMALL
 } tb_status_state_t;
 
+/* --------------------------------------------------------------------------*/
+
+#define I_URL       	0x10
+/*#define I_URL_LABEL     0x14*/
+#define I_STATUS        0x12
+#define I_WORLD       	0x13
+#define I_LIGHTS_GREEN  0x100
+#define I_LIGHTS_YELLOW 0x101
+#define I_LIGHTS_RED    0x102
+#define I_SECURE        0x103
+#define I_DIRECTION	0x104
+
+/* --------------------------------------------------------------------------*/
+
+typedef struct tb_bar_info tb_bar_info;
+
+typedef struct tb_button_info tb_button_info;
+
+struct tb_bar_info
+{
+    tb_bar_info *prev, *next;
+
+    int object_handle;
+    wimp_w window_handle;
+    int num;
+    int height;
+
+    fe_view view;
+
+    int highlight;		/* currently highlighted button index */
+
+    tb_button_info *buttons;	/* the buttons visible in the window, sorted */
+    int n_buttons;
+};
+
+struct tb_button_info
+{
+    int x_pos;			/* position of left edge */
+    int cmp;			/* component number */
+};
+
+/* linked list of tool bars open. The one at the head of the list (*bar_list)
+ * is the one currently visible
+ */
+
+static tb_bar_info *bar_list = NULL;
+static void *tile_sprite = NULL;
+
+/* --------------------------------------------------------------------------*/
 /* --------------------------------------------------------------------------*/
 
 /* messagetrans and toolbox id blocks*/
@@ -200,12 +267,6 @@ static int tb_list[] =
 
 /* toolbox object handles*/
 static int menu_object[2] = { 0, 0 };
-static int status_object = 0;
-static int find_object = 0;
-static int print_object = 0;
-
-/* extents of these dboxs*/
-static wimp_box status_box, find_box, print_box;
 
 /* which sprite from the animation*/
 static int turn_ctr = 0;
@@ -268,7 +329,7 @@ static os_error *setfield(int obj, int cmp, const char *msg, int check)
     if (!e)
     {
         int read = 0, write = 0;
-        switch (type)
+        switch (type & 0xffff)
         {
             case 128:   /* action*/
                 write = 128;
@@ -285,6 +346,10 @@ static os_error *setfield(int obj, int cmp, const char *msg, int check)
             case 960:   /* button*/
                 write = 962;
                 read = 963;
+                break;
+            case 0x4014:   /* toolaction */
+                write = 0x140140;
+                read = 0x140141;
                 break;
         }
         if (write)
@@ -341,21 +406,23 @@ static int getval(int obj, int cmp)
         int read = 0;
         switch (type & 0xffff)
         {
-            case 192:   /* option button*/
-                read = 197;
-                break;
-            case 384:   /* radio button*/
-                read = 389;
-                break;
-            case 576:   /* slider button*/
-                read = 577;
-                break;
-            case 832:   /* numberrange button*/
-                read = 833;
-                break;
-            case 0x4014:    /* toolaction*/
-                read = 0x140147;
-                break;
+	case 192:   /* option button*/
+	    read = 197;
+	    break;
+	case 384:   /* radio button*/
+	    read = 389;
+	    break;
+	case 576:   /* slider button*/
+	    read = 577;
+	    break;
+	case 832:   /* numberrange button*/
+	    read = 833;
+	    break;
+	case 0x4014:    /* toolaction*/
+	    read = 0x140147;
+	    break;
+	case 512:		/* writeable, check focus */
+	    break;
         }
         e = _swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, obj, read, cmp, &val);
     }
@@ -376,23 +443,28 @@ static os_error *setval(int obj, int cmp, int val)
         int write = 0;
         switch (type & 0xffff)
         {
-            case 192:   /* option button*/
-                write = 196;
-                break;
-            case 384:   /* radio button*/
-                write = 388;
-                break;
-            case 576:   /* slider button*/
-                write = 576;
-                break;
-            case 832:   /* numberrange button*/
-                write = 832;
-                break;
-            case 0x4014:    /* toolaction*/
-                write = 0x140146;
-                break;
+	case 192:   /* option button*/
+	    write = 196;
+	    break;
+	case 384:   /* radio button*/
+	    write = 388;
+	    break;
+	case 576:   /* slider button*/
+	    write = 576;
+	    break;
+	case 832:   /* numberrange button*/
+	    write = 832;
+	    break;
+	case 0x4014:    /* toolaction*/
+	    write = 0x140146;
+	    break;
+	case 512:		/* writeable, does a set focus */
+	    if (val)
+		write = 69;
+	    break;
         }
-        e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, write, cmp, val);
+	if (write)
+	    e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, write, cmp, val);
     }
     return (os_error *)e;
 }
@@ -465,6 +537,32 @@ static void remove_title_bar(const char *name)
     MemCheck_RestoreChecking(checking);
 }
 
+static os_error *setfocus(int obj)
+{
+    wimp_caretstr cs;
+    cs.w = window_handle(obj);
+    cs.i = -1;
+    cs.height = -1;
+    cs.x = cs.y = 0;
+    return wimp_set_caret_pos(&cs);
+}
+
+static void tb_bar_set_highlight(tb_bar_info *tbi, int index, int on)
+{
+    STBDBG(("tb_bar_set_highlight(): bar %d index %d on %d obj %x, cmp %x\n", tbi ? tbi->num : -1, index, on, tbi->object_handle, tbi->buttons[index].cmp));
+    setstate(tbi->object_handle, tbi->buttons[index].cmp, on);
+}
+
+static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
+{
+    int i;
+    tb_button_info *but;
+    for (i = 0, but = tbi->buttons; i < tbi->n_buttons; i++, but++)
+	if (but->cmp == cmp)
+	    return i;
+    return -1;
+}
+
 /* --------------------------------------------------------------------------*/
 
 static void *sprite_load(const char *file_name)
@@ -476,9 +574,7 @@ static void *sprite_load(const char *file_name)
         if ((type & 1) && size > 0)
         {
             area = mm_malloc(size+4);
-#if 0
-            fprintf(stderr, "load %d bytes(+4) to %p\n", size, area);
-#endif
+
             area[0] = size+4;
             area[1] = 0;
             area[2] = 16;
@@ -488,12 +584,318 @@ static void *sprite_load(const char *file_name)
                 mm_free(area);
                 area = NULL;
             }
-#if 0
-            fprintf(stderr, "loaded\n");
-#endif
         }
     }
     return area;
+}
+
+/* Check for the tile in a global place and in our own directory for standalone releases */
+
+static void *sprite_load_tile(const char *suffix)
+{
+    char buffer[80];
+    void *sprite_area;
+
+    strcpy(buffer, "WindowManager:Tile");
+    strcat(buffer, suffix);
+
+    if ((sprite_area = sprite_load(buffer)) == NULL)
+    {
+	strcpy(buffer, PROGRAM_NAME":Tile");
+	strcat(buffer, suffix);
+	sprite_area = sprite_load(buffer);
+    }
+
+    return sprite_area;
+}
+
+/* --------------------------------------------------------------------------*/
+
+static int compare_info(const void *o1, const void *o2)
+{
+    const tb_button_info *b1 = (const tb_button_info *)o1;
+    const tb_button_info *b2 = (const tb_button_info *)o2;
+    return b1->x_pos - b2->x_pos;
+}
+
+static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_button_info **list, int *n_buttons)
+{
+    struct toolbox_resource_file_object *obj;
+    struct window_object *wobj;
+    int object, i;
+    struct gadget_object *gadget;
+    tb_button_info *info, *info_list;
+    
+    /* create the window, fixing up the sprite area */
+    frontend_fatal_error((os_error *)_swix(Toolbox_TemplateLookUp, _INR(0,1) | _OUT(0), 0, template_name, &obj));
+    if (obj == NULL)
+    {
+	*list = NULL;
+	return 0;
+    }
+    
+    wobj = (struct window_object *)obj->header_size;
+    if (new_sprite_area)
+	wobj->window.sprite_area = new_sprite_area;
+
+    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, template_name, &object));
+
+    STBDBG(("tb_bar_create(): %d buttons\n", wobj->gadget_count));
+
+    /* create a list of the gadgets in the window */
+    gadget = (struct gadget_object *)wobj->gadgets;
+    info = info_list = mm_calloc(sizeof(*info_list), wobj->gadget_count);
+    for (i = 0; i < wobj->gadget_count; i++, info++)
+    {
+	info->x_pos = gadget->bbox.x0;
+	info->cmp = gadget->cmp;
+	
+	gadget = (struct gadget_object *)((char *)gadget + (gadget->class_no >> 16));
+
+	STBDBG(("  x %d cmp %d\n", info->x_pos, info->cmp));
+    }
+
+    /* now sort the list into horizontal order */
+    qsort(info_list, wobj->gadget_count, sizeof(*info_list), compare_info);
+    
+    /* return pointer */
+    *list = info_list;
+    *n_buttons = wobj->gadget_count;
+    
+    return object;
+}
+
+/* --------------------------------------------------------------------------*/
+
+static void tb_bar_favs_exit_fn(void)
+{
+    fe_view v = fe_locate_view(TARGET_FAVS);
+
+    fe_submit_form(v, "favsd");
+
+    fe_dispose_view(v);
+}
+
+static void tb_bar_history_exit_fn(void)
+{
+    fe_dispose_view(fe_locate_view(TARGET_HISTORY));
+}
+
+static void tb_bar_details_exit_fn(void)
+{
+    fe_dispose_view(fe_locate_view(TARGET_INFO));
+}
+
+static void tb_bar_related_exit_fn(void)
+{
+    fe_dispose_view(fe_locate_view(TARGET_INFO));
+}
+
+static void tb_bar_details_entry_fn(fe_view v)
+{
+    frontend_open_url("ncfrescointernal:openpanel?name=info", v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+}
+
+static void tb_bar_related_entry_fn(fe_view v)
+{
+    frontend_open_url("ncfrescointernal:openpanel?name=related", v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+}
+
+/* --------------------------------------------------------------------------*/
+
+/* This must agree with the defs in fevents.h */
+
+typedef void (*tb_bar_entry_fn)(fe_view v);
+typedef void (*tb_bar_exit_fn)();
+
+typedef struct
+{
+    char *tv_name;
+    char *monitor_name;
+    tb_bar_entry_fn entry_fn;
+    tb_bar_exit_fn exit_fn;
+    int initial_component;
+} tb_bar_descriptor;
+
+static tb_bar_descriptor bar_names[] =
+{
+    { "mainT", NULL, 0, 0, I_DIRECTION },
+    { "favsT", NULL, 0, tb_bar_favs_exit_fn, I_DIRECTION },
+    { "extrasT", NULL, 0, 0, I_DIRECTION },
+    { "historyT", NULL, 0, tb_bar_history_exit_fn, I_DIRECTION },
+    { "printT", NULL, 0, 0, I_DIRECTION },
+    { "detailsT", NULL, tb_bar_details_entry_fn, tb_bar_details_exit_fn, I_DIRECTION },
+    { "relatedT", NULL, tb_bar_related_entry_fn, tb_bar_related_exit_fn, I_DIRECTION },
+    { "openurlT", NULL, 0, 0, I_DIRECTION },
+    { "statusWn", "statusW", 0, 0, fevent_MENU }
+};
+
+static tb_bar_info *tb_bar_init(int bar_num)
+{
+    tb_bar_info *tbi;
+    char *name;
+    wimp_box box;
+    int object_handle;
+    tb_button_info *button_list;
+    int n_buttons;
+
+    /* check for legal bar number */
+    if (bar_num < 0 || bar_num >= sizeof(bar_names)/sizeof(bar_names[0]))
+	return NULL;
+    
+    /* create window */
+    if (is_a_tv())	/* check for interlace bit set */
+    {
+	name = bar_names[bar_num].tv_name;
+    }
+    else
+    {
+	name = bar_names[bar_num].monitor_name;
+	if (!name)
+	    name = bar_names[bar_num].tv_name;
+    }
+
+    /* create object */
+    object_handle = tb_bar_create(name, tile_sprite, &button_list, &n_buttons);
+    
+    STBDBG(("tb_bar_init(): bar %d '%s' creates object %x, %d buttons\n", bar_num, name, object_handle, n_buttons));
+    
+    tbi = NULL;
+    if (object_handle)
+    {
+	tbi = mm_calloc(sizeof(*tbi), 1);
+
+	tbi->num = bar_num;
+	tbi->object_handle = object_handle;
+	tbi->window_handle = window_handle(object_handle);
+
+	tbi->buttons = button_list;
+	tbi->n_buttons = n_buttons;
+    
+	/* link in to list */
+	if (bar_list)
+	{
+	    tbi->next = bar_list;
+	    bar_list->prev = tbi;
+	}
+	bar_list = tbi;
+
+	_swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, tbi->object_handle, 16, &box);
+	tbi->height = box.y1 - box.y0;
+
+	/* extend one extent up or down to cover safe area */
+	if (config_display_control_top)
+	    box.y1 = 0x4000;
+	else
+	    box.y0 = -0x4000;
+	
+	box.x0 = -0x4000;
+	box.x1 = 0x4000;
+	_swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, tbi->object_handle, 15, &box);
+
+	/* move gadgets if necessary */
+	if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &box) == NULL)
+	    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - box.x1, 0);
+    }
+    
+    return tbi;
+}
+
+static void tb_bar_dispose(void)
+{
+    tb_bar_info *tbi = bar_list;
+
+    STBDBG(("tb_bar_dispose(): top is %p '%s'\n", tbi, tbi ? bar_names[tbi->num].tv_name : ""));
+
+    if (tbi == NULL)
+	return;
+    
+    if (bar_names[tbi->num].exit_fn)
+	bar_names[tbi->num].exit_fn();
+
+    if (tbi->view)
+	fe_dispose_view(tbi->view);
+
+    /* unlink top item */
+    bar_list = tbi->next;
+
+    /* remove object */
+    _swix(Toolbox_DeleteObject, _INR(0,1), 0, tbi->object_handle);
+    
+    mm_free(tbi->buttons);
+    mm_free(tbi);
+}
+
+/* --------------------------------------------------------------------------*/
+
+void tb_status_unstack(void)
+{
+    tb_status_state_t old_state = status_state;
+    
+    STBDBG(("tb_status_unstack(): in\n"));
+
+    tb_bar_dispose();
+
+    if (bar_list && old_state != status_CLOSED)
+    {
+	tb_status_show(old_state == status_OPEN_SMALL);
+	setfocus(bar_list->object_handle);
+    }
+
+    STBDBG(("tb_status_unstack(): out\n"));
+}
+
+void tb_status_new(fe_view v, int bar_num)
+{
+    tb_status_state_t old_state = status_state;
+    tb_bar_info *tbi = NULL;
+
+    STBDBG(("tb_status_new(): in\n"));
+    
+    if (bar_list && bar_list->num == bar_num)
+	return;
+
+    tb_status_hide(FALSE);
+
+    tbi = tb_bar_init(bar_num);
+
+    if (tbi)
+    {
+	tb_bar_descriptor *tbd = &bar_names[tbi->num];
+	if (tbd->entry_fn)
+	    tbd->entry_fn(v);
+
+	tbi->highlight = tb_bar_cmp_to_index(tbi, fevent_TOOLBAR_EXIT);
+	tb_bar_set_highlight(tbi, tbi->highlight, TRUE);
+    }
+    
+    if (bar_list && old_state != status_CLOSED)
+    {
+	tb_status_show(old_state == status_OPEN_SMALL);
+	setfocus(bar_list->object_handle);
+    }
+
+    STBDBG(("tb_status_new(): out\n"));
+}
+
+BOOL tb_status_highlight(BOOL gain)
+{
+    tb_bar_info *tbi = bar_list;
+    if (tbi)
+    {
+	if (gain)
+	{
+	    tbi->highlight = tb_bar_cmp_to_index(tbi, bar_names[tbi->num].initial_component);
+	    tb_bar_set_highlight(tbi, tbi->highlight, TRUE);
+	    setfocus(tbi->object_handle);
+	}
+	else
+	{
+	    tb_bar_set_highlight(tbi, tbi->highlight, FALSE);
+	}
+	return TRUE;
+    }
+    return FALSE;
 }
 
 /* --------------------------------------------------------------------------*/
@@ -507,6 +909,9 @@ static char *menu_list[] =
     "navigateM",
     "pageM",
     "viewM"
+#if DEBUG
+    ,"debugM"
+#endif
 };
 
 /* returns wimp task handle */
@@ -516,80 +921,29 @@ int tb_init(int *m_list)
     int i, t;
     MemCheck_checking checking = MemCheck_SetChecking(0, 0);
 
+    STBDBG(("tb_init():\n"));
+    
     frontend_fatal_error((os_error *)_swix(Toolbox_Initialise, _INR(0,6) | _OUT(1), 0, 310,
         m_list, tb_list, "<" PROGRAM_NAME "$Dir>", m_block, tb_block, &t));
 
+    /* register the message block with MemCheck for debugging */
     if (m_block[2])
     {
 	MemCheck_RegisterMiscBlock((void *)m_block[2], ((int *)m_block[2])[-1]);
 	MemCheck_SetBlockWritable((void *)m_block[2], 0);
     }
 
-    /* and create the main menu*/
-#if 0
-    remove_title_bar("mouseM");
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "mouseM", &menu_object[0]));
-
-    remove_title_bar("irM");
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "irM", &menu_object[1]));
-#else
+    /* create the menu tree */
     for (i = 0; i < sizeof(menu_list)/sizeof(menu_list[0]); i++)
         remove_title_bar(menu_list[i]);
 
     frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "mainM", &menu_object[0]));
-    menu_object[1] = menu_object[0];
+#if DEBUG
+    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "debugM", &menu_object[1]));
 #endif
 
-    {
-        struct toolbox_resource_file_object *obj;
-        struct window_object *wobj;
-        char *temp_name, *name;
-
-	if (is_a_tv())	/* check for interlace bit set */
-        {
-             temp_name = "statusWn";
-             name = "N";
-        }
-        else
-        {
-             temp_name = "statusW";
-             name = "V";
-        }
-
-        frontend_fatal_error((os_error *)_swix(Toolbox_TemplateLookUp, _INR(0,1) | _OUT(0), 0, temp_name, &obj));
-
-        wobj = (struct window_object *)obj->header_size;
-
-#if 0
-        fprintf(stderr, "write sprite ptr to %p\n", &wobj->window.sprite_area);
-#endif
-
-        /* Check for the tile in a global place and in our own directory for standalone releases */
-	{
-            char buffer[80];
-
-            strcpy(buffer, "WindowManager:Tile");
-            strcat(buffer, name);
-            if ((wobj->window.sprite_area = sprite_load(buffer)) == NULL)
-            {
-                strcpy(buffer, PROGRAM_NAME":Tile");
-                strcat(buffer, name);
-                wobj->window.sprite_area = sprite_load(buffer);
-            }
-        }
-
-        frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, temp_name, &status_object));
-    }
-
-    frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, status_object, 16, &status_box));
-
-#if 0
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "findW", &find_object));
-    frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, find_object, 16, &find_box));
-
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "printW", &print_object));
-    frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, print_object, 16, &print_box));
-#endif
+    tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V");
+    STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
 
     MemCheck_RestoreChecking(checking);
 
@@ -637,9 +991,22 @@ void tb_menu_show(fe_view v, int which_menu)
     else
     {
         os_coord coord;
-
         coord.x = text_safe_box.x0;
-        coord.y = text_safe_box.y1 + status_box.y0;
+
+	if (config_display_control_top)
+	{
+	    coord.y = text_safe_box.y1 - (bar_list ? bar_list->height : 0);
+	}
+	else
+	{
+	    coord.y = text_safe_box.y0;
+	    if (bar_list)
+	    {
+		int height;
+		_swix(Toolbox_ObjectMiscOp, _INR(0,2) | _OUT(0), 0, bar_list->object_handle, 0x16, &height);
+		coord.y += bar_list->height + height;
+	    }
+	}
 
         frontend_complain((os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 1, obj, 2, &coord, 0, -1)); /*tb_block[4], tb_block[5]));*/
         frontend_complain((os_error *)_swix(Toolbox_SetClientHandle, _INR(0,2), 0, obj, v));
@@ -667,6 +1034,7 @@ static void tb_menu_do_plugins(int obj)
 		   runtype,
 		   0,
 		   &runtype);
+
 	STBDBG(("tb plugin: readvarval returns runtype '%s' e %x '%s'\n",
 		strsafe(runtype), e ? e->errnum : 0, e ? e->errmess : ""));
 
@@ -699,7 +1067,7 @@ static void tb_menu_do_plugins(int obj)
 		    strcpy(nameval, FILETYPE_NAME_PREFIX);
 		    strcat(nameval, runtype + sizeof(PLUGIN_TYPE_PREFIX)-1);
 		    name = getenv(nameval);
-    STBDBG(("tb plugin: nameval '%s' name '%s'\n", nameval, strsafe(name)));
+		    STBDBG(("tb plugin: nameval '%s' name '%s'\n", nameval, strsafe(name)));
 		}
 		
 		if (!name)
@@ -915,35 +1283,24 @@ void tb_menu_refresh(fe_view v)
     _swix(Toolbox_ShowObject, _INR(0,5), 2, this_obj, 0, NULL, 0, -1);
 }
 
-
-/* --------------------------------------------------------------------------*/
-
 /* --------------------------------------------------------------------------*/
 
 /*
  * The status update function takes an fe_view to get its context from.
  */
 
-/*#define I_URL       	0x10*/
-/*#define I_URL_LABEL     0x14*/
-#define I_STATUS        0x12
-/*#define I_STATUS_LABEL  0x11*/
-#define I_WORLD        	0x13
-/*#define I_RING       	0x16*/
-#define I_LIGHTS_GREEN  0x100
-#define I_LIGHTS_YELLOW 0x101
-#define I_LIGHTS_RED    0x102
-#define I_SECURE        0x103
-
 void tb_status_update_fades(fe_view v)
 {
-    int obj = status_object;
-    gfade(obj, fevent_HISTORY_BACK, !fe_history_possible(v, history_PREV));
-    gfade(obj, fevent_HISTORY_FORWARD, !fe_history_possible(v, history_NEXT));
-    gfade(obj, fevent_RELOAD, !fe_reload_possible(v));
-    gfade(obj, fevent_HOTLIST_ADD, !fe_hotlist_add_possible(v));
-    gfade(obj, fevent_PRINT, !fe_print_possible(v));
-    gfade(obj, fevent_STOP_LOADING, !fe_abort_fetch_possible(v));
+    if (bar_list)
+    {
+	int obj = bar_list->object_handle;
+	gfade(obj, fevent_HISTORY_BACK, !fe_history_possible(v, history_PREV));
+	gfade(obj, fevent_HISTORY_FORWARD, !fe_history_possible(v, history_NEXT));
+	gfade(obj, fevent_RELOAD, !fe_reload_possible(v));
+	gfade(obj, fevent_HOTLIST_ADD, !fe_hotlist_add_possible(v));
+	gfade(obj, fevent_PRINT, !fe_print_possible(v));
+	gfade(obj, fevent_STOP_LOADING, !fe_abort_fetch_possible(v));
+    }
 }
 
 void tb_status_show(int small_only)
@@ -953,12 +1310,22 @@ void tb_status_show(int small_only)
 
     if (!small_only)
     {
-        o.box.x0 = 0;
-        o.box.y0 = text_safe_box.y1 + status_box.y0;
-        o.box.x1 = screen_box.x1;
-        o.box.y1 = screen_box.y1;
         o.x = - margin_box.x0;
         o.y = - margin_box.y1;
+
+        o.box.x0 = 0;
+        o.box.x1 = screen_box.x1;
+
+	if (config_display_control_top)
+	{
+	    o.box.y0 = text_safe_box.y1 - bar_list->height;
+	    o.box.y1 = screen_box.y1;
+	}
+	else
+	{
+	    o.box.y0 = screen_box.y0;
+	    o.box.y1 = text_safe_box.y0 + bar_list->height;
+	}
 
         open = TRUE;
         status_state = status_OPEN;
@@ -967,21 +1334,37 @@ void tb_status_show(int small_only)
     {
         if (status_state != status_OPEN)
         {
-	    wimp_box lbox;
-            frontend_complain((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 72, I_WORLD, &o.box));
-            frontend_complain((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 72, I_LIGHTS_GREEN, &lbox));
+	    if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &o.box) == NULL)
+	    {
+		wimp_box lbox;
+		if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_LIGHTS_GREEN, &lbox) != NULL)
+		    lbox = o.box;
+	    
+		o.box.x0 += text_safe_box.x0;
+		o.box.x1 += text_safe_box.x0;
 
-            o.box.x0 += text_safe_box.x0;
-            o.box.x1 += text_safe_box.x0;
-            o.box.y0  = lbox.y0 + text_safe_box.y1;
-            o.box.y1 += text_safe_box.y1;
+		o.x = - text_safe_box.x0 + o.box.x0;
 
-            o.x = - text_safe_box.x0 + o.box.x0;
-            o.y = - text_safe_box.y1 + o.box.y1;
+		if (config_display_control_top)
+		{
+		    o.box.y0  = lbox.y0 + text_safe_box.y1;
+		    o.box.y1 += text_safe_box.y1;
 
-            open = TRUE;
-            status_state = status_OPEN_SMALL;
-        }
+		    o.y = - text_safe_box.y1 + o.box.y1;
+		}
+		else
+		{
+		    o.box.y0 += text_safe_box.y0 + bar_list->height;
+		    o.box.y1 += text_safe_box.y0 + bar_list->height;
+
+		    o.y = - text_safe_box.y0 + o.box.y1;
+		}
+
+
+		open = TRUE;
+		status_state = status_OPEN_SMALL;
+	    }
+	}
     }
 
     STBDBG(("tb_status_show open %d state %d at %d,%d,%d,%d %d,%d\n", open, status_state, o.box.x0, o.box.y0, o.box.x1, o.box.y1, o.x, o.y));
@@ -989,15 +1372,17 @@ void tb_status_show(int small_only)
     if (open)
     {
         o.behind = (wimp_w)-1;
-        frontend_complain((os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 0, status_object, 1, &o.box, 0, 0));/* tb_block[4], tb_block[5]));*/
+        frontend_complain((os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 0, bar_list->object_handle, 1, &o.box, 0, 0));/* tb_block[4], tb_block[5]));*/
     }
 }
 
 void tb_status_hide(int only_if_small)
 {
+    STBDBG(("tb_status_hide(): only_if_small %d state %d\n", only_if_small, status_state));
+
     if ((status_state != status_CLOSED && !only_if_small) || status_state == status_OPEN_SMALL)
     {
-        frontend_complain((os_error *)_swix(Toolbox_HideObject, _INR(0,1), 0, status_object));
+        frontend_complain((os_error *)_swix(Toolbox_HideObject, _INR(0,1), 0, bar_list->object_handle));
         status_state = status_CLOSED;
     }
 }
@@ -1005,21 +1390,27 @@ void tb_status_hide(int only_if_small)
 int tb_is_status_showing(void)
 {
     return status_state == status_OPEN;
-/*
-    int flags = 0;
-    frontend_complain((os_error *)_swix(Toolbox_GetObjectInfo, _INR(0,1) | _OUT(0), 0, status_object, &flags));
-    return flags & 1;
- */
 }
 
 int tb_status_height(void)
 {
-    return - status_box.y0;
+    return bar_list ? bar_list->height : 0;
 }
 
 int tb_status_w(void)
 {
-    return window_handle(status_object);
+    return bar_list ? window_handle(bar_list->object_handle) : 0;
+}
+
+void tb_status_refresh_if_small(void)
+{
+    if (status_state == status_OPEN_SMALL)
+    {
+	wimp_box box;
+	box.x0 = box.y0 = -0x4000;
+	box.x1 = box.y1 =  0x4000;
+	_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, bar_list->object_handle, 0x11, &box);
+    }
 }
 
 #if 0
@@ -1031,10 +1422,10 @@ os_error *tb_status_set_url(const char *url)
     strlencat(buf, (char *)url, sizeof(buf));
 
     /* set help on status and background to be the URL*/
-    sethelp(status_object, I_STATUS, buf);
-    sethelp(status_object, -1, buf);
+    sethelp(bar_list->object_handle, I_STATUS, buf);
+    sethelp(bar_list->object_handle, -1, buf);
 
-/*    return setfield(status_object, I_URL, url, FALSE);*/
+/*    return setfield(bar_list->object_handle, I_URL, url, FALSE);*/
     return NULL;
 }
 #endif
@@ -1053,12 +1444,13 @@ os_error *tb_status_set_messagef(int type, const char *msg, ...)
 
 static os_error *tb_status_force_redraw(void)
 {
-    _kernel_oserror *e;
-    wimp_box box;
-
-    e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 72, I_STATUS, &box);
-    if (!e) e = _swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, status_object, 0x11, &box);
-
+    _kernel_oserror *e = NULL;
+    if (bar_list && config_display_control_status)
+    {
+	wimp_box box;
+	e = _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_STATUS, &box);
+	if (!e) e = _swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, bar_list->object_handle, 0x11, &box);
+    }
     return (os_error *)e;
 }
 
@@ -1102,7 +1494,7 @@ os_error *tb_status_set_message(int type, const char *msg)
         status_current_type = type;
         e = tb_status_force_redraw();
 
-    STBDBG(("stbtb: msg %d '%s'\n", type, strsafe(s)));
+	STBDBG(("stbtb: msg %d '%s'\n", type, strsafe(s)));
     }
 
     return e;
@@ -1116,7 +1508,7 @@ int tb_status_check_message(wimp_mousestr *mp)
 
     _swix(Window_WimpToToolbox, _INR(0,2)|_OUTR(0,1), 0, mp->w, mp->i, &obj, &cmp);
 
-    if (obj != status_object)
+    if (obj != bar_list->object_handle)
         return FALSE;
 
     switch (cmp)
@@ -1168,13 +1560,17 @@ int tb_status_check_message(wimp_mousestr *mp)
 
 void tb_status_rotate(void)
 {
-    char sprite_name[13];
+    if (bar_list)
+    {
+	char sprite_name[13];
 
-    if (++turn_ctr == config_animation_frames)
-	turn_ctr = 0;
+	if (++turn_ctr == config_animation_frames)
+	    turn_ctr = 0;
 
-    sprintf(sprite_name, "%s%02d", config_animation_name, turn_ctr);
-    (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 962, I_WORLD, sprite_name);
+	sprintf(sprite_name, "%s%02d", config_animation_name, turn_ctr);
+	setfield(bar_list->object_handle, I_WORLD, sprite_name, FALSE);
+/* 	(os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 962, I_WORLD, sprite_name); */
+    }
 }
 
 void tb_status_rotate_reset(void)
@@ -1193,24 +1589,14 @@ void tb_status_rotate_reset(void)
 
 void tb_status_resize(int xdiff, int ydiff)
 {
-    if (xdiff || ydiff)
+    if (bar_list && (xdiff || ydiff))
     {
-#if 0
-        movegadget(status_object, fevent_SCROLL_PAGE_UP, xdiff, xdiff);
-        movegadget(status_object, fevent_SCROLL_PAGE_DOWN, xdiff, xdiff);
-        movegadget(status_object, fevent_SCROLL_LEFT, xdiff, xdiff);
-        movegadget(status_object, fevent_SCROLL_RIGHT, xdiff, xdiff);
-#endif
-        movegadget(status_object, I_WORLD, xdiff, xdiff);
-/*      movegadget(status_object, I_RING, xdiff, xdiff);*/
-/*      movegadget(status_object, fevent_STOP_LOADING, xdiff, xdiff);*/
-/*      movegadget(status_object, fevent_PRINT, xdiff, xdiff);*/
-/*      movegadget(status_object, I_URL, 0, xdiff);*/
-        movegadget(status_object, I_STATUS, 0, xdiff);
-        movegadget(status_object, I_LIGHTS_GREEN, xdiff, xdiff);
-        movegadget(status_object, I_LIGHTS_YELLOW, xdiff, xdiff);
-        movegadget(status_object, I_LIGHTS_RED, xdiff, xdiff);
-        movegadget(status_object, I_SECURE, xdiff, xdiff);
+        movegadget(bar_list->object_handle, I_WORLD, xdiff, xdiff);
+        movegadget(bar_list->object_handle, I_STATUS, 0, xdiff);
+        movegadget(bar_list->object_handle, I_LIGHTS_GREEN, xdiff, xdiff);
+        movegadget(bar_list->object_handle, I_LIGHTS_YELLOW, xdiff, xdiff);
+        movegadget(bar_list->object_handle, I_LIGHTS_RED, xdiff, xdiff);
+        movegadget(bar_list->object_handle, I_SECURE, xdiff, xdiff);
     }
 }
 
@@ -1218,15 +1604,14 @@ void tb_status_resize(int xdiff, int ydiff)
 
 int tb_status_redraw(wimp_redrawstr *r)
 {
-#if 0
-    fprintf(stderr, "stbtb: redraw %x status %x\n", r->w, tb_status_w());
-#endif
-    if (r->w == tb_status_w())
+    STBDBGN(("stbtb: redraw %x status %x\n", r->w, tb_status_w()));
+
+    if (config_display_control_status && r->w == tb_status_w())
     {
         wimp_box box, overlap;
         char *msg;
 
-    STBDBG(("stbtb: redraw type %d\n", status_current_type));
+	STBDBG(("stbtb: redraw type %d\n", status_current_type));
 
         /* get the status message to display */
 	msg = status_messages[status_current_type];
@@ -1238,7 +1623,7 @@ int tb_status_redraw(wimp_redrawstr *r)
 	status_changed[status_current_type] = FALSE;
 
         /* get status bounding box */
-        _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 72, I_STATUS, &box);
+        _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_STATUS, &box);
         coords_box_toscreen(&box, (coords_cvtstr *)&r->box);
 
         STBDBG(("stbtb: redraw g %d,%d,%d,%d box %d,%d,%d,%d\n",
@@ -1308,7 +1693,8 @@ int tb_status_redraw(wimp_redrawstr *r)
 
 void tb_status_set_secure(int on)
 {
-    setstate(status_object, I_SECURE, on);
+    if (bar_list)
+	setstate(bar_list->object_handle, I_SECURE, on);
 }
 
 static int light_state = light_state_OFF;
@@ -1331,14 +1717,11 @@ void tb_status_set_lights(int state)
         I_LIGHTS_YELLOW,
         I_LIGHTS_RED
     };
-#if 0
-    if (state > light_state || (state == light_state_OFF && state != light_state))	/* Try this, rather than !=, to see how it goes */
-#else
-    if (state != light_state)
-#endif
+
+    if (bar_list && state != light_state)
     {
-        setstate(status_object, components[light_state], 0);
-        setstate(status_object, components[state], 1);
+        setstate(bar_list->object_handle, components[light_state], 0);
+        setstate(bar_list->object_handle, components[state], 1);
 
         light_state = state;
 
@@ -1349,9 +1732,14 @@ void tb_status_set_lights(int state)
 
 void tb_status_init(void)
 {
-    wimp_box box;
-    frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, status_object, 72, I_WORLD, &box));
-    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - box.x1, 0);
+    tb_bar_init(config_display_control_initial);
+
+/*     if (bar_list) */
+/*     { */
+/* 	wimp_box box; */
+/* 	frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &box)); */
+/* 	tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - box.x1, 0); */
+/*     } */
 }
 
 /* --------------------------------------------------------------------------*/
@@ -1361,22 +1749,29 @@ void tb_status_init(void)
 
 void tb_open_url(void)
 {
-    return;
-/*
-    char *url = getwriteable(status_object, I_URL);
-    char *url1;
+    if (bar_list)
+    {
+	char *url, *url1;
 
-    url1 = check_url_prefix(url);
-    mm_free(url);
+	url = getwriteable(bar_list->object_handle, I_URL);
 
-    frontend_complain(frontend_open_url(url1, NULL, "__top", NULL, 0));
+	url1 = check_url_prefix(url);
+	mm_free(url);
 
-    mm_free(url1);
- */
+	frontend_complain(frontend_open_url(url1, NULL, TARGET_VERY_TOP, NULL, 0));
+
+	mm_free(url1);
+    }
+}
+
+void tb_open_url_and_close(void)
+{
+    tb_open_url();
 }
 
 /* --------------------------------------------------------------------------*/
 
+#if 0
 static os_error *tb_show_centered(int obj, const wimp_box *bbox)
 {
     os_coord coord;
@@ -1386,8 +1781,22 @@ static os_error *tb_show_centered(int obj, const wimp_box *bbox)
 }
 
 static wimp_caretstr saved_caret;
+#endif
+
+#if 0
+static int find_object = 0;
+static int print_object = 0;
+
+    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "findW", &find_object));
+    frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, find_object, 16, &find_box));
+
+    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "printW", &print_object));
+    frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, print_object, 16, &print_box));
+#endif
 
 /* --------------------------------------------------------------------------*/
+
+#if 0
 
 #define I_FIND_TEXT         0x0
 #define I_FIND_BACKWARDS    0x4
@@ -1435,8 +1844,10 @@ int tb_find_redraw(wimp_redrawstr *r)
     return FALSE;
 }
 
+#endif
 /* --------------------------------------------------------------------------*/
 
+#if 0
 #define I_PRINT_OPTIONS_TYPE        0
 #define I_PRINT_OPTIONS_COPIES      1
 #define I_PRINT_OPTIONS_SCALE       2
@@ -1501,8 +1912,36 @@ int tb_print_redraw(wimp_redrawstr *r)
     }
     return FALSE;
 }
+#endif
 
 /* --------------------------------------------------------------------------*/
+
+
+static void movehighlight(tb_bar_info *tbi, int direction)
+{
+    int next;
+
+    if (tbi == NULL)
+	return;
+
+    next = tbi->highlight + direction;
+
+    if (next < 0)
+	next = 0;
+    if (next > tbi->n_buttons-1)
+	next = tbi->n_buttons-1;
+    
+    STBDBG(("movehighlight(): dir %d from %d to %d\n", direction, tbi->highlight, next));
+
+    if (tbi->highlight != next)
+    {
+	if (tbi->highlight != -1)
+	    tb_bar_set_highlight(tbi, tbi->highlight, FALSE);
+
+	tbi->highlight = next;
+	tb_bar_set_highlight(tbi, tbi->highlight, TRUE);
+    }
+}
 
 void tb_events(int *event, fe_view v)
 {
@@ -1514,7 +1953,8 @@ void tb_events(int *event, fe_view v)
             frontend_complain((os_error *)e->data.bytes);
             break;
 
-        case 0xf20:     /* find activated*/
+#if 0
+    case 0xf20:     /* find activated*/
             tb_find();
             break;
 
@@ -1529,7 +1969,7 @@ void tb_events(int *event, fe_view v)
         case 0xf23:     /* print close*/
             tb_print_closed();
             break;
-
+#endif
         default:
             if ((e->action_no & 0xff0) == 0xf00)
                 mshow_handler(e->action_no, tb_block);
@@ -1537,6 +1977,49 @@ void tb_events(int *event, fe_view v)
                 fevent_handler(e->action_no, v);
             break;
     }
+}
+
+/* --------------------------------------------------------------------------*/
+
+BOOL tb_key_handler(wimp_caretstr *cs, int key)
+{
+    tb_bar_info *tbi = bar_list;
+
+    STBDBG(("tb_key_handler(): w %x key %d\n", cs->w, key));
+
+    if (tbi && tbi->window_handle == cs->w)
+    {
+	switch (key)
+	{
+	case akbd_LeftK:
+	    /* move to previous icon */
+	    movehighlight(tbi, -1);
+	    break;
+
+	case akbd_RightK:
+	    /* move to next icon */
+	    movehighlight(tbi, +1);
+	    break;
+
+	case akbd_UpK:
+	    /* transfer focus back to main window */
+	    setstate(tbi->object_handle, tbi->buttons[tbi->highlight].cmp, 0);
+	    fe_move_highlight(selected_view ? selected_view : main_view, be_link_VERT | be_link_BACK);
+	    break;
+
+	case akbd_DownK:
+	    pointer_mode = pointermode_ON;
+	    fevent_handler(fevent_SCROLL_PAGE_DOWN, NULL);
+	    pointer_mode = pointermode_OFF;
+	    break;
+
+	case 13:
+	    fevent_handler(tbi->buttons[tbi->highlight].cmp, NULL);
+	    break;
+	}
+	return TRUE;
+    }
+    return FALSE;
 }
 
 /* --------------------------------------------------------------------------*/

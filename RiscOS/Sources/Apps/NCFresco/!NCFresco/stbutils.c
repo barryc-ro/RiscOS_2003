@@ -935,6 +935,7 @@ os_error *fe_file_to_url(char *file, char **url_out)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+#if 0
 void fe_open_temp_file(fe_view v, fe_temp_file_builder fn, void *handle, const char *name)
 {
     FILE *f;
@@ -984,6 +985,7 @@ void fe_open_temp_file(fe_view v, fe_temp_file_builder fn, void *handle, const c
 
     mm_free(s);
 }
+#endif
 
 /* ----------------------------------------------------------------------------------------------------- */
 

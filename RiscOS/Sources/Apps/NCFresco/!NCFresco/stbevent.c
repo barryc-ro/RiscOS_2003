@@ -13,6 +13,7 @@
 #include "hotlist.h"
 #include "images.h"
 #include "interface.h"
+#include "version.h"
 
 #include "fevents.h"
 
@@ -63,6 +64,41 @@ static void global_event_handler(int event)
 
     case fevent_GLOBAL_OPEN_MEM_DUMP:
 	fe_show_mem_dump();
+	break;
+
+    case fevent_GLOBAL_CYCLE_JPEG:
+	config_display_jpeg = (config_display_jpeg + 1) & 3;
+	if (config_display_jpeg < 2)
+	    fe_refresh_screen(NULL);
+	else
+	    fe_reload(main_view);
+	break;
+
+    case fevent_GLOBAL_TOGGLE_FORCE_FIT:
+	break;
+
+    case fevent_GLOBAL_ICONISE:
+	fe_iconise(TRUE);
+	break;
+
+    case fevent_GLOBAL_DEICONISE:
+	fe_iconise(FALSE);
+	break;
+
+	
+    case fevent_GLOBAL_FONT_INC:
+	fe_font_size_set(+1, FALSE);
+	break;
+	
+    case fevent_GLOBAL_FONT_DEC:
+	fe_font_size_set(-1, FALSE);
+	break;
+	
+    default:
+	if ((event &~ fevent_GLOBAL_FONT_MASK) == fevent_GLOBAL_FONT_SET)
+	{
+	    fe_font_size_set(event & fevent_GLOBAL_FONT_MASK, TRUE);
+	}
 	break;
     }
 }
@@ -115,6 +151,14 @@ static void history_event_handler(int event, fe_view v)
         case fevent_HISTORY_FORWARD_ALL:
             frontend_complain(fe_history_move(v, history_LAST));
             break;
+
+    case fevent_HISTORY_SHOW_ALPHA:
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyalpha", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
+	break;
+
+    case fevent_HISTORY_SHOW_RECENT:
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyrecent", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
+	break;
     }
 }
 
@@ -122,24 +166,28 @@ static void hotlist_event_handler(int event, fe_view v)
 {
     switch (event)
     {
-        case fevent_HOTLIST_SHOW:
-            frontend_complain(fe_hotlist_open(v));
-            break;
+    case fevent_HOTLIST_SHOW:
+	frontend_complain(fe_hotlist_open(v));
+	break;
 
-        case fevent_HOTLIST_SHOW_WITH_URL:
-            frontend_complain(fe_hotlist_and_url_open(v));
-            break;
+    case fevent_HOTLIST_SHOW_WITH_URL:
+	frontend_complain(fe_hotlist_and_url_open(v));
+	break;
 
-        case fevent_HOTLIST_ADD:
-            frontend_complain(fe_hotlist_add(v));
-            break;
+    case fevent_HOTLIST_ADD:
+	frontend_complain(fe_hotlist_add(v));
+	break;
 
-        case fevent_HOTLIST_REMOVE:
-            frontend_complain(fe_hotlist_remove(v));
-            break;
+    case fevent_HOTLIST_REMOVE:
+	frontend_complain(fe_hotlist_remove(v));
+	break;
 
-        case fevent_HOTLIST_WIPE:
-            break;
+    case fevent_HOTLIST_WIPE:
+	break;
+
+    case fevent_HOTLIST_SHOW_DELETE:
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=favsdelete", v, TARGET_FAVS, NULL, fe_open_url_NO_CACHE));
+	break;
     }
 }
 
@@ -187,7 +235,7 @@ static void misc_event_handler(int event, fe_view v)
             fe_find_again(v);
             break;
 
-        case fevent_MENU_KBD:
+        case fevent_MENU_DEBUG:
             tb_menu_show(v, 1);
             break;
 
@@ -198,7 +246,30 @@ static void misc_event_handler(int event, fe_view v)
        case fevent_OPEN_URL:
             frontend_complain(fe_url_open(v));
             break;
-     }
+
+    case fevent_FORCE_FIT:
+	fe_force_fit(v, TRUE);
+	break;
+
+    case fevent_SEARCH_PAGE:
+	frontend_complain(fe_search_page(v));
+	break;
+    case fevent_OFFLINE_PAGE:
+	frontend_complain(fe_offline_page(v));
+	break;
+
+    case fevent_INFO_PAGE:
+	frontend_complain(fe_open_version(v));
+	break;
+
+    case fevent_SEND_URL:
+	frontend_complain(frontend_open_url("ncfrescointernal:sendurl", v, NULL, NULL, fe_open_url_NO_CACHE));
+	break;
+
+    case fevent_OPEN_WRITEABLE:
+	tb_open_url_and_close();
+	break;
+    }
 }
 
 static void clipboard_event_handler(int event, fe_view v)
@@ -337,6 +408,9 @@ static void open_event_handler(int event, fe_view v)
         case fevent_OPEN_DISPLAY_OPTIONS:
             frontend_complain(fe_display_options_open(v));
             break;
+
+        case fevent_OPEN_KEYBOARD:
+            break;
     }
 }
 
@@ -345,66 +419,100 @@ static void status_event_handler(int event, fe_view v)
     frontend_complain(fe_status_info_level(v, event - fevent_STATUS_INFO_LEVEL));
 }
 
+static void toolbar_event_handler(int event, fe_view v)
+{
+    if (event == fevent_TOOLBAR_EXIT)
+	frontend_complain(fe_status_unstack(v));
+    else
+	frontend_complain(fe_status_open_toolbar(v, event - fevent_TOOLBAR_MAIN));
+}
+
+static void url_event_handler(int event, fe_view v)
+{
+    char buf[32], *s;
+
+    sprintf(buf, PROGRAM_NAME"$EventURL%02x", event & fevent_URLS_MASK);
+
+    s = getenv(buf);
+    if (s && s[0])
+	frontend_complain(frontend_open_url(s, v, NULL, NULL, 0));
+}
+
 void fevent_handler(int event, fe_view v)
 {
     switch (event & fevent_CLASS_MASK)
     {
-        case fevent_CLASS_GLOBAL:
-            global_event_handler(event);
-            break;
+    case fevent_CLASS_GLOBAL:
+	global_event_handler(event);
+	break;
 
-        case fevent_CLASS_WINDOW:
-            event &= ~fevent_WINDOW;
-            v = fe_find_top(v);
-            /* fall-through */
+    case fevent_CLASS_WINDOW:
+	event &= ~fevent_WINDOW;
+	v = fe_find_top(v);
+	/* fall-through */
 
-        case fevent_CLASS_FRAME:
+    case fevent_CLASS_FRAME:
+	switch (event & fevent_FRAME_CLASS_MASK)
+	{
+	case fevent_FRAME_CLASS_ACTIONS:
             switch (event & fevent_SUB_CLASS_MASK)
             {
-                case fevent_SUB_CLASS_TOGGLE:
-                    toggle_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_HISTORY:
-                    history_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_HOTLIST:
-                    hotlist_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_MISC:
-                    misc_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_CLIPBOARD:
-                    clipboard_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_SCROLL:
-                    scroll_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_HIGHLIGHT:
-                    highlight_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_FOCUS:
-                    focus_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_OPEN:
-                    open_event_handler(event, v);
-                    break;
-                case fevent_SUB_CLASS_STATUS:
-                    status_event_handler(event, v);
-                    break;
+	    case fevent_SUB_CLASS_TOGGLE:
+		toggle_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_HISTORY:
+		history_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_HOTLIST:
+		hotlist_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_MISC:
+	    case fevent_SUB_CLASS_MISC2:
+		misc_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_CLIPBOARD:
+		clipboard_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_SCROLL:
+		scroll_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_HIGHLIGHT:
+		highlight_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_FOCUS:
+		focus_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_OPEN:
+		open_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_STATUS:
+		status_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_TOOLBAR:
+		toolbar_event_handler(event, v);
+		break;
             }
-            break;
+	    break;
 
-        case fevent_CLASS_MENU:
-            fe_menu_event_handler(event);
-            break;
+	case fevent_FRAME_CLASS_URLS:
+	    url_event_handler(event, v);
+	    break;
+	}
+	if (event & fevent_UNSTACK_TOOLBAR)
+	    tb_status_unstack();
+	break;
 
-        case fevent_CLASS_MAP:
-            fe_map_event_handler(event, v);
-            break;
+    case fevent_CLASS_MENU:
+	fe_menu_event_handler(event);
+	break;
+
+    case fevent_CLASS_MAP:
+	fe_map_event_handler(event, v);
+	break;
 
     case fevent_CLASS_PLUGIN:
-            fe_plugin_event_handler(event, v);
-            break;
+	fe_plugin_event_handler(event, v);
+	break;
     }
 }
 

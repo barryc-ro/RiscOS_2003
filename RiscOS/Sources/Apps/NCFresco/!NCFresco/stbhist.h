@@ -14,5 +14,9 @@ extern os_error *fe_history_show(fe_view v);
 extern int fe_history_possible(fe_view v, int a);
 extern int fe_test_history(fe_view v, const char *url);
 extern void fe_global_history_dispose(void);
+extern os_error *fe_global_write_list(FILE *f);
+extern char *fe_history_get_url(fe_view v, int direction);
+extern os_error *fe_history_write_list(FILE *f, void *handle);
+extern os_error *fe_history_write_combined_list(FILE *f, void *handle);
 
 /* stbhist.c */

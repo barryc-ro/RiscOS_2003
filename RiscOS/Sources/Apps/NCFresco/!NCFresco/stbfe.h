@@ -23,6 +23,8 @@ extern fe_view dragging_view;
 extern fe_view selected_view;
 extern fe_view resizing_view;
 
+extern int last_click_x, last_click_y;
+
 extern int fe_copy_image_possible(fe_view v);
 extern void fe_copy_image_to_clipboard(fe_view v);
 
@@ -66,6 +68,8 @@ extern wimp_w fe_status_window_handle(void);
 extern int fe_status_height_top(fe_view v);
 extern os_error *fe_status_info_level(fe_view v, int level);
 extern int fe_status_open(fe_view v);
+extern os_error *fe_status_unstack(fe_view v);
+extern os_error *fe_status_open_toolbar(fe_view v, int bar);
 
 extern void fe_show_mem_dump(void);
 
@@ -100,7 +104,7 @@ extern BOOL fe_writeable_handle_keys(fe_view v, int key);
 extern void fe_resize_abort(void);
 
 extern void fe_dbox_cancel(void);
-extern fe_view fe_dbox_view(void);
+extern fe_view fe_dbox_view(const char *name);
 extern void fe_dbox_dispose(void);
 
 extern os_error *fe_paste(fe_view v);
@@ -110,6 +114,22 @@ extern int fe_bg_colour(fe_view v);
 extern int fe_check_download_finished(fe_view v);
 
 extern void fe_plugin_event_handler(int event, fe_view v);
+
+extern void fe_font_size_set(int value, BOOL absolute);
+extern BOOL fe_font_size_set_possible(int value, BOOL absolute);
+
+extern void fe_force_fit(fe_view v, BOOL force);
+
+extern void fe_iconise(BOOL iconise);
+extern fe_view fe_locate_view(const char *name);
+extern void fe_submit_form(fe_view v, const char *id);
+
+/* From internal.h */
+
+extern int print__copies, print__ul;
+extern fe_passwd fe_current_passwd;
+
+extern void fe_passwd_abort(void);
 
 /* from stbredraw.c*/
 
@@ -130,6 +150,7 @@ extern void fe_map_event_handler(int event, fe_view v);
 
 /* from stbkeys.c*/
 
+#define fe_browser_mode_UNSET           (-1)
 #define fe_browser_mode_WEB             0
 #define fe_browser_mode_DESKTOP         1
 #define fe_browser_mode_DBOX            2
@@ -138,6 +159,16 @@ extern void fe_map_event_handler(int event, fe_view v);
 #define fe_browser_mode_APP		5
 
 extern void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_mode);
+
+/* from ncreg.c */
+
+extern void ncreg_decode(void);
+extern char *ncreg_enquiry(const char *tag);
+
+/* from stbopen.c */
+
+extern os_error *fe_search_page(fe_view v);
+extern os_error *fe_offline_page(fe_view v);
 
 /* stbfe.h*/
 

@@ -25,7 +25,7 @@
 
 /* ------------------------------------------------------------------------------------------- */
 
-static fe_view find_target(fe_view start, const char *target)
+fe_view fe_find_target(fe_view start, const char *target)
 {
     fe_view v;
     for (v = start; v; v = v->next)
@@ -35,7 +35,7 @@ static fe_view find_target(fe_view start, const char *target)
 
         if (v->children)
         {
-            fe_view vv = find_target(v->children, target);
+            fe_view vv = fe_find_target(v->children, target);
             if (vv)
             {
                 v = vv;
@@ -164,14 +164,14 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
         }
         else
         {
-            parent = find_target(fe_find_top(parent), target);
+            parent = fe_find_target(fe_find_top(parent), target);
         }
     }
 
-    /* Special help target opens up a transient window */
-    if (target && strcasecomp(target, TARGET_HELP) == 0)
+    /* Special targets open up a transient window */
+    if (target && parent == NULL && strncmp(target, "__", 2) == 0 && strcasecomp(target, "__top") != 0)
     {
-	parent = fe_dbox_view();
+	parent = fe_dbox_view(target);
 	open_transient = TRUE;
     }
     else
@@ -274,17 +274,18 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     parent->from_frame = flags & fe_open_url_FROM_FRAME ? 1 : 0;
     
+    parent->threaded++;
+
     ep = backend_open_url(parent, &parent->fetching, url, bfile, referer, oflags);
-    /* set the margin for a frame
-    if (!ep && parent->fetching && parent->parent)
-	backend_set_margin(parent->fetching, &parent->backend_margin);
-	*/
-/*    if (!ep) frontend_view_status(parent, sb_status_URL, url);*/
 
     if (ep && open_transient)
-	fe_dbox_dispose();
-    else
+	fe_dispose_view(parent);
+    else 
 	fe_check_download_finished(parent);
+
+    parent->threaded--;
+    if (parent->delete_pending)
+	fe_dispose_view(parent);
     
     return ep;
 }
@@ -412,7 +413,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 
     view->box = *extent;
 
-    view->browser_mode = fe_browser_mode_WEB;
+    view->browser_mode = parent ? fe_browser_mode_WEB : fe_browser_mode_UNSET;
 
     visible = *extent;
 
@@ -435,8 +436,8 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
     view->name = strdup(ip->name);
     view->parent = parent;
 
-    /* add to end of chain in parent*/
-    /* if this changes then frontend_frame_layout(refresh) may have to change*/
+    /* add to end of chain in parent */
+    /* if this changes then frontend_frame_layout(refresh) may have to change */
     if (parent)
     {
         view->prev = parent->children_last;
@@ -478,6 +479,22 @@ void fe_dispose_view(fe_view v)
     if (!v)
         return;
 
+    if (v->threaded)
+    {
+	v->delete_pending++;
+	return;
+    }
+    else if (--v->delete_pending > 0)
+	return;
+
+#if 1
+    /* unlink from chain before deleting */
+    if (v->prev)
+	v->prev->next = v->next;
+    if (v->next)
+	v->next->prev = v->prev;
+#endif
+    
     wimp_get_caret_pos(&cs);
     had_caret = cs.w == v->w;
 
@@ -519,6 +536,27 @@ void fe_dispose_view(fe_view v)
 
     v->magic = 0;
     mm_free(v);
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+static BOOL iconised = FALSE;
+
+void fe_iconise(BOOL iconise)
+{
+    fe_view v = main_view;
+
+    if (iconise != iconised)
+    {
+	if (iconised)
+	{
+	}
+	else
+	{
+	}
+
+	iconised = iconise;
+    }
 }
 
 /* ------------------------------------------------------------------------------------------- */

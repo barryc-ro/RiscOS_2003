@@ -6,21 +6,26 @@
 ;                          Filer_Action executes the wimpslot command, R0 isn't corrupted
 ;                          Also added "GET Hdr:Variables"
 
-        GET     s.AppName             ; defines the name of this module
+        GET     AppName.s             ; defines the name of this module
 
-        GET     Hdr:ListOpts
-        GET     Hdr:Macros
-        GET     Hdr:System
-        GET     Hdr:ModHand
-        GET     Hdr:EnvNumbers
-        GET     Hdr:Proc
-        GET     Hdr:FSNumbers
-        GET     Hdr:NewErrors
-        GET     Hdr:Services
-        GET     Hdr:ResourceFS
-        GET     Hdr:MsgTrans
-        GET     Hdr:Variables
-        GET     Hdr:UpCall
+        GET     ListOpts
+        GET     Macros
+
+        GET     SWIs		;  these four replace the old System header
+        GET     CPU/Generic26
+        GET     IO/GenericIO
+        GET     RISCOS
+
+	GET     ModHand
+        GET     EnvNumbers
+        GET     Proc
+        GET     FSNumbers
+        GET     NewErrors
+        GET     Services
+        GET     ResourceFS
+        GET     MsgTrans
+        GET     Variables
+        GET     UpCall
 
         IMPORT  |_Lib$Reloc$Off|
         IMPORT  |_clib_initialisemodule|
@@ -716,7 +721,7 @@ svc_resourcefsstarting
         Pull    "r0, pc",,^             ; (r3 = workspace pointer)
 
 resourcefsfiles
-GetRoundObjAsm SETS " GET s.ResFiles"
+GetRoundObjAsm SETS " GET ResFiles.s"
  |
 GetRoundObjAsm SETS " "
  ]
@@ -724,9 +729,5 @@ $GetRoundObjAsm
  [ :LNOT::DEF:FilerAct
         DCD     0                       ; provide terminator automatically
  ]
-
-	; include this file here to cut down on object files created
-
-	GET	s.sutil
 
         END

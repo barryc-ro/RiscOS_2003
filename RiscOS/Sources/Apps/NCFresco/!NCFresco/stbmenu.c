@@ -439,6 +439,9 @@ fe_menu frontend_menu_create(fe_view v, be_menu_callback cb, void *handle, int n
 {
     fe_menu menu;
 
+    if (!v || v->magic != ANTWEB_VIEW_MAGIC)
+	return 0;
+
     menu = mm_calloc(sizeof(*menu), 1);
 
     menu->cb = cb;

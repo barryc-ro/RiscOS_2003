@@ -135,6 +135,9 @@ struct _frontend_view
     int images_waiting;
 
     int from_frame;
+
+    int threaded;
+    int delete_pending;
 };
 
 #define fe_object_type_NONE      0
