@@ -13,26 +13,24 @@
 # Generic options:
 #
 MKDIR   = cdir
-AS      = objasm
+AS      = aasm
 CP      = copy
-LD      = link
 RM      = remove
-WIPE    = wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit ${KBD} -To $@ -From
-LDFLAGS = -bin -o $@
+ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
-WFLAGS  = ~cfr~v
 
 #
 # Program specific options:
 #
 COMPONENT = IntKey
-SOURCE    = Source.IntKeyMod
+#
+# We use <Keyboard> here instead of ${LOCALE} so that the keyboard handler
+# can be built for a different country than the main build (eg. allows USA
+# keyboard handler with UK ROM messages).
+#
+SOURCE    = <Keyboard>.Source.IntKeyMod
 TARGET    = rm.IntKey
-OBJECT    = o.IntKey
-
-KBD       = -PD "Keyboard SETS \"${KEYBOARD}\""
 
 #
 # Generic rules:
@@ -48,17 +46,12 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-${OBJECT}: ${SOURCE}
-        If "<IKHG$Dir>"="" Then Set IKHG$Dir ^.!IKHG
-        ${MKDIR} o
+${TARGET}: ${SOURCE}
+        set IKHG$Country <Keyboard>
         ${AS} ${ASFLAGS} ${SOURCE}
-
-${TARGET}: ${OBJECT}
-        ${LD} ${LDFLAGS} ${OBJECT}
-        SetType $@ &FFA
+        unset IKHG$Country
 
 # Dynamic dependencies:
