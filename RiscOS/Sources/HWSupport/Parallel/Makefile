@@ -73,39 +73,3 @@ ${TARGETSA}: s.StandAlone ${RESOURCES}
         ${AS} ${ASFLAGS} s.StandAlone
 
 # Dynamic dependencies:
-rm.ParallelSA: s.Parallel
-rm.ParallelSA: Hdr:ListOpts
-rm.ParallelSA: Hdr:Macros
-rm.ParallelSA: Hdr:System
-rm.ParallelSA: Hdr:SWIs
-rm.ParallelSA: Hdr:CPU.Generic26
-rm.ParallelSA: Hdr:IO.GenericIO
-rm.ParallelSA: Hdr:RISCOS
-rm.ParallelSA: Hdr:ModHand
-rm.ParallelSA: Hdr:FSNumbers
-rm.ParallelSA: Hdr:NewErrors
-rm.ParallelSA: Hdr:Services
-rm.ParallelSA: Hdr:Symbols
-rm.ParallelSA: Hdr:NDRDebug
-rm.ParallelSA: Hdr:HostFS
-rm.ParallelSA: Hdr:Proc
-rm.ParallelSA: Hdr:DevNos
-rm.ParallelSA: Hdr:PublicWS
-rm.ParallelSA: Hdr:DDVMacros
-rm.ParallelSA: Hdr:Buffer
-rm.ParallelSA: Hdr:DeviceFS
-rm.ParallelSA: Hdr:IO.IOC-A1
-rm.ParallelSA: Hdr:IO.IOC
-rm.ParallelSA: Hdr:IO.IOEB
-rm.ParallelSA: Hdr:IO.IOC
-rm.ParallelSA: Hdr:CMOS
-rm.ParallelSA: Hdr:MsgTrans
-rm.ParallelSA: Hdr:ResourceFS
-rm.ParallelSA: Hdr:Portable
-rm.ParallelSA: Hdr:UpCall
-rm.ParallelSA: Version
-rm.ParallelSA: s.Errors
-rm.ParallelSA: s.ResFiles
-rm.ParallelSA: s.Common
-rm.ParallelSA: s.IOEB
-rm.ParallelSA: s.FastCent
