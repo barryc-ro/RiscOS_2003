@@ -11,7 +11,6 @@ bbe-buildsys: bbe-generic-resources-get-alias
   BBE_Export_Dir Makefiles
   ${RM} ${BBEDIR}.Makefiles.BBEExport
   ${MKDIR} ${BBEDIR}.Components
-  BBE_Export_File Components.${COMPONENTFILE}
   BBE_Export_File VersionNum
-  ${FILTERCOMP} Components.${COMPONENTFILE} < ModuleDB > ${BBEDIR}.ModuleDB
+  ${FILTERCOMP} Components.${COMPONENTFILE} ModuleDB ${BBEDIR}.Components.${COMPONENTFILE} ${BBEDIR}.ModuleDB
 
