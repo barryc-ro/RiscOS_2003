@@ -19,20 +19,20 @@ MODGEN   = modgen
 MODSQZ   = modsqz
 RM       = remove
 SCANRES  = scanres
-WIPE     = -wipe
+WIPE    = -wipe
 
 CPFLAGS  = ~cfr~v
-WFLAGS   = ~cr~v
+WFLAGS  = ~cr~v
 
 #
 # Program specific options:
 #
 COMPONENT   = CDFSRes
 VERSION     = 2.36
-TARGET      = rm.${BUILD}.CDFSRes
+TARGET      = rm.CDFSRes
 MODULE_HELP = "CDFSResources"
 MODULE_NAME = CDFSResources
-FILELIST    = Resources.${LOCALE}.${BUILD}.List
+FILELIST    = Resources.${LOCALE}.${MACHINE}.List
 
 #
 # Generic rules:
@@ -49,11 +49,10 @@ install: ${TARGET}
         @echo ${COMPONENT}: module installed
 
 clean:
-	${WIPE} rm.* ${WFLAGS}
+        ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${FILELIST}
-	${MKDIR} rm.${BUILD}
         ${MODGEN} $@ ${MODULE_NAME} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
 
 # Dynamic dependencies:

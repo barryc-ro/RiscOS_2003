@@ -1,0 +1,705 @@
+/*1 locate.c -*-C-*- */
+
+/* #ifdef Daytona section added to read_etheraddr() by RDW 07/01/98 */
+
+
+#include "all.h"
+
+
+static void free_vifp_memory(vifstr *vifp)
+{
+#define F(x)        if (vifp-> x  != NULL)   free(vifp-> x )
+
+    F(dib.dib_location);
+    F(accumulated.int32);
+    F(accumulated.int64);
+    F(active.int32);
+    F(active.int64);
+    F(pending.int32);
+    F(pending.int64);
+
+
+    F(ether2_hole);
+    F(ieee8023_hole);
+
+    while (vifp->clients != NULL)
+    {
+        struct client *next = vifp->clients->next;
+        free(vifp->clients);
+        vifp->clients = next;
+    } /* endwhile */
+
+#undef F
+}
+
+extern void free_pifp_memory( pifstr *pifp )
+{
+    if ( pifp->primary )
+        free_vifp_memory( pifp->primary );
+    if ( pifp->secondary )
+        free_vifp_memory( pifp->secondary );
+    free( pifp );
+}
+
+
+static vifstr *get_vifp_memory(void)
+{
+    vifstr *vifp = (vifstr *) calloc(1, sizeof(vifstr));
+    int x = 0;
+
+    if (vifp == NULL)
+        return NULL;
+
+    vifp->dib.dib_location   = (char *) calloc(1, 40);         /* More than enough - lazy! */
+    vifp->accumulated.int32  = (unsigned *) calloc(NUM_INTEGER32_STATISTICS, 4);
+    vifp->accumulated.int64  = (unsigned *) calloc(NUM_INTEGER64_STATISTICS, 8);
+    vifp->active.int32       = (unsigned *) calloc(NUM_INTEGER32_STATISTICS, 4);
+    vifp->active.int64       = (unsigned *) calloc(NUM_INTEGER64_STATISTICS, 8);
+    vifp->pending.int32      = (unsigned *) calloc(NUM_INTEGER32_STATISTICS, 4);
+    vifp->pending.int64      = (unsigned *) calloc(NUM_INTEGER64_STATISTICS, 8);
+
+    if ( NULL == vifp->dib.dib_location )
+        x = 1;
+    if ( NULL == vifp->accumulated.int32 )
+        x = 1;
+    if ( NULL == vifp->accumulated.int64 )
+        x = 1;
+    if ( NULL == vifp->active.int32 )
+        x = 1;
+    if ( NULL == vifp->active.int64 )
+        x = 1;
+    if ( NULL == vifp->pending.int32 )
+        x = 1;
+    if ( NULL == vifp->pending.int64 )
+        x = 1;
+
+    if (x == 1)
+    {
+        free_vifp_memory(vifp);
+        return NULL;
+    }
+    else
+    {
+        return vifp;
+    }
+}
+
+static pifstr *get_pifp_memory()
+{
+    return (pifstr*) calloc( 1, sizeof(pifstr) );
+}
+
+extern pifstr *hascard(int socket)
+{
+    pifstr *pifp;
+
+    ITERATE_OVER_ALL_PCARDS
+    {
+        if (pifp->slot == socket)
+        {
+        	return pifp;
+        }
+    }
+
+    return NOCARDPRESENT;
+}
+
+/*****************************************************************************
+ *
+ * ea_reset_card:
+ *
+ * High priority XCB card initialisation - reset the card such that it is
+ * stable and not generating interrupts. We don't know at this stage if we'll
+ * be using the card, so we don't make any structures for it yet.
+ */
+
+/* Used to disable irqs -- ponder @@@@ */
+
+extern void reset_card(pifstr *pifp)
+{
+    /* Reset sequence with extraordinarily long delays in -- look it up
+     * in the datasheet p23 if you don't believe me, which I don't expect
+     * you to.
+     */
+    pifp->chip->CR = my_cr_INIT_P0;	/* Abort any DMA and stop the card */
+
+    microsecond_delay(130000);
+
+    pifp->chip->DCR = my_dcr_WTS;	/* Make sure we do word data transfer */
+    pifp->chip->RBCR0 = 0;		/* Clear down the remote byte count */
+    pifp->chip->RBCR1 = 0;		/* ... both bytes of it */
+    pifp->chip->RCR = 0;	        /* For now only receive address, healthy packets.  Protocol_reflect may change this. */
+    pifp->chip->LCR = my_lcr_LB0;	/* Set the card to internal loopback */
+}
+
+
+/*****************************************************************************
+ *
+ * read_etheraddr:
+ *
+ * Read the 6 byte ethernet address from the slot indicated and fill this
+ * into the buffer supplied. Return 0 for okay and error ptr otherwise.
+ *
+ *
+ #ifdef Daytona section added by RDW 07/01/98
+ */
+
+extern _kernel_oserror *read_etheraddr(pifstr *pifp, u_char *ptr)
+{
+#if HANDLE_PODULES
+#define MAXBUF 256
+    char buf[MAXBUF], *cp;
+    _kernel_swi_regs r;
+    _kernel_oserror *ep;
+    int note, i;
+
+    r.r[0] = 0;
+    r.r[3] = pifp->slot;
+
+    while (1)
+    {
+        note = r.r[0];
+
+        ep = _kernel_swi(XOS_Bit + Podule_EnumerateChunks, &r, &r);
+
+        if (ep != NULL)                         break;
+        if (r.r[0] == 0)                        break;
+        if (r.r[2] == Description)              break;
+    }
+
+    if (ep != NULL)
+        return ep;
+
+    if (r.r[0] == 0 || r.r[2] != Description || r.r[1] >= MAXBUF)
+    {
+        return makeerror(ifp->slot, ENOHWADDR);
+    }
+
+    r.r[0] = note;
+    r.r[2] = (int) buf;
+    r.r[3] = pifp->slot;                                               /* Not necessary? */
+
+    if ((ep = _kernel_swi(XOS_Bit + Podule_ReadChunk, &r, &r)) != NULL)
+        return ep;
+
+    for (cp = buf; *cp != '\0' && *cp != '('; cp++)
+        ;
+
+    if (*cp == '\0')
+        return makeerror(pifp->slot, ENOHWADDR);
+
+    for (cp++, i = 0; i < 6; i++)
+    {
+        int q;
+        if (sscanf(cp, "%2x", &q) != 1)
+            return makeerror(pifp->slot, ENOHWADDR);
+        ptr[i] = q;
+        cp += 3;
+    }
+
+    return NULL;
+#undef MAXBUF
+#elif  HANDLE_NETCARD
+
+#if defined ACORN && defined Daytona
+    _kernel_oserror *ep;
+    _kernel_swi_regs r;
+    
+    r.r[0] = 4;
+    if ((ep = _kernel_swi(0x4f7c8, &r, &r)) != NULL)	/* DaytonaHW_ReadOTP*/
+      return ep;
+    
+    ptr[0] = ( r.r[0] >> 0 ) & 0xff;
+    ptr[1] = ( r.r[0] >> 8 ) & 0xff;
+    ptr[2] = ( r.r[0] >> 16) & 0xff;
+    ptr[3] = ( r.r[0] >> 24) & 0xff;
+    ptr[4] = ( r.r[1] >> 0 ) & 0xff;
+    ptr[5] = ( r.r[1] >> 8 ) & 0xff;
+    if ((ptr[0] == 0) &&
+        (ptr[1] == 0) &&
+        (ptr[2] == 0) &&
+        (ptr[3] == 0) &&
+        (ptr[4] == 0) &&
+        (ptr[5] == 0))
+      return makeerror(0, ENOHWADDR);
+
+    return NULL;
+#else
+    _kernel_oserror *ep;
+    _kernel_swi_regs r;
+    int d[2];
+
+    r.r[0] = 1 << 27 | 1 << 28;
+    r.r[1] = (int) (d);
+    r.r[2] = sizeof(d);
+    r.r[3] = pifp->slot;
+
+    if ((ep = _kernel_swi(XOS_Bit | Podule_ReadInfo, &r, &r)) != NULL)
+    {
+    	return ep;
+    }
+
+    ptr[0] = ( d[1] >> 8 ) & 0xff;
+    ptr[1] = ( d[1] >> 0 ) & 0xff;
+    ptr[2] = ( d[0] >> 24) & 0xff;
+    ptr[3] = ( d[0] >> 16) & 0xff;
+    ptr[4] = ( d[0] >> 8 ) & 0xff;
+    ptr[5] = ( d[0] >> 0 ) & 0xff;
+
+    if (d[0] + (d[1] & 0xffff) == 0)
+    	return makeerror(0, ENOHWADDR);
+
+    return NULL;
+#endif /* ACORN/ANT switch */
+#endif /* PODULE elif NETCARD */
+}
+
+/*****************************************************************************
+ *
+ * readbits:
+ *
+ * Determine width of podule: return 0, 8 or 16.
+ *
+ * Works by seeing if A0 address line has any affect of not.
+ * In order to work with the 8004, we have to choose the bits
+ * we use very carefully. This version will/should handle the
+ * 8004 as well, and uses the led driving bit and the dribble
+ * error enable bit to do its testing. We need to be able to
+ * work out the width before we determine the type of controller
+ * with the current organisation. We perform one write and one,
+ * two or three reads.
+ */
+
+static int readbits(pifstr *pifp)
+{
+    /* @@@@ */
+    return 16;
+}
+
+
+static _kernel_oserror *determine_controller_type(pifstr *pifp)
+{
+    /* @@@@ */
+    return NULL;
+}
+
+static int locate_card_base_address(int slot)
+{
+    _kernel_swi_regs r;
+    int base_addr;
+
+#if HANDLE_PODULES
+    r.r[3] = slot;
+
+    _kernel_swi(XOS_Bit | Podule_HardwareAddress, &r, &r);
+
+    base_addr = r.r[3] & PODULE_BASE_MASK;
+    base_addr += MEMC_BASE_OFFSET;
+
+#elif HANDLE_NETCARD
+
+    r.r[0] = 1 << 1;
+    r.r[1] = (int) &base_addr;
+    r.r[2] = sizeof(int);
+    r.r[3] = slot;
+
+    _kernel_swi(XOS_Bit | Podule_ReadInfo, &r, &r);
+
+    r.r[0] = 1;			/* Use cycle type A, rather than C (r0 = 3) */
+    r.r[3] = slot;
+
+    _kernel_swi(XOS_Bit | Podule_SetSpeed, &r, &r);
+
+#else
+#error Don't know how to look up base address when it's not a podule or a netcard
+#endif
+
+    return base_addr;
+}
+
+#if HANDLE_PODULES
+static _kernel_oserror *locate_interupt_register(pifstr *pifp)
+{
+    pifp->intr_mask_ptr = IOC_IMASKB;
+    pifp->intr_mask_value = IOC_IMASKB_PODULE_BIT;
+
+    return NULL;
+}
+#endif
+
+#if HANDLE_NETCARD
+static _kernel_oserror *locate_interupt_register(pifstr *pifp)
+{
+    _kernel_oserror *ep;
+    _kernel_swi_regs r;
+    int d[2];
+
+    r.r[0] = (1 << 15) | (1 << 16);
+    r.r[1] = (int)d;
+    r.r[2] = sizeof(d);
+    r.r[3] = pifp->slot;
+
+    ep = _kernel_swi(XOS_Bit + Podule_ReadInfo, &r, &r);
+
+    if (ep == NULL)
+    {
+#if DEBUG
+    	debugstr("Interupt mask address: ");
+    	debughex(d[0]);
+    	debugstr(" value: ");
+    	debughexcr(d[1]);
+#endif
+    	pifp->intr_mask_ptr = (volatile unsigned int*) d[0];
+    	pifp->intr_mask_value = d[1];
+    }
+
+    return ep;
+}
+#endif
+
+#ifndef BOOL
+#define BOOL int
+#define TRUE 1
+#define FALSE 0
+#endif
+
+static _kernel_oserror *initialise_vifstr( pifstr *pifp, vifstr **vifpp,
+                                           BOOL bSecondary )
+{
+    struct dib *dib;
+    dci4_spctl *sp;
+    vifstr *vifp;
+
+    vifp = get_vifp_memory();
+    if ( !vifp )
+        return makeerror( NOCARDUNIT, ENOMEM );
+
+    *vifpp = vifp;
+    vifp->raw = pifp;
+    dib = &vifp->dib;
+    sp  = &vifp->spctl;
+
+    vifp->unit = number_of_vcards;
+    number_of_vcards++;
+    vifp->all_next = all_vcards;
+    all_vcards = vifp;
+
+    /* We also hold prototype dci4_dib and dci4_spctl structures */
+
+    dib->dib_swibase = SWI_BASE;
+    dib->dib_name = CARDSTR;
+    dib->dib_unit = vifp->unit;
+    dib->dib_address = &vifp->etheraddr[0];
+    dib->dib_module = TITLE_STRING;
+    dib->dib_slot.slotid = vifp->raw->slot;
+    dib->dib_slot.minor = 0;
+    dib->dib_slot.pcmciaslot = 0;
+    dib->dib_slot.mbz = 0;
+    dib->dib_inquire = (Feature_Multicast * SUPPORT_MULTICAST) |
+                       (Feature_Promiscuous * SUPPORT_PROMISCUOUS) |
+#if 0
+                       Feature_RxOwnTx |
+#endif
+                       Feature_RxErrorPackets |
+                       Feature_HardwareAddress |
+                       Feature_VariableSourceAddress |
+                       Feature_StandardStatistics |
+                       Feature_ExtendedStatistics |
+                       (bSecondary ? Feature_SecondaryInterface : 0 );
+
+#if HANDLE_NETCARD
+    sprintf(dib->dib_location, "Netcard slot");
+#endif
+
+    sp->next        = NULL;
+    sp->i_version   = DCI4_STATISTIC_VERSION;
+    sp->features    = 0ul;
+    sp->swinumber   = SWI_BASE + 63 - vifp->unit;
+    sp->max_stat    = NUM_STATISTICS - 1; /* inclusive count */
+    sp->type        = SPT_NETWORK_DRIVER;
+    sp->s_version   = 150;              /* @@@@ Must do this better! */
+    sp->module      = TITLE_STRING;
+    sp->title       = TITLE_STRING " device driver";
+    sp->description = "DCI4 Ethernet device driver for 16 bit " TITLE_STRING " cards";
+    ( (int *) &sp->reset[0] ) [0] = time(NULL);
+    ( (int *) &sp->reset[0] ) [1] = MONOTIME;
+
+    return NULL;
+}
+
+static _kernel_oserror *initialise_pifstr(pifstr *pifp)
+{
+    int numbits;
+    _kernel_oserror *ep = NULL;
+
+    SET(DOWN);
+
+    ep = cmos_read(pifp);      /* ensures pifp->flags from pifp->cmos as well */
+
+    if (ep == NULL)
+    	ep = read_etheraddr( pifp, &pifp->etheraddr[0] );
+
+    if (ep != NULL)
+    	return ep;
+
+    pifp->chip = (volatile myson *) locate_card_base_address(pifp->slot);
+
+    if ((ep = locate_interupt_register(pifp)) != NULL)
+    	return ep;
+
+    if (TST(ENABLED))
+    {
+    	reset_card(pifp);				/* Writes to conf2 only */
+
+        numbits = readbits(pifp);			/* Touches conf2 only */
+
+        if (numbits == 0)
+        {
+            debugstr("Cannot determine controller width\n");
+
+            return makeerror(NOCARDUNIT, ENOCONTROLLER);
+        }
+
+
+    	if (numbits != CARD_WIDTH )
+    	{
+#if CARD_WIDTH == 16
+    	    static char *err_msg = "Error: this version of " TITLE_STRING" is for 16 bit cards only.";
+#else /* CARD_WIDTH */
+    	    static char *err_msg = "Error: this version of " TITLE_STRING" is for 8 bit cards only.";
+#endif /* CARD_WIDTH */
+    	    printf("%s\n", err_msg);
+    	    return makeerror(number_of_pcards, (int) err_msg);
+    	}
+
+      	SET(HARDWARE_VALID);
+
+         /* work out what sort of controller. This involves reading conf2 only */
+
+        ep = determine_controller_type(pifp);
+
+        if (ep != 0)
+            return ep;                      /* Didn't like something about it */
+    }
+
+    ep = initialise_vifstr( pifp, &pifp->primary, FALSE );
+    if ( ep )
+        return ep;
+    memcpy( pifp->primary->etheraddr, pifp->etheraddr, 6 );
+
+    if ( TST(MULTIPLE) )
+    {
+        ep = initialise_vifstr( pifp, &pifp->secondary, TRUE );
+        if ( ep )
+            return ep;
+        memcpy( pifp->secondary->etheraddr, pifp->etheraddr, 6 );
+
+        if (   pifp->etheraddr[0] == 0x00
+            && pifp->etheraddr[1] == 0x02
+            && pifp->etheraddr[2] == 0x07 )
+        {
+            /* it's an ant address */
+            pifp->secondary->etheraddr[5] ^= 0x01;
+        }
+        else
+        {
+            /* Acorn's, or someone else's */
+            pifp->secondary->etheraddr[3] ^= 0x80;
+        }
+
+        pifp->secondary->other = pifp->primary;
+        pifp->primary->other = pifp->secondary;
+    }
+
+    pifp->all_next = all_pcards;
+    all_pcards = pifp;
+    number_of_pcards += 1;
+
+    return NULL;
+}
+
+
+/*****************************************************************************
+ *
+ * locate_cards:
+ *
+ * Called on module initialisation. Expected to perform:
+ *
+ * 1) Find all suitable cards
+ * 2) For each card, fill in bulk of ifstr structure, and set some sensible values
+ *    in the hardware. Non-functional controllers can get rejected at this stage.
+ *
+ * Returns either NULL or a pointer to an error to return.
+ */
+#if defined ACORN && defined NETFAX
+extern _kernel_oserror *locate_cards(void)
+{
+#define MAXBUF 16
+
+    static int podtypes[] = {EA_TYPE};
+#define numpodtypes             (sizeof(podtypes) / sizeof(podtypes[0]))
+    int i, x, y;
+    _kernel_oserror *e = NULL;
+    pifstr *pifp;
+
+    char buffer[MAXBUF];
+    _kernel_swi_regs r;
+
+    number_of_pcards = 0;
+    active_pcards = NULL;
+    all_pcards = NULL;
+
+    number_of_vcards = 0;
+    active_vcards = NULL;
+    all_vcards = NULL;
+
+    if ((pifp = get_pifp_memory()) == NULL)
+       return makeerror(NOCARDUNIT, ENOMEM);
+
+    /* Outgoing info correct, but not present from outside viewpoints */
+
+    /*pifp->unit = number_of_cards;*/
+    pifp->slot = 8;
+    number_of_pcards = 1;
+
+    /* This fills in all sorts of things. If the card is to be seen by
+       the user, then we get NULL back, else we get an error back and
+       the card is never touched/notable again. The card is patched into
+       the list of cards within here.
+    */
+
+    e = initialise_pifstr(pifp);
+
+    /* If happly initialised the ifp, then patch it in, else get rid of it */
+    if (e != NULL)
+    {
+        free_pifp_memory(pifp);
+        return e;
+    }
+
+    if (number_of_pcards == 0)
+    {
+        /* No cards found -- arguable if we should initialise */
+        /* For now, leave module around with no cards, just like Acorn */
+
+        e = makeerror(NOCARDUNIT, ENOTANIF);
+    }
+
+    update_utovifp_mapping();
+
+    return e;
+
+#undef MAXBUF
+}
+#else /* ACORN&NETFAX | ANT def. */
+extern _kernel_oserror *locate_cards(void)
+{
+#define MAXBUF 16
+
+    static int podtypes[] = {EA_TYPE};
+#define numpodtypes             (sizeof(podtypes) / sizeof(podtypes[0]))
+    int i, x, y;
+    _kernel_oserror *e = NULL;
+    pifstr *pifp;
+#if HANDLE_PODULES || HANDLE_NETCARD
+    char buffer[MAXBUF];
+    _kernel_swi_regs r;
+#endif /* HANDLE_PODULES || HANDLE_NETCARD */
+
+    number_of_pcards = 0;
+    active_pcards = NULL;
+    all_pcards = NULL;
+
+    number_of_vcards = 0;
+    active_vcards = NULL;
+    all_vcards = NULL;
+
+#if HANDLE_PODULES || HANDLE_NETCARD
+    for (i = 0; /* Loop breaks from the middle */ ; i++)
+#elif HANDLE_POCKET
+    i = slot_ParallelPort;
+#endif
+    {
+#if HANDLE_PODULES || HANDLE_NETCARD
+        r.r[3] = i;
+
+        e = _kernel_swi(XOS_Bit | Podule_ReadID, &r, &r);
+
+	    if (e != NULL)
+    	{
+    	    if (e->errnum == EPODULE_BADCARD)
+    	    {
+    	        e = NULL;
+    	    	/* The card number is now too big */
+    	    	break;
+    	    }
+
+    	    if (e->errnum == EPODULE_NOCARD)
+    	        /* There is no card in the slot */
+                continue;
+        }
+
+        r.r[2] = (int)buffer;
+        r.r[3] = i;
+
+        if (_kernel_swi(XOS_Bit | Podule_ReadHeader, &r, &r) != NULL ||
+            (buffer[3] | (buffer[4] << 8)) != EA_TYPE
+           )
+            continue;
+
+        /* Support device driver being suitable for more than one type of podule */
+
+        x = buffer[3] | ( buffer[4] << 8 );
+
+        for (y = 0; y < numpodtypes; y++)
+        {
+            if (podtypes[y] == x)
+                break;
+        }
+
+        if (y == numpodtypes)
+            continue;
+
+#elif HANDLE_POCKET
+#endif /* PODULE || NETCARD elif POCKET */
+
+        if ((pifp = get_pifp_memory()) == NULL)
+            return makeerror(NOCARDUNIT, ENOMEM);
+
+        /* Outgoing info correct, but not present from outside viewpoints */
+
+        /*pifp->unit = number_of_cards;*/
+        pifp->slot = i;
+
+        /* This fills in all sorts of things. If the card is to be seen by
+           the user, then we get NULL back, else we get an error back and
+           the card is never touched/notable again. The card is patched into
+           the list of cards within here.
+        */
+
+        e = initialise_pifstr(pifp);
+
+        /* If happly initialised the ifp, then patch it in, else get rid of it */
+
+        if (e != NULL)
+        {
+            free_pifp_memory(pifp);
+            return e;
+        }
+    }
+
+    if (number_of_pcards == 0)
+    {
+        /* No cards found -- arguable if we should initialise */
+        /* For now, leave module around with no cards, just like Acorn */
+
+        e = makeerror(NOCARDUNIT, ENOTANIF);
+    }
+
+    update_utovifp_mapping();
+
+    return e;
+
+#undef MAXBUF
+}
+#endif /*endif ACORN&NETFAX/ANT def. */

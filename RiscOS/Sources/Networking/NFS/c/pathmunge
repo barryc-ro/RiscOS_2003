@@ -1,0 +1,1351 @@
+/*	C.PATHMUNGE
+
+Purpose : This file gathers together the routines to perform file path
+	  specific functions.
+
+Functions:  assess_root_for_filename
+	    find_dir_for_leaf
+	    simple_riscos_to_nfs
+	    appended_riscos_to_nfs
+	    riscos_name_to_nfsname
+	    move_nfsname_to_riscos_name
+	    nfsname_to_riscos_name
+	    extend_nfs_lookup
+	    nfs_lookup_extended
+	    caseless_wildncmp
+	    wildncmp
+	    caseless_strncmp
+	    caseless_strcmp
+	    find_object_in_directory
+	    find_leaf
+	    find_directory_leaf
+	    find_regular_leaf
+	    reject_nfs_file
+
+
+History :
+Date	Who    Comments
+-----------------------------------------------------------------------------
+07/05/93 ??    INITIAL VERSION
+13/1/95	 CP    Changed find_object_in_directory to use new Get_NFS_Directory
+	       routine.
+7/2/95   CP    Corrected bugs in  find_object_in_directory
+16/2/95  CP    Removed case tolerance from find_object_in_directory
+21/2/95  CP    Added more detailed comments about each function to make code 	       more maintainable in the future.
+13/3/95  CP    Re-enabled case tolerance in find_object_in_directory
+28/3/95  CP    Remembered there are two instances of case-sensitive code!
+
+****************************************************************************/
+
+#ifndef __NFSNFS_H
+#include "NFS.h"
+#endif
+
+#include "enumdir.h" /* prototypes */
+
+#define TRACE_LOC 0 /* turn local tracing on or off */
+
+
+
+/********* assess_root_for_filename *****************************************
+
+Purpose : Strips off the root sequence of filepath, returning a pointer into
+          filepath of what's left. The root sequence is found in the
+	  structures and details for it are returned. The path for the root
+	  sequence is relative to the mount point and so may by a "" string.
+
+Inputs : filepath     ptr to the path to work on
+         mount_point  ptr to ptr, for storing result
+       	 path_to_root ptr to ptr, for storing result
+       	 dirpath      ptr to ptr, for storing result
+
+Returns : NULL if everything OK, error ptr otherwise
+	  mount_point points to mount information
+	  path_to_root points to directory path string
+	     (inside filepath data!)
+	  dirpath points to the leaf name string (inside filepath data!)
+
+****************************************************************************/
+
+static _kernel_oserror *assess_root_for_filename( char *filepath, MountPoint **mount_point,
+        char **path_to_root, char **dirpath)
+{
+        char *filename = filepath;
+        _kernel_oserror *err = NULL;
+
+        /*
+                Find the directory separator or the end of string
+        */
+        while ( *filename != '\0' &&
+                *filename != FileChar_DirectorySeparator )
+        {
+                filename++;
+        }
+
+        /*
+                Find the mount point
+        */
+        if ( *filename )
+        {
+                *filename = '\0';
+                *mount_point = find_mount( filepath + 1 );
+                *filename++ = FileChar_DirectorySeparator;
+        }
+        else
+        {
+                *mount_point = find_mount( filepath + 1 );
+        }
+
+        /*
+                Check the mount point got found
+        */
+        if ( !*mount_point )
+        {
+                err = mb_no_mount_point_found;
+        }
+        else
+        {
+                *path_to_root = "";
+        }
+
+        /*
+                Move past the $ or $. if present
+        */
+        if ( filename[0] == FileChar_Root )
+        {
+                if ( filename[1] == FileChar_DirectorySeparator )
+                        filename += 2;
+                else if ( filename[1] == '\0' )
+                        filename += 1;
+        }
+
+        *dirpath = filename;
+
+        return err;
+} /* endfunction assess_root_for_filename */
+
+
+/*********** find_dir_for_leaf **********************************************
+
+Purpose : finds the directory for the given leaf. If found then *path_to_here
+	  will be pointed at the full path for the dir, including preceding
+	  ':' and trailing '.'. If path_to_here is NULL then no string will
+	  be constructed. If a memory shortage occurs whilst constructing
+	  path_to_here, then it will remain unconstructed.
+
+Inputs : filepath      ptr to the leaf string
+         ndesc         ptr
+         path_to_leaf  ptr to ptr, for storing result
+         leaf_position ptr to ptr, for storing result
+
+Returns : NULL if OK, otherwise system error
+	  path_to_leaf points to path to leaf string
+	  leaf position points to the leaf name
+	  ndesc filled in with details of directory holding the leaf
+
+****************************************************************************/
+
+
+_kernel_oserror *find_dir_for_leaf( char *filepath, nfs_file_descriptor *ndesc,
+        char **path_to_leaf,        /* output */
+        char **leaf_position	    /* output */
+)
+{
+        char *dirpath;
+        char *path_to_root;
+        _kernel_oserror *err;
+        char *full_dirpath;
+        char *position;
+        char *next_separator;
+
+        /*
+                Find the path from the mount point to the root
+        */
+        err = assess_root_for_filename( filepath, &ndesc->mp, &path_to_root, &dirpath );
+
+        if ( err )
+        {
+                return err;
+        }
+
+        /*
+                Tack the root path and the dirpath together to get the full path from
+                the mount point to the leaf.
+        */
+        full_dirpath = malloc( strlen( path_to_root ) + 1 + strlen( dirpath ) + 1 );
+
+        if ( full_dirpath == NULL )
+        {
+                return mb_malloc_failed;
+        }
+
+        sprintf( full_dirpath, "%s%c%s", path_to_root, FileChar_DirectorySeparator, dirpath );
+
+        ndesc->dir = ndesc->mp->fhandle;
+        position = full_dirpath;
+        for ( next_separator = strchr( position, FileChar_DirectorySeparator );
+                !err && next_separator;
+                position = next_separator + 1,
+                        next_separator = strchr( position, FileChar_DirectorySeparator ) )
+        {
+                if ( next_separator > position )
+                {
+                        *next_separator = '\0';
+
+                        err = find_object_in_directory( ndesc, position );
+
+                        if ( !err )
+                        {
+                                free( ndesc->desc.name );
+                                ndesc->dir = ndesc->file;
+                        }
+
+                        *next_separator = FileChar_DirectorySeparator;
+                }
+        }
+
+        if ( err )
+        {
+                free( full_dirpath );
+        }
+        else
+        {
+                *path_to_leaf = full_dirpath;
+                *leaf_position = position;
+        }
+
+        return err;
+} /* endfunction find_dir_for_leaf */
+
+
+
+/********* simple_riscos_to_nfs *********************************************
+
+Purpose : Converts from a riscos name to an NFS equivalent.  Doesn't do
+	  anything fancy - just changes '/' to '.' and '<' to '$'
+
+Inputs : dest    ptr to ptr, to store result
+         source  ptr to name to convert
+
+Returns : NULL if OK, otherwise system err ptr
+	  dest filled with converted name
+
+****************************************************************************/
+
+static _kernel_oserror *simple_riscos_to_nfs( char **dest, char *source)
+{
+        int i;
+
+        *dest = malloc( strlen( source ) + 1 );
+
+        if ( *dest == NULL )
+                return mb_malloc_failed;
+
+        for ( i = 0;
+                source[ i ] != '\0';
+                i++ )
+        {
+                /* Convert RISCOS / into UNIX . extension */
+                if ( source[ i ] == FileChar_NFSDirectorySeparator )
+                {
+                        (*dest)[ i ] = FileChar_DirectorySeparator;
+                }
+                else if ( source[ i ] == '<' )
+                {
+                        (*dest)[ i ] = '$';
+                }
+                else
+                {
+                        (*dest)[ i ] = source[ i ];
+                }
+        }
+
+        (*dest)[i] = '\0';
+
+       return NULL;
+} /* endfunction sinple_riscos_to_nfs */
+
+
+/********* appended_riscos_to_nfs ******************************************
+
+Purpose :  Translate from riscos name ('/' = '.') to nfs name and
+	   appends given string
+
+Inputs : dest            ptr to ptr, for result
+       	 source		 ptr to riscos name to convert
+       	 appended_source ptr to string to append
+
+Returns : NULL if OK, else ptr to error
+	  dest holds onverted string
+
+****************************************************************************/
+
+
+static _kernel_oserror *appended_riscos_to_nfs( char **dest, char *source, char *appended_source)
+{
+        int i;
+
+        *dest = malloc( strlen( source ) + strlen( appended_source ) + 1 );
+
+        if ( *dest == NULL )
+                return mb_malloc_failed;
+
+        for ( i = 0;
+                source[ i ] != '\0';
+                i++ )
+        {
+                /* Convert RISCOS / into UNIX . extension */
+                if ( source[ i ] == FileChar_NFSDirectorySeparator )
+                {
+                        (*dest)[ i ] = FileChar_DirectorySeparator;
+                }
+                else if ( source[ i ] == '<' )
+                {
+                        (*dest)[ i ] = '$';
+                }
+                else
+                {
+                        (*dest)[ i ] = source[ i ];
+                }
+        }
+
+        strcpy( &(*dest)[ i ], appended_source );
+
+        return NULL;
+} /* endfunction appended_riscos_to_nfs */
+
+
+/********* riscos_name_to_nfs_name ******************************************
+
+Purpose : Convert a riscos name to an nfs name, including file type
+	  identifier (<name>,<type>)
+
+Inputs : nname   ptr to ptr, for result
+       	 rname   ptr to riscos name to convert
+       	 attr	 attributes of riscos file (including type info)
+
+Returns : NULL if OK, else ptr to error
+	  nname holds converted string
+
+****************************************************************************/
+
+_kernel_oserror *riscos_name_to_nfsname( char **nname, char *rname,
+                        RISCOSAttributes *attr)
+{
+        _kernel_oserror *err;
+        char hex_appendment[ 5 ];
+
+        if ( !(attr->type & FileType_File) )
+        {
+                /*
+                        Not a file
+                */
+                return simple_riscos_to_nfs( nname, rname );
+        }
+        else if ( attr->load_address == 0xdeaddead &&
+                  attr->execute_address == 0xdeaddead )
+        {
+                /*
+                        Dead file
+                */
+                sprintf( hex_appendment, "%c%s", FileChar_TypedNamePrefix, FileString_DeadFile );
+                return appended_riscos_to_nfs( nname, rname, hex_appendment );
+        }
+        else if ( (attr->load_address & 0xfff00000) != 0xfff00000 || attr->load_address == attr->execute_address )
+        {
+                /*
+                        Untyped file
+                */
+                sprintf( hex_appendment, "%c%s", FileChar_TypedNamePrefix, FileString_UntypedFile );
+                return appended_riscos_to_nfs( nname, rname, hex_appendment );
+        }
+        else
+        {
+                         err = extensions_extend_nfs_name_with_file_type( nname, rname, (attr->load_address & 0x000fff00) >> FileType_Shift );
+
+                if ( err || *nname != NULL )
+                        return err;
+
+                if ( (attr->load_address & 0xffffff00) == (0xfff00000 | (FileType_Text << FileType_Shift)) ||
+                     (attr->load_address & 0xffffff00) == (0xfff00000 | (FileType_UNIXExecutable << FileType_Shift)) )
+                {
+                        /*
+                                Text file or unix executable file
+                        */
+                        return simple_riscos_to_nfs( nname, rname );
+                }
+                else
+                {
+                        /*
+                                Typed file
+                        */
+                        sprintf( hex_appendment, "%c%03x", FileChar_TypedNamePrefix, (attr->load_address >> FileType_Shift) & FileType_Mask );
+                        return appended_riscos_to_nfs( nname, rname, hex_appendment );
+                }
+        }
+}  /* endfunction riscos_name_to_nfsname */
+
+
+
+/********* move_nfsname_to_riscos_name **************************************
+
+Purpose : Copies nfs name to a riscosname, making all the necessary changes
+
+Inputs : riscosname ptr to _allocated_ memory for riscos string
+       	 nfsname    ptr to nfs file string
+       	 ndesc      ptr to nfs file descriptor structure
+
+Returns : void
+	  *riscosname filled in with converted name
+
+****************************************************************************/
+
+void move_nfsname_to_riscos_name( char *riscosname, char *nfsname,
+        nfs_file_descriptor *ndesc)
+{
+        int length_to_copy;
+        int i;
+        int filetype;
+        fattr *attr;
+        _kernel_oserror *err;
+
+        /* table for the nfs to riscos conversion
+        under ascii 32 excluded, :*#$&@^%\ excluded as illegal under riscos
+        And . to / and space to hard space
+        */
+
+        static const char lookup_table[256]="________________________________"
+                                            " !\"_<__'()_+,-//0123456789_;<=>?"
+                                            "_ABCDEFGHIJKLMNOPQRSTUVWXYZ[_]__"
+                                            "`abcdefghijklmnopqrstuvwxyz{|}~_"
+                                            "€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ"
+                                            " ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿"
+                                            "ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞß"
+                                            "àáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ";
+
+        /* JRS 28/8/92 get the attributes to see if it is a regular file.
+         * Only files should have extensions removed */
+        err = nfs_getattr( &attr, ndesc->mp, &ndesc->file );
+
+        if ( (err == NULL) && (attr->type == NFREG) )
+        { /* JRS 28/8/92 leave extension unaltered if there was an error getting the type */
+                /*
+                        Try a user defined extension first for a regular file
+                */
+                extensions_check_nfs_name_for_extension( nfsname, &filetype, &length_to_copy );
+        }
+        else
+                filetype = -1;
+
+        if ( filetype < 0 )
+        {
+                /*
+                Assess how much needs to be copied:
+                length, less extensions, and not more than a max riscos name
+                */
+                length_to_copy = strlen( nfsname );
+
+                if ( length_to_copy >= 4 &&
+                     nfsname[length_to_copy-4] == FileChar_TypedNamePrefix &&
+                     (( strchr( HexChars, nfsname[length_to_copy-3] ) != NULL &&
+                       strchr( HexChars, nfsname[length_to_copy-2] ) != NULL &&
+                       strchr( HexChars, nfsname[length_to_copy-1] ) != NULL ) ||
+                        strcmp( &nfsname[length_to_copy-3], FileString_DeadFile ) == 0 ||
+                        strcmp( &nfsname[length_to_copy-3], FileString_UntypedFile ) == 0 ) )
+                {
+                        length_to_copy -= 4;
+                }
+        }
+
+        length_to_copy = MIN( length_to_copy, max_riscos_name_length );
+
+        /*
+                Convert UNIX characters that are illegal under riscos
+                into friendly ones :-)
+
+        */
+        for ( i = 0; i < length_to_copy; i++ )
+                riscosname[i] = lookup_table[nfsname[i] ];
+
+        riscosname[ length_to_copy ] = '\0';
+} /* endfunction move_nfsname_to_riscos_name */
+
+
+
+/********* nfsname_to_riscos_name *******************************************
+
+Purpose : Converts an nfsname to a riscos name.  Uses
+	  move_nfsname_to_riscos_name.
+
+Inputs : riscosname    ptr to ptr, for result
+       	 nfsname       ptr to nfs name to convert
+       	 ndesc	       ptr to nfs file descriptor
+
+Returns : NULL if OK, else ptr to error
+	  riscosname points to converted name
+
+****************************************************************************/
+
+_kernel_oserror *nfsname_to_riscos_name( char **riscosname,
+        char *nfsname, nfs_file_descriptor *ndesc)
+{
+        /*
+                Some space for the riscos name.
+        */
+        *riscosname = malloc( MIN( strlen( nfsname ), max_riscos_name_length ) + 1 );
+
+        if ( *riscosname == NULL )
+                return mb_malloc_failed;
+
+        move_nfsname_to_riscos_name( *riscosname, nfsname, ndesc );
+
+        return NULL;
+} /* endfunction nfsname_to_riscos_name */
+
+
+
+/********* extend_nfs_lookup ************************************************
+
+Purpose : Fills in partially completed nfs file descriptor
+
+Inputs :   ndesc   ptr to nfs descriptor
+          	   	   ->mp
+          	   	   ->dir (not used)
+          	   	   ->file
+          	   	   ->desc.attr
+          	   	   ->desc.name       are already complete
+
+Returns : NULL if OK, otherwise ptr to error
+	  ndesc has been filled in with details.  The following fields _may_
+	  be changed...
+             ->desc.chars_before_suffix;
+             ->desc.load_address;
+             ->desc.execute_address;
+             ->desc.file_is_lxa;
+
+****************************************************************************/
+
+static _kernel_oserror *extend_nfs_lookup( nfs_file_descriptor *ndesc)
+{
+        char *end_of_suffixed_name;
+        _kernel_oserror *err;
+        int filetype;
+
+        if ( (ndesc->desc.attr.mode & NFSMODE_FMT) != NFSMODE_REG )
+        {
+                /*
+                        Non-files (without a suffix).
+                */
+                ndesc->desc.chars_before_suffix = strlen( ndesc->desc.name );
+                ndesc->desc.file_is_lxa = No;
+                return NULL;
+        }
+
+        extensions_check_nfs_name_for_extension( ndesc->desc.name, &filetype, &ndesc->desc.chars_before_suffix );
+        if ( filetype >= 0 )
+        {
+                ndesc->desc.file_is_lxa = No;
+                return NULL;
+        }
+
+        for ( end_of_suffixed_name = ndesc->desc.name + strlen( ndesc->desc.name );
+                end_of_suffixed_name > ndesc->desc.name && *end_of_suffixed_name != FileChar_TypedNamePrefix;
+                end_of_suffixed_name-- );
+
+        if ( *end_of_suffixed_name == FileChar_TypedNamePrefix &&
+                strlen( end_of_suffixed_name ) == 4 )
+        {
+                if ( caseless_strcmp( end_of_suffixed_name+1, FileString_UntypedFile ) == 0 )
+                {
+                        /*
+                                Untyped file - read appendum (load and exec address).
+                        */
+                        appendum bit_on_end_of_file;
+                        int len_read;
+
+                        ndesc->desc.chars_before_suffix = end_of_suffixed_name - ndesc->desc.name;
+
+                        err = nfs_read(
+                                &len_read,
+                                (char *)&bit_on_end_of_file,
+                                ndesc->mp,
+                                &ndesc->file,
+                                ndesc->desc.attr.size - sizeof( appendum ),
+                                sizeof( appendum ) );
+
+                        if ( err )
+                                return err;
+
+                        ndesc->desc.chars_before_suffix = end_of_suffixed_name - ndesc->desc.name;
+                        ndesc->desc.file_is_lxa = Yes;
+                        ndesc->desc.load_address = bit_on_end_of_file.lxa.load_address;
+                        ndesc->desc.execute_address = bit_on_end_of_file.lxa.execute_address;
+                }
+                else if ( caseless_strcmp( end_of_suffixed_name+1, FileString_DeadFile ) == 0 ||
+                          ( strchr( HexChars, end_of_suffixed_name[ 1 ] ) != NULL &&
+                            strchr( HexChars, end_of_suffixed_name[ 2 ] ) != NULL &&
+                            strchr( HexChars, end_of_suffixed_name[ 3 ] ) != NULL ) )
+                {
+                        /*
+                                Dead or typed files
+                        */
+                        ndesc->desc.chars_before_suffix = end_of_suffixed_name - ndesc->desc.name;
+                        ndesc->desc.file_is_lxa = No;
+                }
+                else
+                {
+                        /*
+                                Files with an invalid suffix
+                        */
+                        ndesc->desc.chars_before_suffix = strlen( ndesc->desc.name );
+                        ndesc->desc.file_is_lxa = No;
+                }
+        }
+        else
+        {
+                /*
+                        Files without a suffix
+                */
+                ndesc->desc.chars_before_suffix = strlen( ndesc->desc.name );
+                ndesc->desc.file_is_lxa = No;
+        }
+
+        return NULL;
+} /* endfunction extend_nfs_lookup */
+
+
+
+/********* nfs_lookup_extended **********************************************
+
+Purpose : Checks to see if a file is there.  Gets its details if it is.
+          Uses extend_nfs_lookup to fill in gaps.
+
+Inputs : ndesc   ptr to nfs file descriptor of file to search for.
+       	 	 Entries ->file, ->mp already filled in
+
+Returns : NULL if OK (file found), ptr to error otherwise.
+	  If successful, ndesc has been filled in with details.
+
+****************************************************************************/
+
+_kernel_oserror *nfs_lookup_extended( nfs_file_descriptor *ndesc)
+{
+        _kernel_oserror *err;
+        fattr *nattr;
+
+        err = nfs_lookup( &ndesc->file, &nattr, ndesc->mp, &ndesc->dir, ndesc->desc.name );
+
+        if ( err )
+                return err;
+
+        ndesc->desc.attr = *nattr;
+
+        return extend_nfs_lookup( ndesc );
+
+} /* nfs_lookup_extended */
+
+
+
+
+/********* caseless_wildncmp ************************************************
+
+Purpose : Compares first 'charsleft' characters of two strings, ignoring
+	  case, and processing wildcard characters '?', '*'.
+
+Inputs : a           ptr to 1st string, which includes wildcards
+         b  	     ptr to 2nd string to be compared, no wildcards
+         charsleft   number of characters to compare
+
+Returns : 0 if compare is successful, value of difference if it is not.
+
+****************************************************************************/
+
+int caseless_wildncmp( const char *a, const char *b, int charsleft )
+{
+        int last_wildrover = -1;        /* first wild char after last wildcard */
+        int last_realrover = -1;        /* first real char after wildcard in this test sequence */
+        int wild_rover = 0;
+        int real_rover = 0;
+        int d;
+
+        while ( (a[wild_rover] || b[real_rover]) && real_rover < charsleft )
+        {
+                switch( a[wild_rover] )
+                {
+                case FileChar_ManyAny:
+                        last_wildrover = ++wild_rover;  /* Carry on after * in wildcard string */
+                        last_realrover = real_rover;    /* try matching from here */
+                        break;
+
+                case FileChar_Any:
+                        if ( !b[real_rover] )
+                                return a[wild_rover];
+
+                        wild_rover++;
+                        real_rover++;
+                        break;
+
+                default:
+                        d = toupper( a[wild_rover] ) - toupper( b[real_rover] );
+                        if ( d )
+                        {
+                                if ( last_wildrover < 0 || !b[real_rover] )
+                                        return d;
+
+                                wild_rover = last_wildrover;    /* Restart after * in wilcard string */
+                                real_rover = ++last_realrover;  /* test one character on */
+                        }
+                        else
+                        {
+                                wild_rover++;
+                                real_rover++;
+                        }
+                        break;
+                }
+        }
+
+        return 0;
+} /* endfunction caseless_wildncmp */
+
+
+
+/********* wildncmp *********************************************************
+
+Purpose : Compares first 'charsleft' characters of two strings, and
+	  processing wildcard characters '?', '*'.  Case sensitive.
+
+Inputs : a           ptr to 1st string, which includes wildcards
+         b  	     ptr to 2nd string to be compared, no wildcards
+         charsleft   number of characters to compare
+
+Returns : 0 if compare is successful, value of difference if it is not.
+
+****************************************************************************/
+
+int wildncmp( const char *a, const char *b, int charsleft )
+{
+        int last_wildrover = -1;        /* first wild char after last wildcard */
+        int last_realrover = -1;        /* first real char after wildcard in this test sequence */
+        int wild_rover = 0;
+        int real_rover = 0;
+        int d;
+
+        while ( (a[wild_rover] || b[real_rover]) && real_rover < charsleft )
+        {
+                switch( a[wild_rover] )
+                {
+                case FileChar_ManyAny:
+                        last_wildrover = ++wild_rover;  /* Carry on after * in wildcard string */
+                        last_realrover = real_rover;    /* try matching from here */
+                        break;
+
+                case FileChar_Any:
+                        if ( !b[real_rover] )
+                                return a[wild_rover];
+
+                        wild_rover++;
+                        real_rover++;
+                        break;
+
+                default:
+                        d = a[wild_rover] - b[real_rover];
+                        if ( d )
+                        {
+                                if ( last_wildrover < 0 )
+                                        return d;
+
+                                wild_rover = last_wildrover;    /* Restart after * in wilcard string */
+                                real_rover = ++last_realrover;  /* test one character on */
+                        }
+                        else
+                        {
+                                wild_rover++;
+                                real_rover++;
+                        }
+                        break;
+                }
+        }
+
+        return 0;
+} /* endfunction wildncmp */
+
+
+
+/********* caseless_strncmp ************************************************
+
+Purpose : Compares first 'charsleft' characters of two strings, ignoring
+	  case.
+
+Inputs : a           ptr to 1st string to be compared
+         b  	     ptr to 2nd string to be compared
+         charsleft   number of characters to compare
+
+Returns : 0 if compare is successful, value of difference if it is not.
+
+****************************************************************************/
+
+int caseless_strncmp( const char *a, const char *b, int charsleft )
+{
+        int d;
+
+        while ( (*a || *b) && charsleft-- > 0 )
+        {
+                d = toupper( *(a++) ) - toupper( *(b++) );
+                if ( d )
+                        return d;
+        }
+
+        return 0;
+} /* endfunction caseless_strncmp */
+
+
+/********* caseless_strcmp ************************************************
+
+Purpose : Compares two strings, ignoring case.
+
+Inputs : a           ptr to 1st string to be compared
+         b  	     ptr to 2nd string to be compared
+
+Returns : 0 if compare is successful, value of difference if it is not.
+
+****************************************************************************/
+
+int caseless_strcmp( const char *a, const char *b )
+{
+        int d;
+
+        while ( *a || *b )
+        {
+                d = toupper( *(a++) ) - toupper( *(b++) );
+                if ( d )
+                        return d;
+        }
+
+        return 0;
+} /* endfunction caseless_strcmp */
+
+
+
+/*********** find_object_in_directory ***************************************
+
+Purpose : Find an object in a directory.  Converts name of object to its NFS
+	  equivalent, and checks to see if it is in the cache.  If it is not,
+	  then it will open the directory being searched, and check each
+	  entry one by one, trying to find the name (plus riscos/NFS
+	  filetype/extension).
+
+	  NOTE: Case tolerance has been removed.  For this function to find
+	  the file, the supplied name must be exact (except for extension).
+
+Inputs : ndesc          pointer to details of directory to search for file
+         riscos_name    pointer to riscos name of object to find
+
+Returns :  NULL if OK, otherwise _kernel_oserror pointer
+	   ndesc holds the details of the found object
+
+****************************************************************************/
+
+_kernel_oserror *find_object_in_directory(nfs_file_descriptor *ndesc,
+        				  char                *riscos_name)
+{
+        _kernel_oserror *err;
+        char *enumed_riscos_name;
+        YesNoAnswer found_a_match = No;
+        YesNoAnswer found_exact_match = No;
+        nfs_file_descriptor ndescf;
+        char *ThisFileName;
+
+        err = simple_riscos_to_nfs( &ndesc->desc.name, riscos_name );
+
+        if ( err )
+        {
+                return err;
+        }
+        err = nfs_lookup_extended( ndesc );
+
+        /*
+                Found it?
+        */
+        if ( !err )
+        {
+                return NULL;
+        }
+
+        /*
+                Well, we didn't find it under this name, so lets junk it.
+        */
+        free( ndesc->desc.name );
+
+        /*
+                If we didn't find the object for some other reason than it just wasn't there
+                then return without trying harder.
+        */
+        if ( err != mb_nfserr_noent )
+        {
+                return err;
+        }
+
+        /*
+                Let's try to find the file by other means. IE lets search through the
+                objects one by one until we find the one we want.
+        */
+
+        found_a_match = No;
+        found_exact_match = No;
+
+        ndescf.mp = ndesc->mp;
+        ndescf.dir = ndesc->dir;
+
+           /* Open the directory */
+#if DEBUGON
+printf("find_object_in_directory: opening directory....");
+#endif
+        err = GetNFSDirEntry(ndesc->mp, ndesc->dir, 0, &ThisFileName, NULL);
+
+        if ( err )
+           return err; /* something went wrong */
+
+#if DEBUGON
+printf("First file name is %s\n", ThisFileName);
+#endif
+
+        /* Carry on while there's no error and there's more directory to
+           pull across */
+
+        while (ThisFileName != NULL)
+        {
+           fattr *attr;
+
+           /*
+                   Get the name of this object
+           */
+	   ndescf.desc.name = ThisFileName;
+
+
+           /* get attributes for name conversion (need to know if dir or file) */
+           err = nfs_lookup( &ndescf.file, &attr, ndescf.mp, &ndescf.dir, ndescf.desc.name );
+           if ( err )
+           {
+#if DEBUGON
+printf("find_object_in_directory: getting next entry...");
+#endif
+             err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+             if(err)
+              return err;
+
+#if DEBUGON
+printf("%s\n", ThisFileName);
+#endif
+             continue;
+           }
+           ndescf.desc.attr = *attr;
+
+           /* convert nfs name to riscos name */
+           err = nfsname_to_riscos_name( &enumed_riscos_name, ndescf.desc.name, &ndescf );
+           if ( err )
+           {
+#if DEBUGON
+printf("find_object_in_directory: getting next entry...");
+#endif
+             err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+             if(err)
+              return err;
+
+#if DEBUGON
+printf("%s\n", ThisFileName);
+#endif
+             continue;
+           }
+           /*
+                   Is it the right one?
+           */
+
+
+/*********************
+CASE TOLERANCE PROVIDED HERE
+**********************/
+           if ( caseless_wildncmp( riscos_name, enumed_riscos_name, max_riscos_name_length ) != 0 )
+           {
+                   free( enumed_riscos_name );
+#if DEBUGON
+printf("find_object_in_directory: getting next entry...");
+#endif
+                   err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+                   if(err)
+                    return err;
+
+#if DEBUGON
+printf("%s\n", ThisFileName);
+#endif
+                   continue;
+           }
+/**********************
+END OF CASE TOLERACE CODE
+***********************/
+           /*
+                   We've found something which is a match
+           */
+
+
+           if ( wildncmp( riscos_name, enumed_riscos_name, max_riscos_name_length ) != 0 )
+           {
+                   /*
+                           This thing we've found isn't an exact match.
+                   */
+                   if ( found_a_match )
+                   {
+                           /*
+                                   As we've already found an inexact match, we'll use
+                                   that earlier one, and not this one we've just found.
+                           */
+                           free( enumed_riscos_name );
+           /* Get next file, don't check for cache freshness */
+#if DEBUGON
+printf("find_object_in_directory: getting next entry...");
+#endif
+                          err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+                          if(err)
+                             return err;
+
+#if DEBUGON
+printf("%s\n", ThisFileName);
+#endif
+		          continue;
+
+                   }
+           }
+           else
+           {
+                   /*
+                           This thing we've found is an exact match.
+                   */
+                   if ( found_a_match )
+                   {
+                           /*
+                                   The previous inexact match must be junked
+                           */
+                           free( ndesc->desc.name );
+                   }
+
+                   found_exact_match = Yes;
+           }
+
+/***
+DISABLED FOR CASE SENSITIVITY
+CP 16/2/95
+***/
+           found_a_match = Yes;
+
+           /*
+                   It IS the right one. No longer need the enumed name'cos is the
+                   same as that passed in.
+           */
+           free( enumed_riscos_name );
+
+           /*
+                   Copy the name
+           */
+           ndesc->desc.name = malloc( strlen( ndescf.desc.name ) + 1 );
+
+           if ( ndesc->desc.name == NULL )
+           {
+                   return mb_malloc_failed;
+           }
+
+           strcpy( ndesc->desc.name, ndescf.desc.name );
+
+           /*
+                   Get the gory details 'cos the caller wants them.
+           */
+           err = nfs_lookup_extended( ndesc );
+
+           if ( err )
+           {
+                   return err;
+           }
+
+           /*
+                   Finding an exact match means stop here
+           */
+           if ( found_exact_match )
+           {
+                   return NULL;
+           }
+
+           /* Get next file, don't check for cache freshness */
+#if DEBUGON
+printf("find_object_in_directory: getting next entry...");
+#endif
+           err = GetNextNFSDirEntry(&ThisFileName, NULL);
+
+           if(err)
+              return err;
+
+#if DEBUGON
+printf("%s\n", ThisFileName);
+#endif
+        } /* endwhile (ThisFileName != NULL) */
+
+        if ( found_a_match )
+        {
+                return NULL;
+        }
+        else
+        {
+                /*
+                        Didn't find any match, its not in this directory.
+                */
+                return mb_nfserr_noent;
+        }
+}
+
+
+/*********** find_leaf *****************************************************
+
+Purpose : Finds a leaf (file/directory)
+
+Inputs :  path          ptr to full path to object (including mount name?)
+          ndesc         ptr, somewhere to put a result
+          path_to_leaf  ptr to ptr, somewhere to put a result
+          leaf_position ptr to ptr, somewhere to put result
+
+Returns :  NULL if OK, otherwise _kernel_oserror pointer.  Nothing to free if 	      error.
+	   ndesc holds NFS details of the directory where the leaf was found
+	   path_to_leaf points to directory path to found leaf (calling
+	       function must free this)
+	   leaf_position points to the name of the found leaf
+
+****************************************************************************/
+
+_kernel_oserror *find_leaf( char *path, nfs_file_descriptor *ndesc,
+        char **path_to_leaf, char **leaf_position)
+{
+        _kernel_oserror *err;
+        fattr *attr;
+        char *path_with_real_leaf;
+        char *real_leaf;
+
+        /*
+                Find the directory for the leaf, and the leaf name
+        */
+        err = find_dir_for_leaf( path, ndesc, path_to_leaf, leaf_position );
+
+        if ( err )
+        {
+                return err;
+        }
+
+        /*
+                If the leaf is not empty, then try to find it. Empty is valid
+                in this context, as it might be a result of nfs::<mountname>
+        */
+        if ( strcmp( *leaf_position, "" ) != 0 )
+        {
+                err = find_object_in_directory( ndesc, *leaf_position );
+
+                if ( err )
+                {
+                        free( *path_to_leaf );
+
+                        return err;
+                }
+
+                /*
+                        Reconstruct path with expanded leaf name (cancels wildcards).
+                */
+                err = nfsname_to_riscos_name( &real_leaf, ndesc->desc.name, ndesc );
+
+                if ( err )
+                {
+                        free( *path_to_leaf );
+                        return err;
+                }
+
+                path_with_real_leaf = malloc( (*leaf_position - *path_to_leaf) + strlen( real_leaf ) + 1 );
+
+                if ( path_with_real_leaf == NULL )
+                {
+                        free( real_leaf );
+                        free( *path_to_leaf );
+
+                        return mb_malloc_failed;
+                }
+
+                /*
+                        Construct path from path to leaf and real leaf
+                */
+                memcpy( path_with_real_leaf, *path_to_leaf, (*leaf_position - *path_to_leaf) );
+                *leaf_position += path_with_real_leaf - *path_to_leaf;
+                strcpy( *leaf_position, real_leaf );
+
+                /*
+                        Discard junk we no longer need
+                */
+                free( real_leaf );
+                free( *path_to_leaf );
+
+                *path_to_leaf = path_with_real_leaf;
+        }
+        else
+        {
+                /*
+                        We actually mean this directory
+                */
+                ndesc->file = ndesc->dir;
+
+                ndesc->desc.name = malloc( strlen( "" ) + 1 );
+                ndesc->desc.chars_before_suffix = 0;
+
+                if ( ndesc->desc.name == NULL )
+                {
+                        free( *path_to_leaf );
+                        return mb_malloc_failed;
+                }
+
+                strcpy( ndesc->desc.name, "" );
+
+                err = nfs_getattr( &attr, ndesc->mp, &ndesc->file );
+
+                if ( err )
+                {
+                        free( ndesc->desc.name );
+                        free( *path_to_leaf );
+                }
+                else
+                {
+                        ndesc->desc.attr = *attr;
+                }
+        }
+
+        return err;
+} /* endfunction find_leaf */
+
+
+
+/********* find_directory_leaf **********************************************
+
+Purpose : Find a leaf, and make sure it is a directory
+
+Inputs : path          ptr to full path to object (including mount name?)
+          ndesc         ptr, somewhere to put a result
+          path_to_leaf  ptr to ptr, somewhere to put a result
+          leaf_position ptr to ptr, somewhere to put result
+
+Returns : NULL if OK, ptr to err if not (eg it's not a directory, or not
+found)).  Nothing malloced if error.
+	   ndesc holds NFS details of the directory where the leaf was found
+	   path_to_leaf points to directory path to found leaf (calling
+	       function must free this)
+	   leaf_position points to the name of the found leaf
+
+****************************************************************************/
+
+_kernel_oserror *find_directory_leaf(
+        char                    *path,
+        nfs_file_descriptor     *ndesc,
+        char                    **path_to_leaf,
+        char                    **leaf_position
+)
+{
+        _kernel_oserror *err;
+
+        err = find_leaf( path, ndesc, path_to_leaf, leaf_position );
+
+        if ( err )
+        {
+                return err;
+        }
+
+        if ( ndesc->desc.attr.type != NFDIR )
+        {
+                free( *path_to_leaf );
+                free( ndesc->desc.name );
+                return mb_nfserr_noent;  /* Must be noent, not notdir, otherwise
+                                             IFSs don't work */
+        }
+
+
+        return NULL;
+} /* endfunction find_directory_leaf */
+
+
+
+
+/********* find_regular_leaf **********************************************
+
+Purpose : Find a leaf, and make sure it is a file
+
+Inputs : path          ptr to full path to object (including mount name?)
+          ndesc         ptr, somewhere to put a result
+          path_to_leaf  ptr to ptr, somewhere to put a result
+          leaf_position ptr to ptr, somewhere to put result
+
+Returns : NULL if OK, ptr to err if not (eg it's not a directory, or not
+found)).  Nothing malloced if error.
+	   ndesc holds NFS details of the directory where the leaf was found
+	   path_to_leaf points to directory path to found leaf (calling
+	       function must free this)
+	   leaf_position points to the name of the found leaf
+
+****************************************************************************/
+
+_kernel_oserror *find_regular_leaf(
+        char                    *path,
+        nfs_file_descriptor     *ndesc,
+        char                    **path_to_leaf,
+        char                    **leaf_position
+)
+{
+        _kernel_oserror *err;
+
+        err = find_leaf( path, ndesc, path_to_leaf, leaf_position );
+
+        if ( err )
+                return err;
+
+        if ( ndesc->desc.attr.type != NFREG )
+        {
+                free( *path_to_leaf );
+                free( ndesc->desc.name );
+                return mb_not_a_file;
+        }
+
+        return NULL;
+} /* endfunction find_regular_leaf */
+
+
+
+/********* reject_nfs_file **************************************************
+
+Purpose : Checks a nfs filename validity.  Will reject any alien concepts (eg
+	  '.' or '..').
+
+Inputs : nfs_name   ptr to name to process
+
+Returns : 'No' if the filename is valid ("No, don't reject it")
+	  'Yes' if the filename cannot be converted to RiscOS (Yes, reject
+	  it")
+
+****************************************************************************/
+
+YesNoAnswer reject_nfs_file(
+        char *nfs_name
+)
+{
+        if ( strcmp( nfs_name, "." ) != 0 &&
+             strcmp( nfs_name, ".." ) != 0 )
+        {
+                return No;  /* don't reject it */
+        }
+        else
+        {
+                return Yes;  /* it's a hassle...reject it */
+        }
+}  /* endfunction reject_nfs_name */
+
+
+

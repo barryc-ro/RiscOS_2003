@@ -21,7 +21,7 @@ AS      = aasm
 CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -throwback -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 
 #
@@ -124,4 +124,3 @@ rm.FileCore: s.FileCore80
 rm.FileCore: s.FormSrvcs
 rm.FileCore: s.FormSWIs
 rm.FileCore: s.Identify
-rm.FileCore: s.BigDirCode
