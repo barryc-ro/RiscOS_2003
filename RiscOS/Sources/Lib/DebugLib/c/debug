@@ -66,7 +66,9 @@ static char debug_buffer[Debug_Buffer_Size];     /* Buffer for debug data */
 
 static int debug_global_indent = 0;
 
-static const char *debug_always_ignore = " PDebug_* Trace_* remote_debug_* debug_* _dprintf _dvprintf _dfprintf ddumpbuf send sendto select socket socketclose recv recvfrom connect gethostbyname";
+static const char *debug_always_ignore = " PDebug_* Trace_* remote_debug_* debug_* _dprintf _dvprintf"
+                                         " _dfprintf ddumpbuf send sendto select socket socketclose"
+                                         " recv recvfrom connect gethostbyname";
 
 typedef struct debug_output_method
 {
@@ -117,11 +119,12 @@ typedef enum
 static debug_sysvar_area_allowed_pair debug_sysvar_pairs[32];
 static int debug_sysvar_num_pairs = 0;
 
-/* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
+/* ---------------------------------- LOCAL FUNCTION PROTOTYPES --------------------------------- */
 
 static void debug_output_data (const char *, debug_device, const char *);
+static void debug_close_device (debug_device);
 
-/* ----------------------------------------- FUNCTIONS ------------------------------------------ */
+/* ------------------------------------ LOCAL FUNCTIONS ----------------------------------------- */
 
 
 /************************************************************************/
@@ -505,6 +508,317 @@ static void debug_setup_tracedevice (void)
 
 
 /************************************************************************/
+/* debug_close_device                                                   */
+/*                                                                      */
+/* Function closes the currently active device.                         */
+/*                                                                      */
+/* Parameters: device - integer constant for devices.                   */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+static void debug_close_device (debug_device device)
+{
+  time_t timer;
+
+  /* Only close the device if it's open */
+  if (methods[device].open == TRUE)
+  {
+    /* And only send the close text if it's not the raw device */
+    if (device != debug_current_options.raw_device)
+    {
+      time (&timer);
+      _dfprintf("",device,"\n***** Debug Session Terminated *************************************\n");
+      _dfprintf("", device, "Task: %s\n", debug_current_options.taskname);
+      _dfprintf("", device, "Time: %s", ctime(&timer));
+      _dfprintf("", device, "%s\n", COPYRIGHT_MESSAGE);
+      _dfprintf("", device, "********************************************************************\n");
+    }
+
+    if (methods[debug_current_options.device].quit)
+      methods[debug_current_options.device].quit();
+    methods[device].open = FALSE;
+
+    if (device == debug_current_options.device)
+      debug_current_options.device = NULL_OUTPUT;
+  }
+}
+
+
+/************************************************************************/
+/* debug_output_prefix                                                  */
+/*                                                                      */
+/* Function outputs the debug output prefix that is needed based on     */
+/* the current configuration, and the device identifer that is passed   */
+/* in.                                                                  */
+/*                                                                      */
+/* Parameters: area_level - Levels specified in the _dprintf().         */
+/*             device - the debug device to send the buffer to          */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+static void debug_output_prefix (const char *area_level, debug_device device)
+{
+  if (debug_current_options.taskname_prefix == TRUE  && device != TRACKER_OUTPUT)
+  {
+    methods[device].output (debug_current_options.taskname, strlen (debug_current_options.taskname));
+  }
+  if (debug_current_options.stamp_debug == TRUE)
+  {
+    char buf[20];
+    time_t timer;
+    struct tm *t;
+
+    time (&timer);
+
+    t = localtime (&timer);
+
+    strftime (buf, sizeof (buf), " %H:%M:%S", t);
+    methods[device].output (buf, strlen (buf));
+  }
+  if (debug_current_options.area_level_prefix == TRUE)
+  {
+    const char *str;
+    char *out;
+
+    if ((area_level == NULL) || (*area_level == '\0'))
+      str = "ALERT";
+    else
+      str = area_level;
+
+    if (debug_current_options.area_pad_limit > 0)
+    {
+      out = malloc (debug_current_options.area_pad_limit + 1);
+      if (out)
+      {
+        strncpy (out, str, debug_current_options.area_pad_limit);
+        if (strlen(str) < debug_current_options.area_pad_limit)
+        {
+          /* Pad */
+          int i;
+
+          for (i=strlen(str) ; i<debug_current_options.area_pad_limit ; i++)
+            out[i] = ' ';
+          out[i] = '\0';
+        }
+        else
+        {
+          /* Truncate */
+          out[debug_current_options.area_pad_limit] = '\0';
+        }
+      }
+    }
+    else
+      out = (char*)str;
+
+    methods[device].output (" [", strlen (" ["));
+    methods[device].output (out, strlen (out));
+    methods[device].output ("]", strlen ("]"));
+
+    if (debug_current_options.area_pad_limit > 0)
+      free (out);
+  }
+  if ((debug_current_options.taskname_prefix == TRUE  && device != TRACKER_OUTPUT) ||
+      (debug_current_options.stamp_debug == TRUE) ||
+      (debug_current_options.area_level_prefix == TRUE))
+  {
+    methods[device].output (": ", strlen (": "));
+  }
+}
+
+
+/************************************************************************/
+/* debug_output_data                                                    */
+/*                                                                      */
+/* Function outputs the conventional debuglib output with prefixing,    */
+/* timestamping etc.                                                    */
+/*                                                                      */
+/* Parameters: area_level - Levels specified in the _dprintf().         */
+/*             device - the debug device to send the buffer to          */
+/*             buffer - data to be streamed.                            */
+/* Parameters: void.                                                    */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+static void debug_output_data (const char *area_level, debug_device device, const char *buffer)
+{
+  if (debug_buff_status.enabled != FALSE)
+  {
+    debug_buffer_stream (buffer);
+  }
+  else
+  {
+    BOOL rc = TRUE;
+
+    /* If we've been passed an invalid device, don't bother */
+    if (device <= NULL_OUTPUT || device >= UNSET_OUTPUT || device == NOTUSED_OUTPUT)
+      return;
+
+    /* If the device has no output method, don't bother */
+    if (methods[device].output == NULL)
+      return;
+
+    /* If we've got an empty string, return too */
+    if ((buffer == NULL) || (*buffer == '\0'))
+      return;
+
+    /* Check that the output device is open */
+    if (methods[device].open == FALSE)
+    {
+      /* If it's not, initialise it */
+      if (methods[device].initialise)
+      {
+        rc = methods[device].initialise ();
+      }
+      if (rc == TRUE)
+        methods[device].open = TRUE;
+    }
+
+    /* And if everything is OK, go ahead and output the buffer */
+    if (rc == TRUE)
+    {
+      const char *stepper = buffer, *match;
+
+      if (methods[device].start_of_line == TRUE)
+      {
+        debug_output_prefix (area_level, device);
+        methods[device].start_of_line = FALSE;
+      }
+      do
+      {
+        match = strchr (stepper, '\n');
+        if (match)
+        {
+          /* Output up to and including the \n */
+          methods[device].output (stepper, match - stepper + 1);
+          stepper = match + 1;
+          if (*stepper == NULL)
+          {
+            /* \n is at the end of "buffer" */
+            methods[device].start_of_line = TRUE;
+          }
+          else
+          {
+            /* \n in middle of "buffer" */
+            debug_output_prefix (area_level, device);
+          }
+        }
+        else
+        {
+          /* No more \ns */
+          methods[device].output (stepper, strlen (stepper));
+        }
+      }
+      while ((match != NULL) && (*stepper != NULL));
+    }
+  }
+}
+
+
+/************************************************************************/
+/* debug_trace_enter                                                    */
+/*                                                                      */
+/* Function is called when a function is entered provided trace is      */
+/* running.                                                             */
+/*                                                                      */
+/* Parameters: format - fprintf configuration.                          */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+static void debug_trace_enter (const char *fname)
+{
+  int i = 0;
+  char *buffer;
+  char buffer2[256];
+
+  buffer = malloc (strlen ("Trace: 999:")+(strlen(" |")*debug_global_indent)+strlen(" \n")+strlen (fname)+1);
+
+  if (buffer)
+  {
+    sprintf (buffer, "Trace: %3d:", debug_global_indent);
+
+    for (i = 0; i < debug_global_indent; i++)
+    {
+      strcat (buffer, " |");
+    }
+    sprintf (buffer2, " %s\n", fname);
+    strcat (buffer, buffer2);
+
+    _dfprintf ("Trace", debug_current_options.trace_device, buffer);
+
+    free (buffer);
+  }
+
+  debug_global_indent++;
+}
+
+
+/************************************************************************/
+/* debug_trace_exit                                                     */
+/*                                                                      */
+/* Function is called when a function is exited provided trace is       */
+/* running.                                                             */
+/*                                                                      */
+/* Parameters: format - fprintf configuration.                          */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+static void debug_trace_exit (const char* fname)
+{
+  int i = 0;
+  char *buffer;
+  char buffer2[256];
+
+  buffer = malloc (strlen ("Trace: 999:")+(strlen(" |")*debug_global_indent)+strlen("~\n")+strlen (fname)+1);
+
+  if (buffer)
+  {
+    sprintf (buffer, "Trace: %3d:", debug_global_indent-1);
+
+    for (i=0; i < debug_global_indent-1; i++)
+    {
+      strcat (buffer, " |");
+    }
+
+    sprintf (buffer2, "~%s\n", fname);
+    strcat (buffer, buffer2);
+
+    _dfprintf ("Trace", debug_current_options.trace_device, buffer);
+
+    free (buffer);
+  }
+
+  debug_global_indent--;
+}
+
+
+/************************************************************************/
+/* debug_terminate                                                      */
+/*                                                                      */
+/* Function terminates the current debug session.                       */
+/*                                                                      */
+/* Parameters: none                                                     */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void debug_terminate (void)
+{
+  int i;
+
+  for (i = (NULL_OUTPUT+1); i < UNSET_OUTPUT; i++)
+    debug_close_device ((debug_device)i);
+}
+
+
+/* --------------------------------- EXPORTED FUNCTIONS -------------------------------------- */
+
+
+/************************************************************************/
 /* debug_initialise                                                     */
 /*                                                                      */
 /* Function initialises the library                                     */
@@ -520,6 +834,9 @@ static void debug_setup_tracedevice (void)
 /************************************************************************/
 void debug_initialise (const char *name, const char *fname, const char *sysvar)
 {
+  /* Set up our atexit handler */
+  atexit(debug_terminate);
+
   /* Set default DebugLib options */
   debug_options_initialise ();
 
@@ -555,64 +872,7 @@ void debug_initialise (const char *name, const char *fname, const char *sysvar)
 
 
 /************************************************************************/
-/* debug_terminate                                                      */
-/*                                                                      */
-/* Function terminates the current debug session.                       */
-/*                                                                      */
-/* Parameters: none                                                     */
-/*                                                                      */
-/* Returns:    void.                                                    */
-/*                                                                      */
-/************************************************************************/
-void debug_terminate (void)
-{
-  int i;
-
-  for (i = (NULL_OUTPUT+1); i < UNSET_OUTPUT; i++)
-    debug_close_device ((debug_device)i);
-}
-
-
-/************************************************************************/
-/* debug_close_device                                                   */
-/*                                                                      */
-/* Function closes the currently active device.                         */
-/*                                                                      */
-/* Parameters: device - integer constant for devices.                   */
-/*                                                                      */
-/* Returns:    void.                                                    */
-/*                                                                      */
-/************************************************************************/
-void debug_close_device (debug_device device)
-{
-  time_t timer;
-
-  /* Only close the device if it's open */
-  if (methods[device].open == TRUE)
-  {
-    /* And only send the close text if it's not the raw device */
-    if (device != debug_current_options.raw_device)
-    {
-      time (&timer);
-      _dfprintf("",device,"\n***** Debug Session Terminated *************************************\n");
-      _dfprintf("", device, "Task: %s\n", debug_current_options.taskname);
-      _dfprintf("", device, "Time: %s", ctime(&timer));
-      _dfprintf("", device, "%s\n", COPYRIGHT_MESSAGE);
-      _dfprintf("", device, "********************************************************************\n");
-    }
-
-    if (methods[debug_current_options.device].quit)
-      methods[debug_current_options.device].quit();
-    methods[device].open = FALSE;
-
-    if (device == debug_current_options.device)
-      debug_current_options.device = NULL_OUTPUT;
-  }
-}
-
-
-/************************************************************************/
-/* debug_set_device                                                     */
+/* debug_read_device                                                    */
 /*                                                                      */
 /* Function returns the identifier of the currently active debug output */
 /* device.                                                              */
@@ -728,89 +988,6 @@ void debug_set_raw_device (debug_device device)
 
 
 /************************************************************************/
-/* debug_output_prefix                                                  */
-/*                                                                      */
-/* Function outputs the debug output prefix that is needed based on     */
-/* the current configuration, and the device identifer that is passed   */
-/* in.                                                                  */
-/*                                                                      */
-/* Parameters: area_level - Levels specified in the _dprintf().         */
-/*             device - the debug device to send the buffer to          */
-/*                                                                      */
-/* Returns:    void.                                                    */
-/*                                                                      */
-/************************************************************************/
-static void debug_output_prefix (const char *area_level, debug_device device)
-{
-  if (debug_current_options.taskname_prefix == TRUE  && device != TRACKER_OUTPUT)
-  {
-    methods[device].output (debug_current_options.taskname, strlen (debug_current_options.taskname));
-  }
-  if (debug_current_options.stamp_debug == TRUE)
-  {
-    char buf[20];
-    time_t timer;
-    struct tm *t;
-
-    time (&timer);
-
-    t = localtime (&timer);
-
-    strftime (buf, sizeof (buf), " %H:%M:%S", t);
-    methods[device].output (buf, strlen (buf));
-  }
-  if (debug_current_options.area_level_prefix == TRUE)
-  {
-    const char *str;
-    char *out;
-
-    if ((area_level == NULL) || (*area_level == '\0'))
-      str = "ALERT";
-    else
-      str = area_level;
-
-    if (debug_current_options.area_pad_limit > 0)
-    {
-      out = malloc (debug_current_options.area_pad_limit + 1);
-      if (out)
-      {
-        strncpy (out, str, debug_current_options.area_pad_limit);
-        if (strlen(str) < debug_current_options.area_pad_limit)
-        {
-          /* Pad */
-          int i;
-
-          for (i=strlen(str) ; i<debug_current_options.area_pad_limit ; i++)
-            out[i] = ' ';
-          out[i] = '\0';
-        }
-        else
-        {
-          /* Truncate */
-          out[debug_current_options.area_pad_limit] = '\0';
-        }
-      }
-    }
-    else
-      out = (char*)str;
-
-    methods[device].output (" [", strlen (" ["));
-    methods[device].output (out, strlen (out));
-    methods[device].output ("]", strlen ("]"));
-
-    if (debug_current_options.area_pad_limit > 0)
-      free (out);
-  }
-  if ((debug_current_options.taskname_prefix == TRUE  && device != TRACKER_OUTPUT) ||
-      (debug_current_options.stamp_debug == TRUE) ||
-      (debug_current_options.area_level_prefix == TRUE))
-  {
-    methods[device].output (": ", strlen (": "));
-  }
-}
-
-
-/************************************************************************/
 /* debug_output                                                         */
 /*                                                                      */
 /* Function sends the debugging data to a valid location.               */
@@ -841,95 +1018,6 @@ void debug_output (unsigned int flags, const char *area_level, debug_device devi
   {
     /* Bit 0 unset, output info based on options */
     debug_output_data (area_level, device, buffer);
-  }
-}
-
-
-/************************************************************************/
-/* debug_output_data                                                    */
-/*                                                                      */
-/* Function outputs the conventional debuglib output with prefixing,    */
-/* timestamping etc.                                                    */
-/*                                                                      */
-/* Parameters: area_level - Levels specified in the _dprintf().         */
-/*             device - the debug device to send the buffer to          */
-/*             buffer - data to be streamed.                            */
-/* Parameters: void.                                                    */
-/*                                                                      */
-/* Returns:    void.                                                    */
-/*                                                                      */
-/************************************************************************/
-static void debug_output_data (const char *area_level, debug_device device, const char *buffer)
-{
-  if (debug_buff_status.enabled != FALSE)
-  {
-    debug_buffer_stream (buffer);
-  }
-  else
-  {
-    BOOL rc = TRUE;
-
-    /* If we've been passed an invalid device, don't bother */
-    if (device <= NULL_OUTPUT || device >= UNSET_OUTPUT || device == NOTUSED_OUTPUT)
-      return;
-
-    /* If the device has no output method, don't bother */
-    if (methods[device].output == NULL)
-      return;
-
-    /* If we've got an empty string, return too */
-    if ((buffer == NULL) || (*buffer == '\0'))
-      return;
-
-    /* Check that the output device is open */
-    if (methods[device].open == FALSE)
-    {
-      /* If it's not, initialise it */
-      if (methods[device].initialise)
-      {
-        rc = methods[device].initialise ();
-      }
-      if (rc == TRUE)
-        methods[device].open = TRUE;
-    }
-
-    /* And if everything is OK, go ahead and output the buffer */
-    if (rc == TRUE)
-    {
-      const char *stepper = buffer, *match;
-
-      if (methods[device].start_of_line == TRUE)
-      {
-        debug_output_prefix (area_level, device);
-        methods[device].start_of_line = FALSE;
-      }
-      do
-      {
-        match = strchr (stepper, '\n');
-        if (match)
-        {
-          /* Output up to and including the \n */
-          methods[device].output (stepper, match - stepper + 1);
-          stepper = match + 1;
-          if (*stepper == NULL)
-          {
-            /* \n is at the end of "buffer" */
-            methods[device].start_of_line = TRUE;
-          }
-          else
-          {
-            /* \n in middle of "buffer" */
-            debug_output_prefix (area_level, device);
-          }
-        }
-        else
-        {
-          /* No more \ns */
-          methods[device].output (stepper, strlen (stepper));
-        }
-      }
-      while ((match != NULL) && (*stepper != NULL));
-    }
   }
 }
 
@@ -1126,84 +1214,6 @@ const char *debug_version (void)
   return debug_version_string;
 }
 
-
-/************************************************************************/
-/* debug_trace_enter                                                    */
-/*                                                                      */
-/* Function is called when a function is entered provided trace is      */
-/* running.                                                             */
-/*                                                                      */
-/* Parameters: format - fprintf configuration.                          */
-/*                                                                      */
-/* Returns:    void.                                                    */
-/*                                                                      */
-/************************************************************************/
-static void debug_trace_enter (const char *fname)
-{
-  int i = 0;
-  char *buffer;
-  char buffer2[256];
-
-  buffer = malloc (strlen ("Trace: 999:")+(strlen(" |")*debug_global_indent)+strlen(" \n")+strlen (fname)+1);
-
-  if (buffer)
-  {
-    sprintf (buffer, "Trace: %3d:", debug_global_indent);
-
-    for (i = 0; i < debug_global_indent; i++)
-    {
-      strcat (buffer, " |");
-    }
-    sprintf (buffer2, " %s\n", fname);
-    strcat (buffer, buffer2);
-
-    _dfprintf ("Trace", debug_current_options.trace_device, buffer);
-
-    free (buffer);
-  }
-
-  debug_global_indent++;
-}
-
-
-/************************************************************************/
-/* debug_trace_exit                                                     */
-/*                                                                      */
-/* Function is called when a function is exited provided trace is       */
-/* running.                                                             */
-/*                                                                      */
-/* Parameters: format - fprintf configuration.                          */
-/*                                                                      */
-/* Returns:    void.                                                    */
-/*                                                                      */
-/************************************************************************/
-static void debug_trace_exit (const char* fname)
-{
-  int i = 0;
-  char *buffer;
-  char buffer2[256];
-
-  buffer = malloc (strlen ("Trace: 999:")+(strlen(" |")*debug_global_indent)+strlen("~\n")+strlen (fname)+1);
-
-  if (buffer)
-  {
-    sprintf (buffer, "Trace: %3d:", debug_global_indent-1);
-
-    for (i=0; i < debug_global_indent-1; i++)
-    {
-      strcat (buffer, " |");
-    }
-
-    sprintf (buffer2, "~%s\n", fname);
-    strcat (buffer, buffer2);
-
-    _dfprintf ("Trace", debug_current_options.trace_device, buffer);
-
-    free (buffer);
-  }
-
-  debug_global_indent--;
-}
 
 
 /************************************************************************/
