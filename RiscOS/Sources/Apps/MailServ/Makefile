@@ -7,6 +7,7 @@
 # ----	     ----   -----------
 # 28-Apr-98  SNB    Created
 # 05-May-98  SNB    Added dual build capability
+# 23-Jul-98  SNB    !Connect provlist file generated automatically
 #
 .SUFFIXES: .o .o_su .c
 
@@ -45,6 +46,8 @@ CFLAGS	 = -c -depend !Depend ${INCLUDES} -faf -Wp -throwback ${DFLAGS}
 DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 ${TRFLAGS} -UTIMEBOMBED
 TRFLAGS  = -UTML -UTRACE -DDEBUG_ON
 INCLUDES = -IC:,TCPIPLibs:
+
+SEDFLAGS = -e "s/MailServ/Connect/g" -e "s/InterTalk Server/Connect/g"
 
 #
 # Libraries
@@ -113,15 +116,19 @@ commonbase:
 	${MKDIR} ${EXPDIR}
 	${CP} CommonBase.* ${EXPDIR}.* ${CPFLAGS}
 	${CP} Resources.${LOCALE}.* ${EXPDIR}.* ${CPFLAGS}
+	@${MKDIR} ${EXPDIR}.!${SU_COMPONENT}.Providers
+	@${MKDIR} ${EXPDIR}.!${MU_COMPONENT}.Providers
 	${WIPE} ${EXPDIR}.!${SU_COMPONENT}.Providers ${WFLAGS}
 	${WIPE} ${EXPDIR}.!${MU_COMPONENT}.Providers ${WFLAGS}
 
 # This is far easier than maintaining multiple message files!
 commonmessages: commonbase
-	${SED} "s/MailServ/Connect" Resources.${LOCALE}.!${MU_COMPONENT}.!Help > \
+	${SED} ${SEDFLAGS} Resources.${LOCALE}.!${MU_COMPONENT}.!Help > \
 	  ${EXPDIR}.!${SU_COMPONENT}.!Help
-	${SED} "s/MailServ/Connect" Resources.${LOCALE}.!${MU_COMPONENT}.Messages > \
+	${SED} ${SEDFLAGS} Resources.${LOCALE}.!${MU_COMPONENT}.Messages > \
 	  ${EXPDIR}.!${SU_COMPONENT}.Messages
+	${SED} ${SEDFLAGS} CommonBase.!${MU_COMPONENT}.provlist > \
+	  ${EXPDIR}.!${SU_COMPONENT}.provlist
 
 export: commonmessages all
 	${SQZ} ${SU_TARGET} ${EXPDIR}.!${SU_COMPONENT}.!RunImage ${SQZFLAGS}
