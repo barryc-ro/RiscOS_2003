@@ -39,6 +39,9 @@ Date		Who	Change
 			now works as it should have all along!
 12/06/2000	BJGA	Added *PacketInfo
 23/06/2000	BJGA	No longer initialises MPEGDriver+ in the middle of ROM init
+06/07/2000	BJGA	Service_PostInit is now depatched correctly (!); sets video PEH flags
+			as in Service.c; added audio PEH; VideoPrefillStiff handler added
+			(does an internal reset if the MPEG chip locked up during prefill)
 
 ***************************************************************************/
 
@@ -188,8 +191,12 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
     
     /* Attempt to register program element handlers */
     /* Don't complain if it fails, it may be that we're in ROM and MPEGTransport hasn't initialised yet */
-    _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3), 0, 1 /* MPEG-1 video */, program_element_handler, pw);
-    _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3), 0, 2 /* MPEG-2 video */, program_element_handler, pw);
+    _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3),
+        1 << PEHFlags_RequiredFlag_Shift, 1 /* MPEG-1 video */, video_program_element_handler, pw);
+    _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3),
+        1 << PEHFlags_RequiredFlag_Shift, 2 /* MPEG-2 video */, video_program_element_handler, pw);
+    _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3),
+        2 << PEHFlags_RequiredFlag_Shift, 3 /* MPEG-1 audio */, audio_program_element_handler, pw);
     
     /* Set up Module_AudioSpeedIndicatorOffset (can't be done on static init) */
     Module_AudioSpeedIndicatorOffset = (char *) &Stream.audio.speed_indicator - (char *) &Stream;
@@ -224,8 +231,12 @@ extern _kernel_oserror *Module_Final(int fatal, int podule, void *pw)
   }
   else
   {
-    _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3), 0, 2, program_element_handler, pw);
-    _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3), 0, 1, program_element_handler, pw);
+    _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
+        2 << PEHFlags_RequiredFlag_Shift, 3, audio_program_element_handler, pw);
+    _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
+        1 << PEHFlags_RequiredFlag_Shift, 2, video_program_element_handler, pw);
+    _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
+        1 << PEHFlags_RequiredFlag_Shift, 1, video_program_element_handler, pw);
     Module_Dying = true; /* flag to MPEGDriver+ that it's OK to die */
     _swix (OS_Module, _INR(0,1), 4 /* delete */, "MPEGDriver+");
     _swix (MessageTrans_CloseFile, _IN(0), &Module_MessageFD);
@@ -253,6 +264,9 @@ extern void Module_Service(int service_number, _kernel_swi_regs *r, void *pw)
       break;
     case Service_ModeChange:
       claim = Service_ServiceModeChange ();
+      break;
+    case Service_PostInit:
+      claim = Service_ServicePostInit ();
       break;
     case Service_MPEGControlStarting:
       claim = Service_ServiceMPEGControlStarting (pw);
@@ -634,15 +648,15 @@ _kernel_oserror *Module_AudioStuffingCallback(_kernel_swi_regs *r, void *pw)
   return NULL;
 }
 
-/******	Module_ProgramElementHandler() *************************************
+/******	Module_VideoPEH() **************************************************
 
-Purpose:	Program element handler
+Purpose:	Video program element handler
 In:		Registers in/out, module private word
 Out:		Pointer to error block (if required)
 
 ***************************************************************************/
 
-extern _kernel_oserror *Module_ProgramElementHandler(_kernel_swi_regs *r, void *pw)
+extern _kernel_oserror *Module_VideoPEH(_kernel_swi_regs *r, void *pw)
 {
   _kernel_oserror *e = NULL;
   IGNORE(pw);
@@ -663,6 +677,40 @@ extern _kernel_oserror *Module_ProgramElementHandler(_kernel_swi_regs *r, void *
       break;
     default:
       /* do nothing (MPEGVideoCloseStream is still called by MPEGTransport) */
+      break;
+  }
+  return e;
+}
+
+/******	Module_AudioPEH() **************************************************
+
+Purpose:	Audio program element handler
+In:		Registers in/out, module private word
+Out:		Pointer to error block (if required)
+
+***************************************************************************/
+
+extern _kernel_oserror *Module_AudioPEH(_kernel_swi_regs *r, void *pw)
+{
+  _kernel_oserror *e = NULL;
+  IGNORE(pw);
+  switch (r->r[0])
+  {
+    case PEHReason_OpenStream:
+      /* We don't have to take any action here, because MPEGAudio_OpenStream is still called by MPEGTransport */
+      /* However, we still need to return the stream handle here, because MPEGTransport will use it in        */
+      /* preference to that returned from MPEGAudio_OpenStream (but only when calling PEH entry points)       */
+      r->r[0] = (unsigned int) &Stream;
+      break;
+    case PEHReason_DataTransfer:
+      e = Audio_SWIFullPackets(
+          (unsigned int) (r->r[1]),
+          (stream_handle_t) (r->r[2]),
+          (bitstream_packet_t *) (r->r[3])
+          );
+      break;
+    default:
+      /* do nothing (MPEGAudioCloseStream is still called by MPEGTransport) */
       break;
   }
   return e;
@@ -697,6 +745,24 @@ _kernel_oserror *Module_STi3520LAudioIRQHandler(_kernel_swi_regs *r, void *pw)
   IGNORE(r);
   IGNORE(pw);
   IRQ_HandleAudioIRQ ();
+  return NULL;
+}
+
+/******	Module_VideoPrefillStiff() *****************************************
+
+Purpose:	CallAfter entry used when MPEG chip jams during prefill
+In:		Registers in/out, module private word
+Out:		Pointer to error block (null)
+
+***************************************************************************/
+
+_kernel_oserror *Module_VideoPrefillStiff(_kernel_swi_regs *r, void *pw)
+{
+  IGNORE(r);
+  IGNORE(pw);
+  _swix (OS_AddCallBack, _INR(0,1), video_reset_callback, Module_PrivateWord);
+  Stream.video.since_open.internal_resets += 1;
+  Stream.video.since_reset.internal_resets += 1;
   return NULL;
 }
 

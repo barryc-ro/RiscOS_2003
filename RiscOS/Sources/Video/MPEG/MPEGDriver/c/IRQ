@@ -143,6 +143,17 @@ Date		Who	Change
 16/06/2000	BJGA	Lipsync error now stored in Stream for access from *PacketInfo; does a pipeline
 			reset before every decode in trick-play mode for added stability
 20/06/2000	BJGA	Video PTSs now obtained from software PTS list, rather from broken hardware PES parser
+07/07/2000	BJGA	support for SWIs MPEGVideo_Play 1 and MPEGAudio_Play 1 added (calls MPEGControl back
+			when video and/or audio display stops); now catches cases where the MPEG chip locks up
+			during prefilling (including prefilling as part of an internal reset) and fires off
+			an(other) internal reset; satisfies _swix() type checking of new version of cc;
+			blanking the first line of video to hide half-line artefacts was erroneously being
+			applied even in non-letterbox modes - now done only in letterbox mode, and uses the
+			specific hardware feature for the task instead - also fixes 1-line vertical positioning fault;
+			always assumes that the picture after a first-field picture is a second-field picture
+			(should make buffer allocation algorithm more robust to bitstream errors);
+			removed special-case handling of low_delay streams (reduces frequency of video-tear artefacts);
+			widescreen TVs can now be signalled to switch to 16:9 zoom mode as well as anamorphic mode in viewing mode Stretch
 
 ***************************************************************************/
 
@@ -224,6 +235,7 @@ static void static_INT_VHR (void);
 static void static_INT_VPR (void);
 static void static_INT_CRC (void);
 static void static_INT_POU (void);
+static void static_INT_FNP (void);
 static void static_ProcessVideoHdr (void *argument);
 static void static_NewPictureDecode (void);
 static void static_ProcessVideoSequenceHdr (void);
@@ -381,6 +393,9 @@ Purpose:	Video IRQ entry point
 void IRQ_HandleVideoIRQ (void)
 {
   static unsigned int video_ints; /* must be static because the coroutine only takes a copy of the address on entry */
+//  static bool threaded = false;
+//  if (threaded) _swix (OS_CallAVector, _INR(0,2)|_IN(4)|_IN(9), 0, 24, 0xff00, 2, 0x23); /* set border red if re-entered */
+//  threaded = true;
   do
   {
     video_ints = VID_ITS;
@@ -427,6 +442,7 @@ void IRQ_HandleVideoIRQ (void)
   /* triggered, but already serviced within an interrupt handler (having been */
   /* detected by using reads from VID_STA rather than VID_ITS). */
   while (video_ints != 0);
+//  threaded = false;
 }
 
 /******	IRQ_HandleAudioIRQ() ***********************************************
@@ -456,7 +472,7 @@ void IRQ_HandleAudioIRQ (void)
 /*    if (audio_ints & AUDIO_INT_DCH) static_INT_DCH ();*/
 /*    if (audio_ints & AUDIO_INT_IFT) static_INT_IFT ();*/
 /*    if (audio_ints & AUDIO_INT_IFF) static_INT_IFF ();*/
-/*    if (audio_ints & AUDIO_INT_FNP) static_INT_FNP ();*/
+      if (audio_ints & AUDIO_INT_FNP) static_INT_FNP ();
     }
   }
   /* Only exit when we're satisfied that we're not about to raise another IRQ. */
@@ -520,16 +536,21 @@ _kernel_oserror *IRQ_EnableVideoPrefillIRQs (void)
   int discard;
   dprintf (("IRQ", "EnableVideoPrefillIRQs\n"));
   
-  /* Mask off all interrupts inside 3520 */
-  WRITE_VID_ITM(0);
+  /* Set a CallAfter to catch cases where the MPEG chip jams during prefill */
+  e = _swix (OS_CallAfter, _INR(0,2), 1000, video_prefill_stiff_detected, Module_PrivateWord);
   
-  /* Clear all the interrupt bits in case any erroneous interrupts are generated as soon as we enable them */
-  READ_VID_ITS(discard);
-  
-  /* Claim 3520 video IRQs */
-  e = _swix (OS_ClaimDeviceVector, _INR(0,4), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
-    sti3520l_video_irq_handler, Module_PrivateWord);
-  
+  if (!e)
+  {
+    /* Mask off all interrupts inside 3520 */
+    WRITE_VID_ITM(0);
+    
+    /* Clear all the interrupt bits in case any erroneous interrupts are generated as soon as we enable them */
+    READ_VID_ITS(discard);
+    
+    /* Claim 3520 video IRQs */
+    e = _swix (OS_ClaimDeviceVector, _INR(0,2), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
+      sti3520l_video_irq_handler, Module_PrivateWord);
+  }
   if (!e)
   {
     /* Enable nINT4 in IOMD */
@@ -586,8 +607,11 @@ void IRQ_DisableVideoIRQs (void)
   Co_Destroy (&Stream.video.header_parser); /* finalise coroutine */
   
   /* Release 3520 video IRQs */
-  _swix (OS_ReleaseDeviceVector, _INR(0,4), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
+  _swix (OS_ReleaseDeviceVector, _INR(0,2), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
     sti3520l_video_irq_handler, Module_PrivateWord);
+  
+  /* Remove the CallAfter, in case it hasn't already been removed or gone off */
+  _swix (OS_RemoveTickerEvent, _INR(0,1), video_prefill_stiff_detected, Module_PrivateWord);
 }
 
 /******	IRQ_EnableAudioPrefillIRQs() ***************************************
@@ -618,7 +642,7 @@ _kernel_oserror *IRQ_EnableAudioPrefillIRQs (void)
   READ_AUD_ITS(discard);
   
   /* Claim 3520 audio IRQs */
-  e = _swix (OS_ClaimDeviceVector, _INR(0,4), IOMDr_MPEGAudio_DevNo /* aka 10, aka IRQRQB bit 2, aka nINT6 */,
+  e = _swix (OS_ClaimDeviceVector, _INR(0,2), IOMDr_MPEGAudio_DevNo /* aka 10, aka IRQRQB bit 2, aka nINT6 */,
     sti3520l_audio_irq_handler, Module_PrivateWord);
   
   if (!e)
@@ -632,7 +656,7 @@ _kernel_oserror *IRQ_EnableAudioPrefillIRQs (void)
     if (irqs_were_enabled) _kernel_irqs_on ();
     
     /* Enable appropriate interrupts */
-    WRITE_AUD_ITM(AUDIO_INT_CSS | AUDIO_INT_VHR | AUDIO_INT_VPR | AUDIO_INT_CRC | AUDIO_INT_POU);
+    WRITE_AUD_ITM(AUDIO_INT_CSS | AUDIO_INT_VHR | AUDIO_INT_VPR | AUDIO_INT_CRC | AUDIO_INT_POU | AUDIO_INT_FNP);
   }
   
   return e;
@@ -666,7 +690,7 @@ void IRQ_DisableAudioIRQs (void)
   WRITE_AUD_IMS(0);
   
   /* Release 3520 audio IRQs */
-  _swix (OS_ReleaseDeviceVector, _INR(0,4), IOMDr_MPEGAudio_DevNo /* aka 10, aka IRQRQB bit 2, aka nINT6 */,
+  _swix (OS_ReleaseDeviceVector, _INR(0,2), IOMDr_MPEGAudio_DevNo /* aka 10, aka IRQRQB bit 2, aka nINT6 */,
     sti3520l_audio_irq_handler, Module_PrivateWord);
 }
 
@@ -809,6 +833,8 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
             }
             /* Decode the first B-frame */
             static_PerhapsWriteNewInstruction ();
+            /* Remove the prefill-stiff CallAfter, since we can now rely on the normal stiff-detect code */
+            _swix (OS_RemoveTickerEvent, _INR(0,1), video_prefill_stiff_detected, Module_PrivateWord);
           }
         }
       }
@@ -835,7 +861,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
     
     if (Deferred_VID_DCF_LB_Pending)
     {
-      VID_DCF_16 = (VID_DCF_16 & 0xEF) | Deferred_VID_DCF_LB;
+      VID_DCF_16 = (VID_DCF_16 & 0x2F) | Deferred_VID_DCF_LB;
       Deferred_VID_DCF_LB_Pending = false;
     }
     
@@ -939,7 +965,16 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
         Stream.video.since_reset.stalls += 1;
         Stream.fields_till_next_AU = 2;
         if (Stream.current_picture_structure == ps_second_field_picture) /* ie first decode within the PU */ Stream.field_to_trigger_second_decode_on += 2;
-        if (Stream.video.state == stream_closing) Stream.vid_flags.stalled_while_closing = true;
+        if (Stream.video.state == stream_closing)
+        {
+          Stream.vid_flags.stalled_while_closing = true;
+        }
+        Stream.vid_flags.display_idle = true;
+        if (Stream.vid_flags.eos_callback_requested)
+        {
+          Stream.vid_flags.eos_callback_requested = false;
+          _swix (MPEGControl_Play, _INR(0,1), PlayFlags_VideoIdle, Stream.csh);
+        }
         
         /* If this happens too many times, we assume the chip has entered a locked state, and apply a reset */
         Stream.consecutive_pipeline_stalls ++;
@@ -1368,6 +1403,25 @@ static void static_INT_POU (void)
   Stream.aud_flags.recovering_from_underrun = true;
   AUD_PLY = 0;
   IRQ_UpdateMuteState ();
+  Stream.aud_flags.pcm_output_idle = true;
+  if (Stream.aud_flags.eos_callback_requested)
+  {
+    Stream.aud_flags.eos_callback_requested = false;
+    _swix (MPEGControl_Play, _INR(0,1), PlayFlags_AudioIdle, Stream.csh);
+  }
+}
+
+/******	static_INT_FNP() ***************************************************
+
+Purpose:	Handles First bit of New frame at PCM output audio IRQ
+Notes:		This is enabled throughout prefill and normal play.
+
+***************************************************************************/
+
+static void static_INT_FNP (void)
+{
+  dprintf (("IRQ", "INT_FNP\n"));
+  Stream.aud_flags.pcm_output_idle = false;
 }
 
 /******	static_ProcessVideoHdr() *******************************************
@@ -1766,7 +1820,18 @@ static void static_ProcessVideoPictureHdr (void)
   }
   
   /* Set sensible values in case the picture extensions are absent */
-  Stream.next_picture_structure = ps_frame_picture; /* for MPEG-1 */
+  switch (Stream.current_picture_structure)
+  {
+    case ps_first_field_picture:
+      Stream.next_picture_structure = ps_second_field_picture;
+      break;
+    case ps_second_field_picture:
+      Stream.next_picture_structure = ps_first_field_picture;
+      break;
+    default:
+      Stream.next_picture_structure = ps_frame_picture;
+      break;
+  }
   Stream.decode_frames->lastpic->intra_dc_precision = 0;  /**/
   Stream.decode_frames->lastpic->picture_structure = 0;   /**  these are the values the VID_PPR1/2 registers require in MPEG-1 mode */
   Stream.decode_frames->lastpic->picture_flags.byte = 0;  /**/
@@ -1909,9 +1974,18 @@ static void static_ProcessVideoPictureCodingExt (void)
   /* Set next_picture_structure and frame's top_field_first flag */
   if (Stream.decode_frames->lastpic->picture_structure == FRAME_PICTURE)
   {
-    Stream.next_picture_structure = ps_frame_picture;
-    dprintf (("IRQ", "ProcessVideoPictureCodingExt: frame_picture\n"));
-    Stream.decode_frames->top_field_first = Stream.decode_frames->lastpic->picture_flags.bits.top_field_first;
+    if (Stream.current_picture_structure == ps_first_field_picture)
+    {
+      /* We're obviously in the middle of some corrupt data - pretend we're a second-field picture to avoid data structures getting out of step */
+      Stream.next_picture_structure = ps_second_field_picture;
+      dprintf (("IRQ", "ProcessVideoPictureCodingExt: faked second_field_picture\n"));
+    }
+    else
+    {
+      Stream.next_picture_structure = ps_frame_picture;
+      dprintf (("IRQ", "ProcessVideoPictureCodingExt: frame_picture\n"));
+      Stream.decode_frames->top_field_first = Stream.decode_frames->lastpic->picture_flags.bits.top_field_first;
+    }
   }
   else
   {
@@ -2309,7 +2383,7 @@ static void static_PerhapsWriteNewInstruction (void)
     /* Are we ready to start display (discounting issues about synchronisation and field polarity) ? */
     if (Stream.video.state == stream_prefilling &&
         (Stream.vid_flags.prefill_anchor_frames_decoded == 2 ||
-         (Stream.vid_flags.prefill_anchor_frames_decoded == 1 && (Stream.rs_flags.trick_play_mode || Stream.decode_frames->seq.low_delay))))
+         (Stream.vid_flags.prefill_anchor_frames_decoded == 1 && Stream.rs_flags.trick_play_mode)))
     {
       /* Update state machine */
       Stream.video.prefill_state = ps_waiting_for_play_command;
@@ -2412,6 +2486,7 @@ static void static_SetUpDisplayForNewAU (void)
       /* Set state flags/variables */
       Stream.fields_into_this_PU = -1; /* start an incrementing count of how many fields the frame has been displayed for */
       Stream.field_to_trigger_second_decode_on = 0; /* default, used unless first decode stalls */
+      Stream.vid_flags.display_idle = false;
     }
     if (Stream.next_picture_structure == ps_frame_picture || (Stream.current_picture_structure == ps_frame_picture_extension && Stream.fields_into_this_PU == -1))
     {
@@ -2900,11 +2975,15 @@ static void static_PositionVideo (signed short frame_centre_horizontal_offset, s
   {
     allow_tv [tvm_collapsed]  = allow_tv [tvm_anamorphic] = allow_tv [tvm_14_9] = allow_tv [tvm_16_9] = false;
     allow_tv [tvm_full_frame] = true;
-    if (((Stream.video_parms.scaling_type.type == st_fixed_width || Stream.video_parms.scaling_type.type == st_fixed_height) && Stream.video_parms.scaling_type.param.fixed_width.anamorphic) ||
-        (Stream.video_parms.scaling_type.type == st_free && Stream.video_parms.scaling_type.param.free.preference == vm_stretch && Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen))
+    if ((Stream.video_parms.scaling_type.type == st_fixed_width || Stream.video_parms.scaling_type.type == st_fixed_height) && Stream.video_parms.scaling_type.param.fixed_width.anamorphic)
     {
       allow_tv [tvm_full_frame] = false;
       allow_tv [tvm_anamorphic] = true;
+    }
+    if (Stream.video_parms.scaling_type.type == st_free && Stream.video_parms.scaling_type.param.free.preference == vm_stretch && Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen)
+    {
+      allow_tv [tvm_full_frame] = false;
+      allow_tv [tvm_anamorphic] = allow_tv [tvm_16_9] = true;
     }
   }
   else
@@ -3142,7 +3221,7 @@ static void static_SetUpScalingRegisters (signed int centre_x, signed int centre
   unsigned int real_YDS = 0;
   static enum { none = 0, down = 1, up = 3 } UDS_lut [2][6] = { { down, none, none, none, up, none }, { down, none, none, none, none, up } };
   static unsigned char                       VFC_lut [2][6] = { { 0,    1,    0,    0xFF, 0,  0xFF }, { 2,    3,    2,    6,    6,    6  } };
-  static enum { off = 0, on = (VID_DCF_LB>>16) } LB_lut [6] = { off,  on,   off,  on,   off,  off };
+  static enum { off = 0, on = (VID_DCF_LB>>16)|(VID_DCF_BFL>>16) } LB_lut [6] = { off,  on,   off,  on,   off,  off };
   bool filter_does_scaling;
   bool vertically_downscaled;
   bool letterbox_used;
@@ -3250,8 +3329,7 @@ static void static_SetUpScalingRegisters (signed int centre_x, signed int centre
   }
   else
   {
-    scan_offset = 4; /* skip first scanline (is often a half-line, so looks horrid) but keep to the multiple-of-4 rule */
-    real_display_y_start = ((display_y_start + 0x80) >> 8) + (filter_does_scaling ? 3 : 1); /* start at next-nearest field scanline */
+    real_display_y_start = (display_y_start + 0x80) >> 8;
     if (real_display_y_start > (Module_Display525_60 ? 240 : 288))
     {
       off_screen = true;

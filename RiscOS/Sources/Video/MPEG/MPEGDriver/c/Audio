@@ -33,6 +33,7 @@ Date		Who	Change
 09/05/2000	BJGA	Now checks audio stream handles passed in; byte counters are now 64 bits wide
 18/05/2000	BJGA	Mute and volume settings are now preserved across ResetStreams (matches
 			MPEG2Video and MPEGAudio behaviour)
+06/07/2000	BJGA	Implemented MPEGAudio_Play 1 (part of timeout/EOS detection)
 
 ***************************************************************************/
 
@@ -44,7 +45,10 @@ Date		Who	Change
 #include "kernel.h"
 #include "swis.h"
 
+#include "Global/SWIs.h"
 #include "DebugLib/DebugLib.h"
+#include "MPEG/MPEGAudio.h"
+#include "MPEG/MPEGCtrl.h"
 
 #include "Audio.h"
 #include "Defs.h"
@@ -259,29 +263,43 @@ _kernel_oserror *Audio_SWIPlay (unsigned int flags, stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
-  IGNORE(flags);
   e = static_CheckHandle (ash);
   dprintf (("Audio", "SWIPlay\n"));
   
   if (!e)
   {
-    AUD_PLY = 1; /* start decoding */
-    
-    e = IRQ_EnableAudioIRQs ();
-  }
-  if (!e)
-  {
-    /* Initialise synchronisation clock */
-    Stream.reference_PCR = Stream.audio.first_PTS;
-    if (irqs_were_enabled) _kernel_irqs_off ();
-    Stream.reference_STC = Clk_ReadRawSTC ();
-    if (irqs_were_enabled) _kernel_irqs_on ();
-    
-    /* Update state machine - audio starts immediately */
-    Stream.audio.state = stream_open;
-    dprintf (("Audio", "SWIPlay: audio.state = stream_open\n"));
-    
-    IRQ_UpdateMuteState ();
+    if ((flags & AudioPlayFlags_Stop) != 0)
+    {
+      if (Stream.aud_flags.pcm_output_idle)
+      {
+        e = _swix (MPEGControl_Play, _INR(0,1), PlayFlags_AudioIdle, Stream.csh);
+      }
+      else
+      {
+        Stream.aud_flags.eos_callback_requested = true;
+      }
+    }
+    else
+    {
+      AUD_PLY = 1; /* start decoding */
+      
+      e = IRQ_EnableAudioIRQs ();
+      
+      if (!e)
+      {
+        /* Initialise synchronisation clock */
+        Stream.reference_PCR = Stream.audio.first_PTS;
+        if (irqs_were_enabled) _kernel_irqs_off ();
+        Stream.reference_STC = Clk_ReadRawSTC ();
+        if (irqs_were_enabled) _kernel_irqs_on ();
+        
+        /* Update state machine - audio starts immediately */
+        Stream.audio.state = stream_open;
+        dprintf (("Audio", "SWIPlay: audio.state = stream_open\n"));
+        
+        IRQ_UpdateMuteState ();
+      }
+    }
   }
   return e;
 }
@@ -577,6 +595,8 @@ static _kernel_oserror *static_AudioStart (void)
   Stream.aud_flags.muted_across_sampling_frequency_transition = false;
   Stream.aud_flags.PTS_valid = false;
   Stream.aud_flags.recovering_from_underrun = false;
+  Stream.aud_flags.pcm_output_idle = false; /* don't timeout before first FullPackets */
+  Stream.aud_flags.eos_callback_requested = false;
   Stream.audio_resync_delay = 25; /* wait a while before we start doing stream sync */
   Stream.discarded_audio_bit_buffer_data = -1; /* flag that VID_ABL should be read on the next Audio_ResetStream */
   IRQ_UpdateMuteState ();
