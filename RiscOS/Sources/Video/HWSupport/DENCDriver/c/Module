@@ -25,6 +25,12 @@ Date		Who	Change
 25/01/2000	BJGA	Added 2 x 27MHz delay to incoming HSync signal
 26/01/2000	BJGA	Sets default palette on module initialisation
 01/02/2000	BJGA	Removed 2 x 27MHz delay
+03/03/2000	BJGA	Actions on initialisation are now conditional upon
+			hardware detected, and upon configuration settings
+09/03/2000	BJGA	Initialises SCART pin 8 state according to TVOn and
+			MPEGControl_SetVideoParameters 2; only sets default
+			palette on module initialisation if MonotonicTime
+			< 5 seconds (ie in ROM boot)
 
 ***************************************************************************/
 
@@ -32,6 +38,7 @@ Date		Who	Change
 /* Includes */
 /************/
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include "kernel.h"
@@ -40,10 +47,18 @@ Date		Who	Change
 #include "Global/PaletteV.h"
 #include "Global/RISCOS.h"
 #include "Global/Services.h"
-#include "PortMan.h"
+#include "Global/SWIs.h"
+#include "Global/IO/GenericIO.h"
+#include "Global/IO/IOMD.h"
+#include "DebugLib/DebugLib.h"
+#include "MPEG/Macrovisio.h"
+#include "MPEG/MPEG2cCard.h"
+#include "MPEG/MPEGCtrl.h"
 
 #include "CLI.h"
 #include "Config.h"
+#include "Control.h"
+#include "Data.h"
 #include "Defs.h"
 #include "Mess.h"
 #include "ModHdr.h"
@@ -65,7 +80,20 @@ Date		Who	Change
 /* Public variables */
 /********************/
 
-extern int Module_MessageFD [4] = { 0, 0, 0, 0 };  /* message file descriptor */
+bool             Module_NTSCJumper;
+modulator        Module_FittedModulator;
+tv_standard      Module_ConfiguredTVStandard;
+unsigned int     Module_ConfiguredTVChannel;
+const tv_standard_block_t *Module_TVStandardsStructure;
+
+unsigned int     Module_PendingMacrovisionState = MacroStateFlags_Path2;
+unsigned int     Module_CurrentMacrovisionState = MacroStateFlags_Path2;
+tv_standard      Module_PendingTVStandard;
+
+bool             Module_SwitchStandardOnNextModeChange = true;
+bool             Module_MacrovisionEnabled = false;
+
+int              Module_MessageFD [4] = { 0, 0, 0, 0 };  /* message file descriptor */
 
 /*********************/
 /* Private variables */
@@ -74,6 +102,14 @@ extern int Module_MessageFD [4] = { 0, 0, 0, 0 };  /* message file descriptor */
 /*********************/
 /* Private constants */
 /*********************/
+
+#ifndef IOMD_C_PALNTSCType
+#define IOMD_C_PALNTSCType (1<<4)
+#endif
+
+#ifndef NVRAM_Read
+#define NVRAM_Read (NVRAMSWI_Base + 0)
+#endif
 
 /********************/
 /* Public functions */
@@ -95,8 +131,18 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
 #endif
   bool MessagesOpen = false;
   bool PaletteVRegistered = false;
+  unsigned int monotonic_time;
   IGNORE(podule_base);
   IGNORE(cmd_tail);
+
+  debug_initialise ("DENCDriver", "null:", "");
+  debug_atexit ();
+  debug_set_taskname_prefix (false);
+  debug_set_area_level_prefix (true);
+  debug_set_area_pad_limit (0);
+  debug_set_device (NULL_OUTPUT);
+  debug_set_raw_device (NULL_OUTPUT);
+  debug_set_trace_device (NULL_OUTPUT);
 
   if (!e)
   {
@@ -121,47 +167,98 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
   {
     PaletteVRegistered = true;
     
+    /* Read configuration from CLINES and NVRAM */
+    e = _swix (NVRAM_Read, _INR(0,2), "RFChannel", &Module_ConfiguredTVChannel, 0);
+  }
+  if (!e)
+  {
+    e = _swix (NVRAM_Read, _INR(0,2), "TVStandard", &Module_ConfiguredTVStandard, 0);
+  }
+  if (!e)
+  {
+    Module_NTSCJumper = (* (volatile char *) (IOC + IOMD_CLINES) & IOMD_C_PALNTSCType) != 0;
+    if (Module_NTSCJumper == 1 ||
+        Module_ConfiguredTVStandard >= standard_MAX ||
+        Data_TVData[Module_ConfiguredTVStandard].system == colour_secam)
     {
-#if 0
-      /* Initialise DENC so we get sync pulses into the 3520L */
-      unsigned char iic_block[2] = { 0, 0xB0 };  /* DENC is sync master (for bodge board) */
-      /* Switch TDA1 to use 2x gain */
-      iic_block[0] = 1;
-      iic_block[1] = 0;
-      _swix (IIC_Control, _INR(0,2), 0x98, &iic_block, 2);
-#else
-      /* Switch DENC to PAL mode */
-      unsigned char iic_block[2] = { 0, 0x12 };
-      _swix (IIC_Control, _INR(0,2), 0x40, &iic_block, 2);
-      /* Turn off Macrovision (!!) */
-      iic_block[0] = 45;
-      iic_block[1] = 0x00;
-      _swix (IIC_Control, _INR(0,2), 0x40, &iic_block, 2);
-      /* Switch DENC to RGB */
-      iic_block[0] = 5;
-      iic_block[1] = 0xB0;
-      _swix (IIC_Control, _INR(0,2), 0x40, &iic_block, 2);
-      
-      /* Switch TDA to use 2x gain */
-      iic_block[0] = 1;
-      iic_block[1] = 0;
-      _swix (IIC_Control, _INR(0,2), 0x98, &iic_block, 2);
-      /* Enable all 4 outputs */
-      iic_block[0] = 2;
-      iic_block[1] = 0x0F;
-      _swix (IIC_Control, _INR(0,2), 0x98, &iic_block, 2);
-      /* Map input 0 -> output 0, input 1 -> output 1 etc. */
-      iic_block[0] = 0;
-      iic_block[1] = 0xE4;
-      _swix (IIC_Control, _INR(0,2), 0x98, &iic_block, 2);
-      
-      _swix (PortMan_AccessBit, _INR(0,1), PORTMAN_FLAG_CLEAR, "NTSC_Selected"); /* reassert on PortMan_Init Service call */
-      
-      * (volatile unsigned int *) 0x0302BF00 = 1;
-      
-      _swix (OS_CallAVector, _IN(4)|_IN(9), paletteV_SetDefaultPalette, PaletteV); /* set solid palette during machine boot */
+      Module_ConfiguredTVStandard = standard_ntsc_m; /* with 0 ohm resistor removed, or if NVRAM corrupt, use NTSC-M */
+    }
+    Module_PendingTVStandard = Module_ConfiguredTVStandard;
+    
+    /* Set solid palette during machine boot (masks the green from the MPEG chip) */
+    _swix (OS_ReadMonotonicTime, _OUT(0), &monotonic_time);
+    if (monotonic_time < 500)
+    {
+      _swix (OS_CallAVector, _IN(4)|_IN(9), paletteV_SetDefaultPalette, PaletteV);
       _swix (ColourTrans_InvalidateCache, 0); /* in case palette wasn't already default */
-#endif
+    }
+    
+    /* Turn on audio DACs */
+    * (volatile unsigned int *) (MPEG_Base_Address + Offset_Audio_DACs) = 1;
+    
+    /* Set up the TV standard to use following the next mode change */
+    /* Note that during ROM boot, a mode change is issued on Service_PostInit */
+    if (Data_TVData[Module_ConfiguredTVStandard].standard_525_60)
+    {
+      _swix (OS_SetVarVal, _INR(0,4), "TV$Type", "NTSC", 4, 0, 0);
+      _swix (OS_CLI, _IN(0), "LoadModeFile ModeFiles:NTSCTV");
+    }
+    else
+    {
+      _swix (OS_SetVarVal, _INR(0,4), "TV$Type", "PAL", 3, 0, 0);
+      _swix (OS_CLI, _IN(0), "LoadModeFile ModeFiles:PALTV");
+    }
+    
+    /* Initialise the modulator */
+    Control_InitialiseModulator ();
+    
+    /* Set up the video path out of the DENC and through the TDA8540 */
+    Control_SetVideoPath ();
+    
+    /* Assert a sensible "Macrovision" state: */
+    /* disable anti-taping and disable test signals in the DENC and/or modulator, */
+    /* and guess an appropriate voltage for SCART pin 8 */
+    if (getenv ("TVOn") == NULL)
+    {
+      Module_PendingMacrovisionState |= MacroStateFlags_Pin8_0V;
+    }
+    else
+    {
+      unsigned int scart_state = 0; /* default to 12V if SWI fails */
+      _swix (MPEGControl_SetVideoParameters, _IN(0)|_IN(2)|_OUT(2), 2, -1, &scart_state);
+      if (scart_state == 1)
+      {
+        Module_PendingMacrovisionState |= MacroStateFlags_Pin8_6V;
+      }
+      else
+      {
+        Module_PendingMacrovisionState |= MacroStateFlags_Pin8_12V;
+      }
+    }
+    Control_SetMacrovisionState (Module_PendingMacrovisionState);
+    
+    /* Initialise Module_TVStandardsStructure */
+    if (Module_NTSCJumper == 1)
+    {
+      if (Module_FittedModulator == modulator_G001D)
+      {
+        Module_TVStandardsStructure = Data_G001DNTSCTVStandards;
+      }
+      else
+      {
+        Module_TVStandardsStructure = Data_H007FNTSCTVStandards;
+      }
+    }
+    else
+    {
+      if (Module_FittedModulator == modulator_G001D)
+      {
+        Module_TVStandardsStructure = Data_G001DPALTVStandards;
+      }
+      else
+      {
+        Module_TVStandardsStructure = Data_H007FPALTVStandards;
+      }
     }
   }
 
@@ -205,9 +302,26 @@ In:		Standard args
 extern void Module_Service(int service_number, _kernel_swi_regs *r, void *pw)
 {
   bool claim = false;
+  _kernel_swi_regs rout;
   IGNORE(pw);
   switch (service_number)
   {
+    case Service_PostInit:
+      Service_ServicePostInit ();
+      break;
+    case Service_MonitorLeadTranslation:
+      claim = Service_ServiceMonitorLeadTranslation (
+          (void **) &(rout.r[3]),
+          (unsigned char *) &(rout.r[4]),
+          (unsigned char *) &(rout.r[5])
+          );
+      if (claim)
+      {
+        r->r[3] = rout.r[3];
+        r->r[4] = rout.r[4];
+        r->r[5] = rout.r[5];
+      }
+      break;
     case Service_ModeChanging:
       Service_ServiceModeChanging (
           (void *) (r->r[2])
@@ -296,9 +410,8 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
       e = SWI_SetState (
           (unsigned int) (r->r[0]),
           (unsigned int) (r->r[1]),
-          (unsigned int *) &(rout.r[1])
+          (bool) (r->r[2])
           );
-      r->r[1] = rout.r[1];
       break;
     case Macrovision_LoadCaptions & 0x3F:
       e = SWI_LoadCaptions (
@@ -315,29 +428,20 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
       {
         case 0:
           e = SWI_PlatformFeatures0 (
-              (void **) &(rout.r[1])
+              (const void **) &(rout.r[1])
               );
           r->r[1] = rout.r[1];
           break;
         case 1:
           e = SWI_PlatformFeatures1 (
               (unsigned int) (r->r[1]),
-              (void **) &(rout.r[2])
+              (const void **) &(rout.r[2])
               );
           r->r[2] = rout.r[2];
-          break;
-        case 2:
-          e = SWI_PlatformFeatures2 (
-              (char **) &(rout.r[1]),
-              (char **) &(rout.r[3])
-              );
-          r->r[1] = rout.r[1];
-          r->r[2] = rout.r[2];
-          r->r[3] = rout.r[3];
           break;
         case 3:
           e = SWI_PlatformFeatures3 (
-              (void **) &(rout.r[1])
+              (const void **) &(rout.r[1])
               );
           r->r[1] = rout.r[1];
           break;
@@ -345,6 +449,32 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
           e = Mess_GenerateError ("Err_InvReason", 0, 1, "Macrovision_PlatformFeatures");
           break;
       }
+      break;
+    case Macrovision_TVSetup & 0x3F:
+      e = SWI_TVSetup (
+          (unsigned int) (r->r[0]),
+          (const char *) (r->r[1]),
+          (const char *) (r->r[2]),
+          (const char **) &(rout.r[1]),
+          (const char **) &(rout.r[2])
+          );
+      r->r[1] = rout.r[1];
+      r->r[2] = rout.r[2];
+      break;
+    case Macrovision_GetState & 0x3F:
+      e = SWI_GetState (
+          (unsigned int) (r->r[0]),
+          (unsigned int *) &(rout.r[1]),
+          (bool *) &(rout.r[2])
+          );
+      r->r[1] = rout.r[1];
+      r->r[2] = rout.r[2];
+      break;
+    case Macrovision_LoadMacrovisionKey & 0x3F:
+      e = SWI_LoadMacrovisionKey (
+          (unsigned int) (r->r[0]),
+          (const char *) (r->r[1])
+          );
       break;
     default:
       e = error_BAD_SWI;

@@ -49,14 +49,14 @@ C_ABSSYM = RISC_OSLib:o.c_abssym
 LIBSD    = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm
 UNIXLIB  = TCPIPLibs:o.UnixLibzm
 
-RAMOBJS  =  o.CLI  o.Config  o.Mess  o.Module    o.PaletteV o.ResMess  o.Service  o.SWI o.ModHdr
-ROMOBJS  =  o.CLI  o.Config  o.Mess  o.ModuleROM o.PaletteV            o.Service  o.SWI o.ModHdr
-SOBJS    =  s.CLI  s.Config  s.Mess  s.Module                          s.Service  s.SWI o.ModHdr
-IOBJS    =  i.CLI  i.Config  i.Mess  i.Module                          i.Service  i.SWI o.ModHdr
-IOOBJS   = io.CLI io.Config io.Mess io.Module    o.PaletteV o.ResMess io.Service io.SWI o.ModHdr
-DOOBJS   = do.CLI do.Config do.Mess do.Module    o.PaletteV o.ResMess do.Service do.SWI o.ModHdr
+RAMOBJS  =  o.CLI  o.Config  o.Control  o.Data  o.Mess  o.Module    o.PaletteV o.ResMess  o.Service  o.SWI o.ModHdr
+ROMOBJS  =  o.CLI  o.Config  o.Control  o.Data  o.Mess  o.ModuleROM o.PaletteV            o.Service  o.SWI o.ModHdr
+SOBJS    =  s.CLI  s.Config  s.Control  s.Data  s.Mess  s.Module                          s.Service  s.SWI o.ModHdr
+IOBJS    =  i.CLI  i.Config  i.Control  i.Data  i.Mess  i.Module                          i.Service  i.SWI o.ModHdr
+IOOBJS   = io.CLI io.Config io.Control io.Data io.Mess io.Module    o.PaletteV o.ResMess io.Service io.SWI o.ModHdr
+DOOBJS   = do.CLI do.Config do.Control do.Data do.Mess do.Module    o.PaletteV o.ResMess do.Service do.SWI o.ModHdr
 
-KEYS     = key.610PAL key.610NTSC key.701PAL key.701NTSC
+KEYS     = key.700PAL key.700NTSC
 
 
 #
