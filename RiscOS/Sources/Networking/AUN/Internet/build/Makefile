@@ -18,6 +18,7 @@ COMPONENT  = Internet
 ROM_MODULE = aof.Internet
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
+TARGET     = rm.Internet
 RESDIR    = ^.^.AUNMsgs.Resources.${Locale}.Resources.${COMPONENT}
 
 # amu version 5.02 can't cope with @ in VPATH so we have to use ^.build
