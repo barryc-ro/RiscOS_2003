@@ -62,7 +62,7 @@ APP       = abs.!RunImage
 OBJS      = o.handlers o.main o.oskbutils o.windowops
 OBJSZ     = oz.handlers oz.main oz.oskbutils oz.windowops oz.ModuleWrap
 OBJSZRAM  = oz.handlers oz.main oz.oskbutils oz.windowops oz.ModuleWra1
-RDIR      = Resources.<System>.${LOCALE}
+RDIR      = Resources.<UserIF>.${LOCALE}
 EXPORTS   = 
 
 .SUFFIXES: .oz
