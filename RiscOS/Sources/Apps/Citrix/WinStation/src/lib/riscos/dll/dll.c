@@ -377,6 +377,9 @@ ModuleCall( PDLLLINK pLink, USHORT ProcIndex, PVOID pParam )
     if ( ProcIndex >= pLink->ProcCount )
 	return( CLIENT_ERROR_BAD_PROCINDEX );
 #endif
+    if (pLink->pProcedures == NULL)
+	return( CLIENT_ERROR_BAD_OVERLAY );
+
     pProcedure = ((PDLLPROCEDURE *) pLink->pProcedures)[ ProcIndex ];
 
     /* procedure is null if this is the wengine */

@@ -1178,12 +1178,16 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 
     if (!inited)
     {
+#ifdef INCL_TCPIP
 	modules[0].fnTable = TdTcpRODeviceProcedures;
+#endif
 #ifdef INCL_ASYNC
 	modules[1].fnTable = TdAsyncDeviceProcedures;
 #endif
 	modules[2].fnTable = PdCryptDeviceProcedures;
+#ifdef INCL_TCPIP
 	modules[3].fnTable = PdRFrameDeviceProcedures;
+#endif
 #ifdef INCL_ASYNC
 	modules[4].fnTable = PdFrameDeviceProcedures;
 	modules[5].fnTable = PdReliDeviceProcedures;

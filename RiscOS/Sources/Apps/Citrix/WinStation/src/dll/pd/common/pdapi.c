@@ -311,6 +311,12 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
     /*
      *  Initialize low level structures
      */
+    if (pPd->pDeviceProcedures == 0)
+    {
+	rc = CLIENT_ERROR_BAD_OVERLAY;
+	goto badopen;
+    }
+
     if ( rc = DeviceOpen( pPd, pPdOpen ) )
         goto badopen;
 

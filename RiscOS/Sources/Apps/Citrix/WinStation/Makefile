@@ -27,9 +27,9 @@ LDFLAGS=
 
 # ----------------------------------------------------------------------------------------------------
 
-# -DINCL_ENUM -DINCL_MODEM -DINCL_SCRIPT
+# -DINCL_ENUM -DINCL_MODEM -DINCL_SCRIPT -DINCL_PRINTER -DINCL_ASYNC -DINCL_TCPIP
 
-DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4 -DINCL_PRINTER
+DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4 -DINCL_PRINTER -DINCL_TCPIP
 INCLUDES=	-Isrc/sys_inc \
 		-Isrc/sdk \
 		-I${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs \
@@ -180,6 +180,12 @@ depends: ${SRC}
 	chmod a+w Makefile
 	@echo ${COMPONENT} dependencies generated
 
+touchsession:
+	-${RM} src/app/session.o
+	-${RM} src/app/session.oz
+	-${RM} src/app/session.od
+	@echo session object files removed
+
 local_dirs: 
 	@-${MKDIR} abs
 	@-${MKDIR} aof
@@ -206,6 +212,7 @@ install: ${APP} install_base
 
 installd: ${APPD} install_base
 	${CP} ${CPFLAGS} ${APPD}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
+	@restool merge ${INSTALLDIR}/${APPNAME}/Res,fae Resources/app/${COUNTRY}/Res_base,fae Resources/app/${COUNTRY}/Res_desktop,fae
 	@echo Installed ${COMPONENT} debug
 
 installrm: ${APPRM} install_base
@@ -458,10 +465,10 @@ TDTCPROLIBOBJS=		src/dll/td/comtcp/tdtcpcom.o  src/dll/td/tdtcpro/tdtcpro.o  src
 TDTCPROLIBOBJSD=	src/dll/td/comtcp/tdtcpcom.od src/dll/td/tdtcpro/tdtcpro.od src/dll/td/tdtcpro/sock.od
 TDTCPROLIBOBJSZ=	src/dll/td/comtcp/tdtcpcom.oz src/dll/td/tdtcpro/tdtcpro.oz src/dll/td/tdtcpro/sock.oz
 
-TDASYNCLIBSRC=		src/dll/td/tdasync/tdasync.c
-TDASYNCLIBOBJS=		src/dll/td/tdasync/tdasync.o
-TDASYNCLIBOBJSD=	src/dll/td/tdasync/tdasync.od
-TDASYNCLIBOBJSZ=	src/dll/td/tdasync/tdasync.oz
+TDASYNCLIBSRC=		src/dll/td/tdasync/tdasync.c src/dll/td/tdasync/roserial.c
+TDASYNCLIBOBJS=		src/dll/td/tdasync/tdasync.o src/dll/td/tdasync/roserial.o
+TDASYNCLIBOBJSD=	src/dll/td/tdasync/tdasync.od src/dll/td/tdasync/roserial.od
+TDASYNCLIBOBJSZ=	src/dll/td/tdasync/tdasync.oz src/dll/td/tdasync/roserial.oz
 
 TDLIBSRC=	${TDCOMMONLIBSRC} ${TDTCPROLIBSRC} ${TDASYNCLIBSRC}
 TDLIBOBJS=	${TDCOMMONLIBOBJS} ${TDTCPROLIBOBJS} ${TDASYNCLIBOBJS}

@@ -411,8 +411,16 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
     /*
      *  Initialize low level structures
      */
+    TRACE((TC_TD,TT_API1, "PdOpen: calling DeviceOpen, procs %p", pPd->pDeviceProcedures));
+    if (pPd->pDeviceProcedures == 0)
+    {
+	rc = CLIENT_ERROR_BAD_OVERLAY;
+	goto badopen;
+    }
+
     if ( rc = DeviceOpen( pPd, pPdOpen ) )
         goto badopen;
+    TRACE((TC_TD,TT_API1, "PdOpen: called DeviceOpen"));
 
     pPd->OutBufHeader  = pPdOpen->OutBufHeader;
     pPd->OutBufTrailer = pPdOpen->OutBufTrailer;
@@ -521,7 +529,10 @@ PdClose( PPD pPd, PDLLCLOSE pPdClose )
     /*
      *  Close PD
      */
-    rc = DeviceClose( pPd, pPdClose );
+    if (pPd->pDeviceProcedures)
+	rc = DeviceClose( pPd, pPdClose );
+    else
+	rc = CLIENT_STATUS_SUCCESS;
 
     TRACE(( TC_TD, TT_API1, "TdClose: rc=%u", rc ));
     return( rc );

@@ -7,7 +7,7 @@
 	
         GBLS    ApplicationName
 
-ApplicationName SETS    "WinFrame"
+ApplicationName SETS    "ICAClient"
 
         GBLS    ApplicationVersion
 
