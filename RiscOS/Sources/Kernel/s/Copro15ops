@@ -4,7 +4,8 @@
 ;and cater for ARM 6,7,8,A (A=StrongARM).
 ;Routines detect which ARM directly by reading ARM ID register (avoids memory reads).
 
-; Created by MJS, 24-01-96
+; 24-01-96 MJS Created
+; 07-10-96 MJS Updated for proper ARM 810 support (not needed for RO 3.70)
 
 ARM_config_cp        CP 15  ;coprocessor number for configuration control
 
@@ -22,6 +23,8 @@ ARM8A_TLB_reg        CN  8  ;TLB operations, ARMs 8 or StrongARM
 
 ARM8_cacheLD_reg     CN  9  ;cache lock-down, ARM 8
 ARM8_TLBLD_reg       CN 10  ;TLB lock-down, ARM 8
+
+ARM8_CTC_reg         CN 15  ;Clock and test configuration
 
 ARMA_TCI_reg         CN 15  ;Test,Clock and Idle control
 
@@ -76,7 +79,7 @@ C15 CN 15
 ;bits 15:12 of returned ID will be 0,7,8,10 for ARM 6,7,8,A
         MACRO
         ARM_read_ID $id,$cond
-        MRC$cond ARM_config_cp,0,$id,ARM_ID_reg,C0,0  
+        MRC$cond ARM_config_cp,0,$id,ARM_ID_reg,C0,0
         MEND
 
 ;read ARM 'number' (6,7,8,&A currently) into $num
@@ -151,9 +154,174 @@ C15 CN 15
         MEND
 
 ;
-; -------------- ARM 8 only ----------------------------------------------
+; -------------- ARM 810 only ----------------------------------------------
 ;
 
+ [ ARM810support
+
+;turn off branch prediction
+; - the forced mispredicted branch ensures that the predictor is trapped in
+;   this code segment when turned off
+; - corrupts $temp and status flags
+;
+        MACRO
+        ARM8_branchpredict_off $temp
+01
+        ARM_read_control $temp
+        BIC $temp,$temp,#&800        ;z bit (branch prediction)
+        ARM_write_control $temp
+        SEC                          ;set carry flag
+        BCC %BT01
+        MEND
+
+;turn on branch prediction
+        MACRO
+        ARM8_branchpredict_on $temp
+        ARM_read_control $temp
+        ORR $temp,$temp,#&800        ;z bit (branch prediction)
+        ARM_write_control $temp
+        MEND
+
+;flush branch prediction, which is sufficient for an IMB (instruction memory
+;barrier) on ARM 810, BUT...
+; - intended for in line use only, where efficiency matters, or SWI call is
+;   awkward
+; - general code should use SWI OS_SynchroniseCodeAreas to implement
+;   an IMB (instruction memory barrier) in future proof, ARM independent way
+; - kernel code may use this without regard to which ARM running - ie. assumed
+;   harmless on other ARMs
+;
+        MACRO
+        ARM8_branchpredict_flush
+        SUB PC,PC,#4        ;flush, because PC is written by data op
+        MEND
+
+;clean cache entry
+; - segment,index spec in $reg
+; - bits 4..6   = segment (0..7)
+; - bits 26..31 = index   (0..63)
+; - all other bits zero
+        MACRO
+        ARM8_clean_IDCentry $reg,$cond
+        MCR$cond ARM_config_cp,0,$reg,ARM8A_cache_reg,C11,1
+        MEND
+
+;flush cache entry -  segment,index spec in $reg, as for ARM8_clean_IDCentry
+        MACRO
+        ARM8_flush_IDCentry $reg,$cond
+        MCR$cond ARM_config_cp,0,$reg,ARM8A_cache_reg,C7,1
+        MEND
+
+;clean and flush cache entry -  segment,index spec in $reg, as for ARM8_clean_IDCentry
+;
+;if ARM810cleanflushbroken is TRUE, interrupts *must* be currently diabled (see below)
+;
+        MACRO
+        ARM8_cleanflush_IDCentry $reg,$cond
+  [ ARM810cleanflushbroken
+        ARM8_clean_IDCentry $reg,$cond
+        ARM8_flush_IDCentry $reg,$cond
+  |
+        MCR$cond ARM_config_cp,0,$reg,ARM8A_cache_reg,C15,1
+  ]
+        MEND
+
+;fully clean and flush cache (assumes no locked-down entries to preserve)
+;
+;if ARM810cleanflushbroken is TRUE, then we have to make sure interrupts are disabled during
+;the sequence of 2 MCRs that make up ARM8_cleanflush_IDCentry, to avoid an interrupt hole.
+;The hole occurs if an interrupt fills and dirties the particular cache entry after the clean
+;but before the flush. We don't have this problem with StrongARM, because the entry is
+;specified by virtual address, and RISC OS only cleans/flushes address space not currently
+;involved in interrupts.
+;
+  [ ARM810cleanflushbroken
+
+        MACRO
+        ARM8_cleanflush_IDC $temp,$temp2
+        ;for simplicity, disable interrupts during entire operation - 26-bit assumed
+        MOV  $temp2,pc
+        AND  $temp2,$temp2,#I_bit
+        EOR  $temp2,$temp2,#I_bit                ;temp := <current I> EOR <I set>
+        TEQP $temp2,pc                           ;disable I
+        MOV  $temp,#0                            ;initial segment and index
+01
+        ARM8_cleanflush_IDCentry $temp
+        ADD $temp,$temp,#1 :SHL: 26              ;next index
+        CMP $temp,#1 :SHL: 26                    ;last index done if index field wrapped to 0
+        BHS %BT01
+        ADD $temp,$temp,#1 :SHL: 4               ;next segment
+        CMP $temp,#8 :SHL: 4                     ;8 segments done?
+        BLO %BT01
+        TEQP $temp2,pc                           ;restore I
+        MEND
+
+  |
+
+        MACRO
+        ARM8_cleanflush_IDC $temp
+        MOV $temp,#0                             ;initial segment and index
+01
+        ARM8_cleanflush_IDCentry $temp
+        ADD $temp,$temp,#1 :SHL: 26              ;next index
+        CMP $temp,#1 :SHL: 26                    ;last index done if index field wrapped to 0
+        BHS %BT01
+        ADD $temp,$temp,#1 :SHL: 4               ;next segment
+        CMP $temp,#8 :SHL: 4                     ;8 segments done?
+        BLO %BT01
+        MEND
+
+  ]
+
+;flush whole TLB (actually, same as ARMA_flush_TLBs)
+        MACRO
+        ARM8_flush_TLB $cond
+        MCR$cond ARM_config_cp,0,R0,ARM8A_TLB_reg,C7,0
+        MEND
+
+;flush TLB entry, virtual address in $reg
+        MACRO
+        ARM8_flush_TLBentry $reg,$cond
+        MCR$cond ARM_config_cp,0,$reg,ARM8A_TLB_reg,C7,1
+        MEND
+
+;select external Refclk pin as fast clock (dynamic switching, asynchronous)
+        MACRO
+        ARM8_refclk_fclk $temp
+        MRC ARM_config_cp,0,$temp,ARM8_CTC_reg,C0,0
+        BIC $temp, $temp,#&1                        ;turn off dynamic bus switching (bit0)
+        MCR ARM_config_cp,0,$temp,ARM8_CTC_reg,C0,0
+        BIC $temp,$temp,#&2                         ;select asynchronous mode (default) (bit1)
+        ORR $temp,$temp,#&4                         ;select REFCLK as the FCLK source (bits3:2)
+        BIC $temp,$temp,#&10                        ;ensure L=0 when writing (PLL locked) (bit4)
+        MCR ARM_config_cp,0,$temp,ARM8_CTC_reg,C0,0
+        NOP
+        NOP
+        NOP
+        NOP
+        ORR $temp,$temp,#&1                         ;select dynamic clock switching (bit0)
+        MCR ARM_config_cp,0,$temp,ARM8_CTC_reg,C0,0
+        MEND
+
+;select PLL output as fast clock (dynamic switching, asynchronous)
+        MACRO
+        ARM8_pll_fclk $temp
+        MRC ARM_config_cp,0,$temp,ARM8_CTC_reg,C0,0
+        BIC $temp,$temp,#&1                         ;turn off dynamic bus switching (bit0)
+        MCR ARM_config_cp,0,$temp,ARM8_CTC_reg,C0,0
+        BIC $temp,$temp,#&2                         ;select asynchronous mode (default) (bit1)
+        ORR $temp,$temp,#&C                         ;select PLLClkOut as the FCLK source (bits3:2)
+        BIC $temp,$temp,#&10                        ;ensure L=0 when writing (PLL locked) (bit4)
+        MCR ARM_config_cp,0,$temp,ARM8_CTC_reg,C0,0
+        NOP
+        NOP
+        NOP
+        NOP
+        ORR $temp,$temp,#&1                         ;select dynamic clock switching (bit0)
+        MCR ARM_config_cp,0,$temp,ARM8_CTC_reg,C0,0
+        MEND
+
+ ] ;ARM810support
 
 ;
 ; -------------- StrongARM only ------------------------------------------
