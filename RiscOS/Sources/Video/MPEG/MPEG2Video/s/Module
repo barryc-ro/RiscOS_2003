@@ -418,6 +418,7 @@ AudioControlStreamHandle #	4	; control stream handle passed in to MPEGAudio_Open
 IRQCounts		#	16*4	; counts of each type of IRQ we've had
 Status0SoftCopy		#	4	; soft copy of status 0 register
 SCROffset		#	8	; offset to add to H/W SCR to get current S/W SCR
+ReferenceSCR            #       8       ; the last time when low-level SCR was correct (will diverge from correct SCR in pause/slow-mo)
 
 ; Variables only valid while stream open: video
 
@@ -1617,6 +1618,13 @@ VideoSetSpeed Entry "r0-r2, r11"
 	MOVHI	r2, #1			; treat 2 to 8 as 1 (normal play)
  ]
 
+        Push    "r2"
+        BL      ReadSCR
+        MOV     r0, r1
+        MOV     r1, r2
+        BL      WriteSCR                ; reset ReferenceSCR to cope with discontinuity in VideoSpeedSetting
+        Pull    "r2"
+
 	LDR	r0, VideoSpeedSetting
 	TST	r0, #&80000000  	; if pre-buffering
 	ORRNE	r2, r2, #&80000000 	; then still pre-buffering, but may have speed setting after
@@ -1682,11 +1690,13 @@ VideoPlay Entry "r0,r2, r11"
 	EXIT
 
       [ EOSDetect
-10      LDR     r0, VideoUnderrunIRQState
-        CMP     r0, #2
-        MOVCS   r0, #1                  ; if currently decoding,
-        STRCS   r0, VideoEOSPending     ; then mark EOS as pending
-        EXIT    CS                      ; and exit
+10      LDR     r0, TrickPlayMode       ; if in trick play mode, the trick play underrun fix will screw up any attempt to use the underrun IRQ to determine stream end
+        TEQ     r0, #0                  ; so just call call back immediately
+        LDREQ   r0, VideoUnderrunIRQState
+        TEQEQ   r0, #2
+        MOVEQ   r0, #1                  ; if currently decoding,
+        STREQ   r0, VideoEOSPending     ; then mark EOS as pending
+        EXIT    EQ                      ; and exit
         MOV     r0, #PlayFlags_VideoIdle
         LDR     r1, VideoControlStreamHandle
         SWI     XMPEGControl_Play       ; else call back immediately
@@ -3864,7 +3874,7 @@ ProcessAuxFIFO Entry "r0-r3"
         STR     r0, AuxData_LastKnownLayer      ; store new layer, whatever happens
         STR     sp, AuxData_ExtSP
         TEQ     r0, r1
-        ADRNE   sp, AuxData_StackTop            ; if layer ID has changed, reinitialise coroutine sp
+        ADRNEL  sp, AuxData_StackTop            ; if layer ID has changed, reinitialise coroutine sp
         BNE     ProcessAuxFIFO_NewLayer         ; and go back to start of coroutine
         ReadRegI r0, AuxiliaryDataFIFO          ; else read a byte from the auxiliary data FIFO,
         LDR     sp, AuxData_CoSP                ; restore the coroutine sp
@@ -4744,6 +4754,7 @@ VideoChannelUnderrunIRQ Entry
         MVN     r1, #IR_VideoChannelBufferUnderflow
         BL      UpdateIR
 
+      [ EOSDetect
         MOV     r1, #1
         STR     r1, VideoUnderrunIRQState
 
@@ -4763,6 +4774,7 @@ VideoChannelUnderrunIRQ Entry
         SWI     XMPEGControl_Play
         Pull    "lr_svc"
         TEQP    r3, #0
+      ]
         EXIT
  ]
 
@@ -5844,6 +5856,10 @@ WriteSCR Entry "r0-r4"
 
 	MOV	r3, r1					; save new hi word of value
 	BL	ReadSCR					; r1 = old value lo, r2 = old value hi
+
+        ADR     lr, ReferenceSCR                        ; store away the new SCR value for use in pause/slow-mo
+        STMIA   lr, {r0, r3}                            ; this must be *after* we used the old ReferenceSCR in ReadSCR above
+
 	SUBS	r0, r0, r1				; r0 = (new value - old value) lo word
 	SBC	r1, r3, r2				; r1 = (new value - old value) hi word
 
@@ -5863,7 +5879,7 @@ WriteSCR Entry "r0-r4"
 ; out:	r1 = bits [31..0] of SCR
 ;	r2 = bit 32 of SCR, in bit 0
 
-ReadSCR Entry	"r0"
+ReadSCR Entry	"r0,r3-r5"
 	MOV	lr, pc
 	ORR	lr, lr, #I_bit
 	TEQP	lr, #0					; disable IRQs while we read this
@@ -5883,6 +5899,31 @@ ReadSCR Entry	"r0"
 	LDMIA	r1, {r1, r2}				; if necessary by CheckErrorStatus)
 	ADDS	r1, r1, lr				; and add it on
 	ADC	r2, r2, #0
+
+	; Now compensate for pause and slow-mo by scaling the difference since the last reference SCR
+	ADR     r3, ReferenceSCR
+	LDMIA   r3, {r3, r4}
+	LDR     r0, VideoSpeedSetting
+	BICS    r0, r0, #&80000000
+
+	MOVEQ   r1, r3                                  ; if paused, just return the reference SCR
+	MOVEQ   r2, r4
+	EXITS   EQ
+
+	TEQ     r0, #1                                  ; if normal speed, just return the hardware-derived SCR
+	EXITS   EQ
+
+	SUBS    r1, r1, r3
+	SBC     r2, r2, r4
+	ANDS    r2, r2, #1                              ; negative? (shouldn't be, but you never know)
+	RSBNE   r1, r1, #0                              ; r1 is absolute value of difference
+	MOV     r5, r1
+	DivRem  r1, r5, r0, lr                          ; DivRem is unsigned 32-bit division
+	TST     r2, #1
+	RSBNE   r1, r1, #0                              ; restore negativity if necessary
+	ADDS    r1, r1, r3
+	ADC     r2, r2, r4
+	AND     r2, r2, #1
 	EXITS
 
 ; **************************************************************************
