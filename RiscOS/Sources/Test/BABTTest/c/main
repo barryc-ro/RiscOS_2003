@@ -1,0 +1,1104 @@
+/************************************************************************/
+/* 	        Copyright 1996 Acorn Network Computers		        */
+/*									*/
+/*  This material is the confidential trade secret and proprietary	*/
+/*  information of Acorn Network Computers. It may not be reproduced,   */
+/*  used sold, or transferred to any third party without the prior      */
+/*  written consent of Acorn Network Computers. All rights reserved.	*/
+/* 									*/
+/************************************************************************/
+
+/*
+ * Application to production test the CME modem cards.
+ *
+ * Modification History
+ *---------------------
+ *  Version    Date     Who     Comments
+ *   1.00    11-Sep-95  RWB     Mask off bottom 9 bits of status word when saving.
+ *   1.01    24-Jun-96  RWB     Implemented TIES for Rockwell chipset
+ *   1.03    09-Jul-96  RWB     Changed power down sequence
+ *   1.04    17-Jul-96  RWB     Removed verbose test in power down sequence
+ *   2.00    22-Jul-96  RWB     Major re-structuring of all code
+ *   2.01    05-Aug-96  RWB     Added a initialisation command sequence prior to
+ *   	     		        start command sequence.
+ *   2.03    07-Aug-96  RWB     Rmkill the module before power up.
+ *   2.04    08-Aug-96  RWB     Drop thru to finalise state on error in init state
+ *   	     		        Do an fx2,2 on serial init.
+ *			        Changed order of things in init state.
+ *   2.10    04 Nov 96  BAR     Updated to support TESTEL 100 manual units.
+ *                              added various new functions, changed loads
+ *                              of others added code to do a manual test etc
+ *   2.11    02 Dec 97  RLT	Striped all functions bar BABT level 1 and 2 for use
+ *				in Daytona.
+ *   2.12    03 Dec 97	RLT	Fixed lines for printing messages to work on Daytona's
+ *				LCD.
+ *   2.13    04 Dec 97  RLT	Tidied up messages which are printed to the screen
+ *				whilst the test is underway.
+ *				Removed variables not needed.
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include "kernel.h"
+#include "swis.h"
+
+#include "constants.h"
+#include "support.h"
+#include "screen.h"
+#include "error.h"
+
+#include "Serial.h"
+#include "bufman.h"
+#include "daytonahw.h"
+
+/*
+ * general application variables
+ */
+#define TITLE    "MODEM TEST V 1.00"
+#define TRANSFER0 "Test transfer string 1234567890"
+#define TRANSFER1 "0123456789"
+
+typedef enum {nothing, connect, carrier_slow, carrier_ok, no_carrier,
+	     protocol_err, protocol_lapm, protocol_alt, no_answer,
+	     no_dialtone, busy, ring, transferred, ok} t_modem_resp;
+
+/*
+ * states used within the main state machine
+ */
+typedef enum {Initialise,
+	      Finalise,
+              Manual,
+              GetDefaults,
+              ManBABTLevel1,
+              ManBABTLevel2,
+              ShowResult} t_states;
+
+/*
+ * states used within the main state machine
+ */
+typedef enum {testfinished,
+              prompt,
+              ringing,
+              waiting,
+              start} t_DialTestStates;
+
+/*
+ * buffer handles
+ */
+int iInputBuffer, iOutputBuffer;
+/*
+ * Flags and variables set by the command line args
+ */
+char strFilename[25] = "";
+int flagLogging     = FALSE;
+int flagDebugging   = FALSE;
+int flagBABTLevel1  = FALSE;
+int flagBABTLevel2  = FALSE;
+int flagAskBABTLevel2 = FALSE;
+
+/*
+ * variables pulled form the defaults file
+ */
+char strMasterNumber[25] = "";
+char strSlaveNumber[25] = "";
+char strFormat[8] = "";
+int  iSpeed;
+int  iStatus;
+char strDialString[25] = "";                            /* ?????*/
+char strToneDial[10] = "";
+char strPulseDial[10] = "";
+char strStartCommand[40] = "";
+char strInitCommand[40] = "";
+int  iSerialSpeed;
+int  iCarrierSpeed;
+char strModemDes1[255] = "";
+char strModemDes2[5] = "OK";
+/*
+ * flags that will be set by the defaults file
+ */
+int  flagToneDial    = FALSE;
+int  flagPulseDial   = FALSE;
+int  flagTies        = FALSE;
+int  flagMasterModem = FALSE;
+int  flagManual      = FALSE;
+/*
+ * misc
+ */
+int  iColour   = COL_WHITE;
+int  iQuietOps = FALSE;
+int  flagPulledDefaults = FALSE;
+int  flagOverallStatus = TRUE;
+int  iModemDes1Len = 255;
+int  flagEjectEjectEject = FALSE;
+int  flagTestingComplete = FALSE;
+int  iOutputLine = 2;  /* one less than reqd. start line; cnter preincremented */
+/*
+ * results to be written to the log file
+ */
+int iConnectCount=0;
+int iReliableCount=0;
+int iAttemptCount=0;
+int iTransferCount=0;
+
+int flagTransferComplete;
+int flagFirstConnect;
+
+/*
+ * set up default baud rates, handshaking etc and initialise the internal
+ * serial port, modem card 0 and modem card 1
+ */
+int
+initialise_serial(void)
+{
+        int iInitSerialOK = TRUE;
+	_kernel_oserror *e;
+
+        iOutputLine++;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING Modem Serial Initialisation");
+
+        e = Serial_Open_Ports ();
+        if (e)
+        {
+            iInitSerialOK = error_report (e, iInitSerialOK);
+            return iInitSerialOK;
+        }
+
+        iInputBuffer = buffermanager_get_internalID (Modem[REMMODEM].BufferIn);
+        iOutputBuffer = buffermanager_get_internalID (Modem[REMMODEM].BufferOut);
+
+        screen_tab(0,iOutputLine);
+        if (iInitSerialOK==TRUE){
+                screen_printf(COL_GREEN,"PASSED  Modem Serial Initialisation");
+        }else{
+                screen_printf(COL_RED,"FAILED  Modem Serial Initialisation");
+                flagOverallStatus = FALSE;
+                get_space_bar();
+        }
+        return iInitSerialOK;
+}
+
+/*
+ * Open the defaults file and read in its contenst, then process
+ */
+int
+get_defaults(void)
+{
+        _kernel_oserror *err = NULL;
+        int  ithrow = 0;
+        FILE *defaults;
+        char strTies[10];
+        char strMasterModem[20];
+        char strManual[10];
+        char strDefaultsFile[25];
+        int  flagDefaultsOK = TRUE;
+
+        sprintf(strDefaultsFile,"%s.Defaults.%s",FILENAME_PATH,strFilename);
+        if (flagPulledDefaults==FALSE)
+        {
+                flagPulledDefaults = TRUE;
+
+                defaults = fopen(strDefaultsFile,"r");
+                if (defaults == NULL){
+                        err = error_construct(ERROR_DEFAULTS);
+                        flagDefaultsOK = error_report(err,flagDefaultsOK);
+                        fclose(defaults);
+                        return flagDefaultsOK;
+                }
+                if (fscanf(defaults,"%s %s %s %d %d %s %s %s %s %s %d %d %s %s",
+                    strMasterNumber,strSlaveNumber,strFormat, &iSpeed, &iStatus,
+                    strToneDial,strPulseDial,strInitCommand,strStartCommand,
+                    strTies,&iSerialSpeed,&iCarrierSpeed,strMasterModem,strManual) != 14)
+                {
+                        err = error_construct(ERROR_DEFAULTS);
+                        flagDefaultsOK = error_report(err,flagDefaultsOK);
+                        fclose(defaults);
+                        return flagDefaultsOK;
+                }
+                ithrow = fgetc(defaults);
+                fgets(strModemDes1,iModemDes1Len,defaults);
+                if (strModemDes1 == NULL)
+                {
+                        err = error_construct(ERROR_DEFAULTS);
+                        flagDefaultsOK = error_report(err,flagDefaultsOK);
+                        fclose(defaults);
+                        return flagDefaultsOK;
+                }
+                fclose(defaults);
+                if (strcmp(strToneDial,"TONEDIAL")==0)
+                {
+                        flagToneDial = TRUE;
+                }
+                if (strcmp(strPulseDial,"PULSEDIAL")==0)
+                {
+                        flagPulseDial = TRUE;
+                }
+                if (strcmp(strTies,"TIES")==0)
+                {
+                        flagTies = TRUE;
+                }
+                if (strcmp(strMasterModem,"MASTERMODEM")==0)
+                {
+                        flagMasterModem = TRUE;
+                }
+                if (strcmp(strManual,"MANUAL")==0){
+                        flagManual = TRUE;
+                }
+                debug screen_printf(COL_GREEN,"loaded defaults %s\n",strFilename);
+                debug screen_printf(COL_YELLOW," numbers %s,%s format:%s\n",
+                	  			     strMasterNumber,strSlaveNumber,strFormat);
+                debug screen_printf(COL_YELLOW," modem baud %d, serial baud %d\n",
+                	  			     iSpeed,iSerialSpeed);
+                debug screen_printf(COL_YELLOW," carrier speed %d\n",iCarrierSpeed);
+                debug screen_printf(COL_YELLOW," status:0x%x, TIES:%s\n",iStatus,strTies);
+                debug screen_printf(COL_YELLOW," Tone:%s, Pulse:%s\n",strToneDial,strPulseDial);
+                debug screen_printf(COL_YELLOW," init:%s\n",strInitCommand);
+                debug screen_printf(COL_YELLOW," start:%s\n",strStartCommand);
+                debug screen_printf(COL_YELLOW," Master Modem:%s\n",strMasterModem);
+                debug screen_printf(COL_YELLOW," Manual      :%s\n",strManual);
+        }
+        return flagDefaultsOK;
+}
+
+/*
+ * check for any data in the input buffer, if data present, extract it.
+ */
+t_modem_resp
+receive_command(int iBuffer)
+{
+  char strBuffer[BUFFER_SIZE];
+  int iThisCarrierSpeed;
+
+  if (!examine_buffer(iBuffer))   /* Examine input buffer */
+  {
+    if (get_modem_response(iBuffer,strBuffer,sizeof(strBuffer)))
+    {
+      if (caseless_strcmp(strBuffer,"connect",7) ==0)
+      {
+        debug screen_printf(iColour,"'%s'\n",strBuffer);
+        return (connect);
+      }
+      else if (caseless_strcmp(strBuffer,"protocol",8) == 0)
+      {
+        debug screen_printf(iColour,"'%s'\n",strBuffer);
+        if (caseless_strcmp(strBuffer+strlen("protocol: "),"none",4) == 0)
+          return (protocol_err);
+
+        else if (caseless_strcmp(strBuffer+strlen("protocol: "),"lap-m",5) == 0)
+          return (protocol_lapm);
+
+        else if (caseless_strcmp(strBuffer+strlen("protocol: "),"alt",4) == 0)
+          return (protocol_alt);
+
+        else
+          return (protocol_err);
+      }
+      else if (caseless_strcmp(strBuffer,"carrier",7) == 0)
+      {
+        debug screen_printf(iColour,"'%s'\n",strBuffer);
+        iThisCarrierSpeed = atoi(strBuffer + strlen("carrier "));
+        if (iThisCarrierSpeed < iCarrierSpeed)
+          return (carrier_slow);
+        else
+          return (carrier_ok);
+      }
+      else if (caseless_strcmp(strBuffer,"no carrier",10) == 0)
+        return (no_carrier);
+
+      else if (caseless_strcmp(strBuffer,"no answer",9) == 0)
+        return (no_answer);
+
+      else if (caseless_strcmp(strBuffer,"no dialtone",10) == 0)
+        return (no_dialtone);
+
+      else if (caseless_strcmp(strBuffer,"busy",4) == 0)
+        return (busy);
+
+      else if (caseless_strcmp(strBuffer,"ring",4) == 0)
+        return (ring);
+
+      else if (caseless_strcmp(strBuffer,"ok",2) == 0)
+        return (ok);
+
+      else if (strcmp(strBuffer,TRANSFER0) == 0)
+	return (transferred);
+
+      else if (caseless_strcmp(strBuffer,"at",2) == 0) /* ignore echos */
+      {
+        debug screen_printf(iColour,"at:'%s'\n",strBuffer);
+      }
+      else
+      {
+        debug screen_printf(iColour,"rx:'%s'\n",strBuffer);
+      }
+    }
+  }
+  return (nothing);
+}
+
+/*
+ * Wait for the modem to say OK
+ * iTimeLimit    Time limit to wait for
+ * y             Line to use for reporting error on
+ * iCmdBuf       Buffer to look for retned commands
+ * flagTestOK    Indicates current status of test; passed in order to preserve, if needed.
+ */
+
+int
+wait_for_ok(int iTimeLimit, int flagTestOK, int iCmdBuf)
+{
+        t_timer timer;      	  /* timeout timer */
+        int iIgnore;
+        int flagTimedOut = FALSE;
+
+        /* wait for OK */
+        timer_reset(&timer);
+        while ((receive_command(iCmdBuf)!=ok) && (flagTimedOut != TRUE)){
+                if (timer_read(&timer)>iTimeLimit){
+                        /* Timed out */
+                        flagTestOK = FALSE;
+                        flagTimedOut = TRUE;
+                        iIgnore = error_report(error_construct(ERROR_AT_RESP),iIgnore);
+                }
+        }
+        return flagTestOK;
+}
+
+/*
+ * dial a number
+ * flagMethod is falg indicating the type of connection to use Tone or Dial
+ */
+void
+open(int iBuffer, char *strNumber, int flagMethod)
+{
+        char strBuffer[80];
+
+        sprintf(strBuffer,"AT");
+        if (flagMethod == TONE){
+                sprintf(strBuffer,"ATDT");
+        }else{
+                sprintf(strBuffer,"ATDP");
+        }
+        sprintf(strBuffer,"%s%s",strBuffer,strNumber);
+        if (iQuietOps==FALSE){
+                screen_printf(iColour,"Dialing %s\n",strNumber);
+        }
+        transmit(iBuffer,strBuffer,CR);
+}
+
+/*
+ * close an open connection
+ */
+static _kernel_oserror *
+close(int iInBuffer, int iOutBuffer)
+{
+        _kernel_oserror *err=NULL;
+        t_timer timer;
+        int iIgnore = FALSE;
+
+        if (iQuietOps == FALSE){
+                screen_centre_printf(COL_YELLOW,18,"Closing connection");
+        }
+        if (flagTies){
+                transmit(iOutBuffer,"+++ATH",CR);
+        }else{
+                wait(100);
+                transmit(iOutBuffer,"+++",0);
+                wait(100);
+                /* wait for ok */
+                timer_reset(&timer);
+                while (receive_command((iInBuffer)!=ok) && (iIgnore != FALSE)){
+                        if (timer_read(&timer)>TIMEOUT){
+                                err = error_construct(ERROR_CLOSE_TIME);
+                                iIgnore = error_report(err,iIgnore);
+                        }
+                }
+                transmit(iOutBuffer,"ATH",CR);
+        }
+        timer_reset(&timer);
+        while(receive_command((iInBuffer)!=ok) && (iIgnore != FALSE)){
+                if (timer_read(&timer)>TIMEOUT){
+                        err = error_construct(ERROR_CLOSE_TIME);
+                        iIgnore = error_report(err,iIgnore);
+                }
+        }
+        return (NULL);
+}
+
+/*
+ * handle exit conditions.
+ */
+void
+doexit(void)
+{
+        FILE *log;
+        char strFilenameResults[40];
+        _kernel_swi_regs reg;
+
+        if (flagTestingComplete != TRUE){
+                sprintf(strFilenameResults,"%s.Results.%s",FILENAME_PATH,strFilename);
+                close(iInputBuffer,iOutputBuffer);
+
+                if (flagLogging){
+                        debug screen_printf(COL_GREEN,"Writing results to file\n");
+                        log = fopen(strFilenameResults,"a");
+                        if (log){
+                                fprintf(log,"Attempts    : %d\n",iAttemptCount);
+                                fprintf(log,"Connections : %d\n",iConnectCount);
+                                fprintf(log,"Reliable    : %d\n",iReliableCount);
+                                fprintf(log,"Transfers   : %d\n",iTransferCount);
+                                fclose(log);
+                        }
+                }
+                flush_buffer(0);
+                screen_clear_line(23);
+                screen_centre_printf(COL_YELLOW,18,"YOU CAN NOW SWITCH OFF THE MACHINE");
+                do{
+                }while(wait_for_key() != 32);
+
+        }
+        /* Issue a Wimp_CommandWindow,-1 SWI call; should prevent 'press space bar" */
+        reg.r[0] = -1;
+        _kernel_swi(Wimp_CommandWindow,&reg,&reg);
+}
+
+/*
+ * perform the initialisation stuff
+ */
+int
+_initialise_test(void)
+{
+        _kernel_oserror *err = NULL;
+        FILE *log;
+        char strFilenameResults[40];
+        int flagInitTestOK = TRUE;
+
+        sprintf(strFilenameResults,"%s.Results.%s",FILENAME_PATH,strFilename);
+/*
+        screen_printf(COL_YELLOW,"Starting test %d.\n",iAttemptCount+1);
+        screen_printf(COL_YELLOW,"Attempts    : %d\n",iAttemptCount);
+        screen_printf(COL_YELLOW,"Connections : %d\n",iConnectCount);
+        screen_printf(COL_YELLOW,"Reliable    : %d\n",iReliableCount);
+        screen_printf(COL_YELLOW,"Transfers   : %d\n\n",iTransferCount);
+ */
+
+        iOutputLine++;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING Modem Initialisation Check");
+
+        if (flagLogging){
+                debug printf("writing to log file\n");
+                log = fopen(strFilenameResults,"a");
+                if (log==NULL){
+                        err = error_construct(ERROR_RESULTS);
+                        flagInitTestOK = error_report(err,flagInitTestOK);
+                }else{
+                        fprintf(log,"Started %s",getenv("Sys$Time"));
+                        fprintf(log," %s\n",getenv("Sys$Date"));
+                        fprintf(log,"Startup commands : %s\n",strStartCommand);
+                        fclose(log);
+                }
+        }
+
+        screen_tab(0,iOutputLine);
+        if (flagInitTestOK==TRUE){
+                screen_printf(COL_GREEN,"PASSED  Modem Initialisation Check");
+        }else{
+                screen_printf(COL_RED,"FAILED  Modem Initialisation Check");
+                flagOverallStatus = FALSE;
+                get_space_bar();
+        }
+
+        return (flagInitTestOK);
+}
+
+/*
+ * Calculate the time meeded to wait for a specified string to be dialed.
+ * flagMethod idicates if its tone or pulse dialing needed.
+ */
+
+int
+_cal_digit_time(int flagMethod, char *strNumber)
+{
+        int cnt;
+        int iDigit = 0;
+        int iNoDigits;
+        int iTime = 0;
+        int iTotal = 0;
+        char strTmp[5];
+        int iPulseDigit = 22;                           /* 1 Digit takes 110mS or 11cS */
+                                                        /* Inter Digit gap is 110mS or 11cS */
+                                                        /* Thus total digit is 220mS or 22cS */
+        int iToneDigit = 30;                            /* 1 Digit takes 150mS or 15cS */
+                                                        /* Inter digit gap is 150mS or 15Cs */
+                                                        /* Thus total digit is 300mS or 30cS */
+
+        iNoDigits = strlen(strNumber);
+
+        if (flagMethod == TONE){
+                iTime = iNoDigits*iToneDigit;
+        }else{
+                for (cnt=1; cnt <= iNoDigits; cnt++){
+                        sprintf(strTmp,"%c",strNumber[cnt]);
+                        iDigit=atoi(strTmp);
+                        if (iDigit == 0){
+                                /* 0 is really a 10) */
+                                iDigit = 10;
+                        }
+                        iTotal=iTotal+iDigit;
+                }
+                iTime = iTotal*iPulseDigit;
+        }
+        return iTime;
+}
+
+/*
+ * perform the Dial Test
+ * flagMethod idicates if its tone or pulse dialing needed.
+ * iPassCnt is the pass counter, returned
+ */
+int
+dialtest(int flagMethod, int iPassCnt, int iInSlave, int iOutSlave, char *strNumber)
+{
+        int iNumbDigits = 0;
+        int iDigitTime = 0;
+        int flagDialingOK = FALSE;
+        int iConnectDelay1 = 0;
+        int iConnectDelay2 = 0;
+
+        iOutputLine++;
+        iNumbDigits = strlen(strNumber);
+        /* Calculate how long it takes for the digits to be dialed */
+        iDigitTime = _cal_digit_time(flagMethod,strNumber);
+
+        screen_tab(0,iOutputLine);
+        if (flagMethod == TONE){
+                screen_printf(COL_YELLOW,"RUNNING Dial Test (TONE)");
+                iConnectDelay1 = 550;
+                iConnectDelay2 = 650;
+        }else{
+                screen_printf(COL_YELLOW,"RUNNING Dial Test (PULSE)");
+                iConnectDelay1 = 350;
+                iConnectDelay2 = 500;
+        }
+
+        screen_centre_printf(COL_YELLOW,15,"Check '%s' is shown on the LCD",strNumber);
+        screen_centre_printf(COL_YELLOW,16,"Check the level is correct");
+        sound_attention();
+
+        iQuietOps = TRUE;
+        open(iOutSlave,strNumber,flagMethod);
+        iQuietOps = FALSE;
+
+        /* wait a time period */
+        wait(iConnectDelay1);           /* Time needed to open connection */
+        wait(iDigitTime);               /* Time needed to dial the digits */
+        flagDialingOK = get_responce(17);
+        screen_clear_line(15);
+        screen_clear_line(16);
+
+        if (flagDialingOK != FALSE){
+                transmit(iOutSlave,"ATH0",CR);
+                flagDialingOK = wait_for_ok(TIMEOUT,flagDialingOK,iInSlave);
+                flush_buffer(iInSlave);
+
+                /* Calculate how long it takes for the digits to be dialed */
+                iDigitTime = _cal_digit_time(flagMethod,"200");
+
+                iQuietOps = TRUE;
+                open(iOutSlave,"200",flagMethod);
+                iQuietOps = FALSE;
+
+                /* wait a time period */
+                wait(iConnectDelay2);           /* Time needed to open connection */
+                wait(iDigitTime);               /* Time needed to dial the digits */
+                flagDialingOK = check_something("Check the limits are correct");
+
+/*
+                transmit(iOutSlave,"ATH0",CR);
+                flagDialingOK = wait_for_ok(TIMEOUT,flagDialingOK,iInSlave);
+                flush_buffer(iInSlave);
+*/
+
+                iQuietOps=TRUE;
+                close(iInSlave,iOutSlave);
+                iQuietOps=FALSE;
+        }
+        iPassCnt = screen_display_subresult(iOutputLine, "Dial Test", flagDialingOK, iPassCnt);
+        return iPassCnt;
+}
+
+/* static _kernel_oserror * */
+int
+_man_babt_level1(int iInSlave, int iOutSlave, char *strNumber)
+{
+        _kernel_oserror *err = NULL;
+        t_timer timer;      	  /* timeout timer */
+        int flagTestOK = FALSE;
+        int iRXCmd;
+        int iRingCnt=0;
+        int iPassCnt=0;
+        int iSubTestsDoneCnt = 0;
+        int iCnt = 0;
+        int iBABTLevel1Line;
+        int iFirstBABTLevel1Test;
+
+        char strDialCmd[10];
+        int iReqdRings = 2;
+        int iDialTimeout = 0;
+        t_DialTestStates DialTestState;
+        int flagButtonPressed = FALSE;
+
+        iOutputLine++;
+        iBABTLevel1Line = iOutputLine;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING BABT Level 1 Test");
+        flagTestOK = FALSE;
+
+        /* RESET UUT TEST */
+
+        iOutputLine++;
+        iFirstBABTLevel1Test = iOutputLine;
+        flagTestOK = TRUE;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING Reset UUT");
+        transmit(iOutSlave,"ATZ",CR);
+        flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInSlave);
+        iPassCnt = screen_display_subresult(iOutputLine, "Reset UUT", flagTestOK, iPassCnt);
+        flagTestOK = FALSE;
+        iSubTestsDoneCnt++;
+
+
+        transmit (iOutSlave, "AT+FCLASS=0", CR);
+        flagTestOK = wait_for_ok (TIMEOUT, flagTestOK, iInSlave);
+        transmit (iOutSlave, "AT+FAE=0", CR);
+        flagTestOK = wait_for_ok (TIMEOUT, flagTestOK, iInSlave);
+
+
+        /* ON LINE TEST */
+
+        iOutputLine++;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING ON LINE Level Test");
+        transmit(iOutSlave,"ATH1",CR);
+
+        flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInSlave);
+
+        flagTestOK = check_something("Is the 'Line LED' ON");
+        iPassCnt = screen_display_subresult(iOutputLine, "ON LINE Level Test", flagTestOK, iPassCnt);
+        flagTestOK = FALSE;
+        iSubTestsDoneCnt++;
+
+        /* OFF LINE TEST */
+
+        iOutputLine++;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING OFF LINE Level Test");
+        transmit(iOutSlave,"ATH0",CR);
+
+        flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInSlave);
+        screen_centre_printf(COL_YELLOW,14,"Press the Button on the");
+        screen_centre_printf(COL_YELLOW,15,"'Line Current Checker'.");
+        flagTestOK = check_something("Is the 'GREEN LED' ON ?");
+        iPassCnt = screen_display_subresult(iOutputLine, "OFF LINE Level Test", flagTestOK, iPassCnt);
+        screen_clear_line(14);
+        screen_clear_line(15);
+        flagTestOK = FALSE;
+        iSubTestsDoneCnt++;
+
+        /* AUTO ANSWER TEST */
+
+        iOutputLine++;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING Auto Answer Test");
+
+        sprintf(strDialCmd,"ATS0=%d",iReqdRings);
+        transmit(iOutSlave,strDialCmd,CR);
+
+        flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInSlave);
+
+
+        DialTestState = start;
+        while (DialTestState != testfinished){
+                switch (DialTestState)
+                {
+                        case start :
+                                screen_centre_printf(COL_YELLOW,14,"Press the Ring Button");
+                                screen_centre_printf(COL_YELLOW,15,"Waiting to answer");
+                                sound_attention();
+                                timer_reset(&timer);
+                                iDialTimeout = TIMEOUT*5;
+                                DialTestState = waiting;
+                                break;
+                        case waiting :
+                                /* wait for either ringing to be detected or a timeout */
+                                /* if ringing detected, then state = ringing */
+                                /* if timeout, then state = prompt */
+
+                                if (timer_read(&timer)>(iDialTimeout)){
+                                        /* Timed out */
+                                        DialTestState = prompt;
+                                }
+
+                                iRXCmd = receive_command(iInSlave);
+                                if (iRXCmd == ring){
+                                        DialTestState = ringing;
+                                        if (iRingCnt == 0){
+                                                timer_reset(&timer);
+                                                iDialTimeout = TIMEOUT*10;
+                                                /* ItsRinging = TRUE; */
+                                                screen_clear_line(14);
+                                                screen_clear_line(15);
+                                                screen_tab(0,15);
+                                                screen_printf(COL_YELLOW,"It is ringing");
+                                                iRingCnt++;
+                                                screen_tab(0,16);
+                                                screen_printf(COL_YELLOW,"Brrr-Ring ..... Brrr-Ring ..... %d",iRingCnt);
+                                        }
+                                }
+                                break;
+                        case prompt :
+                                /* prompt user; reset timer; inc counter */
+                                screen_clear_line(14);
+                                screen_clear_line(15);
+                                screen_centre_printf(COL_YELLOW,15,"Have you pressed the Ring Button?");
+                                sound_attention();
+                                flagButtonPressed = get_responce(16);
+                                screen_clear_line(15);
+                                if (flagButtonPressed == TRUE){
+                                        /* User has pressed the button */
+                                        timer_reset(&timer);
+                                        iDialTimeout = TIMEOUT*5;
+                                        screen_clear_line(15);
+                                        screen_centre_printf(COL_YELLOW,15,"Waiting to answer");
+                                        DialTestState = ringing;
+                                }else{
+                                        /* User ain't pressed the button */
+                                        screen_clear_line(16);
+                                        DialTestState = start;
+                                }
+                                break;
+                        case ringing :
+                                iRXCmd = receive_command(iInSlave);
+                                if (iRXCmd == ring){
+                                        iRingCnt++;
+                                        screen_tab(0,16);
+                                        screen_printf(COL_YELLOW,"Brrr-Ring ..... Brrr-Ring ..... %d",iRingCnt);
+                                        if (iRingCnt == iReqdRings){
+                                                flagTestOK = TRUE;
+                                                wait(100);
+                                                screen_clear_line(15);
+                                                screen_clear_line(16);
+                                                transmit (iOutSlave, "ATA", CR);
+                                                flagTestOK = TRUE;
+                                                DialTestState = testfinished;
+                                        }
+                                }else{
+                                        if (timer_read(&timer)>(iDialTimeout)){
+                                                /* Timed out */
+                                                screen_clear_line(16);
+                                                err = error_construct(ERROR_AT_RESP);
+                                                flagTestOK = error_report(err,flagTestOK);
+                                                screen_centre_printf(COL_YELLOW,15,"Press the Ring Button");
+                                                screen_centre_printf(COL_YELLOW,16,"To reset the test equipment");
+                                                get_space_bar();
+                                                screen_clear_line(15);
+                                                screen_clear_line(16);
+                                                flagTestOK = FALSE;
+                                                DialTestState = testfinished;
+                                        }
+                                }
+                                break;
+                }
+        }
+
+        iPassCnt = screen_display_subresult(iOutputLine,"Auto Answer Test", flagTestOK, iPassCnt);
+        flagTestOK = FALSE;
+        iSubTestsDoneCnt++;
+
+        /* CALL LINE LEVEL TEST */
+
+        iOutputLine++;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING Call Level Test");
+        wait(150);                                                      /* seams a 1.5 sec delay is needed */
+        flagTestOK = is_level_ok();
+        iPassCnt = screen_display_subresult(iOutputLine, "Call Level Test", flagTestOK, iPassCnt);
+        flagTestOK = FALSE;
+        iSubTestsDoneCnt++;
+
+        /* CLOSE AN OPEN CONNECTION */
+
+        iOutputLine++;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING Close Connection Test");
+
+        iQuietOps=TRUE;
+        close(iInSlave,iOutSlave);
+        iQuietOps=FALSE;
+
+        flagTestOK = check_something("Is the 'Line LED' OFF");
+        iPassCnt = screen_display_subresult(iOutputLine, "Close Connection Test", flagTestOK, iPassCnt);
+        flagTestOK = FALSE;
+        iSubTestsDoneCnt++;
+
+
+        /* DETERMIN FINAL RESULT */
+
+        if (iPassCnt == iSubTestsDoneCnt){
+                flagTestOK = TRUE;
+        }else{
+                flagTestOK = FALSE;
+        }
+
+        iPassCnt = screen_display_subresult(iBABTLevel1Line, "BABT Level 1 Test", flagTestOK, iPassCnt);
+        for (iCnt=iFirstBABTLevel1Test; iCnt<=iOutputLine; iCnt++){
+                screen_clear_line(iCnt);
+        }
+        iOutputLine = iFirstBABTLevel1Test;
+
+        return flagTestOK;
+}
+
+/*
+ * perform a manual babt level 2 test
+ */
+/* static _kernel_oserror * */
+int
+_man_babt_level2(int iInSlave, int iOutSlave, char *strNumber)
+{
+        int flagTestOK = FALSE;
+        int iPassCnt=0;
+        int iSubTestsDoneCnt = 0;
+        int iBABTLevel2Line;
+        int iFirstBABTLevel2Test;
+        int iCnt = 0;
+
+        iBABTLevel2Line = iOutputLine;
+        screen_tab(0,iOutputLine);
+        screen_printf(COL_YELLOW,"RUNNING BABT Level 2 Test");
+        flagTestOK = FALSE;
+
+        /* DIAL A NUMBER */
+
+        iFirstBABTLevel2Test = iOutputLine+1;
+        if (flagPulseDial == TRUE){
+                iPassCnt = dialtest(PULSE,iPassCnt,iInSlave, iOutSlave, strNumber);
+                flagTestOK = FALSE;
+                iSubTestsDoneCnt++;
+        }
+
+        if (flagToneDial == TRUE){
+                iPassCnt = dialtest(TONE,iPassCnt,iInSlave, iOutSlave, strNumber);
+                flagTestOK = FALSE;
+                iSubTestsDoneCnt++;
+        }
+
+        /* Take the modem off the hook to clear the test kit LCD */
+
+        transmit(iOutSlave,"ATZ",CR);
+        flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInSlave);
+        flush_buffer(iInSlave);
+
+        transmit(iOutSlave,"ATH1",CR);
+        flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInSlave);
+        flush_buffer(iInSlave);
+
+        transmit(iOutSlave,"ATH0",CR);
+        flagTestOK = wait_for_ok(TIMEOUT,flagTestOK,iInSlave);
+        flush_buffer(iInSlave);
+
+        /* DETERMIN FINAL RESULT */
+
+        if (iPassCnt == iSubTestsDoneCnt){
+                flagTestOK = TRUE;
+        }else{
+                flagTestOK = FALSE;
+        }
+
+        iPassCnt = screen_display_subresult(iBABTLevel2Line, "BABT Level 2 Test", flagTestOK, iPassCnt);
+        for (iCnt=iFirstBABTLevel2Test; iCnt<=iOutputLine; iCnt++){
+                screen_clear_line(iCnt);
+        }
+        iOutputLine = iFirstBABTLevel2Test;
+
+        return flagTestOK;
+}
+
+/*
+ * main state machine
+ */
+/* _kernel_oserror * */
+void
+machine(void)
+{
+        t_states state = GetDefaults;
+        int flagBABTLevel1Done = FALSE;
+        int flagBABTLevel2Done = FALSE;
+        int flagInitTestOK = FALSE;
+        int flagInitSerialOK = FALSE;
+        int flagBABTLevel1Res = FALSE;
+        int flagBABTLevel2Res = FALSE;
+        int iCnt;
+
+        while ((flagTestingComplete == FALSE) && (flagEjectEjectEject==FALSE))
+        {
+                switch (state)
+                {
+                        case GetDefaults :
+                                flagInitTestOK = get_defaults();
+                                if (flagInitTestOK == TRUE){
+                                        state = Initialise;
+                                }else{
+                                        state = Finalise;
+                                        flagOverallStatus = FALSE;
+                                }
+                                break;
+
+                        case Finalise :
+                                screen_init(TITLE);
+                                screen_centre_printf(COL_YELLOW,4,"Finished Testing");
+                                screen_centre_printf(COL_YELLOW,6,"Wait whilst test station is shutdown");
+
+                                wait(150);
+                                flagTestingComplete = TRUE;
+                                break;
+
+                        case Initialise :
+                                iOutputLine = 2;
+                                flagInitTestOK = _initialise_test();
+                                if (flagInitTestOK == FALSE){
+                                        state = ShowResult;
+                                        flagOverallStatus = FALSE;
+                                }else{
+                                        flagInitSerialOK = initialise_serial();
+                                        if (flagInitSerialOK == FALSE){
+                                	        state = ShowResult;
+                                                flagOverallStatus = FALSE;
+                                        }else{
+                                                state = Manual;
+                                        }
+                                }
+                                break;
+
+                        case Manual :
+
+                                if (flagBABTLevel1 == TRUE){
+                                        state = ManBABTLevel1;
+                                }
+
+                        case ManBABTLevel1 :
+                                flagBABTLevel1Done = TRUE;
+                                flagBABTLevel1Res =_man_babt_level1(iInputBuffer,iOutputBuffer,strSlaveNumber);
+
+                                if (flagBABTLevel1Res == FALSE){
+                                        flagOverallStatus = FALSE;
+                                }else{
+                                        if (flagAskBABTLevel2 == TRUE){
+                                                screen_centre_printf(COL_YELLOW,17,"Perform a BABT Level 2 Test?");
+                                                sound_attention();
+                                                flagBABTLevel2 = get_responce(18);
+                                                screen_clear_line(17);
+                                        }
+                                }
+
+                                if (flagBABTLevel2 == TRUE) {
+                                        state = ManBABTLevel2;
+                                }else{
+                                        state = ShowResult;
+                                }
+
+                                break;
+
+                        case ManBABTLevel2 :
+                                flagBABTLevel2Done = TRUE;
+                                flagBABTLevel2Res =_man_babt_level2(iInputBuffer,iOutputBuffer,strSlaveNumber);
+                                if (flagBABTLevel2Res == FALSE){
+                                        flagOverallStatus = FALSE;
+                                }
+                                state = ShowResult;
+                                break;
+
+                        case ShowResult :
+                                if (flagOverallStatus == TRUE){
+                                        screen_centre_printf(COL_GREEN,17,"THIS UUT HAS PASSED");
+                                }else{
+                                        screen_centre_printf(COL_RED,17,"THIS UUT HAS FAILED");
+                                }
+                                get_space_bar();
+                                for (iCnt = 3; iCnt<=19; iCnt++){
+                                        screen_clear_line(iCnt);
+                                }
+
+                                state = Finalise;
+                                break;
+
+                }
+        }
+}
+
+/*
+ * main
+ */
+int
+main(int argc, char *argv[])
+{
+
+        _kernel_swi_regs reg;
+/*         _kernel_oserror *err = NULL; */
+        int i;
+
+        atexit(doexit);
+
+        _kernel_swi(Hourglass_Off,&reg,&reg);
+        strcpy(strFilename,"Default");
+
+        /*
+         * setup command line flags
+         */
+        for (i=0; i<argc; i++)
+        {
+                if (caseless_strcmp(argv[i],"logging"      , 7) == 0){
+                        flagLogging    = TRUE;
+                }
+                if (caseless_strcmp(argv[i],"verbose"      , 7) == 0){
+                        flagDebugging  = TRUE;
+                }
+                if (caseless_strcmp(argv[i],"askbabtlevel2",13) == 0){
+                        flagAskBABTLevel2 = TRUE;
+                }
+                if (caseless_strcmp(argv[i],"babtlevel1"   ,10) == 0){
+                        flagBABTLevel1 = TRUE;
+                }
+                if (caseless_strcmp(argv[i],"babtlevel2"   ,10) == 0){
+                        flagBABTLevel2 = TRUE;
+                        flagAskBABTLevel2 = FALSE;
+                }
+                if (caseless_strcmp(argv[i],"file="        , 5) == 0){
+                        strcpy(strFilename,argv[i]+5);
+                }
+        }
+
+        flagEjectEjectEject= screen_init(TITLE);
+        if (flagEjectEjectEject == FALSE){
+                machine();
+                screen_clear_line(4);
+                screen_clear_line(6);
+                screen_clear_line(23);
+                screen_centre_printf(COL_YELLOW,18,"YOU CAN NOW SWITCH OFF THE MACHINE");
+        }else{
+                /* problems setting the screen mode ...  */
+                printf("\n\nYOU CAN NOW SWITCH OFF THE MACHINE\n\n");
+        }
+
+        do{
+        }while(wait_for_key() != 32);
+
+        /* Issue a Wimp_CommandWindow,-1 SWI call; should prevent 'press space bar" */
+        reg.r[0] = -1;
+        _kernel_swi(Wimp_CommandWindow,&reg,&reg);
+
+        return (0);
+}

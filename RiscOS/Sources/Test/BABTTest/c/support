@@ -1,0 +1,283 @@
+/************************************************************************/
+/* 	        Copyright 1996 Acorn Network Computers		        */
+/*									*/
+/*  This material is the confidential trade secret and proprietary	*/
+/*  information of Acorn Network Computers. It may not be reproduced,   */
+/*  used sold, or transferred to any third party without the prior      */
+/*  written consent of Acorn Network Computers. All rights reserved.	*/
+/* 									*/
+/************************************************************************/
+
+/*
+ * functions for manipulating serial buffers
+ *
+ * Modification History
+ *---------------------
+ * 0.02 13 Nov 96 BAR   Added functions get_space_bar, get_responce,
+ *                      is_level_ok, sound_attention
+ * 0.03 01 Dec 97 RLT	Modified sound_attention to use DaytonaHW_Buzzer,
+ *			changed serial routines to use the buffer manager
+ *			to work under Daytona.  Striped various unneeded
+ *			functions.
+ * 0.04 03 Dec 97 RLT	Fixed lines where messages are printed to fit on
+ *                      Daytona's LCD.
+ * 0.05 04 Dec 97 RLT	Modified yes/no keys to use e-mail and cancel
+ *			instead of F5 and F8.
+ */
+
+#include <stdio.h>
+#include <ctype.h>
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+#include "constants.h"
+#include "error.h"
+#include "screen.h"
+#include "support.h"
+
+#include "daytonahw.h"
+#include "bufman.h"
+
+extern int flagDebugging;
+
+/*
+ * resets the given timer.
+ */
+void
+timer_reset ( t_timer *the_timer )
+{
+        _kernel_swi_regs reg;
+
+        _kernel_swi (OS_ReadMonotonicTime, &reg, &reg);
+        *the_timer = (long) reg.r[0];
+}
+
+/*
+ * returns the current timer setting in centiseconds
+ */
+long
+timer_read ( t_timer *the_timer)
+{
+  _kernel_swi_regs reg;
+
+  _kernel_swi (OS_ReadMonotonicTime, &reg, &reg);
+  return (long) reg.r[0] -  *the_timer;
+}
+
+/*
+ * waits for given number of centiseconds
+ */
+void
+wait(long time)
+{
+  t_timer timer;
+
+  if (time>0)
+  {
+    timer_reset(&timer);
+    while (timer_read(&timer) < time) ;
+  }
+}
+
+/*
+ * compare two strings caselessly
+ */
+int caseless_strcmp(char *a, char *b, int len)
+{
+        int d;
+        while ( (*a || *b) && len)
+        {
+                d = toupper( *(a++) ) - toupper( *(b++) );
+                if (d) return d;
+                len--;
+        }
+        return 0;
+}
+
+/*
+ * return state of c flag, 1 = buffer empty, 0 = bytes present.
+ */
+int
+examine_buffer(int iBuffer)
+{
+    if (buffermanager_get_nused (iBuffer) > 0)
+        return 0;
+    else
+        return 1;
+}
+
+/*
+ * clear everything out of the given buffer
+ */
+void
+flush_buffer(int iBuffer)
+{
+    buffermanager_purge (iBuffer);
+    wait (10);
+}
+
+/*
+ * place given buffer in output buffer and perform timeout checks.
+ * Return TRUE if success, FALSE otherwise.
+ */
+int
+put_char(int iBuffer, char ch)
+{
+    if (buffermanager_put_byte (iBuffer, ch) == 0)
+        return TRUE;
+    else
+        return FALSE;
+}
+
+/*
+ * remove character from input buffer, character if one present, -1 otherwise
+ */
+int
+get_char(int iBuffer)
+{
+    return (buffermanager_get_byte (iBuffer));
+}
+
+/*
+ * wait_for_key
+ */
+int
+wait_for_key(void)
+{
+  _kernel_swi_regs reg;
+  int iCarry;	    /* carry flag as returned from keyboard SWI */
+
+  flush_buffer(0);
+  reg.r[0] = 145;
+  reg.r[1] = 0;
+  do
+  {
+    _kernel_swi_c(OS_Byte, &reg, &reg, &iCarry);
+  } while (iCarry!=0);
+  return (reg.r[2]);
+}
+
+/*
+ * insert characters in the serial output buffer followed by a newline
+ * character.
+ */
+void
+transmit(int iBuffer, char *strCommand, char chTerminate)
+{
+  if (strCommand!=NULL)
+  {
+    //printf("tx:'%s'\n",strCommand);
+    while (*strCommand != NULL)
+    {
+      if (!put_char(iBuffer,*strCommand++)) return;   /* exit if problem */
+    }
+    if (chTerminate != 0) put_char(iBuffer,chTerminate);
+  }
+}
+
+/*
+ * get a terminated string from an input buffer, returns 1 if string read,
+ * 0 if timeout.
+ */
+int
+get_modem_response(int iBuffer, char *strBuffer, int size)
+{
+  t_timer timer;      	  /* timeout timer */
+  int i=0;
+  int ch;
+
+  timer_reset(&timer);
+  do
+  {
+    ch = get_char(iBuffer);
+    if (ch>-1)
+      if (ch!=10 && ch !=13) strBuffer[i++] = (char)ch;
+
+    strBuffer[i] = 0;
+    if (timer_read(&timer) > TIMEOUT)
+      return (0);
+
+  } while (ch!=10 && ch!=13 && i<size);
+
+  return (i?1:0);
+}
+
+/*
+ * Ask for and wait for the space bar to be pressed.
+ */
+void
+get_space_bar(void)
+{
+        screen_centre_printf(COL_YELLOW,18,"Press Space Bar to continue");
+        sound_attention();
+        do{
+        }while(wait_for_key() != 32);
+        screen_clear_line(18);
+}
+
+/*
+ * Get Y - N responce - the question asked else where
+ * the instruction asked here
+ * 'y' specifies the line to use & clear.
+ */
+int
+get_responce(int y)
+{
+        int key = 0, resp = FALSE;
+
+        screen_centre_printf(COL_YELLOW,y,"Press Email for YES; Cancel for NO");
+
+        while((key != UC_Y) && (key != UC_N) && (key != LC_Y) && (key != LC_N) && (key != EMAIL) && (key != CANCEL)){
+                key = wait_for_key();
+        };
+        if ((key == UC_Y) || (key == LC_Y) || (key == EMAIL)){
+                resp = TRUE;
+        }else{
+                resp = FALSE;
+        }
+        screen_clear_line(y);
+        return resp;
+}
+
+/*
+ * Ask if the level is ok and get a Y - N responce
+ */
+int
+is_level_ok(void)
+{
+        int flagOK = FALSE;
+        screen_centre_printf(COL_YELLOW,16,"Check the level is correct");
+        sound_attention();
+        flagOK = get_responce(17);
+        screen_clear_line(16);
+        return flagOK;
+}
+
+/*
+ * Ask operator to check something is correct and get a Y - N responce
+ */
+int
+check_something(char *inst)
+{
+        int flagOK = FALSE;
+        screen_centre_printf(COL_YELLOW,16,inst);
+        sound_attention();
+        flagOK = get_responce(17);
+        screen_clear_line(16);
+        return flagOK;
+}
+
+void
+sound_attention(void)
+/*
+ * Use DaytonaHW_Buzzer to make a sound for half a second.
+ */
+{
+    _kernel_swi_regs reg;
+    int state = 1;
+
+    reg.r[0] = 0;
+    reg.r[1] = state;
+    reg.r[2] = 50;
+    _kernel_swi (DaytonaHW_Buzzer, &reg, &reg);
+}
