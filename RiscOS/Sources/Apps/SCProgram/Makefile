@@ -27,11 +27,11 @@ WIPE    = -wipe
 CD	= dir
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS} -Throwback
+CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 #DFLAGS  = -DDEBUG
-DFLAGS  = 
+DFLAGS  =
 #
 # Libraries
 #
@@ -51,7 +51,7 @@ OBJS      =	\
 o.main		\
 o.error		\
 o.console
-  
+
 #
 # Rule patterns
 #
@@ -76,17 +76,10 @@ clean:
 #
 ${APPLICATION}: ${OBJS}
         ${LD} -o $@ ${OBJS} ${CLIB}
+        Access ${APPLICATION} RW/R
 
 #
 # Dynamic dependencies:
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	h.error
-o.main:	C:h.kernel
-o.main:	h.constants
-o.main:	h.console
-o.main:	C:h.scinter
 o.main:	c.main
 o.main:	C:h.kernel
 o.main:	C:h.swis
