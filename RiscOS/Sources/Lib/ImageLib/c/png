@@ -23,11 +23,12 @@
 #include "defines.h"
 #include "datastruct.h"
 #include "internal.h"
-#include "png.h"
 #include "sprite.h"
 
 #define PNG_INTERNAL  /* Give ourselves slightly more intimate access */
 #include "PNG/png.h"
+
+#include "png.h"
 
 #include "riscospal.h"
 
@@ -584,6 +585,8 @@ void info_callback(png_struct *png_ptr, png_info *info)
     this->width = info->width;
     this->height = info->height;
 
+    #if 0
+    /* Don't support the pHYS chunk - it sucks */
     if ((info->valid & PNG_INFO_pHYs) && info->phys_unit_type < PNG_RESOLUTION_LAST)
     {
         switch (info->phys_unit_type)
@@ -614,6 +617,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
         }
     }
     else
+    #endif
     {
         if (this->width_os==-1)
             this->width_os = info->width * 2;
@@ -638,14 +642,14 @@ void info_callback(png_struct *png_ptr, png_info *info)
     mem = 16  /* Sprite area header size */
          +44; /* Sprite header size */
 
-    if ((info->color_type &~ PNG_COLOR_MASK_ALPHA) == PNG_COLOR_TYPE_GRAY)
-        num_palette = pal_entries = 1 << min(info->bit_depth, 8);
+    if ((info->color_type&~PNG_COLOR_MASK_ALPHA) == PNG_COLOR_TYPE_GRAY && !this->full_alpha)
+        num_palette = pal_entries = 1 << info->bit_depth;
     else if (info->color_type == PNG_COLOR_TYPE_PALETTE)
     {
         num_palette = info->num_palette;
         pal_entries = 1 << info->bit_depth;
     }
-    else if (osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
+    else if (osver < 0xA5 && info->color_type == PNG_COLOR_TYPE_RGB)
     {
         num_palette = 0;
         pal_entries = 256;
@@ -793,10 +797,10 @@ void info_callback(png_struct *png_ptr, png_info *info)
                 this->private_data2[15 + i * 2 + 1] = c;
             }
 
-            /* Any spare palette entries are zeroed */
+            /* Any spare palette entries are set to opaque black */
             for ( ; i < pal_entries; i++)
                 this->private_data2[15 + i * 2] =
-                this->private_data2[15 + i * 2 + 1] = 0;
+                this->private_data2[15 + i * 2 + 1] = 0x000000FF;
 
         }
         else
@@ -804,23 +808,19 @@ void info_callback(png_struct *png_ptr, png_info *info)
             if (info->color_type == PNG_COLOR_TYPE_GRAY ||
                 info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
             {
-                if (this->full_alpha || !(info->valid & PNG_INFO_gAMA))
-                {
-                    /* Palette not important - just fill a simple one in anyway */
-                    for (i = 0; i < num_palette; i++)
-                    {
-                        c = (i << 24) | (i << 16) | (i << 8);
-                        this->private_data2[15 + i * 2] =
-                        this->private_data2[15 + i * 2 + 1] = c;
-                    }
-                }
-                else
+                if (!this->full_alpha)
                 {
                     /* Need a gamma corrected palette */
                     int g, end, step, do_gamma;
-                    double gamma = 1.0 / (info->gamma * SCREEN_GAMMA);
+                    double gamma;
 
-                    do_gamma = fabs(gamma - 1.0) >= PNG_GAMMA_THRESHOLD;
+                    if (info->valid & PNG_INFO_gAMA)
+                    {
+                        gamma = 1.0 / (info->gamma * SCREEN_GAMMA);
+                        do_gamma = fabs(gamma - 1.0) >= PNG_GAMMA_THRESHOLD;
+                    }
+                    else
+                        do_gamma = 0;
 
                     this->private_data2[15] = this->private_data2[16] = 0;
 
@@ -923,7 +923,6 @@ void info_callback(png_struct *png_ptr, png_info *info)
     longjmp(png_ptr->jmpbuf, 1);
 }
 
-static void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width, int depth, png_bytep trans, int num_trans, const png_color_16 *trans_values, int color_type);
 static void convert_32bit_alpha_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width);
 static void convert_row_24bit_to_8bit(const png_byte *row, png_byte *data, png_byte *mask, const char *itable, unsigned int width);
 static void convert_row_8bit_to_24bit(png_byte *row, const png_byte *data, const png_byte *mask, const unsigned int *palette, unsigned int width);
@@ -1089,7 +1088,7 @@ void end_callback(png_struct *png_ptr, png_info *info)
 /*
  * process_transparency - deal with transparency specified by the tRNS chunk
  */
-static void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width, int depth, png_bytep trans, int num_trans, const png_color_16 *trans_values, int color_type)
+void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width, int depth, png_bytep trans, int num_trans, const png_color_16 *trans_values, int color_type)
 {
     int i;
     png_uint_32 mask1, mask2;
@@ -1467,8 +1466,8 @@ static _kernel_oserror *SaveSpriteAlphaPNG(Image *this, const char *filename, in
         memset(&fileheader, 0, sizeof fileheader);
         fileheader.number = 1;
         fileheader.sproff = 16;
-        fileheader.freeoff = load->mask_offset;
-        fileheader.next = load->mask_offset - 16;
+        fileheader.freeoff = load->mask_offset + 256*2*4;
+        fileheader.next = load->mask_offset + 256*2*4 - 16;
         strcpy(fileheader.name, "png");
         fileheader.width = this->private_data2[8];
         fileheader.height = this->private_data2[9];
@@ -1514,14 +1513,14 @@ static _kernel_oserror *SaveSpriteAlphaPNG(Image *this, const char *filename, in
         memset(&fileheader, 0, sizeof fileheader);
         fileheader.number = 1;
         fileheader.sproff = 16;
-        fileheader.freeoff = 16 +44 + sprwidth * this->height;
-        fileheader.next = 44 + sprwidth * this->height;
+        fileheader.freeoff = 16 +44 + (sprwidth+1) * 4 * this->height;
+        fileheader.next = 44 + (sprwidth+1) * 4 * this->height;
         strcpy(fileheader.name, "png");
         fileheader.width = sprwidth;
         fileheader.height = this->private_data2[9];
         fileheader.lbit = 0;
         gap = osver < 0xA5 ? (fileheader.width+1)*4-this->width : 0;
-        fileheader.rbit = osver < 0xA5 ? (this->width & 3) * 8 - 1
+        fileheader.rbit = osver < 0xA5 ? (this->width * 8 - 1) & 31
                                        : 31;
         fileheader.image = 0x2C;
         fileheader.mask = 0x2C;
