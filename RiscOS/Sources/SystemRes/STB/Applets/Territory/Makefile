@@ -61,16 +61,19 @@ unset_vars:
 	@unset STB$OS
 
 resources:
-	${IFTHERE} TerrRes:!Run      ${IFTHEN} ${CP} TerrRes:!Run      ${INSTAPP}.!Run           ${CPFLAGS}
-	${IFTHERE} TerrRes:!RunImage ${IFTHEN} ${CP} TerrRes:!RunImage ${INSTAPP}.!RunImage      ${CPFLAGS}
-	${IFTHERE} TerrRes:banners   ${IFTHEN} ${CP} TerrRes:banners   ${INSTOPTS}.pics.banners  ${CPFLAGS}
-	${IFTHERE} TerrRes:misc      ${IFTHEN} ${CP} TerrRes:misc      ${INSTOPTS}.pics.misc     ${CPFLAGS}
-	${IFTHERE} TerrRes:teleopts  ${IFTHEN} ${CP} TerrRes:teleopts  ${INSTOPTS}.pics.teleopts ${CPFLAGS}
+	${IFTHERE} TerrRes:!Run      ${IFTHEN} ${CP} TerrRes:!Run      ${INSTAPP}.!Run               ${CPFLAGS}
+	${IFTHERE} TerrRes:!RunImage ${IFTHEN} ${CP} TerrRes:!RunImage ${INSTAPP}.!RunImage          ${CPFLAGS}
+	${IFTHERE} TerrRes:banners   ${IFTHEN} ${CP} TerrRes:banners   ${INSTOPTS}.pics.banners      ${CPFLAGS}
+	${IFTHERE} TerrRes:misc      ${IFTHEN} ${CP} TerrRes:misc      ${INSTOPTS}.pics.misc         ${CPFLAGS}
+	${IFTHERE} TerrRes:teleopts  ${IFTHEN} ${CP} TerrRes:teleopts  ${INSTOPTS}.pics.teleopts     ${CPFLAGS}
 	${IFTHERE} TerrRes:Canada1   ${IFTHEN} ${CP} TerrRes:Canada1   ${CMNRESDIR}.Canada1.Messages ${CPFLAGS}
 	${IFTHERE} TerrRes:France    ${IFTHEN} ${CP} TerrRes:France    ${CMNRESDIR}.France.Messages  ${CPFLAGS}
 	${IFTHERE} TerrRes:Germany   ${IFTHEN} ${CP} TerrRes:Germany   ${CMNRESDIR}.Germany.Messages ${CPFLAGS}
 	${IFTHERE} TerrRes:Norway    ${IFTHEN} ${CP} TerrRes:Norway    ${CMNRESDIR}.Norway.Messages  ${CPFLAGS}
 	${IFTHERE} TerrRes:Spain     ${IFTHEN} ${CP} TerrRes:Spain     ${CMNRESDIR}.Spain.Messages   ${CPFLAGS}
+	${IFTHERE} TerrRes:JScript   ${IFTHEN} ${CP} TerrRes:JScript   ${INSTHTML}.JScript           ${CPFLAGS}
+	${IFTHERE} TerrRes:SendMsg   ${IFTHEN} ${CP} TerrRes:SendMsg   ${INSTHTML}.SendMsg           ${CPFLAGS}
+	${IFTHERE} TerrRes:Test      ${IFTHEN} ${CP} TerrRes:Test      ${INSTHTML}.Test              ${CPFLAGS}
 
 translate:
 	${IFTHERE} TerrTrans:Acknow            ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Acknow            -o ${INSTOPTS}.Acknow
