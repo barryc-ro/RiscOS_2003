@@ -84,21 +84,27 @@ Server::setSocketError(int socket_result)
                 switch (errno) {
                         default:
                                 MakeError(TCP_SocketError);
+                		result = ErrorOccurred;
                                 break;
                         case ECONNREFUSED:
                                 MakeError(TCP_ConnectionRefused);
+                		result = ErrorOccurred;
                                 break;
                         case ENOENT:
                                 MakeError(TCP_UnknownServer);
+                		result = ErrorOccurred;
                                 break;
                         case EINVAL:
                                 MakeError(TCP_BadPortSpecification);
+                		result = ErrorOccurred;
                                 break;
                         case ENOBUFS:
                         	MakeError(TCP_NoBuffer);
+                		result = ErrorOccurred;
                         	break;
+                        case EWOULDBLOCK:
+                        	result = NoError;
                 }
-                result = ErrorOccurred;
         }
         else {
                 result = NoError;
@@ -362,10 +368,6 @@ Server::send_playback_request(int state_id, ULINT MAX_storableBlock, ULONG AckSe
     MakeError(VSP_InvalidValue);
     return ErrorOccurred;
   }
-
-#ifdef DEBUGLIB  
-  Debug("play request(%i) %i - %i, time(%i), mode (%i)", state_id, MAX_storableBlock, AckSeq, time, mode);
-#endif
   
   request.interface_number = 0;
   request.route_type = 0;
@@ -414,7 +416,12 @@ Server::get_playback_response(ULINT *result)
     	MakeError(TCP_ReadFail);
   	return ErrorOccurred;
   }
-
+  
+  if (response.certification_code != certification_code++){
+  	MakeError(VSP_ServerCertError);
+  	return ErrorOccurred;
+  }
+    
   if (response.result != 0){
     *result = response.result;
     MakeError(VSP_ServerError);
@@ -456,6 +463,9 @@ Server::Server(char *server, char *port, int timeout):Error()
 
   timeout_period = timeout;
   
+#ifdef DEBUGLIB
+  Debug(" create server link");
+#endif  
   if ( Connect(server, port) != ErrorOccurred ){			// connect to known port
     	 SocketDescriptor.getPeerPort(&connection_port);
   	 if (GetData((void*)(&header), sizeof(PacketHeader)) != ErrorOccurred ){
@@ -485,14 +495,24 @@ Server::Server(char *server, char *port, int timeout):Error()
 
 Server::~Server()
 {
+#ifdef DEBUGLIB  
+  Debug("delete control socket +");
   SocketDescriptor.close();
+  Debug("delete control socket -");
+#else
+  SocketDescriptor.close();
+#endif  
 }
 
 Server::Server(Server *server)
 {
   PacketHeader				header;
   ControlPortNumberNotification		cpnn;
-  
+
+#ifdef DEBUGLIB  
+  Debug(" create server link");
+#endif  
+
   timeout_period = server->timeout();
   
   struct in_addr server_addr;
@@ -575,12 +595,11 @@ Server::GetData(void *buffer, int size)
   
   (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
    
-  while ((get_size = SocketDescriptor.read(buffer, size, MSG_PEEK)) != size) {
-    	if (get_size < 0){
-    		result = setSocketError(get_size);
-    		break;
-    	}
-    		
+  while ((result != ErrorOccurred)&&
+  	((get_size = SocketDescriptor.read(buffer, size, MSG_PEEK)) != size)) {
+    
+   	result = setSocketError(get_size);
+   		
    	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
    	if (t2 > (t1 + timeout_period)){
    		MakeError(TCP_TimeOutOnReceive);
@@ -591,10 +610,10 @@ Server::GetData(void *buffer, int size)
  
    if ((result != ErrorOccurred)&&(SocketDescriptor.read(buffer, size) != size)) {
         MakeError(TCP_ReadFail);
-        return ErrorOccurred;
+        result = ErrorOccurred;
    }
 
-   return NoError;
+   return result;
 }
 
 #ifdef DEBUGLIB
@@ -646,9 +665,6 @@ Server::inetevent(int *event, ULINT *result)
     			MakeError(TCP_ReadFail);
     			return  ErrorOccurred;
     		}
-#ifdef DEBUGLIB    		
-    		Debug("start end notification @ block %i\n", notify.trans_block_num);
-#endif    		
     		*result = (int)notify.trans_block_num;
     	        break;
     	case COMMAND_playback_response:
@@ -656,10 +672,14 @@ Server::inetevent(int *event, ULINT *result)
     			return ErrorOccurred;
     		break;
     	case COMMAND_assetend_response:
+#ifdef DEBUGLIB    	
+    		Debug("asset end response");
+#endif    		
     		break;
     	default:
+
 #ifdef DEBUGLIB    
-    		Debug("TCP: inet ignore command %2.2X\n", *event);
+    		Debug("TCP: inet ignore unknown command %2.2X\n", *event);
 #endif    		
     		while (SocketDescriptor.read(&buffer, 4)==4);
     		break;
@@ -671,24 +691,25 @@ Server::inetevent(int *event, ULINT *result)
 error_flag
 Server::SendAck(ULINT MAX_storableBlocks, ULINT MAX_complete_block, ACK_type datatype)
 {
+  error_flag result = NoError;
+  
   	ack.data_type =    (LINT)ntohl(datatype);
   	ack.min_sequence = (ULINT)ntohl(MAX_complete_block);
   	ack.max_sequence = (ULINT)ntohl(MAX_storableBlocks);
-  	
-	//Debug("A %i-%i, %i", MAX_storableBlocks, MAX_complete_block, datatype);
-	
+  		
   	comms_flag = comms;		// communicated with server;
   	
-  	if (SendData((void*)&ack, sizeof(ACK_Block)) == ErrorOccurred){
-  	  	//Debug("A error %i", errno);
-  		if (ErrorNum() == TCP_NoBuffer){
+  	int size = SocketDescriptor.write((void*)&ack, sizeof(ACK_Block));
+  	if (size < 0){
+     		result = setSocketError(size);
+     		if (ErrorNum() == TCP_NoBuffer){
   			RemoveErr();
   		}
   	}
   	else
   		MAX_requested_block = (MAX_storableBlocks);
   		
-  return ErrorState();
+  return result;
 }
 
 error_flag
@@ -699,15 +720,17 @@ Server::SendNak(ULINT BlockStart, LINT DatagramStart, ULINT BlockEnd, LINT Datag
   	nak.BlockEnd =      (ULINT)ntohl(BlockEnd);
  	nak.DatagramEnd =   (LINT)ntohl(DatagramEnd);
 
-	//Debug("N %i-%i, %i-%i", BlockStart, DatagramStart, BlockEnd, DatagramEnd);
-
 	comms_flag = comms;		// communicated with server;
 	
-  	if (SendData((void*)&nak, sizeof(NAK_Block)) == ErrorOccurred)
-  	  	//Debug("N error %i", errno);
+  	int size = SocketDescriptor.write((void*)&nak, sizeof(NAK_Block));
+  	if (size < 0){
   		if (ErrorNum() == TCP_NoBuffer){
+#ifdef DEBUGLIB  		  
+  		  	Debug("buffers full on sending nak");
+#endif  		  	
   			RemoveErr();
   		}
+  	}
   			
   return ErrorState();	
 }
@@ -797,69 +820,66 @@ Server::AssetEnd(int status, int endflag)
    }
    
    SocketDescriptor.eventsOff();
-   //SocketDescriptor.makeBlocking();
   
    request.interface_number = 0;
    request.route_type = 0;
    request.command_number = COMMAND_assetend_request;
    request.command_length = sizeof(AssetEndRequest) - 8;
    request.certification_code = certification_code;
-   if (endflag != 0) endflag = 1;
-   request.end_flag = endflag;
+   if (endflag != 0)
+   	request.end_flag = 1;
+   else
+   	request.end_flag = endflag;
    request.asset_status = status;
+   request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0;
 
    if ( hton_structure(&request, map_AssetEndRequest, AssetEndRequest) == ErrorOccurred) {
      	MakeError(TCP_SendFail);
      	return ErrorOccurred;
    }
    
-   (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
-   t2 = t1;   
-   do {   // loop until we receive end request dialogue
-
-     ULINT comms_result;
-     
-     		// roughly every second send a request
-     	if (( !((t2-t1) | 0x7f) ) &&(SendData((void*)&request, sizeof( AssetEndRequest)) == ErrorOccurred)){
-   		if (ErrorNum() == TCP_NoBuffer){
-  			RemoveErr();
-  		}	
-  		else
-     			result = ErrorOccurred;
-     	}
-     	
-     	result = inetevent(&command, &comms_result);	// clear the queue this clears start end notifications
-
-   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
    	
-     	if (t2 > (t1 + timeout_period)){
+   result = SendData((void*)&request, sizeof(AssetEndRequest));
+  
+   if (result != ErrorOccurred){
+
+   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
+      	
+   	do {   // loop until we receive end request dialogue
+
+     		ULINT comms_result;
+     
+     		result = inetevent(&command, &comms_result);	// clear the queue this clears start end notifications
+
+   		(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
+   	
+     		if (t2 > (t1 + timeout_period)){
 #ifdef DEBUGLIB     	  
-   		Debug("timeout on receiving asset end");
+   			Debug("timeout on receiving asset end");
 #endif
-     	  	MakeError(TCP_TimeOutOnReceive);
-     		return ErrorOccurred;
-     	}
-   }
-   while ((result != ErrorOccurred)&&(command != COMMAND_assetend_response));
-   if (result == ErrorOccurred)
-   	return result;
-
-   if (GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred)
-   	return ErrorOccurred;
-
-   if ( ntoh_structure(&response, map_AssetEndResponse, AssetEndResponse) == ErrorOccurred) {
-     	MakeError(TCP_ReadFail);
-     	return ErrorOccurred;
+     	  		MakeError(TCP_TimeOutOnReceive);
+     			return ErrorOccurred;
+     		} 	
+   	}
+   	while (command != COMMAND_assetend_response);
    }
    
-   if (response.certification_code != certification_code++){
+   if ((result != ErrorOccurred)&&(GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred))
+   	result = ErrorOccurred;
+
+   	
+   if ((result != ErrorOccurred)&&(ntoh_structure(&response, map_AssetEndResponse, AssetEndResponse) == ErrorOccurred)) {
+     	MakeError(TCP_ReadFail);
+     	result = ErrorOccurred;
+   }
+   	
+   if ((result != ErrorOccurred)&&(response.certification_code != certification_code++)){
    	MakeError(VSP_ServerCertError);
    	return ErrorOccurred;
    }
 #ifdef DEBUGLIB
-   else
-        Debug("assetend result = (%i)\n", response.result);
-#endif       
-  
+   if (result != ErrorOccurred)
+	Debug("asset end result (%i)", response.result);
+#endif   
    return NoError;
 }
