@@ -1,0 +1,279 @@
+/*
+** Email Engine
+** User details
+*/
+
+#include "kernel.h"
+#include "swis.h"
+#include "string.h"
+
+#include "Email/Mailbox/Account.h"
+#include "Email/Mailbox/POP3/POP3Account.h"
+#include "Email/Mailbox/SendQ/SendQAccount.h"
+
+#include "DebugLib/DebugLib.h"
+#ifdef MemCheck_MEMCHECK
+  #include "MemCheck:MemCheck.h"
+#endif
+
+#include "Email/Common/types.h"
+#include "Email/Common/bool.h"
+
+#include "engstr.h"
+#include "engfile.h"
+#include "engmanager.h"
+#include "enginit.h"
+#include "engprocess.h"
+#include "enguiapi.h"
+
+void SetupStore(void)
+{
+
+  static char storename[] = "NCMailStore:*";
+  static char attstr[] = "WR";
+
+  /* create directory to store user's mail */
+
+  CreateDirectory("<NCMailStore$Dir>");
+  CreateDirectory("<NCMailStore$Dir>.<NCMail$User>");
+
+  /* unlock and clear out any files from directory if they exist */
+
+  regs.r[0] = 24;
+  regs.r[1] = (int) storename;
+  regs.r[2] = (int) attstr;
+  _kernel_swi(OS_FSControl,&regs,&regs);
+  regs.r[0] = 27;
+  regs.r[3] = 0;
+  _kernel_swi(OS_FSControl,&regs,&regs);
+
+}
+
+
+void GoSMTP(bool b)
+{
+  changestate.context = creatingsmtp;
+}
+
+
+void GoProcess(bool b)
+{
+  changestate.context = smtpacctok;
+}
+
+
+void GoPopCr(bool b)
+{
+  changestate.context = creatingpop;
+}
+
+
+/*
+** CreatePOPAccount() sets up a new POP3 account.
+** This is called when NCMail is first entered and the account
+** stays valid until the user logs off or goes into standby mode.
+*/
+
+void CreatePOPAccount(void)
+{
+
+  ELib_rcode code;
+
+  if (badpop)
+  {
+    changestate.context = popacctfailure;
+    changestate.rc = ENG_BADPOPDETAILS;
+    return;
+  }
+
+  SetupStore();
+
+  /* create new POP3 account */
+
+  POPaccount = new POP3Account(popuser, poppassword, pophostname, code);
+  if (code < 0)
+  {
+    /* error creating POP3 account */
+    changestate.context = popacctfailure;
+    changestate.rc = ENG_NOPOPACCOUNT;
+    dprintf(("Eng", "***ERROR*** Error creating POP account, rc = %d\n",code));
+  }
+  else
+  {
+    changestate.context = creatingsmtp;
+    popstatus = acctcreated;
+    POPaccount->SetConnectionState(online);
+  }
+
+}
+
+
+void CreateSMTPAccount(void)
+{
+
+  ELib_rcode code;
+
+  if ((badsmtp) || (baduser))
+  {
+    changestate.context = smtpacctfailure;
+    changestate.rc = ENG_BADSMTPDETAILS;
+    return;
+  }
+
+  SMTPaccount = new SendQAccount(smtphostname, code);
+  if (code < 0)
+  {
+    /* error creating SMTP account */
+    changestate.context = smtpacctfailure;
+    changestate.rc = ENG_NOSMTPACCOUNT;
+    dprintf(("Eng", "***ERROR*** Error creating SMTP account, rc = %d\n",code));
+  }
+  else
+  {
+    changestate.context = smtpacctok;
+    smtpstatus = acctcreated;
+    SMTPaccount->SetConnectionState(online);
+  }
+
+}
+
+
+void DoCreateAccount(void)
+{
+
+  switch (changestate.context)
+  {
+
+    case precreate :
+
+      changestate.context = idle;
+      (*callbacklist.statusfunc)(changestate.rc, callbacklist.statushandle, GoPopCr);
+      break;
+
+  }
+}
+
+
+void ReadUserDetails(void)
+{
+
+  baduser = (bool) (((realname = GetSysVar("Inet$EmailRealName")) == 0) || ((emailaddr = GetSysVar("Inet$EmailAddress")) == 0));
+  if (baduser)
+  {
+    /* real name and/or email address missing -
+       what are we going to do about it? */
+    dprintf(("Eng", "Some user details missing\n"));
+  }
+  else
+  {
+    dprintf(("Eng", "Real name = %s, address = %s\n",realname,emailaddr));
+    changestate.context = creatingpop;
+  }
+
+  badpop = (bool) (((popuser = GetSysVar("Inet$EmailPOP3User")) == 0) || ((poppassword = GetSysVar("Inet$EmailPOP3Password")) == 0) || ((pophostname = GetSysVar("Inet$EmailPOP3Hostname")) == 0));
+  if (badpop)
+  {
+    /* some POP details missing - what do we do? */
+    dprintf(("Eng", "Some POP account details missing\n"));
+  }
+  else
+    dprintf(("Eng", "POP3 user = %s, password = %s, hostname = %s \n",popuser,poppassword,pophostname));
+
+  badsmtp = (bool) ((smtphostname = GetSysVar("Inet$EmailSMTPHostname")) == 0);
+  if (badsmtp)
+  {
+    /* some SMTP details missing - what do we do? */
+    dprintf(("Eng", "Some SMTP account details missing\n"));
+  }
+  else
+    dprintf(("Eng", "SMTP hostname = %s\n",smtphostname));
+
+}
+
+
+void DoUserChange(void)
+{
+
+  MessageDescriptor *msg;
+
+  switch (changestate.context)
+  {
+    case readytoclear :
+
+      /* clear out old user's file store and descriptors */
+      SetupStore();
+      while (ourmboxin->list)
+        DestroyDescriptor(ourmboxin->list, ourmboxin);
+
+      while (ourmboxout->list)
+        DestroyDescriptor(ourmboxout->list, ourmboxout);
+
+      /* disconnect and delete old accounts */
+      changestate.context = idle;
+      if (popstatus == acctconnected)
+      {
+        state |= PROCESSPOP;
+        popprocessstate.context = popdone;
+      }
+      else
+        changestate.context = disconnectsmtp;
+
+      break;
+
+    case disconnectsmtp :
+
+      changestate.context = idle;
+      if (smtpstatus == acctconnected)
+      {
+        state |= PROCESSSMTP;
+        smtpprocessstate.context = smtpdone;
+      }
+      else
+        changestate.context = readytoread;
+
+      break;
+      
+    case readytoread :
+      
+      delete POPaccount;
+      delete SMTPaccount;
+      ReadUserDetails();
+      changestate.context = creatingpop;
+      break;
+
+    case creatingpop :
+
+      dprintf(("Eng", "context = creatingpop\n"));
+      CreatePOPAccount();
+      break;
+
+    case creatingsmtp :
+
+      dprintf(("Eng", "context = creatingsmtp\n"));
+      CreateSMTPAccount();
+      break;
+
+    case smtpacctok :
+
+      dprintf(("Eng", "context = smtpacctok\n"));
+      state &= ~CHANGEUSER;
+      if ((online) && ((popstatus != acctnonexistent) || (smtpstatus != acctnonexistent)))
+        StartProcess();
+      break;
+
+    case popacctfailure :
+
+      dprintf(("Eng", "context = popacctfailure\n"));
+      changestate.context = idle;
+      (*callbacklist.statusfunc)(changestate.rc, callbacklist.statushandle, GoSMTP);
+      break;
+
+    case smtpacctfailure :
+
+      dprintf(("Eng", "context = smtpacctfailure\n"));
+      changestate.context = idle;
+      (*callbacklist.statusfunc)(changestate.rc, callbacklist.statushandle, GoProcess);
+      break;
+  }
+
+}
