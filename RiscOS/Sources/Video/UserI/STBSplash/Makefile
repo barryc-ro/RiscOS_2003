@@ -22,7 +22,7 @@ SHRINK  = ShrinkWrapZipCompress
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
+WFLAGS  = ~c~vr
 
 #
 # Libraries
@@ -57,7 +57,7 @@ RDIR      = ${RESDIR}.${COMPONENT}
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ -d h.$* $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -80,6 +80,8 @@ install_rom: ${TARGET}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${RM} h.ModHead
         ${RM} ${TARGET}
         ${RM} ${RAMTARGET}
         @echo ${COMPONENT}: cleaned
@@ -87,6 +89,7 @@ clean:
 resources:
 	${MKDIR} ${RDIR}
 	${CP} LocalUserIFRes:Screen ${RDIR}.Screen ${CPFLAGS}
+	${CP} LocalUserIFRes:STB ${RDIR}.STB ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied
 	@echo
 
@@ -110,5 +113,7 @@ ${RAMTARGET}: ${OBJS} ${CLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+h.ModHead: o.ModHead ;@
 
 # Dynamic dependencies:

@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,9 +8,9 @@
 
 #include "main.h"
 #include "dynamiclib.h"
+#include "ModHead.h"
 
-#define UNUSED(x) x=x
-
+/* Configuration parameters */
 #define DEFAULT_CHOSEN_FONT		"Homerton.Medium\0"
 #define DEFAULT_X_OFFSET		60
 #define DEFAULT_Y_OFFSET		60
@@ -19,12 +18,17 @@
 #define DEFAULT_CHOSEN_FORE		0
 #define DEFAULT_CHOSEN_TEXT_SIZE	22
 
-static void *module_workspace;
+#define STARTUP_TIMEOUT                 1000 /* 10 seconds */
+#define STARTUP_IMAGE                   "Resources:$.Resources.STBSplash.STB"
+#define STARTUP_TEXT                    ""
+#define STARTUP_DISABLE_VARIABLE        "STBSplash$Disable"
 
-static void plot_splash(char *t);
+#define UNUSED(x) x=x
+
+static void plot_splash(const char *t);
 static void set_up_font(char *fontname, int backcol, int forecol, int x_size, int y_size);
 static int display_text(char *text, int x, int y, int orient);
-static void set_up_dynamic_area(char *t);
+static void set_up_dynamic_area(const char *t);
 static void reset_everything(void);
 static int fonts_to_os(int x, int y);
 static void read_system_variables(void);
@@ -37,13 +41,87 @@ static int compare(char *s1, char *s2);
 
 static int save_area[2000];
 
-imageinfo_str  image_info;
-environment_str screen_info;
-dynamiclib_str  graphics, temp_jpeg;
-misc_str misc_info;
+static imageinfo_str  image_info;
+static environment_str screen_info;
+static misc_str misc_info;
 
-static void exithandler(void)
+dynamiclib_str  graphics, temp_jpeg;
+
+/* Note: This can be modified by the callafter handler.  It is only safe to
+ * change it when a callafter is not pending.
+ */
+static int callback_status=0;
+#define CALLBACK_ACTIVE 1
+#define CALLAFTER_ACTIVE 2
+
+/* When the callafter goes off, just set up a callback. */
+_kernel_oserror *callafter_handler(_kernel_swi_regs *r, void *pw)
 {
+  _kernel_swi_regs regs;
+  
+  callback_status &= ~CALLAFTER_ACTIVE;
+  regs.r[0]=(int)callback_entry;
+  regs.r[1]=(int)pw;
+  /* If this returns an error, we can't really do much. */
+  if(_kernel_swi(OS_AddCallBack, &regs, &regs) == NULL)
+    callback_status |= CALLBACK_ACTIVE;
+  return NULL;
+}
+
+_kernel_oserror *callback_handler(_kernel_swi_regs *r, void *pw)
+{
+  _kernel_swi_regs regs;
+
+  UNUSED(pw);
+  UNUSED(r);
+
+  /* This is safe to call since there */
+  callback_status &= ~CALLBACK_ACTIVE;
+  
+  /* Check if the variable exists */
+  regs.r[0]=(int)STARTUP_DISABLE_VARIABLE;
+  regs.r[1]=0;
+  regs.r[2]=-1;
+  regs.r[3]=0;
+  regs.r[4]=0;
+  _kernel_swi(OS_ReadVarVal, &regs, &regs);
+  if(regs.r[2]<0)
+  {
+    /* The splash screen is disabled. */
+    return NULL;
+  }
+  
+  /* Load the graphic */
+  set_up_dynamic_area(STARTUP_IMAGE);
+
+  /* Plot it with no text. */
+  if(graphics.allocated)
+    plot_splash(STARTUP_TEXT);
+    
+  return NULL;
+}
+
+_kernel_oserror *MyInit ( const char *cmd_tail, int podule_base, void *pw )
+{
+  _kernel_swi_regs regs;
+
+  UNUSED(cmd_tail);
+  UNUSED(podule_base);
+
+  graphics.allocated = 0;
+  temp_jpeg.allocated = 0;
+
+  regs.r[0]=STARTUP_TIMEOUT;
+  regs.r[1]=(int)callafter_entry;
+  regs.r[2]=(int)pw;
+  return _kernel_swi(OS_CallAfter, &regs, &regs);
+}
+
+_kernel_oserror *MyFinal(int fatal, int podule, void *pw)
+{
+  _kernel_oserror *err;
+  _kernel_swi_regs regs;
+
   if (graphics.allocated)
   {
     dynamiclib_free(graphics);
@@ -55,34 +133,49 @@ static void exithandler(void)
     dynamiclib_free(temp_jpeg);
     temp_jpeg.allocated = 0;
   }
+
+  if(callback_status & CALLAFTER_ACTIVE)
+  {
+    regs.r[0]=(int)callafter_entry;
+    regs.r[1]=(int)pw;
+    err=_kernel_swi(OS_RemoveTickerEvent, &regs, &regs);
+    /* Account for the case where the callafter goes off while we're
+     * calling the SWI.  This will clear the callafter bit, and return
+     * an error.  If the bit is now clear, the callafter has gone off
+     * so we don't need to return the error.
+     */
+    if(err && (callback_status & CALLAFTER_ACTIVE))
+      return err;
+    /* It's now safe to touch this, as the callafter is cancelled */
+    callback_status &= ~CALLAFTER_ACTIVE;
+  }
+
+  if(callback_status & CALLBACK_ACTIVE)
+  {
+    regs.r[0]=(int)callback_entry;
+    regs.r[1]=(int)pw;
+    err=_kernel_swi(OS_RemoveCallBack, &regs, &regs);
+    if(err)
+      return err;
+    callback_status &= ~CALLBACK_ACTIVE;
+  }
+  return 0;
 }
 
-_kernel_oserror *MyInit ( char *cmd_tail, int podule_base, void *pw )
-{
-  UNUSED(cmd_tail);
-  UNUSED(podule_base);
-
-  module_workspace = pw;
-  atexit(exithandler);
-  graphics.allocated = 0;
-
-  return(0);
-}
-
-extern _kernel_oserror *cmd_handler(char *arg_string, int argc, int cmd_no, void *pw)
+_kernel_oserror *cmd_handler(const char *arg_string, int argc, int cmd_no, void *pw)
 {
   switch (cmd_no)
   {
-    case 0:
+    case CMD_STBSplash_Display:
       if (graphics.allocated)    /* Only if there has been a graphic set up! */
         plot_splash(arg_string);
     break;
 
-    case 1:
+    case CMD_STBSplash_Graphic:
       set_up_dynamic_area(arg_string);
     break;
 
-    case 2:
+    case CMD_STBSplash_Reset:
       reset_everything();
     break;
   }
@@ -94,7 +187,7 @@ extern _kernel_oserror *cmd_handler(char *arg_string, int argc, int cmd_no, void
       Dynamic stuff
 **************************/
 
-static void set_up_dynamic_area(char *t)
+static void set_up_dynamic_area(const char *t)
 {
   _kernel_swi_regs r, saved;
   _kernel_oserror *err;
@@ -349,7 +442,7 @@ static void reset_everything(void)
        Display stuff
 **************************/
 
-static void plot_splash(char *t)
+static void plot_splash(const char *t)
 {
   _kernel_swi_regs r;
   _kernel_oserror *err;
@@ -359,12 +452,10 @@ static void plot_splash(char *t)
 
   /*** Strip the text of any quotes ***/
 
-  tt = t;
-
   if (t[0] == 34)
-    tt++;
+    t++;
 
-  sprintf(text, "%s\0", tt);
+  sprintf(text, "%255s", t);
 
   tt = strrchr(text, 34);
 
