@@ -1,3 +1,5 @@
+#include <inttypes.h>
+
 #include <swis.h>
 
 #include <sys/types.h>
@@ -9,7 +11,6 @@
 #include "nettime.h"
 #include "ntp.h"
 #include "rtcadjust.h"
-#include "extralong.h"
 
 /* Maximum 1% (10000ppm) slew */
 #define DefaultLatchValue 20000
@@ -26,7 +27,7 @@ static int running;
 #define T0LOW  (*(volatile unsigned char *)(IOC + 0x40))
 #define T0HIGH (*(volatile unsigned char *)(IOC + 0x44))
 
-unsigned int rtcadjust_latch()
+unsigned int rtcadjust_latch(void)
 {
     return LastLatchValue;
 }
@@ -39,7 +40,7 @@ static void ProgramLatch(int n)
     T0HIGH = n >> 8;
 }
 
-void rtcadjust_init()
+void rtcadjust_init(void)
 {
     if (!running)
     {
@@ -65,17 +66,7 @@ void rtcadjust_final(int fixup)
     }
 }
 
-struct riscos_time riscostime_sub(struct riscos_time a, struct riscos_time b)
-{
-    struct riscos_time r;
-
-    r.l = a.l - b.l;
-    r.h = a.h - b.h - (a.l < b.l);
-
-    return r;
-}
-
-void rtcadjust_initvars()
+void rtcadjust_initvars(void)
 {
     LastError = 0;
     _swix(OS_ReadMonotonicTime, _OUT(0), &LastMonoTime);
@@ -83,22 +74,26 @@ void rtcadjust_initvars()
 
 static int64_t fixedpoint_multiply(int64_t a, int64_t b)
 {
-    u_int64_t l, h;
+    uint64_t l, h;
+    uint32_t al, ah, bl, bh;
     int64_t r;
 
-    mul64((u_int32_t)a.low, (u_int32_t)b.low, &l);
-    mul64((u_int32_t)a.low, (u_int32_t)b.high, &h);
+    al = (uint32_t) a; ah = (uint32_t) (a >> 32);
+    bl = (uint32_t) b; bh = (uint32_t) (b >> 32);
 
-    r.low = l.high + h.low;
-    r.high = h.high + (r.low < l.high);
+    l = (uint64_t) al * bl;
+    h = (uint64_t) al * bh;
+    r = h + (l >> 32);
 
-    mul64((u_int32_t)a.high, (u_int32_t)b.low, &l);
-    mul64((u_int32_t)a.high, (u_int32_t)b.high, &h);
+    l = (uint64_t) ah * bl;
+    h = (uint64_t) ah * bh;
+    r += (h << 32) + l;
 
-    r.low += l.low;
-    r.high += l.high + h.low + (r.low < l.low);
-
-    dprintf(("rtcadjust_7", "%08lX.%08lX x %08lX.%08lX = %08lX.%08lX\n", a.high, a.low, b.high, b.low, r.high, r.low));
+    dprintf(("rtcadjust_7", "%08"PRIX32".%08"PRIX32" x "
+                            "%08"PRIX32".%08"PRIX32" = "
+                            "%08"PRIX32".%08"PRIX32"\n",
+                            ah, al, bh, bl,
+                            (uint32_t) (r >>32), (uint32_t) r));
 
     return r;
 }
@@ -126,11 +121,13 @@ int rtcadjust_adjtime(int64_t offset, int P)
     unsigned int OldMonoTime;
     int P2;
     int was_running = running;
-    int64_t temp64, temp2;
+    int64_t temp2;
     int64_t C, C_W, W;
     int64_t latch64;
+    int32_t latch32;
 
-    dprintf(("rtcadjust_2", "offset = %08lX.%08lX\n", offset.high, offset.low));
+    dprintf(("rtcadjust_2", "offset = %010"PRIX64".%06"PRIX64"cs\n",
+                            offset >> 24, offset & 0xFFFFFF));
 
     rtcadjust_init();
 
@@ -144,15 +141,14 @@ int rtcadjust_adjtime(int64_t offset, int P)
      * extension of offset.low - ie maximum error is 1.28 seconds.
      */
 
-    if (((int32_t)offset.low >> 31) != offset.high)
+    if (offset < INT32_MIN || offset >= INT32_MAX)
     {
         /* Immediate set - not synchronised, or miles out of range */
         struct riscos_time cur, t;
         dprintf(("rtcadjust_2", "Setting time immediately\n"));
-        C.low = (offset.high << 8) | (offset.low >> 24);
-        C.high = offset.high >> 24;
+        C = offset >> 24;
         cur = current_time();
-        *(int64_t *) &t = extralong_add(*(int64_t* )&cur, C);
+        *(int64_t *) &t = *(int64_t *) &cur + C;
         LastError = 0;
         set_time(&t);
         ProgramLatch(DefaultLatchValue);
@@ -160,13 +156,11 @@ int rtcadjust_adjtime(int64_t offset, int P)
         return -1;
     }
 
-    offset = extralong_neg(offset);
+    offset = -offset;
 
     /* express C and W as a 32.32 fixed point number of centiseconds */
-    C.low = offset.low << 8;
-    C.high = (int32_t) offset.low >> 24;
-    W.low = (int32_t) LastError << 8;
-    W.high = (int32_t) LastError >> 24;
+    C = offset << 8;
+    W = (int64_t) LastError << 8;
 
     OldMonoTime = LastMonoTime;
     if (_swix(OS_ReadMonotonicTime, _OUT(0), &LastMonoTime))
@@ -174,61 +168,69 @@ int rtcadjust_adjtime(int64_t offset, int P)
 
     P2 = LastMonoTime - OldMonoTime;
 
-    dprintf(("rtcadjust_2", "C=%ld.%08lX, W=%ld.%08lX, P=%d, P'=%d, L=%d\n", C.high, C.low, W.high, W.low, P, P2, LastLatchValue));
-
-    latch64.high = LastLatchValue;
-    latch64.low = 0;
+    dprintf(("rtcadjust_2", "C=%"PRId64".%08"PRIX64", "
+                            "W=%"PRId64".%08"PRIX64", "
+                            "P=%d, P'=%d, L=%d\n",
+                            C >> 32, C & 0xFFFFFFFF,
+                            W >> 32, W & 0xFFFFFFFF,
+                            P, P2, LastLatchValue));
 
     if (P)
     {
-        temp64.low = P;
-        temp64.high = 0;
-        temp2 = extralong_divide(C, temp64);
-        dprintf(("rtcadjust_4", "C/P=%08lX.%08lX\n", temp2.high, temp2.low));
-        temp2.high += 1;
-        latch64 = fixedpoint_multiply(latch64, temp2);
-        dprintf(("rtcadjust_4", "latch64(1)=%08lX.%08lX\n", latch64.high, latch64.low));
+        temp2 = C / P;
+        dprintf(("rtcadjust_4", "C/P=%08"PRIX32".%08"PRIX32"\n",
+                                (uint32_t)(temp2 >> 32), (uint32_t)temp2));
+        temp2 += 0x100000000;
+        dprintf(("rtcadjust_4", "1+C/P=%08"PRIX32".%08"PRIX32"\n",
+                                (uint32_t)(temp2 >> 32), (uint32_t)temp2));
+        latch64 = LastLatchValue * temp2;
+        dprintf(("rtcadjust_4", "latch64(1)=%08"PRIX32".%08"PRIX32"\n",
+                                (uint32_t)(latch64 >> 32), (uint32_t)latch64));
     }
+    else
+        latch64 = (int64_t) LastLatchValue << 32;
 
     if (was_running) /* Otherwise, P' = infinity: P' term eliminated */
     {
-        C_W = extralong_subtract(C, W);
-        dprintf(("rtcadjust_4", "C-W=%08lX.%08lX\n", C_W.high, C_W.low));
-        temp64.low = 0;
-        temp64.high = P2;
-        temp2 = extralong_subtract(temp64, C_W);
-        dprintf(("rtcadjust_4", "P'-(C-W)=%08lX.%08lX\n", temp2.high, temp2.low));
+        C_W = C - W;
+        dprintf(("rtcadjust_4", "C-W=%08"PRIX32".%08"PRIX32"\n",
+                                (uint32_t)(C_W >> 32), (uint32_t)C_W));
+        temp2 = ((int64_t) P2 << 32) - C_W;
+        dprintf(("rtcadjust_4", "P'-(C-W)=%08"PRIX32".%08"PRIX32"\n",
+                                (uint32_t)(temp2 >> 32), (uint32_t)temp2));
         /* Now C_W and temp2 contain top and bottom of fraction, each as 32.32 fp.
-           To acheive a 32.32 fp result, shift top left 23 bits, bottom right 9 bits */
-        C_W.high = (C_W.high << 23) | (C_W.low >> 9);
-        C_W.low = C_W.low << 23;
-        temp2.low = (temp2.high << 23) | (temp2.low >> 9);
-        temp2.high = temp2.high >> 9;
-        temp2 = extralong_divide(C_W, temp2);
-        dprintf(("rtcadjust_4", "(C-W)/[P'-(C-W)]=%08lX.%08lX\n", temp2.high, temp2.low));
-        temp2.high += 1;
+           To achieve a 32.32 fp result, shift top left 23 bits, bottom right 9 bits */
+        C_W <<= 23;
+        temp2 >>= 9;
+        temp2 = C_W / temp2;
+        dprintf(("rtcadjust_4", "(C-W)/[P'-(C-W)]=%08"PRIX32".%08"PRIX32"\n",
+                                (uint32_t)(temp2 >> 32), (uint32_t)temp2));
+        temp2 += 0x100000000;
         latch64 = fixedpoint_multiply(latch64, temp2);
-        dprintf(("rtcadjust_4", "latch64(2)=%08lX.%08lX\n", latch64.high, latch64.low));
+        dprintf(("rtcadjust_4", "latch64(2)=%08"PRIX32".%08"PRIX32"\n",
+                                (uint32_t)(latch64 >> 32), (uint32_t)latch64));
     }
 
-    if (latch64.low & 0x80000000)
-        latch64.high++;
+    if (latch64 & 0x80000000)
+        latch64 += 0x100000000;
 
-    LastError = (int) offset.low;
+    latch32 = (int32_t) (latch64 >> 32);
 
-    if (latch64.high < MinimumLatchValue)
-        latch64.high = MinimumLatchValue;
-    else if (latch64.high > MaximumLatchValue)
-        latch64.high = MaximumLatchValue;
+    LastError = (int) offset;
 
-    ProgramLatch((unsigned int) latch64.high);
+    if (latch32 < MinimumLatchValue)
+        latch32 = MinimumLatchValue;
+    else if (latch32 > MaximumLatchValue)
+        latch32 = MaximumLatchValue;
+
+    ProgramLatch(latch32);
 
     dprintf(("rtcadjust_2", "New latch value = %d\n", LastLatchValue));
 
     return -1;
 }
 
-void rtcadjust_fixup_hardware_rtc()
+void rtcadjust_fixup_hardware_rtc(void)
 {
     struct riscos_time cur;
 
@@ -270,19 +272,19 @@ static char *pretty_interval(unsigned int t)
     return buffer;
 }
 
-void rtcadjust_print_status()
+void rtcadjust_print_status(void)
 {
     if (running)
     {
         unsigned int time, error;
-        u_int64_t tmp;
+        uint64_t tmp;
         _swix(OS_ReadMonotonicTime, _OUT(0), &time);
         time -= LastMonoTime;
         error = abs(LastError);
-        mul64((int32_t) error << 8, 10000, &tmp);
+        tmp = ((uint32_t) error << 8) * UINT64_C(10000);
         printf("Last adjustment: %s ago\n", pretty_interval(time/100));
         printf("Last error:      %d.%02d%04ld seconds%s\n", (error >> 24) / 100, (error >> 24) % 100,
-                                                            tmp.high,
+                                                            (long) (tmp >> 32),
                   LastError < 0 ? " slow" : LastError > 0 ? " fast" : "");
     }
     if (last_server.s_addr != 0)
@@ -303,14 +305,13 @@ void rtcadjust_print_status()
         /* Currently expressed as an adjustment to crystal time - this is not the same
          * as our deviation from "real" time.
          */
-        printf(" (%c%dppm)\n", LastLatchValue > DefaultLatchValue ? '-' : '+',
-                               abs(DefaultLatchValue - LastLatchValue) * 50);
+        printf(" (%+dppm)\n", (DefaultLatchValue - LastLatchValue) * 50);
     }
     else
         putchar('\n');
 }
 
-void rtcadjust_suspend()
+void rtcadjust_suspend(void)
 {
     rtcadjust_final(1);
 }

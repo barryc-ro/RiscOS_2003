@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 #include <swis.h>
 #include <sys/types.h>
@@ -17,7 +18,6 @@
 #include "nettime.h"
 #include "ntp.h"
 #include "rtcadjust.h"
-#include "extralong.h"
 
 /* Our clock has a 2MHz resolution (precision = -20.9) */
 #define PRECISE_BITS       20               /* All possible values of these bits are used */
@@ -33,7 +33,7 @@ extern struct ntp_time ntp_add(struct ntp_time, struct ntp_time);
 extern struct ntp_time ntp_sub(struct ntp_time, struct ntp_time);
 extern struct ntp_time ntp_div2(struct ntp_time);
 
-int32_t rand32()
+int32_t rand32(void)
 {
     return (int32_t) rand() ^ ((int32_t) rand() << 16);
 }
@@ -44,7 +44,7 @@ const char *riscos_to_text(struct riscos_time t)
     char *p;
 
     /* Null NTP value 00000000.00000000 maps to RISC OS time 6400000000 */
-    if (t.l == 0 && t.h == 0x64 && t.extrans == 0)
+    if (t.cs == 0x6400000000 && t.extrans == 0)
         return "<none>";
 
     _swix(Territory_ConvertDateAndTime, _INR(0,4)|_OUT(1), -1, &t, buffer, sizeof buffer,
@@ -55,22 +55,18 @@ const char *riscos_to_text(struct riscos_time t)
 const char *riscos8_to_text(riscos_time8 t)
 {
     static char buffer[64];
-    u_int64_t tmp;
+    uint64_t tmp;
     char *p;
 
     /* Null NTP value 00000000.00000000 maps to RISC OS time 6400000000 */
-    if (t.low == 0 && t.high == 0x64000000)
+    if (t == 0x6400000000000000)
         return "<none>";
 
     _swix(Territory_ConvertDateAndTime, _INR(0,4)|_OUT(1), -1, (char *) &t + 3, buffer, sizeof buffer,
                                         "%we, %zdy %mo %ce%yr %24:%mi:%se.%cs", &p);
 
-    t.high = 0;
-    t.low <<= 8;
-    tmp.high = 0;
-    tmp.low = 10000000;
-    t = extralong_umultiply(t, tmp);
-    sprintf(p, "%07ld", t.high);
+    t = (t & 0xFFFFFF) * UINT64_C(10000000);
+    sprintf(p, "%07"PRId64, t >> 24);
 
     return buffer;
 }
@@ -78,29 +74,28 @@ const char *riscos8_to_text(riscos_time8 t)
 struct riscos_time ntp_to_riscos(struct ntp_time n)
 {
     struct riscos_time t;
-    u_int32_t micro2[2];
-    u_int32_t cs;
-    mul64(n.secs, 100, (u_int64_t *)&t.l);
+    uint64_t micro2;
+    uint32_t cs;
+    t.cs = n.secs * UINT64_C(100);
 
     /* Add in fudge for timestamp wrap in 2036 (RFC 2030 section 3).
      * This gives us a representable range of dates from 20 Jan 1968 to 26 Feb 2104.
      * (RISC OS allows 1 Jan 1900 to 3 Jun 2248).
      */
     if ((n.secs & 0x80000000) == 0)
-        t.h += 100;
+        t.cs += 0x100000000 * UINT64_C(100);
 
-    /* micro2[1] := fraction of second in ns units */
-    mul64(n.frac, 1000000000, (u_int64_t *)micro2);
+    /* micro2 >> 32 := fraction of second in ns units */
+    micro2 = n.frac * UINT64_C(1000000000);
 
     /* Round to nearest */
-    if (micro2[0] & 0x80000000)
-        micro2[1]++;
+    if (micro2 & 0x80000000)
+        micro2 += 0x100000000;
 
-    cs = micro2[1] / 10000000;
-    t.extrans = micro2[1] % 10000000;
+    cs = (uint32_t) (micro2 >> 32) / 10000000;
+    t.extrans = (uint32_t) (micro2 >> 32) % 10000000;
 
-    t.l += cs;
-    if (t.l < cs) t.h++;
+    t.cs += cs;
 
     return t;
 }
@@ -108,22 +103,20 @@ struct riscos_time ntp_to_riscos(struct ntp_time n)
 riscos_time8 ntp_to_riscos8(struct ntp_time n)
 {
     riscos_time8 t;
-    u_int64_t tmp;
+    uint64_t tmp;
 
     /* Move fixed point down 8 bits - ignore 8 bottom bits - only 0.1µs */
-    t.low = (n.secs << 24) | (n.frac >> 8);
-    t.high = n.secs >> 8;
+    t = ((uint64_t) n.secs << 24) | (n.frac >> 8);
 
     /* Add in fudge for timestamp wrap in 2036 (RFC 2030 section 3).
      * This gives us a representable range of dates from 20 Jan 1968 to 26 Feb 2104.
      * (RISC OS allows 1 Jan 1900 to 3 Jun 2248).
      */
-    if ((t.high & 0x00800000) == 0)
-        t.high += 0x01000000;
+    if ((t & 0x0080000000000000) == 0)
+        t += 0x0100000000000000;
 
     /* Convert to centiseconds */
-    tmp.high = 0; tmp.low = 100;
-    t = extralong_umultiply(t, tmp);
+    t = t * 100;
 
     return t;
 }
@@ -137,7 +130,7 @@ struct ntp_time riscos8_to_ntp(riscos_time8 t)
      * (20 Jan 1968 04:14:08 to 26 Feb 2104 10:42:23).
      * This corresponds to the set of RISC OS times 0x3200000000.000000-0x95FFFFFFFF.FFFFFF.
      */
-    if (t.high < 0x32000000 || t.high >= 0x96000000)
+    if (t < 0x3200000000000000 || t >= 0x9600000000000000)
     {
         /* Return null time for out of range */
         n.secs = n.frac = 0;
@@ -147,16 +140,14 @@ struct ntp_time riscos8_to_ntp(riscos_time8 t)
     /* Times 0x6400000000-0x95FFFFFFFF map to 00000000.00000000-7FFFFFFF.FFFFFFFF.
      * Handle this by mapping down to 0x0000000000-0x31FFFFFFFF before dividing.
      */
-    if (t.high >= 0x64000000)
-        t.high -= 0x64000000;
+    if (t >= 0x6400000000000000)
+        t -= 0x6400000000000000;
 
     /* Only have signed divide, but doesn't matter because we know the top byte's in the range 00-63 */
-    tmp.high = 0;
-    tmp.low = 100;
-    *(int64_t *)&t = extralong_divide(*(int64_t *)&t, tmp);
+    t = t / 100;
 
-    n.secs = (t.high << 8) | (t.low >> 24);
-    n.frac = t.low << 8;
+    n.secs = (uint32_t) (t >> 24);
+    n.frac = (uint32_t) t << 8;
 
     return n;
 }
@@ -164,9 +155,9 @@ struct ntp_time riscos8_to_ntp(riscos_time8 t)
 /* r[1,0] := a[1,0] / b; a being a 64-bit number, and r being 32.32 fixed point
  * least-significant word first.
  */
-static void divfrac(u_int32_t *a, u_int32_t b, u_int32_t *r)
+static void divfrac(uint32_t *a, uint32_t b, uint32_t *r)
 {
-    u_int32_t n, f;
+    uint32_t n, f;
     int i, j;
 
     n = a[1];
@@ -184,7 +175,7 @@ static void divfrac(u_int32_t *a, u_int32_t b, u_int32_t *r)
             if (n >= b)
             {
                 n -= b;
-                r[j] |= (1ul << i);
+                r[j] |= (UINT32_C(1) << i);
             }
         }
     }
@@ -193,13 +184,13 @@ static void divfrac(u_int32_t *a, u_int32_t b, u_int32_t *r)
 struct ntp_time riscos_to_ntp(struct riscos_time t)
 {
     struct ntp_time n;
-    u_int32_t c[2], r[2];
+    uint32_t c[2], r[2];
 
     /* Range check: NTP allows times from 0x80000000.00000000 to 0x7FFFFFFF.FFFFFFFF.
      * (20 Jan 1968 04:14:08 to 26 Feb 2104 10:42:23).
      * This corresponds to the set of RISC OS times 0x3200000000-0x95FFFFFFFF.
      */
-    if (t.h < 0x32 || t.h >= 0x96)
+    if (t.cs < 0x3200000000 || t.cs >= 0x9600000000)
     {
         /* Return null time for out of range */
         n.secs = n.frac = 0;
@@ -209,11 +200,11 @@ struct ntp_time riscos_to_ntp(struct riscos_time t)
     /* Times 0x6400000000-0x95FFFFFFFF map to 00000000.00000000-7FFFFFFF.FFFFFFFF.
      * Handle this by mapping down to 0x0000000000-0x31FFFFFFFF before dividing.
      */
-    if (t.h >= 0x64)
-        t.h -= 0x64;
+    if (t.cs >= 0x6400000000)
+        t.cs -= 0x6400000000;
 
-    c[1] = t.h;
-    c[0] = t.l;
+    c[1] = (uint32_t) (t.cs >> 32);
+    c[0] = (uint32_t) t.cs;
 
     divfrac(c, 100, r);
     n.secs = r[1];
@@ -235,14 +226,14 @@ struct ntp_time riscos_to_ntp(struct riscos_time t)
     return n;
 }
 
-bool ntp_is_null(struct ntp_time n)
+static inline bool ntp_is_null(struct ntp_time n)
 {
     return n.secs == 0 && n.frac == 0;
 }
 
 struct ntp_time ntp_null;
 
-void randomise_ntp(struct ntp_time *n)
+static void randomise_ntp(struct ntp_time *n)
 {
     if (!ntp_is_null(*n))
     {
@@ -258,9 +249,9 @@ struct riscos_time current_time(void)
     struct riscos_time t;
 
     t.extrans = 0;
-    t.l = 3;
-    if (_swix(OS_Word, _INR(0,1), 14, &t))
-        t.l = t.h = 0;
+    t.cs = 3;
+    if (_swix(OS_Word, _INR(0,1), 14, &t.cs))
+        t.cs = 0;
 
     return t;
 }
@@ -269,7 +260,7 @@ struct riscos_time current_time(void)
  * Return 1 if IOC/IOMD is present (OS_ReadSysInfo 2 reports I/O control
  * chip = 0 or 1 - IOC or IOMD).
  */
-static int iomd_present()
+static int iomd_present(void)
 {
     unsigned int hardware;
 
@@ -288,8 +279,8 @@ riscos_time8 precise_current_time(void)
     if (!iomd_check)
         iomd_check = iomd_present();
 
-    t1.low = 3 << 24;
-    t2.low = 3 << 24;
+    t1 = 3 << 24;
+    t2 = 3 << 24;
 
     if (iomd_check == 1)
     {
@@ -305,10 +296,10 @@ riscos_time8 precise_current_time(void)
     /* Check new time */
     _kernel_osword(14, (int *) ((char *) &t2 + 3));
 
-    if (iomd_check == 1 && t1.low == t2.low)
+    if (iomd_check == 1 && t1 == t2)
     {
         unsigned int latch = rtcadjust_latch();
-        u_int32_t tmp;
+        uint32_t tmp;
         int64_t tmp2, tmp3;
 
         /* Clock didn't tick.
@@ -316,13 +307,9 @@ riscos_time8 precise_current_time(void)
          */
         if (timer_count < latch)
         {
-            tmp = latch - 1L - timer_count;
-            tmp2.high = tmp >> 8;
-            tmp2.low = tmp << 24;
-            tmp3.high = 0;
-            tmp3.low = latch;
-            tmp2 = extralong_divide(tmp2, tmp3);
-            t2.low |= tmp2.low;
+            tmp = latch - UINT32_C(1) - timer_count;
+            tmp2 = ((int64_t) tmp << 24) / latch;
+            t2 += tmp2;
         }
         else
         {
@@ -334,15 +321,15 @@ riscos_time8 precise_current_time(void)
         /* Clock ticked - let it rest at the 1cs boundary */
     }
 
-    dprintf(("ntp_4", "precise_current_time returning %08lX %08lX\n", t2.high, t2.low));
+    dprintf(("ntp_4", "precise_current_time returning %016"PRIX64"\n", t2));
 
     return t2;
 }
 
 struct ntp_time ntp_ntoh(struct ntp_time t)
 {
-    t.secs = ntohl(t.secs);
-    t.frac = ntohl(t.frac);
+    t.secs = (uint32_t) ntohl(t.secs);
+    t.frac = (uint32_t) ntohl(t.frac);
     return t;
 }
 
@@ -356,10 +343,7 @@ const char *ntp_to_text(struct ntp_time t)
 struct riscos_time round_riscos_time(struct riscos_time t)
 {
     if (t.extrans >= 5000000)
-    {
-        if (++t.l == 0)
-           ++t.h;
-    }
+        ++t.cs;
     t.extrans = 0;
 
     return t;
@@ -416,15 +400,15 @@ int ntp_process_reply(const struct ntp *n, size_t len, riscos_timediff8 *offset_
 
     if (ntp_is_null(n->originate_timestamp))
     {
-        *offset_out = extralong_usubtract(xmit, dest);
+        *offset_out = xmit - dest;
     }
     else
     {
-        *offset_out = extralong_add(extralong_div2(extralong_usubtract(recv, orig)),
-                                    extralong_div2(extralong_usubtract(xmit, dest)));
+        *offset_out = ((int64_t) (recv - orig) >> 1) + ((int64_t) (xmit - dest) >> 1);
     }
 
-    dprintf(("ntp_1", "offset = %08lX.%08lX\n", offset_out->high, offset_out->low));
+    dprintf(("ntp_1", "offset = %010"PRIX64".%06"PRIX64"cs\n",
+                      (*offset_out >> 24), *offset_out & 0xFFFFFF));
 
     return -1;
 }

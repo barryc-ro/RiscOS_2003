@@ -19,7 +19,7 @@ CINCLUDES = -IC: -IC:TCPIPLibs
 CDEFINES  = -DCOMPAT_INET4
 CFLAGS    = -ffa -zM -zps1 -Wp
 
-COMOBJS   = extralong.o mul64.o machine.o nt_nvram.o dns.o \
+COMOBJS   = mul64.o machine.o nt_nvram.o dns.o \
             edst.o ntp.o rtcadjust.o dhcp.o dst.o adst.o
 
 ROM_OBJS  = ${COMOBJS} header.o module.o
