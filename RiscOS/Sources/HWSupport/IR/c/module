@@ -43,7 +43,11 @@
 
 06/04/98  SMC  2.06 Added support for IR on the parallel port.
 
-28/09/99  OL   2.08 Added a call the KeyWatch module to ignore the next key that is sent.
+28/09/98  OL   2.08 Added a call the KeyWatch module to ignore the next key that is sent.
+23/09/98  SMC  2.09 Initialise IRmapping to UNDEFINED before filling in specific mappings
+                    (spurious/corrupt IR codes could produce bogus keys).
+                    Only remember last codes that were keys, otherwise we could drop key
+                    ups.
  */
 
 #include <stdio.h>
@@ -140,7 +144,9 @@ typedef struct _Mapping {
   Modifier    modifier ;
 } Mapping ;
 
-Mapping IRmappings[256] ; /* Remote can't have more that this yet! */
+#define IRMAPPINGS_SIZE 256 /* Remote can't have more that this yet! */
+
+Mapping IRmappings[IRMAPPINGS_SIZE] ;
 
 typedef struct _Default {
   int  rc5 ;
@@ -236,6 +242,7 @@ extern int IR_callevery_entry (_kernel_swi_regs *r, void *pw) ;
 extern int IR_callback_entry (_kernel_swi_regs *r, void *pw) ;
 extern int IR_keyv_entry (_kernel_swi_regs *r, void *pw) ;
 void IR_write_LEDs (void) ;
+void clear_mappings (void) ;
 void default_mappings (void) ;
 void write_mpeg_control (int ctrl0, int ctrl1) ;
 void fake_mouse_move (MouseMove where) ;
@@ -365,6 +372,9 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
    */
   while ( (IR_READ & ~TOGGLE_BIT) == (ONLINE_CODE & ~TOGGLE_BIT) );
 
+  /* Set up default mappings before enabling events etc. */
+  default_mappings ();
+
   regs.r[0] = 5 ; /* Every 5 centiseconds */
   regs.r[1] = (int) IR_callevery_entry ;
   regs.r[2] = (int) private_word_pointer ;
@@ -388,8 +398,6 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
   regs.r[9] = KeyV ;
   if ((e = _kernel_swi (OS_CallAVector, &regs, &regs)) != NULL)
     return (e) ;
-
-  default_mappings ();
 
   /* Flush initial F10 in keyboard buffer */
   regs.r[0] = 152;	/* reason = examine buffer status */
@@ -492,7 +500,6 @@ int IR_callevery_handler (_kernel_swi_regs *r, void *pw)
   /* Read twice to ensure value has settled */
   while ( (code = IR_READ) != IR_READ );
 
-
   _kernel_swi (OS_ReadMonotonicTime, &regs, &regs);
 
 
@@ -578,12 +585,15 @@ if (code toggle bit clear) and (last_code == Standby)
           case KEY:
             if (code != last_code)
             {
-
-              fake_key (IRmappings[last_code].action.key, KEYUP) ;
-
-              if (IRmappings[last_code].modifier)
+              /* Release last_code if it wasn't undefined. */
+              if (IRmappings[last_code].type != UNDEFINED)
               {
-                fake_key (IRmappings[last_code].modifier, KEYUP) ;
+                fake_key (IRmappings[last_code].action.key, KEYUP) ;
+
+                if (IRmappings[last_code].modifier)
+                {
+                  fake_key (IRmappings[last_code].modifier, KEYUP) ;
+                }
               }
 
               if (IRmappings[code].modifier)
@@ -593,16 +603,17 @@ if (code toggle bit clear) and (last_code == Standby)
 
               fake_key (IRmappings[code].action.key, KEYDOWN) ;
 
+              /* Only remember last codes that were keys (otherwise we could lose the last key pressed). */
+              last_code = code ;
+              last_time = regs.r[0] ;
             }
             break ;
 
         } /* Switch */
 
-        last_code = code ;
-        last_time = regs.r[0] ;
       }
-
-      else if (last_code != NULL_CODE)
+      /* Got null code so release last code if it wasn't undefined. */
+      else if (IRmappings[last_code].type != UNDEFINED)
       {
          fake_key (IRmappings[last_code].action.key, KEYUP) ;
 
@@ -684,7 +695,7 @@ if (code toggle bit clear) and (last_code == Standby)
 
 _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 {
-  int rc5, i ;
+  int rc5 = 0, i ;
 
   switch (cmd_no)
   {
@@ -692,7 +703,7 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
     /*
      * Dump mappings
      */
-    for (rc5 = 0; rc5 < 255; rc5++)
+    for (rc5 = 0; rc5 < IRMAPPINGS_SIZE; rc5++)
     {
       switch (IRmappings[rc5].type)
       {
@@ -744,6 +755,8 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 
       if (third_arg)
         fourth_arg = strchr (third_arg, ' ') + 1 ;
+      else
+        fourth_arg = NULL;
 
       strncpy (tmp, first_arg, (int) second_arg - (int) first_arg - 1) ;
       tmp[(int) second_arg - (int) first_arg - 1] = '\0' ;
@@ -774,16 +787,25 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
       switch (argc)
       {
         case 3:
-        strncpy (tmp, second_arg, (int) third_arg - (int) second_arg - 1) ;
-        tmp[(int) third_arg - (int) second_arg - 1] = '\0' ;
-          strcpy (tmp1, third_arg) ;
+          if (third_arg)
+          {
+            strncpy (tmp, second_arg, (int) third_arg - (int) second_arg - 1) ;
+            tmp[(int) third_arg - (int) second_arg - 1] = '\0' ;
+            strcpy (tmp1, third_arg) ;
+          }
           break ;
 
         case 4:
-          strncpy (tmp, second_arg, (int) third_arg - (int) second_arg - 1) ;
-          tmp[(int) third_arg - (int) second_arg - 1] = '\0' ;
-          strncpy (tmp1, third_arg, (int) fourth_arg - (int) third_arg - 1) ;
-          tmp1[(int) fourth_arg - (int) third_arg - 1] = '\0' ;
+          if (third_arg)
+          {
+            strncpy (tmp, second_arg, (int) third_arg - (int) second_arg - 1) ;
+            tmp[(int) third_arg - (int) second_arg - 1] = '\0' ;
+            if (fourth_arg)
+            {
+              strncpy (tmp1, third_arg, (int) fourth_arg - (int) third_arg - 1) ;
+              tmp1[(int) fourth_arg - (int) third_arg - 1] = '\0' ;
+            }
+          }
           break ;
 
         case 2:
@@ -884,8 +906,7 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
     break;
 
   case CLEAR:
-    for (i = 0; i < 255; i++)
-      IRmappings[i].type = UNDEFINED ;
+    clear_mappings();
     break;
   }
 
@@ -895,6 +916,14 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 /*
  * Application specific routines
  */
+
+void clear_mappings (void)
+{
+  int i;
+
+  for (i = 0; i < IRMAPPINGS_SIZE; i++)
+    IRmappings[i].type = UNDEFINED;
+}
 
 void default_mappings (void)
 {
@@ -922,6 +951,9 @@ void default_mappings (void)
   regs.r[1] = 2;
   regs.r[2] = 0;
   _kernel_swi (OS_Byte, &regs, &regs);
+
+  /* Clear mappings before setting defaults. */
+  clear_mappings();
 
   for (i = 0; i < NUM_DEFAULTS; i++)
   {
