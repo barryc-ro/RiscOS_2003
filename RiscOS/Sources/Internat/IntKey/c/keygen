@@ -193,7 +193,7 @@ static UCS4 function_key_code(const char *p)
         return ci->code;
     }
 
-    return 0x80000000 ^ ctrl ^ shift + ci->code;
+    return (0x80000000 + ci->code) ^ ctrl ^ shift;
 }
 
 static UCS4 special_key_code(const char *p)
@@ -342,7 +342,7 @@ int is_keypad_key(int key)
 int is_special_key(int key)
 {
     return key == K_ScrollLock || key == K_NumLock || key == K_Tab ||
-           key == K_CapsLock;
+           key == K_CapsLock || is_modifier_key(key);
 }
 
 void read_keypad(Keyboard *kb)
@@ -401,7 +401,7 @@ void read_layer(Keyboard *kb, int layerno)
 {
     char buffer[256];
     char scaps[8], caps[8];
-    int key, i;
+    int key, i, replace=0;
     char *p;
 
     while (getline(buffer, 256))
@@ -415,14 +415,25 @@ void read_layer(Keyboard *kb, int layerno)
         }
 
         key = (int) strtol(buffer, &p, 16);
-        if (p == buffer || *p != '\0' || key < 0 || key >= MAXKEYS)
+        if (p == buffer || key < 0 || key >= MAXKEYS)
             error("Expected key number");
 
-        if (kb->key[key].definedinlayer[layerno])
+        while (*p <= ' ' && *p != '\0')
+            p++;
+
+        if (*p != '\0')
+        {
+            if (strcmp(p, "replace") == 0)
+                replace = 1;
+            else
+                error("Unexpected trailing garbage after key number");
+        }
+
+        if (!replace && kb->key[key].definedinlayer[layerno])
             error("Key already defined");
 
         if (is_modifier_key(key))
-            error("Cannot alter modifier keys");
+            kb->needshiftinglist = 1;
 
         if (is_keypad_key(key))
             error("Use $Keypad to alter keypad keys");
@@ -675,17 +686,27 @@ void output_simples(FILE *out, Keyboard *kb)
     fprintf(out, "KeyTran%dEnd\n\n", kb->country);
 
     fprintf(out, "\nSpecialList%d\n"
-                 "        =       SpecialList%dEnd - SpecialList%d - 1\n"
-                 "        =       K1ShiftLeft, K1ShiftRight, K1CtrlLeft, K1CtrlRight\n"
-                 "        =       K1AltLeft, K1AltRight\n"
-                 "        =       K1LeftMouse, K1CentreMouse, K1RightMouse, K1Break\n"
-                 "SpecialList%dPad\n"
+                 "        =       SpecialList%dEnd - SpecialList%d - 1\n",
+                 kb->country, kb->country, kb->country);
+
+    if (!kb->key[K_ShiftL].defined)     fprintf(out, "        =       K1ShiftLeft\n");
+    if (!kb->key[K_ShiftR].defined)     fprintf(out, "        =       K1ShiftRight\n");
+    if (!kb->key[K_CtrlL].defined)      fprintf(out, "        =       K1CtrlLeft\n");
+    if (!kb->key[K_CtrlR].defined)      fprintf(out, "        =       K1CtrlRight\n");
+    if (!kb->key[K_AltL].defined)       fprintf(out, "        =       K1AltLeft\n");
+    if (!kb->key[K_AltR].defined)       fprintf(out, "        =       K1AltRight\n");
+    if (!kb->key[K_MSelect].defined)    fprintf(out, "        =       K1LeftMouse\n");
+    if (!kb->key[K_MMenu].defined)      fprintf(out, "        =       K1CentreMouse\n");
+    if (!kb->key[K_MAdjust].defined)    fprintf(out, "        =       K1RightMouse\n");
+    if (!kb->key[K_Break].defined)      fprintf(out, "        =       K1Break\n");
+
+    fprintf(out, "SpecialList%dPad\n"
                  "        =       K1NumPadSlash, K1NumPadStar, K1NumPadHash\n"
                  "        =       K1NumPad7, K1NumPad8, K1NumPad9, K1NumPadMinus\n"
                  "        =       K1NumPad4, K1NumPad5, K1NumPad6, K1NumPadPlus\n"
                  "        =       K1NumPad1, K1NumPad2, K1NumPad3\n"
                  "        =       K1NumPad0, K1NumPadDot, K1NumPadEnter\n",
-                 kb->country, kb->country, kb->country, kb->country);
+                 kb->country);
 
     if (!kb->key[K_ScrollLock].defined) fprintf(out, "        =       K1ScrollLock\n");
     if (!kb->key[K_NumLock].defined)    fprintf(out, "        =       K1NumLock\n");
@@ -714,6 +735,7 @@ void process_keyboard(FILE *in, FILE *out)
     kb->layers = 0;
     kb->numkeys = 0;
     kb->needcodetable = 0;
+    kb->needshiftinglist = 0;
     kb->custompad = 0;
     kb->leftaltlayerswitch = 0;
 
@@ -741,11 +763,18 @@ void process_keyboard(FILE *in, FILE *out)
     fprintf(out, "KeyStruct%d\n"
                  "        &       KeyTran%d-KeyStruct%d\n"
                  "        &       (KeyTran%dEnd-KeyTran%d) :SHR: 2\n"
-                 "        &       InkeyTran-KeyStruct%d\n"
-                 "        &       ShiftingKeyList-KeyStruct%d\n"
-                 "        &       SpecialList%d-KeyStruct%d\n",
+                 "        &       InkeyTran-KeyStruct%d\n",
                  kb->country, kb->country, kb->country, kb->country, kb->country,
-                 kb->country, kb->country, kb->country, kb->country);
+                 kb->country);
+
+    if (kb->needshiftinglist)
+        fprintf(out, "        &       ShiftingKeyList%d-KeyStruct%d\n", kb->country, kb->country);
+    else
+        fprintf(out, "        &       ShiftingKeyList-KeyStruct%d\n", kb->country);
+
+    fprintf(out, "        &       SpecialList%d-KeyStruct%d\n",
+                 kb->country, kb->country);
+
     if (kb->needcodetable)
         fprintf(out, "        &       SpecialCodeTable%d-KeyStruct%d\n", kb->country, kb->country);
     else
@@ -820,6 +849,28 @@ void process_keyboard(FILE *in, FILE *out)
         for (i=0; i<MAXKEYS; i++)
             if (kb->key[i].defined && !kb->key[i].easy)
                 fprintf(out, "        &       ProcessUCS - SpecialCodeTable%d\n", kb->country);
+    }
+
+    if (kb->needshiftinglist)
+    {
+        fprintf(out, "\nShiftingKeyList%d\n"
+                     "        =       ShiftingKeyList%dEnd - ShiftingKeyList%d - 1\n",
+                     kb->country, kb->country, kb->country);
+
+        if (!kb->key[K_ShiftL].defined)  fprintf(out, "        =       K1ShiftLeft\n");
+        if (!kb->key[K_ShiftR].defined)  fprintf(out, "        =       K1ShiftRight\n");
+        if (!kb->key[K_CtrlL].defined)   fprintf(out, "        =       K1CtrlLeft\n");
+        if (!kb->key[K_CtrlR].defined)   fprintf(out, "        =       K1CtrlRight\n");
+        if (!kb->key[K_AltL].defined)    fprintf(out, "        =       K1AltLeft\n");
+        if (!kb->key[K_AltR].defined)    fprintf(out, "        =       K1AltRight\n");
+        if (!kb->key[K_MAdjust].defined) fprintf(out, "        =       K1RightMouse\n");
+        if (!kb->key[K_MMenu].defined)   fprintf(out, "        =       K1CentreMouse\n");
+        if (!kb->key[K_MSelect].defined) fprintf(out, "        =       K1LeftMouse\n");
+        if (!kb->key[K_Break].defined)   fprintf(out, "        =       K1Break\n");
+
+        fprintf(out, "ShiftingKeyList%dEnd\n"
+                     "        ALIGN\n",
+                     kb->country);
     }
 
     for (i=0; i<kb->layers; i++)
