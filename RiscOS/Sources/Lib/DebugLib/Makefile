@@ -49,8 +49,8 @@ ABSSYM		= RISC_OSLib:o.AbsSym
 REMOTEDBLIB	= $(LIBDIR).debug.o.lremote
 PDEBUG		= $(LIBDIR).PDebug.o.Lib_PL
 PDEBUGZM	= $(LIBDIR).PDebug.o.Lib_M_PL
-TRACELIB	= libs.t_pl
-TRACELIBZM	= libs.t_m_pl
+TRACELIB	= $(LIBDIR).Trace.o.Trace_PL
+TRACELIBZM	= $(LIBDIR).Trace.o.Trace_M_PL
 
 # ------------------------------------------------------------------------------
 # Include files
