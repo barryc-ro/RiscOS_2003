@@ -7,6 +7,7 @@
 ;               Alan Glover (fixes/enhancements, ARM6/ARM7 instructions)
 ;               William Turner (StrongARM compatibility)
 ;               Kevin Bracey (ARMv4+5, Thumb, fixes/enhancements, 32-bit)
+;               Steve Revill (Slight changes to ADR and SWI disassembly)
 
 ; 1.18  SKS     Fixed disassembly of #xx,yy operands
 ; 1.19  SKS     Fixed disassembly of LSR #32, ASR #32
@@ -181,6 +182,9 @@
 ;                        Disassembly of VFP instruction set added.
 ;                        PC-relative LDRH family instructions calculated
 ;                        target address incorrectly.
+; 1.63  SAR 30-Jan-01    ADDS Rd,PC,#imm (and SUBS) no longer map to ADR.
+;                        Unknown SWIs, such as 'User' and 'OS_Undefind' are now
+;                        disassembled as 'SWI &num'.
 ;
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -277,6 +281,7 @@ SysIs32bit      #       1               ; non-zero if on a 32-bit system
 StringBuffer    #       160             ; Temp string buffer. Big enough to
                                         ; hold a disassembled instruction
                                         ; and a full register set + three instrs
+ ASSERT (?StringBuffer :AND: 2_11)=0
 TotalSpace      *       :INDEX: @
 
 ; List of mistakes
@@ -323,13 +328,14 @@ ExecuteBuffer   #       ExeBufLen
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Useful constants
 
-TAB     *       9
-LF      *       10
-CR      *       13
-space   *       " "
-quote   *       """"
-colon   *       ":"
-delete  *       &7F
+TAB		*       9
+LF		*       10
+CR		*       13
+space		*       " "
+quote		*       """"
+colon		*       ":"
+delete		*       &7F
+ampersand	*	"&"
 
 ; Useful macros
 
@@ -814,10 +820,93 @@ Swi     LDR     R10, Mistake
         SUB     r2, r2, r1
         BIC     r0, r4, #&FF000000      ; Mask out SWI<cc>
         SWI     XOS_SWINumberToString   ; This may give error (eg. Buffer over)
-
-        SUBVC   R2,R2,#1                ;adjust to avoid taking the zero byte
-        ADDVC   r0, r1, r2
+	BVS	InstructionEnd
+        BL	unknown_swis
+        ADD	r0, r1, r2
         B       InstructionEnd
+
+; Compare the string against 'User' and 'OS_Unknown' with or without the leading 'X'. If
+; it matches, dump the SWI number as a string with a preceding '&' into the buffer instead.
+;
+; Entry...
+;   R0 - SWI number
+;   R1 - pointer to string
+;   R2 - offset to last char of string
+; Exit...
+;   R0 - corrupted
+;   R1 - preserved
+;   R2 - pointer to last char of string (may be different)
+;
+unknown_swis
+	Push	"R3, LR"
+	; Ensure all bytes after the SWI name string up to the next word boundary are zero
+	MOV	R14, #0
+	ADD	R3, R1, R2
+unk_swi_align
+	TST	R3, #2_11
+	STRNEB	R14, [R3], #1
+	BNE	unk_swi_align
+	; Compare this SWI name string against some pre-defined unknown SWI name strings
+	ADR	R3, str_user
+	BL	strcmp
+	BEQ	unk_swi_replace
+	ADR	R3, str_xuser
+	BL	strcmp
+	BEQ	unk_swi_replace
+	ADR	R3, str_os_undefined
+	BL	strcmp
+	BEQ	unk_swi_replace
+	ADR	R3, str_xos_undefined
+	BL	strcmp
+	BEQ	unk_swi_replace
+        SUB	R2,R2,#1                ; Adjust to avoid taking the zero byte
+	Pull	"R3, PC"
+	; Replace the SWI name string with the SWI number decoded as hexadecimal
+unk_swi_replace
+	MOV	R2, #ampersand
+	STRB	R2, [R1], #1
+	MOV	R2, #12
+	SWI	XOS_ConvertHex8
+	SUB	R2, R1, R0
+	SUB	R1, R0, #1
+	ADD	R2, R2, #2
+	Pull	"R3, PC"
+
+; Compare two word-aligned strings. They *must* be padded with zero or more null bytes after
+; the terminator (which must also be null) up to the word boundary.
+;
+; Entry...
+;   R1    - pointer to first string
+;   R3    - pointer to second string
+; Exit...
+;   R1    - preserved
+;   R3    - corrupted
+;   flags - EQ=match, NE=don't match
+strcmp
+	Push	"R0, R1, LR"
+strcmp_loop
+	LDR	R0, [R1], #4
+	LDR	R14, [R3], #4
+	TEQ	R0, R14
+	BNE	strcmp_exit		; Conditional Pull is bad on newer ARMs, branch instead
+	TST	R0, #&FF000000
+	BNE	strcmp_loop
+strcmp_exit
+	Pull	"R0, R1, PC"
+
+	; Some SWI names indicating that a SWI number was not recognised (in length order)
+str_user
+	DCB	"User", 0
+	ALIGN
+str_xuser
+	DCB	"XUser", 0
+	ALIGN
+str_os_undefined
+	DCB	"OS_Undefined", 0
+	ALIGN
+str_xos_undefined
+	DCB	"XOS_Undefined", 0
+	ALIGN
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1625,6 +1714,9 @@ DataProcessing ROUT
         AND     R5,R5,#15
         TEQS    R5,#15
         BNE     notADR ;Rn not R15
+
+        TST	r4, #1 :SHL: 20
+        BNE	notADR ;S bit set - not ADR
 
         TestBit	25			; I bit
         BNE     isADR
