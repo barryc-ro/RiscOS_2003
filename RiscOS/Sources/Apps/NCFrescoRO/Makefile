@@ -56,6 +56,7 @@ resources:
 	${CP} NCFrescoRORes:SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
 	${CP} NCFrescoRORes:Config      ${RESRES}.Config   ${CPFLAGS}
+	${CP} NCFrescoRORes:html.badurl   ${RESRES}.html.badurl   ${CPFLAGS}
 	${CP} NCFrescoRORes:html.sslcert  ${RESRES}.html.sslcert  ${CPFLAGS}
 	${CP} NCFrescoRORes:html.sslpin   ${RESRES}.html.sslpin   ${CPFLAGS}
 	${CP} NCFrescoRORes:html.sslserv  ${RESRES}.html.sslserv  ${CPFLAGS}
