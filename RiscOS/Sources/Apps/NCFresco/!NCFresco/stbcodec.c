@@ -60,7 +60,8 @@ static void recording_stop(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-static int recording = FALSE;
+static int recording = FALSE;	/* are we recording? */
+static int blank_time = -1;	/* saved blank time */
 
 static void send_action(fe_view v, int action)
 {
@@ -115,11 +116,36 @@ void codec_event_handler(int event, fe_view v)
     case fevent_CODEC_MUTE:
 	break;
 
-    case fevent_CODEC_CLOSE:
+    case fevent_CODEC_CLOSING:
+	/* reset the screenblanker time */
+	if (blank_time != -1)
+	{
+	    STBDBG(("screenblanker: enable (%d)\n", blank_time));
+	    _swix(ScreenBlanker_Control, _INR(0,1), 3, blank_time);
+	    blank_time = -1;
+	}
+
 	send_action(v, be_plugin_action_CLOSE);
 	if (recording)
 	    recording_stop();
 	break;
+
+    case fevent_CODEC_OPENING:
+	/* read the screenblanker state and then disable it */
+	_swix(ScreenBlanker_Control, _IN(0) | _OUT(1), 5, &blank_time);
+	_swix(ScreenBlanker_Control, _INR(0,1), 3, 0);
+	STBDBG(("screenblanker: disable (%d)\n", blank_time));
+	break;
+
+    case fevent_CODEC_STOP_PAGE:
+	if (fe_abort_fetch_possible(v))
+	    frontend_complain(fe_abort_fetch(v));
+	else
+	{
+	    send_action(v, plugin_state_STOP);
+	    if (recording)
+		recording_stop();
+	}
     }
 }
 

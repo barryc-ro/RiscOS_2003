@@ -49,6 +49,7 @@ void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     }
     else
     {
+#if 0
         rid_table_item *table = ((rid_text_item_table *)ti)->table;
         rid_table_caption *capt = table->caption;
         rid_table_cell *cell;
@@ -81,6 +82,8 @@ void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    }
         }
         TABDBG(("otable_size done, caller = %s\n", caller(1) ) );
+#endif
+	ASSERT(!"Not reached");
     }
 }
 

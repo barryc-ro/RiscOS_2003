@@ -514,13 +514,11 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     }
 
 #ifdef STBWEB
-    render_plinth_full(bg,
-		       has_caret ? plinth_col_HL_M : plinth_col_M,
-		       has_caret ? plinth_col_HL_L : plinth_col_L,
-		       has_caret ? plinth_col_HL_D : plinth_col_D,
-		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
-		       hpos, bline - ti->max_down,
-		       ti->width, (ti->max_up + ti->max_down), doc );
+    render_plinth_from_list(bg,
+			    has_caret ? config_colour_list[render_colour_list_WRITE_HIGHLIGHT] : config_colour_list[render_colour_list_WRITE],
+			    0,
+			    hpos, bline - ti->max_down,
+			    ti->width, (ti->max_up + ti->max_down), doc );
 #else
     render_plinth(bg, render_plinth_RIM | render_plinth_IN,
 		  hpos, bline - ti->max_down,

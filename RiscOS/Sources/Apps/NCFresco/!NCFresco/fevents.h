@@ -73,6 +73,10 @@
 #define fevent_HISTORY_FORWARD_ALL          0x2014
 #define fevent_HISTORY_SHOW_ALPHA           0x2015
 #define fevent_HISTORY_SHOW_RECENT          0x2016
+#define fevent_HISTORY_SHOW_SWITCHABLE      0x2017
+#define fevent_HISTORY_SHOW_ALPHA_FRAMES    0x2018
+#define fevent_HISTORY_SHOW_RECENT_FRAMES   0x2019
+#define fevent_HISTORY_SHOW_SWITCHABLE_FRAMES 0x201A
 
 #define fevent_HOTLIST_SHOW                 0x2020  /* just show the hotlist */
 #define fevent_HOTLIST_ADD                  0x2021
@@ -80,6 +84,11 @@
 #define fevent_HOTLIST_WIPE                 0x2023
 #define fevent_HOTLIST_SHOW_WITH_URL        0x2024  /* show the hotlist with the URL line */
 #define fevent_HOTLIST_SHOW_DELETE	    0x2025
+#define fevent_HOTLIST_FLUSH_DELETE	    0x2026 /* delete marked entries */
+#define fevent_HOTLIST_SHOW_SWITCHABLE	    0x2027
+#define fevent_HOTLIST_SHOW_FRAMES	    0x2028
+#define fevent_HOTLIST_SHOW_DELETE_FRAMES   0x2029
+#define fevent_HOTLIST_SHOW_SWITCHABLE_FRAMES 0x202A
 
 #define fevent_RELOAD                       0x2030
 #define fevent_STOP_LOADING                 0x2031
@@ -181,7 +190,9 @@
 #define fevent_CODEC_FAST_FORWARD	    0x20C4
 #define fevent_CODEC_RECORD		    0x20C5
 #define fevent_CODEC_MUTE		    0x20C6
-#define fevent_CODEC_CLOSE		    0x20C7
+#define fevent_CODEC_CLOSING		    0x20C7 /* codec toolbar is closing */
+#define fevent_CODEC_STOP_PAGE		    0x20C8 /* if page loading then stop it, else stop codec playing */
+#define fevent_CODEC_OPENING		    0x20C9 /* codec toolbar is opening */
 
 #define fevent_TOOLBAR_MOVE_LEFT	    0x20D0
 #define fevent_TOOLBAR_MOVE_RIGHT	    0x20D1

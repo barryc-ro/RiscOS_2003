@@ -491,11 +491,23 @@ void fe_report_error(const char *msg)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+os_error *feutils_open_behind_toolbar(wimp_w w)
+{
+    os_error *e;
+    wimp_wstate state;
+    e = wimp_get_wind_state(w, &state);
+    if (!e)
+    {
+	state.o.behind = fe_status_window_handle();
+	e = wimp_open_wind(&state.o);
+    }
+    return e;
+}
+
 os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_frame_info *ip, int bgcol, BOOL open, wimp_w *w_out)
 {
     os_error *e;
     wimp_wind bg_win;
-    wimp_wstate state;
 
     /* open a full screen window to display onto*/
     memset(&bg_win, 0, sizeof(bg_win));
@@ -541,17 +553,11 @@ os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_
     e = wimp_create_wind(&bg_win, w_out);
 
     if (open)
-    {
-	if (!e) e = wimp_get_wind_state(*w_out, &state);
-	if (!e)
-	{
-	    state.o.behind = fe_status_window_handle();
-	    e = wimp_open_wind(&state.o);
-	}
-    }
+	e = feutils_open_behind_toolbar(*w_out);
 
     return e;
 }
+
 
 /* min size of a window with a scroll bar*/
 
@@ -734,6 +740,8 @@ void feutils_resize_window(wimp_w *w, const wimp_box *margin, const wimp_box *bo
     {
 	if (state.o.behind == -1)
 	    state.o.behind = fe_status_window_handle();
+
+	STBDBG(("resize: open %x behind %x\n", state.o.w, state.o.behind));
 
         frontend_fatal_error(wimp_open_wind(&state.o));
     }
@@ -1051,7 +1059,7 @@ os_error *frontend_complain(os_error *e)
 
 	    msg.hdr.size = 28;
 	    msg.hdr.your_ref = 0;
-	    msg.hdr.action = MESSAGE_ERROR_BROADCAST;
+	    msg.hdr.action = (wimp_msgaction)MESSAGE_ERROR_BROADCAST;
 	    msg.data.words[0] = e->errnum;
 	    msg.data.words[1] = (int)&pending_error;
 	    wimp_sendmessage(wimp_ESENDWANTACK, &msg, 0);

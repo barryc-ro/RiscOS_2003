@@ -85,6 +85,8 @@ struct config_str
     int display_highlight_style;
     int display_highlight_width;
 
+    int display_tables;
+
     int proxy_http_on;
     int proxy_https_on;
     int proxy_gopher_on;
@@ -125,6 +127,7 @@ struct config_str
     int sound_background;
 
     wimp_paletteword colours[render_colour_COUNT];
+    wimp_paletteword *colour_list[render_colour_list_COUNT];
 
     /* Font configuration */
 
@@ -151,6 +154,23 @@ struct config_str
     int netscape_fake;
 
     int hots_length;
+
+    char *language_preference;
+    int browser_version;
+
+    char *image_blacklist;
+
+    char *publishing_fetch_prefix;
+    char *publishing_send_prefix;
+    char *publishing_more;
+    char *publishing_index_page;
+    int publishing_active;
+
+    int hots_run_hotlist;
+
+    int *key;			/* place holders fort NCFresco key and toolbar maps */
+    int *toolbar;
+    char *toolbar_name;
 };
 
 extern struct config_str config_array;
@@ -227,6 +247,7 @@ extern struct config_str config_array;
 
 #define config_display_highlight_style (config_array.display_highlight_style)
 #define config_display_highlight_width (config_array.display_highlight_width)
+#define config_display_tables (config_array.display_tables)
 
 #define config_proxy_http_on (config_array.proxy_http_on)
 #define config_proxy_https_on (config_array.proxy_https_on)
@@ -246,6 +267,7 @@ extern struct config_str config_array;
 #define config_proxy_ftp_ignore (config_array.proxy_ftp_ignore)
 
 #define config_colours (config_array.colours)
+#define config_colour_list (config_array.colour_list)
 
 #define config_font_sizes (config_array.font_sizes)
 #define config_font_names (config_array.font_names)
@@ -295,6 +317,23 @@ extern struct config_str config_array;
 
 #define config_netscape_fake (config_array.netscape_fake)
 #define config_hots_length (config_array.hots_length)
+
+#define config_publishing_more (config_array.publishing_more)
+#define config_publishing_fetch_prefix (config_array.publishing_fetch_prefix)
+#define config_publishing_send_prefix (config_array.publishing_send_prefix)
+#define config_publishing_index_page (config_array.publishing_index_page)
+#define config_publishing_active (config_array.publishing_active)
+
+#define config_language_preference (config_array.language_preference)
+
+#define config_hots_run_hotlist (config_array.hots_run_hotlist)
+
+/* Fresco uses this to automatically reset old config files to contain
+ * frames = yes
+ */
+#define config_browser_version (config_array.browser_version)
+
+#define config_image_blacklist (config_array.image_blacklist)
 
 #endif
 

@@ -166,6 +166,9 @@ struct _frontend_view
 
     int pending_user;
     char *pending_user_name;
+
+    char *onload, *onunload,	/* ncfrescointernal functions to be called after loading and unloading */
+	*onblur;
 };
 
 /* ----------------------------------------------------------------------------- */

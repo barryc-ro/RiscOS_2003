@@ -21,6 +21,7 @@ extern os_error pending_error;
 extern int use_anti_twitter;
 
 extern int fe_pending_event;
+extern int fe_pending_key;
 
 #define TASK_MAGIC	0x4B534154
 
@@ -112,19 +113,6 @@ extern os_error *fe_display_options_open(fe_view v);
 extern void fe_event_process(void);
 
 extern void fe_scroll_changed(fe_view v, int x, int y);
-
-
-#define key_list_CLICK      0x01    /* make an audible click*/
-#define key_list_REPEAT     0x01    /* allow key to auto repeat*/
-
-typedef struct
-{
-    unsigned short key;
-    unsigned short event;
-    int flags;
-} key_list;
-
-extern int fe_key_lookup(int chcode, const key_list *keys);
 extern void fe_menu_event_handler(int event);
 
 extern BOOL fe_item_screen_box(fe_view v, be_item ti, wimp_box *box);
@@ -181,8 +169,12 @@ extern fe_passwd fe_current_passwd;
 extern BOOL fe_passwd_abort(void);
 extern void fe_internal_deleting_view(fe_view v);
 extern os_error *fe_internal_toggle_panel(const char *panel_name);
+extern os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args);
 extern void fe_internal_flush(void);
 extern void fe_internal_optimise(void);
+
+typedef void (*write_list_fn)(FILE *f, void *handle);
+extern void fe_internal_write_page(FILE *f, const char *base_tag, int initial, int frame, write_list_fn write_list, void *handle);
 
 /* from stbredraw.c*/
 
@@ -206,7 +198,7 @@ extern fe_view fe_map_view(void);
 extern void fe_map_mode(fe_view v, be_item ti);
 extern void fe_map_event_handler(int event, fe_view v);
 
-/* from stbkeys.c*/
+/* from stbkeys.c */
 
 #define fe_browser_mode_UNSET           (-1)
 #define fe_browser_mode_WEB             0
@@ -217,7 +209,10 @@ extern void fe_map_event_handler(int event, fe_view v);
 #define fe_browser_mode_APP		5
 
 extern void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_mode);
-extern void stbkeys_init(void);
+
+extern void stbkeys_list_add(const void *info);
+extern void stbkeys_list_clear(void);
+extern void stbkeys_list_loaded(void);
 
 /* from ncreg.c */
 

@@ -118,7 +118,7 @@ extern void bump_current_indent(SGMLCTX *context)
     {
 	x += INDENT_WIDTH;
 	SET_EFFECTS(context->tos, STYLE_INDENT, x);
-	PRSDBGN(("bump_current_indent(%p): now %d\n", context, x));
+	/*PRSDBGN(("bump_current_indent(%p): now %d\n", context, x));*/
     }
     else
     {

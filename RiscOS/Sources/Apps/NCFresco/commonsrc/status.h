@@ -33,6 +33,7 @@ typedef enum {
     status_PUTTING_BODY,                /*   F Putting the data/file itself */
 #endif
     status_SENDING_GENERIC_COMMAND,     /*   F Executing generic command */
+
     /* Data all done */
     status_FINISHING = 400,		/*   F Tidying up after a transfer */
 
@@ -47,7 +48,7 @@ typedef enum {
     status_BAD_FILE_TYPE,		/* H   Frontend cannot handle file type */
     status_FAIL_VERIFY,                 /* h   Remote host identity couldn't be verified */
     status_FAIL_LOCAL,                  /* H   Local failure (eg no disc space) */
-    status_COMPLETED_PART,		/* H */
+    status_COMPLETED_PART,		/* H   Done one part of a server push */
     status_COMPLETED_GENERIC_COMMAND,   /*   F Generic command completed */
     status_FAIL_FOUND                   /* H   File requested wasn't found - error page returned instead */
     } transfer_status;

@@ -68,6 +68,12 @@
 
 #define INPUT_BUTTON_BORDER_X	10
 
+#ifdef STBWEB
+#define INPUT_BUTTON_BORDER_Y	8
+#else
+#define INPUT_BUTTON_BORDER_Y	4
+#endif
+
 /* ---------------------------------------------------------------------- */
 
 #define BUTTON_NAME_OPTION	4
@@ -363,8 +369,8 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(whichfont, t) + INPUT_BUTTON_BORDER_X*2;
 	    if (ii->hh.type != value_absunit)
 	    {
-		ti->max_up = wf->max_up + 4;
-		ti->max_down = wf->max_down + 4;
+		ti->max_up = wf->max_up + INPUT_BUTTON_BORDER_Y;
+		ti->max_down = wf->max_down + INPUT_BUTTON_BORDER_Y;
 	    }
 	    else
 	    {
@@ -373,8 +379,8 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	    }
 #else
 	    ti->width = webfont_tty_width(strlen(t), 1) + INPUT_BUTTON_BORDER_X*2;
-	    ti->max_up = webfonts[WEBFONT_BUTTON].max_up + 4;
-	    ti->max_down = webfonts[WEBFONT_BUTTON].max_down + 4;
+	    ti->max_up = webfonts[WEBFONT_BUTTON].max_up + INPUT_BUTTON_BORDER_Y;
+	    ti->max_down = webfonts[WEBFONT_BUTTON].max_down + INPUT_BUTTON_BORDER_Y;
 #endif
 	}
 	break;
@@ -433,7 +439,13 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
 void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
+#ifndef BUILDERS
     oinput_size_allocate(ti, rh, doc, 0);
+#else
+    ti->width = 10;		/* yuch! */
+    ti->max_up = 5;
+    ti->max_down = 0;
+#endif
 }
 
 void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update)
@@ -548,26 +560,22 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    for (i = 0; i < n; i++)
 	    {
 		BOOL select = has_caret && i == doc->selection.data.text.input_offset;
-		render_plinth_full(select ? bg : bg1,
-				   select ? plinth_col_HL_M : plinth_col_M,
-				   select ? plinth_col_HL_L : plinth_col_L,
-				   select ? plinth_col_HL_D : plinth_col_D,
-				   render_plinth_RIM | render_plinth_DOUBLE_RIM,
-				   hpos + i * (NUMBERS_SPACING_X + char_width),
-				   bline - ti->max_down,
-				   char_width + 2*INPUT_TEXT_BORDER_X, (ti->max_up + ti->max_down),
-				   doc );
+		render_plinth_from_list(select ? bg : bg1,
+					select ? config_colour_list[render_colour_list_WRITE_HIGHLIGHT] : config_colour_list[render_colour_list_WRITE],
+					0,
+					hpos + i * (NUMBERS_SPACING_X + char_width),
+					bline - ti->max_down,
+					char_width + 2*INPUT_TEXT_BORDER_X, (ti->max_up + ti->max_down),
+					doc );
 	    }
 	}
 	else
 	{
-	    render_plinth_full(bg,
-			       has_caret ? plinth_col_HL_M : plinth_col_M,
-			       has_caret ? plinth_col_HL_L : plinth_col_L,
-			       has_caret ? plinth_col_HL_D : plinth_col_D,
-			       render_plinth_RIM | render_plinth_DOUBLE_RIM,
-			       hpos, bline - ti->max_down,
-			       ti->width, (ti->max_up + ti->max_down), doc );
+	    render_plinth_from_list(bg,
+				    has_caret ? config_colour_list[render_colour_list_WRITE_HIGHLIGHT] : config_colour_list[render_colour_list_WRITE],
+				    0,
+				    hpos, bline - ti->max_down,
+				    ti->width, (ti->max_up + ti->max_down), doc );
 	}
 #else
 	render_plinth(bg, render_plinth_RIM | render_plinth_IN,
@@ -650,7 +658,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    else
 		im = (image)ii->data.button.im;
 
-#if 1
 	    if (oinput_image_renderable(ii, im, doc))
 	    {
 		image_render(im,
@@ -664,14 +671,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 			      hpos, bline - ti->max_down,
 			      ti->width, (ti->max_up + ti->max_down), doc);
 
-/* 		oimage_render_text(ti, doc, fs, &bbox, ""); */
 	    }
-#else	    
-	    image_render(im,
-			 hpos, bline - ti->max_down,
-			 ti->width/2, (ti->max_up + ti->max_down)/2,
-			 doc->scale_value, antweb_render_background, doc, oox, ooy);
-#endif
+
 	    fontnum = ti->st.wf_index;
 	    plotx = (ti->width - webfont_font_width(ti->st.wf_index, t))/2;
 	    if (plotx < INPUT_BUTTON_BORDER_X)
@@ -695,13 +696,11 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 		bg = (ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB);
 
 #ifdef STBWEB
-	    render_plinth_full(bg,
-			       selected ? plinth_col_HL_M : plinth_col_M,
-			       selected ? plinth_col_HL_L : plinth_col_L,
-			       selected ? plinth_col_HL_D : plinth_col_D,
-			       render_plinth_RIM | render_plinth_DOUBLE_RIM,
-			       hpos, bline - ti->max_down,
-			       ti->width, (ti->max_up + ti->max_down), doc );
+	    render_plinth_from_list(bg,
+				    selected ? config_colour_list[render_colour_list_BUTTON_HIGHLIGHT] : config_colour_list[render_colour_list_BUTTON],
+				    0,
+				    hpos, bline - ti->max_down,
+				    ti->width, (ti->max_up + ti->max_down), doc );
 	    fontnum = ti->st.wf_index;
 #else
 	    render_plinth(bg,
@@ -1281,7 +1280,8 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	{
 	    if (ii->flags & rid_if_NUMBERS)
 	    {
-		if (isdigit(key))
+		if ( isdigit(key) ||
+		    ((ii->flags & rid_if_PABX) && (key == '#' || key == ',' || key == '*')) )
 		{
 		    if (i >= ii->max_len)
 			i = ii->max_len-1;
@@ -1540,6 +1540,7 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 	}
 	break;
     }
+
     return NULL;
 }
 

@@ -20,6 +20,10 @@
  *		 16bpp to 32bpp and vice versa.
  * 19/9/96: SJM: changed hard coded 68 for default images to size read from image
  * 29/5/97: pdh: always use logical sizes
+ *  1/7/97: pdh: sort out kortinkised GIFs once and for all (required gif dll
+ *               changes). If the LSD size is less than the FD size, Netscape
+ *               uses the LSD size if it's a GIF89 and the FD size if it's a
+ *               GIF87! Now Fresco does too.
  */
 
 #include <limits.h>
@@ -59,7 +63,7 @@
 #include "threads.h"
 #include "version.h"
 #include "unwind.h"
-
+#include "auth.h"
 #include "files.h"
 
 /* ------------------------------------------------------------------------- */
@@ -965,7 +969,7 @@ static char *image_thread_end(image i)
     _kernel_osbyte(0x7C, 0xFF, 0);
 
     if (i->tt->status == thread_ALIVE)
-	res = "Thread did not finnish";
+	res = "Thread did not finish";
     else
 	res = (char *) (long) i->tt->rc;
 
@@ -1255,25 +1259,22 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 		if (i->plotter == plotter_SPRITE)
 		{
 		    sprite_info info;
+		    os_error *ep;
 
-		    sprite_readsize(i->our_area, &i->id, &info);
+		    ep = sprite_readsize(i->our_area, &i->id, &info);
 
-		    /* If we'd used the logical size and it wasn't an animation then go back to the real size */
-		    /* Don't know if this will work from the cache or not */
+                    IMGDBG(( "image_completed: sprite_readsize gives %dx%d\n",
+		             info.width, info.height ));
 
-		    /* pdh
-		    if ( i->flags & image_flag_USE_LOGICAL
-		         && i->file_type == FILETYPE_SPRITE )
+		    if ( ep )
 		    {
-			if (i->frame == NULL)
-			{
-			    i->width = info.width;
-			    i->height = info.height;
-			}
-
-			fillin_scales(i, info.mode);
+		        /* For instance, New Sprite on RiscOS 3.1 */
+		        IMGDBG(( "image_completed: sprite_readsize gives %s\n",
+		                 ep->errmess ));
+                        free_data_area(&i->data_area);
+		        free_area(&i->our_area);
+		        image_set_error(i);
 		    }
-		    */
 		}
 	    }
 	    else
@@ -1458,6 +1459,11 @@ void image_palette_change(void)
     }
 }
 
+void image_defer( image i )
+{
+    i->flags |= image_flag_DEFERRED;
+}
+
 static void image_fetch_next(void)
 {
     image i;
@@ -1466,8 +1472,8 @@ static void image_fetch_next(void)
 
     for (i=image_list; (being_fetched < config_max_files_fetching) && (i != NULL); i = i->next)
     {
-	/* Pick ones that are waiting and not deferred */
-	if ((i->flags & (image_flag_WAITING | image_flag_DEFERRED)) == image_flag_WAITING)
+	/* Pick ones that are waiting and not deferred or blacklisted */
+	if ((i->flags & (image_flag_WAITING | image_flag_DEFERRED | image_flag_BLACKLIST)) == image_flag_WAITING)
 	{
 	    os_error *ep;
 	    int aflags;
@@ -1679,6 +1685,12 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	    i->flags |= image_flag_DEFERRED;
 
 	set_default_image(i, (flags & image_find_flag_DEFER) ? SPRITE_NAME_DEFERRED : SPRITE_NAME_UNKNOWN, TRUE);
+
+        if ( blacklist_match(url) )
+        {
+            set_default_image( i, "black", TRUE );
+            i->flags |= image_flag_BLACKLIST;
+        }
 
 	i->find_flags = flags;
 	i->cache_bgcol = bgcol;
@@ -2154,7 +2166,7 @@ int image_memory_panic(void)
 
 	    /* call thread end to ensure that all the thread/image heap memory gets freed */
 	    image_thread_end(i);	    IMGDBG(("..0"));
-	    
+
 	    free_area(&i->our_area);        IMGDBG(("..1"));
 	    free_area(&i->cache_area);      IMGDBG(("..2"));
 	    free_data_area(&i->data_area);  IMGDBG(("..3"));
@@ -2273,6 +2285,9 @@ os_error *image_flush(image i, int flags)
 	i->flags |= image_flag_DEFERRED;
     else
 	i->flags &= ~image_flag_DEFERRED;
+
+    if ( flags & image_find_flag_FORCE )
+        i->flags &= ~image_flag_BLACKLIST;
 
     /* Move the image to the front of the queue if we're not already */
     if (i->prev != NULL)
@@ -2608,23 +2623,20 @@ static void fixup_scale(sprite_factors *facs, int scale_image)
 
 static void check_scaling(image i, sprite_id *id, int w, int h, int scale_image, sprite_factors *facs)
 {
+    /* pdh: cope with being given New Sprites on 3.1 */
+    if ( i->width == 0 || i->height == 0 )
+    {
+        image_set_error(i);
+        return;
+    }
+
     if ((i->flags & (image_flag_REALTHING|image_flag_ERROR|image_flag_DEFERRED)) == image_flag_REALTHING && (w != -1 && h != -1))
     {
-#if 0   /*pdh*/
-	facs->xmag = w*2;
-	facs->xdiv = i->width * i->dx;
-	facs->ymag = h*2;
-	facs->ydiv = i->height * i->dy;
-#else
-	/* We use this here as sprite may not agree with the values in the image header (if logical size wrong) */
-	sprite_info info;
-	sprite_readsize((sprite_area *)0xff, id, &info);
-
-	facs->xmag = w*2;
-	facs->xdiv = info.width << bbc_modevar(-1, bbc_XEigFactor);
-	facs->ymag = h*2;
-	facs->ydiv = info.height << bbc_modevar(-1, bbc_YEigFactor);
-#endif
+        /* pdh 2 Jul 97: like this to get it right for Mode 12 sprites */
+        facs->xmag = w*2;
+        facs->xdiv = i->width << bbc_modevar( -1, bbc_XEigFactor );
+        facs->ymag = h*2;
+        facs->ydiv = i->height << bbc_modevar( -1, bbc_YEigFactor );
     }
     else
     {

@@ -81,6 +81,7 @@
 
 #include "cookie.h"
 #include "images.h"
+#include "gbf.h"
 
 #ifdef CBPROJECT
 #include "cbtoolbar.h"
@@ -171,6 +172,7 @@ typedef struct _access_item {
 	    char *passwd;
 	    fe_passwd pw;	/* Used while we are waiting for a userid/passwd pair. */
 	    int had_passwd;     /* Set if we hav eto ask the user for a password */
+	    realm rr;           /* If we've built a realm for this uid/passwd */
 	} ftp;
 	struct {
 	    int fh;
@@ -215,7 +217,6 @@ static void access_unlink(access_handle h);
 static void access_link(access_handle h);
 static void access_reschedule(alarm_handler fn, access_handle d, int dt);
 #ifndef FILEONLY
-static void access_http_fetch_done(access_handle d, http_status_args *si);
 static os_error *gopher_set_file_type(char *fname, char tag, int *ftptr);
 static void access_redirect_progress(void *h, int status, int size, int so_far, int fh, int ftype, char *url);
 static access_complete_flags access_redirect_complete(void *h, int status, char *cfile, char *url);
@@ -276,6 +277,12 @@ static http_header_item accept_type_hdr = {
     NULL,
     "Accept",
     "text/html, image/gif, image/jpeg, image/pjpeg, image/png, */*; q=.2"
+    };
+
+static http_header_item accept_language_hdr = {
+    NULL,
+    "Accept-Language",
+    NULL
     };
 
 static http_header_item authenticate_hdr = {
@@ -750,6 +757,8 @@ static os_error *access_ftp_fetch_start(access_handle d)
 {
     ftp_open_args ftpo;
     os_error *ep = NULL;
+    BOOL put = (d->flags & access_UPLOAD);
+
     ACCDBGN(( "Opening connection: host=0x%08x, port=0x%04x\n", (int) d->addr.sin_addr.s_addr, d->addr.sin_port));
     ftpo.in.addr = &d->addr;
     ftpo.in.user_name = d->data.ftp.user;
@@ -757,8 +766,11 @@ static os_error *access_ftp_fetch_start(access_handle d)
     ftpo.in.acct = NULL;
     ftpo.in.path = d->request_string;
     ftpo.in.local_name = d->ofile ? d->ofile : cache->scrapfile_name();
-    ftpo.in.flags = 0;
+    ftpo.in.flags = put ? webftp_open_ftpcmd : 0;
     ftpo.in.maxidle = FTP_IDLE_TIME;
+    ftpo.in.ftp_cmd = put ? FTP_CMD_PUT : FTP_CMD_GET;
+
+    ACCDBG(( "WebFTP_Open(%s)\n", put ? "PUT" : "GET" ));
 
     ep = os_swix(WebFTP_Open, (os_regset *) &ftpo);
 
@@ -798,7 +810,7 @@ static os_error *access_http_fetch_start(access_handle d)
 	content_type_hdr.next = hlist;
 	hlist = &content_type_hdr;
     }
-    
+
     if (d->referer)
     {
 	referer_hdr.next = hlist;
@@ -818,6 +830,12 @@ static os_error *access_http_fetch_start(access_handle d)
 	from_hdr.next = hlist;
 	from_hdr.value = config_email_addr;
 	hlist = &from_hdr;
+    }
+    if ( config_language_preference )
+    {
+        accept_language_hdr.next = hlist;
+        accept_language_hdr.value = config_language_preference;
+        hlist = &accept_language_hdr;
     }
 
     /* normal authentication */
@@ -1341,32 +1359,6 @@ static void access_http_fetch_alarm(int at, void *h)
 
 	d->ftype = httpft.out.ftype;
 	d->ft_is_set = 1;
-
-#if 0
-#define MIME_TYPE_SERVER_PUSH	"MULTIPART/X-MIXED-REPLACE"
-	/* check and see if it is a server-push stream */
-	/* must do before the extension checking */
-	if (d->ftype == 0xffd)
-	{
-	    http_header_item *list;
-	    MemCheck_checking checking = MemCheck_SetChecking(0, 0);
-
-	    for (list = si.out.headers; list; list = list->next)
-	    {
-		if (strcasecomp(list->key, "CONTENT-TYPE") == 0)
-		{
-		    if (strncasecomp(list->value, MIME_TYPE_SERVER_PUSH, sizeof(MIME_TYPE_SERVER_PUSH)-1) == 0)
-		    {
-			usrtrc("server-push: %s\n", d->url);
-			si.out.status = status_BAD_FILE_TYPE;
-		    }
-		    break;
-		}
-	    }
-
-	    MemCheck_RestoreChecking(checking);
-	}
-#endif
 
 	/* this fixes a problem where a file is typed as octet-stream or
 	 * something unknown rather than its real type but it has an extension */
@@ -1906,7 +1898,10 @@ static void access_ftp_fetch_alarm(int at, void *h)
 	{
 	    int s = access_can_handle_file_type(ft, ftps.out.data_total);
 	    if (s)
-		ftps.out.status = status = s;
+	    {
+		status = s;
+		ftps.out.status = (transfer_status)status;
+	    }
 	}
     }
 
@@ -1970,8 +1965,27 @@ static void access_ftp_fetch_alarm(int at, void *h)
 
 	mm_free(cfile);
 
-        if (d->data.ftp.had_passwd && config_passwords_uptodate)
-            auth_write_realms(config_auth_file, config_auth_file_crypt ? auth_passwd_UUCODE : auth_passwd_PLAIN);
+	if ( status == status_FAIL_PASSWORD )
+	{
+	    char *scheme, *netloc, *realm_name;
+
+	    ACCDBG(("FTP password was wrong! Forgetting realm!\n"));
+            url_parse(d->url, &scheme, &netloc, NULL, NULL, NULL, NULL);
+
+            realm_name = url_unparse(scheme, netloc, 0, 0, 0, 0);
+
+            auth_forget_realm( auth_lookup_realm(realm_name) );
+
+            mm_free( realm_name );
+            mm_free( scheme );
+            mm_free( netloc );
+	}
+	else if (d->data.ftp.had_passwd && config_passwords_uptodate)
+	{
+            auth_write_realms( config_auth_file,
+                               config_auth_file_crypt ? auth_passwd_UUCODE
+                                                      : auth_passwd_PLAIN);
+        }
 
 	access_unlink(d);
 
@@ -2158,7 +2172,8 @@ static BOOL access_file_fetch(access_handle d)
 	    d->data.file.ofh = 0;
 	}
 
-	if (cache->header_info)
+	/* only update the header info if this is a file: read, not from the cache */
+	if ((d->flags & access_FROM_CACHE) == 0 && cache->header_info)
 	    cache->header_info(d->url, time(NULL), d->data.file.last_modified, UINT_MAX);
 
 	d->complete(d->h, status_COMPLETED_FILE, d->ofile ? d->ofile : d->data.file.fname, d->url);
@@ -2202,6 +2217,11 @@ static void access_file_fetch_alarm(int at, void *h)
     access_file_fetch(d);
 }
 
+BOOL access_fromcache( access_handle h )
+{
+    return h->access_type == access_type_FILE;
+}
+
 static os_error *access_new_file(const char *file, int ft, char *url, access_url_flags flags, char *ofile,
 				 access_progress_fn progress, access_complete_fn complete,
 				 void *h, access_handle *result)
@@ -2226,6 +2246,17 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	{
 	    d->ofile = strdup(ofile);
 	    d->data.file.ofh = ro_fopen(ofile, RO_OPEN_WRITE);
+	    if ( d->data.file.ofh == 0 )
+	    {
+	        /* pdh: failed to open the file. This is a real error and the
+		 * public should be told!
+		 */
+	        ep = (os_error*)_kernel_last_oserror();
+		mm_free( d->url );
+		mm_free( d );
+		*result = NULL;
+		return ep;
+	    }
 	    set_file_type(ofile, ft);
 
 	    ACCDBG(("access_new_file: ofile %s fh %d\n", ofile, d->data.file.ofh));
@@ -2244,7 +2275,7 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	d->data.file.last_modified = file_last_modified(file);
 
 	/* if it is a priority item then fetch the whole thing right now (eg background image) */
-	if (flags & access_MAX_PRIORITY)
+	if ( (flags & access_MAX_PRIORITY) || gbf_active(GBF_FILES_IN_ONE_GO) )
 	{
 	    d->data.file.chunk = d->data.file.size;
 	    if (!access_file_fetch(d))
@@ -2272,6 +2303,12 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
     }
 
     *result = d;
+
+    if ( ep )
+    {
+        ACCDBG(("access_new_file: returning error %s\n", ep->errmess ));
+    }
+
     return ep;
 }
 
@@ -2570,6 +2607,7 @@ static void access_ftp_passwd_callback(fe_passwd pw, void *handle, char *user, c
     {
 	auth_add(realm_name, rr);
 	d->data.ftp.had_passwd = 1;
+	d->data.ftp.rr = rr;
 
 	access_url(d->url, d->flags, d->ofile, NULL, d->url,
 		   &access_redirect_progress, &access_redirect_complete, d, &(d->redirect));
@@ -2815,7 +2853,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 #ifndef FILEONLY
     /* NO cacheing in fileonly version */
 
-    if (flags & access_NOCACHE)
+    if (flags & (access_NOCACHE|access_UPLOAD))
     {
 	cache->remove(url);
 	cfile = NULL;
@@ -2851,7 +2889,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 	if (ep == NULL && !file_missing)
 	{
-	    ep = access_new_file(cfile, -1/* file_type(cfile) */, url, flags, ofile, progress, complete, h, result);
+	    ep = access_new_file(cfile, -1/* file_type(cfile) */, url, flags | access_FROM_CACHE, ofile, progress, complete, h, result);
 	    if (ep)
 		file_missing = TRUE;
 	}
@@ -3064,6 +3102,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		flags |= access_MAX_PRIORITY;
 #endif
 		ep = access_new_file(cfile, ft, url, flags, ofile, progress, complete, h, result);
+		if ( ep )
+		    ACCDBG(("access_new_file returns %s\n", ep->errmess ));
 	    }
 
 	    mm_free(cfile);
@@ -3361,7 +3401,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		char *new_url;
 
 		url_parse(proxy, &scheme1, &netloc1, &path1, &params1, &query1, &frag1);
-	    
+
 		new_url = url_unparse(scheme1, netloc1, path1 ? path1 : "/", params1, query1, frag1);
 
 		buffer = strcatx1(NULL, new_url);
@@ -3416,7 +3456,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    ACCDBG(("access_url: mailto: config '%s' gstransed '%s'\n",
 		    config_proxy_mailto ? config_proxy_mailto : "<null>",
 		    proxy ? proxy : "<null>"));
-	    
+
 	    mm_free(proxy);
 	}
 #if INTERNAL_URLS
@@ -3441,7 +3481,10 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
     }
 
     if (ep)
+    {
 	*result = NULL;
+	ACCDBG(("access_url: returning error %s\n", ep->errmess ));
+    }
 
     visdelay_end();
 
@@ -3713,6 +3756,16 @@ void access_optimise_cache(void)
     if (cache->optimise)
 	cache->optimise();
 #endif
+}
+
+char *access_cache_lookup( char *url )
+{
+    return cache->lookup( url, FALSE );
+}
+
+void access_cache_lookup_free( char *fname )
+{
+    cache->lookup_free_name( fname );
 }
 
 #ifdef STBWEB

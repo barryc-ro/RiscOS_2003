@@ -37,201 +37,11 @@
 #include "fevents.h"
 #include "hotlist.h"
 
+#include "tbhdrs.h"
+
 /* --------------------------------------------------------------------------*/
 
 #define LIGHT_OFF_DELAY     (2*100)
-
-/* --------------------------------------------------------------------------*/
-
-typedef void (*tb_bar_entry_fn)(fe_view v);
-typedef void (*tb_bar_exit_fn)();
-
-typedef struct
-{
-    char *tv_name;
-    char *monitor_name;
-
-    tb_bar_entry_fn entry_fn;
-    tb_bar_exit_fn exit_fn;
-
-    int initial_component;	/* when moving onto it */
-    int open_component;		/* when opening it */
-    int return_component;
-
-    int can_grey;
-
-    int return_bar;		/*  -1 means stack */
-} tb_bar_descriptor;
-
-#define BAR_CANT	(-2)
-#define BAR_STACK	(-1)
-#define BAR_MAIN	0
-#define BAR_EXTRAS	2
-#define BAR_STATUS	8
-#define BAR_CODEC	9
-
-/* --------------------------------------------------------------------------*/
-
-#define Toolbox_CreateObject                    0x44EC0
-#define Toolbox_DeleteObject                    0x44EC1
-#define Toolbox_ShowObject                      0x44EC3
-#define Toolbox_HideObject                      0x44EC4
-#define Toolbox_GetObjectInfo                   0x44EC5
-#define Toolbox_ObjectMiscOp                    0x44EC6
-#define Toolbox_SetClientHandle                 0x44EC7
-#define Toolbox_GetClientHandle                 0x44EC8
-#define Toolbox_GetObjectClass                  0x44EC9
-#define Toolbox_GetParent                       0x44ECA
-#define Toolbox_GetAncestor                     0x44ECB
-#define Toolbox_GetTemplateName                 0x44ECC
-#define Toolbox_RaiseToolboxEvent               0x44ECD
-#define Toolbox_GetSysInfo                      0x44ECE
-#define Toolbox_Initialise                      0x44ECF
-#define Toolbox_TemplateLookUp                  0x44EFB
-
-#define Window_WimpToToolbox                    0x82884
-#define Gadget_GetHelpMessage                   0x43
-
-#define Menu_GetClickEvent			15
-
-/* --------------------------------------------------------------------------*/
-
-/* Some toolbox headers from OSLib for convenience*/
-
-struct toolbox_resource_file_object
-{
-    int class_no;
-    int flags;
-    int version;
-    char name [12];
-    int size;
-    int header_size;
-    int body_size;
-/*  int object [UNKNOWN];*/
-};
-
-typedef char *toolbox_msg_reference;
-typedef char *toolbox_string_reference;
-typedef void *toolbox_sprite_area_reference;
-typedef int *toolbox_object_offset;
-
-struct menu_object
-{
-    int flags;
-    toolbox_msg_reference title;
-    int title_limit;
-    toolbox_msg_reference help;
-    int help_limit;
-    int show_action;
-    int hide_action;
-    int entry_count;
-/*  menu_entry_object entries [UNKNOWN];*/
-};
-
-typedef struct
-{
-    int x, y;
-} os_coord;
-
-typedef struct
-{
-    int     size;
-    int     ref_no;
-    int     action_no;
-    int     flags;
-    union
-    {
-	char          bytes [212];
-	int           words [53];
-    } data;
-} toolbox_action;
-
-union window_icon_data
-{
-    struct
-    {
-	toolbox_msg_reference text;
-	toolbox_string_reference validation;
-	int size;
-    }
-    indirected_text;
-};
-
-struct window_window
-{
-    wimp_box visible;
-    int xscroll;
-    int yscroll;
-    wimp_w next;
-    int flags;
-    char title_fg;
-    char title_bg;
-    char work_fg;
-    char work_bg;
-    char scroll_outer;
-    char scroll_inner;
-    char highlight_bg;
-    char reserved;
-    wimp_box extent;
-    int title_flags;
-    int work_flags;
-    toolbox_sprite_area_reference sprite_area;
-    short xmin;
-    short ymin;
-    union window_icon_data title_data;
-    int icon_count;
-};
-
-struct window_object
-{
-    int flags;
-    toolbox_msg_reference help_message;
-    int help_limit;
-    toolbox_string_reference sprite_name;
-    int pointer_limit;
-    os_coord hotspot;
-    toolbox_string_reference menu_name;
-    int shortcut_count;
-    toolbox_object_offset shortcuts;
-    int gadget_count;
-    toolbox_object_offset gadgets;
-    int default_focus;
-    int show_action;
-    int hide_action;
-    toolbox_string_reference toolbar_ibl;
-    toolbox_string_reference toolbar_itl;
-    toolbox_string_reference toolbar_ebl;
-    toolbox_string_reference toolbar_etl;
-    struct window_window window;
-/*  int data [UNKNOWN];*/
-};
-
-struct menu_entry_object
-{
-    int flags;
-    int cmp;
-    char *text;
-    int text_limit;
-    char *click_object_name;
-    char *sub_menu_object_name;
-    int sub_menu_action;
-    int click_action;
-    char *help;
-    int help_limit;
-};
-
-struct gadget_object
-{   int flags;
-    int class_no;
-    wimp_box bbox;
-    int cmp;
-    toolbox_msg_reference help_message;
-    int help_limit;
-/*  int gadget [UNKNOWN]; */
-};
-
-/* --------------------------------------------------------------------------*/
-/* --------------------------------------------------------------------------*/
 
 typedef enum
 {
@@ -254,9 +64,42 @@ typedef enum
 
 /* --------------------------------------------------------------------------*/
 
-typedef struct tb_bar_info tb_bar_info;
+#define bar_type_STANDARD	0
+#define bar_type_MAIN		1
+#define bar_type_CODEC		2
 
+#define bar_parent_STACK	(-1)
+
+/* --------------------------------------------------------------------------*/
+
+typedef struct tb_bar_descriptor tb_bar_descriptor;
+typedef struct tb_bar_info tb_bar_info;
 typedef struct tb_button_info tb_button_info;
+
+/* This describes the bars available */
+
+struct tb_bar_descriptor
+{
+    tb_bar_descriptor *next;
+
+    int number;
+    int type;
+    
+    int entry_event;
+    int exit_event;
+    
+    int initial_component;	/* when moving onto it */
+    int open_component;		/* when opening it */
+
+    int return_bar;		/*  -1 means stack */
+    int return_component;
+
+    int can_grey;
+
+    char *name;
+};
+
+/* This describes the bar currently open */
 
 struct tb_bar_info
 {
@@ -265,6 +108,7 @@ struct tb_bar_info
     int object_handle;
     wimp_w window_handle;
     int num;
+    int type;
     int height;
 
     tb_button_info *buttons;	/* the buttons visible in the window, sorted */
@@ -280,28 +124,69 @@ struct tb_button_info
     int cmp;			/* component number */
 };
 
+/* --------------------------------------------------------------------------*/
+
+static tb_bar_descriptor *bar_descriptor_list;
+
+static tb_bar_descriptor *find_bar_from_number(int number)
+{
+    tb_bar_descriptor *tbd;
+    for (tbd = bar_descriptor_list; tbd; tbd = tbd->next)
+    {
+	if (tbd->number == number)
+	    return tbd;
+    }
+    return NULL;
+}
+
+static tb_bar_descriptor *find_bar_from_type(int type)
+{
+    tb_bar_descriptor *tbd;
+    for (tbd = bar_descriptor_list; tbd; tbd = tbd->next)
+    {
+	if (tbd->type == type)
+	    return tbd;
+    }
+    return NULL;
+}
+
+static tb_bar_descriptor *find_bar_from_name(const char *name)
+{
+    tb_bar_descriptor *tbd;
+    for (tbd = bar_descriptor_list; tbd; tbd = tbd->next)
+    {
+	if (tbd->name && strcmp(tbd->name, name) == 0)
+	    return tbd;
+    }
+    return NULL;
+}
+
+/* --------------------------------------------------------------------------*/
+/* --------------------------------------------------------------------------*/
+
 /* linked list of tool bars open. The one at the head of the list (*bar_list)
  * is the one currently visible
  */
 
 static tb_bar_info *bar_list = NULL;
+
 static void *tile_sprite = NULL;
+
 static int secure_light = FALSE;
 
 /* --------------------------------------------------------------------------*/
-/* --------------------------------------------------------------------------*/
 
-/* messagetrans and toolbox id blocks*/
+/* messagetrans and toolbox id blocks */
 static int m_block[4];
 static int tb_block[6];
 
-/* list of supported toolbox messages*/
+/* list of supported toolbox messages */
 static int tb_list[] =
 {
     0
 };
 
-/* toolbox object handles*/
+/* toolbox object handles */
 static int menu_object[2] = { 0, 0 };
 
 /* --------------------------------------------------------------------------*/
@@ -709,7 +594,7 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
     int active = get_active(tbi);
 
     /* if there is an active highlight then can only move off it - unless on the codec toolbar */
-    if (active != -1 && active != highlight && tbi->num != BAR_CODEC)
+    if (active != -1 && active != highlight && tbi->type != bar_type_CODEC)
 	return FALSE;
     
     /* get the position of the item we are moving off */
@@ -752,6 +637,7 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
 
 /* --------------------------------------------------------------------------*/
 
+#if 0
 static void *sprite_load(const char *file_name)
 {
     int type, size;
@@ -775,7 +661,9 @@ static void *sprite_load(const char *file_name)
     }
     return area;
 }
+#endif
 
+#if 0
 /* Check for the tile in a global place and in our own directory for standalone releases */
 
 static void *sprite_load_tile(const char *suffix)
@@ -801,6 +689,7 @@ static void *sprite_load_tile(const char *suffix)
 
     return sprite_area;
 }
+#endif
 
 /* --------------------------------------------------------------------------*/
 
@@ -864,120 +753,94 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
 
 /* --------------------------------------------------------------------------*/
 
-static void tb_bar_favs_exit_fn(void)
+typedef struct
 {
-    frontend_complain(hotlist_flush_pending_delete());
+    int count;
+
+    /* mandatory */
+    int number;			/* this bar */
+    int type;
+
+    int entry_event;
+    int exit_event;
+    
+    int initial_component;	/* when moving onto it */
+    int open_component;		/* when opening it */
+
+    int return_bar;		/*  -1 means stack */
+    int return_component;
+
+    /* optional */
+    int can_grey;
+
+} config_toolbar_info;
+
+
+void tb_bar_add(const void *info)
+{
+    const config_toolbar_info *ti = (const config_toolbar_info *)info;
+    tb_bar_descriptor *tbd;
+    
+    if (ti->count < 5)
+	return;
+
+    /* fill in values */
+    tbd = mm_calloc(1, sizeof(*tbd));
+
+    tbd->number = ti->number;
+    tbd->type = ti->type;
+
+    tbd->entry_event = ti->entry_event;
+    tbd->exit_event = ti->exit_event;
+    
+    tbd->initial_component = ti->initial_component;
+    tbd->open_component = ti->open_component;
+
+    tbd->return_bar = ti->return_bar;
+    tbd->return_component = ti->return_component;
+
+    if (ti->count > 8)
+	tbd->can_grey = ti->can_grey;
+
+    /* add to head of list */
+    tbd->next = bar_descriptor_list;
+    bar_descriptor_list = tbd;
 }
 
-static void tb_bar_history_exit_fn(void)
+/* a but nasty, but the easiest way to supply a name for the toolbar */
+
+void tb_bar_name(const void *info)
 {
+    tb_bar_descriptor *tbd = bar_descriptor_list;
+
+    if (tbd)
+	tbd->name = strdup((const char *)info);
 }
 
-static void tb_bar_details_exit_fn(void)
+int tb_bar_get_num_from_name(const char *name)
 {
-}
-
-static void tb_bar_codec_exit_fn(void)
-{
-    fevent_handler(fevent_CODEC_CLOSE, NULL);
-}
-
-static void tb_bar_custom_exit_fn(void)
-{
-}
-
-static void tb_bar_details_entry_fn(fe_view v)
-{
+    tb_bar_descriptor *tbd = find_bar_from_name(name);
+    return tbd ? tbd->number : -1;
 }
 
 /* --------------------------------------------------------------------------*/
 
-/* This must agree with the defs in fevents.h */
-
-static tb_bar_descriptor bar_names[] =
-{
-    { "mainT", NULL,
-      0, 0,
-      I_DIRECTION, fevent_HOME, -1,
-      FALSE, BAR_CANT },
-    { "favsT", NULL,
-      0, tb_bar_favs_exit_fn,
-      I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_FAVS,
-      FALSE, BAR_MAIN },
-    { "extrasT", NULL,
-      0, 0,
-      I_DIRECTION, fevent_TOOLBAR_HISTORY, fevent_TOOLBAR_EXTRAS,
-      FALSE, BAR_MAIN },
-    { "historyT", NULL,
-      0, tb_bar_history_exit_fn,
-      I_DIRECTION, fevent_HISTORY_SHOW_ALPHA, fevent_TOOLBAR_HISTORY,
-      FALSE,
-#if BOCA
-      BAR_MAIN
-#else
-      BAR_EXTRAS
-#endif
-    },
-    { "printT", NULL,
-      0, 0,
-      I_DIRECTION, fevent_PRINT_LETTER, fevent_TOOLBAR_PRINT,
-      FALSE,
-#if BOCA
-      BAR_MAIN
-#else
-      BAR_EXTRAS
-#endif
-    },
-    { "detailsT", NULL,
-      tb_bar_details_entry_fn, tb_bar_details_exit_fn,
-      I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_DETAILS,
-      FALSE,
-#if BOCA
-      BAR_MAIN
-#else
-      BAR_EXTRAS
-#endif
-    },
-    {  0 },
-    {  0 },
-    { "statusWn", "statusW",
-      0, 0,
-      fevent_MENU, 0, 0,
-      TRUE, BAR_CANT },
-    { "codecT", NULL,
-      0, tb_bar_codec_exit_fn,
-      I_DIRECTION, -1, -1,
-      FALSE, BAR_STACK },
-    { "customT", NULL,
-      0, tb_bar_custom_exit_fn,
-      I_DIRECTION, fevent_OPEN_FONT_SIZE, fevent_TOOLBAR_CUSTOM,
-      FALSE, BAR_EXTRAS }
-};
-
 static tb_bar_info *tb_bar_init(int bar_num)
 {
+    tb_bar_descriptor *tbd;
     tb_bar_info *tbi;
-    char *name;
+    char name[12];
     wimp_box box, wbox;
     int object_handle;
     tb_button_info *button_list;
     int n_buttons;
 
     /* check for legal bar number */
-    if (bar_num < 0 || bar_num >= sizeof(bar_names)/sizeof(bar_names[0]))
+    if ((tbd = find_bar_from_number(bar_num)) == NULL)
 	return NULL;
     
-    /* create window */
-    if (is_a_tv())	/* check for interlace bit set */
-    {
-	name = bar_names[bar_num].tv_name;
-    }
-    else
-    {
-	name = bar_names[bar_num].monitor_name;
-	if (!name)
-	    name = bar_names[bar_num].tv_name;
-    }
+    /* get name */
+    sprintf(name, "T%d", bar_num);
 
     /* create object */
     object_handle = tb_bar_create(name, tile_sprite, &button_list, &n_buttons);
@@ -990,11 +853,12 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	tbi = mm_calloc(sizeof(*tbi), 1);
 
 	tbi->num = bar_num;
+	tbi->type = tbd->type;
 	tbi->object_handle = object_handle;
 	tbi->window_handle = window_handle(object_handle);
 
-	tbi->return_bar = bar_names[bar_num].return_bar;
-	tbi->return_component = bar_names[bar_num].return_component;
+	tbi->return_bar = tbd->return_bar;
+	tbi->return_component = tbd->return_component;
 
 #if DEBUG
 	{
@@ -1046,14 +910,17 @@ static tb_bar_info *tb_bar_init(int bar_num)
 static void tb_bar_dispose(BOOL do_exit_fn)
 {
     tb_bar_info *tbi = bar_list;
+    tb_bar_descriptor *tbd;
 
-    STBDBG(("tb_bar_dispose(): top is %p '%s'\n", tbi, tbi ? bar_names[tbi->num].tv_name : ""));
+    STBDBG(("tb_bar_dispose(): top is %p\n", tbi));
 
     if (tbi == NULL)
 	return;
     
-    if (do_exit_fn && bar_names[tbi->num].exit_fn)
-	bar_names[tbi->num].exit_fn();
+    tbd = find_bar_from_number(tbi->num);
+
+    if (do_exit_fn && tbd->exit_event)
+	fevent_handler(tbd->exit_event, NULL);
 
     /* unlink top item */
     bar_list = tbi->next;
@@ -1069,7 +936,7 @@ static void tb_bar_dispose(BOOL do_exit_fn)
 
 BOOL tb_status_unstack_possible(void)
 {
-    return bar_list && bar_list->return_bar != BAR_CANT;
+    return bar_list && bar_list->return_bar != bar_list->num;
 }
 
 BOOL tb_status_unstack(BOOL do_exit_fn)
@@ -1082,7 +949,7 @@ BOOL tb_status_unstack(BOOL do_exit_fn)
     STBDBG(("tb_status_unstack(): in bar_list %p return_bar %d\n", bar_list, bar_list ? bar_list->return_bar : 99));
 
     /* see if we can do anything */
-    if (!bar_list || bar_list->return_bar == BAR_CANT || !tb_is_status_showing())
+    if (!bar_list || bar_list->return_bar == bar_list->num || !tb_is_status_showing())
 	return FALSE;
 
     sound_event(snd_TOOLBAR_HIDE_SUB);
@@ -1135,14 +1002,14 @@ void tb_status_new(fe_view v, int bar_num)
     /* create a new one */
     if ((tbi = tb_bar_init(bar_num)) != NULL)
     {
-	tb_bar_descriptor *tbd = &bar_names[tbi->num];
+	tb_bar_descriptor *tbd = find_bar_from_number(tbi->num);
 
-	if (tbd->entry_fn)
-	    tbd->entry_fn(v);
+	if (tbd->entry_event)
+	    fevent_handler(tbd->entry_event, v);
 
 	/* record the return point */
-	tbi->return_bar = tbd->return_bar == BAR_STACK ? old_bar : tbd->return_bar;
-	tbi->return_component = tbd->return_bar == BAR_STACK ? tbd->open_component : tbd->return_component;
+	tbi->return_bar = tbd->return_bar == bar_parent_STACK ? old_bar : tbd->return_bar;
+	tbi->return_component = tbd->return_bar == bar_parent_STACK ? tbd->open_component : tbd->return_component;
 
 	/* set the highlight appropriately */
 	tb_status_show(old_state == status_OPEN_SMALL);
@@ -1187,7 +1054,7 @@ BOOL tb_status_highlight(BOOL take_focus)
                default component, eg moving off a web page */
 	    else if (!havefocus(tbi))
 	    {
-		tb_bar_set_highlight(tbi, bar_names[tbi->num].initial_component, FALSE);
+		tb_bar_set_highlight(tbi, find_bar_from_number(tbi->num)->initial_component, FALSE);
 
 		if (take_focus)
 		    setfocus(tbi->object_handle);
@@ -1318,10 +1185,23 @@ int tb_init(int *m_list, int *wimp_version)
 void tb_cleanup(void)
 {
     int i;
+    tb_bar_descriptor *tbd;
+
+    /* free messages */
     for (i = 0; i < sizeof(status_messages)/sizeof(status_messages[0]); i++)
     {
 	mm_free(status_messages[i]);
 	status_messages[i] = NULL;
+    }
+
+    /* free bar descriptors */
+    tbd = bar_descriptor_list;
+    while (tbd)
+    {
+	tb_bar_descriptor *next = tbd->next;
+	mm_free(tbd->name);
+	mm_free(tbd);
+	tbd = next;
     }
 }
 
@@ -1688,7 +1568,7 @@ void tb_menu_refresh(fe_view v)
 
 void tb_status_update_fades(fe_view v)
 {
-    if (v && bar_list && bar_names[bar_list->num].can_grey)
+    if (v && bar_list && find_bar_from_number(bar_list->num)->can_grey)
     {
 	int obj = bar_list->object_handle;
 	gfade(obj, fevent_HISTORY_BACK, !fe_history_possible(v, history_PREV));
@@ -1786,10 +1666,14 @@ void tb_status_show(int small_only)
         frontend_complain((os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 0, bar_list->object_handle, 1, &o.box, 0, 0));/* tb_block[4], tb_block[5]));*/
 
 	/* when opening the full toolbar set the highlight to it automatically */
-	if (status_state == status_OPEN && bar_names[bar_list->num].open_component != -1)
+	if (status_state == status_OPEN)
 	{
-	    tb_bar_set_highlight(bar_list, bar_names[bar_list->num].open_component, FALSE);
-	    setfocus(bar_list->object_handle);
+	    tb_bar_descriptor *tbd = find_bar_from_number(bar_list->num);
+	    if (tbd->open_component != -1)
+	    {
+		tb_bar_set_highlight(bar_list, tbd->open_component, FALSE);
+		setfocus(bar_list->object_handle);
+	    }
 	}	
     }
 }
@@ -2184,8 +2068,8 @@ void tb_status_set_lights(int state)
 
 void tb_status_init(void)
 {
-    if (config_display_control_initial == BAR_STATUS)
-	tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V");
+/*     if (config_display_control_initial == BAR_STATUS) */
+/* 	tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V"); */
 
     STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
 
@@ -2393,19 +2277,16 @@ static int codec_component[] =
     fevent_CODEC_RECORD
 };
 
-/* static int codecs_open = 0; */
-
 void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 {
-/*     if (opening) */
-/* 	codecs_open++; */
-/*     if (closing) */
-/* 	codecs_open--; */
+    if (opening && (bar_list == NULL || bar_list->type != bar_type_CODEC))
+    {
+	tb_bar_descriptor *tbd = find_bar_from_type(bar_type_CODEC);
+	if (tbd)
+	    tb_status_new(NULL, tbd->number);
+    }
 
-    if (opening && (bar_list == NULL || bar_list->num != BAR_CODEC))
-	tb_status_new(NULL, BAR_CODEC);
-
-    if (bar_list && bar_list->num == BAR_CODEC)
+    if (bar_list && bar_list->type == bar_type_CODEC)
     {
 	int i;
 	
@@ -2413,16 +2294,15 @@ void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 	    setstate(bar_list->object_handle, codec_component[i], state == i);
 
 	/* we disable the exit fn here as the codec should already have stopped itself */
-	if (closing/*  && codecs_open == 0 */)
+	if (closing)
 	    tb_status_unstack(FALSE);
     }
 }
 
 void tb_codec_kill(void)
 {
-    if (bar_list && bar_list->num == BAR_CODEC)
+    if (bar_list && bar_list->type == bar_type_CODEC)
     {
-/* 	codecs_open = 0; */
 	tb_status_unstack(TRUE);
     }
 }

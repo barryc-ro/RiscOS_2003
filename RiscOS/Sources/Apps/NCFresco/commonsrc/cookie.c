@@ -781,6 +781,7 @@ void cookie_free_headers(void)
     cookie_http_header.value = NULL;
 }
 
+#ifdef STBWEB
 static void cookie_optimise_domain(cookie_domain *d)
 {
     cookie_item *c, *last_c;
@@ -824,10 +825,11 @@ void cookie_optimise(void)
 	cookie_optimise_domain(d);
     }
 }
+#endif
 
 /* ---------------------------------------------------------------------------------------------------- */
 
-#ifndef FRESCO
+#ifdef STBWEB
 void cookie_dispose_all(void)
 {
     cookie_domain *d = domain_list;

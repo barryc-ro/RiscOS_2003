@@ -13,6 +13,7 @@
 
 #include "interface.h"
 #include "render.h"
+#include "rcolours.h"
 #include "gbf.h"
 
 #include "config.h"
@@ -285,10 +286,11 @@ static void draw_frame_links(wimp_redrawstr *r, fe_view v, const frame_link *fl)
 
 static void draw_border(wimp_redrawstr *r, fe_view v)
 {
-    render_plinth_full(0, plinth_col_M, plinth_col_L, plinth_col_D,
-		       render_plinth_RIM | render_plinth_NOFILL | render_plinth_DOUBLE_RIM,
-		       v->box.x0, v->box.y0, v->box.x1 - v->box.x0, v->box.y1 - v->box.y0,
-		       v->displaying);
+    render_plinth_from_list(0,
+			    config_colour_list[render_colour_list_WINDOW_BORDER],
+			    render_plinth_NOFILL,
+			    v->box.x0, v->box.y0, v->box.x1 - v->box.x0, v->box.y1 - v->box.y0,
+			    v->displaying);
 }
 
 static os_error *draw_bevels(fe_view v, void *handle)
@@ -356,7 +358,7 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
     wimp_redrawstr r;
     fe_view selected;
 
-    STBDBG(("frontend_view_update: v%p box %d,%d %d,%d flags %x\n", v, bb->x0, bb->y0, bb->x1, bb->y1, flags));
+    STBDBGN(("frontend_view_update: v%p box %d,%d %d,%d flags %x\n", v, bb->x0, bb->y0, bb->x1, bb->y1, flags));
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;

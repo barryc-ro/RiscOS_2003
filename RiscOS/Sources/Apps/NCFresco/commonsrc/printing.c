@@ -471,9 +471,6 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
     return ep;
 }
 
-extern os_error *sutil_print_abortjob(int job);
-extern os_error *sutil_print_endjob(int job);
-
 static os_error *awp_end_job(be_doc doc, awp_job job, BOOL abort)
 {
     os_error *ep;
@@ -482,12 +479,7 @@ static os_error *awp_end_job(be_doc doc, awp_job job, BOOL abort)
     /* End job */
     PRNDBG(("Ending job: abort %d job %d\n", abort, job->job));
 
-#if DEBUG
-    ep = abort ? sutil_print_abortjob(job->job) : sutil_print_endjob(job->job);
-#else
     ep = abort ? print_abortjob(job->job) : print_endjob(job->job);
-#endif
-    PRNDBG(("Returning from abort/end\n"));
     if (ep)
     {
 	PRNDBG(("end/abort job gave error '%s'\n", ep->errmess));

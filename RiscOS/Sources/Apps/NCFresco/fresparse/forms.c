@@ -171,9 +171,14 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     if (nocursor->type != value_none)
 	in->flags |= rid_if_NOCURSOR;
 
+    /* some nasty NCFresco special code */
     numbers = &attributes->value[HTML_INPUT_NUMBERS];
     if (numbers->type != value_none)
+    {
 	in->flags |= rid_if_NUMBERS;
+	if (numbers->type == value_enum && numbers->u.i == HTML_INPUT_NUMBERS_PABX)
+	    in->flags |= rid_if_PABX;
+    }
 
     checked = &attributes->value[HTML_INPUT_CHECKED];
     if (checked->type != value_none)

@@ -50,7 +50,7 @@
 
 /* ----------------------------------------------------------------------------- */
 
-/* 
+/*
  */
 
 static int get_value(rid_text_item *ti, rid_stdunits *val, int def, int fwidth)
@@ -78,14 +78,14 @@ static BOOL oobject_renderable(rid_object_item *obj, antweb_doc *doc)
 
     if (doc->flags & doc_flag_NO_PICS)
 	return FALSE;
-    
+
     image_info((image) obj->state.image.im, 0, 0, 0, &fl, 0, 0);
     if (fl & image_flag_REALTHING)
 	return TRUE;
 
     if (obj->standby == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (obj->userheight.type == value_none && obj->userwidth.type == value_none)))
 	return TRUE;
-    
+
     return FALSE;
 }
 
@@ -119,13 +119,13 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	image_flags fl;
 	if (obj->state.image.im == NULL)
 	    obj->state.image.im = oimage_fetch_image(doc, obj->data, obj->userwidth.type == value_none || obj->userheight.type == value_none);
-   
+
 	image_info((image) obj->state.image.im, &width, &height, 0, &fl, 0, 0);
 
 	if (fl & image_flag_REALTHING)
 	    obj->iflags |= rid_image_flag_REAL;
 
-	antweb_doc_ensure_font( doc, ALT_FONT );
+ 	antweb_doc_ensure_font( doc, ALT_FONT );
 	oimage_size_image(obj->standby, &obj->userwidth, &obj->userheight, obj->iflags, config_defer_images, doc->scale_value, fwidth, &width, &height);
 	break;
     }
@@ -144,7 +144,7 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	    (config_sound_background || width > 2 || height > 2))	/* don't start if invisible(ish) and bgsound configured off */
 	{
 	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
-	    
+
 	    /* position plugin initially off screen */
 /* 	    if (!objects_bbox(doc, ti, (wimp_box *)obj->state.plugin.box)) */
 	    {
@@ -155,7 +155,7 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	    }
 
 	    plugin_send_open(obj->state.plugin.pp, (wimp_box *)obj->state.plugin.box, 0 /* open_flags */);
-	    
+
 	    if (doc->object_handler_count++ == 0)
 		frontend_message_add_handler(plugin_message_handler, doc);
 	}
@@ -166,14 +166,14 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	}
 	break;
 #endif
-	
+
     default:
 	/* Get values for text_item */
 	width = get_value(ti, &obj->userwidth, 0, fwidth);
 	height = get_value(ti, &obj->userheight, 0, fwidth);
 	break;
     }
-    
+
     width += (obj->bwidth + obj->hspace) * 2;
     height += (obj->bwidth + obj->vspace) * 2;
 
@@ -204,7 +204,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     wimp_box bbox;
     int bw;
     BOOL do_plinth = TRUE;
-    char *alt;
+    char *alt, alt_buf[128];
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
@@ -260,14 +260,46 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	/* use standby text or mime type for the alt text */
 	alt = obj->standby;
 	if (!alt)
-	    alt = obj->classid_mime_type;
-	if (!alt)
-	    alt = obj->data_mime_type;
-	if (!alt)
-	    alt = msgs_lookup("noplugin");
+	{
+	    char *type, *file, *base_file;
+	    if (obj->classid_ftype != -1)
+	    {
+		type = get_plugin_type_name(obj->classid_ftype);
+		if (!type)
+		    type = obj->classid_mime_type;
+
+		base_file = obj->classid;
+	    }
+	    else
+	    {
+		type = get_plugin_type_name(obj->data_ftype);
+		if (!type)
+		    type = obj->data_mime_type;
+
+		base_file = obj->data;
+	    }
+
+	    file = strrchr(base_file, '/');
+	    if (file)
+		file++;
+	    else
+		file = base_file;
+
+	    strcpy(alt_buf, msgs_lookup("noplugin"));
+	    if (type)
+	    {
+		strlencat(alt_buf, " ", sizeof(alt_buf));
+		strlencat(alt_buf, type, sizeof(alt_buf));
+	    }
+	    if (file)
+	    {
+		strlencat(alt_buf, " ", sizeof(alt_buf));
+		strlencat(alt_buf, file, sizeof(alt_buf));
+	    }
+	    alt = alt_buf;
+	}
 
 	do_plinth = ti->width != 0;
-	break;
 	break;
     }
 
@@ -277,9 +309,10 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     OBJDBG(("oobject_redraw: alt text '%s' (standby '%s' mimes '%s'/'%s')\n",
 	    strsafe(alt), strsafe(obj->standby), strsafe(obj->classid_mime_type), strsafe(obj->data_mime_type)));
-    
+
     if (alt)
 	oimage_render_text(ti, doc, fs, &bbox, alt);
+
 #endif /* BUILDERS */
 }
 
@@ -340,7 +373,7 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 	    frontend_complain(image_flush((image) obj->state.image.im, 0));
 	    return NULL;
 	}
-    
+
 	if (obj->usemap || obj->map)
 	{
 	    /* Remember that the y is in work area co-ordinates */
@@ -364,7 +397,7 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 		follow_link = wait_for_release(config_display_time_activate);
 		backend_update_link_activate(doc, ti, 0);
 	    }
-	    
+
 	    if (follow_link)
 		frontend_complain(antweb_handle_url(doc, ti->aref, NULL,
 						    bb & wimp_BRIGHT ? "_blank" : ti->aref->target));

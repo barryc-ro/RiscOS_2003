@@ -315,15 +315,13 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     }
 
 #ifdef STBWEB
-    render_plinth_full(bg,
-		       selected ? plinth_col_HL_M : plinth_col_M,
-		       selected ? plinth_col_HL_L : plinth_col_L,
-		       selected ? plinth_col_HL_D : plinth_col_D,
-		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
-		       hpos + SELECT_SPACE_X, bline - ti->max_down + SELECT_SPACE_Y,
-		       ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_SPACE_X*2,
-		       (ti->max_up + ti->max_down) - SELECT_SPACE_Y*2,
-		       doc );
+    render_plinth_from_list(bg,
+			    selected ? config_colour_list[render_colour_list_SELECT_HIGHLIGHT] : config_colour_list[render_colour_list_SELECT],
+			    0,
+			    hpos + SELECT_SPACE_X, bline - ti->max_down + SELECT_SPACE_Y,
+			    ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_SPACE_X*2,
+			    (ti->max_up + ti->max_down) - SELECT_SPACE_Y*2,
+			    doc );
 #else
     render_plinth(bg, render_plinth_IN,
 		  hpos + SELECT_SPACE_X, bline - ti->max_down + SELECT_SPACE_Y,

@@ -174,7 +174,7 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
     rid_flag flag;
 
     obj->standby = valuestringdup(standby);
-#ifndef BUILDERS
+#if 0				/* moved to redraw routine */
     /* if no standby message given then use the file type name */
     if (obj->standby == NULL)
     {

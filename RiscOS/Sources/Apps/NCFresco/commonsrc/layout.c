@@ -13,6 +13,7 @@
 #include "rid.h"
 #include "url.h"
 #include "util.h"
+#include "config.h"
 
 #include "render.h"
 #include "rcolours.h"
@@ -634,17 +635,11 @@ void layout_render_bevels(wimp_redrawstr *r, antweb_doc *doc)
 	{
 	    if (spc->flags & layout_spacing_BEVEL)
 	    {
-		render_plinth_full(0, 0, plinth_col_HL_L, plinth_col_D,
-				   render_plinth_NOFILL,
-				   box.x0, box.y0, box.x1-box.x0, box.y1-box.y0,
-				   doc);
-
-/* 		render_plinth_full(plinth_col_HL_M, 0, plinth_col_L, plinth_col_HL_D, */
- 		render_plinth_full(spc->colour | render_colour_RGB, /* plinth_col_HL_D, */
-				   0, plinth_col_HL_M, plinth_col_M,
-				   0,
-				   box.x0 + 4, box.y0 + 4, box.x1-box.x0 - 8, box.y1-box.y0 - 8,
-				   doc);
+		render_plinth_from_list(spc->colour == -1 ? render_colour_BEVEL : (spc->colour | render_colour_RGB),
+					config_colour_list[render_colour_list_BEVEL],
+					0,
+					box.x0, box.y0, box.x1-box.x0, box.y1-box.y0,
+					doc);
 	    }
 	    else
 	    {

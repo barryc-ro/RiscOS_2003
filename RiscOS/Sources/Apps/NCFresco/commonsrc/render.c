@@ -116,6 +116,68 @@ void render_plinth_full(int bcol, int rim_col, int top_col, int bottom_col, int 
 	draw_cornerBR(x+off, y+off, w-off*2, h-off*2, off);
 }
 
+void render_plinth_from_list(int bcol, wimp_paletteword *cols, int flags, int x, int y, int w, int h, antweb_doc *doc)
+{
+    /* total border width in pixels */
+    int bw, xx, yy, ww, hh, col, i;
+
+    if (cols == NULL)
+	return;
+
+    bw = cols[0].word/2;
+
+    /* do background */
+    if ((flags & render_plinth_NOFILL) == 0 && w > bw*2*2 && h > bw*2*2)
+    {
+	render_set_colour(bcol, doc);
+	bbc_rectanglefill(x + bw*2, y + bw*2, w - bw*2*2, h - bw*2*2);
+    }
+
+    /* do top/left border */
+    col = -1;
+    ww = w - frontend_dx;
+    hh = h - frontend_dy;
+    xx = x;
+    yy = y;
+    for (i = 0; i < bw; i++, ww -= 4, hh -= 4, xx += 2, yy += 2)
+    {
+        bbc_move(xx, yy);
+
+	if (col != cols[i+1].word)
+	{
+	    col = cols[i+1].word;
+	    render_set_colour(col, doc);
+	}
+
+	if (hh > 0)
+	    bbc_drawby(0, hh);
+	if (ww > 0)
+	    bbc_drawby(ww, 0);
+    }
+
+    /* do bottom/right border */
+    col = -1;
+    ww = w - frontend_dx;
+    hh = h - frontend_dy;
+    xx = x;
+    yy = y;
+    for (i = bw; i < bw*2; i++, ww -= 4, hh -= 4, xx += 2, yy += 2)
+    {
+        bbc_move(xx, yy);
+
+	if (col != cols[i+1].word)
+	{
+	    col = cols[i+1].word;
+	    render_set_colour(col, doc);
+	}
+
+	if (ww > 0)
+	    bbc_drawby(ww, 0);
+	if (hh > 0)
+	    bbc_drawby(0, hh);
+    }
+}
+
 #if 0
 static int colour_distance(wimp_paletteword c1, wimp_paletteword c2)
 {

@@ -35,3 +35,12 @@ void stream_write_as_drawfile(be_doc doc, rid_text_stream *stream,
 			     int fh, int *writepoint, int ox, int oy);
 
 void stream_write_as_text(rid_header *rh, rid_text_stream *stream, FILE *f);
+
+
+/* iterate through the text items in this stream (not recursing) until
+   the iterate fn returns FALSE, calling the function with the bounding box
+   (not including margins) */
+typedef int (*stream_iterate_box_fn)(be_doc doc, rid_text_item *ti, wimp_box *box, void *handle);
+
+extern void stream_iterate_box(be_doc doc, rid_text_item *ti, stream_iterate_box_fn fn, void *handle);
+

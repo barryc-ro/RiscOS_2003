@@ -525,6 +525,7 @@ enum lookingfor_state
     lookingfor_EQUALS,
     lookingfor_VALUE,
     lookingfor_QUOTE_END,
+    lookingfor_SINGLE_QUOTE_END,
     lookingfor_VALUE_END,
     lookingfor_SEPARATOR
 };
@@ -624,6 +625,11 @@ int parse_http_header(char *header_data, const char *tags[], name_value_pair *ou
 		state = lookingfor_QUOTE_END;
 		value = s;
 	    }
+	    else if (c == '\'')
+	    {
+		state = lookingfor_SINGLE_QUOTE_END;
+		value = s;
+	    }
 	    else if (!isspace(c))
 	    {
 		state = lookingfor_VALUE_END;
@@ -631,13 +637,31 @@ int parse_http_header(char *header_data, const char *tags[], name_value_pair *ou
 	    }
 	    break;
 
+	case lookingfor_SINGLE_QUOTE_END:
+	    if (c == '\'')
+	    {
+		value_end = s-1;
+
+		/* completed NAME=VALUE */
+		unknown += add_tag(name, name_end - name, value, value_end - value, tags, output, unknown_offset);
+
+		name = name_end = NULL;
+		value = value_end = NULL;
+
+		state = lookingfor_SEPARATOR;
+	    }
+	    break;
+
 	case lookingfor_QUOTE_END:
+#if 0
+	    /* SJM: removed this 'cos I think it's wrong! */
 	    if (c == ';')
 	    {
 		state = lookingfor_NAME;
 		name = name_end = NULL;
 	    }
-	    else if (c == '\"')
+#endif
+	    if (c == '\"')
 	    {
 		value_end = s-1;
 

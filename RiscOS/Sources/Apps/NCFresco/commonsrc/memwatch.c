@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 
 #include "assert.h"
 
@@ -26,6 +27,7 @@
 #include "version.h"
 #include "flexwrap.h"
 #include "gbf.h"
+#include "profile.h"
 
 #ifndef ITERATIVE_PANIC
 #define ITERATIVE_PANIC 0
@@ -96,6 +98,12 @@ static int num_malloc = 0,
     num_free0 = 0;
 #endif
 
+#if defined(FRESCO) && defined(PRODUCTION)
+#define CATCHTYPE5 1
+#else
+#define CATCHTYPE5 0
+#endif
+
 #define MEMWATCH_MIN_INTEREST	0
 #define MEMZERO_VALUE		0x69
 
@@ -105,6 +113,15 @@ static os_error panicerr;
 
 static int mm_no_more_memory(void)
 {
+#if CATCHTYPE5
+    /* pdh: if we're really going to fall over, raise a signal so that the
+     * current document can be aborted. Leaks memory, but can only be better
+     * for desktop users than exit(1) is!
+     */
+    if ( sig_guarded() )
+        raise( SIGUSR1 );
+#endif
+
     strcpy(panicerr.errmess, msgs_lookup("memfatal"));
     panicerr.errnum = 0;
 
@@ -112,6 +129,29 @@ static int mm_no_more_memory(void)
     exit(1);
     return 0;
 }
+
+#if CATCHTYPE5
+
+#ifdef __acorn
+#pragma no_check_stack
+#endif
+
+extern void mm_minor_panic( char *token )
+{
+    /* pdh: just an error reporting thing really, but takes advantage of
+     * memwatch's nice static os_error so we don't have to allocate 
+     * anything.
+     */
+    strcpy( panicerr.errmess, msgs_lookup(token) );
+    panicerr.errnum = 0;
+    frontend_complain( &panicerr );
+}
+
+#ifdef __acorn
+#pragma check_stack
+#endif
+
+#endif
 
 extern int antweb_doc_abort_all(int level);
 
@@ -183,7 +223,7 @@ extern int mm_can_we_recover(int abort)
        also check for stash being full and whether it should then
        clear the flag */
     gbf_flags |= GBF_LOW_MEMORY;
-    
+
     if (image_memory_panic())
 	r = 1;			/* recovered through discarding images */
 
@@ -205,7 +245,7 @@ extern int mm_can_we_recover(int abort)
 	}
     }
 #endif
-    
+
     if (r == 0 && antweb_doc_abort_all(0))
 	r = 5;			/* recovered through abort transfers */
 
@@ -227,7 +267,7 @@ extern int mm_can_we_recover(int abort)
 	    }
 	}
     }
-    
+
     if (r == 0 && antweb_doc_abort_all(1))
 	r = 3;			/* recovered through abort transfers */
 
@@ -352,6 +392,9 @@ void *mm_malloc(size_t x)
 
     num_malloc++;
 
+    PINC_MALLOC;
+    PADD_HEAP_BYTES(x);
+
 #if MEMWATCH >= 3
     if (x >= MEMWATCH_MIN_INTEREST)
 	DBG(("mm_malloc: item size 0x%x '%s' '%s'", x, caller(1), caller(2)));
@@ -390,7 +433,7 @@ void *mm_malloc(size_t x)
 	    mm_no_more_memory();
     }
 #endif /* ITERATIVE_PANIC */
-    
+
     newptr->size = x;
     newptr->magic = MM_MAGIC_HEAD;
 #if MEMWATCH >= 4 && 0
@@ -412,13 +455,15 @@ void *mm_malloc(size_t x)
 
 void *mm_calloc(size_t x, size_t y)
 {
-    int size;
+    const int size = x * y;
     mm_chain *new;
     mm_tail *tail;
 
     num_calloc++;
 
-    size = x * y;
+    PINC_CALLOC;
+    PADD_HEAP_BYTES(size);
+    PADD_HEAP_ZERO(size);
 
 #if MEMWATCH >= 3
     if (size >= MEMWATCH_MIN_INTEREST)
@@ -483,6 +528,16 @@ void *mm_realloc(void *x, size_t y)
     mm_tail *tail;
 
     num_realloc++;
+
+    PINC_REALLOC;
+    if (y < 0)
+    {
+	PADD_HEAP_SHRINK(-y);
+    }
+    else
+    {
+	PADD_HEAP_GROW(y);
+    }
 
     /* realloc(NULL, size) is equivalent to malloc(size) */
 
@@ -550,10 +605,12 @@ void mm_free(void *x)
     if (x == NULL)
     {
 	num_free0++;
+	PINC_FREE0;
 	return;
     }
 
     num_free++;
+    PINC_FREE;
 
     m = ((mm_chain *) x)-1;
 
@@ -731,7 +788,7 @@ extern void *mm_malloc(size_t x)
 	CHECKOFF;
 	p=malloc(x);
 	CHECKON;
-    
+
 	if (p)
 	{
 	    mc_add_block(p,x);

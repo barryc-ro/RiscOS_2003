@@ -5,13 +5,13 @@
 /* elements.c */
 /*extern void sgml_free_attributes(VALUE *values);*/
 extern BOOL default_attributes(SGMLCTX *context, ELEMENT *element, VALUES *values);
-extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element);
-extern void ensure_post_requisites (SGMLCTX *context, ELEMENT *element);
+/*extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element);*/
+/*extern void ensure_post_requisites (SGMLCTX *context, ELEMENT *element);*/
 /*extern void special_container_open_actions(SGMLCTX *context, ELEMENT *element);*/
 /*extern void special_container_close_actions(SGMLCTX *context, ELEMENT *element);*/
-extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *values);
+/*extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *values);*/
 extern void perform_element_close(SGMLCTX *context, ELEMENT *element);
-extern void parse_then_perform_element_open(SGMLCTX *context);
+/*extern void parse_then_perform_element_open(SGMLCTX *context);*/
 extern void do_got_element(SGMLCTX *context);
 
 /* entities.c */
@@ -97,6 +97,7 @@ extern BOOL element_bit_clear(BITS *elems, int tag);
 extern BOOL element_bit_set(BITS *elems, int tag);
 extern void element_clear_bit(BITS *elems, int tag);
 extern void element_set_bit(BITS *elems, int tag);
+extern void element_bitset_or(BITS *elem_inout, BITS *elem_in, const size_t n_elems);
 extern int find_element(SGMLCTX *context, STRING s);
 extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *guessed);
 extern void clear_stack_item(STACK_ITEM *stack);

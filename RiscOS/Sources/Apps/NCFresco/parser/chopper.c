@@ -81,11 +81,11 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, STRING input)
     sgml_chopper_state *st = &context->chopper_state;
     int ix;
 
-    PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.bytes, input.ptr));
+    /*PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.bytes, input.ptr));*/
 
     if (input.bytes == 0)
     {
-	PRSDBGN(("sgml_fmt_word_chopper(): flushing\n"));
+	/*PRSDBGN(("sgml_fmt_word_chopper(): flushing\n"));*/
 
 	switch (st->s1)
 	{
@@ -340,7 +340,7 @@ extern void sgml_str_word_chopper(SGMLCTX *context, STRING input)
     sgml_chopper_state *st = &context->chopper_state;
     int ix;
 
-    PRSDBGN(("sgml_str_word_chopper(): %.*s\n", input.bytes, input.ptr));
+    /*PRSDBGN(("sgml_str_word_chopper(): %.*s\n", input.bytes, input.ptr));*/
 
     if (input.bytes == 0)
     {
@@ -361,6 +361,8 @@ extern void sgml_str_word_chopper(SGMLCTX *context, STRING input)
 
 	/* This might well want spaces stripping */
 
+        /* pdh: translate tabs to spaces here */
+        /* sjm: removed translation as that will prevent tab expansion later */
 	if (c != 0)
 	    add_to_buffer(&context->prechop, c);
     }

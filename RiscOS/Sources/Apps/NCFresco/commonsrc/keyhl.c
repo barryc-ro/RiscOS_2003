@@ -186,14 +186,14 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 
 	if (flags & be_link_TEXT)
 	    return tag == rid_it_TEXT || tag == rid_it_PASSWD ?
-		(tii->flags & rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
+		((tii->flags & (rid_if_NUMBERS|rid_if_PABX)) == rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
 	    match_item_NONE;
 
 	if (aref_valid && !aref_changed_enough)
 	    return match_item_NONE;
 
 	return tag == rid_it_TEXT || tag == rid_it_PASSWD ? 
-		(tii->flags & rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
+		((tii->flags & (rid_if_NUMBERS|rid_if_PABX)) == rid_if_NUMBERS ? match_item_NUMBERS : match_item_TEXT) :
 	    match_item_LINK;
     }
 
@@ -921,6 +921,9 @@ static void be_update_link(be_doc doc, antweb_selection_t *selection, int select
     if (selection == NULL)
 	return;
 
+#if NEW_HL
+    highlight_update_link(doc, selection, selected);
+#else
     switch (selection->tag)
     {
     case doc_selection_tag_NONE:
@@ -952,6 +955,7 @@ static void be_update_link(be_doc doc, antweb_selection_t *selection, int select
 	be_update_item_highlight(doc, ti, selected);
 	break;
     }
+#endif
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -1074,6 +1078,8 @@ void backend_set_highlight(be_doc doc, be_item item)
 
 	doc->selection.tag = doc_selection_tag_AREF;
 	doc->selection.data.aref = item->aref;
+
+	highlight_boundary_build(doc);
     }
     else
     {
@@ -1086,9 +1092,15 @@ void backend_set_highlight(be_doc doc, be_item item)
 	doc->selection.tag = doc_selection_tag_TEXT;
 	doc->selection.data.text.item = item;
 	doc->selection.data.text.input_offset = doc_selection_offset_NO_CARET;
+
+	highlight_boundary_build(doc);
     }
 
+#if NEW_HL
+    highlight_boundary_refresh(doc);
+#else
     be_update_link(doc, &doc->selection, TRUE);
+#endif
 }
 
 void backend_set_caret(be_doc doc, be_item ti, int offset)
@@ -1107,6 +1119,8 @@ void backend_set_caret(be_doc doc, be_item ti, int offset)
 
 	doc->selection.tag = doc_selection_tag_TEXT;
 	doc->selection.data.text.item = ti;
+
+	highlight_boundary_build(doc);
 
 	repos = object_caret_FOCUS;
     }
@@ -1140,8 +1154,13 @@ void backend_remove_highlight(be_doc doc)
     doc->selection.tag = doc_selection_tag_NONE;
 
     /* redraw the selected links */
+#if NEW_HL
+    highlight_boundary_refresh(doc);
+    highlight_boundary_clear(doc);
+#else
     be_update_link(doc, &old_sel, FALSE);
-
+#endif
+    
     /* tell the object the caret has been removed */
     if (old_ti)
     {
@@ -1155,7 +1174,7 @@ void backend_remove_highlight(be_doc doc)
 #endif
     }
 #ifndef STBWEB
-        /* pdh: I think this is what desktop Fresco wants */
+    /* pdh: I think this is what desktop Fresco wants */
     frontend_view_caret( doc->parent, 0, 0, -1, FALSE );
 #endif
 }

@@ -31,6 +31,7 @@ typedef struct auth_realm *realm;
 
 extern void auth_init(void);
 extern realm auth_add_realm(char *realmp, char *type, char *user, char *passwd);
+extern void auth_forget_realm( realm r );
 extern void auth_add(char *url, realm r);
 extern realm auth_lookup_realm(char *realmp);
 extern auth_lookup_result auth_lookup(char *url, auth_type *type, char **user, char **passwd);
@@ -45,4 +46,6 @@ extern int auth_supported(char *type);
 extern void auth_dispose(void);
 extern void auth_init_passwords(void);
 extern void auth_init_allow(void);
+
+extern BOOL blacklist_match( const char *url );
 extern void auth_optimise(void);

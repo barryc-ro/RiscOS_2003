@@ -360,6 +360,7 @@ typedef int rid_input_flags;
 #define rid_if_NOCURSOR	0x10		/* with IMAGE, don't need x,y coords */
 #define rid_if_NOPOPUP	0x20		/* with SELECT, don't popup menu */
 #define rid_if_NUMBERS	0x40		/* with TEXT, PASSWORD, only allow numbers */
+#define rid_if_PABX	0x80		/* with TEXT, PASSWORD, only allow numbers and '#,*' */
 
 typedef int rid_image_flags;
 #define rid_image_flag_ISMAP    0x01
@@ -691,11 +692,13 @@ struct rid_table_props
 
 struct rid_width_info
 {
+/*  DAF: 970630
     int				minleft;
     int				minright;
-    int				minwidth;
     int				maxleft;
     int				maxright;
+*/
+    int				minwidth;
     int				maxwidth;
 /*
     int                     	raw_minwidth;
@@ -855,6 +858,7 @@ struct rid_table_item
 
 #define TABLE_INSIDE_BIAS(t)	( (2 * (t)->cellpadding) + (t)->cellspacing )
 #define TABLE_OUTSIDE_BIAS(t)	( (2 * (t)->border) + (t)->cellspacing )
+#define CAPTION_TOTAL_BIAS(t)	( (2 * (t)->cellpadding) + (2 * (t)->cellspacing) + (2 * (t)->border) )
 
 /*****************************************************************************/
 
@@ -1435,6 +1439,7 @@ extern void rid_form_item_connect(rid_header *rh, rid_form_item *f);
 extern void rid_form_element_connect(rid_form_item *f, rid_form_element *i);
 extern void rid_option_item_connect(rid_select_item *s, rid_option_item *o);
 extern void rid_meta_connect(rid_header *rh, rid_meta_item *m);
+extern void rid_scaff_item_push(rid_text_stream *st, int flags);
 extern int memzone_init(memzone *mz, int flags);
 extern int memzone_alloc(memzone *mz, int size);
 extern int memzone_tidy(memzone *mz);

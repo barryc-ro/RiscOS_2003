@@ -7,8 +7,8 @@
  * the same behaviour. Once we've got a release done, we can improve this.
  */
 
-#include "gbf.h"
 #include "htmlparser.h"
+#include "gbf.h"
 
 /*****************************************************************************/
 
@@ -26,8 +26,10 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_HARD_TABLES * 0		) +
 		( GBF_EARLYIMGFETCH * 0		) +
 		( GBF_LOW_MEMORY * 0		) +
-		( GBF_ANTI_TWITTER * 0		) + 
+		( GBF_ANTI_TWITTER * 1		) +
 		( GBF_SI1_PCT * 1		) +
+		( GBF_CAPTIONS * 0		) +
+		( GBF_RELATIVE_TABLE * 0	) +
 		( GBF_MINWIDTH_A * 0		) +
 		( GBF_MINWIDTH_B * 1		) +
 		( GBF_MINWIDTH_C * 0		) +
@@ -43,12 +45,16 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_TRANSLATE_UNDEF_CHARS * 0 ) +
 		( GBF_NEW_FORMATTER * 1		) +
 		( GBF_AUTOFIT * 0		) +
+		( GBF_AUTOFIT_ALL_TEXT * 0	) +
 		( GBF_NETSCAPE_OVERLAPS * 0	) +
 		( GBF_HARD_TABLES * 0		) +
 		( GBF_EARLYIMGFETCH * 0		) +
 		( GBF_LOW_MEMORY * 0		) +
-		( GBF_ANTI_TWITTER * 0		) + 
+		( GBF_ANTI_TWITTER * 0		) +
 		( GBF_SI1_PCT * 1		) +
+		( GBF_CAPTIONS * 0		) +
+		( GBF_FILES_IN_ONE_GO * 0       ) +
+		( GBF_RELATIVE_TABLE * 0	) +
 		( GBF_MINWIDTH_A * 0		) +
 		( GBF_MINWIDTH_B * 1		) +
 		( GBF_MINWIDTH_C * 0		) +
@@ -65,12 +71,16 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_TRANSLATE_UNDEF_CHARS * 0 ) +
 		( GBF_NEW_FORMATTER * 1		) +
 		( GBF_AUTOFIT * 0		) +
+		( GBF_AUTOFIT_ALL_TEXT * 0	) +
 		( GBF_NETSCAPE_OVERLAPS * 0	) +
 		( GBF_HARD_TABLES * 0		) +
 		( GBF_EARLYIMGFETCH * 0		) +
 		( GBF_LOW_MEMORY * 0		) +
 		( GBF_ANTI_TWITTER * 0		) +
 		( GBF_SI1_PCT * 1		) +
+		( GBF_CAPTIONS * 0		) +
+		( GBF_FILES_IN_ONE_GO * 1       ) +
+		( GBF_RELATIVE_TABLE * 0	) +
 		( GBF_MINWIDTH_A * 0		) +
 		( GBF_MINWIDTH_B * 1		) +
 		( GBF_MINWIDTH_C * 0		) +
@@ -87,6 +97,8 @@ extern int gbf_active(int gbf)
 {
     return gbf_flags & gbf;
 }
+
+#endif /* Whether want runtime gbf_action() facilities */
 
 /*****************************************************************************/
 
@@ -111,8 +123,6 @@ extern void gbf_init(void)
 	elements[HTML_BADTD].flags |= FLAG_TEXT;
     }
 }
-
-#endif /* Whether want runtime gbf_action() facilities */
 
 /*****************************************************************************/
 

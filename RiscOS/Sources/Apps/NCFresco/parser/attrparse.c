@@ -604,6 +604,11 @@ extern VALUE sgml_do_parse_stdunit(SGMLCTX *context, ATTRIBUTE *attribute, STRIN
 
  */
 
+#if defined(MemCheck_MEMCHECK)
+/* Memcheck doesn't like this fn for some reason */
+#pragma -c0
+#endif
+
 extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, STRING string)
 {
     VALUE v;
@@ -660,6 +665,11 @@ bad:
     v.type = value_none;
     return v;
 }
+
+#if defined(MemCheck_MEMCHECK)
+/* Memcheck doesn't like this fn for some reason */
+#pragma -c1
+#endif
 
 /*****************************************************************************/
 

@@ -294,7 +294,7 @@ static void fe_global_add(const char *url, const char *title)
 	fe_global_remove_oldest();
 }
 
-os_error *fe__global_write_list(FILE *f)
+static void fe__global_write_list(FILE *f, void *handle)
 {
     fe_global_history_item *item;
     int i;
@@ -303,28 +303,30 @@ os_error *fe__global_write_list(FILE *f)
     {
 	char *s = item->title ? item->title : item->url;
 
-	fprintf(f, msgs_lookup("histAI"), i, i, s);
+	fprintf(f, msgs_lookup("histA.I"), i, i, s);
 
         fputc('\n', f);
     }
-
-    return NULL;
 }
 
-os_error *fe_global_write_list(FILE *f)
+os_error *fe_global_write_list(FILE *f, BOOL switchable, int frame)
 {
+#if 1
+    fe_internal_write_page(f, switchable ? "histAw" : "histA", 0, frame, fe__global_write_list, NULL);
+    return NULL;
+#else
     os_error *e;
     char *s;
-
     fprintf(f, msgs_lookup("histAT"), 0);
     s = getenv(PROFILE_NAME_VAR);
     fprintf(f, msgs_lookup("histA1"), strsafe(s));
+    fputs(msgs_lookup(switchable ? "histA2s" : "histA2"), f);
 
     e = fe__global_write_list(f);
 
     fputs(msgs_lookup("histAF"), f);
-
     return e;
+#endif
 }
 
 static int fe_global__find_url(const char *bare_url, const char *fragment)
@@ -428,63 +430,54 @@ static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
 {
     const fe_history_frame_item *hfi;
 
-    /* only write out an item if there are no frames */
-/*     if (item->n_frames > 1) */
-/* 	return FALSE; */
-
-#if 1
     hfi = &item->frame[0];
 
     if (item->title)
     {
         char *frag = strrchr(hfi->url, '#');
         if (frag)
-            fprintf(f, msgs_lookup("histRI"), i, i, item->title, frag);
+            fprintf(f, msgs_lookup("histR.I"), i, i, item->title, frag);
         else
-            fprintf(f, msgs_lookup("histAI"), i, i, item->title);
+            fprintf(f, msgs_lookup("histA.I"), i, i, item->title);
     }
     else
     {
-        fprintf(f, msgs_lookup("histRI"), i, i, hfi->url);
+        fprintf(f, msgs_lookup("histR.I"), i, i, hfi->url);
     }
-#else
-    fprintf(f, msgs_lookup("histRIa"), i);
-
-    hfi = &item->frame[0];
-
-    url_escape_to_file(hfi->url, f);
-
-    if (item->title)
-    {
-        char *frag = strrchr(hfi->url, '#');
-        if (frag)
-            fprintf(f, msgs_lookup("histRIb"), item->title, frag);
-        else
-            fprintf(f, msgs_lookup("histAIb"), item->title);
-    }
-    else
-    {
-        fprintf(f, msgs_lookup("histRIb"), hfi->url);
-    }
-#endif
     fputc('\n', f);
 
     return TRUE;
 }
 
-os_error *fe_history_write_list(FILE *f, const fe_history_item *start, const fe_history_item *current)
+static void write_list(FILE *f, void *handle)
+{
+    const fe_history_item *start = (const fe_history_item *)handle;
+    const fe_history_item *item;
+    int i;
+
+    /* only write out top level frame changes */
+    for (i = 0, item = start; item; i++, item = item->prev)
+	if (!item->is_offline && /*item->title*/ strcmp(item->frame[0].specifier, "_0") == 0)
+	    fe_hist_write_item(f, item, i);
+}
+
+os_error *fe_history_write_list(FILE *f, const fe_history_item *start, const fe_history_item *current, BOOL switchable, int frame)
 {
     const fe_history_item *item;
     int i;
-    char *s;
 
     /* count how far through the list we are */
     for (i = 0, item = start; item && item != current; i++, item = item->prev)
 	;
 
+#if 1
+    fe_internal_write_page(f, switchable ? "histRw" : "histR", i, frame, write_list, (void *)start);
+#else
+    char *s;
     fprintf(f, msgs_lookup("histRT"), i);
     s = getenv(PROFILE_NAME_VAR);
     fprintf(f, msgs_lookup("histR1"), strsafe(s));
+    fputs(msgs_lookup(switchable ? "histR2s" : "histR2"), f);
 
     /* only write out top level frame changes */
     for (i = 0, item = start; item; i++, item = item->prev)
@@ -493,6 +486,7 @@ os_error *fe_history_write_list(FILE *f, const fe_history_item *start, const fe_
 
     fputs(msgs_lookup("histRF"), f);
     fputc('\n', f);
+#endif
     return NULL;
 }
 
@@ -507,35 +501,36 @@ os_error *fe_history_write_combined_list(FILE *f, const fe_history_item *start, 
     for (i = 0, item = current; i < N_RECENT_SITES/2 && item && item->next; i++, item = item->next)
         ;
 
-    fprintf(f, msgs_lookup("histCT"), i);
+    fprintf(f, msgs_lookup("histC.T"), i);
     s = getenv(PROFILE_NAME_VAR);
-    fprintf(f, msgs_lookup("histC1"), strsafe(s));
+    fprintf(f, msgs_lookup("histC.1"), strsafe(s));
 
     /* write current places */
     for (i = 0; i < N_RECENT_SITES && item; i++, item = item->prev)
     {
         if (item == current && i != 0)
-            fputs(msgs_lookup("histS1"), f);
+            fputs(msgs_lookup("histC.S.1"), f);
 
         fe_hist_write_item(f, item, i);
 
         if (item == current && i != N_RECENT_SITES - 1)
-            fputs(msgs_lookup("histS2"), f);
+            fputs(msgs_lookup("histC.S.2"), f);
     }
 
-    fprintf(f, msgs_lookup("histC2"), strsafe(s));
+    fprintf(f, msgs_lookup("histC.2"), strsafe(s));
 
     /* write global list */
-    fe__global_write_list(f);
+    fe__global_write_list(f, NULL);
 
-    fputs(msgs_lookup("histCF"), f);
+    fputs(msgs_lookup("histC.F"), f);
     fputc('\n', f);
     return NULL;
 }
 
 os_error *fe_history_show(fe_view v)
 {
-    return frontend_open_url("ncint:openpanel?name=historycombined", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE);
+    return fe_internal_toggle_panel("historycombined");
+/*  return frontend_open_url("ncint:openpanel?name=historycombined", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE); */
 }
 
 /* ---------------------------------------------------------------------------------------------*/

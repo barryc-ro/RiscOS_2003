@@ -5,6 +5,8 @@
 
 /* rcolours.h */
 
+/* Things stored in config.colours[] */
+
 #define render_colour_PLAIN	0	/* text fg, HR fill colour, TEXT, PASSWORD, TEXTAREA fg */
 #define render_colour_AREF	1	/* colour for text links and image links borders (link) */
 #define render_colour_CREF	2	/* colour for visited links (vlink) */
@@ -18,17 +20,34 @@
 #define render_colour_INPUT_S	10	/* selected bg colour for SELECT & SUBMIT, RESET, BUTTON items */
 #define render_colour_HIGHLIGHT 11	/* col for highlight box */
 #define render_colour_ACTIVATED 12	/* col for activating links (alink) */
-#define render_colour_RGB       13
+#define render_colour_BEVEL	13	/* col for activating links (alink) */
+#define render_colour_RGB       14
 
 /* pdh: render_colour_RGB in the bottom byte means that the top three bytes
  * are an RGB colour
  */
 
-#define render_colour_COUNT	14
+#define render_colour_COUNT	15
 
 /* ---------------------------------------------------------------------- */
 
-/*#ifdef STBWEB*/
+/* Things stored in config.colour_list[] */
+
+#define render_colour_list_WRITE		0
+#define render_colour_list_WRITE_HIGHLIGHT	1
+#define render_colour_list_SELECT		2
+#define render_colour_list_SELECT_HIGHLIGHT	3
+#define render_colour_list_BUTTON		4
+#define render_colour_list_BUTTON_HIGHLIGHT	5
+#define render_colour_list_BEVEL		6
+#define render_colour_list_HIGHLIGHT		7
+#define render_colour_list_ACTIVATED		8
+#define render_colour_list_WINDOW_BORDER	9
+#define render_colour_list_COUNT		10
+
+/* ---------------------------------------------------------------------- */
+
+#if 0
 
 /* unhighlighted plinth colours */
 #define plinth_col_L	(0x55555500 | render_colour_RGB)
@@ -48,7 +67,7 @@
 /* plinth fill hilighted colour */
 #define plinth_col_FILL	(0x88000000 | render_colour_RGB)
 
-/*#endif*/
+#endif
 
 /* ---------------------------------------------------------------------- */
 

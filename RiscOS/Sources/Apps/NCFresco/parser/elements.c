@@ -8,6 +8,7 @@
  */
 
 #include "sgmlparser.h"
+#include "profile.h"
 
 extern void report_start (SGMLCTX * context, ELEMENT * element, VALUES * attributes);
 extern void report_finish (SGMLCTX * context, ELEMENT * element);
@@ -156,6 +157,8 @@ static BOOL open_within_container(SGMLCTX *context, const tag)
     for (item = context->tos; item != NULL && !seen && !stop; item = item->outer)
     {
 	ELEMENT *elem = &context->elements[item->element];
+	
+	PINC_OPEN_WITHIN_CONTAINER_CHECKS;
 
 	stop = (elem->flags & FLAG_CONTAINER) != 0 && (elem->flags & FLAG_FULL_UNWIND) == 0;
 	seen = elem->id == tag;
@@ -555,10 +558,8 @@ static void special_container_open_actions(SGMLCTX *context, ELEMENT *element)
 	ASSERT(0==1);
     }
 
-    PRSDBG(("special_container_open_actions: on exit the stack looks like this:\n"));
-#if DEBUG
-    dump_stack(context);
-#endif
+    PRSDBGN(("special_container_open_actions: on exit the stack looks like this:\n"));
+    /*dump_stack(context);*/
 }
 
 static void special_container_close_actions(SGMLCTX *context, ELEMENT *element)
@@ -616,10 +617,8 @@ static void special_container_close_actions(SGMLCTX *context, ELEMENT *element)
 	ASSERT(0==1);
     }
 
-    PRSDBG(("special_container_close_actions: on exit the stack looks like this:\n"));
-#if DEBUG
-    dump_stack(context);
-#endif
+    PRSDBGN(("special_container_close_actions: on exit the stack looks like this:\n"));
+    /*dump_stack(context);*/
 }
 
 /*****************************************************************************
@@ -1230,6 +1229,8 @@ extern void do_got_element(SGMLCTX *context)
     else
     {
 	parse_then_perform_element_open(context);
+
+	context->strip_initial_newline = 1;
     }
 
     clear_inhand(context);

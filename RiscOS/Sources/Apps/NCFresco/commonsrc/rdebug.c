@@ -75,7 +75,7 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 
     if (strcasecomp(argv[0], "show") == 0)
     {
-	if (argc == 2)
+	if (argc >= 2)
 	{
 #if MEMLIB
 	    extern char   *flexptr__base;
@@ -183,6 +183,15 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 		extern void history_dump(BOOL global);
 		history_dump(FALSE);
 		handled = 1;
+	    }
+	    else if (strcasecomp(argv[1], "view") == 0)
+	    {
+		if (argc >= 3)
+		{
+		    extern void view_dump(const char *name);
+		    view_dump(argv[2]);
+		    handled = 1;
+		}
 	    }
 #endif
 	}

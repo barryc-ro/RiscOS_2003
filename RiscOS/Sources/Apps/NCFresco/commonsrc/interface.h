@@ -122,6 +122,7 @@ int frontend_view_status(fe_view v, int status_type, ...);
                                         /* (void) */
 #define sb_status_PLUGIN	12	/* A plugin has opened an instance or changed busy or play state */
                                         /* (plugin instance, int busy, int play_state, int opening, int closing) */
+#define sb_status_LOADING	13	/* Like FETCHED but comes from local file */
 
 #define sb_status_PROGRESS_ABORTED  (-1)
 #define sb_status_PROGRESS_LOCAL    (-2)
@@ -362,18 +363,25 @@ os_error *backend_doc_file_info(be_doc doc, int *ft, int *load, int *exec, int *
 /* Return information about images in the document */
 os_error *backend_doc_images(be_doc doc, int *waiting, int *fetching, int *fetched, int *errors, int* in_trans, int *so_far);
 
+/* Total number of images (i.e. whether save box says "with images") */
+int backend_total_images( be_doc doc );
+
 /* Return information about an image item. */
 os_error *backend_image_info(be_doc doc, void *im, int *flags, int *ftype, char **url);
 #define be_image_info_FETCHED		(1 << 0)
 #define be_image_info_DEFERED		(1 << 1)
 #define be_image_info_RENDERABLE	(1 << 2)
 #define be_image_info_ERROR		(1 << 3)
+#define be_image_info_BLACKLIST         (1 << 4)
 #define be_image_info_INTERLACED	(1 << 16)
 #define be_image_info_MASK		(1 << 17)
 #define be_image_info_ANIMATION		(1 << 18)
 
 /* Flush an image, or all images if the image handle is NULL. */
 os_error *backend_doc_flush_image(be_doc doc, void *imh, int flags);
+
+/* Defer all images. Doesn't abort fetches which have already started */
+void backend_defer_images( be_doc doc );
 
 /* Given a position within a document, locate the item as the position
  * given in *x and *y.  The item at *ti is filled in and *x and *y are

@@ -123,17 +123,6 @@ fe_view fe_find_window(fe_view start, wimp_w w)
     return v;
 }
 
-/* find top of stack*/
-#if 0
-/* pdh: now called frameutils_find_top and in commonsrc/frameutils.c */
-fe_view fe_find_top(fe_view v)
-{
-    if (v) while (v->parent)
-        v = v->parent;
-    return v;
-}
-#endif
-
 fe_view fe_find_top_popup(fe_view v)
 {
     v = frameutils_find_top(v);
@@ -257,7 +246,6 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
         }
     }
 
-#if 1
     /* Special targets open up a transient window */
     if (target && parent == NULL && strncmp(target, "__", 2) == 0 && strcasecomp(target, "__top") != 0)
     {
@@ -265,7 +253,6 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	if (!parent)
 	    parent = fe_dbox_view(target);
     }
-#endif
 
     /* don't check recursion unless this was initiated from a frameset */
     if (parent && (flags & fe_open_url_FROM_FRAME) && check_recursion(parent->parent, url))
@@ -762,6 +749,30 @@ void fe_iconise(BOOL iconise)
 
 	iconised = iconise;
     }
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+void view_dump(const char *name)
+{
+    fe_view v = fe_find_target(main_view, name);
+    if (!v)
+	return;
+
+    DBG(("\n"));
+    DBG(("view:        %p '%s'\n", v, v->name));
+    DBG(("magic:       %x\n", v->magic));
+    DBG(("links:       up %p prev %p next %p down %p down last %p\n", v->parent, v->prev, v->next, v->children, v->children_last));
+    DBG(("document:    disp %p fetch %p\n", v->displaying, v->fetching));
+    DBG(("open flags:  %x\n", v->flags));
+    DBG(("doc size     %d x %d\n", v->doc_width, v->doc_height));
+    DBG(("wimp:        %x\n", v->w));
+    DBG(("safe margin: %d,%d %d,%d\n", v->margin.x0, v->margin.y0, v->margin.x1, v->margin.y1));
+    DBG(("back margin: %d,%d %d,%d\n", v->backend_margin.x0, v->backend_margin.y0, v->backend_margin.x1, v->backend_margin.y1));
+    DBG(("box:         %d,%d %d,%d\n", v->box.x0, v->box.y0, v->box.x1, v->box.y1));
+    DBG(("scolling:    type %d bars %d,%d\n", v->scrolling, v->x_scroll_bar, v->y_scroll_bar));
+    DBG(("stretch:     %d\n", v->stretch_document));
+    DBG(("\n"));
 }
 
 /* ------------------------------------------------------------------------------------------- */

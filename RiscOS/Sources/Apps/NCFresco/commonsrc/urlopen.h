@@ -15,6 +15,8 @@
 #define wimp_MCACHEDURL     0x4AF85
 #define wimp_MCACHEDFILE    0x4AF86
 
+#define wimp_MOPENHOTLIST   0x4AF87
+
 #if 1
 
 typedef union {

@@ -168,6 +168,22 @@ static void history_event_handler(int event, fe_view v)
     case fevent_HISTORY_SHOW_RECENT:
 	frontend_complain(fe_internal_toggle_panel("historyrecent"));
 	break;
+
+    case fevent_HISTORY_SHOW_SWITCHABLE:
+	frontend_complain(fe_internal_toggle_panel("historyswitch"));
+	break;
+
+    case fevent_HISTORY_SHOW_ALPHA_FRAMES:
+	frontend_complain(fe_internal_toggle_panel_args("historyalpha", "frame=0"));
+	break;
+
+    case fevent_HISTORY_SHOW_RECENT_FRAMES:
+	frontend_complain(fe_internal_toggle_panel_args("historyrecent", "frame=0"));
+	break;
+
+    case fevent_HISTORY_SHOW_SWITCHABLE_FRAMES:
+	frontend_complain(fe_internal_toggle_panel_args("historyswitch", "frame=0"));
+	break;
     }
 }
 
@@ -200,6 +216,27 @@ static void hotlist_event_handler(int event, fe_view v)
     case fevent_HOTLIST_SHOW_DELETE:
 	frontend_complain(fe_internal_toggle_panel("favsdelete"));
 	break;
+
+    case fevent_HOTLIST_FLUSH_DELETE:
+	frontend_complain(hotlist_flush_pending_delete());
+	break;
+
+    case fevent_HOTLIST_SHOW_SWITCHABLE:
+	frontend_complain(fe_internal_toggle_panel("favswitch"));
+	break;
+
+    case fevent_HOTLIST_SHOW_FRAMES:
+	frontend_complain(fe_internal_toggle_panel_args("favs", "frame=0"));
+	break;
+
+    case fevent_HOTLIST_SHOW_DELETE_FRAMES:
+	frontend_complain(fe_internal_toggle_panel_args("favsdelete", "frame=0"));
+	break;
+
+    case fevent_HOTLIST_SHOW_SWITCHABLE_FRAMES:
+	frontend_complain(fe_internal_toggle_panel_args("favswitch", "frame=0"));
+	break;
+
     }
 }
 
@@ -535,17 +572,21 @@ static void toolbar_event_handler(int event, fe_view v)
 	sound_event(snd_GENERIC_BACK);
 	frontend_complain(fe_status_unstack(v));
     }
+#if !DEBUG
     else if (fe_popup_open() || on_screen_kbd )
     {
 	sound_event(snd_WARN_BAD_KEY);
     }
+#endif
     else
     {
 	frontend_complain(fe_status_open_toolbar(v, event - fevent_TOOLBAR_MAIN));
 
+#if 0
 	if (event == fevent_TOOLBAR_DETAILS)
 	    fe_open_version(v);
 	else
+#endif
 	    sound_event(soundfx_ACTION_OK);
     }
 }

@@ -844,6 +844,13 @@ static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, 
     {
 	widths[RAW_MIN] = cell->stream.width_info.minwidth;
 	widths[RAW_MAX] = cell->stream.width_info.maxwidth;
+
+#if DEBUG
+	if (widths[RAW_MIN] > widths[RAW_MAX])
+	{
+	    FMTDBG(("init_group: min %d, max %d\n", widths[RAW_MIN] , widths[RAW_MAX]));
+	}
+#endif
 	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
     }
     else
@@ -1050,16 +1057,22 @@ static void colspan_init_structure1(rid_table_item *table, BOOL horiz, int scale
     /*colspan_trace_cells(table, horiz);*/
 }
 
-/*****************************************************************************/
+/*****************************************************************************
+
+  Working horizontally, so clear a vertical strip.
+
+ */
 
 static void set_nocons_horiz(rid_table_item *table, int x, rid_cell_flags f)
 {
     int y;
 
+    FMTDBG(("set_nocons_horiz: %d %d %x\n", table->idnum, x, f));
+
     for (y = 0; y < table->cells.y; y++)
     {
 	rid_table_cell *cell = *CELLFOR(table, x, y);
-	if (cell != NULL && cell->span.x == 1 && (cell->flags & f) != 0 )
+	if (cell != NULL && cell->span.x == 1 && ((cell->flags & f) != 0) )
 	{
 	    FMTDBG(("Narrow cell %d,%d stomped\n", cell->cell.x, cell->cell.y));
 	    cell->flags |= rid_cf_NOCONS;
@@ -1079,7 +1092,7 @@ static void set_nocons_vert(rid_table_item *table, int y, rid_cell_flags f)
     for (x = 0; x < table->cells.x; x++)
     {
 	rid_table_cell *cell = *CELLFOR(table, x, y);
-	if (cell != NULL && cell->span.y == 1 && (cell->flags & f) != 0)
+	if (cell != NULL && cell->span.y == 1 && ((cell->flags & f) != 0) )
 	{
 	    FMTDBG(("Narrow cell %d,%d stomped\n", cell->cell.x, cell->cell.y));
 	    cell->flags |= rid_cf_NOCONS;
@@ -1266,7 +1279,7 @@ extern void colspan_init_structure(rid_table_item *table, BOOL horiz, int scale_
 	FMTDBG(("\nRebuilding colspan structure with some constraints overridden\n\n"));
 	colspan_free_structure(table, horiz);
 	colspan_init_structure1(table, horiz, scale_value);
-
+colspan_trace_cells(table,horiz);
 	/* Should have broken ALL clashes */
 	ASSERT( ! have_contradictions(table, horiz) );
     }
@@ -1812,8 +1825,15 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 
     if (horiz)
     {
+	y = table->border;
+	if (table->caption)
+	{
+	    table->caption->off.x = y;
+	    table->caption->size.x = table->caption->stream.fwidth; /* ?? */
+	    FMTDBG(("reflect_into_table: pickup caption size.x %d\n", table->caption->size.x));
+	}
 	/* Set the horizontal offset for each column */
-	for (x = 0, y = table->border; x < table->cells.x; x++)
+	for (x = 0; x < table->cells.x; x++)
 	{
 	    table->colhdrs[x]->offx = y;
 	    table->colhdrs[x]->sizex = the_cells[x].width[ACTUAL];
@@ -1822,13 +1842,35 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
     }
     else
     {
+	y = table->border;
+
+	if (table->caption && table->caption->calign != rid_ct_BOTTOM)
+	{
+	    y += table->cellspacing + table->cellpadding;
+	    table->caption->off.y = -y;
+	    FMTDBG(("reflect_into_table: set off.y to %d\n", table->caption->off.y));
+	    y += (table->caption->size.y = -table->caption->stream.height);
+	    y += table->cellspacing + table->cellpadding;
+	    FMTDBG(("reflect_into_table: top caption height %d\n", table->caption->stream.height));
+	}
+
 	/* Set the vertical offset for each column */
-	for (x = 0, y = table->border; x < table->cells.y; x++)
+	for (x = 0; x < table->cells.y; x++)
 	{
 	    table->rowhdrs[x]->offy = -y;
 	    table->rowhdrs[x]->sizey = the_cells[x].width[ACTUAL];
 	    y += table->rowhdrs[x]->sizey;
 	}
+
+	if (table->caption && table->caption->calign == rid_ct_BOTTOM)
+	{
+	    y += 2 * table->cellspacing + 2 * table->cellpadding;
+	    table->caption->off.y = -y;
+	    table->caption->size.y = -table->caption->stream.height;
+	    FMTDBG(("reflect_into_table: set off.y to %d\n", table->caption->off.y));
+	    FMTDBG(("reflect_into_table: bottom caption height %d\n", table->caption->stream.height));
+	}
+
     }
 
 
@@ -1859,20 +1901,7 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 	    for (t = 0, i = cell->cell.y; i < cell->cell.y + cell->span.y; i++)
 		t += table->rowhdrs[i]->sizey;
 	    cell->size.y = t;
-#if 0
-	    ASSERT( -cell->stream.height <= (t - cb) );
-#endif
 
-#if 0
-            /* pdh: removed this as (a) having stream.height the size of the
-             * cell means we can't do valign, and (b) if people really want the
-             * size of the cell they should get it from cell->size.y
-             */
-	    FMTDBG(("Height was %d, now %d\n", cell->stream.height, - (t-cb)));
-	    cell->stream.height = - (t - cb);
-#endif
-
-	    /*cell->stream.height -= table->cellspacing + table->cellpadding;*/
 	    if (cell->span.y == 0)
 	    {
 #ifdef PLOTCHECK
@@ -1881,9 +1910,7 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 	    }
 	    else
 	    {
-		/* @@@@ */
 		ASSERT(cell->stream.fwidth >= 0);
-		/*cell->stream.fwidth = 0;*/
 	    }
 	}
     }
@@ -2210,7 +2237,21 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	    fwidth = master[LAST_MAX];
 	FMTDBG(("colspan_share_extra_space: can do PCT_MIN: slop %d\n", slop));
     }
-    
+
+    if (horiz && table->caption != NULL)
+    {
+	const int x = table->caption->stream.width_info.minwidth + CAPTION_TOTAL_BIAS(table);
+	if (x > fwidth)
+	{
+	    FMTDBG(("Caption minwidth %d overrides fwidth %d\n",
+		    x, fwidth));
+	    fwidth = x;
+	}
+	table->caption->stream.fwidth = fwidth - CAPTION_TOTAL_BIAS(table);
+	FMTDBG(("colspan_share_extra_space: caption given fwidth %d\n",
+		table->caption->stream.fwidth));
+    }
+
     slop = reflect_percentages(table, horiz, fwidth);
 #endif
     

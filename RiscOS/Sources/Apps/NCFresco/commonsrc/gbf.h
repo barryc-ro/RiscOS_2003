@@ -13,7 +13,7 @@
 #define GBF_GUESS_ATTRIBUTES		0x00000008
 #define GBF_GUESS_ENUMERATIONS		0x00000010
 #define GBF_TRANSLATE_UNDEF_CHARS	0x00000020
-#define GBF_NEW_FORMATTER		0x00000040
+#define GBF_NEW_FORMATTER		0x00000040 /* pdh: won't work with this off */
 #define GBF_AUTOFIT			0x00000080
 #define GBF_NETSCAPE_OVERLAPS		0x00000100 /* DAF: At your own peril! */
 #define GBF_HARD_TABLES			0x00000200
@@ -22,7 +22,10 @@
 #define GBF_ANTI_TWITTER		0x00001000 /* using s/w anti-twitter */
 #define GBF_VERY_LOW_MEMORY		0x00002000 /* have almost exhausted emergency cache */
 #define GBF_SI1_PCT			0x00004000 /* Hack for Si for %ages and minwidth */
-#define GBF_AUTOFIT_ALL_TEXT		0x00008000 /* shrink all text on autofit */
+#define GBF_CAPTIONS			0x00008000 /* Do captions in tables - might be unstable */
+#define GBF_AUTOFIT_ALL_TEXT		0x00010000 /* shrink all text on autofit */
+#define GBF_FILES_IN_ONE_GO             0x00020000 /* local files loaded in one lump */
+#define GBF_RELATIVE_TABLE		0x00040000 /* Handle relative widths in tables */
 
 /*****************************************************************************/
 
@@ -35,7 +38,7 @@
 
 A = max(LM) + max(CW) + max(RM)
     [tends to be wide]
-B = max(LM + CW + RM) 
+B = max(LM + CW + RM)
     [tends to be narrow]
 
 *****************************************************************************
@@ -49,19 +52,19 @@ B = max(LM + CW + RM)
 #define gbf_active(arg) ( (arg==GBF_GUESS_ATTRIBUTES)           \
                           || (arg==GBF_GUESS_ENUMERATIONS)      \
                           || (arg==GBF_NEW_FORMATTER) 		\
-			  || (arg==GBF_TABLES_UNEXPECTED) )
-
-/* DAF: 970620: I suspect this is wrong WRT tables
-   initialisation. Needs more though before this branch is used. */
-#define gbf_init()
+			  || (arg==GBF_TABLES_UNEXPECTED)       \
+			  || (arg==GBF_MINWIDTH_B)              \
+			  || (arg==GBF_SI1_PCT)                 \
+			  || (arg==GBF_FILES_IN_ONE_GO) )
 
 #else
 
 extern int gbf_flags;
 extern int gbf_active(int gbf);
-extern void gbf_init(void);	/* Don't ask why needed! */
 
 #endif
+
+extern void gbf_init(void);	/* Don't ask why needed! */
 
 /*****************************************************************************/
 

@@ -960,7 +960,7 @@ static void cache_dump_dir_wipe(int dir)
     r.r[3] = 0;
     os_swix(OS_FSControl, &r);
 
-#if 0
+#ifndef STBWEB
     dp = &cache[dir];
 
     ACCDBG(("dump_dir_wipe: dp items %p\n", dp->items));
@@ -1324,6 +1324,7 @@ static os_error *cache_init(int size)
 #endif
     return e;
 }
+
 
 static void cache_tidyup(void)
 {

@@ -1299,7 +1299,7 @@ static void allocate_widths_table(antweb_doc *doc,
 	allocate_widths_stream(doc,
 			       rh,
 			       &table->caption->stream,
-			       fwidth - TABLE_OUTSIDE_BIAS(table));
+			       fwidth - CAPTION_TOTAL_BIAS(table));
     }
 
     for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
@@ -1485,7 +1485,10 @@ static void recurse_format_table(antweb_doc *doc,
     /* Format all the descendents below us */
 
     if (table->caption != NULL)
+    {
+	FMTDBG(("recurse_format_table: formatting caption\n"));
 	recurse_format_stream(doc, rh, &table->caption->stream, depth);
+    }
 
     for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
     {

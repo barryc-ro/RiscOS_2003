@@ -633,93 +633,23 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	/* tabs according to how many characters in hand */
 
 	STRING t;
-#if 1
+
 	t = get_tab_expanded_string(item, htmlctx->inhand_string);
-#else
-	int i, extra = htmlctx->inhand_string.bytes;
 
-	for (i = 0; i < item.bytes; i++)
-	{
-	    extra++;
-	    
-	    if (item.ptr[i] == '\t')
-	    {
-		PRSDBG(("Performing tab expansion for <PRE> text\n"));
-		while ( (extra & 7) != 0 )
-		    extra++;
-	    }
-	}
-
-	t.bytes = extra;
-	t.ptr = mm_malloc(extra + 1);
-	extra = htmlctx->inhand_string.bytes;
-
-	memcpy(t.ptr, htmlctx->inhand_string.ptr, htmlctx->inhand_string.bytes);
-	
-	for (i = 0; i < item.bytes; i++)
-	{
-	    if (item.ptr[i] == '\t')
-	    {
-		t.ptr[extra++] = ' ';
-		while ( (extra & 7) != 0 )
-		    t.ptr[extra++] = ' ';
-	    }
-	    else
-	    {
-		t.ptr[extra++] = item.ptr[i];
-	    }
-	}
-
-	t.ptr[extra] = 0;
-#endif
 	string_free(&item);
 	string_free(&htmlctx->inhand_string);
+
 	htmlctx->inhand_string = t;
 	htmlctx->inhand_reason = DELIVER_WORD;
     }
     else
     {
 	STRING t;
-#if 1
 	STRING null;
+
 	null.bytes = 0;
 	t = get_tab_expanded_string(item, null);
-#else
-	int i, extra = 0;
 
-	for (i = 0; i < item.bytes; i++)
-	{
-	    extra++;
-	    
-	    if (item.ptr[i] == '\t')
-	    {
-		PRSDBG(("Performing tab expansion for <PRE> text\n"));
-		while ( (extra & 7) != 0 )
-		    extra++;
-	    }
-	}
-
-	t.bytes = extra;
-	t.ptr = mm_malloc(extra + 1);
-	extra = htmlctx->inhand_string.bytes; /* SJM: 11/05/96 shouldn't this be zero ?? */
-
-	for (i = 0; i < item.bytes; i++)
-	{
-	    if (item.ptr[i] == '\t')
-	    {
-		t.ptr[extra++] = ' ';
-		while ( (extra & 7) != 0 )
-		    t.ptr[extra++] = ' ';
-	    }
-	    else
-	    {
-		t.ptr[extra++] = item.ptr[i];
-	    }
-	}
-
-	t.ptr[extra] = 0;
-
-#endif
 	string_free(&item);
 
 	htmlctx->inhand_string = t;
@@ -799,7 +729,9 @@ static void pre_deliver_eol(SGMLCTX *context, int reason, STRING item, ELEMENT *
 {
     HTMLCTX *htmlctx = context->clictx;
     
-    text_item_push_word(htmlctx, rid_flag_LINE_BREAK, WITHOUT_SPACE);
+    /* SJM: 07Aug97 don't want newlines from textareas being displayed! */
+    if (context->tos->element != HTML_TEXTAREA)
+	text_item_push_word(htmlctx, rid_flag_LINE_BREAK, WITHOUT_SPACE);
 
     htmlctx->inhand_reason = DELIVER_NOP;
 }
@@ -810,7 +742,8 @@ static void pre_deliver_eos(SGMLCTX *context, int reason, STRING item, ELEMENT *
 {
     HTMLCTX *htmlctx = context->clictx;
 
-    if (htmlctx->inhand_reason == DELIVER_WORD)
+    /* SJM: 07Aug97 not sure what this does but we'll exclude textarea's from it anyway */
+    if (htmlctx->inhand_reason == DELIVER_WORD && context->tos->element != HTML_TEXTAREA)
     {
 	text_item_push_word(htmlctx, rid_flag_NO_BREAK, WITHOUT_SPACE);
     }

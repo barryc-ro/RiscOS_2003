@@ -19,7 +19,6 @@
 
 #define DEFAULT_BORDER_WIDTH	8		/* OS units */
 #define DEFAULT_BORDER_3D	TRUE
-#define DEFAULT_BORDER_COLOUR	plinth_col_HL_D
 
 /*****************************************************************************/
 
@@ -188,7 +187,7 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     {
         frameset->bwidth = DEFAULT_BORDER_WIDTH;
 	container->border = DEFAULT_BORDER_3D;
-	container->bordercolour = DEFAULT_BORDER_COLOUR;
+	container->bordercolour = -1;
     }
 
     /* Netscape 3/MSIE3 features */

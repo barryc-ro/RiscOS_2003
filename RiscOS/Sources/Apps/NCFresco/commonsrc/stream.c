@@ -65,13 +65,13 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
     be_item my_ti = NULL;
     /*        rid_table_cell *cell;*/
 
-    LOCATEDBG((stderr, "Locating item in table %p, offset %d,%d\n", table, tx, ty));
+    LOCATEDBG(("Locating item in table %p, offset %d,%d\n", table, tx, ty));
 
     ty -= table->cellspacing + table->cellpadding;
 
     if (ty < 0)
     {
-	LOCATEDBG((stderr, "Below the bottom border\n"));
+	LOCATEDBG(("Below the bottom border\n"));
 	return;
     }
 
@@ -88,13 +88,13 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 
     if (ty < 0)
     {
-	LOCATEDBG((stderr, "Matched vertically within row %d\n", y));
+	LOCATEDBG(("Matched vertically within row %d\n", y));
 
 	tx -= table->cellspacing + table->cellpadding;
 
 	if (tx < 0)
 	{
-	    LOCATEDBG((stderr, "In the left border\n"));
+	    LOCATEDBG(("In the left border\n"));
 	    return;
 	}
 
@@ -112,7 +112,7 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 	{
 	    rid_table_cell *cell = *CELLFOR(table, x, y);
 
-	    LOCATEDBG((stderr, "Matched horizontally within cell %d,%d - %s\n", x, y, cell ? "Occupied" : "No cell"));
+	    LOCATEDBG(("Matched horizontally within cell %d,%d - %s\n", x, y, cell ? "Occupied" : "No cell"));
 	    if (cell != NULL)
 	    {
 		/* Find the offset within the table */
@@ -126,7 +126,7 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 
 		if (my_ti != NULL)
 		{
-		    LOCATEDBG((stderr, "Returning matched child item\n"));
+		    LOCATEDBG(("Returning matched child item\n"));
 		    *xp = tx;
 		    *yp = ty;
 		    *ti = my_ti;
@@ -135,11 +135,11 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 	    }
 	}
 
-	LOCATEDBG((stderr, "Either beyond right border or not over an item\n"));
+	LOCATEDBG(("Either beyond right border or not over an item\n"));
 	return;
     }
 
-    LOCATEDBG((stderr, "Trying to match within caption\n"));
+    LOCATEDBG(("Trying to match within caption\n"));
 
     /* @@@@ this is probably wrong */
     if (table->caption != NULL)
@@ -149,7 +149,7 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 
 	if (my_ti != NULL)
 	{
-	    LOCATEDBG((stderr, "Matched in the caption\n"));
+	    LOCATEDBG(("Matched in the caption\n"));
 	    *xp = tx;
 	    *yp = ty;
 	    *ti = my_ti;
@@ -157,7 +157,7 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 	}
     }
 
-    LOCATEDBG((stderr, "Failed to match any item - just returning the table\n"));
+    LOCATEDBG(("Failed to match any item - just returning the table\n"));
 
     return;
 }
@@ -170,7 +170,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 
     *ti = NULL;
 
-    LOCATEDBG((stderr, "Locating item at %d,%d in stream %p\n", *x, *y, st));
+    LOCATEDBG(("Locating item at %d,%d in stream %p\n", *x, *y, st));
 
     if (st == NULL || st->pos_list == NULL)
         return NULL;
@@ -182,7 +182,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
     for (pi = st->pos_list; pi->next && pi->next->top > *y; pi = pi->next)
        ;
 
-    LOCATEDBG((stderr, "Found pos item %p, top at %d\n", pi, pi->top));
+    LOCATEDBG(("Found pos item %p, top at %d\n", pi, pi->top));
 
     /* A position way off to the left is taken as just wanting what is first on the line */
     if ( *x < -100)
@@ -191,7 +191,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
     }
     else if (pi->next == NULL)
     {
-	LOCATEDBG((stderr, "No items\n"));
+	LOCATEDBG(("No items\n"));
     }
     else
     {
@@ -252,7 +252,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	{
 	    if (*x < pi->left_margin)
 	    {
-		LOCATEDBG((stderr, "Pointer to the left of all items\n"));
+		LOCATEDBG(("Pointer to the left of all items\n"));
 	    }
 	    else
 	    {
@@ -286,7 +286,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 
 	if (found)
 	{
-	    LOCATEDBG((stderr, "Found item\n"));
+	    LOCATEDBG(("Found item\n"));
 
 	    *ti = ti2;
 
@@ -297,7 +297,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	}
     }
 
-    LOCATEDBG((stderr, "Locate pointer done: %p at %d, %d\n", *ti, *x, *y));
+    LOCATEDBG(("Locate pointer done: %p at %d, %d\n", *ti, *x, *y));
 
     return NULL;
 }
@@ -321,7 +321,7 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
     {
 	rid_float_item *fi;
 
-	LOCATEDBG((stderr, "Have floats\n"));
+	LOCATEDBG(("Have floats\n"));
 
         for ( fi = pi->floats->left; fi; fi = fi->next )
         {
@@ -695,6 +695,72 @@ void stream_write_as_drawfile(be_doc doc, rid_text_stream *stream,
 
 }
 
+void stream_iterate_box(be_doc doc, rid_text_item *ti, stream_iterate_box_fn fn, void *handle)
+{
+    wimp_box box;
+    int x, y;
+    BOOL finished;
+    rid_pos_item *pi = NULL;
+
+    /* initialise position */
+    stream_find_item_location(ti, &x, &y);
+    pi = ti->line;
+
+    do
+    {
+	/* call application with the current position */
+	box.x0 = x;
+	box.x1 = x + ti->width;
+	box.y0 = y - ti->max_down;
+	box.y1 = y + ti->max_up;
+
+ 	LOCATEDBG(("stream_iterate_box: doc%p ti%p pos %d,%d\n", doc, ti, x, y));
+	
+	finished = fn(doc, ti, &box, handle);
+
+	/* if we want the next one */
+	if (!finished)
+	{
+	    rid_text_item *next_ti = rid_scanf(ti);
+
+	    if (!next_ti)
+	    {
+		/* if no more then stop */
+	    }
+	    else if (FLOATING_ITEM(next_ti) || FLOATING_ITEM(ti))
+	    {
+		/* if this is floating or last was floating then get
+                   the position the long way */
+		stream_find_item_location(next_ti, &x, &y);
+		pi = next_ti->line;
+	    }
+	    else if (next_ti->line != ti->line)
+	    {
+		/* if we are in a table cell then we give up and find the location the long way */
+		if (pi->st->partype == rid_pt_HEADER)
+		{
+		    pi = next_ti->line;
+		    x += pi->left_margin;
+		    y += pi->top - pi->max_up;
+		}
+		else
+		{
+		    stream_find_item_location(next_ti, &x, &y);
+		    pi = next_ti->line;
+		}
+	    }
+	    else
+	    {
+		/* otherwise just increment x with the current width */
+		x += ti->width + ti->pad + pi->leading;
+	    }
+
+	    ti = next_ti;
+	}
+    }
+    while (ti && !finished);
+}
+
 void stream_write_as_text(rid_header *rh, rid_text_stream *stream, FILE *f)
 {
     rid_pos_item *pi;
@@ -718,3 +784,5 @@ void stream_write_as_text(rid_header *rh, rid_text_stream *stream, FILE *f)
 	fputc('\n', f);
     }
 }
+
+/* eof stream.c */

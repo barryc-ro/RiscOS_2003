@@ -36,10 +36,12 @@ extern int mm_poll(void);
 extern void mm_check(void);
 extern void mm_summary(void);
 extern void mm_dump(void);
- 
+
 extern void mm__check(FILE *f);
 extern void mm__summary(FILE *f);
 extern void mm__dump(FILE *f);
+
+extern void mm_minor_panic( char *token ); /* Give the error and return */
 
 #if !defined(__MemCheck_MemCheck_h)
 # include "memcheck/MemCheck.h"

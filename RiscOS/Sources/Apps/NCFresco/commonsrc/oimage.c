@@ -452,7 +452,7 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
 void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth)
 {
     rid_text_item_image *tii = (rid_text_item_image *) ti;
-    rid_pos_item *pi = fwidth == 0 ? NULL : ti->line;
+    rid_pos_item *pi = (fwidth == 0) ? NULL : ti->line;
     int width = -1, height = -1;
     image_flags fl;
     int min;
@@ -559,10 +559,22 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
     }
     else
     {
+	char *alt;
+
 	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
 		  bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0, doc);
 
-	oimage_render_text(ti, doc, fs, &bbox, tii->alt);
+	alt = tii->alt;
+	if (!alt)
+	{
+	    alt = strrchr(tii->src, '/');
+	    if (alt)
+		alt++;
+	    else
+		alt = tii->src;
+	}
+	
+	oimage_render_text(ti, doc, fs, &bbox, alt);
     }
 
     if (tii->bwidth)

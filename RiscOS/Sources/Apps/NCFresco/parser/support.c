@@ -64,7 +64,7 @@ static void dump_elements_open(BITS *bits)
 #endif
 }
 
-static void dump_stack(SGMLCTX *ctx)
+extern void dump_stack(SGMLCTX *ctx)
 {
     STACK_ITEM *item = ctx->tos;
     char *dir = "vvvv";
@@ -811,7 +811,7 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *gu
 
 extern void clear_stack_item(STACK_ITEM *stack)
 {
-    PRSDBGN(("clear_stack_item(%p)\n", stack));
+    /*PRSDBGN(("clear_stack_item(%p)\n", stack));*/
     stack->element = SGML_NO_ELEMENT;
     stack->matching_mode = -1;	/* Invalid matching mode please */
     memset( &stack->elements_open, 0, sizeof(stack->elements_open) );
@@ -934,7 +934,7 @@ extern void push_stack(SGMLCTX *context, ELEMENT *element)
     if (from->inner == NULL)
     {
 	from->inner = mm_calloc(1, sizeof(STACK_ITEM));
-	PRSDBGN(("push_stack(): creating new stack item %p\n", from->inner));
+	/*PRSDBGN(("push_stack(): creating new stack item %p\n", from->inner));*/
 	clear_stack_item(from->inner);
 	from->inner->outer = from;
 	from->inner->inner = NULL;
@@ -1060,6 +1060,8 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
 {
     ASSERT (context->tos != NULL);
 
+    PRSDBG(("pull_stack_item_to_top: %s\n", elements_name(context, item->element)));
+
     if (item != NULL && item != context->tos)
     {
         STACK_ITEM *tos   = context->tos;
@@ -1117,7 +1119,7 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
 			      in,
 			      sizeof(item->elements_open) / sizeof(item->elements_open[0]) );
 #if DEBUG
-	    PRSDBG(("\nYields    : "));
+	    PRSDBG(("\nYields        : "));
 	    dump_elements_open(tos->elements_open);
 	    PRSDBG(("\n"));
 #endif
@@ -1130,7 +1132,7 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
 	    ASSERT(item->outer != NULL);
 	    PRSDBG(("LHS CLR bitset: "));
 	    dump_elements_open(tos->elements_open);
-	    PRSDBG(("\nRHS CLR bitset: %s\nYields   :", elements[item->element].name.ptr));
+	    PRSDBG(("\nRHS CLR bitset: %s\nYields       :", elements[item->element].name.ptr));
 #endif
 	    element_clear_bit(tos->elements_open, item->element);
 #if DEBUG
@@ -1174,6 +1176,8 @@ extern void pull_stack_item_to_top_correcting_effects (SGMLCTX *context, STACK_I
 {
     ASSERT (context->tos != NULL);
 
+    PRSDBG(("pull_stack_item_to_top_correcting_effects: %s\n", elements_name(context, item->element)));
+
     if (item != NULL && item != context->tos)
     {
         memcpy (item->effects_active, context->tos->effects_active, sizeof (item->effects_active));
@@ -1181,6 +1185,9 @@ extern void pull_stack_item_to_top_correcting_effects (SGMLCTX *context, STACK_I
 
         pull_stack_item_to_top (context, item);
     }
+
+    PRSDBGN(("pull_stack_item_to_top_correcting_effects: afterwards:\n"));
+    /*dump_stack(context);*/
 }
 
 
@@ -1277,6 +1284,18 @@ extern void push_inhand(SGMLCTX *context)
 
     s.ptr = context->inhand.data;
     s.bytes = context->inhand.ix;
+
+    if (context->strip_initial_newline && s.bytes > 0 && (s.ptr[0] == '\n' || s.ptr[0] == '\r'))
+    {
+	s.ptr++;
+	s.bytes--;
+    }
+
+    if (context->strip_final_newline && s.bytes > 0 && (s.ptr[s.bytes-1] == '\n' || s.ptr[s.bytes-1] == '\r'))
+    {
+	s.bytes--;
+    }
+
     /* chopper doesn't free strings itself */
     /* Avoid empty strings when might not be appropriate */
     /* to flush chopper state */
@@ -1293,9 +1312,12 @@ extern void push_bar_last_inhand(SGMLCTX *context)
     if (context->inhand.ix > 1)
     {
 	STRING s;
+
 	s.ptr = context->inhand.data;
 	s.bytes = context->inhand.ix - 1;
+
 	(*context->chopper) (context, s);
+
 	context->inhand.data[0] = context->inhand.data[context->inhand.ix - 1];
 	context->inhand.ix = 1;
     }
@@ -1357,8 +1379,10 @@ extern void set_effects_fn (STACK_ITEM *st, unsigned shift, unsigned mask, BITS 
 {
     pack_fn (st->effects_active, shift, mask, value);
     pack_fn (st->effects_applied, shift, mask, mask);
+#if 0
     PRSDBGN(("set_effects_fn(): st: %p shift: %d mask: %08x value: %08x\n -> %08x %08x %08x\n",
              st, shift, mask, value, st->effects_active[0], st->effects_active[1], st->effects_active[2]));
+#endif
 }
 
 extern void set_effects_wf_flag_fn (STACK_ITEM *st, BITS value)
@@ -1369,8 +1393,10 @@ extern void set_effects_wf_flag_fn (STACK_ITEM *st, BITS value)
     v ^= (value & (STYLE_XOR_MASK >> STYLE_WF_INDEX_SHIFT));
     pack_fn (st->effects_active, STYLE_WF_INDEX_SHIFT, STYLE_WF_INDEX_MASK, v);
     pack_fn (st->effects_applied, STYLE_WF_INDEX_SHIFT, STYLE_WF_INDEX_MASK, value);
+#if 0
     PRSDBGN(("set_effects_wf_flag_fn(): st: %p value: %08x\n -> %08x %08x %08x\n",
              st, value, st->effects_active[0], st->effects_active[1], st->effects_active[2]));
+#endif
 }
 
 /*****************************************************************************/

@@ -27,6 +27,7 @@
 #include "indent.h"
 #include "webfonts.h"
 #include "gbf.h"
+#include "profile.h"
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -53,7 +54,7 @@ static void close_down_current_line(RID_FMT_STATE *fmt);
   But this got overridden to the supplied fwidth where possible so a
   single wide item did not cause everything to format beyond the
   supplied fwidth (window size) unnecessarily.
- 
+
   But this has perceived "problems" with the adjaceny of some floating
   items. These arise due to the combination of having less pixels than
   the "expected" (ie much less than 640) coupled with an increased
@@ -99,7 +100,7 @@ static void close_down_current_line(RID_FMT_STATE *fmt);
 	    : (pi)->floats->right->entry_margin\
         )				\
 )					/**/
- 
+
 /*****************************************************************************/
 
 static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
@@ -110,10 +111,11 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
     {
 	const int display_width = GET_FWIDTH(fmt, new_pos);
 	const int width = fmt->x_text_pos;
-	const int spare = (fmt->fmt_method == MAYBE) ? 
+	const int spare = (fmt->fmt_method == MAYBE) ?
 	    (new_pos->floats->right_margin - fmt->x_text_pos) :
 	    0;
 	int flags = 0;
+	rid_text_item *first_non_scaff;	/* SJM: 07Aug97: added this to catch HR after a SCAFF */
 
 	FMTDBGN(("center_and_right_align_adjustments: display_width %d, text_pos.x %d, flags %x, spare %d\n",
 		 display_width, width, 0 /* fmt->SOL->st.flags & rid_sf_ALIGN_MASK */, spare));
@@ -121,14 +123,18 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 	if (new_pos->first->tag == rid_tag_SCAFF && new_pos->first->next != NULL)
 	{
 	    flags = new_pos->first->next->st.flags;
+	    first_non_scaff = new_pos->first->next;
 	}
 	else
+	{
 	    flags = new_pos->first->st.flags;
-
+	    first_non_scaff = new_pos->first;
+	}
+	
 	switch (flags & rid_sf_ALIGN_MASK)
 	{
 	case rid_sf_ALIGN_JUSTIFY:
-	    if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
+	    if (first_non_scaff->width != MAGIC_WIDTH_HR && spare > 0)
 	    {
 		rid_text_item *ti, *lti;
 		int n;
@@ -162,7 +168,7 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 	    }
 	    break;
 	case rid_sf_ALIGN_CENTER:
-	    if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
+	    if (first_non_scaff->width != MAGIC_WIDTH_HR && spare > 0)
 	    {
 		/* Only center things that can fit on the display */
 
@@ -176,7 +182,7 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 	    }
 	    break;
 	case rid_sf_ALIGN_RIGHT:
-	    if (new_pos->first->width != MAGIC_WIDTH_HR && spare > 0)
+	    if (first_non_scaff->width != MAGIC_WIDTH_HR && spare > 0)
 	    {
 		FMTDBGN(("Right aligned\n"));
 
@@ -193,6 +199,8 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 static void dispose_pos_list(RID_FMT_STATE *fmt)
 {
     rid_pos_item *pi = fmt->stream->pos_list;
+
+    PINC_DISPOSE_POS_LIST;
 
     if (pi == NULL)
     {
@@ -398,7 +406,7 @@ static void attach_float_at_end(rid_float_item **flp, rid_float_item *fi)
 
   We have a floating item and have decided that it will fit on the
   currently known float line. Append it to the L/R list and update
-  information (margins especially) accordingly. 
+  information (margins especially) accordingly.
 
   The extra gluing rules for minwidth/widest and fwidth for floating
   images wanted by Si, and covered by GBF_MINWIDTH_A, are handled
@@ -439,6 +447,8 @@ static void position_floating_item( RID_FMT_STATE *fmt, rid_pos_item *pi,
 	fi->entry_margin = pi->left_margin;
 	pi->left_margin += width;               /* hmm */
 
+	FMTDBG(("3 pi->left_margin %d\n", pi->left_margin));
+
 	fmt->x_text_pos = pi->left_margin;
 
 	attach_float_at_end(&fl->left, fi);
@@ -459,7 +469,7 @@ static void position_floating_item( RID_FMT_STATE *fmt, rid_pos_item *pi,
 	else
 	{
 	    if (fl->right_margin > fmt->stream->widest &&
-		fmt->fmt_method == MAYBE && 
+		fmt->fmt_method == MAYBE &&
 		gbf_active(GBF_MINWIDTH_A))
 	    {
 		fmt->stream->widest = fl->right_margin;
@@ -704,6 +714,8 @@ static void set_margins_from_item( const RID_FMT_STATE *fmt, rid_pos_item *pi,
 
 
         pi->left_margin = ti->st.indent * INDENT_UNIT;
+	FMTDBG(("4 pi->left_margin %d\n", pi->left_margin));
+
         pi->floats->right_margin = format_width
                                     - ( (ti->flag & rid_flag_RINDENT)
                                          ? (INDENT_UNIT*INDENT_WIDTH) : 0 );
@@ -728,6 +740,8 @@ static void set_text_margin_info(RID_FMT_STATE *fmt, const int format_width)
     int emdf;
     int floatmargin;
     int rindent;
+
+    PINC_SET_TEXT_MARGIN_INFO;
 
     ASSERT(pi != NULL);
 
@@ -888,7 +902,7 @@ static BOOL unbreakable_sequence_fits(RID_FMT_STATE *fmt)
 		fits = TRUE;
 	    }
 	    else if ( (line->floats == NULL || (line->floats->right == NULL)) &&
-		      fmt->fmt_method == MAYBE && 
+		      fmt->fmt_method == MAYBE &&
 		      gbf_active(GBF_MINWIDTH_A))
 	    {
 		const int diff = fmt->format_width2 - fmt->format_width;
@@ -929,12 +943,12 @@ static void find_widest_info(RID_FMT_STATE *fmt)
     const int FW = GET_FWIDTH(fmt, fmt->text_line);
     const int LM = fmt->text_line->left_margin;
     const int used = fmt->x_text_pos + (FW - fmt->text_line->floats->right_margin);
-    
+
     if (LM != NOTINIT)
 	if (used > fmt->stream->widest)
 	    fmt->stream->widest = used;
-    
-    FMTDBG(("find_widest_info: MB: LM %d, XP %d, FW %d, RM %d, used %d, widest now %d\n",
+
+    FMTDBGN(("find_widest_info: MB: LM %d, XP %d, FW %d, RM %d, used %d, widest now %d\n",
 	    LM, fmt->x_text_pos, FW, fmt->text_line->floats->right_margin, used, fmt->stream->widest));
 
     if (fmt->fmt_method != MAYBE && gbf_active(GBF_MINWIDTH_A))
@@ -950,7 +964,7 @@ static void find_widest_info(RID_FMT_STATE *fmt)
 
 	    if (RM > fmt->RM_widest)
 		fmt->RM_widest = RM;
-	    
+
 	    if (CW > fmt->CW_widest)
 		fmt->CW_widest = CW;
 	}
@@ -1032,6 +1046,8 @@ static void fracture_copy_left(RID_FMT_STATE *fmt)
     rid_float_item **finp = &new->floats->left;	/* Floating Item Next Pointer */
     int carried_over = 0;
 
+    PINC_FRACTURE_COPY_LEFT;
+
     ASSERT(new != NULL);
     ASSERT(old->floats != NULL);
     ASSERT(fi != NULL);
@@ -1087,6 +1103,8 @@ static void fracture_copy_right(RID_FMT_STATE *fmt)
     rid_float_item **finp = &new->floats->right;
     rid_float_item *last = NULL;
     int carried_over = 0;
+
+    PINC_FRACTURE_COPY_RIGHT;
 
     ASSERT(new != NULL);
     ASSERT(old->floats != NULL);
@@ -1239,6 +1257,8 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     int max_down = 0;
     BOOL goRoundAgain = FALSE;
 
+    PINC_CDCL;
+
     ASSERT(fmt->text_line != NULL);
 
     /* Find height info for this line according to text items only */
@@ -1298,18 +1318,17 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
 	        /* Lots of filth for <IMG align=top> */
 	        if ( ti->tag == rid_tag_IMAGE )
 	        {
-#if 0
-	            IMGDBG((" ti%p: calling size()\n", ti ));
- 	            (object_table[ti->tag].size)( ti, fmt->rh, fmt->doc );
-#else
-		    int reduction = ti->st.indent * INDENT_UNIT     /* left margin */
-                         + ( (ti->flag & rid_flag_RINDENT)
-                                         ? (INDENT_UNIT*INDENT_WIDTH)
-                                         : 0 );         /* right margin */
+	            /* pdh: as si pointed out, just calling size DTWT
+	             * with percentage images, so do this instead
+	             */
+	            int reduction = ti->st.indent * INDENT_UNIT
+	                 + ( (ti->flag & rid_flag_RINDENT)
+	                                ? (INDENT_UNIT*INDENT_WIDTH)
+	                                : 0 );
 
-	            IMGDBG((" ti%p: calling size()\n", ti ));
-		    oimage_size_allocate(ti, fmt->rh, fmt->doc, fmt->stream->fwidth - reduction);
-#endif
+                    oimage_size_allocate( ti, fmt->rh, fmt->doc,
+                                          fmt->stream->fwidth - reduction );
+/* 	            (object_table[ti->tag].size)( ti, fmt->rh, fmt->doc ); */
 	        }
 
                 /* max_up shouldn't actually be different this time round,
@@ -1707,8 +1726,8 @@ static void formatting_start(RID_FMT_STATE *fmt)
        removes a lot of dynamic tests for which method is
        active. Avoid using the different behaviour during sizing
        passes. */
-    if (gbf_active(GBF_MINWIDTH_A) && 
-	fmt->fmt_method == MAYBE && 
+    if (gbf_active(GBF_MINWIDTH_A) &&
+	fmt->fmt_method == MAYBE &&
 	fmt->format_width < fmt->stream->width_info.minwidth)
     {
 	FMTDBG(("formatting_start: applying fmt->stream->width_info.minwidth of %d\n", fmt->stream->width_info.minwidth));
@@ -1741,11 +1760,25 @@ static void formatting_start(RID_FMT_STATE *fmt)
 	{
 	    rid_table_item *table = ((rid_text_item_table*)ti)->table;
 	    int cand_width = 0;
+	    int x;
 
 	    switch (fmt->fmt_method)
 	    {
 	    case MAYBE:
+		/* This width should take into account any caption
+                   requirements by now. */
 		cand_width = table->hwidth[ACTUAL];
+#if DEBUG
+		if (table->caption != NULL)
+		{
+		    x = table->caption->stream.width_info.minwidth + CAPTION_TOTAL_BIAS(table);
+		    FMTDBG(("formatting_start: x %d, cand_width %d\n", x, cand_width));
+		    if (x > cand_width)
+		    {
+			TASSERT(x > cand_width);
+		    }
+		}
+#endif
 		break;
 	    case DONT:
 		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
@@ -1758,9 +1791,34 @@ static void formatting_start(RID_FMT_STATE *fmt)
 			cand_width = table->hwidth[LAST_MIN];
 			FMTDBG(("formatting_start: override user width with %d\n", cand_width));
 		    }
+
+		    /* Table has a size, so don't let caption's
+                       maxwidth grow us. However, we must still meet
+                       its minwidth. */
+		    if (table->caption != NULL &&
+			table->caption->stream.width_info.minwidth + CAPTION_TOTAL_BIAS(table) > cand_width)
+		    {
+			FMTDBG(("formatting_start: caption minwidth %d overrides sized table width %d\n",
+				table->caption->stream.width_info.minwidth + CAPTION_TOTAL_BIAS(table), cand_width));
+			cand_width = table->caption->stream.width_info.minwidth + CAPTION_TOTAL_BIAS(table);
+		    }
 		}
 		else
+		{
 		    cand_width = table->hwidth[LAST_MAX];
+
+		    /* If the caption can go wider than the table, make
+		       the table maxwidth appear bigger than it actually
+		       is. */
+		    if (table->caption != NULL &&
+			table->caption->stream.width_info.maxwidth + CAPTION_TOTAL_BIAS(table) > cand_width)
+		    {
+			FMTDBG(("formatting_start: caption maxwidth %d overrides table maxwidth %d\n",
+				table->caption->stream.width_info.maxwidth + CAPTION_TOTAL_BIAS(table), cand_width));
+			cand_width = table->caption->stream.width_info.maxwidth + CAPTION_TOTAL_BIAS(table);
+		    }
+		}
+
 		break;
 	    case MUST:
 		if ( (table->flags & rid_tf_HAVE_WIDTH) != 0 &&
@@ -1776,6 +1834,19 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		}
 		else
 		    cand_width = table->hwidth[LAST_MIN];
+
+		/* If the minwidth of the caption is greater than the
+                   minwidth of the table, we must present the larger
+                   minwidth. This applies whether the table is sized
+                   or not. */
+		if (table->caption != NULL &&
+		    table->caption->stream.width_info.minwidth + CAPTION_TOTAL_BIAS(table) > cand_width)
+		{
+		    FMTDBG(("formatting_start: caption minwidth %d overrides table minwidth %d\n",
+			    table->caption->stream.width_info.minwidth + CAPTION_TOTAL_BIAS(table), cand_width));
+		    cand_width = table->caption->stream.width_info.minwidth + CAPTION_TOTAL_BIAS(table);
+		}
+
 		break;
 	    }
 
@@ -1891,7 +1962,7 @@ static void formatting_stop(RID_FMT_STATE *fmt)
 
     if (fmt->fmt_method != MAYBE && gbf_active(GBF_MINWIDTH_A))
     {
-#if 0
+#if 1
 	/* Attempts to not get carried away with the width to allocate */
 	const int a = fmt->LM_widest+ fmt->RM_widest;
 	const int b = fmt->CW_widest;
@@ -1905,7 +1976,7 @@ static void formatting_stop(RID_FMT_STATE *fmt)
 	/* Should work, but can lead to very wide widths. */
 	stream->widest = fmt->LM_widest + fmt->CW_widest + fmt->RM_widest;
 #endif
-	FMTDBG(("formatting_stop: GBF_MINWIDTH_A: %d = %d+%d+%d\n", 
+	FMTDBG(("formatting_stop: GBF_MINWIDTH_A: %d = %d+%d+%d\n",
 		stream->widest , fmt->LM_widest , fmt->CW_widest , fmt->RM_widest));
     }
 
@@ -1929,7 +2000,11 @@ static void formatting_stop(RID_FMT_STATE *fmt)
     }
 #endif
 
-    FMTDBG(("formatting_stop\n"));
+    FMTDBG(("formatting_stop: width %d, widest %d, fwidth %d, height %d\n",
+	    stream->width,
+	    stream->widest,
+	    stream->fwidth,
+	    stream->height));
 }
 
 /*****************************************************************************/
@@ -1940,6 +2015,8 @@ static void formatting_loop(RID_FMT_STATE *fmt)
 
     while (fmt->next_item != NULL/*  && !gbf_active(GBF_VERY_LOW_MEMORY)  */)
     {
+	PINC_FORMATTING_LOOP_ITERS;
+
 	/*dump_item(fmt->next_item, fmt->rh->texts.data);*/
 
 	if ( FLOATING_ITEM(fmt->next_item) )
@@ -1984,7 +2061,7 @@ extern void format_stream(antweb_doc *doc,
 
     RID_FMT_STATE tfmt, *fmt = &tfmt;
 
-    FMTDBG(("\nformat_stream(%p %p %p %s): depth %d, fmt_state %p, fwidth %d\n",
+    FMTDBG(("\nformat_stream(%p %p stream %p %s): depth %d, fmt_state %p, fwidth %d\n",
 	     doc, rh, stream, fmt_names[fmt_method],
 	     depth, fmt, stream->fwidth));
 
@@ -2076,7 +2153,8 @@ static void stomp_stream(rid_text_stream *stream)
 
 extern void stomp_captions_until_working(rid_header *header)
 {
-    stomp_stream(&header->stream);
+    if (! gbf_active(GBF_CAPTIONS))
+	stomp_stream(&header->stream);
 }
 
 /*****************************************************************************

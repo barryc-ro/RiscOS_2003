@@ -90,4 +90,9 @@ extern int tb_find_redraw(wimp_redrawstr *r);
 extern os_error *tb_print_options_open(fe_view v);
 extern int tb_print_redraw(wimp_redrawstr *r);
 
+extern void tb_bar_add(const void *info);
+extern void tb_bar_name(const void *info);
+extern int tb_bar_get_num_from_name(const char *name);
+
+
 /* eof stbtb.h */

@@ -8,9 +8,14 @@
 
 #include "akbd.h"
 #include "wimp.h"
+#include "flexwrap.h"
+#include "swis.h"
+#include "memwatch.h"
 
 #include "config.h"
+#include "version.h"
 
+#include "debug.h"
 #include "interface.h"
 #include "stbfe.h"
 #include "stbmenu.h"
@@ -61,7 +66,37 @@
 #define key_mode_MODEL_1	1
 #define key_mode_MODEL_100	2
 
+/* The key map numbers */
+
+#define key_map_MOVEMENT	0
+#define key_map_DESKTOP		1
+#define key_map_CODECS		2
+#define key_map_MAP		3
+#define key_map_MENU		4
+#define key_map_RESIZING	5
+#define key_map_TOOLBAR		6
+#define key_map_WEB		7
+#define key_map_OSK		8
+#define key_map_FRAME_LINK	9
+#define key_map_EXTERNAL_POPUP	10
+#define key_map_WRITEABLES	11
+
 /* ------------------------------------------------------------------------------------- */
+
+#define key_list_REPEAT     0x01    /* allow key to auto repeat*/
+#define key_list_CLICK      0x02    /* make an audible click*/
+
+typedef struct
+{
+    unsigned char map;
+    unsigned char flags;
+    unsigned short key;
+    unsigned short event;
+} key_list;
+
+/* ------------------------------------------------------------------------------------- */
+
+#if 0
 
 /* STB key sets */
 
@@ -616,18 +651,6 @@ static key_list platform_trial_keys[] =
 
 /* ------------------------------------------------------------------------------------- */
 
-#define key_map_MOVEMENT	0
-#define key_map_DESKTOP		1
-#define key_map_CODECS		2
-#define key_map_MAP		3
-#define key_map_MENU		4
-#define key_map_RESIZING	5
-#define key_map_TOOLBAR		6
-#define key_map_WEB		7
-#define key_map_OSK		8
-#define key_map_FRAME_LINK	9
-#define key_map_EXTERNAL_POPUP	10
-
 static key_list *get_key_map(int map)
 {
     switch (config_mode_keyboard/2)
@@ -720,7 +743,121 @@ static key_list *get_key_map(int map)
     return NULL;
 }
 
+#endif
+
 /* ------------------------------------------------------------------------------------- */
+
+typedef struct
+{
+    int count;
+
+    int map;
+    int key;
+    int event;
+    int flags;
+    int sound;
+} config_key_info;
+
+static key_list *list = NULL;
+static int list_size = 0;
+
+static input_key_map *writeables_map = NULL;
+
+#define LIST_CHUNK_SIZE	32
+
+/* ------------------------------------------------------------------------------------- */
+
+static key_list *key_lookup(int chcode, int map)
+{
+    key_list *d;
+    int i;
+    for (i = 0, d = list; i < list_size; i++, d++)
+        if (d->map == map && d->key == chcode)
+	    return d;
+    return NULL;
+}
+
+static int fe_key_lookup(int chcode, int map)
+{
+    const key_list *d = key_lookup(chcode, map);
+
+    if (d)
+    {
+/*      if (d->flags & key_list_CLICK) */
+/*         fe_click_sound(); */
+
+	if (d->flags & key_list_REPEAT)
+	{
+	    int key;
+	    while (akbd_pollkey(&key))
+		if (key != chcode)
+		{
+		    fe_pending_key = key;
+		    break;
+		}
+	}
+	else
+	    _swix(OS_Byte, _IN(0), 0x78);
+
+	return d->event;
+    }
+    return -1;
+}
+
+/* ------------------------------------------------------------------------------------- */
+
+void stbkeys_list_add(const void *info)
+{
+    const config_key_info *ki = (const config_key_info *)info;
+    key_list *kn;
+
+    /* ignore line if we don't have at least map/key/event */
+    STBDBGN(("stbkeys_list_add: count %d\n", ki->count));
+    if (ki->count < 3)
+	return;
+
+    /* see if we already have the keyu in our map */
+    kn = key_lookup(ki->key, ki->map);
+    if (kn == NULL)
+    {
+	/* if not then add a new entry */
+	if ((list_size % LIST_CHUNK_SIZE) == 0)
+	{
+	    BOOL success = FALSE;
+	
+	    if (list == NULL)
+		success = flex_alloc((flex_ptr)&list, LIST_CHUNK_SIZE * sizeof(*list));
+	    else
+		success = flex_extend((flex_ptr)&list, (list_size + LIST_CHUNK_SIZE) * sizeof(*list));
+
+	    if (!success)
+	    {
+		/* oops - no memory for key */
+		usrtrc("no memory for key def\n");
+		return;
+	    }
+	}
+
+	STBDBGN(("stbkeys_list_add: item %d map %d key %d\n", list_size, ki->map, ki->key));
+
+	kn = &list[list_size ++];
+	kn->map = (unsigned char)ki->map;
+	kn->key = (unsigned short)ki->key;
+    }
+    
+    /* write in new values */
+    kn->event = (unsigned short)ki->event;
+    kn->flags = ki->count >= 4 ? (unsigned char)ki->flags : 0;
+}
+
+void stbkeys_list_clear(void)
+{
+    if (list)
+	flex_free((flex_ptr)&list);
+    list_size = 0;
+}
+    
+/* ------------------------------------------------------------------------------------------- */
 
 /* This view could be null if the caret was in the status bar
  * event = -2 means that the key should go straight to processkey
@@ -748,32 +885,32 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 
     if (cs->w == tb_status_w())
     {
-        event = fe_key_lookup(chcode, get_key_map(key_map_TOOLBAR));
+        event = fe_key_lookup(chcode, key_map_TOOLBAR);
     }
 
     if (event == -1 && frameutils_are_we_resizing() )
     {
-        event = fe_key_lookup(chcode, get_key_map(key_map_RESIZING));
+        event = fe_key_lookup(chcode, key_map_RESIZING);
         if (event == -1)
             event = -2;
     }
 
     if (event == -1 && stbmenu_is_open())
     {
-        event = fe_key_lookup(chcode, get_key_map(key_map_MENU));
+        event = fe_key_lookup(chcode, key_map_MENU);
         if (event == -1)
             event = -2;
     }
 
     if (event == -1 && fe_map_view() != NULL)
     {
-        event = fe_key_lookup(chcode, get_key_map(key_map_MAP));
+        event = fe_key_lookup(chcode, key_map_MAP);
         if (event == -1)
             event = -2;
     }
 
     if (event == -1 && on_screen_kbd)
-	event = fe_key_lookup(chcode, get_key_map(key_map_OSK));
+	event = fe_key_lookup(chcode, key_map_OSK);
 
     if (event == -1)
 	event = fe_writeable_handle_keys(v, chcode);
@@ -781,32 +918,33 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     /* careful where this one goes as it stops all other keys from working */
     if (event == -1 && fe_external_popup_open())
     {
-	event = fe_key_lookup(chcode, get_key_map(key_map_EXTERNAL_POPUP));
+	event = fe_key_lookup(chcode, key_map_EXTERNAL_POPUP);
 	if (event == -1)
 	    event = -2;
     }
 
     if (event == -1 && fe_frame_link_selected(v))
-        event = fe_key_lookup(chcode, get_key_map(key_map_FRAME_LINK));
+        event = fe_key_lookup(chcode, key_map_FRAME_LINK);
 
     if (event == -1)
-	event = fe_key_lookup(chcode, get_key_map(key_map_MOVEMENT));
+	event = fe_key_lookup(chcode, key_map_MOVEMENT);
 
     if (event == -1) switch (browser_mode)
     {
     case fe_browser_mode_DESKTOP:
     case fe_browser_mode_DBOX:
     case fe_browser_mode_APP:
-	event = fe_key_lookup(chcode, get_key_map(key_map_DESKTOP));
+	event = fe_key_lookup(chcode, key_map_DESKTOP);
 	break;
 
     case fe_browser_mode_WEB:
     case fe_browser_mode_HOTLIST:
     case fe_browser_mode_HISTORY:
-	event = fe_key_lookup(chcode, get_key_map(key_map_WEB));
+	event = fe_key_lookup(chcode, key_map_WEB);
 	break;
     }
 
+#if 0
     /* check for special mode dependant keys */
     if (event == -1) switch (config_mode_platform)
     {
@@ -820,10 +958,11 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 	event = fe_key_lookup(chcode, platform_trial_keys);
 	break;
     }
+#endif
 
     /* check for the handset transport keys */
     if (event == -1)
-	event = fe_key_lookup(chcode, get_key_map(key_map_CODECS));
+	event = fe_key_lookup(chcode, key_map_CODECS);
 
     /* call event handler or pass on */
     if (event >= 0)
@@ -834,6 +973,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 
 /* ------------------------------------------------------------------------------------- */
 
+#if 0
 #define stb_key_map nc_key_map
 
 static input_key_map nc_key_map[] =
@@ -871,21 +1011,43 @@ static input_key_map rca_key_map[] =
     { akbd_DownK, key_action_DOWN },
     { -1, key_action_NO_ACTION }
 };
+#endif
 
-void stbkeys_init(void)
+/* convert map 11 (writeables) into the form for the backend */
+
+void stbkeys_list_loaded(void)
 {
-    switch (config_mode_keyboard/2)
-    {
-    case key_mode_STB:
-	set_input_key_map(stb_key_map);
-	break;
-    case key_mode_MODEL_1:
-	set_input_key_map(nc_key_map);
-	break;
-    case key_mode_MODEL_100:
-	set_input_key_map(rca_key_map);
-	break;
-    }
+    const key_list *d;
+    int i, count;
+
+    STBDBG(("stbkeys_list_loaded:\n"));
+
+    /* count number of entries in the list */
+    count = 0;
+    for (i = 0, d = list; i < list_size; i++, d++)
+        if (d->map == key_map_WRITEABLES)
+	    count++;
+
+    /* allocate memory */
+    mm_free(writeables_map);
+    writeables_map = mm_malloc((count + 1) * sizeof(writeables_map[0]));
+
+    /* build a new map */
+    count = 0;
+    for (i = 0, d = list; i < list_size; i++, d++)
+        if (d->map == key_map_WRITEABLES)
+	{
+	    writeables_map[count].key = d->key;
+	    writeables_map[count].action = (input_key_action) d->event;
+	    count++;
+	}
+    
+    /* terminate */
+    writeables_map[count].key = -1;
+    writeables_map[count].action = key_action_NO_ACTION;
+    
+    /* register with backend */
+    set_input_key_map(writeables_map);
 }
 
 /* ------------------------------------------------------------------------------------- */

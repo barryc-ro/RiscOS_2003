@@ -379,7 +379,8 @@ extern void finishnobr (SGMLCTX * context, ELEMENT * element)
     htmlctx->no_break = 0;
 
     /* SJM: push a null entry to ensure there is something to break on */
-    text_item_push_word(htmlctx, 0, FALSE);
+    rid_scaff_item_push(htmlctx->rh->curstream, 0);
+/*  text_item_push_word(htmlctx, 0, FALSE); */
 }
 
 extern void startwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -391,13 +392,17 @@ extern void startwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 
 /*  text_item_push_break(htmlctxof(context)); */
     
+#if 1
+    rid_scaff_item_push(htmlctx->rh->curstream, 0);
+#else
     /* cancel the NOBR stuff */
     old_no_break = htmlctx->no_break;
     htmlctx->no_break = FALSE;
 
-    text_item_push_word(htmlctx, 0, FALSE);
+    text_item_push_word(htmlctx, 0, FALSE); 
 
     htmlctx->no_break = old_no_break;
+#endif
 }
 
 /*****************************************************************************/
@@ -527,11 +532,6 @@ extern void startbadtr (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 extern void finishbadtr (SGMLCTX * context, ELEMENT * element)
 {
     generic_finish (context, element);
-}
-
-extern void startbadwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
-{
-    generic_start (context, element, attributes);
 }
 
 extern void startbadparam (SGMLCTX * context, ELEMENT * element, VALUES * attributes)

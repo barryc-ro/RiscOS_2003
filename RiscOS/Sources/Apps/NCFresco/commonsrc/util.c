@@ -42,7 +42,7 @@
 
 /* util.c */
 
-static int suffix_or_mime_to_file_type(const char *suffix, const char *mime)
+static int suffix_or_mime_to_file_type(const char *suffix, const char *mime, char **name)
 {
     FILE *mf;
     char line[MAX_LINE];
@@ -116,6 +116,9 @@ static int suffix_or_mime_to_file_type(const char *suffix, const char *mime)
 	    os_regset r;
 	    os_error *ep;
 
+	    if (name)
+		*name = strdup(roft);
+	    
 	    r.r[0] = 31;
 	    r.r[1] = (int) (long) roft;
 
@@ -142,14 +145,20 @@ static int suffix_or_mime_to_file_type(const char *suffix, const char *mime)
     return ft;
 }
 
+char *suffix_or_mime_to_type_name(const char *suffix, const char *mime)
+{
+    char *name = NULL;
+    suffix_or_mime_to_file_type(suffix, mime, &name);
+}
+
 int suffix_to_file_type(const char *suffix)
 {
-    return suffix_or_mime_to_file_type(suffix, NULL);
+    return suffix_or_mime_to_file_type(suffix, NULL, NULL);
 }
 
 int mime_to_file_type(const char *mime)
 {
-    return suffix_or_mime_to_file_type(NULL, mime);
+    return suffix_or_mime_to_file_type(NULL, mime, NULL);
 }
 
 int set_file_type(const char *fname, int ft)
@@ -868,6 +877,23 @@ char *rs_tmpnam(char *s)
     while (!present);
     return s;
 }
+
+#ifdef FRESCO
+int mkdir( const char *dir, int mode )
+{
+    /* mode is ignored, it's there to make the prototype the same as posix */
+
+    return _swix( OS_File, _IN(0) | _IN(1) | _IN(4), 8, dir, 0 )
+            ? -1
+            : 0;
+}
+
+os_error *file_copy( const char *from, const char *to )
+{
+    return (os_error*) _swix( OS_FSControl, _INR(0,3), 26, from, to, 2 );
+}
+
+#endif
 
 /*****************************************************************************/
 

@@ -87,7 +87,6 @@ static char *auth_type_names[] = {
 static int auth_read_allow_file(char *fname, allow_item **head);
 static int auth_test_allow(char *site, allow_item *list);
 
-#ifdef STBWEB
 static void auth_realm_dispose(auth_realm *r)
 {
     if (r)
@@ -104,6 +103,7 @@ static void auth_realm_dispose(auth_realm *r)
     }
 }
 
+#ifdef STBWEB
 static void auth_realms_dispose(void)
 {
     auth_realm *r = realm_first;
@@ -169,7 +169,43 @@ void auth_dispose(void)
     auth_allows_dispose(deny_list);
     deny_list = NULL;
 }
+#endif
 
+void auth_forget_realm( auth_realm *r )
+{
+    auth_item **ppItem = &auth_first;
+    auth_item *pItem;
+    auth_realm **ppRealm = &realm_first;
+    auth_realm *pRealm;
+
+    /* Remove any items that refer to this realm */
+    while ( ( pItem = *ppItem ) != NULL )
+    {
+        if ( pItem->realm == r )
+        {
+            mm_free( pItem->url );
+            *ppItem = pItem->next;
+            mm_free( pItem );
+        }
+        else
+            ppItem = &(pItem->next);
+    }
+
+    /* Remove the realm */
+    while ( ( pRealm = *ppRealm ) != NULL )
+    {
+        if ( pRealm == r )
+        {
+            *ppRealm = r->next;
+            auth_realm_dispose(r);
+            break;
+        }
+        else
+            ppRealm = &(pRealm->next);
+    }
+}
+
+#ifdef STBWEB
 static void auth_realms_optimise(void)
 {
     auth_realm *r, *last;
@@ -656,7 +692,7 @@ static int auth_read_allow_file(char *fname, allow_item **head)
     }
 
     mmfclose(f);
-    
+
     return 1;
 }
 
@@ -715,6 +751,50 @@ int auth_check_allow_deny(char *site)
 
     /* if we don't have either list then allow it */
     return 1;
+}
+
+
+        /*========================*
+         *   Image blacklisting   *
+         *========================*/
+
+
+BOOL blacklist_match( const char *url )
+{
+    char *ptr = config_image_blacklist, *ptr2;
+    char buffer[256];
+
+    if ( !ptr || !*ptr )
+        return FALSE;
+
+    for (;;)
+    {
+        ptr2 = strchr( ptr, ',' );
+        if ( !ptr2 )
+        {
+            if ( strstr( url, ptr ) )
+            {
+                STBDBG(("blacklist: %s matches %s\n", url, ptr ));
+                return TRUE;
+            }
+
+            STBDBG(("blacklist: %s != %s\n", url, ptr ));
+
+            return FALSE;
+        }
+        strncpy( buffer, ptr, ptr2-ptr );
+        buffer[ptr2-ptr] = '\0';
+
+        if ( strstr( url, buffer ) )
+        {
+            STBDBG(("blacklist: %s matches %s\n", url, buffer ));
+            return TRUE;
+        }
+
+        ptr = ptr2 + 1;
+    }
+
+    return FALSE;
 }
 
 /* eof auth.c */

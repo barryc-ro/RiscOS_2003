@@ -19,6 +19,7 @@
 #include "flexwrap.h"
 
 #include "myassert.h"
+#include "profile.h"
 
 #ifdef PLOTCHECK
 #include "antweb.h"
@@ -166,10 +167,14 @@ extern void rid_free_pos_term(rid_pos_item *p, rid_pos_item *term, rid_text_stre
 {
     rid_float_item *fl = NULL;
 
+    PINC_FREE_POS_TERM;
+
     while (p != term && p != NULL)
     {
 	rid_pos_item *next = p->next ;
 	rid_text_item *ti = p->first;
+
+	PINC_FREE_POS_TERM_ITERS;
 
 	/* NULL pointers for non-floating items */
 	for (; ti != NULL; ti = rid_scanf(ti))
@@ -226,9 +231,13 @@ extern void rid_free_pos(rid_pos_item *p)
 {
     rid_float_item *fl = NULL;
 
+    PINC_FREE_POS;
+
     while (p != NULL)
     {
 	rid_pos_item *next = p->next ;
+
+	PINC_FREE_POS_ITERS;
 
 	if (p->floats)
 	{
@@ -810,8 +819,28 @@ extern void rid_area_item_connect(rid_map_item *m, rid_area_item *a)
     }
 }
 
+extern void rid_scaff_item_push(rid_text_stream *st, int flags)
+{
+    rid_text_item *scaff = mm_calloc(1, sizeof(*scaff));
+
+    scaff->tag = rid_tag_SCAFF;
+    scaff->flag = flags;
+
+    if (st->text_list)
+    {
+	st->text_last->next = scaff;
+	st->text_last = scaff;
+    }
+    else
+    {
+	st->text_last = st->text_list = scaff;
+    }
+}
+
 extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
 {
+    PINC_TEXT_ITEM_CONNECT;
+
     if (st == NULL || st == TABLE_NULL)
     {
 	/* @@@@ Work out why this happens! */
@@ -823,6 +852,14 @@ extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
 	return;
     }
 
+    if (st->text_list == NULL)
+	rid_scaff_item_push(st, rid_flag_NO_BREAK);
+    
+#if 1
+    st->text_last->next = t;
+    st->text_last = t;
+#else
+    /* moved to separate function called before the main push */
     if (st->text_list)
     {
 	st->text_last->next = t;
@@ -842,11 +879,14 @@ extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
 	st->text_list = scaff;
 	st->text_last = t;
     }
+#endif
 }
 
 extern void rid_pos_item_connect(rid_text_stream *st, rid_pos_item *p)
 {
     /*FMTDBGN(("rid_pos_item_connect(%p, %p)\n", st, p));*/
+
+    PINC_POS_ITEM_CONNECT;
 
     if (st->pos_list)
     {
@@ -1489,6 +1529,8 @@ extern void rid_zero_widest_height(rid_text_stream *stream)
 extern rid_pos_item *rid_clone_pos_list(rid_pos_item *pos)
 {
         rid_pos_item *first, *new, *prev;
+
+	PINC_CLONE_POS_LIST;
 
         if (pos == NULL)
                 return NULL;

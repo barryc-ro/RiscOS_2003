@@ -40,10 +40,11 @@ BOOL image_type_test(int ft);
 
 /* Find an image */
 os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h, wimp_paletteword bg, image *result);
-#define image_find_flag_DEFER	(1 << 0) /* Make the image structure but don't start fetching the image */
+#define image_find_flag_DEFER	   (1 << 0) /* Make the image structure but don't start fetching the image */
 #define image_find_flag_CHECK_EXPIRE (1 << 1) /* if coming from cache check expiry date first */
-#define image_find_flag_URGENT  (1 << 2) /* Add to head of queue, not tail */
+#define image_find_flag_URGENT     (1 << 2) /* Add to head of queue, not tail */
 #define image_find_flag_NEED_SIZE  (1 << 3) /* We need the image size */
+#define image_find_flag_FORCE      (1 << 4) /* Fetch even if blacklisted */
 
 /* Loose an image */
 os_error *image_loose(image i, image_callback cb, void *h);
@@ -53,6 +54,10 @@ os_error *image_loose(image i, image_callback cb, void *h);
  * this may force the image to get fetched if the defer dlag is not
  * set. */
 os_error *image_flush(image i, int flags);
+
+/* Defer an image. Doesn't abort the fetch if it has already started.
+ */
+void image_defer( image i );
 
 /* If we are flushing all the images on a page we only want to issue
  * tht flush once for each image.  These two functions let us mark
@@ -83,6 +88,7 @@ typedef int image_flags;
 #define image_flag_ERROR	0x08	/* Fetch tried and failed */
 #define image_flag_DEFERRED	0x10	/* User requested deferred fetching */
 #define image_flag_TO_RELOAD	0x20	/* Marked for reload */
+#define image_flag_BLACKLIST    0x40    /* Was on advert blacklist */
 
 #define image_flag_INTERLACED	0x00010000	/* Image is interlaced */
 #define image_flag_MASK		0x00020000	/* Image has a mask */

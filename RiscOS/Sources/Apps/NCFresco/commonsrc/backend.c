@@ -53,6 +53,8 @@
 #include <assert.h>
 #include <time.h>
 #include <limits.h>
+#include <signal.h>
+#include <setjmp.h>
 
 #include "memwatch.h"
 
@@ -134,6 +136,12 @@
 #define ITERATIVE_PANIC 0
 #endif
 
+#if defined(FRESCO) && defined(PRODUCTION)
+#define CATCHTYPE5 1
+#else
+#define CATCHTYPE5 0
+#endif
+
 /* This is on its own because the include file that it is in includes lots of others */
 /* Not that this is a good excuse. */
 extern void rid_zero_widest_height_from_item(rid_text_item *item);
@@ -151,6 +159,7 @@ static void be_update_image_info(be_doc doc);
 static void antweb_doc_background_change(void *h, void *i, int status, wimp_box *box);
 static void be_refresh_document(int at, void *h);
 static void be_doc_fetch_bg(antweb_doc *doc);
+static void be_dispose_doc_contents( be_doc doc );
 
 void be_caption_stream_origin(rid_table_item *table, int *dx, int *dy);
 void be_cell_stream_origin(rid_table_item *table, rid_table_cell *cell, int *dx, int *dy);
@@ -168,9 +177,78 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 #define Font_WideFormat	0x400A9
 #endif
 
+static be_doc document_list = NULL;
+
 /**********************************************************************/
 
-static be_doc document_list = NULL;
+/* pdh: A bit of a kludge here to stop all windows falling over
+ * when one does. Type 5's are caught and the corresponding views
+ * shut down. See antweb_doc_progress for usage. If "inside" a guarded
+ * block, memwatch raises SIGUSR1 rather than exit()ing. Likewise
+ * ASSERT raises SIGUSR2.
+ */
+
+#if CATCHTYPE5
+typedef void sighandler(int);
+
+static antweb_doc *currentdoc = NULL;
+jmp_buf jbGuard;
+int guarded = 0;
+sighandler *oldtype5 = NULL;
+sighandler *oldtype8 = NULL;
+sighandler *oldtype9 = NULL;
+
+#ifdef __acorn
+#pragma no_check_stack
+#endif
+
+void antweb_signal_handler( int sig )
+{
+    if ( currentdoc )
+    {
+        if ( ( currentdoc->flags & doc_flag_WRECKED ) == 0 )
+	{
+	    be_dispose_doc_contents( currentdoc );
+	    currentdoc->flags |= doc_flag_WRECKED;
+
+	    mm_minor_panic( sig == SIGUSR1 ? "memlow" : "memerror" );
+	}
+    }
+    longjmp( jbGuard, 1 );
+}
+
+void sig_guard( antweb_doc *doc )
+{
+    if ( guarded++ == 0 )
+    {
+        currentdoc = doc;
+        oldtype5 = signal( SIGSEGV, antweb_signal_handler );
+        oldtype8 = signal( SIGUSR1, antweb_signal_handler );
+        oldtype9 = signal( SIGUSR2, antweb_signal_handler );
+    }
+}
+
+void sig_unguard( void )
+{
+    if ( --guarded == 0 )
+    {
+        signal( SIGSEGV, oldtype5 );
+        signal( SIGUSR1, oldtype8 );
+        signal( SIGUSR2, oldtype9 );
+        currentdoc = NULL;
+    }
+}
+
+BOOL sig_guarded( void )
+{
+    return guarded > 0;
+}
+
+#ifdef __acorn
+#pragma check_stack
+#endif
+
+#endif
 
 /**********************************************************************
 
@@ -743,7 +821,8 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	    case rid_it_TEXT:
 	    case rid_it_PASSWD:
 		f |= be_item_info_INPUT;
-		if (ii->flags & rid_if_NUMBERS)
+		/* Nasty NCFresco stuff. Set bit if the input doesn't require a keyboard */
+		if ((ii->flags & (rid_if_NUMBERS|rid_if_PABX)) == rid_if_NUMBERS)
 		    f |= be_item_info_NUMBERS;
 		break;
 	    case rid_it_IMAGE:
@@ -921,6 +1000,9 @@ os_error *backend_image_info(be_doc doc, void *imh, int *flags, int *ftype, char
     if (fi & image_flag_ANIMATION)
 	f |= be_image_info_ANIMATION;
 
+    if (fi & image_flag_BLACKLIST)
+	f |= be_image_info_BLACKLIST;
+
     if (flags)
 	*flags = f;
 
@@ -973,6 +1055,34 @@ os_error *backend_image_file_info(be_doc doc, void *imh, int *load, int *exec, i
     return image_file_info(im, load, exec, size);
 }
 
+void backend_defer_images( be_doc doc )
+{
+    rid_text_item *ti;
+    rid_header *rh = doc->rh;
+
+    if ( rh )
+    {
+        ti = rh->stream.text_list;
+
+        while ( ti )
+        {
+	    if (object_table[ti->tag].imh != NULL)
+	    {
+	        image i;
+
+	        i = (image) (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
+
+	        image_defer( i );
+	    }
+
+            ti = rid_scanfr(ti);
+        }
+
+        if ( rh->tile.im )
+            image_defer( rh->tile.im );
+    }
+}
+
 os_error *backend_doc_flush_image(be_doc doc, void *imh, int flags)
 {
     rid_text_item *ti;
@@ -980,7 +1090,8 @@ os_error *backend_doc_flush_image(be_doc doc, void *imh, int flags)
     int ffi;
     rid_header *rh = doc->rh;
 
-    ffi = (flags & be_openurl_flag_DEFER_IMAGES) ? image_find_flag_DEFER : 0;
+    ffi = (flags & be_openurl_flag_DEFER_IMAGES) ? image_find_flag_DEFER
+                                                 : image_find_flag_FORCE;
 
     if (rh && rh->tile.im && (imh == 0 || imh == rh->tile.im))
 	rh->tile.width = 0;
@@ -1160,6 +1271,7 @@ static void antweb_unlink_doc(be_doc doc)
     }
 }
 
+#if 0
 static BOOL antweb_doc_in_list(be_doc doc)
 {
     be_doc dd;
@@ -1168,6 +1280,7 @@ static BOOL antweb_doc_in_list(be_doc doc)
 	    return TRUE;
     return FALSE;
 }
+#endif
 
 os_error *backend_dispose_doc(be_doc doc)
 {
@@ -1468,7 +1581,7 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 	top = rr->g.y1 - oy;
 	bot = rr->g.y0 - oy;
 
-	RENDBG(("Top work area = %d, bottom = %d\n", top, bot));
+	RENDBG(("Top work area = %d, bottom = %d, stream %p list %p\n", top, bot, &doc->rh->stream, doc->rh->stream.pos_list));
 
 	left = rr->g.x0;
 	right = rr->g.x1;
@@ -1521,7 +1634,8 @@ void antweb_update_item_trim(antweb_doc *doc, rid_text_item *ti,
     wimp_box box;
     os_error *e;
 
-    if ((doc->flags & doc_flag_DISPLAYING) == 0)
+    if ((doc->flags & doc_flag_DISPLAYING) == 0
+        || (doc->parent == NULL) )
         return;
 
     e = backend_doc_item_bbox(doc, ti, &box);
@@ -1828,7 +1942,8 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    /* In theory the URL join can fail */
 	    if (dest2)
 	    {
-	    BENDBG(( "Query string is:\n'%s'\n", dest2));
+		BENDBG(( "Query string is:\n'%s'\n", dest2));
+
 		/* Never get a form query from the cache */
 		ep = frontend_complain(frontend_open_url(dest2, doc->parent, target, NULL, fe_open_url_NO_CACHE));
 
@@ -2100,817 +2215,6 @@ static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int wid
 
 
 #if 0
-static int be_margin_proc (rid_text_stream *stream, rid_text_item *item)
-{
-        return item == NULL ? 0 :
-                item->st.indent * INDENT_UNIT;	/* NvS We no longer as a left gap */
-}
-
-static void be_float_connect(rid_float_tmp_info *flt, rid_pos_item *pos, int flags)
-{
-    flt->h = flt->ti->max_up + flt->ti->max_down;
-    if ( (flags & rid_fmt_BUILD_POS) != 0 )
-    {
-	/* Make new float item */
-	flt->fi = mm_calloc(1, sizeof(*flt->fi));
-
-	/* Fill in the float item */
-	flt->fi->ti = flt->ti;
-	flt->fi->pi = pos;
-	flt->fi->height = flt->h;
-
-	/* Attach floating item to first pos line */
-	flt->ti->line = pos;
-
-	if (flt->fi->ti->tag == rid_tag_TABLE)
-	{
-	    FMTDBG(("be_float_connect() adjusting height of floating table\n"));
-
-	}
-
-    }
-    flt->used = 1;
-}
-
-static void be_float_tidy(rid_float_tmp_info *flt, int max_up, int max_down)
-{
-    if (flt->ti && flt->used)
-    {
-	flt->h -= (max_up + max_down);
-	if (flt->h <= 0)
-	{
-	    flt->h = 0;
-	    flt->ti = NULL;
-	    flt->fi = NULL;
-	}
-    }
-}
-
-/*****************************************************************************
-
-  The rid_pos_item for floating items might not refer to the line which
-  ties up with the item's next pointer. To permit rid_scanb to work, those
-  items that can float store a previous pointer. This routine initialises
-  them (bluntly).
-
-  */
-
-static void fudge_prev_for_floating_items(rid_text_stream *st)
-{
-    rid_text_item *ti, *lastti = NULL;
-
-    FMTDBGN(("fudge_prev_for_floating_items(%p)\n", st));
-
-    for (ti = st->text_list; ti; ti = ti->next)
-    {
-	switch (ti->tag)
-	{
-	case rid_tag_TABLE:
-	{
-	    rid_text_item_table *tit = (rid_text_item_table *)ti;
-	    tit->table->prev = lastti;
-	}
-	break;
-
-	case rid_tag_IMAGE:
-	{
-	    rid_text_item_image *tii = (rid_text_item_image *)ti;
-	    tii->prev = lastti;
-	}
-	break;
-	}
-
-	lastti = ti;
-    }
-
-    return;
-}
-
-/*****************************************************************************
-
-    The new formatting routine. Why? It replaces two seperate routines with one
-    and replaces multiple occurences of code sequences with one each. And it
-    handles the ALIGN=CHAR stuff as well. There are still loose threads (eg
-    widest and fmt->width).
-
-    The margin_proc returns the offset from the left hand margin for the
-    line.  This excludes any ALIGN=CHAR bias. A margin_proc must be supplied.
-
-    The tidy_proc finishes the line.  It returns the height of the line.  It
-    centers or right aligns any lines that need aligning.  It might also
-    perform justification through sharing spare width (ie display_width-width).
-    A tidy_proc must be supplied.
-
-    The table_proc recurses on tables before they are examined.  It does not
-    return anything.  A table_proc need not be supplied (ie use NULL).
-
-    When alignment is active, the first occurence of the alignment character
-    on each line must be vertically aligned.
-
-    Items can mark themselves as never, maybe or always being followed by a
-    line break.  We refuse a break for the first item on the line. We attempt
-    to break if we are about to overflow the available space. This gives a
-    basic line structure of:
-
-    margin word ( pad word ) *
-
-    The basic approach to formatting is
-
-    a) Start a new line. This includes obtaining the margin indent
-    value.
-    b) Repeatedly add words to this line until reason is found to
-    start a new line
-    c) Tidy the line (eg performing centering)
-    d) Repeat from  a)
-
-    The need to split the line is resolved into MUST or DONT. A word
-    can indicate that a break must occur (rid_flag_LINE_BREAK) or that
-    there must *not* be a break (rid_flag_NO_BREAK). IF the word does
-    not indicate either of these, then the width of the word is added
-    to the current line width and standard RHS overflow formatting
-    performed. This means when a new line is started, we have the word
-    in hand that will start it.
-
-    Adding correct support for rid_flag_NO_BREAK changes things as
-    follows (note we view this a rare thing):
-
-    @@@@
-
-    A "word" can now cover multiple rid_text_items, so two pointers
-    are required, one for each end - last identifies the last word
-    start point: ie the start of the current word. It may be NULL due
-    to floating stuff, in which case this_item (which identifies the
-    RH end) should be used instead. When a word needs moving on to the
-    next line, everything from last onwards is moved. This requires
-    updating previously entered pos pointers (done this way around for
-    less burden on typical route).
-
-    The current code will not cater for joining rid_flag_NO_BREAK
-    items together when they are floating. This is deemed "not worth
-    it" at present (15/8/96).
-
-*/
-
-#define DONT    0
-#define MUST    1
-#define MAYBE   2
-
-#define DONE    0
-#define MARGIN  1
-#define WORD    2
-#define TIDY    3
-#define	CLEAR_L	4
-#define CLEAR_R	5
-#define CLEAR	6
-#define ENDST	7
-
-#if DEBUG >= 2
-static char *split_names[] = { "DONT", "MUST", "MAYBE" };
-static char *state_names[] = { "DONE", "MARGIN", "WORD", "TIDY",
-			       "CLEAR_L", "CLEAR_R", "CLEAR", "ENDST" };
-#endif
-
-extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st, rid_text_item *this_item, rid_fmt_info *fmt, int flags)
-{
-    rid_pos_item *pos = NULL;
-    rid_text_item *line_first;	/* Like pos->first but always there */
-    rid_text_item *last = NULL;	/* Last item in multi-item-word */
-    int split = DONT;		/* Whether must, must not or maybe split word */
-    int pad = 0;		/* holds padding from previous item */
-    int align_margin = 0;	/* extra margin space due to character alignment */
-    int left_margin = 0;	/* value for pos->left_margin if doing it */
-    int right_margin = 0;
-    int width = 0;		/* total width of line so far */
-    int state = MARGIN;		/* state machine control variable */
-    int height = st->height;
-    int widest = st->widest;
-    int display_width = st->fwidth;
-    rid_float_tmp_info fl, fr;
-    int max_up=0, max_down=0;	/* Needed for float formatting even if there is no pos list */
-    int prev_flags;
-    BOOL bNoLinefeed = FALSE;
-/*    rid_text_item *exploded = NULL; * beginning of last un-coalesce */
-/*    rid_text_item *explode_next = NULL; * one after end of last un-coalesce */
-/*    rid_text_item *last_coalesced = NULL; * where to start coalescing next */
-
-    line_first = NULL;
-
-    memset(&fl, 0, sizeof(fl));
-    memset(&fr, 0, sizeof(fr));
-
-    FMTDBG(("be_formater_loop_core(%p, %p, %p, %x)\n", st, this_item, fmt, flags));
-
-#if DEBUG && 1
-    if (flags & rid_fmt_MIN_WIDTH  )
-    {
-	FMTDBG(("rid_fmt_MIN_WIDTH  \n"));
-    }
-
-    if (flags & rid_fmt_MAX_WIDTH  )
-    {
-	FMTDBG(("rid_fmt_MAX_WIDTH  \n"));
-    }
-
-    if (flags & rid_fmt_BUILD_POS  )
-    {
-	FMTDBG(("rid_fmt_BUILD_POS  \n"));
-    }
-
-    if (flags & rid_fmt_CHAR_ALIGN )
-    {
-	FMTDBG(("rid_fmt_CHAR_ALIGN \n"));
-    }
-
-    if (flags & rid_fmt_HAD_ALIGN  )
-    {
-	FMTDBG(("rid_fmt_HAD_ALIGN  \n"));
-    }
-#endif
-
-    FMTDBG(("Entry: left %d, right %d, width %d or %d, widest %d\n",
-	     *fmt->left, *fmt->right, *fmt->width, display_width, widest));
-
-/*dump_stream(st, NULL );*/
-
-    /* If there was an old pos list and the end item had floats we may need to take them on */
-    if (st->pos_last && st->pos_last->floats)
-    {
-	int h;
-	rid_floats_link *flink = st->pos_last->floats;
-
-	FMTDBG(("be_formater_loop_core() handling previous floats\n"));
-
-	if (flink->left)
-	{
-	    h = flink->left->ti->max_up + flink->left->ti->max_down;
-	    h -= (flink->left->pi->top - height);
-	    if (h > 0)
-	    {
-		fl.h = h;
-		fl.used = 1;
-		fl.fi = flink->left;
-		fl.ti = flink->left->ti;
-	    }
-	}
-
-	if (flink->right)
-	{
-	    h = flink->right->ti->max_up + flink->right->ti->max_down;
-	    h -= (flink->right->pi->top - height);
-	    if (h > 0)
-	    {
-		fr.h = h;
-		fr.used = 1;
-		fr.fi = flink->right;
-		fr.ti = flink->right->ti;
-	    }
-	}
-    }
-
-    if (this_item != NULL && this_item->tag == rid_tag_TABLE)
-    {
-	FMTDBG(("Initial table proc call\n"));
-	(*fmt->table_proc) (rh, st, this_item, fmt);
-	FMTDBG(("Initial table proc call finished\n"));
-    }
-
-/*     exploded = this_item; */
-    if ( this_item
-         && ( this_item->flag & rid_flag_COALESCED ) )
-    {
-/*     explode_next = this_item->next; */
-/*     last_coalesced = this_item; */
-        un_coalesce( rh, this_item );
-    }
-
-    while (state != DONE)
-    {
-	FMTDBGN(("format state: %s, split %s, pos=%p, this_item=%p, width %d\n",\
-		 state_names[state], split_names[split], pos, this_item, width));
-
-#if DEBUG && 0
-	dump_item(this_item, NULL);
-#endif
-
-	switch (state)
-	{
-	case MARGIN:
-	    flags &= ~ rid_fmt_HAD_ALIGN;
-	    align_margin = pad = 0;
-	    split = DONT;
-	    state = (this_item == NULL) ? ((fr.ti == NULL && fl.ti == NULL) ? DONE : CLEAR) : WORD;
-	    left_margin = state == DONE ? 0 : (*fmt->margin_proc) (st, this_item);
- 	    right_margin = (this_item && (this_item->flag & rid_flag_RINDENT))
- 	                    ? INDENT_WIDTH*INDENT_UNIT : 0;
-
-	    width = left_margin;
-	    if ( (flags & rid_fmt_BUILD_POS) != 0 )
-	    {
-		pos = mm_calloc(1, sizeof(*pos));
-		rid_pos_item_connect(st, pos);
-#if 0
-		if (last != NULL && last != this_item)
-		{
-		    /* Start line at the unbreakable start */
-		    /* Move group of words to this pos item */
-		    pos->first = last;
-		    for (; last != this_item; last = last->next)
-			last->line = pos;
-		    if (this_item != NULL)
-		    {
-			ASSERT(last->line == this_item->line);
-		    }
-		}
-		else
-#endif
-		{
-		    pos->first = this_item;
-		}
-		pos->top = height;
-		pos->st = st;
-	    }
-	    last = line_first = this_item;
-	    max_up = max_down = 0;
-	    /* Deal with float left not yet used */
-	    if (fl.ti && (fl.used == 0))
-	    {
-		FMTDBGN(("Connecting left float\n"));
-		be_float_connect(&fl, pos, flags);
-	    }
-	    /* Deal with float right not yet used */
-	    if (fr.ti && (fr.used == 0))
-	    {
-		FMTDBGN(("Connecting right float\n"));
-		be_float_connect(&fr, pos, flags);
-	    }
-	    /* This link is built even if it is not the first line the float is seen on */
-	    if (((flags & rid_fmt_BUILD_POS)!=0) && (fl.fi || fr.fi))
-	    {
-		FMTDBGN(("Building floats link.\n"));
-		pos->floats = mm_calloc(1, sizeof(rid_floats_link));
-		pos->floats->left = fl.fi;
-		pos->floats->right = fr.fi;
-	    }
-
-	    /* Work out the length of the line, accounting for the floats */
-	    display_width = st->fwidth - right_margin;
-	    if (fl.ti)
-	    {
-		TASSERT(fl.ti->width >= 0);
-		FMTDBGN(("Add left floater with width %d\n", fl.ti->width));
-		width += fl.ti->width;
-	    }
-
-	    if (fr.ti)
-	    {
-		TASSERT(fr.ti->width >= 0);
-		FMTDBGN(("Add right floater with width %d\n", fr.ti->width));
-		width += fr.ti->width;
-	    }
-
-	    FMTDBGN(("state now %s, left_margin %d\n", state_names[state], left_margin));
-	    break;
-
-	case WORD:
-	    /* Committed to adding this word to this line */
-
-	    ASSERT(split == DONT);
-
-	    if (((this_item->flag & rid_flag_LEFTWARDS) ||
-		 (this_item->flag & rid_flag_RIGHTWARDS) ) &&
-		((this_item->flag & rid_flag_CLEARING) == 0) )
-	    {
-		FMTDBGN(("Floating item %p, flags=0x%02x, ", this_item, this_item->flag));
-
-		/* We connect it now to stop it getting lost.  It will be reconnected later */
-		if ( (flags & rid_fmt_BUILD_POS) != 0 )
-		{
-		    this_item->line = pos;
-		}
-
-		/* A floating item, some special action needed */
-		if (this_item->flag & rid_flag_LEFTWARDS)
-		{
-		    FMTDBGN(("LEFT, "));
-
-		    /* Floating left, either add now, add on the next line or clear left */
-		    if (fl.ti)
-		    {
-			FMTDBGN(("already left floater, clearing.\n"));
-
-			state = CLEAR_L;
-			break;
-		    }
-		    else
-		    {
-			FMTDBGN(("initing new left floater, "));
-			fl.ti = this_item;
-			fl.used = 0;
-
-			if ((this_item == line_first) ||
-			    (fr.ti == line_first && this_item == line_first->next))
-			{
-			    FMTDBGN(("connecting.\n"));
-			    /* Nothing visable on the line so far so we can go on this line */
-			    be_float_connect(&fl, pos, flags);
-			    TASSERT(fl.ti->width >= 0);
-			    width += fl.ti->width;
-			}
-			else
-			{
-			    FMTDBGN(("defering.\n"));
-			}
-		    }
-		}
-		else
-		{
-		    FMTDBGN(("RIGHT, "));
-		    /* Floating right, either add now, add on the next line or clear right */
-		    if (fr.ti)
-		    {
-			FMTDBGN(("already right floater, clearing.\n"));
-			state = CLEAR_R;
-			break;
-		    }
-		    else
-		    {
-			FMTDBGN(("initing new right floater, "));
-			fr.ti = this_item;
-			fr.used = 0;
-
-			if ((this_item == line_first) ||
-			    (fl.ti == line_first && this_item == line_first->next))
-			{
-			    FMTDBGN(("connecting.\n"));
-			    /* Nothing visable on the line so far so we can go on this line */
-			    be_float_connect(&fr, pos, flags);
-			    TASSERT(fr.ti->width >= 0);
-			    width += fr.ti->width;
-			}
-			else
-			{
-			    FMTDBGN(("defering.\n"));
-			}
-		    }
-		}
-
-		if ( (flags & rid_fmt_BUILD_POS) != 0 )
-		{
-		    if (pos->floats == NULL)
-		    {
-			FMTDBGN(("Making new floats link\n"));
-			pos->floats = mm_calloc(1, sizeof(rid_floats_link));
-		    }
-
-		    FMTDBGN(("Connecting float items.\n"));
-		    /* Exactly one of these is redundent but the operations are idempotent */
-		    pos->floats->left = fl.fi;
-		    pos->floats->right = fr.fi;
-		}
-
-		FMTDBGN(("Floating done.\n"));
-	    }
-	    else
-	    {
-		if ( (flags & rid_fmt_CHAR_ALIGN) != 0 && pad + width > *fmt->left)
-		{
-		    *fmt->left = pad + width;
-		    FMTDBGN(("Increased left by %d to %d\n", \
-			    align_margin, *fmt->left));
-		}
-
-		width += pad + align_margin;
-		if (this_item->width >= 0)
-		    width += this_item->width;
-		else
-		{
-		    /* @@@@ decide if this needs further investigation */
-		    FMTDBGN(("\nNOT adding in negative width %d\n\n", this_item->width));
-		}
-
-		left_margin += align_margin;
-		pad = this_item->pad;
-		align_margin = 0;
-		/*split = MAYBE;*/
-
-		/* Now we do floats we need this even if there is no pos list */
-		if (this_item->max_up > max_up)       max_up = this_item->max_up;
-		if (this_item->max_down > max_down)   max_down = this_item->max_down;
-
-		if ( (flags & rid_fmt_BUILD_POS) != 0 )
-		{
-		    this_item->line = pos;
-		}
-	    }
-
-	    if	    ( (this_item->flag & rid_flag_CLEARING) != 0 )       { split = MUST; }
-	    else if ( (this_item->flag & rid_flag_LINE_BREAK) != 0 )     { split = MUST; }
-	    else if ( (this_item->flag & rid_flag_NO_BREAK) != 0 )       { split = DONT; }
-	    else if ( (flags & rid_fmt_MIN_WIDTH) != 0 )            { split = MUST; }
-	    else if ( (flags & rid_fmt_MAX_WIDTH) != 0 )            { split = DONT; }
-	    else							{ split = MAYBE;}
-
-	    prev_flags = this_item->flag;
-
-	    /* Now decide whether advancing last as well as this_item. */
-	    /* This might need tweaking for a while! */
-	    {
-		rid_text_item *next = rid_scanf(this_item);
-		BOOL over = TRUE; /* Default is to move last with this_item */
-#if 0
-		if (last != NULL)
-		{
-		    if ( (last->flag & rid_flag_NO_BREAK) != 0 )
-		    {
-			const rid_flag x = last->flag | (next == NULL ? 0 : next->flag);
-			if ( (x & (rid_flag_CLEARING | rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) == 0 )
-			{
-			    FMTDBG(("NO_BREAK retaining last as %p: not move to %p\n",
-				    last, next));
-			    over = FALSE;
-			}
-		    }
-		}
-#endif
-                /* We'd like to do this here, but it takes too long */
-/*                 if ( !( flags & rid_fmt_BUILD_POS ) */
-/*                      && (prev_flags & rid_flag_LINE_BREAK) ) */
-/*                 { */
-/*                     coalesce( rh, last_coalesced, this_item ); */
-/*                     last_coalesced = next; */
-/*                 } */
-
-                this_item = next;
-
-/*                 if ( this_item == explode_next */
-/*                      || explode_next == NULL ) */
-/*                 { */
-/*                     exploded = this_item; */
-/*                     explode_next = this_item->next; */
-                    un_coalesce( rh, this_item );
-/*                 } */
-
-		if (over)
-		    last = next;
-	    }
-
-	    FMTDBGN(("DONT: added word: width %d, pad %d, next %p\n", width, pad, this_item));
-
-	    if (this_item != NULL)
-	    {
-		if ( (flags & (rid_fmt_CHAR_ALIGN | rid_fmt_HAD_ALIGN)) == rid_fmt_CHAR_ALIGN &&
-		     this_item->tag == rid_tag_TEXT &&
-		     fmt->text_data[ ((rid_text_item_text *)this_item)->data_off] == fmt->align_char )
-		{
-		    FMTDBGN(("Character alignment triggered\n"));
-		    flags |= rid_fmt_HAD_ALIGN;
-		    if (pad + width < *fmt->left)
-		    {
-			align_margin = *fmt->left - width - pad;
-			FMTDBGN(("%d padding due to character alignment\n",\
-				align_margin));
-		    }
-		}
-		else if (this_item->tag == rid_tag_TABLE)
-		{
-		    FMTDBGN(("Calling table proc\n"));
-		    (*fmt->table_proc) (rh, st, this_item, fmt);
-		    FMTDBGN(("Called table proc\n"));
-		}
-	    }
-	    else
-	    {
-		split = MUST;	/* because there is no following item */
-	    }
-
-	    if (split == MAYBE)
-	    {
-	        /* pdh: bodge here for DL COMPACT */
-	        if ( this_item->tag == rid_tag_BULLET
-	             && ((rid_text_item_bullet*)this_item)->list_type
-	                     == HTML_DL )
-	        {
-	            FMTDBG(("Found fake DL bullet %d (%d,%d,%d)\n",
-	                    ((rid_text_item_bullet*)this_item)->list_type,
-	                     width, left_margin, INDENT_WIDTH*INDENT_UNIT));
-
-                    if ( width < left_margin + INDENT_WIDTH*INDENT_UNIT - 4 )
-                        bNoLinefeed = TRUE;
-
-	            split = MUST;
-	        }
-	        else if ( align_margin + width + pad +
-		          (this_item->width > 0 ? this_item->width : 0)
-		           > display_width)
-		{ split = MUST; }
-		else
-		{ split = DONT; }
-		FMTDBGN(("Resolved MAYBE to %s split\n", \
-			 split == DONT ? "DONT" : "MUST"));
-	    }
-
-	    if (this_item == NULL)
-	    {
-		state = ENDST;
-	    }
-	    else if (split == MUST)
-	    {
-		switch (prev_flags &
-			(rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS | rid_flag_CLEARING))
-		{
-		case rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS | rid_flag_CLEARING:
-		    state = CLEAR;
-		    break;
-		case rid_flag_LEFTWARDS | rid_flag_CLEARING:
-		    state = CLEAR_L;
-		    break;
-		case rid_flag_RIGHTWARDS | rid_flag_CLEARING:
-		    state = CLEAR_R;
-		    break;
-		default:
-		    state = TIDY;
-		    break;
-		}
-	    }
-	    break;
-
-	case TIDY:
-	case CLEAR_L:
-	case CLEAR_R:
-	case CLEAR:
-	case ENDST:
-	    if ( (flags & rid_fmt_CHAR_ALIGN) != 0 )
-	    {
-		if ( (flags & rid_fmt_HAD_ALIGN) != 0 )
-		{
-		    if ( width - *fmt->left > *fmt->right )
-			*fmt->right = width - *fmt->left;
-		}
-		else
-		{
-		    FMTDBG(("Align char %c not present - padding\n", fmt->align_char));
-		    if (width > *fmt->left)
-		    {
-			*fmt->left = width;
-			FMTDBG(("Increased left to %d\n", *fmt->left));
-		    }
-		    else
-		    {
-			left_margin += *fmt->left - width;
-			FMTDBGN(("Increased left_margin by %d to %d\n",\
-				*fmt->left - width, left_margin));
-			width = *fmt->left;
-		    }
-		}
-	    }
-
-	    if (state == CLEAR_L || state == CLEAR || state == ENDST)
-	    {
-		if (fl.h > (max_up+max_down))
-		{
-		    /* Stretch max_down to take up any space */
-		    max_down = fl.h - max_up;
-		}
-	    }
-
-	    if (state == CLEAR_R || state == CLEAR || state == ENDST)
-	    {
-		if (fr.h > (max_up+max_down))
-		{
-		    /* Stretch max_down to take up any space */
-		    max_down = fr.h - max_up;
-		}
-	    }
-
-	    if ( (flags & rid_fmt_BUILD_POS) != 0 )
-	    {
-	        int ht;
-		pos->left_margin = left_margin;
-		pos->max_up = max_up;
-		pos->max_down = max_down;
-
-		ht = (*fmt->tidy_proc) (rh, pos, width, display_width);
-
-                if ( bNoLinefeed )
-                {
-                    FMTDBG(("Not linefeeding by %d as bNoLinefeed set\n",ht));
-                }
-
-		if ( !bNoLinefeed )
-                    height -= ht;
-
-                bNoLinefeed = FALSE;
-
-                /* Once we've finished this line, it's safe to coalesce the
-                 * previous one
-                 */
-                if ( pos->prev
-                     && pos->prev->first
-                     && pos->prev->leading == 0 )
-                {
-/*                     exploded = pos->first; */
-                    coalesce( rh, pos->prev->first, pos->first );
-                }
-	    }
-
-	    /* These functions clear the floating items when they have run out of length */
-	    be_float_tidy(&fl, max_up, max_down);
-	    be_float_tidy(&fr, max_up, max_down);
-
-	    if (width > widest)
-		widest = width;
-	    state = MARGIN;
-	    break;
-	}
-    }
-
-    if ( (flags & rid_fmt_CHAR_ALIGN) != 0 )
-    {
-	if (*fmt->left + *fmt->right > widest)
-	    widest = *fmt->left + *fmt->right;
-    }
-
-    if (widest > *fmt->width)
-	*fmt->width = widest;
-
-    FMTDBG(("Exit:  left %d, right %d, width %d, widest %d (fwidth %d)\n",
-	     *fmt->left, *fmt->right, *fmt->width, widest, st->fwidth));
-
-    if (widest > st->fwidth)
-    {
-	FMTDBG(("\n\n**** Formatted widest %d exceeds fwidth %d\n\n", widest, st->fwidth));
-    }
-
-    if ( (flags & rid_fmt_BUILD_POS) != 0 )
-    {
-	st->widest = widest;
-	st->height = st->pos_last->top;
-
-	fudge_prev_for_floating_items(st);
-
-	FMTDBG(("st->widest %d, st->height %d\n", st->widest, st->height));
-    }
-
-    return pos;
-}
-
-#undef DONT
-#undef MUST
-#undef MAYBE
-#undef DONE
-#undef MARGIN
-#undef WORD
-#undef TIDY
-#undef CLEAR
-#undef CLEAR_L
-#undef CLEAR_R
-#undef ENDST
-
-/*****************************************************************************/
-
-extern int  dummy_tidy_proc(rid_header *rh, rid_pos_item *new, int width, int display_width)
-{
-    FMTDBG(("dummy_tidy_proc()\n"));
-    return 0;
-}
-
-extern void dummy_table_proc(rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
-{
-    FMTDBG(("dummy_table_proc()\n"));
-    return;
-}
-
-#if 0
-static void sizing_sharing_table_proc(
-    rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
-{
-    FMTDBG(("sizing_sharing_table_proc(%p, %p, %p) entered\n", stream, item, parfmt));
-
-    if (stream->partype == rid_pt_HEADER)
-    {
-	rid_fmt_info fmt;
-	rid_header *rh = (rid_header *)stream->parent;
-
-	FMTDBG(("sizing_sharing_table_proc(%p, %p, %p) sizing\n", stream, item, parfmt));
-
-	memset(&fmt, 0, sizeof(fmt));
-
-	fmt.margin_proc = &be_margin_proc;
-	fmt.tidy_proc = &dummy_tidy_proc;
-	fmt.table_proc = &dummy_table_proc;
-	fmt.text_data = rh->texts.data;
-
-	/* Then get min|max widths for tables */
-	rid_size_stream(stream, &fmt, 0);
-    }
-
-    FMTDBG(("sizing_sharing_table_proc(%p, %p, %p) sharing\n", stream, item, parfmt));
-
-    rid_table_share_width(stream, item, parfmt);
-
-    FMTDBG(("sizing_sharing_table_proc(%p, %p, %p) finished\n", stream, item, parfmt));
-}
-#endif
 
 /* DAF: 970317: Was #if DEBUG */
 #if 1
@@ -2962,44 +2266,13 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
         memset(&fmt, 0, sizeof(fmt));
         memset(&st->width_info, 0, sizeof(st->width_info));
 
-        FMTDBG(("be_formater_loop(%p, %p, %d) - sizing\n", rh, ti, scale_value));
-
-#if 0
-        fmt.margin_proc = &be_margin_proc;
-        fmt.tidy_proc = &dummy_tidy_proc;
-        fmt.table_proc = &dummy_table_proc;
-        fmt.text_data = rh->texts.data;
-#endif
-
-#if 0
-        /* Then get min|max widths for tables */
-	if ( ! gbf_active(GBF_NEW_FORMATTER) )
-	    rid_size_stream(rh, st, &fmt, 0, ti);
-#endif
-        /* Do the actual format */
-
         FMTDBG(("be_formater_loop - building\n"));
 
-#if 0
-	if ( gbf_active(GBF_NEW_FORMATTER) )
-#endif
 	{
 	    fe_view_dimensions fvd;
 	    frontend_view_get_dimensions(doc->parent, &fvd);
 	    rid_toplevel_format(doc, rh, NULL, rh->stream.fwidth, fvd.layout_height);
 	}
-#if 0
-	else
-	{
-	    fmt.margin_proc = &be_margin_proc;
-	    fmt.tidy_proc = &antweb_formater_tidy_line;
-	    fmt.table_proc = &rid_table_share_width;
-	    fmt.text_data = rh->texts.data;
-	    fmt.scale_value = scale_value;
-
-	    be_formater_loop_core(rh, st, ti, &fmt, rid_fmt_BUILD_POS);
-	}
-#endif
 
         FMTDBG(("be_formater_loop done\n"));
 
@@ -3415,7 +2688,8 @@ static void be_update_image_size(antweb_doc *doc, void *i)
  */
 
 
-void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
+static void antweb_doc_image_change2( void *h, void *i, int status,
+                                      wimp_box *box_update )
 {
     antweb_doc *doc = (antweb_doc *) h;
     int changed = FALSE;
@@ -3451,7 +2725,7 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* SJM: moved to end of function as otherwise when last image
            comes in the fvpr flush happens before the fvpr checking in
            the function below and the screen isn't updated */
-/*  	be_update_image_info(doc); */
+/* 	be_update_image_info(doc); */
 	break;
     }
 
@@ -3977,6 +3251,25 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	be_update_image_info(doc);
 }
 
+void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
+{
+#if CATCHTYPE5
+    be_doc doc = (be_doc)h;
+
+    if ( doc->flags & doc_flag_WRECKED )
+        return;
+
+    sig_guard( doc );
+
+    if ( setjmp(jbGuard) == 0 )
+#endif
+        antweb_doc_image_change2( h, i, status, box_update );
+
+#if CATCHTYPE5
+    sig_unguard();
+#endif
+}
+
 static void be_view_visit(antweb_doc *doc)
 {
 #ifdef STBWEB
@@ -4374,11 +3667,10 @@ static void progress_parse_and_format(antweb_doc *doc, int fh, int lastptr, int 
     }
 }
 
-
 /* This will tend to redraw tables as they are arriving. */
 /* It should be okay once the </TABLE> has been processed. */
 
-static void antweb_doc_progress(void *h, int status, int size, int so_far, int fh, int ftype, char *url)
+static void antweb_doc_progress2(void *h, int status, int size, int so_far, int fh, int ftype, char *url)
 {
     antweb_doc *doc = (antweb_doc *) h;
     static antweb_doc *threaded = NULL;
@@ -4486,7 +3778,10 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
     if (status == status_GETTING_BODY || status == status_REQUEST_BODY)
     {
 	frontend_view_status(doc->parent,
-			     status == status_GETTING_BODY ? sb_status_FETCHED : sb_status_SENT,
+			     status == status_GETTING_BODY
+			        ? access_fromcache(doc->ah) ? sb_status_LOADING
+			                                    : sb_status_FETCHED
+			        : sb_status_SENT,
 			     so_far, size);
     }
     else
@@ -4504,11 +3799,36 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
     threaded = NULL;
 }
 
+
+    /*===============================*/
+
+
+static void antweb_doc_progress(void *h, int status, int size, int so_far, int fh, int ftype, char *url)
+{
+#if CATCHTYPE5
+    be_doc doc = (be_doc)h;
+
+    if ( doc->flags & doc_flag_WRECKED )
+        return;
+
+    sig_guard( doc );
+
+    if ( setjmp(jbGuard) == 0 )
+#endif
+        antweb_doc_progress2( h, status, size, so_far, fh, ftype, url );
+
+#if CATCHTYPE5
+    sig_unguard();
+#endif
+}
+
+        /*========================*/
+
 /*
  * If the status is status_FAILL_CONNECT then 'cfile' is actually the error message.
  */
 
-static access_complete_flags antweb_doc_complete(void *h, int status, char *cfile, char *url)
+static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfile, char *url)
 {
     antweb_doc *doc = (antweb_doc *) h;
     int ft, r;
@@ -4552,10 +3872,12 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
 #ifndef BUILDERS
 	frontend_view_visit(doc->parent, NULL, url,
+			    status == status_BAD_FILE_TYPE ?
+			    (char *)makeerror(ERR_BAD_FILE_TYPE) :			/* unsupported file type */
 			    status == status_FAIL_LOCAL ?
 			    (char *)makeerror(ERR_NO_DISC_SPACE) :			/* local error (probably out of disc space) */
 			    status == status_FAIL_DNS ?
-			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile) :/* cannot find the web page */
+			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile) :	/* cannot find the web page */
 			    (char *)makeerror(ERR_UNSUPORTED_SCHEME));			/* cannot display the web page */
 #endif
 
@@ -4581,10 +3903,10 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 #if 1
 	progress_parse_and_format(doc, 0, 0, 0);
 #else
-	doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile); 
-	doc->ph = NULL; 
+	doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
+	doc->ph = NULL;
 #endif
-	
+
 	/* pdh: @@@@ FIXME
 	 * This doesn't belong here (there may be images arriving) but I can't
 	 * see some pages without it!
@@ -4703,6 +4025,32 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     BENDBG(( "'Compleated' function done.\n"));
 
     return r;
+}
+
+static access_complete_flags antweb_doc_complete(void *h, int status, char *cfile, char *url)
+{
+    access_complete_flags result;
+#if CATCHTYPE5
+    be_doc doc = (be_doc)h;
+
+    if ( doc->flags & doc_flag_WRECKED )
+        return 0;
+
+    sig_guard( doc );
+    if ( setjmp(jbGuard) == 0 )
+#endif
+        result = antweb_doc_complete2(h,status,cfile,url);
+#if CATCHTYPE5
+    else
+        result = 0;
+
+    sig_unguard();
+
+    if ( doc->flags & doc_flag_WRECKED )
+        return 0;
+#endif
+
+    return result;
 }
 
 
@@ -5055,6 +4403,8 @@ BOOL backend_image_saver_sprite(char *fname, void *h)
     image im = (image) h;
     int OK;
 
+    IMGDBG(("im%p: saving as sprite %s\n", im, fname ));
+
     OK = (frontend_complain(image_save_as_sprite(im, fname)) == NULL);
 
     if (OK)
@@ -5098,6 +4448,13 @@ os_error *backend_doc_images(be_doc doc, int *waiting, int *fetching, int *fetch
 }
 #endif
 
+int backend_total_images(be_doc doc )
+{
+    return doc ? doc->im_unfetched + doc->im_fetching
+                 + doc->im_fetched + doc->im_error
+               : 0;
+}
+
 /* ============================================================================= */
 
 os_error *backend_activate_link(be_doc doc, be_item item, int flags)
@@ -5128,40 +4485,14 @@ void backend_temp_file_register(char *url, char *file_name)
 }
 #endif
 
-
-#define TIME_FORMAT	"%a, %d %b %Y %H:%M:%S GMT"
-
 const char *backend_check_meta(be_doc doc, const char *name)
 {
-    static char rbuf[32];
-
     rid_meta_item *m;
     for (m = doc->rh->meta_list; m; m = m->next)
     {
         if ((m->name && strcasecomp(m->name, name) == 0) ||
             (m->httpequiv && strcasecomp(m->httpequiv, name) == 0))
             return m->content;
-    }
-
-    /* when document is loaded from cache and these headers aren't available then reconstruct them from cache data */
-    if (strcasecomp(name, "expires") == 0)
-    {
-	unsigned expires = UINT_MAX;
-	if (!access_get_header_info(doc->url, NULL, NULL, &expires) || expires == UINT_MAX || expires == 0)
-	    return NULL;
-
-	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime((const time_t *)&expires));
-	return rbuf;
-    }
-
-    if (strcasecomp(name, "last-modified") == 0)
-    {
-	unsigned last_modified = 0;
-	if (!access_get_header_info(doc->url, NULL, &last_modified, NULL) || last_modified == 0)
-	    return NULL;
-
-	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime((const time_t *)&last_modified));
-	return rbuf;
     }
 
     return NULL;
@@ -5454,7 +4785,7 @@ void antweb_uncache_image_info(antweb_doc *doc)
 	if (object_table[ti->tag].imh != NULL)
 	{
 	    image i;
-		
+
 	    i = (image) (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
 
 	    image_uncache_info(i);

@@ -9,8 +9,10 @@
 
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "bbc.h"
 #include "msgs.h"
@@ -90,7 +92,7 @@ static void write_url_with_breaks(FILE *f, const char *url)
     int c, count = 0;
     BOOL in_tag = FALSE;
 
-    fputs("<NOBR>", f);
+/*     fputs("<NOBR>", f); */
     for (c = *s++; c; c = *s++)
     {
 	fputc(c, f);
@@ -106,7 +108,8 @@ static void write_url_with_breaks(FILE *f, const char *url)
 	}
 	else
 	{
-	    if (ispunct(c) || isspace(c) || count == 16)
+/* 	    if (ispunct(c) || isspace(c) || count == 16) */
+ 	    if (ispunct(c) || count == 16)
 	    {
 		fputs("<WBR>", f);
 		count = 0;
@@ -117,8 +120,10 @@ static void write_url_with_breaks(FILE *f, const char *url)
 	    }
 	}
     }
-    fputs("</NOBR>", f);
+/*     fputs("</NOBR>", f); */
 }
+
+#define TIME_FORMAT	"%a, %d %b %Y %H:%M:%S %Z"
 
 static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 {
@@ -134,6 +139,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
     {
 	char *url, *title;
 	const char *s;
+	unsigned last_modified, expires;
 
 	url = title = NULL;
 	backend_doc_info(doc, NULL, NULL, &url, &title);
@@ -147,11 +153,31 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	    write_url_with_breaks(f, url);
 	}
 
-	if ((s = backend_check_meta(doc, "last-modified")) != NULL)
-	    fprintf(f, msgs_lookup("version4"), s);
+	if (access_get_header_info(url, NULL, &last_modified, &expires))
+	{
+	    char rbuf[32];
+	    int dst, timezone;
 
-	if ((s = backend_check_meta(doc, "expires")) != NULL)
-	    fprintf(f, msgs_lookup("version5"), s);
+	    /* get current daylight savings time flag */
+	    dst = _kernel_osbyte(161, 0xdc, 0) & (1 << 15);
+
+	    /* offset the GMT to the local time so when we convert it it displays correctly */
+	    _swix(Territory_ReadTimeZones, _IN(0) | _OUT(dst ? 3 : 2), -1, &timezone);
+	    timezone /= 100;
+
+	    if (last_modified)
+	    {
+		last_modified += timezone;
+		strftime(rbuf, sizeof(rbuf), TIME_FORMAT, localtime((const time_t *)&last_modified));
+		fprintf(f, msgs_lookup("version4"), rbuf);
+	    }
+	    if (expires && expires != UINT_MAX)
+	    {
+		expires += timezone;
+		strftime(rbuf, sizeof(rbuf), TIME_FORMAT, localtime((const time_t *)&expires));
+		fprintf(f, msgs_lookup("version5"), rbuf);
+	    }
+	}
 
 	if ((s = backend_check_meta(doc, "author")) != NULL)
 	    fprintf(f, msgs_lookup("version6"), s);
@@ -364,6 +390,53 @@ static os_error *fe_print_frames_write_file(FILE *f, fe_view v, const char *size
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+static const char *msgs_lookup_null(const char *tag)
+{
+    const char *s = msgs_lookup((char *)tag);
+    if (s && strcmp(s, tag) == 0)
+	return NULL;
+    return s;
+}
+
+void fe_internal_write_page(FILE *f, const char *base_tag, int initial, int frame, write_list_fn write_list, void *handle)
+{
+    char tag[16];
+    int tag_point;
+    const char *m;
+
+    strcpy(tag, base_tag);
+    tag_point = strlen(tag);
+    if (frame != -1)
+	tag_point += sprintf(tag + tag_point, ".%d", frame);
+
+    strcpy(tag + tag_point, ".T");
+    m = msgs_lookup_null(tag);
+    if (m)
+	fprintf(f, m, initial);
+
+    strcpy(tag + tag_point, ".1");
+    m = msgs_lookup_null(tag);
+    if (m)
+    {
+	char *s = getenv(PROFILE_NAME_VAR);
+	fprintf(f, m, strsafe(s));
+    }
+
+    strcpy(tag + tag_point, ".2");
+    m = msgs_lookup_null(tag);
+    if (m)
+	fprintf(f, m);
+
+    if ((frame == -1 || frame == 2) && write_list)
+	write_list(f, handle);
+
+    strcpy(tag + tag_point, ".F");
+    m = msgs_lookup_null(tag);
+    if (m)
+	fprintf(f, m);
+}
+
+
 static os_error *fe_hotlist_and_openurl_write_file(FILE *f)
 {
     int width, height;
@@ -378,7 +451,7 @@ static os_error *fe_hotlist_and_openurl_write_file(FILE *f)
     fprintf(f, msgs_lookup("openh2"), width, msgs_lookup("opendef"));
     fprintf(f, msgs_lookup("openh3"));
 
-    hotlist_write_list(f, FALSE);
+    hotlist_write_list(f, NULL);
 
     fputs(msgs_lookup("openhF"), f);
     fputc('\n', f);
@@ -386,39 +459,15 @@ static os_error *fe_hotlist_and_openurl_write_file(FILE *f)
     return NULL;
 }
 
-static os_error *fe_hotlist_write_file(FILE *f)
+static os_error *fe_hotlist_write_file(FILE *f, BOOL switchable, int frame)
 {
-    char *s;
-
-    fputs(msgs_lookup("hotsT"), f);
-    fputc('\n', f);
-
-    s = getenv(PROFILE_NAME_VAR);
-    fprintf(f, msgs_lookup("hots1"), strsafe(s));
-
-    hotlist_write_list(f, FALSE);
-
-    fputs(msgs_lookup("hotsF"), f);
-    fputc('\n', f);
-
+    fe_internal_write_page(f, switchable ? "favsw" : "favs", 0, frame, hotlist_write_list, NULL);
     return NULL;
 }
 
-static os_error *fe_hotlist_delete_write_file(FILE *f)
+static os_error *fe_hotlist_delete_write_file(FILE *f, BOOL switchable, int frame)
 {
-    char *s;
-
-    fputs(msgs_lookup("hotsdT"), f);
-    fputc('\n', f);
-
-    s = getenv(PROFILE_NAME_VAR);
-    fprintf(f, msgs_lookup("hotsd1"), strsafe(s));
-
-    hotlist_write_list(f, TRUE);
-
-    fputs(msgs_lookup("hotsdF"), f);
-    fputc('\n', f);
-
+    fe_internal_write_page(f, switchable ? "favsdw" : "favsd", 0, frame, hotlist_write_delete_list, NULL);
     return NULL;
 }
 
@@ -441,7 +490,6 @@ static os_error *fe_openurl_write_file(FILE *f, const char *def)
 
     return NULL;
 }
-
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -1046,11 +1094,18 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 {
     char *panel_name = extract_value(query, "name=");
     char *mode = extract_value(query, "mode=");
+    int frame;
     int generated = fe_internal_url_ERROR;
     fe_view v;
 
     if (panel_name == NULL)
 	return generated;
+
+    {
+	char *frame_name = extract_value(query, "frame=");
+	frame = frame_name ? atoi(frame_name) : -1;
+	mm_free(frame_name);
+    }
 
     if (strcasecomp(panel_name, "related") == 0)
     {
@@ -1112,15 +1167,43 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}
 	else if (strcasecomp(panel_name, "favs") == 0)
 	{
-	    sound_event(snd_HOTLIST_SHOW);
-	    tb_status_button(fevent_HOTLIST_SHOW, TRUE);
-	    e = fe_hotlist_write_file(f);
+	    if (frame <= 0)
+	    {
+		sound_event(snd_HOTLIST_SHOW);
+		tb_status_button(fevent_HOTLIST_SHOW, TRUE);
+	    }
+
+	    e = fe_hotlist_write_file(f, FALSE, frame);
 	}
 	else if (strcasecomp(panel_name, "favsdelete") == 0)
 	{
-	    sound_event(snd_HOTLIST_DELETE_SHOW);
-	    tb_status_button(fevent_HOTLIST_SHOW_DELETE, TRUE);
-	    e = fe_hotlist_delete_write_file(f);
+	    if (frame <= 0)
+	    {
+		sound_event(snd_HOTLIST_DELETE_SHOW);
+		tb_status_button(fevent_HOTLIST_SHOW_DELETE, TRUE);
+	    }
+	    
+	    e = fe_hotlist_delete_write_file(f, FALSE, frame);
+	}
+	else if (strcasecomp(panel_name, "favswitch") == 0)
+	{
+	    if (frame <= 0)
+		tb_status_button(fevent_HOTLIST_SHOW_SWITCHABLE, TRUE);
+
+	    if (mode && strcasecomp(mode, "delete") == 0)
+	    {
+		if (frame <= 0)
+		    sound_event(snd_HOTLIST_DELETE_SHOW);
+
+		e = fe_hotlist_delete_write_file(f, TRUE, frame);
+	    }
+	    else
+	    {
+		if (frame <= 0)
+		    sound_event(snd_HOTLIST_SHOW);
+		
+		e = fe_hotlist_write_file(f, TRUE, frame);
+	    }
 	}
 	else if (strcasecomp(panel_name, "find") == 0)
 	{
@@ -1128,20 +1211,45 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    sound_event(snd_FIND_SHOW);
 	    e = fe_find_write_file(f, query);
 	}
+	else if (strcasecomp(panel_name, "historyswitch") == 0)
+	{
+	    if (frame <= 0)
+	    {
+		sound_event(snd_HISTORY_SHOW);
+		tb_status_button(fevent_HISTORY_SHOW_SWITCHABLE, TRUE);
+	    }
+
+	    if (mode && strcasecomp(mode, "alpha") == 0)
+	    {
+		e = fe_global_write_list(f, TRUE, frame);
+	    }
+	    else
+	    {
+		v = get_source_view(query, TRUE);
+		if (v)
+		    e = fe_history_write_list(f, v->last, v->hist_at, TRUE, frame);
+	    }
+	}
 	else if (strcasecomp(panel_name, "historyalpha") == 0)
 	{
-	    sound_event(snd_HISTORY_SHOW);
-	    tb_status_button(fevent_HISTORY_SHOW_ALPHA, TRUE);
-	    e = fe_global_write_list(f);
+	    if (frame <= 0)
+	    {
+		sound_event(snd_HISTORY_SHOW);
+		tb_status_button(fevent_HISTORY_SHOW_ALPHA, TRUE);
+	    }
+	    e = fe_global_write_list(f, FALSE, frame);
 	}
 	else if (strcasecomp(panel_name, "historyrecent") == 0)
 	{
 	    v = get_source_view(query, TRUE);
 	    if (v)
 	    {
-		sound_event(snd_HISTORY_SHOW);
-		tb_status_button(fevent_HISTORY_SHOW_RECENT, TRUE);
-		e = fe_history_write_list(f, v->last, v->hist_at);
+		if (frame <= 0)
+		{
+		    sound_event(snd_HISTORY_SHOW);
+		    tb_status_button(fevent_HISTORY_SHOW_RECENT, TRUE);
+		}
+		e = fe_history_write_list(f, v->last, v->hist_at, FALSE, frame);
 	    }
 	}
 	else if (strcasecomp(panel_name, "historycombined") == 0)
@@ -1618,57 +1726,50 @@ static int internal_action_select(const char *query, const char *bfile, const ch
     NOT_USED(flags);
 }
 
-/* ----------------------------------------------------------------------------------------------------- */
+static int internal_action_submit(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+{
+    char *id = extract_value(query, "id=");
+    char *source = extract_value(query, "source=");
+    fe_view v = fe_find_target(main_view, source);
+    if (!v) v = fe_selected_view();
+    if (!v) v = main_view;
 
+    if (v && v->displaying && id)
+    {
+	STBDBG(("internal_action_submit: v %p id '%s'\n", v, id));
+
+	backend_submit_form(v->displaying, id, FALSE);
+    }
+
+    mm_free(id);
+    mm_free(source);
+
+    return fe_internal_url_NO_ACTION;
+    NOT_USED(bfile);
+    NOT_USED(referer);
+    NOT_USED(file);
+    NOT_USED(flags);
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
 
 static int internal_action_opentoolbar(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *bar = extract_value(query, "name=");
     int generated = fe_internal_url_ERROR;
-    int event = -1;
+    int event;
 
     if (bar == NULL)
 	return generated;
 
-    if (strcasecomp(bar, "main") == NULL)
-    {
-	event = fevent_TOOLBAR_MAIN;
-    }
-    else if (strcasecomp(bar, "favs") == NULL)
-    {
-	event = fevent_TOOLBAR_FAVS;
-    }
-    else if (strcasecomp(bar, "extras") == NULL)
-    {
-	event = fevent_TOOLBAR_EXTRAS;
-    }
-    else if (strcasecomp(bar, "history") == NULL)
-    {
-	event = fevent_TOOLBAR_HISTORY;
-    }
-    else if (strcasecomp(bar, "print") == NULL)
-    {
-	event = fevent_TOOLBAR_PRINT;
-    }
-    else if (strcasecomp(bar, "details") == NULL)
-    {
-	event = fevent_TOOLBAR_DETAILS;
-    }
-    else if (strcasecomp(bar, "vcr") == NULL)
-    {
-	event = fevent_TOOLBAR_CODEC;
-    }
-    else if (strcasecomp(bar, "custom") == NULL)
-    {
-	event = fevent_TOOLBAR_CUSTOM;
-    }
+    event = tb_bar_get_num_from_name(bar);
 
     if (event != -1)
     {
 	fe_view v = get_source_view(query, TRUE);
 
 	if (v)
-	    fevent_handler(event, v);
+	    fevent_handler(event + fevent_TOOLBAR_MAIN, v);
 
 	generated = fe_internal_url_HELPER;
     }
@@ -1862,6 +1963,7 @@ static internal_url_str internal_url_info[] =
     { "printpage", internal_action_printpage },
     { "keyboard", internal_action_keyboard },
     { "select", internal_action_select },
+    { "submit", internal_action_submit },
 
     /* These are used to process the results of generated pages. Not usually set by the user */
     { "cancel", internal_decode_cancel },
@@ -1890,8 +1992,10 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 
     if (toolbar)
     {
-	BOOL on = strcasecomp(toolbar, "on") == NULL;
-	fe_status_state(main_view, on);
+	int tb = atoi(toolbar);
+	int off = strcasecomp(toolbar, "off") == 0;
+	fe_status_state(main_view, !off);
+	fe_status_open_toolbar(main_view, fevent_TOOLBAR_MAIN + tb);
 	mm_free(toolbar);
     }
 
@@ -1924,10 +2028,15 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 
 void fe_internal_deleting_view(fe_view v)
 {
-/*     if (pointer_mode == fe_pointermode_OFF) */
-/*     { */
-/*     } */
+    /* check for unload action */
+    if (v->onunload)
+    {
+	frontend_open_url(v->onunload, v, NULL, NULL, 0);
+	mm_free(v->onunload);
+	v->onunload = NULL;
+    }
 
+    /* check for special stuff */
     if (strcasecomp(v->name, "__favs") == 0)
     {
 	tb_status_button(fevent_HOTLIST_SHOW, tb_status_button_INACTIVE);
@@ -1942,17 +2051,24 @@ void fe_internal_deleting_view(fe_view v)
 
 	tb_status_button(fevent_HOTLIST_SHOW_DELETE, tb_status_button_INACTIVE);
     }
+    else if (strcasecomp(v->name, "__historyswitch") == 0)
+    {
+	tb_status_button(fevent_HISTORY_SHOW_SWITCHABLE, tb_status_button_INACTIVE);
+	tb_status_button(fevent_HISTORY_SHOW_SWITCHABLE_FRAMES, tb_status_button_INACTIVE);
+    }
     else if (strcasecomp(v->name, "__historyalpha") == 0)
     {
 	tb_status_button(fevent_HISTORY_SHOW_ALPHA, tb_status_button_INACTIVE);
+	tb_status_button(fevent_HISTORY_SHOW_ALPHA_FRAMES, tb_status_button_INACTIVE);
     }
-    else if (strcasecomp(v->name, "__history") == 0)
+    else if (strcasecomp(v->name, "__historycombined") == 0)
     {
 	tb_status_button(fevent_HISTORY_SHOW, tb_status_button_INACTIVE);
     }
     else if (strcasecomp(v->name, "__historyrecent") == 0)
     {
 	tb_status_button(fevent_HISTORY_SHOW_RECENT, tb_status_button_INACTIVE);
+	tb_status_button(fevent_HISTORY_SHOW_RECENT_FRAMES, tb_status_button_INACTIVE);
     }
     else if (strcasecomp(v->name, TARGET_INFO) == 0)
     {
@@ -2030,26 +2146,39 @@ void fe_internal_deleting_view(fe_view v)
 
 os_error *fe_internal_toggle_panel(const char *panel_name)
 {
-    char url[32];
+    return fe_internal_toggle_panel_args(panel_name, NULL);
+}
+
+os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args)
+{
+    char url[48];
     char target[16];
     fe_view v;
     os_error *e = NULL;
 
     strcpy(url, "ncint:openpanel?name=");
     strcat(url, panel_name);
+    if (args)
+    {
+	strcat(url, "&");
+	strcat(url, args);
+    }
 
     strcpy(target, "__");
     strcat(target, panel_name);
 
+    /* if this view name is already open the close it */
     if ((v = fe_locate_view(target)) != NULL)
     {
 	sound_event(snd_MENU_HIDE);
 	fe_dispose_view(v);
     }
+    /* if any different popup is open then close it */
     else if (fe_popup_open())
 	sound_event(snd_WARN_BAD_KEY);
     else
     {
+	/* force open the toolbar */
 	if (!tb_is_status_showing())
 	    fe_status_state(main_view, TRUE);
 	    

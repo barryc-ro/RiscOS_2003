@@ -26,13 +26,15 @@ typedef int access_url_flags;
 #define access_IMAGE            0x20    /* http fetch prefix first? */
 #define access_NO_STREAM        0x40    /* don't need data streamed - just file */
 #define access_MAX_PRIORITY     0x80    /* load whole image if possible */
-#define access_MUST_BE_FOUND    0x100   /* return error status if we didn't get the file we were expecting (ie rc != 200) */
+#define access_UPLOAD           0x100   /* use PUT (only works for ftp) */
+#define access_MUST_BE_FOUND    0x200   /* return error status if we didn't get the file we were expecting (ie rc != 200) */
 #define access_INTERNAL_FLAGS	0x0ffff
 
 /* Flags used internally but not used in the initial call */
 #define access_SECURE		0x10000	/* The access will be started on a secure socket */
 #define access_PROXY		0x20000	/* The access goes via a proxy */
 #define access_PENDING_FREE	0x40000	/* It will die when it unthreads */
+#define access_FROM_CACHE	0x80000	/* This stream is from the cache */
 
 /* A list of the schemes we support */
 extern char *access_schemes[];
@@ -78,6 +80,11 @@ extern os_error *access_url(char *url, access_url_flags flags, char *ofile, char
 /* Call this to abort an existing connection */
 extern os_error *access_abort(access_handle h);
 
+#ifdef BUILDERS
+#define access_fromcache(h) TRUE
+#else
+BOOL access_fromcache( access_handle h );
+#endif
 
 #define access_test_NOT_PRESENT	0
 #define access_test_PRESENT	1
@@ -103,6 +110,9 @@ extern os_error *access_init(int size);
 extern int access_safe_to_quit(void);
 extern os_error *access_tidyup(void);
 extern void access_flush_cache(void);
+
+char *access_cache_lookup( char *url );
+void access_cache_lookup_free( char *fname );
 
 /* Try and move the cache data structures down into lower memory so
  * we can shrink the wimpslot

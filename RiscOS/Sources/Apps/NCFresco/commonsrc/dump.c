@@ -41,6 +41,10 @@
 
 #if DEBUG || defined(BUILDERS)
 
+#ifdef PRODUCTION
+#error "CONTROL FLAGS SERIOUSLY CONFUSED"
+#endif
+
 static int indent = 0;
 static int at_start = 0;
 
@@ -107,14 +111,20 @@ static char *smartpos(rid_pos_item *pi)
     sprintf(buf, "%p", pi);
 #else
 
-    if (pi == NULL || DEBUG != 0)
+    if (pi == NULL)
+    {
 	strcpy(buf, "No pos item");
-#if DEBUG
+    }
     else
+    {
+#if DEBUG
 	sprintf(buf, "line %d", pi->linenum);
+#else
+	strcpy(buf, "No pos item");
 #endif
 
 #endif
+    }
 
     return buf;
 }
@@ -636,6 +646,8 @@ extern void dump_caption(rid_table_caption *ptr, char *base)
         if (ptr == NULL)
         	return;
  	enter();
+		my_print("Size: %d,%d", ptr->size.x, ptr->size.y);
+		my_print("Off: %d,%d", ptr->off.x, ptr->off.y);
 #ifndef NO_PTRS
  		FIELD(ptr, table, "%p");
  		/*my_print("calign %s", str_from_tag(ptr->calign, strtag_calign));*/
@@ -833,11 +845,11 @@ extern void dump_width_info(rid_width_info info)
   	rid_width_info *ptr = &info;
   	/*my_print("width_info");*/
   	enter();
-		FIELD(ptr, minleft, "%d");
-  		FIELD(ptr, minright, "%d");
+/*		FIELD(ptr, minleft, "%d");
+  		FIELD(ptr, minright, "%d");*/
   		FIELD(ptr, minwidth, "%d");
-  		FIELD(ptr, maxleft, "%d");
-  		FIELD(ptr, maxright, "%d");
+/*  		FIELD(ptr, maxleft, "%d");
+  		FIELD(ptr, maxright, "%d");*/
   		FIELD(ptr, maxwidth, "%d");
 	leave();
 }

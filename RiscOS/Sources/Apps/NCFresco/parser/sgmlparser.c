@@ -3,6 +3,7 @@
 
 #include "sgmlparser.h"
 #include "gbf.h"
+#include "profile.h"
 
 /*****************************************************************************/
 
@@ -55,6 +56,9 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
     BOOL convert_char = gbf_active(GBF_TRANSLATE_UNDEF_CHARS);
 
     ASSERT(context->magic == SGML_MAGIC);
+
+    PINC_SGML_FEEDS;
+    PADD_HTML_BYTES(bytes);
 
     PRSDBGN(("sgml_feed_characters(): '%.*s'\n", bytes, buffer));
 
@@ -228,6 +232,8 @@ extern void sgml_install_deliver(SGMLCTX *context, sgml_deliver_fn new)
 {
     sgml_deliver_list *dp = mm_calloc(1, sizeof(*dp));
 
+    PINC_INSTALL_DELIVER;
+
     PRSDBGN(("sgml_install_deliver(%p, %p)\n", context, new));
 
     dp->this_fn = context->deliver;
@@ -239,6 +245,8 @@ extern void sgml_install_deliver(SGMLCTX *context, sgml_deliver_fn new)
 extern void sgml_remove_deliver(SGMLCTX *context, sgml_deliver_fn current)
 {
     sgml_deliver_list *dp = context->dlist;
+
+    PINC_REMOVE_DELIVER;
 
     PRSDBGN(("sgml_remove_deliver(%p, %p)\n", context, current));
 

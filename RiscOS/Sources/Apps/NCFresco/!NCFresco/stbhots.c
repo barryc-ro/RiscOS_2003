@@ -530,7 +530,7 @@ os_error *hotlist_flush_pending_delete(void)
     return NULL;
 }
 
-void hotlist_write_list(FILE *fout, BOOL del)
+static void hotlist__write_list(FILE *fout, BOOL del)
 {
     hotlist_item *item;
     int i;
@@ -540,10 +540,20 @@ void hotlist_write_list(FILE *fout, BOOL del)
 	char *ttl = item->title ? item->title : item->url;
 
 	if (del)
- 	    fprintf(fout, msgs_lookup("hotsdI"), i, i, ttl, i, i, item->flags & hotlist_DELETE_PENDING ? "CHECKED" : "");
+ 	    fprintf(fout, msgs_lookup("favsd.I"), i, i, ttl, i, i, item->flags & hotlist_DELETE_PENDING ? "CHECKED" : "");
 	else
- 	    fprintf(fout, msgs_lookup("hotsI"), i, ttl);
+ 	    fprintf(fout, msgs_lookup("favs.I"), i, ttl);
     }
+}
+
+void hotlist_write_list(FILE *fout, void *handle)
+{
+    hotlist__write_list(fout, FALSE);
+}
+
+void hotlist_write_delete_list(FILE *fout, void *handle)
+{
+    hotlist__write_list(fout, TRUE);
 }
 
 /* ---------------------------------------------------------------------- */

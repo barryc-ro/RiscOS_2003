@@ -1242,7 +1242,7 @@ static void tidy_table(HTMLCTX *me, rid_table_item *table)
 
 extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *result)
 {
-#if DEBUG && 0
+#if DEBUG
     static char *prop_name[] =
     {
 	"rid_PROP_VALIGN ",
@@ -1267,12 +1267,12 @@ extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *res
 
     dsu.u.f = 1.0;
 
+    TABDBGN(("rid_getprop(%p, %d, %d, %s, %p): cell props %p\n",
+      table, x, y, prop_name[prop], result, cell->props));
+
     ASSERT(x < table->cells.x);
     ASSERT(y < table->cells.y);
     TASSERT(cell != NULL);
-
-    /*TABDBGN(("rid_getprop(%p, %d, %d, %s, %p): cell props %p\n",
-      table, x, y, prop_name[prop], result, cell->props));*/
 
     switch (prop)
     {
@@ -1721,6 +1721,12 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     generic_start(context, element, attributes);
 
+    if ( !config_display_tables )
+    {
+        TABDBG(("starttable: ignoring\n"));
+        return;
+    }
+
     ASSERT(context->dlist == NULL);
     ASSERT(context->deliver != &table_deliver);
 
@@ -1994,6 +2000,12 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 
     generic_finish(context, element);
 
+    if ( !config_display_tables )
+    {
+        TABDBG(("finishtable: ignoring\n"));
+        return;
+    }
+
     restrain_rowspan_cells(me, table);
 
 #if 0 && DEBUG
@@ -2082,6 +2094,12 @@ extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     generic_start(context, element, attributes);
 
+    if ( !config_display_tables )
+    {
+        TABDBG(("caption: ignoring\n"));
+        return;
+    }
+
     cap = (rid_table_caption *) mm_calloc(1, sizeof(*cap));
     tab->caption = cap;
     cap->table = tab;
@@ -2135,9 +2153,18 @@ extern void finishcaption(SGMLCTX *context, ELEMENT *element)
 {
     HTMLCTX *htmlctx = htmlctxof(context);
     rid_table_item *table = htmlctx->table;
-    rid_table_caption *caption = table->caption;
+    rid_table_caption *caption;
 
     generic_finish(context, element);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("finishcaption: ignoring\n"));
+        return;
+    }
+
+    /* DAF: 970701: AFTER rejecting case where caption does not exist! */
+    caption = table->caption;
 
     if (caption->stream.text_list == NULL)
     {
@@ -2203,6 +2230,12 @@ extern void startcolgroupsection (SGMLCTX * context, ELEMENT * element, VALUES *
 
     generic_start (context, element, attributes);
 
+    if ( !config_display_tables )
+    {
+        TABDBG(("startcolgroupsection: ignoring\n"));
+        return;
+    }
+
     me->table->flags |= rid_tf_COLGROUPSECTION;
 
     if (!gbf_active(GBF_TABLES_UNEXPECTED))
@@ -2217,6 +2250,12 @@ extern void finishcolgroupsection (SGMLCTX * context, ELEMENT * element)
     rid_table_item *table = me->table;
 
     generic_finish (context, element);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("finishcolgroupsection: ignoring\n"));
+        return;
+    }
 
     TABDBG(("Checking for columns not assigned to a column group yet\n"));
 
@@ -2278,6 +2317,12 @@ extern void startcolgroup(SGMLCTX *context, ELEMENT *element, VALUES *attributes
     VALUE *attr;
 
     generic_start(context, element, attributes);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("startcolgroup: ignoring\n"));
+        return;
+    }
 
     if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
     {
@@ -2358,6 +2403,12 @@ extern void finishcolgroup(SGMLCTX *context, ELEMENT *element)
 
     generic_finish(context, element);
 
+    if ( !config_display_tables )
+    {
+        TABDBG(("finishcolgroup: ignoring\n"));
+        return;
+    }
+
     ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
     ASSERT( table->cur_colgroup != NULL );
     ASSERT( table->num_groups.x > 0 );
@@ -2436,6 +2487,12 @@ extern void startcol(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     VALUE *attr;
 
     generic_start(context, element, attributes);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("startcol: ignoring\n"));
+        return;
+    }
 
     if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
     {
@@ -2562,6 +2619,12 @@ extern void startthead(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 {
     rid_table_item *table = htmlctxof(context)->table;
 
+    if ( !config_display_tables )
+    {
+        TABDBG(("startthead: ignoring\n"));
+        return;
+    }
+
     start_headfootbody(context, element, attributes);
 
     table->rowgroups[table->num_groups.y-1]->flags |= rid_rgf_THEAD;
@@ -2570,6 +2633,12 @@ extern void startthead(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 extern void starttfoot(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 {
     rid_table_item *table = htmlctxof(context)->table;
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("starttfoot: ignoring\n"));
+        return;
+    }
 
     start_headfootbody(context, element, attributes);
 
@@ -2581,6 +2650,12 @@ extern void starttbody(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 {
     rid_table_item *table = htmlctxof(context)->table;
 
+    if ( !config_display_tables )
+    {
+        TABDBG(("starttbody: ignoring\n"));
+        return;
+    }
+
     start_headfootbody(context, element, attributes);
 
     table->rowgroups[table->num_groups.y-1]->flags |= rid_rgf_TBODY;
@@ -2589,6 +2664,12 @@ extern void starttbody(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 extern void finishthead(SGMLCTX *context, ELEMENT *element)
 {
     generic_finish(context, element);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("finishthead: ignoring\n"));
+        return;
+    }
 
     if (!gbf_active(GBF_TABLES_UNEXPECTED))
     {
@@ -2602,6 +2683,12 @@ extern void finishtfoot(SGMLCTX *context, ELEMENT *element)
     rid_table_item *table = me->table;
 
     generic_finish(context, element);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("finishtfoot: ignoring\n"));
+        return;
+    }
 
     /* Need to restrain now, as growing to the next row down counts */
     /* as a fracture on screen, jumping the cell back upwards. */
@@ -2626,6 +2713,12 @@ extern void finishtfoot(SGMLCTX *context, ELEMENT *element)
 extern void finishtbody(SGMLCTX *context, ELEMENT *element)
 {
     generic_finish(context, element);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("finishtbody: ignoring\n"));
+        return;
+    }
 
     if (!gbf_active(GBF_TABLES_UNEXPECTED))
     {
@@ -2660,6 +2753,12 @@ extern void starttr(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     VALUE *attr;
 
     generic_start(context, element, attributes);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("starttr: ignoring\n"));
+        return;
+    }
 
     if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
     {
@@ -2728,6 +2827,12 @@ extern void finishtr(SGMLCTX *context, ELEMENT *element)
 extern void pre_thtd_warning(HTMLCTX *me)
 {
     rid_table_item *table = me->table;
+
+    if (!config_display_tables)
+    {
+	TABDBG(("ignoring pre_thtd_warning\n"));
+	return;
+    }
 
     TABDBGN(("pre_thtd_warning(): looking for new cell position, scaff (%d,%d), cells (%d,%d)\n",
 	    table->scaff.x, table->scaff.y, table->cells.x, table->cells.y));
@@ -2800,6 +2905,12 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     generic_start(context, element, attributes);
 
+    if ( !config_display_tables )
+    {
+        TABDBG(("start_tdth: ignoring\n"));
+        return;
+    }
+
     /* Might be directed not to add more cells */
     if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
 	return;
@@ -2866,7 +2977,6 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	}
 	else if ( ceil(attr->u.f) > 0 )
 	{
-	    FMTDBG(("start_tdth: taking %%age value %d from %g\n", (int)ceil(attr->u.f), attr->u.f));
 	    cell->flags |= rid_cf_PERCENT;
 	    cell->userwidth = *attr;
 	}
@@ -3285,6 +3395,12 @@ static void finish_thtd (SGMLCTX * context, ELEMENT * element)
     int i;
 
     generic_finish (context, element);
+
+    if ( !config_display_tables )
+    {
+        TABDBG(("finish_tdth: ignoring\n"));
+        return;
+    }
 
     /* pdh: this is a bodge */ me->aref = NULL;
 

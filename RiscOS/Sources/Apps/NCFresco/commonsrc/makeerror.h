@@ -42,3 +42,4 @@ os_error *makeerrorf(int n, ...);
 #define ERR_NO_EDITOR           35
 #define ERR_PRINT_FRAMESET      36
 #define ERR_NO_DISC_SPACE       37
+#define ERR_BAD_FILE_TYPE	38

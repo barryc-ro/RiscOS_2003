@@ -44,6 +44,7 @@ static unsigned int seeds[12] =
 
 
 /* Fill a bits96 value with a legal value */
+#if 0
 static void sn_fill_bits(bits96 *bits, int n)
 {
     int i;
@@ -54,6 +55,7 @@ static void sn_fill_bits(bits96 *bits, int n)
 	bits->c[i+4] = antltd[i];
     }
 }
+#endif
 
 static void sn_bit_shuffle_forw(bits96 *bits)
 {
@@ -92,27 +94,27 @@ static void sn_12pass_forw(bits96 *bits)
     sn_bit_shuffle_forw(bits);
     sn_eor_words_forw(bits, seeds[0]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[1]);	
+    sn_eor_words_forw(bits, seeds[1]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[2]);	
+    sn_eor_words_forw(bits, seeds[2]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[3]);	
+    sn_eor_words_forw(bits, seeds[3]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[4]);	
+    sn_eor_words_forw(bits, seeds[4]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[5]);	
+    sn_eor_words_forw(bits, seeds[5]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[6]);	
+    sn_eor_words_forw(bits, seeds[6]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[7]);	
+    sn_eor_words_forw(bits, seeds[7]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[8]);	
+    sn_eor_words_forw(bits, seeds[8]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[9]);	
+    sn_eor_words_forw(bits, seeds[9]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[10]);	
+    sn_eor_words_forw(bits, seeds[10]);
     sn_bit_shuffle_forw(bits);
-    sn_eor_words_forw(bits, seeds[11]);	
+    sn_eor_words_forw(bits, seeds[11]);
 }
 
 static void sn_ascii_encode(bits96 *bits, char *buffer)
@@ -140,6 +142,7 @@ static void sn_ascii_encode(bits96 *bits, char *buffer)
     buffer[j] = 0;
 }
 
+#if 0
 void serial_encode(char *buffer, int n)
 {
     bits96 bns;
@@ -148,12 +151,13 @@ void serial_encode(char *buffer, int n)
     sn_12pass_forw(&bns);
 
     sn_ascii_encode(&bns, buffer+31);
-    
+
     sn_bit_shuffle_forw((bits96 *) &buffer[0]);
     sn_bit_shuffle_forw((bits96 *) &buffer[12]);
     sn_bit_shuffle_forw((bits96 *) &buffer[24]);
     sn_bit_shuffle_forw((bits96 *) &buffer[36]);
 }
+#endif
 
 static void sn_ascii_decode(char *buffer, bits96 *bits)
 {
@@ -209,29 +213,29 @@ static void sn_eor_words_back(bits96 *bits, unsigned int seed)
 
 static void sn_12pass_back(bits96 *bits)
 {
-  sn_eor_words_back(bits, seeds[11]);	
+  sn_eor_words_back(bits, seeds[11]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[10]);	
+  sn_eor_words_back(bits, seeds[10]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[9]);	
+  sn_eor_words_back(bits, seeds[9]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[8]);	
+  sn_eor_words_back(bits, seeds[8]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[7]);	
+  sn_eor_words_back(bits, seeds[7]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[6]);	
+  sn_eor_words_back(bits, seeds[6]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[5]);	
+  sn_eor_words_back(bits, seeds[5]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[4]);	
+  sn_eor_words_back(bits, seeds[4]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[3]);	
+  sn_eor_words_back(bits, seeds[3]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[2]);	
+  sn_eor_words_back(bits, seeds[2]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[1]);	
+  sn_eor_words_back(bits, seeds[1]);
   sn_bit_shuffle_back(bits);
-  sn_eor_words_back(bits, seeds[0]);	
+  sn_eor_words_back(bits, seeds[0]);
   sn_bit_shuffle_back(bits);
 }
 
@@ -253,7 +257,7 @@ extern int VerifySerial(char *buffer)
 #endif
 
   sn_ascii_decode(&buffer[31], &bns);
-  sn_12pass_back(&bns);	
+  sn_12pass_back(&bns);
   for (i = 0; i < 8; i++)
   {
       if (bns.c[i+4] != antltd[i])
@@ -263,7 +267,7 @@ extern int VerifySerial(char *buffer)
 #endif
   }
 
-  sn_12pass_forw(&bns);	
+  sn_12pass_forw(&bns);
   sn_ascii_encode(&bns, &buffer[31]);
 
   return(1);

@@ -67,6 +67,8 @@ extern int file_and_object_type(const char *fname, int *obj_type);
 extern int file_type_real(const char *fname);
 extern int file_type(const char *fname);
 extern int file_last_modified(const char *fname);
+extern os_error *file_copy( const char *from, const char *to ); /* force */
+
 int set_file_type(const char *fname, int ft);
 extern int path_is_directory(const char *path);
 extern char *get_file_type_name(int ftype);
@@ -334,6 +336,10 @@ extern int get_free_memory_size(void);
 extern FILE *mmfopen(const char *file, const char *mode);
 extern void mmfclose(FILE *f);
 
+#endif
+
+#ifdef FRESCO
+int mkdir( const char *dir, int mode );
 #endif
 
 /* eof util.h */

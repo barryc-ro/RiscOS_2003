@@ -116,7 +116,7 @@ static char *match_names[] =
 #endif
 
 /* Commands applied to an element number to describe relations */
-
+/* Please keep debugging list in elements.c upto date as well. */
 enum
 {
     ONE_OF_ENCLOSING = 0,
@@ -384,6 +384,8 @@ struct SGMLCTX
 	applying_rules:1,
 	threaded:1,		/* inside the 'data' function */
 	pending_close:1,	/* close called whilst threaded */
+	strip_initial_newline:1,/* strip newline immediately after start tag */
+	strip_final_newline:1,	/* strip newline immediately before end tag  */
 	:0;			/* placeholder */
     
     /* Context operating within */

@@ -47,6 +47,7 @@ typedef struct awp_page_str {
 #define doc_flag_INCOMPLETE	(1<<17)	/* The document fetch was haltedc before it was done */
 #define doc_flag_SECURE		(1<<18)	/* A secure method, such as SSL, was used. */
 #define doc_flag_HAD_HEADERS	(1<<19)	/* Have we transferred HTTP headers into the META list */
+#define doc_flag_WRECKED	(1<<20)	/* A dreadful memory problem has occurred */
 
 #define doc_selection_tag_NONE	0
 #define doc_selection_tag_TEXT	1
@@ -56,7 +57,26 @@ typedef struct awp_page_str {
 #define doc_selection_offset_UNKNOWN	(-1)
 #define doc_selection_offset_NO_CARET	(-2)
 
-typedef struct				/* the currently selected item. Could be an anchor or a text item or a map */
+
+typedef struct antweb_selection_boundary antweb_selection_boundary;
+typedef struct antweb_selection_t antweb_selection_t;
+typedef struct antweb_selection_descr antweb_selection_descr;
+typedef struct antweb_selection_list_descr antweb_selection_list_descr;
+
+#define selection_boundary_END	0
+#define selection_boundary_MOVE	1
+#define selection_boundary_DRAW	2
+
+struct antweb_selection_boundary
+{
+    antweb_selection_boundary *next;
+
+    char plot;
+    char reserved[3];
+    short x, y;
+};
+ 
+struct antweb_selection_t				/* the currently selected item. Could be an anchor or a text item or a map */
 {
     int tag;
     union
@@ -75,10 +95,8 @@ typedef struct				/* the currently selected item. Could be an anchor or a text i
 	    rid_text_item *item;
 	} map;
     } data;
-} antweb_selection_t;
-
-typedef struct antweb_selection_descr antweb_selection_descr;
-typedef struct antweb_selection_list_descr antweb_selection_list_descr;
+    antweb_selection_boundary *boundary, *boundary_last;
+};
 
 #define LINK_SORT 0		/* future expansion... */
 
@@ -110,7 +128,8 @@ struct antweb_selection_list_descr
 #endif
 };
 
-typedef struct _antweb_doc {
+typedef struct _antweb_doc
+{
     struct _antweb_doc *next;
     int magic;			/* Magic number */
     char *url;
@@ -213,6 +232,9 @@ extern void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw);
 extern void highlight_offset_border(wimp_box *box);
 extern void highlight_render(wimp_redrawstr *rr, antweb_doc *doc);
 extern void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos, BOOL has_text);
+
+extern void highlight_boundary_build(antweb_doc *doc);
+extern void highlight_boundary_clear(antweb_doc *doc);
 
 #endif
 

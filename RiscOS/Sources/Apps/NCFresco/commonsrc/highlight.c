@@ -6,6 +6,8 @@
  
  */
 
+#include <limits.h>
+
 #include "bbc.h"
 #include "wimp.h"
 
@@ -20,22 +22,7 @@
 #include "rcolours.h"
 #include "render.h"
 
-/* doc->selection contains details of the currently selected item or
- * anchor.  This routine should scan to get the total covered area and
- * draw a highlight around all of it. Except where the boxes are
- * discontiguous in which case it should separate boxes.
- */
-
-#if 0
-#define render_colour_highlight_L	(0x33FF3300 | render_colour_RGB)
-#define render_colour_highlight_D	(0x00880000 | render_colour_RGB)
-#define render_colour_highlight_M	(0xffffff00 | render_colour_RGB)
-#else
-#define render_colour_highlight_L	plinth_col_B_M
-#define render_colour_highlight_D	plinth_col_B_L
-#define render_colour_highlight_M	(0xffffff00 | render_colour_RGB)
-#endif
-
+/* ---------------------------------------------------------------------- */
 
 /* bias values for text links */
 #define TEXT_X0	12
@@ -45,165 +32,412 @@
 
 #define IMAGE_SPACE	4
 
+/* ---------------------------------------------------------------------- */
+
+#if NEW_HL
+
+typedef enum
+{
+    state_DOWN,
+    state_RIGHT,
+    state_UP,
+    state_LEFT
+} tracking_state;
+
+/* ---------------------------------------------------------------------- */
+
+static intxy point_array[256];
+static int n_points = 0;
+
+/* ---------------------------------------------------------------------- */
+
+static void pointlist_add_point(antweb_selection_t *sel, int x, int y)
+{
+    point_array[n_points].x = x;
+    point_array[n_points].y = y;
+    n_points++;
+}
+
+static void pointlist_add_rectangle(antweb_selection_t *sel, wimp_box *box)
+{
+    pointlist_add_point(sel, box->x0, box->y0);
+    pointlist_add_point(sel, box->x0, box->y1);
+    pointlist_add_point(sel, box->x1, box->y0);
+    pointlist_add_point(sel, box->x1, box->y1);
+}
+
+static int pointlist_find_next(const intxy *from, tracking_state state)
+{
+    const intxy *p;
+    int best = -1;
+    int best_prim_dist = INT_MAX;
+    int best_sec_dist = INT_MAX;
+    int i;
+    
+    for (i = 0, p = point_array; i < n_points; i++, p++)
+    {
+	int prim_dist = 0, sec_dist = 0;
+
+	switch (state)
+	{
+	case state_DOWN:
+	    prim_dist = from->y - p->y;
+	    sec_dist = from->x - p->x;
+	    break;
+
+	case state_RIGHT:
+	    prim_dist = p->x - from->x;
+	    sec_dist = from->y - p->y;
+	    break;
+
+	case state_UP:
+	    prim_dist = p->y - from->y;
+	    sec_dist = p->x - from->x;
+	    break;
+
+	case state_LEFT:
+	    prim_dist = from->x - p->x;
+	    sec_dist = p->y - from->y;
+	    break;
+	}
+
+	/* ensure that we are
+	   a) in the correct quadrant
+	   b) not the original point as passed in
+	   c) have a lower primary distance that the original point, or
+
+	   d) have the same primary distance and a *larger* secondary distance.
+	   We go for larger as if we went to smaller we'd only go to larger the
+	   next time round so we might as well skip that step. If this decision
+	   changes then we need to change the start point for the finding the
+	   first point below
+
+	   Now use smaller
+	*/
+	if (prim_dist >= 0 && sec_dist >= 0 &&
+	    !(prim_dist == 0 && sec_dist == 0) &&
+	    (prim_dist < best_prim_dist || (prim_dist == best_prim_dist && sec_dist < best_sec_dist)))
+	{
+	    best_prim_dist = prim_dist;
+	    best_sec_dist = sec_dist;
+	    best = i;
+	}
+    }
+
+    return best;
+}
+
+static int pointlist_find_next_index(int index, tracking_state state)
+{
+    return pointlist_find_next(&point_array[index], state);
+}
+
+static int pointlist_find_first(void)
+{
+    intxy start;
+
+    /* to find the top left item we start from the bottom left and go
+       right due to the way that the above search finds the largest
+       secondary dostance */
+    start.x = -0x4000;
+    start.y =  0x4000;
+
+    return pointlist_find_next(&start, state_RIGHT);
+}
+
+static void pointlist_clear(void)
+{
+    n_points = 0;
+}
+
+/* ---------------------------------------------------------------------- */
+
+
+static void boundary_add_point(antweb_selection_t *sel, int plot, int x, int y)
+{
+    antweb_selection_boundary *item = mm_calloc(sizeof(*item), 1);
+
+    if (sel->boundary_last)
+	sel->boundary_last->next = item;
+    else
+	sel->boundary = item;
+    
+    item->plot = plot;
+    item->x = x;
+    item->y = y;
+}
+
+static void boundary_add_point_index(antweb_selection_t *sel, int plot, int index)
+{
+    LNKDBG(("boundary_add_point_index: plot %d index %d\n", plot, index));
+
+    boundary_add_point(sel, plot, point_array[index].x, point_array[index].y);
+}
+
+/* Add the given wimp box as a complete path to the boundary */
+
+static void boundary_add_rectangle(antweb_selection_t *sel, const wimp_box *bb)
+{
+    LNKDBG(("boundary_add_rectangle: box %d,%d %d,%d\n", bb->x0, bb->y0, bb->x1, bb->y1));
+
+    boundary_add_point(sel, selection_boundary_MOVE, bb->x0, bb->y1);
+    boundary_add_point(sel, selection_boundary_DRAW, bb->x0, bb->y0);
+    boundary_add_point(sel, selection_boundary_DRAW, bb->x1, bb->y0);
+    boundary_add_point(sel, selection_boundary_DRAW, bb->x1, bb->y1);
+    boundary_add_point(sel, selection_boundary_DRAW, bb->x0, bb->y1);
+}
+
+static void boundary_create_from_pointlist(antweb_selection_t *sel)
+{
+    int p, first;
+    tracking_state state;
+
+    LNKDBG(("boundary_create_from_pointlist:\n"));
+
+    p = first = pointlist_find_first();
+
+    boundary_add_point_index(sel, selection_boundary_MOVE, p);
+    state = state_DOWN;
+
+    LNKDBG(("boundary_create_from_pointlist: start %d\n", p));
+
+    do
+    {
+	tracking_state orig_state = state;
+	int next_point;
+
+	do
+	{
+	    next_point = pointlist_find_next_index(p, state);
+
+	    LNKDBG(("boundary_create_from_pointlist: state %d next %d\n", state, next_point));
+
+	    if (next_point == -1)
+		state = (tracking_state)((state + 1) % 4);
+	}
+	while (next_point == -1 && state != orig_state);
+	    
+	p = next_point;
+
+	if (p != -1)
+	    boundary_add_point_index(sel, selection_boundary_DRAW, p);
+    }
+    while (p != first && p != -1);
+
+    boundary_add_point(sel, selection_boundary_END, 0, 0);
+
+    pointlist_clear();
+}
+
+/* ---------------------------------------------------------------------- */
+
 #if 0
-
-#define HSPACE	4
-#define VSPACE	4
-
-void highlight_render_highlight(antweb_doc *doc, int ox, int oy, wimp_box *g)
+typedef struct
 {
-    switch (doc->selection.tag)
+    rid_aref_item *aref;
+    wimp_box box;
+    int is_disconnected;
+} box_is_disconnected_str;
+
+static BOOL box_is_disconnected_fn(be_doc doc, rid_text_item *ti, wimp_box *box, void *handle)
+{
+    box_is_disconnected_str *dis = handle;
+
+    /* if different aref then stop */
+    if (dis->aref != ti->aref)
+	return TRUE;
+
+    /* if there is an overlap then unset flag and stop */
+    if (dis->box.x1 >= box->x0 &&
+	box->x1 >= dis->box.x0)
     {
+	dis->is_disconnected = FALSE;
+	return TRUE;
+    }	
+	
+    return FALSE;
+}
+
+static BOOL box_is_disconnected(be_doc doc, rid_aref_item *aref, wimp_box *box)
+{
+    box_is_disconnected_str dis;
+
+    dis.aref = aref;
+    dis.box = *box;
+    dis.is_disconnected = 1;
+	
+    stream_iterate_box(doc, aref->first, box_is_disconnected_fn, &dis);
+
+    return dis.is_disconnected;
+}
+#endif
+
+/* ---------------------------------------------------------------------- */
+
+static BOOL check_aref(be_doc doc, rid_text_item *ti, wimp_box *box, void *handle)
+{
+    antweb_selection_t *sel = &doc->selection;
+    rid_aref_item *aref = handle;
+
+    LNKDBG(("check_aref: ti%p ti->aref %p aref %p\n", ti, ti->aref, aref));
+
+    /* if different aref then stop */
+    if (aref != ti->aref)
+	return TRUE;
+
+#if 0
+    if (box_is_disconnected(doc, sel->data.aref, box))
+	boundary_add_rectangle(sel, box);
+    else
+#endif
+	pointlist_add_rectangle(sel, box);
+
+    return FALSE;
+}
+
+void highlight_boundary_build(be_doc doc)
+{
+    antweb_selection_t *sel = &doc->selection;
+    wimp_box bb;
+
+    LNKDBG(("boundary_build: doc%p\n", doc));
+    
+    highlight_boundary_clear(doc);
+
+    switch (sel->tag)
+    {
+    case doc_selection_tag_NONE:
+	break;
+
     case doc_selection_tag_TEXT:
     {
-	int hpos, bline;
+	wimp_box trim_box;
+	be_item ti;
+	    
+	memset(&trim_box, 0, sizeof(trim_box));
+	ti = sel->data.text.item;
 
-	if (stream_find_item_location(doc->selection.data.text.item, &hpos, &bline))
+	if (object_table[ti->tag].update_highlight == 0 ||
+	    object_table[ti->tag].update_highlight(ti, doc, 0, &trim_box))
 	{
-	    render_set_colour(render_colour_HIGHLIGHT, doc);
-	    render_item_outline(ti, hpos, bline);
+	    backend_doc_item_bbox(doc, ti, &bb);
 
-	    bbc_rectangle(ox + hpos - HSPACE,
-			  oy + bline - ti->max_down - VSPACE,
-			  ti->width + 2*HSPACE - 1,
-			  ti->max_down + ti->max_up + 2*VSPACE - 1);
+	    boundary_add_rectangle(sel, &bb);
+	    boundary_add_point(sel, selection_boundary_END, 0, 0);
 	}
 
 	break;
     }
-
+    
     case doc_selection_tag_AREF:
-	for (ti = item->aref->first; ti && ti->aref == item->aref; ti = rid_scanfr(ti))
+	stream_iterate_box(doc, sel->data.aref->first, check_aref, sel->data.aref);
+
+	boundary_create_from_pointlist(sel);
+	break;
+
+    case doc_selection_tag_MAP:
+	switch (sel->data.map.area->type)
 	{
-	    if (activate)
-		ti->flag |= rid_flag_ACTIVATED;
-	    else
-		ti->flag &= ~rid_flag_ACTIVATED;
-	    be_update_item_highlight(doc, ti);
-	}
-	break;
-
-    case doc_selection_tag_AREA:
-	break;
-    }
-
-}
-
-typedef void (*highlight_line_fn)(int x, int y, int draw);
-
-#define hl_MOVE_TO	0
-#define hl_DRAW_TO	1
-
-static void highlight_draw_line(int x, int y, int draw)
-{
-    switch (draw)
-    {
-    case hl_MOVE_TO:
-	bbc_move(x, y);
-	break;
-    case hl_DRAW_TO:
-	bbc_draw(x, y);
-	break;
-    }
-}
-
-static void highlight_redraw_line(int x, int y, int draw)
-{
-    switch (draw)
-    {
-    case hl_MOVE_TO:
-	bbc_move(x, y);
-	break;
-
-    case hl_DRAW_TO:
-    {
-	wimp_box box;
-	box.x0 = 
-        frontend_view_update(doc->parent, &box, &backend_render_rectangle, doc, wont_plot_all);
-	memset(&trim, 0, sizeof(trim));
-
-	trim.x0 = ti->width - 4;
-	antweb_update_item_trim(doc, ti, &trim, TRUE);
-	break;
-    }
-    }
-}
-
-void highlight_generate_lines(antweb_doc *doc, int ox, int oy, wimp_box *g, highlight_line_fn process_line)
-{
-    switch (doc->selection.tag)
-    {
-    case doc_selection_tag_TEXT:
-    {
-	int hpos, bline;
-
-	if (stream_find_item_location(doc->selection.data.text.item, &hpos, &bline))
-	{
-	    int x0, y0, x1, y1;
-
-	    x0 = ox + hpos - HSPACE;
-	    y0 = oy + bline - ti->max_down - VSPACE;
-	    x1 = x0 + ti->width + 2*HSPACE - 1;
-	    y1 = y0 + ti->max_down + ti->max_up + 2*VSPACE - 1;
-
-	    process_line(x0, y0, hl_MOVE_TO);
-	    process_line(x0, y1, hl_DRAW_TO);
-	    process_line(x1, y1, hl_DRAW_TO);
-	    process_line(x1, y0, hl_DRAW_TO);
-	    process_line(x0, y0, hl_DRAW_TO);
+	case rid_area_RECT:
+	    break;
+	case rid_area_CIRCLE:
+	    break;
+	case rid_area_POLYGON:
+	    break;
 	}
 	break;
     }
+    LNKDBG(("boundary_build: out%p\n", doc));
+}
 
-    case doc_selection_tag_AREF:
-	for (ti = item->aref->first; ti && ti->aref == item->aref; ti = rid_scanfr(ti))
-	{
-	    if (activate)
-		ti->flag |= rid_flag_ACTIVATED;
-	    else
-		ti->flag &= ~rid_flag_ACTIVATED;
-	    be_update_item_highlight(doc, ti);
-	}
-	break;
+void highlight_boundary_clear(be_doc doc)
+{
+    antweb_selection_t *sel = &doc->selection;
+    antweb_selection_boundary *item = sel->boundary;
 
-    case doc_selection_tag_AREA:
-	break;
+    LNKDBG(("boundary_clear: doc%p\n", doc));
+
+    while (item)
+    {
+	antweb_selection_boundary *next = item->next;
+	
+	mm_free(item);
+
+	item = next;
     }
+    
+    sel->boundary = NULL;
+    sel->boundary_last = NULL;
+}
+#else
 
+void highlight_boundary_build(be_doc doc)
+{
+}
+
+void highlight_boundary_clear(be_doc doc)
+{
 }
 
 #endif
 
-static int hl_colours[] =
-{
-    render_colour_highlight_L,
-    render_colour_highlight_D,
-    render_colour_highlight_D,
-    render_colour_highlight_L,
-    render_colour_highlight_M,
-    render_colour_highlight_M
-};
+/* ---------------------------------------------------------------------- */
 
-static int hl_colours_text[] =
-{
-    render_colour_highlight_L,
-    render_colour_highlight_D,
-    render_colour_highlight_M,
-    render_colour_highlight_M
-};
+#if NEW_HL
 
-static int get_colour(int i)
+void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
 {
-    return config_display_highlight_style == highlight_style_SIMPLE || i >= sizeof(hl_colours)/sizeof(hl_colours[0]) ?
-	render_colour_HIGHLIGHT :
-	hl_colours[i];
+    int ox, oy;
+    antweb_selection_boundary *sb;
+
+    ox = rr->box.x0 - rr->scx;
+    oy = rr->box.y1 - rr->scy;
+
+#if USE_MARGINS
+    ox += doc->margin.x0;
+    oy += doc->margin.y1;
+#endif
+
+    for (sb = doc->selection.boundary; sb; sb = sb->next)
+    {
+	switch (sb->plot)
+	{
+	case selection_boundary_END:
+	    break;	    
+	case selection_boundary_MOVE:
+	    bbc_move(ox + sb->x, oy + sb->y);
+	    break;	    
+	case selection_boundary_DRAW:
+	    bbc_draw(ox + sb->x, oy + sb->y);
+	    break;	    
+	}
+    }
 }
+
+void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos, BOOL has_text)
+{
+}
+
+void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
+{
+}
+
+void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw)
+{
+}
+
+void highlight_offset_border(wimp_box *box)
+{
+}
+
+
+#else
+
 
 static int get_colour_text(int i)
 {
-    return config_display_highlight_style == highlight_style_SIMPLE || i >= sizeof(hl_colours_text)/sizeof(hl_colours_text[0]) ?
-	render_colour_HIGHLIGHT :
-	hl_colours_text[i];
+    wimp_paletteword *cols = config_colour_list[render_colour_list_HIGHLIGHT];
+    return i > cols[0].word ? cols[1].word : cols[i+1].word;
 }
 
 void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
@@ -212,24 +446,16 @@ void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
 
     if (ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED))
     {
-	int x, y, w, h, i;
-	int last = -1;
-	int border_width = config_display_highlight_width*2 + IMAGE_SPACE;
+	int x, y, w, h;
+	wimp_paletteword *cols = config_colour_list[ti->flag & rid_flag_ACTIVATED ? render_colour_list_ACTIVATED : render_colour_list_HIGHLIGHT];
+	int border_width = cols[0].word/2*2 + IMAGE_SPACE;
 
 	x = hpos - border_width;
 	y = bline - ti->max_down - border_width;
 	w = ti->width + border_width*2;
 	h = ti->max_up + ti->max_down + border_width*2;
 	
-	for (i = 0; i < config_display_highlight_width; i++)
-	{
-	    int col = ti->flag & rid_flag_ACTIVATED ? render_colour_ACTIVATED : get_colour(i);
-
-	    if (col != last)
-		render_set_colour(last = col, doc);
-
-	    bbc_rectangle(x+i*2, y+i*2, w - i*2*2 -1, h - i*2*2 - 1);
-	}
+	render_plinth_from_list(0, cols, render_plinth_NOFILL, x, y, w, h, doc);
     }
 }
 
@@ -272,11 +498,11 @@ void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw)
 	do_redraw;
 	trim.y1 = box->y1;
 
-	trim.x0 = trim.x1 - (config_display_highlight_width*2);
+	trim.x0 = trim.x1 - (config_display_highlight_width*2) - 1;
 	do_redraw;
 	trim.x0 = box->x0;
 
-	trim.y0 = trim.y1 - (config_display_highlight_width*2);
+	trim.y0 = trim.y1 - (config_display_highlight_width*2) - 1;
 	do_redraw;
     }
 }
@@ -290,11 +516,38 @@ void highlight_offset_border(wimp_box *box)
     box->y1 += border_width + (frontend_dy-1);
 }
 
+static object_font_state hl_render_fs;
+static rid_aref_item *hl_render_aref;
+
+static int redraw_hl(be_doc doc, rid_text_item *ti, wimp_box *box, void *handle)
+{
+    wimp_redrawstr *rr = handle;
+    int ox, oy;
+    int hpos, bline;
+
+    if (ti->aref != hl_render_aref)
+	return TRUE;
+
+    ox = rr->box.x0 - rr->scx;
+    oy = rr->box.y1 - rr->scy;
+
+#if USE_MARGINS
+    ox += doc->margin.x0;
+    oy += doc->margin.y1;
+#endif
+
+    hpos = box->x0;
+    bline = box->y0 + ti->max_down;
+
+    object_table[ti->tag].redraw(ti, doc->rh, doc, ox + hpos, oy + bline, &hl_render_fs, &rr->g, ox, oy, object_redraw_HIGHLIGHT);
+
+    return FALSE;
+}
+
 void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
 {
     int ox, oy;
     int hpos, bline;
-    object_font_state fs;
     be_item ti;
 
     ox = rr->box.x0 - rr->scx;
@@ -305,6 +558,10 @@ void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
     oy += doc->margin.y1;
 #endif
 
+    /* init font state */
+    memset(&hl_render_fs, 0, sizeof(hl_render_fs));
+    hl_render_fs.lf = hl_render_fs.lfc = -1;
+    
     LNKDBGN(("highlight_render: doc %p tag %d\n", doc, doc->selection.tag));
 
     switch (doc->selection.tag)
@@ -317,7 +574,7 @@ void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
 	
 	if (object_table[ti->tag].redraw &&
 	    stream_find_item_location(ti, &hpos, &bline))
-	    object_table[ti->tag].redraw(ti, doc->rh, doc, ox + hpos, oy + bline, &fs, &rr->g, ox, oy, object_redraw_HIGHLIGHT);
+	    object_table[ti->tag].redraw(ti, doc->rh, doc, ox + hpos, oy + bline, &hl_render_fs, &rr->g, ox, oy, object_redraw_HIGHLIGHT);
 	break;
 
     case doc_selection_tag_MAP:
@@ -325,30 +582,16 @@ void highlight_render(wimp_redrawstr *rr, antweb_doc *doc)
 	
 	if (object_table[ti->tag].redraw &&
 	    stream_find_item_location(ti, &hpos, &bline))
-	    object_table[ti->tag].redraw(ti, doc->rh, doc, ox + hpos, oy + bline, &fs, &rr->g, ox, oy, object_redraw_HIGHLIGHT);
+	    object_table[ti->tag].redraw(ti, doc->rh, doc, ox + hpos, oy + bline, &hl_render_fs, &rr->g, ox, oy, object_redraw_HIGHLIGHT);
 	break;
 
     case doc_selection_tag_AREF:
-#if 1
-	for (ti = doc->selection.data.aref->first;
-	     ti && ti->aref == doc->selection.data.aref;
-	     ti = ti->next)
-	{
-	    if (object_table[ti->tag].redraw &&
-		stream_find_item_location(ti, &hpos, &bline))
-		object_table[ti->tag].redraw(ti, doc->rh, doc, ox + hpos, oy + bline, &fs, &rr->g, ox, oy, object_redraw_HIGHLIGHT);
-	}	
-#else
-	/* this may or may not be quicker that finding each item individually - I'm not sure */
-	stream_render(&doc->rh->stream, doc,
-		      ox, oy,
-		      rr->g.x0, rr->g.y1 - oy,
-		      rr->g.x1, rr->g.y0 - oy,
-		      &fs, &rr->g, object_redraw_HIGHLIGHT);
-#endif
+	hl_render_aref = doc->selection.data.aref;
+	stream_iterate_box(doc, doc->selection.data.aref->first, redraw_hl, rr);
 	break;
     }
 }
+
 
 static void draw_partial_box(BOOL first, BOOL last, BOOL first_line, int x, int y, int w, int h)
 {
@@ -456,7 +699,7 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 	ypos =  b - ti->max_down;
 
 	/* for now limit the text border width to 4 pixels */
-	n = config_display_highlight_width;
+	n = config_colour_list[render_colour_list_HIGHLIGHT][0].word/2;
 	if (n > 4)
 	    n = 4;
 
@@ -510,5 +753,7 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 	}
     }
 }
+
+#endif
 
 /* eof highlight.c */
