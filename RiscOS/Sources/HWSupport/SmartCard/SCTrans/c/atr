@@ -22,20 +22,30 @@
 
 #include "sci_api.h"
 #include "sci_int.h"
+#include "com.h"
 #include "atr.h"
 
-int AtrState;
+atr_states_t AtrState;
 
 static PROT_PARAMS ProtTab[MAX_PROTS];
 static BYTE CurrY;
 static int HistNext;
 static int ProtIndex;
 static int ProtCount;
-static BOOL T0Only;
 static int AtrCheck;
+
+static BOOL T0Only; /* flag to indicate card supports T=0 protocol only */
+static BOOL T1Only; /* flag to indicate card supports T=1 protocol only */
 
 static int atr_CalcWorkWaitTime (void);
 static BOOL atr_SendPtss (void);
+
+card_state_t card_status;	// storage for card parameters
+
+#ifdef DEBUG
+char *atr_state_names[] =
+	{ALL_ATR_STATES(ARRAY_ENTRY)};
+#endif
 
 /***************************************************************************/
 int
@@ -43,190 +53,275 @@ atr_ProcessByte (BYTE ch)
 /***************************************************************************/
 {
   int channel;
-
-  //debug_printf(db,"(7) atr_ProcessByte char %02X",ch);
-
-  switch (AtrState)
-  {
+#ifdef DEBUG
+  debug_printf(db,"(7) atr_ProcessByte state %s, char %02X, protocol %d",
+  	atr_state_names[AtrState],ch,card_status.protocol);
+#endif
+  switch (AtrState) {
     case ATR_WAIT_TS:
       /* waiting initial byte, this does not concern API */
+      /* may get padding characters, ignore and remain in initial state */
+      if (ch == 0x00 || ch == 0xFF) {
+	break;
+      }
+      card_status.TS = ch;
       AtrState = ATR_WAIT_T0;
-
       break;
 
     case ATR_WAIT_T0:
       /* waiting format character */
-      //debug_printf(db,"(7) atr_ProcessByte(): T0");
+      debug_printf(db,"(7) atr_ProcessByte(): T0");
       CurrY = ch & ATR_Y_MASK;
-      if ((sci_HistLen = (ch & ATR_K_MASK)) > SCI_HIST_LEN)
-      {
+      if ((sci_HistLen = (ch & ATR_K_MASK)) > SCI_HIST_LEN) {
         return SCI_E_PROTO;
       }
-
+      debug_printf(db,"(7) atr length %d bytes",sci_HistLen);
+      
+      card_status.T0 = ch;
       HistNext = 0;
       ProtIndex = 0;
       AtrCheck = ch;
-      T0Only = TRUE;
-
-      if (CurrY)
-        ProtCount = 1;
-      else
-        ProtCount = 0;
-
-      if (CurrY & ATR_TA_MASK)
-        AtrState = ATR_WAIT_TA;
-      else if (CurrY & ATR_TB_MASK)
-        AtrState = ATR_WAIT_TB;
-      else if (CurrY & ATR_TC_MASK)
-        AtrState = ATR_WAIT_TC;
-      else if (CurrY & ATR_TD_MASK)
-        AtrState = ATR_WAIT_TD;
-      else
-      {
-        if (sci_HistLen == 0)
-        {
-  	if (T0Only)
-  	  AtrState = ATR_ENDED;
-  	else
-  	  AtrState = ATR_WAIT_TCK;
-        }
-        else
-  	AtrState = ATR_WAIT_HIST;
+      if (card_status.protocol == 0) {
+        debug_printf(db,"(7) setting t0only true (1)");
+	T0Only = TRUE;
       }
 
+      if (CurrY) {
+        ProtCount = 1;
+      } else {
+        ProtCount = 0;
+      }
+
+      if (CurrY & ATR_TA_MASK) {
+        AtrState = ATR_WAIT_TA;
+      } else if (CurrY & ATR_TB_MASK) {
+        AtrState = ATR_WAIT_TB;
+      } else if (CurrY & ATR_TC_MASK) {
+        AtrState = ATR_WAIT_TC;
+      } else if (CurrY & ATR_TD_MASK) {
+        AtrState = ATR_WAIT_TD;
+      } else {
+        if (sci_HistLen == 0) {
+	  if (T0Only) {
+  	    AtrState = ATR_ENDED;
+          } else {
+            AtrState = ATR_WAIT_TCK;
+          }
+        } else {
+          AtrState = ATR_WAIT_HIST;
+  	}
+      }
       break;
 
     case ATR_WAIT_TA:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): TA");
+      debug_printf(db,"(7) atr_ProcessByte(): TA");
       AtrCheck ^= ch;
       ProtTab[ProtIndex].clk_rate = ch & ATR_F_MASK;
       ProtTab[ProtIndex].bit_rate = ch & ATR_D_MASK;
 
-      if (CurrY & ATR_TB_MASK)
-        AtrState = ATR_WAIT_TB;
-      else if (CurrY & ATR_TC_MASK)
-        AtrState = ATR_WAIT_TC;
-      else if (CurrY & ATR_TD_MASK)
-        AtrState = ATR_WAIT_TD;
-      else
-      {
-        if (sci_HistLen == 0)
-        {
-  	if (T0Only)
-  	  AtrState = ATR_ENDED;
-  	else
-  	  AtrState = ATR_WAIT_TCK;
-        }
-        else
-  	AtrState = ATR_WAIT_HIST;
+      switch (ProtIndex) {
+	case 0 : /* TA1 */
+  	  debug_printf(db,"(7) atr_ProcessByte(): TA1:%02x", ch);
+ 	  card_status.TA1 = ch;
+ 	  break;
+        case 1 : /* TA2 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TA2:%02x", ch);
+	  card_status.TA2 = ch;
+	  break;
+        case 2 : /* TA3 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TA3:%02x", ch);
+	  card_status.TA3 = ch;
+	  card_status.IFSC = card_status.TA3;	/* update IFSC */
+	  break;
       }
 
+      if (CurrY & ATR_TB_MASK) {
+        AtrState = ATR_WAIT_TB;
+      } else if (CurrY & ATR_TC_MASK) {
+        AtrState = ATR_WAIT_TC;
+      } else if (CurrY & ATR_TD_MASK) {
+        AtrState = ATR_WAIT_TD;
+      } else {
+        if (sci_HistLen == 0) {
+          if (T0Only) {
+  	    AtrState = ATR_ENDED;
+  	  } else {
+  	    AtrState = ATR_WAIT_TCK;
+  	  }
+        } else {
+          AtrState = ATR_WAIT_HIST;
+        }
+      }
       break;
 
     case ATR_WAIT_TB:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): TB");
+      debug_printf(db,"(7) atr_ProcessByte(): TB");
       AtrCheck ^= ch;
       ProtTab[ProtIndex].pc1 = (ch & ATR_I1_MASK) >> ATR_I1_SHIFT;
       ProtTab[ProtIndex].pc2 = ch & ATR_I2_MASK;
+      
+      switch (ProtIndex) {
+        case 0 : 	/* TB1 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TB1:%02x", ch);
+	  card_status.TB1 = ch;
+	  break;
 
-      if (CurrY & ATR_TC_MASK)
-        AtrState = ATR_WAIT_TC;
-      else if (CurrY & ATR_TD_MASK)
-        AtrState = ATR_WAIT_TD;
-      else
-      {
-        if (sci_HistLen == 0)
-        {
-  	if (T0Only)
-  	  AtrState = ATR_ENDED;
-  	else
-  	  AtrState = ATR_WAIT_TCK;
-        }
-        else
-  	AtrState = ATR_WAIT_HIST;
+        case 1 :	/* TB2 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TB2:%02x", ch);
+	  card_status.TB2 = ch;
+	  break;
+
+        case 2 :	/* TB3 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TB3:%02x", ch);
+	  card_status.TB3 = ch;
+	  /* update CWT, used to use pow(2,x) */
+	  debug_printf(db,"(7) atr_ProcessByte(): CWI %d",
+	  	card_status.TB3 & 0x0f);
+	  debug_printf(db,"(7) atr_ProcessByte(): BWI %d",
+	  	(card_status.TB3 & 0xf0)>>4);
+	  card_status.CWT = 2<<((card_status.TB3 & 0x0f)-1); 
+  	  /* update BWT, used to use pow(2,x) */
+ 	  card_status.BWT = 
+ 	    (((((2<<(((card_status.TB3 & 0xf0) >>4)-1))*960))+11)*93)/10000;
+
+  	  debug_printf(db,"(7) atr_ProcessByte(): CWT:%d", card_status.CWT);
+	  debug_printf(db,"(7) atr_ProcessByte(): BWT:%d", card_status.BWT);
+          break;
       }
 
+      if (CurrY & ATR_TC_MASK) {
+        AtrState = ATR_WAIT_TC;
+      } else if (CurrY & ATR_TD_MASK) {
+        AtrState = ATR_WAIT_TD;
+      } else {
+        if (sci_HistLen == 0) {
+          if (T0Only) {
+  	    AtrState = ATR_ENDED;
+  	  } else {
+  	    AtrState = ATR_WAIT_TCK;
+  	  }
+        } else {
+    	  AtrState = ATR_WAIT_HIST;
+    	}
+      }
       break;
 
     case ATR_WAIT_TC:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): TC");
+      debug_printf(db,"(7) atr_ProcessByte(): TC");
       AtrCheck ^= ch;
       ProtTab[ProtIndex].extra_time = ch;
-
-      if (CurrY & ATR_TD_MASK)
+      
+      switch (ProtIndex) {
+      	case 0 :	/* TC1 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TC1:%02x", ch);
+	  card_status.TC1 = ch;
+	  card_status.N = card_status.TC1;
+	  break;
+      
+        case 1 :	/* TC2 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TC2:%02x", ch);
+	  card_status.TC2 = ch;
+	  card_status.WI = card_status.TC2;
+	  break;
+      }
+      
+      if (CurrY & ATR_TD_MASK) {
         AtrState = ATR_WAIT_TD;
-      else
-      {
-        if (sci_HistLen == 0)
-        {
-  	if (T0Only)
-  	  AtrState = ATR_ENDED;
-  	else
-  	  AtrState = ATR_WAIT_TCK;
-        }
-        else
-  	AtrState = ATR_WAIT_HIST;
+      } else {
+        if (sci_HistLen == 0) {
+  	  if (T0Only) {
+   	    AtrState = ATR_ENDED;
+   	  } else {
+   	    AtrState = ATR_WAIT_TCK;
+   	  }
+   	} else {
+   	  AtrState = ATR_WAIT_HIST;
+   	}
       }
 
       break;
 
     case ATR_WAIT_TD:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): TD");
+      debug_printf(db,"(7) atr_ProcessByte(): TD");
       AtrCheck ^= ch;
       CurrY = ch & ATR_Y_MASK;
       ProtTab[ProtIndex].type = ch & ATR_T_MASK;
-      if ((ch & ATR_T_MASK) != T0_TYPE)
-        T0Only = FALSE;
+      
+      switch (ProtIndex) {
+        case 0 : 	/* TD1 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TD1:%02x", ch);
+	  card_status.TD1 = ch;
 
-      if (CurrY != 0)
-      {
+	  if ((card_status.TD1 & 0x0F) == 1) {
+	    card_status.protocol = 1;	/* update current protocol */
+	  }
+	  break;
+	case 1 :	/* TD2 */
+	  debug_printf(db,"(7) atr_ProcessByte(): TD2:%02x", ch);
+	  card_status.TD2 = ch;
+
+	  if ((card_status.TD2 & 0x0F) == 1) {
+	    /*  Optional protocol, need to do PTS */
+	    card_status.optional_protocol = 1;	
+	  }
+	  
+	  debug_printf(db,"(7) Card Optional protocol: %d", 
+	  	card_status.optional_protocol);
+	  break;
+      }
+      
+      if ((ch & ATR_T_MASK) != T0_TYPE) {
+        debug_printf(db,"(7) setting t0only false (1)");
+        T0Only = FALSE;
+      }
+
+      if (CurrY != 0) {
         ProtIndex++;
         ProtCount++;
-        if (CurrY & ATR_TA_MASK)
-  	AtrState = ATR_WAIT_TA;
-        else if (CurrY & ATR_TB_MASK)
-  	AtrState = ATR_WAIT_TB;
-        else if (CurrY & ATR_TC_MASK)
-  	AtrState = ATR_WAIT_TC;
-        else
-  	AtrState = ATR_WAIT_TD;
+        if (CurrY & ATR_TA_MASK) {
+   	  AtrState = ATR_WAIT_TA;
+        } else if (CurrY & ATR_TB_MASK) {
+  	  AtrState = ATR_WAIT_TB;
+        } else if (CurrY & ATR_TC_MASK) {
+  	  AtrState = ATR_WAIT_TC;
+        } else {
+  	  AtrState = ATR_WAIT_TD;
+  	}
+      } else {
+        if (sci_HistLen == 0) {
+  	  AtrState = ATR_ENDED;
+        } else {
+          AtrState = ATR_WAIT_HIST;
+        }
       }
-      else
-      {
-        if (sci_HistLen == 0)
-  	AtrState = ATR_ENDED;
-        else
-  	AtrState = ATR_WAIT_HIST;
-      }
-
       break;
 
     case ATR_WAIT_HIST:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): HIST");
+      debug_printf(db,"(7) atr_ProcessByte(): HIST %d",HistNext);
       AtrCheck ^= ch;
 
       sci_HistData[HistNext++] = ch;
-      if (HistNext == sci_HistLen)
-      {
-        if (T0Only)
-  	AtrState = ATR_ENDED;
-        else
-  	AtrState = ATR_WAIT_TCK;
+      if (HistNext == sci_HistLen) {
+        if (T0Only) {
+          debug_printf(db,"(7) setting ATR_ENDED");
+  	  AtrState = ATR_ENDED;
+  	} else {
+          debug_printf(db,"(7) setting ATR_WAIT_TCK");
+  	  AtrState = ATR_WAIT_TCK;
+  	}
       }
-
       break;
 
     case ATR_WAIT_TCK:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): TCK");
+      debug_printf(db,"(7) atr_ProcessByte(): TCK");
       AtrCheck ^= ch;
-      if (AtrCheck != 0)
-      {
+      if (AtrCheck != 0) {
         return SCI_E_PROTO;
       }
       AtrState = ATR_ENDED;
@@ -235,61 +330,52 @@ atr_ProcessByte (BYTE ch)
 
     case ATR_WAIT_PTS_ACK:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): PTS ACK");
+      debug_printf(db,"(7) atr_ProcessByte(): PTS ACK");
 
-      if (ch != PTS_ACK)
-      {
+      if (ch != PTS_ACK) {
         return SCI_E_PROTO;
       }
-
       AtrState = ATR_WAIT_PROT_ECHO;
-
       break;
 
     case ATR_WAIT_PROT_ECHO:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): protocol echo");
+      debug_printf(db,"(7) atr_ProcessByte(): protocol echo");
 
-      if (ch != T0_TYPE)
-      {
+      if (ch != T1_TYPE) {  /* was T0_TYPE only */
         return SCI_E_PROTO;
       }
-
       AtrState = ATR_WAIT_PROT_ACK;
-
       break;
 
     case ATR_WAIT_PROT_ACK:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): protocol ack");
+      debug_printf(db,"(7) atr_ProcessByte(): protocol ack");
 
-      if (ch != PTS_ACK)
-      {
+      if (ch != PTS_ACK_T1) {  /* was PTS_ACK */
         return SCI_E_PROTO;
       }
+      card_status.protocol = 1;
 
       AtrState = ATR_PTS_ENDED;
 
       break;
 
     case ATR_ENDED:
-      //debug_printf(db,"(7) atr_ProcessByte(): ATR_ENDED");
+      debug_printf(db,"(7) atr_ProcessByte(): ATR_ENDED");
     case ATR_PTS_ENDED:
 
-      //debug_printf(db,"(7) atr_ProcessByte(): SCI_E_PROTO");
+      debug_printf(db,"(7) atr_ProcessByte(): SCI_E_PROTO");
 
       return SCI_E_PROTO;
-
-      break;
+      /* break; */
   }
 
-  if (AtrState != ATR_ENDED && AtrState != ATR_PTS_ENDED)
-  {
+  if (AtrState != ATR_ENDED && AtrState != ATR_PTS_ENDED) {
     return SCI_SUCCESS;
   }
 
-  if (AtrState == ATR_ENDED)
-  {
+  if (AtrState == ATR_ENDED) {
     /* determine if protocol selection required */
     if (!atr_SendPtss ())
       return SCI_E_COMMS;
@@ -301,10 +387,13 @@ atr_ProcessByte (BYTE ch)
   /* ATR received in full successfully */
   sci_State = S_S_OPEN;
   debug_printf(db,"(7) ATR success, signalling apps");
-  for (channel=0; channel<MAX_CARD_CHANNELS; channel++)
-    if (ChannelTable[channel].flags & channel_in_use)
-      if (ChannelTable[channel].state == S_C_OPENING)
+  for (channel=0; channel<MAX_CARD_CHANNELS; channel++) {
+    if (ChannelTable[channel].flags & channel_in_use) {
+      if (ChannelTable[channel].state == S_C_OPENING) {
         sys_SignalTask(channel,SCI_CMD_DONE);
+      }
+    }
+  }
 
   WorkWaitTime = atr_CalcWorkWaitTime ();
 
@@ -314,7 +403,6 @@ atr_ProcessByte (BYTE ch)
 /**************************************************************************/
 static BOOL
 atr_SendPtss (void)
-/**************************************************************************/
 /*
    This function
    1. determines if it necessary to perform protocol selection
@@ -324,32 +412,38 @@ atr_SendPtss (void)
    Returns TRUE if everything OK, FALSE if comms error sending PTSS.
    It does not return any indication as to whether PTSS was necessary.
  */
-
 {
-  int i;
+  int i=0;
   BYTE ptss[PTSS_LEN];
 
-  for (i = 0; i < ProtCount; i++)
-  {
-    if (ProtTab[i].type != T0_TYPE)
-      break;
+  debug_printf(db,"(7) atr_SendPtss()");
+  
+  if (((card_status.TD1 & 0x0F) == 0) && ((card_status.TD2 & 0x0F) == 1)) {
+    
+    debug_printf(db,"(7) atr_SendPtss(): Requesting T=1 Protocol");
+
+    ptss[i++] = PTS_PTSS;
+    ptss[i++] = PTS_DEF_PTS1;
+    ptss[i++] = PTS_ACK_T1;
+
+    if (com_SendBytes(ptss, i) != SCI_SUCCESS) {
+      return FALSE;
+    } else {
+      AtrState = ATR_WAIT_PTS_ACK;
+      return TRUE;
+    }
   }
-  if (i >= ProtCount)
-  {
-    /* only protocol types T=0 detected so no PTSS required */
+  if (card_status.protocol == 0) {
+    debug_printf(db,"(7) setting t0only true (2)");
+    T0Only = TRUE;
     AtrState = ATR_PTS_ENDED;
     return TRUE;
   }
-
-  i = 0;
-  ptss[i++] = PTS_PTSS;
-  ptss[i++] = PTS_DEF_PTS0;
-  ptss[i++] = PTS_DEF_TCK;
-
-  if (com_SendBytes (ptss, i) != SCI_SUCCESS)
-    return FALSE;
-
-  AtrState = ATR_WAIT_PTS_ACK;
+  if (card_status.protocol == 1) {
+    T1Only = TRUE;
+    AtrState = ATR_PTS_ENDED;
+    return TRUE;
+  }
 
   return TRUE;
 }
@@ -357,21 +451,18 @@ atr_SendPtss (void)
 /**************************************************************************/
 int
 atr_Start (BOOL reset)
-/**************************************************************************/
-
 {
   /* if card out do nothing, wait for card in and then do the reset */
 
   debug_printf(db,"(7) ATR Start (%s)",reset?"reset":"no reset");
-  if (com_CardIn())
-  {
-    if (reset)
-    {
+  if (com_CardIn()) {
+    if (reset) {
       com_FlushComms ();
       sys_DiscardEvents ();
 
-      if (com_SetResetInd () != SCI_SUCCESS)
+      if (com_SetResetInd () != SCI_SUCCESS) {
 	return atr_Error (SCI_E_COMMS);
+      }
 
       /*
        * waiting for ATR so set wait time
@@ -382,15 +473,15 @@ atr_Start (BOOL reset)
 
   AtrState = ATR_WAIT_TS;
   sci_State = S_S_OPENING;
-
+  card_status.protocol = 0;
+  card_status.optional_protocol = 0;
+  
   return SCI_SUCCESS;
 }
 
 /**************************************************************************/
 int
 atr_Error (int err)
-/**************************************************************************/
-
 {
   int channel;
 
@@ -398,10 +489,8 @@ atr_Error (int err)
 
   /* remember current connection slot */
   /* error condition so signal users and close everything */
-  for (channel=0; channel<MAX_CARD_CHANNELS; channel++)
-  {
-    if (ChannelTable[channel].flags & channel_in_use)
-    {
+  for (channel=0; channel<MAX_CARD_CHANNELS; channel++) {
+    if (ChannelTable[channel].flags & channel_in_use) {
       ChannelTable[channel].state = S_C_FAILED;
       ChannelTable[channel].last_err = err;
       sys_SignalTask(channel,SCI_ERROR);
@@ -419,22 +508,20 @@ atr_Error (int err)
 /**************************************************************************/
 static int
 atr_CalcWorkWaitTime (void)
-/**************************************************************************/
-
 {
   int wi;
 
   /* analyse protocol parameters */
-  if (ProtCount < 2)
+  if (ProtCount < 2) {
     /* can't be a TC2 byte */
     wi = ATR_DEFAULT_WI;
-  else
-  {
-    if (ProtTab[0].type == ProtTab[1].type)
+  } else {
+    if (ProtTab[0].type == ProtTab[1].type) {
       /* protocol with additional parameters */
       wi = ProtTab[1].extra_time;
-    else
+    } else {
       wi = ATR_DEFAULT_WI;
+    }
   }
 
   return wi * MS_PER_SEC / 100;	/* centi-seconds */
