@@ -53,7 +53,8 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -p -d h.$* -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
+.cmhg.h:;   ${CMHG} -p -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -71,8 +72,7 @@ fsICS.o: fsynth.c
 fsICS2.o: fsynth.c
 	${CC} ${CFLAGS} -o $@ fsynth.c -DFSYNTH_ICS2
 
-header.h: header.o
-	@echo Created cmhg header file.
+module.o: header.h
 
 #
 # build a relocatable module:
