@@ -1,0 +1,237 @@
+/*
+ * Generic (c.start)
+ *
+ * Requires customisation
+ *
+ * © Acorn Computers Ltd. 1997
+ *
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <ctype.h>
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+#include "sys/errno.h"
+#include "socklib.h"
+#include "module.h"
+#include "protocol.h"
+#include "utils.h"
+#include "generic.h"
+#include "urlstruct.h"
+#include "urlclient.h"
+#include "connect.h"
+
+#include "MemCheck:MemCheck.h"
+
+static void start_get_request(const char *url, char **host, int *port, char **uri, char **urlcopy);
+static char *finger_generate_selector(const char *);
+
+_kernel_oserror *generic_start(_kernel_swi_regs *r)
+{
+	int flags	= r->r[0];
+	int *pollword 	= (int *)r->r[1];
+	char *url	= (char *)r->r[3];
+	char *data	= (char *)r->r[4];
+	int style	= r->r[5];
+	char *uri;
+	char *urlcopy;
+	char *host;
+	int  port;
+	Session *ses;
+
+	#ifdef TRACE
+	protocol_debug("Asking for url %s\n", url);
+	#endif
+	(void) flags;
+	(void) style;
+
+	MemCheck_RegisterMiscBlock((void *) url,strlen(url)+1);
+	MemCheck_SetBlockAccess((void *) url,1,0);
+
+	/* Check to see if this session already exists before doing anything */
+	if (find_session(r->r[1])) {
+		return make_error(errortoken_ERROR_BAD_SESSION, 0);
+	}
+
+	/* Create a session control block */
+	ses = new_session();
+	if (ses == NULL) {
+	        return make_error(errortoken_ERROR_NO_SESSION, 0);
+	}
+
+	/* fill in a few bits */
+	ses->id	      	= (unsigned int)pollword;
+	ses->uri	= NULL;
+	ses->url	= NULL;
+
+	/* Now work out the host and port and URI bit we are after */
+	host = NULL;
+	uri  = NULL;
+	start_get_request(url, &host, &port, &uri, &urlcopy);
+	if (host == NULL) {
+	        host = Strdup("localhost");
+	}
+	if (host == NULL || urlcopy == NULL) {
+                kill_session(ses);
+	        return make_error(errortoken_ERROR_NO_URL_DECODE, 0);
+	}
+
+	#ifdef TRACE
+	protocol_debug("Host:%s Port:%d URI:%s URL:%s\n", host, port, uri, urlcopy);
+	#endif
+
+	ses->uri 	= uri;
+	ses->selector	= finger_generate_selector(uri);
+	ses->url	= urlcopy;
+	ses->data	= data;
+
+	ses->host	= host;
+	ses->port	= port;
+
+	MemCheck_UnRegisterMiscBlock((void *) url);
+
+	/* establish the connection */
+	#ifdef TRACE
+	protocol_debug("Preparing to send URL %s to %s port %d\n", uri, host, port);
+	#endif
+
+	ses->state = protostate_INITIAL;
+	return NULL;
+}
+
+static void start_get_request(const char *url, char **host, int *port, char **uri, char **urlcopy)
+{
+	URL		u;
+	_kernel_oserror	*e;
+	int		i;
+	size_t		path_len, query_len;
+
+	*uri = NULL;
+	*host = NULL;
+	*urlcopy = NULL;
+	*port = CONNECT_DEFAULT_PORT_NUMBER;
+
+	e = URL_find_lengths(0, url, NULL, &u);
+	if (e) {
+		#ifdef TRACE
+		protocol_debug("start_get_request> URL_find_lengths> %s\n", e->errmess);
+		#endif
+		return;
+	}
+
+	path_len = u.lengths.path;
+	query_len = u.lengths.query;
+
+	for (i=0; i<URL_fields; ++i) switch (i) {
+		case urlfield_HOST:
+		case urlfield_PORT:
+		case urlfield_FULL:
+		case urlfield_SCHEME:
+			if (u.len[i]) {
+				u.field[i] = malloc(u.len[i]);
+			}
+			break;
+
+		case urlfield_PATH:
+			u.data.path = malloc(path_len + query_len + 2);
+			if (u.data.path != NULL) {
+				if (query_len == 0) {
+					u.data.query = NULL;
+				}
+				else {
+					u.data.query = u.data.path + path_len;
+				}
+				if (path_len == 0) {
+					u.data.path[0] = '\0';
+					++path_len;
+					if (query_len > 0) {
+						u.data.query++;
+					}
+				}
+			}
+			else {
+				u.data.query = NULL;
+			}
+			break;
+
+		case urlfield_QUERY:
+			break;
+
+		default:
+			u.field[i] = NULL;
+			break;
+	}
+
+	e = URL_find_data(0, url, NULL, &u);
+	if (e) {
+		#ifdef TRACE
+		protocol_debug("start_get_request> URL_find_data> %s\n", e->errmess);
+		#endif
+		for (i=0; i<URL_fields; ++i) {
+			if (i != urlfield_QUERY) free(u.field[i]);
+		}
+		return;
+	}
+
+	if (path_len > 0 && query_len > 0) {
+		u.data.path[path_len - 1] = '?';
+	}
+
+	*uri = u.data.path;
+	*host = u.data.host;
+	*urlcopy = u.data.full;
+
+	if (u.data.port) {
+		int i = atoi(u.data.port);
+		if (i != 0) *port = i;
+		free(u.data.port);
+	}
+
+	/* Check the scheme here if we handle multiple schemes */
+	free(u.data.scheme);
+}
+
+static char *finger_generate_selector(const char *uri)
+{
+        size_t length = strlen(uri);
+        char *sel = malloc(length), *s = sel;
+        const char *p = uri;
+
+	if (sel == NULL) return NULL;
+
+	for (;;) {
+	        int c = *p++;
+	        *s = c;
+	        if (c == 0) break;
+	        if (iscntrl(c)) continue;
+	        ++s;
+	        if (c != '%') {
+	                continue;
+	        }
+	        else {
+	                unsigned int hi = (unsigned int) p[0];
+	                unsigned int lo = (unsigned int) p[1];
+	                unsigned int value;
+	                
+	        	if (!isxdigit(hi) || !isxdigit(lo)) continue;
+			/* The Norcroft compiler does surprisingly well on this
+			 * digit evaluation code.
+			 */
+	                hi -= '0';
+	                if (hi > 10) hi -= ('a' - '0' - 10);
+	                if (hi > 16) hi -= ('A' - 'a');
+	                lo -= '0';
+	                if (lo > 10) lo -= ('a' - '0' - 10);
+	                if (lo > 16) lo -= ('A' - 'a');
+	                value = (hi << 4) | lo;
+	                if (!iscntrl(value)) {
+	                        s[-1] = value;
+		                p += 2;
+		        }
+	        }
+	}
+
+        return sel;
+}

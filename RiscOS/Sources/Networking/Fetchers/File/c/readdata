@@ -1,0 +1,217 @@
+/*
+ * Example of a fetcher module for use with Acorn URL system
+ *
+ * © Acorn Computers Ltd. 1995-1998
+ *
+ */
+
+/*
+ * Handle a request to get data!
+ */
+#include <stdio.h>	/* file handling */
+#include <stdlib.h>	/* for malloc/calloc */
+#include "kernel.h"	/* registers */
+#include "swis.h"	/* swis */
+#include <string.h>	/* string handling */
+#include <errno.h>	/* Include errno variable */
+#include "module.h"
+#include "utils.h"
+#include "FileHdr.h"	/* module name etc */
+
+/*************************************************************/
+/* _kernel_oserror *file_readdata(_kernel_swi_regs *r)       */
+/*************************************************************/
+/* The call to get the actual data from a file. The values   */
+/* in the registers are:	     	       	       	     */
+/*                       r0 = flags word		     */
+/*			 r1 = poll word			     */
+/* 			 r2 = buffer			     */
+/*			 r3 = sizeof(buffer)		     */
+/* 			      				     */
+/* On exit:						     */
+/*                       r0 = protocol status 		     */
+/*			 r1 = pollword of client	     */
+/*			 r2 = modified buffer		     */
+/*			 r3 = unchanged			     */
+/*			 r4 = bytes read		     */
+/*			 r5 = bytes left (-1 if unknown)     */
+/*************************************************************/
+_kernel_oserror *file_readdata(_kernel_swi_regs *r)
+{
+  int *pollword	= (int *)r->r[1];
+  char *buffer	= (char *)r->r[2];
+  int   size	= r->r[3];
+
+  Session *ses	= NULL;
+  int count	= 0;
+  FILE *fp;
+
+  /*
+   * Check to see session exists and has connected cleanly first
+   * If it doesnt/hasnt, reject this request cleanly
+   */
+  ses = find_session((unsigned int)pollword);
+  if (ses==NULL)
+  {
+    r->r[0]   = 64;   /* Buggy clients beware :) */
+    *pollword = 64;
+    r->r[4]   = 0;
+    r->r[5]   = 0;
+    return NULL;
+  }
+
+  if (ses->headers==0)
+  {
+    char mimetype[64], ourbuffer[256];
+    _kernel_oserror *e;
+    int fiddled_type = 0;
+
+    if (ses->filetype == 0xfe4 || ses->filetype == 0xffd) {
+            /* Filetype was DOS (&FE4) or Data (&FFD).  Let's check the leafname */
+            char *file_component = strrchr(ses->filename, '.');
+            if (file_component == NULL) file_component = strrchr(ses->filename, ':');
+            if (file_component == NULL) file_component = ses->filename;
+
+	    /* Look for any extension */
+            file_component = strrchr(file_component, '/');
+            if (file_component != NULL) {
+		    *file_component = '.';
+                    e = _swix(MimeMap_Translate, _INR(0,3), 3, file_component, 2, ourbuffer);
+                    *file_component = '/';
+                    if (e == NULL) {
+                            fiddled_type = 1;
+                            strncpy(mimetype, ourbuffer, 63);
+                    }
+            }
+    }
+
+    if (ses->filetype == -2) {
+	/* special value indicating we want a redirection */
+      #define REDIR_STRING "HTTP/1.0 303 Redirect\r\nLocation: %.*s\r\n\r\n"
+      ses->headerlen = sprintf(ourbuffer, REDIR_STRING, sizeof(ourbuffer)-sizeof(REDIR_STRING),
+      	ses->filename);
+      ses->size = 0;
+    }
+    else if (fiddled_type) {
+            /* Do nothing - already copied the guessed type */
+    }
+    else if ((e = _swix(MimeMap_Translate,_INR(0,3),0,ses->filetype,2,ourbuffer)) == NULL)
+      strncpy(mimetype,ourbuffer,63);
+    else
+    {
+      switch (ses->filetype)	/* Decide on an appropriate content type */
+      {
+        case 0xfff:
+          strcpy(mimetype,"text/plain");
+          break;
+        case 0xfaf:
+          strcpy(mimetype,"text/html");
+          break;
+        case 0xc85:
+          strcpy(mimetype,"image/jpeg");
+          break;
+        case 0xff0:
+          strcpy(mimetype,"image/tiff");
+          break;
+        case 0xb60:
+          strcpy(mimetype,"image/png");
+          break;
+        case 0x695:
+          strcpy(mimetype,"image/gif");
+          break;
+        default:
+          strcpy(mimetype,"application/octet-stream");
+      }
+    }
+
+    /* NOTE: Since headerlen is an unsigned char, this had better not exceed 255 bytes! */
+    if (ses->filetype != -2) {
+    ses->headerlen = sprintf(ourbuffer,"HTTP/1.0 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n"
+    	"Server: " Module_Title "/" Module_VersionString "\r\n\r\n", mimetype, ses->size);
+    }
+
+    r->r[0]   = 31;
+    *pollword = 31;
+
+    if (buffer && (size > ses->headerlen))
+    {
+      strcpy(buffer,ourbuffer);
+      r->r[4]      = ses->headerlen;
+      r->r[5]      = ses->size;
+      ses->headers = 1;
+      return NULL;
+    }
+    else
+    {
+      r->r[4] = 0;
+      r->r[5] = ses->size + ses->headerlen;
+      return NULL;
+    }
+  }
+
+  fp = fopen(ses->filename,"r");
+  /* If we cannot open the file return, decide what to do based on retries */
+  if (!fp)
+  {
+    ses->retries++;
+    if (ses->retries >= MAX_RETRIES)
+    {
+      r->r[0]   = 64+31;   /* Buggy clients beware :) */
+      *pollword = 64+31;
+      r->r[4]   = 0;
+      r->r[5]   = 0;
+      ses->done = 2;
+      return make_error(FILE_READ_ERROR, 0);
+    }
+    else
+    {
+      r->r[0]   = 31;   /* Buggy clients beware :) */
+      *pollword = 31;
+      r->r[4]   = 0;
+      r->r[5]   = ses->size - ses->sent;
+      return NULL;
+    }
+  }
+
+   if (ses->filetype == -2) {
+     r->r[4] = 0;
+     r->r[5] = 0;
+     r->r[0] = 32;
+     *pollword = 32;
+     ses->done = 1;
+     return NULL;
+   }
+
+  if (buffer)
+  {
+    if (ses->sent > 0)		/* Seek the correct position in the file */
+      fseek(fp,(long)ses->sent,SEEK_SET);
+
+    count = fread(buffer, sizeof(char), r->r[3], fp);
+  }
+  else
+    count = 0;
+
+  fclose(fp);
+  if (count < 0)
+    count = 0;
+
+  ses->sent += count;
+
+  r->r[4] = count;
+  r->r[5] = ses->size - ses->sent;
+
+  if (r->r[5] <= 0)
+  {
+    r->r[0]   = 32;
+    *pollword = 32;
+    ses->done = 1;
+  }
+  else
+  {
+    r->r[0]   = 31;
+    *pollword = 31;
+  }
+  return NULL;
+
+}

@@ -1,0 +1,252 @@
+/*
+ * Example of a fetcher module for use with Acorn URL system
+ *
+ * © Acorn Computers Ltd. 1995-1998
+ *
+ */
+
+/*
+ * Handle a request to start getting data!
+ */
+#include "stdio.h"	/* file handling */
+#include "stdlib.h"	/* for malloc/calloc */
+#include "kernel.h"	/* registers */
+#include "swis.h"	/* swis */
+#include "string.h"	/* string handling */
+#include "errno.h"	/* Include errno variable */
+#include "module.h"	/* Module name etc */
+#include "utils.h"
+
+static char *file_get_filename (char *url);
+static char *file_unix_to_adfs(char *filename);
+
+static char *file_gen_dir_listing (Session *s);
+
+/*************************************************************/
+/* _kernel_oserror file_start(_kernel_swi_regs *r)           */
+/*************************************************************/
+/* The call to start getting data from a site. The values in */
+/* ther registers are:	     	       	       	   	     */
+/* 		       r0 = Flags word			     */
+/*		       r1 = pollword of client		     */
+/*		       r2 = method to use		     */
+/* 		       r3 = url to get			     */
+/*		       r4 = additional data for put etc	     */
+/*		       r5 = data wanted back	    	     */
+/*************************************************************/
+_kernel_oserror *file_start(_kernel_swi_regs *r)
+{
+  int *pollword =(int *) r->r[1];
+  char *url	=(char *)r->r[3];
+  Session *ses;
+  int type;
+  int data_wanted;
+
+  /* Check to see if this session already exists before doing anything */
+  if (find_session((unsigned int)pollword) != NULL)
+    return NULL;
+
+  /*
+   * Create a session control block extracting the filename that
+   * we are looking for
+   */
+  ses = new_session();
+  if (ses == NULL)
+    return NULL;
+  ses->id        = (unsigned int)pollword;
+  ses->filename  = file_get_filename(url);
+  ses->buffer    = 0;
+  ses->filetype  = -1;
+  ses->size      = 0;
+  ses->sent      = 0;
+  ses->retries   = 0;
+  ses->done      = 0;
+  ses->headerlen = 0;		/* Note that this is stored in a single byte */
+  ses->next      = NULL;
+  /*
+   * Because the file module invents the headers this is the wrong way
+   * around, logically.
+   */
+
+  if (r->r[0] & 2) {
+    /* method in R2:8-15 */
+    data_wanted = ((r->r[2] >> 8) & 0xFF);
+  }
+  else {
+    data_wanted = r->r[5];
+  }
+
+  ses->headers = data_wanted == 0;
+
+  /* If we didnt get a file name - abort */
+  if (ses->filename == NULL)
+  {
+    kill_session(ses);
+    r->r[0]   = 64;
+    *pollword = 64;
+    return NULL;
+  }
+
+  /* Get the size etc of the file */
+  _swix(OS_File, _INR(0,1)|_OUT(0)|_OUT(4)|_OUT(6), 23, ses->filename, &type, &ses->size,&ses->filetype);
+
+  	if (type==0) {
+        	/* Try it without any extension */
+		/* Version 0.35 forces a redirect if the requested name was wrong */
+        	char *last_dir = strrchr(ses->filename, '.');
+        	if (last_dir == NULL) last_dir = strrchr(ses->filename, ':');
+        	if (last_dir == NULL) last_dir = ses->filename;
+
+        	last_dir = strrchr(last_dir, '/');
+        	if (last_dir != NULL) {
+                        *last_dir = '\0';
+			_swix(OS_File, _INR(0,1)|_OUT(0)|_OUT(4)|_OUT(6), 23, ses->filename,
+				&type, &ses->size,&ses->filetype);
+			if (type==0) {
+			        *last_dir = '/';
+			}
+			else if (ses->headers == 0 && (type == 1 || type == 3)) {
+				/* 0.35: Need to issue a redirection here */
+			  	size_t len = strlen(url) + 1;
+			  	free(ses->filename);
+			        *last_dir = '/';
+				ses->filename = malloc(len);
+				if (ses->filename == NULL) {
+				  	ses->size = 0;
+				  	r->r[0] = 64;
+					*pollword = 64;
+					return NULL;
+				}
+				memcpy(ses->filename, url, len);
+				len -= (strlen(last_dir) + 1);
+				ses->filename[len] = '\0';
+				ses->filetype = -2; /* special code */
+			}
+        	}
+
+	        if (strchr(url, '\0')[-1] == '/') {
+	          /* We must have tried index.html and failed to find it */
+		  char *lastdot = strrchr(ses->filename, '.');
+	          if (lastdot != NULL) {
+	            *lastdot = '\0';
+	            type = 2;
+	          }
+	        }
+  	}
+
+  if (type == 2) {
+	/* New in 0.36 */
+    #ifdef OPEN_FILER
+    	r->r[0] = 96;
+	*pollword = 96;
+    {
+      char command[256];
+      (void) sprintf(command, "filer_opendir %s", ses->filename);
+      (void) _swix(OS_CLI, _IN(0), command);
+    }
+        kill_session(ses);
+	return NULL;
+    #else
+        ses->buffer = file_gen_dir_listing(ses);
+        if (ses->buffer != NULL) {
+	  type = 1;
+        }
+    #endif
+  }
+
+  if (type==0 || type==2)
+  {
+    ses->size = 0; /* Just to be lucky :) */
+    r->r[0]   = 64;
+    *pollword = 64;
+    return make_error(FILE_NOT_FOUND, 0);
+  }
+
+  if (ses->size == 0) {
+    r->r[0] = 64;
+    *pollword = 64;
+    return make_error(FILE_ZERO_LEN, 0);
+  }
+
+/* return cleanly */
+  *pollword = 31;
+  r->r[0]   = 31;
+
+  return NULL;
+}
+
+/*************************************************************/
+/* static char *file_get_filename (char *url)                */
+/*************************************************************/
+/* Given a URL extract the ADFS filename from it. This needs */
+/* To try and work out whether the URL is in ADFS or UNIX    */
+/* style format.       	       	       	     	     	     */
+/*************************************************************/
+static char *file_get_filename (char *url)
+{
+  char *filename;
+  char *buffer;
+  int endsinslash=0;
+
+  /* Check for NULL/zero length pointers and the uri part of the url */
+  if (!url || !*url)
+    return NULL;
+
+  filename = strstr(url,"file:");
+  if (!filename)
+    return NULL;
+
+  filename += strlen("file:");
+
+  while (*filename == '/')  /* Skip over a // */
+    filename++;
+
+  if (!*filename)
+    return NULL;
+
+  if (filename[strlen(filename)-1]=='/')
+    endsinslash=1;
+
+  /* Get a copy of the filename back into the filename variable */
+  buffer = malloc(strlen(filename)+1+(endsinslash?(sizeof"index.html"-1):0));
+  if (!buffer)
+    return NULL;
+  strcpy(buffer,filename);
+  if (endsinslash)
+    strcat(buffer,"index.html");
+  filename = buffer;
+
+  (void)file_unix_to_adfs(filename);
+
+  /* All done. Return the filename */
+  return filename;
+}
+
+/*************************************************************/
+/* static char *file_unix_to_adfs(char *filename)            */
+/*************************************************************/
+/* Given a UNIX style filename convert it to its ADFS style  */
+/* one. Basically replace all "."'s with "/"'s and all "/"'s */
+/* with "."'s.	  	      	    	       	       	     */
+/*************************************************************/
+static char *file_unix_to_adfs(char *filename)
+{
+  if (!filename || !*filename)
+    return NULL;
+
+  while (*filename)
+  {
+    if (*filename=='/')
+      *filename='.';
+    else if (*filename=='.')
+      *filename='/';
+    filename++;
+  }
+  return filename;
+}
+
+static char *file_gen_dir_listing (Session *s)
+{
+	(void) s;
+  	return NULL;
+}

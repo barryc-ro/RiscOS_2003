@@ -1,0 +1,253 @@
+/*
+ * Generic (c.commands)
+ *
+ * © Acorn Computers Ltd. 1996-1997
+ *
+ */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include "kernel.h"
+#include "sys/errno.h"
+#include "socklib.h"
+#include "module.h"
+#include "commands.h"
+#include "protocol.h"
+
+#define INTERNAL_BUFFER_SIZE	(2048)
+
+/* This function initiates the sending of a command on the command socket.
+ * It needs to know the command to send (minus the \r\n) and the state into
+ * which to go when the transmission is completed.  Usually this will be
+ * immediately, but you never know.  Doing it this way all the time makes
+ * the code smaller and less complicated anyway.
+ *
+ * If "next_state" is negative, then "-next_state" will be entered immediately
+ * upon completion of command transmission.  Otherwise, protostate_RECEIVING_RESPONSE
+ * is entered and the value of next_state passed on to command_recv as the
+ * next state.  Hence, callers can say things like:
+ *      commands_send(s, FTP_GOT_SYST_RESPONSE, "SYST")
+ * and know that by the time the state moves to FTP_GOT_SYST_REPONSE, the command
+ * was sent successfully, and the server's response was received and decoded and
+ * can be examined by looking at Session.response_code to determine whether it
+ * succeeded or not.
+ */
+_kernel_oserror *commands_send(Session *session, int next_state, const char *command)
+{
+        const size_t length = strlen(command);
+	
+	free(session->command.data);
+	session->command.data = malloc(length + 2 + 1);
+	if (session->command.data == 0) {
+	        session->state = protostate_ERROR_MEM;
+	        return NULL;
+	}
+        memcpy(session->command.data, command, length);
+        session->command.data[length] = '\r';
+        session->command.data[length+1] = '\n';
+        session->command.data[length+2] = '\0';
+        session->command.next_state = next_state;
+        session->command.length = length + 2;
+        session->command.done = 0;
+
+	session->state = protostate_SENDING;
+	/*session->outstanding_response = 1;*/
+
+	#ifdef TRACE
+	protocol_debug("<--- %s\r\n", command);
+	#endif
+	return commands_continue_sending(session);	
+}
+
+/* Specify command and parameters separately */
+_kernel_oserror *vcommands_send(Session *session, int next_state, const char *command, const char *parameters)
+{
+        const size_t length_command = strlen(command);
+        const size_t length_parameters = strlen(parameters);
+        char *full_string;
+        full_string = malloc(length_command + length_parameters + sizeof(" "));
+        if (full_string == NULL) {
+		session->state = protostate_ERROR_MEM;
+                return NULL;
+        }
+        else {
+                _kernel_oserror *result;
+                memcpy(full_string, command, length_command);
+                memcpy(full_string + length_command + 1, parameters, length_parameters + 1);
+                full_string[length_command] = ' ';
+                result = commands_send(session, next_state, full_string);
+                free(full_string);
+                return result;
+        }
+}
+
+/*
+ *  This function is called during state table dispatch to continue pumping out
+ *  data to the remote server.  It returns 1 if the pumping operation has completed
+ *  and sets the state ready for the continuation of the processing.
+ */
+_kernel_oserror *commands_continue_sending(Session *s)
+{
+        int result;
+        size_t remaining = s->command.length - s->command.done;
+        
+        result = send(s->sd, s->command.data + s->command.done, remaining, 0);
+        if (result >= 0) {
+                s->command.done += result;
+                if (s->command.done < s->command.length) {
+                        /* Not yet sent the command - it MUST be big :-) */
+                        #ifdef TRACE
+                        protocol_debug("%d sent total, %d total to send\n", s->command.done, s->command.length);
+                        #endif
+                        return state_BLOCKING;
+                }
+                free(s->command.data);
+              	s->command.data = NULL;
+                if (s->command.next_state < 0) {
+                        s->state = -s->command.next_state;
+			return NULL;
+                }
+                return commands_recv(s, s->command.next_state);
+        }
+        if (errno == ENOTCONN || errno == EWOULDBLOCK) {
+                return state_BLOCKING;
+        }
+
+        /* Oh dear - a real error */
+	s->error_state = s->command.next_state;
+	s->state = protostate_ERROR_WRITE;
+        return NULL;
+}
+
+
+static _kernel_oserror *commands_process_read_line(Session *s)
+{
+        /* Parse the line.  Currently, we are going to discard the stuff, but we really ought
+         * to be saving up directory headers in order to pass them on to our client if required.
+         * eg. welcome messages or directory messages. for FTP
+         */
+        const size_t length = strlen(s->response.data);
+
+	#ifdef TRACE
+	protocol_debug("---> %s\r\n", s->response.data);
+	#endif
+
+	if (s->response_code == -1) {
+                /* First time through. */
+        }
+
+	(void) length;
+	s->state = s->response.next_state;
+        return NULL;
+}
+
+
+/* This routine controls the reading of textual data from a socket through
+ * the buffer system "data".  By accessing the buffer pointers, lengths, etc.
+ * through the pointer, we can use this code for reading directory entries as
+ * well as control connection responses.  The routine compares the "data" pointer
+ * with the address of s->response to determine which socket to read and how to
+ * go about processing the received line of data.
+ */
+_kernel_oserror *commands_continue_reading(Session *s, arbitrary_data *data)
+{
+        size_t buffer_space = data->length - data->done;
+        int result;
+        int sd = s->sd;
+
+	/* Initialise the error state here, because there are too many places where
+	 * errors are generated to remember to set it everywhere
+	 */
+	s->error_state = data->next_state;
+        
+	/* If there is no space left in the buffer (this will be the case if the buffer
+	 * has not yet been allocated, but since the magic of realloc will magically do
+	 * the malloc for us, we do not need to special case that code.
+	 */
+        if (buffer_space == 0) {
+                char *buffer;
+                buffer = module_realloc(data->data, data->length + INTERNAL_BUFFER_SIZE + 4);
+                if (buffer != NULL) {
+                        data->data = buffer;
+                        data->length += INTERNAL_BUFFER_SIZE;
+                        buffer_space += INTERNAL_BUFFER_SIZE;
+                }
+                else {
+                        s->state = protostate_ERROR_MEM;
+                        return NULL;
+                }
+        }
+        
+	/* Obtain copy of the data ONLY - we discard the appropriate amount later */
+        result = recv(sd, data->data + data->done, buffer_space, MSG_PEEK);
+        if (result == 0) {
+       	        /* Closing data connection is end of transfer so switch to next state */
+       	        s->state = data->next_state;
+		return NULL;
+        }
+        else if (result < 0) {
+                /* Errors are errors either way, unless we are waiting for connection/data */
+                if (errno == ENOTCONN || errno == EWOULDBLOCK) {
+                        return state_BLOCKING;
+                }
+                s->state = protostate_ERROR_READ;
+                return NULL;
+        }
+	else {
+		/* Seek out a newline character.  More efficient to use memchr than
+		 * writing a zero byte and using strchr, especially as we know the
+		 * length of the buffer!
+		 */
+	        char *const eol = memchr(data->data, '\n', data->done + result);
+
+		if (eol == NULL) {
+		        /* Have not read a complete line - suck all of the data into the buffer
+		         * immediately, and then block until we get called again
+		         */
+		        (void) recv(sd, data->data + data->done, result, 0);
+			data->done += result;
+		        return state_BLOCKING;
+		}
+		else {
+			/* Read for real - remembering we've already read "done" bytes previously
+		 	 * Errors cannot occur - we've just been told the data is there.
+		 	 */
+		        const size_t bytes_to_read = (eol + 1 - data->data) - data->done;
+	        	(void) recv(sd, data->data + data->done, bytes_to_read, 0);
+
+			/* Terminate buffer, zero counters for next response */
+			*eol = '\0';
+			data->done = 0;
+
+			if (eol > data->data) {
+		        	/* Look for and remove an immediately preceding \r */
+		        	if (eol[-1] == '\r') {
+		                	eol[-1] = '\0';
+			        }
+			}
+		}
+
+		/* Process this line of data as approproate */
+		return commands_process_read_line(s);
+	}
+}
+
+/* This function initiates the process of receiving an FTP command response
+ * from a remote server.  It performs the read version of commands_send.
+ */
+_kernel_oserror *commands_recv(Session *session, int next_state)
+{
+	session->response.next_state = next_state;
+        session->response.length = INTERNAL_BUFFER_SIZE - 4;
+	session->response.done = 0;
+	session->response_code = -1;
+        free(session->response.data);
+        session->response.data = malloc(INTERNAL_BUFFER_SIZE);
+        if (session->response.data == NULL) {
+                session->state = protostate_ERROR_MEM;
+                return NULL;
+        }
+        session->state = protostate_RECEIVING;
+        return commands_continue_reading(session, &session->response);
+}

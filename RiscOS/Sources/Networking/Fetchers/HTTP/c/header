@@ -1,0 +1,723 @@
+/*
+ * HTTP (c.header)
+ *
+ * © Acorn Computers Ltd. 1997
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <time.h>
+
+#include "swis.h"
+
+#include "module.h"
+#include "header.h"
+#include "http.h"
+#include "cookie.h"
+#include "protocol.h"
+#include "writedata.h"
+#include "hosttrack.h"
+#include "generic.h"
+#include "HTTP.h"
+
+
+/* NOTE:  If you fix bugs in this code, bear in mind that the FTP module has a copy of
+ * some of the functions so that it can handle FTP authentication by "faking" HTTP
+ * authentication.  So you may like to update the FTP module whilst you're at it!
+ */
+ 
+
+/* This function takes the header and value supplied and stores them in the header list
+ * It takes a pointer to the head pointer so it can insert at the head of the list if
+ * necessary.
+ */
+void http_add_header(http_header **list, const char *header, const char *value)
+{
+        const size_t header_len = strlen(header) + 1;
+        const size_t value_len = strlen(value) + 1;
+        const size_t size = header_len + value_len + offsetof(http_header, text);
+        http_header *h = malloc(size);
+        
+        if (h == NULL) return;
+        
+        h->next = NULL;
+        h->header = h->text;
+        memcpy(h->text, header, header_len);
+	h->value = h->text + header_len;
+        memcpy(h->value, value, value_len);
+
+	if (*list == NULL) {
+	        *list = h;
+	}
+	else {
+                http_header *plist;
+                
+                for (plist = *list; plist->next; plist = plist->next) ;;
+                plist->next = h;
+	}
+}
+
+void http_delete_header(http_header **list, http_header *header)
+{
+        if (header == NULL) return;
+        if (*list == header) {
+                *list = header->next;
+        }
+        else {
+                http_header *plist;
+                
+                for (plist=*list; plist->next; plist=plist->next) {
+                        if (plist->next == header) {
+                                plist->next = header->next;
+                                break;
+                        }
+                }
+        }
+        free(header);
+}
+
+http_header *http_find_header(http_header *list, char *header)
+{
+        for (; list; list=list->next) {
+                if (Strcmp_ci(list->header, header) == 0) break;
+        }
+
+	return list;
+}
+
+void http_free_headers(http_header **list)
+{
+        while (*list) http_delete_header(list, *list);
+}
+
+
+/* This function takes the list of tokens specified as the value for the Connection header
+ * and removes any headers with matching names.  This is required behaviour for HTTP/1.1.
+ */
+static void http_filter_connection_tokens(http_header **list, char *tokens)
+{        
+        for (;;) {
+	        char *comma, *end, saved;
+
+		while (*tokens == ',' || (*tokens != '\0' && isspace(*tokens))) ++tokens;
+		if (*tokens == '\0') break;
+
+	        comma = strchr(tokens, ',');
+		if (comma != NULL) {
+		        end = comma++;
+		}
+		else {
+		        comma = end = strchr(tokens, '\0');
+		}
+
+		/* We now know we are not looking at an empty list member token */
+		for (--end; isspace(*end); --end) ;;
+		++end;
+		/* Found it! Do NOT get fooled by removing ourselves! Shouldn't happen but ... */
+		if (Strncmp_ci(tokens, "connection", sizeof("connection")) != 0) {
+			#ifdef TRACE
+			protocol_debug("Filtering header named in connection: %.*s\n", end-tokens, tokens);
+			#endif
+			saved = *end;
+			*end = '\0';
+			for (;;) {
+				http_header *h = http_find_header(*list, tokens);
+				if (h == NULL) break;
+				#ifdef TRACE
+				protocol_debug("Deleting `%s' header\n", h->header);
+				#endif
+				http_delete_header(list, h);
+			}
+			*end = saved;
+		}
+                tokens = comma;
+        }
+        
+}
+
+/* This function generates a full request or response header into ses->current_header
+ * using the data in ses->headers.  The remembered header list is then DELETED from ses->headers
+ * The current header pointer is set to a null pointer if unable to claim space for the buffer
+ */
+size_t http_construct_header_buffer(Session *ses, size_t extra)
+{
+	http_header	*h;
+        char 		*ptr;
+        size_t 		header_size = extra + sizeof("\r\n");
+        
+        for (h=ses->headers; h; h=h->next) {
+                header_size += strlen(h->header) + strlen(h->value) + sizeof(": \r\n") - 1;
+        }
+        
+	#ifdef TRACE
+	protocol_debug("Need %d bytes to hold the entire header\n", header_size);
+	#endif
+        ses->current_header = malloc(header_size);
+        if (ses->current_header == NULL) {
+                /* This will have the effect of persuading the browser we are HTTP 0.9
+                 * but hell, it is at least a legal response to an HTTP request!
+                 */
+                return 0;
+        }
+
+	ptr = ses->current_header;
+	for (h=ses->headers; h; h=h->next) {
+		#ifdef TRACE
+		protocol_debug("Writing `%s' header to buffer (value `%s')\n", h->header, h->value);
+		#endif
+	        ptr += sprintf(ptr, "%s%s %s\r\n", h->header, h == ses->headers ? "" : ":", h->value);
+	}
+	ptr += sprintf(ptr, "\r\n");
+	http_free_headers(&ses->headers);
+	return (ptr - ses->current_header);
+}
+
+/* This function is responsible for looking through the headers and removing
+ * anything that it doesn't like the look of that it finds in the HTTP responses.
+ */
+static void http_process_all_response_headers(Session *ses, _kernel_swi_regs *r)
+{
+	#ifdef COOKIE
+        http_header *h;
+        #endif
+
+        (void) r;
+	#ifdef TRACE
+	protocol_debug("Processing the headers\n");
+	#endif
+
+	for (;;) {
+		http_header *connection = http_find_header(ses->headers, "Connection");
+	        if (connection == NULL) break;
+                #ifdef TRACE
+		protocol_debug("Connection header found - scanning it for tokens\n");
+                #endif
+                http_filter_connection_tokens(&ses->headers, connection->value);
+		http_delete_header(&ses->headers, connection);
+        }
+
+       	#ifdef COOKIE
+	if (http_find_header(ses->headers, "Set-Cookie2")) {
+	        http_header *oldheader;
+	        while ((oldheader = http_find_header(ses->headers, "Set-Cookie")) != NULL) {
+	                http_delete_header(&ses->headers, oldheader);
+	        }
+	}
+
+	for (h=ses->headers; h; h = h->next) {
+	        if (Strcmp_ci(h->header, "Set-Cookie") == 0 || Strcmp_ci(h->header, "Set-Cookie2") == 0) {
+			char *dup = Strdup(h->value);
+			if (dup) {
+		                cookie_set_cookie(dup, ses);
+		                free(dup);
+		        }
+	        }
+	}
+	#endif
+	(void) http_construct_header_buffer(ses, 0);
+}
+
+
+
+/* This function takes a buffer containing an HTTP header and splits it into the
+ * header itself and its value.  It returns zero for an unparsable block of data
+ * and pointers.  It DOES modify the input string.  I wouldn't rely on eobuffer
+ * if I were you.
+ */
+static int http_delimit_header(char *buffer, char **eobuffer, char **header, char **value)
+{
+	char *ptr;
+
+	ptr = buffer + strcspn(buffer, "\n\r");	/* Locate line terminator (if present) else string term.*/
+	if (*ptr) {
+		*ptr = '\0';			/* terminate buffer */
+		if (eobuffer) {
+			*eobuffer = ptr + 1;	/* Return that there was more than one line in buffer */
+		}
+	}
+	else {
+		if (eobuffer) *eobuffer = 0;	/* Return that there was no more data in buffer */
+	}
+	while (ptr > buffer) {
+		if (isspace(ptr[-1])) {		/* Strip trailing spaces */
+			*--ptr = '\0';
+		}
+		else break;
+	}
+	buffer += strspn(buffer, " \t");	/* Skip leading spaces */
+	if (!*buffer) {				/* String was empty? Bail out */
+		*header = 0;
+		*value = 0;
+		return 0;
+	}
+	*header = buffer;
+	buffer += strcspn(buffer, " :\t");	/* Skip over header name */
+	if (!*buffer) {
+		*value = 0;			/* No data for this header - corrupt? */
+		return 0;
+	}
+	*buffer++ = 0;				/* Terminate header name and move along */
+	*value = buffer + strspn(buffer, " :\t");	/* Locate start of header value and store it */
+	return 1;
+}
+
+/* This function returns non-zero if it managed to locate a complete header line */
+static int http_check_found_header(char *buffer, char **next, int continuations)
+{
+	char *ptr, *nl;
+
+	#ifdef TRACE
+	protocol_debug("http_check_found_header(%.*s)\n", 96, buffer);
+	#endif
+
+	/* Find the first \r and \n characters in the buffer, if any */
+	ptr = strchr(buffer, '\r');
+	nl = strchr(buffer, '\n');
+	
+	if (!ptr || (nl && ptr && (nl < ptr))) {
+		/* If there was a \n and \r AND \n occurred before \r, make ptr
+		 * point at the \n instead (because we're using EOL of \n and
+		 * it looks as if we might have picked up a \r somewhere in the
+		 * object body which we DON'T want to see yet
+		 */
+		ptr = nl;
+	}
+	/* At this point, ptr can only be NULL if nl is also NULL */
+
+	if (ptr && !nl) {
+		/* found a \r but didn't find a \n */
+		if (ptr[1] == ' ' || ptr[1] == '\t') {
+		        /* Was this a continuation line? */
+		        ptr[0] = ' '; /* blank the spurious \r character out */
+		        return http_check_found_header(buffer, next, continuations);
+		}
+		
+		if (!ptr[1]) {
+			/* BUT the \r happened to be at the end of the buffer
+			 * so we'll go around again in order to forcibly pick
+			 * up the \n on the next read.
+			 */
+			*next = NULL;
+			return 0;
+		}
+
+		/* To get here, ptr points to a lonely \r character at a real header end */
+	}
+	else if (!ptr) {
+		/* neither \r nor \n found */
+		*next = NULL;
+		return 0;
+	}
+	else {
+		if (ptr != nl) {
+			/* To get here, we have found both a \r and a \n */
+			if (ptr[1] == '\n') {
+				nl = ptr+1;
+				*ptr++ = ' '; /* Blank out the \r */
+			}
+		}
+		else {
+		        /* Found just a \n - check at end of buffer */
+		        if (nl[1] == '\0' && continuations && nl != buffer) {
+		                /* At end of buffer */
+		                *next = NULL;
+		                return 0;
+		        }
+		}
+	}
+	
+	/* To get here, ptr is non NULL and points at the end of line character 
+	 * which WILL be either \r or \n, BUT the next character ptr[1] will not
+	 * be another newline indicator unless this is the end of the headers */
+
+	if (ptr == buffer || (ptr == (buffer+1) && buffer[0] == ' ')) {
+	        /* Was the last header - send blank string back */
+	        *buffer = '\0';
+	        *next = ptr+1;
+	        #ifdef TRACE
+	        protocol_debug("Blank line detected.  Next is (%.*s)\n", 96, *next);
+	        #endif
+	        return 1;
+	}
+
+	if ((ptr[1] == ' ' || ptr[1] == '\t') && continuations) {
+	        /* This was a continuation line */
+	        *ptr = ' ';  /* exterminate the previous end of line */
+	        return http_check_found_header(buffer, next, continuations);
+	}
+	
+	*ptr++ = '\0';
+	*next = ptr;
+        return 1;
+}
+
+/* Can't switch on strings, so convert to an integral type instead */
+static int http_recognise_header(const char *hdr)
+{
+	if (Strcmp_ci(hdr, "content-length") == 0) return header_CONTENT_LENGTH;
+	if (Strcmp_ci(hdr, "transfer-encoding") == 0) return header_TRANSFER_ENCODING;
+	#ifdef COOKIE
+	if (Strcmp_ci(hdr, "set-cookie") == 0) return header_SET_COOKIE;
+	if (Strcmp_ci(hdr, "set-cookie2") == 0) return header_SET_COOKIE2;
+	#endif
+	return header_UNKNOWN;
+}
+
+/* This is the main header parsing routine for the HTTP module
+ *
+ * As of version 0.50, this function has been completely rewritten so that it works.
+ * It reconstructs continuation lines, strips leading & trailing spaces from data,
+ * enforces CR LF as the end of header line character sequence, has the capability to
+ * filter out specific headers (although this is only done for Transfer-Encoding: chunked
+ * currently, as we are removing the chunked encoding)
+ *
+ *
+ * It returns the number of bytes in the supplied buffer that it has dealt with.  It will
+ * leave any partially complete lines in the buffer and not consume them.  This includes
+ * buffers that end with end-of-line sequences (except on the blank line which terminates
+ * the headers), since this routine needs to find out whether the header is continued on
+ * the next line and therefore MUST defer processing until it can be sure that it is not
+ * decoding a split line.
+ */
+int parse_http_header(char *const buffer, int buflen, Session *ses, _kernel_swi_regs *r)
+{
+	int wrote, consumed = 0;
+	char *next, *header, *value;
+
+	(void) buflen;
+
+	/* If no data to be read then return 'not finished' response */
+	if (r->r[3] <= 0) return consumed;
+
+	/* Are we pumping a header out to the client? */
+	if (ses->current_header != NULL) {
+	        char *databuffer = ses->current_header + ses->hdrptr;
+	        ses->hdrptr += http_write_data_to_client(r, databuffer, strlen(databuffer));
+	        if (ses->current_header[ses->hdrptr] == '\0') {
+	                if (ses->final_pump) {
+	                        ses->donehead = TRUE;
+	       		        if (ses->chunking && ses->chunk_state == chunkstate_reading_headers) {
+       			                ses->chunk_state = chunkstate_wait_chunk_size;
+       			        }
+	                }
+	                free(ses->current_header);
+	                ses->current_header = NULL;
+	        }
+	        else {
+	                return consumed;
+	        }
+	}
+
+	while (ses->current_header == NULL && (ses->donehead == FALSE || ses->chunking)) {
+	        char *eob;
+	        int find_con = 1;
+
+		if (ses->chunking)  {
+		        if (ses->chunk_state == chunkstate_reading_chunk_data) break;
+		        if (ses->chunk_state != chunkstate_reading_headers && ses->chunk_state != chunkstate_reading_footers) {
+		                find_con = 0;
+		        }
+		}
+		
+		if (ses->read_status == 0) {
+		        /* We haven't yet read any header lines */
+		        if (buflen > 4) {
+		                const int http_match = Strncmp_ci(buffer, "HTTP", 4);
+		                const int broken_ncsa = isspace(buffer[4]) && isdigit(buffer[5]) &&
+		                		isdigit(buffer[6]) && isdigit(buffer[7]);
+
+				#ifdef TRACE
+				protocol_debug("http_match = %d; broken_ncsa = %d\n", http_match, broken_ncsa);
+				protocol_dump(buffer, buflen>10 ? 10:buflen);
+				#endif
+		                
+		                if (!http_match && (buffer[4] == '/' || broken_ncsa)) {
+		                        /* Fine.  We just have to hope we've not been fooled */
+		                }
+		                else {
+		                        /* Not fine.  HTTP/0.9 response.  Need to fake a few things now */
+		                        ses->read_status = 200;
+		                        http_add_header(&ses->headers, "HTTP/1.0", "200 " Module_Title " guessing OK");
+		                        http_add_header(&ses->headers, "Warning", "99 Server didn't sent any headers");
+		                        http_add_header(&ses->headers, "Content-Type", "text/html");
+		                        http_add_header(&ses->headers, "Warning", "14 Content-type header added");
+		                        http_process_all_response_headers(ses, r);
+		                        ses->final_pump = 1;
+		                        ses->hdrptr = 0;
+		                        #ifdef TRACE
+		                        protocol_debug("No headers returned :-/  Faking it\n");
+		                        #endif
+		                        return 0;
+		                }
+		        }
+		}
+		
+	        if (!http_check_found_header(buffer, &next, find_con)) break;
+	        
+	        #ifdef TRACE
+	        protocol_debug("Found one! `%s'\n", buffer);
+	        #endif
+
+	        if (ses->chunking && ses->chunk_state != chunkstate_reading_headers &&
+	        	ses->chunk_state != chunkstate_reading_footers) {
+	                /* We have been called from the header dechunker to get hold of chunks sizes
+	                 * and blank lines and the like. Handle these specially here.
+	                 */
+			if (ses->chunk_state == chunkstate_wait_chunk_ending_crlf) {
+			        if (isxdigit(*buffer)) {
+				        /* Assume broken server is not sending CR LF at end of chunk data
+				         * This is very naughty of it, but we will cope with it for the
+				         * benefit of our users
+				         */
+				        ses->chunk_state = chunkstate_wait_chunk_size;
+			        }
+			        else if (*buffer) {
+		                        #ifdef TRACE
+		                        protocol_debug("BAD CHUNKING DATA(1): %s\n", buffer);
+		                        #endif
+		                        /* For safety, drop back to verbatim mode */
+		                        ses->chunking = FALSE;
+		                        return consumed;
+			        }
+			        else {
+			                /* OK - we read the CR LF at the end of the chunk data - but we
+			                 * mustn't alter the state until we get past the next 'if'
+			                 */
+			        }
+			}
+	                if (ses->chunk_state == chunkstate_wait_chunk_size) {
+	                        if (isxdigit(*buffer)) {
+	                                /* Remember remember, chunk sizes are in HEXADECIMAL */
+	                                #ifdef TRACE
+	                                protocol_debug("Chunk size declaration: `%s'\n", buffer);
+	                                #endif
+	                                ses->chunk_bytes = (int) strtol(buffer, NULL, 16);
+	                        }
+	                        else {
+		                        #ifdef TRACE
+		                        protocol_debug("BAD CHUNKING DATA(2): %s\n", buffer);
+		                        #endif
+	                                ses->chunking = FALSE;
+	                                return consumed;
+	                        }
+	                        if (*buffer == '0' || ses->chunk_bytes == 0) {
+	                                /* That was the final chunk */
+	                                #ifdef TRACE
+	                                protocol_debug("ZERO chunk size - moving to reading footer state\n");
+	                                #endif
+	                                ses->chunk_state = chunkstate_reading_footers;
+	                        }
+	                        else {
+	                                #ifdef TRACE
+					protocol_debug("Moving to chunk data reading state\n");
+	                                #endif
+	                                ses->chunk_state = chunkstate_reading_chunk_data;
+	                        }
+	                }
+			if (ses->chunk_state == chunkstate_wait_chunk_ending_crlf) {
+			        /* OK.  We've swallowed the blank line */
+			        #ifdef TRACE
+			        protocol_debug("OK.  Consuming CR LF which terminates the previous chunk\n");
+			        #endif
+			        ses->chunk_state = chunkstate_wait_chunk_size;
+			}
+	        }
+	        else if (http_delimit_header(buffer, &eob, &header, &value) && header != NULL && value != NULL) {
+			/* Need to suppress footers from the client always */
+		        int suppress = (ses->chunking && ses->chunk_state == chunkstate_reading_footers);
+	                #ifdef TRACE
+	                protocol_debug("Found a header `%s' with value `%s'\n", header, value);
+	                #endif
+			switch (http_recognise_header(header)) {
+			        case header_CONTENT_LENGTH:
+			        	/* Suppress Content-Length header temporarily.  In some cases it is illegal
+			        	 * to have Content-Length headers (notably during chunked transfers)  Therefore,
+			        	 * we decode the header, store the length and if we decide it is safe to do so,
+			        	 * regenerate the header when we've read all of them.
+			        	 */
+			        	suppress = 1;
+			        	ses->size = (int) strtoul(value, NULL, 10);
+					#ifdef TRACE
+					protocol_debug("Content length was %d\n", ses->size);
+					#endif
+			        	break;
+			        case header_TRANSFER_ENCODING:
+					if (Strcmp_ci(value, "chunked") == 0) {
+						#ifdef TRACE
+						protocol_debug("Suppressing header on its way to the client\n");
+						#endif
+				        	suppress = 1; /* Do not want to pass this header on */
+				        	ses->chunking = 1;
+				        	ses->chunk_bytes = -1; /* Special value for first chunk */
+				        	ses->chunk_state = chunkstate_reading_headers;
+				        }
+			        	break;
+				case header_CONNECTION:
+					#ifdef TRACE
+					protocol_debug("Server sent us a connection header");
+					#endif
+					break;
+				default:
+				case header_UNKNOWN:
+					/* Not concerned with this one */
+					break;
+			}
+
+			if (!suppress) {
+			        if (ses->read_status == 0) {
+			                int major = 1, minor = 0;
+			                const int broken_ncsa = isspace(header[4]) && isdigit(header[5]) &&
+			                		isdigit(header[6]) && isdigit(header[7]);
+			                		
+					if (broken_ncsa) {
+			                        #ifdef TRACE
+			                        protocol_debug("Decode HTTP version - found broken NCSA server\n");
+			                        #endif
+			                        hosttrack_store_http_version(ses->host, ses->port, major * 100 + minor);
+					}
+			                else if (sscanf(header, "HTTP/%d.%d", &major, &minor) == 2) {
+			                        #ifdef TRACE
+			                        protocol_debug("Decode HTTP version - found %d.%d\n", major, minor);
+			                        #endif
+			                        hosttrack_store_http_version(ses->host, ses->port, major * 100 + minor);
+			                }
+			                else {
+			                        #ifdef TRACE
+			                        protocol_debug("Unable to decode HTTP header - assuming 0.9\n");
+			                        #endif
+			                        hosttrack_store_http_version(ses->host, ses->port, 0 * 100 + 9);
+			                }
+			                /* Client does NOT need to be aware that we are using HTTP/1.1.  We
+			                 * can lie to it safely.  We MUST do this in case the server used a
+			                 * chunked transfer encoding (which we are removing) since if we were
+			                 * to leave an HTTP/1.1 response without an encoding and without a
+			                 * content-length header, our client MUST reject the message as invalid.
+			                 */
+			                header = "HTTP/1.0";
+			        }
+
+				http_add_header(&ses->headers, header, value);
+			}
+			
+			if (ses->read_status == 0) ses->read_status = 1;
+	        }
+                else if (value == NULL && header == NULL) {
+                        #ifdef TRACE
+                        protocol_debug("** End of headers detected\n");
+                        #endif
+                        if (ses->chunking) {
+			        /* Ignore Content-Length if we are going for a chunked transfer */
+                                ses->size = -1;
+                        }
+                        if (ses->size > 0) {
+                                /* Re-generate the content-length header */
+                                char length[16];
+                                sprintf(length, "%d", ses->size);
+                                http_add_header(&ses->headers, "Content-Length", length);
+                        }
+                        else {
+                                if (ses->chunking && ses->chunk_state == chunkstate_reading_footers) {
+                                        ses->donehead = TRUE;
+                                        return consumed + (next - buffer);
+                                }
+                        }
+                        ses->final_pump = 1;
+                }
+                else {
+                        ses->current_header = NULL;
+                }
+
+		if (ses->final_pump && ses->current_header == NULL && ses->headers) {
+		        /* We have read the header terminator.  At this stage, we have to process
+		         * the headers and remove any headers we do not want the client to see
+		         */
+		        http_process_all_response_headers(ses, r);
+		}
+                
+		if (ses->current_header != NULL) { 
+			size_t length = strlen(ses->current_header);
+	        	wrote = http_write_data_to_client(r, ses->current_header, length);
+        		if (wrote == length) {
+		                if (ses->final_pump) {
+		                        ses->donehead = TRUE;
+	        		        if (ses->chunking && ses->chunk_state == chunkstate_reading_headers) {
+        			                ses->chunk_state = chunkstate_wait_chunk_size;
+        			        }
+	        	        }
+	        	        free(ses->current_header);
+        		        ses->current_header = NULL;
+        	        }
+        		else {
+	        	        ses->hdrptr = wrote;
+		        }
+		}
+
+		/* Shift the remaining data down */
+		{
+		        const size_t data_eaten = next - buffer;
+		        #ifdef TRACE
+		        protocol_debug("Shifting buffer down - eating %d bytes\n", data_eaten);
+		        #if 0
+		        protocol_debug("We have eaten %d bytes.  That leaves %d bytes in buffer\n",
+		        	data_eaten, ses->bufptr - data_eaten);
+	        	protocol_dump(next, ses->bufptr - data_eaten);
+		        #endif
+		        #endif
+	        	memmove(buffer, next, ses->bufptr + 1 - data_eaten);
+	        	ses->bufptr -= data_eaten;
+	        	consumed += data_eaten;
+			#if 0
+		        #ifdef TRACE
+		        protocol_debug("Our buffer is now:\n");
+	        	protocol_dump(buffer, ses->bufptr);
+		        #endif
+		        #endif
+	        }
+	}
+
+	return consumed;
+}
+
+/* This function parses the user supplied headers.  We use this to "fix up" any problems in the
+ * headers - such as removing things we don't like the look of - like Host headers.  We supply
+ * our own Host headers - and our ones are correct!  We also object to Connection headers (our
+ * client has no business interfering with our connections to servers) and user-agent headers
+ * (we provide a perfectly good API for altering the user-agent already).
+ */
+int parse_user_header(char *buffer, int buflen, Session *ses)
+{
+        char *next, *eob, *header, *value;
+        int consumed = 0, ended = 0;
+
+	#ifdef TRACE
+	protocol_debug("Parsing user supplied header block\n");
+	protocol_dump(buffer, buflen);
+	#endif
+        
+        while (!ended && http_check_found_header(buffer, &next, 1)) {
+		if (http_delimit_header(buffer, &eob, &header, &value)) {
+		        if (header != NULL) {
+		                if (Strcmp_ci(header, "host") != 0 && Strcmp_ci(header, "connection") != 0 &&
+		                	Strcmp_ci(header, "user-agent") != 0) {
+			                http_add_header(&ses->headers, header, value ? value : "");
+			        }
+		        }
+		}
+		consumed += (next - buffer);
+		buffer = next;
+                if (consumed >= buflen) ended = TRUE;
+		if (header == NULL && value == NULL) {
+		        ended = TRUE;
+		}
+        }
+
+	#ifdef TRACE
+	protocol_debug("End parse user supplied header block.  Data remaining: %d bytes\n", buflen - consumed);
+	protocol_dump(buffer, buflen - consumed);
+	#endif
+        
+        return consumed;
+}

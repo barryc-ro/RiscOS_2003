@@ -1,0 +1,311 @@
+/*
+ * FTP (c.ses_ctrl)
+ *
+ * © Acorn Computers Ltd. 1996-1997
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+#include "sys/errno.h"
+#include "socklib.h"
+#include "module.h"
+#include "protocol.h"
+#include "utils.h"
+#include "generic.h"
+#include "FTPhdr.h"
+
+/*
+ * This file contains the routines needed to manipulate sessions
+ * within the contect of multiple clients of the module.
+ */
+
+static Session *session_list = NULL;
+static Connection *connection_list = NULL;
+
+/*************************************************************/
+/* Session *find_session(unsigned int id)		     */
+/*************************************************************/
+/* Given a session ID, return the session control block	     */
+/* associated with it.					     */
+/*************************************************************/
+Session *find_session(unsigned int id)
+{
+	Session *session;
+
+	for (session = session_list; session; session = session->next) {
+		if (session->id == id) return session;
+	}
+
+	return NULL;
+}
+
+/*************************************************************/
+/* Session *new_session(void)				     */
+/*************************************************************/
+/* Create a new session, taking into account starting the    */
+/* sessions list					     */
+/*************************************************************/
+Session *new_session(void)
+{
+	Session *ses = calloc(1, sizeof(Session));
+
+	if (ses == NULL) {
+		return ses;
+	}
+
+	if (session_list == NULL) {
+		/* no list so create a new one */
+		session_list = ses;
+	}
+	else {
+		/* else find end of list and add an element */
+		Session *s;
+
+		for (s=session_list; s->next; s=s->next) ;;
+		s->next = ses;
+	}
+
+	return ses;
+}
+
+/* This function frees up any of the data associated with a dying
+ * session.  This ensures that all such freeing up is centralised
+ */
+static Session *kill_session_data(Session *s)
+{
+	Session *result = s->next;
+
+	if (s->control_sd != -1) {
+		(void) close_socket(&s->control_sd);
+	}
+	if (s->data_sd != -1) {
+		(void) close_socket(&s->data_sd);
+	}
+
+	free(s->uri);
+	free(s->url);
+	free(s->host);
+	free(s->user);
+	free(s->pass);
+	free(s->acct);
+	free(s->home);
+	free(s->target_name);
+	free(s->command.data);
+	free(s->client_pump.data);
+	free(s->response.data);
+	free(s->directory.data);
+	free(s->put_data.data);
+	free(s->rename_name);
+	free(s->rename_uri);
+
+	memset(s, '\0', sizeof(*s)); /* Let's be careful */
+	free(s);
+
+	return result;
+}
+
+/*************************************************************/
+/* void kill_session(Session *s)			     */
+/*************************************************************/
+/* Given the location of the session block, delete the	     */
+/* session cleanly, taking into account the session next     */
+/* pointers and any memory associated with it		     */
+/*************************************************************/
+void kill_session(Session *s)
+{
+	Session *ses = session_list, *prev_ses = NULL;
+
+	for (ses = session_list; ses; prev_ses = ses, ses = ses->next) {
+		if (ses == s) {
+			Session *const next = kill_session_data(s);
+			if (prev_ses == NULL) {
+				session_list = next;
+			}
+			else {
+				prev_ses->next = next;
+			}
+			break;
+		}
+	}
+
+	#ifdef TRACE
+	protocol_debug("kill_session %p completed.  Dump of session chain\n", s);
+	for (ses=session_list; ses; ses=ses->next) {
+		protocol_debug("%p (socket %d) URL %s\n", ses, ses->control_sd, ses->url);
+	}
+	protocol_debug("End of session chain\n\n");
+	#endif
+}
+
+/*************************************************************/
+/* void ses_kill_all(void)				     */
+/*************************************************************/
+/* A small routine to kill off all sessions at module shut-  */
+/* down.						     */
+/*************************************************************/
+void ses_kill_all(void)
+{
+	while (session_list) {
+		kill_session(session_list);
+	}
+}
+
+#ifdef TRACE
+static void dump_connection_chain(void)
+{
+        Connection *c;
+        
+	protocol_debug("Start of connection chain\n");
+	for (c = connection_list; c; c=c->next) {
+		protocol_debug("%p (socket %d) host %s:%d user %s home `%s'\n", c, c->control_sd,
+			c->host, c->port, c->user ? c->user : "<ANON>", c->home ? c->home : "<NULL>");
+	}
+	protocol_debug("End of connection chain\n\n");
+}
+
+#endif
+
+/*************************************************************/
+/* void kill_connection(Session *s)				*/
+/*************************************************************/
+/* Given the location of the session block, delete the	     */
+/* session cleanly, taking into account the session next     */
+/* pointers and any memory associated with it		     */
+/*************************************************************/
+void kill_connection(Connection *co)
+{
+	Connection *c = connection_list, *prev_c = NULL;
+
+	for (c = connection_list; c; prev_c = c, c = c->next) {
+		if (c == co) {
+			Connection *const next = co->next;
+			(void) close_socket(&co->control_sd);
+			free(co->user);
+			free(co->home);
+			free(co->host);
+			free(co);
+			if (prev_c == NULL) {
+				connection_list = next;
+			}
+			else {
+				prev_c->next = next;
+			}
+			break;
+		}
+	}
+
+	#ifdef TRACE
+	protocol_debug("kill_connection %p completed.  Dump of connection chain\n", co);
+	dump_connection_chain();
+	#endif
+
+}
+
+/*************************************************************/
+/* Session *find_connection(Session *ses, char *host, int port)*/
+/*************************************************************/
+/* Given a host and port, set up a session control block with */
+/* an established connection, if one exists.		      */
+/*************************************************************/
+int find_connection(Session *ses, const char *host, const int port, const char *user)
+{
+	Connection *c;
+
+	for (c = connection_list; c; c=c->next) {
+	        if (c->port != port) continue;
+	        if (c->user != NULL) {
+	                if (user == NULL) continue;
+	                if (strcmp(c->user, user) != 0) continue;
+	        }
+	        else {
+	                if (user != NULL) {
+	                        if (Strcmp_ci(user, "ftp") != 0 && Strcmp_ci(user, "anonymous") != 0) {
+	                                /* Trap these "special" usernames */
+	                                continue;
+	                        }
+	                }
+	        }
+		if (Strcmp_ci(c->host, host) == 0) {
+			#ifdef TRACE
+			protocol_debug("Reusing socket %d to %s:%d", c->control_sd, c->host, c->port);
+			#endif
+			ses->control_sd = c->control_sd;
+			free(ses->home);
+			ses->home = c->home;
+			ses->server_type = c->server_type;
+			c->home = NULL;
+			c->control_sd = -1;
+			kill_connection(c);
+			return 1;
+		}
+	}
+
+	#ifdef TRACE
+	protocol_debug("Didn't find existing connection to %s:%d", host, port);
+	#endif
+
+	return 0;
+}
+
+/*************************************************************/
+/* Connection *new_connection(Session *ses)		     */
+/*************************************************************/
+/* Transfer a session into the spare connection list	     */
+/*************************************************************/
+Connection *new_connection(Session *ses)
+{
+	if (ses->control_sd == -1 || !ses->cacheable) {
+		return NULL;
+	}
+	else {
+		Connection *const c = calloc(1, sizeof(Connection));
+		if (c != NULL) {
+			_swix(OS_ReadMonotonicTime, _OUT(0), &c->last_use);
+			c->control_sd = ses->control_sd;
+			ses->control_sd = -1;
+			c->host = ses->host;
+			ses->host = NULL;
+			c->port = ses->port;
+			c->user = ses->user;
+			ses->user = NULL;
+			c->home = ses->home;
+			ses->home = NULL;
+			ses->cacheable = 0;
+			c->next = connection_list;
+			c->server_type = ses->server_type;
+			connection_list = c;
+			#ifdef TRACE
+			protocol_debug("new_connection completed.  Dump of connection chain\n");
+			dump_connection_chain();
+			#endif
+		}
+		return c;
+	}
+}
+
+void init_sessions(void)
+{
+	session_list = NULL;
+	connection_list = NULL;
+}
+
+void conn_kill_all(void)
+{
+        while (connection_list != NULL) {
+                kill_connection(connection_list);
+        }
+}
+
+Connection *find_first_connection(void)
+{
+        return connection_list;
+}
+
+Session *find_first_session(void)
+{
+        return session_list;
+}

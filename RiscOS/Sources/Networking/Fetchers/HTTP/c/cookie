@@ -1,0 +1,1802 @@
+/*
+ * HTTP (c.cookie)
+ *
+ *  © Acorn Computers Ltd. 1996-1998
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <time.h>
+#include "kernel.h"
+#include "swis.h"
+#include "module.h"
+#include "header.h"
+#include "http.h"
+#include "cookie.h"
+#include "generic.h"
+#include "protocol.h"
+#include "config.h"
+#include "dates.h"
+
+/* StB 10/10/97 - allow inclusion of cookie code to be a compile time option */
+#ifdef COOKIE
+
+/* Set to 1 if you want cookies stored in Choices:WWW. otherwise !Scrap will be used */
+#define SAVE_COOKIES_IN_CHOICES	0
+
+
+#define DEFAULT_EXPIRY  31536000 /* Set default expiry of a cookie to 1 year */
+
+/* Defined minimums in RFC2109, can always increase it */
+#define MAX_COOKIE_SIZE		4096
+#define MAX_COOKIES_PER_DOMAIN	20
+#define MAX_COOKIES		300
+#define MAX_COOKIES_IN_QUEUE	100
+
+
+/* Arbitary dummy names for host and path when reading in file */
+#define NULL_HOST		"noneset"
+#define NULL_PATH		"noneset"
+
+/* Tells remove_cookie whether to remove an empty domain or not */
+#define NOT_DOMAIN		0
+#define DOMAIN_TOO		1
+
+/* Tells parse_http_buffer whether to remove header from buffer */
+#define REMOVE_BUFFER		0
+#define PRESERVE_BUFFER		1
+
+
+#define ACCEPT_ALL_ENV "Browse$AcceptAllCookies"
+
+
+/* Define the structures used for storing cookie data */
+struct _Cookie {
+	char	*name;		/* The NAME attribute of the cookie */
+	char	*value;		/* VALUE attribute */
+	char	*domain;	/* Domains under which cookie may be used */
+	char	*path;		/* Paths under which cookie may be used */
+	char	*port_list;	/* Comma separated list of allowed ports */
+	char	*comment;	/* Optional comment */
+	time_t	expires;	/* Time after which cookie becomes expired */
+	int	version;	/* Which state management specification conforms to */
+	int	secure;		/* secure means should be used for transfer if set */
+	int	discard;	/* Should be kept in memory _only_ */
+
+	time_t	last_access;	/* last time cookie was sent */
+
+	Cookie	*previous;	/* Pointer to last in linked list */
+	Cookie 	*next;		/* Pointer to next in linked list */
+};
+
+/* Linked list of domains that contain cookies.  It is VITAL that these remain
+ * SORTED by domain name (strcmp order) otherwise you'll notice that cookies
+ * aren't found when they should be.
+ */
+typedef struct _CookieDomain {
+	char	*domain;		/* Domain name cookie applies to */
+	Cookie	*cookie;		/* Linked list of cookies */
+	int	cookies;		/* Number of cookies in list */
+	struct _CookieDomain *previous;	/* Pointer to last in linked list */
+	struct _CookieDomain *next;	/* Pointer to next in linked list */
+} CookieDomain;
+
+
+/* Global definitions */
+static CookieDomain *cookie_domain_root;
+Cookie *cookie_queue_root;
+static int total_cookies = 0, unread_cookies = 0;
+
+
+typedef enum {
+        cookiedomain_INVALID,
+        cookiedomain_VALID,
+        cookiedomain_ADD_DOT
+} cookiedomain_result;
+
+
+#ifdef TRACE
+#define USE_SYSLOG
+
+#ifdef USE_SYSLOG
+#include "<syslog$dir>.C-veneer.h.syslog"
+#endif
+#include <stdarg.h>
+#define DEBUG_FILENAME  "RAM:$.HTTPCookie"
+static void cookie_debug(const char *format, ...)
+{
+	#ifdef TRACE
+	if (getenv("NoTrace$Cookie")) return; else {
+		va_list ap;
+		#ifdef USE_SYSLOG
+		static char buffer[1024];
+		va_start(ap, format);
+		vsprintf(buffer, format, ap);
+		va_end(ap);
+		(void) xsyslog_logmessage("HTTPCookie", buffer, 100);
+		#else
+		FILE *fp = fopen(DEBUG_FILENAME, "a");
+
+		if (fp != 0) {
+			va_start(ap, format);
+			(void) vfprintf(fp, format, ap);
+			va_end(ap);
+			fclose(fp);
+		}
+		#endif
+	}
+	#else
+	(void) format;
+	#endif
+}
+#endif
+
+
+/* Reverses a string.  The behaviour of this function is undefined
+ * if "start" and "end" are not pointers into the same string on entry.
+ */
+static void rev_string(char *start, char *end)
+{
+	while (start < end) {
+		char s = *start;
+		char e = *end;
+		*start++ = e;
+		*end-- = s;
+	}
+}
+
+/* Function to reverse the domain address a.b.c.d to d.c.b.a
+ *
+ *  StB: This version doesn't need to claim any RMA in order to perform
+ *  this in situ domain reversal operation.  Furthermore, it avoids
+ *  multiple copy and length finding operations.  Plus, it is simple
+ *  to understand :-)
+ *
+ *  Basically, the string is first byte-reversed to get the domain
+ *  components into the correct order, then each domain component
+ *  is byte-reversed to re-order the letters back into their
+ *  original order.
+ *
+ *  This routine's behaviour does not involve any undefined behaviour
+ *  under any circumstances.  It never generates a pointer which lies
+ *  outside the string bounds.
+ */
+static char *reverse_domain(char *const domain)
+{
+	char *lastdot = NULL, *dot = domain;
+
+	if (*domain == '\0') return domain;
+	rev_string(domain, strchr(domain, '\0') - 1);
+
+	while (*dot) {
+		if (*dot == '.') {
+			if (lastdot && lastdot != dot) rev_string(lastdot, dot-1);
+			lastdot = ++dot;
+		}
+		else {
+			if (lastdot == NULL) lastdot = dot;
+			++dot;
+		}
+	}
+
+	rev_string(lastdot, dot-1);
+	return domain;
+}
+
+/* This function delinks a cookie from a list of cookies and sorts out
+ * all the double-linking fields.  If the item was the at the head of
+ * the list, the head is modified to point to the next item (or set to
+ * NULL if the list is now empty
+ */
+static void cookie_unlink_cookie(Cookie **head, Cookie *which)
+{
+	if (which->next) {
+		which->next->previous = which->previous;
+	}
+	if (which->previous) {
+		which->previous->next = which->next;
+	}
+	if (*head == which) {
+		*head = which->next;
+	}
+}
+
+/* As cookie_unlink_cookie, but works with domains instead of cookies */
+static void cookie_unlink_cookie_domain(CookieDomain **head, CookieDomain *which)
+{
+	if (which->next) {
+		which->next->previous = which->previous;
+	}
+	if (which->previous) {
+		which->previous->next = which->next;
+	}
+	if (*head == which) {
+		*head = which->next;
+	}
+}
+
+
+/* Function to destroy a cookie and free up all the memory */
+static void destroy_cookie (Cookie *cookie)
+{
+	if (cookie->domain) free(cookie->domain);
+	if (cookie->path) free(cookie->path);
+	if (cookie->name) free(cookie->name);
+	if (cookie->value) free(cookie->value);
+	free(cookie);
+	/* Reduce the total number of cookies by one */
+	total_cookies -= 1;
+}
+
+
+/* Function to add a cookie to the pending queue */
+static void add_cookie_to_queue(Cookie *cookie)
+{
+        int count = 0;
+        Cookie *list;
+
+	/* Enforce an upper limit on the number of cookies that may be held in
+	 * the pending queue
+	 */
+	if (cookie_queue_root != NULL) {
+		for (list=cookie_queue_root; list->next; list=list->next) ++count;
+		if (count > MAX_COOKIES_IN_QUEUE) {
+                        cookie_unlink_cookie(&list, list->next);
+		        destroy_cookie(list->next);
+		}
+	}
+
+	/* Set to head of list */
+	cookie->previous = NULL;
+	cookie->next = cookie_queue_root;
+	cookie_queue_root->previous = cookie;
+	cookie_queue_root = cookie;
+	/* Set bit 16 in URL status flag to indicate new cookie */
+	/* Increase the number of unread cookies by one */
+	unread_cookies += 1;
+}
+
+
+/* Function to remove a cookie from the pending queue */
+static void remove_cookie_from_queue(Cookie *cookie)
+{
+	#ifdef TRACE
+	cookie_debug("Entering remove_cookie_from_queue\n");
+	cookie_debug("Last access is currently %s", ctime(&cookie->last_access));
+	#endif
+
+	unread_cookies --;
+	cookie_unlink_cookie(&cookie_queue_root, cookie);
+
+	#ifdef TRACE
+	cookie_debug("Leaving remove_cookie_from_queue\n");
+	#endif
+}
+
+/* Function to return if a cookie domain change is allowed by that domain */
+/* This function performs a domain-match comparison (RFC2109) */
+static cookiedomain_result check_domain_valid(char *host, char *target)
+{
+	const int target_len = strlen(target);
+
+	#ifdef TRACE
+	cookie_debug("Checking %s is valid in domain %s\n", target, host);
+	#endif
+
+	if (strcmp(host, target) == 0) {
+		return cookiedomain_VALID;
+	}
+
+	if (strcmp(host, NULL_HOST) == 0) {
+		return cookiedomain_VALID;
+	}
+
+	/* New domain must start with a dot, ie end in dot as stored in reverse */
+	if (target[target_len-1] != '.') {
+	        #if 0
+	        /* undeffing this will give you a module that passed more of the test suite
+	         * but that introduces a serious security risk in the module.  Do not include
+	         * this section is release code.  RFC2109, section 4.3.2
+	         */
+	        if (Strncmp_ci(target, host, target_len-2) == 0 && strchr(target+1, '.') != NULL) {
+	                return cookiedomain_ADD_DOT;
+	        }
+	        #endif
+		#ifdef TRACE
+		cookie_debug("Target does not end in a '.' so failing!\n");
+		#endif
+		return cookiedomain_INVALID;
+	}
+	/* Must be embedded dot in new domain */
+	else if (strchr(target+1, '.') == target+target_len-1) {
+		#ifdef TRACE
+		cookie_debug("Does not have an embedded '.' so failing!\n");
+		#endif
+		return cookiedomain_INVALID;
+	}
+	/* Check new domain is subset of old */
+	else if (!strstr(host, target)) {
+		#ifdef TRACE
+		cookie_debug("Failed due to not substring!\n");
+		#endif
+		return cookiedomain_INVALID;
+	}
+	/* Passed all checks, return success response */
+	else {
+		#ifdef TRACE
+		cookie_debug("Success!\n");
+		#endif
+		return cookiedomain_VALID;
+	}
+}
+
+/* Function to return if a cookie path change is allowed by that domain */
+static int check_path_valid(char *path, char *target)
+{
+	#ifdef TRACE
+	cookie_debug("Checking path %s is valid in %s\n", target,path);
+	#endif
+
+	while (*target == '/') ++target;
+	while (*path == '/') ++path;
+
+	if (strcmp(path, target) == 0) return (TRUE);
+	if (strcmp(path, NULL_PATH) == 0) return (TRUE);
+
+	/* Only return true if new path is a subset of request path */
+	if (strstr(path, target) != NULL) {
+		#ifdef TRACE
+		cookie_debug("It is valid\n");
+		#endif
+		return TRUE;
+	}
+	else {
+		#ifdef TRACE
+		cookie_debug("It is not valid\n");
+		#endif
+		return FALSE;
+	}
+}
+
+/* Function to calculate a new expiry time for a cookie */
+/* The delay is an integer given in seconds */
+static void calculate_expiry_date(Cookie *cookie, time_t delay)
+{
+	/* Get number of secs elapsed since 1/1/70, then add delay */
+	cookie->expires = time(NULL) + delay;
+}
+
+static int cookie_looks_like_day_name(const char *start, const char *term)
+{
+        if ((term - start) < 3) return 0;
+
+        while (start < term) {
+                if (!isalpha(*start) && !isspace(*start) && *start != '=') return 0;
+                ++start;
+        }
+
+	if (Strncmp_ci(term - 3, "day", 3) == 0) return 1;
+	return dates_looks_like_weekday(term - 3);
+}
+
+/* Function to read an expiry date string into memory */
+static time_t read_new_expiry_date(char *date_string)
+{
+        time_t result;
+        result = dates_string_to_date(date_string);
+	#ifdef TRACE
+	cookie_debug("Number of secs returned is %d (%s)\n", result, ctime(&result));
+	#endif
+        return result;
+}
+
+
+#ifdef TRACE
+static void write_cookies_to_debug(void)
+{
+	CookieDomain *print_domain;
+
+	cookie_debug("\nCurrent state of the cookie tree:\n");
+
+	for (print_domain = cookie_domain_root; print_domain; print_domain = print_domain->next) {
+		Cookie *print_cookie;
+
+		cookie_debug("Domain \"%s\" ...\n", print_domain->domain);
+
+		for (print_cookie = print_domain->cookie; print_cookie; print_cookie = print_cookie->next) {
+			cookie_debug("... cookie %s=%s, domain %s and path %s\n    last access at %s",
+				print_cookie->name,print_cookie->value,
+				print_cookie->domain, print_cookie->path,
+				ctime(&print_cookie->last_access));
+			/* ctime returns pointer to static storage - cannot have two parameters as ctime() */
+			cookie_debug("    expires at %s\n", ctime(&print_cookie->expires));
+		}
+	}
+
+	cookie_debug("End of cookie tree\n\n");
+}
+#endif
+
+static void write_cookies_format_1(FILE *fp)
+{
+	CookieDomain *cookie_domain;
+	Cookie *cookie;
+	time_t current_time = time(NULL);
+
+	#ifdef TRACE
+	cookie_debug("About to write file format 1\n");
+	#endif
+
+	/* Write initial header lines */
+	fprintf(fp,"# %s Cookie File\n",Module_Help);
+	fprintf(fp,"# Written on GMT %s",ctime(&current_time));
+	fprintf(fp,"Format: 1\n");
+
+	cookie_domain = cookie_domain_root;
+
+	/* For each domain... */
+	for (cookie_domain = cookie_domain_root; cookie_domain; cookie_domain = cookie_domain->next) {
+		/* ... and each cookie in that domain... */
+		for (cookie = cookie_domain->cookie; cookie; cookie = cookie->next) {
+			#ifdef TRACE
+			cookie_debug("Checking cookie %s=%s\n",cookie->name,cookie->value);
+			#endif
+			/* Check it has not been expired or it is marked 'discard' */
+			#ifndef TRACE
+			if (cookie->discard == FALSE)
+		        #endif
+			if (current_time<cookie->expires) {
+				#ifdef TRACE
+				cookie_debug("This cookie is suitable for saving.  Saving it.\n");
+				if (cookie->discard == TRUE) {
+				        cookie_debug(">> Normally discard this cookie for being per-session only\n");
+				}
+				#endif
+				/* Write the obligatory information */
+				fprintf(fp,"%s=\"%s\"; version=\"%i\"; domain=\"%s\"; path=\"%s\"",
+					cookie->name, cookie->value, cookie->version,
+					reverse_domain(cookie->domain), cookie->path);
+				/* Set the domain back to normal */
+				reverse_domain(cookie->domain);
+				/* "Secure" is best on the same line */
+				if (cookie->secure == TRUE) fprintf(fp,"; Secure");
+				if (cookie->port_list) fprintf(fp,"; Ports=%s",cookie->port_list);
+				/* Fill in the optional info and internal details on next line */
+				if (cookie->comment) fprintf(fp,"; comment=\"%s\"",cookie->comment);
+				fprintf(fp,"\nExpires=%s", ctime(&(cookie->expires)));
+				fprintf(fp,"LastAccess=%s\n", ctime(&(cookie->last_access)));
+			}
+		}
+	}
+}
+
+static void write_cookies_format_2(FILE *fp)
+{
+	CookieDomain *cookie_domain;
+	Cookie *cookie;
+	time_t current_time = time(NULL);
+
+	#ifdef TRACE
+	cookie_debug("About to write file format 2\n");
+	#endif
+
+	/* Write initial header lines */
+	fprintf(fp,"# %s Cookie File\n",Module_Help);
+	fprintf(fp,"# Written on GMT %s",ctime(&current_time));
+	fprintf(fp,"Format: 2\n");
+
+	/* For each domain... */
+	for (cookie_domain = cookie_domain_root; cookie_domain; cookie_domain = cookie_domain->next) {
+		/* ... and each cookie in that domain... */
+		for (cookie = cookie_domain->cookie; cookie; cookie = cookie->next) {
+			#ifdef TRACE
+			cookie_debug("Checking cookie %s=%s\n",cookie->name,cookie->value);
+			#endif
+
+			/* Check it has not been expired or it is marked 'discard' */
+			#ifndef TRACE
+			if (cookie->discard == FALSE)
+		        #endif
+			if (current_time<cookie->expires && cookie->discard == FALSE) {
+				#ifdef TRACE
+				cookie_debug("This cookie is suitable for saving.  Saving it.\n");
+				if (cookie->discard == TRUE) {
+				        cookie_debug(">> Normally discard this cookie for being per-session only\n");
+				}
+				#endif
+				/* Write any additional info on a cookie provided by server */
+				if (cookie->comment) {
+					fprintf(fp,"# Comment on next cookie: %s\n",cookie->comment);
+				}
+				/* Format for each cookie is as follows: */
+				/* <name>\t<value>\t<domain>:<portlist>\t<path>\t<expires>\t<last access>\n */
+				reverse_domain(cookie->domain);
+				fprintf(fp,"%s\t%s\t%s:", cookie->name, cookie->value, cookie->domain);
+				/* Set the domain back to normal */
+				reverse_domain(cookie->domain);
+				/* If there is a port list write it, else write -1 */
+				if (cookie->port_list != NULL) {
+					fprintf(fp,"%s",cookie->port_list);
+				}
+				else {
+					fprintf(fp,"-1");
+				}
+				/* Write in the path */
+				fprintf(fp,"\t%s\t",cookie->path);
+				/* If secure write 'S' else write 's' */
+				fputc(cookie->secure == TRUE ? 'S' : 's', fp);
+				/* Finally write the expiry and last access times */
+				fprintf(fp,"\t%x\t%x\n",(int)cookie->expires,(int)cookie->last_access);
+				#ifdef TRACE
+				cookie_debug("Expiry date being written to file (hex): %i\n",cookie->expires);
+				cookie_debug("Expiry date being written to file: %s\n",ctime(&cookie->expires));
+				#endif
+			}
+		}
+	}
+}
+
+/* Function called to write cookie file - chooses a file format and writes the file*/
+static void write_cookies_to_file(void)
+{
+	FILE *fp;
+
+	#ifdef TRACE
+	cookie_debug("About to write cookies out to external database file\n");
+	write_cookies_to_debug();
+	#endif
+
+	if ((fp = config_open_cookies_for_write()) == NULL) {
+		#ifdef TRACE
+		cookie_debug("Failed to open cookie file for writing\n");
+		#endif
+	}
+
+	if (fp != NULL) {
+	        const char *const env = getenv(COOKIE_FILE_FORMAT_ENV);
+		if (env != NULL && !strcmp(env, "1")) {
+			write_cookies_format_1(fp);
+		}
+		else {
+			write_cookies_format_2(fp);
+		}
+
+		fclose(fp);
+	}
+}
+
+static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
+{
+	size_t pointer = 0, max_size = 0;
+	CookieDomain *cookie_domain;
+	Cookie *cookie;
+	const time_t current_time = time(NULL);
+	char *buffer = NULL;
+
+	/* StB: This function is now far more efficient.  It avoids allocating huge buffers of RMA unless
+	 * it actually finds that it needs one at all.  It does this by setting the buffer pointer to NULL
+	 * initially and then relying on the buffer extender to allocate memory as required.  The extender
+	 * now uses realloc, so it can take advantage of the property "realloc(NULL,size) == malloc(size)".
+	 */
+
+	for (cookie_domain = cookie_domain_root; cookie_domain; cookie_domain = cookie_domain->next) {
+		/* Check the domain for this cookie domain; they are sorted; quit loop if we know
+		 * that we've definitely not got any more matching domains to save time
+		 */
+		if (strcmp(cookie_domain->domain, domain) > 0) break;
+		/* Does the domain match? No? Continue next case of loop */
+		if (strstr(domain, cookie_domain->domain) == NULL) continue;
+
+		for (cookie = cookie_domain->cookie; cookie; cookie = cookie->next) {
+			size_t size;
+			/* These are stored in reverse-strcmp path order, so we can apply the
+			 * same optimisations as for domains to avoid wasting time.
+			 */
+			if (strcmp(path, cookie->path) < 0) break;
+			/* Does the path match?  No?  Continue next case of loop */
+			if (strstr(path, cookie->path) == NULL) continue;
+
+			/* Only send if the cookie has not already expired */
+			if (cookie->expires < current_time) continue;
+
+			size = strlen(cookie->name) + strlen(cookie->value) + sizeof("; = ");
+			if (cookie->version > 0) {
+				size += sizeof("; $Version=XXXXXXXX; $Domain= ; $Path= ;");
+				size += cookie->domain != NULL ? strlen(cookie->domain) : 0;
+				size += cookie->path != NULL ? strlen(cookie->path) : 0;
+			}
+
+			if ((pointer + size) >= max_size) {
+				/* Adding this entry would cause a buffer overflow.
+				 * Attempt to extend the buffer (or allocate it on the
+				 * first time through!)
+				 */
+				char *new_buffer;
+				max_size += MAX_COOKIE_SIZE;
+				new_buffer = module_realloc(buffer, max_size);
+				if (new_buffer == NULL) {
+					if (buffer) {
+						/* Discard everything */
+						free(buffer);
+						buffer = NULL;
+					}
+					return buffer;
+				}
+				buffer = new_buffer;
+			}
+
+			/* Write the cookie into the output buffer */
+			if (cookie->version > 0) {
+				pointer += sprintf(buffer + pointer, "$Version=%i; %s=%s",
+					cookie->version,cookie->name,cookie->value);
+				if (strcmp(cookie->domain, domain) != 0) {
+					/* Copying the domain and then reversing it avoids reversing it twice */
+					size_t tmp;
+					pointer += sprintf(buffer+pointer,"; $Domain=");
+					tmp = sprintf(buffer+pointer, "%s", cookie->domain);
+					reverse_domain(buffer+pointer);
+					pointer += tmp;
+				}
+				if (strcmp(cookie->path, path) != 0) {
+					pointer += sprintf(buffer+pointer,"; $Path=%s",cookie->path);
+				}
+				cookie->last_access = current_time;
+			}
+			else {
+				pointer += sprintf(buffer+pointer,"%s=%s",cookie->name,cookie->value);
+			}
+			#ifdef TRACE
+			cookie_debug("Adding cookie `%s'\n", buffer);
+			#endif
+			http_add_header(&ses->headers, "Cookie", buffer);
+			free(buffer);
+			buffer = NULL;
+			pointer = 0;
+			max_size = 0;
+			cookie->last_access = current_time;
+		}
+	}
+
+	if (buffer) {
+	        free(buffer);
+	        buffer = NULL;
+	}
+	return buffer;
+}
+
+static char *cookie_process_path(const char *uri)
+{
+        const size_t length = strlen(uri);
+        char *result;
+
+        result = malloc(length + 2);
+        if (result == NULL) return result;
+        *result = '/';
+        memcpy(result + 1, uri, length + 1);
+        return result;
+}
+
+/* Function to return a buffer containing any cookies, if any, to a given domain/path */
+char *send_cookies_to_domain (Session *s)
+{
+	char *domain, *path;
+
+	domain = Strdup(s->endhost ? s->endhost : s->host);
+	path = cookie_process_path(s->url);
+
+	#if 0
+        /* Again, RFC2109 forbids this */
+	/* Strip the file off the end of the path */
+	if (path) {
+		char *find_end = strchr(path, '\0'), *init = path;
+		while (*find_end != '/' && find_end != path) find_end--;
+		if (find_end != init) *(find_end+1) = '\0';
+	}
+	#endif
+
+	/* Reverse the domain name for comparisons */
+	if (domain) {
+		reverse_domain(domain);
+	}
+
+	#ifdef TRACE
+	cookie_debug("Entering send_cookies_to_domain...domain %s path `%s'\n", domain, path);
+	#endif
+
+	(void) cookie_look_for_cookies(domain, path, s);
+
+	#ifdef TRACE
+	cookie_debug("Leaving send_cookies_to_domain\n");
+	#endif
+
+	if (domain) free(domain);
+	if (path) free(path);
+
+	return NULL;
+}
+/* Function takes name of a domain and returns a pointer to it in the domain list */
+static CookieDomain *find_domain(char *find)
+{
+	CookieDomain *domain;
+
+	for (domain = cookie_domain_root; domain; domain = domain->next) {
+		const int compar = strcmp(find, domain->domain);
+		#ifdef TRACE
+		cookie_debug("  find_domain:  strcmp(%s, %s)\n", find, domain->domain);
+		#endif
+		if (compar == 0) return domain;
+		if (compar < 0) break;
+	}
+
+	return NULL;
+}
+
+/* Function to remove a cookie from the cookie tree stored in memory */
+/* StB: 15/10/97: This function no longer aborts if passed null current_cookie or
+ * the domain cannot be found.
+ */
+static void remove_cookie_from_list(Cookie *current_cookie, int remove_domain)
+{
+	#ifdef TRACE
+	cookie_debug("Removing cookie (handle %p) from the list.\n", current_cookie);
+	#endif
+
+	if (!current_cookie) return;
+
+	/* Unlink cookie from list */
+	if (current_cookie->previous) {
+		/* If in the middle of the list... optimise */
+		Cookie *fake_cookie = NULL;
+		#ifdef TRACE
+		cookie_debug("Taking it out of the middle of the list.\n");
+		#endif
+		cookie_unlink_cookie(&fake_cookie, current_cookie);
+	}
+	else {
+		/* Otherwise deal with head of list */
+		CookieDomain *current_domain = find_domain(current_cookie->domain);
+
+		#ifdef TRACE
+		if (!current_domain) cookie_debug("Failed to find cookie's domain!!!\n");
+		#endif
+		if (current_domain == NULL) return;
+
+		/* Reduce the number of cookies in that domain by one and remove the cookie */
+		current_domain->cookies -= 1;
+		cookie_unlink_cookie(&current_domain->cookie, current_cookie);
+
+		if (current_domain->cookie == NULL && remove_domain == DOMAIN_TOO) {
+			/* Domain has no cookies and we were asked to delete empty domains */
+			cookie_unlink_cookie_domain(&cookie_domain_root, current_domain);
+			free(current_domain->domain);
+			free(current_domain);
+		}
+	}
+}
+
+/* Function to remove least used cookie from linked list */
+static void expire_cookies(CookieDomain *cookie_domain)
+{
+	Cookie *cookie, *least_used;
+
+	least_used = cookie_domain->cookie;
+
+	for (cookie = least_used; cookie; cookie = cookie->next) {
+		if (cookie->last_access < least_used->last_access) {
+			least_used = cookie;
+		}
+	}
+
+	#ifdef TRACE
+	cookie_debug("expire_cookies: Domain %s, cookie %s\n",cookie_domain->domain, least_used->domain);
+	#endif
+
+	remove_cookie_from_list(least_used, NOT_DOMAIN);
+	destroy_cookie(least_used);
+}
+
+/* Function to create a new cookie with default settings, and return a pointer to it */
+static Cookie *create_new_cookie(char *host, char *path, char *name,char *value)
+{
+	/* This calloc is unnecessary - malloc will do provided you are initialising
+	 * all the fields in the Cookie structure.  At the moment (15/10/97) this IS
+	 * happening
+	 */
+	Cookie *new_cookie = calloc(1, sizeof(Cookie));
+
+	if (new_cookie == NULL) {
+		#ifdef TRACE
+		cookie_debug("Failed to create new Cookie object - calloc failed\n");
+		#endif
+		return NULL;
+	}
+
+	#ifdef TRACE
+	cookie_debug("New cookie `%s'  `%s'  `%s'  `%s'\n", name, value, host, path);
+	#endif
+
+	/* Initialise all the fields.  I (StB) just set all the fields without checking
+	 * for errors since if the memory allocation fails, you just get a NULL pointer
+	 * back from Strdup, which is safe.  If memory allocation fails, we are probably
+	 * going to be in serious trouble anyway, and it will be a rare condition, hence
+	 * the pointers can all be checked at the end after everything has been safely
+	 * initialised to avoid any nasty "surprises" */
+	new_cookie->name = Strdup(name);
+	new_cookie->value = Strdup(value);
+	new_cookie->domain = Strdup(host);
+	new_cookie->path = Strdup(path);
+	new_cookie->port_list = NULL;
+	new_cookie->comment = NULL;
+	calculate_expiry_date(new_cookie, DEFAULT_EXPIRY);
+	new_cookie->version = 0;
+	new_cookie->secure = FALSE;
+	new_cookie->discard = TRUE;
+	new_cookie->previous = NULL;
+	new_cookie->next = NULL;
+	new_cookie->last_access = time(NULL);
+
+	if (new_cookie->name == NULL || new_cookie->value == NULL ||
+		new_cookie->domain == NULL || new_cookie->path == NULL) {
+		#ifdef TRACE
+		cookie_debug("Failed to create the new cookie (due to malloc failure)\n");
+		#endif
+		destroy_cookie(new_cookie);
+		return NULL;
+	}
+
+	path = strrchr(new_cookie->path, '/');
+	if (path != NULL) {
+	        /* RFC2109.  Section 4.3.1 */
+	        *path = '\0';
+	}
+
+
+	#ifdef TRACE
+	cookie_debug("Just created a new cookie (address %p)\n", new_cookie);
+	#endif
+	return new_cookie;
+}
+
+/* This function removes the least used cookie from the most used domain */
+static void cookie_clean(void)
+{
+	CookieDomain *find_domain, *best_domain = cookie_domain_root;
+
+	for (find_domain = cookie_domain_root; find_domain; find_domain = find_domain->next) {
+		if (find_domain->cookies > best_domain->cookies) {
+			best_domain = find_domain;
+		}
+	}
+
+	if (best_domain == NULL || best_domain->cookies == 0) {
+		/* Obviously something has gone majorly wrong - attempt to compensate
+		 * May help module stability
+		 */
+		total_cookies = 0;
+		return;
+	}
+
+	/* Expire the oldest cookie */
+	expire_cookies(best_domain);
+}
+
+static Cookie *cookie_match_name_in_domain(CookieDomain *domain, const char *name)
+{
+	Cookie *cookie;
+
+	for (cookie = domain->cookie; cookie; cookie = cookie->next) {
+		if (strcmp(cookie->name, name) == 0) return cookie;
+	}
+
+	return NULL;
+}
+
+/* Locate the cookie domain object that will hold cookies for the given "domain".  These
+ * are sorted in strcmp order, hence the insertion point can be tracked easily whilst
+ * looking for an existing domain object.  If the domain does not exist, it is created
+ * and inserted into the domain list and initialised to be empty.  If the domain did already
+ * exists, no other action is taken.  A pointer to the cookie domain object is returned
+ * by this function, or NULL if it couldn't be created (implying it wasn't found either).
+ */
+static CookieDomain *cookie_locate_domain_with_create(CookieDomain **head, const char *domain)
+{
+	CookieDomain *insertion_point = NULL;
+	CookieDomain *find_domain;
+
+	for (find_domain = *head; find_domain; find_domain = find_domain->next) {
+		const int compar = strcmp(find_domain->domain, domain);
+
+		if (compar < 0) {
+			insertion_point = find_domain;
+			continue;
+		}
+		if (compar == 0) {
+			insertion_point = find_domain;
+		}
+		else {
+			find_domain = NULL;
+		}
+		break;
+	}
+
+	if (find_domain == NULL) {
+		/* We didn't find the domain we were looking for.  Create a new domain */
+		#ifdef TRACE
+		cookie_debug("locate_domain_with_create: did not find the domain `%s'\n", domain);
+		#endif
+
+		find_domain = malloc(sizeof(CookieDomain));
+
+		if (find_domain == NULL) return find_domain;
+		find_domain->domain = Strdup(domain);
+		if (find_domain->domain == NULL) {
+			free(find_domain);
+			return NULL;
+		}
+		find_domain->cookie = NULL;
+		find_domain->cookies = 0;
+
+		#ifdef TRACE
+		cookie_debug("Inserting new domain (%p) after %p\n", find_domain, insertion_point);
+		#endif
+
+		if (insertion_point == NULL) {
+			/* Insert at the head of the list */
+			find_domain->previous = NULL;
+			find_domain->next = *head;
+			*head = find_domain;
+		}
+		else {
+			/* Insert after insertion point */
+			find_domain->next = insertion_point->next;
+			if (insertion_point->next != NULL) {
+				insertion_point->next->previous = find_domain;
+			}
+			find_domain->previous = insertion_point;
+			insertion_point->next = find_domain;
+		}
+	}
+
+	return find_domain;
+}
+
+/* This function links a cookie object into the list of cookies for the given
+ * cookie domain object.  This list is stored in path reverse strcmp order so as
+ * to ensure that when the cookies are extracted for addition to an HTTP request,
+ * they automagically come out in the correct order as per RFC2069.  It destroys
+ * any duplicates that it finds in favour of the new cookie.
+ */
+static void cookie_link_to_domain(CookieDomain *head, Cookie *cookie)
+{
+	Cookie *insertion_point;
+	const char *const path = cookie->path;
+
+	while ((insertion_point = cookie_match_name_in_domain(head, cookie->name)) != NULL) {
+		#ifdef TRACE
+		cookie_debug("Deleting duplicate (%p) domain=%s, name=%s\n",
+			insertion_point, insertion_point->domain, insertion_point->name);
+		#endif
+		remove_cookie_from_list(insertion_point, NOT_DOMAIN);
+		destroy_cookie(insertion_point);
+	}
+
+	head->cookies ++;
+	if (head->cookies >= MAX_COOKIES_PER_DOMAIN) {
+		expire_cookies(head);
+	}
+
+	if (head->cookie == NULL || strcmp(head->cookie->path, path) > 0) {
+		/* Simple case - either is the only cookie or it needs to go first */
+		#ifdef TRACE
+		cookie_debug("Inserting cookie at head of domain list\n");
+		#endif
+		cookie->next = head->cookie;
+		head->cookie = cookie;
+		cookie->previous = NULL;
+		if (cookie->next) {
+			cookie->next->previous = cookie;
+		}
+		return;
+	}
+
+	#ifdef TRACE
+	cookie_debug("Not at the head of the domain list ... searching for insertion point ...\n");
+	#endif
+	for (insertion_point = head->cookie; insertion_point->next; insertion_point = insertion_point->next) {
+		if (strcmp(insertion_point->next->path, path) >= 0) break;
+	}
+
+	#ifdef TRACE
+	cookie_debug("Inserting after cookie `%s=%s'\n", insertion_point->name, insertion_point->value);
+	#endif
+
+	cookie->previous = insertion_point;
+	cookie->next = insertion_point->next;
+	insertion_point->next = cookie;
+	if (cookie->next) {
+		cookie->next->previous = cookie;
+	}
+}
+
+/* Function to insert a cookie into the cookie database.
+ *
+ * Creates a new domain in linked list of domains if necessary.  This function uses
+ * several auxiliary functions now instead of having it all in the same function(!)
+ * It also takes care of duplicate suppression, and actually guarantees that the
+ * cookie data structures are kept in a consistent state at function exit.
+ *
+ */
+static void insert_cookie_into_list (Cookie *cookie)
+{
+	CookieDomain *find_domain;
+
+	/* Make sure the function does nothing if a NULL pointer is passed in */
+	if (cookie == NULL) {
+		#ifdef TRACE
+		cookie_debug("insert_cookie_into_list was passed a NULL pointer\n");
+		#endif
+		return;
+	}
+
+	#ifdef TRACE
+	cookie_debug("About to insert a cookie into the tree\n");
+	write_cookies_to_debug();
+	#endif
+
+	/* Let's first check if we've reached the cookie limit and remove an old cookie if we have */
+	if (total_cookies >= MAX_COOKIES) {
+		#ifdef TRACE
+		cookie_debug("Expiring oldest cookie - too many in memory currently\n");
+		#endif
+		cookie_clean();
+	}
+
+	/* Find the cookie domain - create it if necessary */
+	find_domain = cookie_locate_domain_with_create(&cookie_domain_root, cookie->domain);
+	if (find_domain == NULL) {
+		#ifdef TRACE
+		cookie_debug("insert_cookie_into_list failed to locate/create the CookieDomain for %s\n",
+			cookie->domain);
+		#endif
+		return;
+	}
+
+	#ifdef TRACE
+	cookie_debug("Linking new cookie into its domain\n");
+	#endif
+	total_cookies += 1;
+	cookie_link_to_domain(find_domain, cookie);
+
+	#ifdef TRACE
+	cookie_debug("After insertion of new cookie - dump of cookie tree\n");
+	write_cookies_to_debug();
+	#endif
+}
+
+/* Function to create a new cookie, insert it into the list, then return a pointer to it */
+static Cookie *add_new_cookie(char *host, char *path, char *string, char *value)
+{
+	Cookie *cookie;
+
+	if ((cookie = create_new_cookie(host,path,string,value)) != NULL) {
+		#ifdef TRACE
+		cookie_debug("Adding new cookie to the queue\n");
+		#endif
+		add_cookie_to_queue(cookie);
+	}
+
+	return cookie;
+}
+
+static Cookie *cookie_enum_find_next_from_domain_root(Cookie *cookie)
+{
+	CookieDomain *find_cookie_domain = cookie_domain_root;
+	Cookie *find_cookie = NULL;
+
+	if (cookie != NULL) {
+		/* Move on to next cookie */
+		find_cookie = cookie->next;
+		if (find_cookie == NULL) {
+			/* We have exhausted the cookies for this domain.  We need to find the next domain
+			 * and then pretend as if this was the first call, but starting from further along
+			 * the domain list.
+			 */
+			CookieDomain *find_domain;
+
+			/* It is efficient to walk back along the domain cookies until we find the head
+			 * and then scan down the domain list checking to see if we get a match with the first
+			 * cookie in the list.  To completely re-iterate other everything is not efficient.
+			 */
+			while (cookie->previous) {
+				cookie = cookie->previous;
+			}
+			for (find_domain = cookie_domain_root; find_domain; find_domain = find_domain->next) {
+				if (find_domain->cookie == cookie) {
+					find_cookie_domain = find_domain->next;
+					cookie = NULL;
+					break;
+				}
+			}
+		}
+	}
+
+	if (cookie == NULL) {
+		/* This was the initial call OR we exhausted the previous domain */
+		/* find_cookie_domain has already been initialised ready for this search */
+		find_cookie = NULL;
+		for (; find_cookie_domain; find_cookie_domain = find_cookie_domain->next) {
+			find_cookie = find_cookie_domain->cookie;
+			if (find_cookie != NULL) break;
+		}
+	}
+
+	return find_cookie;
+}
+
+
+/* Far simpler - this is a simple list of cookies that we can walk down */
+static Cookie *cookie_enum_find_next_from_queue_root(Cookie *cookie)
+{
+	Cookie *find_cookie = cookie_queue_root;
+
+	if (cookie == NULL) {
+		return cookie_queue_root;
+	}
+
+	while (find_cookie && find_cookie != cookie) {
+		find_cookie = find_cookie->next;
+	}
+
+	if (find_cookie == cookie) find_cookie = find_cookie->next;
+
+	return find_cookie;
+}
+
+/* Function to pass to browser details of each cookie			*/
+/* On entry:								*/
+/* R0 = flags (bit 0 set means cookies in list, unset means in queue)	*/
+/* R1 = unique cookie handle, 0 for initial call			*/
+/* On exit:								*/
+/* R0 = flags (bit 0 set means secure channel should be used)		*/
+/* R1 = unique cookie handle, 0 for no more cookies			*/
+/* R2 = total number of cookies created					*/
+/* R3 = number of cookies not read					*/
+/* R4 = pointer to domain name string					*/
+/* R5 = pointer to NAME string						*/
+/* R6 = pointer to VALUE string						*/
+/* R7 = pointer to path string						*/
+_kernel_oserror *enumerate_cookies(_kernel_swi_regs *r)
+{
+	static char *enum_name = NULL;
+	int flags		= r->r[0];
+	Cookie *cookie	= (Cookie *)r->r[1];
+	Cookie *find_cookie;
+
+	#ifdef TRACE
+	cookie_debug("enumerate_cookies SWI handler\nFlag word passed in %d\n", flags);
+	#endif
+
+	if (enum_name) free(enum_name);
+	enum_name = NULL;
+
+	if (flags & enumerate_cookies_DOMAIN_LIST) {
+		find_cookie = cookie_enum_find_next_from_domain_root(cookie);
+	}
+	else {
+		find_cookie = cookie_enum_find_next_from_queue_root(cookie);
+	}
+
+	/* Set common return values including the next cookie handle to be passed back */
+	r->r[0] = 0; /* flags */
+	r->r[1] = (int) find_cookie;
+	r->r[2] = total_cookies;
+	r->r[3] = unread_cookies;
+
+	/* If there is a new cookie to be passed back... */
+	if (find_cookie) {
+		if (find_cookie->secure == TRUE) {
+			r->r[0] |= enumerate_cookies_SECURE_COOKIE;
+		}
+
+		/* Fill in rest of the registers */
+		enum_name = Strdup(find_cookie->domain);
+		if (enum_name) reverse_domain(enum_name);
+
+		r->r[4] = (int)enum_name;
+		r->r[5] = (int)find_cookie->name;
+		r->r[6] = (int)find_cookie->value;
+		r->r[7] = (int)find_cookie->path;
+		/* Reduce unread cookies by one if entry flag bit 0 is set */
+		/* StB: the comment on the previous line had no code associated
+		 * with it previously for some unknown reason
+		 */
+	}
+	else {
+		r->r[4] = NULL;
+		r->r[5] = NULL;
+		r->r[6] = NULL;
+		r->r[7] = NULL;
+	}
+
+	return NULL;
+}
+
+/* Function to recieve from the browser whether a cookie is to be accepted or rejected	*/
+/* On entry:										*/
+/* R0 - flags, bit zero set for accept or unset for reject				*/
+/* R1 - session, forget what this is for						*/
+/* R2 - cookie handle									*/
+/* No exit defined									*/
+_kernel_oserror *consume_cookie(_kernel_swi_regs *r)
+{
+	const int flags = r->r[0];
+	Cookie *cookie = (Cookie *)r->r[2];
+	Cookie *find_cookie;
+
+	#ifdef TRACE
+	cookie_debug("Entering consume_cookie\n");
+	#endif
+
+	if (cookie == NULL) {
+		/* Bad parameter - discard silently */
+		return NULL;
+	}
+
+	for (find_cookie = cookie_queue_root; find_cookie; find_cookie = find_cookie->next) {
+		if (find_cookie == cookie) break;
+	}
+
+	/* If the cookie exists in the queue... */
+	if (find_cookie) {
+		remove_cookie_from_queue(find_cookie);
+		if (flags & consume_cookies_ACCEPT) {
+			/* Insert it into the data structure in memory */
+			insert_cookie_into_list (find_cookie);
+			write_cookies_to_file();
+		}
+		else {
+			/* Otherwise destroy it */
+			destroy_cookie(find_cookie);
+		}
+	}
+
+	#ifdef TRACE
+	cookie_debug("Leaving consume_cookie\n");
+	#endif
+
+	return NULL;
+}
+
+/* Function to add a cookie via a SWI call, eg from Javascript				*/
+/* On entry:										*/
+/* R0 - flags, bit 0 set for secure							*/
+/* R1 - name										*/
+/* R2 - value										*/
+/* R3 - expires										*/
+/* R4 - path										*/
+/* R5 - domain										*/
+/* No exit defined									*/
+_kernel_oserror *add_cookie(_kernel_swi_regs *r)
+{
+	int flags = r->r[0];
+	char *name = (char *)r->r[1];
+	char *value = (char *)r->r[2];
+	char *expires = (char *)r->r[3];
+	char *path = (char *)r->r[4];
+	char *domain = (char *)r->r[5];
+	Cookie *new_cookie;
+
+	if ((new_cookie = create_new_cookie(domain,path,name,value)) != NULL) {
+		if (flags & enumerate_cookies_SECURE_COOKIE) new_cookie->secure = TRUE;
+		new_cookie->expires = read_new_expiry_date (expires);
+		new_cookie->last_access = time(NULL);
+		insert_cookie_into_list(new_cookie);
+		write_cookies_to_file();
+	}
+
+	return NULL;
+}
+
+/* StB: copied from ArcWeb's cookie parser.  It is far more thorough that the
+ * code in http 0.48 and earlier.  It deals with quoting, whitespace etc.
+ *
+ * "pcp" is a pointer to a char* which points at the start of the string to
+ * parse on entry, and on exit has been updated to point to the start of the
+ * attribute name, "val" is a pointer to char* into which is written a pointer
+ * to the value of this parameter or NULL if there wasn't one, "pep" is a pointer
+ * to char* into which is written the pointer to pass to cookie_get_next_arg to
+ * read the next argument and is only valid if the return value of the function
+ * is non-zero. "term" is filled in with the terminator character that was found
+ * (needed to determine when a new cookie is being read)
+ *
+ * Function returns 1 if it managed to read something, 0 if it didn't.
+ *
+ */
+static int cookie_get_next_arg(char **pcp, char **val, char **pep, char*term)
+{
+	char *cp = *pcp, *sc, *ep, *tp, *cm;
+
+	*val = 0;
+	*pep = 0;
+	if (!*pcp) return 0;
+	while (isspace(*cp) && *cp) ++cp;
+	if (!*cp) return 0; /* no more args */
+	cm = strchr(cp, ','); /* look for cookie separator */
+	sc = strchr(cp, ';');
+	if (cm) {
+		if (sc && cm>sc) cm = 0;
+		else if (cookie_looks_like_day_name(cp, cm)) {
+			/* Comma appears before ; - need to quickly check unquoted dates */
+			cm = strchr(cm+1, ',');
+		}
+		else sc = cm;
+	}
+	if (sc) *term=*sc; else *term='\0';
+	if (sc) *sc++ = 0;
+	*pep = sc;
+	ep = strchr(cp, '\0') - 1;
+	while (isspace(*ep) && *ep && ep > cp) --ep;
+	*++ep = 0; /* trailing spaces snipped (from value) */
+	if (ep == cp || strlen(cp) < 4) return 0; /* no more args - corrupt? */
+	sc = strchr(cp, '=');
+	if (!sc) {
+		if (*cp == '\"' && ep[-1] == '\"') {
+			/* strip quoted single literal */
+			++cp;
+			*--ep = 0;
+			*pcp = cp;
+		}
+		return 1;
+	}
+	*sc = 0; /* delimit it */
+	tp = sc - 1;
+	while (isspace(*tp) && *tp && tp > cp) --tp;
+	if (tp == cp) return 0; /* nothing? confused :-( */
+	if (*tp == '\"' && *cp == '\"') {
+		++cp;
+		tp[-1] = 0;
+	}
+	*pcp = cp;
+	tp = sc + 1;
+	while (*tp && isspace(*tp)) tp++;
+	if (*tp == '\"' && ep[-1] == '\"') {
+		/* value was quoted - strip quotes */
+		++tp;
+		*--ep = 0;
+	}
+	*val = tp; /* tell caller where the value is stored */
+	#ifdef TRACE
+	cookie_debug("Found an arg: `%s' ==> `%s'\n", *pcp, tp);
+	#endif
+	return 1;
+}
+
+/* This function provides a single place were a cookie can be destroyed during its
+ * creation by act_on_cookie below.  Saves on useless cope duplication everywhere
+ */
+static void act_on_cookie_giveup(Cookie **pcookie)
+{
+	Cookie *const cookie = *pcookie;
+
+	if (cookie != NULL) {
+		remove_cookie_from_queue(cookie);
+		destroy_cookie(cookie);
+		*pcookie = NULL;
+	}
+}
+
+/* Function to deal with cookie header once one is found - also called when loading
+ * a version 1 cookie file
+ */
+static void act_on_cookie(char *string, Session *s, char *host, char *path)
+{
+	static Cookie *current_cookie = NULL;
+	static char last_term = '\0';
+
+	char *value, *next;
+	char next_term;
+
+	if (s == NULL) {
+	        current_cookie = NULL;
+	        last_term = '\0';
+	        return;
+	}
+
+	#ifdef TRACE
+	cookie_debug("act_on_cookie: Now entering function...\n>> %s\n", string);
+	cookie_debug("act_on_cookie:   Checking host `%s' and path `%s'\n", host, path);
+	#endif
+	current_cookie = NULL;
+
+	for (; cookie_get_next_arg(&string, &value, &next, &next_term); string = next, last_term = next_term) {
+
+		#ifdef TRACE
+		cookie_debug("Name = %s, Value = %s\n", string, value ? value : "<NONE>");
+		#endif
+
+		/* Now fill the name/value pair into the appropriate structure */
+		/* First deal with comment field */
+		if (Strcmp_ci(string,"comment") == 0 && current_cookie) {
+			/* If there is already a comment then overwrite it */
+			if (current_cookie->comment) {
+				free(current_cookie->comment);
+			}
+			/* Set new comment, not important if it gets lost */
+			current_cookie->comment = Strdup(value);
+			if (current_cookie->comment == NULL) {
+				act_on_cookie_giveup(&current_cookie);
+			}
+		}
+		/* Deal with domain field */
+		else if (Strcmp_ci(string,"domain") == 0 && current_cookie) {
+			/* Set new domain */
+		        size_t extra = 0;
+			reverse_domain(value);
+			switch (check_domain_valid(host, value)) {
+		                case cookiedomain_ADD_DOT:
+		                        extra = 1;
+		                	/*FALLTHROUGH*/
+			        case cookiedomain_VALID:
+					/* Delete default domain */
+					if (current_cookie->domain) {
+						free(current_cookie->domain);
+					}
+					/* Write in new domain */
+					current_cookie->domain = Strdup_ext(value, extra);
+					if (current_cookie->domain == NULL) {
+						act_on_cookie_giveup(&current_cookie);
+					}
+					else if (extra != 0) {
+					        strcat(current_cookie->domain, ".");
+					}
+					break;
+				default:
+					act_on_cookie_giveup(&current_cookie);
+					break;
+			}
+		}
+		else if (Strcmp_ci(string,"max-age") == 0 && current_cookie) {
+			/* Set new expiry time */
+			calculate_expiry_date(current_cookie, atoi(value));
+			current_cookie->discard = FALSE;
+		}
+		else if (Strcmp_ci(string,"path") == 0 && current_cookie) {
+			/* Set new path */
+			if (check_path_valid(path,value)) {
+				/* Delete default path */
+				if (current_cookie->path != NULL) {
+					free(current_cookie->path);
+				}
+				/* Fill in new path */
+				current_cookie->path = Strdup(value);
+				if (current_cookie->path == NULL) {
+					act_on_cookie_giveup(&current_cookie);
+				}
+			}
+			else {
+				act_on_cookie_giveup(&current_cookie);
+			}
+		}
+		else if (Strcmp_ci(string,"version") == 0 && current_cookie) {
+			/* Set new value */
+			current_cookie->version = atoi(value);
+		}
+		else if (Strcmp_ci(string,"port") == 0 && current_cookie) {
+			/* Set list of permitted access ports */
+			if (current_cookie->port_list != NULL) {
+				free(current_cookie->port_list);
+			}
+			current_cookie->port_list = Strdup(value);
+			if (current_cookie->port_list == NULL) {
+				act_on_cookie_giveup(&current_cookie);
+			}
+		}
+		else if (Strcmp_ci(string,"expires") == 0 && current_cookie) {
+			current_cookie->expires = read_new_expiry_date(value);
+			current_cookie->discard = FALSE;
+
+			#ifdef TRACE
+			cookie_debug("Set new expiry date to %s\n", ctime(&(current_cookie->expires)));
+			#endif
+		}
+		else if (Strcmp_ci(string,"lastaccess") == 0 && current_cookie) {
+			current_cookie->last_access = read_new_expiry_date (value);
+
+			#ifdef TRACE
+			cookie_debug("Set new last access to %s\n", ctime(&(current_cookie->last_access)));
+			#endif
+		}
+		else if (last_term == '\0' || last_term == ',' || last_term == '\n') {
+			/* Not a parameter? It must be a new name! */
+			#ifdef TRACE
+			cookie_debug("About to add new cookie with domain %s, path %s, %s=%s\n", host,path,string,value);
+			#endif
+			current_cookie = add_new_cookie(host, path, string, value);
+		}
+	}
+
+	last_term = next_term;
+
+	#ifdef TRACE
+	cookie_debug("act_on_cookie: Now leaving function.\n");
+	#endif
+}
+
+/* Function to transfer all cookies from temp queue into main list */
+void move_cookies_from_queue_to_list(int check_variable)
+{
+	if (cookie_queue_root == NULL) return;
+
+	if (check_variable) {
+		/* If env is not set and equal to 'on' then just accept all cookies unconditionally.
+		 * As of version 0.50, this code no longer cmp's the contents of zero page with "off"
+	 	 * when the environment variable does not exist.
+	 	 */
+		const char *const env = getenv(ACCEPT_ALL_ENV);
+		if (env == NULL || strcmp(env, "off") == 0) return;
+	}
+
+	while (cookie_queue_root) {
+		Cookie *const cookie = cookie_queue_root;
+		#ifdef TRACE
+		cookie_debug("Moving %s=%s from queue into list\n",cookie->name,cookie->value);
+		#endif
+		remove_cookie_from_queue(cookie);
+		insert_cookie_into_list(cookie);
+	}
+
+	write_cookies_to_file();
+}
+
+/* StB added this function to centralise the data file reading activities.  This one works.
+ * It returns a pointer to the line of data if it managed to read a line, NULL on EOF or
+ * other error.  It strips comments, leading & trailing whitespace and blank lines.  Depending
+ * on the fourth parameter, # needs to be the first non-whitespace character on the line if this
+ * flag is TRUE, otherwise it can appear anywhere on the line.
+ */
+static char *readlines_raw_do(char *const buffer, int size, FILE *f, int only_first_char_comments)
+{
+	char *result = fgets(buffer, size, f);
+	if (result) {
+		char *buf = strchr(buffer, '\n');
+		if (buf) *buf = 0; /* Strip the end-of-line character */
+
+		while (*result && isspace(*result)) ++result; /* Strip leading whitespace */
+
+		if (only_first_char_comments) {
+			buf = (result[0] == '#') ? result : NULL;
+		}
+		else {
+			buf = strchr(result, '#');
+		}
+
+		if (buf) {
+			*buf = 0;
+		}
+
+		/* Strip trailing whitespace */
+		for (buf = strchr(result, '\0'); buf > result;) {
+			--buf;
+			if (!isspace(*buf)) {
+				buf[1] = '\0';
+				break;
+			}
+		}
+		if (!*result) {
+			/* Line was blank - get another one (possibly after removing comments and stuff) */
+			return readlines_raw_do(buffer, size, f, only_first_char_comments);
+		}
+	}
+
+	return result;
+}
+
+
+static size_t cookie_tokenise(char *buffer, char *fields[], size_t max_fields)
+{
+	size_t i;
+
+	/* For safety's sake */
+	for (i = 0; i<max_fields; ++i) {
+		fields[i] = NULL;
+	}
+
+	/* Tokenise string - return number of valid tokens found */
+	for (i=0; i<max_fields; ++i) {
+		fields[i] = buffer;
+		while (*buffer != '\t' && *buffer != '\0') ++buffer;
+		if (*buffer == '\0') return i+1;
+		*buffer++ = '\0';
+	}
+
+	return i;
+}
+
+/* For only_first_char_comment - so we can change it easily */
+#define comment_POLICY 1
+#define GETLINE() (readlines_raw_do(_buffer, MAX_COOKIE_SIZE, fp, comment_POLICY))
+
+typedef enum {
+	token_NAME, token_VALUE, token_DOMAIN, token_PATH,
+	token_SECURE, token_EXPIRES, token_LAST_ACCESS,
+
+	token_MAX_TOKEN_COUNT
+} cookie_tokens;
+
+static void read_cookie_data_from_file(FILE *fp, char *_buffer)
+{
+	char *buffer = GETLINE();
+
+	if (!buffer) return;
+
+	/* First non-comment line *must* be the format type */
+	if (strncmp(buffer,"Format:",7) != 0) {
+		#ifdef TRACE
+		cookie_debug("Malformed 'Format' line: Line found is %s\n", buffer);
+		#endif
+		return;
+	}
+
+	if (atoi(buffer+8) == 1) {
+		while ((buffer = GETLINE()) != NULL) {
+			act_on_cookie(buffer, NULL, NULL_HOST, NULL_PATH); /* Parse it */
+		}
+	}
+	else if (atoi(buffer+8) == 2) {
+		/* Deal with format 2 type files */
+		#ifdef TRACE
+		cookie_debug("Correct format in place\n");
+		#endif
+		while ((buffer = GETLINE()) != NULL) {
+			Cookie *cookie;
+			char *tokens[token_MAX_TOKEN_COUNT];
+			char *portlist;
+			size_t token_count = cookie_tokenise(buffer, tokens, token_MAX_TOKEN_COUNT);
+
+			if (token_count < token_MAX_TOKEN_COUNT) {
+				#ifdef TRACE
+				cookie_debug("Cookie tokeniser only found %d fields - wanted %d\n",
+					token_count, token_MAX_TOKEN_COUNT);
+				cookie_debug("Cookie tokeniser only found %d fields - wanted %d\n",
+					token_count, token_MAX_TOKEN_COUNT);
+				#endif
+				continue;
+			}
+
+			portlist = strchr(tokens[token_DOMAIN], ':');
+			if (portlist != NULL) {
+				*portlist++ = '\0';
+			}
+			else {
+				portlist = "-1";
+			}
+
+			/* Don't forget that we hold the domain in reverse internally! */
+			reverse_domain(tokens[token_DOMAIN]);
+			#ifdef TRACE
+			cookie_debug("Internal domain `%s'\n", tokens[token_DOMAIN]);
+			#endif
+
+			/* Make the cookie */
+			cookie = create_new_cookie(tokens[token_DOMAIN], tokens[token_PATH],
+				tokens[token_NAME], tokens[token_VALUE]);
+
+			/* Check that the cookie was successfully created */
+			if (!cookie) continue;
+
+			if (strcmp(portlist, "-1") != 0) {
+				cookie->port_list = Strdup(portlist);
+			}
+
+			if ((tokens[token_SECURE])[0] == 'S') cookie->secure = TRUE; /* Default false */
+			cookie->expires = (int) strtol(tokens[token_EXPIRES], NULL, 16);
+			cookie->last_access = (int) strtol(tokens[token_LAST_ACCESS], NULL, 16);
+			add_cookie_to_queue(cookie);
+		}
+	}
+}
+
+/* Function to read a cookie file into memory
+ * This function performs the basic housekeeping (particularly of the buffer
+ * which is now allocated dynamically instead of taking 4K of the SVC stack!
+ *
+ * The functions which are called by this loader are now very resilient and
+ * should be able to filter out any rubbish without any trouble at all.
+ */
+void read_cookie_file(void)
+{
+	char *buffer;
+	FILE *fp;
+
+	#ifdef TRACE
+	cookie_debug("Entering read_cookie_file...\n");
+	#endif
+
+	cookie_domain_root = NULL;
+	cookie_queue_root = NULL;
+	total_cookies = 0;
+	unread_cookies = 0;
+	act_on_cookie(0, 0, 0, 0); /* Trapped specially to init static data */
+
+	/* Open the file to be read, and get the format type of file */
+	if ((fp = config_open_cookies_for_read()) == NULL) {
+		#ifdef TRACE
+		cookie_debug("Unable to open cookies from Choices\n");
+		#endif
+		if ((fp = fopen(COOKIE_FILE_NAME, "r")) == NULL) {
+			#ifdef TRACE
+			cookie_debug("Unable to open cookies from " COOKIE_FILE_NAME "\n");
+			#endif
+			return;
+		}
+	}
+
+	buffer = malloc(MAX_COOKIE_SIZE);
+	if (buffer != NULL) {
+		read_cookie_data_from_file(fp, buffer);
+		free(buffer);
+	}
+
+	fclose(fp);
+	move_cookies_from_queue_to_list (0);
+	#ifdef TRACE
+	cookie_debug("Leaving read_cookie_file.\n");
+	#endif
+}
+
+
+void cookie_set_cookie(char *start_field, Session *s)
+{
+	char *host, *path;
+	int port;
+
+	#ifdef TRACE
+	cookie_debug("Found a new cookie - processing it\n");
+	#endif
+
+	/* Set default host and path names */
+	if (s->endhost) {
+	        host = Strdup(s->endhost);
+	        port = s->endport;
+	}
+	else {
+                host = Strdup(s->host);
+                port = s->port;
+	}
+	path = cookie_process_path(s->uri);
+	/* Internally all the domain names are stored in reverse */
+	reverse_domain(host);
+
+	/* Strip the file off the end of the path */
+	#if 0
+        {
+	        /* Removed in HTTP 0.72 because it contravenes RFC2109:4.3.2 */
+		char *find_end = strchr(path, '\0');
+		if (find_end != path) find_end--; /* StB: Mustn't dec if already at start!  Undef. Behaviour! */
+		while (*find_end != '/' && find_end != path) find_end--;
+		*(find_end+1) = NULL;
+        }
+	#endif
+
+	act_on_cookie(start_field, s, host, path);
+
+	if (host) {
+		free(host);
+	}
+	if (path) {
+		free(path);
+	}
+}
+
+
+#else /* COOKIE */
+/* All these functions deny the existence of any cookies - easier to
+ * have them here as empty functions rather than compile the entire
+ * file out otherwise you start getting warnings from the compiler
+ * about lack of objects with external linkage in the AOF file.
+ */
+void read_cookie_file(void) { }
+char *send_cookies_to_domain(Session *ses) { (void) ses; return 0; }
+#endif

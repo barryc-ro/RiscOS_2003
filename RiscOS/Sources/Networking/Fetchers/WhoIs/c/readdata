@@ -1,0 +1,388 @@
+/*
+ * Generic (c.readdata)
+ *
+ * THIS FILE REQUIRES CUSTOMISATION
+ *
+ * © Acorn Computers Ltd. 1996-1997
+ *
+ */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <ctype.h>
+#include "kernel.h"
+#include "swis.h"
+#include "sys/errno.h"
+#include "module.h"
+#include "generic.h"
+#include "sys/types.h"
+#include "sys/socket.h"
+#include "sys/ioctl.h"
+#include "inetlib.h"
+#include "netdb.h"
+#include "socklib.h"
+#include "utils.h"
+#include "commands.h"
+#include "protocol.h"
+#include "writedata.h"
+#include "connect.h"
+
+static _kernel_oserror *generic_exec_readdata(_kernel_swi_regs */*r*/);
+_kernel_oserror *generic_readdata(_kernel_swi_regs *r)
+{
+	/* This wrapper is used to ensure that R2 and R3 are preserved across the SWI
+	 * This is needed because in order to generate the client's data buffer piecemeal
+	 * (we are rewriting the headers to help the browser out and removing some that
+	 * do not concern it at all), we keep updating R2 and R3 to avoid writing off
+	 * the end of the buffer.
+	 * We also take the opportunity to initialise R4 and R5 safely.
+	 */
+	const int const_buffer = r->r[2];
+	const int const_buflen = r->r[3];
+	_kernel_oserror *result;
+
+	#ifdef TRACE
+	protocol_debug("Buffer (R2) is &%08x; Size (R3) = %d\n", const_buffer, const_buflen);
+	#endif
+
+	r->r[0] = status_READING_REPLY;
+	r->r[4] = 0;  /* No data in client buffer yet */
+	r->r[5] = -1; /* Unknown how much more data to read */
+	result = generic_exec_readdata(r);
+	r->r[2] = const_buffer;	/* Restore buffer address */
+	r->r[3] = const_buflen; /* Restore buffer size */
+	#ifdef TRACE
+	protocol_debug("<< Exit SWI ReadData.  Bytes read: %d\n", r->r[4]);
+	protocol_dump((void *)r->r[2], r->r[4]);
+	#endif
+	return result;
+}
+
+
+/* These are the state machine driver functions */
+static _kernel_oserror *generic_wait_dns(Session *s, _kernel_swi_regs *r);
+static _kernel_oserror *generic_pump_client_response(Session *s, _kernel_swi_regs *r);
+static _kernel_oserror *generic_return_no_more_data(Session *s, _kernel_swi_regs *r);
+
+static _kernel_oserror *whois_process_connected(Session *s, _kernel_swi_regs *r);
+static _kernel_oserror *whois_process_command_sent(Session *s, _kernel_swi_regs *r);
+static _kernel_oserror *whois_wait_response(Session *s, _kernel_swi_regs *r);
+
+
+#ifdef TRACE
+static void generic_show_state(const Session *s)
+{
+	protocol_debug("FTP session %p status now %s\n", s, protocol_states(s->state));
+}
+#else
+#define generic_show_state(s) ((void)(s))
+#endif
+
+/* generic_readdata_dispatch is the main state table dispatch routine.  In order to avoid any problems
+ * with overflowing the SVC stack, it sits in a while loop dispatching on the session state until
+ * one of the routines returns an error or the special value "state_BLOCKING".  Errors are real
+ * errors reported to the caller of the ReadData SWI.  state_BLOCKING indicates that the SWI code
+ * should exit with no error.  NULL indicates that the loop should be executed again.	This means
+ * that the code can arrange for the maximum amount of work to be done on each SWI call, which
+ * basically means that the caller is guaranteed that on exit from these calls, either an error has
+ * occurred, or there is buffered data waiting to be written to the client because not all of it
+ * could be transferred, or a network wait is in progress.  The state handlers that are called MAY
+ * choose to rely on tail-call optimisation to avoid overflowing the stack, but if unsure, it is
+ * better to set Session.state to the new state and return NULL, which will force this dispatcher
+ * to call the new state handler anyway.
+ *
+ * However, during testing, a counter "ctr" was introduced to ensure that the SWI will exit after
+ * a maximum number of iterations.  This number is sufficiently large that it will likely rarely be
+ * seen during transfers (very long directory listings are the only cause I can foresee).  This
+ * emergency exit mechanism means that the machine will return to USR mode so Alt-Break can be used
+ * to get control of the machine back should things have gone disastrously wrong. :-)
+ *
+ */
+static _kernel_oserror *generic_readdata_dispatch(Session *s, _kernel_swi_regs *r)
+{
+	_kernel_oserror *e = NULL;
+	int ctr = 0;
+
+	while (generic_show_state(s), e == NULL && ctr++<64) switch (s->state) {
+	        /* Add any more error states to the top section here.  Keep the same format, add
+	         * new errortokens to protoerror.h and add the messages to the Messages file.
+		 */
+		default:
+		case protostate_ERROR:
+		case protostate_ERROR_DEAD:
+			return make_error(errortoken_ERROR_INTERNAL, 0);
+		case protostate_ERROR_MEM:
+			return make_error(errortoken_ERROR_NO_MEMORY, 0);
+		case protostate_ERROR_WRITE:
+			return make_error(errortoken_ERROR_WRITE, 0);
+		case protostate_ERROR_READ:
+			return make_error(errortoken_ERROR_READ, 0);
+		case protostate_ERROR_CONNECTION:
+			return make_error(errortoken_ERROR_NO_CONNECTION, 0);
+		case protostate_ERROR_NO_TOKEN:
+			return make_error(errortoken_ERROR_NO_TOKEN, 0);
+		case protostate_ERROR_NOT_IMPLEMENTED:
+			return make_error(errortoken_ERROR_NOT_IMPLEMENTED, 0);
+
+		case protostate_INITIAL:
+		case protostate_DNS:		e = generic_wait_dns(s, r); break;
+		case protostate_CONNECTED:	e = whois_process_connected(s, r); break;
+		case protostate_SENDING:	e = commands_continue_sending(s); break;
+		case protostate_RECEIVING:	e = commands_continue_reading(s, &s->response); break;
+		case protostate_PUMPING:	e = generic_pump_client_response(s, r); break;
+		case protostate_COMPLETED:	e = generic_return_no_more_data(s, r); break;
+
+		/* Add customised states to the dispatcher beneath here.  If you add a new state,
+		 * you must add the dispatch here.  It should follow the format of those just above
+		 * this comment. ie. e = functionname(s, r); break; so that the function does not
+		 * contain any specific cleverness - only the dispatching functionality.
+	  	 */
+		case protostate_COMMAND_SENT:	e = whois_process_command_sent(s, r); break;
+		case protostate_WAIT_RESPONSE:	e = whois_wait_response(s, r); break;
+	}
+
+	if (e != NULL) {
+		if (e == state_BLOCKING) {
+			e = NULL;
+		}
+		else {
+			s->state = protostate_ERROR_DEAD;
+		}
+	}
+	return e;
+}
+
+
+static _kernel_oserror *generic_exec_readdata(_kernel_swi_regs *r)
+{
+	Session *ses = find_session(r->r[1]);
+
+	/*
+	 * Check to see session exists and has connected cleanly first
+	 * If it doesn't/hasn't, reject this request cleanly
+	 */
+
+	if (ses == NULL) {
+		return make_error(errortoken_ERROR_BAD_SESSION, 0);
+	}
+
+	r->r[0] = *((int *)r->r[1]) = ses->reported_state;
+	r->r[5] = ses->size;
+
+	return generic_readdata_dispatch(ses, r);
+}
+
+static _kernel_oserror *gen_error(Session *s, char *errmess)
+{
+	_kernel_oserror *e = find_error();
+	(void) s;
+	#ifdef TRACE
+	protocol_debug("FTP session %p error --> %s\n", s, errmess);
+	#endif
+	strncpy(e->errmess, errmess, sizeof(e->errmess));
+	return e;
+}
+
+static _kernel_oserror *generic_return_no_more_data(Session *s, _kernel_swi_regs *r)
+{
+	s->reported_state = *((int *)r->r[1]) = r->r[0] = status_ALL_DATA_RECEIVED;
+	r->r[5] = 0;
+	close_socket(&s->sd);
+	return state_BLOCKING;
+}
+
+static _kernel_oserror *generic_pump_data(Session *s, _kernel_swi_regs *r, arbitrary_data *data)
+{
+	if (r->r[3] <= 0) {
+		return state_BLOCKING;
+	}
+	else {
+		const size_t remaining = data->length - data->done;
+		const size_t size = generic_write_data_to_client(r, data->data + data->done, remaining);
+		
+		data->done += size;
+		if (data->done != data->length) {
+			return state_BLOCKING;
+		}
+		free(data->data);
+		data->data = NULL;
+		s->state = data->next_state;
+		return NULL;
+	}
+}
+
+static _kernel_oserror *generic_pump_client_response(Session *s, _kernel_swi_regs *r)
+{
+	return generic_pump_data(s, r, &s->client_pump);
+}
+
+static char *generic_copy_message_token(const char *tag)
+{
+	const char *token = NULL;
+	size_t token_length;
+	_kernel_oserror *result;
+
+	result = read_message(tag, &token, &token_length);
+	if (result != NULL) {
+		return NULL;
+	}
+	else {
+		if (token == NULL) {
+			tag = strchr(tag, ':');
+			if (tag != NULL) {
+				return Strdup(tag + 1);
+			}
+			return NULL;
+		}
+		else {
+			char *data = malloc(token_length+1);
+			if (data == NULL) {
+				return NULL;
+			}
+			memcpy(data, token, token_length);
+			data[token_length] = '\0';
+			return data;
+		}
+	}
+}
+
+static void generic_vstart_client_pump(char *buffer, const char *h1, va_list ap)
+{
+	for (*buffer = '\0'; h1; h1 = va_arg(ap, char *)) {
+		#ifdef TRACE
+		/*protocol_debug("Copying string `%s'\n", h1);*/
+		#endif
+		buffer = strcat(buffer, h1);
+	}
+}
+
+static _kernel_oserror *generic_start_client_pump_va(Session *s, int next_state, const char *h, ...)
+{
+	const char *h1 = h;
+	va_list ap;
+	size_t total_length = 0;
+
+	s->client_pump.next_state = next_state;
+	s->client_pump.done = 0;
+
+	va_start(ap, h);
+	while (h1 != NULL) {
+		#ifdef TRACE
+		/*protocol_debug("Adding length of `%s'\n", h1);*/
+		#endif
+		total_length += strlen(h1);
+		h1 = va_arg(ap, const char *);
+	}
+	va_end(ap);
+
+	s->client_pump.length = total_length;
+	s->client_pump.data = malloc(total_length+1);
+	if (s->client_pump.data == NULL) {
+		s->state = protostate_ERROR_MEM;
+		return NULL;
+	}
+
+	va_start(ap, h);
+	generic_vstart_client_pump(s->client_pump.data, h, ap);
+	va_end(ap);
+
+	s->state = protostate_PUMPING;
+	return NULL;
+}
+
+static _kernel_oserror *generic_start_client_pump(Session *s, int next_state, const char *h1, const char *mt_h2)
+{
+	char *const token = generic_copy_message_token(mt_h2);
+
+	if (token == NULL) {
+		s->state = protostate_ERROR_NO_TOKEN;
+		return NULL;
+	}
+	else {
+		_kernel_oserror *result;
+		result = generic_start_client_pump_va(s, next_state, h1, token, NULL);
+		free(token);
+		return result;
+	}
+}
+
+static _kernel_oserror *generic_wait_dns(Session *ses, _kernel_swi_regs *r)
+{
+	int *pollword = (int *)r->r[1];
+
+	ses->sd = opensock(ses->host, ses->port, NULL, &ses->state, ses->sd);
+	if (ses->sd < 0) {
+	        ses->sd = -1;
+		*pollword = status_ABORTED;
+		return make_error(errortoken_ERROR_NO_CONNECTION, 0);
+	}
+
+	*pollword = r->r[0] = ses->reported_state =
+		(ses->state == protostate_DNS) ? status_NOT_YET_CONNECTED : status_CONNECTED_TO_SERVER;
+
+	return NULL;
+}
+
+/* Add other handlers below this point (end of the generic readdata.c file) */
+
+#define WHOIS_HEADER "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+
+static _kernel_oserror *whois_wait_response(Session *s, _kernel_swi_regs *r)
+{
+	if (r->r[3] <= 0) {
+		return state_BLOCKING;
+	}
+	else {
+		int result;
+
+		errno = 0;
+		result = recv(s->sd, (char *) r->r[2], r->r[3], 0);
+		#ifdef TRACE
+		protocol_debug("recv on data channel returned %d (errno now %d)\n", result, errno);
+		#endif
+		if (result == 0) {
+			close_socket(&s->sd);
+			s->state = protostate_COMPLETED;
+			return NULL;
+		}
+		else if (result > 0) {
+			#ifdef TRACE
+			protocol_debug("Managed to read %d byte(s)\n", result);
+			#endif
+			r->r[2] += result;
+			r->r[3] -= result;
+			r->r[4] += result;
+			return state_BLOCKING;
+		}
+		if (errno == EWOULDBLOCK || errno == ENOTCONN) {
+			#ifdef TRACE
+			protocol_debug("We will block - EWOULDBLOCK/ENOTCONN (%d/%d) yet\n", EWOULDBLOCK, ENOTCONN);
+			#endif
+			return state_BLOCKING;
+		}
+		else {
+			char errnum[16];
+			sprintf(errnum, "Error %d", errno);
+			return gen_error(s, errnum);
+		}
+	}
+
+}
+
+
+static _kernel_oserror *whois_process_command_sent(Session *s, _kernel_swi_regs *r)
+{
+        (void) r;
+        return generic_start_client_pump_va(s, protostate_WAIT_RESPONSE, WHOIS_HEADER, NULL);
+}
+
+
+static _kernel_oserror *whois_process_connected(Session *s, _kernel_swi_regs *r)
+{
+        (void) r;
+        (void) generic_start_client_pump;
+
+	return commands_send(s, -protostate_COMMAND_SENT, s->selector);
+}
+

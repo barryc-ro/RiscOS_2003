@@ -1,0 +1,523 @@
+/*
+ * Gopher (c.readdata)
+ *
+ * © Acorn Computers Ltd. 1996-1997
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+#include "sys/types.h"
+#include "module.h"
+#include "processdir.h"
+#include "gophertype.h"
+#include "protocol.h"
+#include "utils.h"
+
+#include "commands.h"
+
+#ifdef TML
+  #include "svcprint.h"
+#endif
+
+#include "sys/types.h"
+#include "sys/errno.h"
+#include "sys/socket.h"
+#include "unixlib.h"
+#include "inetlib.h"
+#pragma no_warn_deprecated
+#include "netdb.h"
+#pragma warn_deprecated
+#include "socklib.h"
+#include "sys/ioctl.h"
+
+extern _kernel_oserror *usermode_donothing(void);
+static _kernel_oserror *gopher_fetching_data(Session *ses, _kernel_swi_regs *r);
+static _kernel_oserror *gopher_fetching_dir_data(Session *ses, _kernel_swi_regs *r);
+static _kernel_oserror *gopher_send_selector(Session *s, _kernel_swi_regs *r);
+
+#define UNKNOWN -1
+
+
+static _kernel_oserror *gopher_pump_error(Session *ses, _kernel_swi_regs *r)
+{
+    int *pollword = (int *)r->r[1];
+    char *buffer  = (char *)r->r[2];
+    int bufsize	  = r->r[3];
+    int togo;
+
+    togo = strlen(ses->err_ptr+ses->err_sent);
+    strncpy(buffer, ses->err_ptr+ses->err_sent, bufsize);
+    ses->err_sent = bufsize;
+    r->r[4]	  = bufsize;
+    if (ses->err_sent > togo)
+    {
+	r->r[4]	      = togo;
+	ses->err_sent = togo;
+	ses->state    = FINISHED;
+	ses->reported_state = *pollword = r->r[0] = status_ALL_DATA_RECEIVED;
+	ses->server_code = atoi(ses->err_ptr);
+	free(ses->err_ptr);
+    }
+    return NULL;
+}
+
+/*************************************************************/
+/* _kernel_oserror *gopher_readdata(_kernel_swi_regs *r)     */
+/*************************************************************/
+/* The call to get the actual data from a site. The values   */
+/* in the registers are:				     */
+/*			 r0 = flags word		     */
+/*			 r1 = poll word			     */
+/*			 r2 = buffer			     */
+/*			 r3 = sizeof(buffer)		     */
+/*							     */
+/* On exit:						     */
+/*			 r0 = protocol status		     */
+/*			 r1 = pollword of client	     */
+/*			 r2 = modified buffer		     */
+/*			 r3 = unchanged			     */
+/*			 r4 = bytes read		     */
+/*			 r5 = bytes left (-1 if unknown)     */
+/*************************************************************/
+_kernel_oserror *gopher_readdata(_kernel_swi_regs *r)
+{
+	int flags	= r->r[0];
+	int *pollword	= (int *)r->r[1];
+	Session *ses	= NULL;
+
+	(void) flags;
+
+	/*
+	 * Check to see session exists and has connected cleanly first
+	 * If it doesnt/hasnt, reject this request cleanly
+	 */
+	r->r[4]=0;
+	r->r[5]=0;
+
+	ses = find_session((unsigned int)pollword);
+	if (ses == NULL) {
+		r->r[0]= *pollword = status_ABORTED | status_ALL_DATA_RECEIVED;	  /* Buggy clients beware :) */
+		r->r[4]=0;
+		r->r[5]=0;
+		return NULL;
+	}
+
+	if (ses->control_sd == -1) {
+		r->r[0]= *pollword = status_ABORTED | status_ALL_DATA_RECEIVED;	  /* Buggy clients beware :) */
+		r->r[4]=0;
+		r->r[5]=0;
+		return NULL;
+	}
+
+	#ifdef TRACE
+	protocol_debug("In readdata, control_sd=%d, state=%s\n", ses->control_sd,
+		ses->state == PUMPING_ERROR ? "Pumping Error" :
+		ses->state == CONNECTED ? "Connected" :
+		ses->state == FETCHING ? "Fetching" :
+		ses->state == DIR_FETCHING ? "Dir Fetching" :
+		ses->state == FINISHED ? "Finished" :
+		ses->state == FINDING_DNS ? "DNS lookup" :
+		"Unknown");
+	#endif
+
+	r->r[0] = *pollword = ses->reported_state;
+	r->r[4] = 0;
+	r->r[5] = ses->size;
+
+	switch (ses->state) {
+		case PUMPING_ERROR:
+			return gopher_pump_error(ses, r);
+
+		case CONNECTED:
+			return gopher_send_selector(ses, r);
+
+		case FETCHING:
+			return gopher_fetching_data(ses, r);
+
+		case DIR_FETCHING:
+			return gopher_fetching_dir_data(ses, r);
+
+		case FINISHED:
+			if (ses->control_sd != -1) {
+				socketclose(ses->control_sd);
+				ses->control_sd = -1;
+			}
+			r->r[5] = 0;
+			return NULL;
+
+		case FINDING_DNS:
+			r->r[4] = 0;
+			r->r[5] = -1;
+			return gopher_doing_dns(ses, r);
+	}
+
+	return NULL; /* HMM! */
+}
+
+/* This function forms an intermediate phase between the initialisation of a
+ * request and the connection to the remote host whilst the process of getting
+ * the IP address of the remote host is still ongoing.  It is called once by
+ * the start SWI, and then by the ReadData SWI if connection address has not
+ * been discovered yet.
+ */
+_kernel_oserror *gopher_doing_dns(Session *ses, _kernel_swi_regs *r)
+{
+	int *pollword =(int *)r->r[1];
+
+	ses->control_sd = opensock(ses->host, ses->port, NULL, &ses->state, ses->control_sd);
+	if (ses->control_sd == -1) {
+		kill_session(ses);
+		/* Flag abort before connection */
+		r->r[0] = *pollword = status_ABORTED;
+		_inet_error.errnum = ENOENT;
+		strcpy(_inet_error.errmess, "Unable to connect to remote host");
+		return &_inet_error;
+	}
+
+	if (ses->state != FINDING_DNS) {
+		#ifdef TRACE
+		protocol_debug("DNS lookup complete - connection attempt now ongoing\n");
+		#endif
+		ses->reported_state = status_CONNECTED_TO_SERVER;
+	}
+	else {
+	        ses->reported_state = status_NOT_YET_CONNECTED;
+	        /* status_NOT_YET_CONNECTED causes the browser to fail to issue Stop SWIs?
+	         * Maybe I've broken something else :-(
+	         */
+	}
+
+	*pollword = r->r[0] = ses->reported_state;
+
+	return NULL;
+}
+
+
+static _kernel_oserror *gopher_send_selector(Session *ses, _kernel_swi_regs *r)
+{
+	int *pollword=(int *)r->r[1];
+
+	r->r[4] = 0;
+	r->r[5] = -1;
+
+	/* You don't send the leading type information character (ie. skip the leading / and the next character */
+	/* send_command returns the value of errno from the socket writer (0 for success) */
+	switch (send_command(ses, ses->selector)) {
+		case 0:
+			#ifdef TRACE
+			protocol_debug("Connection was made, selector was sent OK\n");
+			#endif
+			if (ses->uri[1] != GOPHER_MENU) {
+				ses->state = FETCHING;
+			}
+			else {
+				ses->state = DIR_FETCHING;
+			}
+			ses->reported_state = r->r[0] = *pollword = status_READING_REPLY;
+			ses->line_ptr = 0;
+			ses->html_buffer[0] = '\0';
+			break;
+		case EINPROGRESS:
+		case ENOTCONN:
+			/* Connection has not yet completed */
+			#ifdef TRACE
+			protocol_debug("Still waiting for connection\n");
+			#endif
+			break;
+		default:
+			return make_error(gopher_ERROR_NO_CONNECTION, 0);
+	}
+
+	return NULL;
+}
+
+
+static int gopher_looks_properly_formatted(const char *datastring)
+{
+        char *tab = strchr(datastring, '\t');
+
+        if (!tab) return 0;
+        tab = strchr(tab+1, '\t');
+        if (!tab) return 0;
+        tab = strchr(tab+1, '\t');
+        if (!tab) return 0;
+        return 1;
+}
+
+/*=================================================================================*/
+/* static _kernel_oserror *gopher_fetching_data(Session *ses, _kernel_swi_regs *r) */
+/*=================================================================================*/
+/* This function is called when we are expecting data of a type which isn't a menu */
+/* (ie. the type character was something other than '1').  We have a limited map   */
+/* of gopher types (gopher_get_type) which maps gopher type chars to MIME types	   */
+/* It defaults to text/plain if it doesn't know the type                           */
+/*=================================================================================*/
+
+static _kernel_oserror *gopher_fetching_data(Session *ses, _kernel_swi_regs *r)
+{
+	int *pollword = (int *)r->r[1];
+	int s		= 0;
+	char *theirbuf	= (char *)r->r[2];
+	int bufsize	= r->r[3];
+	char *theirptr 	= theirbuf;
+
+	r->r[4] = 0;
+	r->r[5] = -1;
+
+	if (ses->headers_sent == 0) {
+		ses->html_ptr = sprintf(ses->line_buffer, "HTTP/1.0 200 OK\r\nContent-Type: %s\r\n\r\n",
+			gopher_get_type((unsigned)ses->uri[1]));
+		#ifdef TRACE
+		protocol_debug("Sending faked headers: %s\n", ses->line_buffer);
+		#endif
+	}
+
+	if (ses->headers_sent < ses->html_ptr) {
+		/* We could be clever here and map the gopher object types (ses->uri[1]) to
+		 * MIME types.  MimeMap module will not do this currently - so what do we do
+		 * about it?  We lie and say it's text/plain always :-/
+		 */
+		const int header_size = ses->html_ptr;
+		const int data_remaining = header_size - ses->headers_sent;
+		const int to_copy_size = bufsize < data_remaining ? bufsize : data_remaining;
+
+		#ifdef TRACE
+		protocol_debug("Pumping header: %d so far; %d total; %d to go; %d buffer size; this call: %d byte(s)\n",
+			ses->headers_sent, header_size, data_remaining, bufsize, to_copy_size);
+		#endif
+
+		if (bufsize <= 0) {
+			/* We can either return zero, or generate an error.  For future
+			 * information, both versions are stored here and the unused
+			 * one is commented out - StB */
+
+			/* Error return version:
+			strcpy(_inet_error.errmess, "Buffer too small");
+			return &_inet_error;
+			*/
+			/* No data return version: */
+			return NULL;
+			/* */
+		}
+
+		memcpy(theirbuf, ses->line_buffer + ses->headers_sent, to_copy_size);
+		r->r[4] = to_copy_size;
+		ses->headers_sent += to_copy_size;
+		return NULL;
+	}
+
+	if (bufsize <= 0) {
+		/* Trap for stupid buffer sizes */
+		return NULL;
+	}
+
+	errno = 0;
+	s = socketread(ses->control_sd, theirptr, bufsize);
+	#ifdef TRACE
+	protocol_debug("Socket read returned %d, errno=%d\n", s, errno);
+	#endif
+
+	if (s < 0 && errno == EWOULDBLOCK) {
+		r->r[4] = theirptr - theirbuf;
+		ses->sent += r->r[4];
+		if (ses->size > 0) {
+			r->r[5] = (ses->sent < ses->size) ? (ses->size - ses->sent) : 0;
+		}
+		return NULL;
+	}
+
+	if (s < 0) {
+		*pollword=ses->reported_state=r->r[0] = status_ABORTED | status_ALL_DATA_RECEIVED;  /* Status */
+		return &_inet_error;
+	}
+
+	/* StB: hmm - this line will always set R4 to s, surely. */
+	r->r[4] = s + (theirptr - theirbuf); /* indicate count of bytes in the buffer */
+	ses->sent += r->r[4];
+
+	if (s==0 && errno==0) {
+		/* End of data */
+		*pollword=ses->reported_state=r->r[0] = status_ALL_DATA_RECEIVED;  /* Status */
+		r->r[5] = 0;				/* Bytes pending */
+		ses->state = FINISHED;
+		return NULL;
+	}
+
+	/* If we know the total size of the object, then tell the caller how much is left to
+	 * go, otherwise leave R5 as -1 to indicate that we don't know
+	 */
+	if (ses->size > 0) {
+		r->r[5] = (ses->sent < ses->size) ? (ses->size - ses->sent) : 0;
+	}
+
+	return NULL;
+}
+
+#define GOPHER_HEAD "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<HEAD><TITLE>Gopher Menu</TITLE></HEAD>\n<BODY>"
+
+static _kernel_oserror *gopher_fetching_dir_data(Session *ses, _kernel_swi_regs *r)
+{
+	int *pollword = (int *)r->r[1];
+	char *theirbuf	= (char *)r->r[2];
+	int bufsize	= r->r[3];
+
+	#ifdef TRACE
+	protocol_debug("gopher_fetch_dir: bufsize=%d, ses->headers_sent=%s\n", bufsize,
+		ses->headers_sent < (sizeof(GOPHER_HEAD)-1) ? "not yet" : "yes");
+	#endif
+
+	/* ses->headers_sent indicates the number of bytes of the menu header (GOPHER_HEAD) have
+	 * been sent to the caller.  This means that we can cope with callers using stupidly small
+	 * buffer sizes
+	 */
+	if (ses->headers_sent < (sizeof(GOPHER_HEAD)-1)) {
+		const int header_size = sizeof(GOPHER_HEAD)-1;
+		const int to_copy_size = (bufsize < header_size ? bufsize : header_size) - ses->headers_sent;
+
+		if (bufsize <= 0) {
+			/* We can either return zero, or generate an error.  For future
+			 * information, both versions are stored here and the unused
+			 * one is commented out - StB */
+
+			/* Error return version:
+			strcpy(_inet_error.errmess, "Buffer too small");
+			return &_inet_error;
+			*/
+			/* No data return version: */
+			r->r[4] = 0;
+			r->r[5] = -1;
+			return NULL;
+			/* */
+		}
+
+		memcpy(theirbuf, GOPHER_HEAD + ses->headers_sent, to_copy_size);
+		r->r[4] = to_copy_size;
+		r->r[5] = -1;
+		ses->headers_sent += to_copy_size;
+		return NULL;
+	}
+
+	/* To get here, we know that the entire header has been sent safely and that we are
+	 * at the stage where we are parsing the gopher menu data and generating HTML for it
+	 */
+
+	if (ses->control_sd == -1) {
+		/* wonderful - not setting a message? */
+		ses->reported_state = *pollword = r->r[0] = status_ABORTED | status_ALL_DATA_RECEIVED;
+		return &_inet_error;
+	}
+
+	/* For safety's sake, no data supplied, amount left unknown */
+	r->r[4] = 0;
+	r->r[5] = -1;
+
+	if (bufsize <= 0) {
+		/* Possibly return an error if it is less than 0? */
+		return 0;
+	}
+	else {
+		int html_len = strlen(ses->html_buffer);
+		if (!html_len) ses->html_ptr = 0;
+
+		if (html_len > 0) {
+			const int bytes_queued = html_len - ses->html_ptr;
+			const int bytes_to_copy = bytes_queued > bufsize ? bufsize : bytes_queued;
+
+			#ifdef TRACE
+			protocol_debug("Sending previously queued data (bytes in buffer: %d)\n", bytes_queued);
+			#endif
+
+			if (bytes_to_copy > 0) {
+				memcpy(theirbuf, ses->html_buffer + ses->html_ptr, bytes_to_copy);
+				bufsize -= bytes_to_copy;
+				ses->sent += bytes_to_copy;
+				ses->html_ptr += bytes_to_copy;
+				r->r[4] += bytes_to_copy;
+			}
+
+			/* Reached the end of the buffer */
+			if (ses->html_ptr >= html_len) {
+				/* Reset data pointers */
+				html_len = 0;
+				ses->html_ptr = 0;
+				ses->html_buffer[0] = '\0';
+				return NULL;
+			}
+			else {
+				/* This means that the client will need a few more SWIs to transfer
+				 * the data, but that doesn't matter at this stage.
+				 */
+				return NULL;
+			}
+		}
+	}
+
+	if (ses->html_ptr > 0) {
+		/* There is data outstanding in html_buffer - abort further reads for now */
+		#ifdef TRACE
+		protocol_debug("Leaving gopher_fetch_dir - client has not finished reading available data\n");
+		#endif
+		return NULL;
+	}
+
+	/* In order to get here, we have no data pending to be sent to the client, so we can
+	 * read another data line from the gopher server and process it (if one is available)
+	 */
+
+	switch (read_line(ses, ses->dir_buffer, sizeof(ses->dir_buffer))) {
+		case -1:
+			/* An error has occurred on the socket */
+			#ifdef TRACE
+			protocol_debug("Socket error (%d)\n", errno);
+			#endif
+			ses->reported_state = r->r[0] = *pollword = status_ABORTED;
+			ses->state = FINISHED;
+			return &_inet_error;
+		case 0:
+			/* Still awaiting a line of data from the server */
+			#ifdef TRACE
+			protocol_debug("No server data available\n");
+			#endif
+			return NULL;
+
+		case '.':
+			/* . is the code for end of menu */
+			#ifdef TRACE
+			protocol_debug("Termination line read from server\n");
+			#endif
+			ses->reported_state = r->r[0] = *pollword = status_ALL_DATA_RECEIVED;
+			ses->state = FINISHED;
+			r->r[5] = 0;
+			return NULL;
+
+		default:
+			/* We got a line of menu! */
+			#ifdef TRACE
+			protocol_debug("Processing data: `%s'\n", ses->dir_buffer);
+			#endif
+
+			if (!gopher_looks_properly_formatted(ses->dir_buffer) ||
+			   (process_dir_line(ses->dir_buffer, ses->html_buffer) == -1)) {
+				strcpy(ses->html_buffer, ses->dir_buffer);
+			}
+
+			return gopher_fetching_dir_data(ses, r);
+	}
+}
+
+_kernel_oserror *gopher_abort(Session *ses, _kernel_swi_regs *r)
+{
+	int *pollword = (int *)r->r[1];
+
+	*pollword  = ses->reported_state = r->r[0] = status_ABORTED;
+	r->r[4]	   = 0;	 /* Bytes read */
+	r->r[5]	   = 0;	 /* Bytes pending */
+	ses->state = FINISHED;
+
+	return NULL;
+}
+

@@ -1,0 +1,290 @@
+/*
+ * Gopher (c.start)
+ *
+ * © Acorn Computers Ltd. 1996-1997
+ *
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <ctype.h>
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+#include "sys/errno.h"
+#include "socklib.h"
+#include "module.h"
+#include "gophertype.h"
+#include "protocol.h"
+#include "utils.h"
+#include "generic.h"
+
+#include "MemCheck:MemCheck.h"
+
+static void gopher_get_request(char *url, char **host, int *port, char **uri, char **urlcopy);
+static void gopher_encode_selector(Session *ses);
+
+/*************************************************************/
+/* _kernel_oserror gopher_start(_kernel_swi_regs *r)	     */
+/*************************************************************/
+/* The call to start getting data from a site. The values in */
+/* ther registers are:					     */
+/*		       r0 = Flags word			     */
+/*		       r1 = pollword of client		     */
+/*		       r2 = method to use		     */
+/*		       r3 = url to get			     */
+/*		       r4 = additional data for put etc	     */
+/*		       r5 = data wanted back		     */
+/*************************************************************/
+_kernel_oserror *gopher_start(_kernel_swi_regs *r)
+{
+	int flags	  =r->r[0];
+	char *url	  =(char *)r->r[3];
+	char *data	  =(char *)r->r[4];
+	int style	  = r->r[5];
+	char *uri;
+	char *urlcopy;
+	char *host;
+	int  port;
+	Session *ses;
+
+	#ifdef TRACE
+	protocol_debug("Asking for url %s\n", url);
+	#endif
+	(void) flags;
+	(void) style;
+
+	MemCheck_RegisterMiscBlock_String(url);
+	MemCheck_SetBlockAccess(url,1,0);
+
+	/* Check to see if this session already exists before doing anything */
+	if (find_session(r->r[1]) != NULL) {
+		return make_error(gopher_ERROR_BAD_SESSION, 0);
+	}
+
+	/* Create a session control block */
+	ses=new_session();
+	if (ses == NULL) {
+	        return make_error(gopher_ERROR_NO_SESSION, 0);
+	}
+
+	/* fill in a few bits */
+	ses->control_sd	  = -1;
+	ses->server_code  = 0;
+	ses->id		= r->r[1];
+	ses->sent	      = 0;
+	ses->headers_sent = 0;
+	ses->uri	      = NULL;
+	ses->url	      = NULL;
+	ses->next	      = NULL;
+	ses->size		= 0;
+	ses->selector 		= NULL;
+
+	/* Now work out the host and port and URI bit we are after */
+	host = NULL;
+	uri  = NULL;
+	gopher_get_request(url, &host, &port, &uri, &urlcopy);
+	if (host==NULL) {
+                kill_session(ses);
+	        return make_error(gopher_ERROR_NO_URL_DECODE, 0);
+	}
+
+	#ifdef TRACE
+	protocol_debug("Host:%s Port:%d URI:%s URL:%s\n", host, port, uri, urlcopy);
+	#endif
+
+	ses->uri	   = uri;
+	ses->url	   = urlcopy;
+	ses->data	   = data;
+	ses->line_ptr	   = 0;
+	ses->server_code   = 200;
+	ses->panic_discard = 0;
+
+	gopher_encode_selector(ses);
+	if (ses->selector == NULL) {
+                kill_session(ses);
+                return make_error(gopher_ERROR_NO_URL_DECODE, 0);
+	}
+
+	ses->host=host;
+	ses->port=port;
+
+	MemCheck_UnRegisterMiscBlock(url);
+
+	/* establish the connection */
+	ses->control_sd = -1;
+	#ifdef TRACE
+	protocol_debug("Preparing to send URL %s to %s port %d\n", uri, host, port);
+	#endif
+
+	return gopher_doing_dns(ses, r);
+}
+
+/*************************************************************/
+/* static void gopher_get_request(char *url, char **host, ...*/
+/*************************************************************/
+/* Given a null terminated string containing a URL, extract  */
+/* the host name, port and URI to get. The URI portion needs */
+/* to be intelligent enough to know if it is actually a URL  */
+/* That is, it needs to spot if it is being used as in proxy */
+/* request mode	and thus strip any initial '/' from the URI. */
+/*************************************************************/
+static void gopher_get_request(char *url, char **host, int *port, char **uri, char **urlcopy)
+{
+    char *newurl;
+    char *newhost=NULL;
+    char *ptr;
+    char c;
+    int  newport;
+
+    newurl=Strdup(url);
+    /* Catch the out of memory case */
+    if (newurl==NULL)
+    {
+	*host=NULL;
+	return;
+    }
+
+    newhost=strstr(newurl,"gopher://"); /* The minimum requirement! */
+
+    if (newhost==NULL)
+    {
+	*host=NULL;
+	free(newurl);
+	return;
+    }
+    newhost+=sizeof("gopher://")-1; /* Skip that bit! */
+    ptr=newhost;
+
+    /* Go to the next bit of interest */
+    while ((*ptr != '\0') && (*ptr != ':') && (*ptr != '/'))
+	ptr++;
+
+    /* Grab the host name to a unique buffer */
+    c=*ptr; *ptr='\0';
+    *host=Strdup(newhost);
+    *ptr=c;
+
+    #ifdef TML
+      Printf("gopher_get_request> URL:%s host:%s\n",url,*host);
+    #endif
+
+    *urlcopy = malloc(strlen(url) + 2);		/* allow for terminator & possible '/' */
+    if (*urlcopy)
+      strcpy(*urlcopy,url);
+
+    /* Decide what to do now */
+    if (*ptr == '\0' || (*ptr == '/' && ptr[1] == '\0'))
+    {
+      *port = gopher_INET_PORT;
+	/* I reckon what they really wanted was the root directory */
+	/* sbrodie: For gopher, this means the empty selector - however, we must
+		    ensure that an empty selector is sent.  Gopher servers must
+		    return a menu object (type '1') for the empty selector
+		    so we pretent that the specific part of the URL was  /1
+	 */
+	emergancy_exit:
+	*uri=Strdup("/1");
+	strcat(*urlcopy,"/1");
+	free(newurl);
+	return;
+    }
+
+    if (*ptr == ':')
+    {
+	ptr++;
+	/* reuse newhost :) */
+	newhost=ptr;
+	while ((*ptr != '/') && (*ptr != '\0'))
+	    ptr++;
+	c=*ptr; *ptr='\0';
+	newport=atoi(newhost);
+	*ptr=c;
+	if (newport==0)
+	    newport=gopher_INET_PORT;
+	*port=newport;
+    }
+    else
+	*port=gopher_INET_PORT;
+
+    /* If we have reached the end of the string break out nicely */
+    if (*ptr=='\0')
+	goto emergancy_exit;
+
+    /*
+     * Finally grab the URI bit - note if the URI is actually a URL
+     * the initial / has to be removed :)
+     */
+    #ifdef TML
+      Printf("URI bit: %s\n",ptr);
+    #endif
+    if ((*ptr=='/') && (strstr(ptr,"://") != NULL))
+	ptr++;
+    if (*ptr == '/' && !ptr[1]) {
+      *uri = Strdup("/1");
+    }
+    else *uri=Strdup(ptr);
+    free(newurl);
+}
+
+/*************************************************************/
+/* void protocol_debug(const char *format, ...)		     */
+/*************************************************************/
+/* Output trace information to the TRACE_FILE		     */
+/*************************************************************/
+void protocol_debug(const char *format, ...)
+{
+	#ifdef TRACE
+	va_list ap;
+	FILE *fp = fopen(TRACE_FILE, "a");
+
+	if (fp != 0) {
+		va_start(ap, format);
+		(void) vfprintf(fp, format, ap);
+		va_end(ap);
+		fclose(fp);
+	}
+	#else
+	(void) format;
+	#endif
+}
+
+/*************************************************************/
+/* void gopher_encode_selector(Session *ses)		     */
+/*************************************************************/
+/* Construct the selector string to send to the server       */
+/* This function handles all the URL de-escaping required in */
+/* order to construct the correct gopher selector, and this  */
+/* is done here to avoid having to repeatedly recalculate it */
+/* on every attempt to send the selector                     */
+/*************************************************************/
+static void gopher_encode_selector(Session *ses)
+{
+        const char *uri = ses->uri + 2;
+	char *sel;
+
+	/* Worst case is that the string is actually to be passed verbatim, in
+	 * which case we need that data length, plus space for \r\n\0
+	 * which is added with the sizeof below (sizeof includes the \0 byte!)
+	 */
+        sel = ses->selector = malloc(strlen(uri) + sizeof("\r\n"));
+        if (ses->selector == NULL) return;
+        ses->type = ses->uri[1];
+
+        while (*uri) {
+                *sel = *uri++;
+	        if (*sel == '%' && isxdigit(uri[0]) && isxdigit(uri[1])) {
+	                char buffer[4];
+	                buffer[0] = uri[0];
+	                buffer[1] = uri[1];
+	                buffer[2] = '\0';
+	                *sel = (int) strtol(buffer, NULL, 16);
+	                uri += 2;
+	        }
+	        ++sel;
+        }
+
+        *sel++ = '\r';
+        *sel++ = '\n';
+        *sel = '\0';
+}
