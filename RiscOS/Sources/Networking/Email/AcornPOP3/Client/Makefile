@@ -47,7 +47,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR		= cdir
+MKDIR		= do mkdir -p
 AS		= objasm -tb
 CC		= $(MemCheckCC) cc
 C++		= $(MemCheckCC) c++
@@ -163,6 +163,11 @@ export_hdrs: h.AcornPOP3 local_dirs
 export_libs: o.AcornPOP3 local_dirs
 	$(CP)	o.AcornPOP3	$(EXP_C_O).AcornPOP3	$(CPFLAGS)
 	@echo $(COMPONENT): export complete (libs)
+
+install: $(TARGET)
+	$(MKDIR) $(INSTDIR)
+	$(CP) $(TARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+	@echo $(COMPONENT): ram module installed
 
 install_rom: $(ROMTARGET)
 	$(CP) $(ROMTARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
