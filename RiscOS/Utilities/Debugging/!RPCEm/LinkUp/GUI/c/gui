@@ -7,11 +7,26 @@
 #include "iconbar.h"
 #include "wimplib.h"
 #include "event.h"
-#include <swis.h>
+#include "swis.h"
+#include "^.mlcd.h"
 #endif
 
+#include <stdio.h>
+#include "utils.h"
+
+#include "^.CommsAPB.h"
+#include "^.CommsASB.h"
+#include "^.memory.h"
+#include "^.SystemAPB.h"
+
+static _kernel_oserror* error_pointer;
+#define ER(EXP) \
+{if (error_pointer = (EXP)) \
+    fout ("Error at line %d: %s\n", __LINE__, error_pointer->errmess);}
+
 //#include "^.HW.hwstate.h"
-extern int RAMSIZE;
+extern unsigned int RAMSIZE;
+extern int vidup;
 
 #ifdef __acorn
 
@@ -51,6 +66,8 @@ int curchange = 0;
 int vidupdates = 10;
 ObjectId status;
 ObjectId memory;
+ObjectId mlcdstatus = 0;
+ObjectId busstatus = 0;
 int wimpst;
 
 int multi = 100;
@@ -60,7 +77,7 @@ int mouse_state=7;
 int quit_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *handle)
 {
   quit = 1;
-  return(1);
+  return Handled;
 }
 
 int display;
@@ -81,7 +98,7 @@ int lose_caret(int event_code, WimpPollBlock *event, IdBlock *id_block,void *han
     //fout ("Losing keys\n");
     _swix(0x84341,0);
   }
-  return 1;
+  return Handled;
 }
 
 int click_window(int event_code, WimpPollBlock *event, IdBlock *id_block,void *handle)
@@ -92,10 +109,10 @@ int click_window(int event_code, WimpPollBlock *event, IdBlock *id_block,void *h
     //fout("Support: kb = %x, size = %d, &pos = %x\n",keys_buffer,key_buffer_size,key_pos);
     last_key =0;
   }
-  return 1;
+  return Handled;
 }
 
-int disp_event(int event_code, ToolboxEvent *event, IdBlock *id_block,int handle)
+int disp_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void* handle)
 {
   if (handle) {
     display = 0;
@@ -112,7 +129,7 @@ int disp_event(int event_code, ToolboxEvent *event, IdBlock *id_block,int handle
     window_get_wimp_handle(0,status,&wimpst);
     event_register_wimp_handler(id_block->self_id,Wimp_EMouseClick,click_window,0);
   }
-  return(1);
+  return Handled;
 }
 
 int break_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *handle)
@@ -125,7 +142,7 @@ int break_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *han
   ;//put_fifo(0x14);
   ;//put_fifo(0xf0);
   ;//put_fifo(0x77);
-  return 1;
+  return Handled;
 }
 
 int ticker=10;
@@ -133,9 +150,9 @@ int config_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *ha
 {
   numberrange_set_value(0,id_block->self_id,1,multi);
   numberrange_set_value(0,id_block->self_id,5,RAMSIZE/1024);
-//  numberrange_set_value(0,id_block->self_id,9,vidupdates);
+  numberrange_set_value(0,id_block->self_id,9,vidupdates);
   numberrange_set_value(0,id_block->self_id,13,ticker);
-  return(1);
+  return Handled;
 }
 
 ObjectId ios;
@@ -143,18 +160,18 @@ ObjectId ios;
 int ios_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *handle)
 {
   ios = id_block->self_id;
-  return 1;
+  return Handled;
 }
 
 static int new_RAMSIZE;
 
-int got_error (int event_code, ToolboxErrorEvent *event, IdBlock *id_block,void *handle)
+int got_error (int event_code, ToolboxEvent *event, IdBlock *id_block,void *handle)
 {
-  wimp_report_error((_kernel_oserror*) &event->errnum,0,0);
-  return 1;
+  wimp_report_error((_kernel_oserror*) &((ToolboxErrorEvent*) event)->errnum,0,0);
+  return Handled;
 }
 
-int memdisp_event(int event_code, ToolboxEvent *event, IdBlock *id_block,int handle)
+int memdisp_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void* handle)
 {
   if (handle) memory = 0;
   else {
@@ -167,8 +184,171 @@ int memdisp_event(int event_code, ToolboxEvent *event, IdBlock *id_block,int han
     gadget_set_flags(0,memory,4,flags);
   }
 
-  return 1;
+  return Handled;
 }
+
+void mlcd_update (void) {
+    if (mlcdstatus) {
+        char buf[10];
+        ER(displayfield_set_value (0, mlcdstatus, 6,mlcd.enable?"Yes":"No"));
+        ER(displayfield_set_value (0, mlcdstatus, 7, mlcd.sram?"Yes":"No"));
+        ER(numberrange_set_value (0, mlcdstatus, 4, mlcd.lines + 1));
+        ER(numberrange_set_value (0, mlcdstatus, 5, (mlcd.pixels + 1) * 16));
+        sprintf (buf, "&%8x", mlcd.MLCDBASE);
+        ER(displayfield_set_value (0, mlcdstatus, 9, buf));
+    }
+}
+
+int mlcddisp_event (int event_code, ToolboxEvent *event, IdBlock *id_block,void* handle)
+{
+    fout ("Displaying MLCD window\n");
+    mlcdstatus = id_block->self_id;
+    mlcd_update ();
+
+    return Handled;
+}
+
+Bus* busses[4] = {&systemASB, &systemAPB, &commsASB, &commsAPB};
+Bus obusses[4];
+
+void
+busstate_update_field (
+    int             value,
+    unsigned int*   ovalue,
+    ComponentId     cid
+) {
+    static char buf[9];
+    if (value == *ovalue) return;
+    *ovalue = value;
+    if ((cid & 0xf0) == 0x30) sprintf (buf, "%d", value);
+    else  sprintf (buf, "%08.X", value);
+    ER(displayfield_set_value (0, busstatus, cid, buf));
+}
+
+void
+busstate_update (void) {
+    int i;
+    for (i = 0; i < 4; ++i) {
+        int write = busses[i]->state.write;
+        int byte = busses[i]->state.byte;
+        busstate_update_field ( busses[i]->state.address,
+                                &(obusses[i].state.address),
+                                0x10 + i);
+        busstate_update_field ( busses[i]->state.data,
+                                &(obusses[i].state.data),
+                                0x20 + i);
+        if (byte != obusses[i].state.byte) {
+            obusses[i].state.byte = byte;
+            /* Turn the button red or grey accordingly */
+            ER(button_set_flags (0, busstatus, 0x50 + i,
+                0x0f000000, byte? (11 << 24): (1 << 24)));
+        }
+
+        if (write != obusses[i].state.write) {
+            obusses[i].state.write = write;
+            /* Turn the button red or grey accordingly */
+            ER(button_set_flags (0, busstatus, 0x40 + i,
+                0x0f000000, write? (11 << 24): (1 << 24)));
+        }
+
+        busstate_update_field ( busses[i]->stats.clocks,
+                                &(obusses[i].stats.clocks),
+                                0x30 + i);
+    }
+}
+
+int
+busstate_reset (
+    int             event_code,
+    ToolboxEvent*   event,
+    IdBlock*        id,
+    void*           handle
+) {
+    int i = id->ancestor_component;
+    busses[i]->stats.clocks = 0;
+    obusses[i].state.address = -1;
+    obusses[i].state.data = -1;
+    ER(displayfield_set_value (0, busstatus, 0x10 + i, "-"));
+    ER(displayfield_set_value (0, busstatus, 0x20 + i, "-"));
+
+    return Handled;
+}
+
+int
+busstate_watch (
+    int             event_code,
+    ToolboxEvent*   event,
+    IdBlock*        id,
+    void*           handle
+) {
+    static char buf[9];
+    ER(writablefield_get_value (0, id->self_id, 2, buf, 9, 0));
+    sscanf (buf, "%x", &busses[id->ancestor_component]->stats.mask);
+    ER(writablefield_get_value (0, id->self_id, 3, buf, 9, 0));
+    sscanf (buf, "%x", &busses[id->ancestor_component]->stats.value);
+
+    return Handled;
+}
+
+int
+busstate_clock (
+    int             event_code,
+    ToolboxEvent*   event,
+    IdBlock*        id,
+    void*           handle
+) {
+    static char buf[9];
+    int byte, write;
+    ComponentId cid = id->self_component;
+    ComponentId acid = id->ancestor_component;
+    writablefield_get_value (0, id->self_id, 2, buf, 9, 0);
+    sscanf (buf, "%x", &busses[acid]->state.address);
+    optionbutton_get_state (0, id->self_id, 6, &byte);
+    optionbutton_get_state (0, id->self_id, 7, &write);
+    if (write) {
+        ER(writablefield_get_value (0, acid, 2, buf, 9, 0));
+        sscanf (buf, "%x", &busses[acid]->state.address);
+    }
+
+    busses[acid]->state.byte = byte;
+    busses[acid]->state.write = write;
+
+    return Handled;
+}
+
+int
+busstate_event (
+    int             event_code,
+    ToolboxEvent*   event,
+    IdBlock*        id_block,
+    void*           handle
+) {
+    switch (event_code) {
+    case 0x500:
+        busstatus = id_block->self_id;
+        busstate_update ();
+        break;
+    case 0x501:
+        busstatus = 0;
+        break;
+    }
+
+    return Handled;
+}
+
+int
+uart_load (WimpMessage *message,void *handle) {
+
+    fout ("data loaded: %s\n", message->data.data_load.leaf_name);
+    /* at some point make sure this is secure... */
+    if (busstatus) {
+        ER(displayfield_set_value (0, busstatus, 0x3c,
+            message->data.data_load.leaf_name));
+    }
+
+    return Handled;
+}
+
 
 void update_memory_gui(void)
 {
@@ -190,9 +370,9 @@ int lookup_event (int event_code, ToolboxEvent *event, IdBlock *id_block,void *h
   unsigned char bytev;
   unsigned int val,addr=0;
 
-  writablefield_get_value(0,id_block->self_id,1,in,16,0);
-  optionbutton_get_state(0,id_block->self_id,4,&log);
-  optionbutton_get_state(0,id_block->self_id,5,&byte);
+  ER(writablefield_get_value(0,id_block->self_id,1,in,16,0));
+  ER(optionbutton_get_state(0,id_block->self_id,4,&log));
+  ER(optionbutton_get_state(0,id_block->self_id,5,&byte));
 
   sscanf(in,"%x",&addr);
 
@@ -205,45 +385,45 @@ int lookup_event (int event_code, ToolboxEvent *event, IdBlock *id_block,void *h
     sprintf(out,"0x%08X",val);
   }
 
-  displayfield_set_value(0,id_block->self_id,3,out);
-  return 1;
+  ER(displayfield_set_value(0,id_block->self_id,3,out));
+  return Handled;
 }
 
 int update_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *handle)
 {
   numberrange_get_value(0,id_block->self_id,1,&multi);
   numberrange_get_value(0,id_block->self_id,5,&new_RAMSIZE);
-//  numberrange_get_value(0,id_block->self_id,9,&vidupdates);
+  numberrange_get_value(0,id_block->self_id,9,&vidupdates);
   numberrange_get_value(0,id_block->self_id,13,&ticker);
-  return(1);
+  return Handled;
 }
 
 int freeze = 0;
 
-int freeze_event(int event_code, OptionButtonStateChangedEvent *event, IdBlock *id_block,void *handle)
+int freeze_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *handle)
 {
-  freeze = event->new_state;
-  return 1;
+  freeze = ((OptionButtonStateChangedEvent*) event)->new_state;
+  return Handled;
 }
 
-int reset_event(int event_code, OptionButtonStateChangedEvent *event, IdBlock *id_block,void *handle)
+int reset_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *handle)
 {
   glue_reset_cpu();
 //  IOMD_reset(0);
-  return 1;
+  return Handled;
 }
 
-int por_event(int event_code, OptionButtonStateChangedEvent *event, IdBlock *id_block,void *handle)
+int por_event(int event_code, ToolboxEvent *event, IdBlock *id_block,void *handle)
 {
   glue_reset_cpu();
 //  IOMD_reset(1);
-  return 1;
+  return Handled;
 }
 
-int quit_message(WimpMessage *message,void *handle, int recorded)
+int quit_message(WimpMessage *message,void *handle)
 {
   quit = 1;
-  return(1);
+  return Handled;
 }
 
 int __swi(OS_ReadMonotonicTime) ticks(void);
@@ -265,7 +445,7 @@ int redraw_window(int event_code, WimpPollBlock *event,IdBlock *id_block,void *v
 
    /* claimed */
 
-   return 1;
+   return Handled;
 }
 
 void set_led(int win,int icon,int st)
@@ -289,14 +469,14 @@ void update_screen(WimpRedrawWindowBlock *upd, int cursor)
   if(wimp_update_window(upd,&more)) return;
   while (more)
   {
-//      if (cursor & 1) render_screen(upd);
+      render_screen(upd);
 //      if (cursor & 2) render_pointer(upd,cursor & 4);
       if(wimp_get_rectangle (upd,&more)) break;
   }
 }
 
-int wimp_messages[] = {Wimp_MModeChange,0};
-int toolbox_events[] = {1,100,101,102,150,300,400,401,500,550,900,901,1001,0};
+int wimp_messages[] = {Wimp_MModeChange, Wimp_MDataLoad, 0};
+int toolbox_events[] = {1,100,101,102,150,300,400,401,500,550,900,901,1001,0x400,SaveAs_AboutToBeShown,0x500, 0x501, 0x502, 0x503, 0x504,0};
 
 int wimp_armul8(int fast)
 {
@@ -313,28 +493,34 @@ int wimp_armul8(int fast)
   event_set_mask (0);
 
   event_register_toolbox_handler(-1,1,quit_event,0);
-  event_register_message_handler(Wimp_MQuit,(WimpMessageHandler *)quit_message,0);
+  event_register_message_handler(Wimp_MQuit,quit_message,0);
 //  event_register_message_handler(Wimp_MModeChange,video_mode_change,0);
   event_register_wimp_handler(-1,Wimp_ERedrawWindow,redraw_window,0);
   event_register_wimp_handler(-1,Wimp_ELoseCaret,lose_caret,0);
   event_register_toolbox_handler(-1,100,config_event,0);
-  event_register_toolbox_handler(-1,101,(ToolboxEventHandler *) reset_event,0);
-  event_register_toolbox_handler(-1,102,(ToolboxEventHandler *) por_event,0);
-  event_register_toolbox_handler(-1,150,(ToolboxEventHandler *) ios_event,0);
-  event_register_toolbox_handler(-1,300,(ToolboxEventHandler *) update_event,0);
-  event_register_toolbox_handler(-1,400,(ToolboxEventHandler *) disp_event,0);
-  event_register_toolbox_handler(-1,401,(ToolboxEventHandler *) disp_event,(void *)1);
-  event_register_toolbox_handler(-1,500,(ToolboxEventHandler *) freeze_event,0);
-  event_register_toolbox_handler(-1,550,(ToolboxEventHandler *) break_event,0);
-  event_register_toolbox_handler(-1,1001,(ToolboxEventHandler *) lookup_event,0);
-//  event_register_toolbox_handler(-1,SaveAs_AboutToBeShown,(ToolboxEventHandler *) setup_save,0);
-  event_register_toolbox_handler(-1,Toolbox_Error,(ToolboxEventHandler *) got_error,0);
-  event_register_toolbox_handler(-1,900,(ToolboxEventHandler *) memdisp_event,0);
-  event_register_toolbox_handler(-1,901,(ToolboxEventHandler *) memdisp_event,(void *)1);
+  event_register_toolbox_handler(-1,101,reset_event,0);
+  event_register_toolbox_handler(-1,102,por_event,0);
+  event_register_toolbox_handler(-1,150,ios_event,0);
+  event_register_toolbox_handler(-1,300,update_event,0);
+  event_register_toolbox_handler(-1,400,disp_event,0);
+  event_register_toolbox_handler(-1,401,disp_event,(void *)1);
+  event_register_toolbox_handler(-1,500,freeze_event,0);
+  event_register_toolbox_handler(-1,550,break_event,0);
+  event_register_toolbox_handler(-1,1001,lookup_event,0);
+  event_register_toolbox_handler(-1,SaveAs_AboutToBeShown,setup_save,0);
+  event_register_toolbox_handler(-1,Toolbox_Error,got_error,0);
+  event_register_toolbox_handler(-1,900,memdisp_event,0);
+  event_register_toolbox_handler(-1,901,memdisp_event,(void *)1);
+  event_register_toolbox_handler(-1,0x400, mlcddisp_event,0);
+  event_register_toolbox_handler(-1,0x500, busstate_event,0);
+  event_register_toolbox_handler(-1,0x501, busstate_event,0);
+  event_register_toolbox_handler(-1,0x502, busstate_reset,0);
+  event_register_toolbox_handler(-1,0x503, busstate_watch,0);
+  event_register_toolbox_handler(-1,0x504, busstate_clock,0);
+  event_register_message_handler(Wimp_MDataLoad, uart_load, 0);
 
   while(!quit) {
-    register int v = 1;//vidupdates;
-    int vidup = 0; // kludged to 0
+    int v = vidupdates;
     lastt = ticks();
     while (!quit && v--) {
        if (!quit && !freeze)
@@ -347,7 +533,7 @@ int wimp_armul8(int fast)
        }
        if (!quit) event_poll(0,0,0);
     }
-//    v = vidupdates;
+    v = vidupdates;
 //    flyback_irq();
 //    printer_heartbeat();
 //    if (ios) iomd_update_gui(ios);
@@ -358,7 +544,7 @@ int wimp_armul8(int fast)
       BBox box;
 
       if (vidup) {
-        int n = 0;//screen_change(&box);
+        int n = screen_change(&box);
         if (n) {
           wimp_set_extent(display,&box);
           open.window_handle = display;
@@ -367,7 +553,7 @@ int wimp_armul8(int fast)
           open.visible_area.ymin = open.visible_area.ymax +box.ymin;
           wimp_open_window((WimpOpenWindowBlock *)&open);
         }
-//        find_update_box(&upd.visible_area);
+        find_update_box(&upd.visible_area);
         update_screen(&upd,3);
       }
       if (curmove || curchange){
@@ -380,7 +566,7 @@ int wimp_armul8(int fast)
         update_screen(&upd,6);
       }
       //fout ("Screen changed and vidupdates zero\n");
-//      if (vidup) reset_update_box();
+      if (vidup) reset_update_box();
       vidup = 0;
       curmove = 0;
     }
@@ -388,13 +574,14 @@ int wimp_armul8(int fast)
     if (!quit && status) {
       char buf[128];
       sprintf(buf,"%d Hz, pc=%8.8x, psr=%8.8x, cr=%8.8x",(v*multi*100)/lastt,get_pc(),get_cpsr(),get_cr());
-      displayfield_set_value(0,status,0,buf);
+      ER(displayfield_set_value(0,status,0,buf));
       if (old_leds != ledvalue) {
         set_led(wimpst,leds[2],ledvalue & 1);
         set_led(wimpst,leds[0],ledvalue & 2);
         set_led(wimpst,leds[1],ledvalue & 4);
         old_leds = ledvalue;
       }
+      if (busstatus) busstate_update ();
     }
     if (!quit && keys_buffer && (last_key != *key_pos)) {
       int key = keys_buffer[last_key];

@@ -32,15 +32,19 @@
 #include "Bus.h"
 #include "CommsASB.h"
 #include "SystemAPB.h"
+#include "HW.Video.h"
 #include "utils.h"
 #include "swis.h"
 #include "wimp.h"
 #include "stdlib.h"
+#include "MLCD.h"
 
 // Boot ROM is 512 bytes.
 unsigned int _ROM[128];
 unsigned int* ROM = _ROM;
 unsigned int *SDRAM[2];
+
+unsigned int* RAM; /* define this here so that we don't have linkage probs. */
 
 // Dual port SRAM is 5120 bytes
 unsigned int SRAMSIZE = 5120;
@@ -65,7 +69,7 @@ SDRAM_controller_registers sdram_registers;
 #define ByteSRAM ((unsigned char*) SRAM)
 
 // This is the state of the System Bus.
-static BusState state;
+Bus systemASB;
 
 static AbortOrNot SystemASB_clock (BusState* state);
 
@@ -103,6 +107,8 @@ int initialise_memory_management(void *state)
       _swix(Wimp_ReportError, _IN(0), "    Can't Load ROM");
       return 1;
     }
+    _swix(Hourglass_Off,0);
+
   }
 
     return SystemAPB_init () || CommsASB_init ();
@@ -113,26 +119,26 @@ int
 memory_store_byte (unsigned int val, unsigned int ad)
 {
     // Setup the bus
-    state.address       = ad;
-    state.data          = val;
-    state.byte          = 1;
-    state.write         = 1;
+    systemASB.state.address       = ad;
+    systemASB.state.data          = val;
+    systemASB.state.byte          = 1;
+    systemASB.state.write         = 1;
 
     // Clock the system ASB.
-    return SystemASB_clock (&state);
+    return SystemASB_clock (&systemASB.state);
 }
 
 int
 memory_store_word (unsigned int val, unsigned int ad)
 {
     // Setup the bus
-    state.address       = ad;
-    state.data          = val;
-    state.byte          = 0;
-    state.write         = 1;
+    systemASB.state.address       = ad;
+    systemASB.state.data          = val;
+    systemASB.state.byte          = 0;
+    systemASB.state.write         = 1;
 
     // Clock the system ASB.
-    return SystemASB_clock (&state);
+    return SystemASB_clock (&systemASB.state);
 }
 
 int
@@ -141,15 +147,15 @@ memory_load_byte (unsigned char* val, unsigned int ad)
     int ret;
 
     // Setup the bus
-    state.address       = ad;
-    state.byte          = 1;
-    state.write         = 0;
+    systemASB.state.address       = ad;
+    systemASB.state.byte          = 1;
+    systemASB.state.write         = 0;
 
     // Clock the system ASB.
-    ret = SystemASB_clock (&state);
+    ret = SystemASB_clock (&systemASB.state);
 
     // Only write back data if we succeeded.
-    if (ret == DataSuccess) *val = state.data;
+    if (ret == DataSuccess) *val = systemASB.state.data;
 
     return ret;
 }
@@ -160,21 +166,18 @@ memory_load_word (unsigned int* val, unsigned int ad)
     int ret;
 
     // Setup the bus
-    state.address       = ad;
-    state.byte          = 0;
-    state.write         = 0;
+    systemASB.state.address       = ad;
+    systemASB.state.byte          = 0;
+    systemASB.state.write         = 0;
 
     // Clock the system ASB.
-    ret = SystemASB_clock (&state);
+    ret = SystemASB_clock (&systemASB.state);
 
     // Only write back data if we succeeded.
-    if (ret == DataSuccess) *val = state.data;
+    if (ret == DataSuccess) *val = systemASB.state.data;
 
     return ret;
 }
-
-static first_time = 1;
-
 
 static AbortOrNot
 SystemASB_clock (
@@ -183,26 +186,34 @@ SystemASB_clock (
     // Switch according to the top nybble
     switch (state->address & L7205_MEM_SEL) {
     case L7205_SRAM_ROM:
+        if (ROM != 0) {
+            state->data = MEMACCESS(ROM,
+                                    state->address & 0xffff,
+                                    state->byte);
+        }else {
+            // For the moment we just want to jump straight to SRAM so we always
+            // put this on the data lines regardless.
+            // E3A0F206 : MOV     PC,#&60000000, i.e. move pc to sram.
+            if (state->address != 0) {
+                replay_regs ();
+            }
+            state->data = 0xe3a0f206;
+        }
+        break;
     case L7205_SRAM_PCCARD1:
     case L7205_SRAM_PCCARD2:
     case L7205_SRAM_PCCARD3:
-        // For the moment we just want to jump straight to SRAM so we always
-        // put this on the data lines regardless.
-        // E3A0F206 : MOV     PC,#&60000000, i.e. move pc to sram.
-        if (first_time = 0) {
-            replay_regs ();
-            exit (1);
-        }
-        state->data = 0xe3a0f206;
-        first_time = 0;
+        fout ("access: address %x data %x\n",
+            state->address,
+            state->data);
+//        replay_regs ();
+//        exit (1);
         break;
 
     case L7205_ON_CHIP_SRAM1:
     case L7205_ON_CHIP_SRAM2:
         if ((state->address & 0xffff) > SDRAMSIZE) {
-            replay_regs ();
-            fout ("Illegal memory access\n");
-            return DataAbort;
+            fout ("Illegal memory access %x\n", state->address);
         }
         if (state->write)
         {
@@ -210,9 +221,13 @@ SystemASB_clock (
             {
                 BYTEACCESS(SRAM, state->address & 0xffff) =
                     state->data;
+                if (mlcd.sram) video_writeb (   state->address & 0xffff,
+                                                MLCD_translate (state->data));
             } else {
                 WORDACCESS(SRAM, state->address & 0xffff) =
                     state->data;
+                if (mlcd.sram) video_writew (   state->address & 0xffff,
+                                                MLCD_translate (state->data));
             }
         } else {
             state->data = MEMACCESS(SRAM,
@@ -234,7 +249,6 @@ SystemASB_clock (
     case L7205_RESERVED4:
         fout ("Attempt to %s from reserved address area %x\n",
             state->byte? "load": "store", state->address);
-        return DataAbort;
         break;
 
     case L7205_SDRAM_INT_REGISTERS:
@@ -265,8 +279,18 @@ SystemASB_clock (
                 if (state->byte)
                 {
                     BYTEACCESS(SDRAM[ram_select], ram_index) = state->data;
+                    if (!mlcd.sram) {
+                        video_writeb (state->address
+                            - (mlcd.MLCDBASE | 0xf0000000),
+                            MLCD_translate (state->data));
+                    }
                 } else {
                     WORDACCESS(SDRAM[ram_select], ram_index) = state->data;
+                    if (!mlcd.sram) {
+                        video_writew (state->address
+                            - (mlcd.MLCDBASE | 0xf0000000),
+                            MLCD_translate (state->data));
+                    }
                 }
             } else {
                 state->data = MEMACCESS(SDRAM[ram_select],
@@ -280,6 +304,8 @@ SystemASB_clock (
         // All cases are covered.
         abort ();
     }
+
+    WATCH_BUS(systemASB);
 
     return DataSuccess;
 }
