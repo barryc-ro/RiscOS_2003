@@ -6,6 +6,7 @@
 # When		Who	What
 # ----		---	----
 # 08-Aug-97	AJS	Created
+# 29-Jun-98	HKS	Added 'OPTS'
 #
 
 #
@@ -64,7 +65,11 @@ NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DLOCAL_URL_PATHS -UDIAL_ON_CO
 #NCTARGETARCH = ${ZIPDB}
 NCTARGETARCH = ${NODB}
 
-CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -DCOMPAT_INET4 ${NCTARGETARCH} 
+# OPTS flag in build options allows several options to be used :
+
+# EMAIL_URL lets it be known that we have an EMAIL_URL to fill in the smartcard
+
+CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -DCOMPAT_INET4 ${OPTS} ${NCTARGETARCH} 
 
 
 
