@@ -34,6 +34,13 @@ static void clear_ticker_and_event(void);
 static void setup_callback(void);
 static void clear_callback(void);
 
+#ifdef PKCS11
+#define Service_SmartCard		0xBA
+#define smartcard_INSERTED		0x01
+
+static void smartcard_service( int delta );
+#endif
+
 /* From http.c */
 extern int stricmp(const char *s1, const char *s2);
 
@@ -43,11 +50,24 @@ extern int stricmp(const char *s1, const char *s2);
 
 /*
  * pick up on the CSFS starting service call and register ourselves
+ * or detect smartcard insertion
  */
-#ifdef CSFS
+#if defined(CSFS ) || defined(PKCS11)
 void module_service(int service_number, _kernel_swi_regs *r, void *pw)
 {
-    csfs_service();
+    switch (service_number)
+    {
+#ifdef CSFS
+    case 0xBE:
+	csfs_service();
+	break;
+#endif
+#ifdef PKCS11
+    case Service_SmartCard:
+	smartcard_service( r->r[4] );
+	break;
+#endif
+    }
 }
 #endif
 
@@ -56,7 +76,10 @@ void module_service(int service_number, _kernel_swi_regs *r, void *pw)
 /*
  * Module finalisation function
  */
-static void module_final(void)
+#ifndef ACORN_BUILD
+static
+#endif
+void module_final(void)
 {
     http_connection *c, *next_one;
 
@@ -72,18 +95,21 @@ static void module_final(void)
         fdebugf(log_file, "%p: being closed by finalisation\n", c );
         http_close_handle(c, http_close_DELETE_FILE | http_close_FATAL );
     }
-#ifdef REMOTE_DEBUG
-    debug_printf(db,"(5) finalisation");
-    remote_debug_close(db);
-#endif
 
 #ifdef CSFS
     csfs_finalise();
 #endif
 
+    client_cert_finalise();
+
 #ifndef NO_SECURE
     if ( ssl_context )
         SSL_CTX_free( ssl_context );
+#endif
+
+#ifdef REMOTE_DEBUG
+    debug_printf(db,"(5) finalisation");
+    remote_debug_close(db);
 #endif
 }
 
@@ -180,6 +206,22 @@ static void dump_ciphers(void)
 	SSL_free(ssl);
     }
 }
+
+void dump_ssl_error(void)
+{
+    unsigned long l;
+    char buf[200];
+    char *file;
+    int line;
+    
+    fdebugf(log_file, "** crypto error log\n");
+
+    while ((l=ERR_get_error_line(&file,&line)) != 0)
+	fdebugf(log_file, "%s:%s:%d\n", ERR_error_string(l, buf),
+		file, line);
+
+    fdebugf(log_file, "** end\n");
+}
 #endif
 
 extern int __module_header;
@@ -243,13 +285,6 @@ extern os_error *module_initialise(char *cmd_tail, int pbase, void *pw)
     riscos_SSLLib_Init();
 #endif
 
-#if DEBUG && !defined(REMOTE_DEBUG) && ACORN_BUILD
-    {
-	extern FILE *SSL_ERR;
-	SSL_ERR = log_file;
-    }
-#endif
-
     {
 #ifdef SSLEAY8
     	SSLeay_add_ssl_algorithms();
@@ -291,13 +326,14 @@ extern os_error *module_initialise(char *cmd_tail, int pbase, void *pw)
         {
 #if DEBUG
     	    fdebugf(log_file, "** ssl_context returned null\n");
-    	    fdebugf(log_file, "** crypto error log\n");
-	    ERR_print_errors_fp(log_file);
-	    fdebugf(log_file, "** end\n");
+	    dump_ssl_error();
 #endif
             ssl_present = FALSE;
         }
     }
+
+    client_cert_initialise( ssl_context );
+
 # if SSL_VERSION == 2
     _kernel_setenv(SSL_VERSION_VAR, ssl_present ? "2" : "0");
 # else  
@@ -321,7 +357,10 @@ extern os_error *module_initialise(char *cmd_tail, int pbase, void *pw)
 #endif
 	allow |= http_config_USE_MIMEMAPMOD;
     
+#ifndef ACORN_BUILD
+    /* Using CMHG 5.16 we don't need this */
     atexit(&module_final);
+#endif
 
     return 0;
 
@@ -546,6 +585,10 @@ extern os_error *module_swi_handler(int swinum, _kernel_swi_regs *regs, void *pw
 #endif
     case HTTP_Config - HTTP_SWI_Base:
 	return http_config((http_config_args *)regs);
+#ifdef PKCS11
+    case HTTP_CertOp - HTTP_SWI_Base:
+	return http_certop((http_certop_args *)regs);
+#endif
     }
 
     return NULL;
@@ -776,4 +819,119 @@ static void clear_callback(void)
     }
 }
 
-/* eof */
+#ifdef PKCS11
+static void smartcard_insertion( BOOL inserted )
+{
+    http_connection *c;
+    
+    /* call once for each connection */
+    for (c = http_cons_list; c != NULL; c = c->next)
+    {
+	client_smartcard_insertion( c, inserted );
+    }
+
+    /* call once globally */
+    client_smartcard_insertion( NULL, inserted );
+}
+
+static void smartcard_service( int delta )
+{
+    fdebugf( log_file, "smartcard_service: delta %x", delta);
+
+    if (delta == -1)		/* smartcard removed */
+    {
+	smartcard_insertion( FALSE );
+    }
+    else if (delta & smartcard_INSERTED)
+    {
+	smartcard_insertion( TRUE );
+    }
+}
+#endif
+
+/* ------------------------------------------------------------------------- */
+
+#if 0
+#define TaskModule_SendMessage 0x4d300
+
+#define wimp_MOPENURL	0x4AF80
+
+typedef union {
+  char *ptr;
+  int offset;
+} string_value;
+
+typedef union {
+    char url[236];
+    struct {
+        int tag;
+        string_value url;
+        int flags;
+        string_value body_file;
+        string_value target;
+        string_value content_type;
+    } indirect;
+} urlopen_data;
+
+typedef struct
+{
+    struct 
+    {
+        int    size;
+        int    sender;
+        int    my_ref;
+        int    your_ref;
+        int    action_code;
+    } hdr;
+
+    union
+    {
+        int                       words[59];
+        char                      bytes[236];
+    } data;
+} WimpMessage;
+
+#define TARGET	"__dbox"
+
+static void dbox_show( const char *target, const char *url )
+{
+    WimpMessage msg;
+    urlopen_data *u = (urlopen_data *)&msg.data;
+    char *s;
+    
+    fdebugf( log_file, "dbox_show: target '%s' url '%s'", target, url );
+
+    u->indirect.tag = 0;
+    u->indirect.flags = 0;
+    u->indirect.body_file.offset = 0;
+    u->indirect.content_type.offset = 0;
+
+    u->indirect.target.offset = sizeof(u->indirect);
+    s = (char *)u + u->indirect.target.offset;
+    strcpy(s, target);
+    
+    u->indirect.url.offset = u->indirect.target.offset + strlen(s) + 1;
+    s = (char *)u + u->indirect.url.offset;
+    strcpy(s, url);
+    
+    msg.hdr.action_code = wimp_MOPENURL;
+    msg.hdr.your_ref = 0;
+    msg.hdr.size = (sizeof(msg.hdr) + (u->indirect.url.offset + strlen(s) + 1 + 3)) &~ 3;
+
+    _swix(TaskModule_SendMessage, _INR(0,5), 0, &msg, 0, 0, 0, 0);
+}
+
+void dbox_open( void )
+{
+    dbox_show( "__dbox", "file:/MAScr:splash.html" );
+}
+
+void dbox_close( void )
+{
+    dbox_show( "__dbox", "ncint:loadurl?remove=__dbox" );
+}
+#endif
+
+/* ------------------------------------------------------------------------- */
+
+/* eof module.c */

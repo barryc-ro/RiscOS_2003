@@ -123,6 +123,8 @@ static const char *err_strings[] = {
 #else
     "",
 #endif
+    "HTTPS connection not in progress",
+    "SSLOp called out of context",
     "Unknown error"
     };
 
@@ -826,18 +828,13 @@ os_error *http_prosecute( http_connection *c )
                 fdebugf( log_file, "SSL_connect returned %d (sockerrno=%d sslerrno=%d)\n", rc,
                                    socket_errno, SSL_errno() );
 
-            if ( rc < 0 )
+            if ( rc <= 0 )
             {
-                if ( socket_errno == EWOULDBLOCK || SSL_errno() == EWOULDBLOCK )
+                if ( rc < 0 && (socket_errno == EWOULDBLOCK || SSL_errno() == EWOULDBLOCK ) )
                     return NULL;    /* still trying */
 
 #if DEBUG
-/* 		if (rc) */
-		{
-		    fdebugf(log_file, "** crypto error log\n");
-		    ERR_print_errors_fp(log_file);
-		    fdebugf(log_file, "** end\n");
-		}
+		dump_ssl_error();
 #endif
 
                 http_fail( c, verify_error ? status_FAIL_VERIFY
@@ -851,7 +848,7 @@ os_error *http_prosecute( http_connection *c )
                 X509 *peer = SSL_get_peer_certificate(c->SSL);
                 char *cipher = SSL_get_cipher( c->SSL );
 
-                fdebugf( log_file, "peer=%p cipher=%p\n", peer, cipher );
+                fdebugf( log_file, "%p: peer=%p cipher=%p\n", c, peer, cipher );
 
                 if ( peer )
                 {
@@ -892,9 +889,7 @@ os_error *http_prosecute( http_connection *c )
                 else
                 {
 #if DEBUG
-		    fdebugf(log_file, "** crypto error log\n");
-                    ERR_print_errors_fp(log_file);
-		    fdebugf(log_file, "** end\n");
+		    dump_ssl_error();
 #endif
                 }
 
@@ -1622,7 +1617,7 @@ static BOOL http_go_ssl( http_connection *c )
 err:
 
 #if DEBUG
-    ERR_print_errors_fp(stderr);
+    dump_ssl_error();
 #endif
     return FALSE;
 }
@@ -2480,7 +2475,7 @@ os_error *http_config( http_config_args *r)
 	r->r1 = http_ssl_NONE;
 	r->r2 = 0;
 #else
-	r->r1 = http_ssl_EXPORT;
+	r->r1 = SSL_export_only() ? http_ssl_EXPORT : http_ssl_FULL;
 	r->r2 = SSL_VERSION;
 #endif
 	break;
@@ -3286,6 +3281,8 @@ void http_socket_close(http_connection *c)
 	if ( c->SSL != NULL )
 	{
 	    fdebugf( log_file, "Closing SSL connection\n" );
+	    client_cert_cleanup( c->SSL );
+
 	    SSL_free( c->SSL );
 	    c->SSL = NULL;
 	}
@@ -3504,7 +3501,7 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
         /* RISC OS will give us a random size */
         if ( c->fh && !c->total_size )
         {
-            fprintf( log_file, "%p: setting extent (2) to %d\n", c, total );
+            fdebugf( log_file, "%p: setting extent (2) to %d\n", c, total );
             if (ro_set_extent(c->fh, total) < 0)
 	    {
 		http_oserror( c, ro_ferror() );
@@ -3541,6 +3538,8 @@ BOOL http_check_special_headers( http_connection *c, char *key, char *value )
 #ifndef NO_SECURE
 int cert_verify_callback( int ok, X509 *xs, X509 *xi, int depth, int error)
 {
+    fdebugf( log_file, "cert_verify_callback: ok %d xs %p xi %p depth %d error %d", ok, xs, xi, depth, error );
+    
     if ( !ok )
     {
         if ( depth >= CERT_VERIFY_DEPTH )
