@@ -17,12 +17,17 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
-AS      = aasm
+AS      = do objasm
+LN	= link
 CP      = copy
 RM      = remove
+WIPE    = -wipe
+
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+AFLAGS = -depend !Depend -Stamp -quit
+LFLAGS = -o $@ -rmf
 CPFLAGS = ~cfr~v
+WFLAGS  = ~c~v
 
 #
 # Program specific options:
@@ -31,6 +36,13 @@ COMPONENT = OSVersion
 SOURCE    = s.ModHead
 TARGET    = rm.${SYSTEM}.${UserIF}.OSVersion
 EXPORTS   =
+
+OBJS = o.ModHead
+
+#
+# Rule patterns
+#
+.s.o:;      ${AS} ${AFLAGS} $< $@ -Predefine "Date SETS \"${DATE}\"" -Predefine "Version SETS \"${VERSION}\"" -Predefine "Name SETS \"${NAME}\"" -Predefine "Build SETS \"${BUILDNAME}\"" 
 
 #
 # Generic rules:
@@ -47,26 +59,27 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${WIPE} o.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE}
+${TARGET}: ${OBJS}
 	${MKDIR} rm.${SYSTEM}
 	${MKDIR} rm.${SYSTEM}.${UserIF}
-        ${AS} ${ASFLAGS} ${SOURCE}
+	${LN} ${LFLAGS} ${OBJS}
 
 # Dynamic dependencies:
-rm.RCA.RCA.OSVersion: Hdr:ListOpts
-rm.RCA.RCA.OSVersion: Hdr:Macros
-rm.RCA.RCA.OSVersion: Hdr:System
-rm.RCA.RCA.OSVersion: Hdr:SWIs
-rm.RCA.RCA.OSVersion: Hdr:CPU.Generic26
-rm.RCA.RCA.OSVersion: Hdr:IO.GenericIO
-rm.RCA.RCA.OSVersion: Hdr:RISCOS
-rm.RCA.RCA.OSVersion: Hdr:ModHand
-rm.RCA.RCA.OSVersion: Hdr:Machine.<Machine>
-rm.RCA.RCA.OSVersion: Hdr:Machine.Machine
-rm.RCA.RCA.OSVersion: Hdr:Proc
-rm.RCA.RCA.OSVersion: s.<System>.<UserIF>
+o.ModHead: s.ModHead
+o.ModHead: Hdr:ListOpts
+o.ModHead: Hdr:Macros
+o.ModHead: Hdr:System
+o.ModHead: Hdr:SWIs
+o.ModHead: Hdr:CPU.Generic26
+o.ModHead: Hdr:IO.GenericIO
+o.ModHead: Hdr:RISCOS
+o.ModHead: Hdr:ModHand
+o.ModHead: Hdr:Machine.<Machine>
+o.ModHead: Hdr:Machine.Machine
+o.ModHead: Hdr:Proc
