@@ -20,6 +20,7 @@ include AAsmModule
 #
 # Static dependencies
 #
+${SA_OBJECT}: ${DATAFILE}
 ${ROM_OBJECT}: ${DATAFILE}
 
 DATAFILEGENERATOR = GenYUVTab
