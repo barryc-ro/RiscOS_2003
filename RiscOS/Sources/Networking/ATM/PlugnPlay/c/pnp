@@ -49,16 +49,39 @@ Date      Who     Description of change
 
 /****************************************************************************/
 
-/*
-   9/1/97:CP:changed type of ATMinit ptr from char * to int * so that it
-             can be used directly to pass data to the ATM card in pnp_ini()
-*/
-extern int *ATMinit;
-extern unsigned int ATMinit_length;  /* these 2 symbols come from data2aof headers */
+/* ATM related CMOS locations */
+enum
+{
+    /* Locations in main CMOS RAM */
+    PrimaryServer_ATMAddr_1      = 0x1e,
+    PrimaryServer_ATMAddr_1_Size = 12,
+    PrimaryServer_ATMAddr_2      = 0x2f,
+    PrimaryServer_ATMAddr_2_Size = 8,
 
-#define NVRAM_ATM_PORTSPEED 0xD7  /* base address of 2 bytes to hold upstream
-                                     bandwidth limit parameter
-                                     (in kbps; 0 => no limit) */
+    Host_IPAddr                  = 0x6c,
+    Host_IPAddr_Octet4           = 0x00,
+
+    Netmask                      = 0x6f,
+    Netmask_Shift                = 3,
+    Netmask_Mask                 = 0x1f << Netmask_Shift,
+
+    /* This is dodgy and should be moved */
+    /* base address of 2 bytes to hold upstream bandwidth limit
+     * parameter (in kbps; 0 => no limit)
+     */
+    UpstreamBandwidth            = 0xd7,
+
+    /* Offsets into podule CMOS RAM */
+    PVC                          = 0x0,
+    Flags                        = 0x2
+};
+
+enum
+{
+    NSAPAddr_Size = 20
+};
+
+
 
 static int selected_pnp_address   = 0x300;
 static int selected_pnp_interrupt = 1;
@@ -80,6 +103,25 @@ static U8  key[32] =
     0xE8, 0x74, 0x3A, 0x9D, 0xCE, 0xE7, 0x73, 0x39
 };
 
+#ifndef M_round_word
+#define M_round_word(x) ( ( (x) + (sizeof (unsigned int) - 1) ) &\
+                          ~(sizeof (unsigned int) - 1) )
+#endif
+
+static int  pnp_ini_write (unsigned int *  ini_data,
+                           size_t          num_words);
+
+static char *  pnp_ini_portspeed (char *  ini_ptr);
+
+static char *  pnp_ini_lane (char *  ini_ptr);
+
+static void  read_arp_atm_addr (unsigned char *  atm_addr);
+
+static char *  num_to_sep_str (void *        num,
+                               const size_t  num_size,
+                               char *        s,
+                               char          sep,
+                               char *        fmt);
 
 
 
@@ -473,149 +515,301 @@ Globals used: ATMinit  (int *) ptr to ATMinit data
               ATMinit_length (unsigned int) length of ATMinit data
 
 **************************************************************************/
-int pnp_ini(void)
+
+int  pnp_ini (void)
 {
-/*     char widge[] = "-\\|/"; */
-/*     int widget = 0; */
-    unsigned long int_count;  /* number of 4-byte words to write */
-    unsigned int tInit;
-    unsigned int uiData;
-    int gotAck = 0;
+    enum
+    {
+        INI_BufferSize  = 4096,
+        INI_DynamicSize = 2048
+    };
+    extern char *   ATMinit;
+    extern size_t   ATMinit_length;
+    static char     ini_buffer[INI_BufferSize];
+    char *          ini_ptr;
 
-    int Vlo;
-    int Vhi;
-    int UpstreamSpeed; /* read from CMOS */
-    char UpstreamString[22];  /* holds "atm_portspeed=xxxxxx\n\0" */
-    int *pUpString; /* working ptr into string */
-    int SpareInt;  /* used to transfer ragged edge between .ini and portspeed */
+    /* Some of the Virata.ini file is static, fixed at compile time and some
+     * is generated at run-time.  Requirement to transfer data to Boson a word
+     * at a time means it is easiest to copy everything into a contiguous
+     * buffer at first and then transfer it all to the Boson.  Buffer is
+     * currently 4k: say 2k for complied-in stuff and 2k for dynamic stuff.
+     */
+
+    if (ATMinit_length + INI_DynamicSize > INI_BufferSize)
+    {
+        return -1;
+    }
+
+    memcpy (ini_buffer, ATMinit, ATMinit_length);
+    ini_ptr = ini_buffer + ATMinit_length;
+
+    ini_ptr = pnp_ini_portspeed (ini_ptr);
+
+    /* If there is no LANE information in the file then make our own */
+    if (!strstr (ATMinit, "\r\nlane="))
+    {
+        ini_ptr = pnp_ini_lane (ini_ptr);
+    }
+
+    QUIET printf ("Final Virata.ini being transferred to NIC:\n%s\n", ini_buffer);
+
+    return pnp_ini_write ((unsigned int *) ini_buffer,
+                          M_round_word (ini_ptr - ini_buffer) / 4);
+}
 
 
-/* 5/2/98:CP:create setportspeed string */
 
-    /* read CMOS for value of upstream bandwidth (in kbps) */
-    _swi ( OS_Byte, _IN(0) | _IN(1) | _OUT(2), 161, NVRAM_ATM_PORTSPEED, &Vlo);
-    _swi ( OS_Byte, _IN(0) | _IN(1) | _OUT(2), 161, NVRAM_ATM_PORTSPEED + 1, &Vhi);
-    UpstreamSpeed = ( (Vhi << 8) | Vlo);
+int  pnp_ini_write (unsigned int *  ini_data,
+                    size_t          num_words)
+{
+    unsigned int  tInit;
+    int           gotAck = 0;
 
-    /*
-       convert this value to the form used by the card.
-       Card value = speed in kbps * 1000 / 432.
-    */
-    UpstreamSpeed *= 1000;
-    UpstreamSpeed /= 432;
-
-    sprintf (UpstreamString, "atm_portspeed=%d\r\n", UpstreamSpeed);
-    pUpString = (int *) UpstreamString;
-
-    /* turn int_count into number of words */
     /* 15/1/97:CP: code changed to reflect bosonxfr.c */
-    int_count = (unsigned long)
-                    (ATMinit_length + (unsigned long) strlen (UpstreamString) +
-                     sizeof(U32) - 1L) / (unsigned long) sizeof (U32);
-
-    /* 19/12/96:CP: fixed print statement - various mismatched warnings etc */
-    QUIET printf("INIT: Loading %d bytes (%lu words) from 0x%x\n",
-    	  ATMinit_length + strlen (UpstreamString), int_count, (unsigned int)ATMinit);
-
-
-    BlockWrite(CONFIG_DATA);
+    BlockWrite (CONFIG_DATA);
 
     tInit = MonotonicTime();
 
-
     /* loop similar to sample code, bosonxfr.c */
-    while ( !gotAck && ( (MonotonicTime() - tInit) < TIMEOUT) )
+    do
     {
-      uiData = BlockRead();
+        unsigned int  data;
 
-      if (uiData == CONFIG_DATA)
-      { /* success!  Data read OK */
-        gotAck = 1;
-        QUIET printf("Got CONFIG_DATA word back in acknowledgement\n");
-      }
-
-      if (uiData == -1)
-      { /* timeout reading data */
-        break;
-      }
+        data = BlockRead();
+        {
+            if (data == CONFIG_DATA)
+            {
+                gotAck = 1;
+                QUIET printf("Got CONFIG_DATA word back in acknowledgement\n");
+            }
+        }
     }
+    while (!gotAck && (MonotonicTime() - tInit) < ACK_TIMEOUT);
 
     if (!gotAck)
     {
-      return -1;
+        return -1;
     }
 
-
-    CommitWrite((int)int_count); /* 19/12/96:CP: CommitWrite takes (int) argument */
+    CommitWrite (num_words); /* 19/12/96:CP: CommitWrite takes (int) argument */
 
     QUIET printf( "downloading...\r\n" );
 
-    while ( (ATMinit_length > sizeof (U32) ) && (timeoutError == 0) )
+    while (num_words-- && !timeoutError)
     {
-       /*
-          9/1/97:CP:Sending words (4 bytes) but incrementing ATMinit (a
-                    char *) only moves it on by a byte!
-                    Re-write code to use ATMinit pointer consistently.
-                    Chksum not used.
+        /* debugging.... */
+        QUIET printf("%c", *((char *)  ini_data));
+        QUIET printf("%c", *(((char *) ini_data) + 1));
+        QUIET printf("%c", *(((char *) ini_data) + 2));
+        QUIET printf("%c", *(((char *) ini_data) + 3));
 
-                    Removed spurious braces.
-       */
-
-       /* debugging.... */
-       QUIET printf("%c", *((char *)ATMinit));
-       QUIET printf("%c", *(((char *)ATMinit) + 1));
-       QUIET printf("%c", *(((char *)ATMinit) + 2));
-       QUIET printf("%c", *(((char *)ATMinit) + 3));
-
-       CommitWrite(*ATMinit); /* 19/12/96:CP: CommitWrite takes (int) argument */
-                              /*  5/ 2/98:CP:timeoutError can be set
-                                 (incremented) in this function, so quitting
-                                 the while loop.  Yuk!
-                              */
-       ATMinit++;
-       ATMinit_length -= sizeof (U32);
-       int_count --;
-
-    } /* end while ((int_count > sizeof (U32) ) && (timeoutError == 0)) */
-
-
-    if (ATMinit_length != 0)
-    {
-       memcpy ( (char *)&SpareInt, (char *)ATMinit, ATMinit_length);  /* copy last few bytes over */
-
-       /* now copy the first few bytes of the portspeed string...*/
-       memcpy ( (char *)( (int)&SpareInt + (int)ATMinit_length), (char *)pUpString, sizeof(U32) - ATMinit_length);
-
-       /* debugging.... */
-       QUIET printf("%c", *((char *)&SpareInt));
-       QUIET printf("%c", *(((char *)&SpareInt) + 1));
-       QUIET printf("%c", *(((char *)&SpareInt) + 2));
-       QUIET printf("%c", *(((char *)&SpareInt) + 3));
-
-       CommitWrite(SpareInt);
-
-       pUpString = (int *)( ((char *)pUpString) + sizeof(U32) - ATMinit_length );
-
-       int_count --;
-    }
-
-    while ( ( int_count != 0 ) && (timeoutError == 0) )
-    {
-       /* debugging.... */
-       QUIET printf("%c", *((char *)pUpString));
-       QUIET printf("%c", *(((char *)pUpString) + 1));
-       QUIET printf("%c", *(((char *)pUpString) + 2));
-       QUIET printf("%c", *(((char *)pUpString) + 3));
-
-       CommitWrite(*pUpString);
-
-       pUpString++;
-       int_count --;
-
-    } /* end while ( int_count != 0 ) && (timeoutError == 0) ) */
+        /* 19/12/96:CP: CommitWrite takes (int) argument */
+        /* 05/02/98:CP:timeoutError can be set (incremented) in this
+         * function, so quitting the while loop.  Yuk!
+         */
+        CommitWrite (*ini_data++);
+    } /* end while (num_words-- && !timeoutError) */
 
 
     QUIET printf("\n");
 
     return (timeoutError == 0);
+}
+
+
+
+
+char *  pnp_ini_portspeed (char *  ini_ptr)
+{
+    int Vlo;
+    int Vhi;
+    int UpstreamSpeed; /* read from CMOS */
+
+    /* 5/2/98:CP:create setportspeed string */
+
+    /* read CMOS for value of upstream bandwidth (in kbps) */
+    _swix (OS_Byte, _INR (0, 1) | _OUT(2), 161, UpstreamBandwidth, &Vlo);
+    _swix (OS_Byte, _INR (0, 1) | _OUT(2), 161, UpstreamBandwidth + 1, &Vhi);
+    UpstreamSpeed = ( (Vhi << 8) | Vlo);
+
+    /* convert this value to the form used by the card.
+     * Card value = speed in kbps * 1000 / 432.
+     */
+    UpstreamSpeed *= 1000;
+    UpstreamSpeed /= 432;
+
+    ini_ptr += sprintf (ini_ptr, "atm_portspeed=%d\r\n", UpstreamSpeed);
+
+    return ini_ptr;
+}
+
+
+
+
+char *  pnp_ini_lane (char *  ini_ptr)
+{
+    unsigned int   netmask;
+    unsigned int   subnet;
+    unsigned int   ip_addr;
+    int            cmos_byte;
+    unsigned char  arp_atm_addr[NSAPAddr_Size];
+    int            i;
+
+    /* Create ini file entry to configure SVC based IPOA.
+     * For some bizarre reason the Virata.ini documentation states that
+     * the IP address of the ARP server is required (why? it just needs
+     * the ATM address so an SVC can be created to it, and even then it
+     * could still use an InATMARP request to find its IP address).
+     * This is used twice in the ini file - once for the configuration
+     * of the ARP server and once for the configuration of the IPOA
+     * subnet.  As far as I can tell, it's only really used as a
+     * mechanism for binding these two bits of configuration information
+     * together.  I've tried just using the subnet address as the ARP
+     * server address (e.g. x.x.x.0) and this seems to work fine, so
+     * this is what we use - saves us having to find more NVRAM in which
+     * to store yet another IP address.
+     */
+
+    /* Read the host IP address */
+    _swix (OS_Byte, _INR (0, 1) | _OUT(2),
+           161,
+           Host_IPAddr,
+           &cmos_byte);
+    cmos_byte &= 0xff;
+    ip_addr = cmos_byte;
+
+    _swix (OS_Byte, _INR (0, 1) | _OUT(2),
+           161,
+           Host_IPAddr + 1,
+           &cmos_byte);
+    cmos_byte &= 0xff;
+    ip_addr |= cmos_byte << 8;
+
+    _swix (OS_Byte, _INR (0, 1) | _OUT(2),
+           161,
+           Host_IPAddr + 2,
+           &cmos_byte);
+    cmos_byte &= 0xff;
+    ip_addr |= cmos_byte << 16;
+
+    _swix (OS_Byte, _INR (0, 1) | _OUT(2),
+           161,
+           Host_IPAddr_Octet4,
+           &cmos_byte);
+    cmos_byte &= 0xff;
+    ip_addr |= cmos_byte << 24;
+
+    QUIET printf ("IP address: %x\n", ip_addr);
+
+    /* Read the netmask */
+    _swix (OS_Byte, _INR (0, 1) | _OUT(2),
+           161,
+           Netmask,
+           &cmos_byte);
+    cmos_byte = (cmos_byte & Netmask_Mask) >> Netmask_Shift;
+
+    /* Netmask is actually a 5 bit value containing the number of significant
+     * bits in the netmask that are set (0 = 32 because can't have a netmask
+     * of all zero).
+     */
+    cmos_byte &= 0x1f;    /* ensure only 5 bit number */
+    if (cmos_byte == 0)
+    {
+        cmos_byte = 32;
+    }
+
+    for (i = 0, netmask = 0;
+         i < 32 && cmos_byte;
+         ++i, --cmos_byte)
+    {
+        netmask |= (1 << i);
+    }
+    QUIET printf ("Netmask: %x\n", netmask);
+
+
+    /* Work out the subnet */
+    subnet = ip_addr & netmask;
+    QUIET printf ("Subnet: %x\n", subnet);
+
+    /* Read the ATM address of the ARP server */
+    read_arp_atm_addr (arp_atm_addr);
+
+    ini_ptr += sprintf (ini_ptr, "lane=proto:atm/ip:");
+    ini_ptr =  num_to_sep_str (&subnet, sizeof (subnet), ini_ptr, '.', "%d");
+    ini_ptr += sprintf (ini_ptr, "/atm:");
+    ini_ptr =  num_to_sep_str (arp_atm_addr,
+                               sizeof (arp_atm_addr),
+                               ini_ptr,
+                               '.',
+                               "%02x");
+    ini_ptr += sprintf (ini_ptr, "\r\nlane=proto:sipa/ip:");
+    ini_ptr =  num_to_sep_str (&subnet, sizeof (subnet), ini_ptr, '.', "%d");
+    ini_ptr += sprintf (ini_ptr, "/mask:");
+    ini_ptr =  num_to_sep_str (&netmask, sizeof (netmask), ini_ptr, '.', "%d");
+    ini_ptr += sprintf (ini_ptr, "/server:");
+    ini_ptr =  num_to_sep_str (&subnet, sizeof (subnet), ini_ptr, '.', "%d");
+    ini_ptr += sprintf (ini_ptr, "\r\n");
+
+    return ini_ptr;
+}
+
+
+
+
+void  read_arp_atm_addr (unsigned char *  atm_addr)
+{
+    int  i;
+    int  cmos_byte;
+
+    for (i = PrimaryServer_ATMAddr_1;
+         i < PrimaryServer_ATMAddr_1 + PrimaryServer_ATMAddr_1_Size;
+         ++i)
+    {
+        _swix (OS_Byte, _INR (0, 1) | _OUT(2),
+               161,
+               i,
+               &cmos_byte);
+        *atm_addr++ = (unsigned char) (cmos_byte & 0xff);
+    }
+
+    for (i = PrimaryServer_ATMAddr_2;
+         i < PrimaryServer_ATMAddr_2 + PrimaryServer_ATMAddr_2_Size;
+         ++i)
+    {
+        _swix (OS_Byte, _INR (0, 1) | _OUT(2),
+               161,
+               i,
+               &cmos_byte);
+        *atm_addr++ = (unsigned char) (cmos_byte & 0xff);
+    }
+}
+
+
+
+
+char *  num_to_sep_str (void *        num,
+                        const size_t  num_size,
+                        char *        s,
+                        char          sep,
+                        char *        fmt)
+{
+    int     i;
+
+    *s = 0;
+    if (!fmt)
+    {
+        fmt = "%02x";
+    }
+
+    if (num)
+    {
+        for (i = 0; i < num_size - 1; ++i)
+        {
+            s += sprintf (s, fmt, ((unsigned char *) num)[i]);
+            *s++ = sep;
+        }
+        s += sprintf (s, fmt, ((unsigned char *) num)[i]);
+    }
+
+    return s;
 }

@@ -25,6 +25,7 @@ MODSQZ		= modsqz
 RESGEN		= resgen
 WIPE		= -wipe
 DATA2AOF	= datatoaof
+STRIPDEPEND	= stripdepnd
 
 ASMFLAGS	= -depend !Depend -Stamp -quit $(THROWBACK)
 CFLAGS		= -depend !Depend -c -strict -wps -zM -zps1 -ffah $(INCLUDES) $(THROWBACK) $(EXTRACFLAGS)
@@ -129,6 +130,7 @@ clean:
 	$(RM) $(RAMTARGET)
 	$(RM) $(ROMTARGET)
 	$(RM) syms
+	@$(STRIPDEPEND)
 	@echo $(COMPONENT): cleaned
 
 resources:
