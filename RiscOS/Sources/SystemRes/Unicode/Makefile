@@ -62,6 +62,11 @@ resources-Japan: resources-
         ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.*GB*  ${WFLAGS}
         ${WIPE} ${RESDIR}.Encodings.BigFive              ${WFLAGS}
 
+resources-NoCJK: resources-
+        ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.* ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.BigFive          ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.Microsoft.CP932  ${WFLAGS}
+
 resources-:
         ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
@@ -94,7 +99,7 @@ install: install_${OPTIONS} install_dirs
 	echo ${COMPONENT}: Installed.
 
 module:
-	modgen UnicodeRes UnicodeRes UnicodeRes 0.13 -via viafile
+	modgen UnicodeRes UnicodeRes UnicodeRes 0.18 -via viafile
 	echo built softload UnicodeRes 
 
 # Dynamic dependencies:
