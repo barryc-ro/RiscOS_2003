@@ -20,7 +20,7 @@ MODULES = \
 #
 install: ${MODULES}
         ${MKIMAGE} { < ForBigSplt }
-        settype <install$dir>.Images.EMCRom/016 FE5
+        settype <install$dir>.Images.EMCRom/017 FE5
 
 EMCMsgs:
         @seteval PositionInRom &03C00000
