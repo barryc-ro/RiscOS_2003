@@ -21,6 +21,7 @@ RMDIR   = @-remove
 LD	= link
 LIBFILE = libfile
 CC	= cc
+SQUEEZE = squeeze
 WIPE	= @-wipe
 
 CCFLAGS = -c -depend !Depend ${INCLUDES} ${DFLAGS}
@@ -233,8 +234,8 @@ install_base:
 	${CP} Resources.ini.wfclient			${INSTALLDIR}.${APPNAME}.ini.WFClient ${CPFLAGS} 
 
 install: ${APP} install_base
-	${CP} ${APP}					${INSTALLDIR}.${APPNAME}.!RunImage ${CPFLAGS}
-	restool merge ${INSTALLDIR}.${APPNAME}.Res Resources.app.${COUNTRY}.Res_base Resources.app.${COUNTRY}.Res_deskto
+	${SQUEEZE} ${APP}				${INSTALLDIR}.${APPNAME}.!RunImage
+	restool merge ${INSTALLDIR}.${APPNAME}.Res Resources.app.${COUNTRY}.Res_base Resources.app.${COUNTRY}.Res_${USERIF}
 	@echo Installed ${COMPONENT}
 
 installrm: install_base ${APPRM}
