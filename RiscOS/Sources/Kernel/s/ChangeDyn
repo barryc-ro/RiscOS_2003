@@ -15,19 +15,26 @@
 ;       R1 set to bytes moved.
 ;******************************************************************************
 
+;access permissions and flags
+;
 AP_AppSpace     *       0                                       ; user r/w, CB
+AP_SVCStack     *       1                                       ; user r/-, CB (added for Ursula)
 AP_SysHeap      *       0                                       ; user r/w, CB
 AP_RMA          *       0                                       ; user r/w, CB
 AP_Screen       *       0 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_DoublyMapped :OR: DynAreaFlags_NeedsSpecificPages
 AP_VRescue      *       2 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_NeedsSpecificPages
 AP_Sprites      *       0                                       ; user r/w, CB
 AP_FontArea     *       2                                       ; user none, CB
-AP_RAMDisc      *       2 :OR: DynAreaFlags_NotCacheable        ; user none, ~CB
+AP_RAMDisc      *       2 :OR: DynAreaFlags_NotCacheable        ; user none, ~CB (this is crap performance for current StrongARMs)
+AP_RAMDisc_SA   *       2                                       ; user none, CB  (for StrongARM only - added for Ursula)
 AP_Duff         *       2 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_NotBufferable ; user none, ~C~B
 AP_FreePool     *       2 :OR: DynAreaFlags_NotCacheable        ; user none, ~CB
 AP_CursorChunk5 *       1 :OR: PageFlags_Unavailable                                  ;first 5 pages of 8 page chunk (SWI dispatch etc)
 AP_CursorChunk3 *       1 :OR: DynAreaFlags_NotCacheable :OR: PageFlags_Unavailable   ;next  3 pages of 8 page chunk
-AP_PageZero     *       0
+AP_PageZero     *       0 :OR: PageFlags_Unavailable            ; user r/w, CB (sadly, at least some of this needs user access)
+                                                                ; Ursula change: pages now locked, because soft CAM doesn't represent
+                                                                ; protection on 1k sub-pages, so swapping pages would cock up access permissions
+                                                                ; Ursula applies more protection on a 1k granularity - see L1L2PTenhancements
 
 AP_L2PT         *       2 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_NotBufferable ; user none, ~C~B
 AP_L1PT         *       AP_L2PT :OR: PageFlags_Unavailable
@@ -1612,15 +1619,22 @@ CheckForOverlappingAreas ENTRY "r0-r5"
         CLRV                                            ; OK exit
         EXIT
 
-
+;mjs changes for Ursula:
+; - L2PT (and L1PT) have moved, so moved in list
+; - area starting at CursorChunkAddress expanded to include cache cleaners etc.
+; - PhysSpace now excludes DRAM
+; - Shadow ROM removed, but top 8M retained as reserved
+;
+        ASSERT  L2PT >= 64*1024*1024
+        ASSERT  UndStackSoftCamChunk = L2PT + 4*1024*1024
 FixedAreasTable                                         ; table of fixed areas (address, size)
         &       0,                      AplWorkMaxSize  ; application space
-        &       UndStackSoftCamChunk,   1024*1024       ; undefined stack / soft cam map
-        &       CursorChunkAddress,     64*1024         ; 32K for cursor, 32K for "nowhere"
-        &       L2PT,                   4*1024*1024     ; L2PT (and L1PT)
+        &       CursorChunkAddress,     2*1024*1024     ; cursor,Nowhere,cache cleaners and reserved
         &       &03000000,              16*1024*1024    ; I/O + ROM
-        &       PhysSpace,              256*1024*1024   ; PhysSpace excluding DRAM (DRAM no longer mapped here)
-        &       &FF800000,              &007FFFFF       ; Shadow ROM (length has been bodged to avoid wrap problems)
+        &       L2PT,                   8*1024*1024     ; 4M for L2PT (and L1PT), 1M for UNDSTK+SoftCAM, 3M reserved
+        &       PhysSpace,              256*1024*1024   ; PhysSpace excluding DRAM
+        &       &FF800000,              &007FFFFF       ; Reserved (used to be Shadow ROM), length has been bodged
+                                                        ; to avoid wrap problems
         &       -1,                     0               ; termination
 
 ;**************************************************************************
@@ -1654,8 +1668,8 @@ AllocateAreaAddress ENTRY "r0-r2,r4-r7"
 10
         ADDS    r7, r3, r5                              ; r7 is our end+1
         BCS     %FT90                                   ; if we wrapped then we failed (includes end+1=0, but this
-                                                        ; should fail given shadow ROM fixed area, and we can't let
-                                                        ; end+1=0 through to compare with r2
+                                                        ; should fail given reserved fixed area at top, and we can't
+                                                        ; let end+1=0 through to compare with r2)
         BL      GetNextRange                            ; get next range from either list (r2=start, r6=end+1)
         CMP     r7, r2                                  ; if end(ours) <= start(next) then this is OK
         BLS     %FT80                                   ; (note this also works when r2=-1)
@@ -1866,6 +1880,169 @@ AllocateBackingLevel2 ENTRY "r0-r8,r11"
         EXIT
 
 ;**************************************************************************
+
+  [ ChocolateSysHeap
+;
+; CreateChocolateBlockArray
+;
+; entry: r2 = No. of blocks to be created in array (N)
+;        r3 = size of each block in bytes (S, must be multiple of 4)
+;
+; exit:
+;        r2 = address of chocolate block array (parent SysHeap block address)
+;        array is initialised to all blocks free
+;   OR   V set, r0=error pointer, if error (from OS_Heap)
+;
+; - A Chocolate block array is only suitable for blocks of single fixed size.
+;   These blocks may be allocated and freed in any order, but never resized.
+; - Allocating and freeing blocks from a Chocolate block array is much faster
+;   than OS_Heap, and the cost of operations is independent of N.
+; - A Chocolate block array is a single block in the SysHeap, and looks like this
+;   (excluding the internal structure of OS_Heap blocks):
+;
+;  - array header (3 words):
+;    - word 0  =  total no. of blocks in array (N)
+;    - word 1  =  size of each block container (S+4)
+;    - word 2  -> first free block container in array, or 0 if none free
+;  - followed immediately by N block containers, each of form:
+;    - container header (1 word):
+;      - word 0 :  bits  0..30 = container id (C)
+;                                C = (S+4)*I, where I is array index, 0..N-1
+;                  bit  31     = 1 if block is free, 0 if block is in use
+;    - followed immediately by the S/4 words of the block itself
+;      - if the block is in use, these words are as defined by the client
+;      - if the block is free, the first word is a pointer to the next free 
+;        block container (or 0 if end of free list), and the other words
+;        are undefined
+;
+; - A Chocolate block array requires a SysHeap block of 3*4 + N*(S + 4) bytes
+;
+CreateChocolateBlockArray ROUT
+        Push    "r0,r1,r3,r4,r5,lr"
+        MOV     r5,r2                ;N
+        ADD     r4,r3,#4             ;S+4
+        MUL     r3,r5,r4
+        ADD     r3,r3,#3*4
+        BL      ClaimSysHeapNode
+        STRVS   r0,[SP]
+        BVS     %FT50
+        STR     r5,[r2]
+        STR     r4,[r2,#4]
+        ADD     r1,r2,#3*4
+        STR     r1,[r2,#8]
+        MOV     lr,r5
+        ADD     r0,r2,#3*4
+        MOV     r1,#&80000000        ;free flag
+10
+        STR     r1,[r0]
+        ADD     r3,r0,r4
+        STR     r3,[r0,#4]
+        ADD     r1,r1,r4
+        SUBS    lr,lr,#1
+        MOVNE   r0,r3
+        BNE     %BT10
+        MOV     r1,#0
+        STR     r1,[r0,#4]           ;end of free list
+50
+        Pull    "r0,r1,r3,r4,r5,pc"
+
+;
+; ClaimChocolateBlock
+;
+; entry: r3 = address of parent ChocolateBlockArray (must be valid)
+; exit:  r2 = address of allocated block
+;        r3 = size of block
+;  OR    V set, R0=error (no free blocks)
+;
+ClaimChocolateBlock ROUT
+        Push    "r1,r4,lr"
+        MOV     r4,pc
+        ORR     r1,r4,#I_bit
+        TEQP    r1,#0             ;protect critical manipulation from interrupt re-entry
+        LDR     r2,[r3,#8]        ;pick up block container at front of free list
+        CMP     r2,#0
+        BEQ     ClaimChocolateBlock_NoneFree
+        LDR     r1,[r2]
+        BIC     r1,r1,#&80000000  ;clear the free flag
+        STR     r1,[r2]
+        LDR     r1,[r2,#4]        ;next free block container
+        STR     r1,[r3,#8]        ;put it at front
+        ADD     r2,r2,#4          ;address of block
+        LDR     r3,[r3,#4]
+        SUB     r3,r3,#4          ;size of block
+        BIC     r4,r4,#V_bit      ;return with V clear
+        TEQP    r4,#0             ;restore IRQ state
+        Pull    "r1,r4,pc"
+;
+;DON'T even think about internationalisation - this exit route must be fast
+ClaimChocolateBlock_NoneFree
+        ADR     R0,ChocolateBlock_NFError
+        ORR     r4,r4,#V_bit      ;return with V set
+        TEQP    r4,#0             ;restore IRQ state
+        Pull    "r1,r4,pc"
+
+;
+; FreeChocolateBlock
+;
+; entry: r1 = address of parent ChocolateBlockArray (must be valid)
+;        r2 = address of block to free (may be invalid)
+; exit:  -
+;   OR   V set, R0=error (not a ChocolateBlock), r1,r2 still preserved
+;
+FreeChocolateBlock ROUT
+        Push    "r2,r3,r4,lr"
+        MOV     r4,pc
+        ORR     r3,r4,#I_bit
+        TEQP    r3,#0             ;protect critical manipulation from interrupt re-entry
+        ADD     r3,r1,#12         ;r3 -> first block container
+        SUB     r2,r2,#4          ;r2 -> container for block (if valid)
+        CMP     r2,r3
+        BLO     FreeChocolateBlock_NaffOff
+        LDR     lr,[r1,#-4]       ;OS_Heap's size word (naughty!)
+        ADD     lr,lr,r1
+        CMP     r2,lr
+        BHS     FreeChocolateBlock_NaffOff
+        LDR     lr,[r2]           ;block container id
+        TST     lr,#&80000000     ;free flag
+        BNE     FreeChocolateBlock_NaffOff
+        ADD     lr,lr,r3          ;lr := address of block container, from container id
+        CMP     lr,r2
+        BNE     FreeChocolateBlock_NaffOff
+;
+;we now believe caller is freeing a valid block, currently in use
+;
+        LDR     lr,[r2]
+        ORR     lr,lr,#&80000000
+        STR     lr,[r2]           ;set free flag in container id
+        LDR     lr,[r1,#8]        ;current front of free list
+        STR     lr,[r2,#4]        ;chain free list to block container we are freeing
+        STR     r2,[r1,#8]        ;put freed block container at front
+        BIC     r4,r4,#V_bit      ;return with V clear
+        TEQP    r4,#0             ;restore IRQ state
+        Pull    "r2,r3,r4,pc"
+;
+;DON'T even think about internationalisation - this exit route must be fast
+FreeChocolateBlock_NaffOff
+        ADR     R0,ChocolateBlock_NOError
+        ORR     r4,r4,#V_bit      ;return with V set
+        TEQP    r4,#0             ;restore IRQ state
+        Pull    "r2,r3,r4,pc"
+
+;
+;bugger internationalisation - if these errors aren't dealt with silently, 
+;                              the kernel's stuffed anyway
+ChocolateBlock_NFError
+        DCD     0
+        DCB     "Chocolate SysHeap claim failed",0
+        ALIGN
+ChocolateBlock_NOError
+        DCD     0
+        DCB     "not a Chocolate SysHeap block",0
+        ALIGN
+
+  ] ;ChocolateSysHeap
+
+;**************************************************************************
 ;
 ;       InitDynamicAreas - Initialise nodes for dynamic areas
 ;
@@ -1934,11 +2111,12 @@ InitDynamicAreas ENTRY "r0-r8,r11"
 
 ; Now initialise the system heap by hand, so we can start creating dynamic areas
 
+        ASSERT  SysHeapPlusSVCStackSize > SVCStackSize
         LDR     r0, =SysHeapStart
         LDR     r1, =magic_heap_descriptor
         MOV     r2, #Nil
         MOV     r3, #hpdsize
-        MOV     r4, #32*1024 - (SysHeapStart-SysHeapChunkAddress)
+        MOV     r4, #SysHeapPlusSVCStackSize - (SysHeapStart-SysHeapChunkAddress)
         STMIA   r0, {r1-r4}
 
         MOV     r0, #0                          ; initialise module list to empty
@@ -1949,6 +2127,54 @@ InitDynamicAreas ENTRY "r0-r8,r11"
         STMIA   lr, {r0-r8}
         MOV     r0, #0
         STR     lr, [r0, #DAList]               ; store pointer to 1st node on list (either free pool or sys heap)
+
+  [ ChocolateSysHeap
+        ASSERT  ChocolateCBBlocks = ChocolateBlockArrays +  0
+        ASSERT  ChocolateSVBlocks = ChocolateBlockArrays +  4
+        ASSERT  ChocolateTKBlocks = ChocolateBlockArrays +  8
+        ASSERT  ChocolateMRBlocks = ChocolateBlockArrays + 12
+        ASSERT  ChocolateMABlocks = ChocolateBlockArrays + 16
+        ASSERT  ChocolateMSBlocks = ChocolateBlockArrays + 20
+        MOV     r1,#ChocolateBlockArrays
+        MOV     r2,#MaxChocolateCBBlocks
+        MOV     r3,#3*4
+        BL      CreateChocolateBlockArray       ; better not fail
+        STR     r2,[r1,#0]
+        MOV     r2,#MaxChocolateSVBlocks
+        MOV     r3,#VecNodeSize
+        BL      CreateChocolateBlockArray       ; better not fail
+        STR     r2,[r1,#4]
+        MOV     r2,#MaxChocolateTKBlocks
+        MOV     r3,#TickNodeSize
+        BL      CreateChocolateBlockArray       ; better not fail
+        STR     r2,[r1,#8]
+        MOV     r2,#MaxChocolateMRBlocks
+        MOV     r3,#ROMModule_NodeSize
+        BL      CreateChocolateBlockArray       ; better not fail
+        STR     r2,[r1,#12]
+        MOV     r2,#MaxChocolateMABlocks
+        MOV     r3,#ModInfo + Incarnation_Postfix + 8
+        BL      CreateChocolateBlockArray       ; better not fail
+        STR     r2,[r1,#16]
+        MOV     r2,#MaxChocolateMSBlocks
+        MOV     r3,#ModSWINode_Size
+        BL      CreateChocolateBlockArray       ; better not fail
+        STR     r2,[r1,#20]
+
+  ]
+
+  [ Oscli_HashedCommands
+        MOV     r3,#4*(Oscli_MHashValMask+1)
+        BL      ClaimSysHeapNode                ; better not fail
+        MOV     r0,#0
+        STR     r0,[r0,#Oscli_CmdHashSum]
+        STR     r2,[r0,#Oscli_CmdHashLists]
+        MOV     r3,#Oscli_MHashValMask+1
+DynArea_OHinit_loop
+        STR     r0,[r2],#4
+        SUBS    r3,r3,#1
+        BNE     DynArea_OHinit_loop
+  ]
 
   [ DynArea_QuickHandles
 
@@ -2020,7 +2246,7 @@ InitSysHeapTable
         &       ChangeDyn_SysHeap
         &       SysHeapStart
         &       AP_SysHeap
-        &       32*1024-(SysHeapStart-SysHeapChunkAddress) ; size
+        &       SysHeapPlusSVCStackSize-(SysHeapStart-SysHeapChunkAddress) ; size
         &       SysHeapMaxSize
         &       SysHeapStart                    ; workspace pointer -> base of heap
         &       DynAreaHandler_SysHeap          ; area handler

@@ -3,6 +3,12 @@
 ExtraRMANeeded * 24*1024 ; Amount you get extra on top of what you configured
 
 
+;mjs changes for Ursula  (ChocolateOSMod) - reduce stress on SysHeap
+;
+                     GBLL ModHand_IntrinsicBI
+ModHand_IntrinsicBI  SETL {TRUE} :LAND: ChocolateOSMod  ;base module incarnation 'node' is in module node
+
+
 ; Test version, incorporating multiple incarnation attempt
 
 ; The module handler needs to know the structure of the HPD, and nodes.
@@ -373,8 +379,17 @@ InitialiseROMModule ENTRY "r0-r12"
 ;
 
 AddROMModuleNode ENTRY "r0,r1,r3-r12"
+  [ ChocolateSysHeap
+        ASSERT  ChocolateMRBlocks = ChocolateBlockArrays + 12
+        MOV     r3,#ChocolateBlockArrays
+        LDR     r3,[r3,#12]
+        BL      ClaimChocolateBlock
+        MOVVS   r3, #ROMModule_NodeSize
+        BLVS    ClaimSysHeapNode
+  |
         MOV     r3, #ROMModule_NodeSize                 ; claim a rom module node
         BL      ClaimSysHeapNode                        ; r0,r1 corrupted, r2 -> block
+  ]
         STRVS   r0, [stack]
         EXIT    VS
 
@@ -1742,8 +1757,27 @@ AddModuleIfInROM ENTRY "r5-r8"
 ;     returns module node pointer in R9
 
 LinkAndInit ENTRY "r2, r3"
+
+
+  [ ChocolateSysHeap
+        ASSERT  ChocolateMABlocks = ChocolateBlockArrays + 16
+        MOV     r3,#ChocolateBlockArrays
+        LDR     r3,[r3,#16]
+        BL      ClaimChocolateBlock
+    [ ModHand_IntrinsicBI
+        MOVVS   r3, #ModInfo + Incarnation_Postfix + 8   ;enough for 'Base',0
+    |
+        MOVVS   r3, #ModInfo
+    ]
+        BLVS    ClaimSysHeapNode
+  |
+    [ ModHand_IntrinsicBI
+        MOV     r3, #ModInfo + Incarnation_Postfix + 8   ;enough for 'Base',0
+    |
         MOV     r3, #ModInfo
+    ]
         BL      ClaimSysHeapNode
+  ]
         EXIT    VS
 
         STR     r9, [r2, #Module_code_pointer]
@@ -1754,8 +1788,13 @@ LinkAndInit ENTRY "r2, r3"
         STR     r0, [r2, #Module_ROMModuleNode]         ; assume not a ROM module
         STR     r0, [r2, #Module_incarnation_list]      ; terminate list
         ADR     r0, base_postfix
+  [ ModHand_IntrinsicBI
+        BL      Add_intrinsic_Incarnation               ; add Base incarnation
+  | 
         BL      Add_Incarnation                         ; add Base incarnation
+  ]
         BVS     %FT01
+
 
         Pull    "r2"
         ADR     r0, Module_List
@@ -1779,7 +1818,15 @@ LinkAndInit ENTRY "r2, r3"
         MOV     r0, #HeapReason_Free
         SWI     XOS_Heap
         MOV     r2, r9                                  ; node pointer
+  [ ChocolateSysHeap
+        ASSERT  ChocolateMABlocks = ChocolateBlockArrays + 16
+        MOV     r1,#ChocolateBlockArrays
+        LDR     r1,[r1,#16]
+        BL      FreeChocolateBlock
+        BLVS    FreeSysHeapNode
+  |
         BL      FreeSysHeapNode
+  ]
         Pull    "r0, r2, r3, lr"
         ORRS    pc, lr, #V_bit
 
@@ -1788,6 +1835,15 @@ base_postfix
         ALIGN
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+  [ ModHand_IntrinsicBI
+Add_intrinsic_Incarnation  ROUT
+         Push   "R0-R3, lr"
+         ADD    r2, r9, #ModInfo              ;base incarnation at end of node
+         MOV    r3, #Incarnation_Postfix + 5
+         B      Add_Incarnation_AltEntry
+  ]
+
 ; Add_Incarnation
 ;       takes postfix pointer in R0 (terminated by <= space
 ;       module node pointer in R9
@@ -1807,6 +1863,7 @@ Add_Incarnation  ROUT
          Pull   "R0-R3, PC", VS
 
          LDR     R0, [stack]
+Add_Incarnation_AltEntry
          ADD     R3, R2, #Incarnation_Postfix
 02       LDRB    R1, [R0], #1
          CMP     R1, #" "
@@ -1842,6 +1899,12 @@ CallInit         ROUT
         BVS     %FT02
  ]
 
+ [ Oscli_HashedCommands
+  ; see if we need to update command hash nodes
+        BL      AddCmdHashEntries
+        BVS     %FT02
+ ]
+
   ; see if we need to set up a module swi node
 
         BL      CheckForSWIEntries
@@ -1855,24 +1918,33 @@ CallInit         ROUT
 
         MOV     R4, R0
         MOV     R11, R1
+  [ ChocolateSysHeap
+        ASSERT  ChocolateMSBlocks = ChocolateBlockArrays + 20
+        MOV     r3,#ChocolateBlockArrays
+        LDR     r3,[r3,#20]
+        BL      ClaimChocolateBlock
+        MOVVS   R3, #ModSWINode_Size
+        BLVS    ClaimSysHeapNode
+  |
         MOV     R3, #ModSWINode_Size
         BL      ClaimSysHeapNode
+  ]
         BVS     %FT02
         STR     R9,  [R2, #ModSWINode_MListNode]
         STR     R4,  [R2, #ModSWINode_CallAddress]
         STR     R11, [R2, #ModSWINode_Number]
         ModSWIHashval R3,R11
-	LDR	R4, [R3]
-  	B	%FT09
+        LDR     R4, [R3]
+        B       %FT09
    ; top of loop: R4 = node under consideration, R3 = pointer to this node from previous
-08	LDR	R14, [R4, #ModSWINode_Number]
-	TEQ	R11, R14			; if numbers match, jump to end. This also sets
-	BEQ	%FT10				;     the new node's link to this node
-	ADD	R3, R4, #ModSWINode_Link	; update R3 to this node's link
-	LDR	R4, [R3] 			; and move R4 to next node
-09	TEQ	R4, #0
-	BNE	%BT08				; if no next node, exit loop and tack on new one
-10	STR	R4, [R2, #ModSWINode_Link]
+08      LDR     R14, [R4, #ModSWINode_Number]
+        TEQ     R11, R14                        ; if numbers match, jump to end. This also sets
+        BEQ     %FT10                           ;     the new node's link to this node
+        ADD     R3, R4, #ModSWINode_Link        ; update R3 to this node's link
+        LDR     R4, [R3]                        ; and move R4 to next node
+09      TEQ     R4, #0
+        BNE     %BT08                           ; if no next node, exit loop and tack on new one
+10      STR     R4, [R2, #ModSWINode_Link]
         STR     R2, [R3]
 
 03  ; now prepared to look at module
@@ -1921,6 +1993,9 @@ CallInit         ROUT
 
 02      LDR     R12, [stack, #4*(6+2)]
         BL      FreeIncarnation
+  [ Oscli_HashedCommands
+        BL      FreeCmdHashEntries
+  ]
         BL      FreeSWIEntry
         STR     R0, [stack]
         Pull   "R0-R6, R11, R12, PC"           ; V set return
@@ -2013,14 +2088,231 @@ FreeSWIEntry ROUT
          BNE     %BT01
          LDR     R4, [R2, #ModSWINode_Link]
          STR     R4, [R1,#ModSWINode_Link]
+  [ ChocolateSysHeap
+         ASSERT  ChocolateMSBlocks = ChocolateBlockArrays + 20
+         MOV     r1,#ChocolateBlockArrays
+         LDR     r1,[r1,#20]
+         BL      FreeChocolateBlock
+         BLVS    FreeSysHeapNode
+  |
          BL      FreeSysHeapNode
+  ]
          Pull   "R0-R4, R12, PC",,^
+
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+  [ Oscli_HashedCommands
+
+         ASSERT  Oscli_MHashValMask = &ff
+
+;entry: R11 -> module cmd table, R4-> 8-word (256-bit) sieve workspace
+;exit:  sieve updated, R0-R3,R5,R6 trashed
+;
+CmdHashSieve ROUT
+         MOV     R0,R4
+         MOV     R1,#0
+         MOV     R2,#8
+10
+         STR     R1,[R0],#4                        ;zero the sieve
+         SUBS    R2,R2,#1
+         BNE     %BT10
+         ;commands with either of these flags set in information word won't be of interest:
+         MOV     R5,#FS_Command_Flag :OR: Status_Keyword_Flag
+         MOV     R0,R11
+18
+         MOV     R6,#0                             ;hash value accumulator
+         LDRB    R1,[R0],#1
+         CMP     R1,#0
+         BEQ     %FT40                             ;no more entries
+20
+         UpperCase R1,R2
+         ADD     R6,R6,R1                          ;hash value is sum of upper cased char values
+         LDRB    R1,[R0],#1
+         CMP     R1,#0
+         BNE     %BT20
+         ADD     R0,R0,#3
+         BIC     R0,R0,#3                          ;align to word boundary
+         LDR     R1,[R0,#4]                        ;pick up information word
+         TST     R1,R5
+         BNE     %FT30                             ;not interested in this type of command
+         AND     R6,R6,#&FF                        ;hash value (256-wide)
+         AND     R2,R6,#&1F
+         MOV     R3,#1
+         MOV     R3,R3,LSL R2                      ;position in sieve word
+         MOV     R6,R6,LSR #5                      ;sieve word index
+         LDR     R1,[R4,R6,LSL #2]
+         ORR     R1,R1,R3                          ;set bit in sieve for this hash value
+         STR     R1,[R4,R6,LSL #2]
+30
+         ADD     R0,R0,#4*4                        ;next command entry (skip 4 word fields)
+         B       %BT18
+40
+         MOV     PC,LR
+
+;
+;entry: R0 -> Oscli_CmdHashLists array
+;       R6 =  hash index
+;exit:  node created/expanded if necessary to allow room for at least 1 more hash ptr
+;       R1 -> node (may have moved, or been created)
+;       OR V set, error returned if no room
+;
+; - a cmd hash node is:
+;           1 word  = max count (according to current size of node)
+;           1 word  = current count (N)
+;           N words = the entries themselves (entries are module node pointers)
+;
+CheckRoomForNewCmdHash ROUT
+         Push    "R0,R2,R3,LR"
+         LDR     R1,[R0,R6,LSL #2]     ;pick up list for this hash value
+         CMP     R1,#0
+         BNE     %FT10
+         Push    "R0,R1"
+         MOV     R3,#(5+2)*4           ;enough for 5 entries, plus the two count words
+         BL      ClaimSysHeapNode
+         STRVS   R0,[SP]
+         Pull    "R0,R1"
+         BVS     %FT90
+         MOV     R1,R2
+         MOV     R3,#5
+         STR     R3,[R1,#0]            ;set the max count word
+         MOV     R3,#0
+         STR     R3,[R1,#4]            ;zero the current count word
+         STR     R1,[R0,R6,LSL #2]     ;store pointer to node in array
+         B       %FT90
+10
+         LDR     R3,[R1,#0]            ;pick up the max count
+         LDR     R2,[R1,#4]            ;pick up thr current count
+         ADD     R2,R2,#1              ;need one more entry
+         CMP     R2,R3
+         BLS     %FT90
+         Push    "R0"
+         MOV     R0,#HeapReason_ExtendBlock
+         MOV     R2,R1
+         MOV     R3,#4*4               ;enough for 4 more entries
+         BL      DoSysHeapOpWithExtension
+         STRVS   R0,[SP]
+         Pull    "R0"
+         BVS     %FT90
+         MOV     R1,R2
+         STR     R1,[R0,R6,LSL #2]     ;store pointer to node in array (may have moved)
+         LDR     R3,[R1,#0]
+         ADD     R3,R3,#4
+         STR     R3,[R1,#0]            ;bump max count by 4
+90
+         STRVS   R0,[SP]
+         Pull    "R0,R2,R3,PC"
+;
+;
+;entry: R9 -> module node
+;exit:  module entered into command hash table(s) where appropriate
+;       OR V set, error returned if no room
+;
+AddCmdHashEntries ROUT
+         Push    "R0-R6,R11,R12,LR"
+         LDR     R12,[R9,#Module_incarnation_list]
+         CMP     R12,#0
+         BNE     %FT90                             ;only do stuff if no incarnations yet
+         LDR     R12,[R9,#Module_code_pointer]
+         LDR     R11,=UtilityMod
+         CMP     R12,R11
+         BEQ     %FT90                             ;ignore UtilityModule (Oscli deals directly with it)
+         LDR     R11,[R12,#Module_HC_Table]
+         CMP     R11,#0
+         BEQ     %FT90                             ;no commands
+         ADD     R11,R12,R11                       ;R11 -> command table
+         SUB     SP,SP,#8*4                        ;256-bit workspace for 256-wide hashing sieve
+         MOV     R4,SP
+         BL      CmdHashSieve
+         ;now our sieve has a bit set for each hash value that this module occupies for commands
+         MOV     R0,#0
+         LDR     R0,[R0,#Oscli_CmdHashLists]
+         MOV     R6,#0
+42
+         AND     R2,R6,#&1F
+         MOV     R3,#1
+         MOV     R3,R3,LSL R2                      ;position in sieve word
+         MOV     R5,R6,LSR #5                      ;sieve word index
+         LDR     R1,[R4,R5,LSL #2]
+         TST     R1,R3
+         BEQ     %FT50                             ;module does not occupy this hash value
+         BL      CheckRoomForNewCmdHash            ;returns R1 -> cmd hash node
+         BVS     %FT90
+         LDR     R2,[R1,#4]                        ;current no. of entries on list
+         ADD     R2,R2,#1
+         STR     R2,[R1,#4]
+         ADD     R1,R1,#4
+         STR     R9,[R1,R2,LSL #2]                 ;store ptr to module node at end of list
+50
+         ADD     R6,R6,#1                          ;next hash value
+         CMP     R6,#256
+         BLO     %BT42
+         ADD     SP,SP,#8*4                        ;drop sieve workspace
+90
+         STRVS   R0,[SP]
+         Pull    "R0-R6,R11,R12,PC"
+;
+;
+;entry: R9 -> module node
+;exit:  module removed from cmd hash table(s) as necessary
+;
+FreeCmdHashEntries ROUT
+         Push    "R0-R6,R11,R12,LR"
+         LDR     R12,[R9,#Module_incarnation_list]
+         CMP     R12,#0
+         BNE     %FT90                             ;only do stuff if no incarnations
+         LDR     R12,[R9,#Module_code_pointer]
+         LDR     R11,=UtilityMod
+         CMP     R12,R11
+         BEQ     %FT90                             ;ignore UtilityModule (Oscli deals directly with it)
+         LDR     R11,[R12,#Module_HC_Table]
+         CMP     R11,#0
+         BEQ     %FT90                             ;no commands
+         ADD     R11,R12,R11                       ;R11 -> command table
+         SUB     SP,SP,#8*4                        ;256-bit workspace for 256-wide hashing sieve
+         MOV     R4,SP
+         BL      CmdHashSieve
+         ;now our sieve has a bit set for each hash value that this module occupies for commands
+         MOV     R0,#0
+         LDR     R0,[R0,#Oscli_CmdHashLists]
+         MOV     R6,#0
+42
+         AND     R2,R6,#&1F
+         MOV     R3,#1
+         MOV     R3,R3,LSL R2                      ;position in sieve word
+         MOV     R5,R6,LSR #5                      ;sieve word index
+         LDR     R1,[R4,R5,LSL #2]
+         TST     R1,R3
+         BEQ     %FT50                             ;module does not occupy this hash value
+         LDR     R1,[R0,R6,LSL #2]                 ;pick up list for this hash value
+         LDR     R2,[R1,#4]                        ;current no. of entries on list
+         SUB     R2,R2,#1
+         STR     R2,[R1,#4]
+         ADD     R1,R1,#8                          ;scrunch list to remove module (R9)
+         MOV     R3,R1
+         CMP     R2,#0
+         BEQ     %FT50
+         ADD     R2,R2,#1
+40
+         LDR     R5,[R1],#4
+         CMP     R5,R9
+         STRNE   R5,[R3],#4
+         SUBS    R2,R2,#1
+         BNE     %BT40
+50
+         ADD     R6,R6,#1                          ;next hash value
+         CMP     R6,#256
+         BLO     %BT42
+         ADD     SP,SP,#8*4                        ;drop sieve workspace
+90
+         Pull    "R0-R6,R11,R12,PC",,^             ;MUST preserve flags
+;
+  ] ;Oscli_HashedCommands
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 FreeIncarnation  ROUT
   ; copy error, free any workspace, incarnation link.
-  ;   R12 incarnation pointer
+  ;   R12 incarnation pointer, R9 module node pointer
          Push   "R0-R2, lr"
          BL      Module_CopyError
          STR     R0, [stack]
@@ -2029,8 +2321,14 @@ FreeIncarnation  ROUT
          MOV     R0, #HeapReason_Free
          MOV     R1, #RMAAddress
          SWINE   XOS_Heap
+  [ ModHand_IntrinsicBI
+         SUB     R2, R12, R9
+         CMP     R2, #ModInfo
+         BEQ     FreeIncarnation_Exit   ;if equal, this is the intrinsic incarnation 'node'
+  ]
          MOV     R2, R12
          BL      FreeSysHeapNode
+FreeIncarnation_Exit
          Pull   "R0-R2, PC",,^
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -2065,7 +2363,11 @@ KillIncarnation  ROUT
          BLNE    CallDie                     ; tidy up anyway
          STRVS   R0, [stack]
          Pull   "R0-R2, R10, PC", VS
-
+  [ ModHand_IntrinsicBI
+         SUB     R2, R12, R9
+         CMP     R2, #ModInfo
+         BEQ     %FT01         ;if equal, this is the intrinsic incarnation 'node'
+  ]
          MOV     R2, R12
          BL      FreeSysHeapNode                ; free incarnation node
 01       LDR     R0, [R9, #Module_incarnation_list]
@@ -2142,6 +2444,9 @@ ModuleIsntCAO
          MOV     lr, PC
          ADDNE   PC, R1, R0                  ; call.
          BVS     %BT01
+  [ Oscli_HashedCommands
+         BL      FreeCmdHashEntries
+  ]
          BL      FreeSWIEntry
 
          CMP     R10, #0                     ; soft die?
@@ -2201,7 +2506,15 @@ DelinkAndFreeModule ROUT
         SWI     XOS_Heap
 
         MOV     R2, R9
+  [ ChocolateSysHeap
+        ASSERT  ChocolateMABlocks = ChocolateBlockArrays + 16
+        MOV     r1,#ChocolateBlockArrays
+        LDR     r1,[r1,#16]
+        BL      FreeChocolateBlock
+        BLVS    FreeSysHeapNode
+  |
         BL      FreeSysHeapNode
+  ]
 
         Pull   "R0-R2, PC",,^
 

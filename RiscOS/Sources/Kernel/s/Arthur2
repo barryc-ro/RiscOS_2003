@@ -7,15 +7,43 @@ $l      GSVarGetWSpace
 $l      LDR R12, =GSVarWSpace
         MEND
 
-        GBLL    LongVars
-LongVars SETL {TRUE}            ; Long system variables (>255 chars)
+;mjs performance enhancements for Ursula (ChocolateSysVars)
+;
+                          GBLL    SysVars_QuickContext
+                          GBLL    SysVars_StickyNodes
+SysVars_QuickContext      SETL    {TRUE} :LAND: ChocolateSysVars   ;avoid abysmal O(n*n) enumeration of vars
+SysVars_StickyNodes       SETL    {TRUE} :LAND: ChocolateSysVars   ;attempt to avoid lots of SysHeap operations,
+                                                                   ;especially grows and shrinks
 
-        GBLL    QuickIndex
-QuickIndex SETL {TRUE}          ; Quick index to binary chop on lookup
+SysVars_Vindex_NStart     * 256   ;initial no. of vars supported by index
+SysVars_Vindex_NBump      *  32   ;additional no. of vars each time index size is bumped up
 
-        GBLL    DebugSysVars
-DebugSysVars SETL {FALSE}
+  [ SysVars_QuickContext
+;
+;format of block anchored at VariableList
+;
+                     ^   0
+SysVars_LastContext  #   4                    ;last var table index for last context ptr returned, or -1 if invalid
+SysVars_VTableOffset #   0
+;
+;immediately followed by table data as in old code:
+;  1 word   = total number of variables (N)
+;  N words  = ptrs to variable blocks (sorted table)
+;
+  ]
 
+  [ SysVars_StickyNodes
+SysVars_StickyNode_UnitSize *  32             ;quantise node size to multiples of this many bytes
+                                              ;(must be multiple of 8, and power of 2)
+SysVars_StickyNode_Log2US   *   5             ;Log2 of unit size
+SysVars_StickyNode_MaxSize  * 320             ;maximum size of node that may stick (be retained on removal as active node)
+;
+;There are currently 10 words allocated in kernel workspace for sticky pointers
+      ASSERT  SysVars_StickyNode_UnitSize*10 = SysVars_StickyNode_MaxSize 
+  ]
+
+        GBLL                      DebugSysVars
+DebugSysVars                      SETL {FALSE}
 
 
 ;-----------------------------------------------------------------------------------
@@ -36,21 +64,15 @@ DebugSysVars SETL {FALSE}
 ; The system variables are stored as a one way sorted alphabetically linked list hanging
 ; off the zero-page location VariableList:
 ;
- [ QuickIndex
-; VariableList---->sorted table of pointers to variable blocks
- |
-; VariableList---->1st variable--->2nd variable--....-->last variable--->||
- ]
+; VariableList---->sorted table of pointers to variable blocks (QuickIndex) - format as above
 ;
 ; The end is indicated by the link having the value 0.
 ;
-; Each variable is stored in one block in the system heap. The format of each block is:
+; Each variable is stored in one block in the system heap (block will be word aligned). The
+; format of each block is:
 ;
-; Bytes         Use
- [ :LNOT: QuickIndex
-; 4             Link. Points to next variable in the list. 0 indicates no more.
- ]
-; N+1           Variable's name (length N with terminator).
+; No. Bytes     Use
+; N+1           Variable's name (length N, plus terminator).
 ; 1             Variable's type:
 ;                       0       string
 ;                       1       number
@@ -63,7 +85,7 @@ DebugSysVars SETL {FALSE}
 ;
 ; Type 0 - string
 ; Bytes         Use
-; 1             Length (N)
+; 3             Length (N)
 ; N             the bytes of the string - may contain any characters
 ;
 ; Type 1 - number
@@ -72,7 +94,7 @@ DebugSysVars SETL {FALSE}
 ;
 ; Type 2 - macro
 ; Bytes         Use
-; 1             Length (N)
+; 3             Length (N)
 ; N             the bytes of the string - must be a valid GSTransable string
 ;                       including terminator
 ;
@@ -529,7 +551,6 @@ GSREAD_AngledThingAintNumber
         CMP     R1, #VarType_Number
         LDRB    R1, [R0], #1
 
- [ LongVars
         LDRB    R3, [R0], #1
         ORR     R1, R1, R3, LSL #8
         LDRB    R3, [R0], #1
@@ -537,16 +558,6 @@ GSREAD_AngledThingAintNumber
 
         BLO     GSREAD_GotVarAsString
         BHI     GSREAD_GotMacroVar
- |
-        BLO     GSREAD_GotVarAsString
-        BHI     GSREAD_GotMacroVar
-
-        ; Got number var
-        LDRB    R3, [R0], #1          ; number - build value
-        ORR     R1, R1, R3, LSL #8
-        LDRB    R3, [R0], #1
-        ORR     R1, R1, R3, LSL #16
- ]
         LDRB    R3, [R0], #1
         ORR     R1, R1, R3, LSL #24
         MOV     R0, R1
@@ -666,15 +677,11 @@ GSREAD_WorkOutBarChar
 
 GSREAD_RStringGetNextByte
         SUB     R2, R2, #1            ; we're reading a string
- [ LongVars
   [ GS_BufferNotStack
         MOVS    R12, R2, ASL #32-GS_StackLimitPos
   |
         ANDS    r12, r2, #&00ffffff
   ]
- |
-        TST     R2, #&FF
- ]
         LDRNEB  R1, [R0], #1          ; and this is already expanded
         ExitSWIHandler NE          ; so finished
 ZeroLengthVar
@@ -756,22 +763,6 @@ GSTRANS ROUT                    ; enables interrupts
 ; Also the binary->decimal SWI.
 ; All the var SWIs enable interrupts - they all take quite a while.
 
-; Variable storage format is dead simple - linear list!
-; It's not even ordered in any fashion.
-; List has fixed section of system vars that cannot die.
-
-; Node format : Link, Name bytes, 0 terminator (so Write0able), type byte, 
-;               then 4 bytes for numeric
-;               or  length byte, value bytes for string/macro.
-;               then a CR if it's a macro variable.
-
- [ QuickIndex
-VNameOff *  0
- |
-VarLink  *  0
-VNameOff *  4
- ]
-
 ; First the lookup SWI, ReadVarValue
 ; In:
 ;   R0 -> name; maybe wildcarded (* and #)
@@ -805,15 +796,32 @@ VNameOff *  4
 ;   R4 type of result (VarType_String, VarType_Number, VarType_Macro)
 ;   VSet if buffer overflowed (R0->error block)
 
+ [ Oscli_QuickAliases
+;  R0 in = -1 is special case: skip call to VarFindIt (r5,r6,r7 in supply r3,r4,r12)
+ ]
+
 ReadVarValue ROUT
         TEQP    PC, #SVC_mode   ; enable interupts (mode remains unchanged)
         Entry   "r0,r1"
 
         MOV     r11, r4
 
+  [ Oscli_QuickAliases
+        CMP     r0, #-1
+        BNE     rvv_noqaspecialentry
+        MOV     r3,r5
+        MOV     r4,r6
+        MOV     r12,r7
+        B       rvv_qaspecialentry
+rvv_noqaspecialentry
+  ]
+
         BL      VarFindIt       ; name=r0,context=r3 -> name found in node=r3,r4=after namein,r12=prev
         BEQ     RVVNotFound
 
+  [ Oscli_QuickAliases
+rvv_qaspecialentry
+  ]
         ; Regardless of expanded or not - always call the code to get value
         LDRB    lr, [r4], #1
         TEQ     lr, #VarType_Code
@@ -839,15 +847,11 @@ ReadVarVal_CopyStringVarToUserBuffer
         ; R10 = length to transfer to user buffer (EQ only)
         ; R11 -> length byte(s) of sysvar (NE only)
         ;     -> bytes string to transfer (EQ only)
- [ LongVars
         LDRNEB  r10, [r11], #1
         LDRNEB  lr, [r11], #1
         ORRNE   r10, r10, lr, ASL #8
         LDRNEB  lr, [r11], #1
         ORRNE   r10, r10, lr, ASL #16
- |
-        LDRNEB  r10, [r11], #1
- ]
 
 ReadVarVal_CopyR10BytesToUserBuffer
         ; R1 -> user buffer
@@ -877,7 +881,11 @@ ReadVarVal_BufWillOFlow
         ; Have determined that the buffer will overflow, so generate an error
         ; and shorten down to the buffer's size
         ADR     r0, BufferOFloError
+  [ InternationaliseCommonSilentErrors
         BL      TranslateError
+  |
+        SETV
+  ]
         STR     r0, [stack, #Proc_LocalStack + 0*4]
         LDR     lr, [stack, #Proc_LocalStack + 2*4]
         ORR     lr, lr, #V_bit     ; set for return
@@ -923,17 +931,15 @@ ReadVarVal_ExpandedWanted
         MVNMI   r10, r2         ; return r2 out by this method
         BMI     ReadVarVal_BufWillOFlow  ; a special meaning - just branch back to the normal overflow code
 
- [ LongVars
         ADD     r0, r11, #3             ; skip length
- |
-        ADD     r0, r11, #1             ; skip length
- ]
         SWI     XOS_GSTrans
         BVS     ReadVarVal_TestVExit
         BCC     ReadVarVal_OKExit
 
         ADR     R0, BufferOFloError
+  [ InternationaliseCommonSilentErrors
         BL      TranslateError
+  ]
         B       ReadVarVal_SetVExit
 
 
@@ -959,14 +965,49 @@ ReadVarVal_TestVExit
 
 RVVNotFound
         MOV     r4, r0
+  [ InternationaliseCommonSilentErrors
         ADR     r0, RVVNFError
         BL      TranslateError_UseR4
+  |
+        BL      RVVError_R4isnameptr
+  ]
         MOV     r2, #0                  ; indicate not found.
 
 ReadVarVal_SetVExit
         STR     r0, [stack, #Proc_LocalStack + 0*4]
         PullEnv
         B       SLVK_SetV               ; general error return
+
+  [ :LNOT: InternationaliseCommonSilentErrors
+RVVError_R4isnameptr ROUT
+        Push    "r1-r4,lr"
+        MOV     r0, #0
+        LDR     r0, [r0, #CommonSilentError_ws]
+        CMP     r0, #0          ;just in case
+        ADREQ   r0, RVVNFError
+        BEQ     %FT20
+        CMP     r4,#0
+        ADREQ   r4,RVVError_R4isnameptr_nullname
+        LDR     r1, [r0]        ;offset to where we should copy name
+        ADD     r1, r0, r1
+        LDR     r2, [r0,#4]     ;max buffer size for name
+        ADD     r0,r0,#8        ;r0 points to error block
+10
+        LDRB    r3,[r4],#1
+        CMP     r2,#1
+        MOVLS   r3,#0
+        CMP     r3,#32
+        MOVLOS  r3,#0
+        STRB    r3,[r1],#1
+        SUB     r2,r2,#1
+        BNE     %BT10
+20
+        SETV
+        Pull    "r1-r4,pc"
+RVVError_R4isnameptr_nullname
+        DCB     "<null>",0
+        ALIGN
+  ]
 
 RVVNFError
         MakeErrorBlock VarCantFind
@@ -1082,7 +1123,6 @@ TenTimesTable
 ;          8) Bad type (update/create)
 
 
- [ LongVars
  [ DebugSysVars
 SysVar_Write0 Entry "r0,r1"
         MOV     r1, r0
@@ -1163,32 +1203,7 @@ SetVarVal_AintExpanded
         ADREQL  r0, ErrorBlock_BadVarNam
         BEQ     SetVarValBadExit_Translate     ; error no. 1)
 
- [ QuickIndex
         ; R12 index of 1st entry in QuickIndex >= the entry we're interested in
- |
-        ; Variable name OK, find where in list we want to insert it
-
-        LDR     r12, =VariableList
-        LDR     r11, [r12]
-        CMP     r11, #0
-        B       %FT08
-
-06
-        MOV     r3, r0
-        ADD     r4, r11, #VNameOff
-07
-        LDRB    r5, [r3], #1
-        LDRB    r6, [r4], #1
-        CMP     r5, r6                  ; can't hit terminator :
-        BEQ     %BT07                   ; not same as any on list
-        MOVHI   r12, r11
-        LDRHI   r11, [r12, #VarLink]
-        CMPHI   r11, #0
-08
-        BHI     %BT06
-
-        ; r12 now ready as pointer to prev
- ]
         MOV     r3, #0                  ; To indicate absence of current
         B       SetVarVal_CreateNode
 
@@ -1250,11 +1265,7 @@ SetVarVal_CreateNode
         ; r2 = length (where appropriate)
         ; r3 = this or 0
         ; r10 = type
- [ QuickIndex
         ; r12 = insertion point
- |
-        ; r12 = prev
- ]
 
         MOV     r5, r1
         MOV     r6, r3
@@ -1262,7 +1273,7 @@ SetVarVal_CreateNode
         ; first work out the length of those things we can work the length of
 
         ; Header and name...
-        MOV     r3, #VNameOff + 1       ; Add one for the type byte
+        MOV     r3, #0                  ;accumulator for length of things we know
         MOV     r1, r0
 10
         LDRB    lr, [r1], #1
@@ -1270,9 +1281,12 @@ SetVarVal_CreateNode
         CMP     lr, #" "
         BHI     %BT10
 
+;r3 is now name length +1 for terminator
+        ADD     r3, r3, #1              ;add in 1 for the type byte
+
         ; Deal with number and string type
         CMP     r10, #VarType_Number
-        ADDLO   r3, r3, #50             ; only an initial guess for the string type
+        ADDLO   r3, r3, #64             ; only an initial guess for the string type
         ADDEQ   r3, r3, #4
         MOVEQ   r2, #4
         BLS     SetVarVal_GotInitialLength
@@ -1309,27 +1323,34 @@ SetVarVal_GotInitialLength
         ; r5 -> value (r1 in)
         ; r6 -> name of node to be replaced (0 if no node being replaced)
         ; r10 = value's type (String, Number, Macro or Code)
- [ QuickIndex
         ; r12 -> insertion point
- |
-        ; r12 -> prev node
- ]
 
-        Push    "r0,r2"
+        Push    "r0-r2"
+  [ SysVars_StickyNodes
+        ADD     r3,r3,#SysVars_StickyNode_UnitSize-1
+        BIC     r3,r3,#SysVars_StickyNode_UnitSize-1  ;so we don't fight sticky routines over sizes
+        BL      SysVars_ClaimVNode
+  |
         BL      ClaimSysHeapNode
+  ]
+        Pull    "r0-r2",VS
         BVS     SetVarVal_VarNoRoom
-        Pull    "r0,r1"
 
         ; Got a heap block - fill it in
 
         ; Copy name
-        ADD     r4, r2, #VNameOff
+
+        MOV     r4, r2
+        LDR     r0,[sp]
 25
         LDRB    lr, [r0], #1
         CMP     lr, #" "
         MOVLS   lr, #0
         STRB    lr, [r4], #1
         BHI     %BT25
+
+        LDR     r1,[sp,#8]
+        ADD     sp,sp,#12                      ; balances push r0-r2 above - value length (entry r2) now in r1
 
         ; Variable's type
         TEQ     r10, #VarType_LiteralString
@@ -1396,8 +1417,12 @@ SetVarVal_FillInString
         Push    "r0-r2"
         MOV     r0, #HeapReason_ExtendBlock
         MOV     r2, r5
-        MOV     r3, #64
+        MOV     r3, #64     ;should be a multiple of StickyNode_UnitSize if SysVars_StickyNodes TRUE
+  [ SysVars_StickyNodes
+        BL      SysVars_ExpandOrShrinkVNode
+  |
         BL      DoSysHeapOpWithExtension
+  ]
         STRVS   r0, [sp]
         SUBVC   lr, r2, r5
         ADDVC   r4, r4, lr
@@ -1408,7 +1433,11 @@ SetVarVal_FillInString
 
 45
         LDR     r3, [r5, #-4]           ; The heap block's size
+  [ SysVars_StickyNodes
+        SUB     r3, r3, #8              ; the amount we're allowed to use
+  |
         SUB     r3, r3, #4              ; the amount we're allowed to use
+  ]
         ADD     r3, r3, r5              ; the block's end
         B       %BT40
 
@@ -1416,9 +1445,19 @@ SetVarVal_StringFinishedExpanding
 
         ; Shorten block to required size
         MOV     r0, #HeapReason_ExtendBlock
+  [ SysVars_StickyNodes
+        Push    "r4"
+        ADD     r4, r4, #SysVars_StickyNode_UnitSize-1
+        BIC     r4, r4, #SysVars_StickyNode_UnitSize-1  ;so we don't fight over sticky sizes
         SUB     r3, r4, r3
+        Pull    "r4"
         MOV     r2, r5
+        BL      SysVars_ExpandOrShrinkVNode
+  |
+        SUB     r3, r4, r3
+        MOV     r2, r5 
         BL      DoSysHeapOpWithExtension
+  ]
         BVS     SetVarVal_DisasterExpandingString
 
         ; Relocate pointers
@@ -1437,11 +1476,7 @@ SetVarVal_StringFinishedExpanding
 SetVarVal_NewNodeReady
         ; r2 -> new node
         ; r6 -> old node's name (or is 0 if no old node)
- [ QuickIndex
         ; r12 = insertion point
- |
-        ; r12 -> prevP
- ]
 
  [ DebugSysVars
         Push    "r0,r1,r2"
@@ -1467,9 +1502,12 @@ SetVarVal_NewNodeReady
         ADD     sp, sp, #12
         Pull    "r0,r1,r2"
  ]
- [ QuickIndex
         LDR     r11, =VariableList
         LDR     r10, [r11]
+  [ SysVars_QuickContext
+        TEQ     r10,#0
+        ADDNE   r10,r10,#SysVars_VTableOffset
+  ]
         MOV     r5, r2
         TEQ     r6, #0
         BEQ     SetVarVal_Insertion
@@ -1479,8 +1517,12 @@ SetVarVal_NewNodeReady
         =       "-straight replace-",0
  ]
 
-        SUB     r2, r6, #VNameOff
+        MOV     r2, r6
+  [ SysVars_StickyNodes
+        BL      SysVars_FreeVNode
+  |
         BL      FreeSysHeapNode
+  ]
         B       SetVarVal_Replace
 
 SetVarVal_Insertion
@@ -1495,9 +1537,20 @@ SetVarVal_Insertion
         SWI     XOS_WriteS
         =       "-create index-",0
  ]
-        MOV     r3, #44         ; 10 nodes and 1 for the count
-        BL      ClaimSysHeapNode
+
+  [ SysVars_QuickContext
+        ; SysVars_Vindex_NStart nodes, 1 word for the count, plus data before table
+        MOV     r3, #SysVars_Vindex_NStart*4
+        ADD     r3, r3, #4+SysVars_VTableOffset
+  |
+        MOV     r3, #(10*4)+4                      ; 10 nodes and 1 word for the count
+  ]
+        BL      ClaimSysHeapNode                   ; this is not a variable node (its the index)
         BVS     SetVarVal_NoRoomForIndex
+  [ SysVars_QuickContext
+        MOV     r10,#-1
+        STR     r10, [r2, #SysVars_LastContext]    ; initialise last context as invalid
+  ]
         MOV     r10, r2
         MOV     r4, #0
         B       SetVarVal_DoInsertNewBlock
@@ -1508,8 +1561,13 @@ SetVarVal_PossibleExtend
         =       "-extend index-",0
  ]
         LDR     r4, [r10]
-        LDR     lr, [r10, #-4]          ; Block length
-        SUB     lr, lr, #4+4            ; 4 for heap adjustment and 4 for entry count word
+  [ SysVars_QuickContext
+        LDR     lr, [r10, #-(4+SysVars_VTableOffset)] ; Block length, from heap block
+        SUB     lr, lr, #4+4+SysVars_VTableOffset     ; 4 for heap adjustment, 4 for entry count word, plus name buffer
+  |
+        LDR     lr, [r10, #-4]                        ; Block length, from heap block
+        SUB     lr, lr, #4+4                          ; 4 for heap adjustment and 4 for entry count word
+  ]
         CMP     lr, r4, ASL #2
         BHI     SetVarVal_DoInsert      ; we've got room with this block
 
@@ -1519,15 +1577,23 @@ SetVarVal_PossibleExtend
  ]
 
         MOV     r0, #HeapReason_ExtendBlock
+  [ SysVars_QuickContext
+        SUB     r2, r10, #SysVars_VTableOffset
+        MOV     r3, #SysVars_Vindex_NBump*4     ; room for SysVars_Vindex_NBump more nodes
+  |
         MOV     r2, r10
-        MOV     r3, #40                 ; room for 10 more nodes
-        BL      DoSysHeapOpWithExtension
+        MOV     r3, #40                         ; room for 10 more nodes
+  ]
+        BL      DoSysHeapOpWithExtension   ;not a variable node (expanding index)
         BVS     SetVarVal_NoRoomForIndex
 
         MOV     r10, r2
 
 SetVarVal_DoInsertNewBlock
         STR     r10, [r11]
+  [ SysVars_QuickContext
+        ADD     r10,r10,#SysVars_VTableOffset
+  ]
 SetVarVal_DoInsert
  [ DebugSysVars
         SWI     XOS_WriteS
@@ -1558,18 +1624,6 @@ SetVarVal_Replace
         SWI     XOS_WriteS
         =       "-done-",0
  ]
- |
-        ; Remove old node and place new node in its place
-        TEQ     r6, #0
-        LDRNE   lr, [r6, #-VNameOff]
-        LDREQ   lr, [r12]
-        STR     lr, [r2]
-        STR     r2, [r12]
-
-        ; If old node present then junk it
-        SUBNE   r2, r6, #VNameOff
-        BLNE    FreeSysHeapNode
- ]
 
         ; All done
         B       SetVarVal_TestVExit
@@ -1580,7 +1634,6 @@ SetVarVal_DeleteIt
         ; Error if not found
         ADREQL  r0, ErrorBlock_VarCantFind ; V set no. 1)
         BEQ     SetVarValBadExit_Translate
-
         ; Check if found vartype code that the supplied vartype was code too
         LDRB    lr, [r4]
         TEQ     lr, #VarType_Code
@@ -1589,9 +1642,11 @@ SetVarVal_DeleteIt
         TEQ     r10, #VarType_Code
         BNE     SetVarVal_TestVExit
 80
- [ QuickIndex
         LDR     r11, =VariableList
         LDR     r10, [r11]
+  [ SysVars_QuickContext
+        ADD     r10,r10,#SysVars_VTableOffset
+  ]
         LDR     r4, [r10]
         ADD     r0, r10, r12, ASL #2    ; rover
         ADD     r1, r10, r4, ASL #2     ; end
@@ -1602,8 +1657,12 @@ SetVarVal_DoRemoveStart
 SetVarVal_DoRemoveEnd
         CMP     r0, r1
         BLO     SetVarVal_DoRemoveStart
-        SUB     r2, r3, #VNameOff
+        MOV     r2, r3
+  [ SysVars_StickyNodes
+        BL      SysVars_FreeVNode
+  |
         BL      FreeSysHeapNode
+  ]
 
         ; Reduce number of nodes
         SUB     r4, r4, #1
@@ -1612,19 +1671,9 @@ SetVarVal_DoRemoveEnd
         ; Construct best guess context ptr to be prev node (if present)
         TEQ     r12, #1
         SUBHI   r12, r12, #1
-        ASSERT  VNameOff = 0
         LDRHI   r3, [r10, r12, ASL #2]
         MOVLS   r3, #0
 
- |
-        ; Unlink node from chain
-        SUB     r3, r3, #VNameOff
-        LDR     r11, [r3, #VarLink]
-        STR     r11, [r12, #VarLink]
-        MOV     R2, R3                   ; node ptr.
-        BL      FreeSysHeapNode
-        ADD     R3, R12, #VNameOff       ; our best guess at a context ptr
- ]
 
 SetVarVal_TestVExit
         MOV     stack, r9
@@ -1634,13 +1683,14 @@ SetVarVal_TestVExit
 
 SetVarValBadExit_Translate
         BL      TranslateError
+SetVarValBadExit_NoTranslate
         SETV
         B       SetVarVal_TestVExit
 
 SetVarVal_DisasterExpandingString
 SetVarVal_NoRoomForIndex
         MOV     r2, r5
-        BL      FreeSysHeapNode
+        BL      FreeSysHeapNode         ;forget stickiness (return node to heap is best here)
 SetVarVal_VarNoRoom
         ADR     r0, ErrorBlock_VarNoRoom
         B       SetVarValBadExit_Translate
@@ -1648,7 +1698,7 @@ SetVarVal_VarNoRoom
 SetVarVal_DisasterExpandingBadString
         Push    "r0"                    ; Save bad string error
         MOV     r2, r5
-        BL      FreeSysHeapNode
+        BL      FreeSysHeapNode         ;forget stickiness (return node to heap is best here)
         Pull    "r0"
         SETV
         B       SetVarVal_TestVExit
@@ -1659,302 +1709,6 @@ SetVarVal_DisasterExpandingBadString
         MakeErrorBlock BadMacVal
         MakeErrorBlock VarNoRoom
 
- |
-SetVarValue ROUT
-
-        Push    "R1, R2, R4, lr"
-        CheckSpaceOnStack  512, SVStackFull, r12
-        SUB     stack, stack, #256      ; buffer space
-
-        CMP     R2, #0
-        BMI     SetVarVal_GotValueToBuffer ; deletion
-
-; now range check type
-        CMP     R4, #VarType_Code
-        BEQ     SetVarVal_GotValueToBuffer
-        CMP     R4, #VarType_Expanded
-        BGT     SetVarVal_TypeNaff
-
-; now get the value, before destroying anything
-        BEQ     SetVarVal_AssignExpanded ; evaluate an expression
-        CMP     R4, #VarType_Number
-        MOVEQ   R2, #3                  ; numbers use type byte as one byte.
-        BEQ     SetVarVal_GotValueToBuffer
-        BGT     SetVarVal_ValidateMacroValue
-; string : GSTRANS it.
-        Push    "R0"
-        MOV     R0, R1                  ; source ptr.
-        ADD     R1, stack, #4
-        MOV     R2, #255
-        SWI     XOS_GSTrans
-        BVS     VarBadStrErr
-        Pull    "R0"
-        BCC     SetVarVal_GotValueToBuffer
-
-SetVarVal_GotValueToBufferButItsTooLong
-        LDR     lr, [Stack, #4*3+256]   ; V set no. 3): value too long
-        ORR     lr, lr, #V_bit          ; Poke V into stacked lr!
-        STR     lr, [Stack, #4*3+256]
-
-SetVarVal_GotValueToBuffer
-; now got R1 pointer to value, R2 = value length
-        BL      VarFindIt
-        BEQ     SetVarVal_NodeNotFound
-
-        ; Check whether we're assigning a Code value to a Code variable
-        LDRB    R10, [R4]              ; get type
-        CMP     R10, #VarType_Code
-        BNE     %FT30
-        LDR     R10, [Stack, #4*2+256]
-        CMP     R10, #VarType_Code
-        BNE     SetVarVal_AssignNonCodeToCode
-
-30
-        ; We are assigning a code value to a code variable
-        ;               OR any value to a non-code variable
-
-        ; deleting?
-        CMP     R2, #0
-        BMI     SetVarVal_GotToJunkOldNode  ; just delete it.
-
-        ; Assigning....
-        LDR     R11, [R3, #-(VNameOff+4)] ; real no of bytes in heap node
-        SUB     R11, R11, #VNameOff+4+2
-        ADD     R11, R11, R3
-        SUB     R11, R11, R4             ; take off bytes in name
-        CMP     R11, R2
-        BGT     SetVarVal_NodeReadyToCopyInValue
-; let's copy the name, in case orig source wildcarded.
-        LDR     R0, =GSVarWSpace+GSNameBuff
-        MOV     R10, R3
-15      LDRB    R11, [R10], #1
-        STRB    R11, [R0], #1
-        CMP     R11, #0
-        BNE     %BT15
-        LDR     R0, =GSVarWSpace+GSNameBuff
-
-SetVarVal_GotToJunkOldNode
-; got to delete old node (too small). R12 previous, R3-VNameOff is this.
-        SUB     R3, R3, #VNameOff
-        LDR     R11, [R3, #VarLink]
-        STR     R11, [R12, #VarLink]     ; chain updated
-        Push    "R0-R2"
-        MOV     R2, R3                   ; node ptr.
-        BL      FreeSysHeapNode
-        Pull    "R0-R2"                   ; node gone
-        ADD     R3, R12, #VNameOff       ; our best guess at a context ptr
-        CMP     R2, #0                   ; delete?
-        BMI     SetVarValueTestExit      ; yup - exit.
-
-SetVarVal_MakeNewNode
-; here, R2 is value length, R0 ptr to name. Validate name while finding length
-        MOV     R10, #0
-16      LDRB    R11, [R0, R10]
-        ADD     R10, R10, #1
-        CMP     R11, #"#"
-        CMPNE   R11, #"*"
-        BEQ     SetVarVal_BadVarName     ; error no. 1)
-        CMP     R11, #32
-        BGT     %BT16
-        CMP     R10, #1
-        BEQ     SetVarVal_BadVarName     ; 0 char name also naff
-; now got R10 name length. Calculate node size
-        ADD     R11, R10, R2
-        ADD     R11, R11, #VNameOff+2    ; link+name terminator+type
-        Push    "R0-R3"
-        MOV     R3, R11
-        BL      ClaimSysHeapNode         ; corrupts R12
-        MOV     R4, R2
-        Pull    "R0-R3"
-        BVS     SetVarSysHeapFull
-; now need to find correct alphabetic position on chain.
-        LDR     R12, =VariableList
-        LDR     R11, [R12]
-; R4 node to insert, R12 prevnode, R11 nextnode
-        Push    "R5, R6"
-31      CMP     R11, #0
-        BEQ     %FT33
-        ADD     R11, R11, #VNameOff
-        MOV     R10, #-1
-32      ADD     R10, R10, #1
-        LDRB    R5, [R0, R10]
-        LDRB    R6, [R11, R10]
-        CMP     R5, R6                 ; can't hit terminator :
-        BEQ     %BT32                 ; not same as any on list
-        SUB     R11, R11, #VNameOff
-        MOVGT   R12, R11
-        LDRGT   R11, [R12, #VarLink]
-        BGT     %BT31
-
-33
-        ; Link node into list
-        STR     R11, [R4, #VarLink]
-        STR     R4, [R12, #VarLink]     ; new entry in
-        Pull    "R5, R6"
-
-        ; Copy name to node
-        ADD     R4, R4, #VNameOff
-18      LDRB    R11, [R0], #1
-        STRB    R11, [R4], #1
-        CMP     R11, #32
-        BGT     %BT18
-        MOV     R11, #0
-        STRB    R11, [R4, #-1]
-
-SetVarVal_NodeReadyToCopyInValue
-; now easy: just copy new value in. R2 bytes, from (R1).R4 points to type
-
-        LDR     R10, [stack, #2*4+256]  ; get original type back
-        STRB    R10, [R4], #1           ; put type in
-        CMP     R10, #VarType_Macro
-        SUBEQ   R2, R2, #1              ; fudge macro terminators
-        CMP     R10, #VarType_Code
-        ADDEQ   R4, R4, #3              ; align for code.
-        BICEQ   R4, R4, #3
-        CMP     R10, #VarType_Number
-        MOVEQ   R2, #4
-        CMPNE   R10, #VarType_Code   ; no length for numbers, sysvars
-        STRNEB  R2, [R4], #1
-        CMP     R10, #VarType_Macro
-        ADDEQ   R2, R2, #1
-05      SUBS    R2, R2, #1
-        BMI     SetVarValueTestExit    ; finished
-        LDRB    R10, [R1, R2]
-        STRB    R10, [R4, R2]
-        B       %BT05
-
-SetVarSysHeapFull
-        ADR     r0, ErrorBlock_VarNoRoom ; VS no. 2)
-        B       SetVarValueBadExit_256Translate
-
-        MakeErrorBlock VarNoRoom
-
-SetVarVal_ValidateMacroValue
-        MOV     R2, #0
-13      CMP     R2, #255
-        BGT     SetVarVal_GotValueToBufferButItsTooLong
-        LDRB    R10, [R1, R2]           ; it's a macro: check for bad chars.
-        ADD     R2, R2, #1
-        CMP     R10, #31
-        BGT     %BT13
-        CMP     R10, #13
-        CMPNE   R10, #10
-        CMPNE   R10, #0
-        BEQ     SetVarVal_GotValueToBuffer
-
-        ADR     r0, ErrorBlock_BadMacVal
-        B       SetVarValueBadExit_256Translate
-
-        MakeErrorBlock BadMacVal
-
-SetVarVal_BadVarName
-        ADR     r0, ErrorBlock_BadVarNam ; VS no. 2)
-        B       SetVarValueBadExit_256Translate
-
-        MakeErrorBlock BadVarNam
-
-SetVarVal_NodeNotFound
-        CMP     R2, #0        ; no node for it, test whether deletion
-        BPL     SetVarVal_MakeNewNode
-
-        ADRL    r0, ErrorBlock_VarCantFind ; V set no. 1)
-        B       SetVarValueBadExit_256Translate
-
-
-SetVarVal_AssignNonCodeToCode
-        CMP     R2, #0
-        BMI     SetVarValueTestExit ; deletion's a NOP, when wrong type given
-        LDR     R10, [stack, #2*4+256] ; get original type back
-        CMP     R10, #VarType_Number
-        BNE     %FT25
-        MOV     R10, R0
-        LDRB    R0, [R1], #1
-        LDRB    R2, [R1], #1
-        ORR     R0, R0, R2, LSL #8
-        LDRB    R2, [R1], #1
-        ORR     R0, R0, R2, LSL #16
-        LDRB    R2, [R1], #1
-        ORR     R0, R0, R2, LSL #24
-        ADD     R1, stack, #0
-        MOV     R2, #256
-        SWI     XOS_BinaryToDecimal
-        MOV     R0, R10        ; force string value.
-25      ADDS    R4, R4, #4      ; skip type, add 3 , clear V
-        MOV     lr, PC
-        BIC     PC, R4, #3      ; complete align and call
-
-; set thunk must take R1 ptr to value, R2 value length
-
-        BVS     SetVarValueBadExit_256
-
-SetVarValueTestExit
-        ADD     stack, stack, #256
-        LDR     R10, [stack, #2*4]
-        TEQ     R10, #VarType_Code
-        MOVEQ   R1,R0
-        MOVEQ   R0,#0
-        SWIEQ   XOS_SynchroniseCodeAreas  ; 'fraid so
-        MOVEQ   R0,R1
-        Pull    "R1, R2, R4, lr"
-        TST     lr, #V_bit
-        ADRNE   R0, ErrorBlock_VarTooLong
-        Push    "lr",NE
-        BLNE    TranslateError
-        Pull    "lr",NE
-        ExitSWIHandler
-
-        MakeErrorBlock VarTooLong
-
-SetVarVal_AssignExpanded
-        Push    "R0"
-        MOV     R0, R1   ; ptr to expression
-        ADD     R1, stack, #4
-        MOV     R2, #256
-        SWI     XOS_EvaluateExpression
-        BVS     NarffExpression
-        CMP     R1, #0   ; integer?
-        MOVEQ   R4, #VarType_Number
-        MOVNE   R4, #VarType_String
-        BNE     %FT40
-        ADD     R1, stack, #8
-        STR     R2, [R1]
-        MOV     R2, #3
-40
-        Pull    "R0"
-        STR     R4, [stack, #2*4+256]  ; update original type
-        B       SetVarVal_GotValueToBuffer
-
-
-NarffExpression
-        ADD     stack, stack, #256+4    ; discard an r0 and buffer
-        Pull    "R1, R2, r4, lr"
-        B       SLVK_SetV
-
-SetVarVal_TypeNaff
-
-        ADR     R0, ErrorBlock_BadVarType ; V set no. 4)
-        B       SetVarValueBadExit_256Translate
-
-        MakeErrorBlock BadVarType
-
-VarBadStrErr
-        Pull    "R1"
-
-SetVarValueBadExit_256Translate
-        BL      TranslateError
-
-SetVarValueBadExit_256
-        ADD     stack, stack, #256
-        B       SetVarValueBadExit
-
-SVStackFull
-        ADRL    r0, ErrorBlock_StackFull
-        BL      TranslateError
-
-SetVarValueBadExit
-        Pull    "R1, R2, R4, lr"
-        B       SLVK_SetV
- ]
 
 ; *****************************************************************************
 ; Utility routines.
@@ -1964,20 +1718,15 @@ SetVarValueBadExit
 ; VarFindIt
 ;
 ; In
-;    r0 -> (wildcard) name of varibale to find
+;    r0 -> (wildcard) name of variable to find
 ;    r3 = context pointer
 ;
 ; Out
 ;    r3 = name pointer
 ;    r4 = pointer after name terminator
- [ QuickIndex
 ;    r12 = insertion point (1st node >= this node)
- |
-;    r12 = address of previous node
- ]
 ;    NE if found, EQ if not found
 ;
- [ QuickIndex
 VarFindIt Entry "r0,r1,r2,r5,r6,r7,r8,r9,r10,r11"
 
 ; validate R3 by looking down the list to see if we find it.
@@ -1992,6 +1741,11 @@ VarFindIt Entry "r0,r1,r2,r5,r6,r7,r8,r9,r10,r11"
         LDR     r9, =VariableList
         LDR     r9, [r9]
         TEQ     r9, #0
+  [ SysVars_QuickContext
+        LDRNE   r12,[r9,#SysVars_LastContext]
+        MOVEQ   r12,#-1                           ;r12 = var table index for last context, or -1 if notvalid/notthere
+        ADDNE   r9,r9,#SysVars_VTableOffset
+  ]
         LDRNE   r8, [r9]
         MOVEQ   r8, #0
         TEQ     r3, #0
@@ -2002,6 +1756,18 @@ VarFindIt Entry "r0,r1,r2,r5,r6,r7,r8,r9,r10,r11"
         =       "-scan-",0
  ]
         ; r3 non-zero - scan list for entry
+
+  [ SysVars_QuickContext
+        ;massive short cut - see if context is the last context we returned
+        CMP     r12, r8               ;if not valid, or higher than current number of vars, forget it
+        BHI     %FT04
+        LDR     lr, [r9, r12, ASL #2]
+        CMP     lr, r3
+        BEQ     %FT70
+04
+        ;no such luck - scan list anyway
+  ]
+
         ADD     r12, r8, #1
         B       %FT10
 05
@@ -2018,6 +1784,7 @@ VarFindIt Entry "r0,r1,r2,r5,r6,r7,r8,r9,r10,r11"
         =       "-wildcheck-",0
  ]
         ; not found in scan - check for name being wildcarded
+
         MOV     r10, r0
 25
         LDRB    lr, [r10], #1
@@ -2063,6 +1830,7 @@ VarFindIt Entry "r0,r1,r2,r5,r6,r7,r8,r9,r10,r11"
         BNE     %FT50
         CMP     r3, #0
         BNE     %BT45
+
 50
         MOVHS   r10, pc                 ; preserve last HS result we got
         MOVHS   r11, r4
@@ -2078,6 +1846,10 @@ VarFindIt Entry "r0,r1,r2,r5,r6,r7,r8,r9,r10,r11"
         ADD     r6, r6, #1
         CMP     r6, r8
         LDRLS   r3, [r9, r6, ASL #2]
+  [ SysVars_QuickContext
+        ASSERT  SysVars_LastContext = SysVars_VTableOffset - 4
+        STRLS   r6, [r9, #-4]            ;save var table index for context we're returning, in LastContext
+  ]
         MOVLS   r4, r11
         MOVHI   r3, #0
         TEQLSP  pc, r10
@@ -2118,7 +1890,10 @@ VarFindIt Entry "r0,r1,r2,r5,r6,r7,r8,r9,r10,r11"
         ; r4->name end
         ; r12 = entry number
         LDR     r3, [r9, r12, ASL #2]
-        ASSERT  VNameOff = 0
+  [ SysVars_QuickContext
+        ASSERT  SysVars_LastContext = SysVars_VTableOffset - 4
+        STR     r12, [r9, #-4]          ;save var table index for context we're returning, in LastContext
+  ]
         MOVS    r12, r12                ; set NE
         EXIT
 
@@ -2132,34 +1907,6 @@ VarFindIt Entry "r0,r1,r2,r5,r6,r7,r8,r9,r10,r11"
         MOV     r12, #1
         MOVS    r3, #0
         EXIT
- |
-VarFindIt Entry "r10,r11"
-
-; validate R3 by looking down the chain to see if we find it.
-; Crude, but effective!
-
-        CMP     R3, #0
-        BEQ     %FT03
-        SUB     R3, R3, #VNameOff         ; step back to chain ptr
-        LDR     R11, =VariableList
-        LDR     R11, [R11]
-02      CMP     R11, #0
-        CMPNE   R11, R3
-        LDRNE   R11, [R11, #VarLink]
-        BNE     %BT02
-        CMP     R11, #0
-03      LDREQ   R3, =VariableList
-01      MOV     R12, R3                  ; keep previous for creation
-        LDR     R3, [R3, #VarLink]        ; step on
-        CMP     R3, #0
-        EXIT    EQ                      ; failed
-        ADD     R4, R3, #VNameOff
-        BL      WildMatch               ; trashes r10,r11
-        BNE     %BT01
-        ADDS    R3, R3, #VNameOff       ; get node ptr and set NE
-        EXIT                            ; and back with got.
- ]
-
 
 WildMatch ROUT
 ; In  : R0 is wildcard spec ptr, R4 is name ptr.
@@ -2210,6 +1957,267 @@ WildMatch ROUT
         BNE     %BT05
         MOV     R3, R4          ; name backtrack ptr is char after match
         B       %BT01           ; LOOP
+
+
+  [ Oscli_QuickAliases
+
+;routines to speed up alias checking for OS_CLI
+
+;VarFindIt_QA - similar to VarFindIt
+;
+; In
+;    r3 -> non-wildcarded, already upper-cased name of var to find
+;          will be of form ALIAS$<whatever>
+;
+; Out
+;    r5 = name pointer (equivalent to r3 for VarFindIt
+;    r6 = pointer after name terminator (equivalent to r4 for VarFindIt)
+;    r7 = insertion point (equivalent to r12 for VarFindIt)
+;    NE if found, EQ if not found
+;
+VarFindIt_QA ROUT
+        Push    "r0,r1,r2,r3,r4,r8,r9,r10,r11,LR"
+        MOV     r0, r3
+        LDR     r9, =VariableList
+        LDR     r9, [r9]
+        TEQ     r9,#0
+        BEQ     %FT99             ;exit with EQ (not found)
+  [ SysVars_QuickContext
+        ADD     r9,r9,#SysVars_VTableOffset
+  ]
+        LDR     r8, [r9]
+
+        ; do binary chop search
+        ORRS    r7, r8, r8, LSR #1
+        ORR     r7, r7, r7, LSR #2
+        ORR     r7, r7, r7, LSR #4
+        ORR     r7, r7, r7, LSR #8
+        ORR     r7, r7, r7, LSR #16
+        BICS    r7, r7, r7, LSR #1      ; least 2^n <= number of entries
+        MOV     r6, #0
+
+        B       %FT60
+40
+        ADD     r5, r6, r7
+        CMP     r5, r8
+        BHI     %FT55
+
+        MOV     r1, r0
+        LDR     r4, [r9, r5, ASL #2]
+
+45
+        LDRB    r2, [r1], #1
+        CMP     r2, #" "
+        MOVLS   r2, #0
+        LDRB    r3, [r4], #1
+        CMP     r3, #" "
+        MOVLS   r3, #0
+        UpperCase R3,LR
+        CMP     r3, r2
+        BNE     %FT50
+        CMP     r3, #0
+        BNE     %BT45
+
+50
+        MOVHS   r10, pc                 ; preserve last HS result we got
+        MOVHS   r11, r4
+        MOVLO   r6, r5
+55
+        MOVS    r7, r7, LSR #1
+60
+        BNE     %BT40
+
+        ; We always want the element above.
+        ; If r6<r8 then we want the preserved result
+        ; else we want the result HI
+        ADD     r6, r6, #1
+        CMP     r6, r8
+        LDRLS   r5, [r9, r6, ASL #2]
+;don't want to save context in this version of routine
+;  [ SysVars_QuickContext
+;        ASSERT  SysVars_LastContext = SysVars_VTableOffset - 4
+;        STRLS   r6, [r9, #-4]            ;save var table index for context we're returning, in LastContext
+;  ]
+        MOV     r7, r6
+        MOVLS   r6, r11
+        MOVHI   r5, #0
+        TEQLSP  pc, r10
+
+        MOV     lr, pc
+        TEQP    lr, #Z_bit
+99
+        Pull    "r0,r1,r2,r3,r4,r8,r9,r10,r11,PC"
+
+
+  ] ;Oscli_QuickAliases
+
+  [ SysVars_StickyNodes
+;
+; SysVars_ClaimVNode
+;
+; entry: R3 = size required
+; exit:  R2 = address of allocated node, or V set for error
+;
+; if R3  > max sticky size, just delegates to ClaimSysHeapNode
+; if R3 <= max sticky size, rounds up to next unit size, and attempts to pick
+;    up sticky node of that size - if not found, gets one from heap (now of size that can
+;    stick on free)
+;
+SysVars_ClaimVNode ROUT
+        Push    "r0,r1,r3,LR"
+        CMP     r3,#SysVars_StickyNode_MaxSize
+        BHI     %FT80                                         ;too big for sticky node
+        ADD     r3,r3,#SysVars_StickyNode_UnitSize-1
+        BIC     r3,r3,#SysVars_StickyNode_UnitSize-1          ;round up to unit size
+        MOV     r1,#SysVars_StickyPointers
+        LDR     r2,[r1,r3,LSR #(SysVars_StickyNode_Log2US-2)] ;sticky pointer for this size
+        CMP     r2,#0                                         ;also clears V
+        BEQ     %FT80
+        MOV     LR,#0
+        STR     LR,[r1,r3,LSR #(SysVars_StickyNode_Log2US-2)] ;used it
+  [ mjsSysHeapNodesTrace
+        Push    "r0-r2"
+        MOV     r0,#0
+        LDR     r1,[r0,#mjsSHNT_vcs_total]
+        ADD     r1,r1,#1
+        STR     r1,[r0,#mjsSHNT_vcs_total]
+        Pull    "r0-r2"
+  ]
+        Pull    "r0,r1,r3,PC"
+80      BL      ClaimSysHeapNode
+        STRVS   r0,[SP]
+  [ mjsSysHeapNodesTrace
+        Push    "r0-r2"
+        MOV     r0,#0
+        LDR     r1,[r0,#mjsSHNT_vch_total]
+        ADD     r1,r1,#1
+        STR     r1,[r0,#mjsSHNT_vch_total]
+        Pull    "r0-r2"
+  ]
+        Pull    "r0,r1,r3,PC"
+
+;
+; SysVars_FreeVNode
+;
+; entry: R2 = address of node to free (must be valid)
+; exit:  -
+;        OR V set, error
+;
+; - checks size of node (uses internal knowledge of Heap blocks - naughty!)
+; - if size is a sticky size, and the corresponding sticky pointer is 0, retains it,
+;   else delegates to FreeSysHeapNode
+;
+SysVars_FreeVNode
+        Push    "r0,r1,r3,LR"
+        LDR     r1,[r2,#-4]                                   ;pick up OS_Heap's size word
+        SUB     r1,r1,#8                                      ;sticky sizes will be 8 less than heap sizes
+        CMP     r1,#SysVars_StickyNode_MaxSize                ;is it too big?
+        BHI     %FT80
+        TST     r1,#SysVars_StickyNode_UnitSize-1             ;is it a multiple of unit size
+        BNE     %FT80
+        MOV     r3,#SysVars_StickyPointers
+        LDR     LR,[r3,r1,LSR #(SysVars_StickyNode_Log2US-2)] ;sticky pointer for this size
+        CMP     LR,#0
+        STREQ   r2,[r3,r1,LSR #(SysVars_StickyNode_Log2US-2)] ;stick!
+80
+  [ mjsSysHeapNodesTrace
+        Push    "r0-r2"
+        MOV     r0,#0
+        LDREQ   r1,[r0,#mjsSHNT_vfs_total]
+        LDRNE   r1,[r0,#mjsSHNT_vfh_total]
+        ADD     r1,r1,#1
+        STREQ   r1,[r0,#mjsSHNT_vfs_total]
+        STRNE   r1,[r0,#mjsSHNT_vfh_total]
+        Pull    "r0-r2"
+  ]
+        BLNE    FreeSysHeapNode
+        STRVS   r0,[SP]
+        Pull    "r0,r1,r3,PC"
+
+;
+; SysVars_ExpandOrShrinkVNode
+;
+; entry: R2 = address of block
+;        R3 = change of size required in bytes (signed integer)
+; exit:  R2 = address of block, which may have changed (block moved/copied)
+;        OR V set, error returned
+;
+; - checks size of node (uses internal knowledge of Heap blocks - naughty!)
+; - assumes all VNodes currently less than MaxSize and of sticky size *must* be stickily
+;   allocated nodes (so that maximum current size that could be presumed by client is heap
+;   size minus 8, rather than minus 4)
+; - if new size is small enough to be a sticky node, attempts to return a sticky node,
+;   without doing an OS_Heap grow or shrink, else delegates to DoSysHeapOpWithExtension
+;
+SysVars_ExpandOrShrinkVNode
+        Push    "r0,r1,r3-r6,LR"
+        LDR     r5,[r2,#-4]                                   ;pick up OS_Heap's size word
+        SUB     r5,r5,#4                                      ;usable sizes are 4 less than heap sizes
+        ADD     r4,r5,r3                                      ;putative new size
+        CMP     r4,#SysVars_StickyNode_MaxSize                ;is it too big?
+        BHI     %FT90
+        SUB     r6,r5,#4                                      ;sticky sizes will be 8 less than heap sizes
+        SUB     r4,r4,#4
+        ADD     r4,r4,#SysVars_StickyNode_UnitSize-1
+        BIC     r4,r4,#SysVars_StickyNode_UnitSize-1          ;round up to unit size
+        CMP     r4,r6                                         ;same as current size?
+        BEQ     %FT55
+        MOV     r1,#SysVars_StickyPointers
+        LDR     LR,[r1,r4,LSR #(SysVars_StickyNode_Log2US-2)] ;sticky pointer for this size
+        CMP     LR,#0
+        BEQ     %FT40
+        MOV     r3,#0
+        STR     r3,[r1,r4,LSR #(SysVars_StickyNode_Log2US-2)] ;used it
+        MOV     r5,r2
+        MOV     r2,LR
+        B       %FT50
+40
+        MOV     r5,r2
+        MOV     r3,r4
+        BL      SysVars_ClaimVNode
+        BVS     %FT95
+50      ;copy min(r6,r4) bytes (multiple of 8) from old node at r5 to new node at r2
+        CMP     r4,r6
+        MOVLO   r6,r4
+        MOV     r3,r2
+        MOV     LR,r5
+52
+        LDMIA   LR!,{r0,r1}
+        STMIA   r3!,{r0,r1}
+        SUBS    r6,r6,#8
+        BGT     %BT52
+        MOV     r6,r2
+        MOV     r2,r5
+        BL      SysVars_FreeVNode
+        MOV     r2,r6
+        BVS     %FT95  
+55
+  [ mjsSysHeapNodesTrace
+        Push    "r0-r2"
+        MOV     r0,#0
+        LDR     r1,[r0,#mjsSHNT_vxs_total]
+        ADD     r1,r1,#1
+        STR     r1,[r0,#mjsSHNT_vxs_total]
+        Pull    "r0-r2"
+  ]
+        CLRV
+        Pull    "r0,r1,r3-r6,PC"
+90
+  [ mjsSysHeapNodesTrace
+        Push    "r0-r2"
+        MOV     r0,#0
+        LDR     r1,[r0,#mjsSHNT_vxh_total]
+        ADD     r1,r1,#1
+        STR     r1,[r0,#mjsSHNT_vxh_total]
+        Pull    "r0-r2"
+  ]
+        MOV     r0,#HeapReason_ExtendBlock
+        BL      DoSysHeapOpWithExtension
+95
+        STRVS   r0,[SP]
+        Pull    "r0,r1,r3-r6,PC"
+
+  ] ;SysVars_StickyNodes
 
         LTORG
 

@@ -66,11 +66,13 @@ DebugAborts SETL {FALSE}
 
 ; Fixed page allocation is as follows
 
+SysHeapPlusSVCStackSize * 64*1024
+
         ^       0
-DRAMOffset_CursorChunk  #       32*1024         ; ie on MEMC1 this is the last 32K of DAG-addressable memory
-DRAMOffset_PageZero     #       32*1024         ; 32K at location zero
-DRAMOffset_SystemHeap   #       32*1024         ; system heap/svc stack
-DRAMOffset_L2PT         #       0               ; static L2PT (variable size, with embedded L1PT)
+DRAMOffset_CursorChunk  #       32*1024                   ; ie on MEMC1 this is the last 32K of DAG-addressable memory
+DRAMOffset_PageZero     #       32*1024                   ; 32K at location zero
+DRAMOffset_SystemHeap   #       SysHeapPlusSVCStackSize   ; system heap/svc stack (changed for Ursula, was 32*1024)
+DRAMOffset_L2PT         #       0                         ; static L2PT (variable size, with embedded L1PT)
 DRAMOffset_L1PT         *       DRAMOffset_L2PT + 48*1024
 
 ; Undefined stack memory (size 8K) starts immediately after end of L2PT (which is variable size)
@@ -80,15 +82,18 @@ StaticPagesSize         *       @
 
 ; Logical addresses are as follows
 
-L2PT                    *       &02C00000       ; size 256K
-L1PT                    *       &02C0C000       ; in the middle of L2PT, where the mapping for 03000000 to 03FFFFFF would be
+L2PT                    *       &08000000       ; L1PT and L2PT moved for Ursula (were &02C00000 &02C0C000)
+L1PT                    *       &0800C000       ; in the middle of L2PT, where the mapping for 03000000 to 03FFFFFF would be
 
-FixedAreasL2Size        *       96*1024        ; amount of L2 to cover fixed areas, excluding free pool
+FixedAreasL2Size        *       136*1024        ; amount of L2 to cover fixed areas, excluding free pool
+                                                ; Changed for Ursula (was 96k, extra 32k for bigger fixed heap/svc stack allocation,
+                                                ; extra 4k for moved 4M of L2PT+L1PT tables, another extra 4k for moved 1M of
+                                                ; SoftCAM+UNDSTK plus 3M reserved)
 
-UndStackSoftCamChunk    *       &01E00000
-UndStackSize            *       8*1024
+UndStackSoftCamChunk    *       &08400000       ; Changed for Ursula (was &01E00000)
+UndStackSize            *       &2000           ; 8k
 CamEntriesForVicky      *       UndStackSoftCamChunk + &2000
-UNDSTK                  *       CamEntriesForVicky ; points to end of stack
+UNDSTK                  *       CamEntriesForVicky ; points to end of stack (no 26-bit code allowed in UNDSTK since Ursula!)
 
 ; logical base address of map of IOMD physical space, excluding RAM
 ;
@@ -663,9 +668,13 @@ SSETMEMC ROUT
 ; out:  r7-r9, r13 preserved
 ;
 
-     GBLL ClearPhysRAMspeedup
-ClearPhysRAMspeedup SETL {TRUE}
+                    GBLL PartialClearBigRAM ;if true, save time by clearing only some RAM
+PartialClearBigRAM  SETL {TRUE}
 
+  [ PartialClearBigRAM
+ClearMaxSizeLo * &200000   ;max of 2 Mb cleared at bottom of DRAM
+ClearMaxSizeHi * &200000   ;max of 2 Mb cleared at top of DRAM
+  ]
 
     ASSERT MEMC_Type = "IOMD"
 ;
@@ -712,14 +721,6 @@ ClearPhysRAM ROUT
 
 06
 ;now let us do the clear
-  [ ClearPhysRAMspeedup
-        MOV     r0,#48                                  ;we can preserve r7-r9,r13 at logical address 48..63
-        STMIA   r0,{r7-r9,r13}
-        MOV     r7,  #0
-        MOV     r8,  #0
-        MOV     r9,  #0
-        MOV     r13, #0
-  ]
         MOV     r0, #0
         MOV     r1, #0
         MOV     r2, #0
@@ -727,10 +728,31 @@ ClearPhysRAM ROUT
         LDR     r12, =PhysRamTable                      ; point to 5 lots of (physaddr,size)
         ADR     r6, RamSkipTable
         ADD     r4, r12, #PhysRamTableEnd-PhysRamTable  ; r4 -> end of table
+  [ PartialClearBigRAM
+        MOV     r5, #48                                 ; 32 bytes of workspace at address 32 ...
+        STMIA   r5, {r7, r8}                            ; ... currently, we just preserve r7,r8 at address 48
+        MOV     r7, #ClearMaxSizeLo
+        MOV     r8, #ClearMaxSizeHi
+        LDR     r5, [r12, #20]                          ; fetch size of 2nd DRAM chunk
+        CMP     r5, #0
+        BNE     %FT08                                   ; if there are at least 2 DRAM chunks, use ClearMaxSize Lo,Hi normally
+        LDR     r5, [r12, #12]                          ; only 1 DRAM chunk, check its size
+        CMP     r5, #ClearMaxSizeLo+ClearMaxSizeHi
+        MOVLS   r7, r5                                  ; if size <= Lo+Hi, then clear all of DRAM as normal
+        MOVLS   r8, #0
+08
+        LDR     r5, [r12,#4]                            ; size of video chunk, plus ...
+        ADD     r7, r7, r5                              ; ... amount to clear at bottom of DRAM
+  ]
 10
         LDR     r5, [r6], #4                            ; load first skip offset
 
         LDMIA   r12!, {r10, r11}                        ; load next address, size
+  [ PartialClearBigRAM
+        CMP     r11, r7
+        MOVHI   r11, r7                                 ; don't clear beyond max limit at bottom of DRAM
+        SUB     r7, r7, r11                             ; remainder of max limit
+  ]
 
         ORR     r10, r10, #CPRTempMappingBase           ; point to temporary RAM mapping
         ADD     r11, r11, r10                           ; r11 -> end address of this area
@@ -740,11 +762,7 @@ ClearPhysRAM ROUT
         TEQ     r10, r11                                ; test for end of this area?
         BEQ     %FT30
         TEQ     r10, r5                                 ; test for the start of a skipped region
-  [ ClearPhysRAMspeedup
-        STMNEIA r10!, {r0-r3,r7-r9,r13}
-  |
         STMNEIA r10!, {r0-r3}
-  ]
         BNE     %BT20
 
         LDR     r5, [r6], #4                            ; load skip amount
@@ -755,13 +773,39 @@ ClearPhysRAM ROUT
         B       %BT15
 
 30
+  [ PartialClearBigRAM
+        TEQ     r7, #0                                  ; have we exhausted max limit of bottom clear?
+        TEQNE   r12, r4                                 ; or, have we done all areas?
+  |
         TEQ     r12, r4                                 ; have we done all areas?
+  ]
         BNE     %BT10
 
-  [ ClearPhysRAMspeedup
+  [ PartialClearBigRAM
+        TEQ     r8, #0                                  ; do we have to clear top of last chunk?
+        BEQ     CPR_lastch_done
+        LDR     r12, =PhysRamTable
+CPR_lastch_loop1
+        LDMIA   r12!, {r10, r11}
+        CMP     r11, #0
+        BNE     CPR_lastch_loop1
+        SUB     r12, r12, #4*4
+        LDMIA   r12!, {r10, r11}                        ; address, size of last DRAM chunk
+        CMP     r11, r8
+        SUBHI   r11, r11, r8
+        ADDHI   r10, r10, r11
+        MOVHI   r11, r8
+        ORR     r10, r10, #CPRTempMappingBase           ; point to temporary RAM mapping
+        ADD     r11, r11, r10                           ; r11 -> end address of this area
+CPR_lastch_loop2
+        TEQ     r10, r11
+        BEQ     CPR_lastch_done
+        STMIA   r10!, {r0-r3}
+        B       CPR_lastch_loop2
+CPR_lastch_done
         MOV     r12,#48
-        LDMIA   r12,{r7-r9,r13}                         ;restore
-        MOV     r12,#32                                 ;clear our speed up workspace
+        LDMIA   r12, {r7, r8}                           ;restore r7, r8
+        MOV     r12,#32                                 ;clear our workspace (32 bytes, at address 32)
         STMIA   r12!,{r0-r3}
         STMIA   r12!,{r0-r3}
   ]
@@ -838,7 +882,7 @@ lastregion SETA   lastregion +1
 ; Tim says "Yuk, yuk, yuk!!"
 
 RamSkipTable
- [ ClearPhysRAMspeedup ; allow some workspace to speed up ClearPhysRAM  Mike says whoosh
+ [ PartialClearBigRAM ; allow some workspace to speed up ClearPhysRAM  Mike says whoosh
         MakeSkipTable   1, DRAMOffset_PageZero + 0, 64  ; skip 1st 32 bytes of LogRAM, so IRQs work!
                                                         ; additional 32 bytes for workspace
  |
@@ -1044,7 +1088,7 @@ init7500cpu_common
         MOV     r0, #0                          ; Podule manager wants TypeA setting by default for all podules
         STRB    r0, [r12, #IOMD_ECTCR]
 
-   [ Japanese16BitSound :LAND: STB
+   [ Japanese16BitSound
         MOV     r0, #2_10
         STRB    r0, [r12, #IOMD_VIDMUX]
    ]
@@ -1977,26 +2021,39 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
         ]
   ]
 
-        ; map of IOMD physical space, including RAM (need for POST) - RAM part will be reset to inaccessible after
-        ; ClearPhysRAM (and hence this mapping will be reduced to cover only PhysSpaceSize_NoDRAM by end of boot)
+        ; mjs behaviour change for Ursula:
+        ; map of IOMD physical space, including RAM as before (need for POST), but RAM part will be now be reset
+        ; to inaccessible after ClearPhysRAM (and hence this mapping will be reduced to cover only
+        ; PhysSpaceSize_NoDRAM by end of boot)
+        ;
         MemInitSection PSS, 1, 0, 0, PhysSpace, AP_None, &00000000
 
-        MemInitROMs      2, 1, 1, 1, &FF800000, AP_Read                 ; ROM
-        MemInitROMs      2, 1, 1, 1, &FFA00000, AP_Read                 ; ROM
-        MemInitROMs      2, 1, 1, 1, &FFC00000, AP_Read                 ; ROM
-        MemInitROMs      2, 1, 1, 1, &FFE00000, AP_Read                 ; ROM
+        ; mjs change for Ursula:
+        ; used to be mapping here for shadow ROM in top 8M of address space - this is vestigial, and can
+        ; be removed (exception vectors no longer use Branches that would have 26/32 bit wrap problems).
 
 ; Now explicit initialisation of L2 for static pages
 
-;3.6 has whole cursor chunk ~C~B which is disaster for SWI dispatcher etc
-;3.7 still declares like this but 'fixes' it in the L2PT later (5 pages CB, 3 pages ~CB)
-;now we just do what 3.7 did, but do it more elegantly by declaring properly in the table
-;note this all assumes 4k pages, but kernel no longer supports pre-Medusa stuff anyway
-;
+        ; mjs change for Ursula:
+        ;3.6 has whole cursor chunk ~C~B which is disaster for SWI dispatcher etc
+        ;3.7 still declares like this but 'fixes' it in the L2PT later (5 pages CB, 3 pages ~CB)
+        ;now we just do what 3.7 did, but do it more elegantly by declaring properly in the table (means soft CAM is correct)
+        ;note this all assumes 4k pages, but kernel no longer supports pre-Medusa stuff anyway
+        ;
         MemInitPagesL2  &5000, 1, 1, CursorChunkAddress, AP_Read, DRAMOffset_CursorChunk              ;first 5 pages CB (SWI dispatcher etc)
         MemInitPagesL2  &3000, 0, 1, CursorChunkAddress+&5000, AP_Read, DRAMOffset_CursorChunk+&5000  ;next 3 pages ~CB (cursor data)
-        MemInitPagesL2  &8000, 1, 1, &00000000, AP_Full, DRAMOffset_PageZero
-        MemInitPagesL2  &8000, 1, 1, SysHeapChunkAddress, AP_Full, DRAMOffset_SystemHeap
+
+        ; mjs changes for Ursula:
+        ; let us have a bigger SVC stack, and a semblance of security
+        ; SVC stack is now 32k, and AP_Read (svc=r/w,usr=r/-) rather than 8k and AP_Full (svc=r/w,usr=r/w)
+        ; sadly, some of kernel workspace needs user access (eg. cointer for Clib tmpnam), but Ursula sets some
+        ; higher protection on 1k granularity, using MMU sub-pages (see L1L2PTenhancements)
+        ;
+        ASSERT SVCStackSize            = 32*1024
+        ASSERT SysHeapPlusSVCStackSize = 64*1024
+        MemInitPagesL2  &8000, 1, 1, &00000000, AP_Full, DRAMOffset_PageZero                          ;kernel workspace
+        MemInitPagesL2  &8000, 1, 1, SysHeapChunkAddress, AP_Read, DRAMOffset_SystemHeap              ;SVC stack (32k)
+        MemInitPagesL2  &8000, 1, 1, SysHeapChunkAddress+&8000, AP_Full, DRAMOffset_SystemHeap+&8000  ;SysHeap (initially 32k from remainder of 64k fixed area)
 
   [ StrongARM
 ;StrongARM requires 2*16k of private logical space (used for absolutely nothing else), which is
@@ -2430,11 +2487,7 @@ MMUC_flush_done
 
 UndPreVeneer    ROUT
 
-; entered in undef32, and we've branched up to &FF80xxxx, so we need to jump
-; back to normal ROM space
-
-        BIC     pc, pc, #&FC000000      ; remove silly bits from pc
-        NOP                             ; (this instruction skipped)
+; entered in undef32
 
         Push    "r0-r7,r14"             ; push r0-r7 on undef stack, and make room for return address
         MOV     r0, r13_undef
@@ -2466,11 +2519,8 @@ UndPreVeneer    ROUT
 
 PAbPreVeneer    ROUT
 
-; entered in abort32, and we've branched up to &FF80xxxx, so we need to jump
-; back to normal ROM space
+; entered in abort32
 
-        BIC     pc, pc, #&FC000000      ; remove silly bits from pc
-        NOP                             ; (this instruction skipped)
         LDR     r13_abort, =PreVeneerRegDump
         STMIA   r13_abort, {r0-r7}
 
@@ -2516,11 +2566,7 @@ AI_Addr #       4
 
 DAbPreVeneer    ROUT
 
-; entered in abort32, and we've branched up to &FF80xxxx, so we need to jump
-; back to normal ROM space
-
-        BIC     pc, pc, #&FC000000              ; remove silly bits from pc
-        NOP                                     ; (this instruction skipped)
+; entered in abort32
 
         LDR     r13_abort, =PreVeneerRegDump
         STMIA   r13_abort, {r0-r7}              ; save unbanked registers anyway
@@ -3150,20 +3196,23 @@ CheckPage
         MOV     lr, lr, LSR #10
         MOV     lr, lr, LSL #10                         ; physical address of base of page table, from L1PT entry
 
-        Push    "r6,r8"
+        Push    "r6,r8,r9"
+        BIC     r9, lr, #&C00                           ; physical page address from L1PT
         MOV     r5, #PhysRamTable                       ; converting physical address to page number...
         MOV     r6, #0                                  ; start at page number 0
 checkpage_loop
         LDMIA   r5!, {r7,r8}                            ; start address, size of physical chunk
-        SUB     r7, lr, r7                              ; see if we are in this chunk
+        SUB     r7, r9, r7                              ; see if we are in this chunk
         CMP     r7, r8
         ADDCS   r6, r6, r8, LSR #SmallPageSizeShift     ; move on to next chunk
         BCS     checkpage_loop
         ADD     r6, r6, r7, LSR #SmallPageSizeShift     ; found page number
         MOV     r5, #0                                  ; converting page number to logical address...
         LDR     r5, [r5, #CamEntriesPointer]
-        LDR     lr, [r5, r6, LSL #3]                    ; found logical address
-        Pull    "r6,r8"
+        LDR     r9, [r5, r6, LSL #3]                    ; logical page address
+        AND     lr, lr, #&C00
+        ADD     lr, lr, r9                              ; full logical L2PT base address from L1PT
+        Pull    "r6,r8,r9"
 
         MOV     r5, r2, LSR #SmallPageSizeShift         ; r2 as a multiple of 4K
         MOV     r5, r5, LSL #SmallPageSizeShift
@@ -3254,6 +3303,24 @@ Fault
 ;some tricks to improve performance, looking at MMU level 1 and level 2 page tables
 L1L2PTenhancements ROUT
         Push    "r0-r5,lr"
+
+        ;mjs change for Ursula:
+        ;improved kernel workspace protection
+        ; - user access to bottom 3k restricted to read only (things like Clib tmpnam counter prevent
+        ;   going further)
+        ; - Java VM will probably require bottom 1k restricted to no user access (so that VM can avoid
+        ;   all run-time checks for null pointers), but this currently makes various things like ShareFS
+        ;   go pop-bang, so not done yet (see TRUE/FALSE choice below)
+        ;
+        MOV     r0,#L2PT                ;L2PT address for page at 0
+        LDR     r1,[r0]
+        BIC     r1,r1,#&FF0             ;clear current AP bits for all four 1k sub-pages (S0 to S3)
+     [ {FALSE}                          ;this would be good for Java VM:
+        ORR     r1,r1,#&E90             ;S0=user none, S1=user read, S2=user read, S3=user read/write
+     |                                  ;this makes less current things go pop-bang:
+        ORR     r1,r1,#&EA0             ;S0=user read, S1=user read, S2=user read, S3=user read/write
+     ]
+        STR     r1,[r0]
 
 ;if the MMU control reg (soft copy) has R bit set (bit 9), then adjust the L1 entries for ROM
 ;space to give full write protection (user and supervisor)

@@ -367,9 +367,15 @@ SetUpKbdReturn
         LDR     sp_irq, =IRQSTK         ; set up sp_irq
 
         ADRL    R2, MOSROMVecs          ; pick up from table
-        LDR     R2, [R2, #&18]          ; this gets overwritten while active,
         MOV     R3, #0
-        STR     R2, [R3, #&18]          ; but hopefully by the same value!
+        LDR     R1, [R2, #&18]          ; this gets overwritten while active,
+        STR     R1, [R3, #&18]          ; but hopefully by the same value!
+
+        ;and we must copy the two words that forward the branch at &18
+        LDR     R1, [R2, #(ResetIRQForwarding-MOSROMVecs)]
+        STR     R1, [R3, #(ResetIRQForwarding-MOSROMVecs)]
+        LDR     R1, [R2, #(RIFaddress-MOSROMVecs)]
+        STR     R1, [R3, #(RIFaddress-MOSROMVecs)]
 
         ORR     r0, r0, #SVC32_mode     ; switch into SVC32
 
@@ -1086,26 +1092,26 @@ WallopDuffOnes
         BL      AddCamEntries
         Pull    "R0,R7"
 
-;used to be:
-;       MOV     R2, #CursorChunkAddress
-;       LDR     r1, =AP_CursorChunk
-;       BL      AddCamEntries
-
-        CMP     R12, #512*1024
-        SUBEQ   R0, R0, R7              ; previous entries
-        ADDNE   R0, R0, R7              ; next entries
+        ADD     R0, R0, R7              ; next entries
         MOV     R2, #0
         MOV     r1, #AP_PageZero
         BL      AddCamEntries
 
-        CMP     R12, #512*1024
-        SUBEQ   R0, R0, R7              ; previous entries
-        ADDNE   R0, R0, R7              ; next entries
+        ASSERT  SVCStackSize            = 32*1024
+        ASSERT  SysHeapPlusSVCStackSize = 64*1024
+        ADD     R0, R0, R7              ; next entries
+        Push    "R0,R7"
+        MOV     R7, #8*8                ; 8 pages for 32k SVC stack
         MOV     R2, #SysHeapChunkAddress
-        MOV     r1, #AP_SysHeap :OR: PageFlags_Unavailable
+        LDR     R1, =AP_SVCStack :OR: PageFlags_Unavailable
         BL      AddCamEntries
+        MOV     R7, #8*8                ; 8 pages for rest of 64k chunk (initial SysHeap)
+        ADD     R0, R0, #8*8
+        LDR     R1, =AP_SysHeap :OR: PageFlags_Unavailable
+        BL      AddCamEntries
+        Pull    "R0,R7"
+        ADD     R0, R0, #16*8           ; next entries (after 64k Sysheap/SVCSTK chunk)
 
-        ADD     R0, R0, R7              ; next entries (ignore stupid 512K machines)
         MOV     r7, #0
         LDR     r7, [r7, #L2PTSize]
         MOV     r7, r7, LSR #12-3       ; number of pages * 8
@@ -1205,7 +1211,11 @@ WallopDuffOnes
 
         MOV     r1, #ChangeDyn_RamFS    ; Area number
         MOV     r3, #-1                 ; Base address dynamic
-        MOV     r4, #AP_RAMDisc         ; Area flags
+        ARM_read_ID r4
+        AND     r4, r4, #&F000
+        CMP     r4, #&A000
+        MOVEQ   r4, #AP_RAMDisc_SA      ; Area flags, if StrongARM  (introduced for Ursula)
+        MOVNE   r4, #AP_RAMDisc         ; Area flags
         MOV     r5, #16*1024*1024       ; Limit maximum size to 16MB until JSR fixes FileCore
         ADRL    r6, DynAreaHandler_RAMDisc ; Pointer to handler
         MOV     r7, #-1                 ; Use base address as workspace ptr
@@ -1387,6 +1397,9 @@ furtherpoke_notSA
         BEQ     SkipHardResetPart2
 
 ; HardResetPart2
+  [ :LNOT: InternationaliseCommonSilentErrors
+        BL      Init_CommonSilentError_ws
+  ]
         BL      L1L2PTenhancements      ; little tricks on cacheability etc for performance
         BL      InitVariables
         BL      AMBControl_Init         ; initialise AMBControl section
@@ -1524,7 +1537,7 @@ SkipHardResetPart2                      ; code executed on all types of reset
         ADRL     r8,VRescue_DAname
         SWI      XOS_DynamicArea               ;create the DA area for rescueing VRAM pages in use
         MOV      r0,#10-1                      ;call rescuer every 10 centiseconds
-        ADR      r1,VRAM_rescuer
+        ADRL     r1,VRAM_rescuer
         MOV      r2,#VRAMRescue_control
         SWI      XOS_CallEvery
 vrescue_init_done
@@ -1839,6 +1852,41 @@ IsKeyPressedAtReset ENTRY "r0-r2"
         TEQ     r1, #&FF
         TEQEQ   r2, #&FF
         EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+  [ :LNOT: InternationaliseCommonSilentErrors
+;
+;  - currently just creates a buffer with a message for VarCantFind - ReadVarVal
+;    can copy the name as a postfix
+;  - there is only one buffer, so the hope is that an error handler that chooses
+;    to report the error will not do another failed var lookup
+;
+Init_CommonSilentError_ws ROUT
+        Push    "r0-r3,lr"
+        MOV     r3,#256 + 8 + (ErrBlock_VarCantFind_End-ErrBlock_VarCantFind)
+        BL      ClaimSysHeapNode
+        MOV     r0,#0
+        STR     r2,[r0,#CommonSilentError_ws]
+        MOV     r1,#8+(ErrBlock_VarCantFind_End-ErrBlock_VarCantFind)
+        STR     r1,[r2],#4        ;1st word is offset to buffer for name
+        MOV     r1,#256
+        STR     r1,[r2],#4        ;2nd word is max length of buffer for name
+        ADR     r3,ErrBlock_VarCantFind
+        MOV     r0,#ErrBlock_VarCantFind_End-ErrBlock_VarCantFind
+10
+        LDR     r1,[r3],#4
+        STR     r1,[r2],#4
+        SUBS    r0,r0,#4
+        BNE     %BT10
+        Pull    "r0-r3,pc"
+
+ErrBlock_VarCantFind
+        DCD     &124
+        DCB     "System variable not found - "   ;MUST be multiple of 4 long, no terminator
+ErrBlock_VarCantFind_End
+        ASSERT  ((ErrBlock_VarCantFind_End-ErrBlock_VarCantFind) :AND: 3) = 0
+  ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 

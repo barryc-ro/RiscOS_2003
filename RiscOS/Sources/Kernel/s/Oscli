@@ -1,5 +1,18 @@
         TTL     => Oscli - main Oscli code and system commands.
 
+;
+;mjs performance enhancements for Ursula (ChocolateOscli)
+;
+                          GBLL    Oscli_QuickAliases
+                          GBLL    Oscli_HashedCommands
+Oscli_QuickAliases        SETL    {TRUE} :LAND: ChocolateOscli   ;try to be less like a bag'o'shite at checking for aliases
+Oscli_HashedCommands      SETL    {TRUE} :LAND: ChocolateOscli   ;try to be less like a bag'o'shite at finding commands
+Oscli_CHashValMask        *       &1f                  ;32-wide Command hashing, for commands within kernel
+Oscli_MHashValMask        *       &ff                  ;256-wide Module hashing, for command groups in other modules
+                                                       ; - kernel cmd hashed tables must be reorganised if Oscli_CHashValMask is changed
+                                                       ; - UtilityModule MUST be first in module chain, if hashing in use
+
+
         GBLL    redirectinkey
 redirectinkey SETL True
 
@@ -303,6 +316,51 @@ pfssss   LDRB      R10, [R1], #1
 ; If success : Recursively call OSCLI for each line in expansion.
 
       Push  "R0, R3-R6"
+
+  [ Oscli_QuickAliases
+    ;
+    ;at least make a vague attempt not to run like a drain - since we can do a binary
+    ;chop search for an exactly known var name, do this unless command is abbreviated
+    ;
+      ADR    R6,AliasStr_QA
+      LDR    R3,=AliasExpansionBuffer      ; construct the alias name here
+      MOV    R5,#6
+oqa_loop1                                  ; bung in "ALIAS$"
+      LDRB   R4,[R6],#1
+      STRB   R4,[R3],#1
+      SUBS   R5,R5,#1
+      BNE    oqa_loop1
+      MOV    R6,R0
+      ADRL   R2, Up_ItAndTerm_Check_Table
+oqa_loop2                                  ; bung in command, upper cased
+      LDRB   R4,[R6],#1
+      CMP    R4,#&80                       ; char in table ?
+      LDRCCB R4,[R2,R4]
+      STRB   R4,[R3],#1
+      CMP    R4,#0
+      BNE    oqa_loop2
+      LDRB   R4,[R3,#-2]                   ; pick up last char of command
+      CMP    R4,#"."
+      BEQ    oqa_treacletime               ; bugger, it's abbreviated, go to slow code
+      LDR    R3,=AliasExpansionBuffer
+      Push   "r6,r7"
+      BL     VarFindIt_QA                  ; quick binary chop type stuff
+      Pull   "r6,r7",EQ
+      BEQ    oqa_quicksilvertime_noalias   ; no alias - carry on
+;found alias
+      MOV    R0,#-1                        ; special, VarFindIt skipping call (r5,r6,r7 from VarFindIt_QA)
+      MOV    R1,R3                         ; output buffer
+      MOV    R2,#256
+      MOV    R3,#0
+      MOV    R4,#VarType_Expanded
+      SWI    XOS_ReadVarVal                ; expand it
+      Pull   "r6,r7"
+      SUB    R6,R6,#1                      ; arg ptr
+      B      oqa_quicksilvertime_alias
+oqa_treacletime
+;
+  ] ;Oscli_Quickaliases
+
       MOV    R3,#0
       LDRB   R6,[R3,#ErrorSemaphore]            ; We are about to get lots of buffer overflow errors, 
       SUB    R6,R6,#1
@@ -311,7 +369,7 @@ pfssss   LDRB      R10, [R1], #1
       MOV    R3, #:LEN: "Alias$"
 31    SUB    R3, R3, #:LEN: "Alias$"
       MOV    R2, #-1        ; negative length means just look for it.
-      ADR    R0, AliasStr
+      ADRL   R0, AliasStr
       SWI    XOS_ReadVarVal
       CMP    R2, #0         ; V always set anyway
       LDREQB R0,[R2,#ErrorSemaphore]
@@ -360,11 +418,15 @@ pfssss   LDRB      R10, [R1], #1
       ADD   R4, R4, #1
       CMP   R5, #0
       BNE   %BT34
+
       MOV   R1, R0               ; output buffer same as input!
       MOV   R2, #256
       MOV   R3, #0
       MOV   R4, #VarType_Expanded
       SWI   XOS_ReadVarVal
+  [ Oscli_QuickAliases
+oqa_quicksilvertime_alias
+  ]
       BVS   AliasOscliTooLong
       MOV   R3, #13
       STRB  R3, [R1, R2]
@@ -420,11 +482,17 @@ AliasOscliTooLong
 
       LTORG
 
+  [ Oscli_QuickAliases
+AliasStr_QA = "ALIAS$", 0
+  ]
 AliasStr = "Alias$*", 0
 AliasDot = "Alias$"
 dotstring = ".", 0
       ALIGN
 
+  [ Oscli_QuickAliases
+oqa_quicksilvertime_noalias
+  ]
 10  ; Failed macro expansion.
          Pull   "R0, R3-R6"
 
@@ -433,11 +501,70 @@ dotstring = ".", 0
          CMP       R1, #"."
          BEQ       PercentDot
 
+  [ Oscli_HashedCommands
+         BL        Oscli_cmd_hashsum            ; => hash value in r1
+         MOV       r2,#0
+         STR       r1,[r2,#Oscli_CmdHashSum]
+         CMP       r1,#0
+         BEQ       oscli_sysabbrevation
+         BL        SysCommsHashedLookup
+         B         oscli_syslook_done
+oscli_sysabbrevation
+  ]
          ADRL      R1, SysCommsModule
          MOV       R2, #SCHCTab-SysCommsModule
          TEQP      PC, #C_bit :OR: SVC_mode     ; carry set means sys module
          BL        ModCommsLookUp
+oscli_syslook_done
          BCS       OscliExit
+
+  [ Oscli_HashedCommands
+         ;now try UtilityModule, if non-abbreviated command
+         Push      "R2"
+         MOV       r2,#0
+         LDR       r1,[r2,#Oscli_CmdHashSum]
+         CMP       r1,#0
+         Pull      "R2",EQ
+         BEQ       oscli_modabbreviation
+         BL        UtilCommsHashedLookup
+         ADDCS     stack, stack, #4                  ;discard R2
+         BCS       OscliExit
+         ;now try list of modules on hash value
+         MOV       r2,#0
+         LDR       r1,[r2,#Oscli_CmdHashSum]
+         AND       r1,r1,#Oscli_MHashValMask
+         LDR       r11,[r2,#Oscli_CmdHashLists]
+         CMP       r11,#0
+         LDRNE     r11,[r11,r1,LSL #2]
+         CMPNE     r11,#0
+         BEQ       %FT75
+         Push      "r3,r4"
+         ADD       r3,r11,#8
+         LDR       r4,[r11,#4]
+         ADD       r4,r4,#1
+oscli_hlist_loop
+         SUBS      r4,r4,#1
+         Pull      "r3,r4",EQ
+         BEQ       %FT75
+         LDR       R2,[stack,#2*4]
+         CMP       R2, #0
+         Pull      "r3,r4",MI
+         BMI       OneModule_Failed
+         LDR       R11,[R3],#4
+         LDR       R1, [R11, #Module_code_pointer]
+         LDR       R2, [R1, #Module_HC_Table]
+         CMP       R2, #0
+         BEQ       oscli_hlist_loop
+         LDR       R12, [R11, #Module_incarnation_list] ; preferred life
+         ADD       R12, R12, #Incarnation_Workspace
+         TEQP      PC, #SVC_mode              ; clear C
+         BL        ModCommsLookUp
+         BCC       oscli_hlist_loop
+         Pull      "r3,r4"
+         ADD       stack,stack,#4
+         B         OscliExit
+oscli_modabbreviation
+  ] ;Oscli_HashedCommands
 
 ; now try looking round the modules.
          MOV       R11, #Module_List
@@ -542,7 +669,7 @@ OscliExit
 07
          Push     "R0, R3-R6"
          MOV       R6, R0
-         ADR       R0, AliasDot
+         ADRL      R0, AliasDot
          MOV       R3, #0
          MOV       R2, #-1         ; negative length means just look for it.
          SWI       XOS_ReadVarVal
@@ -554,6 +681,69 @@ PercentDot                        ; entry for *%.
          ADD       R1, R0, #1
          MOV       R0, #FSControl_CAT   ; *., skip .
          B         %BT71
+
+;***************************************************************************
+
+  [ Oscli_HashedCommands
+;
+; - routine to compute hash value for unabbreviated commands
+; - does not apply mask to hash value (since different hash widths are
+;   required in different cases)
+;
+; hash value = sum of all chars of command, excluding terminator, all
+;              chars being processed through Up_ItAndTerm_Check_Table
+;
+; entry:
+; R0 -> command
+; exit:
+; R1 =  hash value, or 0 if invalid (abbreviation encountered)
+;
+Oscli_cmd_hashsum ROUT
+         Push   "r0,r2-r3,lr"
+         MOV    r1,#0
+         ADRL   r2, Up_ItAndTerm_Check_Table
+         B      %FT15
+10
+         ADD    r1,r1,r3
+15
+         LDRB   r3,[r0],#1
+         CMP    r3,#&80
+         LDRCCB r3,[r2,r3]
+         CMP    r3,#"."
+         BEQ    %FT30
+         CMP    r3,#0
+         BNE    %BT10
+20
+         Pull   "r0,r2-r3,PC"
+30
+         MOV    r1,#0
+         Pull   "r0,r2-r3,PC"
+;
+;special entry of ModCommsLookUp, for hashed lookup of commands in SysCommsModule
+;entry: R0 -> command, r1 = hash value of command
+;
+SysCommsHashedLookup ROUT
+         Push   "R0, R2-R10, lr"
+         AND    R4, R1,#Oscli_CHashValMask  ;hash value, masked for command hashing
+         ADRL   R1, SysCommsModule
+         ADRL   R2, SysCoHashedCmdTab
+         LDR    R2, [R2, R4, LSL #2]        ;command list for this hash value
+         TEQP   PC, #C_bit :OR: SVC_mode    ;carry set means sys module
+         B      ModCommsLookUp_AltEntry
+;
+;special entry of ModCommsLookUp, for hashed lookup of commands in UtilityMod
+;entry: R0 -> command, r1 = hash value of command
+;
+UtilCommsHashedLookup ROUT
+         Push   "R0, R2-R10, lr"
+         AND    R4, R1,#Oscli_CHashValMask  ;hash value, masked for command hashing
+         ADRL   R1, UtilityMod
+         ADRL   R2, UtilHashedCmdTab
+         LDR    R2, [R2, R4, LSL #2]        ;command list for this hash value
+         TEQP   PC, #SVC_mode               ;clear C
+         B      ModCommsLookUp_AltEntry
+;
+  ] ;Oscli_HashedCommands
 
 ;***************************************************************************
 
@@ -569,6 +759,9 @@ PercentDot                        ; entry for *%.
 
 ModCommsLookUp ROUT
          Push   "R0, R2-R10, lr"
+  [ Oscli_HashedCommands
+ModCommsLookUp_AltEntry
+  ]
          MOV     R4, #0   ; want all flags clear
          TEQ     R2, #0   ; don't corrupt C!
          MOVMI   R4, #FS_Command_Flag
@@ -898,14 +1091,14 @@ FindItem_EOTab
 Up_ItAndTerm_Check_Table
 ; Table to uppercase and test for terminators for passed * commands
 ;      0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F
-   =   0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0     ; 0
-   =   0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0     ; 1
-   =   0 , "!", 0 , "#" , 0, 0, 0, "'", "(", ")", "*" , "+", 0 , "-", ".", "/"    ; 2
-   =  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", 0, ";", 0 , "=", 0 , "?"    ; 3
-   =  "@", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"    ; 4
-   =  "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "[", 0, "]", 0, "_"    ; 5
-   =  "`", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"    ; 6
-   =  "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "{", 0 , "}", "~", 0     ; 7
+   =   0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0                   ; 0
+   =   0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0 , 0                   ; 1
+   =   0 , "!", 0 , "#" , 0, 0, 0, "'", "(", ")", "*" , "+", 0 , "-", ".", "/"         ; 2
+   =  "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", 0, ";", 0 , "=", 0 , "?"       ; 3
+   =  "@", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"   ; 4
+   =  "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "[", 0, "]", 0, "_"       ; 5
+   =  "`", "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O"   ; 6
+   =  "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "{", 0 , "}", "~", 0      ; 7
 
 ;  WHILE . < Up_ItAndTerm_Check_Table+256 ; top bit stuff done by CMP #&80
 ;   = . - Up_ItAndTerm_Check_Table
