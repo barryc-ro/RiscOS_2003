@@ -93,10 +93,11 @@ od.header
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 .c.od:;     ${CC} ${CFLAGS} -o $@ $< -DREMOTE_DEBUG
-.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< h.$* -DREMOTE_DEBUG
+.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< -d h.$* -DREMOTE_DEBUG
 .s.od:;     ${AS} ${AFLAGS} $< $@
 
 #
@@ -124,39 +125,38 @@ clean:
         ${WIPE} od ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
-        ${WIPE} map ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${RM} ${TARGET}
+	${RM} h.header
         @echo ${COMPONENT}: cleaned
+
 dirs:
         ${MKDIR} o
         ${MKDIR} od
         ${MKDIR} rm
         ${MKDIR} linked
-        ${MKDIR} map
         ${MKDIR} aof
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} dirs
+${TARGET}: ${OBJS} ${ROMCSTUBS} dirs header.h
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 #
 # Target
 #
-rm.${COMPONENT}: ${OBJS} dirs
+rm.${COMPONENT}: ${OBJS} dirs header.h
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         Access rm.${COMPONENT} RW/R
 
-rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} dirs
+rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} dirs header.h
         ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${REMOTEDB}
         Access rm.${COMPONENT}D RW/R
 
