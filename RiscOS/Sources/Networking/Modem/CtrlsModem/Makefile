@@ -67,7 +67,7 @@ IOP_V = ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o lineasyn.o \
      linev80.o dte_v80.o print.o \
      ringint.o callerid.o dsppatch.o powerons.o \
      trnpatch.o compatch.o datpatch.o vcepatch.o \
-     # pkttrace.o
+     #pkttrace.o
 
 
 
@@ -91,7 +91,7 @@ TARGET_OBJS_P_V = $(PPSTUB) $(AUTOSYNC_STUB) $(IOP_V)
 # Local Flags
 #DFLAGS  = -3/32bit
 DFLAGS  = -DPODULEBASED #-DDEBUG #-DAPP
-CFLAGS  = -depend !Depend -ff -zps -zM -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(C_DBG_FLAGS)
+CFLAGS  = -depend !Depend -ff -zps -zM -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(C_DBG_FLAGS) $(OPTS)
 #CFLAGS  = -zps1 -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(C_DBG_FLAGS)
 AFLAGS  = -LI $(A_DBG_FLAGS)
 #LFLAGS  = -map -ERRORS LINK.ERR -o $(TNAME) -via link/cmd 
