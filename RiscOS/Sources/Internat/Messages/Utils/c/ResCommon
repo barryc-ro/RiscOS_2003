@@ -62,6 +62,7 @@
 *****************************************************************************/
 typedef unsigned int word;
 
+/* Structure in which to hold the file information for a file */
 typedef struct
 {
   word loadaddr;
@@ -99,21 +100,33 @@ char* directory_to_copy = NULL;
 char* compared_files[MAX_TERRITORIES] = NULL; /* An array in which to store the filenames of the files t be compared. */
 bool verbose = false; /* Do you wish to see what it is doing */
 bool simulate = false; /* Do not actually delete any files. */
-bool common_directory_deleted = false;  /* A global flag to say whether an empty directory was deleted on this pass. If it was, then the recursive routines have to restart. */
 
 
 /*****************************************************************************
 * Function prototypes - Private to this file
 *****************************************************************************/
-bool perform_comparisons(void);
-bool remove_file(const char* file_to_remove);
-bool compare_files(const char* filename);
-void exit_handler(void);
+unsigned long int filer_object_type(const char* filename);
+bool file_exists(char* filename);
 char *strdup(const char *str);
-bool is_directory_empty(const char* directory);
+bool parse_territories(const char* const territory_line);
+bool mkdir(char *dir, int mode);
+int  file_size(char *file);
+char *read_env(char *variable);
+bool ensure_resource_directories_exist(void);
+void create_common(const char* res_to_copy);
+int  get_filetype(const char* const obj);
+void appendleaf( char *path, char *leaf );
+void stripleaf( char *path );
+bool compare_files(const char* filename);
+bool remove_file(const char* file_to_remove);
+bool perform_comparisons(void);
+void descend(char *path);
+bool compare_resources(void);
+int  cstrcmp(const char *a, const char *b);
+void help_text(void);
+void exit_handler(void);
 bool compare_squash_files(void);
-int get_filetype(const char* const obj);
-
+bool is_directory_empty(const char* directory);
 
 
 /*****************************************************************************
@@ -207,9 +220,23 @@ unsigned long int filer_object_type(const char* filename)
 
 
 
-/*
- * malloc an area for a string and copy the string in
- */
+/*****************************************************************************
+* strdup
+*
+* malloc an area for a string and copy the string in
+*
+* Assumptions
+*  uses malloc; the memory allocated must be free'd at some point.
+*
+* Inputs
+*  str         : The string to be copied.
+*
+* Outputs
+*  variablename: None; str is constant and should remain unaltered.
+*
+* Returns
+*  A pointer to the copy of the string, or NULL if the copy failed.
+*****************************************************************************/
 char *strdup(const char *str)
 {
   char *newstr = malloc(str == NULL ? 1 : (strlen(str) + 1));
@@ -225,13 +252,30 @@ char *strdup(const char *str)
 
 
 
-/* This routine parses any territory line passed in and strips out all the
-territories into an array.
-   If the line is invalid, it retunrs false, otherwise it returns true. A
-line is considered invalid if it is empty or contains whitespace.
- */
+/*****************************************************************************
+* parse_territories
+*
+* This routine parses any territory line passed in and strips out all the
+*  territories into the global supported_territoried array.
+* If the line is invalid, it retunrs false, otherwise it returns true. A
+*  line is considered invalid if it is empty or contains whitespace.
+*
+* Assumptions
+*  The global variables supported_territories[] and num_of_territories
+*   will both be altered.
+*
+* Inputs
+*  territory_line: A comma-seperated list of countries.
+*
+* Outputs
+*  None. territory_line is a constant pointer.
+*
+* Returns
+*  A boolean describing whether or not the territory line was parsed
+*   successfully.
+*****************************************************************************/
 
-bool parse_territories(char* territory_line)
+bool parse_territories(const char* const territory_line)
 {
   char *territory = NULL;
 
@@ -312,14 +356,31 @@ char *read_env(char *variable)
 
 
 
-/* This routine scans through the list of territories and ensures that they
-all exist. It does this by cheking that <root_directory>.<territory_name> is
-a valid directory.
- */
+
+/*****************************************************************************
+* ensure_resource_directories_exist
+*
+* This routine scans through the list of territories and ensures that the
+*  required resource directories all exist. It does this by checking that
+*  <root_directory>.<territory_name> is a valid directory.
+*
+* Assumptions
+*  There should be no effect outside this routine.
+*
+* Inputs
+*  None.
+*
+* Outputs
+*  None.
+*
+* Returns
+*  A boolean, true if the resource directories existed in the correct
+*   locationm false otherwise.
+*****************************************************************************/
 bool ensure_resource_directories_exist(void)
 {
   unsigned int loop;
-  char buffer[255]; /* Nasty hardcoded value */
+  char buffer[BUFSZ]; /* Nasty hardcoded value */
   for (loop=0; loop < num_of_territories; loop++)
   {
     sprintf(buffer, "%s.%s", root_directory, supported_territories[loop]);
@@ -450,7 +511,6 @@ bool compare_files(const char* filename)
     /* Delete the files from the 'Common' directory */
     matches = false;
     remove_file(filename);
-    common_directory_deleted = true;
   }
   else
   {
@@ -490,7 +550,6 @@ bool remove_file(const char* file_to_remove)
 {
   bool success = false;
   _kernel_swi_regs reg;
-  char* file_path = NULL;
 
   if (verbose)
     printf("Removing file %s\n", file_to_remove);
@@ -500,16 +559,7 @@ bool remove_file(const char* file_to_remove)
     reg.r[0] = 6;		/* remove object */
     reg.r[1] = (int) file_to_remove;
     _kernel_swi(OS_File, &reg, &reg);
-  }
-
-  /* Get the path to the file. */
-  file_path = strdup(file_to_remove);
-  stripleaf(file_path);
-
-  if (file_path)
-  {
-    free (file_path);
-    file_path = NULL;
+    success = true;
   }
 
   return (success);
@@ -554,10 +604,19 @@ bool perform_comparisons(void)
     }
   }
 
-  /* Another check - if the files are squash files, then they will always be different. Check the headers of each file to ensure they are the same. */
+  /* Another check - if the files are squash files, then they will always be
+      different. Check the headers of each file to ensure they are the same. */
   if (filetype[0] == FileType_Squash)
   {
     return (compare_squash_files()); /* We hsve no need to continue. */
+  }
+
+  /* In the future we may wish to treat spritefiles differently. This is a
+      conditional to check for the presence of a spritefile. */
+  if (filetype[0] == FileType_Sprite)
+  {
+    /* Do some magic munging here. We could possibly split all common sprites
+        held within the spritefiles into a 'common' file to save ROM space. */
   }
 
   /* Open all the files. */
@@ -576,8 +635,8 @@ bool perform_comparisons(void)
   /* Scan through all the files on a byte-by-byte basis, comparing them. */
   while (!feof(file_handles[0]) && file_matches)
   {
-    char bytes[10]; /* To hold the bytes from all the files... */
-    bytes[9]='\0';
+    char bytes[MAX_OPEN_TERRITORY_FILES]; /* To hold the bytes from all the files... */
+    bytes[MAX_OPEN_TERRITORY_FILES-1]='\0';
     for (loop=0; loop < num_of_territories; loop++)
     {
       bytes[loop] = getc(file_handles[loop]);
@@ -604,6 +663,7 @@ bool perform_comparisons(void)
 
 
 
+
 /* Descend into the given directory. Called recursively to scan a whole
  * directory structure.
  */
@@ -618,12 +678,6 @@ void descend(char *path)
     {
       object *op = (object *)buf;
       int nread;
-
-      if (common_directory_deleted)
-      {
-        offset = 0; /* Rescan this directory */
-        common_directory_deleted = false;
-      }
 
       printf ("Comparing files in path %s\n", path);
       _swi( OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5)|_IN(6)|_OUT(3)|_OUT(4),
@@ -680,10 +734,10 @@ void descend(char *path)
 /* This is the main routine to compare all the relevant directories. */
 bool compare_resources(void)
 {
-  char buffer[255];
+  char buffer[BUFSZ];
+
   /* Recurse down the directory structure... */
   sprintf(buffer, "%s.Common", root_directory);
-
   descend(buffer);
 
   return (true);
@@ -890,14 +944,31 @@ void exit_handler(void)
 
 
 
-/*
-  This routine scans two squash files and reutrns whether or not they are
-   identical. This is necessary becauyse two identical files can be squahed at
-   different times and end up with different timestamps and load/exec
-   addreses due to when the Squash files were created. Therefore we ignore
-   the timestamp and exec data on the squashed file, and go with the data
-   held in the Squashfile header.
-*/
+
+/*****************************************************************************
+* compare_squash_files
+*
+* This routine scans a number of squash files and returns whether or not they
+*  are identical. This is necessary because identical files can be squahed
+*  at different times and end up with different timestamps and load/exec
+*  addreses due to when the Squash files were created. Therefore we ignore the
+*  timestamp and exec data held in the Squashfile header.
+*
+* Assumptions
+*  That the compared_files[] array contains num_of_territories files, and
+*  that these files point to files of type Squash (&FCA). It also assumes
+*  that the files are able to be opened for reading.
+*  The routine should not alter the contents of any of the files.
+*
+* Inputs
+*  None.
+*
+* Outputs
+*  None.
+*
+* Returns
+*  A boolean stating wether or not the files are identical.
+*****************************************************************************/
 
 bool compare_squash_files(void)
 {
@@ -942,10 +1013,13 @@ bool compare_squash_files(void)
         file_matches = false;
         break;
       }
-      printf("Size      for file %d is %0x\n", loop, hdr[loop].size);
-      printf("Load addr for file %d is %0x\n", loop, hdr[loop].load_addr);
-      printf("Exec addr for file %d is %0x\n", loop, hdr[loop].exec_addr);
-      printf("reserved  for file %d is %0x\n", loop, hdr[loop].reserved);
+      if (verbose)
+      {
+        printf("Size      for file %d is %0x\n", loop, hdr[loop].size);
+        printf("Load addr for file %d is %0x\n", loop, hdr[loop].load_addr);
+        printf("Exec addr for file %d is %0x\n", loop, hdr[loop].exec_addr);
+        printf("reserved  for file %d is %0x\n", loop, hdr[loop].reserved);
+      }
     }
   }
 
@@ -982,8 +1056,27 @@ bool compare_squash_files(void)
 
 
 
-/* This routine returns true if the directory is full, false otherwise. */
-/* This routine is currently uncompleted. */
+
+/*****************************************************************************
+* is_directory_empty
+*
+* This routine attempts to read the number of objects held in the directory
+*  passed in. Ir returns true *only* if the object passed in is a directory
+*  and there are no objects held within the directory.
+*
+* Assumptions
+*  None.
+*
+* Inputs
+*  directory   : The directory to be scanned.
+*
+* Outputs
+*  None        : directory is a constant pointer.
+*
+* Returns
+*  This routine returns true if the directory has no entries or is not a
+*   valid directory, othrwise it returns true.
+*****************************************************************************/
 bool is_directory_empty(const char* directory)
 {
   bool is_empty = false;
