@@ -57,8 +57,11 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+	${RM} ROM
         ${RM} ${TARGET}
-	Wipe o.* ~C~V
+	-Wipe o.* ~C~V
+	-Wipe aif.* ~C~V
+	-Wipe gpa.* ~C~V
         @echo ${COMPONENT}: cleaned
 
 export: ${EXPORTS}
@@ -92,3 +95,7 @@ ${GPATARGET}: ${DBGTARGET}
 	ToGPA -s ${DBGTARGET} $@
 
 # Dynamic dependencies:
+o.IIC: s.IIC Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
+o.NVRAM: s.NVRAM Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
+o.Video: s.Video Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:Proc Hdr:OSEntries Hdr:HALEntries hdr.StaticWS hdr.Video
+o.Boot: s.Boot Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:CPU.ARM600 Hdr:IO.IOMD Hdr:IO.IOMD Hdr:MEMM.ARM600 Hdr:VIDC.VIDC20 Hdr:Proc Hdr:OSEntries Hdr:HALEntries hdr.StaticWS
