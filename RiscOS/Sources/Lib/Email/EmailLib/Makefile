@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.13 for RISC OS
+#	VERSION:	0.14 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -30,6 +30,10 @@
 #	28/08/98	0.12	RDW	clean removes o, od and z dirs.
 #	28/09/98	0.13	RDW	mailbox object added to o, od and z
 #					cc object added to o, od and z
+#	05/10/98	0.14	RDW	C++LIB added to INCLUDES
+#					quotedprintable added to OBJS, HDRS, OBSSZ, OBJSD
+#					-zps1 removed from module build so library will work in
+#					module wrapped application
 
 #
 # Paths
@@ -62,7 +66,7 @@ WFLAGS = ~c~v
 #
 # Include files
 #
-INCLUDES=	C:
+INCLUDES=	C:,<Lib$Dir>.C++Lib
 
 #
 # Program specific options:
@@ -101,26 +105,29 @@ HDRS=		h.822parser body.h bodymulti.h contentT.h contentTE.h date.h elibbase.h e
 		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.h XNFdevicec.h \
 		XNFfaxnum.h XNFfaxpage.h XNFmsgclas.h XNFphoneno.h XNFserial.h XNFsoftrev.h Xorganiz.h \
 		subject.h base64.h ELib.h ELib_priv.h MIMEtext.h ELib_OS.h XNFrtnrcpt.h \
-		@.qautils.h.list @.qautils.h.olist @.qautils.h.indxlist mailbox.h cc.h
+		@.qautils.h.list @.qautils.h.olist @.qautils.h.indxlist mailbox.h cc.h quotedprintable.h
 
 OBJS=		o.822parser body.o bodymulti.o contentT.o contentTE.o date.o elibbase.o entity.o \
 		from.o header.o headers.o messageid.o MIMEentity.o MIMEimage.o MIMEmultip.o mimevers.o \
 		parameter.o replyto.o resentdate.o rfc822msg.o to.o XNFdevice.o XNFdevicec.o \
 		XNFfaxnum.o XNFfaxpage.o XNFmsgclas.o XNFphoneno.o XNFserial.o XNFsoftrev.o Xorganiz.o \
-		subject.o base64.o ELib.o ELib_priv.o MIMEtext.o ELib_OS.o XNFrtnrcpt.o mailbox.o cc.o
+		subject.o base64.o ELib.o ELib_priv.o MIMEtext.o ELib_OS.o XNFrtnrcpt.o mailbox.o cc.o \
+		quotedprintable.o
 
 OBJSZ=		z.822parser z.body z.bodymulti z.contentT z.contentTE z.date z.elibbase z.entity \
 		z.from z.header z.headers z.messageid z.MIMEentity z.MIMEimage z.MIMEmultip z.mimevers \
 		z.parameter z.replyto z.resentdate z.rfc822msg z.to z.XNFdevice z.XNFdevicec \
 		z.XNFfaxnum z.XNFfaxpage z.XNFmsgclas z.XNFphoneno z.XNFserial z.XNFsoftrev z.Xorganiz \
-		z.subject z.base64 z.ELib z.ELib_priv z.MIMEtext z.ELib_OS z.XNFrtnrcpt z.mailbox z.cc
+		z.subject z.base64 z.ELib z.ELib_priv z.MIMEtext z.ELib_OS z.XNFrtnrcpt z.mailbox z.cc \
+		z.quotedprintable
 
 OBJSD =		od.822parser od.body od.bodymulti od.contentT od.contentTE od.date od.elibbase \
 		od.entity od.from od.header od.headers od.messageid od.MIMEentity od.MIMEimage \
 		od.MIMEmultip od.mimevers od.parameter od.replyto od.resentdate od.rfc822msg \
 		od.to od.XNFdevice od.XNFdevicec od.XNFfaxnum od.XNFfaxpage od.XNFmsgclas \
 		od.XNFphoneno od.XNFserial od.XNFsoftrev od.Xorganiz od.subject od.base64 od.ELib \
-		od.ELib_priv od.MIMEtext od.ELib_OS od.XNFrtnrcpt od.mailbox od.cc
+		od.ELib_priv od.MIMEtext od.ELib_OS od.XNFrtnrcpt od.mailbox od.cc \
+		od.quotedprintable
 
 QAOBJS=		@.qautils.o.list @.qautils.o.olist @.qautils.o.indxlist
 
@@ -133,10 +140,10 @@ QAOBJSZ=	@.qautils.z.list @.qautils.z.olist @.qautils.z.indxlist
 .SUFFIXES:	.o .od .z .s .c .c++
 .c.o:;		$(MemCheckCC) $(CC) $(CFLAGS) -o $@ $<
 .c.od:;		$(MemCheckCC) $(CC) $(CFLAGS) -g -fn -o $@ $<
-.c.z:;		$(MemCheckCC) $(CC) $(CFLAGS) -zm -zps1 -o $@ $<
+.c.z:;		$(MemCheckCC) $(CC) $(CFLAGS) -zm -o $@ $<
 .c++.o:;	$(MemCheckCC) $(C++) $(C++FLAGS) -o $@ $<
 .c++.od:;	$(MemCheckCC) $(C++) $(C++FLAGS) +g -fn -o $@ $<
-.c++.z:;	$(MemCheckCC) $(C++) $(C++FLAGS) -zm -zps1 -o $@ $<
+.c++.z:;	$(MemCheckCC) $(C++) $(C++FLAGS) -zm -o $@ $<
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
 
 all: 		library
@@ -214,3 +221,4 @@ cleanqautils:
 	Up
 	
 # Dynamic dependencies:
+ib

@@ -4,7 +4,7 @@
 
 	FILE:		body.c++
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.11 for RISC OS
+	VERSION:	0.13 for RISC OS
 
 	OVERVIEW
 	========
@@ -40,6 +40,15 @@
 					Decode8BIT() method added
 	01/10/98	0.11	RDW	Display() method changed to support 7BIT/NONE
 					encoding as separate types now
+	04/10/98	0.12	RDW	Intergrating quotedprintable support
+					out data member renamed to out_fd
+					DecodeQT(), EncodeQT(), SetUpQT() and CleanUpAT()
+					methods added
+					Memory versions of RemoveEncoding() methods
+					implemented for QT support only.  Destination
+					memory parameter removed as body object itself
+					will allocate the memory to use
+	06/10/98	0.13	RDW	GetCharSet() method added
 */
 
 
@@ -64,6 +73,7 @@ extern "C"
 /* ************************************************************************** */
 #include "body.h"
 #include "elibbase.h"
+#include "quotedprintable.h"
 extern "C"
 {
   #include "ELib.h"
@@ -109,36 +119,38 @@ typedef enum
    VARIABLES:      NONE
  */
 /* ************************************************************************** */
-body::body(void) : elibbase(),
-                   encoding(ELIB_TE_UNKNOWN), out(0),
-                   type(ELIB_BODY)
+body::body(void)
+     :elibbase(),
+      encoding(ELIB_TE_UNKNOWN),
+      out_fd(0),
+      type(ELIB_BODY),
+      qp_obj(0)
 {
 
 }
 
 
-body::body(bool f, char *membase, uint32 offset, uint32 length, ELIB_TE enc, bool owner) : elibbase(f, membase, offset, length, owner),
-                                                                                  encoding(enc), out(0), type(ELIB_BODY)
+body::body(bool f, char *membase, uint32 offset, uint32 length, ELIB_TE enc, bool owner)
+     :elibbase(f, membase, offset, length, owner),
+      encoding(enc),
+      out_fd(0),
+      type(ELIB_BODY),
+      qp_obj(0)
 {
 
 }
 
 
 // copy constructor
-body::body(const body &object) : elibbase(object),
-                                  encoding(ELIB_TE_UNKNOWN)
+body::body(const body &object)
+     :elibbase(object),
+      out_fd(0),
+      encoding(ELIB_TE_UNKNOWN),
+      qp_obj(0)
 {
   copybodyobject(object);
 }
 
-
-/*// constructor, file version
-body::body(uint32 offset, uint32 length, char *filename, ELIB_TE enc, bool owner) : elibbase(filename, offset, length, true, owner),
-                                                                                   encoding(enc), out(0)
-{
-
-}
-*/
 
 // assignment operator
 body& body::operator=(const body &object)
@@ -147,6 +159,16 @@ body& body::operator=(const body &object)
   if (this != &object)
   {
     // do destructor type things
+    if (out_fd)
+    {
+      fclose(out_fd);
+      out_fd = 0;
+    }
+    if (qp_obj)
+    {
+      delete qp_obj;
+      qp_obj = 0;
+    }
     copybodyobject(object);
   }
   return *this;
@@ -156,7 +178,7 @@ body& body::operator=(const body &object)
 void body::copybodyobject(const body &object)
 {
   encoding = object.encoding;
-  out = object.out;
+  out_fd = object.out_fd;
   type = object.type;
 }
 
@@ -164,7 +186,11 @@ void body::copybodyobject(const body &object)
 // Implementation of destructor for body
 body::~body()
 {
-  // nothing to do
+  if (out_fd)
+  {
+    fclose(out_fd);
+    out_fd = 0;
+  }
 }
 
 
@@ -223,376 +249,367 @@ ELib_rcode body::GetEncoding(ELIB_TE &enc)
 }
 
 
-ELib_rcode body::RemoveEncoding(ELIB_CONTEXT &context,
-                               const clock_t t_slice,
-                               char *filename,
-                               FILE *filedes,
-                               uint32 buffer)
+// Remove to file
+ELib_rcode body::RemoveEncoding(ELIB_CONTEXT  &context,
+                                const clock_t  t_slice,
+                                char          *filename,
+                                FILE          *filedes,
+                                uint32         buffer)
 {
-  ELib_rcode rc = ELIB_COMPLETED;
+  ELib_rcode rc = ELIB_RUNNING;
 
-  if (data_present())
+  if (data_present() == false)
   {
-/*    if (encoding != ELIB_TE_NONE)
-    {*/
-      if (encoding == ELIB_TE_UNKNOWN)
-        rc = ELIB_ECANTDOUNKNOWN;
-      else
-      {
-        // do decode
-        switch (encoding)
-        {
-          case ELIB_TE_8BIT:
-          case ELIB_TE_7BIT:
-          {
-            if (encoding == ELIB_TE_8BIT)
-              rc = Decode8BIT(context, t_slice, true, filename, filedes, buffer);
-            else
-              rc = Decode7BIT(context, t_slice, true, filename, filedes, buffer);
-            if (rc == ELIB_COMPLETED)
-            {
-              // need to replace current body data with this new encoded body data
-              encoding = ELIB_TE_NONE;
-              if ((ownership) && (!file))
-                delete[] mem_base;
-              if (file)
-                delete[] mem_base;
-              file = true;
-              parsed = true;
-              start = 0;
-              len = bwritten;
-              mem_base = new char[strlen(filename)+1];
-              strcpy(mem_base, filename);
-              mem_size = 0;
-            }
-            if (out)
-            {
-              fclose(out);
-              out = 0;
-            }
-            break;
-          }
-          case ELIB_TE_BINARY:
-            rc = ELIB_EALREADYDECODED;
-            break;
-          case ELIB_TE_QUOTED_PRINTABLE:
-            rc = ELIB_ENOTSUPPORTED;
-            break;
-          case ELIB_TE_BASE64:
-          {
-            if (out == 0)			// if this is the start (we've not opend the files yet), then
-            {
-              new_context(&context);
-
-              if (file)
-              {
-                if (filedes)
-                  out = filedes;
-                else
-                  out = fopen(filename, "wb+");
-                if (out)
-                {
-                  // move to start in file
-                  bool ok = goto_start();
-                  if (ok)
-                  {
-                    fseek(fd, -1, SEEK_CUR);// move back on char in file as goto_start reads in first char
-                    bwritten = 0;
-                    rc = base64decode(&context, t_slice, fd, out, buffer, &bwritten);
-                    if (rc == ELIB_COMPLETED)
-                    {
-                      // need to replace current body data with this new encoded body data are correctly set all the data members
-                      encoding = ELIB_TE_7BIT;
-                      if ((ownership) && (!file))
-                        delete[] mem_base;
-                      if (file)
-                        delete[] mem_base;
-                      file = true;
-                      parsed = true;
-                      start = 0;
-                      len = bwritten;
-                      mem_base = new char[strlen(filename)+1];
-                      strcpy(mem_base, filename);
-                      mem_size = 0;
-                    }
-                    if (rc != ELIB_RUNNING)
-                    {
-                      destroy_context(&context);
-                      if (!filedes)
-                        fclose(out);
-                      out = 0;
-                      stop();
-                    }
-                  }
-                  else
-                  {
-                    rc = ELIB_EINVALIDFILENAME;
-                    if (!filedes)
-                      fclose(out);
-                    out = 0;
-                  }
-                }
-                else
-                {
-                  rc = ELIB_EWRITEFAIL;
-                }
-              }
-              else
-                rc = ELIB_EINTERNALERR;	// 'cos I've not done mem version yet!
-            }
-            else
-            {
-              rc = base64decode(&context, t_slice, fd, out, buffer, &bwritten);
-              if (rc == ELIB_COMPLETED)
-              {
-                // need to replace current body data with this new encoded body data are correctly set all the data members
-                encoding = ELIB_TE_7BIT;
-                if ((ownership) && (!file))
-                  delete[] mem_base;
-                if (file)
-                  delete[] mem_base;
-                file = true;
-                parsed = true;
-                start = 0;
-                len = bwritten;
-                mem_base = new char[strlen(filename)+1];
-                strcpy(mem_base, filename);
-                mem_size = 0;
-              }
-              if (rc != ELIB_RUNNING)
-              {
-                destroy_context(&context);
-                if (!filedes)
-                  fclose(out);
-                out = 0;
-                stop();
-              }
-            }
-            break;
-          }
-          default:
-          {
-            rc = ELIB_EINTERNALERR;
-            break;
-          }
-        }  // end switch
-      } // endif on encoding type check
-//    } // endif on encoding not NONE check
-  } // endif on data present check
-  else
     rc = ELIB_ENODATAPRESENT;
+  }
+
+  if ((rc == ELIB_RUNNING) && (out_fd == 0))
+  {
+    bwritten = 0;
+    if (filedes)
+    {
+      out_fd = filedes;
+    }
+    else
+    {
+      out_fd = fopen(filename, "wb+");
+      if (out_fd == 0)
+        rc = ELIB_EWRITEFAIL;
+    }
+  }
+
+  if (rc == ELIB_RUNNING)
+  {
+    switch (encoding)
+    {
+      case ELIB_TE_UNKNOWN:
+      {
+        rc = ELIB_ECANTDOUNKNOWN;
+        break;
+      }
+      case ELIB_TE_NONE:
+      case ELIB_TE_BINARY:
+      {
+        rc = ELIB_EALREADYDECODED;
+        break;
+      }
+      case ELIB_TE_8BIT:
+      case ELIB_TE_7BIT:
+      {
+        if (rc >= ELIB_RUNNING)
+        {
+          if (encoding == ELIB_TE_8BIT)
+            rc = Decode8BIT(context, t_slice, true, filename, buffer);
+          else
+            rc = Decode7BIT(context, t_slice, true, filename, buffer);
+        }
+        break;
+      }
+      case ELIB_TE_QUOTED_PRINTABLE:
+      {
+        if (rc >= ELIB_RUNNING)
+        {
+          rc = DecodeQT(true, t_slice, ELIB_TE_NONE, 4096, filename);
+        }
+        break;
+      }
+      case ELIB_TE_BASE64:
+      {
+        rc = DecodeBASE64(context, t_slice, 4096);
+        break;
+      }
+      default:
+      {
+        rc = ELIB_EINTERNALERR;
+        break;
+      }
+    }  // end switch
+
+    if (rc == ELIB_COMPLETED)
+    {
+      // need to replace current body data with this new encoded body data
+      encoding = ELIB_TE_NONE;
+      if ((ownership) && (!file))
+        delete[] mem_base;
+      if (file)
+        delete[] mem_base;
+      file = true;
+      parsed = true;
+      start = 0;
+      len = bwritten;
+      mem_base = new char[strlen(filename)+1];
+      strcpy(mem_base, filename);
+      mem_size = 0;
+    }
+  } // endif on rc == ELIB_RUNNING
+
+  if (rc != ELIB_RUNNING)
+  {
+    if (filedes == 0)			// If caller DID NOT give us a file to use then
+    {
+      if (out_fd)
+        fclose(out_fd);			// close the file as we opened it
+      out_fd = 0;
+    }
+  }
+
   return rc;
 }
 
 
+// Remove to memory
 ELib_rcode body::RemoveEncoding(ELIB_CONTEXT &context,
-                               const clock_t t_slice,
-                               char *memory)
+                                const clock_t t_slice)
 {
-  ELib_rcode rc = ELIB_COMPLETED;
+  ELib_rcode rc = ELIB_RUNNING;
 
-  if (data_present())
+  if (data_present() == false)
   {
-    if (encoding != ELIB_TE_NONE)
+    rc = ELIB_ENODATAPRESENT;
+  }
+
+  if (rc == ELIB_RUNNING)
+  {
+    char *new_memory = 0;
+
+    switch (encoding)
     {
-      if (encoding == ELIB_TE_UNKNOWN)
-        rc = ELIB_ECANTDOUNKNOWN;
-      else
+      case ELIB_TE_UNKNOWN:
       {
-        // do decode
+        rc = ELIB_ECANTDOUNKNOWN;
+        break;
+      }
+      case ELIB_TE_NONE:
+      case ELIB_TE_BINARY:
+      {
+        rc = ELIB_EALREADYDECODED;
+        break;
+      }
+      case ELIB_TE_8BIT:
+      case ELIB_TE_7BIT:
+      case ELIB_TE_BASE64:
+      {
+        rc = ELIB_EINTERNALERR;
+        break;
+      }
+      case ELIB_TE_QUOTED_PRINTABLE:
+      {
+        rc = DecodeQT(false, t_slice, ELIB_TE_NONE, 4096, new_memory);
+        break;
+      }
+      default:
+      {
+        rc = ELIB_EINTERNALERR;
+        break;
+      }
+    } // end switch
+
+    if (rc == ELIB_COMPLETED)		// If decoding has completed, then
+    {
+      // need to replace current body data with this new encoded body data
+      encoding = ELIB_TE_NONE;
+      if ((ownership) && (!file))
+        delete[] mem_base;
+      if (file)
+        delete[] mem_base;
+      file = false;
+      parsed = true;
+      start = 0;
+      len = bwritten;
+      mem_base = new_memory;
+      mem_size = bwritten;
+    }
+  } // endif on rc == ELIB_RUNNING
+
+  return rc;
+}
+
+
+// Encode to file
+ELib_rcode body::ApplyEncoding(ELIB_CONTEXT& context,
+                               const clock_t t_slice,
+                               ELIB_TE       enc,
+                               char*         filename,
+                               uint32        buffer,
+                               FILE*         filedes)
+{
+  ELib_rcode rc = ELIB_RUNNING;
+
+  if (data_present() == false)
+  {
+    rc = ELIB_ENODATAPRESENT;
+  }
+  else if (enc == encoding)
+  {
+    rc = ELIB_EALREADYENCODED;
+  }
+
+  if ((rc == ELIB_RUNNING) && (out_fd == 0))
+  {
+    if (filedes)
+    {
+      out_fd = filedes;
+    }
+    else
+    {
+      out_fd = fopen(filename, "wb+");
+      if (out_fd == 0)
+        rc = ELIB_EWRITEFAIL;
+    }
+  }
+
+  if (rc == ELIB_RUNNING)
+  {
+    switch (enc)
+    {
+      case ELIB_TE_UNKNOWN:
+      {
+        rc = ELIB_ECANTDOUNKNOWN;
+        break;
+      }
+      case ELIB_TE_8BIT:			// 8bit not implemented yet
+      case ELIB_TE_BINARY:			// cant apply binary or NONE (OS format), they are base formats.
+      case ELIB_TE_NONE:
+      {
+        rc = ELIB_ENOTSUPPORTED;
+        break;
+      }
+      case ELIB_TE_7BIT:
+      {
+        rc = Encode7BIT(context, t_slice, true, filename, buffer);
+        break;
+      }
+      case ELIB_TE_QUOTED_PRINTABLE:
+      {
+        rc = EncodeQT(true, t_slice, buffer, filename);
+        break;
+      }
+      case ELIB_TE_BASE64:
+      {
+        rc = EncodeBASE64(context, t_slice, buffer);
+        break;
+      }
+      default:
+      {
+        rc = ELIB_EINTERNALERR;
+        break;
+      }
+    }  // end switch
+
+    if (rc == ELIB_COMPLETED)			// If encoding has completed, then
+    {
+      // need to replace current body data with this new encoded body data
+      encoding = enc;
+      if ((ownership) && (!file))
+        delete[] mem_base;
+      if (file)
+        delete[] mem_base;
+      file = true;
+      parsed = true;
+      start = 0;
+      len = bwritten;
+      mem_base = new char[strlen(filename)+1];
+      strcpy(mem_base, filename);
+      mem_size = 0;
+    }
+  } // endif on rc == ELIB_RUNNING
+
+  if (rc != ELIB_RUNNING)
+  {
+    if (filedes == 0)			// If we didn't get given the file opened, then
+    {
+      if (out_fd)
+      {
+        fclose(out_fd);			// we need to close it
+        out_fd = 0;
       }
     }
   }
-  else
-    rc = ELIB_ENODATAPRESENT;
+
   return rc;
 }
 
 
+// Encode to memory
 ELib_rcode body::ApplyEncoding(ELIB_CONTEXT &context,
                                const clock_t t_slice,
-                               ELIB_TE enc,
-                               char *filename,
-                               uint32 buffer)
+                               ELIB_TE       enc)
 {
-  ELib_rcode rc = ELIB_COMPLETED;
+  ELib_rcode rc = ELIB_RUNNING;
+  char *new_memory = 0;
 
-  if (data_present())
+  if (data_present() == false)
   {
-    if (enc == encoding)
-      rc = ELIB_EALREADYENCODED;
-    else if (enc == ELIB_TE_UNKNOWN)
-      rc = ELIB_ECANTDOUNKNOWN;
-    else
+    rc = ELIB_ENODATAPRESENT;
+  }
+  else if (enc == encoding)
+  {
+    rc = ELIB_EALREADYENCODED;
+  }
+
+  if (rc == ELIB_RUNNING)
+  {
+    switch (enc)
     {
-      // do encode
-      switch (enc)
+      case ELIB_TE_UNKNOWN:
       {
-        case ELIB_TE_7BIT:
-        {
-          rc = Encode7BIT(context, t_slice, true, filename, buffer);
-          if (rc == ELIB_COMPLETED)
-          {
-            // need to replace current body data with this new encoded body data
-            encoding = ELIB_TE_7BIT;
-            if ((ownership) && (!file))
-              delete[] mem_base;
-            if (file)
-              delete[] mem_base;
-            file = true;
-            parsed = true;
-            start = 0;
-            len = bwritten;
-            mem_base = new char[strlen(filename)+1];
-            strcpy(mem_base, filename);
-            mem_size = 0;
-          }
-          if (out)
-          {
-            fclose(out);
-            out = 0;
-          }
-          break;
-        }
-//        case ELIB_TE_NONE:
-        case ELIB_TE_8BIT:			// cant apply 8BIT or binary, that's a base format.
-        case ELIB_TE_BINARY:
-          rc = ELIB_ENOTSUPPORTED;
-          break;
-        case ELIB_TE_QUOTED_PRINTABLE:
-          rc = ELIB_ENOTSUPPORTED;
-          break;
-        case ELIB_TE_BASE64:
-        {
-          if (out == 0)			// if this is the start (we've not opend the files yet), then
-          {
-            new_context(&context);
-
-            if (file)
-            {
-              out = fopen(filename, "wb+");
-              if (out)
-              {
-                // move to start in file
-                bool ok = goto_start();
-                if (ok)
-                {
-                  fseek(fd, -1, SEEK_CUR);// move back on char in file as goto_start reads in first char
-                  bwritten = 0;
-                  rc = base64encode(&context, t_slice, fd, out, buffer, &bwritten);
-                  if (rc == ELIB_COMPLETED)
-                  {
-                    // need to replace current body data with this new encoded body data are correctly set all the data members
-                    encoding = ELIB_TE_BASE64;
-                    if ((ownership) && (!file))
-                      delete[] mem_base;
-                    if (file)
-                      delete[] mem_base;
-                    file = true;
-                    parsed = true;
-                    start = 0;
-                    len = bwritten;
-                    mem_base = new char[strlen(filename)+1];
-                    strcpy(mem_base, filename);
-                    mem_size = 0;
-                  }
-                  if (rc != ELIB_RUNNING)
-                  {
-                    destroy_context(&context);
-                    fclose(out);
-                    out = 0;
-                    stop();
-                  }
-                }
-                else
-                {
-                  rc = ELIB_EINVALIDFILENAME;
-                  fclose(out);
-                  out = 0;
-                }
-              }
-              else
-              {
-                rc = ELIB_EWRITEFAIL;
-              }
-            }
-            else
-              rc = ELIB_EINTERNALERR;	// 'cos I've not done mem version yet!
-          }
-          else
-          {
-            rc = base64encode(&context, t_slice, fd, out, buffer, &bwritten);
-            if (rc == ELIB_COMPLETED)
-            {
-              // need to replace current body data with this new encoded body data are correctly set all the data members
-              encoding = ELIB_TE_BASE64;
-              if ((ownership) && (!file))
-                delete[] mem_base;
-              if (file)
-                delete[] mem_base;
-              file = true;
-              parsed = true;
-              start = 0;
-              len = bwritten;
-              mem_base = new char[strlen(filename)+1];
-              strcpy(mem_base, filename);
-              mem_size = 0;
-            }
-            if (rc != ELIB_RUNNING)
-            {
-              destroy_context(&context);
-              fclose(out);
-              out = 0;
-              stop();
-            }
-          }
-          break;
-        }
-        default:
-        {
-          rc = ELIB_EINTERNALERR;
-          break;
-        }
-      }  // end switch
-    }
+        rc = ELIB_ECANTDOUNKNOWN;
+        break;
+      }
+      case ELIB_TE_8BIT:
+      case ELIB_TE_BINARY:
+      case ELIB_TE_7BIT:
+      case ELIB_TE_NONE:
+      case ELIB_TE_BASE64:
+      {
+        rc = ELIB_ENOTSUPPORTED;
+        break;
+      }
+      case ELIB_TE_QUOTED_PRINTABLE:
+      {
+        rc = EncodeQT(false, t_slice, 4096, new_memory);
+        break;
+      }
+      default:
+      {
+        rc = ELIB_EINTERNALERR;
+        break;
+      }
+    } // end switch
   }
-  else
-    rc = ELIB_ENODATAPRESENT;
-  return rc;
-}
 
-
-ELib_rcode body::ApplyEncoding(ELIB_CONTEXT &context,
-                               const clock_t t_slice,
-                               ELIB_TE enc,
-                               char *memory)
-{
-  ELib_rcode rc = ELIB_COMPLETED;
-
-  if (data_present())
+  if (rc == ELIB_COMPLETED)
   {
-    if (enc == encoding)
-      rc = ELIB_EALREADYENCODED;
-    else if (encoding != ELIB_TE_7BIT)
-      rc = ELIB_EMUSTBE7BIT;
-    else if (encoding == ELIB_TE_UNKNOWN)
-      rc = ELIB_ECANTDOUNKNOWN;
-    else
-    {
-      // do encode
-    }
+    // need to replace current body data with this new encoded body data
+    encoding = enc;
+    if ((ownership) && (!file))
+      delete[] mem_base;
+    if (file)
+      delete[] mem_base;
+    file = false;
+    parsed = true;
+    start = 0;
+    len = bwritten;
+    mem_base = new_memory;
+    mem_size = bwritten;
   }
-  else
-    rc = ELIB_ENODATAPRESENT;
+
   return rc;
 }
 
 
+// ********************************************************************************
+// 7BIT Methods
+//
+
+// method to take the body in it's native system form(ie. RISC OS) Text file
+// and CRLF terminate it.  Later I'll make this none blocking and throw error if
+// characters are not legal 7bit ASCII
 ELib_rcode body::Encode7BIT(ELIB_CONTEXT   &c,
-                           const clock_t  t_slice,
-                           bool           file_output,
-                           char          *output,
-                           uint32         bufsize)
+                            const clock_t  t_slice,
+                            bool           file_output,
+                            char          *output,
+                            uint32         bufsize)
 {
   ELib_rcode rc = ELIB_COMPLETED;
 
@@ -600,44 +617,34 @@ ELib_rcode body::Encode7BIT(ELIB_CONTEXT   &c,
     rc = ELIB_EINTERNALERR;		// As I've not implemented memory output yet!
   else
   {
-    new_context(&c);
-    out = fopen(output, "wb+");
-    if (!out)
-      rc = ELIB_EWRITEFAIL;
+    bool ok = goto_start();		// Goto start of this body object
+    if (!ok)
+    {
+      rc = ELIB_EINVALIDFILENAME;
+    }
     else
     {
-      bool ok = goto_start();		// Goto start of this body object
-      if (!ok)
-      {
-        rc = ELIB_EINVALIDFILENAME;
-        fclose(out);
-        out = 0;
-      }
-      else
-      {
-        bwritten = 0;
-        char prev = 0;
-        int error = 0;
+      bwritten = 0;
+      char prev = 0;
+      int error = 0;
 
-        while ( (error != EOF) && (!end_of_data()) )
+      while ( (error != EOF) && (!end_of_data()) )
+      {
+        if (curchar == LF)				// if current char is a LF
         {
-          if (curchar == LF)				// if current char is a LF
+          if ((prev != CR) && (error != EOF))		// if previous char is not a CR then
           {
-            if ((prev != CR) && (error != EOF))		// if previous char is not a CR then
-            {
-              error = fputc(CR, out);			// write out a CR
-              if (error != EOF) bwritten++;
-            }
+            error = fputc(CR, out_fd);			// write out a CR
+            if (error != EOF) bwritten++;
           }
-          error = fputc(curchar, out);
-          if (error != EOF) bwritten++;
-          prev = curchar;
-          next_char();
-        } // endwhile
-        stop();
-      }
-    } // endif fopen check
-    destroy_context(&c);
+        }
+        error = fputc(curchar, out_fd);
+        if (error != EOF) bwritten++;
+        prev = curchar;
+        next_char();
+      } // endwhile
+      stop();
+    }
   } // endif file_output check
 
   return rc;
@@ -648,80 +655,307 @@ ELib_rcode body::Decode7BIT(ELIB_CONTEXT   &c,
                            const clock_t  t_slice,
                            bool           file_output,
                            char          *output,
-                           FILE          *filedes,
                            uint32         bufsize)
 {
   ELib_rcode rc = ELIB_COMPLETED;
 
   if (!file_output)
-    rc = ELIB_EINTERNALERR;		// As I've not implemented memory output yet!
+    rc = ELIB_EINTERNALERR;				// As I've not implemented memory output yet!
   else
   {
-    new_context(&c);
-    if (filedes)
-      out = filedes;
-    else
-      out = fopen(output, "wb+");
-    if (!out)
-      rc = ELIB_EWRITEFAIL;
+    bool ok = goto_start();				// Goto start of this body object
+    if (!ok)
+    {
+      rc = ELIB_EINVALIDFILENAME;
+    }
     else
     {
-      bool ok = goto_start();		// Goto start of this body object
-      if (!ok)
-      {
-        rc = ELIB_EINVALIDFILENAME;
-        if (!filedes)
-          fclose(out);
-        out = 0;
-      }
-      else
-      {
-        bwritten = 0;
-        int error = 0;
+      bwritten = 0;
+      int error = 0;
 
-        while ( (error != EOF) && (!end_of_data()) && (curpos<len))
+      while ( (error != EOF) && (!end_of_data()) && (curpos<len))
+      {
+        if (curchar == CR)				// if current char is a CR
         {
-          if (curchar == CR)				// if current char is a CR
+          next_char();					// get the next char
+          if (curchar == LF)				// if the next char is a LF then
           {
-            next_char();				// get the next char
-            if (curchar == LF)				// if the next char is a LF then
-            {
-              error = fputc(LF, out);			// Turn CRLF into LF by just outputing LF
-              if (error != EOF) bwritten++;
-            }
-            else					// else, next char wasn't LF, so not a CRLF sequence, so
-            {
-              error = fputc(CR, out);			// write out the CR and
-              if (error !=EOF) bwritten++;
-              error = fputc(curchar, out);		// write out this character
-              if (error !=EOF) bwritten++;
-            }
-          }
-          else						// else current char wasn't a CR, so
-          {
-            error = fputc(curchar, out);		// write it out
+            error = fputc(LF, out_fd);			// Turn CRLF into LF by just outputing LF
             if (error != EOF) bwritten++;
           }
-          next_char();
-        } // endwhile
-        stop();
-      }
-    } // endif fopen check
-    destroy_context(&c);
+          else						// else, next char wasn't LF, so not a CRLF sequence, so
+          {
+            error = fputc(CR, out_fd);			// write out the CR and
+            if (error !=EOF) bwritten++;
+            error = fputc(curchar, out_fd);		// write out this character
+            if (error !=EOF) bwritten++;
+          }
+        }
+        else						// else current char wasn't a CR, so
+        {
+          error = fputc(curchar, out_fd);		// write it out
+          if (error != EOF) bwritten++;
+        }
+        next_char();
+      } // endwhile
+      stop();
+    } // endif goto_start() check
   } // endif file_output check
+
+  return rc;
+}
+//
+// End of 7BIT Methods
+// ********************************************************************************
+
+
+// ********************************************************************************
+// 8BIT Methods
+//
+ELib_rcode body::Decode8BIT(ELIB_CONTEXT   &c,
+                           const clock_t  t_slice,
+                           bool           file_output,
+                           char          *output,
+                           uint32         bufsize)
+{
+  return Decode7BIT(c, t_slice, file_output, output, bufsize);			// As for decoding 8BIT we just need to turn CRLF into OS linebreaks
+}
+//
+// End of 8BIT Methods
+// ********************************************************************************
+
+
+// ********************************************************************************
+// QUOTED PRINTABLE Methods
+//
+ELib_rcode body::DecodeQT(bool              output_to_file,
+                          const clock_t     t_slice,
+                          ELIB_TE           output_encoding,
+                          uint32            bufsize,
+                          char*&            output)
+{
+  ELib_rcode rc = ELIB_RUNNING;
+
+  if (qp_obj == 0)			// This is the start
+  {
+    rc = SetUpQT(output_to_file, output);
+  }
+
+  if ((qp_obj) && (rc >= ELIB_RUNNING))	// this is the next time slice or straight after a successful creation of qp_obj
+  {
+    rc = qp_obj->decode(t_slice, bwritten, output_encoding);
+  }
+
+  if (rc != ELIB_RUNNING)
+  {
+    CleanUpQT();
+  }
 
   return rc;
 }
 
 
-ELib_rcode body::Decode8BIT(ELIB_CONTEXT   &c,
-                           const clock_t  t_slice,
-                           bool           file_output,
-                           char          *output,
-                           FILE          *filedes,
-                           uint32         bufsize)
+void body::CleanUpQT(void)
 {
-  return Decode7BIT(c, t_slice, file_output, output, filedes, bufsize);		// As for decoding 8BIT we just need to turn CRLF into OS linebreaks
+  if (qp_obj)
+  {
+    delete qp_obj;
+    qp_obj = 0;
+  }
+  stop();
 }
 
 
+ELib_rcode body::EncodeQT(bool              output_to_file,
+                          const clock_t     t_slice,
+                          uint32            bufsize,
+                          char*&            output)
+{
+  ELib_rcode rc = ELIB_RUNNING;
+
+  if (qp_obj == 0)			// This is the start
+  {
+    rc = SetUpQT(output_to_file, output);
+  }
+
+  if ((qp_obj) && (rc >= ELIB_RUNNING))	// this is the next time slice or straight after a successful creation of qp_obj
+  {
+    rc = qp_obj->encode(t_slice, bwritten);
+  }
+
+  if (rc != ELIB_RUNNING)
+  {
+    CleanUpQT();
+  }
+
+  return rc;
+}
+
+
+ELib_rcode body::SetUpQT(bool output_to_file, char*& output)
+{
+  ELib_rcode rc = ELIB_RUNNING;
+
+  bool ok = goto_start();
+  if (ok)
+  {
+    if (file)
+    {
+      fseek(fd, -1, SEEK_CUR);	// move back on char in file as goto_start reads in first char
+    }
+    bwritten = 0;
+
+    if (rc >= ELIB_RUNNING)
+    {
+      if (file)
+      {
+        if (output_to_file == true)
+        {
+          qp_obj = new quotedprintable(fd, len, out_fd, rc);
+        }
+        else
+        {
+          qp_obj = new quotedprintable(fd, len, &output, rc);
+        }
+      }
+      else
+      {
+        if (output_to_file == true)
+        {
+          qp_obj = new quotedprintable(mem_base, len, out_fd, rc);
+        }
+        else
+        {
+          qp_obj = new quotedprintable(mem_base, len, &output, rc);
+        }
+      }
+
+      if (qp_obj == 0)
+      {
+        rc = ELIB_EMALLOCFAILED;
+      }
+    }
+  }
+  else
+  {
+    rc = ELIB_EFAILED;
+  }
+
+  return rc;
+}
+//
+// End of QUOTED PRINTABLE Methods
+// ********************************************************************************
+
+
+// ********************************************************************************
+// BASE64 Methods
+//
+ELib_rcode body::DecodeBASE64(ELIB_CONTEXT &context,
+                              const clock_t t_slice,
+                              uint32        buffer)
+{
+  ELib_rcode rc = ELIB_RUNNING;
+
+  if (file == false)
+    rc = ELIB_EINTERNALERR;	// memory as sourse not implemented
+
+  if (rc == ELIB_RUNNING)
+  {
+    if (context == 0)		// if this is the start (we've not opend the files yet), then
+    {
+      new_context(&context);
+
+      bool ok = goto_start();	// move to start in file
+      if (ok)
+      {
+        fseek(fd, -1, SEEK_CUR);	// move back on char in file as goto_start reads in first char
+      }
+      else
+        rc = ELIB_EINVALIDFILENAME;
+    }
+
+    rc = base64decode(&context, t_slice, fd, out_fd, buffer, &bwritten);
+    if (rc != ELIB_RUNNING)
+    {
+      destroy_context(&context);
+      stop();
+    }
+  } // endif on rc == ELIB_RUNNING
+
+  return rc;
+}
+
+
+ELib_rcode body::EncodeBASE64(ELIB_CONTEXT &context,
+                              const clock_t t_slice,
+                              uint32        buffer)
+{
+  ELib_rcode rc = ELIB_RUNNING;
+
+  if (file == false)
+    rc = ELIB_EINTERNALERR;	// memory as sourse not implemented
+
+  if (rc == ELIB_RUNNING)
+  {
+    if (context == 0)		// if this is the start (we've not opend the files yet), then
+    {
+      new_context(&context);
+
+      bool ok = goto_start();	// move to start in file
+      if (ok)
+      {
+        fseek(fd, -1, SEEK_CUR);	// move back on char in file as goto_start reads in first char
+      }
+      else
+        rc = ELIB_EINVALIDFILENAME;
+    }
+
+    rc = base64encode(&context, t_slice, fd, out_fd, buffer, &bwritten);
+    if (rc != ELIB_RUNNING)
+    {
+      destroy_context(&context);
+      stop();
+    }
+  } // endif on rc == ELIB_RUNNING
+
+  return rc;
+}
+//
+// End of BASE64 Methods
+// ********************************************************************************
+
+
+ELib_rcode body::GetCharSet(char*& data, uint32 &size)
+{
+  static char charset[] = "iso-8859-1";
+  ELib_rcode rc = ELIB_DEFAULTED;
+
+  if (data == 0)								// If we've not been given a block of memory
+  {
+    if (size == 0)								// are we to allocate some, if size == 0, then no
+    {
+      size = strlen(charset) + 1;
+      rc = ELIB_ENULLADDR;
+    }
+    else									// else, allocate the required amount of space
+    {
+      size = strlen(charset) + 1;
+      data = new char[size];
+      if (data == 0)
+        rc = ELIB_EMALLOCFAILED;
+    }
+  }
+
+  if (data)									// if memory allocated, then
+  {
+    if (size >= strlen(charset) + 1)						// is it big enough?  if so then
+    {
+      strcpy(data, charset);
+    }
+    else
+      rc = ELIB_ENOSPACE;
+  }
+
+  return rc;
+}
