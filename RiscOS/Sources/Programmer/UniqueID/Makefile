@@ -45,7 +45,8 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 INCLUDES = -IC:
 
-DFLAGS   =
+# DFLAGS   = -DETHERID="\"${ETHERID}\""
+DFLAGS   = 
 
 #
 # Program specific options:
@@ -126,8 +127,8 @@ ${RAMTARGET}: ${OBJS} ${CLIB} dirs
 ${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
-${O}.idblock: s.${MACHINE}.idblock
-        ${AS} ${AFLAGS} s.${MACHINE}.idblock $@
+${O}.idblock: s.${IDBLOCK}.idblock
+        ${AS} ${AFLAGS} s.${IDBLOCK}.idblock $@
 
 dirs:
         ${MKDIR} ${O}
@@ -146,6 +147,7 @@ oBoca.uniqueid:	C:h.kernel
 oBoca.uniqueid:	C:h.swis
 oBoca.uniqueid:	h.module
 oBoca.uniqueid:	h.uniqueid
+oBoca.uniqueid:	export.h.uniqueid
 oBoca.uniqueid:	h.idblock
 oBoca.uniqueid:	C:h.nvram
-oBoca.idblock: s.Boca.idblock
+oBoca.idblock: s.Boca2.idblock
