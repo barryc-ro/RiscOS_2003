@@ -183,14 +183,18 @@ FILES = \
 OBJSDDT2 = \
  opp.FromROSLib		\
  opp.Global		\
+ opp.Handlers		\
  opp.Main		\
+ opp.RMA		\
  opp.Utils		\
  o.ROSLib
 
 OBJSDDT2D = \
  oppd.FromROSLib	\
  oppd.Global		\
+ oppd.Handlers		\
  oppd.Main		\
+ oppd.RMA		\
  oppd.Utils		\
  o.ROSLib
 
@@ -199,14 +203,18 @@ OBJSDDT2D = \
 OBJSDDT2RZ = \
  opprz.FromROSLib	\
  opprz.Global		\
+ opprz.Handlers		\
  opprz.Main		\
+ opprz.RMA		\
  opprz.Utils		\
  o.ROSLib
 
 OBJSDDT2RDZ = \
  opprdz.FromROSLib	\
  opprdz.Global		\
+ opprdz.Handlers	\
  opprdz.Main		\
+ opprdz.RMA		\
  opprdz.Utils		\
  o.ROSLib
 
@@ -216,7 +224,9 @@ OBJSDDT2RDZ = \
 OBJSDDT2Z = \
  oppz.FromROSLib	\
  oppz.Global		\
+ oppz.Handlers		\
  oppz.Main		\
+ oppz.RMA		\
  oppz.Utils		\
  o.ROSLib
 
