@@ -34,6 +34,7 @@
 ;;                      Fix BuffOflow tag to BufOFlo
 ;; 24-Jan-95    0.34    OM SPECIAL VERSION: -m flag allows caching from a block of memory
 ;;                      instead of a file.
+;; 05-Aug-99    0.36    Ursula long command and service call tables merged.
 ;;----------------------------------------------------------------------------
 
 Module_BaseAddr
@@ -52,7 +53,7 @@ Module_BaseAddr
                 GET     hdr:NdrDebug
                 GET     hdr:MsgTrans
 
-                GET     Version
+                GET     VersionASM
 
                 GBLL    debugxx
                 GBLL    debugcommand
@@ -71,7 +72,15 @@ debugmode       SETL    false   ; checking for SVC mode on EXIT handler
 debugexit       SETL    false   ; checking exit handler
 
 hostvdu         SETL    true
-internat        SETL    true :LAND: Version >=20        ; should we internationalise
+internat        SETL    true :LAND: Module_Version >=20        ; should we internationalise
+
+                 GBLL    LongCommandLines
+LongCommandLines SETL    {TRUE}             ;introduced for Ursula
+
+  [ LongCommandLines
+LongCLISize      *       1024     ;long command line length
+LongPNameSize    *        512     ;long pathname length (for obey$dir)
+  ]
 
 ;;----------------------------------------------------------------------------
 ;; Module header
@@ -97,7 +106,10 @@ internat        SETL    true :LAND: Version >=20        ; should we internationa
       ]
 
 Title   DCB     "Obey",0
-Helpstr DCB     "Obey",9,9,"$VString ($Date)"
+Helpstr DCB     "Obey",9,9,"$Module_MajorVersion ($Module_Date)"
+      [ Module_MinorVersion <> ""
+        DCB     " $Module_MinorVersion"
+      ]
       [ debug
         DCB     " Development version"
       ]
@@ -132,7 +144,11 @@ Obey_Syntax     DCB     "SOBYOBY", 0
 ;; Workspace
 ;;----------------------------------------------------------------------------
 
+  [ LongCommandLines
+wk_buflen       *       LongCLISize
+  |
 wk_buflen       *       256
+  ]
 
                 ^       0
 wk_link         #       4
@@ -194,11 +210,23 @@ svc_reset
 
 ;.............................................................................
 
+        ASSERT Service_Reset < Service_NewApplication
+
+ServiceTable
+        DCD     0                               ;flags word
+        DCD     UrsulaService - Module_BaseAddr ;offset to handler (skip pre-rejection)
+        DCD     Service_Reset                   ;service 1
+        DCD     Service_NewApplication          ;service 2
+        DCD     0                               ;terminator
+        DCD     ServiceTable - Module_BaseAddr  ;anchor (offset to table)
 Service
+        MOV     R0,R0                           ;magic instruction for Ursula format
+        TEQ     R1,#Service_Reset
+        TEQNE   R1,#Service_NewApplication
+        MOVNES  PC,LR
+UrsulaService
         TEQ     R1,#Service_Reset
         BEQ     svc_reset
-        TEQ     R1,#Service_NewApplication
-        MOVNE   PC,LR
 ;
 ; Here we see if we can find a block for this application
 ; (identified by quit handler), with its file closed
@@ -649,8 +677,17 @@ MyExitHandler ROUT
 ; Entry: R0 --> parameters
 ;        R1 = number of parameters
 
+  [ LongCommandLines
+    ;avoid the exceedingly naff method of XOS_CLI to *Set Obey$Dir, since it
+    ;is needlessly slow (use XOS_SetVarVal instead)
+    ;
+obeydir_name DCB "Obey$Dir",0
+        ALIGN
+  |
 obeydir DCB     "Set Obey$Dir    "
         ASSERT  (.-obeydir)=16
+  ]
+
 csdname DCB     "@",0
         ALIGN
 
@@ -699,13 +736,20 @@ Obey_Code ROUT
         BGT     %BT02
         ADR     R2,csdname              ; can't allow null directory name!
         ADD     R1,R2,#1
+
 03
+  [ LongCommandLines
+        SUB     sp, sp, #LongPNameSize  ; create local workspace
+        MOV     R4, sp
+        MOV     R5, #LongPNameSize
+  |
         SUB     sp,sp,#256              ; create local workspace
         ADR     R14,obeydir
         LDMIA   R14,{R4-R7}             ; 16 bytes
         STMIA   sp,{R4-R7}
         ADD     R4,sp,#16
         MOV     R5,#256-16
+  ]
 04
         SUBS    R5,R5,#1                ; ensure stack is not crapped on!
       [ internat
@@ -716,16 +760,30 @@ Obey_Code ROUT
       ]
         BVS     %FT44
         CMP     R2,R1
-        LDRCCB  R14,[R2],#1
+        LDRCCB  R14,[R2],#1             ; copy pathname (filename exluding leaf)
         STRCCB  R14,[R4],#1
         BCC     %BT04
         MOV     R14,#0
         STRB    R14,[R4]
 ;
+  [ LongCommandLines
+        Push    "R1-R4"
+        ADR     R0, obeydir_name        ; -> var name
+        ADD     R1, sp, #4*4            ; -> value (allowing for Push of 4 regs)
+        MOV     R2, #0                  ; length irrelevant for R4=0
+        MOV     R3, #0                  ; context
+        MOV     R4, #0                  ; value is string, to be GSTrans'd
+        SWI     XOS_SetVarVal
+        Pull    "R1-R4"
+44
+        ADD     sp, sp, #LongPNameSize
+  |
         MOV     R0,sp                   ; *Set Obey$Dir <parent dir>
         SWI     XOS_CLI
 44
         ADD     sp,sp,#256
+  ]
+
         BLVS    exit                    ; free block etc.
         Pull    "R7-R11,PC",VS
 ;
@@ -783,7 +841,12 @@ noesc
 ; of the fact that that a quit may have occurred, in which case
 ; the stack etc. is invalid and there is no return address.
 ;
+  [ LongCommandLines
+        LDR     R2,=wk_inputcom
+        ADD     R2,R11,R2
+  |
         ADD     R2,R11,#wk_inputcom
+  ]
         MOV     R3,#wk_buflen
         LDR     r1, [r11, #wk_handle]
         CMP     r1, #0
@@ -819,10 +882,20 @@ getline2
 getline3
 ;
 ;
+  [ LongCommandLines
+        LDR     R3,=wk_inputcom
+        ADD     R3,R11,R3               ; R3 --> template string
+  |
         ADD     R3,R11,#wk_inputcom     ; R3 --> template string
+  ]
         SUB     R4,R2,R3                ; R4 = length (no terminator)
 ;
+  [ LongCommandLines
+        LDR     R1,=wk_outputcom
+        ADD     R1,R11,R1               ; R1 --> result buffer
+  |
         ADD     R1,R11,#wk_outputcom    ; R1 --> result buffer
+  ]
         MOV     R2,#wk_buflen           ; R2 = length
         ADD     R0,R11,#wk_parameters   ; argument list
         ORR     r0, r0, #&80000000      ; "don't append unsubstituted args" flag
@@ -870,11 +943,21 @@ getline3
         SWI     OS_WriteS               ; print Obey: <foo>\n
         = "Obey: ", 0
         ALIGN
+  [ LongCommandLines
+        LDRVC   R0,=wk_outputcom
+        ADDVC   R0,R11,R0
+  |
         ADDVC   R0,R11,#wk_outputcom
+  ]
         SWIVC   XOS_Write0
         SWIVC   XOS_NewLine
 96
+  [ LongCommandLines
+        LDRVC   R0,=wk_outputcom
+        ADDVC   R0,R11,R0
+  |
         ADDVC   R0,R11,#wk_outputcom
+  ]
         SWIVC   XOS_CLI                 ; stack must be at the same level!!
 ;
       [ debugxx

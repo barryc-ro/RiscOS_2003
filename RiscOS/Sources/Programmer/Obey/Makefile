@@ -46,29 +46,22 @@ clean:
         $(RM) $(TARGET)
         @echo ${COMPONENT}: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
+
+resources_common:
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 $(TARGET): $(SOURCE)
         $(AS) $(ASFLAGS) $(SOURCE)
 
 # Dynamic dependencies:
-rm.Obey: hdr:ListOpts
-rm.Obey: hdr:Macros
-rm.Obey: hdr:System
-rm.Obey: Hdr:SWIs
-rm.Obey: Hdr:CPU.Generic26
-rm.Obey: Hdr:IO.GenericIO
-rm.Obey: Hdr:RISCOS
-rm.Obey: hdr:ModHand
-rm.Obey: hdr:Services
-rm.Obey: hdr:UpCall
-rm.Obey: hdr:FSNumbers
-rm.Obey: hdr:HighFSI
-rm.Obey: hdr:NewErrors
-rm.Obey: hdr:EnvNumbers
-rm.Obey: hdr:NdrDebug
-rm.Obey: hdr:MsgTrans
-rm.Obey: Version
