@@ -17,7 +17,7 @@ EXPORT_DIR	= <Lib$Dir>.DebugLib
 MKDIR		= cdir
 AS		= objasm
 CP		= copy
-CC		= cc
+CC		= ${MemCheckCC} cc
 CM		= cmhg
 RM		= remove
 LD		= link
@@ -66,6 +66,9 @@ DFLAGS		=
 COMPONENT	= DebugLib
 TARGET		= DebugLib
 TARGETZ		= DebugLibzm
+TARGETD		= DebugLibD
+TARGETMC	= DebugLibMC
+TARGETMCD	= DebugLibMCD
 AOFFile		= AOF_File
 AOFFileZ	= AOF_FileZ
 EXPORTS		= $(EXP_HDR).$(COMPONENT)
@@ -88,6 +91,33 @@ OBJSZ = \
  oz.buffering \
  oz.misc \
 
+OBJSD = \
+ od.debug \
+ od.inits \
+ od.quits \
+ od.output \
+ od.serial_lib \
+ od.buffering \
+ od.misc \
+
+OBJSMC = \
+ oMC.debug \
+ oMC.inits \
+ oMC.quits \
+ oMC.output \
+ oMC.serial_lib \
+ oMC.buffering \
+ oMC.misc \
+
+OBJSMCD = \
+ oMCD.debug \
+ oMCD.inits \
+ oMCD.quits \
+ oMCD.output \
+ oMCD.serial_lib \
+ oMCD.buffering \
+ oMCD.misc \
+
 LIBS = \
  $(PDEBUG) \
  $(TRACELIB) \
@@ -102,18 +132,24 @@ LIBSZ = \
 # Rule patterns
 #
 
-.SUFFIXES: .o .oz .s .h .c
-.c.o:;     $(CC) $(CCFLAGS) -o $@ $<
-.c.oz:;    $(CC) $(CCFLAGS) -zm -o $@ $<
-.s.o:;     $(AS) $(ASFLAGS) -o $@ $<
+.SUFFIXES: .o .oz .od .oMC .oMCD .s .h .c
+.c.o:;		$(CC) $(CCFLAGS) ${EXTRAFLAGS} -o $@ $<
+.c.oz:;		$(CC) $(CCFLAGS) ${EXTRAFLAGS} -zm -o $@ $<
+.c.od:;		${CC} ${CCFLAGS} ${EXTRAFLAGS} -DDEBUG -fn -o $@ $<
+.c.oMC:;	${CC} ${CCFLAGS} ${EXTRAFLAGS} -fn -o $@ $<
+.c.oMCD:;	${CC} ${CCFLAGS} ${EXTRAFLAGS} -DDEBUG -fn -o $@ $<
+.s.o:;		$(AS) $(ASFLAGS) -o $@ $<
 
 
 # ------------------------------------------------------------------------------
 # Build all the library
 #
 
-all:	$(TARGET) $(TARGETZ)
+all:		${TARGET} ${TARGETZ}
 
+dbg:		${TARGETD}
+
+memcheck:	${TARGETMC} ${TARGETMCD}
 
 # ------------------------------------------------------------------------------
 # RISC OS ROM build rules
@@ -128,8 +164,14 @@ install_rom: $(TARGET)
 clean:
 	$(WIPE) o $(WFLAGS)
 	$(WIPE) oz $(WFLAGS)
+	${WIPE} od ${WFLAGS}
+	${WIPE} oMC ${WFLAGS}
+	${WIPE} oMCD ${WFLAGS}
 	$(RM) $(TARGET)
 	$(RM) $(TARGETZ)
+	${RM} ${TARGETD}
+	${RM} ${TARGETMC}
+	${RM} ${TARGETMCD}
 	@echo $(COMPONENT): cleaned
 
 export_hdrs: h.DebugLib dirs
@@ -144,6 +186,9 @@ export_libs: $(TARGET) $(TARGETZ) dirs
 
 o.dirs:
 	$(MKDIR) o
+	${MKDIR} od
+	${MKDIR} oMC
+	${MKDIR} oMCD
 	$(MKDIR) oz
 	create o.dirs
 	stamp  o.dirs
@@ -158,15 +203,30 @@ dirs:
 # Final link
 #
 
-$(TARGET): $(OBJS) o.dirs
+$(TARGET): $(OBJS) $(LIBS) o.dirs
 	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJS) $(LIBS)
         $(LB) $(LBFLAGS) $(TARGET) $(AOFFile)
         $(RM) $(AOFFile)
 
-$(TARGETZ): $(OBJSZ) o.dirs
+$(TARGETZ): $(OBJSZ) $(LIBSZ) o.dirs
 	$(LD) $(LNFLAGS) -o $(AOFFileZ) $(OBJSZ) $(LIBSZ)
         $(LB) $(LBFLAGS) $(TARGETZ) $(AOFFileZ)
         $(RM) $(AOFFileZ)
+
+$(TARGETD): $(OBJSD) $(LIBS) o.dirs
+	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJSD) $(LIBS)
+	$(LB) $(LBFLAGS) $(TARGETD) $(AOFFile)
+	$(RM) $(AOFFile)
+
+$(TARGETMC): $(OBJSMC) $(LIBS) o.dirs
+	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJSMC) $(LIBS)
+	$(LB) $(LBFLAGS) $(TARGETMC) $(AOFFile)
+	$(RM) $(AOFFile)
+
+$(TARGETMCD): $(OBJSMCD) $(LIBS) o.dirs
+	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJSMCD) $(LIBS)
+	$(LB) $(LBFLAGS) $(TARGETMCD) $(AOFFile)
+	$(RM) $(AOFFile)
 
 $(EXP_HDR).$(COMPONENT): hdr.$(COMPONENT)
 	$(CP) hdr.$(COMPONENT) $@ $(CPFLAGS)
