@@ -45,14 +45,10 @@ rom_aof:
 
 
 clean:
+	Every.Every2	-c "@.!*.Sources @.!*.Output* @.!*.Makefile"	Wipe %0 ~cr~v
 	Remove		linked.$(COMPONENT)
 	Remove		$(ROM_AOF_FILE)
 	Echo		Component $(COMPONENT): 'clean' finished.
-
-
-clean_all:	clean
-	Every.Every2	-c "@.!*.Sources @.!*.Output* @.!*.Makefile"	Wipe %0 ~cr~v
-	Echo		Component $(COMPONENT): 'clean_all' finished.
 
 
 export:
