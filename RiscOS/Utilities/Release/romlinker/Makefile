@@ -37,6 +37,7 @@ OBJS =\
  romlinker.o
 
 CINCLUDES = -IC:CLX
+CDEFINES  = -DRISCOS
 
 include Makefiles:AppStdRule
 include Makefiles:AppLibs
@@ -53,14 +54,14 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 install: ${APPTARGET}
-        ${MKDIR} ${INSTDIR}.Build
-        ${CP} ${TARGET} ${INSTDIR}.Build.${TARGET} ${CPFLAGS}
+        ${MKDIR} ${INSTDIR}.Library.Build.Docs
+        ${CP} ${APPTARGET} ${INSTDIR}.Library.Build.${APPTARGET} ${CPFLAGS}
+        ${CP} docs.Notes ${INSTDIR}.Library.Build.Docs.${APPTARGET} ${CPFLAGS}
         @echo ${COMPONENT}: installed
 
 ${DIRS}:
         ${MKDIR} o
-        create ${DIRS}
-        stamp ${DIRS}
+        ${TOUCH} $@
 
 #
 # Target

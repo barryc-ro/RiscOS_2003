@@ -32,6 +32,7 @@
 static char progname[32];
 static HashTable arghash;
 static const char **remaining_args;
+static int args_alloc, args_count;
 
 static linker_characteristics *linker;
 static linker_characteristics *linkers[] = {
@@ -87,17 +88,70 @@ const char *find_next_arg(void)
   return *remaining_args ? *remaining_args++ : NULL;
 }
 
+static const char **extend_array(const char **array, int *entries, int used)
+{
+  if (used == *entries) {
+    *entries += 32;
+    if ((array = realloc(array, sizeof(const char *) * *entries)) == NULL) {
+      err_fail("unable to extend array - out of memory");
+    }
+  }
 
-static const char **init_args(int argc, char *argv[])
+  return array;
+}
+
+static int load_args(const char *filename, const char ***argv)
+{
+  FILE *f;
+  const char **args = NULL;
+  int num_args = 0, max_args = 0;
+  char buffer[BUFSIZ];
+
+  f = fopen(filename, "r");
+  if (!f) {
+    err_fail("unable to open parameter file '%s'", filename);
+  }
+
+  while (fgets(buffer, sizeof(buffer), f)) {
+    buffer[strcspn(buffer, "\n")] = '\0';
+    args = extend_array(args, &max_args, num_args);
+    args[num_args++] = Strdup(buffer);
+  }
+
+  fclose(f);
+  *argv = args;
+  return num_args;
+}
+
+static void add_other_arg(const char *arg)
+{
+  remaining_args = extend_array(remaining_args, &args_alloc, args_count);
+  remaining_args[args_count++] = arg;
+}
+
+static void init_args(int argc, const char **argv)
 {
   int i;
 
-  arghash = fault_null(hash_cinew(argc), "Unable to construct argument table");
-
-  for (i=1; i<argc && *argv[i] == '-'; ++i) {
+  for (i=0; i<argc; ++i) {
     HashId id;
-    if (hash_enter(arghash, argv[i]+1, &id)) {
-      if (argv[i+1][0] == '-' || !argv[i+1]) {
+
+    if (*argv[i] != '-') {
+      add_other_arg(argv[i]);
+    }
+    else if (!*argv[i]) {
+      /* Blank arg (without a leading option) */
+      continue;
+    }
+    else if (strcmp(argv[i], "-via") == 0) {
+      int new_argc;
+      const char **new_argv = NULL;
+
+      new_argc = load_args(fault_null_const(argv[++i], "missing value for -via"), &new_argv);
+      init_args(new_argc, new_argv);
+    }
+    else if (hash_enter(arghash, argv[i]+1, &id)) {
+      if (!argv[i+1] || argv[i+1][0] == '-' || !argv[i+1]) {
         hash_assoc(arghash, id, "1");
       }
       else {
@@ -108,8 +162,6 @@ static const char **init_args(int argc, char *argv[])
       err_fail("Duplicate option: '%s'", argv[i]);
     }
   }
-
-  return (const char **) (argv + i);
 }
 
 /* Extract the options into the linker's private data structure */
@@ -157,13 +209,13 @@ module_list **module_add_to_list(module_list **list, const char *name, unsigned 
   return &entry->next;
 }
 
-size_t romlinker_load_module_list(FILE *f, module_list **list)
+size_t romlinker_load_module_list(module_list **list)
 {
   size_t module_count = 0;
   const char *filename;
   unsigned long position = unassigned_position;
 
-  while ((filename = readline(f)) != NULL) {
+  while ((filename = find_next_arg()) != NULL) {
     if (isdigit(filename[0])) {
       char *end;
       position = romlinker_strtoul(filename, &end, 0);
@@ -182,24 +234,34 @@ size_t romlinker_load_module_list(FILE *f, module_list **list)
   return module_count;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, const char *argv[])
 {
   const char *romtype;
   const char *debuglevel;
   int i;
 
-  err_init(program_name(argv[0], progname, sizeof(progname)));
+  err_init(program_name((char *)argv[0], progname, sizeof(progname)));
   err_report("version %s", Module_HelpVersion);
-  remaining_args = init_args(argc, argv);
-  romtype = find_mandatory_parameter("format");
 
-  for (i = 0, linker = NULL; i<sizeof(linkers)/sizeof(*linkers); ++i) {
+  arghash = fault_null(hash_cinew(256), "Unable to construct argument table");
+  init_args(argc - 1, argv + 1);
+  add_other_arg(NULL);
+  romtype = find_parameter("format");
+
+  for (i = 0, linker = NULL; romtype && i<sizeof(linkers)/sizeof(*linkers); ++i) {
     if (strcmp(linkers[i]->formatname, romtype) == 0) {
       linker = linkers[i];
     }
   }
 
-  fault_null_const(linker, "Unrecognised format option '%s'", romtype);
+  if (!romtype || !linker) {
+    err_report("%s -format option; valid values are:", romtype?"unrecognised":"missing");
+    err_report("");
+    for (i = 0; i<sizeof(linkers)/sizeof(*linkers); ++i) {
+      err_report("    %-16s %s", linkers[i]->formatname, linkers[i]->description);
+    }
+    err_fail("");
+  }
 
   debuglevel = find_parameter("v");
   if (debuglevel) verbose = (int) romlinker_strtoul(debuglevel, NULL, 0);
