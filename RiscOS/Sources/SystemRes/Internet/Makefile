@@ -46,7 +46,7 @@ FILES=\
  ${SDIR}.utils.utl.RMFind\
  ${SDIR}.route.Route\
  ${SDIR}.traceroute.TraceRoute\
- ${RDIR}.bin.ShowStat\
+ ${SDIR}.showstat.ShowStat\
  ${SDIR}.sysctl.SysCtl\
  ${SDIR}.utils.utl.X\
  ${RDIR}.files.AUNMap\
@@ -68,6 +68,7 @@ NETUTILS = \
         ${SDIR}.pong.Pong            \
         ${SDIR}.utils.utl.RMFind     \
         ${SDIR}.route.Route          \
+        ${SDIR}.showstat.ShowStat    \
         ${SDIR}.sysctl.SysCtl        \
         ${SDIR}.traceroute.TraceRoute \
         ${SDIR}.utils.utl.X           \
@@ -101,6 +102,7 @@ install: ${FILES}
         ${CP} ${SDIR}.pong.Pong             ${INSTDIR}.bin.Pong         ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.RMFind      ${INSTDIR}.bin.RMFind       ${CPFLAGS}
         ${CP} ${SDIR}.route.Route           ${INSTDIR}.bin.Route        ${CPFLAGS}
+        ${CP} ${SDIR}.showstat.ShowStat     ${INSTDIR}.bin.ShowStat     ${CPFLAGS}
         ${CP} ${SDIR}.sysctl.SysCtl         ${INSTDIR}.bin.SysCtl       ${CPFLAGS}
         ${CP} ${SDIR}.traceroute.TraceRoute ${INSTDIR}.bin.TraceRoute   ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.X           ${INSTDIR}.bin.X            ${CPFLAGS}
@@ -137,6 +139,7 @@ resources-NetUtils: ${NETUTILS}
         ${CP} ${SDIR}.utils.utl.RMFind      ${RESD}.bin.RMFind       ${CPFLAGS}
         ${CP} ${SDIR}.route.Route           ${RESD}.bin.Route        ${CPFLAGS}
         ${CP} ${SDIR}.sysctl.SysCtl         ${RESD}.bin.SysCtl       ${CPFLAGS}
+        ${CP} ${SDIR}.showstat.ShowStat     ${RESD}.bin.ShowStat     ${CPFLAGS}
         ${CP} ${SDIR}.traceroute.TraceRoute ${RESD}.bin.TraceRoute   ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.X           ${RESD}.bin.X            ${CPFLAGS}
         ${CP} ${RDIR}.files.AUNMap          ${RESD}.files.AUNMap     ${CPFLAGS}
@@ -186,6 +189,12 @@ ${SDIR}.pong.Pong: ${SDIR}.pong.c.Pong
 ${SDIR}.route.Route: ${SDIR}.route.c.Route
 	dir ${SDIR}.route
 	@amu_machine
+	@up
+	@up
+
+${SDIR}.showstat.ShowStat:
+	dir ${SDIR}.showstat
+	@amu_machine 
 	@up
 	@up
 
