@@ -10,6 +10,7 @@
 # lib.romstubs        RISC_OSLib:o.romstubs   ${ROMSTUBS}   ROM      RISC_OSStubs  Module_Only
 # lib.romastubs                                             ROM      RISC_OSStubs  Apps_Only
 # lib.ansilib
+# lib.arthurlib
 # lib.clib
 # lib.riscoslibm
 #---------------------------------------------------------------------------------------------
@@ -22,11 +23,6 @@
 # 20-Jul-94  AMcC         Created.
 # 28-Sep-94  AMcC         Now exports some internal headers for Edit
 #
-
-# Set default component and target.
-# Alternative possible target is RISC_OSLib
-COMPONENT .= SharedCLibrary
-TARGET    .= CLib
 
 #
 # Paths
@@ -44,16 +40,9 @@ CP      = copy
 LD      = link
 LIBFILE = libfile
 MKDIR   = cdir
-MODSQZ  = modsqz
 OBJASM  = objasm
 RM      = remove
 WIPE    = -wipe
-
-# Note the output redirection on the end of this macro to enable parameters
-# to match those of the old application xtentries.
-XTENT   = perl build:xtentries >
-
-DIFF    = gnu.diff -df >null:
 
 AFLAGS  = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${INCLUDES} -DDDE -fK
@@ -64,18 +53,12 @@ WFLAGS  = ~c~r~v
 LIBFLAGS = -c -o
 
 #
-# Flags common to *all* phases of linking
-#
-LDFLAGS = -linkversion 519
-
-#
 # Include files
 #
 INCLUDES =
 
 STK_EXTN =
 
-# RISCOS_Lib txt flags
 DFLAGS =\
  -DFIELDNUM\
  -DBIG_WINDOWS\
@@ -83,7 +66,7 @@ DFLAGS =\
  -DALLOW_OLD_PATTERNS\
  -DSET_MISC_OPTIONS
 
-# ANSILib and stub flags
+# ANSILib flags
 CLFLAGS =\
  -DDEFAULT_TEXT
 
@@ -91,20 +74,18 @@ ALFLAGS =\
  -PD "DEFAULT_TEXT SETL {TRUE}"
 
 VLFLAGS =\
- -DLIB_SHARED="\"\""
+ -DLIB_SHARED="\"\""\
+ -DLIB_APCS="\"R\""
 
 # Shared C Library flags
 CSFLAGS =\
  -I@,^.clib\
  -DSHARED_C_LIBRARY\
- -DUROM\
- ${SCL_APCS}
+ -DUROM
 
 VSFLAGS =\
- -DLIB_SHARED="\"Shared \""
-
-ASFLAGS =\
- ${SCL_APCS}
+ -DLIB_SHARED="\"Shared \""\
+ -DLIB_APCS="\"R\""
 
 VPATH = @ kernel clib rlib
 
@@ -112,17 +93,16 @@ VPATH = @ kernel clib rlib
 #
 # Rule patterns
 #
-# Note
 .c.o:;        ${CC} ${CFLAGS} -fah ${CLFLAGS} -o $@ $<
 .c.o_rl:;     ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c.m_o_rl:;   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zM -o $@ $<
-.c.rm_o:;     ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${OPTIONS} -o $@ $<
-.c.rm_o_rl:;  ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${OPTIONS} -o $@ $<
+.c.rm_o:;     ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -o $@ $<
+.c.rm_o_rl:;  ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} -o $@ $<
 .s.o:;        ${OBJASM} ${AFLAGS} ${ALFLAGS} $< $@
 .s.o_rl:;     ${OBJASM} ${AFLAGS} $< $@
 .s.m_o_rl:;   ${OBJASM} ${AFLAGS} $< $@
-.s.rm_o:;     ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} $< $@
-.s.rm_o_rl:;  ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} $< $@
+.s.rm_o:;     ${OBJASM} ${AFLAGS} $< $@
+.s.rm_o_rl:;  ${OBJASM} ${AFLAGS} $< $@
 
 #
 # Libraries
@@ -241,7 +221,8 @@ EXPORTED_LIBS =\
 
 MODWRAP   = RISC_OSLib:s.modulewrap
 
-OBJECT    = aof.${TARGET}
+COMPONENT = RISC_OSLib
+TARGET    = aof.RISC_OSLib
 EXPORTS   = ${MODWRAP} \
             ${EXPORTED_LIBS} \
             ${HEADERS} \
@@ -282,14 +263,6 @@ RM_OBJS =\
 # Objects for lib.clib (relocatable module)
 #
 CLIB_MOD_OBJS =\
- rm_o.cl_rmhdr \
- o.initmodule \
- ${RM_OBJS}
-
-#
-# Objects for a C library only ROM shared library
-#
-CLIB_ROM_OBJS =\
  rm_o.cl_rmhdr \
  rm_o.initmodule \
  ${RM_OBJS}
@@ -392,7 +365,7 @@ RLIB_MOD_OBJS =\
 #
 # Build rules:
 #
-rom: ${OBJECT}
+rom: ${TARGET}
         @echo ${COMPONENT}: rom library built
 
 export: export_${PHASE}
@@ -402,8 +375,8 @@ export_hdrs: ${EXP_HDR}.SharedCLib; @
 
 export_libs: ${EXPORTS} dirs; @
 
-install_rom: ${OBJECT}
-        ${CP} ${OBJECT} ${INSTDIR}.${TARGET} ${CPFLAGS}
+install_rom: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom library installed
 
 clean:
@@ -417,19 +390,19 @@ clean_all:
         ${WIPE} rm_o_rl.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
-        ${WIPE} aof.* ${WFLAGS}
-        ${WIPE} syms.* ${WFLAGS}
+        ${RM} ${TARGET}
+        ${RM} syms.RISC_OSLib
+        ${RM} syms.Entries
+        ${RM} syms.C_Entries
         ${RM} derived.swis
-        ${RM} s.swioptions
         ${RM} s.abssym
         ${RM} s.c_abssym
         ${RM} s.a_abssym
-        ${RM} rlib.s.asmdefs
         ${WIPE} lib.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.RISC_OSLib
+        ${MKDIR} ${RESDIR}.${COMPONENT}
         ${MKDIR} ${RESDIR}.CLib
         IfThere clib.Resources.${LOCALE}.<System>.Messages Then Set MessagesFile clib.Resources.${LOCALE}.<System>.Messages else Set MessagesFile clib.Resources.${LOCALE}.Messages
         ${CP} <MessagesFile> ${RESDIR}.CLib.Messages ${CPFLAGS}
@@ -451,50 +424,35 @@ dirs:
 #
 # ROM target {re-linked at ROM Image build time}
 #
-aof.RISC_OSLib: ${ROM_OBJS}
-        ${LD} ${LDFLAGS} -o $@ -aof ${ROM_OBJS}
-
-aof.CLib: ${CLIB_ROM_OBJS}
-        ${LD} ${LDFLAGS} -o $@ -aof ${CLIB_ROM_OBJS}
+${TARGET}: ${ROM_OBJS}
+        ${LD} -o $@ -aof ${ROM_OBJS}
 
 #
 # Final link for the ROM Image {using given base address}
 #
-rom_link_Entries:
-        ${XTENT} syms.C_Entries kernel.s.k_entries clib.s.cl_entries
+rom_link:
+        ${LD} -o linked.RISC_OSLib ${ROM_OBJS} \
+              -symbols syms.RISC_OSLib \
+              -bin -base ${ADDRESS} \
+              -map > map.RISC_OSLib
+        ${CP} linked.RISC_OSLib ${LINKDIR}.RISC_OSLib ${CPFLAGS}
+        |
+        xtentries syms.Entries kernel.s.k_entries clib.s.cl_entries rlib.s.rl_entries
+        print rlib.swi { >> syms.Entries }
+        xtentries syms.C_Entries kernel.s.k_entries clib.s.cl_entries
         print rlib.swi { >> syms.C_Entries }
-        | C_Entries *currently* only adds _swi/_swix to RO2 symbols.
-        egrep -v "^(0x00000000 . )?_swix?$" < syms.C_Entries > syms.A_Entries
-
-rom_link_RISC_OSLib: ${ROM_OBJS} rom_link_Entries
-        ${XTENT} syms.Entries kernel.s.k_entries clib.s.cl_entries rlib.s.rl_entries
-        print rlib.swi { >> syms.Entries }
-        ${LD} ${LDFLAGS} -o linked.RISC_OSLib ${ROM_OBJS} \
-              -symdefs syms.C_Entries \
-              -symdefs syms.A_Entries \
-              -symdefs syms.Entries \
-              -symbols syms.${TARGET} \
-              -bin -base ${ADDRESS} \
-              -map > map.${TARGET}
-
-rom_link_CLib: ${CLIB_ROM_OBJS} rom_link_Entries
-        ${XTENT} syms.Entries kernel.s.k_entries clib.s.cl_entries
-        print rlib.swi { >> syms.Entries }
-        ${LD} ${LDFLAGS} -o linked.CLib ${CLIB_ROM_OBJS} \
-              -symdefs syms.C_Entries \
-              -symdefs syms.A_Entries \
-              -symdefs syms.Entries \
-              -symbols syms.${TARGET} \
-              -bin -base ${ADDRESS} \
-              -map > map.${TARGET}
-
-rom_link: rom_link_${TARGET}
-        ${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}
         |
-        ${CP} syms.Entries ${ABSSYM} ${CPFLAGS}
-        ${CP} syms.C_Entries ${C_ABSSYM} ${CPFLAGS}
-        ${CP} syms.A_Entries ${A_ABSSYM} ${CPFLAGS}
+        symgen syms.Entries syms.RISC_OSLib s.abssym
+        symgen syms.C_Entries syms.RISC_OSLib s.c_abssym
+        symgen syms.A_Entries syms.RISC_OSLib s.a_abssym
         |
+        ${OBJASM} ${AFLAGS} -from s.abssym -to o.abssym
+        ${OBJASM} ${AFLAGS} -from s.c_abssym -to o.c_abssym
+        ${OBJASM} ${AFLAGS} -from s.a_abssym -to o.a_abssym
+        |
+        ${CP} o.abssym ${ABSSYM} ${CPFLAGS}
+        ${CP} o.c_abssym ${C_ABSSYM} ${CPFLAGS}
+        ${CP} o.a_abssym ${A_ABSSYM} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 #
@@ -510,10 +468,10 @@ lib.riscoslibm: ${RLIB_MOD_OBJS}
         ${LIBFILE} ${LIBFLAGS} $@ ${RLIB_MOD_OBJS}
 
 lib.stubs: clib.s.cl_stub_r
-        ${OBJASM} ${ALFLAGS} -from clib.s.cl_stub_r -to $@
+        ${OBJASM} ${AFLAGS} -from clib.s.cl_stub_r -to $@
 
 lib.rstubs: rlib.s.rl_stub_r
-        ${OBJASM} ${ALFLAGS} -from rlib.s.rl_stub_r -to $@
+        ${OBJASM} ${AFLAGS} -from rlib.s.rl_stub_r -to $@
 
 lib.romcstubs: clib.s.cl_stub_rm
         ${OBJASM} ${AFLAGS} -from clib.s.cl_stub_rm -to $@
@@ -526,28 +484,21 @@ lib.romastubs: rlib.s.rl_stub_a
 
 # Non-exported libraries:
 lib.clib: ${CLIB_MOD_OBJS}
-        ${LD} ${LDFLAGS} -o $@ -module ${CLIB_MOD_OBJS}
-        ${MODSQZ} $@
+        ${LD} -o $@ -module ${CLIB_MOD_OBJS}
+
+lib.arthurlib: o.arth_new_n o.arth_old_n o.ArtAsm_n o.ArtAsm_o
+        ${LIBFILE} ${LIBFLAGS} $@ o.Arth_new_n o.Arth_old_n o.ArtAsm_n o.ArtAsm_o
 
 # Derived headers:
-derived.swis: s.makehswis h.swisheader s.swioptions
+derived.swis: s.makehswis h.swisheader
         ${AS} ${AFLAGS} -from s.makehswis -to $@
         settype $@ text
-
-s.swioptions:
-        @SWIOptions
 
 #
 # Rules for exporting:
 #
 ${EXP_HDR}.SharedCLib: hdr.SharedCLib
         ${CP} hdr.SharedCLib $@ ${CPFLAGS}
-
-# The swis.h header is only copied if the file differs from an existing
-# exported header.  This prevents needless recompilations
-CLIB:h.swis: derived.swis
-        -${DIFF} $@ derived.swis
-        If "<AMU$ReturnCode>" <> "0" Then ${CP} derived.swis $@ ${CPFLAGS}
 
 # Headers:
 CLIB:h.assert: clib.h.assert  ;   ${CP} clib.h.assert $@ ${CPFLAGS}
@@ -569,6 +520,7 @@ CLIB:h.stdint: clib.h.stdint;     ${CP} clib.h.stdint $@ ${CPFLAGS}
 CLIB:h.stdio: clib.h.stdio;       ${CP} clib.h.stdio $@ ${CPFLAGS}
 CLIB:h.stdlib: clib.h.stdlib;     ${CP} clib.h.stdlib $@ ${CPFLAGS}
 CLIB:h.string: clib.h.string;     ${CP} clib.h.string $@ ${CPFLAGS}
+CLIB:h.swis: derived.swis;        ${CP} derived.swis $@ ${CPFLAGS}
 CLIB:h.time: clib.h.time;         ${CP} clib.h.time $@ ${CPFLAGS}
 CLIB:h.varargs: clib.h.varargs;   ${CP} clib.h.varargs $@ ${CPFLAGS}
 
@@ -653,32 +605,28 @@ o.kernel: kernel.s.k_obj_r
         ${OBJASM} ${AFLAGS} ${ALFLAGS} -from kernel.s.k_obj_r -to $@
 
 rm_o.bsearch_a: c.bsearch
-        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} -zkA ${OPTIONS} -o $@ c.bsearch
+        ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -zkA -o $@ c.bsearch
 
 rm_o.clib:  clib.s.cl_obj_r
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.cl_obj_r -to $@
+        ${OBJASM} ${AFLAGS} -from clib.s.cl_obj_r -to $@
 
 rm_o.cl_modbody: clib.s.cl_mod_r
-        ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.cl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} -from clib.s.cl_mod_r -to $@
 
 rm_o_rl.rl_modbody: rlib.s.rl_mod_r
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from rlib.s.rl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} -from rlib.s.rl_mod_r -to $@
 
 rm_o.k_modbody: kernel.s.k_mod_r
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from kernel.s.k_mod_r -to $@
+        ${OBJASM} ${AFLAGS} -from kernel.s.k_mod_r -to $@
 
 rm_o.memcpy: s.memcpy s.h_regs
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from s.memcpy -to $@
+        ${OBJASM} ${AFLAGS} -from s.memcpy -to $@
 
-o.initmodule: clib.s.initmod_r
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.initmod_r -to $@
-
-rm_o.initmodule: clib.s.initmod_rm
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.initmod_rm -to $@
+rm_o.initmodule: clib.s.initmod_r
+        ${OBJASM} ${AFLAGS} -from clib.s.initmod_r -to $@
 
 rm_o_rl.initmodule: rlib.s.initmod_r
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from rlib.s.initmod_r -to $@
+        ${OBJASM} ${AFLAGS} -from rlib.s.initmod_r -to $@
 
 #
 # Objects that require extra flags
@@ -693,10 +641,10 @@ o.string: c.string
         ${CC} ${CFLAGS} -fah ${CLFLAGS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
 
 rm_o.armsys: c.armsys
-        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} ${OPTIONS} ${VSFLAGS} -o $@ c.armsys
+        ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${VSFLAGS} -o $@ c.armsys
 
 rm_o.string: c.string
-        ${CC} ${CFLAGS} -ffah -zm1 ${CSFLAGS} ${OPTIONS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
+        ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} -DSEPARATE_MEMCPY -DSEPARATE_MEMSET -o $@ c.string
 
 #
 # Special case: use "rom_defs" for ROM library (o_rm), "defs" for the others
@@ -710,10 +658,6 @@ o_rl.poll: rlib.s.poll
         ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.poll o_rl.poll ${AFLAGS}
 
-o_rl.bastxt: rlib.s.bastxt
-        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.bastxt o_rl.bastxt ${AFLAGS}
-
 m_o_rl.swi: rlib.s.swi
         ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.swi m_o_rl.swi ${AFLAGS}
@@ -722,21 +666,13 @@ m_o_rl.poll: rlib.s.poll
         ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.poll m_o_rl.poll ${AFLAGS}
 
-m_o_rl.bastxt: rlib.s.bastxt
-        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.bastxt m_o_rl.bastxt ${AFLAGS}
-
 rm_o_rl.swi: rlib.s.swi
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.swi rm_o_rl.swi ${AFLAGS} ${OPTIONS}
+        ${OBJASM} rlib.s.swi rm_o_rl.swi ${AFLAGS}
 
 rm_o_rl.poll: rlib.s.poll
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.poll rm_o_rl.poll ${AFLAGS} ${OPTIONS}
-
-rm_o_rl.bastxt: rlib.s.bastxt
-        ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.bastxt rm_o_rl.bastxt ${AFLAGS} ${OPTIONS}
+        ${OBJASM} rlib.s.poll rm_o_rl.poll ${AFLAGS}
 
 #
 # trace separated out to allow defining of TRACE
@@ -748,6 +684,21 @@ m_o_rl.trace: rlib.c.trace
    ${CC} ${CFLAGS} -ffah ${DFLAGS} -zM -DTRACE -o m_o_rl.trace rlib.c.trace
 
 rm_o_rl.trace: rlib.c.trace
-   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} ${OPTIONS} -DTRACE -o rm_o_rl.trace rlib.c.trace
+   ${CC} ${CFLAGS} -ffah ${DFLAGS} -zm1 ${CSFLAGS} ${STK_EXTN} -DTRACE -o rm_o_rl.trace rlib.c.trace
+
+#
+# Arthur objects
+#
+o.arth_new_n: c.arthur
+        ${CC} ${CFLAGS} -fah -o $@ c.arthur
+
+o.arth_old_n: c.arthur
+        ${CC} ${CFLAGS} -fah -DARTHUR_OLD_NAMES -o $@ c.arthur
+
+o.ArtAsm_n: s.Art_n_r
+        ${OBJASM} ${AFLAGS} -from s.Art_n_r -to $@
+
+o.ArtAsm_o: s.Art_o_r
+        ${OBJASM} ${AFLAGS} -from s.Art_o_r -to $@
 
 # Dynamic dependencies:

@@ -242,11 +242,7 @@ core_alloc_g ROUT
 
         ENTER   "a2-a4, v1-v6"
 
-        [ No32bitCode
         MOV     v6, pc                  ; current IRQ state
-        |
-        MRS     v6, CPSR
-        ]
         IRQSOFF lr
 
         ; IRQS DISABLED FROM HERE TO EXIT OR %50
@@ -370,7 +366,7 @@ core_alloc_g ROUT
 01
         SADD    a1, lr, MBUF_EXHAUSTIONS
         MOV     a1, #0              ; return value that says failed
-        B       %FT80
+        EXIT
 
 ; allocation of unsafe mbufs
 00
@@ -387,7 +383,7 @@ core_alloc_g ROUT
         MOV     a3, #1
         STRB    a3, [a1, #m_safe]  ; say this one is unsafe
 
-        B       %FT80                       ; no clear or copy phase for unsafe
+        EXIT                        ; no clear or copy phase for unsafe
 
 ; allocation of first available mbuf
 10
@@ -439,14 +435,7 @@ core_alloc_g ROUT
 50
         ; RESTORE IRQS TO ENTRY STATE FROM HERE TO END
 
-        [ No32bitCode
         TEQP    v6, # 0
-        |
-        MSR     CPSR_cf, v6
-        ]
-
-        ; Odd.  copy_p's comments reckon that this routine preserves flags ...
-        ; it's going to be disappointed, isn't it?
 
         LDMFD   sp, {a2, a3, a4}        ; restore these for re-examination
         TST     a4, #MBC_CLEAR
@@ -501,15 +490,6 @@ core_alloc_g ROUT
 
         EXIT
 
-80      ; need to EXIT, restoring IRQs if necessary
-    [ No32bitCode
-      [ {CONFIG}<>26
-        TEQP    v6, #I_bit              ; must restore flags too
-      ]
-    |
-        MSR     CPSR_cf, v6             ; must restore flags too
-    ]
-        EXIT
 
 
 
@@ -646,10 +626,10 @@ core_ensure_safe ROUT
                 SADD    a1, a4, ENSURE_SAFE_CALLS
                 CRIRQS  a1
         ]
-                FunctionEntry "a2"
+                STMFD   sp!, {a2, lr}
                 BL      core_any_unsafe
                 TEQ     a1, #0
-                Return  "a1",,EQ
+                LDMEQFD sp!, {a1, pc}^
 
         [ DEBUG
                 CDIRQS  a1
@@ -662,7 +642,7 @@ core_ensure_safe ROUT
 ; guess this has to be an m_type preserving action unless we want
 ; many variants of this (ie copy_p variant of copy)
 
-                LDR     a2, [sp]
+                LDMFD   sp, {a2}
 
                 MOV     a3, #0                  ; offset of zero
                 MOV     a4, #M_COPYALL          ; all data
@@ -676,7 +656,7 @@ core_ensure_safe ROUT
 
                 BL      core_freem
 
-                Return  "a1"
+                LDMFD   sp!, {a1, pc}^
 
 ;-----------------------------------------------------------------------------
 ;
@@ -715,7 +695,7 @@ ensure_contig   ROUT
                 MOVS    a4, a2
                 TEQNE   a3, #0
                 MOVEQ   a1, a4
-                Return  ,LinkNotStacked, EQ             ; give NULL, get NULL
+                MOVEQS  pc, lr                          ; give NULL, get NULL
 
                 CMP     a3, # min_msize                 ; be strict: more predictable!
 ;                BGT     %f80                            ; do allocation if big
@@ -737,16 +717,15 @@ ensure_contig   ROUT
                 MOVEQ   a1, a4
         [ DEBUG
                 BNE     %f00
-                CDIRQS  a2
+                IRQSOFF a2
                 SADD    a2, a3, ENSURE_CONTIG_QUICK
-                CRIRQS  a2
-                Return  ,LinkNotStacked                 ; at least enough and aligned
+                MOVS    pc, lr                          ; at least enough and aligned
 00
         |
-                Return  ,LinkNotStacked,EQ              ; at least enough and aligned
+                MOVEQS  pc, lr                          ; at least enough and aligned
         ]
 
-                FunctionEntry "a4,v1-v6"
+                STMFD   sp!, {a4, v1-v6, lr}
 
                 ADD     a1, a1, a4
 
@@ -762,7 +741,7 @@ ensure_contig   ROUT
                 CRIRQS  v1
          ]
 
-                Return  "a1,v1-v6"
+                LDMFD   sp!, {a1, v1-v6, pc}^
 
 ; Don't have enough data in 1st mbuf yet
 ; Rephrase request as a trim with copy operation with a correction
@@ -772,8 +751,7 @@ ensure_contig   ROUT
 ; a4    copy of a2 (and it is not zero)
 ; a4 hence needs skipping first
 
-50
-                FunctionEntry "a3"
+50              STMFD   sp!, {a3, lr}
 ; DLINE "Using trim to perform ensure contig"
 51              LDR     a4, [a4, #m_next]
                 TEQ     a4, #0
@@ -804,7 +782,7 @@ ensure_contig   ROUT
                 IRQSOFF a2
                 SADD    a2, a3, ENSURE_CONTIG_SLOW
         ]
-                Return
+                LDMFD   sp!, {pc}^
 
 90              LDMFD   sp!, {a3, lr}
 91
@@ -816,6 +794,115 @@ ensure_contig   ROUT
          ]
 
                 B       core_freem
+
+;----------------------------------------------------------------------------
+
+; Produce a copy of the data supplied for when the data is large.
+
+;-----------------------------------------------------------------------------
+
+ [ {FALSE}
+
+        ; Can fit data into 1st mbuf and there is enough room
+
+        LDMFD   sp, {a4}                        ; restore mbuf head
+
+        ; shuffle first mbuf up
+
+        LDR     a1, [a4, #m_off]
+        ADD     a1, a1, a4                      ; mtod existing data
+        LDR     a2, [a4, #m_actoff]
+        STR     a2, [a4, #m_off]
+        ADD     a2, a2, a4                      ; mtod where want data
+        LDR     a3, [a4, #m_len]                ; bytes so far
+        BL      bcopy
+
+        ; copy into 1st mbuf from other mbufs
+
+        LDMFD   sp, {v1, v2}                    ; mbuf ptr and byte count
+        LDR     a4, [v1, #m_len]
+        SUB     v2, v2, a4                      ; bytes to go
+
+        MOV     v3, v1                          ; chain head
+
+        LDR     v1, [v1, #m_next]
+
+        ; v1    mbuf to do next
+        ; v2    bytes left
+        ; v3    chain head
+
+51      LDR     a3, [v1, #m_len]
+        SUBS    v2, v2, a3
+        BLT     %f52
+
+        ; at least this mbuf
+
+        LDR     a1, [v1, #m_off]
+        ADD     a1, a1, v1                      ; mtod for src
+
+        LDR     a2, [v3, #m_off]
+        LDR     a4, [v3, #m_len]
+        ADD     a2, a2, a4                      ; mtod for dest
+        ADD     a2, a2, v3                      ; at END of data
+
+        ADD     a4, a4, a3
+        STR     a4, [v3, #m_len]                ; length will become
+
+        MOV     a4, # 0
+        STR     a4, [v1, #m_len]                ; these bytes removed
+
+        LDR     v1, [v1, #m_next]               ; advance to next mbuf
+
+        STMFD   sp!, {v1, v2, v3}
+
+        BL      bcopy
+
+        LDMFD   sp!, {v1, v2, v3}
+
+        B       %b51
+
+52      ADDS    v2, v2, a3                      ; v2 now how much to do
+
+
+
+        MOVGES  pc, lr                          ; yep - quick out
+        CMP     a3, #max_msize                  ; ever possible?
+        BGT     core_freem                      ; exits with a1=0
+
+; currently ignores the case of the 1st mbuf has unused underlying
+; storage. Should also do a bit extra in case called repeatedly.
+; Does not cater for byte count being bigger than chain itself.
+; If this happens, the chain will grow and collect garbage!
+
+        STMFD   sp!, {a2, a3, lr}               ; mbuf, count
+        MOV     a2, a3                          ; bytes
+        MOV     a3, #0                          ; ptr
+        MOV     a4, #MBC_SINGLE                 ; whole point!
+
+; DLINE "Allocating contig storage"
+
+        BL      core_alloc_g
+        LDMFD   sp!, {a2, a3}
+        TEQ     a1, #0                          ; managed it?
+        LDMEQFD sp!, {lr}
+        BEQ     core_freem                      ; free a2, exits with a1=0
+        LDR     a4, [a1, #m_off]
+        ADD     a4, a4, a1                      ; mtod on new contig mbuf
+        STMFD   sp!, {a1}
+
+; DLINE "Copy and trim to perform the contig operation"
+
+        BL      core_trim
+        MOV     a2, a1
+        LDMFD   sp!, {a1, lr}
+        STR     a2, [a1, #m_next]               ; make complete chain
+
+; MCDUMP a1, "Final chain with start contig"
+
+        MOVS    pc, lr                          ; ignore wasted empty mbufs
+
+
+ ] ; FALSE
 
 ;-----------------------------------------------------------------------------
 ;
@@ -842,10 +929,7 @@ free    ROUT
         LDCTX
 
 core_free
- [ :LNOT: No32bitCode
-        MRS     a1, CPSR
-        STMFD   sp!, {a1, lr}
- ]
+
         CDIRQS  a1
 
  [ DEBUG
@@ -853,17 +937,9 @@ core_free
  ]
 
         TEQ     a2, #0
- [ :LNOT: No32bitCode
-        LDMEQFD sp!, {a3, lr}
-        MSREQ   CPSR_c, a3              ; restore IRQ state
- ]
-        Return  ,LinkNotStacked,EQ
+        MOVEQS  pc, lr
         FREE    a2, a1, a3
- [ :LNOT: No32bitCode
-        LDMFD   sp!, {a3, lr}
-        MSR     CPSR_c, a3              ; restore IRQ state
- ]
-        Return  ,LinkNotStacked
+        MOVS    pc, lr
 
 ;-----------------------------------------------------------------------------
 ;
@@ -892,8 +968,7 @@ freem   ROUT
 
 core_freem ROUT
 
-        PHPSEI  a3, a4
-        STR     a3, [sp, #-4]!
+        CDIRQS  a1
 
  [ DEBUG
         SADD    a1, a4, FREEM_CALLS
@@ -901,11 +976,8 @@ core_freem ROUT
 
 00
         MOVS    a1, a2
-        BNE     %FT10
-        LDR     a3, [sp], #4
-        PLP     a3
-        Return  ,LinkNotStacked         ; ALWAYS EXIT WITH A1=0
-10      LDR     a2, [a1, #m_next]
+        MOVEQS  pc, lr                  ; ALWAYS EXIT WITH A1=0
+        LDR     a2, [a1, #m_next]
         FREE    a1, a3, a4
         B       %b00
 
@@ -935,8 +1007,7 @@ dtom_free ROUT
 
 core_dtom_free
 
-        PHPSEI  a3, a4
-        STR     a3, [sp, #-4]!
+        CDIRQS  a1
 
  [ DEBUG
         SADD    a1, a4, DTOM_FREE_CALLS
@@ -944,12 +1015,9 @@ core_dtom_free
 
         ;       ptr, res, w1, w2, w3
         DTOM    a2,  a1,  a1, a3, a4
-
-        B$dn    %FT10
+        MOV$dn.S pc, lr
         FREE    a1, a2, a3
-10      LDR     a3, [sp], #4
-        PLP     a3
-        Return  ,LinkNotStacked
+        MOVS    pc, lr
 
 ;-----------------------------------------------------------------------------
 ;
@@ -977,8 +1045,7 @@ dtom_freem ROUT
 
         LDCTX
 
-        PHPSEI  a3, a4
-        STR     a3, [sp, #-4]!
+        CDIRQS  a1
 
  [ DEBUG
         SADD    a1, a4, DTOM_FREEM_CALLS
@@ -987,15 +1054,12 @@ dtom_freem ROUT
         ;       ptr, res, w1, w2, w3, ws
         DTOM    a2,  a1,  a1, a3, a4
 
-        MOV$dn.S a1, #0
+        MOV$dn  a1, #0
 00      MOVS    a2, a1
-        BEQ     %FT10
+        MOVEQS  pc, lr
         LDR     a1, [a2, #m_next]
         FREE    a2, a3, a4
-        B       %BT00
-10      LDR     a3, [sp], #4
-        PLP     a3
-        Return  ,LinkNotStacked
+        B       %b00
 
 ;-----------------------------------------------------------------------------
 ;
@@ -1035,22 +1099,21 @@ dtom    LDCTX
 
         ;       ptr, res, w1, w2, w3, ws
         DTOM    a2,  a1,  a1, a3, a4
-        Return  ,LinkNotStacked,$dy  ; blunt quick exit
+        MOV$dy.S pc, lr              ; blunt quick exit
 
-        PHPSEI  a3, a1
+        IRQSOFF a1
         SADD    a1, a2, FAILED_DTOMS
 
         MOV     a1, #0                  ; consider this case less likely
-        PLP     a3
-        Return  ,LinkNotStacked
+        MOVS    pc, lr
 
  |
 
         ;       ptr, res, w1, w2, w3, ws
         DTOM    a2,  a1,  a1, a3, a4
-        Return  ,LinkNotStacked, $dy    ; blunt quick exit
+        MOV$dy.S pc, lr              ; blunt quick exit
         MOV     a1, #0                  ; consider this case less likely
-        Return  ,LinkNotStacked
+        MOVS    pc, lr
 
  ]
 
@@ -1098,10 +1161,10 @@ core_any_unsafe ROUT
 
         MOV     a1, #0
 00      TEQ     a2, #0
-        Return  ,LinkNotStacked, EQ
+        MOVEQS  pc, lr
         LDRB    a4, [a2, #m_safe]
         ORRS    a1, a1, a4
-        Return  ,LinkNotStacked, NE
+        MOVNES  pc, lr
         LDR     a2, [a2, #m_next]
         B       %b00
 
@@ -1138,7 +1201,7 @@ this_unsafe ROUT
  ]
         MOVS    a1, a2
         LDRNEB  a1, [a1, #m_safe]
-        Return  ,LinkNotStacked
+        MOVS    pc, lr
 
 ;-----------------------------------------------------------------------------
 ;
@@ -1188,7 +1251,7 @@ core_count_bytes ROUT
 
         MOV     a1, #0
 00      TEQ     a2, #0
-        Return  ,LinkNotStacked, EQ
+        MOVEQS  pc, lr
         LDR     a3, [a2, #m_len]
         ADD     a1, a1, a3
         LDR     a2, [a2, #m_next]
@@ -1234,7 +1297,7 @@ cat     ROUT
         MOVS    a1, a2              ; if a2 is null
         MOVEQ   a1, a3              ; then return a3
         TEQNE   a3, #0              ; else if a3 is null
-        Return  ,LinkNotStacked, EQ ; then return a2.
+        MOVEQS  pc, lr              ; then return a2.
 
 00      LDR     a4, [a2, #m_next]
         TEQ     a4, #0              ; end of 1st chain?
@@ -1243,7 +1306,7 @@ cat     ROUT
 
         STR     a3, [a2, #m_next]   ; tag 2nd on end of first
 
-        Return  ,LinkNotStacked     ; and return first
+        MOVS    pc, lr              ; and return first
 
 
 ;-----------------------------------------------------------------------------
@@ -1274,7 +1337,7 @@ copy            LDCTX
 
 core_copy       ROUT
 
-                FunctionEntry
+                STMFD   sp!, {lr}
 
 	[ DEBUG
                 CDIRQS  a1
@@ -1283,7 +1346,7 @@ core_copy       ROUT
         ]
 
                 MOVS    a1, a2
-                Return  ,,EQ
+                LDMEQFD sp!, {pc}^
 
                 STMFD   sp!, {a2-a4, v1-v6}
 
@@ -1337,7 +1400,7 @@ core_copy       ROUT
 
 02              TEQ     v1, #0
 ;                BEQ     %f03
-                Return  "a1-a4,v1-v6",,EQ
+                LDMEQFD sp!, {a1-a4, v1-v6, pc}^
 
 
                 LDR     a3, [v1, #m_len]
@@ -1350,20 +1413,20 @@ core_copy       ROUT
                 LDMFD   sp!, {v1}
                 B       %b02
 
-;03              Return  "a1-a4, v1-v6"
+;03              LDMFD   sp!, {a1-a4, v1-v6, pc}^
 
 ;-----------------------------------------------------------------------------
 
 ; failed new allocation
 01
         MOV     a1, #0
-        Return  "a2-a4,v1-v6"
+        LDMFD   sp!, {a2-a4, v1-v6, pc}^
 
  [ False
         LDMFD   sp!, {a2-a4}
         BL      core_freem
         MOV     a1, #0
-        Return  "v1-v6"
+        LDMFD   sp!, {v1-v6, pc}^
  ]
 
 ;-----------------------------------------------------------------------------
@@ -1374,8 +1437,34 @@ core_copy       ROUT
 ; DLINE "Yielding an empty mbuf chain from copy"
 
 	LDMFD	sp!, {a2-a4, v1-v6, lr}
-	B	alloc_empty_chain
+	B	alloc_empty_chain;
 
+ [ {FALSE}
+        MOV     a2, #0
+        MOV     a3, #0
+        BL      core_alloc
+        TEQ     a1, #0
+        MOVNE   a2, #0
+        STRNE   a2, [a1, #m_len]
+        LDMFD   sp!, {a2-a4, v1-v6, pc}^
+ ]
+
+
+ [ False
+        LDMFD   sp!, {a2, a3, a4}
+        BL      core_freem                      ; free the old chain 1st
+        MOV     a2, #0                          ; any only mbuf
+        MOV     a3, #0                          ; no ptr
+        BL      core_alloc
+
+        ; a1 is eventual yield value
+        TEQ     a1, #0
+        LDMEQFD sp!, {v1-v6, pc}^               ; failed - return NULL
+
+        MOV     a2, #0
+        STR     a2, [a1, #m_len]                ; make zero bytes described
+        LDMFD   sp!, {v1-v6, pc}^
+ ]
 
 ;-----------------------------------------------------------------------------
 ;
@@ -1651,7 +1740,7 @@ core_copy_p     ROUT
                 LDR   a3, [v6, # m_off]
                 ADD   a3, a3, v6
                 ADD   a3, a3, v4
-                BL    core_alloc        ; no longer preserves flags
+                BL      core_alloc              	; preserves flags
 
 ; offset = 0; length -= x;
 
@@ -2062,7 +2151,7 @@ core_trim	ROUT
 ; if (count == 0) return mp;
 
 		TEQNE	a3, # 0
-                Return  ,LinkNotStacked, EQ
+		MOVEQS	pc, lr
 
 		ENTER	"a1, v1"		; a1 is a2 is return value
 
@@ -2203,7 +2292,7 @@ core_trim_with_copy ROUT
 
 		MOVS	a1, a2
 		CMPNE	a3, # 0
-                Return  ,LinkNotStacked, EQ
+		MOVEQS	pc, lr
 		BLT	%f50
 
 		STMFD	sp!, {a2, a3, lr}
@@ -2258,7 +2347,7 @@ import          LDCTX
 
 core_import     ROUT
 
-                FunctionEntry "a2"
+                STMFD   sp!, {a2, lr}
 
 	[ DEBUG
                 CDIRQS  a1
@@ -2270,13 +2359,13 @@ core_import     ROUT
                 TEQNE   a3, #0
                 TEQNE   a4, #0
 
-                Return  "a2",,EQ                ; prefer current a1 value
+                LDMEQFD sp!, {a2, pc}^          ; prefer current a1 value
 
                 MOV     a1, #0
 
                 BL      min
 
-                Return  "a1"
+                LDMFD   sp!, {a1, pc}^
 
 ;-----------------------------------------------------------------------------
 ;
@@ -2311,7 +2400,7 @@ export          LDCTX
 
 core_export     ROUT
 
-                FunctionEntry "a2"
+                STMFD   sp!, {a2, lr}
 
 	[ DEBUG
                 CDIRQS  a1
@@ -2323,13 +2412,13 @@ core_export     ROUT
                 TEQNE   a3, #0
                 TEQNE   a4, #0
 
-                Return  "a2",,EQ                ; prefer current a1 value
+                LDMEQFD sp!, {a2, pc}^          ; prefer current a1 value
 
                 MOV     a1, #0
 
                 BL      mout
 
-                Return  "a1"
+                LDMFD   sp!, {a1, pc}^
 
 ;-----------------------------------------------------------------------------
 
@@ -2377,17 +2466,15 @@ note_alloc
 
 	LDRB	lr, [a1, # m_big]
 	TEQ	lr, # 0
-        BNE     %FT00
-	BL	note_alloc_small
-        EXIT
-00	BLNE	note_alloc_large
+	BLEQ	note_alloc_small
+	BLNE	note_alloc_large
 
 	EXIT
 
 note_alloc_small
-	ENTER	"a1, a2, a3"
+	ENTER	"a1, a2"
 
-        PHPSEI  a3, a1
+	IRQSOFF	a1
 	SADD	a1, a2, SMALL_ALLOCS
 
 	LDR	a1, [ws, # small_in_use]
@@ -2396,27 +2483,25 @@ note_alloc_small
 	LDR	a2, [ws, # small_hwm]
 	CMP	a1, a2
 	STRGT	a1, [ws, # small_hwm]
-        PLP     a3
 
 	EXIT
 
 note_small_free
-	ENTER	"a1, a2, a3"
+	ENTER	"a1, a2"
 
-        PHPSEI  a3, a1
+	IRQSOFF	a1
 	SADD	a1, a2, SMALL_FREES
 
 	LDR	a1, [ws, # small_in_use]
 	SUBS	a1, a1, # 1
 	STRGE	a1, [ws, # small_in_use]
-        PLP     a3
 
 	EXIT
 
 note_alloc_large
-	ENTER	"a1, a2, a3"
+	ENTER	"a1, a2"
 
-        PHPSEI  a3, a1
+	IRQSOFF	a1
 	SADD	a1, a2, LARGE_ALLOCS
 
 	LDR	a1, [ws, # large_in_use]
@@ -2425,20 +2510,18 @@ note_alloc_large
 	LDR	a2, [ws, # large_hwm]
 	CMP	a1, a2
 	STRGT	a1, [ws, # large_hwm]
-        PLP     a3
 
 	EXIT
 
 note_large_free
-	ENTER	"a1, a2, a3"
+	ENTER	"a1, a2"
 
-        PHPSEI  a3, a1
+	IRQSOFF	a1
 	SADD	a1, a2, LARGE_FREES
 
 	LDR	a1, [ws, # large_in_use]
 	SUBS	a1, a1, # 1
 	STRGE	a1, [ws, # large_in_use]
-        PLP     a3
 
 	EXIT
 

@@ -56,10 +56,8 @@ install_rom: ${ROM_MODULE}
 
 resources:
         ${MKDIR} ${RESDIR}.PDrivers
-	Set PDriverRes$Path ${LOCALE}.,UK.
-	TokenCheck PDriverRes:Messages
-        ${CP} PDriverRes:Messages ${RESDIR}.PDrivers.Messages ${CPFLAGS}
-	Unset PDriverRes$Path
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages ${RESDIR}.PDrivers.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files will be included in Messages module
 
 clean:

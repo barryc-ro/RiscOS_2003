@@ -5,8 +5,6 @@
 ; Changes: PJC: 15-Aug-91: Fixed Application_Code so that if an error occurs when
 ;                          Filer_Action executes the wimpslot command, R0 isn't corrupted
 ;                          Also added "GET Hdr:Variables"
-;        ADH: 28-Apr-2000: UsePathForHelpMessages switch added - makes RAM modules work;
-;                          exports private word pointer as 'module_private_word_ptr'.
 
         GET     s.AppName             ; defines the name of this module
 
@@ -104,11 +102,7 @@ Application_Help
   ]
  |
   [ International_Help <> 0
-   [ :DEF: UsePathForHelpMessages
-Message_FileName        DCB     ApplicationName,":Messages",0
-   |
 Message_FileName        DCB     "Resources:Resources.",ApplicationName,".Messages",0
-   ]
 Application_Syntax      DCB     ApplicationName,"Syntax",0
 Application_Help        DCB     ApplicationName,"Help",0
   |
@@ -146,7 +140,7 @@ strcpy_advance  Entry "r1,r2"
         STRB    r2, [r0], #1
         TEQ     r2, #0
         BNE     %BT10
-        EXIT
+        EXITS
 
 ; Command processor
 Application_Code Entry "r0"
@@ -154,8 +148,14 @@ Application_Code Entry "r0"
         ; Drop slot size
         ADR     r0, SlotSizeCommand
         SWI     XOS_CLI
-        STRVS   r0, [sp]
-        EXIT    VS
+ [ 0 = 1
+; This is crap. Why do we let BASIC programmers write assembler. Note the absence of a '!' char after 'sp'.
+        LDMVSFD sp, {r14}               ; if an error occurs, pull off the old
+        STMVSFD sp, {r0}                ; R0 and put on the new one
+ |
+        STR     r0, [sp]
+ ]
+        EXIT    VS                      ; ready for pulling off again!
  ]
         ; Is base active?
         MOV     r0, #ModHandReason_LookupName
@@ -411,14 +411,14 @@ ModuleWrap_Start ROUT
 
         ; Store the magic stack limit things
         LDMIA   sl, {r1, r2}
-        Push    "r1,r2,r4,sl"
+        Push    "r1,r2,r4"
 
         ; Initialise the application
         MOV     r0, #1                  ; Initialise re-entrantly
         BL      |_clib_initialisemodule|
 
         ; Restore the magic stack limit things
-        Pull    "r1,r2,r4,sl"
+        Pull    "r1,r2,r4"
         STMIA   sl, {r1,r2}
 
         ; If error rebalance stack and generate it
@@ -432,20 +432,12 @@ ModuleWrap_Start ROUT
         Pull    "r0,r1"
 
         ; Drop back into user mode
-        MOV     r12, #3
-        MRS     r12, CPSR
-        TST     r12, #2_11100
-        TEQEQP  pc, #Z_bit              ; keeps EQ
-        MSRNE   CPSR_c, #USR32_mode     ; acts as NOP for TEQP :)
+        TEQP    pc, #0
+
+        ; NOP after switching modes
+        MOV     r0, r0
 
         MOV     r12, r1
-
-        ; put a copy of the private word into the data for the
-        ; app to get hold of if necessary
-        LDR     r0, [r12]               ; r0 -> workspace
-        LDR     lr, module_private_word_ptr_adcon
-        LDR     r0, [r0, #8]            ; r0 = client static offset
-        STR     r12, [lr, r0]
 
         ; call the application
         BL      |_clib_entermodule|
@@ -468,10 +460,6 @@ ModuleWrap_Start ROUT
         SWI     OS_GenerateError
 
 
-module_private_word_ptr_adcon
-        DCD     module_private_word_ptr
-
-
 ; This is the application finalisation routine. It should free up
 ; the static workspace.
 application_finalisation ROUT
@@ -487,6 +475,9 @@ application_finalisation ROUT
         SWI     OS_EnterOS
 
         LDR     r4, [r12, #af_allow_finalisation]
+
+        ; NOP after changing modes
+        MOV     r0, r0
 
         ; Construct the stack limit
         MOV     sl, sp, LSR #20
@@ -512,7 +503,7 @@ application_finalisation ROUT
         MOV     fp, #0
 
         TEQ     r4, #0
-        BLNE    |_clib_finalisemodule|          ; BL<cond> 32-bit OK
+        BLNE    |_clib_finalisemodule|
 
         ; Restore the magic stack limit things
         Pull    "r1,r2"
@@ -588,9 +579,8 @@ ModuleWrap_Init
         BL      countinstantiations
         ADRLT   r0, resourcefsfiles
         SWILT   XResourceFS_RegisterFiles   ; ignore errors
-        CLRV                                ; (ResourceFS may not yet be present)
  ]
-        Pull    "pc"
+        Pull    "pc",,^                     ; (ResourceFS may not yet be present)
 
  [ :DEF:FilerAct
 FilerActPath    DCB     "FilerAct$Path", 0
@@ -614,8 +604,7 @@ ModuleWrap_Die
         ADRLT   r0, resourcefsfiles
         SWILT   XResourceFS_DeregisterFiles
  ]
-        CLRV
-        Pull    "pc"
+        Pull    "pc",,^
 
 ErrorBlock_MustQuitApplicationFirst
         DCD     0
@@ -673,14 +662,14 @@ ModuleWrap_UService
         BEQ     svc_reset
 
         CMP     r1, #Service_Memory
-        MOVNE   pc, lr
+        MOVNES  pc, lr
 
         ; Claim the service_memory if its our memory it's stealing
         STMFD   sp!, {lr}
         ADRL    r14, Module_BaseAddr
         CMP     r2, r14
         MOVEQ   r1, #0
-        LDMFD   sp!, {pc}
+        LDMFD   sp!, {pc}^
 
 ; Free workspace of all instantiations and kill all non base instantiations
 ; Note. Assumes Base is last module to get service call. Don't see how I
@@ -689,22 +678,22 @@ svc_reset
         Push    "r0-r5, lr"
         LDR     r2, [r12]
         CMP     r2, #0                  ; Speed optimisation
-        Pull    "r0-r5, pc",EQ
+        Pull    "r0-r5, pc",EQ,^
         MOV     r0, #ModHandReason_Free
         SWI     XOS_Module              ; Free workspace and flag pw
         STR     r12, [r12]              ; with its own address
         MOV     r0, #ModHandReason_LookupName
         ADRL    r1, ModulePercentBase
         SWI     XOS_Module              ; Find module no. and workspace ptr
-        Pull    "r0-r5, pc",VS
+        Pull    "r0-r5, pc",VS,^
         CMP     r12, r4                 ; = flagged workspace ptr?
-        Pull    "r0-r5, pc",NE          ; No, return.
+        Pull    "r0-r5, pc",NE,^        ; No, return.
         MOV     r2, #0                  ; Set base pw to 0 so we don't
         STR     r2, [r12]               ; kill base
 svc_reset1
         MOV     r0, #ModHandReason_GetNames
         SWI     XOS_Module              ; Get next instantiation
-        Pull    "r0-r5, pc",VS
+        Pull    "r0-r5, pc",VS,^
         CMP     r4, #0                  ; Base
         BEQ     svc_reset4              ; => don't kill it
         MOV     r2, #0                  ; Reset instantion no. as kill will
@@ -733,7 +722,7 @@ svc_reset3
 svc_reset4
         CMP     r2, #0                  ; End of instantions?
         BNE     svc_reset1
-        Pull    "r0-r5, pc"
+        Pull    "r0-r5, pc",,^
 
         GBLS    GetRoundObjAsm
  [ :LNOT::DEF:FilerAct
@@ -742,7 +731,7 @@ svc_resourcefsstarting
         ADR     r0, resourcefsfiles
         MOV     lr, pc                  ; lr -> return address
         MOV     pc, r2                  ; r2 -> code to call
-        Pull    "r0, pc"                ; (r3 = workspace pointer)
+        Pull    "r0, pc",,^             ; (r3 = workspace pointer)
 
 resourcefsfiles
 GetRoundObjAsm SETS " GET s.ResFiles"
@@ -753,11 +742,5 @@ $GetRoundObjAsm
  [ :LNOT::DEF:FilerAct
         DCD     0                       ; provide terminator automatically
  ]
-
-        AREA    ModuleWrapData,DATA
-
-        EXPORT  module_private_word_ptr
-module_private_word_ptr
-        DCD     0
 
         END
