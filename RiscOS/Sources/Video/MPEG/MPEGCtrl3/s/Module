@@ -117,6 +117,7 @@ PEH_Flags			#	4		; flags relevant to handler
 PEH_StreamType			#	4		; stream type
 PEH_HandlerWS			#	4		; workspace pointer
 PEH_HandlerCode			#	4		; entry point for handler
+PEH_CSH                         #       4               ; control stream handle (or 0 if not stream-specific)
 PEHSize				*	:INDEX: @
 
 ; Program Element PID structure (local to stream)
@@ -135,6 +136,47 @@ PEHPID_Discontinuities          #       4               ; number of times contin
  ]
 PEHPIDSize			*	:INDEX: @
  ] ; DoPEH
+
+ [ DoNDS
+; Descriptor Handler structure (global)
+
+                                ^       0
+DH_Link                         #       4               ; link to next one
+DH_Flags                        #       4               ; flags relevant to handler
+DH_Tag                          #       4               ; descriptor tag
+DH_HandlerWS                    #       4               ; workspace pointer
+DH_HandlerCode                  #       4               ; entry point for handler
+DH_CSH                          #       4               ; control stream handle (or 0 if not stream-specific)
+DHSize                          *       :INDEX: @
+
+; Descriptor Handler Instance structure (local to stream)
+
+                                ^       0
+DHI_Link                        #       4               ; link to next one
+DHI_Flags                       #       4               ; flags relevant to handler for this stream
+DHI_DescriptorStreamHandle      #       4               ; stream handle to use when talking to DH routine
+DHI_DH                          #       4               ; pointer to DH node
+DHISize                         *       :INDEX: @
+
+; Payload Scrambling Handler structure (global)
+
+                                ^       0
+PSH_Link                        #       4               ; link to next one
+PSH_Flags                       #       4               ; flags relevant to handler
+PSH_HandlerWS                   #       4               ; workspace pointer
+PSH_HandlerCode                 #       4               ; entry point for handler
+PSH_CSH                         #       4               ; control stream handle (or 0 if not stream-specific)
+PSHSize                         *       :INDEX: @
+
+; Payload Scrambling Handler Instance structure (local to stream)
+
+                                ^       0
+PSHI_Link                       #       4               ; link to next one
+PSHI_Flags                      #       4               ; flags relevant to handler for this stream
+PSHI_PayloadScramblingHandle    #       4               ; stream handle to use when talking to PSH routine
+PSHI_PSH                        #       4               ; pointer to PSH node
+PSHISize                        *       :INDEX: @
+ ]
 
 ; Control stream handle structure
 
@@ -174,6 +216,10 @@ CSH_NextSpeedIndicator  #       4                       ; for holding the speed 
 CSH_SpeedIndicator      #       4                       ; the current speed indicator (for general use)
  [ DoPEH
 CSH_ListOfPEHPIDs	#	4			; pointer to 1st PEHPID node for this stream
+ ]
+ [ DoNDS
+CSH_ListOfDHIs          #       4                       ; pointer to 1st DHI node for this stream
+CSH_ListOfPSHIs         #       4                       ; pointer to 1st PSHI node for this stream
  ]
 
 CSH_TrickModeControl	#	4			; value required in trick_mode_control field, or -1 for normal
@@ -262,6 +308,10 @@ DebugFlag               #       4       ; NZ => output debugging
 
  [ DoPEH
 GlobalPEHList		#	4	; list of all PEH nodes, global to all streams
+ ]
+ [ DoNDS
+GlobalDHList            #       4       ; list of all DH nodes, global to all streams
+GlobalPSHList           #       4       ; list of all PSH nodes, global to all streams
  ]
 
  [ international
@@ -476,6 +526,12 @@ Mod_Init Entry
 	STR	r0, GlobalPEHList	; no handlers on list to start with
 	STR	r0, ControlStreamHandle+CSH_ListOfPEHPIDs ; control stream handle not valid, so no PEHPIDs
  ]
+ [ DoNDS
+        STR     r0, GlobalDHList
+        STR     r0, ControlStreamHandle+CSH_ListOfDHIs
+        STR     r0, GlobalPSHList
+        STR     r0, ControlStreamHandle+CSH_ListOfPSHIs
+ ]
  [ Capture
         STR     r0, CaptureEnable
  ]
@@ -555,7 +611,7 @@ Mod_Die Entry
 ;
 ;	IssueServiceMPEGControlStarting - Issue start-up service
 
-IssueServiceMPEGControlStarting Entry "r0-r1"
+IssueServiceMPEGControlStarting Entry
 	; For backwards-compatibility with older versions of MPEGControl, we
 	; ensure that bit zero is set.
         MOV     r0, #1 :OR: (CtrlStarting_CtrlInit :SHL: 1)
@@ -567,7 +623,7 @@ IssueServiceMPEGControlStarting Entry "r0-r1"
 ;
 ;	IssueServiceMPEGControlDying - Issue dying service
 
-IssueServiceMPEGControlDying Entry "r1"
+IssueServiceMPEGControlDying Entry
 	; For backwards-compatibility with older versions of MPEGControl, we
 	; ensure that bit zero is set.
         MOV     r0, #1 :OR: (CtrlStarting_CtrlDie :SHL: 1)
@@ -615,11 +671,21 @@ SWIBTable
 	B       ControlOp       ; set stream autodetect preference
 	B       SetVideoParameters ; set video parameters
 	B       GetSprite       ; capture video as a sprite
+	B       RegisterDescriptorHandler ; register a new descriptor handler
+	B       DeregisterDescriptorHandler ; and deregister it
+	B       RegisterPayloadDescramblingHandler ; register a new payload descrambling handler
+	B       DeregisterPayloadDescramblingHandler ; and deregister it
 SWIBTableEnd
 
  [ :LNOT: DoPEH
 RegisterProgramElementHandler
 DeregisterProgramElementHandler
+ ]
+ [ :LNOT: DoNDS
+RegisterDescriptorHandler
+DeregisterDescriptorHandler
+RegisterPayloadDescramblingHandler
+DeregisterPayloadDescramblingHandler
  ]
 NoSuchSWI
         ADR     r0, NoSuchSWIError
@@ -691,8 +757,10 @@ OpenStream Entry "r0-r2"
         ADR     r1, ControlStreamHandle
         STR     r0, [r1, #CSH_AudioStreamHandle]
 20
+ [ DoPEH :LOR: DoNDS
+        Push    "r3-r6"
+ ]
  [ DoPEH
-	Push	"r3-r6"
 ; Zero the pointer to the list of PEHPIDs
 
 	MOV	r6, #0
@@ -716,7 +784,7 @@ OpenStream Entry "r0-r2"
 	Pull	"r3-r6", VS				; if failed to claim PEHPID, exit with error
 	EXIT	VS
 
-;   Issue OpenStream reason code to handler
+;   Issue OpenStream reason code to program element handler
 
 30
 	Push	"r1,r2"
@@ -766,8 +834,125 @@ OpenStream Entry "r0-r2"
 	SWI	XOS_Module				; free PEHPID node
 
 50
-	Pull	"r3-r6"
  ] ; DoPEH
+ [ DoNDS
+; Zero the pointer to the list of DHIs
+
+        MOV     r6, #0
+        STR     r6, [r1, #CSH_ListOfDHIs]
+
+; For each DH on global list:
+        LDR     r6, GlobalDHList
+25
+        TEQ     r6, #0
+        BEQ     %FT50                                   ; [no more DHs to consider]
+
+; Allocate a DHI
+
+        MOV     r0, #ModHandReason_Claim
+        MOV     r3, #DHISize
+        SWI     XOS_Module
+        Pull    "r3-r6", VS                             ; if failed to claim DHI, exit with error
+        EXIT    VS
+
+;   Issue OpenStream reason code to handler
+
+30
+        Push    "r1,r2"
+        MOV     r0, #DHReason_OpenStream
+        MOV     r2, r1                                  ; r2 = control stream handle
+        LDR     r1, [r2, #CSH_StreamFlags]              ; r1 = stream flags
+        MOV     r3, #0                                  ; no descriptor parameters struct yet
+        BL      CallDH
+        Pull    "r1,r2"
+        BVS     %FT45                                   ; error, so don't include this
+        TEQ     r0, #0
+        BEQ     %FT45                                   ; returned zero handle, so don't include this
+
+        STR     r0, [r2, #DHI_DescriptorStreamHandle]   ; save descriptor stream handle
+        STR     r6, [r2, #DHI_DH]
+        MOV     lr, #0
+        STR     lr, [r2, #DHI_Flags]                    ; no meaning to this yet
+
+        LDR     lr, [r1, #CSH_ListOfDHIs]               ; add DHI onto list for this stream
+        STR     lr, [r2, #DHI_Link]
+        STR     r2, [r1, #CSH_ListOfDHIs]
+        LDR     r6, [r6, #DH_Link]
+        B       %BT25
+
+; handler didn't return a valid handle, so if we're the last DH, we must free it
+; else process next DH using the same DHI
+
+45
+        LDR     r6, [r6, #DH_Link]
+        TEQ     r6, #0
+        BNE     %BT30                                   ; [not at end, so reuse this DHI for the next DH]
+
+        MOV     r0, #ModHandReason_Free
+        SWI     XOS_Module                              ; free DHI node
+
+50
+
+; Zero the pointer to the list of PSHIs
+
+        MOV     r6, #0
+        STR     r6, [r1, #CSH_ListOfPSHIs]
+
+; For each PSH on global list:
+        LDR     r6, GlobalPSHList
+25
+        TEQ     r6, #0
+        BEQ     %FT50                                   ; [no more PSHs to consider]
+
+; Allocate a PSHI
+
+        MOV     r0, #ModHandReason_Claim
+        MOV     r3, #PSHISize
+        SWI     XOS_Module
+        Pull    "r3-r6", VS                             ; if failed to claim PSHI, exit with error
+        EXIT    VS
+
+;   Issue OpenStream reason code to handler
+
+30
+        Push    "r1,r2"
+        MOV     r0, #PSHReason_OpenStream
+        MOV     r2, r1                                  ; r2 = control stream handle
+        LDR     r1, [r2, #CSH_StreamFlags]              ; r1 = stream flags
+        MOV     r3, #0                                  ; no descrambler parameters struct yet
+        BL      CallPSH
+        Pull    "r1,r2"
+        BVS     %FT45                                   ; error, so don't include this
+        TEQ     r0, #0
+        BEQ     %FT45                                   ; returned zero handle, so don't include this
+
+        STR     r0, [r2, #PSHI_PayloadScramblingHandle] ; save descriptor stream handle
+        STR     r6, [r2, #PSHI_PSH]
+        MOV     lr, #0
+        STR     lr, [r2, #PSHI_Flags]                   ; no meaning to this yet
+
+        LDR     lr, [r1, #CSH_ListOfPSHIs]              ; add PSHI onto list for this stream
+        STR     lr, [r2, #PSHI_Link]
+        STR     r2, [r1, #CSH_ListOfPSHIs]
+        LDR     r6, [r6, #PSH_Link]
+        B       %BT25
+
+; handler didn't return a valid handle, so if we're the last PSH, we must free it
+; else process next PSH using the same PSHI
+
+45
+        LDR     r6, [r6, #PSH_Link]
+        TEQ     r6, #0
+        BNE     %BT30                                   ; [not at end, so reuse this PSHI for the next PSH]
+
+        MOV     r0, #ModHandReason_Free
+        SWI     XOS_Module                              ; free PSHI node
+
+50
+ ] ; DoNDS
+ [ DoPEH :LOR: DoNDS
+        Pull    "r3-r6"
+ ]
         SWI     XOS_ReadMonotonicTime
         STR     r0, [r1, #CSH_StartTime]
         STR     r0, [r1, #CSH_PlayTime]
@@ -1444,8 +1629,10 @@ CloseStream Entry "r0"
         SWI     XMPEGAudio_CloseStream
         Pull    "r0, r1"
 30
+ [ DoPEH :LOR: DoNDS
+        Push    "r1-r3,r6"
+ ]
  [ DoPEH
-	Push	"r1-r3,r6"
 	LDR	r3, [r1, #CSH_ListOfPEHPIDs]
 35
 	TEQ	r3, #0					; any more PEHPIDs to consider
@@ -1464,8 +1651,49 @@ CloseStream Entry "r0"
 	B	%BT35
 
 50
-	Pull	"r1-r3,r6"
  ] ; DoPEH
+ [ DoNDS
+        LDR     r3, [r1, #CSH_ListOfDHIs]
+35
+        TEQ     r3, #0                                  ; any more DHIs to consider
+        BEQ     %FT50                                   ; [no, so exit]
+        MOV     r0, #DHReason_CloseStream
+        LDR     r1, [r1, #CSH_CloseStreamFlags]         ; flags
+        LDR     r2, [r3, #DHI_DescriptorStreamHandle]
+        LDR     r6, [r3, #DHI_DH]                       ; point r6 at DH for CallDH
+        BL      CallDH
+        MOV     r2, r3                                  ; save copy of DHI to free
+        LDR     r3, [r3, #DHI_Link]                     ; advance to next before freeing
+        LDR     r1, [sp, #0*4]                          ; reload CSH pointer
+        STR     r3, [r1, #CSH_ListOfDHIs]               ; remove node from head of list
+        MOV     r0, #ModHandReason_Free
+        SWI     XOS_Module
+        B       %BT35
+
+50
+
+        LDR     r3, [r1, #CSH_ListOfPSHIs]
+35
+        TEQ     r3, #0                                  ; any more PSHIs to consider
+        BEQ     %FT50                                   ; [no, so exit]
+        MOV     r0, #PSHReason_CloseStream
+        LDR     r1, [r1, #CSH_CloseStreamFlags]         ; flags
+        LDR     r2, [r3, #PSHI_PayloadScramblingHandle]
+        LDR     r6, [r3, #PSHI_PSH]                     ; point r6 at PSH for CallPSH
+        BL      CallPSH
+        MOV     r2, r3                                  ; save copy of PSHI to free
+        LDR     r3, [r3, #PSHI_Link]                    ; advance to next before freeing
+        LDR     r1, [sp, #0*4]                          ; reload CSH pointer
+        STR     r3, [r1, #CSH_ListOfPSHIs]              ; remove node from head of list
+        MOV     r0, #ModHandReason_Free
+        SWI     XOS_Module
+        B       %BT35
+
+50
+ ] ; DoNDS
+ [ DoPEH :LOR: DoNDS
+        Pull    "r1-r3,r6"
+ ]
 
  [ EOSDetect
         BL      RemoveTimeoutTicker
@@ -1753,7 +1981,7 @@ int_reset_stream                                ; may also be called from within
 	ASSERT	StreamFlags_VideoPresent = ResetStreamFlags_VideoPresent
 	ASSERT	StreamFlags_AudioPresent = ResetStreamFlags_AudioPresent
 	AND	lr, r0, r3			; and out impossible bits in new stream vid/aud flags
-	AND	lr, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
+	AND	lr, lr, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
 	STR	lr, [r1, #CSH_NotReadyBits]     ; this *must* be set up now in case the video unit calls MPEGControl_Play very quickly!
 	STR	lr, [r1, #CSH_LastResetStreamFlags]
 
@@ -1780,11 +2008,62 @@ int_reset_stream                                ; may also be called from within
         EXIT    VS
 20
 
+        Push    "r4"
+        BIC     r4, r0, #ResetStreamFlags_InternalReset ; externally meaningful ResetStream flags
+                                                        ; used for handler ResetStream entries and UpCall_MPEG
+ [ DoPEH :LOR: DoNDS
+        Push    "r1"
+ ]
+ [ DoPEH
+        LDR     r3, [r1, #CSH_ListOfPEHPIDs]
+35
+        TEQ     r3, #0                                  ; any more PEHPIDs to consider
+        BEQ     %FT50                                   ; [no, so exit]
+        MOV     r0, #PEHReason_ResetStream
+        MOV     r1, r4                                  ; reset stream flags
+        LDR     r2, [r3, #PEHPID_ProgramElementStreamHandle]
+        LDR     r6, [r3, #PEHPID_PEH]                   ; point r6 at PEH for CallPEH
+        BL      CallPEH
+        LDR     r3, [r3, #PEHPID_Link]                  ; advance to next
+        B       %BT35
+50
+ ] ; DoPEH
+ [ DoNDS
+        LDR     r1, [sp, #0*4]                          ; retrieve control stream handle
+        LDR     r3, [r1, #CSH_ListOfDHIs]
+35
+        TEQ     r3, #0                                  ; any more DHIs to consider
+        BEQ     %FT50                                   ; [no, so exit]
+        MOV     r0, #DHReason_ResetStream
+        MOV     r1, r4                                  ; reset stream flags
+        LDR     r2, [r3, #DHI_DescriptorStreamHandle]
+        LDR     r6, [r3, #DHI_DH]                       ; point r6 at DH for CallDH
+        BL      CallDH
+        LDR     r3, [r3, #DHI_Link]                     ; advance to next
+        B       %BT35
+50
+
+        LDR     r1, [sp, #0*4]                          ; retrieve control stream handle
+        LDR     r3, [r1, #CSH_ListOfPSHIs]
+35
+        TEQ     r3, #0                                  ; any more PSHIs to consider
+        BEQ     %FT50                                   ; [no, so exit]
+        MOV     r0, #PSHReason_ResetStream
+        MOV     r1, r4                                  ; reset stream flags
+        LDR     r2, [r3, #PSHI_PayloadScramblingHandle]
+        LDR     r6, [r3, #PSHI_PSH]                     ; point r6 at PSH for CallPSH
+        BL      CallPSH
+        LDR     r3, [r3, #PSHI_Link]                    ; advance to next
+        B       %BT35
+50
+ ] ; DoNDS
+ [ DoPEH :LOR: DoNDS
+        Pull    "r1"
+ ]
+
       [ DebugEOS
         DLINE   "ResetStream UpCall"
       ]
-        Push    "r4"
-        BIC     r4, r0, #ResetStreamFlags_InternalReset ; externally meaningful ResetStream flags
         MOV     r3, #UpCallMPEG_ResetStream
         MOV     r2, r1
         MOV     r1, #0
@@ -1973,6 +2252,226 @@ ProgramElementHandlerInUseError
 	=	"Program element handler in use", 0
 	ALIGN
  ] ; DoPEH
+
+ [ DoNDS
+; **************************************************************************
+;
+;       RegisterDescriptorHandler - Entry point for SWI
+;
+; in:   r0 = flags:
+;         bit 0 set => handler is only for control stream handle in R4
+;         Other bits reserved (should be zero)
+;       r1 = descriptor tag
+;       r2 = entry address for handler
+;       r3 = workspace pointer for handler
+;       r4 = (optionally) control stream handle
+;
+; out:  All registers preserved
+
+RegisterDescriptorHandler Entry "r4"
+        Debug   entry, "MPEGControl_RegisterDescriptorHandler: ", r0, r1, r2, r3
+
+; allocate a DH node - if fail, then error
+
+20
+        Push    "r0-r3"
+        MOV     r0, #ModHandReason_Claim
+        MOV     r3, #DHSize
+        SWI     XOS_Module
+        MOVVC   r4, r2                          ; if no error transfer ptr to r4
+        STRVS   r0, [sp]                        ; if error, save error ptr in stacked r0
+        Pull    "r0-r3"
+        EXIT    VS
+
+; store all info in node
+
+        STR     r0, [r4, #DH_Flags]
+        STR     r1, [r4, #DH_Tag]
+        STR     r2, [r4, #DH_HandlerCode]
+        STR     r3, [r4, #DH_HandlerWS]
+
+; add DH to global list (at head of list is easiest)
+
+        LDR     lr, GlobalDHList
+        STR     lr, [r4, #DH_Link]
+        STR     r4, GlobalDHList
+
+; exit, indicating success
+
+        CLRV
+        EXIT
+
+; **************************************************************************
+;
+;       DeregisterDescriptorHandler - Entry point for SWI
+;
+; in:   r0 = flags (should be same as for RegisterDescriptorHandler)
+;       r1 = descriptor tag (ditto)
+;       r2 = entry address for handler
+;       r3 = workspace pointer for handler
+;
+; out:  All registers preserved
+
+DeregisterDescriptorHandler Entry "r4-r6"
+        Debug   entry, "MPEGControl_DeregisterDescriptorHandler: ", r0, r1, r2, r3
+
+; check if (tag,entry,ws) matches any DH on global list - if not, error
+
+        ADR     r6, GlobalDHList
+        LDR     r4, [r6]
+10
+        TEQ     r4, #0                          ; if at end of list
+        BEQ     %FT90                           ; didn't find a match, so error
+
+        LDR     lr, [r4, #DH_Tag]               ; load descriptor tag
+        TEQ     lr, r1                          ; and check for match
+        LDREQ   lr, [r4, #DH_Flags]             ; load flags
+        TEQEQ   lr, r0                          ; and check for match
+        LDREQ   lr, [r4, #DH_HandlerCode]       ; if match then load handler code address
+        TEQEQ   lr, r2                          ; and check for match
+        LDREQ   lr, [r4, #DH_HandlerWS]         ; if match then load handler WS ptr
+        TEQEQ   lr, r3                          ; and check for match
+        MOVNE   r6, r4                          ; if no match then update prev ptr
+        LDRNE   r4, [r4, #DH_Link]              ; if no match then goto next
+        BNE     %BT10                           ; and loop
+
+; delink DH node from global list
+30
+        LDR     lr, [r4, #DH_Link]              ; prev->link = this->link
+        STR     lr, [r6, #DH_Link]
+
+; free DH node
+
+        Push    "r0-r2"
+        MOV     r0, #ModHandReason_Free
+        MOV     r2, r4
+        SWI     XOS_Module                      ; ignore any error from free - we can't do much about it
+        Pull    "r0-r2"
+
+; exit, no error
+
+        CLRV
+        EXIT
+
+; exit with error
+
+90
+        ADR     r0, DescriptorHandlerNotFoundError
+        SETV
+        EXIT
+
+DescriptorHandlerNotFoundError
+        &       0
+        =       "Descriptor handler not found", 0
+        ALIGN
+
+; **************************************************************************
+;
+;       RegisterPayloadDescramblingHandler - Entry point for SWI
+;
+; in:   r0 = flags:
+;         bit 0 set => handler is only for control stream handle in R4
+;         Other bits reserved (should be zero)
+;       r2 = entry address for handler
+;       r3 = workspace pointer for handler
+;       r4 = (optionally) control stream handle
+;
+; out:  All registers preserved
+
+RegisterPayloadDescramblingHandler Entry "r4"
+        Debug   entry, "MPEGControl_RegisterPayloadDescramblingHandler: ", r0, r1, r2, r3
+
+; allocate a PSH node - if fail, then error
+
+20
+        Push    "r0-r3"
+        MOV     r0, #ModHandReason_Claim
+        MOV     r3, #PSHSize
+        SWI     XOS_Module
+        MOVVC   r4, r2                          ; if no error transfer ptr to r4
+        STRVS   r0, [sp]                        ; if error, save error ptr in stacked r0
+        Pull    "r0-r3"
+        EXIT    VS
+
+; store all info in node
+
+        STR     r0, [r4, #PSH_Flags]
+        STR     r2, [r4, #PSH_HandlerCode]
+        STR     r3, [r4, #PSH_HandlerWS]
+
+; add PSH to global list (at head of list is easiest)
+
+        LDR     lr, GlobalPSHList
+        STR     lr, [r4, #PSH_Link]
+        STR     r4, GlobalPSHList
+
+; exit, indicating success
+
+        CLRV
+        EXIT
+
+; **************************************************************************
+;
+;       DeregisterPayloadDescramblingHandler - Entry point for SWI
+;
+; in:   r0 = flags (should be same as for RegisterPayloadDescramblingHandler)
+;       r2 = entry address for handler
+;       r3 = workspace pointer for handler
+;
+; out:  All registers preserved
+
+DeregisterPayloadDescramblingHandler Entry "r4-r6"
+        Debug   entry, "MPEGControl_DeregisterPayloadDescramblingHandler: ", r0, r1, r2, r3
+
+; check if (entry,ws) matches any PSH on global list - if not, error
+
+        ADR     r6, GlobalPSHList
+        LDR     r4, [r6]
+10
+        TEQ     r4, #0                          ; if at end of list
+        BEQ     %FT90                           ; didn't find a match, so error
+
+        LDR     lr, [r4, #PSH_Flags]            ; load flags
+        TEQ     lr, r0                          ; and check for match
+        LDREQ   lr, [r4, #PSH_HandlerCode]      ; if match then load handler code address
+        TEQEQ   lr, r2                          ; and check for match
+        LDREQ   lr, [r4, #PSH_HandlerWS]        ; if match then load handler WS ptr
+        TEQEQ   lr, r3                          ; and check for match
+        MOVNE   r6, r4                          ; if no match then update prev ptr
+        LDRNE   r4, [r4, #PSH_Link]             ; if no match then goto next
+        BNE     %BT10                           ; and loop
+
+; delink PSH node from global list
+30
+        LDR     lr, [r4, #PSH_Link]             ; prev->link = this->link
+        STR     lr, [r6, #PSH_Link]
+
+; free PSH node
+
+        Push    "r0-r2"
+        MOV     r0, #ModHandReason_Free
+        MOV     r2, r4
+        SWI     XOS_Module                      ; ignore any error from free - we can't do much about it
+        Pull    "r0-r2"
+
+; exit, no error
+
+        CLRV
+        EXIT
+
+; exit with error
+
+90
+        ADR     r0, PayloadDescramblingHandlerNotFoundError
+        SETV
+        EXIT
+
+PayloadDescramblingHandlerNotFoundError
+        &       0
+        =       "Payload descrambling handler not found", 0
+        ALIGN
+
+ ] ; DoNDS
 
 ; **************************************************************************
 ;
@@ -3335,14 +3834,27 @@ ts_vidaudpacketcontinue
         CMP     r7, r4                                  ; is it all within this buffer?
         BHI     ts_notallinbuff
 
+      [ DoNDS
+        TST     r9, #TS_TSC_Bits
+        MOVNE   r8, #0
+        BLNE    descramblevidaudblock                   ; returns Z set if we're ready to send data (should be true for NDS)
+        BLEQ    sendvidaudblock
+      |
         BL      sendvidaudblock
+      ]
         MOV     r3, r7                                  ; start from end of video block data
         B       ts_wait_for_sync
 
 ts_notallinbuff
         SUB     r8, r7, r4                              ; r8 = amount of excess
         MOV     r7, r4
+      [ DoNDS
+        TST     r9, #TS_TSC_Bits
+        BLNE    descramblevidaudblock                   ; returns Z set if we're ready to send data (should NOT be true for NDS)
+        BLEQ    sendvidaudblock
+      |
         BL      sendvidaudblock                         ; send this amount
+      ]
         BL      cowait
 
         BL      GetPacketDescriptor                     ; out: r0 -> new packet descriptor (link -> 0, free, freews set up)
@@ -3427,7 +3939,12 @@ ts_process_adaptation_field Entry "r7"
 80      BL      ts_skipbytes                    ; skip remaining bytes in adaptation field, if any
         EXIT
 
-ts_process_PES_packet_header Entry
+ts_process_PES_packet_header
+ [ DoNDS
+        Entry   "r9"
+ |
+        Entry
+ ]
  [ DoPEH
 ; first check if PEH wants to get the PES packet headers himself
 ; if so, then don't process them ourselves
@@ -3788,6 +4305,49 @@ ts_check_for_OVSNPT ROUT
         B       %BT05                                   ; continue (automatically skips last byte of descriptor)
 
 
+ [ DoNDS
+; **************************************************************************
+;
+;       descramblevidaudblock - descramble data
+;
+; in:
+;       r1 = control stream handle
+;       r3 -> start of block to descramble (not necessarily start of buffer))
+;       r7 -> end of block to descramble (+1))
+;       r8 = bytes remaining in TS packet after this bitstream packet
+;       r9 bits 6,7 = transport_scrambling_control (not both zero)
+;       r11 -> packet descriptor (filled in apart from Length field)
+; out:
+;       r11 may be updated
+;       r3 will be updated to nullify the first action of sendvidaudblock :-)
+;       other registers preserved
+;       Z set => data in list pointed to by r11 should be sent to decoder
+
+descramblevidaudblock Entry "r0-r2,r5-r6"
+        SUB     r0, r7, r3
+        STR     r0, [r11, #PacketDescriptor_Length]     ; need to fill in length *now*
+        MOV     r3, r11
+        LDR     r5, [r1, #CSH_ListOfPSHIs]              ; probably just one, but a list just in case...
+10
+        TEQ     r5, #0                                  ; any more PSHIs to consider?
+        BEQ     %FT50                                   ; no, so tidy up and exit
+        MOV     r0, #PSHReason_DescramblePacket
+        MOV     r1, #0
+        LDR     r2, [r5, #PSHI_PayloadScramblingHandle]
+        LDR     r6, [r5, #PSHI_PSH]
+        BL      CallPSH
+        LDR     r5, [r5, #PSHI_Link]
+        TEQ     r3, #0                                  ; if handler has swallowed data then don't attempt to pass it on further
+        BNE     %BT10                                   ; else loop
+50
+        MOVS    r11, r3                                 ; move back to r11 and test for zero
+        MRS     r0, CPSR
+        TST     r0, #Z_bit                              ; invert Z bit
+        LDREQ   r0, [r11, #PacketDescriptor_Length]
+        SUBEQ   r3, r7, r0
+        EXIT
+ ]
+
 ; **************************************************************************
 ;
 ;       sendvidaudblock - send block of video/audio data
@@ -3983,13 +4543,50 @@ GetPacketDescriptor Entry "r1"
 ;
 
 CallPEH	Entry "r12"
-	ADD	r12, r6, #:INDEX: PEH_HandlerWS
+        ADDS    r12, r6, #:INDEX: PEH_HandlerWS ; ensure V clear on entry (C generic-veneer will preserve or set V, never clear it)
 	ASSERT  PEH_HandlerCode = PEH_HandlerWS +4
-	CMP     r0, r0                          ; ensure V clear on entry (C generic-veneer will preserve or set V, never clear it)
 	MOV	lr, pc
 	LDMIA	r12, {r12, pc}
 	EXIT
  ] ; DoPEH
+
+ [ DoNDS
+; **************************************************************************
+;
+;       CallDH - Call a Descriptor Handler
+;
+; in:   r0 = reason code
+;       r1-r? = parameters for call
+;       r6 -> DH
+;
+; out:  Depends on call
+;
+
+CallDH  Entry   "r12"
+        ADDS    r12, r6, #:INDEX: DH_HandlerWS  ; ensure V clear on entry (C generic-veneer will preserve or set V, never clear it)
+        ASSERT  DH_HandlerCode = DH_HandlerWS +4
+        MOV     lr, pc
+        LDMIA   r12, {r12, pc}
+        EXIT
+
+; **************************************************************************
+;
+;       CallPSH - Call a Packet Descrambling Handler
+;
+; in:   r0 = reason code
+;       r1-r? = parameters for call
+;       r6 -> PSH
+;
+; out:  Depends on call
+;
+
+CallPSH Entry   "r12"
+        ADDS    r12, r6, #:INDEX: PSH_HandlerWS ; ensure V clear on entry (C generic-veneer will preserve or set V, never clear it)
+        ASSERT  PSH_HandlerCode = PSH_HandlerWS +4
+        MOV     lr, pc
+        LDMIA   r12, {r12, pc}
+        EXIT
+ ] ; DoNDS
 
 ; **************************************************************************
 ;
@@ -4416,6 +5013,82 @@ CtrlInfo_Code Entry "r7"
 	BNE	%BT61
 70
  ] ; DoPEH
+
+ [ DoNDS
+        DLINE   "Descriptor Handlers:", cc
+        LDR     r0, GlobalDHList
+        TEQ     r0, #0
+        BNE     %FT40
+
+        DLINE   " None"
+        B       %FT50
+40
+        DLINE   ""
+42
+        BL      OutputDHInfo
+        LDR     r0, [r0, #DH_Link]
+        TEQ     r0, #0
+        BNE     %BT42
+50
+        DLINE   "Descriptor Handler Instances:", cc
+        ADR     r0, ControlStreamHandle
+        LDR     r1, [r0, #CSH_ListOfDHIs]
+        TEQ     r1, #0
+        BNE     %FT60
+
+        DLINE   " None"
+        B       %FT70
+60
+        DLINE   ""
+61
+        LDR     r0, [r1, #DHI_DH]
+        BL      OutputDHInfo
+        LDR     r0, [r1, #DHI_Flags]
+        DREG    r0, "  DHI flags = "
+        LDR     r0, [r1, #DHI_DescriptorStreamHandle]
+        DREG    r0, "  Descriptor stream handle = "
+        LDR     r1, [r1, #DHI_Link]
+        TEQ     r1, #0
+        BNE     %BT61
+70
+
+        DLINE   "Payload Descrambling Handlers:", cc
+        LDR     r0, GlobalPSHList
+        TEQ     r0, #0
+        BNE     %FT40
+
+        DLINE   " None"
+        B       %FT50
+40
+        DLINE   ""
+42
+        BL      OutputPSHInfo
+        LDR     r0, [r0, #PSH_Link]
+        TEQ     r0, #0
+        BNE     %BT42
+50
+        DLINE   "Payload Descrambling Handler Instances:", cc
+        ADR     r0, ControlStreamHandle
+        LDR     r1, [r0, #CSH_ListOfPSHIs]
+        TEQ     r1, #0
+        BNE     %FT60
+
+        DLINE   " None"
+        B       %FT70
+60
+        DLINE   ""
+61
+        LDR     r0, [r1, #PSHI_PSH]
+        BL      OutputPSHInfo
+        LDR     r0, [r1, #PSHI_Flags]
+        DREG    r0, "  PSHI flags = "
+        LDR     r0, [r1, #PSHI_PayloadScramblingHandle]
+        DREG    r0, "  Payload descrambling stream handle = "
+        LDR     r1, [r1, #PSHI_Link]
+        TEQ     r1, #0
+        BNE     %BT61
+70
+ ] ; DoNDS
         CLRV
         EXIT
 
@@ -4431,6 +5104,28 @@ OutputPEHInfo Entry "r1"
 	DREG	r1, " WS="
 	EXIT
  ] ; DoPEH
+
+ [ DoNDS
+OutputDHInfo Entry "r1"
+        LDR     r1, [r0, #DH_Tag]
+        BREG    r1, " Tag=", cc
+        LDR     r1, [r0, #DH_Flags]
+        DREG    r1, " Flags=", cc
+        LDR     r1, [r0, #DH_HandlerCode]
+        DREG    r1, " Code=", cc
+        LDR     r1, [r0, #DH_HandlerWS]
+        DREG    r1, " WS="
+        EXIT
+
+OutputPSHInfo Entry "r1"
+        LDR     r1, [r0, #PSH_Flags]
+        DREG    r1, " Flags=", cc
+        LDR     r1, [r0, #PSH_HandlerCode]
+        DREG    r1, " Code=", cc
+        LDR     r1, [r0, #PSH_HandlerWS]
+        DREG    r1, " WS="
+        EXIT
+ ] ; DoNDS
 
         LTORG
 
