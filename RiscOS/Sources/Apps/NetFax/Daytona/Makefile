@@ -15,6 +15,6 @@
 #runs a make file called Laguna or Daytona depending on <system>
 
 
-rom all clean_all clean install:
+rom all clean_all clean install installd:
 	amu -f ${System} ${MFLAGS}
 	
