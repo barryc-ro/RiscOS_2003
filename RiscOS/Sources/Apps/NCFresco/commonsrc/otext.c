@@ -330,6 +330,8 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     flexmem_noshift();
 
+/*  RENDBG(("otext_redraw: fg %08x bg %08x text '%s' vlink=%08x - %08x\n", tfc, tbc, rh->texts.data + tit->data_off, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word)); */
+
 #if 0
     dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off));
 #endif

@@ -177,7 +177,7 @@ static void hotlist_event_handler(int event, fe_view v)
 
     case fevent_HOTLIST_ADD:
 	if (!fe_popup_open() || fe_locate_view(TARGET_INFO)) /* can add to hotlist when the info window is open */
-	    frontend_complain(fe_hotlist_add(v));
+	    fe_hotlist_add(v);
 	else
 	    sound_event(snd_WARN_BAD_KEY);
 	break;

@@ -159,7 +159,7 @@ extern void rid_free_pos(rid_pos_item *p)
 	if (p->floats)
 	{
 	    /* pdh: in the New Formatter, floats are replicated (i think) */
-#if 1
+
             rid_float_item *nextfl;
 
             fl = p->floats->left;
@@ -177,27 +177,8 @@ extern void rid_free_pos(rid_pos_item *p)
                 mm_free(fl);
                 fl = nextfl;
             }
-#else
-	    if (p->floats->left)
-	    {
-		if (fl != p->floats->left)
-		{
-		    if (fl)
-			mm_free(fl);
-		    fl = p->floats->left;
-		}
-	    }
-	    if (p->floats->right)
-	    {
-		if (fr != p->floats->right)
-		{
-		    if (fr)
-			mm_free(fr);
-		    fr = p->floats->right;
-		}
-	    }
-#endif
-            FMTDBG(( "pi%p: freeing floats %p\n", p, p->floats ));
+
+            /*FMTDBGN(( "pi%p: freeing floats %p\n", p, p->floats ));*/
 	    mm_free(p->floats);
 	}
 

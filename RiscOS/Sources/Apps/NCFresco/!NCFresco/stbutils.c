@@ -1076,7 +1076,7 @@ os_error *frontend_complain(os_error *e)
 #endif
 
 #if 1
-	pending_error = e;
+	pending_error = *e;
 
 	/* send the error service call so that the error reporter knows what happened */
 	_swix(OS_ServiceCall, _INR(1,4), 0x400C0, e, 0, PROGRAM_TITLE);	/* Service_ErrorStarting */

@@ -671,14 +671,33 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     FMTDBGN(("normalise_percentages(%p %s): starting\n",
 	    table, HORIZVERT(horiz)));
 
+    /* Are there any cells that do not have some percentage
+       contribution? */
+
+    for (x = 0; x < max; x++)
+    {
+	if ( (table->colspans[x].flags & colspan_flag_PERCENT) == 0 )
+	{
+	    table->flags |= rid_tf_NON_PCT_COLS;
+	    non_percent_column = TRUE;
+	    break;
+	}
+    }
+    
+    /*colspan_trace_cells(table, horiz);*/
+    
     n_components =  find_connected_components (table, colspan_flag_ABSOLUTE_COL, colspan_flag_ABSOLUTE_GROUP, horiz);
     FMTDBG(("%d absolute components\n", n_components));
     /*csg_examine(table->colspans, max);*/
     csg_find_abs_floaters(table, horiz);
     n_components =  find_connected_components (table, colspan_flag_PERCENT_COL, colspan_flag_PERCENT_GROUP, horiz);
     pct_con = (n_components < 2);
-    FMTDBG (("normalise_percentages: n_components %d\n", n_components));
+    FMTDBG (("normalise_percentages: n_components %d, non_percent_column %d\n", n_components, non_percent_column));
 
+    if ( same_connected_component(table->colspans, 0, max) )
+    {
+	FMTDBG(("normalise_percentages: percentages join both extremes\n"));
+    }
 
     /* Initialise column header locations without a percentage
        contribution */
@@ -692,7 +711,6 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     colspan_column_init_from_leftmost(table, PCT_RAW, horiz);
 
 
-    /*colspan_trace_cells(table, horiz);*/
 
     /* Zero contributions from percent groups */
     /*colspan_all_and_eql_set(table, horiz, PCT_RAW,
@@ -718,7 +736,7 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 
 
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
     /* At this point, all the percent group values are zero and they
        have had their flags removed. An arbitary (leftmost in this
        case) crystallisation of the group has been chosen and
@@ -739,22 +757,10 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     {
 	/*colspan_trace_cells(table, horiz);*/
 
-	/* Are there any cells that do not have some percentage
-	   contribution? */
-	for (x = 0; x < max; x++)
-	{
-	    if ( (table->colspans[x].flags & colspan_flag_PERCENT) == 0 )
-	    {
-		table->flags |= rid_tf_NON_PCT_COLS;
-		non_percent_column = TRUE;
-		break;
-	    }
-	}
-
 	/* We can now decide what our expectation of the total value
 	   is and what sort of corrections we will consider
 	   applying. */
-	if (/*non_percent_column*/!pct_con)
+	if ( ! (pct_con == 1 || non_percent_column == 0) )
 	{
 	    /* Expect there to be some percentage points left for the
 	       entiries that exist and do not have percentage
@@ -871,7 +877,7 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 	    total = 100;
 	}
 
-	colspan_trace_cells(table, horiz);
+	/*colspan_trace_cells(table, horiz);*/
     }
 
     master[PCT_RAW] = total;
@@ -944,7 +950,7 @@ static void calc_pct_minwidth(antweb_doc *doc,
     int width;
     int *widths = HORIZCELLS(table,horiz);
 
-    FMTDBG(("calc_pct_minwidth(%p %p %p %s)\n",
+    FMTDBGN(("calc_pct_minwidth(%p %p %p %s)\n",
 	    doc, rh, table, HORIZVERT(horiz)));
 
     /* First, we want the %ages set to something sensible */
@@ -973,6 +979,8 @@ static void calc_pct_minwidth(antweb_doc *doc,
     widths[PCT_MIN] = width;
 
     FMTDBG(("calc_pct_minwidth: %d\n", width));
+
+    /*colspan_trace_cells(table, horiz);*/
 }
 
 /*****************************************************************************
@@ -1148,7 +1156,7 @@ static void basic_size_table(antweb_doc *doc,
 	break;
     }
 #endif
-    colspan_trace_cells(table, HORIZONTALLY);
+    /*colspan_trace_cells(table, HORIZONTALLY);*/
 
     format_width_checking_assertions(table, HORIZONTALLY);
 
@@ -1439,7 +1447,7 @@ static void recurse_format_table(antweb_doc *doc,
 
     for (x = 0; x < N_COLSPAN_WIDTHS; x++)
     {
-	FMTDBG(("recurse_format_table: %s = %d\n", WIDTH_NAMES[x], table->vwidth[x]));
+	FMTDBG(("recurse_format_table: %s = h=%d, v=%d\n", WIDTH_NAMES[x], table->hwidth[x], table->vwidth[x]));
     }
 
     format_width_checking_assertions(table, VERTICALLY);
@@ -1511,73 +1519,6 @@ static void recurse_format_stream(antweb_doc *doc,
 
  */
 
-#if 0
-extern void rid_toplevel_format(antweb_doc *doc,
-				rid_header *rh,
-				rid_text_item *start_from,
-				int fwidth,
-				int fheight)
-{
-    FMTDBG(("\n\n\n\n\n\nrid_toplevel_format(%p) entered\n\n", rh));
-
-    /*dump_header(rh);*/
-
-    format_one_off_assertions();
-
-    ASSERT(rh != NULL);
-    ASSERT(doc != NULL);
-
-    /* And floating images. */
-
-    stomp_captions_until_working(rh);
-
-    format_precondition(rh);
-
-    if (rh->stream.text_list == NULL)
-    {
-	FMTDBG(("Document empty\n"));
-	rh->stream.fwidth = fwidth;
-	rh->stream.width = 0;
-	rh->stream.widest = 0;
-	rh->stream.height = 0;
-    }
-    else
-    {
-	FMTDBG(("Sizing root stream\n"));
-	basic_size_stream(doc, rh, &rh->stream, 0);
-	FMTDBG(("\nDone sizing root stream:\n"));
-	/*dump_header(rh);*/
-
-	if (rh->stream.widest > fwidth)
-	{
-	    FMTDBG(("\n\nCASE WHERE AUTOFIT MIGHT DO SOMETHING BETTER\n\n\n"));
-/* 	    rh->stream.fwidth = rh->stream.widest; */
- 	    fwidth = rh->stream.fwidth = rh->stream.width_info.minwidth;
-	}
-
-	FMTDBG(("Allocating widths to root stream\n"));
-	allocate_widths(doc, rh, &rh->stream, fwidth);
-	FMTDBG(("\nDone allocating widths to root stream: fwidth %d, width %d, widest %d\n",
-		rh->stream.fwidth, rh->stream.width, rh->stream.widest));
-	/*dump_header(rh);*/
-
-
-	FMTDBG(("Formatting root stream with fwidth %d\n", rh->stream.fwidth));
-	recurse_format_stream(doc, rh, &rh->stream, 0);
-	FMTDBG(("\nDone formatting root stream with fwidth %d:\n", rh->stream.fwidth));
-
-#if 0
-	dump_header(rh);
-#endif
-    }
-
-    FMTDBG(("rid_toplevel_format: finished\n"));
-
-    format_postcondition(rh);
-
-    return;
-}
-#else
 extern void rid_toplevel_format(antweb_doc *doc,
 				rid_header *rh,
 				rid_text_item *start_from,
@@ -1586,7 +1527,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
 {
     rid_text_stream *root_stream;
 
-    FMTDBG(("\n\n\n\n\n\nrid_toplevel_format(%p) entered\n\n", rh));
+    FMTDBG(("\n\n\n\n\n\nrid_toplevel_format(%p) entered, fwidth initially %d\n\n", rh, fwidth));
 
 
     format_one_off_assertions();
@@ -1646,6 +1587,5 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
     return;
 }
-#endif
 
 /* eof format.c */

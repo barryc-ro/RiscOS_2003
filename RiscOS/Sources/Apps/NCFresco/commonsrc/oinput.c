@@ -439,7 +439,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	slen = strlen(ii->data.str);
 	has_caret = be_item_has_caret(doc, ti);
 
-	fg = ii->base.colours.back == -1 && ii->base.colours.select == -1 ? render_colour_PLAIN :
+	fg = ii->base.colours.back == -1 && ii->base.colours.select == -1 ? render_colour_RGB | config_colours[render_colour_PLAIN].word :
 	    render_text_link_colour(ti, doc);
 
 	bg = has_caret && ii->base.colours.select != -1 ? ii->base.colours.select | render_colour_RGB :

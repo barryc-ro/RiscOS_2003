@@ -695,7 +695,7 @@ extern int find_element(SGMLCTX *context, STRING s)
 
   */
 
-extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s)
+extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *guessed)
 {
     int ix = 0;
     ATTRIBUTE **attributep = element->attributes, *attribute;
@@ -706,6 +706,8 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s)
 	if ( s.bytes == attribute->name.bytes && strnicmp(s.ptr, attribute->name.ptr, s.bytes) == 0 )
 	{
 	    PRSDBGN(("Attribute '%.*s' is %d\n", s.bytes, s.ptr, ix));
+
+	    *guessed = FALSE;
 	    return ix;
 	}
 
@@ -728,6 +730,8 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s)
 		{
 		    PRSDBGN(("Guessed attribute '%.*s' is %d ('%.*s')\n", 
 			     s.bytes, s.ptr, ix, attribute->name.bytes, attribute->name.ptr));
+
+		    *guessed = TRUE;
 		    return ix;
 		}
 		

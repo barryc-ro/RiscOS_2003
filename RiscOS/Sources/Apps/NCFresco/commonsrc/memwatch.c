@@ -373,7 +373,9 @@ void mm_free(void *x)
     if ((m->magic != MM_MAGIC_HEAD) || (tail->magic != MM_MAGIC_TAIL))
     {
 	int i;
+#ifdef RISCOS
 	char *fnp;
+#endif
 
 	fprintf(stderr, "Problem freeing block at 0x%p, hmagic=0x%08x, tmagic=0x%08x\n",
 		m, m->magic, tail->magic);

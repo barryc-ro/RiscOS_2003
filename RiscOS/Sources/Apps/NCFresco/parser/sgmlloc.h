@@ -97,7 +97,7 @@ extern BOOL element_bit_set(BITS *elems, int tag);
 extern void element_clear_bit(BITS *elems, int tag);
 extern void element_set_bit(BITS *elems, int tag);
 extern int find_element(SGMLCTX *context, STRING s);
-extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s);
+extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *guessed);
 extern void clear_stack_item(STACK_ITEM *stack);
 extern void clear_stack(SGMLCTX *context);
 extern void reset_lexer_state(SGMLCTX *context);

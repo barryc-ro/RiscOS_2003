@@ -16,7 +16,7 @@ extern int wimp_version;
 extern wimp_t on_screen_kbd;
 extern wimp_box on_screen_kbd_pos;
 
-extern os_error *pending_error;
+extern os_error pending_error;
 
 #define TASK_MAGIC	0x4B534154
 

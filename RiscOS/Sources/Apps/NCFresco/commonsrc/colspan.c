@@ -133,6 +133,8 @@ static void print_colspan_flags(unsigned int flags)
 extern void colspan_trace_cells (rid_table_item *table, BOOL horiz)
 {
 #if DEBUG
+    if (horiz)
+    {
     const int max = horiz ? table->cells.x : table->cells.y;
     int *width = HORIZCELLS(table,horiz);
     pcp_cell the_cells = table->colspans;
@@ -206,7 +208,7 @@ extern void colspan_trace_cells (rid_table_item *table, BOOL horiz)
     }	
 
     FMTDBG(("\n"));
-
+    }
 #endif
 }
 
@@ -360,7 +362,7 @@ extern void colspan_column_and_eql_set(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_column_and_eql_set: %s %s %x %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, SET));
+    FMTDBGN(("colspan_column_and_eql_set: %s %s %x %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, SET));
 
     for (x = 0; x < max; x++)
     {
@@ -380,7 +382,7 @@ extern void colspan_column_and_eql_copy(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_column_and_eql_copy: %s %s %x %x %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, WIDTH_NAMES[slot_from]));
+    FMTDBGN(("colspan_column_and_eql_copy: %s %s %x %x %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, WIDTH_NAMES[slot_from]));
 
     for (x = 0; x < max; x++)
     {
@@ -400,7 +402,7 @@ extern void colspan_column_and_eql_lt_copy(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_column_and_eql_lt_copy: %s %s %x %x %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, WIDTH_NAMES[slot_from]));
+    FMTDBGN(("colspan_column_and_eql_lt_copy: %s %s %x %x %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, WIDTH_NAMES[slot_from]));
 
     for (x = 0; x < max; x++)
     {
@@ -421,7 +423,7 @@ extern void colspan_column_and_eql_upwards(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_column_and_eql_upwards: %s %s %x %x %d\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, to_share));
+    FMTDBGN(("colspan_column_and_eql_upwards: %s %s %x %x %d\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, to_share));
 
     while (to_share > 0)
 	for (x = 0; to_share > 0 && x < max; x++)
@@ -445,7 +447,7 @@ extern void colspan_column_and_eql_downwards(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_column_and_eql_downwards: %s %s %x %x %d\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, to_share));
+    FMTDBGN(("colspan_column_and_eql_downwards: %s %s %x %x %d\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, to_share));
 
     while (to_share > 0)
 	for (x = 0; to_share > 0 && x < max; x++)
@@ -468,7 +470,7 @@ extern void colspan_column_and_eql_halve(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_column_and_eql_halve: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
+    FMTDBGN(("colspan_column_and_eql_halve: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
 
     for (x = 0; x < max; x++)
     {
@@ -489,7 +491,7 @@ extern void colspan_column_and_eql_double(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_column_and_eql_double: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
+    FMTDBGN(("colspan_column_and_eql_double: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
 
     for (x = 0; x < max; x++)
     {
@@ -512,7 +514,7 @@ extern void colspan_column_and_eql_scale(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_column_and_eql_scale: %s %s %x %x %g\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, scale));
+    FMTDBGN(("colspan_column_and_eql_scale: %s %s %x %x %g\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, scale));
 
     for (x = 0; x < max; x++)
     {
@@ -538,7 +540,7 @@ extern int colspan_sum_columns(rid_table_item *table,
 	sum += the_cells[x].width[slot];
     }
 
-    FMTDBG(("colspan_sum_columns: %s %s: sum %d\n", HORIZVERT(horiz), WIDTH_NAMES[slot], sum));
+    FMTDBGN(("colspan_sum_columns: %s %s: sum %d\n", HORIZVERT(horiz), WIDTH_NAMES[slot], sum));
 
     return sum;
 }
@@ -673,7 +675,7 @@ extern void colspan_all_and_eql_halve(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_all_and_eql_halve: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
+    FMTDBGN(("colspan_all_and_eql_halve: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
 
     for (x = 0; x < max; x++)
     {
@@ -701,7 +703,7 @@ extern void colspan_all_and_eql_double(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_all_and_eql_double: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
+    FMTDBGN(("colspan_all_and_eql_double: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
 
     for (x = 0; x < max; x++)
     {
@@ -730,7 +732,7 @@ extern void colspan_all_and_eql_scale(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_all_and_eql_scale: %s %s %x %x %g\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, scale));
+    FMTDBGN(("colspan_all_and_eql_scale: %s %s %x %x %g\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, scale));
 
     for (x = 0; x < max; x++)
     {
@@ -1017,7 +1019,7 @@ static void colspan_init_structure1(rid_table_item *table, BOOL horiz)
     }
 
     FMTDBG(("colspan_init_structure1: the cells:\n"));
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
 }
 
 /*****************************************************************************/
@@ -1223,7 +1225,7 @@ extern void colspan_init_structure(rid_table_item *table, BOOL horiz)
 
     /* trace it */
     FMTDBG(("\nNewly initialised colspan structure:\n"));
-    colspan_trace_cells (table, horiz);
+    /*colspan_trace_cells (table, horiz);*/
 }
 
 /*****************************************************************************/
@@ -1868,6 +1870,9 @@ static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
     int *master = HORIZCELLS(table, horiz);
     int x;
 
+    FMTDBG(("reflect_percentages: table %d, %s, fwidth %d\n",
+	    table->idnum, HORIZVERT(horiz), fwidth));
+
     fwidth -= TABLE_OUTSIDE_BIAS(table);
 
     ASSERT(fwidth >= 0);
@@ -1943,6 +1948,8 @@ extern void colspan_share_extra_space (rid_table_item *table,
     int user_width = 0;
     int slop = 0;
 
+    FMTDBG(("colspan_share_extra_space: fwidth %d, %s on table %d\n", fwidth, HORIZVERT(horiz), table->idnum));
+
     if (horiz)
     {
 	switch (table->userwidth.type)
@@ -1951,8 +1958,8 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	    FMTDBG(("colspan_share_extra_space: abs userwidth is present\n"));
 	    if (table->flags & rid_tf_HAVE_WIDTH)
 	    {
-		fwidth = ceil(table->userwidth.u.f);
-		FMTDBG(("colspan_share_extra_space: still active - new fwidth\n"));
+		user_width = fwidth = ceil(table->userwidth.u.f);
+		FMTDBG(("colspan_share_extra_space: still active - new fwidth %d\n", fwidth));
 	    }
 	    else
 	    {
@@ -2067,7 +2074,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
     /* Reflect the values calculated in the existing colhdr structure. */
     reflect_into_table(table, horiz);
     
-    FMTDBG(("colspan_share_extra_space: done\n"));
+    FMTDBG(("colspan_share_extra_space: Table %d, final fwidth %d, done\n", table->idnum, fwidth));
 	
     colspan_trace_cells(table, horiz);
 

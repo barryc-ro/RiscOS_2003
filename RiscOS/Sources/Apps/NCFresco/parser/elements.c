@@ -4,12 +4,17 @@
 /* CHANGELOG
  * 22/7/96: SJM: added call to sgml_translation() to attribute parsing.
  * 21/8/96: SJM: Nasty bit in perform_element_close for /P
+ * 23/5/96: SJM: check the guessed elements in parse_then_perform_element_open().
  */
 
 #include "sgmlparser.h"
 
 extern void report_start (SGMLCTX * context, ELEMENT * element, VALUES * attributes);
 extern void report_finish (SGMLCTX * context, ELEMENT * element);
+
+#define BIT_SET(base, bit)	(base)[(bit)/32] |= (1<<((bit)%32))
+#define BIT_CLR(base, bit)	(base)[(bit)/32] &= ~(1<<((bit)%32))
+#define BIT_TST(base, bit)	((base)[(bit)/32] &  (1<<((bit)%32)))
 
 /*****************************************************************************
 
@@ -873,6 +878,7 @@ extern void parse_then_perform_element_open(SGMLCTX *context)
     char *inhand = context->inhand.data;
     int six = 1, eix = 2, nix, elem_number, attribute_number, ap = 1;
     VALUES values;
+    int guessed[(SGML_MAXIMUM_ATTRIBUTES+31)/32];
 
     ASSERT(context->magic == SGML_MAGIC);
 
@@ -880,6 +886,9 @@ extern void parse_then_perform_element_open(SGMLCTX *context)
 
     PRSDBGN(("parse_open '%.*s'\n", context->inhand.ix, inhand));
 
+    /* clear out the guessed array */
+    memset(guessed, 0, sizeof(guessed));
+    
     while ( is_element_body_character( inhand[eix] ) )
 	eix++;
 
@@ -907,6 +916,8 @@ extern void parse_then_perform_element_open(SGMLCTX *context)
 
     while (1)
     {
+	BOOL this_guessed;
+
 	ASSERT(nix <= context->inhand.ix);
 
 	six = nix;
@@ -990,7 +1001,7 @@ extern void parse_then_perform_element_open(SGMLCTX *context)
 	value_string.ptr = &inhand[six];
 	value_string.bytes = eix - six;
 
-	attribute_number = find_attribute (context, element, attribute_string);
+	attribute_number = find_attribute (context, element, attribute_string, &this_guessed);
 
 	if (attribute_number == SGML_NO_ATTRIBUTE)
 	{
@@ -1001,19 +1012,27 @@ extern void parse_then_perform_element_open(SGMLCTX *context)
 					attribute_string.ptr);
 #endif
 	}
-	else if ( values.value[attribute_number].type != value_none )
+	/* only ignore if duplicated and the first try wasn't a guess */
+	else if ( values.value[attribute_number].type != value_none && !BIT_TST(guessed, attribute_number) )
 	{
 #if SGML_REPORTING
-	    sgml_note_message(context, "Duplicated attribute in <%s %.*s>",
+	    sgml_note_message(context, "Duplicated attribute in <%s %.*s>%s",
 			      element->name.ptr,
 			      min(attribute_string.bytes, MAXSTRING),
-			      attribute_string.ptr);
+			      attribute_string.ptr,
+			      this_guessed ? " (guessed)" : "");
 #endif
 	}
 	else
 	{
 	    ATTRIBUTE *attribute = element->attributes[attribute_number];
 
+	    /* set the guessed bit */
+	    if (this_guessed)
+	    {
+		BIT_SET(guessed, attribute_number);
+	    }
+	    
 #if 1	    /* This should supply attribute values expanding entities */
 	    value_string.bytes = sgml_translation(context, value_string.ptr, value_string.bytes,
 				     SGMLTRANS_AMPERSAND | SGMLTRANS_HASH | SGMLTRANS_STRIP_NEWLINES);

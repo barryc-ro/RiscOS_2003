@@ -241,7 +241,7 @@ static int *keywatch_pollword = 0;		/* address of keywatch module pollword */
 static int keywatch_last_key_val = 0;		/* value read from pollword on last wimp key event */
 static BOOL keywatch_from_handset = FALSE;	/* was lasy key press from a handset */
 
-os_error *pending_error = NULL;
+os_error pending_error = { 0 };
 static char *pending_error_retry = NULL;
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -289,9 +289,9 @@ void frontend_pointer_set_position(fe_view v, int x, int y)
 
     pointer_set_position(p.x, p.y);
 
-/*     pointer_last_pos.x = p.x &~ (frontend_dx - 1); */
-/*     pointer_last_pos.y = p.y &~ (frontend_dy - 1); */
     pointer_ignore_next = TRUE;
+
+    STBDBG(("pointer_set_position: %d,%d\n", p.x, p.y));
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -701,6 +701,23 @@ void fe_no_new_page(fe_view v, os_error *e)
     fe_status_clear_fetch_only();
 }
 
+enum
+{
+    content_tag_SELECTED = 0,
+    content_tag_TOOLBAR,
+    content_tag_MODE,
+    content_tag_LINEDROP,
+    content_tag_POSITION,
+    content_tag_NOHISTORY,
+    content_tag_SOLIDHIGHLIGHT,
+    content_tag_NOSCROLL,
+    content_tag_FASTLOAD
+};
+
+static const char *content_tag_list[] =
+{
+    "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD"
+};
 
 /*
  * If there is a fragment id then 'url' parameter will always contain it.
@@ -715,6 +732,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     int previous_mode;
     int mode;
     int toolbar_state;
+    char *ncmode;
     
     STBDBG(( "frontend_view_visit url '%s' title '%s' doc %p\n", strsafe(url), strsafe(title), doc));
 
@@ -822,11 +840,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     /* check for special page instructions - not all relevant to child pages */
     {
-        char *ncmode;
-
 	if ((ncmode = strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
 	{
-	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD" };
 	    static const char *on_off_list[] = { "OFF", "ON" };
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" };			/* order must agree with #defines in stbview.h */
 	    static const char *position_list[] = { "FULLSCREEN", "CENTERED", "TOOLBAR" };	/* order must agree with #defines in stbview.h */
@@ -839,7 +854,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	    /* set the item to be selected when opened */
 	    mm_free(v->selected_id);
-	    v->selected_id = strdup(vals[0].value);
+	    v->selected_id = strdup(vals[content_tag_SELECTED].value);
 
 	    /* these items are only valid for the top level items */
 	    if (v->parent == NULL)
@@ -848,18 +863,18 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		if (!v->open_transient)
 		{
 		    /* set toolbar state */
-		    toolbar_state = decode_string(vals[1].value, on_off_list, sizeof(on_off_list)/sizeof(on_off_list[0]));
+		    toolbar_state = decode_string(vals[content_tag_TOOLBAR].value, on_off_list, sizeof(on_off_list)/sizeof(on_off_list[0]));
 
 		    /* set mode (keyboard) state */
-		    if ((new_keyboard_state = decode_string(vals[2].value, keyboard_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]))) != -1)
+		    if ((new_keyboard_state = decode_string(vals[content_tag_MODE].value, keyboard_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]))) != -1)
 			keyboard_state = new_keyboard_state;
 		    else
 			keyboard_state = fe_keyboard_ONLINE;
 	    
 		    /* set up a pending line drop */
-		    if (vals[1].value)
+		    if (vals[content_tag_LINEDROP].value)
 		    {
-			_swix(PPP_AlterSettings, _INR(0,2), 0, 0, atoi(vals[1].value));
+			_swix(PPP_AlterSettings, _INR(0,2), 0, 0, atoi(vals[content_tag_LINEDROP].value));
 		    }
 		    /* if you go to an online page then reset the time to the default */
 		    else if (keyboard_state == fe_keyboard_ONLINE) 
@@ -871,11 +886,11 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		}
 		
 		/* read position for window, safe area relative */
-		v->transient_position = decode_string(vals[4].value, position_list, sizeof(position_list)/sizeof(position_list[0]));
-		if (v->transient_position == fe_position_UNSET && vals[4].value)
+		v->transient_position = decode_string(vals[content_tag_POSITION].value, position_list, sizeof(position_list)/sizeof(position_list[0]));
+		if (v->transient_position == fe_position_UNSET && vals[content_tag_POSITION].value)
 		{
 		    box.x0 = box.x1 = box.y0 = box.y1 = -1;
-		    sscanf(vals[4].value, "%d,%d,%d,%d", &box.x0, &box.y0, &box.x1, &box.y1);
+		    sscanf(vals[content_tag_POSITION].value, "%d,%d,%d,%d", &box.x0, &box.y0, &box.x1, &box.y1);
 
 		    if (box.x0 != -1)
 		    {
@@ -909,20 +924,20 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		}
 
 		/* check nohistory flag */
-		if (vals[5].value)
+		if (vals[content_tag_NOHISTORY].value)
 		    v->dont_add_to_history = TRUE;
 	    }
 
 	    /* check highlight flag */
-	    if (vals[6].value)
+	    if (vals[content_tag_SOLIDHIGHLIGHT].value)
 		backend_doc_set_flags(v->displaying, be_openurl_flag_SOLID_HIGHLIGHT, be_openurl_flag_SOLID_HIGHLIGHT);
 
 	    /* check no scroll flag - note this can override that specified in the frameset */
-	    if (vals[7].value)
+	    if (vals[content_tag_NOSCROLL].value)
 		v->scrolling = fe_scrolling_NONE;
 
 	    /* check fast load flag */
-	    v->fast_load = vals[8].value != 0;
+	    v->fast_load = vals[content_tag_FASTLOAD].value != 0;
 
 	    mm_free(ncmode);
 	}
@@ -941,7 +956,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     if (v->parent == NULL)
     {
         const char *bmode;
-	if ((bmode = backend_check_meta(doc, "BROWSERMODE")) != NULL)
+	if (ncmode == NULL && (bmode = backend_check_meta(doc, "BROWSERMODE")) != NULL)
 	{
 	    mode = strcasecomp(bmode, "DESKTOP") == 0 ? fe_browser_mode_DESKTOP :
 		strcasecomp(bmode, "DBOX") == 0 ? fe_browser_mode_DBOX :
@@ -1419,7 +1434,7 @@ static int fe_transient_set_size(fe_view v)
     case fe_position_CENTERED:
     case fe_position_UNSET:
     {
-	int h = -v->doc_height;
+	int h = -v->doc_height - v->backend_margin.y1 + v->backend_margin.y0;
 	int ww, hh;
 
 	ww = v->transient_position == fe_position_CENTERED_WITH_COORDS ? v->dbox_x : DBOX_SIZE_X;
@@ -2611,27 +2626,28 @@ os_error *fe_hotlist_add(fe_view v)
 {
     char *url, *title;
     os_error *e;
+    time_t t;
 
     if (!fe_hotlist_add_possible(v))
         return NULL;
 
-    e = backend_doc_info(v->displaying, NULL, NULL, &url, &title);
-    if (!e)
-    {
-	time_t t = time(NULL) + 2;
+    if (frontend_complain(backend_doc_info(v->displaying, NULL, NULL, &url, &title)))
+	return NULL;
 
-	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_ACTIVE);
-	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_UNPRESSED);
+    t = time(NULL) + 2;
 
-        e = hotlist_add(url, title);
+    tb_status_button(fevent_HOTLIST_ADD, tb_status_button_ACTIVE);
+    tb_status_button(fevent_HOTLIST_ADD, tb_status_button_UNPRESSED);
 
-	while (time(NULL) < t)
-	    ;
+    frontend_complain(hotlist_add(url, title));
 
-	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_PRESSED);
-	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_INACTIVE);
-    }
-    return e;
+    while (time(NULL) < t)
+	;
+
+    tb_status_button(fevent_HOTLIST_ADD, tb_status_button_PRESSED);
+    tb_status_button(fevent_HOTLIST_ADD, tb_status_button_INACTIVE);
+
+    return NULL;
 }
 
 /*
@@ -4949,13 +4965,13 @@ void fe_event_process(void)
             break;
     }
 
-    if (pending_error)
+    if (pending_error.errnum)
     {
 	char buf[512];
 	int n;
 
-	n = sprintf(buf, "ncint:openpanel?name=error&error=E%x&message=", pending_error->errnum);
-	url_escape_cat(buf+n, pending_error->errmess, sizeof(buf)-n);
+	n = sprintf(buf, "ncint:openpanel?name=error&error=E%x&message=", pending_error.errnum);
+	url_escape_cat(buf+n, pending_error.errmess, sizeof(buf)-n);
 
 	if (pending_error_retry)
 	{
@@ -4967,7 +4983,7 @@ void fe_event_process(void)
 	frontend_open_url(buf, NULL, TARGET_ERROR, 0, 0);
 
 	/* clear error flag */
-	pending_error = NULL;
+	pending_error.errnum = 0;
     }
 
     if (pending_error_retry)

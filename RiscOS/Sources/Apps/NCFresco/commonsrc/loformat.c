@@ -10,11 +10,6 @@
 
 #include <limits.h>
 
-#ifndef MAXINT
-#define MAXINT INT_MAX
-/* repeat after me, there's no such soddin' thing as maxint */
-/* values.h on a linux installation defines it though. C++ feature? */
-#endif
 
 #include "rid.h"
 #include "antweb.h"
@@ -28,6 +23,12 @@
 #include "util.h"
 #include "indent.h"
 #include "webfonts.h"
+
+#ifndef MAXINT
+#define MAXINT INT_MAX
+/* repeat after me, there's no such soddin' thing as maxint */
+/* values.h on a linux installation defines it though. C++ feature? */
+#endif
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -52,16 +53,17 @@ static void close_down_current_line(RID_FMT_STATE *fmt);
 static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
 {
     rid_pos_item *new_pos = fmt->text_line;
-    const int display_width = fmt->format_width;
-    const int width = fmt->x_text_pos;
-    const int spare = display_width - width - new_pos->left_margin;
-
-    FMTDBGN(("center_and_right_align_adjustments: display_width %d, text_pos.x %d, flags %x, spare %d\n",
-	    display_width, width, 0 /* fmt->SOL->st.flags & rid_sf_ALIGN_MASK */, spare));
 
     if (new_pos->first != NULL)
     {
+	const int display_width = fmt->format_width;
+	const int width = fmt->x_text_pos;
+/*    const int spare = display_width - width - new_pos->left_margin;*/
+	const int spare = new_pos->floats->right_margin - fmt->x_text_pos;
 	int flags = 0;
+
+    FMTDBGN(("center_and_right_align_adjustments: display_width %d, text_pos.x %d, flags %x, spare %d\n",
+	    display_width, width, 0 /* fmt->SOL->st.flags & rid_sf_ALIGN_MASK */, spare));
 
 	if (new_pos->first->tag == rid_tag_SCAFF && new_pos->first->next != NULL)
 	{
@@ -172,7 +174,7 @@ static rid_pos_item *new_pos_item(RID_FMT_STATE *fmt)
 
     rid_pos_item_connect(fmt->stream, new);
 
-    FMTDBG(("pi%p: npi: floats %p\n", new, new->floats ));
+    /*FMTDBGN(("pi%p: npi: floats %p\n", new, new->floats ));*/
 
     return new;
 }
@@ -340,8 +342,13 @@ static void pickup_float_line(RID_FMT_STATE *fmt)
     }
     else
     {
+#if 0
 	pi->left_margin = pi->prev->left_margin;
 	pi->floats->right_margin = pi->prev->floats->right_margin;
+#else
+	pi->left_margin = 0;
+	pi->floats->right_margin = fmt->format_width;
+#endif
 	FMTDBGN(("pickup_float_line: inherit margins %d/%d\n",
 		 pi->left_margin, pi->floats->right_margin));
     }
@@ -1274,6 +1281,8 @@ static void perform_clearing(RID_FMT_STATE *fmt)
 
 static void formatting_start(RID_FMT_STATE *fmt)
 {
+    static char *fnames[3] = { "MAYBE", "MUST", "DONT" };
+
     rid_text_item *ti;
 
     /* Pick up the stream we are formatting */
@@ -1334,8 +1343,8 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		break;
 	    }
 
-	    FMTDBG(("formatting_start: set table's id=%d width to %d (%d)\n",
-		    ((rid_text_item_table *)ti)->table->idnum, ti->width, fmt->fmt_method));
+	    FMTDBG(("formatting_start: set table's id=%d width to %d (%s)\n",
+		    ((rid_text_item_table *)ti)->table->idnum, ti->width, fnames[fmt->fmt_method]));
 	}
 
 	/* SJM: do the stuff for other scaleable items */
@@ -1357,12 +1366,13 @@ static void formatting_start(RID_FMT_STATE *fmt)
 		break;
 	    }
 
-	    FMTDBG(("formatting_start: set tag %d's width to %d (%d)\n", ti->tag, ti->width, fmt->fmt_method));
+	    FMTDBG(("formatting_start: set tag %d's width to %d (%s)\n", ti->tag, ti->width, 
+		    fnames[fmt->fmt_method]));
 	}
     }
 
-    FMTDBG(("\nformatting_start: initialised formatting state, width %d\n",
-	    fmt->format_width));
+    FMTDBG(("\nformatting_start: initialised formatting state, width %d, mode %s\n",
+	    fmt->format_width, fnames[fmt->fmt_method]));
 }
 
 /*****************************************************************************
@@ -1491,7 +1501,7 @@ extern void format_stream(antweb_doc *doc,
 
     RID_FMT_STATE tfmt, *fmt = &tfmt;
 
-    FMTDBGN(("\nformat_stream(%p %p %p %s): depth %d, fmt_state %p, fwidth %d\n",
+    FMTDBG(("\nformat_stream(%p %p %p %s): depth %d, fmt_state %p, fwidth %d\n",
 	     doc, rh, stream, fmt_names[fmt_method],
 	     depth, fmt, stream->fwidth));
 
