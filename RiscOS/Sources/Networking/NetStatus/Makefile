@@ -56,18 +56,3 @@ version:
         Version
 
 # Dynamic dependencies:
-rm.NetStatus: Hdr:ListOpts
-rm.NetStatus: Hdr:Macros
-rm.NetStatus: Hdr:System
-rm.NetStatus: Hdr:SWIs
-rm.NetStatus: Hdr:CPU.Generic26
-rm.NetStatus: Hdr:IO.GenericIO
-rm.NetStatus: Hdr:RISCOS
-rm.NetStatus: Hdr:ModHand
-rm.NetStatus: Hdr:Econet
-rm.NetStatus: Hdr:Hourglass
-rm.NetStatus: Hdr:Services
-rm.NetStatus: Hdr:Debug
-rm.NetStatus: Hdr:CMOS
-rm.NetStatus: Hdr:Symbols
-rm.NetStatus: Time+Date
