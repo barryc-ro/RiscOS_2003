@@ -1,19 +1,23 @@
 /*
  * bufs.c
- * 
+ *
  * Manage buffer pool for MPEG data, and the interface with the
  * MPEG player modules.
  *
  */
-#include "types.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <swis.h>
+
 #include "module.h"
 
-extern char *malloc();
+#define MPEGControl_FullBuffers 0x492c1
+
 struct bs_buffer *bs_fullp = 0;
 struct bs_buffer *bs_full_q = 0;
 static int wasempty = 0;
-extern struct bs_buffer *get_empty_buffer();
-extern struct bs_buffer *bswait_consume();
+/*extern struct bs_buffer *get_empty_buffer();
+extern struct bs_buffer *bswait_consume();*/
 struct bs_buffer *bs_empty_q = 0;
 struct bs_buffer *bs_emptyp = 0;
 static int bs_sent = 0;
@@ -24,108 +28,121 @@ static int callbs = 0;
 static int callbreqs = 0;
 static int bufs_hiwat = 0;
 static int norbufcnt = 0;
+static int bufs_sent = 0;
+
 int bufs_used = 0;
 int skipcnt = 0;
+
 extern int n_bs_buffers;
 extern int bs_bufsize;
+extern int mpeg_handle;
+extern int bs_minbufs;
+extern int bs_bytes_sent;
 
-init_mpeg_buffers()
+void init_mpeg_buffers ( void );
+struct bs_buffer *full_buffer ( void );
+void print_bufs ( void );
+int return_empty_buf ( struct bs_buffer *b , int flag );
+int init_bs_buffers ( void );
+void reinit_bs_buffers ( void );
+void free_bs_buffers ( void );
+struct bs_buffer *get_empty_buffer ( void );
+void save_full_buf ( struct bs_buffer *b , int datalost );
+int bs_empty_q_cnt ( void );
+int send_buffers ( void );
+void send_full_buf(struct bs_buffer *buf, int flag);
+
+
+static struct bs_buffer **bprotos;
+static int bufs_ready = 0;
+
+void init_mpeg_buffers()
 {
     bs_empty_q = 0;
     bs_full_q = 0;
     bs_emptyp = 0;
     bs_fullp = 0;
     bs_received = 0;
-    init_bs_buffers();
+    if (bufs_ready != 1)
+    {
+      init_bs_buffers();
+    }
     reinit_bs_buffers();
     maxsaved = 0;
     callbs = 0;
     callbreqs = 0;
 }
 
-struct bs_buffer *
-full_buffer()
-{
-    struct bs_buffer *b;
-    int s = ensure_irqs_off();
 
-    b = bs_full_q;
-    if (b) {
-        bs_full_q = b->bs_next;
-        if (bs_full_q == 0)
-            bs_fullp = 0;
-        b->bs_next = 0;
-    }
-    restore_irqs(s);
-    return (b);
-}
-
-print_bufs()
+void print_bufs()
 {
     int nbufs = 0;
     struct bs_buffer *b;
 
-    for (b = bs_empty_q; b; b = b->bs_next) nbufs++;
-    printf("Buffers:\n");
-    printf("    Empty bufs=%d (%d), Empty_q=%x, emptyp=%x, Full_q=%x, fullp=%x\n", nbufs, n_bs_buffers,  
-                bs_empty_q, bs_emptyp, bs_full_q, bs_fullp);
-    printf("    bs_sent=%d, bs_received=%d, bs_saved=%d, maxsaved=%d\n", 
-                bs_sent, bs_received, bs_saved, maxsaved);
-    printf("    norbufs=%d, wasempty=%d, bs_used=%d, bs_hiwat=%d\n", 
-                norbufcnt, wasempty, bufs_used, bufs_hiwat);
-}
-
-int return_empty_buf(b, flag)
-struct bs_buffer *b;
-{
-    if (b != 0) {
-        int s = ensure_irqs_off();
-        bs_received++;
-        bufs_used--;
-        if (bs_emptyp == 0) 
-           bs_empty_q = b;
-        else 
-           bs_emptyp->bs_next = b;
-        bs_emptyp = b;
-        restore_irqs(s);
+    for (b = bs_empty_q; b; b = b->bs_next)
+    {
+      nbufs++;
     }
-    return(1);
+    printf("Buffers:\n");
+    printf("    Empty bufs=%d (of %d)\n",nbufs, n_bs_buffers);
+    printf("    Empty_q=%p, emptyp=%p, Full_q=%p, fullp=%p\n",
+                bs_empty_q, bs_emptyp, bs_full_q, bs_fullp);
+    printf("    bs_queued=%d, bs_sent=%d, bs_returned=%d, maxsaved=%d\n",
+                bs_saved, bs_sent, bs_received, maxsaved);
+    printf("    norbufs=%d, exhaustions=%d, bs_inuse=%d, bs_hiwat=%d\n",
+                norbufcnt, wasempty, bufs_used, bufs_hiwat);
+    printf("    bs_buf average content=%d\n", bs_bytes_sent/bs_sent);
 }
 
-struct bs_buffer *bprotos[512] = { 0 };
-int bufs_ready = 0;
-
-int init_bs_buffers()
+int init_bs_buffers(void)
 {
-    struct bs_buffer *b;
+    struct bs_buffer *b,**bp;
     int i;
 
-    if (bufs_ready)
-        return (1);
-    b = (struct bs_buffer *)malloc(n_bs_buffers * sizeof(struct bs_buffer));
+    bprotos = (struct bs_buffer **)calloc(sizeof(struct bs_buffer *),n_bs_buffers);
+    if (bprotos == NULL)
+    {
+      return(0);
+    }
+    bp = bprotos;
+    b = (struct bs_buffer *)calloc(n_bs_buffers,sizeof(struct bs_buffer));
     if (b == 0)
-        return (0);
-    for (i = 0; i < n_bs_buffers; i++) {
+    {
+        return(0);
+    }
+    for (i = 0; i < n_bs_buffers; i++)
+    {
         b->bs_data = malloc(bs_bufsize+4);
         if (b->bs_data == 0)
-            return (0);
-        bprotos[i] = b++;
+        {
+            return(0);
+        }
+        *bp = b++;
+        bp++;
     }
     bufs_ready = 1;
     return (1);
 }
 
-reinit_bs_buffers()
+/*
+ * Clears all internal information held in buffer structures
+ * and moves all buffers to the empty queue
+ */
+void reinit_bs_buffers(void)
 {
-    struct bs_buffer *b;
+    struct bs_buffer *b,**bp;
     int i;
 
-    for (i = 0; i < n_bs_buffers; i++) {
-        b = bprotos[i];
+    printf("In reinit\n");
+    bp = bprotos;
+    for (i = 0; i < n_bs_buffers; i++)
+    {
+        b = *bp;
+        bp++;
         if (!b)
             break;
         b->bs_handle = 0;
-        b->bs_flags = 0; 
+        b->bs_flags = 0;
         b->bs_packets = 0;
         return_empty_buf(b, 0);
     }
@@ -135,24 +152,50 @@ reinit_bs_buffers()
     bs_saved = 0;
 }
 
-free_bs_buffers()
+/*
+ * Returns a used buffer to the end of the empty queue
+ */
+int return_empty_buf(struct bs_buffer *b, int flag)
+{
+    if (b != 0)
+    {
+        int s = ensure_irqs_off();
+        bs_received++;
+        bufs_used--;
+        if (bs_emptyp == 0)
+           bs_empty_q = b;
+        else
+           bs_emptyp->bs_next = b;
+        bs_emptyp = b;
+        restore_irqs(s);
+    }
+    return(1);
+}
+
+
+void free_bs_buffers(void)
 {
     struct bs_buffer *b;
 
-    while ((b = bs_empty_q) != 0) {
+    while ((b = bs_empty_q) != 0)
+    {
         bs_empty_q = b->bs_next;
         free((char *)b);
     }
+    free((char *)bprotos);
     bs_fullp = 0;
 }
 
-struct bs_buffer *
-get_empty_buffer()
+/*
+ * Returns an empty buffer from the head of the empty queue
+ */
+struct bs_buffer *get_empty_buffer(void)
 {
     int s = ensure_irqs_off();
     struct bs_buffer *b = bs_empty_q;
-    
-    if (b == 0) { 
+
+    if (b == 0)
+    {
         wasempty++;
         restore_irqs(s);
         return ((struct bs_buffer *)0);
@@ -169,27 +212,33 @@ get_empty_buffer()
     return (b);
 }
 
-save_full_buf(b, datalost)
-struct bs_buffer *b;
-int datalost;
+/*
+ * Appears to add a buffer to the 'full queue'
+ * waiting to be passed to the decoder
+ */
+void save_full_buf(struct bs_buffer * b, int datalost)
 {
     int s = ensure_irqs_off();
     b->bs_next = 0;
-    if (skipcnt > 0) {
+    if (skipcnt > 0)
+    {
         b->bs_offset = b->bs_data + skipcnt;
         b->bs_len -= skipcnt;
     }
     else
         b->bs_offset = b->bs_data;
-    if (bs_fullp == 0) 
+    if (bs_fullp == 0)
        bs_full_q = b;
-    else 
+    else
        bs_fullp->bs_next = b;
     bs_fullp = b;
     bs_saved++;
     restore_irqs(s);
 }
 
+/*
+ * Count buffers in empty queue
+ */
 int bs_empty_q_cnt()
 {
     struct bs_buffer *b;
@@ -202,15 +251,23 @@ int bs_empty_q_cnt()
     return (n);
 }
 
-static int bufs_sent = 0;
-
+/*
+ * Sends all full buffers on the full queue to
+ * MPEG decoder
+ */
 int send_buffers()
 {
     struct bs_buffer *b, *bq, *lastb;
     int len = 0;
 
+    if (bs_saved < bs_minbufs) /* implement a primitive sending threshold */
+    {
+      return(0);
+    }
+
     len = 0; bq = 0; lastb = 0;
-    while ((b = full_buffer()) != 0) {
+    while ((b = full_buffer()) != 0)
+    {
         bs_sent++;
         b->bs_next = 0;
         len += b->bs_len;
@@ -219,3 +276,35 @@ int send_buffers()
     return (len);
 }
 
+/*
+ * Returns a buffer from the head of the full queue
+ */
+struct bs_buffer *full_buffer(void)
+{
+    struct bs_buffer *b;
+    int s = ensure_irqs_off();
+
+    b = bs_full_q;
+    if (b)
+    {
+        bs_full_q = b->bs_next;
+        if (bs_full_q == 0)
+        {
+          bs_fullp = 0;
+        }
+        b->bs_next = 0;
+    }
+    restore_irqs(s);
+    return (b);
+}
+
+
+void send_full_buf(struct bs_buffer *buf, int flag)
+{
+    _kernel_swi_regs r;
+
+    r.r[0] = flag;
+    r.r[1] = mpeg_handle;
+    r.r[2] = (int)buf;
+    (void) _kernel_swi(XOS_Bit | MPEGControl_FullBuffers, &r, &r);
+}

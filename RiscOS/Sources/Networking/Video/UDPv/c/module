@@ -4,47 +4,79 @@
  * RISC OS environmental dependencies
  *
  */
-#include "types.h"
-#include "uio.h"
-#include "socket.h"
-#include "ioctl.h"
-#include "in.h"
-#include "if.h"
-#include "stdio.h"
-#include "errno.h"
-#include "ctype.h"
-#include "netdb.h"
+#include "socklib.h"
+#include "inetlib.h"
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
 #include <kernel.h>
 #include <swis.h>
+#include <string.h>
+
+#include "sys/filio.h"
+#include "sys/mbuf.h"
+
 #include "module.h"
-#include "mbuf.h"
+#include "mbuffn.h"
+#include "bufs.h"
 
 #define VIDEO_PORT      0x801a
 
 #define IDLE            0
 #define PLAYING         1
 
+#define SO_RECV_BUF_SIZE   64*1024
+#define MPEG_BUF_POOL_SIZE 850*376
+
 #define TickerV         28
 
-extern char *malloc();
 void *module_wsp = 0;
-struct bs_buffer *get_empty_buffer();
 int v_state = IDLE;
 extern int bs_sent = 0;
 int discards = 0;
+int default_video_port = 0;
 int video_port = 0;
 int rxsize = 0;
 int bs_bufsize = 0;
 int n_bs_buffers = 0;
+int bs_minbufs = 0;
+int bs_bufpool;
+int bs_bytes_sent = 0;
+
 extern int skipcnt;
+
+int mpeg_handle, vsock, vssock;
+int do_debug = 0;
+
+extern _kernel_oserror *calleverytick(void);
+extern struct bs_buffer *get_empty_buffer(void);
+
+_kernel_oserror *udpv_init(char *cmd_tail, int pbase, void *pw);
+_kernel_oserror *udpv_cli_handler(char *arg_string, int arg_count, int cmd_no, void *pw);
+void udpv_show(int argc , char **argv );
+_kernel_oserror *udpv_swi_handler(int swinum, _kernel_swi_regs *r, void *pw);
+int do_getsock(int port, int inputsocket);
+int udpv_startofplay(_kernel_swi_regs *r);
+int udpv_endofplay(_kernel_swi_regs *r);
+int udpv_empty_buf(_kernel_swi_regs *r);
+int udpv_nullswi(_kernel_swi_regs *r);
+int udpv_rxdirect(_kernel_swi_regs *r);
+int udpv_getstatus(_kernel_swi_regs *r);
+void init_session(int handle, int skipsize);
+void close_session(void );
+int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int ack_buf);
+int send_full_buf(int b, int flag);
+int read_sysvar(char *var, char *buf, int buflen);
 
 struct swient {
     int (*swi_call)();      /* swi handler */
 };
 
 #define MAXSWI 31
-extern int udpv_empty_buf(), udpv_nullswi(), udpv_final();
-extern int udpv_startofplay(), udpv_endofplay(), udpv_getstatus(), udpv_rxdirect();
+/*extern int udpv_empty_buf(), udpv_nullswi(), udpv_final();
+//extern int udpv_startofplay(), udpv_endofplay(), udpv_getstatus(), udpv_rxdirect();*/
 
 struct swient udpv_ent[MAXSWI] = {
     udpv_nullswi,
@@ -88,23 +120,12 @@ struct client {
 
 #define MAXCLIENT 2
 
-int udpv_show();
-
 struct client udpv_cli_call[MAXCLIENT] = {
-    udpv_show,
-    0,
+    (int (*)())udpv_show
 };
 
-int mpeg_handle, vsock, vssock;
 
-extern _kernel_oserror *calleverytick();
-
-/*ARGS_USED*/
-_kernel_oserror *
-udpv_init(cmd_tail, pbase, pw)
-char *cmd_tail;
-int pbase;
-void *pw;
+_kernel_oserror *udpv_init(char *cmd_tail, int pbase, void *pw)
 {
     char buf[32];
 
@@ -112,26 +133,51 @@ void *pw;
     if (!mb_present())
         return ((_kernel_oserror *)0);
     (void) mb_entryinit();
-    if (read_sysvar("MPEG$UDPport", buf, sizeof(buf)) != 0) 
-        video_port = atoi(buf);
+
+    if (read_sysvar("MPEG$UDPport", buf, sizeof(buf)) != 0)
+        default_video_port = atoi(buf);
     else
-        video_port = VIDEO_PORT;
-    if (read_sysvar("MPEG$UDPdsize", buf, sizeof(buf)) != 0) 
+        default_video_port = VIDEO_PORT;
+
+    if (read_sysvar("MPEG$UDPdsize", buf, sizeof(buf)) != 0)
         bs_bufsize = atoi(buf);
     else
         bs_bufsize = 8192;
-    n_bs_buffers = (850 * 376) / bs_bufsize;
+
+    if (read_sysvar("UDP$Debug", buf, sizeof(buf)) != 0)
+        do_debug = 1;
+
+    if (read_sysvar("MPEG$BufPool", buf, sizeof(buf)) != 0)
+    {
+      bs_bufpool = atoi(buf);
+      if (bs_bufpool < bs_bufsize)
+      {
+        bs_bufpool = bs_bufsize * 16; /* Guess at minimum sensible value */
+      }
+    }
+    else
+    {
+      bs_bufpool = MPEG_BUF_POOL_SIZE;
+    }
+
+    n_bs_buffers = (bs_bufpool) / bs_bufsize;
+
+    if (read_sysvar("MPEG$MinBufs", buf, sizeof(buf)) != 0)
+    {
+        bs_minbufs = atoi(buf);
+    }
+    else
+    {
+        bs_minbufs = 0;
+    }
+
     init_bs_buffers();
     vsock = -1;
     return ((_kernel_oserror *)0);
 }
 
 /*ARGSUSED*/
-_kernel_oserror *
-udpv_cli_handler(arg_string, arg_count, cmd_no, pw)
-char *arg_string;
-int arg_count, cmd_no;
-void *pw;
+_kernel_oserror *udpv_cli_handler(char *arg_string, int arg_count, int cmd_no, void *pw)
 {
     struct client *callp;
     int margc;
@@ -154,59 +200,56 @@ void *pw;
             break;
         *cp++ = '\0';
     }
-    *argp++ = 0;                                    
+    *argp++ = 0;
     callp = &udpv_cli_call[cmd_no];
     (void)(*(callp->cli_call))(margc, margv);
     return ((_kernel_oserror *)0);
 }
 
-udpv_show(argc, argv)
-int argc;
-char **argv;
+void udpv_show(int argc, char **argv)
 {
-    printf("videoport=%d (%x), rxbufsize=%d\n", 
-               video_port, video_port, rxsize);
-    printf("n_buffers+%d, bufsize=%d\n", n_bs_buffers, bs_bufsize);
+    printf("videoport=%d (%x), lastport=%d, rxbufsize=%d\n",
+               default_video_port, default_video_port, video_port, rxsize);
+    printf("bs_bufpool=%d, n_buffers=%d, bufsize=%d, bs_minbufs=%d, discards=%d\n",
+               bs_bufpool, n_bs_buffers, bs_bufsize, bs_minbufs, discards);
     print_bufs();
 }
 
-_kernel_oserror *
-udpv_swi_handler(swinum, r, pw)
-int swinum;
-_kernel_swi_regs *r;
-void *pw;
-{       
+_kernel_oserror *udpv_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
+{
     struct swient *callp;
 
     callp = &udpv_ent[swinum];
     return ((_kernel_oserror *)(*(callp->swi_call))(r));
 }
 
-int
-do_getsock(port, inputsocket)
-int port, inputsocket;
+int do_getsock(int port, int inputsocket)
 {
     struct sockaddr_in addr;
     int arg, sock, on = 1;
 
-    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) 
+    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
         return (-1);
     arg = UdpV_RxDirect;
-    if (socketioctl(sock, FIONBIO, &on) < 0 || socketioctl(sock, FIORXDIR, &arg) < 0) {
+    if (socketioctl(sock, FIONBIO, &on) < 0 || socketioctl(sock, FIORXDIR, &arg) < 0)
+    {
         socketclose (sock);
         return (-1);
     }
-    arg = (32*1024);
+    arg = (SO_RECV_BUF_SIZE);
     if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof (on)) < 0 ||
-        setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &arg, sizeof (arg)) < 0) {
+        setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &arg, sizeof (arg)) < 0)
+    {
         socketclose(sock);
         return (-1);
     }
-    if (inputsocket) {
+    if (inputsocket)
+    {
         addr.sin_family      = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
         addr.sin_port        = htons((u_short)port);
-        if (bind(sock, (struct sockaddr *)&addr, sizeof (addr)) < 0) {
+        if (bind(sock, (struct sockaddr *)&addr, sizeof (addr)) < 0)
+        {
             socketclose(sock);
             return (-1);
         }
@@ -214,54 +257,67 @@ int port, inputsocket;
     return (sock);
 }
 
-int udpv_startofplay(r)
-_kernel_swi_regs *r;
+int udpv_startofplay(_kernel_swi_regs *r)
 {
+    int port = r->r[2];
+
+
+    if (port == 0)
+        port = default_video_port;
+
+    if (do_debug)
+        printf("        Get socket for port %d\n", port);
+    if (port != video_port && vsock != -1)
+    {
+        socketclose(vsock);
+        vsock = -1;
+    }
     if (vsock == -1)
-        vsock = do_getsock(video_port, 1);
-    if (vsock >= 0) {
+    {
+        vsock = do_getsock(port, 1);
+        if (do_debug && vsock < 0)
+            printf("          Socket open failed!\n");
+    }
+    if (vsock >= 0)
+    {
+        video_port = port;
         init_mpeg_buffers();
-        init_session((char *)r->r[1], r->r[2], r->r[3], r->r[4]);
+        init_session(r->r[3], r->r[4]);
     }
     return (0);
 }
 
-int udpv_endofplay(r)
-_kernel_swi_regs *r;
+int udpv_endofplay(_kernel_swi_regs *r)
 {
     close_session();
     return (0);
 }
 
-int udpv_empty_buf(r)
-_kernel_swi_regs *r;
+int udpv_empty_buf(_kernel_swi_regs *r)
 {
-    if (r->r[2] != 0) 
-        return_empty_buf(r->r[2]);
-    r->r[2] = 0; 
+    if (r->r[2] != 0)
+        return_empty_buf((struct bs_buffer *)r->r[2],0);
+    r->r[2] = 0;
     return (0);
 }
 
-int udpv_nullswi(r)
-_kernel_swi_regs *r;
+int udpv_nullswi(_kernel_swi_regs *r)
 {
     return (0);
 }
 
-int udpv_rxdirect(r)
-_kernel_swi_regs *r;
+int udpv_rxdirect(_kernel_swi_regs *r)
 {
     int s = ensure_irqs_on();
-    if (r->r[0] == vsock) 
+    if (r->r[0] == vsock)
         vs_process_input(r->r[1], r->r[2], (char *)(r->r[3]), r->r[4], r->r[5], r->r[6]);
     restore_irqs(s);
     return (0);
 }
 
-int udpv_getstatus(r)
-_kernel_swi_regs *r;
+int udpv_getstatus(_kernel_swi_regs *r)
 {
-    send_buffers();
+    bs_bytes_sent += send_buffers();
     r->r[0] = (v_state == PLAYING) ? PLAY_INPROGRESS : PLAY_TERMINATED;
     r->r[1] = 0;
     r->r[2] = 0;
@@ -269,30 +325,20 @@ _kernel_swi_regs *r;
     return (0);
 }
 
-init_session(macadr, id, handle, skipsize) 
-char *macadr; 
-u_short id; 
-int handle;
-int skipsize;
+void init_session(int handle, int skipsize)
 {
-    macadr = macadr;
-    id = id;
     mpeg_handle = handle;
     v_state = PLAYING;
     skipcnt = skipsize;
 }
 
-close_session()
+void close_session(void)
 {
     v_state = IDLE;
 }
 
-int
-vs_process_input(a, b, ack_src, ack_unit, ack_swi, ack_buf)
-int a, b;
-char *ack_src;
-int ack_unit, ack_swi, ack_buf;
-{                
+int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int ack_buf)
+{
     struct mbuf *m, *m0, *m1;
     struct bs_buffer *bs = 0;
     int mlen, residue = 0;
@@ -300,15 +346,19 @@ int ack_unit, ack_swi, ack_buf;
 
     m0 = (struct mbuf *)a;
     m1 = (struct mbuf *)ack_buf;
-    if (m0 == 0) 
+    if (m0 == 0)
         goto out;
-    for (m = m0; m; m = m->m_next) {
-        if ((mlen = m->m_len) == 0)
+    for (m = m0; m; m = m->m_next)
+    {
+        mlen = m->m_len;
+        if (mlen == 0)
             continue;
-        if (mlen > residue) {
-            if (bs != 0) 
+        if (mlen > residue)
+        {
+            if (bs != 0)
                 save_full_buf(bs, 0);
-            if ((bs = get_empty_buffer()) == 0) {
+            if ((bs = get_empty_buffer()) == 0)
+            {
                 discards++;
                 break;
             }
@@ -323,33 +373,22 @@ int ack_unit, ack_swi, ack_buf;
         bptr += mlen;
         residue -= mlen;
    }
-   if (bs != 0) {
-        rxsize = bs->bs_len; 
-        save_full_buf(bs, 0); 
+   if (bs != 0)
+   {
+        rxsize = bs->bs_len;
+        save_full_buf(bs, 0);
    }
-   send_buffers();
+   bs_bytes_sent += send_buffers();
    m0->m_len = 0;
 out:
-    if (m1) 
+    if (m1)
+    {
         m_freem(m1);
+    }
+    return(0);
 }
 
-#define MPEGControl_FullBuffers 0x492c1
-
-send_full_buf (b, flag)
-int b, flag;
-{
-    _kernel_swi_regs r;
-
-    r.r[0] = flag;
-    r.r[1] = mpeg_handle;
-    r.r[2] = b;
-    (void) _kernel_swi(XOS_Bit | MPEGControl_FullBuffers, &r, &r);
-}
-
-int read_sysvar(var, buf, buflen)
-char *var, *buf;
-int buflen;
+int read_sysvar(char *var, char *buf, int buflen)
 {
     _kernel_swi_regs r;
     _kernel_oserror *e;
@@ -360,7 +399,7 @@ int buflen;
     r.r[3] = 0;
     r.r[4] = 0;
     e = _kernel_swi(XOS_Bit | OS_ReadVarVal, &r, &r);
-    if (e || r.r[2] == 0) 
+    if (e || r.r[2] == 0)
         return (0);
     buf[r.r[2]] = 0;
     return (1);
