@@ -1,0 +1,247 @@
+/**************************************
+ Error message control and generation
+
+© Acorn Computers Ltd
+
+History:
+
+Date      Who     Description of change
+===========================================
+04/09/98  SNB     Updated to cache messages file and do errors nicely
+
+**************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+#include "VSPHdr.h"
+#include "Error.h"
+
+#ifdef DEBUG
+static int flag = 1;
+#endif
+
+static MessagesFile *messages_file = 0;
+
+MessagesFile::MessagesFile(const char *filename)
+        : data(0)
+{
+        _kernel_oserror *e;
+        int size;
+
+        e = _swix(MessageTrans_FileInfo, _IN(1)|_OUT(2), filename, &size);
+        if (e == NULL) {
+                data = new char[size];
+                if (data != NULL) {
+                        e = _swix(MessageTrans_OpenFile, _INR(0,2), &msgtrans_desc, filename, data);
+                        if (e != NULL) {
+                                delete[] data;
+                                data = 0;
+                        }
+                }
+        }
+}
+
+MessagesFile::~MessagesFile()
+{
+        (void) _swix(MessageTrans_CloseFile, _IN(0), &msgtrans_desc);
+        delete[] data;
+        data = 0;
+}
+
+int MessagesFile::init()
+{
+        messages_file = new MessagesFile(FILENAME_MESSAGES);
+        return messages_file != 0;
+}
+
+void MessagesFile::finalise()
+{
+        delete messages_file;
+        messages_file = 0;
+}
+
+_kernel_oserror *MessagesFile::ErrorLookup(_kernel_oserror *e, int errnum,
+	const char *p1, const char *p2, const char *p3, const char *p4)
+{
+        if (data == 0) {
+                e->errnum = VSP_Alloc;
+                (void) strncpy(e->errmess, "Out of memory for messages file", sizeof(e->errmess));
+        }
+        else {
+                e->errnum = errnum;
+                if (errnum == VSP_BadSWI) {
+                        /* Generate the standard OS error for this and not a module specific
+                         * code.  Parameter is the module name to substitute into message.
+                         * (This message comes from Resources:$.Resources.Global.Messages)
+                         */
+                        e->errnum = 0x1E6;
+                        (void) strcpy(e->errmess, "BadSWI");
+                        p1 = Module_Title;
+                }
+                else if (errnum >= VSP_Alloc && errnum < VSPMaxError) {
+                        (void) sprintf(e->errmess, "E%02x", errnum%256);
+                        e->errnum = errnum;
+                }
+                else {
+                        /* Assume that the token is already in the error buffer */
+                }
+                // MessageTrans_ErrorLookup always exits with V set and hence a non-NULL result
+                // is returned by _swix here.
+                (void) memcpy(e, _swix(MessageTrans_ErrorLookup, _INR(0,7), e, &msgtrans_desc,
+                        0, 0, p1, p2, p3, p4), sizeof(_kernel_oserror));
+        }
+
+        return e;
+}
+
+ErrorBlk::ErrorBlk(char *s_token, int token)
+{
+        (void) strncpy(err.errmess, s_token, sizeof(err.errmess));
+        (void) messages_file->ErrorLookup(&err, token);
+}
+
+ErrorBlk::ErrorBlk(const ErrorBlk& errblk)
+{
+        err.errnum = errblk.err.errnum;
+        (void) strncpy(err.errmess, errblk.err.errmess, sizeof(errblk.err.errmess));
+}
+
+ErrorBlk::ErrorBlk(const VSPErrorCodes v)
+{
+        (void) messages_file->ErrorLookup(&err, (int) v);
+}
+
+ErrorBlk::ErrorBlk(_kernel_oserror *ro_err)
+{
+        err.errnum = ro_err->errnum;
+        (void) strncpy(err.errmess, ro_err->errmess, sizeof(err.errmess));
+}
+
+ErrorBlk&
+ErrorBlk::operator =(const ErrorBlk& errblk)
+{
+        if (errblk.err.errmess != err.errmess) {
+                err.errnum = errblk.err.errnum;
+                (void) strncpy(err.errmess, errblk.err.errmess, sizeof(err.errmess));
+        }
+
+        return *this;
+}
+
+int 
+ErrorBlk::ErrorNum(void) { return err.errnum; }
+
+#ifdef DEBUG
+void
+ErrorBlk::Print(void)
+{
+  // dumps to standard out
+  Debug("Error DUMP");
+  Debug( err.errmess);
+}
+
+void
+ErrorBlk::Debug(char *string)
+{
+  _kernel_swi_regs reg;
+  
+   reg.r[0] = (int)string;
+  _kernel_swi(XDebugMod_Send, &reg, &reg);
+}
+#endif
+
+/************************************************************************/
+// Error SuperClass
+
+ErrorBlk&
+Error::ReturnCopyOfError(void)
+{
+  ErrorBlk *temp = NULL;
+
+  if (err != NULL)
+    temp = new ErrorBlk(*err);
+
+  return *temp;
+}
+// constructors
+
+Error::Error(void) { err = NULL; }
+
+Error::~Error(void) { delete err; err = NULL; }
+
+// other methods
+
+void
+Error::RemoveErr(void) { delete err; err = NULL; }
+
+void
+Error::MakeError(char *s_token, int token) 
+{ 
+   if (err == NULL)
+	err = new ErrorBlk(s_token, token);
+}
+
+void
+Error::MakeError(_kernel_oserror *ro_err) 
+{ 
+   if (err == NULL)
+	err = new ErrorBlk(ro_err);
+}
+
+void
+Error::MakeError(const enum VSPErrorCodes v)
+{ 
+   if (err == NULL)
+	err = new ErrorBlk(v);
+}
+
+int
+Error::ErrorExists(void) { return (err!=NULL); }
+
+int
+Error::ErrorNum(void) 
+{ 
+   if (err!=NULL) 
+   	return err->ErrorNum(); 
+   else return NULL; 
+} 
+
+void
+Error::PrintError(void)
+{
+#ifdef DEBUG
+  if (err != NULL) err->Print();
+#endif
+}
+
+#ifdef DEBUG
+	// Debug Function
+void 
+Error::Debug(char *format, ...)
+{
+  int string_size;
+  va_list list;
+ 
+  if (flag == 0) return;
+  flag = 0;
+  char buffer[128];
+
+  va_start (list, format);
+  string_size = vsprintf (buffer, format, list);
+  va_end(list);
+   
+  if (string_size >= 128)	// terminate at the correct length
+        string_size = 127;
+        
+  buffer[string_size] = '\0';	// string size is the size of the string not including the null terminator
+/*
+  FILE *fp = fopen(DEBUG_FILE, "a+");
+  fprintf(fp,"%s", buffer);
+  fclose(fp);
+*/
+  err->Debug(buffer);    
+  flag = 1;
+}
+#endif
