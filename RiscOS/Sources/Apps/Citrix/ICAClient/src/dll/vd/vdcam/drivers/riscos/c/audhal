@@ -1,83 +1,84 @@
-/*****************************************************************************
-* 
+/****************************************************************************
+*
 *   audhal.c
-* 
+*
 *   Client Audio hardware driver external routines
-* 
+*
 *   Copyright Citrix Systems, Inc. 1997
-* 
+*
 *   Author: DavidP  12 Jun 97
-* 
+*
 *   $Log$
-*  
+*
 *     Rev 1.20   07 May 1998 10:07:34   davids
 *  Get rid of warning for CE builds
-*  
+*
 *     Rev 1.19   Apr 27 1998 11:58:04   DavidT
 *  Get audio working on HP handheld PC
-*  
+*
 *     Rev 1.18   16 Apr 1998 16:20:08   ianr
 *  Fix compilation for WINCE
-*  
+*
 *     Rev 1.17   Apr 02 1998 16:52:32   bills
 *  removed the calls to load/unload the adpcm driver
-*  
+*
 *     Rev 1.16   24 Mar 1998 15:43:50   brada
 *  Use debug macro to declare fName
-*  
+*
 *     Rev 1.15   10 Feb 1998 15:15:58   davidp
 *  moved client-side bandwidth limit to main VD
-*  
+*
 *     Rev 1.14   07 Feb 1998 13:28:40   davidp
 *  Fix for LB audio; formatting
-*  
+*
 *     Rev 1.13   22 Jan 1998 14:46:58   x86fre
 *  Interger to DWORD
-*  
+*
 *     Rev 1.12   Jan 22 1998 14:40:48   xuanh
 *  audio bandwidth limit win16 support
-*  
+*
 *     Rev 1.11   Jan 21 1998 14:55:48   xuanh
 *  upate
-*  
+*
 *     Rev 1.10   Jan 21 1998 14:30:48   xuanh
 *  add audio bandwidth limit
-*  
+*
 *     Rev 1.9   13 Jan 1998 23:22:26   davidp
 *  fixed a series of Win16 oopsies from the last put
-*  
+*
 *     Rev 1.8   13 Jan 1998 23:11:32   davidp
 *  Load ACM converter DLL on Win32 (pICAsso Beta 2 item)
-*  
+*
 *     Rev 1.7   18 Dec 1997 17:54:22   davidp
 *  previous changes isolated to Win32
-*  
+*
 *     Rev 1.6   18 Dec 1997 15:02:46   davidp
 *  changes to support ADPCM format
-*  
+*
 *     Rev 1.5   19 Nov 1997 18:00:10   davidp
 *  Tracing change.  This is also the version where trcflags.h changed locations
-*  
+*
 *     Rev 1.4   17 Oct 1997 19:47:46   davidp
 *  code formatting
-*  
+*
 *     Rev 1.3   09 Oct 1997 16:51:46   davidp
 *  Fixed idle detection code
-*  
+*
 *     Rev 1.2   Oct 09 1997 18:09:24   briang
 *  Conversion to MemIni use
-*  
+*
 *     Rev 1.1   26 Sep 1997 18:31:36   davidp
 *  fix for syntax error from PVCS log entry
-*  
+*
 *     Rev 1.0   26 Sep 1997 18:29:26   davidp
 *  Original revision
-* 
+*
 *****************************************************************************/
 
 #include "windows.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #ifdef WINCE
 #include <wcecalls.h>
@@ -94,6 +95,11 @@
 #include <string.h>
 #endif
 
+#ifdef RISCOS
+#include "mmsystem.h"
+#include "kernel.h"
+#include "swis.h"
+#endif
 
 //  Includes
 //
@@ -110,6 +116,7 @@
 
 #define AUDIO_HW_DRIVER
 #include "../inc/hwapi.h"
+#include "citrix/vdcam.h"
 #include "drvinfo.h"
 
 #include "../../inc/trcflags.h"
@@ -169,7 +176,7 @@ STATIC PPLIBPROCEDURE pKbdProcedures    = NULL;
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
-// data queue management structures and globals
+// data queue management structures
 //
 
 // Queue item struct.  The exact contents of this structure will vary with
@@ -183,6 +190,9 @@ typedef struct _QUEUE_ITEM
     PAUDHW_DATA_ITEM    pData;          // data to play
     struct _QUEUE_ITEM* pNext;          // list management
 } QUEUE_ITEM, * PQUEUE_ITEM;
+
+//////////////////////////////////////////////////////////////////////////////
+// data queue management globals
 
 PQUEUE_ITEM gpsFreeQueueItemList = NULL;
 USHORT      gnQueueBuffers;
@@ -251,6 +261,10 @@ int MapFormatTag( USHORT audHWFormatTag, PUSHORT pWinFormatTag );
 #ifdef WIN32
 BOOL LoadAcmDriver( void );
 void UnloadAcmDriver( void );
+#endif
+
+#ifdef RISCOS
+int audHW16bit( void );
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
@@ -421,6 +435,14 @@ audHWModuleOpen( PAUDHW_MOD_OPEN pAudioOpen )
 #endif
     TRACE(( TC_CAM, TT_INIT, "===%s===", fName ));
 
+#ifdef RISCOS    // check sound h/w capability
+    if (!audHW16bit()) 
+    {
+      rc = CLIENT_ERROR_DRIVER_UNSUPPORTED;
+      return rc;
+    }
+#endif
+
     gnQueueBuffers    = pAudioOpen->nMaxDataItems;
 
     // initialize device structures
@@ -433,6 +455,8 @@ audHWModuleOpen( PAUDHW_MOD_OPEN pAudioOpen )
     TRACE(( TC_CAM, TT_API3, "%s: preallocating %u buffers for queue pool",
         fName, gnQueueBuffers ));
 
+    gpsFreeQueueItemList = NULL;     // ensure list is initialised RE 15/02/2001
+    
     nToAllocate = gnQueueBuffers;
     while( nToAllocate > 0 )
     {
@@ -450,9 +474,13 @@ audHWModuleOpen( PAUDHW_MOD_OPEN pAudioOpen )
 
         nToAllocate--;
     }
-    
+
     TRACE(( TC_CAM, TT_API3, "%s: preallocated %u buffers for queue pool",
         fName, gnQueueBuffers ));
+
+
+    // now set up our sound stuff
+
 
 #ifdef WIN32
     // Load ACM converter DLL
@@ -550,7 +578,7 @@ audHWModuleInfo( PDLLLINK pLink, PDLLINFO pInfo )
     DeclareFName("audHWModuleInfo")
     USHORT      cbInfoSize;
     PMODULE_C2H pData;  // the only data this module sends is the header info
-    
+
     TRACE(( TC_CAM, TT_API1, "===%s===", fName ));
 
     if ( pInfo == NULL )
@@ -582,6 +610,8 @@ audHWModuleInfo( PDLLLINK pLink, PDLLINFO pInfo )
     pData->VersionH    = AUDHW_VERSION_HIGH;
 
     pInfo->ByteCount = cbInfoSize;
+
+    TRACE(( TC_CAM, TT_API3, "%s: return success", fName ));
 
     return CLIENT_STATUS_SUCCESS;
 }
@@ -621,6 +651,10 @@ audHWModulePoll( PDLLPOLL pPoll )
         PDEVICE psDevice;
         PQUEUE_ITEM pItem, pNext;
 
+        /*
+        TRACE(( TC_CAM, TT_API3, "%s: is there data to examine in device? "
+                "%u fIsOpen:%x pFirstData:%x", fName, i, (int) gsDevices[i].fIsOpen, (int) gsDevices[i].pFirstData  ));
+        */
         // nothing to do if device not open or no data being tracked
         if ( (!gsDevices[i].fIsOpen) || (gsDevices[i].pFirstData == NULL) )
             continue;
@@ -645,6 +679,10 @@ audHWModulePoll( PDLLPOLL pPoll )
 #ifdef NOTYET
                 // TODO: modify this for input vs. output
                 // check to see if hardware is finished with this buffer
+
+		TRACE(( TC_CAM, TT_API3, "%s: Completed buffer? "
+                        "in device %u, flags:%x", fName, i, (int) ((PWAVEHDR) (pItem->pHdr))->dwFlags ));
+
                 if (((PWAVEHDR) (pItem->pHdr))->dwFlags & WHDR_DONE )
                 {
                     TRACE(( TC_CAM, TT_API3, "%s: found a completed buffer "
@@ -653,7 +691,7 @@ audHWModulePoll( PDLLPOLL pPoll )
                     // inform VD that this guy is done
                     pItem->pData->fDone = TRUE;
                     pItem->pData = NULL; // it's OK, VD is still tracking this
-    
+
                     // loop and list maintenance
                     waveOutUnprepareHeader((HWAVEOUT) (psDevice->hDevice),
                         (PWAVEHDR) (pItem->pHdr), sizeof(WAVEHDR));
@@ -687,6 +725,8 @@ audHWModulePoll( PDLLPOLL pPoll )
             }
         }
     }
+
+    TRACE(( TC_CAM, TT_ERROR, "%s: Dataprocessed:%x Max_num_devices:%x", fName, fDataProcessed, MAX_NUM_DEVICES));
 
     if ( fDataProcessed )
         return CLIENT_STATUS_SUCCESS;
@@ -999,7 +1039,7 @@ audHWDeviceRead( void )
 //
 //  audHWDeviceWrite - EXTERNAL
 //
-//  Write audio data to the audio device.  
+//  Write audio data to the audio device.
 //
 //  ENTRY:
 //    HAUDDEVICE        hDevice     [in]    target device
@@ -1020,6 +1060,11 @@ audHWDeviceWrite(
     int rc = AUDHW_STATUS_SUCCESS;
     PQUEUE_ITEM pItem;
     PDEVICE psDevice;
+
+    //PAUDHW_DATA_ITEM pConvertedItem;
+    //PVOID pConvertedBuf;
+    //FORMAT_ID srcFormatID;
+    //FORMAT_ID dstFormatID;
 
     TRACE(( TC_CAM, TT_API1, "===%s===", fName ));
 
@@ -1049,12 +1094,33 @@ audHWDeviceWrite(
     switch( psDevice->iType )
     {
         case PCM:
-            TRACE(( TC_CAM, TT_API3, "%s: attempting PCM data write",
-                fName ));
+            TRACE(( TC_CAM, TT_API3, "%s: attempting PCM data write, audio data at:%x",
+                fName, (int) pData->pBuf ));
 #ifdef NOTYET
+            // do any pcm conversion here???
+
+            //srcFormatID.iFormat = FORMAT_LINEAR_PCM;
+            //srcFormatID.wSubFormat = SUBFMT_LINEAR_PCM_8KHZ | SUBFMT_LINEAR_PCM_8BIT | SUBFMT_LINEAR_PCM_STEREO;
+
+            //dstFormatID.iFormat = FORMAT_LINEAR_PCM;
+            //dstFormatID.wSubFormat = SUBFMT_LINEAR_PCM_8KHZ | SUBFMT_LINEAR_PCM_16BIT |  SUBFMT_LINEAR_PCM_STEREO;
+
+            //pConvertedItem = (PAUDHW_DATA_ITEM) malloc(AUDHW_DATA_HEADER_SIZE); /* this IS NOT the way to do it!!!*/
+            /* assuming the malloc was sucsessfull!!!*/
+
+            //pConvertedBuf = malloc((pData->cbSize) * 8);
+            //pConvertedItem->pBuf = pConvertedBuf;
+            //pConvertedItem->cbSize = (pData->cbSize) * 8;
+
+	    //ConvertPCM2PCM(pData, pConvertedItem , &srcFormatID, &dstFormatID);
+
+	    //((PWAVEHDR) pItem->pHdr)->lpData = pConvertedItem->pBuf;
+            //((PWAVEHDR) pItem->pHdr)->dwBufferLength = pConvertedItem->cbSize;
+
             // set up and prepare PCM header
             ((PWAVEHDR) pItem->pHdr)->lpData = pData->pBuf;
             ((PWAVEHDR) pItem->pHdr)->dwBufferLength = pData->cbSize;
+
             if ((rc = waveOutPrepareHeader((HWAVEOUT) (psDevice->hDevice),
                 (PWAVEHDR) (pItem->pHdr), sizeof(WAVEHDR)))
                 != MMSYSERR_NOERROR)
@@ -1252,7 +1318,7 @@ audHWDeviceLastError(
 //
 //  Purge an audio device.  Any buffer currently playing is halted and all
 //  pending buffers (including playing ones) are marked as "finished."
-//  
+//
 //  The purpose of this is to clean out a device's buffers so that sounds
 //  may be interrupted or so that the device may be closed when an error
 //  is detected.
@@ -1271,9 +1337,9 @@ audHWDevicePurge(
     HAUDDEVICE hDevice )
 {
     DeclareFName("audHWDevicePurge")
-#ifdef NOTYET
+//#ifdef NOTYET
     HWAVEOUT hWaveOut;
-#endif
+//#endif
     int rc;
     PQUEUE_ITEM pItem, pNext;
     PDEVICE psDevice;
@@ -1290,7 +1356,7 @@ audHWDevicePurge(
         psDevice = &(gsDevices[hDevice]);
 
     //// kill anything currently playing
-#ifdef NOTYET
+//#ifdef NOTYET
     // (this will need to be modified later for multiple device types)
     hWaveOut = (HWAVEOUT) psDevice->hDevice;
     if ( (rc = waveOutReset(hWaveOut)) != MMSYSERR_NOERROR )
@@ -1299,7 +1365,7 @@ audHWDevicePurge(
             fName, rc ));
         return AUDHW_ERROR_DEVICE_RESET_FAILED;
     }
-#endif
+//#endif
     //// mark all pending buffers as "done"
 
     pItem = psDevice->pFirstData;
@@ -1311,11 +1377,11 @@ audHWDevicePurge(
         pItem->pData->fDone = TRUE;
         pItem->pData = NULL; // it's OK, VD is still tracking this
 
-#ifdef NOTYET
+//#ifdef NOTYET
         // loop and list maintenance
         waveOutUnprepareHeader((HWAVEOUT) (psDevice->hDevice),
             (PWAVEHDR) (pItem->pHdr), sizeof(WAVEHDR));
-#endif
+//#endif
         ReleaseQueueItem(pItem);
         pItem = pNext;
         psDevice->pFirstData = pItem;
@@ -1404,7 +1470,7 @@ int OpenPCMOutDevice(
     HWAVEOUT hWaveOut;       // for Windows MM API
     DWORD    dwWinFlags = 0; //           "
 #endif
-    #if defined(WIN32)
+    #if defined(WIN32) || defined(RISCOS)
     BYTE     FormatBuffer[sizeof(WAVEFORMATEX) + 8]; // larger than we need
     PWAVEFORMATEX   psFormat = (PWAVEFORMATEX) FormatBuffer;
     MMRESULT        rc;
@@ -1414,10 +1480,10 @@ int OpenPCMOutDevice(
     #else
     int rc;
     #endif
-    
+
     WORD wFormatTag;
 
-    TRACE(( TC_CAM, TT_API2, "===%s===", fName ));
+    TRACE(( TC_CAM, TT_API1, "===%s===", fName ));
 
     pNewDevice = &(gsDevices[giNextDeviceNum]);
 
@@ -1428,7 +1494,7 @@ int OpenPCMOutDevice(
         return AUDHW_ERROR_INVALID_PARAMETER;
     }
 
-    #if defined(WIN32)
+    #if defined(WIN32) || defined(RISCOS)
     psFormat->wFormatTag      = wFormatTag;
     psFormat->nChannels       = psFormatParam->nChannels;
     psFormat->nSamplesPerSec  = psFormatParam->nSamplesPerSec;
@@ -1492,7 +1558,7 @@ int OpenPCMOutDevice(
 
 #ifdef NOTYET
     // open the audio device
-    #if defined(WIN32)
+    #if defined(WIN32) || defined(RISCOS)
     if ((rc = waveOutOpen(&hWaveOut, WAVE_MAPPER, psFormat, 0, 0, dwWinFlags))
         != MMSYSERR_NOERROR)
     #elif defined(WIN16)
@@ -1674,6 +1740,7 @@ int AllocateQueueItem( PQUEUE_ITEM* ppNewItem )
     // GlobalLock.
 
     // allocate and lock storage for the header
+#if defined(WIN32) || defined(WIN16)
     if ((hGlobalHdr = GlobalAlloc(GMEM_MOVEABLE, AUDHW_DATA_HEADER_SIZE))
         == NULL)
     {
@@ -1689,6 +1756,12 @@ int AllocateQueueItem( PQUEUE_ITEM* ppNewItem )
         rc = AUDHW_ERROR_MEM_LOCK_FAILED;
         goto cleanup;
     }
+#elif defined(DOS) || defined(RISCOS)
+    TRACE(( TC_CAM, TT_API3, "%s: Now claim header", fName));
+    if ( (pHdr = malloc(AUDHW_DATA_HEADER_SIZE)) == NULL )
+#endif
+
+    TRACE(( TC_CAM, TT_API3, "%s: Header claimed - address=%x", fName, pHdr));
 
     // we can just use malloc here
     if ((pNewItem = (PQUEUE_ITEM) malloc(sizeof(QUEUE_ITEM)))
@@ -1699,7 +1772,12 @@ int AllocateQueueItem( PQUEUE_ITEM* ppNewItem )
         goto cleanup;
     }
 
+#if defined(WIN32) || defined(WIN16)
     pNewItem->hGlobalHdr    = hGlobalHdr;
+#elif defined(DOS) || defined(RISCOS)
+    pNewItem->hGlobalHdr    = 0;    // just to be safe
+#endif
+
     pNewItem->pHdr          = pHdr;
     pNewItem->cbHdr         = 0;        // this needs to get set once we know
                                         // whether the data is Midi or PCM
@@ -1708,15 +1786,23 @@ int AllocateQueueItem( PQUEUE_ITEM* ppNewItem )
 
     *ppNewItem = pNewItem;
 
+    TRACE(( TC_CAM, TT_API3, "%s: Queue item claimed - address=%x", fName, pNewItem));
+
     return AUDHW_STATUS_SUCCESS;
 
 cleanup:
+#if defined(WIN32) || defined(WIN16)
     if (hGlobalHdr != NULL)
     {
         if (pHdr != NULL)
             GlobalUnlock(hGlobalHdr);
         GlobalFree(hGlobalHdr);
     }
+#elif defined(DOS) || defined(RISCOS)
+    if ( pHdr != NULL )
+        free( pHdr );
+#endif
+
     if (pNewItem != NULL)
         free(pNewItem);
 
@@ -1752,12 +1838,20 @@ int DeallocateQueueItem( PQUEUE_ITEM pItem )
     ASSERT( pItem != NULL, 0 );
 
     // blow away anything that's still here
+#if defined(WIN32) || defined(WIN16)
     if (pItem->hGlobalHdr != NULL)
     {
         if (pItem->pHdr != NULL)
             GlobalUnlock(pItem->hGlobalHdr);
         GlobalFree(pItem->hGlobalHdr);
     }
+#elif defined(DOS) || defined(RISCOS)
+
+    TRACE(( TC_CAM, TT_API3, "%s:pItem:%x pItem->pNext:%x", fName, pItem, pItem->pNext ));
+
+    if ( pItem->pHdr != NULL )
+        free( pItem->pHdr );
+#endif
 
     free(pItem);
 
@@ -1851,7 +1945,7 @@ int ReleaseQueueItem( PQUEUE_ITEM pItem )
 {
     DeclareFName("ReleaseQueueItem")
 
-    TRACE(( TC_CAM, TT_MEM, "===%s===", fName ));
+    TRACE(( TC_CAM, TT_API3, "===%s===", fName ));
 
     // sanity check
     if (pItem == NULL)
@@ -1864,6 +1958,8 @@ int ReleaseQueueItem( PQUEUE_ITEM pItem )
     pItem->pNext = gpsFreeQueueItemList;
     memset(pItem->pHdr, 0, AUDHW_DATA_HEADER_SIZE);
     gpsFreeQueueItemList = pItem;
+
+    TRACE(( TC_CAM, TT_API3, "%s: pItem:%x pItem->pNext:%x", fName, pItem, pItem->pNext ));
 
     return AUDHW_STATUS_SUCCESS;
 }
@@ -2008,4 +2104,38 @@ void UnloadAcmDriver( void )
 }
 #endif // WIN32
 
+#ifdef RISCOS
+    /* Not the correct place for this, but it will do for now */
+//////////////////////////////////////////////////////////////////////////////
+//
+//  audHW16bit - INTERNAL  RISCOS only
+//
+//  Checks that the hardware supports 16-bit sound
+//  RE 16/02/2001
+//
+//  ENTRY:
+//
+//  EXIT: =0  8-bit only =1 16-bit supported
+//
+//////////////////////////////////////////////////////////////////////////////
 
+int audHW16bit ( void )
+{
+    DeclareFName("AudHW16bit")
+    int rc;
+    _kernel_swi_regs rin, rout;
+    _kernel_oserror *e;
+
+    TRACE(( TC_CAM, TT_API3, "===%s===", fName ));
+
+    rin.r[0] = 0;      // check sound system capability
+    e = _kernel_swi(Sound_Mode, &rin, &rout);
+
+    rc = rout.r[0];    // =0 for 8-bit, =1 for 16-bit
+
+    TRACE(( TC_CAM, TT_API3, "%s: rc=%d", fName, rc ));
+    
+    return rc;
+}
+#endif //RISCOS
+  

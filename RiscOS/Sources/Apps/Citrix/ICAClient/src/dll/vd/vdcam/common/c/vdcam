@@ -1,75 +1,75 @@
 /*****************************************************************************
-* 
+*
 *  vdcam.c
-* 
+*
 *  Client Audio Mapping Virtual Driver
-* 
+*
 *  Copyright Citrix Systems Inc. 1997
-* 
+*
 *  Author:  David Pope  5/19/97
 *
 *  $Log$
-*  
+*
 *     Rev 1.21   05 May 1998 17:21:42   DAVIDS
 *  UK fix of hard-coded audio dll paths for CE
-*  
+*
 *     Rev 1.20   24 Apr 1998 13:08:42   terryt
 *  another out of memory cleanup fix
-*  
+*
 *     Rev 1.19   23 Apr 1998 13:19:50   davidp
 *  fixed data-init problem
-*  
+*
 *     Rev 1.18   16 Apr 1998 15:58:58   ianr
 *  Fix compilation for WINCE
-*  
+*
 *     Rev 1.17   24 Mar 1998 15:37:40   brada
 *  Use debug macro to declare fName
-*  
+*
 *     Rev 1.16   14 Mar 1998 18:07:02   toma
 *  CE Merge
-*  
+*
 *     Rev 1.15   10 Mar 1998 16:40:38   kenb
 *  Change WdCall to be VdCallWd
-*  
+*
 *     Rev 1.14   19 Feb 1998 17:34:44   davidp
 *  fixed memory leak, trace bugs, and DOS warnings
-*  
+*
 *     Rev 1.13   Feb 19 1998 16:47:22   sumitd
 *  Update for DOS and win16
-*  
+*
 *     Rev 1.11   10 Feb 1998 15:14:22   davidp
 *  changes to support client-side bandwidth limit
-*  
+*
 *     Rev 1.10   Oct 31 1997 19:52:16   briang
 *  Remove pIniSection parameter from miGets
-*  
+*
 *     Rev 1.9   28 Oct 1997 16:49:54   davidp
 *  Fixed resource leak in module load routines.  Also minor tracing changes.
-*  
+*
 *     Rev 1.8   22 Oct 1997 15:43:48   davidp
 *  removed vars and initialization for min resource ack thresholds
-*  
+*
 *     Rev 1.7   21 Oct 1997 12:47:28   davidp
 *  Changed some trace flags for better output selection
-*  
+*
 *     Rev 1.6   14 Oct 1997 14:42:14   davidp
 *  code formatting only
-*  
+*
 *     Rev 1.5   09 Oct 1997 16:41:38   davidp
 *  Removed commented code
-*  
+*
 *     Rev 1.4   09 Oct 1997 16:29:16   x86fre
 *  Fix Meminiprocedures
-*  
+*
 *     Rev 1.3   Oct 09 1997 18:00:34   briang
 *  Conversion to MemIni use
-*  
+*
 *     Rev 1.2   29 Sep 1997 13:58:32   davidp
 *  Now retrieves more init info from INI file
-*  
+*
 *     Rev 1.1   26 Sep 1997 18:22:14   davidp
 *  fix syntax error from PVCS put log
-* 
+*
 *****************************************************************************/
 
 //////////////////////////////////////////////////////////////////////////////
@@ -91,6 +91,7 @@
 
 #include "memmgmt.h"
 #include "camserv.h"
+#include "sendpkts.h"
 
 #include "dll.h"
 #include "miapi.h"
@@ -178,6 +179,12 @@ extern PPLIBPROCEDURE pKbdProcedures;
 extern PFNWFENGPOLL   gpfnWFEngPoll;
 extern PFNSTATUSMESSAGEPROC gpfnStatusMsgProc;
 
+// these are in memmgmt.c RE 15/02/2001
+extern PAUDHW_DATA_ITEM    gpsFreeDataItemList;
+extern PCOMMAND            gpsFreeCommandList;
+
+// this is in sendpkts.c  RE 14/02/2001
+extern PDEFERRED gpDeferredReply;
 
 // See inc\wdapi.h and dll\wd\wdica30\wdica.c
 // These are returned when we register our hook
@@ -196,7 +203,7 @@ PLIBPROCEDURE VdCamDriverProcedures[VDDRIVER__COUNT] =
     (PLIBPROCEDURE)DriverPoll,
     (PLIBPROCEDURE)DriverSetInformation,
     (PLIBPROCEDURE)DriverQueryInformation,
-    (PLIBPROCEDURE)DriverGetLastError   
+    (PLIBPROCEDURE)DriverGetLastError
 };
 
 //////////////////////////////////////////////////////////////////////////////
@@ -228,7 +235,6 @@ static int DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     SHORT               cbMaxDataBlockSize;
 
     TRACE(( TC_CAM, TT_API1 | TT_INIT, "===%s===", fName ));
- 
 
     //// Get our channel information
 
@@ -302,8 +308,12 @@ static int DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     gnAudioBandwidthLimit = miGetPrivateProfileInt("SERVER",
                                                    INI_AUDIOBANDWIDTHLIMIT,
                                                    DEF_AUDIOBANDWIDTHLIMIT);
-    
+
     //// preallocate data buffer pool
+
+    // ensure pointers are initialised   RE 15/02/2001
+    gpsFreeDataItemList = NULL;
+    gpsFreeCommandList = NULL;
 
     // how many data buffers?
     gnMaxDataItems = miGetPrivateProfileInt(INI_CAM_VDSECTION,
@@ -332,6 +342,7 @@ static int DriverOpen( PVD pVd, PVDOPEN pVdOpen )
         {
             TRACE(( TC_CAM, TT_ERROR, "%s: error allocating audio data item",
                 fName ));
+
             rc = CLIENT_ERROR_NO_MEMORY;
             goto cleanup_error;
         }
@@ -350,7 +361,7 @@ static int DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     }
 
     ASSERT( gnCurDataItems == gnMaxDataItems, gnCurDataItems );
-    
+
     TRACE(( TC_CAM, TT_INIT, "%s: preallocated %u %u-byte data buffers",
         fName, gnMaxDataItems, gcbDataBlockSize ));
 
@@ -393,6 +404,9 @@ static int DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
     TRACE(( TC_CAM, TT_INIT, "%s: preallocated %u command buffers", fName,
         gnMaxCommands ));
+
+    // ensure defferred queue is reset     RE 15/02/2001
+    gpDeferredReply = NULL;
 
     // load the audio hardware driver specified in the INI files
     //
@@ -459,6 +473,7 @@ static int DriverClose( PVD pVd, PDLLCLOSE pVdClose )
             TRACE(( TC_CAM, TT_ERROR, "%s: unclosed device at exit", fName ));
         audHWDevicePurge((HAUDDEVICE) i);
         audHWDeviceClose((HAUDDEVICE) i);
+        gsDevices[i].iState = Closed;
     }
 
     // poll one more time to clean up outstanding buffers
@@ -469,6 +484,8 @@ static int DriverClose( PVD pVd, PDLLCLOSE pVdClose )
 
     audHWModuleClose();
     ModuleUnload(&gAudioHWDllLink);
+    
+    gfInitialized = FALSE; // we are no longer active GS 11/02/01
 
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -531,7 +548,7 @@ static int DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     pHeader->VersionL = VERSION_CLIENTL_VDCAM;
     pHeader->VersionH = VERSION_CLIENTH_VDCAM;
     strcpy( pHeader->HostModuleName, "ICA" );
-    
+
     //  Initialize virtual driver header
     //
     pVdData->Header.ChannelMask = pVd->ChannelMask;
@@ -588,7 +605,7 @@ static int DriverPoll( PVD pVd, PDLLPOLL pVdPoll )
 //  ENTRY:
 //    PVD pVd   [in]        virtual driver data structure
 //    PVDQUERYINFORMATION   pVdQueryInformation
-//              [in/out]    VDQUERYINFORMATION structure 
+//              [in/out]    VDQUERYINFORMATION structure
 //
 //  EXIT:
 //    CLIENT_STATUS_SUCCESS - no error
@@ -611,7 +628,7 @@ static int DriverQueryInformation( PVD pVd, PVDQUERYINFORMATION pVdQueryInformat
 // ENTRY:
 //    PVD pVd   [in]        virtual driver data structure
 //    PVDSETINFORMATION pVdSetInformation
-//              [in/out]    VDSETINFORMATION structure 
+//              [in/out]    VDSETINFORMATION structure
 //
 // EXIT:
 //    CLIENT_STATUS_SUCCESS - no error
@@ -719,7 +736,7 @@ CamHookChannel( PVD pVd, USHORT Channel)
     rc = VdCallWd(pVd, WD__SETINFORMATION, &wdsi);
     TRACE(( TC_CAM, TT_INIT, "%s: writehook ch=%u p=%lx rc=%u", fName,
         vdwh.Type, vdwh.pVdData, rc ));
- 
+
     if( rc )
     {
          TRACE(( TC_CAM, TT_ERROR, "%s: Could not register to the WD. "
@@ -739,7 +756,7 @@ CamHookChannel( PVD pVd, USHORT Channel)
     // actually get is a pointer to the second byte of that buffer, since the
     // first byte is the channel number and the WD uses that internally.
     gcbDataBlockSize      = vdwh.MaximumWriteSize - 1;
- 
+
     ASSERT( gpWd != NULL, 0 );
     ASSERT( gpfnOutBufReserve != NULL, 0 );
     ASSERT( gpfnOutBufAppend != NULL, 0 );
@@ -786,8 +803,8 @@ LoadHardwareDriver(PDLLLINK pHWDrvLink)
 #endif
 
     TRACE(( TC_CAM, TT_API2, "===%s===", fName ));
-    
-   
+
+
     // Fetch audio HW driver section name
     //
     miGetPrivateProfileString(INI_CAM_VDSECTION,
@@ -834,7 +851,7 @@ LoadHardwareDriver(PDLLLINK pHWDrvLink)
 #endif
 #if defined(WIN16) || defined(WIN32)
         GetModuleFileName(GetModuleHandle("wfcrunxx.exe"),sz_ExePath,100);
-    
+
         psz_Temp=strstr(sz_ExePath,"WFICA32.EXE");
         if (psz_Temp)
         {

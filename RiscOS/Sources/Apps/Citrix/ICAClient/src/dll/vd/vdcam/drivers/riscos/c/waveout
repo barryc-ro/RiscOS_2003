@@ -1,0 +1,215 @@
+#include "windows.h"
+#include <stdlib.h>
+#include <string.h>
+
+#include "kernel.h"
+#include "swis.h"
+
+#include "../inc/hwapi.h"
+#include "citrix/vdcam.h"
+#include "mmsystem.h"
+
+#include "../../inc/trcflags.h"
+
+extern void linear_handler(UCHAR *pData_area, UCHAR *pSound_DMA_buffer, UCHAR *pSound_DMA_bufferend, INT flags, INT sample_rate);
+
+LPWAVEHDR pStartHeader = NULL;         /* pointer to first wavehdr in the list */
+LPWAVEHDR pCurrentHeader = NULL;          /* pointer to next wavehdr in the list */
+LPWAVEHDR pLinearCurrentHeader = NULL; /* pointer to current wavehdr, this is managed by our linear handler */
+UINT gLinearHandler = FALSE;
+UINT gNumberOfHeaders = 0;
+
+UINT pOldLinearHandler = 0;
+UINT gOldLinearParam = -1;
+
+// External functions
+MMRESULT waveOutReset(HWAVEOUT);
+
+
+MMRESULT waveOutPrepareHeader(HWAVEOUT hHandle, LPWAVEHDR pHeader, UINT cSize)
+{
+    int rc = MMSYSERR_NOERROR;
+    _kernel_swi_regs rin, rout;
+    _kernel_oserror *e;
+
+    DeclareFName("waveOutPrepareHeader")
+    TRACE(( TC_CAM, (TT_API1 | TT_INIT), "===%s===", fName ));
+
+    /*pHeader->dwBufferLength = (pHeader->dwBufferLength) - 32 */;
+    pHeader->lpNext = NULL;   /* pointer to next wavehdr */
+    pHeader->reserved = 8; /* number of bytes copied to our sound dma buffer */
+
+    pHeader->dwFlags = pHeader->dwFlags | WHDR_PREPARED;
+
+    TRACE(( TC_CAM, TT_PROTOCOL, "%s: hHandle:%x WaveHdr:%x Size:%x, Flags:%x",
+                    fName, (int) hHandle, (int) pHeader, cSize, (int) pHeader->dwFlags ));
+
+    return rc;
+}
+
+
+MMRESULT waveOutUnprepareHeader(HWAVEOUT hHandle, LPWAVEHDR pHeader, UINT cSize)
+{
+    int rc = MMSYSERR_NOERROR;
+    _kernel_swi_regs rin, rout;
+    _kernel_oserror *e;
+
+    DeclareFName("waveOutUnprepareHeader")
+    TRACE(( TC_CAM, (TT_API1 | TT_INIT), "===%s===", fName ));
+
+    /* Reset flag - dwFlags AND (0xFFFFFFF EOR WHDR_PREPARED  RE 14/02/2001 */
+    pHeader->dwFlags = pHeader->dwFlags & (0xFFFFFFFF ^ WHDR_PREPARED);
+
+    TRACE(( TC_CAM, TT_PROTOCOL, "%s: hHandle:%x WaveHdr:%x Size:%x Bytes copied:%x, Flags:%x",
+                    fName, (int) hHandle, (int) pHeader, cSize, (int) pHeader->reserved, (int) pHeader->dwFlags ));
+
+    return rc;
+}
+
+
+MMRESULT waveOutWrite(HWAVEOUT hHandle, LPWAVEHDR pHeader, UINT cSize)
+{
+    int rc = MMSYSERR_NOERROR;
+    _kernel_swi_regs rin, rout;
+    _kernel_oserror *e;
+
+    DeclareFName("waveOutWrite")
+    TRACE(( TC_CAM, (TT_API1 | TT_INIT), "===%s===", fName ));
+
+    TRACE(( TC_CAM, TT_PROTOCOL, "%s: hHandle:%x pHeader:%x cSize:%x",
+                    fName, (int) hHandle, (int) pHeader, cSize ));
+
+    //TRACE(( TC_CAM, TT_PROTOCOL, "%s: waveform buffer at:%x buffer length:%x dwFlags:%x dwLoops:%x ",
+                    //fName, (int) pHeader->lpData, pHeader->dwBufferLength, pHeader->dwFlags, pHeader->dwLoops ));
+
+    //TRACE(( TC_CAM, TT_PROTOCOL, "%s: linear_handler at:%x flags:%x",
+	//	    fName, (int) linear_handler, (int) pHeader->dwFlags ));
+
+
+    if (pStartHeader == NULL)
+    {
+        TRACE(( TC_CAM, TT_PROTOCOL, "%s: Start new list. pHeader:%x Audio Data Length:%x pLinearCurrentHeader:%x",
+                    fName, (int) pHeader, (int) pHeader->dwBufferLength,  (int) pLinearCurrentHeader));
+        pStartHeader = pHeader;
+        pCurrentHeader = pHeader;
+        gNumberOfHeaders = 1;
+    }
+    else
+    {
+        /* link this header */
+        TRACE(( TC_CAM, TT_PROTOCOL, "%s: Link header.    pHeader:%x Audio Data Length:%x pLinearCurrentHeader:%x pCurrentHeader:%x ",
+                    fName, (int) pHeader, (int) pHeader->dwBufferLength, (int) pLinearCurrentHeader, (int) pCurrentHeader));
+
+        pCurrentHeader->lpNext = pHeader;
+        pCurrentHeader = pHeader;
+        gNumberOfHeaders++;
+    }
+
+    /* if linear handler has nothing to do, point at first header in list */
+    //if (( pLinearCurrentHeader == NULL ) && (gNumberOfHeaders > 2 ))
+
+    if ( pLinearCurrentHeader == NULL )
+    {
+       	pLinearCurrentHeader = pHeader;
+        TRACE(( TC_CAM, TT_PROTOCOL, "%s: Notify handler. pHeader:%x pStartHeader:%x gNumberOfHeaders:%x",
+                    fName, (int) pHeader, (int) pStartHeader, gNumberOfHeaders ));
+
+        //pStartHeader = NULL; /* start a new list */
+    }
+
+    return rc;
+}
+
+
+MMRESULT waveOutClose(HWAVEOUT hHandle)
+{
+    int rc = MMSYSERR_NOERROR;
+    _kernel_swi_regs rin, rout;
+    _kernel_oserror *e;
+
+    DeclareFName("waveOutClose")
+    TRACE(( TC_CAM, (TT_API1 | TT_INIT), "===%s===", fName ));
+
+    /* reset our header list pointers */
+    pStartHeader = NULL;
+    pCurrentHeader = NULL;
+    pLinearCurrentHeader = NULL;
+
+    rin.r[0] = 1;
+    rin.r[1] = pOldLinearHandler;
+    rin.r[2] = gOldLinearParam;
+    e = _kernel_swi(Sound_LinearHandler, &rin, &rout);
+
+    gLinearHandler = FALSE;
+
+    return rc;
+}
+
+
+MMRESULT waveOutOpen(
+    LPHWAVEOUT phwo,
+    UINT uDeviceID,
+    LPWAVEFORMATEX pwfx,
+    DWORD dwCallback,
+    DWORD dwCallbackInstance,
+    DWORD fdwOpen)
+{
+    int rc = MMSYSERR_NOERROR;
+    _kernel_swi_regs rin, rout;
+    _kernel_oserror *e;
+
+    DeclareFName("waveOutOpen")
+    TRACE(( TC_CAM, (TT_API1 | TT_INIT), "===%s===", fName ));
+
+    TRACE(( TC_CAM, TT_PROTOCOL, "%s: phwo:%x uDeviceID:%x pwfx:%x",
+                    fName, (int) phwo, (int) uDeviceID, (int) pwfx ));
+
+    TRACE(( TC_CAM, TT_PROTOCOL, "%s: nChannels:%d BitsPerSample:%d sample rate:%d",
+                   fName, (int) pwfx->nChannels, (int) pwfx->wBitsPerSample, (int) pwfx->nSamplesPerSec));
+
+    /* set up the sample rate stuff here */
+
+    //if ((pwfx->nChannels == 2) && (pwfx->wBitsPerSample == 8) && (pwfx->nSamplesPerSec == 8000))
+    //{
+       /* initialize our pointers etc.. */
+       pStartHeader = NULL;
+       pCurrentHeader = NULL;
+       pLinearCurrentHeader = NULL;
+
+       rin.r[0] = 0x03;
+       rin.r[1] = 4; /* 4=fixed at 7.8Khz, 5=8.9KHz, 7=11.025KHz, 11=15.6KHz 14=22.05 for testing !!!!!*/
+       e = _kernel_swi(Sound_SampleRate, &rin, &rout);
+    //}
+    //else
+    //  rc = MMSYSERR_ERROR;
+
+    if (gLinearHandler == FALSE)
+    {
+        rin.r[0] = 1; /* register 16 bit linear sound handler and point to first header */
+        rin.r[1] = (int) linear_handler;
+        rin.r[2] = (int) &pLinearCurrentHeader;
+        e = _kernel_swi(Sound_LinearHandler, &rin, &rout);
+        
+        pOldLinearHandler = rout.r[1];
+        gOldLinearParam = rout.r[2];
+        
+        gLinearHandler = TRUE;
+
+        TRACE(( TC_CAM, TT_PROTOCOL, "%s: Linear handler registered. pLinearCurrentHeader:%x pOldLinearHandler:%x gOldLinearParam:%x",
+                    fName, (int) pLinearCurrentHeader, (int) pOldLinearHandler, (int) gOldLinearParam ));
+    }
+
+
+    return rc;
+
+}
+
+
+MMRESULT waveOutReset(HWAVEOUT hHandle)
+{
+    int rc = MMSYSERR_NOERROR;
+    DeclareFName("waveOutReset")
+    TRACE(( TC_CAM, (TT_API1 | TT_INIT), "===%s===", fName ));
+
+    return rc;
+}

@@ -59,6 +59,7 @@ resources:
 	${CP} ${SRC}.Messages    ${RESRES}.Messages ${CPFLAGS}
 	${CP} ${SRC}.Res         ${RESRES}.Res      ${CPFLAGS}
 	${CP} ${SRC}.Splash      ${RESRES}.Splash   ${CPFLAGS}
+	${CP} ${SRC}.Keywatch    ${RESRES}.Keywatch ${CPFLAGS
 	${CP} ${SRC}.ini.AppSrv   ${RESRES}.ini.AppSrv   ${CPFLAGS}
 	${CP} ${SRC}.ini.Module   ${RESRES}.ini.Module   ${CPFLAGS}
 	${CP} ${SRC}.ini.WFClient ${RESRES}.ini.WFClient ${CPFLAGS}
@@ -89,7 +90,8 @@ dirs_rom:
 
 # -DINCL_ENUM -DINCL_MODEM -DINCL_SCRIPT -DINCL_PRINTER -DINCL_ASYNC -DINCL_TCPIP -DINCL_REDUCER -DINCL_AUDIO
 
-DFLAGS=		-DRISCOS -DBETA=1 -DVESA=0 -DREMOTE_DEBUG -DCOMPAT_INET4 -DINCL_PRINTER -DINCL_TCPIP
+#DFLAGS=		-DRISCOS -DBETA=1 -DVESA=0 -DDEBUG -DCOMPAT_INET4 -DINCL_PRINTER -DINCL_TCPIP -DINCL_AUDIO -DNOTYET
+DFLAGS=		-DRISCOS -DBETA=1 -DVESA=0 -DCOMPAT_INET4 -DINCL_PRINTER -DINCL_TCPIP -DINCL_AUDIO -DNOTYET
 
 INCLUDES=	-Isrc.sys_inc \
 		-Isrc.sdk \
@@ -224,13 +226,14 @@ install_base:
 	${CP} Resources.app.${COUNTRY}.EnsureTB	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
 	${CP} Resources.app.${COUNTRY}.Messages	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
 	${CP} Resources.app.${COUNTRY}.Splash	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
+	${CP} Resources.app.${COUNTRY}.Keywatch	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
 	${CP} Resources.ini.appsrv			${INSTALLDIR}.${APPNAME}.ini.AppSrv ${CPFLAGS} 
 	${CP} Resources.ini.module			${INSTALLDIR}.${APPNAME}.ini.Module ${CPFLAGS} 
 	${CP} Resources.ini.wfclient			${INSTALLDIR}.${APPNAME}.ini.WFClient ${CPFLAGS} 
 
 install: ${APP} install_base
 	${CP} ${APP}					${INSTALLDIR}.${APPNAME}.!RunImage ${CPFLAGS}
-	restool merge ${INSTALLDIR}.${APPNAME}.Res Resources.app.${COUNTRY}.Res_base Resources.app.${COUNTRY}.Res_nc2
+	restool merge ${INSTALLDIR}.${APPNAME}.Res Resources.app.${COUNTRY}.Res_base Resources.app.${COUNTRY}.Res_deskto
 	@echo Installed ${COMPONENT}
 
 installrm: install_base ${APPRM}
@@ -722,8 +725,16 @@ VDCAMLIBOBJS=	src.dll.vd.vdcam.common.o.camserv \
 		src.dll.vd.vdcam.common.o.sendpkts \
 		src.dll.vd.vdcam.common.o.statemch \
 		src.dll.vd.vdcam.common.o.vdcam \
-		src.dll.vd.vdcam.drivers.riscos.o.audhal
-
+		src.dll.vd.vdcam.audcvt.converters.common.o.cvtmod \
+		src.dll.vd.vdcam.audcvt.audcvt.o.modmgr \
+		src.dll.vd.vdcam.audcvt.audcvt.o.convert \
+		src.dll.vd.vdcam.audcvt.audcvt.o.cvtfuncs \
+		src.dll.vd.vdcam.audcvt.audcvt.o.pcm2pcm \
+		src.dll.vd.vdcam.audcvt.audcvt.o.fmtidcvt \
+		src.dll.vd.vdcam.drivers.riscos.o.audhal \
+		src.dll.vd.vdcam.drivers.riscos.o.waveout \
+		src.dll.vd.vdcam.drivers.riscos.o.linear
+		
 VDCAMLIBOBJSZ=	src.dll.vd.vdcam.common.o.camserv \
 		src.dll.vd.vdcam.common.o.ctxadpcm \
 	 	src.dll.vd.vdcam.common.o.formats \
@@ -732,7 +743,12 @@ VDCAMLIBOBJSZ=	src.dll.vd.vdcam.common.o.camserv \
 		src.dll.vd.vdcam.common.o.sendpkts \
 		src.dll.vd.vdcam.common.o.statemch \
 		src.dll.vd.vdcam.common.o.vdcam \
-		src.dll.vd.vdcam.drivers.riscos.oz.audhal
+		src.dll.vd.vdcam.audcvt.o.convert \
+		src.dll.vd.vdcam.audcvt.o.cvtfuncs \
+		src.dll.vd.vdcam.audcvt.o.pcm2pcm \
+		src.dll.vd.vdcam.drivers.riscos.o.audhal \
+		src.dll.vd.vdcam.drivers.riscos.o.waveout \
+		src.dll.vd.vdcam.drivers.riscos.o.linear
 
 VDLIBOBJS=	${VDCOMMONLIBOBJS} ${VDTW31LIBOBJS} ${VDCPMLIBOBJS} ${VDSPLLIBOBJS} ${VDCAMLIBOBJS}
 VDLIBOBJSZ=	${VDCOMMONLIBOBJSZ} ${VDTW31LIBOBJSZ} ${VDCPMLIBOBJSZ} ${VDSPLLIBOBJSZ} ${VDCAMLIBOBJSZ}
