@@ -80,6 +80,12 @@ o.kill
 all: ${TARGET}
 	@echo ${COMPONENT}: all complete
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_Dir aof
+  BBE_Export_Dir o
+
 #
 # RISC OS ROM build rules:
 #
