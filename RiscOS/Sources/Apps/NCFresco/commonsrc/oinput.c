@@ -1334,7 +1334,12 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    case key_action_NEWLINE:
 	    case key_action_NEWLINE_SUBMIT_ALWAYS:
 	    case key_action_NEWLINE_SUBMIT_LAST:
-		if (ii->base.parent && ii->base.parent->last_text == NULL)
+		/* ii->base.parent->last_text== NULL : SJM this said
+		don't do a possible submit if a TEXTAREA was in the
+		form. I don't understand what that has to do with
+		anything so removed it */
+
+		if (ii->base.parent) 
 		{
 		    rid_input_item *first, *last;
 		    rid_form_element *ife;
@@ -1380,6 +1385,8 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 			}
 		    }
 
+		    LNKDBG(("oinput_key: ife %p action %d ii %p last %p\n", ife, action, ii, last));
+		    
 		    /* if we got to the end and either we were on the last text item or we didn't care then submit */
 		    if (ife == NULL && (action != key_action_NEWLINE_SUBMIT_LAST || ii == last))
 		    {

@@ -16,6 +16,7 @@
 #include "plugin.h"
 #include "pluginfn.h"
 #include "verstring.h"
+#include "makeerror.h"
 
 #ifndef LOCK_FILES
 #define LOCK_FILES 0
@@ -1479,7 +1480,15 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    plugin_stream_dispose_all(pp);
 
 	    if (closed->flags & plugin_closed_ERROR_MSG)
+	    {
+		/* bug 12721: give generic message, rather than specific one */
+#ifdef STBWEB
+		frontend_complain(makeerrorf(ERR_BAD_FILE_TYPE,
+					     get_file_type_name(pp->objd.classid_ftype != -1 ? pp->objd.classid_ftype : pp->objd.data_ftype)));
+#else
 		frontend_complain((os_error *)&closed->errnum);
+#endif
+	    }
 
     	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
 				 FALSE, pp->play_state,

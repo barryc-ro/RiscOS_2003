@@ -2715,6 +2715,10 @@ BOOL fe_writeable_handle_keys(fe_view v, int key)
 
     if (used == be_doc_key_FILLED)
     {
+	/* special mode for offline pages - vanish after filling an item */
+	if (keyboard_state == fe_keyboard_OFFLINE && on_screen_kbd)
+	    fe_keyboard_close();
+	
 	return fevent_HIGHLIGHT_FORWARD;
     }
 
