@@ -12,14 +12,15 @@
 #include "string.h"
 #include "internal.h"
 #include "stdio.h"
+
+#include "Unicode/encoding.h"
+
 #include "HTTPSuport.h"
 
-#define LOCATION1 "Location"
-#define LOCATION2 "URI"
 #define CONTENTTYPE "Content-Type"
 #define AUTHENTICATE "WWW-Authenticate"
 
-static CTLookup __html_find_content_type(char *conttype);
+static CTLookup __html_find_content_type(char *conttype, int *encoding, int size);
 static char __http_escape_byte(char s);
 
 
@@ -27,7 +28,7 @@ static char __http_escape_byte(char s);
 /* int __http_strip_headers(char *stream, size_t stream_len);           */
 /************************************************************************/
 /* __http_strip_headers returns an offset into the buffer as to where   */
-/* to begin parsing or processing in order to skip the HTTP headers.	*/
+/* to begin parsing or processing in order to skip the HTTP headers.    */
 /************************************************************************/
 int __http_strip_headers(char *stream, size_t stream_len)
 {
@@ -56,18 +57,19 @@ int __http_strip_headers(char *stream, size_t stream_len)
 }
 
 /************************************************************************/
-/* unsigned int __html_identify(char *stream, size_t stream_len, ....   */
+/* unsigned int __html_identify(char *base_url, char *stream, ....      */
 /************************************************************************/
 /* __html_identify attempts to assertain a number of things about the   */
-/* incoming page:  	       		   	     	    	  	*/
-/*        * Does it contain a HTTP redirect and whereto.		*/
-/*	  * Does it need authentication?    				*/
-/*	  * Can the HTML parser handle it?				*/
-/*	  * What is the content type of the stream			*/
-/*	    	    		     	    				*/
+/* incoming page:                                                       */
+/*        * Does it contain a HTTP redirect, and where to.              */
+/*        * Does it need authentication?                                */
+/*        * Can the HTML parser handle it?                              */
+/*        * What is the content type of the stream                      */
 /************************************************************************/
-unsigned int __html_identify(char *stream, size_t stream_len, char done, char **url, int *file_type, int *canparse)
+unsigned int __html_identify(char *base_url, char *stream, size_t stream_len, char done,
+                             char **url, int *file_type, int *canparse, int *encoding)
 {
+static char *urlbuffer=NULL;
 int httpstatus;
 int headend=0;
 char *p=stream;
@@ -76,6 +78,8 @@ int toskip=0;
 CTLookup ctab;
 
   *canparse=TYPE_UNKNOWN;
+  if (encoding)
+    *encoding = 0;
 
 /* Look to see if we have all the headers */
   headend=__http_strip_headers(stream, stream_len);
@@ -95,46 +99,107 @@ fake_return:
 
 /* Try and find out the status code */
   p=strnstr(stream," ",stream_len);
-  if (!p) {
+  if (!p)
+  {
     goto fake_return;
   }
   httpstatus=atoi(p);
-  if ((httpstatus > 200) && (httpstatus < 400)) {
-    p=strinstr(stream,LOCATION1,stream_len);
-    if (p) {
-      toskip=strlen(LOCATION1);
-    }
-    else {
-      p=strinstr(stream,LOCATION2,stream_len);
-    }
-    if (p) {
-      if (toskip==0) toskip=strlen(LOCATION2);
-      p+=toskip+2; /* 2 = ": " in this case */
-      ptr=strchr(p,'\n');
-      if (*(ptr-1)=='\r') ptr--;
-      if (url != NULL) {
-        *url=strndup(p,(int)(ptr-p)); /* Dont need to NULL terminate now */
+
+  if ((httpstatus > 200) && (httpstatus < 400))
+  {
+    /* Find either 'Location: ' or 'URI: ' and skip past it */
+
+    toskip = 0;
+    p      = strinstr(stream, "Location: ", stream_len);
+
+    if (p) toskip = strlen("Location: ");
+    else   p      = strinstr(stream, "URI: " ,stream_len);
+
+    if (p)
+    {
+      if (toskip == 0) toskip = strlen("URI: ");
+
+      p += toskip;
+
+      /* Point 'ptr' to the *start* of the line termintor */
+
+      ptr = strchr(p, '\n');
+      if (*(ptr - 1) == '\r') ptr--;
+
+      if (url != NULL)
+      {
+        void * localcontext;
+        char * redirected;
+
+        /* Get a local memory system context */
+
+        localcontext = (void*)__html_memory_init();
+
+        /* Allocate space for the redirection URL */
+
+        if (urlbuffer) free(urlbuffer);
+        urlbuffer = malloc(ptr - p + 1);
+
+        if (urlbuffer)
+        {
+          /* Copy URL in */
+
+          strncpy(urlbuffer, p, ptr - p);
+          urlbuffer[ptr - p] = 0;
+
+          redirected = __html_relativise_url(base_url,urlbuffer); /* Try to relativise it */
+
+          if (redirected)
+          {
+            /* Relativisation worked, so reallocate buffer and copy new URL in */
+
+            free(urlbuffer);
+            urlbuffer = malloc(strlen(redirected) + 1);
+
+            if (urlbuffer)
+            {
+              strcpy(urlbuffer, redirected);
+              *url = urlbuffer;
+
+              /* Free the redirection (strdup'd) URL */
+
+              __html_free(redirected, 1);
+            }
+            else *url = NULL;
+          }
+          else *url = urlbuffer; /* Relativisation failed, but pass original URL
+                                  * back as it might be fully specified anyway
+                                  */
+        }
+        else *url = NULL;
       }
     }
   }
   else if (httpstatus == 401)
   {
-      p=strinstr(stream,AUTHENTICATE,stream_len);
-      if (p)
-      {
-        p+=strlen(AUTHENTICATE)+2;
-        ptr=strchr(p,'\n');
-        if (*(ptr-1)=='\r') ptr--;
-        if (url != NULL)
-            *url=strndup(p,(int)(ptr-p));
+    p=strinstr(stream,"WWW-Authenticate: ",stream_len);
+    if (p)
+    {
+      p+=strlen("WWW-Authenticate: ");
+      ptr=strchr(p,'\n');
+      if (*(ptr-1)=='\r') ptr--;
+      if (url != NULL) {
+        if (urlbuffer) free(urlbuffer);
+        urlbuffer=malloc(ptr-p+1);
+        if (urlbuffer)
+        {
+          strncpy(urlbuffer,p,ptr-p);
+          urlbuffer[ptr-p]=0;
+        }
+        *url=urlbuffer;
       }
+    }
   }
 
-
-  p=strinstr(stream,CONTENTTYPE, stream_len);
+  p=strinstr(stream,"Content-Type: ", stream_len);
   if (p) {
-    p+=strlen(CONTENTTYPE)+2;
-    ctab=__html_find_content_type(p);
+    p+=strlen("Content-Type: ");
+    ctab=__html_find_content_type(p, encoding, stream_len-(p-stream));
     if (file_type != NULL) *file_type=ctab.filetype;
     *canparse=ctab.can_parse;
   }
@@ -142,19 +207,42 @@ fake_return:
   return httpstatus;
 }
 
-static CTLookup __html_find_content_type(char *conttype)
+static CTLookup __html_find_content_type(char *conttype, int *encoding, int size)
 {
   int loop=0;
 
   /* Just look through the list of content type entries until one matches */
   do {
-    if (!strncmp(conttype, CTTable[loop].content, strlen(CTTable[loop].content))) return CTTable[loop];
+    if (strinstr(conttype, CTTable[loop].content, strlen(CTTable[loop].content)))
+    {
+        if (encoding)
+        {
+            char *p;
+            char *cr, *lf, *end;
+            *encoding = 0;
+
+            lf = strinstr(conttype, "\x0d", size);
+            cr = strinstr(conttype, "\x0a", size);
+            if (cr && lf && cr > lf || !cr)
+                end = lf;
+            else
+                end = cr;
+
+            p = strinstr(conttype, "charset=", end - conttype);
+            if (p)
+            {
+                p += 8;
+                while (*p == ' ') p++;
+                *encoding = encoding_number_from_name(p);
+            }
+        }
+        return CTTable[loop];
+    }
   } while (loop++ < CTLookupMax);
 
   /* If we didnt find it, return the catch all case */
   return CTTable[CTLookupMax - 1];
 }
-
 
 
 char *__http_escape_string(char *input)
@@ -172,7 +260,7 @@ char *__http_escape_string(char *input)
   /* Now create the new version */
   while (*input) {
     if (isalnum(*input) || (*input==':') || (*input=='/')
-       			|| (*input=='.') || (*input=='#')) *s2++=*input++;
+                        || (*input=='.') || (*input=='#')) *s2++=*input++;
     else if (*input==' ') {
       *s2++='+';
       input++;
@@ -195,3 +283,4 @@ static char __http_escape_byte(char s)
   if (s < 0x3a) return (char)(s);
   else return (char)(s+0x27);
 }
+

@@ -1,0 +1,913 @@
+/* -*-C-*-
+ *
+ */
+
+#include "stdio.h"        /* For NULL etc */
+#include "stdlib.h"       /* For bsearch */
+#include "limits.h"       /* For INT_MAX */
+#include "html2_ext.h"    /* For the HTML bits */
+#include "tags.h"         /* for PCDATA */
+#include "struct.h"       /* For the structures */
+#include "string.h"       /* For string handling */
+#include "internal.h"     /* predefinitions of functions */
+#include "rules.h"
+#include "unixlib.h"
+#include "elementinf.h"
+#ifdef TonyTables
+#include "HTMLTables.h"
+#endif
+
+static int __html_tag_length(char *s1);
+static void  __attribute_munge_spaces(char *s);
+static int compare_attribute(const void *keyp, const void *membp);
+static unsigned int __html_convcol(const char *s);
+
+/*
+ * This routine parses the attributes found in a start tag, and fills in
+ * st->curattrs with the found values. Filling in of default values is not done
+ * here.
+ */
+void __html_process_attributes(StreamTokens *st, Tag *tag, char *html, char *url)
+{
+    const Attribute *attrs = tag->attributes;
+    Attribute       *found_attr;
+    AttrInfo        *curattr;
+
+    char      *info  = strndup(html, __html_tag_length(html));
+    char      *start_ptr = info;
+    char      *p = info, *ptr, *pointer = 0, c;
+    int        has_quotes, has_equals, in_second_part, had_space;
+
+    int        max_attrs = tag->max_attributes;
+
+    /* Reset the attribute table */
+    __html_reset_curattrlist(st);
+
+    /* Make parsing a little easier */
+    __attribute_munge_spaces(start_ptr);
+
+    /* Skip the main part of the tag (e.g. '<a' for anchors) */
+    while (
+          (*info != ' ')  &&
+          (*info != '\0') &&
+          (*info != '>')
+          )
+        info++;
+
+    /* Skip the next set of spaces */
+    while (*info == ' ') info++;
+
+    /* We have hit the end of the tag? */
+    if ((*info == '\0') || (*info== '>'))
+    {
+        __html_free(start_ptr,0);
+        return;
+    }
+
+    /* Grab just the bit inside the tag: convert \n, \t and \r to ' ' */
+
+    p = info;
+
+    while ((*p != '>') && (*p != '<') && (*p != '\0'))
+    {
+      p++;
+    }
+
+    /* Snip off the '>' at the end now, then move back to the begining */
+
+    *p = '\0';
+    p  = info;
+
+    /* We are just working inside the tag now: */
+
+    while (*info != '\0')
+    {
+        /* Note that we havent seen a quote mark yet! */
+
+        has_quotes     = 0;
+        has_equals     = 0;
+        in_second_part = 0;
+        had_space      = 0;
+
+        /* isolate the next bit of the tag */
+
+        while (*p != '\0')
+        {
+          if (*p=='"' || *p=='\'')
+          {
+            if (has_quotes)
+            {
+              if ((*p == '"' && has_quotes == 1) || (*p == '\'' && has_quotes == 2))
+              {
+                p++;
+                break;
+              }
+            }
+            else has_quotes = ((*p == '"') ? 1 : 2);
+          }
+          else if (*p=='=') has_equals = 1;
+          else if (isspace(*p))
+          {
+            if (in_second_part && !has_quotes) break;
+
+            had_space = 1;
+          }
+          else
+          {
+            if (has_equals) in_second_part = 1;
+
+            else if (had_space)
+            {
+              /* Hit the next element after an atomic one - back up */
+
+              p--;
+              break;
+            }
+          }
+          p++;
+        }
+
+        c  = *p;
+        *p = '\0';
+
+    /*
+     * Look to see what we have. First off scan through to see if we have
+     * an '=' sign. If we do, store for later use!
+     */
+        ptr=info;
+        while (*ptr != '\0') {
+          if (*ptr=='=') {
+            *ptr='\0';
+            ptr++;
+            while (*ptr == ' ') ptr++;
+            break;
+          }
+          if (*ptr==' ') {
+            *ptr='\0'; ptr++;
+            while (*ptr==' ') ptr++;
+            if (*ptr=='=') {
+              ptr++;
+              while (*ptr==' ') ptr++;
+            }
+            break;
+          }
+          ptr++;
+        }
+
+    /*
+     * Next look to see if we can find the suposed anchor element
+     * in the list provided
+     */
+        UPPER_CASE(info);
+
+    //    Printf ("anchor element '%s', data '%s'\n", info, ptr, info, max_anc, anc);
+
+        found_attr = bsearch(info, attrs, max_attrs, sizeof attrs[0], compare_attribute);
+
+        if (!found_attr && tag->has_coreattrs)
+            found_attr = bsearch(info, Core_Attributes, MAX_CORE_ATTRIBUTES, sizeof Core_Attributes[0], compare_attribute);
+
+        if (!found_attr && tag->has_i18n)
+            found_attr = bsearch(info, I18n_Attributes, MAX_I18N_ATTRIBUTES, sizeof I18n_Attributes[0], compare_attribute);
+
+        if (!found_attr && tag->has_events)
+            found_attr = bsearch(info, Event_Attributes, MAX_EVENT_ATTRIBUTES, sizeof Event_Attributes[0], compare_attribute);
+
+        /*
+         * If we have not found anything that is allowed, skip it
+         */
+        if (!found_attr) {
+            if (c=='\0') break;
+            *p=c; p++;
+            info=p;
+            continue;
+        }
+
+        /*
+         * If the value inside ptr is enclosed in quotes, we need to
+         * strip them off!
+         */
+        if (*ptr=='"')
+        {
+            ptr++;
+            pointer=strpbrk(ptr,"\"");
+        }
+        else if (*ptr=='\'')
+        {
+            ptr++;
+            pointer=strpbrk(ptr,"\'");
+        }
+        if (pointer != NULL) *pointer='\0';
+
+        /* We are going to slot this attribute value into our array.
+         * Remove any prior value first...
+         */
+        curattr = &st->curattrs[found_attr->tag];
+        if (curattr->pleasefree)
+        {
+            __html_free(curattr->data.raw, 0);
+            curattr->pleasefree=0;
+        }
+        curattr->present = 1;
+
+        switch (found_attr->rule)
+        {
+            /* A piece of text (character entities allowed). */
+            case CDATA:
+                __html_unescape_string(ptr);
+                curattr->data.text = strdup(ptr);
+                curattr->pleasefree = 1;
+                break;
+
+            /* A SGML name */
+            case NAME_RULE:
+                curattr->data.text = strdup(ptr);
+                curattr->pleasefree = 1;
+                break;
+
+            /* Either there or not */
+            case EMPTY:
+                break;
+
+            case LENGTH_RULE:
+                __html_unescape_string(ptr);
+                curattr->miscflag = strchr(ptr, '%') ? 1 : 0;
+                /* Fall through */
+
+            /* Goody! An integer! */
+            case NUMBER:
+                curattr->data.number = atoi(ptr);
+                break;
+
+            /* Erk - a choice... */
+            case SET:
+            {
+                const char *s = found_attr->set;
+                const char *p;
+                int n;
+                LOWER_CASE(ptr);
+
+                for (n = 1; *s;)
+                {
+                    p = ptr;
+                    while (*s && *s != '|' && *s != ',')
+                    {
+                        if (*s++ != *p++)
+                            goto next;
+                    }
+                    if (*p == '\0')
+                    {
+                        curattr->data.number = n;
+                        break;
+                    }
+
+                  next:
+                    while (*s && *s != '|' && *s != ',')
+                        s++;
+
+                    if (*s == '|')
+                        s++, n++;
+                    else if (*s == ',')
+                        s++;
+
+                }
+                break;
+            }
+
+            /* A coordinate list (a list of integers) */
+            case COORDS_RULE:
+            {
+                const char *p, *next, *percent;
+                int n;
+
+                /*
+                 * Count the seperators. Start the count at two because
+                 * the first two items are used for the type of item and
+                 * number of coordinates.
+                 */
+                for (n = 2, p = ptr; *p; p = next, n++)
+                {
+                    next = p + strcspn(p, "0123456789%");
+                    if (!strchr("0123456789%", *next)) break;
+                    next += strspn(next, "0123456789%");
+                }
+
+                curattr->data.coords = (int *) __html_malloc(sizeof(int), n);
+                if (!curattr->data.coords)
+                    break;
+
+                /*
+                 * Item 0 left free to put shape in later;
+                 * item 2 = number of coords, items 2 + = coords
+                 */
+                curattr->data.coords[1] = n - 2;
+
+                for (n = 2, p = ptr; *p; p = next, n++)
+                {
+                    next = p + strcspn(p, "0123456789%");
+                    if (!strchr("0123456789%", *next)) break;
+
+                    curattr->data.coords[n] = atoi(next);
+                    if (curattr->data.coords[n] < 0) curattr->data.coords[n] = 0;
+
+                    percent = strchr(next, '%');
+                    next   += strspn(next, "0123456789%");
+
+                    if (percent && percent < next)
+                        curattr->data.coords[n] = -curattr->data.coords[n];
+                }
+
+                break;
+            }
+
+            /* A colour (duh!) */
+            case COLOUR_RULE:
+                __html_unescape_string(ptr);
+                curattr->data.number = __html_convcol(ptr);
+                break;
+
+            /* The style of an OL */
+            case OLSTYLE_RULE:
+                __html_unescape_string(ptr);
+                if (tag->tag_no == TAG_OL)
+                {
+                    if (strchr("1aAiI", ptr[0]))
+                        curattr->data.number = ptr[0];
+                }
+                else
+                {
+                    if (strchr("1aAiIdcsDCS", ptr[0]))
+                    {
+                        curattr->data.number = ptr[0];
+                        if (curattr->data.number == 'D' ||
+                            curattr->data.number == 'C' ||
+                            curattr->data.number == 'S')
+                            curattr->data.number += 32;
+                    }
+                }
+                break;
+
+            /* A URL - lets relativise */
+            case URL_RULE:
+            {
+                char *p;
+
+                /*
+                 * HREF tags *should* be able to have entities in them, so we should
+                 * unescape the string. However, many sites put CGI-style form info
+                 * in anchors, which we do not want to unescape.
+                 */
+
+                /*  __html_unescape_string(ptr);*/
+
+                curattr->data.text  = __html_relativise_url(url, ptr);
+
+                /*
+                 * Strip trailing spaces (important for named anchors)
+                 */
+
+                if (curattr->data.text)
+                {
+                  p = curattr->data.text + strlen(curattr->data.text) - 1;
+                  while (*p == ' ') p--;
+                  *(++p) = '\0';
+                }
+
+                curattr->pleasefree = 1;
+            }
+            break;
+
+        }
+        if (pointer != NULL) *pointer='"';
+    /* Skip this bit (or if it was the last one exit */
+        if (c=='\0') break;
+          *p=c; /*p++;*/
+
+    /* Skip over spaces */
+        while (*p == ' ')
+            p++;
+
+        info=p;
+    }
+
+    __html_free(start_ptr,0);
+}
+
+static int compare_attribute(const void *keyp, const void *membp)
+{
+    const char       *key = (const char *)      keyp;
+    const Attribute *memb = (const Attribute *) membp;
+
+    return strcmp(key, memb->name);
+}
+
+
+/*
+ * This routine parses the attributes found in an EMBED tag, and attaches
+ * them as a list of PARAMs to obj.
+ */
+void __html_process_embed_attributes(StreamTokens *st, Tag *tag, char *html, HStream *obj)
+{
+    const Attribute *attrs = tag->attributes;
+    Attribute       *found_attr;
+
+    char      *info  = strndup(html, __html_tag_length(html));
+    char      *start_ptr = info;
+    char      *p = info, *ptr, *pointer = 0, c;
+    int        has_quotes, has_equals, in_second_part, had_space;
+    HStream   *param, *h = NULL, **hprev = &obj->info->object.hstream;
+    char      *name;
+
+    int        max_attrs = tag->max_attributes;
+
+    /* Make parsing a little easier */
+    __attribute_munge_spaces(start_ptr);
+
+    /* Skip the main part of the tag (e.g. '<a' for anchors) */
+    while (
+          (*info != ' ')  &&
+          (*info != '\0') &&
+          (*info != '>')
+          )
+        info++;
+
+    /* Skip the next set of spaces */
+    while (*info == ' ') info++;
+
+    /* We have hit the end of the tag? */
+    if ((*info == '\0') || (*info== '>'))
+    {
+        __html_free(start_ptr,0);
+        return;
+    }
+
+    /* Grab just the bit inside the tag: convert \n, \t and \r to ' ' */
+
+    p = info;
+
+    while ((*p != '>') && (*p != '<') && (*p != '\0'))
+    {
+      p++;
+    }
+
+    /* Snip off the '>' at the end now, then move back to the begining */
+
+    *p = '\0';
+    p  = info;
+
+    /* We are just working inside the tag now: */
+
+    while (*info != '\0')
+    {
+        /* Note that we havent seen a quote mark yet! */
+
+        has_quotes     = 0;
+        has_equals     = 0;
+        in_second_part = 0;
+        had_space      = 0;
+
+        /* isolate the next bit of the tag */
+
+        while (*p != '\0')
+        {
+          if (*p=='"' || *p=='\'')
+          {
+            if (has_quotes)
+            {
+              if ((*p == '"' && has_quotes == 1) || (*p == '\'' && has_quotes == 2))
+              {
+                p++;
+                break;
+              }
+            }
+            else has_quotes = ((*p == '"') ? 1 : 2);
+          }
+          else if (*p=='=') has_equals = 1;
+          else if (isspace(*p))
+          {
+            if (in_second_part && !has_quotes) break;
+
+            had_space = 1;
+          }
+          else
+          {
+            if (has_equals) in_second_part = 1;
+
+            else if (had_space)
+            {
+              /* Hit the next element after an atomic one - back up */
+
+              p--;
+              break;
+            }
+          }
+          p++;
+        }
+
+        c  = *p;
+        *p = '\0';
+
+    /*
+     * Look to see what we have. First off scan through to see if we have
+     * an '=' sign. If we do, store for later use!
+     */
+        ptr=info;
+        while (*ptr != '\0') {
+          if (*ptr=='=') {
+            *ptr='\0';
+            ptr++;
+            while (*ptr == ' ') ptr++;
+            break;
+          }
+          if (*ptr==' ') {
+            *ptr='\0'; ptr++;
+            while (*ptr==' ') ptr++;
+            if (*ptr=='=') {
+              ptr++;
+              while (*ptr==' ') ptr++;
+            }
+            break;
+          }
+          ptr++;
+        }
+        name = strdup(info);
+        if (!name) break;
+    /*
+     * Next look to see if we can find the suposed anchor element
+     * in the list provided
+     */
+        UPPER_CASE(info);
+
+    //    Printf ("anchor element '%s', data '%s'\n", info, ptr, info, max_anc, anc);
+
+        found_attr = bsearch(info, attrs, max_attrs, sizeof attrs[0], compare_attribute);
+
+        /*
+         * If _have_ found something that is allowed, skip it! We only want
+         * unknown attributes here...
+         */
+        if (found_attr) {
+            __html_free(name, 0);
+            if (c=='\0') break;
+            *p=c; p++;
+            info=p;
+            continue;
+        }
+
+        /*
+         * If the value inside ptr is enclosed in quotes, we need to
+         * strip them off!
+         */
+        if (*ptr=='"')
+        {
+            ptr++;
+            pointer=strpbrk(ptr,"\"");
+        }
+        else if (*ptr=='\'')
+        {
+            ptr++;
+            pointer=strpbrk(ptr,"\'");
+        }
+        if (pointer != NULL) *pointer='\0';
+
+        /*
+         * Allocate a PARAM.
+         */
+        param = __html_construct_param(st, name, NULL, has_equals ? strdup(ptr) : NULL, paramtype_DATA);
+        if (param)
+        {
+            *hprev = param;
+            param->prev = h;
+            hprev = &param->next;
+            h = param;
+        }
+
+        if (pointer != NULL) *pointer='"';
+
+    /* Skip this bit (or if it was the last one exit */
+        if (c=='\0') break;
+          *p=c; /*p++;*/
+
+    /* Skip over spaces */
+        while (*p == ' ')
+            p++;
+
+        info=p;
+    }
+
+    __html_free(start_ptr,0);
+}
+
+typedef struct colour_name { char *name; unsigned int colour; } colour_name;
+
+#include "colourlist.h"
+
+static int compare_colname(const void *keyp, const void *membp)
+{
+    const char        * key  = (const char        *) keyp;
+    const colour_name * memb = (const colour_name *) membp;
+    const char *a = key;
+    const char *b = memb->name;
+
+    for (;;)
+    {   char c1 = *a++, c2 = *b++;
+        int d = toupper(c1) - toupper(c2);
+        if (isspace(c1))
+        {
+            b--;
+            continue;
+        }
+        if (isspace(c2))
+        {
+            a--;
+            continue;
+        }
+        if (d != 0) return d;
+        if (c1 == 0) return 0;     /* no need to check c2 */
+    }
+}
+
+static unsigned int __html_convcol(const char *s)
+{
+    char r, g, b;
+    unsigned int c = 0;
+
+    while (*s==' ' || *s=='"' || *s=='\'')
+        s++;
+
+    if (*s == '#')
+    {
+        s++;
+
+  retry_colour:
+
+        while (*s)
+        {
+            c=c*16+__html_unnumeric_escape(toupper(*s));
+            s++;
+        }
+
+        r=c>>16;
+        g=c>>8;
+        b=c;
+
+        return (b<<24) | (g<<16) | (r<<8);
+    }
+    else
+    {
+        const colour_name *entry;
+
+        if ((entry = bsearch(s, colour_list, SizeOfArray(colour_list), sizeof colour_list[0], compare_colname)) != NULL)
+            return entry->colour;
+        else
+        {
+            if (isxdigit(s[0]) && isxdigit(s[1]) && isxdigit(s[2]))
+                goto retry_colour; /* May be a colour missing initial '#' */
+        }
+
+        return rand() << 8;        /* Whyever not? */
+    }
+}
+
+/*************************************************************************/
+/* static void __anchor_munge_spaces(char *s)                            */
+/*************************************************************************/
+/* Given a string convert all control chars into spaces (e.g. newlines   */
+/* tabs and linefeeds). This makes parsing the string easier :)		 */
+/*************************************************************************/
+static void  __attribute_munge_spaces(char *s)
+{
+  while (*s != '\0') {
+    if ((*s < 32) && (*s > 0)) *s=32;
+    s++;
+  }
+}
+
+static int __html_tag_length (char *s1)
+{
+  char *p=s1 + 1;
+
+  while ((*p != '>') && (*p != '<') && (*p != '\0')) {
+        p++; /* skip to the end of the tag name */
+	}
+
+  if (*p=='>') p++;
+
+  return (int)(p-s1);
+}
+
+void __html_reset_curattrlist(StreamTokens *st)
+{
+    int i;
+
+    for (i=0; i<MAX_ATTRS; i++)
+        if (st->curattrs[i].pleasefree)
+            __html_free(st->curattrs[i].data.raw, 0);
+
+    memset(st->curattrs, 0, sizeof st->curattrs);
+}
+
+/********************************************************************/
+/* static char *__html_relativise_url(char *base, char *link)       */
+/********************************************************************/
+/* Given a base URL and another URL (e.g. a link or an image), this */
+/* routine constructs the resultant URL from the pair               */
+/********************************************************************/
+
+char * __html_relativise_url(const char * base, const char * link)
+{
+  char        * ret = NULL;
+
+//  char        * copy;
+//  char        * buffer;
+//  char        * uri;
+//  extern char * __html_tidy_url(char * url);
+
+  if (link == NULL) return NULL;
+
+  if (base == NULL) // || (strstr(base,"ADFS:") != NULL)
+  {
+    ret = strdup(link);
+    return ret;
+  }
+
+  /* Strip preceeding spaces */
+
+  while (*link == ' ') link++;
+
+  /* Cope with empty link URLs */
+
+  if (link[0] == '\0') return strdup(base);
+
+  /* Otherwise, just go for it... */
+
+  return __html_url_canonicalise_url(0, base, link);
+
+// OLD CODE: Want to have used the above call for quite a
+// while longer before the below gets cut out for good in
+// case we find a good reason to use the below instead
+// of the URL module's routines.
+//
+//  /* Check for an in-document link */
+//
+//  if (link[0] == '#')
+//  {
+//    ret = __html_malloc(strlen(link) + strlen(base) + 1, 1);
+//    if (ret) sprintf(ret,"%s%s",base,link);
+//
+//    return ret;
+//  }
+//
+//  /* Should have a Fetcher_Relativise call                               */
+//  /*                                                                     */
+//  /* Simple test for a fully qualified URL. Look for '://' in the string */
+//  /* Also catch "mailto:" and "x500:" URLs at this point. We expect the  */
+//  /* method to be at the start of the string. (This is to allow for      */
+//  /* funny proxies :)                                                    */
+//  /*                                                                     */
+//  /* The test on ret - link <= 9 ensures URLs that are indeed relative,  */
+//  /* but contain URLs themselves (e.g. as part of some CGI info in the   */
+//  /* link) aren't treated as absolute (see below for more of this kind   */
+//  /* of consideration). We want the :// to be within about the first 9   */
+//  /* characters, more or less...                                         */
+//
+//  ret = strstr(link, "://");
+//
+//  if (
+//       (ret && ret - link <= 9)     ||
+//       !strincmp(link,"MAILTO:",7)  ||
+//       !strincmp(link,"NEWS:",  5)  ||
+//       !strincmp(link,"X500:",  5)  ||
+//       !strincmp(link,"FILE:/", 6)
+//     )
+//  {
+//    ret = strdup(link);
+//    return ret;
+//  }
+//
+//  /* Now look for broken URLs of the form 'method:/path/to/file' or           */
+//  /* 'method:relative/path'. These are a tad more difficult to deal with      */
+//  /* so a separate routine is needed to do this :) This relies on mailto and  */
+//  /* x500 being caught above.                                                 */
+//  /*                                                                          */
+//  /* Also the test for being more than 7 chars in is needed for places like   */
+//  /* www.pathfinder.com who have URLs of the form:                            */
+//  /*                                                                          */
+//  /* /adgw/nph-adgw.cgi?url=http:%2f%2fchess.ibm.park.org&advertiser=...      */
+//  /* IBM%20OS2&description=IBM%20Chess%20Button&source=%2fpathfinder%2f...    */
+//  /* welcome.html                                                             */
+//  /*                                                                          */
+//  /* which contain the sequence "http:" (Technically the ':' should be        */
+//  /* encoded too I believe!). Anyway since mailto is the longest method, 7    */
+//  /* should be okay, I hope!. Alternatively if this is found to be unreliable */
+//  /* change the buffer=strchr() bit and the *link=='/' bits around.           */
+//
+//  buffer = strchr(link, ':');
+//
+//  if (buffer && (buffer - link < 7))
+//  {
+//    buffer++;
+//
+//    uri = strdup(buffer); /* Buffer should now contain URI. Just need new base */
+//    if (!uri) return NULL;
+//
+//    /* Now get the method bit - ughh! */
+//
+//    buffer = strdup(link);
+//
+//    if (!buffer) return buffer;
+//
+//    ret  = strchr(buffer,':'); /* Can't fail because of above */
+//    *ret = '\0';
+//
+//    /* Now need to construct new base bit. */
+//    copy=__html_malloc(strlen(base)+strlen(buffer)+1,1);
+//    if (!copy) return copy;
+//    /* We have up to the : so skip that in base */
+//    base=strchr(base,':');
+//    if (base==NULL) return NULL;
+//    sprintf(copy,"%s%s",buffer,base);
+//    base=copy;
+//    link=uri;
+//  }
+//
+//  /* The 1st case. The link starts with a '/' so it is an absolute URL
+//   * around the same host/method base.
+//   */
+//  if (*link=='/') {
+//    link++;
+//    ret=__html_malloc(strlen(base)+strlen(link)+1,sizeof(char));
+//    if (ret==NULL) return NULL;
+//
+//    strcpy(ret,base);
+//    copy=ret;
+//    copy=strstr(copy,"://");
+//    if (copy==NULL) {
+//      __html_free(ret, 0);
+//      return NULL;
+//    }
+//    copy++; copy++; copy++;
+//    copy=strchr(copy,'/');
+//    if (copy==NULL) {
+//      __html_free(ret, 0);
+//      return NULL;
+//    }
+//    copy++; *copy='\0';
+//    strcat(ret,link);
+//    return ret;
+//  }
+//
+//  /* The 2nd case. The link starts with a './' so it is an relative URL
+//   * around this page
+//   */
+//  if ((*link=='.') && (*(link+1)=='/')) {
+//    link++; link++;
+//
+//default_return:
+//
+//    /*
+//     * Basically we need to look back through base to find the last '/'
+//     * and append link at that point. So we need a string the length
+//     * of base and link, and then blat the two strings into it.
+//     *
+//     * So grab a copy of base, and strip it back to the required point
+//     */
+//    ret=copy=strdup(base);
+//
+//    if (ret==NULL) return ret;
+//
+//    /* If 'link' is a null string, return the base URL - so for example, */
+//    /* http://www.site.com/name.html wouldn't get turned into            */
+//    /* http://www.site.com/                                              */
+//    /* No, don't do this... We want HREF="./" to work */
+//    /*if (!*link) return ret;*/
+//
+//    ret=strrchr(copy,'/');
+//
+//    if (ret==NULL) {
+//      __html_free(copy, 0);
+//      return NULL;
+//    }
+//    ret++;
+//    *ret='\0';
+//
+//    /* Create a big enough string */
+//    ret=__html_malloc(strlen(copy)+strlen(link)+1,sizeof(char));
+//    if (ret==NULL) return ret;
+//    /* Add the two strings into the return buffer */
+//    sprintf(ret,"%s%s",copy,link);
+//    return __html_tidy_url(ret);
+//  }
+//
+//  /* 3rd case. The link has a ':' in it. Assume its a link such as a
+//   * mailto request. (i.e. host independant URL)
+//   */
+//
+//  if (strchr(link, ':') != NULL) {
+//    ret=strdup(link);
+//    return ret;
+//  }
+//
+//  /* Otherwise this is sort of the same as case 2 sans the './' */
+//  goto default_return;
+}

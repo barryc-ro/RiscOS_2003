@@ -1,32 +1,12 @@
-/* -*-C-*-
- *
- * $Version: networking $
- *
- * $Source$
- *
- * $Log$
- * Revision 1.1.2.3  1997/04/28 14:20:19  kbracey
- * Added in Tony Cheal's table code. Various other bug fixes.
- *
- * Revision 1.1.2.2  1997/04/09 16:44:37  kbracey
- * Spacing rules drastically improved. Major error in memory context handling
- * fixed. Bug in __html_strip_lf fixed.
- *
- * Revision 1.1.2.1  1997/04/08 10:26:46  kbracey
- * Initial revision
- *
- * Revision 1.1  95/10/31  13:12:14  pwain
- * Initial revision
- *
- */
-
 #include <assert.h>
 #include <stdio.h>     /* For NULL etc */
+#include <ctype.h>
 #include "html2_ext.h" /* For the HTML bits */
 #include "tags.h"      /* for PCDATA */
 #include "struct.h"    /* For the structures */
 #include "string.h"    /* For string handling */
 #include "internal.h"  /* predefinitions of functions */
+#include "elementinf.h"
 #ifdef TonyTables
 #include "HTMLTables.h"
 #endif
@@ -39,49 +19,55 @@
 /* Predefinition of static functions contained in this file, along  */
 /* along with the main parse function predifinition.   	     	    */
 /********************************************************************/
-static unsigned int __html_stream_style(StreamTokens *st);
-static unsigned int __html_stream_type(StreamTokens *st,
-                              unsigned int style, int start);
-static unsigned int __html_stream_indent(StreamTokens *st);
-static    HStream * __html_stream_start_tag(StreamTokens *st, Tag next_tag,
+static    HStream * __html_stream_start_tag(StreamTokens *st, Tag *next_tag,
                               char **html,char *url, int size);
-static    HStream * __html_stream_end_tag(StreamTokens *st, Tag next_tag,
+static    HStream * __html_stream_end_tag(StreamTokens *st, Tag *next_tag,
                               char **html, char *url, int size);
+static    HStream * __html_stream_end_form(StreamTokens *st, char **html);
 static    HStream * __html_stream_image(StreamTokens *st, char **html,
-                              Tag next_tag, char *url);
+                              Tag *next_tag);
+static    HStream * __html_stream_q(StreamTokens *st, char **html,
+                              int start);
+static    HStream * __html_map_handler(StreamTokens *st);
+static    HStream * __html_stream_area(StreamTokens *st, char **html,
+                              Tag *next_tag);
 static    HStream * __html_stream_hr(StreamTokens *st, char **html,
-                              Tag next_tag, char *url);
+                              Tag *next_tag);
 static    HStream * __html_stream_anchor(StreamTokens *st, char **html,
-                              Tag next_tag, char *url);
+                              Tag *next_tag);
 static    HStream * __html_stream_frame(StreamTokens *st, char **html,
-                              Tag next_tag, char *url, int size);
-static    HStream * __html_stream_base(StreamTokens *st, char **html,
-                              Tag next_tag, char *url);
+                              Tag *next_tag);
+static    HStream * __html_stream_frameset(StreamTokens *st, char **html,
+                              Tag *next_tag);
+static    HStream * __html_stream_base(StreamTokens *st);
 static        void  __html_stream_end_anchor(StreamTokens *st);
+#if 0
 static    HStream * __html_stream_end_header(char **html);
-static    HStream * __html_form_handler(StreamTokens *st, Tag next_tag,
-                              char **html, char *url, int size);
-/*static*/HStream * __html_stream_return_tag(StreamTokens *st, Tag tag,
-                              char **html, int start, char *url);
-static 	     char * __html_stream_grab_pcdata(char **input, int size,
-                              int contig);
+#endif
+static    HStream * __html_form_handler(StreamTokens *st, Tag *next_tag,
+                              char **html, int size);
+/*static*/HStream * __html_stream_return_tag(StreamTokens *st, Tag *tag,
+                              char **html, int start);
+static 	     char * __html_stream_grab_pcdata(char **input,
+                              int contig, int after_tag);
 /*static*/   char * __html_make_anchor(char *base, char *link);
 /*static*/         void __html_stream_free_anchor(AnchorInfo **anchor);
-static         void strdoublecpy(char *buffer, char *s1, char *s2);
 static    HStream * __html_form_parse_select(StreamTokens *, char **html,
                               int size, HStream *ret);
+static    HStream * __html_stream_declaration(StreamTokens *st, char **html,
+                                              int size);
+//static    HStream * __html_stream_comment(StreamTokens *st, char **html,
+//                                          int size);
+static    HStream * __html_stream_script(StreamTokens *st, char **html,
+                                             int size, const char *term, tag_no tagno);
+static void parse_rowcols (char *ptr, unsigned int *values, unsigned int *number);
+static char *__html_skip_record_end(const char *s, int strip_leading);
 
 /********************************************************************/
 /* A global variable declared in this file. A byte is an unsigned   */
 /* char.    	     	      	      	      	      	 	    */
 /********************************************************************/
 byte __html_done_for_now=0;
-
-/********************************************************************/
-/* A few preprocessor definitions to make life easier.              */
-/********************************************************************/
-#define START 1
-#define END   0
 
 /********************************************************************/
 /* A small macro. Set a parser internal flag for some exit states.  */
@@ -106,7 +92,7 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
                               int size, HStream *prevhs)
 {
   HStream *return_val=NULL;
-  Tag     next_tag;
+  Tag     *next_tag;
   char    *ptr;
   char 	  *tag_start;
   char 	  *start;
@@ -115,8 +101,29 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
 /* Reset the bail out pointer */
   __html_done_for_now=0;
 
+  if (st->special_return)
+  {
+      return_val = st->special_return;
+      st->special_return = NULL;
+      return return_val;
+  }
+
 /* Look to make sure we have a valid input pointer. Order is important here */
   if (!html || !*html || !**html) RETURN(NULL);
+
+  switch (st->state)
+  {
+    case Declaration:
+      return __html_stream_declaration(st, html, size);
+//    case Comment:
+//      return __html_stream_comment(st, html, size);
+      /* Don't handle SCRIPT or STYLE at the moment, but lets parse over it */
+    case Script:
+      return __html_stream_script(st, html, size, "</SCRIPT>", TAG_SCRIPT);
+    case Style:
+      return __html_stream_script(st, html, size, "</STYLE>", TAG_STYLE);
+    /* Fall through if other */
+  }
 
 /* In some cases a '>' is left at the beginning of the input stream. Ignore it */
   if (**html == '>') {
@@ -138,27 +145,29 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
  * end of the input stream, whichever is the sooner, and return it as
  * a text segment (PCDATA).
  */
-  if ((*ptr != '<') && (st->_stream_comment==0)) {
+  if (*ptr != '<') {
 
 /* This avoids a few funnies. Cant remember why but it is needed */
     if (**html == '>') {
-      *html=(*html)+sizeof(char);
+      *html += 1;
       size --;
     }
 
 /* Create the structure to return. If non-NULL fill it in */
-    return_val=HStreamalloc();
+    return_val=HStreamalloc(st, (tag_no)0);
     if (return_val != NULL) {
 /* Grab the text, and set the style word in the structure */
-      return_val->flags = 0;
-      return_val->text=__html_stream_grab_pcdata(html, size, 0);
-      return_val->style=__html_stream_style(st) | PCDATA ;
+      return_val->text=__html_stream_grab_pcdata(html, 0, 0);
+      if (st->_stream_title)
+          return_val->tagno = TAG_TITLE;
+      else
+          return_val->style=__html_stream_style(st) | PCDATA ;
 /*
  * If the text is PREformatted or in a textarea in a form we dont want
  * to strip out the LFs, but we do need to unescape it
  */
-      if (((return_val->style & PRE) == PRE ) ||
-      	   ((return_val->style & TEXTAREA) == TEXTAREA)) {
+      if ((return_val->style & PRE) == PRE ||
+      	   return_val->tagno == TAG_TEXTAREA) {
         __html_strip_lfs(return_val->text); /* Strip CRs, preserve LFs */
         __html_unescape_string(return_val->text);
       } else {
@@ -179,20 +188,18 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
  * Now evaluate the type word. We need this to decide what to do if there
  * is a NULL input string left at this point.
  */
-      return_val->type=__html_stream_type(st,return_val->style,START);
+      return_val->type=__html_stream_type(st, TYPE_BODY, START);
 
       /*if (return_val->style & DL)
          Printf("HTMLLib: Got a DL\n");*/
 /* Look to see if we have a zero length return string */
       if (*(return_val->text) == '\0') {
 /*
- * If the tag is in the head, or it is not a special once-only tag,
+ * If the tag is not a special once-only tag,
  * dump the tag to save memory in the
  * final stream returned.
  */
-      if (((return_val->type & HEAD) == HEAD) ||
-           (return_val->type & BODY) &&
-              !(return_val->style & (P|BR|DL|OL|UL|DIR))) {
+      if (!(return_val->style & (P|BR|DL|UL))) {
 /*
  * We only need to free the text and the structure since we havent filled
  * in any other bits, so this is faster than calling the free routine. And
@@ -219,14 +226,14 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
 
 /* If this tag has anchor information associated with it, extract it */
       if (st->_stream_anchor != NULL) {
-        return_val->anchor=__html_make_anchor(url,st->_stream_anchor->href);
+        return_val->anchor=st->_stream_anchor->href;
+        #ifdef LINEONE_HACK
+        return_val->onclick=st->_stream_anchor->onclick;
+        #endif
         return_val->name=st->_stream_anchor->name;
+        return_val->coords=st->_stream_anchor->coords;
+        st->need_to_send_name=0;
         return_val->target = st->_stream_anchor->target;
-      }
-/* Otherwise set it to a NULL */
-      else {
-        return_val->anchor=NULL;
-        return_val->name=NULL;
       }
 
 /* Fill in colour information */
@@ -234,12 +241,9 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
 
 /* Set the rest of the values up as a TEXT token */
       return_val->tag=PCDATA;
-      return_val->src=NULL;
-      return_val->next=NULL;
-      return_val->prev=NULL;
-      st->needtosend=0;
+      memset(st->needtosend, 0, sizeof st->needtosend);
       #ifdef NEWSPACING
-      st->stripleadingspace=0;
+      /*st->stripleadingspace=0;*/
       #else
       st->stripleadingcr=0;
       #endif
@@ -264,36 +268,22 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
     return return_val;
   }
 
+  if (size < 2)
+      RETURN(NULL);
+
+  /* Stop doing any titleness */
+  st->_stream_title=0;
+
+  if (*(ptr+1) == '!')
+  {
+      st->state = Declaration;
+      *html = ptr+2;
+      return NULL;
+  }
+
   #ifdef NEWSPACING
   st->lastwaspcdata=0;
   #endif
-
-/*
- * The next case we have to deal with is that of a comment. This can
- * be done on the fly too. Basically if we have a '<!--' or were in
- * a comment already, see if we have a '-->' on the input stream.
- * If we do, skip to the end of the '-->' otherwise wait until more
- * information is avaliable.
- */
-  if ((!strncmp(ptr,"<!--",4)) || st->_stream_comment) {
-/* Look to see if  we have a '-->' pending on the input */
-    ptr=strnstr(ptr,"-->",size /*- (ptr-start) */);
-    if (ptr != NULL) {
-/* We do, so skip over it. Turn off the comment flag. */
-      st->_stream_comment=0;
-      *html=ptr+3;
-/* A comment is a NULL token. */
-      return NULL;
-    }
-    else {
-/*
- * We didnt find the end of the comment. Set the comment flag, and return
- * setting __html_done_for_now on the way out.
- */
-      st->_stream_comment=1;
-      RETURN(NULL);
-    }
-  }
 
 /*
  * We now think we have a tag. We extract the tag information by skipping
@@ -305,6 +295,9 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
                              (*ptr != '<')) {
     ptr++;
   }
+
+  if (*ptr == '>')
+    ptr++;
 
 /* This code breaks if there happens to be a '>' in the first byte
  * after the meaningful data
@@ -335,75 +328,95 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
 
   if (tag_start[0]=='/')
   {
-    if (lastwaspcdata && prevhs && prevhs->text)
+    if (lastwaspcdata && prevhs && prevhs->text && prevhs->tag == PCDATA)
     {
       __html_strip_trailing_spaces(prevhs->text);
       if (prevhs->text[0]=='\0')
       {
         __html_free(prevhs->text, 0);
         prevhs->text=0;
+        prevhs->type &=~ TYPE_MASK;
+        /*prevhs->type=(prevhs->type &~ (TYPE_BODY|TYPE_FRAMESET|TYPE_NOFRAMES)) | TYPE_HEAD;*/
       }
     }
   }
   else
     st->stripleadingspace=1;
 
-  next_tag=__html_find_tag(&tag_start,0);
+  if (tag_start[0] != '/')
+  {
+      next_tag=__html_find_tag(&tag_start,0);
 
-/* The start tag case */
-  if (!NULL_TAG(next_tag)) {
-/*
- * If the tag we have is a tag that we need to notify the termination
- * of, then send back a NULL tag that terminates all the tags we need
- * to before returning this tag. We can do this by not moving the html
- * data pointer before returning.
- */
-    if ((st->needtosend & next_tag.tag) == next_tag.tag && next_tag.tag
-#ifdef TonyTables
-        && !__html_current_table
-#endif
-       )
-    {
-        return_val=__html_stream_return_tag(st, Null_Tag, NULL, END, st->url);
-    }
-    else
-    {
-        char *p=*html;
-/*
- * Otherwise do what we need to with this pointer before returning
- * any token that it generates.
- */
-      if (lastwaspcdata && next_tag.implicit_lf_before && prevhs && prevhs->text)
-      {
-        __html_strip_trailing_spaces(prevhs->text);
-        if (prevhs->text[0]=='\0')
+    /* The start tag case */
+      if (next_tag) {
+    /*
+     * If the tag we have is a tag that we need to notify the termination
+     * of, then send back a NULL tag that terminates all the tags we need
+     * to before returning this tag. We can do this by not moving the html
+     * data pointer before returning.
+     */
+        if (st->needtosend[next_tag->tag_no] && next_tag->tag_no
+    #ifdef TonyTables
+            && !st->current_table
+    #endif
+           )
         {
-          __html_free(prevhs->text, 0);
-          prevhs->text=0;
+            /* Put in a null tag (ish) */
+            return_val=__html_stream_return_tag(st, &Null_Tag, NULL, END);
+            return_val->type|=TYPE_BODY;
+            return_val->tagno = TAG_DUMMY;
+            /*return_val->style |= DUMMY;*/
         }
+        else
+        {
+            char *p=*html;
+    /*
+     * Otherwise do what we need to with this pointer before returning
+     * any token that it generates.
+     */
+          if (lastwaspcdata && next_tag->block_tag && prevhs && prevhs->text)
+          {
+            __html_strip_trailing_spaces(prevhs->text);
+            if (prevhs->text[0]=='\0')
+            {
+              __html_free(prevhs->text, 0);
+              prevhs->text=0;
+            }
+          }
+
+          return_val = __html_stream_start_tag(st, next_tag, &p, url, size);
+          /* More hackery - some tags swallow PCDATA - if the routine returns
+             NULL, that indicates a tag that needs more PCDATA */
+          if (p>ptr)
+            *html=p;
+          else if (p!=NULL)
+            *html=ptr;
+
+          /* Take off any RE (line feed) following a start tag */
+          if (!st->_stream_pre || next_tag->tag_no == TAG_PRE || next_tag->tag_no == TAG_XMP || next_tag->tag_no == TAG_TEXTAREA)
+              *html = __html_skip_record_end(*html, next_tag->tag_no != TAG_PRE && next_tag->tag_no != TAG_XMP && next_tag->tag_no != TAG_TEXTAREA);
+        }
+        return return_val;
       }
-
-      return_val =  __html_stream_start_tag(st,next_tag, &p, url, size);
-      /* More hackery - some tags swallow PCDATA - if the routine returns
-         NULL, that indicates a tag that needs more PCDATA */
-      if (p>ptr)
-        *html=p;
-      else if (p!=NULL)
-        *html=ptr;
-    }
-    return return_val;
   }
+  else
+  {
+      st->isendtag=1;
+    /* Otherwise it was an end tag? */
+      next_tag=__html_find_tag(&tag_start,1);
 
+      if (next_tag) {
+    /* Register that we have an end tag */
+        st->stripleadingspace=next_tag->block_tag;
+        return_val = __html_stream_end_tag(st, next_tag, html, url, size);
+        *html=ptr;
+        if (next_tag->block_tag && !st->_stream_pre)
+            *html = __html_skip_record_end(*html, 1);
 
-/* Otherwise it was an end tag? */
-  next_tag=__html_find_tag(&tag_start,1);
-
-  if (!NULL_TAG(next_tag)) {
-/* Register that we have an end tag */
-    return_val = __html_stream_end_tag(st, next_tag, html, url, size);
-    *html=ptr;
-
-   return return_val;
+       return return_val;
+      }
+      else
+        st->stripleadingspace=1;
   }
 
 /* Update the pointer and return. This skips unwanted tags etc. */
@@ -414,6 +427,138 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
 }
 
 /********************************************************************/
+/* __html_stream_declaration                                        */
+/********************************************************************/
+/* Called instead of __html_stream_parse when inside a <!  > pair   */
+/********************************************************************/
+static HStream *__html_stream_declaration(StreamTokens *st, char **html,
+                                          int size)
+{
+    /*
+     * Currently we don't do anything with declarations. Just need
+     * to skip comments
+     */
+
+    char *ptr = *html;
+
+    while (size)
+    {
+//        if (*ptr == '>')
+//        {
+//            *html = ptr + 1;
+//            st->state = Other;
+//            return NULL;
+//        }
+
+        if      (*ptr == '<') st->anglecount++;
+        else if (*ptr == '>') st->anglecount--;
+
+        /* Count < and > pairs, but allow the comment close '-->' */
+        /* to forcibly end the comment section.                   */
+
+        if (
+             st->anglecount < 0 ||
+             (
+               size >= 3         &&
+               *ptr == '-'       &&
+               *(ptr + 1) == '-' &&
+               *(ptr + 2) == '>'
+             )
+           )
+        {
+            int inc = (*ptr == '-') ? 3 : 1;
+
+            st->anglecount = 0;
+            st->state      = Other;
+
+            if (!st->_stream_pre)
+                *html = __html_skip_record_end(ptr + inc, 1);
+            else
+                *html = ptr + inc;
+            return NULL;
+        }
+
+//        if (*ptr == '-')
+//        {
+//            if (size < 2)
+//            {
+//                *html = ptr;
+//                RETURN(NULL);
+//            }
+//            if (*(ptr+1) == '-')
+//            {
+//                int i;
+//
+//                /* Check for a run of -s */
+//                for (i=2; i<size; i++)
+//                {
+//                    if (ptr[i] != '-')
+//                    {
+//                        *html = ptr+i;
+//                        st->state = Comment;
+//                        return NULL;
+//                    }
+//                }
+//                /* Have not reached the end of this run yet */
+//                *html = ptr;
+//                RETURN(NULL);
+//            }
+//        }
+
+        ptr++;
+        size--;
+    }
+
+    *html=ptr;
+    RETURN(NULL);
+}
+
+// /********************************************************************/
+// /* __html_stream_comment                                            */
+// /********************************************************************/
+// /* Called instead of __html_stream_parse when inside a -- -- pair   */
+// /********************************************************************/
+// static HStream *__html_stream_comment(StreamTokens *st, char **html,
+//                                       int size)
+// {
+//     char *ptr = *html;
+//     while (size)
+//     {
+//         if (*ptr == '-')
+//         {
+//             if (size < 2)
+//             {
+//                 *html = ptr;
+//                 RETURN(NULL);
+//             }
+//             if (*(ptr+1) == '-')
+//             {
+//                 int i;
+//
+//                 /* Check for a run of -s */
+//                 for (i=2; i<size; i++)
+//                 {
+//                     if (ptr[i] != '-')
+//                     {
+//                         *html = ptr+i;
+//                         st->state = Declaration;
+//                         return NULL;
+//                     }
+//                 }
+//                 /* Have not reached the end of this run yet */
+//                 *html = ptr;
+//                 RETURN(NULL);
+//             }
+//         }
+//         ptr++;
+//         size--;
+//     }
+//
+//     *html = ptr;
+//     RETURN(NULL);
+// }
+
+/********************************************************************/
 /* static unsigned int __html_stream_style(void)                    */
 /********************************************************************/
 /* This routine takes the variables declared above and reworkes     */
@@ -422,20 +567,23 @@ HStream *__html_stream_parse(StreamTokens *st, char **html, char *url,
 /* expanded to include FORM elements                                */
 /********************************************************************/
 
-static unsigned int __html_stream_style(StreamTokens *st)
+unsigned int __html_stream_style(StreamTokens *st)
 {
   unsigned int return_val=0;
 
+  /*
   if (st->_stream_title) {
     return_val |= TITLE;
   }
   else {
-    if (st->_stream_bold)	    return_val |= BOLD;
+  */
+    if (st->_stream_bold)           return_val |= BOLD;
     if (st->_stream_italic)         return_val |= ITALIC;
-    if (st->_stream_tt)	    	    return_val |= TT;
-    if (st->_stream_a)	    	    return_val |= A;
-    if (st->_stream_img)	    return_val |= IMG;
-    if (st->_stream_p)	          { return_val |= P; st->_stream_p=0; }
+    if (st->_stream_tt)             return_val |= TT;
+    if (st->_stream_a)              return_val |= A;
+    if (st->_stream_img)            return_val |= IMG;
+    if (st->_stream_nobr)           return_val |= NOBR;
+    if (st->_stream_p)           { return_val |= P; st->_stream_p=0; }
                                     return_val |= st->_stream_h;
     if (st->_stream_pre)	    return_val |= PRE;
 
@@ -443,14 +591,8 @@ static unsigned int __html_stream_style(StreamTokens *st)
       if (st->send_list & DL) {
         if (st->_stream_dl)	    return_val |= DL;
       }
-      if (st->send_list & OL) {
-        if (st->_stream_ol)	    return_val |= OL;
-      }
       if (st->send_list & UL) {
         if (st->_stream_ul)	    return_val |= UL;
-      }
-      if (st->send_list & DIR) {
-        if (st->_stream_dir)	    return_val |= DIR;
       }
       st->send_list = 0;
     }
@@ -460,15 +602,25 @@ static unsigned int __html_stream_style(StreamTokens *st)
     if (st->_stream_br)           { return_val |= BR ; st->_stream_br=0; }
     if (st->_stream_blockquote)     return_val |= BLOCKQUOTE;
     if (st->_stream_address)        return_val |= ADDRESS;
-    if (st->_stream_center)	    return_val |= CENTER;
+    if (st->_stream_h && st->_stream_halign)
+    {
+        switch (st->_stream_halign)
+        {
+            case 2: return_val |= CENTER; break;
+            case 3: return_val |= RIGHT; break;
+        }
+    }
+    else
+    {
+        if (st->_stream_centre)	    return_val |= CENTER;
+        if (st->_stream_right)	    return_val |= RIGHT;
+    }
+    if (st->_stream_sub)	    return_val |= SUB;
+    if (st->_stream_sup)	    return_val |= SUP;
+    if (st->_stream_u)              return_val |= UNDERLINE;
+    if (st->_stream_strike)         return_val |= STRIKE;
     if (st->_stream_anchor != NULL) return_val |= A;
-    if (st->_stream_form)     	    return_val |= FORM;
-    if (st->_stream_select)	    return_val |= SELECT;
-    if (st->_stream_textarea)	    return_val |= TEXTAREA;
-    #ifdef TonyTables
-    if (st->_stream_table)          return_val |= TABLE;
-    #endif
-  }
+  /*}*/
 
   return return_val;
 }
@@ -482,39 +634,23 @@ static unsigned int __html_stream_style(StreamTokens *st)
 /* expanded to include FORM elements                                */
 /********************************************************************/
 
-static unsigned int __html_stream_type(StreamTokens *st, unsigned int style, int start)
+unsigned int __html_stream_type(StreamTokens *st, unsigned int tag_type, int start)
 {
-  unsigned int temp=0;
+  unsigned int temp=tag_type;
 
-/* if ((st->_stream_head) || (st->_stream_title)) temp=((unsigned int)1<<0); */
-  if (st->_stream_title || st->_stream_head) {
-    temp=((unsigned int)HEAD);
+  if (st->_stream_title) {
+    temp = TYPE_HEAD;
 
-#ifdef FRAMESUPPORT
-  } else if (st->_stream_body) {
-    temp = TYPE_BODY;
   } else if (st->_stream_frameset) {
     temp = TYPE_FRAMESET;
   }
+
   if (st->_stream_noframes) {
     temp |= TYPE_NOFRAMES;
-#endif
   }
 
   temp |= (((unsigned int) start) << TYPE_START_SHIFT);
 
-/* Draw together the anchor and form bits just in case :) */
-  if (st->_stream_anchor != NULL) {
-    temp |= ((unsigned int)(st->_stream_anchor->alignment) <<TYPE_ALIGN_SHIFT);
-    temp |= ((unsigned int)(st->_stream_anchor->ismap)     <<TYPE_ISMAP_SHIFT);
-  }
-  if (st->_stream_forms != NULL) {
-    temp |= ((unsigned int)(st->_stream_forms->type)       <<TYPE_INPUT_SHIFT);
-    temp |= ((unsigned int)(st->_stream_forms->method)     <<TYPE_METHOD_SHIFT);
-    temp |= ((unsigned int)(st->_stream_forms->checked)    <<TYPE_CHECKED_SHIFT);
-    temp |= ((unsigned int)(st->_stream_forms->multiple)   <<TYPE_MULTIPLE_SHIFT);
-    temp |= ((unsigned int)(st->_stream_forms->selected)   <<TYPE_SELECTED_SHIFT);
-  }
   if (st->_stream_colour != NULL) {
     if (st->_stream_colour->colour_valid)
       temp |= TYPE_COLOURED;
@@ -529,13 +665,12 @@ static unsigned int __html_stream_type(StreamTokens *st, unsigned int style, int
 /* Given all the status variable attempt to work out the indent     */
 /* level at this point in time	 	    	     	 	    */
 /********************************************************************/
-static unsigned int __html_stream_indent(StreamTokens *st)
+unsigned int __html_stream_indent(StreamTokens *st)
 {
   return ((unsigned int) st->_stream_dl -
                          st->_stream_dt +
   	 	         st->_stream_ol +
-  	 	         st->_stream_ul +
-  	 	         st->_stream_dir);
+  	 	         st->_stream_ul);
 }
 
 #if 0
@@ -561,24 +696,28 @@ static char *strnchrs(char *start, const char *c, const char *end)
 /* this point, including feeding it through the relevant stripping  */
 /* code etc. This routine only reads up to the next '<' sign  	    */
 /********************************************************************/
-static char *__html_stream_grab_pcdata(char **input, int size, int contig)
+static char *__html_stream_grab_pcdata(char **input, int contig, int after_tag)
 {
-  char *end=*input;
+  char *end;
   char *ret;
+
+  if (after_tag)
+      end = __html_skip_record_end(*input, 1);
+  else
+      end = *input;
 
 carryon:
 /*
  * Find the start of the next tag, end of the input stream, or the
  * end of the chunk by size, which ever is the sooner.
  */
-  while ((end - *input < size) && (*end != '\0') && (*end != '<') && (*end != '&'))
+  while ((*end != '\0') && (*end != '<') && (*end != '&'))
   {
       end++;
   }
 
 /* If we have gone over the end of the size limit, shuffle back a bit */
-  if ((end-*input) >= size) {
-    end=(*input)+size;
+  if (*end == '\0') {
     if (contig)
         RETURN(NULL);  /* Can't be sure we have all PCDATA yet - we'll come back later */
   } else if (*end == '&')
@@ -586,18 +725,18 @@ carryon:
       /* Check we don't have half an escape code */
       char *stop;
 
-      for (stop = end + 1; isalnum(*stop) || *stop=='#' || *stop=='&'; stop++)
+      for (stop = end + 1; *stop != '\0' && (isalnum(*stop) || *stop=='#' || *stop=='&'); stop++)
         continue;
 
       if (*stop == ';')
       {
-        end = stop + 1;
-        goto carryon;
+          end = stop + 1;
+          goto carryon;
       }
       else if (*stop)
       {
-        end = stop;
-        goto carryon;
+          end = stop;
+          goto carryon;
       }
   }
 
@@ -621,174 +760,259 @@ carryon:
 /* This is really only computational work but is in its own fn for  */
 /* ease of code reading		     	      	    	       	    */
 /********************************************************************/
-static HStream *__html_stream_start_tag(StreamTokens *st, Tag next_tag, char **html, char *url, int size)
+static HStream *__html_stream_start_tag(StreamTokens *st, Tag *next_tag, char **html, char *url, int size)
 {
 #ifndef NEWSPACING
     st->stripleadingcr=1;
 #endif
-/*
- * we have a start tag. Big case statement alert - work from the bottom
- * of the list upwards for safty :)
- */
-#ifndef TABLE_SUPPORT
-    if (next_tag.tag >= BR) {
-/*
- * We have a body only element so if we were in the head stage
- * we should toggle to the body stage
- */
-    }
-#endif
 
+    __html_process_attributes(st, next_tag, *html, url);
 
-    switch(next_tag.tag) {
+    switch(next_tag->tag_no)
+    {
       #ifdef TABLE_SUPPORT
-      case TR:
-      case TD:
-      case TH:
-      case TABLE:      return __html_stream_return_tag(st,next_tag,html,END,url);
+      case TAG_TR:
+      case TAG_TD:
+      case TAG_TH:
+      case TAG_TABLE:      return __html_stream_return_tag(st,next_tag,html,END,url);
       #endif
-      case INPUT:
-      case SELECT:
-      case OPTION:
-      case TEXTAREA:   if (st->_stream_form==0) break;
-      case FORM:       return __html_form_handler(st, next_tag, html, url, size);
-      case FONT:       {
-                         AnchorInfo *anc;
-                         /*
-                          * __html_get_anchor_info will examine the size/colour information in
-                          * the tag, and will update st. We don't actually want the AnchorInfo
-                          * structure generated...
-                          */
-                         anc = __html_get_anchor_info(st, html, next_tag);
-                         __html_stream_free_anchor(&anc);
-                         break;
-                       }
-      case CENTER:     st->_stream_center++; break;
-      case ADDRESS:    st->_stream_address++; break;
-      case BLOCKQUOTE: st->_stream_blockquote++; break;
-      case PRE:	       st->_stream_pre++; break;
-      case H1:
-      case H2:
-      case H3:
-      case H4:
-      case H5:
-      case H6:
-      case H7:         st->_stream_h=next_tag.tag; break;
-      case DIR:	       st->_stream_dir++; /* Needed for indent level */
-      	   	       st->send_list|=DIR;
-      	   	       break;
-      case UL:	       st->_stream_ul++;  /* Needed for indent level */
-      	   	       st->send_list|=UL;
+      case TAG_INPUT:
+      case TAG_SELECT:
+      case TAG_OPTION:
+      case TAG_TEXTAREA:
+      case TAG_FORM:       return __html_form_handler(st, next_tag, html, size);
+      case TAG_MAP:        return __html_map_handler(st);
+      case TAG_AREA:       return __html_stream_area(st, html, next_tag);
+      case TAG_APPLET:
+      case TAG_OBJECT:     return __html_stream_object(st, html, next_tag);
+      case TAG_PARAM:      return __html_stream_param(st, html, next_tag);
+      case TAG_EMBED:      return __html_stream_embed(st, html, next_tag);
+      case TAG_BASEFONT:   if (ATTR_VAL(FONTSIZE) >= 1 && ATTR_VAL(FONTSIZE) <= 7)
+                               st->_stream_basefont = ATTR_VAL(FONTSIZE);
+                           break;
+      case TAG_FONT:  {     int first=1;
+
+                            if (ATTR_SET(COLOUR))
+                                add_colour_info(st, ATTR_VAL(COLOUR), &first);
+
+                            if (ATTR_SET(FONTSIZE))
+                                add_size_info(st, ATTR_STR(FONTSIZE), &first);
+
+                            break;
+                      }
+      case TAG_BIG:   {     int first=1;
+
+                            add_size_info(st, "+1", &first);
+                            break;
+                      }
+
+      case TAG_ACRONYM:
+      case TAG_SMALL: {     int first=1;
+
+                            add_size_info(st, "-1", &first);
+                            break;
+                      }
+      case TAG_CENTER:     st->_stream_centre++; break;
+      case TAG_ADDRESS:    st->_stream_address++; break;
+      case TAG_BLOCKQUOTE: st->_stream_blockquote++; break;
+      case TAG_XMP:
+      case TAG_PRE:        st->_stream_pre++; break;
+      case TAG_H1:
+      case TAG_H2:
+      case TAG_H3:
+      case TAG_H4:
+      case TAG_H5:
+      case TAG_H6:     st->_stream_h=next_tag->tag;
+                       st->_stream_halign=ATTR_VAL(ALIGN);
                        break;
-      case OL:	       st->_stream_ol++;  /* Needed for indent level */
-      	   	       st->send_list|=OL;
+      case TAG_MENU:
+      case TAG_DIR:
+      case TAG_UL:     st->_stream_ul++;  /* Needed for indent level */
+      	   	       st->send_list|=UL;
+      	   	       if (st->_stream_ol + st->_stream_ul <= MAX_OL)
+      	   	       {
+      	   	           st->_stream_olstyle[st->_stream_ol + st->_stream_ul - 1] = 'u';
+      	   	       }
+                       break;
+      case TAG_OL:     st->_stream_ol++;  /* Needed for indent level */
+                       if (st->_stream_ol + st->_stream_ul <= MAX_OL)
+                       {
+                           int start = ATTR_VAL(STARTattr);
+                           int style = ATTR_VAL(TYPE);
+                           if (ATTR_SET(STARTattr))
+                               start--;
+                           if (!style)
+                               style = '1';
+                           st->_stream_olcount[st->_stream_ol + st->_stream_ul - 1] = start;
+                           st->_stream_olstyle[st->_stream_ol + st->_stream_ul - 1] = style;
+                       }
       	   	       break;
-      case DL:	       st->_stream_dl++;  /* Needed for indent level */
+      case TAG_DL:     st->_stream_dl++;  /* Needed for indent level */
       	   	       st->_stream_dt=0;
       	   	       st->_stream_dd=0;
       	   	       st->send_list|=DL;
       	   	       //Printf("HTMLLib: Should send a DL now\n");
       	   	       break;
 
-      case LI:	       st->_stream_li++; /* Needed for indent level? */
-                       return __html_stream_return_tag(st,next_tag,html,START,url);
-      case DT:	       st->_stream_dt=1; /* Needed for indent level? */
-                       st->_stream_dd=0;
-      	   	       return __html_stream_return_tag(st,next_tag,html,START,url);
-      case DD:	       st->_stream_dd=1; /* Needed for indent level? */
-                       st->_stream_dt=0;
-      	   	       return __html_stream_return_tag(st,next_tag,html,START,url);
+      case TAG_LI: {
+                       HStream *ret;
 
-      case HR:	       return __html_stream_hr(st, html, next_tag, url);
-      case BR:	       return __html_stream_return_tag(st,next_tag,html,START,url);
-      default: {
+                       st->_stream_li++; /* Needed for indent level? */
+                       if (st->_stream_ol + st->_stream_ul > 0 && st->_stream_ol + st->_stream_ul <= MAX_OL)
+                       {
+                           if (ATTR_SET(VALUE))
+                               st->_stream_olcount[st->_stream_ol + st->_stream_ul - 1] = ATTR_VAL(VALUE);
+                           else
+                               st->_stream_olcount[st->_stream_ol + st->_stream_ul - 1] ++;
+
+                           if (ATTR_SET(TYPE))
+                               st->_stream_olstyle[st->_stream_ol + st->_stream_ul - 1] = ATTR_VAL(TYPE);
+                       }
+
+                       ret = __html_stream_return_tag(st,next_tag,html,START);
+                       if (ret)
+                           __html_construct_ol_text(st, ret);
+                       return ret;
+                   }
+      case TAG_DT:     if (st->_stream_dt || !st->_stream_dl)
+                       {
+                           char *br = "BR>";
+                           /* Send back a BR tag - easiest way to get a linebreak */
+                           return __html_stream_return_tag(st, __html_find_tag(&br, 0), html, START);
+                       }
+                       st->_stream_dt=1; /* Needed for indent level? */
+                       st->_stream_dd=0;
+                       break;
+      	   	       /*return __html_stream_return_tag(st,next_tag,html,START);*/
+      case TAG_DD:     if (st->_stream_dd || !st->_stream_dl)
+                       {
+                           char *br = "BR>";
+                           /* Send back a BR tag - easiest way to get a linebreak */
+                           return __html_stream_return_tag(st, __html_find_tag(&br, 0), html, START);
+                       }
+                       st->_stream_dd=1; /* Needed for indent level? */
+                       st->_stream_dt=0;
+                       break;
+      	   	       /*return __html_stream_return_tag(st,next_tag,html,START);*/
+
+      case TAG_HR:     return __html_stream_hr(st, html, next_tag);
+      case TAG_BR:     return __html_stream_return_tag(st,next_tag,html,START);
 /*
  * We didnt find the tag in that lot, so look in the last 10. This is
  * sort of complicated by the fact that some of these are in the
  * head and some are in the body list, and there are <HEAD> and <BODY>
  * too.
  */
-        if (__html_check_tag(Body_Tags,MAX_BODY_TAGS,
-               	       	              next_tag.start_tag))
-        {
-          switch(next_tag.tag) {
-            case P:      st->_stream_p=1; break;
-            case IMG:    return __html_stream_image(st,html, next_tag, url);
-            case A:      __html_stream_anchor(st, html, next_tag, url); break;
-            case TT:     st->_stream_tt++; break;
-            case ITALIC: st->_stream_italic++; break;
-            case BOLD:	 st->_stream_bold++; break;
-            #ifdef TonyTables
-            case TR:     return __html_table_row_start_tag(st, next_tag, html, url, size);
-            case TD:     return __html_table_data_start_tag(st, next_tag, html, url, size);
-            case TH:     return __html_table_head_start_tag(st, next_tag, html, url, size);
-            case TABLE:  st->_stream_table++;
-                         return __html_table_start_tag(st, next_tag, html, url, size);
-            #endif
-          }
-       } else if ((__html_check_tag(Head_Tags, MAX_HEAD_TAGS,
-             		           next_tag.start_tag)) != NULL) {
-          switch(next_tag.tag) {
-            case NEXTID:
-            case META:
-            case LINK:   //st->_stream_head=1;
-            	         break; /* We are ignoring these for now */
-            case TITLE:  st->_stream_title++; break;
-            case BASE:   __html_stream_base(st, html, next_tag, url); break;
-            case ISINDEX: st->_stream_isindex=1; st->_stream_head=1; break;
-          }
-        } else
-#ifdef FRAMESUPPORT
-        /* Slightly contrived code follows: this only has an else clause, largely to
-         * keep the structure of the 'else if' chain, thus allowing for easy future
-         * expansion - TGR */
+      case TAG_P:   {  int align = ATTR_VAL(ALIGN);
+                       st->_stream_p=1;
+                       if (align != 0 && !st->_stream_palign)
+                       {
+                           st->_stream_palign = 1;
+                           st->_stream_oldcentre = st->_stream_centre;
+                           st->_stream_oldright = st->_stream_right;
+                       }
+                       if (align == 1)
+                           st->_stream_centre = st->_stream_right = 0;
+                       else if (align == 2)
+                           st->_stream_centre = 1, st->_stream_right = 0;
+                       else if (align == 3)
+                           st->_stream_centre = 0, st->_stream_right = 1;
+                       else if (st->_stream_palign)
+                       {
+                           st->_stream_palign = 0;
+                           st->_stream_centre = st->_stream_oldcentre;
+                           st->_stream_right = st->_stream_oldright;
+                       }
+                       break;
+                     }
+      case TAG_DIV:    if (st->_stream_palign)
+                       {
+                           st->_stream_palign = 0;
+                           st->_stream_centre = st->_stream_oldcentre;
+                           st->_stream_right = st->_stream_oldright;
+                       }
+                       st->_stream_h = 0;
+                       switch (ATTR_VAL(ALIGN))
+                       {
+                           default:
+                           case 1: st->_stream_centre = st->_stream_right = 0; break;
+                           case 2: st->_stream_centre = 1; st->_stream_right = 0; break;
+                           case 3: st->_stream_centre = 0; st->_stream_right = 1; break;
+                       }
+                       break;
+      case TAG_IMG:    return __html_stream_image(st,html, next_tag);
+      case TAG_A:      __html_stream_anchor(st, html, next_tag); break;
+      case TAG_SAMP:
+      case TAG_CODE:
+      case TAG_KBD:
+      case TAG_VAR:
+      case TAG_TT:     st->_stream_tt++; break;
+      case TAG_EM:
+      case TAG_CITE:
+      case TAG_DFN:
+      case TAG_ITALIC: st->_stream_italic++; break;
+      case TAG_STRONG:
+      case TAG_BOLD:   st->_stream_bold++; break;
+      case TAG_NOBR:   st->_stream_nobr++; break;
+      case TAG_SUB:    st->_stream_sub++; break;
+      case TAG_SUP:    st->_stream_sup++; break;
+      case TAG_INS:
+      case TAG_U:      st->_stream_u++; break;
+      case TAG_Q:      return __html_stream_q(st, html, START);
 
-        if (__html_check_tag(Frameset_Tags, MAX_FRAMESET_TAGS, next_tag.start_tag)
-           && next_tag.tag == FRAME) {
-             return __html_stream_frame (st, html, next_tag, url, size);
-        } else
-#endif
-        {
-          switch(next_tag.tag) {
-            case HEAD: st->_stream_head=1; break;
-            case BODY: {
-              if (st->_stream_head != 0) { // use to be (.. >= 1)
-                st->_stream_head=0;
-                st->_stream_body=1;
-                /* return __html_stream_end_header(html); */
+      case TAG_S:
+      case TAG_DEL:
+      case TAG_STRIKE: st->_stream_strike++; break;
+      #ifdef TonyTables
+      case TAG_TR:     if (st->usingtables) return __html_table_row_start_tag(st, next_tag, html, url, size);
+                       else break;
+      case TAG_TD:     if (st->usingtables) return __html_table_data_start_tag(st, next_tag, html, url, size);
+                       else break;
+      case TAG_TH:     if (st->usingtables) return __html_table_head_start_tag(st, next_tag, html, url, size);
+                       else break;
+      case TAG_TABLE:  if (st->usingtables) return __html_table_start_tag(st, next_tag, html, url, size);
+                       else break;
+      #endif
+      case TAG_META: {
+              HStream *ret=__html_stream_return_tag(st,next_tag,html,START);
+              if (ret)
+              {
+                  ret->info = (elementinfo *)__html_malloc(sizeof (elementinfo_meta), 1);
+                  if (!ret->info) { __html_free(ret, 0); return NULL; }
+                  ret->info->meta.http_equiv = ATTR_STR(HTTP_EQUIV);
+                  ret->info->meta.name       = ATTR_STR(NAME);
+                  ret->info->meta.content    = ATTR_STR(CONTENT);
+                  ret->info->meta.scheme     = ATTR_STR(SCHEME);
               }
-              st->_stream_body=1;
-              __html_stream_anchor(st, html, next_tag, url);
-              return __html_stream_return_tag(st,next_tag,html,START,url);
-            }
-#ifdef FRAMESUPPORT
-            case TYPE_FRAMESET: {
-              HStream *ret_val;
-              st->_stream_frameset++;
-              st->_stream_head = 0;
-              st->_stream_body = 0;
-              st->_stream_noframes = 0;
-              __html_stream_anchor(st, html, next_tag, url);
-              if (st->_stream_anchor) {
-                st->_stream_anchor->size = st->_stream_frameset;
-//                st->_stream_frame = 0;
-              }
-              ret_val =  __html_stream_return_tag(st,next_tag,html,START,url);
-
-              __html_stream_grab_pcdata(html, size, 1);
-
-              return ret_val;
-              break;
-            }
-            case TYPE_NOFRAMES:
-              st->_stream_noframes = 1;
-              st->_stream_body = 1;
-              st->_stream_head = 0;
-              break;
-#endif
-          }
-        }
+              return ret;
       }
+      case TAG_TITLE:  st->_stream_title++; break;
+      case TAG_BASE:   __html_stream_base(st); break;
+      case TAG_ISINDEX: st->_stream_isindex=1; break;
+      case TAG_SCRIPT:  st->state = Script; return NULL;
+      case TAG_STYLE:   st->state = Style; return NULL;
+      case TAG_FRAME:   return __html_stream_frame(st, html, next_tag);
+      case TAG_BODY: {
+              HStream *ret=__html_stream_return_tag(st,next_tag,html,START);
+              if (ret)
+              {
+                  ret->info = (elementinfo *)__html_malloc(sizeof (elementinfo_body), 1);
+                  if (!ret->info) { __html_free(ret, 0); return NULL; }
+                  ret->info->body.onload = ATTR_STR(ONLOAD);
+                  ret->info->body.onunload = ATTR_STR(ONUNLOAD);
+                  ret->info->body.background = ATTR_STR(BACKGROUND);
+                  ret->info->body.text = ATTR_SET(FGCOL) ? ATTR_VAL(FGCOL) : NULL_COLOUR;
+                  ret->info->body.bgcolour = ATTR_SET(BGCOL) ? ATTR_VAL(BGCOL) : NULL_COLOUR;
+                  ret->info->body.link = ATTR_SET(LINKCOL) ? ATTR_VAL(LINKCOL) : NULL_COLOUR;
+                  ret->info->body.vlink = ATTR_SET(VLINK) ? ATTR_VAL(VLINK) : NULL_COLOUR;
+                  ret->info->body.alink = ATTR_SET(ALINK) ? ATTR_VAL(ALINK) : NULL_COLOUR;
+              }
+              return ret;
+          }
+      case TAG_FRAMESET:return __html_stream_frameset(st, html, next_tag);
+      case TAG_NOFRAMES:
+              st->_stream_noframes = 1;
+              break;
     }
 /* In theory we dont need to do any more so we can return here */
     return NULL;
@@ -804,71 +1028,83 @@ static HStream *__html_stream_start_tag(StreamTokens *st, Tag next_tag, char **h
 /* This is really only computational work but is in its own fn for  */
 /* ease of code reading		     	      	    	       	    */
 /********************************************************************/
-static HStream *__html_stream_end_tag(StreamTokens *st, Tag next_tag, char **html, char *url, int size)
+static HStream *__html_stream_end_tag(StreamTokens *st, Tag *next_tag, char **html, char *url, int size)
 {
-#ifdef NEWSPACING
-    st->isendtag=1;
-    st->stripleadingspace=next_tag.implicit_lf_after;
-#else
-    st->stripleadingcr=1;
-#endif
 /* Make a note of this token for later use */
-  st->needtosend |= next_tag.tag;
+  st->needtosend[next_tag->tag_no] = 1;
 /*
  * we have a start tag. Big case statement alert - work from the bottom
  * of the list upwards for safty :) */
-  switch(next_tag.tag) {
+
+  switch(next_tag->tag_no) {
     #ifdef TABLE_SUPPORT
-    case TR:
-    case TD:
-    case TH:
-    case TABLE: return __html_stream_return_tag(st,next_tag,html,END,url);
+    case TAG_TR:
+    case TAG_TD:
+    case TAG_TH:
+    case TAG_TABLE: return __html_stream_return_tag(st,next_tag,html,END,url);
     #endif
 
-    case FORM:
-      st->_stream_form=0;
+    case TAG_FORM:
+      return __html_stream_end_form(st, html);
+
+    case TAG_MAP:
+      st->_stream_map=0;
       break;
 
-    case SELECT:
+    case TAG_SELECT:
       st->_stream_select=0;
       break;
 
-    case TEXTAREA:
-      st->_stream_textarea=0;
-      break;
-
-    case FONT:
+    case TAG_BIG:
+    case TAG_SMALL:
+    case TAG_ACRONYM:
+    case TAG_FONT:
       font_tag_closed(st);
       #ifndef NEWSPACING
       st->stripleadingcr = 0;
       #endif
       break;
 
-    case CENTER:
-      DEC(st->_stream_center);
+    case TAG_P:
+      if (st->_stream_palign)
+      {
+          st->_stream_palign = 0;
+          st->_stream_centre = st->_stream_oldcentre;
+          st->_stream_right = st->_stream_oldright;
+      }
       break;
 
-    case ADDRESS:
+    case TAG_CENTER:
+      st->_stream_br = 1;
+      DEC(st->_stream_centre);
+      break;
+
+    case TAG_DIV:
+      st->_stream_br = 1;
+      st->_stream_palign = 0;
+      st->_stream_centre = 0;
+      st->_stream_right = 0;
+      break;
+
+    case TAG_ADDRESS:
       DEC(st->_stream_address);
       break;
 
-    case BLOCKQUOTE:
+    case TAG_BLOCKQUOTE:
       DEC(st->_stream_blockquote);
       break;
 
-    case DIR:
-      DEC(st->_stream_dir);
-      return __html_stream_return_tag(st,next_tag,html,END,url);
-
-    case UL:
+    case TAG_MENU:
+    case TAG_DIR:
+    case TAG_UL:
       DEC(st->_stream_ul);
       return NULL /*__html_stream_return_tag(st,next_tag,html,END,url) */;
 
-    case OL:
+    case TAG_OL:
       DEC(st->_stream_ol);
       return NULL /*__html_stream_return_tag(st,next_tag,html,END,url) */;
 
-    case DL:
+    case TAG_DL:
       DEC(st->_stream_dl);
       /* Cope with nested <DL>s: if we're still in a DL, for valid HTML
          we must be in a DD! */
@@ -876,129 +1112,141 @@ static HStream *__html_stream_end_tag(StreamTokens *st, Tag next_tag, char **htm
       st->_stream_dd=st->_stream_dl ? 1 : 0;
       return NULL /*__html_stream_return_tag(st,next_tag,html,END,url)*/;
 
-    case DD:
+    case TAG_DD:
       st->_stream_dd = 0;
+      st->_stream_br = 1; /* Yuck. */
       break;
 
-    case LI:
+    case TAG_LI:
       DEC(st->_stream_li);
       break;
 
-    case DT:
+    case TAG_DT:
       st->_stream_dt = 0;
       break;
 
-    case PRE:
+    case TAG_XMP:
+    case TAG_PRE:
       DEC(st->_stream_pre);
       break;
 
-    case H1:
-    case H2:
-    case H3:
-    case H4:
-    case H5:
-    case H6:
-    case H7:
+    case TAG_H1:
+    case TAG_H2:
+    case TAG_H3:
+    case TAG_H4:
+    case TAG_H5:
+    case TAG_H6:
       st->_stream_h = 0;
       break;
 
-    case HR: break; /* Should never see! */
-    case BR: break; /* Should never see! */
-    default: {
-/*
- * We didnt find the tag in that lot, so look in the last 10. This is
- * sort of complicated by the fact that some of these are in the
- * head and some are in the body list, and there are <HEAD> and <BODY>
- * too.
- */
-      st->_stream_body=__html_check_tag(Body_Tags,MAX_BODY_TAGS,
-             	       	              next_tag.start_tag);
-      if (st->_stream_body==1) {
-        #ifndef NEWSPACING
-        st->stripleadingcr = 0;
-        #endif
-        switch(next_tag.tag) {
-          case P:
-            DEC(st->_stream_p);
-            #ifndef NEWSPACING
-            st->stripleadingcr = 1;
-            #endif
-            break;
-
-          case IMG:    break; /* No such tag! */
-          case A:      __html_stream_end_anchor(st); break;
-          case TT:
-            DEC(st->_stream_tt);
-            break;
-
-          case ITALIC:
-            DEC(st->_stream_italic);
-            break;
-
-          case BOLD:
-            DEC(st->_stream_bold);
-            break;
-        #ifdef TonyTables
-          case TR:    return __html_table_row_end_tag(st, next_tag, html, url);
-          case TD:    return __html_table_data_end_tag(st, next_tag, html, url);
-          case TH:    return __html_table_head_end_tag(st, next_tag, html, url);
-          case TABLE: return __html_table_end_tag(st, next_tag, html, url);
-        #endif
-        }
-      } else if(__html_check_tag(Head_Tags, MAX_HEAD_TAGS,
-               		           next_tag.start_tag))
-        {
-       switch(next_tag.tag) {
-          case NEXTID:
-          case META:
-          case LINK:
-          case ISINDEX: break; /* No such tags */
-          case TITLE:  {
-            DEC(st->_stream_title);
-            break;
-          }
-        }
-      } else
-#if FALSE
-        if (__html_check_tag(Frameset_Tags, MAX_FRAMESET_TAGS, next_tag.start_tag)
-        && next_tag.tag == FRAME) {
-          st->_stream_frame = 0;
-        } else
-#endif
+    case TAG_A:
+    {
+      /* Cope with tossers that do <A NAME="fred"></A> */
+      if (st->need_to_send_name)
       {
-        switch(next_tag.tag) {
-          case HEAD: {
-            st->_stream_head=0;
-            return __html_stream_end_header(html);
-          }
-          case BODY: {
-            DEC(st->_stream_body);
-            break;
-          }
-#ifdef FRAMESUPPORT
-          case TYPE_FRAMESET: {
-            char *ptr;
+          HStream *return_val;
+          st->need_to_send_name=0;
 
-            DEC(st->_stream_frameset);
-#if 0
+          /* To stop it stripping spaces before the <A NAME="x"> */
+          st->isendtag=0;
 
-            if (html != NULL) {
-              ptr=*html;
-              while((*ptr != '\0') && (*ptr != '>')) ptr++;
-              if (*ptr=='>') ptr++;
-              *html=ptr;
-            }
-            __html_stream_grab_pcdata(html, size, 1);
-#endif
-            break;
+          return_val=HStreamalloc(st, TAG_A);
+          if (return_val)
+          {
+              return_val->style=__html_stream_style(st)|PCDATA;
+              return_val->type=__html_stream_type(st, TYPE_BODY, END);
+              return_val->indent=__html_stream_indent(st);
+              if (st->_stream_anchor != NULL) {
+                #ifdef LINEONE_HACK
+                return_val->onclick=st->_stream_anchor->onclick;
+                #endif
+                return_val->anchor=st->_stream_anchor->href;
+                return_val->name=st->_stream_anchor->name;
+                return_val->target = st->_stream_anchor->target;
+              }
+              fill_in_colour_info(st, return_val);
+              return_val->tag=next_tag->tag;
           }
-          case TYPE_NOFRAMES:
-            st->_stream_noframes = 0;
-            break;
-#endif
-         }
+          __html_stream_end_anchor(st);
+          return return_val;
       }
+      __html_stream_end_anchor(st);
+      break;
     }
+    case TAG_SAMP:
+    case TAG_CODE:
+    case TAG_KBD:
+    case TAG_VAR:
+    case TAG_TT:
+      DEC(st->_stream_tt);
+      break;
+
+    case TAG_EM:
+    case TAG_CITE:
+    case TAG_DFN:
+    case TAG_ITALIC:
+      DEC(st->_stream_italic);
+      break;
+
+    case TAG_STRONG:
+    case TAG_BOLD:
+      DEC(st->_stream_bold);
+      break;
+
+    case TAG_NOBR:
+      DEC(st->_stream_nobr);
+      break;
+
+    case TAG_SUB:
+      DEC(st->_stream_sub);
+      break;
+
+    case TAG_SUP:
+      DEC(st->_stream_sup);
+      break;
+
+    case TAG_INS:
+    case TAG_U:
+      DEC(st->_stream_u);
+      break;
+
+    case TAG_Q:
+      return __html_stream_q(st, html, END);
+
+    case TAG_S:
+    case TAG_DEL:
+    case TAG_STRIKE:
+      DEC(st->_stream_strike);
+      break;
+
+  #ifdef TonyTables
+    case TAG_TR:    if (st->usingtables) return __html_table_row_end_tag(st, next_tag, html, url);
+                    else break;
+    case TAG_TD:    if (st->usingtables) return __html_table_data_end_tag(st, next_tag, html, url);
+                    else break;
+    case TAG_TH:    if (st->usingtables) return __html_table_head_end_tag(st, next_tag, html, url);
+                    else break;
+    case TAG_TABLE: if (st->usingtables) return __html_table_end_tag(st, next_tag, html, url);
+                    else break;
+  #endif
+  #if 0
+    /* Not required because ANY tag will terminate a TITLE */
+    case TAG_TITLE:
+      DEC(st->_stream_title);
+      break;
+  #endif
+    case TAG_APPLET:
+    case TAG_OBJECT:
+      __html_stream_end_object(st);
+      break;
+    case TAG_FRAMESET:
+      if (st->_stream_frameset == 1 && st->had_frame) st->dead = 1;
+      DEC(st->_stream_frameset);
+      NOT_USED(size);
+      break;
+    case TAG_NOFRAMES:
+      st->_stream_noframes = 0;
+      break;
   }
   return NULL;
 }
@@ -1009,49 +1257,105 @@ static HStream *__html_stream_end_tag(StreamTokens *st, Tag next_tag, char **htm
 /* Knowing that we are in a image tag, grab the anchor information  */
 /* associated with it and return this info. 	       		    */
 /********************************************************************/
-static HStream *__html_stream_image(StreamTokens *st, char **html, Tag next_tag, char *url)
+static HStream *__html_stream_image(StreamTokens *st, char **html, Tag *next_tag)
 {
-  AnchorInfo  *anc;
   HStream     *return_val;
   char        *ptr;
 
-  return_val=HStreamalloc();
+  /* Throw out certain nasty image thingies which probably don't */
+  /* contribute much to the page alignment...                    */
+
+  if (ATTR_VAL(ALIGN) == 4 || ATTR_VAL(ALIGN) == 5)
+  {
+    if (
+         (
+           ATTR_SET(WIDTH) &&
+           ATTR_VAL(WIDTH) <= 2
+         )
+         ||
+         (
+           ATTR_SET(WIDTH)      &&
+           ATTR_SET(HEIGHT)     &&
+           ATTR_VAL(WIDTH) <= 6 &&
+           ATTR_VAL(HEIGHT) > ATTR_VAL(WIDTH) * 15
+         )
+       )
+       return NULL;
+  }
+
+  return_val=HStreamalloc(st, TAG_IMG);
   if (return_val != NULL) {
-    return_val->flags = 0;
-    anc=__html_get_anchor_info(st, html, next_tag);
-    if (anc != NULL) {
-      return_val->style=__html_stream_style(st) | IMG;
-      return_val->type=__html_stream_type(st,return_val->style,START);
-      if (anc->ismap) {
+    return_val->style=__html_stream_style(st) | IMG;
+    return_val->type=__html_stream_type(st, next_tag->type, START);
+    if (ATTR_SET(ISMAP))
         return_val->type|=TYPE_ISMAP;
-      }
-      return_val->type|=anc->alignment<<TYPE_ALIGN_SHIFT;
-      if (st->_stream_anchor!=NULL) {
-        return_val->anchor=__html_make_anchor(url,st->_stream_anchor->href);
-        return_val->target = (st->_stream_anchor->target);
-       }
-      else {
-        return_val->anchor=NULL;
-      }
-      return_val->text=strdup(anc->alt);
-      return_val->src=__html_make_anchor(url,anc->src);
-      return_val->name=st->_stream_anchor->name;
-//      return_val->target = strdup(st->_stream_anchor->target);
-     return_val->rows=anc->rows;
-      return_val->cols=anc->cols;
-      return_val->maxlen=anc->border;
-      return_val->next=NULL;
-      return_val->prev=NULL;
 
-      /* If one of HEIGHT or WIDTH are missing, remove the other one as
-         well to prevent confusion */
-      if (return_val->rows==0 || return_val->cols==0)
-        return_val->cols=return_val->rows=0;
+    if (ATTR_SET(USEMAP))
+    {
+        elementinfo_object *info;
+        info = (elementinfo_object *)__html_malloc(sizeof(elementinfo_object), 1);
+        if (info)
+        {
+            return_val->info = (elementinfo *) info;
+            info->usemap = ATTR_STR(USEMAP);
+            info->maps = st->maps;
+            return_val->type |= TYPE_ISCLIENTMAP;
+        }
     }
-    st->needtosend=0;
 
-    /* Get rid of the anchor info block */
-    __html_stream_free_anchor(&anc);
+
+    switch (ATTR_VAL(ALIGN))
+    {
+        case 1: return_val->type|=_html_top<<TYPE_ALIGN_SHIFT; break;
+        case 2: return_val->type|=_html_middle<<TYPE_ALIGN_SHIFT; break;
+        case 3: return_val->type|=_html_bottom<<TYPE_ALIGN_SHIFT; break;
+        case 4: return_val->type|=_html_left<<TYPE_ALIGN_SHIFT; break;
+        case 5: return_val->type|=_html_right<<TYPE_ALIGN_SHIFT; break;
+        case 6: return_val->type|=_html_centre<<TYPE_ALIGN_SHIFT; break;
+        default:return_val->type|=_html_none<<TYPE_ALIGN_SHIFT; break;
+    }
+
+    if (st->_stream_anchor!=NULL) {
+        return_val->anchor=st->_stream_anchor->href;
+        return_val->name=st->_stream_anchor->name;
+        return_val->target=st->_stream_anchor->target;
+        #ifdef LINEONE_HACK
+        return_val->onclick=st->_stream_anchor->onclick;
+        #endif
+    }
+
+    st->need_to_send_name=0;
+
+    return_val->text=ATTR_STR(ALT);
+
+    return_val->src=ATTR_STR(SRC);
+
+    if (ATTR_SET(WIDTH))
+    {
+        return_val->cols = ATTR_VAL(WIDTH) | (1<<24);
+        if (st->curattrs[WIDTH].miscflag)
+            return_val->cols |= UNITS_PERCENT << 28;
+        else
+            return_val->cols |= UNITS_PIXELS << 28;
+    }
+    if (ATTR_SET(HEIGHT))
+    {
+        return_val->rows = ATTR_VAL(HEIGHT) | (1<<24);
+        if (st->curattrs[HEIGHT].miscflag)
+            return_val->rows |= UNITS_PERCENT << 28;
+        else
+            return_val->rows |= UNITS_PIXELS << 28;
+    }
+
+    return_val->maxlen=ATTR_SET(BORDER) ? ATTR_VAL(BORDER) :
+                                          return_val->anchor ? 2 : 0;
+
+//    /* If one of HEIGHT or WIDTH are missing, remove the other one as
+//       well to prevent confusion */
+//    if (return_val->rows==0 || return_val->cols==0)
+//        return_val->cols=return_val->rows=0;
+
+    memset(st->needtosend, 0, sizeof st->needtosend);
 
   }
 
@@ -1064,8 +1368,8 @@ static HStream *__html_stream_image(StreamTokens *st, char **html, Tag next_tag,
  * the HTML pointer. Move it to past the next > or the end of the input
  * whichever is sooner. In theory it should be the former.
  */
-  ptr=*html;
-  while((*ptr != '\0') && (*ptr != '>')) ptr++;
+  ptr=*html + 1;
+  while((*ptr != '\0') && (*ptr != '>') && (*ptr != '<')) ptr++;
   if (*ptr=='>') ptr++;
   *html=ptr;
 
@@ -1078,36 +1382,44 @@ static HStream *__html_stream_image(StreamTokens *st, char **html, Tag next_tag,
 /* Knowing that we are in a HR tag, grab the anchor information     */
 /* associated with it and return this info. 	       		    */
 /********************************************************************/
-static HStream *__html_stream_hr(StreamTokens *st, char **html, Tag next_tag, char *url)
+static HStream *__html_stream_hr(StreamTokens *st, char **html, Tag *next_tag)
 {
-  AnchorInfo  *anc;
   HStream     *return_val;
   char        *ptr;
   int         noshade=0;
   int         alignment=_html_centre;
 
-  return_val=HStreamalloc();
+  return_val=HStreamalloc(st, TAG_HR);
   if (return_val != NULL) {
-    return_val->flags = 0;
-    anc=__html_get_anchor_info(st, html, next_tag);
-    if (anc != NULL) {
-      if (anc->noshade)
-        noshade = TYPE_NOSHADE;
-      if (anc->alignment != _html_none)
-          alignment = anc->alignment;
-      if (st->_stream_anchor!=NULL) {
-        return_val->anchor=__html_make_anchor(url,st->_stream_anchor->href);
-        return_val->name=st->_stream_anchor->name;
-      }
-      return_val->cols=anc->cols;
-      return_val->size=anc->size;
-      __html_stream_free_anchor(&anc);
-
+    if (ATTR_SET(NOSHADE))
+        noshade=TYPE_NOSHADE;
+    switch (ATTR_VAL(ALIGN))
+    {
+        case 1: alignment = _html_left; break;
+        case 2: alignment = _html_right; break;
+        default:alignment = _html_centre; break;
     }
-    st->needtosend=0;
-    return_val->name=st->_stream_anchor->name;
+    if (ATTR_SET(WIDTH))
+    {
+        return_val->cols = ATTR_VAL(WIDTH) | (1<<24);
+        if (st->curattrs[WIDTH].miscflag)
+            return_val->cols |= UNITS_PERCENT << 28;
+        else
+            return_val->cols |= UNITS_PIXELS << 28;
+    }
+    return_val->size=ATTR_VAL(SIZE);
+
+    memset(st->needtosend, 0, sizeof st->needtosend);
+    if (st->_stream_anchor!=NULL) {
+        return_val->anchor=st->_stream_anchor->href;
+        return_val->name=st->_stream_anchor->name;
+        #ifdef LINEONE_HACK
+        return_val->onclick=st->_stream_anchor->onclick;
+        #endif
+        st->need_to_send_name=0;
+    }
     return_val->style=__html_stream_style(st) | HR;
-    return_val->type=__html_stream_type(st,return_val->style,START) | noshade;
+    return_val->type=__html_stream_type(st, next_tag->type, START) | noshade;
     return_val->type &= ~TYPE_ALIGN_MASK;
     return_val->type |= alignment << TYPE_ALIGN_SHIFT;
     return_val->indent=__html_stream_indent(st);
@@ -1123,8 +1435,8 @@ static HStream *__html_stream_hr(StreamTokens *st, char **html, Tag next_tag, ch
  * the HTML pointer. Move it to past the next > or the end of the input
  * whichever is sooner. In theory it should be the former.
  */
-  ptr=*html;
-  while((*ptr != '\0') && (*ptr != '>')) ptr++;
+  ptr=*html + 1;
+  while((*ptr != '\0') && (*ptr != '>') && (*ptr != '<')) ptr++;
   if (*ptr=='>') ptr++;
   *html=ptr;
 
@@ -1137,12 +1449,50 @@ static HStream *__html_stream_hr(StreamTokens *st, char **html, Tag next_tag, ch
 /* Given an anchor start tag, extract the relevant information      */
 /* associated with this tag.  	      	  	   		    */
 /********************************************************************/
-static HStream *__html_stream_anchor(StreamTokens *st, char **html, Tag next_tag, char *url)
+static HStream *__html_stream_anchor(StreamTokens *st, char **html, Tag *next_tag)
 {
+  AnchorInfo *anc;
+  int gotsomething=0;
+
+  NOT_USED(html); NOT_USED(next_tag);
+
   if (st->_stream_anchor != NULL) __html_stream_end_anchor(st);
-  st->_stream_anchor=__html_get_anchor_info(st, html, next_tag);
-  if (st->_stream_anchor && !st->_stream_anchor->target)
-    st->_stream_anchor->target = strdup(st->target);
+
+  anc = (AnchorInfo *) __html_malloc(sizeof(AnchorInfo), 1);
+  if (!anc) return NULL;
+
+  if (ATTR_SET(NAME))
+      anc->name = ATTR_STR(NAME), gotsomething=1, st->need_to_send_name = 1;
+
+  if (ATTR_SET(HREF))
+      anc->href = ATTR_STR(HREF), gotsomething=1;
+
+  if (ATTR_SET(TARGET))
+      anc->target = ATTR_STR(TARGET), gotsomething=1;
+
+  #ifdef LINEONE_HACK
+  if (ATTR_SET(ONCLICK))
+      anc->onclick = ATTR_STR(ONCLICK), gotsomething=1;
+  #endif
+
+  /* Get the coordinates */
+  if (ATTR_SET(COORDS))
+      anc->coords = ATTR_COORDS(COORDS);
+  else if (ATTR_VAL(SHAPE) == areashape_DEFAULT)
+      /* If no coordinates, and shape = DEFAULT, that's okay - put in a dummy coords block. */
+      anc->coords = (int *) __html_malloc(sizeof(int), 2);
+
+  if (anc->coords)
+      anc->coords[0] = ATTR_VAL(SHAPE);
+
+  if (gotsomething)
+  {
+      if (!anc->target)
+          anc->target = strdup(st->target);
+
+      st->_stream_anchor = anc;
+  }
+
   return NULL;
 }
 
@@ -1152,35 +1502,49 @@ static HStream *__html_stream_anchor(StreamTokens *st, char **html, Tag next_tag
 /* Given a frame start tag, extract the relevant information        */
 /* associated with this tag.  	      	  	   		    */
 /********************************************************************/
-static HStream *__html_stream_frame (StreamTokens *st, char **html, Tag next_tag, char *url, int size)
+static HStream *__html_stream_frame (StreamTokens *st, char **html, Tag *next_tag)
 {
-  AnchorInfo  *anc;
   HStream     *return_val;
   char        *ptr;
 
-  return_val=HStreamalloc();
-  anc = __html_get_anchor_info(st, html, next_tag);
-  if (return_val != NULL) {
+  if (!st->usingframes)
+      return NULL;
+
+  return_val=HStreamalloc(st, TAG_FRAME);
+
+  if (return_val != NULL)
+  {
+    st->had_frame = 1;
+
     return_val->style  = __html_stream_style(st) | FRAME;
     return_val->tag    = FRAME;
-    return_val->type = __html_stream_type(st,return_val->style,START);
-    if (anc != NULL) {
-      if (anc->scrolling) {
-        return_val->type |= anc->scrolling << TYPE_SCROLLING_SHIFT;
-      }
-      if (anc->noresize) {
+    return_val->type = __html_stream_type(st, next_tag->type, START);
+    return_val->size   = st->_stream_frameset;
+    return_val->type |= ATTR_VAL(SCROLLING) << TYPE_SCROLLING_SHIFT;
+    if (ATTR_SET(NORESIZE))
         return_val->type |= TYPE_NORESIZE;
-      }
-      return_val->size   = st->_stream_frameset;
-      return_val->indent = anc->spacing;
-      return_val->maxlen = anc->maxlength;
-      return_val->rows   = anc->rows;
-      return_val->cols   = anc->cols;
-      return_val->name   = anc->name;
-      return_val->src=__html_make_anchor(url,anc->src);
+    if (ATTR_SET(FRAMEBORDER))
+    {
+        char *p = ATTR_STRPEEK(FRAMEBORDER);
+        UPPER_CASE(p);
 
-//      __html_stream_free_anchor(&anc);
+        if (strstr(p, "YES")) return_val->indent = 8;
+        else if (strstr(p, "NO")) return_val->indent = 0;
+        else
+        {
+            return_val->indent = atoi(p);
+            if (return_val->indent == 1)
+                return_val->indent = 8;
+        }
     }
+    else
+        return_val->indent = 8;
+    if (ATTR_SET(BORDERCOLOUR))
+        return_val->maxlen = ATTR_VAL(BORDERCOLOUR) | 1;
+    return_val->rows   = ATTR_VAL(MARGINHEIGHT);
+    return_val->cols   = ATTR_VAL(MARGINWIDTH);
+    return_val->name   = ATTR_STR(NAME);
+    return_val->src    = ATTR_STR(SRC);
   }
 
 /*
@@ -1189,11 +1553,83 @@ static HStream *__html_stream_frame (StreamTokens *st, char **html, Tag next_tag
  * whichever is sooner. In theory it should be the former.
  */
   ptr=*html;
-  while((*ptr != '\0') && (*ptr != '>')) ptr++;
+  while((*ptr != '\0') && (*ptr != '>') && (*ptr != '<')) ptr++;
   if (*ptr=='>') ptr++;
   *html=ptr;
 
-  __html_stream_grab_pcdata(html, size, 1);
+  __html_stream_grab_pcdata(html, 1, 1);
+  return return_val;
+}
+
+/********************************************************************/
+/* static HStream *__html_stream_frameset (char **html)             */
+/********************************************************************/
+/* Given a frame start tag, extract the relevant information        */
+/* associated with this tag.  	      	  	   		    */
+/********************************************************************/
+static HStream *__html_stream_frameset(StreamTokens *st, char **html, Tag *tag)
+{
+  HStream     *return_val;
+  char        *ptr;
+
+  if (!st->usingframes)
+      return NULL;
+
+  if (!ATTR_SET(ROWS) && !ATTR_SET(COLS)) return NULL;
+
+  st->_stream_frameset++;
+  st->_stream_noframes = 0;
+  return_val=HStreamalloc(st, TAG_FRAMESET);
+  if (return_val != NULL) {
+    return_val->style  = __html_stream_style(st) | tag->tag;
+    return_val->tag    = tag->tag;
+    return_val->type   = __html_stream_type(st, tag->type, START);
+    return_val->size   = st->_stream_frameset;
+    if (ATTR_SET(ROWS))
+    {
+        parse_rowcols(ATTR_STRPEEK(ROWS), NULL, &return_val->rows);
+        return_val->name = __html_malloc(sizeof(unsigned int), return_val->rows);
+        if (return_val->name)
+            parse_rowcols(ATTR_STRPEEK(ROWS), (unsigned int *) (return_val->name), NULL);
+    }
+    if (ATTR_SET(COLS))
+    {
+        parse_rowcols(ATTR_STRPEEK(COLS), NULL, &return_val->cols);
+        return_val->value = __html_malloc(sizeof(unsigned int), return_val->cols);
+        if (return_val->value)
+            parse_rowcols(ATTR_STRPEEK(COLS), (unsigned int *) (return_val->value), NULL);
+    }
+    if (ATTR_SET(FRAMEBORDER))
+    {
+        char *p = ATTR_STRPEEK(FRAMEBORDER);
+        UPPER_CASE(p);
+
+        if (strstr(p, "YES")) return_val->indent = 8;
+        else if (strstr(p, "NO")) return_val->indent = 0;
+        else
+        {
+            return_val->indent = atoi(p);
+            if (return_val->indent == 1)
+                return_val->indent = 8;
+        }
+    }
+    else
+        return_val->indent = 8;
+    if (ATTR_SET(BORDERCOLOUR))
+        return_val->maxlen = ATTR_VAL(BORDERCOLOUR) | 1;
+  }
+
+/*
+ * This routine is called with the understanding that it will update
+ * the HTML pointer. Move it to past the next > or the end of the input
+ * whichever is sooner. In theory it should be the former.
+ */
+  ptr=*html + 1;
+  while((*ptr != '\0') && (*ptr != '>') && (*ptr != '<')) ptr++;
+  if (*ptr=='>') ptr++;
+  *html=ptr;
+
+  __html_stream_grab_pcdata(html, 1, 1);
   return return_val;
 }
 
@@ -1203,27 +1639,20 @@ static HStream *__html_stream_frame (StreamTokens *st, char **html, Tag next_tag
 /* Given an anchor start tag, extract the relevant information      */
 /* associated with this tag.  	      	  	   		    */
 /********************************************************************/
-static HStream *__html_stream_base(StreamTokens *st, char **html, Tag next_tag, char *url)
+static HStream *__html_stream_base(StreamTokens *st)
 {
-char *newurl, *newtarget;
-  if (st->_stream_anchor != NULL) __html_stream_end_anchor(st);
-  st->_stream_anchor=__html_get_anchor_info(st, html, next_tag);
-  if (st->_stream_anchor != NULL) {
-    if (st->_stream_anchor->href != NULL) {
-      newurl=strdup(st->_stream_anchor->href);
-      if (newurl) {
-        __html_free(st->url,0);
-        st->url=newurl;
-      }
-    }
-    if (st->_stream_anchor->target != NULL) {
-      newtarget=strdup(st->_stream_anchor->target);
-      if (newtarget) {
-        __html_free(st->target,0);
-        st->target=newtarget;
-      }
-    }
+  if (ATTR_SET(HREF))
+  {
+      if (st->url) __html_free(st->url, 0);
+      st->url = ATTR_STR(HREF);
   }
+
+  if (ATTR_SET(TARGET))
+  {
+      if (st->target) __html_free(st->target, 0);
+      st->target = ATTR_STR(TARGET);
+  }
+
   return NULL;
 }
 
@@ -1239,6 +1668,7 @@ static void __html_stream_end_anchor(StreamTokens *st)
   __html_stream_free_anchor(&(st->_stream_anchor));
 }
 
+#if 0
 /********************************************************************/
 /* static HStream *__html_stream_end_header(char **html)            */
 /********************************************************************/
@@ -1247,8 +1677,11 @@ static void __html_stream_end_anchor(StreamTokens *st)
 /********************************************************************/
 static HStream *__html_stream_end_header(char **html)
 {
+  NOT_USED(html);
+
   return NULL;
 }
+#endif
 
 /********************************************************************/
 /* static void __html_style_init(styleinfo *s)                      */
@@ -1276,8 +1709,8 @@ StreamTokens *__html_stream_init(void)
 
   __html_style_init(&st->_stream_style);
 
-  st->_stream_body       =1;
   st->_stream_basefont   =3;
+  st->stripleadingspace  =1;
 
   return st;
 }
@@ -1288,116 +1721,34 @@ StreamTokens *__html_stream_init(void)
 /* Given any old tag block that isnt a PCDATA, create and return a  */
 /* stream element for that tag.	       	       	      	  	    */
 /********************************************************************/
-/*static*/ HStream *__html_stream_return_tag(StreamTokens *st, Tag tag, char **html, int start, char *url)
+/*static*/ HStream *__html_stream_return_tag(StreamTokens *st, Tag *tag, char **html, int start)
 {
   HStream *ret;
   char *ptr;
-  #ifdef TRACE
-  FILE *fp;
-  #endif
 
-  ret=HStreamalloc();
+  ret=HStreamalloc(st, tag->tag_no);
   if (ret != NULL) {
 
-      if (tag.tag!=BODY) {
-        ret->flags = 0;
-        ret->style=__html_stream_style(st) | tag.tag; // This appears to put dodgy stuff in the style word
-        ret->type=__html_stream_type(st,ret->style, start);
-      }
-      else {
-          ret->style=__html_stream_style(st) | IMG;
-          ret->type=(__html_stream_type(st,ret->style, start) | TYPE_HEAD) & ~TYPE_BODY;
-
-//          Printf ("In stream_return_tag %08x %08x\n", ret->style, ret->type);
-//          ********************ret->type |= 1;
-      }
-      #ifdef TABLE_SUPPORT
-      if (tag.tag==TABLE) {
-        ret->style|=HR;
-        #ifdef TRACE
-        fp=fopen("adfs::4.$.op","a");
-        if (fp) {
-          fprintf(fp,"TABLE found...\n");
-          fclose(fp);
-        }
-        #endif
-      }
-      #endif
+      ret->style=__html_stream_style(st) | tag->tag; // This appears to put dodgy stuff in the style word
+      ret->type=__html_stream_type(st, tag->type, start);
 
       ret->indent=__html_stream_indent(st);
 
       fill_in_colour_info(st, ret);
 
       if (st->_stream_anchor!=NULL) {
-        ret->anchor=__html_make_anchor(url, st->_stream_anchor->href);
+        #ifdef LINEONE_HACK
+        ret->onclick=st->_stream_anchor->onclick;
+        #endif
+        ret->anchor=st->_stream_anchor->href;
         ret->name=st->_stream_anchor->name;
+        st->need_to_send_name=0;
         ret->target=st->_stream_anchor->target;
       }
-      else {
-        ret->anchor=NULL;
-        ret->name=NULL;
-        ret->target=NULL;
-      }
 
-      ret->text=NULL;
-      if (tag.tag==BODY)
-        ret->tag=0;
-      else
-        ret->tag=tag.tag;
+      ret->tag=tag->tag;
 
-      #ifdef TABLE_SUPPORT
-      if (tag.tag == TABLE) {
-        ret->style|=HR;
-      }
-      #endif
-
-
-//      Printf ("%s has tag field %08x\n", tag.start_tag, tag.tag);
-
-      if (tag.tag == BODY) {
-        if (st->_stream_anchor != NULL) {
-          ret->src=__html_make_anchor(url,st->_stream_anchor->src);
-          /* These four store colour info for the page (special case) */
-          ret->size=st->_stream_anchor->size;
-          ret->rows=st->_stream_anchor->rows;
-          ret->cols=st->_stream_anchor->cols;
-          ret->maxlen=st->_stream_anchor->maxlength;
-          __html_stream_free_anchor(&(st->_stream_anchor));
-          ret->style |= IMG;
-        }
-        else {
-          ret->src=NULL;
-          /* Not valid RiscOS colours. Should be trapped by the UI */
-          ret->size=(unsigned int)-1;
-          ret->rows=(unsigned int)-1;
-          ret->cols=(unsigned int)-1;
-          ret->maxlen=(unsigned int)-1;
-        }
-      } else if (tag.tag == TYPE_FRAMESET) {
-//          ret->src=st->_stream_anchor->src;
-
-          if (st->_stream_anchor != NULL) {
-
-              ret->value=st->_stream_anchor->value;
-              st->_stream_anchor->value = 0;
-
-              ret->size=st->_stream_anchor->size;
-              ret->rows=st->_stream_anchor->rows;
-              ret->cols=st->_stream_anchor->cols;
-              ret->indent=st->_stream_anchor->spacing;
-              ret->maxlen=st->_stream_anchor->maxlength;
-          } else {
-              ret->value = 0;
-              ret->size = st->_stream_frameset;
-              ret->rows = 0;
-              ret->cols = 0;
-              ret->indent = 1;
-              ret->maxlen = 0x00000000;
-          }
-
-      } else ret->src=NULL;
-      ret->prev=NULL;
-      st->needtosend=0;
+      memset(st->needtosend, 0, sizeof st->needtosend);
   }
 
 /*
@@ -1406,194 +1757,13 @@ StreamTokens *__html_stream_init(void)
  * whichever is sooner. In theory it should be the former.
  */
   if (html != NULL) {
-    ptr=*html;
-    while((*ptr != '\0') && (*ptr != '>')) ptr++;
+    ptr=*html + 1;
+    while((*ptr != '\0') && (*ptr != '>') && (*ptr != '<')) ptr++;
     if (*ptr=='>') ptr++;
     *html=ptr;
   }
 
   return ret;
-}
-
-/********************************************************************/
-/* static char *__html_make_anchor(char *base, char *link)          */
-/********************************************************************/
-/* Given a base URL and another URL (e.g. a link or an image), this */
-/* routine constructs the resultant URL from the pair               */
-/********************************************************************/
-
-char * __html_make_anchor(char * base, char * link)
-{
-  char        * ret = NULL;
-  char        * copy;
-  char        * buffer;
-  char        * uri;
-  extern char * __html_tidy_url(char * url);
-
-  if (link == NULL) return NULL;
-
-  if (base == NULL) // || (strstr(base,"ADFS:") != NULL)
-  {
-    ret = strdup(link);
-    return ret;
-  }
-
-  if (link[0] == '#')
-  {
-    /* It's a within document link */
-
-    ret = __html_malloc(strlen(link) + strlen(base) + 1, 1);
-    if (ret) strdoublecpy(ret, base, link);
-
-    return ret;
-  }
-
-  /* Should have a Fetcher_Relativise call                               */
-  /*                                                                     */
-  /* Simple test for a fully qualified URL. Look for '://' in the string */
-  /* Also catch "mailto:" and "x500:" URLs at this point. We expect the  */
-  /* method to be at the start of the string. (This is to allow for      */
-  /* funny proxies :)                                                    */
-  /*                                                                     */
-  /* The test on ret - link <= 9 ensures URLs that are indeed relative,  */
-  /* but contain URLs themselves (e.g. as part of some CGI info in the   */
-  /* link) aren't treated as absolute (see below for more of this kind   */
-  /* of consideration). We want the :// to be within about the first 9   */
-  /* characters, more or less...                                         */
-
-  ret = strstr(link, "://");
-
-  if (
-       (ret && ret - link <= 9)     ||
-       !strincmp(link,"MAILTO:",7)  ||
-       !strincmp(link,"NEWS:",  5)  ||
-       !strincmp(link,"X500:",  5)
-     )
-  {
-
-    ret = strdup(link);
-    return ret;
-  }
-
-  /* Now look for broken URLs of the form 'method:/path/to/file' or           */
-  /* 'method:relative/path'. These are a tad more difficult to deal with      */
-  /* so a separate routine is needed to do this :) This relies on mailto and  */
-  /* x500 being caught above.                                                 */
-  /*                                                                          */
-  /* Also the test for being more than 7 chars in is needed for places like   */
-  /* www.pathfinder.com who have URLs of the form:                            */
-  /*                                                                          */
-  /* /adgw/nph-adgw.cgi?url=http:%2f%2fchess.ibm.park.org&advertiser=...      */
-  /* IBM%20OS2&description=IBM%20Chess%20Button&source=%2fpathfinder%2f...    */
-  /* welcome.html                                                             */
-  /*                                                                          */
-  /* which contain the sequence "http:" (Technically the ':' should be        */
-  /* encoded too I believe!). Anyway since mailto is the longest method, 7    */
-  /* should be okay, I hope!. Alternatively if this is found to be unreliable */
-  /* change the buffer=strchr() bit and the *link=='/' bits around.           */
-
-  buffer = strchr(link, ':');
-
-  if (buffer && (buffer - link < 7))
-  {
-    buffer++;
-
-    uri = strdup(buffer); /* Buffer should now contain URI. Just need new base */
-    if (!uri) return NULL;
-
-    /* Now get the method bit - ughh! */
-
-    buffer = strdup(link);
-
-    if (!buffer) return buffer;
-
-    ret  = strchr(buffer,':'); /* Can't fail because of above */
-    *ret = '\0';
-
-    /* Now need to construct new base bit. */
-    copy=__html_malloc(strlen(base)+strlen(buffer)+1,1);
-    if (!copy) return copy;
-    /* We have up to the : so skip that in base */
-    base=strchr(base,':');
-    if (base==NULL) return base;
-    sprintf(copy,"%s%s",buffer,base);
-    base=copy;
-    link=uri;
-  }
-
-/* The 1st case. The link starts with a '/' so it is an absolute URL
- * around the same host/method base.
- */
-  if (*link=='/') {
-    link++;
-    ret=__html_malloc(strlen(base)+strlen(link)+1,sizeof(char));
-    if (ret==NULL) return NULL;
-
-    strcpy(ret,base);
-    copy=ret;
-    copy=strstr(copy,"://");
-    if (copy==NULL) {
-      __html_free(ret, 0);
-      return NULL;
-    }
-    copy++; copy++; copy++;
-    copy=strchr(copy,'/');
-    if (copy==NULL) {
-      __html_free(ret, 0);
-      return NULL;
-    }
-    copy++; *copy='\0';
-    strcat(ret,link);
-    return ret;
-  }
-
-/* The 2nd case. The link starts with a './' so it is an relative URL
- * around this page
- */
-  if ((*link=='.') && (*(link+1)=='/')) {
-    link++; link++;
-
-default_return:
-
-/*
- * Basically we need to look back through base to find the last '/'
- * and append link at that point. So we need a string the length
- * of base and link, and then blat the two strings into it.
- *
- * So grab a copy of base, and strip it back to the required point
- */
-    ret=copy=strdup(base);
-
-    if (ret==NULL) return ret;
-
-    ret=strrchr(copy,'/');
-
-    if (ret==NULL) {
-      __html_free(copy, 0);
-      return NULL;
-    }
-    ret++;
-    *ret='\0';
-
-/* Create a big enough string */
-    ret=__html_malloc(strlen(copy)+strlen(link)+1,sizeof(char));
-    if (ret==NULL) return ret;
-/* Add the two strings into the return buffer */
-    strdoublecpy(ret, copy, link);
-    return __html_tidy_url(ret);
-  }
-
-/* 3rd case. The link has a ':' in it. Assume its a link such as a
- * mailto request. (i.e. host independant URL)
- */
-
- if (strchr(link, ':') != NULL) {
-   ret=strdup(link);
-   return ret;
- }
-
-/* Otherwise this is sort of the same as case 2 sans the './' */
- goto default_return;
 }
 
 /********************************************************************/
@@ -1608,28 +1778,12 @@ AnchorInfo *anc=*anchor;
 
   if (!anchor || !anc) return;
 
-  if (anc->href != NULL)    __html_free(anc->href,0);
-  if (anc->src != NULL)     __html_free(anc->src,0);
-  if (anc->alt != NULL)     __html_free(anc->alt,0);
-  if (anc->action != NULL)  __html_free(anc->action,0);
-  if (anc->enctype != NULL) __html_free(anc->enctype,0);
-  if (anc->value != NULL)   __html_free(anc->value,0);
-//  if (anc->target != NULL)  __html_free(anc->target,0);
+  /* Don't free href or target - HStreams point directly to them.
+   * They will get freed normally when the stream is discarded.
+   */
   __html_free(anc,0);
 
   *anchor=NULL;
-}
-
-/********************************************************************/
-/* static void strdoublecpy(char *buffer, char *s1, char *s2)       */
-/********************************************************************/
-/* Copy s1 and s2 into buffer, with no space between them           */
-/********************************************************************/
-
-static void strdoublecpy(char *buffer, char *s1, char *s2)
-{
-  if (buffer==NULL) return;
-  sprintf(buffer,"%s%s",s1,s2);
 }
 
 /********************************************************************/
@@ -1640,91 +1794,100 @@ static void strdoublecpy(char *buffer, char *s1, char *s2)
 /* keep them in one bit. NOTE: LINKS WITHIN FORMS ARE DUFF AT THE   */
 /* moment due to an earlier oversight. Fix soon	      	      	    */
 /********************************************************************/
-static HStream * __html_form_handler(StreamTokens *st, Tag next_tag, char **html, char *url, int size)
+static HStream * __html_form_handler(StreamTokens *st, Tag *next_tag, char **html, int size)
 {
-AnchorInfo *anc;
 HStream *ret;
 char *ptr; /* Hackery - used to get text after tag */
 char *p;
 
 /* Since a form shouldnt be within an anchor, we can clear the anchor state */
-  if (st->_stream_forms) __html_stream_free_anchor(&(st->_stream_forms));
+  /*if (st->_stream_forms) __html_stream_free_anchor(&(st->_stream_forms));*/
 
-/* Now get the form information out of the anchor */
-  anc=__html_get_anchor_info(st, html, next_tag);
-
-/* Always check for those NULLs. */
-  if (anc == NULL && next_tag.tag != OPTION)
-      return (HStream *)anc; /* 2 instructions saved :) */
-
-  st->_stream_forms = anc;
 
 /* Fill in a return slip :) */
-  ret=HStreamalloc();
+  ret=HStreamalloc(st, next_tag->tag_no);
   if (!ret) return ret;
 
    ret->flags = 0;
    fill_in_colour_info(st, ret);
 
-  if (next_tag.tag == OPTION || next_tag.tag == TEXTAREA || next_tag.tag == SELECT)
+  if (next_tag->tag_no == TAG_OPTION ||
+      next_tag->tag_no == TAG_TEXTAREA ||
+      next_tag->tag_no == TAG_SELECT)
   {
-    ptr=*html;
-    while((*ptr != '\0') && (*ptr != '>')) ptr++;
+    ptr=*html + 1;
+    while((*ptr != '\0') && (*ptr != '>') && (*ptr != '<')) ptr++;
     if (*ptr=='>') ptr++;
     *html=ptr;
   }
 
 /* This is the nasty bit :) Decide what to do based on the tag */
-  switch(next_tag.tag) {
-    case FORM: /* Fill in method bit etc */
-    	       st->_stream_form=1;
+  switch(next_tag->tag_no) {
+    case TAG_FORM: /* Fill in method bit etc */
     	       ret->tag=FORM;
-    	       if (!anc->method)
-    	            anc->method=1; /* Default to GET form (there are morons out there) */
-	       ret->style=__html_stream_style(st);
-	       ret->type=__html_stream_type(st, ret->style, START);
-	       ret->anchor=__html_make_anchor(url, st->_stream_forms->action);
-	       if (st->_stream_anchor) {
-                 ret->target = st->_stream_anchor->target;
-               }
-               ret->enctype=strdup(st->_stream_forms->enctype);
+    	       ret->info=(elementinfo *)__html_malloc(sizeof(elementinfo_form), 1);
+    	       if (!ret->info) { __html_free(ret, 0); return NULL; }
+	       ret->style=__html_stream_style(st) | FORM;
+	       ret->type=__html_stream_type(st, next_tag->type, START);
                ret->indent=__html_stream_indent(st);
-               st->needtosend |= FORM;
+               if (ATTR_SET(ACTION))
+    	           ret->info->form.action     = ATTR_STR(ACTION);
+    	       else
+    	           ret->info->form.action     = strdup(st->url);
+    	       ret->info->form.method         = (formmethod) ATTR_VAL(METHOD);
+               ret->info->form.accept_charset = ATTR_STR(ACCEPT_CHARSET);
+               ret->info->form.enctype        = ATTR_STR(ENCTYPE);
+               ret->info->form.onsubmit       = ATTR_STR(ONSUBMIT);
+               ret->info->form.onreset        = ATTR_STR(ONRESET);
+               if (ATTR_SET(TARGET))
+                   ret->info->form.target     = ATTR_STR(TARGET);
+               else
+                   ret->info->form.target     = strdup(st->target);
+               st->needtosend[TAG_FORM] = 1;
 	       break;
 
-    case INPUT: /* Do lots of bits */
-    	       ret->tag=INPUT;
-	       ret->style=__html_stream_style(st) | INPUT;
-	       ret->type=__html_stream_type(st, ret->style, START);
+    case TAG_INPUT: /* Do lots of bits */
+    {
+               elementinfo_input *info;
+
+    	       info=(elementinfo_input *)__html_malloc(sizeof(elementinfo_input), 1);
+    	       ret->info=(elementinfo *)info;
+    	       if (!info) { __html_free(ret, 0); return NULL; }
+	       ret->style=__html_stream_style(st) | FORM;
+	       ret->type=__html_stream_type(st, next_tag->type, START);
+               ret->indent=__html_stream_indent(st);
 	       /* INPUTy bits */
-	       ret->maxlen=st->_stream_forms->maxlength;
-	       ret->size=st->_stream_forms->size;
-	       ret->value=strdup(st->_stream_forms->value);
-	       if (st->_stream_forms->type <= 1) {
-  	         if (ret->maxlen > 0) {
-  	           ret->text=strndup(ret->value,ret->maxlen); /* Ensure big buffer */
+               info->type      = (inputtype) ATTR_VAL(TYPE);
+	       info->name      = ATTR_STR(NAME);
+	       info->value     = ATTR_STR(VALUE);
+               info->checked   = ATTR_SET(CHECKED);
+               info->disabled  = ATTR_SET(DISABLED);
+               info->readonly  = ATTR_SET(READONLY);
+	       info->size      = ATTR_VAL(SIZE);
+	       info->maxlength = ATTR_VAL(MAXLENGTH);
+	       info->src       = ATTR_STR(SRC);
+	       info->alt       = ATTR_STR(ALT);
+	       info->usemap    = ATTR_STR(USEMAP);
+	       info->align     = (imgalign) ATTR_VAL(ALIGN);
+               info->tabindex  = ATTR_VAL(TABINDEX);
+               info->onfocus   = ATTR_STR(ONFOCUS);
+               info->onblur    = ATTR_STR(ONBLUR);
+               info->onselect  = ATTR_STR(ONSELECT);
+               info->onchange  = ATTR_STR(ONCHANGE);
+               info->accept    = ATTR_STR(ACCEPT);
+	       if (info->type == inputtype_TEXT || info->type == inputtype_PASSWORD) {
+  	         if (info->maxlength > 0) {
+  	           ret->text=strndup(info->value, info->maxlength); /* Ensure big buffer */
   	         }
   	         else {
-  	           ret->text=strndup(ret->value, 1024);
+  	           ret->text=strndup(info->value, 1024);
   	         }
-  	       }
-	       ret->name=strdup(st->_stream_forms->name);
-	       ret->src=strdup(st->_stream_forms->src);
-               ret->indent=__html_stream_indent(st);
+  	       } else if (info->type == inputtype_IMAGE)
+  	           ret->text=strdup(info->alt);
 	       break;
+    }
 
-    case SELECT: /* Check multiple bits */
-#ifdef OLDCODE
-    	       st->_stream_select=1;
-    	       ret->tag=SELECT;
-	       ret->style=__html_stream_style(st) | SELECT;
-	       ret->type=__html_stream_type(st, ret->style, START);
-	       /* SELECTy bits */
-	       ret->name=strdup(st->_stream_forms->name);
-               ret->indent=__html_stream_indent(st);
-	       st->needtosend |= SELECT;
-	       break;
-#else
+    case TAG_SELECT: /* Check multiple bits */
                 /* Right, here we go. We need to grab data until the next
                    </SELECT> */
                 if ((p = strinstr(*html, "</SELECT>", size)) == NULL)
@@ -1732,17 +1895,18 @@ char *p;
                     *html=0;       /* Signal back-up */
                     RETURN(NULL);
                 }
-                return __html_form_parse_select(st, html, p-*html, ret);
-#endif
+                return __html_form_parse_select(st, html, p-*html+1, ret);
 
-    case OPTION: /* OPTION tag */
-    	       ret->tag=OPTION;
-	       ret->style=__html_stream_style(st) | OPTION;
-	       ret->type=__html_stream_type(st, ret->style, START);
+    case TAG_OPTION: /* OPTION tag */
+    	       ret->info=(elementinfo *)__html_malloc(sizeof(elementinfo_option), 1);
+    	       if (!ret->info) { __html_free(ret, 0); return NULL; }
+	       ret->style=__html_stream_style(st) | FORM;
+	       ret->type=__html_stream_type(st, next_tag->tag, START);
 	       /* OPTIONy bits */
-	       if (st->_stream_forms)
-	           ret->value=strdup(st->_stream_forms->value);
-	       ret->text=__html_stream_grab_pcdata(html, size, 1);
+	       ret->value=ATTR_STR(VALUE);
+	       ret->info->option.selected = ATTR_SET(SELECTED);
+	       ret->info->option.disabled = ATTR_SET(DISABLED);
+	       ret->text=__html_stream_grab_pcdata(html, 1, !st->_stream_pre);
 	       if (ret->text==NULL)
 	       {
 	           __html_free(ret,0);
@@ -1759,11 +1923,9 @@ char *p;
 	       break;
 
     default: /* TEXTAREA */
-    	       st->_stream_textarea=1;
-    	       ret->tag=TEXTAREA;
-	       ret->style=__html_stream_style(st) | TEXTAREA;
-	       ret->type=__html_stream_type(st, ret->style, START);
-	       ret->text=__html_stream_grab_pcdata(html, size, 1);
+	       ret->style=__html_stream_style(st) | FORM;
+	       ret->type=__html_stream_type(st, next_tag->type, START);
+	       ret->text=__html_stream_grab_pcdata(html, 1, 1);
 	       if (ret->text==NULL)
 	       {
 	           __html_free(ret,0);
@@ -1771,23 +1933,27 @@ char *p;
 	           RETURN(NULL);
 	       }
 	       /* TextArea Bits */
-	       ret->cols=st->_stream_forms->cols;
-	       ret->rows=st->_stream_forms->rows;
-	       ret->name=strdup(st->_stream_forms->name);
+	       ret->cols=ATTR_VAL(COLS);
+	       ret->rows=ATTR_VAL(ROWS);
+	       ret->name=ATTR_STR(NAME);
+	       /*st->form_disabled = ATTR_SET(DISABLED);*/
                 __html_strip_lfs(ret->text); /* Strip CRs, preserve LFs */
                __html_unescape_string(ret->text);
                ret->indent=__html_stream_indent(st);
 	       break;
   }
 
+  if (ret)
+      fill_in_colour_info(st, ret);
+
   return ret;
 }
 
-HStream *__html_return_text_token(char *doc, size_t size)
+HStream *__html_return_text_token(StreamTokens *st, char *doc, size_t size)
 {
 HStream *return_val=NULL;
 
-  return_val=HStreamalloc();
+  return_val=HStreamalloc(st, (tag_no)0);
 
   if (return_val != NULL) {
 
@@ -1800,8 +1966,6 @@ HStream *return_val=NULL;
     __html_strip_control_codes(return_val->text);
     return_val->type=TYPE_BODY;
     return_val->tag=PCDATA;
-    return_val->src=NULL;
-    return_val->prev=NULL;
     return_val->fontsize = 3;
   }
   return return_val;
@@ -1820,13 +1984,17 @@ static HStream *__html_form_parse_select(StreamTokens *st, char **html, int size
     HStream *h, *hp;
     StreamTokens *s;
     int count,items;
+    elementinfo_select *info;
 
     /* Re-enter the parser - get a stream for our block, and pull out the
        OPTION tags(!) */
 
-    s=HtmlParse(st->url, size, TYPE_HTMLFILE, 0);
-    /* Hack hack hack hack! */
-    s->_stream_form=1;
+    #ifdef UNIFONT
+    s=HtmlParse(st->url, size, TYPE_HTMLFILE, st->usingframes, st->usingobjects, 0, 106 /* UTF-8 */, priority_user);
+    #else
+    s=HtmlParse(st->url, size, TYPE_HTMLFILE, st->usingframes, st->usingobjects, 0, 5001 /* Acorn Latin-1 */, priority_user);
+    #endif
+    /* Hack hack hack! */
     s->_stream_select=1;
     h=HtmlGetStream(s, &ptr, size, NULL);
     __html_set_memory_context(st->memcontext);
@@ -1835,7 +2003,8 @@ static HStream *__html_form_parse_select(StreamTokens *st, char **html, int size
                1st word: number of options
                2nd word: flags (0)
        then per option:
-               Flags byte (0 atm)
+               Flags byte: bit 0 = selected
+                           bit 1 = disabled
                Displayed text, terminated by zero byte
                Symbolic name, terminated by a zero byte (just a zero byte if not
                                                          present)
@@ -1847,56 +2016,69 @@ static HStream *__html_form_parse_select(StreamTokens *st, char **html, int size
     hp=h;
     while (hp)
     {
-        if (hp->tag == OPTION)
+        if (hp->tagno == TAG_OPTION)
         {
-            count+=1+strlen(hp->text)+1+(hp->value?strlen(hp->value):0)+1;
-            items+=1;
+            count += 1 +
+                     strlen(hp->text) +
+                     1 +
+                     (hp->value ? strlen(hp->value) : strlen(hp->text)) +
+                     1;
+
+            items += 1;
         }
         hp=hp->next;
     }
     count+=1;
-    /* Hack! */
-    ret->value=p=__html_malloc(count, 1);
-    *((int *)p)=items; p+=4;
-    *((int *)p)=0; p+=4;
+
+    info=(elementinfo_select *)__html_malloc(sizeof(elementinfo_select), 1);
+    ret->info=(elementinfo *)info;
+    if (!info) { HtmlStreamFree(h); free(s); __html_free(ret, 0); return NULL; }
+
+    info->options=(int *)__html_malloc(count, 1);
+    info->options[0] = items;
+    info->options[1] = 0;
+    p = (char *) &info->options[2];
     hp=h;
     while (hp)
     {
-        if (hp->tag == OPTION)
+        if (hp->tagno == TAG_OPTION)
         {
             int len;
 
             /* Flags byte */
-            *p++=(hp->type & TYPE_SELECTED) ? 1 : 0;
+            *p++=hp->info->option.selected;
 
             sprintf(p, "%s%n", hp->text, &len); p+=len;
             /* Strip trailing spaces */
             while (*(p-1)==' ')
                 *--p='\0';
             p++;
-            if (hp->value)
-            {
-                sprintf(p, "%s%n", hp->value, &len); p+=len+1;
-            }
-            else
-                *p++='\0';
+            sprintf(p, "%s%n", hp->value ? hp->value : hp->text, &len); p+=len+1;
         }
         hp=hp->next;
     }
     *p=0xFF;
-    assert((p+1)-ret->value == count);
+    assert((p+1)-(char *)info->options == count);
 
     HtmlStreamFree(h);
-    free(s);
+    HtmlEndParse(s);
 
-    ret->tag=SELECT;
-    ret->style=__html_stream_style(st) | SELECT;
-    ret->type=__html_stream_type(st, ret->style, START);
-    ret->name=strdup(st->_stream_forms->name);
-    ret->size=st->_stream_forms->size;
+    ret->style=__html_stream_style(st) | FORM;
+    ret->type=__html_stream_type(st, TYPE_BODY, START);
     ret->indent=__html_stream_indent(st);
+
+    info->name     = ATTR_STR(NAME);
+    info->disabled = ATTR_SET(DISABLED);
+    info->multiple = ATTR_SET(MULTIPLE);
+    info->size     = ATTR_VAL(SIZE);
+    info->tabindex = ATTR_VAL(TABINDEX);
+    info->onfocus  = ATTR_STR(ONFOCUS);
+    info->onblur   = ATTR_STR(ONBLUR);
+    info->onselect = ATTR_STR(ONSELECT);
+    info->onchange = ATTR_STR(ONCHANGE);
+
     fill_in_colour_info(st, ret);
-    st->needtosend |= SELECT;
+    st->needtosend[TAG_SELECT] = 1;
 
     ptr=*html+size;
 
@@ -1907,3 +2089,307 @@ static HStream *__html_form_parse_select(StreamTokens *st, char **html, int size
 
     return ret;
 }
+
+static HStream *__html_stream_end_form(StreamTokens *st, char **html)
+{
+    HStream *ret;
+    char *ptr;
+    ret = HStreamalloc(st, TAG_FORM_END);
+    if (ret)
+    {
+        ret->style=__html_stream_style(st) | FORM;
+        ret->type=__html_stream_type(st, TYPE_BODY, END);
+        ret->indent=__html_stream_indent(st);
+        ret->tag=FORM;
+        fill_in_colour_info(st, ret);
+    }
+
+  /*
+   * This routine is called with the understanding that it will update
+   * the HTML pointer. Move it to past the next > or the end of the input
+   * whichever is sooner. In theory it should be the former.
+   */
+    ptr=*html + 1;
+    while((*ptr != '\0') && (*ptr != '>') && (*ptr != '<')) ptr++;
+    if (*ptr=='>') ptr++;
+    *html=ptr;
+
+    return ret;
+
+}
+
+HStream *HStreamalloc(StreamTokens *st, tag_no tagno)
+{
+    HStream *ret;
+
+    if (tagno == TAG_TABLE) ret = (HStream *)__html_malloc(sizeof(table_stream), 1);
+    else                    ret = (HStream *)__html_malloc(sizeof(HStream),      1);
+
+    if (ret)
+    {
+        ret->parent = st->current_cell;
+        ret->tagno = tagno;
+    }
+
+    return ret;
+}
+
+static int my_strncasecmp(const char *a, const char *b, unsigned int n)
+{
+    while( *a && *b && n-- )
+	if( tolower(*a++) != tolower(*b++) )
+	    return 1;
+
+    return 0;
+}
+
+
+static HStream *__html_stream_script(StreamTokens *st, char **html, int size, const char *term, tag_no tagno)
+{
+    char *ptr = *html;
+    int termlen = strlen(term);
+    char term0 = term[0];
+
+    while (size)
+    {
+        if (*ptr == term0)
+        {
+            if (size < termlen)
+                RETURN(NULL);
+
+            if (my_strncasecmp(ptr, term, termlen)==0)
+            {
+                HStream *ret;
+
+                st->state = Other;
+                /* Produce a return token with the data in the text field */
+                ret = HStreamalloc(st, tagno);
+                if (ret)
+                {
+                    /*ret->style = __html_stream_style(st);*/
+                    ret->type = __html_stream_type(st, TYPE_HEAD, START);
+                    ret->text = strndup(*html, ptr - *html - 1);
+                    __html_unescape_string(ret->text);
+                }
+                if (!st->_stream_pre)
+                    *html = __html_skip_record_end(ptr, 1);
+                else
+                    *html = ptr;
+                st->stripleadingspace = 1;
+                return ret;
+            }
+        }
+        ptr++;
+        size--;
+    }
+
+    RETURN(NULL);
+}
+
+/* parse_rowcols (local)
+ *
+ *   ptr -> FRAMESET ROWS=""/COLS="" data to parse
+ *   values = NULL:
+ *      put number of data into number
+ *   value != NULL:
+ *      put data into values array
+ *
+ * counts number of data items, or puts data items in an array
+ */
+
+static void parse_rowcols (char *ptr, unsigned int *values, unsigned int *number) {
+
+  unsigned int value;
+
+  if (!values) *number = 0;
+
+  do {
+    while (isspace(*ptr)) ptr++;
+    value = 0;
+    if (isdigit(*ptr)) {
+      value = (unsigned int) strtol (ptr, &ptr, /*base=*/10);
+    }
+    while (isspace(*ptr)) ptr++;
+    if (*ptr == '*') {
+
+      if (!value) value = 1;
+      value |= ROWCOL_STAR;
+      ptr++;
+
+    } else if (*ptr == '%') {
+
+      /* Navigator handles a single '%' as '100%', it seems */
+
+      if (!value) value = 100;
+      value |= ROWCOL_PERCENT;
+      ptr++;
+    }
+    while (isspace(*ptr)) ptr++;
+    if (*ptr == ',') {
+      ptr++;
+    }
+    while (isspace(*ptr)) ptr++;
+
+    if (values) {
+      *values++ = value;
+    } else {
+      *number += 1;
+    }
+
+  } while (isdigit (*ptr) || *ptr == '*' || *ptr == '%');
+}
+
+/********************************************************************/
+/* static HStream *__html_map_handler(char **html)                  */
+/********************************************************************/
+/* Given an map tag, prepare a new MapStream.              	    */
+/********************************************************************/
+static HStream *__html_map_handler(StreamTokens *st)
+{
+    MapStream *map;
+
+    /* Need a name */
+    if (!ATTR_STRPEEK(NAME)) return NULL;
+
+    map = (MapStream *) __html_malloc(sizeof(MapStream), 1);
+    if (!map) return NULL;
+
+    map->name = ATTR_STR(NAME);
+    map->next = st->maps->next;
+    st->maps->next = map;
+    st->_stream_map = 1;
+
+    return NULL;
+}
+
+/********************************************************************/
+/* static HStream *__html_stream_area(char **html)                  */
+/********************************************************************/
+/* Given an area tag, extract the relevant information              */
+/* associated with this tag and present it as an <A> element,       */
+/* attached to the current map.                         	    */
+/********************************************************************/
+static HStream *__html_stream_area(StreamTokens *st, char **html, Tag *next_tag)
+{
+  HStream *ret, **prev;
+
+  NOT_USED(next_tag);
+
+  if (!st->_stream_map) return NULL;
+
+  /* Fill in an HStream */
+  ret = __html_stream_return_tag(st, next_tag, html, 1);
+  if (!ret)
+      return NULL;
+
+  ret->style |= A;
+
+  /* Get the coordinates */
+  if (ATTR_SET(COORDS))
+      ret->coords = ATTR_COORDS(COORDS);
+  else if (ATTR_VAL(SHAPE) == areashape_DEFAULT)
+      /* If no coordinates, and shape = DEFAULT, that's okay - put in a dummy coords block. */
+      ret->coords = (int *) __html_malloc(sizeof(int), 2);
+
+  if (!ret->coords)
+  {
+      __html_free(ret, 0);
+      return NULL;
+  }
+
+  ret->coords[0] = ATTR_VAL(SHAPE);
+
+  ret->anchor = ATTR_STR(HREF);
+
+  if (ATTR_SET(TARGET))
+      ret->target = ATTR_STR(TARGET);
+  else
+      ret->target = strdup(st->target);
+
+  if (ATTR_SET(ALT))
+      ret->text = ATTR_STR(ALT);
+  else
+      ret->text = strdup(ret->anchor);
+
+  for (prev = &st->maps->next->stream; *prev; prev = &(*prev)->next)
+      continue;
+
+  *prev = ret;
+
+  return NULL;
+}
+
+/********************************************************************/
+/* static HStream *__html_skip_record_end(char *s)                  */
+/********************************************************************/
+/* Skip over record ends (RE) (line feed). Need to cope with there  */
+/* being spaces at the end of lines or start of the last line.      */
+/********************************************************************/
+static char *__html_skip_record_end(const char *s, int skip_leading)
+{
+    const char *p = s;
+    bool found_re = false;
+
+    while ((*p == ' ' || *p == 10 || *p == 13) && !(found_re && !skip_leading && *p == ' '))
+    {
+        if (*p != ' ')
+            found_re = true;
+
+        p++;
+    }
+
+    return (char *) (found_re ? p : s);
+}
+
+static HStream *__html_stream_q(StreamTokens *st, char **html, int start)
+{
+    HStream *ret;
+    char *ptr;
+    static const char quote[2][2][4] =
+    {
+        #ifdef UNIFONT
+        "â€", "â€˜", "â€™", "â€œ"
+        #else
+        "•",   "",   "‘",   "”"
+        #endif
+    };
+
+    ret = HStreamalloc(st, (tag_no)0);
+    if (ret)
+    {
+        ret->text = strdup(quote[st->_stream_q & 1][start]);
+        ret->style=__html_stream_style(st) | PCDATA;
+        ret->type=__html_stream_type(st, TYPE_BODY, START);
+        ret->indent=__html_stream_indent(st);
+        ret->tag=PCDATA;
+        st->lastwaspcdata = 1;
+        fill_in_colour_info(st, ret);
+        memset(st->needtosend, 0, sizeof st->needtosend);
+        if (st->_stream_anchor != NULL)
+        {
+            ret->anchor=st->_stream_anchor->href;
+            #ifdef LINEONE_HACK
+            ret->onclick=st->_stream_anchor->onclick;
+            #endif
+            ret->name=st->_stream_anchor->name;
+            st->need_to_send_name=0;
+            ret->target = st->_stream_anchor->target;
+        }
+    }
+
+    st->_stream_q += start ? +1 : -1;
+
+  /*
+   * This routine is called with the understanding that it will update
+   * the HTML pointer. Move it to past the next > or the end of the input
+   * whichever is sooner. In theory it should be the former.
+   */
+    ptr=*html + 1;
+    while((*ptr != '\0') && (*ptr != '>') && (*ptr != '<')) ptr++;
+    if (*ptr=='>') ptr++;
+    *html=ptr;
+
+    return ret;
+
+}
+
