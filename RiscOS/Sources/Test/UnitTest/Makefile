@@ -65,11 +65,12 @@ BASEOBJS  = ${OM}.Display ${OM}.DRAMTest ${OM}.InputTest \
             ${OM}.Modem ${OM}.Msgs ${OM}.NVRAMTest ${OM}.ROMCheck \
             ${OM}.Sound ${OM}.Support ${OM}.System ${OM}.UserDiag \
             ${OM}.CPUType ${OM}.IOControl ${OM}.MemSrcNCOS \
-            ${OM}.ROMChksum 
-Module    = ${OM}.header ${OM}.module ${OM}.usermode ${OM}.UnitTest 
-Applic    = ${OM}.AppMain 
+            ${OM}.ROMChksum
+Module    = ${OM}.header ${OM}.module ${OM}.usermode ${OM}.UnitTest
+Applic    = ${OM}.AppMain
 BOCA      = ${BASEOBJS} ${Module} ${OM}.FaultCodes ${OM}.SCardTest ${OM}.storedinfo ${OM}.veneer
-Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib
+Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib \
+            ${OM}.CheckIC
 
 OBJS      = ${Morris2}
 
@@ -108,9 +109,9 @@ dirs:
 	${MKDIR}	o${BUILD}
 
 #
-# Target 
+# Target
 #
-${TARGET}: ${OBJS} dirs 
-        ${LD} -o $@ ${OBJS} ${CLIB} 
+${TARGET}: ${OBJS} dirs
+        ${LD} -o $@ ${OBJS} ${CLIB}
 
 # Dynamic dependencies:
