@@ -17,6 +17,7 @@ CP	= copy
 LD	= link
 RM	= remove
 WIPE	= -wipe
+STRIP   = stripdepnd
 
 DFLAGS	 = ${OPTS}
 
@@ -25,7 +26,6 @@ CFLAGS  = -c -depend !Depend -zM -zps1 -Wp -ff ${INCLUDES} -DDONT_BUILD_RESOURCE
 CMHGFLAGS = ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-STRIP   = stripdepnd
 Datatoaofflags = -d "" -l _len -dp -s -p
 
 #
@@ -101,9 +101,9 @@ install: ${TARGETSA}
 	@echo ${COMPONENT}: module installed
 
 clean:
-	${WIPE} aof.* ${WFLAGS}
+	${WIPE} aof ${WFLAGS}
 	${WIPE} o.* ${WFLAGS}
-	${WIPE} rm.* ${WFLAGS}
+	${WIPE} rm ${WFLAGS}
 	${WIPE} linked ${WFLAGS}
 	${RM} h.cmhg_modem
 	${RM} ${TARGET}
@@ -132,6 +132,7 @@ rom_link:
 	@echo ${COMPONENT}: rom_link complete
 
 ${TARGETSA}: ${OBJS} ${CLIB}
+        ${MKDIR} rm
 	${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB} ${ASMUTILS}
 #	${LD} -v -map -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB}
 
