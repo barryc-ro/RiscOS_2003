@@ -1,7 +1,7 @@
 # URLclient
 .SUFFIXES: .c .o
 
-test: URLClient
+test: URLClient FTPProxy
 	@|
 
 run: test
@@ -16,5 +16,8 @@ PathWrite: pathwrite.o
 
 speedtest: speedtest.c
 	cc c.speedtest
+
+FTPProxy: FTPPrxSrc
+	FTPPrxSrc
 
 .c.o:; cc -c -throwback $*.c
