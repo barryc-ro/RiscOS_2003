@@ -7,9 +7,14 @@
 *
 * Copyright 1994, Citrix Systems Inc.
 *
-* $Author$  Brad Pedersen  (3/15/94)
+* smiddle  Brad Pedersen  (3/15/94)
 *
-* $Log$
+* dll.c,v
+* Revision 1.1  1998/01/12 11:37:32  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.36   15 Apr 1997 18:50:24   TOMA
 *  autoput for remove source 4/12/97
@@ -53,6 +58,10 @@
 #include "../../../inc/clib.h"
 #include "../../../inc/logapi.h"
 
+#include "swis.h"
+
+#include "../../../app/version.h"
+
 /*=============================================================================
 ==   Data Structures
 =============================================================================*/
@@ -82,6 +91,10 @@ int WFCAPI ModuleCall( PDLLLINK, USHORT, PVOID );
 /*=============================================================================
 ==   Global Data
 =============================================================================*/
+
+static USHORT EngModDate;                      // Engine module date
+static USHORT EngModTime;                      // Engine module time
+static ULONG  EngModSize;                      // Engine module size
 
 /*******************************************************************************
  *
@@ -136,13 +149,18 @@ ModuleInit( PCHAR pName,
      */
     strncpy( pDllLink->ModuleName, pName, sizeof(pDllLink->ModuleName) );
 
-//    (void) _ReadHeader( pName, &ExeHeader, &pDllLink->ModuleDate,
-//                        &pDllLink->ModuleTime, &pDllLink->ModuleSize );
+    {
+	int load, exec, length;
+	_swix(OS_File, _INR(0,1) | _OUTR(2,4), 17, APP_DIR ".!RunImage", &load, &exec, &length);
+	pDllLink->ModuleTime = load & 0xffff; // this is WRONG - does it matter?
+	pDllLink->ModuleDate = exec & 0xffff;
+	pDllLink->ModuleSize = length;
+    }
 
     /* save the engine file data for embedded DLLs */
-//    EngModDate = pDllLink->ModuleDate;
-//    EngModTime = pDllLink->ModuleTime; 
-//    EngModSize = pDllLink->ModuleSize; 
+    EngModDate = pDllLink->ModuleDate;
+    EngModTime = pDllLink->ModuleTime; 
+    EngModSize = pDllLink->ModuleSize; 
 
     /*
      *  Link exe module
@@ -181,12 +199,12 @@ int ModuleLoad( char * pName, PDLLLINK pLink )
     if ((rc = ModuleLookup( pName, (PPLIBPROCEDURE)&fnLoad, NULL )) != CLIENT_STATUS_SUCCESS)
 	return rc;
 
-    // init the pLink fields
-    memset(pLink, 0, sizeof(*pLink));
-    strncpy(pLink->ModuleName, pName, sizeof(pLink->ModuleName));
-
+    // this fills in the pLink values for this dll
     if (fnLoad)
 	rc = fnLoad(pLink);
+
+    // init the pLink fields
+    strncpy(pLink->ModuleName, pName, sizeof(pLink->ModuleName));
 
     /*
      *  Keep a linked list of all loaded dlls

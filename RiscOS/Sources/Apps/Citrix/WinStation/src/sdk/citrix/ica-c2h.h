@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen (8/27/94)
 *
-*  $Log$
+*  ica-c2h.h,v
+*  Revision 1.1  1998/01/12 11:37:53  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.59   15 Jul 1997 15:46:02   bradp
 *  update
@@ -93,10 +98,10 @@ typedef struct _UI_C2H {
 
     /* version 1 */
     MODULE_C2H Header;
-    ULONG fDisableSound/*: 1*/;     // don't send sound to client
-    ULONG fReconnect/*: 1*/;        // request to reconnect to existing session
-    ULONG fDisableCtrlAltDel/*: 1*/;// disable ctrl-alt-del on host for this client
-    ULONG fPromptForPassword/*: 1*/;// force server to prompt for password
+    BULONG fDisableSound : 1;     // don't send sound to client
+    BULONG fReconnect : 1;        // request to reconnect to existing session
+    BULONG fDisableCtrlAltDel: 1;// disable ctrl-alt-del on host for this client
+    BULONG fPromptForPassword: 1;// force server to prompt for password
     ULONG KeyboardLayout;       // e.g. 409
     BYTE EncryptionLevel;       // encryption level of password (0=plain text)
     BYTE EncryptionSeed;        // seed for encryption
@@ -170,9 +175,9 @@ typedef struct _WD_C2H {
         BYTE second;            // 0-59
         BYTE hsecond;           // 0-99
     } CurrentTime;              // client computer time
-    ULONG fEnableGraphics/*: 1*/;   // graphics are supported
-    ULONG fEnableMouse/*: 1*/;      // mouse is available
-    ULONG fDoubleClickDetect/*: 1*/;// client will detect double clicks (ver 6)
+    BULONG fEnableGraphics: 1;   // graphics are supported
+    BULONG fEnableMouse: 1;      // mouse is available
+    BULONG fDoubleClickDetect: 1;// client will detect double clicks (ver 6)
     USHORT TextModeCount;       // number of supported text modes
     USHORT oTextMode;           // offset - array of WDTEXTMODE structures
     USHORT ICABufferLength;     // maximum size of one ica packet

@@ -9,7 +9,12 @@
 *
 *  Author: Kurt Perry (3/29/1994)
 *
-*  $Log$
+*  kbdapi.c,v
+*  Revision 1.1  1998/01/12 11:37:34  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.25   15 Apr 1997 18:50:30   TOMA
 *  autoput for remove source 4/12/97
@@ -42,6 +47,7 @@
 
 /*  Get the standard C includes */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /*  Get CLIB includes */
@@ -102,8 +108,9 @@ typedef struct _KBDHOOK {
    struct _KBDHOOK * pNext;
 } KBDHOOK, * PKBDHOOK;
 
-#ifdef DOS
 static PKBDHOOK pKbdRootHook = NULL;
+
+#ifdef DOS
 
 #define KEYBOARD_FUNCTION 0x16
 KBDPREFERENCES gKbdPreferences;
@@ -389,12 +396,21 @@ KbdReadAvail( int * pCountAvail )
     // currently Scan??
     else if ( CurrentKbdMode == Kbd_Scan ) {
 
+	int flags;
+	
         // check for special flag
         if ( RebootFlag ) {
             RebootFlag = FALSE;
             return( CLIENT_STATUS_REBOOT );
         }
-	return( CLIENT_STATUS_NO_DATA );
+
+	_swix(OS_Byte, _INR(0,1) | _FLAGS, 152, 0, &flags);
+
+	if (flags & _C)
+	    return( CLIENT_STATUS_NO_DATA );
+
+	// return key count
+	*pCountAvail = 1;
 #if 0
         // check for key, and return count
         else if ( (*pCountAvail = KeyBdGetStatus()) == 0 ) {
@@ -427,12 +443,12 @@ KbdReadChar( int * pChar, int *pShiftState )
     int Hotkey;
     unsigned char ScanCode = 0;
     union REGS regs;
-    PKBDHOOK pKbdHook;
     LPBYTE pSHFLGS  = (LPBYTE) 0x00400017;
     LPBYTE pSHFLGS2 = (LPBYTE) 0x00400018;
     LPBYTE pK101FL  = (LPBYTE) 0x00400096;
     static LastScanCode = 0;
 #endif
+    PKBDHOOK pKbdHook;
     
     // make sure we are in Ascii mode
     if ( CurrentKbdMode != Kbd_Ascii ) {
@@ -473,7 +489,7 @@ KbdReadChar( int * pChar, int *pShiftState )
 #endif
 
     {
-	int key, flag;
+	int key, flag, Hotkey;
 
 	_swix(OS_Byte,
 	      _INR(0,2) | _OUTR(1,2),
@@ -488,6 +504,16 @@ KbdReadChar( int * pChar, int *pShiftState )
 
 	if (key == 0x1B)
 	    return HOTKEY_EXIT;
+
+        if ( (Hotkey = KbdCheckHotkey( key, 0 )) )
+	{
+            // return no char
+            *pChar = 0;
+
+            // return code
+            LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
+            return( Hotkey );
+	}
     }
 
 #if 0
@@ -562,13 +588,13 @@ steal:
 
     // return key
     *pChar = (unsigned int) regs.h.al;
+#endif
 
     
     // call hook routines
     for ( pKbdHook=pKbdRootHook; pKbdHook != NULL; pKbdHook=pKbdHook->pNext ) {
         (pKbdHook->pProcedure)( 0, 0, *pChar );
     }
-#endif
 done:
     LogPrintf( LOG_CLASS, LOG_KEYBOARD,
                "KEYBOARD: char (%02X)(%c) shift (%04X)",
@@ -592,23 +618,25 @@ done:
 int WFCAPI
 KbdReadScan( int * pScanCode, int * pShiftState )
 {
-#ifdef DOS
     int Char;
     int count;
     int Hotkey;
     int ShiftState;
     unsigned char ScanCode;
     PKBDHOOK pKbdHook;
+#ifdef DOS
     LPBYTE pSHFLGS  = (LPBYTE) 0x00400017;
     LPBYTE pSHFLGS2 = (LPBYTE) 0x00400018;
     LPBYTE pK101FL  = (LPBYTE) 0x00400096;
-
+#endif
     // make sure we are in Scan mode
     if ( CurrentKbdMode != Kbd_Scan ) {
         return( CLIENT_ERROR_INVALID_MODE );
     }
 
-        RebootFlag = FALSE;
+    RebootFlag = FALSE;
+
+#if 0
     // is there a key in the fifo buffer?
     if ( iFifo ) {
 
@@ -618,7 +646,40 @@ KbdReadScan( int * pScanCode, int * pShiftState )
         // done
         goto done;
     }
+#endif
+    
+    ScanCode = 0;
+    ShiftState = 0;
+	
+    {
+	int key, flag;
 
+	_swix(OS_Byte,
+	      _INR(0,2) | _OUTR(1,2),
+	      129, 0, 0,
+	      &key, &flag);
+
+	if (flag == 0xff)
+	    return CLIENT_STATUS_NO_DATA;
+	
+	if (flag == 0)
+	    ScanCode = key;
+
+	if (key == 0x1B)
+	    return HOTKEY_EXIT;
+
+        if ( (Hotkey = KbdCheckHotkey( ScanCode, *pShiftState )) )
+	{
+            // return no char
+            *pScanCode = 0;
+
+            // return code
+            LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
+            return( Hotkey );
+	}
+    }
+
+#if 0
     // check for key
     if ( !KeyBdGetStatus() ) {
         return( CLIENT_STATUS_NO_DATA );
@@ -631,6 +692,7 @@ KbdReadScan( int * pScanCode, int * pShiftState )
     ShiftState = (unsigned short) *pSHFLGS;
     ShiftState |= ((unsigned short) (*pSHFLGS2 & 0xf3) << 8);
     ShiftState |= ((unsigned short) (*pK101FL & 0x06) << 10);
+#endif
 
     // check hotkey
     if ( (Hotkey = KbdCheckHotkey( ScanCode, ShiftState )) ) {
@@ -651,7 +713,7 @@ done:
     LogPrintf( LOG_CLASS, LOG_KEYBOARD,
                "KEYBOARD: scan code (%02X) shift (%04X)",
                *pScanCode, *pShiftState );
-#endif
+
     return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -745,7 +807,6 @@ KbdRegisterHotkey( int HotkeyId, int ScanCode, int ShiftState )
 int WFCAPI
 KbdAddHook( PVOID pProcedure )
 {
-#ifdef DOS
    PKBDHOOK pKbdHook;
 
    // kbd open?
@@ -757,7 +818,7 @@ KbdAddHook( PVOID pProcedure )
    for ( pKbdHook=pKbdRootHook; pKbdHook != NULL; pKbdHook=pKbdHook->pNext ) {
 
       // found?
-      if ( pKbdHook->pProcedure == pProcedure ) {
+      if ( (PKBDHOOK)pKbdHook->pProcedure == pProcedure ) {
          goto done;
       }
    }
@@ -766,7 +827,7 @@ KbdAddHook( PVOID pProcedure )
    if ( (pKbdHook = (PKBDHOOK) malloc( sizeof(KBDHOOK) )) != NULL ) {
 
        // initialize and link in at head
-       pKbdHook->pProcedure = pProcedure;
+       pKbdHook->pProcedure = (PLIBPROCEDURE)pProcedure;
        pKbdHook->pNext = pKbdRootHook;
        pKbdRootHook = pKbdHook;
    }
@@ -777,7 +838,6 @@ KbdAddHook( PVOID pProcedure )
 
    // ok
 done:
-#endif
    return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -795,7 +855,6 @@ done:
 int WFCAPI
 KbdRemoveHook( PVOID pProcedure )
 {
-#ifdef DOS
    PKBDHOOK pKbdHook;
    PKBDHOOK pPrevKbdHook;
 
@@ -810,7 +869,7 @@ KbdRemoveHook( PVOID pProcedure )
          pKbdHook=pKbdHook->pNext ) {
 
       // found hooked proc?
-      if ( pKbdHook->pProcedure == pProcedure ) {
+      if ( pKbdHook->pProcedure == (PLIBPROCEDURE)pProcedure ) {
 
          // remove from list
          if ( pPrevKbdHook == NULL ) {    // first
@@ -836,7 +895,6 @@ KbdRemoveHook( PVOID pProcedure )
 
    // ok
 done:
-#endif
    return( CLIENT_STATUS_SUCCESS );
 }
 

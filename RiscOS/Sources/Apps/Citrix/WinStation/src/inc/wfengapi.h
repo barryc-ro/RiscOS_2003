@@ -11,7 +11,12 @@
 *
 *  Author: Butch Davis (4/4/95)
 *
-*  $Log$
+*  wfengapi.h,v
+*  Revision 1.1  1998/01/12 11:37:11  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.42   10 Sep 1997 16:09:16   kalyanv
 *  added the encryption level session names
@@ -1292,7 +1297,7 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INIT_DIMMINBITMAP_UI    8       // (UI) initially 8K (WIN32)
 #endif
 #define INI_DIMCACHEPATH        "PersistentCachePath"
-#define DEF_DIMCACHEPATH        "Cache"
+#define DEF_DIMCACHEPATH        "<Wimp$ScrapDir>." APP_NAME
 
 
 /*

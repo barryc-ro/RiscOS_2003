@@ -15,7 +15,12 @@
 *  
 *   Author: Brad Pedersen (4/9/94)
 *
-*   $Log$
+*   init.c,v
+*   Revision 1.1  1998/01/12 11:36:18  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.54   15 Apr 1997 18:17:50   TOMA
 *  autoput for remove source 4/12/97
@@ -131,6 +136,8 @@ IcaInitRequest( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     if ( InputCount >= 1 ) {
         pWd->EncryptionLevel = pInputBuffer[0];
     }
+
+    TRACE(( TC_WD, TT_API1, "IcaInitRequest: encryption level %d (%sspecified)", pWd->EncryptionLevel, InputCount >= 1 ? "" : "un" ));
    
 #ifdef DOS
     /*
@@ -432,7 +439,7 @@ IcaInitConnect( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
         case Module_WinstationDriver :
 
             pWdHost = (PWD_H2C) pHeader;
-            ASSERT( InputCount == sizeof(WD_H2C), InputCount );
+//          ASSERT( InputCount == sizeof(WD_H2C), InputCount ); SJM: remove this assert as structure size is not word-aligned
             if ( pWdHost->oAppServerName ) {
                 if ( pWd->pAppServer )
                     free( pWd->pAppServer );

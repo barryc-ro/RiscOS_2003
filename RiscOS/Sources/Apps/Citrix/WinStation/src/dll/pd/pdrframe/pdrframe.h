@@ -56,13 +56,12 @@ typedef struct _PDRFRAME {
 
 /* SJM: rename local functions to prevent clashes */
 
-#define DeviceProcessInput	RFrameDeviceProcessInput
+#define DeviceOutBufAlloc	PdRFrameDeviceOutBufAlloc
+#define DeviceOutBufError	PdRFrameDeviceOutBufError
+#define DeviceOutBufFree	PdRFrameDeviceOutBufFree
+#define DeviceSetInfo		PdRFrameDeviceSetInfo
+#define DeviceQueryInfo		PdRFrameDeviceQueryInfo
 
-#define DeviceSetInfo		RFrameDeviceSetInfo
-#define DeviceQueryInfo		RFrameDeviceQueryInfo
-
-#define DeviceOutBufAlloc	RFrameDeviceOutBufAlloc
-#define DeviceOutBufError	RFrameDeviceOutBufError
-#define DeviceOutBufFree	RFrameDeviceOutBufFree
+#define DeviceProcessInput	PdRFrameDeviceProcessInput
 
 #endif //__PDRFRAME_H__

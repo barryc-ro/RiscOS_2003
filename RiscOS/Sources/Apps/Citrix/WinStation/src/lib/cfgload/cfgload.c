@@ -285,7 +285,7 @@ LoadVd( PCHAR    pMergedSection,
      */
     memset( &VdOpen, 0, sizeof(VDOPEN) );
 #ifdef RISCOS
-    ModuleLookup(pModuleName, NULL, &VdOpen.pDeviceProcedures);
+    ModuleLookup(pModuleName, NULL, &VdOpen.pDriverProcedures);
 #else
     VdOpen.pModuleProcedures   = pModuleProcedures;
 

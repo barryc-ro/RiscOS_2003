@@ -32,25 +32,25 @@
 #include "citrix/ica.h"
 #include "citrix/ica-c2h.h"
 
-#include "session.h"
-
-#include "utils.h"
-
+#include "../inc/tddevicep.h"
 #include "../inc/pddevicep.h"
 #include "../inc/wdemulp.h"
-#include "../inc/vddevicep.h"
+#include "../inc/vddriverp.h"
 #include "../inc/nrdevicep.h"
 
-#include "rdebug.h"
 #include "swis.h"
-
 #include "tboxlibs/toolbox.h"
+
+#include "rdebug.h"
+#include "session.h"
 #include "sessionp.h"
+#include "utils.h"
+#include "version.h"
 
 /* --------------------------------------------------------------------------------------------- */
 
-static char *gszWfclientIni = APP_PATH "WFClient";
-static char *gszModuleIni = APP_PATH "Module";
+static char *gszWfclientIni = INI_PATH "WFClient";
+static char *gszModuleIni = INI_PATH "Module";
 
 typedef struct _OVERRIDELIST
 {
@@ -623,9 +623,7 @@ Session session_open(const char *ica_file)
     // set the product id to Internet client
     {
        WFEPRODUCTID WFEProductID;
-
-       // If the module.ini file exists then it's not the internet client
-       WFEProductID.ProductID = CLIENTID_CITRIX_INTERNET;
+       WFEProductID.ProductID = CLIENTID_CITRIX_RISCOS;
        wdSetProductID( &WFEProductID, sizeof(WFEProductID));
     }
 
@@ -686,6 +684,8 @@ void session_run(const char *ica_file)
 
 /* --------------------------------------------------------------------------------------------- */
 
+extern int SdLoad( PDLLLINK );
+
 int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable )
 {
     static struct
@@ -696,13 +696,15 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
     } modules[] =
     {
 	{ "tdtcpro",	(PLIBPROCEDURE)TdLoad, TdTcpRODeviceProcedures },
-//	{ "pdrframe",	(PLIBPROCEDURE)PdLoad, PdRFrameDeviceProcedures },
-//	{ "pdcrypt1",	(PLIBPROCEDURE)PdLoad, PdCrypt1DeviceProcedures },
+//	{ "pdrfram",	(PLIBPROCEDURE)PdLoad, PdRFrameDeviceProcedures },
+//	{ "pdcrypt",	(PLIBPROCEDURE)PdLoad, PdCryptDeviceProcedures },
+//	{ "pdmodem",	(PLIBPROCEDURE)PdLoad, PdModemDeviceProcedures },
 	{ "wdtty",	(PLIBPROCEDURE)WdLoad, WdTTYEmulProcedures },
 	{ "wdica30",	(PLIBPROCEDURE)WdLoad, WdICA30EmulProcedures },
-//	{ "vdtw31",	(PLIBPROCEDURE)VdLoad, VdTW31DeviceProcedures },
+//	{ "vdtw30",	(PLIBPROCEDURE)VdLoad, VdTW31DriverProcedures },
 	{ "nrtcpro",	(PLIBPROCEDURE)NrLoad, NULL },
 //	{ "neica",	(PLIBPROCEDURE)NeLoad, NeICADeviceProcedures },
+//	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
 	{ NULL,		0,	NULL }
     }, *mp;
 

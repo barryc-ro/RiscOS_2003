@@ -54,7 +54,7 @@ unsigned long Inet_Addr( char * );
 /*
  *   TCP error messages
  */
-LPBYTE pProtocolName = "TCP";
+LPBYTE pNrProtocolName = "TCP";
 
 #define ERROR_HOST_NOT_FOUND 0xffff
 
@@ -83,6 +83,7 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
    long netaddr;
    unsigned char *pTmp;
    struct hostent *phe;
+   struct sockaddr_in sa;
 
    memset( pNameAddress->Address, 0, sizeof(pNameAddress->Address) );
 
@@ -102,7 +103,9 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
          TRACE((TC_PD,TT_API1, "NRTCPMS: Could not lookup host :%s:",pNameAddress->Name));
 	    goto error;
 	}
-        netaddr = ((struct sockaddr_in *)phe->h_addr)->sin_addr.s_addr;
+
+        memcpy(&sa.sin_addr, phe->h_addr, phe->h_length);
+        netaddr = sa.sin_addr.s_addr;
     }
 
    pTmp = (unsigned char *)&netaddr;

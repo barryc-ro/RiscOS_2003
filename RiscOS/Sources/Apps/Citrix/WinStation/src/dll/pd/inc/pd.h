@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (3/25/94)
 *
-*  $Log$
+*  pd.h,v
+*  Revision 1.1  1998/01/12 11:35:36  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.12   15 Apr 1997 16:51:40   TOMA
 *  autoput for remove source 4/12/97
@@ -78,7 +83,13 @@ typedef struct _PD {
     PVOID  pPrivate;                    // pointer to private data structure
 
     PPLIBPROCEDURE pDeviceProcedures;	// Pointer to device function structure
-
+    DLLLINK Link;
 } PD;
+
+#define OutBufAlloc	PdOutBufAlloc
+#define OutBufError	PdOutBufError
+#define OutBufFree	PdOutBufFree
+#define OutBufAppend	PdOutBufAppend
+#define OutBufWrite	PdOutBufWrite
 
 #endif //__PD_H__

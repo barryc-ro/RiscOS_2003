@@ -7,9 +7,14 @@
 *
 * copyright notice: Copyright 1995, Citrix Systems Inc.
 *
-* $Author$
+* smiddle
 *
-* $Log$
+* pdcrypt.c,v
+* Revision 1.1  1998/01/12 11:35:41  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.13   15 Apr 1997 16:52:02   TOMA
 *  autoput for remove source 4/12/97
@@ -29,14 +34,14 @@
 /*
  *  Includes
  */
-#include <windows.h>
+#include "windows.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../../inc/client.h"
-#include <citrix/ica.h>
-#include <citrix/ica-c2h.h>
+#include "citrix/ica.h"
+#include "citrix/ica-c2h.h"
 
 #ifdef DOS
 #include "../../../inc/dos.h"
@@ -49,58 +54,66 @@
 
 #include "pdcrypt.h"
 
+#define NO_PDDEVICE_DEFINES
+#include "../../../inc/pddevice.h"
+#include "../../../inc/pddevicep.h"
 
 /*=============================================================================
 ==   External Functions Defined
 =============================================================================*/
 
-int STATIC DeviceOpen( PPD, PPDOPEN );
-int STATIC DeviceClose( PPD, PDLLCLOSE );
-int STATIC DeviceInfo( PPD, PDLLINFO );
-int STATIC DeviceConnect( PPD );
-int STATIC DeviceDisconnect( PPD );
-int STATIC DeviceInit( PPD, LPVOID, USHORT );
-int STATIC DeviceEnable( PPD );
-int STATIC DeviceDisable( PPD );
-int STATIC DevicePoll( PPD, PDLLPOLL );
-int STATIC DeviceWrite( PPD, PPDWRITE );
-int STATIC DeviceCancelWrite( PPD );
-int STATIC DeviceQuery( PPD, PPDQUERYINFORMATION );
-int STATIC DeviceCallback( PPD );
-int STATIC OutBufAlloc( PPD, POUTBUF, POUTBUF * );
+static int DeviceOpen( PPD, PPDOPEN );
+static int DeviceClose( PPD, PDLLCLOSE );
+static int DeviceInfo( PPD, PDLLINFO );
+static int DeviceConnect( PPD );
+static int DeviceDisconnect( PPD );
+static int DeviceInit( PPD, LPVOID, USHORT );
+static int DeviceEnable( PPD );
+static int DeviceDisable( PPD );
+static int DevicePoll( PPD, PDLLPOLL );
+static int DeviceWrite( PPD, PPDWRITE );
+static int DeviceCancelWrite( PPD );
+static int DeviceQuery( PPD, PPDQUERYINFORMATION );
+static int DeviceCallback( PPD );
 
-PPLIBPROCEDURE PdCrypt1Procedures =
+int  STATIC WFCAPI DeviceOutBufAlloc( PPD, POUTBUF * );
+void STATIC WFCAPI DeviceOutBufError( PPD, POUTBUF );
+void STATIC WFCAPI DeviceOutBufFree( PPD, POUTBUF );
+int  STATIC WFCAPI DeviceSetInfo( PPD, SETINFOCLASS, LPBYTE, USHORT );
+int  STATIC WFCAPI DeviceQueryInfo( PPD, QUERYINFOCLASS, LPBYTE, USHORT );
+
+int STATIC WFCAPI DeviceProcessInput( PPD, LPBYTE, USHORT );
+
+PLIBPROCEDURE PdCryptDeviceProcedures[PDDEVICE__COUNT] =
 {
-    (PPLIBPROCEDURE)DeviceOpen,
-    (PPLIBPROCEDURE)DeviceClose,
+    (PLIBPROCEDURE)DeviceOpen,
+    (PLIBPROCEDURE)DeviceClose,
 
-    (PPLIBPROCEDURE)DeviceInfo,
+    (PLIBPROCEDURE)DeviceInfo,
 
-    (PPLIBPROCEDURE)DeviceConnect,
-    (PPLIBPROCEDURE)DeviceDisconnect,
+    (PLIBPROCEDURE)DeviceConnect,
+    (PLIBPROCEDURE)DeviceDisconnect,
 
-    (PPLIBPROCEDURE)DeviceInit,
+    (PLIBPROCEDURE)DeviceInit,
     
-    (PPLIBPROCEDURE)DeviceEnable,
-    (PPLIBPROCEDURE)DeviceDisable,
+    (PLIBPROCEDURE)DeviceEnable,
+    (PLIBPROCEDURE)DeviceDisable,
 
-    (PPLIBPROCEDURE)DeviceProcessInput,
-    (PPLIBPROCEDURE)DeviceQuery,
-    (PPLIBPROCEDURE)DevicePoll,
+    (PLIBPROCEDURE)DeviceProcessInput,
+    (PLIBPROCEDURE)DeviceQuery,
+    (PLIBPROCEDURE)DevicePoll,
 
-    (PPLIBPROCEDURE)DeviceWrite,
-    NULL, // DeviceCheckWrite,
-    (PPLIBPROCEDURE)DeviceCancelWrite,
+    (PLIBPROCEDURE)DeviceWrite,
+    (PLIBPROCEDURE)DeviceCancelWrite,
 
-    NULL, // DeviceSendBreak,
-    (PPLIBPROCEDURE)DeviceCallback,
+    (PLIBPROCEDURE)DeviceCallback,
 
-    (PPLIBPROCEDURE)DeviceSetInfo,
-    (PPLIBPROCEDURE)DeviceQueryInfo,
+    (PLIBPROCEDURE)DeviceSetInfo,
+    (PLIBPROCEDURE)DeviceQueryInfo,
 
-    (PPLIBPROCEDURE)DeviceOutBufAlloc,
-    (PPLIBPROCEDURE)DeviceOutBufError,
-    (PPLIBPROCEDURE)DeviceOutBufFree
+    (PLIBPROCEDURE)DeviceOutBufAlloc,
+    (PLIBPROCEDURE)DeviceOutBufError,
+    (PLIBPROCEDURE)DeviceOutBufFree
 };
 
 /*=============================================================================
@@ -146,7 +159,7 @@ STATIC PDCRYPT PdCryptData = {0};
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
 {
     PPDCRYPT pPdCrypt;
@@ -195,7 +208,7 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceClose( PPD pPd, PDLLCLOSE pPdClose )
 {
     pPd->pPrivate = NULL;
@@ -221,7 +234,7 @@ DeviceClose( PPD pPd, PDLLCLOSE pPdClose )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceInfo( PPD pPd, PDLLINFO pPdInfo )
 {
     USHORT ByteCount;
@@ -313,7 +326,7 @@ DeviceInfo( PPD pPd, PDLLINFO pPdInfo )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceConnect( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );
@@ -335,7 +348,7 @@ DeviceConnect( PPD pPd )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceDisconnect( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );
@@ -361,7 +374,7 @@ DeviceDisconnect( PPD pPd )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceInit( PPD pPd, LPVOID pBuffer, USHORT ByteCount )
 {
     return( CLIENT_STATUS_SUCCESS );
@@ -383,7 +396,7 @@ DeviceInit( PPD pPd, LPVOID pBuffer, USHORT ByteCount )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceEnable( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );
@@ -405,7 +418,7 @@ DeviceEnable( PPD pPd )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceDisable( PPD pPd )
 {
     PPDCRYPT pPdCrypt;
@@ -438,11 +451,11 @@ DeviceDisable( PPD pPd )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DevicePoll( PPD pPd, PDLLPOLL pPdPoll )
 {
 
-    return( PdNext( pPd, DLL$POLL, pPdPoll ) );
+    return( PdNext( pPd, DLL__POLL, pPdPoll ) );
 }
 
 
@@ -464,7 +477,7 @@ DevicePoll( PPD pPd, PDLLPOLL pPdPoll )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceWrite( PPD pPd, PPDWRITE pPdWrite )
 {
     int rc;
@@ -475,7 +488,7 @@ DeviceWrite( PPD pPd, PPDWRITE pPdWrite )
      *  Check if protocol is enabled
      */
     if ( !pPd->fEnableModule ) 
-        return( PdNext( pPd, PD$WRITE, pPdWrite ) );
+        return( PdNext( pPd, PD__WRITE, pPdWrite ) );
 
     /*
      *  Get pointer to crypt data structure
@@ -486,7 +499,7 @@ DeviceWrite( PPD pPd, PPDWRITE pPdWrite )
      *  No header if we have been disabled
      */
     if ( pPdCrypt->fOff ) 
-        return( PdNext( pPd, PD$WRITE, pPdWrite ) );
+        return( PdNext( pPd, PD__WRITE, pPdWrite ) );
 
     /*
      *  Get pointer to outbuf being writen
@@ -524,7 +537,7 @@ DeviceWrite( PPD pPd, PPDWRITE pPdWrite )
     /*
      *  Write buffer
      */
-    rc = PdNext( pPd, PD$WRITE, pPdWrite );
+    rc = PdNext( pPd, PD__WRITE, pPdWrite );
 
     TRACE(( TC_PD, TT_API3, "PdCrypt: DeviceWrite, bc %u, Status=0x%x", 
             pOutBuf->ByteCount, rc ));
@@ -551,7 +564,7 @@ DeviceWrite( PPD pPd, PPDWRITE pPdWrite )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceCancelWrite( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );
@@ -575,14 +588,14 @@ DeviceCancelWrite( PPD pPd )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceQuery( PPD pPd, PPDQUERYINFORMATION pPdQueryInformation )
 {
 
     /*
      *  Pass request to next PD
      */
-    return( PdNext( pPd, PD$QUERYINFORMATION, pPdQueryInformation ) );
+    return( PdNext( pPd, PD__QUERYINFORMATION, pPdQueryInformation ) );
 }
 
 
@@ -601,7 +614,7 @@ DeviceQuery( PPD pPd, PPDQUERYINFORMATION pPdQueryInformation )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DeviceCallback( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );

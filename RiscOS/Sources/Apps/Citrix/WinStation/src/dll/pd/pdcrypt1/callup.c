@@ -8,9 +8,14 @@
 *
 * copyright notice: Copyright 1993, Citrix Systems Inc.
 *
-* $Author$ 
+* smiddle 
 *
-* $Log$
+* callup.c,v
+* Revision 1.1  1998/01/12 11:35:38  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.6   15 Apr 1997 16:51:56   TOMA
 *  autoput for remove source 4/12/97
@@ -35,13 +40,13 @@
 /*
  *  Includes
  */
-#include <windows.h>
+#include "windows.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../../inc/client.h"
-#include <citrix/ica.h>
+#include "citrix/ica.h"
 
 #ifdef DOS
 #include "../../../inc/dos.h"
@@ -54,7 +59,6 @@
 
 #include "pdcrypt.h"
  
-
 /*=============================================================================
 ==   External procedures defined
 =============================================================================*/

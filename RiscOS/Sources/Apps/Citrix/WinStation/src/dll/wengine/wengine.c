@@ -11,7 +11,12 @@
 *
 *   Author: Marc Bloomfield (marcb) 27-Mar-1995
 *
-*   $Log$
+*   wengine.c,v
+*   Revision 1.1  1998/01/12 11:36:40  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.114   12 Aug 1997 22:34:06   tariqm
 *  win16 fix
@@ -160,7 +165,7 @@ extern VDTWSTACK vTWStack;
 #endif
 extern HWND           g_hWndPlugin;
 
-HINSTANCE ghInstance = NULL; 
+//HINSTANCE ghInstance = NULL; 
 
 #ifndef DOS
 extern BOOL gfIPCShutdown;
@@ -252,6 +257,7 @@ BOOL    G_fAsync = FALSE;
 USHORT G_fNoUmb = FALSE;
 #endif
 
+#if 0
 /*
  *  Define WFEng driver external procedures
  */
@@ -272,22 +278,12 @@ static PDLLPROCEDURE WFEngProcedures[] = {
     (PDLLPROCEDURE) srvWFEngMessageLoop,
     (PDLLPROCEDURE) NULL, // placeholder for WFEngLogString
 };
+#endif
 
 ENCRYPTIONLEVEL g_szEncryptionLevelConnStatus;
 
-#define WFE__COUNT (sizeof( WFEngProcedures ) / sizeof(PDLLPROCEDURE))
+//#define WFE__COUNT (sizeof( WFEngProcedures ) / sizeof(PDLLPROCEDURE))
 
-#ifdef DOS
-static LPSTR gpszWEngineName = "WFENG.DDL";
-#endif
-#ifdef WIN16
-static LPSTR gpszWEngineName = "WFENGW.EXE";
-#endif
-#ifdef WIN32
-static LPSTR gpszWEngineName = "WFENGN.EXE";
-#endif
-
-#ifndef DOS
 static struct {
           char * pszShiftState;
           int    ShiftState;
@@ -304,30 +300,6 @@ static struct {
 { DEF_HOTKEY8_SHIFT, DEF_HOTKEY8_SHIFTV, DEF_HOTKEY8_CHAR, DEF_HOTKEY8_CHARV },
 { NULL,              0,                  NULL,             0                 },
        };
-#endif
-
-
-/*******************************************************************************
- *
- *  Load
- *
- *    The dll init code calls Load to load and link a the dos ddl.
- *    (i.e. when the DOS UI calls MiniLoad via WFEngLoad)
- *
- * ENTRY:
- *    pLink (input/output)
- *       pointer to the structure MINIDLL
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *
- ******************************************************************************/
-
-int WFCAPI
-Load( PMINIDLL pLink )
-{
-    return( srvWFEngLoad( NULL, pLink ) );
-}
 
 /*******************************************************************************
  *
@@ -353,6 +325,8 @@ srvWFEngLoad( LPSTR pszDllPath, PMINIDLL pLink )
     int rc = CLIENT_STATUS_SUCCESS;
 
     ModuleInit( "WENGINE", &gExeLink, NULL );
+
+    MouseLoad( NULL );
 
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngLoad rc(%d)", rc ));
     return( rc );
@@ -406,12 +380,10 @@ srvWFEngUnload( PMINIDLL pLink )
 //    VioUnload();
 //    BIniUnload();
 
-#ifdef DOS
 //     TimerUnload();
 //     KbdUnload();
-//     MouseUnload();
+     MouseUnload();
 //     XmsUnload();
-#endif
 
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngUnload (exit)" ));
     return( CLIENT_STATUS_SUCCESS );
@@ -499,7 +471,7 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
         bGetPrivateProfileString( pIni, INI_SCRIPT_DRIVER, INI_EMPTY, 
                                   gScriptDriver, FILEPATH_LENGTH );
 
-        bGetPrivateProfileString( pIni, INI_SCRIPT_FILE, "c:\\test.scr", 
+        bGetPrivateProfileString( pIni, INI_SCRIPT_FILE, INI_EMPTY, 
                                   gScriptFile,   FILEPATH_LENGTH );
 
         /* valid script file and path */
@@ -984,7 +956,6 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
     
     gState |= WFES_LOADEDSESSION;
 
-#ifndef DOS // BUGBUG: DOS ui currently does this
     {
     char pszBuffer[20];
     char pszINIKey[20];
@@ -1033,7 +1004,8 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
        KbdRegisterHotkey( CLIENT_STATUS_HOTKEY1+i, ScanCode, ShiftState );
     }
     }
-#else
+
+#if 0
     {
     MOUPREFERENCES MPref;
     KBDPREFERENCES KPref;
@@ -1048,7 +1020,6 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
 
     KbdLoadPreferences( &KPref );
 
-#if 0
     MPref.HorizSpeed = bGetPrivateProfileInt( pWFELoad->pIniSection,
                                               INI_HORIZONTALSPEED,
                                               DEF_HORIZONTALSPEED ); 
@@ -1070,7 +1041,6 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
         MPref.fSwapButtons = FALSE;
     }
     MouseLoadPreferences( &MPref );
-#endif
     }
 #endif
 

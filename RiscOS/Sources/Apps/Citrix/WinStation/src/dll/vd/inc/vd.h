@@ -9,7 +9,12 @@
 *
 *  Author: Andy 4/6/94
 *
-*  $Log$
+*  vd.h,v
+*  Revision 1.1  1998/01/12 11:36:08  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.6   15 Apr 1997 18:02:32   TOMA
 *  autoput for remove source 4/12/97
@@ -55,7 +60,7 @@ typedef struct _VD {
     int LastError;                      // Last Error code
     PVOID pPrivate;                     // pointer to VD uncommon data
 
-    PPLIBPROCEDURE pDeviceProcedures;
+    PPLIBPROCEDURE pDriverProcedures;
     
 } VD;
 

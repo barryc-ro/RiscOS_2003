@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (3/25/94)
 *
-*  $Log$
+*  td.h,v
+*  Revision 1.1  1998/01/12 11:35:58  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.15   15 Apr 1997 16:54:52   TOMA
 *  autoput for remove source 4/12/97
@@ -115,7 +120,7 @@ typedef struct _PD {
     LPBYTE pNetBiosBrowserAddrList;     // addr list of netbios ica browser
 
     PPLIBPROCEDURE pDeviceProcedures;	// Pointer to device function structure
-    
+    PCHAR pProtocolName;
 } PD;
 
 /*---------------------------------------------------------------------------------------------------- */

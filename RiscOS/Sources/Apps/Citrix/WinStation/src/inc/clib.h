@@ -9,7 +9,12 @@
 *
 *  $Author:      Brad Pedersen
 *
-*   $Log$
+*   clib.h,v
+*   Revision 1.1  1998/01/12 11:36:46  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.36   15 Apr 1997 18:44:50   TOMA
 *  autoput for remove source 4/12/97
@@ -68,5 +73,18 @@ extern void Delay(int t);
 
 #define     ERROR_DEFAULT           0xffff
 extern int LoadString( const char *base, int idResource, char *szBuffer, int cbBuffer );
+
+extern int mkdir(const char *name);
+
+#define GlobalAlloc(flags, size)	((HGLOBAL)malloc(size))
+#define GlobalFree(ptr)			(free((void *)(ptr)), (HGLOBAL)0)
+#define GlobalLock(ptr)			((void *)ptr)
+#define GlobalUnlock(ptr)		
+
+#define _open(a,b)	open(a,b)
+#define _close(a)	close(a)
+#define _read(a,b,c)	read(a,b,c)
+#define _lseek(a,b,c)	lseek(a,b,c)
+
 
 #endif //__CLIB_H__

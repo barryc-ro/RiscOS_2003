@@ -9,7 +9,12 @@
 *
 *   Author: Kurt Perry
 *
-* $Log$
+* input.c,v
+* Revision 1.1  1998/01/12 11:35:48  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.13   15 Apr 1997 16:52:54   TOMA
 *  autoput for remove source 4/12/97
@@ -37,14 +42,14 @@
 /*
  *  Includes
  */
-#include <windows.h>
+#include "windows.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../../inc/client.h"
-#include <citrix/ica.h>
+#include "citrix/ica.h"
 
 #ifdef  DOS
 #include "../../../inc/dos.h"
@@ -56,7 +61,6 @@
 #include "../inc/pd.h"
 
 #include "pdrframe.h"
-
 
 /*=============================================================================
 ==   External procedures defined

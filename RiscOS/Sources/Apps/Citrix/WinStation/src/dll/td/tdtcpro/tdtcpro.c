@@ -9,7 +9,12 @@
 *
 *  Author: Simon Middleton from tdtcpms.c
 *
-*  $Log$
+*  tdtcpro.c,v
+*  Revision 1.1  1998/01/12 11:36:04  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.21   15 Apr 1997 17:48:24   TOMA
 *  autoput for remove source 4/12/97
@@ -63,9 +68,9 @@
 #include "../../../inc/biniapi.h"
 #include "../inc/td.h"
 
-#define NO_PDDEVICE_DEFINES
-#include "../../../inc/pddevice.h"
-#include "../../../inc/pddevicep.h"
+#define NO_TDDEVICE_DEFINES
+#include "../../../inc/tddevice.h"
+#include "../../../inc/tddevicep.h"
 
 #include "tdtcpro.h"
 
@@ -89,7 +94,7 @@ static int DeviceCheckWrite( PPD, POUTBUF );
 static int DeviceCancelWrite( PPD, POUTBUF );
 static int DeviceSendBreak( PPD );
 
-PLIBPROCEDURE TdTcpRODeviceProcedures[PDDEVICE__COUNT] =
+PLIBPROCEDURE TdTcpRODeviceProcedures[TDDEVICE__COUNT] =
 {
     (PLIBPROCEDURE)DeviceOpen,
     (PLIBPROCEDURE)DeviceClose,
@@ -99,28 +104,13 @@ PLIBPROCEDURE TdTcpRODeviceProcedures[PDDEVICE__COUNT] =
     (PLIBPROCEDURE)DeviceConnect,
     (PLIBPROCEDURE)DeviceDisconnect,
 
-    NULL, // DeviceInit,
-
-    NULL, // DeviceEnable,
-    NULL, // DeviceDisable,
-
     (PLIBPROCEDURE)DeviceProcessInput,
-    NULL, // DeviceQuery,
-    NULL, // DevicePoll,
 
     (PLIBPROCEDURE)DeviceWrite,
     (PLIBPROCEDURE)DeviceCheckWrite,
     (PLIBPROCEDURE)DeviceCancelWrite,
 
-    (PLIBPROCEDURE)DeviceSendBreak,
-    NULL, // DeviceCallback,
-
-    NULL, // DeviceSetInfo,
-    NULL, // DeviceQueryInfo,
-
-    NULL, // DeviceOutBufAlloc,
-    NULL, // DeviceOutBufError,
-    NULL, // DeviceOutBufFree
+    (PLIBPROCEDURE)DeviceSendBreak
 };
 
 /*=============================================================================
@@ -192,6 +182,7 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
 
 
     pPd->PdClass = PdNetwork;
+    pPd->pProtocolName = (PCHAR)pProtocolName;
 
     /*
      *  Return size of header and parameters

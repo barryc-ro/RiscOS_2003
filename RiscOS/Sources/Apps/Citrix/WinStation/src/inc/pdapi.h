@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (3/25/94)
 *
-*  $Log$
+*  pdapi.h,v
+*  Revision 1.1  1998/01/12 11:36:55  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.32   15 Apr 1997 18:45:48   TOMA
 *  autoput for remove source 4/12/97
@@ -60,8 +65,8 @@ typedef struct _PDOPEN {
     USHORT OutBufHeader;        // out: number of header bytes to reserve
     USHORT OutBufTrailer;       // out: number of trailer bytes to reserve
     USHORT OutBufParam;         // out: number of parameter bytes to reserve
-    USHORT fOutBufCopy/* : 1 */;      // out: pd copies data into new outbuf
-    USHORT fOutBufFrame/* : 1 */;     // out: framing protocol driver (2x outbufs)
+    BUSHORT fOutBufCopy : 1;      // out: pd copies data into new outbuf
+    BUSHORT fOutBufFrame : 1;     // out: framing protocol driver (2x outbufs)
     PPLIBPROCEDURE   pDeviceProcedures;
 } PDOPEN, * PPDOPEN;
 

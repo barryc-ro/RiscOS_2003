@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (11/3/94)
 *
-*  $Log$
+*  nrapi.c,v
+*  Revision 1.1  1998/01/12 11:35:21  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.17   15 Apr 1997 16:19:36   TOMA
 *  autoput for remove source 4/12/97
@@ -151,7 +156,7 @@ NR NrData = {0};
 ==   Global Data
 =============================================================================*/
 
-extern char * pProtocolName;
+extern char * pNrProtocolName;
 //STATIC PPLIBPROCEDURE pClibProcedures = NULL;
 //STATIC PPLIBPROCEDURE pLogProcedures = NULL;
 
@@ -420,7 +425,7 @@ int WFCAPI
 NrErrorLookup( PNR pNr, PPDLASTERROR pErrorLookup )
 {
     memset( pErrorLookup->Message, 0, sizeof(pErrorLookup->Message) );
-    strcpy( pErrorLookup->ProtocolName, pProtocolName );
+    strcpy( pErrorLookup->ProtocolName, pNrProtocolName );
 
     if ( !LoadString( "NET",
                       pErrorLookup->Error,

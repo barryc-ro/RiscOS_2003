@@ -77,4 +77,9 @@ int flush(int fhandle)
     return _swix(OS_Args, _INR(0,1), 255, fhandle) ? 0 : -1;
 }
 
+int mkdir(const char *filename)
+{
+    return _swix(OS_File, _INR(0,1) | _IN(4), 8, filename, 0) ? 0 : -1;
+}
+
 /* eof unistd.c */

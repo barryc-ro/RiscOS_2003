@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (3/25/94)
 *
-*  $Log$
+*  wdapi.h,v
+*  Revision 1.1  1998/01/12 11:37:06  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.53   15 Apr 1997 18:46:08   TOMA
 *  autoput for remove source 4/12/97
@@ -119,9 +124,9 @@ typedef struct _WDOPEN {
     USHORT OutBufHeader;        // in: number of header bytes to reserve
     USHORT OutBufTrailer;       // in: number of trailer bytes to reserve
     USHORT OutBufParam;         // in: number of parameter bytes to reserve
-    USHORT fOutBufCopy/* : 1 */;      // in: pd copies data into new outbuf
-    USHORT fOutBufFrame/* : 1 */;     // in: framing protocol driver is loaded
-    USHORT fAsync/* : 1 */;           // in: Async connection or not
+    BUSHORT fOutBufCopy : 1;      // in: pd copies data into new outbuf
+    BUSHORT fOutBufFrame : 1;     // in: framing protocol driver is loaded
+    BUSHORT fAsync : 1;           // in: Async connection or not
     USHORT MaxVirtualChannels;  // out: maximum virtual channels supported
     PPLIBPROCEDURE pEmulProcedures;
 } WDOPEN, * PWDOPEN;
@@ -283,8 +288,8 @@ typedef struct _MOUSEINFO {
  * WdRedraw structure
  */
 typedef struct _WDRCL {         // SetFocusProcedure parameter (via PACKET_REDRAW)
-   ULONG x/* :12 */, // X coordinate
-         y/* :12 */; // Y coordinate
+   BULONG x :12, // X coordinate
+         y :12; // Y coordinate
 } WDRCL, *PWDRCL;
 
 /*
@@ -333,9 +338,9 @@ typedef struct _OUTBUF {
      *  Inherited fields (when pd allocates new outbuf and copies the data)
      */
     ULONG StartTime;            // pdreli - transmit time (used to measure roundtrip)
-    USHORT fControl/* : 1 */;         // pdreli - control buffer (ack/nak)
-    USHORT fRetransmit/* : 1 */;      // pdreli - outbuf retransmit
-    USHORT fCompress/* : 1 */;        // pdcomp - compress data
+    BUSHORT fControl : 1;         // pdreli - control buffer (ack/nak)
+    BUSHORT fRetransmit : 1;      // pdreli - outbuf retransmit
+    BUSHORT fCompress : 1;        // pdcomp - compress data
     BYTE Sequence;              // pdreli - sequence number
     BYTE Fragment;              // pdreli - fragment number
 

@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (4/3/94)
 *
-* $Log$
+* buffer.c,v
+* Revision 1.1  1998/01/12 11:35:33  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.16   15 Apr 1997 16:51:34   TOMA
 *  autoput for remove source 4/12/97
@@ -43,28 +48,24 @@
 /*
  *  Includes
  */
-#include <windows.h>
+#include "windows.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../../inc/client.h"
-#include <citrix/ica.h>
+#include "citrix/ica.h"
 
 #ifdef  DOS
 #include "../../../inc/dos.h"
 #else
-#ifdef DEBUG
-#include <malloc.h>
-#endif
 #endif
 #include "../../../inc/clib.h"
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
 #include "../../../inc/logapi.h"
 #include "../inc/pd.h"
-
 
 /*=============================================================================
 ==   External Functions Defined
@@ -75,8 +76,6 @@ void STATIC OutBufError( PPD, POUTBUF );
 void STATIC OutBufFree( PPD, POUTBUF );
 int  STATIC OutBufAppend( PPD, POUTBUF, LPBYTE, USHORT );
 int  STATIC OutBufWrite( PPD );
-int  STATIC SetInfo( PPD, SETINFOCLASS, LPBYTE, USHORT );
-int  STATIC QueryInfo( PPD, QUERYINFOCLASS, LPBYTE, USHORT );
 
 /*=============================================================================
 ==   Internal Functions Defined
@@ -231,7 +230,7 @@ OutBufAppend( PPD pPd, POUTBUF pOutBufOrig, LPBYTE pData, USHORT ByteCount )
             if ( rc = OutBufAlloc( pPd, pOutBufOrig, &pOutBuf ) ) {
                 /* check if previous write has completed */
                 WriteData.pOutBuf = NULL;
-                if ( rc2 = PdNext( pPd, PD$WRITE, &WriteData ) )
+                if ( rc2 = PdNext( pPd, PD__WRITE, &WriteData ) )
                     return( rc2 );
                 return( rc );
             }
@@ -248,9 +247,9 @@ OutBufAppend( PPD pPd, POUTBUF pOutBufOrig, LPBYTE pData, USHORT ByteCount )
         pData += Count;
         ByteCount -= Count;
         ASSERT( (int)ByteCount >= 0, 0 );
-#ifdef DEBUG
-        (void) _msize( pOutBuf->pMemory );
-#endif
+// #ifdef DEBUG
+//         (void) _msize( pOutBuf->pMemory );
+// #endif
 
         if ( pOutBuf->ByteCount == pOutBuf->MaxByteCount ) {
 
@@ -258,7 +257,7 @@ OutBufAppend( PPD pPd, POUTBUF pOutBufOrig, LPBYTE pData, USHORT ByteCount )
 
             /* write outbuf */
             WriteData.pOutBuf = pOutBuf;
-            if ( rc = PdNext( pPd, PD$WRITE, &WriteData ) )
+            if ( rc = PdNext( pPd, PD__WRITE, &WriteData ) )
                 return( rc );
         }
     }
@@ -307,7 +306,7 @@ OutBufWrite( PPD pPd )
      *  Write data buffer to pd
      */
     WriteData.pOutBuf = pOutBuf;
-    return( PdNext( pPd, PD$WRITE, &WriteData ) );
+    return( PdNext( pPd, PD__WRITE, &WriteData ) );
 }
 
 

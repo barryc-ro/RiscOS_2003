@@ -19,6 +19,8 @@
 #include "session.h"
 #include "sessionp.h"
 
+#include "rdebug.h"
+
 #define tbres_WIN_CONNECT	"connectW"
 
 #define I_MESSAGE		1
@@ -41,6 +43,8 @@ void connect_status(Session sess, int state)
     char buf[12];
     sprintf(buf, "msg%d", state);
     button_set_value(0, sess->connect_d, I_MESSAGE, utils_msgs_lookup(buf));
+
+    DBG(("connect_status: sess %p d %p state %d\n", sess, sess->connect_d, state));
 }
 
 void connect_close(Session sess)

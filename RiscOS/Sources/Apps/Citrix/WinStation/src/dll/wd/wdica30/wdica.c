@@ -8,7 +8,12 @@
 *
 *   Author: Brad Pedersen (4/8/94)
 *
-*   $Log$
+*   wdica.c,v
+*   Revision 1.1  1998/01/12 11:36:27  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.107   11 Jun 1997 10:17:22   terryt
 *  client double click support
@@ -277,7 +282,11 @@ EmulOpen( PWD pWd, PWDOPEN pWdOpen )
      *  BUGBUG: Mouse is always on in GUI
      */
     pIca->fMouse = TRUE;
+#ifdef RISCOS
+    pIca->fDoubleClickDetect = FALSE;
+#else
     pIca->fDoubleClickDetect = TRUE;
+#endif
 #endif
 
     /*
@@ -411,11 +420,27 @@ EmulInfo( PWD pWd, PDLLINFO pWdInfo )
     pWdData->OutBufDelayClient = (USHORT) -1;
     pWdData->ClientProductId   = ProductID;
 
+    TRACE(( TC_WD, TT_API1, "IcaInfo: pVdLink[TW] %p enable graphics %d", pIca->pVdLink[Virtual_ThinWire], pWdData->fEnableGraphics));
+    
     /*
      *  Get the current date and time on the client computer
      *
      *  NOTE: dosdate_t is 5 bytes and CurrentDate is 4 bytes
      */
+
+    {
+	time_t t = time(NULL);
+	struct tm *tm = gmtime(&t);
+	pWdData->CurrentDate.day   = tm->tm_mday;
+	pWdData->CurrentDate.month = tm->tm_mon + 1;
+	pWdData->CurrentDate.year  = tm->tm_year - 10;
+
+	pWdData->CurrentTime.hour    = tm->tm_hour;
+	pWdData->CurrentTime.minute  = tm->tm_min;
+	pWdData->CurrentTime.second  = tm->tm_sec;
+	pWdData->CurrentTime.hsecond = 0;
+    }
+
 #ifdef DOS
     _dos_getdate( (struct dosdate_t *) &dosdate );
     pWdData->CurrentDate.day   = dosdate.day;

@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (4/2/94)
 *
-* $Log$
+* pdapi.c,v
+* Revision 1.1  1998/01/12 11:35:34  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.34   15 Apr 1997 16:51:38   TOMA
 *  autoput for remove source 4/12/97
@@ -47,15 +52,15 @@
 /*
  *  Includes
  */
-#include <windows.h>
+#include "windows.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../../inc/client.h"
-#include <citrix/ica.h>
-#include <citrix/ica-h2c.h>
+#include "citrix/ica.h"
+#include "citrix/ica-h2c.h"
 
 #ifdef  DOS
 #include "../../../inc/dos.h"
@@ -66,6 +71,7 @@
 #include "../../../inc/logapi.h"
 #include "../inc/pd.h"
 
+#include "../../../inc/pddevice.h"
 
 /*=============================================================================
 ==   External Functions Defined
@@ -86,7 +92,7 @@ static int PdSetInformation( PPD, PPDSETINFORMATION );
 =============================================================================*/
 
 static void CancelWrite( PPD );
-static int PdNext( PPD, USHORT, PVOID );
+int PdNext( PPD, USHORT, PVOID );
 
 
 /*=============================================================================
@@ -128,7 +134,7 @@ void STATIC OutBufError( PPD, POUTBUF );
 /*
  *  Define WinStation driver external procedures
  */
-STATIC PDLLPROCEDURE PdProcedures[ PD__COUNT ] = {
+static PDLLPROCEDURE PdProcedures[ PD__COUNT ] = {
     (PDLLPROCEDURE) PdLoad,
     (PDLLPROCEDURE) PdUnload,
     (PDLLPROCEDURE) PdOpen,
@@ -143,7 +149,7 @@ STATIC PDLLPROCEDURE PdProcedures[ PD__COUNT ] = {
 /*
  *  Define Protocol driver link structure
  */
-STATIC DLLLINK PdLink = {0};
+static DLLLINK PdLink = {0};
 
 /*
  *  Define Protocol driver data structure
@@ -156,10 +162,11 @@ STATIC DLLLINK PdLink = {0};
 ==   Global Data
 =============================================================================*/
 
+/*
 STATIC PPLIBPROCEDURE pClibProcedures = NULL;
 STATIC PPLIBPROCEDURE pLogProcedures = NULL;
 STATIC PPLIBPROCEDURE pBIniProcedures = NULL;
-
+*/
 
 /*******************************************************************************
  *
@@ -184,6 +191,8 @@ PdLoad( PDLLLINK pLink )
 {
     PPD pPd = malloc(sizeof(PD));
 
+    TRACE(( TC_PD, TT_API1, "PdLoad: pLink in: '%s' proc %p data %p", pLink->ModuleName, pLink->pProcedures, pLink->pData ));
+
     /*
      *  This pd must never be loaded first.
      */
@@ -204,7 +213,7 @@ PdLoad( PDLLLINK pLink )
      */
     pLink->ProcCount   = PD__COUNT;
     pLink->pProcedures = PdProcedures;
-    pLink->pData       = &PdData;
+    pLink->pData       = pPd;
 
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -232,14 +241,14 @@ PdLoad( PDLLLINK pLink )
 static int
 PdUnload( PPD pPd, PDLLLINK pLink )
 {
-    free(pPd);
-    
     /*
      *  Unlink this PD from the linked list of protocol drivers
      */
-    *pLink = PdLink;
-    memset( &PdLink, 0, sizeof(DLLLINK) );
+    *pLink = pPd->Link;
+//  memset( &PdLink, 0, sizeof(DLLLINK) );
 
+    free(pPd);
+    
     return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -271,15 +280,16 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
     /*
      *  Initialize PD function call tables: MUST BE FIRST!
      */
-    pLogProcedures = pPdOpen->pLogProcedures;
-    pBIniProcedures = pPdOpen->pBIniProcedures;
-    pClibProcedures = pPdOpen->pClibProcedures;
+//    pLogProcedures = pPdOpen->pLogProcedures;
+//    pBIniProcedures = pPdOpen->pBIniProcedures;
+//    pClibProcedures = pPdOpen->pClibProcedures;
 
     /*
      *  Initialize PD data structure
      */
     memset( pPd, 0, sizeof(PD) );
-    pPd->pDriverProcedures = pPdOpen->pDriverProcedures;
+    pPd->pDeviceProcedures = pPdOpen->pDeviceProcedures;
+    pPd->Link = PdLink;
 
     /*
      *  Query size of input and output buffers from TD (level 0)
@@ -578,12 +588,12 @@ PdSetInformation( PPD pPd, PPDSETINFORMATION pPdSetInformation )
             if ( pWdAddress->pWdData ) {
                 pWdAddress->pWdData            = pPd;
 #if 1
-                pWdAddress->pOutBufAllocProc   = (POUTBUFALLOCPROC)   pPd->pDeviceProcedures->OutBufAlloc;
-                pWdAddress->pOutBufErrorProc   = (POUTBUFFREEPROC)    pPd->pDeviceProcedures->OutBufError;
-                pWdAddress->pOutBufFreeProc    = (POUTBUFFREEPROC)    pPd->pDeviceProcedures->OutBufFree;
-                pWdAddress->pProcessInputProc  = (PPROCESSINPUTPROC)  pPd->pDeviceProcedures->ProcessInput;
-                pWdAddress->pSetInfoProc       = (PSETINFOPROC)       pPd->pDeviceProcedures->SetInfo;
-                pWdAddress->pQueryInfoProc       = (PQUERYINFOPROC)   pPd->pDeviceProcedures->QueryInfo;
+                pWdAddress->pOutBufAllocProc   = (POUTBUFALLOCPROC)   pPd->pDeviceProcedures[PDDEVICE__OUTBUFALLOC];
+                pWdAddress->pOutBufErrorProc   = (POUTBUFFREEPROC)    pPd->pDeviceProcedures[PDDEVICE__OUTBUFERROR];
+                pWdAddress->pOutBufFreeProc    = (POUTBUFFREEPROC)    pPd->pDeviceProcedures[PDDEVICE__OUTBUFFREE];
+                pWdAddress->pProcessInputProc  = (PPROCESSINPUTPROC)  pPd->pDeviceProcedures[PDDEVICE__PROCESSINPUT];
+                pWdAddress->pSetInfoProc       = (PSETINFOPROC)       pPd->pDeviceProcedures[PDDEVICE__SETINFO];
+                pWdAddress->pQueryInfoProc       = (PQUERYINFOPROC)   pPd->pDeviceProcedures[PDDEVICE__QUERYINFO];
 #else
                 pWdAddress->pOutBufAllocProc   = (POUTBUFALLOCPROC)   DeviceOutBufAlloc;
                 pWdAddress->pOutBufErrorProc   = (POUTBUFFREEPROC)    DeviceOutBufError;
@@ -740,22 +750,23 @@ CancelWrite( PPD pPd )
  *
  ******************************************************************************/
 
-static int
+int
 PdNext( PPD pPd, USHORT ProcIndex, PVOID pParam )
 {
     PDLLPROCEDURE pProcedure;
 
 #ifdef DEBUG
-    ASSERT( PdLink.pProcedures, 0 );
-    ASSERT( PdLink.pData, 0 );
-    if ( ProcIndex >= PdLink.ProcCount )
+    ASSERT( pPd->Link.pProcedures, 0 );
+    ASSERT( pPd->Link.pData, 0 );
+    if ( ProcIndex >= pPd->Link.ProcCount )
+    {
+	TRACE(( TC_PD, TT_API1, "PdNext: '%s'", pPd->Link.ModuleName ));
         return( CLIENT_ERROR_BAD_PROCINDEX );
+    }
 #endif
 
-    pProcedure = ((PDLLPROCEDURE *) PdLink.pProcedures)[ ProcIndex ];
+    pProcedure = ((PDLLPROCEDURE *) pPd->Link.pProcedures)[ ProcIndex ];
     ASSERT( pProcedure, 0 );
 
-    return( (*pProcedure)( PdLink.pData, pParam ) );
+    return( (*pProcedure)( pPd->Link.pData, pParam ) );
 }
-
-

@@ -59,6 +59,10 @@ VDLIB=		src/dll/vdlib.o
 VDLIBD=		src/dll/vdlib.od
 NRLIB=		src/dll/nrlib.o
 NRLIBD=		src/dll/nrlib.od
+NELIB=		src/dll/nelib.o
+NELIBD=		src/dll/nelib.od
+SDLIB=		src/dll/sdlib.o
+SDLIBD=		src/dll/sdlib.od
 
 APP=		abs/wsclient
 APPD=		abs/wsclientd
@@ -72,15 +76,19 @@ COMMONLIBS=	${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/inetlib.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/tboxlibs/toolboxlib.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/tboxlibs/eventlib.o
 
-APPLIBS=	${WENGINELIB}  ${WDLIB}  ${TDLIB}  ${NRLIB}  ${CITRIXLIB}  
-APPLIBSD=	${WENGINELIBD} ${WDLIBD} ${TDLIBD} ${NRLIBD} ${CITRIXLIBD}
+APPLIBS=	${WENGINELIB}  ${WDLIB}  ${PDLIB}  ${TDLIB}  ${NRLIB}  ${SDLIB} \
+		${VDLIB} \
+		${CITRIXLIB}  
+
+APPLIBSD=	${WENGINELIBD} ${WDLIBD} ${PDLIBD} ${TDLIBD} ${NRLIBD} ${SDLIBD} \
+		${CITRIXLIBD}
 
 BASELIBS=	${COMMONLIBS}
 
 BASELIBSD=	$(RISCOS_BUILD_EXPORT)/Lib/debug/lremote.o \
 		${COMMONLIBS}
 
-SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${WDLIBSRC}
+SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} ${VDLIBSRC}
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -100,7 +108,7 @@ SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${WDLIBSRC}
 
 # Top level targets
 
-all:	${WENGINELIB}
+all:	${APPD}
 
 clean:	cleanlib cleandll cleanapp
 	echo cleaned all
@@ -122,9 +130,13 @@ refreshtags: cleanmisc srclist tags
 	echo refreshed tags
 
 depends: ${SRC}
-	armdepend -M Makefile $(CCFLAGS) ${SRC}
+	armdepend -M Makefile $(CCFLAGS) -DDEBUG ${SRC}
 	chmod a+w Makefile
 	@echo ${APPNAME} dependencies generated
+
+local_dirs: 
+	@-${MKDIR} abs
+	@-${MKDIR} aof
 
 install:
 	-${MKDIR} ${INSTALLDIR}/${APPNAME}
@@ -160,13 +172,15 @@ CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/clib/delay.c src/lib/clib/fileio.c src/lib/clib/loadstr.c src/lib/clib/string.c \
 		src/lib/encrypt/encrypt.c \
 		src/lib/ini/iniapi.c \
-		src/lib/io/icabrows/icabrows.c src/lib/io/tcpro/tcpro.c \
 		src/lib/log/logapi.c \
 		src/lib/riscos/dll/dll.c \
 		src/lib/riscos/kbd/kbdapi.c \
+		src/lib/riscos/mou/mouapi.c \
 		src/lib/riscos/vio/viocfg.c src/lib/riscos/vio/viocur.c src/lib/riscos/vio/viomisc.c \
 		src/lib/riscos/vio/vioread.c src/lib/riscos/vio/vioscrll.c src/lib/riscos/vio/viowrt.c \
 		src/lib/riscos/vio/vioro.c 
+
+#		src/lib/io/icabrows/icabrows.c src/lib/io/tcpro/tcpro.c \
 
 CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/cfgload/cfgload.o \
@@ -177,6 +191,7 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/log/logapi.o \
 		src/lib/riscos/dll/dll.o \
 		src/lib/riscos/kbd/kbdapi.o \
+		src/lib/riscos/mou/mouapi.o \
 		src/lib/riscos/vio/viocfg.o src/lib/riscos/vio/viocur.o src/lib/riscos/vio/viomisc.o \
 		src/lib/riscos/vio/vioread.o src/lib/riscos/vio/vioscrll.o src/lib/riscos/vio/viowrt.o \
 		src/lib/riscos/vio/vioro.o 
@@ -186,14 +201,15 @@ CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/string.od \
 		src/lib/encrypt/encrypt.od \
 		src/lib/ini/iniapi.od \
-		src/lib/io/icabrows/icabrows.od src/lib/io/tcpro/tcpro.od \
 		src/lib/log/logapi.od \
 		src/lib/riscos/dll/dll.od \
 		src/lib/riscos/kbd/kbdapi.od \
+		src/lib/riscos/mou/mouapi.od \
 		src/lib/riscos/vio/viocfg.od src/lib/riscos/vio/viocur.od src/lib/riscos/vio/viomisc.od \
 		src/lib/riscos/vio/vioread.od src/lib/riscos/vio/vioscrll.od src/lib/riscos/vio/viowrt.od \
 		src/lib/riscos/vio/vioro.od
 
+#		src/lib/io/icabrows/icabrows.od src/lib/io/tcpro/tcpro.od \
 
 ${CITRIXLIB}: ${CITRIXLIBOBJS}
 	${LIBFILE} ${LIBFILEFLAGS} -o ${CITRIXLIB} ${CITRIXLIBOBJS}
@@ -233,6 +249,25 @@ cleannr:
 	-${RM} ${NRLIBD}
 	-${RM} ${NRLIBOBJSD}
 	echo cleaned nr libs
+
+# NE
+
+NELIBSRC=	src/dll/ne/common/neapi.c  src/dll/ne/neica/neica.c
+NELIBOBJS=	src/dll/ne/common/neapi.o  src/dll/ne/neica/neica.o
+NELIBOBJSD=	src/dll/ne/common/neapi.od src/dll/ne/neica/neica.od
+
+${NELIB}:	${NELIBOBJS}
+	${LIBFILE} ${LIBFILEFLAGS} -o ${NELIB} ${NELIBOBJS}
+
+${NELIBD}:	${NELIBOBJSD}
+	${LIBFILE} ${LIBFILEFLAGS} -o ${NELIBD} ${NELIBOBJSD}
+
+cleanne:
+	-${RM} ${NELIB}
+	-${RM} ${NELIBOBJS}
+	-${RM} ${NELIBD}
+	-${RM} ${NELIBOBJSD}
+	echo cleaned ne libs
 
 # WENGINE
 
@@ -288,21 +323,25 @@ cleantd:
 
 # PD
 
-PDCOMMONLIBSRC=src/dll/pd/common/pdapi.c src/dll/pd/common/buffer.c
+PDCOMMONLIBSRC=	src/dll/pd/common/pdapi.c src/dll/pd/common/buffer.c
 PDCOMMONLIBOBJS=src/dll/pd/common/pdapi.o src/dll/pd/common/buffer.o
 PDCOMMONLIBOBJSD=src/dll/pd/common/pdapi.od src/dll/pd/common/buffer.od
 
-PDRFRAMELIBSRC=src/dll/pd/pdrframe/pdrframe.c src/dll/pd/pdrframe/callup.c src/dll/pd/pdrframe/input.c
+PDRFRAMELIBSRC=	src/dll/pd/pdrframe/pdrframe.c src/dll/pd/pdrframe/callup.c src/dll/pd/pdrframe/input.c
 PDRFRAMELIBOBJS=src/dll/pd/pdrframe/pdrframe.o src/dll/pd/pdrframe/callup.o src/dll/pd/pdrframe/input.o
 PDRFRAMELIBOBJSD=src/dll/pd/pdrframe/pdrframe.od src/dll/pd/pdrframe/callup.od src/dll/pd/pdrframe/input.od
 
-PDCRYPT1LIBSRC=src/dll/pd/pdcrypt1/pdcrypt1.c src/dll/pd/pdcrypt1/callup.c src/dll/pd/pdcrypt1/input.c src/dll/pd/pdcrypt1/encrypt.c
-PDCRYPT1LIBOBJS=src/dll/pd/pdcrypt1/pdcrypt1.o src/dll/pd/pdcrypt1/callup.o src/dll/pd/pdcrypt1/input.o src/dll/pd/pdcrypt1/encrypt.o
-PDCRYPT1LIBOBJSD=src/dll/pd/pdcrypt1/pdcrypt1.od src/dll/pd/pdcrypt1/callup.od src/dll/pd/pdcrypt1/input.od src/dll/pd/pdcrypt1/encrypt.od
+PDCRYPT1LIBSRC=	src/dll/pd/pdcrypt1/pdcrypt.c src/dll/pd/pdcrypt1/callup.c src/dll/pd/pdcrypt1/input.c src/dll/pd/pdcrypt1/encrypt.c
+PDCRYPT1LIBOBJS=src/dll/pd/pdcrypt1/pdcrypt.o src/dll/pd/pdcrypt1/callup.o src/dll/pd/pdcrypt1/input.o src/dll/pd/pdcrypt1/encrypt.o
+PDCRYPT1LIBOBJSD=src/dll/pd/pdcrypt1/pdcrypt.od src/dll/pd/pdcrypt1/callup.od src/dll/pd/pdcrypt1/input.od src/dll/pd/pdcrypt1/encrypt.od
 
-PDLIBSRC=	${PDCOMMONLIBSRC} ${PDRFRAMELIBSRC} ${PDCRYPT1LIBSRC}
-PDLIBOBJS=	${PDCOMMONLIBOBJS} ${PDRFRAMELIBOBJS} ${PDCRYPT1LIBOBJS}
-PDLIBOBJSD=	${PDCOMMONLIBOBJSD} ${PDRFRAMELIBOBJSD} ${PDCRYPT1LIBOBJSD}
+PDMODEMLIBSRC=	src/dll/pd/pdmodem/pdmodem.c src/dll/pd/pdmodem/callup.c src/dll/pd/pdmodem/input.c src/dll/pd/pdmodem/dsm.c src/dll/pd/pdmodem/util.c
+PDMODEMLIBOBJS=	src/dll/pd/pdmodem/pdmodem.o src/dll/pd/pdmodem/callup.o src/dll/pd/pdmodem/input.o src/dll/pd/pdmodem/dsm.o src/dll/pd/pdmodem/util.o
+PDMODEMLIBOBJSD=src/dll/pd/pdmodem/pdmodem.od src/dll/pd/pdmodem/callup.od src/dll/pd/pdmodem/input.od src/dll/pd/pdmodem/dsm.od src/dll/pd/pdmodem/util.od
+
+PDLIBSRC=	${PDCOMMONLIBSRC} ${PDRFRAMELIBSRC} ${PDCRYPT1LIBSRC} ${PDMODEMLIBSRC}
+PDLIBOBJS=	${PDCOMMONLIBOBJS} ${PDRFRAMELIBOBJS} ${PDCRYPT1LIBOBJS} ${PDMODEMLIBOBJS}
+PDLIBOBJSD=	${PDCOMMONLIBOBJSD} ${PDRFRAMELIBOBJSD} ${PDCRYPT1LIBOBJSD} ${PDMODEMLIBOBJSD}
 
 ${PDLIB}:	${PDLIBOBJS}
 	${LIBFILE} ${LIBFILEFLAGS} -o ${PDLIB} ${PDLIBOBJS}
@@ -366,9 +405,75 @@ VDCOMMONLIBSRC	=src/dll/vd/common/vdapi.c
 VDCOMMONLIBOBJS	=src/dll/vd/common/vdapi.o
 VDCOMMONLIBOBJSD=src/dll/vd/common/vdapi.od
 
-VDTW31LIBSRC=	src/dll/vd/vdtw31/twvd.c
-VDTW31LIBOBJS=	src/dll/vd/vdtw31/twvd.o
-VDTW31LIBOBJSD=	src/dll/vd/vdtw31/twvd.od
+VDTW31LIBSRC=	\
+		src/dll/vd/vdtw31/palette.c \
+		src/dll/vd/vdtw31/pixpack.c \
+		src/dll/vd/vdtw31/twbez.c \
+		src/dll/vd/vdtw31/twdata.c \
+		src/dll/vd/vdtw31/twro.c \
+		src/dll/vd/vdtw31/twroot.c \
+		src/dll/vd/vdtw31/twstroke.c \
+		src/dll/vd/vdtw31/twtext.c \
+		src/dll/vd/vdtw31/twvd.c \
+		src/dll/vd/vdtw31/twwin.c \
+		src/dll/vd/vdtw31/wfbitblt.c \
+		src/dll/vd/vdtw31/wfbrush.c \
+		src/dll/vd/vdtw31/wfcache.c \
+		src/dll/vd/vdtw31/wfcursor.c \
+		src/dll/vd/vdtw31/wfdims.c \
+		src/dll/vd/vdtw31/wfglobal.c \
+		src/dll/vd/vdtw31/wflines.c \
+		src/dll/vd/vdtw31/wfsavscr.c \
+		src/dll/vd/vdtw31/wfssb256.c \
+		src/dll/vd/vdtw31/wfssbtru.c \
+		src/dll/vd/vdtw31/wfstrips.c \
+		src/dll/vd/vdtw31/winonly.c
+
+VDTW31LIBOBJS=	\
+		src/dll/vd/vdtw31/palette.o \
+		src/dll/vd/vdtw31/pixpack.o \
+		src/dll/vd/vdtw31/twbez.o \
+		src/dll/vd/vdtw31/twdata.o \
+		src/dll/vd/vdtw31/twro.o \
+		src/dll/vd/vdtw31/twroot.o \
+		src/dll/vd/vdtw31/twstroke.o \
+		src/dll/vd/vdtw31/twtext.o \
+		src/dll/vd/vdtw31/twvd.o \
+		src/dll/vd/vdtw31/twwin.o \
+		src/dll/vd/vdtw31/wfbitblt.o \
+		src/dll/vd/vdtw31/wfbrush.o \
+		src/dll/vd/vdtw31/wfcache.o \
+		src/dll/vd/vdtw31/wfcursor.o \
+		src/dll/vd/vdtw31/wfdims.o \
+		src/dll/vd/vdtw31/wfglobal.o \
+		src/dll/vd/vdtw31/wflines.o \
+		src/dll/vd/vdtw31/wfsavscr.o \
+		src/dll/vd/vdtw31/wfssb256.o \
+		src/dll/vd/vdtw31/wfssbtru.o \
+		src/dll/vd/vdtw31/winonly.o
+
+VDTW31LIBOBJSD=	\
+		src/dll/vd/vdtw31/palette.od \
+		src/dll/vd/vdtw31/pixpack.od \
+		src/dll/vd/vdtw31/twbez.od \
+		src/dll/vd/vdtw31/twdata.od \
+		src/dll/vd/vdtw31/twro.od \
+		src/dll/vd/vdtw31/twroot.od \
+		src/dll/vd/vdtw31/twstroke.od \
+		src/dll/vd/vdtw31/twtext.od \
+		src/dll/vd/vdtw31/twvd.od \
+		src/dll/vd/vdtw31/twwin.od \
+		src/dll/vd/vdtw31/wfbitblt.od \
+		src/dll/vd/vdtw31/wfbrush.od \
+		src/dll/vd/vdtw31/wfcache.od \
+		src/dll/vd/vdtw31/wfcursor.od \
+		src/dll/vd/vdtw31/wfdims.od \
+		src/dll/vd/vdtw31/wfglobal.od \
+		src/dll/vd/vdtw31/wflines.od \
+		src/dll/vd/vdtw31/wfsavscr.od \
+		src/dll/vd/vdtw31/wfssb256.od \
+		src/dll/vd/vdtw31/wfssbtru.od \
+		src/dll/vd/vdtw31/winonly.o
 
 VDLIBSRC=	${VDCOMMONLIBSRC} ${VDTW31LIBSRC}
 VDLIBOBJS=	${VDCOMMONLIBOBJS} ${VDTW31LIBOBJS}
@@ -387,9 +492,36 @@ cleanvd:
 	-${RM} ${VDLIBOBJSD}
 	echo cleaned vd libs
 
+# SD
+
+SDLIBSRC=	src/dll/sd/common/sdapi.c  \
+		src/dll/sd/script/input.c src/dll/sd/script/parse.c src/dll/sd/script/script.c \
+		src/dll/sd/script/send.c src/dll/sd/script/set.c src/dll/sd/script/wait.c
+
+SDLIBOBJS=	src/dll/sd/common/sdapi.o \
+		src/dll/sd/script/input.o src/dll/sd/script/parse.o src/dll/sd/script/script.o \
+		src/dll/sd/script/send.o src/dll/sd/script/set.o src/dll/sd/script/wait.o
+
+SDLIBOBJSD=	src/dll/sd/common/sdapi.od \
+		src/dll/sd/script/input.od src/dll/sd/script/parse.od src/dll/sd/script/script.od \
+		src/dll/sd/script/send.od src/dll/sd/script/set.od src/dll/sd/script/wait.od
+
+${SDLIB}:	${SDLIBOBJS}
+	${LIBFILE} ${LIBFILEFLAGS} -o ${SDLIB} ${SDLIBOBJS}
+
+${SDLIBD}:	${SDLIBOBJSD}
+	${LIBFILE} ${LIBFILEFLAGS} -o ${SDLIBD} ${SDLIBOBJSD}
+
+cleansd:
+	-${RM} ${SDLIB}
+	-${RM} ${SDLIBOBJS}
+	-${RM} ${SDLIBD}
+	-${RM} ${SDLIBOBJSD}
+	echo cleaned sd libs
+
 # generic dll
 
-cleandll: cleanwengine cleantd cleanpd cleanwd cleanvd
+cleandll: cleanwengine cleantd cleanpd cleanwd cleanvd cleannr cleanne cleansd
 	echo cleaned dll files
 
 # ----------------------------------------------------------------------------------------------------
@@ -403,11 +535,11 @@ APPOBJS=	src/app/connect.o src/app/main.o src/app/rdebug.o \
 APPOBJSD=	src/app/connect.od src/app/main.od src/app/rdebug.od \
 		src/app/session.od src/app/utils.od
 
-${APP}: ${APPOBJS} ${APPLIBS} ${BASELIBS}
+${APP}: ${APPOBJS} ${APPLIBS} ${BASELIBS} local_dirs
 	${LD} ${LDFLAGS} -o ${APP} ${APPOBJS} ${APPLIBS} ${BASELIBS}
 	ls -l $@
 
-${APPD}: ${APPOBJSD} ${APPLIBSD} ${BASELIBSD}
+${APPD}: ${APPOBJSD} ${APPLIBSD} ${BASELIBSD} local_dirs
 	${LD} ${LDFLAGS} -o ${APPD} ${APPOBJSD} ${APPLIBSD} ${BASELIBSD}
 	ls -l $@
 

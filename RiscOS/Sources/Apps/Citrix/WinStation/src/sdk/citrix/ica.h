@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen
 *
-*  $Log$
+*  ica.h,v
+*  Revision 1.1  1998/01/12 11:37:55  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.2   25 Aug 1997 12:00:20   BillG
 *  update
@@ -326,10 +331,13 @@ typedef struct _VDCLIENTDRIVES2 {
 // avoid 2 (andy)
 #define CLIENTID_CITRIX_CONSOLE      0x0003     // citrix console
 #define CLIENTID_CITRIX_TEXT_TERM    0x0004     // citrix text terminals
+#define CLIENTID_CITRIX_TEXT_TERM    0x0004     // citrix text terminals
 
 #define CLIENTID_CITRIX_INTERNET     0x0101     // citrix internet client
 
 #define CLIENTID_CITRIX_JAVA         0x0105     // citrix java client
+
+#define CLIENTID_CITRIX_RISCOS       0x8086     // citrix RISC OS client
 
 #define CLIENTID_FORCESERIALIZE_FLAG 0x4000     // client requires license no.
 #define CLIENTID_TERMINAL_FLAG       0x8000     // terminal based client

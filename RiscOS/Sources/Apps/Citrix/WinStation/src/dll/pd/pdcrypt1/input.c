@@ -7,9 +7,14 @@
 *
 * copyright notice: Copyright 1995, Citrix Systems Inc.
 *
-* $Author$
+* smiddle
 *
-* $Log$
+* input.c,v
+* Revision 1.1  1998/01/12 11:35:40  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.14   15 Apr 1997 16:51:58   TOMA
 *  autoput for remove source 4/12/97
@@ -38,13 +43,13 @@
 /*
  *  Includes
  */
-#include <windows.h>
+#include "windows.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "../../../inc/client.h"
-#include <citrix/ica.h>
+#include "citrix/ica.h"
 
 #ifdef DOS
 #include "../../../inc/dos.h"
@@ -56,7 +61,6 @@
 #include "../inc/pd.h"
 
 #include "pdcrypt.h"
-
 
 /*=============================================================================
 ==   External procedures defined
@@ -144,7 +148,7 @@ WriteReset( PPD pPd )
      *  Write RESET
      */
     WriteParams.pOutBuf = pOutBuf;
-    (void) PdNext( pPd, PD$WRITE, &WriteParams );
+    (void) PdNext( pPd, PD__WRITE, &WriteParams );
 
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -213,7 +217,7 @@ WriteCryptMode( BYTE CryptMode, PPD pPd )
      *  Write mode
      */
     WriteParams.pOutBuf = pOutBuf;
-    (void) PdNext( pPd, PD$WRITE, &WriteParams );
+    (void) PdNext( pPd, PD__WRITE, &WriteParams );
 
     return( CLIENT_STATUS_SUCCESS );
 }

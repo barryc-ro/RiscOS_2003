@@ -5,7 +5,7 @@
 #ifndef __version_h
 # define __version_h
 
-/* #include "../VersionNum" */
+#include "../../VersionNum"
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -16,8 +16,10 @@
 #define APP_PATH_VAR	APP_NAME"$Path"
 #define APP_PATH	APP_NAME":"
 
-/* #define VERSION_STRING	Module_MajorVersion " (" Module_Date ") " Module_MinorVersion */
-#define VERSION_STRING	"0.01 (17-Dec-97)"
+#define INI_PATH	APP_NAME"Ini:"
+
+#define VERSION_STRING	Module_MajorVersion " (" Module_Date ") " Module_MinorVersion
+/* #define VERSION_STRING	"0.01 (17-Dec-97)" */
 
 /* --------------------------------------------------------------------------------------------- */
 

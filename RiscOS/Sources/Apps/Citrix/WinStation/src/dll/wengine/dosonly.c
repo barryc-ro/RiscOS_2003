@@ -8,7 +8,12 @@
 *
 *   Author: Marc Bloomfield (marcb) 13-Mar-1995
 *
-*   $Log$
+*   dosonly.c,v
+*   Revision 1.1  1998/01/12 11:36:34  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.13   11 Jun 1997 10:29:44   terryt
 *  client double click support
@@ -100,6 +105,8 @@ INT InputPoll( VOID )
     MOUINFORMATION MouInfo;
     ULONG CurrentTime;
 
+//  TRACE(( TC_WENG, TT_L1, "InputPoll: (entered)" ));
+    
     /*
      *  Check keyboard input buffer first
      */
@@ -185,35 +192,6 @@ INT InputPoll( VOID )
 
     //  check mouse one no errors
     if ( rc == CLIENT_STATUS_SUCCESS ) {
-#if 1
-	static int LastB = 0, LastT = 0, LastX = -1, LastY = -1;
-	int x, y, b, t;
-	int diff;
-
-	_swix(OS_Mouse, _OUTR(0,3), &x, &y, &b, &t);
-
-	diff = b ^ LastB;
-
-	MouData[0].X = x;
-	MouData[0].Y = y;
-	MouData[0].cMouState = x != LastX || y != LastY ? MOU_STATUS_MOVED : 0;
-
-	if (diff & 1)		// right
-	    MouData[0].cMouState |= b & 1 ? MOU_STATUS_B2DOWN : MOU_STATUS_B2UP;
-	
-	if (diff & 2)		// mid
-	    MouData[0].cMouState |= b & 2 ? MOU_STATUS_B3DOWN : MOU_STATUS_B3UP;
-	
-	if (diff & 4)		// left
-	    MouData[0].cMouState |= b & 4 ? MOU_STATUS_B1DOWN : MOU_STATUS_B1UP;
-
-	rc = wdMouseData( (LPVOID) MouData, sizeof(MouData[0]) );
-
-	LastB = b;
-	LastT = t;
-	LastX = x;
-	LastY = y;
-#else
         /*
          *  BUGBUG: mouse reset needed?
          */
@@ -234,7 +212,7 @@ INT InputPoll( VOID )
         /*
          *  Mouse data ready
          */
-        if ( fMouse && (rc = MouseReadAvail( &CountAvail ) == CLIENT_STATUS_SUCCESS ) ) {
+	if ( fMouse && (rc = MouseReadAvail( &CountAvail ) == CLIENT_STATUS_SUCCESS ) ) {
         
             /*
              *  Append mouse data to output buffer
@@ -251,7 +229,6 @@ INT InputPoll( VOID )
                 CountAvail -= Count;
             }
         }
-#endif
     }
 
     //  ignore these error codes

@@ -9,10 +9,17 @@
 *
 *   Author: Andy Stergiades (andys) 6-Apr-1994
 *
-*   $Log$
+*   twvd.c,v
+*   Revision 1.1  1998/01/12 11:36:09  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.37   14 Aug 1997 15:07:26   kurtp
 *  fix full screen, again
+
+
 *  
 *     Rev 1.36   05 Aug 1997 20:26:56   kurtp
 *  Add Full Screen Window support
@@ -82,7 +89,7 @@
 *  
 *************************************************************************/
 
-#include <windows.h>
+#include "windows.h"
 
 /*
  *  Includes
@@ -90,8 +97,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <direct.h>
 
+#include "../../../app/version.h"
 
 #include "../../../inc/client.h"
 
@@ -101,9 +108,9 @@
 
 #include "../../../inc/clib.h"
 #include "twtype.h"
-#include <citrix\ica.h>
-#include <citrix\ica-c2h.h>
-#include <citrix\twcommon.h>
+#include "citrix/ica.h"
+#include "citrix/ica-c2h.h"
+#include "citrix/twcommon.h"
 
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
@@ -117,6 +124,10 @@
 #include "twwin.h"
 #include "twdata.h"
 #include <math.h>
+
+#define NO_VDDRIVER_DEFINES
+#include "../../../inc/vddriver.h"
+#include "../../../inc/vddriverp.h"
 
 /*=============================================================================
 ==   Functions Defined
@@ -143,6 +154,18 @@ int STATIC TWCallHookTimer( PVD pVd, PVOID pTimerHook );
 int STATIC TWCallUnHookTimer( PVD pVd, PVOID pTimerHook );
 #endif
 void STATIC TWHostWrite( LPBYTE pBuf, USHORT Length );
+
+
+PLIBPROCEDURE VdTW31DriverProcedures[VDDRIVER__COUNT] =
+{
+    (PLIBPROCEDURE)DriverOpen,
+    (PLIBPROCEDURE)DriverClose,
+    (PLIBPROCEDURE)DriverInfo,
+    (PLIBPROCEDURE)DriverPoll,
+    (PLIBPROCEDURE)DriverQueryInformation,
+    (PLIBPROCEDURE)DriverSetInformation,
+    (PLIBPROCEDURE)DriverGetLastError   
+};
 
 /*=============================================================================
 ==   External Functions used
@@ -185,7 +208,7 @@ STATIC ULONG PrefHRes;
 STATIC ULONG PrefVRes;
 STATIC BOOL  vfFullScreen = FALSE;
 
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
 
 extern int vwScreen, vhScreen;
 extern int vSVGAmode;
@@ -293,9 +316,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     ULONG iScreenPercent;
 #endif
 
-#ifdef DOS
     char string[20];
-#endif
  
     /*
      *  Read Cache parameters from .ini file
@@ -303,6 +324,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     if ( rc = TWReadCacheParameters(pVdOpen->pIniSection) )
        return( rc );
 
+#if 0
     /*
      *  Initizlize thinwire stuff
      */
@@ -311,7 +333,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
         TRACE(( TC_VD, TT_API2, "VdOpen: ThinInitOnce failed!" ));
         goto done;
     }
- 
+#endif
     /*
      * Get a virtual channel
      */
@@ -319,7 +341,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     wdqi.pWdInformation = &OpenVirtualChannel;
     wdqi.WdInformationLength = sizeof(OPENVIRTUALCHANNEL);
     OpenVirtualChannel.pVCName = VIRTUAL_THINWIRE;
-    rc = WdCall( pVd, WD$QUERYINFORMATION, &wdqi );
+    rc = WdCall( pVd, WD__QUERYINFORMATION, &wdqi );
     VirtualThinWire = OpenVirtualChannel.Channel;
     ASSERT( VirtualThinWire == Virtual_ThinWire, VirtualThinWire );
  
@@ -331,7 +353,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     /*
      *  Check for super VGA
      */
-#ifdef DOS
+#if defined( DOS) || defined(RISCOS)
     bGetPrivateProfileString( pVdOpen->pIniSection, INI_SVGACAPABILITY, DEFAULT_SVGACAP,
                               string, sizeof(string) );
     if (!stricmp(string, "Off")) {
@@ -353,10 +375,10 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     
         vVariableRes = TRUE;
     }
-    else {
-        if ( rc = TWDetermineSVGA(pVd) )
-            return( rc );
-    }
+//    else {
+//        if ( rc = TWDetermineSVGA(pVd) )
+//            return( rc );
+//    }
  
     bGetPrivateProfileString( pVdOpen->pIniSection, INI_SVGAPREFERENCE, DEFAULT_SVGAPREF,
                               string, sizeof(string) );
@@ -458,16 +480,18 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
         if ( strlen(pszTemp) ) {
 
+#if 0
             //  remove trailing backslash
             if ( pszTemp[strlen(pszTemp)-1] == '\\' ) {
                 pszTemp[strlen(pszTemp)-1] == '\0';
             }
-
+#endif
             //  just to insure directory is there
-            _mkdir( pszTemp );
+            mkdir( pszTemp );
 
             //  restore trailing backslash
-            strcat( pszTemp, "\\" );
+//          strcat( pszTemp, "\\" );
+	    strcat( pszTemp, "." );
             vpszDimCachePath = (PCHAR) malloc(strlen(pszTemp)+1);
             strcpy( vpszDimCachePath, pszTemp );
         }
@@ -492,11 +516,11 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
      */
     vdwh.Type  = (UCHAR)VirtualThinWire;
     vdwh.pVdData = pVd;
-    vdwh.pProc = (PVDWRITEPROCEDURE) TWDisplayPacket;
+//  vdwh.pProc = (PVDWRITEPROCEDURE) TWDisplayPacket;
     wdsi.WdInformationClass  = WdVirtualWriteHook;
     wdsi.pWdInformation      = &vdwh;
     wdsi.WdInformationLength = sizeof(VDWRITEHOOK);
-    rc = WdCall(pVd, WD$SETINFORMATION, &wdsi);
+    rc = WdCall(pVd, WD__SETINFORMATION, &wdsi);
  
     /*
      * This returns pointers to functions to use to send data to the host
@@ -538,12 +562,12 @@ DriverClose( PVD pVd, PDLLCLOSE pVdClose )
 {
    pVdClose;
 
-   TWDeallocCache(pVd);
+// TWDeallocCache(pVd);
    CacheHasBeenAllocated = FALSE;
 
-   TWWindowsStop(pVd);
+// TWWindowsStop(pVd);
 
-   ThinDestroyOnce();
+// ThinDestroyOnce();
 
    return( CLIENT_STATUS_SUCCESS );
 }
@@ -584,7 +608,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     BOOL   fResViolation = FALSE;
     WDQUERYINFORMATION wdqi;
     ENCRYPTIONINIT     eieio;
-    PWFEINSTANCE pInstanceData = (PWFEINSTANCE)GetWindowLong( vhWnd, GWL_INSTANCEDATA );
+//  PWFEINSTANCE pInstanceData = (PWFEINSTANCE)GetWindowLong( vhWnd, GWL_INSTANCEDATA );
 #endif
 
     /*
@@ -648,7 +672,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     pPref->flGraphicsCaps = GCAPS_COMPLEX_CURVES;
     pPref->ResCapsCnt     = 1;
     pPref->ResCapsOff     = (USHORT)((LPBYTE)&pPref->ResCaps - (LPBYTE)pPref);
-#ifdef DOS
+#if defined (DOS) || defined(RISCOS)
 
     if ( vVariableRes == TRUE ) {
         pPref->ResCaps.HRes   = (USHORT)PrefHRes;
@@ -734,7 +758,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     wdqi.WdInformationClass  = WdEncryptionInit;
     wdqi.pWdInformation      = &eieio;
     wdqi.WdInformationLength = sizeof(VDWRITEHOOK);
-    WdCall(pVd, WD$QUERYINFORMATION, &wdqi);
+    WdCall(pVd, WD__QUERYINFORMATION, &wdqi);
 
     /*
      *  On encryption level >1 variable resolution is supported
@@ -856,7 +880,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     /*
      *  Initialize cache data
      */
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
     pVdData->CacheXms    = vVdTWCache.ulXms;
     pVdData->CacheLowMem = vVdTWCache.ulLowMem;
     pVdData->CacheDASD   = vVdTWCache.ulDASD;
@@ -914,7 +938,7 @@ DriverPoll( PVD pVd, PDLLPOLL pVdPoll )
     int         rc = CLIENT_STATUS_SUCCESS;
     PTWBUFFER pTWBuffer;
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     /*
      *  If no work then ship out 
      */
@@ -1054,11 +1078,11 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
    switch ( pVdSetInformation->VdInformationClass ) {
 
       case VdSetFocus:
-         rc = TWWindowsStart(pVd, &vThinWireMode);
+//       rc = TWWindowsStart(pVd, &vThinWireMode);
          break;
 
       case VdKillFocus:
-         rc = TWWindowsStop(pVd);
+//       rc = TWWindowsStop(pVd);
          break;
 
       case VdMousePosition:
@@ -1075,7 +1099,7 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
          pCache = (PVDTWCACHE) pVdSetInformation->pVdInformation;
 #ifdef BEYONDDEMO_CACHING
          if ( !CacheHasBeenAllocated ) {
-             rc = TWAllocCache( pVd, pCache->ulXms, pCache->ulLowMem );
+//           rc = TWAllocCache( pVd, pCache->ulXms, pCache->ulLowMem );
              if ( rc == CLIENT_STATUS_SUCCESS )
                  CacheHasBeenAllocated = TRUE;
          }
@@ -1085,7 +1109,7 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 #endif
          break;
 
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
 
       case VdThinWireDeallocateCache :
          // Special function to steal the thinwire cache
@@ -1094,19 +1118,19 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
          // used to get a large amount of data for a virtual driver for
          // a flash rom update
          if(CacheHasBeenAllocated) {
-             TWDeallocCache(pVd);
+//             TWDeallocCache(pVd);
              CacheHasBeenAllocated = FALSE;
          }
          break;
 
       case VdThinWireSaveVideoRegs :
          // call the save_hw_regs
-         SaveVideoRegs();
+//         SaveVideoRegs();
          break;
 
       case VdThinWireRestoreVideoRegs :
          // call the res_hw_regs
-         RestoreVideoRegs();
+//         RestoreVideoRegs();
          break;
 
 #else
@@ -1120,7 +1144,7 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
          break;
 
       case VdPaint:
-         rc = TWPaint( pVd, (HWND)(ULONG)pVdSetInformation->pVdInformation );
+	  rc = TWPaint( pVd, (HWND)(ULONG)pVdSetInformation->pVdInformation );
          break;
 
       case VdThinwireStack:
@@ -1135,7 +1159,7 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 
       case VdRealizePaletteFG:
          if ( vColor == Color_Cap_256 ) {
-             rc = TWRealizePalette( vhWnd, vhdc, 
+           rc = TWRealizePalette( vhWnd, vhdc, 
                                     (UINT *)pVdSetInformation->pVdInformation, 
                                     TWREALIZEPALETTE_FG );
          }
@@ -1143,7 +1167,7 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 
       case VdInactivate:
          if ( vColor == Color_Cap_256 ) {
-             UINT cColors;
+           UINT cColors;
              rc = TWRealizePalette( vhWnd, vhdc, 
                                     (UINT *)&cColors, 
                                     TWREALIZEPALETTE_FOCUS );
@@ -1152,7 +1176,7 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 
       case VdRealizePaletteBG:
          if ( vColor == Color_Cap_256 ) {
-             rc = TWRealizePalette( vhWnd, vhdc, 
+           rc = TWRealizePalette( vhWnd, vhdc, 
                                     (UINT *)pVdSetInformation->pVdInformation, 
                                     TWREALIZEPALETTE_BG );
          }
@@ -1212,7 +1236,7 @@ int STATIC
 TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
 {
     int rc;
-#ifndef DOS
+#if !defined( DOS) && !defined(RISCOS)
     ULONG vwScreen = GetWindowLong( vhWnd, GWL_WINDOWWIDTH );
     ULONG vhScreen = GetWindowLong( vhWnd, GWL_WINDOWHEIGHT );
 #endif
@@ -1227,9 +1251,9 @@ TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
     // move our cursor
     uX = (USHORT)(((ULONG)uX * vwScreen)/0x10000);
     uY = (USHORT)(((ULONG)uY * vhScreen)/0x10000);
-    rc = TWMoveCursor(uX, uY);
+//  rc = TWMoveCursor(uX, uY);
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     //  save moved to position for wengine
     SetWindowLong( vhWnd, GWL_MOUSE_X, (LONG) uX );
     SetWindowLong( vhWnd, GWL_MOUSE_Y, (LONG) uY );
@@ -1238,6 +1262,7 @@ TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
     return(rc);
 }
 
+#ifdef DOS
 /*******************************************************************************
  *
  *  TWCallSetMouseRanges
@@ -1256,7 +1281,7 @@ TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
 //WARNING - turn optimization off because compiler does not set up
 //          pVd right
 
-#pragma optimize("",off)
+//#pragma optimize("",off)
 STATIC int WFCAPI 
 TWCallSetMouseRanges( USHORT uHoriMin, USHORT uHoriMax, USHORT uVertMin, USHORT uVertMax )
 {
@@ -1268,7 +1293,7 @@ TWCallSetMouseRanges( USHORT uHoriMin, USHORT uHoriMax, USHORT uVertMin, USHORT 
 
    return(rc);
 }
-#pragma optimize("",on)
+//#pragma optimize("",on)
 
 /*******************************************************************************
  *
@@ -1342,6 +1367,7 @@ TWCallResetMouse( PVD pVd )
 
    return(rc);
 }
+#endif
 
 #ifdef DOS
 /*******************************************************************************

@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (11/3/94)
 *
-*  $Log$
+*  nr.h,v
+*  Revision 1.1  1998/01/12 11:35:26  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.3   15 Apr 1997 16:19:38   TOMA
 *  autoput for remove source 4/12/97
@@ -45,7 +50,8 @@ typedef struct _NR * PNR;
  */
 typedef struct _NR {
 
-    USHORT NotUsed;
+//   USHORT NotUsed;
+    PCHAR pProtocolName;
 
 } NR;
 

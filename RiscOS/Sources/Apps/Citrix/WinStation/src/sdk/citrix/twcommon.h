@@ -8,7 +8,12 @@
 *
 * Copyright (c) 1993-4 Citrix Systems, Inc.
 *
-*  $Log$
+*  twcommon.h,v
+*  Revision 1.1  1998/01/12 11:38:04  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.47   21 Apr 1997 16:57:46   TOMA
 *  update
@@ -61,7 +66,7 @@
 #ifndef __TWCOMMON_H__
 #define __TWCOMMON_H__
 
-#include <citrix\twh2inc.h>
+#include "citrix/twh2inc.h"
 
 /*=============================================================================
 ==   ThinWire client-host structures 
@@ -175,7 +180,7 @@ typedef enum _COLOR_CAPS
     Color_Cap_256,
     Color_Cap_64K,
     Color_Cap_16M,
-    Color_Cap_Max,
+    Color_Cap_Max
 } COLOR_CAPS, * PCOLOR_CAPS;
 
 
@@ -303,13 +308,13 @@ typedef struct _LINESTATE {
  * TWSPHEADER    Flags;     (required field)
 \*****************************************************************************/
 typedef struct _TWSPHEADER {
-   UCHAR clipping  : 2;          // b1 b0
+   BCHAR clipping  : 2,          // b1 b0
 #define   TW_CLIP_TRIVIAL      0 //  0  0
 #define   TW_CLIP_RECT         1 //  0  1
 #define   TW_CLIP_COMPLEX      2 //  1  0
 #define   TW_CLIP_reserved     3 //  1  1
 
-   UCHAR style     : 3;          // b4 b3 b2
+   BCHAR style     :3;          // b4 b3 b2
 #define   TW_LINE_SOLID        0 //  0  0  0
 #define   TW_LINE_ALTERNATE    1 //  0  0  1
 #define   TW_LINE_DASH         2 //  0  1  0
@@ -319,16 +324,18 @@ typedef struct _TWSPHEADER {
 #define   TW_LINE_MASK         6 //  1  1  0 (8 bit mask specified in StyleMask)
 #define   TW_LINE_OTHER        7 //  1  1  1 (Custom style specified in Style)
 
-   UCHAR fStartGap : 1;       // b5 TRUE/FALSE
-   UCHAR fSamePen  : 1;       // b6 TRUE/FALSE (Pen field used if FALSE)
-   UCHAR res       : 1;       // b7
+   BCHAR fStartGap : 1;       // b5 TRUE/FALSE
+   BCHAR fSamePen  : 1;     // b6 TRUE/FALSE (Pen field used if FALSE)
+   BCHAR res       : 1;       // b7
 } TWSPHEADER, *PTWSPHEADER;
+
+#define sizeof_TWSPHEADER	1
 
 /*****************************************************************************\
  * TWSPPEN       Pen;       (present IFF Flags.fSamePen (b6 of fl) is FALSE)
 \*****************************************************************************/
 typedef struct _TWSPPEN {
-   UCHAR rop2  : 4; // b3 b2 b1 b0
+   BCHAR rop2  : 4; // b3 b2 b1 b0
                     //  0  0  0  0   = 0 = R2_WHITE       (10)  1
                     //  0  0  0  1   = 1 = R2_BLACK       (01)  0
                     //  0  0  1  0   = 2 = R2_NOTMERGEPEN (02) DPon
@@ -345,7 +352,7 @@ typedef struct _TWSPPEN {
                     //  1  1  0  1   = D = R2_COPYPEN     (0D) P
                     //  1  1  1  0   = E = R2_MERGEPENNOT (0E) PDno
                     //  1  1  1  1   = F = R2_MERGEPEN    (0F) DPo
-   UCHAR color : 4; // b3 b2 b1 b0
+   BCHAR color : 4; // b3 b2 b1 b0
                     //  I  R  G  B
                     //  0  0  0  0   = 0 = BLACK
                     //  0  0  0  1   = 1 = BLUE
@@ -365,6 +372,7 @@ typedef struct _TWSPPEN {
                     //  1  1  1  1   = F = WHITE (high intesity)
 } TWSPPEN, *PTWSPPEN;
 
+#define sizeof_TWSPPEN	1
 
 /*****************************************************************************\
  * TWSPPEN256    Pen;       (present IFF Flags.fSamePen (b6 of fl) is FALSE)
@@ -373,7 +381,7 @@ typedef struct _TWSPPEN {
  *
 \*****************************************************************************/
 typedef struct _TWSPPEN256 {
-   UCHAR rop2  : 4; // b3 b2 b1 b0
+   BCHAR rop2  : 4; // b3 b2 b1 b0
                     //  0  0  0  0   = 0 = R2_WHITE       (10)  1
                     //  0  0  0  1   = 1 = R2_BLACK       (01)  0
                     //  0  0  1  0   = 2 = R2_NOTMERGEPEN (02) DPon
@@ -390,9 +398,11 @@ typedef struct _TWSPPEN256 {
                     //  1  1  0  1   = D = R2_COPYPEN     (0D) P
                     //  1  1  1  0   = E = R2_MERGEPENNOT (0E) PDno
                     //  1  1  1  1   = F = R2_MERGEPEN    (0F) DPo
-   UCHAR res   : 4; // b3 b2 b1 b0
-   UCHAR color;     // b7 b6 b5 b4 b3 b2 b1 b0
+   BCHAR res   : 4; // b3 b2 b1 b0
+   BCHAR color : 8;     // b7 b6 b5 b4 b3 b2 b1 b0
 } TWSPPEN256, *PTWSPPEN256;
+
+#define sizeof_twsppen256	2
 
 /*****************************************************************************\
  * TWSPSTYLEMASK StyleMask; (present IFF Flags.style (b2-b4) = TW_LINE_MASK)
@@ -412,6 +422,8 @@ typedef struct _TWSPSTYLE {
    USHORT  *pData;
 } TWSPSTYLE, *PTWSPSTYLE;
 
+// SJM: This one is OK as it is not read into directly
+
 /*****************************************************************************\
  * TWSPBOUNDS    Bounds;    (present IFF Flags.clipping (b0-b1) = TW_CLIP_RECT)
 \*****************************************************************************/
@@ -427,12 +439,12 @@ typedef struct _TWSPBOUNDS {
  * TWSPSUBPATH  SubPath; (Header for new subpath)
 \*****************************************************************************/
 typedef struct _TWSPSUBPATH {
-   UCHAR  fLast      : 1;  // b0 TRUE if last sub path
-   UCHAR  fSamePoint : 1;  // b1 TRUE if first point is same as previous point
-   UCHAR  fBezier    : 1;  // b2   TRUE/FALSE True if bezier
-   UCHAR  fClosed    : 1;  // b3   TRUE/FALSE True if closed figure
-   UCHAR  fNewStart  : 1;  // b4   TRUE/FALSE True if new figure start
-   UCHAR  fType      : 3;  // b7 b6 b5
+   BCHAR  fLast      : 1;  // b0 TRUE if last sub path
+   BCHAR  fSamePoint : 1;  // b1 TRUE if first point is same as previous point
+   BCHAR  fBezier    : 1;  // b2   TRUE/FALSE True if bezier
+   BCHAR  fClosed    : 1;  // b3   TRUE/FALSE True if closed figure
+   BCHAR  fNewStart  : 1;  // b4   TRUE/FALSE True if new figure start
+   BCHAR  fType      : 3;  // b7 b6 b5
 #define TW_SP_NORMAL   0   //  0  0  0  no special attribute
 #define TW_SP_HORZ     1   //  0  0  1  horizontal line (2 pts) 
 #define TW_SP_VERT     2   //  0  1  0  vertical line (2 pts) 
@@ -442,6 +454,8 @@ typedef struct _TWSPSUBPATH {
                            //  1  1  0  reserved
 #define TW_SP_ENDDATA  7   //  1  1  1  end data
 } TWSPSUBPATH, *PTWSPSUBPATH;
+
+#define sizeof_TWSPSUBPATH 1
 
                          // b1 b0   b1 = fNoFrac   b0 = fSigned
 #define TW_PT_FIX      0 //  0  0   TWPOINTFIX     structure
@@ -454,11 +468,11 @@ typedef struct _TWSPSUBPATH {
 \*****************************************************************************/
 #define SIZE_OF_TWPOINTFIX sizeof(TWPOINTFIX)
 typedef struct _TWPOINTFIX {
-   ULONG fSigned  :  1; // b0   True if x and y are signed values (must be FALSE)
-   ULONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
-   ULONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
-   ULONG  x       : 15; // b3-b17
-   ULONG  y       : 14; // b18-b31
+   BLONG fSigned  :  1; // b0   True if x and y are signed values (must be FALSE)
+   BLONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
+   BLONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
+   BLONG  x       : 15; // b3-b17
+   BLONG  y       : 14; // b18-b31
 } TWPOINTFIX, *PTWPOINTFIX;
 
 /*****************************************************************************\
@@ -466,9 +480,12 @@ typedef struct _TWPOINTFIX {
  *                                          or TWPOINTSIGN
  *            Coordinate range: (-16384,-8192) to (16383 15/16,8191 15/16)
 \*****************************************************************************/
-#pragma pack(1)
-#define SIZE_OF_TWPOINTFIXSIGN sizeof(TWPOINTFIXSIGN)
+//#pragma pack(1)
+#define SIZE_OF_TWPOINTFIXSIGN 9
 typedef struct _TWPOINTFIXSIGN {
+#if 1
+   UCHAR vals[9];
+#else
    UCHAR fSigned  :  1; // b0   True if x and y are signed values (must be TRUE) 
    UCHAR fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
    UCHAR fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
@@ -476,8 +493,9 @@ typedef struct _TWPOINTFIXSIGN {
 
    LONG  x;
    LONG  y;
+#endif
 } TWPOINTFIXSIGN, *PTWPOINTFIXSIGN;
-#pragma pack()
+//#pragma pack()
 
 
 /*****************************************************************************\
@@ -486,12 +504,12 @@ typedef struct _TWPOINTFIXSIGN {
 \*****************************************************************************/
 #define SIZE_OF_TWPOINT 3
 typedef struct _TWPOINT     {
-   ULONG fSigned  :  1; // b0   True if x and y are signed values (must be FALSE) 
-   ULONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
-   ULONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
-   ULONG x        : 11; // b3-b13
-   ULONG y        : 10; // b14-b23
-   ULONG nu       :  8; // b24-b31 not used
+   BLONG fSigned  :  1; // b0   True if x and y are signed values (must be FALSE) 
+   BLONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
+   BLONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
+   BLONG x        : 11; // b3-b13
+   BLONG y        : 10; // b14-b23
+   BLONG nu       :  8; // b24-b31 not used
 } TWPOINT, *PTWPOINT;
 
 /*****************************************************************************\
@@ -500,33 +518,33 @@ typedef struct _TWPOINT     {
 \*****************************************************************************/
 #define SIZE_OF_TWPOINTSIGN sizeof(TWPOINTSIGN)
 typedef struct _TWPOINTSIGN     {
-   LONG fSigned  :  1; // b0   True if x and y are signed values (must be TRUE) 
-   LONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
-   LONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
-   LONG x        : 15; // b3-b17
-   LONG y        : 14; // b18-b31
+   BLONG fSigned  :  1; // b0   True if x and y are signed values (must be TRUE) 
+   BLONG fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
+   BLONG fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
+   BLONG x        : 15; // b3-b17
+   BLONG y        : 14; // b18-b31
 } TWPOINTSIGN, *PTWPOINTSIGN;
 
 /*****************************************************************************\
  * TWPOINTSPECIAL
 \*****************************************************************************/
 typedef struct _TWPOINTSPECIAL     {
-   SHORT fSamePoint :  1; // b1   TRUE/FALSE True if 1st pt same as previous
-   SHORT fType      :  2; // b1 b0
+   BSHORT fSamePoint :  1; // b1   TRUE/FALSE True if 1st pt same as previous
+   BSHORT fType      :  2; // b1 b0
 //      TW_SP_NORMAL   0  //  0  0  diagonal line
 //      TW_SP_HORZ     1  //  0  1  horizontal line
 //      TW_SP_VERT     2  //  1  0  vertical line
-   SHORT value      : 13; // b3-12
+   BSHORT value      : 13; // b3-12
 } TWPOINTSPECIAL, *PTWPOINTSPECIAL;
 
 /*****************************************************************************\
  * TWRUN
 \*****************************************************************************/
 typedef struct _TWRUN {
-   LONG fLast  : 1;      // b0 TRUE/FALSE True if last run entry
-   LONG res    : 1;      // b1 reserved, must be 0
-   LONG iStart : 15;     // b2-b16
-   LONG iStop  : 15;     // b17-b31
+   BLONG fLast  : 1;      // b0 TRUE/FALSE True if last run entry
+   BLONG res    : 1;      // b1 reserved, must be 0
+   BLONG iStart : 15;     // b2-b16
+   BLONG iStop  : 15;     // b17-b31
 } TWRUN;
 
 typedef struct _ELLIPSEDATA
@@ -540,7 +558,7 @@ typedef struct _ELLIPSEDATA
 } ELLIPSEDATA, *PELLIPSEDATA;
 
 
-// DrvTextOut stuff... HOST: textout.c   CLIENT: twtext.c
+// DrvTextOut stuff... HOST/*: textout*/.c   CLIENT/*: twtext*/.c
 ////////////////////////////////////////////////////////////////////////////
 
 #define MAX_2K_CHUNKS_PER_GLYPH 32
@@ -567,7 +585,7 @@ typedef struct _ELLIPSEDATA
 #define TWTO_POS_SAMEY1DX 2 //  1  0 - Same Y, 1 byte dx from last string 1
 #define TWTO_POS_SAMEXDY  3 //  1  1 - Same X, Y uses same delta as last  0
 typedef struct _TWTOFLAGS {
-   UCHAR bSameColor        : 1, // TRUE/FALSE  True if same FG/BG color as last
+   BCHAR bSameColor        : 1, // TRUE/FALSE  True if same FG/BG color as last
          bOpaqueBackground : 1, // TRUE/FALSE  True if opaque background
          bMonospaced       : 1, // TRUE/FALSE  True if monospaced       
          bDefPlacement     : 1, // True if pos is calc'd using cached widths
@@ -576,11 +594,13 @@ typedef struct _TWTOFLAGS {
          fFirstPos         : 2; // Flags describing position of first glyph
 } TWTOFLAGS, *PTWTOFLAGS;
 
+#define sizeof_TWTOFLAGS 1
+
 /*****************************************************************************\
  * TWTOCOLOR       Color;      
 \*****************************************************************************/
 typedef struct _TWTOCOLOR {
-   UCHAR FG : 4; // b3 b2 b1 b0 
+   BCHAR FG : 4; // b3 b2 b1 b0 
                  //  I  R  G  B
                  //  0  0  0  0   = 0 = BLACK                                                    
                  //  0  0  0  1   = 1 = BLUE                                                     
@@ -598,7 +618,7 @@ typedef struct _TWTOCOLOR {
                  //  1  1  0  1   = D = LIGHT MAGENTA                                            
                  //  1  1  1  0   = E = YELLOW                                                   
                  //  1  1  1  1   = F = WHITE (high intesity)                                    
-   UCHAR BG : 4; // b3 b2 b1 b0 
+   BCHAR BG : 4; // b3 b2 b1 b0 
                  //  I  R  G  B
                  //  0  0  0  0   = 0 = BLACK                                                    
                  //  0  0  0  1   = 1 = BLUE                                                     
@@ -618,6 +638,7 @@ typedef struct _TWTOCOLOR {
                  //  1  1  1  1   = F = WHITE (high intesity)                                    
 } TWTOCOLOR, *PTWTOCOLOR;
 
+#define sizeof_TWTOCOLOR 1
 
 /*****************************************************************************\
  * TWTOCOLOR256       Color;      
@@ -630,6 +651,7 @@ typedef struct _TWTOCOLOR256 {
    UCHAR BG;     // b7 b6 b5 b4 b3 b2 b1 b0 
 } TWTOCOLOR256, *PTWTOCOLOR256;
 
+#define sizeof_TWTOCOLOR256 2
 
 /*****************************************************************************\
  * TWTOGLYPHHEADER GlyphHeader;
@@ -639,7 +661,7 @@ typedef struct _TWTOCOLOR256 {
 #define SIZE_OF_HCACHE_EXTRA 2 
 #define HCACHE_VALID_BITS 0x0FFF
 typedef struct _TWTOGLYPHHEADER {
-   ULONG  bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
+   BLONG  bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
           fMediumFormat   : 2,  // see TWTO_MF_xxx defines (below)
           bTotallyClipped : 1,  // TRUE/FALSE True if glyph is totally clipped (must be in 1st byte)
           bLastGlyph      : 1,  // TRUE/FALSE True if last, False if another follows (must be in 1st byte) 
@@ -664,7 +686,7 @@ typedef struct _TWTOGH {
    UCHAR      bPutInCache;     // TRUE/FALSE True if we should put in cache
    UCHAR      bWidthIncluded;  // TRUE/FALSE True if dxNext in GlyphDimension or follows
    USHORT     hCache;          // value of the client cache handle (low 8 bits hCache must be in low word header)
-   CHUNK_TYPE ChunkType;       // _2k, _512B, _128B, _32B
+   USHORT     ChunkType;       // _2k, _512B, _128B, _32B
 } TWTOGH, *PTWTOGH;
 
 /*****************************************************************************\
@@ -676,28 +698,34 @@ typedef struct _TWTOGH {
 #define TWTO_MF_MEDIUM      2   //  1  0 - 2 byte format - TWTOGLYPHHEADERMEDIUM structure
 #define TWTO_MF_SPACES      3   //  1  1 - 1 byte format - TWTOGLYPHHEADERSPACES structure
 typedef struct _TWTOGLYPHHEADERMEDIUM {
-   USHORT bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
+   BSHORT bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
           fMediumFormat   : 2,  // see TWTO_MF_xxx defines (above)
           hCache          : 12, // value of the client cache handle (low 8 bits hCache must be in low word header)
-          bTiny           : 1;  // TRUE: _32B ChunkType, FALSE: _128B
+          bTiny           : 1;  // TRUE/*: _32B*/ ChunkType, FALSE/*: _128B*/
 } TWTOGLYPHHEADERMEDIUM, *PTWTOGLYPHHEADERMEDIUM;
+
+#define sizeof_TWTOGLYPHHEADERMEDIUM 2
 
 /*****************************************************************************\
  * TWTOGLYPHHEADERSPACES GlyphHeaderSpaces;
 \*****************************************************************************/
 typedef struct _TWTOGLYPHHEADERSPACES {
-   UCHAR  bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
+   BCHAR  bShortFormat    : 1,  // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first)
           fMediumFormat   : 2,  // see TWTO_MF_xxx defines (above)
           count           : 5;  // number of contiguous spaces
 } TWTOGLYPHHEADERSPACES, *PTWTOGLYPHHEADERSPACES;
+
+#define sizeof_TWTOGLYPHHEADERSPACES 1
 
 /*****************************************************************************\
  * TWTOGLYPHHEADERSHORT GlyphHeaderShort;
 \*****************************************************************************/
 typedef struct _TWTOGLYPHHEADERSHORT {
-   UCHAR  bShortFormat    : 1; // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first) 
-   UCHAR  hCacheCache     : 7; // value of the client cache handle
+   BCHAR  bShortFormat    : 1; // TRUE/FALSE True if GLYPHHEADERSHORT structure (must be first) 
+   BCHAR  hCacheCache     : 7; // value of the client cache handle
 } TWTOGLYPHHEADERSHORT, *PTWTOGLYPHHEADERSHORT;
+
+#define sizeof_TWTOGLYPHHEADERSHORT 1
 
 /*****************************************************************************\
  * TWTOGLYPHDIMENSION  GlyphDimension;
@@ -705,17 +733,17 @@ typedef struct _TWTOGLYPHHEADERSHORT {
 #define SIZE_OF_GLYPHDIMENSION 6
 #define SIZE_OF_GLYPHDIMENSION_WITH_WIDTH 7
 typedef struct _TWTOGLYPHDIMENSION {
-   ULONG cx              : 11;
-   ULONG cy              : 10;
-   LONG  dyThis          : 11;  // Amount to be added to yBase = yOffset + iStart
+   BULONG cx              : 11;
+   BULONG cy              : 10;
+   BLONG  dyThis          : 11;  // Amount to be added to yBase = yOffset + iStart
 
 
    // If glyphs g1 and g2 have x positions of x1 and x2, respectively,
    // x2 = x1 + dxNext1 + dxThis2
-   LONG  bColumnRemoved :  1; 
-   LONG  dxThis         : 12;  // This char adds this to cur x pos
-   ULONG dxNext         : 11;  // Next char adds this to cur x pos (opt - last)
-   LONG  notused        :  8; 
+   BLONG  bColumnRemoved :  1; 
+   BLONG  dxThis         : 12;  // This char adds this to cur x pos
+   BULONG dxNext         : 11;  // Next char adds this to cur x pos (opt - last)
+   BLONG  notused        :  8; 
 } TWTOGLYPHDIMENSION, *PTWTOGLYPHDIMENSION;
 
 /*****************************************************************************\
@@ -729,12 +757,14 @@ typedef struct _TWTOGD {
    USHORT dxNext;  // Next char adds this to cur x pos (opt - last)
 } TWTOGD, *PTWTOGD;
 
+#define sizeof_TWTOGD 10
+
 /*****************************************************************************\
  * TWTOPOSITION Position;
 \*****************************************************************************/
 #define SIZE_OF_POSITION 3
 typedef struct _TWTOPOSITION {
-   LONG bShortFormat : 1,
+   BLONG bShortFormat : 1,
         x            : 12,
         y            : 11,
         notused      : 8;
@@ -755,13 +785,14 @@ typedef struct _TWTOPOSITIONSHORT {
         delta        : 7;
 } TWTOPOSITIONSHORT, *PTWTOPOSITIONSHORT;
 
+#define sizeof_TWTOPOSITIONSHORT 1
 
 /*****************************************************************************\
  * TWTOPT1RCL      pt1Rcl;    ( 3 bytes )
 \*****************************************************************************/
 typedef struct _TWTOPT1RCL {
                             //                                         Bytes to
-   ULONG fType   : 3;       // b2 b1 b0                                  follow
+   BULONG fType   : 3;       // b2 b1 b0                                  follow
 #define TW_PT1RCL_SAME    0 //  0  0  0 -   same delta X,   same delta Y   0
 #define TW_PT1RCL_SAMEYX1 1 //  0  0  1 -     1B delta X,   same delta Y   1
 #define TW_PT1RCL_11X5Y   2 //  0  1  0 - 11-bit delta X,  5-bit delta Y   2
@@ -771,58 +802,66 @@ typedef struct _TWTOPT1RCL {
 #define TW_PT1RCL_10X6Y   5 //  1  0  1 - 10-bit delta X,  6-bit delta Y   2
 #define TW_PT1RCL_9X7Y    6 //  1  1  0 -  9-bit delta X,  7-bit delta Y   2
 #define TW_PT1RCL_8X8Y    7 //  1  1  1 -  8-bit delta X,  8-bit delta Y   2
-   ULONG xLeft   : 11; // x - coordinate
-   ULONG yTop    : 10; // y - coordinate
-   ULONG notused : 8;
+   BULONG xLeft   : 11; // x - coordinate
+   BULONG yTop    : 10; // y - coordinate
+   BULONG notused : 8;
 } TWTOPT1RCL, *PTWTOPT1RCL;
 
 /*****************************************************************************\
  * TWTOPT1RCLE      pt1RclE;    ( 3 bytes )
 \*****************************************************************************/
 typedef struct _TWTOPT1RCLE {
-   ULONG bMore   : 1;  // TRUE/FALSE  True if not last rectangle
+   BULONG bMore   : 1;  // TRUE/FALSE  True if not last rectangle
                             //                                      Bytes to
-   ULONG fType   : 2;       // b1 b0                                  follow
+   BULONG fType   : 2;       // b1 b0                                  follow
      // TW_PT1RCL_SAME          0  0 -   same delta X,   same delta Y   0
      // TW_PT1RCL_SAMEYX1       0  1 -     1B delta X,   same delta Y   1
      // TW_PT1RCL_11X5Y         1  0 - 11-bit delta X,  5-bit delta Y   2
      // TW_PT1RCL_11X10Y        1  1 - 11-bit delta X, 10-bit delta Y   3
-   ULONG xLeft   : 11; // x - coordinate
-   ULONG yTop    : 10; // y - coordinate
-   ULONG notused : 8;
+   BULONG xLeft   : 11; // x - coordinate
+   BULONG yTop    : 10; // y - coordinate
+   BULONG notused : 8;
 } TWTOPT1RCLE, *PTWTOPT1RCLE;
 
 /*****************************************************************************\
  * TWPT11X5Y pt2Rcl;    ( 2 bytes )
 \*****************************************************************************/
 typedef struct _TWPT11X5Y {
-   USHORT dx : 11; // x - coordinate delta
-   USHORT dy :  5; // y - coordinate delta
+   BUSHORT dx : 11; // x - coordinate delta
+   BUSHORT dy :  5; // y - coordinate delta
 } TWPT11X5Y, *PTWPT11X5Y;
+
+#define sizeof_TWPT11X5Y 2
 
 /*****************************************************************************\
  * TWPT10X6Y pt2Rcl;    ( 2 bytes )
 \*****************************************************************************/
 typedef struct _TWPT10X6Y {
-   USHORT dx : 10; // x - coordinate delta
-   USHORT dy :  6; // y - coordinate delta
+   BUSHORT dx : 10; // x - coordinate delta
+   BUSHORT dy :  6; // y - coordinate delta
 } TWPT10X6Y, *PTWPT10X6Y;
+
+#define sizeof_TWPT10X6Y 2
 
 /*****************************************************************************\
  * TWPT9X7Y pt2Rcl;    ( 2 bytes )
 \*****************************************************************************/
 typedef struct _TWPT9X7Y {
-   USHORT dx : 9; // x - coordinate delta
-   USHORT dy : 7; // y - coordinate delta
+   BUSHORT dx : 9; // x - coordinate delta
+   BUSHORT dy : 7; // y - coordinate delta
 } TWPT9X7Y, *PTWPT9X7Y;
+
+#define sizeof_TWPT9X7Y 2
 
 /*****************************************************************************\
  * TWPT8X8Y pt2Rcl;    ( 2 bytes )
 \*****************************************************************************/
 typedef struct _TWPT8X8Y {
-   USHORT dx : 8; // x - coordinate delta
-   USHORT dy : 8; // y - coordinate delta
+   BUSHORT dx : 8; // x - coordinate delta
+   BUSHORT dy : 8; // y - coordinate delta
 } TWPT8X8Y, *PTWPT8X8Y;
+
+#define sizeof_TWPT8X8Y 2
 
 // Used by stroke
 #define TW_PT1RCL_3X5Y    0 //  0  0  0 -  3-bit delta X,  5-bit delta Y   1
@@ -833,42 +872,50 @@ typedef struct _TWPT8X8Y {
  * TWPT6X10Y pt2Rcl;    ( 2 bytes )
 \*****************************************************************************/
 typedef struct _TWPT6X10Y {
-   USHORT dx : 6; // x - coordinate delta
-   USHORT dy : 10; // y - coordinate delta
+   BUSHORT dx : 6; // x - coordinate delta
+   BUSHORT dy : 10; // y - coordinate delta
 } TWPT6X10Y, *PTWPT6X10Y;
+
+#define sizeof_TWPT6X10Y 2
 
 /*****************************************************************************\
  * TWPT4X4Y pt2Rcl;    ( 1 byte )
 \*****************************************************************************/
 typedef struct _TWPT4X4Y {
-   USHORT dx : 4; // x - coordinate delta
-   USHORT dy : 4; // y - coordinate delta
+   BUSHORT dx : 4; // x - coordinate delta
+   BUSHORT dy : 4; // y - coordinate delta
 } TWPT4X4Y, *PTWPT4X4Y;
+
+#define sizeof_TWPT4X4Y 2
 
 /*****************************************************************************\
  * TWPT3X5Y pt2Rcl;    ( 1 byte )
 \*****************************************************************************/
 typedef struct _TWPT3X5Y {
-   USHORT dx : 3; // x - coordinate delta
-   USHORT dy : 5; // y - coordinate delta
+   BUSHORT dx : 3; // x - coordinate delta
+   BUSHORT dy : 5; // y - coordinate delta
 } TWPT3X5Y, *PTWPT3X5Y;
+
+#define sizeof_TWPT3X5Y 2
 
 /*****************************************************************************\
  * TWPT5X3Y pt2Rcl;    ( 1 byte )
 \*****************************************************************************/
 typedef struct _TWPT5X3Y {
-   USHORT dx : 5; // x - coordinate delta
-   USHORT dy : 3; // y - coordinate delta
+   BUSHORT dx : 5; // x - coordinate delta
+   BUSHORT dy : 3; // y - coordinate delta
 } TWPT5X3Y, *PTWPT5X3Y;
+
+#define sizeof_TWPT5X3Y 2
 
 /*****************************************************************************\
  * TWPT11X10Y pt2Rcl;    ( 3 bytes )
 \*****************************************************************************/
 typedef struct _TWPT11X10Y {
-   ULONG dx      : 11; // x - coordinate delta
-   ULONG dy      : 10; // y - coordinate delta
-   ULONG res     :  3;
-   ULONG notused :  8;
+   BULONG dx      : 11; // x - coordinate delta
+   BULONG dy      : 10; // y - coordinate delta
+   BULONG res     :  3;
+   BULONG notused :  8;
 } TWPT11X10Y, *PTWPT11X10Y;
 
 // Determine size of pt2Rcl
@@ -924,19 +971,21 @@ switch ( pt1Rcl.fType ) {                       \
  * TW4L3T4R3B ccRcl;    ( 2 bytes )
 \*****************************************************************************/
 typedef struct _TW4L3T4R3B {
-   SHORT fType   : 2,
+   BSHORT fType   : 2,
          dL      : 4,
          dT      : 3,
          dR      : 4,
          dB      : 3;
 } TW4L3T4R3B, *PTW4L3T4R3B;
 
+#define sizeof_TW4L3T4R3B 2
+
 /*****************************************************************************\
  * TW6L5T6R5B ccRcl;    ( 3 bytes )
 \*****************************************************************************/
 #define SIZE_OF_TW6L5T6R5B 3
 typedef struct _TW6L5T6R5B {
-   LONG  fType   : 2,
+   BLONG  fType   : 2,
          dL      : 6,
          dT      : 5,
          dR      : 6,
@@ -949,7 +998,7 @@ typedef struct _TW6L5T6R5B {
  * TW8L7T8R7B ccRcl;    ( 4 bytes )
 \*****************************************************************************/
 typedef struct _TW8L7T8R7B {
-   LONG  fType   : 2,
+   BLONG  fType  : 2,
          dL      : 8,
          dT      : 7,
          dR      : 8,
@@ -961,7 +1010,7 @@ typedef struct _TW8L7T8R7B {
 \*****************************************************************************/
 #define SIZE_OF_TW11L0T11R0B 3
 typedef struct _TW11L0T11R0B {
-  ULONG  fType   : 2,
+  BULONG  fType  : 2,
          dL      : 11,
          dR      : 11;
 } TW11L0T11R0B, *PTW11L0T11R0B;
@@ -970,17 +1019,19 @@ typedef struct _TW11L0T11R0B {
 /*****************************************************************************\
  * TW12L11T12R11B ccRcl;    ( 6 bytes )
 \*****************************************************************************/
-#pragma pack(1)
+//#pragma pack(1)
 typedef struct _TW12L11T12R11B {
-   LONG  fType   : 2,
+   BLONG fType   : 2,
          dL      : 12,
          dT      : 11,
          dRLow   : 7;
 
-   SHORT dRHigh  : 5,
+   BSHORT dRHigh : 5,
          dB      : 11;
 } TW12L11T12R11B, *PTW12L11T12R11B;
-#pragma pack()
+//#pragma pack()
+
+#define sizeof_TW12L11T12R11B 6
 
 // We will allow up to 255 complex clipping rectangles
 // This is the largest number of uncompressed rcls which can fit in our
@@ -1024,22 +1075,24 @@ typedef struct _TW12L11T12R11B {
 #define TWPAL_FROM_CACHE        2   //  1   0 - Retreive from cache
 
 typedef struct _TWPALETTEHEADER {
-   USHORT iStart       : 8,     // b0-b7   starting index of paletteu
+   BUSHORT iStart      : 8,     // b0-b7   starting index of paletteu
           res1         : 6,     // b8-b13  reserved
           fType        : 2;     // b14-b15 cache type
 } TWPALETTEHEADER, *PTWPALETTEHEADER;
 
+#define sizeof_TWPALETTEHEADER 2
                                     // b1 b0
 #define TWPAL_CHUNK_128B        0   //  0  0 - 128 byte cache object
 #define TWPAL_CHUNK_512B        1   //  0  1 - 512 byte cache object 
 #define TWPAL_CHUNK_2K          2   //  1  0 - 2K  byte cache object
 
 typedef struct _TWPALETTEHEADERCACHE {
-   USHORT ChunkType    : 2,     // b0-b1  0-128B, 1-512B chunk, 2-2K chunk
+   BUSHORT ChunkType   : 2,     // b0-b1  0-128B, 1-512B chunk, 2-2K chunk
           res2         : 2,     // b2-b3  reserved
           hCache       : 12;    // b4-b15 value of the client cache handle 
 } TWPALETTEHEADERCACHE, *PTWPALETTEHEADERCACHE;
 
+#define sizeof_TWPALETTEHEADERCACHE 2
 
 /*****************************************************************************\
  * Format for PACKET_COMMAND_CACHE
@@ -1058,34 +1111,34 @@ typedef struct _TWPALETTEHEADERCACHE {
 #define CACHE_FILE_HANDLE_SIZE 8
 typedef UCHAR CACHE_FILE_HANDLE[ CACHE_FILE_HANDLE_SIZE ];
 
-#pragma pack(1)
+//#pragma pack(1)
 typedef struct _ICA_CACHE_ERROR {
     USHORT ByteCount;
     UCHAR Command;
     CACHE_FILE_HANDLE FileHandle;
 } ICA_CACHE_ERROR, *PICA_CACHE_ERROR;
-#pragma pack()
+//#pragma pack()
 
 
-#pragma pack(1)
+//#pragma pack(1)
 typedef struct _ICA_CACHE_RESIZE {
     USHORT ByteCount;
     UCHAR Command;
     ULONG Size;
 } ICA_CACHE_RESIZE, *PICA_CACHE_RESIZE;
-#pragma pack()
+//#pragma pack()
 
 
-#pragma pack(1)
+//#pragma pack(1)
 typedef struct _ICA_CACHE_DELETE {
     USHORT ByteCount;
     UCHAR Command;
     CACHE_FILE_HANDLE FileHandle;
 } ICA_CACHE_DELETE, *PICA_CACHE_DELETE;
-#pragma pack()
+//#pragma pack()
 
 
-#pragma pack(1)
+//#pragma pack(1)
 typedef struct _CACHE_FILE_CONTEXT {
     CACHE_FILE_HANDLE Filehandle;
     ULONG Size;
@@ -1093,33 +1146,33 @@ typedef struct _CACHE_FILE_CONTEXT {
     UCHAR Flags;
     UCHAR SignatureLevel;
 } CACHE_FILE_CONTEXT, *PCACHE_FILE_CONTEXT;
-#pragma pack()
+//#pragma pack()
 
 
-#pragma pack(1)
+//#pragma pack(1)
 typedef struct _ICA_CACHE_STREAM {  
     USHORT ByteCount;
     UCHAR  Command;
     UCHAR  Count;
-    CACHE_FILE_CONTEXT FileList[0];
+    /*CACHE_FILE_CONTEXT FileList[0];*/
 } ICA_CACHE_STREAM, *PICA_CACHE_STREAM;
-#pragma pack()
+//#pragma pack()
 
 
-#pragma pack(1)
+//#pragma pack(1)
 typedef struct _ICA_CACHE_DISABLE {
     USHORT ByteCount;
     UCHAR Command;
 } ICA_CACHE_DISABLE, *PICA_CACHE_DISABLE;
-#pragma pack()
+//#pragma pack()
 
 
-#pragma pack(1)
+//#pragma pack(1)
 typedef struct _ICA_CACHE_ENABLE {
     USHORT ByteCount;
     UCHAR Command;
 } ICA_CACHE_ENABLE, *PICA_CACHE_ENABLE;
-#pragma pack()
+//#pragma pack()
 
 
 #endif //__TWCOMMON_H__

@@ -9,7 +9,12 @@
 *
 *  Author: Andy 4/6/94
 *
-* $Log$
+* vdapi.c,v
+* Revision 1.1  1998/01/12 11:36:06  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.18   15 Apr 1997 18:02:30   TOMA
 *  autoput for remove source 4/12/97
@@ -35,7 +40,7 @@
 *
 *************************************************************************/
 
-#include <windows.h>
+#include "windows.h"
 
 /*
  *  Includes
@@ -57,6 +62,9 @@
 #include "../../../inc/logapi.h"
 #include "../inc/vd.h"
 
+#include "../../../inc/vddriver.h"
+#include "../../../inc/vddriverp.h"
+
 /*=============================================================================
 ==   Functions Defined
 =============================================================================*/
@@ -76,6 +84,7 @@ int STATIC WdCall( PVD pVd, USHORT ProcIndex, PVOID pParam );
 /*=============================================================================
 ==   External Functions used
 =============================================================================*/
+/*
 int STATIC DriverOpen( PVD, PVDOPEN );
 int STATIC DriverClose( PVD, PDLLCLOSE );
 int STATIC DriverInfo( PVD, PDLLINFO );
@@ -83,7 +92,7 @@ int STATIC DriverPoll( PVD, PDLLPOLL );
 int STATIC DriverQueryInformation( PVD, PVDQUERYINFORMATION );
 int STATIC DriverSetInformation( PVD, PVDSETINFORMATION );
 int STATIC DriverGetLastError( PVD, PVDLASTERROR );
-
+*/
 
 /*=============================================================================
 ==   Data
@@ -91,7 +100,7 @@ int STATIC DriverGetLastError( PVD, PVDLASTERROR );
 /*
  *  Define Virtual driver external procedures
  */
-STATIC PDLLPROCEDURE VdProcedures[ VD$COUNT ] = {
+STATIC PDLLPROCEDURE VdProcedures[ VD__COUNT ] = {
     (PDLLPROCEDURE) VdLoad,
     (PDLLPROCEDURE) VdUnload,
     (PDLLPROCEDURE) VdOpen,
@@ -113,6 +122,7 @@ STATIC PDLLPROCEDURE VdProcedures[ VD$COUNT ] = {
 ==   Global Data
 =============================================================================*/
 
+/*
 STATIC PPLIBPROCEDURE pClibProcedures  = NULL;
 STATIC PPLIBPROCEDURE pMouProcedures   = NULL;
 STATIC PPLIBPROCEDURE pTimerProcedures = NULL;
@@ -121,6 +131,7 @@ STATIC PPLIBPROCEDURE pXmsProcedures   = NULL;
 STATIC PPLIBPROCEDURE pLogProcedures   = NULL;
 STATIC PPLIBPROCEDURE pBIniProcedures  = NULL;
 STATIC PPLIBPROCEDURE pKbdProcedures   = NULL;
+*/
 STATIC PFNWFENGPOLL   gpfnWFEngPoll    = NULL;
 STATIC PFNSTATUSMESSAGEPROC gpfnStatusMsgProc = NULL;
 
@@ -143,11 +154,11 @@ STATIC PFNSTATUSMESSAGEPROC gpfnStatusMsgProc = NULL;
 extern int WFCAPI
 VdLoad( PDLLLINK pLink )
 {
-    PWD pVd = malloc(sizeof(VD));
+    PVD pVd = malloc(sizeof(VD));
 
-    pLink->ProcCount   = VD$COUNT;
+    pLink->ProcCount   = VD__COUNT;
     pLink->pProcedures = VdProcedures;
-    pLink->pData       = pvd;
+    pLink->pData       = pVd;
 
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -205,6 +216,7 @@ VdOpen( PVD pVd, PVDOPEN pVdOpen )
 {
     int rc;
 
+#if 0
     /*
      *  Initialize global data
      */
@@ -216,6 +228,7 @@ VdOpen( PVD pVd, PVDOPEN pVdOpen )
     pLogProcedures    = pVdOpen->pLogProcedures;
     pBIniProcedures   = pVdOpen->pBIniProcedures;
     pKbdProcedures    = pVdOpen->pKbdProcedures;
+#endif
     gpfnWFEngPoll     = (PFNWFENGPOLL)pVdOpen->pfnWFEngPoll;
     gpfnStatusMsgProc = (PFNSTATUSMESSAGEPROC)pVdOpen->pfnStatusMsgProc;
 

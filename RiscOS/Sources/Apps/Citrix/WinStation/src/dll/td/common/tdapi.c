@@ -9,7 +9,12 @@
 *
 *  Author: Brad Pedersen  (3/25/94)
 *
-*  $Log$
+*  tdapi.c,v
+*  Revision 1.1  1998/01/12 11:35:52  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.48   15 Apr 1997 16:54:46   TOMA
 *  autoput for remove source 4/12/97
@@ -85,8 +90,8 @@
 #include "../inc/td.h"
 //#include "../../../inc/loadstr.h"
 
-#include "../../../inc/pddevice.h"
-#include "../../../inc/pddevicep.h"
+#include "../../../inc/tddevice.h"
+#include "../../../inc/tddevicep.h"
 
 /*=============================================================================
 ==   External Functions Defined
@@ -137,7 +142,7 @@ int STATIC DeviceSendBreak( PPD );
 /*
  *  Define WinStation driver external procedures
  */
-STATIC PDLLPROCEDURE PdProcedures[ PD__COUNT ] = {
+static PDLLPROCEDURE PdProcedures[ PD__COUNT ] = {
     (PDLLPROCEDURE) TdLoad,
     (PDLLPROCEDURE) PdUnload,
     (PDLLPROCEDURE) PdOpen,
@@ -172,7 +177,7 @@ STATIC PPLIBPROCEDURE pLogProcedures = NULL;
 STATIC PPLIBPROCEDURE pBIniProcedures = NULL;
 #endif
 
-extern LPBYTE pProtocolName;
+//extern LPBYTE pProtocolName;
 
 
 /*******************************************************************************
@@ -1092,7 +1097,7 @@ ClientGetLastError( PPD pPd, PPDLASTERROR pLastError )
         strcpy( pLastError->ProtocolName, pPd->ErrorProtocolName );
     }
     else {
-        strcpy( pLastError->ProtocolName, pProtocolName );
+        strcpy( pLastError->ProtocolName, pPd->pProtocolName );
 
         if ( !LoadString( "NET", 
                           pPd->LastError,

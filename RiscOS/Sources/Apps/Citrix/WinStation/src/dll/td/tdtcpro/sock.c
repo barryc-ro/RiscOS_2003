@@ -85,6 +85,7 @@ int Call( PPD pPd, ULONG InetAddr, UINT Port, int * pSocket )
    int arg;
    struct linger Linger;
    struct sockaddr_in addr;
+   int fKeepAlive;
 
    memset( (char *)&addr, (int)0, sizeof( struct sockaddr ) );
 
@@ -115,19 +116,26 @@ int Call( PPD pPd, ULONG InetAddr, UINT Port, int * pSocket )
        goto badconnect;
    }
 
-#if 0
-   // set socket options
-   Linger.l_onoff = 0;
-   Linger.l_linger = 1;
-   rc = setsockopt( sock, SOL_SOCKET, SO_DONTLINGER, (CHAR *)&Linger, sizeof(struct linger) );
+   fKeepAlive = 1;
+   rc = setsockopt( sock, SOL_SOCKET, SO_KEEPALIVE, &fKeepAlive, sizeof(fKeepAlive) );
 
    if( rc ) {
        rc = errno;
        close_socket( sock );
        goto badconnect;
    }
-#endif
-   
+
+   // set socket options
+   Linger.l_onoff = 0;
+   Linger.l_linger = 1;
+   rc = setsockopt( sock, SOL_SOCKET, SO_LINGER, &Linger, sizeof(struct linger) );
+
+   if( rc ) {
+       rc = errno;
+       close_socket( sock );
+       goto badconnect;
+   }
+
 #ifdef HAS_NODELAY
    arg = 1;
    rc = setsockopt( sock, IPPROTO_TCP, TCP_NODELAY, (CHAR *)&arg, sizeof(arg) );

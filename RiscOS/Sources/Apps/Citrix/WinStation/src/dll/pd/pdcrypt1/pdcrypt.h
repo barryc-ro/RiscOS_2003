@@ -7,9 +7,14 @@
 *
 *  Copyright 1995, Citrix Systems Inc.
 *
-* $Author$
+* smiddle
 *
-* $Log$
+* pdcrypt.h,v
+* Revision 1.1  1998/01/12 11:35:44  smiddle
+* Newly added.#
+*
+* Version 0.01. Not tagged
+*
 *  
 *     Rev 1.7   15 Apr 1997 16:52:04   TOMA
 *  autoput for remove source 4/12/97
@@ -101,5 +106,13 @@ void ResetSessionState( PPDCRYPT );
 void GetSessionKey( PPDCRYPT, LPBYTE, PUSHORT );
 
 void CreateRand( LPBYTE, ULONG );
+
+#define DeviceOutBufAlloc	PdCryptDeviceOutBufAlloc
+#define DeviceOutBufError	PdCryptDeviceOutBufError
+#define DeviceOutBufFree	PdCryptDeviceOutBufFree
+#define DeviceSetInfo		PdCryptDeviceSetInfo
+#define DeviceQueryInfo		PdCryptDeviceQueryInfo
+
+#define DeviceProcessInput	PdCryptDeviceProcessInput
 
 #endif //__PDCRYPT_H__

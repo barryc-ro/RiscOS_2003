@@ -9,7 +9,12 @@
 *  
 *   Author: Brad Pedersen (4/8/94)
 *  
-*   $Log$
+*   input.c,v
+*   Revision 1.1  1998/01/12 11:36:19  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.43   15 Apr 1997 18:17:52   TOMA
 *  autoput for remove source 4/12/97
@@ -457,6 +462,9 @@ data:
                      pIca->PacketType <= PACKET_SCROLLRT2 )
                     (void) MouseShowPointer( FALSE );
 #endif
+
+                TRACE(( TC_WD, TT_ICOOK,  "WdIca: input buffer @%p count %d",
+                        pWd->pInputBuffer, pWd->InputCount ));
 
                 if ( pProc = ICAData[ pIca->PacketType ].pProcedure )
                     (*pProc)( pWd, pWd->pInputBuffer, pWd->InputCount );
