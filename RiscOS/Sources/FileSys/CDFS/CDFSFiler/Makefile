@@ -26,6 +26,7 @@ MKDIR    = cdir
 AS       = aasm
 CP       = copy
 RM       = remove
+STRIP    = stripdepnd
 
 CFLAGS   = -c -depend !Depend -IC:
 AFLAGS   = -depend !Depend -Stamp -quit -module
@@ -49,41 +50,10 @@ resources:
 
 clean:
         ${RM} ${TARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.CDFSFiler: Hdr:ListOpts
-rm.CDFSFiler: Hdr:Macros
-rm.CDFSFiler: Hdr:System
-rm.CDFSFiler: Hdr:SWIs
-rm.CDFSFiler: Hdr:CPU.Generic26
-rm.CDFSFiler: Hdr:IO.GenericIO
-rm.CDFSFiler: Hdr:RISCOS
-rm.CDFSFiler: Hdr:ModHand
-rm.CDFSFiler: Hdr:FSNumbers
-rm.CDFSFiler: Hdr:HighFSI
-rm.CDFSFiler: Hdr:NewErrors
-rm.CDFSFiler: Hdr:Wimp
-rm.CDFSFiler: Hdr:WimpSpace
-rm.CDFSFiler: Hdr:Messages
-rm.CDFSFiler: Hdr:Sprite
-rm.CDFSFiler: Hdr:VduExt
-rm.CDFSFiler: Hdr:Variables
-rm.CDFSFiler: Hdr:Proc
-rm.CDFSFiler: Hdr:Services
-rm.CDFSFiler: Hdr:ShareD
-rm.CDFSFiler: Hdr:MsgMenus
-rm.CDFSFiler: Hdr:MsgTrans
-rm.CDFSFiler: Hdr:ResourceFS
-rm.CDFSFiler: Hdr:CDROM
-rm.CDFSFiler: Hdr:CDErrors
-rm.CDFSFiler: Hdr:CDFS
-rm.CDFSFiler: Hdr:Hourglass
-rm.CDFSFiler: Hdr:HostFS
-rm.CDFSFiler: Hdr:NdrDebug
-rm.CDFSFiler: Hdr:DDVMacros
-rm.CDFSFiler: hdr.Icons
-rm.CDFSFiler: Version
