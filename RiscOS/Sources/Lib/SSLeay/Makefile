@@ -21,10 +21,8 @@ WPFLAGS=FR~C~V
 # The following four macros are passed through to all sub-makefiles.  Therefore you can
 # switch all the options just by changing them here, cleaning everything, and rebuilding.
 
-INCLUDES = C:CryptoLib,C:SSLeay,TCPIPLibs:,C:
-DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA -DPKCS11 -D_ACORN
-#INCLUDES = C:SSLeay,TCPIPLibs:,C:
-#DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA
+INCLUDES = C:SSLeay,C:TCPIPLibs,C:
+DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA -DNO_MD2 -DNO_DSA ${DFLAGS}
 EFLAGS   = -zM -zps1 -Wpand
 CC       = cc
 
@@ -81,13 +79,21 @@ export_hdrs:
        @Echo SSLeay headers exported to <Lib$Dir>.SSLeay
        @|
 
-export_libs:
+var:
        Set CryptBase$Dir <Obey$Dir>.crypto
+
+crypto: var
        ${MKDIR} ${LIBDIR}
        ${MKDIR} ${LIBDIR}.o
-       Obey crypto.!mkall "CC=${CC}" "INCLUDES=${INCLUDES}" "DEFINES=${DEFINES}" "EFLAGS=${EFLAGS}"
+       Dir <CryptBase$Dir>
+       Obey !mkall "CC=${CC}" "INCLUDES=${INCLUDES}" "DEFINES=${DEFINES}" "EFLAGS=${EFLAGS}"
+
+ssl:   var
        Dir <CryptBase$Dir>.^.SSL
        Obey !MkExport "CC=${CC}" "INCLUDES=${INCLUDES}" "DEFINES=${DEFINES}" "EFLAGS=${EFLAGS}"
+
+export_libs: ssl crypto
+	@echo SSLeay: exported libs
        
 export: export_libs export_hdrs
        @Echo SSLeay: export complete
