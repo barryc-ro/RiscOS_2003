@@ -39,17 +39,23 @@ DFLAGS  = ${DEBUG}
 #
 # Libraries
 #
-CLIB       = CLIB:o.stubs CLIB:o.inetlibzm
+CLIB       = CLIB:o.stubs
 RLIB       = RISCOSLIB:o.risc_oslib
 RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
 REMOTEDB   = <Lib$Dir>.debug.o.remotezm
+INETLIB    = TCPIPLibs:o.inetlib
+
+LIBS       = ${INETLIB}
+
+LIBSM       = ${INETLIB}zm
+
 #
 # Include files
 #
-INCLUDES = -IC:,<Lib$Dir>.
+INCLUDES = -IC:,<Lib$Dir>.,TCPIPLibs:
 
 # Program specific options:
 #
@@ -105,11 +111,13 @@ clean:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} 
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${LIBSM} ${ROMCSTUBS} 
+        ${LD} -o $@ -aof ${OBJS} ${LIBSM} ${ROMCSTUBS}
 
-${TARGETSA}: ${OBJSSA}  
-        ${LD} -o $@ ${OBJSSA} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB}
+${TARGETSA}: ${OBJSSA} ${LIBS} 
+        ${LD} -o $@ ${OBJSSA} ${LIBS} ${CLIB}
+        
+#${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB}
 #
 # Final link for the ROM Image (using given base address)
 #
@@ -136,58 +144,3 @@ o.ModuleWrap: s.ModuleWrap s.AppName
 	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" s.ModuleWrap $@
 #
 # Dynamic dependencies:
-o.modulewrap: s.ModuleWrap
-o.modulewrap: s.AppName
-o.modulewrap: Hdr:ListOpts
-o.modulewrap: Hdr:Macros
-o.modulewrap: Hdr:System
-o.modulewrap: Hdr:SWIs
-o.modulewrap: Hdr:CPU.Generic26
-o.modulewrap: Hdr:IO.GenericIO
-o.modulewrap: Hdr:RISCOS
-o.modulewrap: Hdr:ModHand
-o.modulewrap: Hdr:EnvNumbers
-o.modulewrap: Hdr:Proc
-o.modulewrap: Hdr:FSNumbers
-o.modulewrap: Hdr:NewErrors
-o.modulewrap: Hdr:Services
-o.modulewrap: Hdr:ResourceFS
-o.modulewrap: Hdr:MsgTrans
-o.modulewrap: Hdr:Variables
-o.modulewrap: Hdr:UpCall
-o.modulewrap: s.ResFiles
-o.main:	c.main
-o.main:	h.defs
-o.main:	C:h.kernel
-o.main:	h.inlines
-o.main:	C:h.swis
-o.main:	h.wimp
-o.main:	h.defs
-o.process:	c.process
-o.process:	h.defs
-o.process:	C:h.kernel
-o.process:	h.inlines
-o.process:	C:h.swis
-o.process:	h.wimp
-o.process:	h.defs
-o.process:	C:h.inetlib
-o.process:	C:sys.h.types
-o.process:	C:sys.h.cdefs
-o.process:	C:machine.h.endian
-o.process:	C:machine.h.ansi
-o.process:	C:machine.h.types
-o.process:	C:netinet.h.in
-o.export:	c.export
-o.export:	h.addrbookif
-o.export:	h.defs
-o.export:	C:h.kernel
-o.export:	C:h.inetlib
-o.export:	C:sys.h.types
-o.export:	C:sys.h.cdefs
-o.export:	C:machine.h.endian
-o.export:	C:machine.h.ansi
-o.export:	C:machine.h.types
-o.export:	C:netinet.h.in
-o.export:	C:h.swis
-o.export:	h.wimp
-o.export:	h.defs
