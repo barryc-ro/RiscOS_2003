@@ -1202,6 +1202,7 @@ icontext_paint
 
         Trace   menuw, "icontext: painting string ", S, R1
         ADD     R3,R3,#2                ; KJB - attempt to nobble it a bit
+	ADDNE   R3,R3,#12               ; BJGA - attempt to fix right-to-left printing
         SWI     XFont_Paint             ; then paint the string
 
  [ BlendedFonts
@@ -1307,6 +1308,7 @@ plotcxy1
 ;         R2 --> text string
 ;         x0,y0,x1,y1 = coordinates of surrounding box
 ;         [linespacing] = amount to leave between lines
+; Exit:   R1-R4, PC pulled from stack
 
 iconformatted TraceL L40
         ASSERT  x0=R6                   ; can't use R6..R9
@@ -1329,6 +1331,15 @@ iconformatted TraceL L40
         TEQEQ   R3, #0
         BNE     iconformatted_fancy
         ]
+
+; draw, or return info on, formatted system font text
+; Entry:  R1 = icon flags
+;         R2 -> text string
+;         x0-y1 = icon bounding box
+;         [linespacing] = distance between baselines
+;         [linecount] <> 0 => just return number of lines required
+; Exit:   if returning number,  R0-R5, R10, R14 corrupted, [linecount] contains line count, PC pulled from stack
+;         else:                 R5, R6, R10, R1-R4, PC pulled from stack
 
 iconformatted_system TraceL L40
         MOV     R0,R2
@@ -1377,6 +1388,14 @@ iconformatted_length
         ADDHI   R5,R5,R14
         BHI     iconformatted_skip_spaces
 
+      [ StretchErrorText
+        LDR     R3, linecount
+        TEQ     R3, #0
+        STRNE   R10, linecount          ; store the number of lines required
+        ADDNE   sp, sp, R10, LSL#3      ; skip line markers on stack
+        Pull    "PC", NE
+      ]
+
 ; R5 = height of text in OSU
 ; R10 = no of lines
 ; on stack are pairs [addr,size] of strings (last one on top)
@@ -1420,12 +1439,17 @@ iconformatted_system_done
         Pull    "R1-R4,PC"
 
         [       outlinefont
-iconformatted_fancy TraceL L40
+; draw, or return info on, formatted outline font text
+; Entry:  R1 = icon flags
+;         R2 -> string to paint
+;         R3 = font handle
+;         ((R6, R7), (R8, R9)) = icon bbox
+;         [linespacing] = distance between baselines
+;         [linecount] <> 0 => just return number of lines required
+; Exit:   if returning number,  R0-R6, R10, R14 corrupted, [linecount] contains line count, PC pulled from stack
+;         else:                 R5, R6, R10, R1-R4, PC pulled from stack
 
-; R1 = icon flags
-; R2 -> string to paint
-; R3 = font handle
-; ((R6, R7), (R8, R9)) = icon bbox
+iconformatted_fancy TraceL L40
 
         TraceK  L40, "iconformatted: icon bbox is (("
         TraceD  L40, R6
@@ -1498,6 +1522,16 @@ iconformatted_fancy_next_pass
 
         BEQ     iconformatted_fancy_first_pass
 ; R11 = number of lines formatted
+
+      [ StretchErrorText
+        LDR     R0, linecount
+        TEQ     R0, #0
+        BEQ     %FT06
+        STR     R11, linecount
+        ADD     sp, sp, R10         ; balance stack after pushfontstring
+        Pull    "R7-R9, R11, PC"    ; exit with number of lines required in [linecount]
+06
+      ]
 
         LDR     R0, linespacing
         MUL     R11, R0, R11
@@ -2409,7 +2443,7 @@ cachespritedata
         MOV     R5,#(1:SHL:0)
       ]
 ;
-; we must now attempt to cope with the dilema of sorting out the correct
+; we must now attempt to cope with the dilemma of sorting out the correct
 ; mapping table for the sprite.
 ;
 ; in earlier versions of the Window Manager it made no attempt to cope
@@ -2422,8 +2456,15 @@ cachespritedata
 
         CMP     R14,#3                  ; is it 8,16 or 32BPP?
         CMPLT   R7,#(spPalette+4)       ; or does it have a palette?
-        LDRGE   R0,baseofsprites        ; 320nk Medusa fix
-        BGE     %FT10
+        BLT     %FT02
+        
+        LDR     R0,baseofromsprites     ; might have 8+ bpp sprites in ROM now
+        LDR     R4,[R0,#0]
+        ADD     R4,R0,R4                ; R4 -> end of ROM sprite area
+        CMP     R1,R0
+        CMPHS   R4,R1                   ; is sprite in ROM?
+        LDRLO   R0,baseofsprites        ; no, use RAM sprite area      ; 320nk Medusa fix
+        B       %FT10
 ;
 ; sprite is in a depth less than 8BPP so take the current palette and munge
 ; it based on the translation table defined in workspace
@@ -2445,8 +2486,8 @@ cachespritedata
         STR     R2,pixtable_size
         Pull    "R3,R4"
         EXIT
-02
         ]
+02
         LDR     R0,[R1,#spMode]         ; R0 = mode of sprite
         ADRL    R1,temppaltable         ; R1 -> temporary palette area
         Push    "R0-R3,R5"
@@ -2584,9 +2625,15 @@ cachespriteaddress ROUT
         EXIT
 
 15
-        Debug   sprite,"Looking in RMA"
+      [ SpritePriority
+        Debug   sprite,"Looking in high-priority sprite area"
+
+        LDR     R1,baseofhisprites
+      |
+        Debug   sprite,"Looking in RAM"
 
         LDR     R1,baseofsprites        ; R1 -> RAM based pool
+      ]
         BL      checkforsprite
         EXIT    VC                      ; return if it has been found
 
@@ -2595,9 +2642,15 @@ cachespriteaddress ROUT
         TEQ     R1,R2
         BNE     %FT25                   ; if sprite not found then return R2 =0
 
+      [ SpritePriority
+        Debug   sprite,"Looking in low-priority sprite area"
+
+        LDR     R1,baseoflosprites
+      |
         Debug   sprite,"Looking in ROM"
 
         LDR     R1,baseofromsprites
+      ]
 20      BL      checkforsprite
         EXIT    VC
 
@@ -2606,7 +2659,11 @@ cachespriteaddress ROUT
         TEQ     LR,R2
         BNE     %FT25                   ; if not then return with R2 =0
 
+      [ SpritePriority
+        LDR     LR,baseoflosprites
+      |
         LDR     LR,baseofromsprites
+      ]
         TEQ     LR,R1                   ; Searching wimp areas?
         BEQ     %FT25                   ; Yes then exit
 
@@ -2890,14 +2947,22 @@ wimp_SpriteOp
         ORRGE   R0,R0,#&100             ; 1 ==> use common sprite pool
         BNE     %FT01
 11
+      [ SpritePriority
+        LDR     R1,baseofhisprites
+      |
         LDR     R1,baseofsprites        ; common sprite pool is split in 2
+      ]
         MOV     R11,R0
         BL      do_spriteop             ; first try the RAM sprites
         Pull    "R1,R2,R11,PC",VC
         LDR     R14,[R0]
         TEQ     R14,#ErrorNumber_Sprite_DoesntExist     ; preserves V
         MOVEQ   R0,R11
+      [ SpritePriority
+        LDREQ   R1,baseoflosprites
+      |
         LDREQ   R1,baseofromsprites     ; in resourcefs:
+      ]
         BLEQ    do_spriteop             ; then the ROM sprites
         Pull    "R1,R2,R11,PC"
 01
@@ -2991,6 +3056,42 @@ inversefunc ENTRY "R1-R4"
         TST     R12,#is_inverted        ; Inverting?
         BEQ     %FT10                   ; No then jump
 
+        [ UrsulaHighlighting            ; New highlighting for Risc PC 2 release
+        TEQ     R1,R2
+        TEQEQ   R1,R3                   ; grey ?
+        BEQ     %FT20
+
+        MOV     R0,R1,LSL #8            ; Convert to 16 bit fixed point
+        ADD     R0,R0,#128
+        MOV     R1,R2,LSL #8            ; Convert to 16 bit fixed point
+        ADD     R1,R1,#128
+        MOV     R2,R3,LSL #8            ; Convert to 16 bit fixed point
+        ADD     R2,R2,#128
+        SWI     XColourTrans_ConvertRGBToHSV ; R0->H, R1->S, R2->V
+        ADD     R0,R0,#180:SHL:16
+        CMP     R0,#360:SHL:16
+        SUBHI   R0,R0,#360:SHL:16
+        SWI     XColourTrans_ConvertHSVToRGB ; Form RGB
+        CMP     R2,#1:SHL:16
+        MOVLO   R3,R2, LSR #8           ; Convert to 8 bit
+        MOVHS   R3, #255
+        CMP     R1,#1:SHL:16
+        MOVLO   R2,R1, LSR #8           ; Convert to 8 bit
+        MOVHS   R2, #255
+        CMP     R0,#1:SHL:16
+        MOVLO   R1,R0, LSR #8           ; Convert to 8 bit
+        MOVHS   R1, #255
+20
+        RSB     R1,R1,#255
+        RSB     R2,R2,#255              ; make a negative
+        RSB     R3,R3,#255
+
+        SUB     R1,R1,R1,LSR #2
+        SUB     R2,R2,R2,LSR #2         ; darken a little
+        SUB     R3,R3,R3,LSR #2
+
+        |
+
         TEQ     R1,R2
         TEQEQ   R1,R3                   ; grey ?
         RSBEQ   R1,R1,#255
@@ -3025,13 +3126,14 @@ inversefunc ENTRY "R1-R4"
         CMP     R2,#1:SHL:16
         MOVLO   R3,R2, LSR #8           ; Convert to 8 bit
         MOVHS   R3, #255
-        CMP     R2,#1:SHL:16
+        CMP     R1,#1:SHL:16
         MOVLO   R2,R1, LSR #8           ; Convert to 8 bit
         MOVHS   R2, #255
-        CMP     R2,#1:SHL:16
+        CMP     R0,#1:SHL:16
         MOVLO   R1,R0, LSR #8           ; Convert to 8 bit
-        MOVHS   R2, #255
+        MOVHS   R1, #255
 
+        ]
         Debug   inverse,"Inverted red,green,blue",R1,R2,R3
 
 10      TST     R12,#is_shaded          ; Shaded?
@@ -3455,6 +3557,8 @@ SWIWimp_GetWindowState
         TEQ     R2,R14
         BNE     ExitWimp
 
+        MOV     R14,#0                          ; ensure <> "TASK"
+        STR     R14,[sp,#1*4]                   ; R2 on exit = 0
         LDR     R14,[handle,#w_parent]
         CMP     R14,#nullptr
         Rel     R14,R14,NE
@@ -4668,7 +4772,7 @@ check8
 ;
 ; 2_1000 ==> x0 = cx1-vscroll_width , else cx0
 ; 2_0100 ==> y0 = cy1-title_height  , else cy0
-; 2_0010 ==> x1 = cx0               , else cx1
+; 2_0010 ==> x1 = undefined         , else cx1
 ; 2_0001 ==> y1 = cy0+hscroll_height, else cy0
 ;
 

@@ -793,6 +793,7 @@ SWIWimp_StartTask
         SWI     XWimp_CommandWindow     ; in case this is a wally task
         Pull    "R0"                    ; Remember *command ptr
         CLRV
+
         B       ExitPoll_tochild        ; swap tasks, and end up at 'runthetask'
 
         MakeErrorBlock WimpCantTask
@@ -807,19 +808,7 @@ SWIWimp_StartTask
 runthetask
         MOV     R1,R0                   ; close down the task !!!
         SWI     Wimp_CloseDown
-      [ Version >= 394 :LAND: AutoHourglass
-        MOV     R0,PC                   ; \
-        AND     R0,R0,#3                ;  > just in case we're not in USR mode...
-        EOR     R0,R0,#SVC_mode         ; /
-        SWI     XOS_EnterOS             ; because we need a stack
-        Push    "R0"
-        SWI     XHourglass_Off
-        CLRV
-        Pull    "R0"
-        Debug   autohg,"Hourglass_Off at Wimp_StartTask child task entry point"
-        TEQP    R0,PC                   ; return to original processor mode
-        NOP
-      ]
+        
         MOV     R0,R1
         SWI     OS_CLI                  ; R0 --> OS_CLI command
         SWI     OS_Exit                 ; exit back to Wimp
@@ -1000,7 +989,7 @@ wimp    DCB     "Wimp",0
         ALIGN
 
 ExitPoll_tochild
-        Debug   task1,"Exit to parent:",#taskhandle
+        Debug   task1,"Exit to child:",#taskhandle
         MOV     R14,#-2
         STR     R14,sender              ; don't call postfilters
         B       ExitPoll
@@ -1151,18 +1140,28 @@ returnerror
         CMP     R0,#-1
         BEQ     repollwimp              ; if it claimed then just re-poll
 01
-      [ Version >= 394 :LAND: AutoHourglass
-        Push    "R0"
-        MOV     R0,#hourglass_delay
-        SWI     XHourglass_Start
-        CLRV
-        Pull    "R0"
+      [ AutoHourglass
+        Push    "R0-R2"
+        LDR     R1, hourglass_status
       [ debugautohg
         Push    "handle"
-        LDR     handle,taskhandle
-        Debug   autohg,"Hourglass_On  at Wimp_Poll end, taskhandle =",handle
+        LDR     handle, taskhandle
+        Debug   autohg, "Hourglass_On  at task switch: taskhandle, old status =", handle, R1
         Pull    "handle"
       ]
+        TEQ     R1, #2
+        SWIEQ   XHourglass_Off          ; if autohourglass is still pending or animating, turn it off
+        TEQ     R1, #0
+        MOVEQ   R0, #WrchV              ; get back on WrchV if necessary
+        ADREQ   R1, deactivate_hourglass_on_wrchv
+        BLEQ    claim
+        
+        MOV     R0, #hourglass_delay
+        SWI     XHourglass_Start        ; turn on using special delay time
+        CLRV                            ; ignore errors
+        MOV     R1, #2
+        STR     R1, hourglass_status    ; mark autohourglass fully active
+        Pull    "R0-R2"
       ]
         BL      DeletePollTask          ; Delete task from polltask list
 
@@ -1248,6 +1247,34 @@ callbackpoll
         NOP
         LDR     lr_svc,[lr_svc,#15*4]
         MOVS    PC,lr_svc                       ; exit to caller, restoring flags
+
+;..............................................................................
+
+; WrchV routine to deactivate the autohourglass as soon as a character is output.
+; The argument for this is that if the task is plotting something, you probably
+; don't need the Wimp putting up an hourglass to let you know that the machine
+; hasn't stiffed.
+; Using this approach, the hourglass isn't shown, for example, while Paint is
+; doing a screen grab (it doesn't Wimp_Poll, but it does plot a box on the screen).
+; It also copes transparently with command windows, ShellCLI etc.
+
+; On entry:  R12 -> workspace
+;            [hourglass_status] = 1 or 2 (by definition)
+;            processor is in SVC mode
+
+      [ AutoHourglass
+deactivate_hourglass_on_wrchv ENTRY "R0-R2"
+        LDR     R1, hourglass_status
+        Debug   autohg, "Hourglass_Off at WrchV, old status =", R1
+        TEQ     R1, #2
+        SWIEQ   XHourglass_Off          ; turn off hourglass if necessary
+        MOV     R0, #WrchV
+        ADR     R1, deactivate_hourglass_on_wrchv
+        BL      release                 ; release WrchV
+        MOV     R1, #0
+        STR     R1, hourglass_status    ; mark fully deactivated
+        EXITS                           ; pass on call (NB: nowhere to return errors to)
+      ]
 
 ;.............................................................................
 
@@ -1367,10 +1394,48 @@ setbuttonx
 ;         R2 --> application name (<=0 ==> Wimp has detected the error)
 ;         R3 --> sprite name (for new type error report)
 ;         R4 --> sprite area, or 1 for Wimp area (for new type error report)
-;         R5 --> comma separated additional button list, or 0 for none (for n; Exit:   R1 = 1 ==> OK box was selected
+;         R5 --> comma separated additional button list, or 0 for none (for new type error report)
+;
+; Exit:   R1 = 1 ==> Continue (OK) box was selected
 ;         R1 = 2 ==> Cancel box was selected
 ;         R1 = 3,4... ==> additional button pressed
 ;
+
+;Rough outline (not gospel!) JRC 24 Jul 1997           ; NB IconHigh stuff not in this branch (BJGA 02 March 1998)
+;	Make service call ErrorStarting
+;	IF	in command mode
+;	THEN	report error in text
+;		poll for a key press
+;		return key pressed (Return/Escape)
+;	ELSE	IF	closing an open error box
+;		THEN	return button-click specified
+;		ELSE	Create a window structure
+;			Make service call WimpReportError 1
+;			Switch output to screen
+;			Disable file redirection
+;			Enable VDU, disable Spool, printer & serial
+;			Beep
+;			Add the icon definitions to the window structure
+;			int_open_window
+;			int_redraw_window
+;			int_get_rectangle
+;			Smash hourglass
+;			Bound pointer to window
+;			Flush keyboard and mouse
+;			Start IconHigh
+;			DO	Read key with no time limit
+;				Check mousebuttons
+;			WHILE	nothing happens
+;			Unbound pointer
+;			int_close_window
+;			Stop IconHigh
+;			Make service call ErrorButtonPressed
+;			Make service call ErrorEnding
+;			Restore file redirection
+;			Restore output to previous state
+;			Make service call WimpReportError
+;		FI
+;	FI
 
 
 
@@ -1380,6 +1445,17 @@ errorprefix2    DCB     "ErrorF",0
 
 execcom DCB     "Exec",0
         ALIGN
+
+; tempworkspace layout
+                        ^       0
+errtws_spritearea       #       4  ;   +0  as passed in R4 / set by service call claimant(s)
+errtws_buttonlist       #       4  ;   +4  pointer to comma-separated list of buttons
+errtws_iconend          #       4  ;   +8  icon handle of (rightmost == first-in-string == highest-icon-handle) extra button, + 1
+errtws_describebuttons  #       4  ;  +12  comma-separated list of buttons to use when program error is Described
+errtws_icondata         #       4  ;  +16  if a "may have gone wrong" window, -> start of icon data for error window, else 0
+errtws_cancelstr        #       4  ;  +20  -> "Cancel"
+errtws_flags            #       4  ;  +24  
+errtws_mustntuse        #       4  ;  +28  corrupted by text plotting code
 
 SWIWimp_ReportError
         MyEntry "ReportError"
@@ -1397,9 +1473,9 @@ SWIWimp_ReportError
         Push    "R0-R3"
 ;
         [ NewErrorSystem
-        STR     R4,tempworkspace                ; R4 gets horribly corrupted
-                                                ; but is required for 3.21
-        STR     R5,tempworkspace+4              ; ditto!
+        STR     R4,tempworkspace+errtws_spritearea  ; R4 gets horribly corrupted
+                                                    ; but is required for 3.21
+        STR     R5,tempworkspace+errtws_buttonlist  ; ditto!
         ]
 
         LDR     R4,commandflag
@@ -1519,6 +1595,17 @@ useerrorwindow
         TSTNE   R1,#erf_poll
         Pull    "R4-R7"                 ; R4-R7 = original R0-R3
         BLEQ    starterrorbox
+
+        MOV     R0, #220                ; Read current escape key so we can restore it later
+        MOV     R1, #0
+        MOV     R2, #255
+        SWI     XOS_Byte
+        STRB    r1, old_escape
+
+        MOV     R0, #220                ; Set default escape key
+        MOV     R1, #27
+        MOV     R2, #0
+        SWI     XOS_Byte
 ;
 ; bodge polling loop - look for mouse click in OK / Cancel boxes
 ;                    - also <escape> (27, or escape condition)
@@ -1538,30 +1625,53 @@ pollit
         TEQNE   R1,#&1B                 ; old allow <CR> and <Esc>
         BNE     %FT02
 ;
-        LDR     R14,[sp,#0*4]           ; work out which of OK / Cancel to select
+        LDR     R14, tempworkspace+errtws_flags  ; to work out which button the key corresponds to, we need the current flags
+                                                 ; note 1: these flags will be correct for "may have gone wrong" boxes
+        Debug   err,"Error flags=",R14           ; note 2: these flags have not been checked to ensure there is at least an OK button
 
-;        MOV R4,#0
-;        STR R14,[R4,#0]
-        Debug   err,"Error flags=",R14
-
-        TST     R14,#erf_htcancel
-        MOVEQ   R4,#1                   ; OK icon handle
-        MOVNE   R4,#4                   ; Cancel icon handle
-
-        TEQ     R1,#&1B                 ; if escape,
-        EOREQ   R4,R4,#5                ; select opposite one
-        TST     R14,#erf_okbox          ; if no OK box,
-        MOVEQ   R4,#4                   ; select cancel
-        TST     R14,#erf_cancelbox      ; if no cancel box,
-        MOVEQ   R4,#1                   ; select OK
-        TST     R14,#erf_okbox:OR:erf_cancelbox
-        BNE     finisherror
-        TST     R14,#erf_newtype
-        BEQ     finisherror
-        LDR     R4,tempworkspace+12              ; first extra button
-        SUB     R4,R4,#1
-        TEQ     R1,#&1b
-        SUBEQ   R4,R4,#1
+        MOV     R4, #-1                 ; Return button not yet determined
+        MOV     R5, #-1                 ; Escape button not yet determined
+        MVN     R14, R14                ; makes life easier when doing comparisons
+        
+        TST     R14, #erf_okbox
+;        CMPEQ   R4, #-1                 ; have we found both buttons yet?
+;        MOVEQ   R4, R5                  ; Return -> previous Escape button
+        MOVEQ   R5, #1                  ; Escape -> OK button
+        
+        TST     R14, #erf_cancelbox
+;        CMPEQ   R4, #-1                 ; have we found both buttons yet?
+        MOVEQ   R4, R5                  ; Return -> previous Escape button
+        MOVEQ   R5, #4                  ; Escape -> Cancel button
+        
+; note, the Describe button is never selected by a keypress
+        TST     R14, #erf_newtype
+        BNE     %FT06
+        LDR     R2, tempworkspace+errtws_buttonlist
+        CMP     R2,#1
+        BLT     %FT06 ; if no extra buttons, skip next section
+        
+        LDR     R2, tempworkspace+errtws_iconend
+        
+        CMP     R2, #8                  ; are there at least 1 extra buttons?
+        CMPGE   R4, #-1                 ; have we found both buttons yet?
+        MOVEQ   R4, R5                  ; Return -> previous Escape button
+        SUBEQ   R5, R2, #1              ; Escape -> highest-numbered (rightmost) extra button
+        
+        CMP     R2, #9                  ; are there at least 2 extra buttons?
+        CMPGE   R4, #-1                 ; have we found both buttons yet?
+        MOVEQ   R4, R5                  ; Return -> previous Escape button
+        SUBEQ   R5, R2, #2              ; Escape -> second highest-numbered (second rightmost) extra button
+06
+        TST     R14, #erf_okbox :OR: erf_cancelbox :OR: erf_htcancel
+        EOREQ   R4, R4, R5              ; if all three flags were set, the meanings of Return and Escape are reversed
+        EOREQ   R5, R4, R5
+        EOREQ   R4, R4, R5
+        
+        CMP     R5, #-1                 ; if no Escape button has been found, an OK/Continue button will have been added
+        MOVEQ   R5, #1
+        CMP     R4, #-1                 ; if no Return button has been found, there is only one button, so act as for Escape
+        TEQNE   R1, #&1B                ; was Escape pressed?
+        MOVEQ   R4, R5                  ; R4 now holds selected icon number
         Debug   err,"Icon=",R4
 ;
         B       finisherror
@@ -1572,15 +1682,13 @@ pollit
         LDR     R14,errorhandle
         TEQ     R3,R14                  ; must be error window!
         BNE     notover
-        TEQ     R4,#1                   ; icon 1 = 'OK' box
-        TEQNE   R4,#4                   ; icon 4 = 'Cancel' box
         [ NewErrorSystem
-        TEQNE   R4,#6                   ; describe button
-        TEQNE   R4,#7
-        TEQNE   R4,#8
-        TEQNE   R4,#9
-        TEQNE   R4,#10
+        SUB     R14, R4, #6             ; Describe button is handle 6, additional buttons are 7 to 6+maxno_error_buttons
+        CMP     R14, #maxno_error_buttons
+        CMPLS   R14, R14                ; set Z if in range
         ]
+        TEQNE   R4,#1                   ; icon 1 = 'OK' box
+        TEQNE   R4,#4                   ; icon 4 = 'Cancel' box
         BNE     notover
         BIC     R14,R2,R5               ; look for +ve edge SELECT/ADJUST
         BICS    R14,R14,#button_middle  ; (ignore menu button)
@@ -1600,10 +1708,12 @@ finisherror
         MOV     R1,#is_inverted         ; R1 = EOR word
         MOV     R2,#is_inverted         ; R2 = BIC word
         BL      int_set_icon_state      ; handle --> window definition
-;
         BL      clearpointerwindow
         ADR     userblk,errorhandle     ; userblk --> window handle
         BL      int_close_window
+        [ ChildWindows
+        BL      int_flush_opens         ; this is necessary to avoid block-copying if the error box
+        ]                               ; is subsequently displayed at a different size
 ;
         Pull    "R1"
 ;
@@ -1614,8 +1724,7 @@ finisherror
         CMP     R1,#6
         BEQ     notoveryet
         SUBGT   R1,R1,#2
-;        RSBGT   R1,R1,#5
-        LDRGT   R2,tempworkspace+12
+        LDRGT   R2,tempworkspace+errtws_iconend
         SUBGT   R1,R2,R1                ; extra icons 7-10 return 6-3
         ]
 
@@ -1625,14 +1734,14 @@ finisherror
         MOV     R2,R1
         MOV     R0,#0
         LDR     R1,=Service_ErrorButtonPressed
-        LDR     R3,tempworkspace+4
+        LDR     R3,tempworkspace+errtws_buttonlist
         SWI     XOS_ServiceCall
         CMP     R0,#0
         BEQ     servicecallend
 ; module wants error dialog redisplayed
         LDMIA   R2!,{R4-R7}
         LDMIA   R2,{R1-R2}
-        ADR     R3,tempworkspace
+        ADR     R3,tempworkspace+errtws_spritearea ; also updates errtws_buttonlist
         STMIA   R3,{R1-R2}
         MOV     userblk,R5
         Push    "PC"                    ; routine returns with Pull "PC"
@@ -1651,19 +1760,19 @@ servicecallend
         [ NewErrorSystem
 ; now replace Quit with Cancel if necessary
 
-        LDR     R1,watchdogerrtxt+216
+        LDR     R1,tempworkspace+errtws_icondata
         TEQ     R1,#0
         BEQ     %FT05
-        LDR     R6,watchdogerrtxt+220
+        LDR     R6,tempworkspace+errtws_cancelstr
         STR     R6,[R1,#i_data+i_size*4]
         MOV     R1,#0
-        STR     R1,watchdogerrtxt+216
+        STR     R1,tempworkspace+errtws_icondata
         TEQ     R2,#2                   ; was quit pressed ?
         BNE     %FT05
-        LDR     R1,watchdogerrtxt+228
+        LDR     R1,progerrsaveblk + 4*1
         TST     R1,#erf_cancelbox
-        BNE     %FT05                   ; it asked for cancel, assume quit
-        MOV     R1,#99
+        BNE     %FT05                   ; it asked for a cancel button, assume it will quit anyway
+        MOV     R1,#99                  ; flag that control should be passed to exit handler instead
         STR     R1,[SP]
 05
         ]
@@ -1730,6 +1839,11 @@ ReportError_restored_font_colours
         Pull    "r0-r3"
         ]
 
+        MOV     R0, #220                ; restore the old escape key
+        LDRB    R1, old_escape
+        MOV     R2, #0
+        SWI     XOS_Byte
+
         MOV     R1,#Service_WimpReportError
         MOV     R0,#0                   ; closing down
         STRB    R0,errorbox_open
@@ -1743,14 +1857,14 @@ ReportError_restored_font_colours
 
         [ NewErrorSystem
 notoveryet
-        LDR     R1,watchdogerrtxt+216
-        LDR     R4,watchdogerrtxt+220
+        LDR     R1,tempworkspace+errtws_icondata
+        LDR     R4,tempworkspace+errtws_cancelstr
         STR     R4,[R1,#i_data+i_size*4]
         MOV     R1,#0
-        STR     R1,watchdogerrtxt+216
-        LDR     R1,tempworkspace+16     ; Get back buttons
-        STR     R1,tempworkspace+4
-        ADRL    R1,watchdogerrtxt+224
+        STR     R1,tempworkspace+errtws_icondata
+        LDR     R1,tempworkspace+errtws_describebuttons  ; Get back buttons
+        STR     R1,tempworkspace+errtws_buttonlist
+        ADRL    R1,progerrsaveblk
         LDMIA   R1,{R4-R7}
         MOV     userblk,R5
         Push    "PC"                    ; routine returns with Pull "PC"
@@ -1843,7 +1957,7 @@ starterrorbox
         BIC     userblk,userblk,#erf_describe
 
         MOV     R1,#0
-        STR     R1,watchdogerrtxt+216   ; make sure no label swapping
+        STR     R1,tempworkspace+errtws_icondata  ; make sure no label swapping
 
 ; is the error box already up? Don't need to save VDU info.
 
@@ -1870,7 +1984,7 @@ starterrorbox
         ]
 
         BNE     starterror_next
-        ADRL    R1,watchdogerrtxt+224
+        ADRL    R1,progerrsaveblk
         STMIA   R1,{R4-R7}
         MOV     R1,#&07000000
         STR     R1,watchdogerror
@@ -1878,8 +1992,8 @@ starterrorbox
         Abs     R1,R1                   ; real windows are Rel-ative
         LDR     R1,[R1,#w_icons]
         LDR     R2,[R1,#i_data+i_size*4]        ; cancel button
-        STR     R2,watchdogerrtxt+220
-        STR     R1,watchdogerrtxt+216   ; make life easier later
+        STR     R2,tempworkspace+errtws_cancelstr
+        STR     R1,tempworkspace+errtws_icondata  ; make life easier later
         ADR     R0,quitlabel            ; SMC: now lookup text for button
         ADRL    R2,quittext
         MOV     R3,#buttontextsize
@@ -1888,22 +2002,22 @@ starterrorbox
         MOVS    R4,R6
         ADRMI   R4,noprogapp
         ADRL    R2,watchdogerrtxt
-        MOV     R3,#216
+        MOV     R3,#?watchdogerrtxt
         ADR     R0,errorptoken
         BL      LookupToken
         ADRL    R4,watchdogerror
-        LDR     R1,tempworkspace+4      ; store buttons away
-        STR     R1,tempworkspace+16     ; in case we need them again
-                                        ; when user hits describe
+        LDR     R1,tempworkspace+errtws_buttonlist        ; store buttons away
+        STR     R1,tempworkspace+errtws_describebuttons   ; in case we need them again
+                                                          ; when user hits describe
         TST     R5,#erf_newtype
         MOV     R5,#erf_describe:OR:erf_cancelbox:OR:erf_okbox
-        ORR     R5,R5,#erf_newtype      ; continue rather than ok
+        ORR     R5,R5,#erf_newtype                        ; continue rather than ok
         MOV     userblk,R5
         MOV     R6,#0
-        MOVEQ   R7,#0                   ; make sure no sprite if original error wasn't new type
-        STREQ   R6,tempworkspace
-        STR     R6,tempworkspace+4      ; no custom buttons
-        LDR     R6,watchdogerrtxt+232   ; app name
+        MOVEQ   R7,#0                                     ; make sure no sprite if original error wasn't new type
+        STREQ   R6,tempworkspace+errtws_spritearea
+        STR     R6,tempworkspace+errtws_buttonlist        ; no custom buttons
+        LDR     R6,progerrsaveblk + 4*2                   ; app name
 
 starterror_next
         ]
@@ -2019,6 +2133,7 @@ starterrorbox_draw
 
 	Debug	err,"starterrorbox_draw"
 
+        STR     R5, tempworkspace+errtws_flags ; for later use by pollit
         Push    "R4-R7"
       [ NewErrorSystem
 ; make sure we have default pointer
@@ -2111,7 +2226,7 @@ starterrorbox_draw
         ADRLTL  R2,conttext
         BLT     oldappsprite2
 
-        LDR     R2,tempworkspace
+        LDR     R2,tempworkspace+errtws_spritearea
         CMP     R2,#255
         STRGT   R2,[handle,#w_areaCBptr]
         MOV     R2,R3                           ; sprite given so use it
@@ -2184,6 +2299,22 @@ oldapploop
         SUB     R2,R14,#11              ; get R2 back to name that is actually used
 ; R2 should have a valid sprite, does it exist?
         LDR     R1,[handle,#w_areaCBptr]
+      [ SpritePriority
+        Push    "R2"
+        CMP     R1, #1                  ; try any user area before either Wimp area
+        SETPSR  V_bit, R0, EQ           ; SETV will *not* do, it corrupts Z
+        MOVNE   R0, #256+24             ; attempt to select sprite
+        SWINE   XOS_SpriteOp
+        MOVVS   R0, #256+24
+        LDRVS   R1, baseofhisprites
+        LDRVS   R2, [SP]
+        SWIVS   XOS_SpriteOp            ; not there? try again within high-priority area
+        MOVVS   R0, #256+24
+        LDRVS   R1, baseoflosprites
+        LDRVS   R2, [SP]
+        SWIVS   XOS_SpriteOp            ; not there? try again within low-priority area
+        Pull    "R2"                    ; sprite op can stuff R2
+      |
         CMP     R1,#1
         LDREQ   R1,baseofsprites
         MOV     R0,#24+256              ; attempt to select sprite
@@ -2194,6 +2325,7 @@ oldapploop
         LDRVS   R2,[SP]
         SWIVS   XOS_SpriteOp            ; not there? try again within the ROM
         Pull    "R2"                    ; sprite op can stuff R2
+      ]
         LDRVS   R0,[R2,#-8]             ; icon's ymax
         LDRVC   R0,[R2,#-16]            ; ymin
         SUBVC   R0,R0,#60               ; gap
@@ -2210,65 +2342,52 @@ doneappsprite
 ; put appropriate OK / Cancel box(es) into error window
 ;
 
-        LDR     R14,tempworkspace+4             ; button list
+        LDR     R14,tempworkspace+errtws_buttonlist
         TST     userblk,#erf_newtype
         TEQNE   R14,#0
         BNE     %FT10
 
         TST     userblk,#erf_okbox:OR:erf_cancelbox
-        ORREQ   userblk,userblk,#erf_okbox
-        TST     userblk,#erf_okbox
-        ORREQ   userblk,userblk,#erf_htcancel   ; highlight one of them
+        ORREQ   userblk,userblk,#erf_okbox      ; ensure there is at least an OK
 ;
 10
         TST     userblk,#erf_okbox
-        LDR     R14,[handle,#w_icons]
-        LDR     R14,[R14,#i_flags+i_size*1]
-        BIC     R14,R14,#is_inverted    ; ensure not inverted initially
-        ORREQ   R14,R14,#is_deleted
-        BICNE   R14,R14,#is_deleted
         MOV     R0,#1                   ; this is icon 1
         Push    "R0",NE                 ; displayed
-        TST     userblk,#erf_htcancel
-        LDRNE   R0,unhighlighted_colour ; values read from icons initially
-        LDREQ   R0,highlighted_colour   ; values read from icons initially
-        BIC     R14,R14,#if_bcol:OR:if_fcol
-        ORR     R14,R14,R0
         LDR     R0,[handle,#w_icons]
+        LDR     R14,[R0,#i_flags+i_size*1]
+        ORR     R14,R14,#is_deleted     ; will be undeleted later if necessary
         STR     R14,[R0,#i_flags+i_size*1]
 ;
 
         TST     userblk,#erf_cancelbox
-        LDR     R14,[handle,#w_icons]
-        LDR     R14,[R14,#i_flags+i_size*4]
-        BIC     R14,R14,#is_inverted    ; ensure not inverted initially
-        ORREQ   R14,R14,#is_deleted
-        BICNE   R14,R14,#is_deleted
         MOV     R0,#4                   ; this is icon 4
         Push    "R0",NE                 ; is displayed
-        TST     userblk,#erf_htcancel
-        LDREQ   R0,unhighlighted_colour ; values read from icons initially
-        LDRNE   R0,highlighted_colour   ; values read from icons initially
-        BIC     R14,R14,#if_bcol:OR:if_fcol
-        ORR     R14,R14,R0
-        LDR     R3,[handle,#w_icons]
-        STR     R14,[R3,#i_flags+i_size*4]
+        LDR     R0,[handle,#w_icons]
+        LDR     R14,[R0,#i_flags+i_size*4]
+        ORR     R14,R14,#is_deleted     ; will be undeleted later if necessary
+        STR     R14,[R0,#i_flags+i_size*4]
+        
+        AND     R0, userblk, #erf_okbox :OR: erf_cancelbox :OR: erf_htcancel
+        TEQ     R0, #erf_okbox :OR: erf_cancelbox :OR: erf_htcancel
+; in this case, we must swap over the position of the OK/Cancel buttons to reflect the effect of keypresses
+        MOVEQ   R0, #1
+        STREQ   R0, [sp]
+        MOVEQ   R0, #4
+        STREQ   R0, [sp, #4]
 
         TST     userblk,#erf_describe
-        LDR     R14,[handle,#w_icons]
-        LDR     R14,[R14,#i_flags+i_size*6]
-        BIC     R14,R14,#is_inverted    ; ensure not inverted initially
-        ORREQ   R14,R14,#is_deleted
-        BICNE   R14,R14,#is_deleted
         MOV     R0,#6                   ; this is icon 6
         Push    "R0",NE                 ; is displayed
-        LDR     R3,[handle,#w_icons]
-        STR     R14,[R3,#i_flags+i_size*6]
+        LDR     R0,[handle,#w_icons]
+        LDR     R14,[R0,#i_flags+i_size*6]
+        ORR     R14,R14,#is_deleted     ; will be undeleted later if necessary
+        STR     R14,[R0,#i_flags+i_size*6]
 
 
 ; now do dynamic icons 7,8,9,10
 
-        LDR     R2,tempworkspace+4      ; comma separated list of buttons
+        LDR     R2,tempworkspace+errtws_buttonlist
         CMP     R2,#1
         MOVLT   R3,#7
         BLT     markinvisibleicons
@@ -2284,18 +2403,30 @@ doneappsprite
         Push    "R0"
         MOV     R14,#0
         ADRL    R3,errorbuttons
-        MOV     R1,#errorbuttonsize-1
-        Push    "R3"
+        MOV     R1,#errorbuttonsize
+        MOV     R4,#maxno_error_buttons   ; this is the maximum number of additional buttons we can have
+        Push    "R3"                      ; the first button is always at the start of the string
 setupdynamicsloop
-        LDRB    R0,[R2],#1
-        CMP     R0,#","
-        STREQB  R14,[R3],#1
-        STRNEB  R0,[R3],#1
-        Push    "R3",EQ                 ; R3 now points to next button
-        TST     R0,#224
-        SUBNES  R1,R1,#1
+        SUBS    R1,R1,#1                  ; run out of buffer space? (one byte required for terminator)
+        LDRNEB  R0,[R2],#1                ; get character from source
+        TSTNE   R0,#224                   ; is it a control character?
+        STREQB  R14,[R3]                  ; null-terminate the copy and finish
+        BEQ     %FT06
+        CMP     R0,#","                   ; is it a comma?
+        STRNEB  R0,[R3],#1                ; no:  copy character and loop
         BNE     setupdynamicsloop
-        STRB    R14,[R3]
+        STRB    R14,[R3],#1               ; yes: copy a NULL
+        SUBS    R4,R4,#1                  ;      decrement buttons counter
+        Push    "R3",NE                   ;      unless we've got all the buttons we can, push the button address and loop
+        BNE     setupdynamicsloop
+06
+        [ debugerr
+        Push    "R0-R8"
+        ADD     R0, sp, #9*4
+        LDMIA   R0,{R0-R8}
+        Debug   err, "setupdynamicsloop: stack contains",R0,R1,R2,R3,R4,R5,R6,R7,R8
+        Pull    "R0-R8"
+        ]
 
 ; stack now holds pointers to button labels
 
@@ -2305,21 +2436,19 @@ setupdynamicsloop
 setupiconsloop
         ADD     R2,R1,R3, LSL #i_shift  ; R2-> icon
         STR     R0,[R2,#i_data]
-
-; make sure correct size
-        LDR     R14,[handle,#w_icons]
-        LDR     R0,[R14,#i_bby0+i_size*6]               ; use 'Describe' as template
-        STR     R0,[R2,#i_bby0]
-        LDR     R0,[R14,#i_bby1+i_size*6]
-        STR     R0,[R2,#i_bby1]
-        LDR     R0,[R14,#i_data+4+i_size*6]
-        STR     R0,[R2,#i_data+4]                       ; validation string
-
         Pull    "R0"
         ADD     R3,R3,#1
         CMP     R0,#-1
         BNE     setupiconsloop
-        STR     R3,tempworkspace+12       ; number of extra buttons (+7)
+        STR     R3,tempworkspace+errtws_iconend  ; number of extra buttons (+7)
+        
+        [ debugerr
+        Push    "R0-R8"
+        ADD     R0, sp, #9*4
+        LDMIA   R0,{R0-R8}
+        Debug   err, "setupiconsloop: stack contains",R0,R1,R2,R3,R4,R5,R6,R7,R8
+        Pull    "R0-R8"
+        ]
 
 ; now set what needs to be displayed and aligned
 
@@ -2331,20 +2460,19 @@ displayiconsloop
         BNE     displayiconsloop
 
 
-; stack now contains list:    (-1,[7],[8],[9],[10],[6],[4],[1],-1)
-; dependent on whether icon number is required
-; if number >4 must make some invisible, then position the rest
-
-; unused icons need to be made invisible
 markinvisibleicons
         MOV     R2,#-1
         Push    "R2"
+; stack now contains list, eg:    (-1, 7, 8, 9, 10, 6, 4, 1, -1)
+; if number >maxno_error_buttons, we must make some invisible, then position the rest
+
+; unused icons need to be made invisible
 markinvisloop
-        CMP     R3,#10
+        CMP     R3,#7+maxno_error_buttons-1
         BGT     markinvend
         MakeInvisibleReg   R3
         ADD     R3,R3,#1
-        CMP     R3,#11
+        CMP     R3,#7+maxno_error_buttons
         BLT     markinvisloop
 markinvend
 
@@ -2357,10 +2485,10 @@ countstackicons
         ADDNE   R0,R0,#1
         BNE     countstackicons
 
-        CMP     R0,#5
+        CMP     R0,#maxno_error_buttons+1
         BLT     alignicons
         Pull    "R1"
-        SUB     R0,R0,#4
+        SUB     R0,R0,#maxno_error_buttons
 marktoomanyicons
         Pull    "R1"
         MakeInvisibleReg  R1
@@ -2373,37 +2501,41 @@ alignicons
 
 	Debug	err,"alignicons"
 
-; stack now has at most 4 icons, R2-8 -> icon to appear on far right.
+; stack now has at most maxno_error_buttons icons, R2-8 -> icon to appear on far right.
 
         SUB     R2,R2,#8
         LDR     R0,[handle,#w_wex1]     ; R0 is max x coord, use as running right posn
         SUB     R0,R0,#20               ; 20 OS unit border
         LDR     R1,[R2],#-4
-        TEQ     R1,#4
-        TEQNE   R1,#1
         LDR     R14,[handle,#w_icons]
 
-        BEQ     alignanddisplayicon
-; the first icon is a 'custom' button
-        ADD     R3,R14,R1, LSL #i_shift
+; the first icon is always a default (aka "highlighted") one
+        ADD     R3, R14, R1, LSL #i_shift       ; R3 -> first icon
+        LDR     R4, errbut_y0_def
+        STR     R4, [R3, #i_bby0]
+        LDR     R4, errbut_y1_def
+        STR     R4, [R3, #i_bby1]
+        LDR     R4, errbut_fl_def
+        STR     R4, [R3, #i_flags]
+        LDR     R4, errbut_va_def
+        STR     R4, [R3, #i_data + 4]
+        LDR     R4, errbut_w_def
+        B       alignanddisplayicon
 
-        LDR     R4,[R14,#i_bby0+i_size*1]               ; use 'OK' as template
-        STR     R4,[R3,#i_bby0]
-        LDR     R4,[R14,#i_bby1+i_size*1]
-        STR     R4,[R3,#i_bby1]
-        LDR     R4,[R14,#i_data+4+i_size*1]
-        STR     R4,[R3,#i_data+4]                       ; validation string
+alignnexticon
+        ADD     R3, R14, R1, LSL #i_shift       ; R3 -> icon
+        LDR     R4, errbut_y0
+        STR     R4, [R3, #i_bby0]
+        LDR     R4, errbut_y1
+        STR     R4, [R3, #i_bby1]
+        LDR     R4, errbut_fl
+        STR     R4, [R3, #i_flags]
+        LDR     R4, errbut_va
+        STR     R4, [R3, #i_data + 4]
+        LDR     R4, errbut_w
 
 alignanddisplayicon
-; R1 is icon number, R14 is icon base, R0 is rhs of icon
-        ADD     R3,R14,R1, LSL #i_shift
-        LDR     R4,[R3,#i_flags]
-        BIC     R4,R4,#is_deleted :OR: is_inverted          ; not initially inverted
-        STR     R4,[R3,#i_flags]
-
-        LDR     R4,[R3,#i_bbx0]
-        LDR     R5,[R3,#i_bbx1]
-        SUB     R4,R5,R4
+; R1 is icon number, R14 is icon base, R0 is rhs of icon, R4 is minimum width
 
       [ StretchErrorButtons
         Push    "R0,R1,R2,R4,R14"
@@ -2426,7 +2558,7 @@ alignanddisplayicon
         STR     R5,[R3,#i_bbx1]
         LDR     R1,[R2],#-4
         CMP     R1,#-1
-        BNE     alignanddisplayicon
+        BNE     alignnexticon
 
         ADD     SP,SP,#4                        ; skip -1
 clearstack
@@ -2437,20 +2569,88 @@ clearstack
 ; now resize window if necessary, by moving lhs.
 
         CMP     R0,#0
-        MOVGT   R0,#0
-        STR     R0,[handle,#w_wex0]
-        LDR     R1,[handle,#w_wax0]
-        ADD     R1,R1,R0
-        STR     R1,[handle,#w_wax0]
+        MOVGT   R0,#0                           ; this is the work area x0 required by the buttons
 
-        LDR     R1,[handle,#w_icons]
-        ADD     R1,R1,#i_size * 5               ; divider sprite
-        STR     R0,[R1,#i_bbx0]
-        LDR     R0,[handle,#w_wax1]
-        LDR     R14,[handle,#w_wax0]
-        SUB     R0,R0,r14
-        ADD     R0,R0,#8
-        STR     R0,[R1,#i_bbx1]
+        LDR     R14, [handle, #w_icons]
+        LDR     R1, errmess_x0
+        ADD     R2, R14, #i_size * 0            ; R2 -> text icon definition
+        ADD     R3, R0, R1                      ; stretch text icon to fit window
+        STR     R3, [R2, #i_bbx0]
+        
+      [ StretchErrorText
+        LDR     R0, [sp]                        ; get error block pointer
+        ADD     R0, R0, #4
+        STR     R0, [R2, #i_data + 0]           ; set up text pointer now, we need it to calculate the icon width
+        
+        Push    "R1-R6, R10, R14"
+06
+        MOV     R1, #-1
+        STR     R1, linecount                   ; activate line counting        
+        LDR     R2, [sp, #1*4]                  ; R2 -> text icon definition
+        LDMIA   R2, {x0, y0, x1, y1}            ;\
+        LDR     R1, [R2, #i_flags]              ; |
+        LDR     R2, [R2, #i_data + 0]           ; | set up registers for line count
+      [ outlinefont                             ; |
+        LDR     R3, systemfont                  ;/
+        TEQ     R3, #0
+        ADREQL  R14, iconformatted_system
+        ADRNEL  R14, iconformatted_fancy
+      |
+        ADRL    R14, iconformatted_system
+      ]
+        Push    "PC"                            ; PC+12 is actually stored
+        MOV     PC, R14                         ; branch to appropriate routine - returns using Pull "PC"
+        NOP
+        
+        LDR     R0, linecount
+      [ debugerr
+        Debug   err, "Error message icon line count =", R0
+      ]
+        CMP     R0, #errmess_maxlines
+        BLE     %FT01                           ; satisfactory number of lines, we don't need to stretch any further
+        LDR     R2, [sp, #1*4]                  ; R2 -> text icon definition
+        LDR     R3, [R2, #i_bbx0]
+        SUB     R3, R3, #errmess_increment      ; enlarge window by one step
+        STR     R3, [R2, #i_bbx0]
+        B       %BT06
+01
+        Pull    "R1-R6, R10, R14"
+        
+        LDR     R3, [R2, #i_bbx0]
+        SUB     R0, R3, R1                      ; stretch window to fit icon
+        
+        MOV     R1, #0
+        STR     R1, linecount                   ; deactivate line counting
+      ]
+        
+        STR     R0,[handle,#w_wex0]
+        LDR     R1,[handle,#w_wex1]
+        STR     R0,[handle,#w_wax0]             ; horizontal centring dealt with later
+        STR     R1,[handle,#w_wax1]             ; but the visible width *must* match the horizontal work area extent width
+
+        ADD     R2, R14, #i_size * 2            ; move app sprite
+        LDR     R3, [R2, #i_bbx0]
+        LDR     R4, [R2, #i_bbx1]
+        SUB     R4, R4, R3                      ; R4 = old width
+        LDR     R3, errapp_x0
+        ADD     R3, R3, R0                      ; make relative to new window edge
+        ADD     R4, R4, R3
+        STR     R3, [R2, #i_bbx0]
+        STR     R4, [R2, #i_bbx1]
+        
+        ADD     R2, R14, #i_size * 3            ; move type sprite
+        LDR     R3, [R2, #i_bbx0]
+        LDR     R4, [R2, #i_bbx1]
+        SUB     R4, R4, R3                      ; R4 = old width
+        LDR     R3, errtype_x0
+        ADD     R3, R3, R0                      ; make relative to new window edge
+        ADD     R4, R4, R3
+        STR     R3, [R2, #i_bbx0]
+        STR     R4, [R2, #i_bbx1]
+        
+        ADD     R2, R14, #i_size * 5            ; stretch divider sprite
+        STR     R0, [R2, #i_bbx0]
+        STR     R1, [R2, #i_bbx1]
 
 ; and we're done!!
         |
@@ -2559,6 +2759,9 @@ clearstack
         MOV     userblk,sp
 	Debug	err,"int_open_window"
         BL      int_open_window
+        [ ChildWindows
+        BLVC    int_flush_opens         ; this is necessary to set the rectangles lists correctly
+        ]
 ;
         BLVC    visibleouterportion     ; handle --> window definition already
         BLVC    int_redraw_window
