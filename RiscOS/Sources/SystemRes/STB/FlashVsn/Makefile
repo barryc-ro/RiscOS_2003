@@ -11,6 +11,8 @@
 COMPONENT = FlashVsn
 TARGET    = ${COMPONENT}
 
+ASFLAGS  = -pd "FlashVar SETS \"${VAR}\"" -pd "FlashVer SETS \"${VER}\""
+
 include StdTools
 include AAsmModule
 
