@@ -25,6 +25,7 @@ char *preprocess_file(char *fname_in)
     int bytes = 0, n = 0, tag_bytes = 0, m = 0;
     int substitution = 0;
     int active_html = 1; /* not within an html comment block */
+    int end_of_html = 0;
 
     FILE *fin, *fout;
 
@@ -59,15 +60,27 @@ char *preprocess_file(char *fname_in)
         return NULL;
     }
 
-    while((n = fgetline(fin, working, WORK_BUF_SIZE))>0) {
+    while(!end_of_html && ((n = fgetline(fin, working, WORK_BUF_SIZE))>0)) {
         DBUG_PRINTF(DBUG_LVL_DIAG, "preprocess_file: -->%s\n", working);
+
+        if(caseless_strnstr(working, "</html>", n, 7)!=NULL) { /* no more html */
+           DBUG_PRINTF(DBUG_LVL_DIAG, "preprocess_file: closing html tag encountered - truncating file\n");
+           end_of_html = 1;
+        }
+
         parsing_form(working, n, &substitution, &active_html); /* are we within <form>....</form> construct? */
+
         if(substitution & active_html) { /* yup */
+
             if(find_tokens(working, n, tokens)) { /* look for (<.*name=")(.*)(".*value=")(.*)(".*) */
+
                 DBUG_PRINTF(DBUG_LVL_DIAG, "preprocess_file: tokens found\n");
                 tag_bytes = find_tag(&tokens[1], tag_buff, WORK_BUF_SIZE); /* lookup tag, rewrite token if found */
+
                 if(tag_bytes>0) {
+
                     m = rewrite_line(tokens, data_ptr, tag_buff, tag_bytes);
+
                     if(m) {
                       bytes += m;
                       data_ptr = data + bytes;
@@ -76,17 +89,20 @@ char *preprocess_file(char *fname_in)
                         DBUG_PRINTF(DBUG_LVL_DIAG, "preprocess_file: unrecognized tag, dumping line\n");
                         continue;
                     }
-                } else {
+
+                } else { /* didn't recognize the tag within the name="" parameter */
+
                     if(caseless_strnstr(tokens[1].ptr, "next", 4, 4)!=NULL) {
                         DBUG_PRINTF(DBUG_LVL_DIAG, "preprocess_file: it's a NEXT tag - passing thru\n");
                         /* fall thru to bottom of outside if */
                     } else if(token_lookup(&tokens[1])>=0) { /* tag exists, but there's no corresponding data on the card */
                         DBUG_PRINTF(DBUG_LVL_DIAG, "preprocess_file: valid tag, but no info\n");
                     } else {
-                        DBUG_PRINTF(DBUG_LVL_ERROR, "preprocess_file: unrecognized tag, dumping line(2)\n");
-                        continue;
+                        DBUG_PRINTF(DBUG_LVL_ERROR, "preprocess_file: unrecognized tag, passing thru\n");
+                        /* continue; NOOO!!! Might not be our form, so fall thru */
                     }
                 }
+
             } else {
                 DBUG_PRINTF(DBUG_LVL_DIAG, "preprocess_file: line contains no tokens\n");
             }
@@ -95,6 +111,7 @@ char *preprocess_file(char *fname_in)
         memcpy(data_ptr, working, n);
         data_ptr += n;
         bytes += n;
+
     } /* next line */
 
     fclose(fin);
@@ -353,6 +370,7 @@ int rewrite_line(TBUF *tokens, char *data_ptr, char *tag_buf, int tag_bytes)
 
         case TAG_MAPPING_SOAK:
         case TAG_MAPPING_PLIP: /* we're not allowing these, for the time being */
+             DBUG_PRINTF(DBUG_LVL_ERROR, "rewrite_line: AARGHHH! Brian Rice tokens! Panic!\n");
              return(-1);
     }
 
@@ -436,6 +454,8 @@ int format_script(char *src, int sn, char *dest, int dn)
 {
   int newlines = 0; /* number of newlines encountered so far */
   char *dp = dest;
+  int bytes = 0;
+
   DBUG_PRINTF(DBUG_LVL_DIAG, "format_script: starting with \"%.*s\"\n", sn, src);
   DBUG_PRINTF(DBUG_LVL_DIAG, "format_script: sn=%d,dn=%d\n", sn, dn);
 
@@ -481,16 +501,25 @@ int format_script(char *src, int sn, char *dest, int dn)
     src++;
   }
 
-  if(sn <= 0) { /* source exhausted */
-    sn = dest - dp - (6*((newlines % 2)==0)); /* if we just stuck spc-quote on the end, lose it */
+  bytes = dest - dp;
 
-    return(sn);
+  if(sn <= 0) { /* source exhausted */
+    if((newlines %2) == 0) { /* did we just add a quote-spc-quote combo? */
+      DBUG_PRINTF(DBUG_LVL_DIAG, "format_script: removing space-quote padding from end of script:\n");
+      DBUG_PRINTF(DBUG_LVL_DIAG, "format_script:--> %.*s (%d)\n", bytes, dp, bytes);
+      /* bytes -= 7; can't do this, because if the input is a NUL terminated string, the script unmunger will
+                     have turned the NUL into the C escape \x00 - result: crap on the end of your script */
+      while(*dest-- != '&') bytes--;
+    }
+
+    DBUG_PRINTF(DBUG_LVL_DIAG, "format_script: returning \"%.*s\" (%d)\n", bytes, dp, bytes);
+
+    return(bytes);
   }
 
   if(dn <= 0) { /* destination exhausted */
     DBUG_PRINTF(DBUG_LVL_DIAG, "format_script: destination buffer exhausted\n");
-    sn = dest - dp;
-    return(sn);
+    return(bytes);
   }
 
   DBUG_PRINTF(DBUG_LVL_ERROR, "format_script: shouldn't be here: sn=%d, dn=%d\n",sn,dn);
