@@ -77,9 +77,6 @@ dirs_RCMM:
 
 translate_Core:
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Applet.!Run          -o ${INSTAPP}.!Run
-	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Desktop.NCFresco     -o ${INSTAPP}.Desktop.NCFresco
-	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Utilities.Desktop    -o ${INSTAPP}.Utilities.Desktop
-	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Utilities.PreDesktop -o ${INSTAPP}.Utilities.PreDesktop
 
 translate_STB3:
 	${NOP}
