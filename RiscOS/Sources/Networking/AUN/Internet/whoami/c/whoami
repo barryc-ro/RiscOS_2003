@@ -34,6 +34,7 @@
  *
  */
 #include <string.h>
+#include <stddef.h>
 #include "kernel.h"
 #include "swis.h"
 
@@ -178,6 +179,7 @@ static int whoamiaddr = 0;
 static int boot_tries = 1;
 static int kernel_escape_seen = 0;
 static struct timeval start_time;
+static int whoiam_service_claimed = 0;
 
 int
 if_whoamiaddr(ifp, cmd)
@@ -187,6 +189,7 @@ if_whoamiaddr(ifp, cmd)
 
     kernel_escape_seen = 0;
     whoamiaddr = 0;
+    whoiam_service_claimed = 0;
 
     if (boot_tries == 1)
     {
@@ -203,15 +206,15 @@ if_whoamiaddr(ifp, cmd)
     ifp->if_flags |= IFF_NEED_IPADDR;
     timeout(bootwakeup, 0, backoff(boot_tries));
 
-    if (cmd == SIOCGWHOIAMR || cmd == SIOCGWHOIAMRB)
+    if (!whoiam_service_claimed && (cmd == SIOCGWHOIAMR || cmd == SIOCGWHOIAMRB))
 	if_askwhoiam(ifp, IFF_NEED_IPADDR, revarp_myaddr, 1);
 
-    if (cmd == SIOCGWHOIAMB || cmd == SIOCGWHOIAMRB)
+    if (!whoiam_service_claimed && (cmd == SIOCGWHOIAMB || cmd == SIOCGWHOIAMRB))
 	if_askwhoiam(ifp, IFF_NEED_IPADDR, (void (*)())bootp_myaddr, 1);
 
     bootsleep(cmd);
 
-    if ((ifp->if_flags & IFF_NEED_IPADDR) == IFF_NEED_IPADDR)
+    if ((ifp->if_flags & IFF_NEED_IPADDR) == IFF_NEED_IPADDR && !whoiam_service_claimed)
     {
 	ifp->if_flags &= ~IFF_NEED_IPADDR;
 
@@ -236,7 +239,7 @@ if_whoamiaddr(ifp, cmd)
 
     untimeout(bootwakeup, 0);
     boot_tries = 1;
-    return (0);
+    return whoiam_service_claimed ? (-1) : (0);
 }
 
 #if 0
@@ -275,6 +278,7 @@ static void
 bootsleep(cmd)
     int cmd;
 {
+  if (whoiam_service_claimed == 0)
     while (whoamiaddr == 0)
     {
 	user_mode_donothing();
@@ -427,6 +431,7 @@ bootp_udp_input(m)
     struct arpcom *ac = (struct arpcom *)ifp;
     struct in_addr in;
     struct in_addr netmask;
+    char devname[16];
 
     if (!(ifp->if_flags & IFF_NEED_IPADDR))
         return;
@@ -461,6 +466,8 @@ bootp_udp_input(m)
     if (DODEBUG(DBGADDRSRCH))
         Printf("Got BOOTP response: myaddr = %x\n", pkt.yiaddr);
 #endif
+
+  do {
 
     in.s_addr = pkt.yiaddr;
     _kernel_setenv(BOOTPIPADDRVAR, inet_ntoa(in));
@@ -556,6 +563,8 @@ bootp_udp_input(m)
        sin->sin_addr.s_addr = (netmask.s_addr & pkt.yiaddr) | ~netmask.s_addr;
        (void) in_control((struct socket *)0, SIOCSIFBRDADDR, (caddr_t)&ifr, ifp);
     }
+    sprintf(devname, "%s%d", ifp->if_name, ifp->if_unit);
+  } while (!service_internetstatus_dynamicboot_reply( devname, ifp->if_dib, (char *) &pkt, sizeof(pkt)));
     bootwakeup(0);
 }
 
@@ -644,28 +653,13 @@ bootp_myaddr(ac, retry)
 {
     struct mbuf *m0, *m;
     BOOTP   pkt;
-    char *server = "", *file = "";
+    char *server = "", *file = "", devname[16];
     int option_index;
 #ifdef FAULTY_MICROSOFT_SERVER
     int req_index;
 #endif
     struct timeval now;
     microtime(&now);
-
-    if (retry && ((ac->ac_if.if_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING)))
-    {
-      if ((ac->ac_if.if_flags & IFF_RUNNING) != IFF_RUNNING)
-      {
-        claim_frames(&ac->ac_if, 1);
-        ac->ac_if.if_flags |= IFF_RUNNING;
-        whoami_claimed_frames = TRUE;
-      }
-      ac->ac_if.if_flags |= IFF_UP;
-    }
-    else
-    {
-      whoami_claimed_frames = FALSE;
-    }
 
     memset(&pkt, 0, sizeof pkt);
     pkt.op = BOOTREQUEST;
@@ -691,16 +685,38 @@ bootp_myaddr(ac, retry)
     pkt.options[option_index++] = OPTION_TIMEOFFSET;
     pkt.options[option_index++] = OPTION_NBNSSERVERS;
     pkt.options[option_index++] = OPTION_TFTPSERVER;
-    pkt.options[option_index++] = OPTION_ACORNPRIVATE;
     pkt.options[option_index++] = OPTION_WWWSERVER;
     pkt.options[option_index++] = OPTION_SMTPSERVER;
     pkt.options[option_index++] = OPTION_POP3SERVER;
     pkt.options[option_index++] = OPTION_NNTPSERVER;
     pkt.options[option_index++] = OPTION_FINGERSERVER;
     pkt.options[option_index++] = OPTION_IRCSERVER;
+    pkt.options[option_index++] = OPTION_ACORNPRIVATE;
     pkt.options[req_index] = option_index - 1 - req_index;
 #endif
-    pkt.options[option_index++] = OPTION_END;
+    pkt.options[option_index] = OPTION_END;
+
+    sprintf(devname, "%s%d", ac->ac_if.if_name, ac->ac_if.if_unit);
+    if (!service_internetstatus_dynamicboot_start(devname, ac->ac_if.if_dib, (char *)&pkt, sizeof(pkt),
+                                                  offsetof(BOOTP, options) + option_index)) {
+                                                          whoiam_service_claimed = 1;
+                                                          return EADDRNOTAVAIL;
+                                                  }
+
+    if (retry && ((ac->ac_if.if_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING)))
+    {
+      if ((ac->ac_if.if_flags & IFF_RUNNING) != IFF_RUNNING)
+      {
+        claim_frames(&ac->ac_if, 1);
+        ac->ac_if.if_flags |= IFF_RUNNING;
+        whoami_claimed_frames = TRUE;
+      }
+      ac->ac_if.if_flags |= IFF_UP;
+    }
+    else
+    {
+      whoami_claimed_frames = FALSE;
+    }
 
     if ((m0 = m = ALLOC(sizeof pkt, &pkt)) == NULL)
 	return (ENOBUFS);
