@@ -12,6 +12,9 @@
 /*          08-Mar-2002 (JRB): Updated for MediaBase 6.       */
 /*          01-Apr-2002 (JRB): Updated to support sequences   */
 /*                             and authorisation.             */
+/*          31-May-2002 (JRB): Updated to support MediaBase   */
+/*                             6.0.1, near-line storage and   */
+/*                             audio-only assets.             */
 /**************************************************************/
 
 #include <stdio.h>
@@ -39,6 +42,7 @@
 
 #include <VideoCtrl.h> /* Exported by VideoCtrl's !MkExport */
 
+#include "AMPlay.h"
 #include "Auth.h"
 #include "CallOut.h"
 #include "Connect.h"
@@ -46,6 +50,7 @@
 #include "Global.h"
 #include "Headers.h"
 #include "Module.h"
+#include "MPEGCtrl.h"
 #include "RTSPMErrors.h"
 #include "Session.h"
 #include "Status.h"
@@ -58,10 +63,11 @@
 
 static _kernel_oserror * setup_send_describe         (session * s);
 static _kernel_oserror * setup_describe_done         (session * s);
-static bool              setup_read_asset_data(const char * data, asset_data * asset);
+static bool              setup_read_asset_data       (mb_asset_types type, const char * data, asset_data * asset);
 static _kernel_oserror * setup_send_setup            (session * s, const char * auth_value);
 static _kernel_oserror * setup_add_transport_header  (session * s);
 static _kernel_oserror * setup_setup_done            (session * s);
+static _kernel_oserror * setup_send_set_parameter    (session * s);
 static void              setup_read_describe_doubles (asset_data * asset, const char * p1, const char * p2);
 #ifdef CLIENT_LOOPING
 static _kernel_oserror * setup_read_loop_option      (session * s, unsigned int vcid);
@@ -79,6 +85,7 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
   _kernel_oserror * e;
   session         * s;
   char            * url;
+  bool            fail = false;
 
   dprintf(("Entry_0", "setup_setup: Called\n"));
   dprintf(("Entry_1", " r0=%x\n",r->r[0]));
@@ -150,15 +157,19 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
   if (s->url->user != NULL && *s->url->user != 0)
   {
     s->user = Strdup(s->url->user);
-    if (s->user == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
-    urlutils_unescape(s->user);
+    if (s->user == NULL)
+      fail = true;
+    else
+      urlutils_unescape(s->user);
   }
 
   if (s->url->password != NULL && *s->url->password != 0)
   {
     s->password = Strdup(s->url->password);
-    if (s->password == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
-    urlutils_unescape(s->password);
+    if (s->password == NULL)
+      fail = true;
+    else
+      urlutils_unescape(s->password);
   }
 
   if (s->user != NULL || s->password != NULL)
@@ -196,13 +207,15 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
   if (r->r[3] != 0)
   {
     s->setup_r3_record = Strdup((char *) r->r[3]);
-    if (s->setup_r3_record == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+    if (s->setup_r3_record == NULL)
+      fail = true;
   }
 
   if (r->r[4] != 0)
   {
     s->setup_r4_record = Strdup((char *) r->r[4]);
-    if (s->setup_r4_record == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+    if (s->setup_r4_record == NULL)
+      fail = true;
   }
 
   if (r->r[5] != 0 && r->r[6] != 0)
@@ -210,21 +223,41 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
     s->setup_r6_record = r->r[6];
     s->setup_r5_record = malloc(r->r[6]);
 
-    if (s->setup_r5_record == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
-
-    memcpy(s->setup_r5_record, (void *) r->r[5], r->r[6]);
+    if (s->setup_r5_record == NULL)
+      fail = true;
+    else
+      memcpy(s->setup_r5_record, (void *) r->r[5], r->r[6]);
   }
 
-  /* OK, send the DESCRIBE command */
+  if (fail)
+  {
+    /* Memory allocation failure */
 
-  RetError(setup_send_describe(s)); /* This queues SETUP in passing */
+    dprintf(("", "setup_setup: Out of memory\n"));
+    e = make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+  else
+  {
+    /* OK, send the DESCRIBE command */
+  
+    e = setup_send_describe(s); /* This queues SETUP in passing */
+  }
 
-  /* Don't forget to tell Video Control about our session handle */
-  /* before returning                                            */
+  if (e == NULL)
+  {
+    /* Don't forget to tell Video Control about our session handle */
+    /* before returning                                            */
+  
+    r->r[1] = (int) s->id;
+  }
+  else
+  {
+    /* Failed - discard session and return error */
 
-  r->r[1] = (int) s->id;
+    session_free_item(s);
+  }
 
-  return NULL;
+  return e;
 }
 
 /**************************************************************/
@@ -242,7 +275,6 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
 static _kernel_oserror * setup_send_describe(session * s)
 {
   bool fail = false;
-  int  port;
 
   session_reset_session(s);
 
@@ -277,48 +309,16 @@ static _kernel_oserror * setup_send_describe(session * s)
   if (fail)
   {
     dprintf(("", "setup_send_describe: Out of memory\n"));
-    session_free_item(s);
     return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
   }
 
-  /* Need to get a socket open to the server. The call to opensock */
-  /* will also initialise the state indicators within the session  */
-  /* structure to allow the state machine to work.                 */
-
-  if (s->sd == -1)
-  {
-    if (s->url->port && *s->url->port) port = atoi(s->url->port);
-    else                               port = RTSPMB_DefaultPort;
-
-    s->sd = opensock(s->url->host,
-                     port,
-                     NULL,
-                     &s->state,
-                     -1);
-
-    if (s->state == protostate_ERROR) s->err_no = -s->sd;
-  }
-  else s->state = protostate_CONNECTED;
-
-  s->last = utils_read_time();
-
-  dprintf(("", "setup_send_describe: Socket descriptor %d, state %d\n", s->sd, s->state));
-
-  /* Queue a SETUP command for next */
+  /* Queue the routine that checks the DESCRIBE response */
 
   s->next_command_cb = setup_describe_done;
 
-  /* Set the state machine going to see errors and DNS stuff */
+  /* Send the DESCRIBE command to the server */
 
-  if (s->callout_set == 0) /* It definitely should be, this is a brand new session! */
-  {
-    s->callout_set = 1;
-    timeout(status_proceed_on_callout, s, Session_State_Timer);
-  }
-
-  /* Finished */
-
-  return NULL;
+  return status_send(s);
 }
 
 /**************************************************************/
@@ -350,37 +350,41 @@ static _kernel_oserror * setup_describe_done(session * s)
 
   /* First see if the server told us its version number in the DESCRIBE response */
 
+  s->server_version = 0;
+
   sver = headers_find_header(s->headers, Headers_HeaderName_Server);
   if (sver != NULL)
   {
     if (!strcmp(sver->value, Headers_HeaderValue_ServerOld))
     {
       /* This is MediaBase 5 or earlier */
-      s->server_majorver = 5;
+      s->server_version = 0x050000;
     }
     else if (!strncmp(sver->value, Headers_HeaderValue_ServerNew, sizeof(Headers_HeaderValue_ServerNew) - 1))
     {
-      /* This is MediaBase 6 (XMP) or later - get major version number, ignore minor version for now */
-      s->server_majorver = atoi(sver->value + sizeof(Headers_HeaderValue_ServerNew) - 1);
-    }
-    else
-    {
-      /* Unknown server version - may not be MediaBase at all */
-      s->server_majorver = 0;
-    }
-  }
-  else
-  {
-    /* No 'Server' header. Early MediaBase 6 beta versions did this, so assume it is one of those */
-    s->server_majorver = 6;
-  }
-  dprintf(("", "Server major version determined as %d\n", s->server_majorver));
+      char * ptr = sver->value + sizeof(Headers_HeaderValue_ServerNew) - 1;
 
-  /* Any DESCRIBE data to parse first? */
+      /* This is MediaBase 6 (XMP) or later - get major version number, ignore minor version for now */
+      s->server_version = (int)strtol(ptr, &ptr, 10) << 16;
+      if (*ptr == '.')
+      {
+        s->server_version |= (int)strtol(ptr + 1, &ptr, 10) << 8;
+        if (*ptr == '.')
+          s->server_version |= (int)strtol(ptr + 1, &ptr, 10);
+      }
+    }
+  }
+  dprintf(("", "Server version determined as 0x%x\n", s->server_version));
+
+  if (s->server_version < 0x050000)
+    return make_error(rtspmb_ERROR_UNKNOWN_VERSION, 0);
+
+  /* Parse DESCRIBE response first */
 
   if (s->data_len > 0)
   {
     char * ptr;
+    char * ptr2;
 
     /* Determine asset type. This must be the same for all assets in a */
     /* sequence, so we only read it once, not per asset.               */
@@ -395,6 +399,41 @@ static _kernel_oserror * setup_describe_done(session * s)
         s->asset_type = assettype_MPEG1;
       else if (!strncmp(ptr, Setup_TypeMPEG2, sizeof(Setup_TypeMPEG2) - 1))
         s->asset_type = assettype_MPEG2;
+      else if (!strncmp(ptr, Setup_TypeMPEG1Audio, sizeof(Setup_TypeMPEG1Audio) - 1))
+        s->asset_type = assettype_MPEG1Audio;
+    }
+  
+    /* Return an error if we did not recognise the asset type */
+  
+    if (s->asset_type == assettype_UNKNOWN)
+      return make_error(rtspmb_ERROR_UNSUPPORTED_TYPE, 0);
+
+    /* Read asset play modes flags. These must be the same for all assets */
+    /* in a sequence, so we only read these once, not per asset.          */
+
+    ptr = strstr(s->data, Setup_PlayModes);
+    if (ptr != NULL)
+    {
+      ptr += sizeof(Setup_PlayModes) - 1;
+      s->play_modes = atoi(ptr);
+    }
+
+    /* See whether the asset is a backing store (near-line) asset that */
+    /* is currently offline. If it isn't explicitly marked as such     */
+    /* we assume that it is available online.                          */
+
+    s->online = 1;
+
+    ptr  = strstr(s->data, Setup_BackingStore);
+    ptr2 = strstr(s->data, Setup_Online);
+  
+    if (ptr != NULL && ptr2 != NULL)
+    {
+      if (
+          atoi(ptr  + sizeof(Setup_BackingStore) - 1) == 1 &&
+          atoi(ptr2 + sizeof(Setup_Online) - 1)       != 1
+         )
+        s->online = 0;
     }
 
     /* See how many assets there are in the sequence */
@@ -434,7 +473,7 @@ static _kernel_oserror * setup_describe_done(session * s)
         if (next_ptr != NULL)
           *next_ptr = 0;
 
-        success = setup_read_asset_data(ptr, &s->assets[i]);
+        success = setup_read_asset_data(s->asset_type, ptr, &s->assets[i]);
 
         if (next_ptr != NULL)
           *next_ptr++ = Setup_MediaStream[0];
@@ -455,7 +494,9 @@ static _kernel_oserror * setup_describe_done(session * s)
         dprintf(("", " parent_duration = %u\n", s->assets[i].parent_duration));
         dprintf(("", " start_offset    = %d\n", s->assets[i].start_offset));
       }
+
       dprintf(("", "Total duration=%u\n", s->duration));
+      dprintf(("", "PlayModes flags=0x%x\n", s->play_modes));
 
       /* Make sure we got information for all of the assets */
 
@@ -469,6 +510,119 @@ static _kernel_oserror * setup_describe_done(session * s)
   if (!success)
     return make_error(rtspmb_ERROR_BAD_DESCRIBE_RESPONSE, 0);
 
+  /* Is the stream going to contain NPT Reference Descriptors and End of  */
+  /* Stream markers? Yes, if this is MediaBase 6.0.1 or later, an MPEG-2  */
+  /* asset, it was not installed as 'play only', and this is not a        */
+  /* simulated multicast.                                                 */
+
+  if (
+      s->server_version >= 0x060001 &&
+      s->asset_type == assettype_MPEG2 &&
+      s->multicast == 0 &&
+      ((s->play_modes & (Setup_PlayModes_RepositionToStartDisabled | Setup_PlayModes_RandomRepositionDisabled)) == 0)
+     )
+  {
+    _kernel_oserror * e;
+    unsigned int      vc_clear, vc_eor, ctrl_clear, ctrl_eor;
+
+    /* Yes, we will have stream markers */
+
+    s->stream_markers = 1;
+
+    /* Tell VideoControl to use different protocol and open stream flags */
+
+    vc_clear   = VC_ProtocolRegister_ReportTimeoutAsEOS;
+    vc_eor     = 0;
+    ctrl_clear = MPEGCtrl_MCOS_EnableOVSTrickPlay |
+                 MPEGCtrl_MCOS_AutoReset;
+    ctrl_eor   = ctrl_clear;
+
+    e = _swix(VideoControl_ProtocolNotify,
+              _INR(0,7),
+        
+              0,
+              s->id,
+              VideoControlProtocolNotifyNewProtocolFlags,
+              VC_ProtocolNotify_NewProtocolFlags_UpdateSession,
+              vc_clear,
+              vc_eor,
+              ctrl_clear,
+              ctrl_eor);
+
+    if (e != NULL)
+      return e;
+
+    dprintf(("", "setup_describe_done: Expecting EOS and NPT Reference Descriptors\n"));
+  }
+
+  /* Is the stream an audio-only one? */
+
+  if (s->asset_type == assettype_MPEG1Audio)
+  {
+    _kernel_oserror * e;
+    int               opts[4];
+
+    /* MPEG1 audio-only asset - set the option to disable video */
+
+    opts[0] = vc_tags_audio_only;
+    opts[1] = 1;
+    opts[2] = 1;
+    opts[3] = vc_tags__end;
+  
+    e = _swix(VideoControl_Options,
+              _INR(0,2),
+  
+              0,
+              s->vcid,
+              opts);
+
+    if (e != NULL)
+      return e;
+
+    #ifdef USE_AMPLAYER
+
+    /* Is AMPlayer module present? */
+
+    if (amplay_check())
+    {
+      unsigned int  vc_clear, vc_eor;
+
+      s->using_amplayer = 1;
+
+      /* We're using AMPlayer - tell VideoControl we're going to do */
+      /* everything ourselves.                                      */
+  
+      vc_clear   = 0xffffffff;
+      vc_eor     = VC_ProtocolRegister_IHandleMPEG;
+
+      e = _swix(VideoControl_ProtocolNotify,
+                _INR(0,7),
+          
+                0,
+                s->id,
+                VideoControlProtocolNotifyNewProtocolFlags,
+                VC_ProtocolNotify_NewProtocolFlags_UpdateSession,
+                vc_clear,
+                vc_eor,
+                0,
+                0);
+  
+      if (e != NULL)
+        return e;
+  
+      dprintf(("", "setup_describe_done: Use AMPlayer - do all MPEG handling\n"));
+
+      /* Do the necessary initialisation */
+
+      RetError(amplay_init());
+
+      /* Set the initial volume level */
+
+      RetError(amplay_set_volume(s));
+    }
+    #endif
+  }
+
   /* Success - now send the SETUP */
 
   return setup_send_setup(s, NULL);
@@ -480,7 +634,10 @@ static _kernel_oserror * setup_describe_done(session * s)
 /* Read information about an asset from the DESCRIBE response */
 /* into an asset_data structure.                              */
 /*                                                            */
-/* Parameters: Pointer to the string containing a description */
+/* Parameters: Type of asset for which information is being   */
+/*             read.                                          */
+/*                                                            */
+/*             Pointer to the string containing a description */
 /*             of the asset;                                  */
 /*                                                            */
 /*             Pointer to the asset_data structure to be      */
@@ -490,10 +647,37 @@ static _kernel_oserror * setup_describe_done(session * s)
 /*             read.                                          */
 /**************************************************************/
 
-static bool setup_read_asset_data(const char * data, asset_data * asset)
+static bool setup_read_asset_data(mb_asset_types type, const char * data, asset_data * asset)
 {
-  char * ptr1 = strstr(data, Setup_FramesPerSecond);
-  char * ptr2 = strstr(data, Setup_IFrameRatio);
+  char * ptr1;
+  char * ptr2;
+
+  /* Store duration (originally in microseconds) to centisecond resolution */
+  
+  ptr1 = strstr(data, Setup_Duration);
+  if (ptr1 != NULL)
+    asset->duration = (unsigned int) (strtoul(ptr1 + sizeof(Setup_Duration) - 1, NULL, 10) / 10000);
+  else
+    return false;
+
+  /* Duration is the only item of interest for an audio-only asset */
+
+  if (type == assettype_MPEG1Audio)
+    return true;
+  
+  /* Store parent duration (originally in microseconds) to centisecond resolution */
+  /* This is only present for clip assets, and only on MediaBase 6 or later */
+
+  ptr1 = strstr(data, Setup_ParentDuration);
+  if (ptr1 != NULL)
+    asset->parent_duration = (unsigned int) (strtoul(ptr1 + sizeof(Setup_ParentDuration) - 1, NULL, 10) / 10000);
+  else
+    asset->parent_duration = asset->duration;
+
+  /* Read items with floating point values */
+
+  ptr1 = strstr(data, Setup_FramesPerSecond);
+  ptr2 = strstr(data, Setup_IFrameRatio);
 
   if (ptr1 != NULL && ptr2 != NULL)
   {
@@ -512,33 +696,15 @@ static bool setup_read_asset_data(const char * data, asset_data * asset)
     return false;
   }
 
-  ptr1 = strstr(data, Setup_StartTime);
-  
   /* Store start time (originally in microseconds) to centisecond resolution */
   
+  ptr1 = strstr(data, Setup_StartTime);
   if (ptr1 != NULL)
     asset->start_offset = -(atoi(ptr1 + sizeof(Setup_StartTime) - 1) / 10000);
   else
     return false;
-  
-  ptr1 = strstr(data, Setup_Duration);
-  
-  /* Store duration (originally in microseconds) to centisecond resolution */
-  
-  if (ptr1 != NULL)
-    asset->duration = (unsigned int) (strtoul(ptr1 + sizeof(Setup_Duration) - 1, NULL, 10) / 10000);
-  else
-    return false;
 
-  ptr1 = strstr(data, Setup_ParentDuration);
-  
-  /* Store parent duration (originally in microseconds) to centisecond resolution */
-  /* This is only present for clip assets, and only on MediaBase 6 or later */
-  
-  if (ptr1 != NULL)
-    asset->parent_duration = (unsigned int) (strtoul(ptr1 + sizeof(Setup_ParentDuration) - 1, NULL, 10) / 10000);
-  else
-    asset->parent_duration = asset->duration;
+  /* Check we got all the things we expect */
 
   if (
       asset->approx_fps      == 0 ||
@@ -554,11 +720,7 @@ static bool setup_read_asset_data(const char * data, asset_data * asset)
 /* setup_send_setup()                                         */
 /*                                                            */
 /* Build a SETUP command and start the state machine up in    */
-/* order to send it. If there is data in the session relating */
-/* to a previous DESCRIBE command, this is parsed to get the  */
-/* frames/sec and I-frames ratio values before resetting the  */
-/* session ready for the SETUP command. The clip duration is  */
-/* also read, and stored to centisecond resolution.           */
+/* order to send it.                                          */
 /*                                                            */
 /* Parameters: Pointer to the session structure representing  */
 /*             the session for which a SETUP command needs to */
@@ -568,7 +730,6 @@ static bool setup_read_asset_data(const char * data, asset_data * asset)
 static _kernel_oserror * setup_send_setup(session * s, const char * auth_value)
 {
   bool fail = false;
-  int  port;
 
   /* Reset ready for the next command */
 
@@ -702,48 +863,16 @@ static _kernel_oserror * setup_send_setup(session * s, const char * auth_value)
   if (fail)
   {
     dprintf(("", "setup_send_setup: Out of memory\n"));
-    session_free_item(s);
     return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
   }
-
-  /* Need to get a socket open to the server. The call to opensock */
-  /* will also initialise the state indicators within the session  */
-  /* structure to allow the state machine to work.                 */
-
-  if (s->sd == -1)
-  {
-    if (s->url->port && *s->url->port) port = atoi(s->url->port);
-    else                               port = RTSPMB_DefaultPort;
-
-    s->sd = opensock(s->url->host,
-                     port,
-                     NULL,
-                     &s->state,
-                     -1);
-
-    if (s->state == protostate_ERROR) s->err_no = -s->sd;
-  }
-  else s->state = protostate_CONNECTED;
-
-  s->last = utils_read_time();
-
-  dprintf(("", "setup_send_setup: Socket descriptor %d, state %d\n", s->sd, s->state));
 
   /* Queue the routine that checks the SETUP response */
 
   s->next_command_cb = setup_setup_done;
 
-  /* Set the state machine going to see errors and DNS stuff */
+  /* Send the SETUP command to the server */
 
-  if (s->callout_set == 0) /* It definitely should be, this is a brand new session! */
-  {
-    s->callout_set = 1;
-    timeout(status_proceed_on_callout, s, Session_State_Timer);
-  }
-
-  /* Finished */
-
-  return NULL;
+  return status_send(s);
 }
 
 /**************************************************************/
@@ -792,6 +921,8 @@ static _kernel_oserror * setup_add_transport_header(session * s)
 
       char * port = getenv(Headers_UDP_Port);
 
+      s->stream_port = atoi(port);
+
       if (!port || !*port) sprintf(value, "%s%s",         Headers_HeaderValue_Transport, ip);
       else                 sprintf(value, "%s%s;port=%s", Headers_HeaderValue_Transport, ip, port);
 
@@ -838,9 +969,7 @@ static _kernel_oserror * setup_add_transport_header(session * s)
 
 static _kernel_oserror * setup_setup_done(session * s)
 {
-  _kernel_oserror * e;
-  rtsp_header     * challenge;
-  char            * auth_value = NULL;
+  _kernel_oserror * e = NULL;
 
   dprintf(("", "setup_setup_done: Response was %d\n", s->response_code));
 
@@ -848,44 +977,235 @@ static _kernel_oserror * setup_setup_done(session * s)
 
   s->next_command_cb = NULL;
 
-  /* Nothing more to do, unless we got an Unauthorised error */
+  /* What was the response code? */
 
-  if (s->response_code != 401)
-    return NULL;
-
-  /* We had an Unauthorised error. Do we have a user name or password? */
-
-  if (s->user == NULL && s->password == NULL)
-    return NULL;
-
-  /* Do we have a challenge? */
-
-  challenge = headers_find_header(s->headers, Headers_HeaderName_Authenticate);
-
-  if (challenge == NULL)
-    return NULL;
-
-  /* Generate a response to the challenge */
-
-  e = auth_generate_response(challenge->value, s->user, s->password, s->url->path, &auth_value);
-  if (e == NULL && auth_value != NULL)
+  switch (s->response_code)
   {
-    /* Now clear the username and password. This will stop us retrying */
-    /* again if we get another 401 error because they were incorrect.  */
+    case 200: /* OK */
+    {
+      rtsp_header * transport;
+      char        * ptr;
 
-    free (s->user);
-    s->user = NULL;
+      /* Look at the Transport header in the response */
 
-    free (s->password);
-    s->password = NULL;
+      s->stream_src.s_addr = htonl(INADDR_ANY);
 
-    /* Send the SETUP again, with the authorisation header. */
+      transport = headers_find_header(s->headers, Headers_HeaderName_Transport);
+      if (transport != NULL)
+      {
+        /* Look for the port number in the setup response. This should be the */
+        /* same as the port number we asked for, but you can never be sure... */
 
-    e = setup_send_setup(s, auth_value);
-    free (auth_value);
+        ptr = strstr(transport->value, Headers_HeaderValue_TransportPort);
+        if (ptr != NULL)
+          s->stream_port = atoi(ptr + sizeof(Headers_HeaderValue_TransportPort) - 1);
+
+        /* Look for the source IP address. This is not currently used. */
+
+        ptr = strstr(transport->value, Headers_HeaderValue_TransportSrc);
+        if (ptr != NULL)
+        {
+          char * ptr2;
+
+          ptr = ptr + sizeof(Headers_HeaderValue_TransportSrc) - 1;
+          ptr2 = strchr(ptr, ';');
+
+          if (ptr2 != NULL)
+            *ptr2 = 0;
+
+          if (!inet_aton(ptr, &s->stream_src))
+            s->stream_src.s_addr = htonl(INADDR_ANY);
+
+          if (ptr2 != NULL)
+            *ptr2 = ';';
+        }
+      }
+
+      /* Is the asset on-line? */
+
+      if (s->online == 0)
+      {
+        /* The SETUP succeeded, but this asset is an offline backing store      */
+        /* asset (e.g. one on a CD jukebox, or delivered from a central server  */
+        /* by the MediaBase Content Distribution mechanism), so we have to send */
+        /* a SET_PARAMETER command to tell the server to load it.               */
+    
+        dprintf(("", "setup_setup_done: Time to load a backing store asset\n"));
+        e = setup_send_set_parameter(s);
+      }
+
+      break;
+    }
+
+    case 401: /* Unauthorised */
+    {
+      rtsp_header * challenge;
+      char        * auth_value = NULL;
+
+      /* We had an Unauthorised error. Do we have a user name or password? */
+    
+      if (s->user == NULL && s->password == NULL)
+        return NULL;
+    
+      /* Do we have a challenge? */
+    
+      challenge = headers_find_header(s->headers, Headers_HeaderName_Authenticate);
+    
+      if (challenge == NULL)
+        return NULL;
+    
+      /* Generate a response to the challenge */
+    
+      e = auth_generate_response(challenge->value, s->user, s->password, s->url->path, &auth_value);
+      if (e == NULL && auth_value != NULL)
+      {
+        /* Now clear the username and password. This will stop us retrying */
+        /* again if we get another 401 error because they were incorrect.  */
+    
+        free (s->user);
+        s->user = NULL;
+    
+        free (s->password);
+        s->password = NULL;
+    
+        /* Send the SETUP again, with the authorisation header. */
+    
+        e = setup_send_setup(s, auth_value);
+        free (auth_value);
+      }
+
+      break;
+    }
   }
 
   return e;
+}
+
+/**************************************************************/
+/* setup_send_set_parameter()                                 */
+/*                                                            */
+/* Build a SET_PARAMETER command and start the state machine  */
+/* up in order to send it.                                    */
+/*                                                            */
+/* Parameters: Pointer to the session structure representing  */
+/*             the session for which a SET_PARAMETER command  */
+/*             needs to be sent.                              */
+/**************************************************************/
+
+static _kernel_oserror * setup_send_set_parameter(session * s)
+{
+  /* Reset ready for the next command */
+
+  session_reset_session(s);
+
+  /* Build the SET_PARAMETER command */
+
+  RetError(setup_build_set_parameter(s));
+
+  /* Clear the command chain - response returned to client */
+
+  s->next_command_cb = NULL;
+
+  /* Send the SET_PARAMETER command to the server */
+
+  return status_send(s);
+}
+
+/**************************************************************/
+/* setup_build_set_parameter()                                */
+/*                                                            */
+/* Build a SET_PARAMETER command inside the given session.    */
+/*                                                            */
+/* Parameters: Pointer to the session structure representing  */
+/*             the session for which a SET_PARAMETER command  */
+/*             needs to be sent.                              */
+/**************************************************************/
+
+_kernel_oserror * setup_build_set_parameter(session * s)
+{
+  char content_length[3];
+  bool fail = false;
+
+  /* Build command body and get content length */
+
+  /* session_reset_session should have cleared s->data, but make sure */
+  if (s->data != NULL)
+    free(s->data);
+
+  s->data_len = sizeof(Headers_Content_SetParameter) - 1;
+  s->data = malloc(s->data_len + 1);
+
+  if (s->data != NULL)
+  {
+    strcpy(s->data, Headers_Content_SetParameter);
+    sprintf(content_length, "%d", s->data_len);
+  }
+
+  /* Add the SET_PARAMETER command */
+
+  if (s->data == NULL) fail = true;
+
+  else if (
+        headers_add_header(&s->headers,
+                           Headers_CommandName_SetParameter,
+                           s->url->full)
+        == NULL
+     )
+     fail = true;
+
+  /* Add sequence number */
+
+  else if (headers_add_sequence_header(&s->headers) == NULL) fail = true;
+
+  /* User agent */
+
+  else if (
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_UserAgent,
+                               Headers_HeaderValue_UserAgent)
+            == NULL
+          )
+          fail = true;
+
+  /* Session header */
+
+  else if (
+            headers_add_header(&s->headers,
+                              Headers_HeaderName_Session,
+                              s->server_session)
+            == NULL
+         )
+         fail = true;
+
+  /* Content type */
+
+  else if (
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_ContentType,
+                               Headers_HeaderValue_ContentTypeSP)
+            == NULL
+          )
+          fail = true;
+
+  /* Content length */
+
+  else if (
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_ContentLength,
+                               content_length)
+            == NULL
+          )
+          fail = true;
+
+  /* Did anything fail (out of memory)? */
+
+  if (fail)
+  {
+    dprintf(("", "setup_build_set_parameter: Out of memory\n"));
+    return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+
+  return NULL;
 }
 
 #ifdef CLIENT_LOOPING

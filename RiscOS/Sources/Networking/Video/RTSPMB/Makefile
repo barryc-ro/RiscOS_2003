@@ -14,7 +14,7 @@
 # 05-Apr-2000	ADH	Corrected path and filenames in ROM resources
 #			export rule
 # 19-Mar-2002	JRB	Added Auth.c, extra compile options
-# 21-May-2002   SAR     Fixed install rule
+# 13-May-2002	JRB	Added AMPlay.c and compile option
 
 # -----------------------------------------------------------------------------
 # Component specific options
@@ -35,7 +35,7 @@ RESDIR		= <resource$dir>.Resources2.VideoCtrl
 # Generic options
 #
 
-MKDIR		= do mkdir -p
+MKDIR		= cdir
 CC		= cc
 CMHG		= cmhg
 CP		= copy
@@ -65,10 +65,10 @@ DIRS		= o._dirs_
 #
 # CLIENT_LOOPING		The module supports client looping.
 #
-# MB6_GDF_SUPPORT		Support MediaBase putting Good Data Follows
-#				information in the stream (experimental)
+# USE_AMPLAYER			Use AMPlayer for playback of audio-only
+#                               streams.
 
-EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV -UCLIENT_LOOPING -UMB6_GDF_SUPPORT
+EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV -UCLIENT_LOOPING -DUSE_AMPLAYER
 
 # -----------------------------------------------------------------------------
 # Libraries and objects lists
@@ -88,6 +88,7 @@ LIBS = ${DEBUGLIB} \
        ${ASMUTILS}
 
 ROM_OBJS =	\
+ o.AMPlay	\
  o.Auth		\
  o.CallOut	\
  o.Connect	\
@@ -112,6 +113,7 @@ ROM_OBJS =	\
 # oSL -> Soft Load
 
 RAM_OBJS =	\
+ oSL.AMPlay	\
  oSL.Auth	\
  oSL.CallOut	\
  oSL.Connect	\
@@ -136,6 +138,7 @@ RAM_OBJS =	\
 # oSLd -> Soft Load deug
 
 DBG_OBJS =	\
+ oSLd.AMPlay	\
  oSLd.Auth	\
  oSLd.CallOut	\
  oSLd.Connect	\
@@ -218,8 +221,9 @@ all: ${RAM_MODULE} ${DIRS}
 	@echo ${COMPONENT}: Module built (RAM)
 
 install: ${RAM_MODULE}
-	${MKDIR} ${INSTDIR}
-	${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+	${MKDIR} ${INSTDIR}.310.Modules.Networking
+	${MKDIR} ${INSTDIR}.310.Modules.Networking.RTSPMB
+	${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.Networking.RTSPMB.${COMPONENT}
 	@echo
 	@echo ${COMPONENT}: Module installed (Disc)
 

@@ -13,6 +13,8 @@
 /* History: 01-Dec-2000 (ADH): Imported from RTSP OVS.        */
 /*          08-Mar-2002 (JRB): Updated for MediaBase 6.       */
 /*          01-Apr-2002 (JRB): Add code to test GDF support.  */
+/*          31-May-2002 (JRB): Updated to support MediaBase   */
+/*                             6.0.1 and AMPlayer.            */
 /**************************************************************/
 
 #include <stdio.h>
@@ -38,6 +40,7 @@
 #include "RTSPMHdr.h"
 #include "Module.h"
 
+#include "AMPlay.h"
 #include "CallOut.h"
 #include "MoreInfo.h"
 #include "MPEGCtrl.h"
@@ -126,21 +129,10 @@ static _kernel_oserror * module_try_to_register(void)
     return NULL;
   }
 
-  #ifdef MB6_GDF_SUPPORT
-
-  vcflags   = VC_ProtocolRegister_OpenStreamFlagsInR5  |
-              VC_ProtocolRegister_DoNotResetOrSetSpeed;
-
-  ctrlflags = MPEGCtrl_MCOS_AudioToStreamSyncOn |
-              MPEGCtrl_MCOS_ReservedSetToOne |
-              MPEGCtrl_MCOS_EnableOVSTrickPlay |
-              MPEGCtrl_MCOS_AutoReset;
-
-  #else
-
-  //// Setting timeout->EOS translation to 'on' is *evil* - presently
-  //// MediaBase gives no other choice, but really must work out a
-  //// way around this with Kasenna some time
+  /* By default we assume no EOS marker or NPT reference descriptors.       */
+  /* When we get a DESCRIBE response, we will know whether the server will  */
+  /* send these or not, so we may tell Video Control to use different flags */
+  /* for that session at that time.                                         */
 
   vcflags   = VC_ProtocolRegister_OpenStreamFlagsInR5  |
               VC_ProtocolRegister_DoNotResetOrSetSpeed |
@@ -148,8 +140,6 @@ static _kernel_oserror * module_try_to_register(void)
 
   ctrlflags = MPEGCtrl_MCOS_AudioToStreamSyncOn |
               MPEGCtrl_MCOS_ReservedSetToOne;
-
-  #endif
 
   e = _swix(VideoControl_ProtocolRegister,
             _INR(0,5),
@@ -527,6 +517,10 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
     e = messages_file_open("Resources:$.Resources.VideoCtrl." "RTSPMB" ".Messages");
   }
 
+  /* Initialise the state machine timeout setting. */
+
+  status_get_timeout();
+
   #if CMHG_VERSION < 530
 
     /*
@@ -721,7 +715,7 @@ void service_handler(int service_number, _kernel_swi_regs * r, void * pw)
 
           if ((r->r[3] & VC_SVC_NewPlayState_StateIsInR4) != 0)
           {
-            if (r->r[4] == vc_play_state_normal_eos || r->r[4] == vc_play_state_streaming)
+            if (r->r[4] == vc_play_state_normal_eos)
             {
               /* Yes. If not a timeout, may need to do looping. */
 
@@ -729,71 +723,106 @@ void service_handler(int service_number, _kernel_swi_regs * r, void * pw)
 
               /* We need to match the Video Control client ID with our own session */
 
-              dprintf(("", "service_handler: Checking session against known list\n"));
+              s = session_find_by_vcid(r->r[2]);
 
-              for (s = session_return_head(); s; s = s->next)
+              if (s != NULL && s->dying == 0)
               {
-                if (s->dying != 0) continue;
+                dprintf(("", "service_handler: Found session ID &%08X\n", s->id));
 
-                dprintf(("", "service_handler: Compare &%08X's VCID of &%08X\n", (int) s, s->vcid));
-
-                if (s->vcid == r->r[2])
+                if (s->asset_type == assettype_MPEG1 && s->cur_asset < (s->num_assets - 1))
                 {
-                  /* Get the MPEGControl handle if this stream has just started */
-
-                  if (r->r[4] == vc_play_state_streaming && s->mpegid == 0)
+                  /* Special bodge for MPEG1 sequences. Sometimes you get an */
+                  /* EOS at the end of an asset in a sequence. In this case  */
+                  /* we can advance the asset number and ignore the EOS.     */
+                  s->cur_asset++;
+                  dprintf(("", "service_handler: Detected MPEG1 sequence change by EOS - now in asset %d\n", s->cur_asset));
+                }
+                else
+                {
+                  /* Stream has ended. Stop the timecode reading callout, */
+                  /* and set the current playmode to EOS.                 */
+  
+                  if (s->read_tc_set != 0)
                   {
-                    _kernel_oserror * e;
-                    int               opts[4];
-
-                  
-                    opts[0] = vc_tags_control_handle;
-                    opts[1] = 1;
-                    opts[2] = 0;
-                    opts[3] = vc_tags__end;
-                  
-                    e = _swix(VideoControl_ProtocolOptions,
-                              _INR(0,2),
-                  
-                              0,
-                              s->vcid,
-                              opts);
-                  
-                    if (e == NULL) s->mpegid = (unsigned int) opts[2];
-                    dprintf(("", "service_handler: read MPEGControl handle as %08X\n", s->mpegid));
-                  }
-
-                  if (r->r[4] == vc_play_state_normal_eos)
-                  {
-                    /* Stream has ended. Stop the timecode reading callout, and set the current */
-                    /* playmode to EOS. */
-
                     s->read_tc_set = 0;
                     untimeout(play_read_timecode_on_callout, s);
-                
-                    s->cached_npt = play_read_current_npt(s);
-                    s->playmode = Play_MB_Trick_EOS;
+                  }
 
-                    #ifdef CLIENT_LOOPING
-                    /* If looping is set, do it now */
+                  s->playmode = Play_MB_Trick_EOS;
 
-                    if (s->loop && s->multicast == 0)
+                  /* Tidy up final NPT */
+
+                  if (s->scale < 0)
+                    s->cached_npt = 0;
+                  else if (s->multicast == 0)
+                    s->cached_npt = s->duration;
+  
+                  #ifdef CLIENT_LOOPING
+                  /* If looping is set, do it now */
+  
+                  if (s->loop && s->multicast == 0)
+                  {
+                    /* We need to flag that the timeout is set, otherwise if the session managed to */
+                    /* die before the timeout fired we wouldn't know we needed to untimeout it.     */
+  
+                    dprintf(("", "service_handler: OK to loop; locking flag should be zero: %d\n", s->loop_ready));
+  
+                    if (s->loop_ready == 0)
                     {
-                      /* We need to flag that the timeout is set, otherwise if the session managed to */
-                      /* die before the timeout fired we wouldn't know we needed to untimeout it.     */
-  
-                      dprintf(("", "service_handler: OK to loop; locking flag should be zero: %d\n", s->loop_ready));
-  
-                      if (s->loop_ready == 0)
-                      {
-                        s->loop_ready = 1;
-                        timeout(play_replay_on_callout, s, 1);
-                      }
+                      s->loop_ready = 1;
+                      timeout(play_replay_on_callout, s, 1);
                     }
-                    #endif
+                  }
+                  #endif
+                }
+              }
+            }
+          }
+        }
+        break;
+        case VideoControlNewMPEGState:
+        {
+          dprintf(("", "service_handler: MPEG event &%04X for VCID &%08X\n", r->r[4], r->r[2]));
+
+          /* MPEG event - was it stream reset? */
+
+          if (r->r[3] == 0 && r->r[4] == UpCall_MPEG_SubReason_Reset)
+          {
+            session * s = session_find_by_vcid(r->r[2]);
+
+            if (s != NULL && s->dying == 0)
+            {
+              dprintf(("", "service_handler: Stream reset detected for session ID &%08X\n", s->id));
+
+              /* Found a stream reset - was it unexpected? */
+
+              if (s->stream_markers != 0 && s->reset_pending == 0 && s->multicast == 0)
+              {
+                /* It wasn't an expected reset, assume it was a sequence transition point */
+  
+                if (s->scale < 0)
+                {
+                  /* Going backwards */
+          
+                  if (s->cur_asset > 0)
+                  {
+                    s->cur_asset--;
+                    dprintf(("", "Detected sequence change by stream reset - now in asset %d\n", s->cur_asset));
+                  }
+                }
+                else
+                {
+                  /* Going forwards */
+        
+                  if (s->cur_asset < (s->num_assets - 1))
+                  {
+                    s->cur_asset++;
+                    dprintf(("", "Detected sequence change by stream reset - now in asset %d\n", s->cur_asset));
                   }
                 }
               }
+
+              s->reset_pending = 0;
             }
           }
         }
@@ -835,9 +864,22 @@ void service_handler(int service_number, _kernel_swi_regs * r, void * pw)
     }
     break;
 
-  } /* 'switch (service_number)' */
+    #ifdef USE_AMPLAYER
+    case Service_AMPlayer:
+    {
+      switch (r->r[0])
+      {
+        case 6:
+        {
+          amplay_check_buffer();
+        }
+        break;
+      }
+    }
+    break;
+    #endif
 
-  dprintf(("", "service_handler: Successful\n"));
+  } /* 'switch (service_number)' */
 }
 
 /**************************************************************/
@@ -890,12 +932,12 @@ int event_handler(_kernel_swi_regs * r, void * pw)
   /* Since this is only called on the Internet event, don't have */
   /* to worry about setting a callback or re-entrancy.           */
 
-  _kernel_irqs_on();
-
   if (r->r[1] == 1) /* socket_ASYNC_EVENT */
   {
     session * s;
     int       sid = r->r[2];
+  
+    _kernel_irqs_on();
 
     dprintf(("", "Internet event handler called, SD = %d\n", r->r[2]));
 
@@ -913,10 +955,19 @@ int event_handler(_kernel_swi_regs * r, void * pw)
         ret = 0; /* Intercept */
         break;
       }
-    }
-  }
+      #ifdef USE_AMPLAYER
+      else if (s->stream_sd == sid)
+      {
+        amplay_receive_data(s);
 
-  _kernel_irqs_off();
+        ret = 0; /* Intercept */
+        break;
+      }
+      #endif
+    }
+  
+    _kernel_irqs_off();
+  }
 
   return ret; /* Pass it on */
 }
