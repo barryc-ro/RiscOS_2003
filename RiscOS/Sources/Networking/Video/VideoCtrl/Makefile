@@ -271,7 +271,7 @@ ${EXPORTS}: h.${CMHG_HDR} h.VideoCtrl
 
 ${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
-	resgen messages_file ${MSGSF}
+	resgen messages_file ${MSGSF} LocalRes:Messages Resources.${COMPONENT}.${COMPONENT}.Messages
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	@echo
