@@ -16,7 +16,7 @@ EXP_HDR = <export$dir>.^.Interface2
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -96,6 +96,11 @@ rom: ${TARGET}
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
+
+install: rm.PPrimer
+        ${MKDIR} ${INSTDIR}
+        ${CP} rm.PPrimer ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
