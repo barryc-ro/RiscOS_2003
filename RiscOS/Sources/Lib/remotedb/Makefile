@@ -107,7 +107,7 @@ export_hdrs:
         ${CP} h.${COMPONENT} ${DEBUGLIB}.h.${COMPONENT}   ${CPFLAGS}
         @echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${COMPONENT} ${COMPONENTZM} local_dirs
+export_libs: ${COMPONENT} ${COMPONENTZM} ${LCOMPONENT} ${LCOMPONENTZM} local_dirs
 	${MKDIR} ${DEBUGLIB}
 	${MKDIR} ${DEBUGLIB}.o
         ${CP} ${COMPONENT}   ${DEBUGLIB}.o.${COMPONENT}   ${CPFLAGS}
@@ -118,3 +118,75 @@ export_libs: ${COMPONENT} ${COMPONENTZM} local_dirs
 
 #
 # Dynamic dependencies:
+o.remote:	c.remote
+o.remote:	TCPIPLibs:sys.h.types
+o.remote:	TCPIPLibs:sys.h.cdefs
+o.remote:	TCPIPLibs:machine.h.endian
+o.remote:	TCPIPLibs:machine.h.ansi
+o.remote:	TCPIPLibs:machine.h.types
+o.remote:	TCPIPLibs:sys.h.socket
+o.remote:	TCPIPLibs:sys.h.cdefs
+o.remote:	TCPIPLibs:sys.h.time
+o.remote:	TCPIPLibs:sys.h.cdefs
+o.remote:	TCPIPLibs:h.netdb
+o.remote:	TCPIPLibs:sys.h.cdefs
+o.remote:	TCPIPLibs:netinet.h.in
+o.remote:	TCPIPLibs:h.socklib
+o.remote:	TCPIPLibs:sys.h.types
+o.remote:	TCPIPLibs:sys.h.socket
+o.remote:	TCPIPLibs:sys.h.stat
+o.remote:	TCPIPLibs:sys.h.time
+o.remote:	TCPIPLibs:sys.h.cdefs
+o.remote:	TCPIPLibs:sys.h.time
+o.remote:	TCPIPLibs:sys.h.uio
+o.remote:	TCPIPLibs:sys.h.cdefs
+o.remote:	C:h.kernel
+o.remote:	h.remote
+z.remote:	c.remote
+z.remote:	TCPIPLibs:sys.h.types
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:machine.h.endian
+z.remote:	TCPIPLibs:machine.h.ansi
+z.remote:	TCPIPLibs:machine.h.types
+z.remote:	TCPIPLibs:sys.h.socket
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:sys.h.time
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:h.netdb
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:netinet.h.in
+z.remote:	TCPIPLibs:h.socklib
+z.remote:	TCPIPLibs:sys.h.types
+z.remote:	TCPIPLibs:sys.h.socket
+z.remote:	TCPIPLibs:sys.h.stat
+z.remote:	TCPIPLibs:sys.h.time
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:sys.h.time
+z.remote:	TCPIPLibs:sys.h.uio
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	C:h.kernel
+z.remote:	h.remote
+z.remote:	c.remote
+z.remote:	TCPIPLibs:sys.h.types
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:machine.h.endian
+z.remote:	TCPIPLibs:machine.h.ansi
+z.remote:	TCPIPLibs:machine.h.types
+z.remote:	TCPIPLibs:sys.h.socket
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:sys.h.time
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:h.netdb
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:netinet.h.in
+z.remote:	TCPIPLibs:h.socklib
+z.remote:	TCPIPLibs:sys.h.types
+z.remote:	TCPIPLibs:sys.h.socket
+z.remote:	TCPIPLibs:sys.h.stat
+z.remote:	TCPIPLibs:sys.h.time
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	TCPIPLibs:sys.h.time
+z.remote:	TCPIPLibs:sys.h.uio
+z.remote:	TCPIPLibs:sys.h.cdefs
+z.remote:	C:h.kernel
+z.remote:	h.remote
