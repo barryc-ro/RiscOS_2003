@@ -45,6 +45,7 @@
 #include "Reformat.h"
 #include "RMA.h"
 #include "TokenUtils.h"
+#include "Toolbars.h"
 #include "URLveneer.h"
 #include "Windows.h"
 
@@ -128,6 +129,8 @@ static char         * plugin_open_filename        = NULL;
 static int            plugin_stream_new_reference = 0;
 
 /* Static function prototypes */
+
+static browser_data    * plugin_return_browser        (unsigned int browser_instance_handle);
 
 static _kernel_oserror * plugin_write_params_word     (int fh, int word);
 static _kernel_oserror * plugin_write_params_string   (int fh, const char * string);
@@ -236,6 +239,32 @@ static _kernel_oserror * plugin_write_params_word(int fh, int word)
                  fh));
 
   return NULL;
+}
+
+/*************************************************/
+/* plugin_return_browser()                       */
+/*                                               */
+/* Converts a browser instance handle to a       */
+/* browser_data structure pointer.               */
+/*                                               */
+/* Parameters: A browser instance handle.        */
+/*                                               */
+/* Returns:    Pointer to a browser_data struct  */
+/*             represented by the instance       */
+/*             handle, or NULL if none is found. */
+/*************************************************/
+
+static browser_data * plugin_return_browser(unsigned int browser_instance_handle)
+{
+  browser_data * b;
+
+  if (!browser_instance_handle) return NULL;
+
+  b = ((plugin_insts *) browser_instance_handle)->browser;
+
+  if (!is_known_browser(b)) return NULL;
+
+  return b;
 }
 
 /*************************************************/
@@ -1065,6 +1094,7 @@ static _kernel_oserror * plugin_broadcast_open(void)
 _kernel_oserror * plugin_open_bounced(WimpMessage * m)
 {
   _kernel_oserror * e;
+  browser_data    * b;
   MPlugIn_Open    * open = (MPlugIn_Open *) &m->data;
 
   #ifdef TRACE
@@ -1174,8 +1204,19 @@ _kernel_oserror * plugin_open_bounced(WimpMessage * m)
       /* as between the two redrawing may have occurred that has changed   */
       /* where the Object now sits.                                        */
 
+      b = plugin_return_browser(open->browser_instance_handle);
+
+      if (!b)
+      {
+        #ifdef TRACE
+          if (tl & (1u<<30)) Printf("plugin_open_bounced: \0211Invalid browser instance handle suspected.\0217\n");
+        #endif
+
+        return NULL;
+      }
+
       if (
-           !object_get_token_object_box(((plugin_insts *) open->browser_instance_handle)->browser,
+           !object_get_token_object_box(b,
                                         ((plugin_insts *) open->browser_instance_handle)->token,
                                         &new)
          )
@@ -1235,6 +1276,7 @@ _kernel_oserror * plugin_open_bounced(WimpMessage * m)
 _kernel_oserror * plugin_got_opening(WimpMessage * m)
 {
   _kernel_oserror * e       = NULL;
+  browser_data    * b;
   MPlugIn_Opening * opening = (MPlugIn_Opening *) &m->data;
 
   #ifdef TRACE
@@ -1264,9 +1306,20 @@ _kernel_oserror * plugin_got_opening(WimpMessage * m)
       plugin_open_filename = NULL;
     }
 
+    b = plugin_return_browser(opening->browser_instance_handle);
+
+    if (!b)
+    {
+      #ifdef TRACE
+        if (tl & (1u<<30)) Printf("plugin_got_opening: \0211Invalid browser instance handle suspected.\0217\n");
+      #endif
+
+      return NULL;
+    }
+
     /* Tell the Object the PlugIn details */
 
-    object_set_token_object_plugin(((plugin_insts *) opening->browser_instance_handle)->browser,
+    object_set_token_object_plugin(b,
                                    ((plugin_insts *) opening->browser_instance_handle)->token,
                                    opening->plugin_instance_handle,
                                    m->hdr.sender);
@@ -1275,8 +1328,7 @@ _kernel_oserror * plugin_got_opening(WimpMessage * m)
 
     if (opening->flags & MPlugIn_Opening_WantsDataResourceFetched)
     {
-      browser_data * b   = ((plugin_insts *) opening->browser_instance_handle)->browser;
-      const char   * url = NULL;
+      const char * url = NULL;
 
       if (b) url = HtmlRelativiseURL(browser_current_url(b),
                                      HtmlOBJECTdata(((plugin_insts *) opening->browser_instance_handle)->token),
@@ -1382,6 +1434,112 @@ _kernel_oserror * plugin_send_close(unsigned int b, unsigned int task, unsigned 
 }
 
 /*************************************************/
+/* plugin_got_reshape_request()                  */
+/*                                               */
+/* Handle reception of a                         */
+/* Message_PlugIn_ReshapeRequest.                */
+/*                                               */
+/* Parameters: Pointer to a Wimp_Message struct  */
+/*             relevant to the message.          */
+/*************************************************/
+
+_kernel_oserror * plugin_got_reshape_request(WimpMessage * m)
+{
+  _kernel_oserror        * e       = NULL;
+  MPlugIn_ReshapeRequest * request = (MPlugIn_ReshapeRequest *) &m->data;
+  browser_data           * b;
+  HStream                * t;
+  unsigned int             plugin_task;
+  int                      line;
+  BBox                     size;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_got_reshape_request: Called\n");
+  #endif
+
+  /* Does this look valid? */
+
+  if (!request->browser_instance_handle)
+  {
+    /* No; do nothing */
+
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_got_reshape_request: Message held a NULL browser instance handle\n");
+    #endif
+
+    return NULL;
+  }
+
+  /* Find the Object representing this Plug-In */
+
+  b = plugin_return_browser(request->browser_instance_handle);
+
+  if (
+       !is_known_browser(b) ||
+       !object_return_info(b,
+                           request->plugin_instance_handle,
+                           &t,
+                           &plugin_task)
+     )
+  {
+    /* Can't find the Object / not a valid browser */
+
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_got_reshape_request: %p isn't a known browser, or can't find an Object to match the given handle\n", b);
+    #endif
+
+    return NULL;
+  }
+
+  /* Does the task handle match? */
+
+  if (plugin_task != (unsigned int) m->hdr.sender)
+  {
+    /* No, so exit */
+
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_got_reshape_request: Senders task handle of %08x doens't match Object's handle, %08x\n", m->hdr.sender, plugin_task);
+    #endif
+
+    return NULL;
+  }
+
+  /* Right, this looks like a valid request. Find out */
+  /* the ancestor line it lies in so we can reformat  */
+  /* the page from here.                              */
+
+  line = tokenutils_find_ancestor_line(b, t);
+
+  /* Get the object's current size */
+
+  RetError(object_get_token_object_size(b, t, &size));
+
+  /* Only proceed if the size has changed */
+
+  if (
+       size.xmax - size.xmin != request->width  ||
+       size.ymax - size.ymin != request->height
+     )
+  {
+    size.xmin = 0;
+    size.ymin = 0;
+    size.xmax = request->width;
+    size.ymax = request->height;
+
+    RetError(object_set_token_object_size(b, t, &size));
+
+    /* Do a reformat if we had a valid line */
+
+    if (line >= 0) RetError(reformat_format_from(b,
+                                                 line - 1,
+                                                 1,
+                                                 0));
+  }
+
+  return NULL;
+}
+
+/*************************************************/
 /* plugin_send_original_reshape()                */
 /*                                               */
 /* Tell a Plug-In to reposition or resize itself */
@@ -1460,7 +1618,7 @@ _kernel_oserror * plugin_got_url_access(WimpMessage * m)
   const char        * url;
   const char        * target;
   browser_data      * targetted;
-  browser_data      * b = ((plugin_insts *) access->browser_instance_handle)->browser;
+  browser_data      * b = plugin_return_browser(access->browser_instance_handle);
   browser_data      * ancestor = utils_ancestor(b);
 
   #ifdef TRACE
@@ -1534,6 +1692,179 @@ _kernel_oserror * plugin_got_url_access(WimpMessage * m)
                                        url,
                                        access->plugin_instance_handle,
                                        m->hdr.sender));
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* plugin_got_status()                           */
+/*                                               */
+/* Handle reception of a Message_PlugIn_Status.  */
+/*                                               */
+/* Parameters: Pointer to a Wimp_Message struct  */
+/*             relevant to the message.          */
+/*************************************************/
+
+_kernel_oserror * plugin_got_status(WimpMessage * m)
+{
+  MPlugIn_Status * status   = (MPlugIn_Status *) &m->data;
+  browser_data   * b        = plugin_return_browser(status->browser_instance_handle);
+  browser_data   * ancestor = utils_ancestor(b);
+  const char     * message;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_got_status: Called\n");
+  #endif
+
+  if (!b || !ancestor)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_got_status: \0211Can't find a valid [ancestor] browser\0217\n");
+    #endif
+
+    return NULL;
+  }
+
+  message = plugin_return_string(m, &status->status);
+
+  if (!message || !*message)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_got_status: Null message string or pointer; cancelling Plug-in message status\n");
+    #endif
+
+    free(ancestor->plugin_status);
+    ancestor->plugin_status = NULL;
+
+    return toolbars_cancel_status(ancestor, Toolbars_Status_PlugIn);
+  }
+
+  /* Otherwise, we need to allocate space for the message in */
+  /* the browser_data structure so the Toolbar routines can  */
+  /* get at it.                                              */
+
+  free(ancestor->plugin_status);
+  ancestor->plugin_status = malloc(strlen(message) + 1);
+
+  if (ancestor->plugin_status)
+  {
+    /* Allocation successful - copy the string over and update */
+    /* the status bar.                                         */
+
+    strcpy(ancestor->plugin_status, message);
+
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_got_status: Successful with '%s'\n", message);
+    #endif
+
+    return toolbars_update_status(ancestor, Toolbars_Status_PlugIn);
+  }
+  else
+  {
+    /* Allocation failed - cancel any existing Plug-In message */
+
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_got_status: Allocation for message string failed, cancelling status\n");
+    #endif
+
+    return toolbars_cancel_status(ancestor, Toolbars_Status_PlugIn);
+  }
+}
+
+/*************************************************/
+/* plugin_got_busy()                             */
+/*                                               */
+/* Handle reception of a Message_PlugIn_Busy.    */
+/*                                               */
+/* Parameters: Pointer to a Wimp_Message struct  */
+/*             relevant to the message.          */
+/*************************************************/
+
+_kernel_oserror * plugin_got_busy(WimpMessage * m)
+{
+  MPlugIn_Busy * busy     = (MPlugIn_Busy *) &m->data;
+  browser_data * b        = plugin_return_browser(busy->browser_instance_handle);
+  browser_data * ancestor = utils_ancestor(b);
+  int            active;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("plugin_got_busy: Called\n");
+  #endif
+
+  if (!b || !ancestor)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<30)) Printf("plugin_got_busy: \0211Can't find a valid [ancestor] browser\0217\n");
+    #endif
+
+    return NULL;
+  }
+
+  /* Are we setting or clearing a busy state? */
+
+  active = busy->flags & MPlugIn_Busy_IsBusy;
+
+  if (ancestor->plugin_active != active)
+  {
+    ancestor->plugin_active = active;
+
+    /* Are we turning it off? */
+
+    if (!active)
+    {
+      /* If we've only got a handler because of the Plug-In, turn it off */
+      /* and if required go to the drift handler instead.                */
+
+      if (!b->anim_handler)
+      {
+        deregister_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation,b);
+        b->anim_handler = 0;
+
+        /* If the Controls say to install the 'drift' handler to ensure   */
+        /* the animation finishes on the first frame, and that handler is */
+        /* not already installed, install it.                             */
+
+        if (controls.anim_drift && !b->anim_drift)
+        {
+          register_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation_drift,b);
+          b->anim_drift = 1;
+        }
+      }
+    }
+
+    /* The animation should be turned on / kept on */
+
+    else
+    {
+      /* Deregister any existing drift handler */
+
+      if (b->anim_drift)
+      {
+        deregister_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation_drift,b);
+        b->anim_drift = 0;
+      }
+
+      /* Register the full time animation handler, if it isn't already registered */
+
+      if (!b->anim_handler)
+      {
+        /* Is there an appropriate gadget in the status bar? */
+
+        ObjectId lower = toolbars_get_lower(b);
+        BBox     box;
+
+        if (!gadget_get_bbox(0, lower, StatusBarAnimAnim, &box))
+        {
+          /* Yes, so install an animation handler. Don't set the */
+          /* anim_handler flag! The fact that anim_handler is    */
+          /* unset and plugin_active is set is used by other     */
+          /* bits of code.                                       */
+
+          register_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation,b);
+        }
+      }
     }
   }
 

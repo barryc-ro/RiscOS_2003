@@ -1661,22 +1661,24 @@ int tables_height_table(int toplevel, browser_data * b, table_stream * p, reform
 //    scale_height = height;
 //  }
 
-  /* Now find the height of all of the cells */
+  /* Now find the collective row heights for all of the cells */
 
-  while (R && cellcount < cellmax && Row < p->RowSpan)
+  while (R)
   {
     D = R->List;
 
-    while (D && cellcount < cellmax && Row < p->RowSpan)
+    /* Scan the cells */
+
+    while (D)
     {
       switch (D->Tag)
       {
         case TagTableData:
         case TagTableHead:
         {
-          /* Work out the width that this cell uses */
+          /* Work out the width that this cell uses, for ROWSPAN = 1 cells only */
 
-          if (D->ColOffs < p->ColSpan && D->RowOffs < p->RowSpan)
+          if (D->ColOffs < p->ColSpan && D->RowOffs < p->RowSpan && D->RowSpan <= 1)
           {
             NewWidth = abs(ColOffs[D->ColOffs]);
 
@@ -1692,11 +1694,11 @@ int tables_height_table(int toplevel, browser_data * b, table_stream * p, reform
               }
             }
 
-            /* Find the required cell height (this is not   */
-            /* a recursive call - the height is stored in   */
-            /* the relevant place by tables_width_cell called from  */
-            /* tables_width_table above, which is where the */
-            /* recursion is handled).                       */
+            /* Find the required cell height (this is not a    */
+            /* recursive call - the height is stored in the    */
+            /* relevant place by tables_width_cell called from */
+            /* tables_width_table above, which is where the    */
+            /* recursion is handled).                          */
 
             Height = tables_height_cell(toplevel,
                                         b,
@@ -1707,49 +1709,164 @@ int tables_height_table(int toplevel, browser_data * b, table_stream * p, reform
                                         D->RowOffs,
                                         D->ColOffs);
 
-            if (TD_HAS_HEIGHT(D) && TD_HEIGHT_UNITS(D) == UNITS_PIXELS) /* Can't see how a cell height in % could possibly be meaningful... */
+            /* Deal with direct height specifiers */
+
+            if (TD_HAS_HEIGHT(D))
             {
-              int dy, hc;
+              int hc = 0;
 
-              convert_to_points(2, &dy); /* Authors assume square pixels, so do a 2 OS unit to 1 pixel scaling */
+              /* Percentages come from the whole visible area size */
 
-              hc = TD_HEIGHT(D) * dy;
+              if (TD_HEIGHT_UNITS(D) == UNITS_PERCENT)
+              {
+                hc = (b->display_height * TD_HEIGHT(D)) / 100;
+              }
+
+              /* Pixel specifiers are easier */
+
+              else
+              {
+                hc = TD_HEIGHT(D) * 2; /* 2 'web pixels' = 1 OS unit */
+              }
+
+              convert_to_points(hc, &hc);
 
               if (hc > Height) Height = hc;
             }
 
+            /* If this is the greatest height so far for the row, remember it */
 
-            if (D->RowSpan) C = CorrectRowSpan(D, p);
-            else            C = 1;
+            if (Height > RowOffs[Row]) RowOffs[Row] = Height;
+          }
+        }
+        break;
+      }
 
-            /* Distribute the height over the rows this cell spans */
+      D = D->Next;
+    }
 
-            Height = Height / C;
+    #ifdef TRACE
+      if (tl & (1u<<20)) Printf("tables_height_table: First pass, row %d, height %d (%d OS)\n", Row, RowOffs[Row], RowOffs[Row] / 400);
+    #endif
 
-            for (I = 0; I < C; I++)
+    Row ++;
+
+    R = R->Next;
+  }
+
+  /* Another scan, for ROWSPAN this time */
+
+  Row = 0;
+  R   = p->List;
+
+  while (R)
+  {
+    D = R->List;
+
+    while (D)
+    {
+      switch (D->Tag)
+      {
+        case TagTableData:
+        case TagTableHead:
+        {
+          /* Work out the width that this cell uses, for ROWSPAN = 1 cells only */
+
+          if (D->ColOffs < p->ColSpan && D->RowOffs < p->RowSpan && D->RowSpan > 1)
+          {
+            NewWidth = abs(ColOffs[D->ColOffs]);
+
+            if (D->ColSpan > 1)
             {
-              if (Height > RowOffs[Row + I]) RowOffs[Row + I] = Height;
+              int index;
+
+              for (I = 1; I < D->ColSpan; I++)
+              {
+                index = D->ColOffs + I;
+
+                if (index < p->ColSpan) NewWidth += abs(ColOffs[index]);
+              }
+            }
+
+            /* Find the required cell height (this is not a    */
+            /* recursive call - the height is stored in the    */
+            /* relevant place by tables_width_cell called from */
+            /* tables_width_table above, which is where the    */
+            /* recursion is handled).                          */
+
+            Height = tables_height_cell(toplevel,
+                                        b,
+                                        (HStream *) D->List,
+                                        p,
+                                        cellarray,
+                                        NewWidth,
+                                        D->RowOffs,
+                                        D->ColOffs);
+
+            /* Deal with direct height specifiers */
+
+            if (TD_HAS_HEIGHT(D))
+            {
+              /* Percentages come from the whole visible area size */
+
+              if (TD_HEIGHT_UNITS(D) == UNITS_PERCENT)
+              {
+                int hc = (b->display_height * TD_HEIGHT(D)) / 100;
+
+                if (hc > Height) Height = hc;
+              }
+
+              /* Pixel specifiers are easier */
+
+              else if (TD_HEIGHT_UNITS(D) == UNITS_PIXELS)
+              {
+                int hc = TD_HEIGHT(D) * 2; /* 2 'web pixels' = 1 OS unit */
+
+                if (hc > Height) Height = hc;
+              }
+            }
+
+            /* The cell spans several rows, so we must count up the height */
+            /* already present in the rows it spans. Any extra that this   */
+            /* cell requires is added to the last row it touches.          */
+
+            C = D->RowSpan;
+            if (C + Row >= p->RowSpan) C = p->RowSpan - Row;
+
+            if (C > 0)
+            {
+              int TotalHeight = 0;
+
+              for (I = Row; I < Row + C && I < p->RowSpan; I++)
+              {
+                TotalHeight += RowOffs[I];
+              }
+
+              /* If the total amount the cell spans is less than this cell */
+              /* requires, add in the extra to the last cell.              */
+
+              if (TotalHeight < Height) RowOffs[Row + C - 1] += Height - TotalHeight;
             }
           }
         }
         break;
       }
 
-      cellcount++;
-
       D = D->Next;
     }
 
     #ifdef TRACE
-      if (tl & (1u<<20)) Printf("tables_height_table: Row %d, height %d (%d OS)\n", Row, RowOffs[Row], RowOffs[Row] / 400);
+      if (tl & (1u<<20)) Printf("tables_height_table: Second pass, row %d, height %d (%d OS)\n", Row, RowOffs[Row], RowOffs[Row] / 400);
     #endif
-
-    ReturnHeight += RowOffs[Row];
 
     Row ++;
 
-    R=R->Next;
+    R = R->Next;
   }
+
+  /* Calculate the table height */
+
+  for (I = 0; I < p->RowSpan; I++) ReturnHeight += RowOffs[I];
 
   /* Add in cell spacings and the table outer border */
 

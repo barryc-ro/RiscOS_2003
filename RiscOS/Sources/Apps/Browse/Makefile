@@ -113,7 +113,7 @@ EVENTLIB	= tbox:o.eventlib
 TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
 INETLIB		= TCPIPLibs:o.inetlib
-UNICODELIB      = C:Unicode.o.ucodelib
+UNICODELIB	= C:Unicode.o.ucodelib
 
 LIBSM = \
  ${HTMLLIB}zm \
@@ -154,7 +154,7 @@ LIBSD = \
  ${IMAGELIB} \
  ${PNGLIB} \
  ${ZLIB} \
- ${UNICODELIB}d
+ ${UNICODELIB}
 
 
 # -----------------------------------------------------------------------------
