@@ -6,16 +6,20 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 31-Mar-98  RML    Created
+# 27-Apr-98  RML    ROM build rules added
 
 #
 # Program specific options:
 #
-COMPONENT  = Help2
-APP        = !Help
-MODULE     = rm.${COMPONENT}
-ROM_MODULE = aof.${COMPONENT}
-RDIR       = Resources
-LDIR       = ${RDIR}.${LOCALE}
+COMPONENT   = Help
+APP         = !Help
+MODULE      = rm.${COMPONENT}
+ROM_MODULE  = aof.${COMPONENT}
+RDIR        = Resources
+LDIR        = ${RDIR}.${LOCALE}
+MODULE_HELP = "!Help"
+VERSION     = 3.06
+FILELIST    = ${RDIR}.Filelist
 
 #
 # Export Paths for Messages module
@@ -27,6 +31,7 @@ RESAPP = <resource$dir>.Apps.${APP}
 # Generic options:
 #
 MKDIR   = cdir
+MODGEN  = modgen
 CC      = cc
 LD      = link
 CP      = copy
@@ -86,12 +91,12 @@ OBJS =\
 # Main rules:
 #
 
+rom: ${MODULE}
+        @echo ${COMPONENT}: rom module built
 
-all:     ${FILES}
-         @echo ${COMPONENT}: Application made.
-
-rom:     ${ROM_MODULE}
-         @echo ${COMPONENT}: Module built (ROM)
+install_rom: ${MODULE}
+        ${CP} ${MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom module installed
 
 install: ${FILES}
          @echo
@@ -108,23 +113,29 @@ install: ${FILES}
          @echo
          @echo ${COMPONENT}: Application installed {Disc}
 
-install_rom: ${ROM_MODULE}
-        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: Module installed (ROM)
-
-resources:
+resources-C:
+	${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
-        ${MKDIR} ${RESAPP}
-        ${CP} ${RDIR}.!Boot     ${RESAPP}.!Boot    ${CPFLAGS}
-        ${CP} ${LDIR}.!Help     ${RESAPP}.!Help    ${CPFLAGS}
-        ${CP} ${LDIR}.!Run      ${RESAPP}.!Run     ${CPFLAGS}
-        ${CP} ${LDIR}.Messages  ${RESDIR}.Messages ${CPFLAGS}
-        ${CP} ${LDIR}.Res       ${RESDIR}.Res      ${CPFLAGS}
+        |
+        ${CP} ${LDIR}.!Help         ${RESAPP}.!Help     ${CPFLAGS}
+        ${CP} ${RDIR}.ROM.!Run      ${RESAPP}.!Run      ${CPFLAGS}
+        ${CP} ${RDIR}.ROM.!Boot     ${RESAPP}.!Boot     ${CPFLAGS}
+        |
+        ${CP} ${RDIR}.!Sprites22    ${RESDIR}.!Sprites22 ${CPFLAGS}
+        ${CP} ${LDIR}.Res           ${RESDIR}.Res       ${CPFLAGS}
+
+resources-RES: 
+        ${MKDIR} ${RESDIR}
+
+resources: resources-${TYPE}
+        ${CP} ${LDIR}.Messages      ${RESDIR}.Messages  ${CPFLAGS}
+        |
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
         ${WIPE} o.*      ${WFLAGS}
         ${WIPE} ${APP}.* ${WFLAGS}
+        ${RM} ${MODULE}
         ${RM} ${RDIR}.!RunImage
         ${RM} ${APP}
         @echo ${COMPONENT}: cleaned
@@ -136,39 +147,8 @@ clean:
 Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
        ${LD} -o $@ ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${OBJS}
 
+${MODULE}: ${FILES}
+           ${MODGEN} $@ ${MODULE} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
+
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.main:	c.main
-o.main:	tbox:h.wimp
-o.main:	tbox:h.wimplib
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	tbox:h.wimplib
-o.main:	tbox:h.toolbox
-o.main:	tbox:h.event
-o.main:	tbox:h.window
-o.main:	tbox:h.gadgets
-o.main:	tbox:h.iconbar
-o.main:	tbox:h.proginfo
-o.main:	tbox:h.fontmenu
-o.main:	tbox:h.menu
-o.main:	h.help
-o.main:	h.common
-o.main:	h.defines
-o.help:	c.help
-o.help:	C:h.swis
-o.help:	C:h.kernel
-o.help:	tbox:h.gadgets
-o.help:	tbox:h.toolbox
-o.help:	tbox:h.wimp
-o.help:	h.common
-o.help:	h.help
-o.common:	c.common
-o.common:	C:h.kernel
-o.common:	tbox:h.wimp
-o.common:	tbox:h.wimplib
-o.common:	tbox:h.toolbox
-o.common:	tbox:h.gadgets
-o.common:	C:h.swis
-o.common:	h.common
-o.common:	h.defines
