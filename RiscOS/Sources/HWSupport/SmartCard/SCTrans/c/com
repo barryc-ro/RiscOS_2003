@@ -33,9 +33,17 @@
  * 2. The ISO/IEC 7816 defines several timing parameters, such as CWT (Char Waiting Time).
  * Section 9.5.2.3 defines a block guardtime (BGT) which defines the minimum period between
  * the leading edge of two consecutive characters sent in opposite directions.
+ * The Funai microcontroller knows nothing about these delays and it is up us to ensure that the
+ * timing requirements are met.
  *
- * 3. Cards IFSC response is ignored in this version. Be sure to re-instate it before releasing this code
- * once we have chained blocks working.
+ * This version ignores all of the timing parameters and appears to work correctly. Note that the first
+ * two bytes of every command, and the ACK byte are interpretted by the microcontroller and not passed
+ * to the card. This will provide a useful delay of several bytes between the card sending data and
+ * receiving new data from us, and this may be sufficient, although in the worst case, the slowest card
+ * might not have enough of a delay even then. This should be considered if the baud rate to the
+ * microcontroller is increased much above 9600.
+ *
+ * 3. See the pmsdebug and db files for details on getting debug output.
  *
  * Paul Skirrow, Jan 2000
  */
@@ -53,6 +61,7 @@
 #include "t0_sm.h"
 #include "t1.h"
 
+#include "pmsdebug.h"  /* Paul Skirrow's debug */
 
 static char serial_config[] = "devices#baud9600;data8;stop1;noparity;nohandshake";
 static int  retry_cmd = 0;
@@ -288,8 +297,32 @@ com_Close(void)
 /* Funai-uController specific routines */
 
 /*
- * com_ReadFunaiHeader - Reads a reply from the Funai microcontroller, and acts on it
- */
+
+  Read Header from Funai Microcontroller
+  --------------------------------------
+
+com_ReadFunaiHeader - reads a reply from the Funai microcontroller, and acts on it
+
+The Funai microcontroller sends us packets of information with a two byte header:
+
+    g_funai_hdr        The first byte is alwyas the command as listed in h.module,
+                       (RET_APDU, RET_CARDOPEN etc) to indicate what the packet represents
+                       - it may be data from the Smart Card or it may represent a card event,
+                       such as a card being removed.
+    byte2              This is normally (but not always) the card slot number (01 or 02)
+
+The microcontroller will also send an ACK character (FF) in response to our commands
+which we ignore.
+
+This routine attempts to read a byte from the serial port and returns immediately
+if it hasn't received both the funai_hdr and the slot number.
+
+When the header byte is received it is stored in g_funai_header, and when
+the second byte (the slot) is received the whole packet is read and decoded.
+
+g_funai_header = NO_HEADER when we are waiting for the header byte.
+*/
+
 void
 com_ReadFunaiHeader
 (
@@ -312,7 +345,8 @@ com_ReadFunaiHeader
   {
     readbyte = serial_read_byte(iInputStream); /** Normally the slot indicator **/
     if(readbyte == -1) return;
-    switch(g_funai_header)
+    pms_debug("Funai Header: cmd %d, slot %d", g_funai_header, readbyte);
+    switch(g_funai_header)      /* Header byte from microcontroller, tells us what follows */
     {
       case RET_CARDOPEN:   com_ProcessCardOpen(readbyte);
       			   break;
@@ -546,6 +580,10 @@ com_ProcessCardOpen
 
 /*
  *  com_ProcessAPDU - Process APDU response from microcontroller
+ *
+ *
+ *  g_slot2_state records the curent state
+ *  so we know how to handle the response.
  */
 void
 com_ProcessAPDU
@@ -554,6 +592,7 @@ com_ProcessAPDU
 )
 {
   debug_printf(db, "++APDU response from slot %d\n",slot);
+  pms_debug("ProcessAPDU: slot %d, g_slot2_state %d", slot, g_slot2_state);
   g_uc_state = UC_BUSY; /** Cos the APDU response is streaming in **/
 
   if(slot == SLOT_2)
@@ -566,7 +605,7 @@ com_ProcessAPDU
       case CMD_RESPONSE_BODY:   com_IncomingResponse();
                                 break;
 
-      case CMD_CHAIN_LINK:      com_HandleChainLink();
+      case CMD_CHAIN_LINK:      com_HandleChainLink(); /* Deals with R block chain link or S block */
                                 break;
 
       default:                  com_StartReadSlot2();
@@ -683,12 +722,17 @@ com_IncomingResponse
 )
 {
   BYTE           rblock[5];
+  int len;
   /** Get NAD/PCB/LEN and remember how many more we want **/
   g_slot2_apdu.NAD = blocking_readbyte();
   g_slot2_apdu.PCB = blocking_readbyte();
   g_slot2_apdu.LEN = blocking_readbyte();
   g_slot2_state = CMD_RESPONSE_BODY;
+
   debug_printf(db, "Read NAD/PCB/LEN as &%02X, &%02X, &%02X\n",g_slot2_apdu.NAD, g_slot2_apdu.PCB, g_slot2_apdu.LEN);
+  pms_debug("Incoming Repsonse NAD &%02X, PCB &%02X, LEN &%02X",g_slot2_apdu.NAD, g_slot2_apdu.PCB, g_slot2_apdu.LEN);
+  pms_debug("  slot2_dataptr: %08X", (int)g_slot2_dataptr);
+  len=g_slot2_apdu.LEN;  /* Debug for pms_debug below */
 
   do
   {
@@ -699,9 +743,11 @@ com_IncomingResponse
   } while(g_slot2_apdu.LEN > 0);
 
   g_slot2_apdu.LRC = blocking_readbyte();
-  debug_printf(db, "Read LRC as &%02X\n", g_slot2_apdu.LRC);
+  pms_debug("  Rcvd: %s", pms_convert_hex(g_slot2_datablock, len));
+
 
   com_SendAck(); /* Ack the last response... */
+  pms_debug("  Ack sent");
 
   if((g_slot2_apdu.PCB & 0xA0) == 0x20) /** Was it a chained I-block response? **/
   {
@@ -733,8 +779,9 @@ com_IncomingResponse
 // but we are going to ignore it and always use our default size of 32 bytes which we regard as being safe
 // (the card's response will always be 32 or more). This is a TEMPORARY change and the code should
 // be re-instated when block chaining is working.
-//TEMP    IFSC_Value[SLOT_2] = *(g_slot2_dataptr-1); /** 'Know' there was only one data byte **/
-//TEMP    if(IFSC_Value[SLOT_2] > max_ifsc) IFSC_Value[SLOT_2] = max_ifsc; /** Check it's not too long **/
+   IFSC_Value[SLOT_2] = *(g_slot2_dataptr-1); /** 'Know' there was only one data byte **/
+   if(IFSC_Value[SLOT_2] > max_ifsc) IFSC_Value[SLOT_2] = max_ifsc; /** Check it's not too long **/
+
     g_uc_state = UC_IDLE;
     g_slot2_state = IDLE;
     sys_SigBroadcast(SCI_CMD2_DONE); /** Data is ready for collection **/
@@ -836,7 +883,8 @@ com_StartReadSlot2
   BYTE  block[10];
   int	retval;
 
-    debug_printf(db, "=Entered com_startreadslot2 with g_slot2_state = %d\n",g_slot2_state);
+  pms_debug("com_StartReadSlot2");
+  debug_printf(db, "=Entered com_startreadslot2 with g_slot2_state = %d\n",g_slot2_state);
   switch(g_slot2_state)
   {
     case VERIFY_SEND:

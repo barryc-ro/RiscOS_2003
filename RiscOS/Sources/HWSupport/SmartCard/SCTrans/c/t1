@@ -24,6 +24,9 @@
 #include "t1.h"
 #include "com.h"
 
+#include "pmsdebug.h"  /* Paul Skirrow's debug */
+
+
 // structures
 T1_PCKT Command;
 T1_PCKT RXPckt;
@@ -154,7 +157,27 @@ t1_ProcessByte(BYTE ch)
   return SCI_SUCCESS;
 }
 
-/**************************************************************************/
+/*      SCTransport_IssueCommand SWI
+        ----------------------------
+
+On Entry - slot           card slot number
+           cmd_hdr        pointer to command header (CLA, INS, P1, P2)
+           data_len       length of data buffer
+           data           pointer to data buffer
+           exp_len        expected length (Le) of response if required. 0 otherwise.
+           t1_extended
+
+On Exit:                  Returns pointer to error block or 0 for success
+
+
+The data_len may be greater than IFSC (Interface Field Size for Card) in which case
+it must be sent as several chained I blocks. After each I block we wait for a response
+before sending the next I block. This will happen asynchronously, and we return immediately
+(after sending the first I block to the serial port). It is therefore necessary to copy the
+data into our own
+
+*/
+
 int
 t1_StartCommand(int slot, BYTE * cmd_hdr,
 		int data_len, BYTE * data, int exp_len, int t1_extended)
@@ -315,26 +338,42 @@ SendIBlock(void)
   int err;
 
   debug_printf(db, "Entering SendIBlock()\n");
+  pms_debug("\nSendIBlock, g_slot2_state was %d", g_slot2_state);
 
   Command.NAD = 0x00;		// NAD will always be 0
   Command.PCB = 0x00;
 
   len = Command.total_len - Command.len_sent;
 
-//  if (len > card_status.IFSC) {	// chaining
+/* At one point I thought we needed to initialise our incoming data pointer here, in case we get a response,
+   but that was only because the state machine had a fault in it. It appears that we only need to do this
+   when we actually send a command, so this line isn't needed:
+  if(Command.slot == SLOT_2) g_slot2_dataptr = g_slot2_datablock;  */
+
+  pms_debug("  slot %d, len %d, IFSC %d", Command.slot, len, IFSC_Value[Command.slot]);
   if(len > IFSC_Value[Command.slot]) {
-     Command.chaining = true;	// set chaining flag to true
-//    Command.LEN = card_status.IFSC;	// set the length to maximum possible
+    Command.chaining = true;	// set chaining flag to true
     Command.LEN = IFSC_Value[Command.slot];	// set the length to maximum possible
     Command.PCB |= 0x20;
     if(Command.slot == SLOT_2) g_slot2_state = CMD_CHAIN_LINK; /* Warn slot2 that it should be expecting an R-block */
   } else {
     Command.LEN = len;		// set the length to the whole data
     Command.chaining = false;	// set chaining flag to false
-//    if(Command.slot == SLOT_2) g_slot2_state = CMD_RESPONSE_HDR; /* Warn slot2 that it should be expecting an I-block */
+
+    /* Bug fix, added in 0.41:
+       If we are sending the last I block of a chain then we expect an I block response, so if our last state
+       was CMD_CHAIN_LINK we move to CMD_RESPONSE_HDR. However we must not do this for every I block that we
+       send as we need to send I blocks when we initialise the card, send a PIN and read the URL. While doing this
+       we do not receive I block responses and we need to preserve our state */
+    if(Command.slot == SLOT_2 && g_slot2_state ==CMD_CHAIN_LINK) g_slot2_state = CMD_RESPONSE_HDR; /* Warn slot2 that it should be expecting an I-block */
+
+    pms_debug("  g_slot2_state state set to %d", g_slot2_state);
   }
 
+
   debug_printf(db, "SendIBlock(slot=%d): total_len:%d  len_sent:%d Len: %d TXSeq=%d\n", Command.slot, Command.total_len, Command.len_sent, Command.LEN,TX_SeqNo[Command.slot]);
+  pms_debug("  IBlock(slot=%d): total_len:%d  len_sent:%d Len: %d TXSeq=%d", Command.slot, Command.total_len, Command.len_sent, Command.LEN,TX_SeqNo[Command.slot]);
+
   if (TX_SeqNo[Command.slot] != 0) {
     Command.PCB |= 0x40;	// TX_SeqNo = 1
   }
@@ -509,14 +548,23 @@ SendRBlock(int seq_no, BYTE type)
   return SendBlk(&cmd);
 }
 
-/******************************************************************************/
+/*****************************************************************************
+
+     Process Received Block
+     ----------------------
+
+If response to I-Blk with chaining - need to send another I-Blk
+
+If it is response to chaining - need to construct another I-Blk to send
+
+*/
+
+
 int
 Process_RBlk(void)
 {
   int err;
 
-// if response to I-Blk with chaining - need to send another I-Blk
-// if it is response to chaining - need to construct another I-Blk to send
 
   debug_printf(db, "Entering Process_RBlk()\n");
 
@@ -665,6 +713,7 @@ SendBlk(T1_PCKT * command)
   for (i = 0; i < len; i++)
     blk[i + 3] = command->DATA[i + command->data_start];
   blk[len + 3] = command->TCK;
+  pms_debug("  Sent> %s", pms_convert_hex(blk, len+4));
 /*
   printf("Sending block: ");
   for (i = 0; i < len + 4; i++) {
