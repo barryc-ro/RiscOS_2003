@@ -84,6 +84,7 @@ ROM_OBJS =	\
  o.DNS		\
  o.Generic	\
  o.GetParam	\
+ o.Global	\
  o.Headers	\
  o.Module	\
  o.MoreInfo	\
@@ -105,6 +106,7 @@ RAM_OBJS =	\
  oSL.DNS	\
  oSL.Generic	\
  oSL.GetParam	\
+ oSL.Global	\
  oSL.Headers	\
  oSL.Module	\
  oSL.MoreInfo	\
@@ -126,6 +128,7 @@ DBG_OBJS =	\
  oSLd.DNS	\
  oSLd.Generic	\
  oSLd.GetParam	\
+ oSLd.Global	\
  oSLd.Headers	\
  oSLd.Module	\
  oSLd.MoreInfo	\
