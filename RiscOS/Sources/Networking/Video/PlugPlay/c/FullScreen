@@ -21,6 +21,7 @@
 #include <Global/SWIs.h>
 #include <Global/Services.h>
 
+#include <MPEG/TTextSubs.h>
 #include <tboxlibs/wimp.h>
 #include <tboxlibs/wimplib.h>
 #include <tboxlibs/event.h>
@@ -107,6 +108,9 @@ static bool              fullscreen_autodn  = false;
 static unsigned int      fullscreen_autodt  = 0;
 static overlay         * fullscreen_ov1     = NULL;
 static overlay         * fullscreen_ov2     = NULL;
+static bool              fullscreen_subson  = false;
+static bool              fullscreen_subsmsginprogress = false;
+static int               fullscreen_substask = 0;
 
 /* SGI demo variables */
 
@@ -192,6 +196,11 @@ _kernel_oserror * fullscreen_start(const char * url, unsigned int launcher)
 
   RetError(event_register_wimp_handler(-1, Wimp_EKeyPressed, fullscreen_keypress, NULL));
   fullscreen_keys = true;
+
+  /* Initially, subtitles are off */
+
+  fullscreen_subson = false;
+  fullscreen_subsmsginprogress = false;
 
   /* Get a new playback session and kick off playback */
 
@@ -860,6 +869,72 @@ _kernel_oserror * fullscreen_wait(unsigned int * response)
 }
 
 /**************************************************************/
+/* fullscreen_handle_subsnoton()                              */
+/*                                                            */
+/* If nobody responded to either our SubsOn or SubsOff        */
+/* messages, or if a SubsOff is correctly acknowledged, the   */
+/* user interface is the same: display a "no subtitles" sign  */
+/* and reinitialise the state machine.                        */
+/**************************************************************/
+
+void fullscreen_handle_subsnoton(void)
+{
+  fullscreen_subson = false;
+  fullscreen_subsmsginprogress = false;
+  fullscreen_substask = 0;
+  overlay_add("subsoff",
+              NULL,
+              oa_top_right,
+              200,
+              NULL,
+              fullscreen_overlay_handle);
+}
+
+/**************************************************************/
+/* fullscreen_handle_subsonack()                              */
+/*                                                            */
+/* Handles ack message from subtitle decoder to confirm       */
+/* subtitle decoding is enabled, or to report an error that   */
+/* prevented decoding from starting.                          */
+/*                                                            */
+/* Parameters: message data, task handle of subtitle decoder  */
+/**************************************************************/
+
+void fullscreen_handle_subsonack(WimpTTextAndSubsOnAckMessage *message, int sender)
+{
+  if (message->flags & Wimp_MTTextAndSubsOnAck_ErrorFlag)
+  {
+    fullscreen_substask = 0;
+    overlay_remove(NULL, fullscreen_overlay_handle);
+    overlay_add("warning",
+                message->errmess,
+                oa_middle_centre,
+                FullScreen_AutoDestructTimer,
+                NULL,
+                fullscreen_overlay_handle);
+  }
+  else
+  {
+    if (message->flags & Wimp_MTTextAndSubsOnAck_ServiceExited)
+    {
+      fullscreen_substask = 0;
+    }
+    else
+    {
+      fullscreen_subson = true;
+      fullscreen_substask = sender;
+      overlay_add("subson",
+                  NULL,
+                  oa_top_right,
+                  200,
+                  NULL,
+                  fullscreen_overlay_handle);
+    }
+  }
+  fullscreen_subsmsginprogress = false;
+}
+
+/**************************************************************/
 /* fullscreen_overlay_callback()                              */
 /*                                                            */
 /* An overlay callback function set up from the key handler   */
@@ -1008,6 +1083,48 @@ static int fullscreen_keypress(int eventcode, WimpPollBlock * block, IdBlock * i
     {
       fullscreen_shutdown();
       return 1;
+    }
+    break;
+
+    /* Toggle subtitling */
+
+    case 'D':
+    case 'd':
+    {
+      if (fullscreen_subsmsginprogress == false)
+      {
+        WimpMessage msg;
+        memset(&msg, 0, sizeof(msg));
+        if (fullscreen_subson)
+        {
+          WimpTTextAndSubsOffMessage *msgdata = (WimpTTextAndSubsOffMessage *) &msg.data;
+          msg.hdr.size = sizeof (msg.hdr) + sizeof (*msgdata);
+          msg.hdr.your_ref = 0;
+          msg.hdr.action_code = Wimp_MTTextAndSubsOff;
+          msgdata->flags = 0;
+          msgdata->videoctrl_client_handle = fullscreen_session->handle;
+          wimp_send_message(Wimp_EUserMessageRecorded, &msg, fullscreen_substask, 0, NULL);
+        }
+        else
+        {
+          WimpTTextAndSubsOnMessage *msgdata = (WimpTTextAndSubsOnMessage *) &msg.data;
+          char *language = getenv("MPEG$SubtitleLanguage");
+          if (language == NULL)
+          {
+            language = "eng";
+          }
+          msg.hdr.size = sizeof (msg.hdr) + sizeof (*msgdata);
+          msg.hdr.your_ref = 0;
+          msg.hdr.action_code = Wimp_MTTextAndSubsOn;
+          msgdata->flags = Wimp_MTTextAndSubsOn_ReasonCode_Subtitles;
+          msgdata->videoctrl_client_handle = fullscreen_session->handle;
+          strncpy(msgdata->iso639lang, language, 3);
+          msgdata->iso639lang[3] = 0;
+          msgdata->select.subtitles = dvb_subtitles_normal;
+          wimp_send_message(Wimp_EUserMessageRecorded, &msg, 0, 0, NULL);
+        }
+        fullscreen_subsmsginprogress = true;
+      }
     }
     break;
 

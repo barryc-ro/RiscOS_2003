@@ -46,7 +46,7 @@ RESAPP		= <Resource$Dir>.Apps.${APP}
 #
 
 LIBDIR		= <Lib$Dir>
-MKDIR		= cdir
+MKDIR		= do mkdir -p
 AS		= objasm
 CC		= cc
 CMHG		= cmhg
@@ -58,6 +58,7 @@ SQUEEZE		= squeeze
 WIPE		= -wipe
 XWIPE		= x wipe
 AWK		= do awk
+NOP		= |
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
 AFLAGSRAMZ	= ${AFLAGS} -PD "REMOVE_RAMLOAD_CHECK SETL {TRUE}" -PD "UsePathForHelpMessages SETL {TRUE}"
@@ -381,6 +382,7 @@ ramd: ${MODULE}D
 
 install_common: ${FILES}
 	@echo
+	${MKDIR} ${INSTDIR}
 	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}n
 	${XCP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
 	${XCP} ${LDIR}.!Sprites23		${INSTDIR}.!Sprites23		${CPFLAGS}n
@@ -393,47 +395,59 @@ install_common: ${FILES}
 	${XCP} ${LDIR}.About			${INSTDIR}.About		${CPFLAGS}n
 	${XWIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 
-install: install_common
+install: install_${TYPE}
+	${NOP}
+
+install_: install_app
+	${NOP}
+
+install_app: install_common
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
 	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
 	${CP} ${LDIR}.!Run			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
-	@echo ${COMPONENT}: Application installed to ${INSTDIR}
+	@echo ${COMPONENT}: Application (absolute !RunImage) installed to ${INSTDIR}
 
-installd: install_common
+install_mod:
+	${MKDIR} ${INSTDIR}
+	${CP} ${TARGET}				${INSTDIR}.${COMPONENT}		${CPFLAGS}~n
+	@echo
+	@echo ${COMPONENT}: Module installed to ${INSTDIR}
+
+install_debug: install_common
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
 	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
 	${CP} ${LDIR}.!RunD			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
-	@echo ${COMPONENT}: Debug application installed to ${INSTDIR}
+	@echo ${COMPONENT}: Debug application (absolute !RunImage) installed to ${INSTDIR}
 
-installs: install_common
+install_sgi: install_common
 	${XWIPE} ${INSTDIR}.Sprites	${WFLAGS}
 	${CP} ${LDIR}.SpritesSGI		${INSTDIR}.Sprites		${CPFLAGS}~n
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
 	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
 	${CP} ${LDIR}.!Run			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
-	@echo ${COMPONENT}: SGI demo application installed to ${INSTDIR}
+	@echo ${COMPONENT}: SGI demo application (absolute !RunImage) installed to ${INSTDIR}
 
 install_ram: install_common
 	${CP} ${TARGET}				${INSTDIR}.${APP}		${CPFLAGS}~n
 	${CP} ${LDIR}.RAM.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
 	${CP} ${LDIR}.RAM.!Run			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
-	@echo ${COMPONENT}: RAM module installed to ${INSTDIR}
+	@echo ${COMPONENT}: Application (module !RunImage) installed to ${INSTDIR}
 
-install_ramd: install_common
+install_ramdebug: install_common
 	${CP} ${TARGET}				${INSTDIR}.${APP}		${CPFLAGS}~n
 	${CP} ${LDIR}.RAM.!Boot			${INSTDIR}.!Boot		${CPFLAGS}~n
 	${CP} ${LDIR}.RAM.!RunD			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
-	@echo ${COMPONENT}: RAM debug module installed to ${INSTDIR}
+	@echo ${COMPONENT}: Application (module !RunImage) installed to ${INSTDIR}
 
 install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo
-	@echo ${COMPONENT}: ROM Module installed to ${INSTDIR}
+	@echo ${COMPONENT}: ROM module installed to ${INSTDIR}
 
 resources:
 	${MKDIR} ${RESDIR}
