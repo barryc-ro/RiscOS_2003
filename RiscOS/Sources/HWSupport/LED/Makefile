@@ -58,7 +58,7 @@ RAMTDIR   = rm.${MACHINE}
 RAMTARGET = ${RAMTDIR}.${COMPONENT}
 LINKEDDIR = linked.${MACHINE}
 MAPDIR    = map.${MACHINE}
-OBJS      = ${OM}.header ${OM}.module ${OM}.veneer ${OM}.led
+OBJS      = ${OM}.header ${OM}.module ${OM}.veneer ${OM}.led ${OM}.msgfile 
 EXPORTS   = ${EXP_HDR}.${COMPONENT}
 
 .SUFFIXES: .${OM}
@@ -97,7 +97,9 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-#        @echo ${COMPONENT}: resource files copied
+        ${MKDIR} ${RESDIR}.LED
+        ${CP} Resources.${LOCALE}.${UserIF}.InitState         ${RESDIR}.LED.InitState       ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -174,29 +176,6 @@ oOmega.led:	h.led
 oOmega.led:	h.veneer
 oOmega.led:	h.iomd
 oOmega.led:	h.error
-oBoca.module:	c.module
-oBoca.module:	C:h.kernel
-oBoca.module:	C:h.swis
-oBoca.module:	h.module
-oBoca.module:	h.led
-oBoca.module:	h.error
-oBoca.veneer: s.veneer
-oBoca.veneer: Hdr:ListOpts
-oBoca.veneer: Hdr:Macros
-oBoca.veneer: Hdr:System
-oBoca.veneer: Hdr:SWIs
-oBoca.veneer: Hdr:CPU.Generic26
-oBoca.veneer: Hdr:IO.GenericIO
-oBoca.veneer: Hdr:RISCOS
-oBoca.veneer: Hdr:ModHand
-oBoca.led:	c.led
-oBoca.led:	C:h.kernel
-oBoca.led:	C:h.swis
-oBoca.led:	h.module
-oBoca.led:	h.led
-oBoca.led:	h.veneer
-oBoca.led:	h.iomd
-oBoca.led:	h.error
 oFunai.module:	c.module
 oFunai.module:	C:h.kernel
 oFunai.module:	C:h.swis
@@ -226,3 +205,34 @@ oFunai.led:	h.led
 oFunai.led:	h.veneer
 oFunai.led:	h.iomd
 oFunai.led:	h.error
+oBoca.module:	c.module
+oBoca.module:	C:h.kernel
+oBoca.module:	C:h.swis
+oBoca.module:	h.module
+oBoca.module:	h.led
+oBoca.module:	h.error
+oBoca.module:	h.msgfile
+oBoca.veneer: s.veneer
+oBoca.veneer: Hdr:ListOpts
+oBoca.veneer: Hdr:Macros
+oBoca.veneer: Hdr:System
+oBoca.veneer: Hdr:SWIs
+oBoca.veneer: Hdr:CPU.Generic26
+oBoca.veneer: Hdr:IO.GenericIO
+oBoca.veneer: Hdr:RISCOS
+oBoca.veneer: Hdr:ModHand
+oBoca.led:	c.led
+oBoca.led:	C:h.kernel
+oBoca.led:	C:h.swis
+oBoca.led:	h.module
+oBoca.led:	h.led
+oBoca.led:	h.veneer
+oBoca.led:	h.iomd
+oBoca.led:	h.error
+oBoca.led:	h.msgfile
+oBoca.msgfile:	c.msgfile
+oBoca.msgfile:	C:h.kernel
+oBoca.msgfile:	C:h.swis
+oBoca.msgfile:	h.msgfile
+oBoca.msgfile:	h.error
+oBoca.msgfile:	h.trace
