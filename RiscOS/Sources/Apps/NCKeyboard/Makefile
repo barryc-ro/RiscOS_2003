@@ -18,11 +18,13 @@
 #			used to correctly recreate o, oz, etc. Some
 #			aesthetic formatting changes done in passing.
 # 29-Oct-98	ADH	-DFUNAI3_POLL removed from DFLAGS.
-# 12-Nov-98     SBF     Removed -DFUNAI3; define this in the build components
-#                       file instead using ${BUILDFLAGS}
-# 08-Oct-99     SNB     Added support to build STB Baseline style NCKeyboard.
-#                       This is a ram module plus a !NCKeyboard psuedo-app.
-#                       Builds if OPTIONS=STB passed into makefile.
+# 12-Nov-98	SBF	Removed -DFUNAI3; define this in the build components
+#			file instead using ${BUILDFLAGS}
+# 08-Oct-99	SNB	Added support to build STB Baseline style NCKeyboard.
+#			This is a ram module plus a !NCKeyboard psuedo-app.
+#			Builds if OPTIONS=STB passed into makefile.
+# 26-Oct-99	SBF	Changed conditionals to use "IfThere" to suppress
+#			bogus build errors
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -161,8 +163,10 @@ resources:
 	${CP} LocalUserIFRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
 	${CP} LocalUserIFRes:!RunROM ${RESAPP}.!Run ${CPFLAGS}
 	${CP} LocalUserIFRes:Messages ${RESAPP}.Messages ${CPFLAGS}
-       -${CP} LocalUserIFRes:Sprites ${RESAPP}.Sprites ${CPFLAGS}
-       -${CP} LocalUserIFRes:TVSprs ${RESAPP}.TVSprs ${CPFLAGS}
+	IfThere LocalUserIFRes:Sprites Then \
+		${CP} LocalUserIFRes:Sprites ${RESAPP}.Sprites ${CPFLAGS}
+	IfThere LocalUserIFRes:TVSprs Then \
+		${CP} LocalUserIFRes:TVSprs ${RESAPP}.TVSprs ${CPFLAGS}
 	${CP} LocalUserIFRes:Res ${RESAPP}.Res ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied
 	@echo
@@ -186,9 +190,12 @@ install_: ${APP}
 	${CP} LocalUserIFRes:!BootROM ${INSTDIR}.!Boot ${CPFLAGS}
 	${CP} LocalUserIFRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
 	${CP} LocalUserIFRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
-       -${CP} LocalUserIFRes:Graphics ${INSTDIR}.Sprites ${CPFLAGS}
-       -${CP} LocalUserIFRes:Sprites ${INSTDIR}.Sprites ${CPFLAGS}
-       -${CP} LocalUserIFRes:TVSprs ${INSTDIR}.TVSprs ${CPFLAGS}
+	IfThere LocalUserIFRes:Graphics Then \
+		${CP} LocalUserIFRes:Graphics ${INSTDIR}.Sprites ${CPFLAGS}
+	IfThere LocalUserIFRes:Sprites Then \
+		${CP} LocalUserIFRes:Sprites ${INSTDIR}.Sprites ${CPFLAGS}
+	IfThere LocalUserIFRes:TVSprs Then \
+		${CP} LocalUserIFRes:TVSprs ${INSTDIR}.TVSprs ${CPFLAGS}
 	${CP} LocalUserIFRes:Res ${INSTDIR}.Res ${CPFLAGS}
 	${CP} ${APP} ${INSTDIR}.!RunImage ${CPFLAGS}
 
