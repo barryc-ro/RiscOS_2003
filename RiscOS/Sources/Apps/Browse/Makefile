@@ -106,6 +106,8 @@ HTMLLIB		= HTMLLib:o.HTMLLib
 IMAGELIB	= ImageLib:o.ImageLib
 PNGLIB		= ImageLib:o.libpng-lib
 PNGLIBZ		= ImageLib:o.libpng-lzm
+JPEGLIB		= ImageLib:o.libjpeg
+JPEGLIBZ	= ImageLib:o.libjpeg-zm
 ZLIB		= ImageLib:o.zlib_lib
 URILIB		= Libraries.URILib.o.URILib
 FLEXLIB		= tbox:o.flexlib
@@ -125,6 +127,7 @@ LIBSM = \
  ${INETLIB}zm \
  ${IMAGELIB}zm \
  ${PNGLIBZ} \
+ ${JPEGLIBZ} \
  ${ZLIB}zm \
  ${UNICODELIB}z
 
@@ -139,6 +142,7 @@ LIBS = \
  ${INETLIB} \
  ${IMAGELIB} \
  ${PNGLIB} \
+ ${JPEGLIB} \
  ${ZLIB} \
  ${UNICODELIB}
 
@@ -153,6 +157,7 @@ LIBSD = \
  ${INETLIB} \
  ${IMAGELIB} \
  ${PNGLIB} \
+ ${JPEGLIB} \
  ${ZLIB} \
  ${UNICODELIB}
 
@@ -210,6 +215,7 @@ OBJS = \
  o.JavaScript		\
  o.LineOne		\
  o.Main			\
+ o.Markers		\
  o.Memory		\
  o.Menus		\
  o.Meta			\
@@ -269,6 +275,7 @@ OBJSZ = \
  oz.JavaScript		\
  oz.LineOne		\
  oz.Main		\
+ oz.Markers		\
  oz.Memory		\
  oz.Menus		\
  oz.Meta		\
@@ -328,6 +335,7 @@ OBJSD = \
  od.JavaScript		\
  od.LineOne		\
  od.Main		\
+ od.Markers		\
  od.Memory		\
  od.Menus		\
  od.Meta		\
@@ -389,6 +397,7 @@ OBJSDZ = \
  odz.JavaScript		\
  odz.LineOne		\
  odz.Main		\
+ odz.Markers		\
  odz.Memory		\
  odz.Menus		\
  odz.Meta		\
@@ -449,6 +458,7 @@ OBJS_SURF = \
  o_surf.JavaScript	\
  o_surf.LineOne		\
  o_surf.Main		\
+ o_surf.Markers		\
  o_surf.Memory		\
  o_surf.Menus		\
  o_surf.Meta		\
@@ -507,6 +517,7 @@ OBJSD_SURF = \
  od_surf.JavaScript	\
  od_surf.LineOne	\
  od_surf.Main		\
+ od_surf.Markers	\
  od_surf.Memory		\
  od_surf.Menus		\
  od_surf.Meta		\
@@ -568,6 +579,7 @@ OBJS_ITALK = \
  o_italk.JavaScript	\
  o_italk.LineOne	\
  o_italk.Main		\
+ o_italk.Markers	\
  o_italk.Memory		\
  o_italk.Menus		\
  o_italk.Meta		\
@@ -627,6 +639,7 @@ OBJSD_ITALK = \
  od_italk.JavaScript	\
  od_italk.LineOne	\
  od_italk.Main		\
+ od_italk.Markers	\
  od_italk.Memory	\
  od_italk.Menus		\
  od_italk.Meta		\
