@@ -8,6 +8,7 @@
 # 25-May-94  AMcC         Created.
 # 23-Aug-94  AMcC         Updated to build International Version (from Opal)
 # 01-Sep-98  KJB          Changed for new keygen tool
+# 21-Nov-00  SBF          Added support for StripDepnd
 #
 
 #
@@ -20,6 +21,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = -stripdepnd
 CCFLAGS = -c -depend !Depend ${THROWBACK} -IC:
 ASFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit ${KBD} -To $@ -From
 LDFLAGS = -bin -o $@
@@ -62,6 +64,7 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} o ${WFLAGS}
         ${WIPE} s ${WFLAGS}
+        ${STRIP}
         ${RM} ${TARGET}
 	${RM} keygen
 	${RM} keyconvert
