@@ -65,7 +65,7 @@ COMPONENT = AudSwitch
 TARGET    = aof.${COMPONENT}
 RMTARGET  = rm.${COMPONENT}
 DBGTARGET = rm.d${COMPONENT}
-EXPORTS   =
+EXPORTS   = ${EXP_C_H}.${COMPONENT}
 DIRS      = o._dirs
 
 OBJS      =  \
