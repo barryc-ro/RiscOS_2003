@@ -49,7 +49,7 @@ WFLAGS = ~c~v
 #
 # Include files
 #
-INCLUDES=       -ITCPIPLibs:,C:
+INCLUDES=       -ITCPIPLibs:,C:,<Lib$Dir>.DebugLib.
 
 #
 # Libraries
@@ -59,9 +59,10 @@ ROMCSTUBS       = RISCOSLIB:o.romcstubs
 ABSSYM          = RISC_OSLib:o.AbsSym
 INETLIB         = TCPIPLibs:o.inetlibzm
 SOCKLIB         = TCPIPLibs:o.socklibzm
+DEBUGLIB        = <Lib$Dir>.DebugLib.o.DebugLibzm
 
 DEPEND          = -depend !Depend
-DBGFLAGS        = -DTRACE
+DBGFLAGS        = -DTRACE -DDEBUGLIB
 DEFINES         = -DRISCOS -DCOMPAT_INET4 -DRISCOS_ATM25 -DRISCOS_MPEG
 
 ASFLAGS         = ${DEPEND} ${THROWBACK}
@@ -139,19 +140,19 @@ export: ${EXPORTS}
 #
 # Targets
 #
-${RAM_MODULE}:  ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+${RAM_MODULE}:  ${RAM_OBJS} ${CLIB} ${DEBUGLIB} ${SOCKLIB} ${INETLIB}
         ${MKDIR} rm
-        $(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+        $(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${DEBUGLIB} ${SOCKLIB} ${INETLIB}
         ${MODSQZ} $@
         Access $@ RW/R
 
-${ROM_MODULE}:  ${ROM_OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
+${ROM_MODULE}:  ${ROM_OBJS} ${ROMCSTUBS} ${DEBUGLIB ${SOCKLIB} ${INETLIB}}
         ${MKDIR} aof
-        $(LD) -o $@ -aof ${ROM_OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
+        $(LD) -o $@ -aof ${ROM_OBJS} ${ROMCSTUBS} ${DEBUGLIB ${SOCKLIB} ${INETLIB}}
 
-${DBG_MODULE}:  ${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+${DBG_MODULE}:  ${DBG_OBJS} ${CLIB} ${DEBUGLIB ${SOCKLIB} ${INETLIB}}
         ${MKDIR} rm
-        $(LD) -o $@ ${LDFLAGS} ${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+        $(LD) -o $@ ${LDFLAGS} ${DBG_OBJS} ${CLIB} ${DEBUGLIB} ${SOCKLIB} ${INETLIB}
         Access $@ RW/R
 
 #
