@@ -127,10 +127,9 @@ od.protocol protocol.o: URLHdr.h
 all: ${RAM_MODULE} o.dirs
 	@echo ${COMPONENT}: Module built (RAM)
 
-install: ${RAM_MODULE}
-	${MKDIR} ${INSTDIR}.310.Modules.Networking
-	${MKDIR} ${INSTDIR}.310.Modules.Networking.URL
-        ${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.Networking.URL.${COMPONENT}
+install: ${RAM_MODULE} o.dirs
+	${MKDIR} ${INSTDIR}
+        ${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT}
 	@echo ${COMPONENT}: Module installed (Disc)
 
 ramtrace: ${DBG_MODULE} o.dirs
