@@ -1,0 +1,191 @@
+/*
+ * QuCommon.c - Queue routines common to both SendQ and PrintQ
+ *
+ * R C Manby
+ *
+ * Started 30 January 1998
+ *
+ */
+
+//#define DEBUGLIB 1
+
+#include "BuildFlags.h"
+#include "StdTypes.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "wimp.h"
+#include "wimplib.h"
+#include "swis.h"
+
+#include "PageList.h"
+#include "AddrBookIF.h"
+#include "QuStruct.h"
+#include "QuCommon.h"
+#include "DebugLib.h"
+
+#include "FileOps.h"
+
+
+#if 1
+/*
+ * High Water Mark Check
+ *
+ * Returns
+ *   1 OK - Below limits
+ *   2 Trigger streaming send
+ *   3 Abort receive - out of memory
+ */
+extern int HWM_Check(void)
+{
+    int used, size, percentage;
+    _kernel_swi_regs regs;
+    char *disc = "Ram:$";
+
+    regs.r[0] = 49;
+    regs.r[1] = (int)disc;
+    _kernel_swi(OS_FSControl, &regs, &regs);
+    size = regs.r[2];
+    used = (size - regs.r[0]);
+    percentage = (int) (((float)used / (float)size) * 100);
+  
+    dprintf((NULL, "free = %d",(size-used)));
+
+    /* less than 50% used - OK */
+    if (percentage < 50)
+        return(1);
+
+    /* only 200k left - abort! */  
+    if ((size - used)< 204800)
+        return(3);
+
+    /* greater than 50% used but more than 200K left - start streaming */
+    return(2);
+}
+#else
+/* dummy version */
+extern int HWM_Check(void)
+{
+	return(1);
+}
+#endif
+
+
+/*
+ * Returns 0=OK
+ *         non-zero for error
+ */
+
+extern BOOL QuCommon_Page_Complete(Document document, unsigned int pageNum, PageClasses pageClass, PageTypes pageType, int fileType)
+{
+	PageRangeList current;
+
+    set_filetypeDN(document->Directory, pageNum, fileType);
+
+    {
+        char current_page_leafname[32];
+        _kernel_oserror *error = NULL;
+        int objecttype, filelength, filetype;
+
+        sprintf(current_page_leafname, "%d", pageNum);
+
+        if ((error = osfile_ReadCatInfoDL(document->Directory, current_page_leafname, &objecttype, &filelength, &filetype)) != NULL)
+        {
+            document->TotalSize += filelength;
+
+            if (document->BiggestPage < filelength)
+                document->BiggestPage = filelength;
+        }                
+    }
+
+	document->ScanCount += 1;
+
+    /* if the new page is exactly the same class & type as the old, extend the PageRange already in the PageList */  
+	if (document->PageList)
+	{
+		/* we have one or more PageRange in the PageList */
+    	current = document->PageList;	/* last record in the list */
+
+   		if ((current->PageClass == pageClass) &&
+   		    (current->PageType == pageType) &&
+		    (current->FileType == fileType)
+		   )
+        {
+           	/* same type of page as the last one, so extend the range */
+           	current->hiPage = document->ScanCount;
+            return(0);
+        }
+    }
+
+	/* either PageList is empty, or new page is a different type to the last one, so start a new PageRange */
+	current = malloc(sizeof(PageRange));
+	if (current)
+	{
+		/* fill in new record */
+
+		current->PageClass = pageClass;
+        current->PageType = pageType;
+        current->FileType = fileType;
+
+        current->loPage = document->ScanCount;
+        current->hiPage = document->ScanCount;
+        current->open_ended = FALSE;
+
+		/* add the new record to the end of the list */
+		if (document->PageList == NULL)
+			current->next_pagerange = current;	/* first and only page range, so point our next field at ourselves */	
+		else
+		{
+			document->PageList->open_ended = FALSE;	/* close old last entry */
+
+			current->next_pagerange = document->PageList->next_pagerange;	/* point to head of list */
+			document->PageList->next_pagerange = current;					/* old last item becomes last-but-one (we are last) */
+		}	
+        document->PageList = current;	/* point to tail of list, our next_pagerange field points to the head of the list */
+
+        return(0);
+	}
+
+	/* error: no memory to create a new PageRange record */
+	/* the new page has been counted, but we can't recover its type */
+	return(1);	/* Error: out of memory */
+}
+
+
+extern BOOL QuCommon_GetClassAndType(Document document, unsigned int pageNum, PageClasses *pPageClass, PageTypes *pPageType, int *pFileType)
+{
+	if (document)
+	{
+		if (document->PageList)
+		{
+			PageRangeList current = document->PageList;
+			do
+				{
+					current = current->next_pagerange;	/* point to first/next entry */
+
+					if ((current->loPage <= pageNum) && (pageNum <= current->hiPage))
+					{
+						/* pageNum within current range, so return class & type */
+						*pPageClass = current->PageClass;
+						*pPageType  = current->PageType;
+						*pFileType  = current->FileType;
+
+						return(0);	/* OK */
+					}
+				}
+			while (current != document->PageList);
+		}
+    }
+
+	/*>>>what should we return???*/
+	*pPageClass = PageClass_TIFF;
+	*pPageType  = PageType_TIFF_2DMMR;
+	*pFileType  = FILETYPE_TIFF;
+	    
+    return(1);	/* Error: pageNum not in PageList */
+}
+
+
+/* end of QuCommon.c */
