@@ -211,8 +211,78 @@ _kernel_oserror *process_nfsname
 
         authorisation = authunix_create( machname, ares->uid, ares->gid, len, gp );
 
-        return new_user( &current_user, username, current_nameing_host, (int)ares->uid, (int)ares->gid, authorisation,
+        err = new_user( &current_user, username, current_nameing_host, (int)ares->uid, (int)ares->gid, authorisation,
                 len, (gid3 *) gp, ares->def_umask);
+
+        if ( err )
+                return err;
+
+        memset( current_user->gnames, 0, sizeof current_user->gnames );
+
+        if (version == PCNFSDV2)
+        {
+                /* PCNFS version 2 - attempt to find the group names; ignore errors */
+                v2_mapid_results *res;
+                mapreq_res gids;
+                v2_mapid_args args;
+                static mapreq_arg_item items[NGRPS+1];
+                int i;
+
+                if ( get_pcnfsd_client_for_host( &pcnfsd_client, current_nameing_host, version ) )
+                        return NULL;
+
+                args.cm = "";
+                args.req_list = items;
+                /* The irregular loop termination condition is because we are looking up the
+                 * primary GID as well as the supplementary GIDs
+                 */
+                for (i = 0; i <= NGRPS; ++i) {
+                        if (i <= len)
+                        {
+                                items[i].mapreq_next = items + i + 1;
+                                items[i].req = MAP_REQ_GID;
+                                items[i].name = "";
+                                if ( i == 0 )
+                                        items[i].id = (int) ares->gid;
+                                else
+                                        items[i].id = (int) gp[i - 1];
+                        }
+                        else
+                        {
+                                items[i-1].mapreq_next = NULL;
+                        }
+                }
+
+                res = pcnfsd2_mapid_2( &args, pcnfsd_client->client );
+
+                release_client( pcnfsd_client );
+
+                if ( res ==  NULL)
+                        return NULL;
+
+                for (i = 0, gids = res->res_list; gids != NULL && i <= NGRPS; ++i)
+                {
+                        if ( gids->stat == MAP_RES_OK )
+                        {
+                                strncpy( current_user->gnames[i].name, gids->name, sizeof current_user->gnames[i].name );
+                                if ( i == 0 )
+                                {
+                                        dprintf(("", "Primary GID %d -> %s\n", ares->gid, gids->name));
+                                }
+                                else
+                                {
+                                        dprintf(("", "Supplementary GID %ld -> %s\n", gp[i-1], gids->name));
+                                }
+
+                        }
+
+                        gids = gids->mapreq_next;
+                }
+
+                xdr_free( xdr_v2_mapid_results, res );
+        }
+
+        return NULL;
 }
 
 /*
@@ -1066,15 +1136,25 @@ _kernel_oserror *command_nfsinfo
                 link = link->forwards )
         {
                 user = Link_Wrapper( link );
-                err = lightweight_printf( "name=<%0s>, uid=<%1d>, gid=<%2d>, default umask=<%4o> usage = %3d\n",
-                        user->name, user->uid, user->gid, user->usage_count, user->umask & 0777 );
+                err = lightweight_printf( "name=<%0s>, uid=<%1d>, group=<%5s>, gid=<%2d>, default umask=<%4o> usage = %3d\n",
+                        user->name, user->uid, user->gid, user->usage_count, user->umask & 0777, user->gnames[0].name );
                 if (!err && user->len > 0)
                 {
                         int i;
                         lightweight_printf("  groups:");
                         for (i = 0; i < user->len; ++i)
                         {
-                                lightweight_printf(" <%0d>", user->gids[i]);
+                                if (i)
+                                        lightweight_printf( "," );
+
+                                if (user->gnames[i+1].name[0])
+                                {
+                                        lightweight_printf( " %1s <%0d>", user->gids[i], user->gnames[i+1].name );
+                                }
+                                else
+                                {
+                                        lightweight_printf( " <%0d>", user->gids[i] );
+                                }
                         }
                         lightweight_printf("\n");
                 }
