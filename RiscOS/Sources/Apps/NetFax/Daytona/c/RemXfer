@@ -65,8 +65,18 @@
  * 1998-05-26: BAL
  * PAN-02022: creation of delete and print lists is now done right after POP3
  * first connects.  Fixed bug in delete_next_message - wasn't resetting to
- * start of list after creating interator (how did it ever work at all, I
+ * start of list after creating iterator (how did it ever work at all, I
  * wonder?).
+ *
+ * 1998-06-08: BAL
+ * Added MemCheck support.
+ *
+ * Fixed high watermark bug - not all memory was being released after a
+ * successful download session (was on error though).
+ *
+ * Removed free_pop3_resources and wipe_pop3_directory calls from places where
+ * error is first detected into common exit state for all errors.  (Did same
+ * for 'normal' exit path just to be safe).
  */
 
 
@@ -83,6 +93,7 @@
                     * Now required for creation and removal of dynamic areas and POP3 directory as well
                     */
 
+#include "MemCheck/MemCheck.h"
 
 #include "NetFax/NFELib/NFELib.h"
 #if SUPPORT_EMAIL
@@ -184,12 +195,12 @@ typedef struct
 
     unsigned int  space_used;
     unsigned int  space_reserved;
+
+    unsigned int  reconnect;
 } pop3_data_t;
 
 typedef struct
 {
-    list_item_handle  item_handle;
-
     unsigned int  pid;
     message_t **  message;
     int           index;
@@ -1740,7 +1751,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                                         &pop3.uid_list_areanum);
                     if (pop3.uid_list == NULL)
                     {
-                        free_pop3_resources ();
                         Pop3IF_ReleaseData();
                         Pop3IF_Disconnect();
                         nextstate = INCOMING_9c;
@@ -1764,14 +1774,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
             {
                 case P3_RX_LIST_UNIQUEIDS_CALL_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
                     break;
 
                 case P3_RX_LIST_UNIQUEIDS_PROCESS_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_ReleaseData();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
@@ -1802,14 +1810,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
             {
                 case P3_RX_DELETE_MESSAGE_CALL_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
                     break;
 
                 case P3_RX_DELETE_MESSAGE_PROCESS_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_ReleaseData();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
@@ -1869,7 +1875,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 case P3_RX_LIST_MESSAGES_CALL_ERROR:
                 {
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
                     break;
@@ -1878,7 +1883,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 case P3_RX_LIST_MESSAGES_PROCESS_ERROR:
                 {
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_ReleaseData();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
@@ -1899,7 +1903,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     {
 /*>>>                       StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_NO_MEMORY, NULL);
 */
-                        free_pop3_resources ();
                         Pop3IF_ReleaseData();
                         Pop3IF_Disconnect();
                         nextstate = INCOMING_9c;
@@ -1926,14 +1929,12 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
             {
                 case P3_RX_GET_HEADER_CALL_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
                     break;
 
                 case P3_RX_GET_HEADER_PROCESS_ERROR:
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_ReleaseData();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
@@ -1953,7 +1954,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                          * so abandon the download.
                          */
                         RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                        free_pop3_resources ();
                         Pop3IF_Disconnect();
                         nextstate = INCOMING_9c;
                     }
@@ -1972,7 +1972,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         {
     /*>>>                        StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_NO_MEMORY, NULL);
     */
-                            free_pop3_resources ();
                             Pop3IF_Disconnect();
                             nextstate = INCOMING_9c;
                             break;
@@ -1993,9 +1992,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 
                     pop3.retry = 0;
-                    /* It is absolutely vital that the header structure is cleared before each message fetch
-                     * otherwise data from the previous fetch could be picked up.
-                     */
                     free_header (&pop3.message_header);
 
                     StateKicker_SendMessage (MimeDecode_StateMachine, RX_MD_DECODE_HDR, &send_message);
@@ -2020,7 +2016,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 case MD_RX_DECODE_HDR_ERROR:
                 {
                     RemXfer_ForwardError(PrintQ_MessageHandler, RX_PQ_ERROR, messageNumber, messageData);   /* forward the error to PrintQ */
-                    free_pop3_resources ();
                     Pop3IF_Disconnect();
                     nextstate = INCOMING_9c;
                     break;
@@ -2151,7 +2146,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                             send_message->data.os_error.err.errnum = 0;
                             strcpy (send_message->data.os_error.err.errmess, "Not enough memory to scan mailbox.");
 #endif
-                            free_pop3_resources ();
                             Pop3IF_Disconnect();
                             nextstate = INCOMING_9c;
                             break;
@@ -2204,8 +2198,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                      * the PrintQ just wants us to not give it any more stuff, so we just clean
                      * up - anything we throw away will be got in the next session.
                      */
-                    free_pop3_resources ();
-                    wipe_pop3_directory ();
                     finish_download_session ();
                     nextstate = INCOMING_8o;
                     break;
@@ -2232,9 +2224,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                                                  RX_PQ_DOCUMENT_COMPLETE,
                                                  NULL);
 
-                        free_pop3_resources ();
                         Pop3IF_Disconnect();
-                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                         break;
                     }
@@ -2255,9 +2245,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         StateKicker_SendMessage (PrintQ_MessageHandler,
                                                  RX_PQ_DOCUMENT_COMPLETE,
                                                  NULL);
-                        free_pop3_resources ();
                         Pop3IF_Disconnect();
-                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                         break;
                     }
@@ -2285,9 +2273,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                             StateKicker_SendMessage (PrintQ_MessageHandler,
                                                      RX_PQ_DOCUMENT_COMPLETE,
                                                      NULL);
-                            free_pop3_resources ();
                             Pop3IF_Disconnect();
-                            wipe_pop3_directory ();
                             nextstate = INCOMING_9c;
                             break;
                         }
@@ -2331,9 +2317,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         StateKicker_SendMessage (PrintQ_MessageHandler,
                                                  RX_PQ_DOCUMENT_COMPLETE,
                                                  NULL);
-                        free_pop3_resources ();
                         Pop3IF_Disconnect();
-                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                     }
                     else
@@ -2357,9 +2341,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     StateKicker_SendMessage (PrintQ_MessageHandler,
                                              RX_PQ_DOCUMENT_COMPLETE,
                                              NULL);
-                    free_pop3_resources ();
                     Pop3IF_Disconnect();
-                    wipe_pop3_directory ();
                     nextstate = INCOMING_9c;
                     break;
 
@@ -2369,10 +2351,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     StateKicker_SendMessage (PrintQ_MessageHandler,
                                              RX_PQ_DOCUMENT_COMPLETE,
                                              NULL);
-                    free_pop3_resources ();
                     Pop3IF_ReleaseData();
                     Pop3IF_Disconnect();
-                    wipe_pop3_directory ();
                     nextstate = INCOMING_9c;
                     break;
 
@@ -2388,9 +2368,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         StateKicker_SendMessage (PrintQ_MessageHandler,
                                                  RX_PQ_DOCUMENT_COMPLETE,
                                                  NULL);
-                        free_pop3_resources ();
                         Pop3IF_Disconnect();
-                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                     }
                     else
@@ -2416,9 +2394,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         StateKicker_SendMessage (PrintQ_MessageHandler,
                                                  RX_PQ_DOCUMENT_COMPLETE,
                                                  NULL);
-                        free_pop3_resources ();
                         Pop3IF_Disconnect();
-                        wipe_pop3_directory ();
                         nextstate = INCOMING_9c;
                     }
                     else
@@ -2483,9 +2459,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     StateKicker_SendMessage (PrintQ_MessageHandler,
                                              RX_PQ_DOCUMENT_COMPLETE,
                                              NULL);
-                    free_pop3_resources ();
                     Pop3IF_Disconnect();
-                    wipe_pop3_directory ();
                     nextstate = INCOMING_9c;
                     break;
                 }
@@ -2607,9 +2581,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     StateKicker_SendMessage (PrintQ_MessageHandler,
                                              RX_PQ_DOCUMENT_COMPLETE,
                                              NULL);
-                    free_pop3_resources ();
                     Pop3IF_Disconnect();
-                    wipe_pop3_directory ();
                     nextstate = INCOMING_9c;
                     break;
 
@@ -2631,6 +2603,11 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 }
 
                 case P3_RX_DISCONNECT_DONE:
+                    free_pop3_resources ();
+                    wipe_pop3_directory ();
+                    HWM_MailRx_Usage (0,
+                                      0);
+                    emailrx_tidy ();
                     Pop3IF_DeRegister();
                     nextstate = INCOMING_8p;
                     break;
@@ -2655,7 +2632,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 {
                     StateKicker_SendMessage(Screen_StateMachine, RX_SC_POP3_DOWNLOAD_COMPLETE, NULL);   /* thumbs up, download complete */
                     StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
-                    emailrx_tidy ();
                     nextstate = IDLE;
                     break;
                 }
@@ -2733,6 +2709,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 }
 
                 case P3_RX_DISCONNECT_DONE:
+                    free_pop3_resources ();
+                    wipe_pop3_directory ();
                     HWM_MailRx_Usage (0,
                                       0);
                     Pop3IF_DeRegister();
@@ -2979,6 +2957,9 @@ static void *  create_dynamic_area (const size_t       size,
         return NULL;
     }
 
+    MemCheck_RegisterMiscBlock (area_base,
+                                size);
+
     return area_base;
 }
 
@@ -3000,11 +2981,31 @@ static void *  create_dynamic_area (const size_t       size,
 
 static _kernel_oserror *  remove_dynamic_area (const int  area_number)
 {
-    return _swix (OS_DynamicArea,
-                  _INR (0, 1),
+    _kernel_oserror *e;
 
-                  1,
-                  area_number);
+#ifdef MemCheck_MEMCHECK
+    void *  area_base;
+
+    _swix (OS_DynamicArea,
+           _INR (0, 1) | _OUT (3),
+
+           2,
+           area_number,
+
+           &area_base);
+#endif
+
+    e =  _swix (OS_DynamicArea,
+                _INR (0, 1),
+
+                 1,
+                 area_number);
+
+#ifdef MemCheck_MEMCHECK
+    MemCheck_UnRegisterMiscBlock (area_base);
+#endif
+
+    return e;
 }
 
 
@@ -3467,6 +3468,8 @@ static void  free_pop3_resources (void)
     }
 
     pop3.retry = 0;
+
+    free_header (&pop3.message_header);
 }
 
 
@@ -3525,15 +3528,13 @@ static int  start_message_download (void)
 
     pop3.space_used = 0;
     pop3.space_reserved = 0;
+    pop3.reconnect = 0;
     if (emailrx_decide_download (&pop3.space_reserved) == 1)
     {
-        /* A document had to be 'split', so we should reconnect as soon as
-         * possible to download the rest of the document.
+        /* Not enough memory to download whole inbox, so flag that we need
+         * to reconnect at some point in the future to get the rest.
          */
-
-        StateKicker_SendMessage (PrintQ_MessageHandler,
-                                 RX_PQ_MAIL_WAITING,
-                                 NULL);
+        pop3.reconnect = 1;
     }
 
 
@@ -3560,7 +3561,6 @@ static int  start_message_download (void)
         send_message->data.os_error.err.errnum = 0;
         strcpy (send_message->data.os_error.err.errmess,
                 "Not enough memory to download EMail messages.");
-        free_pop3_resources ();
         Pop3IF_Disconnect();
         return 1;
     }
@@ -3694,9 +3694,7 @@ static void memory_report_file_error (void)
     }
 #endif
 
-    free_pop3_resources ();
     Pop3IF_Disconnect();
-    wipe_pop3_directory ();
 }
 
 
@@ -3832,6 +3830,15 @@ static void  finish_download_session (void)
         pop3.uid_list = NULL;
     }
 
+
+    if (pop3.reconnect)
+    {
+        StateKicker_SendMessage (PrintQ_MessageHandler,
+                                 RX_PQ_MAIL_WAITING,
+                                 NULL);
+        pop3.reconnect = 0;
+    }
+
 #if 0
     list_destroy (pop3.document_list);
     pop3.document_list = NULL;
@@ -3932,13 +3939,13 @@ static int  add_doc_to_print_list (const unsigned int  pid)
         return 1;
     }
 
-    print_info->item_handle = list_add_item (pop3.print_list,
-                                             print_info);
-    if (print_info->item_handle == NULL)
+    if (list_add_item (pop3.print_list,
+                       print_info) == NULL)
     {
         free (print_info);
         return 1;
     }
+
 
     number_messages = emailrx_get_number_messages (pop3.document_handle,
                                                    MessageFlags_Download,
@@ -3978,14 +3985,15 @@ static int  add_doc_to_print_list (const unsigned int  pid)
 
 static void  print_confirmed (unsigned int  pid)
 {
-    print_info_t *  print_info;
+    list_item_handle  item;
 
-    print_info = list_find_item (pop3.print_list,
-                                 match_pid,
-                                 &pid);
-    if (print_info)
+    item = list_find_item (pop3.print_list,
+                           match_pid,
+                           &pid);
+    if (item)
     {
         int  i;
+        print_info_t *    print_info = list_item_data (item);
 
         for (i = 0; i < print_info->index; ++i)
         {
@@ -3998,7 +4006,7 @@ static void  print_confirmed (unsigned int  pid)
         }
 
         list_remove_item (pop3.print_list,
-                          print_info->item_handle);
+                          item);
     }
 }
 
