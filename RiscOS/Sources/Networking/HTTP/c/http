@@ -91,7 +91,7 @@ extern void riscos_SSLLib_Init( void );
 #define IMAGE_HEADER1    256
 #define IMAGE_HEADER1_T "256"
 
-#define MAXSOCKETS 4        /* Can be overridden */
+#define MAXSOCKETS 12        /* Can be overridden */
 
 /**********************************************************************/
 /*
@@ -288,9 +288,7 @@ static http_connection proto_con = {
     0,                          /* Total size */
     NULL,                       /* Server push boundary */
     0,                          /* #chars of boundary found at end of packet */
-#if DEBUG
     1,                          /* # connections on this socket */
-#endif
     };
 
 
@@ -840,7 +838,6 @@ http_csfs_service(_kernel_swi_regs *r)
   {
     case CSFS_CLOSE :
       close_args.in.handle = handle;
-      close_args.in.flags  = 0;
       ERR_GOTO(err,http_close(&close_args));
 
       break;
@@ -2112,9 +2109,7 @@ static int http_open_socket( http_connection *c )
                  c->queue->nsockets );
     }
 
-#if DEBUG
     c->onthissocket = 1;
-#endif
 
     return err_NO_ERROR;
 }
@@ -2143,21 +2138,21 @@ static BOOL http_queue_new( http_connection *me )
             /* Found a suitable queue */
             me->queue = q;
 
-            if ( q->nsockets < 2
-                 && totalsockets < maxsockets )
+            if ( ( q->nsockets < 2
+                   && totalsockets < maxsockets )
+                 || ( me->flags & http_open_flags_PRIORITY ) )
                     return FALSE;   /* Open another one */
 
-            /* Add me to the queue */
+            /* Add me to the queue
             if ( me->flags & http_open_flags_PRIORITY )
             {
-                /* Add to the front of the queue */
                 me->queueprev = NULL;
                 me->queuenext = q->queue;
                 if ( q->queue )
                     q->queue->queueprev = me;
                 q->queue = me;
             }
-            else
+            else */
             {
                 /* Add to the end of the queue */
                 c = q->queue;
@@ -2325,9 +2320,7 @@ static void http_queue_allow_write( http_connection *c )
     fdebugf( log_file, "%p: handing socket %d writes over to %p\n", c,
                         c->socket, c2 );
 
-#if DEBUG
     c2->onthissocket = c->onthissocket+1;
-#endif
 
     c2->socket = c->socket;     /* Shared, not transferred */
 
@@ -2384,9 +2377,7 @@ static void http_queue_allow_read( http_connection *c )
     fdebugf( log_file, "%p: handing socket %d reads over to %p\n", c,
                        c->socket, c2 );
 
-#if DEBUG
     c2->onthissocket = c->onthissocket+1;
-#endif
 
     keptalive++;
 
@@ -2880,11 +2871,8 @@ void http_send_request(http_connection *c)
     iov[2].iov_base = tmp_buffer;
     iov[2].iov_len  = strlen(tmp_buffer);
 
-#if DEBUG
-    /* need the if 'cos of use of onthissocket */
     fdebugf( log_file, "%p: sending %d request %s%s %s\n", c, c->onthissocket,
              meth, c->object, http_version );
-#endif
 
     /* Note there's an assumption here that we can send the whole request
      * line without getting an EWOULDBLOCK.
@@ -2945,7 +2933,7 @@ int http_send_request_headers( http_connection *c )
             sprintf( tmp_buffer, "%s: %s\r\n", c->sendhead->key,
                                  c->sendhead->value );
 
-            fdebugf( log_file, "(7) %p: txheader %s: %s\n", c, c->sendhead->key,
+            fdebugf( log_file, "%p: (7) txheader %s: %s\n", c, c->sendhead->key,
                                c->sendhead->value );
         }
         else
@@ -2993,7 +2981,7 @@ int http_send_request_headers( http_connection *c )
 
                 sprintf( ptr, "Range: bytes=" IMAGE_HEADER1_T "-%d\r\n",
                               c->total_size-1 );
-                fdebugf( log_file, "(7)%p: txheader Range: bytes=" IMAGE_HEADER1_T
+                fdebugf( log_file, "%p: (7) txheader Range: bytes=" IMAGE_HEADER1_T
                                    "-%d\n", c, c->total_size-1 );
                 c->flags &= ~http_open_flags_IMAGE;
             }
@@ -3003,7 +2991,7 @@ int http_send_request_headers( http_connection *c )
                       && !c->bh )
             {
                 strcat( tmp_buffer, "Range: bytes=0-" IMAGE_HEADER_T "\r\n" );
-                fdebugf( log_file, "(7) %p: txheader Range: bytes=0-"
+                fdebugf( log_file, "%p: (7) txheader Range: bytes=0-"
                                    IMAGE_HEADER_T "\n", c );
             }
             else
@@ -3149,7 +3137,35 @@ char* http_getline(http_connection *c, int read)
 
             if ( c->buf_off == 0 )
             {
-                http_fail( c, status_FAIL_REQUEST );
+                if ( c->onthissocket > 1 )
+                {
+                    /* We may have been thrown off.
+                     * *CAREFUL* not to cause infinite loops here, the
+                     * use of onthissocket makes sure of it.
+                     */
+                    fdebugf( log_file,
+                             "%p: server lied about keep-alive\n", c );
+
+                    /* Don't let socket_close delete the queue! */
+                    if ( c->queue )
+                        c->queue->nsockets++;
+
+                    http_socket_close( c );
+
+                    c->flags &= ( http_open_flags_ALLUSER | http_flags_SERVER
+                                    | http_flags_GOTFIRST );
+
+                    http_open_socket( c );
+
+                    c->onthissocket = 1;
+
+                    if ( c->queue )
+                        c->queue->nsockets--;
+                }
+                else
+                {
+                    http_fail( c, status_FAIL_REQUEST );
+                }
                 return NULL;
             }
         }
