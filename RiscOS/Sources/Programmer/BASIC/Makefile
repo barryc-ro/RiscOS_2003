@@ -70,29 +70,3 @@ rm.BASIC64: ModuleAB64
         ${AS} ${ASFLAGS} ModuleAB64
 
 # Dynamic dependencies:
-rm.BASIC64: BASIC
-rm.BASIC64: Fp
-rm.BASIC64: Fp2
-rm.BASIC64: Expr
-rm.BASIC64: Factor
-rm.BASIC64: Funct
-rm.BASIC64: Stmt
-rm.BASIC64: Stmt2
-rm.BASIC64: Array
-rm.BASIC64: Assembler
-rm.BASIC64: Lexical
-rm.BASIC64: Command
-rm.BASIC64: ErrorMsgs
-rm.BASIC105: BASIC
-rm.BASIC105: Fp
-rm.BASIC105: Fp2
-rm.BASIC105: Expr
-rm.BASIC105: Factor
-rm.BASIC105: Funct
-rm.BASIC105: Stmt
-rm.BASIC105: Stmt2
-rm.BASIC105: Array
-rm.BASIC105: Assembler
-rm.BASIC105: Lexical
-rm.BASIC105: Command
-rm.BASIC105: ErrorMsgs
