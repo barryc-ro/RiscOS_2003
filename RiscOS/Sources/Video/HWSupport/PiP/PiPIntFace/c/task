@@ -1,0 +1,317 @@
+/*
+ * task.c
+ * This controls the wimp task which handles the PIP/TVSound keypresses
+ */
+
+/************************************************************************/
+/*              Copyright 2001 Pace Micro Technology PLC                */
+/************************************************************************/
+
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include "debuglib/debuglib.h"
+
+#include "kernel.h"
+#include "swis.h"
+#include "module.h"
+#include "header.h"
+#include "global/services.h"
+#include "pip.h"
+#include "task.h"
+#include "wimpstruct.h"
+#include "plugin.h"
+#include "utils.h"
+
+/* External global variables */
+
+extern void   *mod_wsp;
+
+/* Global variable section */
+int task_quit=0;
+char *task_name="PIPInterface";
+int task_handle=-1, hotkey_window_handle=-1;
+
+unsigned char *pollword_mem=NULL;
+
+
+_kernel_oserror *poll_redraw(unsigned int window_handle)
+{
+  _kernel_oserror *error=NULL;
+
+  error=plugin_redraw(window_handle);
+  return(error);
+}
+
+_kernel_oserror *poll_open_window(WIMP_WindowOpenStruct *window)
+{
+  _kernel_oserror *error=NULL;
+  dprintf(("","Open window message received\n"));
+
+  if (plugin_test_windowhandle(window->window_handle)==PLUGIN_PLUGIN_WINDOW)
+    error=plugin_open_window(window);
+  else
+    error=_swix(Wimp_OpenWindow,_IN(1),window);
+  return (error);
+}
+
+_kernel_oserror *poll_close_window(WIMP_WindowCloseStruct *window)
+{
+  _kernel_oserror *error=NULL;
+
+  dprintf(("","Close window message received\n"));
+  if (plugin_test_windowhandle(window->window_handle)==PLUGIN_PLUGIN_WINDOW)
+    error=plugin_close_window(window);
+  else
+    error=_swix(Wimp_CloseWindow,_IN(1),window);
+  return(error);
+}
+
+
+_kernel_oserror *poll_key_pressed(WIMP_KeyPressedStruct *keypress)
+{
+  _kernel_oserror *error=NULL;
+
+  switch (keypress->key_value)
+  {
+  case KEY_PIP_ONOFF : case KEY_PIP_TVSOUND : case KEY_PIP_MOVE :
+    pip_keypress(keypress->key_value);
+    break;
+  default :
+    _swix(Wimp_ProcessKey,_IN(0),keypress->key_value);
+    break;
+  } /* switch (key_value)  */
+
+
+  return(error);
+}
+
+_kernel_oserror *poll_user_message(WIMP_MessageStruct *message)
+{
+  _kernel_oserror *error=NULL;
+  dprintf(("","Got message event %x\n",message->message_action));
+  switch ( message->message_action)
+  {
+  case 0 : case 14 :   /* Quit message and message_shutdown */
+    dprintf(("","Got quit message\n"));
+    task_quit=1;
+    break;
+  case 0x4d540 : // Message_PlugIn_Open
+    dprintf(("","Got plugin_open message\n"));
+    if (message->data.word[8]==PLUGIN_FILETYPE)
+      error=plugin_open_msg(message);
+    break;
+  case 0x4d542 : // Message_PlugIn_Close
+    dprintf(("","Got plugin_close message\n"));
+    plugin_close_msg(message);
+    break;
+  case 0x4d551 : // Message_PlugIn_Action
+    dprintf(("","Got plugin_action message\n"));
+    plugin_action_msg(message);
+    break;
+  case 0x4d544 : // Message_PlugIn_Reshape
+    dprintf(("","Got plugin_reshape message\n"));
+    plugin_reshape_msg(message);
+    break;
+  } /* switch (message->message_action) */
+  return(error);
+}
+
+_kernel_oserror *poll_task(void)
+{
+  _kernel_oserror *error=NULL;
+  unsigned char data_block[1024];
+  int reason,wimp_mask;
+
+  wimp_mask=0xc00001; /* ignore null and set poll word */
+
+  /* Initialise plugin, plugin_initialise will initialise pollword_mem */
+  dprintf(("","Initialising plugin\n"));
+  if (plugin_initialise()!=0)
+  {
+    dprintf(("","Failed to initialise plugin, exiting\n"));
+    task_quit=1;
+  } /*  if (plugin_initialise()<>0) */
+
+    /* everything initialised so far.  Set up PiP */
+  if (task_quit==0)
+    pip_initialise();
+
+  dprintf(("","Starting wimp poll\n"));
+
+  // need to convert to poll with wimpmask set
+  while (task_quit==0 && error==NULL && pollword_mem!=NULL)
+  {
+    _swix(Wimp_Poll,_INR(0,3) | _OUT(0),wimp_mask,&data_block,0,pollword_mem,&reason);
+
+    if (reason!=13)
+    {
+      dprintf(("","Reason=%d\n",reason));
+    }
+    switch (reason)
+    {
+      case 1 : /* redraw */
+        error=poll_redraw(getword(data_block,0));
+        break;
+      case 2 : /* window open */
+        error=poll_open_window((WIMP_WindowOpenStruct*) data_block);
+        break;
+      case 3 : /* window close */
+        error=poll_close_window((WIMP_WindowCloseStruct*)data_block);
+        break;
+      case 6 : /* mouse click*/
+        break;
+      case 8 : /* key press */
+        error=poll_key_pressed((WIMP_KeyPressedStruct*)data_block);
+        break;
+      case 13 : /* pollword_nonzero */
+        error=plugin_pollword(data_block);
+        break;
+      case 17 : case 18 :    /* message events */
+        error=poll_user_message((WIMP_MessageStruct*)data_block);
+        break;
+    } /* switch (reason); */
+
+  } /* while (!task_quit) */
+
+  plugin_closedown();
+
+  _swix(Wimp_CloseDown,_INR(0,1),task_handle,0x4B534154);
+
+  task_handle=-1;
+  return(error);
+
+}
+
+_kernel_oserror * task_filter(_kernel_swi_regs *reg, void *pw)
+{
+  /* If any window is moved around on screen then check that it doesn't
+   * obscure the plugin window
+   */
+  putword(pollword_mem,0,1);
+
+  return(NULL);
+}
+
+
+_kernel_oserror *create_window()
+{
+  _kernel_oserror *error=NULL;
+  WIMP_WindowStruct window;
+  WIMP_WindowOpenStruct openwin;
+  int i;
+
+  window.min_x=-10100;
+  window.min_y=-10100;
+  window.max_x=-10000;
+  window.max_y=-10000;
+  window.scroll_x=0;
+  window.scroll_y=0;
+  window.front_window=-2; /* behind */
+  window.window_flags=0x80001050; /* windowflags */
+  window.col_title_fore=7; /* title + window foreground colour */
+  window.col_title_back=2; /* title background */
+  window.col_work_fore=7; /* work foreground */
+  window.col_work_back=7; /* work area background */
+  window.col_scroll_outer=12; /* scroll bar outer colour */
+  window.col_scroll_inner=1; /* scroll bar inner colour */
+  window.col_highlight_title=3; /* highlighted title background */
+  window.col_reserved=0; /* reserved */
+  window.work_min_x=0; /* minimum workarea x coord */
+  window.work_min_y=-100;
+  window.work_max_x=100;
+  window.work_max_y=0; /* max workarea y coord */
+  window.titlebar_flags=0x00000000; /* title bar flags */
+  window.workarea_flags=0x00006000; /* work area flags */
+  window.sprite_area=1; /* wimp sprite area */
+  window.window_min_width=0; /* min width */
+  window.window_min_height=0; /* title bar data (12 bytes) */
+  for (i=0;i<12;i++)
+    window.title_data[i]=0;
+  window.icon_count=0; /* number of icons */
+
+
+
+  dprintf(("","Creating window\n"));
+  error=_swix(Wimp_CreateWindow,_IN(1) | _OUT(0),&window,&hotkey_window_handle);
+  dprintf(("","Got window handle %d\n",hotkey_window_handle));
+
+  if (error==NULL)
+  {
+    openwin.window_handle=hotkey_window_handle;
+    openwin.min_x=window.min_x;
+    openwin.min_y=window.min_y;
+    openwin.max_x=window.max_x;
+    openwin.max_y=window.max_y;
+    openwin.scroll_x=window.scroll_x;
+    openwin.scroll_y=window.scroll_y;
+    openwin.front_window=window.front_window;
+
+    dprintf(("","Opening window\n"));
+    error=_swix(Wimp_OpenWindow,_IN(1),&openwin);
+  }
+
+  if (error!=NULL)
+    return(error);  /* don't continue if error occured */
+
+  return(error);
+}
+
+_kernel_oserror *task_stop_task(void)
+{
+  _kernel_oserror *error=NULL;
+
+  hotkey_window_handle=-1;
+
+
+  if (error==NULL)
+    error=plugin_closedown();
+
+  dprintf(("","Attempting to shutdown task\n"));
+  error=_swix(Wimp_CloseDown,_INR(0,1),task_handle,0x4B534154);
+  task_handle=-1;
+  return(error);
+}
+
+/*
+ * task_start_task attempts to start a desktop application for the
+ * blanking window behind the pip
+ */
+
+_kernel_oserror *task_start_task(void)
+{
+  _kernel_oserror *error=NULL;
+  int message_list=0;
+
+  if (task_handle<=0)
+  {  /* ensure not already running */
+
+    dprintf(("","Starting task\n"));
+
+    error=_swix(Wimp_Initialise,_INR(0,3) | _OUT(1), 380,0x4B534154, task_name, &message_list,&task_handle);
+    dprintf(("","Got task_handle => %d\n",task_handle));
+
+    if (error==NULL)
+      error=create_window();
+
+    if (error==NULL)
+      error=poll_task();
+  } /* if (task_handle>0) */
+  dprintf(("","Exiting start task function\n"));
+  return(error);
+}
+
+int task_get_taskhandle(void)
+{
+  dprintf(("","Get taskhandle called, returning %d\n",task_handle));
+  return(task_handle);
+}
+
+void task_set_taskhandle(int handle)
+{
+  dprintf(("","Set taskhandle called, setting to %d\n",handle));
+  task_handle=handle;
+}
+
+/* end of task.c */

@@ -1,0 +1,220 @@
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include "debuglib/debuglib.h"
+
+#include "kernel.h"
+#include "swis.h"
+#include "module.h"
+#include "header.h"
+#include "global/services.h"
+#include "task.h"
+#include "wimpstruct.h"
+#include "plugin.h"
+#include "pip.h"
+#include "utils.h"
+#include "list.h"
+
+
+/* This function will return the next 4 byte aligned value after the given
+ * value.  If value is already word aligned then the value will not be changed
+ */
+int align_word(int value)
+{
+  while (value % 4!=0)
+    value++;
+  return(value);
+}
+
+/* this function tests if the window is completely visable onscreen
+ * WINDOW_VISIBLE is returned if completely onscreen
+ * WINDOW_NOTVISIBLE is returned if not completely onscreen
+ */
+int test_window_onscreen(int handle)
+{
+  WIMP_WindowStateStruct window;
+  int result=WINDOW_NOTVISIBLE;
+  _kernel_oserror *error=NULL;
+  int shift,size;
+  int screen_width,screen_height;
+
+  window.window_handle=handle;
+  error=_swix(Wimp_GetWindowState,_IN(1),&window);
+  if (error==NULL)
+  {
+
+    /* get screen size */
+    _swix(OS_ReadModeVariable,_INR(0,1) | _OUT(2),-1,11,&size);
+    _swix(OS_ReadModeVariable,_INR(0,1) | _OUT(2),-1,4,&shift);
+    screen_width=(size+1)<<shift;
+    _swix(OS_ReadModeVariable,_INR(0,1) | _OUT(2),-1,12,&size);
+    _swix(OS_ReadModeVariable,_INR(0,1) | _OUT(2),-1,5,&shift);
+    screen_height=(size+1)<<shift;
+
+    if (window.min_x>=0 && window.max_x<screen_width &&
+        window.min_y>=0 && window.max_y<screen_height)
+        result=WINDOW_VISIBLE;
+  } /* if (error==NULL) */
+
+  return(result);
+}
+
+
+/* this function tests if the child window is completly viewable
+ * within the parent window.
+ * WINDOW_VISIBLE is returned if viewable
+ * WINDOW_NOTVISIBLE is returned if not completely viewable
+ */
+
+int test_window_visible(int child_win, int parent_win)
+{
+  WIMP_WindowStateStruct child_buffer,parent_buffer;
+  int result=WINDOW_VISIBLE;
+
+  child_buffer.window_handle=child_win;
+  _swix(Wimp_GetWindowState,_IN(1),&child_buffer);
+  parent_buffer.window_handle=parent_win;
+  _swix(Wimp_GetWindowState,_IN(1),&parent_buffer);
+
+  if ((child_buffer.min_x<parent_buffer.min_x) || (child_buffer.min_y<parent_buffer.min_y) ||
+      (child_buffer.max_x>parent_buffer.max_x) || (child_buffer.max_y>parent_buffer.max_y))
+  {
+    result=WINDOW_NOTVISIBLE;
+  }
+  return(result);
+}
+
+/* this function tests if the front window obscures the behind window
+ * if the behind window is obscured then WINDOW_NOTVISIBLE will be returned
+ * otherwise WINDOW_VISIBLE is returned
+ */
+int test_window_obscured(int behind_window, int front_window)
+{
+  int result=WINDOW_VISIBLE;
+  WIMP_WindowStateStruct behind,front;
+
+  behind.window_handle=behind_window;
+  front.window_handle=front_window;
+
+  if (behind_window==-1 || front_window==-1)
+    result=WINDOW_NOTVISIBLE;
+  else
+  {
+    _swix(Wimp_GetWindowOutline,_IN(1),&behind);
+    _swix(Wimp_GetWindowOutline,_IN(1),&front);
+
+    /* this following if statements could be combined but it's slightly more
+     * readable split into two
+     */
+
+    /* Check if the top or bottom edge lie within vertical position of back window
+     * or that the top and bottom edge surrounds back window position
+     */
+    if ((front.min_y>=behind.min_y && front.min_y<=behind.max_y) ||
+        (front.max_y>=behind.min_y && front.max_y<=behind.max_y) ||
+        (front.min_y< behind.min_y && front.max_y> behind.max_y))
+    {
+    /* Check if the left or right edge lie within horizontal position of back
+     * window or that the left and right edge surrounds back window position
+     */
+      if ((front.min_x>=behind.min_x && front.min_x<=behind.max_x) ||
+          (front.max_x>=behind.min_x && front.max_x<=behind.max_x) ||
+          (front.min_x< behind.min_x && front.max_x> behind.max_x))
+      {
+        result=WINDOW_NOTVISIBLE;
+      } /* horizontal check */
+    } /* vertial check */
+  } /* if (behind_window==-1 || front_window==-1) else */
+
+  return(result);
+}
+
+/* These following case insensitive functions have been taken
+ * from PlugPlay
+ */
+
+/**************************************************************/
+/* utils_strcasecmp()                                         */
+/*                                                            */
+/* Function to compare two strings case insensitively.        */
+/*                                                            */
+/* Originally by S.Brodie.                                    */
+/*                                                            */
+/* The conversions to unsigned int stop the compiler messing  */
+/* around with shifts all over the place whilst trying to     */
+/* promote the chars to int whilst retaining the sign.        */
+/*                                                            */
+/* Problems: Choice of return value when strings do not match */
+/* is based upon character number rather than any alphabetic  */
+/* sorting.                                                   */
+/*                                                            */
+/* Parameters: As strcmp.                                     */
+/*                                                            */
+/* Returns:    As strcmp.                                     */
+/**************************************************************/
+
+int strcasecmp(const char *a, const char *b)
+{
+  for (;;)
+  {
+    unsigned int f1 = *a++;
+    unsigned int s1 = *b++;
+
+    if (f1 == 0) return -s1;
+
+    if (f1 != s1)
+    {
+      unsigned int f2     = (unsigned int) tolower(f1);
+      unsigned int s2     = (unsigned int) tolower(s1);
+      signed int   result = f2 - s2;
+
+      if (result != 0) return result;
+    }
+  }
+}
+
+/**************************************************************/
+/* utils_strncasecmp()                                        */
+/*                                                            */
+/* Function to compare two strings case insensitively up to a */
+/* maximum char count.                                        */
+/*                                                            */
+/* Originally by S.Brodie.                                    */
+/*                                                            */
+/* The conversions to unsigned int stop the compiler messing  */
+/* around with shifts all over the place whilst trying to     */
+/* promote the chars to int whilst retaining the sign.        */
+/*                                                            */
+/* Problems: Choice of return value when strings do not match */
+/* is based upon character number rather than any alphabetic  */
+/* sorting.                                                   */
+/*                                                            */
+/* Parameters: As strncmp.                                    */
+/*                                                            */
+/* Returns:    As strncmp.                                    */
+/**************************************************************/
+
+int strncasecmp(const char * a, const char * b, unsigned int n)
+{
+  for (; n; --n)
+  {
+    unsigned int f1 = *a++;
+    unsigned int s1 = *b++;
+
+    if (f1 == 0) return -s1;
+
+    if (f1 != s1)
+    {
+      unsigned int f2     = (unsigned int) tolower(f1);
+      unsigned int s2     = (unsigned int) tolower(s1);
+      signed int   result = f2 - s2;
+
+      if (result != 0) return result;
+    }
+  }
+
+  return 0;
+}
+
