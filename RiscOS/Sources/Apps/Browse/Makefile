@@ -221,6 +221,7 @@ OBJS = \
  o.Save			\
  o.SaveFile		\
  o.SaveObject		\
+ o.SaveText		\
  o.Tables		\
  o.TokenUtils		\
  o.Toolbars		\
@@ -274,6 +275,7 @@ OBJSZ = \
  oz.Save		\
  oz.SaveFile		\
  oz.SaveObject		\
+ oz.SaveText		\
  oz.Tables		\
  oz.TokenUtils		\
  oz.Toolbars		\
@@ -327,6 +329,7 @@ OBJSD = \
  od.Save		\
  od.SaveFile		\
  od.SaveObject		\
+ od.SaveText		\
  od.svcprint		\
  od.Tables		\
  od.TokenUtils		\
@@ -382,6 +385,7 @@ OBJSDZ = \
  odz.Save		\
  odz.SaveFile		\
  odz.SaveObject		\
+ odz.SaveText		\
  odz.svcprint		\
  odz.Tables		\
  odz.TokenUtils		\
@@ -436,6 +440,7 @@ OBJS_SURF = \
  o_surf.Save		\
  o_surf.SaveFile	\
  o_surf.SaveObject	\
+ o_surf.SaveText	\
  o_surf.Tables		\
  o_surf.TokenUtils	\
  o_surf.Toolbars	\
@@ -488,6 +493,7 @@ OBJSD_SURF = \
  od_surf.Save		\
  od_surf.SaveFile	\
  od_surf.SaveObject	\
+ od_surf.SaveText	\
  od_surf.svcprint	\
  od_surf.Tables		\
  od_surf.TokenUtils	\
@@ -543,6 +549,7 @@ OBJS_ITALK = \
  o_italk.Save		\
  o_italk.SaveFile	\
  o_italk.SaveObject	\
+ o_italk.SaveText	\
  o_italk.Tables		\
  o_italk.TokenUtils	\
  o_italk.Toolbars	\
@@ -596,6 +603,7 @@ OBJSD_ITALK = \
  od_italk.Save		\
  od_italk.SaveFile	\
  od_italk.SaveObject	\
+ od_italk.SaveText	\
  od_italk.svcprint	\
  od_italk.Tables	\
  od_italk.TokenUtils	\
