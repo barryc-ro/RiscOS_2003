@@ -76,8 +76,8 @@ EXPORTS   = h.soundfile hdr.soundfile o.soundfile
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
-.cmhg.o:;   ${CMHG} -o $@ $<
-.cmhg.h:;   ${CMHG} -d h.$* $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
+.cmhg.h:;   ${CMHG} -p -d h.$* $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
 
