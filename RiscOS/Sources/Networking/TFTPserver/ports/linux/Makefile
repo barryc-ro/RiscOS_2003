@@ -22,7 +22,7 @@ AWK     = awk
 MKDIR   = mkdir
 CC      = gcc
 LD      = gcc
-RM      = -rm
+RM      = rm -f
 WIPE    = -rm
 CD	= cd
 TOUCH   = touch
@@ -84,6 +84,9 @@ clean:
 	${RM} lexer.c
 	${RM} parser.h
 	@echo ${COMPONENT}: cleaned
+
+realclean: clean
+	find . -type l -exec rm {} \;
 
 #
 # Target 
