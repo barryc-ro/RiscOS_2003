@@ -22,38 +22,30 @@ Date      Who     Description of change
 error_flag
 ServerList::inetEvent(int code, int identifier, claim_flag *claim)
 {
-  error_flag result = ErrorState();
-  int i;
   InternetObject *server;
   
-  if ((result != ErrorOccurred)&&(identifier != -1)){
+  // see if any errors exist, if so are they ignorable (errorstate())
+
+  if ((ErrorState() != ErrorOccurred)&&(identifier != -1)){
   
-	for (i=0;i<Size();i++){
+	for (int i=0;i<Size();i++){
   	
 		server = (InternetObject*) object[i];
   	  	
      		if (server->getSocketDescriptor() == identifier) {
-        		if (code == Socket_Broken_Event){
-        		     	server->MakeError(IP_SocketError);
-        		     	err = &server->ReturnCopyOfError();
-        		     	server->send_message_Error(err);
-        		     	result = ErrorOccurred;
-        	   	}
-        	   	else {
-        	   	  	UCHAR event;
-  				ULINT comms_result;
+        		UCHAR event;
+  			ULINT comms_result;
         	   	  	
-      				if ( server->inetevent(&event, &comms_result,0) == ErrorOccurred){
-    					err = &server->ReturnCopyOfError();
-    					server->send_message_Error(err);
-    					result = ErrorOccurred;
-      				}
-        		}
+      			if (server->inetevent(&event, &comms_result,0, code) == ErrorOccurred){
+      				if (err_ptr == NULL)
+      					err_ptr = &server->ReturnCopyOfError();
+      			}
+        		
         	   	*claim = claim_event; // claim even if in use
     		}
     	}
   }
-  return result;
+  return ErrorState();
 }
 
 InternetObject::InternetObject(struct in_addr *server, ULINT port)
@@ -209,7 +201,7 @@ InternetObject::InternetObjectType(void)
 }
  
 error_flag
-InternetObject::inetevent(UCHAR*, ULINT*, ULINT)
+InternetObject::inetevent(UCHAR*, ULINT*, ULINT, int)
 {
   	return NoError;
 }  	
@@ -342,7 +334,7 @@ Server::get_assetlist_response(size_t *number, AssetIDDescriptor *buffer, size_t
   	result = MakeError(IP_ReadFail);
   
   if ((result != ErrorOccurred)&&(header.command_number != COMMAND_assetlist_response))
-    	result = MakeError(VSP_UnknownMessage);
+    	result = MakeError(VSP_BadErr);
   	
   if (result != ErrorOccurred)
   	result = GetData(&alr_header, sizeof(AssetListResponseHeader));
@@ -443,7 +435,7 @@ Server::get_scenelist_response(size_t *number, SceneInformationDescriptor *buffe
   }
 
   if ((result != ErrorOccurred)&&(header.command_number != COMMAND_scenelist_response)) {
-    	result = MakeError(VSP_UnknownMessage);
+    	result = MakeError(VSP_BadErr);
   }
 
   if ((result != ErrorOccurred)&&(header.certification_code != certification_code++)){
@@ -510,7 +502,7 @@ Server::fill_assetpresentation_request(int size, ULINT init_value, PlayElementRe
   unsigned int systime;
   _swix(OS_ReadMonotonicTime, _OUT(0), &systime);
 
-  sprintf(((char*)&(request.log_comment)), "STB LOG:%i, timestamp in centiseconds\0",systime);
+  sprintf(((char*)&(request.log_comment[0])), "STB LOG:%i, timestamp in centiseconds\0",systime);
 #ifdef DEBUGLIB
   Debug("STB LOG: timestamp in centiseconds %i",systime);
 #endif  
@@ -577,7 +569,7 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
   }
 
   if (header.command_number != COMMAND_assetpres_response) {
-    	return MakeError(VSP_UnknownMessage);
+    	return MakeError(VSP_BadErr);
   }
     // certification code
   if (GetData((void*)&response, sizeof(AssetPresentationResponse)) == ErrorOccurred)
@@ -782,7 +774,7 @@ Server::~Server()
 {
 #ifdef DEBUGLIB
   Debug("delete control socket +");
-#endif  
+#endif
   SocketDescriptor.close();
 }
 
@@ -1025,18 +1017,23 @@ Server::asyncInetEventHandler(UCHAR *event, ULINT *comms_result, ULINT play_mode
 }
 
 error_flag
-Server::inetevent(UCHAR *event, ULINT *result, ULINT play_mode)
+Server::inetevent(UCHAR *event, ULINT *result, ULINT play_mode, int code)
 {
-  error_flag err_result = ErrorState();
-  
-   if ((err_result != ErrorOccurred)&&(inuse != claim_token)) {
-    	inuse = claim_token;
+   if (code == Socket_Broken_Event)
+  	MakeError(IP_SocketError);
+   else {
+   	if ((!ErrorExists())&&(inuse != claim_token)) {
+    		inuse = claim_token;
     	
-    	err_result = asyncInetEventHandler(event, result, play_mode);
+    		asyncInetEventHandler(event, result, play_mode);
  
-    	inuse = free_token;
-  }
-  return err_result;
+    		inuse = free_token;
+  	}
+   }
+   if (ErrorExists())
+   	send_message_Error(err_ptr);
+   	
+  return NoError; // this is an interrupt event an event here will stop the module
 }
 
 error_flag
@@ -1051,6 +1048,8 @@ Server::SendAck(ULINT MAX_storableBlocks, ULINT MAX_complete_block, ACK_type dat
 #ifdef DEBUGLIB	
 	if (!streamrunning())
 		Debug("attempt to send Ack out of stream bounds");
+	if (datatype == dummy_ack)
+		Debug("dummy (%i)", (!ErrorExists() && streamrunning()) ); 
 #endif		
   	if (!ErrorExists() && streamrunning()){
    		int size = SocketDescriptor.write((void*)&ack, sizeof(ACK_Block));
