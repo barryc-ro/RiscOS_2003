@@ -82,7 +82,7 @@ NODB  =         -UREMOTE_DEBUG -DCHIMPANZEE_INTERFACE \
 
 NCTARGETARCH = ${NODB}
 
-CCFLAGS = -Wp -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS}
+CCFLAGS = -Wp -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS} ${DEBUG}
 
 
 
@@ -99,19 +99,23 @@ ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.c_AbsSym
 SOCKLIB	   = TCPIPLibs:o.socklib5 
 INETLIB	   = TCPIPLibs:o.inetlib
+UNIXLIB    = TCPIPLibs:o.unixlib
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
+LIBSD      = ${LIBDIR}.DebugLib.o.debuglibzm
 
 #
 # Rule patterns
 #
-.SUFFIXES:  .oz
+.SUFFIXES:  .oz .o .s .c .i .cmhg .inst .io
 .c.o:;      ${CC} ${CCFLAGS} -o $@ $< ${NCMAFLAGS}
 .c.oz:;     ${CC} ${CCFLAGS} -o $@ $< ${NCMAFLAGS}
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM_BUILD SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM_BUILD SETL {TRUE}"
+.c.i:;      ${CC} ${CCFLAGS} -c -C -E $< >> $@
+.inst.io:;  ${CC} ${CCFLAGS} -C++ -W -o $@ $<
 
 #
 # Program specific options:
@@ -120,40 +124,49 @@ COMPONENT = NCMAlite
 TARGET    = aof.NCMAlite
 TARGETSA  = rm.NCMAlite
 EXPORTS   = ${EXP_C_H}.smtags
+
+# Normal ROM, RAM an denug objects.
 BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
-	  dynalloc.o ncma_ncma.o machine.o ncma_url.o ncma_scard.o \
-	  ncma_utils.o ncma_dial.o kprintf.o  \
-	  ncma_bootb.o task.o \
-	  ncma_tags.o  ncma_cache.o ncma_uid.o ncma_net.o \
-	  usermode.o areacode.o dbugzm.o ncma_fx.o init.o
+	    dynalloc.o ncma_ncma.o machine.o ncma_url.o ncma_scard.o \
+	    ncma_utils.o ncma_dial.o kprintf.o  \
+	    ncma_bootb.o task.o \
+	    ncma_tags.o  ncma_cache.o ncma_uid.o ncma_net.o \
+	    usermode.o areacode.o dbugzm.o ncma_fx.o init.o
+
+# Instrumentation targets.
+OBJSIO = io.module header.o io.vectors io.ncma_cmds io.ncma_swis \
+	    io.dynalloc io.ncma_ncma io.machine io.ncma_url io.ncma_scard \
+	    io.ncma_utils io.ncma_dial io.kprintf  \
+	    io.ncma_bootb io.task \
+	    io.ncma_tags io.ncma_cache io.ncma_uid io.ncma_net \
+	    usermode.o areacode.o io.dbugzm io.ncma_fx io.init io.instlib
+
+# Preprocess targets.
+OBJSI  = i.module header.o i.vectors i.ncma_cmds i.ncma_swis \
+	    i.dynalloc i.ncma_ncma i.machine i.ncma_url i.ncma_scard \
+	    i.ncma_utils i.ncma_dial i.kprintf  \
+	    i.ncma_bootb i.task \
+	    i.ncma_tags i.ncma_cache i.ncma_uid i.ncma_net \
+	    usermode.o areacode.o i.dbugzm i.ncma_fx i.init
+
 
 ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = oz.resources ${BASEOBJS}
 
-RESDIR = <resource$dir>.Resources.${COMPONENT}
-
-NOTROMRESDEP = html.badpin html.change html.damaged html.disconnect html.download \
-	html.mismatch html.moved html.newpin html.notMA html.notNC html.pin \
-	html.poweroff html.SCprobs html.splash html.transfer html.unblock \
-	html.toplevel html.welcome
-
-ROMRESDEP = 
-
 #
 # Component build rules
 #
-
 o.resources: s.resources ${NOTROMRESDEP}
-
 oz.resources: s.resources ${ROMRESDEP}
+
 
 #
 # Generic rules:
 #
-all: ${TARGETSA}
+all: ${TARGETSA} local_dirs
         @echo ${COMPONENT}: all complete
 
-rom: ${TARGET}
+rom: ${TARGET} local_dirs
         @echo ${COMPONENT}: rom complete
 
 export: ${EXPORTS}
@@ -164,16 +177,51 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} oz.* ${WFLAGS}        
-        ${WIPE} aof.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} oz ${WFLAGS}        
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} i ${WFLAGS}
+        ${WIPE} io ${WFLAGS}
+        ${WIPE} inst ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
         @echo ${COMPONENT}: resource files copied
+
+
+#
+# Create local directories
+#
+local_dirs:
+          ${MKDIR} o
+          ${MKDIR} oz
+          ${MKDIR} aof
+          ${MKDIR} rm
+          ${MKDIR} i
+          ${MKDIR} io
+          ${MKDIR} inst
+          ${MKDIR} linked
+          ${MKDIR} map
+
+
+#
+# Preprocess target
+#
+preprocess: ${OBJSI} local_dirs
+          @echo ${COMPONENT}: Preprocess build complete
+
+
+#
+# Instrumentation target
+#
+instrument: ${OBJSIO} local_dirs
+          ${LD} -o rm.${COMPONENT} -module ${OBJSIO} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
+          @echo ${COMPONENT}: instrument build complete
+
+
 
 #
 # Executable target (static link)
@@ -198,8 +246,6 @@ ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${MKDIR} linked
-        ${MKDIR} map
         ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
         truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
