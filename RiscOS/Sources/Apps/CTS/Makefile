@@ -36,6 +36,7 @@ AS		= objasm
 CC		= ${MemCheckCC} cc
 CMHG		= cmhg
 CP		= copy
+TRANSLATE	= translate
 LD		= link
 RM		= remove
 SQUEEZE		= squeeze
@@ -46,6 +47,12 @@ CFLAGS		= ${THROWBACK} -depend !Depend -ffah ${INCLUDES} -wp
 CPFLAGS		= ~cfr~v~n
 SQFLAGS		= -f
 WFLAGS		= ~cf~vr
+
+# Translate flags
+TRANSFLAGS	= $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë"
+
+# Translation mappings file
+MAPPINGS	= TranslateCTSRes:Mappings
 
 
 # -----------------------------------------------------------------------------
@@ -329,40 +336,45 @@ install_rom: ${ROM_MODULE}
 	@echo
 	@echo ${COMPONENT}: Module installed (ROM)
 
-resources:
+translate:
+        @echo ** Translating translatable resource files
+        Set TranslateCTSRes$Path        Translate.<UserIF>.<Locale>.${UI_VARIANT}.,Translate.<UserIF>.<Locale>.,Translate.<UserIF>.UK.
 	${MKDIR} ${RESDIR}
+	${MKDIR} ${RESDIR}.WebPages
 	${MKDIR} ${RESAPP}
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.01-1 -o ${RESDIR}.WebPages.01-1
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.01-2 -o ${RESDIR}.WebPages.01-2
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.01-3 -o ${RESDIR}.WebPages.01-3
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.02 -o ${RESDIR}.WebPages.02
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.03 -o ${RESDIR}.WebPages.03
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.04 -o ${RESDIR}.WebPages.04
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.05 -o ${RESDIR}.WebPages.05
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.06 -o ${RESDIR}.WebPages.06
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.07 -o ${RESDIR}.WebPages.07
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.08 -o ${RESDIR}.WebPages.08
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.11 -o ${RESDIR}.WebPages.11
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.21 -o ${RESDIR}.WebPages.21
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.22 -o ${RESDIR}.WebPages.22
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.23 -o ${RESDIR}.WebPages.23
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.24 -o ${RESDIR}.WebPages.24
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.25-1 -o ${RESDIR}.WebPages.25-1
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.25-2 -o ${RESDIR}.WebPages.25-2
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.26 -o ${RESDIR}.WebPages.26
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.27-1 -o ${RESDIR}.WebPages.27-1 
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.27-2 -o ${RESDIR}.WebPages.27-2
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.27-3 -o ${RESDIR}.WebPages.27-3 
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.28-1 -o ${RESDIR}.WebPages.28-1
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.28-2 -o ${RESDIR}.WebPages.28-2
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.29 -o ${RESDIR}.WebPages.29
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i LocalRes:WebPages.30 -o ${RESDIR}.WebPages.30
+        UnSet TranslateCTSRes$Path
+
+resources: translate
 	${CP} LocalRes:ROM.!Boot	${RESAPP}.!Boot		${CPFLAGS}
 	${CP} LocalRes:ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
 	${CP} LocalRes:!Sprites		${RESAPP}.!Sprites	${CPFLAGS}
 	${CP} LocalRes:Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} LocalRes:Res		${RESDIR}.Res		${CPFLAGS}
-	${MKDIR} ${RESDIR}.WebPages
-	${CP} LocalRes:WebPages.01-1 	${RESDIR}.WebPages.01-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.01-2 	${RESDIR}.WebPages.01-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.01-3 	${RESDIR}.WebPages.01-3 ${CPFLAGS}
-	${CP} LocalRes:WebPages.02   	${RESDIR}.WebPages.02   ${CPFLAGS}
-	${CP} LocalRes:WebPages.03   	${RESDIR}.WebPages.03   ${CPFLAGS}
-	${CP} LocalRes:WebPages.04   	${RESDIR}.WebPages.04   ${CPFLAGS}
-	${CP} LocalRes:WebPages.05   	${RESDIR}.WebPages.05   ${CPFLAGS}
-	${CP} LocalRes:WebPages.06   	${RESDIR}.WebPages.06   ${CPFLAGS}
-	${CP} LocalRes:WebPages.07   	${RESDIR}.WebPages.07   ${CPFLAGS}
-	${CP} LocalRes:WebPages.08   	${RESDIR}.WebPages.08   ${CPFLAGS}
-	${CP} LocalRes:WebPages.11   	${RESDIR}.WebPages.11   ${CPFLAGS}
-	${CP} LocalRes:WebPages.21   	${RESDIR}.WebPages.21   ${CPFLAGS}
-	${CP} LocalRes:WebPages.22   	${RESDIR}.WebPages.22   ${CPFLAGS}
-	${CP} LocalRes:WebPages.23   	${RESDIR}.WebPages.23   ${CPFLAGS}
-	${CP} LocalRes:WebPages.24   	${RESDIR}.WebPages.24   ${CPFLAGS}
-	${CP} LocalRes:WebPages.25-1  	${RESDIR}.WebPages.25-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.25-2  	${RESDIR}.WebPages.25-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.26   	${RESDIR}.WebPages.26   ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-1 	${RESDIR}.WebPages.27-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-2 	${RESDIR}.WebPages.27-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-3 	${RESDIR}.WebPages.27-3 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-1 	${RESDIR}.WebPages.28-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-2	${RESDIR}.WebPages.28-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.29	${RESDIR}.WebPages.29   ${CPFLAGS}
-	${CP} LocalRes:WebPages.30   	${RESDIR}.WebPages.30   ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
