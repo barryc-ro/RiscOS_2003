@@ -24,7 +24,7 @@ LD		= link
 LB		= libfile
 WIPE		= -wipe
 
-CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} -throwback
+CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS		= -depend !Depend -Stamp -quit
 CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
@@ -112,7 +112,7 @@ all:	${TARGET} ${TARGETZ}
 export: export_${PHASE}
 
 install_rom: ${TARGET}
-	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+	${CP} 	${TARGET} ${INSTDIR}.${COMPONENT} 		${CPFLAGS}
 	@echo ${COMPONENT}: rom module installed
 
 clean:
@@ -123,8 +123,8 @@ clean:
 	@echo ${COMPONENT}: cleaned
 
 export_hdrs: h.DebugLib dirs
-	${CP}	h.DebugLib	${EXPORT_DIR}.h.DebugLib ${CPFLAGS}
-	${CP}   VersionNum      ${EXPORT_DIR}.VersionNum ${CPFLAGS}
+	${CP}	h.DebugLib	${EXPORT_DIR}.h.DebugLib 	${CPFLAGS}
+	${CP}   VersionNum      ${EXPORT_DIR}.VersionNum 	${CPFLAGS}
 	@echo * ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} dirs
