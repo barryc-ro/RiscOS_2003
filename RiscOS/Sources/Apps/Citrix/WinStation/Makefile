@@ -19,7 +19,7 @@ RMDIR=		rmdir
 
 # Flags
 
-CCFLAGS=	-c -fa ${INCLUDES} ${DFLAGS}
+CCFLAGS=	-c -fa -wp ${INCLUDES} ${DFLAGS}
 ASFLAGS=	-Stamp -quit ${ASINCLUDES}
 LIBFILEFLAGS=	-c
 CPFLAGS=	-p
@@ -346,7 +346,7 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/cfgload/cfgload.od \
 		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/machine.od \
-		src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
+		src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/upcall.od src/lib/clib/vdu.od \
 		src/lib/encrypt/encrypt.od \
 		src/lib/ini/iniapi.od \
 		src/lib/io/icabrows/icabrows.od src/lib/io/tcpro/tcpro.od \

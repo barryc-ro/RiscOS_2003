@@ -15,6 +15,7 @@
 #include "../inc/clib.h"
 
 #include "swis.h"
+#include "SCInter.h"
 
 #include "version.h"
 #include "clientname.h"
@@ -56,15 +57,27 @@ void clientname(char *output, int output_len)
 	return;
     }
 
-    /* next thing is to try and see if we have managed access and get a user name out of it */
-    if (_swix(NCAccessManager_Enquiry, _INR(0,2) | _OUT(0), NCMA_TAG_USER_NAME, buf, sizeof(buf), &out) == NULL)
-    {
-	if (out > 0)
-	{
-	    strncpy(output, buf, output_len);
+    /* next thing is to try and see if we have managed access and get
+     * a user name out of it
 
-	    TRACE((TC_UI, TT_API1, "clientname: NCMA returned '%s'", buf));
-	    return;
+     * Only make call if there is a smartcard in as otherwise it will
+     * prompt us for one
+     */
+    {
+	t_interface_status status;
+	if (_swix(SCInterface_Status, _OUT(0), &status) == NULL &&
+	    status != StatusNoCard)
+	{
+	    if (_swix(NCAccessManager_Enquiry, _INR(0,2) | _OUT(0), NCMA_TAG_USER_NAME, buf, sizeof(buf), &out) == NULL)
+	    {
+		if (out > 0)
+		{
+		    strncpy(output, buf, output_len);
+
+		    TRACE((TC_UI, TT_API1, "clientname: NCMA returned '%s'", buf));
+		    return;
+		}
+	    }
 	}
     }
 

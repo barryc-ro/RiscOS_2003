@@ -26,14 +26,12 @@
 
 /*  Get CLIB includes */
 #include "../../../../inc/client.h"
-#ifdef  DOS
-#include "../../../inc/clib.h"
-#include "../../../inc/dos.h"
-#endif
+#include "../../../../inc/clib.h"
 #include "../../../../inc/logapi.h"
 #include "../../../../inc/lptapi.h"
 #include "../common/cpmstr.h"
 
+#include "swis.h"
 
 #define MAX_PRINTER_PORTS  1
 //#define COM_PORTS_START    4
@@ -62,6 +60,7 @@ typedef struct _PORTENTRY {
     DWORD  JobId;
     BOOL   Open;
     int    HostStatus;
+    BOOL   IsParallel;
 } PORTENTRY, *PPORTENTRY;
 
 /*
@@ -135,6 +134,8 @@ LptOpen( int Port )
     * Setup our port entry
     */
    p->HostStatus = LPT_SELECT | LPT_NOTBUSY;
+
+   p->IsParallel = GetPrinterType() == printer_PARALLEL;   
 
    /*
     * Mark the port as open
@@ -223,8 +224,8 @@ LptClose( int Port )
 int WFCAPI
 LptWriteBlock( int Port, char *pBuf, int Count, int *pAmountWrote )
 {
-   BOOL rc;
    PPORTENTRY p;
+   int AmountWrote;
 
    /*
     * Range check the port
@@ -246,18 +247,21 @@ LptWriteBlock( int Port, char *pBuf, int Count, int *pAmountWrote )
 
    TRACE(( TC_CPM, TT_API2, "LptSpoolWrite: Called for Port %d",Port));
 
-   /*
-    * Write the data to the printer
-    */
-   write(p->hPrinter, pBuf, Count);
-   *pAmountWrote = (USHORT)Count;
+   /* Write the data to the printer Claim MediaNotPresent upcall
+    * around write to suppress the NC dialogue box prompting you for
+    * more paper, etc and just send an error back to the server */
 
-#if 0
-   if( !rc || (*pAmountWrote <= 0) ) {
-       TRACE(( TC_CPM, TT_API1, "LptSpoolWrite: Error in WritePrinter %d, AmountWrote %d",GetLastError(),*pAmountWrote));
+   print_upcall_claim();
+   AmountWrote = write(p->hPrinter, pBuf, Count);
+   print_upcall_release();
+
+   if( AmountWrote <= 0 ) {
+       *pAmountWrote = AmountWrote < 0 ? 0 : AmountWrote;
+       TRACE(( TC_CPM, TT_API1, "LptSpoolWrite: Error in WritePrinter %d, AmountWrote %d",GetLastError(),AmountWrote));
        return( CLIENT_ERROR_IO_ERROR );
    }
-#endif
+
+   *pAmountWrote = AmountWrote;
    
    return( CLIENT_STATUS_SUCCESS );
 }
@@ -305,7 +309,11 @@ LptStatus( int Port, int *pStatus )
       return CLIENT_ERROR_NOT_OPEN;
    }
 
-   *pStatus = Ports[Port].HostStatus;
+   if ( Ports[Port].IsParallel )
+   {
+       LOGERR(_swix(Parallel_Op, _IN(0) | _OUT(2), 0, pStatus));
+       *pStatus &= 0xF8;
+   }
 
    return( CLIENT_STATUS_SUCCESS );
 }

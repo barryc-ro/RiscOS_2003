@@ -86,6 +86,8 @@ extern int gbContinuePolling;
 
 extern FILEPATH gszLoadDllFileName;        // name of last DLL loaded
 
+extern int cli_modem;	// from main.c
+
 /* --------------------------------------------------------------------------------------------- */
 
 static void session__close(icaclient_session sess);
@@ -567,7 +569,12 @@ static void session_free(icaclient_session sess)
     FlushPrivateProfileCache();
 
     if (global_session == sess)
+    {
 	global_session = NULL;
+
+	if (cli_modem)
+	    timeout_enable();
+    }
 
     if (sess->tempICAFile)
 	remove(sess->gszICAFile);
@@ -576,6 +583,20 @@ static void session_free(icaclient_session sess)
     
     free(sess->gszICAFile);
     free(sess);
+}
+
+static icaclient_session session_new(void)
+{
+    icaclient_session sess = calloc(sizeof(struct icaclient_session_), 1);
+
+    sess->HaveFocus = TRUE;
+    
+    global_session = sess;
+
+    if (cli_modem)
+	timeout_disable();
+
+    return sess;
 }
 
 static int session_abort(icaclient_session sess, int rc)
@@ -792,10 +813,8 @@ icaclient_session session_open_url(const char *url, const char *bfile)
     }
     else
     {
-	global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
-	if (sess)
+	if ((sess = session_new()) != NULL)
 	{
-	    sess->HaveFocus = TRUE;
 	    strncpy(sess->gszServerLabel, description, sizeof(sess->gszServerLabel));
 	}
     }
@@ -818,21 +837,21 @@ icaclient_session session_open_server(const char *host)
 	char name[L_tmpnam];
 	FILE *f;
 
-	global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
-	sess->HaveFocus = TRUE;
-
-	strncpy(sess->gszServerLabel, host, sizeof(sess->gszServerLabel));
-
-	if ((f = fopen(tmpnam(name), "w")) != NULL)
+	if ((sess = session_new()) != NULL)
 	{
-	    fprintf(f, "[%s]\n", host);
-	    fprintf(f, "Address=%s\n", host);
-	    fprintf(f, "[ApplicationServers]\n");
-	    fprintf(f, "%s=\n", host);
-	    fclose(f);
+	    strncpy(sess->gszServerLabel, host, sizeof(sess->gszServerLabel));
 
-	    sess->gszICAFile = strdup(name);
-	    sess->tempICAFile = TRUE;
+	    if ((f = fopen(tmpnam(name), "w")) != NULL)
+	    {
+		fprintf(f, "[%s]\n", host);
+		fprintf(f, "Address=%s\n", host);
+		fprintf(f, "[ApplicationServers]\n");
+		fprintf(f, "%s=\n", host);
+		fclose(f);
+
+		sess->gszICAFile = strdup(name);
+		sess->tempICAFile = TRUE;
+	    }
 	}
     }
     
@@ -846,10 +865,10 @@ icaclient_session session_open(const char *ica_file, int delete_after)
 
     TRACE((TC_UI, TT_API1, "session_open: '%s'", ica_file));
 
-    global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
+    if ((sess = session_new()) == NULL)
+	return NULL;
 
     sess->gszICAFile = strdup(ica_file);
-    sess->HaveFocus = TRUE;
     sess->tempICAFile = delete_after;
     
     // get the first server listing in the ICA file
@@ -902,12 +921,12 @@ icaclient_session session_open_appsrv(const char *description)
 
     TRACE((TC_UI, TT_API1, "session_open_appsrv: '%s'", description));
 
-    global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
-
-    sess->gszICAFile = strdup(APPSRV_FILE);
-    sess->HaveFocus = TRUE;
+    if ((sess = session_new()) != NULL)
+    {
+	sess->gszICAFile = strdup(APPSRV_FILE);
     
-    strncpy(sess->gszServerLabel, description, sizeof(sess->gszServerLabel));
+	strncpy(sess->gszServerLabel, description, sizeof(sess->gszServerLabel));
+    }
 
     return sess;
 }

@@ -290,4 +290,29 @@ void parse_args(arg_element **pargs, const char *s)
 
 /* --------------------------------------------------------------------------------------------- */
 
+#define PPP_AlterSettings		0x4B620
+#define PPP_Status			0x4B621
+
+static int timeout__count = 0;
+
+void timeout_disable(void)
+{
+    if (timeout__count++ == 0)
+    {
+	_swix(PPP_AlterSettings, _INR(0,2), 0, 0, 0);
+    }
+}
+
+void timeout_enable(void)
+{
+    if (--timeout__count == 0)
+    {
+	int def_linedrop;
+	if (_swix(PPP_Status, _INR(0,1) | _OUT(2), 0, 0, &def_linedrop) == NULL)
+	    _swix(PPP_AlterSettings, _INR(0,2), 0, 0, def_linedrop);
+    }
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
 /* eof utils.c */

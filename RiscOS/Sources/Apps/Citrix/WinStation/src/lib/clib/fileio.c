@@ -20,6 +20,8 @@
 int open(const char *filename, int mode)
 {
     int flags = 0, fhandle = 0;
+    _kernel_oserror *e;
+
     switch (mode & O_OMASK)
     {
         case O_RDONLY:
@@ -33,8 +35,9 @@ int open(const char *filename, int mode)
             break;
     }
 
-    if (LOGERR(_swix(OS_Find, _IN(0)|_IN(1)|_OUT(0), flags, filename, &fhandle)) != NULL)
+    if ((e = LOGERR(_swix(OS_Find, _IN(0)|_IN(1)|_OUT(0), flags, filename, &fhandle))) != NULL)
     {
+	GlobalSetLastError(e->errnum);
 	TRACE((TC_ALL, TT_ERROR, "filename: '%s'", filename));
     }
 
@@ -43,21 +46,51 @@ int open(const char *filename, int mode)
 
 int close(int fhandle)
 {
-    return LOGERR(_swix(OS_Find, _IN(0)|_IN(1), 0, fhandle)) == NULL ? 0 : -1;
+    _kernel_oserror *e = LOGERR(_swix(OS_Find, _IN(0)|_IN(1), 0, fhandle));
+    if (e)
+    {
+	GlobalSetLastError(e->errnum);
+	return -1;
+    }
+    return 0;
 }
 
 int read(int fhandle, void *data, size_t size)
 {
-    return LOGERR(_swix(OS_GBPB, _INR(0,3), 4, fhandle, data, size)) == NULL ? size : -1;
+    int not_read;
+
+    _kernel_oserror *e = LOGERR(_swix(OS_GBPB, _INR(0,3) | _OUT(3), 4,
+				      fhandle, data, size,
+				      &not_read));
+    if (e)
+    {
+	GlobalSetLastError(e->errnum);
+	return -1;
+    }
+
+    return size - not_read;
 }
 
 int write(int fhandle, void *data, size_t size)
 {
-    return LOGERR(_swix(OS_GBPB, _INR(0,3), 2, fhandle, data, size)) == NULL ? size : -1;
+    int not_written;
+
+    _kernel_oserror *e = LOGERR(_swix(OS_GBPB, _INR(0,3) | _OUT(3), 2,
+				      fhandle, data, size,
+				      &not_written));
+    if (e)
+    {
+	GlobalSetLastError(e->errnum);
+	return -1;
+    }
+
+    return size - not_written;
 }
 
 long lseek(int fd, long lpos, int whence)
 {
+    _kernel_oserror *e;
+
     switch (whence)
     {
         case SEEK_SET:
@@ -80,21 +113,43 @@ long lseek(int fd, long lpos, int whence)
         }
     }
 
-    return _swix(OS_Args, _IN(0)|_IN(1)|_IN(2), 1, fd, lpos) == NULL ? lpos : -1;
+    if ((e = LOGERR(_swix(OS_Args, _IN(0)|_IN(1)|_IN(2), 1, fd, lpos))) != NULL)
+    {
+	GlobalSetLastError(e->errnum);
+	return -1;
+    }
+    
+    return lpos;
 }
 
 int flush(int fhandle)
 {
+    _kernel_oserror *e;
+
     TRACE((TC_CLIB, TT_API1, "flush: %d", fhandle));
 
-    return LOGERR(_swix(OS_Args, _INR(0,1), 255, fhandle)) ? 0 : -1;
+    if ((e = LOGERR(_swix(OS_Args, _INR(0,1), 255, fhandle))) != NULL)
+    {
+	GlobalSetLastError(e->errnum);
+	return -1;
+    }
+
+    return 0;
 }
 
 int _mkdir(const char *filename)
 {
+    _kernel_oserror *e;
+
     TRACE((TC_CLIB, TT_API1, "_mkdir: '%s'", filename));
 
-    return LOGERR(_swix(OS_File, _INR(0,1) | _IN(4), 8, filename, 0)) ? 0 : -1;
+    if ((e = LOGERR(_swix(OS_File, _INR(0,1) | _IN(4), 8, filename, 0))) != NULL)
+    {
+	GlobalSetLastError(e->errnum);
+	return -1;
+    }
+
+    return 0;
 }
 
 int mkdir(const char *filename)
@@ -238,8 +293,16 @@ int _findclose(long handle)
 
 int _filelength(int fd)
 {
+    _kernel_oserror *e;
     int ext;
-    return LOGERR(_swix(OS_Args, _INR(0,1)|_OUT(2), 2, fd, &ext)) ? -1 : ext;
+
+    if ((e = LOGERR(_swix(OS_Args, _INR(0,1)|_OUT(2), 2, fd, &ext))) != NULL)
+    {
+	GlobalSetLastError(e->errnum);
+	return -1;
+    }
+
+    return ext;
 }
 
 /* eof fileio.c */

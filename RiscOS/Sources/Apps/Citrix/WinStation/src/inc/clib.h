@@ -105,4 +105,13 @@ extern void *read_rect(const void *in, RECT *r);
 
 extern int GetLocalKeyboard(char *s, int len);
 
+#define printer_NONE		0
+#define printer_PARALLEL	1
+#define printer_SERIAL		2
+#define printer_OTHER		3
+extern int GetPrinterType( void );
+
+extern _kernel_oserror *print_upcall_claim( void );
+extern _kernel_oserror *print_upcall_release( void );
+
 #endif //__CLIB_H__

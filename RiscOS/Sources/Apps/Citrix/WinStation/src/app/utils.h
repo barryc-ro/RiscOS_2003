@@ -68,6 +68,11 @@ extern char *extract_and_expand(const char *in, int len);
 
 /* --------------------------------------------------------------------------------------------- */
 
+extern void timeout_disable(void);
+extern void timeout_enable(void);
+
+/* --------------------------------------------------------------------------------------------- */
+
 #endif
 
 /* eof utils.h */

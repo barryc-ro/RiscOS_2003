@@ -113,7 +113,7 @@ HWND CreateMainWindow( HINSTANCE hInstance, INT nCmdShow,
 VOID FAR *WinAlloc( UINT cb );
 VOID FAR *WinReAlloc( VOID FAR *pMem, UINT cb );
 VOID WinFree( VOID FAR *pMem );
-#ifndef WIN32
+#if !defined(WIN32) && !defined(RISCOS)
 DWORD GetLastError( VOID );
 #endif
 #ifdef WIN16
