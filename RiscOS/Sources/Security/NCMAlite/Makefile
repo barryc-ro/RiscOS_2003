@@ -37,7 +37,7 @@ ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p -depend !Depend -throwback 
-INCLUDES= -IC: 
+INCLUDES= -IC:,TCPIPLibs: 
 
 #
 # Different compile options - choose one
@@ -80,7 +80,7 @@ NODB  =         -UREMOTE_DEBUG -DCHIMPANZEE_INTERFACE \
 
 NCTARGETARCH = ${NODB}
 
-CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS}
+CCFLAGS = -Wp -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS}
 
 
 
