@@ -29,6 +29,7 @@
 #include "Utils.h"
 
 #include "Browser.h"
+#include "ChoiceDefs.h"
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "FetchHTML.h"
 #include "Filetypes.h"
@@ -40,16 +41,18 @@
 #include "Redraw.h"
 #include "Reformat.h"
 #include "TokenUtils.h"
+#include "Toolbars.h"
 #include "URLveneer.h"
 
 #include "Object.h"
 
 /* Static function prototypes */
 
-static int               object_get_token_object  (browser_data * b, HStream * t);
-static _kernel_oserror * object_get_object_size   (browser_data * b, int object, BBox * size);
-static _kernel_oserror * object_get_object_plugin (browser_data * b, int object, unsigned int * plugin_instance, unsigned int * plugin_task);
-static _kernel_oserror * object_set_object_plugin (browser_data * b, int object, unsigned int plugin_instance, unsigned int plugin_task);
+static int               object_get_token_object    (browser_data * b, HStream * t);
+static _kernel_oserror * object_get_object_size     (browser_data * b, int object, BBox * size);
+static int               object_get_object_position (browser_data * b, int object, int * x, int * y);
+static _kernel_oserror * object_get_object_plugin   (browser_data * b, int object, unsigned int * plugin_instance, unsigned int * plugin_task);
+static _kernel_oserror * object_set_object_plugin   (browser_data * b, int object, unsigned int plugin_instance, unsigned int plugin_task);
 
 /*************************************************/
 /* object_new_object()                           */
@@ -111,15 +114,6 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
   b->odata[b->nobjects].x                       = -1;
   b->odata[b->nobjects].y                       = -1;
 
-  /* Width and height initially come from the token, but if this */
-  /* ends up leading to a Plug-In being called, that Plug-In     */
-  /* could ask for the size to change; hence the 'width' and     */
-  /* 'height' fields.                                            */
-
-  b->odata[b->nobjects].units                   = UNITS_PIXELS;
-  b->odata[b->nobjects].width                   = t->cols;
-  b->odata[b->nobjects].height                  = t->rows;
-
   /* Set up initial flags values */
 
   b->odata[b->nobjects].isimage                 = 0;
@@ -152,14 +146,32 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
          filetype == FileType_BMP
        )
     {
-      RetError(image_new_image(b,
-                               data,
-                               t,
-                               0));
+      const char * current;
+      const char * newdata;
 
-      b->odata[b->nobjects - 1].isimage = 1;
+      /* Must relativise the data URL... */
 
-      return NULL;
+      current = browser_fetch_url(b);
+      if (!current) current = browser_current_url(b);
+
+      if (current)
+      {
+        newdata = HtmlRelativiseURL(current, data, t);
+
+        if (newdata)
+        {
+          /* If we've managed all that, call image_new_image */
+
+          RetError(image_new_image(b,
+                                   newdata,
+                                   t,
+                                   0));
+
+          b->odata[b->nobjects - 1].isimage = 1;
+
+          return NULL;
+        }
+      }
     }
   }
 
@@ -188,6 +200,7 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
 _kernel_oserror * object_discard(browser_data * b)
 {
   _kernel_oserror * e = NULL;
+  _kernel_oserror * local;
   int               i;
 
   /* Close down any Plug-Ins */
@@ -206,7 +219,13 @@ _kernel_oserror * object_discard(browser_data * b)
     }
   }
 
-  /* Remove the Objects */
+  /* Only set 'e' from the queue flush if the above call didn't */
+  /* generate an error.                                         */
+
+  local = plugin_flush_queue(b, 1);
+  if (!e) e = local;
+
+  /* Remove the Objects themselves. */
 
   b->nobjects = 0;
 
@@ -245,13 +264,16 @@ static int object_get_token_object(browser_data * b, HStream * t)
   {
     #ifdef TRACE
 
-      erb.errnum = Utils_Error_Custom_Normal;
+      if (t->tagno != TAG_OBJECT)
+      {
+        erb.errnum = Utils_Error_Custom_Normal;
 
-      sprintf(erb.errmess,
-              "Token %08x passed to object_new_object does not represent an OBJECT, APPLET or EMBED tag",
-              (int) t);
+        sprintf(erb.errmess,
+                "Token %08x passed to object_get_token_object does not represent an OBJECT, APPLET or EMBED tag",
+                (int) t);
 
-      show_error_ret(&erb);
+        show_error_ret(&erb);
+      }
 
     #endif
 
@@ -339,10 +361,38 @@ static _kernel_oserror * object_get_object_size(browser_data * b, int object, BB
 
   /* Find its size */
 
-  if (b->odata[object].units == UNITS_PIXELS)
   {
-    size->xmax = b->odata[object].width  * 2; /* A 'web pixel' -> 2 OS units under RISC OS */
-    size->ymax = b->odata[object].height * 2;
+    int       w, h;
+    int       available_w = redraw_display_width (b, b->cell);
+    int       available_h = redraw_display_height(b, b->cell);
+    HStream * tp          = b->odata[object].token;
+
+    /* Deal with % specifiers as well as pixels */
+
+    if (OBJECT_HAS_WIDTH(tp))
+    {
+      switch (OBJECT_WIDTH_UNITS(tp))
+      {
+        default:
+        case UNITS_PIXELS:  w = OBJECT_WIDTH(tp) * 2; break;
+        case UNITS_PERCENT: w = available_w * OBJECT_WIDTH(tp) / 100; break;
+      }
+    }
+    else w = 0;
+
+    if (OBJECT_HAS_HEIGHT(tp))
+    {
+      switch (OBJECT_HEIGHT_UNITS(tp))
+      {
+        default:
+        case UNITS_PIXELS:  h = OBJECT_HEIGHT(tp) * 2; break;
+        case UNITS_PERCENT: h = available_h * OBJECT_HEIGHT(tp) / 100; break;
+      }
+    }
+    else h = 0;
+
+    size->xmax = w;
+    size->ymax = h;
   }
 
   /* Don't allow zero in any direction */
@@ -379,6 +429,39 @@ _kernel_oserror * object_get_token_object_size(browser_data * b, HStream * t, BB
 }
 
 /*************************************************/
+/* object_get_object_position()                  */
+/*                                               */
+/* Returns the x and y fields of the object_info */
+/* structure for a given Object.                 */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object;           */
+/*                                               */
+/*             Number of the Object;             */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             X coordinate is returned;         */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             Y coordinate is returned.         */
+/*                                               */
+/* Returns:    1 if the object number is invalid */
+/*             or 0 for success.                 */
+/*                                               */
+/* Assumes:    Neither pointer is NULL.          */
+/*************************************************/
+
+static int object_get_object_position(browser_data * b, int object, int * x, int * y)
+{
+  if (object < 0 || object >= b->nobjects) return 1;
+
+  *x = b->odata[object].x;
+  *y = b->odata[object].y;
+
+  return 0;
+}
+
+/*************************************************/
 /* object_get_token_object_position()            */
 /*                                               */
 /* Returns the x and y fields of the object_info */
@@ -407,12 +490,7 @@ int object_get_token_object_position(browser_data * b, HStream * t, int * x, int
 {
   int object = object_get_token_object(b, t);
 
-  if (object < 0) return 1;
-
-  *x = b->odata[object].x;
-  *y = b->odata[object].y;
-
-  return 0;
+  return object_get_object_position(b, object, x, y);
 }
 
 /*************************************************/
@@ -441,6 +519,15 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
 {
   int object = object_get_token_object(b, t);
 
+  #ifdef TRACE
+    if (tl & (1u<<30))
+    {
+      char debugbuf[1024];
+      sprintf(debugbuf,"object_set_token_object_positon: Called for %p, %p at %d, %d",b,t,x,y);
+      Printf("%s\n",debugbuf);
+    }
+  #endif
+
   /* If an object was found, set the x and y coordinates */
 
   if (object >= 0)
@@ -450,8 +537,18 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
     oldx = b->odata[object].x;
     oldy = b->odata[object].y;
 
-    b->odata[object].x = x;
-    b->odata[object].y = y;
+    /* *Don't* invalidate x and y positions for Objects; this causes */
+    /* too many reshape messages for some PlugIns and can lead to    */
+    /* items left with out-of-date position information.             */
+    /*                                                               */
+    /* Objects are initialised to be in an invalidated position, of  */
+    /* course, so still need to check for that later in the code.    */
+
+    if (x != -1 && y != -1)
+    {
+      b->odata[object].x = x;
+      b->odata[object].y = y;
+    }
 
     /* If this is is acting as an image, need to update */
     /* the image structure too.                         */
@@ -466,23 +563,39 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
     {
       BBox position;
 
+      #ifdef TRACE
+        if (tl & (1u<<30)) Printf("object_set_token_object_positon: Is Plug-In\n");
+      #endif
+
       show_error_ret(object_get_object_size(b, object, &position));
 
       /* If this is the first time we've tried to set a position for */
       /* the Object and a broadcast to start up an associated        */
-      /* Plug-In has not yet been sent, send it.                     */
+      /* Plug-In has not yet been sent, add the Plug-In to the       */
+      /* 'ready to launch' queue.                                    */
 
       if (!b->odata[object].broadcast_sent)
       {
+        int start_now = 0;
+
         if (x < 0)
         {
-          /* Object position is invalid, so hide the Plug-In */
+          /* Object position is invalid, so hide the Plug-In by moving */
+          /* it off the top of the work area.                          */
 
-          position.xmin = -position.xmax - 16;
-          position.xmax = -16;
+          position.xmax = (position.xmax - position.xmin);
+          position.xmin = 0;
+          position.ymax = (position.ymax - position.ymin) + 0x1000; /* 0x1000 to be (very) safe */
+          position.ymin = 0x1000;
 
-          position.ymin = position.ymax + 16;
-          position.ymin = 16;
+          /* This call will be done by the reformatter, as soon as it    */
+          /* sees the Object item (the redraw routines set the position, */
+          /* the reformatter invalidates it).                            */
+          /*                                                             */
+          /* So only start the Plug-In if Choices say to do so ASAP.     */
+
+          if (choices.plugin_control == Choices_PlugIns_ASAP && choices.support_object) start_now = 1;
+
         }
         else
         {
@@ -492,11 +605,26 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
           position.ymin += y;
           position.xmax += x;
           position.ymax += y;
+
+          if (choices.plugin_control != Choices_PlugIns_Never && choices.support_object) start_now = 1;
         }
 
-        b->odata[object].broadcast_sent = 1; /* Don't try over and over if the first gives an error */
+        if (start_now)
+        {
+          b->odata[object].broadcast_sent = 1; /* Don't try over and over if the first gives an error */
 
-        show_error_ret(plugin_broadcast_plugin_open(b, t, &position));
+          #ifdef TRACE
+            if (tl & (1u<<30)) Printf("object_set_token_object_positon: Starting Plug-In\n");
+          #endif
+
+          show_error_ret(plugin_add_queue_item(b, t, &position));
+        }
+
+        #ifdef TRACE
+
+          else if (tl & (1u<<30)) Printf("object_set_token_object_position: Choices say not to start Plug-In yet\n");
+
+        #endif
       }
 
       /* If the Plug-In has been started, and the position of the Object */
@@ -512,13 +640,12 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
       {
         if (x < 0)
         {
-          /* Object position has been invalidated, so hide the Plug-In */
+          /* Object position is invalid */
 
-          position.xmin = -position.xmax - 16;
-          position.xmax = -16;
-
-          position.ymin = position.ymax + 16;
-          position.ymin = 16;
+          position.xmax = (position.xmax - position.xmin);
+          position.xmin = 0;
+          position.ymax = (position.ymax - position.ymin) + 0x1000; /* 0x1000 to be (very) safe */
+          position.ymax = 0x1000;
         }
         else
         {
@@ -532,6 +659,10 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
 
         /* Send the reshape message */
 
+        #ifdef TRACE
+          if (tl & (1u<<30)) Printf("object_set_token_object_positon: Moving Plug-In\n");
+        #endif
+
         show_error_ret(plugin_send_original_plugin_reshape(b,
                                                            b->odata[object].plugin_instance_handle,
                                                            b->odata[object].plugin_task_handle,
@@ -540,7 +671,60 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
     }
   }
 
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("object_set_token_object_positon: Successful, returning Object number %d\n",object);
+  #endif
+
   return object;
+}
+
+/*************************************************/
+/* object_get_token_object_box()                 */
+/*                                               */
+/* Returns a bounding box filled in with parent  */
+/* window work area coordinates for a given      */
+/* Object.                                       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object;           */
+/*                                               */
+/*             Pointer to the token representing */
+/*             the Object;                       */
+/*                                               */
+/*             Pointer to a BBox to return the   */
+/*             work area coordinates describing  */
+/*             the Object's size.                */
+/*                                               */
+/* Returns:    1 for failure, 0 for success.     */
+/*************************************************/
+
+int object_get_token_object_box(browser_data * b, HStream * t, BBox * box)
+{
+  int object = object_get_token_object(b, t);
+  int x, y;
+
+  if (object < 0 || object >= b->nobjects || !box) return 1;
+
+  /* Get the Object bounding box */
+
+  if (object_get_object_size(b, object, box)) return 1;
+
+  /* Get the Object position */
+
+  if (object_get_object_position(b, object, &x, &y)) return 1;
+
+  /* Return if the Object position is invalidated at the moment */
+
+  if (x < 0) return 1;
+
+  /* Otherwise add the coordinates */
+
+  box->xmin += x;
+  box->ymin += y;
+  box->xmax += x;
+  box->ymax += y;
+
+  return 0;
 }
 
 /*************************************************/
