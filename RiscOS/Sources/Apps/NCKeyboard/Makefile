@@ -133,6 +133,7 @@ clean:
 	${WIPE} aof ${WFLAGS}
 	${WIPE} abs ${WFLAGS}
 	${WIPE} linked ${WFLAGS}
+	${RM} s.ModuleWrap
 	${RM} ${TARGET}
 	${RM} ${APP}
 	@echo
