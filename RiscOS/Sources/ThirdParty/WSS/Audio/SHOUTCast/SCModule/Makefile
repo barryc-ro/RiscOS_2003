@@ -61,6 +61,7 @@ OBJS      =	\
  o.tcpbsd	\
  o.gethost_  	\
  o.gethost      \
+ o,instance     \
  $(CMHGOBJ)
 
 #
