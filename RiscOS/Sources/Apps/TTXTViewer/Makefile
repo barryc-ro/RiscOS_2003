@@ -83,22 +83,20 @@ install: $(FILES)
          @echo $(COMPONENT): installed
 
 clean:
-        ${RM} o.main
-        ${RM} o.messages
-        ${RM} o.teletext
-        ${RM} o.utils
-        ${RM} o.config
-        ${RM} o.keyboard
-        ${RM} ${RDIR}.!RunImage
+        ${RM}   ${RDIR}.!RunImage
         ${WIPE} ${WPREFLAGS} ${APP}.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
         ${RM}   ${APP}
         ${STRIPDEPEND}
         @echo $(COMPONENT): cleaned
 
+dirs:
+        ${MKDIR} o
+
 #
 # Static dependencies:
 #
-${RDIR}.!RunImage: ${OBJS} ${CLIB} ${WIMPLIB} 
+${RDIR}.!RunImage: ${OBJS} ${CLIB} ${WIMPLIB} dirs
         ${LD} ${LINKFLAGS} -o $@ ${OBJS} ${CLIB} ${WIMPLIB} 
 #        ${SQUEEZE} $@
 
