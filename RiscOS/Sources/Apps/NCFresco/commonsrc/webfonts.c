@@ -25,7 +25,21 @@ webfont webfonts[WEBFONT_COUNT];
 
 static char *webfont_font_name(int n, char *buffer)
 {
-    strcpy(buffer, config_font_names[n & WEBFONT_FLAG_MASK]);
+    if (n & WEBFONT_TYPE_SYMBOL)
+    {
+	switch (n & WEBFONT_FLAG_MASK)
+	{
+	case 0:
+	    strcpy(buffer, "Selwyn");
+	    break;
+	default:
+	    return NULL;
+	}
+    }
+    else
+    {
+	strcpy(buffer, config_font_names[n & WEBFONT_FLAG_MASK]);
+    }
 
     return buffer;
 }
@@ -45,7 +59,8 @@ os_error *webfonts_init_font(int n)
 	e = font_lose(item->handle);
     }
 
-    webfont_font_name(n, buffer);
+    if (webfont_font_name(n, buffer) == NULL)
+	return NULL;
 
     size = (n & WEBFONT_SIZE_MASK) >> WEBFONT_SIZE_SHIFT;
     size = config_font_sizes[size] * config_display_scale/100;
@@ -66,8 +81,20 @@ os_error *webfonts_init_font(int n)
 
     if (e == NULL)
     {
-	item->max_up = (fi.maxy * 9) / 8;
-	item->max_down = ((-fi.miny) * 9) / 8;
+	int inc_up, inc_dn;
+	inc_up = config_display_leading/2;
+	inc_dn = config_display_leading - config_display_leading/2;
+
+	if (config_display_leading_percent)
+	{
+	    item->max_up = fi.maxy * (100 + inc_up) / 100;
+	    item->max_down = (-fi.miny) * (100 + inc_dn) / 100;
+	}
+	else
+	{
+	    item->max_up = fi.maxy + inc_up;
+	    item->max_down = (-fi.miny) + inc_dn;
+	}
 
 	e = font_charbbox(item->handle, 'i', font_OSCOORDS, &fi);
     }
@@ -91,6 +118,10 @@ os_error *webfonts_init(void)
 	if (e == NULL)
 	{
 	    /* */
+	}
+	else if (i & WEBFONT_TYPE_SYMBOL)
+	{			/* if no symbol font then we will work around */
+	    e = NULL;
 	}
     }
 
@@ -206,6 +237,14 @@ os_error *webfont_declare_printer_fonts(void)
 	}
     }
 
+    /* declare the symbol font if there */
+    item = &webfonts[WEBFONT_SYMBOL(1)];
+    if (item->handle > 0)
+    {
+	r.r[0] = item->handle;
+	ep = os_swix(PDriver_DeclareFont, &r);
+    }	
+    
     if (ep == NULL)
     {
 	r.r[0] = 0;
@@ -231,6 +270,12 @@ os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
 	size += strlen(buffer)+2;
     }
 
+    if (webfonts[WEBFONT_SYMBOL(1)].handle > 0)
+    {
+	webfont_font_name(WEBFONT_SYMBOL(1), buffer);
+	size += strlen(buffer)+2;
+    }
+    
     size = RND(size);
 
     size += 2 * sizeof(int);	/* Two word header */
@@ -255,8 +300,22 @@ os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
 	size -= len;
     }
 
+    if (webfonts[WEBFONT_SYMBOL(1)].handle > 0)
+    {
+	int len;
+
+	buffer[0] = (char) WEBFONT_SYMBOL(1)+1;
+	webfont_font_name(WEBFONT_SYMBOL(1), buffer+1);
+	len = strlen(buffer+1) + 2;
+	df_write_data(fh, *writeptr, buffer, len);
+	*writeptr += len;
+	size -= len;
+    }
+
     df_write_data(fh, *writeptr, "\0\0\0\0", size);
     *writeptr += size;
 
     return NULL;
 }
+
+/* eof webfonts.c */

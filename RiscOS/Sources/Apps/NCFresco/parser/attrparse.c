@@ -526,7 +526,7 @@ extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, 
         goto bad;
 
     v.type = value_stdunit_list;
-    v.u.l.num = string_count_tokens(string, " ,");
+    v.u.l.num = string_count_tokens(string, " ,\t\r\n");
     v.u.l.items = mm_calloc(v.u.l.num, sizeof(*v.u.l.items));
 
     use = copy = stringdup(string);
@@ -539,7 +539,7 @@ extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, 
     {
         STRING el;
 	
-	el.ptr = strtok(use, " ,");
+	el.ptr = strtok(use, " ,\t\r\n");
 	use = NULL;
 
 	if (el.ptr)

@@ -73,6 +73,11 @@ typedef struct _antweb_doc {
 #if USE_MARGINS
     wimp_box margin;
 #endif
+    int scale_value;
+    int start_time;		/* clock() at which page started downloading */
+
+    int threaded;
+    int pending_delete;
 } antweb_doc;
 
 #define BASE(doc) ((doc->rh && doc->rh->base) ? doc->rh->base : doc->url)

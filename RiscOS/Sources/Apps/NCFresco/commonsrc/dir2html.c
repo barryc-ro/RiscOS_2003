@@ -40,7 +40,7 @@
 
 static char *d2h_fmt_title = "Index of %s";
 #ifdef STBWEB
-static char *d2h_fmt_footer = "Listing generated %s by "PROGRAM_NAME".\n";
+static char *d2h_fmt_footer = "Listing generated %s\n";
 #else
 static char *d2h_fmt_footer = "Listing generated %s by ANT Fresco&#174;.\n";
 #endif

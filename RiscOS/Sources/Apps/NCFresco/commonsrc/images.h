@@ -42,6 +42,7 @@ BOOL image_type_test(int ft);
 os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h, wimp_paletteword bg, image *result);
 #define image_find_flag_DEFER	(1 << 0) /* Make the image structure but don't start fetching the image */
 #define image_find_flag_CHECK_EXPIRE (1 << 1) /* if coming from cache check expiry date first */
+#define image_find_flag_URGENT  (1 << 2) /* Add to head of queue, not tail */
 
 /* Loose an image */
 os_error *image_loose(image i, image_callback cb, void *h);
@@ -82,10 +83,10 @@ typedef int image_flags;
 #define image_flag_DEFERRED	0x10	/* User requested deferred fetching */
 #define image_flag_TO_RELOAD	0x20	/* Marked for reload */
 
-#define image_flag_INTERLACED	0x10000	/* Image is interlaced */
-#define image_flag_MASK		0x20000	/* Image has a mask */
-#define image_flag_ANIMATION	0x40000	/* Image has multiple frames */
-#define image_flag_USE_LOGICAL	0x80000	/* logical size is different from first frame size */
+#define image_flag_INTERLACED	0x00010000	/* Image is interlaced */
+#define image_flag_MASK		0x00020000	/* Image has a mask */
+#define image_flag_ANIMATION	0x00040000	/* Image has multiple frames */
+#define image_flag_USE_LOGICAL	0x00080000	/* logical size is different from first frame size */
 
 #define image_flag_STREAMING	0x10000000	/* Image is being streamed in from parser code */
 #define image_flag_NO_BLOCKS	0x20000000	/* Don't do image blocking, we have all the data */

@@ -28,3 +28,4 @@ extern void dump_htmlctx(HTMLCTX *ptr);
 extern void dump_float_item(rid_float_item *ptr);
 extern void dump_floats_link(rid_floats_link *ptr);
 
+extern char *item_names[];

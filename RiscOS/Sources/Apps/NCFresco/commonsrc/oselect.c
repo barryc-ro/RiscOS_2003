@@ -65,10 +65,10 @@ static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 	{
 	    if (!tog)
 	    {
-		if ((oi->flags & rid_if_CHECKED) == 0)
+		if ((oi->flags & rid_if_SELECTED) == 0)
 		{
 		    iis[i].flags |= fe_menu_flag_CHECKED;
-		    oi->flags |= rid_if_CHECKED;
+		    oi->flags |= rid_if_SELECTED;
 		    if (redraw)
 		    {
 			frontend_menu_update_item(mh, i);
@@ -78,7 +78,7 @@ static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 	    else
 	    {
 		iis[i].flags ^= fe_menu_flag_CHECKED;
-		oi->flags ^= rid_if_CHECKED;
+		oi->flags ^= rid_if_SELECTED;
 		if (redraw)
 		{
 		    frontend_menu_update_item(mh, i);
@@ -89,10 +89,10 @@ static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 	{
 	    if (!tog)
 	    {
-		if ((oi->flags & rid_if_CHECKED))
+		if ((oi->flags & rid_if_SELECTED))
 		{
 		    iis[i].flags ^= fe_menu_flag_CHECKED;
-		    oi->flags ^= rid_if_CHECKED;
+		    oi->flags ^= rid_if_SELECTED;
 		    if (redraw)
 		    {
 			frontend_menu_update_item(mh, i);
@@ -157,10 +157,7 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	/* Start at the end; while not before the start and on a space; work backwards */
 	for(i = strlen(oi->text)-1; i>=0 && isspace(oi->text[i]); i--)
 	    oi->text[i] = 0;
-/*
-	if (oi->flags & rid_if_CHECKED)
-	    checked = TRUE;
- */
+
 	fs.s = oi->text;
 	fs.x = fs.y = fs.term = (1 << 30);
 	fs.split = -1;
@@ -173,11 +170,9 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 	height ++;
     }
-/*
-    if (!checked && sel->options)
-	sel->options->flags |= rid_if_CHECKED;
- */
-    if (height)
+
+    /* don't repeat this if we resize as it leaks memory and resets selections */
+    if (height && sel->items == NULL)
     {
 	sel->items = mm_calloc(sizeof(fe_menu_item), height);
 
@@ -186,7 +181,12 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    fe_menu_item *ii = ((fe_menu_item*)sel->items) + i;
 	    ii->name = oi->text;
 	    if (oi->flags & rid_if_CHECKED)
+	    {
+		oi->flags |= rid_if_SELECTED;
 		ii->flags = fe_menu_flag_CHECKED;
+	    }
+	    else
+		oi->flags &= ~rid_if_SELECTED;
 	}
     }
 
@@ -219,7 +219,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     for(oi = sel->options; oi; oi = oi->next)
     {
-	if (oi->flags & rid_if_CHECKED)
+	if (oi->flags & rid_if_SELECTED)
 	{
 	    str = oi->text;
 	    checked ++;
@@ -279,7 +279,10 @@ void oselect_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     frontend_menu_dispose( sel->menuh );
 
     if (sel->items)
+    {
 	mm_free(sel->items);
+	sel->items = NULL;
+    }
 #endif /* BUILDERS */
 }
 

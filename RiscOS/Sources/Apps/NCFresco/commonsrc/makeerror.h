@@ -34,3 +34,4 @@ os_error *makeerrorf(int n, ...);
 #define ERR_PAGE_NOT_WHOLE	27
 #define ERR_ACCESS_DENIED	28
 #define ERR_FIND_FAILED         29
+#define ERR_NO_ACTION	        30

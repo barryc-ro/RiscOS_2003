@@ -141,7 +141,9 @@ extern void add_bold_to_font(SGMLCTX *context)
 extern void add_italic_to_font(SGMLCTX *context)
 {
     BITS x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
-    x |= WEBFONT_FLAG_ITALIC;
+
+    /* pdh: was "|=" */
+    x ^= WEBFONT_FLAG_ITALIC;
     PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
     PRSDBGN(("add_italic_to_font(%p)\n", context));
 }
@@ -286,7 +288,7 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     PRSDBG(("PUSH WORD '%.*s'\n", bytes, ptr));
     flexmem_shift();
 #endif
-    
+
     new = mm_calloc(1, sizeof(*new));
     nb = &(new->base);
 
@@ -409,7 +411,7 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 
 /*****************************************************************************/
 
-extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target)
+extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target, VALUE *id)
 {
     rid_form_item *new;
 
@@ -430,6 +432,9 @@ extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *tar
     else
 	new->target = strdup(me->basetarget);
 
+    if (id->type == value_string)
+	new->id = stringdup(id->u.s);
+    
     rid_form_item_connect(me->rh, new);
     me->form = new;
 }
@@ -670,7 +675,7 @@ extern void new_area_item(HTMLCTX *me,
 			  VALUE *alt)
 {
     rid_area_item *area;
-    
+
     if (map == NULL)		/* can't check for no coords here as default will fail */
         return;
 
@@ -768,7 +773,7 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
 
     if (me->no_break)
 	nb->flag |= rid_flag_NO_BREAK;
-    
+
     nb->tag = rid_tag_SELECT;
     nb->aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
@@ -872,6 +877,9 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
 	break;
     case HTML_INPUT_TYPE_RESET:
 	tag = rid_it_RESET;
+	break;
+    case HTML_INPUT_TYPE_BUTTON:
+	tag = rid_it_BUTTON;
 	break;
     }
 
@@ -1083,8 +1091,8 @@ extern void text_item_ensure_break(HTMLCTX * me)
 
     PRSDBG(("Ensure Paragraph break.\n"));
 
-    if ( (nb = me->rh->stream.text_last) != NULL && 
-	 nb->tag != rid_tag_PBREAK && 
+    if ( (nb = me->rh->stream.text_last) != NULL &&
+	 nb->tag != rid_tag_PBREAK &&
 	 nb->tag != rid_tag_BULLET) /* SJM: added bullet check */
     {
         nb = mm_calloc(1, sizeof(*nb));

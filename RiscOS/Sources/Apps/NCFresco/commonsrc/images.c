@@ -58,32 +58,18 @@
 #include "version.h"
 #include "unwind.h"
 
+#include "files.h"
+
 /* ------------------------------------------------------------------------- */
 
 #ifndef NEW_WEBIMAGE
-#define NEW_WEBIMAGE	1
-#endif
-
-#ifndef NEW_ANIMATION
-#define NEW_ANIMATION	1
-#endif
-
-#ifndef MEMCHECK_THREADS
-#define MEMCHECK_THREADS 1
+#define NEW_WEBIMAGE	2
 #endif
 
 #ifdef STBWEB_BUILD
-# if NEW_WEBIMAGE
 #  include "libs/webimage/webimage.h"
-# else
-#  include "libs/webim_old/webimage.h"
-# endif
 #else
 # include "../webimage/webimage.h"
-#endif
-
-#if !NEW_WEBIMAGE
-# include "sprt2sprt.h"
 #endif
 
 /* Set debug to 2 or more for loads of detail on the image translation */
@@ -92,12 +78,8 @@
 #define DEBUG 0
 #endif
 
-#ifndef FLEX
-#define FLEX 1
-#endif
-
-#ifndef IMAGE_SCALE_TO_TAG
-#define IMAGE_SCALE_TO_TAG 1
+#ifndef ADD_PALETTE
+# define ADD_PALETTE 0
 #endif
 
 #define REAPER_POLL_TIME 500	/* Images arriving more than 5 seconds apart need to reload */
@@ -107,7 +89,7 @@
 #define CACHE_SPRITE_PLOT_NAME	"cacheplot"
 #define CACHE_SPRITE_BUILD_NAME	"cachebuild"
 
-#define FLEX_FUDGE		4		/* get round sprite extend bug with reading over end of sprite areas */
+#define FLEX_FUDGE		16		/* get round sprite extend bug with reading over end of sprite areas */
 
 /* ------------------------------------------------------------------------- */
 
@@ -140,10 +122,10 @@
  * are called to cause documents to be updated.  If a the same
  * function/data pointer pair is registered with the image more than
  * once it is only called once.
-
  */
 
-typedef struct image_callback_str {
+typedef struct image_callback_str
+{
     int use_count;
     image_callback cb;
     void *h;
@@ -152,20 +134,10 @@ typedef struct image_callback_str {
 
 #define IMAGE_MAGIC 0x78e6b2c9
 
-#if NEW_WEBIMAGE
-typedef struct {
+typedef struct
+{
     int ftype;
 } webimage_str;
-#else
-typedef char * (*webimage_start)(getsrc_func getsrc,
-				 putdst_func putdst, seekdst_func seekdst, imagerec_func imrec,
-				 void *user_get, void *user_put, BOOL blockdetail);
-
-typedef struct {
-    int ftype;
-    webimage_start start;
-} webimage_str;
-#endif
 
 typedef enum
 {
@@ -176,7 +148,8 @@ typedef enum
     pixtrans_WIDE		/* Table is wide > 1 byte */
 } image_pixtrans_type;
 
-typedef struct _image_info {
+typedef struct _image_info
+{
     int magic;
     struct _image_info *next, *prev;
     int use_count;
@@ -194,38 +167,43 @@ typedef struct _image_info {
     sprite_area **areap;
     sprite_area *our_area, *their_area, *cache_area;
     wimp_paletteword cache_bgcol;
-#if NEW_ANIMATION
+
     int cache_mask;		/* if 0 then the cache sprite has no mask and there is no build sprite */
     int cache_frame;		/* last frame number built from build sprite into plot sprite */
     int cache_bgid;		/* a value uniquely identifying the last background rendered */
     int cache_x, cache_y;	/* phase of last bg plotting in cache */
-#endif
+
     sprite_id id;
     char sname[13];		/* Used when we point to a file icon or the default icon */
 
     sprite_pixtrans *pt;		/* If non-NULL points to a pixel translation table */
     image_pixtrans_type table_type;	/* See defines above */
 
-    int width, height;
-    FILE *fh;			/* Used during reading the data */
+    int width, height;		/* in pixels */
+    int fh;			/* Used during reading the data */
     thread tt;
     int put_offset;
     image_callback_str *cblist;
     access_handle ah;
-#if NEW_WEBIMAGE
+
     frame_rec *frame;
     int frames;
     int repeats;
     int cur_frame, cur_repeat;
     char errbuf[256];
+
+#if NEW_WEBIMAGE == 2
+    void *data_area;
+    int plotter;
+    int xdpi, ydpi;		
+    int dx, dy;
+    int offset_x, offset_y;	/* for DrawFile only */
 #endif
 } image_info_str;
 
 #define wi_flag_MASK	0x01
 
 /* ------------------------------------------------------------------------- */
-
-static void image_fetch_next(void);
 
 static image image_list, image_last;
 static int being_fetched;
@@ -235,13 +213,17 @@ static char *image_thread_data_ptr;
 static int image_thread_data_more;
 static int image_thread_data_status;
 
-static int image_white_byte(image im, wimp_paletteword colour);
+int spriteextend_version;
 
+/* ------------------------------------------------------------------------- */
+
+static int image_white_byte(image im, wimp_paletteword colour);
+static void image_fetch_next(void);
 static void image_issue_callbacks(image i, int changed, wimp_box *box);
 static void image_animation_alarm(int at, void *h);
 static void image_startup_animation(image i);
 
-#if NEW_ANIMATION
+/* ------------------------------------------------------------------------- */
 
 #define image_frame_PLOT_IMAGE	(1<<0)
 #define image_frame_PLOT_MASK	(1<<1)
@@ -251,11 +233,59 @@ static void image_startup_animation(image i);
 static void image_animation_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy);
 static void image_animation_render_frame(image i, int flags);
 
-#endif
-
 /* ------------------------------------------------------------------------- */
 
-#if NEW_WEBIMAGE
+#if NEW_WEBIMAGE == 2
+
+#define DrawFile_Render		0x45540
+#define DrawFile_BBox		0x45541
+
+#define JPEG_Info		0x49980
+#define JPEG_PlotScaled		0x49982
+
+#define plotter_UNKNOWN		0
+#define plotter_SPRITE		1
+#define plotter_OSJPEG		2
+#define plotter_DRAWFILE	3
+
+typedef struct
+{
+    void (*render)(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy);
+    os_error *(*save_as_sprite)(image i, char *fname);
+    void (*save_as_draw)(image i, int fh, wimp_box *bb, int *fileoff);
+} plotter_str;
+
+static void image_sprite_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy);
+static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy);
+static void image_drawfile_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy);
+
+static os_error *image_sprite_save_as_sprite(image i, char *fname);
+
+static void image_sprite_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff);
+static void image_jpeg_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff);
+static void image_drawfile_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff);
+
+static plotter_str plotters[] =
+{
+    { 0, 0, 0 },
+    { image_sprite_render,	image_sprite_save_as_sprite, image_sprite_save_as_draw },
+    { image_jpeg_render,	0,			     image_jpeg_save_as_draw },
+    { image_drawfile_render,	0,			     image_drawfile_save_as_draw },
+};
+
+static webimage_str translators[] = {
+{ FILETYPE_SPRITE },
+{ FILETYPE_GIF	},
+{ FILETYPE_XBM	},
+{ FILETYPE_JPEG	},
+{ FILETYPE_PNG	},
+{ FILETYPE_TIFF },
+{ FILETYPE_DRAWFILE },
+{ -1		}
+};
+
+#else
+
 static webimage_str translators[] = {
 { FILETYPE_SPRITE },
 { FILETYPE_GIF	},
@@ -265,18 +295,17 @@ static webimage_str translators[] = {
 { FILETYPE_TIFF },
 { -1		}
 };
-#else
-static webimage_str translators[] = {
-{ FILETYPE_SPRITE,	&sprt2sprite	},
-{ FILETYPE_GIF,		&gif2sprite	},
-{ FILETYPE_XBM,		&xbm2sprite	},
-{ FILETYPE_JPEG,	&jpg2sprite	},
-#if 0
-{ FILETYPE_PNG,		&png2sprite	},
+
 #endif
-{ -1, 			0		}
-};
-#endif
+
+
+typedef enum
+{
+    image_cache_SOLID,
+    image_cache_MASK,
+    image_cache_MASK_SEPARATE
+} image_cache_t;
+
 
 /* ------------------------------------------------------------------------- */
 
@@ -288,6 +317,33 @@ static void free_pt(image i)
 	i->pt = NULL;
 	i->table_type = pixtrans_UNKNOWN;
     }
+}
+
+static void free_area(sprite_area **anchor)
+{
+    if (*anchor)
+    {
+	flex_free((void **)anchor);
+	*anchor = NULL;
+    }
+}
+
+static void free_data_area(void **anchor)
+{
+    if (*anchor)
+    {
+	flex_free(anchor);
+	*anchor = NULL;
+    }
+}
+
+static void fillin_scales(image i, int mode)
+{
+    /* fill in scaling values */
+    i->dx = 1 << bbc_modevar(mode, bbc_XEigFactor);
+    i->dy = 1 << bbc_modevar(mode, bbc_YEigFactor);
+    i->xdpi = 180 / i->dx;
+    i->ydpi = 180 / i->dy; 
 }
 
 /* ------------------------------------------------------------------------- */
@@ -303,7 +359,6 @@ static void free_pt(image i)
  * If we have some or exactly enough return it with flag true.
  */
 
-#if NEW_WEBIMAGE
 static int new_image_get_bytes(char *buf, int buf_len, void *h, BOOL *flush)
 {
     int rc;
@@ -336,54 +391,6 @@ static int new_image_get_bytes(char *buf, int buf_len, void *h, BOOL *flush)
 
     return rc;
 }
-#else
-static int new_image_get_bytes(char *buf, int buf_len, void *h)
-{
-    int rc, data_back;
-
-    if (image_thread_data_size >= buf_len)
-    {
-	memcpy(buf, image_thread_data_ptr, buf_len);
-	image_thread_data_ptr += buf_len;
-	image_thread_data_size -= buf_len;
-
-	return buf_len;
-    }
-
-    rc = image_thread_data_size;
-    if (image_thread_data_size)
-    {
-	memcpy(buf, image_thread_data_ptr, image_thread_data_size);
-	buf += image_thread_data_size;
-	buf_len -= image_thread_data_size;
-    }
-
-    do
-    {
-	thread_wait("Need more data");
-
-	data_back = image_thread_data_size;
-
-	if (data_back)
-	{
-	    int to_copy;
-
-	    to_copy = (buf_len > image_thread_data_size) ? image_thread_data_size : buf_len;
-
-	    memcpy(buf, image_thread_data_ptr, to_copy);
-	    buf += to_copy;
-	    buf_len -= to_copy;
-	    image_thread_data_ptr += to_copy;
-	    image_thread_data_size -= to_copy;
-
-	    rc += to_copy;
-	}
-
-    } while (data_back && buf_len);
-
-    return rc ? rc : -1;
-}
-#endif
 
 static void image_put_bytes(char *buf, int buf_len, void *h)
 {
@@ -400,10 +407,9 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
     {
 	flexmem_noshift();
 	memcpy(((char*) i->our_area) + i->put_offset, buf, buf_len);
+	flexmem_shift();
 
 	i->put_offset += buf_len;
-
-	flexmem_shift();
     }
 
     if ((i->flags & image_flag_REALTHING) == 0)
@@ -413,9 +419,9 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 	i->areap = &(i->our_area);
 	i->id.tag = sprite_id_name;
 	i->id.s.name = i->sname;
+
 	flexmem_noshift();
 	strncpy(i->sname, ((sprite_header *) (i->our_area + 1))->name, 12);
-	
 	flexmem_shift();
 
 	/* Fill with zero if we have no palette yet, use white if we can */
@@ -437,14 +443,16 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 	else
 	{
 	    IMGDBG(("image fill: memset %p %x %d\n", ((char*) i->our_area) + i->put_offset, fill, i->our_area->size - i->put_offset));
-    	    flexmem_noshift();
+
 	    /* I think this may be necessary */
 	    if (i->our_area->size - i->put_offset > 0)
 	    {
 		IMGDBGN(("memset: from %p =%02x %d bytes\n", ((char*) i->our_area) + i->put_offset, fill, i->our_area->size - i->put_offset));
+
+		flexmem_noshift();
 		memset(((char*) i->our_area) + i->put_offset, fill, i->our_area->size - i->put_offset);
+		flexmem_shift();
 	    }
-	    flexmem_shift();
 	}
 
 	free_pt(i);
@@ -458,15 +466,24 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
     /* only set renderable bit when palette has arrived */
     if ((i->flags & image_flag_RENDERABLE) == 0)
     {
-        sprite_header *sph = (sprite_header *) ((char *)i->our_area + i->our_area->sproff);
-        int pal_end = sph->mask > sph->image ? sph->mask : sph->image;
+        sprite_header *sph;
+        int pal_end;
+
+	flexmem_noshift();
+
+	sph = (sprite_header *) ((char *)i->our_area + i->our_area->sproff);
+	pal_end = sph->mask > sph->image ? sph->mask : sph->image;
 
         if ((i->put_offset >= sizeof(sprite_area) + pal_end) &&
 	    (i->flags & image_flag_USE_LOGICAL) == 0)
         {
             i->flags |= image_flag_RENDERABLE;
 	    free_pt(i);
-        }
+
+	    fillin_scales(i, sph->mode);
+	}
+
+	flexmem_shift();
     }
 
     i->flags |= image_flag_CHANGED;
@@ -489,6 +506,17 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     int size;
 
     IMGDBGN(("Given image_rec %p\n", ir));
+
+    /* if we want OS jpeg and the OS can handle it, then abort transfer */
+    if (ir->format == webformat_JPEG && !ir->interlaced && ir->jfif &&
+	config_display_jpeg != 2 && spriteextend_version >= 99)
+    {
+	i->width = ir->x_logical;	/* changed to logical sizes */
+	i->height = ir->y_logical;
+	i->plotter = plotter_OSJPEG;
+	i->flags |= image_flag_CHANGED;
+	return FALSE;
+    }
 
     size = ir->size;
 
@@ -540,7 +568,6 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     if (ir->mask)
 	i->flags |= image_flag_MASK;
 
-#if FLEX
     if (flex_alloc((flex_ptr) &(i->our_area), size + 16 + FLEX_FUDGE) == FALSE)
     {
 	usrtrc( "Failed to get memory for image\n");
@@ -551,19 +578,6 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     {
 	IMGDBG(("Flex alloc for %d bytes gave ptr %p\n", size+16, i->our_area));
     }
-#else
-    i->our_area = mm_malloc(size + 16);
-
-    if (i->our_area == NULL)
-    {
-	usrtrc( "Failed to get memory for image\n");
-	return FALSE;
-    }
-    else
-    {
-	IMGDBG(("Malloc for %d bytes gave ptr %p\n", size+16, i->our_area));
-    }
-#endif
 
     memset(i->our_area, 0, sizeof(sprite_area) + sizeof(sprite_header));
 
@@ -578,28 +592,15 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 
     IMGDBGN(("rec_fn: out: have info; x=%d, y=%d\n", ir->x, ir->y));
 
+/*     access_pause(i->ah); */
+    
     return TRUE;
 }
 
-static void image_set_error(image i)
-{
-    i->flags |= (image_flag_ERROR | image_flag_CHANGED);
-    i->flags &= ~image_flag_RENDERABLE;
-
-    i->their_area = resspr_area(); /* Wimp sprite area */
-    i->areap = &(i->their_area);
-    strcpy(i->sname, "sprerror");
-    i->id.tag = sprite_id_name;
-    i->id.s.name = i->sname;
-
-    free_pt(i);
-}
+/* ------------------------------------------------------------------------- */
 
 static int bastard_main(int argc, char **argv)
 {
-#if NEW_WEBIMAGE == 0
-    webimage_start start;
-#endif
     char *result;
     void *i;
     int flags;
@@ -617,7 +618,6 @@ static int bastard_main(int argc, char **argv)
 	flags &= ~webimage_DEEPSPRITE;
 #endif
 
-#if NEW_WEBIMAGE
     result = img2sprite(&new_image_get_bytes,	/* Get bytes from source */
 			&image_put_bytes,	/* Put bytes to dest */
 			&image_seek_fn,	/* Seek to where to put bytes */
@@ -626,20 +626,12 @@ static int bastard_main(int argc, char **argv)
 			flags,
 			((image)i)->errbuf);	/* Flags */
 
-#else
-    start = (webimage_start) ((int*)argc);
-    result = start(&new_image_get_bytes,	/* Get bytes from source */
-		   &image_put_bytes,	/* Put bytes to dest */
-		   &image_seek_fn,	/* Seek to where to put bytes */
-		   &image_rec_fn,	/* Tell us about the image */
-		   i, i,		/* Handles for get and put */
-		   flags);		/* Flags */
-#endif
-
     IMGDBG(("Bastard_main done r=%d\n", (int)result));
 
     return (int) (long) result;
 }
+
+/* ------------------------------------------------------------------------- */
 
 static int image_thread_start(image i)
 {
@@ -652,11 +644,7 @@ static int image_thread_start(image i)
 
     MemCheck_SetChecking(1,1);
     
-#if NEW_WEBIMAGE
     i->tt = thread_start(&bastard_main, 0, (char**) i, 4096);
-#else
-    i->tt = thread_start(&bastard_main, (int) i->wi->start, (char**) i, 4096);
-#endif
 
     IMGDBG(("New thread 0x%p\n", i->tt));
 
@@ -665,27 +653,21 @@ static int image_thread_start(image i)
 
 static int image_thread_process(image i, int fh, int from, int to)
 {
-    os_gbpbstr gpb;
     char buffer[4096];
-    int len;
+    int from_base = from;
 
     IMGDBGN(("image_thread_process: in: i %p fh %d from %d to %d\n", i, fh, from, to));
 
     while (from < to && i->tt->status == thread_ALIVE)
     {
-	IMGDBG(("Loading some data\n"));
+	int len;
 
 	len = (to-from) > sizeof(buffer) ? sizeof(buffer) : (to-from);
 
-	gpb.action = 3;
-	gpb.file_handle = fh;
-	gpb.data_addr = buffer;
-	gpb.number = len;
-	gpb.seq_point = from;
-
 	IMGDBGN(("Reading %d bytes from file %d.\n", len, fh));
 
-	if (os_gbpb(&gpb) == NULL)
+	/* this should check the values more carefully */
+	if (ro_freadpos(buffer, 1, len, fh, from) == len)
 	{
 	    IMGDBGN(("Sending %d bytes to the image thread.\n", len));
 
@@ -696,15 +678,99 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    IMGDBG(("Running thread again\n"));
 
 	    MemCheck_RegisterMiscBlock(buffer, sizeof(buffer));
-
 	    thread_run(i->tt);
-
 	    MemCheck_UnRegisterMiscBlock(buffer);
 	}
-
+	    
 	from += len;
     }
 
+#if NEW_WEBIMAGE == 2
+    if (i->tt->status == thread_DEAD && (from_base == 0 || i->plotter != plotter_SPRITE))
+    {
+	BOOL success;
+
+	IMGDBG(("image_thread_process: check internal\n"));
+
+	if (i->data_area == NULL)
+	{
+	    success = flex_alloc(&i->data_area, to);
+	    from = 0;
+	}
+	else
+	{
+	    success = flex_extend(&i->data_area, to);
+	    from = from_base;
+	}
+
+	if (success)
+	{
+	    char *in;
+
+	    flexmem_noshift();
+
+	    in = (char *)i->data_area + from;
+	    ro_freadpos(in, 1, to - from, fh, from);
+
+	    if ((i->flags & image_flag_REALTHING) == 0)
+	    {
+		switch (i->plotter)
+		{
+		case plotter_OSJPEG:
+		    if (_swix(JPEG_Info, _INR(0,2) | _OUTR(2,5),
+			      1, i->data_area, to,
+			      &i->width, &i->height, &i->xdpi, &i->ydpi) == NULL)
+		    {
+			i->flags |= image_flag_CHANGED;
+
+			i->dx = /* i->xdpi ? (180 + i->xdpi/2) / i->xdpi : */ 2;
+			i->dy = /* i->ydpi ? (180 + i->ydpi/2) / i->ydpi : */ 2;
+		    }
+		    break;
+
+		case plotter_DRAWFILE:
+		{
+		    wimp_box box;
+		    if (_swix(DrawFile_BBox, _INR(0,4), 0, i->data_area, to, NULL, &box) == NULL)
+		    {
+			i->width = (box.x1 - box.x0) >> 9;	/* convert to nominal pixels */
+			i->height = (box.y1 - box.y0) >> 9;
+			i->offset_x = box.x0 >> 8;
+			i->offset_y = box.y0 >> 8;
+
+			i->xdpi = i->ydpi = 90;
+			i->dx = i->dy = 2;
+
+			i->flags |= image_flag_REALTHING | image_flag_MASK | image_flag_CHANGED;
+		    }
+		    break;
+		}
+
+		case plotter_UNKNOWN:
+		case plotter_SPRITE:
+		    if (from == 0)
+		    {
+			if (in[0] == 0xff && in[1] == 0xd8 && in[2] == 0xff)
+			    i->plotter = plotter_OSJPEG;
+			else if (*(int *)in == 0x77617244)
+			    i->plotter = plotter_DRAWFILE; /* 'Draw' */
+			else
+			    i->plotter = plotter_UNKNOWN;
+		    }
+		    break;
+		}
+	    }
+
+	    IMGDBG(("image_thread_process: plotter %d size %dx%d\n", i->plotter, i->width, i->height));
+
+	    flexmem_shift();
+	}	    
+
+	if (i->plotter == plotter_UNKNOWN)
+	    free_data_area(&i->data_area);
+    }
+#endif
+    
     IMGDBGN(("image_thread_process: out: status %d\n", i->tt->status));
 
     return (i->tt->status == thread_ALIVE);
@@ -713,13 +779,9 @@ static int image_thread_process(image i, int fh, int from, int to)
 static char *image_thread_end(image i)
 {
     char *res;
-#if !MEMCHECK_THREADS
-    MemCheck_checking checking = MemCheck_SetChecking(0, 0);
-#endif
 
     IMGDBGN(("image_thread_end: in: i=%p\n", i));
 
-#if 1
     /* thread doesn't seem to die in two calls when called from image_flush or the like */
     _kernel_osbyte(0xE5, 0, 0);
     _kernel_escape_seen();
@@ -735,25 +797,6 @@ static char *image_thread_end(image i)
     _kernel_osbyte(0xE5, 0xFF, 0);
     _kernel_osbyte(0x7C, 0xFF, 0);
 
-#else
-    /* Call once to flush out any data in buffers */
-    if (i->tt->status == thread_ALIVE)
-    {
-	image_thread_data_size = 0;
-	image_thread_data_ptr = 0;
-	image_thread_data_more = 0;
-	thread_run(i->tt);
-    }
-
-    /* Call again to make sure we have stopped */
-    if (i->tt->status == thread_ALIVE)
-    {
-	image_thread_data_size = 0;
-	image_thread_data_ptr = 0;
-	image_thread_data_more = 0;
-	thread_run(i->tt);
-    }
-#endif
     if (i->tt->status == thread_ALIVE)
 	res = "Thread did not finnish";
     else
@@ -761,14 +804,10 @@ static char *image_thread_end(image i)
 
     /* Clear up the thread */
 
-#if 0
-    fprintf(stderr, "About to destroy thread 0x%p\n", i->tt);
-#endif
+    IMGDBGN(("About to destroy thread 0x%p\n", i->tt));
+
     thread_destroy(i->tt);
  
-#if !MEMCHECK_THREADS
-    MemCheck_RestoreChecking(checking);
-#endif
     i->tt = NULL;
 
     IMGDBGN(("image_thread_end: out: res='%s'\n", strsafe(res)));
@@ -776,43 +815,28 @@ static char *image_thread_end(image i)
     return res;
 }
 
+/* ------------------------------------------------------------------------- */
 
+#if 0
 static char *image_process(image i, char *cfile)
 {
     int fh;
-    os_regset r;
-    os_error *ep;
     char *res;
 
-    r.r[0] = 0x4f;
-    r.r[1] = (int) (long) cfile;
-
-    ep = os_find(&r);
-    if (ep)
-	return ep->errmess;
-
-
-    fh = r.r[0];
-
+    if ((fh = ro_fopen(cfile, RO_OPEN_READ)) == 0)
+	return ro_ferror();
+    
     i->flags |= image_flag_NO_BLOCKS;
 
     if (image_thread_start(i))
     {
-	int size;
-
-	r.r[0] = 2;
-	r.r[1] = fh;
-	r.r[2] = 0;
-
-	os_args(&r);
-
-	size = r.r[2];
+	int size = ro_get_extent(fh);
 
 	image_thread_process(i, fh, 0, (size>>1) );
 	image_thread_process(i, fh, (size>>1), size );
-#if 0
-	fprintf(stderr, "Calling image_thread_end() from image_process()\n");
-#endif
+
+	IMGDBGN(("Calling image_thread_end() from image_process()\n"));
+
 	res = image_thread_end(i);
     }
     else
@@ -820,10 +844,7 @@ static char *image_process(image i, char *cfile)
 	res = "Could not make thread";
     }
 
-    r.r[0] = 0;
-    r.r[1] = fh;
-
-    os_find(&r);
+    ro_fclose(fh);
 
     return res;
 }
@@ -831,40 +852,41 @@ static char *image_process(image i, char *cfile)
 static char *image_process_to_end(image i, char *cfile)
 {
     int fh;
-    os_regset r;
-    os_error *ep;
     char *res;
     int size;
 
-    r.r[0] = 0x4f;
-    r.r[1] = (int) (long) cfile;
+    if ((fh = ro_fopen(cfile, RO_OPEN_READ)) == 0)
+	return ro_ferror();
 
-    ep = os_find(&r);
-    if (ep)
-	return ep->errmess;
-
-    fh = r.r[0];
-
-    r.r[0] = 2;
-    r.r[1] = fh;
-    r.r[2] = 0;
-
-    os_args(&r);
-
-    size = r.r[2];
+    size = ro_get_extent(fh);
 
     image_thread_process(i, fh, i->data_so_far, size );
-#if 0
-    fprintf(stderr, "Calling image_thread_end() from image_process_to_end()\n");
-#endif
+
+    IMGDBGN(("Calling image_thread_end() from image_process_to_end()\n"));
+
     res = image_thread_end(i);
 
-    r.r[0] = 0;
-    r.r[1] = fh;
-
-    os_find(&r);
+    ro_fclose(fh);
 
     return res;
+}
+#endif
+
+/* ------------------------------------------------------------------------- */
+
+static void image_set_error(image i)
+{
+    i->flags |= (image_flag_ERROR | image_flag_CHANGED);
+    i->flags &= ~image_flag_RENDERABLE;
+
+    i->their_area = resspr_area(); /* Wimp sprite area */
+    i->areap = &(i->their_area);
+    strcpy(i->sname, "sprerror");
+    i->id.tag = sprite_id_name;
+    i->id.s.name = i->sname;
+    i->plotter = plotter_SPRITE;
+
+    free_pt(i);
 }
 
 static void image_issue_callbacks(image i, int changed, wimp_box *box)
@@ -886,20 +908,7 @@ static void image_issue_callbacks(image i, int changed, wimp_box *box)
     }
 }
 
-#if NEW_WEBIMAGE == 0
-static webimage_str *image_lookup_wi(int ft)
-{
-    webimage_str *wi;
-
-    for (wi = translators; wi->ftype != -1; wi++)
-    {
-	if (wi->ftype == ft)
-	    break;
-    }
-
-    return (wi->ftype == -1) ? NULL : wi;
-}
-#endif
+/* ------------------------------------------------------------------------- */
 
 static void image_progress(void *h, int status, int size, int so_far, int fh, int ftype, char *url)
 {
@@ -921,21 +930,7 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
     {
 	if (status == status_GETTING_BODY)
 	{
-#if !MEMCHECK_THREADS
-	    MemCheck_checking checking = MemCheck_SetChecking(0, 0);
-#endif
-#if NEW_WEBIMAGE == 0
-	    if (i->wi == NULL)
-	    {
-		i->wi = image_lookup_wi(ftype);
-	    }
-#endif
-	    
-#if NEW_WEBIMAGE
 	    if (i->tt == NULL)
-#else
-	    if (i->tt == NULL && i->wi)
-#endif
 	    {
 		i->flags &= ~image_flag_NO_BLOCKS;
 		i->file_type = ftype;
@@ -949,10 +944,6 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 	    {
 		image_thread_process(i, fh, i->data_so_far, so_far);
 	    }
-
-#if !MEMCHECK_THREADS
-	    MemCheck_RestoreChecking(checking);
-#endif
 	}
 
 	i->data_so_far = so_far;
@@ -985,7 +976,7 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 {
     int ft;
     image i = (image) h;
-    char *err;
+    char *err = NULL;
     int rd;
 
     rd = i->flags & image_flag_RENDERABLE;
@@ -1020,19 +1011,8 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
 	IMGDBG(("Got the image file '%s', type 0x%03x\n", cfile, ft));
 
-#if NEW_WEBIMAGE == 0
-	if (i->wi == NULL)
 	{
-	    i->wi = image_lookup_wi(ft);
-	}
-
-	if (i->wi)
-#endif
-	{
-#if !MEMCHECK_THREADS
-	    MemCheck_checking checking = MemCheck_SetChecking(0, 0);
-#endif
-
+#if 0
 	    visdelay_begin();
 
 	    if (i->tt)
@@ -1044,24 +1024,30 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 		err = image_process(i, cfile);
 	    }
 
-#if !MEMCHECK_THREADS
-	    MemCheck_RestoreChecking(checking);
-#endif
 	    visdelay_end();
-
-	    if (err == NULL)
+#endif
+	    if (err == NULL || (i->plotter != plotter_SPRITE && i->plotter != plotter_UNKNOWN))
 	    {
-		i->flags |= image_flag_RENDERABLE;
+		i->flags |= image_flag_RENDERABLE | image_flag_REALTHING;
 
-		/* If we'd used the logical size and it wasn't an animation then go back to the real size */
-		/* Don't know if this will work from the cache or not */
-		if ((i->flags & image_flag_USE_LOGICAL) && i->frame == NULL)
+		if (i->plotter == plotter_SPRITE)
 		{
 		    sprite_info info;
+
 		    sprite_readsize(i->our_area, &i->id, &info);
 
-		    i->width = info.width;
-		    i->height = info.height;
+		    /* If we'd used the logical size and it wasn't an animation then go back to the real size */
+		    /* Don't know if this will work from the cache or not */
+		    if (i->flags & image_flag_USE_LOGICAL)
+		    {
+			if (i->frame == NULL)
+			{
+			    i->width = info.width;
+			    i->height = info.height;
+			}
+
+			fillin_scales(i, info.mode);
+		    }
 		}
 	    }
 	    else
@@ -1070,18 +1056,10 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
 		if ((i->flags & image_flag_RENDERABLE) == 0)
 		{
-		    if (i->our_area)
-		    {
-			IMGDBG(("Freeing area from %p\n", i->our_area));
+		    free_data_area(&i->data_area);
 
-#if FLEX
-			flex_free((flex_ptr) &i->our_area);
-#else
-			mm_free(i->our_area);
-#endif
-			i->our_area = NULL;
-			/* No alarms exist at this stage */
-		    }
+		    free_area(&i->our_area);
+		    /* No alarms exist at this stage */
 		    image_set_error(i);
 		}
 	    }
@@ -1124,59 +1102,6 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 }
 
 /* ---------------------------------------------------------- */
-
-#ifdef IMAGE_COOLING
-
-/* This was experimental and isn't used */
-
-static void *cooler_table = NULL;
-static BOOL use_cooling = TRUE;
-
-void image_get_cooler_table(void)
-{
-    FILE *f;
-    f = fopen("<NCFresco$Dir>.Tab<TV$Type>", "rb");
-    if (f)
-    {
-        if (flex_alloc(&cooler_table, 64*1024))
-            fread(cooler_table, 64*1024, 1, f);
-        else
-            usrtrc( "Failed to load cooler file\n");
-
-        fclose(f);
-    }
-    else
-	usrtrc( "Failed to open cooler file\n");
-}
-
-void image_toggle_cooling(void)
-{
-    use_cooling = !use_cooling;
-}
-
-static void image_cool_table(void *pt, int log2bpp)
-{
-    if (cooler_table && use_cooling)
-    {
-        int i, n_cols = 1 << (1 << log2bpp);
-
-        short *tp = cooler_table;
-        short *pp = pt;
-
-	usrtrc( "img: Fixed up table size %d\n", n_cols);
-
-        for (i = 0; i < n_cols; i++, pp++)
-        {
-            *pp = tp[*pp];
-        }
-    }
-}
-
-#endif
-
-/* ---------------------------------------------------------- */
-
-int spriteextend_version;
 
 static void image_poll_reaper(int at, void *h)
 {
@@ -1251,10 +1176,7 @@ os_error *image_tidyup(void)
 
 	free_pt(i);
 
-	if (i->frame)
-	{
-	    mm_free(i->frame);
-	}
+	mm_free(i->frame);
 
 	alarm_removeall(i);
 
@@ -1270,6 +1192,8 @@ os_error *image_tidyup(void)
     return NULL;
 }
 
+/* ------------------------------------------------------------------------- */
+
 void image_palette_change(void)
 {
     image i;
@@ -1277,19 +1201,17 @@ void image_palette_change(void)
     for (i=image_list; i != NULL; i = i->next)
     {
 	free_pt(i);
+	free_area(&i->cache_area);
 
-        if (i->cache_area)
-        {
-#if FLEX
-            flex_free((flex_ptr)&i->cache_area);
-#else
-            mm_free(i->cache_area);
-#endif
-            i->cache_area = NULL;
+	if (i->frames > 1)
+	{
+	    i->cache_frame = -1;
+	    i->cur_frame = -1;
+	    i->cache_mask = 0;
 
-	    /* signal that the cahe has been dumped */
-	    if (i->frames > 1)
-		i->cur_frame = -1;
+	    flexmem_noshift();
+	    strncpy(i->sname, ((sprite_header *) (i->our_area + 1))->name, 12);
+	    flexmem_shift();
 	}
     }
 }
@@ -1435,6 +1357,8 @@ static os_error *image_find_icontype(image i)
     i->width = info.width;
     i->height = info.height;
 
+    fillin_scales(i, info.mode);
+    
     if (info.mask)
 	i->flags |= image_flag_MASK;
 
@@ -1504,16 +1428,21 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	strcpy(i->sname, (flags & image_find_flag_DEFER) ? "deferred" : "unknown");
 	i->id.tag = sprite_id_name;
 	i->id.s.name = i->sname;
+	i->plotter = plotter_SPRITE;
 
 	if (sprite_readsize(i->their_area, &i->id, &info) == NULL)
 	{
 	    i->width = info.width;
 	    i->height = info.height;
+
+	    fillin_scales(i, info.mode);
 	}
 	else
+	{
 	    i->width = i->height = 34;
-/* 	i->width = 68; */
-/* 	i->height = 68; */
+	    fillin_scales(i, 27);
+	}
+
 	i->cache_bgcol = bgcol;
     }
 
@@ -1638,15 +1567,19 @@ os_error *image_stream(char *url, int ft, int *already, image *result)
 	strcpy(i->sname, "unknown");
 	i->id.tag = sprite_id_name;
 	i->id.s.name = i->sname;
+	i->plotter = plotter_SPRITE;
+
 	if (sprite_readsize(i->their_area, &i->id, &info) == NULL)
 	{
 	    i->width = info.width;
 	    i->height = info.height;
+	    fillin_scales(i, info.mode);
 	}
 	else
+	{
 	    i->width = i->height = 34;
-/* 	i->width = 68; */
-/* 	i->height = 68; */
+	    fillin_scales(i, 27);
+	}
     }
 
     *result = i;
@@ -1658,9 +1591,6 @@ os_error *image_stream(char *url, int ft, int *already, image *result)
 	*already = FALSE;
 	i->flags |= image_flag_STREAMING;
 	i->file_type = ft;
-#if NEW_WEBIMAGE == 0
-	i->wi = image_lookup_wi(ft);
-#endif
 	i->flags &= ~image_flag_NO_BLOCKS;
 	image_thread_start(i);
     }
@@ -1730,10 +1660,7 @@ os_error *image_stream_end(image i, char *cfile)
 
     if (i->tt)
     {
-#if 0
-	fprintf(stderr, "Calling image_thread_end() from image_stream_end()\n");
-#endif
-
+	IMGDBGN(("Calling image_thread_end() from image_stream_end()\n"));
 	res = image_thread_end(i);
     }
     else
@@ -1762,18 +1689,7 @@ os_error *image_stream_end(image i, char *cfile)
     {
 	usrtrc( "Image error 2 = %s\n", res);
 
-	if (i->our_area)
-	{
-	    IMGDBG(("Freeing area from %p\n", i->our_area));
-
-#if FLEX
-	    flex_free((flex_ptr) &i->our_area);
-#else
-	    mm_free(i->our_area);
-#endif
-	    i->our_area = NULL;
-	    /* Too early to have any alarms set yet */
-	}
+	free_area(&i->our_area);
 	image_set_error(i);
     }
 
@@ -1835,14 +1751,11 @@ os_error *image_loose(image i, image_callback cb, void *h)
 
 	if (i->tt)
 	{
-#if 0
-	    fprintf(stderr, "Calling image_thread_end() from image_loose()\n");
-#endif
+	    IMGDBGN(("Calling image_thread_end() from image_loose()\n"));
 	    image_thread_end(i);
 	}
 
-	if (i->ref)
-	    mm_free(i->ref);
+	mm_free(i->ref);
 
 	if (i->url)
 	{
@@ -1865,37 +1778,14 @@ os_error *image_loose(image i, image_callback cb, void *h)
 	    mm_free(i->url);
 	}
 
-	if (i->our_area)
-	{
-#if FLEX
-	    flex_free((flex_ptr) &i->our_area);
-#else
-	    mm_free(i->our_area);
-#endif
-
-	    IMGDBG(("Freed area from %p\n", i->our_area));
-	}
+	free_area(&i->our_area);
+	free_data_area(&i->data_area);
 
 	/* Get rid of any animation alarms */
 	alarm_removeall(i);
 
-	if (i->cache_area)
-	{
-#if FLEX
-	    flex_free((flex_ptr) &i->cache_area);
-#else
-	    mm_free(i->cache_area);
-#endif
-
-	    IMGDBG(("cache Freed area from %p\n", i->cache_area));
-	}
-
-	if (i->cfile)
-	{
-	    IMGDBG(("Freeing file name\n"));
-
-	    mm_free(i->cfile);
-	}
+	free_area(&i->cache_area);
+	mm_free(i->cfile);
 
 	IMGDBG(("Unlinking from linked list\n"));
 
@@ -1910,9 +1800,7 @@ os_error *image_loose(image i, image_callback cb, void *h)
 	    image_list = i->next;
 
 	free_pt(i);
-
-	if (i->frame)
-	    mm_free(i->frame);
+	mm_free(i->frame);
 
 	i->magic = 0;
 
@@ -1942,44 +1830,13 @@ int image_memory_panic(void)
 
 	    IMGDBG(("Need to dispose of the old image\n"));
 
-#if FLEX
-	    flex_free((flex_ptr) &i->our_area);
-#else
-	    mm_free(i->our_area);
-#endif
+	    free_area(&i->our_area);
+	    free_area(&i->cache_area);
+	    free_data_area(&i->data_area);
 
-	    IMGDBG(("Freed area from %p\n", i->our_area));
-
-	    i->our_area = NULL;
-
-            if (i->cache_area)
-            {
-#if FLEX
-	        flex_free((flex_ptr) &i->cache_area);
-#else
-	        mm_free(i->cache_area);
-#endif
-
-	        IMGDBG(("Freed cache area from %p\n", i->cache_area));
-
-	        i->cache_area = NULL;
-	    }
-
-	    if (i->cfile)
-	    {
-		IMGDBG(("Freeing file name\n"));
-
-		mm_free(i->cfile);
-		i->cfile = NULL;
-	    }
-
+	    STRING_FREE(&i->cfile);
 	    free_pt(i);
-
-	    if (i->frame)
-	    {
-		mm_free(i->frame);
-		i->frame = NULL;
-	    }
+	    nullfree((void **)&i->frame);
 
 	    /* No point in animating a question mark !!!*/
 	    alarm_removeall(i);
@@ -1992,6 +1849,7 @@ int image_memory_panic(void)
 	    strcpy(i->sname, "deferred");
 	    i->id.tag = sprite_id_name;
 	    i->id.s.name = i->sname;
+	    i->plotter = plotter_SPRITE;
 	}
     }
 
@@ -2007,9 +1865,7 @@ os_error *image_flush(image i, int flags)
 
     if (i->tt)
     {
-#if 0
-	fprintf(stderr, "Calling image_thread_end() from image_flush()\n");
-#endif
+	IMGDBGN(("Calling image_thread_end() from image_flush()\n"));
 	image_thread_end(i);
     }
 
@@ -2036,54 +1892,26 @@ os_error *image_flush(image i, int flags)
     if (i->flags & image_flag_ERROR)
     {
 	i->flags &= ~image_flag_ERROR;
-	i->flags |= image_flag_TO_RELOAD | image_flag_WAITING;
     }
+
+    /* pdh: moved this outside the above if */
+    i->flags |= image_flag_TO_RELOAD | image_flag_WAITING;
+    i->flags &= ~image_flag_RENDERABLE;
 
     /* If we already have the image then dispose of it */
     if (i->our_area)
     {
 	IMGDBG(("Need to dispose of the old image\n"));
 
-#if FLEX
-	flex_free((flex_ptr) &i->our_area);
-#else
-	mm_free(i->our_area);
-#endif
-
-	IMGDBG(("Freed area from %p\n", i->our_area));
-
-	i->our_area = NULL;
-
-	if (i->frame)
-	{
-	    mm_free(i->frame);
-	    i->frame = NULL;
-	}
+	free_area(&i->our_area);
+	nullfree((void **)&i->frame);
 
 	/* Remove any animations */
 	alarm_removeall(i);
 
-	if (i->cache_area)
-	{
-#if FLEX
-	    flex_free((flex_ptr) &i->cache_area);
-#else
-	    mm_free(i->cache_area);
-#endif
-
-	    IMGDBG(("Freed cache area from %p\n", i->cache_area));
-
-	    i->cache_area = NULL;
-	}
-
-	if (i->cfile)
-	{
-	    IMGDBG(("Freeing file name\n"));
-
-	    mm_free(i->cfile);
-	    i->cfile = NULL;
-	}
-
+	free_data_area(&i->data_area);
+	free_area(&i->cache_area);
+	STRING_FREE(&i->cfile);
 	free_pt(i);
 
 	i->data_so_far = i->data_size = 0;
@@ -2095,6 +1923,7 @@ os_error *image_flush(image i, int flags)
 	strcpy(i->sname, (flags & image_find_flag_DEFER) ? "deferred" : "unknown");
 	i->id.tag = sprite_id_name;
 	i->id.s.name = i->sname;
+	i->plotter = plotter_SPRITE;
 
 	if (i->cblist)
 	{
@@ -2148,7 +1977,9 @@ os_error *image_mark_to_flush(image i, int flags)
 
     i->flags |= image_flag_TO_RELOAD;
     if (flags & image_find_flag_DEFER)
+    {
 	i->flags |= image_flag_DEFERRED;
+    }
 
     return NULL;
 }
@@ -2246,7 +2077,7 @@ os_error *image_info_frame(image i, wimp_box *box, int *bpp, image_flags *flags)
     if (i->frame)
     {
 	/* We have frame records */
-	frame_rec *rec = i->frame + i->cur_frame;
+	frame_rec *rec = i->frame + (i->cur_frame < 0 ? 0 : i->cur_frame);
 
 	if (box)
 	{
@@ -2319,19 +2150,10 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
 	}
 	else
 	{
-#if 1
 	    if (width)
 		*width = i->width << ex;
 	    if (height)
 		*height = i->height << ey;
-#else
-	    lbit = (sph->mode > 255) ? 0 : sph->lbit;
-
-	    if (width)
-		*width = (((((sph->width+1) << 5) - lbit - (31 - sph->rbit)) >> l2bpp ) << ex);
-	    if (height)
-		*height = ((sph->height+1) << ey);
-#endif
 	    if (bpp)
 		*bpp = 1 << l2bpp;
 	}
@@ -2427,10 +2249,15 @@ static void fixup_scale(sprite_factors *facs, int scale_image)
 
 static void check_scaling(image i, sprite_id *id, int w, int h, int scale_image, sprite_factors *facs)
 {
-#if IMAGE_SCALE_TO_TAG
     if ((i->flags & image_flag_REALTHING) && (w != -1 && h != -1))
     {
-#if 1
+#if 0
+	facs->xmag = w*2;
+	facs->xdiv = i->width * i->dx;
+	facs->ymag = h*2;
+	facs->ydiv = i->height * i->dy;
+#else
+	/* We use this here as sprite may not agree with the values in the image header (if logical size wrong) */
 	sprite_info info;
 	sprite_readsize((sprite_area *)0xff, id, &info);
 
@@ -2438,23 +2265,12 @@ static void check_scaling(image i, sprite_id *id, int w, int h, int scale_image,
 	facs->xdiv = info.width << bbc_modevar(-1, bbc_XEigFactor);
 	facs->ymag = h*2;
 	facs->ydiv = info.height << bbc_modevar(-1, bbc_YEigFactor);
-#else
-	int dw, dh;
-
-	dw = i->width * facs->xmag/2;
-	dh = i->height * facs->ymag/2;
-
-	facs->xmag *= w;
-	facs->xdiv *= dw;
-	facs->ymag *= h;
-	facs->ydiv *= dh;
 #endif
     }
     else
+    {
 	fixup_scale(facs, scale_image);
-#else
-    fixup_scale(facs, scale_image);
-#endif
+    }
 }
 
 /* ------------------------------------------------------------------------------------------ */
@@ -2555,11 +2371,17 @@ static int build_mode_number(int log2bpp)
 static int get_mode_number(void)
 {
     int mode;
+    int log2bpp = bbc_modevar( -1, bbc_Log2BPP );
 
-    /* Try for new style sprite (3.6) */
-    if (spriteextend_version >= 99)
-	return build_mode_number(bbc_modevar(-1, bbc_Log2BPP));
+#if 1
+    /* If in a deep mode or on 3.6 or later, make a New Sprite */
+    /* Otherwise, make an Old Sprite */
 
+    if ( spriteextend_version >= 99 || log2bpp > 3 )
+        mode = build_mode_number( log2bpp );
+    else
+        mode = 25+log2bpp;  /* Modes 25, 26, 27, 28 */
+#else
     /* Else try and read screen mode - new way (3.5) */
     if (os_swi2r(os_X|OS_ScreenMode, 1, 0, 0, &mode) != NULL)
     {
@@ -2576,6 +2398,7 @@ static int get_mode_number(void)
         struct os_mode_selector *m = (struct os_mode_selector *)(long)mode;
 	mode = build_mode_number(m->log2_bpp);
     }
+#endif
 
     IMGDBG(("img: current sprite mode %08x\n", mode));
 
@@ -2587,12 +2410,12 @@ static int get_mode_number(void)
  * sprite area, header, image and mask
  */
 
-static int image_size_needed(int c_w, int c_h, int bpp, BOOL mask)
+static int image_size_needed(int c_w, int c_h, int bpp, image_cache_t mask)
 {
     int data_size = ((c_w*bpp + 31)/32)*4*c_h;
     int mask_size = 0;
 
-    if (mask)
+    if (mask != image_cache_SOLID)
     {
 	int mask_data_size;
 	if (spriteextend_version >= 99 || bpp >= 16)	/* mask bpp = 1 bpp */
@@ -2600,7 +2423,10 @@ static int image_size_needed(int c_w, int c_h, int bpp, BOOL mask)
 	else						/* mask bpp = image bpp */
 	    mask_data_size = data_size;
 
-	mask_size = sizeof(sprite_header) + data_size + mask_data_size;
+	if (mask == image_cache_MASK_SEPARATE)
+	    mask_size = sizeof(sprite_header) + data_size + mask_data_size;
+	else
+	    mask_size = mask_data_size;
     }
 
     return sizeof(sprite_area) + (sizeof(sprite_header) + data_size) + mask_size;
@@ -2677,32 +2503,24 @@ static void image_animation_clear_cache(image i)
     }
 }
 
-static os_error *image_init_cache_sprite(image i, int w, int h, int limit, BOOL mask, sprite_id *id_out)
+static os_error *image_init_cache_sprite(image i, int w, int h, int limit, image_cache_t mask, sprite_id *id_out)
 {
     os_error *e;
     sprite_id id;
     int bpp = 1 << bbc_modevar(-1, bbc_Log2BPP);
-    int size;
-
-#if 0
-    if (h <= 1)
-	h = 2;
-#endif
+    int size, mode;
 
     size = image_size_needed(w, h, bpp, mask);
+#if ADD_PALETTE
     size += 2*4*256;
-    
+#endif    
     IMGDBG(("image: build cache size %d limit %d mask %d dims %dx%d\n", size, limit, mask, w, h));
 
     if (size > limit)
 	return makeerror(ERR_NO_MEMORY);
 
     /* allocate and init sprite area */
-#if FLEX
     if (flex_alloc((flex_ptr) &(i->cache_area), size + FLEX_FUDGE) == FALSE)
-#else
-    if ((i->cache_area = mm_malloc(size)) == NULL)
-#endif
     {
 	return makeerror(ERR_NO_MEMORY);
     }
@@ -2711,7 +2529,11 @@ static os_error *image_init_cache_sprite(image i, int w, int h, int limit, BOOL 
 
     /* create sprite */
     /* 24/10/96: add palette as this seems to fix some crashes (plotting 1bit+palette into 8bit */
-    e = sprite_create(i->cache_area, CACHE_SPRITE_PLOT_NAME, sprite_nopalette, w, h, get_mode_number());
+    mode = get_mode_number();
+    e = sprite_create(i->cache_area, CACHE_SPRITE_PLOT_NAME, sprite_nopalette, w, h, mode);
+
+#if ADD_PALETTE
+    /* 14/1/97: think crashes were different problem so take out palette */
     if (!e && bbc_modevar(-1, bbc_Log2BPP) <= 3)
     {
 	int buf[256];
@@ -2720,31 +2542,36 @@ static os_error *image_init_cache_sprite(image i, int w, int h, int limit, BOOL 
 	if (!e) e = (os_error *)_swix(ColourTrans_WritePalette, _INR(0,4), i->cache_area, CACHE_SPRITE_PLOT_NAME, buf, 0, 0);
 	IMGDBGN(("image: added palette to sprite error '%s'\n", e ? e->errmess : ""));
     }
+#endif
     
-#if NEW_ANIMATION
     i->cache_mask = 0;
-    if (!e && mask)
+    if (!e && mask != image_cache_SOLID)
     {
-	/* Create another sprite, with mask */
-	int mode = get_mode_number();
-	e = sprite_create(i->cache_area, CACHE_SPRITE_BUILD_NAME, sprite_nopalette, w, h, mode);
-	if (!e)
+	if (mask == image_cache_MASK_SEPARATE)
 	{
-	    id.tag = sprite_id_name;
+	    /* Create another sprite, with mask */
 	    id.s.name = CACHE_SPRITE_BUILD_NAME;
+	    e = sprite_create(i->cache_area, CACHE_SPRITE_BUILD_NAME, sprite_nopalette, w, h, mode);
+	}
+	else
+	{
+	    id.s.name = CACHE_SPRITE_PLOT_NAME;
+	}
 
+	id.tag = sprite_id_name;
+	if (!e)
 	    e = sprite_create_mask(i->cache_area, &id);
 
+	if (!e)
+	{
 	    /* Save the value needed to set a mask value (1 if new style sprite) */
-/* 	    i->cache_mask = bpp >= 16 ? 1 : (1 << bpp) - 1; */
  	    i->cache_mask = mode > 255 ? 1 : (1 << bpp) - 1;
 
-	    if (!e) image_animation_clear_cache(i); /* must be after cache_mask is set */
+	    image_animation_clear_cache(i); /* must be after cache_mask is set */
 
 	    IMGDBG(("animation: add mask cache bpp %d mask %d\n", bpp, i->cache_mask));
 	}
     }
-#endif
 
     if (!e && id_out)
     {
@@ -2843,6 +2670,35 @@ static os_error *image_get_trans(sprite_area *area, sprite_ptr sptr, sprite_pixt
 	}
     }
 
+    /* pdh: we must optimise this ourselves, because 3.5 SpriteExtend
+     * doesn't do it for us */
+
+    if ( pixtrans
+         && *table_type == pixtrans_NARROW
+         && sprite_bpp <= 8 )
+    {
+        /* Test for 1:1 pixtrans case */
+        int i;
+        int ncol = 1 << sprite_bpp;
+        BOOL ok = TRUE;
+
+        for ( i=0; i < ncol; i++ )
+        {
+            if ( (*pixtrans)[i] != i )
+            {
+                ok = FALSE;
+                break;
+            }
+        }
+
+        if ( ok )
+        {
+            mm_free( *pixtrans );
+            *pixtrans = NULL;
+            *table_type = pixtrans_NONE_NEEDED;
+        }
+    }
+
     return e;
 }
 
@@ -2873,20 +2729,32 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
     IMGDBGN(("img: building cache sprite orig size %dx%d bg %x\n", i->width, i->height, i->cache_bgcol.word));
 
     /* get the size of out cache image, use up to MAX_CACHE_BYTES on it */
-    i_w = i->width*scale_image/100;
-    c_w = i_w*cceil(128, i_w);
-
     bpp = 1 << bbc_modevar(-1, bbc_Log2BPP);
 
+    i_w = i->width*scale_image/100;
     i_h = i->height*scale_image/100;
-    c_h = i_h * cceil(MAX_CACHE_BYTES*8, i_h*c_w*bpp);
+
+    if (i_w > i_h)
+    {
+	c_w = i_w * cceil(128, i_w);
+	c_h = i_h * cceil(MAX_CACHE_BYTES*8, i_h*c_w*bpp);
+    }
+    else
+    {
+	c_h = i_h * cceil(128, i_h);
+	c_w = i_w * cceil(MAX_CACHE_BYTES*8, i_w*c_h*bpp);
+    }	
 
     if (i->cache_area == NULL)
     {
-	IMGDBGN(("img: scaled input %dx%d cache %dx%d size %d bytes\n", i_w, i_h, c_w, c_h, image_size_needed(c_w, c_h, bpp, FALSE)));
+	IMGDBGN(("img: scaled input %dx%d cache %dx%d\n", i_w, i_h, c_w, c_h));
 
-	/* allocate memory and init the blank sprite */
-	e = image_init_cache_sprite(i, c_w, c_h, ABS_MAX_CACHE_BYTES, FALSE, &id);
+	/* Allocate memory and init the blank sprite
+	 * If not already decompressed then must cache no matter how big it is
+	 */
+	e = image_init_cache_sprite(i, c_w, c_h,
+				    i->plotter == plotter_SPRITE ? ABS_MAX_CACHE_BYTES : INT_MAX,
+				    image_cache_SOLID, &id);
     }
     else
     {
@@ -2898,21 +2766,23 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 
     flexmem_noshift();
 
-    /* get original sprite details */
-    our_sph = image_get_sprite_ptr(*i->areap, &i->id, &our_id);
-
     /* do main plot into cache sprite */
     i_w_os = c_w_os = i_h_os = c_h_os = 0;
-    if (!e && our_sph)
+    if (!e)
     {
         sprite_state state;
+	int *save_area;
+	int save_size;
 
 	IMGDBGN(("image: cache output to sprite %p\n", id.s.name));
 
- 	e = sprite_outputtosprite(i->cache_area, &id, NULL, &state);
+	save_area = NULL;
+	e = sprite_sizeof_spritecontext(i->cache_area, &id, &save_size);
+	if (!e) save_area = mm_calloc(save_size, 1);
+ 	if (!e) e = sprite_outputtosprite(i->cache_area, &id, save_area, &state);
         if (!e)
         {
-            sprite_pixtrans *pt;
+            sprite_pixtrans *pt = NULL;
             image_pixtrans_type table_type;
 
             /* clear background if masked image */
@@ -2923,7 +2793,15 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
                 bbc_clg();
             }
 
-	    e = image_get_trans(*i->areap, our_sph, &pt, &table_type, &facs);
+#if NEW_WEBIMAGE == 2
+	    if (i->plotter == plotter_SPRITE)
+#endif
+	    {
+		/* get original sprite details */
+		our_sph = image_get_sprite_ptr(*i->areap, &i->id, &our_id);
+
+		e = image_get_trans(*i->areap, our_sph, &pt, &table_type, &facs);
+	    }
 
 	    IMGDBGN(("image: cache got trans error '%s'\n", e ? e->errmess : ""));
 
@@ -2932,37 +2810,50 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 		int flags, q, p;
 		BOOL scale_needed;
 
+#if NEW_WEBIMAGE == 2
+                i_w_os = i_w * i->dx;
+                i_h_os = i_h * i->dy;
+#else
                 /* get os sizes */  /* pdh, these were the other way round */
                 i_w_os = i_w << bbc_modevar(our_sph->mode, bbc_XEigFactor);
                 i_h_os = i_h << bbc_modevar(our_sph->mode, bbc_XEigFactor);
+#endif
                 c_w_os = c_w << bbc_modevar(-1, bbc_XEigFactor);
                 c_h_os = c_h << bbc_modevar(-1, bbc_YEigFactor);
 
-                /* adjust for display_scale */
-                fixup_scale(&facs, scale_image);
-		scale_needed = image_reduce_scales(&facs);
+#if NEW_WEBIMAGE == 2
+		if (i->plotter == plotter_SPRITE)
+#endif
+		{
+		    /* adjust for display_scale */
+		    fixup_scale(&facs, scale_image);
+		    scale_needed = image_reduce_scales(&facs);
 
-                flags = (i->flags & image_flag_MASK ? 0x8 : 0) | (table_type == pixtrans_WIDE ? 0x20 : 0);
+		    flags = (i->flags & image_flag_MASK ? 0x8 : 0) | (table_type == pixtrans_WIDE ? 0x20 : 0);
+		}
 
 		IMGDBGN(("image: cache do plot scale %d table %d @ %p\n", scale_needed, table_type, pt));
 		
 		for (q = 0; q < c_h_os; q += i_h_os)
 	            for (p = 0; p < c_w_os; p += i_w_os)
 		    {
-			if (!scale_needed && table_type == pixtrans_NONE_NEEDED)
-			    sprite_put_given(*i->areap, &our_id, flags, p, q);
-			else
+#if NEW_WEBIMAGE == 2
+			if (i->plotter == plotter_SPRITE)
+#endif
 			{
-/* 			    IMGDBGN(("image: area %p id %d/%p f %x @ %d,%d scale %p pt %p\n", *i->areap, our_id.tag, our_id.s.addr, flags, p, q, */
-/* 					  scale_needed ? &facs : NULL, */
-/* 					  table_type == pixtrans_NONE_NEEDED ? NULL : pt)); */
-
-			    sprite_put_scaled(*i->areap, &our_id, flags, p, q,
- 					  scale_needed ? &facs : NULL,
-					  table_type == pixtrans_NONE_NEEDED ? NULL : pt);
-
-/* 			    IMGDBGN(("image: done a plot\n")); */
+			    if (!scale_needed && table_type == pixtrans_NONE_NEEDED)
+				sprite_put_given(*i->areap, &our_id, flags, p, q);
+			    else
+				sprite_put_scaled(*i->areap, &our_id, flags, p, q,
+						  scale_needed ? &facs : NULL,
+						  table_type == pixtrans_NONE_NEEDED ? NULL : pt);
 			}
+#if NEW_WEBIMAGE == 2
+			else if (plotters[i->plotter].render)
+			{
+			    plotters[i->plotter].render(i, p, q, i->width, i->height, scale_image, 0, NULL, 0, 0);
+			}
+#endif
 		    }
             }
 
@@ -2972,45 +2863,17 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 	    mm_free(pt);
             sprite_restorestate(state);
 
-
 	    IMGDBGN(("image: restored state\n"));
-
-#if 0
-            IMGDBGN(("img: os sizes in %d,%d out %d,%d\n", i_w_os, i_h_os, c_w_os, c_h_os));
-            IMGDBGN(("img: factors %d/%d %d/%d\n", facs.xmag, facs.xdiv, facs.ymag, facs.ydiv));
-            IMGDBGN(("img: pixtrans pt %p size %d wide %d\n", pt, table_size, wide_table));
-
-            {
-                int j;
-                for (j = 0; j < table_size; j+=4)
-                    IMGDBGN(("%08x \n", *(int *)(pt+j)));
-            }
-#endif
         }
+
+	mm_free(save_area);
 	IMGDBGN(("img: plot main\n"));
     }
 
     /* tidy up */
-    if (!e)
+    if (e)
     {
-#if 0
-        sprite_area_save(i->our_area, "<NCFresco$Dir>.^.in");
-        sprite_area_save(i->cache_area, "<NCFresco$Dir>.^.out");
-#endif
-    }
-    else
-    {
-	if (i->cache_area)
-	{
-
-#if FLEX
-	    flex_free((flex_ptr)&i->cache_area);
-#else
-	    mm_free(i->cache_area);
-#endif
-	    i->cache_area = NULL;
-	}
-
+	free_area(&i->cache_area);
         IMGDBGN(("img: error building cache sprite %x %s\n", e->errnum, e->errmess));
     }
 
@@ -3040,7 +2903,6 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
     }
     else
     {
-	MemCheck_checking checking;
 	sprite_header *sph;
 
 	IMGDBGN(("img: __render frame %p cache %p\n", i->frame, i->cache_area));
@@ -3062,15 +2924,17 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
 	if ((sph = image_get_sprite_ptr(area, &id, &id)) == NULL)
 	    return;
 
-	MemCheck_SetChecking(0, 0);
+#if DEBUG
+	MemCheck_RegisterMiscBlock(sph, sizeof(sprite_header));
 
 	IMGDBGN(("Pix trans table. bpp=%d, mask %x, image %x (sprite header %x)\n",
 		 bbc_modevar(sph->mode, bbc_Log2BPP),
 		 sph->mask, sph->image,
 		 sizeof(sprite_header)));
 
-	MemCheck_RestoreChecking(checking);
-
+	MemCheck_UnRegisterMiscBlock(sph);
+#endif
+	
 	/* If we don't have a pixtrans then build one, unless plotting from the cache which is
  	 * always in the current mode/palette
 	 */
@@ -3104,7 +2968,7 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
     if (i->frame && i->cache_area == NULL)
     {
 	/* Plotting a frame direct, not cached */
-	frame_rec *rec = i->frame + i->cur_frame;
+	frame_rec *rec = i->frame + (i->cur_frame < 0 ? 0 : i->cur_frame);
 
 	x += rec->x_off * 2;
 	y += (i->height - rec->y_off - rec->y) * 2;
@@ -3123,26 +2987,10 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
 
     IMGDBGN(("img: __render need scale %d table_type %d\n", need_scaling, table_type));
 
-#if 0
-    {
-	char buffer[64];
-	sprintf(buffer, "<Wimp$ScrapDir>.Sprites.%08x", (int)i);
-	sprite_area_save(area, buffer);
-	IMGDBG(("img: id %d/%p flags %x @%d,%d scale %d/%d %d/%d pixtrans %p\n", id.tag, id.s.addr, sp_op, x, y, 
-		facs.xmag, facs.xdiv, facs.ymag, facs.ydiv, pt));
-    }
-#endif
-
     if (!need_scaling && table_type == pixtrans_NONE_NEEDED)
 	ep = sprite_put_given(area, &id, sp_op, x, y);
     else
-    {
-#if 0
-	if (i->width != 2 || i->height != 1)
-#endif
-	
-	    ep = sprite_put_scaled(area, &id, sp_op, x, y, &facs, pt);
-    }
+	ep = sprite_put_scaled(area, &id, sp_op, x, y, &facs, pt);
 
     IMGDBGN(("img: __rendered\n"));
 
@@ -3154,6 +3002,8 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
     }
 }
 
+/* -------------------------------------------------------------------------------- */
+
 /*
  * x,y is the position of the image on the page in screen coords
  * w,h is the size at which to plot the image in pixels, -1,-1 if default size
@@ -3161,22 +3011,56 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
  * plot_bg, handle is a function to plot the background to this page
  */
 
-void image_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
+#if NEW_WEBIMAGE == 2
+
+/* w, h, and i->width, i->height are all in nominal 90x90 pixels */
+
+static void image_drawfile_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
 {
-    if (i == NULL || i->magic != IMAGE_MAGIC)
-    {
-	usrtrc( "Bad magic\n");
+    int trfm[6];
+
+    if ((i->flags & image_flag_RENDERABLE) == 0)
 	return;
-    }
+    
+    trfm[0] = (w << 16) / i->width;
+    trfm[3] = (h << 16) / i->height;
+    trfm[1] = trfm[2] = 0;
+    trfm[4] = (x - i->offset_x*w/i->width) * 256;
+    trfm[5] = (y - i->offset_y*h/i->height) * 256;
+    _swix(DrawFile_Render, _INR(0,4), 0, i->data_area, i->data_size, &trfm, NULL);
+}
 
-    IMGDBG(("Asked to render image handle 0x%p at %d,%d\n", i, x, y));
+static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
+{
+    sprite_factors facs;
 
+    if ((i->flags & image_flag_RENDERABLE) == 0)
+	return;
+    
+#if 0				/* If you trust the dpi in the jpeg... */
+    facs.xmag = w*2 * i->xdpi;
+    facs.xdiv = i->width * 180;
+    facs.ymag = h*2 * i->ydpi;
+    facs.ydiv = i->height * 180;
+#else
+    facs.xmag = w*2;
+    facs.xdiv = i->width * i->dx;
+    facs.ymag = h*2;
+    facs.ydiv = i->height * i->dy;
+#endif
+    
+    image_reduce_scales(&facs);
+
+    IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d\n", i->width, i->height, w, h, i->xdpi, i->ydpi));
+    
+    _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, config_display_jpeg & 3);
+}
+
+static void image_sprite_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
+{
     IMGDBGN(("Sprite area is 0x%p, image pointer is 0x%p, name is %s\n",
 	    *(i->areap), i->id.s.name, i->id.tag == sprite_id_name ? i->id.s.name : "<none>"));
 
-    flexmem_noshift();
-
-#if NEW_ANIMATION
     if (i->frame && i->cache_area)
     {
 	if (i->cache_mask)
@@ -3188,13 +3072,82 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
 	    image_animation_render_frame(i, image_frame_PLOT_IMAGE);
     }
     else
-#endif
+    {
+	image__render(i, x, y, w, h, scale_image);
+    }
+}
+
+
+/*
+ * ox, oy is the screen coordinates of the window origin, corrected for the margins
+ * x, y is the position to plot the image (bottom left)
+ */
+
+void image_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
+{
+    int plotter;
+
+    if (i == NULL || i->magic != IMAGE_MAGIC)
+    {
+	usrtrc( "Bad magic\n");
+	return;
+    }
+
+    IMGDBG(("Asked to render image handle 0x%p at %d,%d plotter %d\n", i, x, y, i->plotter));
+
+    plotter = i->plotter;
+    if ( (i->flags & (image_flag_FETCHED | image_flag_RENDERABLE)) == image_flag_FETCHED )
+	plotter = plotter_SPRITE;
+
+    if ( (i->flags & image_flag_REALTHING) == 0 )
+	plotter = plotter_SPRITE;
+	
+    flexmem_noshift();
+
+    if (plotters[plotter].render)
+	plotters[plotter].render(i, x, y, w, h, scale_image, plot_bg, handle, ox, oy);
+    
+    flexmem_shift();
+}
+
+#else
+
+void image_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
+{
+    if (i == NULL || i->magic != IMAGE_MAGIC)
+    {
+	usrtrc( "Bad magic\n");
+	return;
+    }
+
+    IMGDBG(("Asked to render image handle 0x%p at %d,%d\n", i, x, y));
+
+    flexmem_noshift();
+
+    IMGDBGN(("Sprite area is 0x%p, image pointer is 0x%p, name is %s\n",
+	    *(i->areap), i->id.s.name, i->id.tag == sprite_id_name ? i->id.s.name : "<none>"));
+
+    if (i->frame && i->cache_area)
+    {
+	if (i->cache_mask)
+	    image_animation_render(i, x, y, w, h, scale_image, plot_bg, handle, ox, oy);
+
+	image__render(i, x, y, w, h, scale_image);
+
+	if (i->cache_mask == 0 && i->frame[i->cur_frame].removal == webremove_PREVIOUS)
+	    image_animation_render_frame(i, image_frame_PLOT_IMAGE);
+    }
+    else
     {
 	image__render(i, x, y, w, h, scale_image);
     }
 
     flexmem_shift();
 }
+
+#endif
+
+/* -------------------------------------------------------------------------------- */
 
 /*
  * returns TRUE if the image tile has changed for whatever reason.
@@ -3310,7 +3263,9 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
 	    image_reduce_scales(&factors);
 	}
 
-	IMGDBG(("image_tile(): ptr %p translate %d pt %p type %d mask %d\n", id.s.addr, translate, pt, table_type, i->flags & image_flag_MASK ? 1 : 0));
+	IMGDBG(("image_tile(): ptr %p translate %d pt %p type %d mask %d os_size %dx%d\n",
+		id.s.addr, translate, pt, table_type, i->flags & image_flag_MASK ? 1 : 0,
+		width, height));
 	
 	/* plot the sprite */
 	for (q=minq; q < bb->y1; q+= height)
@@ -3322,7 +3277,6 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
 				      p, q, &factors, pt);
 		else
  		    sprite_put_given(area, &id, 0, p, q);
-/* 		    sprite_put_scaled(area, &id, 0, p, q, NULL, NULL); */
 	    }
     }
 
@@ -3333,36 +3287,9 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
     return changed;
 }
 
-os_error *image_save_as_sprite(image i, char *fname)
-{
-    os_filestr fs;
-    int *area;
-    os_error *ep;
-
-    flexmem_noshift();
-
-    area = (int*) *(i->areap);
-
-    fs.action =10;		/* Save with file type */
-    fs.name = fname;
-    fs.loadaddr = FILETYPE_SPRITE;
-    fs.start = ((int) (long) area) + 4;
-    fs.end = ((int) (long) area) + *area;
-
-    ep = os_file(&fs);
-
-    flexmem_shift();
-
-    return ep;
-}
 
 void image_get_scales(image i, int *dx, int *dy)
 {
-    sprite_header *sph;
-/*     sprite_area *area; */
-/*     sprite_id id; */
-    int mode;
-
     if (i == NULL || i->magic != IMAGE_MAGIC)
     {
 	usrtrc( "Bad magic\n");
@@ -3376,21 +3303,18 @@ void image_get_scales(image i, int *dx, int *dy)
 	return;
     }
 
-    flexmem_noshift();
-#if 1
-    sph = image_get_sprite_ptr(*(i->areap), &i->id, NULL);
+#if NEW_WEBIMAGE == 2
+    if (dx)
+	*dx = i->dx;
+    if (dy)
+	*dy = i->dy;
 #else
-    area = *(i->areap);
-    id = i->id;
-    if (id.tag == sprite_id_name)
     {
-	sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
-	id.s.addr = sph;
-	id.tag = sprite_id_addr;
-    }
-    else
-	sph = (sprite_header *) id.s.addr;
-#endif
+    sprite_header *sph;
+    int mode;
+
+    flexmem_noshift();
+    sph = image_get_sprite_ptr(*(i->areap), &i->id, NULL);
     mode = sph ? sph->mode : 27;
     flexmem_shift();
 
@@ -3398,6 +3322,8 @@ void image_get_scales(image i, int *dx, int *dy)
 	*dx = 1 << bbc_modevar(mode, bbc_XEigFactor);
     if (dy)
 	*dy = 1 << bbc_modevar(mode, bbc_YEigFactor);
+    }
+#endif
 }
 
 void image_os_to_pixels(image im, int *px, int *py, int scale_image)
@@ -3483,9 +3409,7 @@ static int image_ave_col_n(image im, int n)
     r.r[3] = sizeof(palette);
     r.r[4] = ((im->id.tag == sprite_id_name) ? 0 : 1);
 
-#if 1
     ep = os_swix(ColourTrans_ReadPalette, &r);
-#endif
 
     flexmem_shift();
 
@@ -3493,8 +3417,9 @@ static int image_ave_col_n(image im, int n)
 
     for (i=0; i < cols; i++)
     {
-	IMGDBGN(("col %d, count %d, palette 0x%08x\n", i, count[i], palette[i]));
-
+#if DEBUG > 2
+ 	IMGDBGN(("col %d, count %d, palette 0x%08x\n", i, count[i], palette[i]));
+#endif
 	pixcount += count[i];
 
 	reds += ((palette[i] >> 8) & 0xff) * count[i];
@@ -3644,6 +3569,160 @@ static int image_white_byte(image im, wimp_paletteword colour)
 
 /* -------------------------------------------------------------------------- */
 
+#if NEW_WEBIMAGE == 2
+
+static os_error *image_sprite_save_as_sprite(image i, char *fname)
+{
+    os_filestr fs;
+    int *area;
+    os_error *ep;
+
+    area = (int*) *(i->areap);
+
+    fs.action =10;		/* Save with file type */
+    fs.name = fname;
+    fs.loadaddr = FILETYPE_SPRITE;
+    fs.start = ((int) (long) area) + 4;
+    fs.end = ((int) (long) area) + *area;
+
+    ep = os_file(&fs);
+
+    return ep;
+}
+
+os_error *image_save_as_sprite(image i, char *fname)
+{
+    os_error *e = NULL;
+
+    flexmem_noshift();
+
+    if (plotters[i->plotter].save_as_sprite)
+	e = plotters[i->plotter].save_as_sprite(i, fname);
+    
+    flexmem_shift();
+
+    return e;
+}
+
+#else
+
+os_error *image_save_as_sprite(image i, char *fname)
+{
+    os_filestr fs;
+    int *area;
+    os_error *ep;
+
+    flexmem_noshift();
+
+    area = (int*) *(i->areap);
+
+    fs.action =10;		/* Save with file type */
+    fs.name = fname;
+    fs.loadaddr = FILETYPE_SPRITE;
+    fs.start = ((int) (long) area) + 4;
+    fs.end = ((int) (long) area) + *area;
+
+    ep = os_file(&fs);
+
+    flexmem_shift();
+
+    return ep;
+}
+
+#endif
+
+/* -------------------------------------------------------------------------- */
+
+#if NEW_WEBIMAGE == 2
+
+static void image_sprite_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
+{
+    draw_objhdr obj;
+    char buffer[12];
+    sprite_header *sph;
+    sprite_area *area;
+    sprite_id id;
+    os_regset r;
+    os_error *ep = NULL;
+
+    if ( (i->flags & (image_flag_FETCHED | image_flag_RENDERABLE)) == image_flag_FETCHED)
+    {
+	sprintf(buffer, "file_%03x", i->file_type);
+
+	ep = os_swix(Wimp_BaseOfSprites, &r);
+
+	area = (sprite_area *) (long) r.r[1];
+
+	id.tag = sprite_id_name;
+	id.s.name = buffer;
+
+	ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
+
+	if (ep)
+	{
+	    area = (sprite_area *) (long) r.r[0];
+	    ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
+	}
+
+	if (ep)
+	{
+	    strcpy(buffer, "file_xxx");
+	    ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
+	}
+    }
+    else
+    {
+	area = *(i->areap);
+	id = i->id;
+	if (id.tag == sprite_id_name)
+	{
+	    ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
+	    id.s.addr = sph;
+	    id.tag = sprite_id_addr;
+	}
+	else
+	    sph = (sprite_header *) id.s.addr;
+    }
+
+    if (ep)
+    {
+	usrtrc( "Error while saving sprite as draw: %s\n", ep->errmess);
+	return;
+    }
+
+    obj.tag = draw_OBJSPRITE;
+    obj.size = sizeof(obj) + sph->next;
+    obj.bbox.x0 = bb->x0 << 8;
+    obj.bbox.y0 = bb->y0 << 8;
+    obj.bbox.x1 = bb->x1 << 8;
+    obj.bbox.y1 = bb->y1 << 8;
+
+    df_write_data(fh, *fileoff, &obj, sizeof(obj));
+    *fileoff += sizeof(obj);
+    df_write_data(fh, *fileoff, sph, sph->next);
+    *fileoff += sph->next;
+}
+
+void image_jpeg_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
+{
+}
+
+void image_drawfile_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
+{
+}
+
+void image_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
+{
+    flexmem_noshift();
+
+    if (plotters[i->plotter].save_as_draw)
+	plotters[i->plotter].save_as_draw(i, fh, bb, fileoff);
+    
+    flexmem_shift();
+}
+
+#else
+
 void image_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
 {
     draw_objhdr obj;
@@ -3716,10 +3795,9 @@ void image_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
  wayout:
     flexmem_shift();
 }
+#endif
 
 /* -------------------------------------------------------------------------- */
-
-#if NEW_ANIMATION
 
 /*
  * If the main image has a mask, or
@@ -3732,7 +3810,7 @@ void image_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
 
  */
 
-static BOOL image_animation_need_mask(image i)
+static image_cache_t image_animation_need_mask(image i)
 {
     frame_rec *rec;
     int f;
@@ -3740,22 +3818,22 @@ static BOOL image_animation_need_mask(image i)
     IMGDBG(("anim: checking for mask\n"));
 
     if (i->flags & image_flag_MASK)
-	return TRUE;
+	return image_cache_MASK_SEPARATE;
 
     rec = i->frame;
 
     /* if the first frame is not the size of the whole thing it needs a mask */
     if (rec->x != i->width || rec->y != i->height)
-	return TRUE;
+	return image_cache_MASK_SEPARATE;
 
     /* if any frame wipes to background then it may need a mask */
     for (f = 0; f < i->frames; f++, rec++)
 	if (rec->removal == webremove_BACKGROUND/*  && rec->mask */)
-	    return TRUE;
+	    return image_cache_MASK_SEPARATE;
 
     IMGDBG(("anim: no mask\n"));
 
-    return FALSE;
+    return image_cache_SOLID;
 }
 
 #if DEBUG
@@ -3794,8 +3872,8 @@ static os_error *image_animation_init_cache(image i)
     e = sprite_readsize(*i->areap, &i->id, &info);
     if (!e)
     {
-	int w = i->width << bbc_modevar(info.mode, bbc_XEigFactor) >> bbc_modevar(-1, bbc_XEigFactor);
-	int h = i->height << bbc_modevar(info.mode, bbc_YEigFactor) >> bbc_modevar(-1, bbc_YEigFactor);
+	int w = (i->width * i->dx) >> bbc_modevar(-1, bbc_XEigFactor);
+	int h = (i->height * i->dy) >> bbc_modevar(-1, bbc_YEigFactor);
 
 	if (w > 1 && h > 1)
 	    e = image_init_cache_sprite(i, w, h, INT_MAX, image_animation_need_mask(i), NULL);
@@ -4049,26 +4127,28 @@ static void image_animation_render(image i, int x, int y, int w, int h, int scal
     flexmem_shift();
 }
 
-#endif
-
 static void image_startup_animation(image i);
 
 static void image_animation_alarm(int at, void *h)
 {
     image i = (image) h;
     int redraw = 1;
-    frame_rec *rec = i->frame + i->cur_frame;
-
-#if NEW_ANIMATION
+    frame_rec *rec;
     wimp_box box_1, box_2, box_u;
 
     /* if we'd cancelled the cache (on palette change) then just call startup again */
     if (i->cur_frame == -1)
     {
+	IMGDBG(("animation: restart\n"));
+	
+	image_issue_callbacks(i, image_cb_status_UPDATE_ANIM, NULL);
+
 	image_startup_animation(i);
+
 	return;
     }
     
+    rec = i->frame + i->cur_frame;
     switch (rec->removal)
     {
     case webremove_NODISPOSE:
@@ -4092,15 +4172,15 @@ static void image_animation_alarm(int at, void *h)
 	image_info_frame(i, &box_1, NULL, NULL);
 	break;
     }
+
     IMGDBG(("animation: remove frame %d type %d box %d,%d %d,%d\n", i->cur_frame, rec->removal, box_1.x0, box_1.y0, box_1.x1, box_1.y1));
-#endif
 
     /* increment the frame number */
     i->cur_frame++;
     if (i->cur_frame == i->frames)
     {
 	i->cur_repeat++;
-	if (i->cur_repeat == i->repeats)
+	if (i->cur_repeat >= i->repeats)
 	{
 	    i->cur_frame--;
 	    redraw = 0;		/* Cancel the redraw if this is the last frame */
@@ -4127,7 +4207,6 @@ static void image_animation_alarm(int at, void *h)
 	    sprintf(i->sname, "image%d", i->cur_frame + 1);
 	}
 
-#if NEW_ANIMATION
 	/* Update cache sprite if one exists */
 	/* PREVIOUS removal types are not recorded in the cache, but are rendered on the fly */
 	if (i->cache_area)
@@ -4164,14 +4243,6 @@ static void image_animation_alarm(int at, void *h)
 				  image_cb_status_REDRAW :
 				  image_cb_status_UPDATE ), NULL );
 	}
-#else
-	/* Oh what a pain, the new frame can have different palette so we have to slow ourself */
-	free_pt(i);
-
-	image_issue_callbacks(i, (rec->mask && (rec->removal == webremove_BACKGROUND) ?
-				  image_cb_status_REDRAW :
-				  image_cb_status_UPDATE ), NULL );
-#endif
 	IMGDBGN(("Setting animation alarm for %dcs from now.\n", rec->delay));
 
 	alarm_set(alarm_timenow() + rec->delay, image_animation_alarm, i);
@@ -4184,7 +4255,6 @@ static void image_startup_animation(image i)
 
     if (i->frames > 1)
     {
-#if NEW_ANIMATION
 	os_error *e;
 
 	image_animation_dump_info(i);
@@ -4192,7 +4262,6 @@ static void image_startup_animation(image i)
 	e = image_animation_init_cache(i);
 	
 	if (e) usrtrc( "animation: start error %x %s\n", e->errnum, e->errmess);
-#endif
 
 	IMGDBGN(("Setting animation alarm for %dcs from now.\n", i->frame->delay));
 

@@ -189,14 +189,14 @@ static BOOL new_sizer(rid_table_item *table)
 		/* SJM: we have been getting 0 here */
 		if (q <= 0)
 		    q = 1;
-		
+
 		pc_on_line += q;
 
 		d = table->cumminabs[x + cell->span.x] - table->cumminabs[x];
 		d /= (double)q;
 		if (d > minc)
 		    minc = d;
-		
+
 		d = table->cummaxabs[x + cell->span.x] - table->cummaxabs[x];
 		d /= (double)q;
 		if (d > maxc)
@@ -205,7 +205,7 @@ static BOOL new_sizer(rid_table_item *table)
 	}
 
 	TABDBGN(("Line %d: %d%% on line, had_empty=%d\n", y, pc_on_line, had_empty));
-	
+
 	if (!had_empty && (pc_on_line < 100))
 	{
 	    double mpc = 100.0 - pc_on_line;
@@ -221,7 +221,7 @@ static BOOL new_sizer(rid_table_item *table)
 	    if (d > maxc)
 		maxc = d;
 	}
-	else if ( (pc_on_line > 100) || 
+	else if ( (pc_on_line > 100) ||
 		  (pc_on_line == 100 && (total_min_non_pc + total_max_non_pc) > 0 ) )
 	{
 	    TABDBG(("new_sizer(): decided must rerun sizing, with %%ages suppressed: line %d\n", y));
@@ -229,7 +229,7 @@ static BOOL new_sizer(rid_table_item *table)
 	    {
 		rid_table_cell *cell = *CELLFOR(table,x,y);
 
-		if (cell != NULL && 
+		if (cell != NULL &&
 		    x == cell->cell.x &&
 		    (cell->flags & rid_cf_PERCENT) != 0 )
 		{
@@ -241,6 +241,12 @@ static BOOL new_sizer(rid_table_item *table)
 
 	    rerun = TRUE;
 	}
+    }
+
+    if (minc > maxc)
+    {
+	TABDBG(("new_sizer: conflict: increased maxc %f to minc %f\n", maxc, minc));
+	maxc = minc;
     }
 
     TABDBG(("new_sizer(): chosen minc %f, maxc %f\n", minc, maxc));
@@ -303,6 +309,7 @@ static BOOL new_sizer(rid_table_item *table)
 	    table->width_info.minwidth,
 	    table->width_info.maxwidth));
 
+    /* Can fail! */
     TASSERT(table->width_info.minwidth <= table->width_info.maxwidth);
 
     return rerun;
@@ -341,6 +348,7 @@ static void ready_table_for_sizing(rid_table_item *table)
 
     table->minabs    = mm_malloc(table->cells.x * sizeof(int));
     table->maxabs    = mm_malloc(table->cells.x * sizeof(int));
+
 
     /* Extra item to hold overshoot */
     table->cumminabs = mm_calloc(table->cells.x + 1,  sizeof(int));
@@ -413,7 +421,7 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
     rid_fmt_info fmt = *parfmt;
     int *sqpct, *sqmin, *sqmax, sq_index;
 
-    TABDBG(("size_child_items(): entry min %d, max %d\n", 
+    TABDBG(("size_child_items(): entry min %d, max %d\n",
 	    table->width_info.minwidth, table->width_info.maxwidth));
 
     x = sizeof(int) * cellsx * cellsx;
@@ -428,7 +436,7 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
 	memset(sqmin, -1, x);
 	memset(sqmax, -1, x);
     }
-    
+
     /* Ensure all children items have already been sized */
 
     if (table->caption != NULL)
@@ -621,6 +629,8 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
 		x, y,
 		wi->minleft, wi->minright, wi->minwidth,
 		wi->maxleft, wi->maxright, wi->maxwidth));
+
+	TASSERT(wi->minwidth <= wi->maxwidth);
     }
 
 
@@ -655,7 +665,7 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
 		(sqmin[index] + table->cumminabs[x-y+1] > worstmin))
 		worstmin = sqmin[index] + table->cumminabs[x-y+1];
 
-       	    if ((sqmax[index] != -1) && 
+       	    if ((sqmax[index] != -1) &&
 		(sqmax[index] + table->cummaxabs[x-y+1] > worstmax))
 		worstmax = sqmax[index] + table->cummaxabs[x-y+1];
 
@@ -686,7 +696,7 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
 
 	if (minpc < table->minpct[x])
 	    minpc = table->minpct[x];
-	
+
 	table->cumminabs[x+1] = worstmin;
 	table->cummaxabs[x+1] = worstmax;
 	table->minpct[x+1] = minpc;
@@ -703,13 +713,13 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
     for(x = cellsx-1; x >= 0; x--)
     {
 	int bestpc = 100;
-	
+
 	TABDBGN(("Finding maxpc for start of col %d\n", x));
 
 	for(y=1; y <= (cellsx-x); y++)
 	{
 	    int index = (x * cellsx) + (y-1);
-	    
+
 	    TABDBGN(("Looking at cells that span %d (start col=%d), pc=%d\n",
 		     y, x, sqpct[index]));
 
@@ -720,7 +730,7 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
 
 	if (bestpc > table->maxpct[x+1])
 	    bestpc = table->maxpct[x+1];
-	
+
 	table->maxpct[x] = bestpc;
     }
 
@@ -775,8 +785,8 @@ extern void rid_size_table( rid_table_item *table, rid_fmt_info *parfmt )
 	size_child_items(table, parfmt);
     } while ( new_sizer(table) );
 #endif
-    
-    TABDBG(("rid_size_table(): min %d, max %d\n", 
+
+    TABDBG(("rid_size_table(): min %d, max %d\n",
 	    table->width_info.minwidth, table->width_info.maxwidth));
 
     done_table_sizing(table);
@@ -870,7 +880,7 @@ static void borris_rid_table_share_spare_height(rid_table_item *table)
     if (nheights > 0)
     {
 	heights = mm_calloc(sizeof(int), nheights + 1);
-	
+
 	/* Ensure adequate heights */
 	for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
 	{       /* Even distribution is probably better than proportional */
@@ -880,7 +890,7 @@ static void borris_rid_table_share_spare_height(rid_table_item *table)
 
 	    if (worst_span > cell->span.y)
 		worst_span = cell->span.y;
-	    
+
 	    /* Make hspan positive */
 
 	    if ( (table->rowhdrs[y]->rowgroup->flags & rid_rgf_TFOOT) &&
@@ -1031,7 +1041,7 @@ static void nicko_rid_table_share_spare_height(rid_table_item *table)
 	    if (sqh[ydex] < hspan)
 		sqh[ydex] = hspan;
 	}
-	
+
 	rid_close_fixed_widths(nheights, sqh, 0);
 
 	heights[0] = 0;
@@ -1133,7 +1143,7 @@ static void rid_close_fixed_widths(int cellsx, int *sqfixed, int overwrite)
 		    {
 			jpos = x+i;
 			jdex = (jpos * cellsx) + (j-1);
-			
+
 			TABDBGN(("    Second span: %d (%d)\n", j, sqfixed[jdex]));
 
 			if (sqfixed[jdex] != -1)
@@ -1167,7 +1177,7 @@ static void rid_close_fixed_widths(int cellsx, int *sqfixed, int overwrite)
 		    {
 			jpos = x;
 			jdex = (jpos * cellsx) + (j-1);
-			
+
 			TABDBGN(("    Second span: %d (%d)\n", j, sqfixed[jdex]));
 
 			if (sqfixed[jdex] != -1)
@@ -1182,7 +1192,7 @@ static void rid_close_fixed_widths(int cellsx, int *sqfixed, int overwrite)
 			    if (overwrite || sqfixed[kdex] == -1)
 			    {
 				wdiff = sqfixed[jdex] - sqfixed[idex];
-				
+
 				if (sqfixed[kdex] < wdiff)
 				{
 				    TABDBGN(("    Starting at %d, span %d=%d, span %d=%d, cell %d span %d=%d (was %d)\n", x, i, sqfixed[idex], j, sqfixed[jdex], kpos, kspan, wdiff, sqfixed[kdex]));
@@ -1200,7 +1210,7 @@ static void rid_close_fixed_widths(int cellsx, int *sqfixed, int overwrite)
 		    {
 			jpos = x+i-j;
 			jdex = (jpos * cellsx) + (j-1);
-			
+
 			TABDBGN(("    Second span: %d (%d)\n", j, sqfixed[jdex]));
 
 			if (sqfixed[jdex] != -1)
@@ -1216,7 +1226,7 @@ static void rid_close_fixed_widths(int cellsx, int *sqfixed, int overwrite)
 			    if (overwrite || sqfixed[kdex] == -1)
 			    {
 				wdiff = sqfixed[idex] - sqfixed[jdex];
-				
+
 				if (sqfixed[kdex] < wdiff)
 				{
 				    TABDBGN(("    Starting at %d, span %d=%d, span %d=%d, cell %d span %d=%d (was %d)\n", x, i, sqfixed[idex], j, sqfixed[jdex], kpos, kspan, wdiff, sqfixed[kdex]));
@@ -1333,7 +1343,7 @@ static int rid_span_slack2(int cellsx, int start, int span, int *cum, int *sqmin
 	cum[x] = worst;
     }
 
-    slack = (sqmin[sdex] - cum[start+span]); 
+    slack = (sqmin[sdex] - cum[start+span]);
 
     TABDBGN(("Last accumulation=%d, fixed span=%d, slack=%d\n",
 	     cum[start+span], sqmin[sdex], slack));
@@ -1365,7 +1375,7 @@ static void rid_spread_slack(int cellsx, int start, int span, int *cum,
 	for (j=0; j <= span - i; j++)
 	{
 	    int idex = ((start + j) * cellsx) + (i-1);
-	    
+
 	    if (sqnew[idex] == -1 && sqfixed[idex] == -1)
 		share_over++;
 	}
@@ -1380,7 +1390,7 @@ static void rid_spread_slack(int cellsx, int start, int span, int *cum,
 		int grow;
 #if 0
 		/* Be VERY careful about rounding */
-		grow = (((slack * (share_over+j))/span) - 
+		grow = (((slack * (share_over+j))/span) -
 			((slack * (j)  )/span) );
 #else
 		grow =  (slack * i) / span  ;
@@ -1388,14 +1398,14 @@ static void rid_spread_slack(int cellsx, int start, int span, int *cum,
 
 		TABDBG(("Offset %d, span %d, (idex %d) grow %d, fixed %d, min %d, max %d\n",
 			 j, i, idex, grow, sqfixed[idex], sqmin[idex], sqmax[idex]));
-		
+
 		if (sqfixed[idex] == -1 && sqnew[idex] == -1)
 		{
 		    int newmin = sqmin[idex] + grow;
-		    
+
 		    if (newmin > sqmax[idex])
 			newmin = sqmax[idex];
-		    
+
 		    sqnew[idex] = newmin;
 		}
 	    }
@@ -1438,7 +1448,7 @@ static void rid_table_place_cols(rid_text_stream *stream,
 	{
 	    x += table->maxabs[i];
 	}
-	
+
 	if (x < width)
 	{
 	    TABDBG(("rid_table_place_cols(): sum maxabs %d < width %d\n", x, width));
@@ -1458,7 +1468,7 @@ static void rid_table_place_cols(rid_text_stream *stream,
 	    memset(sqmin, -1, x);
 	    memset(sqmax, -1, x);
 	}
-	
+
 	for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
 	{
 	    /* Size cell. Include any border type spacing */
@@ -1594,7 +1604,7 @@ static void rid_table_place_cols(rid_text_stream *stream,
 		if (sqfixed[idex] != -1)
 		{
 		    int slack;
-		    
+
 		    TABDBGN(("idex %d (%d,%d): fixed %d, min %d, new %d\n",
 			    idex, i, x, sqfixed[idex], sqmin[idex], sqmax[idex]));
 
@@ -1628,50 +1638,50 @@ static void rid_table_place_cols(rid_text_stream *stream,
 
 	/* Two passes:
 	   Build cumminabs with a L->R of sqmin
-	   Build cummaxabs with a R->L of sqmin       
+	   Build cummaxabs with a R->L of sqmin
 	   */
-	
+
 	/* L->R pass of sqmin for min values */
 	table->cumminabs[0] = 0;
 	rid_table_accumulate_widths_l2r(cellsx, sqmin, table->cumminabs);
 
 	PRINT_LIST(table->cumminabs, cellsx + 1, "Cum:");
-	
+
 	/* R->L pass of sqmin for max values */
 	table->cummaxabs[cellsx] = table->cumminabs[cellsx];
 	rid_table_accumulate_widths_r2l(cellsx, sqmin, table->cummaxabs);
-	
+
 	TABDBG(("rid_table_place_cols(): cummulative min/max abs lists are:\n"));
 	PRINT_LIST(table->cumminabs, cellsx + 1, "Min:");
 	PRINT_LIST(table->cummaxabs, cellsx + 1, "Max:");
-	
+
 #if 0
 	for(leftfix = 0; leftfix < cellsx; /**/ )
 	{
 	    int spread_cols, spread_width, spare_width;
-	    
+
 	    while ((leftfix < cellsx) &&
 		   (table->cumminabs[leftfix+1] == table->cummaxabs[leftfix+1]))
 		leftfix++;
-	    
+
 	    if (leftfix == cellsx)
 		break;
-	    
+
 	    rightfix = leftfix + 1;
-	    
+
 	    while ((rightfix < cellsx) &&
 		   (table->cumminabs[rightfix] != table->cummaxabs[rightfix]))
 		rightfix++;
-	    
+
 	    /* We know that that leftfix and rightfix point to fixed boundaries
 	       and that the boundaries in between are flexable */
-	    
+
 	    spread_cols = rightfix - leftfix;
 	    /* @@@@ Wrong!!!! */
 	    spread_width = table->cumminabs[rightfix] - table->cumminabs[rightfix-1];
 
 	    TABDBGN(("Left %d, right %d, spread_width %d\n", leftfix, rightfix, spread_width));
-	    
+
 	    for(i=1; i <= spread_cols; i++)
 	    {
 		for (j=0; j <= spread_cols - i; j++)
@@ -1680,7 +1690,7 @@ static void rid_table_place_cols(rid_text_stream *stream,
 		    int grow;
 
 		    /* Be VERY careful about rounding */
-		    grow = (((spread_width * (i+j))/spread_cols) - 
+		    grow = (((spread_width * (i+j))/spread_cols) -
 			    ((spread_width * (j)  )/spread_cols) );
 
 		    TABDBGN(("Offset %d, span %d, (idex %d) grow %d, fixed %d, min %d, max %d\n",
@@ -1703,7 +1713,7 @@ static void rid_table_place_cols(rid_text_stream *stream,
 	    }
 	    leftfix = rightfix;
 	}
-	
+
 	TABDBG(("rid_table_place_cols(): cummulative min/max abs lists are:\n"));
 	PRINT_LIST(table->cumminabs, cellsx + 1, "Min:");
 	PRINT_LIST(table->cummaxabs, cellsx + 1, "Max:");
@@ -1714,9 +1724,9 @@ static void rid_table_place_cols(rid_text_stream *stream,
 
     for (x = 0; x < cellsx; x++)
     {
-	table->colhdrs[x]->width_info.minwidth = 
+	table->colhdrs[x]->width_info.minwidth =
 	    table->minabs[x] = table->cumminabs[x+1] - table->cumminabs[x];
-	table->colhdrs[x]->width_info.maxwidth = 
+	table->colhdrs[x]->width_info.maxwidth =
 	    table->maxabs[x] = table->cummaxabs[x+1] - table->cummaxabs[x];
     }
 
@@ -1884,7 +1894,7 @@ extern void rid_table_share_width(rid_text_stream *stream, rid_text_item *orig_i
 	borris_rid_table_share_spare_height(table);
     else
 	nicko_rid_table_share_spare_height(table);
-	
+
     /* Now each stream has real width and height. */
     /* Calculate the sizes */
     /* for the rid_text_item holding the table */

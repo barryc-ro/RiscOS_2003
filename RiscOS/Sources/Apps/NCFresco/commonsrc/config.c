@@ -11,7 +11,12 @@
  * NvS: 26/01/96:	Incorporated Si's changes and split out gui code
  */
 
+#ifdef CBPROJECT
+#define CONFIG_FILE_NAME    "Resources:$.ThirdParty.Fresco.Config"
+#else
 #define CONFIG_FILE_NAME    "<"PROGRAM_NAME"$Config>"
+#endif
+
 #define CONFIG_FILE_NAME_2  PROGRAM_NAME":Config"
 
 #include <stddef.h>
@@ -52,11 +57,11 @@ struct config_str config_array;
 
 /**********************************************************************
 
- !!    !!    !!    !!    !!    !!    !!    !!    !!    !!    !!    !!  
+ !!    !!    !!    !!    !!    !!    !!    !!    !!    !!    !!    !!
 
  NOTE:  This table MUST be kept in step with citemsdbs in configgui.c
 
- !!    !!    !!    !!    !!    !!    !!    !!    !!    !!    !!    !!  
+ !!    !!    !!    !!    !!    !!    !!    !!    !!    !!    !!    !!
 
 **********************************************************************/
 
@@ -74,9 +79,15 @@ config_item citems[] = {
 { config_BOOL,	"display.control.buttons",	(void *)offsetof(struct config_str, display_control_buttons),	"Display button bar", (void *) 1  },
 { config_BOOL,	"display.control.urlline",	(void *)offsetof(struct config_str, display_control_urlline),	"Display URL line", (void *) 1  },
 { config_BOOL,	"display.control.status",	(void *)offsetof(struct config_str, display_control_status),		"Display status line", (void *) 1  },
+{ config_BOOL,	"display.control.top",	(void *)offsetof(struct config_str, display_control_top),		"Display tool bar at top", (void *) 1  },
+{ config_INT,	"display.control.initial",	(void *)offsetof(struct config_str, display_control_initial),		"Initial tool bar", (void *) 8  },
 { config_BOOL,	"display.fancy_ptr",		(void *)offsetof(struct config_str, display_fancy_ptr),		"Use different pointer shapes depending on what the pointer is over", (void *) 1 },
 { config_INT,	"display.scale",	(void *)offsetof(struct config_str, display_scale),		"Scaling factor (%)", (void *) 100  },
 { config_INT,	"display.scale.image",	(void *)offsetof(struct config_str, display_scale_image),	"Scaling factor for images (%)", (void *) 100 },
+{ config_INT,	"display.scale.1",	(void *)offsetof(struct config_str, display_scales[0]),	"Scale level 1", (void *)  80 },
+{ config_INT,	"display.scale.2",	(void *)offsetof(struct config_str, display_scales[1]),	"Scale level 2", (void *) 100 },
+{ config_INT,	"display.scale.3",	(void *)offsetof(struct config_str, display_scales[2]),	"Scale level 3", (void *) 125 },
+{ config_INT,	"display.scale.4",	(void *)offsetof(struct config_str, display_scales[3]),	"Scale level 4", (void *) 150 },
 { config_INT,	"display.width",	(void *)offsetof(struct config_str, display_width),		"Default page width in characters", (void *) 71  },
 { config_BOOL,	"display.blending",	(void *)offsetof(struct config_str, display_blending),	"Blend fonts to background", (void *) 0  },
 { config_INT,	"display.margin.left",	(void *)offsetof(struct config_str, display_margin.x0),		"Margin left (%)", (void *) 0 },
@@ -87,9 +98,18 @@ config_item citems[] = {
 { config_BOOL,  "display.frames", 	        (void *)offsetof(struct config_str, display_frames),	"Display frames", (void *)0  },
 { config_BOOL,  "display.smooth_scrolling", 	(void *)offsetof(struct config_str, display_smooth_scrolling),	"Use smooth scrolling", (void *)0  },
 { config_INT,   "display.time.activate", 	(void *)offsetof(struct config_str, display_time_activate),	"Time to activate links for", (void *)50 },
+{ config_INT,   "display.time.background", 	(void *)offsetof(struct config_str, display_time_background),	"Time for which to wait for background", (void *)0 },
+{ config_INT,   "display.time.fade", 	(void *)offsetof(struct config_str, display_time_fade),	"Time to fade page out", (void *)0 },
 { config_BOOL,	"display.map_coords",		(void *)offsetof(struct config_str, display_map_coords),	"Display map co-ordinates on the status line",	(void *) 0 },
+{ config_INT,	"display.jpeg",	(void *)offsetof(struct config_str, display_jpeg),		"0,1,3: on the fly, 2: decompress", (void *) 2 },
+{ config_INT,	"display.leading",	(void *)offsetof(struct config_str, display_leading),		"half leading", (void *) 25 },
+{ config_BOOL,	"display.leading.percent",	(void *)offsetof(struct config_str, display_leading_percent), "% or OS units", (void *) 1 },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_URL,	"document.default",	(void *)offsetof(struct config_str, doc_default),		"Default document",		"Welcome"  },
+{ config_URL,	"document.handler.user",	(void *)offsetof(struct config_str, document_handler_user),	       "Handler URL",		NULL  },
+{ config_URL,	"document.handler.related",	(void *)offsetof(struct config_str, document_handler_related),	       "URL to fetch related stuff",		NULL  },
+{ config_URL,	"document.search",	(void *)offsetof(struct config_str, document_search),	       "URL to search from",		NULL  },
+{ config_URL,	"document.offline",	(void *)offsetof(struct config_str, document_offline),	       "URL of offline menu",		NULL  },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_FILE,	"files.hots", 		(void *)offsetof(struct config_str, hotlist_file),		"Hotlist file",		"InetDBase:Hotlist"  },
 { config_FILE,	"files.passwords", 	(void *)offsetof(struct config_str, auth_file),		"File to store passwords in",	"<Fresco$Dir>.Users"  },
@@ -138,13 +158,18 @@ config_item citems[] = {
 { config_COLOUR, "colour.highlight",	(void *)offsetof(struct config_str, colours[10]), "Colour for highlighted link",			(void *) 0x0000ff00  },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_BOOL,	"proxy.http.enable",	(void *)offsetof(struct config_str, proxy_http_on),	"Enable proxies",	(void *) 0  },
-{ config_BOOL,	"proxy.gopher.enable",	(void *)offsetof(struct config_str, proxy_gopher_on),	NULL,		(void *) 0  },
+{ config_BOOL,	"proxy.https.enable",	(void *)offsetof(struct config_str, proxy_https_on),	NULL,	                (void *) 0  },
+{ config_BOOL,	"proxy.gopher.enable",	(void *)offsetof(struct config_str, proxy_gopher_on),	NULL,		        (void *) 0  },
 { config_BOOL,	"proxy.ftp.enable",	(void *)offsetof(struct config_str, proxy_ftp_on),	NULL,			(void *) 0  },
+{ config_BOOL,	"proxy.mailto.enable",	(void *)offsetof(struct config_str, proxy_mailto_on),	NULL,			(void *) 0  },
 { config_STRING, "proxy.http", 		(void *)offsetof(struct config_str, proxy_http),	"Proxy server name (and port)",	0  },
+{ config_STRING, "proxy.https", 	(void *)offsetof(struct config_str, proxy_https),	NULL,	                        0  },
 { config_STRING, "proxy.gopher", 	(void *)offsetof(struct config_str, proxy_gopher),	NULL,				0  },
 { config_STRING, "proxy.ftp", 		(void *)offsetof(struct config_str, proxy_ftp),	NULL,				0  },
+{ config_URL, "proxy.mailto", 		(void *)offsetof(struct config_str, proxy_mailto),	"Proxy URL",				0  },
 { config_STRING, "proxy.http.ignore", 	(void *)offsetof(struct config_str, proxy_http_ignore),	"No proxy on these domains",	0  },
-{ config_STRING, "proxy.gopher.ignore", (void *)offsetof(struct config_str, proxy_gopher_ignore),	NULL,				0  },
+{ config_STRING, "proxy.https.ignore", 	(void *)offsetof(struct config_str, proxy_https_ignore),        NULL,	                0  },
+{ config_STRING, "proxy.gopher.ignore", (void *)offsetof(struct config_str, proxy_gopher_ignore),	NULL,	                0  },
 { config_STRING, "proxy.ftp.ignore", 	(void *)offsetof(struct config_str, proxy_ftp_ignore),	NULL,				0  },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_INT,	"cache.size",	(void *)offsetof(struct config_str, cache_size),	"Size in K for cache (0 = unlimited)",		(void *) 0  },
@@ -162,6 +187,7 @@ config_item citems[] = {
 { config_BOOL,	"print.reversed",	(void *)offsetof(struct config_str, print_reversed),	"Print pages in reverse order",	(void *) 0  },
 { config_STRING, "sound.click", 	(void *)offsetof(struct config_str, sound_click),	"Command to run when selecting", (void *)0  },
 { config_BOOL, "mode.keyboard", 	(void *)offsetof(struct config_str, mode_keyboard),	"Are we mouseless", (void *)1  },
+{ config_BOOL, "mode.cursor.toolbar", 	(void *)offsetof(struct config_str, mode_cursor_toolbar),	"Move cursor to toolbar", (void *)1  },
 { config_INT, "mode.platform", 	(void *)offsetof(struct config_str, mode_platform),	"Platform type", (void *)0  },
 { config_INT,	"history.length",	(void *)offsetof(struct config_str, history_length),	"The number of pages in the per-view history list",	(void *) 50 },
 { config_INT,	"history.global.length",	(void *)offsetof(struct config_str, history_global_length),	"The number of unique pages in the global history list",	(void *) 250 },
@@ -343,7 +369,7 @@ static char *config_check_var(const char *config_name)
     /* COMMENT lines have no names */
     if (config_name == NULL)
 	return NULL;
-    
+
     strcpy(name, PROGRAM_NAME"$Config");
     s_out = name + sizeof(PROGRAM_NAME"$Config")-1;
 
@@ -469,7 +495,7 @@ void config_read_file_by_name(const char *file_name)
 		if (p)
 		{
 		    char *q1 = strtok(NULL, " \t\n\r,");
-		    char *q2 = strtok(NULL, " \t\n\r,");	
+		    char *q2 = strtok(NULL, " \t\n\r,");
 		    config_read_colour(p, q1, q2, &citems[i]);
 		}
 		break;

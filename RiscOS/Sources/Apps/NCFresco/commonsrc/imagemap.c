@@ -266,7 +266,7 @@ rid_map_item *imagemap_find_map(rid_header * rh, const char *name)
     return map;
 }
 
-#if 1
+#if 0
 /* not in use until we have some way of selecting the individual areas of a map */
 void imagemap_draw_area(antweb_doc *doc, rid_text_item_image *tii, int xb, int yb)
 {
@@ -283,10 +283,10 @@ void imagemap_draw_area(antweb_doc *doc, rid_text_item_image *tii, int xb, int y
         case rid_area_RECT:
         {
             wimp_box box;
-            box.x0 = area->coords.rect.x0*config_display_scale_image/100*dx;
-            box.y0 = area->coords.rect.y0*config_display_scale_image/100*dy;
-            box.x1 = area->coords.rect.x1*config_display_scale_image/100*dx;
-            box.y1 = area->coords.rect.y1*config_display_scale_image/100*dy;
+            box.x0 = area->coords.rect.x0*doc->scale_value/100*dx;
+            box.y0 = area->coords.rect.y0*doc->scale_value/100*dy;
+            box.x1 = area->coords.rect.x1*doc->scale_value/100*dx;
+            box.y1 = area->coords.rect.y1*doc->scale_value/100*dy;
             bbc_rectangle(xb + box.x0,   yb - box.y0, box.x1-box.x0-1, -(box.y1-box.y0-1));
             bbc_rectangle(xb + box.x0-2, yb - (box.y0-2), box.x1-box.x0+4-1, -(box.y1-box.y0+4-1));
             break;
@@ -294,9 +294,9 @@ void imagemap_draw_area(antweb_doc *doc, rid_text_item_image *tii, int xb, int y
 
         case rid_area_CIRCLE:
         {
-            int x = xb + area->coords.circle.x*config_display_scale_image/100*dx;
-            int y = yb - area->coords.circle.y*config_display_scale_image/100*dy;
-            int r = area->coords.circle.r*config_display_scale_image/100*2;
+            int x = xb + area->coords.circle.x*doc->scale_value/100*dx;
+            int y = yb - area->coords.circle.y*doc->scale_value/100*dy;
+            int r = area->coords.circle.r*doc->scale_value/100*2;
             bbc_circle(x, y, r);
             bbc_circle(x, y, r+2);
             break;
@@ -306,16 +306,16 @@ void imagemap_draw_area(antweb_doc *doc, rid_text_item_image *tii, int xb, int y
         {
             int i;
             intxy *p = area->coords.polygon.point;
-            bbc_move(xb + p->x*config_display_scale_image/100*dx, yb - p->y*config_display_scale_image/100*dy);
+            bbc_move(xb + p->x*doc->scale_value/100*dx, yb - p->y*doc->scale_value/100*dy);
             for (i = 1, p++; i < area->coords.polygon.npoints; i++, p++)
-                bbc_draw(xb + p->x*config_display_scale_image/100*dx, yb - p->y*config_display_scale_image/100*dy);
+                bbc_draw(xb + p->x*doc->scale_value/100*dx, yb - p->y*doc->scale_value/100*dy);
             break;
         }
 
         case rid_area_POINT:
         {
-            int x = xb + area->coords.point.x*config_display_scale_image/100*dx;
-            int y = yb - area->coords.point.y*config_display_scale_image/100*dy;
+            int x = xb + area->coords.point.x*doc->scale_value/100*dx;
+            int y = yb - area->coords.point.y*doc->scale_value/100*dy;
             bbc_circle(x, y, 8);
             break;
         }

@@ -48,7 +48,7 @@ object_methods object_table[rid_tag_LAST_TAG] = {
       0,		0,			0,
       &otable_asdraw,   0			},	/* TABLE */
 { &oobject_size,	&oobject_redraw,	&oobject_dispose,
-      0,		&oobject_astext,
+      oobject_click,	&oobject_astext,
       0,		0,			0,
       &oobject_asdraw,  0			}	/* OBJECT */
 

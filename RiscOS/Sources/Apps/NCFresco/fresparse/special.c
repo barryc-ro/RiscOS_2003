@@ -70,7 +70,7 @@ extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	me->rh->margin.left = attributes->value[HTML_BODY_LEFTMARGIN].u.i;
     if (attributes->value[HTML_BODY_TOPMARGIN].type == value_integer)
 	me->rh->margin.top = attributes->value[HTML_BODY_TOPMARGIN].u.i;
-    
+
     select_fmt_mode(htmlctxof(context));
 }
 
@@ -121,7 +121,7 @@ extern void startimg (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
     printf("HTML_IMG_WIDTH %p \n", vp);
 #endif
 #if 1
-    PRSDBGN(("startimg(): %p, %p, %p, %p, %p, %p, %p, %p, %p, %p\n", 
+    PRSDBGN(("startimg(): %p, %p, %p, %p, %p, %p, %p, %p, %p, %p\n",
 			 &attributes->value[HTML_IMG_SRC],
 			 &attributes->value[HTML_IMG_ALT],
 			 &attributes->value[HTML_IMG_ALIGN],
@@ -163,6 +163,32 @@ extern void finishapplet (SGMLCTX * context, ELEMENT * element)
 }
 #endif
 
+/* rh_find_colour
+ *
+ * Find a place in the rid_header to store the colour
+ */
+
+static int rh_find_colour( rid_header *rh, int colour )
+{
+    int i;
+
+    if ( rh->extracolours >= rid_EXTRACOLOURS )
+        return rid_EXTRACOLOURS-1;      /* abject failure */
+
+    /* not 0 as that means "use the normal colour" */
+    for ( i=1; i < rh->extracolours; i++ )
+        if ( rh->extracolourarray[i] == colour )
+            return i;
+
+    if ( !rh->extracolours )
+        rh->extracolours = 1;
+
+    rh->extracolourarray[ rh->extracolours ] = colour;
+    rh->extracolours++;
+
+    return rh->extracolours-1;
+}
+
 extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *me = htmlctxof(context);
@@ -199,6 +225,19 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	x &= ~WEBFONT_SIZE_MASK;
 	x |= (size - 1) << WEBFONT_SIZE_SHIFT;
 	PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+    }
+
+    /* pdh: font colour */
+    if (attributes->value[HTML_FONT_COLOR].type != value_none)
+    {
+        int thecolour;
+        unsigned int no;
+
+	htmlriscos_colour( &attributes->value[HTML_FONT_COLOR], &thecolour );
+
+	no = rh_find_colour( me->rh, thecolour );
+
+	PACK( context->tos->effects_active, STYLE_COLOURNO, no );
     }
 }
 

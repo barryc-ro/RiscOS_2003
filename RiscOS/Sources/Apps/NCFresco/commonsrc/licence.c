@@ -84,7 +84,8 @@ extern os_error *licence_init(void)
     }
 #endif /* TIMEOUT */
 
-#ifndef MemCheck_MEMCHECK
+/*#ifndef MemCheck_MEMCHECK*/
+#if PRODUCTION && !defined(MemCheck_MEMCHECK)
     if (VerifySerial(key_string) == 0)
     {
 	os_error *ep = (os_error *) &key_string;
@@ -93,7 +94,7 @@ extern os_error *licence_init(void)
 	return ep;
     }
 #endif
-    
+
     /* Initally we have up to 30 chars, a NULL chars and another NULL.
        We turn this into 16 chars, a colon, up to 30 chars and a NULL. */
 
@@ -104,14 +105,14 @@ extern os_error *licence_init(void)
 
     licensee_name = key_string + 17;
     licensee_string = key_string;
-    
+
     /* Build a user agent name including the OS version */
     {
 	os_regset r;
-	os_error *ep;	
+	os_error *ep;
 	int len;
 	char *s, *fmt, *os_name;
-		
+
 	/* Get the OS string */
 	r.r[0] = r.r[1] = 0;
 	ep = os_swix(OS_Byte, &r);
@@ -124,7 +125,7 @@ extern os_error *licence_init(void)
 
 	/* decide what format to use */
 	fmt = msgs_lookup(config_netscape_fake ? "uahdr1" : "uahdr0");
-	
+
 	/* NCFresco has an extra field for the base Fresco version number */
 #ifdef STBWEB
 	ua_name = mm_calloc(strlen(fmt) + sizeof(BASE_VERSION_NUMBER) + len + sizeof(BASE_UA_NAME), 1);
@@ -150,7 +151,7 @@ extern os_error *licence_init(void)
 	*s = 0;
 #endif
     }
-    
+
     return NULL;
 }
 

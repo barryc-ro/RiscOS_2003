@@ -137,7 +137,6 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
         if ( attributes->value[HTML_META_CONTENT].type == value_string &&
     	    attributes->value[HTML_META_HTTP_EQUIV].u.i == HTML_META_HTTP_EQUIV_REFRESH )
         {
-#if 1
 	    /* New way for new parse_http_header */
 	    static const char *content_tag_list[] = { "URL", 0 };
     	    char *s;
@@ -148,18 +147,10 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
     	    parse_http_header(s, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
 
     	    rh->refreshurl = strdup(vals[0].value);
-	    rh->refreshtime = vals[1].name ? atoi(vals[1].name) : -1;
-#else
-    	    static const char *content_tag_list[] = { "", "URL", NULL };
-    	    char *vals[2];
-    	    char *s = stringdup(attributes->value[HTML_META_CONTENT].u.s);
+	    rh->refreshtime = vals[1].name == NULL ? -1 :
+		strcasecomp(vals[1].name, "ondispose") ? -2 :
+		atoi(vals[1].name);
 
-    	    parse_http_header(s, content_tag_list, vals);
-
-    	    if (vals[0])
-    	        rh->refreshtime = atoi(vals[0]);
-    	    rh->refreshurl = strdup(vals[1]);
-#endif
     	    mm_free(s);
     	}
     }

@@ -162,6 +162,9 @@ static rid_text_item_object *connect_object(HTMLCTX *me, rid_object_item *obj)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
 
+    /* insert parent ptr */
+    obj->text_item = nb;
+    
     /* connect to stream */
     rid_text_item_connect(me->rh->curstream, nb);
 
@@ -215,6 +218,25 @@ static void add_param(rid_object_item *obj, const STRING *name, const VALUE *val
     param->value = valuestringdup(value);
     param->type = valuestringdup(type);
     param->valuetype = valuetype->type == value_enum ? valuetype->u.i : HTML_PARAM_VALUETYPE_DATA;
+
+    PRSDBG(("objparse: param '%s'='%s' type %s valuetype %d\n", param->name, strsafe(param->value), strsafe(param->type), param->valuetype));
+
+    /* Add to param list for this object */
+    param->next = obj->params;
+    obj->params = param;
+}
+
+static void add_param1(rid_object_item *obj, const char *name, const char *value, int valuetype)
+{
+    rid_object_param *param;
+
+    if (!obj)
+	return;
+
+    param = mm_calloc(sizeof(*param), 1);
+    param->name = strdup(name);
+    param->value = strdup(value);
+    param->valuetype = valuetype;
 
     PRSDBG(("objparse: param '%s'='%s' type %s valuetype %d\n", param->name, strsafe(param->value), strsafe(param->type), param->valuetype));
 
@@ -603,8 +625,15 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	param.type = value_enum;
 	param.u.i = rid_object_param_OBJECT_DATA;
 
+	/* shockwave */
 	add_param(obj, &(element->attributes[HTML_EMBED_PALETTE])->name, &attributes->value[HTML_EMBED_PALETTE], &none, &param);
 	add_param(obj, &(element->attributes[HTML_EMBED_TEXTFOCUS])->name, &attributes->value[HTML_EMBED_TEXTFOCUS], &none, &param);
+
+	/* oracle video server */
+	add_param(obj, &(element->attributes[HTML_EMBED_AUTOSTART])->name, &attributes->value[HTML_EMBED_AUTOSTART], &none, &param);
+	add_param(obj, &(element->attributes[HTML_EMBED_LOOP])->name, &attributes->value[HTML_EMBED_LOOP], &none, &param);
+	add_param(obj, &(element->attributes[HTML_EMBED_MDSFILE])->name, &attributes->value[HTML_EMBED_MDSFILE], &none, &param);
+	add_param(obj, &(element->attributes[HTML_EMBED_SERVER])->name, &attributes->value[HTML_EMBED_SERVER], &none, &param);
 
 	me->discard_noembed = 1;
     }
@@ -622,6 +651,53 @@ extern void finishembed(SGMLCTX *context, ELEMENT *element)
     htmlctx->discard_noembed = 0;
 }
 #endif
+
+/* -------------------------------------------------------------------------- */
+
+extern void startbgsound(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
+{
+    HTMLCTX *me = htmlctxof(context);
+    rid_object_item *obj;
+    VALUE none;
+
+    generic_start(context, element, attributes); 
+
+    none.type = value_none;
+    obj = make_base_object(me, 
+		&none,
+		&none,
+		&attributes->value[HTML_BGSOUND_SRC],
+		&none);
+
+    if (obj)
+    {
+	rid_text_item_object *tio;
+	VALUE param;
+	
+	/* explicitly zero size */
+	obj->userwidth.type = value_integer;
+	obj->userwidth.u.i = 0;
+	obj->userheight.type = value_integer;
+	obj->userheight.u.i = 0;
+    
+	/* BGSOUND is an empty element so no stacking */
+	me->object = NULL;
+	
+	obj->element = HTML_BGSOUND;
+
+	tio = connect_object(me, obj);
+
+	/* These are implied in BGSOUND */
+	add_param1(obj, "AUTOSTART", "TRUE", rid_object_param_OBJECT_DATA);
+	add_param1(obj, "HIDDEN", "TRUE", rid_object_param_OBJECT_DATA);
+
+	param.type = value_enum;
+	param.u.i = rid_object_param_OBJECT_DATA;
+	add_param(obj, &(element->attributes[HTML_BGSOUND_LOOP])->name, &attributes->value[HTML_BGSOUND_LOOP], &none, &param);
+    }
+
+    me->discard_noembed = 0;
+}
 
 /* -------------------------------------------------------------------------- */
 

@@ -21,6 +21,7 @@ typedef int access_url_flags;
 #define access_FORGROUND	0x02
 #define access_CHECK_EXPIRE	0x04
 #define access_CHECK_FILE_TYPE	0x08
+#define access_INTERNAL_FLAGS	0x0ffff
 /* Flags used internally but not used in the initial call */
 #define access_SECURE		0x10000	/* The access will be started on a secure socket */
 #define access_PROXY		0x20000	/* The access goes via a proxy */
@@ -101,6 +102,7 @@ extern void access_flush_cache(void);
 extern void access_optimise_cache( void );
 
 extern void access_abort_all_items(void);
+extern BOOL access_is_scheme_supported(const char *scheme);
 
 #ifdef ACCESS_INTERNAL
 

@@ -13,7 +13,8 @@ typedef void (*object_size)(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 
 typedef struct {
     int lf;			/* Last font handle */
-    int lfc;			/* Last font colour */
+    int lfc;			/* Last foreground colour */
+    int lbc;			/* Last background colour */
 } object_font_state;
 
 typedef void (*object_redraw)(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
@@ -54,7 +55,7 @@ typedef BOOL (*object_process_key)(rid_text_item *ti, rid_header *rh, antweb_doc
 
 /* Perform actions on images within objects
  * HANDLE: Return the image handle for the image in the object or NULL if
- * there is no image.  
+ * there is no image.
  * ABORT: If the image is partially loaded then abort it and cleanup
  * BOX: Return a pointer to a box describing the offset of the actual image
  * within the rid_text_item. In OS units. in trim form.

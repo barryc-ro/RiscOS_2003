@@ -20,7 +20,8 @@ void render_plot_icon(char *sprite, int x, int y);
 wimp_paletteword render_get_colour(int colour, be_doc doc);
 /* SJM */
 void render_item_outline(be_item ti, int hpos, int bline);
-int render_text_link_colour(be_item ti, be_doc doc);
+int render_text_link_colour(rid_header *rh, be_item ti, be_doc doc);
 
 int render_cell_background_colour(int c);
 
+int render_background( rid_header *rh, be_item ti, be_doc doc );

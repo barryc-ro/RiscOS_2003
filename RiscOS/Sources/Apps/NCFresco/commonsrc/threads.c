@@ -20,6 +20,9 @@
 #define STBWEB_ROM 0
 #endif
 
+/* Cross-compilation of this is too machine specific. */
+#ifdef RISCOS
+
 extern void sutil_get_relocation_offsets(int *stack_limit);
 
 #define STACK_LIMIT_OFFSET	0x230
@@ -53,8 +56,10 @@ extern void thread_starter(void)
     fprintf(stderr, "Thread main returned\n");
 #endif
 
+#ifdef RISCOS
     running_thread->rc = rc;
     running_thread->halt_point = "<DEAD via main return>";
+#endif
 
     longjmp(return_point, thread_DEAD);
 }
@@ -187,3 +192,5 @@ void thread_wait(char *s)
 	longjmp(return_point, thread_ALIVE);
     }
 }
+
+#endif /* RISCOS */

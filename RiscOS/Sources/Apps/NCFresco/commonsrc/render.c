@@ -66,7 +66,7 @@ static void draw_cornerLT(int x, int y, int w, int h, int thickness)
 void render_plinth(int bcol, int flags, int x, int y, int w, int h, antweb_doc *doc)
 {
 #if !ANTI_TWITTER
-    const int dx = frontend_dx, dy = frontend_dy; 
+    const int dx = frontend_dx, dy = frontend_dy;
 #endif
     int off;
 
@@ -203,6 +203,16 @@ wimp_paletteword render_get_colour(int colour, be_doc doc)
 	break;
     }
 
+    if ( (unsigned int)colour >= (unsigned int)render_colour_RGB )
+    {
+        /* Too late now to check DOC_COLOURS as the information as to *which*
+         * colour this is has been lost. DOC_COLOURS must be checked before
+         * a colour_RGB colour is chosen in the first place
+         */
+	pw.word = colour & 0xFFFFFF00;
+	return pw;
+    }
+
     return config_colours[colour];
 }
 
@@ -262,19 +272,29 @@ int render_link_colour(rid_text_item *ti, antweb_doc *doc)
     if (ti->flag & (rid_flag_SELECTED | rid_flag_ACTIVATED))
 	rcol = render_colour_HIGHLIGHT;
     else
-        rcol = render_text_link_colour(ti, doc);
+        rcol = render_text_link_colour(NULL, ti, doc);
     return rcol;
 }
 
 /*
- * This is used for text links.
+ * This is used for text links. Note that (in the function above) rh is passed
+ * as NULL (in this case aref should never be null though)
  */
 
-int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
+int render_text_link_colour(rid_header *rh, rid_text_item *ti, antweb_doc *doc)
 {
     int rcol;
+
     if (ti->aref == NULL || ti->aref->href == NULL)
-	rcol = render_colour_PLAIN;
+    {
+        /* pdh: It's not a link -- but what colour is it? */
+        int no = RID_COLOUR(ti);    /* defined in rid.h */
+
+        if ( no && rh && doc && (doc->flags & doc_flag_DOC_COLOURS) )
+            rcol = render_colour_RGB | rh->extracolourarray[no];
+        else
+            rcol = render_colour_PLAIN;
+    }
     else if (ti->flag & rid_flag_ACTIVATED)
 	rcol = render_colour_HIGHLIGHT;
     else
@@ -309,6 +329,58 @@ int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
 #endif
     }
     return rcol;
+}
+
+/*
+ * Get hold of the right background colour, which, now tables can have
+ * background colours, is not as easy as it used to be
+ */
+
+int render_background( rid_header *rh, rid_text_item *ti, antweb_doc *doc )
+{
+    if ( doc && !( doc->flags & doc_flag_DOC_COLOURS ) )
+        return render_colour_BACK;
+
+    if ( ti && ti->line )
+    {
+        struct rid_text_stream *st = ti->line->st;
+        /* The shin-bone's connected to the ... ankle-bone */
+
+        if ( st && st->parent )
+        {
+            void *parent = st->parent;
+            rid_table_props *props = NULL;
+
+            switch ( st->partype )
+            {
+            case rid_pt_CAPTION:
+                {
+                    rid_table_caption *caption = (rid_table_caption*)parent;
+
+                    if ( caption )
+                        props = caption->props;
+                }
+                break;
+            case rid_pt_CELL:
+                {
+                    rid_table_cell *cell = (rid_table_cell*)parent;
+                    if ( cell )
+                        props = cell->props;
+                }
+                break;
+            }
+
+            /* YCGLIYT I'm recursing all the way up to find a colour */
+            if ( props
+                 && ( props->flags & rid_tpf_BGCOLOR ) )
+                    return render_colour_RGB | props->bgcolor;
+        }
+    }
+
+    if ( doc && doc->rh && ( doc->rh->bgt & rid_bgt_COLOURS) )
+	return render_colour_RGB | doc->rh->colours.back;
+
+    return render_colour_BACK;
 }
 
 void render_plot_icon(char *sprite, int x, int y)

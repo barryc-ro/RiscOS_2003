@@ -45,6 +45,7 @@ extern int frontend_dx, frontend_dy;
 #define fe_open_url_NO_HISTORY		(1<<1)	/* Don't add file to history list */
 #define fe_open_url_FROM_HISTORY	(1<<2)	/* url was pulled from history list */
 #define fe_open_url_FROM_FRAME		(1<<3)	/* url was initiated from a frameset */
+#define fe_open_url_NO_REFERER		(1<<4)	/* url is unrelated to current document */
 
 os_error *frontend_open_url(char *url, fe_view parent, char *windowname, char *bfile, int flags);
 
@@ -237,6 +238,16 @@ typedef int (*frontend_message_handler)(wimp_eventstr *e, void *handle);
 
 extern int frontend_message_add_handler(frontend_message_handler fn, void *handle);
 extern int frontend_message_remove_handler(frontend_message_handler fn, void *handle);
+
+extern void frontend_fade_frame(fe_view v, wimp_paletteword colour);
+
+#define fe_internal_url_ERROR		0 /* Display the No Data error */
+#define fe_internal_url_REDIRECT	1 /* *new_url contains a URL to redirect to */
+#define fe_internal_url_NO_ACTION	2 /* Do nothing, command completed successfully and quietly */
+#define fe_internal_url_NEW		3 /* New file created in 'file' */
+#define fe_internal_url_HELPER		4 /* Some kind of helper fired off */
+
+extern int frontend_internal_url(const char *path, const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags);
 
 /***************************************************************************/
 /* Functions for talking to the back end */
@@ -441,6 +452,10 @@ extern void backend_set_margin(be_doc doc, wimp_box *margin);
 #endif
 
 extern void backend_image_expire(be_doc doc, void *imh);
+extern void backend_doc_reformat(be_doc doc);
+extern void backend_doc_set_scaling(be_doc doc, int scale_value);
+
+extern BOOL backend_submit_form(be_doc doc, const char *id, int right);
 
 #endif /* __interface_h */
 

@@ -21,6 +21,7 @@ char *url_leaf_name(char *url);
 char *url_escape_chars(char *s, char *escapes);
 void url_escape_cat(char *buffer, char *in, int len);
 void url_escape_to_file(char *s, FILE *f);
+BOOL url_escape_file_to_file(FILE *in, FILE *out);
 
 extern char *url_path_trans(char *s, int topath);
 

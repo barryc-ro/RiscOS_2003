@@ -150,7 +150,10 @@ IF these are not kept in sync, then incorrect results *will* be obtained.
 #define STYLE_STRIKE_SHIFT      11
 #define rid_sf_STRIKE		( STYLE_STRIKE << STYLE_STRIKE_SHIFT )
 
-/* 12.15 spare */
+/* 12.15 pdh: colour... zero means page's fg colour */
+
+#define STYLE_COLOURNO_MASK     0x000F
+#define STYLE_COLOURNO_SHIFT    12
 
 /*****************************************************************************/
 

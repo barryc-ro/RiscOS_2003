@@ -600,7 +600,7 @@ void url_escape_to_file(char *s, FILE *f)
 {
     char c;
 
-    while ( (c=*s++) != 0)
+    while ( (c=*s++) != 0 && !ferror(f))
     {
 	if (c == ' ')
         {
@@ -617,6 +617,35 @@ void url_escape_to_file(char *s, FILE *f)
 	    fputc(hexchars[(c>>0) & 0xf], f);
 	}
     }
+}
+
+BOOL url_escape_file_to_file(FILE *in, FILE *out)
+{
+    /*char c;*/
+    int c;
+
+    /* EOF WILL NOT FIT IN A char, SO THIS TEST IS */
+    /* USELESS IF c IS A char. */
+
+    while ( (c=fgetc(in)) != EOF && !ferror(out))
+    {
+	if (c == ' ')
+        {
+	    fputc('+', out);
+        }
+	else if (isalnum(c) || strchr(FORM_UNRESERVED_CHARS, c) != 0) /* SJM: let some chars through unchanged */
+	{
+	    fputc(c, out);
+	}
+	else
+	{
+	    fputc('%', out);
+	    fputc(hexchars[(c>>4) & 0xf], out);
+	    fputc(hexchars[(c>>0) & 0xf], out);
+	}
+    }
+
+    return !ferror(out) && !ferror(in);
 }
 
 /*

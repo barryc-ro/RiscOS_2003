@@ -21,6 +21,8 @@ extern void config_write_file_by_name(const char *file_name);
 extern void config_read_file_by_name(const char *file_name);
 extern int config_colour_number(char *p);
 
+#define config_SCALES	4
+
 struct config_str
 {
     int max_files_fetching;
@@ -41,6 +43,10 @@ struct config_str
     char *animation_name;
     int animation_frames;
     char *doc_default;
+    char *document_handler_user;
+    char *document_handler_related;
+    char *document_search;
+    char *document_offline;
 
     int display_links_underlined;
     int display_body_colours;
@@ -48,12 +54,15 @@ struct config_str
     int display_control_buttons;
     int display_control_urlline;
     int display_control_status;
+    int display_control_top;
+    int display_control_initial;
     int display_fancy_ptr;
     int display_map_coords;
 
     int display_scale;
-    int display_width;
     int display_scale_image;
+    int display_scales[config_SCALES];
+    int display_width;
     int display_blending;
     wimp_box display_margin;
     int display_margin_auto;
@@ -61,16 +70,26 @@ struct config_str
     int display_smooth_scrolling;
 
     int display_time_activate;
-
+    int display_time_background;
+    int display_time_fade;
+    int display_jpeg;
+    int display_leading;
+    int display_leading_percent;
+    
     int proxy_http_on;
+    int proxy_https_on;
     int proxy_gopher_on;
     int proxy_ftp_on;
+    int proxy_mailto_on;
 
     char *proxy_http;
+    char *proxy_https;
     char *proxy_gopher;
     char *proxy_ftp;
+    char *proxy_mailto;
 
     char *proxy_http_ignore;
+    char *proxy_https_ignore;
     char *proxy_gopher_ignore;
     char *proxy_ftp_ignore;
 
@@ -102,6 +121,7 @@ struct config_str
     char *font_names[8];
 
     int mode_keyboard;
+    int mode_cursor_toolbar;
     int mode_platform;
 
     int cookie_enable;
@@ -143,6 +163,10 @@ extern struct config_str config_array;
 
 #define config_auth_file_crypt (config_array.auth_file_crypt)
 #define config_doc_default (config_array.doc_default)
+#define config_document_handler_user (config_array.document_handler_user)
+#define config_document_handler_related (config_array.document_handler_related)
+#define config_document_search (config_array.document_search)
+#define config_document_offline (config_array.document_offline)
 
 #define config_display_links_underlined (config_array.display_links_underlined)
 #define config_display_body_colours (config_array.display_body_colours)
@@ -150,11 +174,14 @@ extern struct config_str config_array;
 #define config_display_control_buttons (config_array.display_control_buttons)
 #define config_display_control_urlline (config_array.display_control_urlline)
 #define config_display_control_status (config_array.display_control_status)
+#define config_display_control_top (config_array.display_control_top)
+#define config_display_control_initial (config_array.display_control_initial)
 #define config_display_fancy_ptr (config_array.display_fancy_ptr)
 
 #define config_display_scale (config_array.display_scale)
-#define config_display_width (config_array.display_width)
 #define config_display_scale_image (config_array.display_scale_image)
+#define config_display_scales (config_array.display_scales)
+#define config_display_width (config_array.display_width)
 #define config_display_blending (config_array.display_blending)
 #define config_display_margin (config_array.display_margin)
 #define config_display_margin_auto (config_array.display_margin_auto)
@@ -165,17 +192,27 @@ extern struct config_str config_array;
 #endif
 #define config_display_smooth_scrolling (config_array.display_smooth_scrolling)
 #define config_display_time_activate (config_array.display_time_activate)
+#define config_display_time_background (config_array.display_time_background)
+#define config_display_time_fade (config_array.display_time_fade)
 #define config_display_map_coords (config_array.display_map_coords)
+#define config_display_jpeg (config_array.display_jpeg)
+#define config_display_leading (config_array.display_leading)
+#define config_display_leading_percent (config_array.display_leading_percent)
 
 #define config_proxy_http_on (config_array.proxy_http_on)
+#define config_proxy_https_on (config_array.proxy_https_on)
 #define config_proxy_gopher_on (config_array.proxy_gopher_on)
 #define config_proxy_ftp_on (config_array.proxy_ftp_on)
+#define config_proxy_mailto_on (config_array.proxy_mailto_on)
 
 #define config_proxy_http (config_array.proxy_http)
+#define config_proxy_https (config_array.proxy_https)
 #define config_proxy_gopher (config_array.proxy_gopher)
 #define config_proxy_ftp (config_array.proxy_ftp)
+#define config_proxy_mailto (config_array.proxy_mailto)
 
 #define config_proxy_http_ignore (config_array.proxy_http_ignore)
+#define config_proxy_https_ignore (config_array.proxy_https_ignore)
 #define config_proxy_gopher_ignore (config_array.proxy_gopher_ignore)
 #define config_proxy_ftp_ignore (config_array.proxy_ftp_ignore)
 
@@ -203,6 +240,7 @@ extern struct config_str config_array;
 
 #define config_sound_click (config_array.sound_click)
 #define config_mode_keyboard (config_array.mode_keyboard)
+#define config_mode_cursor_toolbar (config_array.mode_cursor_toolbar)
 #define config_mode_platform (config_array.mode_platform)
 #define config_cookie_enable (config_array.cookie_enable)
 #define config_cookie_uptodate (config_array.cookie_uptodate)

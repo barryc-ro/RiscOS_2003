@@ -18,9 +18,11 @@ extern void startform (SGMLCTX * context, ELEMENT * element, VALUES * attributes
     new_form_item(htmlctxof(context),
 		  &attributes->value[HTML_FORM_ACTION],
 		  &attributes->value[HTML_FORM_METHOD],
-		  &attributes->value[HTML_FORM_TARGET]);
+		  &attributes->value[HTML_FORM_TARGET],
+		  &attributes->value[HTML_FORM_ID]);
 }
 
+#if 0
 /* On the first checked set the flag, on others clear checked flag */
 static void check_radio_1(rid_form_element *fe, void *handle)
 {
@@ -67,6 +69,8 @@ static void check_radio(rid_form_element *fe, void *handle)
     }
 }
 
+#endif
+
 extern void finishform (SGMLCTX * context, ELEMENT * element)
 {
     HTMLCTX *me = htmlctxof(context);
@@ -76,7 +80,10 @@ extern void finishform (SGMLCTX * context, ELEMENT * element)
     /* check that form items are as they should be */
 
     /* check that each radio group has one and only one button checked */
-    form_element_enumerate(me->form, rid_form_element_INPUT, rid_it_RADIO, form_element_enumerate_ALL, check_radio, NULL);
+    /* remove this check as despite it being in the spec, other browsers don't do it and
+       some crappy pages depend on non being set initially
+       form_element_enumerate(me->form, rid_form_element_INPUT, rid_it_RADIO, form_element_enumerate_ALL, check_radio, NULL);
+       */
 }
 
 /*****************************************************************************/

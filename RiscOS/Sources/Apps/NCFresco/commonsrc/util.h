@@ -23,8 +23,11 @@
 #define ROUND4(a)	(((a)+3)&~3)
 #define ROUND2(a)	(((a)+1)&~1)
 
+#define NOT_USED(a)	a=a
+
 extern char *strdup(const char *s);
 extern char *strndup(const char *s, size_t maxlen);
+extern char *strcatx(char **s1, const char *s2);
 extern int strncasecomp(const char *a, const char *b, size_t n);
 extern int strcasecomp(const char *s1, const char *s2);
 extern char *strcasestr(const char *s1, const char *s2);
@@ -42,12 +45,13 @@ unsigned int string_hash(const char *s);
 /* Try and reallocate in lower memory (returns s if it can't) */
 char *optimise_string( char *s );
 
-int suffix_to_file_type(char *suffix);
-int mime_to_file_type(char *mime);
+int suffix_to_file_type(const char *suffix);
+int mime_to_file_type(const char *mime);
 
+extern int file_type_real(const char *fname);
 int file_type(const char *fname);
-int set_file_type(char *fname, int ft);
-extern int path_is_directory(char *path);
+int set_file_type(const char *fname, int ft);
+extern int path_is_directory(const char *path);
 
 char *reduce_file_name(char *fname, char *temp, char *pathname);
 
@@ -65,7 +69,6 @@ void flexmem_shift(void);
 /* wait for all mouse buttons to be released */
 extern int wait_for_release(int max);
 
-#if 1
 typedef struct
 {
     char *name;
@@ -73,9 +76,6 @@ typedef struct
 } name_value_pair;
 
 extern int parse_http_header(char *header_data, const char *tags[], name_value_pair *output, int output_size);
-#else
-extern void parse_http_header(char *header_data, const char *tags[], char *values[]);
-#endif
 
 extern char *skip_space(const char *s);
 
@@ -133,5 +133,8 @@ extern os_error *ensure_modem_line(void);
 #else
 #define ensure_modem_line() 0
 #endif
+
+/*extern void null_free(void **vpp);*/
+#define STRING_FREE(s) nullfree((void **)(s));
 
 /* eof util.h */

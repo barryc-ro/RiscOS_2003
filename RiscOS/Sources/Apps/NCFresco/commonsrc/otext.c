@@ -173,7 +173,7 @@ static void draw_line(int x, int baseline, int w)
     int cap[4];
     int trans[6];
     _kernel_oserror *e;
-    
+
     *bp++ = 2;			/* move */
     *bp++ = x << 8;
     *bp++ = baseline << 8;
@@ -196,7 +196,7 @@ static void draw_line(int x, int baseline, int w)
 
     trans[4] = 0;
     trans[5] = 0;
-    
+
     e = _swix(Draw_Stroke, _INR(0,6), buf, 0x30, trans, 0, 4 << 8, cap, 0);
     if (e) usrtrc("Draw_Stroke: %x %s\n", e->errnum, e->errmess);
 }
@@ -206,7 +206,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 {
 #ifndef BUILDERS
     rid_text_item_text *tit = (rid_text_item_text *) ti;
-    int tfc;
+    int tfc, tbc;
     struct webfont *wf;
     int b;
     BOOL no_text;
@@ -219,10 +219,14 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	font_setfont(fs->lf);
     }
 
-    if (fs->lfc != (tfc = render_text_link_colour(ti, doc) ) )
+    tfc = render_text_link_colour(rh, ti, doc);
+    tbc = render_background(rh, ti, doc);
+
+    if ( fs->lfc != tfc || fs->lbc != tbc )
     {
 	fs->lfc = tfc;
-	render_set_font_colours(fs->lfc, render_colour_BACK, doc);
+	fs->lbc = tbc;
+	render_set_font_colours(fs->lfc, fs->lbc, doc);
     }
 
 #if 0

@@ -99,13 +99,16 @@ static char *roman_numeral(int n, int caps)
 #endif
 
 #ifndef BUILDERS
-static char *obullet_string(rid_text_item_bullet *tib)
+static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 {
     static char buffer[24];		/* Big enough that it can be padded to a full word. */
 
     switch (tib->list_type)
     {
     case HTML_UL:
+	buffer[0] = BULLET_CHAR;
+	buffer[1] = 160;
+	buffer[2] = 0;
 	switch (tib->item_type)
 	{
 	case 0:     /* PLAIN */
@@ -113,10 +116,18 @@ static char *obullet_string(rid_text_item_bullet *tib)
 	    buffer[0] = 0;
 	    break;
 
-	default:
-	    buffer[0] = BULLET_CHAR;
-	    buffer[1] = ' ';
-	    buffer[2] = 0;
+	    /* only override the standard bullet if we know the symbol font is available */
+	case HTML_UL_TYPE_DISC:
+	    if (symfont)
+		buffer[0] = 108;
+	    break;
+	case HTML_UL_TYPE_SQUARE:
+	    if (symfont)
+		buffer[0] = 110;
+	    break;
+	case HTML_UL_TYPE_CIRCLE:
+	    if (symfont)
+		buffer[0] = 109;
 	    break;
 	}
 	break;
@@ -126,30 +137,31 @@ static char *obullet_string(rid_text_item_bullet *tib)
 	{
 	default:
 	case rid_bullet_ol_1:
-	    sprintf(buffer, "%d) ", tib->list_no);
+	    sprintf(buffer, "%d", tib->list_no);
 	    break;
 
 	case rid_bullet_ol_a:
-	    sprintf(buffer, "%c) ", 'a' + ((tib->list_no-1) % 26));
+	    sprintf(buffer, "%c", 'a' + ((tib->list_no-1) % 26));
 	    break;
 
 	case rid_bullet_ol_A:
-	    sprintf(buffer, "%c) ", 'A' + ((tib->list_no-1) % 26));
+	    sprintf(buffer, "%c", 'A' + ((tib->list_no-1) % 26));
 	    break;
 
 	case rid_bullet_ol_I:
 	case rid_bullet_ol_i:
-	    sprintf(buffer, "%s) ", roman_numeral(tib->list_no,
+	    sprintf(buffer, "%s", roman_numeral(tib->list_no,
 						  (tib->item_type == rid_bullet_ol_i) ? 0 : 1 ));
 	    break;
 	}
+	strcat(buffer, ")\240");
 	break;
 
     case HTML_MENU:
     case HTML_DIR:
     default:
 	buffer[0] = BULLET_CHAR;
-	buffer[1] = ' ';
+	buffer[1] = 160;
 	buffer[2] = 0;
 	break;
     }
@@ -186,17 +198,33 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 {
 #ifndef BUILDERS
     char *buffer;
-    int tfc;
+    int tfc, tbc;
     font_string fstr;
+    font fh;
     rid_text_item_bullet *tib = (rid_text_item_bullet*) ti;
+    BOOL symfont;
 
-    if (fs->lf != webfonts[ti->st.wf_index].handle)
+    symfont = FALSE;
+    fh = webfonts[ti->st.wf_index].handle;
+
+    /* check and see if thew symbol font is available */
+    if (tib->list_type == HTML_UL && tib->item_type != HTML_UL_TYPE_DISC)
     {
-	fs->lf = webfonts[ti->st.wf_index].handle;
+	font fhsym = webfonts[WEBFONT_SYMBOL(((ti->st.wf_index & WEBFONT_SIZE_MASK) >> WEBFONT_SIZE_SHIFT) + 1)].handle;
+	if (fhsym > 0)
+	{
+	    fh = fhsym;
+	    symfont = TRUE;
+	}
+    }
+    
+    if (fs->lf != fh)
+    {
+	fs->lf = fh;
 	font_setfont(fs->lf);
     }
 
-    buffer = obullet_string(tib);
+    buffer = obullet_string(tib, symfont);
 
     fstr.x = 1 << 30;
     fstr.y = 1 << 30;
@@ -206,11 +234,16 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     fstr.s = buffer;
     font_strwidth(&fstr);
 
-    if (fs->lfc != (tfc = render_link_colour(ti, doc)) )
+    tfc = render_text_link_colour(rh, ti, doc);
+    tbc = render_background(rh, ti, doc);
+
+    if ( fs->lfc != tfc || fs->lbc != tbc )
     {
 	fs->lfc = tfc;
-	render_set_font_colours(tfc, render_colour_BACK, doc);
+	fs->lbc = tbc;
+	render_set_font_colours(fs->lfc, fs->lbc, doc);
     }
+
     font_paint(buffer, font_OSCOORDS + (config_display_blending ? 0x800 : 0),
 	       hpos + ti->width - (fstr.x / MILIPOINTS_PER_OSUNIT), bline);
 #endif /* BUILDERS */
@@ -256,7 +289,7 @@ void obullet_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     font_string fstr;
     int hp;
 
-    buffer = obullet_string(tib);
+    buffer = obullet_string(tib, FALSE);
 
     for (len = strlen(buffer)+1; (len % 4) != 0 ; len++)
 	buffer[len] = 0;

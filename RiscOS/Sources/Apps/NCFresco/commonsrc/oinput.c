@@ -139,8 +139,8 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	}
 #endif
 #ifndef BUILDERS
-        width = width*config_display_scale_image/100 + 4;
-        height = height*config_display_scale_image/100 + 4;
+        width = width*doc->scale_value/100 + 4;
+        height = height*doc->scale_value/100 + 4;
 #endif
 	ti->width = width;
 	ti->pad = 0;
@@ -161,10 +161,16 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	break;
     case rid_it_TEXT:
     case rid_it_PASSWD:
-	ti->width = webfont_tty_width(((ii->xsize != -1) ? ii->xsize : 20), 1) + 24;
+    {
+	int n = ((ii->xsize != -1) ? ii->xsize : 20) * doc->scale_value / 100;
+	if (n == 0)
+	    n = 1;
+	ti->width = webfont_tty_width(n, 1) + 24;
 	ti->max_up = webfonts[WEBFONT_TTY].max_up + 8;
 	ti->max_down = webfonts[WEBFONT_TTY].max_down + 8;
 	break;
+    }
+    case rid_it_BUTTON:
     case rid_it_SUBMIT:
     case rid_it_RESET:
 	t = ii->value ? ii->value : (ii->tag == rid_it_RESET ? "Reset" : "Submit");
@@ -204,7 +210,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    ooy -= doc->margin.y1;
 #endif
 	    image_render((image) ii->data.image.im, hpos+2, bline + 2 - ti->max_down,
-			 -1, -1, config_display_scale_image, antweb_render_background, doc, oox, ooy);
+			 -1, -1, doc->scale_value, antweb_render_background, doc, oox, ooy);
 	}
 	else
 	{
@@ -326,6 +332,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
     case rid_it_SUBMIT:
     case rid_it_RESET:
+    case rid_it_BUTTON:
 	render_plinth(ii->data.tick ? render_colour_ACTION : render_colour_INPUT_B,
 		      ii->data.tick ? render_plinth_IN : 0,
 		      hpos, bline - ti->max_down,
@@ -416,7 +423,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    x = x-2;
 	    y = (ti->max_up-2)-y;
 
-            image_os_to_pixels((image) ii->data.image.im, &x, &y, config_display_scale_image);
+            image_os_to_pixels((image) ii->data.image.im, &x, &y, doc->scale_value);
 
 	    ii->data.image.x = x;
 	    ii->data.image.y = y;
@@ -576,6 +583,21 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 		antweb_update_item(doc, tai->base.display);
 		break;
 	    }
+
+	    case rid_form_element_SELECT:
+	    {
+		rid_select_item *sis = (rid_select_item *)ife;
+		rid_option_item *ois;
+		for(ois = sis->options; ois; ois = ois->next)
+		{
+		    if (ois->flags & rid_if_CHECKED)
+			ois->flags |=  rid_if_SELECTED;
+		    else
+			ois->flags &= ~rid_if_SELECTED;
+		}
+		antweb_update_item(doc, sis->base.display);
+		break;
+	    }		
 	    }
 	}
 
@@ -637,6 +659,7 @@ void oinput_astext(rid_text_item *ti, rid_header *rh, FILE *f)
 	break;
     case rid_it_RESET:
     case rid_it_SUBMIT:
+    case rid_it_BUTTON:
 	fputc('[', f);
 	fputs(ii->value ? ii->value : ( ii->tag == rid_it_SUBMIT ? "Submit" : "Reset" ), f);
 	fputc(']', f);
@@ -1052,6 +1075,7 @@ void oinput_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 	break;
     case rid_it_SUBMIT:
     case rid_it_RESET:
+    case rid_it_BUTTON:
 	df_write_plinth(fh, &tb,
 			render_get_colour(render_colour_LINE_L, doc),
 			render_get_colour(render_colour_LINE_D, doc),

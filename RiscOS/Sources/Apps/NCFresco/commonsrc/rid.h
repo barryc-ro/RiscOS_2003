@@ -4,11 +4,15 @@
 /* 19-03-96 DAF         Added rid_sf_RIGHTALIGN. Some tidying up. */
 /* 02-04-96 SJM         Added meta_list, remove windowname */
 /* 19/07/06 SJM		Change form element structures */
- 
+
 /* rid.h */
 
 #ifndef __rid_h
 #define __rid_h
+
+#ifndef __coretypes_h
+#include "coretypes.h"
+#endif
 
 #ifndef __glue_h
 #include "glue.h"
@@ -97,8 +101,6 @@ can be searched for a given name attribute.
 
 **********************************************************************************/
 
-typedef struct { int x, y; } intxy;
-
 /*****************************************************************************/
 
 /* Forward declarations */
@@ -124,6 +126,7 @@ typedef struct rid_frame_unit_totals    rid_frame_unit_totals;
 typedef struct rid_area_item            rid_area_item;
 typedef struct rid_map_item             rid_map_item;
 typedef struct rid_fmt_info             rid_fmt_info;
+typedef struct rid_fmt_state		rid_fmt_state;
 typedef struct rid_meta_item            rid_meta_item;
 
 typedef struct rid_object_param		rid_object_param;
@@ -183,7 +186,17 @@ typedef SHORTISH rid_flag;
 #define rid_flag_ACTIVATED	0x40	/* item is being clicked on */
 #define rid_flag_EXPLICIT_BREAK	0x80	/* a BR element was used */
 
+#define rid_flag_COLOUR_MASK   0xF00    /* Up to 16 colours per page */
+#define rid_flag_COLOUR_SHIFT      8
+
+#define RID_COLOUR(rid) ( ( (rid)->st.flags >> STYLE_COLOURNO_SHIFT ) \
+                         & STYLE_COLOURNO_MASK )
+
 typedef struct rid_pos_item {
+#if DEBUG
+    MAGIC tag;
+    int line_number;
+#endif
     struct rid_pos_item *next, *prev;   /* Next line down */
     struct rid_text_stream *st; /* Parent */
     int top;                    /* The vertical starting position of the line */
@@ -199,6 +212,7 @@ typedef struct rid_float_item {
     struct rid_text_item *ti;	/* The item that is floating */
     struct rid_pos_item *pi;	/* The FIRST line that it floats on */
     int height;			/* The height of the floating object */
+    int left;			/* Left X for starting point */
     struct rid_float_item *next;
 } rid_float_item;
 
@@ -276,13 +290,15 @@ typedef enum {
     rid_it_SUBMIT,
     rid_it_RESET,
     rid_it_IMAGE,
-    rid_it_HIDDEN
+    rid_it_HIDDEN,
+    rid_it_BUTTON
     } rid_input_tag;
 
 typedef int rid_input_flags;
-#define rid_if_CHECKED  0x01
+#define rid_if_CHECKED  0x01		/* was it selected in the HTML? */
 #define rid_if_DISABLED 0x02
 #define rid_if_SCANNED	0x04		/* Used when checking elements at end of form */
+#define rid_if_SELECTED	0x08		/* with OPTION, was it selected by the user */
 
 typedef int rid_image_flags;
 #define rid_image_flag_ISMAP    0x01
@@ -293,13 +309,7 @@ typedef int rid_image_flags;
 #define rid_image_flag_PERCENT  0x20 /* size is a percent value not pixels */
 
 typedef struct rid_input_item {
-#if 1
     struct rid_form_element base;
-#else
-    struct rid_input_item *next, *prev; /* In a list for the whole form */
-    struct rid_form_item *parent;
-    struct rid_text_item *display;
-#endif
     rid_input_tag tag;
     rid_input_flags flags;
     char *name;
@@ -330,13 +340,7 @@ typedef int rid_select_flags;
 #define rid_sf_MULTIPLE 0x01
 
 typedef struct rid_select_item {
-#if 1
     struct rid_form_element base;
-#else
-    struct rid_select_item *next, *prev;
-    struct rid_form_item *parent;
-    struct rid_text_item *ti;   /* Points back to the visable object */
-#endif
     char *name;
     SHORTISH count;             /* How many items in the list */
     SHORTISH size;              /* For the display */
@@ -353,13 +357,7 @@ typedef struct rid_textarea_line {
 } rid_textarea_line;
 
 typedef struct rid_textarea_item {
-#if 1
     struct rid_form_element base;
-#else
-    struct rid_textarea_item *next, *prev;
-    struct rid_form_item *parent;
-    struct rid_text_item *display;
-#endif
     char *name;
     SHORTISH rows, cols;
     SHORTISH cx, cy;                    /* Caret position */
@@ -376,18 +374,13 @@ typedef enum {
 
 typedef struct rid_form_item {
     struct rid_form_item *next, *prev;
-#if 1
     struct rid_form_element *kids, *last_kid;
     struct rid_textarea_item *last_text;
     struct rid_select_item *last_select;
-#else
-    struct rid_input_item *kids, *last_kid;
-    struct rid_textarea_item *texts, *last_text;
-    struct rid_select_item *selects, *last_select;
-#endif
     rid_form_method method;
     char *action;
     char *target;
+    char *id;
 } rid_form_item;
 
 
@@ -737,6 +730,25 @@ struct rid_table_item
 
 /*****************************************************************************/
 
+typedef enum
+{
+    rid_fmt_idle/*,
+		 */
+} rid_fmt_enum;
+
+#define rid_MAX_ALIGNS		20
+
+struct rid_fmt_state
+{
+    struct rid_text_item *	ti;
+    rid_fmt_enum	state;
+    intxy	        left_nest[rid_MAX_ALIGNS];
+    intxy	        right_nest[rid_MAX_ALIGNS];
+    int			left_sp;
+    int			right_sp;
+};
+
+
 /* Parent type */
 
 #define rid_pt_HEADER           0       /* rid_header */
@@ -753,6 +765,7 @@ struct rid_text_stream {
     int widest;                 /* The widest single item in the stream */
     int height;                 /* The height of the formatted text */
     rid_width_info width_info;  /* Describes stream; used when doing tables*/
+    rid_fmt_state *fmt_state;	/* Freed after use */
 };
 
 typedef int rid_header_flags;
@@ -769,6 +782,7 @@ typedef int rid_bgt;
 #define rid_bgt_ACOL    0x20    /* We have a active colour */
 #define rid_bgt_BASEFONT        0x40    /* The base font size has been set */
 
+#define rid_EXTRACOLOURS    16  /* Number of font colours per page supported */
 
 typedef struct rid_header {
     rid_text_stream stream;
@@ -806,6 +820,9 @@ typedef struct rid_header {
     } margin;
 
     int full_format_nest;
+
+    int extracolours;
+    int extracolourarray[rid_EXTRACOLOURS];
 
 } rid_header;
 
@@ -994,7 +1011,7 @@ struct rid_object_item
     rid_object_param *params;			/* list of extra parameters */
 
     rid_map_item *map;				/* If we have shapes then we create a private map here */
-    
+
     union
     {
 	struct
@@ -1007,6 +1024,8 @@ struct rid_object_item
 	    void *im;
 	} image;
     } state;
+
+    rid_text_item *text_item;
 };
 
 /* ------------------------------------------------ */
@@ -1141,6 +1160,7 @@ struct rid_fmt_info
         char align_char;
         int *left, *right, *width;
         char *text_data;
+	int scale_value;	/* percentage scale value from autofit routine */
 };
 
 /*****************************************************************************/
@@ -1247,13 +1267,7 @@ extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t);
 extern void rid_pos_item_connect(rid_text_stream *st, rid_pos_item *p);
 extern void rid_aref_item_connect(rid_header *rh, rid_aref_item *a);
 extern void rid_form_item_connect(rid_header *rh, rid_form_item *f);
-#if 1
 extern void rid_form_element_connect(rid_form_item *f, rid_form_element *i);
-#else
-extern void rid_input_item_connect(rid_form_item *f, rid_input_item *i);
-extern void rid_textarea_item_connect(rid_form_item *f, rid_textarea_item *t);
-extern void rid_select_item_connect(rid_form_item *f, rid_select_item *s);
-#endif
 extern void rid_option_item_connect(rid_select_item *s, rid_option_item *o);
 extern int memzone_init(memzone *mz, int flags);
 extern int memzone_alloc(memzone *mz, int size);

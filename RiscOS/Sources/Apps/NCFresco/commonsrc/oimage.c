@@ -52,10 +52,6 @@
 #include "object.h"
 #include "version.h"
 
-#ifndef IMAGE_SCALE_TO_TAG
-#define IMAGE_SCALE_TO_TAG 1
-#endif
-
 #ifndef DRAW_AREA_HIGHLIGHT
 #define DRAW_AREA_HIGHLIGHT 0
 #endif
@@ -63,8 +59,6 @@
 #define PLINTH_PAD 16
 
 #define NONE_STRING	"[IMAGE]"
-
-#if 1				/* This method maintains the requested sizes */
 
 #define ALT_FONT    (WEBFONT_SIZE(2) + WEBFONT_FLAG_FIXED)
 
@@ -141,109 +135,44 @@ static void oimage_size_alt_text(rid_text_item *ti, int *iw, int *ih, BOOL defer
     IMGDBG(("Done sizing alt text: %d,%d\n", *iw, *ih));
 }
 
-#else
-
-#define ALT_FONT    WEBFONT_PRE
-
-static void oimage_size_alt_text(rid_text_item *ti, int *iw, int *ih)
-{
-    rid_text_item_image *tii = (rid_text_item_image *) ti;
-    font_string fs;
-    struct webfont *wf;
-    int imw, imh;
-
-    IMGDBG(("Sizing alt text: %d,%d\n", *iw, *ih));
-    if (tii->alt)
-    {
-	wf = &webfonts[ALT_FONT];
-
-	font_setfont(wf->handle);
-
-        /* or expand image size to what is necessary for ALT text */
-	fs.x = 1 << 30;
-	fs.y = 1 << 30;
-	fs.split = -1;
-
-	fs.s = tii->alt;
-	fs.term = strlen(fs.s);
-	font_strwidth(&fs);
-
-	IMGDBG(("Alt text: '%s', width=%d\n", tii->alt, fs.x));
-	fs.x /= MILIPOINTS_PER_OSUNIT;
-
-	imw = fs.x + PLINTH_PAD;
-	imh = wf->max_up + wf->max_down + PLINTH_PAD;
-
-	if ((tii->ww*2) > imw)
-	    imw = tii->ww * 2;
-	if ((tii->hh*2) > imh)
-	    imh = tii->hh * 2;
-    }
-    else
-    {
-	imw = (tii->ww != -1) ? tii->ww * 2 : *iw;
-	imh = (tii->hh != -1) ? tii->hh * 2 : *ih;
-    }
-
-    *iw = imw;
-    *ih = imh;
-
-    IMGDBG(("Done sizing alt text: %d,%d\n", *iw, *ih));
-}
-#endif
 
 void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_image *tii = (rid_text_item_image *) ti;
     int width, height;
     image_flags fl;
-#if 0
-    IMGDBG(("Sizing image\n"));
-#endif
-#if 0
-    if (tii->src)
-#endif
+
+    int new_im = 0;
+
+    if (tii->im == NULL)
     {
-	int new_im = 0;
+	char *url;
+	int ffl;
 
-	if (tii->im == NULL)
-	{
-	    char *url;
-	    int ffl;
+	new_im = 1;
 
-	    new_im = 1;
+	url = url_join(BASE(doc), tii->src);
+	
+	ffl = (doc->flags & doc_flag_DEFER_IMAGES) ? image_find_flag_DEFER : 0;
+	if ((doc->flags & doc_flag_FROM_HISTORY) == 0)
+	    ffl |= image_find_flag_CHECK_EXPIRE;
+	
+	image_find(url, BASE(doc), ffl, &antweb_doc_image_change, doc, render_get_colour(render_colour_BACK, doc), (image*) &(tii->im));
 
-	    url = url_join(BASE(doc), tii->src);
-
-	    ffl = (doc->flags & doc_flag_DEFER_IMAGES) ? image_find_flag_DEFER : 0;
-	    if ((doc->flags & doc_flag_FROM_HISTORY) == 0)
-		ffl |= image_find_flag_CHECK_EXPIRE;
-
-	    image_find(url, BASE(doc), ffl, &antweb_doc_image_change, doc, render_get_colour(render_colour_BACK, doc), (image*) &(tii->im));
-
-	    mm_free(url);
-	}
-
-	image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
-
-	if (new_im && (fl & image_flag_REALTHING))
-	    tii->flags |= rid_image_flag_REAL;
+	mm_free(url);
     }
-#if 0
-    else
-    {
-	fl = 0;
-	width = 68;
-	height = 68;
-    }
-#endif
-    width = width*config_display_scale_image/100;
-    height = height*config_display_scale_image/100;
+
+    image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
+    
+    if (new_im && (fl & image_flag_REALTHING))
+	tii->flags |= rid_image_flag_REAL;
+
+    width = width*doc->scale_value/100;
+    height = height*doc->scale_value/100;
 
     IMGDBG(("Old width %d, height %d, flags 0x%x\n", width, height, fl));
     IMGDBG(("Image object given width %d, height %d\n", tii->ww, tii->hh));
 
-#if IMAGE_SCALE_TO_TAG
     /* if we have an image
      *   if two sizes specified then use those
      *   if one size specified then use that and maintain aspect ratio
@@ -274,14 +203,14 @@ void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 		}
                 else
 #endif
-    	            width = tii->ww*2;
+    	            width = tii->ww*2 * doc->scale_value/100;
     	    }
     	    else
     	    {   /* If width is not specified, calculate from height */
-    	        width = (int)(tii->hh * aspect) * 2;
+    	        width = (int)(tii->hh * aspect * doc->scale_value/100) * 2;
     	    }
 
-    	    height = tii->hh != -1 ? tii->hh*2 : (int)(width / aspect);
+    	    height = tii->hh != -1 ? tii->hh*2 : (int)(width * doc->scale_value/100 / aspect);
     	}
     }
     else
@@ -289,16 +218,7 @@ void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
         /* if not real then size from the text */
 	oimage_size_alt_text(ti, &width, &height, doc->flags & doc_flag_DEFER_IMAGES ? 1 : 0);
     }
-#else
-    /* If we don't have the real thing but we have a size, use the size */
-    if ((fl & image_flag_REALTHING) == 0)
-    {
-	if (tii->ww != -1)
-	    width = tii->ww * 2;
-	if (tii->hh != -1)
-	    height = tii->hh * 2;
-    }
-#endif
+
     IMGDBG(("Now width %d, height %d\n", width, height));
     IMGDBG(("bwidth %d, hspace %d, vspace %d\n", tii->bwidth, tii->hspace, tii->vspace));
 
@@ -337,10 +257,8 @@ void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     {
 	ti->max_up = height >> 1;
     }
+
     ti->max_down = height - ti->max_up;
-#if 0
-    IMGDBG(("Done sizing, caller = %s\n", caller(1)));
-#endif
 }
 
 static BOOL draw_image(rid_text_item_image *tii, antweb_doc *doc)
@@ -358,11 +276,6 @@ static BOOL draw_image(rid_text_item_image *tii, antweb_doc *doc)
 
     if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (tii->hh == -1 && tii->ww == -1)))
 	return TRUE;
-#if 0
-    if (/* (doc->flags & doc_flag_DEFER_IMAGES) == 0 && */ tii->alt == NULL &&
-	((tii->hh == -1 && tii->ww == -1) /* || (tii->hh == -1 && tii->ww >= 34) || (tii->ww == -1 && tii->hh >= 34) */))
-	return TRUE;
-#endif
     
     return FALSE;
 }
@@ -391,23 +304,21 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	ooy -= doc->margin.y1;
 #endif
 	image_render((image) tii->im, x + (bw*2), y + (bw*2),
-		     w/2 - bw*2, h/2 - bw*2, config_display_scale_image, antweb_render_background, doc,
+		     w/2 - bw*2, h/2 - bw*2, doc->scale_value, antweb_render_background, doc,
 		     oox, ooy);
     }
     else
     {
-/*      if (tii->alt == NULL) */
-        {
-    	    render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
+	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
 		      x + (bw*2), y + (bw*2),
 		      w - (bw*4), h - (bw*4),
 		      doc);
-        }
 
 	if (tii->alt)
         {
 	    struct webfont *wf;
 	    int tfc;
+	    wimp_box box;
 
 	    wf = &webfonts[ALT_FONT];
 
@@ -424,54 +335,16 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	    }
 
 
-#if 1
-            {
-                wimp_box box;
-		box.x0 = x + PLINTH_PAD/2;
-		box.x1 = x + w - PLINTH_PAD/2;
-		box.y0 = y + PLINTH_PAD/2;
-		box.y1 = y + h - PLINTH_PAD/2;
-                write_text_in_box(fs->lf, tii->alt ? tii->alt : NONE_STRING, &box);
-            }
-#else
-
-	    font_string fstr;
-
-	    fstr.x = 1 << 30;
-	    fstr.y = 1 << 30;
-	    fstr.split = -1;
-
-	    fstr.s = tii->alt;
-	    fstr.term = strlen(fstr.s);
-	    font_strwidth(&fstr);
-
-	    fstr.x /= MILIPOINTS_PER_OSUNIT;
-
-	    /* Vertical centering:
-	       bline + (ti->max_up - ti->max_down)/2 == fline + (wf->max_up - wf->max_down)/2
-
-	       fline = bline + (ti->max_up - ti->max_down - wf->max_up + wf->max_down)/2;
-
-	       Horizontal centering:
-	       hpos + ti->width/2 = fpos + fstr.x/2
-	       fpos = hpos + (ti->width - fstr.x)/2;
-	       */
-
-
-	    font_paint(tii->alt,
-		       font_OSCOORDS + (config_display_blending ? 0x800 : 0),
-		       hpos + (ti->width - fstr.x)/2,
-		       bline + (ti->max_up - ti->max_down - wf->max_up + wf->max_down)/2);
-#endif
+	    box.x0 = x + PLINTH_PAD/2;
+	    box.x1 = x + w - PLINTH_PAD/2;
+	    box.y0 = y + PLINTH_PAD/2;
+	    box.y1 = y + h - PLINTH_PAD/2;
+	    write_text_in_box(fs->lf, tii->alt ? tii->alt : NONE_STRING, &box);
         }
 
     }
 
-    /* SJM added SELECTED bits */
-    /*    if ((bw || (ti->flag & rid_flag_SELECTED)) && (tii->im == NULL || is_link || (doc->flags & doc_flag_NO_PICS))) */
-
     if ((ti->flag & rid_flag_SELECTED) || bw)
-/* 	(bw && (tii->im == NULL || is_link || (doc->flags & doc_flag_NO_PICS))) ) */
     {
 	render_set_colour(render_link_colour(ti, doc), doc);
 
@@ -493,21 +366,10 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	    }
 	    else
 	    {
-#if 1
 		bbc_rectanglefill(x, y, w-frontend_dx, bw*2-frontend_dy);
 		bbc_rectanglefill(x, y + h - (bw*2), w-frontend_dx, bw*2-frontend_dy);
 		bbc_rectanglefill(x, y + (bw*2), bw*2-frontend_dx, h - (bw*4)-frontend_dy);
 		bbc_rectanglefill(x + w - (bw*2), y + (bw*2), bw*2-frontend_dx, h - (bw*4)-frontend_dy);
-#else
-		bbc_rectanglefill(hpos, bline - ti->max_down,
-				  ti->width, bw*2);
-		bbc_rectanglefill(hpos, bline + ti->max_up - (bw*2),
-				  ti->width, bw*2);
-		bbc_rectanglefill(hpos, bline - ti->max_down + (bw*2),
-				  bw*2, ti->max_up + ti->max_down - (bw*4));
-		bbc_rectanglefill(hpos + ti->width - (bw*2), bline - ti->max_down + (bw*2),
-				  bw*2, ti->max_up + ti->max_down - (bw*4));
-#endif
 	    }
 
         }
@@ -555,7 +417,7 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	x = x - (tii->bwidth * 2) - tii->hspace*2;
 	y = ((ti->max_up) - (tii->bwidth *2) - tii->vspace*2) - y;
 
-        image_os_to_pixels((image)tii->im, &x, &y, config_display_scale_image);
+        image_os_to_pixels((image)tii->im, &x, &y, doc->scale_value);
 
         if (tii->usemap)
         {
@@ -652,17 +514,7 @@ void *oimage_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 	    image_info(tii->im, NULL, NULL, NULL, &f, NULL, NULL) == NULL &&
 	    (f & image_flag_FETCHED) == 0)
 	{
-#if 0
-	    wimp_box box;
-	    backend_doc_item_bbox(doc, ti, &box);
-
-	    image_loose(tii->im, antweb_doc_image_change, doc);
-	    tii->im = NULL;
-
-	    frontend_view_redraw(doc->parent, &box);
-#else
 	    image_mark_to_flush(tii->im, image_find_flag_DEFER);
-#endif
 	}
 	break;
     }

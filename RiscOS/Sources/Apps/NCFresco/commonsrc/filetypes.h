@@ -6,6 +6,7 @@
 #define FILETYPE_DATA		0xffd
 #define FILETYPE_SPRITE		0xff9
 #define FILETYPE_TIFF		0xff0
+#define FILETYPE_UNIXEX		0xFE6
 #define FILETYPE_DOS		0xfe4
 #define FILETYPE_HTML		0xfaf
 #define FILETYPE_JPEG		0xc85

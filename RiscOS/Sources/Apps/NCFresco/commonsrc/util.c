@@ -34,11 +34,12 @@
 #endif
 
 #define MAPPING_FILE	"<Inet$MimeMappings>"
+
 #define MAX_LINE	256
 
 /* util.c */
 
-static int suffix_or_mime_to_file_type(char *suffix, char *mime)
+static int suffix_or_mime_to_file_type(const char *suffix, const char *mime)
 {
     FILE *mf;
     char line[MAX_LINE];
@@ -138,33 +139,31 @@ static int suffix_or_mime_to_file_type(char *suffix, char *mime)
     return ft;
 }
 
-int suffix_to_file_type(char *suffix)
+int suffix_to_file_type(const char *suffix)
 {
     return suffix_or_mime_to_file_type(suffix, NULL);
 }
 
-int mime_to_file_type(char *mime)
+int mime_to_file_type(const char *mime)
 {
     return suffix_or_mime_to_file_type(NULL, mime);
 }
 
-int set_file_type(char *fname, int ft)
+int set_file_type(const char *fname, int ft)
 {
     os_filestr osf;
 
     osf.action = 18;
-    osf.name = fname;
+    osf.name = (char *)fname;
     osf.loadaddr = ft;
 
     return (os_file(&osf) == NULL);
 }
 
-int file_type(const char *fname)
+int file_type_real(const char *fname)
 {
     os_filestr ofs;
     os_error *ep;
-    int ft, ft2;
-    char *dot, *suffix;
     os_regset r;
 
     ofs.action = 17;		/* changed from 5 as we don't want any paths being looked at */
@@ -193,9 +192,17 @@ int file_type(const char *fname)
     if (ep)
 	return -1;
 
-    ft = r.r[2];
+    return r.r[2];
+}
 
-    if (ft != FILETYPE_TEXT && ft != FILETYPE_DATA && ft != FILETYPE_DOS)
+int file_type(const char *fname)
+{
+    int ft, ft2;
+    char *dot, *suffix;
+
+    ft = file_type_real(fname);
+
+    if (ft != FILETYPE_TEXT && ft != FILETYPE_DATA && ft != FILETYPE_DOS && ft != FILETYPE_UNIXEX)
 	return ft;
 
     suffix = strrchr(fname, '/');
@@ -214,13 +221,13 @@ int file_type(const char *fname)
     return ft;
 }
 
-int path_is_directory(char *path)
+int path_is_directory(const char *path)
 {
     os_filestr ofs;
     os_error *ep;
 
     ofs.action = 5;
-    ofs.name = path;
+    ofs.name = (char *)path;
 
     ep = os_file(&ofs);
 
@@ -651,7 +658,7 @@ extern BOOL gstrans_not_null(const char *input)
 
 #include "werr.h"
 
-#ifdef STBWEB
+#if defined(STBWEB) && !defined(CBPROJECT)
 extern os_error *ensure_modem_line(void)
 {
     os_error *e;
@@ -659,8 +666,6 @@ extern os_error *ensure_modem_line(void)
     if (e && e->errnum == 214)	/* file not found */
 	e = NULL;
 
-    werr(0, "ensure modem line called");
-    
     return e;
 }
 #endif

@@ -12,6 +12,12 @@
 
 #include "rlib_alloc.h"
 
+
+    /*=================================*
+     *   1. Allocators for RiscOSLib   *
+     *=================================*/
+
+
 #if 0
 /*MEMWATCH >= 2*/
 
@@ -51,3 +57,24 @@ void *rlib_calloc( size_t a, size_t b ) { return mm_calloc( a, b ); }
 void rlib_free( void* p )               { mm_free( p ); }
 void *rlib_realloc( void* p, size_t s ) { return mm_realloc( p, s ); }
 #endif
+
+
+    /*================================*
+     *   2. Allocators for webimage   *
+     *================================*/
+
+
+void *heap_alloc( size_t s )        { return malloc(s); }
+void heap_free( void *p )           { free(p); }
+
+
+    /*=======================================*
+     *   3. Allocators for webimage's DLLs   *
+     *=======================================*/
+
+
+/* These ALWAYS use the wimp slot */
+#undef malloc
+#undef free
+void *code_alloc( size_t s )        { return malloc(s); }
+void  code_free( void *p )          { free(p); }

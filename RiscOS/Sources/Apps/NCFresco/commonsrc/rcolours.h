@@ -16,7 +16,12 @@
 #define render_colour_INPUT_F	8
 #define render_colour_INPUT_B	9
 #define render_colour_HIGHLIGHT 10
+#define render_colour_RGB       11
 
-#define render_colour_COUNT	11
+/* pdh: render_colour_RGB in the bottom byte means that the top three bytes
+ * are an RGB colour
+ */
+
+#define render_colour_COUNT	12
 
 #endif

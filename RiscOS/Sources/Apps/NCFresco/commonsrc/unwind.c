@@ -70,7 +70,9 @@ extern char *caller(int n)
 
     n++;
 
+#ifdef RISCOS
     fp = (int *) jb[6];
+#endif
 
     while (n && fp)
     {

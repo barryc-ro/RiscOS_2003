@@ -417,7 +417,6 @@ extern void rid_free_select_options(rid_option_item *p)
     }
 }
 
-#if 1
 extern void rid_free_form_elements(rid_form_element *f)
 {
     while (f)
@@ -472,81 +471,14 @@ extern void rid_free_form_elements(rid_form_element *f)
     }
 }
 
-#else
-
-extern void rid_free_input(rid_input_item *p)
-{
-    while (p)
-    {
-	rid_input_item *next = p->next;
-
-	if (p->name)
-	    mm_free(p->name);
-	if (p->value)
-	    mm_free(p->value);
-	if (p->src)
-	    mm_free(p->src);
-
-	switch(p->tag)
-	{
-	case rid_it_TEXT:
-	case rid_it_PASSWD:
-	    mm_free(p->data.str);
-	    break;
-	}
-
-	mm_free(p);
-	p = next;
-    }
-}
-
-extern void rid_free_textarea(rid_textarea_item *p)
-{
-    while (p)
-    {
-	rid_textarea_item *next = p->next;
-
-	if (p->name)
-	    mm_free(p->name);
-
-	rid_free_textarea_lines(p->default_lines);
-	rid_free_textarea_lines(p->lines);
-
-	mm_free(p);
-	p = next;
-    }
-}
-
-
-extern void rid_free_selects(rid_select_item *p)
-{
-    while (p)
-    {
-	rid_select_item *next = p->next;
-
-	if (p->name)
-	    mm_free(p->name);
-	rid_free_select_options(p->options);
-
-	mm_free(p);
-	p = next;
-    }
-}
-#endif
-
 extern void rid_free_form(rid_form_item *p)
 {
     while (p)
     {
 	rid_form_item *next = p->next;
 
-#if 1
 	rid_free_form_elements(p->kids);
-#else
-	rid_free_input(p->kids);
-	rid_free_textarea(p->texts);
-	rid_free_selects(p->selects);
-#endif
+
 	if (p->action)
 	    mm_free(p->action);
 
@@ -778,6 +710,13 @@ extern void rid_area_item_connect(rid_map_item *m, rid_area_item *a)
 
 extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
 {
+    if (st == NULL)
+    {
+	/* @@@@ Work out why this happens! */
+	usrtrc("rid_text_item_connect: NULL stream\n");
+	return;
+    }
+
     if (st->text_list)
     {
 	st->text_last->next = t;
@@ -834,7 +773,6 @@ extern void rid_form_item_connect(rid_header *rh, rid_form_item *f)
     }
 }
 
-#if 1
 extern void rid_form_element_connect(rid_form_item *f, rid_form_element *i)
 {
     if (f->kids)
@@ -850,55 +788,6 @@ extern void rid_form_element_connect(rid_form_item *f, rid_form_element *i)
 
     i->parent = f;
 }
-#else
-extern void rid_input_item_connect(rid_form_item *f, rid_input_item *i)
-{
-    if (f->kids)
-    {
-	f->last_kid->next = i;
-	i->prev = f->last_kid;
-	f->last_kid = i;
-    }
-    else
-    {
-	f->kids = f->last_kid = i;
-    }
-
-    i->parent = f;
-}
-
-extern void rid_textarea_item_connect(rid_form_item *f, rid_textarea_item *t)
-{
-    if (f->texts)
-    {
-	f->last_text->next = t;
-	t->prev = f->last_text;
-	f->last_text = t;
-    }
-    else
-    {
-	f->texts = f->last_text = t;
-    }
-
-    t->parent = f;
-}
-
-extern void rid_select_item_connect(rid_form_item *f, rid_select_item *s)
-{
-    if (f->selects)
-    {
-	f->last_select->next = s;
-	s->prev = f->last_select;
-	f->last_select = s;
-    }
-    else
-    {
-	f->selects = f->last_select = s;
-    }
-
-    s->parent = f;
-}
-#endif
 
 extern void rid_option_item_connect(rid_select_item *s, rid_option_item *o)
 {
