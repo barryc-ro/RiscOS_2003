@@ -11,6 +11,8 @@
 # 23-Aug-99  NCE          Exports app to resourcesFS for ROM builds
 # 23-Aug-99  SNB          Fixed makefile dependency for resources: phase.  Now uses mkdir -p 
 #                         rather than CDIR to create dirs.
+# 23-Aug-99 NCE           omtest no longer copied over from resources as it is obselete and was
+#			  useing 25K of ROM space in Lazarus
 
 #
 # Paths
@@ -90,7 +92,9 @@ clean_all: clean
 install: ${APPLICATION}
 	${MKDIR} ${APP}
 	${CP} ${APPLICATION} ${APP}.${APPLICATION} ${CPFLAGS}
-	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${CP} Resources.!Boot ${APP}.* ${CPFLAGS}
+	${CP} Resources.!Help ${APP}.* ${CPFLAGS}
+	${CP} Resources.!Sprites ${APP}.* ${CPFLAGS}
 	${CP} Defaults.${LOCALE}.!Run ${APP}.!Run ${CPFLAGS}
 	${MKDIR} ${APP}.Defaults
 	${CP} Defaults.${LOCALE}.${LOCALE} ${APP}.Defaults.${LOCALE} ${CPFLAGS}
@@ -99,7 +103,9 @@ install: ${APPLICATION}
 resources: ${APPLICATION}
 	${MKDIR} ${APP}
 	${CP} ${APPLICATION} ${APP}.${APPLICATION} ${CPFLAGS}
-	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${CP} Resources.!Boot ${APP}.* ${CPFLAGS}
+	${CP} Resources.!Help ${APP}.* ${CPFLAGS}
+	${CP} Resources.!Sprites ${APP}.* ${CPFLAGS}
 	${CP} Defaults.${LOCALE}.!Run ${APP}.!Run ${CPFLAGS}
 	${MKDIR} ${APP}.Defaults
 	${CP} Defaults.${LOCALE}.${LOCALE} ${APP}.Defaults.${LOCALE} ${CPFLAGS}
@@ -114,6 +120,7 @@ resources: ${APPLICATION}
 #
 ${APPLICATION}: ${OBJS}
         ${LD} -o $@ ${OBJS} ${CLIB}
+        -squeeze -f $@
 
 #
 # Dynamic dependencies:
