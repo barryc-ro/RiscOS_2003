@@ -153,7 +153,10 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 ModHdr.o: cmhg.ModHdr
-	${CMHG} ${CMHGFLAGS} -o $@ $? h.ModHdr
+	${CMHG} ${CMHGFLAGS} -o $@ $?
+
+ModHdr.h: cmhg.ModHdr
+	${CMHG} ${CMHGFLAGS} -d $@ $?
 
 Registers.h: Registers.s
         aasm -quit -from $? -to $@
