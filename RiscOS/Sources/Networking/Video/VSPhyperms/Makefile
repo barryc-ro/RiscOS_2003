@@ -65,6 +65,7 @@ o.VSPHdr	\
 o.main		\
 o.Interface	\
 o.List		\
+o.MessageQ	\
 o.Stream	\
 o.ServCtrl	\
 o.Source	\
@@ -79,6 +80,7 @@ OBJSI     =	\
 i.main		\
 i.Interface	\
 i.List		\
+i.MessageQ	\
 i.Stream	\
 i.ServCtrl	\
 i.Source	\
@@ -94,6 +96,7 @@ oi.VSPHdr	\
 oi.main		\
 oi.Interface	\
 oi.List		\
+oi.MessageQ	\
 oi.Stream	\
 oi.ServCtrl	\
 oi.Source	\
