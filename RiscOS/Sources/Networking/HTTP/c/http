@@ -41,7 +41,6 @@
 #define HEADER_DES_LOCL_H	/* prevents crypt() warning */
 #include "objects.h"		/* for NID */
 #include "pem.h"		/* for PEM_ */
-#include "err.h"
 #include "rsa.h"
 
 
@@ -57,6 +56,10 @@ extern void riscos_SSLLib_Init( void );
 #define CERT_VERIFY_DEPTH 10
 #endif
 
+#if DEBUG
+#include "err.h"
+#endif
+
 #include "httppub.h"
 #include "http.h"
 #include "files.h"
@@ -65,6 +68,7 @@ extern void riscos_SSLLib_Init( void );
 #ifdef CSFS
 #include "csfs.h"
 #endif
+
 
 #ifndef FILETYPE_HTML
 #define FILETYPE_HTML	0xfaf
@@ -133,7 +137,7 @@ static char *err_strings[] = {
     "Can't negotiate HTTPS connection",
     "Unexpected call to CompletedPart",
 #ifdef CSFS
-    "HTTP transport error",
+    "CSFS transport error",
 #endif
     "Unknown error"
     };
@@ -863,12 +867,10 @@ http_csfs_service(_kernel_swi_regs *r)
               if (strcasecmp(hdr->key,"CONTENT-TYPE")==0)
                 if (strcasecmp(hdr->value,MIME_CSFSStatus)==0)
                 {
-                  int i;
+                  int i=0;
 
                   /* fill-in the error message from status file */
         	  err=make_error(err_CSFS); /* defer jump till later */
-        	  strcat(err->errmess," ");
-        	  i=strlen(err->errmess);
                   ro_write_ptr(handle->fh, 0);
                   while (!ro_eof(handle->fh) && i<252)
                     err->errmess[i++]= _kernel_osbget(handle->fh);
@@ -3773,12 +3775,16 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
     r = r;
 #else
     _kernel_oserror *e = NULL;
-    EVP_PKEY *pkey = NULL;
+    EVP_PKEY *pkey = NULL, *pkey2 = NULL;
     RSA *rsa = NULL;
+    X509 *xcert = NULL;
+    FILE *f;
+    EVP_MD_CTX md_ctx;
+
     int rc = http_vmd_rc_BAD_INPUT;
     unsigned char *certificate_ptr, *pubkey_ptr;
     unsigned char **certificate_ptr_ptr, **pubkey_ptr_ptr;
-    unsigned char *rsa_buff;
+    unsigned char *rsa_buff = NULL;
     unsigned int rsa_bytes;
 
     fdebugf(log_file, "HTTP_VerifyMessageDigest:\n  flags %08x\n  key '%s'\n  cert '%s'\n  message @ 0x%p/%d\n  digest @ 0x%p/%d\n",
@@ -3799,7 +3805,6 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
     /* get the initial public key from the file */
     if (r->in.public_key)
     {
-	FILE *f;
 	if ((f = fopen(r->in.public_key, "rb")) != NULL)
 	{
 	    if(r->in.flags & http_vmd_flag_RAW_PKEY) { /* root file is raw (ie DER) RSA public key */
@@ -3835,16 +3840,22 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 
 	    } else { /* root file is a certificate (PEM or DER) */
 
-	      X509 *xcert;
-
 	      /* extract X509 certificate from file */
 	      if (r->in.flags & http_vmd_flag_KEY_DER)
 	      {
-		  xcert = d2i_X509_fp(f, NULL);
+		  if((xcert = d2i_X509_fp(f, NULL))==NULL) {
+		      fdebugf(log_file, "couldn't claim x509 cert\n");
+		      r->out.rc = http_vmd_rc_NO_FREE_X509;
+		      return NULL;
+		  }
 	      }
 	      else
 	      {
-		  xcert = PEM_read_X509(f, NULL, 0); /* specify default callback function - could be awkward if it was called */
+		  if((xcert = PEM_read_X509(f, NULL, 0))==NULL) { /* specify default callback function - could be awkward if it was called */
+		      fdebugf(log_file, "couldn't claim x509 cert\n");
+		      r->out.rc = http_vmd_rc_NO_FREE_X509;
+		      return NULL;
+		  }
 	      }
 
 	      fclose(f);
@@ -3866,7 +3877,6 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
     /* if there's a certificate given then extract the public key from it to use instead */
     if (pkey && r->in.certificate)
     {
-        X509 *xcert;
 
         if((r->in.flags & http_vmd_flag_CERT_INCORE) && (r->in.flags & http_vmd_flag_CERT_DER)) { /* it's DER, and it's in RAM */
           certificate_ptr = (unsigned char *)r->in.certificate;
@@ -3886,11 +3896,19 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 	     /* extract X509 certificate from file */
 	     if (r->in.flags & http_vmd_flag_CERT_DER)
 	     {
-		xcert = d2i_X509_fp(f, NULL);
+		if((xcert = d2i_X509_fp(f, NULL))==NULL) {
+		  fdebugf(log_file, "couldn't claim x509 cert\n");
+		  r->out.rc = http_vmd_rc_NO_FREE_X509;
+		  return NULL;
+		}
 	     }
 	     else
 	     {
-		xcert = PEM_read_X509(f, NULL, 0); /* specify default callback function - could be awkward if it was called */
+		if((xcert = PEM_read_X509(f, NULL, 0))==NULL) { /* specify default callback function - could be awkward if it was called */
+		  fdebugf(log_file, "couldn't claim x509 cert\n");
+		  r->out.rc = http_vmd_rc_NO_FREE_X509;
+		  return NULL;
+		}
 	     }
 
 	     fclose(f);
@@ -3909,22 +3927,26 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 		if (X509_verify(xcert, pkey))
 		{
 		    /* free the initial key */
-		    EVP_PKEY_free(pkey);
+		    if(pkey) EVP_PKEY_free(pkey);
+		    rsa = NULL; /* if this existed, EVP_PKEY_free will have freed it for us */
 
 		    /* replace with the new key */
-		    pkey = X509_extract_key(xcert);
+		    pkey2 = X509_extract_key(xcert);
 
 		    fdebugf(log_file, "new key @ 0x%p\n", pkey);
 
-		    if (!pkey) {
+		    if (!pkey2) {
 		        fdebugf(log_file, "new cert has no key! Reverting to old one.\n");
-			rc = http_vmd_rc_BAD_CERT;
+			rc = http_vmd_rc_BAD_CERT; /* pkey still intact, so fall through */
+		    } else { /* new key is ok, free old one, use new one */
+		      if(pkey) EVP_PKEY_free(pkey);
+		      pkey = pkey2;
 		    }
 		}
 		else
 		{
 		    fdebugf(log_file, "new cert failed to verify, reverting to old key\n");
-		    rc = http_vmd_rc_BAD_CERT;
+		    rc = http_vmd_rc_BAD_CERT; /* pkey still intact, so fall through */
 		}
 
 		X509_free(xcert);
@@ -3935,7 +3957,6 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
     /* if we have a public key by this point */
     if (pkey)
     {
-	EVP_MD_CTX md_ctx;
 
 	/* set up and verify the message digest
 	 * assume MD5 only for now unless we need others
@@ -3956,6 +3977,7 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 
 	/* free any key we have open */
 	EVP_PKEY_free(pkey);
+	rsa = NULL; /* if this existed, evp_pkey_free will have freed it for us */
     }
 
     if(rsa) RSA_free(rsa);
@@ -3986,7 +4008,7 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 
    on exit:
 
-   r0 = 0 or -1 for error
+   r0 = 0 or -n for error
 
 */
 static _kernel_oserror *http_converttopem(_kernel_swi_regs *r)
@@ -4018,13 +4040,13 @@ static _kernel_oserror *http_converttopem(_kernel_swi_regs *r)
 
   if((fout=fopen(outfile, "w"))==NULL) {
       fdebugf(log_file, "http_converttopem: couldn't open file\n");
-      r->r[0] = -1;
+      r->r[0] = -2;
       return(NULL);
   }
 
   PEM_write_X509(fout, xcert);
 
-  X509_free(xcert);
+  if(xcert) X509_free(xcert);
   fclose(fout);
   r->r[0] = 0;
   return(NULL);
