@@ -107,6 +107,10 @@ resources:
         ${CP} ${RDIR} ${RESDIR} ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
+BBETYPE = ncdialui
+bbe-ncdialui: bbe-generic
+  BBE_Export_Dir ResModem
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
