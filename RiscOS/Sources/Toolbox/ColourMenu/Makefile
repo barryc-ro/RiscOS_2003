@@ -83,7 +83,7 @@ RESF=o.msgs
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.cmhg.o:; ${CMHG} -p -depend !Depend -o $@ $<
 
 #
 # Main rules:
@@ -119,10 +119,7 @@ ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
