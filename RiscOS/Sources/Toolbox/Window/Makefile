@@ -91,7 +91,7 @@ OBJS =\
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -O $@ $<
+.cmhg.o:; ${CMHG} -o $@ $<
 .s.o:;    ${AS} ${AFLAGS} -o $@ $<
 
 #
@@ -138,6 +138,8 @@ ${WIMPLIB}:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.slider_ven: gadgets.s.slider_ven
+o.toolbox: s.toolbox
 o.actbut:	gadgets.c.actbut
 o.actbut:	C:h.swis
 o.actbut:	C:h.kernel
@@ -171,6 +173,8 @@ o.actbut:	gadgets.^.h.object
 o.actbut:	gadgets.^.h.veneers
 o.actbut:	gadgets.h.actbut
 o.actbut:	gadgets.h.simple
+o.actbut:	h.main
+o.actbut:	C:h.kernel
 o.adjuster:	gadgets.c.adjuster
 o.adjuster:	C:h.swis
 o.adjuster:	C:h.kernel
@@ -261,6 +265,8 @@ o.create:	h.utils
 o.create:	tbox:h.twimp
 o.create:	C:h.kernel
 o.create:	C:h.swis
+o.create:	h.toolbar
+o.create:	C:h.kernel
 o.create:	h.create
 o.create:	C:h.kernel
 o.create:	h.utils
@@ -822,6 +828,8 @@ o.show:	h.show
 o.show:	C:h.kernel
 o.show:	h.toolbar
 o.show:	C:h.kernel
+o.show:	h.main
+o.show:	C:h.kernel
 o.simple:	gadgets.c.simple
 o.simple:	C:h.swis
 o.simple:	C:h.kernel
@@ -891,7 +899,6 @@ o.slider:	C:h.swis
 o.slider:	gadgets.^.h.main
 o.slider:	C:h.kernel
 o.slider:	gadgets.h.slider
-o.slider_ven: gadgets.s.slider_ven
 o.stringset:	gadgets.c.stringset
 o.stringset:	C:h.swis
 o.stringset:	C:h.kernel
@@ -995,7 +1002,6 @@ o.toolbar:	C:h.kernel
 o.toolbar:	h.veneers
 o.toolbar:	h.toolbar
 o.toolbar:	C:h.kernel
-o.toolbox: s.toolbox
 o.utils:	c.utils
 o.utils:	h.utils
 o.utils:	tbox:h.twimp
@@ -1003,7 +1009,7 @@ o.utils:	tbox:objects.h.toolbox
 o.utils:	C:h.kernel
 o.utils:	C:h.kernel
 o.utils:	C:h.swis
-o.utils:	C:h.wimp
+o.utils:	tbox:h.twimp
 o.utils:	C:h.swis
 o.utils:	tbox:h.debug
 o.utils:	tbox:objects.h.window
