@@ -1,67 +1,8 @@
-; > Sources.MsgTrans
-
-;;----------------------------------------------------------------------------
-;; MessageTrans module
-;;
-;; Change List
-;; -----------
-;;  2-Nov-89    0.01    File created
-;;  7-Nov-89    0.02    Return R1->token terminator from MessageTrans_Lookup
-;;                      Also allow <=32, "," or ")" as token terminators
-;;  8-Nov-89            Report error if file is opened more than once
-;;  8-Nov-89    0.03    Fix bug: R1 was returned as a byte from Lookup!
-;; 13-Nov-89    0.04    Skip comment lines correctly
-;; 22-Feb-90    0.05    Change to look for fsnumber_resourcefs (not deskfs)
-;; 23-Feb-90    0.06    Allow "token:default" in case messages unavailable
-;; 10-Jan-91            Implement MessageTrans_EnumerateTokens
-;; 11-Jan-91    0.07    Fix bug: Die entry wasn't in module header!
-;; 05-Mar-91    0.08    Added MessageTrans_ErrorLookup
-;;                      Added workspace allocation
-;; 14-Mar-91    0.09    Added MessageTrans_GSLookup.
-;; 14-Mar-91    0.10    Added Global messages file.
-;;                      Added Message file for MessageTrans errors
-;;              0.11    Addd 'token' to message token not found message.
-;; 31-May-91    0.12    Fixed bug in Service_TerritoryLoaded
-;; 04-Jul-91    0.13    (WStoye) Optimised message lookup - 3.5* faster.
-;;              0.14    Copy error number last in error lookup.
-;; 26-Aug-91    0.15    Increased number of error buffers to 10.
-;; 19-Nov-91    0.16    Allow for lines ending in 0's as well as 10's when
-;;                      looking up tokens - the client can do this if it wants.
-;;                      Allow 13's as well (consistency only)
-;; 24-Jan-92    0.17    Add new SWI; MessageTrans_CopyError
-;; 29-Jan-92    0.18    General tidy up, removed all version-conditional
-;;                      assembly, ensured that the Service entry was fast,
-;;                      made wp constant through out the entire module (i.e.
-;;                      it is never used for anything else, removed the funny
-;;                      sav_token code by a proper passed pointer so that
-;;                      recursion is not a problem, includes initialising it
-;;                      from EnumerateTokens so that there isn't an address
-;;                      exception after the last token.
-;; 04-Feb-92    0.19    Fix bugs in new work.
-;; 17-Feb-92    0.20    2 X speed improvement on MessageTrans_Lookup
-;; 26-Feb-92    0.21    Handle workspace allocation on initialisation correctly.
-;; 11-Mar-92    0.22    Put a limit on the number of internal_fileinfos that can
-;;                      be current at any one time.
-;; 19-Jul-93    0.24    ECN:
-;;                      Add SWI MessageTrans_Dictionary
-;;                      Expand messages when looking up into a buffer using
-;;                      OS_PrettyPrint style detokenisation.
-;;                      Allow Tab (9), Hard space (31) and <ESC><N> in messages.
-;; 09-Aug-93    0.25    Bruce Cockburn;
-;;                      Fixed stack imbalance problem in GSLookup.
-;; 02-Sep-93    0.26    ECN:
-;;                      Fixed token expansion so <ESC>0 substitutes the string pointed
-;;                      to by R4. Similar to %0 substitution.
-;; 01-Feb-94    0.27    JSR:
-;;                      Increased number of foreground message buffers to 16 (was 10)
-;; 01-Mar-94    0.28    amg:
-;;                      Defer the call to MessageTrans_Dictionary in the token expansion
-;;                      until it is actually needed. The overhead of the call was making
-;;                      it run unacceptably slowly on 3.10.
-;;
-;;----------------------------------------------------------------------------
-
-Module_BaseAddr
+;
+; MsgTrans.s (MessageTrans)
+;
+; Copyright (C) Acorn Computers Ltd. 1989 - 2000
+;
 
         GET     Hdr:ListOpts
         GET     Hdr:Macros
@@ -90,6 +31,13 @@ Module_BaseAddr
         GBLL    debugintr                               ; For internationalisation
         GBLL    debugFSW
         GBLL    debughash
+        GBLL    debugstats
+
+        GBLL    keepstats                               ; keep use counts on files - view with ShowMsgs
+keepstats       SETL   true
+    [ keepstats
+        ! 0, "WARNING: Keeping usage count statistics"
+    ]
 
 debug           SETL   false
 debugxx         SETL   debug :LAND: false
@@ -98,7 +46,8 @@ debugservice    SETL   debug :LAND: false
 debugerr        SETL   debug :LAND: false
 debugintr       SETL   debug :LAND: false
 debugFSW        SETL   debug :LAND: false
-debughash       SETL   debug :LAND: true
+debughash       SETL   debug :LAND: false
+debugstats      SETL   debug :LAND: false :LAND: keepstats
 
         GBLL    hostvdu
 hostvdu SETL    false
@@ -108,8 +57,13 @@ hostvdu SETL    false
 ; the SWI chunk prefix changes similarly, the SWI chunk changes to &C0E00
 ; This enables it to be softloaded on a RISC OS machine without confusing
 ; all the applications and modules relying on MessageTrans services.
+    [ :LNOT: :DEF: AltTitleAndSWI
         GBLL    AltTitleAndSWI
 AltTitleAndSWI  SETL   false
+    ]
+
+        GBLL    ChocolateProxies
+ChocolateProxies  SETL false
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Workspace layout
@@ -118,13 +72,29 @@ AltTitleAndSWI  SETL   false
                                 ^       0, wp
 wsorigin                        #       0
 link_header                     #       4
-current_ForegroundBuffer        #       4
-current_IRQBuffer               #       4
+current_ForegroundBuffer        #       1
+current_IRQBuffer               #       1
+ThreadNess                      #       1
+    [ ChocolateProxies
+ProxyCountdown                  #       1       ; don't use chocolate blocks until this gets to 0
+    |
+alignpadding                    #       5
+    ]
 MessageFile_block               #       8*4
 GlobalMessageFile_block         #       8*4
 Dictionary                      #       4
-ThreadNess                      #       4
+DictionaryHash                  #       (4 * 256)
+
 MaxThreadNess * 2
+
+    [ ChocolateProxies
+ProxyBlockSize                  *       32      ; cannot change!
+ProxyBlocks                     *       32      ; one bit per block in ProxyAlloc
+ProxyAlloc                      #       4
+ProxyMemorySize                 *       ProxyBlockSize * ProxyBlocks
+ProxyMemory                     #       ProxyMemorySize
+ChocolateCountdown              *       0
+    ]
 
         ASSERT  (link_header-wsorigin)=0
 
@@ -142,9 +112,9 @@ workspace_size  * @-wsorigin
 ; Module header
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-        LEADR   Module_LoadAddr
+        AREA    |MsgTrans$$Code|, CODE, READONLY, PIC
 
-        ASSERT  (.=Module_BaseAddr)
+Module_BaseAddr
 
         DCD     0                                       ; Start
         DCD     Init             - Module_BaseAddr
@@ -184,6 +154,13 @@ MyFlags DCD     ModuleFlag_32bit
 ; File control block format
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+; Only the 32 byte blocks are ever linked into the MessageTrans chain.  MessageTrans always
+; allocates blocks of 32 bytes long.  Clients will only pass 16 byte blocks normally, but
+; can pass 32 byte blocks by specfiying R3 = FAST on the call to MessageTrans_OpenFile.  The
+; client supplies certain guarantees by doing this too, notably: block will be safe (ie. in
+; RMA/DA - specifically NOT in application space and NOT on the SVC stack); the client will call
+; MessageTrans_CloseFile.  If the client fails to do the latter, the hash table will be leaked.
+
                 ^       0
 fcb_link        #       4                               ; only linked in if not client buffer
 fcb_flags       #       4                               ; flags in proxy blocks
@@ -191,14 +168,15 @@ fcb_fileptr     #       4                               ; pointer to file data: 
 fcb_filename    #       4                               ; pointer to filename
 fcb_hash        #       4                               ; hash table (if fcb_flags & flg_hashing)
 fcb_clnt_block  #       4                               ; pointer back to client's block
-fcb_reserved    #       8                               ; reserved for future use
+fcb_use_count   #       4                               ; usage counter (only if keepstats is true)
+fcb_reserved    #       4                               ; reserved for future use
 fcb_size        #       0
 
                 ^       0
 fcb_clnt_magic  #       4                               ; magic word in client's proxy block
 fcb_clnt_flags  #       4                               ; flags in the client's block
 fcb_real_block  #       4                               ; pointer to proxy descriptor
-fcb_clnt_spre2  #       4                               ; spare in client's proxy block
+fcb_clnt_spare  #       4                               ; spare (but is initialised as pointer to filename)
 fcb_clnt_size   #       0
 
 
@@ -215,14 +193,14 @@ flg_sqshinresourcefs    *       1 :SHL: 31              ; means a squashed file 
 
 flg_hidden_from_client  *       (2_111111 :SHL: 26)     ; Mask for internal only flags.
 
-MinimumHashableFileSize *       1                       ; minimum file size to enable hashing
-MinimumTokenCount       *       1                       ; number of tokens required to enable hashing
+MinimumHashableFileSize *       64                      ; minimum file size to enable hashing
+MinimumTokenCount       *       3                       ; number of tokens required to enable hashing
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Init entry - claim and initialise workspace.
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-Init    ENTRY
+Init    Entry
 
         LDR     r2, [r12]
         TEQ     r2,#0
@@ -236,14 +214,20 @@ Init    ENTRY
         STR     r2, [ r12 ]
 01      MOV     wp, r2
 
+    [ ChocolateProxies
+        MVN     r0, #0
+        STR     r0, ProxyAlloc
+        MOV     r0, #ChocolateCountdown
+        STRB    r0, ProxyCountdown
+    ]
         MOV     r0, #0
         STR     r0, link_header
-        STR     r0, current_ForegroundBuffer
-        STR     r0, current_IRQBuffer
+        STRB    r0, current_ForegroundBuffer
+        STRB    r0, current_IRQBuffer
         STR     r0, MessageFile_block
         STR     r0, GlobalMessageFile_block
         STR     r0, Dictionary
-        STR     r0, ThreadNess
+        STRB    r0, ThreadNess
 
 ; Try to open message files
         BL      AttemptOpenMessagesFiles
@@ -308,7 +292,7 @@ magicnumber     DCB     "FAST"
         ;       The module workspace is freed by the kernel on exit.
 
 
-Die     ENTRY
+Die     Entry
 
         ; Don't bother closing our own messages files because we're going to
         ; reopen them anyway on initialisation.
@@ -371,19 +355,20 @@ UService
         ;       the service call Service_MessageFileClosed is issued.
         ;       All blocks remain "Open" and on the list.
 
-        Push    "r0-r1, lr"
+        Push    "r0-r2, lr"
         LDR     wp, [ r12 ]
         MOV     r1, #Service_Serviced                   ; Keep a flag to see if any files have changed
-        LDR     r14, link_header                        ; Look at the head of the chain
+        LDR     r2, link_header                         ; Look at the head of the chain
 ResourceFSLoop
-        TEQ     r14, #0
+        TEQ     r2, #0
         BEQ     FinishResourceFS
-        LDR     r0, [ r14, #fcb_flags ]
+        LDR     r0, [ r2, #fcb_flags ]
         TST     r0, #flg_inresourcefs                   ; Is it in the ROM?
+        BLNE    Service_CheckFileMoved                  ; has this change affected this file?
         MOVNE   r1, #Service_MessageFileClosed          ; Flag for later service call
         MOVNE   r0, #0
-        STRNE   r0, [ r14, #fcb_fileptr ]               ; Mark data as 'not there'
-        LDR     r14, [ r14, #fcb_link ]
+        STRNE   r0, [ r2, #fcb_fileptr ]                ; Mark data as 'not there'
+        LDR     r2, [ r2, #fcb_link ]
         B       ResourceFSLoop
 
 FinishResourceFS
@@ -406,8 +391,25 @@ FinishResourceFS
         BLEQ    AttemptOpenMessagesFiles
 
 ExitServiceResourceFS
-        Pull    "r0-r1, pc"
+        Pull    "r0-r2, pc"
 
+        ; This routine looks at the descriptor pointed to be R2 and determines
+        ; whether the file has moved or not.  If it has not, then it returns with Z set.
+        ; If it has, then it returns with Z clear.  All other flags are corrupted.
+        ; The affect of this is that the service call Service_MessageFileClosed does not
+        ; go around unnecessarily (ie. it only goes round if one of the message files
+        ; currently open and buffered by MessageTrans from ResourceFS has actually changed).
+        ; This optimisation will relieve RAMFSFiler of its need to commit suicide every time
+        ; ResourceFS changes.  ShowMsgs will confirm that none of the data pointers are 0
+        ; after a ResourceFS change.
+Service_CheckFileMoved Entry "r1-r4"
+        LDR     r4, [ r2, #fcb_fileptr ]
+        LDR     r1, [ r2, #fcb_filename ]
+        BL      internal_fileinfo
+        TEQ     r0, #flg_inresourcefs                   ; error block won't be 1, will it? :)
+        TEQEQ   r2, r4
+
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SWI decoding: R11 = SWI index to call
@@ -486,7 +488,7 @@ error_badswi
 ;       R2 = size of buffer required to hold file
 ;            if R0 bit 0 set, the buffer is not required for read-only access
 
-SWIMessageTrans_FileInfo ENTRY "r3"
+SWIMessageTrans_FileInfo Entry "r3"
 
         BL      internal_fileinfo
         BICVC   r0, r0, #flg_hidden_from_client         ; flags not for external consumption
@@ -509,14 +511,14 @@ ErrorBlock_Recurse
         DCB     "Recursion in MessageTrans",0
         ALIGN
 
-internal_fileinfo ENTRY "r1,r4-r7"
+internal_fileinfo Entry "r1,r4-r7"
 
-        LDR     lr, ThreadNess
+        LDRB    lr, ThreadNess
         CMP     lr, #MaxThreadNess
         XError  Recurse, HS
         EXIT    VS
         ADD     lr, lr, #1
-        STR     lr, ThreadNess
+        STRB    lr, ThreadNess
 
         DebugS  xx,"MessageTrans_FileInfo", r1
         DebugS  FSW,"MessageTrans:OSFind_ReadFile",r1
@@ -573,9 +575,9 @@ internal_fileinfo ENTRY "r1,r4-r7"
 
 99
         Debug   FSW,"Out"
-        LDR     lr, ThreadNess
+        LDRB    lr, ThreadNess
         SUB     lr, lr, #1
-        STR     lr, ThreadNess
+        STRB    lr, ThreadNess
 
         EXIT
 
@@ -649,6 +651,9 @@ OpenScanLoop
         LDREQ   r4, stk_filedesc                        ; R4 -> file descriptor
         MOVEQ   lr, #0
         STREQ   lr, [r4, #fcb_clnt_block]               ; zero the back pointer
+    [ keepstats
+        STREQ   lr, [r4, #fcb_use_count]                ; zero the usage counter
+    ]
 
         LDR     r14, stk_buffer
         CMP     r14, #0
@@ -728,7 +733,24 @@ err_alreadyopen
         Pull    "r1, r2"
         B       ExitOpenFile
 
-CopyDescriptorToRMA Entry "r0-r3,r5,r6,r7"
+CopyDescriptorToRMA Entry "r0-r3,r5,r6-r8"
+    [ ChocolateProxies
+        LDRB    r3, ProxyCountdown
+        TEQ     r3, #0
+        BNE     %FT10
+        LDR     r1, ProxyAlloc                          ; bit set = array entry available
+        RSB     r3, r1, r3
+        ANDS    r3, r3, r1
+        BEQ     %FT10                                   ; none left!
+        BIC     r1, r1, r3
+        STR     r1, ProxyAlloc
+        ADR     r2, ProxyMemory
+01
+        MOVS    r3, r3, LSR #1
+        ADDNE   r2, r2, #ProxyBlockSize
+        BNE     %BT01
+10
+    ]
         MOV     r3, #fcb_size
         MOV     r0, #ModHandReason_Claim
         SWI     XOS_Module                              ; Try and get a new RMA block for descriptor
@@ -737,12 +759,16 @@ CopyDescriptorToRMA Entry "r0-r3,r5,r6,r7"
         ORR     r1, r1, #flg_proxy                      ; Set flag that we allocated this block
         STR     r1, [ r4, #fcb_clnt_flags ]             ; Store flag so TranslateFindDescriptor knows about it
         STR     r2, [ r4, #fcb_real_block ]             ; link from client descriptor to our new descriptor
+        STR     r3, [ r4, #fcb_clnt_spare ]             ; Store copy of filename pointer for now
         EOR     r1, r1, #flg_freeblock :OR: flg_proxy   ; set flg_freeblock, clears flg_proxy
         LDR     r6, magicnumber                         ; get the magic word
         STR     r6, [ r4, #fcb_clnt_magic ]             ; store the magic word
         MOV     r6, #0                                  ; hash table pointer set to 0
-        MOV     r7, r2                                  ; backwards pointer to client block
+        MOV     r7, r4                                  ; backwards pointer to client block
         STMIA   r2, {r0,r1,r3,r5,r6,r7}                 ; copy information to our own internal descriptor
+    [ keepstats
+        STR     r6, [r2, #fcb_use_count]                ; zero the usage counter
+    ]
         MOV     r4, r2                                  ; replace caller's descriptor pointer
         EXIT                                            ; and return.
 
@@ -806,6 +832,9 @@ OpenFile_LoadIntoBuffer Entry "r1-r6"
 
         Pull    "r0"
         RestPSR r5,,f
+    [ No32bitCode
+        NOP
+    ]
 
         EXIT
 
@@ -1252,7 +1281,7 @@ DoGlobalLookup
         BL      internal_lookup                         ; Look it up again
         Pull    "pc"
 
-internal_lookup ENTRY "r0-r10"
+internal_lookup Entry "r0-r10"
 
         Debug   xx,"MessageTrans_Lookup",r0,r1,r2,r3,r4,r5
         DebugS  xx,"Token =",r1
@@ -1262,12 +1291,27 @@ internal_lookup ENTRY "r0-r10"
         BVS     %FT98
 
         LDR     r1, [r0, #fcb_flags]
+    [ :DEF: deferhashcreation
+        AND     r8, r1, #flg_hashing :OR: flg_worth_hashing
+        TEQ     r8, #flg_worth_hashing
+        MOVEQ   r4, r0
+        BLEQ    HashTableAlloc
+        LDR     r1, [r0, #fcb_flags]
+        BICVS   r1, r1, #flg_worth_hashing :OR: flg_hashing
+        STRVS   r1, [r0, #fcb_flags]
+    ]
         TST     r1, #flg_hashing
+    [ keepstats
+        ; We can only do stats when hashing as that's the only guaranteed case of having 32 byte block
+        LDRNE   r8, [r0, #fcb_use_count]
+        ADDNE   r8, r8, #1
+        STRNE   r8, [r0, #fcb_use_count]
+    ]
         LDRNE   r8, [r0, #fcb_hash]
         TEQNE   r8, #0
         BEQ     findtoken                               ; no hash table, behave as before
 
-        Debug   hash, "Looking up in hash table"
+        DebugS   hash, "Looking up in hash table : ",r9
 
         Push    "r2,r3,r8"
         MOV     r1, r9                                  ; token we are searching for
@@ -1520,14 +1564,16 @@ expand_tok1
         ;      we've not done it already. Moving it to here ensure that it doesn't get
         ;      called when there's no need to call it.
 
-        MOVS    r0, r9
+        ADDS    r0, r9, #0                              ; clear V
         BLEQ    SWIMessageTrans_Dictionary
-        MOVEQ   r9, r0                                  ; R9 points to kernel dictionary
+        LDMVSIA sp!, {r0, pc}                           ; didn't find it?
+        MOV     r9, r0                                  ; R9 points to kernel dictionary
 
 explp   SUBS    r8, r8, #1
-        LDRHIB  r14, [r0]
-        ADDHI   r0, r0, r14
-        BHI     explp
+        ADRCS   r14, DictionaryHash + 4
+        LDRCS   r0, [r14, r8, LSL #2]!                  ; check hash table
+        TEQCS   r0, #0
+        LDMEQIA sp!, {r0, pc}
         SUBCCS  r0, r6, #1
         LDMCCIA sp!, {r0, pc}
 explp1  LDRB    r8, [r0, #1]!
@@ -1667,12 +1713,22 @@ getbyte                                                 ; This version does not 
 ; SWI MessageTrans_CloseFile
 ; In    R0 -> 4-word data structure passed to MessageTrans_OpenFile
 
-SWIMessageTrans_CloseFile ENTRY "r0-r3"
+SWIMessageTrans_CloseFile Entry "r0-r3"
 
         Debug   xx,"MessageTrans_CloseFile",r0
 
         ADR     r11, link_header - fcb_link
         BL      TranslateFindDescriptor
+    [ debugstats
+        LDR     r2, [ r0, #fcb_flags ]
+        TST     r2, #flg_hashing
+        BEQ     %F09
+        LDR     r1, [ r0, #fcb_filename ]
+        LDR     r2, [ r0, #fcb_use_count ]
+        DebugS  stats, "MessageTrans file closed", r1
+        Debug   stats, "Use count", r2
+09
+    ]
         BL      HashTableDelete
 CloseFileLoop
         LDR     r1, [ r11, #fcb_link ]
@@ -1695,10 +1751,27 @@ CloseFileLoop
         MOVEQ   r2, #0                                  ; ensure R2 is set correctly to avoid later test
         TST     r14, #flg_freeblock
         STMFD   sp!, {r2}
+    [ ChocolateProxies
+        BEQ     %FT20
+        ADR     r2, ProxyMemory
+        SUBS    r2, r0, r2
+        RSBCSS  r1, r2, #ProxyMemorySize
+        LDRCS   r1, ProxyAlloc
+        MOVCS   r2, r2, LSR #5
+        MOVCS   r3, #1
+        ORRCS   r1, r1, r3, LSL r2
+        STRCS   r1, ProxyAlloc
+        MOVCC   r2, r0
+        MOVCC   r0, #ModHandReason_Free
+        SWICC   XOS_Module
+20
+    |
         MOVNE   r2, r0
         MOVNE   r0, #ModHandReason_Free
         SWINE   XOS_Module
+    ]
         LDMFD   sp!, {r2}
+
         ADDS    r2, r2, #0                              ; clears V and sets/clears Z appropriately
         EXIT    EQ
 
@@ -1720,7 +1793,7 @@ CloseFileLoop
 ;       R3 = bytes remaining in buffer (should be 0 if you got it right)
 ;       "Buffer overflow" error if buffer is too small
 
-SWIMessageTrans_MakeMenus ENTRY "r1, r4-r11"
+SWIMessageTrans_MakeMenus Entry "r1, r4-r11"
 
         Debug   xx,"MessageTrans_MakeMenus", r0, r1, r2, r3
 
@@ -1845,7 +1918,7 @@ ErrorBlock_BuffOverflow
 ; In    r1 -> start of token
 ; Out   r1 -> byte after end of token
 
-skiptoken ENTRY
+skiptoken Entry
 
 01      LDRB    r14, [ r1 ], #1                         ; skip the token
         CMP     r14, #","
@@ -1867,7 +1940,7 @@ skiptoken ENTRY
 ;       R2 -> terminator (character 10 if R2=0 on entry, 0 otherwise)
 ;       R3 = size of result, excluding terminator
 
-int_lookup_nopars ENTRY "r4-r7"
+int_lookup_nopars Entry "r4-r7"
 
         MOV     r4, #0
         MOV     r5, #0
@@ -1880,16 +1953,31 @@ int_lookup_nopars ENTRY "r4-r7"
 DictionaryFileName       DCB     "Resources:$.Resources.Kernel.Dictionary", 0
         ALIGN
 
-SWIMessageTrans_Dictionary
-        STMDB   sp!, {r1, r2, r3, lr}
+        ; Returns address of first byte of dictionary in R0 if V clear; error if V set
+SWIMessageTrans_Dictionary Entry   "r0-r3"
         LDR     r2, Dictionary
         CMP     r2, #0
         ADREQ   r1, DictionaryFileName
         BLEQ    internal_fileinfo
-        MOVVC   r0, r2
-        STRVC   r0, Dictionary
-        ADDVC   r0, r0, #4
-        LDMIA   sp!, {r1, r2, r3, pc}
+        ADDVC   r0, r2, #4
+        STR     r0, [sp]
+        EXIT    VS
+        LDR     r1, Dictionary
+        STR     r2, Dictionary
+        TEQ     r1, r2
+        EXIT    EQ
+        ADR     r3, DictionaryHash
+        MOV     r1, #0
+dichashloop
+        LDRB    r2, [r0]              ; read length byte of R1'th entry
+        TEQ     r2, #0                ; end of list?
+        STRNE   r0, [r3, r1, LSR #22] ; store hash entry
+        STREQ   r2, [r3, r1, LSR #22] ; store zero
+        ADDNE   r0, r0, r2
+        ADDS    r1, r1, #&01000000    ; count in top-byte so 256th loop => R1=0, Z set
+        BNE     dichashloop
+
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Hashing routines
@@ -1930,7 +2018,7 @@ SWIMessageTrans_Dictionary
 NumBuckets      *       64                              ; MUST be a power of two
         ASSERT (NumBuckets * 4) <= Buffersize           ; must fit in a _kernel_oserror
 
-HashTableDelete ENTRY "r0-r3"
+HashTableDelete Entry "r0-r3"
         ; Delete the hash table in the descriptor pointed to by R0
         ; Preserves all registers; corrupts all flags.
         ; Must not write pointer unless we were hashing in case it was a
@@ -1949,7 +2037,7 @@ HashTableDelete ENTRY "r0-r3"
         SWINE   XOS_Module                              ; release hash table
         EXIT
 
-HashTableAlloc ENTRY "r0-r11"
+HashTableAlloc Entry "r0-r11"
         ; Allocate space in the hash table.  R4 is our internal descriptor.
         ; Preserves all registers.  Corrupts NZC, V clear if OK, V set on error
         MOV     r0, r4
@@ -2036,7 +2124,7 @@ HashTableAlloc ENTRY "r0-r11"
         Push    "r11"
         BL      SWIMessageTrans_EnumerateTokens         ; we know what to do now
         Pull    "r11"
-        TEQ     r2, #0
+        CMP     r2, #0                                  ; clears V!
         BEQ     %FT70
         BL      HashAdvanceToRealToken                  ; updates R6 if necessary
         BL      AllocHashR2R3toR1
@@ -2053,7 +2141,7 @@ HashTableAlloc ENTRY "r0-r11"
         ORR     r1, r1, #flg_hashing
         STR     r1, [r0, #fcb_flags]
         Debug   hash, "HashTableAlloc exiting having set up the hash table"
-        CLRV
+        ; V must be clear - the only branch from above ensures this is the case
         EXIT
 
 StarToken
@@ -2062,7 +2150,7 @@ StarToken
 
         ROUT
 
-HashAdvanceToRealToken ENTRY "r0,r8"
+HashAdvanceToRealToken Entry "r0,r8"
         ; R2 is the buffer into which the token has been copied
         ; R4 points to EOF or to the byte following this token's value
         ; R6 is a pointer into the messages file at or after which the token lives
@@ -2093,7 +2181,7 @@ HashAdvanceToRealToken ENTRY "r0,r8"
 
         ROUT
 
-AllocHashR2R3toR1 ENTRY "r0,r2-r4"
+AllocHashR2R3toR1 Entry "r0,r2-r4"
         ; Generates the hash of the token at address R2 length R3 into R1
         ; R1 is NumBuckets if the symbol contains wildcards, else in the
         ; range 0 to (NumBuckets-1)
@@ -2113,7 +2201,7 @@ AllocHashR2R3toR1 ENTRY "r0,r2-r4"
         AND     r1, r1, #(NumBuckets-1)
         EXIT
 
-AllocateInternalBuffer ENTRY "r8"
+AllocateInternalBuffer Entry "r8"
         ; Allocate one of MessageTrans's internal buffers from IRQ or foreground pools
         ; depending on the kernel's IRQsema flag.  Returns buffer in R2, length in R3
         ; Used when client does not supply a buffer to *Lookup and in HashTableAlloc
@@ -2126,8 +2214,8 @@ AllocateInternalBuffer ENTRY "r8"
         TEQNE   r3, #0                                  ; Z set => force foreground pool
         ADR     r2, ForegroundBuffers
         ADDNE   r2, r2, #Buffersize*ForegroundBuffersNo
-        LDREQ   r14, current_ForegroundBuffer
-        LDRNE   r14, current_IRQBuffer
+        LDREQB  r14, current_ForegroundBuffer
+        LDRNEB  r14, current_IRQBuffer
         ADD     r2, r2, r14, LSL #8                     ; Point at correct buffer to use
         ADD     r14, r14, #1
         MOVEQ   r8, #ForegroundBuffersNo
@@ -2135,8 +2223,8 @@ AllocateInternalBuffer ENTRY "r8"
         CMP     r14, r8
         MOVGE   r14, #0
         TEQ     r3, #0
-        STREQ   r14, current_ForegroundBuffer
-        STRNE   r14, current_IRQBuffer                  ; And set new buffer number.
+        STREQB  r14, current_ForegroundBuffer
+        STRNEB  r14, current_IRQBuffer                  ; And set new buffer number.
         MOV     r3, #Buffersize
         EXIT
 
