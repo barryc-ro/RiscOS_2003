@@ -3,95 +3,149 @@
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
-# Date       Name         Description
-# ----       ----         -----------
-# 16-Jul-96  SMC          Created
+# Date		Name	Description
+# ----		----	-----------
+# 1998-01-19	BAL	Created
+#
+
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_HDR	=	<export$dir>
 
 #
 # Generic options:
 #
-MKDIR   = cdir
-AS      = objasm -tb
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-RM      = remove
-MODSQZ  = modsqz
-WIPE    = -wipe
-CD	= dir
+MKDIR =		cdir
+AS =		objasm
+CC =		${MEMCHECKCC} cc
+CMHG =		cmhg
+CP =		copy
+LD =		${MEMCHECKLD} link
+RM =		remove
+MODSQZ =	modsqz
+WIPE =		-wipe
 
-CPFLAGS = ~cfr~v
-WFLAGS = ~c~v
+ASMFLAGS =	-depend !Depend ${THROWBACK} -predefine "BlockDrivers SETL ${ASMBLOCKDRIVERS}"
+CFLAGS =	-depend !Depend ${THROWBACK} ${INCLUDES} ${CBLOCKDRIVERS} -strict -wP -ffah ${CCEXTRA}
+CMHGFLAGS =	-depend !Depend ${THROWBACK} ${INCLUDES} ${CBLOCKDRIVERS} -p
+CPFLAGS =	~cfr~v
+WFLAGS =	~c~v
+
+DFLAGS_COMMON = -DINET -DCOMPAT_INET4 -DVJC
+DFLAGS =	${DFLAGS_COMMON} -DNDEBUG
+DDFLAGS =       ${DFLAGS_COMMON} -DDEBUG -DDEBUG_TML -DTrace_TRACE
 
 #
-# Include files
+# Libraries
 #
-INCLUDES=	TCPIPLibs:,C:
+CLIB =		CLIB:o.stubs
+RLIB =		RISCOSLIB:o.risc_oslib
+RSTUBS =	RISCOSLIB:o.rstubs
+ROMSTUBS =	RISCOSLIB:o.romstubs
+ROMCSTUBS =	RISCOSLIB:o.romcstubs
+ABSSYM  =	RISC_OSLib:o.c_AbsSym
 
 INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 
+LIBS =\
+ ${INETLIB}\
+ ${SOCKLIB}\
+ ${UNIXLIB}\
+# MemCheck:o.MC_M\
+		
+
+LIBSD =\
+ ${INETLIB}\
+ ${SOCKLIB}\
+ ${UNIXLIB}\
+ <Lib$Dir>.svcprint.o.svcprint\
+ <Lib$Dir>.Trace.o.T_M_PL
+
+
+#
+# Include files
+#
+INCLUDES =	-ITCPIPLibs:,C:
+
 #
 # Program specific options:
 #
-COMPONENT = PPP
-TARGET = rm.PPP
-ROMTARGET = aof.PPP
-
-# To compile a version of PPP which uses the blockdrivers uncomment the next
-# line, ensure that o.blockdrive is in the list of object files and change
-# ASMFLAGS so that the symbol BlockDrivers is predefined to {TRUE}
-# 
-# The Makefile in pppd must also be changed
-
-BLOCKDRIVERS=	-DBLOCKDRIVERS
+COMPONENT =	PPP
+RAMTARGET =	rm.PPP
+ROMTARGET =	aof.PPP
+DEBUGTARGET =	rm.PPPD
+EXPORTS =	${EXP_DIR}.PPP
 
 
-# You may want to link with TinyStubs. if you do, set LD to tlink and
-# uncomment this TINYSTUBS, and comment out the STUBS
+#
+# Export Paths for Messages module
+#
+#RESDIR = 	<resource$dir>.Resources2.PPP
 
-TINYSTUBS=	#-DTINYSTUBS
-STUBS=		C:o.Stubs
 
-ROMCSTUBS=      RISC_OSLib:o.romcstubs
-ABSSYM=         RISC_OSLib:o.AbsSym
+OBJS =\
+ o.blockdrive\
+ o.if_ppp\
+ o.mbuf\
+ o.ppp_io\
+ o.ppphdr\
+ o.pppmodule\
+ o.serial\
+ o.slcompress\
 
-DEBUG=		#-DDEBUG
 
-COMPAT=		-DCOMPAT_INET4
+OBJSD =\
+ od.blockdrive\
+ od.if_ppp\
+ od.mbuf\
+ od.ppp_io\
+ od.ppphdr\
+ od.pppmodule\
+ od.serial\
+ od.slcompress\
 
-CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
-		-zps1 -Wp -depend !Depend -c -throwback -DVJC ${TINYSTUBS}\
-		${BLOCKDRIVERS}
 
-ASMFLAGS=       -PreDefine "BlockDrivers SETL {TRUE}"
+OBJSCP =\
+ cp.if_ppp\
+ cp.mbuf\
+ o.ppphdr\
+ cp.pppmodule\
+ cp.serial\
+ cp.slcompress\
 
-OBJS=		o.if_ppp o.slcompress o.pppmodule \
-		o.serial o.mbuf o.ppphdr o.ppp_io o.blockdrive \
-		${SOCKLIB} ${INETLIB} ${UNIXLIB} \
-		#o.svcprint
+
+HDRS =	h.ppphdr
 
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .s .c
-.c.o:;		$(CC) $(CFLAGS) -o $@ $<
-.s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
+.SUFFIXES:	.o .od .cp .h .s .c .cmhg
+.c.o:;		${CC} ${CFLAGS} ${DFLAGS}       -c -zM -zps1 -o $@ $<
+.c.od:;		${CC} ${CFLAGS} ${DDFLAGS}      -c -zM -zps1 -fn -o $@ $<
+.c.cp:;		${CC} ${CFLAGS} ${DFLAGS}       -c -C -E $< >> $@
+.s.o:;		${AS} ${ASMFLAGS}               -o $@ $<
+.s.od:;		${AS} ${ASMFLAGS}               -o $@ $<
+.cmhg.o:;	${CMHG} ${CMHGFLAGS} ${DFLAGS}  -o $@ $<
+.cmhg.od:;	${CMHG} ${CMHGFLAGS} ${DDFLAGS} -o $@ $<
+.cmhg.h:;	${CMHG} ${CMHGFLAGS} ${DFLAGS}  -d $@ $<
 
-all: ${TARGET}
+#
+# Main rules:
+#
+ram: ${RAMTARGET}
         @echo ${COMPONENT}: all complete
 
-#
-# RISC OS ROM build rules:
-#
 rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module built
+
+debug: ${DEBUGTARGET}
+        @echo ${COMPONENT}: debug build complete
+
+analyse: pppd ${OBJSCP} ${HDRS}
+	@echo ${COMPONENT}: analysis build complete
 
 export:
         @echo ${COMPONENT}: export complete
@@ -100,24 +154,45 @@ install_rom: ${ROMTARGET}
         ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-clean:
-		$(WIPE) o.*      $(WFLAGS)
-		$(WIPE) pppd.o.* $(WFLAGS)
-                $(WIPE) rm.*     $(WFLAGS)
-		$(RM) link/sym
+resources:
+        @echo ${COMPONENT}: resource files copied
+
+clean:	pppd
+	${RM} ${HDRS}
+	${WIPE} o.* ${WFLAGS}
+	${WIPE} od.* ${WFLAGS}
+	${WIPE} cp.* ${WFLAGS}
+	${WIPE} rm.* ${WFLAGS}
+	${WIPE} linked ${WFLAGS}
+	${WIPE} map ${WFLAGS}
+	${RM} ${RAMTARGET}
+	${RM} ${ROMTARGET}
+	${RM} ${DEBUGTARGET}
+	@echo ${COMPONENT}: cleaned
+
+pppd:
+        Dir pppd
+        amu ${MFLAGS}
+        Up
 
 #
 # Target 
 #
-${TARGET}:	$(OBJS) pppd
-		$(LD) -rmf -s link/sym -o rm.PPPu $(OBJS) $(STUBS) pppd.o.pppd
-		ModSqz rm.PPPu $@
+${RAMTARGET}: pppd ${OBJS} ${HDRS} ${CLIB}
+	${LD} -rmf -o $@ pppd.o.pppd ${OBJS} ${LIBS} ${CLIB}
+	${MODSQZ} $@
 
 #
-# ROM Target 
+# ROM Target (re-linked at ROM Image build time)
 #
-${ROMTARGET}: ${OBJS} pppd
-        ${LD} -s link/sym -o $@ -aof ${OBJS} ${ROMCSTUBS} pppd.o.pppd
+${ROMTARGET}: pppd ${OBJS} ${HDRS} ${ROMCSTUBS}
+	${LD} -o $@ -aof pppd.o.pppd ${OBJS} ${LIBS} ${ROMCSTUBS}
+
+#
+# Debug target
+#
+${DEBUGTARGET}: pppd ${OBJSD} ${HDRS} ${CLIB}
+	${LD} -rmf -o $@ pppd.od.pppd ${OBJSD} ${LIBSD} ${CLIB}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -130,255 +205,5 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-#
-# Some rules that need explicitly declaring
-#
-pppd:
-        Dir pppd
-        Amu
-        Up
-
-s.blockdrive::	Internal.Driver
-	
-o.ppphdr:	cmhg.ppphdr
-		cmhg -p ${BLOCKDRIVERS} -depend !Depend -throwback \
-		cmhg.ppphdr o.ppphdr h.ppphdr
-
 
 # Dynamic dependencies:
-o.if_ppp:	c.if_ppp
-o.if_ppp:	TCPIPLibs:sys.h.dcistructs
-o.if_ppp:	h.ppp
-o.if_ppp:	TCPIPLibs:sys.h.errno
-o.if_ppp:	C:h.kernel
-o.if_ppp:	TCPIPLibs:sys.h.types
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	TCPIPLibs:machine.h.endian
-o.if_ppp:	TCPIPLibs:machine.h.ansi
-o.if_ppp:	TCPIPLibs:machine.h.types
-o.if_ppp:	TCPIPLibs:sys.h.mbuf
-o.if_ppp:	TCPIPLibs:sys.h.malloc
-o.if_ppp:	TCPIPLibs:sys.h.socket
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	TCPIPLibs:sys.h.ioctl
-o.if_ppp:	TCPIPLibs:sys.h.ttycom
-o.if_ppp:	TCPIPLibs:sys.h.ioccom
-o.if_ppp:	TCPIPLibs:sys.h.ioccom
-o.if_ppp:	TCPIPLibs:sys.h.filio
-o.if_ppp:	TCPIPLibs:sys.h.ioccom
-o.if_ppp:	TCPIPLibs:sys.h.sockio
-o.if_ppp:	TCPIPLibs:sys.h.ioccom
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	TCPIPLibs:sys.h.signal
-o.if_ppp:	TCPIPLibs:machine.h.signal
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	TCPIPLibs:sys.h.tty
-o.if_ppp:	TCPIPLibs:sys.h.termios
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	TCPIPLibs:sys.h.ttycom
-o.if_ppp:	TCPIPLibs:sys.h.ttydefaults
-o.if_ppp:	TCPIPLibs:sys.h.select
-o.if_ppp:	TCPIPLibs:sys.h.conf
-o.if_ppp:	TCPIPLibs:sys.h.syslog
-o.if_ppp:	TCPIPLibs:machine.h.ansi
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	TCPIPLibs:net.h.if
-o.if_ppp:	TCPIPLibs:sys.h.socket
-o.if_ppp:	TCPIPLibs:sys.h.time
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	TCPIPLibs:net.h.if_arp
-o.if_ppp:	TCPIPLibs:sys.h.socket
-o.if_ppp:	TCPIPLibs:net.h.netisr
-o.if_ppp:	TCPIPLibs:net.h.route
-o.if_ppp:	TCPIPLibs:net.h.radix
-o.if_ppp:	TCPIPLibs:netinet.h.in
-o.if_ppp:	TCPIPLibs:netinet.h.if_ether
-o.if_ppp:	TCPIPLibs:netinet.h.in_systm
-o.if_ppp:	TCPIPLibs:netinet.h.in_var
-o.if_ppp:	TCPIPLibs:sys.h.queue
-o.if_ppp:	TCPIPLibs:netinet.h.ip
-o.if_ppp:	TCPIPLibs:netinet.h.tcp
-o.if_ppp:	TCPIPLibs:h.socklib
-o.if_ppp:	TCPIPLibs:sys.h.types
-o.if_ppp:	TCPIPLibs:sys.h.socket
-o.if_ppp:	TCPIPLibs:sys.h.stat
-o.if_ppp:	TCPIPLibs:sys.h.time
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	TCPIPLibs:sys.h.time
-o.if_ppp:	TCPIPLibs:sys.h.uio
-o.if_ppp:	TCPIPLibs:sys.h.cdefs
-o.if_ppp:	C:h.kernel
-o.if_ppp:	h.mbuf
-o.if_ppp:	C:h.swis
-o.if_ppp:	h.pppd
-o.if_ppp:	h.ppp_io
-o.if_ppp:	h.ppphdr
-o.if_ppp:	h.pppmodule
-o.if_ppp:	h.blockdrive
-o.if_ppp:	h.if_ppp
-o.if_ppp:	TCPIPLibs:sys.h.socket
-o.if_ppp:	TCPIPLibs:net.h.if
-o.if_ppp:	TCPIPLibs:netinet.h.in
-o.if_ppp:	TCPIPLibs:netinet.h.ip
-o.if_ppp:	h.slcompress
-o.if_ppp:	h.serial
-o.if_ppp:	pppd.h.minixlib
-o.if_ppp:	pppd.h.riscos_ppp
-o.slcompress:	c.slcompress
-o.slcompress:	TCPIPLibs:sys.h.types
-o.slcompress:	TCPIPLibs:sys.h.cdefs
-o.slcompress:	TCPIPLibs:machine.h.endian
-o.slcompress:	TCPIPLibs:machine.h.ansi
-o.slcompress:	TCPIPLibs:machine.h.types
-o.slcompress:	TCPIPLibs:sys.h.param
-o.slcompress:	TCPIPLibs:sys.h.types
-o.slcompress:	TCPIPLibs:sys.h.syslimits
-o.slcompress:	TCPIPLibs:sys.h.signal
-o.slcompress:	TCPIPLibs:machine.h.signal
-o.slcompress:	TCPIPLibs:sys.h.cdefs
-o.slcompress:	TCPIPLibs:machine.h.param
-o.slcompress:	TCPIPLibs:machine.h.limits
-o.slcompress:	TCPIPLibs:sys.h.mbuf
-o.slcompress:	TCPIPLibs:sys.h.malloc
-o.slcompress:	TCPIPLibs:sys.h.socketvar
-o.slcompress:	TCPIPLibs:sys.h.stat
-o.slcompress:	TCPIPLibs:sys.h.time
-o.slcompress:	TCPIPLibs:sys.h.cdefs
-o.slcompress:	TCPIPLibs:sys.h.cdefs
-o.slcompress:	TCPIPLibs:sys.h.select
-o.slcompress:	TCPIPLibs:h.inetlib
-o.slcompress:	TCPIPLibs:sys.h.types
-o.slcompress:	TCPIPLibs:netinet.h.in
-o.slcompress:	TCPIPLibs:netinet.h.in_systm
-o.slcompress:	TCPIPLibs:netinet.h.ip
-o.slcompress:	TCPIPLibs:netinet.h.tcp
-o.slcompress:	C:h.kernel
-o.slcompress:	h.mbuf
-o.slcompress:	h.slcompress
-o.pppmodule:	c.pppmodule
-o.pppmodule:	TCPIPLibs:sys.h.types
-o.pppmodule:	TCPIPLibs:sys.h.cdefs
-o.pppmodule:	TCPIPLibs:machine.h.endian
-o.pppmodule:	TCPIPLibs:machine.h.ansi
-o.pppmodule:	TCPIPLibs:machine.h.types
-o.pppmodule:	TCPIPLibs:sys.h.dcistructs
-o.pppmodule:	TCPIPLibs:sys.h.errno
-o.pppmodule:	C:h.kernel
-o.pppmodule:	TCPIPLibs:sys.h.mbuf
-o.pppmodule:	TCPIPLibs:sys.h.malloc
-o.pppmodule:	TCPIPLibs:sys.h.signal
-o.pppmodule:	TCPIPLibs:machine.h.signal
-o.pppmodule:	TCPIPLibs:sys.h.cdefs
-o.pppmodule:	TCPIPLibs:sys.h.ioctl
-o.pppmodule:	TCPIPLibs:sys.h.ttycom
-o.pppmodule:	TCPIPLibs:sys.h.ioccom
-o.pppmodule:	TCPIPLibs:sys.h.ioccom
-o.pppmodule:	TCPIPLibs:sys.h.filio
-o.pppmodule:	TCPIPLibs:sys.h.ioccom
-o.pppmodule:	TCPIPLibs:sys.h.sockio
-o.pppmodule:	TCPIPLibs:sys.h.ioccom
-o.pppmodule:	TCPIPLibs:sys.h.cdefs
-o.pppmodule:	TCPIPLibs:sys.h.syslog
-o.pppmodule:	TCPIPLibs:machine.h.ansi
-o.pppmodule:	TCPIPLibs:sys.h.cdefs
-o.pppmodule:	pppd.h.minixlib
-o.pppmodule:	pppd.h.riscos_ppp
-o.pppmodule:	TCPIPLibs:net.h.if
-o.pppmodule:	TCPIPLibs:sys.h.socket
-o.pppmodule:	TCPIPLibs:sys.h.cdefs
-o.pppmodule:	TCPIPLibs:sys.h.time
-o.pppmodule:	TCPIPLibs:sys.h.cdefs
-o.pppmodule:	TCPIPLibs:net.h.if_arp
-o.pppmodule:	TCPIPLibs:sys.h.socket
-o.pppmodule:	TCPIPLibs:netinet.h.in
-o.pppmodule:	TCPIPLibs:netinet.h.in_systm
-o.pppmodule:	TCPIPLibs:netinet.h.if_ether
-o.pppmodule:	C:h.kernel
-o.pppmodule:	C:h.swis
-o.pppmodule:	h.ppp
-o.pppmodule:	h.pppd
-o.pppmodule:	h.pppmodule
-o.pppmodule:	h.serial
-o.pppmodule:	h.if_ppp
-o.pppmodule:	TCPIPLibs:sys.h.socket
-o.pppmodule:	TCPIPLibs:net.h.if
-o.pppmodule:	TCPIPLibs:netinet.h.in
-o.pppmodule:	TCPIPLibs:netinet.h.ip
-o.pppmodule:	h.slcompress
-o.pppmodule:	h.blockdrive
-o.pppmodule:	h.ppp_io
-o.pppmodule:	h.ppphdr
-o.pppmodule:	h.mbuf
-o.serial:	c.serial
-o.serial:	TCPIPLibs:h.errno
-o.serial:	TCPIPLibs:sys.h.errno
-o.serial:	C:h.kernel
-o.serial:	TCPIPLibs:sys.h.types
-o.serial:	TCPIPLibs:sys.h.cdefs
-o.serial:	TCPIPLibs:machine.h.endian
-o.serial:	TCPIPLibs:machine.h.ansi
-o.serial:	TCPIPLibs:machine.h.types
-o.serial:	TCPIPLibs:sys.h.dcistructs
-o.serial:	TCPIPLibs:net.h.if
-o.serial:	TCPIPLibs:sys.h.socket
-o.serial:	TCPIPLibs:sys.h.cdefs
-o.serial:	TCPIPLibs:sys.h.time
-o.serial:	TCPIPLibs:sys.h.cdefs
-o.serial:	TCPIPLibs:net.h.if_arp
-o.serial:	TCPIPLibs:sys.h.socket
-o.serial:	TCPIPLibs:netinet.h.in_systm
-o.serial:	TCPIPLibs:netinet.h.in
-o.serial:	TCPIPLibs:netinet.h.if_ether
-o.serial:	TCPIPLibs:sys.h.signal
-o.serial:	TCPIPLibs:machine.h.signal
-o.serial:	TCPIPLibs:sys.h.cdefs
-o.serial:	TCPIPLibs:sys.h.syslog
-o.serial:	TCPIPLibs:machine.h.ansi
-o.serial:	TCPIPLibs:sys.h.cdefs
-o.serial:	C:h.kernel
-o.serial:	C:h.swis
-o.serial:	h.ppp_io
-o.serial:	h.pppmodule
-o.serial:	h.blockdrive
-o.serial:	h.if_ppp
-o.serial:	h.ppp
-o.serial:	TCPIPLibs:sys.h.socket
-o.serial:	TCPIPLibs:net.h.if
-o.serial:	TCPIPLibs:netinet.h.in
-o.serial:	TCPIPLibs:netinet.h.ip
-o.serial:	h.slcompress
-o.serial:	h.ppphdr
-o.serial:	pppd.h.minixlib
-o.serial:	pppd.h.riscos_ppp
-o.serial:	pppd.h.main
-o.serial:	h.serial
-o.mbuf:	c.mbuf
-o.mbuf:	C:h.kernel
-o.mbuf:	C:h.swis
-o.mbuf:	TCPIPLibs:sys.h.param
-o.mbuf:	TCPIPLibs:sys.h.types
-o.mbuf:	TCPIPLibs:sys.h.cdefs
-o.mbuf:	TCPIPLibs:machine.h.endian
-o.mbuf:	TCPIPLibs:machine.h.ansi
-o.mbuf:	TCPIPLibs:machine.h.types
-o.mbuf:	TCPIPLibs:sys.h.syslimits
-o.mbuf:	TCPIPLibs:sys.h.signal
-o.mbuf:	TCPIPLibs:machine.h.signal
-o.mbuf:	TCPIPLibs:sys.h.cdefs
-o.mbuf:	TCPIPLibs:machine.h.param
-o.mbuf:	TCPIPLibs:machine.h.limits
-o.mbuf:	TCPIPLibs:sys.h.errno
-o.mbuf:	C:h.kernel
-o.mbuf:	TCPIPLibs:sys.h.mbuf
-o.mbuf:	TCPIPLibs:sys.h.malloc
-o.mbuf:	TCPIPLibs:net.h.if
-o.mbuf:	TCPIPLibs:sys.h.socket
-o.mbuf:	TCPIPLibs:sys.h.cdefs
-o.mbuf:	TCPIPLibs:sys.h.time
-o.mbuf:	TCPIPLibs:sys.h.cdefs
-o.mbuf:	TCPIPLibs:net.h.if_arp
-o.mbuf:	TCPIPLibs:sys.h.socket
-o.mbuf:	TCPIPLibs:netinet.h.in
-o.mbuf:	TCPIPLibs:netinet.h.if_ether
-o.mbuf:	h.mbuf
-o.ppphdr:	cmhg.ppphdr
