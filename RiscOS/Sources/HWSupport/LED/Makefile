@@ -67,7 +67,7 @@ EXPORTS   = ${EXP_HDR}.${COMPONENT}
 # Rule patterns
 #
 .c.${OM}:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.${OM}:;   ${CMHG} -o $@ $<
+.cmhg.${OM}:;   ${CMHG} -p -DMachine=${Machine} -o $@ $<
 .s.${OM}:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -128,29 +128,6 @@ ${OM}:
         ${MKDIR} ${OM}
 
 # Dynamic dependencies:
-oOmega.module:	c.module
-oOmega.module:	C:h.kernel
-oOmega.module:	C:h.swis
-oOmega.module:	h.module
-oOmega.module:	h.led
-oOmega.module:	h.error
-oOmega.veneer: s.veneer
-oOmega.veneer: Hdr:ListOpts
-oOmega.veneer: Hdr:Macros
-oOmega.veneer: Hdr:System
-oOmega.veneer: Hdr:SWIs
-oOmega.veneer: Hdr:CPU.Generic26
-oOmega.veneer: Hdr:IO.GenericIO
-oOmega.veneer: Hdr:RISCOS
-oOmega.veneer: Hdr:ModHand
-oOmega.led:	c.led
-oOmega.led:	C:h.kernel
-oOmega.led:	C:h.swis
-oOmega.led:	h.module
-oOmega.led:	h.led
-oOmega.led:	h.veneer
-oOmega.led:	h.iomd
-oOmega.led:	h.error
 oRCA.module:	c.module
 oRCA.module:	C:h.kernel
 oRCA.module:	C:h.swis
@@ -174,6 +151,29 @@ oRCA.led:	h.led
 oRCA.led:	h.veneer
 oRCA.led:	h.iomd
 oRCA.led:	h.error
+oOmega.module:	c.module
+oOmega.module:	C:h.kernel
+oOmega.module:	C:h.swis
+oOmega.module:	h.module
+oOmega.module:	h.led
+oOmega.module:	h.error
+oOmega.veneer: s.veneer
+oOmega.veneer: Hdr:ListOpts
+oOmega.veneer: Hdr:Macros
+oOmega.veneer: Hdr:System
+oOmega.veneer: Hdr:SWIs
+oOmega.veneer: Hdr:CPU.Generic26
+oOmega.veneer: Hdr:IO.GenericIO
+oOmega.veneer: Hdr:RISCOS
+oOmega.veneer: Hdr:ModHand
+oOmega.led:	c.led
+oOmega.led:	C:h.kernel
+oOmega.led:	C:h.swis
+oOmega.led:	h.module
+oOmega.led:	h.led
+oOmega.led:	h.veneer
+oOmega.led:	h.iomd
+oOmega.led:	h.error
 oBoca.module:	c.module
 oBoca.module:	C:h.kernel
 oBoca.module:	C:h.swis
@@ -197,3 +197,32 @@ oBoca.led:	h.led
 oBoca.led:	h.veneer
 oBoca.led:	h.iomd
 oBoca.led:	h.error
+oFunai.module:	c.module
+oFunai.module:	C:h.kernel
+oFunai.module:	C:h.swis
+oFunai.module:	h.module
+oFunai.module:	h.led
+oFunai.module:	h.error
+oFunai.module:	c.module
+oFunai.module:	C:h.kernel
+oFunai.module:	C:h.swis
+oFunai.module:	h.module
+oFunai.module:	h.led
+oFunai.module:	h.error
+oFunai.veneer: s.veneer
+oFunai.veneer: Hdr:ListOpts
+oFunai.veneer: Hdr:Macros
+oFunai.veneer: Hdr:System
+oFunai.veneer: Hdr:SWIs
+oFunai.veneer: Hdr:CPU.Generic26
+oFunai.veneer: Hdr:IO.GenericIO
+oFunai.veneer: Hdr:RISCOS
+oFunai.veneer: Hdr:ModHand
+oFunai.led:	c.led
+oFunai.led:	C:h.kernel
+oFunai.led:	C:h.swis
+oFunai.led:	h.module
+oFunai.led:	h.led
+oFunai.led:	h.veneer
+oFunai.led:	h.iomd
+oFunai.led:	h.error
