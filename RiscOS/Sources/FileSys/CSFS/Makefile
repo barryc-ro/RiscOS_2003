@@ -33,7 +33,7 @@ OPTIONS = -DENSURE_LINE
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff -Wpc ${INCLUDES} ${DFLAGS} ${OPTIONS}
-CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
+CMHGFLAGS = -p -depend !Depend ${THROWBACK} ${DFLAGS} ${INCLUDES}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
 DFLAGS  = ${MESSAGES}
@@ -79,7 +79,7 @@ FDBASEOBJS    =	ofd.csfserr ofd.sfs ofd.sff ofd.sfi ofd.arcs    \
 		ofd.mount ofd.service ofd.serx ofd.update ofd.fs 	   \
 		ofd.interface ofd.link ofd.open	ofd.gbpb ofd.func ofd.file \
 		ofd.close ofd.args ofd.getbytes ofd.putbytes ofd.xstr      \
-		ofd.modulewrap ofd.header 
+		ofd.modulewrap ofd.modulewrap
 
 OBJS =    o.resources  ${BASEOBJS}
 FDOBJS =  ofd.resources ${FDBASEOBJS}
@@ -87,15 +87,15 @@ RDOBJS =  ord.resources ${RDBASEOBJS}
 ROMOBJS = ${BASEOBJS}
 
 
-.SUFFIXES:   .ofd 
-.SUFFIXES:   .ord
+.SUFFIXES:   .o .s .c .i .cmhg .inst .io .ofd .ord 
 
 #
 # Rule patterns
 #
 
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.modulewrap
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< 
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS}  $< $@
 .c.ofd:;    ${CC} ${CFLAGS} -o $@ $< -DFILE_DEBUG
 .cmhg.ofd:; ${CMHG} ${CMHGFLAGS} -o $@ $< h.modulewrap -DFILE_DEBUG
@@ -142,6 +142,7 @@ clean:
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${RM} h.modulewrap
+        ${RM} h.header
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
@@ -183,6 +184,10 @@ rm.${COMPONENT}FD: ${FDOBJS} ${CLIB} ${FILEDB} ${INETLIB} ${ASMUTILS}
 	${MKDIR} rm
         ${LD} -rmf -o $@ ${FDOBJS} ${CLIB} ${FILEDB} ${INETLIB} ${ASMUTILS}
         Access rm.${COMPONENT}FD RW/R
-        
+
+#
+# Static dependencies:
+o.modulewrap: header.h
+
 #
 # Dynamic dependencies:
