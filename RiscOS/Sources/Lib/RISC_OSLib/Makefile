@@ -236,6 +236,7 @@ EXPORTED_LIBS =\
  Clib:o.ansilib \
  CLib:o.stubs \
  RISC_OSLib:o.risc_oslib \
+ RISC_OSLib:o.riscoslibm \
  RISC_OSLib:o.rstubs \
  RISC_OSLib:o.romstubs \
  RISC_OSLib:o.romcstubs
