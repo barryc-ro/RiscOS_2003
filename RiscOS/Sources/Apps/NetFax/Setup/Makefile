@@ -98,7 +98,10 @@ LIBSM = \
  ${WIMPLIB} \
  ${TOOLBOXLIB} \
  ${EVENTLIB}m \
- ${NUMCONVERT}zm
+ ${NUMCONVERT}zm \
+ TCPIPLibs:o.socklib5 \
+ TCPIPLibs:o.unixlib \
+ TCPIPLibs:o.inetlib \
 
 
 LIBS = \
@@ -110,7 +113,10 @@ LIBS = \
  ${TOOLBOXLIB} \
  ${EVENTLIB} \
  ${CLIB} \
- ${NUMCONVERT}
+ ${NUMCONVERT} \
+ ${LIBDIR}.TCPIPLibs.o.socklib5 \
+ ${LIBDIR}.TCPIPLibs.o.unixlib \
+ ${LIBDIR}.TCPIPLibs.o.inetlib \
 
 
 LIBSD = \
@@ -133,7 +139,7 @@ LIBSD = \
 # Include files (libraries and resources)
 #
 
-INCLUDES	= -Itbox:,C:
+INCLUDES	= -Itbox:,C:,TCPIPLIBS:
 
 FILES = \
  ${LDIR}.!Boot \
