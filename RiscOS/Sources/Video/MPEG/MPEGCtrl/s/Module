@@ -84,6 +84,14 @@ CoroutineStackCopied SETL {TRUE}			; into a static block
 		GBLL	SupportMPEG2PS
 SupportMPEG2PS	SETL	{TRUE}				; support decoding of MPEG-2 Program Streams
 
+                GBLL    EOSDetect
+EOSDetect       SETL    {TRUE}                          ; detect end-of-stream / timeouts
+Timeout_Time    *       300                             ; centiseconds at full speed
+
+                GBLL    DebugEOS
+DebugEOS        SETL    {FALSE}                         ; print EOS debug to vdu
+
+                GBLL    debug
                 GBLL    debug
 debug           SETL    {FALSE}                         ; this enables NdrDebug real-time debugging
 
@@ -143,11 +151,25 @@ CSH_EndOfStreamReceived	#	4			; 0 normally, 1 when end of stream code has been r
 CSH_SyncLosses		#	4			; number of times system stream had discontinuity
 CSH_TooShortPackets	#	4			; number of packets whose header exceeded the packet length
 CSH_CloseStreamFlags    #       4                       ; flags passed to MPEGControl_CloseStream
+CSH_SpeedIndicator      #       4                       ; the current speed indicator (for general use)
 
  [ DataRateStats
 DataCountPeriod         *       300                     ; seconds in 1 period
 DataCountArraySize      *       100                     ; allow for 100 periods at present
 CSH_DataCounts          #       DataCountArraySize * 4  ; one word per minute
+ ]
+
+ [ EOSDetect
+CSH_BufferCount         #       4                       ; number of buffers in use
+CSH_EOSFlags            #       4
+EOSFlags_HadFirstBuffer *       1 :SHL: 0
+EOSFlags_TimedOut       *       1 :SHL: 1
+EOSFlags_EOSImminent    *       1 :SHL: 2
+EOSFlags_WaitingForVideo *      1 :SHL: 3
+EOSFlags_WaitingForAudio *      1 :SHL: 4
+CSH_TickInterval        #       4                       ; in cs
+CSH_LastTick_DataReceived #     4                       ; number of buffers in use at last ticker event
+CSH_LastTick_BufferCount #      4                       ; data received at last ticker event
  ]
 
  [ :LNOT: UseSVCStack
@@ -476,6 +498,8 @@ OpenStream Entry "r0-r2"
 
         AND     lr, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
         STR     lr, [r1, #CSH_NotReadyBits]             ; which bits are not yet ready to play
+	MOV     lr, #1                                  ; start off playing data at normal speed
+	STR     lr, [r1, #CSH_SpeedIndicator]
 
  [ SendFirstSCR
         ASSERT  StreamFlags_VideoPresent = 1
@@ -518,6 +542,10 @@ OpenStream Entry "r0-r2"
 	STR	r0, [r1, #CSH_CoroutineStackCopy]	; no block allocated yet
 	STR	r0, [r1, #CSH_CoroutineStackBlockSize]	; no space in it
  ]
+ [ EOSDetect
+        STR     r0, [r1, #CSH_BufferCount]              ; no buffers in use yet
+        STR     r0, [r1, #CSH_EOSFlags]                 ; not near any sort of stream-end
+ ]
 
  [ DataRateStats
         MOV     lr, #DataCountArraySize-1               ; initialise all data counts to zero
@@ -555,6 +583,9 @@ OpenStream Entry "r0-r2"
 ; in:   r0 = flags
 ;            bit 0 set => video module ready to play
 ;            bit 1 set => audio module ready to play
+;            bit 2 set => end-of-stream signalled from higher layer
+;            bit 3 set => video unit is idle
+;            bit 4 set => audio unit is idle
 ;       r1 = external stream handle (assumed for now)
 ;
 ; out:  -
@@ -562,6 +593,11 @@ OpenStream Entry "r0-r2"
 
 Play    Entry "r0-r3"
         ADR     r1, ControlStreamHandle
+
+      [ EOSDetect
+        TST     r0, #PlayFlags_VideoReady :OR: PlayFlags_AudioReady
+        BEQ     %FT30                           ; not a ready-to-play event
+      ]
 
         LDR     r3, [r1, #CSH_NotReadyBits]
         BICS    r3, r3, r0                      ; clear not ready bits for this module
@@ -597,6 +633,125 @@ Play    Entry "r0-r3"
         CLRV
         EXIT
 
+ [ EOSDetect
+30
+        TST     r0, #PlayFlags_EOSImminent
+        BEQ     %FT40
+
+        ; Higher layer has signalled that we can expect an end-of-stream soon.
+        ; Wait until video and/or audio have become idle.
+      [ DebugEOS
+        DLINE   "EOS imminent"
+      ]
+        BL      AnticipateEndOfStream
+        EXIT
+
+40      ; We have been called back by the video/audio unit to say that decode-display has ceased
+        ; so we may have to generate either an end-of-stream or a timeout UpCall
+        ; or possibly neither, in the case where we have received more data since we timed out
+        SCPSR   I_bit, 0, r3,, lr                       ; disable IRQs around EOSFlags manipulation
+        LDR     r3, [r1, #CSH_EOSFlags]
+        TST     r0, #PlayFlags_VideoIdle
+        BICNE   r3, r3, #EOSFlags_WaitingForVideo
+        TST     r0, #PlayFlags_AudioIdle
+        BICNE   r3, r3, #EOSFlags_WaitingForAudio
+        STR     r3, [r1, #CSH_EOSFlags]
+        RestPSR lr,, c                                  ; restore IRQ state
+        TST     r3, #EOSFlags_WaitingForVideo :OR: EOSFlags_WaitingForAudio
+        EXIT    NE                                      ; still waiting for the other unit
+
+        TST     r3, #EOSFlags_EOSImminent
+        BEQ     %FT45
+
+        ; End Of Stream has occurred
+        BL      RemoveTimeoutTicker                     ; don't generate timeouts after this point
+        ADR     r0, CallBack_UpCall_EndOfStream
+        MOV     r1, r12
+        SWI     XOS_AddCallBack                         ; do it on a callback because we may have been triggered from an IRQ handler
+        EXIT
+
+45      TST     r3, #EOSFlags_TimedOut
+        EXIT    EQ
+
+        ; Stream has timed out and stopped decoding
+        ADR     r0, CallBack_UpCall_TimeOut
+        MOV     r1, r12
+        SWI     XOS_AddCallBack                         ; do it on a callback because we may have been triggered from an IRQ handler
+        EXIT
+
+CallBack_UpCall_EndOfStream
+        Entry   "r0-r3"
+      [ DebugEOS
+        DLINE   "End Of Stream UpCall"
+      ]
+        MOV     r0, #UpCall_MPEG
+        MOV     r1, #0
+        ADR     r2, ControlStreamHandle
+        MOV     r3, #UpCallMPEG_EndOfStream
+        SWI     XOS_UpCall
+        EXIT
+
+CallBack_UpCall_TimeOut
+        Entry   "r0-r3"
+      [ DebugEOS
+        DLINE   "Timeout UpCall"
+      ]
+        MOV     r0, #UpCall_MPEG
+        MOV     r1, #0
+        ADR     r2, ControlStreamHandle
+        MOV     r3, #UpCallMPEG_TimeOut
+        SWI     XOS_UpCall
+        EXIT
+
+
+
+AnticipateEndOfStream
+        Entry   "r3,r4"
+        SCPSR   I_bit, 0, r3,, r4               ; disable IRQs while we alter EOSFlags
+        LDR     r3, [r1, #CSH_EOSFlags]
+        ORR     r3, r3, #EOSFlags_EOSImminent
+        STR     r3, [r1, #CSH_EOSFlags]
+        BL      RemoveTimeoutTicker
+        RestPSR r4,, c
+        BL      CheckVidAudUnitsIdle
+        EXIT
+
+CheckVidAudUnitsIdle
+        Entry   "r0-r3"
+        SCPSR   I_bit, 0, r3,, lr               ; disable IRQs while we alter EOSFlags
+        LDR     r2, [r1, #CSH_EOSFlags]
+        LDR     r3, [r1, #CSH_StreamFlags]      ; NB: MPEGTransport uses LastResetStreamFlags
+        BIC     r2, r2, #EOSFlags_WaitingForVideo :OR: EOSFlags_WaitingForAudio
+        TST     r3, #StreamFlags_VideoPresent
+        ORRNE   r2, r2, #EOSFlags_WaitingForVideo
+        TST     r3, #StreamFlags_AudioPresent
+        ORRNE   r2, r2, #EOSFlags_WaitingForAudio
+        STR     r2, [r1, #CSH_EOSFlags]
+        RestPSR lr,, c
+
+        TST     r3, #StreamFlags_VideoPresent
+        BEQ     %FT10
+
+        ; Video is present in the stream; ask to be called back when video is idle
+        Push    "r1"
+        MOV     r0, #VideoPlayFlags_Stop
+        LDR     r1, [r1, #CSH_VideoStreamHandle]
+        SWI     XMPEGVideo_Play
+        Pull    "r1"
+10
+        TST     r3, #StreamFlags_AudioPresent
+        BEQ     %FT20
+
+        ; Audio is present in the stream; ask to be called back when audio is idle
+        Push    "r1"
+        MOV     r0, #VideoPlayFlags_Stop
+        LDR     r1, [r1, #CSH_AudioStreamHandle]
+        SWI     XMPEGAudio_Play
+        Pull    "r1"
+20
+        EXIT
+ ]
+
 ; **************************************************************************
 ;
 ;       SetSpeed - Set speed of play on MPEG stream
@@ -613,6 +768,7 @@ Play    Entry "r0-r3"
 
 SetSpeed Entry "r0-r3"
         ADR     r1, ControlStreamHandle
+        STR     r2, [r1, #CSH_SpeedIndicator]
 
         LDR     r3, [r1, #CSH_StreamFlags]
         TST     r3, #StreamFlags_VideoPresent
@@ -628,11 +784,17 @@ SetSpeed Entry "r0-r3"
         TST     r3, #StreamFlags_AudioPresent
         BEQ     %FT20
 
+        Push    "r1"
         LDR     r1, [r1, #CSH_AudioStreamHandle]
         SWI     XMPEGAudio_SetSpeed
+        Pull    "r1"
         STRVS   r0, [sp]
         EXIT    VS
 20
+      [ EOSDetect
+        BL      RemoveTimeoutTicker             ; has no effect if it wasn't already registered (eg we were paused)
+        BL      AddTimeoutTicker                ; has no effect if we've just gone into pause
+      ]
         CLRV
         EXIT
 
@@ -766,7 +928,16 @@ GetSprite Entry "r1"
 
 FullBuffers Entry "r0-r5"
         ADR     r1, ControlStreamHandle                 ; for now, since Keith isn't doing the open!
-
+ [ EOSDetect
+        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs
+        LDR     r4, [r1, #CSH_BufferCount]
+        ADD     r4, r4, #1                              ; increment buffer count
+        STR     r4, [r1, #CSH_BufferCount]
+        LDR     r4, [r1, #CSH_EOSFlags]
+        TST     r4, #EOSFlags_TimedOut                  ; if we were in a timed-out state
+        BLNE    AddTimeoutTicker                        ; then we no longer should be
+        RestPSR r3,, c                                  ; restore IRQ state
+ ]
         LDR     r0, [r1, #CSH_NotReadyBits]             ; if we haven't actually started playing yet, do nothing
         TEQ     r0, #0
         MOVNE   r5, #0                                  ; indicate no array element to increment
@@ -901,6 +1072,11 @@ CloseStream Entry "r0"
         SWI     XMPEGAudio_CloseStream
         Pull    "r0, r1"
 30
+
+ [ EOSDetect
+        BL      RemoveTimeoutTicker
+ ]
+
  [ CoroutineStackCopied
 
 ; Now free the coroutine stack block
@@ -1001,7 +1177,16 @@ FreePackets Entry "r0-r5, wp"
 ;
 
 ResetStream Entry "r0-r3"
+	MOV     lr, #1
+	STR     lr, [r1, #CSH_SpeedIndicator]
+      [ EOSDetect
+        BL      RemoveTimeoutTicker
+        MOV     r3, #0
+        STR     r3, [r1, #CSH_BufferCount]              ; no buffers in use yet
+        STR     r3, [r1, #CSH_EOSFlags]                 ; not near any sort of stream-end
+      |
 	MOV	r3, #0
+      ]
 	STR	r3, [sp, #2*4]			; zero the returned r2
 	STR	r3, [sp, #3*4]			; zero the returned r3
 
@@ -1078,7 +1263,11 @@ FreeBuffer Entry "r0-r2,r12"
         MOV     r0, #3
         MOV     lr, pc
         MOV     pc, r2
+      [ EOSDetect
+        B       %FT90
+      |
         EXIT
+      ]
 
 ; swi interface
 
@@ -1091,11 +1280,114 @@ FreeBuffer Entry "r0-r2,r12"
 	LDR	r0, [lr, #CSH_EndOfStreamReceived]	; will be 0 or 1
         MOV     r1, #0
         BL      %FT20
+      [ EOSDetect
+        B       %FT90
+      |
         EXIT
+      ]
 
 20
         Push    "lr"
         ADR     pc, SWIInstruction
+
+ [ EOSDetect
+90
+        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs
+        ADR     lr, ControlStreamHandle
+        LDR     r0, [lr, #CSH_BufferCount]
+        SUB     r0, r0, #1
+        STR     r0, [lr, #CSH_BufferCount]
+        RestPSR r3,, c                                  ; restore IRQ state
+        EXIT
+ ]
+
+
+ [ EOSDetect
+; **************************************************************************
+;
+;       AddTimeoutTicker - if conditions are appropriate, initiates timeout ticker events
+;
+; in:   r1 = control stream handle
+;
+
+AddTimeoutTicker
+        Entry   "r0-r2"
+        LDR     r0, [r1, #CSH_SpeedIndicator]
+        TEQ     r0, #0                          ; if paused
+        EXIT    EQ                              ; then don't start ticker events
+        SCPSR   I_bit, 0, r2,, lr               ; disable IRQs while we mess with EOSFlags
+        LDR     r2, [r1, #CSH_EOSFlags]
+        TST     r2, #EOSFlags_HadFirstBuffer    ; if still waiting for first data
+        RestPSR lr, EQ, c
+        EXIT    EQ
+        TST     r2, #EOSFlags_EOSImminent       ; or expecting a genuine EOS
+        RestPSR lr, NE, c
+        EXIT    NE                              ; then also don't start ticker events
+
+        BIC     r2, r2, #EOSFlags_TimedOut      ; in case we're recovering from a previous timeout, clear timed-out flag
+        STR     r2, [r1, #CSH_EOSFlags]
+        RestPSR lr,, c                          ; restore IRQ state
+
+        LDR     r2, [r1, #CSH_DataReceived]
+        LDR     lr, [r1, #CSH_BufferCount]
+        STR     r2, [r1, #CSH_LastTick_DataReceived]
+        STR     lr, [r1, #CSH_LastTick_BufferCount]
+
+        LDR     r2, =Timeout_Time
+        MUL     r0, r2, r0
+        STR     r0, [r1, #CSH_TickInterval]
+        MOV     r2, r1
+        ADR     r1, TimeoutTicker
+        SWI     XOS_CallAfter
+        EXIT
+
+; **************************************************************************
+;
+;       RemoveTimeoutTicker - prevents any further timeout ticker events
+;
+; in:   r1 = control stream handle
+;
+
+RemoveTimeoutTicker
+        Entry   "r0,r1"
+        ADR     r0, TimeoutTicker
+        SWI     XOS_RemoveTickerEvent
+        EXIT
+
+; **************************************************************************
+;
+;       TimeoutTicker - ticker event handler
+;
+; in:   r12 = control stream handle
+;       IRQs are disabled
+;
+
+TimeoutTicker
+        Entry   "r0-r3"
+        LDR     r0, [r12, #CSH_LastTick_BufferCount]
+        LDR     r1, [r12, #CSH_BufferCount]
+        TEQ     r0, #0                          ; if old BufferCount = 0
+        LDREQ   r2, [r12, #CSH_LastTick_DataReceived]
+        LDR     r3, [r12, #CSH_DataReceived]
+        TEQEQ   r2, r3                          ; and data has arrived since last tick
+        STR     r1, [r12, #CSH_LastTick_BufferCount]
+        STR     r3, [r12, #CSH_LastTick_DataReceived]
+        BEQ     %FT50                           ; then we've timed out
+        ; else we need to set another CallAfter
+        LDR     r0, [r12, #CSH_TickInterval]
+        ADR     r1, TimeoutTicker
+        MOV     r2, r12
+        SWI     XOS_CallAfter
+        EXIT
+
+50
+        MOV     r1, r12
+        LDR     r0, [r1, #CSH_EOSFlags]
+        ORR     r0, r0, #EOSFlags_TimedOut
+        STR     r0, [r1, #CSH_EOSFlags]
+        BL      CheckVidAudUnitsIdle
+        EXIT
+ ]
 
 ; **************************************************************************
 ;
@@ -1191,6 +1483,16 @@ coinit  ALTENTRY                                ; must push same stuff as CoWait
   ]
  ]
         BL      cowait
+
+ [ EOSDetect
+        ; We get here when the first data is received after an OpenStream or (non-internal) ResetStream
+        SCPSR   I_bit, 0, r7,, lr
+        LDR     r7, [r1, #CSH_EOSFlags]
+        ORR     r7, r7, #EOSFlags_HadFirstBuffer
+        STR     r7, [r1, #CSH_EOSFlags]
+        RestPSR lr,, c
+        BL      AddTimeoutTicker
+ ]
 
 ; and when we come back, drop thru to...
 
@@ -1517,6 +1819,14 @@ notvidaudpacket
 	TEQ	r7, #&B9				; is it end-of-stream marker
 	MOVEQ	lr, #1
 	STREQ	lr, [r1, #CSH_EndOfStreamReceived]	; indicate we've received end-of-stream marker
+      [ EOSDetect
+       [ DebugEOS
+        BNE     %FT00
+        DLINE   "Parsed end code"
+00
+       ]
+        BLEQ    AnticipateEndOfStream                   ; this waits for decoding to stop, then issues an UpCall
+      ]
 
         BL      getnextstartcode
         B       notallvideo
@@ -1905,6 +2215,17 @@ SysCtrlInfo_Code Entry
         LDR     r0, [r1, #CSH_DataReturned]
         BL      DecimalOutput
         DLINE   ""
+
+ [ EOSDetect
+        DLINE   "Buffers in use = ", cc
+        LDR     r0, [r1, #CSH_BufferCount]
+        BL      DecimalOutput
+        DLINE   ""
+      [ DebugEOS
+        LDR     r0, [r1, #CSH_EOSFlags]
+        DREG    r0, "EOSFlags = "
+      ]
+ ]
 
 	DLINE	"Number of sync losses = ", cc
 	LDR	r0, [r1, #CSH_SyncLosses]
