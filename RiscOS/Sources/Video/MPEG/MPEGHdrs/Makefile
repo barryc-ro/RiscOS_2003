@@ -15,12 +15,12 @@
 # Paths
 #
 EXP_HDR = <export$dir>.^.Interface2
-C_EXP_HDR = <cexport$dir>.Interface
+C_EXP_HDR = <lib$dir>.MPEG
 
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = aasm
 CP      = copy
 RM      = remove
@@ -44,6 +44,7 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${EXP_HDR}.L64002 \
             ${EXP_HDR}.MPEG2Card \
             ${EXP_HDR}.MPEG2bCard \
+            ${EXP_HDR}.MPEG2cCard \
             ${EXP_HDR}.DVBControl \
             ${EXP_HDR}.VSP \
             ${EXP_HDR}.Macrovisio \
@@ -56,6 +57,7 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${C_EXP_HDR}.h.L64002 \
             ${C_EXP_HDR}.h.MPEG2Card \
             ${C_EXP_HDR}.h.MPEG2bCard \
+            ${C_EXP_HDR}.h.MPEG2cCard \
             ${C_EXP_HDR}.h.DVBControl \
             ${C_EXP_HDR}.h.VSP \
             ${C_EXP_HDR}.h.Macrovisio
@@ -66,7 +68,7 @@ EXPORTS   = ${EXP_HDR}.AV110 \
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: ${EXPORTS} Dirs
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
@@ -74,6 +76,9 @@ install_rom: ${TARGET}
 
 clean:
         @echo ${COMPONENT}: cleaned
+
+Dirs:
+        ${MKDIR} <lib$dir>.MPEG.h
 
 #
 # Exported interface headers
@@ -104,6 +109,9 @@ ${EXP_HDR}.MPEG2Card: hdr.MPEG2Card
 
 ${EXP_HDR}.MPEG2bCard: hdr.MPEG2bCard
         ${CP} hdr.MPEG2bCard $@ ${CPFLAGS}
+
+${EXP_HDR}.MPEG2cCard: hdr.MPEG2cCard
+        ${CP} hdr.MPEG2cCard $@ ${CPFLAGS}
 
 ${EXP_HDR}.DVBControl: hdr.DVBControl
         ${CP} hdr.DVBControl $@ ${CPFLAGS}
@@ -140,6 +148,9 @@ ${C_EXP_HDR}.h.MPEG2Card: hdr.MPEG2Card
 
 ${C_EXP_HDR}.h.MPEG2bCard: hdr.MPEG2bCard
 	${PERL} Hdr.MPEG2bCard $@
+
+${C_EXP_HDR}.h.MPEG2cCard: hdr.MPEG2cCard
+	${PERL} Hdr.MPEG2cCard $@
 
 ${C_EXP_HDR}.h.DVBControl: hdr.DVBControl
 	${PERL} Hdr.DVBControl $@
