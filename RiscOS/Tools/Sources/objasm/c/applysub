@@ -3,6 +3,7 @@
  * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
  */
 
+#include "hostdep.h"
 #include "applysub.h"
 #include "errors.h"
 #include "exprstor.h"
@@ -11,9 +12,14 @@
 #include "message.h"
 #include <string.h>
 #ifdef BINARY_INCLUDES
-#include "riscos.h"        /* added by NRaine */
-#include <stdio.h>         /* added by NRaine */
-#include "getline.h"       /* added by NRaine */
+#  ifdef HOST_IS_RISCOS
+#    include "riscos.h"    /* added by NRaine */
+#  else
+#    include "filestamp.h"
+#    include "wholefls.h"
+#  endif
+#  include <stdio.h>       /* added by NRaine */
+#  include "getline.h"     /* added by NRaine */
 #endif
 
 CARDINAL Coerce(CARDINAL pointer)
@@ -137,6 +143,63 @@ eStack[pointer2].u.operand.u.constant = op1;
 } /* End LenSub */
 
 
+/**** Added by SBrodie to support using :FLOAD: :FEXEC: :FSIZE: :FATTR: etc. ****/
+#if defined(BINARY_INCLUDES) && !defined(HOST_IS_RISCOS)
+/* This code came from resgen ... */
+static int32 resgen_derive_filetype(const char *filename)
+{
+        char *comma = strrchr(filename, ',');
+        size_t type;
+        int count = -1;
+
+        if (comma && sscanf(comma+1, "%x%n", &type, &count) > 0 && count == 3) {
+                return type;
+        }
+        return 0xFFF;
+}
+
+static void resgen_time_t_to_riscos(TimeStamp ts, int32 *load, int32 *exec)
+{
+        /* convert a time_t (seconds from 1 Jan 1970 00:00:00 UTC) to a RISC OS
+         * date/time stamp (centiseconds from 1 Jan 1900 00:00:00 UTC)
+         * The "load address" attribute used by RISCOS is equal to 0xFFFtttdd, where
+         * ttt is a 12-bit file type and dd is bits 32..39 of the time stamp. This is
+         * defined as the number of centiseconds since 01-Jan-1900.
+         *
+         * DOS and UNIX deal (in the main) with time as the number of seconds since
+         * 01-Jan-1970, which is to be RISCOS time 0x33 6E99 6A00.  Hence the conversion
+         * is relatively simple.   RISCOS time = 336E996A00h + 100*UNIX time
+         */
+        int32 t_hi, t_lo;
+
+        t_hi = 0x336E99ul + ((int32)ts >> 16ul) * 100ul;
+        t_lo = 0x6A00ul + (ts & 0xFFFFul) * 100ul;
+
+        *load = (*load & ~0xFFul) | ((t_hi + (t_lo >> 16ul)) >> 16ul);
+        *exec = (t_hi << 16) + t_lo;
+}
+
+static int derive_riscos_attributes(char *filename, int32 loadexecsizeattr[])
+{
+  TimeStamp ts;
+  int32 length = wf_filesize(filename);
+
+  if (length == -1) {
+    return -1;
+  }
+  else {
+    loadexecsizeattr[0] = 0xFFF00000ul | (resgen_derive_filetype(filename) << 8);
+    loadexecsizeattr[1] = 0;
+    loadexecsizeattr[2] = length;
+    loadexecsizeattr[3] = 0x3B; /* LWR/R - fake */
+    ts = filestamp_get(filename);
+    if (ts != -1)
+      resgen_time_t_to_riscos(ts, &loadexecsizeattr[0], &loadexecsizeattr[1]);
+    return 0;
+  }
+}
+
+#endif /* defined(BINARY_INCLUDES) && !defined(HOST_IS_RISCOS) */
 
 /**** Added by NRaine ****/
 
@@ -145,10 +208,11 @@ void FInfoSub(int index,
             CARDINAL pointer2)
 {
 #ifdef BINARY_INCLUDES
+#ifdef HOST_IS_RISCOS
   __riscos_osfile_block fblk;
   char errbuf[MaxLineLength+50], filename[MaxLineLength+1];
   char *f = eStack[pointer].u.operand.u.string.key;
-  int len = eStack[pointer].u.operand.u.string.length;
+  CARDINAL len = eStack[pointer].u.operand.u.string.length;
   int i;
 
   for (i=0;i<len;i++) filename[i] = f[i];
@@ -164,6 +228,26 @@ case 1: eStack[pointer2].type = OperandEST;
 case 2: sprintf(errbuf,applysub_finfosub_direct,filename);
         Report(AsmError,errbuf);
   }
+#else /* HOST_IS_RISCOS */
+  char errbuf[MaxLineLength+50], filename[MaxLineLength+1];
+  char *f = eStack[pointer].u.operand.u.string.key;
+  CARDINAL len = eStack[pointer].u.operand.u.string.length;
+  int i;
+  int32 loadexecsizeattr[4];
+
+  for (i=0;i<len;i++) filename[i] = f[i];
+  filename[len] = 0;
+
+  if (derive_riscos_attributes(filename, loadexecsizeattr) < 0) {
+    sprintf(errbuf,applysub_finfosub_fnotf,filename);
+    Report(AsmError,errbuf);
+  }
+  else {
+    eStack[pointer2].type = OperandEST;
+    eStack[pointer2].u.operand.operandType = ConstantOT;
+    eStack[pointer2].u.operand.u.constant = loadexecsizeattr[index];
+  }
+#endif
 #else
   /* suppress unused warning */
   index = index;  pointer = pointer;  pointer2 = pointer2;
