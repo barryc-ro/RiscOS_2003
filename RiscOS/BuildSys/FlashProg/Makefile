@@ -47,12 +47,12 @@ ROMImage: ${BUILD}
 FlashProg:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.FlashProg
-        @${CD} ${SRCDIR}.Trial.FlashProg.FlashProg
+        @${CD} ${SRCDIR}.Apps.FlashProg.FlashProg
         ${MAKE} INSTDIR=${INSTDIR}.FlashProg
 
 FlashApp:
         @echo $@ ...
         @${MKDIR} ${INSTDIR}.FlashProg
-        @${CD} ${SRCDIR}.Trial.FlashProg.FlashApp
+        @${CD} ${SRCDIR}.Apps.FlashProg.FlashApp
         ${MAKE} INSTDIR=${INSTDIR}.FlashProg
 
