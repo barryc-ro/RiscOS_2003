@@ -29,6 +29,9 @@
 #pragma no_warn_deprecated
 #include "sys/signal.h"
 #pragma warn_deprecated
+#include "sys/types.h"
+#include "netinet/in_systm.h"
+#include "../ppphdr.h"
 #include "errno.h"
 #include "socklib.h"
 #include "inetlib.h"
@@ -50,7 +53,14 @@
 
 #include <net/if.h>
 
-#include "^.blockdrive.h"
+
+#ifdef BLOCKDRIVERS
+    #include "^.blockdrive.h"
+#else
+    #include "^.ioctl.h"
+    #include "^.serial.h"
+#endif
+
 #include "^.if_ppp.h"
 
 #include "callout.h"
@@ -86,6 +96,7 @@
 #define FALSE (0)
 #endif /*FALSE*/
 
+#define OutputFreeSpaceThres 63
 
 /* interface vars */
 char ifname[IFNAMSIZ];		/* Interface name */
@@ -96,7 +107,12 @@ char hostname[MAXNAMELEN];	/* Our hostname */
 char our_name[MAXNAMELEN];
 char remote_name[MAXNAMELEN];
 
+#ifdef BLOCKDRIVERS
 char devname[MAXPATHLEN] = "Internal";	/* Device name */
+#else
+char devname[MAXPATHLEN] = "devices:$.Serial1";	/* Device name */
+#endif
+
 int default_device = TRUE;	/* use default device (stdin/out) */
 
 int fd;			    /* Device file descriptor */
@@ -138,7 +154,9 @@ int lockflag;		        /* lock the serial device */
 int idle_time_limit;            /* How long to be idle before disconnecting */
 volatile int idle_time;
 
+#ifdef BLOCKDRIVERS
 extern u_char *ring_insert;
+#endif
 
 /* prototypes */
 static void hup(int);
@@ -156,9 +174,6 @@ static void pr_log(void *, char *, ...);
 
 extern	char	*ttyname(int);
 extern	char	*getlogin(void);
-
-extern int timeout_entry(_kernel_swi_regs *r, void *pw);
-extern int timeout_handler(_kernel_swi_regs *r, void *pw);
 
 /*
  * PPP Data Link Layer "protocol" table.
@@ -181,6 +196,9 @@ static struct protent {
 #define N_PROTO		(sizeof(prottbl) / sizeof(prottbl[0]))
 
 jmp_buf exitenv;
+int internet_version;
+
+#define Socket_Version 0x41222
 
 _kernel_oserror *pppd_main(int argc, char *argv[])
 {
@@ -193,6 +211,9 @@ _kernel_oserror *pppd_main(int argc, char *argv[])
     FILE *pidfile;
     struct passwd *pw;
 #   endif
+
+    if (_swix(Socket_Version, _OUT(0), &internet_version))
+        internet_version = 408;
 
     /* To allow exit() calls from deeper levels */
     if ((a=setjmp(exitenv)) != 0)
@@ -425,12 +446,15 @@ int pppd_PHASE_DEAD(void)
 static void set_up_tty(int fd, int local)
 {
     int speed, oldspeed, oldformat, status;
+#ifndef BLOCKDRIVERS
+    ioctl_t ioctl;
+#endif
 
     IGNORE(local);
     IGNORE(fd);
 
-#ifdef OLDCODE
     speed = inspeed;
+#ifdef OLDCODE
     if (speed)
     {
         oldspeed=driver_txspeed(-1);
@@ -445,14 +469,65 @@ static void set_up_tty(int fd, int local)
     driver_rxspeed(speed);
 #endif
 
+#ifdef BLOCKDRIVERS
     if (speed)
     {
+        oldspeed=driver_txspeed(-1);
         driver_txspeed(speed);
         driver_rxspeed(speed);
     }
+
+    else
+    {
+        speed=driver_txspeed(-1);
+        oldspeed=speed;
+    }
+
+#else
+    ioctl.reason = IOCtl_baud_rate;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+
+    if (speed)
+    {
+        oldspeed = ioctl.data;
+
+        ioctl.read = 0;
+        ioctl.write = 1;
+        ioctl.data = speed;
+
+        _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+    }
+
+    else
+    {
+        oldspeed = speed = ioctl.data;
+    }
+#endif
+
     /* Set 8N1 data format */
+#ifdef BLOCKDRIVERS
     oldformat=driver_wordformat(-1);
     driver_wordformat(0);
+#else
+    ioctl.reason = IOCtl_data_format;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+    oldformat = ioctl.data;
+
+    ioctl.read = 0;
+    ioctl.write = 1;
+    ioctl.data = (IOCtl_data_length_8 | IOCtl_stop_bits_1 | IOCtl_no_parity);
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+#endif
+
 
     if (!restore_term)
     {
@@ -463,16 +538,60 @@ static void set_up_tty(int fd, int local)
     baud_rate = speed;
     restore_term = TRUE;
 
+    /* This next bit of code to read the control lines appears to have no use but has
+     * been left in for now.
+     */
+#ifdef BLOCKDRIVERS
     status=driver_controllines(-1);
+#else
+    ioctl.reason = IOCtl_control_lines;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
 
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+    status = ioctl.data;
+#endif
+
+
+#ifdef BLOCKDRIVERS
     if (crtscts)
         driver_flowcontrol(crtscts);
+#else
+    if (crtscts)
+    {
+        ioctl.reason = IOCtl_handshaking;
+        ioctl.group = 0;
+        ioctl.reserved = 0;
+        ioctl.read = 0;
+        ioctl.write = 1;
+        ioctl.data = crtscts;
+
+        _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+    }
+#endif
+
+
+#ifndef BLOCKDRIVERS
+    ioctl.reason = IOCtl_buffer_threshold;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 0;
+    ioctl.write = 1;
+    ioctl.data = OutputFreeSpaceThres;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+#endif
 }
 
 /*
  * setdtr - control the DTR line on the serial port.
  * This is called from die(), so it shouldn't call die().
  */
+
+#ifdef BLOCKDRIVERS
+
 static void setdtr(int fd, int on)
 {
     int status;
@@ -480,6 +599,7 @@ static void setdtr(int fd, int on)
     IGNORE(fd);
 
     status=driver_controllines(-1);
+
     if (on)
         status|=1;
     else
@@ -487,6 +607,33 @@ static void setdtr(int fd, int on)
     driver_controllines(status);
 }
 
+#else
+
+static void setdtr(int fd, int on)
+{
+    ioctl_t ioctl;
+
+    IGNORE(fd);
+
+    ioctl.reason = IOCtl_control_lines;
+    ioctl.group = 0;
+    ioctl.reserved = 0;
+    ioctl.read = 1;
+    ioctl.write = 0;
+
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_in, &ioctl);
+
+    if (on)
+        ioctl.data |= IOCtl_control_line_DTR;
+    else
+        ioctl.data &= ~IOCtl_control_line_DTR;
+
+    ioctl.read = 0;
+    ioctl.write = 1;
+    _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+}
+
+#endif
 
 /*
  * quit - Clean up state and exit.
@@ -529,12 +676,35 @@ void cleanup(int status, caddr_t arg)
 
 	disestablish_ppp();
 
+#ifdef BLOCKDRIVERS
 	if (restore_term)
 	{
 	    driver_txspeed(initspeed);
 	    driver_rxspeed(initspeed);
 	    driver_wordformat(initformat);
 	}
+#else
+        if (restore_term && serial_out != 0)
+        {
+            ioctl_t ioctl;
+
+            ioctl.reason = IOCtl_baud_rate;
+            ioctl.group = 0;
+            ioctl.reserved = 0;
+            ioctl.read = 0;
+            ioctl.write = 1;
+            ioctl.data = initspeed;
+
+            _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+
+
+            ioctl.reason = IOCtl_data_format;
+            ioctl.data = initformat;
+
+            _swix (OS_Args, _INR (0, 2), OS_Args_IOCtl, serial_out, &ioctl);
+        }
+#endif
+
 
 	/*pppclose(fd);*/
 	fd = -1;
@@ -608,14 +778,14 @@ void timeout(void (*func)(), caddr_t arg, int time)
     }
 }
 
-int timeout_handler(_kernel_swi_regs *r, void *pw)
+_kernel_oserror *timeout_handler(_kernel_swi_regs *r, void *pw)
 {
     IGNORE(pw);
     IGNORE(r);
 
     pppd_signal_handler(SIGALRM);
 
-    return 1;
+    return NULL;
 }
 
 /*
