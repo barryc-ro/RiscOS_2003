@@ -7,6 +7,7 @@
 EXP_HDR = <CExport$Dir>
 RESAPP = <Resource$Dir>.Apps.!NCFresco
 RESRES = <Resource$Dir>.Resources.NCFresco
+RESRES_ALT = <Resource$Dir>.Resources.NCFrescoA
 #
 # Generic options:
 #
@@ -43,39 +44,25 @@ install_rom: ${TARGET}
 clean:
         @echo ${COMPONENT}: cleaned
 
-resources_old:
-	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.,Resources.Common.UK.
-	${MKDIR} ${RESAPP}
-	${MKDIR} ${RESRES}
-	${MKDIR} ${RESRES}.html
-	${CP} NCFrescoRORes:!BootROM    ${RESAPP}.!Boot    ${CPFLAGS}
-	${CP} NCFrescoRORes:!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
-	${CP} NCFrescoRORes:!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
-	${CP} NCFrescoRORes:SpritesROM  ${RESRES}.Sprites  ${CPFLAGS}
-	${CP} NCFrescoRORes:Messages    ${RESRES}.Messages ${CPFLAGS}
-	${CP} NCFrescoRORes:Res         ${RESRES}.Res      ${CPFLAGS}
-	${CP} NCFrescoRORes:Welcome     ${RESRES}.Welcome  ${CPFLAGS}
-	${CP} NCFrescoRORes:MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
-	${CP} NCFrescoRORes:Config      ${RESRES}.Config   ${CPFLAGS}
-	${CP} NCFrescoRORes:html.badurl    ${RESRES}.html.badurl    ${CPFLAGS}
-	${CP} NCFrescoRORes:html.favs      ${RESRES}.html.favs      ${CPFLAGS}
-	${CP} NCFrescoRORes:html.favsd     ${RESRES}.html.favsd     ${CPFLAGS}
-	${CP} NCFrescoRORes:html.hista     ${RESRES}.html.hista     ${CPFLAGS}
-	${CP} NCFrescoRORes:html.histr     ${RESRES}.html.histr     ${CPFLAGS}
-	${CP} NCFrescoRORes:html.jsalert   ${RESRES}.html.jsalert   ${CPFLAGS}
-	${CP} NCFrescoRORes:html.jsprompt  ${RESRES}.html.jsprompt  ${CPFLAGS}
-	${CP} NCFrescoRORes:html.jsokcncl  ${RESRES}.html.jsokcncl  ${CPFLAGS}
-	${CP} NCFrescoRORes:html.password  ${RESRES}.html.password  ${CPFLAGS}
-	${CP} NCFrescoRORes:html.printopts ${RESRES}.html.printopts ${CPFLAGS}
-	${CP} NCFrescoRORes:html.sslcert   ${RESRES}.html.sslcert   ${CPFLAGS}
-	${CP} NCFrescoRORes:html.sslpin    ${RESRES}.html.sslpin    ${CPFLAGS}
-	${CP} NCFrescoRORes:html.sslserv   ${RESRES}.html.sslserv   ${CPFLAGS}
-	${CP} NCFrescoRORes:html.ssltoken  ${RESRES}.html.ssltoken  ${CPFLAGS}
-	${CP} NCFrescoRORes:html.url       ${RESRES}.html.url       ${CPFLAGS}
-	Unset NCFrescoRORes$Path
-        @echo ${COMPONENT}: resource files copied
+resources: resources_${RES} resources_base
+        @echo ${COMPONENT}: all resource files copied
 
-resources:
+resources_:
+        @echo ${COMPONENT}: dummy alt resource files copied
+
+resources_alt:
+	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.,Resources.Common.UK.
+	Set NCFrescoROAltRes$Path NCFrescoRORes:Alt.,NCFrescoRORes:
+	Set NCFrescoROAltTranslateRes$Path TranslateRes:Alt.,TranslateRes:
+	${MKDIR} ${RESRES_ALT}
+	${CP} NCFrescoROAltRes:SpritesROM    ${RESRES_ALT}.Sprites  ${CPFLAGS}
+	${TR} -i NCFrescoROAltTranslateRes:Messages -o ${RESRES_ALT}.Messages ${TRFLAGS}
+	${CP} NCFrescoROAltRes:Res           ${RESRES_ALT}.Res      ${CPFLAGS}
+	Unset NCFrescoROAltRes$Path
+	Unset NCFrescoRORes$Path
+        @echo ${COMPONENT}: alt resource files copied
+
+resources_base:
 	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.,Resources.Common.UK.
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
