@@ -763,6 +763,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     int mode;
     int toolbar_state;
     char *ncmode;
+    int old_keyboard_state, linedrop;
     
     STBDBG(( "frontend_view_visit url '%s' title '%s' doc %p\n", strsafe(url), strsafe(title), doc));
 
@@ -872,6 +873,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     v->real_url = NULL;
 
     v->offline_mode = keyboard_state;
+
+    linedrop = -1;
+    old_keyboard_state = keyboard_state;
     
     /* check for special page instructions - not all relevant to child pages */
     {
@@ -908,16 +912,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    
 		    /* set up a pending line drop */
 		    if (vals[content_tag_LINEDROP].value)
-		    {
-			_swix(PPP_AlterSettings, _INR(0,2), 0, 0, atoi(vals[content_tag_LINEDROP].value));
-		    }
-		    /* if you go to an online page then reset the time to the default */
-		    else if (keyboard_state == fe_keyboard_ONLINE) 
-		    {
-			int def_linedrop;
-			_swix(PPP_Status, _INR(0,1) | _OUT(2), 0, 0, &def_linedrop);
-			_swix(PPP_AlterSettings, _INR(0,2), 0, 0, def_linedrop);
-		    }
+			linedrop = atoi(vals[content_tag_LINEDROP].value);
 		}
 		
 		/* read position for window, safe area relative */
@@ -991,7 +986,22 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	}
     }
 
-    /* check for special page instructions - but only on top page   */
+    /* if linedrop is given then set it */
+    if (linedrop != -1)
+    {
+	STBDBG(("frontend_view_visit: linedrop %d\n", linedrop));
+	_swix(PPP_AlterSettings, _INR(0,2), 0, 0, linedrop);
+    }
+    /* if you go to an online page then reset the time to the default */
+    else if (/* old_keyboard_state == fe_keyboard_OFFLINE && */ keyboard_state == fe_keyboard_ONLINE)
+    {
+	int def_linedrop;
+	if (_swix(PPP_Status, _INR(0,1) | _OUT(2), 0, 0, &def_linedrop) == NULL)
+	    _swix(PPP_AlterSettings, _INR(0,2), 0, 0, def_linedrop);
+	STBDBG(("frontend_view_visit: linedrop reset to default %d\n", def_linedrop));
+    }
+
+    /* check for special page instructions - but only on top page  */
     if (v->parent == NULL)
     {
         const char *bmode;

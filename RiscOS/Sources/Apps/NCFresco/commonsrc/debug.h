@@ -132,6 +132,7 @@ extern int debug_get(const char *feature);
 #define BENDBG(x)
 #define LNKDBG(x)
 #define LAYDBG(x)
+#define DBG(x)
 
 #else	/* DEBUG < 1 */
 
@@ -150,6 +151,7 @@ extern int debug_get(const char *feature);
 #define BENDBG(x)	bendbg x
 #define LNKDBG(x)	lnkdbg x
 #define LAYDBG(x)	laydbg x
+#define DBG(x)		dbg x
 
 /* -v1 and -v0 are NorCroft printf() checking indicators */
 #ifdef __acorn
@@ -170,6 +172,7 @@ DBGPROTO(stbdbg);
 DBGPROTO(bendbg);
 DBGPROTO(lnkdbg);
 DBGPROTO(laydbg);
+DBGPROTO(dbg);
 #ifdef __acorn
 #pragma -v0
 #endif

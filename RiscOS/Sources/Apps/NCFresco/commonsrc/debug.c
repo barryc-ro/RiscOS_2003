@@ -32,8 +32,19 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 
 #define DBGFNDEF(x,y) extern void x(const char *fmts, ...) \
 { if (dbg_conf[y].present) \
-{ va_list arglist; va_start(arglist, fmts); debug_vprintf(db_sess, fmts, arglist); \
+{ va_list arglist; va_start(arglist, fmts); if (db_sess) debug_vprintf(db_sess, fmts, arglist); else vfprintf(stderr, fmts, arglist);\
 va_end(arglist); } }
+
+void dbg(const char *fmts, ...)
+{
+    va_list arglist;
+    va_start(arglist, fmts);
+    if (db_sess)
+	debug_vprintf(db_sess, fmts, arglist);
+    else
+	vfprintf(stderr, fmts, arglist);
+    va_end(arglist);
+}
 
 #else
 
@@ -41,6 +52,14 @@ va_end(arglist); } }
 { if (dbg_conf[y].present) \
 { va_list arglist; va_start(arglist, fmts); vfprintf(stderr, fmts, arglist); \
 fflush(stderr);	va_end(arglist); } }
+
+void dbg(const char *fmts, ...)
+{
+    va_list arglist;
+    va_start(arglist, fmts);
+    vfprintf(stderr, fmts, arglist);
+    va_end(arglist);
+}
 
 #endif
 
@@ -186,7 +205,8 @@ extern void dbginit(void)
 
 #ifdef REMOTE_DEBUG
     remote_debug_open("NCFresco", &db_sess);
-    remote_debug_register_cmd_handler(db_sess, debug_cmd_handler, NULL);
+    if (db_sess)
+	remote_debug_register_cmd_handler(db_sess, debug_cmd_handler, NULL);
     atexit(cleanup);
 #endif
 }
@@ -255,7 +275,7 @@ DBGFNDEF(lnkdbg, lnk)
 DBGFNDEF(lnkdbgn, lnkn)
 DBGFNDEF(laydbg, lay)
 DBGFNDEF(laydbgn, layn)
-
+    
 #else	/* DEBUG */
 
 extern void dbginit(void)

@@ -862,7 +862,7 @@ NCFRESCO_BUILD:		$(PREDEPS)
 NCFRESCO_ROM:	$(PREDEPS)
 		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
 		@-mkdir aof
-		@cd ./ncfresco; $(MAKE) NCFRESCO_AOF \
+		@cd ./ncfresco_zm; $(MAKE) NCFRESCO_AOF \
 		LIBS="$(NCFRESCO_ROM_LIBS)" \
 		OBJS="$(NCFRESCO_ROM_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \

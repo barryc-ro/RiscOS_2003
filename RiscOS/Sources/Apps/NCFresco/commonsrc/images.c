@@ -19,6 +19,7 @@
  * 13/9/96: SJM: It did assume if no pixtrans then it didn't need scaling, however this isn't case for plotting
  *		 16bpp to 32bpp and vice versa.
  * 19/9/96: SJM: changed hard coded 68 for default images to size read from image
+ * 29/5/97: pdh: always use logical sizes
  */
 
 #include <limits.h>
@@ -538,6 +539,29 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     IMGDBG(("im%p: rec_fn: fmt %d size %dx%d logical size %dx%d\n", i,
             ir->format, ir->x, ir->y, ir->x_logical, ir->y_logical));
 
+    i->frames = ir->frames;
+
+    if (ir->frame)
+    {
+	int size = i->frames * sizeof(frame_rec);
+
+	/* pdh: this is still needed even if i->frames = 1 */
+
+	if (i->frame)
+	    i->frame = mm_realloc(i->frame, size);
+	else
+	    i->frame = mm_malloc(size);
+	memcpy(i->frame, ir->frame, size);
+    }
+
+    IMGDBG(("im%p: rec_fn: frames %d frame=%p repeats=%d\n", i,
+            i->frames, ir->frame, ir->repeat ));
+
+    i->repeats = ir->repeat;
+
+    if (i->frames > 1)
+	i->flags |= image_flag_ANIMATION;
+
     if (i->our_area)
     {
 	int OK;
@@ -548,25 +572,7 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 	{
 	    i->our_area->size = size+16;
 	    i->our_area->freeoff = size + 16;
-
-	    i->frames = i->our_area->number = ir->frames;
-
-	    if (ir->frame)
-	    {
-		int size = i->frames * sizeof(frame_rec);
-
-		if (i->frame)
-		    i->frame = mm_realloc(i->frame, size);
-		else
-		    i->frame = mm_malloc(size);
-
-		memcpy(i->frame, ir->frame, size);
-	    }
-
-	    i->repeats = ir->repeat;
-
-	    if (i->frames > 1)
-		i->flags |= image_flag_ANIMATION;
+            i->our_area->number = ir->frames;
 	}
 	else
 	{
@@ -1147,6 +1153,8 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
 		    /* If we'd used the logical size and it wasn't an animation then go back to the real size */
 		    /* Don't know if this will work from the cache or not */
+
+		    /* pdh
 		    if (i->flags & image_flag_USE_LOGICAL)
 		    {
 			if (i->frame == NULL)
@@ -1157,6 +1165,7 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
 			fillin_scales(i, info.mode);
 		    }
+		    */
 		}
 	    }
 	    else
@@ -1704,7 +1713,7 @@ os_error *image_stream_data(image i, char *buffer, int len, int update)
     int rd;
 
     IMGDBG(("image_stream_data: i%p buffer %p len %d update %d\n", i, buffer, len, update));
-    
+
     if (i == NULL || i->magic != IMAGE_MAGIC)
     {
 	return makeerror(ERR_BAD_IMAGE_HANDLE);
@@ -1734,7 +1743,7 @@ os_error *image_stream_data(image i, char *buffer, int len, int update)
      * This won't work if the file cannot be identified in the first buffer as the previous
      * buffers aren't available and we can't back up.
      */
-    
+
     if (i->tt->status == thread_DEAD &&
 	(i->data_so_far == 0 || i->plotter != plotter_SPRITE) &&
 	i->our_area == NULL &&
@@ -1831,7 +1840,7 @@ os_error *image_stream_end(image i, char *cfile)
 	free_area(&i->our_area);
 	flex_free(&i->data_area);
 	i->data_area = NULL;
-	
+
 	image_set_error(i);
     }
 
@@ -2410,7 +2419,7 @@ static void check_scaling(image i, sprite_id *id, int w, int h, int scale_image,
 {
     if ((i->flags & image_flag_REALTHING) && (w != -1 && h != -1))
     {
-#if 0
+#if 1   /*pdh*/
 	facs->xmag = w*2;
 	facs->xdiv = i->width * i->dx;
 	facs->ymag = h*2;
@@ -2983,7 +2992,7 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 #else
                 /* get os sizes */  /* pdh, these were the other way round */
                 i_w_os = i_w << bbc_modevar(our_sph->mode, bbc_XEigFactor);
-                i_h_os = i_h << bbc_modevar(our_sph->mode, bbc_XEigFactor);
+                i_h_os = i_h << bbc_modevar(our_sph->mode, bbc_YEigFactor);
 #endif
                 c_w_os = c_w << bbc_modevar(-1, bbc_XEigFactor);
                 c_h_os = c_h << bbc_modevar(-1, bbc_YEigFactor);
@@ -3072,7 +3081,7 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
     {
 	sprite_header *sph;
 
-	IMGDBGN(("img: __render frame %p cache %p\n", i->frame, i->cache_area));
+	IMGDBG(("img: __render frame %p cache %p\n", i->frame, i->cache_area));
 
 	if (i->frame && i->cache_area)
 	{
