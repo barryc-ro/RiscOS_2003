@@ -15,6 +15,7 @@
 # Paths
 #
 EXP_HDR = <export$dir>.^.Interface2
+C_EXP_HDR = <cexport$dir>.Interface
 
 #
 # Generic options:
@@ -26,6 +27,9 @@ RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
+PLFLAGS = -swi
+
+PERL    = perl Build:Hdr2H ${PLFLAGS}
 
 #
 # Program specific options:
@@ -42,7 +46,19 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${EXP_HDR}.MPEG2bCard \
             ${EXP_HDR}.DVBControl \
             ${EXP_HDR}.VSP \
-            ${EXP_HDR}.Macrovisio
+            ${EXP_HDR}.Macrovisio \
+            ${C_EXP_HDR}.h.AV110 \
+            ${C_EXP_HDR}.h.CL450 \
+            ${C_EXP_HDR}.h.MPEGAudio \
+            ${C_EXP_HDR}.h.MPEGCard \
+            ${C_EXP_HDR}.h.MPEGCtrl \
+            ${C_EXP_HDR}.h.MPEGVideo \
+            ${C_EXP_HDR}.h.L64002 \
+            ${C_EXP_HDR}.h.MPEG2Card \
+            ${C_EXP_HDR}.h.MPEG2bCard \
+            ${C_EXP_HDR}.h.DVBControl \
+            ${C_EXP_HDR}.h.VSP \
+            ${C_EXP_HDR}.h.Macrovisio
 
 #
 # Generic rules:
@@ -96,7 +112,43 @@ ${EXP_HDR}.VSP: hdr.VSP
 	${CP} hdr.VSP $@ ${CPFLAGS}
 
 ${EXP_HDR}.Macrovisio: Hdr.Macrovisio
-	${CP} Hdr.Macrovisio $@ ${CPFLAGS}
+	${CP} hdr.Macrovisio $@ ${CPFLAGS}
+
+${C_EXP_HDR}.h.AV110: hdr.AV110
+	${PERL} Hdr.AV110 $@
+
+${C_EXP_HDR}.h.CL450: hdr.CL450
+	${PERL} Hdr.CL450 $@
+
+${C_EXP_HDR}.h.MPEGAudio: hdr.MPEGAudio
+	${PERL} Hdr.MPEGAudio $@
+
+${C_EXP_HDR}.h.MPEGCard: hdr.MPEGCard
+	${PERL} Hdr.MPEGCard $@
+
+${C_EXP_HDR}.h.MPEGCtrl: hdr.MPEGCtrl
+	${PERL} Hdr.MPEGCtrl $@
+
+${C_EXP_HDR}.h.MPEGVideo: hdr.MPEGVideo
+	${PERL} Hdr.MPEGVideo $@
+
+${C_EXP_HDR}.h.L64002: hdr.L64002
+	${PERL} Hdr.L64002 $@
+
+${C_EXP_HDR}.h.MPEG2Card: hdr.MPEG2Card
+	${PERL} Hdr.MPEG2Card $@
+
+${C_EXP_HDR}.h.MPEG2bCard: hdr.MPEG2bCard
+	${PERL} Hdr.MPEG2bCard $@
+
+${C_EXP_HDR}.h.DVBControl: hdr.DVBControl
+	${PERL} Hdr.DVBControl $@
+
+${C_EXP_HDR}.h.VSP: hdr.VSP
+	${PERL} Hdr.VSP $@
+
+${C_EXP_HDR}.h.Macrovisio: Hdr.Macrovisio
+	${PERL} Hdr.Macrovisio $@
 
 
 # Dynamic dependencies:
