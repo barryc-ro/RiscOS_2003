@@ -1,0 +1,235 @@
+/*************************************************************************
+Copyright [2000] Pace Micro Technology PLC. All rights reserved.
+
+The copyright in this material is owned by Pace Micro Technology PLC
+("Pace"). This material is regarded as highly confidential trade secret
+of Pace. It may not be reproduced, used, sold or in any other way exploited
+or transferred to any third party without the prior written permission of
+Pace.
+*************************************************************************/
+
+
+
+#include <stdio.h>
+#include <stdbool.h>
+
+#include "keyboard.h"
+
+#include "module.h"
+#include "Global/RISCOS.h"
+
+#include "Global/IOCtl.h"
+
+#include "swis.h"
+#include "test.h"
+
+
+// description
+// the keyboard is scanned ideally 100 times / sec. at the moment, every key on the keyboard is scanned and if a key has
+// changed state the translated key code is pushed onto one of two stacks depending on wether the key is now up or dowm.
+// although this is not the simplest way of doing it, it does at least keep the functions to buffer the keypresses and
+// send keypresses to kernel as isolated as possible.
+
+
+// local macros
+#define OS_RECOGNISABLE(c) (c != NEQV)
+
+#define SHIFT_KEY_DOWN()  (kbd_states[SFTL_KEY_ROW][SFTL_KEY_CLM] == KEY_DOWN) || (kbd_states[SFTR_KEY_ROW][SFTR_KEY_CLM] == KEY_DOWN)
+#define FUNC_KEY_DOWN()   (kbd_states[FUNC_KEY_ROW][FUNC_KEY_CLM] == KEY_DOWN)
+#define ALT_KEY_DOWN()    (kbd_states[ALT_KEY_ROW][ALT_KEY_CLM]   == KEY_DOWN)
+#define ESC_KEY_DOWN()    (kbd_states[ESC_KEY_ROW][ESC_KEY_CLM]   == KEY_DOWN)
+
+
+
+
+
+
+
+
+keyboard::keyboard()      // keyboard constructor
+  : keys_up(10), keys_down(10)
+{
+   // initialise keyboard registers on L7205
+   init_kbd_hardware();
+
+   // initialise kbd_states and kbd_states_buffer here, set to all keys up
+   for(int x = 0; x < ROW_SIZE; x++)
+   {
+       for(int y = 0; y < COLUMN_SIZE; y++)
+       {
+           kbd_states[x][y] = KEY_UP;
+       }
+   }
+   number_of_keys_down = 0;
+
+//   _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyboardPresent, KEYBOARD_TYPE, KeyV);
+
+}
+
+
+
+
+void keyboard::init_kbd_hardware(void) const
+{
+     // there will be a function provided to initialise the hardware
+}
+
+
+
+
+// when this function is called it scans each key on the keyboard and buffers it before forwarding to kernel
+void keyboard::poll_keys(void)
+{
+   unsigned int row, column, row_data;
+   int mask;
+
+   for(column = 1; column <= COLUMN_SIZE; column++)
+   {
+          mask = 1;
+          row_data = ScanMatrix(column);        // this function will be provided, at the moment only calls test function
+          for(row = 1; row <= ROW_SIZE; row++)  // loop to see which bits are set
+          {
+              if(row_data & mask)
+              {
+                 buffer_key(row, column, KEY_DOWN);
+              }
+              else if(number_of_keys_down > 0)        // no need to send key_up message when all the keys are already up.
+              {
+                 buffer_key(row, column, KEY_UP);
+              }
+
+              mask = mask << 1;
+          }
+
+  }
+
+
+}
+
+
+// here state of all keys are recorded. this is necessary to ensure that only key transitions are forwarded to the OS.
+void keyboard::buffer_key(unsigned int row, unsigned int column, KEY_STATES key_state)
+{
+   unsigned char trans_key;           // this variable will be assigned the value of the translated key
+
+   row = row - 1;                    // here remove offset between physical rows and columns starting at 1
+   column = column - 1;              // and the mapping tables row and columns which start at 0.
+
+
+   // row and column values on keyboard start at 1. row and column values in kbd_states start at 0.
+   if(kbd_states[row][column] != key_state)                          // if key state has changed since we last looked
+   {
+      kbd_states[row][column] = key_state;                          // then record as a valid key press
+      trans_key = translate_key_code(row, column);                          // get the key code
+
+      if(key_state == KEY_UP)                    // if the key is up
+      {
+         number_of_keys_down--;
+         if(OS_RECOGNISABLE(trans_key))
+         {
+            keys_up.push(trans_key);                // push key code onto keys_up stack
+         }
+      }
+
+      else                                      // else key must be down
+      {
+         number_of_keys_down++;
+         if(OS_RECOGNISABLE(trans_key))
+         {
+            keys_down.push(trans_key);             // push key code onto keys_down stack
+         }
+      }
+
+   }
+
+}
+
+
+// here we determine which keyboard layer is in use
+unsigned int keyboard::get_layer(void) const
+{
+   unsigned int layer = 0;
+
+   // if left or right shift keys are pressed
+   if(SHIFT_KEY_DOWN())
+   {
+      layer = 1;
+   }
+
+   // code to deal with function keys needs to go here
+
+   return layer;
+
+}
+
+
+
+// function to translate key to key code. at the moment it is ignoring secondary functionality of keys
+// returns either the character code or NULL.
+unsigned char keyboard::translate_key_code(unsigned int row, unsigned int column) const
+{
+
+   // likely that more than one mapping table will be needed, as some keys have more than one purpose
+   static unsigned char mapping_table1[MAX_KEYS] =
+          #include "FKB1406_L1.h"
+
+
+   static unsigned char mapping_table2[MAX_KEYS] =
+          #include "FKB1406_L2.h"
+
+   // store pointers to mapping tables in an array for easy access
+   static unsigned char* mapping_tables[NUMBER_OF_KEY_LAYERS] = {mapping_table1, mapping_table2};
+
+   static unsigned int layer_in_use;
+
+   layer_in_use = get_layer();
+
+   // to provide a level of abstraction, outside of this function keys have an associated row and column.
+   // however, inside this function the mapping tables are held in a 1-D array. so here we need to calculate
+   // a single key position value from the row and column parameters.
+   return mapping_tables[layer_in_use][row * COLUMN_SIZE + column];
+
+}
+
+
+
+
+
+// after the keyboard has been scanned, valid keypresses are on the translated_keys_stack.
+// this function simply pops off all of the translated key codes and sends them to the kernel
+void keyboard::inform_kernel(void)
+{
+
+  int key;
+
+  // send to the kernel the codes of all of the keys that have been released
+   while(keys_up.keys_buffer_size() > 0)
+   {
+       // send to kernel keys_up.top();
+       key = (int)keys_up.top();
+       _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, key, KeyV);
+       keys_up.pop();
+   }
+
+   // send to the kernel the codes of all of the keys that have been pressed
+   while(keys_down.keys_buffer_size() > 0)
+   {
+       // send to kernel keys_down.down();
+       key = (int)keys_down.top();
+      _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyDown, key, KeyV);
+       keys_down.pop();
+   }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
