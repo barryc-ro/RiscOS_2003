@@ -50,18 +50,10 @@ clean:
         ${RM} z.SystemDisc
         @echo ${COMPONENT}: cleaned
 
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
+resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE} z.SystemDisc
         ${AS} ${ASFLAGS} ${SOURCE}

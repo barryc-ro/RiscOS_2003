@@ -51,20 +51,10 @@ clean:
         ${RM} s.TokenHelp
         @echo ${COMPONENT}: cleaned
 
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
+resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE} s.TokenHelp
         ${AS} ${ASFLAGS} ${SOURCE}

@@ -20,7 +20,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-CFLAGS  = -depend !Depend -c -zM -ffa -wp ${DFLAGS}
+CFLAGS  = -depend !Depend -c -zM ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -42,7 +42,7 @@ TARGET    = aof.IR
 
 DFLAGS    = 
 
-OBJS      = o.Debug o.Module o.IRiface o.poduleirq
+OBJS      = o.Debug o.Module o.IRiface
 
 #
 # Rule patterns
@@ -104,7 +104,6 @@ o.Debug:	c.Debug
 o.Debug:	C:h.swis
 o.Debug:	C:h.kernel
 o.Debug:	C:h.kernel
-o.poduleirq:    s.poduleirq
 o.Module:	c.Module
 o.Module:	C:h.kernel
 o.Module:	C:h.swis

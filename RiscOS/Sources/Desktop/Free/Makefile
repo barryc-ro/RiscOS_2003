@@ -49,19 +49,11 @@ clean:
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
+resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         ${CP} Resources.${LOCALE}.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}

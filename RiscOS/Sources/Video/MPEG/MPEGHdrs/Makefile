@@ -8,7 +8,6 @@
 # 14-Sep-94  JRH          Created.
 # 01-Aug-95  JRH          Changed export directory
 # 02-Aug-95  TMD	  Added Hdr:VSP
-# 07-Oct-96  TMD	  Added Hdr:Macrovisio
 #
 
 #
@@ -40,8 +39,7 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${EXP_HDR}.L64002 \
             ${EXP_HDR}.MPEG2Card \
             ${EXP_HDR}.DVBControl \
-            ${EXP_HDR}.VSP \
-            ${EXP_HDR}.Macrovisio
+            ${EXP_HDR}.VSP
 
 #
 # Generic rules:
@@ -90,9 +88,6 @@ ${EXP_HDR}.DVBControl: hdr.DVBControl
 
 ${EXP_HDR}.VSP: hdr.VSP
 	${CP} hdr.VSP $@ ${CPFLAGS}
-
-${EXP_HDR}.Macrovisio: Hdr.Macrovisio
-	${CP} Hdr.Macrovisio $@ ${CPFLAGS}
 
 
 # Dynamic dependencies:

@@ -51,20 +51,10 @@ clean:
         ${RM} s.TokHelpSrc
         @echo ${COMPONENT}: cleaned
 
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
+resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-        TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE} s.TokHelpSrc
         ${AS} ${ASFLAGS} ${SOURCE}
@@ -88,7 +78,6 @@ rm.FileSwitch: Hdr:CPU.Generic26
 rm.FileSwitch: Hdr:IO.GenericIO
 rm.FileSwitch: Hdr:RISCOS
 rm.FileSwitch: Hdr:Machine.<Machine>
-rm.FileSwitch: Hdr:Machine.Machine
 rm.FileSwitch: Hdr:CMOS
 rm.FileSwitch: Hdr:ModHand
 rm.FileSwitch: Hdr:Services

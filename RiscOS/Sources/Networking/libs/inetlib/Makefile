@@ -20,10 +20,7 @@
 #
 LEVEL=		../..
 INCLUDES=	INetInc:,C:
-LIBDIR=         <Lib$Dir>
 
-MKDIR=          cdir
-CP=             copy
 CC=		cc
 AS=		objasm
 LD=		link
@@ -33,7 +30,6 @@ CMHG=		cmhg
 
 CFLAGS=		-depend !Depend -pcc -zps0 -I${INCLUDES} -fah -Fn -DINET
 CFLAGSZM=	-depend !Depend -pcc -zps1 -I${INCLUDES} -ffah -DINET -zM
-CPFLAGS=        ~cfr~v
 
 CCZM=		${CC} ${CFLAGSZM}
 
@@ -59,19 +55,6 @@ ZFILES=		z.gethent z.gethnad z.getnbyad z.getnbyna z.getnent \
 
 .c.z:;       ${CCZM} -c -o $@ $<
 .c.o:;       ${CC} ${CFLAGS} -c -o $@ $<
-
-export: export_${PHASE}
-        @echo ${COMPONENT}: export complete (${PHASE})
-
-export_hdrs:
-	${MKDIR} ${LIBDIR}.inetlib
-	${MKDIR} ${LIBDIR}.inetlib.h
-	${CP} h ${LIBDIR}.inetlib.h ${CPFLAGS}
-
-export_libs: inetlibzm
-	${MKDIR} ${LIBDIR}.inetlib
-	${MKDIR} ${LIBDIR}.inetlib.o
-	${CP} inetlibzm ${LIBDIR}.inetlib.o.inetlibzm ${CPFLAGS}	
 
 all:	inetlib inetlibzm 
 

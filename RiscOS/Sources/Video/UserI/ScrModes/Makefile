@@ -88,18 +88,10 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
+resources:
         ${MKDIR} ${RESDIR}.ScreenMode
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.ScreenMode.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.ScreenMode.Messages }
+        @echo ${COMPONENT}: resource files copied
 
 #
 # ROM target (re-linked at ROM Image build time)

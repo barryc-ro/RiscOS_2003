@@ -43,22 +43,39 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
+resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-        TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
+rm.Desktop: Hdr:ListOpts
+rm.Desktop: Hdr:Macros
+rm.Desktop: Hdr:System
+rm.Desktop: Hdr:SWIs
+rm.Desktop: Hdr:CPU.Generic26
+rm.Desktop: Hdr:IO.GenericIO
+rm.Desktop: Hdr:RISCOS
+rm.Desktop: Hdr:ModHand
+rm.Desktop: Hdr:Services
+rm.Desktop: Hdr:Machine.<Machine>
+rm.Desktop: Hdr:CMOS
+rm.Desktop: Hdr:Proc
+rm.Desktop: Hdr:FSNumbers
+rm.Desktop: Hdr:HighFSI
+rm.Desktop: Hdr:LowFSi
+rm.Desktop: Hdr:NewErrors
+rm.Desktop: Hdr:Variables
+rm.Desktop: Hdr:Wimp
+rm.Desktop: Hdr:WimpSpace
+rm.Desktop: Hdr:Messages
+rm.Desktop: Hdr:ResourceFS
+rm.Desktop: Hdr:MsgTrans
+rm.Desktop: Hdr:Font
+rm.Desktop: Hdr:Draw
+rm.Desktop: Hdr:ColourTran
+rm.Desktop: Version
+rm.Desktop: Hdr:NDRDebug
