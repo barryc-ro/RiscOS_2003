@@ -31,7 +31,7 @@ CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
-WFLAGS  = ~CFR~V
+WFLAGS  = ~CF~V
 
 #
 # Libraries
@@ -88,7 +88,7 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
         ${RM} ${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
@@ -108,21 +108,3 @@ ${TARGET}: ${OBJS} ${LIBS} local_dirs
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
 
 # Dynamic dependencies:
-o.armlib:	c.armlib
-o.armlib:	C:h.kernel
-o.armlib:	C:h.swis
-o.armlib:	C:CLX.h.chunkfmt
-o.armlib:	C:CLX.h.libflfmt
-o.armlib:	C:CLX.h.aof
-o.armlib:	C:CLX.h.bytesex
-o.armlib:	C:CLX.h.prgname
-o.armlib:	C:h.kernel
-o.armlib:	c.armlib
-o.armlib:	C:h.kernel
-o.armlib:	C:h.swis
-o.armlib:	C:CLX.h.chunkfmt
-o.armlib:	C:CLX.h.libflfmt
-o.armlib:	C:CLX.h.aof
-o.armlib:	C:CLX.h.bytesex
-o.armlib:	C:CLX.h.prgname
-o.armlib:	C:h.kernel
