@@ -52,7 +52,7 @@ RSTUBS		= RISCOSLIB:o.rstubs
 ROMSTUBS	= RISCOSLIB:o.romstubs
 ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.c_AbsSym
-LIBS		= <Lib$Dir>.svcprint.o.svcprint <Lib$Dir>.Trace.o.T_M_PL
+LIBS		= #<Lib$Dir>.svcprint.o.svcprint <Lib$Dir>.Trace.o.T_M_PL
 
 
 # ------------------------------------------------------------------------------
