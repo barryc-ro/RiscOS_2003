@@ -60,6 +60,9 @@ resources:
 	${CP} NCFrescoRORes:html.sslpin   ${RESRES}.html.sslpin   ${CPFLAGS}
 	${CP} NCFrescoRORes:html.sslserv  ${RESRES}.html.sslserv  ${CPFLAGS}
 	${CP} NCFrescoRORes:html.ssltoken ${RESRES}.html.ssltoken ${CPFLAGS}
+	${CP} NCFrescoRORes:html.jsalert  ${RESRES}.html.jsalert  ${CPFLAGS}
+	${CP} NCFrescoRORes:html.jsprompt ${RESRES}.html.jsprompt ${CPFLAGS}
+	${CP} NCFrescoRORes:html.jsokcncl ${RESRES}.html.jsokcncl ${CPFLAGS}
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
 
