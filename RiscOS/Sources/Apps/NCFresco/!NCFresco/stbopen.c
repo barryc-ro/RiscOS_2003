@@ -297,18 +297,16 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     if (parent->displaying)
     {
-	int f, ft;
-	ep = backend_doc_info(parent->displaying, &f, &ft, &referer, &title);
-	if (ep)
+	if (backend_doc_info(parent->displaying, NULL, NULL, &referer, &title) != NULL)
 	    referer = NULL;
-	STBDBG(("Moving on...\n"));
-	if (parent->hist_at)
-	{
-	    wimp_wstate state;
-	    wimp_get_wind_state(parent->w, &state);
-	    STBDBG(("history: %p '%s' write scroll pos %d\n", parent->hist_at, parent->hist_at->url, state.o.box.y1));
-	    parent->hist_at->scroll_pos = state.o.y + parent->margin.y1;
-	}
+
+/* 	if (parent->hist_at) */
+/* 	{ */
+/* 	    wimp_wstate state; */
+/* 	    wimp_get_wind_state(parent->w, &state); */
+/* 	    STBDBG(("history: %p '%s' write scroll pos %d\n", parent->hist_at, parent->hist_at->url, state.o.box.y1)); */
+/* 	    parent->hist_at->scroll_pos = state.o.y + parent->margin.y1; */
+/* 	} */
     }
 
     STBDBG(("check referer '%s'\n", strsafe(referer)));
@@ -564,7 +562,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 
     if (vp)
     {
-	fe_internal_opening_view(view);
+/* 	fe_internal_opening_view(view); */
         *vp = view;
     }
 
@@ -601,8 +599,11 @@ void fe_dispose_view(fe_view v)
     else if (--v->delete_pending > 0)
 	return;
 
-     fe_internal_deleting_view(v);
-    
+    fe_internal_deleting_view(v);
+
+    /* update current state in the history list */
+    fe_history_update_current_state(v);
+     
 #if 1
     /* unlink from chain before deleting */
     if (v->prev)

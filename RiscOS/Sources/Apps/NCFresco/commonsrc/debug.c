@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <string.h>
 #include "debug.h"
 
 #define DBGPROTO(x) extern void x(const char *fmt, ...)
@@ -23,7 +24,8 @@ DBGPROTO(cnfdbg);
 DBGPROTO(imgdbg);
 DBGPROTO(ckidbg);
 DBGPROTO(accdbg);
-DBGPROTO(htsdbg);
+DBGPROTO(bendbg);
+DBGPROTO(lnkdbg);
 DBGPROTO(tabdbgn);
 DBGPROTO(prsdbgn);
 DBGPROTO(rendbgn);
@@ -32,7 +34,8 @@ DBGPROTO(cnfdbgn);
 DBGPROTO(imgdbgn);
 DBGPROTO(ckidbgn);
 DBGPROTO(accdbgn);
-DBGPROTO(htsdbgn);
+DBGPROTO(bendbgn);
+DBGPROTO(lnkdbgn);
 #pragma -v0
 #endif
 
@@ -64,8 +67,10 @@ static dbg_conf_item dbg_conf[]=
     { "ACCDBGN", 0 } ,
     { "STBDBG", 0 },
     { "STBDBGN", 0 },
-    { "HTSDBG", 0 },
-    { "HTSDBGN", 0 }
+    { "BENDBG", 0 },
+    { "BENDBGN", 0 },
+    { "LNKDBG", 0 },
+    { "LNKDBGN", 0 }
 };
 
 enum
@@ -94,8 +99,10 @@ enum
     accn,
     stb,
     stbn,
-    hts,
-    htsn
+    ben,
+    benn,
+    lnk,
+    lnkn
 };
 
 extern void dbginit(void)
@@ -133,8 +140,10 @@ extern void dbginit(void)
     ACCDBGN(("Excessive access debugging present\n"));
     STBDBG(("NCFresco debugging present\n"));
     STBDBGN(("Excessive NCFresco debugging present\n"));
-    HTSDBG(("HTTPSave debugging present\n"));
-    HTSDBGN(("Excessive HTTPSave debugging present\n"));
+    BENDBG(("HTTPSave debugging present\n"));
+    BENDBGN(("Excessive HTTPSave debugging present\n"));
+    LNKDBG(("Link debugging present\n"));
+    LNKDBGN(("Excessive link debugging present\n"));
 }
 
 extern void debug_set(const char *feature, int enable)
@@ -177,8 +186,10 @@ DBGFNDEF(accdbg, acc)
 DBGFNDEF(accdbgn, accn)
 DBGFNDEF(stbdbg, stb)
 DBGFNDEF(stbdbgn, stbn)
-DBGFNDEF(htsdbg, hts)
-DBGFNDEF(htsdbgn, htsn)
+DBGFNDEF(bendbg, ben)
+DBGFNDEF(bendbgn, benn)
+DBGFNDEF(lnkdbg, lnk)
+DBGFNDEF(lnkdbgn, lnkn)
 
 #else	/* DEBUG */
 

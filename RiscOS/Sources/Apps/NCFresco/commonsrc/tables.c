@@ -726,10 +726,26 @@ static void add_retro_col(rid_table_item *table)
 	{
 	    int  t;
 	    * CELLFOR(table, x, y) = cell;
+	    ASSERT(cell->span.x > 0);
+#if NEWGROW
+	    TABDBG(("Cell %d,%d in %d,%d table with span %d,%d has swant %d,%d\n",
+		    x, y, table->cells.x, table->cells.y,
+		    cell->span.x, cell->span.y,
+		    cell->swant.x, cell->swant.y));
+
+	    /* Must only do this once, even with ROWSPAN=N, N > 1 */
+	    if (y == cell->cell.y)
+	    {
+		cell->span.x += 1;
+		FMTDBG(("Cell rooted at %d,%d, bump span.x to %d\n", cell->cell.x, cell->cell.y, cell->span.x));
+	    }
+
+	    TABDBGN(("Cell %d,%d is replicated from %d,%d, span %d,%d\n",
+		     x, y, cell->cell.x, cell->cell.y, cell->span.x, cell->span.y));
+#else
 	    TABDBG(("Cell %d,%d in %d,%d table with span %d,%d has sleft %d\n",
 		    x, y, table->cells.x, table->cells.y,
 		    cell->span.x, cell->span.y, cell->sleft));
-	    ASSERT(cell->span.x > 0);
 	    t = cell->sleft / cell->span.x;
 
 	    if (y == cell->cell.y)
@@ -741,6 +757,7 @@ static void add_retro_col(rid_table_item *table)
 
 	    TABDBGN(("Cell %d,%d is replicated from %d,%d, new sleft %d, span %d,%d\n",
 		     x, y, cell->cell.x, cell->cell.y, t, cell->span.x, cell->span.y));
+#endif
 	}
     }
 
@@ -870,6 +887,19 @@ static void add_new_row(rid_table_item *table)
 		TABDBGN(("Root cell - bumping span.y to %d\n", cell->span.y));
 	    }
 	}
+#if NEWGROW
+	else if (cell->swant.y != cell->span.y)
+	{
+	    did_repl = 1;
+	    * CELLFOR(table, x, y) = cell;
+	    if (x == cell->cell.x)
+	    {
+		cell->span.y += 1;
+		TABDBG(("Cell %d,%d rooted so bumping span.y to %d\n", x,y,cell->span.y));
+	    }
+	    TABDBGN(("Replicating %d,%d from %d,%d, span %d,%d\n", x, y, cell->cell.x, cell->cell.y, cell->swant.x, cell->swant.y));
+	}
+#else
 	else if ( cell->sleft > 0 )
 	{
 	    did_repl = 1;
@@ -877,6 +907,7 @@ static void add_new_row(rid_table_item *table)
 	    * CELLFOR(table, x, y) = cell;
 	    cell->sleft -= 1;
 	}
+#endif
     }
 
     if (! did_repl)
@@ -896,12 +927,21 @@ static void add_new_row(rid_table_item *table)
 	    && (cell->flags & rid_cf_INF_VERT) == 0 )
 	{
 	    TABDBGN(("Considering cell %d,%d\n", cell->cell.x, cell->cell.y));
+#if NEWGROW
+	    if (cell->swant.y <= cell->span.y)
+	    {
+		TABDBGN(("Marking cell %d,%d as completed vertically, spans %d, %d\n",
+			 cell->cell.x, cell->cell.y, cell->span.x, cell->span.y));
+		cell->flags |= rid_cf_COMPLETE;
+	    }
+#else
 	    if (cell->sleft <= 0)
 	    {
 		TABDBGN(("Marking cell %d,%d as completed vertically, spans %d, %d\n",
 			 cell->cell.x, cell->cell.y, cell->span.x, cell->span.y));
 		cell->flags |= rid_cf_COMPLETE;
 	    }
+#endif
 	}
     }
 
@@ -1125,15 +1165,24 @@ static void restrain_rowspan_cells(HTMLCTX *me, rid_table_item *table)
     rid_table_cell *cell;
 
     TABDBGN(("restrain_rowspan_cells:\n"));
-    dump_table(table, NULL);
+    /*dump_table(table, NULL)*/;
 
     for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
     {
+#if NEWGROW
+	cell->flags |= rid_cf_COMPLETE;
+	/* Might not have been able to grow as the user expected */
+	if ( (cell->flags & rid_cf_INF_HORIZ) == 0)
+	    cell->swant.x = cell->span.x;
+	if ( (cell->flags & rid_cf_INF_VERT) == 0)
+	    cell->swant.y = cell->span.y;
+#else
 	if (cell->cell.y + cell->span.y > maxy)
 	{
 	    cell->span.y = maxy - cell->cell.y;
 	    TABDBG(("restrain_rowspan_cells: Restraining %d,%d to span %d\n", cell->cell.x, cell->cell.y, cell->span.y));
 	}
+#endif
     }
 }
 
@@ -2844,18 +2893,38 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     if (cell->span.y < 0)
 	cell->span.y = 1;
 
+    /* Note basic shaping information */
+    if (cell->span.y == 0)
+	cell->flags |= rid_cf_INF_VERT;
+    if (cell->span.x == 0)
+	cell->flags |= rid_cf_INF_HORIZ;
+    if (cell->span.x != 1 || cell->span.y != 1)
+	cell->flags |= rid_cf_MULTIPLE;
+    if (cell->span.x == 1 && cell->span.y == 1)
+    {       /* 1x1 cell - no more work */
+	cell->flags |= rid_cf_COMPLETE;
+    }
+
+#if NEWGROW
+    /* Record the size we want to be in swant and the size we actually
+       are in span. This means we always present a valid span size,
+       which the old approach did not. By having seperate x and y
+       target sizes, the effects of truncatating growth in one
+       direction on the other direction are greatly simplified. */
+    cell->swant = cell->span;
+    cell->span.x = 1;
+    cell->span.y = 1;
+#else
     /* SJM: added *span.x */
     /* DAF: If INF_HORIZ, *cell->span.x will always give zero! */
     cell->sleft = (cell->span.y - 1) * (cell->span.x == 0 ? 1 : cell->span.x);
+#endif
 
     table->scaff.x += 1;		/* Starting looking after this */
 
     /* That's the new cell created at the right position */
     /* Do cell spreading: horizontal now, vertical row by row as table grows */
     /* Advance scaffolding and see if still have room. */
-
-    if (cell->span.x != 1 || cell->span.y != 1)
-	cell->flags |= rid_cf_MULTIPLE;
 
     /* Select new text stream */
 
@@ -2914,25 +2983,18 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	break;
     }
 
-    if (cell->span.y == 0)
-	cell->flags |= rid_cf_INF_VERT;
-    if (cell->span.x == 0)
-	cell->flags |= rid_cf_INF_HORIZ;
-    if (cell->span.x != 1 || cell->span.y != 1)
-	cell->flags |= rid_cf_MULTIPLE;
-
     /* Common work done - can start returning now */
 
-    if (cell->span.x == 1 && cell->span.y == 1)
-    {       /* 1x1 cell - no more work */
-	cell->flags |= rid_cf_COMPLETE;
+    if (cell->flags & rid_cf_COMPLETE)
 	goto done;
-    }
 
     /* Need to ensure span.y of INF_VERT is greater than zero */
 
     if (cell->span.y == 0)
 	cell->span.y = 1;
+
+    if (cell->flags & rid_cf_COMPLETE)
+	goto done;
 
     if (cell->span.x == 1)
     {       /* Only vertical growth - done in add_row() */
@@ -2944,7 +3006,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     if ( (table->flags & rid_tf_COLS_FIXED) != 0 )
     {       /* Constrained in number of columns */
 	TABDBG(("More work needed, fixed columns\n"));
-	if (cell->span.x == 0)
+	if ( (cell->flags & rid_cf_INF_HORIZ) != 0)
 	{
 	    TABDBG(("Extend to end of row, then we're full %d...%d\n",
 		    cell->cell.x, table->cells.x));
@@ -2964,7 +3026,20 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		    table->cells.x, cell->span.x, cell->cell.x, cell->cell.y));
 	}
 	else
-	{       /* Try to fit */
+	{    
+	    /* Try to fit */
+#if NEWGROW
+	    if (cell->cell.x + cell->swant.x > table->cells.x)
+	    {       /* Filled up. Reduce span. */
+		/*table->flags |= rid_tf_NO_MORE_CELLS;*/
+		TABDBG(("cell %d,%d wanted span.x %d, but table is %d,%d, so limited to %d\n",
+			cell->cell.x, cell->cell.y, 
+			cell->swant.x, cell->swant.y,
+			table->cells.x, table->cells.y,
+			table->cells.x - cell->cell.x));
+		cell->span.x = table->cells.x - cell->cell.x;
+	    }
+#else
 	    if (cell->cell.x + cell->span.x > table->cells.x)
 	    {       /* Filled up. Reduce span. */
 		/*table->flags |= rid_tf_NO_MORE_CELLS;*/
@@ -2975,10 +3050,15 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 			table->cells.x - cell->cell.x));
 		cell->span.x = table->cells.x - cell->cell.x;
 	    }
-
+#endif
 /* 	    for (x = cell->cell.x + 1; x < table->cells.x + cell->span.x; x++) */
             /* pdh: would look better to me as this: */
+	    /* DAF: good point! */
+#if NEWGROW
+	    for (x = cell->cell.x + 1; x < cell->cell.x + cell->swant.x; x++)
+#else /* Sorry! */
 	    for (x = cell->cell.x + 1; x < cell->cell.x + cell->span.x; x++)
+#endif
 	    {       /* Replicate cell pointer */
 		TABDBG(("Repl cell %d,%d into %d,%d? ... ",
 			cell->cell.x, cell->cell.y, x, table->scaff.y));
@@ -2999,10 +3079,16 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	goto done;
     }
 
-    if (cell->span.x == 0)
+    if ( (cell->span.x & rid_cf_INF_HORIZ) != 0)
     {
+#if NEWGROW
+	TABDBG(("Cell (%d,%d) (span %d,%d, swant %d,%d) extends right as far as possible\n",
+		cell->cell.x, cell->cell.y, cell->span.x, cell->span.y, cell->swant.x, cell->swant.y));
+#else
 	TABDBG(("Cell (%d,%d) (span %d,%d, sleft %d) extends right as far as possible\n",
 		cell->cell.x, cell->cell.y, cell->span.x, cell->span.y, cell->sleft));
+#endif
+
 	for (x = cell->cell.x + 1; x < table->cells.x; x++)
 	{
 	    cellp = CELLFOR(table,x,table->scaff.y);
@@ -3017,6 +3103,10 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		break;
 	}
 
+#if NEWGROW
+	TABDBG(("INF_HORIZ cell (%d,%d) now has span (%d,%d), swant %d,%d\n",
+		cell->cell.x, cell->cell.y, cell->span.x, cell->span.y, cell->swant.x, cell->swant.y));
+#else
 	cell->span.x++;
 
 	/* DAF: 970315: Can update this value a bit now */
@@ -3024,6 +3114,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
 	TABDBG(("INF_HORIZ cell (%d,%d) now has span (%d,%d), sleft %d\n",
 		cell->cell.x, cell->cell.y, cell->span.x, cell->span.y, cell->sleft));
+#endif
 	goto done;
     }
 
@@ -3032,7 +3123,11 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     TABDBGN(("Growing to meet span of %d\n", cell->span.x));
 
+#if NEWGROW
+    for (x = 1; x < cell->swant.x; x++)
+#else
     for (x = 1; x < cell->span.x; x++)
+#endif
     {       /* Add another column if we need it */
 	if (cell->cell.x + x >= table->cells.x)
 	{
@@ -3045,12 +3140,18 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
 	if (*cellp != NULL)
 	{
-
+#if NEWGROW
+	    /* Would overlap - constrict current cell */
+	    cell->span.x = x;
+#else
 	    if ( gbf_active(GBF_NETSCAPE_OVERLAPS) )
-	    {
+	    { 
 		/* SJM: netscape overlaps in the other order so try stomping over cell to see if it works */
-		/* DAF: wasn't good enough - see below */
+		/* DAF: wasn't good enough - consider 
+		   <TABLE> <TR> <TD> <TD rowspan=2 colspan=2> 
+		   <TR> <TD colspan=2> </TABLE> */
 		rid_table_cell *oldcell = *cellp;
+		{ /* DAF: 970424: */ static int THIS_DOES_NOT_WORK_SO_DO_NOT_USE_UNLESS_PYSCHOTIC; }
 		if ( (oldcell->flags & rid_cf_INF_VERT) != 0 )
 		    oldcell->span.y--;
 		else
@@ -3061,13 +3162,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		oldcell->flags |= rid_cf_COMPLETE;
 		
 		/* DAF: Clear out ALL preceeding traces of the ealier
-		   growth. To see why, work through this example: <TABLE>
-		   <TR> <TD> <TD rowspan=2 colspan=2> <TR> <TD colspan=2>
-		   </TABLE> */
-		for (;;)
-		{
-		}
-		
+		   growth. To see why, work through this example:  */
 		/* DAF: Mark ourselves for this cell */
 		*cellp = cell;
 	    }
@@ -3076,6 +3171,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		/* Would overlap - constrict current cell */
 		cell->span.x = x;       /* ? */
 	    }
+#endif
 
 	    goto done;
 	}
@@ -3084,8 +3180,13 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	*cellp = cell;
     }
 
+#if NEWGROW
+    if (cell->swant.y == 1)
+	cell->flags |= rid_cf_COMPLETE;
+#else
     if (cell->span.y == 1)
 	cell->flags |= rid_cf_COMPLETE;
+#endif
 
 
 done:

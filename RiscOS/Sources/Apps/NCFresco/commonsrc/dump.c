@@ -959,7 +959,11 @@ extern void dump_cell(rid_table_cell *ptr, char *base)
 */		my_print("cell %d %d", ptr->cell.x, ptr->cell.y);
 		my_print("span %d %d", ptr->span.x, ptr->span.y);
 		my_print("size %d %d", ptr->size.x, ptr->size.y);
+#if NEWGROW
+		my_print("want %d %d", ptr->swant.x, ptr->swant.y);
+#else
 		my_print("sleft %d", ptr->sleft);
+#endif
 		dump_props(ptr->props);
   		dump_stream(&ptr->stream, base);
 	leave();

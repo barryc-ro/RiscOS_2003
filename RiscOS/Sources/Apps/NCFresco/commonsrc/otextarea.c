@@ -169,6 +169,12 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
+    if (update == object_redraw_HIGHLIGHT)
+    {
+	highlight_render_outline(ti, doc, hpos, bline);
+	return;
+    }
+    
     tai = ((rid_text_item_textarea *)ti)->area;
     has_caret = be_item_has_caret(doc, ti);
 
@@ -230,12 +236,6 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 	}
 
 	bbc_gwindow(g->x0, g->y0, g->x1-dx, g->y1-dy);
-    }
-
-    if (ti->flag & rid_flag_SELECTED)
-    {
-	render_set_colour(render_colour_HIGHLIGHT, doc);
-	render_item_outline(ti, hpos, bline);   /* SJM */
     }
 #endif /* BUILDERS */
 }
@@ -814,3 +814,15 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 #endif /* BUILDERS */
 
 }
+
+int otextarea_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
+{
+    rid_textarea_item *tai = ((rid_text_item_textarea *) ti)->area;
+
+    if (box)
+	memset(box, 0, sizeof(*box));
+
+    return TRUE;
+}
+
+/* eof otextarea.c */

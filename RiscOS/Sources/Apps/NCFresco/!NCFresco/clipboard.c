@@ -114,9 +114,9 @@ BOOL clipboard_eventhandler(wimp_eventstr *e, void *handle)
 #if DEBUG >= 2
 {
     int *fp = dp->filetype;
-    fprintf(stderr, "clip: datarequest from task %x flags %x\n", mp->hdr.task, dp->flags);
+    STBDBG(("clip: datarequest from task %x flags %x\n", mp->hdr.task, dp->flags));
     while (*fp != -1)
-        fprintf(stderr, "  type %03x\n", *fp++);
+        STBDBG(("  type %03x\n", *fp++));
 }
 #endif
                 if (clip__hasclipboard && dp->flags & datarequest_Clipboard)

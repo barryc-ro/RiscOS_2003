@@ -18,6 +18,9 @@ extern wimp_box on_screen_kbd_pos;
 
 #define TASK_MAGIC	0x4B534154
 
+#define DBOX_SIZE_X	800
+#define DBOX_SIZE_Y	400
+
 #define IconHigh_GetDirection		0x4E701
 #define IconHigh_Start			0x4E702
 #define IconHigh_Stop			0x4E703
@@ -46,6 +49,7 @@ extern void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags);
 
 extern int fe_print_possible(fe_view v);
 
+/* must agree with arrays in stbfe.c */
 #define fe_print_DEFAULT	0
 #define fe_print_LEGAL		1
 #define fe_print_LETTER		2
@@ -135,7 +139,7 @@ extern void fe_plugin_event_handler(int event, fe_view v);
 
 extern void fe_font_size_set(int value, BOOL absolute);
 extern BOOL fe_font_size_set_possible(int value, BOOL absolute);
-extern void fe_beeps_set(int state);
+extern void fe_beeps_set(int state, BOOL make_sound);
 extern void fe_bgsound_set(int state);
 extern void fe_scaling_set(int state);
 

@@ -653,13 +653,32 @@ static int get_highlighted(tb_bar_info *tbi)
     return -1;    
 }
 
+static int get_active(tb_bar_info *tbi)
+{
+    int i, active;
+    for (i = 0; i < tbi->n_buttons; i++)
+	if (_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140147, tbi->buttons[i].cmp, &active) == NULL &&
+	    active &&
+	    tbi->buttons[i].cmp != I_DIRECTION)	/* arrow pointing up is returned as ACTIVE but it's not what we meant */
+	    return i;
+    return -1;    
+}
+
 static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
 {
-    int cmp = tbi->buttons[get_highlighted(tbi)].cmp;
+    int cmp;
     wimp_box box;
     wimp_wstate state;
+    int highlight = get_highlighted(tbi);
+    int active = get_active(tbi);
 
+    /* if there is an active highlight then can only move off it */
+    if (active != -1 && active != highlight)
+	return FALSE;
+    
     /* get the position of the item we are moving off */
+    cmp = tbi->buttons[highlight].cmp;
+
     _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, cmp, &box);
     wimp_get_wind_state(tbi->window_handle, &state);
     coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
@@ -831,8 +850,6 @@ static void tb_bar_custom_exit_fn(void)
 
 static void tb_bar_details_entry_fn(fe_view v)
 {
-    if (v)
-	fe_open_version(v);
 }
 
 /* --------------------------------------------------------------------------*/
@@ -947,6 +964,8 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	tbi->object_handle = object_handle;
 	tbi->window_handle = window_handle(object_handle);
 
+	tbi->return_bar = bar_names[bar_num].return_bar;
+	tbi->return_component = bar_names[bar_num].return_component;
 
 #if DEBUG
 	{
@@ -1027,7 +1046,7 @@ BOOL tb_status_unstack(void)
     tb_bar_info *tbi;
     int return_bar, return_cmp;
     
-    STBDBG(("tb_status_unstack(): in\n"));
+    STBDBG(("tb_status_unstack(): in bar_list %p return_bar %d\n", bar_list, bar_list ? bar_list->return_bar : 99));
 
     /* see if we can do anything */
     if (!bar_list || bar_list->return_bar == BAR_CANT)
@@ -1105,11 +1124,23 @@ void tb_status_new(fe_view v, int bar_num)
 BOOL tb_status_highlight(BOOL gain)
 {
     tb_bar_info *tbi = bar_list;
+
+    STBDBG(("tb_status_highlight: bar %p gain %d\n", tbi, gain));
+
     if (tbi)
     {
 	if (gain)
 	{
-	    tb_bar_set_highlight(tbi, bar_names[tbi->num].initial_component, FALSE);
+	    int active = get_active(tbi);
+
+	    STBDBG(("tb_status_highlight: active %d\n", active));
+
+	    /* if a popup is open then move to the selected button */
+	    if (active != -1)
+		tb_bar_set_highlight(tbi, tbi->buttons[active].cmp, FALSE);
+	    else
+		tb_bar_set_highlight(tbi, bar_names[tbi->num].initial_component, FALSE);
+
 	    setfocus(tbi->object_handle);
 	}
 	return TRUE;
@@ -1600,7 +1631,6 @@ void tb_status_show(int small_only)
     if (!small_only)
     {
         o.x = - margin_box.x0;
-        o.y = - margin_box.y1;
 
         o.box.x0 = 0;
         o.box.x1 = screen_box.x1;
@@ -1609,11 +1639,15 @@ void tb_status_show(int small_only)
 	{
 	    o.box.y0 = text_safe_box.y1 - bar_list->height;
 	    o.box.y1 = screen_box.y1;
+
+	    o.y = - margin_box.y1;
 	}
 	else
 	{
 	    o.box.y0 = screen_box.y0;
 	    o.box.y1 = text_safe_box.y0 + bar_list->height;
+
+	    o.y = 0;
 	}
 
         open = TRUE;
@@ -1626,7 +1660,8 @@ void tb_status_show(int small_only)
     {
         if (status_state != status_OPEN)
         {
-	    if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &o.box) == NULL)
+	    if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD_BORDER, &o.box) == NULL ||
+		_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &o.box) == NULL)
 	    {
 		wimp_box lbox;
 		if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_LIGHTS_GREEN, &lbox) != NULL)
@@ -1649,9 +1684,8 @@ void tb_status_show(int small_only)
 		    o.box.y0 += text_safe_box.y0 + bar_list->height;
 		    o.box.y1 += text_safe_box.y0 + bar_list->height;
 
-		    o.y = - text_safe_box.y0 + o.box.y1 + 10;
+		    o.y = lbox.y1;
 		}
-
 
 		open = TRUE;
 		status_state = status_OPEN_SMALL;

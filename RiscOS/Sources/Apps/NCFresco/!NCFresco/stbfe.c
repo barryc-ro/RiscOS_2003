@@ -139,9 +139,7 @@
 
 #define AUTOSCROLL_EDGE_THRESHOLD	24	/* closeness to edge to start auto-scrolling in OS units */
 #define AUTOSCROLL_DELAY		100	/* delay before auto-scrolling takes affect */
-
-#define DBOX_SIZE_X	800
-#define DBOX_SIZE_Y	400
+#define AUTOSCROLL_HOVER_AREA		8	/* space to stay within during DELAY period */
 
 /* -------------------------------------------------------------------------- */
 
@@ -459,10 +457,19 @@ static void adjust_box_for_toolbar(wimp_box *box)
 {
     if (use_toolbox && tb_is_status_showing())
     {
+	wimp_box bb;
+	tb_status_box(&bb);
+	
 	if (config_display_control_top)
-	    box->y1 -= tb_status_height() + STATUS_TOP_MARGIN;
+	{
+	    if (box->y1 > bb.y0)
+		box->y1 = bb.y0;
+	}		
 	else
-	    box->y0 += tb_status_height() + STATUS_TOP_MARGIN;
+	{
+	    if (box->y0 < bb.y1)
+		box->y0 = bb.y1;
+	}
     }
 }
 
@@ -641,23 +648,27 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     
     if (doc == NULL)    /* lookup failed re visit the current one   */
     {
-	char *durl;
-	int f, ft;
-
  	frontend_complain(makeerrorf(ERR_CANT_GET_URL, strsafe(title)));
 
 	if (v->displaying)
 	{
-	    backend_doc_info(v->displaying, &f, &ft, &durl, NULL);
+	    char *durl;
+	    backend_doc_info(v->displaying, NULL, NULL, &durl, NULL);
+
 	    if (durl)
-		frontend_view_status(v, sb_status_URL, durl );
+		frontend_view_status(v, sb_status_URL, durl);
 	}
 
         session_log("", session_FAILED);
 
+	/* clear various variables that store state whilst fetching and rendering */
 	v->fetching = NULL;
 	v->had_completed = TRUE;
 
+	v->fetching_data.xscroll = v->fetching_data.yscroll = 0;
+	v->fetching_data.hist = NULL;
+	
+	/* update the toolbar */
         if (use_toolbox)
             tb_status_update_fades(fe_find_top(v));
 
@@ -729,19 +740,23 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     if (v->displaying)
     {
 	char *durl;
+
 	backend_doc_info(v->displaying, NULL, NULL, &durl, NULL);
 	previous_url = strdup(durl);
 	
 	if (fe_map_view() == v)
             fe_map_mode(NULL, NULL);
 
+	/* store the positions of this frame in the history */
+	fe_history_update_current_state(v);
+	
 	/* do before disposing */
-	frontend_fade_frame(v, render_get_colour(render_colour_BACK, v->displaying));
+	frontend_fade_frame(v, render_get_colour(render_colour_BACK, doc));
     
         backend_dispose_doc(v->displaying);
     }
 
-    /* dispose of any children */
+    /* dispose of any children - each one will call fe_history_update_current_state before being removed */
     fe_dispose_view_children(v);
 
     v->displaying = doc;
@@ -883,30 +898,42 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
         fe_status_mode(v, v->parent->browser_mode, -1);
     }
 
-    v->pending_scroll = fe_history_visit(v, url, title);
 
-    if (!v->open_transient)
-	frontend_view_redraw(v, NULL);
-
-    frontend_view_status(v, sb_status_URL, url);
-
-    if (use_toolbox)
     {
-	int f;
-	backend_doc_info(v->displaying, &f, NULL, NULL, NULL);
-	tb_status_set_secure(f & be_doc_info_SECURE);
+	/* transfer any fetching_data values over in to the real world */
+	if (v->fetching_data.hist)
+	{
+	    v->hist_at = v->fetching_data.hist;
+	    v->fetching_data.hist = NULL;
+	}
+	else
+	{
+	    fe_history_visit(v, url, title);
+	}
+
+	/* redraw window - unless transient as that hasn't been opened yet */
+	if (!v->open_transient)
+	    frontend_view_redraw(v, NULL);
+
+	/* set URL and secure flag and page info */
+	frontend_view_status(v, sb_status_URL, url);
+
+	if (use_toolbox)
+	{
+	    int f;
+	    backend_doc_info(v->displaying, &f, NULL, NULL, NULL);
+
+	    tb_status_set_secure(f & be_doc_info_SECURE);
+	    tb_status_set_lights(light_state_FETCHING);
+	}
+
+	fe_update_page_info(v);
+
+	/* scroll to top of page if it doesn't look like any better offer will come along */
+	if (!v->open_transient && (!fe_check_download_finished(v) || !v->fetching_data.yscroll))
+	    frontend_view_ensure_visable(v, -1, 0, 0);
     }
-
-    fe_update_page_info(v);
-
-    if (!fe_check_download_finished(v) || !v->pending_scroll)
-        frontend_view_ensure_visable(v, -1, 0, 0);
-
-    STBDBG(( "stbfe: fetching lights\n"));
     
-    if (use_toolbox)
-	tb_status_set_lights(light_state_FETCHING);
-
     mm_free(previous_url);
     
     return 1;
@@ -1135,6 +1162,20 @@ const char *fe_printer_name(void)
 
 #define PPrimer_ChangePrinter	0x4B100
 
+static char *print_targets[] =
+{
+    "__print",
+    "__printlegal",
+    "__printletter"
+};
+
+static int print_events[] =
+{
+    fevent_PRINT,
+    fevent_PRINT_LEGAL,
+    fevent_PRINT_LETTER
+};
+
 static os_error *fe__print(fe_view v, int size)
 {
     char *s;
@@ -1153,8 +1194,18 @@ static os_error *fe__print(fe_view v, int size)
 	_swix(PPrimer_ChangePrinter, 0);
     }
 
+    /* activate the appropriate button, and move highlight to BACK */
     if (use_toolbox)
-	tb_status_button(size == fe_print_DEFAULT ? fevent_PRINT : size == fe_print_LEGAL ? fevent_PRINT_LEGAL : fevent_PRINT_LETTER, TRUE);
+    {
+	fe_view vv;
+	
+	/* remove the view of frames to print */
+	if ((vv = fe_locate_view(print_targets[size])) != NULL)
+	    fe_dispose_view(vv);
+
+	tb_status_button(print_events[size], tb_status_button_ACTIVE);
+	tb_status_button(fevent_TOOLBAR_EXIT, tb_status_button_PRESSED);
+    }
     
     if (!e)
 	e = awp_print_document(v->displaying, config_print_scale,
@@ -1168,7 +1219,7 @@ static os_error *fe__print(fe_view v, int size)
 			       print__copies);
 
     if (use_toolbox)
-	tb_status_button(size == fe_print_DEFAULT ? fevent_PRINT : size == fe_print_LEGAL ? fevent_PRINT_LEGAL : fevent_PRINT_LETTER, FALSE);
+	tb_status_button(print_events[size], tb_status_button_INACTIVE);
     
     if (old_size != -1)
     {
@@ -1181,15 +1232,26 @@ static os_error *fe__print(fe_view v, int size)
 
 os_error *fe_print(fe_view v, int size)
 {
-    os_error *e;
+    os_error *e = NULL;
 
     STBDBG(("fe_print: v%p size %d children %p\n", v, size, v->children));
 
     if (v->children)
     {
 	char buffer[64];
+	fe_view vv;
+
 	sprintf(buffer, "ncint:openpanel?name=printframes&size=%s", size == fe_print_LEGAL ? "legal" : "letter");
-	e = frontend_open_url(buffer, NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+
+	if ((vv = fe_locate_view(print_targets[size])) != NULL)
+	    fe_dispose_view(vv);
+	else if (fe_popup_open())
+	    sound_event(snd_WARN_BAD_KEY);
+	else
+	{
+	    e = frontend_open_url(buffer, NULL, print_targets[size], NULL, fe_open_url_NO_CACHE);
+	    if (!e) tb_status_button(print_events[size], tb_status_button_ACTIVE);
+	}
     }
     else
     {
@@ -1227,7 +1289,7 @@ static os_error *set_fetch_message(fe_view v)
 
 static void check_pending_scroll(fe_view v)
 {
-    if (v->pending_scroll)
+    if (v->fetching_data.yscroll || v->fetching_data.xscroll)
     {
         wimp_box bb;
         int h, hh;
@@ -1237,10 +1299,15 @@ static void check_pending_scroll(fe_view v)
         h = bb.y1 - bb.y0;
         hh = h > -v->doc_height ? h : -v->doc_height;
 
-        if (v->pending_scroll - h >= -hh)
+	/* if the desired point is within a screen's worth of the
+	 * current end of the document then jump to it - the page will
+	 * stretch appropriately */
+        if (v->fetching_data.yscroll - h >= -hh)
         {
-            frontend_view_ensure_visable(v, -1, v->pending_scroll, v->pending_scroll);
-            v->pending_scroll = 0;
+            frontend_view_ensure_visable(v, v->fetching_data.xscroll, v->fetching_data.yscroll, v->fetching_data.yscroll);
+
+            v->fetching_data.yscroll = 0;
+	    v->fetching_data.xscroll = 0;
         }
     }
 }
@@ -1268,14 +1335,19 @@ static int fe_transient_set_size(fe_view v)
 	break;
 
     case fe_position_CENTERED:
+    {
+	int h = -v->doc_height;
+	if (h < DBOX_SIZE_Y)
+	    h = DBOX_SIZE_Y;
 	v->box.x0 = (text_safe_box.x0 + text_safe_box.x1)/2 - DBOX_SIZE_X/2;
 	v->box.x1 = v->box.x0 + DBOX_SIZE_X;
-	v->box.y0 = (text_safe_box.y0 + text_safe_box.y1)/2 - DBOX_SIZE_Y/2;
-	v->box.y1 = v->box.y0 + DBOX_SIZE_Y;
+	v->box.y0 = (text_safe_box.y0 + text_safe_box.y1)/2 - h/2;
+	v->box.y1 = v->box.y0 + h;
 	memset(&v->margin, 0, sizeof(v->margin));
 	changed = TRUE;
 	break;
-
+    }
+    
     case fe_position_FULLSCREEN:
     case fe_position_UNSET:
 	/* do nothing */
@@ -1354,6 +1426,12 @@ int fe_check_download_finished(fe_view v)
 
     if (fe_is_download_finished(top))
     {
+	/* clear various variables */
+	v->fetching = NULL;
+
+	v->fetching_data.xscroll = v->fetching_data.yscroll = 0;
+	v->fetching_data.hist = NULL;
+
 	/* update toolbar fades */
 	if (use_toolbox)
 	    tb_status_update_fades(top);
@@ -1369,10 +1447,12 @@ int fe_check_download_finished(fe_view v)
 	{
 	    BOOL changed = fe_transient_set_size(top);
 
-	    feutils_resize_window(&top->w, &top->margin, &top->box, &top->x_scroll_bar, &top->y_scroll_bar, 0, 0, fe_scrolling_NO, fe_bg_colour(top));
+ 	    feutils_resize_window(&top->w, &top->margin, &top->box, &top->x_scroll_bar, &top->y_scroll_bar, 0, 0, fe_scrolling_NO, fe_bg_colour(top));
 
 	    if (changed)
 		backend_reset_width(top->displaying, 0);
+
+	    frontend_view_redraw(top, NULL);
 	}
     }
 
@@ -1386,24 +1466,32 @@ int fe_check_download_finished(fe_view v)
     
     if (finished)
     {
-	wimp_caretstr cs;
 	fe_view vcaret;
 
 	STBDBG(( "stbfe: check download finished current link %p/%p top %p\n", v, v->current_link, top));
 
-	wimp_get_caret_pos(&cs);
-
-	/* find which frame has the caret */
-	vcaret = fe_find_window(top, cs.w);
-
-	STBDBG(( "stbfe: w %d vcaret %p\n", cs.w, vcaret));
-
-	/* if top window has the caret and children then move into thew first child frame */
-	if (vcaret == top && top->children)
+	/* if opening a transient then that definitely gets the highlight */
+	if (top->open_transient)
 	{
-	    vcaret = fe_next_frame(top, TRUE);
+	    vcaret = top;
+	}
+	else
+	{
+	    wimp_caretstr cs;
+	    wimp_get_caret_pos(&cs);
 
-	    STBDBG(( "stbfe: new vcaret %p\n", vcaret));
+	    /* find which frame has the caret */
+	    vcaret = fe_find_window(top, cs.w);
+
+	    STBDBG(( "stbfe: w %d vcaret %p\n", cs.w, vcaret));
+
+	    /* if top window has the caret and children then move into the first child frame */
+	    if (vcaret == top && top->children)
+	    {
+		vcaret = fe_next_frame(top, TRUE);
+
+		STBDBG(( "stbfe: new vcaret %p\n", vcaret));
+	    }
 	}
 
 	/* if the frame has data then update the link position */
@@ -1846,7 +1934,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
     if (refresh_only)
         child = v->children;
     else
-        fe_dispose_view_children(v);
+        fe_dispose_view_children(v); /* this should be unnecessary as visit() should have already removed them */
 
     /* ensure at top of visible screen  */
     frontend_view_ensure_visable(v, -v->margin.x0, 0, 0);
@@ -1981,7 +2069,7 @@ void fe_bgsound_set(int state)
     }
 }
 
-void fe_beeps_set(int state)
+void fe_beeps_set(int state, BOOL sound)
 {
     int new_state = state == -1 ? !config_sound_fx : state;
 
@@ -1989,11 +2077,13 @@ void fe_beeps_set(int state)
     if (new_state)
     {
 	config_sound_fx = TRUE;
-	sound_event(snd_BEEPS_ON);
+	if (sound)
+	    sound_event(snd_BEEPS_ON);
     }
     else
     {
-	sound_event(snd_BEEPS_OFF);
+	if (sound)
+	    sound_event(snd_BEEPS_OFF);
 	config_sound_fx = FALSE;
     }
 }
@@ -2058,6 +2148,11 @@ void fe_scaling_set(int state)
     else
 	config_display_scale_fit = state;
 
+    if (config_display_scale_fit)
+	gbf_flags |= GBF_AUTOFIT;
+    else
+	gbf_flags &= ~GBF_AUTOFIT;
+    
     fe_force_fit(main_view, config_display_scale_fit);
 }
 
@@ -2199,6 +2294,8 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	    backend_doc_info(current->displaying, NULL, NULL, &current_url, NULL);
 
 	strcpy(buffer, "ncint:openpanel?name=info&source=");
+
+	/* add the specifier for this buffer */
 	fe_frame_specifier_create(v, buffer, sizeof(buffer));
 
 	if (ti &&
@@ -2207,8 +2304,11 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	{
 	    int len = strlen(buffer);
 
+	    /* add the url of any link to be displayed */
 	    strcat(buffer, "&url=");
 	    len += url_escape_cat(buffer + len, link, sizeof(buffer) - len);
+
+	    /* add any TITLE shown in the link */
 	    if (title)
 	    {
 		len += sprintf(buffer + len, "&title=");
@@ -2218,6 +2318,8 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 
 	sound_event(snd_INFO_SHOW);
 	
+	STBDBG(("fe_open_info: toggle %d current %p url '%s' buf '%s'\n", toggle, current, strsafe(current_url), buffer));
+
 	if (toggle)
 	{
 	    if (current)
@@ -2534,6 +2636,10 @@ void fe_status_clear_fetch_only(void)
 
 void fe_status_open_fetch_only(fe_view v)
 {
+    /* don't show spinny if current mode is offline */
+    if (keyboard_state == fe_keyboard_OFFLINE)
+	return;
+
     if (use_toolbox)
     {
         tb_status_show(TRUE);
@@ -2609,7 +2715,11 @@ os_error *fe_status_unstack(fe_view source_v)
 	    source_v, source_v ? source_v->name : NULL,
 	    top, top ? top->name : NULL));
 
-    if (on_screen_kbd)
+    if (stbmenu_is_open())
+    {
+	stbmenu_close();
+    }
+    else if (on_screen_kbd)
     {
 	fe_keyboard_close();
     }    
@@ -2641,6 +2751,9 @@ BOOL fe_status_unstack_possible(fe_view source_v)
 {
     fe_view v;
     
+    if (stbmenu_is_open() || on_screen_kbd)
+	return TRUE;
+
     v = fe_find_top_popup(source_v ? source_v : main_view);
 
     if (v && v->open_transient)
@@ -2919,21 +3032,35 @@ static fe_view find_view(wimp_w w)
 
 static int check_edge_proximity(int pos, int left, int right, int threshold)
 {
-    int dleft = pos - left;
-    int dright = right - pos;
-    int r = 0;
+    int dleft, dright, r;
+
+    /* check threshold isn't too big for window */
+    if (threshold > (right-left)/2)
+	threshold = (right-left)/2;
+
+    /* calculate distances from window */
+    dleft = pos - left;
+    dright = right - pos;
+    r = 0;
 
     if (dleft < dright)
     {
-	if (dleft < threshold)
-	    r = -1;
+	r = dleft - threshold;
+	if (r > 0)
+	    r = 0;
     }
     else
     {
-	if (dright < threshold)
-	    r = +1;
+	r = threshold - dright;
+	if (r < 0)
+	    r = 0;
     }
     return r;
+}
+
+static int scrollsafe(int scroll)
+{
+    return scroll * 4;
 }
 
 #if 0
@@ -3102,9 +3229,9 @@ static void fe_idle_handler(void)
         return;
     }
 
-#if 0
+#if 1
     /* check for auto-scrolling */
-    if (v->w)
+    if (v->w && v->scrolling != fe_scrolling_NO)
     {
 	static int autoscroll_xedge = 0, autoscroll_yedge = 0, autoscroll_time = 0;
 	wimp_wstate state;
@@ -3116,16 +3243,28 @@ static void fe_idle_handler(void)
 	box = state.o.box;
 	adjust_box_for_toolbar(&box);
 
+	/* check edge returns how far over the threshold we are */
 	xedge = check_edge_proximity(m.x, state.o.box.x0, state.o.box.x1, AUTOSCROLL_EDGE_THRESHOLD);
 	yedge = check_edge_proximity(m.y, box.y0, box.y1, AUTOSCROLL_EDGE_THRESHOLD);
 
-	if (xedge || yedge)
+/* 	STBDBG(("autoscroll: box %d to %d, mouse %d speed %d\n", box.y0, box.y1, m.y, yedge)); */
+	
+	/* we start scrolling if we stay in one place for AUTOSCROLL_DELAY
+	 * we continue scrolling as long as we are over the threshold
+	 */
+	if (autoscroll_xedge || autoscroll_yedge)
+	{
+	    autoscroll_xedge = xedge;
+	    autoscroll_yedge = yedge;
+	    fe_scroll_request(v, &state.o, scrollsafe(xedge), scrollsafe(yedge));
+	}
+	else if (xedge || yedge)
 	{
 	    int now = alarm_timenow();
-	    if (xedge == autoscroll_xedge && yedge == autoscroll_yedge)
+	    if (abs(xedge - autoscroll_xedge) <= AUTOSCROLL_HOVER_AREA && abs(yedge - autoscroll_yedge) < AUTOSCROLL_HOVER_AREA)
 	    {
 		if (now - autoscroll_time >= AUTOSCROLL_DELAY)
-		    fe_scroll_request(v, &state.o, xedge, yedge);
+		    fe_scroll_request(v, &state.o, scrollsafe(xedge), scrollsafe(yedge));
 	    }
 	    else
 	    {
@@ -3474,6 +3613,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 	    backend_doc_locate_item(v->displaying, &m->x, &m->y, &ti);
 
 	    fe_open_info(v, ti, m->x, m->y, FALSE);
+
 	    frontend_complain(fe_status_open_toolbar(v, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
 	}
 	break;
@@ -4496,6 +4636,8 @@ void fe_event_process(void)
 		{
 		    v_old->is_selected = FALSE;
 		    fe_frame_link_array_free(v_old);
+
+		    v_old->current_link = NULL;
 		}
 
 		/* set the new view as the selected one */
@@ -4530,6 +4672,9 @@ void fe_event_process(void)
 		/* disable iconhigh */
 		_swix(IconHigh_Stop, _IN(0), 0);
 
+		/* turn off pointer */
+		fe_pointer_mode_update(pointermode_OFF);
+
 		/* if moving onto the toolbar */
 		if (e.data.c.w == tb_status_w())
 		{
@@ -4538,8 +4683,19 @@ void fe_event_process(void)
 		}
 		else
 		{
-		    /* close OSK if open */
-		    fe_keyboard_close();
+		    fe_view v;
+
+		    /* if moving onto a view then ensure the highlight is somewhere*/
+		    v = find_view(e.data.c.w);
+		    if (v)
+		    {
+			fe_ensure_highlight(v, be_link_INCLUDE_CURRENT);
+		    }
+
+		    /* close OSK if open, unless moving onto a
+                     * transient like open url or password */
+		    if (!v || !v->open_transient)
+			fe_keyboard_close();
 		}
 	    }
 	    break;
@@ -4823,6 +4979,7 @@ static int message_codes[] =
 static BOOL fe_initialise(void)
 {
     os_error *e;
+    char *s;
 
 #if HEAPCHECK
     void __heap_checking_on_all_allocates(void);
@@ -4863,6 +5020,8 @@ static BOOL fe_initialise(void)
         msgs_init();
     }
 
+    STBDBG(( "task handle: %x\n", task_handle));
+
 #if !MEMLIB
     /* Now bring up the flex system->.. */
     flex_init(program_name);
@@ -4875,16 +5034,9 @@ static BOOL fe_initialise(void)
 
     gbf_flags &= ~(GBF_FVPR | GBF_GUESS_ELEMENTS | GBF_TABLES_UNEXPECTED | GBF_NEW_FORMATTER | GBF_AUTOFIT);
     gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; /* this needs to not be defined to build a japanese version */
-
-    {
-	char *s = getenv("NCFresco$GBF");
-	if (s)
-	    gbf_flags = (int)strtoul(s, NULL, 10);
-    }
-
-    gbf_init();
-
-    STBDBG(( "task handle: %x\n", task_handle));
+    
+    if ((s = getenv("NCFresco$GBF")) != NULL)
+	gbf_flags = (int)strtoul(s, NULL, 10);
 
     /* Init our configuration */
     config_init();
@@ -4892,9 +5044,18 @@ static BOOL fe_initialise(void)
     /* Init the NVRAM based configuration */
     if (nvram_read(NVRAM_FONTS_TAG, &config_display_scale))
 	config_display_scale = config_display_scales[config_display_scale];
+
     nvram_read(NVRAM_BEEPS_TAG, &config_sound_fx);
     nvram_read(NVRAM_SOUND_TAG, &config_sound_background);
+
     nvram_read(NVRAM_SCALING_TAG, &config_display_scale_fit);
+    if (config_display_scale_fit)
+	gbf_flags |= GBF_AUTOFIT;
+    else
+	gbf_flags &= ~GBF_AUTOFIT;
+
+    gbf_init();
+
 
     stbkeys_init();
 

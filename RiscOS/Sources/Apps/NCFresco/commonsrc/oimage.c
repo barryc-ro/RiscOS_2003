@@ -52,12 +52,12 @@
 #include "object.h"
 #include "version.h"
 #include "oimage.h"
+#include "gbf.h"
 
 /* ----------------------------------------------------------------------------- */
 
 #ifndef DRAW_AREA_HIGHLIGHT
 #define DRAW_AREA_HIGHLIGHT 0
-#include "gbf.h"
 #endif
 
 #define PLINTH_PAD 16
@@ -274,14 +274,13 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
 }
 #endif
 
-#ifndef BUILDERS
 void oimage_render_border(rid_text_item *ti, antweb_doc *doc, wimp_box *bbox, int bw)
 {
     int dx = frontend_dx;
     int dy = frontend_dy;
     int x, y, w, h;
 
-    render_set_colour(render_link_colour(ti, doc), doc);
+    render_set_colour(render_text_link_colour(ti, doc), doc);
 
     x = bbox->x0 - bw;
     y = bbox->y0 - bw;
@@ -301,7 +300,6 @@ void oimage_render_border(rid_text_item *ti, antweb_doc *doc, wimp_box *bbox, in
 	bbc_rectanglefill(x + w - bw, y + bw, bw-dx, h - (bw*2)-dy);
     }
 }
-#endif
 
 int oimage_decode_align(rid_image_flags flags, int height)
 {
@@ -354,7 +352,7 @@ BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp
 	    BOOL follow_link = TRUE;
 	    if (config_display_time_activate)
 	    {
-		int was_selected = ti->flag & rid_flag_SELECTED;
+		int was_selected = backend_is_selected(doc, ti);
 
 		/* highlight the area (and dehighlight image) */
 /* 		tii->data.usemap.selection = area; */
@@ -459,6 +457,13 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
+    if (update == object_redraw_HIGHLIGHT)
+    {
+	LNKDBG(("origin %d,%d base %d,%d\n", ox, oy, hpos, bline));
+	highlight_render_outline(ti, doc, hpos, bline);
+	return;
+    }
+
     bbox.x0 = hpos + tii->hspace*2 + bw*2;
     bbox.y0 = bline - ti->max_down + tii->vspace*2 + bw*2;
     bbox.x1 = bbox.x0 + ti->width - tii->hspace*2*2 - bw*2*2;
@@ -486,9 +491,9 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	oimage_render_text(ti, doc, fs, &bbox, tii->alt);
     }
 
-    if ((ti->flag & rid_flag_SELECTED) || bw)
+    if (bw)
     {
-	oimage_render_border(ti, doc, &bbox, bw*2);
+ 	oimage_render_border(ti, doc, &bbox, bw*2);
 
 #if DRAW_AREA_HIGHLIGHT
         if (tii->usemap && tii->data.usemap.selection)
@@ -652,6 +657,24 @@ void oimage_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 #endif /* BUILDERS */
 }
 
+#if 1
+int oimage_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
+{
+    rid_text_item_image *tii = (rid_text_item_image *)ti;
+
+    if (box)
+    {
+	memset(box, 0, sizeof(*box));
+#if 0
+	box->x0 =   tii->hspace*2 + tii->bwidth*2;
+	box->x1 = - box->x0;
+	box->y0 =   tii->vspace*2 + tii->bwidth*2;
+	box->y1 = - box->y0;
+#endif
+    }
+    return TRUE;
+}
+#else
 void oimage_update_highlight(rid_text_item *ti, antweb_doc *doc)
 {
     rid_text_item_image *tii = (rid_text_item_image *)ti;
@@ -698,6 +721,7 @@ void oimage_update_highlight(rid_text_item *ti, antweb_doc *doc)
         antweb_update_item_trim(doc, ti, &trim, TRUE);
     }
 }
+#endif
 
 /* ----------------------------------------------------------------------------- */
 

@@ -2230,22 +2230,30 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
     {
 	MemCheck_checking checking;
 
-	flexmem_noshift();
+	if (i->plotter == plotter_SPRITE)
+	{
+	    flexmem_noshift();
 
-	if (i->id.tag == sprite_id_name)
-	    ep = sprite_select_rp(*(i->areap), &(i->id), (sprite_ptr *) &sph);
+	    if (i->id.tag == sprite_id_name)
+		ep = sprite_select_rp(*(i->areap), &(i->id), (sprite_ptr *) &sph);
+	    else
+		sph = (sprite_header *) i->id.s.addr;
+
+	    checking = MemCheck_SetChecking(0, 0);
+
+	    IMGDBG(("Sprite is at 0x%p, mode value is 0x%x\n", sph, sph ? sph->mode : 0));
+
+	    ex = bbc_modevar(sph->mode, bbc_XEigFactor);
+	    ey = bbc_modevar(sph->mode, bbc_YEigFactor);
+	    l2bpp = bbc_modevar(sph->mode, bbc_Log2BPP);
+
+	    MemCheck_RestoreChecking(checking);
+	}
 	else
-	    sph = (sprite_header *) i->id.s.addr;
-
-	checking = MemCheck_SetChecking(0, 0);
-
-	IMGDBG(("Sprite is at 0x%p, mode value is 0x%x\n", sph, sph ? sph->mode : 0));
-
-	ex = bbc_modevar(sph->mode, bbc_XEigFactor);
-	ey = bbc_modevar(sph->mode, bbc_YEigFactor);
-	l2bpp = bbc_modevar(sph->mode, bbc_Log2BPP);
-
-	MemCheck_RestoreChecking(checking);
+	{
+	    ex = ey = 1;
+	    l2bpp = 5;
+	}
 
 	if (ep)
 	{

@@ -211,7 +211,7 @@ static void center_and_right_align_adjustments(RID_FMT_STATE *fmt)
     const int width = fmt->text_pos.x;
     const int spare = display_width - width;
 
-    FMTDBG(("center_and_right_align_adjustments: center_width %d, text_pos.x %d, flags %x, spare %d\n",
+    FMTDBGN(("center_and_right_align_adjustments: center_width %d, text_pos.x %d, flags %x, spare %d\n",
 	    display_width, width, fmt->SOL->st.flags & rid_sf_ALIGN_MASK, spare));
 
     switch (new->first->st.flags & rid_sf_ALIGN_MASK)
@@ -736,8 +736,6 @@ static void entry_fixes_table(rid_table_item *table)
 
     for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
     {
-/*	if (cell->sleft > 0)
-	    cell->span.y -= cell->sleft;*/
 	entry_fixes_stream(&cell->stream);
     }
 }
@@ -772,8 +770,6 @@ static void exit_fixes_table(rid_table_item *table)
 
     for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
     {
-/*	if (cell->sleft > 0)
-	    cell->span.y += cell->sleft;*/
 	exit_fixes_stream(&cell->stream);
     }
 }

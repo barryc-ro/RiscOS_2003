@@ -229,6 +229,9 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
         return;
 #endif
 
+    if (update == object_redraw_HIGHLIGHT)
+	return;
+
     symfont = FALSE;
     fh = webfonts[ti->st.wf_index].handle;
 

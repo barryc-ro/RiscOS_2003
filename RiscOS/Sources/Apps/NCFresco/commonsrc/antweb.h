@@ -191,6 +191,14 @@ extern void antweb_build_selection_list(antweb_doc *doc);
 extern rid_text_item *be_doc_read_caret(antweb_doc *doc);
 extern BOOL be_item_has_caret(antweb_doc *doc, rid_text_item *ti);
 
+/* From highlight.c */
+
+/* extern void highlight_render(int ox, int oy, const wimp_box *g, antweb_doc *doc); */
+extern void highlight_render_outline(rid_text_item *ti, antweb_doc *doc, int hpos, int bline);
+extern void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw);
+extern void highlight_offset_border(wimp_box *box);
+extern void highlight_render(wimp_redrawstr *rr, antweb_doc *doc);
+
 #endif
 
 /* eof antweb.h */

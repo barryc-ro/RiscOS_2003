@@ -425,7 +425,7 @@ static key_list rca_web_keys[] =
     { kbd_handset_PRINT,		fevent_PRINT },
     { akbd_PrintK,			fevent_TOOLBAR_PRINT + fevent_WINDOW },
 
-    { kbd_handset_MENU,			fevent_INFO_PAGE },
+    { kbd_handset_MENU,			fevent_TOOLBAR_DETAILS },
 
     { kbd_handset_TOOLBAR,          fevent_TOGGLE_STATUS },
     { kbd_handset_OPEN,             fevent_OPEN_URL+fevent_WINDOW },
@@ -440,7 +440,7 @@ static key_list rca_web_keys[] =
     { kbd_rca_GOTO,		fevent_OPEN_URL },
     { kbd_rca_SEARCH,		fevent_SEARCH_PAGE },
     { kbd_rca_SEND,		fevent_SEND_URL },
-    { kbd_rca_INFO,		fevent_INFO_PAGE },
+    { kbd_rca_INFO,		fevent_TOOLBAR_DETAILS },
 
     { 0 }
 };
@@ -561,7 +561,10 @@ static key_list platform_riscos_keys[] =
     { akbd_Ctl + akbd_Fn+2,		    fevent_CLOSE+fevent_WINDOW },
     { akbd_Sh + akbd_Ctl + akbd_Fn + 1,	    fevent_GLOBAL_TOGGLE_ANTI_TWITTER },
     { akbd_Sh + akbd_Ctl + akbd_Fn11,	    fevent_GLOBAL_OPEN_MEM_DUMP },
-    { 27, fevent_TOGGLE_STATUS },
+
+    { 27, fevent_TOOLBAR_EXIT },
+    { akbd_Fn+4, fevent_HISTORY_BACK },
+    { akbd_Fn+5, fevent_HISTORY_FORWARD },
     
     { 0 }
 };

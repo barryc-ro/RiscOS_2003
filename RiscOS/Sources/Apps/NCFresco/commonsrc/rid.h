@@ -178,6 +178,10 @@ typedef SHORTISH rid_flag;
 #define rid_flag_RINDENT        0x4000  /* Right indent (or not! only one level) */
 #define rid_flag_WIDE_FONT	0x8000	/* item contains some 16bit characters */
 
+
+#define CLEARING_ITEM(ti) (((ti)->flag & rid_flag_CLEARING) != 0)
+#define FLOATING_ITEM(ti) (((ti)->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) != 0)
+
 #define RID_COLOUR(rid) ( ( (rid)->st.flags >> STYLE_COLOURNO_SHIFT ) \
                          & STYLE_COLOURNO_MASK )
 
@@ -954,7 +958,11 @@ struct rid_table_cell
         rid_cell_flags          flags;          /* eg NOWRAP flag */
         intxy                   cell;           /* The root cell */
         intxy                   span;           /* Span in cells */
+#if NEWGROW
+	intxy			swant;		/* Span we want, x,y seperately */
+#else
         int                     sleft;          /* Span left to grow - stop when zero */
+#endif
         intxy                   size;           /* Cell's size in pixels - incl borders */
         VALUE                   userwidth;      /* Support for Netvirus */
         VALUE                   userheight;     /* Support for Netvirus */

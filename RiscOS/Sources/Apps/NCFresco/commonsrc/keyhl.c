@@ -21,22 +21,6 @@
 #include "stream.h"
 #include "util.h"
 
-#ifndef LINK_DEBUG
-#define LINK_DEBUG 0
-#endif
-
-#if LINK_DEBUG
-#define LKDBG(a) fprintf a
-#else
-#define LKDBG(a)
-#endif
-
-#if LINK_DEBUG >= 2
-#define LKDBGN(a) fprintf a
-#else
-#define LKDBGN(a)
-#endif
-
 /* ----------------------------------------------------------------------------- */
 
 static int item_to_descriptor_index(be_doc doc, be_item ti)
@@ -228,7 +212,7 @@ void antweb_build_selection_list(be_doc doc)
 #endif
     int count;
 
-    LKDBG((stderr, "antweb_build_selection_list(): doc %p old list %p\n", doc, doc->selection_list.list));
+    LNKDBG(("antweb_build_selection_list(): doc %p old list %p\n", doc, doc->selection_list.list));
 
     /* free any old list */
     mm_free(doc->selection_list.list);
@@ -312,7 +296,7 @@ void antweb_build_selection_list(be_doc doc)
     doc->selection_list.count = count;
     doc->selection_list.list = link_list;
 
-    LKDBG((stderr, "antweb_build_selection_list(): count %d new list %p\n", count, doc->selection_list.list));
+    LNKDBG(("antweb_build_selection_list(): count %d new list %p\n", count, doc->selection_list.list));
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -332,13 +316,13 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 
     int i;
 
-    LKDBG((stderr, "antweb_highlight_scan_xy: doc %p initial %p from x=%d-%d y=%d-%d flags %x\n", doc, initial, from->x0, from->x1, from->y0, from->y1, flags));
-    LKDBG((stderr, "antweb_highlight_scan_xy: bounds from x=%d-%d y=%d-%d\n", bounds->x0, bounds->x1, bounds->y0, bounds->y1));
+    LNKDBGN(("antweb_highlight_scan_xy: doc %p initial %p from x=%d-%d y=%d-%d flags %x\n", doc, initial, from->x0, from->x1, from->y0, from->y1, flags));
+    LNKDBGN(("antweb_highlight_scan_xy: bounds from x=%d-%d y=%d-%d\n", bounds->x0, bounds->x1, bounds->y0, bounds->y1));
 
     /* see if there is an aref we mustn't match */
     start_aref = (flags & be_link_INCLUDE_CURRENT) == 0 && initial && initial->tag == doc_selection_tag_AREF ? initial->data.aref : NULL;
 
-    LKDBG((stderr, "antweb_highlight_scan_xy: start_aref %p\n", start_aref));
+    LNKDBGN(("antweb_highlight_scan_xy: start_aref %p\n", start_aref));
 
     /* go through all the elements looking for the minimum distance */
     for (i = 0, link = doc->selection_list.list; i < doc->selection_list.count; i++, link++)
@@ -347,13 +331,13 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	int dist1 = -1, secdist1 = INT_MAX;
 	BOOL on_screen = FALSE;
 
- 	LKDBGN((stderr, "                        : link %p item %p box    x=%d-%d y=%d-%d\n", link, link->item.data.text, link->bbox.x0, link->bbox.x1, link->bbox.y0, link->bbox.y1));
+ 	LNKDBGN(("                        : link %p item %p box    x=%d-%d y=%d-%d\n", link, link->item.data.text.item, link->bbox.x0, link->bbox.x1, link->bbox.y0, link->bbox.y1));
 
 	if (link->item.tag == doc_selection_tag_TEXT)
 	{
 	    if (start_aref != NULL && link->item.data.text.item->aref == start_aref)	/* mustn't be part of same link */
 	    {
- 		LKDBGN((stderr, "                        : same aref\n"));
+ 		LNKDBGN(("                        : same aref\n"));
 		continue;
 	    }
 	}
@@ -373,7 +357,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	/* if not visible then continue on to next immediately */
 	if (!on_screen)
 	{
- 	    LKDBGN((stderr, "                        : not on screen\n"));
+ 	    LNKDBGN(("                        : not on screen\n"));
 	    continue;
 	}
 
@@ -468,12 +452,12 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 
     if ((flags & be_link_DONT_WRAP_H) == 0 && min_link == NULL)
     {
-	LKDBG((stderr, "antweb_highlight_scan_xy: using fallback link %p dist %d sec %d\n", min_link1, min_dist1, min_secdist1));
+	LNKDBG(("antweb_highlight_scan_xy: using fallback link %p dist %d sec %d\n", min_link1, min_dist1, min_secdist1));
 	min_link = min_link1;
     }
     else
     {
-	LKDBG((stderr, "antweb_highlight_scan_xy: using main link %p dist %d sec %d\n", min_link, min_dist, min_secdist));
+	LNKDBG(("antweb_highlight_scan_xy: using main link %p dist %d sec %d\n", min_link, min_dist, min_secdist));
     }
 
     return min_link;
@@ -487,7 +471,7 @@ static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_sel
     wimp_box bbox;
     be_item item = NULL;
 
-    LKDBG((stderr, "antweb_highlight_scan_link: doc %p selection %p item %p flags %x tag %d\n", doc, initial, initial ? initial->data.text.item : 0, flags, initial ? initial->tag : -1));
+    LNKDBG(("antweb_highlight_scan_link: doc %p selection %p item %p flags %x tag %d\n", doc, initial, initial ? initial->data.text.item : 0, flags, initial ? initial->tag : -1));
 
     if (initial == NULL)
 	return NULL;
@@ -538,7 +522,7 @@ static be_item scan_links_2D(be_doc doc, be_item item, int flags, const wimp_box
     antweb_selection_t sel;
     antweb_selection_descr *link;
 
-    LKDBG((stderr, "backend_highlight_link_2D: doc %p item %p aref %p flags %x\n", doc, item, item ? item->aref : NULL, flags));
+    LNKDBG(("backend_highlight_link_2D: doc %p item %p aref %p flags %x\n", doc, item, item ? item->aref : NULL, flags));
 
     if (item == NULL)
     {
@@ -576,7 +560,7 @@ static be_item scan_links_2D(be_doc doc, be_item item, int flags, const wimp_box
 	link = antweb_highlight_scan_link(doc, &sel, flags, bounds);
     }
 
-    LKDBG((stderr, "backend_highlight_link_2D: return link %p tag %d item %p\n", link, link ? link->item.tag : 0, link ? link->item.data.text.item : 0));
+    LNKDBG(("backend_highlight_link_2D: return link %p tag %d item %p\n", link, link ? link->item.tag : 0, link ? link->item.data.text.item : 0));
 
     return descriptor_to_item(link);
 }
@@ -588,7 +572,7 @@ static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp
     be_item ti;
     rid_aref_item *aref;
 
-    LKDBG((stderr, "scan_links_linear: doc %p item %p flags %x\n", doc, item, flags));
+    LNKDBG(("scan_links_linear: doc %p item %p flags %x\n", doc, item, flags));
 
     /* get increment and end */
     inc = flags & be_link_BACK ? -1 : +1;
@@ -621,7 +605,7 @@ static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp
     /* search from current position to end of list */
     while (i != term)
     {
-/* 	LKDBG((stderr, "scan_links_linear: 1st pass i %d\n", i)); */
+/* 	LNKDBG(("scan_links_linear: 1st pass i %d\n", i)); */
 
 	ti = descriptor_to_item(&doc->selection_list.list[i]);
 
@@ -650,7 +634,7 @@ static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp
 
 	while (i != term)
 	{
-/* 	    LKDBG((stderr, "scan_links_linear: 2nd pass i %d\n", i)); */
+/* 	    LNKDBG(("scan_links_linear: 2nd pass i %d\n", i)); */
 
 	    ti = descriptor_to_item(&doc->selection_list.list[i]);
 
@@ -664,7 +648,7 @@ static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp
 	}
     }
 
-    LKDBG((stderr, "scan_links_linear: return i %d item %p\n", i, ti));
+    LNKDBG(("scan_links_linear: return i %d item %p\n", i, ti));
 
     return i == term ? NULL : ti;
 }
@@ -700,12 +684,33 @@ static int adjust_flag(int old_flag, int select, BOOL *changed)
  * redraws the whole box.
  */
 
-static void be_update_item_highlight(be_doc doc, be_item ti)
+static void be_update_item_highlight(be_doc doc, be_item ti, BOOL selected)
 {
+    wimp_box trim_box;
+    BOOL needs_box = TRUE;
+
+    LNKDBG(("be_update_item_highlight: doc %p ti %p tag %d\n", doc, ti, ti ? ti->tag : -1));
+
+/*     if (object_table[ti->tag].update_highlight) */
+/*         object_table[ti->tag].update_highlight(ti, doc); */
+/*     else */
+/*         antweb_update_item(doc, ti); */
+
     if (object_table[ti->tag].update_highlight)
-        object_table[ti->tag].update_highlight(ti, doc);
+	needs_box = object_table[ti->tag].update_highlight(ti, doc, 0, &trim_box);
     else
-        antweb_update_item(doc, ti);
+	memset(&trim_box, 0, sizeof(trim_box));
+
+    if (needs_box)
+    {
+	wimp_box bbox;
+	backend_doc_item_bbox(doc, ti, &bbox);
+
+	highlight_offset_border(&bbox);
+	highlight_update_border(doc, &bbox, selected);
+    }
+    else
+	antweb_update_item_trim(doc, ti, &trim_box, TRUE);
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -721,7 +726,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
     be_item ti;
     wimp_box bounds, margins;
 
-    LKDBG((stderr, "Highlight from item %p, flags=0x%x, line=%p\n", item, flags, item ? item->line : NULL));
+    LNKDBG(("Highlight from item %p, flags=0x%x, line=%p\n", item, flags, item ? item->line : NULL));
 
     /* get the screen bounds for visibility */
     frontend_view_bounds(doc->parent, &bounds);
@@ -774,7 +779,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
         {
 	    int x, y;
 
-	    LKDBG((stderr, "New link at %p\n", ti));
+	    LNKDBG(("New link at %p\n", ti));
 
 	    if ((flags & be_link_VISIBLE) == 0 || (flags & be_link_MOVE_POINTER))
 		stream_find_item_location(ti, &x, &y);
@@ -804,7 +809,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		    else
 			offset = flags & be_link_BACK ? -1 : 0;			/* end : beginning */
 #endif
-		    LKDBG((stderr, "move_highlight: caretise flags %x old offset %d offset %d old item %p old input %p\n", flags, doc->selection.data.text.input_offset, offset, item, doc->selection.data.text.item));
+		    LNKDBG(("move_highlight: caretise flags %x old offset %d offset %d old item %p old input %p\n", flags, doc->selection.data.text.input_offset, offset, item, doc->selection.data.text.item));
 		    backend_set_caret(doc, ti, offset);
 		}
 		else
@@ -822,7 +827,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
         }
     }
 
-    LKDBG((stderr, "About to return %p\n", ti));
+    LNKDBG(("About to return %p\n", ti));
 
     return ti;
 }
@@ -839,8 +844,9 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 static void be_update_link(be_doc doc, antweb_selection_t *selection, int selected)
 {
     be_item ti;
-    BOOL changed;
 
+    LNKDBG(("be_update_link: doc %p type %d selected %d\n", doc, selection ? selection->tag : -1, selected));
+    
     if (selection == NULL)
 	return;
 
@@ -851,26 +857,28 @@ static void be_update_link(be_doc doc, antweb_selection_t *selection, int select
 
     case doc_selection_tag_TEXT:
 	ti = selection->data.text.item;
-	ti->flag = adjust_flag(ti->flag, selected, &changed);
-	if (changed)
-	    be_update_item_highlight(doc, ti);
+
+	ti->flag = adjust_flag(ti->flag, selected, NULL);
+
+	be_update_item_highlight(doc, ti, selected);
+	
 	break;
 
     case doc_selection_tag_AREF:
 	for (ti = selection->data.aref->first; ti && ti->aref == selection->data.aref; ti = rid_scanfr(ti))
 	{
-	    ti->flag = adjust_flag(ti->flag, selected, &changed);
+	    ti->flag = adjust_flag(ti->flag, selected, NULL);
 
-	    if (changed)
-		be_update_item_highlight(doc, ti);
+	    be_update_item_highlight(doc, ti, selected);
 	}
 	break;
 
     case doc_selection_tag_MAP:
 	ti = selection->data.map.item;
-	ti->flag = adjust_flag(ti->flag, selected, &changed);
-	if (changed)
-	    be_update_item_highlight(doc, ti);
+
+	ti->flag = adjust_flag(ti->flag, selected, NULL);
+
+	be_update_item_highlight(doc, ti, selected);
 	break;
     }
 }
@@ -896,7 +904,7 @@ void backend_update_link_activate(be_doc doc, be_item item, int activate)
 	    ti->flag |= rid_flag_ACTIVATED;
 	else
 	    ti->flag &= ~rid_flag_ACTIVATED;
-	be_update_item_highlight(doc, ti);
+	be_update_item_highlight(doc, ti, TRUE);
     }
 }
 
@@ -1049,17 +1057,19 @@ void backend_remove_highlight(be_doc doc)
 {
     /* see if anyone had the caret */
     be_item old_ti;
+    antweb_selection_t old_sel;
 
     if (!doc)
 	return;
 
     old_ti = be_doc_read_caret(doc);
-
-    /* redraw the selected links */
-    be_update_link(doc, &doc->selection, FALSE);
+    old_sel = doc->selection;
 
     /* set none selected */
     doc->selection.tag = doc_selection_tag_NONE;
+
+    /* redraw the selected links */
+    be_update_link(doc, &old_sel, FALSE);
 
     /* tell the object the caret has been removed */
     if (old_ti)
@@ -1070,10 +1080,10 @@ void backend_remove_highlight(be_doc doc)
 #ifdef STBWEB
 	/* Give the window the input focus but no visable caret */
 	frontend_view_caret(doc->parent, 0, 0, -1, 0);
+#endif
     }
-#else
+#ifndef STBWEB
         /* pdh: I think this is what desktop Fresco wants */
-    }
     frontend_view_caret( doc->parent, 0, 0, -1, FALSE );
 #endif
 }
@@ -1087,6 +1097,31 @@ be_item backend_read_highlight(be_doc doc, BOOL *had_caret)
     }
 
     return selection_to_item(&doc->selection);
+}
+
+int backend_is_selected(be_doc doc, be_item ti)
+{
+    antweb_selection_t *sel = &doc->selection;
+    BOOL selected = FALSE;
+
+    if (sel) switch (sel->tag)
+    {
+    case doc_selection_tag_NONE:
+	break;
+
+    case doc_selection_tag_TEXT:
+	selected = ti == sel->data.text.item;
+	break;
+
+    case doc_selection_tag_AREF:
+	selected = ti->aref == sel->data.aref;
+	break;
+
+    case doc_selection_tag_MAP:
+	selected = ti == sel->data.map.item;
+	break;
+    }
+    return selected;
 }
 
 /* ----------------------------------------------------------------------------- */

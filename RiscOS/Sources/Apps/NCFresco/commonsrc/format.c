@@ -370,9 +370,11 @@ static int largest_implied_table_width(rid_table_item *table,
     const int max = (horiz ? table->cells.x : table->cells.y);
     int *widths = (horiz ? table->hwidth : table->vwidth);
     const int pct_used = widths[PCT_RAW];
+    int left;
     int x;
     int width_non_pct = 0;
     int widest = 0;
+    int N;
 
     FMTDBG(("largest_implied_table_width(%p %s %s): %d%% used\n",
 	    table,
@@ -407,15 +409,13 @@ static int largest_implied_table_width(rid_table_item *table,
 		const int z = (100 * q ) / a;
 		if (z > widest)
 		    widest = z;
+		FMTDBGN(("q %d, a %d, z %d, widest %d\n", q,a,z,widest));
 	    }
 	    else
 	    {
 		width_non_pct += q;
 	    }
 	}
-
-	FMTDBG(("largest_implied_table_width: widest %d, width_non_pct %d\n",
-		widest, width_non_pct));
 
 	/* Do a similar calculation for areas not covered by cells with
 	   percentage specifictions. */
@@ -428,11 +428,14 @@ static int largest_implied_table_width(rid_table_item *table,
 		widest = x;
 	}
 
+	FMTDBG(("largest_implied_table_width: widest %d, width_non_pct %d\n",
+		widest, width_non_pct));
+
 	/* For each column with a percentage, we need to scale the
            minwidth value according to our newly calculated narrowest
-           value. Be wary of small integer problems. */
+           value. Be wary of small integer problems. 970424: Bitten!  */
 
-	for (x = 0; x < max; x++)
+	for (left = widest, N = x = 0; x < max; x++)
 	{
 	    if ( table->colspans[x].flags & colspan_flag_PERCENT )
 	    {
@@ -441,17 +444,57 @@ static int largest_implied_table_width(rid_table_item *table,
 		const int f = table->colspans[x].width[PCT_RAW];
 		if (f > 0)
 		{
-		    const int z = (widest * f + 50) / 100;
+		    const int z = (widest * f /*+ 50*/) / 100;
+		    const int permit = z > left ? left : z;
 #if 1
 		    const int q = table->colspans[x].width[slot];
 
 		    /* Probably guaranteed, but I'm not very good with
 		       errors in integer arithmetic */
-		    FMTDBG(("col %d, f %d, z %d, q%d\n", x, f, z, q));
-		    ASSERT(z >= q);
+		    FMTDBG(("col %d, f %d, z %d, q %d, permit %d, left %d\n", x, f, z, q, permit, left));
+		    /*ASSERT(permit >= q); pcent6.html */
 #endif
-		    table->colspans[x].width[slot] = z;
+		    if (permit > q) 
+		    {
+			table->colspans[x].width[slot] = permit;
+			left -= permit;
+			N += 1;
+		    }
+		    else
+		    {
+			left -= q;
+		    }
 		}
+	    }
+	}
+
+	if (left > 0)
+	{
+	    if (pct_used == 100)
+	    {
+		ASSERT(left < N);
+
+		/* Round robin distribute single pixels until finished */
+		for (x = 0; left > 0 && x < max; x++)
+		    if ( table->colspans[x].flags & colspan_flag_PERCENT )
+		    {
+			table->colspans[x].width[slot] += 1;
+			left -= 1;
+		    }
+		ASSERT(left == 0);
+	    }
+	    else
+	    {
+#if 0
+		/* not elegant, but it's late */
+		while (left > 0)
+		    for (x = 0; left > 0 && x < max; x++)
+			if ( (table->colspans[x].flags & colspan_flag_PERCENT) == 0 )
+			{
+			    table->colspans[x].width[slot] += 1;
+			    left -= 1;
+			}
+#endif
 	    }
 	}
 
@@ -509,6 +552,10 @@ static int tiresome_pct_forced_change(rid_table_item *table, BOOL horiz, int bia
 	pcp_cell cell = &table->colspans[x];
 	pcp_group grp = cell->first_start;
 
+	if (cell->flags & colspan_flag_PERCENT_THIS)
+	    if (cell->width[PCT_RAW] > bias2)
+		cell->width[PCT_RAW] += bias;
+
 	if (grp != NULL)
 	{
 	    do
@@ -518,18 +565,14 @@ static int tiresome_pct_forced_change(rid_table_item *table, BOOL horiz, int bia
 			grp->width[PCT_RAW] += bias;
 		grp = grp->next_start;
 	    } while (grp != NULL);
-
-	    if (cell->flags & colspan_flag_PERCENT_THIS)
-		if (cell->width[PCT_RAW] > bias2)
-		    cell->width[PCT_RAW] += bias;
-
-	    total = pct_raw_recalc(table, horiz);
-
-	    if (total == target)
-		break;
-
-	    ASSERT(total == target - 1 || total == target + 1);
 	}
+
+	total = pct_raw_recalc(table, horiz);
+	
+	if (total == target)
+	    break;
+	
+	ASSERT(total == target - 1 || total == target + 1);
     }
 
     ASSERT(total == target);
@@ -592,6 +635,7 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     int total;
     int max = (horiz ? table->cells.x : table->cells.y), x;
     int *master = HORIZCELLS(table,horiz);
+    int N;
 
     FMTDBG(("normalise_percentages(%p %s): starting\n",
 	    table, HORIZVERT(horiz)));
@@ -663,6 +707,8 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 
 	    /* All entries have percentage and not 100%, so need to scale
 	       until we do have 100% in total. */
+
+
 
 	    while (total <= 50)
 	    {
@@ -1118,7 +1164,8 @@ static int decide_which_slot (antweb_doc *doc,
 
   The fwidth supplied is the space we have available to us - ie the
   width the stream WILL be formatted to. If we exceed this and we are
-  not an outermost table, then we have got things wrong.
+  not an outermost table, then we have got things wrong. The width is
+  the margin distance and hence INCLUDES borders etc.
 
 
   */
@@ -1176,6 +1223,8 @@ static void allocate_widths_table(antweb_doc *doc,
 
   This is also the time when we might be considering <IMG WIDTH=50%>
   type elements.
+
+  The fwidth value is the full margin distance.
 
   */
 

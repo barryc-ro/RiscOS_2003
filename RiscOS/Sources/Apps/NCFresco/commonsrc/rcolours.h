@@ -5,19 +5,19 @@
 
 /* rcolours.h */
 
-#define render_colour_PLAIN	0
-#define render_colour_AREF	1
-#define render_colour_CREF	2
-#define render_colour_BACK	3
-#define render_colour_ACTION	4
-#define render_colour_WRITE	5
-#define render_colour_LINE_L	6
-#define render_colour_LINE_D	7
-#define render_colour_INPUT_F	8
-#define render_colour_INPUT_B	9
-#define render_colour_INPUT_S	10
-#define render_colour_HIGHLIGHT 11
-#define render_colour_ACTIVATED 12
+#define render_colour_PLAIN	0	/* text fg, HR fill colour, TEXT, PASSWORD, TEXTAREA fg */
+#define render_colour_AREF	1	/* colour for text links and image links borders (link) */
+#define render_colour_CREF	2	/* colour for visited links (vlink) */
+#define render_colour_BACK	3	/* page background colour */
+#define render_colour_ACTION	4	/* pressed bg colour for SUBMIT, RESET, BUTTON items */
+#define render_colour_WRITE	5	/* bg colour for TEXT, PASSWORD, TEXTAREA */
+#define render_colour_LINE_L	6	/* colour for 3D plinthing */
+#define render_colour_LINE_D	7	/* colour for 3D plinthing */
+#define render_colour_INPUT_F	8	/* fg colour for SELECT & SUBMIT, RESET, BUTTON items */
+#define render_colour_INPUT_B	9	/* unselected bg colour for SELECT & SUBMIT, RESET, BUTTON items */
+#define render_colour_INPUT_S	10	/* selected bg colour for SELECT & SUBMIT, RESET, BUTTON items */
+#define render_colour_HIGHLIGHT 11	/* col for highlight box */
+#define render_colour_ACTIVATED 12	/* col for activating links (alink) */
 #define render_colour_RGB       13
 
 /* pdh: render_colour_RGB in the bottom byte means that the top three bytes

@@ -442,7 +442,7 @@ extern void backend_remove_highlight(be_doc doc);
 extern be_item backend_read_highlight(be_doc doc, BOOL *had_caret);
 extern void backend_set_caret(be_doc doc, be_item ti, int offset);
 extern void backend_set_highlight(be_doc doc, be_item item);
-
+extern int backend_is_selected(be_doc doc, be_item ti);
 
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);
@@ -545,9 +545,9 @@ extern int backend_doc_encoding(be_doc doc, int encoding);
 /* Functions in layout.c */
 /* Write out frame layout as a table, return the number of frames */
 
-typedef void (*be_layout_write_table_fn)(FILE *f, const char *frame_specifier);
+typedef void (*be_layout_write_table_fn)(FILE *f, const char *frame_specifier, int w, int h);
 
-extern void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix);
+extern void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix, int w, int h);
 
 #endif /* __interface_h */
 

@@ -266,6 +266,9 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
+    if (update == object_redraw_HIGHLIGHT)
+	return;
+    
     /* quick exit if there is no text to display */
     if (rh->texts.data[tit->data_off] == 0)
 	return;
@@ -506,13 +509,14 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 #endif /* BUILDERS */
 }
 
-void otext_update_highlight(rid_text_item *ti, antweb_doc *doc)
+int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
-    wimp_box trim;
-    memset(&trim, 0, sizeof(trim));
+    memset(box, 0, sizeof(*box));
 
-    trim.x1 = ti->pad + 2;
-    antweb_update_item_trim(doc, ti, &trim, TRUE);
+    if (box)
+	box->x1 = ti->pad + 2;
+
+    return FALSE;
 }
 
 /* eof otext.c */

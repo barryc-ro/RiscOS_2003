@@ -129,27 +129,6 @@
 #include "rectplot.h"
 #endif
 
-#ifndef PP_DEBUG
-#define PP_DEBUG 0
-#endif
-
-#ifndef BE_DEBUG
-#define BE_DEBUG DEBUG
-#endif
-
-#if 0   /* pdh: done the usual XXXDBG way now */
-#if PP_DEBUG
-#define PPDBG(a) fprintf a
-#else
-#define PPDBG(a)
-#endif
-#endif
-
-#if BE_DEBUG
-#define BEDBG(a) fprintf a
-#else
-#define BEDBG(a)
-#endif
 
 /* This is on its own because the include file that it is in includes lots of others */
 /* Not that this is a good excuse. */
@@ -445,7 +424,7 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
     BOOL new_win = target && strcasecomp(target, "_blank") == 0;
     const char *href = aref->href;
 
-    BEDBG((stderr, "antweb_handle_url: doc %p aref %p for '%s' target '%s'\n", doc, aref, strsafe(href), strsafe(target)));
+    BENDBG(( "antweb_handle_url: doc %p aref %p for '%s' target '%s'\n", doc, aref, strsafe(href), strsafe(target)));
 
     if (aref->flags & rid_aref_LABEL)
     {
@@ -572,7 +551,7 @@ os_error *backend_doc_click(be_doc doc, int x, int y, wimp_bbits bb)
 
     ep = backend_doc_locate_item(doc, &x, &y, &ti);
 
-    BEDBG((stderr, "doc click on item %p offset %d,%d error %p tag %d click fn %p\n",
+    BENDBG(( "doc click on item %p offset %d,%d error %p tag %d click fn %p\n",
 	    ti, x, y, ep, ti ? ti->tag : -1, ti ? object_table[ti->tag].click : 0));
 
     if (!ep)
@@ -591,7 +570,7 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
     int f = 0;
     void *imh = NULL;
 
-/*     if (ti) { BEDBG((stderr, "Asked for info on item at %p\n", ti)); } */
+/*     if (ti) { BENDBG(( "Asked for info on item at %p\n", ti)); } */
 
     if (link)
         *link = NULL;
@@ -953,7 +932,7 @@ static void be_dispose_doc_contents( be_doc doc )
 {
     rid_text_item *ti;
 
-    BEDBG((stderr, "doc%p: disposing of contents, url is '%s'\n", doc, doc->url ? doc->url : "<none>"));
+    BENDBG(( "doc%p: disposing of contents, url is '%s'\n", doc, doc->url ? doc->url : "<none>"));
 
     alarm_removeall(doc);
 
@@ -1007,7 +986,7 @@ static os_error *backend__dispose_doc(be_doc doc)
 {
     if (doc->ah)
     {
-	BEDBG((stderr, "Calling access_abort on 0x%p\n", doc->ah));
+	BENDBG(( "Calling access_abort on 0x%p\n", doc->ah));
 	access_abort(doc->ah);
     }
 
@@ -1036,7 +1015,7 @@ static os_error *backend__dispose_doc(be_doc doc)
 
     mm_free(doc);
 
-    BEDBG((stderr, "Document disposed of\n"));
+    BENDBG(( "Document disposed of\n"));
 
     return NULL;
 }
@@ -1067,7 +1046,7 @@ static void antweb_unlink_doc(be_doc doc)
 	be_doc dd;
 	for (dd = document_list; dd; dd = dd->next)
 	{
-/* 	    BEDBG((stderr, "dispose_doc: dd %p dd->next %p\n", dd, dd->next)); */
+/* 	    BENDBG(( "dispose_doc: dd %p dd->next %p\n", dd, dd->next)); */
 	    if (dd->next == doc)
 	    {
 		dd->next = doc->next;
@@ -1088,7 +1067,7 @@ static BOOL antweb_doc_in_list(be_doc doc)
 
 os_error *backend_dispose_doc(be_doc doc)
 {
-    BEDBG((stderr, "doc%p: dispose_doc called by %s\n", doc, caller(1) ));
+    BENDBG(( "doc%p: dispose_doc called by %s\n", doc, caller(1) ));
 
 #if 0
     fprintf(stderr, "dispose_doc: checklist: in %p doc->next %p document_list %p\n", doc, doc->next, document_list);
@@ -1107,7 +1086,7 @@ os_error *backend_dispose_doc(be_doc doc)
 
     antweb_unlink_doc(doc);
 
-    BEDBG((stderr, "dispose_doc: calling real dispose doc\n"));
+    BENDBG(( "dispose_doc: calling real dispose doc\n"));
 
     return backend__dispose_doc(doc);
 }
@@ -1381,16 +1360,20 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 	fs.lf = fs.lfc = -1;
 
         /* Now into the recursive stream rendering function */
-
         stream_render(&doc->rh->stream, doc,
 		      ox, oy,
 		      left, top, right, bot,
 		      &fs, &rr->g, update);
 
 
-	/* render frame borders */
 #ifdef RISCOS
+	/* render frame borders */
  	layout_render_bevels(rr, doc);
+
+	/* make another pass through the document to draw the
+	 * highlights
+	 */
+	highlight_render(rr, doc);
 #endif
     }
 
@@ -1609,7 +1592,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
     rid_form_element *fis;
     char *target = right ? "_blank" : form->target;
 
-    BEDBG((stderr, "Submit form: action='%s', method='%s'\n",
+    BENDBG(( "Submit form: action='%s', method='%s'\n",
 	    form->action ? form->action : "<none>",
 	    (form->method == rid_fm_GET ?
 	     "GET" :
@@ -1710,7 +1693,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    /* In theory the URL join can fail */
 	    if (dest2)
 	    {
-	    BEDBG((stderr, "Query string is:\n'%s'\n", dest2));
+	    BENDBG(( "Query string is:\n'%s'\n", dest2));
 		/* Never get a form query from the cache */
 		ep = frontend_complain(frontend_open_url(dest2, doc->parent, target, NULL, 1));
 
@@ -1836,7 +1819,7 @@ extern os_error *antweb_document_sizeitems(antweb_doc *doc)
      * the background image to be fetched first, not last */
     if ((doc->rh->bgt & rid_bgt_IMAGE) && (doc->rh->tile.im == NULL))
     {
-        BEDBG((stderr, "Calling fetch_bg from document_sizeitems\n" ));
+        BENDBG(( "Calling fetch_bg from document_sizeitems\n" ));
         be_doc_fetch_bg(doc);
     }
 
@@ -2878,7 +2861,7 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
 
     FMTDBG(("antweb_document_format() entered\n"));
 
-    BEDBG((stderr, "Document title: '%s' \ndoc %p, rid_header %p\n",
+    BENDBG(( "Document title: '%s' \ndoc %p, rid_header %p\n",
 	    doc->rh->title ? doc->rh->title : "<none>", doc, doc->rh));
 
     /* Include tables in free of pos items */
@@ -3068,7 +3051,7 @@ static void be_set_dimensions(be_doc doc)
     w = doc->rh->stream.widest;
     h = doc->rh->stream.height;
 
-    BEDBG((stderr, "be_set_dimensions: doc%p to %dx%d\n", doc, w, h));
+    BENDBG(( "be_set_dimensions: doc%p to %dx%d\n", doc, w, h));
 
 #if USE_MARGINS
     w += doc->margin.x0 - doc->margin.x1;
@@ -3153,7 +3136,7 @@ os_error *backend_goto_fragment(be_doc doc, char *frag)
     if (doc == NULL || doc->rh == NULL)
 	return makeerror(ERR_BAD_DOCUMENT);
 
-    BEDBG((stderr, "Going to fragment '%s'\n", frag ? frag : "<none>"));
+    BENDBG(( "Going to fragment '%s'\n", frag ? frag : "<none>"));
     if (frag)
     {
         rid_text_item *first;
@@ -3177,7 +3160,7 @@ os_error *backend_goto_fragment(be_doc doc, char *frag)
 
 	    if (backend_doc_item_bbox(doc, first, &bb) == 0)
 	    {
-		BEDBG((stderr, "Ensuring item visable, top at %d\n", bb.y1));
+		BENDBG(( "Ensuring item visable, top at %d\n", bb.y1));
 		/* doesn't need margin adjustment, done in doc_item_bbox */
 		frontend_view_ensure_visable(doc->parent, 0, bb.y1, bb.y1);
 	    }
@@ -3736,7 +3719,7 @@ static void antweb_init_page(antweb_doc *doc)
     {
 	fe_view_dimensions fvd;
 
-	BEDBG((stderr, "antweb_init_page(): doc %p\n", doc));
+	BENDBG(( "antweb_init_page(): doc %p\n", doc));
 
 	frontend_view_get_dimensions(doc->parent, &fvd);
 
@@ -3748,7 +3731,7 @@ static void antweb_init_page(antweb_doc *doc)
 
 	antweb_document_format(doc, doc->rh->stream.fwidth);
 
-	BEDBG((stderr, "Calling visit\n"));
+	BENDBG(( "Calling visit\n"));
 
 	/* We assume we can use the title here because it is supposed to be
 	   in the header and the header is supposed to come before the body. */
@@ -3771,7 +3754,7 @@ static void antweb_doc_background_change(void *h, void *i, int status, wimp_box 
     int fl;
     antweb_doc *doc = (antweb_doc *) h;
 
-/*  BEDBG((stderr, "antweb_doc_background_change(): doc %p status %d\n", doc, status)); */
+/*  BENDBG(( "antweb_doc_background_change(): doc %p status %d\n", doc, status)); */
 
     switch (status)
     {
@@ -3801,12 +3784,12 @@ static void antweb_doc_background_change(void *h, void *i, int status, wimp_box 
 	if (((doc->rh->bgt & rid_bgt_COLOURS) == 0) &&
 	    ((fl & image_flag_MASK) == 0))
 	{
-	    BEDBG((stderr, "Setting background colour\n"));
+	    BENDBG(( "Setting background colour\n"));
 
 	    doc->rh->bgt |= rid_bgt_COLOURS;
 	    doc->rh->colours.back = image_average_colour(i);
 
-	    BEDBG((stderr, "New bg colour is 0x%08x\n", doc->rh->colours.back));
+	    BENDBG(( "New bg colour is 0x%08x\n", doc->rh->colours.back));
 	}
 
 	antweb_init_page(doc);
@@ -3840,7 +3823,7 @@ extern pparse_details *be_lookup_parser(int ft)
     for(i=0; file_parsers[i].ftype != -1 && file_parsers[i].ftype != ft; i++)
 	;
 
-    BEDBG((stderr, "Using parser %d for file type 0x%03x\n", i, ft));
+    BENDBG(( "Using parser %d for file type 0x%03x\n", i, ft));
 
     return &file_parsers[i];
 }
@@ -3890,7 +3873,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     }
 
 #if USE_MARGINS
-#if PP_DEBUG
+#if DEBUG
     if ((rh->margin.left != -1 && rh->margin.left*2 != doc->margin.x0) ||
 	(rh->margin.top != -1 && rh->margin.top*2 != doc->margin.y1))
 	PPDBG(("setting margins to %d,%d\n", doc->margin.x0, doc->margin.y1));
@@ -3918,7 +3901,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     if ( (doc->rh->bgt & rid_bgt_IMAGE)
          && (doc->rh->tile.im == NULL) )
     {
-        BEDBG((stderr, "Calling fetch_bg from pparse_doc\n"));
+        BENDBG(( "Calling fetch_bg from pparse_doc\n"));
 	be_doc_fetch_bg(doc);
     }
 
@@ -3939,7 +3922,7 @@ static void be_doc_fetch_bg(antweb_doc *doc)
 {
     char *url;
 
-    BEDBG((stderr, "be_doc_fetch_bg(): doc %p\n", doc));
+    BENDBG(( "be_doc_fetch_bg(): doc %p\n", doc));
 
     /* record time at which we started fetching */
     doc->start_time = clock();
@@ -4070,16 +4053,16 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 			image_info(doc->rh->tile.im, NULL, NULL, NULL, &flags, NULL, NULL);
 			if (flags & image_flag_FETCHED)
 			{
-			    BEDBG((stderr, "background is here already\n"));
+			    BENDBG(( "background is here already\n"));
 			}
 			else if (clock() < doc->start_time + config_display_time_background)
 			{
 			    waiting_for_bg = TRUE;
-			    BEDBG((stderr, "waiting for background\n"));
+			    BENDBG(( "waiting for background\n"));
 			}
 			else
 			{
-			    BEDBG((stderr, "background wait timeout\n"));
+			    BENDBG(( "background wait timeout\n"));
 			}
 		    }
 #endif
@@ -4089,8 +4072,8 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 		}
 		else
 		{
-		    BEDBG((stderr, "Tail changed, checking for select items\n"));
-		    BEDBG((stderr, "ofi=%p, osi=%p, ooi=%p\n", ofi, osi, ooi));
+		    BENDBG(( "Tail changed, checking for select items\n"));
+		    BENDBG(( "ofi=%p, osi=%p, ooi=%p\n", ofi, osi, ooi));
 
 		    /* We had an option in the last visable select and
 		       either the last form no longer has a select or
@@ -4163,7 +4146,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 	frontend_view_status(doc->parent, sb_status_PROGRESS, status);
     }
 
-#if PP_DEBUG
+#if DEBUG >= 3
     PPDBG(( "Progress done\n"));
 
     if (doc->rh) dump_header(doc->rh);
@@ -4186,7 +4169,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
     doc->ah = NULL;
 
-    BEDBG(( stderr, "doc%p: antweb_doc_complete(%d) called\n", doc, status ));
+    BENDBG(("doc%p: antweb_doc_complete(%d) called\n", doc, status ));
 
     ACCDBG(("Access completed, doc=%p, status=%d, file='%s', url='%s'\n",
 	    doc, status, strsafe(cfile), url));
@@ -4234,7 +4217,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	{
 	    rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
 
-	    BEDBG((stderr, "doc_complete: add meta rh %p list %p\n", doc->rh, list));
+	    BENDBG(( "doc_complete: add meta rh %p list %p\n", doc->rh, list));
 
 	    m->httpequiv = strdup(list->key);
 	    m->content = strdup(list->value);
@@ -4254,8 +4237,8 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     if (doc->url == NULL)
 	doc->url = strdup(url);
 
-    BEDBG((stderr, "Completed opening %s\n", url));
-    BEDBG((stderr, "Cache file is '%s'\n", doc->cfile));
+    BENDBG(( "Completed opening %s\n", url));
+    BENDBG(( "Cache file is '%s'\n", doc->cfile));
 
     ft = file_type(cfile);
 
@@ -4269,7 +4252,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
 	if ((doc->rh->bgt & rid_bgt_IMAGE) && (doc->rh->tile.im == NULL))
 	{
-	    BEDBG((stderr, "Calling fetch_bg from doc_complete\n" ));
+	    BENDBG(( "Calling fetch_bg from doc_complete\n" ));
 	    be_doc_fetch_bg(doc);
 	}
 
@@ -4278,7 +4261,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
 	if ((doc->flags & doc_flag_DISPLAYING) == 0)
 	{
-	    BEDBG((stderr, "visit called from complete\n"));
+	    BENDBG(( "visit called from complete\n"));
 	    antweb_init_page(doc);
 	}
 
@@ -4315,7 +4298,10 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 #endif
 
 	/* Override the visability of the caret */
-	frontend_complain(backend_goto_fragment(doc, doc->frag));
+#ifdef STBWEB
+	if ((doc->flags & doc_flag_FROM_HISTORY) == 0)
+#endif
+	    frontend_complain(backend_goto_fragment(doc, doc->frag));
 
 	/* check for a refresh tag */
 	refresh = backend_check_meta(doc, "REFRESH");
@@ -4346,7 +4332,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     }
     else
     {
-	BEDBG((stderr, "Got document of type 0x%03x, passing to the front end.\n", ft));
+	BENDBG(( "Got document of type 0x%03x, passing to the front end.\n", ft));
 
 #ifndef BUILDERS
 	if (frontend_plugin_handle_file_type(ft))
@@ -4358,12 +4344,12 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	    frontend_pass_doc(doc->parent, doc->url, cfile, ft);
 #endif
 
-	BEDBG((stderr, "Returned from frontend\n"));
+	BENDBG(( "Returned from frontend\n"));
 
 	backend_dispose_doc(doc);
     }
 
-    BEDBG((stderr, "'Compleated' function done.\n"));
+    BENDBG(( "'Compleated' function done.\n"));
 
     return access_CACHE;
 }
@@ -4371,14 +4357,14 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
 os_error *backend_doc_abort(be_doc doc)
 {
-    BEDBG((stderr, "Entering backend_doc_abort for %p\n", doc));
+    BENDBG(( "Entering backend_doc_abort for %p\n", doc));
 
     if ((doc->flags & doc_flag_DISPLAYING) == 0)
 	return NULL;
 
     if (doc->ah)
     {
-	BEDBG((stderr, "Calling access_abort\n"));
+	BENDBG(( "Calling access_abort\n"));
 	access_abort(doc->ah);
 	doc->ah = NULL;
 
@@ -4496,7 +4482,7 @@ static void be_refresh_document(int at, void *h)
 {
     be_doc doc = (be_doc) h;
 
-    BEDBG((stderr, "doc%p: be_refresh_document()\n", doc ));
+    BENDBG(( "doc%p: be_refresh_document()\n", doc ));
 
     if (doc->url || doc->rh->refreshurl)
     {
@@ -4543,7 +4529,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     /* new: add the url here */
 /*     new->url = strdup(url); */
 
-    BEDBG((stderr, "backend_open_url: url '%s' checklist: add %p document_list %p next %p\n",
+    BENDBG(( "backend_open_url: url '%s' checklist: add %p document_list %p next %p\n",
 	   strsafe(url), new, document_list, document_list ? document_list->next : NULL));
 
     /* add to list of documents, must do now in case we dispose of doc before returning from access_url */
@@ -4567,7 +4553,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 	new->frag = strdup(frag+1);
     }
 
-    BEDBG((stderr, "Calling access function flags %x\n", flags));
+    BENDBG(( "Calling access function flags %x\n", flags));
 
 #if USE_MARGINS
     frontend_view_margins(v, &new->margin);
@@ -4591,7 +4577,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 	    frontend_view_status(v, sb_status_PROGRESS, status_COMPLETED_CACHE);
 	else
 	{
-	    BEDBG((stderr, "New access handle is 0x%p\n", new->ah));
+	    BENDBG(( "New access handle is 0x%p\n", new->ah));
 	}
 
 	if (!antweb_doc_in_list(new))
@@ -4714,7 +4700,7 @@ os_error *backend_activate_link(be_doc doc, be_item item, int flags)
 {
     if (!item)
 	return NULL;
-    BEDBG((stderr, "activate link %p (type %d)\n", item, item->tag));
+    BENDBG(( "activate link %p (type %d)\n", item, item->tag));
 
     backend__doc_click(doc, item, item->tag == rid_tag_INPUT ? item->width : 0, 0,
 			      (flags & 1) ? wimp_BRIGHT : wimp_BLEFT );
@@ -4775,25 +4761,6 @@ const char *backend_check_meta(be_doc doc, const char *name)
 
     return NULL;
 }
-
-#if 0
-void backend_clear_selected(be_doc doc)
-{
-    be_item ti = doc->rh->stream.text_list;
-    while (ti)
-    {
-	if (ti->flag & rid_flag_SELECTED)
-	{
-	    ti->flag &= ~rid_flag_SELECTED;
-	    be_update_item_highlight(doc, ti);
-	}
-
-	ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
-    }
-
-    doc->selection.data.text = NULL;
-}
-#endif
 
 #ifdef STBWEB
 int backend_frame_resize_bounds(be_doc doc, int x, int y, wimp_box *box, int *handle)
@@ -4935,7 +4902,7 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 	be_item ti = rh->stream.text_list;
 	rid_aref_item *last_aref = NULL;
 
-	BEDBG((stderr, "locate_id: id='%s'\n", id));
+ 	BENDBG(( "locate_id: id='%s'\n", id));
 
 	while (ti)
 	{
@@ -4988,7 +4955,7 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 		break;
 	    }
 
-	    BEDBG((stderr, "locate_id: ti=%p tag %d this_id='%s'\n", ti, ti->tag, strsafe(this_id)));
+/* 	    BENDBG(( "locate_id: ti=%p tag %d this_id='%s'\n", ti, ti->tag, strsafe(this_id))); */
 
 	    /* and compare what is going in */
 	    if (this_id && strcmp(this_id, id) == 0)

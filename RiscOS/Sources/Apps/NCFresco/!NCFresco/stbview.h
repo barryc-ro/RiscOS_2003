@@ -40,36 +40,8 @@ struct _frontend_passwd_handle
 
 /* ----------------------------------------------------------------------------- */
 
-typedef struct fe_global_history_item fe_global_history_item;
-typedef struct fe_global_history_fragment fe_global_history_fragment;
 typedef struct fe_history_item fe_history_item;
 typedef struct _frontend_view frontend_view;
-
-struct fe_history_item
-{
-    fe_history_item *next, *prev;
-    char *url;
-    char *title;
-    unsigned int url_hash;
-    unsigned int seq_no;
-    int scroll_pos;
-};
-
-struct fe_global_history_fragment
-{
-    fe_global_history_fragment *next;
-    char fragment[1];                   /* resize block to hold fragment */
-};
-
-struct fe_global_history_item
-{
-    fe_global_history_item *next;       /* next history item */
-    fe_global_history_fragment *frag_list;   /* linked list of fragments in this page visited */
-
-    char *url;
-    char *title;
-    unsigned int url_hash;            /* ash lookup of title string */
-};
 
 /* ----------------------------------------------------------------------------- */
 
@@ -107,6 +79,8 @@ struct _frontend_view
     be_doc displaying;
     be_doc fetching;
     fe_history_item *first, *last, *hist_at;
+    int hist_count;
+
     char last_search[64];
 
     int current_object_type;
@@ -129,7 +103,7 @@ struct _frontend_view
     int y_scroll_bar;
     int scrolling;          /* 0 = auto, 1 = yes, 2 = no */
 
-    int pending_scroll;
+/*     int pending_scroll; */
 
     int dont_add_to_history;
     int pending_download_finished;
@@ -177,6 +151,12 @@ struct _frontend_view
     int fast_load;
 
     int transient_position;
+
+    struct
+    {
+	int xscroll, yscroll;	/* scroll positions to move to - used in check_pending_scroll */
+	fe_history_item *hist;	/* history item to be current  - used in visit */
+    } fetching_data;
 };
 
 /* ----------------------------------------------------------------------------- */

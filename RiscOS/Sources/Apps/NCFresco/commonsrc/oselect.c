@@ -249,19 +249,25 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     int checked = 0;
     char *str = NULL;
     font_string fstr;
-    BOOL draw_selection_box = (ti->flag & rid_flag_SELECTED);
     int fg, bg;
+    BOOL selected = backend_is_selected(doc, ti);
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    if (draw_selection_box)
+    if (update == object_redraw_HIGHLIGHT)
+    {
+	if (oselect_update_highlight(ti, doc, 0, NULL))
+	    highlight_render_outline(ti, doc, hpos, bline);
+	return;
+    }
+    
+    if (selected)
     {
 	if (sel->base.colours.select != -1)
 	    bg = sel->base.colours.select | render_colour_RGB;
 	else
 	    bg = render_colour_INPUT_S;
-	draw_selection_box = FALSE;
     }
     else
     {
@@ -273,9 +279,9 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     
 #ifdef STBWEB
     render_plinth_full(bg,
-		       ti->flag & rid_flag_SELECTED ? plinth_col_HL_M : plinth_col_M, 
-		       ti->flag & rid_flag_SELECTED ? plinth_col_HL_L : plinth_col_L, 
-		       ti->flag & rid_flag_SELECTED ? plinth_col_HL_D : plinth_col_D,
+		       selected ? plinth_col_HL_M : plinth_col_M, 
+		       selected ? plinth_col_HL_L : plinth_col_L, 
+		       selected ? plinth_col_HL_D : plinth_col_D,
 		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
 		       hpos + SELECT_BORDER_X, bline - ti->max_down + SELECT_BORDER_Y,
 		       ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_BORDER_X*2,
@@ -337,12 +343,6 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if ((sel->flags & rid_if_NOPOPUP) == 0)
 	render_plot_icon("gright", hpos + ti->width - GRIGHT_SIZE, bline + ((ti->max_up - ti->max_down) >> 1) - 22);
 
-    /* SJM */
-    if (draw_selection_box)
-    {
-	render_set_colour(render_colour_HIGHLIGHT, doc);
-	render_item_outline(ti, hpos, bline);
-    }
 #endif /* BUILDERS */
 }
 
@@ -417,6 +417,20 @@ char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 void oselect_astext(rid_text_item *ti, rid_header *rh, FILE *f)
 {
     fputs("[Selection menu]", f);
+}
+
+int oselect_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
+{
+    rid_select_item *sel = ((rid_text_item_select *) ti)->select;
+    BOOL draw_box;
+
+    if (box)
+	memset(box, 0, sizeof(*box));
+
+    draw_box = sel->base.colours.select == -1 &&
+	config_colours[render_colour_INPUT_S].word == config_colours[render_colour_INPUT_B].word;
+
+    return draw_box;
 }
 
 /* eof oselect.c */

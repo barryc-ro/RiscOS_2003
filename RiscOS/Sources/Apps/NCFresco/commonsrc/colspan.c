@@ -1299,6 +1299,8 @@ static void most_constraints_then_share_fairly(rid_table_item *table,
     FMTDBG(("\nAdd %d slop pixels onto %s slot, fwidth %d, %s\n\n", 
 	    slop, WIDTH_NAMES[best], fwidth, HORIZVERT(horiz)));
 
+    ASSERT(slop >= 0);
+
     generate_constraints_summary(table, horiz, &csumm);
 
     /* Either use REL_MIN or ABS_MAX as appropriate */

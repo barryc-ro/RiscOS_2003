@@ -152,6 +152,9 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
     left = g->x0;
     right = g->x1;
 
+  if (update != object_redraw_HIGHLIGHT)
+  {
+    
     RENDBGN(("Rendering table.  ox=%d, oy=%d. size = %dx%d\n", ox, oy, table->size.x, table->size.y));
     RENDBGN(("Top work area = %d, bottom = %d\n", top, bot));
     RENDBGN(("Left = %d, right = %d, capt_size = %d\n", left, right, capt_size));
@@ -360,6 +363,7 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	    }
 	}
     }
+  } /* update != 2 */
 
     /* Any caption */
 

@@ -20,9 +20,6 @@ extern void stomp_captions_until_working(rid_header *header);
 
 /*****************************************************************************/
 
-#define CLEARING_ITEM(ti) (((ti)->flag & rid_flag_CLEARING) != 0)
-#define FLOATING_ITEM(ti) (((ti)->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) != 0)
-
 /*****************************************************************************/
 
 /*

@@ -194,6 +194,12 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
+    if (update == object_redraw_HIGHLIGHT)
+    {
+	highlight_render_outline(ti, doc, hpos, bline);
+	return;
+    }
+
     bw = obj->bwidth;
 
     bbox.x0 = hpos + obj->hspace + bw;
@@ -248,10 +254,6 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     if (do_alt)
 	oimage_render_text(ti, doc, fs, &bbox, obj->standby);
-
-    if ((ti->flag & rid_flag_SELECTED) || bw)
-	oimage_render_border(ti, doc, &bbox, bw);
-
 #endif /* BUILDERS */
 }
 

@@ -284,7 +284,7 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_STOP_OR_RELOAD:
-	if (fe_popup_open || on_screen_kbd)
+	if (fe_popup_open() || on_screen_kbd)
 	    sound_event(snd_WARN_BAD_KEY);
 	else if (fe_abort_fetch_possible(v))
 	    frontend_complain(fe_abort_fetch(v));
@@ -305,15 +305,15 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_BEEPS_TOGGLE:
-	fe_beeps_set(-1);
+	fe_beeps_set(-1, TRUE);
 	break;
 
     case fevent_BEEPS_OFF:
-	fe_beeps_set(0);
+	fe_beeps_set(0, TRUE);
 	break;
 
     case fevent_BEEPS_ON:
-	fe_beeps_set(1);
+	fe_beeps_set(1, TRUE);
 	break;
 
     case fevent_SCALING_TOGGLE:
@@ -513,11 +513,20 @@ static void status_event_handler(int event, fe_view v)
 static void toolbar_event_handler(int event, fe_view v)
 {
     if (event == fevent_TOOLBAR_EXIT)
+    {
 	frontend_complain(fe_status_unstack(v));
-    else if (!fe_popup_open() && on_screen_kbd == 0)
-	frontend_complain(fe_status_open_toolbar(v, event - fevent_TOOLBAR_MAIN));
-    else
+    }
+    else if (fe_popup_open() || on_screen_kbd )
+    {
 	sound_event(snd_WARN_BAD_KEY);
+    }
+    else
+    {
+	frontend_complain(fe_status_open_toolbar(v, event - fevent_TOOLBAR_MAIN));
+
+	if (event == fevent_TOOLBAR_DETAILS)
+	    fe_open_version(v);
+    }
 }
 
 static void frame_link_event_handler(int event, fe_view v)

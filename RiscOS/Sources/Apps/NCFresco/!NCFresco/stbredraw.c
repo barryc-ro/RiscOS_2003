@@ -341,6 +341,8 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
     wimp_redrawstr r;
     fe_view selected;
 
+    STBDBG(("frontend_view_update: v%p box %d,%d %d,%d flags %x\n", v, bb->x0, bb->y0, bb->x1, bb->y1, flags));
+
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;
 
@@ -366,8 +368,8 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	 */
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
 
-	/* if we are transient then draw a border */
-	if (v->open_transient)
+	/* if we are transient and can't scroll then draw a border */
+	if (v->open_transient && v->scrolling == fe_scrolling_NO)
 	    draw_border(&r, v);
 
 	/* if we are the top frameset and this is a call to

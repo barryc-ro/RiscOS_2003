@@ -180,66 +180,80 @@ extern int cmos_op(int bit_start, int n_bits, int new_val, BOOL write);
 extern int nvram_read(const char *tag, int *val);
 extern int nvram_write(const char *tag, int new_val);
 
+/* base sounds defined in soundfx module */
+#define soundfx_WIN_OPEN	0x01
+#define soundfx_WIN_CLOSE	0x02
+#define soundfx_TB_OPEN		0x03
+#define soundfx_TB_CLOSE	0x04
+#define soundfx_ACTION_OK	0x05
+#define soundfx_ACTION_FAIL	0x06
+#define soundfx_BROWSER_BACK	0x00010001
+#define soundfx_BROWSER_HOME	0x00010002
+#define soundfx_BROWSER_SOUND_ON	0x00010003
+#define soundfx_BROWSER_SOUND_OFF	0x00010004
+
+
+/* mappgins from slightly more generic browser conditions to the above map */
 #define snd_NONE		0
     
-#define snd_TOOLBAR_SHOW	0x03
-#define snd_TOOLBAR_HIDE	0x04
-#define snd_TOOLBAR_SHOW_SUB	0x03
-#define snd_TOOLBAR_HIDE_SUB	0x04
+#define snd_TOOLBAR_SHOW	soundfx_TB_OPEN
+#define snd_TOOLBAR_HIDE	soundfx_TB_CLOSE
+#define snd_TOOLBAR_SHOW_SUB	soundfx_ACTION_OK
+#define snd_TOOLBAR_HIDE_SUB	0
 
-#define snd_HISTORY_SHOW	0x01
-#define snd_HISTORY_BACK	0x08
-#define snd_HISTORY_FORWARD	0x08
+#define snd_HISTORY_SHOW	soundfx_ACTION_OK
+#define snd_HISTORY_BACK	soundfx_BROWSER_BACK
+#define snd_HISTORY_FORWARD	soundfx_ACTION_OK
 
-#define snd_HOTLIST_SHOW	0x01
-#define snd_HOTLIST_DELETE_SHOW	0x01
-#define snd_HOTLIST_ADD		0x08
-#define snd_HOTLIST_REMOVE	0x08
+#define snd_HOTLIST_SHOW	soundfx_ACTION_OK
+#define snd_HOTLIST_DELETE_SHOW	soundfx_ACTION_OK
+#define snd_HOTLIST_ADD		soundfx_ACTION_OK
+#define snd_HOTLIST_REMOVE	soundfx_ACTION_OK
 
-#define snd_HOME		0x01
-#define snd_SEARCH		0x01
-#define snd_OFFLINE		0x01
-#define snd_ABORT		0x0A
-#define snd_RELOAD		0x08
+#define snd_HOME		soundfx_BROWSER_HOME
+#define snd_SEARCH		soundfx_ACTION_OK
+#define snd_OFFLINE		soundfx_ACTION_OK
+#define snd_ABORT		soundfx_ACTION_OK
+#define snd_RELOAD		soundfx_ACTION_OK
 
-#define snd_OPEN_URL_SHOW	0x01
-#define snd_HELP_SHOW		0x01
-#define snd_PASSWORD_SHOW	0x01
-#define snd_INFO_SHOW		0x01
-#define snd_FIND_SHOW		0x01
+#define snd_OPEN_URL_SHOW	soundfx_ACTION_OK
+#define snd_HELP_SHOW		soundfx_ACTION_OK
+#define snd_PASSWORD_SHOW	soundfx_ACTION_OK
+#define snd_INFO_SHOW		soundfx_ACTION_OK
+#define snd_FIND_SHOW		soundfx_ACTION_OK
     
-#define snd_SCROLL_LINE		0x07
-#define snd_SCROLL_PAGE		0x07
-#define snd_SCROLL_LIMIT	0x07
-#define snd_SCROLL_FAILED	0x0c
+#define snd_SCROLL_LINE		0
+#define snd_SCROLL_PAGE		0
+#define snd_SCROLL_LIMIT	0
+#define snd_SCROLL_FAILED	soundfx_ACTION_FAIL
 
-#define snd_CHANGE_FRAME	0x10001
-#define snd_CHANGE_HIGHLIGHT	0x10001
+#define snd_CHANGE_FRAME	0
+#define snd_CHANGE_HIGHLIGHT	0
 
-#define snd_WARN_NO_SCROLL	0x0c
-#define snd_WARN_NO_FIELD	0x0c
-#define snd_WARN_BAD_KEY	0x0c
+#define snd_WARN_NO_SCROLL	soundfx_ACTION_FAIL
+#define snd_WARN_NO_FIELD	soundfx_ACTION_FAIL
+#define snd_WARN_BAD_KEY	soundfx_ACTION_FAIL
 
-#define snd_MENU_SHOW		0x05
-#define snd_MENU_HIDE		0x06
-#define snd_MENU_SELECT		0x08
+#define snd_MENU_SHOW		soundfx_ACTION_OK
+#define snd_MENU_HIDE		soundfx_ACTION_OK
+#define snd_MENU_SELECT		soundfx_ACTION_OK
 
-#define snd_CHECKBOX_TOGGLE	0x0d
-#define snd_RADIO_TOGGLE	0x0d
-#define snd_FORM_SUBMIT		0x08
-#define snd_FORM_RESET		0x0A
+#define snd_CHECKBOX_TOGGLE	0
+#define snd_RADIO_TOGGLE	0
+#define snd_FORM_SUBMIT		0
+#define snd_FORM_RESET		0
 
-#define snd_LINK_FOLLOW		0x10002
+#define snd_LINK_FOLLOW		0
     
-#define snd_MODE_MAP_START	0x10003
-#define snd_MODE_MAP_END	0x10004
+#define snd_MODE_MAP_START	0
+#define snd_MODE_MAP_END	0
 
-#define snd_BEEPS_ON		0x08
-#define snd_BEEPS_OFF		0x08
+#define snd_BEEPS_ON		soundfx_BROWSER_SOUND_ON
+#define snd_BEEPS_OFF		soundfx_BROWSER_SOUND_ON
     
-#define snd_ERROR		0x0B
+#define snd_ERROR		soundfx_ACTION_FAIL
 
-#define snd_FIND_FAILED		0x0c
+#define snd_FIND_FAILED		soundfx_ACTION_FAIL
 
 typedef int sound_event_t;
 

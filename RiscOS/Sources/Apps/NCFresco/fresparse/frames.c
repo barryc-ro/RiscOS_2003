@@ -19,7 +19,7 @@
 
 #define DEFAULT_BORDER_WIDTH	8		/* OS units */
 #define DEFAULT_BORDER_3D	TRUE
-#define DEFAULT_BORDER_COLOUR	plinth_col_HL_D;
+#define DEFAULT_BORDER_COLOUR	plinth_col_HL_D
 
 /*****************************************************************************/
 
@@ -209,7 +209,7 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     }
 
     /* use the outermost frameset to set the background colour for the page */
-#if STBWEB
+#ifdef STBWEB
     if (me->frameset == NULL)
     {
 	me->rh->bgt |= rid_bgt_COLOURS;

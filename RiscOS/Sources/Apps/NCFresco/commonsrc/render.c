@@ -134,7 +134,16 @@ wimp_paletteword render_get_colour(int colour, be_doc doc)
     switch (colour)
     {
     case render_colour_BACK:
-	if (doc &&
+#ifdef STBWEB
+	/* make colour whilst loading black as it looks much better on TV's */
+	if (doc == NULL || doc->rh == NULL)
+	{
+	    pw.word = 0x00000000;
+	    return pw;
+	}
+	else
+#endif
+	    if (doc &&
 	    (doc->flags & doc_flag_DOC_COLOURS) &&
 	    doc->rh &&
 	    (doc->rh->bgt & rid_bgt_COLOURS) )
@@ -293,10 +302,10 @@ void render_set_font_colours(int f, int b, antweb_doc *doc)
 int render_link_colour(rid_text_item *ti, antweb_doc *doc)
 {
     int rcol;
-    if (ti->flag & rid_flag_SELECTED)
-	rcol = render_colour_HIGHLIGHT;
-    else if (ti->flag & rid_flag_ACTIVATED)
+    if (ti->flag & rid_flag_ACTIVATED)
 	rcol = render_colour_ACTIVATED;
+    else if (backend_is_selected(doc, ti))
+	rcol = render_colour_HIGHLIGHT;
     else
         rcol = render_text_link_colour(ti, doc);
     return rcol;

@@ -54,15 +54,6 @@
 #include "oimage.h"
 #include "gbf.h"
 
-#ifndef OI_DEBUG
-#define OI_DEBUG 0
-#endif
-
-#if OI_DEBUG
-#define OIDBG(a) fprintf a
-#else
-#define OIDBG(a)
-#endif
 /* ---------------------------------------------------------------------- */
 
 #ifndef Wimp_TextOp
@@ -364,11 +355,20 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     int fg, bg;
     char *t;
     struct webfont *wf;
-    BOOL draw_selection_box = (ti->flag & rid_flag_SELECTED) != 0;
+    BOOL selected;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
+    selected = backend_is_selected(doc, ti);
+
+    if (update == object_redraw_HIGHLIGHT)
+    {
+	if (oinput_update_highlight(ti, doc, 0, NULL))
+	    highlight_render_outline(ti, doc, hpos, bline);
+	return;
+    }
+    
     switch (ii->tag)
     {
     case rid_it_IMAGE:
@@ -541,11 +541,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    oox -= doc->margin.x0;
 	    ooy -= doc->margin.y1;
 #endif
-	    if (draw_selection_box && ii->data.button.im_sel)
-	    {
+	    if (selected && ii->data.button.im_sel)
 		im = (image)ii->data.button.im_sel;
-		draw_selection_box = FALSE;
-	    }
 	    else
 		im = (image)ii->data.button.im;
 	    
@@ -556,31 +553,28 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    
 	    wf = &webfonts[ti->st.wf_index];
 	    plotx = (ti->width - webfont_font_width(ti->st.wf_index, t))/2;
-	    draw_selection_box = FALSE;
 	}
 	else
 	{
 	    if (ii->data.button.tick)
 	    {
 		bg = render_colour_ACTION;
-		draw_selection_box = FALSE;
 	    }
-	    else if (draw_selection_box)
+	    else if (selected)
 	    {
 		if (ii->base.colours.select == -1)
 		    bg = render_colour_INPUT_S;
 		else
 		    bg = ii->base.colours.select | render_colour_RGB;
-		draw_selection_box = FALSE;
 	    }
 	    else
 		bg = (ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB);
 
 #ifdef STBWEB
 	    render_plinth_full(bg,
-			       ti->flag & rid_flag_SELECTED ? plinth_col_HL_M : plinth_col_M, 
-			       ti->flag & rid_flag_SELECTED ? plinth_col_HL_L : plinth_col_L, 
-			       ti->flag & rid_flag_SELECTED ? plinth_col_HL_D : plinth_col_D, 
+			       selected ? plinth_col_HL_M : plinth_col_M, 
+			       selected ? plinth_col_HL_L : plinth_col_L, 
+			       selected ? plinth_col_HL_D : plinth_col_D, 
 			       render_plinth_RIM | render_plinth_DOUBLE_RIM,
 			       hpos, bline - ti->max_down,
 			       ti->width, (ti->max_up + ti->max_down), doc );
@@ -607,6 +601,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    render_set_font_colours(fg, bg, doc);
 	}
 
+	RENDBG(("oinput_redraw: wf_index %x wf->handle %d\n", ti->st.wf_index, wf->handle));
+	
 	font_paint(t, font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0), hpos + plotx, bline);
 	break;
 
@@ -631,12 +627,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    /* try and draw a different sprite (suffix '1') for the highlighted version of the radio/check boxes */
 	    int index = (ii->tag == rid_it_RADIO ? BUTTON_NAME_RADIO : BUTTON_NAME_OPTION) + (ii->data.radio.tick ? BUTTON_NAME_ON : BUTTON_NAME_OFF);
 
-	    if (draw_selection_box &&
-		render_plot_icon(button_names[index + BUTTON_NAME_HIGHLIGHT], hpos + 4, bline - ti->max_down + 4) == NULL)
-	    {
-		draw_selection_box = FALSE;
-	    }
-	    else
+	    if (!selected ||
+		render_plot_icon(button_names[index + BUTTON_NAME_HIGHLIGHT], hpos + 4, bline - ti->max_down + 4) != NULL)
 	    {
 		render_plot_icon(button_names[index], hpos + ii->bw*2, bline - ti->max_down + ii->bw*2);
 	    }
@@ -645,12 +637,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     }
     default:
 	break;
-    }
-
-    if (draw_selection_box)
-    {
-	render_set_colour(render_colour_HIGHLIGHT, doc);
-	render_item_outline(ti, hpos, bline);       /* SJM */
     }
 #endif
 }
@@ -790,7 +776,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    /* This now always sets the caret */
 	    text_input_offset = ep ? strlen(ii->data.str) : ((char *) (long) r.r[1]) - ii->data.str;
 
-	    OIDBG((stderr, "Caret set to item %p, offset %d\n", ti, text_input_offset));
+	    LNKDBG(( "Caret set to item %p, offset %d\n", ti, text_input_offset));
 
 	    antweb_place_caret(doc, ti, text_input_offset);
 	}
@@ -1004,7 +990,7 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
     int h;
     int slen;
 
-    OIDBG((stderr, "oinput_caret: repos=%d\n", repos));
+    LNKDBG(( "oinput_caret: repos=%d\n", repos));
 
     ii = ((rid_text_item_input *) ti)->input;
 
@@ -1113,7 +1099,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
     ii = ((rid_text_item_input *) ti)->input;
 
-    OIDBG((stderr, "oinput_key(): key %d tag %d text_input_offset %d\n", key, ii->tag, doc->selection.data.text.input_offset));
+    LNKDBG(( "oinput_key(): key %d tag %d text_input_offset %d\n", key, ii->tag, doc->selection.data.text.input_offset));
 
 /*     if (doc->selection.data.text.input_offset < 0) */
 /* 	doc->selection.data.text.input_offset = strlen(ii->data.str); */
@@ -1482,9 +1468,49 @@ void oinput_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 }
 
 /*
- * Also currently used for textarea and select
  */
 
+#if 1
+int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
+{
+    rid_input_item *ii = ((rid_text_item_input *) ti)->input;
+    BOOL own = FALSE;
+
+    if (box)
+	memset(box, 0, sizeof(*box));
+
+    switch (ii->tag)
+    {
+    case rid_it_IMAGE:
+	break;
+
+    case rid_it_TEXT:
+    case rid_it_PASSWD:
+	break;
+
+    case rid_it_SUBMIT:
+    case rid_it_BUTTON:
+    case rid_it_RESET:
+	own = (ii->data.button.im && ii->data.button.im_sel) ||
+	    ii->base.colours.select != -1 ||
+	    config_colours[render_colour_INPUT_S].word != config_colours[render_colour_INPUT_B].word;
+	break;
+
+    case rid_it_CHECK:
+    case rid_it_RADIO:
+	/* this is actually dependant on whether the xxxon1 and xxxoff1 buttons are present */
+#ifdef STBWEB
+	own = TRUE;
+#endif
+	break;
+
+    case rid_it_HIDDEN:
+	own = TRUE;
+	break;
+    }
+    return !own;
+}
+#else
 void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc)
 {
     wimp_box trim;
@@ -1548,5 +1574,5 @@ void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc)
 	antweb_update_item_trim(doc, ti, &trim, TRUE);
     }
 }
-
+#endif
 /* eof oinput.c */

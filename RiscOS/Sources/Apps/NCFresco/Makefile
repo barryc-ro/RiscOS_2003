@@ -96,7 +96,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
 		files.o fvpr.o remote.o coalesce.o keyhl.o \
-		buildtime.o format.o colspan.o loformat.o cs2.o
+		buildtime.o format.o colspan.o loformat.o cs2.o highlight.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -177,8 +177,8 @@ PC_CFLAGS =     -apcs 3/26/hardfp
 
 FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
-FRESCO_CFLAGS_REL=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
-FRESCO_CFLAGS_DBG=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
+FRESCO_CFLAGS_REL=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DNEWGROW=1
+FRESCO_CFLAGS_DBG=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DNEWGROW=1
 
 FRESCO_CFLAGS=  $(FRESCO_CFLAGS_REL)
 
@@ -197,7 +197,7 @@ FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 CBFRESCO_VPATH = ../!CBFresco/source
 
 CBFRESCO_INCS=	-I../plingcbfresco/source
-CBFRESCO_BASECFLAGS= -DSTBWEB $(CBFRESCO_INCS) $(RISCOS_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0 -DCBPROJECT -Duse_toolbox=1
+CBFRESCO_BASECFLAGS= -DSTBWEB $(CBFRESCO_INCS) $(RISCOS_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0 -DCBPROJECT -Duse_toolbox=1 -DNEWGROW=1
 
 # Production flag set
 CBFRESCO_CFLAGSN= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
@@ -211,7 +211,7 @@ CBFRESCO_CFLAGSD= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML
 # -------------
 
 BUILDERS_INCS=	-I../bunix -I../RISC_OSLib
-BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -g
+BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -g -DNEWGROW=1
 BUILDERS_VPATH=	$(RISCOS_VPATH)
 BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
@@ -219,9 +219,9 @@ BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
-BUILDERS_LIBS=	-lefence
+BUILDERS_LIBS=	
 
-CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1
+CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1  -DNEWGROW=1
 CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
@@ -238,18 +238,18 @@ HTMLCHECK_OBJS=	$(SGML_OBJS) htmlcheck.o debug.o memwatch.o myassert.o \
 HTMLCHECK_LIBS=
 
 MOST_INCS=	-I../unix  -I../RISC_OSLib -I../\!Fresco -I../tcpiplibs -I../memlib
-MOST_CFLAGS=	-DMOST $(MOST_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -DUSE_MARGINS=1 -DOLD_COMMENTS=0
+MOST_CFLAGS=	-DMOST $(MOST_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -DUSE_MARGINS=1 -DOLD_COMMENTS=0 -DNEWGROW=1
 MOST_VPATH=	$(FRESCO_VPATH):../commonsrc
 MOST_OBJS=	$(FRESCO_OBJS)
 MOST_LIBS=
 
 FIXL_INCS=	-I../!Fresco -I../commonsrc
-FIXL_CFLAGS=	$(FIXL_INCS)
+FIXL_CFLAGS=	$(FIXL_INCS) -DNEWGROW=1
 FIXL_VPATH=	../!Fresco ../commonsrc
 FIXL_OBJS=	SerialEnc.o bittabenc.o fixlicence.o
 
 PLOTCHECK_INCS=	-I../plotcheck -I../RISC_OSLib
-PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -UNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -DBE_DEBUG=0 -O9 -g $(UNIX_CFLAGS)
+PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -UNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -DBE_DEBUG=0 -O9 -g $(UNIX_CFLAGS) -DNEWGROW=1
 PLOTCHECK_VPATH=$(RISCOS_VPATH)
 PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
@@ -261,7 +261,7 @@ PLOTCHECK_LIBS=
 
 
 RECONS_INCS=	-I../reconsparse -I../RISC_OSLib
-RECONS_CFLAGS=-DBUILDERS -DRECONS -DHTMLCHECK -DNO_PTRS $(RECONS_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=1 -O9
+RECONS_CFLAGS=-DBUILDERS -DRECONS -DHTMLCHECK -DNO_PTRS $(RECONS_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=1 -O9 -DNEWGROW=1
 RECONS_VPATH=$(RISCOS_VPATH)
 RECONS_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
@@ -726,12 +726,12 @@ NCFRESCO_BUILD_INCS=		-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 				-I$(RISCOS_BUILD_EXPORT)/C \
 				-J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
-NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 $(NCFRESCO_INCS)
+NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DNEWGROW=0 -DCOMPAT_INET4 $(NCFRESCO_INCS)
 
 # several alternative flag sets
 NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
-NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=1 -DOI_DEBUG=1
-NCFRESCO_MEMCHECK_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -zpc1 -DMemCheck_MEMCHECK -fw -g
+NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1
+NCFRESCO_MEMCHECK_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -zpc1 -DMemCheck_MEMCHECK -fw -g
 NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
 
 # choose one here
@@ -913,9 +913,6 @@ NCFRESCO_DIST:  NCFRESCO_BUILD
 		@cp -p \!NCFresco/Resources/UK/\!Sprites3,ff9 $(RELS)/\!Sprites,ff9
 		@cp -p \!NCFresco/Resources/UK/Res,fae $(RELS)
 		@cp -p \!NCFresco/Resources/UK/Sprites3,ff9 $(RELS)/Sprites,ff9
-		@cp -p \!NCFresco/Resources/UK/TileV,ff9 $(RELS)
-		@cp -p \!NCFresco/Resources/UK/TileN,ff9 $(RELS)
-		@cp -p \!NCFresco/Resources/UK/\!Help $(RELS)
 		@cp -p \!NCFresco/Resources/UK/MimeMap $(RELS)
 		@cp -p \!NCFresco/Resources/UK/Config $(RELS)
 		@cp -p \!NCFresco/Resources/UK/Messages $(RELS)
@@ -923,7 +920,6 @@ NCFRESCO_DIST:  NCFRESCO_BUILD
 		@cp -p \!NCFresco/Resources/UK/Welcome,faf $(RELS)
 		@cp -p \!NCFresco/Resources/UK/SetScrap,ffb $(RELS)
 
-		@chmod 644 $(RELS)/\!Help
 		@chmod 644 $(RELS)/MimeMap
 		@chmod 644 $(RELS)/Config
 		@chmod 644 $(RELS)/Messages
@@ -947,7 +943,7 @@ NCFRESCO_RELEASE: NCFRESCO_BUILD FIXL
 
 NCFRESCO_TEST:	NCFRESCO_DIST
 		@echo "Installing NCFresco release on bungle"
-		@rcp -r RELEASE/\!NCFresco '$(NCFRESCO_TEST_DIR)/Apps'
+		@rcp -pr RELEASE/\!NCFresco '$(NCFRESCO_TEST_DIR)/Apps'
 		@echo "Done"
 		@echo ""
 

@@ -619,23 +619,23 @@ void layout_render_bevels(wimp_redrawstr *r, antweb_doc *doc)
 
 /* Write the layout of the frames as a table */
 
-static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_write_table_fn fn, const char *prefix, int base_count, int width, int height)
+static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_write_table_fn fn, const char *prefix, int base_count, int fmt_w, int fmt_h, int width, int height)
 {
     const rid_frame *frame;
     const rid_frameset_item *fs = &frameset->data.frameset;
     int i, count = base_count;
 
-    int *xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, 0, width, fs->bwidth);
-    int *ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, 0, height, fs->bwidth);
+    int *xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, 0, fmt_w, fs->bwidth);
+    int *ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, 0, fmt_h, fs->bwidth);
 
     PRSDBG(("layout__writetable: frameset %p prefix '%s' fn %p base count %d\n", frameset, strsafe(prefix), fn, base_count));
     
-    fprintf(f, "<TABLE BORDER>\n");
+    fprintf(f, "<TABLE BORDER CELLSPACING=0 CELLPADDING=0>\n");
    
     /* for all frames in the frameset */
     for (frame = frameset->data.frameset.frame_list, i = 0; frame; frame = frame->next, i++)
     {
-        int row, col;
+        int row, col, w, h, scaled_w, scaled_h;
 	char spec[64];
 
 	PRSDBG(("layout__writetable: frame %p\n", frame));
@@ -646,19 +646,25 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
 	if (col == 0)
 	    fprintf(f, "<TR>");
 
-	fprintf(f, "<TD WIDTH=%d HEIGHT=%d ALIGN=CENTER VALIGN=MIDDLE>", xpos[col+1] - xpos[col], ypos[row+1] - ypos[row]);
+	w = xpos[col+1] - xpos[col];
+	h = ypos[row+1] - ypos[row];
+
+	scaled_w = w * width / fmt_w;
+	scaled_h = h * height / fmt_h;
+
+	fprintf(f, "<TD WIDTH=%d HEIGHT=%d ALIGN=CENTER VALIGN=MIDDLE>", scaled_w/2, scaled_h/2);
 
 	switch (frame->tag)
         {
 	case rid_frame_tag_FRAME:		/* if a frame then call back to frontend */
 	    sprintf(spec, "%s_%d", strsafe(prefix), count);
 	    if (fn)
-		fn(f, spec);
+		fn(f, spec, scaled_w, scaled_h);
 	    count++;
 	    break;
 
 	case rid_frame_tag_FRAMESET:		/* if a frameset then recurse */
-	    count += layout__write_table(f, frame, fn, prefix, count, xpos[col+1] - xpos[col], ypos[row+1] - ypos[row]);
+	    count += layout__write_table(f, frame, fn, prefix, count, w, h, scaled_w, scaled_h);
 	    break;
 	}
     }
@@ -671,9 +677,19 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
     return count;
 }
 
-void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix)
+void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix, int width, int height)
 {
-    layout__write_table(f, doc->rh->frames, fn, prefix, 0, 400, 300);
+    int w, h;
+
+    w = doc->rh->stream.widest;
+    h = doc->rh->stream.height;
+
+#if USE_MARGINS
+    w += doc->margin.x0 - doc->margin.x1;
+    h -= doc->margin.y0 - doc->margin.y1;
+#endif
+
+    layout__write_table(f, doc->rh->frames, fn, prefix, 0, w, -h, width, height);
 }
 
 /* ---------------------------------------------------------------------------------------------------------- */

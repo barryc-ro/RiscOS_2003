@@ -246,7 +246,7 @@ static os_error *fe_print_options_write_file(FILE *f)
 
 static const char *print_size = NULL;
 
-static void fe__print_frames(FILE *f, const char *spec)
+static void fe__print_frames(FILE *f, const char *spec, int w, int h)
 {
     fe_view v = fe_frame_specifier_decode(main_view, spec);
 
@@ -256,7 +256,7 @@ static void fe__print_frames(FILE *f, const char *spec)
 	return;
     
     if (v->children)
-	backend_layout_write_table(f, v->displaying, fe__print_frames, spec);
+	backend_layout_write_table(f, v->displaying, fe__print_frames, spec, w, h);
     else
 	fprintf(f, msgs_lookup("printf1"), spec, strsafe(print_size));
 }
@@ -268,7 +268,7 @@ static os_error *fe_print_frames_write_file(FILE *f, fe_view v, const char *size
     fputs(msgs_lookup("printfT"), f);
 
     print_size = size;
-    backend_layout_write_table(f, v->displaying, fe__print_frames, "_0");
+    backend_layout_write_table(f, v->displaying, fe__print_frames, "_0", DBOX_SIZE_X, DBOX_SIZE_Y - 80);
     print_size = NULL;
 
     fputs(msgs_lookup("printfF"), f);
@@ -559,7 +559,8 @@ void fe_find(fe_view v, const char *text, int backwards, int casesense)
 }
 
 /* ------------------------------------------------------------------------------------------- */
-  
+
+#if 0  
 static int vals_to_bits(int n_vals)
 {
     int n_bits = 0;
@@ -571,6 +572,7 @@ static int vals_to_bits(int n_vals)
     while (n_vals > 1);
     return n_bits;
 }
+#endif
 
 #if 0
 #define NVRAM_FONTS	(0x131*8 + 0)
@@ -645,7 +647,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
 	int beeps_val = !atoi(beeps);
 	nvram_write(NVRAM_BEEPS_TAG, beeps_val);
 
-	fe_beeps_set(beeps_val);
+	fe_beeps_set(beeps_val, FALSE);
 	
 	*url = strdup("ncint:openpanel?name=custombeeps");
 	generated = fe_internal_url_REDIRECT;
@@ -944,7 +946,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 		*flags |= access_NOCACHE;
 		generated = fe_internal_url_REDIRECT;
 
-		tb_status_button(fevent_OPEN_RELATED_STUFF, TRUE);
+/* 		tb_status_button(fevent_OPEN_RELATED_STUFF, TRUE); */
 
 		STBDBG(("internal_url: related %s\n", s));
 	    }
@@ -993,7 +995,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    {
 		sound_event(snd_HISTORY_SHOW);
 		tb_status_button(fevent_HISTORY_SHOW_RECENT, TRUE);
-		e = fe_history_write_list(f, v->first, v->hist_at);
+		e = fe_history_write_list(f, v->last, v->hist_at);
 	    }
 	}
 	else if (strcasecomp(panel_name, "historycombined") == 0)
@@ -1229,13 +1231,19 @@ static int internal_action_back(const char *query, const char *bfile, const char
     fe_view v = get_source_view(query, TRUE);
 
     if (v)
-    {
-	sound_event(snd_HISTORY_BACK);
-	*new_url = strdup(fe_history_get_url(v, history_PREV));
-	*flags &= ~access_CHECK_EXPIRE;
-    }
+#if 1
+	fevent_handler(fevent_HISTORY_BACK, v);
+    return fe_internal_url_NO_ACTION;
+#else
+    { 
+ 	sound_event(snd_HISTORY_BACK); 
+	
+  	*new_url = strdup(fe_history_get_url(v, history_PREV));  
+  	*flags &= ~access_CHECK_EXPIRE; 
+    } 
 
-    return *new_url ? fe_internal_url_REDIRECT : fe_internal_url_ERROR;
+    return *new_url ? fe_internal_url_REDIRECT : fe_internal_url_ERROR; 
+#endif
     NOT_USED(bfile);
     NOT_USED(referer);
     NOT_USED(file);
@@ -1246,13 +1254,18 @@ static int internal_action_forward(const char *query, const char *bfile, const c
     fe_view v = get_source_view(query, TRUE);
 
     if (v)
-    {
-	sound_event(snd_HISTORY_FORWARD);
-	*new_url = strdup(fe_history_get_url(v, history_NEXT));
-	*flags &= ~access_CHECK_EXPIRE;
-    }
+#if 1
+	fevent_handler(fevent_HISTORY_FORWARD, v);
+    return fe_internal_url_NO_ACTION;
+#else
+    { 
+ 	sound_event(snd_HISTORY_FORWARD); 
+ 	*new_url = strdup(fe_history_get_url(v, history_NEXT)); 
+ 	*flags &= ~access_CHECK_EXPIRE; 
+    } 
 
     return *new_url ? fe_internal_url_REDIRECT : fe_internal_url_ERROR;
+#endif
     NOT_USED(bfile);
     NOT_USED(referer);
     NOT_USED(file);
@@ -1651,11 +1664,23 @@ void fe_internal_deleting_view(fe_view v)
     {
 	tb_status_button(fevent_OPEN_SCALING, tb_status_button_INACTIVE);
     }
+    else if (strcasecomp(v->name, "__print") == 0)
+    {
+	tb_status_button(fevent_PRINT, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__printletter") == 0)
+    {
+	tb_status_button(fevent_PRINT_LETTER, tb_status_button_INACTIVE);
+    }
+    else if (strcasecomp(v->name, "__printlegal") == 0)
+    {
+	tb_status_button(fevent_PRINT_LEGAL, tb_status_button_INACTIVE);
+    }
 }
 
-void fe_internal_opening_view(fe_view v, const char *url)
-{
-}
+/* void fe_internal_opening_view(fe_view v, const char *url) */
+/* { */
+/* } */
 
 os_error *fe_internal_toggle_panel(const char *panel_name)
 {
