@@ -271,6 +271,7 @@ int build_clean(void)
         case C:
         case BAS:
         case KERNEL:
+        case HAL:
         case EXP:
         case DATA:
   	printf("\n%s...\n", component->name);
@@ -326,6 +327,7 @@ int build_export_hdrs(void)
         case C:
         case BAS:
         case KERNEL:
+        case HAL:
         case DATA:
         case EXP:
   	printf("\n%s...\n", component->name);
@@ -377,6 +379,7 @@ int build_export_libs(void)
         case C:
         case BAS:
         case KERNEL:
+        case HAL:
         case DATA:
         case EXP:
   	printf("\n%s...\n", component->name);
@@ -464,6 +467,7 @@ int build_resources(void)
       case ASM:
       case BAS:
       case KERNEL:
+      case HAL:
       case DATA:
       case RES:
 	printf("\n%s...\n", component->name);
@@ -554,6 +558,7 @@ int build_rom(void)
         case ASM:
         case BAS:
         case KERNEL:
+        case HAL:
         case DATA:
   	printf("\n%s...\n", component->name);
   	sprintf(buffer, "%s.%s.%s", build_dir, SOURCE_DIR, module->path);
@@ -614,6 +619,8 @@ int build_rom(void)
   return 0;
 }
 
+static int ran_install_rom;
+
 int
 build_install_rom(void)
 {
@@ -646,6 +653,7 @@ build_install_rom(void)
       case ASM:
       case BAS:
       case KERNEL:
+      case HAL:
       case DATA:
 	printf("\n%s...\n", component->name);
 	if (module->filename == NULL) {
@@ -668,6 +676,13 @@ build_install_rom(void)
     	        position_in_rom = component->force_position;
     	      }
 	    }
+	    else if (type == KERNEL) {
+	      if (component->force_position) {
+	        if (component->force_position < position_in_rom)
+	          error(0, "component overlaps previous data");
+    	        position_in_rom = component->force_position;
+    	      }
+    	    }
 	    switch (type) {
 	      case C:
 		/* if module is C, link things correctly */
@@ -707,7 +722,7 @@ build_install_rom(void)
 
 	  /* calculate position of next module in ROM */
 	  position_in_rom += (((unsigned long int) size + 3UL) & ~3UL);
-	  if (type != KERNEL)	/* add some magic if not kernel */
+	  if (type != KERNEL && type != HAL)	/* add some magic if not kernel */
 	    position_in_rom += 4;
 	}
     }
@@ -732,6 +747,7 @@ build_install_rom(void)
       case C:
       case BAS:
       case KERNEL:
+      case HAL:
       case DATA:
 	if (module->filename != NULL) {
 	  number_of_modules++;
@@ -743,6 +759,9 @@ build_install_rom(void)
     component = component->next;
   }
   printf("\nTotal of %d modules.\n", number_of_modules);
+
+  ran_install_rom = 1;
+
   return 0;
 }
 
@@ -754,7 +773,75 @@ static int joiner_format_bigsplit(FILE * fh)
   component_entry_t *component;
   module_entry_t *module;
   module_type_t type;
+  int hal_count = 0;
   int kernel_count = 0;
+  int size_printed = 0;
+  unsigned long base = 0x03800000;
+
+  if (base_address) {
+    base = strtoul (base_address, NULL, 0);
+  }
+
+  if (!ran_install_rom) {
+    unsigned long int position_in_rom;
+    int size;
+    int position_forced = 0;
+    char buffer[BUFFER_LEN];
+    char output_path[BUFFER_LEN];
+
+    /* Scan the sizes of the files to get positions */
+    position_in_rom = base;
+
+    component = component_database;
+    while (component) {
+      module = lookup_module(component->name);
+      type = component->type;
+      if (type == UNDEF)
+        type = module->type;
+
+      sprintf(output_path, "%s.%s.%s.%s", build_dir,
+  	    INSTALL_DIR, build_name, module->output);
+
+      switch (type) {
+        case C:
+        case ASM:
+        case BAS:
+        case KERNEL:
+        case HAL:
+        case DATA:
+        if (module->filename != NULL)
+        {
+	  if (position_forced && type != DATA) {
+	  }
+	  else if (type == DATA) {
+	    if (!component->force_position)
+	      component->force_position = position_in_rom;
+  	    position_forced = 1;
+    	    position_in_rom = component->force_position;
+	  }
+	  else if (type == KERNEL) {
+	    if (component->force_position)
+              position_in_rom = component->force_position;
+    	  }
+  	  /* Need to stat the module file, display position in ROM */
+  	  sprintf(buffer, "%s.%s", output_path, module->filename);
+
+  	  if ((size = file_size(buffer)) == -1)
+  	    error(1, "cannot stat file '%s'.", buffer);
+
+  	  /* keep record of things for later */
+  	  component->position = position_in_rom;
+  	  component->size = size;
+
+  	  /* calculate position of next module in ROM */
+  	  position_in_rom += (((unsigned long int) size + 3UL) & ~3UL);
+  	  if (type != KERNEL && type != HAL)	/* add some magic if not kernel */
+  	    position_in_rom += 4;
+        }
+      }
+      component = component->next;
+    }
+  }
 
   /* look for kernel */
   component = component_database;
@@ -764,10 +851,27 @@ static int joiner_format_bigsplit(FILE * fh)
     if (type == UNDEF)
       type = module->type;
 
-    if (type == KERNEL) {
+    if (type == HAL) {
+      fprintf(fh, "HAL:%s.%s.%s.%s.%s\n", build_dir,
+	      INSTALL_DIR, build_name, module->output, module->filename);
+      hal_count++;
+    }
+    else if (type == KERNEL) {
+      if (component->force_position)
+        fprintf(fh, "%lu\n", component->force_position - base);
       fprintf(fh, "%s.%s.%s.%s.%s\n", build_dir,
 	      INSTALL_DIR, build_name, module->output, module->filename);
       kernel_count++;
+    }
+
+    if (hal_count + kernel_count == 1 && !size_printed) {
+      /* write out the image filename */
+      fprintf(fh, "%s.%s.%s\n", build_dir, IMAGES_DIR, image_filename);
+
+      /* write out the image size and misc newline */
+      fprintf(fh, "%d\n\n", atoi(image_size) * 1024);
+
+      size_printed = 1;
     }
     component = component->next;
   }
@@ -778,11 +882,8 @@ static int joiner_format_bigsplit(FILE * fh)
   else if (kernel_count < 1)
     error(0, "you seem to be missing a kernel in this ROM");
 
-  /* write out the image filename */
-  fprintf(fh, "%s.%s.%s\n", build_dir, IMAGES_DIR, image_filename);
-
-  /* write out the image size and misc newline */
-  fprintf(fh, "%d\n\n", atoi(image_size) * 1024);
+  if (hal_count > 1)
+    error(0, "you appear to have more than one HAL in this ROM");
 
   /* now write out the other modules in order */
   component = component_database;
@@ -799,7 +900,7 @@ static int joiner_format_bigsplit(FILE * fh)
       case DATA:
 	if (module->filename != NULL) {
 	  if (type == DATA)
-	    fprintf(fh, "%ld\n", component->position - 0x03800000);
+	    fprintf(fh, "%lu\n", component->position - base);
 	  fprintf(fh, "%s.%s.%s.%s.%s\n", build_dir,
 		  INSTALL_DIR, build_name, module->output, module->filename);
         }
@@ -1084,6 +1185,7 @@ build_install(void)
       case BAS:
       case RES:
       case KERNEL:
+      case HAL:
       case DATA:
 	printf("\n%s...\n", component->name);
 	sprintf(buffer, "%s.%s.%s", build_dir, SOURCE_DIR, module->path);
