@@ -1,464 +1,166 @@
-# Makefile for CTS Plugin
-# =======================
+# Makefile for SCTransport
 #
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name         Description
+# ----       ----         -----------
+# 23-May-96  RWB 	  New for SCTransport
+# 25-Jul-96  RWB	  Changed install rules
+# 11-Sep-96  RWB	  Corrected a major flaw in ROM build
+# 07 May 1997 RWB	  Now supports remote debug library
 
-# -----------------------------------------------------------------------------
-# Change List
 #
-
-# Date		Name	Description
-# ====		====	===========
-# 1999-05-11	JPB	Created from Daytona address book Makefile
-
-# -----------------------------------------------------------------------------
-# Program specific options
+# Paths
 #
+EXP_HDR = <export$dir>.^.Interface2
+EXP_C_H = <Cexport$dir>.h
+EXP_C_O = <Cexport$dir>.o
 
-COMPONENT	= CTS
-APP		= !CTS
-MODULE		= rm.!CTS
-MODULE_D	= rm.!CTSD
-ROM_MODULE	= aof.CTS
-
-# -----------------------------------------------------------------------------
-# Export Paths for Messages module
 #
-
-RESDIR          = ${RESDIR}.${COMPONENT}
-RESAPP          = <Resource$Dir>.Apps.${APP}
-
-# -----------------------------------------------------------------------------
-# Generic options
+# Generic options:
 #
+MKDIR   = cdir
+AS      = objasm
+CC      = cc
+CMHG    = cmhg
+CP      = copy
+LD      = link
+RM      = remove
+WIPE    = -wipe
+CD	= dir
+DEFMOD  = DefMod
+AR	= LibFile
+STRIP   = stripdepnd
 
-MKDIR		= cdir
-AS		= objasm
-CC		= ${MemCheckCC} cc
-CMHG		= cmhg
-CP		= copy
-LD		= link
-RM		= remove
-SQUEEZE		= squeeze
-WIPE		= -wipe
+AFLAGS = -depend !Depend -Stamp -quit
+CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
+CPFLAGS = ~cfr~v
+WFLAGS  = ~c~vr
+CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
 
-AFLAGS		= -depend !Depend -nocache -stamp -quit ${THROWBACK}
-CFLAGS		= ${THROWBACK} -depend !Depend -ffah ${INCLUDES} -wp
-CPFLAGS		= ~cfr~v~n
-SQFLAGS		= -f
-WFLAGS		= ~cf~vr
-
-
-# -----------------------------------------------------------------------------
-# Flags
+DFLAGS = -DUSE_TINY ${DEBUG}
 #
-
-# These are for the standard Desktop build (plus debug)
-
-DFLAGS		= 
-DDFLAGS		= -fn -DDEBUGLIB
-DZFLAGS		= 
-DDZFLAGS	= ${DZFLAGS} -fn -DDEBUGLIB
-
-
-# -----------------------------------------------------------------------------
 # Libraries
 #
-
-LIBDIR		= <Lib$Dir>
-
-CLIB		= CLib:o.stubs
-CPPLIB		= CPPLib:o.c++lib
-ROMCSTUBS	= RISC_OSLib:o.romcstubs
-ABSSYM		= RISC_OSLib:o.c_abssym
-WRAPPER		= RISC_OSLib:s.ModuleWrap
-
-EVENTLIB	= tbox:o.eventlib
-TOOLBOXLIB	= tbox:o.toolboxlib
-WIMPLIB		= tbox:o.wimplib
-
-INETLIB		= TCPIPLIBS:o.inetlib
-SOCKLIB		= TCPIPLIBS:o.socklib5
-UNIXLIB		= TCPIPLIBS:o.unixlib
-
-DEBUGLIB	= ${LIBDIR}.DebugLib.o.DebugLib
-
-LIBSM =\
- ${WIMPLIB}\
- ${TOOLBOXLIB}\
- ${EVENTLIB}m\
- ${UNIXLIB}zm\
- ${INETLIB}zm\
- ${SOCKLIB}zm\
-
-LIBS =\
- ${WIMPLIB}\
- ${TOOLBOXLIB}\
- ${EVENTLIB}\
- ${UNIXLIB}\
- ${INETLIB}\
- ${SOCKLIB}\
- ${CLIB}\
-
-LIBSD =\
- ${WIMPLIB}\
- ${TOOLBOXLIB}\
- ${EVENTLIB}\
- ${DEBUGLIB}\
- ${UNIXLIB}\
- ${INETLIB}\
- ${SOCKLIB}\
- ${CLIB}\
-
-LIBSDM =\
- ${WIMPLIB}\
- ${TOOLBOXLIB}\
- ${EVENTLIB}m\
- ${DEBUGLIB}zm\
- ${UNIXLIB}zm\
- ${INETLIB}zm\
- ${SOCKLIB}zm\
-
-
-# -----------------------------------------------------------------------------
-# Include files (libraries and resources)
+CLIB       = CLIB:o.stubs
+RLIB       = RISCOSLIB:o.risc_oslib
+RSTUBS     = RISCOSLIB:o.rstubs
+ROMSTUBS   = RISCOSLIB:o.romstubs
+ROMCSTUBS  = RISCOSLIB:o.romcstubs
+ABSSYM     = RISC_OSLib:o.AbsSym
+REMOTEDB   = <Lib$Dir>.debug.o.remotezm
+SOCKLIB	   = TCPIPLibs:o.socklibzm
+INETLIB	   = TCPIPLibs:o.inetlibzm
+UNIXLIB    = TCPIPLibs:o.unixlibzm
+LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
+C++LIB     = <Lib$Dir>.c++lib.o.c++libz
+LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
 #
-
-INCLUDES	= -Itbox:,TCPIPLibs:,C:
-
-FILES = \
- LocalRes:!Boot \
- LocalRes:!Run \
- LocalRes:!Sprites \
- LocalRes:Messages \
- LocalRes:Res \
- ${TARGET}
-
-# Include these in the ROM module
-RESFILES = \
- LocalRes:!Sprites \
-
-DIRS = o._dirs
-
-# -----------------------------------------------------------------------------
-# Include files (objects)
+# Include files
 #
+INCLUDES = -IC:,<Lib$Dir>.
 
-OBJS =\
- o.client\
- o.ctsmessage\
- o.ctsbrowser\
- o.ctsui\
- o.ctsutils\
- o.plugclient\
- o.scevent\
- o.smartcard\
- o.statetable\
- o.st_aux\
- o.st_basic\
- o.st_change\
- o.st_errorclose\
- o.st_verify\
- o.st_apdu\
- o.st_text\
- o.st_open\
- o.st_started\
- o.utils
+DIRS=o._dirs
 
-OBJSZ =\
- oz.client\
- oz.ctsmessage\
- oz.ctsbrowser\
- oz.ctsui\
- oz.ctsutils\
- oz.plugclient\
- o.scevent\
- oz.smartcard\
- oz.statetable\
- oz.st_aux\
- oz.st_basic\
- oz.st_change\
- oz.st_errorclose\
- oz.st_verify\
- oz.st_apdu\
- oz.st_text\
- oz.st_open\
- oz.st_started\
- oz.utils
+# Program specific options:
+#
+COMPONENT = SCTrans
+TARGET    = aof.${COMPONENT}
 
-OBJSD =\
- od.client\
- od.ctsmessage\
- od.ctsbrowser\
- od.ctsui\
- od.ctsutils\
- od.plugclient\
- o.scevent\
- od.smartcard\
- od.statetable\
- od.st_aux\
- od.st_basic\
- od.st_change\
- od.st_errorclose\
- od.st_verify\
- od.st_apdu\
- od.st_text\
- od.st_open\
- od.st_started\
- od.utils
- 
-OBJSDZ =\
- odz.client\
- odz.ctsmessage\
- odz.ctsbrowser\
- odz.ctsui\
- odz.ctsutils\
- odz.plugclient\
- o.scevent\
- odz.smartcard\
- odz.statetable\
- odz.st_aux\
- odz.st_basic\
- odz.st_change\
- odz.st_errorclose\
- odz.st_verify\
- odz.st_apdu\
- odz.st_text\
- odz.st_open\
- odz.st_started\
- odz.utils
+.SUFFIXES:   .od
 
-# -----------------------------------------------------------------------------
+OBJS      =	o.sys o.com o.data o.api o.atr o.t0_sm o.t1 o.chan o.irqs \
+	  	o.serial o.header o.db
+
+DOBJS      =	od.sys od.com od.data od.api od.atr od.t0_sm od.t1 od.chan od.irqs \
+	  	od.serial od.header od.db
+
+#
 # Rule patterns
 #
+.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.s.o:;      ${AS} ${AFLAGS} $< $@
+.c.od:;     ${CC} ${CFLAGS} -o $@ $<
+.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.s.od:;     ${AS} ${AFLAGS} $< $@
 
-.SUFFIXES: .o .oz .od .odz .s .c
-
-.c.o:;		${CC} ${CFLAGS} ${DFLAGS} ${EXTRAFLAGS} -c -o $@ $<
-
-.c.oz:;		${CC} ${CFLAGS} ${DZFLAGS} ${EXTRAFLAGS} -c -zM -DROM -o $@ $<
-
-.c.od:;		${CC} ${CFLAGS} ${DDFLAGS} ${EXTRAFLAGS} -c -o $@ $<
-
-.c.odz:;	${CC} ${CFLAGS} ${DDZFLAGS} ${EXTRAFLAGS} -c -zM -DROM -o $@ $<
-
-.s.o:;		${AS} ${AFLAGS} $< $@
-
-
-# -----------------------------------------------------------------------------
-# Main rules
 #
+# build a relocatable module:
+#
+all: rm.${COMPONENT}
 
-all: ${FILES}
-	@echo ${COMPONENT}: Application built (Disc)
+debug: rm.${COMPONENT}D
 
-rom: ${ROM_MODULE}
-	@echo ${COMPONENT}: Module built (ROM)
+#
+# RISC OS ROM build rules:
+#
+rom: ${TARGET}
+        @echo ${COMPONENT}: all complete
 
-ram: ${MODULE}
-	@echo ${COMPONENT}: Module built (RAM)
+export_hdrs:
+	${CP} h.SCTransport ${EXP_C_H}.SCTransport ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (headers)
 
-ramD: ${MODULE_D}
-	@echo ${COMPONENT}: Debug module built (RAM)
+export_libs:
+        @echo ${COMPONENT}: export complete (libs)
 
-install_common: ${FILES}
-	@echo
-	${CP} LocalRes:!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}
-	${CP} LocalRes:Messages			${INSTDIR}.Messages		${CPFLAGS}
-	${CP} LocalRes:Res			${INSTDIR}.Res			${CPFLAGS}
-	${MKDIR} ${INSTDIR}.WebPages
-	${CP} LocalRes:WebPages.01-1 		${INSTDIR}.WebPages.01-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.01-2 		${INSTDIR}.WebPages.01-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.01-3 		${INSTDIR}.WebPages.01-3 ${CPFLAGS}
-	${CP} LocalRes:WebPages.02   		${INSTDIR}.WebPages.02   ${CPFLAGS}
-	${CP} LocalRes:WebPages.03   		${INSTDIR}.WebPages.03   ${CPFLAGS}
-	${CP} LocalRes:WebPages.04   		${INSTDIR}.WebPages.04   ${CPFLAGS}
-	${CP} LocalRes:WebPages.05   		${INSTDIR}.WebPages.05   ${CPFLAGS}
-	${CP} LocalRes:WebPages.06   		${INSTDIR}.WebPages.06   ${CPFLAGS}
-	${CP} LocalRes:WebPages.07   		${INSTDIR}.WebPages.07   ${CPFLAGS}
-	${CP} LocalRes:WebPages.08   		${INSTDIR}.WebPages.08   ${CPFLAGS}
-	${CP} LocalRes:WebPages.11   		${INSTDIR}.WebPages.11   ${CPFLAGS}
-	${CP} LocalRes:WebPages.21   		${INSTDIR}.WebPages.21   ${CPFLAGS}
-	${CP} LocalRes:WebPages.22   		${INSTDIR}.WebPages.22   ${CPFLAGS}
-	${CP} LocalRes:WebPages.23   		${INSTDIR}.WebPages.23   ${CPFLAGS}
-	${CP} LocalRes:WebPages.24   		${INSTDIR}.WebPages.24   ${CPFLAGS}
-	${CP} LocalRes:WebPages.25-1   		${INSTDIR}.WebPages.25-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.25-2   		${INSTDIR}.WebPages.25-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.26   		${INSTDIR}.WebPages.26   ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-1 		${INSTDIR}.WebPages.27-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-2 		${INSTDIR}.WebPages.27-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-3 		${INSTDIR}.WebPages.27-3 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-1 		${INSTDIR}.WebPages.28-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-2 		${INSTDIR}.WebPages.28-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.29 		${INSTDIR}.WebPages.29   ${CPFLAGS}
-	${CP} LocalRes:WebPages.30   		${INSTDIR}.WebPages.30   ${CPFLAGS}
+export: export_${PHASE}
 
-install: install_common
-	${CP} LocalRes:!Run		${INSTDIR}.!Run		${CPFLAGS}
-	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}
-	-Access ${INSTDIR}.!Boot	lr/r
-	-Access ${INSTDIR}.!Run		lr/r
-	-Access ${INSTDIR}.!RunImage	lr/r
-	-Access ${INSTDIR}.Messages	lr/r
-	-Access ${INSTDIR}.Res		lr/r
-	@echo
-	@echo ${COMPONENT}: Application installed to ${INSTDIR}
-
-installd: install_common
-	${CP} LocalRes:!Boot			${INSTDIR}.!Boot		${CPFLAGS}
-	${CP} LocalRes:!RunT		${INSTDIR}.!Run		${CPFLAGS}
-	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}
-	@echo
-	@echo ${COMPONENT}: Debug application installed to ${INSTDIR}
-
-installram: install_common ram
-	${CP} LocalRes:RAM.!Boot	${INSTDIR}.!Boot	${CPFLAGS}
-	${CP} LocalRes:RAM.!Run		${INSTDIR}.!Run		${CPFLAGS}
-	${CP} ${MODULE}			${INSTDIR}.!CTS		${CPFLAGS}
-	@echo
-	@echo ${COMPONENT}: Ram module installed to ${INSTDIR}
-
-installramD: install_common ramD
-	${CP} LocalRes:RAM.!Boot	${INSTDIR}.!Boot	${CPFLAGS}
-	${CP} LocalRes:RAM.!Run		${INSTDIR}.!Run		${CPFLAGS}
-	${CP} ${MODULE_D}		${INSTDIR}.!CTS		${CPFLAGS}
-	@echo
-	@echo ${COMPONENT}: Debug ram module installed to ${INSTDIR}
-
-install_rom: ${ROM_MODULE}
-	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-	@echo
-	@echo ${COMPONENT}: Module installed (ROM)
-
-resources:
-	${MKDIR} ${RESDIR}
-	${MKDIR} ${RESAPP}
-	${CP} LocalRes:ROM.!Boot	${RESAPP}.!Boot		${CPFLAGS}
-	${CP} LocalRes:ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
-	${CP} LocalRes:!Sprites		${RESAPP}.!Sprites	${CPFLAGS}
-	${CP} LocalRes:Messages		${RESDIR}.Messages	${CPFLAGS}
-	${CP} LocalRes:Res		${RESDIR}.Res		${CPFLAGS}
-	${MKDIR} ${RESDIR}.WebPages
-	${CP} LocalRes:WebPages.01-1 	${RESDIR}.WebPages.01-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.01-2 	${RESDIR}.WebPages.01-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.01-3 	${RESDIR}.WebPages.01-3 ${CPFLAGS}
-	${CP} LocalRes:WebPages.02   	${RESDIR}.WebPages.02   ${CPFLAGS}
-	${CP} LocalRes:WebPages.03   	${RESDIR}.WebPages.03   ${CPFLAGS}
-	${CP} LocalRes:WebPages.04   	${RESDIR}.WebPages.04   ${CPFLAGS}
-	${CP} LocalRes:WebPages.05   	${RESDIR}.WebPages.05   ${CPFLAGS}
-	${CP} LocalRes:WebPages.06   	${RESDIR}.WebPages.06   ${CPFLAGS}
-	${CP} LocalRes:WebPages.07   	${RESDIR}.WebPages.07   ${CPFLAGS}
-	${CP} LocalRes:WebPages.08   	${RESDIR}.WebPages.08   ${CPFLAGS}
-	${CP} LocalRes:WebPages.11   	${RESDIR}.WebPages.11   ${CPFLAGS}
-	${CP} LocalRes:WebPages.21   	${RESDIR}.WebPages.21   ${CPFLAGS}
-	${CP} LocalRes:WebPages.22   	${RESDIR}.WebPages.22   ${CPFLAGS}
-	${CP} LocalRes:WebPages.23   	${RESDIR}.WebPages.23   ${CPFLAGS}
-	${CP} LocalRes:WebPages.24   	${RESDIR}.WebPages.24   ${CPFLAGS}
-	${CP} LocalRes:WebPages.25-1  	${RESDIR}.WebPages.25-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.25-2  	${RESDIR}.WebPages.25-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.26   	${RESDIR}.WebPages.26   ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-1 	${RESDIR}.WebPages.27-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-2 	${RESDIR}.WebPages.27-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.27-3 	${RESDIR}.WebPages.27-3 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-1 	${RESDIR}.WebPages.28-1 ${CPFLAGS}
-	${CP} LocalRes:WebPages.28-2	${RESDIR}.WebPages.28-2 ${CPFLAGS}
-	${CP} LocalRes:WebPages.29	${RESDIR}.WebPages.29   ${CPFLAGS}
-	${CP} LocalRes:WebPages.30   	${RESDIR}.WebPages.30   ${CPFLAGS}
-	@echo
-	@echo ${COMPONENT}: Resource files copied to Messages module
+install_rom: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom module installed
 
 clean:
-	@echo starting
-	${WIPE}	abs		${WFLAGS}
-	${WIPE}	aof		${WFLAGS}
-	${WIPE}	linked		${WFLAGS}
-	${WIPE}	map		${WFLAGS}
-	${WIPE}	o		${WFLAGS}
-	${WIPE}	od		${WFLAGS}
-	${WIPE}	oz		${WFLAGS}
-	${WIPE}	odz		${WFLAGS}
-	${WIPE}	rm		${WFLAGS}
-	${RM}	s.ModuleWrap
-	@echo
-	@echo ${COMPONENT}: Cleaned
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${RM} h.header
+        ${STRIP}
+        @echo ${COMPONENT}: cleaned
 
 ${DIRS}:
-	@${MKDIR} abs
-	@${MKDIR} aof
-	@${MKDIR} linked
-	@${MKDIR} map
-	@${MKDIR} o
-	@${MKDIR} od
-	@${MKDIR} oz
-	@${MKDIR} odz
-	@${MKDIR} rm
-	@${MKDIR} syms
-	@${MKDIR} Targets
-	@${MKDIR} Targets.!CTS
-	create ${DIRS}
+	${MKDIR} aof
+	${MKDIR} linked
+	${MKDIR} map
+        ${MKDIR} o
+        ${MKDIR} od
+        ${MKDIR} rm
+        create ${DIRS}
 	stamp  ${DIRS}
 
-
-# -----------------------------------------------------------------------------
-# Development rules
 #
-
-linkmap: ${OBJS} ${LIBS}
-	${LD} -map -o null:x ${OBJS} ${LIBS} > map.linked
-
-map:
-	${LD} -map -bin -base 0 -o null: ${OBJS} ${LIBS} > map.base0
-
-clean_all: clean
-	${WIPE}	Targets		${WFLAGS}
-	${WIPE} syms		${WFLAGS}
-	@echo ${COMPONENT}: Cleaned all
-
-
-# -----------------------------------------------------------------------------
-# Final link for ROM Image (using given base address)
+# ROM target (re-linked at ROM Image build time)
 #
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${DIRS}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
+#
+# Final link for the ROM Image (using given base address)
+#
 rom_link:
-	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} \
-		${ROM_MODULE} ${ABSSYM} -map > map.${COMPONENT}
-	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-	@echo ${COMPONENT}: rom_link complete
-
-oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
-	${AS} ${AFLAGS} s.ModuleWrap $@
-
-oz.ModuleWra1: s.ModuleWrap s.AppName ${RESFILES}
-	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" s.ModuleWrap $@
-
-s.ModuleWrap: ${WRAPPER}
-	${CP} ${WRAPPER} $@ ${CPFLAGS}
-
-
-# -----------------------------------------------------------------------------
-# Static dependencies
+        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
 #
+# Target
+#
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${DIRS}
+        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
+        Access rm.${COMPONENT} RW/R
 
-abs.!RI: ${OBJS} ${EXTRALIBS} ${LIBS} ${DIRS}
+rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} ${DIRS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} 
+        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} 
+        Access rm.${COMPONENT}D RW/R
+
+# dummy target
+h.header: cmhg.header
 	@echo
-	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS} ${EXTRALIBS}
-	${SQUEEZE} ${SQFLAGS} $@
 
-abs.!RI_D: ${OBJSD} ${EXTRALIBS} ${LIBSD} ${DIRS}
-	@echo
-	${LD} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD} ${EXTRALIBS}
-
-${MODULE}: oz.ModuleWra1 ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB} ${DIRS}
-	@echo
-	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWra1 ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB}
-
-${MODULE_D}: oz.ModuleWra1 ${OBJSDZ} ${LIBSDM} ${EXTRALIBS} ${CLIB} ${DIRS}
-	@echo
-	${LD} -s syms.RAMModD -o $@ -module oz.ModuleWra1 ${OBJSDZ} ${LIBSDM} ${EXTRALIBS} ${CLIB}
-
-${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} ${EXTRALIBS} ${DIRS}
-	@echo
-	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${ROMCSTUBS}
-
-
-# -----------------------------------------------------------------------------
+#
 # Dynamic dependencies:
