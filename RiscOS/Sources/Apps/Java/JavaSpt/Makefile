@@ -12,7 +12,10 @@
 # Component specific options:
 #
 COMPONENT  = JavaSpt
+RAM_MODULE = rm.${COMPONENT}
 ROM_MODULE = aof.${COMPONENT}
+
+FULL_COMPONENT = JavaSupport
 
 #
 # Generic options:
@@ -23,6 +26,7 @@ CMHG    = cmhg
 CP      = copy
 LD      = link
 RM      = remove
+MODSQZ  = modsqz
 WIPE    = -wipe
 ASM	= objasm
 
@@ -38,21 +42,24 @@ RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
 
-OBJS =\
-	o.DynamicA \
-	o.JavaSpt
-	
+ROM_OBJS	= or.DynamicA or.JavaSpt
+RAM_OBJS	= o.DynamicA o.JavaSpt
+
 #
 # Rule patterns
 #
 
+.SUFFIXES:	.o .od .or .s .c .cmhg .h
 .s.o:;	$(ASM) $< $@
 
 #
 # Main rules:
 #
 #
-rom: ${ROM_MODULE}
+all: ${RAM_MODULE} o.dirs
+        @echo ${COMPONENT}: Module built (RAM)
+
+rom: ${ROM_MODULE} o.dirs
         @echo ${COMPONENT}: Module built (ROM)
 
 install_rom: ${ROM_MODULE}
@@ -61,13 +68,29 @@ install_rom: ${ROM_MODULE}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} or.* ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
+o.dirs:
+	${MKDIR} o
+	${MKDIR} or
+	create $@
+
+#
+# Targets
+#
+${RAM_MODULE}:	${RAM_OBJS} ${CLIB}
+	${MKDIR} rm
+	$(LD) -o $@ -rmf ${RAM_OBJS}
+        ${MODSQZ} $@
+        Access $@ RW/R
+
 ${ROM_MODULE}: ${OBJS}
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS}
+        ${LD} -o $@ -aof ${ROM_OBJS}
 
 # final link for ROM Image (using given base address)
 rom_link:
