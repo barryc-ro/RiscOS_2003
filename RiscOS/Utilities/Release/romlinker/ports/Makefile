@@ -20,7 +20,7 @@ ${TARGET}: $(OBJALL)
 	@echo "Made ${TARGET}"
 
 install: ${TARGET}
-	/usr/ucb/install ${TARGET} ${RISCOS_BUILD_TOOLS}/${TARGET}
+	install ${TARGET} ${RISCOS_BUILD_TOOLS}/${TARGET}
 	strip ${RISCOS_BUILD_TOOLS}/${TARGET}
 
 clean:
