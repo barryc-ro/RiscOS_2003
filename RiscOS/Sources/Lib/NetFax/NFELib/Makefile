@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.10 for RISC OS
+#	VERSION:	0.11 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -27,6 +27,8 @@
 #					amu commandline
 #					create_ent, extract_hdr and utils objects added
 #	25/02/98	0.10	RDW	Fixed so only NFELib.h is exported.
+#	20/03/98	0.11	RDW	MEMCHECK var. removed so it can be set from
+#					amu commandline
 
 #
 # Paths
@@ -51,7 +53,6 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 LIBFILE = libfile
-MemCheckCC	= #MemCheck.CC
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v

@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.05 for RISC OS
+#	VERSION:	0.06 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -18,6 +18,8 @@
 #	20/02/98	0.04	RDW	Cleaned up to work in build env. correctly
 #	25/02/98	0.05	RDW	Commented out DEBUG and DBUGOBJS so it can
 #					be passed from amu commandline
+#	20/03/98	0.06	RDW	MemCheck var. removed so it can be given on
+#					amu commandline
 
 #
 # Paths
@@ -40,7 +42,6 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 LIBFILE = libfile
-MemCheckCC	= #MemCheck.CC
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
@@ -83,7 +84,7 @@ C++FLAGS=	-I${INCLUDES} ${DEBUG}\
 		-Wp -depend !Depend -c -throwback ${TINYSTUBS}		
 
 
-#DBUGOBJS=       #MemCheck:o.MC #tml_podule.o debuglib.o trace_PL.o# 
+#DBUGOBJS=       MemCheck:o.MC #tml_podule.o debuglib.o trace_PL.o
 
 ASMFLAGS=       
 
@@ -102,10 +103,10 @@ DDOBJS=		od.tstNFELDec
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
 
 encode:		${EOBJS} local_dirs
-		$(LD) -aif -C++ -o NFEencode $(NFELIB) $(EMAILLIB) ${EOBJS} $(OBJS) $(C++LIB) $(DBUGOBJS) $(STUBS)
+		$(LD) -aif -C++ -o NFEencode $(NFELIB) $(EMAILLIB) ${EOBJS} $(OBJS) $(C++LIB) $(STUBS)
         	@echo ${TARGETE}: complete
 decode:		${DOBJS} local_dirs
-		$(LD) -aif -C++ -o NFEdecode $(NFELIB) $(EMAILLIB) ${DOBJS} $(OBJS) $(C++LIB) $(DBUGOBJS) $(STUBS)
+		$(LD) -aif -C++ -o NFEdecode $(NFELIB) $(EMAILLIB) ${DOBJS} $(OBJS) $(C++LIB) $(STUBS)
         	@echo ${TARGETD}: complete
 edebug:		${DEOBJS} local_dirs
 		$(LD) -d -aif -C++ -o NFEencode $(NFELIB)d $(EMAILLIB)d ${DEOBJS} $(OBJS) $(C++LIB) $(DBUGOBJS) $(STUBS)
