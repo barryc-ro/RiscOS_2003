@@ -168,58 +168,10 @@ extern "C" {
 /*=============================================================================
  ==   basic defines and typedefs
  ============================================================================*/
-#ifdef DOS
-#define WFCAPI _cdecl far _loadds
-#define PWFCAPI _cdecl far *
-#define WFCAPI_NOLOADDS _cdecl far
-#define PWFCAPI_NOLOADDS _cdecl far *
-#endif
-
-#ifdef  WIN16
-#define WFCAPI _cdecl far _loadds
-#define PWFCAPI _cdecl far *
-#define WFCAPI_NOLOADDS _cdecl far
-#define PWFCAPI_NOLOADDS _cdecl far *
-#endif
-
-#ifdef  WIN32
 #define WFCAPI _cdecl
 #define PWFCAPI _cdecl *
 #define WFCAPI_NOLOADDS _cdecl
 #define PWFCAPI_NOLOADDS _cdecl *
-#endif
-
-#ifdef RISCOS
-#define WFCAPI _cdecl
-#define PWFCAPI _cdecl *
-#define WFCAPI_NOLOADDS _cdecl
-#define PWFCAPI_NOLOADDS _cdecl *
-#endif
-
-typedef char CHAR;
-#if 0
-typedef unsigned char UCHAR;
-typedef int INT;
-typedef unsigned short USHORT;
-typedef unsigned long ULONG;
-#endif
-    
-typedef void far * PVOID;
-typedef char far * PCHAR;
-#if 0
-typedef UCHAR far * PUCHAR;
-typedef USHORT far * PUSHORT;
-typedef ULONG far * PULONG;
-#endif
-    
-typedef PVOID  far * PPVOID;
-typedef PCHAR  far * PPCHAR;
-typedef PUCHAR far * PPUCHAR;
-
-#if 0
-typedef UCHAR BOOLEAN;
-#endif
-typedef BOOLEAN far *PBOOLEAN;         
 
 #ifndef IN
 #define IN

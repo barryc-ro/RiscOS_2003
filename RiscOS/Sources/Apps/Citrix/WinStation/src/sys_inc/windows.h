@@ -61,8 +61,16 @@ typedef BYTE near           *PBYTE;
 typedef BYTE far            *LPBYTE;
 typedef LPBYTE far	    *PPBYTE;
 
+typedef signed char SCHAR;
+typedef SCHAR * PSCHAR;
+
+typedef char CHAR;
+typedef CHAR * PCHAR;
+typedef PCHAR  * PPCHAR;
+
 typedef char UCHAR;
 typedef UCHAR *PUCHAR;
+typedef PUCHAR * PPUCHAR;
 
 typedef short SHORT;                        //      x
 
@@ -97,11 +105,14 @@ typedef DWORD near          *PDWORD;
 typedef DWORD far           *LPDWORD;
 
 typedef void VOID;                          //  x   x
+typedef void  * PVOID;
+typedef PVOID  * PPVOID;
 typedef void far            *LPVOID;
 typedef CONST void far      *LPCVOID;
 
 typedef UCHAR		    BOOLEAN;
 
+typedef BOOLEAN far *PBOOLEAN;         
 typedef char *PSZ;
 typedef char *LPSTR;
 

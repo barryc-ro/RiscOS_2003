@@ -10,6 +10,12 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.2  1998/01/27 18:39:07  smiddle
+*   Lots more work on Thinwire, resulting in being able to (just) see the
+*   log on screen on the test server.
+*
+*   Version 0.03. Tagged as 'WinStation-0_03'
+*
 *   Revision 1.1  1998/01/19 19:12:57  smiddle
 *   Added loads of new files (the thinwire, modem, script and ne drivers).
 *   Discovered I was working around the non-ansi bitfield packing in totally
@@ -70,8 +76,10 @@ BOOL BltSrcRop3Simpleclip( HDC hdc );
 BOOL BltSrcRop3Cmplxclip( HDC hdc );
 #endif
 
+#ifndef MAX
 #define MAX( a, b ) (( (b) > (a) ) ? (b) : (a) )
 #define MIN( a, b ) (( (b) < (a) ) ? (b) : (a) )
+#endif
 #define ABS( a ) ( ((a) < 0 ) ? (-1*(a)) : (a) )
 
 #define TWSetJmpSaveStack( Buf )        setjmpSaveStack( Buf )

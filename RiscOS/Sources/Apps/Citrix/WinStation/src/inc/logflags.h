@@ -6,9 +6,14 @@
 *
 *  Copyright Citrix Systems Inc. 1995
 *
-*  $Author$
+*  smiddle
 *
-*  $Log$
+*  logflags.h,v
+*  Revision 1.1  1998/01/12 11:36:51  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.6   15 Apr 1997 18:45:24   TOMA
 *  autoput for remove source 4/12/97
@@ -110,5 +115,6 @@
 #define LOG_APPEND       0x00000001
 #define LOG_FLUSH        0x00000002
 #define LOG_PRINTF       0x00000004
+#define LOG_REMOTE       0x00000008
 
 #endif //__LOGFLAGS_H__

@@ -8,6 +8,7 @@
 
 #include <ctype.h>
 #include <locale.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -21,14 +22,18 @@
 #include "tboxlibs/quit.h"
 #include "tboxlibs/event.h"
 #include "tboxlibs/wimplib.h"
+#include "tboxlibs/proginfo.h"
+#include "tboxlibs/menu.h"
 
 #include "tbres.h"
 #include "utils.h"
 #include "version.h"
-#include "rdebug.h"
 #include "session.h"
 
 #include "../inc/clib.h"
+#include "../inc/client.h"
+#include "../inc/debug.h"
+#include "../dll/vd/vdtw31/twh2cinc.h"
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -44,6 +49,8 @@ static int ToolBox_EventList[] =
 {
     tbres_event_CONNECT,
     tbres_event_DISCONNECT,
+    tbres_event_SHOWING_ICON_MENU,
+    ProgInfo_AboutToBeShown,
     Quit_Quit,
     0
 };
@@ -65,8 +72,10 @@ static int event_mask =
 /* cli set values */
 
 static char *cli_filename = NULL;
+static char *cli_logfile = NULL;
 static int cli_iconbar = FALSE;
 static int cli_dopostmortem = FALSE;
+static int cli_remote_debug = FALSE;
 
 static Session current_session = NULL;
 
@@ -124,7 +133,7 @@ static void signal_setup(void)
 static int connect_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
-    DBG(("connect_handler:\n"));
+    TRACE((TC_UI, TT_API1, "connect_handler:\n"));
 
     if (current_session)
 	session_resume(current_session);
@@ -141,7 +150,7 @@ static int connect_handler(int event_code, ToolboxEvent *event, IdBlock *id_bloc
 static int disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
-    DBG(("disconnect_handler:\n"));
+    TRACE((TC_UI, TT_API1, "disconnect_handler:\n"));
 
     if (current_session)
     {
@@ -156,17 +165,36 @@ static int disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *id_b
     NOT_USED(handle);
 }
 
+static int proginfo_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+                         void *handle)
+{
+    LOGERR(proginfo_set_version(0, id_block->self_id, Module_MajorVersion " (" Module_Date ") " Module_MinorVersion ));
+    return 1;
+    NOT_USED(event_code);
+    NOT_USED(event);
+    NOT_USED(handle);
+}
+
+static int icon_menu_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+                         void *handle)
+{
+    LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_CONNECT, current_session == NULL));
+    LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_DISCONNECT, current_session == NULL));
+    return 1;
+    NOT_USED(event_code);
+    NOT_USED(event);
+    NOT_USED(handle);
+}
+
 /* --------------------------------------------------------------------------------------------- */
 
 static void cleanup_task(void)
 {
 }
 
-extern void LogClose(void);
-
 static void cleanup(void)
 {
-    DBG(("cleanup:\n"));
+    TRACE((TC_UI, TT_API1, "cleanup:\n"));
 
     if (current_session)
     {
@@ -174,13 +202,13 @@ static void cleanup(void)
 	current_session = NULL;
     }
     
-    _swix(Hourglass_Smash, 0);	/* just in case */
+    LOGERR(_swix(Hourglass_Smash, 0));	/* just in case */
 
 #ifdef DEBUG
     {
     time_t tp;
     time(&tp);
-    DBG(("(1) *** " APP_NAME " exiting at %s", ctime(&tp)));
+    TRACE((TC_UI, TT_API1, "(1) *** " APP_NAME " exiting at %s", ctime(&tp)));
     }
 
     LogClose();
@@ -208,10 +236,12 @@ static int quit_handler1(int event_code, ToolboxEvent *event, IdBlock *id_block,
 
 static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
 {
+    DTRACE((TC_UI, TT_API1, "null_handler: sess %p\n", current_session));
+    
     if (current_session)
 	if (!session_poll(current_session))
 	{
-	    DBG(("null_handler: poll returned 0\n"));
+	    TRACE((TC_UI, TT_API1, "null_handler: poll returned 0\n"));
 
 	    session_close(current_session);
 	    current_session = NULL;
@@ -285,6 +315,43 @@ static int dataopen_handler(WimpMessage *message, void *handle)
 
 /* --------------------------------------------------------------------------------------------- */
 
+#ifdef DEBUG
+/*
+ * EMLogInit
+ *
+ *
+ * Initialize the important stuff for the Log file
+ *
+ */
+static int log_init(void)
+{
+   LOGOPEN EMLogInfo;
+   int rc = CLIENT_STATUS_SUCCESS;
+
+   LogClose();
+   
+   EMLogInfo.LogFlags   = (cli_remote_debug ? LOG_REMOTE : 0);
+#if 1
+   EMLogInfo.LogClass   = TC_UI;
+   EMLogInfo.LogEnable  = TT_ERROR;
+   EMLogInfo.LogTWEnable = 0;
+#else
+   EMLogInfo.LogClass   = TC_ALL;
+   EMLogInfo.LogEnable  = TT_ERROR;
+   EMLogInfo.LogTWEnable = TT_ERROR;
+#endif
+
+   strcpy(EMLogInfo.LogFile, cli_logfile ? cli_logfile : "");
+   //lstrcpy(EMLogInfo.LogFile, "<Wimp$ScrapDir>." APP_NAME ".Log");
+
+   rc = LogOpen(&EMLogInfo);
+
+   return(rc);
+}
+#endif //DEBUG
+
+/* --------------------------------------------------------------------------------------------- */
+
 static void process_args(int argc, char *argv[])
 {
     int i;
@@ -293,7 +360,7 @@ static void process_args(int argc, char *argv[])
     {
         char *s = argv[i];
 
-        DBG(("(3) arg(%d)='%s'\n", i, s));
+        TRACE((TC_UI, TT_API1, "(3) arg(%d)='%s'\n", i, s));
 
 	if (*s == '-')
 	{
@@ -301,6 +368,14 @@ static void process_args(int argc, char *argv[])
 	    {
 	    case 'd':	    /* output post mortem on abort? */
 		cli_dopostmortem = TRUE;
+		break;
+
+	    case 'l':	    /* log file */
+		cli_logfile = strdup(argv[++i]);
+		break;
+
+	    case 'r':	    /* remote debugging */
+		cli_remote_debug = TRUE;
 		break;
 
 	    case 'f':      /* file to play initially */
@@ -315,7 +390,7 @@ static void process_args(int argc, char *argv[])
 	} /* if */
     } /* for */
 
-    DBG(("(2) process_args result: file=\"%s\", dopostmortem=%d, iconbar=%d\n",
+    TRACE((TC_UI, TT_API1, "(2) process_args result: file=\"%s\", dopostmortem=%d, iconbar=%d\n",
 	 strsafe(cli_filename), cli_dopostmortem, cli_iconbar));
 }
 
@@ -332,6 +407,10 @@ static void initialise(int argc, char *argv[])
     /* decode args */
     process_args(argc, argv);
 
+#ifdef DEBUG
+    log_init();
+#endif
+    
     /* initialise toolbox first to get messages file */
 #if 0
     /* Wimp 380 needed for embedded windows */
@@ -370,6 +449,9 @@ static void initialise(int argc, char *argv[])
     err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
     err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, disconnect_handler, NULL));
 
+    err_fatal(event_register_toolbox_handler(-1, ProgInfo_AboutToBeShown, proginfo_handler, NULL));
+    err_fatal(event_register_toolbox_handler(-1, tbres_event_SHOWING_ICON_MENU, icon_menu_handler, NULL));
+
     /* initialise application components */
 
     /* create iconbar icon */
@@ -386,10 +468,8 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
     time_t tp;
 
-    rdebug_open();
-    
     time(&tp);
-    DBG(("(1) *** New " APP_NAME " " VERSION_STRING " started %s", ctime(&tp)));
+    TRACE((TC_UI, TT_API1, "(1) *** New " APP_NAME " " VERSION_STRING " started %s", ctime(&tp)));
 #endif
 
     initialise(argc, argv);
@@ -404,17 +484,22 @@ int main(int argc, char *argv[])
 
     err_fatal(event_set_mask(event_mask));
 
-    DBG(("(1) Entering poll loop\n"));
+    TRACE((TC_UI, TT_API1, "(1) Entering poll loop\n"));
     while (TRUE)
     {
-	int event_code;
+	int event_code, t;
 	WimpPollBlock poll_block;
 
-        event_poll_idle(&event_code, &poll_block, 100, NULL);
-	rdebug_poll();
+	LOGERR(_swix(OS_ReadMonotonicTime, _OUT(0), &t));
+//      event_poll_idle(&event_code, &poll_block, t + 100, NULL);
+        event_poll(&event_code, &poll_block, NULL);
+
+#ifdef DEBUG
+	LogPoll();
+#endif
 
     	if (event_code != 0)
-    	    DBG(("(7) Poll: %d\n", event_code));
+    	    TRACE((TC_UI, TT_API1, "(7) Poll: %d\n", event_code));
     }
 
     return EXIT_SUCCESS;

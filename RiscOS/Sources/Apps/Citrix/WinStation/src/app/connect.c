@@ -19,8 +19,6 @@
 #include "session.h"
 #include "sessionp.h"
 
-#include "rdebug.h"
-
 #define tbres_WIN_CONNECT	"connectW"
 
 #define I_MESSAGE		1
@@ -34,7 +32,7 @@ void connect_open(Session sess)
     {
 	toolbox_show_object(0, sess->connect_d, Toolbox_ShowObject_Default, NULL, NULL_ObjectId, NULL_ComponentId);
 	button_set_value(0, sess->connect_d, I_MESSAGE, "");
-	window_set_title(0, sess->connect_d, sess->gszServerLabel);
+	window_set_title(0, sess->connect_d, (char *)sess->gszServerLabel);
     }
 }
 
@@ -44,7 +42,7 @@ void connect_status(Session sess, int state)
     sprintf(buf, "msg%d", state);
     button_set_value(0, sess->connect_d, I_MESSAGE, utils_msgs_lookup(buf));
 
-    DBG(("connect_status: sess %p d %p state %d\n", sess, sess->connect_d, state));
+    //DBG(("connect_status: sess %p d %p state %d\n", sess, sess->connect_d, state));
 }
 
 void connect_close(Session sess)

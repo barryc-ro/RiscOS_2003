@@ -52,6 +52,7 @@ typedef struct _LOGOPEN {
    ULONG LogFlags;
    ULONG LogClass;
    ULONG LogEnable;
+   ULONG LogTWEnable;
    FILEPATH LogFile;
 } LOGOPEN, far *PLOGOPEN;
 
@@ -88,7 +89,8 @@ void WFCAPI LogBuffer( ULONG LogClass, ULONG LogEnable,
                        LPVOID pBuffer, ULONG ByteCount );
 void WFCAPI LogAssert( PCHAR, PCHAR, int, int );
 void LogErr( void *err, PCHAR pFileName, int LineNumber );
-
+void LogPoll(void);
+    
 #else
 /*
  * Note: These function typedefs must be maintained in sync with the

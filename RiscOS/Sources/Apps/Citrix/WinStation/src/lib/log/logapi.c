@@ -58,6 +58,7 @@
 /*  Get the standard C includes */
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -68,10 +69,20 @@
 
 #include "kernel.h"
 
+#if defined(REMOTE_DEBUG) && defined(DEBUG)
+#include "debug/remote.h"
+#endif
+
+#include "../../app/version.h"
+
 /*=============================================================================
 ==   Functions Defined
 =============================================================================*/
 void logWrite( char far * Format, ... );
+
+#if defined(REMOTE_DEBUG) && defined(DEBUG)
+static void rdebug_open(void);
+#endif
 
 /*=============================================================================
 ==   External Functions used
@@ -83,6 +94,7 @@ void logWrite( char far * Format, ... );
 int ghLogHandle=-1;
 ULONG guLogClass=0;
 ULONG guLogEnable=0;
+ULONG guLogTWEnable=0;
 ULONG guLogFlags=0;
 
 PLIBPROCEDURE gpfnLogFunctions[]=
@@ -94,7 +106,9 @@ PLIBPROCEDURE gpfnLogFunctions[]=
  (PLIBPROCEDURE)LogAssert,
 };
 
-void WinLog( LPVOID );
+#if defined(REMOTE_DEBUG) && defined(DEBUG)
+static debug_session *db_sess = NULL;
+#endif
 
 /*******************************************************************************
  *
@@ -116,6 +130,7 @@ int WFCAPI LogLoad( PPLIBPROCEDURE pfnLogProcedures )
    ghLogHandle=-1;
    guLogClass=0;
    guLogEnable=0;
+   guLogTWEnable=0;
    guLogFlags=0;
 
    // set up entrypoint array to return
@@ -154,11 +169,17 @@ int WFCAPI LogOpen( PLOGOPEN pLogOpen )
    // set up global data
    guLogClass  = pLogOpen->LogClass;
    guLogEnable = pLogOpen->LogEnable;
+   guLogTWEnable = pLogOpen->LogTWEnable;
    guLogFlags  = pLogOpen->LogFlags;
 
-   if ( guLogClass == 0 || guLogEnable == 0 )
-       return( CLIENT_STATUS_SUCCESS );
+//   if ( guLogClass == 0 || (guLogEnable == 0 && guLogTWEnable == 0))
+//       return( CLIENT_STATUS_SUCCESS );
 
+#if defined(REMOTE_DEBUG) && defined(DEBUG)
+   if (guLogFlags & LOG_REMOTE)
+       rdebug_open();
+#endif
+   
    // check for nul device
    if ( (pLogOpen->LogFile[0] == '\0') || !stricmp( pLogOpen->LogFile, "nul" ) )
       return( CLIENT_STATUS_SUCCESS );
@@ -252,11 +273,27 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
    char * pBuf = Buffer;          // (ie. Don't try to put more chars in Buffer than
                                   //      sizeof(Buffer) )
 
-
-   if ( (!(LogClass & LOG_ASSERT)) &&  // Always log asserts
-        (!(LogClass & guLogClass) || !(LogEnable & guLogEnable)) )
-      return;
-
+   if ( !(LogClass & LOG_ASSERT) )  // Always log asserts
+   {
+       if (!(LogClass & guLogClass) ||
+	   !(LogEnable & (LogClass == TC_TW ? guLogTWEnable : guLogEnable)))
+	   return;
+/*
+       if (!(LogClass & guLogClass))
+	   return;
+	   
+       if (LogClass == TC_TW)
+       {
+	   if (!(LogEnable & guLogTWEnable))
+	       return;
+       }
+       else
+       {
+	   if (!(LogEnable & guLogEnable))
+	       return;
+       }
+*/
+   }
 
    {
 
@@ -284,13 +321,6 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
 
    pBuf += vsprintf( pBuf, pFormat, arg_marker );
 
-    //  send to WFDbg before \n is appended
-    {
-        LPVOID pVoid = (LPVOID) Buffer;
-
-        WinLog( pVoid );
-    }
-
    pBuf += sprintf( pBuf, "\n" );
    *pBuf = '\0';
 
@@ -303,6 +333,12 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
          flush( ghLogHandle );
   }
 
+#if defined(REMOTE_DEBUG) && defined(DEBUG)
+   if( guLogFlags & LOG_REMOTE )
+   {
+       debug_print_line(db_sess, Buffer + 9);	// skip over the timestamp
+   }
+#endif
 }
 
 /*******************************************************************************
@@ -334,8 +370,9 @@ LogBuffer( ULONG LogClass, ULONG LogEnable,
    ULONG i, j;
    int nl=0x0D|(0x0A<<8);
 
-   if (!(LogClass & guLogClass) || !(LogEnable & guLogEnable))
-      return;
+   if (!(LogClass & guLogClass) ||
+       !(LogEnable & (LogClass == TC_TW ? guLogTWEnable : guLogEnable)))
+       return;
 
     /*
      *  Output data
@@ -429,13 +466,6 @@ LogAssert( PCHAR pExpr, PCHAR pFileName, int LineNumber, int rc )
 
    LogPrintf( LOG_ASSERT, TT_ERROR, "%s", Buffer );
    fprintf(stderr,  "%s\n", Buffer );
-
-    //  send to WFDbg
-    {
-        LPVOID pVoid = (LPVOID) Buffer;
-
-        WinLog( pVoid );
-    }
 }
 
 
@@ -452,11 +482,6 @@ LogAssert( PCHAR pExpr, PCHAR pFileName, int LineNumber, int rc )
  *
  ******************************************************************************/
 
-void
-WinLog( LPVOID pBuffer )
-{
-}
-
 void LogErr( void *err, PCHAR pFileName, int LineNumber )
 {
     if (err)
@@ -470,3 +495,77 @@ void LogErr( void *err, PCHAR pFileName, int LineNumber )
 	fprintf(stderr,  "%s\n", Buffer );
     }
 }
+
+/* ----------------------------------------------------------------------------- */
+
+#if defined(REMOTE_DEBUG) && defined(DEBUG)
+
+#define HELP_INFO_1	\
+			"help\n" \
+			"set log (class|enable|twenable) x\n"
+
+static void cleanup(void)
+{
+    remote_debug_close((debug_session *)db_sess);
+    db_sess = NULL;
+}
+
+static int debug_cmd_handler(int argc, char *argv[], void *handle)
+{
+    int handled = -1;
+
+    if (stricmp(argv[0], "help") == 0)
+    {
+	debug_print_line(db_sess, HELP_INFO_1);
+	handled = 1;
+    }
+    else if (stricmp(argv[0], "show") == 0)
+    {
+	handled = 1;
+    }
+    else if (stricmp(argv[0], "set") == 0)
+    {
+	handled = 0;
+	if (argc > 1)
+	{
+	    if (stricmp(argv[1], "log") == 0)
+	    {
+		if (argc > 3)	// type and value
+		{
+		    handled = 1;
+
+		    if (stricmp(argv[2], "class") == 0)
+			guLogClass = strtoul(argv[3], NULL, 16);
+		    else if (stricmp(argv[2], "enable") == 0)
+			guLogEnable = strtoul(argv[3], NULL, 16);
+		    else if (stricmp(argv[2], "twenable") == 0)
+			guLogTWEnable = strtoul(argv[3], NULL, 16);
+		    else
+			handled = 0;
+		}
+	    }
+	}
+    }
+    
+    return handled;
+    handle = handle;
+}
+
+static void rdebug_open(void)
+{
+    if (!db_sess)
+    {
+	remote_debug_open(APP_NAME, &db_sess);
+	if (db_sess)
+	    remote_debug_register_cmd_handler(db_sess, debug_cmd_handler, NULL);
+	atexit(cleanup);
+    }
+}
+
+void LogPoll(void)
+{
+    if (db_sess)
+	debug_poll(db_sess);
+}
+
+#endif

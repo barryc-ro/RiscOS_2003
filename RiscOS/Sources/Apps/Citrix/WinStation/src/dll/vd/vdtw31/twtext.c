@@ -10,6 +10,13 @@
 *   Author: Marc Bloomfield (marcb) 15-Apr-1994
 *
 *   $Log$
+*   Revision 1.3  1998/01/30 19:10:45  smiddle
+*   Fixed clipping (as long as its simple), and palettes (mostly) and text.
+*   Fixed a few more dodgy alignmenet structures and made some progress
+*   towards getting the save/restore screen code working.
+*
+*   Version 0.04. Tagged as 'WinStation-0_04'
+*
 *   Revision 1.2  1998/01/27 18:38:59  smiddle
 *   Lots more work on Thinwire, resulting in being able to (just) see the
 *   log on screen on the test server.
@@ -102,7 +109,7 @@ static TWTOFLAGS    vFlags;
 static USHORT       vLastCharInc = 8;
 static UCHAR        vfFirstGlyph;
 static RECTI        vrclBackground;
-static CHAR         vfrclClip;
+static SCHAR        vfrclClip;
 
 static BOOL    vbComplex;  // TRUE if current operation is complex clipping
 
@@ -554,7 +561,7 @@ static SHORT     yPos = 0, yBase = 0;
 
              case TWTO_POS_SAMEY1DX:
                 {
-                   CHAR deltaPos;
+                   SCHAR deltaPos;
 
                    memcpy( &Position, &vLastStringPos, SIZE_OF_POSITION );
                    GetNextTWCmdBytes( &deltaPos, sizeof(deltaPos) );
@@ -1290,7 +1297,7 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
     ULONG        pt2Rcl;
     ULONG *      ppt2Rcl = &pt2Rcl;
     USHORT       uscbData;
-    CHAR         deltaRcl;
+    SCHAR        deltaRcl;
 
     LPBYTE p = (LPBYTE) lpstatic_buffer;
 
@@ -1520,7 +1527,7 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
     /*
      *  Simple clipping
      */
-    vfrclClip = (CHAR)(Options & TWTO_RCLCLIP);
+    vfrclClip = (SCHAR)(Options & TWTO_RCLCLIP);
 
     /*
      *  Create the region mask out of clipping rects

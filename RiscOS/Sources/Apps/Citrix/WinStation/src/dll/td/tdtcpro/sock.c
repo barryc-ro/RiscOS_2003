@@ -138,7 +138,7 @@ int Call( PPD pPd, ULONG InetAddr, UINT Port, int * pSocket )
 
 #ifdef HAS_NODELAY
    arg = 1;
-   rc = setsockopt( sock, IPPROTO_TCP, TCP_NODELAY, (CHAR *)&arg, sizeof(arg) );
+   rc = setsockopt( sock, IPPROTO_TCP, TCP_NODELAY, , sizeof(arg) );
 
    if( rc ) {
        rc = errno;
@@ -152,7 +152,7 @@ int Call( PPD pPd, ULONG InetAddr, UINT Port, int * pSocket )
    TRACE((TC_TD,TT_API3, "Call: ioctl FIONBIO"));
    
    arg = 1;
-   rc = socketioctl( sock, FIONBIO, (CHAR *)&arg );
+   rc = socketioctl( sock, FIONBIO, (char *)&arg );
 
    TRACE((TC_TD,TT_API3, "Call: done"));
 

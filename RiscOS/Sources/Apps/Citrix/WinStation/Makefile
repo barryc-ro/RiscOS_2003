@@ -142,18 +142,17 @@ local_dirs:
 install_base:
 	-${MKDIR} ${INSTALLDIR}/${APPNAME}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Boot,feb	${INSTALLDIR}/${APPNAME}/
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Run,feb	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Res,fae	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${INSTALLDIR}/${APPNAME}/
 	-${MKDIR} ${INSTALLDIR}/${APPNAME}/ini
-	-${CP} ${CPFLAGS} Resources/ini/appsrv			${INSTALLDIR}/${APPNAME}/ini/
-	-${CP} ${CPFLAGS} Resources/ini/module			${INSTALLDIR}/${APPNAME}/ini/
-	-${CP} ${CPFLAGS} Resources/ini/wfclient		${INSTALLDIR}/${APPNAME}/ini/
+	${CP} ${CPFLAGS} Resources/ini/appsrv			${INSTALLDIR}/${APPNAME}/ini/
+	${CP} ${CPFLAGS} Resources/ini/module			${INSTALLDIR}/${APPNAME}/ini/
+	${CP} ${CPFLAGS} Resources/ini/wfclient			${INSTALLDIR}/${APPNAME}/ini/
 	-${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${INSTALLDIR}/${APPNAME}/
-	-${CP} ${CPFLAGS} ${APPD}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
-	echo Installed ${APPNAME}
 
 install: install_base
 	-${CP} ${CPFLAGS} ${APP}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
@@ -543,11 +542,11 @@ cleandll: cleanwengine cleantd cleanpd cleanwd cleanvd cleannr cleanne cleansd
 
 # APP
 
-APPSRC=		src/app/connect.c src/app/main.c src/app/rdebug.c \
+APPSRC=		src/app/connect.c src/app/main.c \
 		src/app/session.c src/app/utils.c
-APPOBJS=	src/app/connect.o src/app/main.o src/app/rdebug.o \
+APPOBJS=	src/app/connect.o src/app/main.o \
 		src/app/session.o src/app/utils.o
-APPOBJSD=	src/app/connect.od src/app/main.od src/app/rdebug.od \
+APPOBJSD=	src/app/connect.od src/app/main.od \
 		src/app/session.od src/app/utils.od
 
 ${APP}: ${APPOBJS} ${APPLIBS} ${BASELIBS} local_dirs

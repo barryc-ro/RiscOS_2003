@@ -6,6 +6,7 @@
 
 #include "windows.h"
 
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,11 +38,11 @@
 #include "../inc/wdemulp.h"
 #include "../inc/vddriverp.h"
 #include "../inc/nrdevicep.h"
+#include "../inc/debug.h"
 
 #include "swis.h"
 #include "tboxlibs/toolbox.h"
 
-#include "rdebug.h"
 #include "session.h"
 #include "sessionp.h"
 #include "utils.h"
@@ -90,12 +91,6 @@ static BOOL		bPDError=FALSE;
 
 /* --------------------------------------------------------------------------------------------- */
 
-#ifdef DEBUG
-static int EMLogInit(void);
-#else
-#define EMLogInit()	0
-#endif
-
 extern LPBYTE gScriptFile;
 extern LPBYTE gScriptDriver;
 
@@ -108,7 +103,7 @@ static void MessageBox(const char *message, const char *server)
     _kernel_oserror e;
     e.errnum = 0;
     strncpy(e.errmess, message, sizeof(e.errmess)-1);
-    _swix(Wimp_ReportError, _INR(0,2), &e, 0, server);
+    LOGERR(_swix(Wimp_ReportError, _INR(0,2), &e, 0, server));
 }
 
 
@@ -385,6 +380,7 @@ static void WFEngineStatusCallback( Session sess, int message )
 	LogPrintf( LOG_CLASS, LOG_CONNECT, "CONNECTED to %s", sess->gszServerLabel);
 #endif
 	sess->HaveFocus = FALSE;
+	sess->Connected = TRUE;
 	break;
 
     case CLIENT_STATUS_KILL_FOCUS:  // ignore these messages
@@ -393,8 +389,11 @@ static void WFEngineStatusCallback( Session sess, int message )
 	// restore desktop (should work with mode numbers and selectors)
 	{
 	    int mode;
-	    _swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 1, &mode);
-	    _swix(Wimp_SetMode, _IN(0), mode);
+
+	    LOGERR(_swix(OS_RestoreCursors, 0));
+
+	    LOGERR(_swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 1, &mode));
+	    LOGERR(_swix(Wimp_SetMode, _IN(0), mode));
 	}
 	break;
 
@@ -528,7 +527,7 @@ static int EMEngLoadSession(Session sess)
 
 static void session_free(Session sess)
 {
-    DBG(("session_free: %p\n", sess));
+    TRACE((TC_UI, TT_API1, "session_free: %p\n", sess));
 
     if (global_session == sess)
 	global_session = NULL;
@@ -539,7 +538,7 @@ static void session_free(Session sess)
 
 static int session_abort(Session sess, int rc)
 {
-    DBG(("session_abort: %p state %d\n", sess, rc));
+    TRACE((TC_UI, TT_API1, "session_abort: %p state %d\n", sess, rc));
 
     connect_close(sess);
     EMErrorPopup(sess, rc);
@@ -555,13 +554,10 @@ Session session_open(const char *ica_file)
     char *pEnvVar;
     Session sess;
 
-    DBG(("session_open: '%s'\n", ica_file));
+    TRACE((TC_UI, TT_API1, "session_open: '%s'\n", ica_file));
 
     sess = global_session = calloc(sizeof(struct session_), 1);
 
-    rc = EMLogInit();
-    DBG(("LogInit: returns %d\n", rc));
-    
     sess->gszICAFile = strdup(ica_file);
     sess->HaveFocus = TRUE;
     
@@ -585,7 +581,7 @@ Session session_open(const char *ica_file)
 	}
     }
     
-    DBG(("got server: '%s'\n", sess->gszServerLabel));
+    TRACE((TC_UI, TT_API1, "got server: '%s'\n", sess->gszServerLabel));
 
     GetPrivateProfileString(sess->gszServerLabel, INI_ENCRYPTIONLEVELSESSION, 
 			    "",
@@ -679,7 +675,7 @@ int session_poll(Session sess)
 {
     int rc;
     
-//  DBG(("session_poll: state %x connected %d\n", gState, gState & WFES_CONNECTED ));
+    TRACE((TC_UI, TT_API1, "session_poll: state %x connected %d focus %d continuepolling %d\n", gState, gState & WFES_CONNECTED, sess->HaveFocus, gbContinuePolling ));
 
 //  if ( gState & WFES_CONNECTED )
 //	srvWFEngMessageLoop( sess->hWFE );
@@ -696,6 +692,10 @@ int session_poll(Session sess)
 	}
 
 	WFEngineStatusCallback(sess, rc);
+
+#ifdef DEBUG
+	LogPoll();
+#endif
     }
     while (!sess->HaveFocus && gbContinuePolling);
     
@@ -704,7 +704,7 @@ int session_poll(Session sess)
 
 void session_close(Session sess)
 {
-    DBG(("session_close: %p\n", sess));
+    TRACE((TC_UI, TT_API1, "session_close: %p\n", sess));
 
     /*
      *  Unload script driver
@@ -732,7 +732,7 @@ void session_close(Session sess)
 #if 0
 void session_close_all(void)
 {
-    DBG(("session_close_all: \n"));
+    TRACE((TC_UI, TT_API1, "session_close_all: \n"));
 
     if (global_session)
 	session_close(global_session);
@@ -743,7 +743,7 @@ void session_close_all(void)
 
 void session_resume(Session sess)
 {
-    DBG(("session_resume: %p\n", sess));
+    TRACE((TC_UI, TT_API1, "session_resume: %p\n", sess));
 
     // Give focus back to the engine
     if (!srvWFEngSetInformation(sess->hWFE, WFESetFocus, NULL, 0))
@@ -752,12 +752,22 @@ void session_resume(Session sess)
 
 void session_run(const char *ica_file)
 {
-    Session sess = session_open(ica_file);
+    Session sess;
 
-    while (sess->HaveFocus)
+    TRACE((TC_UI, TT_API1, "session_run: %s\n", ica_file));
+
+    sess = session_open(ica_file);
+
+    TRACE((TC_UI, TT_API1, "session_run: entering poll\n"));
+
+    while (sess->HaveFocus && !sess->Connected)
 	session_poll(sess);
 
+    TRACE((TC_UI, TT_API1, "session_run: entering close\n"));
+
     session_close(sess);
+
+    TRACE((TC_UI, TT_API1, "session_run: going for cleanup Focus %d\n", sess->HaveFocus));
 
     // allow cleanup
     while (session_poll(sess))
@@ -790,7 +800,7 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 	{ NULL,		0,	NULL }
     }, *mp;
 
-    DBG(("ModuleLookup: '%s'\n", pName));
+    TRACE((TC_UI, TT_API1, "ModuleLookup: '%s'\n", pName));
     
     for (mp = modules; mp->pName; mp++)
     {
@@ -809,35 +819,4 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 }
 
 /* --------------------------------------------------------------------------------------------- */
-
-#ifdef DEBUG
-/*
- * EMLogInit
- *
- *
- * Initialize the important stuff for the Log file
- *
- */
-int  EMLogInit(void)
-{
-   LOGOPEN EMLogInfo;
-   int rc = CLIENT_STATUS_SUCCESS;
-
-   LogClose();
-   
-   EMLogInfo.LogFlags   = LOG_APPEND;
-#if 1
-   EMLogInfo.LogClass   = TC_ALL;
-   EMLogInfo.LogEnable  = TT_ERROR &~ 0x0040;
-#else
-   EMLogInfo.LogClass   = TC_TW | LOG_ASSERT;
-   EMLogInfo.LogEnable  = TT_API3;
-#endif
-   lstrcpy(EMLogInfo.LogFile, "<Wimp$ScrapDir>." APP_NAME ".Log");
-
-   rc = LogOpen(&EMLogInfo);
-
-   return(rc);
-}
-#endif //DEBUG
 

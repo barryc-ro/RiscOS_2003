@@ -9,6 +9,13 @@
 * $Author$  Andy (3/15/94)
 *
 * $Log$
+* Revision 1.3  1998/01/30 19:11:02  smiddle
+* Fixed clipping (as long as its simple), and palettes (mostly) and text.
+* Fixed a few more dodgy alignmenet structures and made some progress
+* towards getting the save/restore screen code working.
+*
+* Version 0.04. Tagged as 'WinStation-0_04'
+*
 * Revision 1.2  1998/01/27 18:40:26  smiddle
 * Lots more work on Thinwire, resulting in being able to (just) see the
 * log on screen on the test server.
@@ -621,6 +628,9 @@ int far  MousePosition( USHORT X, USHORT Y )
    X = (USHORT)(((ULONG)X * gWidth )/0x10000);
    Y = (USHORT)(((ULONG)Y * gHeight)/0x10000);
 
+   X = X * 2;
+   Y = (gHeight - 1 - Y) * 2;
+   
    TRACE(( TC_MOU, TT_API1, "MousePosition: X=%u Y=%u",X,Y ));
 
    //  Make a position call to mouse driver
@@ -657,6 +667,9 @@ int far  MousePositionAbs( USHORT X, USHORT Y )
 
    TRACE(( TC_MOU, TT_API1, "MousePositionAbs: X=%u Y=%u",X,Y ));
 
+   X = X * 2;
+   Y = (gHeight - 1 - Y) * 2;
+   
    //  Make a position call to mouse driver
    //  Make a position call to mouse driver
    s[0] = 3;

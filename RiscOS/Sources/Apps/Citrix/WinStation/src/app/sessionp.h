@@ -23,6 +23,7 @@ struct session_
     int fSdPoll;
     int fSdLoaded;
     int HaveFocus;
+    int Connected;
 
     ObjectId connect_d;		// connection dialogue box
 };
