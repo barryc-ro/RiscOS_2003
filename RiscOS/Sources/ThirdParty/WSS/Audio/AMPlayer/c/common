@@ -206,11 +206,11 @@ STATIC FrameState do_read_frame(Frame *fr)
     /* Recognise TAGs, they mean end of file */
     /* RJW: No they don't. They mean skip the next 128 bytes */
     if((newhead & 0xffffff00) == ('T'<<24)+('A'<<16)+('G'<<8)) {
-      dprintf("TAG! @ %d\n", Ftell(filept));
+      dprintf("TAG! @ %ld\n", Ftell(filept));
       if (Fseek(filept, 124, SEEK_CUR)) {
         return Feof(filept) ? frame_eof : frame_moredata;
       }
-      dprintf("seeked! %d\n", Ftell(filept));
+      dprintf("seeked! %ld\n", Ftell(filept));
       goto read_again;
       /*return frame_eof;*/
     }
@@ -234,16 +234,16 @@ STATIC FrameState do_read_frame(Frame *fr)
           len+=10; /* Footer */
         dprintf("len=%d\n", len);
         currentpos=Ftell(filept);
-        dprintf("currentpos = %d\n", currentpos);
+        dprintf("currentpos = %ld\n", currentpos);
 
         if (!Fisastream(filept))
           id3v2_header(filept,((newhead & 0xff)<<8) | buf[0], buf[1], len);
 
-        dprintf("seeking (1) to %d\n", currentpos+len);
+        dprintf("seeking (1) to %ld\n", currentpos+len);
         if (Fseek(filept, currentpos+len, SEEK_SET)) {
           return Feof(filept) ? frame_eof : frame_moredata;
         }
-        dprintf("seeked to = %d\n", Ftell(filept));
+        dprintf("seeked to = %ld\n", Ftell(filept));
         goto read_again;
       }
       if(firsthead == 0)
@@ -251,11 +251,61 @@ STATIC FrameState do_read_frame(Frame *fr)
         /* I even saw RIFF headers at the beginning of MPEG streams ;( */
         if(newhead == ('R'<<24)+('I'<<16)+('F'<<8)+'F')
         {
-           dprintf("RIFF header!\n");
-          async_err("Skipped RIFF header");
-          if (Fseek(filept, 40, SEEK_CUR)) {
+          /* Format:
+              +0 RIFF
+              +4 <data length exc header>
+              +8 WAVE
+              <id blocks>
+
+              <id blocks> are :
+              +0 Identifier
+              +4 block length, little endian
+
+              Identifiers we are interested in :
+              'fmt ' : format information - I guess that type &20055 is MP3,
+                       but without further documentary evidence, I won't
+                       commit to anything. type is word 0 in the fmt chunk.
+              'data' : sound data
+          */
+
+          /* Missing checks on this code :
+               WAVE not checked.
+               'fmt ' not checked for the file containing MP3 data
+          */
+          dprintf("RIFF header!\n");
+          if (Fseek(filept, 8, SEEK_CUR)) {
+            dprintf("Couldn't skip the RIFF non-header length (and WAV)\n");
+            async_err("Skipping RIFF header");
             return Feof(filept) ? frame_eof : frame_moredata;
           }
+          /* Here we do the idblock skipping */
+          while (1)
+          {
+            struct {
+              char id[4];
+              unsigned long len;
+            } idblock;
+            if (Fread(&idblock, 1, 8, filept) != 8) {
+              dprintf("Couldn't read IDblock\n");
+              async_err("Skipping RIFF header");
+              return Feof(filept) ? frame_eof : frame_moredata;
+            }
+            dprintf("-- RIFF chunk %c%c%c%c size %lx\n",
+                                               idblock.id[0],idblock.id[1],
+                                               idblock.id[2],idblock.id[3],
+                                               idblock.len);
+            if (idblock.id[0]=='d' &&
+                idblock.id[1]=='a' &&
+                idblock.id[2]=='t' &&
+                idblock.id[3]=='a')
+              break;
+            if (Fseek(filept, idblock.len, SEEK_CUR)) {
+              dprintf("Couldn't skip chunk\n");
+              async_err("Skipping RIFF header");
+              return Feof(filept) ? frame_eof : frame_moredata;
+            }
+          }
+          async_err("Skipped RIFF header");
           goto read_again;
         }
         got_here_by_skipping = TRUE;
@@ -563,7 +613,40 @@ _kernel_oserror *read_fileinfo(word info, char *name, Fib *fib, Frib *frib)
           /* I even saw RIFF headers at the beginning of MPEG streams ;( */
           if(newhead == ('R'<<24)+('I'<<16)+('F'<<8)+'F')
           {
-            Fseek(file, 40, SEEK_CUR);
+            /* Comments in the main decoder about RIFF apply here also */
+            dprintf("RIFF header!\n");
+            if (Fseek(file, 8, SEEK_CUR)) {
+              dprintf("Couldn't skip the RIFF non-header length (and WAV)\n");
+              return err(ERROR_BADHEADER, "Truncated RIFF header");
+            }
+
+            /* Here we do the idblock skipping */
+            while (1)
+            {
+              struct {
+                char id[4];
+                unsigned long len;
+              } idblock;
+              if (Fread(&idblock, 1, 8, file) != 8) {
+                dprintf("Couldn't read IDblock\n");
+                return err(ERROR_BADHEADER, "Malformed RIFF header");
+              }
+              dprintf("-- RIFF chunk %c%c%c%c size %lx\n",
+                                                 idblock.id[0],idblock.id[1],
+                                                 idblock.id[2],idblock.id[3],
+                                                 idblock.len);
+              if (idblock.id[0]=='d' &&
+                  idblock.id[1]=='a' &&
+                  idblock.id[2]=='t' &&
+                  idblock.id[3]=='a')
+                break;
+              if (Fseek(file, idblock.len, SEEK_CUR)) {
+                dprintf("Couldn't skip chunk\n");
+                async_err("Skipping RIFF header");
+                return err(ERROR_BADHEADER, "Malformed RIFF header");
+              }
+            }
+            async_err("Skipped RIFF header");
             goto fi_read_again;
           }
           else if ((newhead & 0xffffff00) == ('I'<<24)+('D'<<16)+('3'<<8))
@@ -571,11 +654,11 @@ _kernel_oserror *read_fileinfo(word info, char *name, Fib *fib, Frib *frib)
             /* ID3v2 - will the crap never end */
             _kernel_oserror *error;
             dprintf("Identified ID3v2 tag at %lx\n",ftell(file));
-            fseek(file,-4,SEEK_CUR); /* Jump back to the ID3v2 tag */
+            Fseek(file,-4,SEEK_CUR); /* Jump back to the ID3v2 tag */
             error=id3v2_skiptag(file);
             if (error)
             {
-              fclose(file);
+              Fclose(file);
               return error;
             }
             goto fi_read_again;
