@@ -27,8 +27,7 @@ Objects =  autojp.o unictype.o \
 	enc_utf8.o \
 	enc_ascii.o \
 	enc_utf16.o \
-	enc_ucs4.o \
-	acorn.o
+	enc_ucs4.o
 
 ObjectsD =  autojp.od unictype.od \
 	utf8.od \
@@ -40,8 +39,7 @@ ObjectsD =  autojp.od unictype.od \
 	enc_utf8.od \
 	enc_ascii.od \
 	enc_utf16.od \
-	enc_ucs4.od \
-	acorn.od
+	enc_ucs4.od
 
 ObjectsZ =  autojp.oz unictype.oz \
 	utf8.oz \
@@ -53,8 +51,7 @@ ObjectsZ =  autojp.oz unictype.oz \
 	enc_utf8.oz \
 	enc_ascii.oz \
 	enc_utf16.oz \
-	enc_ucs4.oz \
-	acorn.oz
+	enc_ucs4.oz
 
 all: ucodelib
 
@@ -82,7 +79,6 @@ riscos_export: riscos_libs
 	@cp -p unictype.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p encoding.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p iso10646.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
-	@cp -p languages.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p utf8.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@echo Copied libraries
 
@@ -90,9 +86,6 @@ clean:
 	@-rm mkunictype
 	@-rm unictype.c
 	@-rm *.o
-	@-rm *.od
-	@-rm *.oz
-	@-rm ucodelib ucodelibd ucodelibz
 	echo Done clean
 
 realclean: clean

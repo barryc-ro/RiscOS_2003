@@ -67,14 +67,16 @@ OBJS = autojp.o \
 	utf8.o \
 	encoding.o \
 	iso2022.o \
-	eightbit.o \
+	koi8r.o \
+	microsoft.o \
+	acorn.o \
+	apple.o \
 	shiftjis.o \
 	bigfive.o \
 	enc_utf8.o \
 	enc_ascii.o \
 	enc_utf16.o \
-	enc_ucs4.o \
-	acorn.o
+	enc_ucs4.o
 
 OBJSZ = \
 	oz.autojp \
@@ -82,15 +84,16 @@ OBJSZ = \
 	oz.utf8 \
 	oz.encoding \
 	oz.iso2022 \
-	oz.eightbit \
+	oz.koi8r \
+	oz.microsoft \
+	oz.acorn \
+	oz.apple \
 	oz.shiftjis \
 	oz.bigfive \
 	oz.enc_utf8 \
 	oz.enc_ascii \
 	oz.enc_utf16 \
-	oz.enc_ucs4 \
-	oz.acorn
-
+	oz.enc_ucs4
 
 OBJSD = \
 	od.autojp \
@@ -98,18 +101,20 @@ OBJSD = \
 	od.utf8 \
 	od.encoding \
 	od.iso2022 \
-	od.eightbit \
+	od.koi8r \
+	od.microsoft \
+	od.acorn \
+	od.apple \
 	od.shiftjis \
 	od.bigfive \
 	od.enc_utf8 \
 	od.enc_ascii \
 	od.enc_utf16 \
-	od.enc_ucs4 \
-	od.acorn
+	od.enc_ucs4
 
-HDRS = autojp.h charsets.h encoding.h iso10646.h languages.h unictype.h utf8.h
+HDRS = autojp.h charsets.h encoding.h iso10646.h unictype.h utf8.h
 
-LIBS = ${TARGET} ${TARGETD} ${TARGETZ} 
+LIBS = ${TARGET} ${TARGETD} 
 
 #
 # Rule patterns
@@ -154,7 +159,6 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.charsets ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.encoding ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.iso10646 ${UNICODELIBDIR}.h.* ${CPFLAGS}
-	${CP} h.languages ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.unictype ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.utf8     ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
@@ -162,9 +166,9 @@ export_hdrs: ${HDRS} dirs
 export_libs: ${LIBS} dirs
 	${CP} ${TARGET}  ${UNICODELIBDIR}.o.* ${CPFLAGS}
 	${CP} ${TARGETD} ${UNICODELIBDIR}.o.* ${CPFLAGS}
-	${CP} ${TARGETZ} ${UNICODELIBDIR}.o.* ${CPFLAGS}
         @echo ${COMPONENT}: export complete (libs)
 
+#	${CP} ${TARGETZ} ${UNICODELIBDIR}.o.* ${CPFLAGS}
 
 local_dirs:
 	${MKDIR} o
@@ -184,14 +188,7 @@ unictype.c: mkunictype data.UNIDATA2
 mkunictype: mkunictype.o ${CLIB}
 	${LD} -o $@ mkunictype.o ${CLIB}
 
-unictype.o od.unictype oz.unictype: unictype.c
-
-links:
-	./mklinks
-	echo Made links
-
-#od.unictype: unictype.c
-#	${CC} ${CCFLAGS} -DROM=0 -DDEBUG=1         -o $@ unictype.c
+unictype.o oz.unictype od.unictype: unictype.c
 
 #
 # Final link
@@ -206,76 +203,3 @@ ${TARGETD}: ${OBJSD} local_dirs
 	${LB} ${LBFLAGS} -o ${COMPONENTD} ${OBJSD}
 
 # Dynamic dependencies:
-o.mkunictype:	c.mkunictype
-o.mkunictype:	h.unictype
-o.mkunictype:	h.iso10646
-o.mkunictype:	c.mkunictype
-o.mkunictype:	h.unictype
-o.mkunictype:	h.iso10646
-oz.utf8:	c.utf8
-oz.utf8:	h.utf8
-oz.utf8:	h.iso10646
-oz.encoding:	c.encoding
-oz.encoding:	C:h.swis
-oz.encoding:	C:h.kernel
-oz.encoding:	h.encpriv
-oz.encoding:	h.encoding
-oz.encoding:	h.iso10646
-oz.encoding:	h.enc_ascii
-oz.encoding:	h.iso2022
-oz.encoding:	h.shiftjis
-oz.encoding:	h.bigfive
-oz.encoding:	h.eightbit
-oz.encoding:	h.enc_utf8
-oz.encoding:	h.enc_utf16
-oz.encoding:	h.enc_ucs4
-oz.encoding:	h.charsets
-oz.encoding:	VersionNum
-oz.iso2022:	c.iso2022
-oz.iso2022:	C:h.swis
-oz.iso2022:	C:h.kernel
-oz.iso2022:	h.encpriv
-oz.iso2022:	h.encoding
-oz.iso2022:	h.iso10646
-oz.iso2022:	h.iso2022
-oz.eightbit:	c.eightbit
-oz.eightbit:	h.encpriv
-oz.eightbit:	h.encoding
-oz.eightbit:	h.iso10646
-oz.eightbit:	h.eightbit
-oz.shiftjis:	c.shiftjis
-oz.shiftjis:	h.encpriv
-oz.shiftjis:	h.encoding
-oz.shiftjis:	h.iso10646
-oz.shiftjis:	h.iso2022
-oz.shiftjis:	h.shiftjis
-oz.bigfive:	c.bigfive
-oz.bigfive:	h.encpriv
-oz.bigfive:	h.encoding
-oz.bigfive:	h.iso10646
-oz.bigfive:	h.iso2022
-oz.bigfive:	h.bigfive
-oz.enc_utf8:	c.enc_utf8
-oz.enc_utf8:	h.encpriv
-oz.enc_utf8:	h.encoding
-oz.enc_utf8:	h.iso10646
-oz.enc_utf8:	h.utf8
-oz.enc_utf8:	h.iso10646
-oz.enc_utf8:	h.iso2022
-oz.enc_utf8:	h.enc_utf8
-oz.enc_ascii:	c.enc_ascii
-oz.enc_ascii:	h.encpriv
-oz.enc_ascii:	h.encoding
-oz.enc_ascii:	h.iso10646
-oz.enc_ascii:	h.enc_ascii
-oz.enc_utf16:	c.enc_utf16
-oz.enc_utf16:	h.encpriv
-oz.enc_utf16:	h.encoding
-oz.enc_utf16:	h.iso10646
-oz.enc_utf16:	h.iso2022
-oz.enc_utf16:	h.enc_utf16
-oz.enc_ucs4:	c.enc_ucs4
-oz.enc_ucs4:	h.encpriv
-oz.enc_ucs4:	h.encoding
-oz.enc_ucs4:	h.iso10646
-oz.enc_ucs4:	h.enc_ucs4
