@@ -33,9 +33,11 @@
 
 #include "Encoding.h"
 #include "FetchPage.h"
+#include "FontManage.h"
 #include "History.h"
 #include "Menus.h"
 #include "NestWimp.h"
+#include "Redraw.h"
 #include "Save.h"
 #include "URLutils.h"
 #include "Windows.h"
@@ -44,12 +46,17 @@
 
 /* Locals */
 
+char *consonant = "bcdfghijklmnopqrstuvwxyz";
+char *vowel = "aeiou";
+
 static int      * subwindows        = NULL;
 static ObjectId   current_subwindow = CDSubNone;
 static ObjectId   colourdbox_id     = 0;
 
 static int        save_ticked = -1;
 static int        disp_ticked = -1;
+
+static int        choices_modechanged = 0;
 
 global_choices  * new_choices       = NULL;
 ObjectId          choices_windowid  = 0;
@@ -72,7 +79,9 @@ static int               choices_display_m_button_handler(int eventcode, Toolbox
 static int               choices_save_m_button_handler   (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 static int               choices_display_m_click_handler (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 static int               choices_save_m_click_handler    (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
-
+static int               choices_option_state_handler    (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               choices_redraw_fakepage_handler (int eventcode, WimpPollBlock * event, IdBlock * id_block, void * handle);
+static int               choices_open_choice_window      (int eventcode, WimpPollBlock * event, IdBlock * id_block, void * handle);
 static _kernel_oserror * choices_colour_set_component    (ObjectId window, ComponentId component, int colour);
 static _kernel_oserror * choices_set_save_field          (ObjectId obj, ComponentId comp, int state);
 static _kernel_oserror * choices_set_display_field       (ObjectId obj, ComponentId comp, int state);
@@ -103,18 +112,18 @@ static _kernel_oserror * choices_show_subwindow(ObjectId choices_window, int sub
   int                         window_handle;
   int                         vwidth, hheight;
 
-  if (current_subwindow != CDSubNone)
+  if (current_subwindow != CDSubNone && current_subwindow != subwindow)
   {
     /* remove the current subwindow */
 
     RetError(toolbox_hide_object(0, subwindows[current_subwindow]));
+    current_subwindow = CDSubNone;
   }
 
-  if (subwindow == CDSubNone || !(subwindows[subwindow]) || subwindow == current_subwindow)
+  if (subwindow == CDSubNone || !(subwindows[subwindow]))
   {
     /* Have not been asked to open a new subwindow */
 
-    current_subwindow = CDSubNone;
     return NULL;
   }
 
@@ -215,6 +224,8 @@ int choices_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void
     if (tl & (1u<<29)) Printf("choices_to_be_shown: Called\n");
   #endif
 
+  if (choices_windowid) return 1;
+
   choices_windowid = idb->self_id;
 
   /* Allocate block for holding subwindows ObjectIds */
@@ -276,7 +287,10 @@ int choices_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void
   if (!e) e = event_register_toolbox_handler(-1, ECD_HiSaveBt,       choices_save_m_button_handler,    NULL);
   if (!e) e = event_register_toolbox_handler(-1, ECDSaveMenuClick,   choices_save_m_click_handler,     NULL);
   if (!e) e = event_register_toolbox_handler(-1, ECDDispMenuClick,   choices_display_m_click_handler,  NULL);
+  if (!e) e = event_register_toolbox_handler(subwindows[CDSubBrowseDefaults], OptionButton_StateChanged, choices_option_state_handler, NULL);
 
+  if (!e) e = event_register_wimp_handler(*(subwindows + CDSubColours), Wimp_ERedrawWindow, choices_redraw_fakepage_handler, NULL);
+  if (!e) e = event_register_wimp_handler(idb->self_id, Wimp_EOpenWindow, choices_open_choice_window, NULL);
   /* Deal with errors */
 
   if (e)
@@ -293,6 +307,10 @@ int choices_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void
     event_deregister_toolbox_handler(-1, ECD_HiSaveBt,       choices_save_m_button_handler,    NULL);
     event_deregister_toolbox_handler(-1, ECDSaveMenuClick,   choices_save_m_click_handler,     NULL);
     event_deregister_toolbox_handler(-1, ECDDispMenuClick,   choices_display_m_click_handler,  NULL);
+    event_deregister_toolbox_handler(subwindows[CDSubBrowseDefaults], OptionButton_StateChanged, choices_option_state_handler, NULL);
+
+    event_deregister_wimp_handler(*(subwindows + CDSubColours), Wimp_ERedrawWindow, choices_redraw_fakepage_handler, NULL);
+    event_deregister_wimp_handler(idb->self_id, Wimp_EOpenWindow, choices_open_choice_window, NULL);
 
     ChkError(e);
   }
@@ -365,6 +383,12 @@ int choices_hidden(int eventcode, ToolboxEvent * event, IdBlock * idb, void * ha
   event_deregister_toolbox_handler(-1, ECD_HiSaveBt,       choices_save_m_button_handler,    NULL);
   event_deregister_toolbox_handler(-1, ECDSaveMenuClick,   choices_save_m_click_handler,     NULL);
   event_deregister_toolbox_handler(-1, ECDDispMenuClick,   choices_display_m_click_handler,  NULL);
+  event_deregister_toolbox_handler(subwindows[CDSubBrowseDefaults], OptionButton_StateChanged, choices_option_state_handler, NULL);
+
+  event_deregister_wimp_handler(*(subwindows + CDSubColours), Wimp_ERedrawWindow, choices_redraw_fakepage_handler, NULL);
+  event_deregister_wimp_handler(idb->self_id, Wimp_EOpenWindow, choices_open_choice_window, NULL);
+
+  choices_windowid = 0;
 
   return 1;
 }
@@ -522,18 +546,6 @@ static _kernel_oserror * choices_get_contents(void)
         show_error_ret(make_no_memory_error(17));
       }
     }
-
-    e = optionbutton_get_state(0, subwindows[CDSubBrowseDefaults], CD_UnderlineLinks, &state);
-    if (!e) new_choices->underline_links = !!state;
-
-    e = optionbutton_get_state(0, subwindows[CDSubBrowseDefaults], CD_UseDocColours,  &state);
-    if (!e) new_choices->use_source_cols = !!state;
-
-    e = optionbutton_get_state(0, subwindows[CDSubBrowseDefaults], CD_ShowForeground, &state);
-    if (!e) new_choices->show_foreground = !!state;
-
-    e = optionbutton_get_state(0, subwindows[CDSubBrowseDefaults], CD_ShowBackground, &state);
-    if (!e) new_choices->show_background = !!state;
   }
 
   if (subwindows[CDSubWindows])
@@ -922,7 +934,7 @@ static int choices_colour_closed_handler(int eventcode, ToolboxEvent * event, Id
 }
 
 /*************************************************/
-/* choices_colour_closed_handler()               */
+/* choices_colour_selected_handler()             */
 /*                                               */
 /* Called when the a colour is selected in the   */
 /* colour dialogue box.                          */
@@ -948,13 +960,19 @@ static int choices_colour_selected_handler(int eventcode, ToolboxEvent * event, 
     break;
   }
 
-  show_error_ret(choices_colour_set_component(idb->parent_id, idb->parent_component-1, cevent->colour_block[0]));
+  /* Don't bother with errors as colour display field might not exist */
+
+  choices_colour_set_component(idb->parent_id, idb->parent_component-1, cevent->colour_block[0]);
+
+  /* Don't bother with errors as fake page display might not exist */
+
+  button_set_flags(0, idb->parent_id, CD_FakePage, 0, 0);
 
   return 1;
 }
 
 /*************************************************/
-/* choices_colour_closed_handler()               */
+/* choices_colour_set_component()                */
 /*                                               */
 /* Sets the validation string of a button to be  */
 /* slabbed in and have the background colour     */
@@ -1196,6 +1214,13 @@ static _kernel_oserror * choices_set_display_field(ObjectId obj, ComponentId com
 /*************************************************/
 /* choices_display_m_click_handler()             */
 /*                                               */
+/* Called when there is a selection in the       */
+/* display menu.  Sets the selected menu item to */
+/* be ticked, unticks the previously ticked      */
+/* entry sets appropriate new_choices field and  */
+/* updates the display field of the component    */
+/* with component number 1 less than the menus   */
+/* parent.                                       */
 /*************************************************/
 
 static int choices_display_m_click_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
@@ -1225,6 +1250,13 @@ static int choices_display_m_click_handler(int eventcode, ToolboxEvent * event, 
 /*************************************************/
 /* choices_save_m_click_handler()                */
 /*                                               */
+/* Called when there is a selection in the save  */
+/* menu.  Sets the selected menu item to be      */
+/* ticked, unticks the previously ticked entry   */
+/* sets appropriate new_choices field and        */
+/* updates the display field of the component    */
+/* with component number 1 less than the menus   */
+/* parent.                                       */
 /*************************************************/
 
 static int choices_save_m_click_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
@@ -1247,6 +1279,373 @@ static int choices_save_m_click_handler(int eventcode, ToolboxEvent * event, IdB
   }
 
   choices_set_save_field(idb->parent_id, idb->parent_component - 1, idb->self_component);
+
+  return 1;
+}
+
+/*************************************************/
+/* choices_draw_string()                         */
+/*                                               */
+/* Writes a string on the screen using the       */
+/* passed font handle, it underlines the text if */
+/* required.  It also returns the position to    */
+/* paint the next string following this one.     */
+/*                                               */
+/* Parameters: font handle                       */
+/*                                               */
+/*             string to print                   */
+/*                                               */
+/*             xposition on screen (os coords)   */
+/*                                               */
+/*             yposition on screen (os coords)   */
+/*                                               */
+/*             0     - don't underline           */
+/*             non 0 - underline                 */
+/*                                               */
+/*             foreground colour                 */
+/*                                               */
+/*             background colour                 */
+/*                                               */
+/*             pointer to int to return x        */
+/*             position in                       */
+/*************************************************/
+
+static _kernel_oserror * choices_draw_string(fm_face h,
+                                             char *string,
+                                             int xpos,
+                                             int ypos,
+                                             int underline,
+                                             int forecolour,
+                                             int backcolour,
+                                             int *newxpos)
+{
+  int width, nochars;
+  fm_set_font_colour(h, forecolour, backcolour);
+  fm_get_string_width(h, string, 0x1000000, strlen(string), -1, &nochars, &width);
+  convert_to_os(width, &width);
+
+  /* The next string must be plotted straight after this string */
+
+  *newxpos = xpos + width;
+
+  fm_puts(h, xpos, ypos, string, 1, 0);
+
+  if (underline)
+  {
+    redraw_set_colour(forecolour);
+    bbc_move(xpos, ypos - 7);
+    bbc_draw(*newxpos, ypos - 7);
+  }
+  return NULL;
+}
+
+/*************************************************/
+/* choices_write_crap()                          */
+/*                                               */
+/* Writes a string of readable rubbish on the    */
+/* screen using the passed font handle.  It also */
+/* returns the position to paint the next string */
+/* following this one.                           */
+/*                                               */
+/* Parameters: font handle                       */
+/*                                               */
+/*             xposition on screen (os coords)   */
+/*                                               */
+/*             yposition on screen (os coords)   */
+/*                                               */
+/*             Approximate x position to stop    */
+/*             printing at (os coords)           */
+/*                                               */
+/*             foreground colour                 */
+/*                                               */
+/*             background colour                 */
+/*                                               */
+/*             pointer to int to return x        */
+/*             position in                       */
+/*                                               */
+/*             Random seed for string to print   */
+/*             (If you pass the same seed the    */
+/*             string should be the same)        */
+/*************************************************/
+
+static _kernel_oserror * choices_write_crap(fm_face h,
+                                            int xpos,
+                                            int ypos,
+                                            int maxxish,
+                                            int forecolour,
+                                            int backcolour,
+                                            int *newxpos,
+                                            int seed)
+{
+  char ministring[5];
+  int chars = 0;
+  int spcwidth, width, nochars;
+
+  fm_set_font_colour(h, forecolour, backcolour);
+
+  srand(seed);
+
+  fm_get_string_width(h, " ", 0x1000000, 1, -1, &nochars, &width);
+  convert_to_os(width, &spcwidth);
+  xpos += spcwidth;
+
+  while(xpos < maxxish)
+  {
+    ministring[0] = consonant[rand()%sizeof(consonant)];
+    ministring[1] = vowel[rand()%sizeof(vowel)];
+
+    if (rand()%2)
+    {
+      ministring[2] = consonant[rand()%sizeof(consonant)];
+      ministring[3] = vowel[rand()%sizeof(vowel)];
+      ministring[4] = 0;
+    }
+    else
+    {
+      ministring[2] = 0;
+    }
+
+    fm_puts(h, xpos, ypos, ministring, 1, 0);
+    fm_get_string_width(h, ministring, 0x1000000, strlen(ministring), -1, &nochars, &width);
+    convert_to_os(width, &width);
+    xpos += width;
+
+    chars++;
+    if (chars > rand()%2 || xpos >= maxxish)
+    {
+      chars = 0;
+      xpos += spcwidth;
+    }
+  }
+
+  *newxpos = xpos;
+  return NULL;
+}
+
+/*************************************************/
+/* choices_redraw_fakepage_handler()             */
+/*                                               */
+/* Redraws the fake page in the colour selection */
+/* dbox.                                         */
+/*************************************************/
+
+static int choices_redraw_fakepage_handler(int eventcode, WimpPollBlock * event, IdBlock * idb, void * handle)
+{
+  _kernel_oserror       * e = NULL;
+  WimpRedrawWindowBlock   block;
+  WimpGetWindowStateBlock state;
+  int                     more, ypos, xtarget, ptsize, gadsize, xstart;
+  int                     fontheight = 0;
+  int                     gotfont    = 0;
+  BBox                    icon_coords, fbox;
+  fm_face                 h = 0;
+
+  block.window_handle = event->redraw_window_request.window_handle;
+  state.window_handle = event->redraw_window_request.window_handle;
+
+  e = wimp_get_window_state(&state);
+  show_error_ret(e);
+  if (!e) e = gadget_get_bbox(0, idb->self_id, CD_FakePage, &icon_coords);
+
+  gadsize = icon_coords.ymax - icon_coords.ymin;
+
+  xstart = gadsize / 8;
+
+  if (e)
+  {
+    /* Gadget doesn't exist or something strange happened trying */
+    /* to get window state so just do a simple redraw loop to    */
+    /* keep the wimp happy.                                      */
+
+    ChkError(wimp_redraw_window(&block, &more));
+    while (more && !e) e = wimp_get_rectangle(&block, &more);
+    return 1;
+  }
+
+  coords_box_toscreen(&icon_coords, (WimpRedrawWindowBlock *) &state);
+
+  /* Start the redraw loop */
+
+  ChkError(wimp_redraw_window(&block, &more));
+
+  while (more && !e)
+  {
+    /* Clip the redraw area to only take in the gadget */
+
+    if (set_graphics_intersection(&icon_coords, &block.redraw_area))
+    {
+      /* Only claim the font if it is required */
+
+      if (!gotfont)
+      {
+        /* Find default browser font, the font manager will return system */
+        /* font if it is configured.                                      */
+
+        /* Find a 1000 subpoint (big) version of default browser font to scale against */
+
+        h = fm_find_font(NULL, "serif", 1000, 1000, 0, 0);
+        ChkError(fm_font_box(h, &fbox));
+        fm_lose_font(NULL, h);
+        fontheight = fbox.ymax - fbox.ymin;
+
+        /* Find a version of the default browser font with a */
+        /* point size which will allow an appropriate number */
+        /* of lines in the fake page display.                */
+
+        #ifdef ChoiceUseSelected
+          ptsize = ((gadsize * 1000 / 5) / fontheight);
+        #else
+          ptsize = ((gadsize * 1000 / 4) / fontheight);
+        #endif
+
+        h = fm_find_font(NULL, "serif", ptsize, ptsize, 0, 0);
+        ChkError(fm_font_box(h, &fbox));
+        fontheight = fbox.ymax - fbox.ymin;
+        gotfont = 1;
+      }
+
+      /* Fake browser drawing code is here */
+
+      /* Fill background with background colour */
+
+      redraw_set_colour(new_choices->background_colour);
+      ChkError(bbc_rectanglefill(icon_coords.xmin, icon_coords.ymin, icon_coords.xmax - icon_coords.xmin, icon_coords.ymax - icon_coords.ymin));
+
+      xtarget = icon_coords.xmin - 32;
+      ypos = icon_coords.ymax - fontheight / 3;
+
+      /* Display the top line of the fake page display */
+
+      ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmax, new_choices->text_colour, new_choices->background_colour, &xtarget, 1));
+
+      ypos -= fontheight;
+      xtarget = icon_coords.xmin - 32;
+
+      /* Display the new link line of the fake page display */
+
+      ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmin+xstart, new_choices->text_colour, new_choices->background_colour, &xtarget, 2));
+      ChkError(choices_draw_string(h, "new", xtarget, ypos, new_choices->underline_links, new_choices->link_colour, new_choices->background_colour, &xtarget));
+      ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmax, new_choices->text_colour, new_choices->background_colour, &xtarget, 3));
+
+      ypos -= fontheight;
+      xtarget = icon_coords.xmin - 32;
+
+      /* Display the new followed line of the fake page display */
+
+      ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmin+xstart, new_choices->text_colour, new_choices->background_colour, &xtarget, 4));
+      ChkError(choices_draw_string(h, "followed", xtarget, ypos, new_choices->underline_links, new_choices->used_colour, new_choices->background_colour, &xtarget));
+      ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmax, new_choices->text_colour, new_choices->background_colour, &xtarget, 5));
+
+      ypos -= fontheight;
+      xtarget = icon_coords.xmin - 32;
+
+      /* Display the highlighted link line of the fake page display */
+
+      ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmin+xstart, new_choices->text_colour, new_choices->background_colour, &xtarget, 6));
+      ChkError(choices_draw_string(h, "highlighted", xtarget, ypos, new_choices->underline_links, new_choices->followed_colour, new_choices->background_colour, &xtarget));
+      ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmax, new_choices->text_colour, new_choices->background_colour, &xtarget, 7));
+
+      ypos -= fontheight;
+      xtarget = icon_coords.xmin - 32;
+
+      /* Display the selected link line of the fake page display */
+      #ifdef ChoiceUseSelected
+        ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmin+xstart, new_choices->text_colour, new_choices->background_colour, &xtarget, 12));
+        ChkError(choices_draw_string(h, "selected", xtarget, ypos, new_choices->underline_links, new_choices->selected_colour, new_choices->background_colour, &xtarget));
+        ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmax, new_choices->text_colour, new_choices->background_colour, &xtarget, 9));
+
+        ypos -= fontheight;
+        xtarget = icon_coords.xmin - 32;
+      #endif
+
+      /* Display the bottom line of the fake page display */
+
+      ChkError(choices_write_crap(h, xtarget, ypos, icon_coords.xmax, new_choices->text_colour, new_choices->background_colour, &xtarget, 10));
+    }
+
+    restore_graphics_intersection(&block.redraw_area);
+
+    /* Get the next redraw rectangle */
+
+    if (!e) e = wimp_get_rectangle(&block, &more);
+  }
+
+  if (gotfont) fm_lose_font(NULL, h);
+
+  return 1;
+}
+
+/*************************************************/
+/* choices_option_state_handler()                */
+/*                                               */
+/* Called when an option button has its state    */
+/* changed by being clicked on.  Sets or unsets  */
+/* the relevant flag in new_choices and causes   */
+/* redraws where necessary.                      */
+/*************************************************/
+
+static int choices_option_state_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  int state;
+  ChkError(optionbutton_get_state(0, idb->self_id, idb->self_component, &state));
+
+  switch(idb->self_component)
+  {
+    case CD_UnderlineLinks:
+    {
+      new_choices->underline_links = !!state;
+
+      /* Don't bother with errors as fake page display might not exist */
+
+      if (subwindows[CDSubColours])
+      {
+        button_set_flags(0, subwindows[CDSubColours], CD_FakePage, 0, 0);
+      }
+      break;
+    }
+
+    case CD_UseDocColours:  new_choices->use_source_cols = !!state; break;
+    case CD_ShowForeground: new_choices->show_foreground = !!state; break;
+    case CD_ShowBackground: new_choices->show_background = !!state; break;
+  }
+
+  return 1;
+}
+
+/*************************************************/
+/* choices_mode_change()                         */
+/*                                               */
+/* Called on every mode change event.  Records   */
+/* that a mode change has taken place for use    */
+/* with the choices_open_choice_window function. */
+/*************************************************/
+
+_kernel_oserror * choices_mode_change(void)
+{
+  choices_modechanged = 1;
+
+  return NULL;
+}
+
+/*************************************************/
+/* choices_open_choice_window()                  */
+/*                                               */
+/* Called whenever the choices window needs to   */
+/* be moved and specifically on mode changes so  */
+/* the current sub window can be positioned      */
+/* correctly dealing with rounding errors        */
+/* between modes of different aspect ratio.      */
+/*************************************************/
+
+static int choices_open_choice_window(int eventcode, WimpPollBlock * event, IdBlock * idb, void * handle)
+{
+  toolbox_show_object(0, idb->self_id, Toolbox_ShowObject_FullSpec, &(event->open_window_request.visible_area), 0, -1);
+
+  if (choices_modechanged)
+  {
+    choices_show_subwindow(idb->self_id, current_subwindow);
+    choices_modechanged = 0;
+  }
 
   return 1;
 }
