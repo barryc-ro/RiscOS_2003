@@ -21,7 +21,7 @@ typedef struct UTF16_Encoding
     UCS2 prev_surrogate;
     char prev;
     char sync;
-    enum { big_endian, little_endian } byte_sex;
+    char first;
 } UTF16_Encoding;
 
 /*
@@ -38,7 +38,7 @@ static int utf16_reset(Encoding *e, int for_encoding)
 
     ue->prev_surrogate = 0;
     ue->sync = 0;
-    ue->byte_sex = big_endian;
+    ue->first = 1;
 
     return 1;
 }
@@ -61,14 +61,14 @@ static unsigned int utf16_read(Encoding *e,
         {
             ue->sync = 0;
 
-            if (ue->byte_sex == big_endian)
-                u = (ue->prev << 8) | c;
-            else
+            if (ue->e.flags & encoding_FLAG_LITTLE_ENDIAN)
                 u = (c << 8) | ue->prev;
+            else
+                u = (ue->prev << 8) | c;
 
             if (ue->prev_surrogate)
             {
-                if (u < 0xDC00 | u >= 0xE000)
+                if (u < 0xDC00 || u >= 0xE000)
                     u = 0xFFFD;
                 else
                     u = 0x10000 + ((ue->prev_surrogate - 0xD800) << 10)
@@ -82,10 +82,7 @@ static unsigned int utf16_read(Encoding *e,
             }
             else if (u == 0xFFFE)
             {
-                if (ue->byte_sex == big_endian)
-                    ue->byte_sex = little_endian;
-                else
-                    ue->byte_sex = big_endian;
+                ue->e.flags ^= encoding_FLAG_LITTLE_ENDIAN;
                 u = 0xFEFF;
             }
         }
@@ -96,6 +93,15 @@ static unsigned int utf16_read(Encoding *e,
             continue;
         }
 
+        /* Strip BOM */
+        if (ue->first && u == 0xFEFF)
+        {
+            ue->first = 0;
+            continue;
+        }
+
+        ue->first = 0;
+
         if (ucs_out)
             if (ucs_out(handle, u))
                 break;
@@ -104,15 +110,36 @@ static unsigned int utf16_read(Encoding *e,
     return n - count;
 }
 
+static char *write_be(char *p, UCS2 u)
+{
+    *p++ = u >> 8;
+    *p++ = u & 0xff;
+
+    return p;
+}
+
+static char *write_le(char *p, UCS2 u)
+{
+    *p++ = u & 0xff;
+    *p++ = u >> 8;
+
+    return p;
+}
+
 static int utf16_write(EncodingPriv *e, UCS4 u, char **putf16, int *bufsize)
 {
+    UTF16_Encoding *ue = (UTF16_Encoding *) e;
+    unsigned int flags = ue->e.flags;
     char *utf16;
-    int c = 0, cc = 0;
+    int c = 0, cc = 0, bom = 0;
 
     if (u == NULL_UCS4)
 	return 0;
-    
+
     utf16 = *putf16;
+
+    if (ue->first && !(flags & encoding_FLAG_NO_HEADER))
+        bom = 2;
 
     if (u < 0x00010000)
     {
@@ -120,28 +147,43 @@ static int utf16_write(EncodingPriv *e, UCS4 u, char **putf16, int *bufsize)
     }
     else if (u < 0x00110000)
     {
-	c  = (u - 0x00010000) / 400 + 0xD800;
-	cc = (u - 0x00010000) % 400 + 0xDC00;
+	c  = (u - 0x00010000) / 0x400 + 0xD800;
+	cc = (u - 0x00010000) % 0x400 + 0xDC00;
     }
     else
     {
 	c = 0xFFFD;
     }
-    
-    if ((*bufsize -= (cc ? 4 : 2)) < 0 || !putf16)
+
+    if ((*bufsize -= (cc ? 4 : 2) + bom) < 0 || !putf16)
 	return 0;
 
-    *(*putf16)++ = (c >> 8) & 0xff;
-    *(*putf16)++ =  c & 0xff;
+    ue->first = 0;
+
+    if (bom)
+    {
+        if (flags & encoding_FLAG_LITTLE_ENDIAN)
+            utf16 = write_le(utf16, 0xFEFF);
+        else
+            utf16 = write_be(utf16, 0xFEFF);
+    }
+
+    if (flags & encoding_FLAG_LITTLE_ENDIAN)
+        utf16 = write_le(utf16, c);
+    else
+        utf16 = write_be(utf16, c);
 
     if (cc)
     {
-	*(*putf16++) = (cc >> 8) & 0xff;
-	*(*putf16++) =  cc & 0xff;
+        if (flags & encoding_FLAG_LITTLE_ENDIAN)
+            utf16 = write_le(utf16, cc);
+        else
+            utf16 = write_be(utf16, cc);
     }
-    
+
+    *putf16 = utf16;
+
     return 1;
-    e = e;
 }
 
 EncodingPriv enc_utf16 =

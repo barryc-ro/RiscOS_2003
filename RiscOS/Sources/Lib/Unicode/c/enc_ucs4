@@ -23,7 +23,7 @@ typedef struct UCS4_Encoding
         UCS4 word;
     } code;
     char sync;
-    enum { big_endian, little_endian } byte_sex;
+    char first;
 } UCS4_Encoding;
 
 /*
@@ -38,7 +38,7 @@ static int ucs4_reset(Encoding *e, int for_encoding)
 
     ue->code.word = 0;
     ue->sync = 3;
-    ue->byte_sex = big_endian;
+    ue->first = 1;
 
     return 1;
 }
@@ -57,10 +57,10 @@ static unsigned int ucs4_read(Encoding *e,
         char c = *s++;
         UCS4 u;
 
-        if (ue->byte_sex == big_endian)
-            ue->code.byte[ue->sync] = c;
-        else
+        if (ue->e.flags & encoding_FLAG_LITTLE_ENDIAN)
             ue->code.byte[3 - ue->sync] = c;
+        else
+            ue->code.byte[ue->sync] = c;
 
         if (ue->sync)
         {
@@ -73,12 +73,20 @@ static unsigned int ucs4_read(Encoding *e,
 
         if (u == 0xFFFE0000)
         {
-            if (ue->byte_sex == big_endian)
-                ue->byte_sex = little_endian;
-            else
-                ue->byte_sex = big_endian;
+            ue->e.flags ^= encoding_FLAG_LITTLE_ENDIAN;
             u = 0xFEFF;
         }
+        else if (u & 0x80000000)
+            u = 0xFFFD;
+
+        /* Strip BOM */
+        if (ue->first && u == 0xFEFF)
+        {
+            ue->first = 0;
+            continue;
+        }
+
+        ue->first = 0;
 
         if (ucs_out)
             if (ucs_out(handle, u))
@@ -88,34 +96,63 @@ static unsigned int ucs4_read(Encoding *e,
     return n - count;
 }
 
-/* Always write out little endian? */
+static char *write_be(char *p, UCS4 u)
+{
+    *p++ = (u >> 24) & 0xff;
+    *p++ = (u >> 16) & 0xff;
+    *p++ = (u >> 8) & 0xff;
+    *p++ = u & 0xff;
+
+    return p;
+}
+
+static char *write_le(char *p, UCS4 u)
+{
+    *p++ = u & 0xff;
+    *p++ = (u >> 8) & 0xff;
+    *p++ = (u >> 16) & 0xff;
+    *p++ = (u >> 24) & 0xff;
+
+    return p;
+}
 
 static int ucs4_write(EncodingPriv *e, UCS4 u, char **pucs4, int *bufsize)
 {
+    UCS4_Encoding *ue = (UCS4_Encoding *) e;
     char *ucs4;
+    int size = ue->first && !(ue->e.flags & encoding_FLAG_NO_HEADER) ? 8 : 4;
 
     if (u == NULL_UCS4)
 	return 0;
-    
-    if ((*bufsize -= 4) < 0 || !pucs4)
+
+    if ((*bufsize -= size) < 0 || !pucs4)
 	return 0;
 
     ucs4 = *pucs4;
+
+    if (ue->first && !(ue->e.flags & encoding_FLAG_NO_HEADER))
+    {
+        if (ue->e.flags & encoding_FLAG_LITTLE_ENDIAN)
+            ucs4 = write_le(ucs4, 0xFEFF);
+        else
+            ucs4 = write_be(ucs4, 0xFEFF);
+    }
+
+    ue->first = 0;
 
     /* convert all illegal sequences (except NULL_UCS4) to the
        illegal/replacement character */
     if (u & 0x80000000)
 	u = 0xFFFD;
-    
-    *ucs4++ = (u >> 24) & 0xff;
-    *ucs4++ = (u >> 16) & 0xff;
-    *ucs4++ = (u >> 8) & 0xff;
-    *ucs4++ = u & 0xff;
 
-    (*pucs4) += 4;
-    
-    return 4;
-    e = e;
+    if (ue->e.flags & encoding_FLAG_LITTLE_ENDIAN)
+        ucs4 = write_le(ucs4, u);
+    else
+        ucs4 = write_be(ucs4, u);
+
+    (*pucs4) = ucs4;
+
+    return 1;
 }
 
 EncodingPriv enc_ucs4 =
