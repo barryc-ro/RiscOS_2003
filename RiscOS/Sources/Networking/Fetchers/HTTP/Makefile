@@ -52,10 +52,10 @@ DEBFLAGS = -DTRACE -DUSE_SYSLOG
 ANSILIB	  = CLib:o.ansilib
 CLIB	  = CLIB:o.stubs
 ZLIB      = C:zlib.o.zlibzm
-DEBLIBS   = <syslog$dir>.c-veneer.o.syslog
+#DEBLIBS   = <syslog$dir>.c-veneer.o.syslog
 RLIB	  = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM	  = RISC_OSLib:o.abssym
+ABSSYM	  = RISCOSLIB:o.abssym
 TCPIPLIBS = TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
 
 OBJS =\
@@ -212,7 +212,7 @@ ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS} ${ZLIB}
 rom_link:
 	${MKDIR} linked
 	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
-	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+	${CP} linked.${COMPONENT} ${LINKDIR}.AcornHTTP ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
 ${MSGSF}: LocalRes:Messages
