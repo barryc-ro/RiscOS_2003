@@ -111,13 +111,3 @@ ${TARGET}: ${OBJS}
 
 #
 # Dynamic dependencies:
-
-
-o.BORDERDBUG: s.BORDERDBUG hdr:ListOpts hdr:Macros hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS hdr:Proc hdr:APCS.<APCS> Hdr:APCS.Common
-o.ProgOS: c.ProgOS C:h.stdio C:h.stdlib C:h.string C:h.kernel C:h.swis C:zlib.h.zlib C:zlib.h.zconf h.globals h.ProgOS h.flashprog h.endscreen h.fetcher h.messages
-o.main: c.main C:h.stdio C:h.stdlib C:h.string C:h.kernel C:h.swis C:zlib.h.zlib C:zlib.h.zconf h.globals h.ProgOS h.flashprog h.endscreen h.fetcher h.messages
-o.flashprog: c.flashprog C:zlib.h.zlib C:zlib.h.zconf h.globals h.flashprog
-o.fetcher: c.fetcher C:h.kernel C:h.swis h.fetcher
-o.stuff: s.stuff Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Debug Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:IO.IOMD Hdr:MEMM.ARM600
-o.endscreen: c.endscreen C:h.swis C:h.kernel C:h.kernel h.globals h.endscreen h.messages
-o.messages: c.messages C:h.swis C:h.kernel C:h.kernel C:h.string h.globals h.messages
