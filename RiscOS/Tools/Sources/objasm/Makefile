@@ -26,12 +26,14 @@ LD      = link
 LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
+SQUEEZE = squeeze
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK}
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
 WFLAGS  = ~CFR~V
+SQZFLAGS= -f
 
 #
 # Libraries
@@ -109,5 +111,6 @@ local_dirs:
 #
 ${TARGET}: ${OBJS} ${LIBS} local_dirs
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+        ${SQUEEZE} ${SQZFLAGS} $@
 
 # Dynamic dependencies:
