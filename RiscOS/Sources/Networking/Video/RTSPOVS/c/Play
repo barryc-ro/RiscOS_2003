@@ -31,6 +31,7 @@
 #include "CallOut.h"
 #include "Connect.h"
 #include "Generic.h"
+#include "GetParam.h"
 #include "Headers.h"
 #include "Module.h"
 #include "RTSPOErrors.h"
@@ -51,10 +52,11 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
 {
   session * s         = session_find_by_id(r->r[1]);
   bool      fail      = false;
-//  char    * range     = NULL;
-//  int       range_len = 0;
+  bool      slowmofwd = false; /* This is true for slowmo forward play     */
+  bool      play      = true;  /* This is true for any non-pause play mode */
+  bool      mpd_present;
   char    * port;
-  bool      play;
+  char    * scale;
 
   dprintf(("", "play_play: Called\n"));
 
@@ -85,52 +87,46 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
     return make_error(rtspovs_ERROR_NO_SERVER_SESSION, 0);
   }
 
+  /* Can we do reduced data rate forwards slowmo? */
+
+  if (
+       _swix(OS_Module,
+             _INR(0,1),
+
+             18,
+             ReducedRateSlowmoSupportModule) /* Play.h */
+
+       != NULL
+     )
+     mpd_present = false;
+
+  else mpd_present = true;
+
+  /* For forwards slow-mo, we don't use Scale, we use Speed. You can */
+  /* just deliver the data more slowly. OVS' slowmo with Scale is    */
+  /* awful; using Speed gives a much better result.                  */
+
+  scale = (char *) r->r[3];
+
+  if (scale)
+  {
+    if (strchr(scale, '.') != NULL && *scale != '-') slowmofwd = true;
+    else if (!strcmp(scale, "0"))                    play      = false;
+  }
+
+  /* If MPEGDriver isn't present, unset slowmofwd */
+
+  if (mpd_present == false) slowmofwd = false;
+
   /* Ensure everything is reset for a new command */
 
   session_reset_session(s);
 
-  /* Build the headers. First, the PLAY or PAUSE command */
-
-  if (r->r[3] != 0 && !strcmp((char *) r->r[3], "0")) play = false;
-  else                                                play = true;
-
-//  /* Work out the Range header. OVS kludges looping in the range */
-//  /* the range value, rather than adding x-Loop or similar. Ick. */
-//
-//  if (r->r[2] != 0)
-//  {
-//    range_len = strlen((char *) r->r[2]) + 1;
-//    if (s->loop != 0) range_len += 1; /* The ';' separator */
-//  }
-//  else if (s->loop != 0) range_len = sizeof(Headers_HeaderValue_Loop);
-//
-//  if (range_len != 0)
-//  {
-//    range = malloc(range_len);
-//
-//    if (range == NULL)
-//    {
-//      fail = true;
-//    }
-//    else
-//    {
-//      if (r->r[2] != 0)
-//      {
-//        strcpy(range, (char *) r->r[2]);
-//
-//        if (s->loop != 0)
-//        {
-//          strcat(range, ";");
-//          strcat(range, Headers_HeaderValue_Loop);
-//        }
-//      }
-//      else if (s->loop != 0) strcpy(range, Headers_HeaderValue_Loop);
-//    }
-//  }
-
   /* Copy R3 away */
 
-  s->play_record = Strdup(r->r[3] == 0 ? "" : (char *) r->r[3]);
+  s->play_record = Strdup(scale == NULL ? "" : scale);
+
+  /* Start adding headers */
 
   if (s->play_record == NULL) fail = true;
 
@@ -158,25 +154,30 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
           )
           fail = true;
 
-//  else if (
-//            range_len != 0 &&
-//
-//            headers_add_header(&s->headers,
-//                               Headers_HeaderName_Range,
-//                               range)
-//            == NULL
-//          )
-//          fail = true;
-
-  /* If we're not pausing, the playback rate */
+  /* If we're not pausing, the playback rate - first, Scale playback (trick play) */
 
   else if (
-            play         &&
-            r->r[3] != 0 &&
+            play          &&
+            !slowmofwd    &&
+            scale != NULL &&
 
             headers_add_header(&s->headers,
                                Headers_HeaderName_Scale,
-                               (const char *) r->r[3])
+                               scale)
+            == NULL
+          )
+          fail = true;
+
+  /* Second, Speed playback (alter data delivery rate, for slowmo forwards play) */
+
+  else if (
+            play          &&
+            slowmofwd     &&
+            scale != NULL && /* It should never be if slowmofwd is true, but just in case... */
+
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Speed,
+                               scale)
             == NULL
           )
           fail = true;
@@ -200,10 +201,6 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
             == NULL
           )
           fail = true;
-
-//  /* Free the temporary Range header buffer */
-//
-//  free(range);
 
   /* Did anything fail? */
 
@@ -272,6 +269,17 @@ _kernel_oserror * play_replay(session * s)
 
     return make_error(rtspovs_ERROR_NO_SERVER_SESSION, 0);
   }
+
+  /* Cancel and GET_PARAMETER manually - it won't be done automatically */
+  /* as we're not resetting this session, we're spawning a new one      */
+
+  if (s->gp_set != 0)
+  {
+    untimeout(getparam_proceed_on_callout, s);
+    s->gp_set = 0;
+  }
+
+  if (s->child) session_free_item(s->child);
 
   /* Create a new session */
 
