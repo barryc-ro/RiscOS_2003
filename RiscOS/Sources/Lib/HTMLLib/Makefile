@@ -7,6 +7,7 @@
 # ----       ----         -----------
 # 12-Dec-96  KJB          Created.
 # 08-Jul-97  BAL          Added build suitable for modules.
+# 17-Mar-99  ADH          Modified to work in current build structure.
 #
 
 #
@@ -137,16 +138,16 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 export_hdrs: h.html2_ext h.api h.struct h.tags dirs
-	Copy h.html2_ext                HTMLLib:h.html2_ext                ~CFLNR~V
-	Copy h.api                      HTMLLib:h.HTMLLib                  ~CFLNR~V
-	Copy h.struct                   HTMLLib:h.struct                   ~CFLNR~V
-	Copy h.tags                     HTMLLib:h.tags                     ~CFLNR~V
-	Copy h.tablestruc               HTMLLib:h.tablestruc               ~CFLNR~V
+	Copy h.html2_ext                ${LIBDIR}.HTMLLib.h.html2_ext                ~CFLNR~V
+	Copy h.api                      ${LIBDIR}.HTMLLib.h.HTMLLib                  ~CFLNR~V
+	Copy h.struct                   ${LIBDIR}.HTMLLib.h.struct                   ~CFLNR~V
+	Copy h.tags                     ${LIBDIR}.HTMLLib.h.tags                     ~CFLNR~V
+	Copy h.tablestruc               ${LIBDIR}.HTMLLib.h.tablestruc               ~CFLNR~V
 	@echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} dirs
-	Copy ${TARGET}      HTMLLib:o.${TARGET}      ~CFLNR~V
-	Copy ${TARGETZ}     HTMLLib:o.${TARGETZ}     ~CFLNR~V
+	Copy ${TARGET}      ${LIBDIR}.HTMLLib.o.${TARGET}      ~CFLNR~V
+	Copy ${TARGETZ}     ${LIBDIR}.HTMLLib.o.${TARGETZ}     ~CFLNR~V
         @echo ${COMPONENT}: export complete (libs)
 
 local_dirs:

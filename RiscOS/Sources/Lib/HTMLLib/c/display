@@ -18,7 +18,7 @@ char * __html_strip_spaces(char *input, int stripleadingcr);
 char * __html_strip_lfs(char *input);
 char * __html_tidy_url(char *url);
 int __html_unnumeric_escape(char ch);
-static UCS4 __html_entity_name_to_char(char * *sequencep);
+static UCS4 __html_entity_name_to_char(char **sequencep, unsigned int strict);
 static UCS4 __html_number_to_char(char **sequencep);
 
 
@@ -159,6 +159,9 @@ void __html_strip_trailing_spaces(char *input)
 /********************************************************************/
 /* This function removes all instances LF in the input stream to    */
 /* enable the front end to only have to deal with CRs  	      	    */
+/*                                                                  */
+/* 18/03/1999 (ADH) Arf. Don't think so. Does the reverse - leaves  */
+/*                  you with just LFs.                              */
 /********************************************************************/
 #define CR '\r'
 #define LF '\n'
@@ -241,25 +244,34 @@ char * strndup(const char * s1, int size)
 }
 
 /********************************************************************/
-/* static void __html_unescape(char *sequence)                      */
+/* static void __html_unescape(char *sequence, unsigned int strict) */
 /********************************************************************/
-/* Given a ';' or ' ' space terminated sequence of chars (including */
-/* the '&', this routine will return the correct (hopefully)        */
-/* ISO-LATIN-1 char for that sequence. The string passed in         */
-/* sequence is returned in the modified form.                       */
+/* Given a string which either must be terminated in ';' (if the    */
+/* parameter 'strict' is set to 1 on entry) or may be terminated by */
+/* ';', ' ' or even more string (e.g. "nbsp;" or "nbspmore" match   */
+/* the same thing), return the (hopefully!) correct ISO-LATIN-1     */
+/* char for that string. The string passed in the first parameter   */
+/* is returned in the modified form.                                */
 /********************************************************************/
 
-static void __html_unescape(char *sequence)
+static void __html_unescape(char *sequence, unsigned int strict)
 {
   char *ptr=sequence;
   char c;
   UCS4 result;
   char *end;
 
+  /*
+   * Force a terminating NUL after the entity name. Want to include
+   * the ';' for strict unescaping; otherwise, can't later distinguish
+   * between "&amp;" and "&amp".
+   */
+
   while (isalnum(*sequence) || *sequence=='#' || *sequence=='&') {
     sequence++;
   }
 
+  if (*sequence==';') sequence++;
   c=*sequence; *sequence='\0';
 
   if (*(ptr+1) == '#') { /* Decimal numeric escape */
@@ -288,7 +300,7 @@ static void __html_unescape(char *sequence)
   }
   else {
     end = ptr+1;
-    result=__html_entity_name_to_char(&end);
+    result=__html_entity_name_to_char(&end, strict);
   }
 
   if (result == 0)
@@ -482,37 +494,89 @@ static UCS4 __html_number_to_char(char **sequencep)
   return ch;
 }
 
-/* This relies on no known entity being a truncation of another one! */
-/* XXXXXX  This is no longer true!!!!! (sup, sup1; theta, thetasym) XXXXXX */
-/* /* Fix meeeeeee */
-static int entcmp(const void *a, const void *b)
+/* The following is needed for the fuzzy matching routine for entities. */
+
+typedef struct
 {
-    return strncmp((const char *) a, (const char *) b, strlen((const char *) b));
+  char name[9];
+  unsigned short code;
+}
+CharEnt;
+
+static CharEnt * entcmpfuzzy_found = NULL;
+static int       entcmpfuzzy_len   = 0;
+
+/*
+ * This routine compares a given entity name from HTML source and finds,
+ * via. being called from bsearch, the character code corresponding to
+ * a matching entity name (if any) - where the length of the matching
+ * entity name is as large as possible. This way, entities where one is
+ * a substring of another - e.g. 'not' and 'notin' - do not get confused
+ * in broken code such as '&notinmissing a semicolon'.
+ *
+ * Set entcmpfuzzy_found to NULL and entcmpfuzzy_len to 0 before calling
+ * bsearch with this function given as the comparison code. Don't use
+ * bsearch's return value; check if entcmpfuzzy_found is NULL on exit
+ * instead (bsearch will always say "nothing found" directly).
+ */
+
+static int entcmpfuzzy(const void *a, const void *b)
+{
+  int len;
+  int result;
+
+  len = strlen((const char *) b);
+  result = strncmp((const char *) a, (const char *) b, len);
+
+  if (!result)
+  {
+    if (len > entcmpfuzzy_len)
+    {
+      entcmpfuzzy_len   = len;
+      entcmpfuzzy_found = (CharEnt *) b;
+    }
+
+    return 1;
+  }
+
+  return result;
+}
+
+/*
+ * Use this if you want to use bsearch on a strict 'must match exactly'
+ * basis for entities. No need to do any special setting up for this
+ * one, and bsearch's return value should be used as normal.
+ */
+
+static int entcmpstrict(const void *a, const void *b)
+{
+/*  return strncmp((const char *) a, (const char *) b, strlen((const char *) b)); *//* Fuzzy */
+/*  return strncmp((const char *) a, (const char *) b, strlen((const char *) a)); *//* Strict or broken? */
+
+  return strcmp((const char *) a, (const char *) b);
 }
 
 /********************************************************************/
-/* char __html_entity_name_to_char(const char * sequence)           */
+/* char __html_entity_name_to_char(const char * sequence,           */
+/*                                 unsigned int strict)             */
 /********************************************************************/
-/* Given a ';' or ' ' space terminated sequence of chars (including */
-/* the '&', this routine will return the correct (hopefully)        */
-/* Acorn Extended Latin 1 char for that sequence. The string passed */
-/* in sequence is returned in the modified form.                    */
+/* Given a string which either must be terminated in ';' (if the    */
+/* parameter 'strict' is set to 1 on entry) or may be terminated by */
+/* ';', ' ' or even more string (e.g. "nbsp;" or "nbspmore" match   */
+/* the same thing), return the (hopefully!) correct UCS4 character  */
+/* for the entity named in the string, if recognised (returns zero  */
+/* if no match is found). The first parameter is a pointer to a     */
+/* string as this gets updated to point to the first character      */
+/* after the entity if a match is found.                            */
 /********************************************************************/
 
-static UCS4 __html_entity_name_to_char(char ** sequencep)
+static UCS4 __html_entity_name_to_char(char ** sequencep, unsigned int strict)
 {
-  typedef struct
-  {
-    char name[9];
-    unsigned short code;
-  }
-  CharEnt;
-
   char *sequence = *sequencep;
 
   /*
    * This table comes from the W3C HTML 4.0 Specification Working
-   * Draft (8-Jul-1997)
+   * Draft (8-Jul-1997). CharEnt is defined just above entcmpfuzzy().
    */
 
   static const CharEnt char_table[] =
@@ -775,49 +839,90 @@ static UCS4 __html_entity_name_to_char(char ** sequencep)
   char            temp[9];
   int             i;
 
-  for (
-        i = 0;
+  /* Must end with ';' if in strict mode */
 
-        sequence[i] != '\0' &&
-        sequence[i] != ' '  &&
-        sequence[i] != ';'  &&
-        i < 9;
+  if (strict)
+  {
+    for (
+          i = 0;
 
-        i++
-      )
+          sequence[i] != ';' &&
+          i < 9;
+
+          i++
+        )
+    {
+      if (sequence[i] == '\0') return 0;
       temp[i] = sequence[i];
+    }
+  }
+  else
+  {
+    for (
+          i = 0;
+
+          sequence[i] != '\0' &&
+          sequence[i] != ' '  &&
+          sequence[i] != ';'  &&
+
+          i < 9;
+
+          i++
+        )
+        temp[i] = sequence[i];
+  }
 
   temp[i] = '\0';
 
-  found = bsearch(temp,
-                  char_table,
-                  (sizeof char_table) / (sizeof char_table[0]),
-                  sizeof char_table[0],
-                  entcmp);
+  /* Having isolated the entity name, see if we recognise it */
+
+  if (strict)
+  {
+    found = bsearch(temp,
+                    char_table,
+                    (sizeof char_table) / (sizeof char_table[0]),
+                    sizeof char_table[0],
+                    entcmpstrict);
+  }
+  else
+  {
+    entcmpfuzzy_len   = 0;
+    entcmpfuzzy_found = NULL;
+
+    bsearch(temp,
+            char_table,
+            (sizeof char_table) / (sizeof char_table[0]),
+            sizeof char_table[0],
+            entcmpfuzzy);
+
+    found = entcmpfuzzy_found;
+  }
+
+  /* Did we get a match? */
 
   if (found)
   {
-      *sequencep = sequence + strlen(found->name);
-      return found->code;
+    *sequencep = sequence + strlen(found->name);
+    return found->code;
   }
-  else       return 0;
+  else return 0;
 }
 
 /********************************************************************/
-/* char *__html_unescape_string(char *input)                        */
+/* char *__html_unescape_string(char *input, unsigned int strict)   */
 /********************************************************************/
 /* This function searches for any entities '&name;' or '&#number;'  */
 /* and converts them to the relevant characters.                    */
 /********************************************************************/
 
-char *__html_unescape_string(char * input)
+char *__html_unescape_string(char * input, unsigned int strict)
 {
   char * ret = input;
 
   while (*input != '\0')
   {
     if (*input == '&')
-        __html_unescape(input);
+        __html_unescape(input, strict);
     input++;
   }
   return ret;
