@@ -13,7 +13,6 @@
 #
 LIBDIR	= ${INSTDIR}.Library.Acorn
 INSTAPP    = ${INSTDIR}.Apps.!Link
-VPATH=  @ riscos
 
 #
 # Generic options:
@@ -51,7 +50,7 @@ CLXLIB    = C:CLX.o.clxlib
 #
 # Include files
 #
-INCLUDES  = -IC: -Iriscos -IC:CLX
+INCLUDES  = -IC: -IC:CLX
 DFLAGS    = 
 
 #
@@ -63,9 +62,9 @@ SOURCE     =
 EXPORTS    = 
 
 
-OBJS=	o.aifcode o.hostdep o.link o.dem 
+OBJS=o.aifcode o.hostdep o.link
 
-LIBS=	${CLXLIB} ${CLIB}
+LIBS= ${CLXLIB} ${CLIB}
 
 #
 # Rule patterns
@@ -134,10 +133,5 @@ o.dirs:
 ${TARGET}: ${OBJS} ${LIBS} o.dirs
         ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
 	${SQZ} ${SQZFLAGS} $@
-
-# Static dependencies:
-
-o.dem: riscos.c.dem
-    ${CC} ${CCFLAGS} -pcc -o $@ riscos.c.dem
 
 # Dynamic dependencies:

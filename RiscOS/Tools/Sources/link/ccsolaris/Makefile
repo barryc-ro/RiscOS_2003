@@ -1,7 +1,6 @@
 # This file was created by Megamake.
 # Copyright (C) Advanced RISC Machines 1992.
 
-#CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
 CLX=${CLXPATH}/clx.a
 
 CFLAGS=-D__acorn -DTARGET_IS_ACORN_RISC_OS=1 -c -O -I${CLXPATH} ${CFL}
