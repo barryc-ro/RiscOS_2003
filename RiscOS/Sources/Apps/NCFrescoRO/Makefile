@@ -8,11 +8,11 @@ EXP_HDR = <CExport$Dir>
 RESAPP = <Resource$Dir>.Apps.!NCFresco
 RESRES = <Resource$Dir>.Resources.NCFresco
 RESRES_ALT = <Resource$Dir>.Resources.NCFrescoA
-INSTALLDIR = <Install$Dir>.!NCFresco
+INSTALLDIR = $(INSTDIR).!NCFresco
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = aasm
 CP      = copy
 SQ      = squeeze
