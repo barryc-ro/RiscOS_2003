@@ -74,6 +74,8 @@
 /*                          machines.                                                          */
 /*          04-Sep-97: RML: Corrected bug which resulted in dodgy palette for animations in    */
 /*                          16 colour screen modes.                                            */
+/*          12-Sep-97: RML: Added sprite export functions (render_export_sprite and            */
+/*                          render_export_animated_sprites)                                    */
 /*---------------------------------------------------------------------------------------------*/
 /* To do (inanimate) :                                                                         */
 /*                                                                                             */
@@ -3894,6 +3896,128 @@ static int render_animate_valid_handle(int handle)
     }
 
     return 1;
+}
+
+
+/*-----------------------------------------------------------------------------------------------------------------*/
+/*                                                 IMAGE EXPORT ROUTINES                                           */
+/*-----------------------------------------------------------------------------------------------------------------*/
+
+#define FreeMemoryAndReturn {flex_free((flex_ptr)&spr);flex_set_budge(oldstate);return e;}
+
+_kernel_oserror* render_export_sprite(int handle, char*filename)
+{
+    _kernel_oserror *e = NULL;
+    internal_header *im = images[handle];
+    sprite_area     *spr;
+    sprite_header   *spr_head;
+    sprite_header   *src_head;
+    char            *src_pal;
+    char            *spr_pal;
+    char            *spr_img;
+    char            *spr_msk;
+    int              w = im->width;
+    int              h = im->height;
+    int              tp = im->transparency;
+    int              oldstate, sw, size, bytes, x, y;
+
+    /* Check it's a valid handle */
+    if (!render_valid_handle(handle)) return NULL;
+
+    oldstate=flex_set_budge(0);
+    
+    /* If image_fast set, we can save the image already */
+    if (im->flags.image_fast)
+    {
+        _swix(OS_SpriteOp, _INR(0,2), 256+SprSaveSprites, (int)im->spr_data, filename);
+        return NULL;
+    }
+
+    /* Get memory to store a sprite of this image */
+    sw = AlignSize(w);
+    size = sizeof(sprite_area) + sizeof(sprite_header) + (sw*h) + (sw*h);
+    if (!flex_alloc((flex_ptr)&spr, size))
+        return render_error("Can't allocate memory to save sprite.");
+
+    /* Initialise sprite area, then create sprite */
+    spr->size   = size;
+    spr->sproff = 16;
+    e=_swix(OS_SpriteOp, _INR(0,1), 256+SprInitArea, (int)spr);
+    e=_swix(OS_SpriteOp, _INR(0,6), 256+SprCreateSprite, (int)spr, "image", 0, w, h, 28);
+    if (e) FreeMemoryAndReturn
+     
+    /* Add 256 entry palette */
+    e=_swix(OS_SpriteOp, _INR(0,3), 256+SprAddPalette, (int)spr, "image", (1U<<31)+1);
+    if (e) FreeMemoryAndReturn
+    
+    /* If transparent, add mask */
+    if (im->transparency!=-1) e=_swix(OS_SpriteOp, _INR(0,2), 256+SprAddMask, (int)spr, "image");
+    if (e) FreeMemoryAndReturn
+
+    spr_head = (sprite_header*) ((char*)spr + sizeof(sprite_area));
+    spr_img = ((char*)spr_head) + spr_head->image;
+    spr_msk = ((char*)spr_head) + spr_head->mask;
+    spr_pal = ((char*)spr_head) + sizeof(sprite_header) - 4 - 2048;
+    
+    src_head = (sprite_header*) ((char*)im->spr_data + sizeof(sprite_area));
+    src_pal  = ((char*)src_head) + sizeof(sprite_header) - 4 - 2048;
+
+    /* Copy the palette data */
+    memcpy(spr_pal, src_pal, 2048);
+    
+    e=LZW_decompress_start(NULL, 'T', 8, NULL, (uint8*) im->lzw_data);
+    if (e) FreeMemoryAndReturn
+    
+    for (y=0; y<h; y++)
+    {
+        /* Decompress next row */
+        e=LZW_decompress_next((uint8*)spr_img, w, (uint8*)im->lzw_data, &bytes);
+        if (e) FreeMemoryAndReturn
+
+        /* If not a whole row of data, something's gone wrong */
+        if (bytes!=w)
+        {
+            flex_free((flex_ptr)&spr);
+            flex_set_budge(oldstate);
+            return render_error("Decompression failed - not a whole row.\n");
+        }
+
+        /* Setup mask */
+        if (im->transparency!=-1)
+        {
+            for (x=0; x<w; x++)
+            {
+                if (spr_img[x]==tp) spr_msk[x]=0;
+                else spr_msk[x]=255;
+            }
+        }
+        spr_img+=sw;
+        spr_msk+=sw;
+    }
+    
+    LZW_decompress_end();
+
+    _swix(OS_SpriteOp, _INR(0,2), 256+SprSaveSprites, (int)spr, filename);
+
+    flex_free((flex_ptr)&spr);
+
+    flex_set_budge(oldstate);
+
+    return NULL;    
+}
+
+
+_kernel_oserror* render_export_animated_sprites(int handle, char* filename)
+{
+    _kernel_oserror *e = NULL;
+    
+    /* Check it's a valid handle */
+    if (!render_animate_valid_handle(handle)) return NULL;
+
+    /* Save the sprites */
+    e=_swix(OS_SpriteOp, _INR(0,2), 256+SprSaveSprites, (int)anims[handle]->rgb_data, filename);
+
+    return e;
 }
 
 
