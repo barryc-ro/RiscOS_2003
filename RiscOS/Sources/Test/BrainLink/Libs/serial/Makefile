@@ -21,7 +21,7 @@ EXP_C_O     = <Cexport$dir>.o
 #
 include Makefiles:StdTools
 
-COMPONENT = sercomm
+COMPONENT = BLserial
 TARGET   ?= ${COMPONENT}
 TARGETZ   = ${TARGET}ZM
 
