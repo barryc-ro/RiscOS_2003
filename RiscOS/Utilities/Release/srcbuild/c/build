@@ -56,6 +56,12 @@ static const char corporate_copyright_for_bbe[] = "#"
   "\n# Pace."
   "\n#";
 
+/* Internal function invoked by build_install and build_bbe */
+static int build_install_rom_(int generate_script);
+
+/* Internal function invoked by build_resources and build_bbe */
+static int build_resources_(int generate_script);
+
 /*
  * A nice veneer to OS_ReadVarVal
  */
@@ -451,7 +457,7 @@ int build_export_libs(void)
 
 
 
-int build_resources_(int generate_script)
+static int build_resources_(int generate_script)
 {
   component_entry_t *component;
   module_entry_t *module;
@@ -581,6 +587,9 @@ int build_resources(void)
   return build_resources_(0);
 }
 
+
+
+/* Copy lines from 'source' to 'dest', indenting each line with a tab if 'with_tab' is non-zero */
 static void line_by_line_copy(FILE *dest, FILE *source, int with_tab)
 {
   char buffer[BUFFER_LEN * 2];
@@ -595,11 +604,10 @@ static void line_by_line_copy(FILE *dest, FILE *source, int with_tab)
   }
 }
 
-static void copy_file(const char *destination, const char *source)
-{
-  _swix(OS_FSControl, _INR(0,3), 26, source, destination, 1<<1 /* force */);
-}
-
+/* After the BBE phase has invoked the faked rom_link phase, parse the resultant script looking for
+ * the line which does the link.  We need to know where the partially linked ROM module is, and which
+ * abssym file it wants - then we throw the script away and write the rule cleanly ourselves.
+ */
 static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target, const char *componentname)
 {
   char buffer[BUFFER_LEN * 2];
@@ -665,7 +673,7 @@ static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target
       }
     }
 
-    copy_file(aof_target, source_file);
+    copy_objects(aof_target, source_file);
     fprintf(dest,
       "rom_link:\n"
       "\t${MKDIR} linked\n\t%s\n"
@@ -674,8 +682,13 @@ static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target
   }
 }
 
-/* NOTE: Parameter must be pointer to array with enough space to hold locale names
+/*
+ * Write the resources phases into the target BBE Makefile.  Each locale is copied in as a
+ * separate rule.
+ *
+ * NOTE: Parameter 'bbe_dir' must be pointer to array with enough space to hold locale names
  * tacked on the end of it.
+ *
  */
 static void copy_locale_resources(FILE *makefile, char *bbe_dir /* see comment above */, const char *name)
 {
@@ -705,18 +718,19 @@ static void copy_locale_resources(FILE *makefile, char *bbe_dir /* see comment a
     fprintf(makefile, "resources-%s:\n", locale);
     if (resources_file)
     {
-      /* Not an error if it doesn't exist - but need the rule in the Makefile anyway */
+      /* Not an error if it doesn't exist - but need the rule in the Makefile anyway.
+       * Copy file line by line, inserting TABs.
+       */
       line_by_line_copy(makefile, resources_file, 1);
     }
+    /* Need this line to ensure that there is at least one command for this target */
     fprintf(makefile, "\t@| End of resource export for locale %s\n\n", locale);
     fclose(resources_file);
   }
 }
 
-
-int
-build_install_rom_(int generate_script);
-
+/* BBE phase.
+ */
 int build_bbe(void)
 {
   component_entry_t *component;
@@ -731,9 +745,21 @@ int build_bbe(void)
   module_type_t type;
   FILE *makefile;
   FILE *rom_link_file;
+  /* The following variable is used for debugging only */
+  const enum {
+    bbe_real,
+    bbe_debugging
+  } bbe_debug = bbe_real;
 
-  build_resources_(1);
-  build_install_rom_(1);
+  (void) bbe_debugging; /* avoid compiler warning */
+  (void) bbe_real; /* avoid compiler warning */
+
+  if (bbe_debug == bbe_real)
+  {
+    /* Generate BBE_Res and BBE_ROM contents (debug builds assume this is already there to save time). */
+    build_resources_(1);
+    build_install_rom_(1);
+  }
 
   /*
    * now get on with rest
@@ -899,6 +925,40 @@ int build_bbe(void)
         }
     }
     component = component->next;
+  }
+
+  if (bbe_debug == bbe_real)
+  {
+    /* Delete the generated BBE_Res and BBE_ROM dirs (debug builds don't to help debugging and save time)
+     * NOTE: This must NOT be done as we loop through the components, because some components are used
+     * multiple times (e.g. territory modules) for different targets and this could cause problems.
+     */
+
+    component = component_database;
+    while (component) {
+      module = lookup_module(component->name);
+      type = component->type;
+      if (type == UNDEF)
+        type = module->type;
+
+      switch (type) {
+        case C:
+        case ASM:
+        case BAS:
+        case KERNEL:
+        case HAL:
+        case DATA:
+        case RES:
+          printf("\n%s...\n", component->name);
+          sprintf(bbe_dir, "%s.%s.%s.BBE.%s.%s.", build_dir, INSTALL_DIR, build_name, SOURCE_DIR, module->path);
+          end_bbe_dir = strchr(bbe_dir, '\0');
+          strcpy(end_bbe_dir, "BBE_Res");
+          wipe_objects(bbe_dir);
+          strcpy(end_bbe_dir, "BBE_ROM");
+          wipe_objects(bbe_dir);
+      }
+      component = component->next;
+    }
   }
 
   /* Finally change the locale back to the default one (the first in the list). */
@@ -1091,7 +1151,6 @@ build_install_rom_(int generate_script)
               sprintf(scriptdirname, "%s.%s.BBE.%s.%s.%s", INSTALL_DIR, build_name, SOURCE_DIR, module->path, "BBE_ROM");
               _check_dir_v(scriptdirname, NULL);
               sprintf(scriptfilename, "-o %s.%s.rom_link ADDRESS=Address FORCEROMLINK=%s", build_dir, scriptdirname, forcefilename);
-              if (module->filename && 0 == strcmp(module->filename, "FTP")) strcat(scriptfilename, " -x");
               sprintf(scriptdirname, "%s.%s.BBE.%s.%s.%s", INSTALL_DIR, build_name, SOURCE_DIR, module->path, "rm");
               _check_dir_v(scriptdirname, NULL);
               sprintf(scriptdirname, "%s.%s.%s.BBE.%s.%s.%s", build_dir, INSTALL_DIR, build_name, SOURCE_DIR, module->path, "rm");
