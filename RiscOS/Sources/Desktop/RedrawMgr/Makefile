@@ -36,9 +36,9 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 # Include files
 #
-INCLUDES = -Itbox:,C:
+INCLUDES = -IC:tboxlibs,C:
 
-LIBS     = tbox:wimplib
+LIBS     = C:tboxlibs.o.wimplib
 
 DFLAGS   = -DDONT_RMENSURE
 
@@ -100,8 +100,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -112,10 +111,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.veneers: s.veneers
-o.errors: s.errors
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	tbox:h.wimp
-o.main:	tbox:h.wimplib
