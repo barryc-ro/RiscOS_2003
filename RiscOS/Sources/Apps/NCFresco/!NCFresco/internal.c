@@ -425,6 +425,34 @@ static os_error *fe_print_frames_write_file(FILE *f, fe_view v, const char *size
     return NULL;
 }
 
+static int internal_decode_print_frames(const char *query, char **new_url)
+{
+    char *size, *source;
+    BOOL cancel;
+    char *s, buffer[128];
+
+    /* when called from the printframes dialogue box, this may have a
+       cancel button */
+    s = extract_value(query, "action=");
+    cancel = strcasestr(s, "cancel") != 0;
+    mm_free(s);
+
+    if (cancel)
+	return fe_internal_url_NO_ACTION;
+    
+    size = extract_value(query, "size=");
+    source = extract_value(query, "source=");
+
+    sprintf(buffer, "ncint:printpage?source=%s&size=%s", source, size);
+
+    *new_url = strdup(buffer);
+
+    mm_free(size);
+    mm_free(source);
+
+    return fe_internal_url_REDIRECT;
+}
+
 /* ----------------------------------------------------------------------------------------------------- */
 
 static const char *msgs_lookup_null(const char *tag)
@@ -1997,6 +2025,10 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     else if (strcasecomp(page, "printoptions") == 0)
     {
 	generated = internal_decode_print_options(query, new_url);
+    }
+    else if (strcasecomp(page, "printframes") == 0)
+    {
+	generated = internal_decode_print_frames(query, new_url);
     }
     else if (strcasecomp(page, "find") == 0)
     {

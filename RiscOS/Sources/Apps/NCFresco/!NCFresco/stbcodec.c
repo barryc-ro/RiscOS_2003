@@ -124,6 +124,10 @@ void codec_event_handler(int event, fe_view v)
 	    _swix(ScreenBlanker_Control, _INR(0,1), 3, blank_time);
 	    blank_time = -1;
 	}
+	else
+	{
+	    STBDBG(("screenblanker: closing called twice\n"));
+	}
 
 	send_action(v, be_plugin_action_CLOSE);
 	if (recording)
@@ -132,9 +136,16 @@ void codec_event_handler(int event, fe_view v)
 
     case fevent_CODEC_OPENING:
 	/* read the screenblanker state and then disable it */
-	_swix(ScreenBlanker_Control, _IN(0) | _OUT(1), 5, &blank_time);
-	_swix(ScreenBlanker_Control, _INR(0,1), 3, 0);
-	STBDBG(("screenblanker: disable (%d)\n", blank_time));
+	if (blank_time == -1)
+	{
+	    _swix(ScreenBlanker_Control, _IN(0) | _OUT(1), 5, &blank_time);
+	    _swix(ScreenBlanker_Control, _INR(0,1), 3, 0);
+	    STBDBG(("screenblanker: disable (%d)\n", blank_time));
+	}
+	else
+	{
+	    STBDBG(("screenblanker: opening called twice\n"));
+	}
 	break;
 
     case fevent_CODEC_STOP_PAGE:

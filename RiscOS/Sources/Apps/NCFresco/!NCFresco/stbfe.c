@@ -1400,12 +1400,13 @@ static os_error *fe__print(fe_view v, int size)
     /* activate the appropriate button, and move highlight to BACK */
     if (use_toolbox)
     {
+#if 0
 	fe_view vv;
 
 	/* remove the view of frames to print */
 	if ((vv = fe_locate_view(print_targets[size])) != NULL)
 	    fe_dispose_view(vv);
-
+#endif
 	tb_status_button(print_events[size], tb_status_button_UNPRESSED);
 	tb_status_button(print_events[size], tb_status_button_ACTIVE);
 	tb_status_button(fevent_TOOLBAR_EXIT, tb_status_button_PRESSED);
@@ -1449,13 +1450,13 @@ static os_error *fe__print(fe_view v, int size)
 os_error *fe_print(fe_view v, int size)
 {
     os_error *e = NULL;
+    fe_view vv;
 
     STBDBG(("fe_print: v%p size %d children %p\n", v, size, v->children));
 
     if (v->children)
     {
 	char buffer[64];
-	fe_view vv;
 
 	sprintf(buffer, "ncint:openpanel?name=printframes&size=%s", print_sizes[size]);
 
@@ -1474,6 +1475,14 @@ os_error *fe_print(fe_view v, int size)
     }
     else
     {
+#if 0
+	/* check to see if print frames dbox is still up and remove it */
+	if ((vv = fe_locate_view(print_targets[size])) != NULL)
+	{
+	    sound_event(snd_MENU_HIDE);
+	    fe_dispose_view(vv);
+	}
+#endif
 	e = fe__print(v, size);
     }
 
