@@ -282,7 +282,7 @@ resources: 	$(APPENGINE) $(UI) o.dirs
         @echo
         @echo $(COMPONENT): Resource files copied to Messages module
 
-clean:  $(APPENGINE) $(UI)
+clean:  $(APPENGINE) cleanWebMail cleanTestUI
         @echo starting
         $(WIPE) abs             $(WFLAGS)
         $(WIPE) aof             $(WFLAGS)
@@ -379,17 +379,31 @@ rm.$(APP)D: odz.ModuleWrap  $(LIBSM) o.dirs
 
 Engine:
 	@echo Calling Engine Makefile
-	dir Engine
+	dir ^.Engine
 	@amu -f Makefile $(MFLAGS)
 	@echo Returned from Engine Makefile
-	up
+	dir ^.Build
 
 $(UI):
 	@echo Calling $(UI) Makefile
-	dir $(UI)
+	dir ^.$(UI)
 	@amu -f Makefile $(MFLAGS)
 	@echo Returned from $(UI) Makefile
-	up
+	dir ^.Build
+
+cleanWebMail:
+	@echo Calling WebMail Makefile
+	dir ^.WebMail
+	@amu -f Makefile $(MFLAGS)
+	@echo Returned from WebMail Makefile
+	dir ^.Build
+
+cleanTestUI:
+	@echo Calling TestUI Makefile
+	dir ^.TestUI
+	@amu -f Makefile $(MFLAGS)
+	@echo Returned from TestUI Makefile
+	dir ^.Build
 
 
 # -----------------------------------------------------------------------------

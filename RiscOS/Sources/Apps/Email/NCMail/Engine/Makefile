@@ -261,8 +261,8 @@ OBJSZ=  oz.engcbf oz.engdownld oz.engfile oz.engevent \
 export: export_$(PHASE)
 
 export_hdrs:
-	@$(CP)	h.enguiapi	^.h.enguiapi			$(CPFLAGS)
-	@$(CP)	h.engtypes	^.h.engtypes			$(CPFLAGS)
+	@$(CP)	h.enguiapi	^.Build.h.enguiapi			$(CPFLAGS)
+	@$(CP)	h.engtypes	^.Build.h.engtypes			$(CPFLAGS)
 	@echo $(COMPONENT): export complete (hdrs)		$(CPFLAGS)
 
 export_libs: 
@@ -281,21 +281,21 @@ debug: $(TARGETD)
 		@echo ${COMPONENT}: debug complete
 
 install_rom: $(ROM_MODULE)
-	$(CP) $(ROM_MODULE) ^.oz.Engine	$(CPFLAGS)
+	$(CP) $(ROM_MODULE) ^.Build.oz.Engine	$(CPFLAGS)
 
 install_common: $(FILES)
         @echo
-        $(CP) $(LPATH)Res                       ^.$(INSTDIR).Res      $(CPFLAGS)
+        $(CP) $(LPATH)Res                       ^.Build.$(INSTDIR).Res      $(CPFLAGS)
 
 install: install_common
-        $(CP) $(LPATH)!Run              ^.$(INSTDIR).!Run         $(CPFLAGS)
+        $(CP) $(LPATH)!Run              ^.Build.$(INSTDIR).!Run         $(CPFLAGS)
         @echo
-        @echo $(COMPONENT): Application installed to ^.$(INSTDIR)
+        @echo $(COMPONENT): Application installed to ^.Build.$(INSTDIR)
 
 installd: install_common
-        $(CP) $(LPATH)!RunD             ^.$(INSTDIR).!Run         $(CPFLAGS)
+        $(CP) $(LPATH)!RunD             ^.Build.$(INSTDIR).!Run         $(CPFLAGS)
         @echo
-        @echo $(COMPONENT): Debug application installed ^.$(INSTDIR)
+        @echo $(COMPONENT): Debug application installed ^.Build.$(INSTDIR)
 
 resources:
 	@echo $(RESDIR)
@@ -315,8 +315,8 @@ clean:
         $(WIPE) syms             $(WFLAGS)
         $(RM)   syms
         $(RM)   o.dirs
-	$(RM)   ^.h.enguiapi
-	$(RM)   ^.h.engtypes
+	$(RM)   ^.Build.h.enguiapi
+	$(RM)   ^.Build.h.engtypes
         @echo
         @echo $(COMPONENT): Cleaned
 
@@ -348,16 +348,16 @@ clean_all: clean
 #
 
 abs.!RI: $(OBJS) o.dirs
-	$(LD) $(LDFLAGS) -o ^.o.Engine $(OBJS)
+	$(LD) $(LDFLAGS) -o ^.Build.o.Engine $(OBJS)
 
 $(ROM_MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.oz.Engine $(OBJSZ)
+	$(LD) $(LDFLAGS) -o ^.Build.oz.Engine $(OBJSZ)
 
 $(MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.oz.Engine $(OBJSZ)
+	$(LD) $(LDFLAGS) -o ^.Build.oz.Engine $(OBJSZ)
 
 abs.!RI_D: $(OBJSD) o.dirs
-	$(LD) $(LDFLAGS) -o ^.od.Engine $(OBJSD)
+	$(LD) $(LDFLAGS) -o ^.Build.od.Engine $(OBJSD)
 
 
 # -----------------------------------------------------------------------------

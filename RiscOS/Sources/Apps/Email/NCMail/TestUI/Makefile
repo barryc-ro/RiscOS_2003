@@ -194,7 +194,7 @@ OBJSZ=  oz.engtempui
 export: export_$(PHASE)
 
 export_hdrs: 
-	@$(CP)	h.NCMailUI	^.h.NCMailUI			$(CPFLAGS)
+	@$(CP)	h.NCMailUI	^.Build.h.NCMailUI			$(CPFLAGS)
 	@echo $(COMPONENT): export complete (hdrs)		$(CPFLAGS)
 
 export_libs: 
@@ -213,21 +213,21 @@ debug: $(TARGETD)
 		@echo ${COMPONENT}: debug complete
 
 install_rom: $(ROM_MODULE)
-	$(CP) $(ROM_MODULE) ^.oz.NCMailUI	$(CPFLAGS)
+	$(CP) $(ROM_MODULE) ^.Build.oz.NCMailUI	$(CPFLAGS)
 
 install_common: $(FILES)
         @echo
-        $(CP) $(LPATH)Res               ^.$(INSTDIR).Res           $(CPFLAGS)
-        $(CP) $(LPATH)Messages                  ^.$(INSTDIR).Messages $(CPFLAGS)
+        $(CP) $(LPATH)Res               ^.Build.$(INSTDIR).Res           $(CPFLAGS)
+        $(CP) $(LPATH)Messages                  ^.Build.$(INSTDIR).Messages $(CPFLAGS)
 
 install: install_common
         @echo
-        @echo $(COMPONENT): Application installed to ^.$(INSTDIR)
+        @echo $(COMPONENT): Application installed to ^.Build.$(INSTDIR)
 
 
 installd: install_common
         @echo
-        @echo $(COMPONENT): Debug application installed ^.$(INSTDIR)
+        @echo $(COMPONENT): Debug application installed ^.Build.$(INSTDIR)
 
 resources:
 	@echo $(RESDIR)
@@ -245,7 +245,7 @@ clean:
         $(WIPE) oz              $(WFLAGS)
         $(WIPE) odz             $(WFLAGS)
         $(RM)   o.dirs
-	$(RM) ^.h.NCMailUI
+	$(RM) ^.Build.h.NCMailUI
         @echo
         @echo $(COMPONENT): Cleaned
 
@@ -277,16 +277,16 @@ clean_all: clean
 
 
 abs.!RI: $(OBJS) o.dirs
-	$(LD) $(LDFLAGS) -o ^.o.NCMailUI $(OBJS) $(LIBS)
+	$(LD) $(LDFLAGS) -o ^.Build.o.NCMailUI $(OBJS) $(LIBS)
 
 $(ROM_MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.oz.NCMailUI $(OBJSZ) $(LIBSZ)
+	$(LD) $(LDFLAGS) -o ^.Build.oz.NCMailUI $(OBJSZ) $(LIBSZ)
 
 $(MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.oz.NCMailUI $(OBJSZ) $(LIBSZ)
+	$(LD) $(LDFLAGS) -o ^.Build.oz.NCMailUI $(OBJSZ) $(LIBSZ)
 
 abs.!RI_D: $(OBJSD) o.dirs
-	$(LD) $(LDFLAGS) -o ^.od.NCMailUI $(OBJSD) $(LIBSD)
+	$(LD) $(LDFLAGS) -o ^.Build.od.NCMailUI $(OBJSD) $(LIBSD)
 
 
 # -----------------------------------------------------------------------------
