@@ -32,7 +32,7 @@ AR	= LibFile
 STRIP   = -StripDepnd
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
-CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp ${DFLAGS}
+CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -ffa -zps1 -zM -DCOMPAT_INET4 -Wp ${DFLAGS}
 # Flags for debugging ...
 #CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -DCOMPAT_INET4 -Wp -Throwback -DDEBUG
 CPFLAGS = ~cfr~v
