@@ -103,6 +103,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
         ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
 ${APPTARGET}: ${APPOBJS}
+	${MKDIR} abs
         ${LD} -aif -o $@ ${APPOBJS} ${CLIB} ${RLIB}
 
 #
@@ -123,9 +124,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	h.module
 o.app:	c.app
 o.app:	C:h.swis
 o.app:	C:h.kernel
@@ -146,3 +144,6 @@ o.app:	C:h.bbc
 o.app:	C:h.colourtran
 o.app:	C:h.font
 o.app:	C:h.drawmod
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	h.module
