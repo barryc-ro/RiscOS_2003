@@ -15,7 +15,7 @@ CC      = cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
-RM      = remove
+REMOVE  = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
@@ -83,7 +83,7 @@ export_hdrs: h.${COMPONENT}
         ${CP} h.${COMPONENT} ${EXP_HDR}.h.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: export complete (headers)
 
-export_libs: o.filewatch
+export_libs:
         @echo ${COMPONENT}: export complete (libs)
 
 install_rom: ${TARGET}
@@ -96,8 +96,8 @@ clean:
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
-        ${RM} h.KeyWatchHd
+        ${REMOVE} ${TARGET}
+        ${REMOVE} h.KeyWatchHd
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -131,14 +131,6 @@ ${RMD}: ${OBJSD} ${LIBSD} ${CLIB}
 KeyWatch.c: KeyWatchHd.h
 
 # Dynamic dependencies:
-o.KeyWatch:	c.KeyWatch
-o.KeyWatch:	C:h.kernel
-o.KeyWatch:	C:h.swis
-o.KeyWatch:	C:tboxlibs.h.wimp
-o.KeyWatch:	VersionNum
-o.KeyWatch:	h.KeyWatchHd
-o.KeyWatch:	h.KeyWatch
-o.KeyWatch:	C:debug.h.remote
 o.KeyWatch:	c.KeyWatch
 o.KeyWatch:	C:h.kernel
 o.KeyWatch:	C:h.swis
