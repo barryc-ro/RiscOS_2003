@@ -232,21 +232,14 @@ riscos_export: riscos_libs
 	@cp -p ssllib $(RISCOS_BUILD_EXPORT)/Lib/SSL/ssllib.o
 	@echo Copied libraries
 
-riscos_libs: cryptolib ssllib pem.h
-	@echo Made SSL libraries
-
-cryptolib: pem.h
-	cd crypto ; make top
-
-ssllib: cryptolib
-	cd ssl ; make top
-
-robits:
-	cd robits ; make top
-
-pem.h:
+riscos_libs: 
 	echo making pem.h on starman
 	rsh starman "cd /home/smiddle/Sources/renaissa/RiscOS/Sources/Networking/libs/SSL/crypto/pem ; make pem.h"
+	@echo Making SSL libraries
+	cd crypto ; make top
+	cd ssl ; make top
+	cd robits ; make top
+	@echo Made SSL libraries
 
 # -----------------------------------------------------------------------------
 
