@@ -54,6 +54,7 @@ ABSSYM	  = RISC_OSLib:o.abssym
 
 OBJS =\
  o.module\
+ o.processdir\
  o.readdata\
  o.ses_ctrl\
  o.start\
@@ -64,6 +65,7 @@ OBJS =\
 
 RAM_OBJS =\
  o.moduleRAM\
+ o.processdir\
  o.readdata\
  o.ses_ctrl\
  o.start\
