@@ -12,9 +12,18 @@
 ; call: handle_device_call
 ;
 
+;
+; DeviceFS will have ensured that V is clear on entry - so we don't need to
+; do that.   The return address is now stacked, and the CPSR too for the
+; duration of the call.
+;
+
 handle_device_call ROUT
 
-                BIC     lr, lr, #VFlag		; clear V flag in link register
+                Push    lr
+                SavePSR lr
+                Push    lr
+                ADR     lr, device_call_exit
 
                 CMP     r0, #(%20-%10)/4	; validate reason code
                 ADDCC   pc, pc, r0, LSL #2 	; despatch
@@ -23,24 +32,32 @@ handle_device_call ROUT
                 B       initialise              ; 0  initialise
                 B       finalise                ; 1  finalise
                 B       wakeup_tx               ; 2  wake up for TX
-                MOVS	pc, lr                  ; 3  wake up for RX
-                MOVS	pc, lr			; 4  sleep rx
-                MOVS	pc, lr	                ; 5  enumerate directory
+                MOV     pc, lr                  ; 3  wake up for RX
+                MOV     pc, lr                  ; 4  sleep rx
+                MOV     pc, lr                  ; 5  enumerate directory
                 B       create_tx_buffer        ; 6  create buffer for TX
                 B       create_rx_buffer        ; 7  create buffer for RX
                 B       threshold_halt          ; 8  halt - below threshold
                 B       threshold_resume	; 9  resume - above threshold
-                MOVS    pc, lr                  ; 10 end of data
+                MOV     pc, lr                  ; 10 end of data
                 B       stream_created		; 11 stream created
-		MOVS	pc, lr
-		MOVS	pc, lr
+		MOV	pc, lr
+		MOV	pc, lr
 		B	ioctl			; 14 IOCtl
 20
+                Pull    lr
                 ADDR    r0, ErrorBlock_Serial_BadDeviceReasonCode
+                Pull    lr
                 B	make_error
 
 		MakeErrorBlock Serial_BadDeviceReasonCode
                 MOVS    pc, lr
+
+device_call_exit
+                Pull    lr
+                ORRVS   lr, lr, #V_bit
+                RestPSR lr,,f
+                Pull    pc
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -141,8 +158,9 @@ initialise      ENTRY "r0,r4-r5"
                 TST     r3, #1                  ; tx or rx stream ?
                 STREQ   r0, InputBufferThreshold
                 STRNE   r0, OutputBufferThreshold
+                CLRV
 30
-                EXITS
+                EXIT
 
 40
                 STR   	r0, [sp]
@@ -163,7 +181,7 @@ initialise      ENTRY "r0,r4-r5"
 ; received then we should halt the relevant transmission type until the stream
 ; is re-opened.
 
-finalise        ENTRY	"r0-r3"
+finalise        Entry	"r0-r3"
  [ debug
 ;		DREG	r2, "Modem: finalise : "
  ]
@@ -181,7 +199,7 @@ finalise        ENTRY	"r0-r3"
 		STREQ	r1, OutputStream	; null the stream
 		STREQ	r3, OutputBufferPrivId
 		STREQ	r1, OutputBuffer
-                EXITS
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -196,6 +214,8 @@ finalise        ENTRY	"r0-r3"
 ;
 ; This routine is called when data is ready to be transmitted. Data should
 ; start being passed to the device
+
+; Must not corrupt Z
 
 wakeup_tx       ENTRY	"r3,r10"
  [ debug
@@ -216,7 +236,7 @@ wakeup_tx       ENTRY	"r3,r10"
  [ debug
 		DREG	r3,"Modem:   Interrupt enable reg "
  ]
- 		EXITS
+ 		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -252,11 +272,11 @@ create_tx_buffer ENTRY "r0"
 
 ; and now the default threshold
 		LDR	r0, OutputBufferThreshold
-		CMP	r0, #0
+		CMP	r0, #0                       ; clears V
 		MOVNE	r6, r0
 		STREQ	r6, OutputBufferThreshold
 
- 		EXITS
+ 		EXIT
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -293,11 +313,11 @@ create_rx_buffer ENTRY
 
 ; and now the default threshold
 		LDR	r0, InputBufferThreshold
-		CMP	r0, #0
+		CMP	r0, #0                       ; clears V
 		MOVNE	r6, r0
 		STREQ	r6, InputBufferThreshold
 
- 		EXITS
+ 		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -327,12 +347,12 @@ threshold_halt  ENTRY "r0-r1"
 ; check stream handle
 		LDR	r1, InputStream
 		TEQ	r2, r1
-		EXITS	NE
+		EXIT	NE
 
 ; are we doing handshaking ?
 		LDR	r1, Flags
 		TST	r1, #flag_UseRTS:OR:flag_UseXon:OR:flag_UseDTR
-		EXITS	EQ
+		EXIT	EQ
 
 		ORR	r1, r1, #flag_RxThresholded
 		STR	r1, Flags
@@ -341,21 +361,22 @@ threshold_halt  ENTRY "r0-r1"
 		TST	r1, #flag_UseXon
 		ORRNE	r1, r1, #flag_TxXoff		; send an xoff
 		STRNE	r1, Flags
-		BLNE	wakeup_tx
-		EXITS	NE
+		BLNE	wakeup_tx                       ; preserves Z
+		EXIT	NE
 
-		PHPSEI				; disable interrupts
+		PHPSEI	lr, r0			; disable interrupts
 		LDRB	r0, ControlLines
 		TST	r1, #flag_UseRTS
 		BICNE 	r0, r0, #ctrl_line_rts
 		TST	r1, #flag_UseDTR
 		BICNE	r0, r0, #ctrl_line_dtr
 		STRB	r0, ControlLines
-		PLP				; enable interrupts
+		PLP	lr			; enable interrupts
 
 		BL	hardware_ctrl_lines
 
-                EXITS
+                CLRV
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -381,12 +402,12 @@ threshold_resume ENTRY	"r0-r1"
 ; check stream handle
 		LDR	r1, InputStream
 		TEQ	r2, r1
-		EXITS	NE
+		EXIT	NE
 
 ; are we doing handshaking ?
 		LDR	r1, Flags
 		TST	r1, #flag_UseRTS:OR:flag_UseXon:OR:flag_UseDTR
-		EXITS	EQ
+		EXIT	EQ
 
 		BIC	r1, r1, #flag_RxThresholded
 		STR	r1, Flags
@@ -395,21 +416,22 @@ threshold_resume ENTRY	"r0-r1"
 		TST	r1, #flag_UseXon
 		ORRNE	r1, r1, #flag_TxXon	; send an xon
 		STRNE	r1, Flags
-		BLNE	wakeup_tx
-		EXITS	NE
+		BLNE	wakeup_tx                       ; preserves Z
+		EXIT	NE
 
-		PHPSEI				; disable interrupts
+		PHPSEI	lr, r0			; disable interrupts
 		LDRB	r0, ControlLines
 		TST	r1, #flag_UseRTS
 		ORRNE 	r0, r0, #ctrl_line_rts
 		TST	r1, #flag_UseDTR
 		ORRNE	r0, r0, #ctrl_line_dtr
 		STRB	r0, ControlLines
-		PLP				; enable interrupts
+		PLP	lr			; enable interrupts
 
 		BL	hardware_ctrl_lines
 
-                EXITS
+                CLRV
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -446,7 +468,7 @@ stream_created  ENTRY	"r0-r4"
 
 		STREQ	r0, InputBufferPrivId
                 STREQ   r3, InputBuffer
-		EXITS	EQ
+		EXIT	EQ
 
 		STR	r0, OutputBufferPrivId
                 STR	r3, OutputBuffer
@@ -460,7 +482,8 @@ stream_created  ENTRY	"r0-r4"
 		STR	r1, ControlLines
 		BL	hardware_ctrl_lines
 
-                EXITS
+                CLRV
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -496,7 +519,7 @@ ioctl		ROUT
                 ADDCC   pc, pc, r0, LSL #2 	; despatch
 		B	%20
 10
-		MOVS	pc, lr			; 0 nothing
+		MOV	pc, lr			; 0 nothing
                 B       ioctl_baud		; 1 set baud rate
                 B       ioctl_data		; 2 set data format
 		B	ioctl_handshake		; 3 set handshaking
@@ -531,7 +554,8 @@ ioctl_baud	ENTRY 	"r0-r4"
 		LDRNE	r0, BaudRate
 		STRNE	r0, [r3, #4]
 
-                EXITS
+                CLRV
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -566,7 +590,8 @@ ioctl_data	ENTRY	"r0-r4"
 		LDRNE	r0, DataFormat
 		STRNE	r0, [r3, #4]
 
-                EXITS
+                CLRV
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -581,7 +606,7 @@ ioctl_handshake ENTRY "r0-r5"
 		TST	r5, #ioctl_write
 		BEQ	%10
 
-		PHPSEI				; disable interrupts
+		PHPSEI	lr, r4			; disable interrupts
 		LDR	r4, Flags
 		BIC	r4, r4, #flag_UseRTS:OR:flag_UseXon:OR:flag_UseDTR
 		CMP	r1, #1
@@ -591,11 +616,11 @@ ioctl_handshake ENTRY "r0-r5"
 		CMP	r1, #3
 		ORREQ	r4, r4, #flag_UseDTR
 		STR	r4, Flags
-		PLP				; enable interrupts
+		PLP	lr			; enable interrupts
 10
 ; do we wish to read current
 		TST	r5, #ioctl_read
-		EXITS	EQ
+		EXIT	EQ
 
 		MOV	r0, #0
 		LDR	r4, Flags
@@ -607,7 +632,7 @@ ioctl_handshake ENTRY "r0-r5"
 		MOVNE	r0, #3
 		STR	r0, [r3, #4]
 
-                EXITS
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -630,50 +655,52 @@ ioctl_buffer_size ENTRY "r0-r4"
 10
 ; do we wish to read current
 		TST	r4, #ioctl_read
-		EXITS	EQ
+		EXIT	EQ
 
 		TEQ	r0, r2
 		LDREQ	r1, InputBufferSize
 		LDRNE	r1, OutputBufferSize
 		STR	r1, [r3, #4]		; write back to data block
 
-		EXITS
+		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-ioctl_buffer_thres ENTRY "r0-r4"
+ioctl_buffer_thres ENTRY "r0-r5"
 
 		LDR	r4, [r3, #0]		; load flags
 		LDR	r1, [r3, #4]		; load data
 
-		LDR	r0, InputStream
+		LDR	r5, InputStream
 
 ; are we writing the data
 		TST	r4, #ioctl_write
 		BEQ	%10
 
-		TEQ	r0, r2
+		TEQ	r5, r2
 		LDREQ	r0, InputBuffer
 		LDRNE	r0, OutputBuffer
 		SWI	XBuffer_Threshold	; set buffer threshold
 		EXIT	VS			; return if it didn't work
+		TEQ     r5, r2
 
 ; store new value in workspace if call succeeded
 		STREQ	r1, InputBufferThreshold
 		STRNE	r1, OutputBufferThreshold
+
 10
 ; do we wish to read current
 		TST	r4, #ioctl_read
-		EXITS	EQ
+		EXIT	EQ
 
-		TEQ	r0, r2
+		TEQ	r5, r2
 		LDREQ	r1, InputBufferThreshold
 		LDRNE	r1, OutputBufferThreshold
 		STR	r1, [r3, #4]		; write back to data block
 
-		EXITS
+		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -700,10 +727,11 @@ ioctl_ctrl_lines ENTRY "r0-r4"
 		PLP				; enable interrupts
 10
 		BL	hardware_ctrl_lines
+                CLRV
 
 ; do we wish to read current
 		TST	r4, #ioctl_read
-		EXITS	EQ
+		EXIT	EQ
 
 		LDRB	r0, ControlLines
 		MOV	r1, #0
@@ -726,7 +754,7 @@ ioctl_ctrl_lines ENTRY "r0-r4"
 
 		STR	r1, [r3, #4]		; write back to data block
 
-		EXITS
+		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -742,15 +770,16 @@ ioctl_fifo_trig ENTRY "r0-r1"
 
 		LDR	r0, [r3, #4]		; load data
 		BL	hardware_set_fifo_trigger
+		CLRV
 10
 ; do we wish to read current
 		TST	r1, #ioctl_read
-		EXITS	EQ
+		EXIT	EQ
 
 		LDRB	r0, FifoTrigger
 		STR	r0, [r3, #4]		; write back to data block
 
-		EXITS
+		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -771,7 +800,7 @@ ioctl_read_bauds ENTRY "r0-r4"
 
 		STR	r0, [r3, #4]		; store data
 
-		EXITS
+		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -805,9 +834,8 @@ ioctl_read_baud	ENTRY "r0-r6"
 10
 		STR	r0, [r3, #4]		; store data
 
-		EXITS
-
-; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                CLRV
+		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -836,7 +864,8 @@ ioctl_flush_buffer ENTRY "r0-r3"
 
 ; reading returns undefined value in data field of ioctl block
 10
-		EXITS
+                CLRV
+		EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
