@@ -11,6 +11,7 @@
 # 1998-09-16    AW      Created
 # 1998-09-22	RDW	Modified to fit into build structure
 # 1998-10-20	RDW	RAM module target added
+# 1998-10-20	RDW	resources now exports the HTML templates
 
 
 # ------------------------------------------------------------------------------
@@ -32,9 +33,6 @@ LPATH            = LocalUserIFRes:
 MODULE		= rm.!NCMail
 ROM_MODULE	= aof.NCMail
 LPATH            = LocalUserIFRes:
-#TARGET		= NCMailUI
-#TARGETD		= $(TARGET)d
-#TARGETZ		= $(TARGET)z
 
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
@@ -288,22 +286,50 @@ install_rom: $(ROM_MODULE)
 
 install_common: $(FILES)
         @echo
-        $(CP) $(LPATH)*                  ^.Build.$(INSTDIR).* $(CPFLAGS)
+	$(MKDIR)^.Build.$(INSTDIR).NCMail
+        $(CP) $(LPATH)*                  ^.Build.$(INSTDIR).NCMail.* $(CPFLAGS)
+	$(RM) ^.Build.$(INSTDIR).NCMail.!BootDUI
+	$(RM) ^.Build.$(INSTDIR).NCMail.!BootROMUI
+	$(RM) ^.Build.$(INSTDIR).NCMail.!BootUI
+	$(RM) ^.Build.$(INSTDIR).NCMail.!RunDUI
+	$(RM) ^.Build.$(INSTDIR).NCMail.!RunROMUI
+	$(RM) ^.Build.$(INSTDIR).NCMail.!RunUI
 
 install: install_common
         @echo
+        $(CP) $(LPATH)!BootUI           ^.Build.$(INSTDIR).!BootUI      $(CPFLAGS)
+        $(CP) $(LPATH)!RunUI            ^.Build.$(INSTDIR).!RunUI       $(CPFLAGS)
         @echo $(COMPONENT): Application installed to ^.Build.$(INSTDIR)
 
 
 installd: install_common
         @echo
+        $(CP) $(LPATH)!BootDUI          ^.Build.$(INSTDIR).!BootUI      $(CPFLAGS)
+        $(CP) $(LPATH)!RunDUI           ^.Build.$(INSTDIR).!RunUI       $(CPFLAGS)
         @echo $(COMPONENT): Debug application installed ^.Build.$(INSTDIR)
 
 resources:
-	@echo $(RESDIR)
+	@echo    $(RESDIR)
         $(MKDIR) $(RESDIR)
         $(MKDIR) $(RESAPP)
-        $(CP) $(LPATH)Messages          $(RESDIR).Messages      $(CPFLAGS)
+        $(CP) $(LPATH)!BootROMUI  $(RESAPP).!BootUI       $(CPFLAGS)
+        $(CP) $(LPATH)!RunROMUI   $(RESAPP).!RunUI        $(CPFLAGS)
+        $(CP) $(LPATH)Compose     $(RESDIR).Compose       $(CPFLAGS)
+        $(CP) $(LPATH)ERROR       $(RESDIR).ERROR         $(CPFLAGS)
+        $(CP) $(LPATH)Inbox       $(RESDIR).Inbox         $(CPFLAGS)
+        $(CP) $(LPATH)Inbox_Hc    $(RESDIR).Inbox_Hc      $(CPFLAGS)
+        $(CP) $(LPATH)Inbox_Hd    $(RESDIR).Inbox_Hd      $(CPFLAGS)
+        $(CP) $(LPATH)Inbox_L     $(RESDIR).Inbox_L       $(CPFLAGS)
+        $(CP) $(LPATH)Messages    $(RESDIR).Messages      $(CPFLAGS)
+        $(CP) $(LPATH)PopUp       $(RESDIR).PopUp         $(CPFLAGS)
+        $(CP) $(LPATH)PopUp_1     $(RESDIR).PopUp_1       $(CPFLAGS)
+        $(CP) $(LPATH)PopUp_2     $(RESDIR).PopUp_2       $(CPFLAGS)
+        $(CP) $(LPATH)Read        $(RESDIR).Read          $(CPFLAGS)
+        $(CP) $(LPATH)Read_B      $(RESDIR).Read_B        $(CPFLAGS)
+        $(CP) $(LPATH)Read_H      $(RESDIR).Read_H        $(CPFLAGS)
+        $(CP) $(LPATH)UserSel     $(RESDIR).UserSel       $(CPFLAGS)
+        $(MKDIR) $(RESDIR).pics
+        $(CP) $(LPATH).pics.*     $(RESDIR).pics.*        $(CPFLAGS)
         @echo
         @echo $(COMPONENT): Resource files copied to Messages module
 
