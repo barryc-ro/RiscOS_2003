@@ -15,6 +15,7 @@ VPATH = @ gadgets
 #
 COMPONENT  = Window
 ROM_MODULE = aof.${COMPONENT}
+RAM_MODULE = rm.${COMPONENT}
 
 #
 # Export Paths for Messages module
@@ -98,6 +99,10 @@ OBJS =\
 # Main rules:
 #
 #
+all: ${RAM_MODULE}
+        @echo ${COMPONENT}: Module built (RAM)
+
+
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
@@ -135,6 +140,11 @@ ${WIMPLIB}:
         ${CD} ^.wimplib
         ${MAKE} @.wimplib
         back
+
+${RAM_MODULE}: ${OBJS} ${TBOXLIB} ${WIMPLIB} ${CLIB}
+	${mkdir} rm
+        ${LD} -o $@ -module ${OBJS} ${TBOXLIB} ${WIMPLIB} ${CLIB}
+        Access $@ RW/R
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
@@ -470,6 +480,23 @@ o.getstate:	h.object
 o.getstate:	h.task
 o.getstate:	h.getstate
 o.getstate:	C:h.kernel
+o.globals:	c.globals
+o.globals:	<Lib$Dir>.tboxlibint.h.const
+o.globals:	<Lib$Dir>.tboxlibint.h.macros
+o.globals:	<Lib$Dir>.tboxlibint.h.services
+o.globals:	<Lib$Dir>.tboxlibint.h.debug
+o.globals:	<Lib$Dir>.tboxlibint.h.mem
+o.globals:	<Lib$Dir>.tboxlibint.h.string32
+o.globals:	<Lib$Dir>.tboxlibint.h.messages
+o.globals:	C:h.kernel
+o.globals:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.globals:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.globals:	<Lib$Dir>.tboxlibint.objects.h.window
+o.globals:	<Lib$Dir>.tboxlibint.h.twimp
+o.globals:	C:h.kernel
+o.globals:	<Lib$Dir>.tboxlibint.objects.h.menu
+o.globals:	h.globals
+o.globals:	C:h.kernel
 o.hide:	c.hide
 o.hide:	C:h.kernel
 o.hide:	C:h.swis
@@ -559,6 +586,51 @@ o.labelbox:	gadgets.^.h.main
 o.labelbox:	C:h.kernel
 o.labelbox:	gadgets.^.h.veneers
 o.labelbox:	gadgets.h.labelbox
+o.main:	c.main
+o.main:	C:h.kernel
+o.main:	C:h.swis
+o.main:	<Lib$Dir>.tboxlibint.h.const
+o.main:	<Lib$Dir>.tboxlibint.h.macros
+o.main:	<Lib$Dir>.tboxlibint.h.services
+o.main:	<Lib$Dir>.tboxlibint.h.debug
+o.main:	<Lib$Dir>.tboxlibint.h.mem
+o.main:	<Lib$Dir>.tboxlibint.h.string32
+o.main:	<Lib$Dir>.tboxlibint.h.messages
+o.main:	C:h.kernel
+o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.main:	<Lib$Dir>.tboxlibint.h.rmensure
+o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.main:	<Lib$Dir>.tboxlibint.objects.h.window
+o.main:	<Lib$Dir>.tboxlibint.h.twimp
+o.main:	C:h.kernel
+o.main:	h.object
+o.main:	h.create
+o.main:	C:h.kernel
+o.main:	h.task
+o.main:	h.delete
+o.main:	C:h.kernel
+o.main:	h.show
+o.main:	C:h.kernel
+o.main:	h.hide
+o.main:	C:h.kernel
+o.main:	h.getstate
+o.main:	C:h.kernel
+o.main:	h.miscop
+o.main:	C:h.kernel
+o.main:	h.events
+o.main:	C:h.kernel
+o.main:	h.gadgets
+o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.main:	<Lib$Dir>.tboxlibint.objects.h.window
+o.main:	<Lib$Dir>.tboxlibint.h.twimp
+o.main:	h.utils
+o.main:	<Lib$Dir>.tboxlibint.h.twimp
+o.main:	C:h.kernel
+o.main:	C:h.swis
+o.main:	h.veneers
+o.main:	h.task
+o.main:	h.main
+o.main:	C:h.kernel
 o.miscop:	c.miscop
 o.miscop:	C:h.kernel
 o.miscop:	C:h.swis
@@ -665,6 +737,39 @@ o.optbut:	gadgets.^.h.veneers
 o.optbut:	gadgets.^.h.main
 o.optbut:	C:h.kernel
 o.optbut:	gadgets.h.optbut
+o.popupmenu:	gadgets.c.popupmenu
+o.popupmenu:	C:h.swis
+o.popupmenu:	C:h.kernel
+o.popupmenu:	C:h.kernel
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.const
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.macros
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.services
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.debug
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.mem
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.string32
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.messages
+o.popupmenu:	C:h.kernel
+o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.style
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.twimp
+o.popupmenu:	C:h.kernel
+o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.window
+o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.menu
+o.popupmenu:	gadgets.^.h.globals
+o.popupmenu:	gadgets.^.h.gadgets
+o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.window
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.twimp
+o.popupmenu:	gadgets.^.h.utils
+o.popupmenu:	<Lib$Dir>.tboxlibint.h.twimp
+o.popupmenu:	C:h.kernel
+o.popupmenu:	C:h.swis
+o.popupmenu:	gadgets.^.h.object
+o.popupmenu:	gadgets.^.h.task
+o.popupmenu:	gadgets.^.h.object
+o.popupmenu:	gadgets.^.h.veneers
+o.popupmenu:	gadgets.h.popupmenu
 o.radiobut:	gadgets.c.radiobut
 o.radiobut:	C:h.swis
 o.radiobut:	C:h.kernel
@@ -803,6 +908,43 @@ o.slider:	gadgets.^.h.main
 o.slider:	C:h.kernel
 o.slider:	gadgets.h.slider
 o.slider_ven: gadgets.s.slider_ven
+o.stringset:	gadgets.c.stringset
+o.stringset:	C:h.swis
+o.stringset:	C:h.kernel
+o.stringset:	C:h.kernel
+o.stringset:	<Lib$Dir>.tboxlibint.h.const
+o.stringset:	<Lib$Dir>.tboxlibint.h.macros
+o.stringset:	<Lib$Dir>.tboxlibint.h.services
+o.stringset:	<Lib$Dir>.tboxlibint.h.debug
+o.stringset:	<Lib$Dir>.tboxlibint.h.mem
+o.stringset:	<Lib$Dir>.tboxlibint.h.string32
+o.stringset:	<Lib$Dir>.tboxlibint.h.messages
+o.stringset:	C:h.kernel
+o.stringset:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.stringset:	<Lib$Dir>.tboxlibint.h.style
+o.stringset:	<Lib$Dir>.tboxlibint.h.twimp
+o.stringset:	C:h.kernel
+o.stringset:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.stringset:	<Lib$Dir>.tboxlibint.objects.h.window
+o.stringset:	<Lib$Dir>.tboxlibint.objects.h.menu
+o.stringset:	gadgets.^.h.globals
+o.stringset:	gadgets.^.h.gadgets
+o.stringset:	<Lib$Dir>.tboxlibint.objects.h.toolbox
+o.stringset:	<Lib$Dir>.tboxlibint.objects.h.window
+o.stringset:	<Lib$Dir>.tboxlibint.h.twimp
+o.stringset:	gadgets.^.h.utils
+o.stringset:	<Lib$Dir>.tboxlibint.h.twimp
+o.stringset:	C:h.kernel
+o.stringset:	C:h.swis
+o.stringset:	gadgets.^.h.object
+o.stringset:	gadgets.^.h.task
+o.stringset:	gadgets.^.h.object
+o.stringset:	gadgets.^.h.veneers
+o.stringset:	gadgets.^.h.utils
+o.stringset:	<Lib$Dir>.tboxlibint.h.twimp
+o.stringset:	C:h.kernel
+o.stringset:	C:h.swis
+o.stringset:	gadgets.h.stringset
 o.task:	c.task
 o.task:	C:h.kernel
 o.task:	C:h.swis
@@ -919,135 +1061,3 @@ o.writable:	<Lib$Dir>.tboxlibint.h.twimp
 o.writable:	C:h.kernel
 o.writable:	C:h.swis
 o.writable:	gadgets.h.writable
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	<Lib$Dir>.tboxlibint.h.const
-o.main:	<Lib$Dir>.tboxlibint.h.macros
-o.main:	<Lib$Dir>.tboxlibint.h.services
-o.main:	<Lib$Dir>.tboxlibint.h.debug
-o.main:	<Lib$Dir>.tboxlibint.h.mem
-o.main:	<Lib$Dir>.tboxlibint.h.string32
-o.main:	<Lib$Dir>.tboxlibint.h.messages
-o.main:	C:h.kernel
-o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.main:	<Lib$Dir>.tboxlibint.h.rmensure
-o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.main:	<Lib$Dir>.tboxlibint.objects.h.window
-o.main:	<Lib$Dir>.tboxlibint.h.twimp
-o.main:	C:h.kernel
-o.main:	h.object
-o.main:	h.create
-o.main:	C:h.kernel
-o.main:	h.task
-o.main:	h.delete
-o.main:	C:h.kernel
-o.main:	h.show
-o.main:	C:h.kernel
-o.main:	h.hide
-o.main:	C:h.kernel
-o.main:	h.getstate
-o.main:	C:h.kernel
-o.main:	h.miscop
-o.main:	C:h.kernel
-o.main:	h.events
-o.main:	C:h.kernel
-o.main:	h.gadgets
-o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.main:	<Lib$Dir>.tboxlibint.objects.h.window
-o.main:	<Lib$Dir>.tboxlibint.h.twimp
-o.main:	h.utils
-o.main:	<Lib$Dir>.tboxlibint.h.twimp
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	h.veneers
-o.main:	h.task
-o.main:	h.main
-o.main:	C:h.kernel
-o.globals:	c.globals
-o.globals:	<Lib$Dir>.tboxlibint.h.const
-o.globals:	<Lib$Dir>.tboxlibint.h.macros
-o.globals:	<Lib$Dir>.tboxlibint.h.services
-o.globals:	<Lib$Dir>.tboxlibint.h.debug
-o.globals:	<Lib$Dir>.tboxlibint.h.mem
-o.globals:	<Lib$Dir>.tboxlibint.h.string32
-o.globals:	<Lib$Dir>.tboxlibint.h.messages
-o.globals:	C:h.kernel
-o.globals:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.globals:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.globals:	<Lib$Dir>.tboxlibint.objects.h.window
-o.globals:	<Lib$Dir>.tboxlibint.h.twimp
-o.globals:	C:h.kernel
-o.globals:	<Lib$Dir>.tboxlibint.objects.h.menu
-o.globals:	h.globals
-o.globals:	C:h.kernel
-o.popupmenu:	gadgets.c.popupmenu
-o.popupmenu:	C:h.swis
-o.popupmenu:	C:h.kernel
-o.popupmenu:	C:h.kernel
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.const
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.macros
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.services
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.debug
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.mem
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.string32
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.messages
-o.popupmenu:	C:h.kernel
-o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.style
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.twimp
-o.popupmenu:	C:h.kernel
-o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.window
-o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.menu
-o.popupmenu:	gadgets.^.h.globals
-o.popupmenu:	gadgets.^.h.gadgets
-o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.popupmenu:	<Lib$Dir>.tboxlibint.objects.h.window
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.twimp
-o.popupmenu:	gadgets.^.h.utils
-o.popupmenu:	<Lib$Dir>.tboxlibint.h.twimp
-o.popupmenu:	C:h.kernel
-o.popupmenu:	C:h.swis
-o.popupmenu:	gadgets.^.h.object
-o.popupmenu:	gadgets.^.h.task
-o.popupmenu:	gadgets.^.h.object
-o.popupmenu:	gadgets.^.h.veneers
-o.popupmenu:	gadgets.h.popupmenu
-o.stringset:	gadgets.c.stringset
-o.stringset:	C:h.swis
-o.stringset:	C:h.kernel
-o.stringset:	C:h.kernel
-o.stringset:	<Lib$Dir>.tboxlibint.h.const
-o.stringset:	<Lib$Dir>.tboxlibint.h.macros
-o.stringset:	<Lib$Dir>.tboxlibint.h.services
-o.stringset:	<Lib$Dir>.tboxlibint.h.debug
-o.stringset:	<Lib$Dir>.tboxlibint.h.mem
-o.stringset:	<Lib$Dir>.tboxlibint.h.string32
-o.stringset:	<Lib$Dir>.tboxlibint.h.messages
-o.stringset:	C:h.kernel
-o.stringset:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.stringset:	<Lib$Dir>.tboxlibint.h.style
-o.stringset:	<Lib$Dir>.tboxlibint.h.twimp
-o.stringset:	C:h.kernel
-o.stringset:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.stringset:	<Lib$Dir>.tboxlibint.objects.h.window
-o.stringset:	<Lib$Dir>.tboxlibint.objects.h.menu
-o.stringset:	gadgets.^.h.globals
-o.stringset:	gadgets.^.h.gadgets
-o.stringset:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.stringset:	<Lib$Dir>.tboxlibint.objects.h.window
-o.stringset:	<Lib$Dir>.tboxlibint.h.twimp
-o.stringset:	gadgets.^.h.utils
-o.stringset:	<Lib$Dir>.tboxlibint.h.twimp
-o.stringset:	C:h.kernel
-o.stringset:	C:h.swis
-o.stringset:	gadgets.^.h.object
-o.stringset:	gadgets.^.h.task
-o.stringset:	gadgets.^.h.object
-o.stringset:	gadgets.^.h.veneers
-o.stringset:	gadgets.^.h.utils
-o.stringset:	<Lib$Dir>.tboxlibint.h.twimp
-o.stringset:	C:h.kernel
-o.stringset:	C:h.swis
-o.stringset:	gadgets.h.stringset
