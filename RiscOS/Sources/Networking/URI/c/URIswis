@@ -1,0 +1,142 @@
+/* File		: URIswis.c
+ * Purpose	: URI handler SWI code
+ * Author	: C.Elkins
+ * History	: Started 9/2/97
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "kernel.h"
+#include "swis.h"
+#include "strings.h"
+
+#include "OS:os.h"
+
+#include "ralloc.h"
+#include "globals.h"
+#include "URIswis.h"
+#include "module.h"
+
+
+
+/*
+ * Routine to accept a URI from a client, copy onto an internal buffer,
+ * link this buffer (including header) onto a chain of similar ;
+ * then causes service call, and possibly WIMP message to be broadcast
+ * May then return an indication to the client.
+ */
+
+_kernel_oserror*	swi_dispatchURI(_kernel_swi_regs* r)
+{
+  int			uri_length;
+  URI_handle_t		uri_handle;
+
+  if ((uri_length = strlen((char *)r->r[1])) == 0) return ERR(err_badURI);
+  uri_length++;
+  if ((uri_handle = rcalloc(sizeof(URI_t)+uri_length,1)) == 0) return ERR(err_nomemory);
+  uri_handle->guardword = MagicWord;
+  uri_handle->length = uri_length;
+  if ((r->r[0] & 1<<0) == 1<<0) uri_handle->taskhandle = r->r[2];
+  uri_handle->action = (r->r[0] & 0xff) | Action_ServiceA7 | Action_WimpBroad;
+  strcpy((char *)&uri_handle->string,(char *)r->r[1]);
+  uri_add_to_chain(uri_handle);
+
+  setcallback();
+
+  r->r[0] = 0;
+  r->r[2] = URI_taskhandle;
+  r->r[3] = (int) uri_handle;
+
+  return(0);
+}
+
+
+/*
+ * Routine to copy a URI from internal buffer to user supplied buffer
+ * May apply transformations in future
+ * Will also return length of buffer required (r1=0)
+ * Returns as much as possible if buffer too short, and indicates shortfall
+ */
+
+_kernel_oserror*	swi_requestURI(_kernel_swi_regs* r)
+{
+  URI_handle_t		uri_handle;
+  int			length;
+  char*			buffer;
+
+  uri_handle = (URI_handle_t) r->r[3];
+  if (uri_handle->guardword != MagicWord) return ERR(err_badhandle);
+
+  buffer = (char *) r->r[1];
+  length = r->r[2];
+  if (buffer == NULL)
+  {
+    r->r[2] = uri_handle->length;
+    return(0);
+  }
+  else
+    uri_handle->action |= Action_Claimed;
+
+  if (length < uri_handle->length)
+  {
+    strncpy(buffer,(char *) &uri_handle->string,length-1);
+    buffer[length] = NULL;
+    r->r[2] = length - uri_handle->length;
+    return(0);
+  }
+  else
+  {
+    strcpy(buffer,(char *) &uri_handle->string);
+    r->r[2] = uri_handle->length;
+    return(0);
+  }
+}
+
+
+/*
+ * Routine to 'invalidate' URI
+ * Currently, removes from chain of active URIs, deallocates store
+ * Marks URI as 'for deletion', then issues a callback for this.
+ */
+
+_kernel_oserror*	swi_invalidateURI(_kernel_swi_regs* r)
+{
+  URI_handle_t		uri_handle;
+
+  M_debug (("SWI URI_InvalidateURI called with r0=%x r3=%p\n", r->r[0], r->r[3]));
+  uri_handle = (URI_handle_t) r->r[3];
+  if (uri_handle->guardword != MagicWord) return ERR(err_badhandle);
+
+  uri_handle->action |= Action_Delete;
+  setcallback();
+  return(0);
+}
+
+
+void uri_add_to_chain(URI_handle_t handle)
+{
+  URI_handle_t		entry_ptr;
+
+  entry_ptr = URI_handle_chain;
+  while (entry_ptr->next != NULL)
+  {
+    if (entry_ptr->guardword != MagicWord) abort();
+    entry_ptr = entry_ptr->next;
+  }
+  handle->previous = entry_ptr;
+  handle->next     = NULL;
+  entry_ptr->next  = handle;
+}
+
+
+void uri_remove_from_chain(URI_handle_t handle)
+{
+  URI_handle_t		previous_entry_ptr, next_entry_ptr;
+
+  previous_entry_ptr = handle->previous;
+  next_entry_ptr     = handle->next;
+
+  if (previous_entry_ptr != NULL) previous_entry_ptr->next = handle->next;
+  if (next_entry_ptr != NULL) next_entry_ptr->previous = handle->previous;
+}
