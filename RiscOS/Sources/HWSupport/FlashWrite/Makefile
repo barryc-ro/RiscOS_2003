@@ -25,7 +25,8 @@ WIPE    	= -wipe
 
 AFLAGS		= -depend !Depend -Stamp -quit ${THROWBACK}
 CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} 
-CPFLAGS		= ~cfr~v
+CPPFLAGS	= ~cfr~v
+CMHGFLAGS	= -depend !Depend -p -throwback ${DFLAGS}
 WFLAGS		= ~c~v
 
 DFLAGS		= 
@@ -38,25 +39,22 @@ DDFLAGS		= -fn -DDEBUGLIB
 LIBDIR		= <Lib$Dir>
 CLIB		= CLIB:o.stubs
 CPPLIB		= CPPLib:o.c++lib
-RLIB		= RISCOSLIB:o.risc_oslib
-RSTUBS		= RISCOSLIB:o.rstubs
-ROMSTUBS	= RISCOSLIB:o.romstubs
-ROMCSTUBS	= RISCOSLIB:o.romcstubs
-ABSSYM		= RISC_OSLib:o.c_AbsSym
-WRAPPER		= RISC_OSLib:s.ModuleWrap
+RLIB		= ${LIBDIR}.RISC_OSLIB.o.risc_oslib
+RSTUBS		= ${LIBDIR}.RISC_OSLIB.o.rstubs
+ROMSTUBS	= ${LIBDIR}.RISC_OSLIB.o.romstubs
+ROMCSTUBS	= ${LIBDIR}.RISC_OSLIB.o.romcstubs
+ABSSYM		= ${LIBDIR}.RISC_OSLib.o.c_AbsSym
+WRAPPER		= ${LIBDIR}.RISC_OSLib.s.ModuleWrap
 
 DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglibzm
 MEMCHECKLIB	= MemCheck:o.MC_M
 
 LIBS = \
- ${MEMCHECKLIB} \
 
 LIBSD = \
  ${DEBUGLIB} \
  TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.unixlib \
  TCPIPLibs:o.inetlib \
- ${MEMCHECKLIB} \
 
 
 # ------------------------------------------------------------------------------
@@ -158,21 +156,21 @@ resources:
 # Stand-alone module
 #
 
-${TARGETSA}: ${OBJS} ${LIBS} ${CLIB} o.dirs
-        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
+${TARGETSA}: ${OBJS} ${LIBS} ${CLIB} ${EXTRALIBS} o.dirs
+        ${LD} -o $@ -module ${OBJS} ${LIBS} ${EXTRALIBS} ${CLIB}
 
-${TARGETSA_D}: ${OBJSD} ${LIBSD} ${CLIB} o.dirs
-        ${LD} -o $@ -module ${OBJSD} ${LIBSD} ${CLIB}
+${TARGETSA_D}: ${OBJSD} ${LIBSD} ${EXTRALIBS} ${CLIB} o.dirs
+        ${LD} -o $@ -module ${OBJSD} ${LIBSD} ${EXTRALIBS} ${CLIB}
 
 # ------------------------------------------------------------------------------
 # Final link for the ROM Image (re-linked at ROM Image build time)
 #
 
-${TARGET}: ${OBJS} ${LIBS} ${ROMCSTUBS} o.dirs
-        ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${LIBS} ${EXTRALIBS} ${ROMCSTUBS} o.dirs 
+        ${LD} -o $@ -aof ${OBJS} ${LIBS} ${EXTRALIBS} ${ROMCSTUBS}
 
-${TARGET_D}: ${OBJSD} ${LIBSD} ${ROMCSTUBS} o.dirs
-        ${LD} -o $@ -aof ${OBJSD} ${LIBSD} ${ROMCSTUBS}
+${TARGET_D}: ${OBJSD} ${LIBSD} ${EXTRALIBS} ${ROMCSTUBS} o.dirs
+        ${LD} -o $@ -aof ${OBJSD} ${LIBSD} ${EXTRALIBS} ${ROMCSTUBS}
 
 # ------------------------------------------------------------------------------
 # Final link for the ROM Image (using given base address)
