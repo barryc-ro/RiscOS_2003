@@ -7,6 +7,8 @@
 /*          16-Apr-98: RML: Fixed crash if ScrSavers directory not present.  */
 /*          23-Apr-98: RML: Changed order of resolutions to match display    */
 /*                          manager.                                         */
+/*          03-Jun-98: RML: Added code to read screensaver information from  */
+/*                          their messages files.                            */
 /*                                                                           */
 /* Copyright © 1998 Acorn Computers Ltd., Cambridge, UK.                     */
 /*---------------------------------------------------------------------------*/
@@ -16,8 +18,12 @@
 #include <string.h>
 #include "swis.h"
 #include "toolbox.h"
+#include "window.h"
+#include "menu.h"
 #include "common.h"
 #include "defines.h"
+
+#define MAX_PATHNAME_LENGTH 256
 
 typedef struct
 {
@@ -34,8 +40,12 @@ typedef struct saver_ref
 {
     struct saver_ref *next;
     char             *saver_name;
+    char             *saver_purpose;
+    char             *saver_author;
+    char             *saver_version;
     char             *file_name;
 } saver_ref;
+
 
 static saver_ref  *savers_list=0;
 static saver_ref **savers_list_tail=0;
@@ -242,6 +252,69 @@ _kernel_oserror* write_screen_choices(char *set_command, char *mem_command, char
 
 
 /*---------------------------------------------------------------------------*
+ * read_saver_messages_file                                                  *
+ *                                                                           *
+ * Read the purpose, author and version of a screensaver from it's messages  *
+ * file.                                                                     *
+ *                                                                           *
+ * In: ref -> saver_ref structure of the saver whose data we're reading.     *
+ *---------------------------------------------------------------------------*/
+
+static void read_saver_messages_file(saver_ref *ref)
+{
+    char  purpose[128] = " ";
+    char  author[128] = " ";
+    char  version[128] = " ";
+    char  string[128];
+    char  filename[MAX_PATHNAME_LENGTH];
+    char *buffer;
+    int   messblk[4];
+    int   type;
+    int   flags;
+    int   buffsize;
+    
+    sprintf(filename, "%s.Messages", ref->file_name);
+
+    _swix(OS_File, _INR(0,1)|_OUT(0), 17, filename, &type);
+
+    if (type==1)
+    {
+        _swix(MessageTrans_FileInfo, _IN(1)|_OUTR(1, 2), filename, &flags, &buffsize);
+        buffer = malloc(buffsize);
+
+        if (buffer)
+        {
+            _swix(MessageTrans_OpenFile, _INR(0, 2), messblk, filename, buffer);
+
+            if (!_swix(MessageTrans_Lookup, _INR(0,7), messblk, "_Purpose", string, 128, 0, 0, 0, 0))
+            {
+                strcpy(purpose, string);
+            }
+            if (!_swix(MessageTrans_Lookup, _INR(0,7), messblk, "_Author", string, 128, 0, 0, 0, 0))
+            {
+                strcpy(author, string);
+            }
+            if (!_swix(MessageTrans_Lookup, _INR(0,7), messblk, "_Version", string, 128, 0, 0, 0, 0))
+            {
+                strcpy(version, string);
+            }
+
+            _swix(MessageTrans_CloseFile, _IN(0), messblk);
+            free(buffer);
+        }
+    }
+    
+    ref->saver_purpose = malloc(strlen(purpose) + 1);
+    ref->saver_author = malloc(strlen(author) + 1);
+    ref->saver_version = malloc(strlen(version) + 1);
+
+    strcpy(ref->saver_purpose, purpose);
+    strcpy(ref->saver_author, author);
+    strcpy(ref->saver_version, version);
+}
+
+
+/*---------------------------------------------------------------------------*
  * construct_savers_list                                                     *
  *                                                                           *
  * Build a structure with the details of all screen savers.                  *
@@ -266,7 +339,7 @@ static void construct_savers_list(char *dirname, char *buffer_end)
     while(last_item_read!=-1)
     {
         /* Get next entry from directory */
-        _swi(OS_GBPB, _INR(0,6)|_OUTR(3,4),
+        _swix(OS_GBPB, _INR(0,6)|_OUTR(3,4),
                          9, dirname, dirname_end+1, 1, pos,
                          buffer_end - (dirname_end+1), 0,
                          &num, &last_item_read);
@@ -297,6 +370,7 @@ static void construct_savers_list(char *dirname, char *buffer_end)
                     new_ref->next = 0;
                     strcpy(new_ref->file_name, dirname);
                     strcpy(new_ref->saver_name, leafname+1);
+                    read_saver_messages_file(new_ref);
                     *savers_list_tail = new_ref;
                     savers_list_tail = &new_ref->next;
                 }
@@ -412,7 +486,7 @@ int parse_wimpslot_command(char *cmd)
     int   buffer[64];
     int   min;
 
-    _swi(OS_ReadArgs, _INR(0,3), args, cmd, buffer, 256);
+    _swix(OS_ReadArgs, _INR(0,3), args, cmd, buffer, 256);
     _swix(OS_ReadUnsigned, _INR(0,1)|_OUT(2), 10, buffer[0], &min);
     
     if (!buffer[0]) return 0;
@@ -457,6 +531,7 @@ int get_wimpslot_min(char *filename)
                 if (strncmpa(string, "WimpSlot", 8)==0)
                 {
                      /* Yes, then parse it */
+                     fclose(fp);
                      return parse_wimpslot_command(string+8);
                 }
             }
@@ -466,4 +541,86 @@ int get_wimpslot_min(char *filename)
     }
 
     return 0;
+}
+
+
+/*---------------------------------------------------------------------------*
+ * build_info_menu                                                           *
+ *                                                                           *
+ * Make the screensaver information menu.                                    *
+ *                                                                           *
+ * In: main_id = toolbox id of the main menu (from which Info comes)         *
+ *     menu_id = toolbox id of the screensaver info menu.                    *
+ *     window_id = toolbox id of the screensaver info window.                *
+ *---------------------------------------------------------------------------*/
+
+void build_info_menu(int main_id, int menu_id, int window_id)
+{
+    MenuTemplateEntry *entry;
+    saver_ref   *ref;
+    static char *menudata;
+    char        *menuptr;
+    int          n = 1;
+    int          i;
+
+    ref = savers_list;
+    if (!ref)
+    {
+        error_trap(menu_set_fade(0, main_id, MainInfoSubMenu, 1), 0);
+        return;
+    }
+
+    while (ref->next)
+    {
+        n+=1;
+        ref = ref->next;
+    }
+    
+    menudata = malloc(sizeof(MenuTemplateEntry) * n);
+    menuptr = menudata;
+    
+    ref = savers_list;
+    for (i=0; i<n; i++)
+    {
+        entry = (MenuTemplateEntry*)menuptr;
+        entry->flags = Menu_Entry_SubMenu + Menu_Entry_GenerateSubMenuEvent;
+        entry->component_id = i; 
+        entry->text = ref->saver_name;
+        entry->max_text = 255;
+        entry->click_show = 0;
+        entry->submenu_show = 0;
+        entry->submenu_event = 0;
+        entry->click_event = 0;
+        entry->help_message = 0;
+        entry->max_entry_help = 0;
+
+        error_trap(menu_add_entry(0, menu_id, -2, menuptr, 0), 0);
+        error_trap(menu_set_sub_menu_show(0, menu_id, i, window_id), 0);
+        
+        ref = ref->next;
+        menuptr = menuptr + sizeof(MenuTemplateEntry);
+    }
+}
+
+
+/*---------------------------------------------------------------------------*
+ * fill_in_saver_info                                                        *
+ *                                                                           *
+ * Fill in the screensaver information window.                               *
+ *---------------------------------------------------------------------------*/
+ 
+void fill_in_saver_info(int window_id, int entry)
+{
+    saver_ref *ref = savers_list;
+    int        n;
+    
+    for (n=0; n<entry; n++)
+    {
+        if (ref->next) ref = ref->next;
+    }
+    
+    error_trap(displayfield_set_value(0, window_id, InfoNameDisplay, ref->saver_name), 0);
+    error_trap(displayfield_set_value(0, window_id, InfoPurposeDisplay, ref->saver_purpose), 0);
+    error_trap(displayfield_set_value(0, window_id, InfoAuthorDisplay, ref->saver_author), 0);
+    error_trap(displayfield_set_value(0, window_id, InfoVersionDisplay, ref->saver_version), 0);
 }
