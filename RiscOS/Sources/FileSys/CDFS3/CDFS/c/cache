@@ -1,0 +1,552 @@
+/* File:    cache.c
+ * Purpose: Cacheing routines
+ * Author:  Timothy Roddis
+ * History: 24-Nov-95: TGR: created
+ */
+
+/* ANSI headers */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <limits.h>
+
+/* RISC OS headers */
+
+#include "kernel.h"
+#include "swis.h"
+
+/* commonlib headers */
+
+#include "debug.h"
+#include "dbmalloc.h"
+#include "msgs.h"
+
+/* Local headers */
+
+#include "main.h"
+#include "disc.h"
+#include "filesys.h"
+#include "cache.h"
+#include "fname.h"
+
+typedef struct _cache_dir_info {
+   DiscInfoPtr     disc_info;
+   unsigned int    disc_addr;
+} CacheDirRec, *CacheDirPtr;
+
+static CacheDirPtr      cache_dir_info = NULL;
+static SectorBuffer    *cache_directory_buffers = NULL;
+static unsigned int     cache_next_free_dir_index = 0;
+static DiscInfoPtr      cache_disc_info = NULL;
+static unsigned int     cache_current_epoch = 0;
+
+/* This finds the directory sector on the cache, if it is there, or else returns -1
+ *
+ * on entry:
+ *    disc_info is a non-updateable disc information record pointer
+ *    dir_addr is the location on the disc of the directory in question
+ */
+
+static find_dir_sector (DiscInfoPtr disc_info, int dir_addr) {
+
+   int i;
+
+   for (i=0; i<global_no_directory_buffers; i++) {
+      if (  (cache_dir_info[i]).disc_addr   == dir_addr /* least likely test to succeed */
+         && (cache_dir_info[i]).disc_info   == disc_info) return i;
+   }
+   return -1;
+}
+
+/* This reads the CMOS and determines the number of buffers there should be
+ *
+ * on exit:
+ *    returns the number of buffers to use
+ */
+
+int cache_read_cmos (void) {
+
+   char cmos_byte;
+
+#ifdef TESTFS
+   cmos_byte = CDFS_CMOS_Default;
+#else
+   _swi (OS_Byte, I0|I1|O2, OS_Byte_ReadCMOSRAM, CMOS_CDFSLocation, &cmos_byte);
+#endif
+
+   DEBUG debug_output ("g", "CDFS: cmos byte is 0x%x\n", cmos_byte);
+
+   cmos_byte = cmos_byte & 0xf;
+
+   if (cmos_byte < CDFS_CMOS_Zero || cmos_byte > CDFS_CMOS_RangeMax) {
+      cmos_byte = CDFS_CMOS_Default;
+
+      _swi (OS_Byte, I0|I1|I2, OS_Byte_WriteCMOSRAM, CMOS_CDFSLocation, cmos_byte);
+
+      return 1 << (cmos_byte - CDFS_CMOS_RangeCorrection);
+
+   } else if (cmos_byte == CDFS_CMOS_Zero) {
+      return 1; /* The very minimum CDFS will cope with */
+   } else {
+      return 1 << (cmos_byte - CDFS_CMOS_RangeCorrection);
+   }
+}
+
+/* This function is used once we're convinced that their are CDs present on the system to
+ * allocate the memory we'll require */
+
+_kernel_oserror *cache_claim_memory (void) {
+
+   DEBUG debug_output ("c", "CDFS: attempting to claim memory for caches\n");
+
+   global_no_directory_buffers = cache_read_cmos();
+
+   if (!cache_claim_disc_info_records (CDFS_NumDiscInfoRecords)) {
+      return msgs_make_error (Error_MemAlloc);
+   }
+
+   /* If the attempt to get memory fails, then keep halving request until it succeeds
+    * Note: This is really intended to help people that have requested 1 MB but don't have
+    * that much free, rather than people on their last 4K.
+    */
+
+   while (global_no_directory_buffers && (cache_directory_buffers = malloc (global_no_directory_buffers * sizeof(SectorBuffer))) == NULL) {
+
+      global_no_directory_buffers = global_no_directory_buffers / 2;
+   }
+   if (!global_no_directory_buffers) {
+      goto free1;
+   }
+   DEBUG debug_output ("c", "CDFS: directory buffer cache has %d buffers starting @0x%x\n", global_no_directory_buffers, cache_directory_buffers);
+
+   if ((cache_dir_info = malloc (global_no_directory_buffers * sizeof (CacheDirRec))) == NULL) {
+      goto free1;
+   }
+   memset (cache_dir_info, 0xff, global_no_directory_buffers * sizeof (CacheDirRec));
+
+   return NULL;
+
+   free1:
+      free (cache_disc_info);
+      cache_disc_info = NULL;
+      free (cache_directory_buffers);
+      cache_directory_buffers = NULL;
+      return msgs_make_error (Error_MemAlloc);
+}
+
+/* This frees all memory associated with this file */
+
+void cache_free_memory (void) {
+
+   if (cache_directory_buffers) free (cache_directory_buffers);
+   if (cache_dir_info)          free (cache_dir_info);
+   if (cache_disc_info)         free (cache_disc_info);
+}
+
+#if debugging
+
+void cache_dump_disc_info (void) {
+
+   int i;
+
+   for (i=0; i<global_no_disc_info_records; i++) {
+      DEBUG {
+         if (cache_disc_info[i].drive_no != -1) {
+            debug_output ("c", "CDFS: disc info rec %d, drive %d, seq %d, epoch %d, name %s\n",
+                          i, cache_disc_info[i].drive_no, cache_disc_info[i].sequence_no,
+                          cache_disc_info[i].epoch, cache_disc_info[i].name);
+         } else {
+            debug_output ("c", "CDFS: disc rec %d not in use\n", i);
+         }
+      }
+   }
+}
+#endif
+
+
+/* This should only be called more than once per session under fairly remarkable circumstances,
+   such as if there are more than CDFS_NumDiscInfoRecords on the system */
+
+int cache_claim_disc_info_records (int no_of_records) {
+
+   int         i;
+   DiscInfoPtr disc_info;
+
+   if (no_of_records <= global_no_disc_info_records) return global_no_disc_info_records;
+
+   /* Not using realloc because I don't trust it and this should be a very rare occurance */
+
+   if ((disc_info = calloc (no_of_records, sizeof(DiscInfoRec))) == NULL) {
+      return 0;
+   }
+   memcpy (disc_info, cache_disc_info, global_no_disc_info_records * sizeof(DiscInfoRec));
+
+   if (cache_disc_info) free (cache_disc_info);
+
+   for (i=global_no_disc_info_records; i<no_of_records; i++) {
+      disc_info[i].drive_no    = -1;
+      disc_info[i].sequence_no = -1;
+   }
+   cache_disc_info = disc_info;
+
+   DEBUG debug_output ("c", "CDFS: allocated %d disc info records @0x%x\n", no_of_records, disc_info);
+
+   return (global_no_disc_info_records = no_of_records);
+}
+
+/* This forgets about a disc and closes all files on it, it is used by DISMOUNT, SHUTDOWN etc. */
+
+void cache_dismount_disc (DiscInfoPtr disc_info) {
+
+   int              i;
+
+   DEBUG debug_output ("c", "CDFS: purging directory information record\n");
+
+   /* Purge from sector buffers information block */
+
+   for (i = 0; i<global_no_directory_buffers; i++) {
+      if (cache_dir_info[i].disc_info == disc_info) {
+         cache_dir_info[i].disc_info = NULL;
+      }
+   }
+   disc_info->drive_no    = -1;
+   disc_info->sequence_no = -1;
+}
+
+/* Close all files, dismount all discs.
+ * on exit:
+ *    may retun error
+ */
+
+_kernel_oserror *cache_dismount_all (void) {
+
+   int              i;
+   _kernel_oserror *e;
+
+   DEBUG debug_output ("c", "CDFS: dismounting all drives\n");
+
+   for (i=0; i<global_no_disc_info_records; i++) {
+      if (cache_disc_info[i].drive_no != -1) { /* disc record is used */
+         e = filesys_dismount_disc (cache_disc_info + i);
+         if (e) return e;
+      }
+   }
+   return NULL;
+}
+
+
+/* This marks disc information records as stale and stamps the epoch number on them, incrementing
+   the current epoch. It is used when new media is discovered in a drive
+
+   ENTRY: drive number to look out for
+   EXIT:  nowt */
+
+void cache_age_drive (int drive_no) {
+
+  unsigned int  i;
+
+   DEBUG debug_output ("c2", "CDFS: drive %d information stale", drive_no);
+
+   for (i=0; i < global_no_disc_info_records; i++) {
+      if (cache_disc_info[i].drive_no    == drive_no
+      &&  cache_disc_info[i].sequence_no != -1) {
+
+         cache_disc_info[i].sequence_no = -1;
+         cache_disc_info[i].epoch       = ++cache_current_epoch;
+
+         DEBUG debug_output ("c2", ", record %d ['%s'] aged, epoch %d", i, cache_disc_info[i].name, cache_disc_info[i].epoch);
+      }
+   }
+   DEBUG debug_output ("c2", "\n");
+}
+
+/* Reads one directory sector in one at a time, relying on drives' internal FIFO buffer to
+ * store the remaining directory sectors - this should have good 'demand' behaviour.
+ *
+ * ENTRY:
+ *    disc_info is a pointer to the disc's information block
+ *    dir_addr is the directory sector's address
+ *    sector_buffer is a pointer to a place to put the sector buffer pointer
+ * EXIT:
+ *    sector_buffer is updated with a pointer to the used sector buffer or else
+ *    an error is returned.
+ *
+ * In a way having this function read the disc breaks the abstraction of this file containing
+ * cache handling facilities only and not being interested in such mere trivia as disc
+ * operations and the resulting errors.
+ *    However, it is shielded from non-terminal errors by the disc_read_sectors thick veneer
+ * and exception handling and it is desirable that it should know whether the operation was
+ * successful or not, so that it knows whether to mark the directory is successfully updated
+ */
+
+_kernel_oserror *cache_read_dir_sector (SectorBuffer **ptr, DiscInfoPtr *disc_info, int dir_addr) {
+
+   int              index;
+   int              data_mode = CDMgr_DataMode_Mode1OrMode2Form1;
+   _kernel_oserror *e;
+
+   if (!cache_directory_buffers) {
+      cache_claim_memory ();
+   }
+   index = find_dir_sector (*disc_info, dir_addr);
+
+   if (index != -1) {
+
+      *ptr = cache_directory_buffers + index;
+
+      DEBUG debug_output ("c3", "CDFS: cached sector: base = 0x%x, index = %d, buffer @ 0x%x\n",
+                          cache_directory_buffers, index, *ptr);
+      return NULL;
+   }
+   /* We don't check for sequence_no = -1 here, instead we actually call CDManager to see.
+      This has good behaviour if the disc has just been reinserted etc. */
+
+   (cache_dir_info[cache_next_free_dir_index]).disc_info   = *disc_info;
+   (cache_dir_info[cache_next_free_dir_index]).disc_addr   = dir_addr;
+
+   *ptr = cache_directory_buffers + cache_next_free_dir_index;
+
+   if ((e = disc_read_sectors (disc_info, *ptr, dir_addr, 1, data_mode)) != NULL) {
+
+      (cache_dir_info[cache_next_free_dir_index]).disc_addr = -1;
+      return e;
+   }
+   DEBUG debug_output ("c3", "CDFS: reading sector: base = 0x%x, index = %d, buffer @ 0x%x\n",
+                       cache_directory_buffers, cache_next_free_dir_index,
+                       *ptr);
+
+   if (++cache_next_free_dir_index == global_no_directory_buffers) {
+
+      /* If it's greater than, rather than equal to, then there's been an almighty foul-up
+         and I don't want to hide the bug that caused it behind a belt and braces measure */
+
+      cache_next_free_dir_index = 0;
+   }
+   return NULL;
+}
+
+/* Auxiliary routine for function below. Mutter mutter non block structured languages ... */
+
+static void update_disc_info (DiscInfoPtr disc_info, char *discname, int drive_no, int sequence_no,
+                       int disc_type, int root_dir_addr, int root_dir_size, int whichdisc,
+                       unsigned short logical_block_size) {
+
+   DEBUG debug_output ("c0", "CDFS: Updating disc info block [0x%x] for %s in drive %d [%d]\n",
+                       disc_info, discname, drive_no, sequence_no);
+
+   strcpy (disc_info->name, discname);
+   disc_info->drive_no      = drive_no;
+   disc_info->sequence_no   = sequence_no;
+   disc_info->type          = disc_type;
+   disc_info->root_dir_addr = root_dir_addr;
+   disc_info->root_dir_size = root_dir_size;
+   disc_info->whichdisc     = whichdisc;
+   disc_info->logical_block_size = logical_block_size;
+
+   disc_info->epoch = 0;
+}
+
+
+/* This finds a disc info record given a discname which is 32 bytes long with padding spaces
+ * and a variety of other information to put in the disc record.
+ * It will attempt to allocate (if necessary) a disc information record and return a pointer to
+ * it, but if that fails it will return NULL
+ *
+ * ENTRY:
+ *    Everything you need to know about a disc. No special values.
+ *    discname is a fileswitch discname NOT a pathname
+ *
+ * EXIT:
+ *    A pointer to a disc info record for that information or a NULL pointer in the advent
+ *    of failure to free up a disc information record for use.
+ */
+
+
+DiscInfoPtr cache_cache_disc_info (char *discname, int drive_no, int sequence_no, int disc_type
+,                            int root_dir_addr, int root_dir_size, int whichdisc,
+                             unsigned short logical_block_size) {
+
+   unsigned int  i,j;
+   unsigned int  lowest_epoch = UINT_MAX; /* Maximum unsigned integer value - see <limits.h> */
+   int           disc_info_idx = -1;
+   FileOpenPtr   file_open_ptr;
+
+   /* In the following, a sequence number of -1 indicates that the record is stale: the disc
+    * has at some point been found not to be in the drive. A drive no of -1 indicates that
+    * the entire record is free ... it contains no valid data and the disc to which it refered,
+    * if it ever did, has been dismounted
+    */
+
+   if (!global_no_disc_info_records) {
+      cache_claim_memory();
+   }
+   if (drive_no > (3 * global_no_disc_info_records) >> 2) {
+      cache_claim_disc_info_records (global_no_disc_info_records + CDFS_NumDiscInfoRecords);
+   }
+   /* In the ideal case, we'll already have cached the information ... so just update
+      drive number and sequence number for the disc */
+
+   DEBUG debug_output ("c2","CDFS: Do we have a %s [0x%x] record already?\n", discname, whichdisc);
+
+   for (i=0; i< global_no_disc_info_records; i++) {
+      if (!strcmp (cache_disc_info[i].name, discname)) {
+
+         if (cache_disc_info[i].whichdisc == whichdisc) {
+
+            /* Not much point reading the value and then deciding whether or not it needs
+               setting ... we just set the values */
+
+            (cache_disc_info[i]).drive_no    = drive_no;
+            (cache_disc_info[i]).sequence_no = sequence_no;
+
+            return cache_disc_info + i;
+         } else {
+            /* Return an error or just dismount the old disc and re-use the record? */
+
+            cache_dismount_disc (cache_disc_info + i);
+
+            update_disc_info (cache_disc_info+i, discname, drive_no, sequence_no, disc_type,
+                              root_dir_addr, root_dir_size, whichdisc, logical_block_size);
+
+            return cache_disc_info + i;
+         }
+      }
+   }
+   /* However, some things may be less than ideal, here we have to find somewhere new to
+      put a disc info record
+      Let's look through the free disc records ... */
+
+   DEBUG debug_output ("c2","CDFS: Disc info record not found - look through for new, free records\n");
+
+   for (i=0; i< global_no_disc_info_records; i++) {
+      if (cache_disc_info[i].drive_no == -1) {
+
+         update_disc_info (cache_disc_info+i, discname, drive_no, sequence_no, disc_type,
+                           root_dir_addr, root_dir_size, whichdisc, logical_block_size);
+
+         return cache_disc_info + i;
+      }
+   }
+   /* ... Okay, that failed, so let's see if there are any discs with no open files on them! */
+   /* This is where epochs come into their own */
+
+   DEBUG debug_output ("c2", "CDFS: That wasn't much use either: try finding a disc record to purge\n");
+
+   for (i=0; i<global_no_disc_info_records; i++) {
+      file_open_ptr = global_files_open;
+      while (file_open_ptr) {
+         if (file_open_ptr->disc_info == cache_disc_info + i) {
+            break; /* There are open files on this disc */
+         }
+         file_open_ptr = file_open_ptr->next;
+      }
+      if (file_open_ptr->disc_info != cache_disc_info + i /* No open files on this disc */
+      && cache_disc_info[i].sequence_no == -1
+      && cache_disc_info[i].epoch < lowest_epoch) { /* & Lowest (oldest) epoch thus far */
+         char  path_component[ISO9660_PVD_VolumeIdentifierLength];
+         char *buffer, *ptr;
+         int   size;
+         Bool  flag = FALSE; /* No special directories detected ... yet */
+
+         /* Look for special directories on this disc ... */
+
+         for (j = OS_FSControl_Special_Current; j <= OS_FSControl_Special_Library && !flag; j++) {
+            if (!_swix (OS_FSControl, I0|I1|I2|I3|I5|O5, OS_FSControl_ReadDirPath, 0, j,
+            CDFS_FileSystemName, 0, /* OUT = */ &size)) {
+
+               if ((buffer = malloc (-size)) != NULL) {
+
+                  if (!_swix (OS_FSControl, I0|I1|I2|I3|I5|O1, OS_FSControl_ReadDirPath, buffer, j,
+                  CDFS_FileSystemName, -size, /* OUT = */ &ptr)) {
+
+                     if (ptr) { /* If CSD is set */
+                        fname_get_path_component(path_component,++ptr,ISO9660_PVD_VolumeIdentifierLength);
+                        DEBUG debug_output ("c2", "CDFS:: special directory %d is \"%s\"\n", j, ptr);
+
+                        if (!fname_strcmp (cache_disc_info[i].name, path_component)) {
+                           DEBUG debug_output("c2", "CDFS: special (%i) directory found\n",i);
+                           flag = TRUE;
+                        }
+                     }
+                  }
+                  free(buffer);
+               }
+            }
+         }
+         if (!flag) {
+            lowest_epoch  = cache_disc_info[i].epoch;         /* We have a new lowest epoch */
+            disc_info_idx = i;                                /* remember this disc info record */
+         }
+      }
+   }
+   DEBUG debug_output ("c2", "CDFS: Lowest epoch was %d for disc info record %d ['%s']\n", lowest_epoch, disc_info_idx, cache_disc_info[disc_info_idx].name);
+
+   if (disc_info_idx != -1) {
+
+      cache_dismount_disc (cache_disc_info + disc_info_idx);
+      update_disc_info (cache_disc_info+disc_info_idx, discname, drive_no, sequence_no, disc_type,
+                        root_dir_addr, root_dir_size, whichdisc, logical_block_size);
+   }
+   return cache_disc_info+disc_info_idx;
+}
+
+
+/* entry: discname is a pointer to a terminated discname
+ * exit:  returns pointer to a disc info record if an appropriate one has been found,
+ *                                                                               otherwise NULL
+ */
+
+DiscInfoPtr cache_find_disc_by_name (char *discname) {
+
+   int    i;
+
+   for (i=0; i<global_no_disc_info_records; i++) {
+      if (!fname_strcmp (discname, cache_disc_info[i].name)) {
+         return cache_disc_info + i;
+      }
+   }
+   return NULL;
+}
+
+/*  entry: a drive number and sequence number pair such as would be got when canonicalising
+ *  exit:  returns pointer to disc info record if an appropriate one has been found, otherwise NULL
+ *
+ *  The disc info record returned may well have a sequence number of -1 (ie. be stale), it is up
+ *  to the calling function to check this.
+ *
+ */
+
+DiscInfoPtr cache_find_disc_by_drive (int drive_no, int sequence_no) {
+
+   int    i;
+   DiscInfoPtr disc_info = NULL;
+
+   DEBUG debug_output ("c1", "CDFS: cache_find drive %d, seq %d - statuses: ", drive_no, sequence_no);
+
+   for (i=0; i<global_no_disc_info_records; i++) {
+      if (cache_disc_info[i].drive_no == drive_no) {
+         if (cache_disc_info[i].sequence_no == sequence_no) {
+
+            DEBUG debug_output ("c1", "CDFS: find disc: drive %d, €€€€ correct sequence no %d found 0x%x\n",
+                                drive_no, sequence_no, cache_disc_info + i);
+
+            DEBUG debug_output ("c1", "€\n");
+
+            return cache_disc_info + i;
+         }  else {
+
+            DEBUG debug_output ("c1", "CDFS: find disc: drive %d, ×××× incorrect sequence no %d found @0x%x\n",
+                                drive_no, cache_disc_info[i].sequence_no, cache_disc_info + i);
+
+              DEBUG debug_output ("c1", "?");
+
+            disc_info = cache_disc_info + i;
+         }
+      } else {
+         DEBUG debug_output ("c1", "×");
+      }
+   }
+   DEBUG debug_output ("c1","\n");
+   return disc_info;
+}

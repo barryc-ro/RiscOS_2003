@@ -1,0 +1,466 @@
+        TTL     CDFS C Support functions               > s.FSVeneer
+        ; -------------------------------------------------------------------
+        ; DOSFS headers Copyright (c) 1990, JGSmith
+        ;
+        ; 29/1/96: TGR: Incorporated into CDFS 3
+        ; -------------------------------------------------------------------
+
+        AREA    |CDFS_Support|,CODE,READONLY
+
+        ; -------------------------------------------------------------------
+
+                GBLL    newcode
+newcode         SETL    {TRUE}          ; calls not detailed in JRoach docs
+
+        ; -------------------------------------------------------------------
+
+                GBLL    RMAalloc
+RMAalloc        SETL    {FALSE}          ; include RMA allocation routines
+
+        ; -------------------------------------------------------------------
+
+        IMPORT  |raise|
+        IMPORT  |_Lib$Reloc$Off|
+        IMPORT  |Image$$RO$$Base|
+
+        ; FileSwitch interface functions
+        EXPORT  |fsveneer_open|
+        EXPORT  |fsveneer_get_bytes|
+        EXPORT  |fsveneer_close|
+        EXPORT  |fsveneer_file|
+        EXPORT  |fsveneer_func|
+
+        ; -------------------------------------------------------------------
+
+
+        ; standard C register definitions
+a1      RN      0
+a2      RN      1
+a3      RN      2
+a4      RN      3
+av      RN      4
+;v1      RN      5
+;v2      RN      6
+;v3      RN      7
+;v4      RN      8
+;v5      RN      9
+
+sl      RN      10
+fp      RN      11
+ip      RN      12
+sp      RN      13
+lr      RN      14
+pc      RN      15
+
+
+        ; -------------------------------------------------------------------
+        ; ARM processor flags
+
+N_bit_number    *       31
+Z_bit_number    *       30
+C_bit_number    *       29
+V_bit_number    *       28
+I_bit_number    *       27
+F_bit_number    *       26
+
+
+        ; Flag value specifiers for the PSR
+
+N_bit           *       1 :SHL: N_bit_number
+Z_bit           *       1 :SHL: Z_bit_number
+C_bit           *       1 :SHL: C_bit_number
+V_bit           *       1 :SHL: V_bit_number
+I_bit           *       1 :SHL: I_bit_number
+F_bit           *       1 :SHL: F_bit_number
+
+
+        ; Processor mode values for the PSR
+
+USR_mode        *      2_00
+FIQ_mode        *      2_01
+IRQ_mode        *      2_10
+SVC_mode        *      2_11
+
+ARM_CC_Mask     *   &FC000003           ; Processor condition flags + mode bits
+
+;
+;
+; null            *       &00
+; lf              *       &0A
+; cr              *       &0D
+; space           *       " "
+
+        ; -------------------------------------------------------------------
+
+        GET     s.cdmacros
+        GET     s.defs
+
+        ; -------------------------------------------------------------------
+        ; Errors
+
+nostack         *       &a
+
+        ; -------------------------------------------------------------------
+
+spare_word         *    &2053474A                       ; "JGS "
+
+                GBLA    fs_number
+fs_number       SETA    0               ; undefined filing system
+
+        ; -------------------------------------------------------------------
+        ; private (assembler) data
+
+sl_offset       &       |_Lib$Reloc$Off|        ; stack overflow buffer size
+|moduleBase|    &       |Image$$RO$$Base|       ; module base address
+
+        LTORG
+
+        ; -------------------------------------------------------------------
+        ; Filing System interface:
+
+        IMPORT  |cdfs_open_file|      ; open a file
+        IMPORT  |cdfs_get_bytes|      ; read bytes from an open file
+        IMPORT  |cdfs_close_file|     ; close an open file
+
+        IMPORT  |cdfs_file_range|
+        IMPORT  |cdfs_read_cat|       ; read catalogue information
+        IMPORT  |cdfs_load_file|
+
+        IMPORT  |cdfs_func_range|
+        IMPORT  |cdfs_read_dir|          ; read directory entries
+        IMPORT  |cdfs_shutdown|
+        IMPORT  |cdfs_canonicalise|
+
+        IMPORT  |debug_output|
+
+        IMPORT  |msgs_make_error|            ; generate error message from number
+        ; -------------------------------------------------------------------
+        ; RISC OS Filing System interface:
+        ;
+        ; In the following I've used [regs in -> regs out] to help with APCS translations
+
+fsveneer_open ; FSEntry_Open
+;
+; [0, 1, 3 -> 0, 1, 2, 3, 4]
+;
+; on entry:
+;    r0  =  0 - open for read
+;           2 - open for update
+;    r1  -> pathname
+;    r3  =  FileSwitch handle
+;
+; on exit:
+;    r0  =  file information word
+;    r1  =  CDFS handle
+;    r2  =  2048 (ISOLogicalSectorSize)
+;    r3  =  extent
+;    r4  =  space allocated to file
+
+;        Debug   open,"CDFS_Open",r0,r1,r6
+        MOV     a3,r3
+        Ccall   |cdfs_open_file|
+        ORRVSS  pc,lr,#V_bit             ; error -> r0 = ptr to error block
+        LDMIA   r0,{r0-r4}              ; r0 = pointer to information block
+        BICS    pc,lr,#V_bit
+
+        ; -------------------------------------------------------------------
+
+fsveneer_get_bytes ; FSEntry_GetBytes
+;
+; [ 1, 2, 3, 4 -> X ]
+;
+; on entry:
+;    r1  =  CDFS file handle
+;    r2  -> file buffer
+;    r3  =  number of bytes to read into buffer
+;    r4  =  file offset from which to read data
+
+
+        MOV     a1,r1           ; r1 = filing system handle
+        MOV     a2,r2           ; r2 = memory address for data
+        MOV     a3,r3           ; r3 = number of bytes to transfer
+        MOV     a4,r4           ; r4 = file offset (PTR#)
+        Ccall   |cdfs_get_bytes|
+        ; r0 = byte read if unbuffered
+        ORRVSS  pc,lr,#V_bit
+        BICS    pc,lr,#V_bit
+
+        ; -------------------------------------------------------------------
+
+fsveneer_close ; FSEntry_Close
+;
+; [
+;    On entry:
+;
+;      R1  =  CDFS file handle
+;      R2  =  load address
+;      R3  =  execution address
+;
+;    On exit:
+;
+        MOV     a1,r1           ; r1 = filing system handle
+;        MOV     a2,r2           ; r2 = new load address for file
+;        MOV     a3,r3           ; r3 = new exec address for file
+        Ccall   |cdfs_close_file|
+        ORRVSS  pc,lr,#V_bit
+        BICS    pc,lr,#V_bit
+
+        ; -------------------------------------------------------------------
+
+fsveneer_file
+;        Debug   file,"CDFS_File",r0
+        ; r0 reason code:
+        ;
+        ; &05 = read catalogue information (|CDFS_read_cat|)
+        ;       in:     r1 = pointer to NULL terminated wildcarded filename
+        ;               r6 = filing system image handle
+        ;       out:    r0 = object type
+        ;               r2 = load address
+        ;               r3 = exec address
+        ;               r4 = file length
+        ;               r5 = file attributes
+        ;
+        ; &0A = read block size (|CDFS_read_block_size|)
+        ;       in:     r1 = pointer to NULL terminated file name
+        ;               r6 = filing system image handle
+        ;       out:    r2 = natural block size of the file in bytes
+        ;
+        ; &FF = load file
+        ;
+        ;    on entry:
+        ;       r0  =  255 (reason code)
+        ;       r1  -> pathname
+        ;       r2  =  address to load file
+        ;    on exit:
+        ;       r2  =  load address
+        ;       r3  =  execution address
+        ;       r4  =  extent
+        ;       r5  =  attributes
+        ;       r6  =  pathname for print *OPT1 info
+
+        CMP     r0,#5
+        BEQ     |fsveneer_read_cat|
+        CMP     r0,#255
+        BEQ     |fsveneer_load_file|
+        CMP     r0,#10                           ; read block size
+        MOVEQ   r2, #ISO9660_LogicalSectorSize   ; always true at the moment
+        MOVEQ   pc, lr                  ; (comparison =>) the overflow is obviously clear
+
+file_out_of_range
+        Ccall   |cdfs_file_range|,2,r4-r5 ; The C code gets chance to look at
+                                          ; r0-r5
+                                          ; [r6 = special field]
+        ORRS    pc,lr,#V_bit
+
+
+|fsveneer_read_cat|
+        MOV     a1,r1                   ; filename
+        Ccall   |cdfs_read_cat|
+        ORRVSS  pc,lr,#V_bit
+        ; r0 = pointer to structure containing return information
+        LDMIA   r0,{r0,r2-r5}
+        BICS    pc,lr,#V_bit
+
+|fsveneer_load_file|
+        MOV     a1,r1                   ; filename
+        MOV     a2,r2                   ; address
+        Ccall   |cdfs_load_file|
+        ORRVSS  pc,lr,#V_bit
+        LDMIA   r0,{r2-r6}
+        BICS    pc,lr,#V_bit
+
+        ; -------------------------------------------------------------------
+
+fsveneer_func
+;        Debug   func,"CDFS_Func",r0
+        ; r0 reason code:
+        ;
+        ; &0E = read directory entries
+        ;       in:     r1 = pointer to NULL terminated wildcarded dirname
+        ;               r2 = data destination memory address
+        ;               r3 = number of objects to read
+        ;               r4 = offset of first object within directory
+        ;               r5 = buffer length
+        ;               r6 = filing system image handle
+        ;       out:    r3 = number of objects read
+        ;               r4 = offset of next item in directory (-1 if end)
+        ;
+        ; &0F = read directory entries and info.
+        ;       in:     r1 = pointer to NULL terminated wildcarded dirname
+        ;               r2 = data destination memory address
+        ;               r3 = number of objects to read
+        ;               r4 = offset of first object within directory
+        ;               r5 = buffer length
+        ;               r6 = filing system image handle
+        ;       out:    r3 = number of records read
+        ;               r4 = offset of next item in directory (-1 if end)
+        ;
+        ; &10 = shutdown
+        ;
+        ; &13 = read directory entries and information
+        ;    on entry:
+        ;       r0  =  16 (reason code)
+        ;       r1  -> pathname of directory
+        ;       r2  -> buffer
+        ;       r3  =  number of entries to read
+        ;       r4  =  offset to first object to be read
+        ;       r5  =  buffer size
+        ;    on exit:
+        ;       r3  =  number of entries read
+        ;       r4  =  offset of next object to be read
+        ;
+        ; &17 = canonicalise special field and disc name
+        ;   on entry:
+        ;      r0  =  23 (reason code)
+        ;      r1  -> special field (should be 0)
+        ;      r2  -> disc name
+        ;      r3  -> buffer for canonical special field
+        ;      r4  -> buffer for canonical disc name
+        ;      r5  -> size of canonical special field buffer
+        ;      r6  -> size of canonical disc name buffer
+        ;   on exit:
+        ;      r0  -> canonical special field or 0 if none
+        ;      r1  -> canonnical disc name or 0 if none
+        ;      r2  =  bytes overflow from special field buffer
+        ;      r3  =  bytes overflow from disc name buffer
+        ;
+        ; &18 = resolve wild-card
+        ;    on entry:
+        ;       r0  =  24 (reason code)
+        ;       r1  -> pathname
+        ;       r2  -> buffer
+        ;       r3  -> wildcarded objext name
+        ;       r4  =  buffer length
+        ;    on exit:
+        ;       r4  =  -1 (let FileSwitch do the work)
+        ;
+        ; &1B = read boot option
+        ;       in:     r1 = pointer to NULL terminated name of object on
+        ;                    thing whose boot option is to be read
+        ;               r6 = filing system image handle
+        ;       out:    r2 =  0 (boot option)
+        ;
+;        SUB     R0, R0, #&E                     ; Remove necessity for first &e words of branch table
+        CMP     r0,#func_table_entries
+        BHI     func_out_of_range
+        ADD     pc,pc,r0,LSL #2
+        &       spare_word                      ; DO NOT REMOVE OR ADD CODE
+func_table_start
+        B       func_out_of_range              ; 00 / 0
+        B       func_out_of_range              ; 01 / 1
+        B       func_out_of_range              ; 02 / 2
+        B       func_out_of_range              ; 03 / 3
+        B       func_out_of_range              ; 04 / 4
+        B       func_out_of_range              ; 05 / 5
+        B       func_out_of_range              ; 06 / 6
+        B       func_out_of_range              ; 07 / 7
+        B       func_out_of_range              ; 08 / 8
+        B       func_out_of_range              ; 09 / 9
+        B       func_out_of_range              ; 0A / 10
+        B       func_out_of_range              ; 0B / 11
+        B       func_out_of_range              ; 0C / 12
+        B       func_out_of_range              ; 0D / 13
+        B       |fsveneer_read_dir|            ; 0E / 14
+        B       |fsveneer_read_dir|            ; 0F / 15
+        B       |fsveneer_shutdown|            ; 10 / 16
+        B       func_out_of_range              ; 11 / 17
+        B       func_out_of_range              ; 12 / 18
+        B       |fsveneer_read_dir|            ; 13 / 19
+        B       func_out_of_range              ; 14 / 20
+        B       func_out_of_range              ; 15 / 21
+        B       func_out_of_range              ; 16 / 22
+        B       |fsveneer_canonicalise|        ; 17 / 23
+        B       |fsveneer_resolve_wild|        ; 18 / 24
+        B       func_out_of_range              ; 19 / 25
+        B       func_out_of_range              ; 1A / 26
+        B       |fsveneer_read_boot_option|    ; 1B / 27
+func_table_end
+func_table_entries      *       ((func_table_end - func_table_start) / 4)
+
+func_out_of_range
+;        ADD     R0,R0,#&E
+        Ccall   |cdfs_func_range|,4,r4-r7 ; The C code gets chance to look at r0-r6
+        ORRS    pc,lr,#V_bit
+
+;|fsveneer_read_dir| ;
+;        MOV     a1,r1                   ; filename
+;        MOV     a2,r2                   ; data destination
+;        MOV     a3,r3                   ; number of objects
+;        MOV     a4,r4                   ; object offset
+;        Ccall   |cdfs_read_dir|,1,r5
+;        ORRVSS  pc,lr,#V_bit
+;        ; r0 = pointer to structure containing return information
+;        LDMIA   r0,{r3-r4}
+;        BICS    pc,lr,#V_bit
+
+|fsveneer_read_dir| ; Func 14, 15 & 19
+;       MOV     a1,r1                   ; filename
+;       MOV     a2,r2                   ; data destination
+;       MOV     a3,r3                   ; number of objects
+;       MOV     a4,r4                   ; object offset
+        Ccall   |cdfs_read_dir|,2,r4-r5
+        ORRVSS  pc,lr,#V_bit
+        ; r0 = pointer to structure containing return information
+        LDMIA   r0,{r3-r4}
+        BICS    pc,lr,#V_bit
+
+|fsveneer_shutdown| ; Func 16
+        Ccall   |cdfs_shutdown|
+        ORRVSS  pc,lr,#V_bit
+        BICS    pc,lr,#V_bit
+
+
+;|fsveneer_read_dir_info2|
+;       ORRVSS  pc,lk,#V_bit
+;       BICS    pc,lk,#V_bit
+;       MOV     a1,r1                   ; filename
+;       MOV     a2,r2                   ; data destination
+;       MOV     a3,r3                   ; number of objects
+;       MOV     a4,r4                   ; object offset
+;       Ccall   |cdfs_read_dir_info|,2,r5-r6
+;       ORRVSS  pc,lr,#V_bit
+;       ; r0 = pointer to structure containing return information
+;       LDMIA   r0,{r3-r4}
+;       BICS    pc,lr,#V_bit
+
+|fsveneer_canonicalise| ; Func 23
+        MOV     a1,r2
+        MOV     a2,r4
+        MOV     a3,r6
+        Ccall   |cdfs_canonicalise|
+        ORRVSS  pc,lr,#V_bit
+        LDMIA   r0,{r2,r4}              ; discname pointer and overspill
+        MOV     r1,#0                   ; no special field
+        MOV     r3,#0                   ; no special field
+        BICS    pc,lr,#V_bit
+
+|fsveneer_resolve_wild| ; Func 24
+        MOV     r4,#&FFFFFFFF
+        BICS    pc,lr,#V_bit
+
+|fsveneer_read_boot_option| ; Func 27
+        MOV     r2, #0                   ; boot option
+        BICS    pc,lr,#V_bit
+
+        ; -------------------------------------------------------------------
+        ; Called when an unrecognised reason code is presented
+; CD_notsupported
+;         ; There should be no stacked state at this point
+;         MOV     a1,#notsupported
+;         Ccall   |msgs_make_error|
+;         ORRS    pc,lr,#V_bit
+;
+        ; Called when a "Ccall" will fail due to insufficient stack.
+CD_not_enough_stack
+        ; There should be no stacked state at this point
+        MOV     a1,#nostack
+        Ccall   |msgs_make_error|
+        ORRS    pc,lr,#V_bit
+
+
+        ; -------------------------------------------------------------------
+
+        LTORG
+
+        ; -------------------------------------------------------------------
+        END
