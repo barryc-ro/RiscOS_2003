@@ -1093,18 +1093,7 @@ drawcolouredicon
         BNE     %FT01
         TST     R1, #is_inverted
         BEQ     %FT01
-        ; apply EOR iversion *before* main icon draw
-        ; recover EOR colour from the window and icon background colours
-        BL      getpalpointer
-      [ TrueIcon3
-        LDR     R0, trueworkbg
-      |
-        LDRB    R0, work_back_colour
-        AND     R0, R0, #&F
-        LDR     R0, [R14, R0, LSL #2]
-      ]
-        LDR     R14, truebgcolour
-        EOR     R0, R0, R14
+        ; apply EOR inversion *before* main icon draw
         BL      trueeorrectangle
 01
         Pull    "R0-R9"
@@ -1128,12 +1117,25 @@ exitcicon
         Pull    "cx1,cy1,PC"
 
 trueeorrectangle
-; In:  R0 = palette entry
+        ; determine EOR colour from the window and icon background colours
         Push    "R14"
-        MOV     R3, #&80                ; set background, don't dither
-        MOV     R4, #3                  ; EOR colour
-        SWI     XColourTrans_SetGCOL
+      [ TrueIcon3
+        LDR     R0, trueworkbg
+      |
+        BL      getpalpointer
+        LDRB    R0, work_back_colour
+        AND     R0, R0, #&F
+        LDR     R0, [R14, R0, LSL #2]
+      ]
+        SWI     XColourTrans_ReturnColourNumber
+        MOV     R1, R0
+        LDR     R0, truebgcolour
+        SWI     XColourTrans_ReturnColourNumber
 
+        EOR     R1, R0, R1              ; we want the window background to be mapped to the icon background
+        MOV     R0, #&13                ; set background, EOR colours
+        SWI     XOS_SetColour
+        
         BLVC    solidrectangle
         Pull    "PC",,^
 
@@ -1788,6 +1790,9 @@ icontext_pushfontstring
 
         Trace   menuw, "icontext: icon flags ", X, R1
         MOV     R0, R1
+      [ CnP
+        MOV     R7, #nullptr
+      ]
         BL      pushfontstring
         BNE     icontext_dont_justify
 
@@ -2100,6 +2105,9 @@ iconformatted_fancy TraceL L40
 
         BL      remembercurrentfont
         BL      setfancyfontcolours
+      [ CnP
+        MOV     R7, #nullptr
+      ]
         BL      pushfontstring
 
         MOV     R0,R3
@@ -2560,6 +2568,9 @@ textwidth_current_font_known
 ; R3 = font handle to use for text
         Push    "R3"
         STR     R1,tempworkspace+28
+      [ CnP
+        MOV     R7, #nullptr
+      ]
         BL      pushfontstring
         LDR     R0,[SP,R7]              ; stack has moved!!!
 ; R1 -> string
@@ -2624,7 +2635,7 @@ my_StringBBox
 
         ; Now we've still got to find the height using a Font_CharBBox loop, due to rounding errors in the
         ; Font Manager's string bounding box code (PRM 3-463). However, we can make some simplifications, based upon
-        ; knowledge of what pushfontstring will have given us (ie only printable characters and font changes)
+        ; knowledge of what pushfontstring will have given us (ie only printable characters and font/colour changes)
 
         MOV     R7, #0                  ; cumulative maximum (starts at 0, so we'll always go up to the baseline at least)
       [ UTF8
@@ -2646,6 +2657,11 @@ my_StringBBox
         TEQ     R1, #26                 ; font change?
         LDREQB  R0, [R5], #1            ; set R0 to hold font handle
         BEQ     %BT01
+      [ CnP
+        TEQ     R1, #19                 ; colour change?
+        ADDEQ   R5, R5, #8-1            ; skip
+        BEQ     %BT01
+      ]
 
         MOV     R2, #1:SHL:4            ; return OS units
         SWI     XFont_CharBBox
@@ -6642,9 +6658,18 @@ getpalpointer ROUT
 ; in    R1 = flags for icon
 ;       R2 -> string to paint
 ;       R3 = handle for icon font
+;       R7 -> control sequence list ( <= 0 indicates no list)
 ; out   R1 -> string to use
 ;       R7 = difference in stack (*word aligned*)
 ;       all others preserved
+;
+; R7 on entry points to a list of control sequences that need inserting into
+; the pushed font string. The list has the following form:
+;       +0 = byte index into original string where sequence is to be inserted
+;            these must be kept in ascending order
+;       +4 = number of bytes in sequence
+;       +8 = bytes to insert (eg colour change), padded to next word boundary
+; The sequence is terminated by the word -1. The list may need to be writeable.
 ;---------------------------------------------------------------------------
 
 State_CurrentFont       *       0
@@ -6674,13 +6699,19 @@ pushfontstring TraceL font
         TraceX  font, R3
         TraceNL font
 
+      [ CnP
+        CMP     R7, #0
+        ADRLEL  R7, null_control_sequence_list
+        STR     R7, font_cs_list
+      ]
+
       [ UTF8
 ; Initialise R11 (flag word, containing list of characters that need mapping to WimpSymbol)
         BL      read_current_alphabet
         LDR     R14, systemfont
         TEQ     R3, R14                         ; is it a desktop font icon?
         LDREQ   R11, systemfont_wimpsymbol_map  ; get the cached map if so (speedup)
-        BLNE    measure_symbols
+        MOVNE   R11, #0                         ; else mark as not yet calculated (may be set during test_arrow)
       ]
 
         MOV     R8, R2
@@ -6742,7 +6773,7 @@ pushfontstring_scan_string TraceL font
       ]
         MOV     R6, #0
 ; R0 = index into destination
-; R1 = state (State_CurrentFont, State_IconFont or State_SymbolFont)
+; R1 = state
 ; R2 = alphabet
 ; R3 = handle of icon font
 ; R6 = index into source
@@ -6850,6 +6881,9 @@ pushfontstring_switch
 pushfontstring_copy_string TraceL font
         ;R7 := ALIGN (R0 + 1)
         ADD     R7, R0, #4
+      [ CnP
+        BL      add_control_sequences_to_length
+      ]
         BIC     R7, R7, #3
         SUB     SP, SP, R7
 
@@ -6894,7 +6928,7 @@ pushfontstring_copy_string TraceL font
 ; R2 = alphabet
 ; R3 = handle of icon font
 ; R4 = index into source
-; R5 = state (State_CurrentFont, State_IconFont or State_SymbolFont)
+; R5 = state
 ; R6 = maximum index into source (either index of terminator, or max length of buffer)
 ; R7 = stack alignment
 ; R8 -> source
@@ -6903,6 +6937,23 @@ pushfontstring_copy_string TraceL font
         B       pushfontstring_end_copy_loop
 
 pushfontstring_start_copy_loop
+      [ CnP
+        LDR     R9, font_cs_list
+        LDR     R10, [R9, #0]                   ; check to see if we need to insert a control sequence
+        TEQ     R10, R4
+        BNE     %FT02
+        LDR     R10, [R9, #4]                   ; byte count
+        ADD     R9, R9, #8
+01      LDRB    R14, [R9], #1                   ; copy control bytes
+        STRB    R14, [R1, R0]
+        ADD     R0, R0, #1
+        SUBS    R10, R10, #1
+        BGT     %BT01
+        ADD     R9, R9, #3                      ; align, and store back in font_cs_list
+        BIC     R9, R9, #3
+        STR     R9, font_cs_list
+02
+      ]
       [ UTF8
         LDRB    R9, [R8, R4]                    ; get byte
         MOV     R10, #1
@@ -7027,6 +7078,9 @@ pushfontstring_copy_loop_done
 pushfontstring_use_replacement_string TraceL font
         ;R7 := Align (R6 + 4 + 1)
         ADD     R7, R6, #8
+      [ CnP
+        BL      add_control_sequences_to_length
+      ]
         BIC     R7, R7, #3
         SUB     SP, SP, R7
 
@@ -7047,7 +7101,26 @@ pushfontstring_use_replacement_string TraceL font
         MOV     R2, #0
 ; R2 = counter for source
 
+      [ CnP
+        LDR     R9, font_cs_list
+        LDR     R11, [R9, #0]
 pushfontstring_replacement_loop
+        TEQ     R11, R2                 ; check if we need to insert a control sequence
+        BNE     %FT02
+        LDR     R11, [R9, #4]
+        ADD     R9, R9, #8
+01      LDRB    R14, [R9], #1           ; copy control bytes
+        STRB    R14, [R1, R0]
+        ADD     R0, R0, #1
+        SUBS    R11, R11, #1
+        BGT     %BT01
+        ADD     R9, R9, #3              ; align
+        BIC     R9, R9, #3
+        LDR     R11, [R9, #0]
+02
+      |
+pushfontstring_replacement_loop
+      ]
         TEQ     R2, R6
         ;store replacement character
         STRNEB  R10, [R1, R0]
@@ -7074,7 +7147,20 @@ pushfontstring_scan_UTF8_string
         MOV     R2, R8                  ; rover
         MOV     R6, R9
         ADD     R7, R8, R9              ; -> byte after end of source
-01      MOV     R4, R2
+      [ CnP
+        LDR     R11, font_cs_list       ; -> control sequence list
+01      LDR     R14, [R11, #0]          ; is there a control sequence at this byte offset?
+        SUB     R4, R2, R8              ; convert back to offset
+        CMP     R4, R14
+        STRHS   R0, [R11, #0]           ; if so, then store *character* offset back into list
+        LDRHS   R14, [R11, #4]          ; and advance to next item
+        ADDHS   R11, R11, R14
+        ADDHS   R11, R11, #8 + 3
+        BICHS   R11, R11, #3
+      |
+01
+      ]
+        MOV     R4, R2
         BL      skipcharR
         CMP     R2, R4
         BEQ     %FT02                   ; break from loop if we've not advanced
@@ -7089,6 +7175,9 @@ pushfontstring_scan_UTF8_string
         ADD     sp, sp, #8
         ; R4 = number of bytes per replacement character
         MUL     R7, R4, R0
+      [ CnP
+        BL      add_control_sequences_to_length
+      ]
         ADD     R7, R7, #3 + 3
         BIC     R7, R7, #3
         ; R7 = Align (R0 + 2 + 1)
@@ -7099,20 +7188,38 @@ pushfontstring_scan_UTF8_string
         MOV     R5, sp
         MOV     R6, R10
         BL      convert_UCS4_to_UTF8
+        MOV     R2, #0                  ; character count into destination
+      [ CnP
+        LDR     R11, font_cs_list       ; -> control sequence list
+      ]
         ; first, select font:
         MOV     R14, #26
         STRB    R14, [R1], #1
         STRB    R3, [R1], #1
         ; now put in characters:
-01      CMP     R0, #0                  ; finished?
-        BLE     %FT03
-        MOV     R5, #0                  ; reinitialise index into replacement character
+01      CMP     R2, R0                  ; finished?
+        BGE     %FT03
+      [ CnP
+        LDR     R14, [R11, #0]          ; is there a control sequence at this character offset?
+        TEQ     R2, R14
+        BNE     %FT12
+        LDR     R5, [R11, #4]           ; byte count
+        ADD     R11, R11, #8
+11      LDRB    R14, [R11], #1          ; copy control bytes
+        STRB    R14, [R1], #1
+        SUBS    R5, R5, #1
+        BGT     %BT11
+        ADD     R11, R11, #3            ; align
+        BIC     R11, R11, #3
+12
+      ]
+        MOV     R5, #0                  ; initialise index into replacement character
 02      LDRB    R14, [sp, R5]
         STRB    R14, [R1], #1           ; copy across byte
         ADD     R5, R5, #1
         CMP     R5, R4
         BLT     %BT02
-        SUB     R0, R0, #1              ; decrement character count
+        ADD     R2, R2, #1              ; increment character count
         B       %BT01
 03      ADD     sp, sp, #8              ; realign stack
         ; finally, terminate the string
@@ -7183,6 +7290,24 @@ remembercurrentfont TraceL font
 
         Pull    "R0-R3, PC",, ^
         ]
+
+      [ CnP
+null_control_sequence_list  DCD  -1
+
+add_control_sequences_to_length
+; On exit, R7 is incremented by the total of the control sequence lengths indicated in font_cs_list
+        Entry   "R0"
+        LDR     R0, font_cs_list
+01      LDR     R14, [R0, #0]
+        CMP     R14, #nullptr
+        EXITS   EQ
+        LDR     R14, [R0, #4]
+        ADD     R7, R7, R14
+        ADD     R0, R0, R14
+        ADD     R0, R0, #8 + 3
+        BIC     R0, R0, #3
+        B       %BT01
+      ]
 
         [ AllowMatrix
 font_matrix
@@ -7292,6 +7417,7 @@ measure_symbols
 
 ; Compare a UCS-4 character against the WimpSymbol mapping bitmap, to see if it needs to be mapped
 ; Entry: R2 = alphabet
+;        R3 = icon's font handle
 ;        R9 = UCS-4 character
 ;        R11 = mapping bitmap (as set up in measure_symbols)
 ; Exit:  EQ => needs mapping
@@ -7314,6 +7440,8 @@ test_arrow
         CMP     PC, #0
         Pull    "R0,R1,PC"              ; return NE
 02      ; we've found a character from the list - what does R11 say?
+        TEQ     R11, #0                 ; not calculated yet?
+        BLEQ    measure_symbols         ; work it out if so
         MOV     R14, #1
         TST     R11, R14, LSL R1        ; set Z according to R1-th bit of R11
         Pull    "R0,R1,PC"
