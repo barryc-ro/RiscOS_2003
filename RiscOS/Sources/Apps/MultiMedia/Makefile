@@ -22,13 +22,15 @@ WFLAGS  = ~cr~v
 #
 COMPONENT = MultiMedia
 SOURCE    = s.Messages
-TARGET    = rm.${COMPONENT}
-RESDIR    = ShrunkRes
+TDIR      = rm.<UserIF>
+TARGET    = ${TDIR}.${COMPONENT}
+RESDIR    = ShrunkRes.<UserIF>
 UTILS     = Utils
-DATA      = Data
+DATA      = Data.<UserIF>
 # Note: RESDATA mustn't be in RESDIR !!
 RESDATA   = ${DATA}.Data
 SHRINKFILE = ${DATA}.MkShrink
+SPECIALFILE = ${DATA}.MkSpecial
 
 #
 # Utility programs:
@@ -49,28 +51,36 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${RM} ${TARGET}
-        ${WIPE} ${RESDIR}.* ${WFLAGS}
-        ${WIPE} ${DATA}.* ${WFLAGS}
+        ${WIPE} ${TDIR} ${WFLAGS}
+        ${WIPE} ${RESDIR} ${WFLAGS}
+        ${WIPE} ${DATA} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${WIPE} ${DATA}.* ${WFLAGS}
+        ${WIPE} ${DATA} ${WFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE} ${RESDATA}
+${TARGET}: ${SOURCE} ${RESDATA} dirs
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
-${RESDATA}: ${SHRINKFILE}
+${RESDATA}: ${SHRINKFILE} ${SPECIALFILE}
         @RMEnsure ShrinkWrap 0.00 Error *** ShrinkWrap must be loaded ***
         Run ${SHRINKFILE}
+        IfThere ${SPECIALFILE} Then Run ${SPECIALFILE}
         ${SCANRES} ${RESDIR} $@
 
 ${SHRINKFILE}:
         ${BUILDWRAP} Resources ${RESDIR} $@
 
+${SPECIALFILE}:
+        IfThere Special.<UserIF> Then ${BUILDWRAP} Special.<UserIF> ${RESDIR} $@
+
+dirs:
+        ${MKDIR} ${TDIR}
+        ${MKDIR} ${RESDIR}
+        ${MKDIR} ${DATA}
 
 # Dynamic dependencies:
 rm.MultiMedia: Hdr:ListOpts
@@ -86,3 +96,16 @@ rm.MultiMedia: Hdr:Proc
 rm.MultiMedia: Hdr:ResourceFS
 rm.MultiMedia: Version
 rm.MultiMedia: Hdr:NDRDebug
+rm.<UserIF>.MultiMedia: Hdr:ListOpts
+rm.<UserIF>.MultiMedia: Hdr:Macros
+rm.<UserIF>.MultiMedia: Hdr:System
+rm.<UserIF>.MultiMedia: Hdr:SWIs
+rm.<UserIF>.MultiMedia: Hdr:CPU.Generic26
+rm.<UserIF>.MultiMedia: Hdr:IO.GenericIO
+rm.<UserIF>.MultiMedia: Hdr:RISCOS
+rm.<UserIF>.MultiMedia: Hdr:ModHand
+rm.<UserIF>.MultiMedia: Hdr:Services
+rm.<UserIF>.MultiMedia: Hdr:Proc
+rm.<UserIF>.MultiMedia: Hdr:ResourceFS
+rm.<UserIF>.MultiMedia: Version
+rm.<UserIF>.MultiMedia: Hdr:NDRDebug
