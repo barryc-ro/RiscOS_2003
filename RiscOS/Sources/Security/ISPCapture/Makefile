@@ -106,7 +106,7 @@ NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 HTMLDIR = <resource$dir>.!Boot.HTML
-LDIR = Resources.${LOCALE}.${SYSTEM}
+LDIR = Resources.${LOCALE}.${USERIF}
 
 NOTROMRESDEP = html.ISPC1 html.ISPC2 html.ISPC3 html.ISPC4
 
