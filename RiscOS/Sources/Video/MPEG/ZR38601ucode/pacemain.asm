@@ -259,7 +259,9 @@
 // accomodate residue left in the DFIFO between requests, and - 1
 // to eliminate potential wrapping condition.  MPEG only.
 #define IBUF_SIZE               1862
-#define TRGT_SIZE               IBUF_SIZE - 5
+//#define TRGT_SIZE               IBUF_SIZE - 5
+#define TRGT_SIZE               (IBUF_SIZE - 5) - MAX_REQ_SIZE
+
 // PCM_BUF_SIZE is the size of the output buffer.  Target is - 5
 // words for the same reason as TRGT_SIZE
 #define PCM_BUF_SIZE            1536
@@ -342,19 +344,23 @@ DATA    bip             {0};                // mutual exclusion of request/send 
 DATA    in_buf  (FIFO_SIZE+4) {0};          // Temporary input buffer. (+8 bytes for any FIFO residue)
 DATA    in_buf_ptr      {#in_buf};          // Input buffer pointer.
 DATA    myFrameSize     {0};                // store real MPEG frame size here
-DATA    d2_bkp          {0};                // register protection for interrupts
+DATA    d2_bkp          {0};                // register protection for breakpoint ISR
 DATA    d3_bkp          {0};                //                  "
 DATA    d4_bkp          {0};                //                  "
-DATA    d3_phi_protect  {0};                //                  "
-DATA    d4_phi_protect  {0};                //                  "
-DATA    d5_phi_protect  {0};                //                  "
-DATA    a0_phi_protect  {0};                //                  "
-DATA    i0_phi_protect  {0};                //                  "
-DATA    m0_phi_protect  {0};                //                  "
+DATA    d3_pkt          {0};                // register protection for virtual FIFO
+DATA    d4_pkt          {0};                //                  "
+DATA    d5_pkt          {0};                //                  "
+DATA    d3_hdr          {0};
+DATA    d4_hdr          {0};
+DATA    a0_pkt          {0};                //                  "
+DATA    i0_pkt          {0};                //                  "
+DATA    m0_pkt          {0};                //                  "
 DATA    predictedWrPntr {0};                //
 DATA    watermark       {500};              // MPEG low water mark level default 500 words
 DATA    underflow       {0};                // bespoke underflow flag 
 DATA    last_rate       {0};                // current sample rate
+DATA    pktLength       {0};
+DATA    pktWordCount    {0};
 
 DATA Osc_Cfs {              // Ftone = 206 Hz
          -0.999636,         // a1/2, Fs=48 kHz
@@ -401,8 +407,8 @@ SUBROUTINE USER_exec;
 SUBROUTINE PCMinject;
 SUBROUTINE Init_all;
 SUBROUTINE Intb_ISR;
-SUBROUTINE Dfifo_ISR;
-SUBROUTINE Phi_ISR;
+SUBROUTINE vfifo_header_ISR;
+SUBROUTINE vfifo_payload_ISR;
 SUBROUTINE MPG_Bkp_ISR;
 SUBROUTINE AC3_Bkp_ISR;
 SUBROUTINE Post_Shell;
@@ -657,8 +663,7 @@ no_pes;
     move    d4,(AVS_mask);
     move    d3,(off_inta);
     move_m  (#Intb_ISR,(off_intb));             // Load pointer to serial b service routine.
-    move_m  (#Dfifo_ISR,(dfifo_entry));         // Load pointer to fifo service routine.
-    move_m  (#Phi_ISR,(phi_entry));             // Load pointer to parallel host service routine.
+    move_m  (#vfifo_header_ISR,(dfifo_entry));
     move    #1,ie;                              // Interrupts back on.
     rts_2;
      move_m( #Post_Shell,(postproc_ptr));       // Enable post-processing.
@@ -697,128 +702,108 @@ EXPORT INCA7_INCA7:                             // self modifying code
 }
 
 
-SUBROUTINE Dfifo_ISR
+#define SYNC_BYTE 0x42000
+SUBROUTINE vfifo_header_ISR
 {
     push    mode;                               // Save mode register.
-    push    a0;                                 // Save a0.
-    push    m0;                                 // Save m0.
     clrb    #0,mode;                            // Set shift direction.
     move    #0,ds;                              // Defeat auto shift modes.
     move    dffcnt,d3;                          // Get the fifo count.
     lshi    #-17,d3;                            // Shift count down to LSB position.
     dbeq    exit;                               // If empty, exit.
-     move   (in_buf_ptr),a0;                    // Get input buffer pointer.
-     dec    d3  #0,m0;                          //
-data_loop:
-    dbne    data_loop;                          //
-     dec    d3  dfifo,d4;                       //
-     cmpz   d3  d4,(a0)+;                       //
-    move    a0,(in_buf_ptr);                    // Save the pointer.
+     nop;
+     nop;
+    move    dfifo,d4;                           // 
+    move    d4,d3;                              // 
+    andi    #0xff000,d3;                        // find SYNC
+    cmpi    #SYNC_BYTE,d3;                      // 
+    dbne    error;                              // or quit out with error
+     andi   #0x00ff0,d4;                        // 
+     lshi   #-4,d4;                             // 
+    move    d4,(pktLength);                     // 
+    move    d4,(pktWordCount);                  // 
+    db      exit;                               // 
+     move   #vfifo_payload_ISR,d4;              // 
+     move   d4,(dfifo_entry);                   // setup ISR for data aquisition
+error:
+    move    #0,d3;                              // for 0x27 - allow further requests
+    move    d3,(bip);                           // clear bip flag
 exit:
-    pop     m0;                                 // Restore registers.
-    pop     a0;                                 //
-    pop     mode;                               //
     move    (d3_reg),d3;                        //
     move    (d4_reg),d4;                        //
-    rti_1;                                      //
+    pop     mode;                               // 
+    rti_1;                                      // 
      clrb   #12,imr;                            // Re-enable dfifo interrupts. 
 }
 
-
-SUBROUTINE Phi_ISR
+SUBROUTINE vfifo_payload_ISR
 {
-    move    d3,(d3_phi_protect);
-    move    d4,(d4_phi_protect);
-    move    d5,(d5_phi_protect);
-    move    a0,(a0_phi_protect);
-    move    i0,(i0_phi_protect);
-    move    m0,(m0_phi_protect);
-    tstb    #10,status;                         // Test the HWR bit.
-    dbeq    exit_phi;                           // If it's a read, skip ahead.
-     move   (requestedWords),d2;                // copy requested words for next read
-     move   d2,hregout;                         // if there is one before next post-proc
-    setb    #0,gpio;                            // always clear the interrupt If it's a write
-    push    mode;                               // now go check for residual bytes in the FIFO
+    push    mode;                               // Save mode register.
     clrb    #0,mode;                            // Set shift direction.
     move    #0,ds;                              // Defeat auto shift modes.
+    move    a0,(a0_pkt);                        // <-+
+    move    m0,(m0_pkt);                        //   | protect registers
+    move    d3,(d3_pkt);
+    move    d4,(d4_pkt);
+    move    d5,(d5_pkt);                        // <-+
     move    dffcnt,d3;                          // Get the fifo count.
     lshi    #-17,d3;                            // Shift count down to LSB position.
+    pop     mode;                               // 
     dbeq    exit;                               // If empty, exit.
+     move   d3,d5;                              // 
      move   (in_buf_ptr),a0;                    // Get input buffer pointer.
-     dec    d3  #0,m0;                          //
+    dec     d3  #0,m0;                          //
 data_loop:
-    dbne    data_loop;                          //
+    dbgt    data_loop;                          //
      dec    d3  dfifo,d4;                       //
      cmpz   d3  d4,(a0)+;                       //
     move    a0,(in_buf_ptr);                    // Save the pointer.
-exit:
-    pop     mode;
-    move    (in_buf_ptr),d5;                    // Get the temp buffer pointer.
-    move    #in_buf,d4;                         // Get base of buffer.
-    sub     d4,d5   d4,a0;                      // Figure the number of words in the buffer.
-    move    a0,(in_buf_ptr);                    // Reset the buffer pointer.
-    cmpz    d5  #0,m0;                          // Compare to zero.
-deformat_lp:
-    dbeq    deformat_end;                       // If zero, break out of loop.
-    move    (nwa_input_flag),d4;                // Get 'not-word-aligned' flag in d4.
-    move    (a0),d3;                            // Get data in d3;
-    rpt     #4;
-    move    #0,ie;                              // turn interrupts off.
-    andi    #0xFFFF0,d3;                        // Mask off relevant stuff.
-    move    d5,(a0)+;                           // Clear the temp buffer.
-    move    #rti_address,i0;                    // Prep i0 register for simulated interrupt.
-    push    i0;                                 // Push return address.
-    push    status;                             // Push status register.
-    push    mode;                               // Push mode register.
-    db      (off_inta);                         // Load the program counter.
-     move   #0,ds;                              // clear data register shift mode
-     clrb   #0,mode;                            // define positive shift direction
-rti_address:
-    db      deformat_lp;                        // Send the next word.
-    nop;
-    dec     d5;                                 // Decrement the count.
-deformat_end:
-    move    (bip),d3;                           // MAX bursts to go in d3
-    dec     d3;                                 // -1
-    dble    exit_phi;                           // if 0 quit
-     move    d3,(bip);                          // update bip count
-     move    hregin,d3;                         // what was written by host
-    rpt     #4;
-    move    #0,ie;                              // turn interrupts off.
+    move    (pktWordCount),d4;                  // update word countdown
+    sub     d5,d4;                              // 
+    move    d4,(pktWordCount);                  // 
+    dbgt    exit;                               // <------ return here if no packet yet ------>
+     move   #in_buf,a0;                         // at start of payload data
+     move   (pktLength),d5;                     // 
+    move    #vfifo_header_ISR,d4;               // 
+    move    d4,(dfifo_entry);                   // setup ISR for header scan..
+    move    i0,(i0_pkt);                        // protect i0
+    setb    #0,gpio;                            // packet arrived .. clear request
+    cmpz    d5  #0,m0;                          // 
+inject_loop:                                    // 
+    dbeq    inject_end;                         // 
+     move   (nwa_input_flag),d4;                // 
+     move   (a0)+,d3;                           // 
+    rpt     #4;                                 // disable interrupts
+    move    #0,ie;                              // 
+    andi    #0xFFFF0,d3;                        // 
+    move    #dfifo_int_a_rti,i0;                // 
+    push    i0;                                 // 
+    push    status;                             // 
+    push    mode;                               // 
+    db      (off_inta);                         // 
+     move   #0,ds;                              // 
+     clrb   #0,mode;                            // 
+dfifo_int_a_rti:                                // 
+    db      inject_loop;                        // 
+     nop;                                       // 
+     dec    d5;                                 // 
+inject_end:                                     // 
+    move    (i0_pkt),i0;                        // unprotect i0
     move    a6,(predictedWrPntr);               // store "real" write pointer
-    cmpz    d3;                                 // if host wrote 0
-    dbeq    clear_bip;                          // then host has no more data to send
-     move   (hregout_stat),d5;                  // get sample rate and status 
-     move   (req_cntr),d4;                      // Get the request count.
-    cmpz    d4;                                 // greater than 0
-    dble    clear_bip;                          // no .. then quit ISR
-     move   #MAX_REQ_SIZE-1,d2;                 // max is 512 bytes
-     dec    d4;                                 // compute words to request
-    movemin d2,d4;                              //
-    move    d4,(requestedWords);                // store for subsequent read...
-    move    a6,a0;                              // get current write pointer
-    move    m6,m0;                              // get modulo for input buffer
-    inc     d4;                                 // d4 is actual requested words
-    move    d4,i0;                              // as index
-    setb    #0,d5;                              // Set flag for PES interrupt.
-    move    (a0)+i;                             // go update it...
-    move    a0,(predictedWrPntr);               // store next safe write pointer
-    db      exit_phi;
-     move   d5,hregout;                         // Set flags for host.
-     clrb   #0,gpio;                            // Send interrupt, active low.
-clear_bip:
-    move    #0,d3;
-    move    d3,(bip);
-exit_phi:
-    move    (a0_phi_protect),a0;
-    move    (i0_phi_protect),i0;
-    move    (m0_phi_protect),m0;
-    move    (d3_phi_protect),d3;
-    move    (d4_phi_protect),d4;
-    move    (d5_phi_protect),d5;
-    pop     d2;
-    rti_1;
-     move    (sh_dbx),dbx;
+// cleanup registers
+    move    #0,d3;                              // allow further requests
+    move    d3,(bip);                           // clear bip flag
+// any xtra words that enter now are flushing words .. trash them
+    move    #1000,d3;
+    move    d3,(pktWordCount);
+exit:
+    move    (m0_pkt),m0;
+    move    (a0_pkt),a0;
+    move    (d3_pkt),d3;
+    move    (d4_pkt),d4;
+    move    (d5_pkt),d5;
+    rti_1;                                      //
+     clrb   #12,imr;                            // Re-enable dfifo interrupts. 
 }
 
 SUBROUTINE MPG_Bkp_ISR
@@ -1031,15 +1016,9 @@ End_Tone_Insertion:
      move   (req_cntr),d4;                      // Get the request count.
      cmpz   d4;                                 // greater than 0
     dble    skipDataReq;                        // no .. skip FIFO request
-     dec    d4;                                 // compute number of words to request
-     move   #MAX_REQ_SIZE-1,d2;                 // max is 512 bytes
-    movemin d2,d4;                              //
-    move    d4,(requestedWords);                // and store for PHISR
-// increment write pointer here by req_cntr to ensure next req_cntr is calculated
-// correctly if input data is being recieved straddling frame boundary...
-    move    a6,a0;                              // get current write pointer
-    move    m6,m0;                              // get modulo for input buffer
-    inc     d4;                                 // d4 is actual requested words
+     move   a6,a0;                              // get current write pointer
+     move   m6,m0;                              // get modulo for input buffer
+    move    #MAX_REQ_SIZE,d4;
     move    d4,i0;                              // as index
     setb    #FIFO_REQ_BIT,d5;                   // Set flag for PES interrupt.
     move    (a0)+i;                             // go update it...
@@ -1051,6 +1030,20 @@ skipDataReq:
      move   #MAX_REQ,d4;                        // number of bursts to go in d4
      move   d5,hregout;                         // Set flags for host regardless (ignored if no ISR)
     move    d4,(bip);
+
+// clear FIFO here (NULL flush bytes may reside in base of FIFO)
+    rpt     #4;                                 // Clear the fifo.
+    move    dfifo,d3;
+// signify to FIFO ISR that we are looking for sync byte
+    move_m  (#in_buf,(in_buf_ptr));             // point to beginning next packet
+    move_m  (#vfifo_header_ISR,(dfifo_entry));  // Load pointer to fifo service routine.
+// go signal interrupt...
+
+    move    #in_buf,a0;
+    move    #0,d3;
+    rpt     #FIFO_SIZE;
+     move   d3,(a0)+;
+
     clrb    #0,gpio;                            // Send interrupt, active low.
 no_IRQ:
     move    #1,ie;                              // re enable interrupts
