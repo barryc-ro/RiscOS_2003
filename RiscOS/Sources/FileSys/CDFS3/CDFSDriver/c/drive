@@ -1,0 +1,115 @@
+/* File:    drive.c
+ * Purpose: drive related operations
+ * Author:  Timothy Roddis
+ * History: 21-Apr-97: TGR: created
+ */
+
+/* ANSI headers */
+
+#include <stdlib.h>
+#include <string.h>
+
+/* RISC OS headers */
+
+#include "kernel.h"
+#include "swis.h"
+
+/* commonlib headers */
+
+#include "defines.h"
+#include "debug.h"
+#include "msgs.h"
+
+/* local headers */
+
+#include "swiextra.h"
+#include "cdmgr.h"
+#include "module.h"
+#include "errors.h"
+#include "globals.h"
+#include "drive.h"
+
+/* drive_check
+ *
+ * parameters:
+ *   drive_no - the drive to be checked
+ *   sequence_check - a flag indicating whether the global sequence number for that drive
+ *                    should be brought up to date
+ */
+
+_kernel_oserror *drive_check (int drive_no, Bool sequence_check) {
+
+  unsigned int     start_time;
+  unsigned int     current_time;
+  unsigned int     timeout;
+  _kernel_oserror  *e = NULL;
+  Bool             carry_on;
+  Global_DriveInfo *drive_info;
+
+  if (drive_no > global_max_drive_no) {
+    int max_drive_no;
+    e = _swix (CDMgr_DriveOp, I0|O0, CDMgr_DriveOp_EnumerateDrives, &max_drive_no);
+
+    if (e || max_drive_no == -1) {
+      return msgs_make_error(Error_NoDrive);
+    }
+    DEBUG debug_output ("d", "CDFSDriver: Max drive no. %d, (old %d)\n", max_drive_no, global_max_drive_no);
+
+    if (max_drive_no > global_max_drive_no) {
+
+      /* realloc of NULL in a module returns NULL, but sizeof (NULL) is the size you asked for! */
+
+      /* Everything until the next comment is a realloc replacement: realloc didn't work
+       * properly (eg. realloc of NULL in a module returns NULL, but sizeof (NULL) is
+       * the size you asked for etc.) */
+
+      drive_info = malloc ((max_drive_no + 1) * sizeof (Global_DriveInfo));
+
+      if (drive_info == NULL) return msgs_make_error (Error_MemAlloc);
+
+      DEBUG debug_output ("d", "CDFSDriver: %d bytes (%d records) reserved %p\n",
+                          sizeof (drive_info),
+                          sizeof (drive_info)/sizeof (Global_DriveInfo), drive_info);
+
+      memcpy (drive_info, global_drive_info, MIN (sizeof (drive_info), sizeof (global_drive_info)));
+
+      free (global_drive_info);
+
+      global_drive_info = drive_info;
+
+      /* Set sequence count to guarantee disc changed responses first time */
+      /* Array is full ascending */
+
+      while (global_max_drive_no < max_drive_no) {
+        global_max_drive_no++;
+        DEBUG debug_output ("d", "CDFSDriver: init record %d\n", global_max_drive_no);
+        global_drive_info[global_max_drive_no].sequence_count = -1;
+      }
+    }
+  }
+  if (sequence_check && drive_no <= global_max_drive_no) {
+#if GETSEQNUMRPT
+    if ((e = _swix (CDMgr_DriveOp, I0|I1|O0, CDMgr_DriveOp_BusyTimeOut,
+               drive_no, &timeout)) != NULL) return e;
+
+    if ((e = _swix (OS_ReadMonotonicTime, _OUT(0), &start_time)) != NULL) return e;
+
+    do {
+      carry_on = FALSE;
+      if ((e = _swix (CDMgr_DriveOp, I0|I1|O0, CDMgr_DriveOp_GetSequenceNumber, drive_no, &(global_drive_info[drive_no].sequence_count))) != NULL) {
+        if (e && ((e->errnum & OS_ErrorNumberBitMask) == CDMgr_Error_BecomingReady)) {
+          if ((e = _swix (OS_ReadMonotonicTime, _OUT(0), &current_time)) != NULL) break;
+
+          carry_on = (current_time - start_time <= timeout);
+        }
+      }
+    } while (carry_on);
+#else
+    e = _swix (CDMgr_DriveOp, I0|I1|O0, CDMgr_DriveOp_GetSequenceNumber, drive_no, &(global_drive_info[drive_no].sequence_count));
+#endif
+  }
+
+  DEBUG if (e) debug_output ("d", "CDFSDriver: checking drive returned %s\n", e->errmess);
+
+  return e;
+}

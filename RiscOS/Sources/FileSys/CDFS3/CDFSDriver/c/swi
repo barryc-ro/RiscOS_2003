@@ -1,0 +1,841 @@
+ /* File:   swi.c
+ * Purpose: CDFSDriver swi handler: mostly a veneer onto CDManager
+ * Author:  Timothy Roddis
+ * History: 04-Apr-97: TGR: created
+ */
+
+/* ANSI headers */
+
+#include <stdlib.h>
+#include <string.h>
+
+/* RISC OS headers */
+
+#include "kernel.h"
+#include "swis.h"
+
+/* commonlib headers */
+
+#include "defines.h"
+#include "debug.h"
+#include "msgs.h"
+
+/* local headers */
+
+#include "standards.h"
+#include "swiextra.h"
+#include "cdmgr.h"
+#include "cdfsdriver.h"
+#include "module.h"
+#include "errors.h"
+#include "globals.h"
+#include "aux.h"
+#include "drive.h"
+
+/* Extern functions */
+
+/* Swi handler - standard cmhg SWI handling function */
+
+_kernel_oserror *swi_handler (int swi_no, _kernel_swi_regs *r, void *pw) {
+
+  int             *cblock    = (int *) (r->r[7]); // CDFSDriver command block
+  int              drive_no = -1;
+  _kernel_oserror *e = NULL;
+
+  IGNORE (pw);
+
+  DEBUG debug_output ("s", "CDFSDriver: Handling SWI no. %d (0x%x)\n", swi_no, swi_no+CD_00);
+
+  switch (swi_no + CD_00) {
+    case CD_Version:
+    case CD_Register:
+    case CD_Unregister:
+    case CD_ByteCopy:
+    case CD_ConvertToLBA:
+    case CD_ConvertToMSF:
+    /* These SWIs do not have a control block which contains 'physical' drive info */
+    break;
+    default:
+    {
+      drive_no = (cblock[0])     & 0x00000003
+               | (cblock[1]<<3)  & 0x00000018;
+
+// !CDPlay asks to play drive 5120!
+//               | (cblock[2]<<5)  & 0x000000e0
+//               | (cblock[3]<<8)  & 0x0000ff00
+//               | (cblock[4]<<16) & 0xffff0000;
+
+      drive_check(drive_no, swi_no + CD_00 != CD_DiscChanged);
+    }
+  }
+  /* The main SWI stuff follows: this is where the SWIs are actually executed.
+   * The reason why this is done in a while loop is so that DiscChanged has access to
+   * the media may have changed error messages.
+   * In general errors returned by CDMgr are allowed to drop through to the bottom
+   * for porcessing, whereas errors generated internally are returned straight away
+   * because we know the client expects to see them.
+   */
+
+  DEBUG debug_output ("s", "About to execute SWI (drive %d)\n", drive_no);
+
+  if (!e) switch (swi_no + CD_00) {
+    case CD_Version:
+    {
+       static struct _version_block {
+         unsigned int no;
+         char string[12+16];
+       } version_block = { Module_VersionNumber, Module_Help " " Module_VersionString };
+       r->r[0] = (int) &version_block;
+       break;
+    }
+    case CD_ReadData:
+    {
+      unsigned int  i;
+      unsigned int  no_blocks = r->r[2];
+      unsigned int  block_size = r->r[4];
+      unsigned int  disc_addr = aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_LBA);
+      char         *dest = (char *) (r->r[3]);
+      char         *buffer = NULL;
+
+      if (block_size == ISO9660_LogicalSectorSize) {
+        e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6,
+                   CDMgr_ReadData_User,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count,
+                   dest,
+                   disc_addr,
+                   no_blocks,
+                   CDMgr_DataMode_Mode1OrMode2Form1);
+        break;
+      }
+      for (i = 0; i<no_blocks; i++) {
+
+        if (i * block_size + ISO9660_LogicalSectorSize > no_blocks * block_size) {
+          buffer = malloc (ISO9660_LogicalSectorSize);
+          if (!buffer) return msgs_make_error (Error_MemAlloc);
+        }
+        e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6,
+                   CDMgr_ReadData_User,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count,
+                   buffer ? buffer : dest,
+                   disc_addr,
+                   no_blocks,
+                   CDMgr_DataMode_Any);
+
+        if (e) if (buffer) {
+          free (buffer);
+          break;
+        }
+
+        if (buffer) {
+          memcpy (dest, buffer, block_size);
+        }
+        dest += block_size;
+      }
+      break;
+    }
+    case CD_SeekTo:
+      e = _swix (CDMgr_MiscOp, I0|I1|I2|I3,
+                 CDMgr_MiscOp_Seek,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_LBA));
+      break;
+    case CD_DriveStatus:
+    {
+      int status;
+
+      e = _swix (CDMgr_DriveOp, I0|I1|O0, CDMgr_DriveOp_DriveStatus, drive_no, &status);
+
+      r->r[0] = 1<<status;
+      break;
+    }
+    case CD_DriveReady:
+    {
+      int status;
+
+      e = _swix (CDMgr_DriveOp, I0|I1|O0, CDMgr_DriveOp_DriveStatus, drive_no, &status);
+
+      if (status == CDMgr_DriveStatus_Empty) {
+        r->r[0] = 1;
+      } else {
+        r->r[0] = 0;
+      }
+      break;
+    }
+    case CD_GetParameters:
+    {
+      CD_Parameter_Block *params = (CD_Parameter_Block *) r->r[0];
+
+      params->timer_multiplier = 1; // typically c.15 (max)
+      params->no_retries = 0;       // typically 3-5
+      e = _swix (CDMgr_MiscOp, I0|I1|I2|I3|O0,
+                 CDMgr_MiscOp_GiveSectorDataMode,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 0,
+                 &(params->data_mode));
+
+      if (e) params->data_mode = 0;
+
+      e = _swix (CDMgr_DriveOp, I0|I1|O2,
+                 CDMgr_DriveOp_GetDriveSpeed | CDMgr_SpeedFlags_RawXferRates,
+                 drive_no,
+                 &(params->speed));
+
+      params->speed = params->speed * 1024/(RedBook_FramesPerSecond * RedBook_SectorSize);
+                                                             // To get approximate actual speed
+      break;
+    }
+    case CD_SetParameters:
+    {
+      int speed;
+      CD_Parameter_Block *params = (CD_Parameter_Block *) r->r[0];
+
+      /* Try to set to speed + 1/2 so that drives that say 4 ×, but are 4 and a bit ×
+       * are okay */
+
+      speed = (2 * (params->speed + 1) * RedBook_FramesPerSecond * RedBook_SectorSize)>>11;
+
+      DEBUG debug_output ("s1", "Setting speed to %dKps (%d)\n", speed, params->speed);
+
+      e = _swix (CDMgr_DriveOp, I0|I1|I2,
+                 CDMgr_DriveOp_SetDriveSpeed | CDMgr_SpeedFlags_RawXferRates,
+                 drive_no,
+                 speed);
+      break;
+    }
+    case CD_OpenDrawer:
+      DEBUG debug_output ("s1", "Ejecting disc\n");
+      e = _swix (CDMgr_DriveOp, I0|I1, CDMgr_DriveOp_OpenDrawer, drive_no);
+      break;
+    case CD_EjectButton:
+      if (r->r[0]) {
+        e = _swix (CDMgr_DriveOp, I0|I1, CDMgr_DriveOp_LockDrive, drive_no);
+      } else {
+        e = _swix (CDMgr_DriveOp, I0|I1, CDMgr_DriveOp_UnlockDrive, drive_no);
+      }
+      break;
+    case CD_EnquireAddress:
+    {
+      int addr;
+
+      e = _swix (CDMgr_MiscOp, I0|I1|I2|O3,
+                 CDMgr_MiscOp_Address,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 &addr);
+
+      r->r[0] = aux_convert_addr (CDFSDriver_AddressMode_LBA, addr+150, r->r[0]);
+
+      break;
+    }
+    case CD_EnquireDataMode:
+    {
+      e = _swix (CDMgr_MiscOp, I0|I1|I2|I3|O0,
+                 CDMgr_MiscOp_GiveSectorDataMode,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_LBA),
+                 &(r->r[0])); // The definitions for modes are the same, but CD 3 knows that
+                              // some drives can't distinguish mode 1 & mode 2 form 1
+
+      if (e && (e->errnum & OS_ErrorNumberBitMask) == CDMgr_Error_WrongSectorMode) {
+        r->r[0] = 0; // 0 => audio mode OR zero sector
+        e = NULL;
+      }
+      break;
+    }
+    case CD_PlayAudio:
+      e = _swix (CDMgr_AudioOp, I0|I1|I2|I3|I4,
+                 CDMgr_AudioOp_PlayFromAddress,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_LBA),
+                 aux_convert_addr (r->r[0], r->r[2], CDFSDriver_AddressMode_LBA));
+      break;
+    case CD_PlayTrack:
+       e = _swix (CDMgr_AudioOp, I0|I1|I2|I3|I4,
+                  CDMgr_AudioOp_PlayTracks,
+                  drive_no,
+                  global_drive_info[drive_no].sequence_count,
+                  r->r[0],
+                  (r->r[1] == 0xfe) ? r->r[0] : r->r[1]);
+       break;
+    case CD_AudioPause:
+    {
+#ifdef TRUE //PAUSEHACK
+      int status;
+
+      e = _swix (CDMgr_AudioOp, I0|I1|I2|O0,
+                 CDMgr_AudioOp_AudioStatus,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 &status);
+
+      if (e && (e->errnum & OS_ErrorNumberBitMask) == CDMgr_Error_NoAudioOp) {
+        status = CDMgr_AudioStatus_NoOp;
+        e = NULL;
+      }
+
+      if (status == CDMgr_AudioStatus_NoOp) {
+        int addr;
+        unsigned int             size;
+        CDMgr_ReadTOC_Block     *toc_hdr;
+
+        DEBUG debug_output ("s1", "No audio operation in progress, synthesising one\n");
+
+        e = _swix (CDMgr_MiscOp, I0|I1|I2|O3,
+                   CDMgr_MiscOp_Address,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count,
+                   &addr);
+
+        if (e) break;
+
+        DEBUG debug_output ("s1", "Address: %d\n", addr);
+
+        e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|O3,
+                   0,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count,
+                   0,
+                   &size);
+
+        if (e) break;
+
+        if ((toc_hdr = malloc (size)) == NULL) {
+          e = msgs_make_error (Error_MemAlloc);
+          break;
+        }
+
+        e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|O3,
+                   0,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count,
+                   toc_hdr,
+                   &toc_hdr);
+
+         if (!e) {
+
+           /* If there hasn't been an error, translate the data */
+
+           size = toc_hdr->disc_size;
+         }
+         free (toc_hdr);
+
+         DEBUG debug_output ("s1", "Size: %d\n", size);
+
+         e = _swix (CDMgr_AudioOp, I0|I1|I2|I3|I4,
+                    CDMgr_AudioOp_PlayFromAddress,
+                    drive_no,
+                    global_drive_info[drive_no].sequence_count,
+                    addr,
+                    size-1);
+
+         if (e) break;
+      }
+
+#endif
+
+      if (r->r[0]) {
+        e = _swix (CDMgr_AudioOp, I0|I1|I2,
+                   CDMgr_AudioOp_Pause,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count);
+      } else {
+        e = _swix (CDMgr_AudioOp, I0|I1|I2,
+                   CDMgr_AudioOp_Resume,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count);
+      }
+      break;
+    }
+    case CD_EnquireTrack:
+    {
+      unsigned int             size;
+      CDMgr_ReadTOC_TrackInfo *trk_info;
+      CDMgr_ReadTOC_Block     *toc_hdr;
+      CD_EnquireTrack_Block   *out_blk = (CD_EnquireTrack_Block *)(r->r[1]);
+
+      /* This maps onto quite a complicated call to read the Table of Contents (TOC).
+       * This call uses the RISC OS paradigm of call once to get size, then again for data.
+       * ReadTOC allows the user to read just a header, or to additionally
+       * ((read selected or all tracks) and/or (read selected or all sessions))
+       */
+
+      e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|I4|O3,
+                 (r->r[0] != 0) ? CDMgr_ReadTOCFlags_ReturnTrackInfo : 0,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 0,
+                 r->r[0],
+                 &size);
+
+      if (e) break;
+
+      if ((toc_hdr = malloc (size)) == NULL) {
+        e = msgs_make_error (Error_MemAlloc);
+        break;
+      }
+
+      e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|I4|O3|O4,
+                 (r->r[0] != 0) ? CDMgr_ReadTOCFlags_ReturnTrackInfo : 0,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 toc_hdr,
+                 r->r[0],
+                 &toc_hdr,
+                 &trk_info);
+
+       if (!e) {
+
+         /* If there hasn't been an error, translate the data */
+
+         if (r->r[0] == 0) {
+           out_blk->range.first_track = toc_hdr->first_track;
+           out_blk->range.last_track  = toc_hdr->last_track;
+           out_blk->range.reserved[0] =
+           out_blk->range.reserved[1] = 0;
+         } else {
+           out_blk->single.lba = trk_info->address;
+           out_blk->single.audio_mode
+             = ((trk_info->audio_mode & CDMgr_AudioModeFlags_Data)        ? 1 : 0)
+             | ((trk_info->audio_mode & CDMgr_AudioModeFlags_PreEmphasis) ? 2 : 0);
+         }
+       }
+       free (toc_hdr);
+
+       break;
+    }
+    case CD_ReadSubChannel:
+    {
+      struct _sub_channel_q {
+        unsigned int relative_address;
+        unsigned int absolute_address;
+        char         audio_mode;
+        char         track;
+        char         index;
+      } *blk = (struct _sub_channel_q *) (r->r[1]);
+      unsigned int mode, track, index;
+
+      if (r->r[0] != 64) return msgs_make_error (Error_IllegalSubChannel);
+
+      e = _swix (CDMgr_MiscOp, I0|I1|I2|O0|O3|O4|O5|O6,
+                 CDMgr_MiscOp_Address,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 &mode,
+                 &(blk->absolute_address),
+                 &(blk->relative_address),
+                 &track,
+                 &index);
+
+      if (e) break;
+
+      blk->audio_mode
+        = ((mode & CDMgr_AudioModeFlags_Data)        ? 1 : 0)
+        | ((mode & CDMgr_AudioModeFlags_PreEmphasis) ? 2 : 0);
+
+      blk->track = track;
+      blk->index = index;
+
+      break;
+    }
+    case CD_CheckDrive:
+      r->r[0] = 0; // Some drives do not support this, so it uniformly returns 'happy' state
+      break;
+    case CD_DiscChanged:
+    {
+      int sequence_count;
+
+      e = _swix (CDMgr_DriveOp, I0|I1|O0,
+              CDMgr_DriveOp_GetSequenceNumber,
+              drive_no,
+              &sequence_count);
+
+      if (sequence_count != global_drive_info[drive_no].sequence_count) {
+        r->r[0] = 1;
+        global_drive_info[drive_no].sequence_count = sequence_count;
+      } else {
+        r->r[0] = 0;
+      }
+      break;
+    }
+    case CD_StopDisc:
+      _swix (CDMgr_AudioOp, I0|I1|I2,
+             CDMgr_AudioOp_Stop,
+             drive_no,
+             global_drive_info[drive_no].sequence_count);
+       break;
+    case CD_DiscUsed:
+    {
+      unsigned int             size;
+      CDMgr_ReadTOC_Block     *toc_hdr;
+      CD_DiscUsed_Block       *out_blk = (CD_DiscUsed_Block *) r->r[1];
+
+      /* This maps onto quite a complicated call to read the Table of Contents (TOC).
+       * This call uses the RISC OS paradigm of call once to get size, then again for data.
+       * ReadTOC allows the user to read just a header, or to additionally
+       * ((read selected or all tracks) and/or (read selected or all sessions))
+       */
+
+      e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|O3,
+                 0,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 0,
+                 &size);
+
+      if (e) break;
+
+      if ((toc_hdr = malloc (size)) == NULL) {
+        e = msgs_make_error (Error_MemAlloc);
+        break;
+      }
+
+      e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|O3,
+                 0,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 toc_hdr,
+                 &toc_hdr);
+
+       if (!e) {
+
+         /* If there hasn't been an error, translate the data */
+
+         out_blk->size_in_blocks
+           = aux_convert_addr (CDFSDriver_AddressMode_LBA, toc_hdr->disc_size, r->r[0]);
+         out_blk->block_size = 2048; // Do as CDFSDriver did!
+       }
+       free (toc_hdr);
+
+       break;
+    }
+    case CD_AudioStatus:
+    {
+      int status;
+
+      e = _swix (CDMgr_AudioOp, I0|I1|I2|O0,
+                 CDMgr_AudioOp_AudioStatus,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 &status);
+
+      if (e && (e->errnum & OS_ErrorNumberBitMask) == CDMgr_Error_NoAudioOp) {
+        status = CDMgr_AudioStatus_NoOp;
+        e = NULL;
+      }
+
+      if (!e) switch (status) {
+        case CDMgr_AudioStatus_NoOp:
+          r->r[0] = 5; // CDManager does not distinguish successful completion and failure
+                       // in this context: this value represents no request as per ATAPI RC
+          break;
+        case CDMgr_AudioStatus_PlayOrScan:
+          r->r[0] = 0;
+          break;
+        case CDMgr_AudioStatus_Pause:
+          r->r[0] = 1;
+          break;
+      }
+      break;
+    }
+    case CD_Inquiry:
+       // Not supported
+       break;
+    case CD_DiscHasChanged:
+      /* Fake a medium change */
+      global_drive_info[drive_no].sequence_count = -1;
+      break;
+    case CD_Control:
+      // Not supported
+      break;
+    case CD_Supported:
+    {
+      unsigned int supported;
+      unsigned int max;
+
+      e = _swix (CDMgr_GetSupported, I0|I1|O0,
+                 0, drive_no, &supported);
+
+      e = _swix (CDMgr_DriveOp, I0|I1|O4,
+                 CDMgr_DriveOp_GetDriveSpeed | CDMgr_SpeedFlags_RawXferRates,
+                 drive_no,
+                 &max);
+
+      max = max * 1024/(RedBook_FramesPerSecond * RedBook_SectorSize);
+
+      r->r[0] = (supported & CDMgr_Support_MotorDrawer ? 1U<<4  : 0) // Close drawer support
+              | max << 6 // max speed of drive
+              | (supported & CDMgr_Support_ReadAudio   ? 1U<<14 : 0)
+              | (supported & CDMgr_Support_AudioVolume ? 1U<<15 : 0);
+
+      break;
+    }
+    case CD_Prefetch:
+      // Not supported - one way to support this might be to read from the
+      // sector before the desired one
+      break;
+    case CD_Reset:
+      // Not supported
+      break;
+    case CD_CloseDrawer:
+      e = _swix (CDMgr_DriveOp, I0|I1, CDMgr_DriveOp_CloseDrawer, drive_no);
+      break;
+    case CD_IsDrawerLocked:
+    {
+      e = _swix (CDMgr_DriveOp, I0|I1|O0, CDMgr_DriveOp_GetLockedStatus, drive_no, &(r->r[0]));
+
+      break;
+    }
+    case CD_AudioControl:
+      // Not supported
+      break;
+    case CD_LastError:
+       r->r[0] = 0;
+       break;
+    case CD_AudioLevel:
+      // Not supported
+      break;
+    case CD_Register:
+       // No support for CFDS 2 drivers is given
+       break;
+    case CD_Unregister:
+      // No support for CFDS 2 drivers is given
+       break;
+    case CD_ByteCopy:
+       memcpy ((void *)(r->r[2]), (void *)(r->r[1]), r->r[3]);
+       break;
+    case CD_Identify:
+      /* The following works on the pricinple that the mapping between drives and
+       * control blocks is _very_ trivial (Identity function anyone?) */
+
+      DEBUG debug_output ("s1", "Identifying drive %d (max %d)\n", drive_no, global_max_drive_no);
+
+      if (drive_no > global_max_drive_no) {
+        r->r[2] = -1;
+      } else {
+        r->r[2] = 0;
+      }
+      break;
+    case CD_ConvertToLBA:
+       if (r->r[0] == CDFSDriver_AddressMode_LBA) {
+         break;
+       } else {
+         r->r[1] = aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_LBA);
+       }
+       break;
+    case CD_ConvertToMSF:
+       if (r->r[0] == CDFSDriver_AddressMode_MSF) {
+         break;
+       } else {
+         r->r[1] = aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_MSF);
+       }
+       break;
+    case CD_ReadAudio:
+      e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6,
+                 CDMgr_ReadData_User,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 r->r[3],
+                 aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_LBA),
+                 r->r[2],
+                 CDMgr_DataMode_Audio);
+
+      break;
+    case CD_ReadUserData:
+    {
+      unsigned int offset = r->r[4];
+      unsigned int size = r->r[2];
+      char *address = (char *) (r->r[3]);
+      int disc_addr = aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_LBA);
+      unsigned int       start_sector,
+                         end_sector,
+                         start_rem,
+                         end_rem,
+                         bytes;
+      const unsigned int n = Log2_ISO9660_LogicalSectorSize;
+      char              *sector_buffer = NULL;
+
+      /* The following code was half-hinched from CDFS:
+                                          it's therefore a good deal more robust than needed */
+
+      DEBUG debug_output ("s1","CDFSDriver: reading from lba 0x%x, offset 0x%x, size 0x%x\n",
+                         disc_addr, offset, size);
+
+      /* n is the shift associated with the logical block size (9 for 512, 10 for 1024 etc.) */
+
+      /* It's done like this so that if disc sizes are upped, the code can cope */
+
+      /* Starting sector */
+
+      start_sector = (disc_addr + (offset>>n)) / (ISO9660_LogicalSectorSize>>n);
+
+      /* Bytes into first sector to start at */
+
+      start_rem    = ((disc_addr << n) + offset) & (ISO9660_LogicalSectorSize - 1);
+
+      /* Ending sector */
+
+      end_sector   = (disc_addr + ((offset + size)>>n)) / (ISO9660_LogicalSectorSize>>n);
+
+      /* Bytes in the end sector to copy */
+
+      end_rem      = ((disc_addr << n) + offset + size ) & (ISO9660_LogicalSectorSize - 1);
+
+      if (start_rem || end_rem) { /* Not fully sector aligned */
+        if ((sector_buffer = malloc (ISO9660_LogicalSectorSize)) == NULL) {
+           return msgs_make_error (Error_MemAlloc);
+        }
+      }
+      /* If it doesn't start on a sector, read the first sector in which the data occurs
+       * into a buffer */
+
+      if (start_rem) {
+        DEBUG debug_output ("s1", "CDFSDriver: first fractional sector @0x%x, start_rem is 0x%x\n",
+                            start_sector, start_rem);
+
+        e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6,
+                   CDMgr_ReadData_User,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count,
+                   sector_buffer,
+                   start_sector++,
+                   1,
+                   CDMgr_DataMode_Mode1OrMode2Form1);
+
+        if (e) goto free1;
+
+        memcpy (address, sector_buffer + start_rem,
+                MIN(ISO9660_LogicalSectorSize - start_rem, size));
+
+        address += (ISO9660_LogicalSectorSize - start_rem);
+      }
+
+      /* read the aligned sectors */
+
+      if (end_sector > start_sector) {
+
+        DEBUG debug_output ("s1", "CDFSDriver: %d full sectors from 0x%x, buffer @%p\n",
+                            end_sector-start_sector, start_sector, address);
+
+        e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6|O0,
+                   CDMgr_ReadData_User,
+                   drive_no,
+                   global_drive_info[drive_no].sequence_count,
+                   address,
+                   start_sector,
+                   end_sector - start_sector,
+                   CDMgr_DataMode_Mode1OrMode2Form1,
+                   &bytes);
+
+         DEBUG debug_output ("s1", "0x%x bytes transfered\n", bytes);
+
+         DEBUG if (e) debug_output ("s1", e->errmess);
+
+         if (e) goto free1;
+      }
+      if (end_sector >= start_sector) {
+        /* If it doesn't end on a sector, read the last sector in which data occurs into the
+         * sector buffer */
+
+        if (end_rem) {
+
+          DEBUG debug_output ("s1", "CDFSDriver: last fractional sector @0x%x, end_rem is 0x%x\n",
+                              end_sector, end_rem);
+
+          address += (end_sector - start_sector) * ISO9660_LogicalSectorSize;
+
+          e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6,
+                     CDMgr_ReadData_User,
+                     drive_no,
+                     global_drive_info[drive_no].sequence_count,
+                     sector_buffer,
+                     end_sector,
+                     1,
+                     CDMgr_DataMode_Mode1OrMode2Form1);
+
+          if (e) goto free1;
+
+          memcpy (address, sector_buffer, end_rem);
+        }
+      }
+      free1:
+
+      if (sector_buffer) free (sector_buffer);
+      break;
+    }
+    case CD_SeekUserData:
+    {
+      unsigned int offset = r->r[2];
+      int disc_addr = aux_convert_addr (r->r[0], r->r[1], CDFSDriver_AddressMode_LBA);
+      unsigned int       start_sector,
+                         start_rem;
+      const unsigned int n = Log2_ISO9660_LogicalSectorSize;
+
+      /* The following code was half-hinched from CDFS:
+                                          it's therefore a good deal more robust than needed */
+
+      DEBUG debug_output ("s1","CDFSDriver: seekuser: lba 0x%x, offset 0x%x\n",
+                         disc_addr, offset);
+
+      /* n is the shift associated with the logical block size (9 for 512, 10 for 1024 etc.) */
+
+      /* It's done like this so that if disc sizes are upped, the code can cope */
+
+      /* Starting sector */
+
+      start_sector = (disc_addr + (offset>>n)) / (ISO9660_LogicalSectorSize>>n);
+
+      /* Bytes into first sector to start at */
+      start_rem    = ((disc_addr << n) + offset) & (ISO9660_LogicalSectorSize - 1);
+
+      r->r[1] = start_sector;
+      r->r[2] = start_rem;
+
+      break;
+    }
+    case CD_GetAudioParms:
+    {
+      CD_Volume_Block *volumes = (CD_Volume_Block *) (r->r[1]);
+
+      e = _swix (CDMgr_DriveOp, I0|I1|O2|O3,
+                 CDMgr_DriveOp_GetVolume,
+                 drive_no,
+                 &(volumes->channel0),
+                 &(volumes->channel1));
+      break;
+    }
+    case CD_SetAudioParms:
+    {
+      CD_Volume_Block *volumes = (CD_Volume_Block *) (r->r[1]);
+
+      DEBUG debug_output ("s1", "Setting volume: left 0x%x, right 0x%x\n", volumes->channel0, volumes->channel1);
+
+      e = _swix (CDMgr_DriveOp, I0|I1|I2|I3,
+                 CDMgr_DriveOp_SetVolume | CDMgr_VolumeFlags_Stereo,
+                 drive_no,
+                 volumes->channel0,
+                 volumes->channel1);
+       break;
+    }
+    default:
+       return error_BAD_SWI;
+  }
+  DEBUG if (e) debug_output ("s", "CDFSDriver: swi: error 0x%x, \"%s\"\n", e->errnum, e->errmess);
+
+  /* translate certain errors */
+#if FALSE
+  if (e) {
+    switch (e->errnum & OS_ErrorNumberBitMask) {
+      case CDMgr_Error_DriveNotKnown:
+        e = msgs_make_error (Error_SoftLoadNotPresent);
+    }
+  }
+#endif
+  return e;
+}
+
