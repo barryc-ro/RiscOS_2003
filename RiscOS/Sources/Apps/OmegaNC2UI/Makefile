@@ -11,7 +11,7 @@
 #
 # Generic options:
 #
-MKDIR   	= cdir
+MKDIR   	= mkdir -p
 CP      	= copy
 TRANSLATE	= translate
 RM      	= remove
@@ -64,6 +64,7 @@ dirs:
         @echo ** Creating directory structure
         $(MKDIR) $(EXPORTDIR)
         $(MKDIR) $(RESAPP)
+        $(MKDIR) $(RESAPP).HTML.Other
         $(MKDIR) $(RESAPP).HTML-Ether
         $(MKDIR) $(RESAPP).HTML-Modem
         $(MKDIR) $(RESAPP).HTML-Ether.Setup
@@ -134,6 +135,9 @@ translate: dirs
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Text -o $(RESAPP).HTML.Setup.Text
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML-Ether.Setup.Timeout -o $(RESAPP).HTML-Ether.Setup.Timeout
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML-Modem.Setup.Timeout -o $(RESAPP).HTML-Modem.Setup.Timeout
+        @echo ** Translating Other files...
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Other.HeroList -o $(RESAPP).HTML.Other.HeroList
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Other.Test -o $(RESAPP).HTML.Other.Test
         
 resources: translate
 	@echo ** Exporting non-translatable resource files
