@@ -4,7 +4,7 @@
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_HDR = <cexport$dir>
 #
 # Generic options:
 #
@@ -48,7 +48,7 @@ export_libs:
 	@echo ${COMPONENT}: export complete(libs)
 
 export_hdrs:
-        ${CP} h.plugin ${EXP_HDR}.C.h.plugin ${CPFLAGS}
+        ${CP} h.plugin ${EXP_HDR}.h.plugin ${CPFLAGS}
         @echo ${COMPONENT}: export complete(hdrs)
 
 #
