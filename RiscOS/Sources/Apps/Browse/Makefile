@@ -94,7 +94,6 @@ EVENTLIB	= tbox:o.eventlib
 TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
 INETLIB		= TCPIPLibs:o.inetlib
-UNIXLIB		= TCPIPLibs:o.unixlib
 
 LIBSM = \
  ${HTMLLIB}zm \
@@ -104,7 +103,6 @@ LIBSM = \
  ${TOOLBOXLIB} \
  ${WIMPLIB} \
  ${INETLIB}zm \
- ${UNIXLIB}zm \
  ${IMAGELIB}zm \
  ${PNGLIBZ} \
  ${ZLIB}zm
@@ -118,7 +116,6 @@ LIBS = \
  ${TOOLBOXLIB} \
  ${WIMPLIB} \
  ${INETLIB} \
- ${UNIXLIB} \
  ${IMAGELIB} \
  ${PNGLIB} \
  ${ZLIB}
@@ -132,7 +129,6 @@ LIBSD = \
  ${TOOLBOXLIB} \
  ${WIMPLIB} \
  ${INETLIB} \
- ${UNIXLIB} \
  ${IMAGELIB} \
  ${PNGLIB} \
  ${ZLIB}
@@ -167,7 +163,7 @@ OBJS = \
  o.Printing	o.Redraw	o.Reformat	o.ROSLib	\
  o.Save		o.Tables	o.TokenUtils	o.Toolbars	\
  o.URLutils	o.Utils		o.Windows	o.JavaScript	\
- o.LineOne	o.Meta
+ o.LineOne	o.Meta		o.Cookies
 
 OBJSZ = \
  oz.Authorise	oz.Browser	oz.Fetch	oz.FetchPage	\
@@ -177,7 +173,7 @@ OBJSZ = \
  oz.Printing	oz.Redraw	oz.Reformat	o.ROSLib	\
  oz.Save	oz.Tables	oz.TokenUtils	oz.Toolbars	\
  oz.URLutils	oz.Utils	oz.Windows	oz.JavaScript	\
- oz.LineOne	oz.Meta
+ oz.LineOne	oz.Meta		oz.Cookies
 
 OBJSD = \
  od.Authorise	od.Browser	od.Fetch	od.FetchPage	\
@@ -187,7 +183,8 @@ OBJSD = \
  od.Printing	od.Redraw	od.Reformat	o.ROSLib	\
  od.Save	od.svcprint	od.Tables	od.TokenUtils	\
  od.Toolbars	od.Trace	od.URLutils	od.Utils	\
- od.Windows	od.JavaScript	od.LineOne	od.Meta
+ od.Windows	od.JavaScript	od.LineOne	od.Meta		\
+ od.Cookies
 
 OBJSDZ = \
  odz.Authorise	odz.Browser	odz.Fetch	odz.FetchPage	\
@@ -197,7 +194,8 @@ OBJSDZ = \
  odz.Printing	odz.Redraw	odz.Reformat	o.ROSLib	\
  odz.Save	odz.svcprint	odz.Tables	odz.TokenUtils	\
  odz.Toolbars	odz.Trace	odz.URLutils	odz.Utils	\
- odz.Windows	odz.JavaScript	odz.LineOne	odz.Meta
+ odz.Windows	odz.JavaScript	odz.LineOne	odz.Meta	\
+ odz.Cookies
 
 OBJS_SURF = \
  o_surf.Authorise	o_surf.Browser		o_surf.Fetch		o_surf.FetchPage	\
@@ -207,7 +205,7 @@ OBJS_SURF = \
  o_surf.Printing	o_surf.Redraw		o_surf.Reformat		o.ROSLib		\
  o_surf.Save		o_surf.Tables		o_surf.TokenUtils	o_surf.Toolbars		\
  o_surf.URLutils	o_surf.Utils		o_surf.Windows		o_surf.JavaScript	\
- o_surf.LineOne		o_surf.Meta
+ o_surf.LineOne		o_surf.Meta		o_surf.Cookies
 
 OBJSD_SURF = \
  od_surf.Authorise	od_surf.Browser		od_surf.Fetch		od_surf.FetchPage	\
@@ -217,7 +215,8 @@ OBJSD_SURF = \
  od_surf.Printing	od_surf.Redraw		od_surf.Reformat	o.ROSLib		\
  od_surf.Save		od_surf.svcprint	od_surf.Tables		od_surf.TokenUtils	\
  od_surf.Toolbars	od_surf.Trace		od_surf.URLutils	od_surf.Utils		\
- od_surf.Windows	od_surf.JavaScript	od_surf.LineOne		od_surf.Meta
+ od_surf.Windows	od_surf.JavaScript	od_surf.LineOne		od_surf.Meta		\
+ od_surf.Cookies
 
 OBJS_ITALK = \
  o_italk.Authorise	o_italk.Browser		o_italk.Fetch		\
@@ -229,7 +228,8 @@ OBJS_ITALK = \
  o_italk.Reformat	o.ROSLib		o_italk.Save		\
  o_italk.Tables		o_italk.TokenUtils	o_italk.Toolbars	\
  o_italk.URLutils	o_italk.Utils		o_italk.Windows		\
- o_italk.JavaScript	o_italk.LineOne		o_italk.Surf
+ o_italk.JavaScript	o_italk.LineOne		o_italk.Surf		\
+ o_italk.Cookies
 
 OBJSD_ITALK = \
  od_italk.Authorise	od_italk.Browser	od_italk.Fetch		\
@@ -242,7 +242,7 @@ OBJSD_ITALK = \
  od_italk.svcprint	od_italk.Tables		od_italk.TokenUtils	\
  od_italk.Toolbars	od_italk.Trace		od_italk.URLutils	\
  od_italk.Utils		od_italk.Windows	od_italk.JavaScript	\
- od_italk.LineOne	od_italk.Surf
+ od_italk.LineOne	od_italk.Surf		od_italk.Cookies
 
 
 # ------------------------------------------------------------------------------
