@@ -194,52 +194,61 @@ local_dirs:
 install_base:
 	@-${MKDIR} ${INSTALLDIR}/${APPNAME}
 	@-${MKDIR} ${INSTALLDIR}/${APPNAME}/ini
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Boot,feb	${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Run,feb	${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/EnsureTB,feb	${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/ini/appsrv			${INSTALLDIR}/${APPNAME}/ini/AppSrv
-	${CP} ${CPFLAGS} Resources/ini/module			${INSTALLDIR}/${APPNAME}/ini/Module
-	${CP} ${CPFLAGS} Resources/ini/wfclient			${INSTALLDIR}/${APPNAME}/ini/WFClient
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Boot,feb	${INSTALLDIR}/${APPNAME}/
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help	${INSTALLDIR}/${APPNAME}/
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Run,feb	${INSTALLDIR}/${APPNAME}/
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${INSTALLDIR}/${APPNAME}/
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/EnsureTB,feb	${INSTALLDIR}/${APPNAME}/
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${INSTALLDIR}/${APPNAME}/
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${INSTALLDIR}/${APPNAME}/
+	@${CP} ${CPFLAGS} Resources/ini/appsrv			${INSTALLDIR}/${APPNAME}/ini/AppSrv
+	@${CP} ${CPFLAGS} Resources/ini/module			${INSTALLDIR}/${APPNAME}/ini/Module
+	@${CP} ${CPFLAGS} Resources/ini/wfclient		${INSTALLDIR}/${APPNAME}/ini/WFClient
 
-install: ${APP} install_base
-	${CP} ${CPFLAGS} ${APP}					${INSTALLDIR}/${APPNAME}/!RunImage,ff8
+install_res_desktop:
 	@restool merge ${INSTALLDIR}/${APPNAME}/Res,fae Resources/app/${COUNTRY}/Res_base,fae Resources/app/${COUNTRY}/Res_desktop,fae
+	@echo Installed Res for desktop
+
+install_res_nc2:
+	@restool merge ${INSTALLDIR}/${APPNAME}/Res,fae Resources/app/${COUNTRY}/Res_base,fae Resources/app/${COUNTRY}/Res_nc2,fae
+	@echo Installed Res for nc2
+
+install: ${APP} install_base install_res_desktop
+	@${CP} ${CPFLAGS} ${APP}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
 	@echo Installed ${COMPONENT}
 
-installd: ${APPD} install_base
-	${CP} ${CPFLAGS} ${APPD}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
+installd: ${APPD} install_base install_res_desktop
+	@${CP} ${CPFLAGS} ${APPD}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
 	@restool merge ${INSTALLDIR}/${APPNAME}/Res,fae Resources/app/${COUNTRY}/Res_base,fae Resources/app/${COUNTRY}/Res_desktop,fae
 	@echo Installed ${COMPONENT} debug
 
-installrm: ${APPRM} install_base
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunRAM,feb	${INSTALLDIR}/${APPNAME}/!Run,feb
-	${CP} ${CPFLAGS} ${APPRM}				${INSTALLDIR}/${APPNAME}/!RunImage,ffa
+installrm: ${APPRM} install_base install_res_desktop
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunRAM,feb	${INSTALLDIR}/${APPNAME}/!Run,feb
+	@${CP} ${CPFLAGS} ${APPRM}				${INSTALLDIR}/${APPNAME}/!RunImage,ffa
 	@echo Installed ${COMPONENT} module
 
-installrom: ${APPZ}
+install_rom_dirs:
 	@-${MKDIR} ${ROMDIR}
 	@-${MKDIR} ${ROMDIR}/h
 	@-${MKDIR} ${ROMDIR}/Resources/
 	@-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}
 	@-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}/ini
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!BootROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Boot,feb
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${ROMDIR}/Resources/${COUNTRY}
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Run,feb
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/EnsureTB,feb	${ROMDIR}/Resources/${COUNTRY}
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${ROMDIR}/Resources/${COUNTRY}
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${ROMDIR}/Resources/${COUNTRY}
-	${CP} ${CPFLAGS} Resources/ini/appsrv			${ROMDIR}/Resources/${COUNTRY}/ini
-	${CP} ${CPFLAGS} Resources/ini/module			${ROMDIR}/Resources/${COUNTRY}/ini
-	${CP} ${CPFLAGS} Resources/ini/wfclient			${ROMDIR}/Resources/${COUNTRY}/ini
-	${CP} ${CPFLAGS} ${APPZ}				${ROMDIR}/aof/${COMPONENT}
-	@restool merge ${ROMDIR}/Resources/${COUNTRY}/Res,fae Resources/app/${COUNTRY}/Res_base,fae Resources/app/${COUNTRY}/Res_nc2,fae
+	@echo Installed ROM dirs
+
+installrom: ${APPZ} install_rom_dirs install_res_nc2
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!BootROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Boot,feb
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help	${ROMDIR}/Resources/${COUNTRY}
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Run,feb
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/EnsureTB,feb	${ROMDIR}/Resources/${COUNTRY}
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${ROMDIR}/Resources/${COUNTRY}
+	@${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${ROMDIR}/Resources/${COUNTRY}
+	@${CP} ${CPFLAGS} Resources/ini/appsrv			${ROMDIR}/Resources/${COUNTRY}/ini
+	@${CP} ${CPFLAGS} Resources/ini/module			${ROMDIR}/Resources/${COUNTRY}/ini
+	@${CP} ${CPFLAGS} Resources/ini/wfclient		${ROMDIR}/Resources/${COUNTRY}/ini
+	@${CP} ${CPFLAGS} ${APPZ}				${ROMDIR}/aof/${COMPONENT}
 	@echo Installed ${COMPONENT} aof in ${ROMDIR}
-	${CP} ${CPFLAGS} src/app/icaclient.h			${ROMDIR}/h/icaclient
+	@${CP} ${CPFLAGS} src/app/icaclient.h			${ROMDIR}/h/icaclient
 
 cleaninstall:
 	-${RM}	  ${APPNAME}/ini/*
@@ -248,7 +257,7 @@ cleaninstall:
 	-${RMDIR} ${APPNAME}
 	@echo Cleaned install
 
-installnc: install
+installnc: install install_res_nc2
 	@rcp -pr ${INSTALLDIR}/${APPNAME} 'bungle:/export/ftp/Custom/Apps'
 	@echo Installed ${COMPONENT} on NC
 
@@ -262,11 +271,11 @@ makepass: makepass,ff8
 
 makepass,ff8: src/app/makepass.o ${CITRIXLIB}
 	${LD} ${LDFLAGS} -o 'makepass,ff8' src/app/makepass.o ${CITRIXLIB} $(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
-	ls -l '$@'
+	@ls -l '$@'
 
 
 cleanmakepass:
-	${RM} src/app/makepass.o 'makepass,ff8'
+	@${RM} src/app/makepass.o 'makepass,ff8'
 	@echo cleaned makepass
 
 # ----------------------------------------------------------------------------------------------------

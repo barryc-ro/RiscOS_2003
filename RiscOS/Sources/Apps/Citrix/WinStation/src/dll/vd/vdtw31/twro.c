@@ -479,7 +479,7 @@ static void dump_object(HGDIOBJ obj)
     switch (obj->gdi.tag)
     {
     case OBJ_PEN:
-	TRACE((LOG_ASSERT, TT_ERROR, "%p: pen"));
+	TRACE((LOG_ASSERT, TT_ERROR, "%p: pen", obj));
 	break;
 	
     case OBJ_BITMAP:
@@ -667,7 +667,7 @@ static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palett
     LOGERR(MemFlex_Alloc((flex_ptr)&descr->area, size));
     if ((area = descr->area) != NULL)
     {
-	char buf[12];
+	char buf[16];			// must be long enough for the longest sprite name
 	area->size = size;		// area size is total size malloced including space for wastage
 
 	size = sizeof(sprite_area) +	// recalculate size to use as the actual size of the sprite
@@ -682,7 +682,7 @@ static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palett
 	sprite = first_sprite(area);
 	sprite->next = size - sizeof(sprite_area);
 
-	sprintf(buf, "%dbitmap", create_sprite_index++);
+	sprintf(buf, "%.5dbitmap", create_sprite_index++);
 	strncpy(sprite->name, buf, sizeof(sprite->name));
 
 	sprite->width = word_width - 1;
@@ -2135,7 +2135,8 @@ pp_function make_function(int rop3)
     code += build_rop3_function(code, rop3);
     code += build_end_function(code);
 
-    LOGERR(_swix(OS_SynchroniseCodeAreas, _INR(0,2), 1, code_array, code - 1)); // end is inclusive so subtract one word
+    // ignore errors on this as it may not be implemented.
+    _swix(OS_SynchroniseCodeAreas, _INR(0,2), 1, code_array, code - 1); // end is inclusive so subtract one word
 
 #ifdef DEBUG
     dump_code(code_array);

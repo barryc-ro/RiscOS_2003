@@ -503,7 +503,7 @@ void *LogErr( void *err, PCHAR pFileName, int LineNumber )
 			"message <message>\n" \
 			"set log (class|enable|twenable) x\n" \
 			"set log (file|remote) (1|0)\n" \
-			"show (da|mem)\n"
+			"show (da|mem|gdi)\n"
 
 static void cleanup(void)
 {
