@@ -53,6 +53,7 @@
 #include "TokenUtils.h"
 #include "Toolbars.h"
 #include "URLveneer.h"
+#include "Windows.h"
 
 #include "Images.h"
 
@@ -4143,6 +4144,55 @@ int image_set_token_image_position(browser_data * b, HStream * t, int x, int y)
 }
 
 /*************************************************/
+/* image_get_background_image_url()              */
+/*                                               */
+/* Returns the URL of a browser's current        */
+/* background image.                             */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the background;       */
+/*                                               */
+/*             Pointer to a buffer to take the   */
+/*             URL;                              */
+/*                                               */
+/*             Size of the buffer.               */
+/*************************************************/
+
+void image_get_background_image_url(browser_data * b, char * buffer, int size)
+{
+  int offset;
+  int old_budge;
+  int image = b ? b->background_image : -1;
+
+  if (!buffer || size < 1) return;
+
+  *buffer = 0;
+
+  if (size < 2 || image < 0 || image >= nimages) return;
+
+  /* Find the offset of the URL in the 'ddata' block */
+
+  offset = image_data_offset(b, image);
+
+  /* Lock flex */
+
+  old_budge = flex_set_budge(0);
+
+  /* Copy the URL in, ensuring termination */
+
+  strncpy(buffer, ddata + offset, size);
+  buffer[size - 1] = 0;
+
+  /* Restore flex's previous budge state */
+
+  flex_set_budge(old_budge);
+
+  /* Finished */
+
+  return;
+}
+
+/*************************************************/
 /* image_convert_to_pixels()                     */
 /*                                               */
 /* Converts a given OS unit X and Y size to      */
@@ -4382,7 +4432,7 @@ _kernel_oserror * image_export_sprite(char * path, browser_data * b, HStream * i
       erb.errnum = Utils_Error_Custom_Normal;
 
       sprintf(erb.errmess,
-              "There is no data for this image in image_export_foreground_sprite.");
+              "There is no data for this image in image_export_sprite.");
 
       return &erb;
 
@@ -4413,7 +4463,7 @@ _kernel_oserror * image_export_sprite(char * path, browser_data * b, HStream * i
 /*                                               */
 /* Returns:    The size the image would be as a  */
 /*             sprite file saved to disc, in     */
-/*             bytes.                            */
+/*             bytes (a guess only).             */
 /*************************************************/
 
 int image_sprite_size(browser_data * b, HStream * image)
@@ -4423,3 +4473,169 @@ int image_sprite_size(browser_data * b, HStream * image)
   return 4096;
 }
 
+/*************************************************/
+/* image_export_original()                       */
+/*                                               */
+/* Saves an image represented by the given token */
+/* in its original format to the given path.     */
+/*                                               */
+/* Parameters: Pointer to the path to save to;   */
+/*                                               */
+/*             Pointer to a browser_data struct  */
+/*             that owns the image;              */
+/*                                               */
+/*             Pointer to the token representing */
+/*             the image, or NULL for the page's */
+/*             background image.                 */
+/*************************************************/
+
+_kernel_oserror * image_export_original(char * path, browser_data * b, HStream * image)
+{
+  char url[Limits_URL];
+  int  i, offset;
+
+  if (!path || !*path) return NULL;
+
+  save_record_path(path);
+
+  /* Find the image number */
+
+  if (!image) i = b->background_image;
+  else        i = image_get_token_image_xref(b, image);
+
+  /* Must have image data... */
+
+  offset = image_data_offset(b, i);
+
+  if (!ddata[offset])
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "There is no URL for this image in image_export_original.");
+
+      return &erb;
+
+    #endif
+
+    return NULL;
+  }
+
+  /* Start a fetch for this URL */
+
+  strncpy(url, ddata + offset, sizeof(url));
+  url[sizeof(url) - 1] = 0;
+
+  RetError(windows_create_browser(url,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  Windows_CreateBrowser_SaveToFile));
+
+  /* Set the title to the save pathname */
+
+  {
+    char title[Limits_Title];
+
+    StrNCpy0(title, path);
+
+    /* Don't treat any errors here as fatal */
+
+    show_error_ret(window_set_title(0, last_browser->self_id, title));
+  }
+
+  /* Open the file */
+
+  last_browser->save_file = fopen(path, "wb");
+
+  if (!last_browser->save_file)
+  {
+    fetch_stop(last_browser, 0);
+    RetLastE;
+  }
+  else
+  {
+    int bytes;
+
+    /* Set the filetype to DEADDEAD, to represent an incomplete */
+    /* file (particularly good on later Filers, which display   */
+    /* a special sprite for this).                              */
+
+    _swix(OS_File,
+          _INR(0,2),
+
+          2, /* Set load address */
+          path,
+          0xdeaddead);
+
+    _swix(OS_File,
+          _INR(0,1) | _IN(3),
+
+          3, /* Set exec address */
+          path,
+          0xdeaddead);
+
+    if (last_browser->source)
+    {
+        /* Any data in the source store represents already */
+        /* fetched bits of the file. Must lock flex down   */
+        /* over the save to make sure the heap doesn't     */
+        /* shift over the call to fwrite.                  */
+
+        flex_set_budge(0);
+
+        bytes = fwrite(last_browser->source,
+                       1,
+                       flex_size((flex_ptr) &last_browser->source),
+                       last_browser->save_file);
+
+        flex_set_budge(1);
+
+      /* If we didn't transfer as much as we expected, complain */
+
+      if (bytes != flex_size((flex_ptr) &last_browser->source))
+      {
+        /* Report any errors */
+
+        fetch_stop(last_browser, 0);
+        RetLastE;
+      }
+      else
+      {
+        /* Otherwise, get rid of the data in the source store */
+        /* as it's been written to the file.                  */
+
+        flex_free((flex_ptr) &last_browser->source);
+        last_browser->source = NULL;
+      }
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* image_original_size()                         */
+/*                                               */
+/* Returns the size of a given image in its      */
+/* original format.                              */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             that owns the image;              */
+/*                                               */
+/*             Pointer to the token representing */
+/*             the image, or NULL for the page's */
+/*             background image.                 */
+/*                                               */
+/* Returns:    The size of the original image,   */
+/*             in bytes (a guess only).          */
+/*************************************************/
+
+int image_original_size(browser_data * b, HStream * image)
+{
+  /* ...And for now, we don't know this either! */
+
+  return 4096;
+}
