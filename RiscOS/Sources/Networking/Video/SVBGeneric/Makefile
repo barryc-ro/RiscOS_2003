@@ -78,7 +78,6 @@ LIBS = ${DEBUGLIB} \
 
 ROM_OBJS =	\
  o.CallOut	\
- o.Connect	\
  o.Generic	\
  o.Headers	\
  o.Module	\
@@ -100,7 +99,6 @@ ROM_OBJS =	\
 
 RAM_OBJS =	\
  oSL.CallOut	\
- oSL.Connect	\
  oSL.Generic	\
  oSL.Headers	\
  oSL.Module	\
@@ -122,7 +120,6 @@ RAM_OBJS =	\
 
 DBG_OBJS =	\
  oSLd.CallOut	\
- oSLd.Connect	\
  oSLd.Generic	\
  oSLd.Headers	\
  oSLd.Module	\

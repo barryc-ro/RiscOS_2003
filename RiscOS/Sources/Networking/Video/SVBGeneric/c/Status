@@ -34,7 +34,6 @@
 #include <VideoCtrl.h>
 
 #include "CallOut.h"
-#include "Connect.h"
 #include "Generic.h"
 #include "Headers.h"
 #include "Module.h"
@@ -56,7 +55,6 @@ static char recbuf[2048];
 static bool status_proceed_completed (session * s, bool * repeat);
 static bool status_proceed_connected (session * s, bool * repeat);
 static bool status_proceed_default   (session * s, bool * repeat);
-static bool status_proceed_dns       (session * s, bool * repeat);
 static bool status_proceed_error     (session * s, bool * repeat);
 static bool status_proceed_initial   (session * s, bool * repeat);
 static bool status_proceed_pumping   (session * s, bool * repeat);
@@ -149,16 +147,7 @@ void status_proceed(session * s)
 
       /* Error states: Various things went wrong... */
 
-      case protostate_ERROR:
-      case protostate_ERROR_DEAD:
       case protostate_ERROR_MEM:
-      case protostate_ERROR_WRITE:
-      case protostate_ERROR_READ:
-      case protostate_ERROR_CONNECTION:
-      case protostate_ERROR_NO_TOKEN:
-      case protostate_ERROR_NOT_IMPLEMENTED:
-      case protostate_ERROR_TIMEOUT:
-      case protostate_ERROR_DNS:
       case protostate_ERROR_VCPN:
       {
         if (status_proceed_error(s, &repeat)) return;
@@ -173,19 +162,7 @@ void status_proceed(session * s)
       }
       break;
 
-      /* After calling opensock (Connect.c) to kick things off, we're */
-      /* waiting for DNS lookup to complete.                          */
-
-      case protostate_DNS:
-      {
-        if (status_proceed_dns(s, &repeat)) return;
-      }
-      break;
-
-      /* DNS is complete, and we're connected. Well, almost, could still try to */
-      /* send down the socket and get ENOTCONN for a while...! At this point,   */
-      /* call any connection callback function immediately, add in a sequence   */
-      /* header, and move to a SENDING state to send the command off.           */
+      /* Various imaginary connection, send and receive processes */
 
       case protostate_CONNECTED:
       {
@@ -193,16 +170,11 @@ void status_proceed(session * s)
       }
       break;
 
-      /* Whilst we could still be in an ENOTCONN state, the state machine is way ahead */
-      /* and is will be issuing socket_write calls.                                    */
-
       case protostate_SENDING:
       {
         if (status_proceed_sending(s, &repeat)) return;
       }
       break;
-
-      /* As soon as a full command is sent, we start listening for a response */
 
       case protostate_RECEIVING:
       {
@@ -300,64 +272,6 @@ static bool status_proceed_error(session * s, bool * repeat)
 static bool status_proceed_initial(session * s, bool * repeat)
 {
   dprintf(("", "status_proceed_initial: Initial state\n"));
-
-  return false;
-}
-
-/**************************************************************/
-/* status_proceed_dns()                                       */
-/*                                                            */
-/* State machine handler for a DNS (resolving) state: "After  */
-/* calling opensock (Connect.c) to kick things off, we're     */
-/* waiting for DNS lookup to complete".                       */
-/*                                                            */
-/* Parameters: Pointer to a session structure for this state; */
-/*                                                            */
-/*             Pointer to a boolean, in which true is         */
-/*             written to go around the state table again,    */
-/*             else the contents are unaltered.               */
-/*                                                            */
-/* Returns:    True if the state table should be exitted      */
-/*             immediately, false to proceed normally.        */
-/**************************************************************/
-
-static bool status_proceed_dns(session * s, bool * repeat)
-{
-  char * port;
-
-  dprintf(("", "status_proceed_dns: DNS; recalling opensock\n"));
-
-  port = NULL;
-  if (s->url->port && *s->url->port) port = s->url->port;
-  s->sd = opensock(s->url->host, SVBGeneric_DefaultPort, port, &s->state, -1);
-
-  /* If we're still in the DNS state, set another callout. Otherwise we */
-  /* have to wait until the Internet event handler gets triggered when  */
-  /* the socket gets connected.                                         */
-
-  if (s->sd < 0 || s->state == protostate_DNS)
-  {
-    unsigned now = utils_read_time();
-
-    dprintf(("", "status_proceed_dns: Still in DNS state / sd < 0\n"));
-
-    /* Check timeout */
-
-    if (utils_time_difference(s->last, now) > Headers_Timeout_General)
-    {
-      dprintf(("", "status_proceed_dns: DNS timeout\n"));
-
-      s->state = protostate_ERROR_TIMEOUT;
-      *repeat  = true;
-    }
-    else if (s->callout_set == 0)
-    {
-      dprintf(("", "status_proceed_dns: Setting a 50cs callout for DNS lookup\n"));
-
-      s->callout_set = 1;
-      timeout(status_proceed_on_callout, s, Session_State_Timer);
-    }
-  }
 
   return false;
 }
@@ -549,9 +463,7 @@ static bool status_proceed_receiving(session * s, bool * repeat)
         s->server_session = Strdup(h->value);
         if (store != NULL) *store = ';';
 
-        s->server_timeout = Session_Timeout_Default * 50;
-
-        dprintf(("", "status_proceed_receving: New session '%s', timeout %d\n", s->server_session ? s->server_session : "<out of memory>", s->server_timeout));
+        dprintf(("", "status_proceed_receving: New session '%s'\n", s->server_session ? s->server_session : "<out of memory>"));
       }
     }
 
@@ -691,48 +603,9 @@ _kernel_oserror * status_check_error(session * s)
   {
     /* Error states: Various things went wrong... */
 
-    case protostate_ERROR:
-    case protostate_ERROR_DEAD:
-    case protostate_ERROR_CONNECTION:
-    case protostate_ERROR_NO_TOKEN:
-    case protostate_ERROR_NOT_IMPLEMENTED:
-    {
-      e = make_error(svbgeneric_ERROR_CONNECT_GENERAL, 0);
-    }
-    break;
-
-    case protostate_ERROR_WRITE:
-    {
-      e = make_error(svbgeneric_ERROR_CONNECT_WRITE, 0);
-    }
-    break;
-
-    case protostate_ERROR_READ:
-    {
-      e = make_error(svbgeneric_ERROR_CONNECT_READ, 0);
-    }
-    break;
-
     case protostate_ERROR_MEM:
     {
       e = make_error(svbgeneric_ERROR_MEMORY_EXHAUSTED, 0);
-    }
-    break;
-
-    case protostate_ERROR_TIMEOUT:
-    {
-      e = make_error(svbgeneric_ERROR_CONNECT_TIMEOUT, 0);
-    }
-    break;
-
-    case protostate_ERROR_DNS:
-    {
-      char * host;
-
-      if (s->url && s->url->host && *s->url->host) host = s->url->host;
-      else                                         host = "<?>";
-
-      e = make_error(svbgeneric_ERROR_CONNECT_DNS, 1, host);
     }
     break;
 
