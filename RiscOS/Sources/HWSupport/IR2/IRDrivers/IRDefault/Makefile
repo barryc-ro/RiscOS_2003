@@ -28,7 +28,7 @@ CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT
 #DFLAGS  = -DDEBUG=3
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-INCLUDES= -IC:
+INCLUDES= -IC: -IINetInc: -IINetInc:^.^.libs
 
 #
 # Libraries
@@ -98,6 +98,7 @@ rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} dirs
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS} dirs
+	${MKDIR} aof
 	${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
@@ -120,13 +121,12 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.driver
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.utils
-o.module:	h.ir_api
-o.module:	h.module
-o.module:	h.driver
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
 o.driver:	c.driver
 o.driver:	C:h.kernel
 o.driver:	C:h.swis
@@ -134,9 +134,3 @@ o.driver:	h.utils
 o.driver:	h.ir_api
 o.driver:	h.driver
 o.driver:	h.veneers
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers

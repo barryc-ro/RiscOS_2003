@@ -116,6 +116,12 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.keyboard
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
 o.driver:	c.driver
 o.driver:	C:h.kernel
 o.driver:	C:h.swis
@@ -125,12 +131,6 @@ o.driver:	h.veneers
 o.driver:	h.irqs
 o.driver:	h.keyboard
 o.driver:	h.module
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
 o.keyboard:	c.keyboard
 o.keyboard:	C:h.kernel
 o.keyboard:	C:h.swis
