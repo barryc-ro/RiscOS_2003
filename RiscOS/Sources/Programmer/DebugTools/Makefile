@@ -46,6 +46,7 @@ all: ${TARGET}
 	@echo ${COMPONENT}: disc module built
 
 install: ${TARGET} dirs
+	${MKDIR} ${INSTDIR}
 	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: disc module installed
 
