@@ -180,8 +180,8 @@ static void check_pending_scroll(fe_view v);
 
 static int fe_check_resize(fe_view start, int x, int y, wimp_box *box, int *handle, fe_view *resizing_v);
 static void fe_update_page_info(fe_view v);
-
-extern void fe_keyboard_close(void);
+static void fe_force_fit(fe_view v, BOOL force);
+static void fe_keyboard_close(void);
 
 /* -------------------------------------------------------------------------- */
 
@@ -237,6 +237,9 @@ wimp_box on_screen_kbd_pos;	/* position in screen coordinates of OSK window */
 static int *keywatch_pollword = 0;		/* address of keywatch module pollword */
 static int keywatch_last_key_val = 0;		/* value read from pollword on last wimp key event */
 static BOOL keywatch_from_handset = FALSE;	/* was lasy key press from a handset */
+
+os_error *pending_error = NULL;
+static char *pending_error_retry = NULL;
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -648,8 +651,11 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     
     if (doc == NULL)    /* lookup failed re visit the current one   */
     {
+#if 1
+ 	frontend_complain(makeerrorf(ERR_CANT_GET_URL, strsafe(url)));
+#else
  	frontend_complain(makeerrorf(ERR_CANT_GET_URL, strsafe(title)));
-
+#endif
 	if (v->displaying)
 	{
 	    char *durl;
@@ -844,6 +850,15 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    v->fast_load = vals[8].value != 0;
 	    
 	    mm_free(ncmode);
+	}
+	else
+	{
+	    /* reset all values if NCBROWSERMODE header not set */
+	    v->scrolling = fe_scrolling_AUTO;
+	    v->fast_load = FALSE;
+	    v->dont_add_to_history = FALSE;
+	    v->transient_position = fe_position_UNSET;
+	    keyboard_state = fe_keyboard_ONLINE;
 	}
 
 	if ((bmode = backend_check_meta(doc, "BROWSERMODE")) != NULL)
@@ -1182,8 +1197,7 @@ static os_error *fe__print(fe_view v, int size)
     os_error *e = NULL;
     int old_size = -1;
 
-    s = getenv("Printer$");
-    if (s == NULL || s[0] == 0)
+    if (_swix(PDriver_Info, 0) != NULL)
         return makeerror(ERR_NO_PRINTER);
 
     if (size != fe_print_DEFAULT)
@@ -1257,6 +1271,25 @@ os_error *fe_print(fe_view v, int size)
     {
 	e = fe__print(v, size);
     }
+
+    /* translate errors */
+    if (e)
+    {
+	if (e->errnum != 0x5C9 && e->errnum != ANTWEB_ERROR_BASE + ERR_NO_PRINTER)
+	{
+	    char buf[128];
+
+	    sprintf(buf, "ncint:printpage?size=");
+	    strcat(buf, size == fe_print_LEGAL ? "legal" : "letter");
+	    strcat(buf, "&source=");
+	    fe_frame_specifier_create(v, buf, sizeof(buf));
+
+	    pending_error_retry = strdup(buf);
+
+	    e = makeerror(ERR_PRINT_FAILED);
+	}
+    }
+    
     return e;
 }
 
@@ -1450,9 +1483,16 @@ int fe_check_download_finished(fe_view v)
  	    feutils_resize_window(&top->w, &top->margin, &top->box, &top->x_scroll_bar, &top->y_scroll_bar, 0, 0, fe_scrolling_NO, fe_bg_colour(top));
 
 	    if (changed)
+	    {
 		backend_reset_width(top->displaying, 0);
 
-	    frontend_view_redraw(top, NULL);
+		frontend_view_redraw(top, NULL); /* put inside because of ncint:select */
+	    }
+	}
+	else
+	{
+	    if (config_display_scale_fit)
+		fe_force_fit(top, TRUE);
 	}
     }
 
@@ -2117,9 +2157,12 @@ static void fe_force_fit(fe_view v, BOOL force)
 
 		STBDBG(("fe_force_fit: v %p force %d scaling %d %%\n", v, force, scale_value));
     
-		backend_doc_set_scaling(v->displaying, scale_value);
-		backend_doc_reformat(v->displaying);
-		fe_refresh_window(v->w, NULL);
+		if (!force || scale_value < 100)
+		{
+		    backend_doc_set_scaling(v->displaying, scale_value);
+		    backend_doc_reformat(v->displaying);
+		    fe_refresh_window(v->w, NULL);
+		}
 	    }
 	}	    
 	while (v);
@@ -2132,9 +2175,12 @@ static void fe_force_fit(fe_view v, BOOL force)
 
 	STBDBG(("fe_force_fit: v %p force %d scaling %d %%\n", v, force, scale_value));
     
-	backend_doc_set_scaling(v->displaying, scale_value);
-	backend_doc_reformat(v->displaying);
-	fe_refresh_window(v->w, NULL);
+	if (!force || scale_value < 100)
+	{
+	    backend_doc_set_scaling(v->displaying, scale_value);
+	    backend_doc_reformat(v->displaying);
+	    fe_refresh_window(v->w, NULL);
+	}
     }
 
     visdelay_end();
@@ -2181,10 +2227,12 @@ os_error *fe_paste_url(fe_view v)
         return NULL;
 
     e = NULL;
-    if (v->dont_add_to_history)
-        url = v->hist_at ? v->hist_at->url : NULL;
-    else
-        e = backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
+    v = fe_find_top_nopopup(v);
+
+/*     if (v->dont_add_to_history) */
+/*         url = v->hist_at ? v->hist_at->url : NULL; */
+/*     else */
+    e = backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
 
     if (!e && url)
     {
@@ -3868,7 +3916,7 @@ static void fe_keyboard__open(void)
     }
 }
 
-void fe_keyboard_close(void)
+static void fe_keyboard_close(void)
 {
     if (on_screen_kbd)
     {
@@ -4813,6 +4861,31 @@ void fe_event_process(void)
 	    }
             break;
     }
+
+    if (pending_error)
+    {
+	char buf[128];
+	int n;
+
+	n = sprintf(buf, "ncint:openpanel?name=error&error=E%x&message=", pending_error->errnum);
+	n += sprintf(buf+n, "%s", pending_error->errmess);
+	if (pending_error_retry)
+	{
+	    n += sprintf(buf+n, "&again=");
+	    url_escape_cat(buf+n, pending_error_retry, sizeof(buf)-n);
+	}
+
+	frontend_open_url(buf, NULL, TARGET_ERROR, 0, 0);
+
+	/* clear error flag */
+	pending_error = NULL;
+    }
+
+    if (pending_error_retry)
+    {
+	mm_free(pending_error_retry);
+	pending_error_retry = NULL;
+    }
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -5032,7 +5105,7 @@ static BOOL fe_initialise(void)
 #endif
     atexit(&fe_tidyup);
 
-    gbf_flags &= ~(GBF_FVPR | GBF_GUESS_ELEMENTS | GBF_TABLES_UNEXPECTED | GBF_NEW_FORMATTER | GBF_AUTOFIT);
+    gbf_flags &= ~(GBF_FVPR | GBF_GUESS_ELEMENTS | GBF_TABLES_UNEXPECTED);
     gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; /* this needs to not be defined to build a japanese version */
     
     if ((s = getenv("NCFresco$GBF")) != NULL)

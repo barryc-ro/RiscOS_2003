@@ -181,6 +181,7 @@ struct pcp_cell_s
     int leftmost;		/* lowest possible position of end of cell */
     int rightmost;		/* highest possible position of end of cell */
     unsigned int flags;		/* bitmap of constraints satisfied */
+    rid_table_cell *table_cell;	/* cell in table  */
     int width[N_COLSPAN_WIDTHS]; /* widths of this column on its own */
 };
 
@@ -193,27 +194,44 @@ struct pcp_group_s
     int istart;			/* index of start cell */
     int iend;			/* index of end cell (>istart) */
     unsigned int flags;		/* bitmap of constraints satisfied */
+    rid_table_cell *table_cell;	/* cell in table  */
     int width[N_COLSPAN_WIDTHS]; /* widths of this group */
 };
 
 typedef struct pcp_group_s pcp_group_t, *pcp_group;
 
-/* Have contribtions of this type - maybe from a group */
+/* Have contribtions of this type */
 #define colspan_flag_ABSOLUTE		0x80000000
 #define colspan_flag_PERCENT		0x40000000
 #define colspan_flag_RELATIVE		0x20000000
 
-/* This item yields a contribution of this type */
-#define colspan_flag_ABSOLUTE_THIS	0x10000000
-#define colspan_flag_PERCENT_THIS	0x08000000
-#define colspan_flag_RELATIVE_THIS	0x04000000
+/* This column yields a contribution of this type */
+#define colspan_flag_ABSOLUTE_COL	0x10000000
+#define colspan_flag_PERCENT_COL	0x08000000
+#define colspan_flag_RELATIVE_COL	0x04000000
+
+/* This group yields a contribution of this type */
+#define colspan_flag_ABSOLUTE_GROUP	0x02000000
+#define colspan_flag_PERCENT_GROUP	0x01000000
+#define colspan_flag_RELATIVE_GROUP	0x00800000
+
+/* Constraints for this column have been "satisified" */
+#define colspan_flag_FINISHED		0x00400000
+
+/* This column is in use */
+#define colspan_flag_USED		0x00200000
+
+/* Markers to say which constrains must be withdrawn */
+#define colspan_flag_STOMP_ABSOLUTE	0x00100000
+#define colspan_flag_STOMP_PERCENT	0x00080000
+#define colspan_flag_STOMP_RELATIVE	0x00040000
 
 
-#define colspan_flag_FINISHED		0x02000000
-#define colspan_flag_USED		0x01000000
-#define colspan_flag_COLUMN_USED	0x00800000
+/*#define colspan_flag_COLUMN_USED	0x00100000*/
 
 /*
+
+  ** IMPORTANT ** IMPORTANT ** IMPORTANT ** IMPORTANT ** IMPORTANT **
 
   For each width_array_e from FIRST_MIN...LAST_MAX, (1 << X) is a flag
   in the flags field that says whether we have satisfied that level of
@@ -308,7 +326,46 @@ extern void colspan_column_and_eql_downwards(rid_table_item *table,
 					     unsigned int EQL,
 					     int to_share);
 
+extern void colspan_column_and_eql_halve(rid_table_item *table,
+					     BOOL horiz, 
+					     width_array_e slot,
+					     unsigned int AND,
+					     unsigned int EQL);
+
+extern void colspan_column_and_eql_double(rid_table_item *table,
+					     BOOL horiz, 
+					     width_array_e slot,
+					     unsigned int AND,
+					     unsigned int EQL);
+
+extern void colspan_column_and_eql_scale(rid_table_item *table,
+					 BOOL horiz, 
+					 width_array_e slot,
+					 unsigned int AND,
+					 unsigned int EQL,
+					 double scale);
+
+extern int colspan_sum_columns(rid_table_item *table,
+				BOOL horiz, 
+				width_array_e slot);
+
+
+extern void colspan_column_and_eql_bitset(rid_table_item *table, 
+					BOOL horiz, 
+					width_array_e slot,
+					unsigned int AND,
+					unsigned int EQL,
+					unsigned int SET);
+
+
 /*****************************************************************************/
+
+extern void colspan_all_and_eql_bitclr(rid_table_item *table, 
+					BOOL horiz, 
+					width_array_e slot,
+					unsigned int AND,
+					unsigned int EQL,
+					unsigned int CLR);
 
 extern void colspan_all_and_eql_lt_copy(rid_table_item *table, 
 					BOOL horiz, 

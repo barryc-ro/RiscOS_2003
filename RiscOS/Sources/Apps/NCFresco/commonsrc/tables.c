@@ -717,12 +717,12 @@ static void add_retro_col(rid_table_item *table)
 	goto done;
     }
 
-    TABDBGN(("Replicating any necessary cells\n"));
+    TABDBGN(("Replicating any necessary cells (%d,%d)\n", table->cells.x, table->cells.y));
 
     for (y = 0; y < table->cells.y; y++)
     {
 	cell = * CELLFOR(table, x - 1, y);
-	if (cell != NULL && cell->flags & rid_cf_INF_HORIZ)
+	if (cell != NULL && (cell->flags & rid_cf_INF_HORIZ) != 0 )
 	{
 	    int  t;
 	    * CELLFOR(table, x, y) = cell;
@@ -870,7 +870,7 @@ static void add_new_row(rid_table_item *table)
 
     TABDBGN(("Performing any spreading to row %d from row %d\n", y, y-1));
 
-    for (did_repl = 0, x = 0; x < table->cells.x; x++)
+    for (did_repl = 0, x = table->cells.x - 1; x >= 0; x--)
     {
 	cell = * CELLFOR(table, x, y - 1);
 	if (cell == NULL || (cell->flags & rid_cf_COMPLETE) != 0 )
@@ -1771,6 +1771,7 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     if ( (attr = &attributes->value[HTML_TABLE_ID])->type == value_string)
 	tab->id = stringdup(attr->u.s);
     tab->userwidth = attributes->value[HTML_TABLE_WIDTH];
+    tab->userheight = attributes->value[HTML_TABLE_HEIGHT];
 
     switch (tab->userwidth.type)
     {
@@ -2830,7 +2831,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     switch ( (attr = &attributes->value[HTML_TD_WIDTH])->type )
     {
     case value_absunit:
-	/*cell->flags |= rid_cf_ABSOLUTE;*/
+	cell->flags |= rid_cf_ABSOLUTE;
 	cell->userwidth = *attr;
 	break;
 #if 0
@@ -2838,12 +2839,12 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	/* No specification requires this and no other implementation */
 	/* does relative widths on cells and it's not easy, so don't */
 	/* permit them - pretend they just never happened */
-	/*cell->flags |= rid_cf_RELATIVE;*/
+	cell->flags |= rid_cf_RELATIVE;
 	cell->userwidth = *attr;
 	break;
 #endif
     case value_pcunit:
-	/*cell->flags |= rid_cf_PERCENT;*/
+	cell->flags |= rid_cf_PERCENT;
 	cell->userwidth = *attr;
 	break;
 
@@ -2873,6 +2874,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     {
 	if ( (cell->span.x = attr->u.i) < 0 )
 	    cell->span.x = 1;
+	TABDBG(("start_tdth: user colspan %d\n", cell->span.x));
     }
     else
 	cell->span.x = 1;
@@ -2996,10 +2998,17 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     if (cell->flags & rid_cf_COMPLETE)
 	goto done;
 
+#if NEWGROW
+    if (cell->swant.x == 1)
+    {       /* Only vertical growth - done in add_row() */
+	goto done;
+    }
+#else
     if (cell->span.x == 1)
     {       /* Only vertical growth - done in add_row() */
 	goto done;
     }
+#endif
 
     /* Something about the cell's shape requires extra work */
 
@@ -3121,11 +3130,12 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     /* Grow col(s) to fit cell, if possible */
     /* Have cell->span.x > 1 and not fixed columns. */
 
-    TABDBGN(("Growing to meet span of %d\n", cell->span.x));
 
 #if NEWGROW
+    TABDBGN(("Growing to meet span of %d\n", cell->swant.x));
     for (x = 1; x < cell->swant.x; x++)
 #else
+    TABDBGN(("Growing to meet span of %d\n", cell->span.x));
     for (x = 1; x < cell->span.x; x++)
 #endif
     {       /* Add another column if we need it */
@@ -3135,6 +3145,9 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    if (table->state == tabstate_BAD)
 		goto done;
 	}
+#if NEWGROW
+	cell->span.x++;
+#endif
 	/* See if would overlap with a previous cell */
 	cellp = CELLFOR(table, cell->cell.x + x, table->scaff.y);
 

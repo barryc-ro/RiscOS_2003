@@ -594,10 +594,16 @@ void fe_dispose_view(fe_view v)
     if (v->threaded)
     {
 	v->delete_pending++;
+	STBDBG(("fe_dispose_view: threaded pending %d\n", v->delete_pending));
 	return;
     }
     else if (--v->delete_pending > 0)
+    {
+	STBDBG(("fe_dispose_view: unthreading pending %d\n", v->delete_pending));
 	return;
+    }
+
+    STBDBG(("fe_dispose_view: disposing\n"));
 
     fe_internal_deleting_view(v);
 

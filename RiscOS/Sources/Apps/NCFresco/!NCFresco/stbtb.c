@@ -624,7 +624,6 @@ static void tb_bar_set_highlight(tb_bar_info *tbi, int val, BOOL is_index)
     }
 }
 
-#if 0
 static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
 {
     int i;
@@ -634,7 +633,6 @@ static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
 	    return i;
     return -1;
 }
-#endif
 
 static BOOL havefocus(tb_bar_info *tbi)
 {
@@ -1179,6 +1177,7 @@ void tb_status_button(int cmp, int active)
 	    toolactionpress(tbi->object_handle, cmp, FALSE);
 	    break;
 	case tb_status_button_PRESSED:
+	    tb_bar_set_highlight(tbi, tb_bar_cmp_to_index(tbi, cmp), TRUE);
 	    toolactionpress(tbi->object_handle, cmp, TRUE);
 	    break;
 	}

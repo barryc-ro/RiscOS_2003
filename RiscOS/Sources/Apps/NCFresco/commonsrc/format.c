@@ -5,6 +5,7 @@
  * Music used:
  *
  * Terrorvision: How to make friends and influence people.
+ * The Offspring: Ixnay on the Hombre
 
  streams should end with <br clear=all> to ensure floating images
  properly finished.
@@ -143,13 +144,13 @@ static void basic_size_stream(antweb_doc *doc,
 
     FMTDBGN(("basic_size_stream: now doing raw_minwidth\n"));
 
-    stream->fwidth = INT_MAX;
+    stream->fwidth = 1000000000;
     format_stream(doc, rh, stream, MUST);
     stream->width_info.minwidth = stream->widest;
 
     FMTDBGN(("basic_size_stream: now doing raw_maxwidth\n"));
 
-    stream->fwidth = INT_MAX;
+    stream->fwidth = 1000000000;
     format_stream(doc, rh, stream, DONT);
     stream->width_info.maxwidth = stream->widest;
 }
@@ -162,15 +163,18 @@ static int pct_raw_recalc(rid_table_item *table, BOOL horiz)
 
     /* Should be mergable - need colspan_all_and_neql_set() */
     colspan_all_and_eql_set(table, horiz, PCT_RAW,
-			    colspan_flag_PERCENT_THIS, 0, 0);
+			    colspan_flag_PERCENT_COL, 0, 0);
 
     /* Distribute percentages to cater for cells spanning multiple
        underlying grid entries. Find total percentage specified by
        user. Having done this, we operate only with the column header
        information. */
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
 
+    /* Clear out unused entries */
+    colspan_column_and_eql_set(table, horiz, PCT_RAW,
+			       colspan_flag_PERCENT, 0, 0);
     width =  colspan_algorithm(table, PCT_RAW, horiz);
 
     FMTDBG(("After colspan\n"));
@@ -255,9 +259,9 @@ static void calc_abs_minwidth(antweb_doc *doc,
     int width;
     int *widths = (horiz ? table->hwidth : table->vwidth);
 
-    /* Set unused column headers to zero */
+    /* Set unused entries to zero */
     colspan_all_and_eql_set(table, horiz, ABS_MIN,
-			    colspan_flag_ABSOLUTE_THIS, 0, 0);
+			    colspan_flag_ABSOLUTE_COL | colspan_flag_ABSOLUTE_GROUP, 0, 0);
 
     /* Use RAW_MIN values for used locations that do not have an ABS
        contribution. */
@@ -268,15 +272,21 @@ static void calc_abs_minwidth(antweb_doc *doc,
 
     /* For all used items with an ABS contribution, ensure it is at
        least as large as the RAW_MIN value. */
+    colspan_column_and_eql_lt_copy(table, horiz, ABS_MIN,
+				colspan_flag_ABSOLUTE_COL,
+				colspan_flag_ABSOLUTE_COL,
+				RAW_MIN);
+
     colspan_all_and_eql_lt_copy(table, horiz, ABS_MIN,
-				colspan_flag_ABSOLUTE,
-				colspan_flag_ABSOLUTE,
+				colspan_flag_ABSOLUTE_GROUP,
+				colspan_flag_ABSOLUTE_GROUP,
 				RAW_MIN);
 
     /* and apply colspan algorithm */
     width = colspan_algorithm(table, ABS_MIN, horiz);
 
-    /* Record widths for percentages to work from */
+    /* Record widths for percentages to work from - use just the
+       column headers! */
     colspan_column_init_from_leftmost(table, ABS_MIN, horiz);
 
     widths[ABS_MIN] = width + TABLE_OUTSIDE_BIAS(table);
@@ -315,7 +325,7 @@ static void calc_abs_maxwidth(antweb_doc *doc,
 
     /* Set unused column headers to zero */
     colspan_all_and_eql_set(table, horiz, ABS_MAX,
-			    colspan_flag_ABSOLUTE_THIS, 0, 0);
+			    colspan_flag_ABSOLUTE_COL | colspan_flag_ABSOLUTE_GROUP, 0, 0);
 
     /* Use RAW_MAX values for used locations that do not have an ABS
        contribution. */
@@ -326,18 +336,22 @@ static void calc_abs_maxwidth(antweb_doc *doc,
 
     /* For all used items with an ABS contribution, ensure it is at
        least as large as the RAW_MIN value. */
+    colspan_column_and_eql_lt_copy(table, horiz, ABS_MAX,
+				   colspan_flag_ABSOLUTE_COL,
+				   colspan_flag_ABSOLUTE_COL,
+				   RAW_MIN);
+    
     colspan_all_and_eql_lt_copy(table, horiz, ABS_MAX,
-				colspan_flag_ABSOLUTE,
-				colspan_flag_ABSOLUTE,
+				colspan_flag_ABSOLUTE_GROUP,
+				colspan_flag_ABSOLUTE_GROUP,
 				RAW_MIN);
 
     width = colspan_algorithm(table, ABS_MAX, horiz);
-    width += TABLE_OUTSIDE_BIAS(table);
 
     /* Record widths for percentages to work from */
     colspan_column_init_from_leftmost(table, ABS_MAX, horiz);
 
-    widths [ABS_MAX] = width;
+    widths [ABS_MAX] = width + TABLE_OUTSIDE_BIAS(table);
 
     FMTDBG(("calc_abs_maxwidth: %d\n", widths[ABS_MAX]));
 }
@@ -370,13 +384,13 @@ static int largest_implied_table_width(rid_table_item *table,
     const int max = (horiz ? table->cells.x : table->cells.y);
     int *widths = (horiz ? table->hwidth : table->vwidth);
     const int pct_used = widths[PCT_RAW];
-    int left;
+    /*int left;*/
     int x;
     int width_non_pct = 0;
     int widest = 0;
-    int N;
+    /*int N;*/
 
-    FMTDBG(("largest_implied_table_width(%p %s %s): %d%% used\n",
+    FMTDBGN(("largest_implied_table_width(%p %s %s): %d%% used\n",
 	    table,
 	    WIDTH_NAMES[slot],
 	    HORIZVERT(horiz),
@@ -385,7 +399,7 @@ static int largest_implied_table_width(rid_table_item *table,
     ASSERT( widths[PCT_RAW] != NOTINIT );
     ASSERT(slot == PCT_MIN || slot == PCT_MAX);
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
 
 
     if (pct_used == 0)
@@ -430,7 +444,7 @@ static int largest_implied_table_width(rid_table_item *table,
 
 	FMTDBG(("largest_implied_table_width: widest %d, width_non_pct %d\n",
 		widest, width_non_pct));
-
+#if 0
 	/* For each column with a percentage, we need to scale the
            minwidth value according to our newly calculated narrowest
            value. Be wary of small integer problems. 970424: Bitten!  */
@@ -497,6 +511,7 @@ static int largest_implied_table_width(rid_table_item *table,
 #endif
 	    }
 	}
+#endif
 
 	/*widest += TABLE_OUTSIDE_BIAS(table);*/
 
@@ -509,7 +524,7 @@ static int largest_implied_table_width(rid_table_item *table,
 
     FMTDBG(("largest_implied_table_width: %d\n", widest));
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
 
 
     return widest;
@@ -536,6 +551,7 @@ static int largest_implied_table_width(rid_table_item *table,
 
  */
 
+#if 0
 static int tiresome_pct_forced_change(rid_table_item *table, BOOL horiz, int bias, int target)
 {
     const width_array_e max = HORIZMAX(table, horiz);
@@ -579,7 +595,7 @@ static int tiresome_pct_forced_change(rid_table_item *table, BOOL horiz, int bia
 
     return total;
 }
-
+#endif
 /*****************************************************************************
 
   Normalise the percentage specifications.
@@ -637,10 +653,42 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     int *master = HORIZCELLS(table,horiz);
     int N;
 
-    FMTDBG(("normalise_percentages(%p %s): starting\n",
+    FMTDBGN(("normalise_percentages(%p %s): starting\n",
 	    table, HORIZVERT(horiz)));
 
-    total = pct_raw_recalc(table, horiz);
+    /* Generate a division of the groups into columns (L/R)*/
+    colspan_algorithm(table, PCT_RAW, horiz);
+
+    /* Gets widths based on leftmost data set */
+    colspan_column_init_from_leftmost(table, PCT_RAW, horiz);
+
+    /* Zero contributions from percent groups */
+    colspan_all_and_eql_set(table, horiz, PCT_RAW,
+			    colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP, 0);
+
+    /* Mark all column headers with percentages as having a direct contribution */
+    colspan_column_and_eql_bitset(table, horiz, PCT_RAW,
+				  colspan_flag_PERCENT, colspan_flag_PERCENT, colspan_flag_PERCENT_COL);
+
+    /* Clear the flags for percent groups */
+    colspan_all_and_eql_bitclr(table, horiz, PCT_RAW,
+			       colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP);
+
+    /* Zero contributions that are not from percent columns */
+    colspan_all_and_eql_set(table, horiz, PCT_RAW,
+			    colspan_flag_PERCENT_COL, 0, 0);
+
+
+    /* At this point, all the percent group values are zero and they
+       have had their flags removed. An arbitary (leftmost in this
+       case) crystallisation of the group has been chosen and
+       reflected into the column headers covered. All column with
+       percent contributions now flag themselves as being a percent
+       constraint, even if initially they were only covered by a
+       percent group. All entries that are not column percents have
+       been zeroed. */
+
+    total = colspan_sum_columns(table, horiz, PCT_RAW);
 
     if (total == 0)
     {
@@ -649,7 +697,7 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     }
     else
     {
-	colspan_trace_cells(table, horiz);
+	/*colspan_trace_cells(table, horiz);*/
 
 	/* Are there any cells that do not have some percentage
 	   contribution? */
@@ -677,29 +725,29 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 		/* Be real crude - just halve so 50% not accounted for by
 		   user percentages. If this isn't what they intended,
 		   TOUGH. */
-		FMTDBG(("100%% specified but other columns to account for!\n"));
-		colspan_all_and_eql_halve(table, horiz, PCT_RAW,
-					  colspan_flag_PERCENT | colspan_flag_USED,
-					  colspan_flag_PERCENT | colspan_flag_USED);
-		total = pct_raw_recalc(table, horiz);
-		FMTDBG(("100%% reduced to %d%% through a halving operation\n", total));
+		FMTDBGN(("100%% specified but other columns to account for!\n"));
+		colspan_column_and_eql_halve(table, horiz, PCT_RAW,
+					     colspan_flag_PERCENT,
+					     colspan_flag_PERCENT);
+		total = colspan_sum_columns(table, horiz, PCT_RAW);
+		FMTDBGN(("100%% reduced to %d%% through a halving operation\n", total));
 		/* Should be 50%, but might get rounding artifacts? */
 	    }
 	    else if (total > 100)
 	    {
-		FMTDBG(("%d%% specified but other columns to account for!\n", total));
+		FMTDBGN(("%d%% specified but other columns to account for!\n", total));
 		while (total >= 100)
 		{
-		    colspan_all_and_eql_halve(table, horiz, PCT_RAW,
-					      colspan_flag_PERCENT | colspan_flag_USED,
-					      colspan_flag_PERCENT | colspan_flag_USED);
-		    total = pct_raw_recalc(table, horiz);
-		    FMTDBG(("Reduced to %d%%\n", total));
+		    colspan_column_and_eql_halve(table, horiz, PCT_RAW,
+					      colspan_flag_PERCENT,
+					      colspan_flag_PERCENT);
+		    total = colspan_sum_columns(table, horiz, PCT_RAW);
+		    FMTDBGN(("Reduced to %d%%\n", total));
 		}
 	    }
 	    /* else total < 100, which is just fine */
 
-	    FMTDBG(("normalise_percentages: non-%%age cells (now) account for %d%%\n", total));
+	    FMTDBGN(("normalise_percentages: non-%%age cells (now) account for %d%%\n", total));
 	}
 	else if (total != 100)
 	{
@@ -708,39 +756,36 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 	    /* All entries have percentage and not 100%, so need to scale
 	       until we do have 100% in total. */
 
-
-
 	    while (total <= 50)
 	    {
-		colspan_all_and_eql_double(table, horiz, PCT_RAW,
-					   colspan_flag_PERCENT | colspan_flag_USED,
-					   colspan_flag_PERCENT | colspan_flag_USED);
-		total = pct_raw_recalc(table, horiz);
+		colspan_column_and_eql_double(table, horiz, PCT_RAW,
+					   colspan_flag_PERCENT,
+					   colspan_flag_PERCENT);
+		total = colspan_sum_columns(table, horiz, PCT_RAW);
 	    }
 
 	    while (total > 100)
 	    {
-		colspan_all_and_eql_halve(table, horiz, PCT_RAW,
-					  colspan_flag_PERCENT | colspan_flag_USED,
-					  colspan_flag_PERCENT | colspan_flag_USED);
-		total = pct_raw_recalc(table, horiz);
+		colspan_column_and_eql_halve(table, horiz, PCT_RAW,
+					  colspan_flag_PERCENT,
+					  colspan_flag_PERCENT);
+		total = colspan_sum_columns(table, horiz, PCT_RAW);
 	    }
 
 	    ASSERT(total != 0);
 	    scale = 100.0 / total;
 
-	    FMTDBG(("Chosen scaling factor of %g for total specified %d\n", scale, total));
+	    FMTDBGN(("Chosen scaling factor of %g for total specified %d\n", scale, total));
 
-	    colspan_all_and_eql_scale(table, horiz, PCT_RAW,
-				      colspan_flag_PERCENT | colspan_flag_USED,
-				      colspan_flag_PERCENT | colspan_flag_USED,
+	    colspan_column_and_eql_scale(table, horiz, PCT_RAW,
+				      colspan_flag_PERCENT,
+				      colspan_flag_PERCENT,
 				      scale);
-	    total = pct_raw_recalc(table, horiz);
+	    total = colspan_sum_columns(table, horiz, PCT_RAW);
 
-	    FMTDBG(("Rescaled to a total of %d%%\n", total));
+	    FMTDBGN(("Rescaled to a total of %d%%\n", total));
 
 	    ASSERT(total != 0);
-
 
 	    /* Simply tweaking one column header might not be enough
 	       to decrease sufficient constraints to lower the table
@@ -755,22 +800,18 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 	    if (total < 100)
 	    {
 		colspan_column_and_eql_upwards(table, horiz, PCT_RAW,
-					       colspan_flag_PERCENT | colspan_flag_USED,
-					       colspan_flag_PERCENT | colspan_flag_USED,
+					       colspan_flag_PERCENT,
+					       colspan_flag_PERCENT,
 					       100 - total);
-		total = pct_raw_recalc(table, horiz);
-		while (total < 100)
-		    total = tiresome_pct_forced_change(table, horiz, 1, total+1);
+		total = colspan_sum_columns(table, horiz, PCT_RAW);
 	    }
 	    else if (total > 100)
 	    {
 		colspan_column_and_eql_downwards(table, horiz, PCT_RAW,
-						 colspan_flag_PERCENT | colspan_flag_USED,
-						 colspan_flag_PERCENT | colspan_flag_USED,
+						 colspan_flag_PERCENT,
+						 colspan_flag_PERCENT,
 						 total - 100);
-		total = pct_raw_recalc(table, horiz);
-		while (total > 100)
-		    total = tiresome_pct_forced_change(table, horiz, -1, total-1);
+		total = colspan_sum_columns(table, horiz, PCT_RAW);
 	    }
 
 	    ASSERT(total == 100);
@@ -791,15 +832,9 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 	}
 
 	colspan_trace_cells(table, horiz);
-
-
     }
 
-
     master[PCT_RAW] = total;
-
-    /* Let's have a peek at what we ended up with. */
-    /*colspan_trace_cells(table, horiz);*/
 
     /* We have now chosen some basic percentages for each column. We
        are not going to change our mind over these values
@@ -866,14 +901,14 @@ static void calc_pct_minwidth(antweb_doc *doc,
     */
 
 {
-    int x, pct_used;
+    int width;
     int *widths = HORIZCELLS(table,horiz);
 
     FMTDBG(("calc_pct_minwidth(%p %p %p %s)\n",
 	    doc, rh, table, HORIZVERT(horiz)));
 
     /* First, we want the %ages set to something sensible */
-    pct_used = normalise_percentages(table, horiz);
+    (void) normalise_percentages(table, horiz);
 
     /* Pick up what absolute information we have. This should be a
        basic copy operation as we don't initialise PCT_MIN to
@@ -881,23 +916,23 @@ static void calc_pct_minwidth(antweb_doc *doc,
        column values from now on, as I can't wrap my head around doing
        all this with groups yet. */
 
-    colspan_all_and_eql_copy(table, horiz, PCT_MIN,
-			     0, 0, ABS_MIN);
+    colspan_column_and_eql_copy(table, horiz, PCT_MIN,
+				0, 0, ABS_MIN);
 
-    x = largest_implied_table_width(table, PCT_MIN, horiz);
+    width = largest_implied_table_width(table, PCT_MIN, horiz);
 
-    x += TABLE_OUTSIDE_BIAS(table);
+    width += TABLE_OUTSIDE_BIAS(table);
 
-    if (x < widths[ABS_MIN])
+    if (width < widths[ABS_MIN])
     {
 	FMTDBG(("Latching PCT_MIN (%d) so that it is not smaller than ABS_MIN (%d)\n",
-		x, widths[ABS_MIN]));
-	x = widths[ABS_MIN];
+		width, widths[ABS_MIN]));
+	width = widths[ABS_MIN];
     }
 
-    widths[PCT_MIN] = x;
+    widths[PCT_MIN] = width;
 
-    FMTDBG(("calc_pct_minwidth: %d\n", x));
+    FMTDBG(("calc_pct_minwidth: %d\n", width));
 }
 
 /*****************************************************************************
@@ -925,8 +960,8 @@ static void calc_pct_maxwidth(antweb_doc *doc,
     int width;
     int *widths = HORIZCELLS(table,horiz);
 
-    colspan_all_and_eql_copy(table, horiz, PCT_MAX,
-			     0, 0, ABS_MAX);
+    colspan_column_and_eql_copy(table, horiz, PCT_MAX,
+				0, 0, ABS_MAX);
 
     width = largest_implied_table_width(table, PCT_MAX, horiz);
 
@@ -934,7 +969,7 @@ static void calc_pct_maxwidth(antweb_doc *doc,
 
     if (width < widths[ABS_MAX])
     {
-	FMTDBG(("Latching PCT_MIN (%d) so that it is not smaller than ABS_MAX (%d)\n",
+	FMTDBG(("Latching PCT_MAX (%d) so that it is not smaller than ABS_MAX (%d)\n",
 		width, widths[ABS_MAX]));
 	width = widths[ABS_MAX];
     }
@@ -1005,7 +1040,7 @@ static void basic_size_table(antweb_doc *doc,
     rid_table_cell *cell;
     int uwidth;
 
-    FMTDBG(("basic_size_table(%p %p %p): recurse down doing basic sizing\n", doc, rh, table));
+    FMTDBG(("basic_size_table(%p %p id %d): recurse down doing basic sizing\n", doc, rh, table->idnum));
 
     if (table->caption != NULL)
 	basic_size_stream(doc, rh, &table->caption->stream);
@@ -1018,9 +1053,13 @@ static void basic_size_table(antweb_doc *doc,
        structure and then calculate some other pieces of
        information. */
 
-    FMTDBG(("basic_size_table: now do colspan calculations\n"));
+    FMTDBG(("basic_size_table: id %d: now do colspan calculations\n", table->idnum));
 
     colspan_init_structure(table, HORIZONTALLY);
+
+    for (x = 0; x < table->cells.x; x++)
+	if (table->colspans[x].width[RAW_MIN] == NOTINIT)
+	    table->colspans[x].width[RAW_MIN] = table->colspans[x].width[RAW_MAX] = 0;
 
     /* Cell borders */
     colspan_bias(table, TABLE_INSIDE_BIAS(table), HORIZONTALLY);
@@ -1036,17 +1075,17 @@ static void basic_size_table(antweb_doc *doc,
     calc_pct_maxwidth(doc, rh, table, HORIZONTALLY);
     calc_rel_maxwidth(doc, rh, table, HORIZONTALLY);
 
-    FMTDBG(("basic_size_table: done\n"));
+    FMTDBG(("basic_size_table: id %d: done\n", table->idnum));
 
     /* Attempt to override sizes with user width, if it exists */
-
+#if 0
     switch (table->userwidth.type)
     {
     case value_absunit:
 	uwidth = ceil(table->userwidth.u.f);
 	if (uwidth >= table->hwidth[RAW_MIN])
 	{
-	    FMTDBG(("User width of %d being applied (RAW_MIN=%d)\n", uwidth, table->hwidth[PCT_RAW]));
+	    FMTDBG(("User width of %d being applied (RAW_MIN=%d)\n", uwidth, table->hwidth[RAW_MIN]));
 	    /* Override ALL previously calculated values. */
 	    table->hwidth[RAW_MIN] =
 		table->hwidth[ABS_MIN] =
@@ -1060,11 +1099,11 @@ static void basic_size_table(antweb_doc *doc,
 	}
 	else
 	{
-	    FMTDBG(("User width %d smaller than RAW_MIN %d: ignoring\n", uwidth, table->hwidth[PCT_RAW]));
+	    FMTDBG(("User width %d smaller than RAW_MIN %d: ignoring\n", uwidth, table->hwidth[RAW_MIN]));
 	}
 	break;
     }
-
+#endif
     colspan_trace_cells(table, HORIZONTALLY);
 
     format_width_checking_assertions(table, HORIZONTALLY);
@@ -1206,6 +1245,38 @@ static void allocate_widths_table(antweb_doc *doc,
 				       &cell->stream,
 				       cell->/*size.x*/stream.fwidth );
 	    }
+#if 1
+	    /* SJM: set sizes for images where the fwidth is */
+	    if (ti->tag == rid_tag_IMAGE)
+	    {
+		rid_text_item_image *tii = (rid_text_item_image *)ti;
+		if (tii->ww.type == value_pcunit)
+		{
+		    extern void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+		    oimage_size_allocate(ti, rh, doc, cell->stream.fwidth);
+		}
+	    }
+
+	    if (ti->tag == rid_tag_INPUT)
+	    {
+		rid_input_item *ii = ((rid_text_item_input *)ti)->input;
+		if (ii->tag == rid_it_IMAGE && ii->ww.type == value_pcunit)
+		{
+		    extern void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+		    oinput_size_allocate(ti, rh, doc, cell->stream.fwidth);
+		}
+	    }
+
+	    if (ti->tag == rid_tag_OBJECT)
+	    {
+		rid_object_item *obj = ((rid_text_item_object *)ti)->object;
+		if (obj->userwidth.type == value_pcunit)
+		{
+		    extern void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+		    oobject_size_allocate(ti, rh, doc, cell->stream.fwidth);
+		}
+	    }
+#endif
 	}
     }
 }
@@ -1247,6 +1318,38 @@ static void allocate_widths_stream(antweb_doc *doc,
 	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
 	    allocate_widths_table(doc, rh, table, fwidth);
 	}
+#if 1
+	/* SJM: set sizes for images where the fwidth is */
+	if (ti->tag == rid_tag_IMAGE)
+	{
+	    rid_text_item_image *tii = (rid_text_item_image *)ti;
+	    if (tii->ww.type == value_pcunit)
+	    {
+		extern void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+		oimage_size_allocate(ti, rh, doc, fwidth);
+	    }
+	}
+
+	if (ti->tag == rid_tag_INPUT)
+	{
+	    rid_input_item *ii = ((rid_text_item_input *)ti)->input;
+	    if (ii->tag == rid_it_IMAGE && ii->ww.type == value_pcunit)
+	    {
+		extern void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+		oinput_size_allocate(ti, rh, doc, fwidth);
+	    }
+	}
+
+	if (ti->tag == rid_tag_OBJECT)
+	{
+	    rid_object_item *obj = ((rid_text_item_object *)ti)->object;
+	    if (obj->userwidth.type == value_pcunit)
+	    {
+		extern void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+		oobject_size_allocate(ti, rh, doc, fwidth);
+	    }
+	}
+#endif
     }
 }
 
@@ -1329,6 +1432,10 @@ static void recurse_format_table(antweb_doc *doc,
     colspan_free_structure(table, HORIZONTALLY);
     colspan_init_structure(table, VERTICALLY);
 
+    for (x = 0; x < table->cells.y; x++)
+	if (table->colspans[x].width[RAW_MIN] == NOTINIT)
+	    table->colspans[x].width[RAW_MIN] = table->colspans[x].width[RAW_MAX] = 0;
+
     /* Borders for each cell */
     colspan_bias(table, TABLE_INSIDE_BIAS(table), VERTICALLY);
 
@@ -1345,7 +1452,7 @@ static void recurse_format_table(antweb_doc *doc,
 
     FMTDBG(("Have worked out height information:\n"));
 
-    colspan_trace_cells(table, VERTICALLY);
+    /*colspan_trace_cells(table, VERTICALLY);*/
 
     for (x = 0; x < N_COLSPAN_WIDTHS; x++)
     {

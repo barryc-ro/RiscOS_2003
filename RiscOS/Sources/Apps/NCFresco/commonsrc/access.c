@@ -2864,6 +2864,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 #ifndef STBWEB
                 /* pdh: Desktop Fresco wanted this, I don't know whether
                  * NCFresco does or not
+		 * sjm: well it might but that's what the chunk of code above does (or was meant to)
                  */
 		if ( ft == FILETYPE_DOS || ft == FILETYPE_DATA
 		     || ft == FILETYPE_TEXT )

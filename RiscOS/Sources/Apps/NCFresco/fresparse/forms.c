@@ -7,6 +7,7 @@
  * 07/08/96: SJM: check that at least one OPTION is selected.
  * 04/09/96: SJM: only check one SELECT is selected if not multiple.
  * 27/02/97: SJM: Moved text_item_push_input() code into here.
+ * 29/04/97: SJM: Changed INPUT ww and hh to being VALUEs.
  */
 
 
@@ -106,7 +107,7 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     VALUE *type;
     VALUE *maxlength;
     VALUE *size;
-    VALUE *width, *height;
+/*     VALUE *width, *height; */
     VALUE *tabindex;
     VALUE *border;
 
@@ -212,11 +213,16 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     tabindex = &attributes->value[HTML_INPUT_TABINDEX];
     in->base.tabindex = tabindex->type == value_integer ? tabindex->u.i : -2; /* have to use -2 as default as -1 means unselectable */
     
+#if 1
+    in->ww = attributes->value[HTML_INPUT_WIDTH];
+    in->hh = attributes->value[HTML_INPUT_HEIGHT];
+#else
     width = &attributes->value[HTML_INPUT_WIDTH];
-    in->ww = width->type == value_integer ? width->u.i : -1;
+    in->ww = width;
     
     height = &attributes->value[HTML_INPUT_HEIGHT];
     in->hh = height->type == value_integer ? height->u.i : -1;
+#endif
     
     border = &attributes->value[HTML_INPUT_BORDER];
     in->bw = border->type == value_integer ? border->u.i : 2; /* default border of 2 pixels on all input items */

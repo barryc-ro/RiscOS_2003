@@ -4201,7 +4201,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	    cfile = msgs_lookup(tag);
 	}
 
-	frontend_view_visit(doc->parent, NULL, NULL,
+	frontend_view_visit(doc->parent, NULL, url,
 			    (status == status_FAIL_CONNECT || status == status_FAIL_DNS) ? cfile : NULL);
 
 	backend_dispose_doc(doc);

@@ -200,7 +200,7 @@ static void draw_view_outline(wimp_w w)
 int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight)
 {
     STBDBG(("fe_view_scroll_x: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
-    if (v->w)
+    if (v->w && v->scrolling != fe_scrolling_NO)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
@@ -217,7 +217,7 @@ int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight)
 int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight)
 {
     STBDBG(("fe_view_scroll_y: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
-    if (v->w)
+    if (v->w && v->scrolling != fe_scrolling_NO)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
@@ -328,6 +328,8 @@ int frontend_view_redraw(fe_view v, wimp_box *bb)
 	r.box.y1 = -v->margin.y1;
 	r.box.x1 = 1 << 30;
 	r.box.y0 = - r.box.x1;
+
+/* 	STBDBG(("frontend_view_redraw: whole v %p from %s/%s\n", v, caller(1), caller(2))); */
     }
 
     wimp_force_redraw(&r);

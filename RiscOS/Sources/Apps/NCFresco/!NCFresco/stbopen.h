@@ -18,6 +18,7 @@
 #define TARGET_INFO	"__info"
 #define TARGET_OPEN	"__open"
 #define TARGET_CUSTOM	"__custom"
+#define TARGET_ERROR	"__error"
 
 extern fe_view fe_find_top(fe_view v);
 extern fe_view fe_find_window(fe_view start, wimp_w w);

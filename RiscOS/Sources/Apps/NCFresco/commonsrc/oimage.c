@@ -66,9 +66,10 @@
 
 #define ALT_FONT    (WEBFONT_SIZE(2) + WEBFONT_FLAG_FIXED)
 
+
 /* ----------------------------------------------------------------------------- */
 
-static void oimage_size_alt_text(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int *iw, int *ih)
+static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int fwidth, int *iw, int *ih)
 {
     font_string fs;
     struct webfont *wf;
@@ -77,12 +78,22 @@ static void oimage_size_alt_text(const char *alt, int req_ww, int req_hh, rid_im
     IMGDBG(("Sizing alt text: %d,%d\n", *iw, *ih));
 
     /* if we are not deferring images and either have alt text or both sizes are specified then use what we've got */
-    if (alt == NULL || (!defer_images && req_ww != -1 && req_hh != -1))
+    if (alt == NULL || (!defer_images && req_ww->type != value_none && req_hh->type == value_absunit))
     {
-	if (req_ww != -1)
-	    *iw = req_ww * 2;
-	if (req_hh != -1)
-	    *ih = req_hh * 2;
+	switch (req_ww->type)
+	{
+	case value_pcunit:
+	    if (fwidth)
+		*iw = (int)(req_ww->u.f * fwidth / 100);
+	    break;
+
+	case value_absunit:
+	    *iw = (int)req_ww->u.f;
+	    break;
+	}
+
+	if (req_hh->type == value_absunit)
+	    *ih = (int)req_hh->u.f;
         return;
     }
 
@@ -92,8 +103,8 @@ static void oimage_size_alt_text(const char *alt, int req_ww, int req_hh, rid_im
 
 	font_setfont(wf->handle);
 
-        /* if no width given (currently this includes havig a percentage width) then use what we need */
-        if (defer_images || req_ww == -1 || (flags & rid_image_flag_PERCENT))
+        /* if no width given then use what we need */
+        if (defer_images || req_ww->type == value_none)
         {
 	    fs.x = 1 << 30;
 	    fs.y = 1 << 30;
@@ -106,23 +117,25 @@ static void oimage_size_alt_text(const char *alt, int req_ww, int req_hh, rid_im
 	    fs.x /= MILIPOINTS_PER_OSUNIT;
 
 	    imw = fs.x + PLINTH_PAD;
-	    imh = defer_images || req_hh == -1 ? wf->max_up + wf->max_down + PLINTH_PAD : req_hh*2;
+	    imh = defer_images || req_hh->type != value_absunit ? (wf->max_up + wf->max_down + PLINTH_PAD) : (int)(req_hh->u.f*2);
         }
         else
         {
             /* else wrap the text into the space given */
-            int ww, height = 0;
+            int ww = 0, height = 0;
 
-#if 0
-    	    if (flags & rid_image_flag_PERCENT)
+    	    switch (req_ww->type)
 	    {
-    	        ww = req_ww*2*antweb_get_edges(ti, NULL, NULL)/100;
+	    case value_pcunit:
+    	        ww = (int)(req_ww->u.f * fwidth / 100);
 		if (ww == 0)
 		    ww = *iw;
+		break;
+
+	    case value_absunit:
+    	        ww = (int)req_ww->u.f;
+		break;
 	    }
-            else
-#endif
-    	        ww = req_ww*2;
 
             write_text_in_box_height(alt, ww - PLINTH_PAD, wf->handle, &height);
 
@@ -140,15 +153,14 @@ static void oimage_size_alt_text(const char *alt, int req_ww, int req_hh, rid_im
     IMGDBG(("Done sizing alt text: %d,%d\n", *iw, *ih));
 }
 
-void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int *iw, int *ih)
+void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int fwidth, int *iw, int *ih)
 {
     int width, height;
 
     width = *iw * scale_value/100;
     height = *ih * scale_value/100;
 
-    IMGDBG(("Old width %d, height %d, scale %d%% rid flags 0x%x\n", *iw, *ih, scale_value, flags));
-    IMGDBG(("Image object given width %d, height %d\n", req_ww, req_hh));
+    IMGDBG(("oimage_size_image: old width %d, height %d, scale %d%% rid flags 0x%x\n", *iw, *ih, scale_value, flags));
 
     /* if we have an image
      *   if two sizes specified then use those
@@ -164,36 +176,37 @@ void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags 
 
     if (flags & rid_image_flag_REAL)
     {
-        /* if a width or height is specified, for now a percent width means not specified  */
-	if ((req_ww != -1 && (flags & rid_image_flag_PERCENT) == 0) || req_hh != -1)
+        /* if a width or height is specified */
+	if (req_ww->type != value_none || req_hh->type == value_absunit)
 	{
             double aspect = (double)width/height;
 
-    	    if (req_ww != -1)
-    	    {   /* If width is specified, use that */
-#if 0
-    	        if (flags & rid_image_flag_PERCENT)
-		{
-    	            int ww = req_ww*2*antweb_get_edges(ti, NULL, NULL)/100;
-		    if (ww == 0)
-			width = ww;
-		}
-                else
-#endif
-    	            width = req_ww*2 * scale_value/100;
-    	    }
-    	    else
-    	    {   /* If width is not specified, calculate from height */
-    	        width = (int)(req_hh * aspect * scale_value/100) * 2;
+    	    switch (req_ww->type)
+    	    {
+	    case value_pcunit:
+	    {
+		int ww = (int)(req_ww->u.f * fwidth/100);
+		if (ww != 0)
+		    width = ww;
+		break;
+	    }
+            case value_absunit:
+		width = (int)(req_ww->u.f * scale_value/100);
+		break;
+		
+    	    case value_none:
+    	       /* If width is not specified, calculate from height */
+    	        width = (int)(req_hh->u.f * aspect * scale_value/100);
+		break;
     	    }
 
-    	    height = req_hh != -1 ? req_hh*2 : (int)((double)width * scale_value/100 / aspect);
+    	    height = req_hh->type == value_absunit ? (int)req_hh->u.f : (int)((double)width * scale_value/100 / aspect);
     	}
     }
     else
     {
         /* if not real then size from the text */
-	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, &width, &height);
+	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, fwidth, &width, &height);
     }
 
     IMGDBG(("Now width %d, height %d\n", width, height));
@@ -404,7 +417,7 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
     if (fl & image_flag_REALTHING)
 	return TRUE;
 
-    if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (tii->hh == -1 && tii->ww == -1)))
+    if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (tii->hh.type == value_none && tii->ww.type == value_none)))
 	return TRUE;
     
     return FALSE;
@@ -412,16 +425,18 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
 
 /* ----------------------------------------------------------------------------- */
 
-void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
+/* size function called from format.c for percentage sized images */
+void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth)
 {
     rid_text_item_image *tii = (rid_text_item_image *) ti;
     int width, height;
     image_flags fl;
 
-    IMGDBG(("oimage_size: src '%s' im %p size %dx%d bwidth %d, hspace %d, vspace %d\n", tii->src, tii->im, tii->ww, tii->hh, tii->bwidth, tii->hspace, tii->vspace));
+    IMGDBG(("oimage_size: src '%s' im %p bwidth %d, hspace %d, vspace %d, fwidth %d\n",
+	    tii->src, tii->im, tii->bwidth, tii->hspace, tii->vspace, fwidth));
 
     if (tii->im == NULL)
-	tii->im = oimage_fetch_image(doc, tii->src, tii->ww == -1 || tii->hh == -1);
+	tii->im = oimage_fetch_image(doc, tii->src, tii->ww.type == value_none || tii->hh.type == value_none);
 
     image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
     
@@ -430,7 +445,7 @@ void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     if (fl & image_flag_REALTHING)
 	tii->flags |= rid_image_flag_REAL;
 
-    oimage_size_image(tii->alt, tii->ww, tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
+    oimage_size_image(tii->alt, &tii->ww, &tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
     
     IMGDBG(("oimage_size:       width %d height %d\n", width, height));
 
@@ -444,6 +459,11 @@ void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     ti->max_down = height - ti->max_up;
 }
 
+/* size method */
+void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
+{
+    oimage_size_allocate(ti, rh, doc, 0);
+}
 
 void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 		   int hpos, int bline, object_font_state *fs,
@@ -459,7 +479,6 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 
     if (update == object_redraw_HIGHLIGHT)
     {
-	LNKDBG(("origin %d,%d base %d,%d\n", ox, oy, hpos, bline));
 	highlight_render_outline(ti, doc, hpos, bline);
 	return;
     }
@@ -657,7 +676,6 @@ void oimage_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 #endif /* BUILDERS */
 }
 
-#if 1
 int oimage_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
     rid_text_item_image *tii = (rid_text_item_image *)ti;
@@ -674,54 +692,6 @@ int oimage_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp
     }
     return TRUE;
 }
-#else
-void oimage_update_highlight(rid_text_item *ti, antweb_doc *doc)
-{
-    rid_text_item_image *tii = (rid_text_item_image *)ti;
-    wimp_box trim;
-    int bw;
-
-    memset(&trim, 0, sizeof(trim));
-
-    bw = tii->bwidth < 2 ? 2*2 : tii->bwidth*2;
-
-    trim.x0 =   tii->hspace*2;
-    trim.x1 = - tii->hspace*2;
-    trim.y0 =   tii->vspace*2;
-    trim.y1 = - tii->vspace*2;
-
-#if DRAW_AREA_HIGHLIGHT
-    if (tii->data.usemap.selection)
-    {
-        image_flags fi;
-        image_info((image) tii->im, 0, 0, 0, &fi, NULL, NULL);
-        antweb_update_item_trim(doc, ti, &trim, fi & image_flag_MASK ? 1 : 0);
-    }
-    else
-#endif
-    if (!oimage_renderable(tii, doc))
-    {
-        antweb_update_item_trim(doc, ti, &trim, TRUE);
-    }
-    else
-    {
-        trim.x0 = ti->width - tii->hspace*2 - bw;
-        antweb_update_item_trim(doc, ti, &trim, TRUE);
-        trim.x0 = tii->hspace*2;
-
-        trim.y0 = ti->max_up + ti->max_down - tii->vspace*2 - bw;
-        antweb_update_item_trim(doc, ti, &trim, TRUE);
-        trim.y0 = tii->vspace*2;
-
-        trim.x1 = - (ti->width - tii->hspace*2 - bw);
-        antweb_update_item_trim(doc, ti, &trim, TRUE);
-        trim.x1 = - tii->hspace*2;
-
-        trim.y1 = - (ti->max_up + ti->max_down - tii->vspace*2 - bw);
-        antweb_update_item_trim(doc, ti, &trim, TRUE);
-    }
-}
-#endif
 
 /* ----------------------------------------------------------------------------- */
 

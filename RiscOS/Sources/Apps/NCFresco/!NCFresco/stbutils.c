@@ -1074,6 +1074,11 @@ os_error *frontend_complain(os_error *e)
         usrtrc("complain '%s'\n", e->errmess);
         usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
 #endif
+
+#if 1
+	pending_error = e;
+#else
+
 #if 1
         if ((e->errnum &~ 0xff000000) != 0x288)
 #endif
@@ -1081,6 +1086,7 @@ os_error *frontend_complain(os_error *e)
 	    wimp_reporterror(e, wimp_EOK, PROGRAM_NAME);
 #else
             fe_report_error(e->errmess);
+#endif
 #endif
     }
     return e;

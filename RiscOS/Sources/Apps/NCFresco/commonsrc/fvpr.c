@@ -162,7 +162,7 @@ extern BOOL fvpr_progress_stream(rid_text_stream *stream)
 		    break;
 		}
 		
-		if (im->ww == -1 || im->hh == -1)
+		if (im->ww.type == value_none || im->hh.type == value_none)
 		{
 		    RENDBG(("fvpr: ww or hh still -1\n"));
 		    stop = TRUE;
@@ -172,6 +172,7 @@ extern BOOL fvpr_progress_stream(rid_text_stream *stream)
 	    }
 	    break;
 	    case rid_tag_INPUT:
+				/* need to fill stuff in here for rid_it_IMAGE*/
 		break;
 	    case rid_tag_TEXTAREA:
 	    break;
@@ -193,6 +194,7 @@ extern BOOL fvpr_progress_stream(rid_text_stream *stream)
 	    }
 	    break;
 	    case rid_tag_OBJECT:
+				/* need to fill stuff in here for rid_plugin_IMAGE */
 		break;
 	    }
 	    

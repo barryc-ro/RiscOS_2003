@@ -63,9 +63,28 @@ typedef struct RID_FMT_STATE
     int			left_indent;
     int			right_indent;
     int			center_width;
+    int			format_width;
+
+    rid_text_item *	next_item;
+
+    int			unbreakable_width;
+    rid_text_item *	unbreakable_start;
+    rid_text_item *	unbreakable_stop;
+    rid_text_item *	last_last_unbreakable; /* Cleared each line */
+
+    rid_pos_item *	text_line;
+    rid_pos_item *	float_line;
+    rid_pos_item *	text_pickup;
+    /*rid_pos_item *	last_float_line;*/
+
+    int			x_text_pos; /* From current left margin */
+    int			y_text_pos; /* Distance so far (-ve) */
+
     intxy		text_pos;
     intxy		max_pos;
-    int			interword_space;
+
+
+    
 } RID_FMT_STATE;
 
 extern void rid_toplevel_format(antweb_doc *doc,

@@ -197,7 +197,7 @@ static int oinput_image_renderable(rid_input_item *ii, antweb_doc *doc)
     if (fl & image_flag_REALTHING)
 	return TRUE;
 
-    if (/* tii->alt == NULL && */((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (ii->hh == -1 && ii->ww == -1)))
+    if (/* tii->alt == NULL && */((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (ii->hh.type == value_none && ii->ww.type == value_none)))
 	return TRUE;
     
     return FALSE;
@@ -205,7 +205,7 @@ static int oinput_image_renderable(rid_input_item *ii, antweb_doc *doc)
 
 /* ---------------------------------------------------------------------- */
 
-void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
+void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth)
 {
     rid_text_item_input *tii = (rid_text_item_input *) ti;
     rid_input_item *ii;
@@ -219,14 +219,14 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     {
     case rid_it_IMAGE:
 	if (ii->data.image.im == NULL)
-	    ii->data.image.im = oimage_fetch_image(doc, ii->src, ii->ww == -1 || ii->hh == -1);
+	    ii->data.image.im = oimage_fetch_image(doc, ii->src, ii->ww.type == value_none || ii->hh.type == value_none);
 
 	image_info((image) ii->data.image.im, &width, &height, 0, &fl, 0, 0);
 
 	if (fl & image_flag_REALTHING)
 	    ii->data.image.flags |= rid_image_flag_REAL;
 
-	oimage_size_image("Submit", ii->ww, ii->hh, ii->data.image.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
+	oimage_size_image("Submit", &ii->ww, &ii->hh, ii->data.image.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
 
 	width += ii->bw*2*2;
 	height += ii->bw*2*2;
@@ -266,7 +266,7 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	if (ii->src)
 	{
 	    if (ii->data.button.im == NULL)
-		ii->data.button.im = oimage_fetch_image(doc, ii->src, ii->ww == -1 || ii->hh == -1);
+		ii->data.button.im = oimage_fetch_image(doc, ii->src, ii->ww.type == value_none || ii->hh.type == value_none);
 
 	    if (ii->src_sel && ii->data.button.im_sel == NULL)
 		ii->data.button.im_sel = oimage_fetch_image(doc, ii->src_sel, FALSE);
@@ -276,7 +276,7 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    if (fl & image_flag_REALTHING)
 		ii->data.button.flags |= rid_image_flag_REAL;
 
-	    oimage_size_image(t, ii->ww, ii->hh, ii->data.button.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
+	    oimage_size_image(t, &ii->ww, &ii->hh, ii->data.button.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
 	    ti->width = width;
 	    ti->max_up = (height - webfonts[WEBFONT_BUTTON].max_down + webfonts[WEBFONT_BUTTON].max_up)/2;
 	    ti->max_down = height - ti->max_up;
@@ -284,16 +284,16 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	else
 	{
 #ifdef STBWEB
-	    ti->width = ii->ww != -1 ? ii->ww*2 : webfont_font_width(WEBFONT_BUTTON, t) + 20;
-	    if (ii->hh == -1)
+	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(WEBFONT_BUTTON, t) + 20;
+	    if (ii->hh.type != value_absunit)
 	    {
 		ti->max_up = webfonts[WEBFONT_BUTTON].max_up + 4;
 		ti->max_down = webfonts[WEBFONT_BUTTON].max_down + 4;
 	    }
 	    else
 	    {
-		ti->max_up = (ii->hh*2 - webfonts[WEBFONT_BUTTON].max_down + webfonts[WEBFONT_BUTTON].max_up)/2;
-		ti->max_down = ii->hh*2 - ti->max_up;
+		ti->max_up = ((int)ii->hh.u.f - webfonts[WEBFONT_BUTTON].max_down + webfonts[WEBFONT_BUTTON].max_up)/2;
+		ti->max_down = (int)ii->hh.u.f - ti->max_up;
 	    }
 #else
 	    ti->width = webfont_tty_width(strlen(t), 1) + 20;
@@ -308,7 +308,7 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	if (ii->src && ii->src_sel)
 	{
 	    if (ii->data.radio.im_off == NULL)
-		ii->data.radio.im_off = oimage_fetch_image(doc, ii->src, ii->ww == -1 || ii->hh == -1);
+		ii->data.radio.im_off = oimage_fetch_image(doc, ii->src, ii->ww.type == value_none || ii->hh.type == value_none);
 
 	    if (ii->data.radio.im_on == NULL)
 		ii->data.radio.im_on = oimage_fetch_image(doc, ii->src_sel, FALSE);
@@ -318,7 +318,7 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    if (fl & image_flag_REALTHING)
 		ii->data.radio.flags |= rid_image_flag_REAL;
 
-	    oimage_size_image("*", ii->ww, ii->hh, ii->data.radio.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
+	    oimage_size_image("*", &ii->ww, &ii->hh, ii->data.radio.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
 
 	    width += ii->bw*2*2;
 	    height += ii->bw*2*2;
@@ -344,6 +344,10 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     ti->pad = 4;
 }
 
+void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
+{
+    oinput_size_allocate(ti, rh, doc, 0);
+}
 
 void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update)
 {

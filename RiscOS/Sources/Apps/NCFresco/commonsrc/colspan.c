@@ -41,7 +41,7 @@ static void generate_constraints_summary(rid_table_item *table,
     {
 	const unsigned int flags = table->colspans[x].flags;
 
-	if (flags & colspan_flag_COLUMN_USED)
+	if (flags & colspan_flag_USED)
 	{
 	    ptr->used += 1;
 
@@ -87,6 +87,26 @@ static void generate_constraints_summary(rid_table_item *table,
 
 static void print_colspan_flags(unsigned int flags)
 {
+    static struct { unsigned int f; char *n; } 
+    names[] =
+    {
+	{ colspan_flag_ABSOLUTE		, "colspan_flag_ABSOLUTE" } ,
+	{ colspan_flag_PERCENT		, "colspan_flag_PERCENT" } ,
+	{ colspan_flag_RELATIVE		, "colspan_flag_RELATIVE" } ,
+	{ colspan_flag_ABSOLUTE_COL	, "colspan_flag_ABSOLUTE_COL" } ,
+	{ colspan_flag_PERCENT_COL	, "colspan_flag_PERCENT_COL" } ,
+	{ colspan_flag_RELATIVE_COL	, "colspan_flag_RELATIVE_COL" } ,
+	{ colspan_flag_ABSOLUTE_GROUP	, "colspan_flag_ABSOLUTE_GROUP" } ,
+	{ colspan_flag_PERCENT_GROUP	, "colspan_flag_PERCENT_GROUP" } ,
+	{ colspan_flag_RELATIVE_GROUP	, "colspan_flag_RELATIVE_GROUP" } ,
+	{ colspan_flag_FINISHED		, "colspan_flag_FINISHED" } ,
+	{ colspan_flag_USED		, "colspan_flag_USED" } ,
+	{ colspan_flag_STOMP_ABSOLUTE	, "colspan_flag_STOMP_ABSOLUTE" },
+	{ colspan_flag_STOMP_PERCENT	, "colspan_flag_STOMP_PERCENT" },
+	{ colspan_flag_STOMP_RELATIVE	, "colspan_flag_STOMP_RELATIVE" },
+	{ 0, NULL }
+    };
+
     int x;
 
     for (x = 0; x <= LAST_MAX; x++)
@@ -97,32 +117,11 @@ static void print_colspan_flags(unsigned int flags)
 	    FMTDBG(("%s ", WIDTH_NAMES[x]));
     }
 
-    if (flags & colspan_flag_ABSOLUTE)
-	FMTDBG(("ABSOLUTE "));
-
-    if (flags & colspan_flag_PERCENT)
-	FMTDBG(("PERCENT "));
-
-    if (flags & colspan_flag_RELATIVE)
-	FMTDBG(("RELATIVE "));
-
-    if (flags & colspan_flag_ABSOLUTE_THIS)
-	FMTDBG(("ABSOLUTE_THIS "));
-
-    if (flags & colspan_flag_PERCENT_THIS)
-	FMTDBG(("PERCENT_THIS "));
-
-    if (flags & colspan_flag_RELATIVE_THIS)
-	FMTDBG(("RELATIVE_THIS "));
-
-    if (flags & colspan_flag_FINISHED)
-	FMTDBG(("FINISHED "));
-
-    if (flags & colspan_flag_USED)
-	FMTDBG(("USED "));
-
-    if (flags & colspan_flag_COLUMN_USED)
-	FMTDBG(("COLUSED "));
+    for (x = 0; x < sizeof(names) / sizeof(names[1]); x++)
+    {
+	if ( names[x].f & flags )
+	    FMTDBG(("%s ", names[x].n));
+    }
 
     FMTDBG(("\n"));
 }
@@ -391,7 +390,7 @@ extern void colspan_bias(rid_table_item *table, int bias, BOOL horiz)
     const width_array_e min = RAW_MIN;
     const width_array_e max = RAW_MAX;
 
-    FMTDBG(("colspan_bias(%p): bias %d onto RAW_MIN/RAW_MAX items\n",
+    FMTDBGN(("colspan_bias(%p): bias %d onto RAW_MIN/RAW_MAX items\n",
 	     table, bias));
 
     if (bias > 0)
@@ -455,7 +454,7 @@ extern void colspan_column_init_from_leftmost(rid_table_item *table, width_array
     const int max = horiz ? table->cells.x : table->cells.y;
     int x, prev;
 
-    FMTDBG(("colspan_column_init_from_leftmost: id %d, slot %s, %s\n",
+    FMTDBGN(("colspan_column_init_from_leftmost: id %d, slot %s, %s\n",
 	    table->idnum, WIDTH_NAMES[slot], HORIZVERT(horiz)));
 
     for (x = 0, prev = 0; x < max; x++)
@@ -470,6 +469,25 @@ extern void colspan_column_init_from_leftmost(rid_table_item *table, width_array
 
 /*****************************************************************************/
 
+extern void colspan_column_and_eql_bitset(rid_table_item *table, 
+					BOOL horiz, 
+					width_array_e slot,
+					unsigned int AND,
+					unsigned int EQL,
+					unsigned int SET)
+{
+    const int max = horiz ? table->cells.x : table->cells.y;
+    pcp_cell the_cells = table->colspans;
+    int x;
+
+    FMTDBGN(("colspan_column_and_eql_bitset: %s %s %x %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, SET));
+
+    for (x = 0; x < max; x++)
+    {
+	if ( (the_cells[x].flags & AND) == EQL )
+	    the_cells[x].flags |= SET;
+    }
+}
 
 extern void colspan_column_and_eql_set(rid_table_item *table, 
 				       BOOL horiz, 
@@ -580,7 +598,122 @@ extern void colspan_column_and_eql_downwards(rid_table_item *table,
 	}
 }
 
+extern void colspan_column_and_eql_halve(rid_table_item *table,
+					     BOOL horiz, 
+					     width_array_e slot,
+					     unsigned int AND,
+					     unsigned int EQL)
+{
+    const int max = horiz ? table->cells.x : table->cells.y;
+    pcp_cell the_cells = table->colspans;
+    int x;
+
+    FMTDBG(("colspan_column_and_eql_halve: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
+
+    for (x = 0; x < max; x++)
+    {
+	if ( (the_cells[x].flags & AND) == EQL )
+	{
+	    the_cells[x].width[slot] /= 2;
+	}
+    }
+}
+
+extern void colspan_column_and_eql_double(rid_table_item *table,
+					     BOOL horiz, 
+					     width_array_e slot,
+					     unsigned int AND,
+					     unsigned int EQL)
+{
+    const int max = horiz ? table->cells.x : table->cells.y;
+    pcp_cell the_cells = table->colspans;
+    int x;
+
+    FMTDBG(("colspan_column_and_eql_double: %s %s %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL));
+
+    for (x = 0; x < max; x++)
+    {
+	if ( (the_cells[x].flags & AND) == EQL )
+	{
+	    the_cells[x].width[slot] /= 2;
+	}
+    }
+}
+
+
+extern void colspan_column_and_eql_scale(rid_table_item *table,
+					 BOOL horiz, 
+					 width_array_e slot,
+					 unsigned int AND,
+					 unsigned int EQL,
+					 double scale)
+{
+    const int max = horiz ? table->cells.x : table->cells.y;
+    pcp_cell the_cells = table->colspans;
+    int x;
+
+    FMTDBG(("colspan_column_and_eql_scale: %s %s %x %x %g\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, scale));
+
+    for (x = 0; x < max; x++)
+    {
+	if ( (the_cells[x].flags & AND) == EQL )
+	{
+	    the_cells[x].width[slot] *= scale;
+	}
+    }
+}
+
+extern int colspan_sum_columns(rid_table_item *table,
+				BOOL horiz, 
+				width_array_e slot)
+{
+    const int max = horiz ? table->cells.x : table->cells.y;
+    pcp_cell the_cells = table->colspans;
+    int x;
+    int sum = 0;
+
+    FMTDBG(("colspan_sum_columns: %s %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot]));
+
+    for (x = 0; x < max; x++)
+    {
+	sum += the_cells[x].width[slot];
+    }
+
+    return sum;
+}
+
 /*****************************************************************************/
+
+
+extern void colspan_all_and_eql_bitclr(rid_table_item *table, 
+					BOOL horiz, 
+					width_array_e slot,
+					unsigned int AND,
+					unsigned int EQL,
+					unsigned int CLR)
+{
+    const int max = horiz ? table->cells.x : table->cells.y;
+    pcp_cell the_cells = table->colspans;
+    int x;
+
+    FMTDBGN(("colspan_all_and_eql_bitclr: %s %s %x %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, CLR));
+
+    CLR = ~CLR;
+
+    for (x = 0; x < max; x++)
+    {
+	pcp_group grp;
+
+	if ( (the_cells[x].flags & AND) == EQL )
+	    the_cells[x].flags &= CLR;
+
+	for (grp = the_cells[x].first_start; grp != NULL; grp = grp->next_start)
+	{
+	    if ( (grp->flags & AND) == EQL )
+		grp->flags &= CLR;
+	}
+    }
+}
 
 extern void colspan_all_and_eql_lt_copy(rid_table_item *table, 
 					BOOL horiz, 
@@ -593,7 +726,7 @@ extern void colspan_all_and_eql_lt_copy(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_all_and_eql_lt_copy: %s %s %x %x %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, WIDTH_NAMES[slot_from]));
+    FMTDBGN(("colspan_all_and_eql_lt_copy: %s %s %x %x %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, WIDTH_NAMES[slot_from]));
 
     for (x = 0; x < max; x++)
     {
@@ -623,7 +756,7 @@ extern void colspan_all_and_eql_copy(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_all_and_eql_copy: %s %s %x %x %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, WIDTH_NAMES[slot_from]));
+    FMTDBGN(("colspan_all_and_eql_copy: %s %s %x %x %s\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, WIDTH_NAMES[slot_from]));
 
     for (x = 0; x < max; x++)
     {
@@ -651,7 +784,7 @@ extern void colspan_all_and_eql_set(rid_table_item *table,
     pcp_cell the_cells = table->colspans;
     int x;
 
-    FMTDBG(("colspan_all_and_eql_set: %s %s %x %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, SET));
+    FMTDBGN(("colspan_all_and_eql_set: %s %s %x %x %x\n", HORIZVERT(horiz), WIDTH_NAMES[slot], AND, EQL, SET));
 
     for (x = 0; x < max; x++)
     {
@@ -820,22 +953,160 @@ static pcp_group new_group (pcp_cell_t * the_cells,
     return result;
 }
 
-/*****************************************************************************
+/*****************************************************************************/
 
-  Initialise a colspan structure ready for manipulating. This is used
-  for both horizontal and vertical operation. Initially, we do all the
-  horizontal operations, deriving final stream format widths and hence
-  an actual height for the contents. We then reuse most of the
-  operations to share out these heights where ROWSPAN=N or HEIGHT=N
-  has been used.
+static void init_group(rid_table_item *table, BOOL horiz, rid_table_cell *cell, VALUE *vp)
+{
+    const int span = (horiz ? cell->span.x : cell->span.y);
+    const int first = (horiz ? cell->cell.x : cell->cell.y);
+    const int last = first + span - 1;
+    pcp_group group;
+    int *widths;
+    unsigned int flags = 0;
+    int z;
 
-  NOTE: colspan_flag_USED should be used to determine whether a column
-  header value is supplied from the user or inferred from surrounding
-  information.  
+    group = new_group (table->colspans, first, last);
+    group->table_cell = cell;
+    widths = group->width;
 
-*/
+    FMTDBG(("init_group: id %d, %s, first %d, span %d\n",
+	    table->id, HORIZVERT(horiz), first, span));
 
-extern void colspan_init_structure(rid_table_item *table, BOOL horiz)
+    /* New group, so always take these values */
+    if (horiz)
+    {
+	widths[RAW_MIN] = cell->stream.width_info.minwidth;
+	widths[RAW_MAX] = cell->stream.width_info.maxwidth;
+	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
+    }
+    else
+    {
+	widths[RAW_MIN] = widths[RAW_MAX] = - cell->stream.height;
+    }
+    
+    switch (vp->type)
+    {
+    case value_absunit:
+	flags = colspan_flag_ABSOLUTE | colspan_flag_ABSOLUTE_GROUP;
+	z = ceil(vp->u.f);
+	if (widths[ABS_MAX] < z)
+	    widths[ABS_MAX] = widths[ABS_MIN] = z;
+	break;
+
+    case value_pcunit:
+	flags = colspan_flag_PERCENT | colspan_flag_PERCENT_GROUP;
+	/* Remember what %age the user asked for here. Later, we
+	   will normalise this slot and use this and RAW_MIN
+	   values to calculate actual pixel values for the PCT_MIN
+	   slot. */
+	widths[PCT_RAW] = ceil(vp->u.f);
+	break;
+
+    case value_relunit:
+	flags = colspan_flag_RELATIVE | colspan_flag_RELATIVE_GROUP;
+	/* need to scale all rel values so the smallest is an
+	   integer, yuck need to do a pre-pass of some kind. */
+	widths[REL_MIN] = ceil(vp->u.f); /* probably wrong for 0.5*!!! */
+	break;
+    }
+
+    /* Might have already got some size information for a column
+       header. */
+    if (horiz)
+    {
+	if (widths[RAW_MIN] < cell->stream.width_info.minwidth)
+	    widths[RAW_MIN] = cell->stream.width_info.minwidth;
+	
+	if (widths[RAW_MAX] < cell->stream.width_info.maxwidth)
+	    widths[RAW_MAX] = cell->stream.width_info.maxwidth;
+	
+	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
+    }
+    else
+    {
+	if (widths[RAW_MIN] < - cell->stream.height )
+	    widths[RAW_MIN] = widths[RAW_MAX] = - cell->stream.height;
+    }	        
+
+    flags |= colspan_flag_USED;
+    group->flags |= flags;
+
+    /* Flag all the columns covered */
+
+    for (z = first; z <= last; z++)
+    {
+	/* Column head flags get the indication of what sort of
+	   constraints contribute to them, but don;t get flagged as
+	   being used just because they have received a constraint
+	   contribution. */
+	table->colspans[z].flags |= flags; 
+    }
+}
+
+/*****************************************************************************/
+
+static void init_column(rid_table_item *table, BOOL horiz, rid_table_cell *cell, VALUE *vp)
+{
+    const int X = horiz ? cell->cell.x : cell->cell.y;
+    unsigned int *flags = & table->colspans[X].flags;
+    int *widths = table->colspans[X].width;
+    int z;
+
+    FMTDBG(("init_column: id %d, %s, X %d\n",
+	    table->idnum, HORIZVERT(horiz), X));
+
+    switch (vp->type)
+    {
+    case value_absunit:
+	*flags |= colspan_flag_ABSOLUTE | colspan_flag_ABSOLUTE_COL | colspan_flag_USED;
+	z = ceil(vp->u.f);
+	if (widths[ABS_MAX] < z)
+	    widths[ABS_MAX] = widths[ABS_MIN] = z;
+	break;
+
+    case value_pcunit:
+	*flags |= colspan_flag_PERCENT | colspan_flag_PERCENT_COL | colspan_flag_USED;
+	/* Remember what %age the user asked for here. Later, we
+	   will normalise this slot and use this and RAW_MIN
+	   values to calculate actual pixel values for the PCT_MIN
+	   slot. */
+	widths[PCT_RAW] = ceil(vp->u.f);
+	break;
+
+    case value_relunit:
+	*flags |= colspan_flag_RELATIVE | colspan_flag_RELATIVE_COL | colspan_flag_USED;
+	/* need to scale all rel values so the smallest is an
+	   integer, yuck need to do a pre-pass of some kind. */
+	widths[REL_MIN] = ceil(vp->u.f); /* probably wrong for 0.5*!!! */
+	break;
+
+    default:
+	*flags |= colspan_flag_USED;
+	break;
+    }
+
+    /* Might have already got some size information for a column
+       header. */
+    if (horiz)
+    {
+	if (widths[RAW_MIN] < cell->stream.width_info.minwidth)
+	    widths[RAW_MIN] = cell->stream.width_info.minwidth;
+	
+	if (widths[RAW_MAX] < cell->stream.width_info.maxwidth)
+	    widths[RAW_MAX] = cell->stream.width_info.maxwidth;
+	
+	ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
+    }
+    else
+    {
+	if (widths[RAW_MIN] < - cell->stream.height )
+	    widths[RAW_MIN] = widths[RAW_MAX] = - cell->stream.height;
+    }	        
+}
+
+/*****************************************************************************/
+
+static void colspan_init_structure1(rid_table_item *table, BOOL horiz)
 {
     int x, y, iw;
     rid_table_cell *cell;
@@ -867,116 +1138,229 @@ extern void colspan_init_structure(rid_table_item *table, BOOL horiz)
     for (x = -1, y = 0; (cell = rid_next_root_cell (table, &x, &y)) != NULL; )
     {
 	const int span = (horiz ? cell->span.x : cell->span.y);
-	const int first = (horiz ? cell->cell.x : cell->cell.y);
-	const int last = first + span - 1;
-	pcp_group group;
-	int *widths;
-	int z;
 	VALUE v;
-	unsigned int *flagsp, flags = 0, for_this = 0, for_column = 0, hh = 0;
 
-	if (span > 1)
+	if (cell->flags & rid_cf_NOCONS)
 	{
-	    /* make a new group record */
-	    group = new_group (the_cells, first, last);
-	    flagsp = &group->flags;
-	    widths = group->width;
-
-	    /* New group, so always take these values */
-	    if (horiz)
-	    {
-		widths[RAW_MIN] = cell->stream.width_info.minwidth;
-		widths[RAW_MAX] = cell->stream.width_info.maxwidth;
-		ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
-	    }
-	    else
-	    {
-		widths[RAW_MIN] = widths[RAW_MAX] = - cell->stream.height;
-	    }
+	    FMTDBG(("Cell %d,%d flagged NOCONS\n", cell->cell.x, cell->cell.y));
+	    v.type = value_none;
 	}
 	else
-	{
-	    flagsp = &the_cells[first].flags;
-	    widths = the_cells[first].width;
-
-	    /* Might have already got some size information for a
-               column header. */
-	    if (horiz)
-	    {
-		if ( widths[RAW_MIN] < cell->stream.width_info.minwidth )
-		    widths[RAW_MIN] = cell->stream.width_info.minwidth;
-		
-		if (widths[RAW_MAX] < cell->stream.width_info.maxwidth )
-		    widths[RAW_MAX] = cell->stream.width_info.maxwidth;
-
-		ASSERT(widths[RAW_MIN] <= widths[RAW_MAX]);
-	    }
-	    else
-	    {
-		if ( widths[RAW_MIN] < - cell->stream.height )
-		    widths[RAW_MIN] = widths[RAW_MAX] = - cell->stream.height;
-	    }	    
-	}
-
-	rid_getprop(table, x, y, prop, &v);
-
-	switch (v.type)
-	{
-	case value_absunit:
-	    for_this |= colspan_flag_ABSOLUTE | colspan_flag_ABSOLUTE_THIS;
-	    for_column |= colspan_flag_ABSOLUTE;
-	    hh = rid_chf_ABSOLUTE;
-	    z = ceil(v.u.f);
-	    if (span > 1 || widths[ABS_MAX] < z)
-		widths[ABS_MAX] = widths[ABS_MIN] = z;
-	    break;
-
-	case value_pcunit:
-	    for_this |= colspan_flag_PERCENT | colspan_flag_PERCENT_THIS;
-	    for_column |= colspan_flag_PERCENT;
-	    hh = rid_chf_PERCENT;
-	    /* Remember what %age the user asked for here. Later, we
-               will normalise this slot and use this and RAW_MIN
-               values to calculate actual pixel values for the PCT_MIN
-               slot. */
-	    widths[PCT_RAW] = ceil(v.u.f);
-	    break;
-
-	case value_relunit:
-	    for_this |= colspan_flag_RELATIVE | colspan_flag_RELATIVE_THIS;
-	    for_column |= colspan_flag_RELATIVE;
-	    hh = rid_chf_RELATIVE;
-	    /* need to scale all rel values so the smallest is an
-               integer, yuck need to do a pre-pass of some kind. */
-	    widths[REL_MIN] = ceil(v.u.f); /* probably wrong for 0.5*!!! */
-	    break;
-	}
-
-	/* Flag all the columns covered */
+	    rid_getprop(table, x, y, prop, &v);
 
 	if (span > 1)
+	    init_group(table, horiz, cell, &v);
+	else
+	    init_column(table, horiz, cell, &v);
+    }
+
+    FMTDBG(("colspan_init_structure1: the cells:\n"));
+    colspan_trace_cells(table, horiz);
+}
+
+/*****************************************************************************/
+
+static void set_nocons_horiz(rid_table_item *table, int x, rid_cell_flags f)
+{
+    int y;
+
+    for (y = 0; y < table->cells.y; y++)
+    {
+	rid_table_cell *cell = *CELLFOR(table, x, y);
+	if (cell != NULL && cell->span.x == 1 && (cell->flags & f) != 0 )
 	{
-	    for (z = first; z <= last; z++)
-	    {
-		if (horiz)
-		    table->colhdrs[z]->flags |= hh;
-		else
-		    table->rowhdrs[z]->flags |= hh;
-		/* Column head flags get the indication of what sort
-		   of constraints contribute to them, but don;t get
-		   flagged as being used just because they have
-		   received a constraint contribution. */
-		the_cells[z].flags |= for_column; 
-	    }
+	    FMTDBG(("Narrow cell %d,%d stomped\n", cell->cell.x, cell->cell.y));
+	    cell->flags |= rid_cf_NOCONS;
+	}
+    }
+}
+
+static void set_nocons_vert(rid_table_item *table, int y, rid_cell_flags f)
+{
+    int x;
+
+    for (x = 0; x < table->cells.x; x++)
+    {
+	rid_table_cell *cell = *CELLFOR(table, x, y);
+	if (cell != NULL && cell->span.y == 1 && (cell->flags & f) != 0)
+	{
+	    FMTDBG(("Narrow cell %d,%d stomped\n", cell->cell.x, cell->cell.y));
+	    cell->flags |= rid_cf_NOCONS;
+	}
+    }
+}
+
+static void set_nocons(rid_table_item *table, BOOL horiz, int x, rid_cell_flags f)
+{
+    if (horiz)
+	set_nocons_horiz(table, x, f);
+    else
+	set_nocons_vert(table, x, f);
+}
+
+static BOOL have_contradictions(rid_table_item *table, BOOL horiz)
+{
+    int x;
+    pcp_cell the_cells = table->colspans;
+    const int max = horiz ? table->cells.x : table->cells.y;
+    int worth_recalculating = 0;
+
+    /* Now look for contradictory constraints of different types and
+       remove them. Individual constrain override flags are used. */
+
+    for (x = 0; x < max; x++)
+    {
+	int unsigned clash = 0;
+
+	switch ( the_cells[x].flags & ( colspan_flag_RELATIVE | colspan_flag_PERCENT | colspan_flag_ABSOLUTE ) )
+	{
+	case 0:
+	case colspan_flag_ABSOLUTE:
+	case colspan_flag_PERCENT:
+	case colspan_flag_RELATIVE:
+	    /* Not more than one constraint - no clash */
+	    break;
+
+	case colspan_flag_PERCENT | colspan_flag_ABSOLUTE:
+	    clash = colspan_flag_STOMP_PERCENT;
+	    worth_recalculating++;
+	    FMTDBG(("have_contradictions: col %d: pct:abs\n", x));
+	    break;
+
+	case colspan_flag_RELATIVE | colspan_flag_ABSOLUTE:
+	case colspan_flag_RELATIVE | colspan_flag_PERCENT:
+	    clash = colspan_flag_STOMP_RELATIVE;
+	    worth_recalculating++;
+	    FMTDBG(("have_contradictions: col %d: rel:abs or rel:pct\n", x));
+	    break;
+
+	case colspan_flag_RELATIVE | colspan_flag_PERCENT | colspan_flag_ABSOLUTE:
+	    clash = colspan_flag_STOMP_PERCENT |  colspan_flag_STOMP_RELATIVE;
+	    FMTDBG(("have_contradictions: col %d: rel:pct:abs\n", x));
+	    worth_recalculating++;
+	    break;
 	}
 
-	/* The root cell, whether group or column, is marked as being
-           used. */
-	*flagsp |= flags | colspan_flag_USED | for_this;
+	the_cells[x].flags |= clash;
+    }
+
+    if (worth_recalculating > 0)
+    {
+	FMTDBG(("colspan_init_structure: worth_recalculating is %d: MARKING\n", worth_recalculating));
+
+	colspan_trace_cells(table, horiz);
+
+	/* Clear old contribution flags */
+	for (x = 0; x < max; x++)
+	{
+	    the_cells[x].flags &= ~ (colspan_flag_RELATIVE | colspan_flag_PERCENT | colspan_flag_ABSOLUTE);
+	}
+
+	/* Now recalculate what contributions we have to give each
+	   column. Some contributions *will* find themselves stomped
+	   on now. */
+
+	for (x = 0; x < max; x++)
+	{
+	    BOOL stomped = FALSE;
+	    pcp_cell cell = &the_cells[x];
+	    pcp_group group = cell->first_start;
+
+	    if ( (cell->flags & colspan_flag_STOMP_ABSOLUTE) != 0 )
+	    {
+		set_nocons(table, horiz, x, rid_cf_ABSOLUTE);
+		FMTDBG(("col %d, abs, stomped %d\n", x, stomped));
+	    }
+
+	    if ( (cell->flags & colspan_flag_STOMP_RELATIVE) != 0 )
+	    {
+		set_nocons(table, horiz, x, rid_cf_RELATIVE);
+		FMTDBG(("col %d, rel, stomped %d\n", x, stomped));
+	    }
+
+	    if ( (cell->flags & colspan_flag_STOMP_PERCENT) != 0 )
+	    {
+		set_nocons(table, horiz, x, rid_cf_PERCENT);
+		FMTDBG(("col %d, pct, stomped %d\n", x, stomped));
+	    }
+
+	    while (group != NULL)
+	    {
+		int z;
+		stomped = FALSE;
+
+		if ( (group->flags & colspan_flag_ABSOLUTE_GROUP) != 0 )
+		{
+		    for (z = x; !stomped && z <= group->iend; z++)
+			stomped = (the_cells[z].flags & colspan_flag_STOMP_ABSOLUTE) != 0;
+		}
+		else if ( (group->flags & colspan_flag_PERCENT_GROUP) != 0 )
+		{
+		    for (z = x; !stomped && z <= group->iend; z++)
+			stomped = (the_cells[z].flags & colspan_flag_STOMP_PERCENT) != 0;
+		}
+		else if ( (group->flags & colspan_flag_RELATIVE_GROUP) != 0 )
+		{
+		    for (z = x; !stomped && z <= group->iend; z++)
+			stomped = (the_cells[z].flags & colspan_flag_STOMP_RELATIVE) != 0;
+		}
+
+		if (stomped)
+		{
+		    FMTDBG(("Wide cell %d,%d stomped\n", group->table_cell->cell.x, group->table_cell->cell.y));
+		    group->table_cell->flags |= rid_cf_NOCONS;
+		}
+
+		group = group->next_start;
+	    }
+	}
+    }
+
+    FMTDBG(("have_contradictions: worth_recalculating is %d\n", worth_recalculating));
+
+    return worth_recalculating > 0;
+}
+
+/*****************************************************************************
+
+  Initialise a colspan structure ready for manipulating. This is used
+  for both horizontal and vertical operation. Initially, we do all the
+  horizontal operations, deriving final stream format widths and hence
+  an actual height for the contents. We then reuse most of the
+  operations to share out these heights where ROWSPAN=N or HEIGHT=N
+  has been used.
+
+  NOTE: colspan_flag_USED should be used to determine whether a column
+  header value is supplied from the user or inferred from surrounding
+  information.  
+
+  This version takes what we consider to be a simplistic approach to
+  constraints and overrides percentage constraints by absolute
+  constraints and relative constraints by percentage constraints or
+  absolute constraints. This extends over the entire group, if
+  applicable. This means we end up with each column receiving ZOm user
+  constraints, and no groups have holes in them.
+  
+*/
+
+extern void colspan_init_structure(rid_table_item *table, BOOL horiz)
+{
+    colspan_init_structure1(table, horiz);
+
+    if ( have_contradictions(table, horiz) )
+    {
+	/* have_contradictions will have stomped constraints as
+           necessary. */
+	FMTDBG(("\nRebuilding colspan structure with some constraints overridden\n\n"));
+	colspan_free_structure(table, horiz);
+	colspan_init_structure1(table, horiz);
+
+	/* Should have broken ALL clashes */
+	ASSERT( ! have_contradictions(table, horiz) );
     }
 
     /* trace it */
-    FMTDBG(("after building the datastructure...\n"));
+    FMTDBG(("\nNewly initialised colspan structure:\n"));
     colspan_trace_cells (table, horiz);
 }
 
@@ -1191,7 +1575,7 @@ static void padding_only_share(rid_table_item *table,
 			       int slop,
 			       constraints_summary *csumm)
 {
-    while (slop > 0)
+    while (slop > 0)		/* you don't want to do it like THAT! PCP 27/4/97 */
     {
 	const int last_slop = slop;
 
@@ -1272,6 +1656,60 @@ static int attempt_meet_rel_max(rid_table_item *table, BOOL horiz, int slop, con
 
 /*****************************************************************************
 
+  'slop' pixels MUST be shared out into the columns. We prefer to
+  always do this in unconstrained columns. If there are no such
+  columns, some other choice of where to put the space is
+  required. Today: round robin blunt distribution.  */
+
+static void share_raw_abs_pct(rid_table_item *table, BOOL horiz, int slop)
+{
+    const int max = HORIZMAX(table, horiz);
+    int x;
+    BOOL any_uncons = FALSE;
+    pcp_cell the_cells = table->colspans;
+
+    for (x = 0; ! any_uncons && x < max; x++)
+	any_uncons = (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0;
+
+    FMTDBG(("share_raw_abs_pct: %s, id %d, slop %d, any_uncons %d\n",
+	    HORIZVERT(horiz), table->idnum, slop, any_uncons));
+
+    if (any_uncons)
+    {
+	int total_max = 0;
+	int left = slop;
+
+	for (x = 0; x < max; x++)
+	    if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
+		total_max += the_cells[x].width[RAW_MAX];
+
+	if (total_max > 0)
+	{
+	    for (x = 0; left > 0 && x < max; x++)
+		if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
+		{
+		    const int my_max = the_cells[x].width[RAW_MAX];
+		    const int want = (slop * my_max) / total_max;
+		    
+		    the_cells[x].width[ACTUAL] += want;
+		    left -= want;
+		}
+	    
+	    slop = left;
+	}
+    }
+
+    /* I know! */
+    while (slop > 0)
+	for (x = 0; slop > 0 && x < max; x++)
+	    the_cells[x].width[ACTUAL]++, slop--;
+
+    ASSERT(slop == 0);
+}
+
+
+/*****************************************************************************
+
   See how many more constraints we can satisfy to use up spare space.
 
   Then distribute the remaining slop in a fair fashion.
@@ -1285,10 +1723,7 @@ static void most_constraints_then_share_fairly(rid_table_item *table,
 					       int fwidth,
 					       BOOL horiz)
 {
-    int x;
-    pcp_cell the_cells = table->colspans;
     int *width = HORIZCELLS(table,horiz);
-    const int max = horiz ? table->cells.x : table->cells.y;
     int slop = (fwidth - width[ACTUAL]);
     constraints_summary csumm;
 
@@ -1550,6 +1985,62 @@ static width_array_e choose_best_slot(rid_table_item *table,
 
 /*****************************************************************************
 
+  Given an fwidth, increase the size of the percentage columns to
+  represent their share of this fwidth. We might have some spare
+  pixels of error. We need to ensure that minwidth values are always
+  met. Return the number of pixels left to share out: this is the
+  total width minus all sizes allocated to percentages minus all
+  absolute sizes minus min sizes for unconstrained columns.
+
+ */
+
+static int reflect_percentages(rid_table_item *table, BOOL horiz, int fwidth)
+{
+    const int max = HORIZMAX(table, horiz);
+    int used = 0;
+    pcp_cell the_cells = table->colspans;
+    int x;
+
+    fwidth -= TABLE_OUTSIDE_BIAS(table);
+
+    ASSERT(fwidth >= 0);
+
+    for (x = 0; x < max; x++)
+    {
+	if ( (the_cells[x].flags & colspan_flag_PERCENT) != 0 )
+	{
+	    const int want = (fwidth * the_cells[x].width[PCT_RAW]) / 100;
+	    if (want <= the_cells[x].width[ACTUAL])
+	    {
+		used += the_cells[x].width[ACTUAL];
+	    }
+	    else
+	    {
+		the_cells[x].width[ACTUAL] = want;
+		used += want;
+	    }
+	}
+	else
+	{
+	    used += the_cells[x].width[ACTUAL];
+	}
+    }
+
+    /* Columns with percentage contributions now have their FINAL
+       sizes. The only reason we might add to a percentage column is
+       if we have NOT been able to meet all percentage criteria, and
+       hence have not called this function. */
+    FMTDBG(("reflect_percentages: reflected fwidth %d into ACTUAL with %d slop\n", fwidth, fwidth - used));
+
+    ASSERT(used <= fwidth);
+
+    colspan_trace_cells(table, horiz);
+
+    return fwidth - used;
+}
+
+/*****************************************************************************
+
   shares out extra space and sets ACTUAL fields in base column records
   to actual position of right cell boundary.
 
@@ -1566,6 +2057,113 @@ static width_array_e choose_best_slot(rid_table_item *table,
 extern void colspan_share_extra_space (rid_table_item *table, 
 				       int fwidth,
 				       BOOL horiz)
+{
+    int *master = HORIZCELLS(table, horiz);
+    int user_width = 0;
+    int slop;
+
+    if (horiz)
+    {
+	switch (table->userwidth.type)
+	{
+	case value_absunit:
+	    user_width = ceil(table->userwidth.u.f);
+	    break;
+
+	case value_pcunit:
+	    user_width = ceil( (table->userwidth.u.f * fwidth ) / 100.0 );
+	    break;
+	}
+    }
+    else
+    {
+	switch (table->userheight.type)
+	{
+	case value_absunit:
+	    user_width = ceil(table->userheight.u.f);
+	    break;
+
+	case value_pcunit:
+	    user_width = ceil( (table->userheight.u.f * fwidth ) / 100.0 );
+	    break;
+	}
+    }
+
+    /* Not correct interpretation for heights? */
+    if (horiz)
+    {
+	if (user_width > master[RAW_MIN])
+	    fwidth = user_width;
+    }
+    else
+    {
+	if (user_width > master[RAW_MIN])
+	    fwidth = user_width;
+	else
+	    fwidth = master[RAW_MIN];
+    }
+
+    if (fwidth < master[RAW_MIN])
+    {
+	FMTDBG(("colspan_share_extra_space: forcing RAW_MIN\n"));
+	colspan_algorithm(table, RAW_MIN, horiz);
+	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
+	slop = 0;
+	fwidth = master[RAW_MIN];
+    }
+    else if (fwidth == master[RAW_MIN])
+    {
+	colspan_algorithm(table, RAW_MIN, horiz);
+	colspan_column_init_from_leftmost(table, RAW_MIN, horiz);
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
+	slop = 0;
+    }
+    else if (fwidth < master[ABS_MIN])
+    {
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, RAW_MIN);
+	slop = fwidth - master[RAW_MIN];
+    }
+    else if (fwidth == master[ABS_MIN])
+    {
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
+	slop = 0;
+    }
+    else if (fwidth < master[PCT_MIN])
+    {
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
+	slop = fwidth - master[ABS_MIN];
+    }
+    else
+    {
+
+	if (fwidth > master[LAST_MAX] && user_width == 0)
+	    fwidth = master[LAST_MAX];
+	colspan_column_and_eql_copy(table, horiz, ACTUAL, 0,0, ABS_MIN);
+	slop = reflect_percentages(table, horiz, fwidth);
+    }
+
+    ASSERT(slop >= 0);
+
+    if (slop > 0)
+    {
+	/* Share in order raw, abs then pct */
+	share_raw_abs_pct(table, horiz, slop);
+    }
+
+    master[ACTUAL] = fwidth;
+
+    /* Reflect the values calculated in the existing colhdr structure. */
+    reflect_into_table(table, horiz);
+    
+    FMTDBG(("colspan_share_extra_space: done\n"));
+	
+    colspan_trace_cells(table, horiz);
+
+
+}
+
+#if 0
 {
     int x;
     pcp_cell the_cells = table->colspans;
@@ -1605,7 +2203,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
     /* Reflect the constraint level we have satisfied fully */
     for (x = 0; x < max; x++)
     {
-	the_cells[x].flags |= (1 << (best_slot + 1)) - 1;
+	the_cells[x].flags |= ((1 << (best_slot + 1)) - 1);
     }
 
     FMTDBG(("\nNOW INITIALISED ACTUAL VALUES, BASED ON %s SLOT\n\n", 
@@ -1644,6 +2242,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
     colspan_trace_cells(table, horiz);
     /*dump_table(table, NULL);*/
 }
+#endif
 
 /*****************************************************************************/
 

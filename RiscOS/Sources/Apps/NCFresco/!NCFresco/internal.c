@@ -831,6 +831,53 @@ void frontend_passwd_dispose(fe_passwd pw)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+static os_error *fe_error_write_file(FILE *f, const char *query)
+{
+    char *which = extract_value(query, "error=");
+    char *again = extract_value(query, "again=");
+    char *message = extract_value(query, "message=");
+    char buffer[32], *s;
+
+    STBDBG(("error: query '%s'\n", query));
+    STBDBG(("error: which '%s'\n", which));
+    STBDBG(("error: again '%s'\n", strsafe(again)));
+    
+    /* write out header, including error for reference on return */
+    fprintf(f, msgs_lookup("errorT"), which, again);
+
+    /* write message */
+    s = msgs_lookup(which);
+    if (s && strcmp(s, which) == 0)
+	fprintf(f, "%s", message);
+    else
+	fprintf(f, strsafe(s));
+
+    /* write button 1 */
+    fputs(msgs_lookup("error1"), f);
+    
+    sprintf(buffer, "%s_0:", which);
+    s = msgs_lookup(buffer);
+    fprintf(f, msgs_lookup("errorB"), 0, s && s[0] ? s : msgs_lookup("continue"));
+
+    /* write button 2 */
+    sprintf(buffer, "%s_1:", which);
+    if ((s = msgs_lookup(buffer)) != NULL && s[0])
+    {
+	fputs(msgs_lookup("error2"), f);
+	fprintf(f, msgs_lookup("errorB"), 1, s);
+    }
+
+    fputs(msgs_lookup("errorF"), f);
+
+    mm_free(which);
+    mm_free(again);
+    mm_free(message);
+    
+    return NULL;
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
 static os_error *fe_mem_dump_write_file(FILE *f)
 {
     int us = -1, next = -1, free;
@@ -919,11 +966,12 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
     {
 	char *url = NULL;
 
-	fe_file_to_url(config_document_handler_related, &url);
+	if (fe_file_to_url(config_document_handler_related, &url) != NULL)
+	    return generated;
 
 	v = get_source_view(query, TRUE);
 
-	STBDBG(("internal_url: related %s v%p\n", query, v));
+	STBDBG(("internal_url: related %s v%p handler '%s'\n", query, v, strsafe(url)));
 
 	if (url && v && v->displaying)
 	{
@@ -1079,6 +1127,11 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    tb_status_button(fevent_OPEN_SCALING, TRUE);
 	    e = fe_custom_write_file(f, "scaling", NVRAM_SCALING_TAG, 2, config_display_scale_fit);
 	}    
+	else if (strcasecomp(panel_name, "error") == 0)
+	{
+	    sound_event(snd_ERROR);
+	    e = fe_error_write_file(f, query);
+	}
     
 	fclose(f);
 
@@ -1499,6 +1552,33 @@ static int internal_decode_cancel(const char *query, const char *bfile, const ch
     NOT_USED(flags);
 }
 
+/* ----------------------------------------------------------------------------------------------------- */
+
+static int internal_decode_error(const char *query, char **new_url, int *flags)
+{
+    char *which = extract_value(query, "error=");
+    char *action = extract_value(query, "action=");
+    int generated = fe_internal_url_NO_ACTION;
+
+    if (strcmp(which, "E80acf") == 0)
+    {
+	if (strcasecomp(action, "cancel") != 0)
+	{
+	    /* try the print again */
+	    *new_url = extract_value(query, "again=");
+	    *flags |= access_NOCACHE;
+	    generated = fe_internal_url_REDIRECT;
+	}
+    }
+    
+    mm_free(action);
+    mm_free(which);
+
+    return generated;
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
 /*
  * Format of hotlist delet query data is
  * i=n1&i=n2&i=n3... for however many sites we have selected to delete
@@ -1533,6 +1613,10 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     else if (strcasecomp(page, "password") == 0)
     {
 	generated = internal_decode_password(query);
+    }
+    else if (strcasecomp(page, "error") == 0)
+    {
+	generated = internal_decode_error(query, new_url, flags);
     }
     
     return generated;
@@ -1587,7 +1671,7 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
     char *remove = extract_value(query, "remove=");
 
     STBDBG(("frontend_internal_url(): action '%s'\n", path));
-    
+
     for (uu = internal_url_info; uu->name; uu++)
     {
 	if (strcasecomp(uu->name, path) == 0)
@@ -1603,6 +1687,7 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
     {
 	fe_dispose_view(fe_locate_view(remove));
 	mm_free(remove);
+	remove = NULL;
     }
 
     return generated;

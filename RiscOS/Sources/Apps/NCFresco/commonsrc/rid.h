@@ -178,9 +178,18 @@ typedef SHORTISH rid_flag;
 #define rid_flag_RINDENT        0x4000  /* Right indent (or not! only one level) */
 #define rid_flag_WIDE_FONT	0x8000	/* item contains some 16bit characters */
 
+/* LINE_BREAK is higher strength than NO_BREAK */
+#define MUST_BREAK(ti)	(((ti)->flag & (rid_flag_EXPLICIT_BREAK | rid_flag_LINE_BREAK)) != 0)
+#define DONT_BREAK(ti)	( ! MUST_BREAK(ti) && ((ti)->flag & (rid_flag_NO_BREAK)) != 0)
+
+#define NO_TEXT_ITEMS_THIS_LINE(pi)	( (pi)->first == NULL )
+#define NO_FLOATERS_THIS_LINE(pi)	( (pi)->floats == NULL ? TRUE : ( (pi)->floats->left == NULL && (pi)->floats->right == NULL ) )
+#define NEITHER_TEXT_FLOATERS(pi)	( NO_TEXT_ITEMS_THIS_LINE(pi) && NO_FLOATERS_THIS_LINE(pi) )
 
 #define CLEARING_ITEM(ti) (((ti)->flag & rid_flag_CLEARING) != 0)
-#define FLOATING_ITEM(ti) (((ti)->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) != 0)
+
+/* CAUTION: uses argument twice. */
+#define FLOATING_ITEM(ti) ( ! CLEARING_ITEM(ti) && ((ti)->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) != 0 )
 
 #define RID_COLOUR(rid) ( ( (rid)->st.flags >> STYLE_COLOURNO_SHIFT ) \
                          & STYLE_COLOURNO_MASK )
@@ -217,8 +226,10 @@ typedef struct rid_float_item {
 } rid_float_item;
 
 typedef struct rid_floats_link {
-    struct rid_float_item *left;
-    struct rid_float_item *right;
+    struct rid_float_item *	left; /* going rightwards */
+    struct rid_float_item *	right; /* going leftwards */
+    int				left_margin;
+    int				right_margin;
 } rid_floats_link;
 
 /* This is just a hold-all used during formatting */
@@ -331,7 +342,7 @@ typedef int rid_image_flags;
 #define rid_image_flag_ABOT     0x04
 #define rid_image_flag_ABSALIGN 0x08
 #define rid_image_flag_REAL     0x10 /* We are displaying the real image (not a dummy) */
-#define rid_image_flag_PERCENT  0x20 /* size is a percent value not pixels */
+/* #define rid_image_flag_PERCENT  0x20 */ /* size is a percent value not pixels */
 
 typedef struct rid_input_item {
     struct rid_form_element base;
@@ -342,7 +353,7 @@ typedef struct rid_input_item {
     int xsize;			/* physical size in characters */
     char *src;                  /* If we have an image */
     char *src_sel;		/* URL of image */
-    int ww, hh;			/* specified size for IMAGE or BORDERIMAGE */
+    rid_stdunits ww, hh;	/* specified size for IMAGE or BORDERIMAGE */
     int max_len;		/* max buffer size in characters */
     int bw;			/* border width */
     union {
@@ -526,6 +537,7 @@ typedef SHORTISH rid_cell_flags;
 #define rid_cf_RELATIVE		0x0080  /* Cell has WIDTH=N* */
 #define rid_cf_ABSOLUTE		0x0100  /* Cell has WIDTH=N  */
 #define rid_cf_BACKGROUND       0x0200  /* Cell has background colour */
+#define rid_cf_NOCONS		0x0400  /* Constraint has been stomped on */
 
 /*****************************************************************************
 
@@ -753,6 +765,7 @@ struct rid_table_item
         rid_rules_tag           rules;          /* Which rules to draw between cells */
         rid_stdunits            userborder;     /* Width of border framing table. */
         rid_stdunits            userwidth;      /* Author's width of table, relative to container */
+	rid_stdunits		userheight;
         rid_stdunits            usercellspacing;/* Back-compat. */
         rid_stdunits            usercellpadding;/* Back-compat. */
 
@@ -989,7 +1002,7 @@ typedef struct {
     char *alt;                  /* Text to use in place */
     rid_image_flags flags;
     int bwidth;                 /* border width */
-    int ww, hh;                 /* Width and height if given by the author */
+    rid_stdunits ww, hh;                 /* Width and height if given by the author */
     void *im;
     char *usemap;               /* client side image map */
     int hspace, vspace;         /* gutters */
