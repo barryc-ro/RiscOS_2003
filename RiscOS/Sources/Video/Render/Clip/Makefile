@@ -51,7 +51,7 @@ rom: $(TARGET)
 
 resources:
         $(MKDIR) $(RESDIR).$(COMPONENT)
-        $(CP) LocalRes:Messages $(RESDIR).$(COMPONENT).Messages
+        $(CP) LocalRes:Messages $(RESDIR).$(COMPONENT).Messages $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
 
 install: $(TARGET)
