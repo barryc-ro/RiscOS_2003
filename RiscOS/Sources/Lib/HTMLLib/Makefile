@@ -27,7 +27,7 @@ LD      = link
 LB      = libfile
 WIPE    = wipe
 
-CCFLAGS = -c -depend !Depend -ffah -throwback ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -g -depend !Depend -ffah -throwback ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c -o
