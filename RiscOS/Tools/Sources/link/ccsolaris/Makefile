@@ -1,7 +1,7 @@
 # This file was created by Megamake.
 # Copyright (C) Advanced RISC Machines 1992.
 
-CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
+#CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
 CLX=${CLXPATH}/clx.a
 
 CFLAGS=-D__acorn -DTARGET_IS_ACORN_RISC_OS=1 -c -O -I${CLXPATH} ${CFL}
@@ -51,6 +51,10 @@ armlink: $(DERIVED)
 armlink: $(EXTLIB1)
 	$(CC) -o armlink $(OBJALL) $(EXTLIB1)
 	@echo "Made armlink"
+
+install: armlink
+	cp -p armlink ${RISCOS_BUILD_TOOLS}/
+	strip ${RISCOS_BUILD_TOOLS}/armlink
 
 clean:
 	-rm ${OBJALL}
