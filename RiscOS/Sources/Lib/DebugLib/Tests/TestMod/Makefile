@@ -51,14 +51,14 @@ MEMCHECKLIB	= MemCheck:o.MC_M
 
 LIBS =\
  ${DEBUGLIB}\
- TCPIPLibs:o.socklib5\
- TCPIPLibs:o.inetlib\
+ TCPIPLibs:o.socklib5zm\
+ TCPIPLibs:o.inetlibzm\
  ${MEMCHECKLIB}\
 
 LIBSD =\
  ${DEBUGLIB}\
- TCPIPLibs:o.socklib5\
- TCPIPLibs:o.inetlib\
+ TCPIPLibs:o.socklib5zm\
+ TCPIPLibs:o.inetlibzm\
  ${MEMCHECKLIB}\
 
 
@@ -66,7 +66,7 @@ LIBSD =\
 # Include files
 #
 
-INCLUDES = -IC:
+INCLUDES = -Itbox:,C:
 
 DIRS = o._dirs
 
