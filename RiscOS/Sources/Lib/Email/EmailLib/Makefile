@@ -50,7 +50,7 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 LIBFILE = libfile
-MemCheckCC	= #MemCheck.CC
+#MemCheckCC	= #MemCheck.CC
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
