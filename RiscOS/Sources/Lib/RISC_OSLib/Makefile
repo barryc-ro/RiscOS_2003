@@ -48,6 +48,10 @@ OBJASM  = objasm
 RM      = remove
 WIPE    = -wipe
 
+# Note the output redirection on the end of this macro to enable parameters
+# to match those of the old application xtentries.
+XTENT   = perl build:xtentries >
+
 DIFF    = gnu.diff -df >null:
 
 AFLAGS  = -depend !Depend -Stamp -quit
@@ -57,6 +61,11 @@ WFLAGS  = ~c~r~v
 
 # create a new library, add symbol table
 LIBFLAGS = -c -o
+
+#
+# Flags common to *all* phases of linking
+#
+LDFLAGS = -linkversion 519
 
 #
 # Include files
@@ -442,22 +451,38 @@ dirs:
 # ROM target {re-linked at ROM Image build time}
 #
 aof.RISC_OSLib: ${ROM_OBJS}
-        ${LD} -o $@ -aof ${ROM_OBJS}
+        ${LD} ${LDFLAGS} -o $@ -aof ${ROM_OBJS}
 
 aof.CLib: ${CLIB_ROM_OBJS}
-        ${LD} -o $@ -aof ${CLIB_ROM_OBJS}
+        ${LD} ${LDFLAGS} -o $@ -aof ${CLIB_ROM_OBJS}
 
 #
 # Final link for the ROM Image {using given base address}
 #
-rom_link_RISC_OSLib: ${ROM_OBJS}
-        ${LD} -o linked.RISC_OSLib ${ROM_OBJS} \
+rom_link_Entries:
+        ${XTENT} syms.C_Entries kernel.s.k_entries clib.s.cl_entries
+        print rlib.swi { >> syms.C_Entries }
+        | C_Entries *currently* only adds _swi/_swix to RO2 symbols.
+        egrep -v "^(0x00000000 . )?_swix?$" < syms.C_Entries > syms.A_Entries
+
+rom_link_RISC_OSLib: ${ROM_OBJS} rom_link_Entries
+        ${XTENT} syms.Entries kernel.s.k_entries clib.s.cl_entries rlib.s.rl_entries
+        print rlib.swi { >> syms.Entries }
+        ${LD} ${LDFLAGS} -o linked.RISC_OSLib ${ROM_OBJS} \
+              -symdefs syms.C_Entries \
+              -symdefs syms.A_Entries \
+              -symdefs syms.Entries \
               -symbols syms.${TARGET} \
               -bin -base ${ADDRESS} \
               -map > map.${TARGET}
 
-rom_link_CLib: ${CLIB_ROM_OBJS}
-        ${LD} -o linked.CLib ${CLIB_ROM_OBJS} \
+rom_link_CLib: ${CLIB_ROM_OBJS} rom_link_Entries
+        ${XTENT} syms.Entries kernel.s.k_entries clib.s.cl_entries
+        print rlib.swi { >> syms.Entries }
+        ${LD} ${LDFLAGS} -o linked.CLib ${CLIB_ROM_OBJS} \
+              -symdefs syms.C_Entries \
+              -symdefs syms.A_Entries \
+              -symdefs syms.Entries \
               -symbols syms.${TARGET} \
               -bin -base ${ADDRESS} \
               -map > map.${TARGET}
@@ -465,27 +490,10 @@ rom_link_CLib: ${CLIB_ROM_OBJS}
 rom_link: rom_link_${TARGET}
         ${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}
         |
-        if "${TARGET}"="RISC_OSLib" Then Set ExtraLibs$xtentries rlib.s.rl_entries Else Unset ExtraLibs$xtentries
-        @echo xtentries syms.Entries kernel.s.k_entries clib.s.cl_entries <ExtraLibs$xtentries>
-        @do xtentries syms.Entries kernel.s.k_entries clib.s.cl_entries <ExtraLibs$xtentries>
-        unset ExtraLibs$xtentries
-        print rlib.swi { >> syms.Entries }
-        xtentries syms.C_Entries kernel.s.k_entries clib.s.cl_entries
-        print rlib.swi { >> syms.C_Entries }
-        | C_Entries *currently* only adds _swi/_swix to RO2 symbols.
-        egrep -v "^_swix?$" < syms.C_Entries > syms.A_Entries
+        ${CP} syms.Entries ${ABSSYM} ${CPFLAGS}
+        ${CP} syms.C_Entries ${C_ABSSYM} ${CPFLAGS}
+        ${CP} syms.A_Entries ${A_ABSSYM} ${CPFLAGS}
         |
-        symgen syms.Entries syms.${TARGET} s.abssym
-        symgen syms.C_Entries syms.${TARGET} s.c_abssym
-        symgen syms.A_Entries syms.${TARGET} s.a_abssym
-        |
-        ${OBJASM} ${AFLAGS} -from s.abssym -to o.abssym
-        ${OBJASM} ${AFLAGS} -from s.c_abssym -to o.c_abssym
-        ${OBJASM} ${AFLAGS} -from s.a_abssym -to o.a_abssym
-        |
-        ${CP} o.abssym ${ABSSYM} ${CPFLAGS}
-        ${CP} o.c_abssym ${C_ABSSYM} ${CPFLAGS}
-        ${CP} o.a_abssym ${A_ABSSYM} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 #
@@ -517,7 +525,7 @@ lib.romastubs: rlib.s.rl_stub_a
 
 # Non-exported libraries:
 lib.clib: ${CLIB_MOD_OBJS}
-        ${LD} -o $@ -module ${CLIB_MOD_OBJS}
+        ${LD} ${LDFLAGS} -o $@ -module ${CLIB_MOD_OBJS}
 
 # Derived headers:
 derived.swis: s.makehswis h.swisheader s.swioptions
