@@ -16,7 +16,7 @@ EXP_HDR = <Cexport$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -24,7 +24,6 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
-STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -Wc -depend !Depend ${THROWBACK} -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} -wp
@@ -62,8 +61,8 @@ DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -
 #
 # Program specific options:
 #
-COMPONENT = webftp
-COMPONENTD = webftpD
+COMPONENT = WebFTP
+COMPONENTD= ${COMPONENT}D
 TARGET    = aof.${COMPONENT}
 OBJS      = webftp.o q.o files.o header.o support.o misc.o db.o dirparse.o
 OBJSD     = od.webftp od.q od.files header.o support.o od.misc od.db od.dirparse
@@ -102,6 +101,7 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 install: rm.${COMPONENT}
+	${MKDIR} ${INSTDIR}
 	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: installed
 
@@ -112,7 +112,6 @@ clean:
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${RM} h.header
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${DIRS}:
