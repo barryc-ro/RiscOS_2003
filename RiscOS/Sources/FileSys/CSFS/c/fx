@@ -38,10 +38,31 @@
 /*****************************************************************************/
 
 
+#define FSMAPCHUNK  (32*sizeof(filestr))
+
+static  int    fsmapn;
+filestr     *  fsmap;  /* maps file strcuture number to cat + data */
 
 
-filestr *   fsmap[MAXFILES];  /* maps file strcuture number to cat + data */
-filehandle  fmap[MAXFILES];   /* maps file handles to file structures */
+#define FMAPCHUNK  (32*sizeof(filehandle))
+
+static  int    fmapn;
+filehandle  *  fmap;   /* maps file handles to file structures */
+
+
+
+
+_kernel_oserror * fxinit(void)
+{
+ _kernel_oserror * err;
+
+ err=flex_alloc((flex_ptr)&fsmap,FSMAPCHUNK);
+ if(!err) err=flex_alloc((flex_ptr)&fmap,FMAPCHUNK);
+
+ fsmapn=fmapn=1;
+
+ return(err);
+}
 
 
 
@@ -54,46 +75,61 @@ _kernel_oserror * getnewfilehandle(int acn,int fn,int new,int * fh)
 
  err=NULL;
 
- for(i=1;i<MAXFILES;i++) if(!fmap[i].file) break;
+ for(i=1;i<fmapn;i++) if(!fmap[i].file) break;
 
- if(i==MAXFILES)
+ if(i==fmapn)
  { 
-  /* return too many files open error */ 
-  err=&mb_nfserr_TooManyFiles;
+  err=flex_chunk((flex_ptr)&fmap,(fmapn+1)*sizeof(filehandle),FMAPCHUNK);
+  if(!err)
+  {
+   fmap[fmapn].file=0; /* not needed, but play safe */
+   fmapn++;
+  }
  }
- else
+
+ if(!err)
  {
   if(arc[acn].hdr[fn].fshandle)  /* the file is already open */
   {
    fmap[i].file=fs=arc[acn].hdr[fn].fshandle;
    fmap[i].pointer=0;
-   fsmap[fs]->cat.open++;
+   fsmap[fs].cat.open++;
   }
   else   /* we have to open the file */
   {
-   for(j=1;j<MAXFILES;j++) if(!fsmap[j]) break;
+   for(j=1;j<fsmapn;j++) 
+   {
+    if(fsmap[j].cat.state==OPENUNUSED) break;
+   }
 
-   if(j==MAXFILES) { /* return too many files open error */ }
+   if(j==fsmapn)
+   {
+    err=flex_chunk((flex_ptr)&fsmap,(fsmapn+1)*sizeof(filestr),FSMAPCHUNK);
+    if(!err)
+    {
+     fsmap[fsmapn].cat.state=OPENUNUSED;
+     fsmapn++;
+    }
+   }
 
-   err=flex_alloc((flex_ptr)&fsmap[j],sizeof(filestr));
    if(!err)
    {
     arc[acn].files++;
     fmap[i].file=arc[acn].hdr[fn].fshandle=j;
     fmap[i].pointer=0;
 
-    fsmap[j]->cat.load=arc[acn].hdr[fn].load;
+    fsmap[j].cat.load=arc[acn].hdr[fn].load;
 
-    fsmap[j]->cat.exec=arc[acn].hdr[fn].exec;
-    fsmap[j]->cat.acc=arc[acn].hdr[fn].acc;
-    fsmap[j]->cat.length=arc[acn].hdr[fn].length;
-    fsmap[j]->cat.alloc=fsmap[j]->cat.length;
-    fsmap[j]->cat.isdir=arc[acn].hdr[fn].dirn>=0 || arc[acn].hdr[fn].dirn==-2;
-    fsmap[j]->cat.modded=0;
-    fsmap[j]->cat.open=1;
-    fsmap[j]->cat.state=OPENPEND;
-    fsmap[j]->cat.sh=0;
-    fsmap[j]->cat.sn=arc[acn].hdr[fn].sn;
+    fsmap[j].cat.exec=arc[acn].hdr[fn].exec;
+    fsmap[j].cat.acc=arc[acn].hdr[fn].acc;
+    fsmap[j].cat.length=arc[acn].hdr[fn].length;
+    fsmap[j].cat.alloc=fsmap[j].cat.length;
+    fsmap[j].cat.isdir=arc[acn].hdr[fn].dirn>=0 || arc[acn].hdr[fn].dirn==-2;
+    fsmap[j].cat.modded=0;
+    fsmap[j].cat.open=1;
+    fsmap[j].cat.state=OPENPEND;
+    fsmap[j].cat.sh=0;
+    fsmap[j].cat.sn=arc[acn].hdr[fn].sn;
    }
   }
   *fh=i;
@@ -104,12 +140,13 @@ _kernel_oserror * getnewfilehandle(int acn,int fn,int new,int * fh)
 
 
 
-static void storefshdr(heads * hdr,int fs)
+static void storefsstat(fstat * stat,int fs)
 {
- hdr->load=fsmap[fs]->cat.load;
- hdr->exec=fsmap[fs]->cat.exec;
- hdr->acc=fsmap[fs]->cat.acc;
- hdr->length=fsmap[fs]->cat.length;
+ stat->object=1;
+ stat->load=fsmap[fs].cat.load;
+ stat->exec=fsmap[fs].cat.exec;
+ stat->acc=fsmap[fs].cat.acc;
+ stat->length=fsmap[fs].cat.length;
 }
 
 
@@ -122,9 +159,9 @@ void updatefsmap(int acn,int fn)
 
  if((fs=hdr->fshandle)!=0)
  {
-  fsmap[fs]->cat.load=hdr->load;
-  fsmap[fs]->cat.exec=hdr->exec;
-  fsmap[fs]->cat.acc=hdr->acc;
+  fsmap[fs].cat.load=hdr->load;
+  fsmap[fs].cat.exec=hdr->exec;
+  fsmap[fs].cat.acc=hdr->acc;
  }
 }
 
@@ -133,16 +170,17 @@ void updatefsmap(int acn,int fn)
 static _kernel_oserror * stashdata(int acn,int fn,int fs)
 {
  _kernel_oserror * err;
- heads             hdr;
  int               ind;
+ fstat             stat;
 
- hdr=arc[acn].hdr[fn];
- storefshdr(&hdr,fs);
+ storefsstat(&stat,fs);
  ind=parentof(&arc[acn],fn);
 
+#ifdef DODEBUG
  deb("stash data");
+#endif
 
- err=savearcfile(acn,&hdr,fn,ind,1,fs,0);
+ err=savearcfile(acn,&stat,NULL,fn,ind,1,fs,0);
 
  return(err);
 }
@@ -162,14 +200,14 @@ _kernel_oserror * closefilehandle(int fh)
 
  fs=fmap[fh].file;
 
- if(fsmap[fs]->cat.open==1)
+ if(fsmap[fs].cat.open==1)
  {
   /* last file handle open on file structure */
 
-  if(fsmap[fs]->cat.state==OPENDISC) 
+  if(fsmap[fs].cat.state==OPENDISC) 
   {
-   close(fsmap[fs]->cat.sh);
-   fsmap[fs]->cat.sh=0;
+   close(fsmap[fs].cat.sh);
+   fsmap[fs].cat.sh=0;
   }
 
   for(i=0;i<maxarc;i++)
@@ -180,7 +218,7 @@ _kernel_oserror * closefilehandle(int fh)
     {
      if(arc[i].hdr[j].fshandle==fs)
      {
-      if(fsmap[fs]->cat.modded)
+      if(fsmap[fs].cat.modded)
       {
        err=stashdata(i,j,fs);
       }
@@ -192,11 +230,11 @@ _kernel_oserror * closefilehandle(int fh)
    }
   }
 
-  flex_free((flex_ptr)&fsmap[fs]);
+  fsmap[fs].cat.state=OPENUNUSED;
  }
  else
  {
-  fsmap[fs]->cat.open--;
+  fsmap[fs].cat.open--;
  }
 
  fmap[fh].file=0; 
@@ -264,19 +302,20 @@ _kernel_oserror * getbytes(int fh,char * dest,int n,int offset)
 
  fs=fmap[fh].file;
 
- if(fsmap[fs]->cat.state==OPENPEND) err=downloadfile(fs);
+ if(fsmap[fs].cat.state==OPENPEND) err=downloadfile(fs);
 
  if(!err)
  {
-  if((offset+n)>fsmap[fs]->cat.length) n=fsmap[fs]->cat.length-offset;
+  if((offset+n)>fsmap[fs].cat.length) n=fsmap[fs].cat.length-offset;
 
-
-  if(fsmap[fs]->cat.state==OPENDISC)
+  if(fsmap[fs].cat.state==OPENDISC)
   {
-   err=readat(fsmap[fs]->cat.sh,dest,n,offset);
+   err=readat(fsmap[fs].cat.sh,dest,n,offset);
   }
 
+#ifdef DODEBUG
   deb("gbx");
+#endif
  }
 
  return(err);
@@ -294,17 +333,17 @@ static _kernel_oserror * setextent(int fs,int newlen,int fill,int w)
 
  err=NULL;
 
- oldlen=fsmap[fs]->cat.length;
+ oldlen=fsmap[fs].cat.length;
 
  if((newlen>oldlen) || w)
  {
 
-  if(fsmap[fs]->cat.state==OPENDISC && !err)
+  if(fsmap[fs].cat.state==OPENDISC && !err)
   {
-   err=setfileextent(fsmap[fs]->cat.sh,newlen);
+   err=setfileextent(fsmap[fs].cat.sh,newlen);
   }
 
-  if(!err) fsmap[fs]->cat.length=newlen;
+  if(!err) fsmap[fs].cat.length=newlen;
  }
 
  return(err);
@@ -322,17 +361,17 @@ _kernel_oserror * putbytes(int fh,char * src,int n,int offset)
 
  fs=fmap[fh].file;
 
- if(fsmap[fs]->cat.state==OPENPEND) err=downloadfile(fs);
+ if(fsmap[fs].cat.state==OPENPEND) err=downloadfile(fs);
 
  if(!err)
  {
   err=setextent(fs,offset+n,0,0);
   if(!err)
   {
-   fsmap[fs]->cat.modded=1;
-   if(fsmap[fs]->cat.state==OPENDISC)
+   fsmap[fs].cat.modded=1;
+   if(fsmap[fs].cat.state==OPENDISC)
    {
-    err=writeat(fsmap[fs]->cat.sh,src,n,offset);
+    err=writeat(fsmap[fs].cat.sh,src,n,offset);
    }
   }
  }
@@ -353,11 +392,14 @@ _kernel_oserror * validextent(int fh,int extent,int write)
 
  fs=fmap[fh].file;
 
- if(fsmap[fs]->cat.state==OPENPEND) err=downloadfile(fs);
+ if(fsmap[fs].cat.state==OPENPEND) err=downloadfile(fs);
 
  if(!err) err=setextent(fs,extent,1,write);
 
  return(err);
 }
+
+
+
 
 
