@@ -49,3 +49,5 @@ ${TARGET}: ${OBJECTS} ${LIBS} o.dirs
 # Dynamic dependencies:
 o.main:	c.main
 o.main:	C:DebugLib.h.debuglib
+o.main:	c.main
+o.main:	C:DebugLib.h.debuglib
