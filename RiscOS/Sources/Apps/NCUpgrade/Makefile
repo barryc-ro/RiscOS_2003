@@ -167,7 +167,8 @@ OBJS = \
  o.nvram \
  o.ppp \
  o.progrmng \
- o.ui_main 
+ o.ui_main \
+ o.leds \
 
 OBJSZ = \
  oz.main \
@@ -182,6 +183,7 @@ OBJSZ = \
  oz.nvram \
  oz.ppp \
  oz.progrmng \
+ oz.leds \
 
 OBJSD = \
  od.main \
@@ -196,6 +198,7 @@ OBJSD = \
  od.nvram \
  od.ppp \
  od.progrmng \
+ od.leds \
   
 #OBJSDZ =
 
