@@ -16,9 +16,9 @@
 #
 COMPONENT  = Internet
 ROM_MODULE = aof.Internet
+TARGET     = rm.Internet
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
-TARGET    = rm.Internet
 RESDIR    = ^.^.AUNMsgs.Resources.${Locale}.Resources.${COMPONENT}
 
 # amu version 5.02 can't cope with @ in VPATH so we have to use ^.build
@@ -77,9 +77,10 @@ OBJS =	o.af o.if o.if_loop o.if_module o.raw_cb \
 # Main rules:
 #
 all: ${TARGET}
+	@echo ${COMPONENT}: Module built (Relocatable)
 
-${TARGET}: ${OBJS}
-        ${LD} -o $@ -rmf ${OBJS} ${CLIB}
+${TARGET}: ${OBJS} ${CLIB}
+        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
 
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
