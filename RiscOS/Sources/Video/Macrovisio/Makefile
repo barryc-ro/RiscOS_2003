@@ -35,7 +35,8 @@ ROMTARGET =	rm.${MACHINE}.${COMPONENT}
 DISCTARGETS =	${ROMTARGET} \
 		rm.MacroA \
 		rm.MacroB \
-		rm.MacroC
+		rm.MacroC \
+		rm.MacroD
 
 #
 # Generic rules:
@@ -63,6 +64,7 @@ install: ${DISCTARGETS}
         ${CP} rm.MacroA ${INSTDIR}.MacroA ${CPFLAGS}
         ${CP} rm.MacroB ${INSTDIR}.MacroB ${CPFLAGS}
         ${CP} rm.MacroC ${INSTDIR}.MacroC ${CPFLAGS}
+        ${CP} rm.MacroD ${INSTDIR}.MacroD ${CPFLAGS}
 	@echo ${COMPONENT}: disc modules installed
 
 #
@@ -89,6 +91,9 @@ rm.MacroB: Data.YUVTable Hdr.MacroB
 
 rm.MacroC: Data.YUVTable Hdr.MacroC
 	${AS} ${ASFLAGS} -From Hdr.MacroC -To rm.MacroC
+
+rm.MacroD: Data.YUVTable Hdr.MacroD
+	${AS} ${ASFLAGS} -From Hdr.MacroD -To rm.MacroD
 
 Data.YUVTable: BASIC.GenYUVTab
 	Run BASIC.GenYUVTab
