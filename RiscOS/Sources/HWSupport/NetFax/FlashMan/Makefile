@@ -35,6 +35,10 @@ ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
 
+DEBUGLIB   = <Lib$Dir>.DebugLib.o.debuglib
+FLASHLIB_T = <Lib$Dir>.FlashLib.o.flashlib_t
+FLASHLIB   = <Lib$Dir>.FlashLib.o.flashlib
+
 #
 # Include files
 #
@@ -50,10 +54,10 @@ TARGET_D  = aof.FlashManT
 TARGETSA  = rm.FlashMan
 TARGETSA_D = rm.FlashManT
 
-OBJS      = o.Header o.Module o.FlashMan o.misc <Lib$Dir>.flashlib.o.flashlib
+OBJS      = o.Header o.Module o.FlashMan o.misc ${FLASHLIB}
 
-OBJS_D  = o.Header od.Module od.FlashMan od.misc C:o.debuglib TCPIPLibs:o.socklib5 \
-TCPIPLibs:o.unixlib TCPIPLibs:o.inetlib ^.flashlib.flashlib_t
+OBJS_D  = o.Header od.Module od.FlashMan od.misc ${DEBUGLIB} TCPIPLibs:o.socklib5 \
+TCPIPLibs:o.unixlib TCPIPLibs:o.inetlib ${FLASHLIB_T}
 
 EXPORTS   = 
 
