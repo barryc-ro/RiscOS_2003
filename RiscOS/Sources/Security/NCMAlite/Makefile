@@ -29,7 +29,6 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
-THROWBACK = -Throwback
 
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
