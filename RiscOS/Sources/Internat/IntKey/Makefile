@@ -64,6 +64,7 @@ clean:
         ${WIPE} s ${WFLAGS}
         ${RM} ${TARGET}
 	${RM} keygen
+	${RM} keyconvert
         @echo ${COMPONENT}: cleaned
 
 keygen: o.keygen o.throwback o.unicdata
@@ -86,52 +87,3 @@ ${TARGET}: ${OBJECT}
         SetType $@ &FFA
 
 # Dynamic dependencies:
-o.throwback:	c.throwback
-o.throwback:	C:h.swis
-o.throwback:	C:h.kernel
-o.throwback:	h.throwback
-o.unicdata:	c.unicdata
-o.unicdata:	C:Unicode.h.iso10646
-o.keygen:	c.keygen
-o.keygen:	C:Unicode.h.iso10646
-o.keygen:	h.unicdata
-o.keygen:	h.structures
-o.keygen:	C:Unicode.h.iso10646
-o.keygen:	h.throwback
-o.IntKey: Source.IntKeyMod
-o.IntKey: Source.IntKeyBody
-o.IntKey: Hdr:ListOpts
-o.IntKey: Hdr:Macros
-o.IntKey: Hdr:System
-o.IntKey: Hdr:SWIs
-o.IntKey: Hdr:CPU.Generic26
-o.IntKey: Hdr:IO.GenericIO
-o.IntKey: Hdr:RISCOS
-o.IntKey: Hdr:ModHand
-o.IntKey: Hdr:Services
-o.IntKey: Hdr:Proc
-o.IntKey: Source.Accents
-o.IntKey: Source.KeyStruct
-o.IntKey: s.UK
-o.IntKey: s.Italy
-o.IntKey: s.Spain
-o.IntKey: s.France
-o.IntKey: s.Germany
-o.IntKey: s.Esperanto
-o.IntKey: s.Greece
-o.IntKey: s.Swed-Finl
-o.IntKey: s.Denmark
-o.IntKey: s.Norway
-o.IntKey: s.Iceland
-o.IntKey: s.Turkey
-o.IntKey: s.Russia
-o.IntKey: s.Israel
-o.IntKey: s.LatinAm
-o.IntKey: s.Belgium
-o.IntKey: s.Netherlands
-o.IntKey: s.Japan
-o.IntKey: s.Switzerland
-o.IntKey: s.Wales
-o.IntKey: s.USA
-o.IntKey: s.DvorakUK
-o.IntKey: s.DvorakUSA
