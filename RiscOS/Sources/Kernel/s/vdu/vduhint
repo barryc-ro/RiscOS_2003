@@ -4,15 +4,15 @@
 ;
 ; part of Kernel/HAL division
 ;
-; Author M Stephens
+; Author Mike Stephens (mjs)
 ; Date   Sep 2000
 
 ;;;mjsHAL
 ;
 ; vduhint is currently also a repository for VIDC20/IOMD specific HAL
 ; code, as stage 1 of Kernel/HAL split for video code
-; eventually, vduhint should just be veneer for calls to defined HAL routines
-;
+; eventually, vduhint should either have any veneer code/defns or
+; should disappear altogether
 
 ; temp mjs versions of macros to call HAL routines
 ;
@@ -51,8 +51,10 @@
 
 ; -----------------------------------------------------------------------------------
 
+;
 ; TEMP defn for workspace while code still in kernel
 ; layout of workspace block anchored at mjs_tempHALworkspace
+;
 
                             ^    0
 mjs_thalwk_start            #    0
@@ -68,6 +70,8 @@ VIDC_FSynSoftCopy           #    4
 VIDC_ControlSoftCopy        #    4
 VIDC_HSWRSoftCopy           #    4   ; horizontal sync width
 VIDC_VSWRSoftCopy           #    4   ; vertical sync width
+IOMD_VInitSoftCopy          #    4
+IOMD_VEndSoftCopy           #    4
 mjs_thalwk_end              #    0
 
 mjs_thalwk_size * mjs_thalwk_end - mjs_thalwk_start
@@ -83,23 +87,6 @@ mjs_tempHALworkspace_init ROUT
     STR      lr, [r0, #VIDC_Interlace]
     Pull     "r0, pc"
 
-; -----------------------------------------------------------------------------------
-
-;;;mjsHAL - is the mode workspace really generic enough to pass to HAL?
-;;;
-
-; HAL routine
-;
-; int HAL_Video_VetMode(void *VIDClist, void *workspace)
-;
-; VIDClist  -> generic video controller list (VIDC list type 3)
-; workspace -> mode workspace (if mode number), or 0
-; returns 0 if OK (may be minor adjusts to VIDClist and/or workspace values)
-;         non-zero if not OK
-;
-HAL_Video_VetMode ROUT
-        MOV   r0,#0    ; do nothing for now
-        MOV   PC,LR
 
 ; -------------------------------------------------------------------------
 
@@ -226,18 +213,6 @@ DCR_HDWRShift   *       0
 
 ; -------------------------------------------------------------------------
 
-;;;mjsHAL
-;;;
-;;;  HAL_Video_SetMode - routine for HAL to support VIDC20
-;;;
-;;;  mjs: adapted from ProcessVIDCListType3 in old kernel
-;;;
-;;;  this code still accesses kernel variable(s),
-;;;  also calls ComputeModuli
-;;;  also calls ProcessControlListItem
-;;;  so more work needed to fully divorce it
-;;;  put here for first stage of kernel/HAL split
-
 ;
 ;  void HAL_Video_SetMode(const void *VIDCList3)
 ;
@@ -245,6 +220,7 @@ DCR_HDWRShift   *       0
 ;
 ;  in: VIDClist -> video mode list (in VIDCList type 3 format)
 ;      (and sb (r9) -> HAL workspace)
+;
 
 HAL_Video_SetMode ROUT
         Push    "r4, r7,r8,r10,r11, lr"
@@ -402,6 +378,8 @@ FIFOLoadTable
         LDR     r0, [r3, #VIDCList3_PixelRate]  ; get pixel rate
         MOV     r10, r0, LSL r7                 ; peak mem b/w (x 1E3 bits/sec) - save for FIFO calculation
 
+  ! 0, "mjsHAL - using kernel variable IOSystemType"
+
  [ MorrisSupport
         MOV     R1, #0
         LDRB    R1, [R1, #IOSystemType]
@@ -450,19 +428,18 @@ FIFOLoadTable
         ADD     R0, r11, #(&80*4)           ; R0 -> VIDC20 table (remove offset for reg indices starting at &80)
         BL      ProgramVIDC20Regs
 
+        ; now make sure video DMA enabled
+        ;
+        MOV     r7, #IOMD_Base
+        LDRB    r8, [r7, #IOMD_VIDCR]
+        AND     r8, r8, #&7F                 ; knock out IOMD_VIDCR_Dup
+        ORR     r8, r8, #IOMD_VIDCR_Enable   ; enable video DMA
+        STRB    r8, [r7, #IOMD_VIDCR]
+
         ADD     sp, sp, #VIDC20ParmsSize   ; drop workspace for table
         Pull    "r4, r7,r8,r10,r11, pc"
 
 ; -------------------------------------------------------------------------
-
-
-;;;
-;;; mjsHAL - code for hitting VIDC20 registers, taken from s.vdudriver
-;;;
-;;;    eventually, need to do *TV adjustment to VIDCList3 itself before calling HAL routine
-;;;    other adjustments in old code, remembering things in kernel variables etc.
-;;;    may have to stay for this first stage, but need sorting when candidate HAL
-;;;    routine is really moved out of kernel
 
 ; ProgramVIDC20Regs - program registers from table
 ;
@@ -477,19 +454,6 @@ ProgramVIDC20Regs ROUT
         LDR     R4, [R9, #VIDC_Interlace]
         TST     R4, #1
         MOVNE   R4, #CR_Interlace
-
- [ STB
-;;;mjsHAL - unacceptable to call SWI from HAL code, needs sorting
-;;;
-        LDR     R1, [R0, #(PseudoRegister_HClockSpeed:SHR:22)-&80*4] ; are we using HCLK?
-        CMP     R1, #-1
-        Push    "r0-r1"
-        MOVEQ   R0, #1                  ; if not, pull the TV_Mode GPIO line low (if present)
-        MOVNE   R0, #3                  ; if we are, pull it high
-        ADR     R1, TV_Mode_string
-        SWI     XPortMan_AccessBit      ; (don't forget svc_PortMan below)
-        Pull    "r0-r1"
- ]
 
         MOV     R7, R0                  ; keep copy in R7 in case we go wrong
         MOV     R3, #VIDC               ; R3 -> VIDC20 h/w
@@ -517,13 +481,12 @@ ProgramVIDC20Regs ROUT
         TEQ     R6, #VIDCExternal       ; check for external register (which contains syncs)
         BNE     %FT50
 
-;;;mjsHAL this calls a SWI - not acceptable eventually for HAL, see comments for ReadSyncType
-        Push    "r4"
-        BL      ReadSyncType
-        Pull    "r4"
-
-        BICNE   R2, R2, #(Ext_HSYNCbits :OR: Ext_VSYNCbits)     ; if composite sync then don't invert syncs
-        ORRNE   R2, R2, #Ext_InvertCompVSYNC :OR: Ext_InvertCompHSYNC ; and force both syncs to be composite (because of lack of
+   ! 0, "mjsHAL - currently assume vertical sync rather than find out (by HAL call to OS?)"
+;;;
+;;;mjsHAL old code that operated on NE if composite sync found from SWI OS_ReadSysInfo 1
+;;;
+;;;     BICNE   R2, R2, #(Ext_HSYNCbits :OR: Ext_VSYNCbits)     ; if composite sync then don't invert syncs
+;;;     ORRNE   R2, R2, #Ext_InvertCompVSYNC :OR: Ext_InvertCompHSYNC ; and force both syncs to be composite (because of lack of
                                                                 ; swap in A540 VIDC card)
         B       %FT75
 50
@@ -549,6 +512,8 @@ ProgramVIDC20Regs ROUT
 60
         TEQ     r6, #VIDCDataControl
         BNE     %FT65
+
+   ! 0, "mjsHAL - using kernel variable VRAMWidth"
 
         BIC     r2, r2, #DCR_BusBits
         MOV     r14, #0
@@ -617,31 +582,6 @@ ProgramVIDC20Regs ROUT
 
 ; -------------------------------------------------------------------------
 
-;;; mjsHAL - spliced here for now (called by code above)
-
-;;; note, we would _not_ want to call a SWI from HAL
-;;; eventually, either this info is passed in to routine above, or HAL must
-;;; make a call back to kernel
-;;; (such calls have similar ATPCS style API, but there is no r9=workspace)
-
-;
-;       ReadSyncType - Read sync type
-;
-; out:  R4 = sync type (0 or 1)
-;       Z set/clear on R4
-;       All other registers preserved
-;
-
-ReadSyncType Entry "r0-r2"
-        MOV     r0, #1
-        SWI     XOS_ReadSysInfo         ; out: r0 = mode, r1 = monitortype, r2 = sync
-        MOVS    r4, r2                  ; move into r4
-        EXIT
-
-; -------------------------------------------------------------------------
-
-;;; mjsHAL - ProcessControlListItem spliced here for now, not investigated deeply
-;;;
 ;
 ;       ProcessControlListItem
 ;
@@ -669,20 +609,14 @@ ProcessControlListItem Entry
         &       ProcessControlListDPMSState             ; 11 - DPMS state
         &       ProcessControlListNOP                   ; 12 - Interlaced mode
 
-ProcessControlListLCDMode
-        [ STB
-        MOV     r1, #Ext_LCDGrey
-        |
-        MOV     r0, #0
-        LDRB    r1, [r0, #LCD_Active]           ;Read the existing value
-        AND     r1, r1, #&80                    ;Clear all but the single/dual bit, 'cos this might have been set already
-        ORR     r1, r1, r2                      ;Bung our new lcdmode into the byte, and....
-        STRB    r1, [r0, #LCD_Active]           ;...store in the KernelWS which LCD mode we are in.
-        MOV     r1, #Ext_ECKOn                  ;Set the ECLK on
+  ! 0, "mjsHAL - no LCD support (VIDCList3 control list stuff)"
 
-        CMP     r2, #3                          ;Was (is) it active-matrix?
-        ORRNE   r1, r1, #Ext_LCDGrey            ;If not, set the LCD greyscaler 'on'
-        ]
+ProcessControlListLCDMode
+        ;;;mjsHAL we have no support
+        EXIT
+
+ProcessControlListHiResMode
+        MOV     r1, #Ext_HiResMono              ; bit of a misnomer, it's not nec. mono
 05
         MOV     r0, #VIDCExternal
 10
@@ -695,13 +629,9 @@ ProcessControlListLCDMode
         BIC     lr, lr, r7                      ; knock out bits in mask
         ORR     lr, lr, r2                      ; OR in new bits
         STR     lr, [r11, r0, LSR #22]           ; and store in array
-
+;
 ProcessControlListNOP
         EXIT
-
-ProcessControlListHiResMode
-        MOV     r1, #Ext_HiResMono              ; bit of a misnomer, it's not nec. mono
-        B       %BT05
 
 ProcessControlListDACControl
         MOV     r1, #Ext_DACsOn
@@ -719,64 +649,16 @@ ProcessControlListExternalRegister
         B       %BT15
 
 ProcessControlListLCDDualPanelMode
-        [ STB
-        MOV     r0, #VIDCControl
-        MOV     r1, #CR_DualPanel
-        B       %BT10
-        |
-        MOV     r0, #0
-        LDRB    r1, [r0, #LCD_Active]
-        ORR     r1, r1, #&80                    ;Set the top bit & leave the rest as-is
-        STRB    r1, [r0, #LCD_Active]           ;Store in the KernelWS that we are in dual-panel LCD mode.
-        LDR     r0, [r11, #VIDCDataControl :SHR: 22]
-        MOV     r1, r0, LSL #(31-10)            ;Put HDWR bits to the top
-        BIC     r0, r0, r1, LSR #(31-10)        ;knock off bits
-        ORR     r0, r0, r1, LSR #(31-11)        ;Put back one bit further up (ie mul by 2)
-        STR     r0, [r11, #VIDCDataControl :SHR: 22]
-
-        LDR     r0, [r11, #VertiDisplayEnd :SHR: 22]
-        LDR     r1, [r11, #VertiDisplayStart :SHR: 22]
-        BIC     r0, r0, #VertiDisplayEnd
-        BIC     r1, r1, #VertiDisplayStart
-        SUB     r0, r0, r1                      ;R0 = Vres
-        ADD     r1, r1, r0, LSR #1              ;R1 = Vres/2 + VDSR
-        ORR     r1, r1, #VertiDisplayEnd
-        STR     r1, [r11, #VertiDisplayEnd :SHR: 22]
-
-        LDR     r1, [r11, #VertiCycle :SHR: 22]
-        BIC     r1, r1, #VertiCycle
-        SUB     r1, r1, r0, LSR #1
-        ORR     r1, r1, #VertiCycle
-        STR     r1, [r11, #VertiCycle :SHR: 22]
-
-        LDR     r1, [r11, #VertiBorderEnd :SHR: 22]
-        BIC     r1, r1, #VertiBorderEnd
-        SUB     r1, r1, r0, LSR #1
-        ORR     r1, r1, #VertiBorderEnd
-        STR     r1, [r11, #VertiBorderEnd :SHR: 22]
-
-        LDR     r1, [r11, #VIDCExternal :SHR: 22]
-        BIC     r1, r1, #Ext_ERegExt
-        ORR     r1, r1, #Ext_ERegGreen
-        STR     r1, [r11, #VIDCExternal :SHR: 22]
-
-        MOV     r0, #VIDCControl
-        MOV     r1, #CR_DualPanel
-        B       %BT10
-        ]
+        ;;;mjsHAL we have no support
+        EXIT
 
 ProcessControlListLCDOffsetRegister0
-        MOV     r0, #LCDOffsetRegister0
-20
-        ORR     r2, r2, r0                      ; put high bits of register at top
-        STR     r2, [r11, r0, LSR #22]           ; and store in array
-        MOV     r0, #VIDC                       ;ACTUALLY PROGRAM VIDC (I know I shouldn't but I don't care - I've got a cold)
-        STR     r2, [r0]
+        ;;;mjsHAL we have no support
         EXIT
 
 ProcessControlListLCDOffsetRegister1
-        MOV     r0, #LCDOffsetRegister1
-        B       %BT20
+        ;;;mjsHAL we have no support
+        EXIT
 
 ProcessControlListHClockSelect
         MOV     r0, #PseudoRegister_HClockSpeed ; pseudo-register holding HClock speed
@@ -790,9 +672,6 @@ ProcessControlListDPMSState
 
 ; -------------------------------------------------------------------------
 
-;;; mjsHAL - ComputeModuli spliced here for now, not investigated deeply
-;;;
-; *****************************************************************************
 ;
 ;       ComputeModuli - Work out VCO moduli for a given frequency
 ;
@@ -957,8 +836,6 @@ ComputeModuli Entry "r2-r12", ComputeModuliStack
 ; -------------------------------------------------------------------------
 
 ;
-; HAL routine, implemented for VIDC20
-;
 ; void HAL_Video_WritePaletteEntry(uint type, uint pcolour, uint index)
 ;
 ; write palette entry to video controller
@@ -1031,8 +908,6 @@ HV_WritePalettEntry_type1
 
 ; -------------------------------------------------------------------------
 
-;
-; HAL routine, implemented for VIDC20
 ;
 ; void HAL_Video_WritePaletteEntries(uint type, const uint *pcolours, uint index, uint Nentries)
 ;
@@ -1110,8 +985,6 @@ HAL_Video_WritePaletteEntries ROUT
 ; -------------------------------------------------------------------------
 
 ;
-; HAL routine, implemented for VIDC20
-;
 ; uint HAL_Video_ReadPaletteEntry(uint type, uint pcolour, uint index)
 ;
 ; return the effective palette entry after taking into account any hardware
@@ -1182,6 +1055,12 @@ HAL_Video_SetInterlace ROUT
 ; DMPS  = 0..3 as specified by monitor DPMSState (from mode file)
 ;         0 for no DPMS power saving
 
+; HAL is expected to attempt to turn syncs off according to DPMS, and
+; to turn video DMA off for blank (and therefore on for unblank) if possible.
+; HAL is not expected to do anything else, eg. blank all palette entries.
+; Such things are the responsibility of the OS, and also this call is expected
+; to be fast. May be called with interrupts off.
+
 HAL_Video_SetBlank ROUT
 
         MOV     r3, #VIDC
@@ -1206,6 +1085,12 @@ HAL_Video_SetBlank ROUT
         ORREQ   r2, r2, #Ext_InvertHSYNC :OR: Ext_InvertVSYNC  ; set sync signals to low (less power)
         BIC     r2, r2, #Ext_DACsOn                            ; turn off the DACs
         STR     r2, [r3]
+
+        MOV     r0, #IOMD_Base
+        LDRB    r1, [r0, #IOMD_VIDCR]
+        BIC     r1, r1, #IOMD_VIDCR_Enable   ; disable video DMA
+        STRB    r1, [r0, #IOMD_VIDCR]
+
         MOV     pc, lr
 ;
 ; unblanking
@@ -1220,6 +1105,12 @@ HAL_Video_SetBlank ROUT
         TST     r1, #2                                         ; if vsyncs were turned off,
         LDRNE   r2, [R9, #VIDC_VSWRSoftCopy]                   ; then restore from soft copy
         STRNE   r2, [r3]
+
+        MOV     r0, #IOMD_Base
+        LDRB    r1, [r0, #IOMD_VIDCR]
+        ORR     r1, r1, #IOMD_VIDCR_Enable   ; enable video DMA
+        STRB    r1, [r0, #IOMD_VIDCR]
+
         MOV     pc, lr
 
 ; -------------------------------------------------------------------------
@@ -1390,6 +1281,94 @@ HAL_Video_UpdatePointer
         STR     r4, [r14]
 
         Pull    "r4, r5, pc"
+
+; -------------------------------------------------------------------------
+
+; void HAL_Video_SetDAG(uint DAG, uint paddr)
+;
+; set Video DMA address generator value to given physical address
+;
+; DAG   = 0 set start address of current video display
+;         1 set start address of total video buffer
+;         2 set end address (exclusive) of total video buffer
+;         all other values reserved
+; paddr = physical address for given DAG
+;
+; Notes:
+; The OS has a video buffer which is >= total display size, and may be using
+; bank switching (several display buffers) or hardware scroll within the
+; total video buffer.
+;
+; DAG=1 will be start address of current total video buffer
+; DAG=2 will be end address (exclusive) of current total video buffer
+; DAG=0 will be start address in buffer for current display
+;
+; HALs should respond as follows:
+; 1) If they have no hardware scroll support, only DAG=0 is significant,
+;    and the end address of the current display is implied by the size
+;    of the current mode. Calls with DAG=1,2 should be ignored.
+; 2) If they support hardware scroll, DAG=0 again defines display start.
+;    DAG=2 defines the last address (exclusive) that should be displayed
+;    before wrapping back (if reached within display size), and DAG=1
+;    defines the address to which accesses should wrap back.
+
+HAL_Video_SetDAG ROUT
+
+        MOV     r12, #IOMD_Base
+
+        CMP     r0, #1
+        BEQ     %FT20
+        BHI     %FT40
+;
+; DAG=0 program VInit
+;
+        STR     r1, [r9, #IOMD_VInitSoftCopy]   ; save VInit so that writes to VEnd can check
+        LDR     r2, [r9, #IOMD_VEndSoftCopy]
+        CMP     r1, r2                         ; if VInit >= VEnd then set L bit
+        ORRCS   r1, r1, #IOMD_DMA_L_Bit
+        STR     r1, [r12, #IOMD_VIDINIT]
+        MOV     pc, lr
+;
+; DAG=1 program VStart
+;
+20      STR     r1, [r12, #IOMD_VIDSTART]
+        MOV     pc, lr
+
+   ! 0, "mjsHAL - using kernel variable VRAMWidth"
+;
+; DAG=2 program VEnd
+;
+40      MOV     r2, #0                          ; we must adjust address to that of
+        LDRB    r2, [r2, #VRAMWidth]            ; last DMA fetch, allowing for fetch size
+        CMP     r2, #1
+        MOVLO   r2, #16                         ; DRAM-only, subtract 16 (quadword)
+        MOVEQ   r2, #SAMLength/2                ; 1 bank of VRAM - 1/2 SAM
+        MOVHI   r2, #SAMLength                  ; 2 banks of VRAM - 1/2 SAM * 2
+        SUB     r1, r1, r2
+        STR     r1, [r9, #IOMD_VEndSoftCopy]    ; remember VEnd value
+        LDR     r2, [r9, #IOMD_VInitSoftCopy]   ; load current VInit
+        CMP     r2, r1                          ; if VInit >= VEnd
+        ORRCS   r2, r2, #IOMD_DMA_L_Bit         ; then set L bit
+        STR     r2, [r12, #IOMD_VIDINIT]        ; store VInit
+        STR     r1, [r12, #IOMD_VIDEND]         ; and VEnd
+        MOV     pc, lr
+
+; -------------------------------------------------------------------------
+
+;;;mjsHAL - is the mode workspace really generic enough to pass to HAL?
+;;;
+
+;
+; int HAL_Video_VetMode(const void *VIDClist, const void *workspace)
+;
+; VIDClist  -> generic video controller list (VIDC list type 3)
+; workspace -> mode workspace (if mode number), or 0
+; returns 0 if OK (may be minor adjusts to VIDClist and/or workspace values)
+;         non-zero if not OK
+;
+HAL_Video_VetMode ROUT
+        MOV   r0,#0    ; do nothing for now
+        MOV   PC,LR
 
 ; -------------------------------------------------------------------------
 
