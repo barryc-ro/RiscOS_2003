@@ -29,9 +29,9 @@ LD      = link
 RM      = remove
 MODSQZ  = modsqz
 WIPE    = -wipe
-CD	= dir
 RPCGEN  = rpcgen
 TOUCH   = create
+SED     = sed
 
 COMPONENT = NFS
 CMHGNAME  = nfscmhg
@@ -51,6 +51,8 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 DIRS=od._dirs
+
+TEMPORARY=tmpfile
 
 #
 # Libraries
@@ -95,6 +97,7 @@ ROMTARGET = aof.${COMPONENT}
 
 OBJS      =	  \
   $(CMHGOBJ)   	  \
+  o.xdr_manual    \
   o.printfuncs    \
   o.chains        \
   o.enumdir       \
@@ -135,6 +138,7 @@ OBJS      =	  \
 
 DEBOBJS      =	  \
   $(CMHGOBJ)   	  \
+  od.xdr_manual   \
   od.printfuncs    \
   od.chains        \
   od.enumdir       \
@@ -154,13 +158,13 @@ DEBOBJS      =	  \
   od.extensions    \
   od.access        \
   od.nfsrw         \
-  o.rquota_xdr    \
+  od.rquota_xdr    \
   od.nfs_prot_clnt \
-  o.nfs_prot_xdr  \
+  od.nfs_prot_xdr  \
   od.pcnfsd_clnt   \
-  o.pcnfsd_xdr    \
+  od.pcnfsd_xdr    \
   od.mount_clnt    \
-  o.mount_xdr     \
+  od.mount_xdr     \
   od.ModuleWrap    \
   od.Commands      \
   od.Utils         \
@@ -239,7 +243,7 @@ ${TARGET}: ${XTARGET} ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
 
 
 ${DTARGET}: ${DEBOBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ASMLIB}
-        ${LD} -o $@ -rmf ${DEBOBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB} ${ASMLIB} -symbols syms
+        ${LD} -o $@ -rmf ${DEBOBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB} ${ASMLIB}
         |sortsymtab syms linked.syms
         Access $@ RW/R
 
@@ -272,6 +276,12 @@ rom_link: ${ROMTARGET}
 # XDR related functions end up inside rpclib:xdr.c anyway.
 RPCCCFLAGS_EXTRA = -zo
 
+# NOTE: nfs_prot_xdr.c defines a recursive xdr routine for the entry types.  If used
+# with a sufficiently large directory, this causes the SVC stack to overflow.  There
+# are iterative versions in xdr_manual.c which replace these routines.  We use sed
+# to alter the name of the functions in the code that rpcgen generates to avoid
+# duplicate symbol definitions.
+
 c.mount_clnt   :  x.mount ${HDRS}
 	${RPCGEN} ${RPCGENFLAGS} -l -o $@ mount.x
 c.mount_xdr    :  x.mount ${HDRS}
@@ -279,7 +289,9 @@ c.mount_xdr    :  x.mount ${HDRS}
 c.nfs_prot_clnt:  x.nfs_prot ${HDRS}
 	${RPCGEN} ${RPCGENFLAGS} -l -o $@ nfs_prot.x
 c.nfs_prot_xdr :  x.nfs_prot ${HDRS}
-	${RPCGEN} ${RPCGENFLAGS} -c -o $@ nfs_prot.x
+	${RPCGEN} ${RPCGENFLAGS} -c -o ${TEMPORARY} nfs_prot.x
+	${SED} "s/^xdr_entry/obs_xdr_entry/" < ${TEMPORARY} > $@
+	${RM} ${TEMPORARY}
 c.pcnfsd_clnt  :  x.pcnfsd ${HDRS}
 	${RPCGEN} ${RPCGENFLAGS} -l -o $@ pcnfsd.x
 c.pcnfsd_xdr   :  x.pcnfsd ${HDRS}
@@ -298,6 +310,8 @@ h.nfs_prot: x.nfs_prot
 h.mount: x.mount
 	${RPCGEN} ${RPCGENFLAGS} -h -o $@ $*.x
 
+o.xdr_manual: c.xdr_manual
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
 o.rquota_xdr: c.rquota_xdr
 	${CC} ${RPCCCFLAGS} -o $@ $*.c
 o.rquota_clnt: c.rquota_clnt
@@ -315,14 +329,25 @@ o.nfs_prot_xdr: c.nfs_prot_xdr
 o.nfs_prot_clnt: c.nfs_prot_clnt
 	${CC} ${RPCCCFLAGS} -o $@ $*.c
 
+od.xdr_manual: c.xdr_manual
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+od.rquota_xdr: c.rquota_xdr
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
 od.rquota_clnt: c.rquota_clnt
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+od.pcnfsd_xdr: c.pcnfsd_xdr
 	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
 od.pcnfsd_clnt: c.pcnfsd_clnt
 	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+od.mount_xdr: c.mount_xdr
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
 od.mount_clnt: c.mount_clnt
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+od.nfs_prot_xdr: c.nfs_prot_xdr
 	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
 od.nfs_prot_clnt: c.nfs_prot_clnt
 	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+
 
 autogen-clean:
 	${RM} h.rquota
@@ -355,4 +380,10 @@ ${XTARGET}: o.${XCOMPONENT}
 	${LD} -o $@ -bin -base 0 o.${XCOMPONENT}
 	SetType $@ Module
 	
+
+o.V2support: c.V2support
+        ${CC} ${RPCCCFLAGS} -o $@ $*.c
+
+
+
 # Dynamic dependencies:
