@@ -486,7 +486,7 @@ lib.arthurlib: o.arth_new_n o.arth_old_n o.ArtAsm_n o.ArtAsm_o
         ${LIBFILE} ${LIBFLAGS} $@ o.Arth_new_n o.Arth_old_n o.ArtAsm_n o.ArtAsm_o
 
 # Derived headers:
-derived.swis: s.makehswis
+derived.swis: s.makehswis h.swisheader
         ${AS} ${AFLAGS} -from s.makehswis -to $@
         settype $@ text
 
