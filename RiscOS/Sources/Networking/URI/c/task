@@ -25,6 +25,7 @@
 
 static const int		messagelist[]	= { Wimp_MPreQuit,
 						    Wimp_MDataOpen,
+						    0x4af80,         /* URL message */
 						    URI_MProcess,    /* deals with URI_MCheck as well */
                                                     URI_MReturnResult,
 						    URI_MProcessAck,
@@ -35,8 +36,9 @@ static _kernel_oserror *task_wimp_message (int code, WimpMessage* pollblk);
 static _kernel_oserror *load_uri_file (const char* const filename);
 static _kernel_oserror *task_walk_chain (URI_handle_t uri_handle);
 static _kernel_oserror *task_send_uri_message (const int message_code, URI_t *const uri);
-static _kernel_oserror *task_unclaimed_uri (URIProcessURIMessage *message);
+static _kernel_oserror *task_unclaimed_uri (URI_t *);
 static _kernel_oserror *task_claimed_uri (URIProcessURIAckMessage *message);
+static _kernel_oserror *task_send_url_message (URI_t *const uri);
 static void task_invalidate_uri (URI_t *uri_handle);
 
 static int quit;
@@ -166,9 +168,28 @@ static _kernel_oserror* task_wimp_message(int code, WimpMessage* pollblk)
               poll_word = (int) URI_handle_chain;
               break;
       }
-      if ((e = task_unclaimed_uri (process_message)) != NULL)
-        return e;
+      if (process_message->uri_handle->action & Action_Check) {
+        if ((e = task_unclaimed_uri (process_message->uri_handle)) != NULL)
+          return e;
+      }
+      else {
+        process_message->uri_handle->action |= Action_URLProto;
+        poll_word = (int) URI_handle_chain;
+      }
     }
+      break;
+
+    case 0x4af80:
+      /* Only interested if it was a bounced message */
+      if (code == Wimp_EUserMessageAcknowledge) {
+             #define find_uri(x) ((void *)0)
+        URI_t *t = find_uri(&pollblk->data);
+        if (t != NULL) {
+          if ((e = task_unclaimed_uri (t)) != NULL) {
+            return e;
+          }
+        }
+      }
       break;
 
     case URI_MReturnResult:
@@ -350,7 +371,7 @@ static _kernel_oserror *task_walk_chain (URI_handle_t uri_handle)
     uri_handle = uri_handle->next;
     M_debug(("URI handle %08x action %08x\n",(int) uri_handle,(int) uri_handle->action));
     if ((action = uri_handle->action) == 0) continue;	/* nothing to do, so be quick */
-    if (action & (Action_WimpBroad|Action_WimpUnicast))				/* implies service call broadcast needed */
+    if (action & (Action_WimpBroad|Action_WimpUnicast))				/* implies URI Wimp message needed */
     {
       action &= ~(Action_WimpBroad|Action_WimpUnicast);		/* clear 'wimp broadcast flag' */
       if (action & Action_Check)
@@ -366,11 +387,24 @@ static _kernel_oserror *task_walk_chain (URI_handle_t uri_handle)
       uri_handle->action = action;
       M_debug(("URI handle %08x action %08x\n",(int) uri_handle,(int) uri_handle->action));
     }
+    else if (action & Action_URLProto) {
+        if ((e = task_send_url_message (uri_handle)) != NULL)
+          return e;
+    }
   }
 
   return NULL;
 }
 
+static _kernel_oserror *task_send_url_message (URI_t *const uri)
+{
+        _kernel_oserror *e;
+
+        uri->action = (uri->action & ~Action_URLProto);
+        if ((e = task_unclaimed_uri (uri)) != NULL)
+          return e;
+        return NULL;
+}
 
 static _kernel_oserror *task_send_uri_message (const int message_code, URI_t *const uri)
 {
@@ -446,9 +480,8 @@ static _kernel_oserror *task_send_uri_message (const int message_code, URI_t *co
 }
 
 /* deal with the situation where no task was able to handle the URI */
-static _kernel_oserror *task_unclaimed_uri (URIProcessURIMessage *message)
+static _kernel_oserror *task_unclaimed_uri (URI_t *uri_handle)
 {
-  URI_t *uri_handle = (URI_t *) message->uri_handle;
   _kernel_oserror *e = NULL;
 
   /* at some point in the future system variables will be checked as a last resort
