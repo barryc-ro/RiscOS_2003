@@ -19,8 +19,8 @@ RM      = remove
 WIPE    = -wipe
 SHRINK  = ShrinkWrapZipCompress
 
-AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
+AFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${THROWBACK} ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
 
