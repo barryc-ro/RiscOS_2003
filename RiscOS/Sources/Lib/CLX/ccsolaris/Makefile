@@ -101,15 +101,15 @@ install: clx.a
 	@echo "Installed clx.a"
 
 clean:
-	-rm ${OBJALL}
-	-rm clx.a
-	-rm ${DERIVED}
-	-rm *.c
-	-rm *.h
+	-rm -f ${OBJALL}
+	-rm -f clx.a
+	-rm -f ${DERIVED}
+	-rm -f *.c
+	-rm -f *.h
 	@echo cleaned CLX
 
 realclean: clean
-	-find . -type l -print | xargs rm
+	-find . -type l -print | xargs rm -f ${DERIVED}
 	@echo cleaned CLX links
 
 links:
