@@ -87,9 +87,14 @@ clean:
         ${WIPE} aof.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} h.header
         @echo ${COMPONENT}: cleaned
+
+resources:
+        TokenCheck LocalRes:Messages
+	${MKDIR} ${RESDIR}.${COMPONENT}
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGETSA}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
@@ -106,9 +111,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
