@@ -5,6 +5,10 @@
 # Paths
 #
 EXP_HDR = <cexport$dir>
+RESAPP = <resource$Dir>.App
+RESRES = <resource$Dir>.Resources
+SRCCOMMON = Resources.Common
+SRCLOCALE = Resources.<System>.<Locale>
 #
 # Generic options:
 #
@@ -38,8 +42,21 @@ install_rom: ${TARGET}
 clean:
         @echo ${COMPONENT}: cleaned
 
+resources1:
+	${CP} ${SRCCOMMON}.!BootROM    {RESAPP}.!Boot    ${CPFLAGS}
+	${CP} ${SRCCOMMON}.Welcome     {RESRES}.Welcome  ${CPFLAGS}
+	${CP} ${SRCCOMMON}.SetScrap    {RESRES}.SetScrap ${CPFLAGS}
+	${CP} ${SRCCOMMON}.MimeMap     {RESRES}.MimeMap  ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!RunROM     {RESAPP}.!Run     ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!SpritesROM {RESAPP}.!Sprites ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Config      {RESRES}.Config   ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Messages    {RESRES}.Message  ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Res         {RESRES}.Res      ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Sprites     {RESRES}.Sprites ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
+
 resources:
-	${CP} Resources.* <resource$dir>.* ${CPFLAGS}
+	${CP} Resources.* <resource$dir> ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 export: export_${PHASE}
