@@ -69,7 +69,7 @@ o.SampleExpV
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} $< $@
+.cmhg.o:;   ${CMHG} -p $< $@
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
