@@ -48,6 +48,13 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
+resources:
+	${MKDIR} <Resource$Dir>.Fonts
+        @Set Alias$MFD ${MKDIR} <Resource$Dir>.Fonts.%0
+	@Set Alias$CFF ${CP} Fonts.%0 <Resource$Dir>.Fonts.%0 ${CPFLAGS}
+	Obey Config.${SYSTEM}
+        @echo ${COMPONENT}: resource files copied
+
 o.ROMFonts: ${SOURCE}
         ${MKDIR} o
         ${AS} ${ASFLAGS} ${SOURCE}
