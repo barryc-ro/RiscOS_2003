@@ -65,7 +65,6 @@ OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1
 ASMS      = s.plugclient s.utils s.client_rep s.clientmidi s.event s.tbevent s.wimpevent s.wimpmsg s.m
 
 # CodecCtl was System specific but not any more.
-RDIR      = Resources.RCA.${LOCALE}
 EXPORTS   =
 
 .SUFFIXES: .oz .c .o .src .cmhg .s
@@ -109,7 +108,6 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${WIPE} s.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${RAMTARGET}
@@ -118,10 +116,13 @@ clean:
 
 resources:
         ${MKDIR} ${RESAPP}
-        ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot ${CPFLAGS}
-        ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run ${CPFLAGS}
-        ${CP} ${RDIR}.Messages ${RESAPP}.Messages ${CPFLAGS}
-        ${CP} ${RDIR}.Res ${RESAPP}.Res ${CPFLAGS}
+	Set CodecCtlRes$Path Resources.RCA.${LOCALE}.,Resources.RCA.UK.
+	TokenCheck CodecCtlRes:Messages
+        ${CP} CodecCtlRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
+        ${CP} CodecCtlRes:!RunROM  ${RESAPP}.!Run ${CPFLAGS}
+        ${CP} CodecCtlRes:Messages ${RESAPP}.Messages ${CPFLAGS}
+        ${CP} CodecCtlRes:Res      ${RESAPP}.Res ${CPFLAGS}
+	Unset CodecCtlRes$Path
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -158,9 +159,7 @@ ${TARGET}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
