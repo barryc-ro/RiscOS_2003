@@ -72,7 +72,8 @@ install_resources:
 
 clean:
         ${WIPE} o ${WFLAGS}
-        ${RM} ${COMPONENT}
+        ${RM} ${TARGET}
+        ${RM} ${TARGET2}
         @echo ${COMPONENT}: cleaned
 
 export_hdrs: 
@@ -89,12 +90,12 @@ ${DIRS}:
 # Final link
 #
 ${TARGET}: ${OBJS} ${LIBS} ${DIRS}
-        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
         ${SQZ} ${SQZFLAGS} $@
         ${CHMOD} a+rx $@
 
 ${TARGET2}: ${XPANDOBJS} ${LIBS} ${DIRS}
-        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+        ${LD} ${LDFLAGS} -o $@ ${XPANDOBJS} ${LIBS}
         ${SQZ} ${SQZFLAGS} $@
         ${CHMOD} a+rx $@
 
