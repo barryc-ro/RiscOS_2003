@@ -56,11 +56,12 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ABSSYM    = RISCOSLIB:o.c_abssym
+ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 
 #
 # Include files
 #
-INCLUDES = -IC:
+INCLUDES = -IC: -IC:AsmUtils
 
 OBJS =\
  o.convert\
@@ -114,11 +115,11 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 ${MODULE}: ${OBJS} ${CLIB}
-        ${LD} -o $@ -Module ${OBJS} ${CLIB}
+        ${LD} -o $@ -Module ${OBJS} ${ASMUTILS} ${CLIB}
 
 # Partially linked AOF object file
-${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${ASMUTILS} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${ASMUTILS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image {using given base address}
