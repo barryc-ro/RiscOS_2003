@@ -94,12 +94,12 @@ INETLIB	   = TCPIPLibs:o.inetlibzm
 #
 # Program specific options:
 #
-COMPONENT = ISPcapture
-TARGET    = aof.ISPcapture
-TARGETSA  = rm.ISPcapture
+COMPONENT = ISPCapture
+TARGET    = aof.ISPCapture
+TARGETSA  = rm.ISPCapture
 EXPORTS   =
 BASEOBJS  = module.o header.o ispc_cmds.o dynalloc.o ispc_ispc.o \
-	  ispc_url.o kprintf.o ispc_utils.o usermode.o
+	  ispc_url.o kprintf.o ispc_utils.o usermode.o 
 
 ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
@@ -108,7 +108,7 @@ RESDIR = <resource$dir>.Resources.${COMPONENT}
 
 NOTROMRESDEP = html.ISPC1 html.ISPC2 html.ISPC3 html.ISPC4
 
-ROMRESDEP = 
+ROMRESDEP = html.ISPC1 html.ISPC2 html.ISPC3 html.ISPC4
 
 #
 # Component build rules
@@ -144,10 +144,10 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} <resource$dir>.Resources
-        ${MKDIR} <resource$dir>.Resources.ISPcapture
+#        ${MKDIR} <resource$dir>.Resources
+#        ${MKDIR} <resource$dir>.Resources.ISPCapture
         
-        @echo ${COMPONENT}: resource files copied
+#        @echo ${COMPONENT}: resource files copied
 
 #
 # Executable target (static link)
