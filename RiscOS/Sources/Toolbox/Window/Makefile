@@ -48,7 +48,7 @@ WFLAGS  = ~c~v
 
 AFLAGS   = -depend !Depend -Stamp -quit -CloseExec
 CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -Wc -zps1 ${DFLAGS}
-DFLAGS   = -D${SYSTEM}
+DFLAGS   = -D${SYSTEM} ${STYLE}
 ROMFLAGS = -DROM
 INCLUDES = -IC:tboxlibint.,C:tboxlibs,C:
 
