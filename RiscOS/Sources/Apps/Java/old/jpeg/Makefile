@@ -11,7 +11,7 @@
 #
 # Component specific options:
 #
-COMPONENT  = JavaJPEG
+COMPONENT  = jpeg
 ROM_MODULE = aof.$(COMPONENT)
 
 #

@@ -13,28 +13,16 @@
 #include "ncma_url.h"
 #include "ncma_utils.h"
 #include "ncma_dial.h"
-#include "smtagsCCIJ.h"
+#include "ncma_cache.h"
 #include "ncma_bootb.h"
 #include "ncma_net.h"
 #include "ncma_funai.h"
 #include "ncma_fx.h"
 #include "vectors.h"
-#include "init.h"
 
 #include "DBUG.h"
 
-/* JRF: For some reason removing the card whilst shutting down was
-        explicitly marked as ignoring the removal. This is obviously a big
-        no-no. Defining this will cause card removal in shutdown queries
-        to be treated like card removals anywhere else.
- */
-#define REMOVING_CARD_AFFECTS_SHUTDOWN
 
-/* JRF: It may be that shutdown /should/ be terminated by any transition,
-        rather than special casing just some that are known to cause
-        problems.
- */
-#define SHUTDOWN_KILLED_BY_ALL_TRANSITIONS
 
 char *trans_string(NCMA_TRANS trans)
 {
@@ -47,14 +35,12 @@ char *trans_string(NCMA_TRANS trans)
     "Trans_CompleteOK",
     "Trans_CompleteBad",
     "Trans_AuthFail",
-    "Trans_URLStart",
     "Trans_URLRetry",
     "Trans_Registry",
     "Trans_Shutdown",
     "Trans_ShutdownComplete",
     "Trans_URLShutdown",
     "Trans_URLShutdownCancel",
-    "Trans_URLUnblock",
     "Trans_URLChangePIN",
     "Trans_URLLeavePIN",
     "Trans_PowerUp",
@@ -63,44 +49,21 @@ char *trans_string(NCMA_TRANS trans)
     "Trans_URLMismatch",
     "Trans_URLMismatchAck",
     "Trans_NCMASurf",
-    "Trans_URLDownloadMin",
-    "Trans_URLDownloadMax",
-    "Trans_URLDownloadSched",
-    "Trans_URLDownloadNak",
-    "Trans_URLConnect",
-    "Trans_URLConnectNak",
-    "Trans_MIMEOk",
-    "Trans_MIMEBad",
-    "Trans_URLDisconnectAck",
-    "Trans_URLDisconnectNak",
-    "Trans_HUP",
-    "Trans_URLPinNAK",
-    "Trans_PreConnect",
-    "Trans_NCMADialUI_Start",
-    "Trans_BadCardNak",
-    "Trans_Logout",
-    "Trans_LogoutAck",
-    "Trans_LogoutNak",
-    "Trans_HangUp",
-    "Trans_NCDialUI_Cancel",
-    "Trans_URLCardInserted", // Funai slot 2 smartcard inserted
-    "Trans_URLCardRemoved", // Funai slot 2 smartcard removed
-    "Trans_URLCardRetry", // retry a read on slot 2
-    "Trans_CardBroken",
 #ifdef TRAP_PPP_TIMEOUTS
     "Trans_PPPTimeout",
 #endif
-#ifdef SC_SWAPPING
-    "Trans_WrongISPCard",
-#endif /* SC_SWAPPING */
-#ifdef EMAIL_CLIENT
-    "Trans_NCMAEnterEmailSelectUserOffline",
-    "Trans_NCMAEnterEmailSelectUserOnline",
-    "Trans_NCMAEmailSelectUserAck",
-    "Trans_NCMAEmailSelectUserNak",
-#endif /* EMAIL_CLIENT */
-    "Trans_URLCardBroken",
-    "Trans_DiallerStateChange"
+    "Trans_DisconnectAck",
+     "Trans_URLDisconnectNak",
+     "Trans_HUP",
+     "Trans_URLPinNAK",
+     "Trans_PreConnect",
+     "Trans_HangUp",
+     "Trans_URLCardInserted",
+     "Trans_URLCardRemoved",
+     "Trans_URLCardRetry",
+     "Trans_URLConnect",
+     "Trans_URLStart",
+     "Trans_URLConnectNak"
   };
 
 
@@ -112,6 +75,7 @@ char *state_string(NCMA_STATE state)
     static char *s_table[] = {
     "State_NCMAInit",
     "State_NCMAStart",
+    "State_NCMAPanic",
     "State_NCMASleep",
     "State_NCMANoCard",
     "State_NCMABadCard",
@@ -127,103 +91,12 @@ char *state_string(NCMA_STATE state)
     "State_NCMABooted",
     "State_NCMAConnect",
     "State_NCMAUpdatePIN",
-    "State_NCMANeedPIN",
+    "State_NCMANeedPIN"
 
-    "State_NCMAPanic",
-    "State_NCMAUnblock",
-    "State_NCMADownload",
-    "State_NCMABadUnblockPIN",
-#ifdef SC_SWAPPING
-    "State_NCMAWrongISPCard",
-#endif /* SC_SWAPPING */
-#ifdef EMAIL_CLIENT
-    "State_NCMAEmailSelectUser",
-#endif /* EMAIL_CLIENT */
-    "State_NCMALogout"
   };
+
   return(s_table[state]);
 }
-
-
-
-
-/* This routine initialises all variables to do with smartcard swapping and
-    the email client. It is used at the beginning of a session, i.e. at
-    initialisation and after a standby/logoff sequence. */
-void initialise_variables(void)
-{
-  DBUG_PRINTF(DBUG_LVL_DIAG, "initialise_variables().\n");
-  /* Reinitialise all data */
-  bNoScreenChanges = false; /* Screen changes are allowed */
-  bRedialRequested = false; /* No redial has been requested */
-#ifdef SC_SWAPPING
-  bCardVerified = false;    /* Card is intially unverified */
-  uiPreviousState = State_NCMAInit;
-  tidy_memory();
-#ifdef EMAIL_CLIENT
-  uiemail_client_state = email_state_none; /* Reset email client state */
-#endif /* EMAIL_CLIENT */
-#endif /* SC_SWAPPING */
-
-  /* Ensure that the post_initialisation() routine has been run - it may not have been if the module was soft-loaded */
-  if (!post_initialisation_run)
-  {
-    post_initialisation();
-    post_initialisation_run = true;
-  }
-}
-
-
-
-/*********************************************************************************/
-/* PreConnect_in_NCMA_Connect                                                    */
-/*                                                                               */
-/* This routine allows a client application to ask NCMATwin to create it's       */
-/*  tag cache off the smartcard without NCMAlite having connected. It is used by */
-/*  ISPCapture and the email client, which need to know about tags from the      */
-/*  smartcard before NCMAlite has conencted.                                     */
-/*                                                                               */
-/* Parameters: None                                                              */
-/*                                                                               */
-/* Returns:    The new state.                                                    */
-/*                                                                               */
-/*********************************************************************************/
-NCMA_STATE PreConnect_in_NCMA_Connect(void)
-{
-  DBUG_PRINTF(DBUG_LVL_ERROR, "PreConnect_in_NCMA_Connect() called\n");
-
-  /* Fetch the bootblock from the smartcard. */
-  if(fetch_sc_bootblock() < 0)
-  { // bootblock read was crap
-      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: failed to read bootblock\n");
-      ncma_dbox_open(URL_PATH(invalid.html));
-      return(State_NCMABadCard);
-  }
-
-  /* Build the RAM cache withth data out of the bootblock */
-  if(build_ram_cache() < 0)
-  {
-     DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: failed to build RAM cache\n");
-     ncma_dbox_open(URL_PATH(invalid.html));
-     return(State_NCMABadCard);
-  }
-
-  /* Validate that the card is valid */
-  if(validate_funai_id_card() < 0)
-  { // check bootblock looks ok
-      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: bootblock isn't formatted as Funai ID card\n");
-      ncma_dbox_open(URL_PATH(invalid.html));
-      return(State_NCMABadCard);
-  }
-
-  return(State_NCMAConnect);
-
-}
-
-
-
-
-
 
 /* this is the NCMA ASM */
 NCMA_STATE machine(NCMA_TRANS trans)
@@ -260,93 +133,33 @@ NCMA_STATE machine(NCMA_TRANS trans)
 #endif
 
     case Trans_CardRemoved:
-	//card_removed: UNCOMMENT ME IF CHANGING ABOVE #IF 0
+         //card_removed: UNCOMMENT ME IF CHANGING ABOVE #IF 0
+    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard removed, hanging up, flushing cache\n");
+	 ncma_hangup();
+	 ncma_dbox_close();
+    	 reset_cache(); /* was unlock_cache() */
+    	 options_mode = 0; // clear options screen lock-out
+    	 force_pin = 0;
 
-	/* 5Jan98 SJM This comes around whilst in stutdown process so
-           we need to ignore some of it or it upsets the handling of
-           ShutdownComplete */
-
-	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard removed, flushing cache, maybe hanging up\n");
-
-	reset_cache(); /* was unlock_cache() */
-	options_mode = 0; // clear options screen lock-out
-	force_pin = 0;
-
-#ifdef REMOVING_CARD_AFFECTS_SHUTDOWN
-	if (ncma_state == State_NCMAShutdown)
-	{
-	    break;
-	}
-	else
-#else
-	if (ncma_state == State_NCMAShutdown)
-	{
-	    return State_NCMAShutdown;
-	}
-	else
-#endif
-	  {
-	    ncma_hangup();
-
-	    /* close all the dboxes */
-	    ncma_dialler_dbox_close();
-	    ncma_dbox_close();
-	    ncma_dbox2_close();
-
-	    if (ncma_started)
-	    {
-		//ncma_dbox_open(URL_PATH(splash.html));
-		//return(State_NCMANoCard);
+	if(ncma_started) {
+                //ncma_dbox_open(URL_PATH(splash.html));
+                //return(State_NCMANoCard);
 #ifdef LOCAL_URL_PATHS
-		ncma_url_open(URL_PATH(welcome.html));
+  	   	  ncma_url_open(URL_PATH(welcome.html));
 #else
-		ncma_url_open(WELCOME_SCREEN_URL);
+		  ncma_url_open(WELCOME_SCREEN_URL);
 #endif
-		return(State_NCMAInit);
-	    }
-	    else
-	    {
-		return(State_NCMAInit); /* sc layer kicks off with a card removed event */
-	    }
-	}
-	break;
+	          return(State_NCMAInit);
+        } else return(State_NCMAInit); /* sc layer kicks off with a card removed event */
+        break;
 
-	/* SJM 14Dec98: triggered from SCI_BADINSERTx event from
-           SCTrans. Means a non-smartcard has been inserted in the
-           slot (eg upside down) */
-  case Trans_CardBroken:
-      if (ncma_state != State_NCMAShutdown)
-	  ncma_dbox_open(URL_PATH(SCprobs.html));
-#ifdef REMOVING_CARD_AFFECTS_SHUTDOWN
-      else
-          break; /* Shutdown handler deals with it and rethrow it for us */
-#endif
-      return (ncma_state);
+    case Trans_URLCardInserted: // these states are only of interest to State_NCMAConnect and State_NCMABooted
+    case Trans_URLCardRemoved: // so if we're not in that state, ignore, otherwise fall-thru
+    	if((ncma_state != State_NCMAConnect) && (ncma_state != State_NCMABooted)) return(ncma_state);
+    	break;
 
-  case Trans_URLCardBroken:
-      if (ncma_state != State_NCMAShutdown)
-	  ncma_dbox2_open(URL_PATH(SCprobs.html));
-#ifdef REMOVING_CARD_AFFECTS_SHUTDOWN
-      else
-          break; /* Shutdown handler deals with it and rethrow it for us */
-#endif
-      return (ncma_state);
-
-      /* this globally removes any card dbox. It also, in certain
-         states, drops though to the main state machine to perform
-         suitable other functions. */
-  case Trans_URLCardRemoved:
-      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: card 2 removed, clear any dbox2\n");
-      ncma_dbox2_close();
-      slot2_retries = MAX_SLOT2_RETRIES;
-#ifdef MUST_HAVE_URL_CARD
-      if (ncma_state != State_NCMADiallingISP && ncma_state != State_NCMABooted)
-#endif
-	  return ncma_state;
-      break;
-
-  default:
-      break;
+    default:
+         break;
   }
 
   switch(ncma_state) {
@@ -407,8 +220,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
             	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: card inserted in slot 1 \n");
 
-                ncma_started = true;
-                initialise_variables();
+                ncma_started = 1;
 
                 num_slots = find_slots();
 
@@ -490,7 +302,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
                 }
 
                 proceed_after_force_pin: // callback entry point from State_NCMANeedPIN
-                proceed_after_dial_failed: // callback from State_DiallingISP
 
                 if(num_slots == 2) { // twin slot system
                     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: twin slot system - connect page has no CONNECT button\n");
@@ -501,7 +312,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	    	        case -1: // there's an invalid card already inserted
     	    	            	 // open badsvc dialogue, and open connect[BNP] dialogue underneath, proceed as if no card inserted
     	    	    	    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: invalid card already inserted\n");
-    	    	    	    ncma_dbox2_open(URL_PATH(badsvc.html));
+    	    	    	    ncma_dbox_open(URL_PATH(badsvc.html));
     	    	    	    // fall-thru to complete 'card not inserted' stuff
 
     	    	    	case 0: // no card inserted
@@ -526,7 +337,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	    	    	    break;
 
     	    	    	case 1: // valid card inserted - continue in connect phase
-    	    	    	    ncma_trans = Trans_URLCardRetry; // SJM: 8Dec98: Was Trans_URLConnect;
+    	    	    	    ncma_trans = Trans_URLConnect;
     	    	    	    setcallback();
     	    	    	    return(State_NCMAConnect);
     	    	    	    break;
@@ -579,13 +390,13 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  return(State_NCMANewPIN);
 
              case Trans_PreConnect: /* byild tag cache without connecting, to allow ISPCapture to display current sc values */
-                  return (PreConnect_in_NCMA_Connect());
+    	    	  // don't need do to anything, as ram cache is built during state_ncmainit now
+             	  return(State_NCMAConnect);
 
 
 	     case Trans_URLConnect: /* generated internally for a twin-slot box when the SVC card is inserted
 	     	    	    	       generated by user-click on a 'connect' button on a single slot box ONLY */
 
-                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: TransURLConnect state  ** Paul **\n");
     	    	  if(fetch_sc_bootblock() < 0) { // fetch again, in case changed by ISPCapture
     	    	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: failed to re-read bootblock\n");
     	    	      ncma_dbox_open(URL_PATH(invalid.html));
@@ -598,9 +409,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		      return(State_NCMABadCard);
       		  }
 
-		  // used to be in State_NCMADiallingISP/Trans_DialOK
-    	     	  ncma_network_init(NCMA_NET_RAM | NCMA_NET_POST_DIAL); /* set resolver variables */
-
       		  // dial based on connection details in bootblock
       		  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: dialling from SC info...\n");
       		  if(ncma_dial()<0) {
@@ -609,12 +417,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
       		      ncma_url_open(URL_PATH(connect.html));
       		      return(State_NCMAConnect);
       		  }
-		  else
-		  {
-                    /* Dial was successful, open the please waitscreen */
-                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Opening the please wait screen.\n");
-	            ncma_url_open(URL_PATH(pleasewait.html));
-		  }
 
 		  return(State_NCMADiallingISP);
                   break;
@@ -626,7 +428,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	    	switch(url_card_inserted) {
     	    	    case -1: // bad card
     	    	    	DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: bad card in slot 2\n");
-    	    	    	ncma_dbox2_open(URL_PATH(badsvc.html));
+    	    	    	ncma_dbox_open(URL_PATH(badsvc.html));
     	    	    	return(State_NCMAConnect);
 
     	    	    case 0: // no card present - this shouldn't be possible
@@ -641,13 +443,20 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	    	}
     	    	break;
 
+     	    case Trans_URLCardRemoved: // card 2 out, reset retries
+      	    	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: card 2 removed, waiting for re-insertion\n");
+      	    	ncma_dbox_close();
+      	    	slot2_retries = MAX_SLOT2_RETRIES;
+      	    	return(State_NCMAConnect);
+      	    	break;
+
     	    case Trans_URLCardRetry: // called from card 2 inserted above
     	    case Trans_Timeout: // called after 'not ready' error from card
 
     	    	switch(read_service_card()) { // attempt to read the 2nd smartcard, sets URL card inserted
 	    	    case -1: // error
 		    	DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: read service card FAILED\n");
-    	    	    	ncma_dbox2_open(URL_PATH(badsvc.html));
+    	    	    	ncma_dbox_open(URL_PATH(badsvc.html));
     	    	    	return(State_NCMAConnect);
 
 	    	    case -2: // not ready
@@ -656,10 +465,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		    	return(State_NCMAConnect);
 
 	    	    default: // got the data
-			ncma_dbox2_close(); /* 14Jan99 there can be an
-			error box hanging around at this point from
-			quick insert and remove */
-
 	    	    	ncma_trans = Trans_URLConnect; // re-enter state & connect
 	    	    	setcallback();
 		    	return(State_NCMAConnect);
@@ -678,23 +483,11 @@ NCMA_STATE machine(NCMA_TRANS trans)
     case State_NCMADiallingISP:
 
     	 switch(trans) {
-#ifdef MUST_HAVE_URL_CARD
-    	     case Trans_URLCardRemoved: // user removed the URL card while we were dialling
-    	     	  // this bit's not in the spec - it's a late addition at the customer's behest
-    	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: URL card removed while dialling\n");
-    	     	  ncma_hangup();
-    	     	  ncma_dialler_dbox_close();
-    	     	  ncma_dbox_close();
-    	     	  goto proceed_after_dial_failed;
-    	     	  return(State_NCMAConnect);
-    	     	  break;
-#endif
+
     	     case Trans_DialBad: /* Don't know what to do here! Not in the CIS!! */
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: ISP dial failed - bummer\n");
-    	     	  ncma_dialler_dbox_close();
     	     	  ncma_dbox_close();
-    	     	  //ncma_url_open(URL_PATH(connect.html));
-    	     	  goto proceed_after_dial_failed;
+    	     	  ncma_url_open(URL_PATH(connect.html));
     	     	  return(State_NCMAConnect);
     	     	  break;
 
@@ -706,34 +499,19 @@ NCMA_STATE machine(NCMA_TRANS trans)
        		  set_ppp_timeout();
 #endif
 
-		  /* moved to just before ncma_dial() */
-    	     	  /* ncma_network_init(NCMA_NET_RAM | NCMA_NET_POST_DIAL); set resolver variables */
 
-      	     	  ncma_url_user();
+    	     	  ncma_network_init(NCMA_NET_RAM | NCMA_NET_POST_DIAL); /* set resolver variables */
+
+      	     	  if (ncma_url_user() != 0)
+		  {
+		        ncma_hangup();
+			ncma_dbox_open( URL_PATH(badurldbox.html) );
+			return(State_NCMAConnect);
+		  }
 
     	     	  return(State_NCMABooted);
  		  break;
-
-		  /* 5Jan99 SJM add this transition so that we can
-                     redial from a dial failure via NCMA and get the
-                     pleasewait screen up. */
-	 case Trans_URLConnect:	/* request to redial after a dial failure */
-	     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: redialling from SC info...\n");
-	     if(ncma_dial()<0) {
-		 DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: IAP dial initiation failed\n");
-		 ncma_dbox_close();
-		 ncma_url_open(URL_PATH(connect.html));
-		 return(State_NCMAConnect);
-	     }
-	     else
-	     {
-		 /* Dial was successful, open the please wait screen */
-		 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Opening the please wait screen.\n");
-		 ncma_url_open(URL_PATH(pleasewait.html));
-	     }
-	     break;
-
-	 } /* end state_ncmadiallingisp */
+ 	 } /* end state_ncmadiallingisp */
  	 break;
 
 /*********************************************************************************
@@ -787,33 +565,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  return(State_NCMAConnect);
 #endif
 
-	     case Trans_URLConnect:
-		 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: redialling from SC info...\n");
-#if 1
-		 /* 14Jan99 it is possible to get a dial error whilst
-                    in the booted state. If the user goes to options
-                    at this point then they will come back out with
-                    'connectack' */
-		 if(ncma_dial()<0) {
-		     DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: IAP dial initiation failed\n");
-		     ncma_dbox_close();
-		     ncma_url_open(URL_PATH(connect.html));
-		     return(State_NCMAConnect);
-		 }
-		 else
-		 {
-		     /* Dial was successful, open the please wait screen */
-		     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Opening the please wait screen.\n");
-		     ncma_url_open(URL_PATH(pleasewait.html));
-		     return(State_NCMADiallingISP);
-		 }
-		 break;
-#else
-		 /* this is the old code from NCMAlite - the Boca years */
-		 ncma_dbox_close();
-		 ncma_url_open(URL_PATH(badurl.html));
-		 return(State_NCMABooted);
-#endif
+	     case Trans_URLConnect: // Added by SJM - refer to Docs.BocaChanges
+	     	  ncma_dbox_close();
+		  ncma_url_open(BAD_URL_URL);
+	     	  return(State_NCMABooted);
 
 	     case Trans_URLConnectNak: // Added by SJM - refer to Docs.BocaChanges
 		  ncma_hangup();
@@ -842,16 +597,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	    // basically, ignore card-outs, but on a valid card-in, fetch the SVC/URL card's URL regardless
 
     	    case Trans_URLCardInserted: // second card inserted into slot 2
-		if (disable_slot2_count == 0)
-		{
-		    if(options_mode != 0)
-                    {
-                    	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: ignoring, because options mode is currently ON\n");
-                    	return(State_NCMABooted);
-                    }
-		    init_service_card() ; // sets url_card_inserted
+    	    	ncma_dbox_close();
+    	    	init_service_card() ; // sets url_card_inserted
 
-		    switch(url_card_inserted) {
+    	    	switch(url_card_inserted) {
     	    	    case -1: // bad card
     	    	    	DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: bad card in slot 2, ignoring it\n");
     	    	    	return(State_NCMABooted);
@@ -865,22 +614,15 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	    	    	ncma_trans = Trans_URLCardRetry; // callback to this state - gives the card a chance to settle
     	    	    	setcallback();
     	    	    	return(State_NCMABooted);
-		    }
-		}
+    	    	}
     	    	break;
 
-#ifdef MUST_HAVE_URL_CARD
      	    case Trans_URLCardRemoved: // card 2 out, reset retries
-     	    	// this isn't in the spec. either - it's a late addition at the customer's behest
-      	    	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: card 2 removed, but this state DOES now care\n");
-
-      	    	// put a dialogue up until the user puts another URL card in
-      	    	// don't need a separate state to handle this, as the browser won't let the user do anything
-      	    	// while one of my dialogs is on screen. Now there's handy!
-      	    	ncma_dbox2_open(URL_PATH(waiturl.html));
+      	    	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: card 2 removed, but this state doesn't care\n");
+      	    	ncma_dbox_close();
+      	    	slot2_retries = MAX_SLOT2_RETRIES;
       	    	return(State_NCMABooted);
       	    	break;
-#endif
 
     	    case Trans_URLCardRetry: // called from card 2 inserted above
     	    case Trans_Timeout: // called after 'not ready' error from card
@@ -896,7 +638,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		    	return(State_NCMABooted);
 
 	    	    default: // got the data
-	    	    	ncma_dbox2_close(); // close the waiturl.html dialogue
 	    	    	ncma_trans = Trans_URLConnect; // re-enter state & connect
     	    	    	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: new SERVICE card info read...fetching\n");
     	    	    	ncma_url_user();
@@ -919,19 +660,15 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
              case Trans_URLShutdown:
              case Trans_Shutdown:
-                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: shutdown being acted upon\n");
                   prevent_shutdown = 0;
                   shutdown_nc();
                   ncma_standby_dbox_close(); /* close my dbox */
                   ncma_dbox_close(); /* close any other dbox. Yuck. */
-                  ncma_dbox2_close(); /* close any other dbox. Yuck. */
                   ncma_url_open(BLANK_SCREEN_URL);
                   return(State_NCMAShutdown);
                   break;
 
              case Trans_URLShutdownCancel:
-                  prevent_shutdown = 1;
-                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: shutdown request cancelled\n");
                   ncma_standby_dbox_close();
              	  return(pre_shutdown_state);
              	  break;
@@ -941,44 +678,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
              	  if(ui_present()) prod_browser_after_standby();
              	  return(State_NCMAInit);
              	  break;
-
-             default:
-                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: shutdown request got transition %s\n",trans_string(trans));
-#ifndef SHUTDOWN_KILLED_BY_ALL_TRANSITIONS
-                  if (pre_shutdown_state == State_NCMADiallingISP ||
-                      trans == Trans_CardRemoved ||
-                      trans == Trans_CardBad ||
-                      trans == Trans_CardOK ||
-                      trans == Trans_URLCardInserted ||
-                      trans == Trans_URLCardRemoved ||
-                      trans == Trans_URLCardRetry ||
-                      trans == Trans_CompleteOK ||
-                      trans == Trans_Registry ||
-                      trans == Trans_Timeout
-                     )
-#endif
-                     { /* JRF: If they pressed the off button whilst dialling,
-                            and there is a state change, then we want to
-                            obey that state change immediately. Otherwise
-                            things go very screwy. Fault 1701 is a case of
-                            this.
-                            It's possible that other states have similar
-                            issues and need to be dealt with like this.
-                            Adding to the above conditional would probably
-                            be better than merely allowing all state
-                            changes through. I believe there may be other
-                            issues involved with the transition queue
-                            having multiple transitions happening
-                            concurrently.
-                     */
-                    /* We forget about the shutdown request */
-                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: unknown transition during shutdown request - losing shutdown request\n");
-                    ncma_state = pre_shutdown_state; /* Restore state */
-                    prevent_shutdown = 1; /* Remember to block shutdown */
-                    ncma_standby_dbox_close();
-                    return machine(trans);
-
-                  }
          } /* end state_ncmashutdown */
          break;
 
@@ -1174,7 +873,8 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
        		      return(State_NCMAApresPIN);
 	          }
-		  break;
+
+
     	 } /* end state_ncmapin */
     	 break;
 
@@ -1274,7 +974,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	    	      return(State_NCMAConnect);
 
 	     	  }
-		  break;
     	 }
     	 break;
 
@@ -1355,7 +1054,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	     case Trans_CardRemoved: /* user has removed bad card */
 
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: invalid smartcard removed\n");
-    	     	  ncma_dbox_close();
     	     	  ncma_dbox_open(URL_PATH(splash.html));
     	     	  return(State_NCMANoCard);
 
@@ -1427,8 +1125,35 @@ NCMA_STATE machine(NCMA_TRANS trans)
          } /* end state_ncmanocard */
          break;
 
+
+
+
+/*********************************************************************************
+
+    STATE_NCMAPANIC
+
+ *********************************************************************************/
+    case State_NCMAPanic:
+    default:
+
+	 DBUG_PRINTF(DBUG_LVL_PANIC, "NCMA_machine: PANIC!\n");
+	 return(State_NCMAPanic);
+
   } /* end switch STATE */
 
+  if(trans == Trans_Registry) {
+#ifdef SHOW_BOOTBLOCK_TRANSACTIONS
+      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: sweet nothings from the registry\n");
+#endif
+      return(ncma_state);
+  }
+
+  if((trans == Trans_CompleteOK) || (trans == Trans_CompleteBad) || (trans == Trans_AuthFail)) {
+#ifdef SHOW_BOOTBLOCK_TRANSACTIONS
+    DBUG_PRINTF(DBUG_LVL_DEBUG, "NCMA: spurious I/O ACK from smartcard driver...ignoring\n");
+#endif
+    return(ncma_state);
+  }
 
   /* otherwise . . . PANIC!! */
 

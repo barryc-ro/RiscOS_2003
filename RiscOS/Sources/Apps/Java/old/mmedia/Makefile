@@ -11,7 +11,7 @@
 #
 # Component specific options:
 #
-COMPONENT  = JavaMMedia
+COMPONENT  = mmedia
 ROM_MODULE = aof.$(COMPONENT)
 
 #

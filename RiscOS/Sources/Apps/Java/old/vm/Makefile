@@ -11,17 +11,13 @@
 #
 # Component specific options:
 #
-COMPONENT  = JavaVM
-APP	   = !$(COMPONENT)
+COMPONENT  = java
 ROM_MODULE = aof.$(COMPONENT)
 
 RESDIR = <resource$dir>.Resources2.$(COMPONENT)
-RESAPP = <resource$dir>.Apps.$(APP)
-RDIR   = Resources
 
 SYMFILTER = filter
 GENINDEX = genindex
-FIDDLE = fiddle
 
 #
 # Generic options:
@@ -44,7 +40,7 @@ ANSILIB   = CLib:o.ansilib
 CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.c_abssym
+ABSSYM    = RISC_OSLib:o.abssym
 
 OBJ       = image
 SYM       = symbols
@@ -70,12 +66,6 @@ ENTRIES = \
 	$(ENTRY).$(NET) \
 	$(ENTRY).$(MMEDIA)
 
-FILES = \
-	$(RDIR).!Boot \
-	$(RDIR).!Run \
-	$(RDIR).CallASWI \
-	$(RDIR).!Sprites22
-	
 SYMBOLS = syms
 
 #
@@ -84,16 +74,14 @@ SYMBOLS = syms
 
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
-	
+
 install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
-resources: indexes $(FILES)
+resources: indexes
 	$(MKDIR) $(RESDIR)
-	$(MKDIR) $(RESAPP)
 	$(CP) $(INDEX).* $(RESDIR).* $(CPFLAGS)
-	$(CP) $(RDIR).* $(RESAPP).* $(CPFLAGS)
 	@echo $(COMPONENT): resource files copied to Messages module
 
 
@@ -114,27 +102,23 @@ clean:
         ${WIPE} aof ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
-        ${WIPE} fiddled ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 $(SYMBOLS): $(OBJS)
-	$(MKDIR) aof
-	$(FIDDLE) fiddle_syms $(ROMCSTUBS) fiddled
-        ${LD} -o $(ROM_MODULE) -aof -symbols syms0 ${OBJS} fiddled
+        ${LD} -o $(ROM_MODULE) -aof -symbols syms0 ${OBJS} ${ROMCSTUBS}
 	awk "$1~/(._stub$)|(^__DLL__ENTRIES_.)/ {print $1, $2}" syms0 \
 	    { > $@ }
 	
 ${ROM_MODULE}: $(OBJS)
 	$(MKDIR) aof
-	$(FIDDLE) fiddle_syms $(ROMCSTUBS) fiddled
-        ${LD} -o $@ -symbols $(SYMBOLS) -aof ${OBJS} fiddled
+        ${LD} -o $@ -symbols $(SYMBOLS) -aof ${OBJS} ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} \
-		$(ABSSYM) ${ROM_MODULE} -map > map.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
+              -map > map.${COMPONENT}
 	truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete

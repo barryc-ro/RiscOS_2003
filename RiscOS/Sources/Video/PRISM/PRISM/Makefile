@@ -1,5 +1,5 @@
 # Makefile for PRISM
-# ==================
+# =======================
 #
 
 # -----------------------------------------------------------------------------
@@ -77,7 +77,6 @@ ROM_OBJS =		\
  o.Clients		\
  o.Components		\
  o.Generic		\
- o.Handles		\
  o.Lists		\
  o.Module		\
  o.Utils		\
@@ -90,7 +89,6 @@ RAM_OBJS =		\
  oSL.Clients		\
  oSL.Components		\
  oSL.Generic		\
- oSL.Handles		\
  oSL.Lists		\
  oSL.Module		\
  oSL.Utils		\
@@ -103,7 +101,6 @@ DBG_OBJS =		\
  oSLd.Clients		\
  oSLd.Components	\
  oSLd.Generic		\
- oSLd.Handles		\
  oSLd.Module		\
  oSLd.Lists		\
  oSLd.Utils		\

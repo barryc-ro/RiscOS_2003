@@ -8,10 +8,6 @@
  * piers    20/11/96 Got around a bug in the toolbox where if a gadget isn't
  *                   made up of icons, it creates new ones. Passing a NULL
  *                   list fails, but passing an empty list containing -1 works.
- * piers    19/01/98 Added dragging support
- * ADH      24/03/99 Set title_bg to 2 rather than leaving it uninitialised.
- *                   Put scroll_inner and scroll_outer the right way around.
- * pete     18/6/99  Added fading support.
  */
 
 #include <stdio.h>
@@ -28,11 +24,12 @@
 
 #include "glib.h"
 #include "string32.h"
-#include "riscos_uti.h"
-#include "TextGadget.h"
+#include "riscos_utils.h"
+#include "TextGadgets.h"
 #include "Scrollbar.h"
 #include "ScrollbarP.h"
-#include "ModHdr.h"
+#include "debug.h"
+#include "myswis.h"
 #include "Utils.h"
 
 #ifdef MemCheck_MEMCHECK
@@ -162,7 +159,7 @@ static _kernel_oserror *scrollbar_show(PrivateScrollbar *sdata)
         }
         else
             extent.xmax = -0xffff;
-
+        
         if (sdata->value - sdata->min == 0)
             open_win.xscroll = 0;
         else
@@ -183,36 +180,19 @@ static _kernel_oserror *scrollbar_show(PrivateScrollbar *sdata)
         }
         else
             extent.ymin = -0xffff;
-
+        
         if (sdata->value - sdata->min == 0)
             open_win.yscroll = 0;
         else
             open_win.yscroll = (extent.ymin) /
             	(int)(sdata->max - sdata->min) * (sdata->value - sdata->min);
     }
-
-    /* PJG: (18/6/99) Now, if the scrollbar is faded, just set the extent to
-    *                 be the window size so we get one big sausage.
-     */
-    if (sdata->faded)
-    {
-        extent.xmin = 0;
-        extent.xmax = sdata->box.xmax - sdata->box.xmin;
-        extent.ymax = 0;
-        extent.ymin = -(sdata->box.ymax - sdata->box.ymin);
-    }
-
     wimp_set_extent(sdata->scrollbar_window, &extent);
     open_win.behind = 0;
     _swix(Wimp_OpenWindow, _INR(1,4), &open_win, 0x4B534154 /*'TASK'*/,
     				sdata->parent_window, 0);
 
     return NULL;
-}
-
-int scrollbar_active(void)
-{
-    return scrollbar_list != NULL;
 }
 
 /* scrollbar_die -----------------------------------------------------------
@@ -247,7 +227,6 @@ scrollbar_add(Scrollbar *sdata, int wimpw, ObjectId object_id,
     sb->component_id = sdata->hdr.component_id;
 
     sb->type = sdata->type;
-    sb->faded = 0; // PJG (18/6/99) scrollbar is not faded
     sb->parent_window = wimpw;
 
     sb->box = sdata->hdr.box;
@@ -278,9 +257,8 @@ scrollbar_add(Scrollbar *sdata, int wimpw, ObjectId object_id,
     else
         win.flags |= WimpWindow_VScroll;
     win.title_fg = 0xff;
-    win.title_bg = 2;
-    win.scroll_outer = 3;
-    win.scroll_inner = 1;
+    win.scroll_outer = 1;
+    win.scroll_inner = 3;
     win.extent.xmin = 0;
     win.extent.ymin = -0xffff;
     win.extent.xmax = 0xffff;
@@ -289,9 +267,6 @@ scrollbar_add(Scrollbar *sdata, int wimpw, ObjectId object_id,
     win.work_flags = 0;
     win.sprite_area = NULL;
     win.min_width = win.min_height = 1;
-    win.title_data.it.buffer = NULL;
-    win.title_data.it.validation = NULL;
-    win.title_data.it.buffer_size = 0;
     win.nicons = 0;
 
     // Display scrollbar if parent is showing
@@ -401,7 +376,7 @@ _kernel_oserror *scrollbar_method(PrivateScrollbar *handle,
             break;
         case Scrollbar_SetValue:
             handle->value = regs->r[4];
-            scrollbar_show(handle);
+//            scrollbar_update(handle);
             break;
         case Scrollbar_GetValue:
             regs->r[0] = handle->value;
@@ -436,7 +411,7 @@ _kernel_oserror *scrollbar_remove(PrivateScrollbar *handle)
 
     remove_task_interest(GLib_ToolboxEvents, filter_toolbox_events);
     remove_task_interest(GLib_WimpEvents, filter_wimp_events);
-
+    
     mem_free(handle);
 
 #ifdef MemCheck_MEMCHECK
@@ -446,13 +421,11 @@ _kernel_oserror *scrollbar_remove(PrivateScrollbar *handle)
     return NULL;
 }
 
-_kernel_oserror *scrollbar_fade(PrivateScrollbar *handle, int fade)
+_kernel_oserror *scrollbar_fade(int *handle, int fade)
 {
-    /* PJG: (18/6/99) Now the sausage will be plotted as big as possible
-     *                and we will ignore it.
-     */
-    handle->faded = fade;
-    scrollbar_show(handle);
+    // Plot scrollbar without sausage? (huge extent doesn't work. argh!)
+    IGNORE(handle);
+    IGNORE(fade);
 
     return NULL;
 }
@@ -469,67 +442,6 @@ sdata = sdata;
     return NULL;
 }
 
-static _kernel_oserror *_do_drag_scroll(WimpOpenWindowRequestEvent *event)
-{
-    int old_position, i;
-
-    for (i = 0; scrollbar_list[i] != NULL; i++)
-        if (scrollbar_list[i]->scrollbar_window == event->window_handle)
-        {
-            PrivateScrollbar *sdata = scrollbar_list[i];
-            ScrollbarPositionChangedEvent changed;
-
-            if (sdata->faded) return NULL; // PJG (18/6/99) Ignore if faded
-                                           //               bit is set.
-
-            old_position = sdata->value;
-
-            if (sdata->state & Scrollbar_Horizontal)
-            {
-                int extent = (sdata->box.xmax - sdata->box.xmin) *
-                	(sdata->max - sdata->min + sdata->visible);
-
-                if (extent == 0)
-                    sdata->value = sdata->max;
-                else
-                    sdata->value = (event->xscroll *
-                    	(sdata->max - sdata->min) *
-	                sdata->visible / extent) + sdata->min;
-            }
-            else
-            {
-                int extent = (sdata->box.ymax - sdata->box.ymin) *
-                	(sdata->max - sdata->min + sdata->visible);
-
-	        if (extent == 0)
-	            sdata->value = sdata->max;
-	        else
-                    sdata->value = (-event->yscroll *
-                        (sdata->max - sdata->min) *
-                	sdata->visible / extent) + sdata->min;
-            }
-
-            if (old_position != sdata->value)
-            {
-                changed.hdr.size = sizeof(ScrollbarPositionChangedEvent);
-                changed.hdr.event_code = sdata->event;
-                changed.hdr.flags = 0;
-
-                changed.direction = 0;
-
-                changed.new_position = sdata->value;
-
-                toolbox_raise_toolbox_event(0, sdata->object_id,
-                	sdata->component_id, (ToolboxEvent *) &changed);
-
-                scrollbar_show(sdata);
-            }
-        }
-
-
-    return NULL;
-}
-
 static _kernel_oserror *_do_scroll(WimpScrollRequestEvent *event)
 {
     PrivateScrollbar	*sdata;
@@ -541,12 +453,9 @@ static _kernel_oserror *_do_scroll(WimpScrollRequestEvent *event)
             // Found it!
             ScrollbarPositionChangedEvent changed;
             int old_position;
-
+            
             sdata = scrollbar_list[i];
             old_position = sdata->value;
-
-            if (sdata->faded) return NULL; // PJG (18/6/99) Ignore if faded
-                                           //               bit is set.
 
             changed.hdr.size = sizeof(ScrollbarPositionChangedEvent);
             changed.hdr.event_code = sdata->event;
@@ -617,10 +526,6 @@ _kernel_oserror *scrollbar_filter(_kernel_swi_regs *regs)
     {
         _do_scroll((WimpScrollRequestEvent *)regs->r[1]);
     }
-    else if (event_code == Wimp_EOpenWindow)
-    {
-        _do_drag_scroll((WimpOpenWindowRequestEvent *)regs->r[1]);
-    }
 
     // All checks after here should assume event is a toolbox event
     if (event_code != Wimp_EToolboxEvent)
@@ -676,13 +581,13 @@ _swix(0x107,0);
 _kernel_oserror *scrollbar_filter(_kernel_swi_regs *regs)
 {
     _kernel_oserror *e;
-
+    
     MemCheck_RegisterMiscBlock((void*)regs->r[1], 256);
     MemCheck_RegisterMiscBlock((void*)regs->r[3], sizeof(IdBlock));
     e = scrollbar_filter2(regs);
     MemCheck_UnRegisterMiscBlock((void*)regs->r[1]);
     MemCheck_UnRegisterMiscBlock((void*)regs->r[3]);
-
+    
     return e;
 }
 #endif
@@ -695,6 +600,6 @@ _kernel_oserror *scrollbar_move(PrivateScrollbar *sdata, BBox *box)
 
     state.window_handle = sdata->scrollbar_window;
     wimp_get_window_state(&state);
-
+    
     return scrollbar_show(sdata);
 }
