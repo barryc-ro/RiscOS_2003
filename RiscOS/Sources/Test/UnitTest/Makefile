@@ -20,7 +20,8 @@
 # 1999-03-03    SBF             Added TCPIPLibs
 # 1999-03-08    SBF             Modified install phase to build targets (if necessary)
 # 1999-08-04    NCE             Created resource directorys for individual machine builds.
-
+# 1999-08-04    NCE		Added -DUSERIF${USSERIF} to cflags so that I can switch things
+#				on UserIF.  This is used on Lazarus builds.
 
 #
 # Paths
@@ -45,7 +46,7 @@ CD	= dir
 
 #AFLAGS  = -depend !Depend -Stamp -quit -To $@ -From
 AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -Wp ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} ${EXT_FLAGS}
+CFLAGS  = -c -depend !Depend -Wp ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 -DUSERIF${USERIF}=1 ${DFLAGS} ${EXT_FLAGS}
 #LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
