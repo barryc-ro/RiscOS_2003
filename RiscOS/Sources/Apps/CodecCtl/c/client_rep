@@ -11,8 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include "swis.h"
+#include <swis.h>
 
 #include "wimplib.h"
 #include "window.h"
@@ -48,6 +47,14 @@
 
 #define REPLAY_START_COMMAND                "/<ARMovie$Dir>.Player"
 
+#define CMD_LINE_LIMIT                      256 /*longest command line possible for RISC O S*/
+#define SLACK_SPACE                         80  /*longer than the longest single item*/
+
+static
+   _kernel_oserror
+      Error_Too_Long = {1, "Replay command line too long"},
+      Error_No_Task  = {1, "Replay task exited unexpectedly"};
+
 /* ----------------------------------------------------------------------
  * TYPE DEFINITIONS
  * ----------------------------------------------------------------------
@@ -55,7 +62,7 @@
 
 /* client specific stuff */
 
-typedef void * (replay_open_handler)(int flags, WimpPollBlock *event);
+typedef _kernel_oserror *replay_open_handler (int, WimpPollBlock *);
 
 typedef struct
 {
@@ -130,13 +137,19 @@ static int client_replay_file_types[] =
 
 /* Also see pluginclient_replay definition at end of file */
 
-/* ----------------------------------------------------------------------
- * FUNCTION PROTOTYPES
- * ----------------------------------------------------------------------
- */
-
-static void replay_multi_end(client_replay_control *crc);
-
+static void replay_multi_end(client_replay_control *crc)
+{
+    TRACE1 ("+replay_multi_end\n");
+    
+    if (crc != NULL)
+    {
+	if (crc->rma != NULL)
+	    rma_free(crc->rma);
+	free(crc);
+    }
+    
+    TRACE1 ("-replay_multi_end\n");
+} /* replay_multi_end */
 
 /* ----------------------------------------------------------------------
  * WIMP MESSAGE HANDLERS
@@ -148,40 +161,48 @@ static int client_replay_open_win_handler(int event_code, WimpPollBlock *event,
 {
     client_replay_control *crc = (client_replay_control *) handle;
 
-    if (crc->rma && crc->rma->mywindow.open_handler)
+    TRACE1 ("+client_replay_open_win_handler: crc %p\n" _ crc);
+    
+    if (crc->rma != NULL && crc->rma->mywindow.open_handler != NULL)
     {
       TRACE4("calling replay's open_handler()\n");
       err_report(crc->rma->mywindow.open_handler(0,event));
     }
+
+    TRACE1 ("-client_replay_open_win_handler\n");
     return 1;
 } /* client_replay_open_win_handler */
 
-
 static int client_replay_closedown_handler(WimpMessage *message, void *handle)
 {
-  client_replay_ptr crp = (client_replay_ptr) handle;
+   client_replay_ptr crp = (client_replay_ptr) handle;
+ 
+   TRACE1("+client_replay_closedown_handler: crp %p\n" _ crp);
 
-  if (message->hdr.sender == crp->replay->replay_task)
-  {
-    TRACE1("client_replay_closedown_handler: instance %p\n", crp);
+   if (message->hdr.sender == crp->replay->replay_task)
+   {
+      if (crp->show_own_window)
+         /*Close the window now. JRC Tue 3rd June 1997*/
+         err_report (toolbox_hide_object (0u, crp->window_handle));
 
-    err_report(event_deregister_wimp_handler(crp->window_handle, Wimp_EOpenWindow,
-                                             client_replay_open_win_handler,
-                                             crp->replay));
-    err_report(event_deregister_message_handler(Wimp_MTaskCloseDown,
-                                                &client_replay_closedown_handler,
-                                                crp));
-    pluginclient_send_busy(crp->plugin, 0, plugin_busy_STOP);
+      if (crp->replay != NULL)
+         err_report (event_deregister_wimp_handler (crp->wimp_window,
+               Wimp_EOpenWindow, client_replay_open_win_handler, crp->replay));
+      err_report(event_deregister_message_handler(Wimp_MTaskCloseDown,
+            &client_replay_closedown_handler, crp));
+      pluginclient_send_busy(crp->plugin, 0, plugin_busy_STOP);
+ 
+      crp->replay->replay_running = FALSE;
+      crp->replay->replay_task = 0;
+      replay_multi_end(crp->replay);
+      crp->replay=NULL;
 
-    crp->replay->replay_running = FALSE;
-    crp->replay->replay_task = 0;
-    replay_multi_end(crp->replay);
-    crp->replay=NULL;
-
-    return 1;
-  } /* if */
-
-  return 0;
+      TRACE1("-client_replay_closedown_handler\n");
+      return 1;
+   } /* if */
+ 
+   TRACE1("-client_replay_closedown_handler\n");
+   return 0;
 } /* client_replay_closedown_handler */
 
 
@@ -191,25 +212,25 @@ static int client_replay_closedown_handler(WimpMessage *message, void *handle)
  */
 
 /* read an int off the start of line, and ignore rest of line from file */
-static int read_file_line_int(FILE *handle, int *value)
+static _kernel_oserror *read_file_line_int (FILE *handle, int *value)
 {
-  char crap[1024];
+  char crap [1024];
 
   /* read int */
   if (fscanf(handle, "%d", value) == EOF)
   {
     TRACE4("error reading int from file\n");
-    return 0;
+    return utils_last_oserror ();
   } /* if */
 
   /* go to next line */
-  if (fgets(&crap[0], sizeof(crap), handle) == NULL)
+  if (fgets(crap, sizeof crap, handle) == NULL)
   {
     TRACE4("error reading to next line of file\n");
-    return 0;
+    return utils_last_oserror ();
   } /* if */
 
-  return 1;
+  return NULL;
 }
 
 static int read_curr_screen_mode(int mode_var)
@@ -276,90 +297,98 @@ static int read_ylimit(void)
   return read_curr_screen_mode(12);
 } /* read_ylimit */
 
-static void show_own_window(ObjectId window_handle, const char *file_name)
+static _kernel_oserror *show_own_window(ObjectId window_handle, const char *file_name,
+      int *windowx, int *windowy)
 {
-  FILE *replay_file;
-  int i,x,y;
-  WindowShowObjectBlock full_spec;
+   FILE *replay_file;
+   int i, width, height;
+   WindowShowObjectBlock full_spec;
+   _kernel_oserror *error;
 
-  TRACE4("show_own_window() handle %p file_name %s\n", window_handle, file_name);
+   TRACE4("show_own_window() handle %p file_name %s\n" _ window_handle _
+         file_name);
 
-  if ( (replay_file=fopen(file_name, "r"))==NULL )
-  {
-    TRACE4("show_own_window(): error opening file\n");
-    return;
-  } /* if */
+   if ((replay_file = fopen (file_name, "r")) == NULL)
+   {
+      TRACE4("show_own_window(): error opening file\n");
+      return utils_last_oserror ();
+   } /* if */
+ 
+   /* ignore first 4 lines */
+   for (i = 0; i < 4; i++)
+   {
+      char value[1024];
+ 
+      if (fgets (value, sizeof value, replay_file) == NULL)
+      {
+         TRACE4("error reading file\n");
+         fclose(replay_file);
+         return utils_last_oserror ();
+      } /* if */
+   } /* for */
 
-  /* ignore first 4 lines */
-  for (i=0; i<4; i++)
-  {
-    char value[1024];
-
-    if (fgets(&value[0], sizeof(value), replay_file) == NULL)
-    {
-      TRACE4("error reading file\n");
+   /* read video format */
+   if ((error = read_file_line_int(replay_file, &i)) != NULL ||
+       (error = read_file_line_int(replay_file, &width)) != NULL || /*x size*/
+       (error = read_file_line_int(replay_file, &height)) != NULL)   /*y size*/
+   {
       fclose(replay_file);
-      return;
-    } /* if */
-  } /* for */
+      return error;
+   } /* if */
 
-  /* read video format */
-  if (!read_file_line_int(replay_file, &i) ||
-      !read_file_line_int(replay_file, &x) ||   /* read x size */
-      !read_file_line_int(replay_file, &y))     /* read y size */
-  {
-    fclose(replay_file);
-    return;
-  } /* if */
+   fclose(replay_file);
 
-  fclose(replay_file);
+   /* check video format is non-zero, i.e. has video, and screen size is non-zero */
+   if (i != 0 && width != 0 && height != 0)
+   {
+      /* reassign width and height to _real_ sizes for use on screen */
+      width *= read_xeig() * 2;
+      height *= read_yeig() * 2;
 
-  /* check video format is non-zero, i.e. has video */
-  if (i==0)
-    return; /* don't do anything if no video */
+      /* centre on screen, word aligning to help work with replay */
+      full_spec.visible_area.xmin = ALIGN ((read_xlimit()*read_xeig() - width)/2);
+      full_spec.visible_area.xmax = full_spec.visible_area.xmin + width;
+      full_spec.visible_area.ymin = ALIGN ((read_ylimit()*read_yeig() - height)/2);
+      full_spec.visible_area.ymax = full_spec.visible_area.ymin + height;
 
-  if (!x || !y) return; /* nothing to show */
+      full_spec.xscroll = full_spec.yscroll = 0;
+      full_spec.behind = -1;
+      full_spec.window_flags = 0;
+      full_spec.alignment_flags = 0;
+ 
+      /*Return *window* coordinates to display movie at.*/
+      *windowx = 0;
+      *windowy = 0;
+ 
+      TRACE4("Showing window at xmin %d, ymin %d, xmax %d, ymax %d\n" _
+             full_spec.visible_area.xmin _ full_spec.visible_area.ymin _
+             full_spec.visible_area.xmax _ full_spec.visible_area.ymax);
 
-  /* reassign x and y to _real_ sizes for use on screen */
-  x *= read_xeig() * 2;
-  y *= read_yeig() * 2;
-
-  /* centre on screen, word aligning to help work with replay */
-  full_spec.visible_area.xmin = ROUND4((read_xlimit()*read_xeig() - x) / 2);
-  full_spec.visible_area.xmax = full_spec.visible_area.xmin + x;
-  full_spec.visible_area.ymin = ROUND4((read_ylimit()*read_yeig() - y) / 2);
-  full_spec.visible_area.ymax = full_spec.visible_area.ymin + y;
-
-  full_spec.xscroll = full_spec.yscroll = 0;
-  full_spec.behind = -1;
-  full_spec.window_flags = 0;
-  full_spec.alignment_flags = 0;
-
-  TRACE4("Showing window at xmin %d, ymin %d, xmax %d, ymax %d\n",
-         full_spec.visible_area.xmin, full_spec.visible_area.ymin,
-         full_spec.visible_area.xmax, full_spec.visible_area.ymax);
-
-  /* show it */
-  err_fatal(toolbox_show_object(0, window_handle, Toolbox_ShowObject_FullSpec,
-                                &full_spec, 0, -1));
+      /* show it */
+      return toolbox_show_object(0, window_handle,
+            Toolbox_ShowObject_FullSpec, &full_spec, 0, -1);
+   }
+   else
+      return NULL;
 }
 
-static void centre_in_window(int wimp_handle, const char *file_name,
+static _kernel_oserror *centre_in_window(int wimp_window, const char *file_name,
                              int *windowx, int *windowy)
 {
   FILE *replay_file;
-  int i,x,y;
+  int i,width,height;
   WimpGetWindowStateBlock state;
   int window_height, window_width;
+  _kernel_oserror *error;
 
-  TRACE4("centre_in_window() handle %08d file_name %s\n", wimp_handle, file_name);
+  TRACE4("centre_in_window() handle %08d file_name %s\n" _ wimp_window _ file_name);
 
   *windowx = *windowy = 0;
 
   if ( (replay_file=fopen(file_name, "r"))==NULL )
   {
     TRACE4("centre_in_window(): error opening file\n");
-    return;
+    return utils_last_oserror ();
   } /* if */
 
   /* ignore first 4 lines */
@@ -367,222 +396,261 @@ static void centre_in_window(int wimp_handle, const char *file_name,
   {
     char value[1024];
 
-    if (fgets(&value[0], sizeof(value), replay_file) == NULL)
+    if (fgets(value, sizeof(value), replay_file) == NULL)
     {
       TRACE4("error reading file\n");
       fclose(replay_file);
-      return;
+      return utils_last_oserror ();
     } /* if */
   } /* for */
 
   /* read video format */
-  if (!read_file_line_int(replay_file, &i) ||
-      !read_file_line_int(replay_file, &x) ||   /* read x size */
-      !read_file_line_int(replay_file, &y))     /* read y size */
+  if ((error = read_file_line_int(replay_file, &i)) != NULL ||
+      (error = read_file_line_int(replay_file, &width)) != NULL ||   /* read x size */
+      (error = read_file_line_int(replay_file, &height)) != NULL)     /* read y size */
   {
     fclose(replay_file);
-    return;
+    return error;
   } /* if */
 
   fclose(replay_file);
 
   /* check video format is non-zero, i.e. has video */
-  if (i==0)
-    return; /* don't do anything if no video */
+  if (i != 0 && width != 0 && height != 0) /* don't do anything if no video */
+  {
+     /* reassign x and height to _real_ sizes for use on screen */
+     width *= read_xeig() * 2;
+     height *= read_yeig() * 2;
 
-  if (!x || !y) return; /* nothing to show */
+     state.window_handle = wimp_window;
+     err_fatal(wimp_get_window_state(&state));
 
-  /* reassign x and y to _real_ sizes for use on screen */
-  x *= read_xeig() * 2;
-  y *= read_yeig() * 2;
+     window_width  = state.visible_area.xmax - state.visible_area.xmin;
+     window_height = state.visible_area.ymax - state.visible_area.ymin;
 
-  state.window_handle = wimp_handle;
-  err_fatal(wimp_get_window_state(&state));
+     *windowx = (window_width  - width)/2;
+     *windowy = (window_height - height)/2;
+  }
 
-  window_width  = state.visible_area.xmax - state.visible_area.xmin;
-  window_height = state.visible_area.ymax - state.visible_area.ymin;
-
-  *windowx = (x < window_width)  ? ((window_width  - x) / 2) : 0;
-  *windowy = (y < window_height) ? ((window_height - y) / 2) : 0;
-
+  return NULL;
 } /* centre_in_window */
 
 
-static void replay_multi_end(client_replay_control *crc)
-{
-    if (crc)
-    {
-	if (crc->rma)
-	    rma_free(crc->rma);
-	free(crc);
-    }
-} /* replay_multi_end */
-
 static client_replay_control *replay_multi_start(client_replay_ptr crp)
 {
-    client_replay_control *crc;
-    char cmd_line[256];
-    int n, x=0, y=0;
+   client_replay_control *crc;
+   char cmd_line [CMD_LINE_LIMIT + SLACK_SPACE];
+   int n, x = 0, y = 0, len;
+   _kernel_oserror *error = NULL; /*error indicator*/
+   FILE *temp_file;
+   char temp_str [512];
 
-    crc = calloc(sizeof(*crc), 1);
-    if (!crc)
-	return NULL;
+   static _kernel_oserror Local_Error; /*error buffer*/
+   
+   TRACE1 ("+replay_multi_start\n");
 
-    crc->rma = rma_alloc(sizeof(*crc->rma));
-    if (!crc->rma)
-    {
-        replay_multi_end(crc);
-        return NULL;
-    }
+   if ((crc = calloc (sizeof *crc, 1)) == NULL)
+   {
+      error = &Error_No_Mem;
+      goto finish;
+   }
 
-    /* set replay arguments that don't change */
-    set_system_variable("ARMovie$ExtraArgs",
-                        " -noerror -pollword -noadjust -nomenu");
+   if ((crc->rma = rma_alloc (sizeof *crc->rma)) == NULL)
+   {
+      error = &Error_No_Mem;
+      goto finish;
+   }
 
-    n = sprintf(cmd_line, REPLAY_START_COMMAND " %s", crp->file_name);
+   /* set replay arguments that don't change */
+   set_system_variable ("ARMovie$ExtraArgs",
+         " -noerror -pollword -noadjust -nomenu");
 
-    /* if type isn't ARMOVIE, assume MovieFS is involved */
-    if ((n < sizeof(cmd_line)) && (crp->file_type != osfile_TYPE_ARMOVIE))
-    {
-      FILE *temp_file;
-      char temp_str[512];
-      _kernel_oserror e;
+   if ((n = sprintf (cmd_line, REPLAY_START_COMMAND " %s", crp->file_name))
+         >= CMD_LINE_LIMIT)
+   {
+      error = &Error_Too_Long;
+      goto finish;
+   }
 
+   /* if type isn't ARMOVIE, assume MovieFS is involved */
+   if (crp->file_type != osfile_TYPE_ARMOVIE)
+   {
       /* Check for MovieFS Error file */
-      sprintf(&temp_str[0], "%s.Error", crp->file_name);
-
-      temp_file=fopen(&temp_str[0], "r");
-
-      if (temp_file) /* error file exists! */
+      sprintf (temp_str, "%s.Error", crp->file_name);
+      temp_file = fopen (temp_str, "r");
+ 
+      if (temp_file != NULL) /* error file exists! */
       {
-        e.errnum = 0;
-        strcpy(&e.errmess[0], "Could not play multimedia file: ");
-        fgets(&e.errmess[strlen(e.errmess)],
-              sizeof(e.errmess)-strlen(e.errmess) - 1, temp_file);
-        fclose(temp_file);
+         TRACE4 ("%s found\n" _ temp_str);
+         Local_Error.errnum = 0;
+         strcpy (Local_Error.errmess, "Could not play multimedia file: ");
+         len = strlen (Local_Error.errmess);
+         fgets (Local_Error.errmess + len, sizeof Local_Error.errmess - len - 1, temp_file);
+         fclose (temp_file);
 
-        TRACE4("%s found\n", &temp_str[0]);
-
-        pluginclient_send_closed(crp->plugin, 0, &e, 0);
-
-        return NULL;
+         error = &Local_Error;
+         goto finish;
       } /* if */
-
+ 
       /* check existence of .ARMovie file */
-
-      sprintf(&temp_str[0], "%s.ARMovie", crp->file_name);
-      temp_file=fopen(&temp_str[0], "r");
-
-      if (!temp_file) /* not found */
+ 
+      sprintf (temp_str, "%s.ARMovie", crp->file_name);
+      temp_file = fopen (temp_str, "r");
+ 
+      if (temp_file == NULL) /* not found */
       {
-        TRACE4("%s not found\n", &temp_str[0]);
-        return NULL;
+         TRACE4 ("%s not found\n" _ temp_str);
+         error = utils_last_oserror ();
+         goto finish;
       } /* if */
+ 
+      fclose (temp_file);
 
-      fclose(temp_file);
+      if ((n += sprintf (cmd_line + n, ".ARMovie")) >= CMD_LINE_LIMIT)
+      {
+         error = &Error_Too_Long;
+         goto finish;
+      }
+   } /* if */
 
-      n += sprintf(cmd_line + n, ".ARMovie");
-    } /* if */
+   if (crp->show_own_window)
+   {
+      if (!crp->hidden)
+         if ((error = show_own_window (crp->window_handle,
+               cmd_line + sizeof REPLAY_START_COMMAND, &x, &y)) != NULL)
+            goto finish;
+   }
+   else
+      if ((error = centre_in_window (crp->wimp_window,
+            cmd_line + sizeof REPLAY_START_COMMAND, &x, &y)) != NULL)
+         goto finish;
 
-    if (crp->show_own_window==TRUE && !crp->hidden)
-      show_own_window(crp->window_handle,
-                      cmd_line + strlen(REPLAY_START_COMMAND) + 1);
-    else
-      centre_in_window(crp->wimp_window,
-                       cmd_line + strlen(REPLAY_START_COMMAND) + 1, &x, &y);
+   crc->rma->mywindow.wimp_handle = crp->wimp_window;
+   crc->rma->mywindow.task_handle = crp->task_handle;
+   crc->rma->mywindow.open_handler = NULL;
+   memset (&crc->rma->multi_flags, '\0', sizeof crc->rma->multi_flags);
 
-    crc->rma->mywindow.wimp_handle = crp->wimp_window;
-    crc->rma->mywindow.task_handle = crp->task_handle;
-    crc->rma->mywindow.open_handler = NULL;
-    memset(&crc->rma->multi_flags, 0, sizeof(crc->rma->multi_flags));
+   /* NB Resources (in file Res) set up so that bottom left of window is 0,0 */
+   if ((n += sprintf (cmd_line + n, " -at %d,%d -multi %d -mywindow %d",
+         x, y,
+         (int) &crc->rma->multi_flags,
+         (int) &crc->rma->mywindow)) >= CMD_LINE_LIMIT)
+   {
+      error = &Error_Too_Long;
+      goto finish;
+   }
 
-    if (n < sizeof(cmd_line))
-    {
-        /* NB Resources (in file Res) set up so that bottom left of window is 0,0 */
-        n += sprintf(cmd_line + n, " -at %d,%d -multi %d -mywindow %d",
-                     x, y,
-                     (int)&crc->rma->multi_flags,
-                     (int)&crc->rma->mywindow);
-    } /* if */
+   if (crp->loop == -1)
+   {
+      if ((n += sprintf (cmd_line + n, " -loop")) >= CMD_LINE_LIMIT)
+      {
+         error = &Error_Too_Long;
+         goto finish;
+      }
+   }
+   else if (crp->loop > 1)
+   {
+      if ((n += sprintf (cmd_line + n, " -loop %d", crp->loop - 1)) >=
+            CMD_LINE_LIMIT)
+      {
+         error = &Error_Too_Long;
+         goto finish;
+      }
+   }
 
-    if ((n < sizeof(cmd_line)) && (crp->loop==-1)) /* check at each stage that string won't
-                                        * reach end of cmd_line */
-    {
-	n += sprintf(cmd_line + n, " -loop");
-    } /* if */
+   if (crp->starttime != 0)
+      /* replay wants time in centiseconds */
+      if ((n += sprintf (cmd_line + n, " -startat %d", crp->starttime*100))
+            >= CMD_LINE_LIMIT)
+      {
+         error = &Error_Too_Long;
+         goto finish;
+      }
 
-    if ((n < sizeof(cmd_line)) && (crp->loop > 1))
-    {
-        n += sprintf(cmd_line + n, " -loop %d", crp->loop - 1);
-    } /* if */
+   if (crp->endtime != -1)
+       /* replay wants time in centiseconds */
+       if ((n += sprintf (cmd_line + n, " -playfor %d",
+             (crp->endtime - crp->starttime)*100)) >= CMD_LINE_LIMIT)
+       {
+          error = &Error_Too_Long;
+          goto finish;
+       }
 
-    if ((n < sizeof(cmd_line)) && (crp->starttime))
-    {
-        /* replay wants time in centiseconds */
-        n += sprintf(cmd_line + n, " -startat %d", crp->starttime * 100);
-    } /* if */
+   if (crp->hidden)
+   {
+       if ((n += sprintf (cmd_line + n, " -novideo")) >= CMD_LINE_LIMIT)
+       {
+          error = &Error_Too_Long;
+          goto finish;
+       }
+   }
 
-    if ((n < sizeof(cmd_line)) && (crp->endtime != -1))
-    {
-        /* replay wants time in centiseconds */
-        n += sprintf(cmd_line + n, " -playfor %d",
-                     (crp->endtime - crp->starttime) * 100);
-    } /* if */
+   /*Close the window when the movie finishes. (Deleted code |else {if ((n +=
+      sprintf (cmd_line + n, " -pauseatend")) >= CMD_LINE_LIMIT) {error =
+      &Error_Too_Long; goto finish;}}|.) JRC 5 Jun 1997*/
 
-    if ((n < sizeof(cmd_line)) && (crp->hidden))
-    {
-        n += sprintf(cmd_line + n, " -novideo");
-    } /* if */
+   if (crp->volume == 0) /* volume on or off is all replay supports :-( */
+      if ((n += sprintf (cmd_line + n, " -mute")) >= CMD_LINE_LIMIT)
+      {
+         error = &Error_Too_Long;
+         goto finish;
+      }
 
-    if ((n < sizeof(cmd_line)) && (!crp->hidden))
-    {
-      n += sprintf(cmd_line + n, " -pauseatend");
-    } /* if */
+   TRACE4("Starting replay, cmdline = %s\n" _ cmd_line);
+   if ((error = wimp_start_task (cmd_line, &crc->replay_task)) != NULL)
+      goto finish;
 
-    if ((n < sizeof(cmd_line)) && (crp->volume != -1)) /* volume on or off is
-                                                        * all replay supports :-(
-                                                        */
-    {
-        if (crp->volume == 0)
-          n += sprintf(cmd_line + n, " -mute");
-    } /* if */
+   if (crc->replay_task == 0)
+   {
+      error = &Error_No_Task;
+      goto finish;
+   }
 
-    if (n >= sizeof(cmd_line))
-      TRACE1("Warning, replay command-line over %d long!\n", sizeof(cmd_line));
+   /*Replay has filled in |crc->rma->mywindow.open_handler| with an open
+      handler function.*/
+   crc->replay_running = TRUE;
 
-    crc->replay_task=0;
+   /* register handler so we know when replay closes */
+   event_register_message_handler (Wimp_MTaskCloseDown,
+         &client_replay_closedown_handler, crp);
 
-    TRACE4("Starting replay, cmdline = %s\n", cmd_line);
+   /* register open window event */
+   event_register_wimp_handler (crp->wimp_window, Wimp_EOpenWindow,
+         client_replay_open_win_handler, crc);
 
-    err_report(wimp_start_task(cmd_line, &crc->replay_task));
+   pluginclient_send_busy (crp->plugin, 0, plugin_busy_PLAY);
 
-    if (crc->replay_task == 0) /* task has already quit */
-    {
-      TRACE4("replay failed to start!\n");
-      crc->replay_running = FALSE;
-      replay_multi_end(crc);
+finish:
+   if (error != NULL)
+   {
+      pluginclient_send_closed(crp->plugin, 0, error, 0);
+
+      /* deregister handler */
+      event_deregister_message_handler (Wimp_MTaskCloseDown,
+            &client_replay_closedown_handler, crp);
+
+      if (crc != NULL)
+      {
+         /* deregister open window event */
+         event_deregister_wimp_handler (crp->wimp_window, Wimp_EOpenWindow,
+               client_replay_open_win_handler, crc);
+
+         if (crc->rma != NULL) rma_free (crc->rma);
+         free (crc);
+      }
+
+      TRACE1 ("-replay_multi_start\n");
       return NULL;
-    } /* if */
-
-    crc->replay_running=TRUE;
-
-    /* register handler so we know when replay closes */
-    event_register_message_handler(Wimp_MTaskCloseDown,
-                                   &client_replay_closedown_handler,
-                                   crp);
-
-    /* register open window event */
-    event_register_wimp_handler(crp->window_handle, Wimp_EOpenWindow,
-                                client_replay_open_win_handler, crc);
-
-    pluginclient_send_busy(crp->plugin, 0, plugin_busy_PLAY);
-
-    return crc;
+   }
+   else
+   {
+      TRACE1 ("-replay_multi_start\n");
+      return crc;
+   }
 } /* replay_multi_start */
 
-
-static int param_bool(pluginclient_instance *plugin, const char *param_name,
-                      int def)
+static BOOL param_bool(pluginclient_instance *plugin, const char *param_name,
+                      BOOL def)
 {
     pluginclient_param *param;
     param = pluginclient_param_lookup(plugin, param_name, -1, FALSE);
@@ -614,15 +682,15 @@ static void process_tag_params(pluginclient_instance *plugin, client_replay_ptr 
   crp->loop = 0;
   param = pluginclient_param_lookup(plugin, "LOOP", -1, FALSE);
 
-  if (param)
+  if (param != NULL)
   {
-    if (!param->value || toupper(param->value[0] == 'T')) /* present and true */
+    if (param->value == NULL || toupper(param->value[0] == 'T')) /* present and true */
       crp->loop = -1; /* loop forever */
-    else if (param->value && !(toupper(param->value[0]) == 'F')) /* false */
+    else if (param->value != NULL && !(toupper(param->value[0]) == 'F')) /* false */
     {
       if (toupper(param->value[0]) == 'I') /* infinite */
         crp->loop = -1; /* loop forever */
-      else if (sscanf(&param->value[0], "%d", &crp->loop) == EOF) /* number */
+      else if (sscanf(param->value, "%d", &crp->loop) == EOF) /* number */
         crp->loop=-1; /* if conversion error, loop forever */
     } /* else if */
 
@@ -632,14 +700,14 @@ static void process_tag_params(pluginclient_instance *plugin, client_replay_ptr 
   crp->starttime = 0; /* default */
   param = pluginclient_param_lookup(plugin, "STARTTIME", -1, FALSE);
 
-  if (param && param->value)  /* present, and has value */
+  if (param != NULL && param->value != NULL)  /* present, and has value */
   {
     char *temp_str;
     int min, sec;
 
-    temp_str=strtok(&param->value[0], ":"); /* read up to ":" */
+    temp_str=strtok(param->value, ":"); /* read up to ":" */
 
-    if (temp_str && sscanf(temp_str, "%d", &min) != EOF) /* read minutes */
+    if (temp_str != NULL && sscanf(temp_str, "%d", &min) != EOF) /* read minutes */
     {
       while (*(temp_str++)); /* move to rest of string */
 
@@ -654,13 +722,13 @@ static void process_tag_params(pluginclient_instance *plugin, client_replay_ptr 
   crp->endtime = -1; /* default */
   param = pluginclient_param_lookup(plugin, "ENDTIME", -1, FALSE);
 
-  if (param && param->value)  /* present, and has value */
+  if (param != NULL && param->value != NULL)  /* present, and has value */
   {
     char *temp_str;
     int min, sec;
 
-    temp_str=strtok(&param->value[0], ":"); /* read up to ":" */
-    if (temp_str && sscanf(temp_str, "%d", &min) != EOF) /* read minutes */
+    temp_str=strtok(param->value, ":"); /* read up to ":" */
+    if (temp_str != NULL && sscanf(temp_str, "%d", &min) != EOF) /* read minutes */
     {
       while (*(temp_str++)); /* move to rest of string */
       if (sscanf(temp_str, "%d", &sec) != EOF) /* read seconds */
@@ -676,20 +744,20 @@ static void process_tag_params(pluginclient_instance *plugin, client_replay_ptr 
   crp->href[0] = '\0';
   param = pluginclient_param_lookup(plugin, "HREF", -1, FALSE);
 
-  if (param && param->value)  /* present, and has value */
-    strncpy(&crp->href[0], &param->value[0], sizeof(crp->href));
+  if (param != NULL && param->value != NULL)  /* present, and has value */
+    strncpy(crp->href, param->value, sizeof crp->href);
 
   /* sort out VOLUME */
   crp->volume=-1;  /* volume at max 100% */
   param = pluginclient_param_lookup(plugin, "VOLUME", -1, FALSE);
 
-  if (param && param->value) /* present, and has value */
-    sscanf(&param->value[0], "%d", &crp->volume);
+  if (param != NULL && param->value != NULL) /* present, and has value */
+    sscanf(param->value, "%d", &crp->volume);
 
-  TRACE2("process_tag_params(): AUTOSTART %d LOOP %d STARTTIME %d ENDTIME %d\n",
-         crp->autostart, crp->loop, crp->starttime, crp->endtime);
-  TRACE2("process_tag_params(): HIDDEN %d HREF \"%s\" VOLUME %d\n",
-         crp->hidden, crp->href, crp->volume);
+  TRACE2("process_tag_params(): AUTOSTART %d LOOP %d STARTTIME %d ENDTIME %d\n" _
+         crp->autostart _ crp->loop _ crp->starttime _ crp->endtime);
+  TRACE2("process_tag_params(): HIDDEN %d HREF \"%s\" VOLUME %d\n" _
+         crp->hidden _ crp->href _ crp->volume);
 
 } /* process_tag_params */
 
@@ -701,9 +769,11 @@ static void process_tag_params(pluginclient_instance *plugin, client_replay_ptr 
 
 static void client_replay_init(int argc, char *argv[])
 {
+  TRACE1 ("+client_replay_init\n");
   /* Poke client_replay_file_types address into client definition structure. */
   /* This avoids static init. data errors when building as a module.         */
-  pluginclient_replay.file_type_list = &client_replay_file_types[0];
+  pluginclient_replay.file_type_list = client_replay_file_types;
+  TRACE1 ("-client_replay_init\n");
 }
 
 
@@ -711,17 +781,15 @@ static int client_replay_open(pluginclient_instance *plugin, client_ptr *client_
                               int *opening_flags)
 {
     client_replay_ptr crp = calloc(sizeof(*crp), 1);
+    _kernel_swi_regs r;
 
-    TRACE1("client_replay_open()\n");
-    if (crp)
+    TRACE1 ("+client_replay_open\n");
+    if (crp != NULL)
     {
-	_kernel_swi_regs r;
-
 	/* store the instance value */
 	crp->plugin = plugin;
 
 	/* get our task handle */
-
 	toolbox_get_sys_info(Toolbox_GetSysInfo_TaskHandle, &r);
 	crp->task_handle = r.r[0];
 
@@ -729,76 +797,89 @@ static int client_replay_open(pluginclient_instance *plugin, client_ptr *client_
 	process_tag_params(plugin, crp);
 
 	*opening_flags = client_open_FETCH_DATA | client_open_ALLOW_ACTION;
-
     }
 
     *client_data = crp;
-
+    
+    TRACE1 ("-client_replay_open\n");
     return crp != NULL;
 } /* client_replay_open */
 
-
 static void client_replay_close(client_ptr cp)
 {
-    client_replay_ptr crp = (client_replay_ptr) cp;
+   client_replay_ptr crp = (client_replay_ptr) cp;
+   WimpMessage message;
 
-    TRACE1("client_replay_close(): instance %p\n", crp);
+   TRACE1("+client_replay_close(): crp %p\n" _ crp);
 
-    if (crp->replay)
-    {
-      if (crp->replay->rma->multi_flags.multi_status)
-        *crp->replay->rma->multi_flags.multi_status |= REPLAY_MULTI_EXIT;
+   if (crp->replay != NULL)
+   {
+      if (crp->replay->rma->multi_flags.multi_status != NULL)
+         *crp->replay->rma->multi_flags.multi_status |= REPLAY_MULTI_EXIT;
       else
       {
-        /* Have to send a quit message to replay as its not quite running
-         * properly yet. Sigh :-( */
-        WimpMessage message;
-        message.hdr.size = sizeof(message.hdr);
-        message.hdr.your_ref = 0;
-        message.hdr.action_code = Wimp_MQuit;
-        err_report(wimp_send_message(Wimp_EUserMessage, &message,
+         /* Have to send a quit message to Replay as its not quite running
+          * properly yet. Sigh :-( */
+         message.hdr.size = sizeof(message.hdr);
+         message.hdr.your_ref = 0;
+         message.hdr.action_code = Wimp_MQuit;
+         err_report(wimp_send_message(Wimp_EUserMessage, &message,
                                       crp->replay->replay_task, 0, NULL));
       } /* else */
-      /* Don't send STOP message, as higher layer should know we're stopping */
+      /*Don't send STOP message, as higher layer should know we're stopping*/
 
-      err_report(event_deregister_wimp_handler(crp->window_handle, Wimp_EOpenWindow,
+      err_report(event_deregister_wimp_handler(crp->wimp_window, Wimp_EOpenWindow,
                                                client_replay_open_win_handler,
                                                crp->replay));
-      err_report(event_deregister_message_handler(Wimp_MTaskCloseDown,
-                                                  &client_replay_closedown_handler,
-                                                  crp));
 
       crp->replay->replay_running = FALSE;
       crp->replay->replay_task = 0;
-
       replay_multi_end(crp->replay);
       crp->replay = NULL;
-    }
+   }
 
-    if (crp->file_name)
+   /*Always remove the closedown handler, even if replay has stopped. It
+      might not exist, so discard any error. JRC 6 Jun 1997*/
+   (void) event_deregister_message_handler (Wimp_MTaskCloseDown,
+         &client_replay_closedown_handler, crp);
+
+   if (crp->file_name != NULL)
       free(crp->file_name);
-    free(crp);
-} /* client_replay_close */
 
+   free(crp);
+
+   TRACE1("-client_replay_close()\n");
+} /* client_replay_close */
 
 static void client_replay_set_window(client_ptr cp, ObjectId window_handle,
                                      BBox *bbox, BOOL subwindow)
 {
-    client_replay_ptr crp = (client_replay_ptr) cp;
-    int window_changed = window_handle != crp->window_handle;
+   client_replay_ptr crp = (client_replay_ptr) cp;
+   BOOL window_changed = window_handle != crp->window_handle;
 
-    TRACE1("client_replay_set_window(): instance %p id %d subwindow %d\n", crp,
-            window_handle, subwindow);
+   TRACE1("+client_replay_set_window(): crp %p id %d subwindow %d\n" _ crp _
+           window_handle _ subwindow);
 
-    crp->bbox = *bbox;
+   crp->bbox = *bbox;
 
-    if (window_changed)
-    {
-	crp->window_handle = window_handle;
-	err_fatal(window_get_wimp_handle(0, crp->window_handle, &crp->wimp_window));
-    }
+   if (window_changed)
+   {
+      /*Deregister the handler for the window we used to have ...*/
+      err_report (event_deregister_wimp_handler (crp->wimp_window,
+            Wimp_EOpenWindow, &client_replay_open_win_handler, crp->replay));
 
-    if (subwindow==FALSE) crp->show_own_window=TRUE;
+      crp->window_handle = window_handle;
+      err_report (window_get_wimp_handle (0u, crp->window_handle,
+            &crp->wimp_window));
+
+      /*... and reregister a new one. JRC Tue 3rd June 1997*/
+      err_report (event_register_wimp_handler (crp->wimp_window,
+            Wimp_EOpenWindow, &client_replay_open_win_handler, crp->replay));
+   }
+
+   if (!subwindow) crp->show_own_window=TRUE;
+
+   TRACE1("-client_replay_set_window()\n");
 }
 
 /* ----------------------------------------------------------------------
@@ -810,99 +891,136 @@ static void client_replay_click(client_ptr cp, const WimpMouseClickEvent *click)
 {
     client_replay_ptr crp = (client_replay_ptr) cp;
 
-    TRACE1("client_replay_click(): instance %p\n", crp);
+    TRACE1("+client_replay_click(): crp %p\n" _ crp);
 
     wimp_set_caret_position(crp->wimp_window, -1, 0, 0, -1, -1);
 
-    if ((crp->href[0] != '\0') && (click->buttons==Wimp_MouseButtonSelect))
+    if (crp->href[0] != '\0' && click->buttons == Wimp_MouseButtonSelect)
     {
         pluginclient_browser_goto(crp->plugin, crp->href);
     } /* if */
+    
+    TRACE1("-client_replay_click()\n");
 }
-
 
 static int client_replay_action(client_ptr cp, int reason)
 {
-  client_replay_ptr crp = (client_replay_ptr) cp;
+   client_replay_ptr crp = (client_replay_ptr) cp;
 
-  TRACE1("client_replay_action(): instance %p reason %d\n", crp, reason);
+   TRACE1("+client_replay_action(): crp %p reason %d\n" _ crp _ reason);
 
-  switch (reason)
-  {
-    case client_action_STOP:
-           if (crp->replay && crp->replay->replay_running)
-           {
-             *crp->replay->rma->multi_flags.multi_status |= REPLAY_MULTI_PAUSE;
-             crp->replay->replay_running=FALSE;
-             pluginclient_send_busy(crp->plugin, 0, plugin_busy_STOP);
-           } /* if */
-           break;
+   switch (reason)
+   {
+      case client_action_STOP:
+         if (crp->replay != NULL && crp->replay->replay_running != NULL)
+         {
+            if (crp->show_own_window)
+               /*Close the window now. JRC Tue 3rd June 1997*/
+               err_report (toolbox_hide_object (0u, crp->window_handle));
 
-    case client_action_PLAY:
-           if (crp->replay && crp->replay->replay_running)
-           {
-             *crp->replay->rma->multi_flags.multi_status &= ~REPLAY_MULTI_PAUSE;
-           } /* if */
-           else
-           {
-             /* start replay again */
+            if (crp->replay->rma->multi_flags.multi_status != NULL)
+               *crp->replay->rma->multi_flags.multi_status |=
+                     REPLAY_MULTI_EXIT; /*was |REPLAY_MULTI_PAUSE|. JRC 5 Jun
+                     1997*/
 
-             TRACE4("restarting replay\n");
+            /*Deregister no-longer-needed event handlers. JRC 6th Jun 1997*/
+            err_report (event_deregister_wimp_handler (crp->wimp_window,
+                  Wimp_EOpenWindow, client_replay_open_win_handler, crp->replay));
+            err_report(event_deregister_message_handler(Wimp_MTaskCloseDown,
+                  &client_replay_closedown_handler, crp));
+            pluginclient_send_busy(crp->plugin, 0, plugin_busy_STOP);
+       
+            crp->replay->replay_running = FALSE;
+            crp->replay->replay_task = 0;
+            replay_multi_end(crp->replay);
+            crp->replay=NULL;
+         } /* if */
+      break;
 
-             /* restart playback */
-             if (crp->replay)
-             {
-               if (crp->replay->rma && crp->replay->rma->multi_flags.multi_status)
-                 *crp->replay->rma->multi_flags.multi_status |= REPLAY_MULTI_EXIT;
+      case client_action_PLAY:
+         if (crp->replay != NULL && crp->replay->replay_running != NULL)
+         {
+            if (crp->replay->rma->multi_flags.multi_status != NULL)
+               *crp->replay->rma->multi_flags.multi_status &=
+                     ~REPLAY_MULTI_PAUSE;
+         } /* if */
+         else
+         {
+            /* start replay again */
+            TRACE4("restarting replay\n");
+
+            /* restart playback */
+            if (crp->replay != NULL)
+            {
+               if (crp->replay->rma != NULL && crp->replay->rma->multi_flags.multi_status != NULL)
+                  *crp->replay->rma->multi_flags.multi_status |= REPLAY_MULTI_EXIT;
+
+               if (crp->show_own_window)
+               {
+                  /*Close the window now. JRC Tue 3rd June 1997*/
+                  err_report (toolbox_hide_object (0u, crp->window_handle));
+
+                  err_report (event_deregister_wimp_handler
+                        (crp->wimp_window, Wimp_EOpenWindow,
+                        client_replay_open_win_handler, crp->replay));
+               }
+
                replay_multi_end(crp->replay);
-             } /* if */
+            } /* if */
 
-             crp->replay = replay_multi_start(crp);
+            crp->replay = replay_multi_start(crp);
 
-             if (!crp->replay)
+            if (crp->replay == NULL)
+            {
+               TRACE1("-client_replay_action()\n");
                return 0;
+            }
+         } /* else */
+         pluginclient_send_busy(crp->plugin, 0, plugin_busy_PLAY);
+      break;
 
-           } /* else */
-           pluginclient_send_busy(crp->plugin, 0, plugin_busy_PLAY);
+      case client_action_PAUSE:
+             if (crp->replay != NULL && crp->replay->replay_running != NULL)
+             {
+               if (crp->replay->rma->multi_flags.multi_status != NULL)
+                  *crp->replay->rma->multi_flags.multi_status |=
+                        REPLAY_MULTI_PAUSE;
+               pluginclient_send_busy(crp->plugin, 0, plugin_busy_PAUSE);
+             } /* if */
+      break;
+  
+      case client_action_MUTE:
+             if (crp->replay != NULL && crp->replay->replay_running != NULL)
+             {
+               if (crp->replay->rma->multi_flags.multi_status != NULL)
+                  *crp->replay->rma->multi_flags.multi_status |=
+                        REPLAY_MULTI_MUTE;
+             } /* if */
+      break;
+  
+      case client_action_UNMUTE:
+             if (crp->replay != NULL && crp->replay->replay_running != NULL)
+             {
+               if (crp->replay->rma->multi_flags.multi_status != NULL)
+                  *crp->replay->rma->multi_flags.multi_status &=
+                        ~REPLAY_MULTI_MUTE;
+             } /* if */
+      break;
+   } /* switch */
 
-           break;
-
-    case client_action_PAUSE:
-           if (crp->replay && crp->replay->replay_running)
-           {
-             *crp->replay->rma->multi_flags.multi_status |= REPLAY_MULTI_PAUSE;
-             pluginclient_send_busy(crp->plugin, 0, plugin_busy_PAUSE);
-           } /* if */
-           break;
-
-    case client_action_MUTE:
-           if (crp->replay && crp->replay->replay_running)
-           {
-             *crp->replay->rma->multi_flags.multi_status |= REPLAY_MULTI_MUTE;
-           } /* if */
-           break;
-
-    case client_action_UNMUTE:
-           if (crp->replay && crp->replay->replay_running)
-           {
-             *crp->replay->rma->multi_flags.multi_status &= ~REPLAY_MULTI_MUTE;
-           } /* if */
-           break;
-
-    default:
-           break;
-  } /* switch */
-  return 1;
+   TRACE1("-client_replay_action()\n");
+   return 1;
 } /* client_replay_action */
 
 static void client_replay_idle(client_ptr cp)
 {
   client_replay_ptr crp = (client_replay_ptr) cp;
+  
+  TRACE1 ("+client_replay_idle\n");
 
-
-  if (crp->replay && crp->replay->rma->multi_flags.multi_status)
+  if (crp->replay != NULL && crp->replay->rma->multi_flags.multi_status != NULL)
   {
-    if (*crp->replay->rma->multi_flags.multi_status & REPLAY_MULTI_ENDOFPLAY)
+    if ((*crp->replay->rma->multi_flags.multi_status & REPLAY_MULTI_ENDOFPLAY) != 0u)
     {
       /* if replay has paused at end, we say that we aren't running so we don't
        * send STOP messages again */
@@ -915,6 +1033,8 @@ static void client_replay_idle(client_ptr cp)
       } /* if */
     } /* if */
   } /* if */
+  
+  TRACE1 ("-client_replay_idle\n");
 } /* client_replay_idle */
 
 
@@ -923,34 +1043,36 @@ static void client_replay_idle(client_ptr cp)
  * ----------------------------------------------------------------------
  */
 
-static void client_replay_focus(client_ptr cp)
+static void client_replay_gain_caret(client_ptr cp)
 {
     client_replay_ptr crp = (client_replay_ptr) cp;
     BBox box;
 
+    TRACE1("+client_replay_gain_caret(): crp %p\n" _ crp);
+
     box.xmin = box.ymin = -0x4000;
     box.xmax = box.ymax =  0x4000;
-
-    TRACE1("client_replay_focus(): instance %p\n", crp);
 
     crp->has_focus = TRUE;
     window_force_redraw(0, crp->window_handle, &box);
 
-    return;
+    TRACE1("-client_replay_gain_caret()\n");
 }
 
-static void client_replay_blur(client_ptr cp)
+static void client_replay_lose_caret(client_ptr cp)
 {
     client_replay_ptr crp = (client_replay_ptr) cp;
     BBox box;
 
+    TRACE1("+client_replay_lose_caret(): crp %p\n" _ crp);
+
     box.xmin = box.ymin = -0x4000;
     box.xmax = box.ymax =  0x4000;
 
-    TRACE1("client_replay_blur(): instance %p\n", crp);
-
     crp->has_focus = FALSE;
     window_force_redraw(0, crp->window_handle, &box);
+
+    TRACE1("-client_replay_lose_caret()\n");
 }
 
 static _kernel_oserror *client_replay_redraw(client_ptr cp,
@@ -959,27 +1081,29 @@ static _kernel_oserror *client_replay_redraw(client_ptr cp,
 {
     client_replay_ptr crp = (client_replay_ptr) cp;
 
-    TRACE1("client_replay_redraw(): instance %p focus %d area %d,%d %d,%d\n",
-	   crp, crp->has_focus,
-	   r->redraw_area.xmin, r->redraw_area.ymin,
-	   r->redraw_area.xmax, r->redraw_area.ymax);
+    TRACE1("+client_replay_redraw(): crp %p focus %d area %d,%d %d,%d\n" _
+	   crp _ crp->has_focus _
+	   r->redraw_area.xmin _ r->redraw_area.ymin _
+	   r->redraw_area.xmax _ r->redraw_area.ymax);
 
-    if (crp->replay && crp->replay->rma->multi_flags.multi_status &&
-       (*crp->replay->rma->multi_flags.multi_status & REPLAY_MULTI_PAUSE))
+    if (crp->replay != NULL && crp->replay->rma->multi_flags.multi_status != NULL &&
+          (*crp->replay->rma->multi_flags.multi_status & REPLAY_MULTI_PAUSE)
+          != 0u)
     {
       /* ensure we repaint if paused */
       *crp->replay->rma->multi_flags.multi_status |= REPLAY_MULTI_PAINTIFPAUSED;
     } /* if */
-
-    /* Just draw a black square - only happens if nothing is painting in
-     * window, e.g. if HTML specifies window, but there's no video in the file */
     else
     {
+       /* Just draw a black square - only happens if nothing is painting in
+        * window, e.g. if HTML specifies window, but there's no video in the file */
 	_swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4),
 	      0x00000000, 0, 0); /* black */
 	_swix(OS_Plot, _INR(0,2), 4, r->redraw_area.xmin, r->redraw_area.ymin);
 	_swix(OS_Plot, _INR(0,2), 96 + 5, r->redraw_area.xmax, r->redraw_area.ymax);
     }
+
+    TRACE1("-client_replay_redraw\n");
 
     return NULL;
     NOT_USED(local);
@@ -1001,12 +1125,12 @@ static void client_replay_stream_new(client_ptr cp, const char *mime_type,
                                      plugin_stream *stream, int seekable,
                                      int *stream_type)
 {
-    client_replay_ptr crp = (client_replay_ptr) cp;
-
-    TRACE1("client_replay_stream_new(): instance %p\n", crp);
+    TRACE1("+client_replay_stream_new(): crp %p\n" _ cp);
 
     /* Just tell them we only want the whole file */
     *stream_type = plugin_stream_TYPE_ASFILEONLY;
+    
+    TRACE1("-client_replay_stream_new()\n");
 }
 
 /*
@@ -1018,11 +1142,14 @@ static int client_replay_stream_as_file(client_ptr cp, plugin_stream *stream,
 {
     client_replay_ptr crp = (client_replay_ptr) cp;
 
-    TRACE1("client_replay_stream_as_file(): instance %p\n", crp);
+    TRACE1("+client_replay_stream_as_file(): crp %p\n" _ crp);
 
     crp->file_name = strdup(cache_file);
-    if (!crp->file_name)
-      return 0;
+    if (crp->file_name == NULL)
+    {
+       TRACE1("-client_replay_stream_as_file()\n");
+       return 0;
+    }
 
     crp->file_type = get_file_type(cache_file);
 
@@ -1031,10 +1158,14 @@ static int client_replay_stream_as_file(client_ptr cp, plugin_stream *stream,
     {
       crp->replay = replay_multi_start(crp);
 
-      if (!crp->replay)
-        return 0;
+      if (crp->replay == NULL)
+      {
+         TRACE1("-client_replay_stream_as_file()\n");
+         return 0;
+      }
     } /* if */
 
+    TRACE1("-client_replay_stream_as_file()\n");
     return 1;
 }
 
@@ -1043,55 +1174,59 @@ static int client_replay_stream_as_file(client_ptr cp, plugin_stream *stream,
 
 /* play a straightforward file */
 static client_ptr client_replay_play_file(const char *file_name, int filetype,
-                                          ObjectId window_oid,
+                                          ObjectId window_handle,
                                           pluginclient_instance *plugin)
 {
-  client_replay_ptr crp;
-  _kernel_swi_regs regs;
+   client_replay_ptr crp;
+   _kernel_swi_regs regs;
 
-  TRACE1("client_replay_play_file(): file \"%s\", type &%X, plugin %d\n", file_name,
-         filetype, plugin);
+   TRACE1("+client_replay_play_file(): file \"%s\", type &%X, plugin %d, "
+         "window_handle 0x%X\n" _ file_name _ filetype _ plugin _ window_handle);
 
-  /* create and clear crp */
-  crp = calloc(sizeof(*crp),1);
-
-  if (crp)
-  {
-    crp->file_name = strdup(file_name);
-    if (!crp->file_name)
-    {
+   /* create and clear crp */
+   if ((crp = calloc (sizeof *crp, 1)) == NULL)
+   {
+      TRACE1("-client_replay_play_file()\n");
+      return NULL;
+   }
+     
+   if ((crp->file_name = strdup(file_name)) == NULL)
+   {
       free(crp);
+      TRACE1("-client_replay_play_file()\n");
       return NULL;
-    } /* if */
+   } /* if */
 
-    crp->file_type = filetype;
-    crp->show_own_window=TRUE;
-    crp->window_handle = window_oid;
-    err_fatal(window_get_wimp_handle(0, crp->window_handle, &crp->wimp_window));
-    err_fatal(toolbox_get_sys_info(Toolbox_GetSysInfo_TaskHandle, &regs));
-    crp->task_handle = regs.r[0];
-    crp->autostart=TRUE;
-    crp->loop = FALSE;
-    crp->starttime = 0;
-    crp->endtime = -1;
-    crp->hidden = FALSE;
-    crp->href[0] = '\0';
-    crp->volume = -1;
-    crp->plugin = plugin;
+   crp->file_type = filetype;
+   crp->show_own_window=TRUE;
+   crp->window_handle = window_handle;
+   err_fatal(window_get_wimp_handle(0, crp->window_handle, &crp->wimp_window));
+   err_fatal(toolbox_get_sys_info(Toolbox_GetSysInfo_TaskHandle, &regs));
+   crp->task_handle = regs.r[0];
+   crp->autostart=TRUE;
+   crp->loop = FALSE;
+   crp->starttime = 0;
+   crp->endtime = -1;
+   crp->hidden = FALSE;
+   crp->href[0] = '\0';
+   crp->volume = -1;
+   crp->plugin = plugin;
 
-    crp->replay = replay_multi_start(crp);
-
-    if (!crp->replay)
+   if ((crp->replay = replay_multi_start(crp)) == NULL)
+   {
+      free (crp->file_name);
+      free (crp);
+      TRACE1("-client_replay_play_file()\n");
       return NULL;
-  } /* if */
+   } /* if */
 
-  return (client_ptr) crp;
+   TRACE1("-client_replay_play_file()\n");
+   return (client_ptr) crp;
 
-  NOT_USED(filetype);
+   NOT_USED(filetype);
 } /* client_replay_play_file */
 
 /* ---------------------------------------------------------------------- */
-
 
 /* externally available definition describing functions available */
 
@@ -1107,8 +1242,8 @@ pluginclient pluginclient_replay =
   NULL, //  &client_replay_help,
   &client_replay_action,
   &client_replay_idle,
-  &client_replay_focus,
-  &client_replay_blur,
+  &client_replay_gain_caret,
+  &client_replay_lose_caret,
   NULL, //  &client_replay_redraw_setup,
   &client_replay_redraw,
   &client_replay_play_file,
