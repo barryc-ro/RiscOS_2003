@@ -50,7 +50,8 @@ pp_ctrl_strobe          * 1:SHL:0       ; set => active low pulse,              
 ; IEEE 1284 extensibility request values
 extensibility_request_revnibble * 0     ; request Reverse Nibble Mode
 extensibility_request_device_id * 4     ; request Device ID using Reverse Nibble Mode
-
+extensibility_acknowledge_mask  * pp_stat_pe :OR: pp_stat_slct :OR: pp_stat_error :OR: pp_stat_ack
+extensibility_acknowledge_value * pp_stat_pe :OR: pp_stat_slct :OR: pp_stat_error
 
 ; these flags control the mode at which the parallel device should be driven, see the COMBO chip spec
 ; pg. 99 FDC37C669 specification.
@@ -855,8 +856,6 @@ ioeb_strobe     EntryS
 
                 EXITS
 
-
-
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; call: ioeb_irqread
 ;
@@ -956,6 +955,7 @@ ioeb_resume     ALTENTRY                        ; needs to push same stuff as io
                 MOV     r3, #IOC
                 B       buffer_byte             ; try again
 
+                LTORG
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -1119,6 +1119,7 @@ IOEB_ReadDataStatus
 
                 EXITS   ,cf
 
+                LTORG
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -1211,31 +1212,36 @@ UpdateIOEBCtrl  EntryS  "r2"
 ;          r0 => error block (not translated)
 ;        VC if success
 ;          r4 = amount of data read
-
 IEEE1284_negotiate
                 ROUT
                 Entry "r0-r3,r5,r9-r10"
 
 		Debug   ioctl, "IEEE1284_negotiate = ", r7
 
+; check if there is an OS_CallAfter pending. We don't want it trying to send data in the middle of reverse nibble!
+                LDR     r0, IRQFlags
+                TST     r0, #if_PendingCallAfter
+                BEQ     %FT01
+                ADRL    r0, ioeb_busy_check_callafter
+                MOV     r1, wp
+                SWI     XOS_RemoveTickerEvent
+                EXIT    VS
+                
+01
 		MOV     r9, r6                  ; keep initial buffer pointer
                 LDR     lr, =pp_ecr             ; make sure we are in compatability mode
                 LDRB    r5, [lr]                ; r5 must be preserved for negotiate_finalise below!
 
-                BL      wait_for_buffers_to_empty
-                STRVS   r0, [sp, #Proc_RegOffset]
-                EXIT    VS
-
-;                [  FastCentronics               ; if we are in fast mode get out of it first
-;                TST     r5, #pp_ecr_flag_FIFO
-;                TSTNE   r5, #pp_ecr_empty
-;		BEQ	%FT05                   ; not in fast mode or FIFO empty, so we can go on
-;		Debug   ioctl_err, "FPar in use"
-;                ADRL    r0, ErrorBlock_Parallel_InUse
-;                STR     r0, [sp, #Proc_RegOffset]
-;		SETV
-;                EXIT
-;                ]
+                [  FastCentronics               ; if we are in fast mode get out of it first
+                TST     r5, #pp_ecr_flag_FIFO
+                TSTNE   r5, #pp_ecr_empty
+		BEQ	%FT05                   ; not in fast mode or FIFO empty, so we can go on
+		Debug   ioctl_err, "FPar in use"
+                ADRL    r0, ErrorBlock_Parallel_InUse
+                STR     r0, [sp, #Proc_RegOffset]
+		SETV
+                EXIT
+                ]
 
 05
                 MOV     r0, #pp_ecr_default     ; mode 001 as we may want to tri-state the data lines
@@ -1244,54 +1250,54 @@ IEEE1284_negotiate
 		Debug   ioctl, "init"
 
                 LDR     r1, =pp_stat            ; r1 always contains the address of the status byte
-
-               
-                LDR     r2, LoopFactor          ; LoopFactor = loops for ~40us
-                MOV     r2, r2, LSL#4           ; Loop for ~1ms
-07              LDR     r0, [r1]                ; read the status
-                TST     r0, #pp_stat_notbusy    ; set => ready for data
-                BNE     %F08                    ; ready for data so continue
-                SUBS    r2, r2, #1
-                BNE     %B07                    ; not timed out
-
-                ADRL    r0, ErrorBlock_Parallel_BadHardware
-                STR     r0, [sp, #Proc_RegOffset]
-                SETV
-                EXIT
-
-08
-                LDR     r2, LoopFactor          ; LoopFactor = loops for ~40us
-                MOV     r2, r2, LSL#4           ; ~1ms
-09              SUBS    r2, r2, #1
-                BNE     %B09
- 
-                LDR     r2, =pp_ctrl            ; r2 always contains the address of the control byte
-
+08              LDR     r2, =pp_ctrl            ; r2 always contains the address of the control byte
 		LDRB	r10, [r2]               ; keep original ctrl byte value
+
+; ensure interrupts are off and wait for everything to stabilise
+                MOV     r0, r10
+                BIC     r0, r0, #pp_ctrl_irqen
+                STR     r0, [r2]
+; Failure rates per 10000 tries
+; Delay     K80      930C
+; 0            5     Freezes (power up needed)
+; 5us         10     Freezes (escape worked. At write zeroes to printer)
+; 10us        20
+; 15us        10
+; 1.3ms       22     As for 5us
+                 LDR    r0, LoopFactor         ; 40us
+                 MOV    r0, r0, LSL#5          ; 1.3ms
+09               SUBS   r0, r0, #1
+                 BNE    %B09
+; things should now be stable so it should be safe to carry on
+
                 LDR     lr, =pp_data
 		LDRB	r0, [lr]
 		ORR	r10, r10, r0, lsl#8     ; keep original data byte value
+
                 MOV     r0, #pp_ctrl_default
                 STRB    r0, [r2]                ; pull the strobe line up
-                STRB    r8, [lr]                ; set the data to Extensibility Request Value
+                STRB    r8, [lr]                ; set the data to Extensibility Request Value - event # 0
 
-		PulseDelay lr                   ; make sure the data is stable before event 1
+		PulseDelay lr                   ; make sure the data is stable before event # 1
 
                 ORR     r0, r0, #pp_ctrl_autofd
                 BIC     r0, r0, #pp_ctrl_slctin
                 STRB    r0, [r2]                ; set the stimulus event 1.
 
                 LDR     r0, LoopFactor          ; wait for peripheral response
-                MOV     r0, r0, LSL #10         ; 40 us * &400
+                MOV     r0, r0, LSL #10         ; 40 us * &400 = ~40ms
 10
-                LDRB    r3, [r1]                ; negotiation phase
-                TST     r3, #pp_stat_error
-                TSTNE   r3, #pp_stat_pe
-                BNE     %FT20                   ; IEEE 1284 compatabiility
+                LDRB    r3, [r1]                ; negotiation phase, load status
+;                TST     r3, #pp_stat_error
+;                TSTNE   r3, #pp_stat_pe
+;                BNE     %FT20                   ; IEEE 1284 compatabiility
+                AND     r3, r3, #extensibility_acknowledge_mask
+                CMP     r3,     #extensibility_acknowledge_value 
+                BEQ     %FT20
                 SUBS    r0, r0, #1
                 BGT     %BT10
 
-		Debug   ioctl, "1284 failed ", r3
+		Debug   ioctl, "1284 failed, status = ", r3
                 B       negotiate_error         ; device is not IEEE 1284 compatible
 20
 		Debug   ioctl, "1284 OK ", r3
@@ -1307,64 +1313,38 @@ IEEE1284_negotiate
                 BIC     r3, r3, #pp_ctrl_autofd :OR: pp_ctrl_strobe
                 STRB    r3, [r2]                ; event 4 on map
 
-		; wait 35ms to give the device time to respond
-		; if we want the device ID, then the XFlag response is positive,
-		; so we will not see a change in the line!
+; Events 5 and 6.
                 LDR     r0, LoopFactor
-                MOV     r0, r0, LSL #10
+                MOV     r0, r0, LSL #10          ; ~40ms. In practice a lot more as register r/w is slow.
 22
-		SUBS    r0, r0, #1
-		BGT	%BT22
-
-		; wait for peripheral response (event 5)
-		; we need to see SLCT going low if this is nibble mode else we want SLCT to go
-		; high (see table 4 in 1284-2000, column "XFlag affirmative response")
-		TEQ     r8, #extensibility_request_revnibble
-		MOVEQ	lr,#0                   ; we set up r14 to toggle the bit in modes other
-		MOVNE	lr,#pp_stat_slct	; than reverse nibble mode
-                LDR     r0, LoopFactor          ; wait for peripheral response
-                MOV     r0, r0, LSL #10
-25
-                LDRB    r3, [r1]
-		EOR	r3, r3, lr              ; toggle SLCT bit if required
-		TST	r3, #pp_stat_slct       ; wait for our adapted SLCT to clear
-                BEQ     %FT28
+                LDR     r3, [r1]                 ; Load status
+                TST     r3, #pp_stat_ack         ; Step 6. Wait for nAck to go high. Step 5 values valid.
+                BNE     %FT23
                 SUBS    r0, r0, #1
-                BGT     %BT25
-
+                BGT     %BT22                    ; time out
+		Debug   ioctl_err, "1284 t/o (step 6)"
+                B       negotiate_error
+23
+                ; check that we have a positive responce. Required XFlag(slct) value depends on extensibility type.
+                ; cf 1284-2000 table 4
+		TEQ     r8, #extensibility_request_revnibble
+		EOREQ	r3, r3, #pp_stat_slct   ; toggle SLCT bit if required
+		TST	r3, #pp_stat_slct       ; if set then success
+                BNE     %FT28
+                
 		Debug   ioctl_err, "1284 t/o (XFlag)"
                 B       negotiate_error
 
 28
 		Debug   ioctl, "XFlag OK"
 
-		; OK, so we have successfully entered the given mode
-		; However, there may not be any data!
-		TST     r3, #pp_stat_error      ; any data available?
-		BNE	negotiate_tidy		; no, success
-
-		Debug   ioctl, "data"
-                PulseDelay r0                   ; give the periperal one pulse delay to set up ACK
-
-                LDR     r0, LoopFactor          ; wait for peripheral response
-                MOV     r0, r0, LSL #10
-30
-                LDRB    r3, [r1]
-                TST     r3, #pp_stat_ack        ; wait for the ACK to come up.
-                BNE     %FT40
-                SUBS    r0, r0, #1
-                BGT     %BT30
-
-		Debug   ioctl_err, "1284 t/o (ACK)"
-
-                B       negotiate_error
-40
+                ; Negotiate phase now successfully completed 
 		; OK, we have entered a valid state, so if anything goes wrong now, we have to
 		; use the full handshake termination protocol
 
-                ; read data from peripheral
+                ; read data from peripheral, the data transfer phase
 50
-		Debug   ioctl, "read loop, r4 = ", r4
+		Debug   ioctl_loop, "read loop, r4 = ", r4
 
                 LDRB    r3, [r1]                ; main read loop
                 TST     r3, #pp_stat_error      ; determine if there is data to read
@@ -1375,13 +1355,13 @@ IEEE1284_negotiate
                 BVS     negotiate_error         ; if an error occurred while reading a nibble, this was not while
 						; being in a valid state, so we use the immediate abort strategy
 
-		Debug   ioctl, "nibble read = ", r0
+		Debug   ioctl_loop, "nibble read = ", r0
 
                 STRB    r0, [r6, r4]            ; this stores the data at the buffer including the first two bytes
 
                 ADD     r4, r4, #1
                 CMP     r4, r7
-                BLT     %BT40
+                BLT     %BT50
 
 		; The buffer is full
 		Debug   ioctl, "Buffer full r8 = ", r8
@@ -1456,7 +1436,7 @@ negotiate_tidy
 		; OK, we did it! We are back in compatibility mode.
 		; All we have to do now is to clear pp_ctrl_autofd (set nAutoFd high, event 28),
 		; but this will be done using pp_ctrl_default below.
-		Debug   ioctl_err, "Terminated OK"
+		Debug   ioctl, "Terminated OK"
 		CLRV
 
 negotiate_finalise
@@ -1478,7 +1458,29 @@ negotiate_finalise
 		STRB	r0, [lr]                ; and restore it
 		STRB    r10, [r2]               ; restore the original ctrl byte
 
-		Debug   ioctl_err, "negotiate_ret"
+                LDR     r0, IRQFlags             ; check to see if we need to put back a CallAfter
+                TST     r0, #if_PendingCallAfter
+                BEQ     %FT120
+                LDR     r0, =RevNibBusyCheckInterval    
+                ADRL    r1, ioeb_busy_check_callafter
+                MOV     r2, wp
+                SWI     XOS_CallAfter
+120
+
+; but during output, a nAck may have been missed, in which case the stream will stall
+; so check that there is an output stream, and if busy is clear, call ioeb_wakeupTX
+; Entry r3 -> base of IOC memory space, r12 -> workspace, anymode
+; Exit, corrupts r0-r3, r12.        r0-r3, r5, r9-r10 stacked formerly.  wp is r12 so now stacking that as well.
+
+                 LDR    r0, Flags
+                 TST    r0, #f_OpenForWrite
+                 BEQ    %FT130                 ; there is no output stream
+                 MOV    R3, #IOC               ; r3 base of IOC memory space
+                 BL     ioeb_wakeupTX
+
+130
+
+		Debug   ioctl, "negotiate_ret"
 
                 EXIT
 
@@ -1493,58 +1495,62 @@ negotiate_finalise
 ;       VC if success
 ;         all registers preserved
 
-wait_for_buffers_to_empty
-                ROUT
-                Entry "r0-r9"
-
-10              SWI     XOS_ReadMonotonicTime
-                ADD     r7, r0, #&BC0          ; ~30 seconds in cs
-                MOV     r8, #0                 ; used to store the number of characters in the buffer
-                LDR     r9, =pp_stat           ; pointer to status register
-20
-        ; is the printer error free?
-                LDR     r0, [r9]
-                TST     r0, #pp_stat_error
-                ADREQL  r0, ErrorBlock_Parallel_OtherError
-                BEQ     %99
-
-        ; user run out of patience? Check escape state
-                SWI     XOS_ReadEscapeState
-                ADRCSL  r0, ErrorBlock_Escape
-                BCS     %98
-
-        ; have we been here a stupidly long time?
-                SWI     XOS_ReadMonotonicTime
-                BVS     %99
-                CMP     r7, r0
-                ADRLTL  r0, ErrorBlock_Parallel_OtherError
-                BLT     %98
-
-        ; anything in the OS buffer PRM 4-97
-                LDR     r0, BufferHandle
-                SWI     XBuffer_GetInfo
-                BVS     %99
-                CMP     r6, #0
-                BEQ     %30                         ; os buffer is empty
-
-        ; are characters still departing?
-                CMP     r6, r8                      ; always false first time round, but that doesn't matter
-                MOV     r8, r6                      ; remember the number of characters in the buffer
-                BNE     %10                         ; characters are going, so reset timeout
-                B       %20                         ; no character gone, so don't reset the timeout
-
-30      ; is the hardware buffer in use, and if so, is it empty
-                TST     r5, #pp_ecr_flag_FIFO       ; in fast mode?
-                BEQ     %40                         ; it is not in use, so carry on
-                TST     r5, #pp_ecr_empty           ; buffer empty?
-                BEQ     %20                         ; not empty, so go round again
-                
-40
-                EXIT
-98
-                SETV
-99              STR     r0, [sp, #Proc_RegOffset]
-                EXIT
+; wait_for_buffers_to_empty
+;                 ROUT
+;                 Entry "r0-r9"
+; 
+; 10              SWI     XOS_ReadMonotonicTime
+;                 ADD     r7, r0, #&BC0          ; ~30 seconds in cs  (30.08s)
+;                 MOV     r8, #0                 ; used to store the number of characters in the buffer
+;                 LDR     r9, =pp_stat           ; pointer to status register
+; 20
+;         ; is the printer error free?
+;                 LDRB    r0, [r9]
+;                 TST     r0, #pp_stat_error
+;                 ADREQL  r0, ErrorBlock_Parallel_OtherError
+;                 BEQ     %99
+; 
+;         ; user run out of patience? Check escape state
+;                 SWI     XOS_ReadEscapeState
+;                 ADRCSL  r0, ErrorBlock_Escape
+;                 BCS     %98
+; 
+;         ; have we been here a stupidly long time?
+;                 SWI     XOS_ReadMonotonicTime
+;                 BVS     %99
+;                 CMP     r7, r0
+;                 ADRLTL  r0, ErrorBlock_Parallel_OtherError
+;                 BLT     %98
+; 
+;         ; anything in the OS buffer PRM 4-97
+;                 LDR     r0, BufferHandle
+;                 SWI     XBuffer_GetInfo
+;                 BVS     %99
+;                 CMP     r6, #0
+;                 BEQ     %30                         ; os buffer is empty
+; 
+;         ; are characters still departing?
+;                 CMP     r6, r8                      ; always false first time round, but that doesn't matter
+;                 MOV     r8, r6                      ; remember the number of characters in the buffer
+;                 BNE     %10                         ; characters are going, so reset timeout
+;                 B       %20                         ; no character gone, so don't reset the timeout
+; 
+; 30      ; is the hardware buffer in use, and if so, is it empty
+;                 LDR     r5, =pp_ecr
+;                 LDRB    r5, [r5]
+;                 TST     r5, #pp_ecr_flag_FIFO       ; in fast mode?
+;                 BEQ     %40                         ; it is not in use, so carry on
+;                 TST     r5, #pp_ecr_empty           ; buffer empty?
+;                 BEQ     %20                         ; not empty, so go round again
+;                 
+; 40      ; normal exit
+;                 EXIT
+; 
+; 98      ; our error exit point
+;                 SETV
+; 99      ; external error exit point
+;                 STR     r0, [sp, #Proc_RegOffset]
+;                 EXIT
 
 
 negotiate_error
