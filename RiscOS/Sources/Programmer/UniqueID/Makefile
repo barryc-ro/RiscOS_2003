@@ -116,8 +116,7 @@ rom_link:
         ${MKDIR} ${LDIR}
         ${MKDIR} ${MAPDIR}
         ${MKDIR} ${MDIR}
-        ${LD} -o ${LDIR}.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > ${MDIR}.${COMPONENT}
-        truncate ${MDIR}.${COMPONENT} ${LDIR}.${COMPONENT}
+        ${LD} -o ${LDIR}.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} ${LDIR}.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
