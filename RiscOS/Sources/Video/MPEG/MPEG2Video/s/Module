@@ -116,6 +116,13 @@
 ; 11-Mar-98  TMD  2.53		Make audio packetisation use MPEG2 PES as per video, with multiple of 8 bytes packet header
 ; 11-Mar-98  TMD  2.54		Discard initial video/audio packets until we get start of MPEG packet on each
 ; 20-Apr-98  TMD  2.55		Adjust horizontal scaler to take aspect_ratio_information into account
+; 09-Oct-98  TMD  2.56		Add dual mono and mute-on-error support.
+; 21-Oct-98  TMD  2.57		(Conditionally) call InitL64002 on module initialisation (to avoid green screen).
+; 23-Oct-98  TMD  2.58		Fix dual mono code so it doesn't crash (hopefully!)
+; 03-Nov-98  TMD  2.59		Disable InitL64002OnModuleInit
+; 03-Nov-98  TMD  2.60		Put back VideoStats to how it was before I put in and removed AudioStats
+; 04-Nov-98  TMD  2.61		Fix unknown SWI handler so Audio_Stats and Audio_SoundVolume don't barf, and
+;				 reenable InitL64002OnModuleInit as that wasn't the problem.
 ;
 
 	LEADR	Module_LoadAddr
@@ -208,6 +215,9 @@ DiscardPartialPackets	SETL {TRUE}	; discard initial partial PES packet for both 
 
 	GBLL	CheckAspectRatio
 CheckAspectRatio SETL {TRUE}		; adjust picture size to cope with 16:9 and 2.21:1 aspect ratios
+
+	GBLL	InitL64002OnModuleInit
+InitL64002OnModuleInit SETL {FALSE}	; call InitL64002 to set screen to black on module initialisation
 
 ; Structure of a PTS list entry
 
@@ -368,6 +378,7 @@ AudioPreFilling		#	4	; NZ => pre-filling
 AudioStreamClosing	#	4	; 0 normally; 1 => we won't receive any more data - keep sending, but don't hang around
 					; on partial packet at end; 2 => don't send any more.
 AudioStreamFlags	#	4	; stream flags
+AudioFlags		#	4	; flags from audio parameters structure
 AudioSpeedSetting	#	4	; speed 0 => paused, 1 => normal, 2..8 => slow-mo, bit 31 set => paused during pre-buffering
 AudioLastPTS		#	8	; last PTS value rec'd, used to set SCR after switching from slow-motion to normal play
 AudioNumberOfPTSs	#	4	; number of PTSs sent
@@ -375,6 +386,8 @@ AudioAmountSent		#	4	; amount of data sent
 AudioPTSInCount		#	4	; number of audio PTSs received from MPEGControl
 
 AudioSampleRate		#	4	; -1 for unknown, 0..7 => 22.05, 24, 16, reserved, 44.1, 48, 32, reserved
+DualMonoChannelSpecifier #	4	; indicates what mode of dual mono to select
+AudioChannelMode	#	4	; copy of what hardware says is the current stream type, or -1 if undefined
 AudioResyncDelay	#	4	; counts down number of centisecond ticks till we check audio buffer fullness again
 AudioFasts		#	4	; number of audio frames played "fast"
 AudioSlows		#	4	; number of audio frames played "slow"
@@ -573,7 +586,7 @@ Mod_Title
 	=	"MPEG2Video", 0
 
 Mod_HelpStr
-	=	"MPEG2Video", TAB, "2.55 (20 Apr 1998)", 0
+	=	"MPEG2Video", TAB, "2.61 (04 Nov 1998)", 0
 	ALIGN
 
 Mod_SWITable
@@ -733,6 +746,13 @@ Mod_Init Entry
 
 	DLine	"Returned from initialising Control registers"
 
+ [ InitL64002OnModuleInit
+	MOV	r0, #0
+	STR	r0, VideoInputType	; unknown video input type
+	STR	r0, VideoStreamFlags
+	BL	InitL64002
+ ]
+
 ; now claim unknown SWI vector, to trap the MPEGAudio SWIs
 
 	MOV	r0, #UKSWIV
@@ -879,14 +899,14 @@ NoSuchSWI
 UnknownSWI Entry
 	LDR	lr, =MPEGAudioSWI_Base
 	SUB	lr, r11, lr
-	CMP	lr, #MPEGAudio_MuteSound + 1 - MPEGAudioSWI_Base
+	CMP	lr, #MPEGAudio_SetAudioParameters + 1 - MPEGAudioSWI_Base
 	EXIT	HI			; [not an MPEGAudio SWI that we know about]
 
-	STR	r11, [sp]		; overwrite pass-on address with r11
-	MOV	r11, lr
+	Push	"r11"			; save r11
+	MOV	r11, lr			; r11 = SWI offset
 	MOV	lr, pc
 	ADD	pc, pc, r11, LSL #2
-	Pull	"r11, pc"		; restore r11 and exit claiming vector
+	Pull	"r11, lr, pc"		; restore r11 and exit claiming vector
 	B	AudioOpenStream
 	B	AudioFullPackets
 	B	AudioCloseStream
@@ -896,6 +916,9 @@ UnknownSWI Entry
 	B	AudioRepeatFrame
 	B	AudioResetStream
 	B	AudioMuteSound
+	Pull	"r11, pc"		; we don't do AudioSoundVolume, so restore r11 and pass on
+	Pull	"r11, pc"		; ditto for AudioStats
+	B	AudioSetAudioParameters
 
 	LTORG
 
@@ -2706,6 +2729,9 @@ AudioSyncCodeIRQ Entry "r8"
 	BL	ProcessAudioReadPtr		; compare audio channel buffer read ptr in r0 with audio PTS list entries
 
 	ReadRegI r0, AudioParameter0
+	AND	r1, r0, #3 :SHL: 2		; extract bits which say stereo, joint stereo, dual mono or mono
+	MOV	r1, r1, LSR #2
+	STR	r1, AudioChannelMode
 	ReadRegI r1, AudioParameter1
 	AND	r0, r0, #3			; get bottom 2 bits of audio rate
 	TST	r1, #&80			; if RATE bit set
@@ -5368,6 +5394,7 @@ VideoStats	Entry "r2, r5-r6"
 	STMPLIA	r3!, {r5,r6,lr}			; store tag, length, value
 	B	%BT10				; go back for more stats
 
+
 Stats_LengthOfPendingVideoPackets Entry "r0,r1"
 	MOV	r0, pc
 	ORR	r0, r0, #I_bit			; disable IRQs so atomic
@@ -5424,6 +5451,14 @@ VideoStatsTable
 ;
 
 AudioOpenStream Entry "r1,r2, r11"
+ [ {FALSE}
+	Push	"r0"
+	SWI	XOS_WriteI+22
+	SWI	XOS_WriteI+12
+	DREG	r2, "Audio parameters structure = "
+	SWI	OS_ReadC
+	Pull	"r0"
+ ]
 	LDR	r11, L64002_Registers
 	STR	r0, AudioStreamFlags
 	STR	r1, AudioControlStreamHandle
@@ -5440,10 +5475,24 @@ AudioOpenStream Entry "r1,r2, r11"
 	STR	r0, AudioFasts
 	STR	r0, AudioSlows
 	STR	r0, AudioMuted
+	STR	r0, DualMonoChannelSpecifier	; default (stereo)
+	STR	r0, AudioFlags			; default
 
 	MOV	r0, #-1
 	STR	r0, AudioDiscardedDataCount
+	STR	r0, AudioChannelMode		; don't know what mode yet
 
+	TEQ	r2, #0
+	BEQ	%FT50				; no audio structure
+	LDR	r0, [r2, #AudioStructure_FormatType]
+	TEQ	r0, #AudioStructureFormatType_Normal
+	BNE	%FT50				; unknown structure format
+	LDR	r0, [r2, #AudioStructure_Flags]
+	STR	r0, AudioFlags			; save value for later
+	TST	r0, #AudioStructureFlags_SpecifyDualMonoChannels
+	LDRNE	r0, [r2, #AudioStructure_DualChannelSpecifier]
+	STRNE	r0, DualMonoChannelSpecifier	; override default
+50
 	BL	AudioReset
 
 	MOV	r0, r12
@@ -5858,6 +5907,11 @@ AudioReset Entry "r0"
 	LDR	r0, AudioMuted
 	BL	AudioMuteSound
 
+	LDR	r0, DualMonoChannelSpecifier
+	BL	AudioSetDualMonoChannels
+
+	BL	AudioSetErrorMode	; look at audio flags to determine whether to mute on errors
+
 	EXIT
 
 ; **************************************************************************
@@ -5924,6 +5978,88 @@ AudioMuteSound Entry "r0, r11"
 
 ; **************************************************************************
 ;
+;	AudioSetErrorMode - Set/clear bit controlling mute-on-errors
+;
+
+AudioSetErrorMode Entry "r0, r11"
+	MOV	lr, pc
+	ORR	lr, lr, #I_bit				; disable IRQs around Read/WriteRegI called from fgd
+	TEQP	lr, #0
+
+	LDR	r11, L64002_Registers
+	ReadRegI lr, AudioModeControl
+	LDR	r0, AudioFlags
+	TST	r0, #AudioStructureFlags_MuteAudioOnErrors
+	BICEQ	lr, lr, #AudioModeControl_AudioMuteOnErrors
+	ORRNE	lr, lr, #AudioModeControl_AudioMuteOnErrors
+	WriteRegI lr, AudioModeControl, r0
+
+	EXITS						; exit restoring IRQ state
+
+; **************************************************************************
+;
+;	AudioSetAudioParameters - Do various stuff to audio
+;
+; in:	r0 = reason code
+;	r1 = audio stream handle
+;	Other registers depend on reason code
+
+AudioSetAudioParameters ROUT
+	CMP	r0, #(AudioSetAudioParametersTableEnd - AudioSetAudioParametersTable) :SHR: 2
+	ADDCC	pc, pc, r0, LSL #2
+	B	UnknownSetAudioParametersReasonCode
+AudioSetAudioParametersTable
+	B	AudioSetAudioParameters_MuteOnErrors
+	B	AudioSetAudioParameters_DualChannelModeSpecifier
+AudioSetAudioParametersTableEnd
+
+UnknownSetAudioParametersReasonCode
+	ADRL	r0, BadSetParametersReasonError
+	SETV
+	MOV	pc, lr
+
+; AudioSetAudioParameters_MuteOnErrors
+;
+; in:	r0 = reason code (0)
+;	r1 = audio stream handle
+;	r2 = 0 => don't mute audio on errors
+;	     1 => mute audio on errors
+;	     -1 => read current state
+;
+; out:	r2 = old state
+
+AudioSetAudioParameters_MuteOnErrors Entry "r0"
+	LDR	lr, AudioFlags
+	MOV	r0, lr
+	ASSERT	AudioStructureFlags_MuteAudioOnErrors = 1
+	CMP	r2, #1
+	BICCC	r0, r0, #AudioStructureFlags_MuteAudioOnErrors
+	ORREQ	r0, r0, #AudioStructureFlags_MuteAudioOnErrors
+	STRLS	r0, AudioFlags
+	BLLS	AudioSetErrorMode
+	ANDS	r0, r0, #AudioStructureFlags_MuteAudioOnErrors
+	EXIT
+
+; AudioSetAudioParameters_DualChannelModeSpecifier
+;
+; in:	r0 = reason code (1)
+;	r1 = audio stream handle
+;	r2 = dual channel mode specifier, or -1 to read
+;
+; out:	r2 = old dual channel mode specifier
+;	r3 = current channel type (0 = stereo, 1 = joint stereo, 2 = dual mono, 3 = mono, -1 = unknown)
+
+AudioSetAudioParameters_DualChannelModeSpecifier Entry "r0"
+	AND	r0, r2, #3		    ; only bottom 2 bits significant
+	CMP	r2, #-1
+	LDR	r2, DualMonoChannelSpecifier
+	STRNE	r0, DualMonoChannelSpecifier
+	BLNE	AudioSetDualMonoChannels
+	LDR	r3, AudioChannelMode
+	EXIT
+
+; **************************************************************************
+;
 ;	AudioSendPlay - Start decoder playing
 
 AudioSendPlay Entry "r0"
@@ -5951,6 +6087,27 @@ AudioSendPause Entry "r0"
 	AND	r0, r0, #AudioTrickModes_ValidBits :AND: :NOT: AudioTrickModes_PausePlayFastSlowBits
 	ORR	r0, r0, #AudioTrickModes_Pause
 	WriteRegI r0, AudioTrickModes, lr
+
+	EXITS						; exit restoring IRQ state
+
+; **************************************************************************
+;
+;	AudioSetDualMonoChannels - Set which channels are heard for dual mono
+;
+; in:	r0 = dual mono selector (00 = stereo, 01 = left, 10 = right)
+;
+
+AudioSetDualMonoChannels Entry "r0, r1, r11"
+	MOV	lr, pc
+	ORR	lr, lr, #I_bit				; disable IRQs around Read/WriteRegI called from fgd
+	TEQP	lr, #0
+
+	LDR	r11, L64002_Registers
+	ReadRegI r1, AudioTrickModes
+	AND	r1, r1, #AudioTrickModes_ValidBits :AND: :NOT: AudioTrickModes_DualMonoSelectMask
+	AND	r0, r0, #3				; mask off any unwanted bits
+	ORR	r1, r1, r0, LSL #AudioTrickModes_DualMonoSelectShift
+	WriteRegI r1, AudioTrickModes, lr
 
 	EXITS						; exit restoring IRQ state
 
