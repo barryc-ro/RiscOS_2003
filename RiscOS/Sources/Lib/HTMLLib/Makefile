@@ -73,6 +73,7 @@ OBJS =\
  o.attributes\
  o.attrvenrs\
  o.object\
+ o.ol\
  encodings.o.utf8\
  encodings.o.encoding\
  encodings.o.iso2022\
@@ -114,6 +115,7 @@ OBJSZ =\
  z.attributes\
  z.attrvenrs\
  z.object\
+ z.ol\
  encodings.z.utf8\
  encodings.z.encoding\
  encodings.z.iso2022\
