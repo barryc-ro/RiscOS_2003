@@ -7,8 +7,9 @@
 # ----       ----         -----------
 # 10-Mar-95  TMD          Created.
 # 28-Aug-96  BAR          Updated to build differetn vsn.s for different
-#                         machine types
-# 29 Jul 1997 RWB	  Made image publicly readable.
+#                         machine types.
+# 29 Jul 97  RWB          Made image publicly readable.
+# 04 Feb 00  SBF          Added StripDepnd support.
 #
 
 #
@@ -24,6 +25,7 @@ AS      = aasm
 CP      = copy
 RM      = remove
 WIPE    = wipe
+STRIP   = stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
@@ -34,7 +36,7 @@ WPFLAGS = ~cfr~v
 #
 COMPONENT = SoakTest
 SOURCE    = Hdr.GetAll
-MPEGS	  = MPEG.Soak MPEG.Test MPEG.AudioLo MPEG.AudioHi
+MPEGS     = MPEG.Soak MPEG.Test MPEG.AudioLo MPEG.AudioHi
 NONMPEGS  = Sprites.Soak.4bpp Sprites.Test.4bpp
 TARGET    = rm.${MACHINE}.SoakTest
 
@@ -64,6 +66,7 @@ clean:
         ${RM} Sprites.Test.Frame0
         ${RM} Sprites.Soak.32bpp
         ${RM} Sprites.Test.32bpp
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE} ${NONMPEGS}
