@@ -55,6 +55,7 @@ static _kernel_oserror * options_set_loop           (client * c, const int boole
 static _kernel_oserror * options_set_demux          (client * c, const int demux     [1]); /* 0 = auto, 1 = MPEG 1, 2 = MPEG 2                */
 static _kernel_oserror * options_set_mode_width     (client * c, const int width     [1]); /* Set width of screen mode away from default      */
 static _kernel_oserror * options_set_mode_height    (client * c, const int height    [1]); /* Set height of screen mode from default          */
+static _kernel_oserror * options_set_demux_mask     (client * c, const int mask      [1]); /* R1 in MPEGControl_ControlOp 0 (if demux=3 only) */
 
 static _kernel_oserror * options_get_volume         (client * c, int       volume    [1]);
 static _kernel_oserror * options_get_audio_channel  (client * c, int       channels  [1]);
@@ -81,6 +82,7 @@ static _kernel_oserror * options_get_control_handle (client * c, int       contr
 static _kernel_oserror * options_get_mode_width     (client * c, int       width     [1]);
 static _kernel_oserror * options_get_mode_height    (client * c, int       height    [1]);
 static _kernel_oserror * options_get_play_state     (client * c, int       state     [1]);
+static _kernel_oserror * options_get_demux_mask     (client * c, int       mask      [1]);
 
 /* A tag number is used as an offset into this array. The parameters */
 /* are passed straight in as an int * - the function takes as many   */
@@ -112,6 +114,7 @@ static options_description known_options[] = {
                                                { 1, options_set_mode_width,     options_get_mode_width     },
                                                { 1, options_set_mode_height,    options_get_mode_height    },
                                                { 1, NULL,                       options_get_play_state     },
+                                               { 1, options_set_demux_mask,     options_get_demux_mask     },
                                              };
 
 /**************************************************************/
@@ -263,8 +266,6 @@ _kernel_oserror * options_options_backend(client * c, vc_options * entries, int 
 
 void options_set_defaults(client * c)
 {
-  char * tvtype;
-
   c->opts.mute           = 0;
   c->opts.video_only     = 0;
   c->opts.audio_only     = 0;
@@ -284,21 +285,15 @@ void options_set_defaults(client * c)
   c->opts.audio_stream   = 1;
   c->opts.npt            = 0;
   c->opts.mode_width     = MPEGCtrl_DefaultModeWidth;
+  c->opts.mode_height    = 0; /* Signals "Use TV$Type" to mpegctrl_setup_mode and options_get_mode_height */
   c->opts.demux          = vc_demux_auto;
   c->opts.play_state     = vc_play_state_unknown;
+  c->opts.demux_mask     = -1;
 
   c->opts.rectangle.x    = 0;
   c->opts.rectangle.y    = 0;
   c->opts.rectangle.w    = 0;
   c->opts.rectangle.h    = 0;
-
-  /* Assume PAL if TV$Type is set to anything other than NTSC */
-
-  tvtype = getenv("TV$Type");
-  if (tvtype == NULL) tvtype = "";
-
-  if (!strcmp(tvtype, "NTSC")) c->opts.ntsc = 1, c->opts.mode_height = MPEGCtrl_DefaultModeHeightNTSC;
-  else                         c->opts.ntsc = 0, c->opts.mode_height = MPEGCtrl_DefaultModeHeightPAL;
 
   return;
 }
@@ -513,6 +508,16 @@ static _kernel_oserror * options_set_ntsc(client * c, const int boolean[1])
   dprintf(("", "options_set_ntsc %d (%p)\n", boolean[0], c));
 
   c->opts.ntsc = b ? 1 : 0;
+
+  /* If we ask specifically for PAL or NTSC style modes, according to */
+  /* the specification we should alter the height too. If the height  */
+  /* is zero we take it as having not been set to some specific value */
+  /* yet and can thus force it here.                                  */
+
+  if (c->opts.mode_height == 0)
+  {
+    c->opts.mode_height = (c->opts.ntsc == 1 ? MPEGCtrl_DefaultModeHeightNTSC : MPEGCtrl_DefaultModeHeightPAL);
+  }
 
   return NULL;
 }
@@ -859,6 +864,7 @@ static _kernel_oserror * options_set_demux(client * c, const int demux[1])
     case 0: c->opts.demux = vc_demux_auto;  break;
     case 1: c->opts.demux = vc_demux_mpeg1; break;
     case 2: c->opts.demux = vc_demux_mpeg2; break;
+    case 3: c->opts.demux = vc_demux_ext;   break;
   }
 
   return NULL;
@@ -898,6 +904,29 @@ static _kernel_oserror * options_set_mode_height(client * c, const int height[1]
   int h = height[0];
 
   c->opts.mode_height = h;
+
+  return NULL;
+}
+
+/**************************************************************/
+/* options_set_demux_mask()                                   */
+/*                                                            */
+/* Set stream demux mask.                                     */
+/*                                                            */
+/* Parameters: Pointer to client struct to set options in;    */
+/*                                                            */
+/*             Pointer to an int which will be given in R1 to */
+/*             MPEGControl_ControlOp, if and only if the      */
+/*             demux tag has value 3.                         */
+/**************************************************************/
+
+static _kernel_oserror * options_set_demux_mask(client * c, const int mask[1])
+{
+  int m = mask[0];
+
+  dprintf(("", "options_set_demux_mask %d (%p)\n", mask[0], c));
+
+  c->opts.demux_mask = m;
 
   return NULL;
 }
@@ -1482,7 +1511,22 @@ static _kernel_oserror * options_get_mode_width(client * c, int width[1])
 
 static _kernel_oserror * options_get_mode_height(client * c, int height[1])
 {
-  height[0] = c->opts.mode_height;
+  if (c->opts.mode_height != 0)
+  {
+    height[0] = c->opts.mode_height;
+  }
+  else
+  {
+    /* Use TV$Type */
+
+    char * tvtype;
+
+    tvtype = getenv("TV$Type");
+    if (tvtype == NULL) tvtype = "";
+
+    if (!strcmp(tvtype, "NTSC")) height[0] = MPEGCtrl_DefaultModeHeightNTSC;
+    else                         height[0] = MPEGCtrl_DefaultModeHeightPAL;
+  }
 
   return NULL;
 }
@@ -1500,6 +1544,25 @@ static _kernel_oserror * options_get_mode_height(client * c, int height[1])
 static _kernel_oserror * options_get_play_state(client * c, int state[1])
 {
   state[0] = c->opts.play_state;
+
+  return NULL;
+}
+
+/**************************************************************/
+/* options_get_demux_mask()                                   */
+/*                                                            */
+/* Get stream demux mask.                                     */
+/*                                                            */
+/* Parameters: Pointer to client struct to get options from;  */
+/*                                                            */
+/*             Pointer to an int to take demux mask, which is */
+/*             the value given in R1 to MPEGControl_ControlOp */
+/*             0 if and only if the demux tag has value 3.    */
+/**************************************************************/
+
+static _kernel_oserror * options_get_demux_mask(client * c, int mask[1])
+{
+  mask[0] = c->opts.demux_mask;
 
   return NULL;
 }
