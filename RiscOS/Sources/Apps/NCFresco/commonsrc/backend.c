@@ -1572,7 +1572,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 			break;
 		    case rid_it_CHECK:
 		    case rid_it_RADIO:
-			if (iis->data.tick)
+			if (iis->data.radio.tick)
 			{
 			    antweb_append_query(&buffer, iis->name,
 						iis->value ? iis->value : "on", &buf_size);
@@ -1678,7 +1678,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 			break;
 		    case rid_it_CHECK:
 		    case rid_it_RADIO:
-			if (iis->data.tick)
+			if (iis->data.radio.tick)
 			{
 			    antweb_write_query(f, iis->name, iis->value ? iis->value : "on", &first);
 			}

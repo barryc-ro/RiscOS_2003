@@ -334,13 +334,20 @@ typedef struct rid_input_item {
     int max_len;		/* max buffer size in characters */
     union {
         char *str;              /* Used for TEXT and PASSWORD */
-        int tick;               /* Used for RADIO and CHECKBOX */
+/*         int tick;  */              /* Used for RADIO and CHECKBOX */
         struct
 	{
             void *im;
             rid_image_flags flags;
             SHORTISH x,y;       /* Click position */
         } image;		/* Used for IMAGE */
+	struct
+	{
+            void *im_off;       /* base image */
+	    void *im_on;	/* selected base image */
+            rid_image_flags flags;
+	    int tick;
+	} radio;
 	struct
 	{
             void *im;           /* base image */

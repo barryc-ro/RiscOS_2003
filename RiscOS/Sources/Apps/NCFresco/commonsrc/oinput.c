@@ -52,19 +52,32 @@
 
 #include "stream.h"
 
+/* ---------------------------------------------------------------------- */
+
 #ifndef Wimp_TextOp
 #define Wimp_TextOp 0x400F9
 #endif
 
+#define NUMBERS_SPACING_X	32
+#define INPUT_TEXT_BORDER_X	12
+#define INPUT_TEXT_BORDER_Y	8
+
+/* ---------------------------------------------------------------------- */
+
 extern void translate_escaped_text(char *src, char *dest, int len);
+
 extern void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int *iw, int *ih);
 extern image oimage_fetch_image(antweb_doc *doc, const char *src);
 extern void oimage_flush_image(image im);
+
+/* ---------------------------------------------------------------------- */
 
 #ifndef BUILDERS
 static char *passwd_dummy =
     "---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------";
 #endif
+
+/* ---------------------------------------------------------------------- */
 
 static void oinput_update_box(rid_text_item *ti, wimp_box *box)
 {
@@ -90,6 +103,75 @@ static void oinput_update_box(rid_text_item *ti, wimp_box *box)
     }
 }
 
+static int string_length_upto(const char *str, int offset)
+{
+    font_string fs;
+    fs.s = (char *)str;
+    fs.x = fs.y = (1 << 30);
+    fs.split = -1;
+    fs.term = offset;
+
+    font_strwidth(&fs);
+
+    return fs.x;
+}
+
+/*
+ * Returns the actual start plot point of a string taking into account the scrolling
+ */
+
+static int get_string_start(const char *str, int text_input_offset, int boxx, int boxw, int numbers)
+{
+    int x1, x2, slen, plotx;
+
+    slen = strlen(str);
+    x1 = string_length_upto(str, slen) / MILIPOINTS_PER_OSUNIT;			/* length of string */
+    x2 = string_length_upto(str, text_input_offset) / MILIPOINTS_PER_OSUNIT;	/* length to caret */
+    plotx = boxx;
+    
+    if (numbers)
+    {
+	x1 += (text_input_offset > 0 ? text_input_offset : 0) * NUMBERS_SPACING_X;
+	x2 += (slen > 0 ? slen-1 : 0) * NUMBERS_SPACING_X;
+    }
+    
+    if (x2 <= boxw)
+    {
+	/* The whole string fits in the box */
+    }
+    else
+    {
+	if (x1 <= (boxw >> 1) )
+	{
+	    /* At the left end */
+	}
+	else if (x1 >= (x2 - (boxw >> 1)))
+	{
+	    /* At the right end */
+	    plotx -= x2;
+	    plotx += boxw;
+	}
+	else
+	{
+	    /* Center the caret */
+	    plotx -= x1;
+	    plotx += (boxw >> 1);
+	}
+    }
+
+    return plotx;
+}
+
+static int text_displayable_width(int xsize, antweb_doc *doc)
+{
+    int n = ((xsize != -1) ? xsize : 20) * doc->scale_value / 100;
+    if (n == 0)
+	n = 1;
+    return n;
+}
+
+/* ---------------------------------------------------------------------- */
+
 void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_input *tii = (rid_text_item_input *) ti;
@@ -113,10 +195,6 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 	oimage_size_image("Submit", ii->ww, ii->hh, ii->data.image.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
 
-#ifndef BUILDERS
-/*         width = width*doc->scale_value/100 + 4; */
-/*         height = height*doc->scale_value/100 + 4; */
-#endif
 	ti->width = width;
 	ti->pad = 0;
 
@@ -134,17 +212,17 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	}
 	ti->max_down = height - ti->max_up;
 	break;
+
     case rid_it_TEXT:
     case rid_it_PASSWD:
     {
-	int n = ((ii->xsize != -1) ? ii->xsize : 20) * doc->scale_value / 100;
-	if (n == 0)
-	    n = 1;
-	ti->width = webfont_tty_width(n, 1) + 24;
-	ti->max_up = webfonts[WEBFONT_TTY].max_up + 8;
-	ti->max_down = webfonts[WEBFONT_TTY].max_down + 8;
+	int n = text_displayable_width(ii->xsize, doc);
+	ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
+	ti->max_up = webfonts[WEBFONT_TTY].max_up + INPUT_TEXT_BORDER_Y;
+	ti->max_down = webfonts[WEBFONT_TTY].max_down + INPUT_TEXT_BORDER_Y;
 	break;
     }
+
     case rid_it_BUTTON:
     case rid_it_SUBMIT:
     case rid_it_RESET:
@@ -178,6 +256,36 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    ti->max_down = webfonts[WEBFONT_BUTTON].max_down + 4;
 	}
 	break;
+
+    case rid_it_CHECK:
+    case rid_it_RADIO:
+	if (ii->src && ii->src_sel)
+	{
+	    if (ii->data.radio.im_off == NULL)
+		ii->data.radio.im_off = oimage_fetch_image(doc, ii->src);
+
+	    if (ii->data.radio.im_on == NULL)
+		ii->data.radio.im_on = oimage_fetch_image(doc, ii->src_sel);
+	
+	    image_info((image) ii->data.radio.im_off, &width, &height, 0, &fl, 0, 0);
+
+	    if (fl & image_flag_REALTHING)
+		ii->data.radio.flags |= rid_image_flag_REAL;
+
+	    oimage_size_image(t, ii->ww, ii->hh, ii->data.radio.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
+
+	    ti->width = width;
+	    ti->max_up = (height + webfonts[WEBFONT_BASE].max_up) / 2;
+	    ti->max_down = height - ti->max_up;
+	}
+	else
+	{
+	    ti->width = CHAR_HEIGHT + 16;
+	    ti->max_up = (CHAR_HEIGHT + 16 + webfonts[WEBFONT_BASE].max_up) / 2;
+	    ti->max_down = (CHAR_HEIGHT + 16) - ti->max_up;
+	}
+	break;
+	
     default:
 	ti->width = CHAR_HEIGHT + 16;
 	ti->max_up = (CHAR_HEIGHT + 16 + webfonts[WEBFONT_BASE].max_up) / 2;
@@ -186,6 +294,7 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     }
     ti->pad = 4;
 }
+
 
 void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update)
 {
@@ -232,7 +341,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	fg = ii->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
 	bg = ii->base.colours.back == -1 ? render_colour_WRITE :
-	    (ti->flag & rid_flag_SELECTED) && ii->base.colours.select != -1 ?
+	    doc->input == ti && ii->base.colours.select != -1 ?
 	    ii->base.colours.select : ii->base.colours.back;
     
 	if (fs->lf != webfonts[WEBFONT_TTY].handle)
@@ -249,60 +358,32 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	if (ti == doc->input)
 	{
-	    font_string fs;
-	    os_error *ep;
-	    int x1, x2;
-	    int boxw = ii->base.display->width - 24;
-
 	    if (doc->text_input_offset < 0)
 		doc->text_input_offset = strlen(ii->data.str);
 
-	    fs.s = ii->data.str;
-	    fs.x = fs.y = (1 << 30);
-	    fs.split = -1;
-	    fs.term = doc->text_input_offset;
-
-	    ep = font_strwidth(&fs);
-
-	    x1 = (fs.x / MILIPOINTS_PER_OSUNIT);
-
-	    fs.s = ii->data.str;
-	    fs.x = fs.y = (1 << 30);
-	    fs.split = -1;
-	    fs.term = slen;
-
-	    ep = font_strwidth(&fs);
-
-	    x2 = (fs.x / MILIPOINTS_PER_OSUNIT);
-
-	    if (x2 <= boxw)
-	    {
-		/* The whole string fits in the box */
-	    }
-	    else
-	    {
-		if (x1 <= (boxw >> 1) )
-		{
-		    /* At the left end */
-		}
-		else if (x1 >= (x2 - (boxw >> 1)))
-		{
-		    /* At the right end */
-		    plotx -= x2;
-		    plotx += boxw;
-		}
-		else
-		{
-		    /* Center the caret */
-		    plotx -= x1;
-		    plotx += (boxw >> 1);
-		}
-	    }
+	    plotx = get_string_start(ii->data.str, doc->text_input_offset,
+				     plotx, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
+				     ii->flags & rid_if_NUMBERS);
 	}
 
-	render_plinth(bg, render_plinth_RIM | render_plinth_IN,
+	if (ii->flags & rid_if_NUMBERS)
+	{
+	    int i, char_width = webfont_tty_width(1, TRUE); /* webfonts[WEBFONT_TTY].space_width; */
+	    int n = text_displayable_width(ii->xsize, doc);
+
+	    for (i = 0; i < n; i++)
+		render_plinth(bg, render_plinth_RIM | render_plinth_IN,
+			      hpos + i * (NUMBERS_SPACING_X + char_width),
+			      bline - ti->max_down,
+			      char_width + 2*INPUT_TEXT_BORDER_X, (ti->max_up + ti->max_down),
+			      doc );
+	}
+	else
+	{
+	    render_plinth(bg, render_plinth_RIM | render_plinth_IN,
 		      hpos, bline - ti->max_down,
 		      ti->width, (ti->max_up + ti->max_down), doc );
+	}
 
 	/* Check for whether the text needs redrawing if it does 
 	 * use the intersection of graphics window and text box
@@ -311,25 +392,26 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    wimp_box ta_box, gwind_box;
 	    int dx = frontend_dx, dy = frontend_dy;
 
-	    ta_box.x0 = hpos+8;
+	    ta_box.x0 = hpos + INPUT_TEXT_BORDER_X;
 	    ta_box.y0 = bline-ti->max_down+8;
-	    ta_box.x1 = hpos+ti->width-8;
+	    ta_box.x1 = hpos + ti->width - INPUT_TEXT_BORDER_X;
 	    ta_box.y1 = bline+ti->max_up-8;
 	    if (coords_intersection(&ta_box, g, &gwind_box))
 	    {
+		char *str = ii->tag == rid_it_TEXT ? ii->data.str : passwd_dummy + 255 - slen;
+		int coords[8];
+
+		coords[0] = coords[1] = 0;
+		coords[2] = NUMBERS_SPACING_X * MILIPOINTS_PER_OSUNIT;
+		coords[3] = 0;
+		    
 		bbc_gwindow(gwind_box.x0, gwind_box.y0, gwind_box.x1-dx, gwind_box.y1-dy);
 
-		if (ii->tag == rid_it_TEXT)
-		{
-		    font_paint(ii->data.str, font_OSCOORDS + (config_display_blending ? 0x800 : 0),
-			       plotx, bline);
-		}
-		else
-		{
-		    font_paint(passwd_dummy + 255 - slen,
-			       font_OSCOORDS + (config_display_blending ? 0x800 : 0),
-			       plotx, bline);
-		}
+		_swix(Font_Paint, _INR(1,5), str,
+		      (config_display_blending ? 0x800 : 0) + (ii->flags & rid_if_NUMBERS ? (1<<5) : 0),
+		      plotx * MILIPOINTS_PER_OSUNIT,
+		      bline * MILIPOINTS_PER_OSUNIT,
+		      coords);
 
 		bbc_gwindow(g->x0, g->y0, g->x1-dx, g->y1-dy);
 	    }
@@ -393,15 +475,29 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	break;
     case rid_it_RADIO:
     case rid_it_CHECK:
-        {
-	    char *sname;
-
-	    sname = ((ii->tag == rid_it_RADIO) ?
-		     (ii->data.tick ? "radioon" : "radiooff") :
-		     (ii->data.tick ? "opton" : "optoff") );
+    {
+	void *im = ii->data.radio.tick ? ii->data.radio.im_off : ii->data.radio.im_on;
+	if (im)
+	{
+	    int oox = ox, ooy = oy;
+#if USE_MARGINS
+	    oox -= doc->margin.x0;
+	    ooy -= doc->margin.y1;
+#endif
+	    image_render(im,
+		     hpos, bline - ti->max_down,
+		     ti->width/2, (ti->max_up + ti->max_down)/2,
+			 doc->scale_value, antweb_render_background, doc, oox, ooy);
+	}
+	else
+	{
+	    char *sname = ((ii->tag == rid_it_RADIO) ?
+		     (ii->data.radio.tick ? "radioon" : "radiooff") :
+		     (ii->data.radio.tick ? "opton" : "optoff") );
 	    render_plot_icon(sname, hpos + 4, bline - ti->max_down + 4);
 	}
 	break;
+    }
     default:
 	break;
     }
@@ -430,6 +526,12 @@ void oinput_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     case rid_it_BUTTON:
 	image_loose((image) ii->data.button.im, &antweb_doc_image_change, doc);
 	image_loose((image) ii->data.button.im_sel, &antweb_doc_image_change, doc);
+	break;
+
+    case rid_it_RADIO:
+    case rid_it_CHECK:
+	image_loose((image) ii->data.radio.im_off, &antweb_doc_image_change, doc);
+	image_loose((image) ii->data.radio.im_on, &antweb_doc_image_change, doc);
 	break;
     }
     /* Don't free the input item itself, these are taken care of by the form */
@@ -508,9 +610,19 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    os_regset r;
 	    int len = strlen(ii->data.str);
 
-	    /* FIXME: This doesn't take into account scrolled strings */
+	    x-=INPUT_TEXT_BORDER_X;
 
-	    x-=12;
+	    /* take into account scrolled strings */
+
+	    if (ti == doc->input)
+	    {
+		if (doc->text_input_offset < 0)
+		    doc->text_input_offset = len;
+		
+		x = get_string_start(ii->data.str, doc->text_input_offset,
+				     x, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
+				     ii->flags & rid_if_NUMBERS);
+	    }
 
 	    r.r[0] = (int) (long) webfonts[WEBFONT_TTY].handle;
 	    r.r[1] = (int) (long) ii->data.str;
@@ -531,13 +643,13 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	}
 	break;
     case rid_it_CHECK:
-	ii->data.tick = !ii->data.tick;
+	ii->data.radio.tick = !ii->data.radio.tick;
 	redraw = TRUE;
 	break;
     case rid_it_RADIO:
-	if (ii->data.tick == FALSE)
+	if (ii->data.radio.tick == FALSE)
 	{
-	    ii->data.tick = TRUE;
+	    ii->data.radio.tick = TRUE;
 	    for (ife = ii->base.parent->kids; ife; ife = ife->next)
 	    {
 		if (ife->tag == rid_form_element_INPUT)
@@ -545,7 +657,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 		    rid_input_item *iis = (rid_input_item *)ife;
 		    if (iis->tag == rid_it_RADIO && ii != iis && strcasecomp(ii->name, iis->name) == 0)
 		    {
-			iis->data.tick = FALSE;
+			iis->data.radio.tick = FALSE;
 			antweb_update_item(doc, iis->base.display);
 		    }
 		}
@@ -618,7 +730,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 		    break;
 		case rid_it_CHECK:
 		case rid_it_RADIO:
-		    iis->data.tick = iis->flags & rid_if_CHECKED;
+		    iis->data.radio.tick = iis->flags & rid_if_CHECKED;
 		    touch = 1;
 		    break;
 		}
@@ -705,7 +817,7 @@ void oinput_astext(rid_text_item *ti, rid_header *rh, FILE *f)
     case rid_it_CHECK:
     case rid_it_RADIO:
 	fputc('[', f);
-	fputc(ii->data.tick ? 'x' : ' ', f);
+	fputc(ii->data.radio.tick ? 'x' : ' ', f);
 	fputc(']', f);
 	break;
     case rid_it_RESET:
@@ -723,12 +835,12 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 #ifndef BUILDERS
     rid_input_item *ii;
     int take_it = FALSE;
-    font_string fs;
     os_error *ep;
     int x1, x2;
     int boxw;
     int cx, cy;
     int h;
+    int slen;
 
     ii = ((rid_text_item_input *) ti)->input;
 
@@ -738,38 +850,33 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
     case rid_it_PASSWD:
 	stream_find_item_location(ti, &cx, &cy);
 
+	slen = strlen(ii->data.str);
+	
 	if (doc->text_input_offset < 0)
 	{
-	    doc->text_input_offset = strlen(ii->data.str);
+	    doc->text_input_offset = slen;
 	    repos = 1;
 	}
-
-	fs.s = ii->data.str;
-	fs.x = fs.y = (1 << 30);
-	fs.split = -1;
-	fs.term = doc->text_input_offset;
+	if (doc->text_input_offset >= slen && (ii->flags & rid_if_NUMBERS))
+	{
+	    doc->text_input_offset = slen-1;
+	    repos=1;
+	}
 
 	ep = font_setfont(webfonts[WEBFONT_TTY].handle);
 	if (ep)
 	    break;
 
-	ep = font_strwidth(&fs);
-	if (ep)
-	    break;
+	x1 = string_length_upto(ii->data.str, doc->text_input_offset) / MILIPOINTS_PER_OSUNIT;
+	x2 = string_length_upto(ii->data.str, slen) / MILIPOINTS_PER_OSUNIT;
 
-	x1 = (fs.x / MILIPOINTS_PER_OSUNIT);
-
-	fs.s = ii->data.str;
-	fs.x = fs.y = (1 << 30);
-	fs.split = -1;
-	fs.term = strlen(ii->data.str);
-
-	ep = font_strwidth(&fs);
-	if (ep)
-	    break;
-
-	boxw = ii->base.display->width - 24;
-	x2 = (fs.x / MILIPOINTS_PER_OSUNIT);
+	if (ii->flags & rid_if_NUMBERS)
+	{
+	    x1 += (doc->text_input_offset > 0 ? doc->text_input_offset : 0) * NUMBERS_SPACING_X;
+	    x2 += (slen > 0 ? slen-1 : 0) * NUMBERS_SPACING_X;
+	}
+	
+	boxw = ii->base.display->width - 2*INPUT_TEXT_BORDER_X;
 	cx += 10;
 
 	if (x2 <= boxw)
@@ -825,12 +932,12 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     int redraw = FALSE;
     int i;
 
-    i = doc->text_input_offset;
-
     ii = ((rid_text_item_input *) ti)->input;
 
     if (doc->text_input_offset < 0)
 	doc->text_input_offset = strlen(ii->data.str);
+
+    i = doc->text_input_offset;
 
     switch (ii->tag)
     {
@@ -845,11 +952,15 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		if (isdigit(key))
 		{
 		    if (i >= ii->max_len)
-			i--;
-		    if (i <= ii->max_len)
+			i = ii->max_len-1;
+
+		    ii->data.str[i] = key;
+		    if (i == len)
+			ii->data.str[i+1] = 0;
+
+		    if (doc->text_input_offset < ii->max_len-1)
 			doc->text_input_offset++;
 		    
-		    ii->data.str[i] = key;
 		    redraw = TRUE;
 		    used = TRUE;
 		}
@@ -959,7 +1070,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
 	    case key_action_RIGHT:
 #ifdef STBWEB
-		if (i < len)
+		if (i < (ii->flags & rid_if_NUMBERS ? len-1 : len))
 		{
 		    doc->text_input_offset++;
 		    redraw = TRUE;
@@ -977,7 +1088,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		break;
 
 	    case key_action_END_OF_LINE:
-		doc->text_input_offset = len;
+		doc->text_input_offset = ii->flags & rid_if_NUMBERS ? len-1 : len;
 		redraw = TRUE;
 		break;
 
@@ -1013,28 +1124,65 @@ void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
 {
     rid_text_item_input *tii = (rid_text_item_input *) ti;
     rid_input_item *ii = tii->input;
+    static wimp_box box, *bp = NULL;
 
-    if (ii->tag == rid_it_IMAGE || ii->tag == rid_it_SUBMIT || ii->tag == rid_it_RESET || ii->tag == rid_it_BUTTON) switch (reason)
+    switch (ii->tag)
     {
-    case object_image_HANDLE:
-	return ii->tag == rid_it_IMAGE ? ii->data.image.im : ii->data.button.im;
-
-    case object_image_ABORT:
-	if (ii->tag == rid_it_IMAGE)
-	    oimage_flush_image(ii->data.image.im);
-	else
+    case rid_it_IMAGE:
+	switch (reason)
 	{
-	    oimage_flush_image(ii->data.button.im);
-	    oimage_flush_image(ii->data.button.im_sel);
+	case object_image_HANDLE:
+	    return ii->data.image.im;
+
+	case object_image_ABORT:
+	    oimage_flush_image(ii->data.image.im);
+	    break;
+
+	case object_image_BOX:
+	    memset(&box, 0, sizeof(box));
+	    bp = &box;
+	    break;
 	}
 	break;
 
-    case object_image_BOX:
-    {
-	static wimp_box box;
-	memset(&box, 0, sizeof(box));
-	return &box;
-    }
+    case rid_it_SUBMIT:
+    case rid_it_RESET:
+    case rid_it_BUTTON:
+	switch (reason)
+	{
+	case object_image_HANDLE:
+	    return ii->data.button.im;
+
+	case object_image_ABORT:
+	    oimage_flush_image(ii->data.button.im);
+	    oimage_flush_image(ii->data.button.im_sel);
+	    break;
+
+	case object_image_BOX:
+	    memset(&box, 0, sizeof(box));
+	    bp = &box;
+	    break;
+	}
+	break;
+
+    case rid_it_RADIO:
+    case rid_it_CHECK:
+	switch (reason)
+	{
+	case object_image_HANDLE:
+	    return ii->data.radio.tick ? ii->data.radio.im_off : ii->data.radio.im_on;
+
+	case object_image_ABORT:
+	    oimage_flush_image(ii->data.radio.im_off);
+	    oimage_flush_image(ii->data.radio.im_on);
+	    break;
+
+	case object_image_BOX:
+	    memset(&box, 0, sizeof(box));
+	    bp = &box;
+	    break;
+	}
+	break;
     }
 
     return NULL;
@@ -1080,8 +1228,8 @@ void oinput_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 	    char *sname;
 
 	    sname = ((ii->tag == rid_it_RADIO) ?
-		     (ii->data.tick ? "radioon" : "radiooff") :
-		     (ii->data.tick ? "opton" : "optoff") );
+		     (ii->data.radio.tick ? "radioon" : "radiooff") :
+		     (ii->data.radio.tick ? "opton" : "optoff") );
 	    df_write_sprite(fh, sname, x + 4, y - ti->max_down + 4, fileoff);
 	}
 	break;

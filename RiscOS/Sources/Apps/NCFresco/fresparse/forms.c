@@ -182,10 +182,10 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 
     in->name = valuestringdup(&attributes->value[HTML_INPUT_NAME]);
     in->value = valuestringdup(&attributes->value[HTML_INPUT_VALUE]);
-    if (tag == rid_it_SUBMIT || tag == rid_it_RESET || tag == rid_it_BUTTON)
+
+    if (tag == rid_it_SUBMIT || tag == rid_it_RESET || tag == rid_it_BUTTON || tag == rid_it_RADIO || tag == rid_it_CHECK)
     {
-	VALUE *borderimage = &attributes->value[HTML_INPUT_BORDERIMAGE];
-	in->src = valuestringdup(borderimage->type == value_string ? borderimage : &attributes->value[HTML_INPUT_SRC]);
+	in->src = valuestringdup(&attributes->value[HTML_INPUT_BORDERIMAGE]);
 	in->src_sel = valuestringdup(&attributes->value[HTML_INPUT_SELIMAGE]);
     }
     else
@@ -227,7 +227,7 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
     {
     case rid_it_CHECK:
     case rid_it_RADIO:
-	in->data.tick = ((in->flags & rid_if_CHECKED) != 0);
+	in->data.radio.tick = ((in->flags & rid_if_CHECKED) != 0);
 	break;
     case rid_it_TEXT:
     case rid_it_PASSWD:

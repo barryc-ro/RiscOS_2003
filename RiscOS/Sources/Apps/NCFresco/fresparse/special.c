@@ -226,10 +226,7 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 
 	PRSDBG(("Setting font size to %d\n", size));
 
-	x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
-	x &= ~WEBFONT_SIZE_MASK;
-	x |= (size - 1) << WEBFONT_SIZE_SHIFT;
-	PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+	set_font_size(context, size);
     }
 
     /* pdh: font colour */
@@ -252,6 +249,13 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	no = rh_find_colour( me->rh, thecolour );
 
 	PACK( context->tos->effects_active, STYLE_COLOURNO, no );
+    }
+
+    if (attributes->value[HTML_FONT_FACE].type == value_string)
+    {
+/*  	fonth = webfont_init_font(attributes->value[HTML_FONT_FACE].u.s); */
+
+/* 	index = webfont_claim_font(fonth, size, i, b); */
     }
 }
 

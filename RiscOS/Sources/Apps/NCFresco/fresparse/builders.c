@@ -165,6 +165,16 @@ extern void add_strike(SGMLCTX *context)
 
 /*****************************************************************************/
 
+extern void set_font_size(SGMLCTX *context, int size)
+{
+    int x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
+    x &= ~WEBFONT_SIZE_MASK;
+    x |= (size - 1) << WEBFONT_SIZE_SHIFT;
+    PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+}
+
+/*****************************************************************************/
+
 /* Setting the LCR alignment is now potentially very common */
 
 extern void std_lcr_align(SGMLCTX *context, VALUE *align)

@@ -280,7 +280,7 @@ static int menu_object[2] = { 0, 0 };
 
 /* which sprite from the animation*/
 
-#define TURN_SPEED	4	/* frames per second */
+#define TURN_SPEED	8	/* frames per second */
 
 static int turn_ctr = 0;
 static int turn_start = -1;
@@ -1636,8 +1636,8 @@ void tb_status_rotate(void)
 /* 	if (++turn_ctr == config_animation_frames) */
 /* 	    turn_ctr = 0; */
 
-	sprintf(sprite_name1, "%suhl%02d,%suhl%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
-	sprintf(sprite_name2, "%shl%02d,%shl%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
+	sprintf(sprite_name1, "%suhl%02d", config_animation_name, turn_ctr);
+	sprintf(sprite_name2, "%shl%02d", config_animation_name, turn_ctr);
 	toolactionsetpair(bar_list->object_handle, I_WORLD, sprite_name1, sprite_name2);
     }
 }
