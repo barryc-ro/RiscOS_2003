@@ -66,6 +66,7 @@ EXPORTS    =
 OBJS = autojp.o \
         unictype.o \
 	utf8.o \
+	utf16.o \
 	encoding.o \
 	iso2022.o \
 	eightbit.o \
@@ -87,6 +88,7 @@ OBJSZ = \
 	oz.autojp \
 	oz.unictype \
 	oz.utf8 \
+	oz.utf16 \
 	oz.encoding \
 	oz.iso2022 \
 	oz.eightbit \
@@ -109,6 +111,7 @@ OBJSD = \
 	od.autojp \
 	od.unictype \
 	od.utf8 \
+	od.utf16 \
 	od.encoding \
 	od.iso2022 \
 	od.eightbit \
@@ -210,10 +213,6 @@ mkunictype: mkunictype.o ${CLIB}
 TextConv: textconv.o ${TARGET}
 	${LD} -o $@ textconv.o ${TARGET} ${CLIB}
         ${SQUEEZE} $@
-
-links:
-	./mklinks
-	echo Made links
 
 #
 # Final link

@@ -2,8 +2,10 @@
 
 CC = armcc
 AS = armasm
+LD = armlink
+CLIB=${RISCOS_BUILD_EXPORT}/Lib/CLib/stubs.o
 CCflags = -c -I$(RISCOS_BUILD_EXPORT)/Lib/CLib \
-	-ffa -Ws -Ospace -DRISCOS -Fn
+	-ffa -Wsc -Ospace -DRISCOS -Fn
 
 ASflags = -Stamp -quit
 
@@ -26,10 +28,13 @@ Objects =  autojp.o unictype.o \
 	shiftjis.o \
 	johab.o \
 	bigfive.o \
+	enc_utf7.o \
 	enc_utf8.o \
 	enc_ascii.o \
 	enc_utf16.o \
 	enc_ucs4.o \
+	enc_scsu.o \
+	enc_system.o \
 	acorn.o \
 	combine.o \
 	riscos.o
@@ -43,10 +48,13 @@ ObjectsD =  autojp.od unictype.od \
 	shiftjis.od \
 	johab.od \
 	bigfive.od \
+	enc_utf7.od \
 	enc_utf8.od \
 	enc_ascii.od \
 	enc_utf16.od \
 	enc_ucs4.od \
+	enc_scsu.od \
+	enc_system.od \
 	acorn.od \
 	combine.od \
 	riscos.od
@@ -60,15 +68,18 @@ ObjectsZ =  autojp.oz unictype.oz \
 	shiftjis.oz \
 	johab.oz \
 	bigfive.oz \
+	enc_utf7.oz \
 	enc_utf8.oz \
 	enc_ascii.oz \
 	enc_utf16.oz \
 	enc_ucs4.oz \
+	enc_scsu.oz \
+	enc_system.oz \
 	acorn.oz \
 	combine.oz \
 	riscos.oz
 
-all: ucodelib
+all: riscos_libs TextConv,ff8
 
 ucodelib: $(Objects)
 	armlib -c -o ucodelib $(Objects)
@@ -78,6 +89,9 @@ ucodelibd: $(ObjectsD)
 
 ucodelibz: $(ObjectsZ)
 	armlib -c -o ucodelibz $(ObjectsZ)
+
+TextConv,ff8: textconv.o ucodelib ${CLIB}
+	${LD} -o $@ textconv.o ucodelib ${CLIB}
 
 riscos_libs: ucodelib ucodelibd ucodelibz
 
@@ -101,20 +115,21 @@ riscos_export: riscos_libs
 	@echo Copied libraries
 
 clean:
-	@-rm mkunictype
+	@-rm mkunictype 
 	@-rm unictype.c
 	@-rm *.o
 	@-rm *.od
 	@-rm *.oz
 	@-rm ucodelib ucodelibd ucodelibz
+	@-rm TextConv,ff8
 	echo Done clean
 
 realclean: clean
 	find . -type l -print | xargs rm
 	echo Done realclean
 
-unictype.c: ../data/UNIDATA2 mkunictype
-	./mkunictype < ../data/UNIDATA2 > unictype.c
+unictype.c: ../data/UnicodeData mkunictype
+	./mkunictype < ../data/UnicodeData > unictype.c
 	echo Made unictype.c
 
 mkunictype: mkunictype.c
