@@ -123,11 +123,10 @@ VPATH=ACU ACU2 AS IO MT_Ctls1 PP Voice
 #
 # Main rules:
 #
-all: ${TARGET}
+all: ${TARGET} dirs
 	@echo ${COMPONENT}: Module built (Relocatable)
 
-rom: ${ROM_MODULE}
-	${MKDIR} aof
+rom: ${ROM_MODULE} dirs
         @echo ${COMPONENT}: Module built (ROM)
 
 install_rom: ${ROM_MODULE}
@@ -146,8 +145,11 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${TARGET} ${ROMCSTUBS}
-	${MKDIR} aof
         ${LD} -aof -o $@ $(LFLAGS) $(ROMCSTUBS)
+
+dirs:	
+	${MKDIR} aof
+	${MKDIR} o
 
 # final link for ROM Image (using given base address)
 rom_link: ${ROM_MODULE}
