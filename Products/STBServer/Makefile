@@ -9,26 +9,30 @@
 # for the TFTP baseline support.
 
 all: scripts modgen modsqz mtftpd 
-	tar cf dist-server.tar \
-	Unix/Sources/Scripts/blconf \
-	Unix/Sources/Scripts/blbuild \
-	Unix/Sources/Scripts/blswinst \
-	Unix/Sources/Scripts/S94mtftpd \
-	Unix/Sources/Scripts/mtftpd.conf \
-	Tools/Sources/ResGen/ports/solaris/modgen \
-	Tools/Sources/modsqz/ports/solaris/modsqz \
-	RiscOS/Sources/Networking/TFTPserver/ports/solaris/mtftpd 
-	gzip dist-server.tar
+	(cd ${TARDIR}; tar cf dist-server.tar blconf blbuild blswinst S94mtftpd mtftpd.conf modgen modsqz mtftpd)
+	gzip ${TARDIR}/dist-server.tar
+	cp ${TARDIR}/dist-server.tar.gz dist-server-tar.gz
 	@echo All done
 
 scripts:
+	cp Unix/Sources/Scripts/blconf ${TARDIR}/blconf
+	cp Unix/Sources/Scripts/blbuild ${TARDIR}/blbuild
+	cp Unix/Sources/Scripts/blswinst ${TARDIR}/blswinst
+	cp Unix/Sources/Scripts/S94mtftpd ${TARDIR}/S94mtftpd
+	cp Unix/Sources/Scripts/mtftpd.conf ${TARDIR}/mtftpd.conf
 
-modgen resgen:
+modgen resgen: clx
 	(cd Tools/Sources/ResGen/ports/solaris; ./mklinks; make)
+	cp Tools/Sources/ResGen/ports/solaris/modgen ${TARDIR}/modgen
 
-modsqz:
+modsqz: clx
 	(cd Tools/Sources/modsqz/ports/solaris; ./mklinks; make)
+	cp Tools/Sources/modsqz/ports/solaris/modsqz ${TARDIR}/modsqz
 
 mtftpd:
 	(cd RiscOS/Sources/Networking/TFTPserver/ports/solaris; ./mklinks; make)
+	cp RiscOS/Sources/Networking/TFTPserver/ports/solaris/mtftpd ${TARDIR}/mtftpd
  
+clx:
+	(cd RiscOS/Sources/Lib/CLX/ccsolaris; ./mklinks; make install;)
+
