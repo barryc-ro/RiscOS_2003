@@ -27,6 +27,7 @@
 #include "SendQ.h"
 #include "PrintQ.h"
 #include "MimeQ.h"
+#include "QuHWM.h"
 
 #include "NetFax/NFELib/NFELib.h"
 #include "MimeIF.h"
@@ -38,11 +39,25 @@
 #include "SetupIF.h"
 #include "FileOps.h"
 
+#include "LogFileIF.h"
 
+#if 1 /*normal*/
+        /* output debugging info only if LOGFILE_REPORT_LEVEL is LOG_DEBUG */
+#define REPORT LOG_DEBUG
+#else
+        /* output debugging info all the time */
+#define REPORT LOG_NORMAL
+#endif
+
+#define ESTIMATE_ENTITY_HEADER    150
+#define ESTIMATE_MAILFILE_HEADER  590
 
 static int estimate_mime_size(int original_filesize);
+static void MimeQ_HWM_Usage(void);
 static void MimeEncode_ForwardError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
                                     int forwardNumber, messageDataBlock *forwardData);
+static void MimeEncode_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
+                                   const char *text, int rc);
 
 
 /* A multi-page document is delivered as one or more email messages, */
@@ -63,6 +78,7 @@ struct _mail_queue_element
 	int loPage;     /* first page in this message */
 	int hiPage;     /* last page in this message */
 	int fileNo;		/* complete email message is <mailqueue>.<fileNo> */
+	int fileSize;   /* size of message */
 };
 
 typedef struct _mail_queue_element mail_queue_element;
@@ -73,6 +89,8 @@ struct
 {                                       		/* empty when (qhead == qtail), full when (qhead == (qtail+1)) */
 	int	qhead, qtail;                   		/* first item to remove is at [qhead+1], last item entered is at [qtail]  */
 	mail_queue_element queue[MAIL_QUEUE_SIZE];	/* only (QSIZE - 1) entries usable at any time */
+	int total_size;                             /* sum of all queue[].fileSizes */
+	int estimated_mailsize;                     /* estimate of space we need for next MimeIF_create_RFC822_msg operation */
 } mail = { 0, 0};                       		/* initialised to empty */
 
 
@@ -91,16 +109,25 @@ typedef struct _entity_list_element entity_list_element;
 #define ENTITY_LIST_SIZE 3
 struct
 {
-	int count;
-	int total_size;
+	int count;          /* number of items in the entity list */
+	int total_size;     /* of file space used by entity list */
+	int reserve;        /* space to reserve for current MimeIF_create_MIME_entity operation */
 	entity_list_element list[ENTITY_LIST_SIZE];
 	NFE_MIME object[ENTITY_LIST_SIZE];			/*>>>would be cleaner to abstract this so that we don't import NFELib */
 	NFE_NF_msg_class class[ENTITY_LIST_SIZE];
 } entity = { 0, 0};
 
+/* NB when any changes are made to the values of
+ entity.reserve
+ entity.total_size
 
+ mail.estimated_mailsize
+ mail.total_size
 
+ then MimeQ_HWM_Usage() MUST be called.
 
+ This ensures the space we want reserved actually is, and that our space usage doesn't upset the document scanning watermarks
+*/
 
 enum _ME_States { ME_IDLE = 0, ME_S2, ME_extra, ME_S4, ME_S5, ME_S6, ME_S2_stopping, ME_extra_stopping, ME_S4_stopping, ME_S5_stopping, ME_S6_stopping };
 typedef enum _ME_States ME_States;
@@ -134,6 +161,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 	switch (state)
 	{
     	case ME_IDLE:
+    	    LogFileIF_show_decimal_int(REPORT, "ME_IDLE, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case RX_ME_PREFETCH_START:
@@ -141,6 +169,9 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 					ME_MQ_MIMEENCODE_ACTIVE = TRUE;
 					flush_entities = FALSE;
 					stopping = FALSE;
+
+                    /* clear mail queue (should be empty, but make sure) */
+                    mail.total_size = 0;
 
 					/* ask SendQ for the first document */
 	        		StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_WHICH_DOCUMENT, NULL);
@@ -155,6 +186,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
         	break;
 
         case ME_S2:
+            LogFileIF_show_decimal_int(REPORT, "ME_S2, messageNumber", messageNumber);
         	switch (messageNumber)
         	{
 				case RX_ME_PREFETCH_STOP:
@@ -174,10 +206,11 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 
                 case SQ_ME_THIS_DOCUMENT:
                 	{
+#if 0
 	                	_kernel_oserror *error = NULL;
 	                	char current_page_leafname[32];
 	        			int objecttype, filelength, filetype;
-
+#endif
 	                	ProcessId = messageData->data.this_document.pid;
 	                	strcpy(directory, messageData->data.this_document.directory);
 						SendQ_emailaddress_from_pid(stash_to_emailaddress, ProcessId);
@@ -190,9 +223,13 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 						stash_hiPage     = messageData->data.this_document.hiPage;
 						stash_pageStream = messageData->data.this_document.pageStream;
 
+
 	                    /* clear entity list (should be empty, but make sure) */
 						entity.count = 0;
+						entity.reserve = 0;
 						entity.total_size = 0;
+						mail.estimated_mailsize = ESTIMATE_MAILFILE_HEADER;
+						MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */
 
 						/* no pages encoded yet */
 	                    loPage = 0;
@@ -211,6 +248,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 	    /* must wait for the response to the ME_SQ_WHICH_DOCUMENT or ME_SQ_NEXT_DOCUMENT we sent */
 	    /* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
 		case ME_S2_stopping:
+		    LogFileIF_show_decimal_int(REPORT, "ME_S2_stopping, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case SQ_ME_NO_NORE_DOCUMENTS:
@@ -222,6 +260,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 			break;
 
 		case ME_extra:
+            LogFileIF_show_decimal_int(REPORT, "ME_extra, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case RX_ME_PREFETCH_STOP:
@@ -241,16 +280,50 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 	                    /* object "<directory>.<current_page>" may not exist, but if it does, lets find out what it is */
                         if (SendQ_Page_ClassTypeSize(ProcessId, current_page, &pageClass, &pageType, &fileSize) == 0)
 	                    {
-	                    	/* MIME encode <directory>.<current_page> to <EntityQ>.<current.page> */
-	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname,
-	                    	                          pageClass, pageType, stash_document_number, current_page,
-	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
-	                    	                         );
+                            int ems = estimate_mime_size(fileSize);
+                            int extra = ESTIMATE_ENTITY_HEADER + 2 * ems;   /* reserve space for page in entity list AND page with header in mail queue */ 
 
-	                    	nextstate = ME_S4;
+                            LogFileIF_show_decimal_uint_int(REPORT, "Trying page", current_page, "size", fileSize);
+
+                            if (HWM_MailSend_Extra(ESTIMATE_MAILFILE_HEADER + extra) == 0)
+                            {
+                                LogFileIF_show(REPORT, "creating MIME entity");
+                                /* there is enough space available */
+                                mail.estimated_mailsize = ESTIMATE_MAILFILE_HEADER; /* first entity, so reserve mailfile header }  must total value    */
+                                entity.reserve = extra;                             /* two copies of entity & one entity header }  passed to HWM_MailSend_Extra() */
+                                MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */                   
+
+                                /* MIME encode <directory>.<current_page> to <EntityQ>.<current.page> */
+	                          	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname,
+	                          	                          pageClass, pageType, stash_document_number, current_page,
+	                          	                          &(entity.object[entity.count]), &(entity.class[entity.count])
+	                          	                         );
+
+	                    	    nextstate = ME_S4;
+	                    	}
+	                    	else
+	                    	{
+                                /* insufficient memory to complete an MimeIF_create_MIME_entity() / MimeIF_create_RFC822_msg cycle */
+                                if (mail.qhead == mail.qtail)
+                                {
+                                    LogFileIF_show(REPORT, "page too big!");
+                                    /* mail queue is empty. we simply don't have sufficent space to encode a page of this size - so give up */
+                                    /*>>>send a page to big to encode error???*/
+                                    /*>>>StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_OVERSIZED_PAGE, NULL);*/
+                                    MimeEncode_SendRCError(SendQ_MessageHandler, ME_SQ_ERROR, "Page too big to send by Email", 1); 
+	                    	        nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */
+	                    	    }
+	                    	    else
+	                    	    {
+	                    	        LogFileIF_show(REPORT, "waiting for space");
+	                    	        /* wait until a mailfile has been sent (which may release sufficent space), before trying again */
+	                    	        nextstate = ME_S6;	/* wait until an item is removed from head of the queue ie MQ_ME_SPACE_AVAILABLE */
+	                    	    }
+	                    	}
 	                    }
 	                    else
 	                    {
+	                        LogFileIF_show(REPORT, "document is empty");
 	                    	/* appears to be an empty document - is there another document we can encode */
 	                    	StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_NEXT_DOCUMENT, NULL);
 	                    	nextstate = ME_S2;
@@ -263,6 +336,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 			break;
 
 		case ME_extra_stopping:
+		    LogFileIF_show_decimal_int(REPORT, "ME_extra_stopping, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case ME_ME_FIRST_ENTITY:
@@ -273,6 +347,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 			break;
 
         case ME_S4:
+            LogFileIF_show_decimal_int(REPORT, "ME_S4, messageNumber", messageNumber);
         	switch (messageNumber)
         	{
 				case RX_ME_PREFETCH_STOP:
@@ -299,12 +374,17 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
                             /* how big is the MIME entity file just created? */
 						    error = osfile_ReadCatInfoDL(ENTITYQ_DIR, current_page_leafname /*dst_leafname*/, &objecttype, &filelength, &filetype); 
 
+                            LogFileIF_show_decimal_int(REPORT, "actual MIME entity size", filelength);
+
 	        		    	/* put entity file in entity list - list WILL have space */
 							entity.list[entity.count].page   = current_page;	/* src_leafname */
 							entity.list[entity.count].fileNo = current_page;  	/* dst_leafname */
 
 							entity.count += 1;
+							entity.reserve = 0;
 	                  		entity.total_size += filelength;
+	                  		mail.estimated_mailsize += filelength + ESTIMATE_ENTITY_HEADER;
+                            MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */
 
     	                    if (loPage == 0)
     	                    	loPage = current_page;	/* record first page in this group */
@@ -325,18 +405,37 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 
 	                        sprintf(current_page_leafname, "%d", current_page);
 
+                            /* must not exceed hard list limit or user configured 'pages per email' */
     	                    if ((entity.count < ENTITY_LIST_SIZE) && (entity.count < configured_pages_per_email))
     	                    {
     		                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
                                 if (SendQ_Page_ClassTypeSize(ProcessId, current_page, &pageClass, &pageType, &fileSize) == 0)
     	                    	{
-    	                    	    if ((entity.total_size + estimate_mime_size(fileSize)) < configured_max_message_size)
-    	                    	    	do_another = TRUE;
+
+                                    int ems = estimate_mime_size(fileSize);
+
+                                    LogFileIF_show_decimal_uint_int(REPORT, "Trying page", current_page, "size", fileSize);
+                                    
+                                    /* don't exceed user configured 'maximum email size' */
+    	                    	    if ((mail.estimated_mailsize + ESTIMATE_ENTITY_HEADER + ems) < configured_max_message_size)
+    	                    	    {
+                                        int extra = ESTIMATE_ENTITY_HEADER + 2 * ems;
+
+                                        if (HWM_MailSend_Extra(extra) == 0)
+                                        {
+                                            entity.reserve = extra;
+    	                    	    	    do_another = TRUE;
+    	                    	    	}
+    	                    	    }
     							}
     	                    }
     
     	                    if (do_another)
     	                    {
+    	                        LogFileIF_show(REPORT, "creating MIME entity");
+    	                        
+                                MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */                   
+
     	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname,
     	                    	                          pageClass, pageType, stash_document_number, current_page,
     	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
@@ -350,7 +449,11 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
     
     							mailfileNo = mail.qtail + 1; /*N.B. when queue wraps this gives MAIL_QUEUE_SIZE rather than 0*/
                                 sprintf(mailfileNo_leafname, "%d", mailfileNo);
-    
+
+                                LogFileIF_show_decimal_uint(REPORT, "creating mailfile no", mailfileNo);
+
+                                MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */
+
     							MimeIF_create_RFC822_msg(MAILQ_DIR, mailfileNo_leafname,
     							                         stash_to_emailaddress, stash_to_realname, setup_from_mailaddress, setup_domainname,
                                                          stash_subject,
@@ -371,6 +474,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
         /* must wait for the response to the MimeIF_create_MIME_entity() call */
 		/* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
 		case ME_S4_stopping:
+		    LogFileIF_show_decimal_int(REPORT, "ME_S4_stopping, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case MI_ME_CREATE_MIME_ENTITY_ERROR:
@@ -385,6 +489,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 			break;
 
 		case ME_S5:	/* waiting for MimeIF_create_RFC822_msg to complete */
+		    LogFileIF_show_decimal_int(REPORT, "ME_S5, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case RX_ME_PREFETCH_STOP:
@@ -400,41 +505,55 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 					break;
 
 				case MI_ME_CREATE_RFC822_MSG_DONE:
-        		    /* put mail file in mail queue - queue WILL have space */
         		    {
-        				int qtail = mail.qtail;
+                        char mailfileNo_leafname[32];
+                        _kernel_oserror *error = NULL; 
+                        int objecttype, filelength, filetype;
+                        
+                        sprintf(mailfileNo_leafname, "%d", mailfileNo);
 
-						qtail += 1;
-						if (qtail >= MAIL_QUEUE_SIZE)
-							qtail = 0;
+                        /* how big is the MailFile just created? */
+                        error = osfile_ReadCatInfoDL(MAILQ_DIR, mailfileNo_leafname, &objecttype, &filelength, &filetype);
+                        
+                        LogFileIF_show_decimal_int(REPORT, "actual mailfile size", filelength);
 
-						/* we don't do a queue full check here (ie qtail == mail.qhead) as the queue is either: */
-						/*  1) known to be empty - initialised so in state ME_IDLE                              */
-						/*  2) has been checked in state ME_S6 before starting an encode sequence               */
+                        /* put mail file in mail queue - queue WILL have space */
+            		    {
+            				int qtail = mail.qtail;
+    
+    						qtail += 1;
+    						if (qtail >= MAIL_QUEUE_SIZE)
+    							qtail = 0;
+    
+    						/* we don't do a queue full check here (ie qtail == mail.qhead) as the queue is either: */
+    						/*  1) known to be empty - initialised so in state ME_IDLE                              */
+    						/*  2) has been checked in state ME_S6 before starting an encode sequence               */
+    
+                        	mail.qtail = qtail;
+                        	mail.queue[qtail].processID    = ProcessId;
+    						mail.queue[qtail].loPage = loPage;
+    						mail.queue[qtail].hiPage = hiPage;
+    						mail.queue[qtail].fileNo = mailfileNo;
+    						mail.queue[qtail].fileSize = filelength;
+    						mail.total_size += filelength;
+                        }
 
-                    	mail.qtail = qtail;
-                    	mail.queue[qtail].processID    = ProcessId;
-						mail.queue[qtail].loPage = loPage;
-						mail.queue[qtail].hiPage = hiPage;
-						mail.queue[qtail].fileNo = mailfileNo;
-						/*mail.queue[qtail].filesize = ???*/
-                    }
-/*>>>
-                    mail_count += 1;
-                    mail_size  += latest_file_size;
-<<<*/
-					/* purge the entity queue/list */
-					purge_directory(ENTITYQ_DIR, loPage, hiPage);
-                    entity.count = 0;
-                    entity.total_size = 0;
-
-					/* no pages encoded yet */
-	                loPage = 0;
-	                hiPage = 0;
-
-					StateKicker_SendMessage(MailQ_StateMachine, ME_MQ_MAILFILE_AVAILABLE, NULL);	/* MailQ may be stalled awaiting the next mailfile, this will restart it */
-					StateKicker_SendMessage(MimeEncode_StateMachine, ME_ME_TRYAGAIN, NULL);			/* share code - tell ourselves to try creating another mailfile */
-					nextstate = ME_S6;
+    					/* purge the entity queue/list */
+    					purge_directory(ENTITYQ_DIR, loPage, hiPage);
+                        entity.count = 0;
+                        entity.reserve = 0; /* should already be zero */
+                        entity.total_size = 0;
+                        mail.estimated_mailsize = 0;
+                        MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */
+    
+    					/* no pages encoded yet */
+    	                loPage = 0;
+    	                hiPage = 0;
+    
+    					StateKicker_SendMessage(MailQ_StateMachine, ME_MQ_MAILFILE_AVAILABLE, NULL);	/* MailQ may be stalled awaiting the next mailfile, this will restart it */
+    					StateKicker_SendMessage(MimeEncode_StateMachine, ME_ME_TRYAGAIN, NULL);			/* share code - tell ourselves to try creating another mailfile */
+    					nextstate = ME_S6;
+					}
                     break;
             }
             break;
@@ -442,6 +561,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 		/* must wait for MimeIF_create_RFC822_msg to complete */
 		/* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
 		case ME_S5_stopping:
+		    LogFileIF_show_decimal_int(REPORT, "ME_S5_stopping, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case MI_ME_CREATE_RFC822_MSG_ERROR:
@@ -456,6 +576,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 			break;
 
 		case ME_S6:
+		    LogFileIF_show_decimal_int(REPORT, "ME_S6, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case RX_ME_PREFETCH_STOP:
@@ -466,8 +587,6 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
             	case MQ_ME_SPACE_AVAILABLE:             /* a mailfile has been deleted from the queue - try creating the next one */
                     {
                     	BOOL do_another = TRUE;
-
-
                         {
         					int qtail = mail.qtail;
 
@@ -478,19 +597,11 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 							if (qtail == mail.qhead)
 								do_another = FALSE;		/* queue already full (we've got MAIL_QUEUE_SIZE-1 entries) */
                         }
-/*>>>
-                    	if (mail_size >= configured_max_message_size)
-                    		do_another= FALSE;
-<<<*/
+
 						if (do_another)
 						{
-        					_kernel_oserror *error = NULL;
-        					int objecttype, filelength, filetype;
-        				    char current_page_leafname[32];
-
-						/* encode first entity of another email message */
-
 							/* encode next page of document as first entity of another email message */
+							/* OR encode first entity of another document */
 							StateKicker_SendMessage(MimeEncode_StateMachine, ME_ME_FIRST_ENTITY, NULL);
 							nextstate = ME_extra;
 	                    }
@@ -502,6 +613,7 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 			break;
 
 		case ME_S6_stopping:
+		    LogFileIF_show_decimal_int(REPORT, "ME_S6_stopping, messageNumber", messageNumber);
 			switch (messageNumber)
 			{
 				case ME_ME_TRYAGAIN:
@@ -520,6 +632,12 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
     {
         /* purge the entity list */
 		purge_directory(ENTITYQ_DIR, loPage, current_page); /* use current_page not hiPage as we may have converted a page but not formally accepted it yet */
+        entity.count = 0;
+        entity.reserve = 0;
+        entity.total_size = 0;
+        mail.estimated_mailsize = 0;
+        MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */
+
 		/*>>>what about the entity.object NFE things*/
     }
 
@@ -531,6 +649,10 @@ extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *message
 		/* this SHOULD be compiled in */
         purge_directory(MAILQ_DIR, 0, MAIL_QUEUE_SIZE);		/*>>>N.B. relies on mail.queue[xxxx].fileNo holding 0..MAIL_QUEUE_SIZE<<<*/
 #endif
+        mail.estimated_mailsize = 0;
+        mail.total_size = 0;
+        MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */
+
         mail.qhead = mail.qtail;
 
     	StateKicker_SendMessage(RemXfer_StateMachine, ME_RX_STOPPED, NULL);
@@ -626,11 +748,12 @@ extern void MailQ_StateMachine(int messageNumber, messageDataBlock *messageData)
 								qhead = 0;
 
 					    	mail.qhead = qhead;
-					    	/* use purge_directory to delete one file! */
-#if 1
-		/* this SHOULD be compiled in */
-							purge_directory(MAILQ_DIR, mail.queue[qhead].fileNo, mail.queue[qhead].fileNo);
-#endif
+					    	
+                            /* delete the mailfile now that it's been sent */
+							purge_directory(MAILQ_DIR, mail.queue[qhead].fileNo, mail.queue[qhead].fileNo); /* use purge_directory to delete one file! */
+                            mail.total_size -= mail.queue[qhead].fileSize;
+                            MimeQ_HWM_Usage();  /* water mark handler needs to know how much space we're using and how much extra to reserve for us */
+
 					    	/* MimeEncoder may be stalled awaiting a space in the MailQ, this will restart it */
 					    	StateKicker_SendMessage(MimeEncode_StateMachine, MQ_ME_SPACE_AVAILABLE, NULL);
 					    }
@@ -660,11 +783,36 @@ extern void MailQ_StateMachine(int messageNumber, messageDataBlock *messageData)
 }
 
 
+/*
+ * SendQ will ask us the space requirements to encode the largest page/file in the SendQ
+ */
+extern MimeQ_QuerySpaceForPage(int pageSize)
+{
+    /* space required is                                                                                        */
+    /*  in entity queue  estimate_mime_size(pageSize)  ie 4 * pageSize / 3 plus allowance for CR/LF's           */
+    /*  in mail queue    estimate_mime_size(pageSize) plus ESTIMATE_ENTITY_HEADER plus ESTIMATE_MAILFILE_HEADER */
+
+    return(ESTIMATE_MAILFILE_HEADER + ESTIMATE_ENTITY_HEADER + 2 * estimate_mime_size(pageSize));
+}
+
 
 static int estimate_mime_size(int original_filesize)
 {
 	return(((original_filesize / 3) + 1) * 4);	/*>>>no allowence for CR/LF every 75ish characters*/
 
+}
+
+
+/* water mark handler needs to know how much space we're using and how much extra to reserve for us */
+static void MimeQ_HWM_Usage(void)
+{
+    LogFileIF_show_decimal_uint_int(REPORT, "entities: using", entity.total_size, "reserving", entity.reserve);
+    LogFileIF_show_decimal_uint_int(REPORT, "mailQ   : using", mail.total_size  , "reserving", mail.estimated_mailsize);
+    HWM_MailSend_Usage(
+                       entity.total_size + mail.total_size,         /* total file space we are using */
+                       entity.reserve    + mail.estimated_mailsize  /* amount we need reserving for current/future */
+                                                /* MimeIF_create_MIME_entity() or MimeIF_create_RFC822_msg() calls */
+                      );                              
 }
 
 
@@ -677,5 +825,14 @@ static void MimeEncode_ForwardError(void (*StateMachine)(int messageNumber, mess
     sendMessage->data = forwardData->data;
 }
 
+
+/*
+ * Send an error of our own
+ */
+static void MimeEncode_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
+                                   const char *text, int rc)
+{
+    StateKicker_SendRCError(StateMachine, messageNumber, code_MimeEncode_RCError, ctx_MimeEncode_RCError, rc, text);
+}
 
 /* end of MimeQ.c */

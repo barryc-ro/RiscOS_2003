@@ -23,11 +23,218 @@
 #include "AddrBookIF.h"
 #include "QuStruct.h"
 #include "QuCommon.h"
+#include "QuHWM.h"
+#include "LogFileIF.h"
 
 #include "FileOps.h"
 
+#if 1 /*normal*/
+        /* output debugging info only if LOGFILE_REPORT_LEVEL is LOG_DEBUG */
+#define REPORT LOG_DEBUG
+#else
+        /* output debugging info all the time */
+#define REPORT LOG_NORMAL
+#endif
 
-#if 1
+#if SUPPORT_EMAIL_HWM
+struct
+{
+    int using;                  /* } current requirement is using + reserving */
+    int reserving;              /* }                                          */
+
+    int minimum_requirement;    /* we MUST be able to take AT LEAST this much memory to allow the */
+                                /* largest known page (of size mailscan.largest_page) to be sent  */ 
+} mailsend = { 0, 0 };
+
+struct
+{
+    int largest_page;
+} mailscan = { 0 };
+
+
+void read_disc_size(int *p_size, int *p_used)
+{
+    const char *disc = "Ram:$";
+    _kernel_swi_regs regs;
+
+    regs.r[0] = 49;
+    regs.r[1] = (int)disc;
+    _kernel_swi(OS_FSControl, &regs, &regs);
+    *p_size = regs.r[2];
+    *p_used = (regs.r[2] - regs.r[0]);
+}
+
+int max(int a, int b)
+{
+    if (a > b)
+        return(a);
+    else
+        return(b);
+}
+
+int min(int a, int b)
+{
+    if (a < b)
+        return(a);
+    else
+        return(b);
+}
+
+/* Used by SendQ to inform HWM system of the largest known page size. */
+/* We then ensure enough space is reserved to allow it to be sent.    */
+extern void HWM_MailScan_Usage(int largest)
+{
+    if (mailscan.largest_page != largest)
+    {
+        mailscan.largest_page = largest;
+
+        if (largest == 0)
+            mailsend.minimum_requirement = 0;
+        else
+            mailsend.minimum_requirement = MimeQ_QuerySpaceForPage(largest);
+
+        LogFileIF_show_decimal_uint_int(REPORT , "Largest page scanned", largest, "requires", mailsend.minimum_requirement);
+    }
+}
+
+
+/* Used by MimeQ to inform HWM system how much space it is currently */
+/* using and to confirm its space reservation requirements */
+/* Any space used or reserved should have been approved by an earlier */
+/* HWM_MailSend_Extra call */
+extern void HWM_MailSend_Usage(int using, int reserving)
+{
+    mailsend.using     = using;
+    mailsend.reserving = reserving;
+}
+
+
+/* Used by MimeQ to ask HWM system if it can safely use or reserve more memory */
+/* Returns:                                                                    */
+/*   0=OK                                                                      */
+/*   1=Fail                                                                    */
+extern int HWM_MailSend_Extra(int extra_reservation)
+{
+    int disc_used, disc_size;
+
+    read_disc_size(&disc_size, &disc_used);
+    LogFileIF_show_decimal_uint_int(REPORT, "HWM_MailSend_Extra: disc_size", disc_size, "disc_used", disc_used);
+    LogFileIF_show_decimal_int(REPORT, "HWM_MailSend_Extra: extra_reservation", extra_reservation);
+
+    /* can we fit this in, leaving the minimum of margins? */
+    if ((disc_size - disc_used - mailsend.reserving - extra_reservation) < 51200)
+        return(1);  /* no - fail */
+
+    /* yes, so if it's within the reserved minimum allocation (ie the space needed for the largest page), allow it */
+    if ((mailsend.using + mailsend.reserving + extra_reservation) <= mailsend.minimum_requirement)
+        return(0);  /* OK */    /* within minimum allocation, which may exceed 50% of memory */
+
+    /* trying to use more than the reserved minimum, which is allowed as long as we */
+    /* don't use more than 50% of memory */
+    if (2*(mailsend.using + mailsend.reserving + extra_reservation) > disc_size)
+        return(1);  /*fail*/    /* would exceed 50% of memory unnecessarily */
+
+    /* leave at least 200k for the page scan */
+    if ((disc_size - disc_used - mailsend.reserving - extra_reservation) < 204800)
+        return(1);  /* fail */
+
+    return(0);
+}
+
+
+
+/*
+ * High Water Mark Check
+ *
+ * In
+ *   SQ_NEW_DOCUMENT
+ *   SQ_NEW_PAGE
+ *   SQ_PAGE_COMPLETE
+ *   SQ_DOCUMENT_COMPLETE
+ *
+ * Returns
+ *   1 OK - Below limits
+ *   2 Trigger streaming send
+ *   3 Abort receive - out of memory
+ */
+extern int HWM_Check(void)
+{
+    int disc_used, disc_size;
+
+    read_disc_size(&disc_size, &disc_used);
+
+    /* check for disc full, based on amount used, amount reserved and a margin */
+    {
+        /* currently only mailsend reserves space, if we add reservation schemes for other purposes, factor the values to hwm_reserved below */
+        /* we use mailsend.using in calculations where it really is mail orientied, and hwm_using in places where other reservation values may go */
+        int hwm_reserved = 0;
+        int ensure   = 2 * mailscan.largest_page;
+
+#if SUPPORT_EMAIL
+        hwm_reserved += mailsend.reserving; /* may be high, if entity file or mailfile is being created in the background */
+#endif
+                  /* += other.reserving (in the future) */
+
+        if ((disc_size - disc_used - hwm_reserved) < ensure)
+            return(3);    /*ABORT now*/
+    }
+
+    /* check for start streaming trigger level */
+    {
+        int mail_requ = 0;  /* suitable value for NO email support */
+        int trigger   = 0;
+        int hwm_using = 0;
+        int docu_used = 0;
+
+#if SUPPORT_EMAIL
+        /* allow MailQ the greater of:            */
+        /*   what it's asked for                  */
+        /*   amount needed for largest known page */
+        mail_requ += max(mailsend.using + mailsend.reserving, mailsend.minimum_requirement);
+#endif
+
+#if SUPPORT_EMAIL
+        hwm_using += mailsend.using;
+#endif
+               /* += other.using (in the future) */
+
+#if 0
+        margin = 2 * mailscan.largest_page; /* should this be three */
+#endif
+
+
+        /* stream trigger is lower of: */
+        /*   2/3 available memory      */
+        /*   1/2 disc_size             */
+
+#if SUPPORT_EMAIL
+        trigger = min((2*(disc_size - mail_requ))/3, disc_size/2);
+#else
+        trigger = disc_size/2;  /* optimisation, above expression simplifies to this when mail_requ is 0 */
+#endif
+
+        /* calculate total document space (PrintQ & SendQ) */
+        docu_used = disc_used - hwm_using;  /* not totally accurate, while encoding we are eating into hwm_reserved allocation, so docu_used will */
+                                            /* show high (by upto mailsend.reserving) - not really a problem as the encode is probably a streaming email send anyway       */
+
+    /* should we lower the trigger for start of document - probably not */
+    /* should we lower the trigger for start of page - probably yes */
+
+    /* if starting a page
+    if SQ_WM_NEW_PAGE or PQ_WM_NEW_PAGE
+        docu_used += mailscan.largest_page;
+    */
+
+        if (docu_used >= trigger)
+            return(2);  /* start streaming */
+    }
+
+
+
+    return(1);  /*OK*/
+}
+
+#else
 /*
  * High Water Mark Check
  *
@@ -62,12 +269,6 @@ extern int HWM_Check(void)
     /* greater than 50% used but more than 200K left - start streaming */
     return(2);
 }
-#else
-/* dummy version */
-extern int HWM_Check(void)
-{
-	return(1);
-}
 #endif
 
 
@@ -89,7 +290,7 @@ extern BOOL QuCommon_Page_Complete(Document document, unsigned int pageNum, Page
 
         sprintf(current_page_leafname, "%d", pageNum);
 
-        if ((error = osfile_ReadCatInfoDL(document->Directory, current_page_leafname, &objecttype, &filelength, &filetype)) != NULL)
+        if ((error = osfile_ReadCatInfoDL(document->Directory, current_page_leafname, &objecttype, &filelength, &filetype)) == NULL)
         {
             document->TotalSize += filelength;
 
