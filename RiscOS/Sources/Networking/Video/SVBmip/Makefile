@@ -76,24 +76,19 @@ DBG_OBJS        = od.Module od.mipSWI od.Parser od.Channels o.SVBmip
 #
 # Rule patterns
 #
-.SUFFIXES:      .o .od .or .s .c .cmhg .h
+.SUFFIXES:
+.SUFFIXES:      .o .od .or .s .c .h .cmhg
 .c.o:;          ${CC} ${CFLAGS} -o $@ $<
 .c.or:;         ${CC} ${CFLAGS} -DROM -o $@ $<
 .c.od:;         ${CC} ${CFLAGS} ${DBGFLAGS} -o $@ $<
-.cmhg.o:;       ${CMHG} ${CMHGFLAGS} -o $@ $< -d h.${CMHG_HDR}
+.cmhg.o:;       ${CMHG} ${CMHGFLAGS} -o $@ $<
 .cmhg.h:;       ${CMHG} ${CMHGFLAGS} -d $@ $<
-.cmhg.od:;      ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;          ${AS} ${ASFLAGS} -o $@ $<
 
-SVBmip.h: o.SVBmip
-        ${TOUCH} $@
-
-IPConfHdrD.h: od.IPConfHdr
-        ${TOUCH} $@
-
-o.IPConfHdr: VersionNum
-
-od.IPConfHdr: VersionNum
+#
+# Static dependencies
+#
+Module.c: SVBmip.h
 
 #
 # Main rules:
@@ -163,7 +158,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${EXPORTS}: h.Export
+${EXPORTS}: h.Export h.${CMHG_HDR}
+        @echo this is $@
         ${CP} h.Export $@ ${CPFLAGS}
         Do ${AWK} -- "/.define ${SWI_PREFIX}\_00/,/endif/" h.${CMHG_HDR} >>$@
 
