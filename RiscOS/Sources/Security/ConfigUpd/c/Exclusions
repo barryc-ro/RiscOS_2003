@@ -23,7 +23,7 @@
 #include "cu_main.h"
 #include "cu_utils.h"
 #include "cu_exclusn.h"
-
+#include "cu_errors.h"
 
 static int exclusions_file_valid = -1; /* No attempt as been made to load file. */
 
@@ -35,7 +35,7 @@ static void debug_display_lists(void);
    The code scans an exclusions file and places any rules found into a singly-linked lists. This list cmprises of rules for tags that must be present (included) or not be present (excluded).
 */
 
-SLIST_HEAD(list2, list) *inclusions;
+static SLIST_HEAD(list2, list) *inclusions;
 
 struct list
 {
@@ -44,7 +44,7 @@ struct list
    struct {
 	struct list *sle_next;	// next element
   */
-  int rule_type;         /* 1,2 */
+  int rule_type;         /* 1 = include, 2 = exclude */
   int nci_tag_number;    /* The nci_ tag number of the tag this rule represents. */
   char* rule_text;       /* An additional rule (e.g. a DNS range ) */
 };
@@ -299,7 +299,7 @@ bool clear_exclusions_file(void)
 
 
 
-
+/* This routine displays a debug list of all the known rules. */
 static void debug_display_lists(void)
 {
   struct list *p;
@@ -364,7 +364,7 @@ int is_exclusions_file_valid(void)
  is mentioned in the exclusions file. If it is present then it returns a
 pointer to the node in the list for this tag, otherwise it returns NULL. */
 
-struct list* search_exclusions_file_for_tag(const int nci_tag)
+static struct list* search_exclusions_file_for_tag(const int nci_tag)
 {
   struct list *p = NULL;
 
@@ -373,7 +373,6 @@ struct list* search_exclusions_file_for_tag(const int nci_tag)
   /* Parse the inclusions list... */
   SLIST_FOREACH(p, inclusions, list_link)
   {
-//    dprintf(("", "debug_display_lists(): Node nci_tag is %d (want %d)\n", p->nci_tag_number, nci_tag));
     if (p->nci_tag_number == nci_tag)
     {
       return (p);
@@ -386,21 +385,49 @@ struct list* search_exclusions_file_for_tag(const int nci_tag)
 
 
 
+#define EXCLUSION_RULE_TYPE_INCLUDED 1
+#define EXCLUSION_RULE_TYPE_EXCLUDED 2
+
 /* This routine ensures that all the tags in the target are valid against the rules held in the exclusions file, i.e. that any included tags are present and that excluded ones are not. Also any extended rules (e.g. DNS ranges) need to be checked.
-   It returns 0 if all tags match, otherwise it returns */
+   It returns 0 if all tags match, otherwise it returns non-zero. Any errors encoutnered should be added to the errors list. */
 
 unsigned int validate_bootblock_data(sc_bootblock_data_struct* bootblock)
 {
   unsigned int loop;
 
-  /* We need to do 2 parses:
+ /* Initially check that the same tag is not present as both an inclusion and an exclusion; this would obviously be an error.
+    We then need to do 2 parses:
     1) Scan through all the tags in the CU file and ensure that they should all be present (i.e. none are excluded in the exclusions file);
     2) Scan through the exclusions file and ensure that all tags that are included are present in the CU file.
-    As well as th above, we also need to ensure that any extended rule (for example DNS ranges) are validated. */
+    As well as th above, we also need to ensure that any extended rule (for example DNS ranges) are validated.
+ */
+
+  /* Ensure that the same tag is not mentioned in both exclusion and inclusion rules. */
+  struct list *p;
+  SLIST_FOREACH(p, inclusions, list_link)
+  {
+    struct list *p_inner;
+    SLIST_FOREACH(p_inner, inclusions, list_link)
+    {
+      dprintf(("", "validate_bootblock_data(): Node %p is: %d %d (%p %d %d)", p, p->rule_type, p->nci_tag_number, p_inner, p_inner->rule_type, p_inner->nci_tag_number));
+      /* Ensure we are not comparing the same node. */
+      if (p_inner == p)
+      {
+        continue;
+      }
+
+      if (p->nci_tag_number == p_inner->nci_tag_number)
+      {
+        char error_string[255];
+        dprintf(("", "validate_bootblock_data(): Error: The same tag number has two rules.\n"));
+        sprintf(error_string, "Tag %d has two exclusions rules.", p->nci_tag_number);
+        append_error(error_string);
+        return (-1);
+      }
+    }
+  }
 
   /* Check CU file tags are not excluded. */
-
-  /* Go through all the tags one at a time. If they are present output them to the filename passed in. */
   for(loop=0; loop<MAX_TAG_CACHE; loop++)
   {
     if(bootblock->tag_cache->tag[loop].tag == NULL)
@@ -409,19 +436,24 @@ unsigned int validate_bootblock_data(sc_bootblock_data_struct* bootblock)
     if(bootblock->tag_cache->tag[loop].bytes != 0) /* Tag has a value */
     {
       struct list *p = NULL;
-//      dprintf(("", "validate_bootblock_data(): tag %d has a value.\n", loop));
       /* Is this tag excluded or excluded in the exclusions file? */
       p = search_exclusions_file_for_tag(bootblock->tag_cache->tag[loop].nci_tag);
       if (p)
       {
         dprintf(("", "validate_bootblock_data(): tag %d is a %d in the exclusions file.\n", loop, p->rule_type));
-      }
-      else
-      {
-//        dprintf(("", "validate_bootblock_data(): tag %d is not present in the exclusions file.\n", loop));
+        if (p->rule_type == EXCLUSION_RULE_TYPE_EXCLUDED)
+        {
+          char error_string[255];
+          dprintf(("", "validate_bootblock_data(): Error: Attempt to alter tag %s (it is excluded in the exclusions file).\n", bootblock->tag_cache->tag[loop].tag));
+          sprintf(error_string, "Tag %s excluded in exclusions file.", bootblock->tag_cache->tag[loop].tag);
+          append_error(error_string);
+          return (loop);
+        }
       }
     }
   }
+
+  /* Ensure that all tags that need including are included. */
 
   return (0);
 }
