@@ -6,8 +6,9 @@ MaxDevice	*	(IRQ_other_timings - IRQ_timings) :SHR: 2
 
 ; ****************************************************
 ; *
-; * Replace our B instruction with the original LDMIA in the IRQ despatcher, remove
-; * the ticker event and release IrqV.
+; * Initialise the IRQ patching stuff to be off with all of the relevant stats in
+; * our workspace set to zero. You have to use *IRQInfo 1 to activate the timing
+; * mechanism.
 ; *
 ; * In...
 ; *   R12	= module workspace pointer
@@ -18,133 +19,208 @@ MaxDevice	*	(IRQ_other_timings - IRQ_timings) :SHR: 2
 ; *   R1-R13	= preserved
 ; *   V flag	= set if R0 is a pointer to an error block
 ; *
-IRQ_unpatch Entry "R1-R2"
-	; Have we patched the IRQ despatcher?
-	LDR	R2, [R12, #WSP_IRQtable]
-	LDR	R14, =0xE8919000	; = "LDMIA R1,{R12,PC}"
-	TEQ	R2, #0
-	BEQ	Iup			; No. Exit.
-	; Put back the original LDMIA instruction...
-	STR	R14, [R2, #-4]
-	; Ensure that we don't have any cache problems...
-	MOV	R0,#2_1
-	SUB	R1,R2,#4
-	MOV	R2,R1
-	SWI	XOS_SynchroniseCodeAreas
-	; Remove the ticker event for our timing code...
-	ADR	R0, IRQ_ticker
-	MOV	R1, R12
-	SWI	XOS_RemoveTickerEvent
-	BVS	Iup
-	; Release the IRQ vector...
+IRQ_init Entry "R1-R5"
+	; Set IRQ patching flags to "inactive"...
+	MOV	R0, #0
+	STR	R0, [R12, #WSP_IRQactive]
+	STR	R0, [R12, #WSP_IRQcode]
+	; Claim the Unknown IRQ vector...
 	MOV	R0, #IrqV
 	ADR	R1, IrqV_handler
 	MOV	R2, R12
-	SWI	XOS_Release
-	BVS	Iup
-	; Free the RMA block with our patch code in it...
-	LDR	R2, [R12, #WSP_IRQcode]
-	MOV	R0, #ModHandReason_Free
+	SWI	XOS_Claim
+	BVS	%FT09
+	; Initialise our count of unclaimed IRQs to zero...
+	ASSERT	((?WSP_UnkIRQCount) :AND: 3) = 0
+	MOV	R0, #0
+	ADD	R1, R12, #WSP_UnkIRQCount
+	MOV	R2, #?WSP_UnkIRQCount
+00	STR	R0, [R1], #4
+	SUBS	R2, R2, #4
+	BNE	%BT00
+	; Zero-initialise the copy of the statistics table...
+	ASSERT	((?WSP_IRQinfo) :AND: 3) = 0
+	ADD	R1, R12, #WSP_IRQinfo
+	MOV	R14, #?WSP_IRQinfo
+01	STR	R0, [R1], #4
+	SUBS	R14, R14, #4
+	BNE	%BT01
+	; Search for the base of the Kernel IRQ despatch table...
+	MOV	R0, #6
+	MOV	R1, #0
+	MOV	R2, #19
+	SWI	XOS_ReadSysInfo
+	MOVVS	R2, #0
+	MOVS	R1, R2
+	BNE	%FT03
+	LDR	R0, =0xE8919000		; = "LDMIA R1,{R12,PC}"
+	MOV	R1, #0x01F00000		; Base of the Cursor/System/Sound area
+02	LDR	R14, [R1], #4
+	TEQ	R14, R0
+	BEQ	%FT03
+	CMP	R1, #0x01F800000
+	BLO	%BT02
+	; We didn't find it. Store zero and exit...
+	MOV	R1, #0
+	STR	R1, [R12, #WSP_IRQtable]
+	EXIT
+03	; Copy our IRQ handler code into RMA...
+	ASSERT	((IRQ_code_end - IRQ_code) :AND: 3) = 0
+	ADR	R4, IRQ_code
+	ADR	R5, IRQ_code_end
+	MOV	R0, #ModHandReason_Claim
+	SUB	R3, R5, R4
 	SWI	XOS_Module
-Iup	EXIT
+	BVS	%FT09
+	STR	R1, [R12, #WSP_IRQtable]
+	STR	R2, [R12, #WSP_IRQcode]
+	MOV	R1, R2
+04	LDR	R14, [R4], #4
+	SUBS	R3, R3, #4
+	STR	R14, [R2], #4
+	BNE	%BT04
+	; Ensure that we don't have any cache problems...
+	MOV	R0, #2_1
+	SUB	R2, R2, #4
+	SWI	XOS_SynchroniseCodeAreas
+09	;
+	EXIT
 
 
 ; ****************************************************
 ; *
-; * Replace the LDMIA instruction in the IRQ despatcher with a branch to a copy
-; * copy of our IRQ timing and despatch code in the RMA.
+; * Remove all of the various bits and bobs related to our software for watching
+; * unknown IRQ events and timing IRQ handlers. This includes:
 ; *
-; * We also create a ticker event to copy the timing and other information over
-; * to a block in the module workspace once a second.
-; *
-; * Finally, we claim IrqV so that we can keep a record of any device numbers
-; * which pass along there.
+; * - Replacing the patched B in the Kernel IRQ despatch with the orignal LDMIA
+; * - Removing the CallEvery which copies IRQ stats into our workspace
+; * - Freeing the block of RMA with our IRQ despatch code in it
+; * - Releasing the claimant on the IrqV vector
 ; *
 ; * In...
 ; *   R12	= module workspace pointer
 ; *   R13	= full-descending stack pointer
 ; *   R14	= return address
 ; * Out...
-; *   R0-R3	= corrupted (or pointer to error block)
-; *   R4-R9	= preserved
-; *   R10-R11	= corrupted
-; *   R12-R13	= preserved
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R13	= preserved
 ; *   V flag	= set if R0 is a pointer to an error block
 ; *
-IRQ_patch Entry
-	; Scan through the Cursor/System/Sound area for two instructions...
-	LDR	R0, =0xE8919000		; = "LDMIA R1,{R12,PC}"
-	MOV	R11, #0x01F00000	; Base of the Cursor/System/Sound area
-00	LDR	R14, [R11], #4
-	TEQ	R14, R0
-	BEQ	%FT01
-	CMP	R11, #0x01F800000
-	BLO	%BT00
-	MOV	R11, #0
-	STR	R11, [R12, #WSP_IRQtable]
-	B	Ipa
-01	;
-	STR	R11, [R12, #WSP_IRQtable]
-	SUB	R11, R11, #4
-	ADR	R1, IRQ_code
-	ADR	R10, IRQ_code_end
-	; Claim a block of RMA...
-	MOV	R0, #ModHandReason_Claim
-	SUB	R3, R10, R1
-	SWI	XOS_Module
-	BVS	Ipa
-	STR	R2, [R12, #WSP_IRQcode]
-	; Copy our code into RMA...
-	MOV	R3, R2
-02	LDR	R14, [R1], #4
-	STR	R14, [R3], #4
-	CMP	R1, R10
-	BLO	%BT02
-	;
-	; R2  -> base of copied code
-	; R11 -> LDM instruction's address
-	;
+IRQ_final Entry "R1-R2"
+	; Replace the B with a the original LDMIA in the Kernel's IRQ despatcher...
+	BL	IRQ_unpatch
+	BVS	%FT00
+	; Remove our ticker event...
+	ADR	R0, IRQ_ticker
+	MOV	R1, R12
+	SWI	XOS_RemoveTickerEvent
+	BVS	%FT00
+	; Free the RMA block containing our IRQ despatcher...
+	LDR	R2, [R12, #WSP_IRQcode]
+	MOV	R0, #ModHandReason_Free
+	CMP	R2, #0		; Also clears V flag (over-engineered as V is already clear)
+	SWINE	XOS_Module
+	BVS	%FT00
+	; Remove our claimant from the IrqV vector...
+	MOV	R0, #IrqV
+	ADR	R1, IrqV_handler
+	MOV	R2, R12
+	SWI	XOS_Release
+00	;
+	EXIT
+
+
+; ****************************************************
+; *
+; * Replace our B instruction with the original LDMIA in the IRQ despatcher,
+; * remove the ticker event and release IrqV.
+; *
+; * In...
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
+; *   R3-R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+IRQ_unpatch Entry
+	; Did we successfully install our code into the RMA? If not, exit...
+	LDR	R2, [R12, #WSP_IRQtable]
+	TEQ	R2, #0
+	EXIT	EQ
+	; Is IRQ patching already active? If not, exit...
+	LDR	R14, [R12, #WSP_IRQactive]
+	TST	R14, #1
+	EXIT	EQ
+	; Put back the original LDMIA instruction...
+	LDR	R14, =0xE8919000	; = "LDMIA R1,{R12,PC}"
+	STR	R14, [R2, #-4]!
 	; Ensure that we don't have any cache problems...
 	MOV	R0, #2_1
 	MOV	R1, R2
-	SUB	R2, R3, #4
 	SWI	XOS_SynchroniseCodeAreas
-	BVS	Ipa
-	; Replace the LDMIA with a B to our code...
-	ADD	R14, R11, #8
+	EXIT	VS
+	; Remove the ticker event for our timing code...
+	ADR	R0, IRQ_ticker
+	MOV	R1, R12
+	SWI	XOS_RemoveTickerEvent
+	EXIT	VS
+	; Set the activity flag back to "inactive"...
+	MOV	R14, #0
+	STR	R14, [R12, #WSP_IRQactive]
+	EXIT
+
+; ****************************************************
+; *
+; * Replace the LDMIA instruction in the IRQ despatcher with a branch to a copy
+; * copy of our IRQ timing and despatch code in the RMA and create a ticker event
+; * to copy the timing and other information over to a block in the module
+; * workspace once a second.
+; *
+; * In...
+; *   R12	= module workspace pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R2	= corrupted
+; *   R3-R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+IRQ_patch Entry
+	; Did we successfully install our code into the RMA? If not, exit...
+	LDR	R2, [R12, #WSP_IRQtable]
+	TEQ	R2, #0
+	EXIT	EQ
+	; Is IRQ patching already active? If so, exit...
+	LDR	R14, [R12, #WSP_IRQactive]
+	TST	R14, #1
+	EXIT	NE
+	; Replace the LDMIA in the Kernel's despatch code with a B to our code...
+	LDR	R1, [R12, #WSP_IRQcode]
+	ADD	R14, R2, #4
 	SUB	R14, R1, R14
 	MOV	R14, R14, LSR #2
 	; Exit if the branch target is too far away or below the source...
 	TST	R14, #0xFF000000
-	; Ensure cache coherency on Harvard-like CPUs...
-	BNE	Ipa
-	ORR	R14, R14, #0xEA000000
-	STR	R14, [R11]
-	MOV	R0,#2_1
-	MOV	R1,R11
-	MOV	R2,R1
+	EXIT	NE
+	ORR	R14, R14, #0xEA000000	; = "B IRQ_code"
+	STR	R14, [R2, #-4]!
+	; Ensure that we don't have any cache problems...
+	MOV	R0, #2_1
+	MOV	R1, R2
 	SWI	XOS_SynchroniseCodeAreas
-	BVS	Ipa
+	EXIT	VS
+	; Set flag bit to indicate that we are "active"....
+	STR	R0, [R12, #WSP_IRQactive]
 	; Install a ticker event to copy and reset the timings every second...
 	MOV	R0, #99
 	ADR	R1, IRQ_ticker
 	MOV	R2, R12
 	SWI	XOS_CallEvery
-	BVS	Ipa
-	; Claim the IRQ vector...
-	MOV	R0, #IrqV
-	ADR	R1, IrqV_handler
-	MOV	R2, R12
-	SWI	XOS_Claim
-	BVS	Ipa
-	; Initialise our count of unclaimed IRQs to zero...
-	MOV	R0, #0
-	ADD	R1, R12, #WSP_UnkIRQCount
-	ADD	R2, R1, #4*IRQs
-03	STR	R0, [R1], #4
-	CMP	R1, R2
-	BLO	%BT03
-Ipa	EXIT
+	EXIT
 
 
 ; ****************************************************
