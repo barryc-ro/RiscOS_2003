@@ -37,7 +37,7 @@ LEXFLAGS= -i
 #
 # Libraries
 #
-CLIB      =
+CLIB      = -lm
 #INETLIBS  = -lsocket -lnsl -lresolv
 
 SUPPORT   = inet_net_pton.o inet_net_ntop.o

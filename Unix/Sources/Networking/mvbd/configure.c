@@ -47,7 +47,7 @@ typedef struct configuration {
         u_char          default_ttl;
         /* An absolute limit on the MTU of outgoing packets */
         int             mtu_ceiling;
-        /* Rate in bytes/sec that the object is to be delivered at */
+        /* Rate in bits/sec that the object is to be delivered at */
         unsigned long   minimum_master_rate;
         /* The root for all served files.  UNIX implementations will attempt
          * to chroot to this directory.  OSes without this capability should

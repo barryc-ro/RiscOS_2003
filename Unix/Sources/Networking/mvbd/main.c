@@ -40,6 +40,23 @@
 #include "platform.h"
 #include "mofile.h"
 
+#include "VersionNum"
+
+#ifdef LOG_PERROR
+#  define VERBOSE_LOG_OPTIONS LOG_PERROR
+#else
+#  ifdef LOG_CONS
+#    define VERBOSE_LOG_OPTIONS LOG_CONS
+#  else
+#    define VERBOSE_LOG_OPTIONS (0)
+#  endif
+#endif
+
+const char *ident(void)
+{
+        static char ident[] = "$Id$ " Module_FullVersion;
+        return ident;
+}
 
 static char id[] = "video_multiblaster[            ]";
 static int log_options = 0;
@@ -71,8 +88,6 @@ static void sighup_handler(int sig)
 
 static bmc_status main_initialise(int argc, char **argv)
 {
-        bmc_status s;
-
         /* The order of these is important to ensure atexit fns are called in
          * the right order
          */
@@ -98,7 +113,7 @@ static bmc_status main_initialise(int argc, char **argv)
                                         raise(SIGUSR1); /* dump config */
                                         break;
                                 case 'v':
-                                        log_options = LOG_PERROR;
+                                        log_options = VERBOSE_LOG_OPTIONS;
                                         platform_reopen_log();
                                         break;
                                 case 'x':
@@ -116,7 +131,7 @@ static bmc_status main_initialise(int argc, char **argv)
 const char *main_get_application_id(void)
 {
         pid_t pid = getpid();
-        sprintf(strchr(id, '[') + 1, "%d]", pid);
+        sprintf(strchr(id, '[') + 1, "%ld]", (long) pid);
         return id;
 }
 

@@ -189,7 +189,7 @@ multicastdestinations   : TOK_MULTICAST TOK_ADDRESS cidrlist
                         ;
 
 multicastrate           : TOK_RATE integer
-                                { $$ = $2 << 3; }
+                                { $$ = $2; }
                         ;
 
 integer                 : TOK_INT

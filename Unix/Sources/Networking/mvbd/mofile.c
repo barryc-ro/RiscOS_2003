@@ -218,7 +218,7 @@ bmc_status multicast_file_launch(void)
                 switch (pid) {
                         case -1:
                                 platform_log(LOG_ERR, "Unable to fork()\n");
-                                return;
+                                return bmc_SYSCALL;
                         case 0:
                                 signal(SIGHUP, SIG_IGN);
                                 platform_reopen_log();
