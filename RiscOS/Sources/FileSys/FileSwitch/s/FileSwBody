@@ -314,6 +314,15 @@
                 GBLL    appendhandle
 appendhandle    SETL    False
 
+; mjs Nov 97:
+; Ursula performance enhancements
+;
+                  GBLL  MercifulToSysHeap  ;attempt to avoid very frequent OS_Heap
+                                           ;claims and releases for sytem heap
+                  GBLL  MercifulTracing    ;tracing for diagnostics only
+MercifulToSysHeap SETL  {TRUE}
+MercifulTracing   SETL  {FALSE} :LAND: MercifulToSysHeap
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Flags to strip out copy + wipe for MOS debugging versions
 
@@ -710,6 +719,26 @@ OsFile5Cache    #       4
 
 FileSwitch_LastNowtVar # 0
 
+ [ MercifulToSysHeap
+HBlocks_Valid     #     4
+HBlockArray_32    #     4
+HBlockArray_64    #     4
+HBlockArray_128   #     4
+HBlockArray_1040  #     4
+
+NHBlocks_32   *  64
+NHBlocks_64   *  64
+NHBlocks_128  *  64
+NHBlocks_1040 *  12
+
+    [ MercifulTracing
+NHB_total   # 4       ;total block claims
+NHB_fail    # 4       ;total block claims that gave up and went to OS_Heap
+HB_failmax  # 4       ;largest size of block that had to come from OS_Heap
+    ]
+
+ ] ;MercifulToSysHeap
+
            AlignSpace   16      ; So we don't have to ADRL these objects
 
 MaxHandle       *       255     ; Biggest valid handle that I will return
@@ -754,7 +783,8 @@ EnvTimeAddr     #       4
 FileSwitchWorkspace_size * :INDEX: @
 
 
-StaticName_length *     256     ; Limits size of input filename, path etc.
+StaticName_length *     1024    ; Limits size of input filename, path etc.
+                                ; was 256 (changed for Ursula)
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Local workspace allocation: done bottom up!
@@ -1124,6 +1154,9 @@ fsw_varcount SETA fsw_varcount + 4
         WEND
  ]
 
+   [ MercifulToSysHeap
+        BL      InitHBlocks
+   ]
 
 ; No streams present yet
 
@@ -1590,6 +1623,10 @@ FileSwitch_Die Entry   "fp"
 
         STR     r2, fschain             ; fschain empty
 
+  [ MercifulToSysHeap
+        BL      ReleaseHBlocks
+  ]
+
         EXIT
 
         LTORG
@@ -1598,9 +1635,27 @@ FileSwitch_Die Entry   "fp"
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Service entry. No trashable registers. Services can't give errors back
 
-FileSwitch_Service ROUT
+        ASSERT  Service_Memory           <  Service_StartUpFS
+        ASSERT  Service_StartUpFS        <  Service_Reset
+        ASSERT  Service_Reset            <  Service_CloseFile
+        ASSERT  Service_CloseFile        <  Service_TerritoryStarted
+        ASSERT  Service_TerritoryStarted <  Service_DiscDismounted
 
-        ; Rapid service rejection
+FileSwitch_ServTab                                    ; Ursula format service table
+        DCD     0                                     ; flags word
+        DCD     FileSwitch_UService - Module_BaseAddr ; offset to handler (skip rapid rejection)
+        DCD     Service_Memory                        ; service calls...
+        DCD     Service_StartUpFS
+        DCD     Service_Reset
+        DCD     Service_CloseFile
+        DCD     Service_TerritoryStarted
+        DCD     Service_DiscDismounted                ; ...in ascending numerical order
+        DCD     0                                     ; terminator
+        DCD     FileSwitch_ServTab - Module_BaseAddr  ;anchor for table
+
+FileSwitch_Service ROUT                               ; Rapid service rejection
+
+        MOV     r0, r0                                ; magic instruction indicates Ursula format
         TEQ     r1, #Service_Memory
         TEQNE   r1, #Service_Reset
         TEQNE   r1, #Service_StartUpFS
@@ -1609,7 +1664,7 @@ FileSwitch_Service ROUT
         TEQNE   r1, #Service_TerritoryStarted
         MOVNE   pc, lr
 
-        ; Now go to the various service handlers...
+FileSwitch_UService                                   ; Now go to the various service handlers...
 
         TEQ     r1, #Service_Memory
         BEQ     FileSwitch_Service_Memory
@@ -1986,5 +2041,194 @@ FileSwitchExitSettingC ROUT
         BIC     lr, lr, #V_bit          ; ??? Does this have VClear anyway ?
         BICCCS  pc, lr, #C_bit          ; Return to punter, NZ flags intact
         ORRCSS  pc, lr, #C_bit
+
+; .............................................................................
+
+  [ MercifulToSysHeap
+
+;mjs: these routines are similar to the ChocolateBlock stuff in Ursula
+;     kernel - see s.ChangeDyn for more comments there 
+
+; CreateHBlockArray
+; entry: r2 = No. of blocks to be created in array (N)
+;        r3 = size of each block in bytes (S, must be multiple of 4)
+;
+; exit:
+;        r2 = address of block array (parent SysHeap block address)
+;        array is initialised to all blocks free
+;   OR   V set, r0=error pointer, if error
+;
+CreateHBlockArray ROUT
+        Push    "r0,r1,r3,r4,r5,lr"
+        MOV     r5,r2                ;N
+        ADD     r4,r3,#4             ;S+4
+        MUL     r3,r5,r4
+        ADD     r3,r3,#3*4
+        BL      MTSH_SMustGetArea
+        STRVS   r0,[SP]
+        BVS     %FT50
+        STR     r5,[r2]
+        STR     r4,[r2,#4]
+        ADD     r1,r2,#3*4
+        STR     r1,[r2,#8]
+        MOV     lr,r5
+        ADD     r0,r2,#3*4
+        MOV     r1,#&80000000        ;free flag
+10
+        STR     r1,[r0]
+        ADD     r3,r0,r4
+        STR     r3,[r0,#4]
+        ADD     r1,r1,r4
+        SUBS    lr,lr,#1
+        MOVNE   r0,r3
+        BNE     %BT10
+        MOV     r1,#0
+        STR     r1,[r0,#4]           ;end of free list
+50
+        Pull    "r0,r1,r3,r4,r5,pc"
+
+;
+; ClaimHBlock
+;
+; entry: r3 = address of parent HBlockArray (must be valid)
+; exit:  r2 = address of allocated block
+;        r3 = size of block
+;  OR    V set, but no error ptr in R0 (no free blocks - must be dealt with silently)
+;
+ClaimHBlock ROUT
+        Push    "r1,r4,lr"
+        MOV     r4,pc
+        ORR     r1,r4,#I_bit
+        TEQP    r1,#0             ;protect critical manipulation from interrupt re-entry
+        LDR     r2,[r3,#8]        ;pick up block container at front of free list
+        CMP     r2,#0
+        BEQ     ClaimHBlock_NoneFree
+        LDR     r1,[r2]
+        BIC     r1,r1,#&80000000  ;clear the free flag
+        STR     r1,[r2]
+        LDR     r1,[r2,#4]        ;next free block container
+        STR     r1,[r3,#8]        ;put it at front
+        ADD     r2,r2,#4          ;address of block
+        LDR     r3,[r3,#4]
+        SUB     r3,r3,#4          ;size of block
+        BIC     r4,r4,#V_bit      ;return with V clear
+        TEQP    r4,#0             ;restore IRQ state
+        Pull    "r1,r4,pc"
+ClaimHBlock_NoneFree
+        ORR     r4,r4,#V_bit      ;return with V set
+        TEQP    r4,#0             ;restore IRQ state
+        Pull    "r1,r4,pc"
+
+;
+; FreeHBlock
+;
+; entry: r1 = address of parent HBlockArray (must be valid)
+;        r2 = address of block to free (may be invalid)
+; exit:  -
+;   OR   V set, (not a valid HBlock), no error ptr in r0, but r1,r2 still preserved
+;
+FreeHBlock ROUT
+        Push    "r2,r3,r4,lr"
+        MOV     r4,pc
+        ORR     r3,r4,#I_bit
+        TEQP    r3,#0             ;protect critical manipulation from interrupt re-entry
+        ADD     r3,r1,#12         ;r3 -> first block container
+        SUB     r2,r2,#4          ;r2 -> container for block (if valid)
+        CMP     r2,r3
+        BLO     FreeHBlock_NaffOff
+        LDR     lr,[r1,#-4]       ;OS_Heap's size word (naughty!)
+        ADD     lr,lr,r1
+        CMP     r2,lr
+        BHS     FreeHBlock_NaffOff
+        LDR     lr,[r2]           ;block container id
+        TST     lr,#&80000000     ;free flag
+        BNE     FreeHBlock_NaffOff
+        ADD     lr,lr,r3          ;lr := address of block container, from container id
+        CMP     lr,r2
+        BNE     FreeHBlock_NaffOff
+;
+;we now believe caller is freeing a valid block, currently in use
+;
+        LDR     lr,[r2]
+        ORR     lr,lr,#&80000000
+        STR     lr,[r2]           ;set free flag in container id
+        LDR     lr,[r1,#8]        ;current front of free list
+        STR     lr,[r2,#4]        ;chain free list to block container we are freeing
+        STR     r2,[r1,#8]        ;put freed block container at front
+        BIC     r4,r4,#V_bit      ;return with V clear
+        TEQP    r4,#0             ;restore IRQ state
+        Pull    "r2,r3,r4,pc"
+FreeHBlock_NaffOff
+        ORR     r4,r4,#V_bit      ;return with V set
+        TEQP    r4,#0             ;restore IRQ state
+        Pull    "r2,r3,r4,pc"
+
+; InitHBlocks
+;
+InitHBlocks ROUT
+        Push    "r2,r3,lr"
+        MOV     r2,#0
+        STR     r2,HBlocks_Valid
+        MOV     r2,#NHBlocks_32
+        MOV     r3,#32              ;size
+        BL      CreateHBlockArray
+        BVS     %FT90
+        STR     r2,HBlockArray_32
+        MOV     r2,#NHBlocks_64
+        MOV     r3,#64              ;size
+        BL      CreateHBlockArray
+        BVS     %FT90
+        STR     r2,HBlockArray_64
+        MOV     r2,#NHBlocks_128
+        MOV     r3,#128             ;size
+        BL      CreateHBlockArray
+        BVS     %FT90
+        STR     r2,HBlockArray_128
+        MOV     r2,#NHBlocks_1040
+        MOV     r3,#1040            ;size
+        BL      CreateHBlockArray
+        BVS     %FT90
+        STR     r2,HBlockArray_1040
+        MOV     r2,#-1
+        STR     r2,HBlocks_Valid
+  [ MercifulTracing
+        MOV     r2,#0
+        STR     r2,NHB_total
+        STR     r2,NHB_fail
+        STR     r2,HB_failmax
+  ]
+90
+        Pull    "r2,r3,pc"
+
+;
+; ReleaseHBlocks
+;
+ReleaseHBlocks ROUT
+        Push    "r0-r3,lr"
+        MOV     r0,#0
+        STR     r0,HBlocks_Valid
+        MOV     r0,#HeapReason_Free
+        LDR     r1,=SysHeapStart
+        MOV     r3,#0
+        LDR     r2,HBlockArray_32
+        STR     r3,HBlockArray_32
+        CMP     r2,#0
+        SWINE   XOS_Heap
+        LDR     r2,HBlockArray_64
+        STR     r3,HBlockArray_64
+        CMP     r2,#0
+        SWINE   XOS_Heap
+        LDR     r2,HBlockArray_128
+        STR     r3,HBlockArray_128
+        CMP     r2,#0
+        SWINE   XOS_Heap
+        LDR     r2,HBlockArray_1040
+        STR     r3,HBlockArray_1040
+        CMP     r2,#0
+        SWINE   XOS_Heap
+        CLRV
+        Pull    "r0-r3,pc"
+
+  ] ;MercifulToSysHeap
 
         END
