@@ -88,7 +88,7 @@ CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS
 
 # Libraries
 #
-LIBDIR		= <Lib$Dir>
+LIBDIR	   = <Lib$Dir>
 CLIB       = CLIB:o.stubs
 RLIB       = RISCOSLIB:o.risc_oslib
 RSTUBS     = RISCOSLIB:o.rstubs
