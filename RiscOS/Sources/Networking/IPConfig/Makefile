@@ -64,14 +64,16 @@ ASFLAGS		= ${DEPEND} ${THROWBACK}
 CFLAGS		= -c -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${CENV}
 CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
 
-ROM_OBJS	= o.iicpoke or.module or.ifrconfig or.editconfig or.utils   \
+ROM_OBJS	= o.iicpoke or.module or.ifrconfig or.editconfig or.utils\
 		  or.lineedit or.Strncmp_ci o.ipconfhdr
-RAM_OBJS	= o.iicpoke o.module  o.ifrconfig  o.editconfig  o.utils   \
+RAM_OBJS	= o.iicpoke o.module  o.ifrconfig  o.editconfig  o.utils \
 		  o.lineedit  o.Strncmp_ci  o.ipconfhdr  ${RESF}
-DBG_OBJS	= o.iicpoke od.module od.ifrconfig od.editconfig od.utils  \
-		  od.lineedit od.Strncmp_ci od.ipconfhdr ${RESF}
+DBG_OBJS	= o.iicpoke od.module od.ifrconfig od.editconfig od.utils\
+		  od.lineedit od.Strncmp_ci od.ipconfhdr ${DBGRESF}
 
 RESF		= o.msgs
+
+DBGRESF		= od.msgs
 
 #
 # Rule patterns
@@ -158,7 +160,16 @@ ${DBG_MODULE}:	${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 
 ${RESF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
-	resgen messages_file ${RESF} LocalRes:Messages ${RESFSDIR}.Messages
+	resgen messages_file $@ LocalRes:Messages ${RESFSDIR}.Messages
+
+${DBGRESF}: LocalRes:Messages
+	TokenCheck LocalRes:Messages
+	resgen messages_file $@ \
+		LocalRes:Messages ${RESFSDIR}.Messages \
+		Inet:bin.IfConfig IfConfig \
+		Inet:bin.InetStat InetStat \
+		Inet:bin.Route Route \
+		LocalRes:SIFAddr SIFAddr
 
 #
 # Final link for the ROM Image (using given base address)
