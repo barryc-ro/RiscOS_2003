@@ -27,6 +27,13 @@ LDIR		= Resources.${LOCALE}
 RESDIR          = ${RESDIR}.${COMPONENT}
 RESAPP          = <Resource$Dir>.Apps.${APP}
 
+# -----------------------------------------------------------------------------
+# MemCheck bits
+#
+
+MEMCHECK_CC = 
+#MEMCHECK_CC = MemCheck.CC
+MEMCHECK_FLAGS = 
 
 # -----------------------------------------------------------------------------
 # Generic options
@@ -34,7 +41,7 @@ RESAPP          = <Resource$Dir>.Apps.${APP}
 
 MKDIR		= cdir
 AS		= objasm
-CC		= cc
+CC		= ${MEMCHECK_CC} cc
 CMHG		= cmhg
 CP		= copy
 LD		= link
@@ -44,6 +51,7 @@ WIPE		= -wipe
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
 CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -wp
+#CFLAGS		= ${THROWBACK} -depend !Depend -fa ${INCLUDES} -wp
 CPFLAGS		= ~cfr~v~n
 SQFLAGS		= -f
 WFLAGS		= ~cf~vr
@@ -56,7 +64,7 @@ WFLAGS		= ~cf~vr
 # These are for the standard Desktop build (plus debug)
 
 DFLAGS		= 
-#DFLAGS		= -DDEBUGLIB
+#DFLAGS 		= -DMEMCHECK
 DDFLAGS		= -fn -DDEBUGLIB -DTEST
 DZFLAGS		= 
 DDZFLAGS	= ${DZFLAGS} -fn
@@ -85,6 +93,7 @@ FLASHLIB	= ${LIBDIR}.Netfax.FlashLib.o.FlashLib
 FLASHLIB_T	= ${LIBDIR}.Netfax.FlashLib.o.FlashLib_t
 DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
 NUMCONVERTLIB   = ${LIBDIR}.NumConvert.o.numconv
+MEMCHECK_LIB	= MemCheck:o.MC
 
 LIBSM = \
  ${FLASHLIB} \
@@ -107,10 +116,12 @@ LIBS = \
  ${EVENTLIB} \
  ${CLIB} \
  ${NUMCONVERTLIB} \
+# ${MEMCHECK_LIB} \
 # ${DEBUGLIB} \
 # TCPIPLibs:o.socklib5 \
 # TCPIPLibs:o.unixlib \
 # TCPIPLibs:o.inetlib \
+
 
 
 LIBSD = \
