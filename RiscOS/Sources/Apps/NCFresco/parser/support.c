@@ -265,7 +265,7 @@ extern STRING mkstring(char *ptr, int n)
 }
 
 #if UNICODE
-extern STRING mkstringu(UCHARACTER *ptr, int n)
+extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 {
     STRING s;
 
@@ -294,6 +294,12 @@ extern STRING mkstringu(UCHARACTER *ptr, int n)
 	case 0:
 	    s.bytes = n;
 	    break;
+	case 3:
+	    s.bytes = n*2;
+	    break;
+	case 4:
+	    s.bytes = n*3;
+	    break;
 	default:
 	    for (i = 0; i < n; i++)
 		s.bytes += UTF8_codelen(ptr[i]);
@@ -307,21 +313,31 @@ extern STRING mkstringu(UCHARACTER *ptr, int n)
 	}
 	else 
 	{
-	    /* write out UTF8 string */
+	    /* write out string */
 	    char *ss = s.ptr;
+	    int bufsize = s.bytes;
 	    for (i = 0; i < n; i++)
 	    {
 		switch (config_encoding_internal)
 		{
-		case 0:
-		    *ss++ = ptr[i] >= 256 ? '?' : ptr[i];
-		    break;
-		default:
+		case 1:
+		case 2:
 		    ss = UCS4_to_UTF8(ss, ptr[i]);
+		    break;
+
+		case 0:
+		case 3:
+		case 4:
+		    encoding_write(encoding, ptr[i], &ss, &bufsize);
 		    break;
 		}
 	    }
 
+	    if (s.bytes != ss - s.ptr)
+	    {
+		s.bytes = ss - s.ptr;
+		s.ptr = mm_realloc(s.ptr, s.bytes);
+	    }
 	    PRSDBGN(("mkstringu: written %d chars\n", ss - s.ptr));
 	}
 

@@ -93,6 +93,17 @@ extern void sgml_free_context(SGMLCTX *context);
 extern SGMLCTX * sgml_new_context(void);
 
 
+#if UNICODE
+/*****************************************************************************
+
+    Change the character encoding that the stream uses. The old one is stopped
+    and the new one started with no further fixes or backtracking.
+
+*/
+
+extern void sgml_set_encoding(SGMLCTX *context, int enc_num);
+#endif
+
 /* attrparse.c ***************************************************************
 
     Functions for parsing the different structures of attributes.  You can

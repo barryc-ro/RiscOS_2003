@@ -561,7 +561,7 @@ extern void state_markup_only (SGMLCTX *context, UCHARACTER input)
                 (
                         context,
                         DELIVER_UNEXPECTED,
-                        mkstringu(context->inhand.data, context->inhand.ix),
+                        mkstringu(context->encoding_write, context->inhand.data, context->inhand.ix),
 			NULL
                 );
 		clear_inhand (context) ;

@@ -115,3 +115,5 @@ extern os_error *webfont_lose_font( int n );
 
 extern int webfont_font_width_n(int f, const char *s, int n);
 extern int webfont_split_point(int f, const char *s, int width);
+extern int webfont_need_wide_font(const char *s, int n_bytes);
+extern void webfont_set_wide_format(int fh);

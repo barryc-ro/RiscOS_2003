@@ -20,6 +20,10 @@
 #include "util.h"
 #include "config.h"
 
+#ifndef Font_WideFormat
+#define Font_WideFormat	0x400A9
+#endif
+
 extern df_write_data(int fh, int pos, void *ptr, int size);
 
 webfont webfonts[WEBFONT_COUNT];
@@ -465,6 +469,49 @@ int webfont_lookup(const char *font_name)
 	return WEBFONT_FLAG_FIXED;
 
     return -1;
+}
+
+int webfont_need_wide_font(const char *s, int n_bytes)
+{
+#if UNICODE
+    /* check to see if there are any wide characters in there */ 
+    switch (config_encoding_internal)
+    {
+    case 0:			/* latin1 */
+	break;
+
+    case 1:			/* utf8 */
+    case 3:			/* sjis */
+    case 4:			/* euc */
+    {
+	int i;
+	for (i = 0; i < n_bytes; i++)
+	    if ((s[i] & 0x80) && s[i] != 0x80)
+		return TRUE;
+	break;
+    }
+
+    case 2:			/* utf8 plot as unicode */
+	return TRUE;
+    }
+#endif
+    
+    return FALSE;
+}
+
+void webfont_set_wide_format(int fh)
+{
+    static char format[] =
+    {
+	0,			/* latin1 */
+	0,			/* utf8 */
+	0,			/* unicode */
+	1,			/* sjis */
+	3,			/* euc */
+	2,			/* jis */
+	4,			/* korean */
+    };
+    _swix(Font_WideFormat, _INR(0,1), fh, format[config_encoding_internal]);
 }
 
 /* eof webfonts.c */

@@ -1216,7 +1216,7 @@ extern void do_got_element(SGMLCTX *context)
     {
 	(*context->deliver) (context,
 			     DELIVER_SGML,
-			     mkstringu(context->inhand.data, context->inhand.ix), NULL );
+			     mkstringu(context->encoding_write, context->inhand.data, context->inhand.ix), NULL );
 	clear_inhand(context);
     }
     else if (sw == '/')

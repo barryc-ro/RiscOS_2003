@@ -42,11 +42,6 @@
 #include "utf8.h"
 #include "Unicode/charsets.h"
 #include "encoding.h"
-
-#ifndef Font_WideFormat
-#define Font_WideFormat	0x400A9
-#endif
-
 #endif
 
 static void draw_cornerBR(int x, int y, int w, int h, int thickness)
@@ -639,11 +634,6 @@ int render_caret_colour(be_doc doc, int back, int cursor)
     return h;
 }
 
-void render_set_wide_format(int fh)
-{
-    _swix(Font_WideFormat, _INR(0,1), fh, config_encoding_internal == 2 ? 0 : config_encoding_internal == 3 ? 1 : 0);
-}
-
 int render_text(be_doc doc, const char *text, int x, int y)
 {
     int flags = 0;
@@ -664,52 +654,17 @@ int render_text(be_doc doc, const char *text, int x, int y)
 	}
     }
 
-    /* do we need different character set? */
-#if 0
-    if (doc && doc->encoding != be_encoding_LATIN1)
-    {
-	RENDBG(("render_text: set bit 12\n"));
-	flags |= 1<<12;
-    }
-#endif
-
 #if UNICODE
     switch (config_encoding_internal)
     {
-    case 0:			/* plot as latin1 */
-    case 1:			/* plot as utf8 */
+    case 0:			/* latin1 */
+    case 1:			/* utf8 */
+    case 3:			/* sjis */
+    case 4:			/* euc */
 	font_paint((char *)text, flags, x*400, y*400);
 	break;
-
-    case 3:			/* plot as sjis */
-    {
-	const char *utf8 = text;
-
-	Encoding *encoding = encoding_new(csShiftJIS);
-
-	while (*utf8)
-	{
-	    char buf[256*2];
-	    int out = 0;
 	
-	    while (out < sizeof(buf)-2 && *utf8)
-	    {
-		UCS4 c;
-		utf8 += UTF8_to_UCS4(utf8, &c);
-
-		out += encoding_write(encoding, c, &buf[out]);
-	    }
-	    buf[out++] = 0;
-    
-	    font_paint(buf, flags, x*400, y*400);
-	}
-
-	encoding_delete(encoding);
-
-	break;
-    }
-
-    case 2:			/* plot as unicode */
+    case 2:			/* utf8, plot as unicode */
     {
 	const char *utf8 = text;
 	while (*utf8)

@@ -90,7 +90,7 @@ static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
 #if UNICODE && defined(RISCOS)
     /* if we are claiming a wide font then always set it to Unicode encoding */
     if (ti->flag & rid_flag_WIDE_FONT)
-	render_set_wide_format(webfonts[whichfont].handle);
+	webfont_set_wide_format(webfonts[whichfont].handle);
 #endif
 
     return &webfonts[whichfont];
@@ -119,39 +119,17 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     s = rh->texts.data + tit->data_off;
     str_len = strlen(s);
 
-#if UNICODE
-    /* check to see if there are any wide characters in there */ 
-    switch (config_encoding_internal)
-    {
-    case 0:			/* latin1 */
-	break;
-
-    case 1:			/* utf8 */
-    case 3:			/* utf8 plot as sjis */
-    {
-	int i;
-	for (i = 0; i < str_len; i++)
-	    if (s[i] & 0x80)
-	    {
-		ti->flag |= rid_flag_WIDE_FONT;
-		break;
-	    }
-	break;
-    }
-
-    case 2:			/* utf8 plot as unicode */
-	ti->flag |= rid_flag_WIDE_FONT;
-	break;
-    }
-#endif
-    
     /* get font descriptor */
     wf = getwebfont(doc, ti);
 
     if (str_len == 0)
     {
 	ti->width = 0;
+#if NEW_BREAKS
+	ti->pad = ti->flag & rid_flag_SPACE ? wf->space_width : 0;
+#else
 	ti->pad = 0;
+#endif
     }
     else
     {
@@ -165,7 +143,9 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	      &width2);
 
 	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
-	ti->pad = wf->space_width;
+	ti->pad = ti->flag & rid_flag_SPACE ? wf->space_width : 0;
+
+	DBG(("otext: scanstring '%s' str_len %d width %d pad %d\n", s, str_len, ti->width, ti->pad));
 #else
 	int flags; 
 	int width1, width2;
@@ -194,9 +174,6 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 	ti->pad = (width1 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT - ti->width;
-#endif
-#if 0
-	fprintf(stderr, "otext: scanstring '%s' str_len %d width1 %d width2 %d\n", s, str_len, width1, width2);
 #endif
     }
 

@@ -125,11 +125,16 @@ static int getwebfont(antweb_doc *doc, rid_text_item *ti)
 {
     int whichfont;
 
+    if (ti->flag & rid_flag_WIDE_FONT)
+	whichfont = (ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
+    else
+    {
 #ifdef SELECT_CURRENT_FONT
-    whichfont = ti->st.wf_index;
+	whichfont = ti->st.wf_index;
 #else
-    whichfont = WEBFONT_TTY;
+	whichfont = WEBFONT_TTY;
 #endif
+    }
 
     /* pdh: autofit bodge */
     if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) )
@@ -144,6 +149,12 @@ static int getwebfont(antweb_doc *doc, rid_text_item *ti)
     }
 
     antweb_doc_ensure_font( doc, whichfont );
+
+#if UNICODE && defined(RISCOS)
+    /* if we are claiming a wide font then always set it to Unicode encoding */
+    if (ti->flag & rid_flag_WIDE_FONT)
+	webfont_set_wide_format(webfonts[whichfont].handle);
+#endif
 
     return whichfont;
 }
@@ -203,8 +214,9 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 #endif
 
 	/* Start at the end; while not before the start and on a space; work backwards */
-	for(i = strlen(oi->text)-1; i>=0 && isspace(oi->text[i]); i--)
-	    oi->text[i] = 0;
+	    /* SJM. this is now done in the parser */
+/* 	for(i = strlen(oi->text)-1; i>=0 && isspace(oi->text[i]); i--) */
+/* 	    oi->text[i] = 0; */
 
 	fs.s = oi->text;
 	fs.x = fs.y = fs.term = (1 << 30);

@@ -145,7 +145,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 		(
 		    context,
 		    DELIVER_WORD,
-		    mkstringu(context->prechop.data, context->prechop.ix),
+		    mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
 		    NULL
 		    );
 	    break;
@@ -302,7 +302,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 		context->deliver(
 		    context,
 		    DELIVER_WORD,
-		    mkstringu(context->prechop.data, context->prechop.ix),
+		    mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
 		    NULL
 		    );
 	    }
@@ -343,7 +343,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 		(
 		    context,
 		    DELIVER_WORD,
-		    mkstringu(context->prechop.data, context->prechop.ix),
+		    mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
 		    NULL
 		    );
 	    break;
@@ -382,7 +382,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 		    (
 			context,
 			DELIVER_WORD,
-			mkstringu(context->prechop.data, context->prechop.ix),
+			mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
 			NULL
 			);
 		st->s1 = 2;	/* space */
@@ -446,7 +446,7 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, USTRING input)
 	    break;
 
 	case 3:
-	    context->deliver ( context, DELIVER_WORD, mkstringu(context->prechop.data, context->prechop.ix), NULL );
+	    context->deliver ( context, DELIVER_WORD, mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix), NULL );
 	    break;
 	}
 
@@ -543,14 +543,14 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, USTRING input)
 	    ASSERT(context->prechop.ix > 0);
 	    if (c == '\r')
 	    {
-		(*context->deliver) ( context, DELIVER_WORD, mkstringu(context->prechop.data, context->prechop.ix), NULL );
+		(*context->deliver) ( context, DELIVER_WORD, mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix), NULL );
 		context->prechop.ix = 0;
 		st->s1 = 1;
 		discard = TRUE;
 	    }
 	    else if (c == '\n')
 	    {
-		(*context->deliver) ( context, DELIVER_WORD, mkstringu(context->prechop.data, context->prechop.ix), NULL );
+		(*context->deliver) ( context, DELIVER_WORD, mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix), NULL );
 		context->prechop.ix = 0;
 		st->s1 = 2;
 		discard = TRUE;
@@ -612,7 +612,7 @@ extern void sgml_str_word_chopper(SGMLCTX *context, USTRING input)
 	    add_to_prechop_buffer(context, c);
     }
 
-    (*context->deliver) ( context, DELIVER_WORD, mkstringu(context->prechop.data, context->prechop.ix), NULL );
+    (*context->deliver) ( context, DELIVER_WORD, mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix), NULL );
 
     context->prechop.ix = 0;
 }

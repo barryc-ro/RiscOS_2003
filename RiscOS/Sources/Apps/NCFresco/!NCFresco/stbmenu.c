@@ -54,11 +54,29 @@ static fe_menu current_menu = 0;
 
 /* ------------------------------------------------------------------------------------------- */
 
+static int getwebfont(fe_menu mh)
+{
+    int whichfont;
+
+    if (mh->flags & fe_menu_flag_WIDE)
+	whichfont = WEBFONT_SIZE(3) | WEBFONT_JAPANESE;
+    else
+	whichfont = MENU_FONT;
+
+#if UNICODE
+    /* if we are claiming a wide font then always set it to Unicode encoding */
+    if (mh->flags & fe_menu_flag_WIDE)
+	webfont_set_wide_format(webfonts[whichfont].handle);
+#endif
+
+    return whichfont;
+}
+
 /* ensure that the given item is visible */
 
-static int get_line_space(void)
+static int get_line_space(webfont *wf)
 {
-    return (webfonts[MENU_FONT].max_up + webfonts[MENU_FONT].max_down + 1) &~ 1;
+    return (wf->max_up + wf->max_down + 1) &~ 1;
 }
 
 static void fe_menu_ensure_item(fe_menu mh, int item)
@@ -68,7 +86,7 @@ static void fe_menu_ensure_item(fe_menu mh, int item)
     wimp_wstate ws;
     wimp_box box;
 
-    line_space = get_line_space();
+    line_space = mh->line_space;
 
     top = - line_space*item;
     bottom = top - line_space;
@@ -111,13 +129,15 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
     int line_space;
     int lfc;
     int width;
+    webfont *wf;
 
     ox = r.box.x0 - r.scx;
     oy = r.box.y1 - r.scy;
 
     width = r.box.x1 - r.box.x0 - 2*X_BORDER;
 
-    line_space = get_line_space();
+    wf = &webfonts[getwebfont(mh)];
+    line_space = mh->line_space;
 
     more = TRUE;
     while (more)
@@ -141,7 +161,7 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 	    bbc_rectanglefill(ox - X_BORDER, oy - mh->n*line_space - Y_BORDER, width + 2*X_BORDER-1, Y_BORDER-1);
 	}
 	
-	if (font_setfont(webfonts[MENU_FONT].handle) != NULL)
+	if (font_setfont(wf->handle) != NULL)
 	    continue;
 
 	for (h=0, i=0; i < mh->n && (h-line_space) >= top; h -= line_space, i++)
@@ -189,9 +209,9 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 
 	    /* draw the text itself */
 #if 1
-	    render_text(NULL, mh->items[i].name, ox, h + oy - webfonts[MENU_FONT].max_up);
+	    render_text(NULL, mh->items[i].name, ox, h + oy - wf->max_up);
 #else
-	    font_paint(mh->items[i].name, font_OSCOORDS, ox, h + oy - webfonts[MENU_FONT].max_up);
+	    font_paint(mh->items[i].name, font_OSCOORDS, ox, h + oy - wf->max_up);
 #endif
 	    
 #if 0
@@ -208,6 +228,7 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 
 #if 1
 	/* draw the selection box - inefficient */
+	if (mh->highlight >= 0 && mh->highlight < mh->n)
 	{
 	    int hh = - mh->highlight * line_space;
 	    render_plinth_from_list(0, config_colour_list[render_colour_list_TEXT_HIGHLIGHT], render_plinth_NOFILL,
@@ -239,9 +260,6 @@ static int fe_menu_coords_to_index(fe_menu mh, int my)
 {
     wimp_wstate ws;
     int y;
-    int line_space;
-
-    line_space = get_line_space();
 
     if (wimp_get_wind_state(mh->wh, &ws))
 	return -1;
@@ -251,7 +269,7 @@ static int fe_menu_coords_to_index(fe_menu mh, int my)
     y = my - y;
 
     y = -y;
-    y /= line_space;
+    y /= mh->line_space;
 
     if (y < 0)
         y = 0;
@@ -284,9 +302,7 @@ static os_error *fe_menu_window(fe_menu mh)
     /* Find template for the window */
     if (mh->wh == 0)
     {
-	int line_space;
-
-	line_space = get_line_space();
+	int line_space = mh->line_space;
 
         memset(&win, 0, sizeof(win));
 
@@ -367,12 +383,12 @@ static void fe_menu_move_highlight(fe_menu mh, int dir)
     }
 }
 
-static int get_widest_entry(fe_menu_item *items, int n)
+static int get_widest_entry(webfont *wf, fe_menu_item *items, int n)
 {
     int i, widest;
     fe_menu_item *item;
 
-    font_setfont(webfonts[MENU_FONT].handle);
+    font_setfont(wf->handle);
     widest = 0;
 
     for (i = 0, item = items; i < n; i++, item++)
@@ -398,30 +414,19 @@ static int get_widest_entry(fe_menu_item *items, int n)
 void frontend_menu_update_item(fe_menu mh, int i)
 {
     wimp_redrawstr r;
-    int line_space;
-/*     int more; */
 
     STBDBG(("stbmenu: update mh %p item %d\n", mh, i));
 
     if (i < 0)
 	return;
     
-    line_space = get_line_space();
-
     r.w = mh->wh;
     r.box.x0 = - X_BORDER;
     r.box.x1 =   X_BORDER + mh->width;
-    r.box.y1 = - line_space*i       + 4 + Y_BORDER_HL; /* extra 4 is for anti-twitter protection I think */
-    r.box.y0 = - line_space*(i + 1) - 4 - Y_BORDER_HL;
+    r.box.y1 = - mh->line_space*i       + 4 + Y_BORDER_HL; /* extra 4 is for anti-twitter protection I think */
+    r.box.y0 = - mh->line_space*(i + 1) - 4 - Y_BORDER_HL;
 
-#if 1
     frontend_fatal_error(wimp_force_redraw(&r));
-#else
-    frontend_fatal_error(wimp_update_wind(&r, &more));
-
-    if (more)
-	fe_menu_redo_window(&r, mh, 1);
-#endif
 }
 
 void frontend_menu_dispose(fe_menu mh)
@@ -442,6 +447,8 @@ void frontend_menu_dispose(fe_menu mh)
 
     if (current_menu == mh)
 	current_menu = NULL;
+
+    webfont_lose_font(getwebfont(mh));
 
     mm_free(mh);
 }
@@ -466,21 +473,21 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
     p.y = y;
     coords_point_toscreen(&p, &cvt);
 
-    mh->highlight = first_checked(mh);
+    if (pointer_mode == fe_pointermode_OFF)
+	mh->highlight = first_checked(mh);
 
     if (mh->wh)
     {
         wimp_wstate state;
-        int overhang, line_space;
+        int overhang;
 
         current_menu = mh;
-        line_space = get_line_space();
-#if 1
+
         state.o.w = mh->wh;
         state.o.box.x0 = p.x;
         state.o.box.y1 = p.y;
         state.o.box.x1 = p.x + mh->width + 2*X_BORDER;
-        state.o.box.y0 = p.y - mh->size*line_space - 2*Y_BORDER;
+        state.o.box.y0 = p.y - mh->size*mh->line_space - 2*Y_BORDER;
         state.o.x = 0;
         state.o.behind = (wimp_w)-1;
 
@@ -517,31 +524,11 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
 
 
 	/* put the first checked in the middle of the menu */
-	state.o.y = - first_checked(mh) * line_space + (state.o.box.y1 - state.o.box.y0)/2;
+	state.o.y = - first_checked(mh) * mh->line_space + (state.o.box.y1 - state.o.box.y0)/2;
 
 	/* open menu window */
 	frontend_fatal_error(wimp_open_wind(&state.o));
-#else
-	frontend_fatal_error(wimp_create_menu((wimp_menustr *) mh->wh, p.x, p.y));
-#endif
-#if 0
-        frontend_fatal_error(wimp_get_wind_state(mh->wh, &state));
-        overhang = state.o.box.x1 - text_safe_box.x1;
-        if (overhang > 0)
-        {
-            state.o.box.x0 -= overhang;
-            state.o.box.x1 -= overhang;
-        }
 
-        if (state.o.box.y1 > text_safe_box.y1)
-            state.o.box.y1 = text_safe_box.y1;
-
-        if (state.o.box.y0 < text_safe_box.y0)
-            state.o.box.y0 = text_safe_box.y0;
-
-        state.o.y = -mh->highlight*line_space;
-        frontend_fatal_error(wimp_open_wind(&state.o));
-#endif
 	sound_event(snd_MENU_SHOW);
     }
 }
@@ -549,18 +536,29 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
 fe_menu frontend_menu_create(fe_view v, be_menu_callback cb, void *handle, int n, fe_menu_item *items, int size, int width)
 {
     fe_menu menu;
+    int wf_index;
+    webfont *wf;
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 0;
 
     menu = mm_calloc(sizeof(*menu), 1);
+
     menu->cb = cb;
     menu->h = handle;
     menu->n = n;
     menu->items = items;
     menu->size = 0; /* size; change to use as much as possible */
-    menu->width = get_widest_entry(items, n);
+    menu->flags = items[0].flags & fe_menu_flag_WIDE;
+
+    wf_index = getwebfont(menu);
+    webfont_find_font(wf_index);
+
+    wf = &webfonts[wf_index];
+
+    menu->width = get_widest_entry(wf, items, n);
     menu->parent = v;
+    menu->line_space = get_line_space(wf);
 
     fe_menu_window(menu);
 

@@ -209,6 +209,7 @@ typedef struct {
 
 #define fe_menu_flag_CHECKED	(1 << 0)
 #define fe_menu_flag_SHADED	(1 << 1)
+#define fe_menu_flag_WIDE	(1 << 2) /* wide font necessary */
 
 typedef void (*be_menu_callback)(fe_menu mh, void *handle, int item, int right);
 

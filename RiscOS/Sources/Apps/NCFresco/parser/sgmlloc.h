@@ -56,10 +56,10 @@ extern char *get_state_name(state_fn fn);
 extern int strnicmp(const char *a, const char *b, int n);
 #if UNICODE
 extern int strnicmpu(const UCHARACTER *a, const char *b, int n);
-extern STRING mkstringu(UCHARACTER *ptr, int n);
+extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n);
 #else
 #define strnicmpu(a,b,c) strnicmp(a,b,c)
-#define mkstringu(a,b) mkstring(a,b)
+#define mkstringu(a,b,c) mkstring(b,c)
 #endif
 extern char *stringdup(STRING s);
 extern char *strip_stringdup(STRING s);

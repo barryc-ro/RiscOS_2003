@@ -12,6 +12,7 @@
 
 
 #include "htmlparser.h"
+#include "webfonts.h"
 
 /* extern void translate_escaped_text(char *src, char *dest, int len); */
 
@@ -287,6 +288,12 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	if (me->mode == HTMLMODE_PRE || me->no_break) /* We need to be able to have both flags set */
 	    nb->flag |= rid_flag_NO_BREAK;
 #endif
+
+#if UNICODE
+	if (webfont_need_wide_font(in->value, strlen(in->value)))
+	    nb->flag |= rid_flag_WIDE_FONT;
+#endif
+
 	nb->aref = me->aref;	/* Current anchor, or NULL */
 	if (me->aref && me->aref->first == NULL)
 	    me->aref->first = nb;
@@ -397,6 +404,13 @@ extern void finishoption (SGMLCTX * context, ELEMENT * element)
 
 	/* SJM: FIXME: check this still works, entity translation should have been done in state machine */
 	opt->text = stringdup(string_strip_space(s));
+
+	/* check for wide font necessity and record in main item */
+	if ((me->rh->curstream->text_last->flag & rid_flag_WIDE_FONT) == 0)
+	{
+	    if (webfont_need_wide_font(s.ptr, s.bytes))
+		me->rh->curstream->text_last->flag |= rid_flag_WIDE_FONT;
+	}
     }
     else
     {

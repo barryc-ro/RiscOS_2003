@@ -202,7 +202,7 @@ extern VALUE sgml_do_parse_string_void(SGMLCTX *context, ATTRIBUTE *attribute, U
        */
 
     v.type = value_string;
-    v.u.s = mkstringu(string.ptr, string.bytes);
+    v.u.s = mkstringu(context->encoding_write, string.ptr, string.bytes);
     
 /*     v.u.s.bytes = sgml_translation(context, v.u.s.ptr, v.u.s.bytes, */
 /* 				   SGMLTRANS_AMPERSAND | SGMLTRANS_HASH | SGMLTRANS_STRIP_NEWLINES); */
@@ -546,7 +546,7 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
     VALUE val;
     STRING string_copy;
 
-    string_copy = mkstringu(string_in.ptr, string_in.bytes);
+    string_copy = mkstringu(context->encoding_write, string_in.ptr, string_in.bytes);
 
     val = sgml__do_parse_stdunit_void(context, attribute, string_copy);
 
@@ -595,7 +595,7 @@ extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, 
     char *copy, *use;
     STRING string;
 
-    string = mkstringu(string_in.ptr, string_in.bytes);
+    string = mkstringu(context->encoding_write, string_in.ptr, string_in.bytes);
 
     if (string.bytes == 0)
         goto bad;
@@ -716,7 +716,7 @@ extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, USTRIN
     if (v.type == value_tuple)
 	return v;
 
-    string_copy = mkstringu(string.ptr, string.bytes);
+    string_copy = mkstringu(context->encoding_write, string.ptr, string.bytes);
 
     v = colour_lookup(string_copy);
 

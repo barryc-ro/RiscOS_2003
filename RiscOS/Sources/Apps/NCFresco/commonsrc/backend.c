@@ -530,7 +530,7 @@ the baseline.
 
 os_error *backend_doc_locate_item(be_doc doc, int *x, int *y, be_item *ti)
 {
-    RENDBG(("Locate item: doc = %p, x=%d, y=%d\n", doc, *x, *y));
+    RENDBGN(("Locate item: doc = %p, x=%d, y=%d\n", doc, *x, *y));
 
     *ti = NULL;
 

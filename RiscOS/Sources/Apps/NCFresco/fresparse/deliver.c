@@ -65,10 +65,19 @@ static void fmt_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 
     if (htmlctx->inhand_reason == DELIVER_WORD)
     {
+#if UNICODE
+	PRSDBGN(("fmt_deliver_word(): word already stashed - push word\n"));
+	text_item_push_word(htmlctx, 0, WITHOUT_SPACE);
+
+	/* No free - data retained for later */
+	htmlctx->inhand_string = item;
+	htmlctx->inhand_reason = reason;
+#else
 	/* Could push word with text_item_push_word(htmlctx, rid_flag_NO_BREAK, WITHOUT_SPACE); */
 	PRSDBGN(("fmt_deliver_word(): word already stashed - appending\n"));
 	/* Freeing done in append_new() */
 	append_new(htmlctx, DELIVER_WORD, item);
+#endif
     }
     else if (htmlctx->inhand_reason == DELIVER_SPACE)
     {

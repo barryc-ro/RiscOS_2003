@@ -348,6 +348,11 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	xf &= ~rid_flag_NO_BREAK;
     }
 #endif
+
+#if UNICODE
+    if (webfont_need_wide_font(ptr, bytes))
+	xf |= rid_flag_WIDE_FONT;
+#endif
     
 #if DEBUG
     flexmem_noshift();

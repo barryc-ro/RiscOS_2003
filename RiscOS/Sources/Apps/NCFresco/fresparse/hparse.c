@@ -45,6 +45,7 @@
 
 #if UNICODE
 #include "Unicode/charsets.h"
+#include "config.h"
 #endif
 
 #ifndef PARSE_DEBUG
@@ -285,8 +286,21 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 
 #if UNICODE
     /* set encoding to 4 (Latin1) if not set, this value will come from user or HTTP header */
-    context->encoding = encoding_new(encoding == 0 || encoding == csAutodetectJP ? csISOLatin1 : encoding);
+    context->encoding = encoding_new(encoding == 0 || encoding == csAutodetectJP ? csWindows1250 : encoding);
     context->enc_num = encoding;
+
+    switch (config_encoding_internal)
+    {
+    case 0:
+	context->encoding_write = encoding_new(csAcornLatin1);
+	break;
+    case 3:
+	context->encoding_write = encoding_new(csShiftJIS);
+	break;
+    case 4:
+	context->encoding_write = encoding_new(csEUCPkdFmtJapanese);
+	break;
+    }
 #endif
     
 #if SGML_REPORTING
