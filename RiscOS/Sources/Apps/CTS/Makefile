@@ -50,6 +50,7 @@ DEBUGLIB  = ${LIBDIR}.DebugLib.o.DebugLib
 
 OBJS =\
  o.client\
+ o.ctsmessage\
  o.ctsbrowser\
  o.plugclient\
  o.statetable\
@@ -57,6 +58,7 @@ OBJS =\
 
 DEBOBJS =\
  od.client\
+ od.ctsmessage\
  od.ctsbrowser\
  od.plugclient\
  od.statetable\
@@ -80,10 +82,7 @@ all: ${TARGET}
 trace: ${TARGET}T
 	@echo ${COMPONENT}: !RunImageT built
 
-export: all
-	${MKDIR} ${EXPDIR}
-	${MKDIR} ${EXPDIR}.!${COMPONENT}
-	${CP} Resources.${LOCALE}.* ${EXPDIR}.!${COMPONENT}.* ${CPFLAGS}
+export: coreres all
 	${SQZ} ${TARGET} ${EXPDIR}.!${COMPONENT}.!RunImage ${SQZFLAGS}
 
 clean:
@@ -103,11 +102,16 @@ ${TARGET}T: ${DEBOBJS} ${CLIB} ${TBOXLIBS} ${TCPIPLIBS} ${DEBUGLIB} ${DIRS}
 	${LD} -aif -o $@ ${DEBOBJS} ${TBOXLIBS} ${DEBUGLIB} ${TCPIPLIBS} ${CLIB}
 	Access $@ RW/R
 
-traceinst: trace
+traceinst: coreres trace
+	${SQZ} ${TARGET}T ${EXPDIR}.!${COMPONENT}.!RunImage ${SQZFLAGS}
+
+coreres:
 	${MKDIR} ${EXPDIR}
 	${MKDIR} ${EXPDIR}.!${COMPONENT}
-	${CP} Resources.${LOCALE}.* ${EXPDIR}.!${COMPONENT}.* ${CPFLAGS}
-	${SQZ} ${TARGET}T ${EXPDIR}.!${COMPONENT}.!RunImage ${SQZFLAGS}
+	${CP} LocalRes:!Boot ${EXPDIR}.!${COMPONENT}.!Boot ${CPFLAGS}
+	${CP} LocalRes:!Run ${EXPDIR}.!${COMPONENT}.!Run ${CPFLAGS}
+	${CP} LocalRes:Messages ${EXPDIR}.!${COMPONENT}.Messages ${CPFLAGS}
+	${CP} LocalRes:Res ${EXPDIR}.!${COMPONENT}.Res ${CPFLAGS}
 
 ${DIRS}:
 	${mkdir} o
