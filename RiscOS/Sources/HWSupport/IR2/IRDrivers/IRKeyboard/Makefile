@@ -44,7 +44,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Program specific options:
 #
 TARGET    = aof.${COMPONENT}
-OBJS      = module.o driver.o handset.o keyboard.o ir_api.o header.o veneers.o irqs.o
+OBJS      = module.o driver.o keyboard.o ir_api.o header.o veneers.o irqs.o
 
 #
 # Rule patterns
@@ -107,22 +107,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.utils
-o.module:	h.ir_api
-o.module:	h.module
-o.module:	h.keyboard
-o.driver:	c.driver
-o.driver:	C:h.kernel
-o.driver:	C:h.swis
-o.driver:	h.utils
-o.driver:	h.ir_api
-o.driver:	h.veneers
-o.driver:	h.irqs
-o.driver:	h.keyboard
-o.driver:	h.module
 o.handset:	c.handset
 o.handset:	C:h.kernel
 o.handset:	C:h.swis
@@ -132,6 +116,13 @@ o.handset:	h.veneers
 o.handset:	h.irqs
 o.handset:	h.keyboard
 o.handset:	h.module
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.utils
+o.module:	h.ir_api
+o.module:	h.module
+o.module:	h.keyboard
 o.keyboard:	c.keyboard
 o.keyboard:	C:h.kernel
 o.keyboard:	C:h.swis
@@ -147,3 +138,12 @@ o.ir_api:	C:h.swis
 o.ir_api:	h.utils
 o.ir_api:	h.ir_api
 o.ir_api:	h.veneers
+o.driver:	c.driver
+o.driver:	C:h.kernel
+o.driver:	C:h.swis
+o.driver:	h.utils
+o.driver:	h.ir_api
+o.driver:	h.veneers
+o.driver:	h.irqs
+o.driver:	h.keyboard
+o.driver:	h.module
