@@ -24,7 +24,9 @@
 #include "sys/time.h"
 #include "sys/ioctl.h"
 #include "netinet/in.h"
+#include "net/if_arp.h"
 #include "net/if.h"
+#include "netinet/if_ether.h"
 #include "socklib.h"
 
 #include "module.h"
@@ -38,8 +40,7 @@
 #  include "IPConfHdr.h"
 #endif
 
-/*static int establish_addresses(void);*/
-static void read_device_name(char *buf, char *macadr);
+static void setcallback(void);
 
 #ifdef TRACE
 /* This variable is set to non-zero if the dynamic boot is to be executed
@@ -65,12 +66,11 @@ static int ifcnt = 0;
  *  returned.
  *
  */
+static int cli_state = 0;
 int module_read_command_options(const char *cmd_tail)
 {
-        static int state = 0;
-
         if (cmd_tail != NULL) {
-                int switches[3];
+                int switches[4];
                 _kernel_oserror *e;
                 const char *msg = 0;
 		char *args = 0;
@@ -95,16 +95,18 @@ int module_read_command_options(const char *cmd_tail)
                 e = _swix(OS_ReadArgs, _INR(0,3), args, cmd_tail, switches, sizeof(switches));
                 free(args);
                 /* Error or -help was specified */
-                if (e != NULL || switches[2]) {
+                if (e != NULL || switches[3]) {
                         e = make_error(error_REFUSE_INIT_SYNTAX_ERROR, 0);
                 	(void) fprintf(stderr, "%s\n", e->errmess);
                 	return -1;
                 }
-                if (switches[0]) state |= 1;
-                if (switches[1]) state |= 2;
+                cli_state = 0;
+                if (switches[0]) cli_state |= flag_RUN_EDITOR;
+                if (switches[1]) cli_state |= flag_NO_DO_BOOT;
+                else if (switches[2]) cli_state |= flag_FORCE_BOOT;
         }
 
-        return state;
+        return cli_state;
 }
 
 /* release_module_resources closes and removes the messages file from the RMA
@@ -130,6 +132,7 @@ static void release_module_resources(void)
 _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 {
         _kernel_oserror *e;
+        int opts;
 
         (void) podule_base;
         module_wsp = pw;
@@ -160,26 +163,36 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
                 return e;
         }
 
-        if (module_read_command_options(cmd_tail)<0) {
+	opts = module_read_command_options(cmd_tail);
+        if (opts<0) {
                 _kernel_oserror *e = make_error(error_REFUSE_INIT_BOOTP_ALREADY_DONE, 0);
 		release_module_resources();
                 return e;
         }
 
         if (editconfig_initialise() == NULL) {
+                cli_state |= flag_RUN_EDITOR;
+                setcallback();
                 return NULL;
         }
 
-#if 0
-        (void) establish_addresses();
-        if (ifcnt != 0) {
-                _kernel_oserror *e = make_error(error_REFUSE_INIT_BOOTP_ALREADY_DONE, 0);
-                release_module_resources();
-                return e;
-        }
-#endif
+	if (opts & flag_FORCE_BOOT) {
+		setcallback();
+		return NULL;
+	}
 
-        return NULL;
+	/* Do we need to perform our boot operations? */
+	if (!(opts & flag_NO_DO_BOOT)) {
+#ifdef TRACE
+	        setcallback();
+#endif
+		return NULL;
+	}
+	else {
+                _kernel_oserror *e = make_error(error_REFUSE_INIT_BOOTP_ALREADY_DONE, 0);
+		release_module_resources();
+                return e;
+	}
 }
 
 _kernel_oserror *module_final(int fatal, int podule, void *pw)
@@ -248,15 +261,54 @@ static void setadrvar(int ifcnt, struct in_addr in)
 }
 
 
+/* read_device_name
+ *
+ * This function fills in the interface name and MAC address of the first interface
+ * in the chain returned by the network driver enumeration service call.  The supplied
+ * buffer must be long enough to accept any interface name.  The Ethernet MAC address
+ * will be 6 bytes long.  The service call is sent around and all the drivers attach
+ * a struct chaindib to the head of the list which must be in the RMA so that we can
+ * free it when we're done.
+ *
+ */
+static void read_device_name(char *buf, struct ether_addr *macadr)
+{
+        _kernel_oserror *e;
+        struct chaindib *d;
+
+	/* Enumerate the network drivers */
+        e = _swix(OS_ServiceCall, _INR(0,1)|_OUT(0), 0, Service_EnumerateNetworkDrivers, &d);
+        if( e != 0 || d == NULL) {
+                buf[0] = 0;
+                return;
+        }
+
+	/* Construct the complete interface name fom the unit name and the unit number */
+        (void) strcat(strcpy(buf, (char *) d->chd_dib->dib_name), "0");
+
+	/* Copy the 6-byte Ethernet MAC address */
+	(void) memcpy(macadr, d->chd_dib->dib_address, sizeof(struct ether_addr));
+
+        while (d) {
+                struct chaindib *d_next = d->chd_next;
+                /* specification requires chain blocks be in the RMA.   C library detects blocks
+                 * in RMA and frees them correctly with OS_Module
+                 */
+                free(d);
+                d = d_next;
+        }
+}
+
+
 static int establish_addresses_sub(int s)
 {
-        char buf[512], name[16], macadr[6];
+        char buf[512], name[16], var_buf[64];
+        struct ether_addr macadr;
         struct ifconf ifc;
         struct ifreq ifreq, *ifr;
         int n, retried = 0;
-        char var_buf[64];
 
-        read_device_name(name, macadr);
+        read_device_name(name, &macadr);
 again:
         ifc.ifc_len = sizeof (buf);
         ifc.ifc_buf = buf;
@@ -295,7 +347,7 @@ again:
 
                 if (getvar(SYSVAR_INET_HOSTNAME, var_buf, sizeof(var_buf)) == 0) {
                         (void) strcpy(var_buf, "ARM");
-                        format_mac_address(macadr, strchr(var_buf, '\0'), '\0');
+                        format_mac_address(&macadr, strchr(var_buf, '\0'), '\0');
                         setvar(SYSVAR_INET_HOSTNAME, var_buf);
                 }
                 ifcnt++;
@@ -303,9 +355,9 @@ again:
 #ifdef TRACE
         if (trace_DO_BOOTP) ifcnt = 0;
         trace_DO_BOOTP = 0;
-        read_device_name(name, macadr);
+        read_device_name(name, &macadr);
         printf("read_device_name: `%s' at `", name);
-        { char macbuf[20]; format_mac_address(macadr, macbuf, ':'); printf("%s", macbuf); }
+        { char macbuf[20]; format_mac_address(&macadr, macbuf, ':'); printf("%s", macbuf); }
         printf("' %s\n", (ifcnt == 0 && !retried) ? "executing ifrconfig" : "");
 #endif
 
@@ -351,44 +403,6 @@ static int establish_addresses(void)
         return result;
 }
 
-/* read_device_name
- *
- * This function fills in the interface name and MAC address of the first interface
- * in the chain returned by the network driver enumeration service call.  The supplied
- * buffer must be long enough to accept any interface name.  The Ethernet MAC address
- * will be 6 bytes long.  The service call is sent around and all the drivers attach
- * a struct chaindib to the head of the list which must be in the RMA so that we can
- * free it when we're done.
- *
- */
-static void read_device_name(char *buf, char *macadr)
-{
-        _kernel_oserror *e;
-        struct chaindib *d;
-
-	/* Enumerate the network drivers */
-        e = _swix(OS_ServiceCall, _INR(0,1)|_OUT(0), 0, Service_EnumerateNetworkDrivers, &d);
-        if( e != 0 || d == NULL) {
-                buf[0] = 0;
-                return;
-        }
-
-	/* Construct the complete interface name fom the unit name and the unit number */
-        (void) strcat(strcpy(buf, (char *) d->chd_dib->dib_name), "0");
-
-	/* Copy the 6-byte Ethernet MAC address */
-	(void) memcpy(macadr, d->chd_dib->dib_address, 6);
-
-        while (d) {
-                struct chaindib *d_next = d->chd_next;
-                /* specification requires chain blocks be in the RMA.   C library detects blocks
-                 * in RMA and frees them correctly with OS_Module
-                 */
-                free(d);
-                d = d_next;
-        }
-}
-
 
 /* Callback management.  The dynamic boot cannot be performed during module initialisation
  * so these routines manage the callback settings and the top-level call into the
@@ -402,8 +416,12 @@ _kernel_oserror *callb_handler(_kernel_swi_regs *r, void *pw)
         (void) pw;
         if (callbackflag != 0) {
                 callbackflag = 0;
-                if (ifcnt == 0) {
+                if (module_read_command_options(0) & flag_RUN_EDITOR) {
+                        (void) editconfig_service(pw);
+                }
+                else if (ifcnt == 0) {
                         (void) establish_addresses();
+                        cli_state &= ~flag_FORCE_BOOT;
                 }
         }
         return 0;
@@ -412,9 +430,12 @@ _kernel_oserror *callb_handler(_kernel_swi_regs *r, void *pw)
 static void setcallback(void)
 {
         if (callbackflag == 0) {
-                callbackflag = 1;
-                if (_swix(OS_AddCallBack, _INR(0,1), callb_entry, module_wsp)) {
-                        callbackflag = 0;
+                int opts = module_read_command_options(0);
+                if ((ifcnt == 0 && !(opts & flag_NO_DO_BOOT)) || (opts & flag_FORCE_BOOT)) {
+                	callbackflag = 1;
+	                if (_swix(OS_AddCallBack, _INR(0,1), callb_entry, module_wsp)) {
+        	                callbackflag = 0;
+                	}
                 }
         }
 }
@@ -424,7 +445,7 @@ void module_service(int sn, _kernel_swi_regs *r, void *pw)
 {
         switch (sn) {
                 case Service_DCIDriverStatus:
-                        if (r->r[2] == 0 && ifcnt == 0) {
+                        if (r->r[2] == 0) {
                                 setcallback();
                         }
                         break;
