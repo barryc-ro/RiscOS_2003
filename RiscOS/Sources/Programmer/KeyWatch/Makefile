@@ -4,7 +4,7 @@
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_HDR = <Cexport$dir>
 
 #
 # Generic options:
@@ -71,8 +71,14 @@ all: rm.KeyWatch h.KeyWatchHd
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
+export: export_${PHASE}
+
+export_hdrs: h.${COMPONENT}
+        ${CP} h.${COMPONENT} ${EXP_HDR}.h.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (headers)
+
+export_libs: o.filewatch
+        @echo ${COMPONENT}: export complete (libs)
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -112,19 +118,11 @@ rom_link:
 rm.KeyWatch: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-#       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
-
 # Dynamic dependencies:
 o.KeyWatch:	c.KeyWatch
 o.KeyWatch:	C:h.kernel
 o.KeyWatch:	C:h.swis
 o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
 o.KeyWatch:	h.KeyWatchHd
-o.KeyWatch:	VersionNum
-o.KeyWatch:	c.KeyWatch
-o.KeyWatch:	C:h.kernel
-o.KeyWatch:	C:h.swis
-o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
-o.KeyWatch:	h.KeyWatchHd
+o.KeyWatch:	h.KeyWatch
 o.KeyWatch:	VersionNum
