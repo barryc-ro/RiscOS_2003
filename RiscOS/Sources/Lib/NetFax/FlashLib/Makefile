@@ -15,7 +15,8 @@
 
 EXP_HDR		= <export$dir>
 LIBDIR		= <Lib$Dir>
-EXPORT_DIR	= <Lib$Dir>.FlashLib
+NFXLIBDIR	= <Lib$Dir>.Netfax
+EXPORT_DIR	= <Lib$Dir>.Netfax.FlashLib
 
 
 # ------------------------------------------------------------------------------
@@ -105,9 +106,9 @@ install_rom: ${TARGET}
 	@echo ${COMPONENT}: rom module installed
 
 clean:
-	${WIPE} o.* ${WFLAGS}
-	${WIPE} ot.* ${WFLAGS}
-	${WIPE} z.* ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${WIPE} ot ${WFLAGS}
+	${WIPE} z ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${TARGETZ}
 	${RM} ${TARGET_T}
@@ -130,6 +131,7 @@ local_dirs:
 
 dirs:
 	${MKDIR} ${LIBDIR}
+	${MKDIR} ${NFXLIBDIR}
 	${MKDIR} ${EXPORT_DIR}
 	${MKDIR} ${EXPORT_DIR}.h
 	${MKDIR} ${EXPORT_DIR}.o
