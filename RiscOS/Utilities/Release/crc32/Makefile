@@ -61,9 +61,3 @@ all:	${APPLICATION}
 	@echo ${APPLICATION} built
 
 # Dynamic dependencies:
-o.crc:	c.crc
-o.crc:	h.crc
-o.prog:	c.prog
-o.prog:	h.crc
-o.calc:	c.calc
-o.calc:	h.crc
