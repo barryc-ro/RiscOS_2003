@@ -41,6 +41,7 @@
 ; 07-Apr-99  BJGA 0.25-4.5.2.1  Added NTSC line 21 (closed captions) support.
 ; 14-Apr-99  TMD  0.25-4.5.2.2  Added code for fast switching in/out of Macrovision video path, for closed-caption support.
 ; 19-Apr-99  BJGA 0.25-4.5.2.3  Now builds cleanly when Machine=Peregrine (using Hdr:MPEG2Card instead of Hdr:MPEG2bCard).
+; 20-Apr-99  BJGA 0.25-4.5.2.4  Now ensures that control codes are always sent in pairs on odd fields
 ;
 
 	LEADR	Module_LoadAddr
@@ -133,8 +134,16 @@ MessageFile_Open  #	4
  ]
 
  [ Captions
-IICBusyFlag     #       4
 RCV2IICBlk	#	4
+ControlCode1    #       1
+ControlCode2    #       1
+ControlCodeState #      1               ; 0 = normal
+                                        ; 1 = received first byte of a control code
+                                        ; 2 = received second byte of a control code
+                                        ; 3 = received matching repeated first byte
+        AlignSpace
+
+IICBusyFlag     #       4
 
         MACRO
 $label  MyIIC_Control $con
@@ -291,6 +300,8 @@ Mod_Init Entry
 
  [ Captions
         STR     r0, IICBusyFlag
+        STRB    r0, ControlCodeState
+
 	MOV	r0, #&70	; IIC offset of RCV2 registers in 7183
 	STRB	r0, RCV2IICBlk + 0
 
@@ -2549,10 +2560,10 @@ LoadCaptions
 	LDR	r3, MacroType
 	TEQ	r3, #0
 	EXITS	EQ			; exit doing nothing if normal mode
-        TST     r0, #1 :SHL: 0  ; select FIFO
+        TST     r0, #1 :SHL: 0          ; select FIFO
         ADREQ   r3, CaptionFIFO
         ADRNE   r3, ExtDataFIFO
-        TST     r0, #1 :SHL: 2  ; flush FIFO?
+        TST     r0, #1 :SHL: 2          ; flush FIFO?
         LDRNE   lr, [r3, #FIFO_WritePtr]
         STRNE   lr, [r3, #FIFO_ReadPtr]
 01      SUBS    r2, r2, #1
@@ -2560,7 +2571,9 @@ LoadCaptions
         LDRB    r4, [r1], #1
         TST     r0, #1 :SHL: 1
         BLNE    SetParity
-        BL      WriteToFIFO
+        TST     r0, #1 :SHL: 0          ; ensure that control codes are always doubled, but only on odd fields
+        BLEQ    WriteToFIFO_WithCheckForControlCode
+        BLNE    WriteToFIFO
         B       %BT01
 
 ; SetParity - sets byte in r4 to odd parity
@@ -2587,6 +2600,56 @@ SetParity
         BICNE   r4, r4, #&80
         EXITS
  ]
+
+; WriteToFIFO_WithCheckForControlCode - may also insert extra data if needed to keep control codes in pairs
+; in:   r3 -> FIFO
+;       r4 = byte to write
+; out:  registers preserved
+WriteToFIFO_WithCheckForControlCode
+        Entry
+        LDRB    r14, ControlCodeState
+        MOVS    r14, r14, LSR #1        ; C = r14 bit 0,  Z set if r14 was 0 or 1
+        BHI     %FT03                   ; branch if C set and Z clear (ie r14 was 3)
+        BNE     %FT02                   ; if r14 was 2
+        BCS     %FT01                   ; if r14 was 1
+                                        ; else r14 was 0
+00      AND     r14, r4, #&70
+        TEQ     r14, #&10               ; check if first byte of a control code (&10-&1F, ignoring parity)
+        STREQB  r4, ControlCode1        ; if the start of a control code, wait for the second byte
+        BLNE    WriteToFIFO             ; else just put it in the FIFO now
+        MOVEQ   r14, #1
+        MOVNE   r14, #0
+        STRB    r14, ControlCodeState   ; update control code state appropriately
+        EXITS
+
+01      STRB    r4, ControlCode2
+        LDRB    r4, ControlCode1
+        BL      WriteToFIFO
+        LDRB    r4, ControlCode2
+        BL      WriteToFIFO             ; write both bytes now, in any case
+        TST     r4, #&60                ; check if a valid second byte (&20-&7F, ignoring parity)
+        LDRNEB  r4, ControlCode1
+        BLNE    WriteToFIFO
+        LDRNEB  r4, ControlCode2        ; if we recognised the control code format, send the repetition immediately
+        BLNE    WriteToFIFO             ; else make no assumptions about repetition of codes (to allow for future changes to the CC standard)
+        MOVNE   r14, #2
+        MOVEQ   r14, #0
+        STRB    r14, ControlCodeState   ; update control code state appropriately
+        EXITS
+
+02      LDRB    r14, ControlCode1
+        TEQ     r4, r14                 ; an exact repetition?
+        BNE     %BT00                   ; if not, act as though control code state was 0 instead
+        MOV     r14, #3
+        STRB    r14, ControlCodeState   ; else just update control code state (we've already put this byte in the FIFO)
+        EXITS
+
+03      LDRB    r14, ControlCode2
+        TEQ     r4, r14                 ; an exact repetition?
+        BNE     %BT01                   ; if not, act as though control code state was 1 instead
+        MOV     r14, #0
+        STRB    r14, ControlCodeState   ; else just update control code state (we've already put this byte in the FIFO)
+        EXITS
 
 ; WriteToFIFO - writes a single byte to a FIFO
 ; in:   r3 -> FIFO
