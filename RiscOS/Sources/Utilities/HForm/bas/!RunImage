@@ -19,6 +19,14 @@ MaxLinkBits%=19: REM allow 16 bit idlen
 MaxFreeLinkBits%=15: REM maximum number of bits for a free link
 MinLinkBits%=10
 
+REM Determine if it looks like a Phoebe ADFS
+
+IF FNADFSVersion<=329 THEN
+  TwinIDE%=FALSE
+ELSE
+  TwinIDE%=TRUE
+ENDIF
+
 REM default closing status indicates a panic
 *set HForm$EndStatus 1
 Log2ShareSize%=0:REM Unit of sharing
@@ -44,11 +52,14 @@ FormatFlag%=(FNChoose("Q01:","FormatOrInitChoose","FI","")="F")
 SoakStyle$=FNChoose("Q02:","SoakTestChoose","LSN", "")
 BootOpt$=FNChoose("BootOpt:","BootOptChoose","YN", "")
 
+REM Determine if the Filecore version we have supports long filenames
+
 IF FNFileCoreVersion<=298 THEN
   BigDir%=FALSE
 ELSE
   BigDir%=FNChoose("BigDir:","BigDirChoose","YN","")="Y"
 ENDIF
+
 
 IF NOT BigDir% THEN MaxLinkBits%=15
 
@@ -125,17 +136,43 @@ ELSE
  IDE%=DriveType%=4
 ENDIF
 IF IDE% THEN
- REM Determine whether this is IDE drive 0/1
- SYS"XADFS_ControllerType",Drive%-1 TO A%;F%
- IF ((F%AND1)=0) AND (A%=4) THEN IDEdrive%=1 ELSE IDEdrive%=0
  DIM IDEid% 512
- DIM IDEpb% 7
- IDEpb%!0=0
- IDEpb%!4=0
- IDEpb%?5=&A0+(IDEdrive%<<4)
- IDEpb%?6=&EC
- SYS"ADFS_IDEUserOp",1<<24,,IDEpb%,IDEid%,512 TO r0%,,,,r4%
- IF r0%<>0 OR r4%<>0 THEN
+ 
+ IF TwinIDE% THEN
+   REM determine physical drive number which corresponds to logical drive
+   IDEdrive%=-1
+   FOR N%=0 TO 3
+     SYS "ADFS_IDEDeviceInfo",0,N% TO ,B%,C%,D%
+     IF (C%=Drive%) AND (B%=1) THEN
+       IDEdrive%=N%
+       REM copy the data from the device ID to a local copy of it
+       FOR A%=0 TO 512-4 STEP 4
+         IDEid%!A%=D%!A%
+       NEXT A%
+     ENDIF
+   NEXT N%
+   IF IDEdrive%=-1 THEN
+     fail%=TRUE
+   ELSE
+     fail%=FALSE
+   ENDIF
+ ELSE
+   REM Determine whether this is IDE drive 0/1
+   SYS"XADFS_ControllerType",Drive%-1 TO A%;F%
+   IF ((F%AND1)=0) AND (A%=4) THEN IDEdrive%=1 ELSE IDEdrive%=0
+   DIM IDEpb% 7
+   IDEpb%!0=0
+   IDEpb%!4=0
+   IDEpb%?5=&A0+(IDEdrive%<<4)
+   IDEpb%?6=&EC
+   SYS"ADFS_IDEUserOp",1<<24,,IDEpb%,IDEid%,512 TO r0%,,,,r4%
+   IF r0%<>0 OR r4%<>0 THEN
+     fail%=TRUE
+   ELSE
+     fail%=FALSE
+   ENDIF
+ ENDIF
+ IF fail% THEN
   PROCmessage_print_1("DiscIdError", STR$~(r0%))
   IDEcyls%=0:IDEheads%=0:IDEsecs%=0
  ELSE
@@ -267,7 +304,6 @@ ENDIF
 
 Log2Alloc%=10:LinkBits%=MinLinkBits%
 IF LinkBits%<=MaxFreeLinkBits% THEN FreeLinkBits%=LinkBits% ELSE FreeLinkBits%=15
-PROCShareSize
 IndRootDirAdd%=RootDirAdd%
 
 REM Having SectorsPerDisc% makes various calculations for
@@ -915,7 +951,6 @@ DEF FNMinMapObj
 
 DEF FNdoalloc(Verbose%)
  Log2Alloc%=Log%
- PROCShareSize
  MapBits%=FNMapBits(SectorsPerDisc%,Log2Alloc%,Log2SecSize%)
  RoundSectors%=FNRoundSectors(MapBits%,Log2Alloc%,Log2SecSize%)
  BestZones%=1 << 30      :REM init to rogue values
@@ -989,7 +1024,6 @@ DEF PROCNewStructure
 Zone0Bits%=60*8
 ZoneBits%=SecSize%*8
 Log2Alloc%=7: REM requested by TCs ECR
-PROCShareSize
 REMIF Log2Alloc%<8 THEN Log2Alloc%=10:PROCShareSize
 
 REM * check for sensible default
@@ -1264,6 +1298,7 @@ UsedBits%=SecSize%*8-SpareBits%
 WholeZones%=(MapBits%+Zone0Bits%) DIV UsedBits%
 OddBits%=(MapBits%+Zone0Bits%) MOD UsedBits%
 IF OddBits% Zones%=WholeZones%+1 ELSE Zones%=WholeZones%
+PROCShareSize
 MapZone%=Zones% DIV 2
 IF MapZone%=0 THEN
      MapAdd%=0
@@ -2139,8 +2174,10 @@ DEF FNBigADFS
     =((!Misc_InfoPtr%) AND (1<<9))=(1<<9)
 
 DEF PROCShareSize
-    LOCAL min%
+    LOCAL min%, min2%
+    min2%=Zones%*SecSize%
     min%=FNMinMapObj<<Log2Alloc%
+    IF (min%<min2%) AND (LinkBits%<=15) THEN min%=min2%
     Log2ShareSize%=0
     WHILE (253*(SecSize%<<Log2ShareSize%)<min%)
         Log2ShareSize%+=1
@@ -2171,6 +2208,21 @@ DEF FNGranularity
 DEF FNFileCoreVersion
 LOCAL code%, help$, help%
 SYS "OS_Module",18,"FileCore" TO ,,,code%
+
+help$=""
+
+help%=(code%!&14)+code%
+
+WHILE (?help%)<>0
+  help$+=CHR$?help%
+  help%+=1
+ENDWHILE
+
+=INT(VAL(MID$(help$,INSTR(help$,".")-1))*100)
+
+DEF FNADFSVersion
+LOCAL code%, help$, help%
+SYS "OS_Module",18,"ADFS" TO ,,,code%
 
 help$=""
 
