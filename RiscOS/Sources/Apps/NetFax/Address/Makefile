@@ -9,6 +9,7 @@
 # Date		Name	Description
 # ====		====	===========
 # 1997-10-06	BAL	Created
+# 1998-10-15    JPB     Fixed ROM build options, plus MemCheck
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -41,9 +42,8 @@ RM		= remove
 SQUEEZE		= squeeze
 WIPE		= -wipe
 
-AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
+AFLAGS		= -depend !Depend -nocache -stamp -quit ${THROWBACK}
 CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -wp
-#CFLAGS		= ${THROWBACK} -depend !Depend -fa ${INCLUDES} -wp
 CPFLAGS		= ~cfr~v~n
 SQFLAGS		= -f
 WFLAGS		= ~cf~vr
@@ -92,7 +92,7 @@ LIBSM = \
  ${WIMPLIB} \
  ${TOOLBOXLIB} \
  ${EVENTLIB}m \
- ${NUMCONVERTLIB}m
+ ${NUMCONVERTLIB}zm
 
 
 LIBS = \
@@ -297,7 +297,6 @@ clean:
 	${WIPE}	oz		${WFLAGS}
 	${WIPE}	odz		${WFLAGS}
 	${WIPE}	rm		${WFLAGS}
-	${RM}	s.AppName
 	${RM}	s.ModuleWrap
 	${RM}	o.dirs
 	@echo
@@ -352,8 +351,8 @@ oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
 s.ModuleWrap: ${WRAPPER}
 	${CP} ${WRAPPER} $@ ${CPFLAGS}
 
-s.AppName: ${LDIR}.Messages
-	awk -f awk.AppName ${LDIR}.Messages > $@
+#s.AppName: ${LDIR}.Messages
+#	awk -f awk.AppName ${LDIR}.Messages > $@
 
 
 # -----------------------------------------------------------------------------
