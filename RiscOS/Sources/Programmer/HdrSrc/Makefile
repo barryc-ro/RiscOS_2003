@@ -67,6 +67,7 @@ EXPORTS   = \
  ${HDRDIR}.Messages \
  ${HDRDIR}.NdrDebug \
  ${HDRDIR}.NewErrors \
+ ${HDRDIR}.Oswords \
  ${HDRDIR}.PaletteV \
  ${HDRDIR}.PDriverReg \
  ${HDRDIR}.PDumperReg \
@@ -122,6 +123,7 @@ ${HDRDIR}.PDriverReg: Import.Global.PDriverReg;     ${CP} Import.Global.PDriverR
 ${HDRDIR}.PDumperReg: Import.Global.PDumperReg;     ${CP} Import.Global.PDumperReg $@ ${CPFLAGS}
 ${HDRDIR}.PoduleReg:  Import.Global.PoduleReg;      ${CP} Import.Global.PoduleReg  $@ ${CPFLAGS}
 ${HDRDIR}.NewErrors:  Import.Global.NewErrors;      ${CP} Import.Global.NewErrors  $@ ${CPFLAGS}
+${HDRDIR}.Oswords:    Import.Global.Oswords;        ${CP} Import.Global.Oswords    $@ ${CPFLAGS}
 ${HDRDIR}.Services:   Import.Global.Services;       ${CP} Import.Global.Services   $@ ${CPFLAGS}
 ${HDRDIR}.UpCall:     Import.Global.UpCall;         ${CP} Import.Global.UpCall     $@ ${CPFLAGS}
 
