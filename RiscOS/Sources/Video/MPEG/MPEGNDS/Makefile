@@ -79,4 +79,3 @@ ${OBJECT}: ${SOURCE}
 	${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-o.MPEGNDS: Hdr.GetAll Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:ModHand Hdr:Proc Hdr:MsgTrans Hdr:Services Hdr:MPEGCtrl VersionASM s.Debug s.DataStruct s.Module s.SWIs s.Descramble s.Support
