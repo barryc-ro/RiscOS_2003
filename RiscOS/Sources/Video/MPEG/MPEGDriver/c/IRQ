@@ -158,8 +158,11 @@ Date		Who	Change
 			fixed header parsing to skip slice start codes until at least one of sequence header, gop header or
 			picture header had been received, and moved a few critical operations from the picture start code handler
 			to the slice start code handler - so now we are robust against the picture start code being lost from the stream
-10/08/2000	BJGA	Last version broke MPEG-1 decode due to the code moved from the picture coding extension handler assuming we were
+10/07/2000	BJGA	Last version broke MPEG-1 decode due to the code moved from the picture coding extension handler assuming we were
 			dealing with an MPEG-2 stream. Also fixed a couple of debug statements to reflect the moves!
+14/07/2000	BJGA	Altered display of 2x enlarged interlaced pictures and 4x enlarged progressive pictures to avoid display artefacts;
+			takes advantage of fixed MPEG sequence header fields to cope with corruption of sequence header data;
+			ignores picture_display_extension unless sequence_display_extension is present
 
 ***************************************************************************/
 
@@ -245,6 +248,7 @@ static void static_INT_FNP (void);
 static void static_ProcessVideoHdr (void *argument);
 static void static_NewPictureDecode (void);
 static void static_ProcessVideoSequenceHdr (void);
+static void static_ProcessRepeatVideoSequenceHdr (void);
 static void static_ProcessVideoSequenceExt (void);
 static void static_ProcessVideoSequenceDisplayExt (void);
 static void static_ProcessVideoGOPHdr (void);
@@ -911,7 +915,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
         /* In trick play, slow-mo and pause, we just leave the first field displaying throughout */
         /* Otherwise, the second field is displayed on the second (ie next-latched) and subsequent fields (ie for repeat-frames and stalls) */
         /* (When a frame decode follows a field decode, so the frame decode doesn't start until the second VSync, this is taken care of during writing of the task instruction) */
-        if (Stream.video.speed_indicator == 1 && Stream.rs_flags.trick_play_mode == false && Stream.fields_into_this_PU == 0)
+        if (Stream.video.speed_indicator == 1 && Stream.rs_flags.trick_play_mode == false && Stream.vid_flags.up_scaling_used == false && Stream.fields_into_this_PU == 0)
         {
           static_SetNextDisplayField (!Stream.display_frames->top_field_first); /* here, the relevant bits *are* latched next VSync */
         }
@@ -1462,7 +1466,14 @@ static void static_ProcessVideoHdr (void *argument)
         case SEQUENCE_HEADER_CODE:
           /* Start a new picture struct */
           if (!Stream.vid_flags.started_parsing_headers) static_NewPictureDecode ();
-          static_ProcessVideoSequenceHdr ();
+          if (Stream.vid_flags.sequence_headers_locked)
+          {
+            static_ProcessRepeatVideoSequenceHdr ();
+          }
+          else
+          {
+            static_ProcessVideoSequenceHdr ();
+          }
           break;
         case GROUP_START_CODE:
           /* If this is the first header for this picture, start a new picture struct */
@@ -1478,10 +1489,16 @@ static void static_ProcessVideoHdr (void *argument)
           switch (static_GetVideoHdrBits (4))
           {
             case SEQUENCE_EXTENSION:
-              static_ProcessVideoSequenceExt ();
+              if (Stream.vid_flags.sequence_headers_being_parsed)
+              {
+                static_ProcessVideoSequenceExt ();
+              }
               break;
             case SEQUENCE_DISPLAY_EXTENSION:
-              static_ProcessVideoSequenceDisplayExt ();
+              if (Stream.vid_flags.sequence_headers_being_parsed)
+              {
+                static_ProcessVideoSequenceDisplayExt ();
+              }
               break;
             case PICTURE_CODING_EXTENSION:
               static_ProcessVideoPictureCodingExt ();
@@ -1490,12 +1507,18 @@ static void static_ProcessVideoHdr (void *argument)
               static_ProcessVideoQuantMatrixExt ();
               break;
             case PICTURE_DISPLAY_EXTENSION:
-              static_ProcessVideoPictureDisplayExt ();
+              if (Stream.vid_flags.display_headers_present)
+              {
+                static_ProcessVideoPictureDisplayExt ();
+              }
               break;
           }
           break;
         case USER_DATA_START_CODE:
           static_ProcessVideoUserData ();
+          break;
+        case SEQUENCE_END_CODE:
+          Stream.vid_flags.sequence_headers_locked = false;
           break;
       }
       /* Unfortunately, we can't rely on an automatic header search at *this* point, because I've      */
@@ -1579,6 +1602,7 @@ static void static_ProcessVideoSequenceHdr (void)
   /* Set decoding state flags */
   Stream.last_video_header_layer_decoded = lvhld_sequence;
   Stream.vid_flags.sequence_header_received_since_picture_header = true;
+  Stream.vid_flags.sequence_headers_being_parsed = true;
   
   Stream.decode_frames->seq.mpeg2 = false;  /* assume MPEG-1 until we find a sequence_extension */
   Stream.decode_frames->seq.display_horizontal_size =
@@ -1604,6 +1628,51 @@ static void static_ProcessVideoSequenceHdr (void)
   Stream.decode_frames->seq.colour_primaries = 1;              /* ITU-R BT.709 */
   Stream.decode_frames->seq.transfer_characteristics = 1;      /* ITU-R BT.709 */
   Stream.decode_frames->seq.matrix_coefficients = 1;           /* ITU-R BT.709 */
+  Stream.decode_frames->frame_centre_horizontal_offset [0] =
+  Stream.decode_frames->frame_centre_horizontal_offset [1] =
+  Stream.decode_frames->frame_centre_horizontal_offset [2] = 0;
+  Stream.decode_frames->frame_centre_vertical_offset [0] =
+  Stream.decode_frames->frame_centre_vertical_offset [1] =
+  Stream.decode_frames->frame_centre_vertical_offset [2] = 0;
+  Stream.decode_frames->pic1.active_format = 8; /* default AFD = 8 (as the coded frame) */
+  Stream.decode_frames->pic2.active_format = 8;
+}
+
+/******	static_ProcessRepeatVideoSequenceHdr() *****************************
+
+Purpose:	Parses subsequent occurrences of MPEG sequence_header()
+
+***************************************************************************/
+
+static void static_ProcessRepeatVideoSequenceHdr (void)
+{
+  bool corrupted = false;
+  dprintf (("IRQ", "ProcessRepeatVideoSequenceHdr\n"));
+  /* Set decoding state flags */
+  Stream.last_video_header_layer_decoded = lvhld_sequence;
+  Stream.vid_flags.sequence_header_received_since_picture_header = true;
+  
+  Stream.decode_frames->seq = Stream.decode_frames->decode_link->seq; /* keep this stuff the same */
+  if (static_GetVideoHdrBits (12) != Stream.decode_frames->seq.coded_horizontal_size & 0xFFF) corrupted = true;
+  if (static_GetVideoHdrBits (12) != Stream.decode_frames->seq.coded_vertical_size & 0xFFF) corrupted = true;
+  if (static_GetVideoHdrBits (4) != Stream.decode_frames->seq.aspect_ratio_information) corrupted = true;
+  static_GetVideoHdrBits (4); /* previous frame_rate not stored */
+  if (static_GetVideoHdrBits (18) != Stream.decode_frames->seq.bit_rate & 0x3FFFF) corrupted = true;
+  if (static_GetVideoHdrBits (1) != 1) corrupted = true;  /* marker bit */
+  if (static_GetVideoHdrBits (10) != Stream.decode_frames->seq.vbv_buffer_size & 0x3FF) corrupted = true;
+  static_GetVideoHdrBits (1);  /* constrained parameters flag not stored */
+  if (corrupted)
+  {
+    Stream.video.since_open.seqhdr_errors ++;
+    Stream.video.since_reset.seqhdr_errors ++;
+  }
+  else
+  {
+    /* The quant matrices are the only part of repeat sequence headers that are allowed to change */
+    /* The code for loading the quantization matrices is identical to that for processing quant_matrix_extension() */
+    static_ProcessVideoQuantMatrixExt ();
+  }
+  /* Some things need to be reset on repeat sequence headers */
   Stream.decode_frames->frame_centre_horizontal_offset [0] =
   Stream.decode_frames->frame_centre_horizontal_offset [1] =
   Stream.decode_frames->frame_centre_horizontal_offset [2] = 0;
@@ -1661,6 +1730,8 @@ static void static_ProcessVideoSequenceDisplayExt (void)
   Stream.decode_frames->seq.display_horizontal_size = static_GetVideoHdrBits (14);
   static_GetVideoHdrBits (1);  /* skip marker bit */
   Stream.decode_frames->seq.display_vertical_size = static_GetVideoHdrBits (14);
+  /* Flag that picture display extensions are now valid */
+  Stream.vid_flags.display_headers_present = true;
 }
 
 /******	static_ProcessVideoGOPHdr() ****************************************
@@ -2280,6 +2351,11 @@ static void static_ProcessVideoSliceHdr (void)
     dprintf (("IRQ", "ProcessVideoSliceHdr: video.prefill_state = pre_decoding\n"));
   }
   Stream.vid_flags.next_frames_headers_have_been_decoded = true;
+  if (Stream.vid_flags.sequence_headers_being_parsed)
+  {
+    Stream.vid_flags.sequence_headers_being_parsed = false;
+    Stream.vid_flags.sequence_headers_locked = true;
+  }
   static_PerhapsWriteNewInstruction ();
 }
 
@@ -2490,7 +2566,7 @@ static void static_SetUpDisplayForNewAU (void)
       /* However, if the frame decode followed a field decode, then we're just coming up to the second (or fourth, sixth etc.) VSync of the PU */
       /* so we may need to display the opposite field (but only for progressive_frames or when in normal-speed play) */
       if (Stream.current_picture_structure != ps_frame_picture &&
-          (Stream.display_frames->progressive_frame || (Stream.video.speed_indicator == 1 && Stream.rs_flags.trick_play_mode == false)))
+          (Stream.display_frames->progressive_frame || (Stream.video.speed_indicator == 1 && Stream.rs_flags.trick_play_mode == false & Stream.vid_flags.up_scaling_used == false)))
       {
         static_SetNextDisplayField (!Stream.display_frames->top_field_first);
       }
@@ -3216,7 +3292,7 @@ static void static_SetUpScalingRegisters (signed int centre_x, signed int centre
   unsigned int real_YDO = 0;
   unsigned int real_YDS = 0;
   static enum { none = 0, down = 1, up = 3 } UDS_lut [2][6] = { { down, none, none, none, up, none }, { down, none, none, none, none, up } };
-  static unsigned char                       VFC_lut [2][6] = { { 0,    1,    0,    0xFF, 0,  0xFF }, { 2,    3,    2,    6,    6,    6  } };
+  static unsigned char                       VFC_lut [2][6] = { { 0,    1,    0,    0xFF, 0,  0xFF }, { 2,    3,    2,    6,    6,    4  } };
   static enum { off = 0, on = (VID_DCF_LB>>16)|(VID_DCF_BFL>>16) } LB_lut [6] = { off,  on,   off,  on,   off,  off };
   bool filter_does_scaling;
   bool vertically_downscaled;
@@ -3345,8 +3421,10 @@ static void static_SetUpScalingRegisters (signed int centre_x, signed int centre
   }
   else
   {
+    unsigned char UDS = (unsigned char) UDS_lut [Stream.display_frames->progressive_frame] [vertical_scaling_index];
     WRITE_VID_LSR((horizontal_downscaling >> 8) - 1);
-    WRITE_VID_UDS(UDS_lut [Stream.display_frames->progressive_frame] [vertical_scaling_index]);
+    WRITE_VID_UDS(UDS);
+    Stream.vid_flags.up_scaling_used = (UDS == 3);
     WRITE_VID_DCF_0((VID_DCF_0 & 0xF8) | VFC_lut [Stream.display_frames->progressive_frame] [vertical_scaling_index]);
     Deferred_VID_DCF_LB = LB_lut [vertical_scaling_index]; /* this bit isn't latched, so we have to write it on the next VSync */
     Deferred_VID_DCF_LB_Pending = true;
