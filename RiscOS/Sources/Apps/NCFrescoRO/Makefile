@@ -7,7 +7,7 @@
 EXP_HDR = <CExport$Dir>
 RESAPP = <Resource$Dir>.Apps.!NCFresco
 RESRES = <Resource$Dir>.Resources.NCFresco
-SRCCOMMON = Resources.Common
+SRCCOMMON = Resources.Common.${Locale}
 SRCLOCALE = Resources.${UserIf}.${Locale}
 #
 # Generic options:
@@ -45,16 +45,16 @@ clean:
 resources:
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
-	${CP} ${SRCCOMMON}.!BootROM    {RESAPP}.!Boot    ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!RunROM     {RESAPP}.!Run     ${CPFLAGS}
-	${CP} ${SRCLOCALE}.!SpritesROM {RESAPP}.!Sprites ${CPFLAGS}
-	${CP} ${SRCCOMMON}.Welcome     {RESRES}.Welcome  ${CPFLAGS}
-	${CP} ${SRCCOMMON}.SetScrap    {RESRES}.SetScrap ${CPFLAGS}
-	${CP} ${SRCCOMMON}.MimeMap     {RESRES}.MimeMap  ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Config      {RESRES}.Config   ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Messages    {RESRES}.Message  ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Res         {RESRES}.Res      ${CPFLAGS}
-	${CP} ${SRCLOCALE}.SpritesROM  {RESRES}.Sprites ${CPFLAGS}
+	${CP} ${SRCCOMMON}.!BootROM    ${RESAPP}.!Boot    ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!RunROM     ${RESAPP}.!Run     ${CPFLAGS}
+	${CP} ${SRCLOCALE}.!SpritesROM ${RESAPP}.!Sprites ${CPFLAGS}
+	${CP} ${SRCCOMMON}.Welcome     ${RESRES}.Welcome  ${CPFLAGS}
+	${CP} ${SRCCOMMON}.SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
+	${CP} ${SRCCOMMON}.MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Config      ${RESRES}.Config   ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Messages    ${RESRES}.Message  ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Res         ${RESRES}.Res      ${CPFLAGS}
+	${CP} ${SRCLOCALE}.SpritesROM  ${RESRES}.Sprites ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #resources:
