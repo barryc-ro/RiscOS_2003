@@ -234,7 +234,7 @@ static struct hentry *firstglobsym, **nextglobsym;
 static struct fentry { /* struct to hold file info from command line */
     struct fentry *next;
     int32  type;                        /* AOF, AOUT, AR, ALF, ELF, SYMDEF */
-    union {
+    union fentry_un {
         char *hdrptr;
 #ifdef TARGET_HAS_AOF
         cf_header *cfhdr;               /* Chunk file headers + entries */
@@ -344,6 +344,7 @@ static struct oentry { /* object file */
     struct oentry *next;
     char *oname;
     struct fentry *fep;        /* file entry from which this object was derived */
+    int32  type;               /* AOF, AOUT, AR, ALF, ELF, SYMDEF */
     union {
         char *hdrptr;
 #ifdef TARGET_HAS_AOF
@@ -355,6 +356,9 @@ static struct oentry { /* object file */
 #endif
 #ifdef TARGET_HAS_ELF
         Elf32_Ehdr *elfhdr;    /* ELF header */
+#endif
+#ifdef TARGET_HAS_SYMDEFS
+        SymDefsFile *sf;       /* SYMDEFS file */
 #endif
     } o_un;
     char *objbuffer;           /* if object is in memory, but file isn't */
@@ -2334,80 +2338,83 @@ new_area:
 #  define MAGICSZ 8
 #endif
 
-static int32 filetype(struct fentry *fep)
+static int32 filetype_ident(char *fname, int32 fsize, union fentry_un *f_un)
 {
+    int32 size_mapped = MAGICSZ;
 #ifdef TARGET_HAS_SYMDEFS
+#   define SYMDEF_IDENT_SIZE 16
     SymDefsFile *sf;
 #endif
-    setfile(fep);
-    if (fep->size >= MAGICSZ)   /* Make sure small files don't fool us */
-    {   fep->f_un.hdrptr = map_perm(0, MAGICSZ);
+    if (fsize >= MAGICSZ)   /* Make sure small files don't fool us */
+    {   f_un->hdrptr = map_perm(0, MAGICSZ);
 #ifdef TARGET_HAS_AOF
-        if (is_cf_magic(fep->f_un.cfhdr->cf_magic))
+        if (is_cf_magic(f_un->cfhdr->cf_magic))
         {        /* read rest of chunk file header */
-            fep->f_un.hdrptr = map_perm(0,
-                hv(fep->f_un.cfhdr->cf_maxchunks)*sizeof(cf_entry) +
+            f_un->hdrptr = map_perm(0,
+                hv(f_un->cfhdr->cf_maxchunks)*sizeof(cf_entry) +
                     sizeof(cf_header) - sizeof(cf_entry));
 
-            if (findchunk(fep->f_un.cfhdr, OBJ_HEAD)) return AOF;
-            if (findchunk(fep->f_un.cfhdr, LIB_DIRY)) return OFL;
+            if (findchunk(f_un->cfhdr, OBJ_HEAD)) return AOF;
+            if (findchunk(f_un->cfhdr, LIB_DIRY)) return OFL;
         }
-        else if (is_reversed_cf_magic(fep->f_un.cfhdr->cf_magic))
-            msg(fatal_byteorder(fep->fname));
+        else if (is_reversed_cf_magic(f_un->cfhdr->cf_magic))
+            msg(fatal_byteorder(fname));
 #endif
 #ifdef TARGET_HAS_AOUT
-        if (strncmp(fep->f_un.armag, ARMAG, MAGICSZ) == 0)
-        {   fep->f_un.hdrptr = map_perm(0, MAGICSZ+sizeof(struct ar_hdr));
+        if (strncmp(f_un->armag, ARMAG, MAGICSZ) == 0)
+        {   f_un->hdrptr = map_perm(0, MAGICSZ+sizeof(struct ar_hdr));
             return AR;
         }
-        if (!N_BADMAG(*(fep->f_un.aouthdr)))
-        {   if (fep->f_un.aouthdr->a_magic == OMAGIC)
-                fep->f_un.hdrptr = map_perm(0, sizeof(struct exec));
+        if (!N_BADMAG(*(f_un->aouthdr)))
+        {   if (f_un->aouthdr->a_magic == OMAGIC)
+                f_un->hdrptr = map_perm(0, sizeof(struct exec));
             else
-                fep->f_un.hdrptr = map_perm(0, sizeof(struct exec_header));
+                f_un->hdrptr = map_perm(0, sizeof(struct exec_header));
             return AOUT;
         }
 #endif
 #ifdef TARGET_HAS_ELF
         if (sizeof(Elf32_Ehdr) > MAGICSZ)
-          fep->f_un.hdrptr = map_perm(0, sizeof(Elf32_Ehdr));
+        {  f_un->hdrptr = map_perm(0, sizeof(Elf32_Ehdr));
+            size_mapped = sizeof(Elf32_Ehdr);
+        }
         if (
-          fep->f_un.elfhdr->e_ident[EI_MAG0] == ELFMAG0 &&
-          fep->f_un.elfhdr->e_ident[EI_MAG1] == ELFMAG1 &&
-          fep->f_un.elfhdr->e_ident[EI_MAG2] == ELFMAG2 &&
-          fep->f_un.elfhdr->e_ident[EI_MAG3] == ELFMAG3
+          f_un->elfhdr->e_ident[EI_MAG0] == ELFMAG0 &&
+          f_un->elfhdr->e_ident[EI_MAG1] == ELFMAG1 &&
+          f_un->elfhdr->e_ident[EI_MAG2] == ELFMAG2 &&
+          f_un->elfhdr->e_ident[EI_MAG3] == ELFMAG3
           )
         {
-            Elf32_Ehdr *e = fep->f_un.elfhdr;
+            Elf32_Ehdr *e = f_un->elfhdr;
             switch (e->e_ident[EI_CLASS]) {
               case ELFCLASS32:
                 break;
               case ELFCLASS64:
-                msg(fatal_badelf_class(fep->fname,"64-bit objects"));
+                msg(fatal_badelf_class(fname,"64-bit objects"));
               case ELFCLASSNONE:
-                msg(fatal_badelf_class(fep->fname,"Unclassified"));
+                msg(fatal_badelf_class(fname,"Unclassified"));
               default:
-                msg(fatal_badelf_class_x(fep->fname,e->e_ident[EI_CLASS]));
+                msg(fatal_badelf_class_x(fname,e->e_ident[EI_CLASS]));
             }
             switch (e->e_ident[EI_DATA]) {
               case ELFDATA2LSB:
               case ELFDATA2MSB:
                   if (!set_object_endianness_explicit(e->e_ident[EI_DATA] == ELFDATA2MSB))
-                      msg(fatal_byteorder(fep->fname));
+                      msg(fatal_byteorder(fname));
                   break;
               case ELFDATANONE:
-                  msg(fatal_badelf_encoding(fep->fname,"Invalid data encoding"));
+                  msg(fatal_badelf_encoding(fname,"Invalid data encoding"));
               default:
-                  msg(fatal_badelf_encoding_x(fep->fname,e->e_ident[EI_DATA]));
+                  msg(fatal_badelf_encoding_x(fname,e->e_ident[EI_DATA]));
             }
             if (e->e_ident[EI_VERSION] != 1) {
-                msg(fatal_badelf_version(fep->fname,e->e_ident[EI_VERSION]));
+                msg(fatal_badelf_version(fname,e->e_ident[EI_VERSION]));
             }
             if (e->e_machine != EM_ARM) {
-                msg(fatal_badelf_type(fep->fname,"n ARM"));
+                msg(fatal_badelf_type(fname,"n ARM"));
             }
             if (e->e_type != ET_REL) {
-                msg(fatal_badelf_type(fep->fname," relocatable"));
+                msg(fatal_badelf_type(fname," relocatable"));
             }
             /* We are only interested if this object has sections */
             if (tvs(e->e_shnum) > 0)
@@ -2416,21 +2423,34 @@ static int32 filetype(struct fentry *fep)
 #endif
 #ifdef TARGET_HAS_SYMDEFS
         if ((sf = sf_new()) != NULL)
-        {   if (sf_open(fep->fname, sf, SFOPEN_INPUT_IDENT_ONLY))
-            {   fep->f_un.sf = sf;
+        {   if (size_mapped < SYMDEF_IDENT_SIZE)
+            {   f_un->hdrptr = salloc(SYMDEF_IDENT_SIZE+4);
+                map_at(0, SYMDEF_IDENT_SIZE, f_un->hdrptr);
+                f_un->hdrptr[SYMDEF_IDENT_SIZE] = '\0';
+                size_mapped = SYMDEF_IDENT_SIZE;
+            }
+            if (sf_open_inplace(fname, sf, f_un->hdrptr, SYMDEF_IDENT_SIZE, SFOPEN_INPUT_IDENT_ONLY, NULL, NULL))
+            {   f_un->sf = sf;
                 return SYMDEFS;
             }
             sf_delete(sf);
         }
 #endif
     }
-    msg(fatal_notobj(fep->fname));
-    /*NOTREACHED*/
     return 0;
 }
 
-/* XXX: ELF OK */
 #undef MAGICSZ
+
+static int32 filetype(struct fentry *fep)
+{
+    int32 type;
+    setfile(fep);
+    type = filetype_ident(fep->fname, fep->size, &fep->f_un);
+    if (!type)
+        msg(fatal_notobj(fep->fname));
+    return type;
+}
 
 static struct sym *makesym(int32 value, unsigned32 flags, struct aentry *area)
 {   static struct sym tsym;
@@ -2911,7 +2931,7 @@ static unsigned32 elf_alignment(Elf32_Word alignment, struct oentry *oep, char *
 static void load1_elf(struct oentry *oep)
 {
 #ifdef TARGET_HAS_ELF
-    Elf32_Ehdr *elf = oep->fep->f_un.elfhdr;
+    Elf32_Ehdr *elf = oep->o_un.elfhdr;
     Elf32_Shdr *sections, *sp;
     int32 nsyms = 0;
     int32 shstrgsectionid;
@@ -3516,19 +3536,31 @@ static int aof_translate_relocation(aof_reloc *aofr, unsigned char *r_type, stru
 #endif
 
 #ifdef TARGET_HAS_SYMDEFS
+/* This routine is called back by the CLX library to insert the globally exported
+ * symbols from a SYMDEFS file in a library into the library symbol table.
+ * It must return NULL, whether addition of the symbol succeeded or failed.
+ */
+static SymDefSymbol *sflibcallback(SymDefsFile *sf, char *name, int32 val, SymDefSymbolType t, void *idx)
+{
+  (void) val;
+  (void) sf;
+  (void) t;
+  enter(name, &libsymtable)->h_un.intval = *(int32 *) idx;
+  return NULL;
+}
 /* This routine is called back by the CLX library to insert the global symbols into
  * the symbol tables.  It must return NULL, whether addition of the symbol succeeded
  * or failed.
  */
-static struct oentry *sf_oep;
-static SymDefSymbol *sfcallback(SymDefsFile *sf, char *name, int32 val, SymDefSymbolType t)
+static SymDefSymbol *sfcallback(SymDefsFile *sf, char *name, int32 val, SymDefSymbolType t, void *v_oep)
 {
+  struct oentry *oep = v_oep;
   struct sym sy;
   (void) sf;
   zmem((char *)&sy, sizeof(sy));
   sy.value = val;
   sy.area = NULL;
-  sy.refobj = sf_oep;
+  sy.refobj = oep;
   switch (t) {
     case symdef_DATA : sy.flags = SYM_GLOBALDEFAT | SYM_DATAAT ; break;
     case symdef_THUMB: sy.flags = SYM_GLOBALDEFAT | SYM_THUMBAT; break;
@@ -3546,11 +3578,10 @@ static SymDefSymbol *sfcallback(SymDefsFile *sf, char *name, int32 val, SymDefSy
 static void load1_symdefs(struct oentry *oep)
 {
 #ifdef TARGET_HAS_SYMDEFS
-    if (oep->fep->f_un.sf != NULL) {
-      sf_oep = oep;
-      sf_load(oep->fep->f_un.sf, sfcallback);
-      sf_delete(oep->fep->f_un.sf);
-      oep->fep->f_un.sf = NULL;
+    if (oep->o_un.sf != NULL) {
+      sf_open_inplace(oep->fep->fname, oep->o_un.sf, map(0, oep->size), oep->size, SFOPEN_INPUT, sfcallback, oep);
+      sf_delete(oep->o_un.sf);
+      oep->o_un.sf = NULL;
     }
 #else
     UNUSED(oep);
@@ -3566,11 +3597,11 @@ static void load1(struct oentry *oep)
         /* cached object file... */
         lock = lock_in_cache(oep->fep->filebuffer);
     mark_stack();
-    if (oep->fep->type & AOUT_MASK)
+    if (oep->type & AOUT_MASK)
         load1_aout(oep);
-    else if (oep->fep->type & SYMDEFS_MASK)
+    else if (oep->type & SYMDEFS_MASK)
         load1_symdefs(oep);
-    else if (oep->fep->type & ELF_MASK)
+    else if (oep->type & ELF_MASK)
         load1_elf(oep);
     else
         load1_aof(oep);
@@ -3592,7 +3623,7 @@ static int special_aof(struct oentry *oep)
     aof_area *area;
     aof_symbol *symt = 0;
 
-    if (oep->fep->type & NOT_AOF_MASK) return 0;
+    if (oep->type & NOT_AOF_MASK) return 0;
 
     ce = findchunk(oep->o_un.cfhdr, OBJ_HEAD); /* Read in header */
     hdr = (aof_header *) map_tvtv(ce->cfe_offset, ce->cfe_size);
@@ -3694,15 +3725,15 @@ static int32 areagtr(struct aentry *cs, struct aentry *ct)
     if (csa == cta)
     /* AREAs are unordered by attribute... */
     {   if (cs->oep && ct->oep)
-        {   if (cs->oep->fep->type & AOUT_MASK)
+        {   if (cs->oep->type & AOUT_MASK)
             {   /* first area is a.out... */
-                if (!(ct->oep->fep->type & AOUT_MASK))
+                if (!(ct->oep->type & AOUT_MASK))
                 {   /* 2nd area isn't a.out... so order by output type */
                     if (output_type & AOUT_MASK) return 0;
                     return 1;
                 }
             }
-            else if (ct->oep->fep->type & AOUT_MASK)
+            else if (ct->oep->type & AOUT_MASK)
             {   /* 1st area isn't a.out and 2nd area is - order by o/p type */
                 if (output_type & AOUT_MASK) return 1;
                 return 0;
@@ -4793,7 +4824,7 @@ static void add_area_xrefs(struct aentry *aep)
     if (aep->relocs == 0 || shl_flag && (aep->attrs & AOF_CODEAT)) return;
 
     setobject(aep->oep);
-    if (aep->oep->fep->type & AOUT_MASK)
+    if (aep->oep->type & AOUT_MASK)
     {
 #ifdef TARGET_HAS_AOUT
         struct relocation_info *reloc, *r, *rend;
@@ -4829,7 +4860,7 @@ case N_BSS:
         }
 #endif /* TARGET_HAS_AOUT */
     }
-    else if (aep->oep->fep->type & ELF_MASK)
+    else if (aep->oep->type & ELF_MASK)
     {
 #ifdef TARGET_HAS_ELF
 msg("1add_area_xrefs for an ELF file is not implemented yet");
@@ -5829,7 +5860,7 @@ static void load2(struct aentry *aep)
     setobject(aep->oep);
     areasiz = aep->areasiz;
     area = map(aep->areaoff, areasiz);
-    if (aep->oep->fep->type & AOUT_MASK) {
+    if (aep->oep->type & AOUT_MASK) {
 #ifdef TARGET_HAS_AOUT
         struct relocation_info *reloc, *r, *rend;
         struct aentry *tarea, *darea, *zarea;
@@ -5974,7 +6005,7 @@ nostrback:
         }
 #endif /* TARGET_HAS_AOUT */
     }
-    else if (aep->oep->fep->type & SYMDEFS_MASK) {
+    else if (aep->oep->type & SYMDEFS_MASK) {
 #ifdef TARGET_HAS_SYMDEFS
         /* Actually, no work to do - we already dumped everything into
          * the global symbol table during the load1 phase
@@ -6146,7 +6177,7 @@ so that we can generate a diagnostic for unlinked components.
         }
         for (r = reloc, rend = reloc + aep->relocs; r<rend; r++)
         {
-            if (aep->oep->fep->type & ELF_MASK) {
+            if (aep->oep->type & ELF_MASK) {
 #ifdef TARGET_HAS_ELF
                 /* Just in time translation of ELF relocations into AOF relocations */
                 if (elf_translate_relocation(r, elfreloc++, aep, area, areasiz)) {
@@ -6488,7 +6519,7 @@ static void write_symt(void)
 
             oep = objectlist;
             while (oep) {
-                if (oep->fep->type & AOUT_MASK) {
+                if (oep->type & AOUT_MASK) {
                     setobject(oep);
                     code = oep->arealist[CODE_AREA];
                     data = oep->arealist[DATA_AREA];
@@ -7422,6 +7453,7 @@ static struct oentry **addobject(struct oentry **next,
     *next = oep;
     oep->oname = strcpy(halloc((int32)(size_t)(strlen(mn) + 1)), mn);
     oep->fep = fep;
+    oep->type = fep->type;
     oep->o_un.hdrptr = hdr; /* fixme */
     oep->offset = offset;
     oep->size = size;
@@ -7624,34 +7656,74 @@ static int enter_alf_symbols(struct fentry *fep)
         }
     }
 
-    /* library has no symt */
+    /* library has no symt OR an out of date symt */
     for (d = diry; d < diryend;
         d = (lib_direntry *) ((char *) d + hv(d->lib_entrylength)))
     {
-        cf_header *cfhdr;
         aof_header *aofhdr;
         aof_symbol *aofsymt, *syend;
         char *strt;
         int32 nsyms;
+        union fentry_un f_un;
+        int32 objtype;
+        int32 chunkidx = hv(d->lib_chunkidx);
 
-        if (d->lib_chunkidx == 0) continue;
-        ce = fep->f_un.cfhdr->cf_chunks + hv(d->lib_chunkidx);
+        if (chunkidx == 0) continue;
+        ce = fep->f_un.cfhdr->cf_chunks + chunkidx;
         setfilesection(fep, hv(ce->cfe_offset), hv(ce->cfe_size));
-        cfhdr = (cf_header *) map(0, sizeof(cf_header));
-        cfhdr = (cf_header *) map(0, sizeof(cf_header) +
-            hv(cfhdr->cf_maxchunks) * sizeof(cf_entry));
-        ce = findchunk(cfhdr, OBJ_HEAD);
-        aofhdr = (aof_header *) map_tvtv(ce->cfe_offset, ce->cfe_size);
-        ce = findchunk(cfhdr, OBJ_SYMT);
-        aofsymt = (aof_symbol *) map_tvtv(ce->cfe_offset, ce->cfe_size);
-        ce = findchunk(cfhdr, OBJ_STRT);
-        strt = (char *) map_tvtv(ce->cfe_offset, ce->cfe_size);
-        nsyms = hv(aofhdr->aof_nsyms);
-        for (syend = aofsymt + nsyms; aofsymt < syend; aofsymt++)
-        {   if ((hv(aofsymt->sym_AT) & SYM_REFDEFMASK) !=
-                                       SYM_GLOBALDEFAT) continue;
-            enter(strt + hv(aofsymt->sym_name), &libsymtable)->
-                h_un.intval = hv(d->lib_chunkidx);
+        objtype = filetype_ident(fep->fname, hv(ce->cfe_size), &f_un);
+        if (objtype == AOF) {
+            ce = findchunk(f_un.cfhdr, OBJ_HEAD);
+            aofhdr = (aof_header *) map_tvtv(ce->cfe_offset, ce->cfe_size);
+            ce = findchunk(f_un.cfhdr, OBJ_SYMT);
+            aofsymt = (aof_symbol *) map_tvtv(ce->cfe_offset, ce->cfe_size);
+            ce = findchunk(f_un.cfhdr, OBJ_STRT);
+            strt = (char *) map_tvtv(ce->cfe_offset, ce->cfe_size);
+            nsyms = hv(aofhdr->aof_nsyms);
+            for (syend = aofsymt + nsyms; aofsymt < syend; aofsymt++)
+            {   if ((hv(aofsymt->sym_AT) & SYM_REFDEFMASK) !=
+                                           SYM_GLOBALDEFAT) continue;
+                enter(strt + hv(aofsymt->sym_name), &libsymtable)->h_un.intval = chunkidx;
+            }
+        }
+#ifdef TARGET_HAS_ELF
+        else if (objtype == ELF) {
+            Elf32_Shdr *s, *strsec;
+            char *symbase;
+            int32 siz, symsize, nsy, symname, t1;
+            int32 nsecs = hv(f_un.elfhdr->e_shnum);
+
+            siz = nsecs * hv(f_un.elfhdr->e_shentsize);
+            s = (Elf32_Shdr *) map(hv(f_un.elfhdr->e_shoff), siz);
+
+            for (t1 = 0; t1 < nsecs; ++t1) {
+                if (hv(s[t1].sh_type) != SHT_SYMTAB) continue;
+                symsize = hv(s[t1].sh_entsize);
+                if (symsize < sizeof(Elf32_Sym) || (symsize & ALIGN_MASK)) continue;
+                strsec = s + hv(s[t1].sh_link);
+                strt = map_tvtv(strsec->sh_offset, strsec->sh_size);
+                nsyms = hv(s[t1].sh_size) / symsize;
+                symbase = map_tvtv(s[t1].sh_offset, s[t1].sh_size);
+                for (nsy = 0; nsy < nsyms; ++nsy) {
+                    Elf32_Sym *sy = (Elf32_Sym *) (symbase + nsy * symsize);
+                    if ((ELF32_ST_BIND(sy->st_info) == STB_GLOBAL ||
+                        ELF32_ST_BIND(sy->st_info) == STB_WEAK) &&
+                        (tvs(sy->st_shndx) != SHN_UNDEF) &&
+                        ((symname = hv(sy->st_name)) != 0))
+                            enter(strt + symname, &libsymtable)->h_un.intval = chunkidx;
+                }
+            }
+        }
+#endif
+#ifdef TARGET_HAS_SYMDEFS
+        else if (objtype == SYMDEFS) {
+            int32 size = hv(ce->cfe_size);
+            sf_open_inplace(fep->fname, f_un.sf, map(0, size), size, SFOPEN_INPUT, sflibcallback, &chunkidx);
+            sf_delete(f_un.sf);
+        }
+#endif
+        else {
+            msg(warn_libunkobj(fep->fname));
         }
         setfile(fep);
     }
@@ -7665,6 +7737,8 @@ static void load_whole_alf_lib(struct fentry *fep)
     struct oentry **lastobj;
     char *hdr;
     int32 ofs, siz;
+    int32 objtype;
+    union fentry_un hdrptr;
 
     ce = findchunk(fep->f_un.cfhdr, LIB_DIRY);
     diry = (lib_direntry *) map_tvtv(ce->cfe_offset, ce->cfe_size);
@@ -7685,10 +7759,11 @@ static void load_whole_alf_lib(struct fentry *fep)
 fprintf(stderr, "stacked %s, size = %ld\n", diry->lib_entry, siz);
 #endif
         }
-        hdr = map_perm(0, sizeof(struct cf_header));
-        hdr = map_perm(0, sizeof(struct cf_header)+
-            hv(((cf_header *) hdr)->cf_maxchunks)*sizeof(cf_entry));
-        nextobj = addobject(nextobj, diry->lib_entry, fep, hdr, ofs, siz);
+        objtype = filetype_ident(fep->fname, siz, &hdrptr);
+        if ((objtype & (OBJECT_MASK|LIB_MASK)) != OBJECT_MASK)
+            msg(fatal_libbadobj(fep->fname));
+        nextobj = addobject(nextobj, diry->lib_entry, fep, hdrptr.hdrptr, ofs, siz);
+        (*lastobj)->type = objtype;
         (*lastobj)->objbuffer = sectinram;
         load1(*lastobj);
         setfile(fep);
@@ -7734,6 +7809,8 @@ static int load_alf_lib(struct fentry *fep)
         int32 chunkindex, ofs, siz;
         char *hdr;
         int again = 1;
+        int32 objtype;
+        union fentry_un hdrptr;
 
       while (again)
       { if (verboseflag)
@@ -7764,12 +7841,13 @@ static int load_alf_lib(struct fentry *fep)
 fprintf(stderr, "stacked %s, size = %ld\n", mname, siz);
 #endif
                 }
-                hdr = map_perm(0, sizeof(struct cf_header));
-                hdr = map_perm(0, sizeof(struct cf_header) +
-                    hv(((cf_header *) hdr)->cf_maxchunks)*sizeof(cf_entry));
+                objtype = filetype_ident(fep->fname, siz, &hdrptr);
+                if ((objtype & (OBJECT_MASK|LIB_MASK)) != OBJECT_MASK)
+                    msg(fatal_libbadobj2(fep->fname, mname, h->name+2));
                 if (verboseflag) msg(info_loadmemb(mname, h->name+2));
                 lastobj = nextobj;
-                nextobj = addobject(nextobj, mname, fep, hdr, ofs, siz);
+                nextobj = addobject(nextobj, mname, fep, hdrptr.hdrptr, ofs, siz);
+                (*lastobj)->type = objtype;
                 (*lastobj)->objbuffer = sectinram;
                 load1(*lastobj);
                 if (verboseflag >= 3) {
