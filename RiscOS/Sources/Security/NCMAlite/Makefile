@@ -123,7 +123,7 @@ BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 	  ncma_utils.o ncma_dial.o kprintf.o  \
 	  ncma_bootb.o task.o \
 	  ncma_tags.o  ncma_cache.o ncma_uid.o ncma_net.o \
-	  usermode.o areacode.o dbugzm.o ncma_fx.o
+	  usermode.o areacode.o dbugzm.o ncma_fx.o init.o
 
 ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = oz.resources ${BASEOBJS}
