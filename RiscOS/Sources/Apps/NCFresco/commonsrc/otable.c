@@ -43,12 +43,6 @@
 
 void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
-    if (gbf_active(GBF_NEW_FORMATTER))
-    {
-	TABDBG(("otable_size: new formatter so not doing anything\n"));
-    }
-    else
-    {
         rid_table_item *table = ((rid_text_item_table *)ti)->table;
         rid_table_caption *capt = table->caption;
         rid_table_cell *cell;
@@ -81,7 +75,6 @@ void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    }
         }
         TABDBG(("otable_size done, caller = %s\n", caller(1) ) );
-    }
 }
 
 /* This is the main function to render a stream of text, it is called
@@ -159,9 +152,6 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
     left = g->x0;
     right = g->x1;
 
-  if (update != object_redraw_HIGHLIGHT)
-  {
-    
     RENDBGN(("Rendering table.  ox=%d, oy=%d. size = %dx%d\n", ox, oy, table->size.x, table->size.y));
     RENDBGN(("Top work area = %d, bottom = %d\n", top, bot));
     RENDBGN(("Left = %d, right = %d, capt_size = %d\n", left, right, capt_size));
@@ -370,7 +360,6 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	    }
 	}
     }
-  } /* update != 2 */
 
     /* Any caption */
 
@@ -409,36 +398,14 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 		break;
 	    }
 	    else if (((ox + dx) < g->x1) &&	/* Stream.left to left of clip.right */
-		     ((ox + dx + cell->stream.fwidth) > g->x0) ) /* Stream.right to right of clip.left */
+		     ((ox + dx + cell->stream.fwidth) > g->x0) ) /* Stream.right to right of clip.lrft */
 	    {
-	        /* pdh: not sure I want to put my name to this horrible cheat
-	         * to get background colours right. It works though.
-	         */
-	        int bgcol = cell->stream.bgcolour;
-	        BOOL swapped = FALSE;
-	        int oldbgt = 0;
-
-	        if ( bgcol )
-	        {
-	            bgcol = doc->rh->colours.back;
-	            doc->rh->colours.back = cell->stream.bgcolour & ~1;
-	            oldbgt = doc->rh->bgt;
-	            doc->rh->bgt |= rid_bgt_COLOURS;
-	            swapped = TRUE;
-	        }
-
 		stream_render(&cell->stream, doc,
 			      ox + dx, oy + dy,
 			      left, top - dy,
 			      right, bot - dy,
 			      fs,
 			      g, update );
-
-                if ( swapped )
-                {
-                    doc->rh->colours.back = bgcol;
-                    doc->rh->bgt = oldbgt;
-                }
 	    }
         }
     }

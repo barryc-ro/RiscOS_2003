@@ -26,8 +26,6 @@
 #define fdebugf 1?0:fprintf
 #endif
 
-#define DEFEAT_COALESCE 0
-
 /* Replaces all occurrences of one character with another */
 
 static void strrepl( char *s, char from, char to )
@@ -70,15 +68,8 @@ void coalesce( rid_header *rh, rid_text_item *ti, rid_text_item *dont )
 {
 #ifndef BUILDERS
     rid_text_item_text *tit = (rid_text_item_text*)ti, *tit2;
+/*     rid_text_stream *st;    */
     rid_pos_item *line = ti->line;      /* May be NULL */
-
-#if DEBUG
-    int tried = 0;
-#endif
-
-#if DEFEAT_COALESCE
-    return;
-#endif
 
     if ( rh == NULL
          || ti == NULL
@@ -87,8 +78,7 @@ void coalesce( rid_header *rh, rid_text_item *ti, rid_text_item *dont )
 
     fdebugf( stderr, "coalesce: %p - %p\n", ti, dont );
 
-    while ( tit && tit->base.line == line && (&tit->base) != dont
-            && (tit->base.flag & rid_flag_LINE_BREAK) == 0 )
+    while ( tit && tit->base.line == line && (&tit->base) != dont )
     {
         tit2 = (rid_text_item_text*) tit->base.next;
 
@@ -111,10 +101,6 @@ void coalesce( rid_header *rh, rid_text_item *ti, rid_text_item *dont )
                 char *s2 = rh->texts.data + tit2->data_off;
                 int len = strlen(s);
                 char *expect;
-
-#if DEBUG
-                tried++;
-#endif
 
                 fdebugf( stderr, "coalesce: flags 0x%X 0x%X %s\n",
                          tit->base.flag, tit2->base.flag, s );
@@ -166,11 +152,6 @@ void coalesce( rid_header *rh, rid_text_item *ti, rid_text_item *dont )
 
         tit = tit2;
     }
-
-#if DEBUG
-    fdebugf( stderr,  "coalesce: tried %d words\n", tried );
-#endif
-
 #endif
 }
 
@@ -178,6 +159,7 @@ void un_coalesce( rid_header *rh, rid_text_item *ti )
 {
 #ifndef BUILDERS
     rid_text_item_text *tit = (rid_text_item_text*) ti;
+/*     rid_text_stream *st; */
     rid_pos_item *line;
     int count;
     char *s;
@@ -192,6 +174,8 @@ void un_coalesce( rid_header *rh, rid_text_item *ti )
     if ( rh == NULL
          || ti == NULL
          || ti->tag != rid_tag_TEXT
+/*          || (line = ti->line) == NULL */
+/*          || (st = line->st) == NULL */
        )
         return;
 
@@ -235,6 +219,11 @@ void un_coalesce( rid_header *rh, rid_text_item *ti )
 
     ptr->base.next = (rid_text_item*)ti->next;
     ti->next = (rid_text_item*)list;
+
+    /*
+    if ( st->text_last == ti )
+        st->text_last = &ptr->base;
+    */
 
     if ( tit->base.flag & rid_flag_LINE_BREAK )
         ptr->base.flag |= rid_flag_LINE_BREAK;

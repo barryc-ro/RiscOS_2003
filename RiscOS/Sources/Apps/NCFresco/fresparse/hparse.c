@@ -209,7 +209,7 @@ static HTMLCTX * core_HTMLToRiscos (void /*HTStream * output */ )
 
     me->magic = HTML_MAGIC;
 
-#if 0
+#if DEBUG
     fprintf(stderr, "HTMLCTX created at %p, magic %x\n", me, me->magic);
 #endif
 
@@ -439,8 +439,6 @@ static rid_header *pparse_html_rh(void *h)
 
 static void html_free_context(HTMLCTX *htmlctx)
 {
-    mm_free(htmlctx->basetarget);
-
     mm_free(htmlctx);
 }
 

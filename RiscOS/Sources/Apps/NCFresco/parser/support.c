@@ -196,14 +196,7 @@ extern char *strip_stringdup(STRING s)
 
 char *valuestringdup(const VALUE *v)
 {
-    switch (v->type)
-    {
-    case value_string:
-	return stringdup(v->u.s);
-    case value_void:		/* for some items we need to be able to distinguish between "" and NULL, ie empty and not present */
-	return mm_calloc(1, 1);
-    }
-    return NULL;
+    return v->type == value_string ? stringdup(v->u.s) : NULL;
 }
 
 /*****************************************************************************/

@@ -191,7 +191,9 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
     }
     else if (pi->next == NULL)
     {
-	LOCATEDBG((stderr, "No items\n"));
+#if 0
+	fprintf(stderr, "No items\n");
+#endif
     }
     else
     {
@@ -207,10 +209,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	    if (pi->floats->left)
 	    {
 		float_l = pi->floats->left->ti;
-		/* pdh: don't add this to left_margin as that includes floater
-		 * width these days
 		hpos += float_l->width;
-		 */
 	    }
 	    if (pi->floats->right)
 		float_r = pi->floats->right->ti;
@@ -234,7 +233,9 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	{
 	    if (*x < pi->left_margin)
 	    {
-		LOCATEDBG((stderr, "Pointer to the left of all items\n"));
+#if 0
+		fprintf(stderr, "Pointer to the left of all items\n");
+#endif
 	    }
 	    else
 	    {
@@ -248,7 +249,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 			hpos += ti2->pad;
 			hpos += pi->leading;
 
-			if (*x < hpos || ti2->width == MAGIC_WIDTH_HR)
+			if (*x < hpos || ti2->width == -1)
 			{
 			    *y -= (pi->top - pi->max_up);         /* Relative to baseline */
 			    *x -= ohpos ;
@@ -262,8 +263,9 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 
 	if (found)
 	{
-	    LOCATEDBG((stderr, "Found item\n"));
-
+#if 0
+	    fprintf(stderr, "Found item\n");
+#endif
 	    *ti = ti2;
 
 	    if (ti2->tag == rid_tag_TABLE)
@@ -273,7 +275,9 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	}
     }
 
-    LOCATEDBG((stderr, "Locate pointer done: %p at %d, %d\n", *ti, *x, *y));
+#if 0
+    fprintf(stderr, "Locate pointer done: %p at %d, %d\n", *ti, *x, *y);
+#endif
 
     return NULL;
 }
@@ -298,23 +302,24 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
 
     if (pi->floats)
     {
-	LOCATEDBG((stderr, "Have floats\n"));
-
+#if DEBUG
+	fprintf(stderr, "Have floats\n");
+#endif
 	if (pi->floats->left)
 	{
-	    LOCATEDBG((stderr, "Left float: left->ti=%p, left->pi=%p\n",
-		    pi->floats->left->ti, pi->floats->left->pi));
-
+#if DEBUG
+	    fprintf(stderr, "Left float: left->ti=%p, left->pi=%p\n",
+		    pi->floats->left->ti, pi->floats->left->pi);
+#endif
 	    float_l = pi->floats->left->ti;
-	    /* pdh: not with the new formatter it doesn't
 	    hpos += float_l->width;
-	     */
 	}
 	if (pi->floats->right)
 	{
-	    LOCATEDBG((stderr, "Right float: right->ti=%p, right->pi=%p\n",
-		    pi->floats->right->ti, pi->floats->right->pi));
-
+#if DEBUG
+	    fprintf(stderr, "Right float: right->ti=%p, right->pi=%p\n",
+		    pi->floats->right->ti, pi->floats->right->pi);
+#endif
 	    float_r = pi->floats->right->ti;
 	}
     }
@@ -413,10 +418,6 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
  * from the backend and from the code for rendering tables to render
  * the caption and each cell. */
 
-#if DEBUG
-extern char *item_names[];
-#endif
-
 void stream_render(rid_text_stream *stream, antweb_doc *doc,
 		   const int ox, const int oy, /* screen origin of text stream */
 		   const int left, const int top, /* Area being redrawn in local coords */
@@ -490,16 +491,17 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 		float_r = NULL;
 	    }
 
-            /* pdh: left_margin now includes float width
 	    if (float_l)
 		hpos += float_l->width;
-             */
 	}
 
 	RENDBGN(("Base line at %d, hpos starts at %d\n", bline, hpos));
 
 	for (ti = pi->first; ti && ti != pi->next->first; ti = rid_scanf(ti) /*ti->next*/ )
 	{
+#if DEBUG
+	    extern char *item_names[];
+#endif
 	    RENDBGN(("%s item at %p hpos=%d, width=%d\n", item_names[ti->tag], ti, hpos, ti->width));
 
 	    if (hpos >= right)
@@ -507,7 +509,7 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 	    if ((ti->flag & rid_flag_CLEARING) ||
 		(ti->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) == 0)
 	    {
-		if ((ti->width == MAGIC_WIDTH_HR) || ((hpos + ti->width + ti->pad) >= left) )
+		if ((ti->width == -1) || ((hpos + ti->width + ti->pad) >= left) )
 		{
 		    RENDBGN(("Rendering item at %d,%d\n", hpos, bline));
 
@@ -619,10 +621,8 @@ void stream_write_as_drawfile(be_doc doc, rid_text_stream *stream,
 		float_r = NULL;
 	    }
 
-            /* pdh: left_margin include floater width now
 	    if (float_l)
 		hpos += float_l->width;
-             */
 	}
 
 	bb.x0 = ox + dwidth;

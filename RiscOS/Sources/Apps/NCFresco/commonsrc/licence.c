@@ -21,7 +21,7 @@
 
 
 /*                            0123456789012345678901234567 89012345678901234567 */
-#if STBWEB_ROM || (defined(STBWEB) && PRODUCTION)
+#if STBWEB_ROM
 static char key_string[48] = "Acorn Network Computer ROM\0    YWqg=*g&LNA&Wqcn\0"; /* This is OK */
 /* static char key_string[48] = "Acorn Network Computer ROM\0    GgprzA6$XADoyfe7\0"; */ /* This is OK */
 #elif DEVELOPMENT

@@ -58,7 +58,7 @@ static int fe_map_update_position_to(int x, int y)
     }
 
     if (limit)
-	return flags | movepointer();
+	return flags | be_link_MOVE_POINTER;
 
     frontend_pointer_set_position(NULL, x, y);
 

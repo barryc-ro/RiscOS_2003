@@ -33,11 +33,6 @@
 
 #include "sgmlparser.h"
 #include "gbf.h"
-#include "util.h"
-
-#ifdef PLOTCHECK
-#include "rectplot.h"
-#endif
 
 /*****************************************************************************
 
@@ -99,11 +94,11 @@ static VALUE sgml_do_parse_enum_void_case(SGMLCTX *context, ATTRIBUTE *attribute
     if (gbf_active(GBF_GUESS_ENUMERATIONS))
     {
 	PRSDBGN(("Attempting to guess enumeration '%.*s'\n", string.bytes, string.ptr));
-
+	
 	for (w = string.bytes - 1; w > 0; w--)
 	{
 	    list = attribute->templates;
-
+	    
 	    for (v.u.i = 0; list->ptr != NULL; list++, v.u.i++)
 	    {
 		if ( list->bytes >= w &&
@@ -213,7 +208,7 @@ extern VALUE sgml_do_parse_string_void(SGMLCTX *context, ATTRIBUTE *attribute, S
 	return v;
     }
 
-    /* @@@@ NvS: I think that this should be translating entities in the string,
+    /* @@@@ NvS: I think that this should be translating entities in the string, 
        SJM: entities handled at lower level */
 
     v.type = value_string;
@@ -263,14 +258,6 @@ extern VALUE sgml_do_parse_integer_void(SGMLCTX *context, ATTRIBUTE *attribute, 
     {
 	v.type = value_void;
 	return v;
-    }
-
-    /* pdh: bodge bodge bodge */
-    if ( !strcasecomp( string.ptr, "no" ) )
-    {
-        v.u.i = 0;
-        v.type = value_integer;
-        return v;
     }
 
     v.u.i = (int)strtol(string.ptr, &ptr, 10);
@@ -460,7 +447,6 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
     }
 
     v.u.f = strtod(string.ptr, &ptr);
-
     if (ptr == string.ptr || string.ptr + string.bytes < ptr)
 	goto bad;
     else
@@ -510,10 +496,6 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
     else if (string.bytes >= 1 && string.ptr[0] == '%')
     {
 	v.type = value_pcunit;
-	/* DAF: 970519: Global behaviour - no individual percentage
-           bigger than 100% is acceptable. Clip rather than ignore */
-	if (v.u.f > 100.0)
-	    v.u.f = 100.0;
     }
     else if (string.bytes >= 1 && string.ptr[0] == '*')
     {
@@ -526,18 +508,17 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
 
 #ifdef PLOTCHECK
     {
-	/*extern int fwidth_scale;*/
+	extern int fwidth_scale;
 	if (v.type == value_absunit)
 	    v.u.f /= fwidth_scale;
     }
 #endif
 
-
     return v;
 
 bad:
 #if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad unit value '%.*s'",
+    sgml_note_bad_attribute(context, "Bad unit value '%.*s'",  
 			    min(string_in.bytes, MAXSTRING), string_in.ptr);
 #endif
 
@@ -595,7 +576,7 @@ extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, 
     for (i = 0; i < v.u.l.num; i++)
     {
         STRING el;
-
+	
 	el.ptr = strtok(use, " ,\t\r\n");
 	use = NULL;
 
@@ -643,66 +624,5 @@ extern VALUE sgml_do_parse_enum_string(SGMLCTX *context, ATTRIBUTE *attribute, S
     return sgml_do_parse_string(context, attribute, string);
 }
 
-/*****************************************************************************/
-
-extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, STRING string)
-{
-    VALUE v;
-
-    if (string.bytes == 0)
-    {
-	v.type = value_void;
-	return v;
-    }
-
-    switch (string.ptr[0])
-    {
-    case 'n':
-    case 'N':
-    case '0':
-	v.type = value_bool;
-	v.u.i = 0;
-	break;
-
-    case 'y':
-    case 'Y':
-    case '1':
-	v.type = value_bool;
-	v.u.i = 1;
-	break;
-
-    default:
-#if SGML_REPORTING
-	sgml_note_bad_attribute(context, "Bad bool value '%.*s'",  min(string.bytes, MAXSTRING), string.ptr);
-#endif
-	v.type = value_none;
-	break;
-    }
-
-    return v;
-}
-
-/*****************************************************************************/
-
-extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, STRING string)
-{
-    VALUE v = sgml_do_parse_colour_tuple(context, attribute, string);
-
-    if (v.type == value_tuple)
-	return v;
-
-    v = colour_lookup(string);
-
-    if (v.type == value_tuple)
-	return v;
-
-#if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string.bytes, MAXSTRING), string.ptr);
-#endif
-
-    return v;
-}
-
-/*****************************************************************************/
 
 /* eof attrparse.c */

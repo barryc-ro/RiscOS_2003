@@ -174,7 +174,6 @@ static key_list stb_function_keys[] =
 #define stb_resizing_keys	0
 #define stb_toolbar_keys	0
 #define stb_osk_keys		0
-#define stb_frame_link_keys		0
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -293,7 +292,7 @@ static key_list nc_resizing_keys[] =
     { 0 }
 };
 
-/* mode keyboard = FALSE */
+/* mode keyboard = FALSE */   
 
 static key_list nc_movement2_keys[] =
 {
@@ -319,7 +318,7 @@ static key_list nc_movement2_keys[] =
     { 0 }
 };
 
-/* mode keyboard = TRUE */
+/* mode keyboard = TRUE */   
 
 static key_list nc_movement1_keys[] =
 {
@@ -362,7 +361,6 @@ static key_list nc_movement1_keys[] =
 #define nc_toolbar_keys 0
 #define nc_codec_keys	0
 #define nc_osk_keys	0
-#define nc_frame_link_keys	0
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -417,15 +415,13 @@ static key_list rca_web_keys[] =
     { ctrl('a'),			fevent_HOTLIST_ADD + fevent_WINDOW },
     { ctrl('r'),			fevent_RELOAD + fevent_WINDOW },
 
-    { akbd_Fn12,			fevent_TOGGLE_STATUS },
-
     { 30,				fevent_HOME + fevent_WINDOW },
     { kbd_handset_HOME,			fevent_HOME + fevent_WINDOW },
 
     { kbd_handset_PRINT,		fevent_PRINT },
     { akbd_PrintK,			fevent_TOOLBAR_PRINT + fevent_WINDOW },
 
-    { kbd_handset_MENU,			fevent_TOOLBAR_DETAILS },
+    { kbd_handset_MENU,			fevent_INFO_PAGE },
 
     { kbd_handset_TOOLBAR,          fevent_TOGGLE_STATUS },
     { kbd_handset_OPEN,             fevent_OPEN_URL+fevent_WINDOW },
@@ -440,19 +436,13 @@ static key_list rca_web_keys[] =
     { kbd_rca_GOTO,		fevent_OPEN_URL },
     { kbd_rca_SEARCH,		fevent_SEARCH_PAGE },
     { kbd_rca_SEND,		fevent_SEND_URL },
-    { kbd_rca_INFO,		fevent_TOOLBAR_DETAILS },
+    { kbd_rca_INFO,		fevent_INFO_PAGE },
 
     { 0 }
 };
 
 static key_list rca_desktop_keys[] =
 {
-    { kbd_handset_MENU,		fevent_OFFLINE_PAGE },
-
-    { kbd_handset_BACK,         fevent_TOOLBAR_EXIT },
-
-    { kbd_rca_SOUND,		fevent_SOUND_TOGGLE },
-
     { 0 }
 };
 
@@ -461,7 +451,7 @@ static key_list rca_resizing_keys[] =
     { 0 }
 };
 
-/* mode keyboard = FALSE */
+/* mode keyboard = FALSE */   
 
 static key_list rca_movement2_keys[] =
 {
@@ -490,7 +480,7 @@ static key_list rca_movement2_keys[] =
     { 0 }
 };
 
-/* mode keyboard = TRUE */
+/* mode keyboard = TRUE */   
 
 #define rca_movement1_keys	rca_movement2_keys
 
@@ -524,31 +514,19 @@ static key_list rca_toolbar_keys[] =
 
     { 13,                   fevent_TOOLBAR_ACTIVATE },
 
-    { akbd_PageUpK,         fevent_SCROLL_PAGE_UP + fevent_WINDOW, key_list_REPEAT },
-    { akbd_PageDownK,       fevent_SCROLL_PAGE_DOWN + fevent_WINDOW, key_list_REPEAT },
+    { akbd_PageUpK,         fevent_SCROLL_PAGE_UP, key_list_REPEAT },
+    { akbd_PageDownK,       fevent_SCROLL_PAGE_DOWN, key_list_REPEAT },
 
-    { akbd_Sh + akbd_Ctl + akbd_UpK,    fevent_SCROLL_UP + fevent_WINDOW, key_list_REPEAT },
-    { akbd_Sh + akbd_Ctl + akbd_DownK,  fevent_SCROLL_DOWN + fevent_WINDOW, key_list_REPEAT },
-    { akbd_Sh + akbd_Ctl + akbd_LeftK,  fevent_SCROLL_LEFT + fevent_WINDOW, key_list_REPEAT },
-    { akbd_Sh + akbd_Ctl + akbd_RightK, fevent_SCROLL_RIGHT + fevent_WINDOW, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_UpK,    fevent_SCROLL_UP, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_DownK,  fevent_SCROLL_DOWN, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_LeftK,  fevent_SCROLL_LEFT, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_RightK, fevent_SCROLL_RIGHT, key_list_REPEAT },
 
     { 0 }
 };
 
 static key_list rca_osk_keys[] =
 {
-    { 0 }
-};
-
-static key_list rca_frame_link_keys[] =
-{
-    { akbd_LeftK,           fevent_FRAME_LINK_LEFT, key_list_REPEAT },
-    { akbd_RightK,          fevent_FRAME_LINK_RIGHT, key_list_REPEAT },
-    { akbd_UpK,             fevent_FRAME_LINK_UP, key_list_REPEAT },
-    { akbd_DownK,           fevent_FRAME_LINK_DOWN, key_list_REPEAT },
-
-    { 13,		    fevent_FRAME_LINK_ACTIVATE, 0 },
-
     { 0 }
 };
 
@@ -561,11 +539,8 @@ static key_list platform_riscos_keys[] =
     { akbd_Ctl + akbd_Fn+2,		    fevent_CLOSE+fevent_WINDOW },
     { akbd_Sh + akbd_Ctl + akbd_Fn + 1,	    fevent_GLOBAL_TOGGLE_ANTI_TWITTER },
     { akbd_Sh + akbd_Ctl + akbd_Fn11,	    fevent_GLOBAL_OPEN_MEM_DUMP },
-
-    { 27, fevent_TOOLBAR_EXIT },
-    { akbd_Fn+4, fevent_HISTORY_BACK+fevent_WINDOW },
-    { akbd_Fn+5, fevent_HISTORY_FORWARD+fevent_WINDOW },
-
+    { 27, fevent_TOGGLE_STATUS },
+    
     { 0 }
 };
 
@@ -590,7 +565,6 @@ static key_list platform_trial_keys[] =
 #define key_map_TOOLBAR		6
 #define key_map_WEB		7
 #define key_map_OSK		8
-#define key_map_FRAME_LINK	9
 
 static key_list *get_key_map(int map)
 {
@@ -617,8 +591,6 @@ static key_list *get_key_map(int map)
 	    return stb_web_keys;
 	case key_map_OSK:
 	    return stb_osk_keys;
-	case key_map_FRAME_LINK:
-	    return stb_frame_link_keys;
 	}
 	break;
 
@@ -643,8 +615,6 @@ static key_list *get_key_map(int map)
 	    return nc_web_keys;
 	case key_map_OSK:
 	    return nc_osk_keys;
-	case key_map_FRAME_LINK:
-	    return nc_frame_link_keys;
 	}
 	break;
 
@@ -669,8 +639,6 @@ static key_list *get_key_map(int map)
 	    return rca_web_keys;
 	case key_map_OSK:
 	    return rca_osk_keys;
-	case key_map_FRAME_LINK:
-	    return rca_frame_link_keys;
 	}
 	break;
     }
@@ -692,23 +660,12 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     int chcode = e->data.key.chcode;
     int event = -1;
 
-    if (fe_map_view() == NULL )
-	switch (chcode &~ (akbd_Sh | akbd_Ctl))
-    {
-    case akbd_LeftK:
-    case akbd_RightK:
-    case akbd_UpK:
-    case akbd_DownK:
-	fe_pointer_mode_update(pointermode_OFF);
-	break;
-    }
-
     if (v == NULL && cs->w == tb_status_w())
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_TOOLBAR));
     }
 
-    if (event == -1 && frameutils_are_we_resizing() )
+    if (event == -1 && resizing_view)
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_RESIZING));
         if (event == -1)
@@ -730,15 +687,16 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     }
 
     if (event == -1 && on_screen_kbd)
+    {
 	event = fe_key_lookup(chcode, get_key_map(key_map_OSK));
-
+	if (event == -1)
+	    event = 0;
+    }
+    
     if (event == -1 && fe_writeable_handle_keys(v, chcode))
     {
         event = 0;  /* key handled, no event */
     }
-
-    if (event == -1 && fe_frame_link_selected(v))
-        event = fe_key_lookup(chcode, get_key_map(key_map_FRAME_LINK));
 
     if (event == -1)
 	event = fe_key_lookup(chcode, get_key_map(key_map_MOVEMENT));
@@ -771,11 +729,11 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 	event = fe_key_lookup(chcode, platform_trial_keys);
 	break;
     }
-
+    
     /* check for the handset transport keys */
     if (event == -1)
 	event = fe_key_lookup(chcode, get_key_map(key_map_CODECS));
-
+    
     /* call event handler or pass on */
     if (event != -1)
         fevent_handler(event, v ? v : main_view);

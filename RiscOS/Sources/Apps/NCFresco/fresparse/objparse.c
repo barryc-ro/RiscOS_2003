@@ -75,7 +75,7 @@ static int extension_to_filetype(STRING s)
 
 /* -------------------------------------------------------------------------- */
 
-static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, const VALUE *classid_type, const VALUE *data, const VALUE *data_type, const VALUE *id, BOOL always_include)
+static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, const VALUE *classid_type, const VALUE *data, const VALUE *data_type, const VALUE *id)
 {
     int classid_ftype, data_ftype, ftype;
     rid_object_item *obj;
@@ -110,12 +110,16 @@ static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, con
 
     /* SJM: 4/3/96: remove check for whether we know about plugin or not */
     ftype = classid_ftype != -1 ? classid_ftype : data_ftype;
-    if (!always_include && ftype == -1)		/* Unknonw mime type or extension */
+#if 0
+    if (ftype == -1)		/* Unknonw mime type or extension */
 	return NULL;
+#endif
 				/* Known type but no plugin present */
     objtype = objects_type_test(ftype);
-    if (!always_include && objtype == rid_object_type_UNKNOWN)
+#if 0
+    if (objtype == rid_object_type_UNKNOWN)
 	return NULL;
+#endif
 
     /* Can handle it so allocate structure and fill in values */
     obj = mm_calloc(sizeof(*obj), 1);
@@ -353,7 +357,7 @@ extern void startapplet (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 		&java_type,
 		&none,
 		&none,
-		&attributes->value[HTML_APPLET_ID], FALSE);
+		&attributes->value[HTML_APPLET_ID]);
 
     if (obj)
     {
@@ -528,7 +532,7 @@ extern void startobject(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&attributes->value[HTML_OBJECT_CODETYPE],
 		&attributes->value[HTML_OBJECT_DATA],
 		&attributes->value[HTML_OBJECT_TYPE],
-		&attributes->value[HTML_OBJECT_ID], FALSE);
+		&attributes->value[HTML_OBJECT_ID]);
 
     if (obj)
     {
@@ -588,7 +592,7 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&none,
 		&attributes->value[HTML_EMBED_SRC],
 		&none,
-		&attributes->value[HTML_EMBED_ID], TRUE);
+		&attributes->value[HTML_EMBED_ID]);
 
     if (obj)
     {
@@ -630,14 +634,9 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
 	/* oracle video server */
 	add_param(obj, &(element->attributes[HTML_EMBED_AUTOSTART])->name, &attributes->value[HTML_EMBED_AUTOSTART], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_AUTOPLAY])->name, &attributes->value[HTML_EMBED_AUTOPLAY], &none, &param);
 	add_param(obj, &(element->attributes[HTML_EMBED_LOOP])->name, &attributes->value[HTML_EMBED_LOOP], &none, &param);
 	add_param(obj, &(element->attributes[HTML_EMBED_MDSFILE])->name, &attributes->value[HTML_EMBED_MDSFILE], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_MEDIAFILE])->name, &attributes->value[HTML_EMBED_MEDIAFILE], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_PLAYFROM])->name, &attributes->value[HTML_EMBED_PLAYFROM], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_PLAYTO])->name, &attributes->value[HTML_EMBED_PLAYTO], &none, &param);
 	add_param(obj, &(element->attributes[HTML_EMBED_SERVER])->name, &attributes->value[HTML_EMBED_SERVER], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_TYPE])->name, &attributes->value[HTML_EMBED_TYPE], &none, &param);
 
 	me->discard_noembed = 1;
     }
@@ -672,7 +671,7 @@ extern void startbgsound(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&none,
 		&attributes->value[HTML_BGSOUND_SRC],
 		&none,
-		&none, FALSE);
+		&none);
 
     if (obj)
     {

@@ -25,7 +25,6 @@
 #include "stbutils.h"
 #include "stbfe.h"
 #include "fevents.h"
-#include "frameutils.h"
 
 #define X_BORDER 12
 #define Y_BORDER 12
@@ -35,12 +34,6 @@
 #endif
 
 #define MENU_FONT   WEBFONT_BASE
-
-#define col_HIGHLIGHT	render_colour_HIGHLIGHT	/* the highlight box colour */
-#define col_FG		render_colour_PLAIN
-#define col_FG_HL	render_colour_INPUT_B
-#define col_BG		render_colour_INPUT_B
-#define col_BG_HL	render_colour_PLAIN
 
 /* ------------------------------------------------------------------------------------------- */
 
@@ -124,20 +117,10 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 
 	for( ; i < mh->n && h >= bot; h -= line_space, i++)
 	{
-	    int junk, nfc, opcol;
+	    int junk;
+	    int nfc = (mh->items[i].flags & fe_menu_flag_CHECKED) ? render_colour_WRITE : render_colour_INPUT_F;
+	    int opcol = (nfc == render_colour_WRITE) ? render_colour_INPUT_F : render_colour_WRITE;
 
-	    if (mh->items[i].flags & fe_menu_flag_CHECKED)
-	    {
-		nfc = col_FG_HL;
-		opcol = col_BG_HL;
-	    }
-	    else
-	    {
-		nfc = col_FG;
-		opcol = col_BG;
-	    }
-
-	    /* set the font colours */
 	    if (lfc != nfc)
 	    {
 		int maxcols = 14;
@@ -153,23 +136,18 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 		colourtran_setfontcolours(&fh, &bb, &ff, &maxcols);
 	    }
 
-	    /* draw the left and right edges */
-	    colourtran_setGCOL(config_colours[col_BG], 0, 0, &junk);
+	    colourtran_setGCOL(config_colours[render_colour_WRITE], 0, 0, &junk);
 	    bbc_rectanglefill(ox - X_BORDER, h + oy - line_space, X_BORDER, line_space-1);
-	    bbc_rectanglefill(ox + width, h + oy - line_space, X_BORDER, line_space-1);
+	    bbc_rectanglefill(ox - width, h + oy - line_space, X_BORDER, line_space-1);
 
-	    /* draw the background for the text */
 	    colourtran_setGCOL(config_colours[opcol], 0, 0, &junk);
 	    bbc_rectanglefill(ox, h + oy - line_space, width, line_space-1);
 
-	    /* draw the text itself */
 	    font_paint(mh->items[i].name, font_OSCOORDS, ox, h + oy - webfonts[MENU_FONT].max_up);
 
-	    /* draw the selection box */
             if (i == mh->highlight && pointer_mode == pointermode_OFF)
             {
-                colourtran_setGCOL(config_colours[col_HIGHLIGHT], 0, 0, &junk);
-
+                colourtran_setGCOL(config_colours[render_colour_HIGHLIGHT], 0, 0, &junk);
                 bbc_rectangle(ox-2, h + oy - line_space, width+4-1, line_space-1);
                 bbc_rectangle(ox, h + oy - line_space+2, width-1, line_space-4-1);
             }
@@ -242,7 +220,7 @@ static os_error *fe_menu_window(fe_menu mh)
 
         win.behind = -1;
         win.flags = wimp_WNEW;
-        win.colours[wimp_WCWKAREABACK] = 3;
+        win.colours[wimp_WCWKAREABACK] = 0;
         win.colours[wimp_WCWKAREAFORE] = 7;
         win.colours[wimp_WCTITLEFORE] = 7;
 
@@ -258,7 +236,7 @@ static os_error *fe_menu_window(fe_menu mh)
 	    win.box.y0 = - (mh->size * line_space) - Y_BORDER;
 	    win.flags = (wimp_wflags) (win.flags | wimp_WVSCR);
 	    mh->vscroll = TRUE;
-
+	    
 	}
         else
         {
@@ -279,9 +257,6 @@ static os_error *fe_menu_window(fe_menu mh)
 	win.scx = win.scy = 0;
 
         win.workflags = (wimp_iconflags)(wimp_IBTYPE*wimp_BCLICKDEBOUNCE);
-
-	if (!config_display_frames_scrollbars)
-	    win.flags &= ~wimp_WVSCR;
 
 	/* Create the window, dealing with errors */
 	ep = frontend_complain(wimp_create_wind(&win, &(mh->wh)));
@@ -314,32 +289,6 @@ static void fe_menu_move_highlight(fe_menu mh, int dir)
 
         fe_menu_ensure_item(mh, new_highlight);
     }
-}
-
-static int get_widest_entry(fe_menu_item *items, int n)
-{
-    int i, widest;
-    fe_menu_item *item;
-
-    font_setfont(webfonts[MENU_FONT].handle);
-    widest = 0;
-
-    for (i = 0, item = items; i < n; i++, item++)
-    {
-	font_string fs;
-
-	fs.s = strsafe(item->name);
-	fs.x = fs.y = fs.term = (1 << 30);
-	fs.split = -1;
-
-	if (font_strwidth(&fs) == NULL)
-	{
-	    if (widest < fs.x)
-		widest = fs.x;
-	}
-    }
-
-    return widest / 400; /* MILIPOINTS_PER_OSUNIT; */
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -406,7 +355,7 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
         return;
 #endif
 
-    cvt = frameutils_get_cvt(mh->parent);
+    cvt = fe_get_cvt(mh->parent);
     p.x = x;
     p.y = y;
     coords_point_toscreen(&p, &cvt);
@@ -449,7 +398,7 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
 
 	/* see if we overhang the bottom of the safe area */
         overhang = - state.o.box.y0 + text_safe_box.y0;
-
+	
 	/* move up */
         if (overhang > 0)
         {
@@ -501,8 +450,8 @@ fe_menu frontend_menu_create(fe_view v, be_menu_callback cb, void *handle, int n
     menu->h = handle;
     menu->n = n;
     menu->items = items;
-    menu->size = n; /* size; change to use the full size */
-    menu->width = get_widest_entry(items, n);
+    menu->size = size;
+    menu->width = width;
     menu->parent = v;
 
     fe_menu_window(menu);

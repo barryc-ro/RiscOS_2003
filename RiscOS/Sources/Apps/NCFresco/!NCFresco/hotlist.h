@@ -17,7 +17,6 @@ extern BOOL hotlist_write(const char *file);
 extern void hotlist_init(void);
 extern void hotlist_shutdown(void);
 extern os_error *hotlist_remove_list(const char *list);
-extern void hotlist_return_url(int index, char **url);
 
 #endif
 

@@ -17,10 +17,6 @@
 
 #define USE_NOFRAMES	1
 
-#define DEFAULT_BORDER_WIDTH	8		/* OS units */
-#define DEFAULT_BORDER_3D	TRUE
-#define DEFAULT_BORDER_COLOUR	plinth_col_HL_D
-
 /*****************************************************************************/
 
 #if USE_NOFRAMES
@@ -118,8 +114,8 @@ extern void startframe (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	frame->src = stringdup(attr->u.s);
 
     /* Netscape 3 features */
-    if ((attr = &attributes->value[HTML_FRAME_FRAMEBORDER])->type == value_bool)
-        container->border = attr->u.i;
+    if ((attr = &attributes->value[HTML_FRAME_FRAMEBORDER])->type == value_integer)
+        container->border = attr->u.i != 0;
     else
 	container->border = me->frameset->border;
     
@@ -186,9 +182,13 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     }
     else
     {
-        frameset->bwidth = DEFAULT_BORDER_WIDTH;
-	container->border = DEFAULT_BORDER_3D;
-	container->bordercolour = DEFAULT_BORDER_COLOUR;
+        frameset->bwidth = 8;
+	container->border = FALSE;
+#ifdef STBWEB
+	container->bordercolour = 0;						/* default of black is better for TVs */
+#else
+	container->bordercolour = config_colours[render_colour_BACK].word;	/* default is the standard default */
+#endif
     }
 
     /* Netscape 3/MSIE3 features */
@@ -197,14 +197,8 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     else if ((attr = &attributes->value[HTML_FRAMESET_FRAMESPACING])->type == value_integer)
         frameset->bwidth = attr->u.i*2;
 
-#ifdef STBWEB
-    /* border must be 0 or >= DEFAULT */
-    if (frameset->bwidth && frameset->bwidth < DEFAULT_BORDER_WIDTH)
-	frameset->bwidth = DEFAULT_BORDER_WIDTH;
-#endif
-
-    if ((attr = &attributes->value[HTML_FRAMESET_FRAMEBORDER])->type == value_bool)
-        container->border = attr->u.i;
+    if ((attr = &attributes->value[HTML_FRAMESET_FRAMEBORDER])->type == value_integer)
+        container->border = attr->u.i != 0;
 
     if ((attr = &attributes->value[HTML_FRAMESET_BORDERCOLOR])->type == value_none)
 	attr = &attributes->value[HTML_FRAMESET_BORDERCOLOUR];
@@ -215,15 +209,12 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     }
 
     /* use the outermost frameset to set the background colour for the page */
-#ifdef STBWEB
     if (me->frameset == NULL)
     {
 	me->rh->bgt |= rid_bgt_COLOURS;
-	me->rh->colours.back = 0; /* container->bordercolour; */
-    }
-#endif
+	me->rh->colours.back = container->bordercolour;
+    }    /* save last frameset for when we unstack */
 
-    /* save last frameset for when we unstack */
     frameset->old_frameset = me->frameset;
 
     /* link into the list of framesets */

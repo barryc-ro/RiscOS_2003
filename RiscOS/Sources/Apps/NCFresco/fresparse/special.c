@@ -39,19 +39,6 @@ extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	if (me->rh->tile.src)
 	    mm_free(me->rh->tile.src);
 	me->rh->tile.src = stringdup(attributes->value[HTML_BODY_BACKGROUND].u.s);
-	
-	/* pdh: Doesn't entirely actually completely belong here, but
-	  we want the background image to be fetched first, not
-	  last. DAF: Moved to where I think it *does* belong - the
-	  earliest point we become aware we have a background
-	  image. See antweb_trigger_fetching() for where this used to
-	  happen. */
-#if 0
-	{
-	    BENDBG(( "Calling fetch_bg from startbody\n" ));
-	    be_doc_fetch_bg(doc);
-	}
-#endif 
     }
     if (attributes->value[HTML_BODY_BGCOLOR].type != value_none)
     {

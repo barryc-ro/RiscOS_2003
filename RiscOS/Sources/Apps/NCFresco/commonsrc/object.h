@@ -24,10 +24,6 @@ typedef struct {
     int lbc;			/* Last background colour */
 } object_font_state;
 
-#define object_redraw_REDRAW	0
-#define object_redraw_UPDATE	1
-#define object_redraw_HIGHLIGHT	2
-
 typedef void (*object_redraw)(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
 
 /* Dispose of resources: Used after an item has been sized and is no
@@ -96,16 +92,9 @@ typedef void (*object_asdraw)(rid_text_item *di, antweb_doc *doc,
 /* Update the area of the screen that would be covered by the highlighting
  * use antweb_update_item_trim.
  * If 0 then the whole object will be updated using antweb_update_item.
-
- * reason BOUNDS:
- *  Return in box the bounds of this item
- *  Return 'int' that is TRUE if the item needs a box drawn.
- *  FALSE if it has its own highlighted state.
  */
 
-#define object_highlight_BOUNDS		0
-
-typedef int (*object_update_highlight)(rid_text_item *di, antweb_doc *doc, int reason, wimp_box *box);
+typedef void (*object_update_highlight)(rid_text_item *di, antweb_doc *doc);
 
 /* The object_methods structure is used to hold pointers to all the
  * methods for a given type of object. */
@@ -143,7 +132,7 @@ char *otext_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int
 #endif
 void otext_astext(rid_text_item *ti, rid_header *rh, FILE *f);
 void otext_asdraw(rid_text_item *di, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
-int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box);
+void otext_update_highlight(rid_text_item *ti, antweb_doc *doc);
 
 void obullet_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
@@ -161,7 +150,7 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 void oimage_astext(rid_text_item *ti, rid_header *rh, FILE *f);
 void *oimage_image_handle(rid_text_item *ti, antweb_doc *doc, int reason);
 void oimage_asdraw(rid_text_item *ti, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
-int oimage_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box);
+void oimage_update_highlight(rid_text_item *ti, antweb_doc *doc);
 
 void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
@@ -172,7 +161,7 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key);
 void *oinput_image_handle(rid_text_item *ti, antweb_doc *doc, int reason);
 void oinput_asdraw(rid_text_item *di, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
-int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box);
+void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc);
 
 void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
@@ -182,7 +171,6 @@ void otextarea_astext(rid_text_item *ti, rid_header *rh, FILE *f);
 BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos);
 BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key);
 void otextarea_asdraw(rid_text_item *di, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
-int otextarea_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box);
 
 void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
@@ -190,7 +178,6 @@ void oselect_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int y, wimp_bbits bb);
 void oselect_astext(rid_text_item *ti, rid_header *rh, FILE *f);
 void oselect_asdraw(rid_text_item *di, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
-int oselect_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box);
 
 void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
@@ -207,12 +194,6 @@ void oobject_astext(rid_text_item *ti, rid_header *rh, FILE *f);
 void oobject_asdraw(rid_text_item *ti, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
 void *oobject_image_handle(rid_text_item *ti, antweb_doc *doc, int reason);
 
-void oscaff_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
-void oscaff_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update);
-void oscaff_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
-char * oscaff_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int y, wimp_bbits bb);
-void oscaff_astext(rid_text_item *ti, rid_header *rh, FILE *f);
-void oscaff_asdraw(rid_text_item *ti, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
 
 /* Finally, a jump table to dispatch from */
 extern object_methods object_table[];

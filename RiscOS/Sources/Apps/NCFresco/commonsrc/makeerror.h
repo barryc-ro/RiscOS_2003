@@ -35,4 +35,3 @@ os_error *makeerrorf(int n, ...);
 #define ERR_ACCESS_DENIED	28
 #define ERR_FIND_FAILED         29
 #define ERR_NO_ACTION	        30
-#define ERR_PRINT_FAILED        31

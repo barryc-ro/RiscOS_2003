@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
-#include <time.h>
 
 #include "memwatch.h"
 
@@ -163,7 +162,7 @@ int set_file_type(const char *fname, int ft)
     return (os_file(&osf) == NULL);
 }
 
-int file_and_object_type_real(const char *fname, int *obj_type)
+int file_and_object_type(const char *fname, int *obj_type)
 {
     os_filestr ofs;
     os_error *ep;
@@ -179,7 +178,7 @@ int file_and_object_type_real(const char *fname, int *obj_type)
 
     if (obj_type)
 	*obj_type = ofs.action;
-
+    
     if (ofs.action == 2)
 	return FILETYPE_DIRECTORY;
 
@@ -204,7 +203,7 @@ int file_and_object_type_real(const char *fname, int *obj_type)
 
 int file_type_real(const char *fname)
 {
-    return file_and_object_type_real(fname, NULL);
+    return file_and_object_type(fname, NULL);
 }
 
 /* return last modified time in unix style */
@@ -243,15 +242,10 @@ int file_last_modified(const char *fname)
 
 int file_type(const char *fname)
 {
-    return file_and_object_type(fname, NULL);
-}
-
-int file_and_object_type(const char *fname, int *obj_type)
-{
     int ft, ft2;
     char *dot, *suffix;
 
-    ft = file_and_object_type_real(fname, obj_type);
+    ft = file_type_real(fname);
 
     if (ft != FILETYPE_TEXT && ft != FILETYPE_DATA && ft != FILETYPE_DOS && ft != FILETYPE_UNIXEX)
 	return ft;
@@ -291,10 +285,10 @@ char *reduce_file_name(char *fname, char *temp, char *pathname)
     char temp2[256];
     int len;
 
-    if (_swix(OS_FSControl, _INR(0,6), 37, (int) (long) pathname, (int) (long) temp, 0, 0, 256) != NULL)
+    if (os_swi6(XOS_Bit | OS_FSControl, 37, (int) (long) pathname, (int) (long) temp, 0, 0, 256) != NULL)
 	return NULL;
 
-    if (_swix(OS_FSControl, _INR(0,6), 37, (int) (long) fname, (int) (long) temp2, 0, 0, 256) != NULL)
+    if (os_swi6(XOS_Bit | OS_FSControl, 37, (int) (long) fname, (int) (long) temp2, 0, 0, 256) != NULL)
 	return NULL;
 
     len = strlen(temp);
@@ -686,7 +680,7 @@ extern char *strdup_gstrans(const char *input)
     /* if overflow then just ensure terminated - should do better really */
     if (r.r[2] == GSTRANS_BUFSIZE)
 	output[GSTRANS_BUFSIZE-1] = 0;
-
+    
     return mm_realloc(output, r.r[2]);
 }
 
@@ -745,29 +739,29 @@ int cmos_op(int bit_start, int n_bits, int new_val, BOOL write)
 #define NVRAM_Read	0x4EE00
 #define NVRAM_Write	0x4EE01
 
-int nvram_read(const char *tag, int *val)
+int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write)
 {
     char buf[4];
-    int err = -1;
-    _swix(NVRAM_Read, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
-#if DEBUG
-    fprintf(stderr, "nvram_read: '%s' = %d err %d\n", tag, *(int *)buf, err);
-#endif
-    if (err >= 0)
-	*val = *(int *)buf;
-    return err >= 0;
-}
+    int err;
+    if (!write)
+    {
+	_swix(NVRAM_Read, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
+	if (err >= 0)
+	    return *(int *)buf;
+    }
+    else
+    {
+	*(int *)buf = new_val;
+	_swix(NVRAM_Write, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
+	if (err == 0)
+	    return 0;
+    }
 
-int nvram_write(const char *tag, int new_val)
-{
-    char buf[4];
-    int err = -1;
-    *(int *)buf = new_val;
-    _swix(NVRAM_Write, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
 #if DEBUG
-    fprintf(stderr, "nvram_write: '%s' = %d err %d\n", tag, new_val, err);
+    fprintf(stderr, "nvram_op: error %d on %s write %d val %d\n", err, tag, write, new_val);
 #endif
-    return err == 0;
+    
+    return bit_start == -1 ? 0 : cmos_op(bit_start, n_bits, new_val, write);
 }
 
 /* trigger an event */
@@ -799,58 +793,5 @@ void pointer_set_position(int x, int y)
     block[4] = (y >> 8) & 0xff;
     _kernel_osword(osword_Mouse, (int *)block);
 }
-
-static char tmpnam_buf[L_tmpnam] = "";
-static char count = 0;
-
-char *rs_tmpnam(char *s)
-{
-    FILE *f;
-    BOOL present = FALSE;
-    do
-    {
-	int sig = (time(NULL) << 8) | count++;
-
-	if (!s)
-	    s = tmpnam_buf;
-
-	sprintf(s, "<Wimp$ScrapDir>.%08x", sig);
-	f = fopen(s, "w");
-	if (f)
-	{
-	    fclose(f);
-	    present = TRUE;
-	}
-    }
-    while (!present);
-    return s;
-}
-
-/*****************************************************************************/
-
-/* Change a window's flags: only in Nested Wimp (3.90 and later)
- * No-op (but returns error) if used on earlier wimps.
- */
-
-os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor )
-{
-    wimp_wstate ws;
-    os_error *e;
-    _kernel_swi_regs r;
-
-    e = wimp_get_wind_state( w, &ws );
-    if ( e )
-        return e;
-    ws.flags = ( ws.flags & ~bic ) ^ eor;
-
-    r.r[1] = (int)&ws;
-    r.r[2] = *((int*)"TASK");
-    r.r[3] = -1;
-    r.r[4] = 1;
-
-    return (os_error*)_kernel_swi( 0x600C5, &r, &r );   /* XWimp_OpenWindow */
-}
-
-/*****************************************************************************/
 
 /* eof util.c */

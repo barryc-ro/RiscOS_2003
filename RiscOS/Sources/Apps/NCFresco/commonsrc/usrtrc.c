@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <time.h>
 #include "version.h"
 
 
@@ -13,13 +12,6 @@ extern void init_usrtrc(void)
 {
     if (getenv(PROGRAM_NAME"$Trace") != NULL)
 	emit = 1;
-
-    if (emit)
-    {
-	time_t t;
-	time(&t);
-	usrtrc("\n\n"PROGRAM_NAME" started at %s\n\n", ctime(&t));
-    }
 }
 
 #ifdef __acorn

@@ -41,17 +41,15 @@ typedef struct awp_page_str {
 #define doc_flag_FROM_HISTORY	(1<<6) /* Document was loaded from the history list (don't check expiry) */
 #define doc_flag_USE_DRAW_MOD	(1<<7) /* Draw lines with the draw module, rather than OS_Plot */
 #define doc_flag_SOLID_HIGHLIGHT (1<<8) /* Draw highlight filled rather than boxed */
-#define doc_flag_FAST_LOAD	(1<<9) /* load as quickly as possible */
 
 #define doc_flag_DISPLAYING	(1<<16)	/* The document is being displayed, it's safe to try updating the view */
 #define doc_flag_INCOMPLETE	(1<<17)	/* The document fetch was haltedc before it was done */
 #define doc_flag_SECURE		(1<<18)	/* A secure method, such as SSL, was used. */
-#define doc_flag_HAD_HEADERS	(1<<19)	/* Have we transferred HTTP headers into the META list */
 
-#define doc_selection_tag_NONE	0
-#define doc_selection_tag_TEXT	1
-#define doc_selection_tag_AREF	2
-#define doc_selection_tag_MAP	3
+
+#define doc_selection_tag_TEXT	0
+#define doc_selection_tag_AREF	1
+#define doc_selection_tag_MAP	2
 
 #define doc_selection_offset_UNKNOWN	(-1)
 #define doc_selection_offset_NO_CARET	(-2)
@@ -171,9 +169,7 @@ extern rid_header *parse_gif_file(char *fname, char *url);
 extern void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box);
 extern void antweb_update_item(antweb_doc *doc, rid_text_item *ti);
 extern void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right);
-
-#define antweb_place_caret(doc, ti, offset) backend_set_caret(doc, ti, offset)
-
+extern void antweb_place_caret(antweb_doc *doc, rid_text_item *ti, int offset);
 extern void antweb_default_caret(antweb_doc *doc, BOOL take_caret);
 extern BOOL antweb_pointer_in_image(antweb_doc *doc, rid_text_item *ti, wimp_mousestr *m, int *xx, int *yy, BOOL in_pixels);
 extern BOOL antweb_locate_item(rid_text_item *ti, int *xx, int *yy);
@@ -184,21 +180,13 @@ extern void antweb_update_item_trim(antweb_doc *doc, rid_text_item *ti, wimp_box
 extern int antweb_get_edges(const rid_text_item *ti, int *left, int *right);
 extern int antweb_render_background(wimp_redrawstr *rr, void *h, int update);
 extern int antweb_doc_abort_all(void);
-extern os_error *antweb_trigger_fetching(antweb_doc *doc);
+extern os_error *antweb_document_sizeitems(antweb_doc *doc);
 
 /* from keyhl.c */
 
 extern void antweb_build_selection_list(antweb_doc *doc);
 extern rid_text_item *be_doc_read_caret(antweb_doc *doc);
 extern BOOL be_item_has_caret(antweb_doc *doc, rid_text_item *ti);
-
-/* From highlight.c */
-
-/* extern void highlight_render(int ox, int oy, const wimp_box *g, antweb_doc *doc); */
-extern void highlight_render_outline(rid_text_item *ti, antweb_doc *doc, int hpos, int bline);
-extern void highlight_update_border(antweb_doc *doc, wimp_box *box, BOOL draw);
-extern void highlight_offset_border(wimp_box *box);
-extern void highlight_render(wimp_redrawstr *rr, antweb_doc *doc);
 
 #endif
 

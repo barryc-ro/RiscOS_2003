@@ -21,13 +21,6 @@
 #include "version.h"
 #include "dfsupport.h"
 
-static os_error *df_error = NULL;
-
-extern os_error *df_last_error( void )
-{
-    return df_error;
-}
-
 extern os_error *df_write_data(int fh, int at, void *base, int size)
 {
     os_gbpbstr gps;
@@ -38,8 +31,7 @@ extern os_error *df_write_data(int fh, int at, void *base, int size)
     gps.number = size;
     gps.seq_point = at;
 
-    df_error = os_gbpb(&gps);
-    return df_error;
+    return os_gbpb(&gps);
 }
 
 extern void df_write_fileheader(int fh, int width, int dheight, int *writepoint, char *program_name)
@@ -165,7 +157,7 @@ extern void df_stretch_bb(wimp_box *bb, wimp_box *ob)
 	bb->x0 = ob->x0;
     if (bb->y0 > ob->y0)
 	bb->y0 = ob->y0;
-
+    
     if (bb->x1 < ob->x1)
 	bb->x1 = ob->x1;
     if (bb->y1 < ob->y1)
@@ -330,7 +322,7 @@ extern void df_write_sprite(int fh, char *sprite, int x, int y, int *fileoff)
     int ex, ey, l2bpp, lbit, width, height;
 
     ep = os_swix(Wimp_BaseOfSprites, &r);
-
+    
     if (ep)
 	return;
 
@@ -346,7 +338,7 @@ extern void df_write_sprite(int fh, char *sprite, int x, int y, int *fileoff)
 	area = (sprite_area *) (long) r.r[0];
 	ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
     }
-
+	
     if (ep)
     {
 	usrtrc( "Error writing sprite: %s\n", ep->errmess);
@@ -358,7 +350,7 @@ extern void df_write_sprite(int fh, char *sprite, int x, int y, int *fileoff)
     l2bpp = bbc_modevar(sph->mode, bbc_Log2BPP);
 
     lbit = (sph->mode > 255) ? 0 : sph->lbit;
-
+	    
     width = ((((sph->width+1) << 5) - lbit - (31 - sph->rbit)) >> l2bpp ) << ex;
 
     height = (sph->height+1) << ey;

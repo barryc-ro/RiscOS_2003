@@ -359,8 +359,8 @@ os_error *hotlist_add(const char *url, const char *title)
     hotlist__add(strdup(url), strdup(title), TRUE);
     hotlist__sort();
 
-/*     if ((ep = ensure_modem_line()) != NULL) */
-/* 	return ep; */
+    if ((ep = ensure_modem_line()) != NULL)
+	return ep;
     
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
@@ -376,8 +376,8 @@ os_error *hotlist_remove(const char *url)
 
     hotlist__remove(NULL, url);
     
-/*     if ((ep = ensure_modem_line()) != NULL) */
-/* 	return ep; */
+    if ((ep = ensure_modem_line()) != NULL)
+	return ep;
     
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
@@ -391,8 +391,8 @@ os_error *hotlist_remove_list(const char *list)
     
     hotlist__remove_list(list);
     
-/*     if ((ep = ensure_modem_line()) != NULL) */
-/* 	return ep; */
+    if ((ep = ensure_modem_line()) != NULL)
+	return ep;
     
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
@@ -410,23 +410,14 @@ void hotlist_write_list(FILE *fout, BOOL del)
 	char *ttl = item->title ? item->title : item->url;
 
 	if (del)
- 	    fprintf(fout, msgs_lookup("hotsdI"), i, i, ttl, i, i);
+	    fprintf(fout, msgs_lookup("hotsI1"), i, ttl, i, i);
 	else
- 	    fprintf(fout, msgs_lookup("hotsI"), i, ttl);
+	{
+	    fprintf(fout, msgs_lookup("hotsI2a"));
+	    url_escape_to_file(item->url, fout);
+	    fprintf(fout, msgs_lookup("hotsI2b"), ttl);
+	}
     }
-}
-
-/* ---------------------------------------------------------------------- */
-
-void hotlist_return_url(int index, char **url)
-{ 
-    hotlist_item *item;
-    int i;
-    for (item = hotlist_list, i = 0; item && i < index; item = item->next, i++)
-	;
-
-    if (item)
-	*url = strdup(item->url);
 }
 
 /* ---------------------------------------------------------------------- */

@@ -1,9 +1,7 @@
-/* -*-C-*- commonsrc/debug.c */
 
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
-#include <string.h>
 #include "debug.h"
 
 #define DBGPROTO(x) extern void x(const char *fmt, ...)
@@ -24,8 +22,7 @@ DBGPROTO(cnfdbg);
 DBGPROTO(imgdbg);
 DBGPROTO(ckidbg);
 DBGPROTO(accdbg);
-DBGPROTO(bendbg);
-DBGPROTO(lnkdbg);
+DBGPROTO(htsdbg);
 DBGPROTO(tabdbgn);
 DBGPROTO(prsdbgn);
 DBGPROTO(rendbgn);
@@ -34,9 +31,7 @@ DBGPROTO(cnfdbgn);
 DBGPROTO(imgdbgn);
 DBGPROTO(ckidbgn);
 DBGPROTO(accdbgn);
-DBGPROTO(bendbgn);
-DBGPROTO(lnkdbgn);
-DBGPROTO(laydbgn);
+DBGPROTO(htsdbgn);
 #pragma -v0
 #endif
 
@@ -68,12 +63,8 @@ static dbg_conf_item dbg_conf[]=
     { "ACCDBGN", 0 } ,
     { "STBDBG", 0 },
     { "STBDBGN", 0 },
-    { "BENDBG", 0 },
-    { "BENDBGN", 0 },
-    { "LNKDBG", 0 },
-    { "LNKDBGN", 0 },
-    { "LAYDBG", 0 },
-    { "LAYDBGN", 0 }
+    { "HTSDBG", 0 },
+    { "HTSDBGN", 0 }
 };
 
 enum
@@ -102,12 +93,8 @@ enum
     accn,
     stb,
     stbn,
-    ben,
-    benn,
-    lnk,
-    lnkn,
-    lay,
-    layn
+    hts,
+    htsn
 };
 
 extern void dbginit(void)
@@ -145,46 +132,9 @@ extern void dbginit(void)
     ACCDBGN(("Excessive access debugging present\n"));
     STBDBG(("NCFresco debugging present\n"));
     STBDBGN(("Excessive NCFresco debugging present\n"));
-    BENDBG(("HTTPSave debugging present\n"));
-    BENDBGN(("Excessive HTTPSave debugging present\n"));
-    LNKDBG(("Link debugging present\n"));
-    LNKDBGN(("Excessive link debugging present\n"));
-    LAYDBG(("Frame debugging present\n"));
-    LAYDBGN(("Excessive frame debugging present\n"));
+    HTSDBG(("HTTPSave debugging present\n"));
+    HTSDBGN(("Excessive HTTPSave debugging present\n"));
 }
-
-extern void debug_set(const char *feature, int enable)
-{
-    int ix;
-
-    for (ix = 0; ix < sizeof(dbg_conf) / sizeof(dbg_conf_item); ix++)
-    {
-	/*if ( strcasecmp(dbg_conf[ix].name, feature) == 0 )*/
-	if ( strcmp(dbg_conf[ix].name, feature) == 0 )
-	{
-	    dbg_conf[ix].present = enable;
-	    break;
-	}
-    }
-}
-
-extern int debug_get(const char *feature)
-{
-    int ix;
-
-    for (ix = 0; ix < sizeof(dbg_conf) / sizeof(dbg_conf_item); ix++)
-    {
-	/*if ( strcasecmp(dbg_conf[ix].name, feature) == 0 )*/
-	if ( strcmp(dbg_conf[ix].name, feature) == 0 )
-	{
-	    return dbg_conf[ix].present;
-	}
-    }
-
-    return 0;
-}
-
-
 
 /* **** N.B.  These don't need semi-colons at the end as they define functions */
 DBGFNDEF(tabdbg, tab)
@@ -211,12 +161,8 @@ DBGFNDEF(accdbg, acc)
 DBGFNDEF(accdbgn, accn)
 DBGFNDEF(stbdbg, stb)
 DBGFNDEF(stbdbgn, stbn)
-DBGFNDEF(bendbg, ben)
-DBGFNDEF(bendbgn, benn)
-DBGFNDEF(lnkdbg, lnk)
-DBGFNDEF(lnkdbgn, lnkn)
-DBGFNDEF(laydbg, lay)
-DBGFNDEF(laydbgn, layn)
+DBGFNDEF(htsdbg, hts)
+DBGFNDEF(htsdbgn, htsn)
 
 #else	/* DEBUG */
 

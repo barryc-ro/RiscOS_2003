@@ -5,8 +5,11 @@
 
 typedef enum
 {
+/*    pointermode_REFRESH = -1,*/
     pointermode_OFF,
     pointermode_ON
+/*    pointermode_MAP,*/
+/*    pointermode_INPUT*/
 } pointermode_t;
 
 extern pointermode_t pointer_mode;
@@ -16,16 +19,7 @@ extern int wimp_version;
 extern wimp_t on_screen_kbd;
 extern wimp_box on_screen_kbd_pos;
 
-extern os_error *pending_error;
-
 #define TASK_MAGIC	0x4B534154
-
-#define DBOX_SIZE_X	800
-#define DBOX_SIZE_Y	400
-
-#define IconHigh_GetDirection		0x4E701
-#define IconHigh_Start			0x4E702
-#define IconHigh_Stop			0x4E703
 
 extern void fe_pointer_mode_update(pointermode_t mode);
 extern void fe_set_pointer(int item_flags);
@@ -33,7 +27,7 @@ extern void fe_set_pointer(int item_flags);
 extern fe_view main_view;
 extern fe_view last_click_view;
 extern fe_view dragging_view;
-/* extern fe_view resizing_view; */
+extern fe_view resizing_view;
 
 extern int last_click_x, last_click_y;
 
@@ -49,9 +43,10 @@ extern void fe_move_highlight_frame(fe_view v, BOOL next);
 extern void fe_move_highlight_frame_direction(fe_view v, int flags);
 extern void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags);
 
+extern os_error *fe_handle_enter(fe_view v);
+
 extern int fe_print_possible(fe_view v);
 
-/* must agree with arrays in stbfe.c */
 #define fe_print_DEFAULT	0
 #define fe_print_LEGAL		1
 #define fe_print_LETTER		2
@@ -96,7 +91,7 @@ extern os_error *fe_status_open_toolbar(fe_view v, int bar);
 extern void fe_show_mem_dump(void);
 
 extern os_error *fe_open_version(fe_view v);
-extern void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle);
+extern void fe_open_info(fe_view v, be_item ti, int x, int y);
 
 
 extern os_error *fe_display_options_open(fe_view v);
@@ -121,6 +116,7 @@ extern void fe_menu_event_handler(int event);
 
 extern BOOL fe_item_screen_box(fe_view v, be_item ti, wimp_box *box);
 extern void fe_fake_click(fe_view v, int x, int y);
+extern coords_cvtstr fe_get_cvt(fe_view v);
 
 extern BOOL fe_writeable_handle_keys(fe_view v, int key);
 
@@ -140,9 +136,10 @@ extern void fe_plugin_event_handler(int event, fe_view v);
 
 extern void fe_font_size_set(int value, BOOL absolute);
 extern BOOL fe_font_size_set_possible(int value, BOOL absolute);
-extern void fe_beeps_set(int state, BOOL make_sound);
+extern void fe_beeps_set(int state);
 extern void fe_bgsound_set(int state);
-extern void fe_scaling_set(int state);
+
+extern void fe_force_fit(fe_view v, BOOL force);
 
 extern void fe_iconise(BOOL iconise);
 extern fe_view fe_locate_view(const char *name);
@@ -157,25 +154,17 @@ extern void fe_cursor_movement(fe_view v, int x, int y);
 
 extern int fe_encoding(fe_view v, int encoding);
 
-extern int caretise(void);
-extern int movepointer(void);
-
-extern void fe_no_new_page(fe_view v, os_error *e);
-extern void fe_ensure_highlight_after_fetch(fe_view v);
-
 /* From internal.h */
 
 extern int print__copies, print__ul;
 extern fe_passwd fe_current_passwd;
 
 extern BOOL fe_passwd_abort(void);
-extern void fe_internal_deleting_view(fe_view v);
-extern os_error *fe_internal_toggle_panel(const char *panel_name);
 
 /* from stbredraw.c*/
 
-extern int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight);
-extern int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight);
+extern int fe_view_scroll_x(fe_view v, int val);
+extern int fe_view_scroll_y(fe_view v, int val);
 extern int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y);
 
 /* from stbevents.c*/
@@ -212,28 +201,6 @@ extern char *ncreg_enquiry(const char *tag);
 
 extern os_error *fe_search_page(fe_view v);
 extern os_error *fe_offline_page(fe_view v);
-
-/* From stblinks.c */
-
-extern void fe_frame_link_array_build(fe_view v);
-extern void fe_frame_link_array_free(fe_view v);
-
-extern fe_view fe_next_frame(fe_view v, BOOL next);
-
-extern void fe_frame_link_move(fe_view v, int flags);
-extern void fe_frame_link_activate(fe_view v);
-extern int fe_frame_link_selected(fe_view v);
-extern void fe_frame_link_clear_all(fe_view v);
-extern void fe_frame_link_redraw_all(fe_view v);
-
-extern os_error *fe_handle_enter(fe_view v);
-extern os_error *fe_activate_link(fe_view v, int x, int y, int bbits);
-
-extern int fe_ensure_highlight(fe_view v, int scroll_flags);
-
-/* From stbcodec.c */
-
-extern void codec_event_handler(int event, fe_view v);
 
 /* stbfe.h*/
 

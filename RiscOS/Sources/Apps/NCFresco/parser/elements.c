@@ -106,9 +106,7 @@ static parse_table_fn parse_table [] =
     sgml_do_parse_stdunit_void,
     sgml_do_parse_stdunit_list,
     sgml_do_parse_enum_string,
-    sgml_do_parse_enum_case,
-    sgml_do_parse_bool,
-    sgml_do_parse_colour
+    sgml_do_parse_enum_case
 };
 
 
@@ -309,30 +307,8 @@ extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 			element->name.ptr, oe->name.ptr));
 		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
 		    sgml_note_missing_close (context, oe);
-
 		/* perform_element_close (context, oe); */
-
-#if 1
-		/* SJM: 20/5/97: this (or something liek it) is needed here as much as in perform_element_close() */
-		if (other_elem->flags & FLAG_OUT_OF_ORDER_CLOSE)
-		{
-		    STACK_ITEM *matching_close = find_element_in_stack (context, other_elem);
-  
-		    if (matching_close != NULL)
-		    {
-			PRSDBG(("perform_element_close(%s): pulling close to top of stack\n",
-				other_elem->name.ptr));
-			pull_stack_item_to_top_correcting_effects (context, matching_close);
-			perform_element_close (context, other_elem);
-			sgml_note_missing_close (context, other_elem);
-		    }
-		    /* Otherwise we saw it earlier and the elements_open is lying */
-		}
-		else if (element_bit_set (context->tos->elements_open, other_elem->id))
-		    force_close_to_matching (context, other_elem);
-#else
 		force_close_to_matching (context, other_elem);
-#endif
 	    }
 	    break;
 	case QUIETLY_CLOSE_ANY_OPEN:
@@ -344,27 +320,7 @@ extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
 		    sgml_note_missing_close (context, other_elem);
 		/* perform_element_close (context, &context->elements [context->tos->element] ); */
-#if 1
-		/* SJM: 20/5/97: this (or something liek it) is needed here as much as in perform_element_close() */
-		if (other_elem->flags & FLAG_OUT_OF_ORDER_CLOSE)
-		{
-		    STACK_ITEM *matching_close = find_element_in_stack (context, other_elem);
-  
-		    if (matching_close != NULL)
-		    {
-			PRSDBG(("perform_element_close(%s): pulling close to top of stack\n",
-				other_elem->name.ptr));
-			pull_stack_item_to_top_correcting_effects (context, matching_close);
-			perform_element_close (context, other_elem);
-			sgml_note_missing_close (context, other_elem);
-		    }
-		    /* Otherwise we saw it earlier and the elements_open is lying */
-		}
-		else if (element_bit_set (context->tos->elements_open, other_elem->id))
-		    force_close_to_matching (context, other_elem);
-#else
 		force_close_to_matching (context, other_elem);
-#endif
 	    }
 	    break;
 	case CONTAINER_ENCLOSED_WITHIN:
@@ -1074,9 +1030,7 @@ static void parse_then_perform_element_close(SGMLCTX *context)
 #if SGML_REPORTING
 	sgml_note_message(context, "</%s> has unexpected attributes", element->name.ptr);
 #endif
-/*  goto done; SJM: 21/05/97: removed this goto. Even if it does have
-			      unexpected attributes we still probably
-			      want to obey the close */
+	goto done;
     }
 
     perform_element_close(context, element);

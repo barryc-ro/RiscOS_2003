@@ -21,11 +21,10 @@
 
 #include "stbfe.h"
 #include "stbopen.h"
-#include "stbview.h"
 #include "stbhist.h"
 #include "stbutils.h"
+#include "stbview.h"
 #include "stbtb.h"
-#include "frameutils.h"
 
 static void global_event_handler(int event)
 {
@@ -78,6 +77,9 @@ static void global_event_handler(int event)
 	    fe_reload(main_view);
 	break;
 
+    case fevent_GLOBAL_TOGGLE_FORCE_FIT:
+	break;
+
     case fevent_GLOBAL_ICONISE:
 	fe_iconise(TRUE);
 	break;
@@ -86,15 +88,15 @@ static void global_event_handler(int event)
 	fe_iconise(FALSE);
 	break;
 
-
+	
     case fevent_GLOBAL_FONT_INC:
 	fe_font_size_set(+1, FALSE);
 	break;
-
+	
     case fevent_GLOBAL_FONT_DEC:
 	fe_font_size_set(-1, FALSE);
 	break;
-
+	
     default:
 	if ((event &~ fevent_GLOBAL_FONT_MASK) == fevent_GLOBAL_FONT_SET)
 	{
@@ -112,7 +114,7 @@ static void toggle_event_handler(int event, fe_view v)
     {
         case fevent_TOGGLE_FRAMES:
             parse_frames(-1);
-            frontend_complain(fe_reload(frameutils_find_top(v)));
+            frontend_complain(fe_reload(fe_find_top(v)));
             break;
 
         case fevent_TOGGLE_STATUS:
@@ -154,11 +156,11 @@ static void history_event_handler(int event, fe_view v)
             break;
 
     case fevent_HISTORY_SHOW_ALPHA:
-	frontend_complain(fe_internal_toggle_panel("historyalpha"));
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyalpha", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
 	break;
 
     case fevent_HISTORY_SHOW_RECENT:
-	frontend_complain(fe_internal_toggle_panel("historyrecent"));
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyrecent", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
 	break;
     }
 }
@@ -176,10 +178,7 @@ static void hotlist_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HOTLIST_ADD:
-	if (!fe_popup_open() || fe_locate_view(TARGET_INFO)) /* can add to hotlist when the info window is open */
-	    frontend_complain(fe_hotlist_add(v));
-	else
-	    sound_event(snd_WARN_BAD_KEY);
+	frontend_complain(fe_hotlist_add(v));
 	break;
 
     case fevent_HOTLIST_REMOVE:
@@ -190,7 +189,7 @@ static void hotlist_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HOTLIST_SHOW_DELETE:
-	frontend_complain(fe_internal_toggle_panel("favsdelete"));
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=favsdelete", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE));
 	break;
     }
 }
@@ -208,8 +207,7 @@ static void misc_event_handler(int event, fe_view v)
             break;
 
         case fevent_HOME:
-	    if (!fe_locate_view("__url") && !on_screen_kbd)
-		frontend_complain(fe_home(v));
+            frontend_complain(fe_home(v));
             break;
 
         case fevent_PRINT:
@@ -252,11 +250,12 @@ static void misc_event_handler(int event, fe_view v)
             frontend_complain(fe_url_open(v));
             break;
 
+    case fevent_FORCE_FIT:
+	fe_force_fit(v, TRUE);
+	break;
+
     case fevent_SEARCH_PAGE:
-	if (!fe_popup_open() && on_screen_kbd == 0)
-	    frontend_complain(fe_search_page(v));
-	else
-	    sound_event(snd_WARN_BAD_KEY);
+	frontend_complain(fe_search_page(v));
 	break;
 
     case fevent_OFFLINE_PAGE:
@@ -264,30 +263,28 @@ static void misc_event_handler(int event, fe_view v)
 	frontend_complain(fe_offline_page(v));
 	break;
 
-    case fevent_INFO_PAGE: /* this just opens the info page and not the toolbar */
- 	frontend_complain(fe_open_version(v));
+    case fevent_INFO_PAGE:
+	frontend_complain(fe_open_version(v));
 	break;
 
     case fevent_SEND_URL:
-	frontend_complain(frontend_open_url("ncint:sendurl", v, NULL, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncfrescointernal:sendurl", v, NULL, NULL, fe_open_url_NO_CACHE));
 	break;
 
     case fevent_PRINT_LETTER:
 	frontend_complain(fe_print(v, fe_print_LETTER));
 	break;
-
+	
     case fevent_PRINT_LEGAL:
 	frontend_complain(fe_print(v, fe_print_LEGAL));
 	break;
-
+	
     case fevent_OPEN_WRITEABLE:
 	tb_open_url_and_close();
 	break;
 
     case fevent_STOP_OR_RELOAD:
-	if (fe_popup_open() || on_screen_kbd)
-	    sound_event(snd_WARN_BAD_KEY);
-	else if (fe_abort_fetch_possible(v))
+	if (fe_abort_fetch_possible(v))
 	    frontend_complain(fe_abort_fetch(v));
 	else
 	    frontend_complain(fe_reload(v));
@@ -306,27 +303,15 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_BEEPS_TOGGLE:
-	fe_beeps_set(-1, TRUE);
+	fe_beeps_set(-1);
 	break;
 
     case fevent_BEEPS_OFF:
-	fe_beeps_set(0, TRUE);
+	fe_beeps_set(0);
 	break;
 
     case fevent_BEEPS_ON:
-	fe_beeps_set(1, TRUE);
-	break;
-
-    case fevent_SCALING_TOGGLE:
-	fe_scaling_set(-1);
-	break;
-
-    case fevent_SCALING_OFF:
-	fe_scaling_set(0);
-	break;
-
-    case fevent_SCALING_ON:
-	fe_scaling_set(1);
+	fe_beeps_set(1);
 	break;
     }
 }
@@ -355,28 +340,28 @@ static void scroll_event_handler(int event, fe_view v)
     switch (event)
     {
         case fevent_SCROLL_LEFT:
-            fe_view_scroll_x(v, -1, TRUE);
+            fe_view_scroll_x(v, -1);
             break;
         case fevent_SCROLL_RIGHT:
-            fe_view_scroll_x(v, +1, TRUE);
+            fe_view_scroll_x(v, +1);
             break;
         case fevent_SCROLL_UP:
-            fe_view_scroll_y(v, +1, TRUE);
+            fe_view_scroll_y(v, +1);
             break;
         case fevent_SCROLL_DOWN:
-            fe_view_scroll_y(v, -1, TRUE);
+            fe_view_scroll_y(v, -1);
             break;
         case fevent_SCROLL_PAGE_UP:
-            fe_view_scroll_y(v, +2, TRUE);
+            fe_view_scroll_y(v, +2);
             break;
         case fevent_SCROLL_PAGE_DOWN:
-            fe_view_scroll_y(v, -2, TRUE);
+            fe_view_scroll_y(v, -2);
             break;
         case fevent_SCROLL_TOP:
-            fe_view_scroll_y(v, +3, TRUE);
+            fe_view_scroll_y(v, +3);
             break;
         case fevent_SCROLL_BOTTOM:
-            fe_view_scroll_y(v, -3, TRUE);
+            fe_view_scroll_y(v, -3);
             break;
         case fevent_SCROLL_OR_CURSOR_UP:
 	    fe_cursor_movement(v, 0, +1);
@@ -385,16 +370,16 @@ static void scroll_event_handler(int event, fe_view v)
 	    fe_cursor_movement(v, 0, -1);
             break;
         case fevent_SCROLL_FAR_LEFT:
-            fe_view_scroll_x(v, -3, TRUE);
+            fe_view_scroll_x(v, -3);
             break;
         case fevent_SCROLL_FAR_RIGHT:
-            fe_view_scroll_x(v, +3, TRUE);
+            fe_view_scroll_x(v, +3);
             break;
         case fevent_SCROLL_PAGE_LEFT:
-            fe_view_scroll_x(v, -2, TRUE);
+            fe_view_scroll_x(v, -2);
             break;
         case fevent_SCROLL_PAGE_RIGHT:
-            fe_view_scroll_x(v, +2, TRUE);
+            fe_view_scroll_x(v, +2);
             break;
     }
 }
@@ -485,23 +470,19 @@ static void open_event_handler(int event, fe_view v)
 
     case fevent_OPEN_RELATED_STUFF:
 	fe_dispose_view(fe_locate_view(TARGET_INFO));
-	frontend_open_url("ncint:openpanel?name=related", v, TARGET_TOP, NULL, fe_open_url_NO_CACHE);
+	frontend_open_url("ncfrescointernal:openpanel?name=related", v, TARGET_TOP, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_FONT_SIZE:
-	frontend_complain(fe_internal_toggle_panel("customfonts"));
+	frontend_open_url("ncfrescointernal:openpanel?name=customfonts", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_SOUND:
-	frontend_complain(fe_internal_toggle_panel("customsound"));
+	frontend_open_url("ncfrescointernal:openpanel?name=customsound", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_BEEPS:
-	frontend_complain(fe_internal_toggle_panel("custombeeps"));
-	break;
-
-    case fevent_OPEN_SCALING:
-	frontend_complain(fe_internal_toggle_panel("customscaling"));
+	frontend_open_url("ncfrescointernal:openpanel?name=custombeeps", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
     }
 }
@@ -514,46 +495,9 @@ static void status_event_handler(int event, fe_view v)
 static void toolbar_event_handler(int event, fe_view v)
 {
     if (event == fevent_TOOLBAR_EXIT)
-    {
 	frontend_complain(fe_status_unstack(v));
-    }
-    else if (fe_popup_open() || on_screen_kbd )
-    {
-	sound_event(snd_WARN_BAD_KEY);
-    }
     else
-    {
 	frontend_complain(fe_status_open_toolbar(v, event - fevent_TOOLBAR_MAIN));
-
-	if (event == fevent_TOOLBAR_DETAILS)
-	    fe_open_version(v);
-    }
-}
-
-static void frame_link_event_handler(int event, fe_view v)
-{
-    switch (event)
-    {
-    case fevent_FRAME_LINK_LEFT:
-	fe_frame_link_move(v, be_link_BACK);
-	break;
-
-    case fevent_FRAME_LINK_RIGHT:
-	fe_frame_link_move(v, 0);
-	break;
-
-    case fevent_FRAME_LINK_UP:
-	fe_frame_link_move(v, be_link_VERT | be_link_BACK);
-	break;
-
-    case fevent_FRAME_LINK_DOWN:
-	fe_frame_link_move(v, be_link_VERT);
-	break;
-
-    case fevent_FRAME_LINK_ACTIVATE:
-	fe_frame_link_activate(v);
-	break;
-    }
 }
 
 static void url_event_handler(int event, fe_view v)
@@ -565,6 +509,45 @@ static void url_event_handler(int event, fe_view v)
     s = getenv(buf);
     if (s && s[0])
 	frontend_complain(frontend_open_url(s, v, NULL, NULL, 0));
+}
+
+/* The order here is determined by that in fevents.h */
+
+static int codec_actions[] =
+{
+    plugin_state_STOP,
+    plugin_state_PLAY,
+    plugin_state_PAUSE,
+    plugin_state_REWIND,
+    plugin_state_FAST_FORWARD,
+    plugin_state_RECORD
+};
+
+static void codec_event_handler(int event, fe_view v)
+{
+    int action = event - fevent_CODEC_STOP;
+    if (action < sizeof(codec_actions)/sizeof(codec_actions[0]))
+    {
+	be_item item = be_plugin_action_item_HELPERS;
+
+	if (v && v->displaying)
+	    item = v->current_link;
+
+	backend_plugin_action(v->displaying, item, codec_actions[action]);
+    }
+    else if (event == fevent_CODEC_MUTE)
+    {
+	/* do something else... */
+    }
+    else if (event == fevent_CODEC_CLOSE)
+    {
+	be_item item = be_plugin_action_item_HELPERS;
+
+	if (v && v->displaying)
+	    item = v->current_link;
+
+	backend_plugin_action(v->displaying, item, be_plugin_action_CLOSE);
+    }
 }
 
 static void encoding_event_handler(int event, fe_view v)
@@ -584,7 +567,7 @@ void fevent_handler(int event, fe_view v)
 
     case fevent_CLASS_WINDOW:
 	event &= ~fevent_WINDOW;
-	v = fe_find_top_nopopup(v);
+	v = fe_find_top(v);
 	/* fall-through */
 
     case fevent_CLASS_FRAME:
@@ -632,9 +615,6 @@ void fevent_handler(int event, fe_view v)
 		break;
 	    case fevent_SUB_CLASS_TOOLBAR2:
 		tb_event_handler(event, v);
-		break;
-	    case fevent_SUB_CLASS_FRAME_LINK:
-		frame_link_event_handler(event, v);
 		break;
             }
 	    break;

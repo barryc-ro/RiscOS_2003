@@ -13,20 +13,17 @@
 #define TARGET_VERY_TOP	"__top"
 #define TARGET_DBOX	"__dbox"
 #define TARGET_PASSWORD	"__passwd"
-/* #define TARGET_FAVS	"__favs" */
+#define TARGET_FAVS	"__favs"
 #define TARGET_HISTORY	"__history"
 #define TARGET_INFO	"__info"
-/* ;#define TARGET_OPEN	"__open" */
-/* ;#define TARGET_CUSTOM	"__custom" */
-#define TARGET_ERROR	"__error"
-#define TARGET_FIND	"__find"
+#define TARGET_OPEN	"__open"
+#define TARGET_CUSTOM	"__custom"
 
+extern fe_view fe_find_top(fe_view v);
 extern fe_view fe_find_window(fe_view start, wimp_w w);
 extern fe_view fe_find_target(fe_view start, const char *target);
 extern fe_view fe_find_top_popup(fe_view v);
 extern fe_view fe_find_top_nopopup(fe_view v);
-extern int fe_popup_open(void);
-
 extern fe_view fe_frame_specifier_decode(fe_view top, const char *spec);
 extern char *fe_frame_specifier_create(fe_view v, char *buf, int len);
 

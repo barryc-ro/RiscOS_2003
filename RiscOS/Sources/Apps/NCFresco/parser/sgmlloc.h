@@ -114,7 +114,4 @@ extern void add_char_to_inhand(SGMLCTX *context, char input);
 extern void push_inhand(SGMLCTX *context);
 extern void push_bar_last_inhand(SGMLCTX *context);
 
-/* colours.c */
-extern VALUE colour_lookup(STRING name);
-
 /* eof sgmlloc.h */

@@ -13,7 +13,6 @@
  * 02/08/96: SJM: changed bwidth to 0 if no anchor around it.
  * 11/09/96: SJM: new_area_item was checking for valid coords which obviously don't exist for SHAPE=DEFAULT
  * 27/02/97: SJM: Added new attributes to INPUT, TEXTAREA, SELECT for background colours and images
- * 29/04/97: SJM: Changed IMG ww and hh to being VALUEs.
  */
 
 #include <stdlib.h>
@@ -34,7 +33,7 @@
 #include "filetypes.h"
 #include "parsers.h"
 #include "images.h"
-#include "gbf.h"
+
 #include "tables.h"
 
 #include "htmlparser.h"
@@ -203,9 +202,9 @@ extern void set_font_type(SGMLCTX *context, int type)
 	x &= WEBFONT_SIZE_MASK;
     else
 	x &= WEBFONT_SIZE_MASK | WEBFONT_FLAG_BOLD | WEBFONT_FLAG_ITALIC;
-
+    
     x |= type;
-
+    
     SET_EFFECTS(context->tos, STYLE_WF_INDEX, x);
 }
 
@@ -594,10 +593,6 @@ extern void text_item_push_image(HTMLCTX * me,
     if ( ismap->type == value_void )
 	new->flags |= rid_image_flag_ISMAP;
 
-#if 1
-    new->ww = *ww;
-    new->hh = *hh;
-#else
     if ( ww->type == value_absunit )
 	new->ww = (int)(ww->u.f/2);    /* convert back to pixels to avoid confusing users of this */
     else if ( ww->type == value_pcunit )
@@ -612,13 +607,14 @@ extern void text_item_push_image(HTMLCTX * me,
 	new->hh = hh->u.i;
     else
 	new->hh = -1;
-#endif
     if ( border->type == value_integer )
 	new->bwidth = border->u.i;
     else
 	new->bwidth = (me->aref && me->aref->href) || new->usemap ? 1 : 0;	/* Default is border if link else not */
 
-    PRSDBGN(("Image %s, border=%d\n", new->src ? new->src : "", new->bwidth));
+#if DEBUG
+    fprintf (stderr, "Image %s, border=%d\n", new->src ? new->src : "", new->bwidth);
+#endif
 
     if (hspace->type == value_integer)
         new->hspace = hspace->u.i;
@@ -639,21 +635,6 @@ extern void text_item_push_image(HTMLCTX * me,
     GET_ROSTYLE(nb->st);
 
     rid_text_item_connect(me->rh->curstream, nb);
-
-#if 0				/* FIXME: SJM: this new scheme doesn't work !!! */
-    if (gbf_active(GBF_EARLYIMGFETCH))
-    {
-	rid_text_item_image *tii = (rid_text_item_image *) nb;
-
-	IMGDBG(("text_item_push_image: src '%s' im %p bwidth %d, hspace %d, vspace %d\n",
-		tii->src, tii->im, tii->bwidth, tii->hspace, tii->vspace));
-
-#if 0 /*ndef BUILDERS*/
-	if (tii->im == NULL)
-	    tii->im = oimage_fetch_image(doc, tii->src, tii->ww.type == value_none || tii->hh.type == value_none);
-#endif
-    }
-#endif
 }
 
 /*****************************************************************************/
@@ -711,7 +692,8 @@ extern void new_option_item(HTMLCTX * me, VALUE *value, rid_input_flags flags)
     new = mm_calloc(1, sizeof(*new));
 
     new->flags = flags;
-    new->value = valuestringdup(value);
+    if (value->type == value_string)
+	new->value = stringdup(value->u.s);
 
     rid_option_item_connect(me->form->last_select, new);
 }
@@ -1149,7 +1131,7 @@ extern void push_fake_search_form(HTMLCTX * me, VALUE *prompt)
 
   SJM: Currently this is only called from the <BR> code. We don't want it to
   push a break if the previous word has line break set.
-
+  
   */
 
 extern void text_item_push_break(HTMLCTX * me)
@@ -1175,9 +1157,9 @@ extern void text_item_push_break(HTMLCTX * me)
 	rid_text_item_text *ti = mm_calloc(1, sizeof(*ti));
 
 	PRSDBG(("line break\n"));
-
+     
 	nb = (rid_text_item *) ti;
-
+     
 	nb->tag = rid_tag_TEXT;
 	nb->flag |= rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK;
 	nb->aref = me->aref;	/* Current anchor, or NULL */
@@ -1192,7 +1174,7 @@ extern void text_item_push_break(HTMLCTX * me)
 	flexmem_shift();
 
 	rid_text_item_connect(me->rh->curstream, nb);
-
+    
     }
     else
     {
@@ -1239,8 +1221,6 @@ extern void text_item_push_hr(HTMLCTX *me, VALUE *align, VALUE *noshade, VALUE *
     rid_text_item_hr *item;
     rid_text_item *ti;
 
-    /* This implies LINE_BREAK overrides NO_BREAK. Don't forget this
-       when altering the formatter! */
     if ( (ti = me->rh->curstream->text_last) != NULL )
 	ti->flag |= rid_flag_LINE_BREAK;
 

@@ -16,10 +16,6 @@
 #include "util.h"
 #include "tables.h"
 
-
-
-
-
 static void append_new(HTMLCTX *htmlctx, int reason, STRING item)
 {
     /* These two don't apply anymore? */
@@ -516,54 +512,7 @@ static void fmt_deliver_eos(SGMLCTX *context, int reason, STRING item, ELEMENT *
   a convenient means of obtaining the data they want in the unit they
   want (lines).
 
-  SJM: 11/05/97: separated out the routines to do tab expansions and concatenation
-  to ensure TEXTAREA and OPTION are expanded and fixed memory leaks due to not always
-  freeing the item passed in.
-  
   */
-
-static STRING get_tab_expanded_string(STRING item, STRING inhand)
-{
-    STRING t;
-    int i, extra = inhand.bytes;
-
-    for (i = 0; i < item.bytes; i++)
-    {
-	extra++;
-	    
-	if (item.ptr[i] == '\t')
-	{
-	    PRSDBG(("Performing tab expansion\n"));
-	    while ( (extra & 7) != 0 )
-		extra++;
-	}
-    }
-
-    t.bytes = extra;
-    t.ptr = mm_malloc(extra + 1);
-
-    if (inhand.bytes)
-	memcpy(t.ptr, inhand.ptr, inhand.bytes);
-    extra = inhand.bytes;
-
-    for (i = 0; i < item.bytes; i++)
-    {
-	if (item.ptr[i] == '\t')
-	{
-	    t.ptr[extra++] = ' ';
-	    while ( (extra & 7) != 0 )
-		t.ptr[extra++] = ' ';
-	}
-	else
-	{
-	    t.ptr[extra++] = item.ptr[i];
-	}
-    }
-
-    t.ptr[extra] = 0;
-
-    return t;
-}
 
 static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT *elem)
 {
@@ -577,17 +526,12 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	{
 	    rid_textarea_item *tai;
 	    rid_textarea_line *tal;
-	    STRING null;
 
 	    tai = htmlctx->form->last_text;
 
 	    tal = mm_calloc(1, sizeof(*tal));
-#if 1
-	    null.bytes = 0;
-	    tal->text = get_tab_expanded_string(item, null).ptr;
-#else
 	    tal->text = stringdup(item);
-#endif
+
 	    if (tai->default_lines)
 	    {
 		tai->def_last_line->next = tal;
@@ -602,29 +546,19 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	else
 	{
 	    PRSDBG(("pre_deliver_word(): TEXTAREA line being discarded\n"));
-/* 	    mm_free(item.ptr); */
+	    mm_free(item.ptr);
 	}
-	string_free(&item);
     }
     else if (context->tos->element == HTML_SELECT)
     {
 	if (htmlctx->form && htmlctx->form->last_select && htmlctx->form->last_select->last_option)
 	{
 	    rid_option_item *opt = htmlctx->form->last_select->last_option;
-	    STRING current;
-	    
+
 	    PRSDBG(("Option line='%.*s'\n", 
 		    htmlctx->inhand_string.bytes,
 		    htmlctx->inhand_string.ptr));
 
-#if 1
-	    current.bytes = opt->text ? strlen(opt->text) : /*NULL*/ 0;
-	    current.ptr = opt->text;
-
-	    opt->text = get_tab_expanded_string(item, current).ptr;
-
-	    mm_free(current.ptr);
-#else
 	    if (opt->text)
 	    {
 		int len;
@@ -643,9 +577,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	    {
 		opt->text = stringdup(item);
 	    }
-#endif
 	}
-	string_free(&item);
     }
 
     else if (htmlctx->inhand_reason == DELIVER_WORD)
@@ -654,9 +586,6 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	/* tabs according to how many characters in hand */
 
 	STRING t;
-#if 1
-	t = get_tab_expanded_string(item, htmlctx->inhand_string);
-#else
 	int i, extra = htmlctx->inhand_string.bytes;
 
 	for (i = 0; i < item.bytes; i++)
@@ -692,7 +621,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	}
 
 	t.ptr[extra] = 0;
-#endif
+
 	string_free(&item);
 	string_free(&htmlctx->inhand_string);
 	htmlctx->inhand_string = t;
@@ -701,11 +630,6 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
     else
     {
 	STRING t;
-#if 1
-	STRING null;
-	null.bytes = 0;
-	t = get_tab_expanded_string(item, null);
-#else
 	int i, extra = 0;
 
 	for (i = 0; i < item.bytes; i++)
@@ -722,7 +646,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 
 	t.bytes = extra;
 	t.ptr = mm_malloc(extra + 1);
-	extra = htmlctx->inhand_string.bytes; /* SJM: 11/05/96 shouldn't this be zero ?? */
+	extra = htmlctx->inhand_string.bytes;
 
 	for (i = 0; i < item.bytes; i++)
 	{
@@ -740,7 +664,6 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 
 	t.ptr[extra] = 0;
 
-#endif
 	string_free(&item);
 
 	htmlctx->inhand_string = t;
