@@ -1,12 +1,5 @@
 # Makefile for RCABlast
 #
-# ***********************************
-# ***    C h a n g e   L i s t    ***
-# ***********************************
-# Date       Name	 Description
-# ----       ----	 -----------
-# 06-Sep-96  JRH	  Created.
-#
 
 COMPONENT = RCABlast
 
@@ -24,8 +17,8 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT
-DFLAGS  = -DDEBUG=3
+CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT -DSWAP_NIBBLE_ORDER
+#DFLAGS  = -DDEBUG=3
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 INCLUDES= -IC: -IINetInc: -IINetInc:^.^.libs
@@ -104,6 +97,7 @@ rom_link:
 	truncate map.${COMPONENT} linked.${COMPONENT}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
+
 
 
 
