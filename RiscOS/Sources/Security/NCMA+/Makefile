@@ -52,17 +52,19 @@ INCLUDES= -IC:
 # the fact that you bought 40,000 of the wrong type of smartcard
 # use DIALING_FROM_UK to frig numbers locally and tell the server to frig them for UK international access
 # use DEFEAT_BROWSER_LIMIT to prevent MA parsing NCIBrowserMode tags for restricting URLs
+# use SECURE_RELATIONSHIP_SERVER to speak to the relationship server via SSL
+#use MANUFACTURER_KEY_X509 if the root public key is in an x.509 certificate, otherwise raw DER RSA key is assumed
 
 # no debugging
 CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -UREMOTE_DEBUG -UENABLE_DEBUGGING -DPOINTLESS_BUTTONS -DUSE_TINY \
-		-DCHIMPANZEE_INTERFACE -DAUTHENTICATE_SIGNATURES -UDIALING_FROM_UK -UDEFEAT_BROWSER_LIMIT \
-		-USECURE_RELATIONSHIP_SERVER
+		-DCHIMPANZEE_INTERFACE -DAUTHENTICATE_SIGNATURES -DDIALING_FROM_UK -UDEFEAT_BROWSER_LIMIT \
+		-USECURE_RELATIONSHIP_SERVER -DMANUFACTURER_KEY_X509
 
 # debugging
-#CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -UREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
+#CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -DREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
-		-DSHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK \
-		-USECURE_RELATIONSHIP_SERVER
+		-DSHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK -DSECURE_RELATIONSHIP_SERVER \
+		-UMANUFACTURER_KEY_X509
 
 
 # Libraries
@@ -151,6 +153,7 @@ resources:
         ${MKDIR} <resource$dir>.Resources
         ${MKDIR} <resource$dir>.Resources.NCMA
         ${CP} Resources.MFRCERT  <resource$dir>.Resources.NCMA.MFRCERT ${CPFLAGS}
+        ${CP} Resources.MFRKEY <resource$dir>.Resources.NCMA.MFRKEY ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
