@@ -85,16 +85,14 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} o.*      ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.*    ${WFLAGS}
         ${RM} h.header
         ${RM} ${RMTARGET}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
         
 # dummy target
-h.header: cmhg.header
-	@echo
-        
+h.header: o.header ;@
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
@@ -105,8 +103,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -120,10 +117,8 @@ ${RMTARGET}: ${OBJS}
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
+# Extra dependencies:
+o.module: h.header
+
 #
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.swis
-o.module:	C:h.kernel
-o.module:	h.module
-o.module:	h.header
