@@ -5,67 +5,14 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 09-Mar-01  SNB          Recreated
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT  = Joystick
+HEADER1    = Joystick
+ROM_SOURCE = Front.s
 
-#
-# Program specific options:
-#
-COMPONENT = Joystick
-SOURCE    = s.Front
-TARGET    = rm.Joystick
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
-RDIR      = Resources
-LDIR      = ${RDIR}.${LOCALE}
-
-
-#
-# Export Paths for Messages module
-#
-RESDIR  = <resource$dir>.Resources2.${COMPONENT}
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-resources:
-        ${MKDIR} ${RESDIR}
-        ${CP} ${LDIR}.Messages  ${RESDIR}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied to Messages module
-
-clean:
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
