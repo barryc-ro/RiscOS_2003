@@ -28,11 +28,9 @@ include RAMCModule
 include ROMCModule
 
 clean:
-	${WIPE} aof ${WFLAGS}
 	${WIPE} o ${WFLAGS}
 	${WIPE} h ${WFLAGS}
 	${WIPE} rm ${WFLAGS}
-	${WIPE} linked ${WFLAGS}
         @${ECHO} ${COMPONENT}: cleaned
 
 ${DIRS}:
