@@ -92,6 +92,13 @@
 ; 28-May-97  TMD  2.30		Program border colour to only set ED[0], to be suitable for non-Macrovision use.
 ; 05-Jun-97  TMD  2.31		Attempt to protect against electric surges by holding reset active for 10ms
 ; 21-Aug-97  TMD  2.32		Remove surge protection, make it wait for vsync before resetting L64002.
+; 29-Oct-97  TMD  2.33		(Conditionally) Added commands for access to registers.
+; 03-Nov-97  TMD  2.34		Started stuff for trick play mode support (incomplete so disabled).
+; 05-Nov-97  TMD  2.35		Disable IRQs in AudioMuteSound, AudioSendPlay, AudioSendPause, AudioPlayFastFrame,
+;				 AudioPlaySlowFrame around access to banked registers.
+; 07-Nov-97  TMD  2.36		Enable trick play support
+; 10-Nov-97  TMD  2.37		Fix CheckErrorStatus so it saves lr_svc around the SWI call.
+; 10-Nov-97  TMD  2.38		Remove TrickPlay stuff so above fix can be tested.
 ;
 
 	LEADR	Module_LoadAddr
@@ -148,6 +155,24 @@ SaveAPacket SETL Save1stFullPacket :LOR: Save1stFIQPacket
 
 	GBLL	HoldResetFor10ms
 HoldResetFor10ms	SETL	{FALSE}	; try holding reset low for 10ms to protect against electric surge
+
+	GBLL	RegDebug
+RegDebug SETL	{TRUE}			; allow L64002 register access thru *-commands
+
+	GBLL	NobbleL64002VideoPacketLengths ; set video packet lengths to zero as written to L64002
+NobbleL64002VideoPacketLengths SETL {FALSE}
+
+	GBLL	TrickPlaySupport
+TrickPlaySupport SETL {FALSE}
+
+	GBLL	StopStartTrickPlay	; on BeginActiveVideo IRQ, check video buffer
+StopStartTrickPlay SETL {TRUE} :LAND: TrickPlaySupport ; has at least VBV size amount in it, otherwise stop decoder
+
+	GBLL	FudgeZeroLengthPackets	; Fudge zero-length packets by waiting until length is known
+FudgeZeroLengthPackets SETL {TRUE} :LAND: TrickPlaySupport	; required for OVS trick play
+
+	GBLL	NobbleInputVideoPacketLengths	; pretend all inputted video packets have zero length
+NobbleInputVideoPacketLengths SETL {TRUE} :LAND: TrickPlaySupport
 
 ; Structure of a PTS list entry
 
@@ -420,6 +445,11 @@ SavedPacketPTS		#	8	; PTS on 1st packet
   ]
  ]
 
+ [ StopStartTrickPlay
+TrickStops		#	4	; number of times code stopped the decoder
+TrickStarts		#	4	; number of times code started the decoder
+ ]
+
 ; Large blocks
 
 VideoPTSList		#	PTSListSize * VideoPTSListEntries
@@ -488,7 +518,7 @@ Mod_Title
 	=	"MPEG2Video", 0
 
 Mod_HelpStr
-	=	"MPEG2Video", TAB, "2.32 (21 Aug 1997)", 0
+	=	"MPEG2Video", TAB, "2.38 (10 Nov 1997)", 0
 	ALIGN
 
 Mod_SWITable
@@ -510,6 +540,11 @@ Mod_SWITable
 Mod_HC_Table
 	Command SyncOffset, 1, 1
 	Command VideoInfo, 0, 0
+ [ RegDebug
+	Command ReadL64002, 2, 1
+	Command WriteL64002, 3, 2
+	Command	PacketInfo, 0, 0
+ ]
 	=	0
 
 SyncOffset_Help
@@ -904,6 +939,10 @@ VideoOpenStream Entry "r1,r2, r11"
 	STR	r1, SyncMode					; don't enable sync on I frames until an appropriate ResetStream
 	STR	r1, AnchorFIFOOverruns
  ]
+ [ StopStartTrickPlay
+	STR	r1, TrickStops
+	STR	r1, TrickStarts
+ ]
  [ CountVideoPackets
 	STR	r1, SyncMode					; normal syncing until a reset stream
  ]
@@ -1241,6 +1280,10 @@ VideoFullPackets Entry "r0,r11"
 	STR	r0, UnknownLengthPacket			; and clear the pointer to it
 	Pull	"r0,r1"
 20
+ [ NobbleInputVideoPacketLengths
+	ORR	r0, r0, #PacketDescriptorFlags_FullLengthUnknown	; pretend was unknown length
+	STR	r0, [r2, #PacketDescriptor_Flags]
+ ]
 	TST	r0, #PacketDescriptorFlags_FullLengthUnknown ; is the new packet of unknown length
  [ FudgeZeroLengthPackets
 	STRNE	r2, UnknownLengthPacket			; if so, then set up pointer to it
@@ -1823,7 +1866,7 @@ VideoSendPlay Entry "r0,r1"
 
 VideoSendPause Entry "r0,r1"
 	MOV	r0, #0		; disable video decoder by clearing bit 0 of IR0
-	MVN	r1, #1
+	MVN	r1, #IR_DecodeStatus
 	BL	UpdateIR
 	MOV	r0, #1
 	STR	r0, PendingFreezeState	; should be frozen
@@ -2722,6 +2765,41 @@ BeginVerticalBlank Entry
 ; r0-r3 can be junked
 
 BeginActiveVideo Entry "r4,r5,r8"
+ [ StopStartTrickPlay
+
+; might want to condition this on trick play mode somehow
+
+	LDR	r0, VideoPreFilling
+	TEQ	r0, #0
+	BNE	%FT09				; [prefilling, so don't start decoder]
+  [ {TRUE}
+	ReadReg	r0, Status0			; check if video still requesting
+	TST	r0, #L64002_Status0_VideoChannelReady
+	MVN	r1, #IR_DecodeStatus
+	MVNEQ	r0, r1				; if enough, start decoder
+	ADREQ	r2, TrickStarts
+	MOVNE	r0, #0				; if not, stop it
+	ADRNE	r2, TrickStops
+  |
+	BL	VideoGetBufferFullness
+;	LDR	r0, VideoVBVSize
+	LDR	r0, =200*1024
+	CMP	r2, r0
+	MVN	r1, #IR_DecodeStatus
+	MVNCS	r0, r1				; if enough, start decoder
+	ADRCS	r2, TrickStarts
+	MOVCC	r0, #0				; if not, stop it
+	ADRCC	r2, TrickStops
+  ]
+	BL	UpdateIR
+
+	LDR	lr, [r2]
+	ADD	lr, lr, #1			; increment either TrickStops or TrickStarts
+	STR	lr, [r2]
+
+09
+ ] ; StopStartTrickPlay
+
  [ PerformFieldInversion
 	LDR	r0, FieldInversionState		; 2 => freeze, 1 => unfreeze, 0 => do nowt
 	CMP	r0, #1
@@ -2764,6 +2842,7 @@ BeginActiveVideo Entry "r4,r5,r8"
 	MOV	r1, #0
 	STR	r1, FreezeUpdate
 07
+
 
  [ CountUnderruns
 	LDR	r1, UnderrunIRQState
@@ -4025,12 +4104,19 @@ CheckErrorStatus Entry "r1,r2"
 	LDR	lr, TimeOffsetOfVRError
 	CMP	lr, #-1				; if already had a vid recon error since last video reset
 	BNE	%FT10				; then skip
-	Push	"r0"
+
+	MOV	r1, pc
+	ORR	r2, r1, #SVC_mode		; switch to SVC_mode so we can save lr_svc
+	TEQP	r2, #0
+	NOP
+	Push	"r0, lr"
 	SWI	XOS_ReadMonotonicTime
 	LDR	lr, TimeOfLastVideoReset
 	SUB	r0, r0, lr
 	STR	r0, TimeOffsetOfVRError
-	Pull	"r0"
+	Pull	"r0, lr"
+	TEQP	r1, #0				; switch back to previous mode
+	NOP
 10
 	TST	r0, #ErrorStatus_ContextError
 	LDRNE	lr, ContextErrors
@@ -4333,6 +4419,11 @@ VideoSendNewPacketIfNecessary Entry "r1-r5, r11"
 	TST	r1, #PacketDescriptorFlags_MPEGStart	; is it start of an MPEG packet?
 	EXIT	EQ					; [no, so no packet header required, exit EQ => try to send data]
 
+ [ FudgeZeroLengthPackets
+	TST	r1, #PacketDescriptorFlags_FullLengthUnknown	; is it a packet of indeterminate length?
+	EXIT	NE					; [yes, so we must wait for length to be determined, exit NE => wait]
+ ]
+
 	LDR	r3, FIQSlotWritePtr
 	LDR	lr, [r3, #FIQSlot_Address]
 	TEQ	lr, #0
@@ -4382,6 +4473,9 @@ VideoSendNewPacketIfNecessary Entry "r1-r5, r11"
 	TEQ	r4, #0					; if zero, then leave it at zero
 	ADDNE	r4, r4, r5				; else add on length of packet header
 	SUBNE	r4, r4, #6				; but don't count start code or length in total length
+ [ NobbleL64002VideoPacketLengths
+	MOV	r4, #0					; store zero length in packet
+ ]
 	MOV	lr, r4, LSR #8
 	STRB	lr, [r0, #PacketDescriptor_PTS+4]	; store len hi
 	STRB	r4, [r0, #PacketDescriptor_PTS+5]	; store len lo
@@ -4573,6 +4667,12 @@ VideoInfo_Code Entry "r8"
 
 30
  ]
+ [ StopStartTrickPlay
+	LDR	r0, TrickStops
+	DREG	r0, "Trick stops = "
+	LDR	r0, TrickStarts
+	DREG	r0, "Trick starts = "
+ ]
 	LDR	r0, CurrentHorizontalSize
 	DREG	r0, "Horizontal size = "
 	LDR	r0, CurrentVerticalSize
@@ -4700,9 +4800,10 @@ OutputInfo Entry
 	DREG	r3, "PTSListWritePtr = "
 	LDR	r0, [r8, #SI_PTSListOverruns]
 	DREG	r0, "PTS list overruns = "
+
+ [ {FALSE}
 	LDR	r4, [r8, #SI_PTSListPtr]
 	LDR	r5, [r8, #SI_PTSListSize]
-
 	DLINE	"PTS List data:"
 10
 	TEQ	r2, r3
@@ -4716,6 +4817,7 @@ OutputInfo Entry
 	MOVEQ	r2, #0
 	B	%BT10
 20
+ ]
 	CLRV
 	EXIT
 
@@ -4748,6 +4850,180 @@ SR4410  =	"44.1kHz", 0
 SR4800  =	"48kHz", 0
 SR3200  =	"32kHz", 0
 	ALIGN
+
+; **************************************************************************
+
+ [ RegDebug
+ReadL64002_Help
+	=	"*ReadL64002 reads an L64002 register.", CR
+ReadL64002_Syntax
+	=	"Syntax: *ReadL64002 <group> [<index>]", 0
+WriteL64002_Help
+	=	"*WriteL64002 writes an L64002 register.", CR
+WriteL64002_Syntax
+	=	"Syntax: *WriteL64002 <group> [<index>] <value>", 0
+PacketInfo_Help
+	=	"*PacketInfo gives info on video and audio packets held by MPEG2Video", CR
+PacketInfo_Syntax
+	=	"Syntax: *PacketInfo", 0
+	ALIGN
+
+
+; **************************************************************************
+;
+;	ReadL64002_Code - Entry point for *ReadL64002 command
+;
+; Syntax: ReadL64002 <group> [<index>]
+; (index is required on groups 6 and 7)
+
+ReadL64002_Code Entry "r11"
+	LDR	wp, [r12]
+	LDR	r11, L64002_Registers
+
+	MOV	r4, r1					; r4 = number of parameters we had
+	MOV	r1, r0					; r1 -> command tail
+	MOV	r0, #10 :OR: (1:SHL:29) :OR: (1:SHL:31) ; space or ctrl terminator, base 10,
+							; limit of 0 to R2 inclusive
+	MOV	r2, #7					; maximum value for group
+	SWI	XOS_ReadUnsigned
+	EXIT	VS
+
+	MOV	r5, r2					; r5 = group
+	CMP	r5, #6
+	BCS	%FT50					; [reading group 6 or 7, so need index]
+
+; not a banked group, so should be at end of line
+
+	TEQ	r4, #1					; if correct number of parameters
+	LDREQB	r0, [r11, r5, LSL #L64002_Register_Address_Shift] ; then read data
+	BEQ	%FT70					; and branch to display code
+TooManyParams
+	ADRL	r0, TooManyParametersError
+	SETV
+	EXIT
+
+50
+	MOV	r0, #10 :OR: (1:SHL:29) :OR: (1:SHL:31) ; space or ctrl terminator, base 10,
+							; limit of 0 to R2 inclusive
+	MOV	r2, #63					; maximum value of index is 63
+	SWI	XOS_ReadUnsigned
+	EXIT	VS
+
+; r5 = group, r2 = index
+
+	MOV	r1, pc
+	ORR	lr, r1, #I_bit
+	TEQP	lr, #0					; disable IRQs while we do this
+
+	ReadReg r3, AIR					; preserve old AIR
+	WriteReg r2, AIR				; set new AIR
+	LDRB	r0, [r11, r5, LSL #L64002_Register_Address_Shift] ; then read data
+	WriteReg r3, AIR
+
+	TEQP	r1, #0					; restore IRQ status
+70
+	DREG	r0, "Value is &"
+	CLRV
+	EXIT
+
+; **************************************************************************
+;
+;	WriteL64002_Code - Entry point for *WriteL64002 command
+;
+; Syntax: WriteL64002 <group> [<index>] <value>
+; (index is required on groups 6 and 7)
+
+WriteL64002_Code ALTENTRY
+	LDR	wp, [r12]
+	LDR	r11, L64002_Registers
+
+	MOV	r4, r1					; r4 = number of parameters we had
+	MOV	r1, r0					; r1 -> command tail
+	MOV	r0, #10 :OR: (1:SHL:29) :OR: (1:SHL:31) ; space or ctrl terminator, base 10,
+							; limit of 0 to R2 inclusive
+	MOV	r2, #7					; maximum value for group
+	SWI	XOS_ReadUnsigned
+	EXIT	VS
+
+	MOV	r5, r2					; r5 = group
+	CMP	r5, #6
+	BCS	%FT50					; [reading group 6 or 7, so need index]
+
+; not a banked group, so should only have 2 parameters
+
+	TEQ	r4, #2					; if incorrect number of parameters
+	BNE	TooManyParams
+
+	MOV	r0, #10 :OR: (1:SHL:30)			; restrict value to 0 to 255
+	SWI	XOS_ReadUnsigned
+	EXIT	VS
+
+	STRB	r0, [r11, r5, LSL #L64002_Register_Address_Shift] ; write data
+	B	%FT70					; and branch to common exit code
+
+50
+	MOV	r0, #10 :OR: (1:SHL:29) :OR: (1:SHL:31) ; space or ctrl terminator, base 10,
+							; limit of 0 to R2 inclusive
+	MOV	r2, #63					; maximum value of index is 63
+	SWI	XOS_ReadUnsigned
+	EXIT	VS
+
+	MOV	r4, r2					; r4 = index
+
+; now read value
+
+	MOV	r0, #10 :OR: (1:SHL:30)			; restrict value to 0 to 255
+	SWI	XOS_ReadUnsigned
+	EXIT	VS
+
+	MOV	r1, pc
+	ORR	lr, r1, #I_bit
+	TEQP	lr, #0					; disable IRQs while we do this
+
+	ReadReg r3, AIR					; preserve old AIR
+	WriteReg r4, AIR				; set new AIR
+	STRB	r2, [r11, r5, LSL #L64002_Register_Address_Shift] ; then write data
+	WriteReg r3, AIR
+
+	TEQP	r1, #0					; restore IRQ status
+70
+	CLRV
+	EXIT
+
+PacketInfo_Code Entry
+	LDR	wp, [r12]
+
+	LDR	r0, VideoPacketListHeadPtr
+	BL	CountPackets
+	DREG	r1, "Number of video packets = &"
+	DREG	r2, "Video packet data length = &"
+
+	LDR	r0, AudioPacketListHeadPtr
+	BL	CountPackets
+	DREG	r1, "Number of audio packets = &"
+	DREG	r2, "Audio packet data length = &"
+
+	CLRV
+	EXIT
+
+CountPackets Entry
+	MOV	lr, pc
+	ORR	lr, lr, #I_bit			; disable IRQs so atomic
+	TEQP	lr, #0
+
+	MOV	r1, #0
+	MOV	r2, #0
+10
+	TEQ	r0, #0
+	ADDNE	r1, r1, #1			; increment number of packets
+	LDRNE	r3, [r0, #PacketDescriptor_Length]
+	ADDNE	r2, r2, r3
+	LDRNE	r0, [r0, #PacketDescriptor_Link]
+	BNE	%BT10
+
+	EXITS					; exit restoring IRQ state
+
+ ] ; RegDebug
 
 ; **************************************************************************
 ;
@@ -5209,6 +5485,10 @@ AudioFreePacket ROUT
 ;
 
 AudioMuteSound Entry "r0, r11"
+	MOV	lr, pc
+	ORR	lr, lr, #I_bit				; disable IRQs around Read/WriteRegI called from fgd
+	TEQP	lr, #0
+
 	LDR	r11, L64002_Registers
 	ReadRegI lr, AudioModeControl
 	ANDS	r0, r0, #1
@@ -5216,29 +5496,40 @@ AudioMuteSound Entry "r0, r11"
 	BICEQ	lr, lr, #AudioModeControl_AudioSoftMute	; EQ => not muted
 	ORRNE	lr, lr, #AudioModeControl_AudioSoftMute ; NE => muted
 	WriteRegI lr, AudioModeControl, r0
-	EXIT
+
+	EXITS						; exit restoring IRQ state
 
 ; **************************************************************************
 ;
 ;	AudioSendPlay - Start decoder playing
 
 AudioSendPlay Entry "r0"
+	MOV	lr, pc
+	ORR	lr, lr, #I_bit				; disable IRQs around Read/WriteRegI called from fgd
+	TEQP	lr, #0
+
 	ReadRegI r0, AudioTrickModes
 	AND	r0, r0, #AudioTrickModes_ValidBits :AND: :NOT: AudioTrickModes_PausePlayFastSlowBits
 	ORR	r0, r0, #AudioTrickModes_Play
 	WriteRegI r0, AudioTrickModes, lr
-	EXIT
+
+	EXITS						; exit restoring IRQ state
 
 ; **************************************************************************
 ;
 ;	AudioSendPause - Stop decoder playing
 
 AudioSendPause Entry "r0"
+	MOV	lr, pc
+	ORR	lr, lr, #I_bit				; disable IRQs around Read/WriteRegI called from fgd
+	TEQP	lr, #0
+
 	ReadRegI r0, AudioTrickModes
 	AND	r0, r0, #AudioTrickModes_ValidBits :AND: :NOT: AudioTrickModes_PausePlayFastSlowBits
 	ORR	r0, r0, #AudioTrickModes_Pause
 	WriteRegI r0, AudioTrickModes, lr
-	EXIT
+
+	EXITS						; exit restoring IRQ state
 
 ; **************************************************************************
 ;
@@ -5402,6 +5693,10 @@ AudioDoStreamSync Entry "r0-r2"
 ; out:  -
 
 AudioPlayFastFrame Entry "r0"
+	MOV	lr, pc
+	ORR	lr, lr, #I_bit
+	TEQP	lr, #0				; disable IRQs round access
+
 	ReadRegI r0, AudioTrickModes
 	AND	r0, r0, #AudioTrickModes_ValidBits :AND: :NOT: AudioTrickModes_PausePlayFastSlowBits
 	ORR	r0, r0, #AudioTrickModes_Fast
@@ -5410,8 +5705,7 @@ AudioPlayFastFrame Entry "r0"
 	LDR	lr, AudioFasts
 	ADD	lr, lr, #1
 	STR	lr, AudioFasts
-	CLRV
-	EXIT
+	EXITS					; exit restoring IRQ state
 
 ; **************************************************************************
 ;
@@ -5422,6 +5716,10 @@ AudioPlayFastFrame Entry "r0"
 ; out:  -
 
 AudioPlaySlowFrame Entry "r0"
+	MOV	lr, pc
+	ORR	lr, lr, #I_bit
+	TEQP	lr, #0				; disable IRQs round access
+
 	ReadRegI r0, AudioTrickModes
 	AND	r0, r0, #AudioTrickModes_ValidBits :AND: :NOT: AudioTrickModes_PausePlayFastSlowBits
 	ORR	r0, r0, #AudioTrickModes_Slow
@@ -5430,8 +5728,7 @@ AudioPlaySlowFrame Entry "r0"
 	LDR	lr, AudioSlows
 	ADD	lr, lr, #1
 	STR	lr, AudioSlows
-	CLRV
-	EXIT
+	EXITS					; exit restoring IRQ state
 
  [ UseWholePackets
 ; **************************************************************************
