@@ -9,9 +9,9 @@
  *              Internet: nas@ant.co.uk
  *
  * Date:	3 Febuary 1995
- * Last Edited:	19 March 1996
+ * Last Edited:	9 July 1997
  *
- * Copyright 1996 by ANT Limited
+ * Copyright 1996,1997 by ANT Limited
  */
 
 #include "kernel.h"
@@ -36,6 +36,8 @@
 #ifdef ANTPPP
 #include "MonitorIf.h"
 #endif
+#include "Server.h"
+#include "resolv.h"
 
 
 /* Global variables */
@@ -50,6 +52,9 @@ static BOOL CheckClock(void);
 #endif
 extern _kernel_oserror *res_init(void);
 extern BOOL		dns_client = FALSE;
+#ifdef server_BUILD
+extern BOOL		dns_server = FALSE;
+#endif
 
 #ifdef DEBUG
 extern FILE 		*omniout = NULL;		/* Debug trace file handle */
@@ -83,6 +88,9 @@ static void module_final(void)
   clear_ticker_and_event();
   clear_callback();
   res_close();
+#ifdef server_BUILD
+  server_close();
+#endif
   cachefini(TRUE);
   debugclose();
 }
@@ -126,6 +134,7 @@ extern _kernel_oserror *config_init(void)
       cache_retries = cache_RETRIES;
     }
   }
+  cachefini(TRUE);
 #ifdef ANTPPP
   r.r[0] = (int) "Modem";
   r.r[1] = (int) &state;
@@ -260,7 +269,7 @@ static BOOL validhost(char *hostname)
  *	set), then a RISC OS error block pointer is returned in R0, and
  *	the V flag is set on exit.
  */
-static _kernel_oserror *gethost(_kernel_swi_regs *r)
+extern _kernel_oserror *gethost(_kernel_swi_regs *r, BOOL server)
 {
   char *hostname = (char *) r->r[0];
   cache_rec *cr = NULL;
@@ -317,21 +326,31 @@ static _kernel_oserror *gethost(_kernel_swi_regs *r)
   {
     struct hostent *host = NULL;
     _kernel_oserror *err = NULL;
-    char s[32];
+    char s[96];
+    char *p;
     int s_addr;
     int numeric = 0;
 
     /* Item not in cache, try a hosts file lookup */
     host = _gethtbyname(hostname);
     if (!host) host = _gethtbyaddr(hostname);
+    if (host) p = host->h_name;
+    if (!host && (p = strcasestr(hostname, _res.defdname)) != NULL)
+    {
+      TRACE1("gethost: local domain substring match '%s'\n", hostname);
+      strncpy(s, hostname, 95);
+      if (p-hostname < 95) s[p-hostname-1] = '\0';
+      host = _gethtbyname(s);
+      p = hostname;
+    }
     TRACE1("gethost: host %x\n", (int) host);
     if (host)
     {
       /* If found entry in hosts file, add to local cache */
       TRACE("gethost: found in hosts file\n");
-      cachemerge(cacheadd(host->h_name, host, flags_VALID | flags_HOST));
+      cr = cachemerge(cacheadd(p /*host->h_name*/, host, flags_VALID | flags_HOST));
       r->r[0] = 0;
-      r->r[1] = (int) host;
+      r->r[1] = (int) cr->host;
       return(NULL);
     }
 
@@ -355,6 +374,7 @@ static _kernel_oserror *gethost(_kernel_swi_regs *r)
     /* Item not in hosts file, send off a remote resolver request */
     TRACE("gethost: launching...\n");
     cr->failure = -2;
+    cr->server = server;
     err = res_launch(hostname, cr, numeric);
     if (err)
     {
@@ -387,12 +407,25 @@ extern _kernel_oserror *SWIentry(int swi_no, _kernel_swi_regs *r, void *privatew
                 {
                   thread_wait("_GetHostByName");
                   r->r[0] = (int) hostname;
-                  err = gethost(r);
+                  err = gethost(r, FALSE);
                 } while (!err && (r->r[0] == EINPROGRESS) && !escape_press());
                 TRACE2("GetHostByName: ret %x %d\n", (int) err, r->r[0]);
                 break;
     case 1: /* Resolver_GetHost */
-                return(gethost(r));
+                if (r->r[0] == 0)
+                {
+                  char s[32];
+                  int s_addr = *(int *) r->r[1];
+
+                  sprintf(s, "%d.%d.%d.%d.in-addr.arpa", s_addr & 0xff, (s_addr & 0xff00) >> 8,
+                    (s_addr & 0xff0000) >> 16, (s_addr & 0xff000000) >> 24);
+                  do
+                  {
+                    thread_wait("_GetHostByAddr");
+                    r->r[0] = (int) s;
+                    err = gethost(r, FALSE);
+                  } while (!err && (r->r[0] == EINPROGRESS) && !escape_press());
+                } else return(gethost(r, FALSE));
                 break;
     case 2: /* Resolver_GetCache */
     		cacheget(r);

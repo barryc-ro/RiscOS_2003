@@ -45,6 +45,7 @@
 #ifdef ANTPPP
 #    include "MonitorIf.h"
 #endif
+#include "Server.h"
 
 
 /* Global variables */
@@ -59,6 +60,10 @@ static fd_set        	dsmask;
 extern BOOL		online = FALSE; /* PPP status */
 #endif
 
+#ifdef server_BUILD
+static volatile int server_pending = 0;
+extern int              ss;        	/* server socket used for communications */
+#endif
 
 #ifndef FD_SET
 #define NFDBITS         32
@@ -166,6 +171,15 @@ extern int inetevent_handler(_kernel_swi_regs *r, void *pw)
     setup_callback();
     return(VIA_STACK);
   }
+#ifdef server_BUILD
+  if (r->r[0] == Event_Internet && r->r[2] == ss)
+  {
+    TRACE2("******** inetevent_handler: server %x %x\n", r->r[1], r->r[2]);
+    server_pending = 1;
+    setup_callback();
+    return(VIA_STACK);
+  }
+#endif
   return(VIA_R14);
 }
 
@@ -255,7 +269,7 @@ extern void res_tick(void)
         /* Hmmm .... */
 
         TRACE1("res_tick: failed retry %d\n", cr->retry);
-        if (cr->retry < cache_retries)
+        if (cr->retry < cache_retries && !cr->server)
         {
           TRACE("res_tick: updated PENDING to RETRY PENDING\n");
           cr->time = cr->dns->time = Time_Monotonic();
@@ -273,6 +287,9 @@ extern void res_tick(void)
           cr->failure = -2;
           heap_free(cr->dns);
           cr->dns = NULL;
+#ifdef server_BUILD
+          if (cr->server) server_result(cr);
+#endif
         }
       }
     }
@@ -294,6 +311,15 @@ extern int callback_handler(_kernel_swi_regs *regs, void *pw)
     /* Handle incoming data */
     res_rec();
   }
+#ifdef server_BUILD
+  if (server_pending)
+  {
+    TRACE("******** callback_handler: server datagram\n");
+    server_pending = 0;
+    /* Handle incoming data */
+    server_rec();
+  }
+#endif
   if (tick_pending > 0)
   {
     TRACE1("******** callback_handler: ticker %d\n", tick_pending);
@@ -381,7 +407,7 @@ extern void res_process(cache_rec *cr)
   {
     /* Complete failure - mark as failed */
     TRACE2("res_process: failed retry %d errno %d\n", cr->retry, cr->dns->errno);
-    if ((cr->retry < cache_retries) && (cr->dns->errno == HOST_NOT_FOUND))
+    if ((cr->retry < cache_retries) && (cr->dns->errno == HOST_NOT_FOUND) && !cr->server)
     {
       TRACE("res_process: updated PENDING to RETRY PENDING\n");
       cr->time = cr->dns->time = Time_Monotonic();
@@ -399,6 +425,9 @@ extern void res_process(cache_rec *cr)
       cr->failure = -1;
       heap_free(cr->dns);
       cr->dns = NULL;
+#ifdef server_BUILD
+      if (cr->server) server_result(cr);
+#endif
     }
   }
 
@@ -485,6 +514,7 @@ extern void res_rec(void)
   int inlen, fromlen;
   int snum;
   cache_rec *cr;
+  int x;
 
   TRACE1("res_rec: entry %d\n", sizeof(fd_set));
   do
@@ -510,6 +540,14 @@ extern void res_rec(void)
 
       /* Process what we've recieved */
       TRACE2("res_rec: got %d bytes at %x\n", inlen, (int) inpacket);
+
+    for (x = 0; x < inlen; x++)
+    {
+      TRACE1(" %02x", inpacket[x]);
+    }
+    TRACE("\n");
+
+
       hp = (HEADER *) inpacket;
       TRACE1("res_rec: id %d\n", hp->id);
       cr = packetid(hp->id);
@@ -580,6 +618,9 @@ extern void res_rec(void)
         heap_free(cr->dns);
         cr->dns = NULL;
         cr->failure = 0;
+#ifdef server_BUILD
+        if (cr->server) server_result(cr);
+#endif
         cachemerge(cr);
       }
     }
