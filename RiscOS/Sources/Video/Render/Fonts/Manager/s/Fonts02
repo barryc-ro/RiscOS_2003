@@ -1403,7 +1403,7 @@ scanjlp
         CMPNE   R14,#-1                 ;  3) split char = -1
         BNE     %FT01
 
-02      ADR     R0,scanstrpars
+        ADR     R0,scanstrpars
         STMIA   R0,{R1-R4}              ; save pars for later
         LDR     R14,futurechanged
         CMP     R14,#0
@@ -2134,24 +2134,43 @@ getgluewidth Entry "R0-R8,wrchbase"
 
 ; metricsptr, pixelsptr must be correctly relocated by the following code
 
-        LDR     R8,cacheindex
+        LDR     R7,cacheindex
         LDRB    R14,currentfont
-        LDR     R8,[R8,R14,LSL #2]      ; R8 -> font header
+        LDR     R8,[R7,R14,LSL #2]      ; R8 -> font header
+     [ newmapping
+        LDRB    R8,[R8,#hdr_masterfont]
+        LDR     R8,[R7,R8,LSL #2]       ; R8 -> master font header
         LDR     R7,[R8,#hdr_Kerns]!     ; R7 -> kerning block (if present)
-      [ :LNOT: newmapping
-        ;####TODO: Read kern info from master, and scale result
+     |
+        LDR     R7,[R8,#hdr_Kerns]!     ; R7 -> kerning block (if present)
+     ]
         TEQ     R7,#0
         BLEQ    CacheKerns              ; R7 -> kern block; metricsptr, pixelsptr relocated
         BVS     %FT99
-      ]
 
         CMP     R7,#1                   ; if no kerning data, cop out now
         EXITS   LS
 
         LDR     R6,[R7,#kern_flags]     ; R6 = metrics / kerning flags (superset of metrics flags)
+
+     [ newmapping
+        TST     R6,#flg_shortkerns      ; if short kerns, only kerning for both chars <= 255 (internal)
+        BEQ     %FT15
+        CMP     R0,#255
+        CMPLS   R1,#255
+        EXITS   HI
+15
+     ]
+
         ADD     R8,R7,#kern_index
+     [ newmapping
+        EOR     R14,R0,R1,ROR #4
+        EOR     R14,R14,R14,ROR #16
+        EOR     R14,R14,R14,ROR #8
+     |
         EOR     R14,R0,R1,LSR #4
         EOR     R14,R14,R1,LSL #4
+     ]
         AND     R14,R14,#&FF            ; R14 = R0 EOR (R1 ROR-in-8-bits 4)
 
         Debug   me,"getgluewidth: CharL, CharR, Kern table, index =",R0,R1,R8,R14
@@ -2165,6 +2184,46 @@ getgluewidth Entry "R0-R8,wrchbase"
         ADD     R5,R5,#kern_index       ; R5 -> first kern pair
         ADD     R8,R5,R8                ; R8 -> end
 
+     [ newmapping
+        TST     R6,#flg_shortkerns
+        BEQ     newlongkerns
+
+        ORR     R14,R0,R1,LSL #8        ; R14 = L,R pair
+        MOV     R14,R14,LSL #16
+
+newshortkerns_lp
+        LDR     R1,[R5],#4              ; R1 = CharL, CharR, Offset
+        MOV     R3,R1,LSL #16
+        TEQ     R3,R14
+        BEQ     donenewshortkern
+        CMP     R5,R8
+        BLO     newshortkerns_lp
+        EXITS
+
+donenewshortkern
+        TST     R6,#flg_noxoffsets
+        MOVEQ   R3,R1,ASR #16
+        MOVEQ   R4,#0
+        MOVNE   R3,#0
+        MOVNE   R4,R1,ASR #16
+        B       donekern
+
+newlongkerns
+        ORR     R14,R0,R1,LSL #16       ; R14 = L,R pair
+
+newlongkerns_lp
+        LDMIA   R5!,{R1,R3}             ; R1 = CharL, CharR, R3 = x-offset, y-offset
+        TEQ     R1,R14
+        BEQ     donenewkern
+        CMP     R5,R8
+        BLO     newlongkerns_lp
+        EXITS
+
+donenewkern
+        MOV     R4,R3,ASR #16           ; R4 = unscaled y-offset
+        MOV     R3,R3,LSL #16
+        MOV     R3,R3,ASR #16           ; R3 = unscaled x-offset
+     |
         TST     R6,#flg_shortkerns
         BEQ     longkerns
 
@@ -2238,12 +2297,19 @@ long_xy LDMIA   R5!,{R1,R3,R4}          ; R1 = char code, R3 = x-offset, R4 = y-
         CMP     R5,R8
         BLO     long_xy
         EXITS
-
 donekernx
         MOV     R4,#0
 
+     ]
+
 donekern
         Debug   me,"Kern pair offset =",R3,R4
+
+     [ newmapping
+        BL      scalewidth
+
+        Debug   me,"Scaled kern pair offset =",R3,R4
+     ]
 
         LDR     R1,metricsmatrix
         TEQ     R1,#0
@@ -2269,23 +2335,36 @@ transformkern
 
 ;..........................................................................
 
+ [ newmapping
+; In    R8 -> master font header + hdr_Kerns (kerns not loaded)
+ |
 ; In    R8 -> slave font header + hdr_Kerns (kerns not loaded)
+ ]
 ;       master font metrics are loaded
 ;       metricsptr, pixelsptr may be set up
 ; Out   R7 -> kerning block
 ;       R8, metricsptr, pixelsptr relocated if necessary
 
-      [ :LNOT: newmapping
 
         ASSERT  metricsptr = R10
         ASSERT  pixelsptr = R9
 
+     [ newmapping
+                ^       0
+kblk_link       #       4                       ; link to next kern pair block
+kblk_lcode      #       2                       ; character code of left-hand letter of pair
+kblk_rcode      #       2                       ; character code of right-hand letter of pair
+kblk_xoff       #       2                       ; unscaled x-offset
+kblk_yoff       #       2                       ; unscaled y-offset
+kblk_size       #       0
+     |
                 ^       0
 kblk_link       #       4                       ; link to next kern pair block
 kblk_xoff       #       4                       ; scaled x-offset
 kblk_yoff       #       4                       ; scaled y-offset
 kblk_code       #       4                       ; character code of right-hand letter of pair
 kblk_size       #       0
+     ]
 
 CacheKerns Entry "R0-R6,R11"
 
@@ -2294,9 +2373,13 @@ CacheKerns Entry "R0-R6,R11"
         PushP   "CacheKerns: metricsptr",metricsptr
         PushP   "CacheKerns: pixelsptr",pixelsptr
 
+     [ newmapping
+        SUB     R7,R8,#hdr_Kerns                ; R7 -> master font header
+     |
         LDRB    R0,[R8,#hdr_masterfont-hdr_Kerns]
         LDR     R7,cacheindex
         LDR     R7,[R7,R0,LSL #2]               ; R7 -> master font header
+     ]
         LDR     R5,[R7,#hdr_nchars]             ; R5 = no of entries (cached in GetMetricsHeader)
         LDR     R1,[R7,#hdr_MetricsPtr]         ; R1 -> master metrics
 
@@ -2314,6 +2397,7 @@ CacheKerns Entry "R0-R6,R11"
 
         PushP   "CacheKerns: master metrics",R1
 
+     [ :LNOT:newmapping
 ; load x, y point sizes of slave and master fonts, for scaling the offsets later
 
         ASSERT  hdr_xsize + 4 = hdr_ysize
@@ -2326,7 +2410,8 @@ CacheKerns Entry "R0-R6,R11"
 
         Push    "R2,R3,R4,R14"                  ; used later for scaling
 
-        Debug   me,"Stacked x,y size, x,y factor =",R2,R3,R4,R5
+        Debug   me,"Stacked x,y size, x,y factor =",R2,R3,R4,R14
+     ]
 
 ; now work out where the kerning information actually starts
 
@@ -2376,7 +2461,7 @@ CacheKerns Entry "R0-R6,R11"
 
         PushP   "Start of master kerns",R7      ; save this while we count the kern pairs
 
-      [ :LNOT: newmapping
+     [ :LNOT: newmapping
 
         SUB     R6,R8,#hdr_Kerns                ; R6 -> slave font header
         BL      getmapping_fromR6               ; R1 -> index of mapping block (external -> internal code)
@@ -2406,12 +2491,16 @@ CacheKerns Entry "R0-R6,R11"
         SUBS    R0,R0,#1
         BPL     %BT33
 31
-      ] ; not required if newmapping set
+     ] ; not required if newmapping set
 
 ; now count the kern pairs that are mapped in and work out how much space they will need
 
+     [ newmapping
+        MOV     R4,#0                           ; R4 = maximum code found so far
+     |
         MOV     R4,#0                           ; R4 = maximum x-offset found so far
         MOV     R5,#0                           ; R5 = maximum y-offset found so far
+     ]
         MOV     R6,#0                           ; R6 = number of kern pairs found so far
 
 kloop1  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => codes are 16-bit
@@ -2422,10 +2511,10 @@ kloop1  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         TEQ     R0,#0                           ; finished if L char = 0
         BEQ     endkloop
 
-      [ :LNOT: newmapping
+     [ :LNOT: newmapping
         TEQ     R11,#0
         LDRNEB  R0,[R11,R0]                     ; R0 = internal character code of L char
-      ]
+     ]
 
 kloop2  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => codes are 16-bit
         LDRB    R1,[R7],#1
@@ -2435,17 +2524,25 @@ kloop2  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         TEQ     R1,#0
         BEQ     kloop1
 
-      [ :LNOT: newmapping
+     [ :LNOT: newmapping
         TEQ     R11,#0
         LDRNEB  R1,[R11,R1]                     ; R1 = internal character code of R char
-      ]
 
         TEQ     R0,#0
         TEQNE   R1,#0                           ; forget it if either character is not mapped in
         BEQ     kloop2skip
+     ]
+
+     [ newmapping
+        CMP     R0,R4
+        MOVHI   R4,R0
+        CMP     R1,R4
+        MOVHI   R4,R1                           ; R4 = maximum code encountered
+     ]
 
         ADD     R6,R6,#1                        ; R6 = number of kern pairs found so far
 
+     [ :LNOT:newmapping
         TST     R9,#flg_noxoffsets
         BNE     %FT01
 
@@ -2472,6 +2569,7 @@ kloop2  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         CMP     R2,R5
         MOVGT   R5,R2                           ; R5 = maximum y-offset encountered
         B       kloop2
+      ]
 
 kloop2skip
         TST     R9,#flg_noxoffsets
@@ -2482,10 +2580,24 @@ kloop2skip
 
 endkloop
 
+     [ newmapping
+        Debug   me,"Number of kern pairs, highest code =",R6,R4
+
+; now R4 = highest code found, R6 = number of kern pairs
+
+        MOV     R14,R6,LSL #3                   ; R14 = space taken up by kern pairs (8 bytes each)
+
+        CMP     R4,#255                         ; go for short kerns if 8-bit codes and x or y only
+        BHI     %FT80
+        TST     R9,#flg_noxoffsets:OR:flg_noyoffsets
+        ORRNE   R9,R9,#flg_shortkerns
+        MOVNE   R14,R6,LSL #2                   ; R14 = space taken up by short kern pairs (4 bytes each)
+80
+     |
+        Debug   me,"Number of kern pairs, max x,y offsets =",R6,R4,R5
+
 ; now R4,R5 = maximum x,y offsets found, R6 = number of kern pairs
 ; on stack are slave x,y size and master x,y size
-
-        Debug   me,"Number of kern pairs, max x,y offsets =",R6,R4,R5
 
         TST     R9,#flg_noxoffsets              ; go for short kerns if x-offsets small enough
         ADDEQ   R0,sp,#0
@@ -2517,6 +2629,7 @@ endkloop
         Debug   me,"Kern pair size",R0
 
         MUL     R14,R6,R0                       ; R14 = space taken up by kern pairs
+     ]
         ADD     R6,R14,#kern_data               ; R6 = size of block required
         BL      reservecache                    ; R6 -> new block, R8 relocated
 95
@@ -2557,8 +2670,10 @@ kloop3  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         TEQ     R10,#0                          ; finished if L char = 0
         BEQ     endkloop2
 
+     [ :LNOT: newmapping
         TEQ     R11,#0
         LDRNEB  R10,[R11,R10]                   ; R10 = external code (0 => not mapped)
+     ]
 
 kloop4  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => codes are 16-bit
         LDRB    R3,[R7],#1
@@ -2568,12 +2683,14 @@ kloop4  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         TEQ     R3,#0
         BEQ     kloop3
 
+     [ :LNOT: newmapping
         TEQ     R11,#0
         LDRNEB  R3,[R11,R3]                     ; R3 = internal code of right-hand character
 
         TEQ     R10,#0
         TEQNE   R3,#0                           ; skip it if either character is not mapped
         BEQ     kloop4skip
+     ]
 
         TST     R9,#flg_noxoffsets
         MOVNE   R4,#0
@@ -2582,6 +2699,7 @@ kloop4  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         LDRB    R4,[R7],#1
         LDRB    R14,[R7],#1
         ORR     R4,R4,R14,LSL #8
+     [ :LNOT: newmapping
         MOV     R4,R4,LSL #16
         MOV     R4,R4,ASR #16                   ; R4 = signed 16-bit x-offset
 
@@ -2592,6 +2710,7 @@ kloop4  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         MOVEQ   R2,R0,ASR #4                    ; divide by old point size
         BLNE    divide
         MOV     R4,R2                           ; R4 = scaled x-offset
+     ]
 
 03      TST     R9,#flg_noyoffsets
         MOVNE   R5,#0
@@ -2600,6 +2719,7 @@ kloop4  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         LDREQB  R5,[R7],#1
         LDREQB  R14,[R7],#1
         ORREQ   R5,R5,R14,LSL #8
+     [ :LNOT: newmapping
         MOVEQ   R5,R5,LSL #16
         MOVEQ   R5,R5,ASR #16                   ; R5 = signed 16-bit y-offset
 
@@ -2610,19 +2730,43 @@ kloop4  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         MOVEQ   R2,R0,ASR #4
         BLNE    divide
         MOV     R5,R2                           ; R5 = scaled y-offset
+     ]
 
 04
         Debug   me,"CacheKerns: CharL, CharR, x-offset, y-offset =",R10,R3,R4,R5
 
+     [ newmapping
+        EORVC   R14,R10,R3,ROR #4
+        EORVC   R14,R14,R14,ROR #16
+        EORVC   R14,R14,R14,ROR #8
+        ANDVC   R0,R14,#&FF                     ; R0 = R10 EOR (R3 ROR-in-8-bits 4)
+
+        ORRVC   R11,R10,R3,LSL #16              ; R11 = lchar,rchar
+
+     |
         EORVC   R14,R10,R3,LSR #4
         EORVC   R14,R14,R3,LSL #4
         ANDVC   R0,R14,#&FF                     ; R0 = R10 EOR (R3 ROR-in-8-bits 4)
+     ]
 
         MOV     R3,#kblk_size
         BL      grabblock_claim                 ; R2 -> block (in ScratchSpace or RMA)
 
         Debug   me,"Kern hash table, index, new block =",R6,R0,R2
 
+     [ newmapping
+        ASSERT  kblk_link = 0
+        ASSERT  kblk_lcode = 4
+        ASSERT  kblk_rcode = 6
+        ASSERT  kblk_xoff = 8
+        ASSERT  kblk_yoff = 10
+        ASSERT  kblk_size = 12
+
+        LDRVC   R3,[R6,R0,LSL #2]               ; R3 = link to next block
+        ORRVC   R14,R4,R5,LSL #16               ; R14 = xoffset,yoffset
+        STMVCIA R2,{R3,R11,R14}                 ; store link, leftcode, rightcode, xoffset, yoffset
+        STRVC   R2,[R6,R0,LSL #2]               ; put new block at head of list
+     |
         ASSERT  kblk_link = 0
         ASSERT  kblk_xoff = 4
         ASSERT  kblk_yoff = 8
@@ -2632,6 +2776,7 @@ kloop4  TST     R9,#flg_16bitkerns              ; 0 => codes are 8-bit, 1 => cod
         LDRVC   R3,[R6,R0,LSL #2]               ; R3 = link to next block
         STMVCIA R2,{R3,R4,R5,R10}               ; store link, xoffset, yoffset, charcode
         STRVC   R2,[R6,R0,LSL #2]               ; put new block at head of list
+     ]
         BVC     kloop4
         BVS     %FT99                           ; error - discard block and exit
 
@@ -2656,6 +2801,22 @@ endkloop2
 06      TEQ     R2,#0
         BEQ     %FT07
 
+     [ newmapping
+08      LDMIA   R2,{R2,R5,R11}                  ; R2=link, R5=lcode,rcode, R11=xoffset,yoffset
+        TST     R9,#flg_shortkerns
+        STMEQIA R4!,{R5,R11}                    ; lcode(16),rcode(16),xoff(16),yoff(16)
+        BEQ     %BT06
+
+        MOV     R14,R5,LSR #8                   ; R14=rcode >> 8
+        MOV     R10,R5,LSL #24                  ; R10=lcode << 24
+        ORR     R5,R14,R10,LSR #24              ; R5=(rcode << 8) + lcode
+        TST     R9,#flg_noxoffsets
+        MOVNE   R11,R11,LSR #16
+        MOV     R11,R11,LSL #16                 ; R11=offset << 16
+        ORR     R5,R5,R11
+        STR     R5,[R4],#4
+        B       %BT06                           ; lcode(8),rcode(8),off(16)
+     |
         LDMIA   R2,{R2,R5,R10,R11}              ; R2=link, R5=xoffset, R10=yoffset, R11=code
         TST     R9,#flg_noxoffsets
         MOVNE   R5,R10                          ; R5 = first offset register to store
@@ -2673,6 +2834,7 @@ endkloop2
         STMEQIA R4!,{R1,R5}                     ; code/x-offset,y-offset or code,x-offset or code,y-offset
         STRNE   R1,[R4],#4                      ; code/x-offset or code/y-offset
         B       %BT06
+      ]
 
 07      ADD     R3,R3,#1
         CMP     R3,#256
@@ -2694,7 +2856,10 @@ endkloop2
 
         BL      makelink                        ; [R8] = R6 (successfully completed)
 
-100     ADD     sp,sp,#4*4                      ; remove x,y scale and x,y factor from stack
+100
+     [ :LNOT:newmapping
+        ADD     sp,sp,#4*4                      ; remove x,y scale and x,y factor from stack
+     ]
         PullP   "CacheKerns: pixelsptr",pixelsptr
         PullP   "CacheKerns: metricsptr",metricsptr
 
@@ -2713,8 +2878,6 @@ cachenokerns
         BL      unlockblock                     ; unlock master metrics
         MOV     R6,#0                           ; R6=0 => no kern info
         B       %BT100
-
-      ] ; this code isn't required if newmapping is set
 
 ;..........................................................................
 
@@ -2899,21 +3062,10 @@ readnextchar_andremap Entry
 
 readnextchar Entry "R1-R4,R7"
 
-      [ {FALSE} ; KJB fix - current font handle may be undefined - this is fine as long as
-                ; we're doing a control code.
-        LDRB    R0,currentfont
-        BL      getfontheaderptr                ; can return errors
-        EXIT    VS
-
-        ADD     R3,R7,#hdr_encoding
-        LDMIA   R3,{R3,R4}                      ; remember font's target encoding, so we can check if it was "utf8"
-      ]
-
         MOV     R1,wrchbase
 
         BL      readuint1_R1
 
-      [ {TRUE} ; Continued KJB fix
 ; If the returned number is <= &7F, the encoding is immaterial.
         CMP     R0,#&7F
         BLS     %FT99
@@ -2928,7 +3080,6 @@ readnextchar Entry "R1-R4,R7"
 
         ADD     R3,R7,#hdr_encoding
         LDMIA   R3,{R3,R4}                      ; remember font's target encoding, so we can check if it was "utf8"
-      ]
 
 ; Unless font's encoding is UCS, we've finished
 
@@ -2965,10 +3116,8 @@ readnextchar Entry "R1-R4,R7"
         BCC     %FT99                   ; bit 7 clear => 1 byte code
         BPL     %FT98                   ; bit 6 clear => continuation byte (illegal - don't read it again)
 
- [ {TRUE} ; KJB fix
         CMP     R0,#&FE                 ; &FE, &FF => illegal - don't read it again
         BHS     %FT98
- ]
 
         MOV     R4,#&80                 ; R4 = min value allowable
         MOV     R3,#&800                ; R3 = next bit to check for (NB: we gain only 4 bits the 1st time)
@@ -3047,19 +3196,19 @@ encoding_UTF8   DCB     "utf8",0,0,0,0          ; first 4 bytes of encoding is e
 ; Out   R0 = next character
 ;       R1 updated
 
-readuint1_R1 Entry
+readuint1_R1
 
-        LDR     R14,plottype
+        LDR     R0,plottype
         ASSERT  paint_16bit < paint_32bit
-        AND     R14,R14,#paint_16bit:OR:paint_32bit
-        CMP     R14,#paint_16bit
+        AND     R0,R0,#paint_16bit:OR:paint_32bit
+        CMP     R0,#paint_16bit
         LDRLOB  R0,[R1],#1
         LDRHI   R0,[R1],#4                      ; assume word-aligned
         LDREQ   R0,[R1],#2                      ; assume bottom 16 bits are OK for half-word access
         MOVEQ   R0,R0,LSL #16
         MOVEQ   R0,R0,LSR #16
 
-        EXITS
+        MOVS    PC,LR
 
 ;..............................................................................
 
@@ -3067,12 +3216,12 @@ readuint1_R1 Entry
 ; Out   R0 = next character
 ;       R1 updated
 
-readint1_R1 Entry
+readint1_R1
 
-        LDR     R14,plottype
+        LDR     R0,plottype
         ASSERT  paint_16bit < paint_32bit
-        AND     R14,R14,#paint_16bit:OR:paint_32bit
-        CMP     R14,#paint_16bit
+        AND     R0,R0,#paint_16bit:OR:paint_32bit
+        CMP     R0,#paint_16bit
 
         LDRLOB  R0,[R1],#1
         MOVLO   R0,R0,LSL #24                   ; sign-extend
@@ -3082,7 +3231,7 @@ readint1_R1 Entry
         MOVEQ   R0,R0,LSL #16
         MOVEQ   R0,R0,ASR #16
 
-        EXITS
+        MOVS    PC,LR
 
 ;..............................................................................
 
