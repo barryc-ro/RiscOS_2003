@@ -257,9 +257,11 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
 	    font_setfont(fs->lf);
 	}
 
-	if (fs->lfc != (tfc = render_link_colour(ti, doc) ) )
+	if (fs->lfc != (tfc = render_link_colour(ti, doc) ) || fs->lbc != render_colour_BACK)
 	{
 	    fs->lfc = tfc;
+	    fs->lbc = render_colour_BACK;
+
 	    render_set_font_colours(fs->lfc, render_colour_BACK, doc);
 	}
 

@@ -165,8 +165,8 @@ extern void fe_internal_deleting_view(fe_view v);
 
 /* from stbredraw.c*/
 
-extern int fe_view_scroll_x(fe_view v, int val);
-extern int fe_view_scroll_y(fe_view v, int val);
+extern int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight);
+extern int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight);
 extern int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y);
 
 /* from stbevents.c*/
@@ -219,6 +219,8 @@ extern void fe_frame_link_redraw_all(fe_view v);
 
 extern os_error *fe_handle_enter(fe_view v);
 extern os_error *fe_activate_link(fe_view v, int x, int y, int bbits);
+
+extern int fe_ensure_highlight(fe_view v, int scroll_flags);
 
 /* stbfe.h*/
 

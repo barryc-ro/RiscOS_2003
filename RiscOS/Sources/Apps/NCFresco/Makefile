@@ -48,7 +48,7 @@ POSS_TARGETS=	br bu cu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX CHECKERS_UNIX clea
 		memlib mu \
 		MOST MOST_UNIX realclean sanity srclist sr NCFRESCO \
 		NCFRESCO_RISCOS riscoslib TAGS TESTS xref \
-		pu PLOTCHECK PLOTCHECK_UNIX
+		pu PLOTCHECK PLOTCHECK_UNIX ru RECONS
 
 all:
 		@echo
@@ -74,7 +74,7 @@ RM=		rm -f
 
 #PREDEPS=	builddate.h sanity
 #POSTACTS=	@$(RM) $(PREDEPS)
-PREDEPS=        sanity
+PREDEPS=        #sanity
 POSTACTS=
 
 #############################################################################
@@ -96,7 +96,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
 		files.o fvpr.o remote.o coalesce.o keyhl.o \
-		buildtime.o
+		buildtime.o format.o colspan.o loformat.o cs2.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -205,23 +205,23 @@ CBFRESCO_CFLAGSD= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML
 # -------------
 
 BUILDERS_INCS=	-I../bunix -I../RISC_OSLib
-BUILDERS_CFLAGS=-DBUILDERS -DNEW_UNEXP_TABLE $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -g
+BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -g
 BUILDERS_VPATH=	$(RISCOS_VPATH)
 BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
-		coalesce.o fvpr.o gbf.o
+		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
 BUILDERS_LIBS=	-lefence
 
-CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNEW_UNEXP_TABLE -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1
+CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1
 CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
-		coalesce.o fvpr.o gbf.o
+		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
 CHECKERS_LIBS=
 
 HTMLCHECK_INCS=	-I../stdalone
@@ -243,15 +243,27 @@ FIXL_VPATH=	../!Fresco ../commonsrc
 FIXL_OBJS=	SerialEnc.o bittabenc.o fixlicence.o
 
 PLOTCHECK_INCS=	-I../plotcheck -I../RISC_OSLib
-PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -DNEW_UNEXP_TABLE -DNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=0 -O9
+PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -UNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -DBE_DEBUG=0 -O9 -g $(UNIX_CFLAGS)
 PLOTCHECK_VPATH=$(RISCOS_VPATH)
 PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
-		coalesce.o fvpr.o gbf.o
+		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o loformat.o cs2.o
 PLOTCHECK_LIBS=
+
+
+RECONS_INCS=	-I../reconsparse -I../RISC_OSLib
+RECONS_CFLAGS=-DBUILDERS -DRECONS -DHTMLCHECK -DNO_PTRS $(RECONS_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=1 -O9
+RECONS_VPATH=$(RISCOS_VPATH)
+RECONS_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
+		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
+		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
+		otext.o otextarea.o basic2.o stream.o object.o config.o \
+		oobject.o objects.o usrtrc.o rectplot.o \
+		coalesce.o fvpr.o gbf.o
+RECONS_LIBS=
 
 #############################################################################
 
@@ -572,12 +584,16 @@ FIXL:
 		VPATH="$(FIXL_VPATH):$(UNIX_VPATH)" \
 		CFLAGS="$(FIXL_CFLAGS) $(UNIX_CFLAGS)"
 
-# This is ordered to get matches in the main files first. Note that !Fresco
-# starts with a !, which find takes as meaninga predicate. Hence ./
+# Go for all files these days so tags-replace is certain to work.
+# Use a better build script I swiped - it handles the very long
+# command line problem and also places a TAGS symlink in each
+# subdirectory for convenience.
 TAGS:		srclist_fresco
 		@echo "Building emacs TAGS file for fresco"
-		@etags `cat srclist`
-		@$(RM) srclist
+		@./MAKE_ETAGS
+
+#		@etags `cat srclist`
+#		@$(RM) srclist
 
 TESTS:
 		@echo "Performing parser tests."
@@ -603,21 +619,6 @@ WEBGOPHER:
 
 #############################################################################
 
-pu:		PLOTCHECK
-
-PLOTCHECK:	PLOTCHECK_UNIX
-
-PLOTCHECK_UNIX:	$(PREDEPS)
-		@echo "Making PLOTCHECK for UNIX"
-		@cd ./plotcheck; $(MAKE) $@ \
-		LIBS="$(PLOTCHECK_LIBS) $(UNIX_LIBS)" \
-		OBJS="$(PLOTCHECK_OBJS) $(UNIX_OBJS)" \
-		VPATH="$(PLOTCHECK_VPATH):$(UNIX_VPATH)" \
-		CFLAGS="$(PLOTCHECK_CFLAGS) $(UNIX_CFLAGS)"
-		$(POSTACTS)
-
-#############################################################################
-
 # This runs checks that look for potential problems with the source/CVS
 # tree. Please use every so often.
 
@@ -633,6 +634,35 @@ fresh:		HTML TAGS
 
 #############################################################################
 
+pu:		PLOTCHECK
+
+PLOTCHECK:	PLOTCHECK_UNIX
+
+PLOTCHECK_UNIX:	$(PREDEPS)
+		@echo "Making PLOTCHECK for UNIX"
+		@cd ./plotcheck; $(MAKE) $@ \
+		LIBS="$(PLOTCHECK_LIBS) $(UNIX_LIBS)" \
+		OBJS="$(PLOTCHECK_OBJS) $(UNIX_OBJS)" \
+		VPATH="$(PLOTCHECK_VPATH):$(UNIX_VPATH)" \
+		CFLAGS="$(PLOTCHECK_CFLAGS) $(UNIX_CFLAGS)"
+		$(POSTACTS)
+
+#############################################################################
+
+ru:		RECONS
+
+RECONS:		RECONS_UNIX
+
+RECONS_UNIX:	$(PREDEPS)
+		@echo "Making RECONS for UNIX"
+		@cd ./reconsparse; $(MAKE) $@ \
+		LIBS="$(RECONS_LIBS) $(UNIX_LIBS)" \
+		OBJS="$(RECONS_OBJS) $(UNIX_OBJS)" \
+		VPATH="$(RECONS_VPATH):$(UNIX_VPATH)" \
+		CFLAGS="$(RECONS_CFLAGS) $(UNIX_CFLAGS)"
+		$(POSTACTS)
+
+#############################################################################
 
 # ===========================================================================
 #
@@ -680,12 +710,13 @@ NCFRESCO_MEMCHECK_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -
 NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
 
 # choose one here
-NCFRESCO_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS)
-
-NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn  -DSTBWEB_ROM=0 \
+NCFRESCO_ANT_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -DSTBWEB_ROM=0 \
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
-NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
+NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
+				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
+
+NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
 NCFRESCO_RAM_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
@@ -697,7 +728,7 @@ NCFRESCO_ROM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS)
 NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine \"REMOVE_RAMLOAD_CHECK SETL {TRUE}\"
 
 NCFRESCO_ANT_LDFLAGS=
-NCFRESCO_BUILD_LDFLAGS=		-d -v
+NCFRESCO_BUILD_LDFLAGS=		-v
 NCFRESCO_ROM_LDFLAGS=	
 NCFRESCO_RAM_LDFLAGS=	
 
@@ -705,14 +736,14 @@ NCFRESCO_VPATH=			../!NCFresco
 
 NCFRESCO_BASE_OBJS=		clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 				stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
-				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o rlib_alloc.o \
+				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o \
 				$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 
 
 NCFRESCO_ANT_OBJS=		$(NCFRESCO_BASE_OBJS)
-NCFRESCO_BUILD_OBJS=		$(NCFRESCO_BASE_OBJS)
+NCFRESCO_BUILD_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o
 NCFRESCO_ROM_OBJS=		$(NCFRESCO_BASE_OBJS) rolib.o ModuleWrap.o
-NCFRESCO_RAM_OBJS=		$(NCFRESCO_BASE_OBJS) ModuleWrap.o
+NCFRESCO_RAM_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o ModuleWrap.o
 
 
 NCFRESCO_ANT_LIBS=		../webimage/webimage1
@@ -734,7 +765,7 @@ NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 
 NCFRESCO_RAM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/riscoslibm.o \
+				../RISC_OSLib/risc_oslibzm \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
@@ -765,6 +796,7 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Config	$(NCFRESCO_BUILD_RESOURCES)
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Messages	$(NCFRESCO_BUILD_RESOURCES)
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/MimeMap	$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Welcome,faf	$(NCFRESCO_BUILD_RESOURCES)
 		@-mkdir $(RISCOS_BUILD_OBJECTS)
 		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
 
@@ -901,7 +933,6 @@ NCFRESCO_BINARIES:
 		@uuencode ~/tmp/ncfrescobin.tar.gz ~/tmp/ncfrescobin.tar.gz > ~/tmp/ncfrescobin.tar.gz.uue
 
 # ========================================================================================================================
-
 
 
 # eof fresco/Makefile

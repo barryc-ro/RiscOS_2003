@@ -24,6 +24,7 @@
 #include "unwind.h"
 #include "interface.h"
 #include "version.h"
+#include "flexwrap.h"
 
 #if MEMLIB
 #include "../memlib/memheap.h"
@@ -51,6 +52,22 @@
 #define calloc MemHeap_calloc
 #define realloc MemHeap_realloc
 #endif /* MEMLIB */
+
+#if MEMLIB && defined(MemCheck_MEMCHECK)
+#define mc_add_block(p,x) MemCheck_RegisterMiscBlock(p,x)
+#define mc_resize_block(p,x) MemCheck_ResizeMiscBlock(p,x)
+#define mc_del_block(p) MemCheck_UnRegisterMiscBlock(p)
+#define CHECKVAR MemCheck_checking checking
+#define CHECKOFF checking = MemCheck_SetChecking(0,0)
+#define CHECKON  MemCheck_RestoreChecking(checking)
+#else
+#define mc_add_block(p,x)
+#define mc_resize_block(p,x)
+#define mc_del_block(p)
+#define CHECKVAR
+#define CHECKOFF
+#define CHECKON
+#endif
 
 #include "memwatch.h"
 #include "debug.h"
@@ -362,6 +379,8 @@ void mm_free(void *x)
 		m, m->magic, tail->magic);
 
 	i = 1;
+	/* Unfortunately, this isn't so easy on many other platforms! */
+#ifdef RISCOS
 	do
 	{
 	    fnp = caller(i);
@@ -369,6 +388,7 @@ void mm_free(void *x)
 		fprintf(stderr, "mm_free caller(%d)='%s'\n", i, fnp);
 	    i++;
 	} while (fnp && strcmp(fnp, "main") != 0);
+#endif
 	exit(1);
     }
 
@@ -502,22 +522,37 @@ void mm__dump(FILE *f)
 }
 
 #else
-/* SJM: changed these back to plain alloc names as they will be #define's anyawy if MEMLIb is defined  */
+/* SJM: changed these back to plain alloc names as they will be #define's anyawy if MemLib is defined  */
+
 extern void *mm_malloc(size_t x)
 {
     void *p;
+    CHECKVAR;
+
+    CHECKOFF;
     p=malloc(x);
+    CHECKON;
+
     if (p)
+    {
+        mc_add_block(p,x);
 	return p;
+    }
 
     if (x == 0)
 	return NULL;
 
     mm_can_we_recover(TRUE);
 
+    CHECKOFF;
     p=malloc(x);
+    CHECKON;
+
     if (p)
+    {
+        mc_add_block(p,x);
 	return p;
+    }
 
     mm_no_more_memory();
 
@@ -526,10 +561,19 @@ extern void *mm_malloc(size_t x)
 
 extern void *mm_calloc(size_t x, size_t y)
 {
+#if 1
+    void *p = mm_malloc(x*y);
+    if ( p )
+        memset( p, 0, x*y );
+    return p;
+#else
     void *p;
     p=calloc(x, y);
     if (p)
+    {
+        mc_add_block(p,x*y)
 	return p;
+    }
 
     if (x*y == 0)
 	return NULL;
@@ -538,28 +582,50 @@ extern void *mm_calloc(size_t x, size_t y)
 
     p=calloc(x, y);
     if (p)
+    {
+        mc_add
 	return p;
+    }
 
     mm_no_more_memory();
 
     return NULL;
+#endif
 }
 
 extern void *mm_realloc(void *x, size_t y)
 {
     void *p;
+    CHECKVAR;
+
+    CHECKOFF;
     p=realloc(x, y);
+    CHECKON;
+
     if (p)
-	return p;
+    {
+        if ( x )
+            mc_del_block(x);
+        mc_add_block(p,y);
+ 	return p;
+    }
 
     if (y == 0)
 	return NULL;
 
     mm_can_we_recover(TRUE);
 
+    CHECKOFF;
     p=realloc(x, y);
+    CHECKON;
+
     if (p)
+    {
+        if ( x )
+            mc_del_block(x);
+        mc_add_block(p,y);
 	return p;
+    }
 
     mm_no_more_memory();
 
@@ -569,7 +635,15 @@ extern void *mm_realloc(void *x, size_t y)
 extern void mm_free(void *x)
 {
     if ( x )
+    {
+        CHECKVAR;
+
+        mc_del_block(x);
+
+        CHECKOFF;
         free(x);
+        CHECKON;
+    }
 }
 
 extern void mm__dump(FILE *f)
@@ -603,5 +677,107 @@ void mm_check(void)
 {
     mm__check(stderr);
 }
+
+#if MEMLIB && defined( MemCheck_MEMCHECK )
+/* pdh: Lots of filth here for wrapping flex and subflex accesses */
+
+#undef MemFlex_Alloc
+#undef MemFlex_Free
+#undef MemFlex_MidExtend
+#undef SubFlex_Initialise
+#undef SubFlex_Alloc
+#undef SubFlex_Free
+
+/* Declare the real ones (the header declared the fake ones, confused yet?)
+ */
+
+extern os_error *MemFlex_Alloc( flex_ptr anchor, int size );
+extern os_error *MemFlex_Free( flex_ptr anchor );
+extern os_error *MemFlex_MidExtend( flex_ptr anchor, int at, int by );
+
+extern os_error *SubFlex_Initialise( flex_ptr master );
+extern os_error *SubFlex_Alloc( subflex_ptr anchor, int size, flex_ptr master );
+extern os_error *SubFlex_Free( subflex_ptr anchor, flex_ptr master );
+
+os_error *MemFlex_MemCheck_Alloc( flex_ptr a, int size )
+{
+    CHECKVAR;
+    os_error *e;
+
+    CHECKOFF;
+    if ( *((void**)a) )
+        MemCheck_UnRegisterFlexBlock(a);
+    e = MemFlex_Alloc( a, size );
+    if ( !e )
+        MemCheck_RegisterFlexBlock( a, size );
+    CHECKON;
+    return e;
+}
+
+os_error *MemFlex_MemCheck_Free( flex_ptr a )
+{
+    CHECKVAR;
+    os_error *e;
+
+    CHECKOFF;
+    MemCheck_UnRegisterFlexBlock( a );
+    e = MemFlex_Free( a );
+    CHECKON;
+    return e;
+}
+
+os_error *MemFlex_MemCheck_MidExtend( flex_ptr a, int at, int by )
+{
+    CHECKVAR;
+    os_error *e;
+    int newsize;
+
+    CHECKOFF;
+    newsize = MemFlex_Size( a ) + by;
+    e = MemFlex_MidExtend(a, at, by);
+    if ( !e )
+        MemCheck_ResizeFlexBlock( a, newsize );
+    CHECKON;
+    return e;
+}
+
+os_error *SubFlex_MemCheck_Initialise( flex_ptr master )
+{
+    CHECKVAR;
+    os_error *e;
+
+    CHECKOFF;
+    e = SubFlex_Initialise( master );
+    if ( !e )
+        MemCheck_RegisterFlexBlock( master, MemFlex_Size(master) );
+    CHECKON;
+    return e;
+}
+
+os_error *SubFlex_MemCheck_Alloc( subflex_ptr anchor, int size, flex_ptr master )
+{
+    CHECKVAR;
+    os_error *e;
+
+    CHECKOFF;
+    e = SubFlex_Alloc( anchor, size, master );
+    MemCheck_ResizeFlexBlock( master, MemFlex_Size(master) );
+    CHECKON;
+    return e;
+}
+
+os_error *SubFlex_MemCheck_Free( subflex_ptr anchor, flex_ptr master )
+{
+    CHECKVAR;
+    os_error *e;
+
+    CHECKOFF;
+    e = SubFlex_Free( anchor, master );
+    MemCheck_ResizeFlexBlock( master, MemFlex_Size(master) );
+    CHECKON;
+    return e;
+}
+
+#endif
 
 /* eof memwatch.c */

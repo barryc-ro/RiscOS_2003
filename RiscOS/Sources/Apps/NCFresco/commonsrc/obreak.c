@@ -74,7 +74,7 @@ void obreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_hr *tih = (rid_text_item_hr *)ti;
 
-    ti->width = -1;
+    ti->width = MAGIC_WIDTH_HR;
     ti->pad = 0;
     ti->max_up = tih->size/2 + PBREAK_SPACING/2;
     ti->max_down = ti->max_up;
@@ -82,7 +82,7 @@ void obreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 void opbreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
-    ti->width = -1;
+    ti->width = MAGIC_WIDTH_HR;
     ti->pad = 0;
     ti->max_up = PBREAK_HEIGHT;
     ti->max_down = 0;

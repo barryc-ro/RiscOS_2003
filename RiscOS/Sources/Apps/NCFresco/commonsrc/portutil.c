@@ -1357,33 +1357,4 @@ extern input_key_action lookup_key_action(int key)
 
 /*****************************************************************************/
 
-#if defined(STBWEB) && !STBWEB_ROM
-static char tmpnam_buf[L_tmpnam] = "";
-static char count = 0;
-
-char *my_tmpnam(char *s)
-{
-    FILE *f;
-    BOOL present = FALSE;
-    do
-    {
-	int sig = (time(NULL) << 8) | count++;
-
-	if (!s)
-	    s = tmpnam_buf;
-
-	sprintf(s, "<Wimp$ScrapDir>.%08x", sig);
-	f = fopen(s, "w");
-	if (f)
-	{
-	    fclose(f);
-	    present = TRUE;
-	}
-    }
-    while (!present);
-}
-#endif
-    
-/*****************************************************************************/
-
 /* eof portutil.c */

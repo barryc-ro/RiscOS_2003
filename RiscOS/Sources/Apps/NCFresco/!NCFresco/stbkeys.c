@@ -417,6 +417,8 @@ static key_list rca_web_keys[] =
     { ctrl('a'),			fevent_HOTLIST_ADD + fevent_WINDOW },
     { ctrl('r'),			fevent_RELOAD + fevent_WINDOW },
 
+    { akbd_Fn12,			fevent_TOGGLE_STATUS },
+    
     { 30,				fevent_HOME + fevent_WINDOW },
     { kbd_handset_HOME,			fevent_HOME + fevent_WINDOW },
 
@@ -522,13 +524,13 @@ static key_list rca_toolbar_keys[] =
 
     { 13,                   fevent_TOOLBAR_ACTIVATE },
 
-    { akbd_PageUpK,         fevent_SCROLL_PAGE_UP, key_list_REPEAT },
-    { akbd_PageDownK,       fevent_SCROLL_PAGE_DOWN, key_list_REPEAT },
+    { akbd_PageUpK,         fevent_SCROLL_PAGE_UP + fevent_WINDOW, key_list_REPEAT },
+    { akbd_PageDownK,       fevent_SCROLL_PAGE_DOWN + fevent_WINDOW, key_list_REPEAT },
 
-    { akbd_Sh + akbd_Ctl + akbd_UpK,    fevent_SCROLL_UP, key_list_REPEAT },
-    { akbd_Sh + akbd_Ctl + akbd_DownK,  fevent_SCROLL_DOWN, key_list_REPEAT },
-    { akbd_Sh + akbd_Ctl + akbd_LeftK,  fevent_SCROLL_LEFT, key_list_REPEAT },
-    { akbd_Sh + akbd_Ctl + akbd_RightK, fevent_SCROLL_RIGHT, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_UpK,    fevent_SCROLL_UP + fevent_WINDOW, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_DownK,  fevent_SCROLL_DOWN + fevent_WINDOW, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_LeftK,  fevent_SCROLL_LEFT + fevent_WINDOW, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_RightK, fevent_SCROLL_RIGHT + fevent_WINDOW, key_list_REPEAT },
 
     { 0 }
 };
@@ -686,6 +688,17 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     wimp_caretstr *cs = &e->data.key.c;
     int chcode = e->data.key.chcode;
     int event = -1;
+
+    if (fe_map_view() == NULL )
+	switch (chcode &~ (akbd_Sh | akbd_Ctl))
+    {
+    case akbd_LeftK:
+    case akbd_RightK:
+    case akbd_UpK:
+    case akbd_DownK:
+	fe_pointer_mode_update(pointermode_OFF);
+	break;
+    }
 
     if (v == NULL && cs->w == tb_status_w())
     {

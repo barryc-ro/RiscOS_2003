@@ -21,7 +21,9 @@
 #include "makeerror.h"
 #include "util.h"
 #include "verstring.h"
-#include "subflex.h"
+#if MEMLIB
+#include "flexwrap.h"
+#endif /* MEMLIB */
 
 #include "config.h"
 
@@ -45,7 +47,11 @@ static void cache_dump_dir_write(int dir);
 
 typedef struct
 {
+#if !MEMLIB
+    char *url;
+#else /* MEMLIB */
     int urloffset;
+#endif /* MEMLIB */
 
     char file_num;
     cache_flags flags;
@@ -71,8 +77,10 @@ typedef struct
 
 static cache_dir *cache;
 
+#if MEMLIB
 static char *urlblock = NULL;
 
+#endif /* MEMLIB */
 #ifndef MONOTIME
 #define MONOTIME		(*(unsigned int *)0x10C) /* RISC OS runery! */
 #endif
@@ -161,7 +169,11 @@ static BOOL cache_scan_for_url(cache_dir *dir, cache_item *item, int n, void *ha
     unsigned int *vars = handle;
     unsigned int h = vars[0];
     char *url = (char *)vars[1];
+#if !MEMLIB
+    return item->hash == h && strcmp(item->url, url) == 0;
+#else /* MEMLIB */
     return item->hash == h && strcmp(urlblock + item->urloffset, url) == 0;
+#endif /* MEMLIB */
 }
 
 static BOOL cache_scan_for_oldest(cache_dir *dir, cache_item *cc, int n, void *handle)
@@ -193,10 +205,18 @@ static BOOL cache_scan_for_oldest(cache_dir *dir, cache_item *cc, int n, void *h
 
 static BOOL is_older(const cache_item *oldest_item, const cache_item *item)
 {
+#if !MEMLIB
+    if (oldest_item->url == NULL)
+#else /* MEMLIB */
     if (oldest_item->urloffset == NULL)
+#endif /* MEMLIB */
         return TRUE;
 
+#if !MEMLIB
+    if (item->url &&
+#else /* MEMLIB */
     if (item->urloffset &&
+#endif /* MEMLIB */
         ((item->keep_count < oldest_item->keep_count) ||
         (item->keep_count == oldest_item->keep_count && item->last_used < oldest_item->last_used) ) )
         return TRUE;
@@ -280,7 +300,11 @@ static cache_item *cache_ptr_from_url(char *url, cache_dir **dir_out)
         cache_item *item = dirp->items;
         if (item) for (i = 0; i < N_FILES_PER_DIR; i++, item++, n++)
         {
+#if !MEMLIB
+            if (item->hash == h && strcmp(item->url, url) == 0)
+#else /* MEMLIB */
             if (item->hash == h && strcmp(urlblock + item->urloffset, url) == 0)
+#endif /* MEMLIB */
             {
                 if (dir_out)
                     *dir_out = dirp;
@@ -329,7 +353,11 @@ static cache_item *cache_ptr_from_file(char *file, cache_dir **dir_out)
 
 static BOOL cache_remove_file(cache_item *cc, cache_dir *dir)
 {
+#if !MEMLIB
+    if (cc == NULL || cc->url == NULL)
+#else /* MEMLIB */
     if (cc == NULL || cc->urloffset == 0)
+#endif /* MEMLIB */
 	return TRUE;
 
     if (cc->flags & cache_flag_OURS)
@@ -357,7 +385,12 @@ static BOOL cache_remove_file(cache_item *cc, cache_dir *dir)
 
     cache_data_size -= cc->size;
 
+#if !MEMLIB
+    mm_free(cc->url);
+    cc->url = NULL;
+#else /* MEMLIB */
     SubFlex_Free( &cc->urloffset, &urlblock );
+#endif /* MEMLIB */
 
     cc->file_num = NO_FILE;
     cc->hash = 0;
@@ -444,7 +477,11 @@ static void cache_make_room(int size)
 	    for (i = 0; i < cache_size; i++)
 	    {
 	        cache_item *cc = cache_item_ptr(i);
+#if !MEMLIB
+		if (cc == NULL || cc->url == NULL)
+#else /* MEMLIB */
 		if (cc == NULL || cc->urloffset == NULL)
+#endif /* MEMLIB */
 		{
 		    continue;
 		}
@@ -467,15 +504,21 @@ static void cache_make_room(int size)
 
 static void cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int file_num, cache_flags flags, int size)
 {
+#if MEMLIB
     int len = strlen(url)+1;
 
+#endif /* MEMLIB */
     cc->hash = string_hash(url);
+#if !MEMLIB
+    cc->url = strdup(url);
+#else /* MEMLIB */
 
     ACCDBGN(("cache3: inserting %s\n", url));
 
     SubFlex_Alloc( &cc->urloffset, len, &urlblock );
 
     memcpy( urlblock + cc->urloffset, url, len );
+#endif /* MEMLIB */
 
     if (cc->file_num != file_num)
     {
@@ -497,7 +540,7 @@ static void cache_insert_data(cache_dir *dir, cache_item *cc, char *url, int fil
 
 static void cache_optimise( void )
 {
-#if 0
+#if !MEMLIB
     int i;
 
     if ( cache )
@@ -509,7 +552,7 @@ static void cache_optimise( void )
             cc->url = optimise_string( cc->url );
         }
     }
-#endif
+#endif /* !MEMLIB */
 }
 
 static void cache_insert(char *url, char *file, cache_flags flags)
@@ -568,10 +611,15 @@ static void cache_insert(char *url, char *file, cache_flags flags)
     /* dump out the cache details */
     if (config_cache_keep_uptodate)
     {
+#if !MEMLIB
+        cache_dump_dir_write(dir->dir_num);
+        if (first_dir != -1 && first_dir != dir->dir_num)
+#else /* MEMLIB */
         if ( dir )
             cache_dump_dir_write(dir->dir_num);
 
         if ( first_dir != -1 && (!dir || first_dir != dir->dir_num) )
+#endif /* MEMLIB */
             cache_dump_dir_write(first_dir);			/* this used to be dir->dir_num */
     }
 }
@@ -793,16 +841,28 @@ static void cache_dump_dir_write(int dir)
 
 	for (i = 0; i < N_FILES_PER_DIR; i++, cc++)
 	{
+#if !MEMLIB
+	    if (cc->url && cc->file_num != NO_FILE && (cc->flags & cache_flag_OURS) )
+#else /* MEMLIB */
 	    if (cc->urloffset && cc->file_num != NO_FILE && (cc->flags & cache_flag_OURS) )
+#endif /* MEMLIB */
 	    {
 #if CACHE_FORMAT == 1
 		fprintf(fh, "%02d" "\t%d" "\t%x" "\t%d" "\t%d" "\t%s" "\n",
+#if !MEMLIB
+			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, cc->url);
+#else /* MEMLIB */
 			cc->file_num, cc->size, cc->last_used, cc->keep_count, cc->flags & cache_flag_OURS, urlblock + cc->urloffset);
+#endif /* MEMLIB */
 #elif CACHE_FORMAT == 2
 		fprintf(fh, "%02d" "\t%x" "\t%x" "\t%x" "\t%s" "\n",
 			cc->file_num,
 			cc->header.date, cc->header.last_modified, cc->header.expires,
+#if !MEMLIB
+			cc->url);
+#else /* MEMLIB */
 			urlblock + cc->urloffset);
+#endif /* MEMLIB */
 #else
 #error "unknown cache format"
 #endif
@@ -840,8 +900,13 @@ static void cache_dump_dir_wipe(int dir)
     {
 	for (i = 0; i < N_FILES_PER_DIR; i++, cc++)
 	{
+#if !MEMLIB
+	    ACCDBG(("dump_dir_wipe: cc->url %p\n", cc->url));
+	    mm_free(cc->url);
+#else /* MEMLIB */
 	    ACCDBG(("dump_dir_wipe: cc->url %p\n", urlblock + cc->urloffset));
 	    SubFlex_Free( &cc->urloffset, &urlblock );
+#endif /* MEMLIB */
 	}
 
 	ACCDBG(("dump_dir_wipe: dp items %p\n", dp->items));
@@ -999,10 +1064,10 @@ static void filewatcher_poll(int called_at, void *handle)
                 cache_item *item = cache_ptr_from_file(s, &dir);
 		
 		ACCDBG(("filewatcher_poll: remove '%s' item %p dir %p\n", s, item, dir));
-				
+
                 if (item)
                     cache_remove_file(item, dir);
-		
+
                 s += strlen(s) + 1;
             }
         }
@@ -1025,7 +1090,7 @@ static void filewatcher_init(void)
     {
         int reasons[2];
 
-	reasons[0] = 6;      /* delete */
+        reasons[0] = 6;      /* delete */
         reasons[1] = -1;     /* terminator */
 
         *scrap_leaf_ptr = 0;
@@ -1039,7 +1104,6 @@ static void filewatcher_init(void)
             filewatcher_poll(0, (void *)filewatcher_handle);
         }
     }
-
     ACCDBG(("\n"));
 }
 
@@ -1048,6 +1112,7 @@ static void filewatcher_final(void)
     if (filewatcher_handle)
     {
 	alarm_removeall((void *)filewatcher_handle);
+
         _swix(FileWatch_DeRegisterInterest, _INR(0,1), 0, filewatcher_handle);
         filewatcher_handle = 0;
     }
@@ -1066,7 +1131,11 @@ static int cache_test(char *url)
 
     if (filewatcher_handle)
     {
+#if !MEMLIB
+	type = item->url ? 1 : 0;
+#else /* MEMLIB */
 	type = item->urloffset ? 1 : 0;
+#endif /* MEMLIB */
     }
     else
     {
@@ -1087,27 +1156,42 @@ static int cache_test(char *url)
 
 static void cache_free_mem(void)
 {
+#if !MEMLIB
     int dir, file;
+#else /* MEMLIB */
+    int dir;
+#endif /* MEMLIB */
     for (dir = 0; dir < cache_ndirs; dir++)
     {
 	cache_dir *dp = &cache[dir];
 	if (dp->items)
 	{
+#if !MEMLIB
+	    cache_item *cc = dp->items;
+	    for (file = 0; file < N_FILES_PER_DIR; file++, cc++)
+	    {
+		mm_free(cc->url);
+	    }
+
+#endif /* not MEMLIB */
 	    mm_free(dp->items);
 	}
     }
 
     mm_free(cache);
     cache = NULL;
-
+#if MEMLIB
     MemFlex_Free( &urlblock );
+#endif /* MEMLIB */
 }
 
 static os_error *cache_init(int size)
 {
     os_error *e;
 
+#if MEMLIB
     ACCDBG(("cache3 initialising\n"));
+#endif /* MEMLIB */
 
     MemCheck_RegisterMiscBlock((void *)0x10c, 4);
 
@@ -1124,10 +1208,14 @@ static os_error *cache_init(int size)
 
     cache = (cache_dir *)mm_calloc(cache_ndirs, sizeof(cache_dir));
 
+#if !MEMLIB
+    e = scrapfile_init();
+#else /* MEMLIB */
     e = SubFlex_Initialise( &urlblock );
 
     if (!e)
         e = scrapfile_init();
+#endif /* MEMLIB */
     if (!e) filewatcher_init();
 
     return e;
@@ -1157,7 +1245,11 @@ static void cache_tidyup(void)
 		for (i = 0; i < cache_size; i++)
 		{
 		    cache_item *cc = cache_item_ptr(i);
-		    if (cc->urloffset)
+#if !MEMLIB
+		    if (cc->url)
+#else /* MEMLIB */
+		    if (cc && cc->urloffset)
+#endif /* MEMLIB */
 			cache_remove_file(cc, cache_dir_ptr(i));
 		}
 	    }
@@ -1201,7 +1293,11 @@ cache_functions cachefs_cache_functions =
     cache_header_info,
 
     cache_flush,
+#if !MEMLIB
+    cache_optimise
+#else /* MEMLIB */
     cache_optimise,
+#endif /* MEMLIB */
 
     cache_get_header_info
 };

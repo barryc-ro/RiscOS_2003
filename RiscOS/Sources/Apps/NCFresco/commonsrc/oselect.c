@@ -317,10 +317,11 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     }
 #endif
 
-    if (fs->lfc != fg)
+    if (fs->lfc != fg || fs->lbc != bg)
     {
 	fs->lfc = fg;
-	render_set_font_colours(fs->lfc, bg, doc);
+	fs->lbc = bg;
+	render_set_font_colours(fg, bg, doc);
     }
 
     fstr.s = str;

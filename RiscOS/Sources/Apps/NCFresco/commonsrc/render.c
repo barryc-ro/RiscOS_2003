@@ -214,7 +214,7 @@ wimp_paletteword render_get_colour(int colour, be_doc doc)
 	    return pw;
 	}
 #endif
-	
+
     case render_colour_ACTIVATED:
 	if (doc &&
 	    (doc->flags & doc_flag_DOC_COLOURS) &&
@@ -370,10 +370,16 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
     if ( ti && ti->line )
     {
         struct rid_text_stream *st = ti->line->st;
-        /* The shin-bone's connected to the ... ankle-bone */
-
+#if 1
+        if ( st->bgcolour )
+            return render_colour_RGB | ( st->bgcolour & ~1 );
+        /* wonder whether cc realises that render_colour_RGB has its bottom
+         * bit set?
+         */
+#else
         if ( st && st->parent )
         {
+            /* The shin-bone's connected to the ... ankle-bone */
             void *parent = st->parent;
             rid_table_props *props = NULL;
 
@@ -401,6 +407,7 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
                  && ( props->flags & rid_tpf_BGCOLOR ) )
                     return render_colour_RGB | props->bgcolor;
         }
+#endif
     }
 
     if ( doc && doc->rh && ( doc->rh->bgt & rid_bgt_COLOURS) )
@@ -514,7 +521,7 @@ int render_text(be_doc doc, const char *text, int x, int y)
 
     if (text == NULL || *text == 0)
 	return FALSE;
-    
+
     /* do we need font blending? */
     if (config_display_blending &&
 	(doc->flags & doc_flag_DOC_COLOURS) &&
@@ -533,7 +540,7 @@ int render_text(be_doc doc, const char *text, int x, int y)
 	flags |= 1<<12;
     }
 #endif
-    
+
     font_paint((char *)text, flags, x, y);
 
     return TRUE;

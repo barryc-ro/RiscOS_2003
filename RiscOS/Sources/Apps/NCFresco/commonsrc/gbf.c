@@ -14,7 +14,9 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 0 ) +
 		( GBF_FVPR * 0 ) +
 		( GBF_GUESS_ELEMENTS * 0 ) +
 		( GBF_GUESS_ATTRIBUTES * 1 ) +
-		( GBF_GUESS_ENUMERATIONS * 1 )
+		( GBF_GUESS_ENUMERATIONS * 1 ) +
+		( GBF_NEW_FORMATTER * 1 ) +
+		( GBF_AUTOFIT * 1 )
 ;
 
 extern int gbf_active(int gbf)

@@ -16,13 +16,6 @@
 #include "tcplibs.h"
 #include "resolve.h"
 
-
-#if DEBUG && 0
-#define fdebugf fprintf
-#else
-#define fdebugf 1?0:fprintf
-#endif
-
 #if 0
 static unsigned int last_hostaddr;
 static char* last_hostname = NULL;
@@ -42,8 +35,13 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
     sa->sin_family = AF_INET;
     sa->sin_port = htons((short)def_port);
 
-    fdebugf( stderr, "netloc_resolve: %s setting port to 0x%04x (%d)\n", location,
-	             sa->sin_port, def_port );
+    ACCDBGN(("netloc_resolve: %s setting port to 0x%04x (%d)\n", location,
+	             sa->sin_port, def_port ));
+
+    if ( !location )
+    {
+        return makeerror( ERR_NO_SUCH_HOST );
+    }
 
     if ( (p=strchr(location, ':')) != 0)
     {
@@ -56,8 +54,8 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
 	{
 	    sa->sin_port = htons((short)i);
 
-	    fdebugf( stderr, "netloc_resolve: 1 setting port to 0x%04x (%d)\n",
-	             sa->sin_port, i );
+	    ACCDBGN(("netloc_resolve: 1 setting port to 0x%04x (%d)\n",
+	             sa->sin_port, i ));
 	}
 	else if ( ( sp = getservbyname(portstr, "tcp") ) == NULL)
 	{
@@ -67,8 +65,8 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
 	{
 	    sa->sin_port = sp->s_port;
 
-	    fdebugf( stderr, "netloc_resolve: 2 setting port to 0x%04x (%d)\n",
-	             sa->sin_port, ntohs(sp->s_port) );
+	    ACCDBGN(("netloc_resolve: 2 setting port to 0x%04x (%d)\n",
+	             sa->sin_port, ntohs(sp->s_port) ));
 	}
 	*p = 0;
     }
@@ -117,8 +115,8 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
 	*p = ':';
 
 
-    fdebugf( stderr, "netloc_resolve: port is 0x%04x (%d)\n",
-             sa->sin_port, ntohs(sa->sin_port) );
+    ACCDBGN(("netloc_resolve: port is 0x%04x (%d)\n",
+             sa->sin_port, ntohs(sa->sin_port) ));
 
     return ep;
 }

@@ -23,6 +23,14 @@
 #include "sgmlparser.h"
 #endif
 
+#ifndef __structs_h
+#include "structs.h"
+#endif
+
+#ifndef __colspan_h
+#include "colspan.h"
+#endif
+
 #ifndef MAX_TEXT_LINE
 #define MAX_TEXT_LINE 1024
 #endif
@@ -106,37 +114,6 @@ can be searched for a given name attribute.
 **********************************************************************************/
 
 /*****************************************************************************/
-
-/* Forward declarations */
-
-/*typedef struct rid_stdunits             *rid_stdunits;*/
-#define rid_stdunits                    VALUE
-typedef struct rid_table_props          rid_table_props;
-typedef struct rid_width_info           rid_width_info;
-typedef struct rid_table_caption        rid_table_caption;
-typedef struct rid_table_cell           rid_table_cell;
-typedef struct rid_table_colgroup       rid_table_colgroup;
-typedef struct rid_table_rowgroup       rid_table_rowgroup;
-typedef struct rid_table_item           rid_table_item;
-typedef struct rid_text_item_table      rid_text_item_table;
-typedef struct rid_text_stream          rid_text_stream;
-typedef struct rid_table_rowhdr         rid_table_rowhdr;
-typedef struct rid_table_colhdr         rid_table_colhdr;
-
-typedef struct rid_frame                rid_frame;
-typedef struct rid_frame_item           rid_frame_item;
-typedef struct rid_frameset_item        rid_frameset_item;
-typedef struct rid_frame_unit_totals    rid_frame_unit_totals;
-typedef struct rid_area_item            rid_area_item;
-typedef struct rid_map_item             rid_map_item;
-typedef struct rid_fmt_info             rid_fmt_info;
-typedef struct rid_fmt_state		rid_fmt_state;
-typedef struct rid_meta_item            rid_meta_item;
-
-typedef struct rid_object_param		rid_object_param;
-typedef struct rid_object_item		rid_object_item;
-typedef struct rid_text_item_object	rid_text_item_object;
-
 /*****************************************************************************/
 
 /* A memzone is used to allocate memory in a single contiguous block
@@ -164,6 +141,9 @@ typedef struct
 } rid_tile;
 
 
+/* WARNING: DO NOT REORDER OR CHANGE THESE TAGS WITHOUT */
+/* FIRST LOCATING ALL THE ORDER ASSUMPTIONS THAT EXIST, */
+/* ESPECIALLY WHEN USED AS AN ARRAY INDEX.		*/
 
 typedef SHORTISH rid_tag;
 #define rid_tag_PBREAK          0       /* Paragraph break */
@@ -177,7 +157,7 @@ typedef SHORTISH rid_tag;
 #define rid_tag_TABLE           8       /* A table */
 #define rid_tag_OBJECT          9       /* An OBJECT */
 
-#define rid_tag_LAST_TAG        10
+#define rid_tag_LAST_TAG        10	/* ie 0...N-1 is tag range */
 #define rid_tag_MASK            0xf
 
 typedef SHORTISH rid_flag;
@@ -201,8 +181,15 @@ typedef SHORTISH rid_flag;
 #define RID_COLOUR(rid) ( ( (rid)->st.flags >> STYLE_COLOURNO_SHIFT ) \
                          & STYLE_COLOURNO_MASK )
 
+/* NOTE: THE ABILITY OF SOME NUMERIC FIELDS TO STORE NEGATIVE */
+/* VALUES IS USED TO INDICATE EXTRA INFORMATION. SUCH FIELDS ARE */
+/* leading: -2 == holder for pending items */
+
+#define IS_MAGIC_LEADING(n)	( (n) < 0 )
+#define MAGIC_LEADING_PENDING	-2
+
 typedef struct rid_pos_item {
-#if DEBUG
+#if DEBUG && 0
     MAGIC tag;
     int line_number;
 #endif
@@ -238,12 +225,25 @@ typedef struct {
     int used;			/* Flag indicating the item is used */
 } rid_float_tmp_info;
 
+/*****************************************************************************
+
+  A negative value in the width field indicates a special
+  meaning. Zero or positive value indicates a specifically calculated
+  size. Such sizes do not change. If an image, for example, needs a
+  new size, it must clear the existing size value to indicate this.
+
+  */
+
+#define IS_MAGIC_WIDTH(x)	( (x) < 0 )
+#define MAGIC_WIDTH_HR		-1
+#define MAGIC_WIDTH_UNKNOWN	-2
+
 typedef struct rid_text_item {
     struct rid_text_item *next; /* Single link now */
     struct rid_pos_item *line;  /* The start of the line */
     struct rid_aref_item *aref; /* The aref, or NULL if there is none */
     int max_up, max_down;       /* Riser and decender */
-    SHORTISH width;             /* Display width, or -1 to extend all the way across the line */
+    SHORTISH width;             /* Display width, or -1/-2 to extend all the way across the line/unknown */
     SHORTISH pad;               /* Pad width between this and the next item IF NOT AT THE END OF A LINE */
     rid_flag flag;              /* Flags */
     rid_tag tag;                /* Tag for the type of data */
@@ -529,27 +529,31 @@ Flags for a column header. <COL SPAN=0> indicates the column header spans to
 the horizontal extent. This requires colhdr replication during column addition
 as well as cell spreading.
 
+The _PERCENT, _RELATIVE and _ABSOLUTE flags must have the same value
+for rid_chf and rid_rhf. Someday, rows and columns should become
+symetrical.
+
 */
 
 typedef unsigned char rid_colhdr_flags;
 typedef unsigned char rid_rowhdr_flags;
 typedef unsigned char rid_rowgrp_flags;
 
-#define rid_rhf_GROUP_ABOVE     0x0001
-#define rid_rhf_GROUP_BELOW     0x0002
-#define rid_rhf_PERCENT		0x0004
-#define rid_rhf_RELATIVE	0x0008
-#define rid_rhf_ABSOLUTE	0x0010
+#define rid_rhf_ABSOLUTE	0x0001
+#define rid_rhf_PERCENT		0x0002
+#define rid_rhf_RELATIVE	0x0004
+#define rid_rhf_GROUP_ABOVE     0x0008
+#define rid_rhf_GROUP_BELOW     0x0010
 #define rid_rhf_THEAD		0x0020
 #define rid_rhf_TBODY		0x0040
 #define rid_rhf_TFOOT		0x0080
 
-#define rid_chf_GROUP_LEFT      0x0001
-#define rid_chf_GROUP_RIGHT     0x0002
-#define rid_chf_REPLICATE       0x0004    /* Replicate this column header */
-#define rid_chf_ABSOLUTE        0x0008    /* WIDTH=N */
-#define rid_chf_PERCENT         0x0010    /* WIDTH=N% */
-#define rid_chf_RELATIVE	0x0020    /* WIDTH=N* */
+#define rid_chf_ABSOLUTE        0x0001    /* WIDTH=N */
+#define rid_chf_PERCENT         0x0002    /* WIDTH=N% */
+#define rid_chf_RELATIVE	0x0004    /* WIDTH=N* */
+#define rid_chf_GROUP_LEFT      0x0008
+#define rid_chf_GROUP_RIGHT     0x0010
+#define rid_chf_REPLICATE       0x0020    /* Replicate this column header */
 
 /* NB tie-up with above */
 #define rid_rgf_THEAD		rid_rhf_THEAD
@@ -558,7 +562,7 @@ typedef unsigned char rid_rowgrp_flags;
 
 /*****************************************************************************/
 
-typedef SHORTISH rid_table_flags;
+typedef unsigned int rid_table_flags;
 
 #define rid_tf_COLS_FIXED       0x0001  /* Number of columns now fixed */
 #define rid_tf_LINE_START       0x0002  /* Next <TH|TD> is 1st of line */
@@ -575,6 +579,10 @@ typedef SHORTISH rid_table_flags;
 #define rid_tf_TFOOT_INVISIBLE	0x1000
 #define rid_tf_BGCOLOR     	0x2000  /* One or more cells have BGCOLOR */
 #define rid_tf_FINISHED		0x4000  /* Finished - ie seen </TABLE> */
+#define rid_tf_NON_PCT_COLS	0x8000  /* Not all columns have a % contribution */
+
+#define rid_tf_HAVE_WIDTH	0x00010000 /* TABLE WIDTH= is present */
+#define rid_tf_HAVE_HEIGHT	0x00020000 /* TABLE HEIGHT= is present */
 
 /*****************************************************************************
 
@@ -595,6 +603,7 @@ typedef SHORTISH rid_table_flags;
 #define rid_PROP_STYLE          6
 #define rid_PROP_WIDTH          7	/* Pseudo type */
 #define rid_PROP_BGCOLOR	8	/* Extension to be this general */
+#define rid_PROP_HEIGHT		9	/* Pseudo type. Cell only */
 
 #define NO_BGCOLOR		-1
 
@@ -621,12 +630,20 @@ struct rid_table_props
 
 struct rid_width_info
 {
-        int                     minleft;
-        int                     minright;
-        int                     minwidth;       /* at least minleft + minright */
-        int                     maxleft;
-        int                     maxright;
-        int                     maxwidth;
+    int				minleft;
+    int				minright;
+    int				minwidth;
+    int				maxleft;
+    int				maxright;
+    int				maxwidth;
+/*
+    int                     	raw_minwidth;
+    int                     	abs_minwidth;
+    int                     	pct_minwidth;
+    int                     	all_minwidth;
+    int                     	raw_maxwidth;
+    int                     	all_maxwidth;
+*/
 };
 
 /*****************************************************************************
@@ -721,6 +738,8 @@ struct rid_table_item
         rid_table_flags         flags;          /* */
         rid_table_caption       *caption;       /* Caption for the table, if any */
         int                     state;          /* tabstate_BLAH value */
+	int			depth;		/* Table nesting depth */
+    	int			idnum;
 
         /* Constant after opening <TABLE> has been seen */
         rid_table_props         *props;         /* Alignment of table relative to container */
@@ -752,6 +771,9 @@ struct rid_table_item
         /* Used during sizing and formatting */
         rid_width_info          width_info;     /* Got by examining all child text streams */
 	int			offy;		/* so can move up/down easier */
+	int			hwidth[N_COLSPAN_WIDTHS]; /* Horizontal */
+	int			vwidth[N_COLSPAN_WIDTHS]; /* Vertical */
+	pcp_cell		colspans;	/* Colspan algorithm data structure */
 
         /* Scaffolding for use during construction */
         intxy                   scaff;
@@ -768,6 +790,9 @@ struct rid_table_item
 
 
 #define CELLFOR(table, xx, yy)    ( & (table)->array[ (xx) + (yy) * (table)->cells.x ] )
+
+#define TABLE_INSIDE_BIAS(t)	( (2 * (t)->cellpadding) + (t)->cellspacing )
+#define TABLE_OUTSIDE_BIAS(t)	( (2 * (t)->border) + (t)->cellspacing )
 
 /*****************************************************************************/
 
@@ -810,8 +835,9 @@ struct rid_text_stream {
     int partype;                /* Type of parent we are in */
     int fwidth;                 /* Width to format to */
     int width;                  /* Width of formatted text */
-    int widest;                 /* The widest single item in the stream */
+    int widest;                 /* The widest single item in the stream (ie minwidth) */
     int height;                 /* The height of the formatted text */
+    int bgcolour;               /* Solid background (0=none) */
     rid_width_info width_info;  /* Describes stream; used when doing tables*/
     rid_fmt_state *fmt_state;	/* Freed after use */
 };
@@ -872,6 +898,11 @@ typedef struct rid_header {
     int extracolours;
     int extracolourarray[rid_EXTRACOLOURS];
 
+    void *fmt_state;
+    
+    int			table_depth;		/* Recursive table nesting level */
+    int			idnum;	/* To sequentially 'name' objects for debugging reference */
+    
 #ifdef BUILDERS
     int cwidth;			/* Width of monospaced text font */
 #endif
@@ -1139,7 +1170,7 @@ struct rid_frame
         int                     bordercolour;       /* standard colour for border region */
 
 	int			dividers[4];		/* divider numbers for each edge */
-    
+
         union
         {
             rid_frame_item      frame;
@@ -1343,6 +1374,12 @@ extern rid_text_item * rid_scan(rid_text_item * item, int action);
 extern void rid_zero_widest_height_from_item(rid_text_item *item);
 extern void rid_zero_widest_height(rid_text_stream *stream);
 extern rid_pos_item *rid_clone_pos_list(rid_pos_item *pos);
+
+/* NEW: 970409: rid_pos_item caching */
+extern rid_pos_item *rid_pos_alloc(void);
+extern void rid_pos_free(rid_pos_item *pi);
+extern void rid_pos_free_chain(rid_pos_item *pi);
+extern void rid_pos_cache_flush(void);
 
 /* Some useful form scanning functions */
 

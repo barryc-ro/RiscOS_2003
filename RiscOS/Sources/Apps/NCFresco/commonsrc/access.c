@@ -872,6 +872,8 @@ static os_error *access_http_fetch_start(access_handle d)
 
     ep = os_swix(HTTP_Open, (os_regset *) &httpo);
 
+    ACCDBG(("HTTP_Open returned %p\n", ep ));
+
 #if SEND_HOST
     /* pdh: HTTP module takes copies of these, obviously, so we can free what
      * we just strdup'd
@@ -1240,10 +1242,13 @@ static void memcheck_register_list(http_header_item *list)
 
 static void memcheck_unregister_list(http_header_item *list)
 {
-    for (; list; list = list->next)
+    http_header_item *next = NULL;
+
+    for (; list; list = next)
     {
 	MemCheck_UnRegisterMiscBlock(list->key);
 	MemCheck_UnRegisterMiscBlock(list->value);
+	next = list->next;
 	MemCheck_UnRegisterMiscBlock(list);
     }
 }
@@ -1377,6 +1382,8 @@ static void access_http_fetch_alarm(int at, void *h)
 		}
 	    }
 
+            memcheck_unregister_list(si.out.headers);
+
 	    /* don't do the location till finished scanning in case there are any cookies */
 	    if (new_url)
 	    {
@@ -1434,13 +1441,13 @@ static void access_http_fetch_alarm(int at, void *h)
 		    d->data.http.date = (unsigned)HTParseTime(list->value);
 		}
 	    }
-	}
 
-	/* 401 is UNAUTHORIZED, 407 is PROXY-AUTHENTICATE */
-	if (si.out.rc == 401 || si.out.rc == 407)
-	{
-	    char *type;
-	    char *realm_name;
+
+	    /* 401 is UNAUTHORIZED, 407 is PROXY-AUTHENTICATE */
+	    if (si.out.rc == 401 || si.out.rc == 407)
+	    {
+	        char *type;
+	        char *realm_name;
 
 	    /* Authentication failed.  There are three cases: a) we
 	     * have no idea about this realm and we need a new realm
@@ -1451,51 +1458,56 @@ static void access_http_fetch_alarm(int at, void *h)
 	     * realm but it seems to be wrong.
 	     */
 
-	    if (access_http_find_realm(si.out.headers, &realm_name, &type, si.out.rc == 401 ? auth_req_WWW : auth_req_PROXY))
-	    {
-		realm rr;
+	        if (access_http_find_realm(si.out.headers, &realm_name, &type, si.out.rc == 401 ? auth_req_WWW : auth_req_PROXY))
+	        {
+		    realm rr;
 
-		rr = auth_lookup_realm(realm_name);
+		    rr = auth_lookup_realm(realm_name);
 
-		mm_free(type);
+		    mm_free(type);
 
-		if (rr)
-		{
-		    if ((si.out.rc == 401 && d->data.http.had_auth) || (si.out.rc == 407 && d->data.http.had_proxy_auth))
+		    if (rr)
 		    {
-			frontend_complain(makeerror(ERR_BAD_PASSWD));
-			rr = NULL;
+		        if ((si.out.rc == 401 && d->data.http.had_auth) || (si.out.rc == 407 && d->data.http.had_proxy_auth))
+		        {
+			    frontend_complain(makeerror(ERR_BAD_PASSWD));
+			    rr = NULL;
+		        }
 		    }
-		}
 
-		if (rr == NULL)
-		{
-		    char *hname = si.out.rc == 401 ? access_host_name_only(d->url) : strdup(d->dest_host);
-		    d->data.http.pw = frontend_passwd_raise(access_http_passwd_callback,
+		    if (rr == NULL)
+		    {
+		        char *hname = si.out.rc == 401 ? access_host_name_only(d->url) : strdup(d->dest_host);
+		        d->data.http.pw = frontend_passwd_raise(access_http_passwd_callback,
 							    d, NULL, realm_name, hname);
-		    mm_free(hname);
-		}
-		else
-		{
-		    access_http_auth_rerequest(d, rr, si.out.rc == 401 ? auth_req_WWW : auth_req_PROXY);
-		}
+		        mm_free(hname);
+		    }
+		    else
+		    {
+		        access_http_auth_rerequest(d, rr, si.out.rc == 401 ? auth_req_WWW : auth_req_PROXY);
+		    }
 
-		mm_free(realm_name);
+		    mm_free(realm_name);
 
-		done = FALSE;
+    		    done = FALSE;
+                }
+
+	        /* If we can't authenticate, just show the error to the user */
 	    }
 
-	    /* If we can't authenticate, just show the error to the user */
+            memcheck_unregister_list(si.out.headers);
 	}
-
-	memcheck_unregister_list(si.out.headers);
 
 	if (done)
 	    access_http_fetch_done(d, &si);
     }
     else
     {
-	int readable = d->ft_is_set && ((si.out.rc / 100) == 2);
+        /* pdh: removed the rc=2xx condition, 'cos long 404 pages weren't
+         * being displayed. (e.g. www.infoseek.com, all of whose pages are
+         * 404 in some kind of lumpen attempt at cache evasion)
+         */
+	int readable = d->ft_is_set; /* && ((si.out.rc / 100) == 2); */
 
         ACCDBG(("Calling progress function (st=%d data=%d/%d rd=%d ft=%d)\n",
                 si.out.status, si.out.data_so_far, si.out.data_size, readable,
@@ -2652,7 +2664,7 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 	    frontend_url_punt(NULL, d->url, bfile);
 	    ep = makeerror(ERR_NO_ACTION);
 	}
-	
+
 	ACCDBG(("access_new_internal(): error, freeing access handle %p\n", d));
 	access_unlink(d);
 	access_free_item(d);
@@ -3414,7 +3426,12 @@ os_error *access_tidyup(void)
 
 os_error *access_abort(access_handle d)
 {
-    BOOL threaded = !alarm_anypending(d);
+    BOOL threaded;
+
+    if ( !d )
+        return NULL;
+
+    threaded = !alarm_anypending(d);
 
     ACCDBG(("Access_abort called\n"));
 

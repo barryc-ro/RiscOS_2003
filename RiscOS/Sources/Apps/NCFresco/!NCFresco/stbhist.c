@@ -298,13 +298,15 @@ os_error *fe_history_write_list(FILE *f, const fe_history_item *start, const fe_
 {
     const fe_history_item *item;
     int i;
+    char *s;
 
     /* count how far through the list we are */
     for (i = 0, item = start; item && item != current; i++, item = item->next)
 	;
 	
     fprintf(f, msgs_lookup("histRT"), i);
-    fprintf(f, msgs_lookup("histR1"), getenv(PROFILE_NAME_VAR));
+    s = getenv(PROFILE_NAME_VAR);
+    fprintf(f, msgs_lookup("histR1"), strsafe(s));
 
     for (i = 0, item = start; item; i++, item = item->next)
         fe_hist_write_item(f, item, i);

@@ -9,6 +9,9 @@
 #include "webfonts.h"
 #include "indent.h"
 
+#ifdef PLOTCHECK
+#include "rectplot.h"
+#endif
 
 static void rid_table_accumulate_widths_l2r(int cellsx, int *sq, int *cum);
 static void rid_table_accumulate_widths_r2l(int cellsx, int *sq, int *cum);
@@ -829,7 +832,7 @@ static void rid_table_set_stream_widths(rid_table_item *table)
     for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
     {       /* Cells can have borders */
 	cell->stream.fwidth = table->cumminabs[x + cell->span.x] - table->cumminabs[x];
-#if DEBUG && 1
+#if DEBUG && 0
 	fprintf(stderr, "%2d %2d = %3d, table->cumminabs[x=%2d + cell->span.x=%2d]=%3d - table->cumminabs[%2d]=%3d;\n",
 	       x, y, cell->stream.fwidth, 
 	       x, cell->span.x, 

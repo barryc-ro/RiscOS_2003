@@ -43,7 +43,10 @@ static int sock = -1;
  */
 
 void RemoteControl__Poll( wimp_eventstr*, void* );
+
+#ifdef STBWEB
 static void RemoteControl__Poll1( int called_at, void *handle);
+#endif
 
 BOOL RemoteControl_Open( void )
 {

@@ -7,12 +7,18 @@
 #ifndef included_gbf_h
 #define included_gbf_h
 
+#ifdef NEW_UNEXP_TABLE
+#error "This approach is obsolete"
+#endif
+
 #define GBF_TABLES_UNEXPECTED		0x00000001
 #define GBF_FVPR			0x00000002
 #define GBF_GUESS_ELEMENTS		0x00000004
 #define GBF_GUESS_ATTRIBUTES		0x00000008
 #define GBF_GUESS_ENUMERATIONS		0x00000010
 #define GBF_TRANSLATE_UNDEF_CHARS	0x00000020
+#define GBF_NEW_FORMATTER		0x00000040
+#define GBF_AUTOFIT			0x00000080
 
 extern int gbf_flags;
 extern int gbf_active(int gbf);

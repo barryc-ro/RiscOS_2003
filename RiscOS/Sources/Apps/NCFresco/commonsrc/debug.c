@@ -1,3 +1,4 @@
+/* -*-C-*- commonsrc/debug.c */
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -134,6 +135,21 @@ extern void dbginit(void)
     STBDBGN(("Excessive NCFresco debugging present\n"));
     HTSDBG(("HTTPSave debugging present\n"));
     HTSDBGN(("Excessive HTTPSave debugging present\n"));
+}
+
+extern void debug_set(const char *feature, int enable)
+{
+    int ix;
+
+    for (ix = 0; ix < sizeof(dbg_conf) / sizeof(dbg_conf_item); ix++)
+    {
+	/*if ( strcasecmp(dbg_conf[ix].name, feature) == 0 )*/
+	if ( strcmp(dbg_conf[ix].name, feature) == 0 )
+	{
+	    dbg_conf[ix].present = enable;
+	    break;
+	}
+    }
 }
 
 /* **** N.B.  These don't need semi-colons at the end as they define functions */

@@ -269,6 +269,22 @@ extern void dump_pos(rid_pos_item *pi)
                 FIELD(pi, left_margin, "%d");
                 FIELD(pi, max_up, "%d");
                 FIELD(pi, max_down, "%d");
+
+		switch (pi->leading)
+		{
+		case MAGIC_LEADING_PENDING:
+		    my_print("Magic leading pending");
+		    break;
+		case -1:
+		    my_print("Leading - generic MAGIC -1");
+		    break;
+		case 0:
+		    break;
+		default:
+		    FIELD(pi, leading, "%d");
+		    break;
+		}
+
 #ifndef NO_PTRS
                 FIELD(pi, first, "%p");
 		FIELD(pi, floats, "%p");
@@ -690,10 +706,10 @@ extern void dump_table(rid_table_item *ptr, char *base)
 #endif
         	my_print("cells %d %d", ptr->cells.x, ptr->cells.y);
         	my_print("size %d %d", ptr->size.x, ptr->size.y);
-        	my_print("width_info");
+/*        	my_print("width_info");*/
+/*        	dump_width_info(ptr->width_info);*/
 /*        	FIELD(ptr, hwidths, "%p");*/
 /*        	FIELD(ptr, vheights, "%p"); */
-        	dump_width_info(ptr->width_info);
         	FIELD(ptr, state, "%d");
         	my_print("scaff %d %d", ptr->scaff.x, ptr->scaff.y);
                 my_print("Column groups and headers");

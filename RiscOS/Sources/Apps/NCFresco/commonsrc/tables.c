@@ -24,6 +24,7 @@ Music used:
 		the parser sorts out all the implied elements.
 26--6-96 NvS	Moved code to locate the origin of a table stream
                 into this file.
+15-04-97 pdh    Two minor bugfixes tagged with 'pdh'
 
     Summary of 23-1-96 DRAFT Tables DTD section
 
@@ -738,7 +739,7 @@ static void add_retro_col(rid_table_item *table)
 		cell->sleft = t;
 	    }
 
-	    TABDBGN(("Cell %d,%d is replicated from %d,%d, new sleft %d, span %d,%d\n", 
+	    TABDBGN(("Cell %d,%d is replicated from %d,%d, new sleft %d, span %d,%d\n",
 		     x, y, cell->cell.x, cell->cell.y, t, cell->span.x, cell->span.y));
 	}
     }
@@ -860,7 +861,7 @@ static void add_new_row(rid_table_item *table)
 
 	if ( (cell->flags & rid_cf_INF_VERT) != 0 )
 	{
-	    TABDBGN(("Replicating INF_VERT %d,%d span %d,%d from %d,%d\n", 
+	    TABDBGN(("Replicating INF_VERT %d,%d span %d,%d from %d,%d\n",
 		     x, y, cell->span.x, cell->span.y, cell->cell.x, cell->cell.y));
 	    * CELLFOR(table, x, y) = cell;
 	    if ( x == cell->cell.x )
@@ -1163,6 +1164,9 @@ static void tidy_table(HTMLCTX *me, rid_table_item *table)
   cells > columns > column groups > rows > row groups > table > default
   xcCrRtd
 
+  HEIGHT
+  fudge on cells only at present.
+
   Within rid_getprop(), this is translated into a control string indicating
   where to look next for the attribute.  The magic characters are:
 
@@ -1193,7 +1197,8 @@ extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *res
 	"rid_PROP_LANG   ",
 	"rid_PROP_STYLE  ",
 	"rid_PROP_WIDTH  ",
-	"rid_PROP_BGCOLOR"
+	"rid_PROP_BGCOLOR",
+	"rid_PROP_HEIGHT "
     };
 #endif
 
@@ -1265,6 +1270,10 @@ extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *res
 	    * ((VALUE *)result) = dsu;
 #endif
 	}
+	return;
+
+    case rid_PROP_HEIGHT:
+	* ((VALUE *)result) = cell->userheight;
 	return;
     }
     break;
@@ -1497,7 +1506,7 @@ static BOOL find_empty_cell(HTMLCTX *htmlctx, rid_table_item *table)
 
 static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *element)
 {
-    HTMLCTX *htmlctx = htmlctxof(context);
+    /*HTMLCTX *htmlctx = htmlctxof(context);*/
 
     switch (reason)
     {
@@ -1711,6 +1720,22 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	tab->id = stringdup(attr->u.s);
     tab->userwidth = attributes->value[HTML_TABLE_WIDTH];
 
+    switch (tab->userwidth.type)
+    {
+    case value_absunit:
+	tab->flags |= rid_tf_HAVE_WIDTH;
+	break;
+
+    case value_pcunit:
+    case value_relunit:
+	TABDBG(("starttable: Forcing out %%/REL WIDTH constraint for now\n"));
+	/* Fall through */
+
+    default:
+	tab->userwidth.type = value_none;
+	break;
+    }
+
     if (tab->props != NULL)
     {
 	TABDBG(("Setting table alignment %d\n", tab->props->halign));
@@ -1853,6 +1878,12 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     tab->oldtable = me->table;
     me->table = tab;
 
+    me->rh->table_depth++;
+    me->rh->idnum++;
+
+    tab->depth = me->rh->table_depth;
+    tab->idnum = me->rh->idnum;
+
     if (gbf_active(GBF_TABLES_UNEXPECTED))
     {
 	PRSDBG(("Delaying connecting the table to the stream\n"));
@@ -1914,6 +1945,7 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 
     me->rh->curstream = table->oldstream;
     me->table = table->oldtable;
+    me->rh->table_depth--;
 
     if (gbf_active(GBF_TABLES_UNEXPECTED))
     {
@@ -2141,7 +2173,9 @@ extern void finishcolgroupsection (SGMLCTX * context, ELEMENT * element)
 	}
     }
 
-    table->flags &= ~( rid_tf_COLGROUPSECTION | rid_tf_NO_MORE_CELLS );
+    table->flags &= ~( rid_tf_COLGROUPSECTION | rid_tf_NO_MORE_CELLS
+                       | rid_tf_IMPLIED_COLGROUP        /* pdh: added this */
+                         );
 
 #if DEBUG == 3
     dump_table(table, NULL);
@@ -2932,7 +2966,10 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		/*table->flags |= rid_tf_NO_MORE_CELLS;*/
 		cell->span.x = table->cells.x - cell->cell.x;
 	    }
-	    for (x = cell->cell.x + 1; x < table->cells.x + cell->span.x; x++)
+
+/* 	    for (x = cell->cell.x + 1; x < table->cells.x + cell->span.x; x++) */
+            /* pdh: would look better to me as this: */
+	    for (x = cell->cell.x + 1; x < cell->cell.x + cell->span.x; x++)
 	    {       /* Replicate cell pointer */
 		cellp = CELLFOR(table, x, table->scaff.y);
 		if (*cellp != NULL)
@@ -3064,7 +3101,10 @@ static void finish_thtd (SGMLCTX * context, ELEMENT * element)
     rid_getprop(cell->parent, cell->cell.x, cell->cell.y, rid_PROP_BGCOLOR, &i);
 
     if (i != NO_BGCOLOR)
+    {
 	cell->flags |= rid_cf_BACKGROUND;
+	cell->stream.bgcolour = i | 1;
+    }
 
 /*      sgml_install_deliver(context, &table_deliver); */
 }

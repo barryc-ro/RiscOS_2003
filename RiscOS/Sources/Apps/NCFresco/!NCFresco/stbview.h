@@ -179,7 +179,12 @@ struct _frontend_view
 
 /* ----------------------------------------------------------------------------- */
 
-#define PROFILE_NAME_VAR	"User$Profile"
+#define PROFILE_NAME_VAR	"User$Name"
+
+#define NVRAM_FONTS_TAG		"BrowserFontSize"
+#define NVRAM_SOUND_TAG		"BrowserMusicStatus"
+#define NVRAM_BEEPS_TAG		"BrowserBeepStatus"
+#define NVRAM_SCALING_TAG	"BrowserScaling"
 
 /* ----------------------------------------------------------------------------- */
 

@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "memcheck/MemCheck.h"
+
 #include "interface.h"
 #include "memwatch.h"
 #include "webfonts.h"
@@ -49,7 +51,7 @@ static int item_to_descriptor_index(be_doc doc, be_item ti)
 	    return i;
 	}
     }
-    
+
     return -1;
 }
 
@@ -60,7 +62,7 @@ static be_item selection_to_item(antweb_selection_t *link)
     {
     case doc_selection_tag_NONE:
 	break;
-	
+
     case doc_selection_tag_TEXT:
 	new_item = link->data.text.item;
 	if (new_item->aref)
@@ -70,7 +72,7 @@ static be_item selection_to_item(antweb_selection_t *link)
     case doc_selection_tag_AREF:
 	new_item = link->data.aref->first;
 	break;
-	
+
     case doc_selection_tag_MAP:
 	new_item = link->data.map.item;
 	break;
@@ -230,7 +232,7 @@ void antweb_build_selection_list(be_doc doc)
 
     /* free any old list */
     mm_free(doc->selection_list.list);
-    
+
     /* count how many we have */
     count = 0;
     for (ti = doc->rh->stream.text_list; ti; ti = rid_scanfr(ti))
@@ -255,7 +257,7 @@ void antweb_build_selection_list(be_doc doc)
 	{
 	    /* FIXME: this is rather inefficient - need a better way */
 	    backend_doc_item_bbox(doc, ti, &link->bbox);
-	    
+
 	    link->item.tag = doc_selection_tag_TEXT;
 	    link->item.data.text.item = ti;
 
@@ -282,14 +284,14 @@ void antweb_build_selection_list(be_doc doc)
 	link = link->next_x;	/* step onto the pointer */
     }
     link->next_x = NULL;
-    
+
 
     /* fillin sort array again */
     sort = sort_list;
     link = link_list;
     for (i = 0; i < count; i++)
 	*sort++ = link;
-    
+
 
     /* order them vertically */
     qsort(sort_list, sizeof(*sort_list), count, link_sort_compare_y);
@@ -305,7 +307,7 @@ void antweb_build_selection_list(be_doc doc)
     }
     link->next_y = NULL;
 #endif
-    
+
     /* write out vars */
     doc->selection_list.count = count;
     doc->selection_list.list = link_list;
@@ -329,7 +331,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
     antweb_selection_descr *min_link1 = NULL;
 
     int i;
-    
+
     LKDBG((stderr, "antweb_highlight_scan_xy: doc %p initial %p from x=%d-%d y=%d-%d flags %x\n", doc, initial, from->x0, from->x1, from->y0, from->y1, flags));
     LKDBG((stderr, "antweb_highlight_scan_xy: bounds from x=%d-%d y=%d-%d\n", bounds->x0, bounds->x1, bounds->y0, bounds->y1));
 
@@ -374,7 +376,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
  	    LKDBGN((stderr, "                        : not on screen\n"));
 	    continue;
 	}
-	
+
 	/* match the correct edge of the box for the direction being travelled */
 
 	/* We use the opposite sides of the start rectangle from
@@ -386,7 +388,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	    /* for vertical movement we can match any overlap of the
 	     * source box and the destination box but we prefer
 	     * matches to the left */
-	       
+
 	    if (from->x0 < link->bbox.x1 && from->x1 > link->bbox.x0)
 	    {
 		dist = flags & be_link_BACK ? link->bbox.y0 - from->y0 : from->y1 - link->bbox.y1;		/* up : down */
@@ -473,7 +475,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
     {
 	LKDBG((stderr, "antweb_highlight_scan_xy: using main link %p dist %d sec %d\n", min_link, min_dist, min_secdist));
     }
-    
+
     return min_link;
 }
 
@@ -489,7 +491,7 @@ static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_sel
 
     if (initial == NULL)
 	return NULL;
-    
+
     /* decide which item/position to start from */
     switch (initial->tag)
     {
@@ -520,12 +522,12 @@ static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_sel
 /* #else */
 /*     x = (bbox.x0 + bbox.x1) / 2; */
 /* #endif */
-    
+
 /*     h = item ? item->max_up + item->max_down : 0; */
 /*     if (h > webfonts[WEBFONT_BASE].max_up) */
 /* 	h = webfonts[WEBFONT_BASE].max_up; */
 /*     y = bbox.y1 - h/2; */
-    
+
     return antweb_highlight_scan_xy(doc, initial, &bbox, flags, bounds);
 }
 
@@ -577,7 +579,7 @@ static be_item scan_links_2D(be_doc doc, be_item item, int flags, const wimp_box
     LKDBG((stderr, "backend_highlight_link_2D: return link %p tag %d item %p\n", link, link ? link->item.tag : 0, link ? link->item.data.text.item : 0));
 
     return descriptor_to_item(link);
-}				
+}
 
 static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp_box *bounds)
 {
@@ -628,7 +630,7 @@ static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp
 	    if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, bounds, flags))
 		break;
 	}
-	
+
 	if (flags & be_link_ONLY_CURRENT)
 	{
 	    i = term;		/* exit after first check
@@ -639,7 +641,7 @@ static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp
 	{
 	    i += inc;
 	}
-    }    
+    }
 
     /* search from one extent to the other */
     if (i == term && (flags & (be_link_DONT_WRAP | be_link_ONLY_CURRENT)) == 0)
@@ -738,7 +740,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 	antweb_selection_descr *link;
 
 	link = antweb_highlight_scan_xy(doc, NULL, box, flags, &bounds);
-    
+
 	ti = descriptor_to_item(link);
     }
     else
@@ -759,6 +761,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 	    ti = scan_links_linear(doc, item, flags, &bounds);
 	}
     }    
+
     /* check for highlighting needed */
     if ((flags & be_link_DONT_HIGHLIGHT) == 0)
     {
@@ -840,7 +843,7 @@ static void be_update_link(be_doc doc, antweb_selection_t *selection, int select
 
     if (selection == NULL)
 	return;
-    
+
     switch (selection->tag)
     {
     case doc_selection_tag_NONE:
@@ -906,9 +909,12 @@ void antweb_default_caret(antweb_doc *doc, BOOL take_caret)
     if (take_caret || frontend_view_has_caret(doc->parent))
     {
 	rid_text_item *ti = be_doc_read_caret(doc);
+#ifdef STBWEB
+        /* pdh: I think we want to do this all the time in Fresco */
 	if (ti)
+#endif
 	    backend_set_caret(doc, ti, doc->selection.data.text.input_offset);
-/* 		antweb_place_caret(doc, ti, doc->selection.data.text.input_offset); */
+/* 	antweb_place_caret(doc, ti, doc->selection.data.text.input_offset); */
     }
 }
 
@@ -939,11 +945,11 @@ os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
     case be_cursor_UP | be_cursor_LIMIT:
 	ti = backend_highlight_link(doc, NULL, be_link_TEXT | be_link_BACK | be_link_CARETISE | be_link_DONT_WRAP);
 	break;
-    
+
     case be_cursor_DOWN:
 	ti = backend_highlight_link(doc, old_ti, be_link_TEXT | be_link_CARETISE | be_link_DONT_WRAP);
 	break;
-    
+
     case be_cursor_DOWN | be_cursor_WRAP:
 	ti = backend_highlight_link(doc, old_ti, be_link_TEXT | be_link_CARETISE);
 	break;
@@ -954,7 +960,7 @@ os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
     }
 
     *used = old_ti != ti;
-    
+
     return NULL;
 }
 
@@ -1015,7 +1021,7 @@ void backend_set_caret(be_doc doc, be_item ti, int offset)
 	backend_remove_highlight(doc);
 	return;
     }
-    
+
     if (!be_item_has_caret(doc, ti))
     {
 	backend_remove_highlight(doc);
@@ -1061,9 +1067,15 @@ void backend_remove_highlight(be_doc doc)
 	if (object_table[old_ti->tag].caret)
 	    object_table[old_ti->tag].caret(old_ti, doc->rh, doc, object_caret_BLUR);
 
+#ifdef STBWEB
 	/* Give the window the input focus but no visable caret */
 	frontend_view_caret(doc->parent, 0, 0, -1, 0);
     }
+#else
+        /* pdh: I think this is what desktop Fresco wants */
+    }
+    frontend_view_caret( doc->parent, 0, 0, -1, FALSE );
+#endif
 }
 
 be_item backend_read_highlight(be_doc doc, BOOL *had_caret)

@@ -117,14 +117,15 @@ config_item citems[] = {
 { config_URL,	"document.search",	(void *)offsetof(struct config_str, document_search),	       "URL to search from",		NULL  },
 { config_URL,	"document.offline",	(void *)offsetof(struct config_str, document_offline),	       "URL of offline menu",		NULL  },
 { config_COMMENT, NULL, NULL, "", NULL },
-{ config_FILE,	"files.hots", 		(void *)offsetof(struct config_str, hotlist_file),		"Hotlist file",		"InetDBase:Hotlist"  },
-{ config_FILE,	"files.passwords", 	(void *)offsetof(struct config_str, auth_file),		"File to store passwords in",	"<Fresco$Dir>.Users"  },
-{ config_BOOL,	"files.passwords.encrypted", 	(void *)offsetof(struct config_str, auth_file_crypt),"Store passwords scrambled",	(void *) 0  },
-{ config_FILE,	"files.runable",	(void *)offsetof(struct config_str, runable_file),		"This file lists the file types of files that will be run when fetched.",	"<"PROGRAM_NAME"$Dir>.Runables" },
-{ config_FILE,	"files.allow", 	(void *)offsetof(struct config_str, allow_file),		"If given, only allow access to sites listed in this file.",	NULL },
-{ config_FILE,	"files.deny", 	(void *)offsetof(struct config_str, deny_file),		"If given, don't allow access to sites listed in this file.",	NULL },
-{ config_FILE, "files.Help",	(void *)offsetof(struct config_str, help_file),              "URL of help pages",	NULL  }, /* SJM */
-{ config_FILE,  "files.cookie",	(void *)offsetof(struct config_str, cookie_file),              "Where to store the users cookies",	"<"PROGRAM_NAME"$Dir>.Cookies" },
+{ config_FILE, "files.hots", 		(void *)offsetof(struct config_str, hotlist_file),		"Hotlist file",		"InetDBase:Hotlist"  },
+{ config_FILE, "files.passwords", 	(void *)offsetof(struct config_str, auth_file),		"File to store passwords in",	"<Fresco$Dir>.Users"  },
+{ config_BOOL, "files.passwords.encrypted", 	(void *)offsetof(struct config_str, auth_file_crypt),"Store passwords scrambled",	(void *) 0  },
+{ config_FILE, "files.runable", (void *)offsetof(struct config_str, runable_file),  "This file lists the file types of files that will be run when fetched.",	"<"PROGRAM_NAME"$Dir>.Runables" },
+{ config_FILE, "files.allow", 	(void *)offsetof(struct config_str, allow_file),    "If given, only allow access to sites listed in this file.",	NULL },
+{ config_FILE, "files.deny", 	(void *)offsetof(struct config_str, deny_file),	    "If given, don't allow access to sites listed in this file.",	NULL },
+{ config_FILE, "files.Help",	(void *)offsetof(struct config_str, help_file),     "URL of help pages",	                NULL  }, /* SJM */
+{ config_FILE, "files.cookie",	(void *)offsetof(struct config_str, cookie_file),   "Where to store cookies",	                "<"PROGRAM_NAME"$Dir>.Cookies" },
+{ config_FILE, "files.history", (void *)offsetof(struct config_str, history_file),  "Where to store the persistent history",    "<"PROGRAM_NAME"$Dir>.History" },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_INT,	"truncate.length", 	(void *)offsetof(struct config_str, truncate_length),	"Number of chars to truncate file names to", 0  },
 { config_BOOL,	"truncate.suffix", 	(void *)offsetof(struct config_str, truncate_suffix),	"Do we remove the file extension when we choose a file name?", 0  },
@@ -213,6 +214,14 @@ config_item citems[] = {
 { config_LAST, NULL, NULL, NULL, 0 }
 };
 
+#ifdef __acorn
+/* According to the Dr Smiths documentation, there's a bug in Norcroft 5
+ * when zpc1 is active which stops *((int*)foo) from working properly.
+ * Sadly we must thus turn off checking in this file (or everything ends
+ * up shades of light blue -- no, that's not a metaphor, it *does*).
+ */
+#pragma -c0
+#endif
 
 /**********************************************************************/
 /* This gets called to set up all the config */

@@ -112,9 +112,9 @@ static int scroll_by_flags(fe_view v, int flags)
     if (v->displaying && v->scrolling != fe_scrolling_NO)
     {
 	if (flags & be_link_VERT)
-	    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1);
+	    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
 	else
-	    scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1);
+	    scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, FALSE);
     }
     return scrolled;
 }
@@ -420,12 +420,12 @@ static BOOL move_to_toolbar(int flags)
 	config_mode_cursor_toolbar && tb_is_status_showing() &&
 	((config_display_control_top && (flags & be_link_BACK)) || (!config_display_control_top && (flags & be_link_BACK) == 0)))
     {
-	fe_pointer_mode_update(pointermode_OFF);
+/* 	fe_pointer_mode_update(pointermode_OFF); */
 
 	if (tb_status_highlight(TRUE))
 	    return TRUE;
 
-	pointer_mode = pointermode_ON;
+/* 	pointer_mode = pointermode_ON; */
     }
 
     return FALSE;
@@ -567,9 +567,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	if (v->displaying && v->scrolling != fe_scrolling_NO)
 	{
 	    if (flags & be_link_VERT)
-		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1);
+		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
 	    else
-		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1);
+		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, FALSE);
 	    
 	    if (scrolled)
 	    {
@@ -639,9 +639,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	if (v->displaying && v->scrolling != fe_scrolling_NO)
 	{
 	    if (flags & be_link_VERT)
-		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1);
+		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
 	    else
-		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1);
+		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, FALSE);
 
 	    if (scrolled)
 	    {
@@ -664,16 +664,32 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 
 void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
 {
-    pointer_mode = pointermode_ON;  /* so that scroll_changed doesn't reposition highlight  */
+/*     pointer_mode = pointermode_ON; */  /* so that scroll_changed doesn't reposition highlight  */
 
     fe__move_highlight_xy(v, box, flags);
 
-    fe_pointer_mode_update(pointermode_OFF);
+/*     fe_pointer_mode_update(pointermode_OFF); */
 }
 
 void fe_move_highlight(fe_view v, int flags)
 {
     fe_move_highlight_xy(v, NULL, flags);
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+/* the given window has just scrolled
+ * check that the highlight is still visible
+ */
+
+int fe_ensure_highlight(fe_view v, int flags)
+{
+    if (pointer_mode == pointermode_OFF && v && v->displaying)
+    {
+	v->current_link = backend_highlight_link(v->displaying, v->current_link,
+						 (flags & be_link_BACK) | be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise() | movepointer());
+    }
+    return 0;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -799,8 +815,8 @@ void fe_frame_link_array_build(fe_view v)
     
     vals[0] = (int) v;		/* target view */
     vals[1] = NULL;		/* list is put in here */
-    vals[2] = info.width << bbc_modevar(info.mode, bbc_XEigFactor);	/* icon's small side size (OS) */
-    vals[3] = info.height << bbc_modevar(info.mode, bbc_YEigFactor);	/* icon's large side size (OS) */
+    vals[2] = info.width*2;	/* icon's small side size (OS) - bbc_modevar() was crashing here in the ROM!!! */
+    vals[3] = info.height*2;	/* icon's large side size (OS) */
 
     STBDBG(("fe_frame_link_array_build: v %p size %dx%d OS units\n", v, vals[2], vals[3]));
 
@@ -1023,38 +1039,43 @@ os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 	frontend_pointer_set_position(v, (box.x0 + box.x1)/2, (box.y0 + box.y1)/2);
 	fe_map_mode(v, ti);
     }
-    else if (flags & be_item_info_INPUT)
+    else
     {
-	BOOL had_caret;
+	/* if we are clicking in a text item, that is highlighted, and doesn't have the caret */
+	BOOL had_caret, need_caret;
 
-	if (backend_read_highlight(v->displaying, &had_caret) == v->current_link && had_caret)
+	need_caret = (flags & be_item_info_INPUT) && 
+	    backend_read_highlight(v->displaying, &had_caret) == ti &&
+	    !had_caret;
+	
+	if (bbits)
 	{
+	    last_click_x = x;
+	    last_click_y = y;
+	    last_click_view = v;
+	
 	    e = backend_doc_click(v->displaying, x, y, (wimp_bbits)bbits);
+
+	    if (need_caret && !caretise())
+		fe_keyboard_open(v);
 	}
 	else
 	{
-	    v->current_link = backend_highlight_link(v->displaying, v->current_link,
-						     movepointer() | be_link_TEXT | be_link_VERT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
+	    last_click_x = box.x0;
+	    last_click_y = box.y0;
+	    last_click_view = v;
+	    
+#if 0
+	    if (flags & be_item_info_INPUT)
+		v->current_link = backend_highlight_link(v->displaying, ti,
+							 movepointer() | be_link_TEXT | be_link_VERT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
+	    else
+#endif
+		e = backend_activate_link(v->displaying, ti, 0);
 
-	    if (!caretise())
+	    if (need_caret && !caretise())
 		fe_keyboard_open(v);
 	}
-    }
-    else if (bbits)
-    {
-	last_click_x = x;
-	last_click_y = y;
-	last_click_view = v;
-	
-	e = backend_doc_click(v->displaying, x, y, (wimp_bbits)bbits);
-    }
-    else
-    {
-	last_click_x = box.x0;
-	last_click_y = box.y0;
-	last_click_view = v;
-	
-	e = backend_activate_link(v->displaying, ti, 0);
     }
 
     return e;
@@ -1067,6 +1088,4 @@ os_error *fe_handle_enter(fe_view v)
 
 /* ------------------------------------------------------------------------------------------- */
 
-/* eof stblinks..c */
-
-   
+/* eof stblinks.c */

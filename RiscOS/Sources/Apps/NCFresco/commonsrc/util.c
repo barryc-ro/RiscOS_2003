@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "memwatch.h"
 
@@ -290,10 +291,10 @@ char *reduce_file_name(char *fname, char *temp, char *pathname)
     char temp2[256];
     int len;
 
-    if (_swix(OS_FSControl, _INR(0,5), 37, (int) (long) pathname, (int) (long) temp, 0, 0, 256) != NULL)
+    if (_swix(OS_FSControl, _INR(0,6), 37, (int) (long) pathname, (int) (long) temp, 0, 0, 256) != NULL)
 	return NULL;
 
-    if (_swix(OS_FSControl, _INR(0,5), 37, (int) (long) fname, (int) (long) temp2, 0, 0, 256) != NULL)
+    if (_swix(OS_FSControl, _INR(0,6), 37, (int) (long) fname, (int) (long) temp2, 0, 0, 256) != NULL)
 	return NULL;
 
     len = strlen(temp);
@@ -744,29 +745,29 @@ int cmos_op(int bit_start, int n_bits, int new_val, BOOL write)
 #define NVRAM_Read	0x4EE00
 #define NVRAM_Write	0x4EE01
 
-int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write)
+int nvram_read(const char *tag, int *val)
 {
     char buf[4];
-    int err;
-    if (!write)
-    {
-	_swix(NVRAM_Read, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
-	if (err >= 0)
-	    return *(int *)buf;
-    }
-    else
-    {
-	*(int *)buf = new_val;
-	_swix(NVRAM_Write, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
-	if (err == 0)
-	    return 0;
-    }
-
+    int err = -1;
+    _swix(NVRAM_Read, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
 #if DEBUG
-    fprintf(stderr, "nvram_op: error %d on %s write %d val %d\n", err, tag, write, new_val);
+    fprintf(stderr, "nvram_read: '%s' = %d err %d\n", tag, *(int *)buf, err);
 #endif
-    
-    return bit_start == -1 ? 0 : cmos_op(bit_start, n_bits, new_val, write);
+    if (err >= 0)
+	*val = *(int *)buf;
+    return err >= 0;
+}
+
+int nvram_write(const char *tag, int new_val)
+{
+    char buf[4];
+    int err = -1;
+    *(int *)buf = new_val;
+    _swix(NVRAM_Write, _INR(0,2) | _OUT(0), tag, buf, 0, &err);
+#if DEBUG
+    fprintf(stderr, "nvram_write: '%s' = %d err %d\n", tag, new_val, err);
+#endif
+    return err == 0;
 }
 
 /* trigger an event */
@@ -798,5 +799,33 @@ void pointer_set_position(int x, int y)
     block[4] = (y >> 8) & 0xff;
     _kernel_osword(osword_Mouse, (int *)block);
 }
+
+static char tmpnam_buf[L_tmpnam] = "";
+static char count = 0;
+
+char *my_tmpnam(char *s)
+{
+    FILE *f;
+    BOOL present = FALSE;
+    do
+    {
+	int sig = (time(NULL) << 8) | count++;
+
+	if (!s)
+	    s = tmpnam_buf;
+
+	sprintf(s, "<Wimp$ScrapDir>.%08x", sig);
+	f = fopen(s, "w");
+	if (f)
+	{
+	    fclose(f);
+	    present = TRUE;
+	}
+    }
+    while (!present);
+    return s;
+}
+    
+/*****************************************************************************/
 
 /* eof util.c */

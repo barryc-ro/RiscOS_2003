@@ -34,6 +34,10 @@
 #include "sgmlparser.h"
 #include "gbf.h"
 
+#ifdef PLOTCHECK
+#include "rectplot.h"
+#endif
+
 /*****************************************************************************
 
     Parse a void value - this is used for attributes that do not have any
@@ -508,7 +512,7 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
 
 #ifdef PLOTCHECK
     {
-	extern int fwidth_scale;
+	/*extern int fwidth_scale;*/
 	if (v.type == value_absunit)
 	    v.u.f /= fwidth_scale;
     }

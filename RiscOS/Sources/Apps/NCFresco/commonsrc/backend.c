@@ -110,6 +110,8 @@
 #include "objects.h"
 #include "fvpr.h"
 #include "pluginfn.h"
+#include "format.h"
+#include "gbf.h"
 
 #ifdef STBWEB_BUILD
 #include "http.h"
@@ -121,6 +123,10 @@
 
 #if DEBUG
 #include "unwind.h"
+#endif
+
+#ifdef PLOTCHECK
+#include "rectplot.h"
 #endif
 
 #ifndef PP_DEBUG
@@ -1039,6 +1045,7 @@ static os_error *backend__dispose_doc(be_doc doc)
 #if DEBUG
 static void dump_document_list(void)
 {
+#if 0
     be_doc dd;
     fprintf(stderr, "dump doc: dump list\n");
     for (dd = document_list; dd; dd = dd->next)
@@ -1046,6 +1053,7 @@ static void dump_document_list(void)
 	fprintf(stderr, "dump doc: dd %p dd->next %p\n", dd, dd->next);
     }
     fprintf(stderr, "dump doc: end\n");
+#endif
 }
 #endif
 
@@ -1343,8 +1351,10 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 
     RENDBG(("Rendering rectangle.  ox=%d, oy=%d, encoding=%d.\n", ox, oy, doc->encoding));
 
+#ifdef RISCOS
     if (doc->encoding != be_encoding_LATIN1)
 	_swix(Font_WideFormat, _IN(0), doc->encoding);
+#endif
 
     if (rh)
     {
@@ -1372,8 +1382,10 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
  	layout_render_bevels(rr, doc);
     }
 
+#ifdef RISCOS
     if (doc->encoding != be_encoding_LATIN1)
 	_swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
+#endif
 
     RENDBG(("Render done\n"));
 
@@ -1487,8 +1499,11 @@ static void antweb_append_textarea(char **buffer, rid_textarea_item *tai, int *l
 	be_ensure_buffer_space(buffer, len, 3 * strlen(tal->text) + 2);
 
 	url_escape_cat(*buffer, tal->text, *len);
+
+	/* pdh: capitalised 'D' and 'A' for the benefit of wonky Otago boys
+	 */
 	if (tal->next)
-	    strcat(*buffer, "%0d%0a");
+	    strcat(*buffer, "%0D%0A");
     }
 }
 
@@ -1549,8 +1564,10 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
     for(tal = tai->lines; tal; tal = tal->next)
     {
 	url_escape_to_file(tal->text, f);
+	/* pdh: capitalised 'D' and 'A' for the benefit of wonky Otago boys
+	 */
 	if (tal->next)
-	    fputs("%0d%0a", f);
+	    fputs("%0D%0A", f);
     }
 }
 
@@ -1838,6 +1855,9 @@ static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int wid
     if (new == NULL || new->first == NULL)
     {
 	usrtrc( "**** Tried to tidy NULL pos line ****\n");
+#ifdef PLOTCHECK
+	 plotcheck_boom();
+#endif
 	return 0;
     }
 
@@ -1846,7 +1866,7 @@ static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int wid
     switch (new->first->st.flags & rid_sf_ALIGN_MASK)
     {
     case rid_sf_ALIGN_JUSTIFY:
-	if (new->first->width != -1 && spare > 0)
+	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
 	{
 	    rid_text_item *ti, *lti;
 	    int n;
@@ -1881,7 +1901,7 @@ static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int wid
 	}
 	break;
     case rid_sf_ALIGN_CENTER:
-	if (new->first->width != -1 && spare > 0)
+	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
 	{
 	    /* Only center things that can fit on the display */
 
@@ -1892,7 +1912,7 @@ static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int wid
 	}
 	break;
     case rid_sf_ALIGN_RIGHT:
-	if (new->first->width != -1 && spare > 0)
+	if (new->first->width != MAGIC_WIDTH_HR && spare > 0)
 	{
 	    FMTDBGN(("Right aligned\n"));
 
@@ -2758,7 +2778,7 @@ static void stomp_contained_widths(rid_text_stream *st)
 }
 #endif
 
-static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
+static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti, int scale_value)
 {
         rid_text_stream *st = &rh->stream;
         rid_fmt_info fmt;
@@ -2774,11 +2794,11 @@ static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
         fmt.text_data = rh->texts.data;
 
         /* Then get min|max widths for tables */
-        rid_size_stream(rh, st, &fmt, 0, ti);
+	if ( ! gbf_active(GBF_NEW_FORMATTER) )
+	    rid_size_stream(rh, st, &fmt, 0, ti);
 
+#if 0
 	{ static int BE_REALLY_REALLY_CAUTIOUS_ABOUT_WHETHER_WANT_THIS_FEATURE; }
-
-#if 1
 #if DEBUG
 	fprintf(stderr, "Width after formatting is %d, versus fwidth %d\n",
 		*fmt.width, rh->stream.fwidth);
@@ -2810,13 +2830,26 @@ static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
 
         FMTDBG(("be_formater_loop - building\n"));
 
-        fmt.margin_proc = &be_margin_proc;
-        fmt.tidy_proc = &antweb_formater_tidy_line;
-        fmt.table_proc = &rid_table_share_width;
-        fmt.text_data = rh->texts.data;
-	fmt.scale_value = scale_value;
-
-        be_formater_loop_core(rh, st, ti, &fmt, rid_fmt_BUILD_POS);
+	if ( gbf_active(GBF_NEW_FORMATTER) )
+	{
+	    { static int WARNING_FIX_ME_REQUIRED; }
+	    /* The 100 needs to be replaced with the window
+               height. This is the value we get if a table has a
+               height of 100%. Thus, just as widening the window might
+               want to trigger a reformat, making the window taller
+               can also potentially trigger a reformat. */
+	    rid_toplevel_format(doc, rh, NULL, rh->stream.fwidth, 100);
+	}
+	else
+	{
+	    fmt.margin_proc = &be_margin_proc;
+	    fmt.tidy_proc = &antweb_formater_tidy_line;
+	    fmt.table_proc = &rid_table_share_width;
+	    fmt.text_data = rh->texts.data;
+	    fmt.scale_value = scale_value;
+	    
+	    be_formater_loop_core(rh, st, ti, &fmt, rid_fmt_BUILD_POS);
+	}
 
         FMTDBG(("be_formater_loop done\n"));
 
@@ -2844,13 +2877,15 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
     if (ti == NULL)
 	return NULL;
 
+#ifdef RISCOS
     if (doc->encoding != be_encoding_LATIN1)
 	_swix(Font_WideFormat, _IN(0), doc->encoding);
+#endif
 
     /* Zero w|h for all table descendent streams as well */
     rid_zero_widest_height(&doc->rh->stream);
 
-    be_formater_loop(doc->rh, ti, doc->scale_value);
+    be_formater_loop(doc, doc->rh, ti, doc->scale_value);
 
     fvpr_progress_stream(&doc->rh->stream);
 
@@ -2859,10 +2894,12 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
     antweb_build_selection_list(doc);
 #endif
 
+#ifdef RISCOS
     if (doc->encoding != be_encoding_LATIN1)
 	_swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
+#endif
 
-#if DEBUG
+#if DEBUG && 0
     FMTDBG(("antweb_document_format() done doc %p, rid_header %p\n", doc, doc->rh));
 
     if (doc->rh->tile.src)
@@ -2991,7 +3028,7 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 
     FMTDBG(("Calling the formatter loop\n"));
 
-    be_formater_loop(doc->rh, ti, doc->scale_value);
+    be_formater_loop(doc, doc->rh, ti, doc->scale_value);
 
     fvpr_progress_stream(&doc->rh->stream);
 
@@ -4213,7 +4250,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     if (doc->ph)
     {
 	const char *refresh;
-	
+
         PPDBG(("Closing parser down\n"));
         doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
         doc->ph = NULL;
@@ -4288,11 +4325,11 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 		atoi(vals[1].name);
 
 	    mm_free(s);
-	    
+
 	    if (doc->rh->refreshtime >= 0)
 		alarm_set(alarm_timenow()+(doc->rh->refreshtime * 100), be_refresh_document, doc);
 	}
-	
+
 	frontend_view_status(doc->parent, sb_status_FINISHED);
     }
     else
@@ -4490,7 +4527,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->parent = v;
     new->scale_value = config_display_scale_image;
     new->encoding = config_display_encoding;
-    
+
     /* new: add the url here */
 /*     new->url = strdup(url); */
 
@@ -4689,6 +4726,7 @@ void backend_temp_file_register(char *url, char *file_name)
 }
 #endif
 
+
 #define TIME_FORMAT	"%a, %d %b %Y %H:%M:%S GMT"
 
 const char *backend_check_meta(be_doc doc, const char *name)
@@ -4726,6 +4764,24 @@ const char *backend_check_meta(be_doc doc, const char *name)
     return NULL;
 }
 
+#if 0
+void backend_clear_selected(be_doc doc)
+{
+    be_item ti = doc->rh->stream.text_list;
+    while (ti)
+    {
+	if (ti->flag & rid_flag_SELECTED)
+	{
+	    ti->flag &= ~rid_flag_SELECTED;
+	    be_update_item_highlight(doc, ti);
+	}
+
+	ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
+    }
+
+    doc->selection.data.text = NULL;
+}
+#endif
 
 #ifdef STBWEB
 int backend_frame_resize_bounds(be_doc doc, int x, int y, wimp_box *box, int *handle)
@@ -4817,7 +4873,7 @@ static void be__plugin_abort_or_action(be_item item, int action)
 	if (obj->type == rid_object_type_PLUGIN)
 	    pp = obj->state.plugin.pp;
     }
-    
+
     if (action == be_plugin_action_CLOSE)
 	plugin_send_close(pp);
     else if (action == be_plugin_action_ABORT)

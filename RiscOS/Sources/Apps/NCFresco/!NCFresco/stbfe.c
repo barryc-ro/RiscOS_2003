@@ -670,6 +670,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     previous_url = NULL;
     previous_mode = v->browser_mode;
 
+    /* really not sure about this one */
+    if (frontend_view_has_caret(v))
+ 	backend_remove_highlight(v->displaying);
+    
     if (v->displaying)
     {
 	char *durl;
@@ -687,10 +691,6 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     fe_dispose_view_children(v);
 
-    /* really not sure about this one */
-    if (frontend_view_has_caret(v))
- 	backend_remove_highlight(v->displaying);
-    
     v->displaying = doc;
     v->current_link = NULL;
     v->find_last_item = NULL;
@@ -1083,8 +1083,9 @@ static os_error *fe__print(fe_view v, int size)
 
     if (size != fe_print_DEFAULT)
     {
-	old_size = nvram_op("PaperSize", 0x6D*8, 2, 0, FALSE);
-	nvram_op("PaperSize", 0x6D*8, 2, size == fe_print_LEGAL ? 2 : 1, TRUE);
+	if (nvram_read("PaperSize", &old_size))
+	    nvram_write("PaperSize", size == fe_print_LEGAL ? 2 : 1);
+
 	_swix(PPrimer_ChangePrinter, 0);
     }
 
@@ -1107,7 +1108,7 @@ static os_error *fe__print(fe_view v, int size)
     
     if (old_size != -1)
     {
-	nvram_op("PaperSize", 0x6D*8, 2, old_size, TRUE);
+	nvram_write("PaperSize", old_size);
 	_swix(PPrimer_ChangePrinter, 0);
     }
 
@@ -1796,6 +1797,16 @@ BOOL fe_font_size_set_possible(int value, BOOL absolute)
     return value >= 0 && value < config_SCALES;
 }
 
+static os_error *reformat_view(fe_view v, void *handle)
+{
+    if (v->w)
+    {
+	backend_doc_reformat(v->displaying);
+	fe_refresh_window(v->w, NULL);
+    }
+    return NULL;
+}
+
 void fe_font_size_set(int value, BOOL absolute)
 {
     fe_view v;
@@ -1821,26 +1832,7 @@ void fe_font_size_set(int value, BOOL absolute)
     
     frontend_complain(webfonts_init());
 
-    v = main_view;
-    if (v->children)
-    {
-	do
-	{
-	    
-	    v = fe_next_frame(v, TRUE);
-	    if (v)
-	    {
-		backend_doc_reformat(v->displaying);
-		fe_refresh_window(v->w, NULL);
-	    }
-	}	    
-	while (v);
-    }
-    else
-    {
-	backend_doc_reformat(v->displaying);
-	fe_refresh_window(v->w, NULL);
-    }
+    iterate_frames(main_view, reformat_view, NULL);
 
     visdelay_end();
 }
@@ -2297,6 +2289,8 @@ static os_error *fe_status_state(fe_view v, int state)
 	    else
 	    {
 		v->margin.y0 = margin_box.y0 + tb_status_height() + STATUS_TOP_MARGIN;
+/* 		if (on_screen_kbd) */
+/* 		    v->margin.y0 += on_screen_kbd_pos.y1 - on_screen_kbd_pos.y0; */
 	    }
 	}
         else
@@ -2340,7 +2334,7 @@ static os_error *fe_status_state(fe_view v, int state)
 	    if (v->children)
 		fe_refresh_window(v->w, NULL);
 	    else
-		fe_view_scroll_y(v, movement);
+		fe_view_scroll_y(v, movement, TRUE);
 #endif
 	}
 	
@@ -2538,6 +2532,8 @@ os_error *fe_status_open_toolbar(fe_view v, int bar)
 
 /* ------------------------------------------------------------------------------------------- */
 
+/* This should only be used for informtional uses - not triggering a highlight move */
+
 void fe_scroll_changed(fe_view v, int x, int y)
 {
     STBDBG(("fe_scroll_changed(): v %p link %p\n", v, v ? v->current_link : 0));
@@ -2548,14 +2544,6 @@ void fe_scroll_changed(fe_view v, int x, int y)
     else
     {
         statuswin_refresh_slider(v);
-    }
-
-    if (pointer_mode == pointermode_OFF && v && v->displaying/*  && v->current_link */)
-    {
-        int dir;
-
-	dir = y < 0 ? 0 : be_link_BACK;
-	v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise() | movepointer());
     }
 }
 
@@ -4395,6 +4383,8 @@ void fe_event_process(void)
 
 	    /* see if iconhigh is running */
 	    _swix(IconHigh_GetDirection, _IN(0) | _OUT(3), 0, &mode);
+	    STBDBG(("ptrenter: w%x iconhigh mode %d\n", e.data.c.w, mode));
+
 	    if (mode != 0)
 	    {
 		/* disable iconhigh */
@@ -4746,8 +4736,14 @@ static BOOL fe_initialise(void)
 #endif
     atexit(&fe_tidyup);
 
-    gbf_flags &= ~(GBF_FVPR | GBF_GUESS_ELEMENTS | GBF_TABLES_UNEXPECTED);
+    gbf_flags &= ~(GBF_FVPR | GBF_GUESS_ELEMENTS | GBF_TABLES_UNEXPECTED | GBF_NEW_FORMATTER | GBF_AUTOFIT);
     gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; /* this needs to not be defined to build a japanese version */
+
+    {
+	char *s = getenv("NCFresco$GBF");
+	if (s)
+	    gbf_flags = (int)strtoul(s, NULL, 10);
+    }
 
     gbf_init();
 
@@ -4755,6 +4751,14 @@ static BOOL fe_initialise(void)
 
     /* Init our configuration */
     config_init();
+
+    /* Init the NVRAM based configuration */
+    if (nvram_read(NVRAM_FONTS_TAG, &config_display_scale))
+	config_display_scale = config_display_scales[config_display_scale];
+    nvram_read(NVRAM_BEEPS_TAG, &config_sound_fx);
+    nvram_read(NVRAM_SOUND_TAG, &config_sound_background);
+    nvram_read(NVRAM_SCALING_TAG, &config_display_scale_fit);
+
     stbkeys_init();
 
     fe_font_size_init();
@@ -4853,8 +4857,8 @@ static BOOL fe_initialise(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if 0 //STBWEB_ROM
-int __root_stack_size = 32*1024;
+#if STBWEB_ROM
+int __root_stack_size = 64*1024;
 extern int disable_stack_extension;
 #endif
 
@@ -4862,7 +4866,7 @@ int main(int argc, char **argv)
 {
     int init_ok;
 
-#if 0 //STBWEB_ROM
+#if STBWEB_ROM
     disable_stack_extension = 1;
 #endif
 
@@ -4887,21 +4891,12 @@ int main(int argc, char **argv)
     argv++;
     argc--;
 
-#if 1
+#if STBWEB_ROM
     use_toolbox = TRUE;
 #else
-    if (argc > 0 && (strncmp(argv[0], "-x", 2)==0) )
     {
-	debug_level = atoi(argv[0] + 2);
-	argc--;
-	argv++;
-    }
-
-    if (argc > 0 && strcmp(argv[0], "-t") == 0)
-    {
-        use_toolbox = TRUE;
-	argc--;
-	argv++;
+	char *s = getenv(PROGRAM_NAME"$UseTB");
+	use_toolbox = s && atoi(s);
     }
 #endif
     
@@ -4971,25 +4966,6 @@ char *fe_msgs_lookup(char *tag)
 {
     return use_toolbox ? tb_msgs_lookup(tag) : msgs_lookup(tag);
 }
-
-/* ----------------------------------------------------------------------------------------------------- */
-
-#if 0
-os_error *os_swix(int swi, os_regset *r)
-{
-    return (os_error *)_kernel_swi(swi, (_kernel_swi_regs *)r, (_kernel_swi_regs *)r);
-}
-
-void os_read_var_val(char *name, char *buf /*out*/, int bufsize)
-{
-    _kernel_getenv(name, buf, bufsize);
-}
-
-os_error *os_byte(int a, int *x /*inout*/, int *y /*inout*/)
-{
-    return (os_error *)_swix(OS_Byte, _INR(0,2) | _OUTR(0,1), a, *x, *y, x, y);
-}
-#endif
 
 /* ----------------------------------------------------------------------------------------------------- */
 

@@ -195,7 +195,7 @@ struct gadget_object
     int cmp;
     toolbox_msg_reference help_message;
     int help_limit;
-/*     int gadget [UNKNOWN]; */
+/*  int gadget [UNKNOWN]; */
 };
 
 /* --------------------------------------------------------------------------*/
@@ -211,7 +211,6 @@ typedef enum
 /* --------------------------------------------------------------------------*/
 
 #define I_URL       	0x10
-/*#define I_URL_LABEL     0x14*/
 #define I_STATUS        0x12
 #define I_WORLD       	0x13
 #define I_WORLD_BORDER	0x14
@@ -236,12 +235,11 @@ struct tb_bar_info
     int num;
     int height;
 
-    fe_view view;
-
-/*     int highlight;		 *//* currently highlighted button index */
-
     tb_button_info *buttons;	/* the buttons visible in the window, sorted */
     int n_buttons;
+
+    int return_bar;		/* index of bar to open when closing */
+    int return_component;	/* component to highlight when closing */
 };
 
 struct tb_button_info
@@ -832,7 +830,8 @@ static void tb_bar_custom_exit_fn(void)
 
 static void tb_bar_details_entry_fn(fe_view v)
 {
-    fe_open_version(v);
+    if (v)
+	fe_open_version(v);
 }
 
 /* --------------------------------------------------------------------------*/
@@ -846,30 +845,67 @@ typedef struct
 {
     char *tv_name;
     char *monitor_name;
+
     tb_bar_entry_fn entry_fn;
     tb_bar_exit_fn exit_fn;
+
     int initial_component;	/* when moving onto it */
     int open_component;		/* when opening it */
     int return_component;
+
     int can_grey;
+
+    int return_bar;		/*  -1 means stack */
 } tb_bar_descriptor;
+
+#define BAR_CANT	(-2)
+#define BAR_STACK	(-1)
+#define BAR_MAIN	0
+#define BAR_EXTRAS	2
+#define BAR_STATUS	8
+#define BAR_CODEC	9
 
 static tb_bar_descriptor bar_names[] =
 {
-    { "mainT", NULL, 0, 0, I_DIRECTION, fevent_HOME, -1, FALSE },
-    { "favsT", NULL, 0, tb_bar_favs_exit_fn, I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_FAVS, FALSE },
-    { "extrasT", NULL, 0, 0, I_DIRECTION, fevent_TOOLBAR_HISTORY, fevent_TOOLBAR_EXTRAS, FALSE },
-    { "historyT", NULL, 0, tb_bar_history_exit_fn, I_DIRECTION, fevent_HISTORY_SHOW_ALPHA, fevent_TOOLBAR_HISTORY, FALSE },
-    { "printT", NULL, 0, 0, I_DIRECTION, fevent_PRINT_LETTER, fevent_TOOLBAR_PRINT, FALSE },
-    { "detailsT", NULL, tb_bar_details_entry_fn, tb_bar_details_exit_fn, I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_DETAILS, FALSE },
+    { "mainT", NULL,
+      0, 0,
+      I_DIRECTION, fevent_HOME, -1,
+      FALSE, BAR_CANT },
+    { "favsT", NULL,
+      0, tb_bar_favs_exit_fn,
+      I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_FAVS,
+      FALSE, BAR_MAIN },
+    { "extrasT", NULL,
+      0, 0,
+      I_DIRECTION, fevent_TOOLBAR_HISTORY, fevent_TOOLBAR_EXTRAS,
+      FALSE, BAR_MAIN },
+    { "historyT", NULL,
+      0, tb_bar_history_exit_fn,
+      I_DIRECTION, fevent_HISTORY_SHOW_ALPHA, fevent_TOOLBAR_HISTORY,
+      FALSE, BAR_EXTRAS },
+    { "printT", NULL,
+      0, 0,
+      I_DIRECTION, fevent_PRINT_LETTER, fevent_TOOLBAR_PRINT,
+      FALSE, BAR_EXTRAS },
+    { "detailsT", NULL,
+      tb_bar_details_entry_fn, tb_bar_details_exit_fn,
+      I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_DETAILS,
+      FALSE, BAR_EXTRAS },
     {  0 },
     {  0 },
-    { "statusWn", "statusW", 0, 0, fevent_MENU, 0, 0, TRUE },
-    { "codecT", NULL, 0, tb_bar_codec_exit_fn, I_DIRECTION, -1, -1, FALSE },
-    { "customT", NULL, 0, tb_bar_custom_exit_fn, I_DIRECTION, fevent_OPEN_FONT_SIZE, fevent_TOOLBAR_CUSTOM, FALSE}
+    { "statusWn", "statusW",
+      0, 0,
+      fevent_MENU, 0, 0,
+      TRUE, BAR_CANT },
+    { "codecT", NULL,
+      0, tb_bar_codec_exit_fn,
+      I_DIRECTION, -1, -1,
+      FALSE, BAR_STACK },
+    { "customT", NULL,
+      0, tb_bar_custom_exit_fn,
+      I_DIRECTION, fevent_OPEN_FONT_SIZE, fevent_TOOLBAR_CUSTOM,
+      FALSE, BAR_EXTRAS }
 };
-
-#define TOOLBAR_CODEC	9
 
 static tb_bar_info *tb_bar_init(int bar_num)
 {
@@ -911,7 +947,7 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	tbi->window_handle = window_handle(object_handle);
 
 
-#if 0
+#if DEBUG
 	{
 	    wimp_winfo info;
 	    info.w = tbi->window_handle;
@@ -966,9 +1002,6 @@ static void tb_bar_dispose(void)
     if (bar_names[tbi->num].exit_fn)
 	bar_names[tbi->num].exit_fn();
 
-    if (tbi->view)
-	fe_dispose_view(tbi->view);
-
     /* unlink top item */
     bar_list = tbi->next;
 
@@ -983,83 +1016,84 @@ static void tb_bar_dispose(void)
 
 BOOL tb_status_unstack_possible(void)
 {
-    return bar_list && bar_list->next;
+    return bar_list && bar_list->return_bar != BAR_CANT;
 }
 
 BOOL tb_status_unstack(void)
 {
     tb_status_state_t old_state = status_state;
+    tb_bar_descriptor *tbd;
+    tb_bar_info *tbi;
+    int return_bar, return_cmp;
     
     STBDBG(("tb_status_unstack(): in\n"));
 
-    if (bar_list && bar_list->next)
+    /* see if we can do anything */
+    if (!bar_list || bar_list->return_bar == BAR_CANT)
+	return FALSE;
+
+    sound_event(snd_TOOLBAR_HIDE_SUB);
+
+    /* get return bar */
+    return_bar = bar_list->return_bar;
+    return_cmp = bar_list->return_component;
+    
+    /* dispose of current bar */
+    tb_bar_dispose();
+
+    /* open new bar */
+    tb_status_new(NULL, return_bar);
+    if ((tbi = bar_list) != NULL)
     {
-	int return_cmp = bar_names[bar_list->num].return_component;
+	/* set highlight */
+	tb_status_show(old_state == status_OPEN_SMALL);
 
-	sound_event(snd_TOOLBAR_HIDE_SUB);
-
-	tb_bar_dispose();
-
-	if (old_state != status_CLOSED)
-	{
-	    tb_status_show(old_state == status_OPEN_SMALL);
-
-	    tb_bar_set_highlight(bar_list, return_cmp, FALSE);
-	    setfocus(bar_list->object_handle);
-	}
-
-	STBDBGN(("tb_status_unstack(): out\n"));
-
-	return TRUE;
+	tb_bar_set_highlight(tbi, return_cmp, FALSE);
+	setfocus(tbi->object_handle);
     }
-
+    
     STBDBGN(("tb_status_unstack(): out\n"));
 
-    return FALSE;
+    return TRUE;
 }
 
 void tb_status_unstack_all(void)
 {
-    tb_status_state_t old_state = status_state;
-
-    while (bar_list && bar_list->next)
-	tb_bar_dispose();
-
-    if (bar_list && old_state != status_CLOSED)
-    {
-	tb_status_show(old_state == status_OPEN_SMALL);
-	setfocus(bar_list->object_handle);
-    }
+    tb_status_unstack();
 }
 
 void tb_status_new(fe_view v, int bar_num)
 {
     tb_status_state_t old_state = status_state;
-    tb_bar_info *tbi = NULL;
+    tb_bar_info *tbi;
+    int old_bar = bar_list ? bar_list->num : -1;
 
     STBDBG(("tb_status_new(): in\n"));
     
-    if (bar_list && bar_list->num == bar_num)
+    /* is this one already open */
+    if (old_bar == bar_num)
 	return;
 
-    /* hide the current status bar withouut actually flagging this as a status_hide */
-    frontend_complain((os_error *)_swix(Toolbox_HideObject, _INR(0,1), 0, bar_list->object_handle));
-
-    tbi = tb_bar_init(bar_num);
-
-    if (tbi)
+    /* dipose of what's there currently */
+    tb_bar_dispose();
+    
+    /* create a new one */
+    if ((tbi = tb_bar_init(bar_num)) != NULL)
     {
 	tb_bar_descriptor *tbd = &bar_names[tbi->num];
+
 	if (tbd->entry_fn)
 	    tbd->entry_fn(v);
-    }
-    
-    if (bar_list && old_state != status_CLOSED)
-    {
+
+	/* record the return point */
+	tbi->return_bar = tbd->return_bar == BAR_STACK ? old_bar : tbd->return_bar;
+	tbi->return_component = tbd->return_bar == BAR_STACK ? tbd->open_component : tbd->return_component;
+
+	/* set the highlight appropriately */
 	tb_status_show(old_state == status_OPEN_SMALL);
 
-	tb_bar_set_highlight(bar_list, bar_names[bar_list->num].open_component, FALSE);
-	setfocus(bar_list->object_handle);
+	tb_bar_set_highlight(tbi, tbd->open_component, FALSE);
+	setfocus(tbi->object_handle);
     }
 
     sound_event(snd_TOOLBAR_SHOW_SUB);
@@ -1992,7 +2026,7 @@ void tb_status_set_lights(int state)
 
 void tb_status_init(void)
 {
-    if (config_display_control_initial == 8)
+    if (config_display_control_initial == BAR_STATUS)
 	tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V");
 
     STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
@@ -2189,10 +2223,10 @@ static int codec_component[] =
 
 void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 {
-    if (opening && (bar_list == NULL || bar_list->num != TOOLBAR_CODEC))
-	tb_status_new(NULL, TOOLBAR_CODEC);
+    if (opening && (bar_list == NULL || bar_list->num != BAR_CODEC))
+	tb_status_new(NULL, BAR_CODEC);
 
-    if (bar_list && bar_list->num == TOOLBAR_CODEC)
+    if (bar_list && bar_list->num == BAR_CODEC)
     {
 	int i;
 	

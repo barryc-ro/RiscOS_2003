@@ -176,7 +176,9 @@ extern void set_input_key_map(input_key_map *map);
 extern input_key_action lookup_key_action(int key);
 
 extern int cmos_op(int bit_start, int n_bits, int new_val, BOOL write);
-extern int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write);
+
+extern int nvram_read(const char *tag, int *val);
+extern int nvram_write(const char *tag, int new_val);
 
 #define snd_NONE		0
     
@@ -249,9 +251,7 @@ extern void sound_event(sound_event_t event_num);
 
 extern void pointer_set_position(int x, int y);
 
-#if defined(STBWEB) && !STBWEB_ROM
 #define tmpnam(a) my_tmpnam(a)
 extern char *my_tmpnam(char *s);
-#endif
 
 /* eof util.h */

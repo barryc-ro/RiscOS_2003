@@ -38,6 +38,7 @@ struct config_str
     char *deny_file;
     char *help_file;
     char *cookie_file;
+    char *history_file;
 
     int auth_file_crypt;
     char *animation_name;
@@ -79,7 +80,7 @@ struct config_str
     int display_leading_percent;
     int display_char_password;
     int display_encoding;
-    
+
     int proxy_http_on;
     int proxy_https_on;
     int proxy_gopher_on;
@@ -167,6 +168,7 @@ extern struct config_str config_array;
 #define config_deny_file (config_array.deny_file)
 #define config_help_file (config_array.help_file)
 #define config_cookie_file (config_array.cookie_file)
+#define config_history_file (config_array.history_file)
 
 #define config_auth_file_crypt (config_array.auth_file_crypt)
 #define config_doc_default (config_array.doc_default)

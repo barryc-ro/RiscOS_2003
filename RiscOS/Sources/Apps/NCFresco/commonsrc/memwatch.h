@@ -40,7 +40,7 @@ void mm__check(FILE *f);
 void mm__summary(FILE *f);
 void mm__dump(FILE *f);
 
-#ifndef __MemCheck_MemCheck_h
+#if !defined(__MemCheck_MemCheck_h)
 # include "memcheck/MemCheck.h"
 #endif
 

@@ -197,20 +197,26 @@ static void draw_view_outline(wimp_w w)
 
 /* ----------------------------------------------------------------------------*/
 
-int fe_view_scroll_x(fe_view v, int val)
+int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight)
 {
+    STBDBG(("fe_view_scroll_x: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
     if (v->w)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
-        return fe_scroll_request(v, &state.o, val, 0);
+        if (fe_scroll_request(v, &state.o, val, 0))
+	{
+	    if (ensure_highlight)
+		fe_ensure_highlight(v, val < 0 ? be_link_BACK : 0);
+	    return 1;
+	}
     }
     return 0;
 }
 
-int fe_view_scroll_y(fe_view v, int val)
+int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight)
 {
-    STBDBG(("fe_view_scroll_y: v%p w%x val %d\n", v, v->w, val));
+    STBDBG(("fe_view_scroll_y: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
     if (v->w)
     {
         wimp_wstate state;
@@ -219,7 +225,12 @@ int fe_view_scroll_y(fe_view v, int val)
 	if (use_toolbox)
 	    tb_status_set_direction(val > 0);
 
-	return fe_scroll_request(v, &state.o, 0, val);
+	if (fe_scroll_request(v, &state.o, 0, val))
+	{
+	    if (ensure_highlight)
+		fe_ensure_highlight(v, be_link_VERT | (val > 0 ? be_link_BACK : 0));
+	    return 1;
+	}
     }
     return 0;
 }
@@ -705,7 +716,7 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
         need_to_set_dims = 1;
     }
 
-#if 1
+#if 0
     if (bottom - h < -mh /*- sbh*/)
     {
         v->stretch_document = (-mh/* - sbh*/) - (bottom - h);

@@ -572,24 +572,23 @@ static int vals_to_bits(int n_vals)
     return n_bits;
 }
 
+#if 0
 #define NVRAM_FONTS	(0x131*8 + 0)
-#define NVRAM_FONTS_TAG	"BrowserFontSize"
 #define NVRAM_SOUND	(0x131*8 + 2)
-#define NVRAM_SOUND_TAG	"BrowserMusicStatus"
 #define NVRAM_BEEPS     (0x131*8 + 3)
-#define NVRAM_BEEPS_TAG	"BrowserBeepStatus"
 #define NVRAM_SCALING     (0x131*8 + 3)
-#define NVRAM_SCALING_TAG "BrowserScaling"
+#endif
 
 /* ------------------------------------------------------------------------------------------- */
 
-static os_error *fe_custom_write_file(FILE *f, const char *tag, const char *nvram_tag, int bit_start, int n_vals)
+static os_error *fe_custom_write_file(FILE *f, const char *tag, const char *nvram_tag, int n_vals, int def)
 {
     char tag_buf[8];
     int val, i;
 
-    val = nvram_op(nvram_tag, bit_start, vals_to_bits(n_vals), 0, FALSE);
-
+    if (!nvram_read(nvram_tag, &val))
+	val = def;
+	
     /* binary wotsits are written in reverse order (on,off rather than offf,on) */
     if (n_vals == 2)
 	val = !val;
@@ -622,7 +621,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     if (font)
     {
 	int font_val = atoi(font);
-	nvram_op(NVRAM_FONTS_TAG, NVRAM_FONTS, 2, font_val, TRUE);
+	nvram_write(NVRAM_FONTS_TAG, font_val);
 
 	fe_font_size_set(font_val, TRUE);
 
@@ -633,7 +632,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     if (sound)
     {
 	int sound_val = !atoi(sound);
-	nvram_op(NVRAM_SOUND_TAG, NVRAM_SOUND, 1, sound_val, TRUE);
+	nvram_write(NVRAM_SOUND_TAG, sound_val);
 
 	fe_bgsound_set(sound_val);
 	
@@ -644,7 +643,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     if (beeps)
     {
 	int beeps_val = !atoi(beeps);
-	nvram_op(NVRAM_BEEPS_TAG, NVRAM_BEEPS, 1, beeps_val, TRUE);
+	nvram_write(NVRAM_BEEPS_TAG, beeps_val);
 
 	fe_beeps_set(beeps_val);
 	
@@ -655,7 +654,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     if (scaling)
     {
 	int scaling_val = !atoi(scaling);
-	nvram_op(NVRAM_SCALING_TAG, NVRAM_SCALING, 1, scaling_val, TRUE);
+	nvram_write(NVRAM_SCALING_TAG, scaling_val);
 
 	fe_scaling_set(scaling_val);
 	
@@ -1058,25 +1057,25 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	{
 	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_FONT_SIZE, TRUE);
-	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS_TAG, NVRAM_FONTS, 3);
+	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS_TAG, 3, 0);
 	}    
 	else if (strcasecomp(panel_name, "customsound") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_SOUND, TRUE);
-	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND_TAG, NVRAM_SOUND, 2);
+	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND_TAG, 2, config_sound_background);
 	}    
 	else if (strcasecomp(panel_name, "custombeeps") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_BEEPS, TRUE);
-	    e = fe_custom_write_file(f, "beeps", NVRAM_BEEPS_TAG, NVRAM_BEEPS, 2);
+	    e = fe_custom_write_file(f, "beeps", NVRAM_BEEPS_TAG, 2, config_sound_fx);
 	}
 	else if (strcasecomp(panel_name, "customscaling") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_SCALING, TRUE);
-	    e = fe_custom_write_file(f, "scaling", NVRAM_SCALING_TAG, NVRAM_SCALING, 2);
+	    e = fe_custom_write_file(f, "scaling", NVRAM_SCALING_TAG, 2, config_display_scale_fit);
 	}    
     
 	fclose(f);

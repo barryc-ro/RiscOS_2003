@@ -28,7 +28,7 @@
 
 /* ---------------------------------------------------------------------- */
 
-#ifdef STBWEB
+/*#ifdef STBWEB*/
 
 /* unhighlighted plinth colours */
 #define plinth_col_L	(0x55555500 | render_colour_RGB)
@@ -48,7 +48,7 @@
 /* plinth fill hilighted colour */
 #define plinth_col_FILL	(0x00008800 | render_colour_RGB)
 
-#endif
+/*#endif*/
 
 /* ---------------------------------------------------------------------- */
 

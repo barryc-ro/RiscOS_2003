@@ -363,6 +363,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     int slen;
     int fg, bg;
     char *t;
+    struct webfont *wf;
     BOOL draw_selection_box = (ti->flag & rid_flag_SELECTED) != 0;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
@@ -424,10 +425,11 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    font_setfont(fs->lf);
 	}
 
-	if (fs->lfc != fg)
+	if (fs->lfc != fg || fs->lbc != bg)
 	{
 	    fs->lfc = fg;
-	    render_set_font_colours(fs->lfc, bg, doc);
+	    fs->lbc = bg;
+	    render_set_font_colours(fg, bg, doc);
 	}
 
 	if (has_caret)
@@ -529,6 +531,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	t = ii->value ? ii->value : ii->tag == rid_it_SUBMIT ? "Submit" : "Reset";
 
+	wf = &webfonts[WEBFONT_BUTTON];
+	
 	if (ii->data.button.im)
 	{
 	    int oox = ox, ooy = oy;
@@ -550,7 +554,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 			 ti->width/2, (ti->max_up + ti->max_down)/2,
 			 doc->scale_value, antweb_render_background, doc, oox, ooy);
 	    
-	    plotx = (ti->width - webfont_font_width(WEBFONT_BUTTON, t))/2;
+	    wf = &webfonts[ti->st.wf_index];
+	    plotx = (ti->width - webfont_font_width(ti->st.wf_index, t))/2;
 	    draw_selection_box = FALSE;
 	}
 	else
@@ -579,6 +584,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 			       render_plinth_RIM | render_plinth_DOUBLE_RIM,
 			       hpos, bline - ti->max_down,
 			       ti->width, (ti->max_up + ti->max_down), doc );
+	    wf = &webfonts[ti->st.wf_index];
 #else
 	    render_plinth(bg,
 			  ii->data.button.tick ? render_plinth_IN : 0,
@@ -588,16 +594,17 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    plotx = 10;
 	}
 	
-	if (fs->lf != webfonts[WEBFONT_BUTTON].handle)
+	if (fs->lf != wf->handle)
 	{
-	    fs->lf = webfonts[WEBFONT_BUTTON].handle;
+	    fs->lf = wf->handle;
 	    font_setfont(fs->lf);
 	}
 
-	if (fs->lfc != fg)
+	if (fs->lfc != fg || fs->lbc != bg)
 	{
 	    fs->lfc = fg;
-	    render_set_font_colours(fs->lfc, bg, doc);
+	    fs->lbc = bg;
+	    render_set_font_colours(fg, bg, doc);
 	}
 
 	font_paint(t, font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0), hpos + plotx, bline);

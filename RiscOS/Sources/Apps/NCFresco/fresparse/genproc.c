@@ -3,11 +3,17 @@
 /*#include "sgmlparser.h"*/
 #include "htmlparser.h"
 
-#if DEBUG
+#ifdef PLOTCHECK
+#include "../plotcheck/rectplot.h"
+#endif
+
+static void sgml_print_value(FILE *output, ATTRIBUTE *attribute, VALUE *value);
+
+#ifdef SGML_REPORTING
 
 static char *stack_indentation(SGMLCTX *context)
 {
-#ifdef HTMLCHECK
+#if defined(HTMLCHECK) || defined(PLOTCHECK)
     return "";
 #else
 static char buf[256];
@@ -116,20 +122,11 @@ static void sgml_print_value(FILE *output, ATTRIBUTE *attribute, VALUE *value)
 }
 #endif
 
-extern void generic_start (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
-{
-}
-
-extern void generic_finish (SGMLCTX * context, ELEMENT * element)
-{
-}
-
-
 
 
 extern void report_start (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
-#if !defined(PRODUCTION) && SGML_REPORTING
+#if SGML_REPORTING
     int ix, j;
     FILE *fp = context->report.output;
     int array[SGML_MAXIMUM_ATTRIBUTES + 1]; /* Might be spare or all used */
@@ -170,22 +167,40 @@ extern void report_start (SGMLCTX * context, ELEMENT * element, VALUES * attribu
 	sgml_print_value(context->report.output, attribute, value);
     }
 
-#ifndef HTMLCHECK
+#if !defined(HTMLCHECK) && !defined(PLOTCHECK)
     fprintf(fp, ">\n");
 #else
     fprintf(fp, ">");
 #endif
-#endif /* PRODUCTION */
+
+#endif /* SGML_REPORTING */
 }
 
 extern void report_finish (SGMLCTX * context, ELEMENT * element)
 {
-#if !defined(PRODUCTION) && SGML_REPORTING
-#ifndef HTMLCHECK
+#if SGML_REPORTING
+#if !defined(HTMLCHECK) && !defined(PLOTCHECK)
     fprintf (context->report.output, "%s</%s>\n", stack_indentation(context), element->name.ptr);
 #else
     fprintf (context->report.output, "</%s>", element->name.ptr);
 #endif
+#endif
+}
+
+
+extern void generic_start (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+#ifdef RECONS
+    if (delivery)
+	report_start(context, element, attributes);
+#endif
+}
+
+extern void generic_finish (SGMLCTX * context, ELEMENT * element)
+{
+#ifdef RECONS
+    if (delivery)
+	report_finish(context, element);
 #endif
 }
 

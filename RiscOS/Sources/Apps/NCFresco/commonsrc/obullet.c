@@ -266,7 +266,7 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     {
 	fs->lfc = tfc;
 	fs->lbc = tbc;
-	render_set_font_colours(fs->lfc, fs->lbc, doc);
+	render_set_font_colours(tfc, tbc, doc);
     }
 
     font_paint(buffer, font_OSCOORDS | (config_display_blending ? 0x800 : 0),
