@@ -142,6 +142,11 @@ struct config_str
     int mode_mouse_menu;
     int mode_errors;
 
+    int event_smartcard_in;
+    int event_smartcard_out;
+    int event_standby_in;
+    int event_standby_out;
+    
     int cookie_enable;
     int cookie_uptodate;
 
@@ -306,6 +311,11 @@ extern struct config_str config_array;
 #define mode_errors_MESSAGE	2
 
 #define config_mode_errors (config_array.mode_errors)
+
+#define config_event_smartcard_in (config_array.event_smartcard_in)
+#define config_event_smartcard_out (config_array.event_smartcard_out)
+#define config_event_standby_in (config_array.event_standby_in)
+#define config_event_standby_out (config_array.event_standby_out)
 
 #define config_cookie_enable (config_array.cookie_enable)
 #define config_cookie_uptodate (config_array.cookie_uptodate)

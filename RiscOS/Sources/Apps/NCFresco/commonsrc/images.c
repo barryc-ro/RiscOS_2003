@@ -231,6 +231,7 @@ static int image_thread_data_more;
 static int image_thread_data_status;
 static int do_memory_panic = FALSE;
 static int disallow_memory_panic = 0;
+static int in_image_find = 0;
 
 /* extern for use of NCFresco frontend */
 int spriteextend_version;
@@ -1170,7 +1171,8 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
     fetching_dec(i);
 
-    image_fetch_next();
+    if (!in_image_find)
+	image_fetch_next();
 
     if (i->magic != IMAGE_MAGIC)
 	return 0;
@@ -1708,6 +1710,8 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 		/* If the file is already around then we don't care if it was deferred, do we? */
 		i->flags &= ~(image_flag_WAITING | image_flag_DEFERRED);
 
+		in_image_find++;
+    
 		ep = access_url( url,
 				 (flags & image_find_flag_NEED_SIZE ? access_IMAGE : 0) |
 				 (flags & image_find_flag_URGENT ? access_MAX_PRIORITY : 0),
@@ -1721,6 +1725,8 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 
 		    fetching_dec(i);
 		}
+
+		in_image_find--;
 	    }
 	}
 	else

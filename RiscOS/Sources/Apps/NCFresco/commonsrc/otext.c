@@ -181,7 +181,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 	ti->pad = (width1 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT - ti->width;
 
-	DBG(("otext: scanstring '%s' wide %d str_len %d width1 %d width2 %d\n", s, ti->flag & rid_flag_WIDE_FONT ? 1 : 0, str_len, width1, width2));
+/* 	DBG(("otext: scanstring '%s' wide %d str_len %d width1 %d width2 %d\n", s, ti->flag & rid_flag_WIDE_FONT ? 1 : 0, str_len, width1, width2)); */
     }
 
     flexmem_shift();		/* shiftable */

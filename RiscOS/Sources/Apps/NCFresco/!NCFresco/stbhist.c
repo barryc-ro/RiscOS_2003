@@ -85,7 +85,7 @@ struct fe_global_history_item
 /* --------------------------------------------------------------------------------------------- */
 
 static fe_global_history_item *global_hist_list = NULL;
-static int global_count = 0;
+static int global_count = 0;	/* count of global URL entries (however many fragments are attached) */
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -200,7 +200,6 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
 {
     fe_global_history_item *item, *prev;
     fe_global_history_item *new_item;
-    int diff;
     unsigned int h;
     BOOL insert, add_frag;
 
@@ -208,33 +207,34 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
 
     h = string_hash(bare_url);
 
-    /* locate current copy */
+    /* locate current copy - list is effectively unordered in this case */
     insert = TRUE;
     add_frag = FALSE;
-    for (prev = NULL, item = global_hist_list; item; prev = item, item = item->next)
+    prev = NULL;
+    for (item = global_hist_list; item; item = item->next)
     {
-        diff = strcmp(strsafe(item->title), strsafe(title));
-
-	HISTDBG(("hist: compare %s %s diff=%d\n", strsafe(item->title), strsafe(title), diff));
-
-        /* if the title and the URL are the same */
-        if (diff == 0 && item->url_hash == h && strcmp(item->url, bare_url) == 0)
+        /* if the title and the URL are the same then we've found a matching entry */
+        if (strcmp(strsafe(item->title), strsafe(title)) == 0 &&
+	    item->url_hash == h && strcmp(item->url, bare_url) == 0)
         {
             insert = FALSE;
 
-            /* add the fragment on if necessary */
+            /* still need to see if this fragment is marked */
             if (fragment && check_frag_list(item->frag_list, fragment) == NULL)
                 add_frag = TRUE;
-            break;
-        }
 
-        /* if we have gone past where the title would be then insert before here */
-        if (diff > 0)
-        {
-            if (fragment)
-                add_frag = TRUE;
             break;
         }
+    }
+
+    /* locate insert position if insertion is needed */
+    if (insert)
+    {
+	for (item = global_hist_list; item; prev = item, item = item->next)
+	{
+	    if (strcasecomp(strsafe(item->title), strsafe(title)) >= 0)
+		break;
+	}
     }
 
     HISTDBG(("hist: global insert %d addfrag %d after %p '%s' '%s' \n",insert, add_frag,  prev, prev ? prev->url : "", prev ? strsafe(prev->title) : ""));
@@ -277,7 +277,9 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
         new_item->frag_list = f;
     }
 
-    global_count++;
+    /* Only count sites - not fragments */
+    if (insert)
+	global_count++;
 }
 
 static void fe_global_add(const char *url, const char *title)

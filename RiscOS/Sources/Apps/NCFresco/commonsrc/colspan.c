@@ -2125,6 +2125,12 @@ extern void colspan_share_extra_space (rid_table_item *table,
 
     FMTDBG(("colspan_share_extra_space: fwidth %d, %s on table %d\n", fwidth, HORIZVERT(horiz), table->idnum));
 
+/*     if (table->colspans == NULL) */
+/*     { */
+/* 	FMTDBG(("**** colspans NULL ***\n")); */
+/* 	return; */
+/*     } */
+    
     if (horiz)
     {
 	switch (table->userwidth.type)

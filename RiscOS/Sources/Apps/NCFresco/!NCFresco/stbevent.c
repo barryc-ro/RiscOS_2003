@@ -534,10 +534,13 @@ static void focus_event_handler(int event, fe_view v)
 {
     switch (event &~ fevent_CLEAR_POPUPS)
     {
-        case fevent_GIVE_FOCUS:
-            break;
-        case fevent_REMOVE_FOCUS:
-            break;
+    case fevent_USER_UNLOAD:
+	fe_user_unload();
+	break;
+
+    case fevent_USER_LOAD:
+	fe_user_load();
+	break;
     }
 }
 
