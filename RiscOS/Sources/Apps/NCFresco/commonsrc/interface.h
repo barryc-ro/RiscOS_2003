@@ -292,6 +292,21 @@ extern int frontend_memory_panic(void);
 
 extern int frontend_interface_state(void);
 
+typedef struct
+{
+    BOOL verified;
+    char *issuer;
+    char *subject;
+    char *cipher;
+} fe_ssl_info;
+
+typedef struct _frontend_ssl_handle *fe_ssl;
+
+typedef void (*backend_ssl_callback)(void *handle, BOOL verified);
+
+extern fe_ssl frontend_ssl_raise(backend_ssl_callback fn, const fe_ssl_info *info, void *handle);
+extern void frontend_ssl_dispose(fe_ssl fe);
+
 /***************************************************************************/
 /* Functions for talking to the back end */
 

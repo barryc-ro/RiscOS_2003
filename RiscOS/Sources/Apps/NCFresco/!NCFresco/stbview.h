@@ -38,6 +38,13 @@ struct _frontend_passwd_handle
     char *realm, *site, *user;
 };
 
+struct _frontend_ssl_handle
+{
+    backend_ssl_callback cb; /* values passed in originally */
+    void *h;
+    char *issuer, *subject;
+};
+
 /* ----------------------------------------------------------------------------- */
 
 typedef struct fe_history_item fe_history_item;

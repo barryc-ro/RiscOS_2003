@@ -103,6 +103,10 @@ extern void translate_escaped_text(char *in, char *out, int len);
 #define SEND_HOST 1
 #endif
 
+#ifndef SSL_UI
+#define SSL_UI 0
+#endif
+
 #ifdef STBWEB
 #define INTERNAL_URLS 1
 #else
@@ -171,6 +175,14 @@ typedef struct _access_item {
 	    unsigned last_modified;	/* from headers */
 	    unsigned expires;		/* from headers */
 	    unsigned date;		/* from headers */
+#if SSL_UI
+	    struct
+	    {
+		BOOL checked_headers;
+		fe_ssl fe;	/* frontend handle */
+		fe_ssl_info info;
+	    } ssl;
+#endif
 	} http;
 	struct {
 	    int gopher_tag;
@@ -638,6 +650,11 @@ static void access_free_item(access_handle d)
     {
     case access_type_HTTP:
 	FREE(d->data.http.body_file);
+#if SSL_UI
+	FREE(d->data.http.ssl.info.issuer);
+	FREE(d->data.http.ssl.info.subject);
+	FREE(d->data.http.ssl.info.cipher);
+#endif
 	break;
     case access_type_FTP:
 	FREE(d->data.ftp.user);
@@ -1324,6 +1341,36 @@ static void access_http_passwd_callback(fe_passwd pw, void *handle, char *user, 
     }
 }
 
+#if SSL_UI
+
+/* This is called by the frontend. If the user OK'd the transaction
+ * then the verified field is set to Yes. If they cancelled then it
+ * is left at No. */
+
+static void access_http_ssl_callback(void *handle, BOOL verified)
+{
+    access_handle d = handle;
+
+    d->data.http.ssl.fe = 0;
+    
+    if (verified)
+    {
+	/* If the user said OK then just continue from where we were */
+	/* But what happens if we'd timed out */
+	access_http_fetch_alarm(0, d);
+    }
+    else
+    {
+	http_status_args si;
+
+	memset(&si, 0, sizeof(si));
+	si.out.status = status_FAIL_VERIFY;
+
+	access_http_fetch_done(d, &si);
+    }
+}
+#endif
+
 static void access_http_fetch_done(access_handle d, http_status_args *si)
 {
     int cache_it;
@@ -1528,6 +1575,41 @@ static void access_http_fetch_alarm(int at, void *h)
 	}
     }
 
+#if SSL_UI
+    /* check the fake SSL headers returned */
+    if (si.out.status > status_AUTHENTICATING &&
+	(d->flags & access_SECURE) &&
+	!d->data.http.ssl.checked_headers)
+    {
+	http_header_item *list;
+
+	d->data.http.ssl.checked_headers = TRUE;
+	d->data.http.ssl.info.verified = -1;
+
+	ACCDBG(("access_http_fetch_alarm: checking SSL headers\n"));
+
+	for (list = si.out.headers; list; list = list->next)
+	{
+ 	    ACCDBG(("%s: %s\n", list->key, list->value));
+
+	    if (strcasecomp(SSL_HEADER_VERIFIED, list->key) == 0)
+		d->data.http.ssl.info.verified = strcasecomp(SSL_HEADER_YES, list->value) == 0;
+	    else if (strcasecomp(SSL_HEADER_CERT_ISSUER, list->key) == 0)
+		d->data.http.ssl.info.issuer = strdup(list->value);
+	    else if (strcasecomp(SSL_HEADER_CERT_SUBJECT, list->key) == 0)
+		d->data.http.ssl.info.subject = strdup(list->value);
+	    else if (strcasecomp(SSL_HEADER_CIPHER, list->key) == 0)
+		d->data.http.ssl.info.cipher = strdup(list->value);
+	}
+
+	if (d->data.http.ssl.info.verified == 0)
+	{
+	    d->data.http.ssl.fe = frontend_ssl_raise(access_http_ssl_callback, &d->data.http.ssl.info, d);
+	    return;
+	}	
+    }
+#endif
+    
     if ( (si.out.status >= status_COMPLETED_FILE)
          && (si.out.status != status_COMPLETED_PART) )
     {
@@ -1540,7 +1622,7 @@ static void access_http_fetch_alarm(int at, void *h)
 	usrtrc("\nHeaders for 0x%x '%s'\n", d->flags, d->url);
 	for (list = si.out.headers; list; list = list->next)
 	{
-	    usrtrc("%s: %s\n", list->key, list->value);
+ 	    usrtrc("%s: %s\n", list->key, list->value);
 	}
 	usrtrc("\n");
 #endif
@@ -3716,9 +3798,22 @@ static void access_abort_item(access_handle d)
 #ifndef FILEONLY
     case access_type_HTTP:
 	if (d->transport_handle)
+	{
 	    access_http_close(d->transport_handle, http_close_DELETE_FILE | http_close_DELETE_BODY );
+	    d->transport_handle = 0;
+	}
 	if (d->data.http.pw)
+	{
 	    frontend_passwd_dispose(d->data.http.pw);
+	    d->data.http.pw = 0;
+	}
+#if SSL_UI
+	if (d->data.http.ssl.fe)
+	{
+	    frontend_ssl_dispose(d->data.http.ssl.fe);
+	    d->data.http.ssl.fe = 0;
+	}
+#endif
 	break;
     case access_type_GOPHER:
 	if (d->transport_handle)

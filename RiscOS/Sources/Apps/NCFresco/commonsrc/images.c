@@ -904,10 +904,13 @@ static int image_thread_process(image i, int fh, int from, int to)
     /* only check this if the thread has died, we were reading from the start
      * and no sprite has been created
      * pdh: *And* there wasn't an error.
+
+     * Unfortunately we can't tell what is a decode error and what is
+     * an unknown format currently so this code gets called when nothing can be done
      */
     if (!do_memory_panic &&
 	i->tt->status == thread_DEAD &&
-	(from_base == 0 || i->plotter != plotter_SPRITE) &&
+	(from_base == 0 || (i->plotter != plotter_SPRITE/*  && i->plotter != plotter_UNKNOWN */)) &&
 	i->our_area == NULL &&
 	!(i->flags & image_flag_ERROR) )
     {
@@ -2095,6 +2098,9 @@ int image_memory_panic(void)
 
     do_memory_panic = FALSE;
 
+    /* stop this function being reentered */
+    disallow_memory_panic++;
+
 #if ITERATIVE_PANIC
     for (i=image_list; i != NULL && !freed; i = i->next)
     {
@@ -2131,15 +2137,18 @@ int image_memory_panic(void)
 
 	    set_default_image(i, SPRITE_NAME_DEFERRED, FALSE);
 
-#if 0
+#ifdef STBWEB
 	    /* SJM: keep display up to date */
 	    image_issue_callbacks(i, image_cb_status_REDRAW, NULL);
 #endif /* STBWEB */
+
 #if ITERATIVE_PANIC
 	    break;
 #endif /* ITERATIVE_PANIC */
 	}
     }
+
+    disallow_memory_panic--;
 
     return freed;
 }
@@ -3546,7 +3555,7 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
 	IMGDBGN(("img: not have cache OK changed %d flags %x\n", changed, i->flags));
 
 	/* If image is transparent then clear background first */
-        if (i->flags & (image_flag_MASK|image_flag_ERROR|image_flag_DEFERRED))
+        if ((i->flags & (image_flag_MASK|image_flag_ERROR|image_flag_DEFERRED)) || i->plotter != plotter_SPRITE)
 	{
 	    int junk;
 	    colourtran_setGCOL(bgcol, (1<<8) | (1<<7), 0, &junk);
@@ -3561,10 +3570,13 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
     }
 
     /* get the sprite direct pointer */
-    if ( (i->flags & (image_flag_ERROR|image_flag_DEFERRED)) == 0 && image_get_sprite_ptr(area, &id, &id))
+    if ((!translate || i->plotter == plotter_SPRITE) && 
+	(i->flags & (image_flag_ERROR|image_flag_DEFERRED)) == 0 &&
+	image_get_sprite_ptr(area, &id, &id))
     {
 	/* read the sprite info */
 	sprite_readsize(area, &id, &info);
+
 	/* pdh: was bbc_modevar( -1, ... ) */
 	width  = info.width << bbc_modevar(info.mode, bbc_XEigFactor);
 	height = info.height << bbc_modevar(info.mode, bbc_YEigFactor);
