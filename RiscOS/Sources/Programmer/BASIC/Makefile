@@ -31,9 +31,8 @@ TOKENS   = Hdr:Tokens
 # Program specific options:
 #
 COMPONENT = BASIC
-EXPORTS   = ${EXP_HDR}.BASICTrans
-TARGETS   = rm.BASIC105 \
-            rm.BASICTrans
+EXPORTS   = 
+TARGETS   = rm.BASIC105
 
 #
 # Generic rules:
@@ -54,18 +53,14 @@ install: rm.BASIC64
 
 install_rom: ${TARGETS}
         ${CP} rm.BASIC105 ${INSTDIR}.BASIC105 ${CPFLAGS}
-        ${CP} rm.BASICTrans ${INSTDIR}.BASICTrans ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
         ${RM} rm.BASIC64
         ${RM} rm.BASIC105
-        ${RM} rm.BASICTrans
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 rm.BASIC105: ModuleAB
@@ -74,40 +69,7 @@ rm.BASIC105: ModuleAB
 rm.BASIC64: ModuleAB64
         ${AS} ${ASFLAGS} ModuleAB64
 
-rm.BASICTrans: TransSrc
-        ${AS} ${ASFLAGS} TransSrc
-
-${EXP_HDR}.BASICTrans: hdr.BASICTrans
-        ${CP} hdr.BASICTrans $@ ${CPFLAGS}
-
 # Dynamic dependencies:
-rm.BASIC105: BASIC
-rm.BASIC105: Fp
-rm.BASIC105: Fp2
-rm.BASIC105: Expr
-rm.BASIC105: Factor
-rm.BASIC105: Funct
-rm.BASIC105: Stmt
-rm.BASIC105: Stmt2
-rm.BASIC105: Array
-rm.BASIC105: Assembler
-rm.BASIC105: Lexical
-rm.BASIC105: Command
-rm.BASIC105: ErrorMsgs
-rm.BASICTrans: Hdr:ListOpts
-rm.BASICTrans: Hdr:Macros
-rm.BASICTrans: Hdr:System
-rm.BASICTrans: Hdr:SWIs
-rm.BASICTrans: Hdr:CPU.Generic26
-rm.BASICTrans: Hdr:IO.GenericIO
-rm.BASICTrans: Hdr:RISCOS
-rm.BASICTrans: Hdr:CMOS
-rm.BASICTrans: Hdr:ModHand
-rm.BASICTrans: Hdr:Services
-rm.BASICTrans: Hdr:Proc
-rm.BASICTrans: Hdr:FSNumbers
-rm.BASICTrans: Hdr:NewErrors
-rm.BASICTrans: Hdr:MsgTrans
 rm.BASIC64: BASIC
 rm.BASIC64: Fp
 rm.BASIC64: Fp2
@@ -121,3 +83,16 @@ rm.BASIC64: Assembler
 rm.BASIC64: Lexical
 rm.BASIC64: Command
 rm.BASIC64: ErrorMsgs
+rm.BASIC105: BASIC
+rm.BASIC105: Fp
+rm.BASIC105: Fp2
+rm.BASIC105: Expr
+rm.BASIC105: Factor
+rm.BASIC105: Funct
+rm.BASIC105: Stmt
+rm.BASIC105: Stmt2
+rm.BASIC105: Array
+rm.BASIC105: Assembler
+rm.BASIC105: Lexical
+rm.BASIC105: Command
+rm.BASIC105: ErrorMsgs
