@@ -118,6 +118,7 @@ OBJS = 	o.EscapeHTML 	\
         o.WebMail	\
 	o.BrowserIF	\
 	o.Entry		\
+	o.ReadMsg	\
 	o.WimpReg
 
 OBJSD = od.EscapeHTML 	\
@@ -126,6 +127,7 @@ OBJSD = od.EscapeHTML 	\
         od.WebMail	\
 	od.BrowserIF	\
 	od.Entry	\
+	od.ReadMsg	\
 	od.WimpReg
 
 OBJSZ = oz.EscapeHTML 	\
@@ -134,6 +136,7 @@ OBJSZ = oz.EscapeHTML 	\
         oz.WebMail	\
 	oz.BrowserIF	\
 	oz.Entry	\
+	oz.ReadMsg	\
 	oz.WimpReg
 
 
