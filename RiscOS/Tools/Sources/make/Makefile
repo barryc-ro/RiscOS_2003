@@ -56,7 +56,7 @@ install: ${TARGET}
 	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
 	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
 	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
-	${CP} ${TARGET} ${INSTDIR}.!RunImage ${CPFLAGS}
+	${CP} ${TARGET} ${INSTAPP}.!RunImage ${CPFLAGS}
 	@echo ${COMPONENT}: !${COMPONENT} app install in '${INSTAPP}'
 
 clean:
