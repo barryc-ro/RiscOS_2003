@@ -67,7 +67,7 @@ RESDIR = <resource$dir>.Resources.${COMPONENT}
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -125,7 +125,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.SoundFX:	c.SoundFX
-o.SoundFX:	C:h.kernel
-o.SoundFX:	C:h.swis
-o.SoundFX:	C:h.nvram
