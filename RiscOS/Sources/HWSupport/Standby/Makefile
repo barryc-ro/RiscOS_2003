@@ -18,7 +18,7 @@ EXPC_HDR = <CExport$Dir>.h
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -47,7 +47,7 @@ ABSSYM    = RISC_OSLib:o.c_AbsSym
 #
 # Include files
 #
-INCLUDES = -IC:
+INCLUDES = -IC:AsmUtils -IC:
 
 DFLAGS   = -DSTANDBY_INITIAL_STATE=${INITIAL_STATE} -DSTANDBY_ENABLE_DELAY=${ENABLE_DELAY}
 
@@ -57,10 +57,10 @@ DFLAGS   = -DSTANDBY_INITIAL_STATE=${INITIAL_STATE} -DSTANDBY_ENABLE_DELAY=${ENA
 COMPONENT = Standby
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
-OBJS      = header.o module.o veneer.o standby.o task.o cstart.o robase.o
+OBJS      = header.o module.o standby.o task.o cstart.o
 EXPORTS   = ${EXP_HDR}.${COMPONENT} ${EXPC_HDR}.${COMPONENT}
 HDR       = h.header
-LIBS      = <Lib$Dir>.tboxlibs.o.wimplib
+LIBS      = C:tboxlibs.o.wimplib C:AsmUtils.o.AsmUtilsZM
 
 #
 # DebugLib support.
@@ -126,7 +126,7 @@ ${TARGET}: ${OBJS} ${HDR} ${LIBS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
