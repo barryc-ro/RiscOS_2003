@@ -188,12 +188,16 @@ OBJSDDT2 = \
  opp.FromROSLib		\
  opp.Global		\
  opp.Handlers		\
+ opp.List		\
+ opp.ListAdd		\
+ opp.ListMenu		\
  opp.Main		\
  opp.MainMenu		\
  opp.Menus		\
  opp.NewProject		\
  opp.Projects		\
  opp.RMA		\
+ opp.TGUtils		\
  opp.Utils		\
  opp.Windows		\
  o.ROSLib
@@ -206,12 +210,16 @@ OBJSDDT2D = \
  oppd.FromROSLib	\
  oppd.Global		\
  oppd.Handlers		\
+ oppd.List		\
+ oppd.ListAdd		\
+ oppd.ListMenu		\
  oppd.Main		\
  oppd.MainMenu		\
  oppd.Menus		\
  oppd.NewProject	\
  oppd.Projects		\
  oppd.RMA		\
+ oppd.TGUtils		\
  oppd.Utils		\
  oppd.Windows		\
  o.ROSLib
@@ -226,12 +234,16 @@ OBJSDDT2RZ = \
  opprz.FromROSLib	\
  opprz.Global		\
  opprz.Handlers		\
+ opprz.List		\
+ opprz.ListAdd		\
+ opprz.ListMenu		\
  opprz.Main		\
  opprz.MainMenu		\
  opprz.Menus		\
  opprz.NewProject	\
  opprz.Projects		\
  opprz.RMA		\
+ opprz.TGUtils		\
  opprz.Utils		\
  opprz.Windows		\
  o.ROSLib
@@ -244,12 +256,16 @@ OBJSDDT2RDZ = \
  opprdz.FromROSLib	\
  opprdz.Global		\
  opprdz.Handlers	\
+ opprdz.List		\
+ opprdz.ListAdd		\
+ opprdz.ListMenu	\
  opprdz.Main		\
  opprdz.MainMenu	\
  opprdz.Menus		\
  opprdz.NewProject	\
  opprdz.Projects	\
  opprdz.RMA		\
+ opprdz.TGUtils		\
  opprdz.Utils		\
  opprdz.Windows		\
  o.ROSLib
@@ -265,12 +281,16 @@ OBJSDDT2Z = \
  oppz.FromROSLib	\
  oppz.Global		\
  oppz.Handlers		\
+ oppz.List		\
+ oppz.ListAdd		\
+ oppz.ListMenu		\
  oppz.Main		\
  oppz.MainMenu		\
  oppz.Menus		\
  oppz.NewProject	\
  oppz.Projects		\
  oppz.RMA		\
+ oppz.TGUtils		\
  oppz.Utils		\
  oppz.Windows		\
  o.ROSLib

@@ -21,6 +21,8 @@
 
 #include "Errors.h"
 #include "Global.h"
+#include "List.h"
+#include "ListAdd.h"
 #include "NewProject.h"
 
 #include "Windows.h"
@@ -151,15 +153,15 @@ static _kernel_oserror * windows_register_window(int          e_to_be_shown,    
 
   /* Is there anything to be done? */
 
-  if (to_be_shown == NULL && e_hidden == NULL && number_of_others == 0)
+  if (to_be_shown == NULL && hidden == NULL && number_of_others == 0)
   {
     dprintf(("Wind", "windows_register_window: Nothing to do, exitting\n"));
 
     return NULL;
   }
-  else if (to_be_shown == NULL || e_to_be_shown == 0 || e_hidden == 0)
+  else if (e_to_be_shown == 0 || e_hidden == 0)
   {
-    dprintf(("Wind", "windows_register_window: Invalid parameters (&%08X = NULL or &%08X = 0 or &%08X = 0)\n", (unsigned int) to_be_shown, e_to_be_shown, e_hidden));
+    dprintf(("Wind", "windows_register_window: Invalid parameters (&%08X = 0 or &%08X = 0)\n", e_to_be_shown, e_hidden));
 
     return errors_frontend_error(fee_invalid_parameters,
                                  1,
@@ -183,7 +185,15 @@ static _kernel_oserror * windows_register_window(int          e_to_be_shown,    
   if (handlers != NULL) handlers->prev = handler;
   handlers = handler;
 
-  /* Allocate space for an attached generic handler array */
+  /* Fill the basic stuff in */
+
+  handler->e_to_be_shown    = e_to_be_shown;
+  handler->to_be_shown      = to_be_shown;
+  handler->e_hidden         = e_hidden;
+  handler->hidden           = hidden;
+  handler->number_of_others = number_of_others;
+
+  /* Allocate space for an attached generic handler array and fill that in too */
 
   if (number_of_others > 0)
   {
@@ -197,30 +207,22 @@ static _kernel_oserror * windows_register_window(int          e_to_be_shown,    
                                    1,
                                    "windows_register_window");
     }
+
+    va_start(ap, number_of_others);
+
+    do
+    {
+      handler->generic_handlers[count].event_code = va_arg(ap, int);
+      handler->generic_handlers[count].handler    = va_arg(ap, ToolboxEventHandler *);
+
+      dprintf(("Wind", "windows_register_window: Registered extra event code &%08X\n", handler->generic_handlers[count].event_code));
+
+      count++;
+    }
+    while (count < number_of_others);
+
+    va_end(ap);
   }
-
-  /* Fill everything in */
-
-  handler->e_to_be_shown    = e_to_be_shown;
-  handler->to_be_shown      = to_be_shown;
-  handler->e_hidden         = e_hidden;
-  handler->hidden           = hidden;
-  handler->number_of_others = number_of_others;
-
-  va_start(ap, number_of_others);
-
-  do
-  {
-    handler->generic_handlers[count].event_code = va_arg(ap, int);
-    handler->generic_handlers[count].handler    = va_arg(ap, ToolboxEventHandler *);
-
-    dprintf(("Wind", "windows_register_window: Registered extra event code &%08X\n", handler->generic_handlers[count].event_code));
-
-    count++;
-  }
-  while (count < number_of_others);
-
-  va_end(ap);
 
   /* Finished */
 
@@ -247,10 +249,20 @@ _kernel_oserror * windows_register_primary_handlers(void)
   dprintf(("Wind", "windows_register_primary_handlers: Registering windows internally...\n"));
 
   RetError(windows_register_window(NewProject_EToBeShown, newproject_to_be_shown,
-                                   NewProject_EHidden,    NULL,
+                                   NewProject_EHidden,    newproject_hidden,
                                    2,
                                    NewProject_EOK,        newproject_ok,
                                    NewProject_ECancel,    newproject_cancel));
+
+  RetError(windows_register_window(List_EToBeShown,       list_to_be_shown,
+                                   List_EHidden,          NULL,
+                                   0));
+
+  RetError(windows_register_window(ListAdd_EToBeShown,    listadd_to_be_shown,
+                                   ListAdd_EHidden,       listadd_hidden,
+                                   2,
+                                   ListAdd_EAdd,          listadd_add,
+                                   ListAdd_ECancel,       listadd_cancel));
 
   /* Now register the generic ToBeShown handlers */
 
@@ -320,7 +332,10 @@ static int windows_generic_to_be_shown(int eventcode, ToolboxEvent * event, IdBl
                                                                         1,
                                                                         "windows_generic_to_be_shown"));
 
-  /* Install the generic "hidden" handler */
+  /* Install the generic "hidden" handler. Any installations done here */
+  /* are individually removed in windows_generic_hidden (see comments  */
+  /* in that function for why) and so the list of handlers here and    */
+  /* there must be kept in sync with each other.                       */
 
   ChkError(event_register_toolbox_handler(idb->self_id,
                                           hdl->e_hidden,
@@ -343,7 +358,7 @@ static int windows_generic_to_be_shown(int eventcode, ToolboxEvent * event, IdBl
   dprintf(("Wind", "windows_generic_to_be_shown: Successful, exitting via %s\n", hdl->to_be_shown != NULL ? "custom handler" : "return (1)"));
 
   if (hdl->to_be_shown != NULL) return (hdl->to_be_shown)(eventcode, event, idb, handle);
-  else                          return 1;
+  else                          return 0;
 }
 
 /**************************************************************/
@@ -358,21 +373,42 @@ static int windows_generic_to_be_shown(int eventcode, ToolboxEvent * event, IdBl
 
 static int windows_generic_hidden(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  window_handler * hdl = (window_handler *) handle;
+  window_handler * hdl   = (window_handler *) handle;
+  unsigned int     count = 0;
 
   dprintf(("Wind", "windows_generic_hidden: Called for &%08X\n", (unsigned int) hdl));
 
   if (windows_find_handler(hdl) == NULL) ChkError(errors_frontend_error(fee_invalid_parameters,
                                                                         1,
                                                                         "windows_generic_hidden"));
-  /* Deregister all object-specific handlers */
+  /* Deregister all object-specific handlers. WE MUST NOT use */
+  /* event_deregister_toolbox_handlers_for_object as this     */
+  /* would assume that no other bits of code placed any       */
+  /* handlers on the object - that's invalid for parent/child */
+  /* permanent dialogue box relationships for a start.        */
 
-  ChkError(event_deregister_toolbox_handlers_for_object(idb->self_id));
+  /* Remove the generic "hidden" handler */
+
+  ChkError(event_deregister_toolbox_handler(idb->self_id,
+                                            hdl->e_hidden,
+                                            windows_generic_hidden,
+                                            (void *) hdl));
+
+  /* Remove any other extra handlers */
+
+  while (count < hdl->number_of_others)
+  {
+    ChkError(event_deregister_toolbox_handler(idb->self_id,
+                                              hdl->generic_handlers[count].event_code,
+                                              hdl->generic_handlers[count].handler,
+                                              (void *) hdl));
+    count++;
+  }
 
   /* If there is one, exit through the custom Hidden handler */
 
   dprintf(("Wind", "windows_generic_hidden: Successful, exitting via %s\n", hdl->hidden != NULL ? "custom handler" : "return (1)"));
 
   if (hdl->hidden != NULL) return (hdl->hidden)(eventcode, event, idb, handle);
-  else                     return 1;
+  else                     return 0;
 }
