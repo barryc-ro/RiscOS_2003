@@ -35,8 +35,6 @@
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/systm.h>
-#include <sys/kernel.h>
-#include <sys/sysctl.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
@@ -69,24 +67,10 @@
 
 /* patchable/settable parameters for tcp */
 int 	tcp_mssdflt = TCP_MSS;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_MSSDFLT, mssdflt, CTLFLAG_RW,
-    &tcp_mssdflt , 0, "Default TCP Maximum Segment Size");
-
-static int 	tcp_rttdflt = TCPTV_SRTTDFLT / PR_SLOWHZ;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_RTTDFLT, rttdflt, CTLFLAG_RW,
-    &tcp_rttdflt , 0, "Default maximum TCP Round Trip Time");
-
-static int	tcp_do_rfc1323 = 1;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_DO_RFC1323, rfc1323, CTLFLAG_RW,
-    &tcp_do_rfc1323 , 0, "Enable rfc1323 (high performance TCP) extensions");
-
-static int	tcp_do_rfc1644 = 1;
-SYSCTL_INT(_net_inet_tcp, TCPCTL_DO_RFC1644, rfc1644, CTLFLAG_RW,
-    &tcp_do_rfc1644 , 0, "Enable rfc1644 (TTCP) extensions");
-
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, pcbcount, CTLFLAG_RD,
-    &tcbinfo.ipi_count, 0, "Number of active PCBs");
-
+/* This is now the ReTransmit Timeout default - KJB */
+int 	tcp_rttdflt = TCPTV_SRTOBASE / PR_SLOWHZ;
+int	tcp_do_rfc1323 = 1;
+int	tcp_do_rfc1644 = 1;
 static	void tcp_cleartaocache(void);
 
 /*
@@ -268,15 +252,32 @@ tcp_newtcpcb(inp)
 	if (tcp_do_rfc1644)
 		tp->t_flags |= TF_REQ_CC;
 	tp->t_inpcb = inp;
+#if 0
 	/*
+	 * Init srtt to TCPTV_SRTTBASE (0), so we can tell that we have no
+	 * rtt estimate.  Set rttvar so that srtt + 2 * rttvar gives
+	 * reasonable initial retransmit time.
+	 */
+	tp->t_srtt = TCPTV_SRTTBASE;
+	tp->t_rttvar = tcp_rttdflt * PR_SLOWHZ << TCP_RTTVAR_SHIFT;
+	tp->t_rttmin = TCPTV_MIN;
+	TCPT_RANGESET(tp->t_rxtcur,
+	    ((TCPTV_SRTTBASE >> 2) + (TCPTV_SRTTDFLT << 2)) >> 1,
+	    TCPTV_MIN, TCPTV_REXMTMAX);
+#else
+	/*
+	 * KJB version from Peterson-Brakmo and RFC1122
+	 *
 	 * Init srtt to TCPTV_SRTTBASE (0), so we can tell that we have no
 	 * rtt estimate.  Set rttvar so that srtt + 4 * rttvar gives
 	 * reasonable initial retransmit time.
 	 */
 	tp->t_srtt = TCPTV_SRTTBASE;
-	tp->t_rttvar = ((TCPTV_RTOBASE - TCPTV_SRTTBASE) << TCP_RTTVAR_SHIFT) / 4;
+	tp->t_rttvar = ((tcp_rttdflt * PR_SLOWHZ - TCPTV_SRTTBASE)
+	                << TCP_RTTVAR_SHIFT) >> 2;
 	tp->t_rttmin = TCPTV_MIN;
-	tp->t_rxtcur = TCPTV_RTOBASE;
+	tp->t_rxtcur = tcp_rttdflt * PR_SLOWHZ;
+#endif
 	tp->snd_cwnd = TCP_MAXWIN << TCP_MAX_WINSHIFT;
 	tp->snd_ssthresh = TCP_MAXWIN << TCP_MAX_WINSHIFT;
 	inp->inp_ip_ttl = ip_defttl;
@@ -450,102 +451,6 @@ tcp_notify(inp, error)
 	sowwakeup(so);
 }
 
-static int
-tcp_pcblist SYSCTL_HANDLER_ARGS
-{
-	int error, i, n, s;
-	struct inpcb *inp, **inp_list;
-	inp_gen_t gencnt;
-	struct xinpgen xig;
-
-	/*
-	 * The process of preparing the TCB list is too time-consuming and
-	 * resource-intensive to repeat twice on every request.
-	 */
-	if (req->oldptr == 0) {
-		n = tcbinfo.ipi_count;
-		req->oldidx = 2 * (sizeof xig)
-			+ (n + n/8) * sizeof(struct xtcpcb);
-		return 0;
-	}
-
-	if (req->newptr != 0)
-		return EPERM;
-
-	/*
-	 * OK, now we're committed to doing something.
-	 */
-	s = splnet();
-	gencnt = tcbinfo.ipi_gencnt;
-	n = tcbinfo.ipi_count;
-	splx(s);
-
-	xig.xig_len = sizeof xig;
-	xig.xig_count = n;
-	xig.xig_gen = gencnt;
-	xig.xig_sogen = so_gencnt;
-	error = SYSCTL_OUT(req, &xig, sizeof xig);
-	if (error)
-		return error;
-
-	inp_list = malloc(n * sizeof *inp_list, M_TEMP, M_WAITOK);
-	if (inp_list == 0)
-		return ENOMEM;
-
-	s = splnet();
-	for (inp = tcbinfo.listhead->lh_first, i = 0; inp && i < n;
-	     inp = inp->inp_list.le_next) {
-#ifdef __riscos
-		if (inp->inp_gencnt <= gencnt)
-#else
-		if (inp->inp_gencnt <= gencnt && !prison_xinpcb(req->p, inp))
-#endif
-			inp_list[i++] = inp;
-	}
-	splx(s);
-	n = i;
-
-	error = 0;
-	for (i = 0; i < n; i++) {
-		inp = inp_list[i];
-		if (inp->inp_gencnt <= gencnt) {
-			struct xtcpcb xt;
-			caddr_t inp_ppcb;
-			xt.xt_len = sizeof xt;
-			/* XXX should avoid extra copy */
-			bcopy(inp, &xt.xt_inp, sizeof *inp);
-			inp_ppcb = inp->inp_ppcb;
-			if (inp_ppcb != NULL)
-				bcopy(inp_ppcb, &xt.xt_tp, sizeof xt.xt_tp);
-			else
-				bzero((char *) &xt.xt_tp, sizeof xt.xt_tp);
-			if (inp->inp_socket)
-				sotoxsocket(inp->inp_socket, &xt.xt_socket);
-			error = SYSCTL_OUT(req, &xt, sizeof xt);
-		}
-	}
-	if (!error) {
-		/*
-		 * Give the user an updated idea of our state.
-		 * If the generation differs from what we told
-		 * her before, she knows that something happened
-		 * while we were processing this request, and it
-		 * might be necessary to retry.
-		 */
-		s = splnet();
-		xig.xig_gen = tcbinfo.ipi_gencnt;
-		xig.xig_sogen = so_gencnt;
-		xig.xig_count = tcbinfo.ipi_count;
-		splx(s);
-		error = SYSCTL_OUT(req, &xig, sizeof xig);
-	}
-	free(inp_list, M_TEMP);
-	return error;
-}
-
-SYSCTL_PROC(_net_inet_tcp, TCPCTL_PCBLIST, pcblist, CTLFLAG_RD, 0, 0,
-	    tcp_pcblist, "S,xtcpcb", "List of active TCP connections");
-
 void
 tcp_ctlinput(cmd, sa, vip)
 	int cmd;
@@ -558,8 +463,10 @@ tcp_ctlinput(cmd, sa, vip)
 
 	if (cmd == PRC_QUENCH)
 		notify = tcp_quench;
+#if 1
 	else if (cmd == PRC_MSGSIZE)
 		notify = tcp_mtudisc;
+#endif
 	else if (!PRC_IS_REDIRECT(cmd) &&
 		 ((unsigned)cmd > PRC_NCMDS || inetctlerrmap[cmd] == 0))
 		return;
@@ -731,8 +638,8 @@ tcp_cleartaocache(void)
 #endif
 /*
  * Generate ISNs for new TCP connections that are more likely to be unique
- * as it matches the TCP specification. Note use of microtime -
- * main issue is avoiding clashes with sequence numbers used
+ * as it matches the TCP specification. Note use of realtime, rather than
+ * microtime - main issue is avoiding clashes with sequence numbers used
  * in previous sessions after a crash and reboot.
  */
 tcp_seq tcp_newisn(void)
@@ -740,7 +647,7 @@ tcp_seq tcp_newisn(void)
         static tcp_seq seq;
         struct timeval tv;
 
-        microtime(&tv);
+        tv.tv_sec = realtime(&tv.tv_usec);
 
         return (tv.tv_sec * TCP_ISSINCR) + (tv.tv_usec / (1000000 / TCP_ISSINCR)) + seq++;
 }

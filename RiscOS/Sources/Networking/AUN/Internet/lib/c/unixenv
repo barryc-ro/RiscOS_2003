@@ -2,7 +2,6 @@
  * Copyright(c) 1994 Acorn Computers Ltd., Cambridge, England
  */
 #include <string.h>
-#include <stdbool.h>
 #include <kernel.h>
 #include <swis.h>
 
@@ -448,17 +447,15 @@ void sleeptabinit()
 
 static void endtsleep(struct stab_entry *s);
 
-/*
- * Returns true if UpCall 6 was claimed - ie a task window or some other
- * threading system let us sleep.
- */
-static bool taskwindow_sleep(volatile int *pollword)
+static void taskwindow_sleep(volatile int *pollword)
 {
-    /*
-     * Always call UpCall 6 - modern TaskWindow modules don't mind if we're
-     * not in a task window, and it allows other threading systems a look in.
-     */
-    return os_upcall(6, pollword) == 0;
+    int in_taskwindow;
+    _kernel_oserror *e;
+
+    e=taskwindow_task_info(0, &in_taskwindow);
+
+    if (!e && in_taskwindow)
+        os_upcall(6, pollword);
 }
 
 int
@@ -485,19 +482,9 @@ tsleep(event, prio, wmesg, wait, sleep_task)
 			if (wait)
 				timeout((timeout_func_t) endtsleep, s, wait);
 			while (s->flag == 0) {
-				bool slept = false;
 
 				if (sleep_task)
-					slept = taskwindow_sleep(&s->flag);
-
-				/*
-				 * Still waiting? Either not in a taskwindow, or it returned
-				 * early. Go to sleep, little processor.
-				 */
-				if (!slept &&
-				    (portable_features & PortableFeature_Idle) &&
-				    s->flag == 0)
-					portable_idle();
+					taskwindow_sleep(&s->flag);
 
 				if ((prio & PCATCH) && escape_seen()) {
 #ifdef DEBUG
@@ -693,6 +680,26 @@ int callback(int callbackno)
 }
 
 /*
+ * Access to our monotonic real-time clock. This is read
+ * at module initialisation from the RTC, and is not affected
+ * by any changes to the clock. Thus, on an NC-type device,
+ * it will not actual contain a correct time. Where
+ * monotonicity or speed are required, use microtime(). Where
+ * a potentially more accurate real time is required, use
+ * realtime().
+ */
+void
+microtime(tv)
+	struct timeval *tv;
+{
+	func_splhi();
+
+	*tv = time;
+
+	func_splx();
+}
+
+/*
  * Check that a proposed value to load into the .it_value or
  * .it_interval part of an interval timer is acceptable, and
  * fix it to have at least minimal value (i.e. if it is less
@@ -753,21 +760,35 @@ timevalfix(t1)
 	}
 }
 
-#define secs0070 (((unsigned)60*60*24) * (365 * 70 + 17)) /* less than 2^32 */
+#define secs0070 (((unsigned)86400) * (365 * 70 + 17))	/* less than 2^32 */
 
-static long machinetime_to_realtime(machinetime *t, long *csecs)
+typedef struct {unsigned int l,h;} machinetime;
+
+unsigned long realtime(long *usec)
 {
+    /*
+     * this is time(), recoded here to avoid the absurd 6ms delay
+     * in the RISC OS 3 Shared C Library (penalty is timezone())
+     */
     machinetime bt, w, w2;
+    unsigned int cs;
+
+    /*
+     * read timer as 5 byte integer
+     * centiseconds since 1/1/1900
+     */
+    bt.l = 3;
+    _kernel_osword(14, (int *)&bt);
 
     /* to two 3-byte things - for divide */
-    w.h = ((t->h & 255) << 8) | (t->l >> 24);
-    w.l = t->l & 0xffffff;
+    w.h = ((bt.h & 255) << 8) | (bt.l >> 24);
+    w.l = bt.l & 0xffffff;
 
     /* turn csecs to secs */
     w2.h = w.h / 100;
-    w2.l = ((w.h % 100 << 24) | w.l) / 100;
-    if (csecs)
-        *csecs = ((w.h % 100L << 24) | w.l) % 100;
+    w2.l = ((w.h % 100 << 24) | w.l);
+    cs = w2.l % 100;
+    w2.l /= 100;
 
     /* back to 8 byte binary */
     bt.h = w2.h >> 8;
@@ -777,68 +798,13 @@ static long machinetime_to_realtime(machinetime *t, long *csecs)
     if (bt.l < secs0070) bt.h--;
     bt.l -= secs0070;
 
+    /* return microseconds, if desired */
+    if (usec)
+        *usec = cs * 10000;
+
     /*
      * if high word is non-zero then date
      * is unset/out of unix range...
      */
     return bt.h ? -1 : bt.l;
-}
-
-/**********************************************************************/
-
-/*
- * Return 1 if IOC/IOMD is present (OS_ReadSysInfo 2 reports I/O control
- * chip = 0 or 1 - IOC or IOMD).
- */
-static int iomd_present()
-{
-    return (osreadsysinfo_hardware0() & 0xFF00) <= 0x0100 ? 1 : 2;
-}
-
-/**********************************************************************/
-
-/*
- * Access to the real-time clock. This is read from the RTC,
- * so is not monotonic if some bastard changes the time.
- * If you want a monotonic time, look at the time global
- * variable.
- *
- * We do get microsecond precision though.
- */
-void microtime(struct timeval *tv)
-{
-    static int iomd_check;  /* 0 = not checked, 1 = present, 2 = not present */
-    machinetime t1, t2;
-    unsigned long timer_count;
-
-    /* Only poke the hardware if we're sure it's there :) */
-    if (!iomd_check)
-        iomd_check = iomd_present();
-
-    if (iomd_check == 1)
-    {
-        /* Check initial time */
-        osword_read_realtime(&t1);
-
-        /* Read the Timer 0 value - it counts down from 19999 to 0,
-         * the clock tick occurring as it changes from 0 to 19999.
-         */
-        timer_count = get_t0_count();
-    }
-
-    /* Check new time */
-    osword_read_realtime(&t2);
-
-    tv->tv_sec = machinetime_to_realtime(&t2, &tv->tv_usec);
-    tv->tv_usec *= 10000;
-
-    if (iomd_check == 1 && t1.l == t2.l)
-    {
-        /* Clock didn't tick - add in timer count */
-        tv->tv_usec += (19999 - timer_count) / 2;
-    }
-    else
-    {
-        /* Clock ticked - let it rest at the 10000us boundary */
-    }
 }

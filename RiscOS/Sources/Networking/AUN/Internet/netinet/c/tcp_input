@@ -32,6 +32,7 @@
  *
  */
 
+#ifndef TUBA_INCLUDE
 #include <sys/param.h>
 #include <sys/queue.h>
 #include <sys/systm.h>
@@ -76,14 +77,6 @@ tcp_seq	tcp_iss;
 #endif
 tcp_cc	tcp_ccgen;
 struct	tcpstat tcpstat;
-SYSCTL_STRUCT(_net_inet_tcp, TCPCTL_STATS, stats, CTLFLAG_RD,
-    &tcpstat , tcpstat, "TCP statistics (struct tcpstat, netinet/tcp_var.h)");
-
-int tcp_delack_enabled = 1;
-SYSCTL_INT(_net_inet_tcp, OID_AUTO, delayed_ack, CTLFLAG_RW,
-    &tcp_delack_enabled, 0,
-    "Delay ACK to try and piggyback it onto a data packet");
-
 u_long	tcp_now;
 struct inpcbhead tcb;
 struct inpcbinfo tcbinfo;
@@ -95,6 +88,7 @@ static void	 tcp_pulloutofband(struct socket *,
 static int	 tcp_reass(struct tcpcb *, struct tcpiphdr *, struct mbuf *);
 static void	 tcp_xmit_timer(struct tcpcb *, int);
 
+#endif /* TUBA_INCLUDE */
 
 /*
  * Insert segment ti into reassembly queue of tcp with
@@ -106,14 +100,15 @@ static void	 tcp_xmit_timer(struct tcpcb *, int);
  * Set DELACK for segments received in order, but ack immediately
  * when segments are out of order (so fast retransmit can work).
  */
-#define TCP_REASS(tp, ti, m, so, flags) { \
+#ifdef TCP_ACK_HACK
+#define	TCP_REASS(tp, ti, m, so, flags) { \
 	if ((ti)->ti_seq == (tp)->rcv_nxt && \
 	    (tp)->seg_next == (struct tcpiphdr *)(tp) && \
 	    (tp)->t_state == TCPS_ESTABLISHED) { \
-		if (tcp_delack_enabled) \
-			tp->t_flags |= TF_DELACK; \
-		else \
+		if (ti->ti_flags & TH_PUSH) \
 			tp->t_flags |= TF_ACKNOW; \
+		else \
+			tp->t_flags |= TF_DELACK; \
 		(tp)->rcv_nxt += (ti)->ti_len; \
 		flags = (ti)->ti_flags & TH_FIN; \
 		tcpstat.tcps_rcvpack++;\
@@ -125,6 +120,25 @@ static void	 tcp_xmit_timer(struct tcpcb *, int);
 		tp->t_flags |= TF_ACKNOW; \
 	} \
 }
+#else
+#define TCP_REASS(tp, ti, m, so, flags) { \
+	if ((ti)->ti_seq == (tp)->rcv_nxt && \
+	    (tp)->seg_next == (struct tcpiphdr *)(tp) && \
+	    (tp)->t_state == TCPS_ESTABLISHED) { \
+		tp->t_flags |= TF_DELACK; \
+		(tp)->rcv_nxt += (ti)->ti_len; \
+		flags = (ti)->ti_flags & TH_FIN; \
+		tcpstat.tcps_rcvpack++;\
+		tcpstat.tcps_rcvbyte += (ti)->ti_len;\
+		sbappend(&(so)->so_rcv, (m)); \
+		sorwakeup(so); \
+	} else { \
+		(flags) = tcp_reass((tp), (ti), (m)); \
+		tp->t_flags |= TF_ACKNOW; \
+	} \
+}
+#endif
+#ifndef TUBA_INCLUDE
 
 static int
 tcp_reass(tp, ti, m)
@@ -295,6 +309,7 @@ tcp_input(m, iphlen)
 		tcpstat.tcps_rcvbadsum++;
 		goto drop;
 	}
+#endif /* TUBA_INCLUDE */
 
 	/*
 	 * Check that TCP offset makes sense,
@@ -542,12 +557,21 @@ findpcb:
 			 */
 			sbappend(&so->so_rcv, m);
 			sorwakeup(so);
-			if (tcp_delack_enabled) {
-				tp->t_flags |= TF_DELACK;
-			} else {
+#ifdef TCP_ACK_HACK
+			/*
+			 * If this is a short packet, then ACK now - with Nagel
+			 *	congestion avoidance sender won't send more until
+			 *	he gets an ACK.
+			 */
+			if (tiflags & TH_PUSH) {
 				tp->t_flags |= TF_ACKNOW;
 				tcp_output(tp);
+			} else {
+				tp->t_flags |= TF_DELACK;
 			}
+#else
+			tp->t_flags |= TF_DELACK;
+#endif
 			return;
 		}
 	}
@@ -674,8 +698,8 @@ findpcb:
 			 * segment.  Otherwise must send ACK now in case
 			 * the other side is slow starting.
 			 */
-			if (tcp_delack_enabled && ((tiflags & TH_FIN) || (ti->ti_len != 0 &&
-			    in_localaddr(inp->inp_faddr))))
+			if ((tiflags & TH_FIN) || (ti->ti_len != 0 &&
+			    in_localaddr(inp->inp_faddr)))
 				tp->t_flags |= (TF_DELACK | TF_NEEDSYN);
 			else
 				tp->t_flags |= (TF_ACKNOW | TF_NEEDSYN);
@@ -792,7 +816,7 @@ findpcb:
 			 * If there's data, delay ACK; if there's also a FIN
 			 * ACKNOW will be turned on later.
 			 */
-			if (tcp_delack_enabled && ti->ti_len != 0)
+			if (ti->ti_len != 0)
 				tp->t_flags |= TF_DELACK;
 			else
 				tp->t_flags |= TF_ACKNOW;
@@ -1532,7 +1556,7 @@ dodata:							/* XXX */
 			 *  Otherwise, since we received a FIN then no
 			 *  more input can be expected, send ACK now.
 			 */
-			if (tcp_delack_enabled && (tp->t_flags & TF_NEEDSYN))
+			if (tp->t_flags & TF_NEEDSYN)
 				tp->t_flags |= TF_DELACK;
 			else
 				tp->t_flags |= TF_ACKNOW;
@@ -1653,6 +1677,7 @@ drop:
 	if (dropsocket)
 		(void) soabort(so);
 	return;
+#ifndef TUBA_INCLUDE
 }
 
 static void
@@ -2100,3 +2125,4 @@ tcp_mssopt(tp)
 
 	return rt->rt_ifp->if_mtu - sizeof(struct tcpiphdr);
 }
+#endif /* TUBA_INCLUDE */
