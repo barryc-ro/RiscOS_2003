@@ -22,6 +22,24 @@
  * been changed to check if the message being added is part of an
  * existing document *only* when the message being added contains fax pages.
  * Otherwise it is treated as an entirely separate document.
+ *
+ * 1998-04-01: BAL
+ * Bug fix: number_pages_remaining in a document was being set incorrectly -
+ * it was being initialised to the number of pages reported in the first message
+ * seen for a document as well as being incremented on each new page encountered
+ * (so it would typically end up double what it should be).  It is now
+ * initialised to zero.  The only effect this had was a small memory leak.
+ *
+ * 1998-04-02: BAL
+ * Fixed problem in addition of new messages: now checks if message is
+ * already in document list before trying to add it.  In cases where only part
+ * of the mailbox was downloaded in a session, remaining messages would be added
+ * again in the next session.
+ *
+ * number_pages_remaining corrected again.  Used to only be incremented if
+ * message had never been seen before.  It is now always incremented when a
+ * message is added to the document list, even if that message has been seen
+ * before.
  */
 
 
@@ -87,7 +105,7 @@ enum bool
     true
 };
 
-/* Can't use an enum for this because I want it to be char to hopefully save
+/* Can't use an enum for this because Iwant it to be char to hopefully save
  * space when its used for arrays.
  */
 typedef char  page_state;
@@ -167,6 +185,12 @@ class document_t
                                  size_t              report_size,
                                  const NFE_header &  header);
 
+#ifdef TEST
+        virtual void  dump_to_file (FILE *const  file);
+
+        virtual void  dump_message_list_to_file (FILE *const  file);
+#endif
+
     // Data
     protected:
         list_item_handle  item_handle;
@@ -198,6 +222,10 @@ class netfax_document_t : public document_t
                                const char *const       unique_id,
                                const NFE_message_id &  nf_message_id,
                                bool &                  delete_message);
+
+#ifdef TEST
+        virtual void  dump_to_file (FILE *const  file);
+#endif
 
     // Data
     protected:
@@ -250,6 +278,10 @@ class netfax_fax_document_t : public netfax_document_t
         int cover_sheet (char *const         report,
                          size_t              report_size,
                          const NFE_header &  header);
+
+#ifdef TEST
+        virtual void  dump_to_file (FILE *const  file);
+#endif
 
     private:
         int page_range_report (char *const         report,
@@ -305,6 +337,9 @@ static document_t *create_doc (const NFE_header &  header);
 
 static int match_doc (void *const  data1,
                       void *const  data2);
+
+static int match_message (void *const  data1,
+                          void *const  data2);
 
 static int compare_page_nums (void *const  data1,
                               void *const  data2);
@@ -810,7 +845,8 @@ netfax_fax_document_t::netfax_fax_document_t (const NFE_header &  header,
     connection_count       = 0;
     total_number_pages     = 0;
     number_pages           = 0;
-    number_pages_remaining = header.id.msg_num_pages;
+//     number_pages_remaining = header.id.msg_num_pages;
+    number_pages_remaining = 0;
     page_seen              = NULL;
 }
 
@@ -890,7 +926,9 @@ message_t *netfax_fax_document_t::add_message (
         message = add_message_common (size,
                                       unique_id);
         if (message == NULL)
+        {
             goto no_mem;
+        }
 
 
         // All types of netfax messages must always have meaningful information
@@ -906,7 +944,9 @@ message_t *netfax_fax_document_t::add_message (
                                    message,
                                    compare_page_nums);
         if (message_item_handle == NULL)
+        {
             goto no_mem;
+        }
 
         message->item_handle = message_item_handle;
 
@@ -953,7 +993,7 @@ message_t *netfax_fax_document_t::add_message (
         delta_number_pages = nf_message_id.msg_num_pages -
                              total_number_pages;
 
-        number_pages_remaining += delta_number_pages;
+        // number_pages_remaining += delta_number_pages;
         total_number_pages = nf_message_id.msg_num_pages;
     }
 
@@ -971,15 +1011,28 @@ message_t *netfax_fax_document_t::add_message (
     }
     else
     {
+        // Be careful when incrementing the number of pages in a document.  It
+        // is possible for a message to be added to the document list, selected
+        // for download (therefore moved from the document list to the download
+        // list), but not actually get processed - ie. when the PrintQ aborts
+        // a job before it is complete.  Then the message is seen again on the
+        // next connection - it's not in the document list anymore so it's
+        // added again, but we have previously taken account of the pages
+        // contained in it, so we don't want to add these again.
+
         for (int i = nf_message_id.first_page_num - 1;
              i < nf_message_id.last_page_num;
              i++)
         {
-            page_seen[i] = PageState_Seen;
+            if (page_seen[i] == PageState_Unseen)
+            {
+                page_seen[i] = PageState_Seen;
+                ++number_pages;
+            }
         }
 
-        number_pages += (nf_message_id.last_page_num -
-                         nf_message_id.first_page_num) + 1;
+        number_pages_remaining += (nf_message_id.last_page_num -
+                                   nf_message_id.first_page_num) + 1;
     }
 
     return message;
@@ -989,7 +1042,9 @@ no_mem:
     if (message)
     {
         if (message->unique_id)
+        {
             free (message->unique_id);
+        }
 
         free (message);
     }
@@ -2082,12 +2137,11 @@ extern void emailrx_finalise (void)
                       deletion immediately
 
     Returns
-    0: added message successfully
+    0: message dealt with successfully (NB. not necessarily added)
     1: couldn't add message but managed to recover some memory
     2: couldn't add message and couldn't recover memory
 -
  */
-
 
 extern int emailrx_new_message (const unsigned int        size,
                                 const NFE_header *const   header,
@@ -2137,14 +2191,28 @@ extern int emailrx_new_message (const unsigned int        size,
                                                   &new_document_id);
     }
 
-    if (document == NULL)    /* document not in document list */
+    if (document == NULL)
     {
+        // document not in document list
         document = create_doc (*header);
 
         if (document == NULL ||
             document->add_to_list (document_list) == NULL)
         {
             goto no_mem;
+        }
+    }
+    else
+    {
+        // Document is already in document list.  Now have to check whether
+        // message is already in message list for this document.
+
+        if (list_find_item (document->get_message_list (),
+                            match_message,
+                            (void *) unique_id))
+        {
+            // Message is already in message list for this document
+            return 0;
         }
     }
 
@@ -2154,7 +2222,6 @@ extern int emailrx_new_message (const unsigned int        size,
                                header->id,
                                *((bool *) delete_message)) == NULL)
     {
-        /* yes, I know, but if you've got a better idea... */
         goto no_mem;
     }
 
@@ -2836,7 +2903,39 @@ static int match_doc (void *const  data1,
 
 
 /* -----------------------------------------------------------------------------
-+
+   match_message
+
+   Message matching routine for document list searching.
+
+   Inputs
+   data1: pointer to current message in list
+   data2: pointer to UID of message being searched for
+
+   Returns
+   1: match
+   0: no match
+ */
+
+static int match_message (void *const  data1,
+                          void *const  data2)
+{
+    const message_t &  message   = *((message_t *const) data1);
+    const char *const  unique_id = (const char *const)  data2;
+
+
+    if (strcmp (message.unique_id,
+                unique_id) == 0)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
    compare_page_nums
 
    Page number comparison routine for inserting a message into a list of
@@ -2849,7 +2948,6 @@ static int match_doc (void *const  data1,
    Returns
    -1: message1 comes before message2
     1: message1 comes after message2
--
  */
 
 static int compare_page_nums (void *const  data1,
@@ -3116,56 +3214,96 @@ static message_t *add_message_common (const unsigned int  size,
 
 
 #ifdef TEST
-extern void emailrx_display_doc (document_handle document_info)
+void document_t::dump_to_file (FILE *const  file)
 {
-    list_iterator_t message_iterator;
-    message_info_t *message_info;
+    fprintf (file, "========================================\n");
+    fprintf (file, "Document size: %u\n", document_size);
+    fprintf (file, "Message class: %u\n", message_class);
+}
 
+void netfax_document_t::dump_to_file (FILE *const  file)
+{
+    document_t::dump_to_file (file);
 
-    printf ("========================================\n");
-    printf ("Document number: %u\n", document_info->document_number);
-    printf ("Document size: %u\n", document_info->document_size);
-    printf ("Number messages: %u\n", document_info->number_messages);
-    printf ("Split download: %s\n",
-            document_info->flags.split_download ? "Yes" : "No");
-    printf ("Connection count: %u\n", document_info->connection_count);
-    printf ("Exact number pages: %s\n",
-            document_info->flags.exact_number_pages ? "Yes" : "No");
-    printf ("Total number pages: %u\n", document_info->total_number_pages);
-    printf ("Number pages: %u\n", document_info->number_pages);
-    printf ("Number pages remaining: %u\n",
-            document_info->number_pages_remaining);
-    printf ("\n");
+    fprintf (file, "Document number: %u\n", document_id.document_number);
+    fprintf (file, "Netfax messsage class: %x\n", netfax_message_class);
+}
 
-    /* Iterate over the message list for this document, adding as many
-     * messages from it to the download list as possible.
-     */
+void netfax_fax_document_t::dump_to_file (FILE *const  file)
+{
+    netfax_document_t::dump_to_file (file);
 
-    list_initialise_iterator (&message_iterator,
-                              document_info->message_list);
+    fprintf (file, "Split download: %s\n",
+             flags.split_download ? "Yes" : "No");
 
+    fprintf (file, "Connection count: %u\n", connection_count);
+    fprintf (file, "Total number pages: %u\n", total_number_pages);
+    fprintf (file, "Number pages: %u\n", number_pages);
+    fprintf (file, "Number pages remaining: %u\n", number_pages_remaining);
+    fprintf (file, "Exact number pages: %s\n",
+             flags.exact_number_pages ? "Yes" : "No");
 
-    message_info = (message_iterator.reset) (&message_iterator);
-
-    while (!(message_iterator.finished) (&message_iterator))
+    fprintf (file, "Pages seen:");
+    for (int i = 0; i < number_pages; ++i)
     {
-        printf ("----------------------------------------\n");
-        printf ("Message id: %u\n", message_info->id);
-        printf ("Message size: %u\n", message_info->size);
-        printf ("Unique id: %s\n", message_info->unique_id);
-        printf ("First page: %u\n",
-                message_info->nf_message_id.first_page_num);
-        printf ("Last page: %u\n",
-                message_info->nf_message_id.last_page_num);
-        printf ("Document number: %u\n",
-                message_info->nf_message_id.doc_num);
-        printf ("Number pages: %u\n",
-                message_info->nf_message_id.msg_num_pages);
-        printf ("Exact number pages: %s\n",
-                message_info->nf_message_id.exact_num_pages ? "Yes" : "No");
-        printf ("\n");
+        if (page_seen[i] == PageState_Seen)
+        {
+            fprintf (file, " %d", i + 1);
+        }
+    }
 
-        message_info = (message_iterator.next) (&message_iterator);
+    fprintf (file, "\n\n");
+}
+
+void document_t::dump_message_list_to_file (FILE *const  file)
+{
+    list_iterator_t iter;
+    message_t *message;
+
+    list_initialise_iterator (&iter,
+                              message_list);
+
+    for (message = (message_t *) (iter.reset) (&iter);
+         !(iter.finished) (&iter);
+         message = (message_t *) (iter.next) (&iter))
+    {
+         fprintf (file, "----------------------------------------\n");
+         fprintf (file, "Message size: %u\n", message->size);
+         fprintf (file, "Unique id: %s\n", message->unique_id);
+         fprintf (file, "Pages: %d - %d\n",
+                  message->nf_message_id.first_page_num,
+                  message->nf_message_id.last_page_num);
+         fprintf (file, "\n");
     }
 }
+
+extern "C" void  emailrx_dump_doc_list_to_file (const list_handle  list,
+                                                const char *const  filename)
+{
+    FILE *           file;
+    list_iterator_t  iter;
+    document_t *     document;
+
+
+    file = fopen (filename, "a+");
+    if (file == NULL)
+    {
+        return;
+    }
+
+    list_initialise_iterator (&iter,
+                              list);
+
+    fprintf (file, "########################################\n");
+    for (document = (document_t *) (iter.reset) (&iter);
+         !(iter.finished) (&iter);
+         document = (document_t *) (iter.next) (&iter))
+    {
+        document->dump_to_file (file);
+        document->dump_message_list_to_file (file);
+    }
+
+    fclose (file);
+}
+
 #endif
