@@ -60,7 +60,8 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
+.cmhg.h:;   ${CMHG} -p -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 .d.o:;      datatoaof -f $< -o $@ $(Datatoaofflags)
 
@@ -90,8 +91,8 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} h.HeaderMod
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -102,7 +103,7 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} HeaderMod.h
         ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
 #
@@ -110,32 +111,14 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${TARGETSA}: ${OBJS} ${CLIB}
+${TARGETSA}: ${OBJS} ${CLIB} HeaderMod.h
         ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.filegen:	c.filegen
-o.filegen:	h.defs
-o.filegen:	C:h.kernel
-o.filegen:	C:h.swis
-o.swiven: s.swiven
-o.swiven: h.regdefs
-o.swiven: h.swinos
-o.swiven: h.macros
-o.module:	c.module
-o.module:	h.cmhg_modem
-o.module:	h.defs
-o.module:	C:h.kernel
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.wimp
-o.module:	h.defs
