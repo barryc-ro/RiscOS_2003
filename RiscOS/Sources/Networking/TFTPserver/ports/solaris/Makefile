@@ -22,8 +22,8 @@ AWK     = awk
 MKDIR   = mkdir
 CC      = gcc
 LD      = gcc
-RM      = -rm
-WIPE    = -rm
+RM      = -rm -f
+WIPE    = -rm 
 CD	= cd
 TOUCH   = touch
 LEX	= flex
@@ -85,14 +85,17 @@ clean:
 	${RM} parser.h
 	@echo ${COMPONENT}: cleaned
 
+realclean: clean
+	find . -type l -exec rm {} \;
+
 #
 # Target 
 #
-${TARGET}: ${OBJS} ${INETLIBS} ${CLIB}
+${TARGET}: ${OBJS} ${CLIB}
 	${LD} -o $@ ${LDFLAGS} ${OBJS} ${INETLIBS} -lresolv ${CLIB}
 
 parser.c parser.h: parser.y
-	${YACC} ${YACCFLAGS} --name-prefix=parser -d --output=parser.c parser.y
+	${YACC} --defines ${YACCFLAGS} -p parser --output=parser.c parser.y
 
 lexer.c: lexer.l
 	${LEX} ${LEXFLAGS} -t >$@ lexer.l
