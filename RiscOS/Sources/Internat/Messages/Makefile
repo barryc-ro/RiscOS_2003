@@ -117,7 +117,7 @@ ${BUILTDIR}.Messages: ${SOURCE} ${DATA}.Tokenised ${DIRS}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
-${BUILTDIR}.MessagesHI: ${SOURCE} 
+${BUILTDIR}.MessagesHI: ${SOURCE} ${DIRS}
         ${MKDIR} rm.${BUILD}.<Build$LocaleListNumeric>
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
 
@@ -130,7 +130,7 @@ ${BUILTDIR}.MessData: ${DATA}.Tokenised ${DIRS}
 ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
         Perl Utils.HelpAppend ${PROCESSDIR} ${HELPTOKENS}
         ${MSGTOK} ${HELPTOKENS} ${HELPTAGS} 
-        ${CP} ${DICTIONARY} ${PROCESSDIR}.Common.Resources.Kernel.Dictionary ${CPFLAGS}
+        ${CP} ${DICTIONARY} ${PROCESSDIR}.<Build$LocaleListNumeric>.Resources.Kernel.Dictionary ${CPFLAGS}
         ${MSGTOK2} ${DICTTOKENS} ${DICTTAGS}
         ${TOUCH} ${DATA}.Tokenised; settype ${DATA}.Tokenised fff
 
@@ -139,8 +139,8 @@ ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
 #
 ${HELPTAGS}: ${TAGEXT} ${DIRS}
         @echo Copying Resources to Processed directory for tokenising ...
-        ${CP} Resources Processed ${CPFLAGS}
-        ${RESCOMM} ${PROCESSDIR}
+	${MKDIR} ${PROCESSDIR}
+        ${RESCOMM} Resources.${BUILD}.<Build$LocaleListNumeric> ${PROCESSDIR}
         Perl Utils.RemoveEmpt ${PROCESSDIR}
         Do ${TAGEXT} ${PROCESSDIR} ${DICTTAGS} ${HELPTAGS}
 
@@ -174,6 +174,7 @@ ${DIRS}:
 	${MKDIR} Data.${LOCALE}
 	${MKDIR} ${DATA}
 	${MKDIR} o
+	${MKDIR} ${PROCESSDIR}
 	${MKDIR} rm.${BUILD}.<Build$LocaleListNumeric>
 	${TOUCH} ${DIRS}
 	
