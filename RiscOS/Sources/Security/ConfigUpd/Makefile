@@ -28,7 +28,7 @@ ASFLAGS   = -depend !Depend -ffah -Stamp -quit -module
 CCFLAGS   = -c ${THROWBACK} -zm -zps1 -depend !Depend -ffah ${INCLUDES} ${OPTS}
 CPFLAGS   = ~cfr~v
 WFLAGS    = ~c~v
-CMHGFLAGS = -p -depend !Depend -throwback
+CMHGFLAGS = -p -depend !Depend -throwback ${OPTS}
 INCLUDES  = -IC: -IC:NCMAlib -IC:AsmUtils, -IC:TCPIPLibs
 DIRS      = o._dirs
 
