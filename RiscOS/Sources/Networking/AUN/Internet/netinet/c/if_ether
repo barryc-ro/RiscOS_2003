@@ -85,6 +85,15 @@ int	arpt_keep = (20*60);	/* once resolved, good for 20 more minutes */
 int	arpt_down = 20;		/* once declared down, don't send for 20 secs */
 #define	rt_expire rt_rmx.rmx_expire
 
+struct llinfo_arp {
+	struct	llinfo_arp *la_next;
+	struct	llinfo_arp *la_prev;
+	struct	rtentry *la_rt;
+	struct	mbuf *la_hold;		/* last packet until resolved/timeout */
+	long	la_asked;		/* last time we QUERIED for this addr */
+#define la_timer la_rt->rt_rmx.rmx_expire /* deletion time in seconds */
+};
+
 static	void arprequest(struct arpcom *, struct in_addr *, struct in_addr *, u_char *);
 static	void arptfree(struct llinfo_arp *);
 static	void arptimer(void *);
@@ -240,17 +249,6 @@ arp_rtrequest(req, rt, sa)
 			m_freem(la->la_hold);
 		Free((caddr_t)la);
 	}
-}
-
-/*
- * Broadcast an ARP packet, asking who has addr on interface ac.
- */
-void
-arpwhohas(ac, addr)
-	register struct arpcom *ac;
-	struct in_addr *addr;
-{
-	arprequest(ac, &ac->ac_ipaddr, addr, ac->ac_enaddr);
 }
 
 /*
@@ -452,7 +450,9 @@ arpresolve(ac, rt, m, dst, desten, rt0)
 		if (la->la_asked == 0 || rt->rt_expire != time.tv_sec) {
 			rt->rt_expire = time.tv_sec;
 			if (la->la_asked++ < arp_maxtries)
-				arpwhohas(ac, &(SIN(dst)->sin_addr));
+			    arprequest(ac,
+			        &SIN(rt->rt_ifa->ifa_addr)->sin_addr,
+				&SIN(dst)->sin_addr, ac->ac_enaddr);
 			else {
 				rt->rt_flags |= RTF_REJECT;
 				rt->rt_expire += arpt_down;
@@ -567,7 +567,7 @@ in_arpinput(m)
 	if (isaddr.s_addr == myaddr.s_addr) {
 #ifdef __riscos
 		char buffer[80];
-		untimeout(broadcastarpreply, ac);
+		untimeout(broadcastarpreply, ia);
 		if (service_internetstatus_duplicate_ip_address(
 		      ac->ac_if.if_name, ac->ac_if.if_dib, isaddr, ea->arp_sha)) {
 			sprintf(buffer,
@@ -750,21 +750,23 @@ arp_ifinit(ac, ifa)
 	struct arpcom *ac;
 	struct ifaddr *ifa;
 {
-	ac->ac_ipaddr = IA_SIN(ifa)->sin_addr;
+	if (ntohl(IA_SIN(ifa)->sin_addr.s_addr) != INADDR_ANY) {
 #ifdef __riscos
 	if (ac->ac_if.if_flags & IFF_NEED_IPADDR) {
 		/* Initial tentative probe with source IP set to 0 - as
 		 * recommended in DHCP spec. */
 		 struct in_addr sip = { 0 };
-		 arprequest(ac, &sip, &ac->ac_ipaddr, ac->ac_enaddr);
+		 arprequest(ac, &sip, &IA_SIN(ifa)->sin_addr, ac->ac_enaddr);
 		 /* If no response after 1 second, broadcast a definite
 		  * ARP reply to announce our presence to the world.
 		  */
-		 timeout(broadcastarpreply, ac, hz);
+		 timeout(broadcastarpreply, ifa, hz);
 	}
 	else
 #endif
-	arpwhohas(ac, &ac->ac_ipaddr);
+		arprequest(ac, &IA_SIN(ifa)->sin_addr,
+			       &IA_SIN(ifa)->sin_addr, ac->ac_enaddr);
+	}
 	ifa->ifa_rtrequest = arp_rtrequest;
 	ifa->ifa_flags |= RTF_CLONING;
 }
@@ -773,7 +775,8 @@ arp_ifinit(ac, ifa)
 static void
 broadcastarpreply(void *p)
 {
-	struct arpcom *ac = (struct arpcom *) p;
+	struct ifaddr *ifa = (struct ifaddr *) p;
+	struct arpcom *ac = (struct arpcom *) ifa->ifa_ifp;
 
 	struct mbuf *m;
 	struct ether_header *eh;
@@ -796,9 +799,9 @@ broadcastarpreply(void *p)
 	ea->arp_pln = sizeof(ea->arp_spa);	/* protocol address length */
 	ea->arp_op = htons(ARPOP_REPLY);
 	(void)memcpy(ea->arp_sha, ac->ac_enaddr, sizeof(ea->arp_sha));
-	(void)memcpy(ea->arp_spa, &ac->ac_ipaddr.s_addr, sizeof(ea->arp_spa));
+	(void)memcpy(ea->arp_spa, &IA_SIN(ifa)->sin_addr, sizeof(ea->arp_spa));
 	(void)memcpy(ea->arp_tha, ac->ac_enaddr, sizeof(ea->arp_tha));
-	(void)memcpy(ea->arp_tpa, &ac->ac_ipaddr.s_addr, sizeof(ea->arp_tpa));
+	(void)memcpy(ea->arp_tpa, &IA_SIN(ifa)->sin_addr, sizeof(ea->arp_tpa));
 	sa.sa_family = AF_UNSPEC;
 	sa.sa_len = sizeof(sa);
 	(*ac->ac_if.if_output)(&ac->ac_if, m, &sa, (struct rtentry *)0);
