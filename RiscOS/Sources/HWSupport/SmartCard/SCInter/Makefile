@@ -37,7 +37,7 @@ AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
-CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
+CMHGFLAGS = -p  ${DFLAGS} ${INCLUDES}
 
 DFLAGS  = -DUSE_TINY ${DEBUG} ${OPTS}
 #
