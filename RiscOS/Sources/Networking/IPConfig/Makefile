@@ -12,6 +12,18 @@ RAM_MODULE = rm.${COMPONENT}
 ROM_MODULE = aof.${COMPONENT}
 DBG_MODULE = rm.${COMPONENT}D
 
+# Build options
+#
+# The module has the following build options accessed by ensuring that OPTIONS
+# is set to something that can be passed directly as a parameter to the C compiler
+# Do not set OPTIONS in this file (or if you do, make it additive)
+#
+# -DDNS_SUPPORT_ADDRESS_TO_NAME     - include the domain name retrieval code
+# -DDNS_SUPPORT_NAME_TO_ADDRESS     - include the name->IP address code
+#
+# Neither are included by default.
+
+
 #
 # Paths
 #
@@ -64,18 +76,18 @@ SOCKLIB		= TCPIPLibs:o.socklibzm
 DEPEND		= -depend !Depend
 DBGFLAGS        = -DTRACE
 DEFINES         = -DUSECMOS -DCOMPAT_INET4
-CENV		= ${DEPEND} ${THROWBACK}
+CENV		= ${DEPEND} ${THROWBACK} ${OPTIONS}
 
 ASFLAGS		= ${DEPEND} ${THROWBACK}
 CFLAGS		= -c -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${CENV}
 CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
 
 ROM_OBJS	= o.iicpoke or.module or.ifrconfig or.editconfig or.utils\
-		  or.lineedit or.Strncmp_ci o.atmconfig  o.ipconfhdr
+		  or.lineedit or.Strncmp_ci o.atmconfig  o.dns o.ipconfhdr
 RAM_OBJS	= o.iicpoke o.module  o.ifrconfig  o.editconfig  o.utils \
-		  o.lineedit  o.Strncmp_ci  o.atmconfig  o.ipconfhdr  ${RESF}
+		  o.lineedit  o.Strncmp_ci  o.atmconfig  o.dns o.ipconfhdr  ${RESF}
 DBG_OBJS	= o.iicpoke od.module od.ifrconfig od.editconfig od.utils\
-		  od.lineedit od.Strncmp_ci od.atmconfig od.ipconfhdr ${DBGRESF}
+		  od.lineedit od.Strncmp_ci od.atmconfig od.dns od.ipconfhdr ${DBGRESF}
 
 RESF		= o.msgs
 
