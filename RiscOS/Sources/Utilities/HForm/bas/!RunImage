@@ -9,6 +9,15 @@ REM FileCore changes.  For backwards compatability, we can
 REM convert the disc address at the last instant to be a
 REM sector address.
 
+REM For formatting with idlen>15, we have to allow the formatter
+REM to select a larger idlen value.
+
+REM MaxLinkBits% sets the maximum value of idlen
+
+MaxLinkBits%=19: REM allow 16 bit idlen
+MaxFreeLinkBits%=15: REM maximum number of bits for a free link
+MinLinkBits%=10
+
 REM default closing status indicates a panic
 *set HForm$EndStatus 1
 Log2ShareSize%=0:REM Unit of sharing
@@ -23,7 +32,7 @@ ON ERROR PROCabort(REPORT$, 1)
 VDU 26 : VDU 12
 PROCInit:REM Opens the message file as its first action.
 PROCGetShape
-IF NOT BigADFS% THEN
+IF NOT BigADFS% THEN   
     REM Check that disc not too big
     IF (DiscSize2%<>0 OR (DiscSize% AND &E0000000)<>0) THEN
         PROCmessage_print_0("DiscSizeError")
@@ -33,6 +42,10 @@ ENDIF
 FormatFlag%=(FNChoose("Q01:","FormatOrInitChoose","FI","")="F")
 SoakStyle$=FNChoose("Q02:","SoakTestChoose","LSN", "")
 BootOpt$=FNChoose("BootOpt:","BootOptChoose","YN", "")
+BigDir%=FNChoose("BigDir:","BigDirChoose","YN","")="Y"
+
+IF NOT BigDir% THEN MaxLinkBits%=15
+
 IF FNchoose_no_lookup("Q03:",FNmessage_lookup_1("SureChoose", STR$(Drive%)),"YN", "")="N" PROCfinish
 
 PROCDisableEscape
@@ -212,7 +225,7 @@ ENDIF
 AdfsDiscErr%=&108C7
 MaxVerifyBad%=16
 Patterns%=8
-DIM Buf% &40000, DiscRec% 64+BootSize%, Defect% BootSize%, DirMark% 5, Bad%(MaxVerifyBad%),mc% 100, Pattern%(Patterns%-1)
+DIM Buf% &160000, DiscRec% 64+BootSize%, Defect% BootSize%, DirMark% 5, Bad%(MaxVerifyBad%),mc% 100, Pattern%(Patterns%-1)
 Boot%=DiscRec%+64
 BootRec%=Boot%+BootSize%-64
 REM
@@ -246,7 +259,8 @@ ELSE
    RootDirAdd%=&400
 ENDIF
 
-Log2Alloc%=10:LinkBits%=10
+Log2Alloc%=10:LinkBits%=MinLinkBits%
+IF LinkBits%<=MaxFreeLinkBits% THEN FreeLinkBits%=LinkBits% ELSE FreeLinkBits%=15
 PROCShareSize
 IndRootDirAdd%=RootDirAdd%
 
@@ -743,8 +757,9 @@ REPEAT
              ENDIF
          UNTIL defectlist%=1 OR ((Defect%!ptr%)DIV SecSize%)>=add%
      ENDIF
+     
      IF defectlist%=1 THEN
-         WHILE Defect%!ptr%<add%
+         WHILE (Defect%!ptr%)<add%
              ptr%+=4
          ENDWHILE
      ENDIF
@@ -759,6 +774,8 @@ REPEAT
      ELSE
       length%=defect%-add%
      ENDIF
+     
+     IF length%>1024 THEN length%=1024
      
      PROCOp(Verify%,add%,0,length%*SecSize%)
      
@@ -873,6 +890,23 @@ DEF FNRoundSectors(Bits%,Lg%,Lg2SecSize%)
         =Bits%<<(-Shift%)
     ENDIF
 
+DEF FNMinMapObj
+  LOCAL min%, t%
+  
+  IF (Log2SecSize%>Log2Alloc%) THEN
+    min%=1<<(Log2SecSize%-Log2Alloc%)
+  ELSE
+    min%=1
+  ENDIF
+
+  t%=min%
+
+  WHILE(t%<(LinkBits%+1))
+    t%+=min%
+  ENDWHILE
+
+  =t%
+
 DEF FNdoalloc(Verbose%)
  Log2Alloc%=Log%
  PROCShareSize
@@ -883,22 +917,40 @@ DEF FNdoalloc(Verbose%)
  FOR DummySpare%=1 TO 1
  FOR SpareBits% = 4*8 TO ZoneBits%-Zone0Bits%-8*8
   PROCCalcZones
-  LinkBits%=10
+  LinkBits%=MinLinkBits%-1
   REPEAT LinkBits%+=1
    PROCCalcIds
   UNTIL Ids%<=2^LinkBits% AND LinkBits%>=(Log2SecSize%+3)
   IF SpareBits%-4*8>0 AND SpareBits%-4*8<=LinkBits% NEXT SpareBits%
   IF OddBits%>0 AND OddBits%<=LinkBits% NEXT SpareBits%
-  IF LinkBits%>15 OR Zones%>127 THEN
+  IF LinkBits%>MaxLinkBits% THEN
    IF Verbose% THEN PROCmessage_print_0("TooSmallAlloc")
    Log2Alloc%+=1
    NEXT DummySpare%
    =FALSE  :REM restart alloc size loop
   ENDIF
   IF Zones% <= BestZones% THEN
-   Crucial%=FNRoundUpShare(Zones%*2)*SecSize%+DirSize%
-   IF MapZone%=0 Crucial%=BootAdd%*SecSize%+BootSize%
-   IF Crucial%<Alloc%*(LinkBits%+1) Crucial%=Alloc%*(LinkBits%+1)
+   IF LinkBits%<=15 THEN
+     Crucial%=FNRoundUpShare(Zones%*2)*SecSize%+DirSize%
+     IF MapZone%=0 Crucial%=BootAdd%*SecSize%+BootSize%
+     IF Crucial%<Alloc%*FNMinMapObj Crucial%=Alloc%*FNMinMapObj
+     IF Crucial% MOD FNGranularity<>0 Crucial%+=FNGranularity-Crucial% MOD FNGranularity
+   ELSE     
+     Crucial1%=FNRoundUpShare(Zones%*2)*SecSize%
+     IF Crucial1%<Alloc%*FNMinMapObj Crucial1%=Alloc%*FNMinMapObj
+     IF Crucial1% MOD FNGranularity<>0 Crucial1%+=FNGranularity-Crucial1% MOD FNGranularity
+     
+     Crucial2%=DirSize%
+     IF Crucial2%<Alloc%*FNMinMapObj Crucial2%=Alloc%*FNMinMapObj
+     IF Crucial2% MOD FNGranularity<>0 Crucial2%+=FNGranularity-Crucial2% MOD FNGranularity
+     Crucial%=Crucial1%+Crucial2%
+   ENDIF
+   IF (Crucial%>((ZoneBits%-SpareBits%)<<Log2Alloc%)) THEN
+     IF Verbose% THEN PROCmessage_print_0("TooSmallAlloc")
+     Log2Alloc%+=1
+     NEXT DummySpare%
+     =FALSE  :REM restart alloc size loop    
+   ENDIF
    CrucialEnd%=MapAdd%+Crucial%/SecSize%
    defectlist%=0:REM We're in the first defect list
    DefPtr%=Defect%
@@ -930,9 +982,9 @@ IF BestZones%=(1<<30) AND Verbose%=TRUE THEN PROCmessage_print_0("InvalidAllocSi
 DEF PROCNewStructure
 Zone0Bits%=60*8
 ZoneBits%=SecSize%*8
-Log2Alloc%=9: REM requested by TCs ECR
+Log2Alloc%=7: REM requested by TCs ECR
 PROCShareSize
-IF Log2Alloc%<8 THEN Log2Alloc%=10:PROCShareSize
+REMIF Log2Alloc%<8 THEN Log2Alloc%=10:PROCShareSize
 
 REM * check for sensible default
 Alloc%=2^Log2Alloc%:Log%=Log2Alloc%
@@ -952,19 +1004,37 @@ UNTIL FNdoalloc(TRUE)
 
 PRINT
 LinkBits%=BestLinkBits%
+IF LinkBits%<=MaxFreeLinkBits% THEN FreeLinkBits%=LinkBits% ELSE FreeLinkBits%=15
 SpareBits%=BestSpare%
 PROCCalcZones
 PROCCalcIds
-Crucial%=FNRoundUpShare(Zones%*2)*SecSize%+DirSize%
-IF MapZone%=0 Crucial%=BootAdd%*SecSize%+BootSize%
-IF Crucial%<Alloc%*(LinkBits%+1) Crucial%=Alloc%*(LinkBits%+1)
-IF Crucial% MOD Alloc%<>0 Crucial%+=Alloc%-Crucial% MOD Alloc%
+ IF LinkBits%<=15 THEN
+   Crucial%=FNRoundUpShare(Zones%*2)*SecSize%+DirSize%
+   IF MapZone%=0 Crucial%=BootAdd%*SecSize%+BootSize%
+   IF Crucial%<Alloc%*FNMinMapObj Crucial%=Alloc%*FNMinMapObj
+   IF Crucial% MOD FNGranularity<>0 Crucial%+=FNGranularity-Crucial% MOD FNGranularity
+ ELSE     
+   Crucial1%=FNRoundUpShare(Zones%*2)*SecSize%
+   IF Crucial1%<Alloc%*FNMinMapObj Crucial1%=Alloc%*FNMinMapObj
+   IF Crucial1% MOD FNGranularity<>0 Crucial1%+=FNGranularity-Crucial1% MOD FNGranularity
+   
+   Crucial2%=DirSize%
+   IF Crucial2%<Alloc%*FNMinMapObj Crucial2%=Alloc%*FNMinMapObj
+   IF Crucial2% MOD FNGranularity<>0 Crucial2%+=FNGranularity-Crucial2% MOD FNGranularity
+   Crucial%=Crucial1%+Crucial2%
+ ENDIF
+
 IF MapZone%=0 THEN
  RootDirAdd%=BootAdd%+BootSize%/SecSize%
  IndRootDirAdd%=&200 + (BootAdd%*SecSize%+BootSize%) DIV SecSize% + 1
 ELSE
- RootDirAdd%=MapAdd%+FNRoundUpShare((MapLen%*2)/SecSize%)
- IndRootDirAdd%=&200+FNRoundUpShare(Zones%*2)/ShareSize%+1
+ IF LinkBits%<=15 THEN
+   RootDirAdd%=MapAdd%+FNRoundUpShare((MapLen%*2)/SecSize%)
+   IndRootDirAdd%=&200+FNRoundUpShare(Zones%*2)/ShareSize%+1
+ ELSE
+   RootDirAdd%=MapAdd%+(Crucial1%)/SecSize%
+   IndRootDirAdd%=((MapZone%*IdsPerZone%)<<8)+1
+ ENDIF
 ENDIF
 DiscRec%?4=LinkBits%
 DiscRec%?5=Log2Alloc%
@@ -975,11 +1045,18 @@ DiscRec%?&A=SpareBits% MOD 256
 DiscRec%?&B=SpareBits% DIV 256
 DiscRec%!&C=IndRootDirAdd%
 DiscRec%?&28=Log2ShareSize%
+DiscRec%?&2a=Zones%>>8
+IF BigDir% THEN
+  DiscRec%!&2C=1
+  DiscRec%!&30=2048
+ENDIF
 BootRec%!4=DiscRec%!4
 BootRec%!8=DiscRec%!8
 BootRec%!&C=DiscRec%!&C
 BootRec%!&24=DiscRec%!&24
 BootRec%!&28=DiscRec%!&28
+BootRec%!&2C=DiscRec%!&2C
+BootRec%!&30=DiscRec%!&30
 FOR I%=0 TO Zones%*SecSize%-4 STEP 4
  Buf%!I%=0
 NEXT I%
@@ -1011,18 +1088,29 @@ FOR zone%=0 TO Zones%-1
   BootStartBit%=ZoneBit%
   ZoneBit%=ZoneBit%+Zone0Bits%
   length%=(BootAdd%*SecSize%+BootSize%) DIV Alloc%
-  IF length%<LinkBits%+1 length%=LinkBits%+1
-  PROCWriteLink(ZoneBit%,2)
-  PROCWriteLength(ZoneBit%,length%)
+  IF length%<FNMinMapObj length%=FNMinMapObj
+  PROCWriteFragLink(ZoneBit%,2)
+  PROCWriteFragLength(ZoneBit%,length%)
   ZoneBit%=ZoneBit%+length%
   BootEndBit%=ZoneBit%
  ELSE
   IF zone%=MapZone% THEN
    MapStartBit%=ZoneBit%
-   length%=Crucial% DIV Alloc%
-   PROCWriteLink(ZoneBit%,2)
-   PROCWriteLength(ZoneBit%,length%)
-   ZoneBit%=ZoneBit%+length%
+   IF LinkBits%<=15 THEN
+    length%=Crucial% DIV Alloc%
+    PROCWriteFragLink(ZoneBit%,2)
+    PROCWriteFragLength(ZoneBit%,length%)
+    ZoneBit%=ZoneBit%+length%
+   ELSE
+    length%=Crucial1% DIV Alloc%
+    PROCWriteFragLink(ZoneBit%,2)
+    PROCWriteFragLength(ZoneBit%,length%)
+    ZoneBit%=ZoneBit%+length%
+    length%=Crucial2% DIV Alloc%
+    PROCWriteFragLink(ZoneBit%,IndRootDirAdd%>>8)
+    PROCWriteFragLength(ZoneBit%,length%)
+    ZoneBit%=ZoneBit%+length%    
+   ENDIF
    MapEndBit%=ZoneBit%
   ENDIF
  ENDIF
@@ -1092,12 +1180,12 @@ FOR zone%=0 TO Zones%-1
           ENDIF
       ENDIF
       IF NextDefect%<UsedZoneEndBit% THEN
-       IF NextDefect%>ZoneEndBit%-(LinkBits%+1) THEN
-        NextDef%=ZoneEndBit%-(LinkBits%+1)
+       IF NextDefect%>ZoneEndBit%-FNMinMapObj THEN
+        NextDef%=ZoneEndBit%-FNMinMapObj
        ELSE
         NextDef%=NextDefect%
        ENDIF
-       IF NextDef%-DefectEnd%<LinkBits%+1 THEN
+       IF NextDef%-DefectEnd%<FNMinMapObj THEN
         IF NextDefect%+1>DefectEnd% THEN
          DefectEnd%=NextDefect%+1
         ENDIF
@@ -1106,19 +1194,19 @@ FOR zone%=0 TO Zones%-1
        ENDIF
       ENDIF
      UNTIL done2%
-     IF DefectEnd%-DefectStart%<LinkBits%+1 THEN
-      DefectEnd%=DefectStart%+LinkBits%+1
+     IF DefectEnd%-DefectStart%<FNMinMapObj THEN
+      DefectEnd%=DefectStart%+FNMinMapObj
       IF DefectEnd%>ZoneEndBit% THEN
        DefectEnd%=ZoneEndBit%
       ENDIF
       done1%=FALSE
      ENDIF
-     IF DefectEnd%>ZoneEndBit%-(LinkBits%+1) AND DefectEnd%<>ZoneEndBit% THEN
+     IF DefectEnd%>ZoneEndBit%-(FNMinMapObj) AND DefectEnd%<>ZoneEndBit% THEN
       DefectEnd%=ZoneEndBit%
       done1%=FALSE
      ENDIF
-     IF DefectEnd%-DefectStart%<LinkBits%+1 THEN
-      DefectStart%=DefectEnd%-(LinkBits%+1)
+     IF DefectEnd%-DefectStart%<FNMinMapObj THEN
+      DefectStart%=DefectEnd%-FNMinMapObj
      ENDIF
     UNTIL done1%
    ENDIF
@@ -1126,30 +1214,30 @@ FOR zone%=0 TO Zones%-1
   IF ZoneBit%>DefectStart% PROCmessage_print_0("ERROR1"):PROCfinish
   IF DefectStart%-ZoneBit% <= LinkBits% THEN DefectStart%=ZoneBit%
   IF DefectStart%>ZoneBit% THEN
-   PROCWriteLink(PreFree%,ZoneBit%-PreFree%)
+   PROCWriteFreeLink(PreFree%,ZoneBit%-PreFree%)
    IF DefectStart%>=UsedZoneEndBit% THEN
-    PROCWriteLength(ZoneBit%,UsedZoneEndBit%-ZoneBit%)
+    PROCWriteFreeLength(ZoneBit%,UsedZoneEndBit%-ZoneBit%)
     IF ZoneEndBit%>UsedZoneEndBit% THEN
-     PROCWriteLink(UsedZoneEndBit%,1)
-     PROCWriteLength(UsedZoneEndBit%,ZoneEndBit%-UsedZoneEndBit%)
+     PROCWriteFragLink(UsedZoneEndBit%,1)
+     PROCWriteFragLength(UsedZoneEndBit%,ZoneEndBit%-UsedZoneEndBit%)
     ENDIF
    ELSE
-    PROCWriteLength(ZoneBit%,DefectStart%-ZoneBit%)
+    PROCWriteFreeLength(ZoneBit%,DefectStart%-ZoneBit%)
    ENDIF
   PreFree%=ZoneBit%
   ENDIF
   IF DefectStart%<ZoneEndBit% THEN
-   IF DefectEnd%>UsedZoneEndBit%-(LinkBits%+1) THEN
+   IF DefectEnd%>UsedZoneEndBit%-FNMinMapObj THEN
     DefectEnd%=ZoneEndBit%
    ENDIF
-   PROCWriteLink(DefectStart%,1)
-   PROCWriteLength(DefectStart%,DefectEnd%-DefectStart%)
+   PROCWriteFragLink(DefectStart%,1)
+   PROCWriteFragLength(DefectStart%,DefectEnd%-DefectStart%)
    ZoneBit%=DefectEnd%
   ELSE
    ZoneBit%=ZoneEndBit%
   ENDIF
  UNTIL ZoneBit%=ZoneEndBit%
- PROCWriteLink(PreFree%,0)
+ PROCWriteFreeLink(PreFree%,0)
  IF zone%=0 THEN
   ZoneStart%?CrossCheck%=&FF
  ELSE
@@ -1193,7 +1281,8 @@ REM discadd% is now a sector address of course
 
 DEF FNDiscToMap(discadd%)
 LOCAL bit%,zone%
-IF (Alloc%>SecSize%)
+IF discadd%>=EndDefect% THEN =EndDefect%
+IF (Alloc%>SecSize%) THEN
     bit%=(discadd% DIV (Alloc% DIV SecSize%))+Zone0Bits%
 ELSE
     bit%=(discadd% * (SecSize% DIV Alloc%))+Zone0Bits%
@@ -1202,8 +1291,8 @@ zone%=bit% DIV UsedBits%
 bit%=bit%+(bit% DIV UsedBits%)*SpareBits%+4*8
 = bit%
 
-:
-DEF PROCWriteLink(off%,link%)
+
+DEF PROCWriteFragLink(off%,link%)
 IF link%>=2^LinkBits% PROCmessage_print_0("ERROR2"):PROCfinish
 LOCAL bit%,add%,mask%
 bit%=off% MOD 8
@@ -1211,13 +1300,28 @@ add%=Buf%+off% DIV 8
 mask%=2^LinkBits%-1
 !add%=(!add% AND NOT (mask%<<bit%)) OR link%<<bit%
 ENDPROC
-:
-DEF PROCWriteLength(off%,len%)
+
+DEF PROCWriteFragLength(off%,len%)
 IF len%<=LinkBits% PROCmessage_print_0("ERROR3"):PROCfinish
 off%=off%+len%-1
 Buf%?(off%DIV8)+=2^(off%MOD8)
 ENDPROC
-:
+
+DEF PROCWriteFreeLink(off%,link%)
+IF link%>=2^FreeLinkBits% PROCmessage_print_0("ERROR2"):PROCfinish
+LOCAL bit%,add%,mask%
+bit%=off% MOD 8
+add%=Buf%+off% DIV 8
+mask%=2^FreeLinkBits%-1
+!add%=(!add% AND NOT (mask%<<bit%)) OR link%<<bit%
+ENDPROC
+
+DEF PROCWriteFreeLength(off%,len%)
+IF len%<=LinkBits% PROCmessage_print_0("ERROR3"):PROCfinish
+off%=off%+len%-1
+Buf%?(off%DIV8)+=2^(off%MOD8)
+ENDPROC
+
 DEF PROCWriteDefectList
 PROCmessage_print_0("WritingDefects")
 ptr%=0
@@ -1271,39 +1375,90 @@ ENDPROC
 :
 DEF PROCWriteRootDir
 PROCmessage_print_0("WritingRootDir")
-LOCAL BF%
+IF BigDir% THEN
+  PROCWriteBigRootDir
+ELSE
+  LOCAL BF%
+  FOR I%=0 TO DirSize%-4 STEP 4:Buf%!I%=0:NEXT
+  IF NewMap% THEN
+   $DirMark%="Hugo"
+  ELSE
+   $DirMark%="Hugo"
+  ENDIF
+  Buf%!1=!DirMark%
+  BF%=Buf%+DirSize%
+  IF NewMap% THEN
+   BF%!-38=IndRootDirAdd%
+  ELSE
+   BF%!-38=IndRootDirAdd% DIV &100
+  ENDIF
+  BF%?-35=ASC"$"
+  BF%?-16=ASC"$"
+  BF%!-5=!DirMark%
+  check%=0
+  PROCCheckPut(!Buf%)
+  PROCCheckPut(Buf%?4)
+  I%=BF%-40
+  WHILE I%AND3
+   PROCCheckPut(?I%)
+   I%=I%+1
+  ENDWHILE
+  WHILE I%<BF%-4
+   PROCCheckPut(!I%)
+   I%=I%+4
+  ENDWHILE
+  check%=check% EOR (check%>>>16)
+  check%=(check% EOR (check%>>>8))AND &FF
+  BF%?-1=check%
+ENDIF
+PROCMoanOp(Write%,RootDirAdd%,Buf%,DirSize%)
+ENDPROC
+:
+DEF PROCWriteBigRootDir
 FOR I%=0 TO DirSize%-4 STEP 4:Buf%!I%=0:NEXT
-IF NewMap% THEN
- $DirMark%="Hugo"
-ELSE
- $DirMark%="Hugo"
-ENDIF
-Buf%!1=!DirMark%
-BF%=Buf%+DirSize%
-IF NewMap% THEN
- BF%!-38=IndRootDirAdd%
-ELSE
- BF%!-38=IndRootDirAdd% DIV &100
-ENDIF
-BF%?-35=ASC"$"
-BF%?-16=ASC"$"
-BF%!-5=!DirMark%
+LOCAL hp%
+hp%=Buf%+4
+$hp%="SBPr"
+hp%+=4
+!hp%=1
+hp%+=4
+!hp%=DirSize%
+hp%+=4
+!hp%=0:REM no entries
+hp%+=4
+!hp%=0:REM space for names
+hp%+=4
+!hp%=IndRootDirAdd%
+hp%+=4
+?hp%=ASC"$"
+REM there are no entries.  so just do the tail.
+
+hp%=Buf%+DirSize%-8
+$hp%="oven"
+hp%+=4
+!hp%=0
+
+REM now do the check byte
+
 check%=0
-PROCCheckPut(!Buf%)
-PROCCheckPut(Buf%?4)
-I%=BF%-40
-WHILE I%AND3
- PROCCheckPut(?I%)
- I%=I%+1
-ENDWHILE
-WHILE I%<BF%-4
- PROCCheckPut(!I%)
- I%=I%+4
-ENDWHILE
+FOR I%=0 TO 28 STEP 4
+  PROCCheckPut(Buf%!I%)
+NEXT I%
+
+I%=DirSize%-8
+
+PROCCheckPut(Buf%!I%)
+I%+=4
+PROCCheckPut(Buf%?I%)
+I%+=1
+PROCCheckPut(Buf%?I%)
+I%+=1
+PROCCheckPut(Buf%?I%)
+I%+=1
+
 check%=check% EOR (check%>>>16)
 check%=(check% EOR (check%>>>8))AND &FF
-BF%?-1=check%
-PROCMoanOp(Write%,RootDirAdd%,Buf%,DirSize%)
+Buf%?I%=check%
 ENDPROC
 :
 DEF FNLogToPhys(add%)
@@ -1979,7 +2134,7 @@ DEF FNBigADFS
 
 DEF PROCShareSize
     LOCAL min%
-    min%=(LinkBits%+1)<<Log2Alloc%
+    min%=FNMinMapObj<<Log2Alloc%
     Log2ShareSize%=0
     WHILE (253*(SecSize%<<Log2ShareSize%)<min%)
         Log2ShareSize%+=1
@@ -1998,3 +2153,11 @@ WHILE (LEN(low$)<8)
     low$="0"+low$
 ENDWHILE
 =high$+low$
+
+DEF FNGranularity
+
+  IF Log2SecSize%>Log2Alloc% THEN
+    =1<<Log2SecSize%
+  ELSE
+    =1<<Log2Alloc%
+  ENDIF
