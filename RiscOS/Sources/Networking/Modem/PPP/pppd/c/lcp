@@ -45,10 +45,12 @@
 #include "fsm.h"
 #include "lcp.h"
 #include "magic.h"
+#include "main.h"
 #include "chap.h"
 #include "auth.h"
 #include "upap.h"
 #include "ipcp.h"
+#include "ccp.h"
 
 #ifdef _linux_		/* Needs ppp ioctls */
 #include <linux/ppp.h>
@@ -128,6 +130,7 @@ int lcp_warnloops = DEFWARNLOOPS; /* Warn about a loopback this often */
 #define CILEN_CHAP	5	/* CILEN_VOID + sizeof(short) + 1 */
 #define CILEN_LONG	6	/* CILEN_VOID + sizeof(long) */
 #define CILEN_LQR	8	/* CILEN_VOID + sizeof(short) + sizeof(long) */
+#define CILEN_ENDPOINT	3	/* CILEN_VOID + 1 */
 
 #define CODENAME(x)	((x) == CONFACK ? "ACK" : \
 			 (x) == CONFNAK ? "NAK" : "REJ")
@@ -1283,6 +1286,7 @@ static void lcp_up(fsm *f)
     upap_lowerup(f->unit);	/* Enable UPAP */
     ipcp_lowerup(f->unit);	/* Enable IPCP */
     lcp_echo_lowerup(f->unit);  /* Enable echo messages */
+    ccp_lowerup(f->unit);       /* Enable CCP */
 
     link_established(f->unit);
 }
@@ -1295,6 +1299,7 @@ static void lcp_up(fsm *f)
  */
 static void lcp_down(fsm *f)
 {
+    ccp_lowerdown(f->unit);
     lcp_echo_lowerdown(f->unit);
     ipcp_lowerdown(f->unit);
     ChapLowerDown(f->unit);
@@ -1396,10 +1401,17 @@ int lcp_printpkt(u_char *p, int plen, void (*printer)(void *, char *m, ...), voi
 		    GETSHORT(cishort, p);
 		    switch (cishort) {
 		    case UPAP:
-			printer(arg, "upap");
+			printer(arg, "pap");
 			break;
 		    case CHAP:
 			printer(arg, "chap");
+			if (p < optend) {
+			    GETCHAR(code, p);
+			    if (code == CHAP_DIGEST_MD5)
+				printer(arg, " MD5");
+			    else
+			        p--;
+			}
 			break;
 		    default:
 			printer(arg, "0x%x", cishort);
@@ -1439,12 +1451,87 @@ int lcp_printpkt(u_char *p, int plen, void (*printer)(void *, char *m, ...), voi
 		    printer(arg, "accomp");
 		}
 		break;
+	    case CI_MRRU:
+		if (olen == CILEN_SHORT) {
+		    p += 2;
+		    GETSHORT(cishort, p);
+		    printer(arg, "mrru %d", cishort);
+		}
+		break;
+	    case CI_SHORTSEQNUM:
+		if (olen == CILEN_VOID) {
+		    p += 2;
+		    GETSHORT(cishort, p);
+		    printer(arg, "shortseqnum", cishort);
+		}
+		break;
+	    case CI_ENDPOINT:
+		if (olen >= CILEN_ENDPOINT) {
+		    p += 2;
+		    GETCHAR(code, p);
+		    printer(arg, "endpoint ");
+		    switch (code) {
+		    case 0:
+			printer(arg, "null");
+			break;
+		    case 1:
+		    	printer(arg, "local");
+		    	/* default hex dump after this */
+		    	break;
+		    case 2:
+			GETLONG(cilong, p);
+		    	printer(arg, "ip %s", ip_ntoa(htonl(cilong)));
+		    	break;
+		    case 3:
+			printer(arg, "mac");
+			if (optend - p >= 6) {
+			    int i;
+			    for (i=0; i<6; i++) {
+			        GETCHAR(code, p);
+			        printer(arg, "%c%.2x", i==0 ? ' ' : ':', code);
+			    }
+			}
+			break;
+		    case 4:
+		        printer(arg, "magic");
+		        while (optend - p >= 4) {
+			    GETLONG(cilong, p);
+			    printer(arg, " 0x%.8x", cilong);
+			}
+		        break;
+		    case 5:
+		        printer(arg, "directory");
+		    	/* default hex dump after this */
+		        break;
+		    }
+		}
+		break;
 	    }
 	    while (p < optend) {
 		GETCHAR(code, p);
 		printer(arg, " %.2x", code);
 	    }
 	    printer(arg, ">");
+	}
+	break;
+
+    case TERMACK:
+    case TERMREQ:
+	if (len > 0 && *p >= ' ' && *p < 0x7f) {
+	    printer(arg, " ");
+	    print_string((char *) p, len, printer, arg);
+	    p += len;
+	    len = 0;
+	}
+	break;
+
+    case ECHOREQ:
+    case ECHOREP:
+    case DISCREQ:
+	if (len >= 4) {
+	    GETLONG(cilong, p);
+	    printer(arg, " magic=0x%x", cilong);
+	    len -= 4;
 	}
 	break;
     }
