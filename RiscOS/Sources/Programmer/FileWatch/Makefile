@@ -29,7 +29,7 @@ WIPE    = -wipe
 DEFMOD  = DefMod
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} -DNDEBUG
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -72,14 +72,15 @@ EXPORTS   = h.filewatch hdr.filewatch o.filewatch
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
-.cmhg.o:;   ${CMHG} -o $@ $< h.$*
+.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.h:;   ${CMHG} -d h.$* $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
 
 #
 # build a relocatable module:
 #
-all: rm.${COMPONENT}
+all: rm.${COMPONENT} o.modhdr
 
 #
 # component build rules
@@ -105,11 +106,16 @@ o.filewatch: Documents.def.filewatch
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: export_${PHASE}
+
+export_hdrs: h.filewatch hdr.filewatch
         ${CP} h.filewatch ${EXP_HDR}.h.filewatch ${CPFLAGS}
         ${CP} hdr.filewatch ${EXP_HDR1}.filewatch ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (headers)
+
+export_libs: o.filewatch
         ${CP} o.filewatch ${EXP_HDR}.o.filewatch ${CPFLAGS}
-        @echo ${COMPONENT}: export complete
+        @echo ${COMPONENT}: export complete (libs)
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -123,6 +129,10 @@ clean:
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
+        ${RM} h.modhdr
+        ${RM} h.filewatch
+        ${RM} hdr.filewatch
+        ${RM} o.filewatch
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
@@ -145,35 +155,17 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS}
-        ${TLD} -o $@ -module ${OBJS}
+rm.${COMPONENT}: ${OBJS} ${CLIB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 # Dynamic dependencies:
-o.resources: s.resources
-o.resources: hdr:ListOpts
-o.resources: hdr:Macros
-o.resources: hdr:System
-o.resources: Hdr:SWIs
-o.resources: Hdr:CPU.Generic26
-o.resources: Hdr:IO.GenericIO
-o.resources: Hdr:RISCOS
-o.resources: hdr:ModHand
-o.resources: hdr:MsgTrans
-o.resources: hdr:ResourceFS
-o.resources: hdr:Proc
-o.main:	c.main
-o.main:	C:h.swis
-o.main:	C:h.kernel
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.resourcefs
-o.main:	h.modhdr
-o.main:	h.main
-o.main:	h.msgs
-o.main:	h.resources
-o.main:	h.utils
-o.main:	h.fw
-o.main:	h.filewatch
+o.msgs:	c.msgs
+o.msgs:	C:h.swis
+o.msgs:	C:h.kernel
+o.msgs:	h.filewatch
+o.msgs:	OS:h.types
+o.msgs:	OS:h.os
+o.msgs:	h.msgs
 o.msgs:	c.msgs
 o.msgs:	C:h.swis
 o.msgs:	C:h.kernel
@@ -198,10 +190,12 @@ o.handlers:	c.handlers
 o.handlers:	OS:h.osfind
 o.handlers:	OS:h.types
 o.handlers:	OS:h.os
+o.handlers:	OS:h.fileswitch
 o.handlers:	OS:h.osfscontrol
 o.handlers:	h.fw
 o.handlers:	h.filewatch
-o.handlers:	h.main
+o.handlers:	h.modhdr
+o.handlers:	C:h.kernel
 o.handlers:	h.utils
 o.interest:	c.interest
 o.interest:	C:h.swis
@@ -209,34 +203,35 @@ o.interest:	C:h.kernel
 o.interest:	OS:h.osfscontrol
 o.interest:	OS:h.types
 o.interest:	OS:h.os
+o.interest:	OS:h.fileswitch
 o.interest:	h.fw
 o.interest:	h.filewatch
 o.interest:	h.msgs
 o.interest:	h.utils
 o.interest:	h.main
-oz.resources: s.resources
-oz.resources: hdr:ListOpts
-oz.resources: hdr:Macros
-oz.resources: hdr:System
-oz.resources: Hdr:SWIs
-oz.resources: Hdr:CPU.Generic26
-oz.resources: Hdr:IO.GenericIO
-oz.resources: Hdr:RISCOS
-oz.resources: hdr:ModHand
-oz.resources: hdr:MsgTrans
-oz.resources: hdr:ResourceFS
-oz.resources: hdr:Proc
-oz.resources: hdr.CVars
-oz.main:	c.main
-oz.main:	C:h.swis
-oz.main:	C:h.kernel
-oz.main:	OS:h.os
-oz.main:	OS:h.types
-oz.main:	OS:h.resourcefs
-oz.main:	h.modhdr
-oz.main:	h.main
-oz.main:	h.msgs
-oz.main:	h.resources
-oz.main:	h.utils
-oz.main:	h.fw
-oz.main:	h.filewatch
+o.resources: s.resources
+o.resources: hdr:ListOpts
+o.resources: hdr:Macros
+o.resources: hdr:System
+o.resources: Hdr:SWIs
+o.resources: Hdr:CPU.Generic26
+o.resources: Hdr:IO.GenericIO
+o.resources: Hdr:RISCOS
+o.resources: hdr:ModHand
+o.resources: hdr:MsgTrans
+o.resources: hdr:ResourceFS
+o.resources: hdr:Proc
+o.resources: hdr.CVars
+o.main:	c.main
+o.main:	C:h.swis
+o.main:	C:h.kernel
+o.main:	OS:h.os
+o.main:	OS:h.types
+o.main:	OS:h.resourcefs
+o.main:	OS:h.fileswitch
+o.main:	h.modhdr
+o.main:	h.msgs
+o.main:	h.resources
+o.main:	h.utils
+o.main:	h.fw
+o.main:	h.filewatch
