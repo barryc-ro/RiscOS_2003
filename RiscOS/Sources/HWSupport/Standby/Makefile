@@ -27,7 +27,8 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ffah -strict ${CFLAGSEXTRA} ${INCLUDES} ${DFLAGS}
+CMHGFLAGS = -p -depend !Depend
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -54,15 +55,22 @@ DFLAGS   = -DSTANDBY_INITIAL_STATE=${INITIAL_STATE}
 COMPONENT = Standby
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
-OBJS      = header.o module.o veneer.o standby.o
+OBJS      = header.o module.o veneer.o standby.o task.o cstart.o robase.o
 EXPORTS   = ${EXP_HDR}.${COMPONENT} ${EXPC_HDR}.${COMPONENT}
+HDR       = h.header
+LIBS      = <Lib$Dir>.tboxlibs.o.wimplib
 
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
-.s.o:;      ${AS} ${AFLAGS} $< $@
+.SUFFIXES:	.o .s .c .cmhg .h
+.c.o:;		${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;	${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;	${CMHG} ${CMHGFLAGS} -d $@ $<
+.s.o:;		${AS} ${AFLAGS} $< $@
+
+
+HDR: cmhg.header
 
 #
 # build a relocatable module:
@@ -83,6 +91,7 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+	${RM} ${HDR}
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
@@ -95,11 +104,12 @@ resources:
 #        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.Standby.Messages  ${CPFLAGS}
 #        @echo ${COMPONENT}: resource files copied
 
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${HDR} ${LIBS} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -110,8 +120,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${RAMTARGET}: ${OBJS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${HDR} ${LIBS} ${CLIB}
+        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
 
 ${EXP_HDR}.${COMPONENT}: export.hdr.${COMPONENT}
         ${CP} export.hdr.${COMPONENT} $@ ${CPFLAGS}
@@ -120,25 +130,3 @@ ${EXPC_HDR}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.standby
-o.module:	h.error
-o.veneer: s.veneer
-o.veneer: Hdr:ListOpts
-o.veneer: Hdr:Macros
-o.veneer: Hdr:System
-o.veneer: Hdr:SWIs
-o.veneer: Hdr:CPU.Generic26
-o.veneer: Hdr:IO.GenericIO
-o.veneer: Hdr:RISCOS
-o.veneer: Hdr:ModHand
-o.standby:	c.standby
-o.standby:	C:h.kernel
-o.standby:	C:h.swis
-o.standby:	h.module
-o.standby:	h.standby
-o.standby:	C:h.led
-o.standby:	h.veneer
