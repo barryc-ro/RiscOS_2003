@@ -11,13 +11,7 @@ INSTDIR    = ${APP}
 
 # Generic options:
 #
-#MKDIR   = cdir
-#CC      = cc
-#CP      = copy
-#LD      = link
-#RM      = remove
-#SQUEEZE = squeeze
-#WIPE    = -wipe
+
 include Makefiles:StdTools
 
 CFLAGS  = ${THROWBACK} -c -depend !Depend -fah -fussy ${INCLUDES} ${DFLAGS}
@@ -67,19 +61,13 @@ all: $(FILES)
 
 install: $(FILES)
          $(MKDIR) ${INSTDIR}
-         Access $(INSTDIR) RW/R
          $(CP) $(LDIR).Messages  $(INSTDIR).Messages    $(CPFLAGS)
-         Access $(INSTDIR).Messages RW/R
          $(CP) $(RDIR).!Run      $(INSTDIR).!Run        $(CPFLAGS)
-         Access $(INSTDIR).!Run RW/R
          $(CP) $(RDIR).!Boot     $(INSTDIR).!Boot       $(CPFLAGS)
-         Access $(INSTDIR).!Boot RW/R
          $(CP) $(RDIR).TTXlaunch $(INSTDIR).TTXlaunch   $(CPFLAGS)
-         Access $(INSTDIR).TTXlaunch RW/R
          $(CP) $(RDIR).Config    $(INSTDIR).Config      $(CPFLAGS)
-         Access $(INSTDIR).Config RW/R
          $(CP) $(RDIR).!RunImage $(INSTDIR).!RunImage   $(CPFLAGS)
-         Access $(INSTDIR).!RunImage RW/R
+         Access $(INSTDIR).* RW/R
          @echo $(COMPONENT): installed
 
 clean:
@@ -87,7 +75,7 @@ clean:
         ${WIPE} ${WPREFLAGS} ${APP}.* ${WFLAGS}
         ${WIPE} o ${WFLAGS}
         ${RM}   ${APP}
-        ${STRIPDEPEND}
+        -stripdepnd
         @echo $(COMPONENT): cleaned
 
 dirs:
