@@ -17,7 +17,6 @@ RAM_LIBS	= ${DEBUGLIB} ${NET5LIBS} ${CALLXLIB} ${ASMUTILS}
 ROM_LIBS        = ${RAM_LIBS}
 
 CFLAGS          = -zM -zps1 -ffah
-#CDEFINES = -DDEBUGLIB -DEMULATE
 CDEFINES = ${OPTIONS}
 CINCLUDES = -IC:USB -IOS: -IC:
 
@@ -28,9 +27,11 @@ include RAMCModule
 include ROMCModule
 
 clean:
+        ${WIPE} aof ${WFLAGS}
 	${WIPE} o ${WFLAGS}
 	${WIPE} h ${WFLAGS}
 	${WIPE} rm ${WFLAGS}
+	${WIPE} linked ${WFLAGS}
         @${ECHO} ${COMPONENT}: cleaned
 
 ${DIRS}:
