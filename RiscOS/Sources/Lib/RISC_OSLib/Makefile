@@ -55,7 +55,7 @@ LIBFLAGS = -c -o
 #
 # Include files
 #
-INCLUDES = 
+INCLUDES =
 
 STK_EXTN =
 
