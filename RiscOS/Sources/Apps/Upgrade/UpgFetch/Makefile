@@ -88,7 +88,7 @@ all: ${TARGET}
 
 resources: ${TARGET}
 	${MKDIR} ${RESDIR}.^.Apps.${APP}
-        ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${APP}.${COMPONENT} ${CPFLAGS}
+        ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
         ${CP} Resources.* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
         @echo ${COMPONENT}: all complete
         
