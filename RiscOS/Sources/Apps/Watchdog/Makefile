@@ -34,7 +34,7 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-#WRAPPER   = RISCOSLIB:s.ModuleWrap
+WRAPPER   = RISCOSLIB:s.ModuleWrap
 
 #
 # Include files
@@ -110,6 +110,7 @@ clean:
         ${WIPE} linked.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${APP}
+        ${RM} s.ModuleWrap
         ${STRIP}
         @echo ${COMPONENT}: cleaned
 
@@ -134,8 +135,8 @@ oz.ModuleWrap: s.ModuleWrap s.AppName
 oz.ModuleWra1: s.ModuleWrap s.AppName
         ${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" s.ModuleWrap $@
 
-#s.ModuleWrap: ${WRAPPER}
-#        ${CP} ${WRAPPER} $@ ${CPFLAGS}
+s.ModuleWrap: ${WRAPPER}
+        ${CP} ${WRAPPER} $@ ${CPFLAGS}
 
 #
 # ROM target (re-linked at ROM Image build time)
