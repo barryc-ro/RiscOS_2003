@@ -57,7 +57,8 @@ static  WimpPollBlock  poll_block;
         MessagesFD     messages;
 static  IdBlock        id_block;
 
-
+/* Define the SWI number for NCMA that we need. */
+#define NCMATwin_Enquiry                0x04f000
 
 /* This flag below states how much data we wish to read from the URL at any time. */
 #define URL_CHUNK_SIZE 32768
@@ -95,6 +96,7 @@ static char* is_tag_complete(const char* const base_pointer, const char* const e
 static int return_tag_length(const char* const base_pointer, const char* end_pointer);
 static int return_tag_type(const char* const base_pointer, const char* end_pointer);
 tlv_list_node_type* return_tlv_of_type(const unsigned int type);
+static bool setup_proxy(const unsigned int session);
 
 /* The base address for the dynamic area. */
 char *dynamic_area_base_address = NULL;
@@ -213,7 +215,7 @@ int main(int argc, char *argv[])
   DBUG_PRINTF(DBUG_LVL_DIAG, "main(): Initialising the status screen.\n");
   initialise_status_screen();
 
-  /* Register the session and set teh session_identifier flag */
+  /* Register the session and set the session_identifier flag */
   regs.r[0] = 0;
   DBUG_PRINTF(DBUG_LVL_DIAG, "main(): Resgistering the session.\n");
   err = _kernel_swi(URL_Register, &regs, &regs);
@@ -222,11 +224,16 @@ int main(int argc, char *argv[])
   {
     error_occurred("CantConnectToFTPServer");
   }
-
   session_identifier = regs.r[1];
 
+  /* Set up the proxy (if any) */
+  if (!setup_proxy(session_identifier))
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "main(): Could not connect via a proxy.\n");
+  }
+
   /* Commence the fetch of the data from the url */
-  DBUG_PRINTF(DBUG_LVL_DIAG, "main(): Getting the URL.\n");
+  DBUG_PRINTF(DBUG_LVL_DIAG, "main(): Commencing fetch of the URL.\n");
   regs.r[0] = 0;         /* We do want the length of the data */
   regs.r[1] = session_identifier;
   regs.r[2] = 1;
@@ -238,7 +245,8 @@ int main(int argc, char *argv[])
 
   if (error)
   {
-     error_occurred("CantFetchURL");
+    DBUG_PRINTF(DBUG_LVL_ERROR, "main(): Error commencing fetch of the URL.\n");
+    error_occurred("CantFetchURL");
   }
 
   /* Get the server timeout value from message file */
@@ -279,7 +287,8 @@ int main(int argc, char *argv[])
   /* Free the list. */
   free_list();
 
-  if(crc_validated)
+  /* Only attempt to flash the image if it's CRC has been validated. */
+  if (crc_validated)
   {
     status_print("Programming new image\n");
     poll_wimp();
@@ -291,26 +300,25 @@ int main(int argc, char *argv[])
             child_task, (int)image_pointer, image_pointer_tlv->tag_length,
             memory_bank);
 
-  /* Ensure that the messages file ahs been closed. */
-  if (!close_messages_file())
-  {
-    exit(EXIT_FAILURE);
-  }
+    /* Ensure that the messages file has been closed. */
+    if (!close_messages_file())
+    {
+      exit(EXIT_FAILURE);
+    }
 
-  /* Finally execute the string including the child task string */
-
-  DBUG_PRINTF(DBUG_LVL_DIAG, "main(): UpgFlash command line args %s\n", command_line_arguments);
-
-  _kernel_oscli(command_line_arguments);
+    /* Finally execute the string including the child task string */
+    DBUG_PRINTF(DBUG_LVL_DIAG, "main(): UpgFlash command line args %s\n", command_line_arguments);
+    _kernel_oscli(command_line_arguments);
   }
   else
   {
     if (!close_messages_file())
-   {
-    exit(EXIT_FAILURE);
-   }
+    {
+     exit(EXIT_FAILURE);
+    }
   }
 
+  return (SUCCESS);
 }
 
 
@@ -426,8 +434,9 @@ unsigned int return_free_memory(void)
   possible we allocate the memory on the fly and hope for the best !!
 
   The first part of the image shall be an header in the format as specified
-   by the specification 2503/047/FS. This will have to be downloaded before
-   various other
+   by the specification 2503/047/FS. This header consists of a series of
+   Tag-Length-Value triplets that contain imformation about theimage embedded
+   within the file.
   */
 bool fetch_data(const int session_identifier, const int dynamic_area_number, char** dynamic_area_current_ptr, const int server_timeout, const char* const dynamic_area_base)
 {
@@ -446,7 +455,7 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
   /* Add two vars we need for the TLV decode.... */
   char* end_of_last_tag = (char*)dynamic_area_base;
 
-  /* Set vars to store the amount of memory currently alloated for te DA, and the amount used. */
+  /* Set vars to store the amount of memory currently alloated for the DA, and the amount used. */
   unsigned int mem_da_size = 0;
   unsigned int mem_da_used = 0;
 
@@ -1131,5 +1140,86 @@ void checkBuild(char *builds)
      {
        DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Correct Build");
      }
+}
+
+
+
+/* This routine sets up a proxy with the URL module */
+static bool setup_proxy(const unsigned int session)
+{
+  char* ftp_proxy = NULL;
+  int tag_size = -1;
+  _kernel_swi_regs regs;
+  _kernel_oserror *err;
+
+  /* Read the FTP proxy from NCMAlite */
+  regs.r[0] = (int)"FTP_PROXY";
+  regs.r[1] = NULL;
+  regs.r[2] = 0;
+
+  err = _kernel_swi(NCMATwin_Enquiry, &regs, &regs);
+  if (err!=NULL)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "setup_proxy(): Error whilst trying to get FTP proxy from NCMA.\n");
+    return (false);
+  }
+
+  tag_size = regs.r[0];
+  if (tag_size < 0)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "setup_proxy(): FTP proxy tag does not exist..\n");
+    return (false);
+  }
+  else
+  {
+    if ((ftp_proxy = malloc(tag_size+2)) == NULL)
+    {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "setup_proxy(): Error allocating %d bytes of memory for tag.\n", tag_size);
+      return (false);
+    }
+    else
+    {
+      regs.r[0]=(int)"FTP_PROXY";
+      regs.r[1]=(int)ftp_proxy;
+      regs.r[2]=tag_size;
+
+      err = _kernel_swi(NCMATwin_Enquiry, &regs, &regs);
+      if (err!=NULL)
+      {
+        DBUG_PRINTF(DBUG_LVL_ERROR, "setup_proxy(): Error whilst trying to get FTP proxy from NCMA.\n");
+        return (false);
+      }
+    }
+  }
+
+  DBUG_PRINTF(DBUG_LVL_DIAG, "setup_proxy(): Proxy is %s\n", ftp_proxy);
+
+#if 0 /* We may well need to make a call to the SWI below to convert the format of the Proxy URL. */
+  /* Parse the URL (converts it into a suitable format */
+  {
+    char buffer[10];
+    regs.r[0] = 0;
+    regs.r[1] = 3;         /* Quick parse */
+    regs.r[2] = ftp_proxy;
+    regs.r[3] = NULL;
+    regs.r[4] = buffer;    /* Only availble if r0 bit 0 is 0 and r3 is 1. */
+    err = _kernel_swi(URL_Parse, &regs, &regs);
+  }
+#endif /* 0 */
+
+  /* Register the proxy */
+  regs.r[0] = 0;
+  regs.r[1] = session;
+  regs.r[2] = (int)ftp_proxy;
+  regs.r[3] = (int)"ftp";
+  regs.r[4] = 0;
+  err = _kernel_swi(URL_SetProxy, &regs, &regs);
+  if (err!=NULL)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "setup_proxy(): Error whilst trying to set FTP proxy\n");
+    return (false);
+  }
+
+  return (true);
 }
 
