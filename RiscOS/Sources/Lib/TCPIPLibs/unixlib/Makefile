@@ -31,7 +31,11 @@ INCLUDES=	TCPIPLibs:,C:
 CFLAGS=		-depend !Depend -Wp -zps0 -I${INCLUDES} -fah -Fn -DINET -DCOMPAT_INET4
 CFLAGSZM=	-depend !Depend -Wp -zps1 -I${INCLUDES} -ffah -DINET -DCOMPAT_INET4 -zM
 
+AFLAGS=		-depend !Depend
+AFLAGSZM=	-depend !Depend -PD "module SETL {TRUE}"
+
 CCZM=		${CC} ${CFLAGSZM}
+ASZM=		${AS} ${AFLAGSZM}
 
 CFILES=		access.c chdir.c chmod.c close.c filestat.c flushinput.c \
 		fstat.c getdtabsiz.c getegid.c geteuid.c getgroups.c \
@@ -41,7 +45,7 @@ CFILES=		access.c chdir.c chmod.c close.c filestat.c flushinput.c \
 		memops.c osreadc.c read.c readdir.c readv.c strcasecmp.c \
 		stubs.c write.c writev.c xgets.c xperror.c xputchar.c \
 		getopt.c strsep.c kvm.c err.c errlst.c xstrerror.c \
-		strdup.c sleep.c ffs.c
+		strdup.c sleep.c ffs.c asm.s
 
 OFILES=		access.o chdir.o chmod.o close.o filestat.o flushinput.o \
 		fstat.o getdtabsiz.o getegid.o geteuid.o getgroups.o \
@@ -51,7 +55,7 @@ OFILES=		access.o chdir.o chmod.o close.o filestat.o flushinput.o \
 		memops.o osreadc.o read.o readdir.o readv.o strcasecmp.o \
 		stubs.o write.o writev.o xgets.o xperror.o xputchar.o \
 		getopt.o strsep.o kvm.o err.o errlst.o xstrerror.o \
-		strdup.o sleep.o ffs.o
+		strdup.o sleep.o ffs.o asm.o
 
 ZFILES=		z.access z.chdir z.chmod z.close z.filestat z.flushinput \
 		z.fstat z.getdtabsiz z.getegid z.geteuid z.getgroups \
@@ -61,12 +65,14 @@ ZFILES=		z.access z.chdir z.chmod z.close z.filestat z.flushinput \
 		z.memops z.osreadc z.read z.readdir z.readv z.strcasecmp \
 		z.stubs z.write z.writev z.xgets z.xperror z.xputchar \
 		z.getopt z.strsep z.kvm z.err z.errlst z.xstrerror \
-		z.strdup z.sleep z.ffs
+		z.strdup z.sleep z.ffs z.asm
 
 .SUFFIXES:	.z .o .c .s
 
 .c.z:;	     ${CCZM} -c -o $@ $<
 .c.o:;       ${CC} ${CFLAGS} -c -o $@ $<
+.s.z:;       ${ASZM} -o $@ $<
+.s.o:;       ${AS} ${AFLAGS} -o $@ $<
 
 COMPONENT = unixlib
 LIBDIR = <Lib$Dir>

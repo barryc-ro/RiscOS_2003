@@ -10,23 +10,14 @@
  * Initial revision
  *
  */
-#include <time.h>
 
-#include "kernel.h"
-
-/*
- * YUCK YUCK YUCK
- *
- * time_t and clock_t are defined in <time.h>, stop their
- * re-definition in "sys/types.h"
- */
-#define __time_t
-#define __clock_t
-
-#include "sys/time.h"
-#include "sys/types.h"
+#include <sys/time.h>
+#include <sys/types.h>
+#include <swis.h>
 
 #include "unixlib.h"
+#include "asm.h"
+
 
 #define secs0070 (((unsigned)86400) * (365 * 70 + 17))	/* less than 2^32 */
 
@@ -34,30 +25,19 @@ typedef struct {unsigned int l,h;} machinetime;
 
 /**********************************************************************/
 
-static long realtime(long *csecs)
+static long machinetime_to_realtime(machinetime *t, long *csecs)
 {
-    /*
-     * this is time(), recoded here to avoid the absurd 6ms delay
-     * in the RISC OS 3 Shared C Library (penalty is timezone())
-     */
     machinetime bt, w, w2;
 
-    /*
-     * read timer as 5 byte integer
-     * centiseconds since 1/1/1900
-     */
-    bt.l = 3;				/* presumably 'request time' arg */
-    _kernel_osword(14, (int *)&bt);
-
     /* to two 3-byte things - for divide */
-    w.h = ((bt.h & 255) << 8) | (bt.l >> 24);
-    w.l = bt.l & 0xffffff;
+    w.h = ((t->h & 255) << 8) | (t->l >> 24);
+    w.l = t->l & 0xffffff;
 
     /* turn csecs to secs */
     w2.h = w.h / 100;
     w2.l = ((w.h % 100 << 24) | w.l) / 100;
     if (csecs)
-        *csecs = ((w.h % 100 << 24) | w.l) % 100;
+        *csecs = ((w.h % 100L << 24) | w.l) % 100;
 
     /* back to 8 byte binary */
     bt.h = w2.h >> 8;
@@ -76,16 +56,70 @@ static long realtime(long *csecs)
 
 /**********************************************************************/
 
+/*
+ * Return 1 if IOC/IOMD is present (OS_ReadSysInfo 2 reports I/O control
+ * chip = 0 or 1 - IOC or IOMD).
+ */
+static int iomd_present()
+{
+    unsigned int hardware;
+
+    if (_swix(OS_ReadSysInfo, _IN(0)|_OUT(0), 2, &hardware))
+        return 2;
+
+    return (hardware & 0xFF00) <= 0x0100 ? 1 : 2;
+}
+
+/**********************************************************************/
+
+/*
+ * This function is actully reasonably fast - it's between 7 and 8us
+ * on a 200MHz StrongARM.
+ */
 int gettimeofday(struct timeval *tv, struct timezone *tzp)
 {
-    struct tm *t_gmt;
-    struct tm *t_local;
+    static int iomd_check;  /* 0 = not checked, 1 = present, 2 = not present */
+    machinetime t1, t2;
+    unsigned long timer_count;
+    /* Only poke the hardware if we're sure it's there :) */
+    if (!iomd_check)
+        iomd_check = iomd_present();
 
-    tv->tv_sec = realtime(&tv->tv_usec);
+    t1.l = 3;
+    t2.l = 3;
+
+    if (iomd_check == 1)
+    {
+        /* Check initial time */
+        _kernel_osword(14, (int *) &t1);
+
+        /* Read the Timer 0 value - it counts down from 19999 to 0,
+         * the clock tick occurring as it changes from 0 to 19999.
+         */
+        timer_count = _get_t0_count();
+    }
+
+    /* Check new time */
+    _kernel_osword(14, (int *) &t2);
+
+    tv->tv_sec = machinetime_to_realtime(&t2, &tv->tv_usec);
     tv->tv_usec *= 10000;
+
+    if (iomd_check == 1 && t1.l == t2.l)
+    {
+        /* Clock didn't tick - add in timer count */
+        tv->tv_usec += (19999 - timer_count) / 2;
+    }
+    else
+    {
+        /* Clock ticked - let it rest at the 10000us boundary */
+    }
 
     if ( tzp )
     {
+        struct tm *t_gmt;
+        struct tm *t_local;
+
 	t_gmt = gmtime( (time_t *)&tv->tv_sec );
 	t_local = localtime( (time_t *)&tv->tv_sec );
 	tzp->tz_minuteswest = (int)difftime(mktime(t_gmt),
