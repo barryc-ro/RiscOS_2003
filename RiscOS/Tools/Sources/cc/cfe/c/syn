@@ -2722,7 +2722,7 @@ static int32 syn_minformals, syn_maxformals;
 static bool syn_oldeformals;     /* @@@ use in rd_decl? */
                        /* set by rd_formals, read by rd_declarator_1() */
 static bool syn_fillinforfndef;
-static SynBindList *syn_narrowformals, *syn_wideformals, *syn_allformals;
+static SynBindList *syn_narrowformals, *syn_allformals;
 static DeclRhsList *syn_auxiliaries;
 static Expr *syn_arginit;
                        /* set by rd_formals, read by rd_fndef          */
@@ -3257,11 +3257,13 @@ static void merge_formal_decl(DeclRhsList *d, DeclRhsList *dnew)
 /* Here I have a formal parameter (d) which is now being given an        */
 /* explicit declaration (dnew).  Merge new information in with the old.  */
     TypeExpr *t = d->decltype;
-    if (!is_untyped_(t))  /* previous type info */
-        cc_err(syn_err_duplicate_type, d->declname);
     d->declstg = dnew->declstg;
     d->decltype = dnew->decltype;
+    if (!is_untyped_(t))  /* previous type info */
+        cc_err(syn_err_duplicate_type, d->declname);
+    else
     /* KJB - need to do declaration now (see rd_formals_2) */
+    #if 0
     {   TypeExpr *at = d->decltype, *wt = widen_formaltype(at);
         Binder *ab, *wb;
         if (wt == at ||  /* pointer equality is fine here */
@@ -3294,17 +3296,21 @@ static void merge_formal_decl(DeclRhsList *d, DeclRhsList *dnew)
             /* Allow whinges in C++ since formal names are omittable.   */
             binduses_(ab) |= u_referenced;
         #endif
-        if (syn_wideformals == 0)
-        {   instate_alias(first_arg_sym, wb);
-            syn_wideformals = mkSynBindList(0, wb);
-        }
+        d->declbind = wb;
+    }
+    #else
+    {   TypeExpr *at = d->decltype, *wt = widen_formaltype(at);
+        if (wt == at ||  /* pointer equality is fine here */
+            (typefnaux_(syn_fntype).flags & bitoffnaux_(s_callernarrow))) /* KJB */
+            d->declbind = instate_declaration(d, FORMAL);
         else
-        {   SynBindList *p;
-            for (p = syn_wideformals; p->bindlistcdr!=0; p=p->bindlistcdr)
-                ;
-            p->bindlistcdr = mkSynBindList(0,wb);
+        {   DeclRhsList *wideformal = mkDeclRhsList(d->declname, wt,
+                                  d->declstg);
+            /* do the original binder second so it gets seen first */
+            d->declbind = instate_declaration(wideformal, FORMAL);
         }
     }
+    #endif
 }
 
 #ifdef CPLUSPLUS
@@ -3879,7 +3885,7 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
 {   TypeExpr *fntype = d->decltype;        /* known to be fn type */
     Binder *fnbind; Cmd *body;
     DeclRhsList *fpdecllist = typefnargs1_(fntype), *fpe;
-    SynBindList *lambdap = 0;
+    SynBindList *lambdap = 0, *lambdaq = 0;
     SynBindList *narrowformals = 0; Expr *arginit = 0;
     Expr *initstuff = 0; SynBindList *initbind = 0;
 
@@ -3964,7 +3970,7 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
  */
     for (fpe = fpdecllist; fpe != 0; fpe = fpe->declcdr)
     {   TypeExpr *at = fpe->decltype, *wt = widen_formaltype(at);
-        Binder *ab, *wb;
+        Binder *ab, *wb = fpe->declbind;
         if (wt == at ||  /* pointer equality is fine here */
             (typefnaux_(fntype).flags & bitoffnaux_(s_callernarrow))) /* KJB */
             ab = wb = instate_declaration(fpe, FORMAL);
@@ -3972,10 +3978,10 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
         {   Expr *e;
             DeclRhsList *narrowedformal = mkDeclRhsList(fpe->declname, at,
                                   fpe->declstg);
-            DeclRhsList *wideformal = mkDeclRhsList(fpe->declname, wt,
-                                  fpe->declstg);
+       //     DeclRhsList *wideformal = mkDeclRhsList(fpe->declname, wt,
+       //                           fpe->declstg);
             /* do the original binder second so it gets seen first */
-            wb = instate_declaration(wideformal, FORMAL);
+      //      wb = instate_declaration(wideformal, FORMAL);
             ab = instate_declaration(narrowedformal, FORMAL|DUPL_OK);
             binduses_(wb) |= u_referenced;
             e = mkbinary(s_init, (Expr *)ab,  /* do the narrowing */
@@ -4011,7 +4017,14 @@ static TopDecl *rd_fndef(DeclRhsList *d, int declflag, TagBinder *parent,
     }
 #else
     /* KJB - new code, as rd_formals_2's done the work */
-    lambdap = syn_wideformals;
+    for (fpe = fpdecllist; fpe != 0; fpe = fpe->declcdr)
+    {   if (fpe == fpdecllist) instate_alias(first_arg_sym, fpe->declbind);
+        if (fpe->declcdr == 0) instate_alias(last_arg_sym, fpe->declbind);
+        if (lambdap == 0) lambdap = lambdaq = mkSynBindList(0,fpe->declbind);
+        else lambdaq = lambdaq->bindlistcdr = mkSynBindList(0,fpe->declbind);
+        fpe->declbind = 0;
+    }
+
     narrowformals = syn_narrowformals;
     arginit = syn_arginit;
     if (usrdbg(DBG_VAR) && !(bindstg_(fnbind) & b_maybeinline))
@@ -4482,7 +4495,7 @@ static int32 syn_count_minargs(DeclRhsList *d)
 static DeclRhsList *rd_formals_2(const DeclFnAux *fnaux)
 {   DeclRhsList *p,*q,*temp;
     Expr *arginit = 0;
-    SynBindList *narrowformals = 0, *lambdap = 0, *lambdaq = 0;
+    SynBindList *narrowformals = 0; //, *lambdap = 0, *lambdaq = 0;
     bool toplevfn = syn_fillinforfndef;
 
     if (toplevfn)
@@ -4499,7 +4512,7 @@ static DeclRhsList *rd_formals_2(const DeclFnAux *fnaux)
 #endif
        if (toplevfn)
        {   syn_arginit = 0;
-           syn_narrowformals = syn_wideformals = 0;
+           syn_narrowformals = 0;
        }
        return 0;
     }
@@ -4519,9 +4532,8 @@ static DeclRhsList *rd_formals_2(const DeclFnAux *fnaux)
             if (toplevfn)
             {   syn_arginit = arginit;
                 syn_narrowformals = narrowformals;
-                syn_wideformals = lambdap;
             }
-            if (lambdaq) instate_alias(last_arg_sym, lambdaq->bindlistcar);
+//            if (lambdaq) instate_alias(last_arg_sym, lambdaq->bindlistcar);
             return p;    /* to checkfor_ket(s_rpar) */
         }
         temp = rd_decl2(FORMAL, 0);
@@ -4567,9 +4579,10 @@ static DeclRhsList *rd_formals_2(const DeclFnAux *fnaux)
                     /* Allow whinges in C++ since formal names are omittable.   */
                     binduses_(ab) |= u_referenced;
 #endif
-                if (p == 0) instate_alias(first_arg_sym, wb);
+                temp->declbind = wb;
+                /*if (p == 0) instate_alias(first_arg_sym, wb);
                 if (lambdap == 0) lambdap = lambdaq = mkSynBindList(0,wb);
-                else lambdaq = lambdaq->bindlistcdr = mkSynBindList(0,wb);
+                else lambdaq = lambdaq->bindlistcdr = mkSynBindList(0,wb);*/
                 if (toplevfn)
                 {   DeclRhsList *v = make_vla_decls(temp);
                     if (v)
@@ -4609,9 +4622,7 @@ static DeclRhsList *rd_formals_2(const DeclFnAux *fnaux)
             if (toplevfn)
             {   syn_arginit = arginit;
                 syn_narrowformals = narrowformals;
-                syn_wideformals = lambdap;
             }
-            if (lambdaq) instate_alias(last_arg_sym, lambdaq->bindlistcar);
             return p;
         }
         nextsym();
