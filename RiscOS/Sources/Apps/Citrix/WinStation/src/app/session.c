@@ -729,8 +729,13 @@ void session_close(Session sess)
      * These APIs are called automatically on exit
      * (The APIs called by the UI are handled in WFCWINx.DLL)
      */
+    TRACE((TC_UI, TT_API1, "session_close: unload drivers"));
     srvWFEngUnloadDrivers( sess->hWFE );
+
+    TRACE((TC_UI, TT_API1, "session_close: close"));
     srvWFEngClose( sess->hWFE );
+
+    TRACE((TC_UI, TT_API1, "session_close: unload engine"));
     srvWFEngUnload( (PMINIDLL)NULL );  // Call the WFEngUnload API
 
     connect_close(sess);

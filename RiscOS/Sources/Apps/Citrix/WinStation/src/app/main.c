@@ -55,9 +55,11 @@ static int ToolBox_EventList[] =
 {
     tbres_event_CONNECT,
     tbres_event_DISCONNECT,
+    tbres_event_QUIT,
     tbres_event_SHOWING_ICON_MENU,
     ProgInfo_AboutToBeShown,
     Quit_Quit,
+    Quit_Cancel,
     0
 };
 
@@ -220,6 +222,7 @@ static void cleanup(void)
     kill_current_session();
     
     LOGERR(_swix(Hourglass_Smash, 0));	/* just in case */
+    KbdClose();				/* just in case */
 
 #ifdef DEBUG
     {
@@ -232,20 +235,61 @@ static void cleanup(void)
 #endif
 }
 
-static int quit_handler(WimpMessage *message, void *handle)
+/* called from Quit_Quit toolbox event */
+
+static int quit_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+                         void *handle)
 {
     kill_current_session();
 
     exit(EXIT_SUCCESS);
     return 1;
+    NOT_USED(event_code);
+    NOT_USED(event);
+    NOT_USED(id_block);
+    NOT_USED(handle);
+}
+
+/* called from Quit menu entry */
+
+static int try_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+                         void *handle)
+{
+    if (current_session == NULL)
+    {
+	quit_quit_handler(NULL, NULL, NULL, NULL);
+    }
+    else
+    {
+	ObjectId d;
+	LOGERR(toolbox_create_object(0, (char *)tbres_QUIT_W, &d));
+	LOGERR(toolbox_show_object(0, d, Toolbox_ShowObject_Centre, NULL,
+				   id_block ? id_block->self_id : NULL_ObjectId,
+				   id_block ? id_block->self_component : NULL_ComponentId));
+    }
+    return 1;
+    NOT_USED(event_code);
+    NOT_USED(event);
+    NOT_USED(id_block);
+    NOT_USED(handle);
+}
+
+/* called from the PREQUIT message */
+
+static int quit_handler(WimpMessage *message, void *handle)
+{
+    try_quit_handler(NULL, NULL, NULL, NULL);
+    return 1;
     NOT_USED(message);
     NOT_USED(handle);
 }
 
-static int quit_handler1(int event_code, ToolboxEvent *event, IdBlock *id_block,
+/* Called from Quit_Cancel event */
+
+static int quit_cancel_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
-    quit_handler(NULL, NULL);
+    LOGERR(toolbox_delete_object(0, id_block->self_id));
     return 1;
     NOT_USED(event_code);
     NOT_USED(event);
@@ -460,7 +504,8 @@ static void initialise(int argc, char *argv[])
 
     /* attach quit handlers */
     err_fatal(event_register_message_handler(Wimp_MQuit, quit_handler, NULL));
-    err_fatal(event_register_toolbox_handler(-1, Quit_Quit, quit_handler1, NULL));
+    err_fatal(event_register_toolbox_handler(-1, Quit_Quit, quit_quit_handler, NULL));
+    err_fatal(event_register_toolbox_handler(-1, Quit_Cancel, quit_cancel_handler, NULL));
 
     /* other general handlers */
     err_fatal(event_register_wimp_handler(0, Wimp_ENull, null_handler, NULL));
@@ -469,6 +514,7 @@ static void initialise(int argc, char *argv[])
 
     err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
     err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, disconnect_handler, NULL));
+    err_fatal(event_register_toolbox_handler(-1, tbres_event_QUIT, try_quit_handler, NULL));
 
     err_fatal(event_register_toolbox_handler(-1, ProgInfo_AboutToBeShown, proginfo_handler, NULL));
     err_fatal(event_register_toolbox_handler(-1, tbres_event_SHOWING_ICON_MENU, icon_menu_handler, NULL));
@@ -508,7 +554,7 @@ int main(int argc, char *argv[])
     TRACE((TC_UI, TT_API1, "(1) Entering poll loop\n"));
     while (TRUE)
     {
-	int event_code, t;
+	int event_code;
 	WimpPollBlock poll_block;
 
 //	LOGERR(_swix(OS_ReadMonotonicTime, _OUT(0), &t));

@@ -42,7 +42,9 @@ ASINCLUDES=	-I${RISCOS_BUILD_EXPORT}/Hdr/Global -I${RISCOS_BUILD_EXPORT}/Hdr/Int
 COUNTRY=	UK
 INSTALLDIR=	.
 RISCOS_BUILD_EXPORT=../../../../Export
-APPNAME=	!WinFrame
+COMPONENT=	WinFrame
+APPNAME=	!${COMPONENT}
+ROMDIR=		../WinFrameRO
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -169,7 +171,7 @@ refreshtags: cleanmisc srclist tags
 depends: ${SRC}
 	armdepend -M Makefile $(CCFLAGS) -DDEBUG ${SRC}
 	chmod a+w Makefile
-	@echo ${APPNAME} dependencies generated
+	@echo ${COMPONENT} dependencies generated
 
 local_dirs: 
 	@-${MKDIR} abs
@@ -191,18 +193,37 @@ install_base:
 	${CP} ${CPFLAGS} Resources/ini/wfclient			${INSTALLDIR}/${APPNAME}/ini/
 	-${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${INSTALLDIR}/${APPNAME}/
 
-install: install_base
+install: ${APP} install_base
 	${CP} ${CPFLAGS} ${APP}					${INSTALLDIR}/${APPNAME}/!RunImage,ff8
-	echo Installed ${APPNAME}
+	echo Installed ${COMPONENT}
 
-installd: install_base
+installd: ${APPD} install_base
 	${CP} ${CPFLAGS} ${APPD}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
-	echo Installed ${APPNAME} debug
+	echo Installed ${COMPONENT} debug
 
-installrm: install_base
+installrm: ${APPRM} install_base
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunRAM,feb	${INSTALLDIR}/${APPNAME}/!Run,feb
 	${CP} ${CPFLAGS} ${APPRM}				${INSTALLDIR}/${APPNAME}/!RunImage,ffa
-	echo Installed ${APPNAME} module
+	echo Installed ${COMPONENT} module
+
+installrom: ${APPZ}
+	-${MKDIR} ${ROMDIR}
+	-${MKDIR} ${ROMDIR}/Resources/
+	-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}
+	-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}/ini
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!BootROM,feb	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunROM,feb	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Res,fae	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
+	-${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/ini/appsrv			${ROMDIR}/Resources/${COUNTRY}/ini
+	${CP} ${CPFLAGS} Resources/ini/module			${ROMDIR}/Resources/${COUNTRY}/ini
+	${CP} ${CPFLAGS} Resources/ini/wfclient			${ROMDIR}/Resources/${COUNTRY}/ini
+	${CP} ${CPFLAGS} ${APPZ}				${ROMDIR}/aof/${COMPONENT}
+	echo Installed ${COMPONENT} aof in ${ROMDIR}
 
 cleaninstall:
 	${RM}	 ${APPNAME}/ini/*

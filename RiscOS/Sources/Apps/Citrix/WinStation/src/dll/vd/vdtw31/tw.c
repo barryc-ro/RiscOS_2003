@@ -71,6 +71,8 @@
 =============================================================================*/
 //(see twwin.h)
 
+extern COLOR_CAPS curColorCaps;
+
 extern int TWInitializeObjectCaches( ULONG, ULONG );
 extern int TWFreeObjectCaches(void);
 extern void far pascal ctx_detect_supervga(void);
@@ -379,6 +381,8 @@ USHORT TWWindowsStop( PVD pVd )
    SetCursor( LoadCursor( NULL, IDC_ARROW ) );
 #endif
 
+   curColorCaps = Color_Cap_Max;
+   
    return( CLIENT_STATUS_SUCCESS );
 }
 

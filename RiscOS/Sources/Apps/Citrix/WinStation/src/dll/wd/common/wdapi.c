@@ -9,7 +9,12 @@
 *
 *   Author: Brad Pedersen  (3/25/94)
 *
-*   $Log$
+*   wdapi.c,v
+*   Revision 1.1  1998/01/12 11:36:13  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.53   15 Apr 1997 18:17:18   TOMA
 *  autoput for remove source 4/12/97
@@ -493,8 +498,10 @@ WdClose( PWD pWd, PDLLCLOSE pWdClose )
      *  Free WD data structures
      */
     if ( pWd->pAppServer )
+    {
         free( pWd->pAppServer );
-
+    }
+ 
     p = pWd->pInfoBlockList;
 
     while ( p != NULL) {
@@ -510,6 +517,7 @@ WdClose( PWD pWd, PDLLCLOSE pWdClose )
 
     if ( paWD_VcBind != NULL ) {
         free( paWD_VcBind );
+	paWD_VcBind = NULL;
     }
 
     OutBufPoolFree( pWd );

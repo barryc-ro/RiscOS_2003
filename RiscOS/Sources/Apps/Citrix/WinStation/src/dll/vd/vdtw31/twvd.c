@@ -216,26 +216,6 @@ extern HWND vhWnd;
 extern HDC  vhdc;
 extern COLOR_CAPS vColor;
 
-#if 0
-typedef struct _RESCLIENT {
-    USHORT  hres;
-    USHORT  vres;
-} RESCLIENT, * PRESCLIENT;
-
-
-/*
- *  Client supported resolutions
- *  Note: 640x480 is assumed!
- */
-
-RESCLIENT aresClient[] = {
-    {  800,  600 },
-    { 1024,  768 },
-    { 1280, 1024 },
-};
-#define MAX_CLIENT_RES  (sizeof(aresClient)/sizeof(aresClient[0]))
-#endif
-
 static int    cHostLevel;
 static int    iColorDepth;
 int    viBitsPerPixel;
@@ -276,13 +256,6 @@ typedef struct _TWBUFFERHEAD {
 TWBUFFERHEAD      ICAWriteQ = { NULL, NULL, 0, 0 };
 
 STATIC int CacheHasBeenAllocated = FALSE;
-
-#ifndef DOS
-LPBYTE vpTWLocalStack    = NULL;
-LPBYTE vpTWLocalStackRHE = NULL;
-LPBYTE vpTWLocalStackNT  = NULL;
-#endif
-
 
 /*******************************************************************************
  *
@@ -898,7 +871,8 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 //	  rc = TWPaint( pVd, (HWND)(ULONG)pVdSetInformation->pVdInformation );
          break;
 
-      case VdThinwireStack:
+   case VdThinwireStack:
+#if 0
          {
              PVDTWSTACK pTWStack = (PVDTWSTACK)pVdSetInformation->pVdInformation;
 
@@ -906,8 +880,9 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
              vpTWLocalStackNT  = pTWStack->pMiddle;
              vpTWLocalStackRHE = pTWStack->pBottom;
          }
+#endif
          break;
-
+	 
       case VdRealizePaletteFG:
          if ( vColor == Color_Cap_256 ) {
            rc = TWRealizePalette( vhWnd, vhdc, 

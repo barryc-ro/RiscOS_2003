@@ -185,15 +185,16 @@ extern LPBYTE  vpLVB;
  *     FALSE - error occurred
  *
 \****************************************************************************/
-void far InitThinwire( COLOR_CAPS reqColorCaps, USHORT uWidth, USHORT uHeight )
-{
-       INT cx, cy;
-//     WINDOWPLACEMENT wndpl;
 
     /*
      *  Not initizlized by default
      */
-static COLOR_CAPS curColorCaps = Color_Cap_Max;
+COLOR_CAPS curColorCaps = Color_Cap_Max;
+
+void far InitThinwire( COLOR_CAPS reqColorCaps, USHORT uWidth, USHORT uHeight )
+{
+       INT cx, cy;
+//     WINDOWPLACEMENT wndpl;
 
 #if 0
 /*
