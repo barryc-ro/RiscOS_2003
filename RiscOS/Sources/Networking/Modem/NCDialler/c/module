@@ -85,6 +85,7 @@ struct in_addr innfs;
 
 extern char *dialscr[][2];
 
+extern int no_more_nodes; // ajs added
 static char *Rip(char *text)
 {
   char *c;
@@ -142,14 +143,14 @@ static char *fourdigit(char *tag, int len, char *phone, BOOL pulse)
 {
   char *chars = "0123456789*#,";
   int failed, nibble, packed, shift = 0;
-  
+
   _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), tag, &packed, 0, &failed);
   if (failed >= 0 && packed)
   {
     while (shift < (4 * (len - 1)))
     {
       nibble = (packed >> (shift ^ 4)) & 0xF;
-  
+
       if (nibble == 0)
         break;
       if (pulse && chars[nibble -1] == '*')
@@ -195,10 +196,18 @@ static char *cmos_number(void)
   /* Outside line */
   _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemPrefixStatus",
         &outside, 0, &failed);
+
+  if(!silent) { /* ajs debug added */
+      int temp;
+      fprintf(stderr, "ModemPrefixStatus: %d\n", outside);
+      _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemPrefixStatus", &temp, 0, &failed);
+      fprintf(stderr, "ModemPrefix: %d\n", temp);
+  }
+
   if (failed >= 0 && outside)
   {
     ptr = fourdigit("ModemPrefix", 4, ptr, pulse);
-    
+
     _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemDialTone",
           &wait, 0, &failed);
     if (failed >= 0 && wait)
@@ -213,7 +222,7 @@ static char *cmos_number(void)
   if (failed >= 0 && callwaiting)
   {
     ptr = fourdigit("ModemCallWaiting", 4, ptr, pulse);
-    
+
     *(ptr++) = ',';
   }
   *(ptr++) = '\0';
@@ -236,10 +245,13 @@ void DiallerService(int reason)
   _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, reason);
   if ((reason & 0xF0) == 0x80)
   {
-    doingit = FALSE;
+      if(no_more_nodes) { /* ajs added - this function has side effects on the callback handler & the i/o stream! */
+        doingit = FALSE;
 #ifdef VIA_DEVICEFS
-    close_streams();
+        close_streams();
 #endif
+      } /* ajs - ensure it doesn't do any of that unless we really mean it */
+
     _swix(OS_ServiceCall, _INR(1, 2), Service_DiallerStatus, NCDialler_IPDown);
   }
 }
@@ -291,7 +303,7 @@ BOOL Driver_Get(char *expect, int stream)
     }
     if (strstr(incoming, "BUSY") != NULL)
     {
-      DiallerService(NCDialler_Busy);
+      if(no_more_nodes) DiallerService(NCDialler_Busy);
       restart = TRUE;
       unsilent(incoming);
       rxchars = 0;
@@ -299,7 +311,7 @@ BOOL Driver_Get(char *expect, int stream)
     }
     else if (strstr(incoming, "ERROR") != NULL)
     {
-      DiallerService(NCDialler_Busy);
+      if(no_more_nodes) DiallerService(NCDialler_Busy);
       restart = TRUE;
       unsilent(incoming);
       rxchars = 0;
@@ -307,7 +319,7 @@ BOOL Driver_Get(char *expect, int stream)
     }
     else if (strstr(incoming, "NO CARRIER") != NULL)
     {
-      DiallerService(NCDialler_NoCarrier);
+      if(no_more_nodes) DiallerService(NCDialler_NoCarrier);
       restart = TRUE;
       unsilent(incoming);
       rxchars = 0;
@@ -315,7 +327,7 @@ BOOL Driver_Get(char *expect, int stream)
     }
     else if (strstr(incoming, "NO DIALTONE") != NULL)
     {
-      DiallerService(NCDialler_NoDial);
+      if(no_more_nodes) DiallerService(NCDialler_NoDial);
       restart = TRUE;
       unsilent(incoming);
       rxchars = 0;
@@ -651,8 +663,16 @@ int NCDial_callback_handler (_kernel_swi_regs *r, void *pw)
         {
           if (strcmp(send, "ATDT") == 0)
           {
+            char *next_pstn_num;
+
+            if((next_pstn_num = current_dialup_node())==NULL) {
+                fprintf(stderr, "NCDial unable to handle script errpr!\n");
+                break;
+            }
+
             Driver_Send(cmos_number(), outstream);
-            Driver_Send(card.pstnnum, outstream);
+            Driver_Send(next_pstn_num, outstream); /* ajs - get current node */
+            next_dialup_node(); /* ajs - get next node, and set barf flag if it's the last one */
           }
           else if (strcmp(send, "send_user") == 0)
           {
@@ -679,6 +699,16 @@ int NCDial_callback_handler (_kernel_swi_regs *r, void *pw)
         fclose(fin);
         fin = NULL;
 #endif
+/* ajs added - I'm hoping this is where we end up if the modem returned an error string in DriverGet */
+        if(!no_more_nodes) { /* there's more in the list */
+          DiallerService(NCDialler_Dialling); /* hopefully, display the OSD without the usual DiallerService side effects */
+	  script = card.script;
+	  restart = FALSE;
+	  fprintf(stderr, "redialling...\n");
+	  dialplease = CALLBACK_SCRIPT;
+	  callafter(100, NCDial_callafter_entry, pwp); /* hopefully, this kicks it all off again */
+	}
+/* end ajs added */
         break;
       }
       dialplease = CALLBACK_EXPECT;
@@ -836,7 +866,7 @@ _kernel_oserror *NCDial_swis(int swi_no, _kernel_swi_regs *r, void *pw)
   return(NULL);
 }
 
-_kernel_oserror *NCDialler_cmd (const char *arg_string, int argc, int cmd_no, void *pw)
+_kernel_oserror *NCDialler_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 {
   switch (cmd_no)
   {
@@ -941,7 +971,7 @@ void NCDial_service(int service, _kernel_swi_regs *r, void *pw)
 #define INETDBASE_VAR "InetDBase$Path"
 #define INETDBASE_TXT "Inet:Files.,FileDyn:Files."
 
-_kernel_oserror *NCDialler_modinit (const char *cmd_tail, int podule_base, void *pw)
+_kernel_oserror *NCDialler_modinit (char *cmd_tail, int podule_base, void *pw)
 {
   pwp = pw;
 
