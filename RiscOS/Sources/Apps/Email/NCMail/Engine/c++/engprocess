@@ -273,8 +273,12 @@ void DoSMTPProcess(void)
 
     case smtpdone :
 
-      /* SMTP process completed -
-         do we have a means to check that mail has been sent? */
+      /*
+      ** SMTP process completed.
+      ** We need to alter following code to call
+      ** GetNumberMessages again to see if queue is now empty.
+      ** If it is, do an expunge. If not, report to UI?
+      */
       dprintf(("Eng", "SMTP context = smptdone\n"));
       RemoveObj((MBoxOpCB**) &smtpprocessstate.processobj);
       smtpprocessstate.context = idle;
@@ -365,6 +369,8 @@ void DoPOPProcess(void)
     case readytoprocess :
 
       dprintf(("Eng", "POP context = readytoprocess\n"));
+      if (popprocessstate.expungeobj)
+        changed = popprocessstate.expungeobj->mailbox_changed;
       RemoveObj((MBoxOpCB**) &popprocessstate.expungeobj);
 
       popprocessstate.context = idle;
@@ -402,7 +408,8 @@ void DoPOPProcess(void)
     case popdone :
 
       dprintf(("Eng", "POP context = popdone\n"));
-      if (popprocessstate.processobj)
+      /* only set changed if expunge hasn't already set it */
+      if ((popprocessstate.processobj) && (!changed))
         changed = popprocessstate.processobj->mailbox_changed;
       RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
       popprocessstate.context = idle;
@@ -566,41 +573,64 @@ void ReconcileMailbox(uint32 n)
   }
 
   msglist.Reset();
-  for (i = 0; i < n; i++)
-  {
-    msglist.Next();
-    obj = (Message *) msglist.Current();
-    dprintf(("Eng", "Examining message %d on mailbox list\n",i));
-    if (!OnOurList(obj))
-    {
-      /* must be an unknown message so create new descriptor */
-      dprintf(("Eng", "Message is not on our list\n"));
 
-      if ((msgptr = NewDescriptor(0, ourmboxin)) == 0)
+  if (n > ourmboxin->total)
+  {
+
+    if ((tempmbox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor *))) == 0)
+    {
+      dprintf(("Eng", "Malloc failure setting up temp list\n"));
+      errorflag = true;
+    }
+    else
+    {
+      dprintf(("Eng", "There are some new messages\n"));
+      tempmbox->total = 0;
+      tempmbox->list = 0;
+    }
+  }
+    
+  if (!errorflag)
+  {
+    uint32 count = 0;
+
+    for (i = 0; i < n; i++)
+    {
+      msglist.Next();
+      obj = (Message *) msglist.Current();
+      dprintf(("Eng", "Examining message %d on mailbox list\n",i));
+      if (!OnOurList(obj))
       {
-        /* there was not enough memory to create descriptor */
-        dprintf(("Eng", "Malloc failure\n"));
-        errorflag = true;
-      }
-      else
-      {
-        msgptr->mboxobj = obj;
-        code = obj->GetFlags(flags, Message::Set);
-        dprintf(("Eng", "Flags=0x%x, code=%d\n",flags,code));
-        if (code >= 0)
+        /* must be an unknown message so create new descriptor */
+        dprintf(("Eng", "Message is not on our list\n"));
+
+        if ((msgptr = NewDescriptor(0, tempmbox)) == 0)
         {
-          if (flags & Message::Read)
-            msgptr->flags |= READ;
-          if (flags & Message::New)
-          {
-            newmail = true;
-            msgptr->flags |= NEW;
-          }
+          /* there was not enough memory to create descriptor */
+          dprintf(("Eng", "Malloc failure\n"));
+          errorflag = true;
         }
-        msgptr->flags |= NEWLYCREATED;
+        else
+        {
+          msgptr->mboxobj = obj;
+          code = obj->GetFlags(flags, Message::Set);
+          dprintf(("Eng", "Flags=0x%x, code=%d\n",flags,code));
+          if (code >= 0)
+          {
+            if (flags & Message::Read)
+              msgptr->flags |= READ;
+            if (flags & Message::New)
+            {
+              newmail = true;
+              msgptr->flags |= NEW;
+            }
+          }
+          msgptr->flags |= NEWLYCREATED;
+        }
       }
     }
   }
+  dprintf(("Eng", "Total for mboxin %d, for tempmbox %d\n",ourmboxin->total,tempmbox->total));
 
   if (errorflag)
   {
@@ -623,7 +653,7 @@ void ProcessDone(bool changed)
     if (online)
     {
       /* go off and get headers for Inbox */
-      downloadstate.msg = ourmboxin->list;
+      downloadstate.msg = tempmbox->list;
       downloadstate.context = readytodownload;
       parsehdrstate.context = idle;
       downloadstate.rc = ENG_COMPLETED;
@@ -653,6 +683,61 @@ void ProcessDone(bool changed)
 }
 
 
+void SortByDate(MessageDescriptor *newmsg)
+{
+
+  MessageDescriptor *msgptr = ourmboxin->list, *lastptr;
+
+  if (newmsg->next)
+    newmsg->next->last = 0;
+
+  if (!msgptr)
+  {
+    dprintf(("Eng", "New message is first on mboxin\n"));
+    ourmboxin->list = newmsg;
+    newmsg->next = 0;
+    newmsg->last = 0;
+  }
+
+  else
+  {
+    while (msgptr)
+    {
+      if (mktime(newmsg->datestruct) >= mktime(msgptr->datestruct))
+        break;
+      lastptr = msgptr;
+      msgptr = msgptr->next;
+    }
+
+    if (!msgptr)
+    {
+      dprintf(("Eng", "Inserting new message at end of list\n"));
+      lastptr->next = newmsg;
+      newmsg->last = lastptr;
+      newmsg->next = 0;
+    }
+    else
+    {
+      dprintf(("Eng", "Inserting new message before message %d\n",msgptr->ID));
+      newmsg->next = msgptr;
+      newmsg->last = msgptr->last;
+      msgptr->last = newmsg;
+      if (newmsg->last)
+        newmsg->last->next = newmsg;
+      else
+        ourmboxin->list = newmsg;
+    }
+  }
+
+  --tempmbox->total;
+  ++ourmboxin->total;
+  dprintf(("Eng", "mboxin total now %d, tempbox total %d\n",ourmboxin->total,tempmbox->total));
+
+}        
+  
+  
+
+#ifdef gorilla
 /*
 ** SortMailbox() reorders the message list in date order, newest first.
 */
@@ -703,7 +788,7 @@ void SortMailbox(void)
   while (sortflag);
   dprintf(("Eng", "Mailbox sorted\n"));
 }
-
+#endif
 
 void DoMark(void)
 {
