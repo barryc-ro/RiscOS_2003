@@ -39,7 +39,7 @@ ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p -depend !Depend ${THROWBACK} ${OPTS}
-INCLUDES= -IC: -ITCPIPLibs:
+INCLUDES= -IC: -ITCPIPLibs: -IC:AsmUtils
 
 DIRS    = o._dirs
 
@@ -95,6 +95,7 @@ UNIXLIB    = TCPIPLibs:o.unixlibzm
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
 LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
+ASMUTILS   = C:AsmUtils.o.AsmUtilsZM
 
 #
 # Rule patterns
@@ -119,16 +120,16 @@ EXPORTS   =
 
 # Normal targets
 BASEOBJS  = module.o header.o ispc_cmds.o dynalloc.o ispc_ispc.o \
-            ispc_url.o kprintf.o ispc_utils.o usermode.o ispc_file.o \
+            ispc_url.o kprintf.o ispc_utils.o ispc_file.o \
             dbugzm.o
 
 # Preprocess targets.
 OBJSI  = i.module header.o i.ispc_cmds i.dynalloc i.ispc_ispc \
-         i.ispc_url i.kprintf i.ispc_utils usermode.o i.ispc_file i.dbugzm o.resources
+         i.ispc_url i.kprintf i.ispc_utils i.ispc_file i.dbugzm o.resources
 
 # Instrumentation targets.
 OBJSIO = io.module header.o io.ispc_cmds io.dynalloc io.ispc_ispc \
-         io.ispc_url io.kprintf io.ispc_utils usermode.o io.ispc_file \
+         io.ispc_url io.kprintf io.ispc_utils io.ispc_file \
          io.dbugzm io.instlib
 
 ROMOBJS = oz.resources ${BASEOBJS}
@@ -208,7 +209,7 @@ preprocess: ${OBJSI} ${DIRS}
 # Instrumentation target - create a McCabe-enabled instrumented executable
 #
 instrument: ${OBJSIO} ${DIRS}
-          ${LD} -o rm.${COMPONENT} -module ${NOTROMOBJSIO} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
+          ${LD} -o rm.${COMPONENT} -module ${NOTROMOBJSIO} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
           @echo ${COMPONENT}: instrument build complete
 
 
@@ -228,14 +229,14 @@ resources:
 # Executable target (static link)
 #
 ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${DIRS} header.h 
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
 
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${DIRS} header.h
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${ASMUTILS}
 
 
 #
