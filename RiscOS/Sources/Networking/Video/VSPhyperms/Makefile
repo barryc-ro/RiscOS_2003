@@ -2,6 +2,7 @@
 # Project:   VSPHyperms
 
 COMPONENT = VSPHyperms
+DEBUG_COMPONENT = VSPHyperDM
 
 #
 # Paths
@@ -11,8 +12,7 @@ EXP_HDR = <export$dir>
 # Libraries
 #
 TCPIPLib   = TCPIPLibs:o.unixlibzm TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklib5zm
-DebugLib   = 
-#<Lib$Dir>.DebugLib.o.DebugLibzm
+DebugLib   = <Lib$Dir>.DebugLib.o.DebugLibzm
 CLIB       = CLIB:o.stubs
 CPPLIB	   = CLIB:o.c++libz
 RLIB       = RISCOSLIB:o.risc_oslib
@@ -40,10 +40,9 @@ CD	= dir
 AWK	= awk
 
 # Debug flags
-THROWBACK = -Throwback
+#THROWBACK = -Throwback
 #DEFINES = ${DEBUG} -DCOMPAT_INET4 ${THROWBACK}
-DEFINES = 
-#${DEBUG} ${THROWBACK}
+DEFINES = ${DEBUG} ${THROWBACK}
 COMMONFLAGS = -zM -c -Wp -ws -depend !Depend ${INCLUDES} ${DEFINES}
 
 AFLAGS = -depend !Depend -Stamp -quit
@@ -60,6 +59,7 @@ WFLAGS  = ~c~v
 INCLUDES = -ITCPIPLibs:,C:
 
 TARGET    = rm.${COMPONENT}
+TARGETDB  = rm.${DEBUG_COMPONENT}
 
 OBJS      =	\
 o.VSPHdr	\
@@ -77,6 +77,23 @@ o.Error         \
 o.vspSocket	\
 o.NECstruct	\
 o.htonstruct
+
+d_OBJS      =	\
+o.VSPHdr	\
+d_o.main	\
+d_o.Interface	\
+d_o.List	\
+d_o.MessageQ	\
+d_o.Stream	\
+d_o.Source	\
+d_o.SourceMem	\
+d_o.ServCtrl	\
+d_o.ServerATM	\
+d_o.Sink	\
+d_o.Error       \
+d_o.vspSocket	\
+d_o.NECstruct	\
+d_o.htonstruct
 
 OBJSI     =	\
 i.main		\
@@ -115,7 +132,9 @@ oi.instlib
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .oi .s .c .c++ .i .cmhg .inst
+.SUFFIXES:	.d_o .o .oi .s .c .c++ .i .cmhg .inst
+.c++.d_o:;  ${C++} ${C++FLAGS} -o $@ $<
+.c.d_o:;    ${CC} ${CFLAGS} -o $@ $<
 .c++.o:;    ${C++} ${C++FLAGS} -o $@ $<
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .c++.i:;    ${CC} ${C++FLAGS} -c -C -E $< > $@
@@ -130,8 +149,12 @@ oi.instlib
 all: ${TARGET} test local_dirs
         @echo ${COMPONENT}: all complete
 
+debug: ${TARGETDB} test local_dirs
+        @echo ${DEBUG_COMPONENT}: all complete
+
 local_dirs:
 	${MKDIR} o
+	${MKDIR} d_o
 	${MKDIR} oi
 	${MKDIR} aof
 	${MKDIR} rm
@@ -151,6 +174,7 @@ clean:
         ${RM} c++.NECstruct
         ${RM} h.VSPHdr
         ${WIPE} o ${WFLAGS}
+        ${WIPE} d_o ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${WIPE} inst ${WFLAGS}
@@ -160,7 +184,10 @@ clean:
 
 # Final targets:
 ${TARGET}: ${OBJS} o.VSPHdr
-        ${LD} ${Linkflags} -s syms ${OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${TCPIPLib} ${DebugLib}
+        ${LD} ${Linkflags} -s syms ${OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${TCPIPLib}
+
+${TARGETDB}: ${d_OBJS} o.VSPHdr
+        ${LD} ${Linkflags} -s syms ${d_OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${TCPIPLib} ${DebugLib}
         
 h.VSPHdr:	cmhg.VSPHdr
 		${CMHG} ${CMHGFLAGS} -o o.$* $? $@
