@@ -27,7 +27,7 @@ LD      = link
 LB      = libfile
 WIPE    = wipe
 
-CCFLAGS = -c -depend !Depend -fah -throwback ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -ffah -throwback ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c -o
@@ -158,18 +158,6 @@ o.display:	h.struct
 o.display:	h.tablestruc
 o.display:	C:h.ctype
 o.display:	C:h.stdio
-o.display:	c.display
-o.display:	h.html2_ext
-o.display:	h.tablestruc
-o.display:	h.tags
-o.display:	h.struct
-o.display:	C:h.string
-o.display:	h.internal
-o.display:	h.tags
-o.display:	h.struct
-o.display:	h.tablestruc
-o.display:	C:h.ctype
-o.display:	C:h.stdio
 o.malloc:	c.malloc
 o.malloc:	C:h.swis
 o.malloc:	C:h.kernel
@@ -197,25 +185,6 @@ o.rules:	h.html2_ext
 o.rules:	h.struct
 o.rules:	C:h.string
 o.rules:	C:h.ctype
-o.veneers:	c.veneers
-o.veneers:	h.api
-o.veneers:	h.html2_ext
-o.veneers:	h.tablestruc
-o.veneers:	h.tags
-o.veneers:	h.struct
-o.veneers:	h.internal
-o.veneers:	h.tags
-o.veneers:	h.struct
-o.veneers:	h.tablestruc
-o.veneers:	C:h.ctype
-o.veneers:	C:h.flex
-o.veneers:	C:h.stdio
-o.veneers:	C:h.kernel
-o.veneers:	h.HTMLTables
-o.veneers:	h.html2_ext
-o.veneers:	h.tags
-o.veneers:	h.internal
-o.veneers:	h.tablestruc
 o.new_stream:	c.new_stream
 o.new_stream:	h.html2_ext
 o.new_stream:	h.tablestruc
@@ -290,3 +259,22 @@ o.HTMLTables:	h.tablestruc
 o.HTMLTables:	C:h.ctype
 o.HTMLTables:	h.tablestruc
 o.HTMLTables:	h.tablestruc
+o.veneers:	c.veneers
+o.veneers:	h.api
+o.veneers:	h.html2_ext
+o.veneers:	h.tablestruc
+o.veneers:	h.tags
+o.veneers:	h.struct
+o.veneers:	h.internal
+o.veneers:	h.tags
+o.veneers:	h.struct
+o.veneers:	h.tablestruc
+o.veneers:	C:h.ctype
+o.veneers:	C:h.flex
+o.veneers:	C:h.stdio
+o.veneers:	C:h.kernel
+o.veneers:	h.HTMLTables
+o.veneers:	h.html2_ext
+o.veneers:	h.tags
+o.veneers:	h.internal
+o.veneers:	h.tablestruc
