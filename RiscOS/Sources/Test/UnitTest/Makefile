@@ -19,13 +19,14 @@
 # 1999-02-23    SBF             Removed Printer target (BASIC file now removed)
 # 1999-03-03    SBF             Added TCPIPLibs
 # 1999-03-08    SBF             Modified install phase to build targets (if necessary)
+# 1999-08-04    NCE             Created resource directorys for individual machine builds.
 
 
 #
 # Paths
 #
 EXP_HDR = <export$dir>
-
+RESDIR  = <Resource$Dir>.Resources2.Test
 #
 # Generic options:
 #
@@ -138,7 +139,7 @@ clean_all: clean
 install: ${TARGET}
 	${MKDIR} ${APP}
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
-	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${CP} Resources.${MACHINE}.${LOCALE}.* ${APP}.* ${CPFLAGS}
 	${CP} ${CRUNCHED}.TestCard ${APP}.TestCard ${CPFLAGS}
 	${CP} ${CRUNCHED}.Gen_lib ${APP}.Gen_lib ${CPFLAGS}
 	@echo ${COMPONENT}: installed
@@ -149,6 +150,15 @@ dirs:
 	${MKDIR} o${BUILD}
 	${MKDIR} ${CRUNCHED}
 	
+resources: ${TARGET}
+	${MKDIR} ${APP}
+	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
+	${CP} Resources.${MACHINE}.${LOCALE}.* ${APP}.* ${CPFLAGS}
+	${CP} ${CRUNCHED}.TestCard ${APP}.TestCard ${CPFLAGS}
+	${CP} ${CRUNCHED}.Gen_lib ${APP}.Gen_lib ${CPFLAGS}
+	${MKDIR} ${RESDIR}
+	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
+	@echo ${COMPONENT}: built & installed
 
 #
 # Target
