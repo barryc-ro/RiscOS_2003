@@ -29,6 +29,8 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+STRIP   = stripdepnd
+
 THROWBACK = -Throwback
 
 
@@ -38,6 +40,8 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p -depend !Depend -throwback
 INCLUDES= -IC:,TCPIPLibs: 
+
+DIRS    = o._dirs
 
 CCFLAGS = -Wp -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${TYPE} ${OPTS} ${DEBUG} -DUserIF_${USERIF}
 
@@ -120,10 +124,10 @@ NOTROMOBJS = ${BASEOBJS}
 #
 # Generic rules:
 #
-all: ${TARGETSA} local_dirs
+all: ${TARGETSA} ${DIRS}
         @echo ${COMPONENT}: all complete
 
-rom: ${TARGET} local_dirs
+rom: ${TARGET} ${DIRS}
         @echo ${COMPONENT}: rom complete
 
 export: ${EXPORTS}
@@ -135,7 +139,7 @@ install_rom: ${TARGET}
 
 clean:
         ${WIPE} o ${WFLAGS}
-        ${WIPE} oz ${WFLAGS}        
+        ${WIPE} oz ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} i ${WFLAGS}
@@ -143,6 +147,7 @@ clean:
         ${WIPE} inst ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -152,7 +157,7 @@ resources:
 #
 # Create local directories
 #
-local_dirs:
+${DIRS}:
           ${MKDIR} o
           ${MKDIR} oz
           ${MKDIR} aof
@@ -162,19 +167,20 @@ local_dirs:
           ${MKDIR} inst
           ${MKDIR} linked
           ${MKDIR} map
-
+          create ${DIRS}
+          stamp  ${DIRS}
 
 #
 # Preprocess target
 #
-preprocess: ${OBJSI} local_dirs
+preprocess: ${OBJSI} ${DIRS}
           @echo ${COMPONENT}: Preprocess build complete
 
 
 #
 # Instrumentation target
 #
-instrument: ${OBJSIO} local_dirs
+instrument: ${OBJSIO} ${DIRS}
           ${LD} -o rm.${COMPONENT} -module ${OBJSIO} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
           @echo ${COMPONENT}: instrument build complete
 
