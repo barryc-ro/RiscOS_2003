@@ -44,8 +44,8 @@ SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 INETLIB_NORM=TCPIPLibs:o.inetlib
 SOCKLIB_NORM=TCPIPLibs:o.socklib
-REMOTEDB  = <Lib$Dir>.debug.o.remotezm
-#REMOTEDB  = 
+#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
+REMOTEDB  = 
 #
 # Include files
 #
@@ -136,6 +136,63 @@ o.test1: c.test1
         ${CC} -c ${INCLUDES} ${DFLAGS} -o $@ c.test1
 
 # Dynamic dependencies:
+o.webftp:	c.webftp
+o.webftp:	h.all
+o.webftp:	h.tcplibs
+o.webftp:	TCPIPLibs:sys.h.types
+o.webftp:	TCPIPLibs:sys.h.cdefs
+o.webftp:	TCPIPLibs:machine.h.endian
+o.webftp:	TCPIPLibs:machine.h.ansi
+o.webftp:	TCPIPLibs:machine.h.types
+o.webftp:	TCPIPLibs:sys.h.socket
+o.webftp:	TCPIPLibs:sys.h.cdefs
+o.webftp:	TCPIPLibs:sys.h.errno
+o.webftp:	C:h.kernel
+o.webftp:	TCPIPLibs:net.h.if
+o.webftp:	TCPIPLibs:sys.h.socket
+o.webftp:	TCPIPLibs:sys.h.time
+o.webftp:	TCPIPLibs:sys.h.cdefs
+o.webftp:	TCPIPLibs:net.h.if_arp
+o.webftp:	TCPIPLibs:sys.h.socket
+o.webftp:	TCPIPLibs:netinet.h.in
+o.webftp:	TCPIPLibs:sys.h.ioctl
+o.webftp:	TCPIPLibs:sys.h.ttycom
+o.webftp:	TCPIPLibs:sys.h.ioccom
+o.webftp:	TCPIPLibs:sys.h.ioccom
+o.webftp:	TCPIPLibs:sys.h.filio
+o.webftp:	TCPIPLibs:sys.h.ioccom
+o.webftp:	TCPIPLibs:sys.h.sockio
+o.webftp:	TCPIPLibs:sys.h.ioccom
+o.webftp:	TCPIPLibs:sys.h.cdefs
+o.webftp:	TCPIPLibs:h.netdb
+o.webftp:	TCPIPLibs:sys.h.cdefs
+o.webftp:	TCPIPLibs:netns.h.ns
+o.webftp:	TCPIPLibs:sys.h.cdefs
+o.webftp:	TCPIPLibs:sys.h.time
+o.webftp:	TCPIPLibs:h.socklib
+o.webftp:	TCPIPLibs:sys.h.types
+o.webftp:	TCPIPLibs:sys.h.socket
+o.webftp:	TCPIPLibs:sys.h.stat
+o.webftp:	TCPIPLibs:sys.h.time
+o.webftp:	TCPIPLibs:sys.h.cdefs
+o.webftp:	TCPIPLibs:sys.h.time
+o.webftp:	TCPIPLibs:sys.h.uio
+o.webftp:	TCPIPLibs:sys.h.cdefs
+o.webftp:	C:h.kernel
+o.webftp:	TCPIPLibs:h.inetlib
+o.webftp:	TCPIPLibs:sys.h.types
+o.webftp:	TCPIPLibs:netinet.h.in
+o.webftp:	TCPIPLibs:netinet.h.tcp_timer
+o.webftp:	C:h.kernel
+o.webftp:	C:h.swis
+o.webftp:	h.files
+o.webftp:	h.q
+o.webftp:	h.status
+o.webftp:	h.webftp
+o.webftp:	h.pads
+o.webftp:	h.privwebftp
+o.webftp:	h.autofns
+o.webftp:	h.csfs
 o.webftp:	c.webftp
 o.webftp:	h.all
 o.webftp:	h.tcplibs
