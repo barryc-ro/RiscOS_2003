@@ -17,8 +17,8 @@ APP        = !${COMPONENT}
 # Pass OPTIONS as batmgr_app to include !BatMgr in ResourceFS
 RESOURCEEXTRA = batmgr_resources ${OPTIONS}
 
-include Makefiles:StdTools
-include Makefiles:AAsmModule
+include StdTools
+include AAsmModule
 
 # Note: !Run and !Sprites NOT in Messages module (only required on portables)
 batmgr_resources:
