@@ -79,7 +79,7 @@ install: ${DISCTARGETS}
 #
 # ROM variants
 #
-rm.Lazarus.Interlace: rm.Interlx
+rm.Lazarus.Interlace: rm.Interls
         ${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
 
