@@ -43,7 +43,7 @@ WFLAGS  = ~c~vr
 SQZFLAGS =
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -faf -Wp -throwback ${DFLAGS}
 DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 ${TRFLAGS} -UTIMEBOMBED
-TRFLAGS  = -UTML -UTRACE -UDEBUG_ON
+TRFLAGS  = -UTML -UTRACE -DDEBUG_ON
 INCLUDES = -IC:,TCPIPLibs:
 
 #
@@ -113,6 +113,8 @@ commonbase:
 	${MKDIR} ${EXPDIR}
 	${CP} CommonBase.* ${EXPDIR}.* ${CPFLAGS}
 	${CP} Resources.${LOCALE}.* ${EXPDIR}.* ${CPFLAGS}
+	${WIPE} ${EXPDIR}.!${SU_COMPONENT}.Providers ${WFLAGS}
+	${WIPE} ${EXPDIR}.!${MU_COMPONENT}.Providers ${WFLAGS}
 
 # This is far easier than maintaining multiple message files!
 commonmessages: commonbase
