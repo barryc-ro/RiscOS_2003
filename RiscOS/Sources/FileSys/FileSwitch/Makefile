@@ -23,7 +23,7 @@ CP      = copy
 RM      = remove
 STRIP   = stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From 
 CPFLAGS = ~cfr~v
 
 #
