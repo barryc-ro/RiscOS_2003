@@ -10,8 +10,9 @@ EXP_HDR = <export$dir>
 # Libraries
 #
 CLIB       = CLIB:o.stubs
-ABCLIB     = CLIB:o.ABCLib
-CPPLIB	   = CPP:o.c++lib
+ABCLIB     = <LIB$Dir>.ABClib.o.ABCLib
+DLIB       = <LIB$Dir>.DebugLib.o.debuglib TCPIPLibs:o.socklib TCPIPLibs:o.inetlib
+CPPLIB	   = Cpp:o.c++lib
 RLIB       = RISCOSLIB:o.risc_oslib
 RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
@@ -20,7 +21,6 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 TOOLBOXLIB = TBox:o.toolboxlib
 EVENTLIB   = TBox:o.eventlib
 WIMPLIB	   = TBox:o.wimplib
-DEBUGLIB   = <Lib$Dir>.DebugLib.o.DebugLibzm TCPIPLibs:o.unixlibzm TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklib5zm
 
 #
 # Generic options:
@@ -39,8 +39,8 @@ CD	= dir
 # Debug flags
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${INCLUDES} ${DEBUG} -Throwback
-C++FLAGS  = -c -depend !Depend ${INCLUDES} ${DEBUG} -Throwback
+CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS} -Throwback
+C++FLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS} -Throwback
 Linkflags = -aif -c++ -o $@
 ObjAsmflags = -throwback -NoCache -depend !Depend
 CPFLAGS = ~cfr~v
@@ -48,46 +48,75 @@ WFLAGS  = ~c~v
 #
 # Include files
 #
-INCLUDES = -IC:,tbox:
+INCLUDES = -I<LIB$Dir>.ABCLib.,C:,,tbox:
 
 COMPONENT = Printtool
 TARGET    = !RunImage
+DTARGET	  = !RunImaDB
 
 OBJS      =	\
-main.o		\
-calib.o		\
-display.o	\
-drawfile.o	\
-tboxclass.o	\
-walkth.o	\
-error.o		\
-palchoose.o	\
-prtablegen.o
+o.main		\
+o.calib		\
+o.display	\
+o.drawfile	\
+o.tboxclass	\
+o.walkth	\
+o.error		\
+o.palchoose	\
+o.prtablegen
+
+d_OBJS	  = 	\
+d_o.main	\
+d_o.calib	\
+d_o.display	\
+d_o.drawfile	\
+d_o.tboxclass	\
+d_o.walkth	\
+d_o.error	\
+d_o.palchoose	\
+d_o.prtablegen
 
 #
 # Rule patterns
 #
-.c++.o:;    ${C++} ${CFLAGS} -o $@ $<
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.SUFFIXES:	.d_o .o .s .c .c++ .i .cmhg .inst .io
+
+.c++.o:;    ${C++} ${C++FLAGS} ${DFLAGS} -o $@ $<
+.c.o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c++.d_o:;  ${C++} ${C++FLAGS} ${DFLAGS} -o $@ $<
+.c.d_o:;    ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
+.c++.i:;    ${C++} ${CFLAGS} ${DFLAGS} -c -C -E $< >> $@
+.c.i:;      ${CC} ${CFLAGS} ${DFLAGS} -c -C -E $< >> $@
+.inst.io:;  ${C++} ${CFLAGS} ${DFLAGS} -W -o $@ $<
 
 #
 # Build
 #
-all: ${TARGET} dirs
+all:    ${TARGET} dirs
         @echo ${COMPONENT}: all complete
+
+d_all:  ${DTARGET} dirs
+        @echo ${COMPONENT}: debug version complete
 
 dirs:
         ${MKDIR} o
+	${MKDIR} d_o
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+	${WIPE} d_o.* ${WFLAGS}
         ${WIPE} ${TARGET} ${WFLAGS}
+        ${WIPE} ${DTARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 # Final targets:
 ${TARGET}: ${OBJS} ${EVENTLIB} ${ABCLIB} ${WIMPLIB}
-        ${LD} ${Linkflags} ${OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${EVENTLIB} ${ABCLIB} ${WIMPLIB} ${DEBUGLIB}
+        ${LD} ${Linkflags} ${OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${EVENTLIB} ${ABCLIB} ${WIMPLIB}
+
+${DTARGET}: ${d_OBJS} ${EVENTLIB} ${DLIB} ${WIMPLIB}
+        ${LD} ${Linkflags} ${d_OBJS} ${COBJ} ${CLIB} ${CPPLIB} ${EVENTLIB} ${ABCLIB} ${DLIB} ${WIMPLIB}
+
 
 # Dynamic dependencies:
