@@ -8,12 +8,7 @@
 *
 *  Author: Kurt Perry
 *
-*  vioapi.h,v
-*  Revision 1.1  1998/01/12 11:37:05  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
 *  
 *     Rev 1.13   15 Apr 1997 18:46:06   TOMA
 *  autoput for remove source 4/12/97

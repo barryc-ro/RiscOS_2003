@@ -13,15 +13,21 @@
 *
 *   $Log$
 *  
+*     Rev 1.2   25 Feb 1998 16:44:34   TOMA
+*  CE Merge
+*  
+*     Rev 1.2   19 Aug 1997 13:29:14   TOMA
+*  update
+*
 *     Rev 1.1   15 Apr 1997 16:53:22   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.0   13 Aug 1996 12:05:32   richa
 *  Initial revision.
-*  
+*
 *     Rev 1.0   17 May 1996 13:44:56   kurtp
 *  Initial revision.
-*  
+*
 *************************************************************************/
 
 /*
@@ -131,7 +137,11 @@ ReadHook( LPBYTE pData, USHORT cbData )
                 }
             }
 #else
+#ifdef WINCE
+            CharUpperA( p );
+#else
             AnsiUpper( p );
+#endif
 #endif
         }
     }
@@ -218,7 +228,7 @@ DevicePoll( PSD pSd, PDLLPOLL pSdPoll )
             rc = SCRIPT_STATUS_COMPLETE;
         }
         else {
-    
+
             /*
              *  NULL terminate line
              */
@@ -231,7 +241,7 @@ DevicePoll( PSD pSd, PDLLPOLL pSdPoll )
              */
             ++pSd->LineNumber;
 
-            /* 
+            /*
              *  If not case sensitive
              */
             if ( !pSd->fCaseSensitive ) {
@@ -249,7 +259,11 @@ DevicePoll( PSD pSd, PDLLPOLL pSdPoll )
                    }
                }
 #else
+#ifdef WINCE
+               CharUpperA( p );
+#else
                AnsiUpper( p );
+#endif
 #endif
             }
 
@@ -267,7 +281,7 @@ DevicePoll( PSD pSd, PDLLPOLL pSdPoll )
 
         switch ( pSd->Command ) {
 
-        case COMMAND_SEND_STRING :   
+        case COMMAND_SEND_STRING :
             rc = fnSendString( pSd );
             break;
 
@@ -275,7 +289,7 @@ DevicePoll( PSD pSd, PDLLPOLL pSdPoll )
             rc = fnWaitReceive( pSd );
             break;
 
-        case COMMAND_WAIT_SILENCE :  
+        case COMMAND_WAIT_SILENCE :
             rc = fnWaitSilence( pSd );
             break;
 

@@ -10,6 +10,12 @@
 *
 * $Log$
 *  
+*     Rev 1.26   Apr 20 1998 18:17:08   sumitd
+*  CPR 10099 - mouse cursor not yieling properly
+*  
+*     Rev 1.25   Apr 13 1998 16:46:52   sumitd
+*  int changed to unsigned int in a macro
+*  
 *     Rev 1.24   02 Dec 1997 17:33:56   terryt
 *  vesa driver
 *  
@@ -131,9 +137,8 @@ char gcLastButton3=0;
 USHORT guLastX=0;
 USHORT guLastY=0;
 char gcLastQueueState=0;
-
-USHORT gWidth = 0;
-USHORT gHeight = 0;
+SHORT gWidth = 0;
+SHORT gHeight = 0;
 
 static USHORT gOriginX = 0;
 static USHORT gOriginY = 0;

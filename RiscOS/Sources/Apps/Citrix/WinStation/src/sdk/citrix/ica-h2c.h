@@ -11,6 +11,15 @@
 *
 *  $Log$
 *  
+*     Rev 1.16   09 Apr 1998 20:04:36   kurtp
+*  Add versioning to reducer code
+*  
+*     Rev 1.14   01 Apr 1998 14:01:20   miked
+*  UK Reducer fix
+*  
+*     Rev 1.13   Mar 30 1998 16:03:36   grega
+*  Merged in UK Reducer
+*  
 *     Rev 1.12   16 Jun 1997 21:57:24   kurtp
 *  update
 *  
@@ -57,9 +66,11 @@ typedef struct _MODULE_H2C {
  *  3 - WinFrame 154 
  *  4 - WinFrame 158 (ship level)
  *  5 - WinFrame 2.0
+ *  6 - Picasso with WD reducer
  */
 #define VERSION_HOSTL_WD   1
-#define VERSION_HOSTH_WD   5
+#define MIN_WD_REDUCER_SERVER_VERSION  6
+#define VERSION_HOSTH_WD   6
 
 
 /*
@@ -77,6 +88,13 @@ typedef struct _WD_H2C {
 
     /* version 5 */
     USHORT WdFlag;              // ica winstation driver flags
+
+    /* version 6 */
+    BYTE C2H_PowerOf2Agreed;    // expansion buffer agreed
+    BYTE H2C_PowerOf2Agreed;    // reduction buffer agreed
+    USHORT C2H_MaxNewData;      // maximum expanded packet size
+    USHORT ReducerVersion;      // version of reducer
+
 } WD_H2C, * PWD_H2C;
 
 /*

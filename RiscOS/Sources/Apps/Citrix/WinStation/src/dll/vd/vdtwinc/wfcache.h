@@ -11,6 +11,12 @@
 *
 *   $Log$
 *  
+*     Rev 1.2   Jan 29 1998 17:23:34   briang
+*  fix for dos vesa
+*  
+*     Rev 1.1   16 Dec 1997 16:40:18   terryt
+*  vesa cache
+*  
 *     Rev 1.0   03 Dec 1997 17:47:32   terryt
 *  Initial revision.
 *  
@@ -24,15 +30,35 @@
 *  update
 *  
 *******************************************************************************/
-
 #ifndef __WFCACHE_H__
 #define __WFCACHE_H__
+
+#if VESA
+#define DEF_MIN_SMALL_CACHE_IN_K		8
+#define DEF_MAX_SMALL_CACHE_IN_K		32
+#define DEF_MAX_LARGE_CACHE_IN_K		8192
+#define DEF_MAX_MEM_CACHE_IN_K		8192
+#define DEF_MIN_MEM_CACHE_IN_K		750
+#define DEF_MAX_DASD_CACHE_IN_K		2048
+#define DEF_MIN_DASD_LEFT_IN_K		2048
+#define DEF_DIRNAME                 "\0"
+#endif
 
 //used to hold information for allocated cache areas
 //16 segments for 1 meg.  128 for 8 meg
 typedef struct _LARGE_CACHE_SEGMENTS
 {
+#if VESA
+	SHANDLE	handle;
+#ifdef EMS
+	UINT	flags;
+#define CACHE_EMS		1
+#define CACHE_LOWMEM 	2
+#endif
+
+#else //VESA
    HGLOBAL  hsegment;
+#endif
    LPBYTE   lpsegment;
 } LARGE_CACHE_SEGMENTS, far * LPLARGE_CACHE_SEGMENTS, near * PLARGE_CACHE_SEGMENTS;
 
@@ -41,8 +67,11 @@ extern LPBYTE lptiny_cache;
 
 
 //initialize cache data areas
+#if VESA
+BOOL  TWCache_Init(void);
+#else
 BOOL  TWCache_Init(UINT chunks_2K);
-
+#endif
 //Destroy cache data areas
 BOOL  TWCache_Destroy(void);
 

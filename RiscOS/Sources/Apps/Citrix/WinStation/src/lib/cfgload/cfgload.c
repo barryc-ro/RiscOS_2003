@@ -21,6 +21,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef WINCE
+#include "..\..\inc\wcecalls.h"
+#endif
+
 /*  Get CLIB includes */
 #include "../../inc/client.h"
 #ifdef  DOS
@@ -54,6 +58,7 @@
 int   LoadDriver( PCHAR, PCHAR, PDLLLINK );
 void  UnloadVd( PDLLLINK *, USHORT );
 void  UnloadWd( PDLLLINK );
+void  UnloadRed( PDLLLINK );
 void  UnloadPd( PDLLLINK );
 
 /*=============================================================================
@@ -70,6 +75,7 @@ FNSTATUSMESSAGEPROC StatusMsgProc;
 ==   External Data
 =============================================================================*/
 extern BOOL G_fAsync;
+extern BOOL gbIPCEngine;
 
 /*=============================================================================
 ==   Global Data
@@ -105,8 +111,8 @@ LoadPd( PCHAR    pMergedSection,
      *  get Pd's dll and load
      */
     if ( (rc = LoadDriver( pModuleName, pDLLPath, pPdLink )) != CLIENT_STATUS_SUCCESS )
-	goto done;
-    
+        goto done;
+
     /*
      *  Open Protocol driver
      */
@@ -115,6 +121,14 @@ LoadPd( PCHAR    pMergedSection,
     ModuleLookup(pModuleName, NULL, &PdOpen.pDeviceProcedures);
 #else
     PdOpen.pModuleProcedures = pModuleProcedures;
+#ifndef DOS
+    if( !gbIPCEngine )
+        PdOpen.fWebClient = TRUE;
+    else 
+        PdOpen.fWebClient = FALSE;
+#else
+    PdOpen.fWebClient = FALSE;
+#endif
 #ifdef DOS
     PdOpen.pClibProcedures   = pClibProcedures;
 #else
@@ -168,12 +182,16 @@ LoadWd( PCHAR     pMergedSection,
         PCHAR     pModuleName,
         PCHAR     pDLLPath,
         PDLLLINK  pWdLink,
+        PDLLLINK  pRedLink,
         PDLLLINK  pPdLink,
         PPDOPEN   pPdOpen,
         PUSHORT   pMaxVirtualChannels )
 {
     int      rc;
     WDOPEN   WdOpen;
+    CHAR     reducDriver[DOSFILENAME_LENGTH+1];
+    CHAR     OnOff[4];
+
 
 //  TRACE((TC_LIB, TT_API1, "LoadWd: pMergedSection" ));
 //  TRACEBUF((TC_LIB, TT_API1, (char far *)pMergedSection, (ULONG)500 ));
@@ -182,7 +200,7 @@ LoadWd( PCHAR     pMergedSection,
      *  get Wd's dll and load
      */
     if ( (rc = LoadDriver( pModuleName, pDLLPath, pWdLink )) != CLIENT_STATUS_SUCCESS )
-	goto done;
+        goto done;
 
     /*
      *  Open Winstation driver
@@ -192,6 +210,7 @@ LoadWd( PCHAR     pMergedSection,
     ModuleLookup(pModuleName, NULL, &WdOpen.pEmulProcedures);
 #else
     WdOpen.pModuleProcedures = pModuleProcedures;
+
 #ifdef DOS
     WdOpen.pClibProcedures   = pClibProcedures;
     WdOpen.pXmsProcedures    = pXmsProcedures;
@@ -203,10 +222,8 @@ LoadWd( PCHAR     pMergedSection,
     WdOpen.pMouProcedures    = NULL;
     WdOpen.pTimerProcedures  = NULL;
 #endif
-#ifndef RISCOS
     WdOpen.pVioProcedures    = pVioProcedures;
     WdOpen.pKbdProcedures    = pKbdProcedures;
-#endif
 #ifdef LPT_IN_ENGINE
     WdOpen.pLptProcedures    = pLptProcedures;
 #else
@@ -227,6 +244,48 @@ LoadWd( PCHAR     pMergedSection,
     } else {
         WdOpen.fAsync        = FALSE;
     }
+
+    /*
+     *  Use compress check for reducer
+     */
+    miGetPrivateProfileString(  INI_TRANSPORTSECTION,
+                                INI_COMPRESSION,
+                                DEF_COMPRESSION ? INI_ON : INI_OFF,
+                                OnOff,
+                                sizeof(OnOff) );
+
+    if ( strnicmp( OnOff, INI_ON, 2 ) ) {
+        TRACE((TC_LIB, TT_API1, "LoadWd: Reducer disabled"));
+        WdOpen.pReduceProcedures = NULL;
+    }
+    else {
+
+
+        /*
+         *  Load Reducer driver for WD
+         */
+        miGetPrivateProfileString(  INI_ICA30,
+                                    INI_REDUCER,
+                                    INI_REDUCER_DEFAULT,
+                                    reducDriver,
+                                    DOSFILENAME_LENGTH+1 );
+
+        if ( (rc = LoadDriver( reducDriver, pDLLPath, pRedLink )) != CLIENT_STATUS_SUCCESS ) {
+            TRACE((TC_LIB, TT_API1, "LoadWd: failed to load reducer, rc=%u", rc));
+            WdOpen.pReduceProcedures = NULL;
+        }
+        else {
+            rc = ModuleCall( pRedLink, DLL__OPEN, (PPLIBPROCEDURE)&WdOpen.pReduceProcedures );
+            if ( rc != CLIENT_STATUS_SUCCESS ) {
+                WdOpen.pReduceProcedures = NULL;
+                TRACE((TC_LIB, TT_API1, "LoadWd: open call failed to reducer, rc=%u", rc));
+            }
+            else {
+                TRACE((TC_LIB, TT_API1, "LoadWd: open to reducer OK, funcs @ %lx", WdOpen.pReduceProcedures));
+            }
+        }
+    }
+
     rc = ModuleCall( pWdLink, DLL__OPEN, &WdOpen );
     TRACE((TC_LIB, TT_API1, "LoadWd: ModuleCall DLL$OPEN, rc=%u", rc));
 
@@ -258,6 +317,9 @@ LoadVd( PCHAR    pMergedSection,
         PUSHORT  pChannel )
 {
     int      rc;
+#ifdef DOS
+    int      rc2;
+#endif
     VDOPEN   VdOpen;
     PDLLLINK pVdLink = NULL;
     USHORT   Channel;
@@ -305,11 +367,9 @@ LoadVd( PCHAR    pMergedSection,
 #else
     VdOpen.pLptProcedures      = NULL;
 #endif
-#ifndef RISCOS
     VdOpen.pLogProcedures      = pLogProcedures;
     VdOpen.pMemIniProcedures   = pMemIniProcedures;
     VdOpen.pKbdProcedures      = pKbdProcedures;
-#endif
 #endif
     VdOpen.pfnWFEngPoll        = (PPLIBPROCEDURE)srvWFEngPoll;
     VdOpen.pfnStatusMsgProc    = (PPLIBPROCEDURE)StatusMsgProc;
@@ -323,6 +383,10 @@ LoadVd( PCHAR    pMergedSection,
 
     if ( rc ) {
 
+#ifdef DOS
+        rc2 = rc;
+#endif
+
         //  unload on error
         rc = ModuleUnload( pVdLink );
         ASSERT( rc == CLIENT_STATUS_SUCCESS, rc );
@@ -330,6 +394,14 @@ LoadVd( PCHAR    pMergedSection,
         // free VdLink
         if ( pVdLink )
             (void) free( pVdLink );
+
+#ifdef DOS
+        //  Out of memory is the only fatal error.
+        //  DOS is so tight on memory that this may be a common occurance depending
+        //  on the system and the optional features configured.
+        if ( rc2 == CLIENT_ERROR_NO_MEMORY ) 
+            rc = rc2;
+#endif
     }
     else {
 
@@ -409,17 +481,23 @@ done:
 
 void
 UnloadDrivers( PDLLLINK pWdLink,
+               PDLLLINK pRedLink,
                PDLLLINK pPdLink,
                PDLLLINK * ppVdLink,
                USHORT  MaxVirtualChannels )
 {
 
-    TRACE((TC_LIB, TT_API1, "UnloadDrivers: Wd %lx, Pd %lx, pVd %lx", pWdLink, pPdLink, ppVdLink));
+    TRACE((TC_LIB, TT_API1, "UnloadDrivers: Wd %lx, Red %lx, Pd %lx, pVd %lx", pWdLink, pRedLink, pPdLink, ppVdLink));
 
     /*
      *  unload virtual drivers
      */
     UnloadVd( ppVdLink, MaxVirtualChannels );
+
+    /*
+     *  unload reducer driver
+     */
+    UnloadRed( pRedLink );
 
     /*
      *  unload winstation driver
@@ -521,6 +599,37 @@ UnloadWd( PDLLLINK pWdLink )
 
 /*******************************************************************************
  *
+ *  UnloadRed
+ *
+ *  ENTRY:
+ *
+ *  EXIT:
+ *      CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+
+void
+UnloadRed( PDLLLINK pRedLink )
+{
+    int rc;
+
+    TRACE((TC_LIB, TT_API1, "Unload Reducer: pRed %lx", pRedLink));
+
+    // Reducer valid?
+    if ( pRedLink && pRedLink->pProcedures ) {
+
+        // close first
+        rc = ModuleCall( pRedLink, DLL__CLOSE, NULL );
+        ASSERT( rc == CLIENT_STATUS_SUCCESS, rc );
+
+        // then unload
+        rc = ModuleUnload( pRedLink );
+        ASSERT( rc == CLIENT_STATUS_SUCCESS, rc );
+    }
+}
+
+/*******************************************************************************
+ *
  *  UnloadPd
  *
  *  ENTRY:
@@ -549,4 +658,3 @@ UnloadPd( PDLLLINK pPdLink )
         ASSERT( rc == CLIENT_STATUS_SUCCESS, rc );
     }
 }
-

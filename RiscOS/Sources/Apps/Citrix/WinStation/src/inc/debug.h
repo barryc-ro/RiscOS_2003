@@ -8,12 +8,13 @@
 *
 *  $Author: Butch Davis (from Brad Pedersen's logapi.h)
 *
-*   debug.h,v
-*   Revision 1.1  1998/01/12 11:36:47  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.6   25 Feb 1998 16:45:58   TOMA
+*  CE Merge
+*  
+*     Rev 1.6   Oct 15 1997 17:44:24   anthonyu
+*  Added #define TRACE_ENABLED so tracing could be turned on for nondebug builds.
 *  
 *     Rev 1.5   15 Apr 1997 18:45:02   TOMA
 *  autoput for remove source 4/12/97
@@ -59,6 +60,10 @@
  ============================================================================*/
 
 #ifdef DEBUG
+#define TRACE_ENABLED
+#endif
+
+#ifdef TRACE_ENABLED
 #define TRACE(_arg) LogPrintf _arg
 #define TRACEBUF(_arg) LogBuffer _arg
 #define DEBUGBREAK() DebugBreak()

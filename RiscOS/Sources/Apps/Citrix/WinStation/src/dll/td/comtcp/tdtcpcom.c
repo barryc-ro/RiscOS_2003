@@ -35,6 +35,9 @@
 #include "../inc/td.h"
 //#include "../../../inc/loadstr.h"
 
+#ifdef WINCE
+#include <wcecalls.h>
+#endif
 
 
 /*=============================================================================
@@ -62,15 +65,15 @@ int WFCAPI GetTCPHostNamePort(char *szHostString, char *szHostName, USHORT *pPor
  *
  *  GetTCPHostNamePort
  *
- *    This functions parsing the Host entry string into two 
+ *    This functions parsing the Host entry string into two
  *    parts: Host Name and TCP Port Number.
- *    
+ *
  *
  * ENTRY:
  *    szHostString (input) : Host entry string format: Hostname[:PortNumber]
  *    szHostName   (output): Host name after parsing
  *    pPortName    (Output): ICA TCP Port Number pointer
- *       
+ *
  *
  * EXIT:
  *    CLIENT_STATUS_SUCCESS - no error
@@ -81,21 +84,25 @@ int WFCAPI GetTCPHostNamePort(char *szHostString, char *szHostName, USHORT *pPor
 int WFCAPI GetTCPHostNamePort(char *szHostString, char *szHostName, USHORT *pPortNumber)
 {
     char * pDest;
-	int iPosition;
-    
-	pDest=strrchr(szHostString, ':');
-	if (pDest==NULL) {
-		strcpy(szHostName, szHostString);
-		szHostName[strlen(szHostString)] = '\0';
-		*pPortNumber=0;
-	}
-	else {
-		iPosition=(int) (pDest - szHostString) + 1;
-		strncpy(szHostName,szHostString,iPosition-1 );
-		szHostName[iPosition - 1]='\0';
-		*pPortNumber=atoi(szHostString + iPosition);
-	}
-	AnsiUpper(szHostName);
+   int iPosition;
+
+   pDest=strrchr(szHostString, ':');
+   if (pDest==NULL) {
+      strcpy(szHostName, szHostString);
+      szHostName[strlen(szHostString)] = '\0';
+      *pPortNumber=0;
+   }
+   else {
+      iPosition=(int) (pDest - szHostString) + 1;
+      strncpy(szHostName,szHostString,iPosition-1 );
+      szHostName[iPosition - 1]='\0';
+      *pPortNumber=atoi(szHostString + iPosition);
+   }
+#ifdef WIN32
+   CharUpperA(szHostName);
+#else
+   AnsiUpper(szHostName);
+#endif
 
     return( CLIENT_STATUS_SUCCESS );
 }

@@ -14,21 +14,24 @@
 *
 *   $Log$
 *  
+*     Rev 1.7   01 Mar 1998 15:01:56   TOMA
+*  ce merge
+*
 *     Rev 1.5   Dec 16 1997 21:12:52   briang
 *  update
-*  
+*
 *     Rev 1.4   Oct 10 1997 14:31:30   briang
 *  update
-*  
+*
 *     Rev 1.3   15 Apr 1997 18:48:52   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.2   30 May 1995 12:03:16   butchd
 *  update
-*  
+*
 *     Rev 1.1   30 May 1995 08:31:26   butchd
 *  update
-*  
+*
 *     Rev 1.0   25 May 1995 13:20:16   butchd
 *  Initial revision.
 *
@@ -246,11 +249,11 @@ bGetSectionLength( PCHAR lpszSection )
 {
     PCHAR p;
     int length = 0, cb;
-#ifdef DEBUG
+#ifdef TRACE_ENABLED
     char szSectionStub[21];
     strncpy(szSectionStub, lpszSection, 20);
     szSectionStub[20] = '\0';
-#endif    
+#endif
 
     for ( p = lpszSection; *p; p += cb  )
         length += (cb = strlen(p) + 1);

@@ -1,4 +1,3 @@
-
 /*************************************************************************
 *
 *   mode.c
@@ -16,27 +15,33 @@
 *
 *   $Log$
 *  
+*     Rev 1.41   27 Feb 1998 17:26:56   TOMA
+*  ce merge
+*
 *     Rev 1.40   21 Oct 1997 17:40:34   kalyanv
 *  fixed the tty bug in IcaSetLed
-*  
+*
 *     Rev 1.42   29 Sep 1997 12:03:48   x86fre
 *  updated
-*  
+*
 *     Rev 1.41   20 Oct 1997 11:34:50   kalyanv
 *  Made changes to the IcaSetLed for TTY bu
-*  
+*
+*     Rev 1.40   12 Aug 1997 14:49:46   anthonyu
+*  ifdefed out server notification of num-lock and scroll-lock for WinCE. They are not supported.
+*
 *     Rev 1.39   30 Apr 1997 14:38:14   terryt
 *  shift states again
-*  
+*
 *     Rev 1.38   15 Apr 1997 18:17:56   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.38   21 Mar 1997 16:09:52   bradp
 *  update
-*  
+*
 *     Rev 1.37   21 Oct 1996 11:34:14   BradA
 *  Re-enable the mouse if necessary during a video mode change.
-*  
+*
 *
 *     Rev 1.36   05 Jun 1996 12:04:44   jeffm
 *  update
@@ -284,7 +289,9 @@ IcaSetText( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     PWDICA              pIca;
     int                 rc;
 
+
     TRACE(( TC_WD, TT_API1, "SET_TEXT" ));
+
 
     pIca = (PWDICA) pWd->pPrivate;
 
@@ -334,7 +341,6 @@ IcaSetVideoMode( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 #if defined(DOS) || defined(RISCOS)
     BOOL enableMouse;
 #endif
-
     pIca = (PWDICA) pWd->pPrivate;
 
 #if defined(DOS) || defined(RISCOS)
@@ -346,6 +352,17 @@ IcaSetVideoMode( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     TRACE(( TC_WD, TT_API1, "SET_VIDEO_MODE: index=%u", pIca->TextIndex ));
 
     _SetTextMode( pWd, pIca->TextIndex );
+
+/*
+ Stephen Spector January 15, 1998
+ CPR 7762 DOS Fullscreen will not work on the CE Devices.
+ This fix will tell the user about this problem.
+*/
+
+#ifdef WINCE
+   MessageBox(NULL,"Device does not support DOS full screen. Click OK to close box and press ALT-ENTER to return",
+              "DOS Full Screen Mode",MB_ICONEXCLAMATION | MB_OK);
+#endif
 
 #if defined(DOS) || defined(RISCOS)
     /*
@@ -544,6 +561,7 @@ _SetTextMode( PWD pWd, USHORT TextIndex )
                           G_TextModes[pIca->TextIndex].Rows,
                           G_TextModes[pIca->TextIndex].Columns,
                           FALSE );
+
 #endif
 
     /*

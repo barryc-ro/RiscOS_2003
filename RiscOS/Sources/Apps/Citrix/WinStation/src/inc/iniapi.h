@@ -10,6 +10,12 @@
 *
 *   $Log$
 *  
+*     Rev 1.20   25 Feb 1998 16:46:00   TOMA
+*  CE Merge
+*  
+*     Rev 1.20   14 Aug 1997 18:55:30   KenB
+*  Fix GetProfileString reference for WinCE in DLL\VD\VDSPL\SPOOL\NTSPOOL.C
+*  
 *     Rev 1.19   15 Apr 1997 18:45:14   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -37,7 +43,7 @@
 extern "C" {
 #endif
 
-#if defined(DOS)
+#if defined(DOS) || defined(WINCE) || defined(RISCOS)
 /*=============================================================================
 ==   Macros
 =============================================================================*/
@@ -47,8 +53,12 @@ extern "C" {
 #ifdef GetPrivateProfileInt
 #undef GetPrivateProfileInt
 #endif
-/* #define GetPrivateProfileString dosGetPrivateProfileString */
-/* #define GetPrivateProfileInt dosGetPrivateProfileInt */
+#ifdef GetProfileString
+#undef GetProfileString
+#endif
+#define GetPrivateProfileString dosGetPrivateProfileString
+#define GetPrivateProfileInt dosGetPrivateProfileInt
+#define GetProfileString(a,b,c,d,e) dosGetPrivateProfileString(a,b,c,d,e,NULL)
 
 /*=============================================================================
 ==   External functions provided by LoadLibraries()
@@ -61,20 +71,17 @@ int cdecl WFCAPI IniUnload( VOID );
 ==   C runtime library routines
 =============================================================================*/
 
-#define INI$GETSTRING      0
-#define INI$GETINT         1
-#define INI$GETLONG        2
-#define INI$GETBOOL        3
-#define INI$FLUSHCACHE     4
-#define INI$GETENTRY       5
-#define INI$GETPPPSEC      6
-#define INI$REFRESH        7
-#define INI$COUNT          8
-#endif // DOS
+#define INI__GETSTRING      0
+#define INI__GETINT         1
+#define INI__GETLONG        2
+#define INI__GETBOOL        3
+#define INI__FLUSHCACHE     4
+#define INI__GETENTRY       5
+#define INI__GETPPPSEC      6
+#define INI__REFRESH        7
+#define INI__COUNT          8
+#endif // DOS || WINCE || RISCOS
 
-#define GetPrivateProfileString dosGetPrivateProfileString
-#define GetPrivateProfileInt dosGetPrivateProfileInt
-    
 #if defined(INILIB) || !defined(DOS)
 
 /*

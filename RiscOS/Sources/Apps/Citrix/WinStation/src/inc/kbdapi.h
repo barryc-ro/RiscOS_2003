@@ -8,12 +8,10 @@
 *
 *  Author: Kurt Perry
 *
-*  kbdapi.h,v
-*  Revision 1.1  1998/01/12 11:36:50  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.11   14 Apr 1998 21:16:30   derekc
+*  added kbdclass Kbd_Unicode
 *  
 *     Rev 1.10   15 Apr 1997 18:45:16   TOMA
 *  autoput for remove source 4/12/97
@@ -51,6 +49,9 @@ typedef enum _KBDCLASS {
    Kbd_Scan,
    Kbd_Ascii,
    Kbd_Closed
+#ifdef UNICODESUPPORT
+   ,Kbd_Unicode
+#endif
 } KBDCLASS;
 
 /*

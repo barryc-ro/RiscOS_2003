@@ -38,6 +38,11 @@
 
 #include "vdcdm.h"
 
+#ifdef WINCE
+#include <wcecalls.h>
+#endif
+
+
 /*
  * Forward references
  */
@@ -91,8 +96,8 @@ CdmMarshallFind(
 
 void STATIC
 CdmDosCreate(
-    PCHAR   pName,
-    USHORT  PathNameSize,
+    PCHAR   pNameOrg,
+    USHORT  PathNameSizeOrg,
     USHORT  AccessMode,
     USHORT  CreateMode,
     USHORT  Attributes,
@@ -106,6 +111,16 @@ CdmDosCreate(
     USHORT ErrCode, ErrClass;
     POPENCONTEXT p;
     PCHAR pPathNameBuf;
+    PCHAR  pName;
+    USHORT PathNameSize;
+    pName = pNameOrg;
+    PathNameSize = PathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pName)) {
+       pName = pNameOrg+2;
+       PathNameSize = PathNameSize-2;
+    }
+#endif
 
     // Convert to 16 bit ints for DOS
 
@@ -304,9 +319,9 @@ CdmDosCreate(
 #ifdef PERF_PROFILE
                 if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
                     p->IsNullFile = TRUE;
-		}
+      }
 #endif
-		free( pPathNameBuf );
+      free( pPathNameBuf );
                 return;
             }
 #else
@@ -378,7 +393,7 @@ CdmDosCreate(
 #ifdef PERF_PROFILE
         if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
             p->IsNullFile = TRUE;
-	}
+   }
 #endif
         free( pPathNameBuf );
         return;
@@ -400,7 +415,7 @@ CdmDosCreate(
 #ifdef PERF_PROFILE
             if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
                 p->IsNullFile = TRUE;
-	    }
+       }
 #endif
             free( pPathNameBuf );
             return;
@@ -429,7 +444,7 @@ CdmDosCreate(
 #ifdef PERF_PROFILE
                     if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
                         p->IsNullFile = TRUE;
-	            }
+               }
 #endif
                     free( pPathNameBuf );
                     return;
@@ -453,7 +468,7 @@ CdmDosCreate(
 #ifdef PERF_PROFILE
                     if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
                         p->IsNullFile = TRUE;
-	            }
+               }
 #endif
                     free( pPathNameBuf );
                     return;
@@ -476,7 +491,7 @@ CdmDosCreate(
 #ifdef PERF_PROFILE
                 if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
                     p->IsNullFile = TRUE;
-	        }
+           }
 #endif
                 free( pPathNameBuf );
                 return;
@@ -536,10 +551,10 @@ CdmDosCreate(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosOpen(
-    PCHAR   pName,
-    USHORT  PathNameSize,
+    PCHAR   pNameOrg,
+    USHORT  PathNameSizeOrg,
     USHORT  AccessMode,
     PUSHORT pFileId,
     PUSHORT  pResult
@@ -551,6 +566,16 @@ CdmDosOpen(
     USHORT ErrCode, ErrClass;
     POPENCONTEXT p;
     PCHAR pPathNameBuf;
+    PCHAR  pName;
+    USHORT PathNameSize;
+    pName = pNameOrg;
+    PathNameSize = PathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pName)) {
+       pName = pNameOrg+2;
+       PathNameSize = PathNameSize-2;
+    }
+#endif
 
 
     // Convert to 16 bit ints for DOS
@@ -625,7 +650,7 @@ CdmDosOpen(
         p->x.pFileEnt->OpenForWriting = FALSE;
     }
     else {
-	p->x.pFileEnt->OpenForWriting = TRUE;
+   p->x.pFileEnt->OpenForWriting = TRUE;
     }
 
     TRACE(( TC_CDM, TT_API4, "CdmDosOpen: Name :%s: DosAccess 0x%x", pPathNameBuf, DosAccess));
@@ -643,11 +668,11 @@ CdmDosOpen(
         *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
         *pFileId = Context;
 #ifdef PERF_PROFILE
-	if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
+   if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
             p->IsNullFile = TRUE;
-	}
+   }
 #endif
-	free( pPathNameBuf );
+   free( pPathNameBuf );
         return;
     } else {
         // Error opening the file
@@ -684,7 +709,7 @@ CdmDosOpen(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosClose(
     USHORT FileId,
     PUSHORT pResult
@@ -785,7 +810,7 @@ CdmDosClose(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosRead(
     USHORT  FileId,
     PCHAR   pBuf,
@@ -917,7 +942,7 @@ CdmDosRead(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosWrite(
     USHORT  FileId,
     PCHAR   pBuf,
@@ -1079,10 +1104,10 @@ CdmDosWrite(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosFindFirstIndex(
-    PCHAR       pName,
-    USHORT      PathNameSize,
+    PCHAR       pNameOrg,
+    USHORT      PathNameSizeOrg,
     USHORT      StartIndex,
     USHORT      LongFileNames,
     PCHAR       pBuf,
@@ -1103,6 +1128,16 @@ CdmDosFindFirstIndex(
     USHORT      NewReadBytes, NewResult;
     UCHAR       NewReadCount;
     BOOLEAN     Result;
+    PCHAR  pName;
+    USHORT PathNameSize;
+    pName = pNameOrg;
+    PathNameSize = PathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pName)) {
+       pName = pNameOrg+2;
+       PathNameSize = PathNameSize-2;
+    }
+#endif
 
     TRACE(( TC_CDM, TT_API3, "CdmDosFindFirst: pName 0x%lx, PathNmSz %d, pBuf 0x%lx", pName, PathNameSize, pBuf));
     TRACE(( TC_CDM, TT_API3, "FindBufSize %d, pFindBufRead 0x%lx, *pFindBufRead %ld", FindBufSize, pFindBufRead, *pFindBufRead));
@@ -1203,16 +1238,16 @@ CdmDosFindFirstIndex(
         ret = GetLastError();
         TRACE(( TC_CDM, TT_API3, "FINDFIRST: GetLastError=%d", ret ));
         //
-	// Win32 FindFirst can return no error, but a
-	// FindHandle of (-1) when no files on a floppy
+   // Win32 FindFirst can return no error, but a
+   // FindHandle of (-1) when no files on a floppy
         //
-	if( ret == 0 ) {
-	    ErrClass = CDM_ERROR_NOTFOUND;
+   if( ret == 0 ) {
+       ErrClass = CDM_ERROR_NOTFOUND;
             ErrCode = CDM_DOSERROR_NOFILES;
-	}
-	else {
-  	    CdmDosError( ret, &ErrClass, &ErrCode );
-	}
+   }
+   else {
+       CdmDosError( ret, &ErrClass, &ErrCode );
+   }
 #else
         CdmDosError( ret, &ErrClass, &ErrCode );
 #endif
@@ -1226,23 +1261,23 @@ CdmDosFindFirstIndex(
 
         TRACE(( TC_CDM, TT_API3, "CDMAPI: Entries returned from FINDFIRST"));
 
-	// If we are at the callers index, we can begin transfering entries
+   // If we are at the callers index, we can begin transfering entries
         if( pOC->DirIndex >= StartIndex ) {
 
-	    AmountCopied = 0;
+       AmountCopied = 0;
 
-	    pFind = pOC->x.pFindBuf;
+       pFind = pOC->x.pFindBuf;
 
-	    /*
-	     * Marshall the data out into the callers buffer
-	     */
-	    Result = CdmMarshallFind(
-	                 pFind,
-			 LongFileNames,
-			 pBuf,
-			 FindBufSize,
-			 &AmountCopied
-			 );
+       /*
+        * Marshall the data out into the callers buffer
+        */
+       Result = CdmMarshallFind(
+                    pFind,
+          LongFileNames,
+          pBuf,
+          FindBufSize,
+          &AmountCopied
+          );
 
             if( !Result ) {
 
@@ -1252,16 +1287,16 @@ CdmDosFindFirstIndex(
                 free( pPathNameBuf );
                 FreeContext( Context );
                 return;
-	    }
+       }
 
-	    pBuf += AmountCopied;
+       pBuf += AmountCopied;
             FindBufSize -= AmountCopied;
             (*pFindBufRead) += AmountCopied;
-	    (*pCountRead)++;
+       (*pCountRead)++;
             CountRequested--;
         }
 
-	// Increment the current dir position
+   // Increment the current dir position
         pOC->DirIndex++;
 
         /*
@@ -1283,7 +1318,7 @@ CdmDosFindFirstIndex(
         CdmDosFindNext( Context,
                         StartIndex,
                         LongFileNames,
-			pBuf,
+         pBuf,
                         FindBufSize,
                         &NewReadBytes, // Bytes
                         CountRequested,
@@ -1294,8 +1329,8 @@ CdmDosFindFirstIndex(
         if( (NewResult == CDM_ERROR_NONE) ||
             (CDM_DOSERROR_CODE(NewResult) == CDM_DOSERROR_BADLENGTH) ) {
 
-	    // The Find Context is still Valid, update the count and size
-	    *pFileId = Context;
+       // The Find Context is still Valid, update the count and size
+       *pFileId = Context;
             *pCountRead += NewReadCount;
             *pFindBufRead += NewReadBytes;
             *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
@@ -1303,7 +1338,7 @@ CdmDosFindFirstIndex(
             return;
         } else {
 
-	    // A FindNext error occurred.
+       // A FindNext error occurred.
             //
             // The Find Context is no longer Valid, update the count and size
             // since a NO_MORE_FILES error still has a valid count and size,
@@ -1376,7 +1411,7 @@ CdmDosFindFirstIndex(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosFindNext(
     USHORT      FileId,
     USHORT      StartIndex,
@@ -1446,11 +1481,11 @@ CdmDosFindNext(
          *       this search.
          */
         if( !pOC->FindBufferFull ) {
-	    FINDNEXT( pOC->FindHandle, pOC->x.pFindBuf, ret );
-	}
-	else {
-	    ret = 0;
-	}
+       FINDNEXT( pOC->FindHandle, pOC->x.pFindBuf, ret );
+   }
+   else {
+       ret = 0;
+   }
 
         if ( ret ) {
             // Error on FindNext, no entries found, close the Context to return
@@ -1464,56 +1499,56 @@ CdmDosFindNext(
             *pResult = CDM_MAKE_STATUS( ErrClass, ErrCode );
             if( ErrCode == CDM_DOSERROR_NOFILES ) {
                 // We autoclose the context when we return CDM_DOSERROR_NOFILES
-		CdmDosFindClose( FileId, &Tmp );
-	    }
-	    return;
+      CdmDosFindClose( FileId, &Tmp );
+       }
+       return;
         } else {
 
             pOC->FindBufferFull = TRUE;
 
-	    // See if we are at the callers requested index
+       // See if we are at the callers requested index
             if( pOC->DirIndex >= StartIndex ) {
 
-	        AmountCopied = 0;
+           AmountCopied = 0;
 
-		pFind = pOC->x.pFindBuf;
+      pFind = pOC->x.pFindBuf;
 
-  	        /*
-	         * Marshall the data out into the callers buffer
-	         */
-	        Result = CdmMarshallFind(
-	                     pFind,
-			     LongFileNames,
-			     pBuf,
-			     FindBufSize,
-			     &AmountCopied
-			     );
+           /*
+            * Marshall the data out into the callers buffer
+            */
+           Result = CdmMarshallFind(
+                        pFind,
+              LongFileNames,
+              pBuf,
+              FindBufSize,
+              &AmountCopied
+              );
 
                 if( !Result ) {
 
                     if( *pCountRead == 0 ) {
-  		        // Buffer overflow on first entry
+              // Buffer overflow on first entry
                         *pResult = CDM_MAKE_STATUS( CDM_ERROR_INVALID, CDM_DOSERROR_BADLENGTH );
                         return;
-		    }
-		    else {
-   	                *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
+          }
+          else {
+                      *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
                         return;
-		    }
-		}
+          }
+      }
 
-		pBuf += AmountCopied;
+      pBuf += AmountCopied;
                 FindBufSize -= AmountCopied;
-		(*pFindBufRead) += AmountCopied;
+      (*pFindBufRead) += AmountCopied;
                 (*pCountRead)++;
             }
 
             // Update the current dir index
             pOC->DirIndex++;
 
-	    // continue reading more entries
-	    pOC->FindBufferFull = FALSE;
-	    continue;
+       // continue reading more entries
+       pOC->FindBufferFull = FALSE;
+       continue;
         }
 
     } // End while( 1 )
@@ -1534,7 +1569,7 @@ CdmDosFindNext(
  *
  ****************************************************************************/
 
-BOOLEAN STATIC 
+BOOLEAN STATIC
 CdmMarshallFind(
     PFIND   pFind,
     USHORT  LongFileNames,
@@ -1564,23 +1599,22 @@ CdmMarshallFind(
     // Only send Long File Names to a host that can handle it
     if( LongFileNames ) {
 
-	// We must marshall into a FINDSTRUCT_LONG
+   // We must marshall into a FINDSTRUCT_LONG
 
-	if( FindBufSize < (sizeof( FINDSTRUCT_LONG ) + ShortNameSize + LongNameSize) ) {
+   if( FindBufSize < (sizeof( FINDSTRUCT_LONG ) + ShortNameSize + LongNameSize) ) {
             return(FALSE);
         }
 
         pFindBufL = (PFINDSTRUCT_LONG)pBuf;
 
         pFindBufL->NameSize = (UCHAR)ShortNameSize;
-	pFindBufL->LongNameSize = (UCHAR)LongNameSize;
+   pFindBufL->LongNameSize = (UCHAR)LongNameSize;
 
         pFindBufL->Attributes = (USHORT)pFind->dwFileAttributes;
         pFindBufL->FileSize = (ULONG)pFind->nFileSizeLow;
         FileTimeToDosDateTime( &pFind->ftLastWriteTime,
                                &pFindBufL->WriteDate,
                                &pFindBufL->WriteTime);
-
         // Increment to the next entry
         pFindBufL++;
         *pFindBufRead += (USHORT)sizeof( FINDSTRUCT_LONG );
@@ -1588,10 +1622,10 @@ CdmMarshallFind(
         // Copy the short name after the find struct, without the NULL byte
         pTmp = (PUCHAR)pFindBufL;
 
-	if ( LongNameSize ) {
+   if ( LongNameSize ) {
 
             // Copy the short name
-	    memcpy( pTmp, pFind->cAlternateFileName, ShortNameSize );
+       memcpy( pTmp, pFind->cAlternateFileName, ShortNameSize );
             pTmp += ShortNameSize;
             *pFindBufRead += ShortNameSize;
 
@@ -1600,10 +1634,10 @@ CdmMarshallFind(
             pTmp += LongNameSize;
             *pFindBufRead += LongNameSize;
 
-	} else {
+   } else {
 
             // We just have a short name in the normal file name place
-	    memcpy( pTmp, pFind->cFileName, ShortNameSize );
+       memcpy( pTmp, pFind->cFileName, ShortNameSize );
             pTmp += ShortNameSize;
             *pFindBufRead += ShortNameSize;
         }
@@ -1611,7 +1645,7 @@ CdmMarshallFind(
     else {
 #endif // WIN32
 
-	// We must marshall into a FINDSTRUCT
+   // We must marshall into a FINDSTRUCT
 
 	if( FindBufSize < (sizeof_FINDSTRUCT + ShortNameSize ) ) {
             return(FALSE);
@@ -1643,24 +1677,24 @@ CdmMarshallFind(
         pTmp = (PUCHAR)pFindBuf;
 #ifdef  WIN32
 
-	if ( LongNameSize ) {
+   if ( LongNameSize ) {
 
             // Copy the short name field, ignore the long file name
-	    memcpy( pTmp, pFind->cAlternateFileName, ShortNameSize );
+       memcpy( pTmp, pFind->cAlternateFileName, ShortNameSize );
             pTmp += ShortNameSize;
             *pFindBufRead += ShortNameSize;
 
-	} else {
+   } else {
 
             // We just have a short name in the normal file name place
-	    memcpy( pTmp, pFind->cFileName, ShortNameSize );
+       memcpy( pTmp, pFind->cFileName, ShortNameSize );
             pTmp += ShortNameSize;
             *pFindBufRead += ShortNameSize;
         }
     }
 #else
         // DOS and WIN16 clients only have the short name
-	memcpy( pTmp, pFind->name, ShortNameSize );
+   memcpy( pTmp, pFind->name, ShortNameSize );
         pTmp += ShortNameSize;
         *pFindBufRead += ShortNameSize;
 #endif
@@ -1688,7 +1722,7 @@ CdmMarshallFind(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosFindClose(
     USHORT  FileId,
     PUSHORT pResult
@@ -1761,10 +1795,10 @@ CdmDosFindClose(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosGetAttrEx(
-    PCHAR   pName,
-    USHORT  PathNameSize,
+    PCHAR   pNameOrg,
+    USHORT  PathNameSizeOrg,
     PUSHORT pAttributes,
     PULONG  pFileSize,
     PUSHORT pFileDate,
@@ -1777,6 +1811,16 @@ CdmDosGetAttrEx(
     USHORT  ErrCode, ErrClass;
     PCHAR   pPathNameBuf;
     HANDLE  FindHandle;
+    PCHAR  pName;
+    USHORT PathNameSize;
+    pName = pNameOrg;
+    PathNameSize = PathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pName)) {
+       pName = pNameOrg+2;
+       PathNameSize = PathNameSize-2;
+    }
+#endif
 
     /*
      * Copy the path name string into our buffer so we can NULL
@@ -1828,9 +1872,14 @@ CdmDosGetAttrEx(
          */
         if( ( ErrCode == CDM_DOSERROR_NOTFOUND ) ||
             ( ErrCode == CDM_DOSERROR_PATHNOTFOUND ) ) {
+#ifdef WINCE
+            if((PathNameSize == 1) && (pPathNameBuf[0] == '\\')) 
+#else // !WINCE
             if( (PathNameSize == 3) &&
                 (pPathNameBuf[1] == ':') &&
-                (pPathNameBuf[2] == '\\' )) {
+                (pPathNameBuf[2] == '\\' )) 
+#endif // WINCE
+			{
 
                 *pAttributes = (USHORT)CDM_ATTR_DIRECTORY;
                 *pFileSize = (ULONG)0L;
@@ -1875,20 +1924,20 @@ CdmDosGetAttrEx(
 #ifdef PERF_PROFILE
         if( stricmp( "C:\\NULL", pPathNameBuf ) == 0 ) {
             *pFileSize = (ULONG)(1024L*1024L*10L);
-	}
+   }
 #endif
 
-	/*
+   /*
          *  If a set attribute occurred while we had the file open then
          *  we store the information.  We return this info on this call.
          *
-	 *  Also if the file has a handle open for writing, the file size
-	 *  will be incorrect since FindFirst() returns 0 for file size
-	 *  on files that have exclusive write opens.
-	 */
+    *  Also if the file has a handle open for writing, the file size
+    *  will be incorrect since FindFirst() returns 0 for file size
+    *  on files that have exclusive write opens.
+    */
         ContextGetAttributes( pName, PathNameSize, pAttributes, pFileSize );
 
-	*pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
+   *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
         free( pPathNameBuf );
         return;
     }
@@ -1920,10 +1969,10 @@ CdmDosGetAttrEx(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosSetAttr(
-    PCHAR   pName,
-    USHORT  PathNameSize,
+    PCHAR   pNameOrg,
+    USHORT  PathNameSizeOrg,
     USHORT  Attributes,
     PUSHORT pResult
     )
@@ -1932,6 +1981,16 @@ CdmDosSetAttr(
     unsigned int DosAttributes;
     USHORT ErrCode, ErrClass;
     PCHAR pPathNameBuf;
+    PCHAR  pName;
+    USHORT PathNameSize;
+    pName = pNameOrg;
+    PathNameSize = PathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pName)) {
+       pName = pNameOrg+2;
+       PathNameSize = PathNameSize-2;
+    }
+#endif
 
 #ifndef  WIN32
     /*
@@ -2021,7 +2080,7 @@ CdmDosSetAttr(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosGetDateTime(
     USHORT  FileId,
     PUSHORT pFileDate,
@@ -2088,7 +2147,7 @@ CdmDosGetDateTime(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosSetDateTime(
     USHORT  FileId,
     USHORT  FileDate,
@@ -2158,16 +2217,26 @@ CdmDosSetDateTime(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosDelete(
-    PCHAR   pName,
-    USHORT  PathNameSize,
+    PCHAR   pNameOrg,
+    USHORT  PathNameSizeOrg,
     PUSHORT pResult
     )
 {
     int ret;
     USHORT ErrCode, ErrClass;
     PCHAR pPathNameBuf;
+    PCHAR  pName;
+    USHORT PathNameSize;
+    pName = pNameOrg;
+    PathNameSize = PathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pName)) {
+       pName = pNameOrg+2;
+       PathNameSize = PathNameSize-2;
+    }
+#endif
 
     /*
      * Copy the path name string into our buffer so we can NULL
@@ -2196,7 +2265,11 @@ CdmDosDelete(
 
     ret = DELETEFILE( pPathNameBuf );
 
+#ifdef WINCE
+    if( ret != 0 ) {
+#else
     if( ret == 0 ) {
+#endif
         // Successful delete
         *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
         free( pPathNameBuf );
@@ -2239,12 +2312,12 @@ CdmDosDelete(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosRename(
-    PCHAR   pOldName,
-    USHORT  OldPathNameSize,
-    PCHAR   pNewName,
-    USHORT  NewPathNameSize,
+    PCHAR   pOldNameOrg,
+    USHORT  OldPathNameSizeOrg,
+    PCHAR   pNewNameOrg,
+    USHORT  NewPathNameSizeOrg,
     PUSHORT pResult
     )
 {
@@ -2252,6 +2325,22 @@ CdmDosRename(
     USHORT ErrCode, ErrClass;
     PCHAR pOldPathNameBuf;
     PCHAR pNewPathNameBuf;
+    PCHAR  pOldName, pNewName;
+    USHORT OldPathNameSize, NewPathNameSize;
+    pNewName = pNewNameOrg;
+    NewPathNameSize = NewPathNameSizeOrg;
+    pOldName = pOldNameOrg;
+    OldPathNameSize = OldPathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pOldName)) {
+       pOldName = pOldNameOrg+2;
+       OldPathNameSize = OldPathNameSize-2;
+    }
+    if (CdmDriveStrip(pNewName)) {
+       pNewName = pNewNameOrg+2;
+       NewPathNameSize = NewPathNameSize-2;
+    }
+#endif
 
     /*
      * Copy the path name strings into our buffers so we can NULL
@@ -2293,7 +2382,11 @@ CdmDosRename(
 
     ret = RENAMEFILE( pOldPathNameBuf, pNewPathNameBuf );
 
+#ifdef WINCE
+    if( ret != 0 ) {
+#else
     if( ret == 0 ) {
+#endif
         // Successful rename
         *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
         free( pOldPathNameBuf );
@@ -2331,10 +2424,10 @@ CdmDosRename(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosCreateDir(
-    PCHAR   pName,
-    USHORT  PathNameSize,
+    PCHAR   pNameOrg,
+    USHORT  PathNameSizeOrg,
     USHORT  AccessMode,
     USHORT  Attributes,
     PUSHORT pResult
@@ -2344,6 +2437,16 @@ CdmDosCreateDir(
     USHORT ErrCode, ErrClass;
     PCHAR pPathNameBuf;
     unsigned int DosAttributes;
+    PCHAR  pName;
+    USHORT PathNameSize;
+    pName = pNameOrg;
+    PathNameSize = PathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pName)) {
+       pName = pNameOrg+2;
+       PathNameSize = PathNameSize-2;
+    }
+#endif
 
     /*
      * Copy the path name string into our buffer so we can NULL
@@ -2394,9 +2497,17 @@ CdmDosCreateDir(
 
     TRACE(( TC_CDM, TT_API3, "DosCreateDir: Attempting to make directory :%s:", pPathNameBuf));
 
+#ifdef WINCE
+    ret = CreateDirectory( pPathNameBuf, NULL );
+#else
     ret = _mkdir( pPathNameBuf );
+#endif
 
+#ifdef WINCE
+    if( ret != 0 ) {
+#else
     if( ret == 0 ) {
+#endif
         // Successful create dir
         *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
         TRACE(( TC_CDM, TT_API3, "DosCreateDir: Success, *pResult 0x%lx", *pResult));
@@ -2436,16 +2547,26 @@ CdmDosCreateDir(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosDeleteDir(
-    PCHAR   pName,
-    USHORT  PathNameSize,
+    PCHAR   pNameOrg,
+    USHORT  PathNameSizeOrg,
     PUSHORT pResult
     )
 {
     int ret;
     USHORT ErrCode, ErrClass;
     PCHAR pPathNameBuf;
+    PCHAR  pName;
+    USHORT PathNameSize;
+    pName = pNameOrg;
+    PathNameSize = PathNameSizeOrg;
+#ifdef WINCE
+    if (CdmDriveStrip(pName)) {
+       pName = pNameOrg+2;
+       PathNameSize = PathNameSize-2;
+    }
+#endif
 
     /*
      * Copy the path name string into our buffer so we can NULL
@@ -2472,9 +2593,17 @@ CdmDosDeleteDir(
      * Try to delete the directory
      */
 
+#ifdef WINCE
+    ret = RemoveDirectory( pPathNameBuf );
+#else
     ret = _rmdir( pPathNameBuf );
+#endif
 
+#ifdef WINCE
+    if( ret != 0 ) {
+#else
     if( ret == 0 ) {
+#endif
         // Successful delete dir
         *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
         free( pPathNameBuf );
@@ -2548,7 +2677,7 @@ CdmDosDeleteDir(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosReadCond(
     USHORT  FileId,
     PCHAR   pBuf,
@@ -2704,7 +2833,7 @@ CdmDosReadCond(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosFileLock(
     USHORT  FileId,
     ULONG   LockStart,
@@ -2782,7 +2911,7 @@ CdmDosFileLock(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosFileUnLock(
     USHORT  FileId,
     ULONG   LockStart,
@@ -2848,7 +2977,7 @@ CdmDosFileUnLock(
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosFileChangeSize( USHORT  FileId, ULONG   NewSize, PUSHORT pResult )
 {
     int ret;
@@ -2951,7 +3080,7 @@ CdmDosFileChangeSize( USHORT  FileId, ULONG   NewSize, PUSHORT pResult )
  *
  ****************************************************************************/
 
-void STATIC 
+void STATIC
 CdmDosSeek(
     USHORT  FileId,
     ULONG   NewOffset,
@@ -2983,9 +3112,9 @@ CdmDosSeek(
 #ifdef PERF_PROFILE
         if( p->IsNullFile ) {
             *pFileSize = (ULONG)(1024L*1024L*10L);
-	}
+   }
 #endif
-	TRACE(( TC_CDM, TT_API3, "CdmDosSeek: Returning success, file size %ld", *pFileSize));
+   TRACE(( TC_CDM, TT_API3, "CdmDosSeek: Returning success, file size %ld", *pFileSize));
         // No errors
         *pResult = CDM_MAKE_STATUS( CDM_ERROR_NONE, CDM_DOSERROR_NOERROR );
         return;
@@ -2999,3 +3128,31 @@ CdmDosSeek(
         return;
     }
 }
+
+#ifdef WINCE
+/*****************************************************************************
+ *
+ *  CdmDriveStrip
+ *
+ *  Strips off drive letter and colon for WINCE
+ *
+ * ENTRY:
+ *
+ *   lpFileName (input)
+ *     FileName to strip drive letter and colon from
+ *
+ * EXIT:
+ *  Returns new pointer that removes drive letter and colon
+ *
+ ****************************************************************************/
+BOOL
+CdmDriveStrip(
+    PCHAR lpFileName
+    )
+{
+   if (*(lpFileName+1) == ':')
+      return(TRUE);
+   else
+      return(FALSE);
+}
+#endif  //WINCE

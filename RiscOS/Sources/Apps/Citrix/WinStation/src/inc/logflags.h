@@ -10,6 +10,9 @@
 *
 *  $Log$
 *  
+*     Rev 1.9   21 Apr 1998 16:22:38   butchd
+*  Added Seamless trace class TC_TWI
+*  
 *     Rev 1.8   Feb 17 1998 20:06:46   briang
 *  Add a trace flag for VDLIC virtual channel debugging
 *  
@@ -70,6 +73,7 @@
 #define TC_WFSHELL  0x00200000
 #define TC_CAM      0x00400000
 #define TC_VDLIC    0x00800000
+#define TC_TWI      0x01000000
 #define LOG_ASSERT  0x40000000     // Always log this class 
 #define LOG_CLASS   0x80000000     // UI: standard event logging class 
 #define TC_ALL      0xffffffff

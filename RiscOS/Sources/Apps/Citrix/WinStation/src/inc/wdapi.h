@@ -11,6 +11,12 @@
 *
 *  $Log$
 *  
+*     Rev 1.56   14 Apr 1998 21:15:58   derekc
+*  added wdinfoclass WdUnicodeCode, UNICODECODE and UNICODECHAR structs
+*  
+*     Rev 1.55   13 Apr 1998 18:37:24   kurtp
+*  add UK reducer code
+*  
 *     Rev 1.54   Oct 09 1997 18:49:00   briang
 *  Conversion to MemIni use
 *  
@@ -115,6 +121,7 @@ typedef struct _WDOPEN {
     PPLIBPROCEDURE pXmsProcedures;
     PPLIBPROCEDURE pLogProcedures;
     PPLIBPROCEDURE pMemIniProcedures;
+    PPLIBPROCEDURE pReduceProcedures;
     LPVOID pIniSection;         // in: pointer to ini file section buffer
     PDLLLINK pPdLink;           // in: top most protocol driver
     PDLLLINK pScriptLink;       // in: pointer to scripting dll
@@ -177,7 +184,10 @@ typedef enum _WDINFOCLASS {
     WdOpenVirtualChannel, // get - Open a virtual channel
     WdCache,              // persistent caching command set
     WdGetInfoData,        // Information from host to client
-    WdWindowSwitch       // window has switched back, check keyboard state
+    WdWindowSwitch        // window has switched back, check keyboard state
+#ifdef UNICODESUPPORT
+    , WdUnicodeCode        // window has sent unicode information to wd
+#endif
 } WDINFOCLASS;
 
 /*
@@ -274,6 +284,30 @@ typedef struct _CHARCODE {
     USHORT  cCharCodes;
     LPVOID  pCharCodes;
 } CHARCODE, * PCHARCODE;
+
+#ifdef UNICODESUPPORT
+/*
+ *  WdUnicodeCode structure
+ */
+typedef struct _UNICODECODE {
+    USHORT  cUnicodeCodes;
+    LPVOID  pUnicodeCodes;
+} UNICODECODE, * PUNICODECODE;
+
+/*
+ *  Unicode keyboard packet
+ *  structure -- stored in
+ *  pUnicodesCodes array
+ *  in _UNICODECODE
+ */
+#define KEYUP       0x01
+#define SPECIALKEY  0x02
+
+typedef struct _UNICODECHAR {
+	BYTE  bCharType;          // KEYUP, SPECIALKEY & KEYUP, etc.
+	BYTE  cCharValue[2];      // Unicode or special key value
+} UNICODECHAR, * PUNICODECHAR;
+#endif
 
 /*
  *  WdMouseInfo structure

@@ -11,6 +11,15 @@
 *
 *   $Log$
 *  
+*     Rev 1.46   15 Apr 1998 16:06:22   kurtp
+*  fix fullscreen repaint problem
+*  
+*     Rev 1.45   10 Mar 1998 17:05:30   kenb
+*  Change WdCall to be VdCallWd
+*  
+*     Rev 1.44   10 Mar 1998 17:16:50   kurtp
+*  fix palette bug introduced by TWI
+*  
 *     Rev 1.43   19 Feb 1998 21:28:04   kurtp
 *  fix cpr 8750
 *  
@@ -314,7 +323,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     wdqi.pWdInformation = &OpenVirtualChannel;
     wdqi.WdInformationLength = sizeof(OPENVIRTUALCHANNEL);
     OpenVirtualChannel.pVCName = VIRTUAL_THINWIRE;
-    rc = WdCall( pVd, WD__QUERYINFORMATION, &wdqi );
+    rc = VdCallWd( pVd, WD__QUERYINFORMATION, &wdqi );
     VirtualThinWire = OpenVirtualChannel.Channel;
     ASSERT( VirtualThinWire == Virtual_ThinWire, VirtualThinWire );
 
@@ -461,7 +470,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     wdsi.WdInformationClass  = WdVirtualWriteHook;
     wdsi.pWdInformation      = &vdwh;
     wdsi.WdInformationLength = sizeof(VDWRITEHOOK);
-    rc = WdCall(pVd, WD__SETINFORMATION, &wdsi);
+    rc = VdCallWd(pVd, WD__SETINFORMATION, &wdsi);
 
     /*
      * This returns pointers to functions to use to send data to the host
@@ -612,7 +621,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     wdqi.WdInformationClass  = WdEncryptionInit;
     wdqi.pWdInformation      = &eieio;
     wdqi.WdInformationLength = sizeof(VDWRITEHOOK);
-    WdCall(pVd, WD__QUERYINFORMATION, &wdqi);
+    VdCallWd(pVd, WD__QUERYINFORMATION, &wdqi);
 
     /*
      *  On encryption level >1 variable resolution is supported
@@ -936,7 +945,18 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 
       case VdRealizePaletteFG:
          if ( vColor == Color_Cap_256 ) {
-           rc = TWRealizePalette( vhWnd, vhdc,
+#ifdef TWI_INTERFACE_ENABLED
+            PMYWIN_INFO c_win;
+             if( TwiModeEnabledFlag ) {
+                if ( c_win = FindWinPointer( GetForegroundWindow() ) ) {
+                   rc = TWRealizePalette( c_win->hWnd, c_win->hDC,
+                                          (UINT *)pVdSetInformation->pVdInformation,
+                                          TWREALIZEPALETTE_FG );
+                }
+             }
+             else 
+#endif
+             rc = TWRealizePalette( vhWnd, vhdc,
                                     (UINT *)pVdSetInformation->pVdInformation,
                                     TWREALIZEPALETTE_FG );
          }
@@ -953,7 +973,18 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 
       case VdRealizePaletteBG:
          if ( vColor == Color_Cap_256 ) {
-           rc = TWRealizePalette( vhWnd, vhdc,
+#ifdef TWI_INTERFACE_ENABLED
+            PMYWIN_INFO c_win;
+             if( TwiModeEnabledFlag ){
+                for( c_win=CWinInfo; c_win!=0; c_win=c_win->Next ){
+                   rc = TWRealizePalette( c_win->hWnd, c_win->hDC,
+                                          (UINT *)pVdSetInformation->pVdInformation,
+                                          TWREALIZEPALETTE_BG );
+                }
+             }
+             else 
+#endif
+             rc = TWRealizePalette( vhWnd, vhdc,
                                     (UINT *)pVdSetInformation->pVdInformation,
                                     TWREALIZEPALETTE_BG );
          }

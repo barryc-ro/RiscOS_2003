@@ -8,12 +8,10 @@
 *
 * Copyright (c) 1993-4 Citrix Systems, Inc.
 *
-*  twcommon.h,v
-*  Revision 1.1  1998/01/12 11:38:04  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.48   17 Apr 1998 16:48:18   kurtp
+*  add wyse cache purge
 *  
 *     Rev 1.47   21 Apr 1997 16:57:46   TOMA
 *  update
@@ -98,6 +96,7 @@ typedef struct _THINWIRECAPS {
 #define GCAPS_ROP4_BITBLT         0x00000080L 
 #define GCAPS_RES_VARIABLE        0x00000100L // var HRes/VRes up to fResCaps
 #define GCAPS_SSB_1BYTE_PP        0x00000200L // save screen 1 byte per pixel
+#define GCAPS_CACHE_FLUSH         0x00000400L // Flush RAM cache
 
     USHORT  fColorCaps;
 #define CCAPS_4_BIT               0x0001    //       16 colors
@@ -279,7 +278,7 @@ typedef struct _LINESTATE {
     ULONG           ulBitmapROP;    // ROP info for DFB strip drawer
     LONG            lNextPlane;     // Offset to next plane, same scan line
 
-} LINESTATE;	                /* ls */
+} LINESTATE;                    /* ls */
 
 
 /*****************************************************************************\
@@ -1103,6 +1102,9 @@ typedef struct _TWPALETTEHEADERCACHE {
 #define PACKET_COMMAND_CACHE_STREAM       4
 #define PACKET_COMMAND_CACHE_DISABLE      5
 #define PACKET_COMMAND_CACHE_ENABLE       6
+// Add per Wyse's request for their WinTerm clients.  Currently intended
+// only used internally for WD to send thinwire a cache flush request.
+#define PACKET_COMMAND_CACHE_PURGE        7
 
 
 #define CACHE_FILE_HANDLE_SIZE 8

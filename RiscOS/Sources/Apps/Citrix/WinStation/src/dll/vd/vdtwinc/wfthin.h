@@ -11,6 +11,12 @@
 *
 *   $Log$
 *  
+*     Rev 1.5   Jan 29 1998 17:23:24   briang
+*  fix for dos vesa
+*  
+*     Rev 1.4   Jan 28 1998 20:57:30   briang
+*  fix the revision to include the vesa stuff
+*  
 *     Rev 1.0   03 Dec 1997 17:47:34   terryt
 *  Initial revision.
 *  
@@ -177,6 +183,8 @@ typedef struct _BRUSHOBJOBJ
    BYTE     dib_index;   //has index into BrushDIB describing dib bitmap
 } BRUSHOBJOBJ, near * PBRUSHOBJOBJ, far * LPBRUSHOBJOBJ;
 
+void    pascal	InitBrushObj( void );
+void    pascal	DeleteBrushObj( void );
 
 //for realized brushes pointed to by brushobjobj.dibindex
 //the last entry in the array is used for the no caching case
@@ -192,6 +200,8 @@ typedef  struct _BRUSHDIB
    LPVOID   dib_address;
 } BRUSHDIB, near * PBRUSHDIB, far * LPBRUSHDIB;
 
+
+void    pascal InitBrushDIB( void * lpbmp, int szbmp, int extra );
 
 //if the 8 byte header for a bitmap that may or may not be cached
 //if the bitmap is cached, then this header precedes the bitmap data

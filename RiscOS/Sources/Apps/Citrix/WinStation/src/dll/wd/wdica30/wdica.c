@@ -10,6 +10,24 @@
 *
 *   $Log$
 *  
+*     Rev 1.118   25 Apr 1998 17:54:42   terryt
+*  Free expansion/reduction buffers
+*  
+*     Rev 1.117   20 Apr 1998 17:55:00   terryt
+*  dos memory fix for reducer
+*  
+*     Rev 1.116   15 Apr 1998 19:16:22   kurtp
+*  UK fix for DOS/Win16
+*  
+*     Rev 1.115   14 Apr 1998 21:21:42   derekc
+*  added WdUnicodeCode handler
+*  
+*     Rev 1.114   14 Apr 1998 23:01:10   kurtp
+*  fix reducer defaults
+*  
+*     Rev 1.113   13 Apr 1998 18:32:58   kurtp
+*  add UK reducer code
+*  
 *     Rev 1.109   Oct 31 1997 19:49:56   briang
 *  Remove pIniSection parameter from miGets
 *  
@@ -103,6 +121,9 @@
 #include "../inc/wdemul.h"
 #include "../inc/wdemulp.h"
 
+
+#include "../../../inc/reducapi.h"
+
 /*=============================================================================
 ==   Defines
 =============================================================================*/
@@ -124,6 +145,7 @@ int WFCAPI AppendVdHeader( PWD, USHORT, USHORT );
 int VdCall( PWD, USHORT, USHORT, PVOID );
 int DllCall( PDLLLINK, USHORT, PVOID );
 int WdKbdSetMode( PWDICA, KBDCLASS );
+void GetExpIniData(BYTE*, BYTE*);
 
 
 /*=============================================================================
@@ -316,6 +338,14 @@ EmulOpen( PWD pWd, PWDOPEN pWdOpen )
 int
 EmulClose( PWD pWd )
 {
+    if ( pWd->ExpanderBuffer ) {
+        free( pWd->ExpanderBuffer );
+        pWd->ExpanderBuffer = NULL;
+    }
+    if ( pWd->ReducerBuffer ) {
+        free( pWd->ReducerBuffer );
+        pWd->ReducerBuffer = NULL;
+    }
     pWd->pPrivate = NULL;
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -416,6 +446,9 @@ EmulInfo( PWD pWd, PDLLINFO pWdInfo )
         // paWD_VcBind = NULL; //paranoia
     }
 
+    pWdData->H2C_PowerOf2Wanted = pWd->H2C_PowerOf2Wanted;
+    pWdData->C2H_PowerOf2Wanted = pWd->C2H_PowerOf2Wanted;
+    pWdData->H2C_MaxNewData = pWd->H2C_MaxNewData;
 
     pWdData->fEnableGraphics   = (pIca->pVdLink && pIca->pVdLink[Virtual_ThinWire]) ? TRUE : FALSE;
     pWdData->fEnableMouse      = pIca->fMouse;
@@ -828,6 +861,9 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
     PWDICA pIca;
     PSCANCODE pSC;
     PCHARCODE pCC;
+#ifdef UNICODESUPPORT
+    PUNICODECODE pUC;
+#endif
     PMOUSEINFO pMI;
     BYTE       bLED;
     int rc = CLIENT_STATUS_SUCCESS;
@@ -1021,7 +1057,36 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
             }
 
             break;
+#ifdef UNICODESUPPORT
+        case WdUnicodeCode :
 
+            /*
+             *  Filter out Unicodes till connected
+             */
+            if ( !pWd->fConnected )
+                break;
+
+            /*
+             *  Send Unicode keystrokes down the wire
+             */
+            if ( pIca->KbdMode == Kbd_Unicode ) {
+
+                if ( !pIca->fKbdShiftStateSet ) {
+
+                    BYTE bLED = (BYTE) pIca->ShiftState;
+
+                    // TODO:  Enable IcaSetLed
+                    //  IcaSetLed( pWd, &bLED, 1 );
+                    pIca->fKbdShiftStateSet = TRUE;
+                }
+
+                pUC = (PUNICODECODE) pWdSetInformation->pWdInformation;
+                rc = KbdWrite( pWd, (PUCHAR) pUC->pUnicodeCodes, pUC->cUnicodeCodes * 3 );  // 3 *should* be sizeof(UNICODECHAR)
+            }
+
+            break;
+
+#endif
         case WdMouseInfo :
 
             /*
@@ -1374,3 +1439,16 @@ WdKbdSetMode( PWDICA pIca, KBDCLASS KbdMode )
      */
     return( KbdSetMode( pIca->KbdMode ) );
 }
+
+
+void GetExpIniData(BYTE* H2C_PowerOf2Wanted, BYTE* C2H_PowerOf2Wanted)
+{
+	int powerOf2;
+
+	powerOf2 = miGetPrivateProfileInt(INI_WFCLIENT, INI_EXP_PO2, DEF_EXP_PO2);
+	*H2C_PowerOf2Wanted = (BYTE) powerOf2;
+
+	powerOf2 = miGetPrivateProfileInt(INI_WFCLIENT, INI_RED_PO2, DEF_RED_PO2);
+	*C2H_PowerOf2Wanted = (BYTE)  powerOf2;
+}
+

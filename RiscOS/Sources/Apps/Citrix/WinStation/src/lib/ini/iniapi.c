@@ -9,40 +9,35 @@
 *
 *   Author: Kurt Perry (4/08/1994)
 *
-*   iniapi.c,v
-*   Revision 1.3  1998/06/19 17:12:43  smiddle
-*   Merged in Beta2 code. A few redundant header files removed, various new ones
-*   added. It all compiles and sometimes it runs. Mostly it crashes in the new
-*   ini code though.
-*   Added a check for the temporary ICA file being created OK. If not then it gives
-*   a warning that the scrap directory might need to be set up.
-*   Upped version number to 0.40 so that there is room for some bug fixes to the
-*   WF 1.7 code.
-*
-*   Version 0.40. Tagged as 'WinStation-0_40'
-*
+*   $Log$
 *  
+*     Rev 1.39   25 Mar 1998 17:34:50   butchd
+*  fixed CE merge bug
+*  
+*     Rev 1.38   01 Mar 1998 15:41:12   TOMA
+*  ce merge
+*
 *     Rev 1.36   12 Feb 1998 13:35:30   butchd
 *  CPR 8345: fixed existing max() logic to work correctly
-*  
+*
 *     Rev 1.35   15 Apr 1997 18:52:26   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.34   16 Jan 1997 15:18:28   kurtp
 *  Make GetPrivateProfileString handle > 32K (int ot UINT)
-*  
+*
 *     Rev 1.33   08 Nov 1995 15:55:06   butchd
 *  update
-*  
+*
 *     Rev 1.32   08 Nov 1995 10:20:48   KenB
 *  don't use fungets(), WIN doesn't have it; use BOOL to determine whether to read or use last string
-*  
+*
 *     Rev 1.31   19 Jul 1995 12:17:36   kurtp
 *  update
-*  
+*
 *     Rev 1.30   19 Jul 1995 12:15:26   kurtp
 *  update
-*  
+*
 *     Rev 1.29   02 May 1995 14:06:46   butchd
 *  update
 *
@@ -63,6 +58,9 @@
 #include "../../inc/logapi.h"
 #include "../../inc/clib.h"
 #include "../../inc/iniapi.h"
+#ifdef WINCE
+#include <wcecalls.h>
+#endif
 
 /*=============================================================================
 ==   Structures
@@ -83,7 +81,11 @@ typedef struct _INICACHE {
 
 typedef struct _FILECACHE {
     PCHAR pFilename;
+#ifdef WINCE
+    HFILE fp;
+#else
     FILE *fp;
+#endif
     struct _FILECACHE * pNext;
 } FILECACHE, * PFILECACHE;
 
@@ -112,7 +114,11 @@ static PFILECACHE pFileRoot = NULL;
 #include "helpers.h"    // common helper routines used in both 'internal'
                         // INI apis and 'external' INI apis.
 
+#ifdef WINCE
+HFILE inifopen( PCHAR );
+#else
 FILE * inifopen( PCHAR );
+#endif
 void   iniflush( void );
 int
 static wGetPrivateProfileString( PCHAR lpszSection,
@@ -145,8 +151,8 @@ dosGetPrivateProfileString( PCHAR lpszSection,
                             int   cbReturnBuffer,
                             PCHAR lpszFilename )
 {
-    UINT rc, i;
-    
+    UINT rc;
+
     rc = wGetPrivateProfileString( lpszSection,
                                    lpszEntry,
                                    lpszDefault,
@@ -154,10 +160,10 @@ dosGetPrivateProfileString( PCHAR lpszSection,
                                    (UINT) cbReturnBuffer,
                                    lpszFilename,
                                    NULL );
-
-#if 0
+#ifndef DOS
+#ifndef WINCE
     /*
-     * For windows, we need to make sure that no \r or \n
+     * For windows (but not WINCE), we need to make sure that no \r or \n
      * is at the end of the return buffer and adjust rc
      * accordingly.
      */
@@ -165,12 +171,12 @@ dosGetPrivateProfileString( PCHAR lpszSection,
             ((lpszReturnBuffer[rc-1] == '\r') ||
              (lpszReturnBuffer[rc-1] == '\n')) )
         lpszReturnBuffer[--rc] = '\0';
-
+#endif
 #endif
     
     TRACE((TC_LIB, TT_API1, "dosGetPrivateProfileString: rc=%d s='%s'\n", rc, lpszReturnBuffer));
 
-    return((int)rc);                                    
+    return((int)rc);
 }
 
 /*******************************************************************************
@@ -203,7 +209,13 @@ wGetPrivateProfileString( PCHAR lpszSection,
     PINICACHE pTemp  = NULL;
     int   fFirstPass = TRUE;
     int   fInSection = FALSE;
+#ifdef WINCE
+    HFILE infile;
+    CHAR  *CurChar;
+    DWORD NumRead=0, CurPos=0;
+#else
     FILE *infile     = NULL;
+#endif
     UINT  cbReturn   = strlen(lpszDefault);
     UINT  cbRemain   = cbReturnBuffer;
     UINT  cbRead;
@@ -264,13 +276,32 @@ wGetPrivateProfileString( PCHAR lpszSection,
     /*
      *  Section is not cached, let's cache it now/
      */
+#ifdef WINCE
+    if ( (infile = inifopen( lpszFilename )) == HFILE_ERROR )
+#else
     if ( (infile = inifopen( lpszFilename )) == NULL )
+#endif
         goto file_not_found;
 
 scanagain:
     //  read each line until section header
+#ifdef WINCE
+    CurPos = SetFilePointer((HANDLE)infile, 0L, NULL, FILE_CURRENT);
+#endif
     while ( fDontRead ? TRUE :
+#ifdef WINCE
+                        (ReadFile( (HANDLE)infile, ReadBuf, MAX_INI_LINE, &NumRead, NULL) != 0 && NumRead !=0 ) ) {
+                        CurChar = strstr(ReadBuf, "\r");
+                        if (CurChar != NULL) {
+                           *CurChar = 0x00;
+                           if (*(CurChar+1) == 0xA)
+                              *(CurChar+1) = 0x00;
+                        }
+                        CurPos = CurPos + strlen(ReadBuf)+2;
+                        SetFilePointer((HANDLE)infile, CurPos , NULL, FILE_BEGIN);
+#else
                         (myfgets( ReadBuf, MAX_INI_LINE, infile ) != NULL) ) {
+#endif
 
         fDontRead = FALSE;
         cbRead = strlen( ReadBuf ) + 1;
@@ -307,7 +338,11 @@ scanagain:
              *  The first pass didn't necessarily start at the beginning of
              *  the file.  So we will seek to the beginning and try again
              */
+#ifdef WINCE
+            _llseek( infile, 0L, FILE_BEGIN );
+#else
             fseek( infile, 0L, SEEK_SET );
+#endif
             fFirstPass = FALSE;
             goto scanagain;
         }
@@ -324,7 +359,11 @@ scanagain:
         pTemp->cbBufMax  = START_BUFFER_SIZE;
         pTemp->cbBufCur  = 0;
         pTemp->pNext     = pSectionRoot;
+#ifdef WINCE
+        pTemp->offBegin  = max( 0, (int)((UINT)_llseek( infile, 0L, FILE_CURRENT ) - cbRead));
+#else
         pTemp->offBegin  = max( 0, (int)((UINT)ftell(infile) - cbRead));
+#endif
         pSectionRoot     = pTemp;
     }
     else {
@@ -333,8 +372,23 @@ scanagain:
     }
 
     //  read each line until next section header
+#ifdef WINCE
+    CurPos = SetFilePointer((HANDLE)infile, 0L, NULL, FILE_CURRENT);
+#endif
     while ( fDontRead ? TRUE :
+#ifdef WINCE
+                        (ReadFile( (HANDLE)infile, ReadBuf, MAX_INI_LINE, &NumRead, NULL) != 0 && NumRead != 0) ) {
+                        CurChar = strstr(ReadBuf, "\r");
+                        if (CurChar != NULL) {
+                           *CurChar = 0x00;
+                           if (*(CurChar+1) == 0xA)
+                              *(CurChar+1) = 0x00;
+                        }
+                        CurPos = CurPos + strlen(ReadBuf)+2;
+                        SetFilePointer((HANDLE)infile, CurPos , NULL, FILE_BEGIN);
+#else
                         (myfgets( ReadBuf, MAX_INI_LINE, infile ) != NULL) ) {
+#endif
 
         fDontRead = FALSE;
 
@@ -344,8 +398,11 @@ scanagain:
 
         //  section header?
         if ( ReadBuf[0] == '[' ) {
-            pTemp->offEnd  = (UINT)ftell( infile ) -
-                             strlen(ReadBuf) - 1;
+#ifdef WINCE
+            pTemp->offEnd  = (UINT)_llseek( infile, 0L, FILE_CURRENT ) - strlen(ReadBuf) - 1;
+#else
+            pTemp->offEnd  = (UINT)ftell( infile ) - strlen(ReadBuf) - 1;
+#endif
             /*
              * undo last fgets
              *
@@ -362,6 +419,20 @@ scanagain:
 
         //  find = sign, signal of a valid entry syntax
         if ( (strchr( ReadBuf, '=' )) != NULL ) {
+
+#ifdef WINCE
+            //For WinCE
+            //Remove \r and \n if Windows and not DOS
+            if ( (ReadBuf[strlen(ReadBuf)-1] == '\r') || (ReadBuf[strlen(ReadBuf)-1] == '\n') ) {
+               ReadBuf[strlen(ReadBuf)-1] = 0x00;
+            }
+            if ( (ReadBuf[strlen(ReadBuf)-1] == '\r') || (ReadBuf[strlen(ReadBuf)-1] == '\n') ) {
+               ReadBuf[strlen(ReadBuf)-1] = 0x00;
+            }
+            if ( (lpszEntry == NULL) && (ReadBuf[strlen(ReadBuf)-1] == '=' ) ) {
+               ReadBuf[strlen(ReadBuf)-1] = 0x00;
+            }
+#endif
 
             //  get current strlen with NULL terminator
             cb = strlen( ReadBuf ) + 1;
@@ -390,7 +461,11 @@ scanagain:
 
     // If we reached the file end, calculate the end
     if ( ReadBuf[0] != '[' ) {
+#ifdef WINCE
+        pTemp->offEnd  = (UINT)_llseek( infile, 0L, FILE_CURRENT );
+#else
         pTemp->offEnd  = (UINT)ftell( infile );
+#endif
     }
 
     //  realloc to true size
@@ -627,10 +702,18 @@ FlushPrivateProfileCache()
 *
 ****************************************************************************/
 
+#ifdef WINCE
+HFILE
+#else
 FILE *
+#endif
 inifopen( PCHAR filename )
 {
+#ifdef WINCE
+    HFILE fp;
+#else
     FILE * fp = NULL;
+#endif
     PFILECACHE pTemp;
 
     /*
@@ -649,7 +732,11 @@ inifopen( PCHAR filename )
      *  not found, open now
      */
     if ( (pTemp = (PFILECACHE) malloc( sizeof( FILECACHE ) )) != NULL ) {
+#ifdef WINCE
+        if ( (fp = _lopen( filename, OF_READ )) != HFILE_ERROR ) {
+#else
         if ( (fp = fopen( filename, "rb" )) != NULL ) {
+#endif
             pTemp->pFilename = strdup( filename );
             pTemp->fp = fp;
             pTemp->pNext = pFileRoot;
@@ -690,7 +777,11 @@ iniflush()
         pNext = pTemp->pNext;
 
         // dealloc this node
+#ifdef WINCE
+        (void) _lclose( pTemp->fp );
+#else
         (void) fclose( pTemp->fp );
+#endif
         (void) free( pTemp->pFilename );
         (void) free( pTemp );
     }
@@ -912,7 +1003,11 @@ int  WFCAPI RefreshProfile( PCHAR pszFile )
            }
 
            // dealloc this node
+#ifdef WINCE
+           (void) _lclose( pFTemp->fp );
+#else
            (void) fclose( pFTemp->fp );
+#endif
            (void) free( pFTemp->pFilename );
            (void) free( pFTemp );
            break;

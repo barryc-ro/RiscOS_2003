@@ -9,30 +9,37 @@
 *
 * copyright notice: Copyright 1995, Citrix Systems Inc.
 *
-* smiddle
+* $Author$
 *
-* encrypt.c,v
-* Revision 1.1  1998/01/12 11:35:39  smiddle
-* Newly added.#
-*
-* Version 0.01. Not tagged
-*
+* $Log$
 *  
+*     Rev 1.9   Apr 03 1998 18:35:18   bills
+*  "Backed out" the changes for the UK Reducer
+*  
+*     Rev 1.8   Mar 30 1998 16:14:58   grega
+*  Merged in UK Reducer
+*  
+*     Rev 1.7   25 Feb 1998 16:44:26   TOMA
+*  CE Merge
+*  
+*     Rev 1.7   19 Aug 1997 14:45:28   TOMA
+*  update
+*
 *     Rev 1.6   15 Apr 1997 16:51:56   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.6   21 Mar 1997 16:07:10   bradp
 *  update
-*  
+*
 *     Rev 1.5   08 May 1996 16:48:38   jeffm
 *  update
-*  
+*
 *     Rev 1.4   31 May 1995 15:11:02   terryt
 *  Change Encryption algorithm
-*  
+*
 *     Rev 1.3   09 May 1995 11:43:08   terryt
 *  Reconnect redo and fix types
-*  
+*
 *     Rev 1.2   03 May 1995 11:27:18   butchd
 *  clib.h now standard
 *
@@ -70,15 +77,19 @@ GetTimeStamp( LPBYTE Stamp, ULONG Size )
 
     _dos_gettime(&SystemTime);
 #else
-    DWORD SystemTime = 0;	// SJM: fixme
+    DWORD SystemTime;
 
-//  SystemTime = GetCurrentTime();
+#ifdef WINCE
+    //BUGBUGCE This should return the same info
+    SystemTime = GetTickCount();
+#else
+    SystemTime = GetCurrentTime();
+#endif
 #endif
 
     for ( i = 0; i < sizeof(SystemTime); i++)
         Stamp[i%Size] += ((LPBYTE)(&SystemTime))[i];
 }
-
 
 /*
  * Don't pay too much attention to this, it's just expanding small
@@ -88,7 +99,7 @@ GetTimeStamp( LPBYTE Stamp, ULONG Size )
  * At the moment we really only use this for 1 byte session keys,
  * so it's overkill;
  */
-void STATIC 
+void STATIC
 CreateRand( LPBYTE RandData, ULONG Size )
 {
     ULONG i;
@@ -103,9 +114,9 @@ CreateRand( LPBYTE RandData, ULONG Size )
     }
     for ( i = 0; i < 4; i++ ) {
         for ( j = 0; j < Size; j++ ) {
-	    RandData[j] += Mess;
-	    Mess = RandData[j] ^ (BYTE)j + (BYTE)i;
-	}
+       RandData[j] += Mess;
+       Mess = RandData[j] ^ (BYTE)j + (BYTE)i;
+   }
     }
 }
 
@@ -121,10 +132,10 @@ CreateRand( LPBYTE RandData, ULONG Size )
  *  in the main loop, there should only be 1 read and 1 write memory,
  *  unfortuneately there are normally more.
  */
-void STATIC 
+void STATIC
 EncryptStream( PPDCRYPT pPdCrypt,
                LPBYTE Buffer,
-	       USHORT Size )
+          USHORT Size )
 {
     USHORT Cur;
     USHORT Seed;
@@ -134,11 +145,12 @@ EncryptStream( PPDCRYPT pPdCrypt,
 
     do {
         Cur = *Buffer ^ ( Cur ^ Seed );
-	*Buffer++ = (BYTE)Cur;
+   *Buffer++ = (BYTE)Cur;
     } while ( --Size );
 
     pPdCrypt->OutputQueue = (BYTE)Cur;
 }
+
 
 /*
  *  The algorithm is XOR the previously encrypted byte with the seed, and then
@@ -154,7 +166,8 @@ EncryptStream( PPDCRYPT pPdCrypt,
 void STATIC 
 DecryptStream( PPDCRYPT pPdCrypt,
                LPBYTE Buffer,
-	       USHORT Size )
+          USHORT Size )
+
 {
     USHORT i;
     USHORT Last;
@@ -174,18 +187,18 @@ DecryptStream( PPDCRYPT pPdCrypt,
 }
 
 /*
- *  This should be RSA. 
+ *  This should be RSA.
  */
-void STATIC 
+void STATIC
 CreatePublicKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, PUSHORT Size )
 {
     *Size = 0;
 }
 
 /*
- *  This should be RSA. 
+ *  This should be RSA.
  */
-void STATIC 
+void STATIC
 InitPublicKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, USHORT Size )
 {
 
@@ -194,7 +207,7 @@ InitPublicKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, USHORT Size )
 /*
  * Initialize the queues with agreed upon values.
  */
-void STATIC 
+void STATIC
 InitSessionState( PPDCRYPT pPdCrypt )
 {
    pPdCrypt->InputQueue = pPdCrypt->SessionKey | 0x43;
@@ -209,7 +222,7 @@ InitSessionState( PPDCRYPT pPdCrypt )
  * If this were real encryption, we wouldn't want to use the same values
  * that we started with.
  */
-void STATIC 
+void STATIC
 InitSessionState2( PPDCRYPT pPdCrypt )
 {
 
@@ -223,8 +236,8 @@ InitSessionState2( PPDCRYPT pPdCrypt )
  * session.
  *
  */
-void STATIC 
-InitSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, USHORT Size ) 
+void STATIC
+InitSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, USHORT Size )
 {
    if ( Size < 1 )
        return;
@@ -237,8 +250,8 @@ InitSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, USHORT Size )
 /*
  * This is called by reconnected sessions.  No public/private needed.
  */
-void STATIC 
-ResetSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, USHORT Size ) 
+void STATIC
+ResetSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, USHORT Size )
 {
    if ( Size < 1 )
        return;
@@ -251,8 +264,8 @@ ResetSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, USHORT Size )
 /*
  * This is called by reconnected sessions.  No public/private needed.
  */
-void STATIC 
-ResetSessionState( PPDCRYPT pPdCrypt ) 
+void STATIC
+ResetSessionState( PPDCRYPT pPdCrypt )
 {
    InitSessionState2( pPdCrypt );
 }
@@ -261,7 +274,7 @@ ResetSessionState( PPDCRYPT pPdCrypt )
 /*
  * Create a session key and then encrypt it using the public key.
  */
-void STATIC 
+void STATIC
 CreateSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, PUSHORT Size )
 {
     CreateRand( &pPdCrypt->SessionKey, 1 );
@@ -278,8 +291,8 @@ CreateSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, PUSHORT Size )
 /*
  * Get session key, for use by reconnected sessions
  */
-void STATIC 
-GetSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, PUSHORT Size ) 
+void STATIC
+GetSessionKey( PPDCRYPT pPdCrypt, LPBYTE Buffer, PUSHORT Size )
 {
    if ( *Size > 0 ) {
        *Buffer = pPdCrypt->SessionKey;

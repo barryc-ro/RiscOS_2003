@@ -10,6 +10,9 @@
 *
 * $Log$
 *  
+*     Rev 1.11   May 01 1998 15:04:00   DavidT
+*  WinCE SH# alignment fix
+*  
 *     Rev 1.10   Oct 09 1997 18:15:04   briang
 *  Conversion to MemIni use
 *  
@@ -226,8 +229,10 @@ RingBufWrite( LPBYTE pBuffer, USHORT ByteCount )
      *  Save byte count in ring buffer
      */
     if ( Count > 1 ) {
+		UCHAR *BytePtr = (UCHAR *)&(Ring.pMem[Ring.Tail]);
 
-        *((PUSHORT)&Ring.pMem[Ring.Tail]) = ByteCount;
+		*BytePtr++ = LSB(ByteCount);
+		*BytePtr   = MSB(ByteCount);
         ADVANCE( Ring.Tail, 2, Ring.ByteCount );
 
     } else {
@@ -313,12 +318,15 @@ RingBufReadAvail( PUSHORT pBytesAvail )
 {
     USHORT HeadSave;
     USHORT Count;
+	UCHAR *bytesAvailPtr = (UCHAR *)pBytesAvail;
 
     /*
      *  Check if any read data is available
      */
     if ( Ring.Head == Ring.Tail ) {
-        *pBytesAvail = 0;
+
+		*bytesAvailPtr = 0;
+		*(bytesAvailPtr+1) = 0;
         return( CLIENT_STATUS_NO_DATA );
     }
 
@@ -331,8 +339,10 @@ RingBufReadAvail( PUSHORT pBytesAvail )
      *  Return number of bytes available
      */
     if ( Count > 1 ) {
+		UCHAR *BytePtr = (UCHAR *)(&Ring.pMem[Ring.Head]);
 
-        *pBytesAvail = *((PUSHORT)&Ring.pMem[Ring.Head]);
+		*bytesAvailPtr = *BytePtr++;
+		*(bytesAvailPtr+1) = *BytePtr;
 
     } else {
 

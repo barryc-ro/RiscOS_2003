@@ -1459,7 +1459,7 @@ static int log_init(void)
        EMLogInfo.LogFlags |= LOG_FILE;
 
 #if 1
-   EMLogInfo.LogClass    = LOG_ASSERT | TC_UI | TC_LIB | TC_TD;
+   EMLogInfo.LogClass    = LOG_ASSERT | TC_UI;
    EMLogInfo.LogEnable   = TT_ERROR;
    EMLogInfo.LogTWEnable = 0;
 #else

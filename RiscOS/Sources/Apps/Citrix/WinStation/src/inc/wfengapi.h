@@ -12,199 +12,279 @@
 *
 *  Author: Butch Davis (4/4/95)
 *
-*  wfengapi.h,v
-*  Revision 1.5  1998/06/19 17:12:27  smiddle
-*  Merged in Beta2 code. A few redundant header files removed, various new ones
-*  added. It all compiles and sometimes it runs. Mostly it crashes in the new
-*  ini code though.
-*  Added a check for the temporary ICA file being created OK. If not then it gives
-*  a warning that the scrap directory might need to be set up.
-*  Upped version number to 0.40 so that there is room for some bug fixes to the
-*  WF 1.7 code.
+*  $Log$
+*  
+*     Rev 1.106   08 May 1998 15:03:50   terryt
+*  ipx receive buffer increase
+*  
+*     Rev 1.105   05 May 1998 17:23:26   DAVIDS
+*  UK fix of hard-coded audio dll paths for CE
+*  
+*     Rev 1.104   May 02 1998 20:05:06   briang
+*  leave user profile as the default kbd layout
+*  
+*     Rev 1.103   May 02 1998 19:50:42   briang
+*  Add Server Default to keyboard layout list
+*  
+*     Rev 1.102   May 01 1998 09:59:24   sumitd
+*  Error when the IPX maximum connection limit reached
+*  
+*     Rev 1.101   26 Apr 1998 22:51:50   terryt
+*  add vesa low memory INI parameters
+*  
+*     Rev 1.100   26 Apr 1998 19:38:18   terryt
+*  provide more descriptive out of memory error messages
+*  
+*     Rev 1.99   Apr 20 1998 19:05:22   sumitd
+*  AutoLogonAllowed flag for Secure ICA
+*  
+*     Rev 1.98   17 Apr 1998 16:53:04   derekc
+*  added reducer for WinCE
+*  
+*     Rev 1.97   Apr 16 1998 18:02:10   bills
+*  Changed the location in module.ini where information such as the 
+*  converter module name lives.  Needed to make define's to match
+*  
+*     Rev 1.96   16 Apr 1998 15:26:16   ianr
+*  Ensure correct dll names for WINCE
+*  
+*     Rev 1.95   15 Apr 1998 14:09:26   terryt
+*  log flushing off by default for windows - performance
+*  
+*     Rev 1.94   14 Apr 1998 23:01:38   kurtp
+*  fix reducer defaults
+*  
+*     Rev 1.93   13 Apr 1998 18:38:24   kurtp
+*  add UK reducer code
+*  
+*     Rev 1.92   08 Apr 1998 19:00:40   kevins
+*  client comm port polling
+*  
+*     Rev 1.91   Apr 03 1998 16:27:34   bills
+*  "Backed out" the changes made for the UK Reducer
+*  
+*     Rev 1.90   02 Apr 1998 11:51:22   butchd
+*  Added DEF_ENCRYPTIONDLL define (Encrypt)
+*  
+*     Rev 1.89   Apr 01 1998 17:21:12   bills
+*  Added a few more audio converter ini settings changes
+*  
+*     Rev 1.88   31 Mar 1998 09:46:32   butchd
+*  Added DEF_COMPRESSION and DEF_CAM
+*  
+*     Rev 1.87   Mar 30 1998 17:01:02   bills
+*  Added support for the audio converter
+*  
+*     Rev 1.86   Mar 30 1998 16:05:02   grega
+*  Merged in UK Reducer
+*  
+*     Rev 1.85   26 Mar 1998 14:23:06   butchd
+*  Changed INI_PROGRAMGROUP to Citrix ICA Client from ICA Client
+*  
+*     Rev 1.84   Mar 24 1998 15:13:18   scottc
+*  added web client defines
+*  
+*     Rev 1.83   24 Mar 1998 14:26:52   Thanhl
+*  Update
+*  
+*     Rev 1.82   24 Mar 1998 11:48:18   Thanhl
+*  KEYBOARD TYPE UPDATE
+*  
+*     Rev 1.81   23 Mar 1998 17:42:50   Thanhl
+*  Update keyboard type
+*  
+*     Rev 1.80   20 Mar 1998 18:00:06   butchd
+*  CPR 9298: Win UI Marketing changes
+*  
+*     Rev 1.79   Mar 20 1998 16:00:42   xuanh
+*  CPR9198 optionally load VDCDM, VDCPM, VDCOM based on settings in appsrv.ini
+*  
+*     Rev 1.78   Mar 20 1998 15:55:24   xuanh
+*  add CTRL-SHFIT-ESC hotkey9.
+*  
+*     Rev 1.77   14 Mar 1998 18:31:36   toma
+*  CE Merge
 *
-*  Version 0.40. Tagged as 'WinStation-0_40'
+*     Rev 1.76   11 Mar 1998 12:55:44   kalyanv
+*  added DEF_SERIALBANDWIDTHLIMIT
 *
-*  
-*     Rev 1.76   Feb 22 1998 12:23:54   xuanh
-*  DEF_USEAREAANDCOUNTRY is TRUE.
-*  
-*     Rev 1.74   Feb 20 1998 11:30:46   xuanh
-*  DEF_SERIALBANDWIDTHLIMIT is added.
-*  
+*     Rev 1.75   01 Mar 1998 14:49:30   TOMA
+*  ce merge
+*
 *     Rev 1.73   Feb 17 1998 20:56:06   sumitd
 *  SV_TYPE_TERMINALSERVER added
-*  
+*
 *     Rev 1.72   21 Jan 1998 15:19:08   butchd
 *  removed INI_CAM_AUDIOBANDWIDTHLIMIT and DEF_
-*  
+*
 *     Rev 1.71   Jan 21 1998 14:05:14   xuanh
 *  update
-*  
+*
 *     Rev 1.70   Jan 21 1998 14:02:14   xuanh
 *  add audio bandwidth limit
-*  
+*
 *     Rev 1.69   20 Jan 1998 15:10:10   butchd
 *  Added TWI definitions
-*  
+*
 *     Rev 1.68   19 Jan 1998 15:02:58   butchd
 *  update
-*  
+*
 *     Rev 1.67   19 Jan 1998 15:01:06   butchd
 *  Added INI_CAM_BANDWIDTHLIMIT and DEF_
-*  
+*
 *     Rev 1.66   16 Jan 1998 15:53:06   butchd
 *  update
-*  
+*
 *     Rev 1.65   16 Jan 1998 13:34:16   brada
 *  Add INI file macros from vdcm.h
-*  
+*
 *     Rev 1.64   14 Jan 1998 16:53:46   butchd
 *  added TAPI device configuration defines
-*  
+*
 *     Rev 1.63   13 Jan 1998 23:01:54   davidp
 *  added values for audio converter module name
-*  
+*
 *     Rev 1.62   Jan 08 1998 17:50:32   sumitd
 *  Clear Test Password acceptance
-*  
+*
 *     Rev 1.61   06 Jan 1998 16:11:52   butchd
 *  update
-*  
+*
 *     Rev 1.60   12 Dec 1997 15:03:20   butchd
 *  Added INI_COUNTRYSTRING for TAPI UI
-*  
+*
 *     Rev 1.59   08 Dec 1997 18:44:46   butchd
 *  Add Direct Connection DEFAULT and MRU keys
-*  
+*
 *     Rev 1.58   08 Dec 1997 16:57:10   butchd
 *  Add TAPI defines
-*  
+*
 *     Rev 1.57   03 Dec 1997 11:32:14   terryt
 *  vesa client
-*  
+*
 *     Rev 1.56   Nov 13 1997 18:51:42   briang
 *  Add WebClient IntlKB Support for WIN16
-*  
+*
 *     Rev 1.55   03 Nov 1997 09:09:46   brada
 *  Added firewall load balancing support
-*  
+*
 *     Rev 1.54   30 Oct 1997 20:43:52   tariqm
 *  fix for CPR 7250: When encryption is specified in the ICA file, the web client generates an error
-*  
+*
 *     Rev 1.53   28 Oct 1997 16:41:20   stephens
 *  Added DRIVER_BAD_CONFIG for DOS Audio Driver
-*  
+*
 *     Rev 1.52   Oct 10 1997 10:22:38   briang
 *  update
-*  
+*
 *     Rev 1.50   09 Oct 1997 21:49:12   tariqm
 *  Audio UI
-*  
+*
 *     Rev 1.49   Oct 09 1997 18:54:52   briang
 *  Conversion to MemIni use
-*  
+*
 *     Rev 1.44   15 Oct 1997 16:18:06   kalyanv
 *  updated
-*  
+*
 *     Rev 1.43   14 Oct 1997 17:07:24   kalyanv
 *  Added the EnCRYPT_LEVEL_INCORRECT_USE constant
-*  
+*
 *     Rev 1.42   10 Sep 1997 16:09:16   kalyanv
 *  added the encryption level session names
-*  
+*
 *     Rev 1.41   20 Aug 1997 00:12:16   tariqm
 *  RSA Copyright message
-*  
+*
 *     Rev 1.39   18 Jul 1997 15:40:30   tariqm
 *  Encryption DLL  Load
-*  
+*
 *     Rev 1.38   16 Jul 1997 18:11:40   terryt
 *  add error messages
-*  
+*
 *     Rev 1.37   25 Jun 1997 18:09:56   tariqm
 *  Addition of encryption interface to GUI
-*  
+*
 *     Rev 1.35   18 Jun 1997 11:36:54   butchd
 *  Added SV_TYPE_APPSERVER bit
-*  
+*
 *     Rev 1.34   11 Jun 1997 10:17:00   terryt
 *  client double click support
 *
 *     Rev 1.33   18 Apr 1997 16:44:36   butchd
 *  changed min & incr of persistant cache to 2K
-*  
+*
 *     Rev 1.32   15 Apr 1997 18:46:24   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.31   20 Feb 1997 14:06:26   butchd
 *  update
-*  
+*
 *     Rev 1.30   11 Feb 1997 10:58:58   butchd
 *  update
-*  
+*
 *     Rev 1.29   08 Feb 1997 13:55:02   jeffm
 *  multiple browser support added
-*  
+*
 *     Rev 1.28   07 Feb 1997 13:52:14   butchd
 *  update
-*  
+*
 *     Rev 1.27   06 Feb 1997 11:12:58   bradp
 *  reduce keyboard timer
-*  
+*
 *     Rev 1.26   28 Jan 1997 07:25:48   butchd
 *  added Server Location UI defines
-*  
+*
 *     Rev 1.25   22 Jan 1997 17:49:54   kurtp
 *  update
-*  
+*
 *     Rev 1.24   20 Jan 1997 18:12:10   butchd
 *  Added browser address list section key defines
-*  
+*
 *     Rev 1.23   14 Jan 1997 17:24:14   butchd
 *  update
-*  
+*
 *     Rev 1.22   13 Jan 1997 14:41:50   butchd
 *  update
-*  
+*
 *     Rev 1.21   27 Nov 1996 19:16:52   jeffm
 *  added SetInfo type of WFEFileSecurity
-*  
+*
 *     Rev 1.20   13 Nov 1996 12:18:34   richa
-*  
+*
 *     Rev 1.19   28 Aug 1996 10:22:32   marcb
 *  update
-*  
+*
 *     Rev 1.18   13 Aug 1996 13:12:54   jeffm
 *  Added max for x and y resolution of client.
-*  
+*
 *     Rev 1.17   13 Aug 1996 11:38:20   BillG
 *  add ICAPortNumber
-*  
+*
 *     Rev 1.16   27 Jul 1996 11:04:24   butchd
 *  update
-*  
+*
 *     Rev 1.15   26 Jun 1996 14:59:26   brucef
 *  Added DOS-specific keywords for mouse and
 *  keyboard user preferences.
-*  
-*  
+*
+*
 *     Rev 1.14   25 Jun 1996 11:47:50   butchd
 *  update
-*  
+*
 *     Rev 1.13   12 Jun 1996 14:16:46   marcb
 *  update
-*  
+*
 *     Rev 1.12   04 Jun 1996 15:49:36   jeffm
 *  update
-*  
+*
 *     Rev 1.10   01 Jun 1996 12:15:42   unknown
-*  
+*
 *     Rev 1.9   16 May 1996 12:25:22   marcb
 *  update
-*  
+*
 *     Rev 1.8   06 May 1996 19:26:38   jeffm
 *  update
-*  
+*
 *     Rev 1.7   27 Apr 1996 16:05:10   andys
 *  soft keyboard
 *
@@ -259,7 +339,7 @@ extern "C" {
 /* Due to contention in the bit, Citrix was given a different bit - 02/17/98 */
 
 #ifndef SV_TYPE_TERMINALSERVER
-#define SV_TYPE_TERMINALSERVER      0x02000000  
+#define SV_TYPE_TERMINALSERVER      0x02000000
                   /*  Multi-User NT and Citrix WinFrame (for Beta 2 and future) */
 #endif
 
@@ -361,12 +441,16 @@ typedef PLIBPROCEDURE far * PPLIBPROCEDURE;
 #define CLIENT_STATUS_HOTKEY6                       905 // Win only
 #define CLIENT_STATUS_HOTKEY7                       906 // Win only
 #define CLIENT_STATUS_HOTKEY8                       907 // Win only
+#define CLIENT_STATUS_HOTKEY9                       908 // Win only
+
 #ifdef DOS
 #define WFENG_NUM_HOTKEYS                           2
 #else
-#define WFENG_NUM_HOTKEYS                           8
+#define WFENG_NUM_HOTKEYS                           9
 #endif
 
+
+#ifndef WINCE
 /*
  * Hotkeys (all)
  */
@@ -382,6 +466,27 @@ typedef PLIBPROCEDURE far * PPLIBPROCEDURE;
 #define HOTKEY_ALT_ESC          /* Alt+F2   */      CLIENT_STATUS_HOTKEY6
 #define HOTKEY_ALT_TAB          /* Alt+F3   */      CLIENT_STATUS_HOTKEY7
 #define HOTKEY_ALT_BACKTAB      /* Ctrl+F3  */      CLIENT_STATUS_HOTKEY8
+#define HOTKEY_CTRL_SHIFT_ESC   /* Ctrl+F3  */      CLIENT_STATUS_HOTKEY9
+#endif //WINCE
+
+#ifdef WINCE
+/*
+ * Hotkeys (all)
+ */
+#define HOTKEY_UI               /* Ctrl+6 */      CLIENT_STATUS_HOTKEY1
+#define HOTKEY_EXIT             /* Ctrl+2 */      CLIENT_STATUS_HOTKEY2
+
+/*
+ * Hotkeys (Win)
+ */
+#define HOTKEY_TITLEBAR_TOGGLE  /* Ctrl+3 */      CLIENT_STATUS_HOTKEY3
+#define HOTKEY_CTRL_ALT_DEL     /* Ctrl+4 */      CLIENT_STATUS_HOTKEY4
+#define HOTKEY_CTRL_ESC         /* Ctrl+5 */      CLIENT_STATUS_HOTKEY5
+#define HOTKEY_ALT_ESC          /* Ctrl+7  */      CLIENT_STATUS_HOTKEY6
+#define HOTKEY_ALT_TAB          /* Ctrl+8  */      CLIENT_STATUS_HOTKEY7
+#define HOTKEY_ALT_BACKTAB      /* Ctrl+9  */      CLIENT_STATUS_HOTKEY8
+#define HOTKEY_CTRL_SHIFT_ESC   /* Ctrl+1  */      CLIENT_STATUS_HOTKEY9
+#endif // WINCE
 
 /*
  *  General errors
@@ -483,9 +588,27 @@ typedef PLIBPROCEDURE far * PPLIBPROCEDURE;
 #define CLIENT_ERROR_TAPI_LINE_NO_EXIST           1094
 #define CLIENT_ERROR_TAPI_NEGOTIATE_LINE          1095
 #define CLIENT_ERROR_TAPI_CALL_NOT_MADE           1096
+#define CLIENT_ERROR_NO_MEMORY_LOAD_AUDIO_VESA    1097
+#define CLIENT_ERROR_NO_MEMORY_LOAD_AUDIO         1098
+#define CLIENT_ERROR_NO_MEMORY_LOAD_VESA          1099
+#define CLIENT_ERROR_NO_MEMORY_LOAD               1100
+#define CLIENT_ERROR_IPX_CONNECT_TIMEOUT          1101
 // Range of 1600-1899 is reserved for specific client implementations
 #define CLIENT_ERROR_RESERVED_16XX_18XX           1600
 
+/*=============================================================================
+ ==  Web Client defines
+ ============================================================================*/
+#define CURRENT_CONNECTION     "CurrentConnection"
+#define GLOBAL_SECURITY_ACCESS "GlobalSecurityAccess"
+#define WEB_ICA_INI            "webica.ini"
+#define ACCESS                 "Access"
+
+#ifndef WIN16
+#define ACCESS_UNDEFINED       0xFFFFFFFF
+#else
+#define ACCESS_UNDEFINED       0xFFFF
+#endif
 
 /*=============================================================================
  ==  String lengths and invalid character defines
@@ -554,6 +677,7 @@ typedef PLIBPROCEDURE far * PPLIBPROCEDURE;
 #define MODEMINIT_LENGTH        12
 #define MODEMINITSTRING_LENGTH  80
 #define KEYBOARDLAYOUT_LENGTH   40
+#define KEYBOARDTYPE_LENGTH	40
 #define HOTKEYNAME_LENGTH       20
 
 #define DIALINGLOCATION_LENGTH  128
@@ -562,17 +686,17 @@ typedef PLIBPROCEDURE far * PPLIBPROCEDURE;
 #define DIALCOUNTRY_LENGTH      64
 
 // The following #define is in support of Application Publishing (.ICA files),
-// where the 'Address' and 'Description' (the entry's section name) are 
-// likely to be the same, so we'll use the smaller of the two 
+// where the 'Address' and 'Description' (the entry's section name) are
+// likely to be the same, so we'll use the smaller of the two
 // (DESCRIPTION_LENGTH) for usability sake.
 //
-// BUG Note (ButchD 7/27/96): Instead this #define being set to the existing 
-// DESCRIPTION_LENGTH (40), the define is set to 38, for compatability with 
+// BUG Note (ButchD 7/27/96): Instead this #define being set to the existing
+// DESCRIPTION_LENGTH (40), the define is set to 38, for compatability with
 // early (WF 1.6 and Internet) .ICA file processing clients.  These
-// clients had a bug processing the [ApplicationServers] section which would 
-// truncate the 'Description' (section name) to 38 characters max instead of 
-// the 40 character max that it should be allowed to have.  Therefore, to 
-// maintain compatibility for all .ICA file clients, the 'Address' and 
+// clients had a bug processing the [ApplicationServers] section which would
+// truncate the 'Description' (section name) to 38 characters max instead of
+// the 40 character max that it should be allowed to have.  Therefore, to
+// maintain compatibility for all .ICA file clients, the 'Address' and
 // 'Description' will have a maximum of 38 characters.
 
 #define ICAFILE_ADDRESS_AND_DESCRIPTION_LENGTH  38
@@ -618,6 +742,7 @@ typedef CHAR MODEM[ MODEM_LENGTH+1 ];
 typedef CHAR MODEMINIT[ MODEMINIT_LENGTH+1 ];
 typedef CHAR MODEMINITSTRING[ MODEMINITSTRING_LENGTH+1 ];
 typedef CHAR KEYBOARDLAYOUT[ KEYBOARDLAYOUT_LENGTH+1 ];
+typedef CHAR KEYBOARDTYPE[ KEYBOARDTYPE_LENGTH+1 ];	
 typedef CHAR HOTKEYNAME[ HOTKEYNAME_LENGTH+1 ];
 typedef CHAR DIALINGLOCATION[ DIALINGLOCATION_LENGTH+1 ];
 typedef CHAR DIALINGPREFIX[ DIALINGPREFIX_LENGTH+1 ];
@@ -637,6 +762,7 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_SERVER_FILE     "APPSRV.INI"
 #define CLIENTNAME_FILE     "WFCNAME.INI"
 #define SETUP_FILE          "WFCSETUP.INI"
+#define INI_REDUCER_DEFAULT "ICAREDUC.DLL"
 
 
 /*=============================================================================
@@ -703,6 +829,17 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
  */
 #define INI_KEYBOARDLAYOUT  "KeyboardLayout"
 #define DEF_KEYBOARDLAYOUT  "(User Profile)"      // user NT user profile code
+#define DEF_SRVDEFAULTKBDLAYOUT "(Server Default)"	
+
+#define INI_KEYBOARDSECTION   "Keyboard"
+#define INI_KEYBOARDDLL       "keyboard.dll"
+#define INI_KBDLL_CODES       "Keyboard Dll Codes"
+
+#define DEF_KEYBOARDTYPE  "(DEFAULT)"      // auto detect
+#define INI_KEYBRDTYPESECTION   "KeyboardType"
+#define DEF_KEYBOARD		"(User Profile)"
+#define INI_KEYBRDTYPE		"type"
+#define INI_KEYBRDSUBTYPE	"subtype"
 
 #define INI_KEYBOARDSECTION   "Keyboard"
 #define INI_KEYBOARDDLL       "keyboard.dll"
@@ -719,6 +856,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_IPXBROWSERADDRESS       "IpxBrowserAddress"
 #define DEF_IPXBROWSERADDRESS       ""
 #define INI_IPXBROWSERSTRING        "IPX/SPX"       // for Server Location UI
+#define INI_IPXRECEIVEBUFFERS       "ReceiveBuffers"
+#define DEF_IPXRECEIVEBUFFERS       10
 
 #define INI_NETBIOSSECTION              "NETBIOS"
 #define INI_NETBIOSBROWSERADDRESS       "NetBiosBrowserAddress"
@@ -789,6 +928,12 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #endif
 #define INI_LOGAPPEND       "LogAppend"
 #define DEF_LOGAPPEND       FALSE
+#define INI_LOGFLUSH       "LogFlush"
+#ifdef DOS
+#define DEF_LOGFLUSH        TRUE
+#else
+#define DEF_LOGFLUSH        FALSE  // Flushing is very slow under windows
+#endif
 
 #define INI_LOGCONNECT      "LogConnect"
 #define DEF_LOGCONNECT      TRUE
@@ -801,13 +946,27 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_LOGKEYBOARD     "LogKeyboard"
 #define DEF_LOGKEYBOARD     FALSE
 
+// Expansion/Reduction ini entries
+#ifdef DOS
+#define INI_EXP_PO2         "ServerToClientBuffPowerOf2"
+#define DEF_EXP_PO2         14
+#define INI_RED_PO2         "ClientToServerBuffPowerOf2"
+#define DEF_RED_PO2         14
+#else
+#define INI_EXP_PO2         "ServerToClientBuffPowerOf2"
+#define DEF_EXP_PO2         15
+#define INI_RED_PO2         "ClientToServerBuffPowerOf2"
+#define DEF_RED_PO2         13
+#endif
+
+
 
 // Define the ICA TCP Port Number
 
 #define INI_ICAPORTNUMBER       "ICAPortNumber"
 #define DEF_ICAPORTNUMBER   1494
 
-
+#ifndef WINCE
 /* HOTKEY_UI : Shift + F1 */
 #define INI_HOTKEY1_SHIFT   "Hotkey1Shift"
 #define DEF_HOTKEY1_SHIFT   "Shift"
@@ -872,6 +1031,90 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_HOTKEY8_CHAR    "minus"
 #define DEF_HOTKEY8_CHARV   74
 
+/* HOTKEY_CTRL_SHIFT_ESC : Ctrl + F3 */
+#define INI_HOTKEY9_SHIFT   "Hotkey9Shift"
+#define DEF_HOTKEY9_SHIFT   "Ctrl"
+#define DEF_HOTKEY9_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY9_CHAR    "Hotkey9Char"
+#define DEF_HOTKEY9_CHAR    "F3"
+#define DEF_HOTKEY9_CHARV   61
+#endif // ndef WINCE
+
+#ifdef WINCE
+
+/* HOTKEY_UI : Ctrl + 6 */
+#define INI_HOTKEY1_SHIFT   "Hotkey1Shift"
+#define DEF_HOTKEY1_SHIFT   "Ctrl"
+#define DEF_HOTKEY1_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY1_CHAR    "Hotkey1Char"
+#define DEF_HOTKEY1_CHAR    "6"
+#define DEF_HOTKEY1_CHARV   7
+
+/* HOTKEY_EXIT : Ctrl + 2 */
+#define INI_HOTKEY2_SHIFT   "Hotkey2Shift"
+#define DEF_HOTKEY2_SHIFT   "Ctrl"
+#define DEF_HOTKEY2_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY2_CHAR    "Hotkey2Char"
+#define DEF_HOTKEY2_CHAR    "2"
+#define DEF_HOTKEY2_CHARV   3
+
+/* HOTKEY_TITLEBAR_TOGGLE : Ctrl + 3 */
+#define INI_HOTKEY3_SHIFT   "Hotkey3Shift"
+#define DEF_HOTKEY3_SHIFT   "Ctrl"
+#define DEF_HOTKEY3_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY3_CHAR    "Hotkey3Char"
+#define DEF_HOTKEY3_CHAR    "3"
+#define DEF_HOTKEY3_CHARV   4
+
+/* HOTKEY_CTRL_ALT_DEL : Ctrl + 4 */
+#define INI_HOTKEY4_SHIFT   "Hotkey4Shift"
+#define DEF_HOTKEY4_SHIFT   "Ctrl"
+#define DEF_HOTKEY4_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY4_CHAR    "Hotkey4Char"
+#define DEF_HOTKEY4_CHAR    "4"
+#define DEF_HOTKEY4_CHARV   5
+
+/* HOTKEY_CTRL_ESC : Ctrl + 5 */
+#define INI_HOTKEY5_SHIFT   "Hotkey5Shift"
+#define DEF_HOTKEY5_SHIFT   "Ctrl"
+#define DEF_HOTKEY5_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY5_CHAR    "Hotkey5Char"
+#define DEF_HOTKEY5_CHAR    "5"
+#define DEF_HOTKEY5_CHARV   6
+
+/* HOTKEY_ALT_ESC : Ctrl + 7 */
+#define INI_HOTKEY6_SHIFT   "Hotkey6Shift"
+#define DEF_HOTKEY6_SHIFT   "Ctrl"
+#define DEF_HOTKEY6_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY6_CHAR    "Hotkey6Char"
+#define DEF_HOTKEY6_CHAR    "7"
+#define DEF_HOTKEY6_CHARV   8
+
+/* HOTKEY_ALT_TAB : Ctrl + 8 */
+#define INI_HOTKEY7_SHIFT   "Hotkey7Shift"
+#define DEF_HOTKEY7_SHIFT   "Ctrl"
+#define DEF_HOTKEY7_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY7_CHAR    "Hotkey7Char"
+#define DEF_HOTKEY7_CHAR    "8"
+#define DEF_HOTKEY7_CHARV   9
+
+/* HOTKEY_ALT_BACKTAB : Ctrl + 9 */
+#define INI_HOTKEY8_SHIFT   "Hotkey8Shift"
+#define DEF_HOTKEY8_SHIFT   "Ctrl"
+#define DEF_HOTKEY8_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY8_CHAR    "Hotkey8Char"
+#define DEF_HOTKEY8_CHAR    "9"
+#define DEF_HOTKEY8_CHARV   10
+
+/* HOTKEY_CTRL_SHIFT_ESC : Ctrl + 1 */
+#define INI_HOTKEY9_SHIFT   "Hotkey9Shift"
+#define DEF_HOTKEY9_SHIFT   "Ctrl"
+#define DEF_HOTKEY9_SHIFTV  KSS_EITHERCTRL
+#define INI_HOTKEY9_CHAR    "Hotkey9Char"
+#define DEF_HOTKEY9_CHAR    "1"
+#define DEF_HOTKEY9_CHARV   2
+#endif //WINCE
+
 #define INI_HOTKEY_SHIFT    "Hotkey%uShift"
 #define INI_HOTKEY_CHAR     "Hotkey%uChar"
 
@@ -904,6 +1147,17 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 
 #define INI_USEALTERNATEADDRESS "UseAlternateAddress"
 #define DEF_USEALTERNATEADDRESS 0
+
+
+#define INI_COMALLOWED    "COMAllowed"
+#define DEF_COMALLOWED    TRUE
+
+#define INI_CPMALLOWED    "CPMAllowed"
+#define DEF_CPMALLOWED    TRUE
+
+#define INI_CDMALLOWED    "CDMAllowed"
+#define DEF_CDMALLOWED    TRUE
+
 
 #define INI_MRU_CONNECTION  "MRU Connection"
 #define INI_MRU_NETWORK     "Network Connection"
@@ -981,6 +1235,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_DEFAULT_NETWORK "Default Network Connection"
 #define INI_PUBLISHEDAPP    "Published Application"
 #define DEF_PUBLISHEDAPP    FALSE
+#define INI_HIGH_BANDWIDTH  "High Bandwidth"
+#define DEF_HIGH_BANDWIDTH  TRUE
 #define INI_DEFAULT_SERIAL  "Default Serial Connection"
 /* Windows Client 4.0: Default Serial Connection is for Dial-In */
 /*                     Default Direct Connection is for Direct */
@@ -998,8 +1254,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_USERNAME        ""
 #define INI_PASSWORD        "Password"
 #define DEF_PASSWORD        ""
-#define INI_CLEAR_PASSWORD  "ClearPassword"   
-#define DEF_CLEAR_PASSWORD  ""		     	
+#define INI_CLEAR_PASSWORD  "ClearPassword"
+#define DEF_CLEAR_PASSWORD  ""
 
 #define INI_AUTHENCRYPTIONLEVEL "AuthEncryptionLevel"
 #define INI_DATAENCRYPTIONLEVEL "DataEncryptionLevel"
@@ -1013,7 +1269,7 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_INITIALPROGRAM  "InitialProgram"
 #define DEF_INITIALPROGRAM  ""
 #define INI_PROGRAMGROUP    "ProgramGroup"
-#define DEF_PROGRAMGROUP    "WinFrame Client"
+#define DEF_PROGRAMGROUP    "Citrix ICA Client"
 #define INI_ICONPATH        "IconPath"
 #define DEF_ICONPATH        ""
 #define INI_ICONINDEX       "IconIndex"
@@ -1037,6 +1293,7 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_DRIVERNAMEALT   "DriverNameAlt"
 #define INI_NAMEENUMERATOR  "NameEnumerator"
 #define INI_NAMERESOLVER    "NameResolver"
+#define INI_REDUCER         "Reducer"
 #endif
 
 #ifdef WIN16
@@ -1044,6 +1301,7 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_DRIVERNAMEALT   "DriverNameAltWin16"
 #define INI_NAMEENUMERATOR  "NameEnumeratorWin16"
 #define INI_NAMERESOLVER    "NameResolverWin16"
+#define INI_REDUCER         "ReducerWin16"
 #endif
 
 #ifdef WIN32
@@ -1051,6 +1309,12 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_DRIVERNAMEALT   "DriverNameAltWin32"
 #define INI_NAMEENUMERATOR  "NameEnumeratorWin32"
 #define INI_NAMERESOLVER    "NameResolverWin32"
+#define INI_REDUCER         "ReducerWin32"
+#endif
+
+#ifdef WINCE
+#undef INI_REDUCER
+#define INI_REDUCER         "ReducerWinCE"
 #endif
 #define INI_DRIVERUNSUPPORTED "Unsupported"
 
@@ -1102,7 +1366,9 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_LANANUMBER        0
 
 #define INI_COMPRESSION       "Compress"
+#define DEF_COMPRESSION       FALSE
 #define INI_CAM               "ClientAudio"
+#define DEF_CAM               FALSE
 #define INI_AUDIOBANDWIDTHLIMIT    "AudioBandwidthLimit"
 #define DEF_AUDIOBANDWIDTHLIMIT        1   // for network connection, default is "moderate"
 #define DEF_SERIALBANDWIDTHLIMIT       2   // for serial connection, default is "severe"
@@ -1113,9 +1379,10 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_TAPIDEVICE_CONFIGLINE   "TAPIDeviceConfigLine"
 #define INI_TAPIMODEM               "TAPIModem"
 
+#define INI_ENCRYPTIONDLL          "EncryptionDLL"
+#define DEF_ENCRYPTIONDLL          "Encrypt"
 #define INI_ENCRYPTIONLEVELAUTH "EncryptionLevelAuth"
 #define INI_ENCRYPTIONLEVELSESSION "EncryptionLevelSession"
-#define INI_ENCRYPTIONDLL          "EncryptionDLL"
 #define DEF_ENCRYPTIONLEVEL INI_ENCRYPTION_BASIC
 #define INI_DRIVERNAMEWIN32 "DriverNameWin32"
 #define INI_ENCRC5_0 "EncRC5-0"
@@ -1124,7 +1391,7 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_ENCRC5_128 "EncRC5-128"
 
 
-// Encryption Levels 
+// Encryption Levels
 #define     INI_ENCRYPTION_NONE     "None"
 #define     INI_ENCRYPTION_BASIC    "Basic"
 #define     INI_ENCRYPTION_RC5_40   "RC5 (40 bit)"
@@ -1382,8 +1649,10 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 //  256 or greater color supported on windows clients only
 #define INI_DESIREDCOLOR  "DesiredColor"
 #define DEF_DESIREDCOLOR  0x0001            //  16 color
+#define INI_VESALOWMEMLARGECACHE "VesaLowMemoryCache"
+#define INI_VESALOWMEMSMALLCACHE "VesaLowMemorySpecialCache"
 
-//  persistent cache (DIM) 
+//  persistent cache (DIM)
 #define INI_DIMCACHEENABLED     "PersistentCacheEnabled"
 #define DEF_DIMCACHEENABLED     0
 #define INI_DIMCACHESIZE        "PersistentCacheSize"
@@ -1414,6 +1683,18 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_CCMWINDOWSIZE      "WindowSize"
 #define DEF_CCMWINDOWSIZE      1024
 
+#define INI_COMSECTION         "ClientComm"
+#define INI_CCMCOMMPOLLSIZE    "CommPollSize"
+#define DEF_CCMCOMMPOLLSIZE    "Off"
+
+#define INI_CCMCOMMPOLLWAITMIN    "CommPollWaitMin"
+#define DEF_CCMCOMMPOLLWAITMIN    1        // 1 msec
+#define INI_CCMCOMMPOLLWAITMAX    "CommPollWaitMax"
+#define DEF_CCMCOMMPOLLWAITMAX    500      // half a second
+#define INI_CCMCOMMPOLLWAITINC    "CommPollWaitInc"
+#define DEF_CCMCOMMPOLLWAITINC    1        // 1 msec
+#define INI_CCMCOMMPOLLWAITINCTIME    "CommPollWaitIncTime"
+#define DEF_CCMCOMMPOLLWAITINCTIME    20        // wait 20 msec before next inc
 
 /*
  *  vdcdm30.dll
@@ -1475,7 +1756,10 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_CAM_VDSECTION           "ClientAudio"
 
 #define INI_CAM_AUDHW_SECTIONNAME   "AudioHWSection"
-#define DEF_CAM_AUDHW_SECTIONNAME   "AudioHardware"
+#define DEF_CAM_AUDHW_SECTIONNAME   "AudioConverter"
+
+#define INI_CAM_AUDCVT_LIST_SECTIONNAME   "ConverterSection"
+#define DEF_CAM_AUDCVT_LIST_SECTIONNAME   "AudioConverterList"
 
 #define INI_CAM_NUMCOMMANDBUFFERS   "NumCommandBuffers"
 #define DEF_CAM_NUMCOMMANDBUFFERS   64
@@ -1513,22 +1797,45 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_AUDHW_SECTION           "AudioHardware"
 
 #if defined(DOS)
-#define DEF_AUDHW_DRIVERNAME        "SB16.DDL"
+#define DEF_AUDHW_DRIVERNAME        "AUDCVT.DDL"
 #elif defined(WIN16)
-#define DEF_AUDHW_DRIVERNAME        "AUDHALW.DLL"
-#elif defined(WIN32)
-#define DEF_AUDHW_DRIVERNAME        "AUDHALN.DLL"
-#elif defined(RISCOS)
-#define DEF_AUDHW_DRIVERNAME        "AUDHAL"
+#define DEF_AUDHW_DRIVERNAME        "AUDCVT.DLL"
+#elif defined(WINCE)
+#define DEF_AUDHW_DRIVERNAME        "AUDCVTC.DLL"
+#elif defined(WIN32) && !defined (WINCE)
+#define DEF_AUDHW_DRIVERNAME        "AUDCVT.DLL"
 #endif
+
+#if defined(DOS)
+#define DEF_AUDHW_HW_DRIVERNAME        "SB16.DDL"
+#elif defined(WIN16)
+#define DEF_AUDHW_HW_DRIVERNAME        "AUDHAL.DLL"
+#elif defined(WINCE)
+#define DEF_AUDHW_HW_DRIVERNAME        "AUDHALC.DLL"
+#elif defined(WIN32) && !defined(WINCE)
+#define DEF_AUDHW_HW_DRIVERNAME        "AUDHAL.DLL"
+#endif
+
+
+// audio converter
+#define INI_AUDCVT_DEF_HW_SECTION	"AudioHardware"
+#define INI_AUDCVT_NUM_CONVERTERS   "NumConverters"
+#define INI_AUDCVT_MAX_CONVERTERS	16
+#define INI_AUDCVT_CONVERTER		"Converter"
+
+
 
 #define INI_AUDHW_BUFFERPOOLSIZE    "BufferPoolSize"
 #define DEF_AUDHW_BUFFERPOOLSIZE    8192
 
-#if defined(WIN32)
+#if defined(WINCE)
+#define INI_AUDHW_CONVERTERNAME     "ConverterNameWin32"
+#define DEF_AUDHW_CONVERTERNAME     "ADPCMC.DLL"
+#elif defined(WIN32) && !defined(WINCE)
 #define INI_AUDHW_CONVERTERNAME     "ConverterNameWin32"
 #define DEF_AUDHW_CONVERTERNAME     "ADPCMN.DLL"
 #endif
+
 
 /*
  *  vdcm.dll
@@ -1563,6 +1870,13 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_TWI_MODE            "TWIMode"
 #define DEF_TWI_MODE            FALSE
 
+
+/*
+ * AutoLogon flags - if set Autologon will be allowed for Secure ICA client
+ */
+
+#define AUTOLOGON               "AutoLogonAllowed"
+#define DEF_AUTOLOGON           FALSE
 
 /*=============================================================================
  ==  Dialing Properties INI keys (INI_) and defaults (DEF_)
@@ -1607,8 +1921,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 
 typedef VOID (PWFCAPI PFNUIPOLL)( VOID );
 typedef LRESULT (PWFCAPI PFNSTATUSMSGPROC)( HANDLE hWFE,
-					    INT message,
-					    LPARAM lParam );
+                   INT message,
+                   LPARAM lParam );
 
 /*
  * Default INI file settings structures
@@ -1814,10 +2128,10 @@ typedef FNWFENGLOADPD far * PFNWFENGLOADPD;
 typedef INT (WFCAPI FNWFENGUNLOADDRIVERS)( HANDLE hWFE );
 typedef FNWFENGUNLOADDRIVERS far * PFNWFENGUNLOADDRIVERS;
 typedef INT (WFCAPI FNWFENGSETINFORMATION)( HANDLE hWFE, WFEINFOCLASS type,
-					    LPVOID pData, UINT cbData );
+                   LPVOID pData, UINT cbData );
 typedef FNWFENGSETINFORMATION far * PFNWFENGSETINFORMATION;
 typedef INT (WFCAPI FNWFENGQUERYINFORMATION)( HANDLE hWFE, WFEINFOCLASS type,
-					      LPVOID pData, UINT cbData );
+                     LPVOID pData, UINT cbData );
 typedef FNWFENGQUERYINFORMATION far * PFNWFENGQUERYINFORMATION;
 typedef INT (WFCAPI FNWFENGPOLL)( HANDLE hWFE );
 typedef FNWFENGPOLL far * PFNWFENGPOLL;
@@ -1830,7 +2144,7 @@ typedef FNWFENGLOAD far * PFNWFENGLOAD;
 typedef INT (WFCAPI FNWFENGUNLOAD)( PMINIDLL pLink );
 typedef FNWFENGUNLOAD far * PFNWFENGUNLOAD;
 typedef INT (WFCAPI FNWFENGLOGSTRING)( HANDLE hWFE, ULONG LogClass,
-				       ULONG LogEvent, LPSTR pszString );
+                   ULONG LogEvent, LPSTR pszString );
 typedef FNWFENGLOGSTRING far * PFNWFENGLOGSTRING;
 
 FNWFENGLOAD              WFEngLoad;
@@ -1889,6 +2203,10 @@ extern PPLIBPROCEDURE pWFEngProcedures;
 #ifdef DBCS
 #define IsDBCSLeadByte(ch)  (((ch & 0xe0) == 0x80) || ((ch & 0xe0) == 0xe0))
 #define IsDBCSSpace(p)      ((*p == 0x81) && (*(p+1) == 0x40))
+#endif
+
+#ifdef WIN32
+#define IS_IME_KBDLAYOUT(hkl) ((HIWORD(hkl) & 0xf000) == 0xe000)
 #endif
 
 #ifdef DOS

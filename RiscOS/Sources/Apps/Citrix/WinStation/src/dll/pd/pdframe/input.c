@@ -16,6 +16,9 @@
 *
 * $Log$
 *  
+*     Rev 1.15   Apr 29 1998 11:14:16   DavidT
+*  WinCE TAPI support
+*  
 *     Rev 1.14   15 Apr 1997 16:52:14   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -329,7 +332,7 @@ ProcessFrame( PPD pPd, LPBYTE pBuffer, USHORT ByteCount )
      *  -- the last two bytes in the buffer are crc
      */
     ByteCount -= 2;
-    CrcReceived = (USHORT) *((PUSHORT)&pBuffer[ByteCount]);
+    CrcReceived = (*((PUCHAR)&pBuffer[ByteCount])) | (*((PUCHAR)&pBuffer[ByteCount+1]) << 8);
 
     /*
      *  Verify CRC

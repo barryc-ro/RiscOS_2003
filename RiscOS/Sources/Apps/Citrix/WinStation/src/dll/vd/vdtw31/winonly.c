@@ -11,6 +11,24 @@
 *
 *   $Log$
 *  
+*     Rev 1.39   23 Apr 1998 10:22:22   kurtp
+*  fix all kind of weird seamless bug related to save screen bits
+*  
+*     Rev 1.38   20 Apr 1998 13:25:20   butchd
+*  Added back rev 1.36 changes
+*  
+*     Rev 1.37   Apr 17 1998 19:42:26   grega
+*  Backed out change
+*  
+*     Rev 1.36   17 Apr 1998 01:59:30   anatoliyp
+*  Update
+*  
+*     Rev 1.35   07 Apr 1998 02:25:56   anatoliyp
+*  TWI update
+*  
+*     Rev 1.34   10 Mar 1998 17:05:32   kenb
+*  Change WdCall to be VdCallWd
+*  
 *     Rev 1.33   Jan 27 1998 21:34:08   briang
 *  Fix TWI display error
 *  
@@ -413,27 +431,14 @@ int TWInitWindow( PVD pVd, HWND hWnd )
        ptru += sizeof(WFEINSTANCE);
 
        TwiModeEnabledFlag = *((PULONG)ptru);
-//       if( TwiModeEnabledFlag &&
-//           (GetWindowLong(hWnd, GWL_WINDOWWIDTH) != GetSystemMetrics(SM_CXSCREEN)) ){
-//  UCHAR  tmps[256];
-//  wsprintf( tmps, "Requested x=%i, avail.x=%i",
-//            GetWindowLong(hWnd, GWL_WINDOWWIDTH), GetSystemMetrics(SM_CXSCREEN) );
-//      MessageBox( NULL, tmps, "AP", MB_OK);
-//
-//          TwiModeEnabledFlag = FALSE;
-//          *((PULONG)ptru) = TwiModeEnabledFlag;
-//       }
 
 
     if( TwiModeEnabledFlag ){
-//        MessageBox( NULL, "TWI mode enabled", "AP", MB_OK);
 
        MyInit( hWnd );
        *((PULONG)(ptru+4)) = (ULONG)CommWindow;
-       SetWindowLong( CommWindow, 0, TRUE );
+       SetWindowLong( CommWindow, 0, 0 );
 
-       BringWindowToTop( hWnd );
-       SetForegroundWindow( hWnd );
 
        MainWindowDC = GetDC( hWnd );
        vhdc = ShadowDC;
@@ -519,7 +524,7 @@ int TWPaint( PVD pVd, HWND hWnd )
 
     wdsi.WdInformationClass  = WdRedraw; // Redraw the invalid region
     wdsi.pWdInformation      = pRedraw;
-    rc = WdCall( pVd, WD__SETINFORMATION, &wdsi);
+    rc = VdCallWd( pVd, WD__SETINFORMATION, &wdsi);
 
     TRACE(( TC_TW, TT_TW_CONNECT, "TWPaint: rc(%d) hWnd(%08lX)",
                                   rc, (ULONG)hWnd ));
@@ -597,6 +602,30 @@ int TWDestroyWindow( HWND hWnd )
     // SJM moved here so that colour can be set up properly on a second connection
     curColorCaps = Color_Cap_Max;
    
+#ifdef TWI_INTERFACE_ENABLED
+
+  if( TwiModeEnabledFlag ){
+       ULONG ptru = (ULONG)GetWindowLong( hWnd, GWL_INSTANCEDATA );
+
+//     TWISendPause( CommWindow );
+//     TWIClose();
+     MyDestroyAll();
+     CWinInfo->HostStyle = WS_VISIBLE;
+     HostPausedFlag = TRUE;
+     SetWindowLong( CommWindow, 0, 0 );
+
+       if( ptru ){
+
+          ptru += sizeof(WFEINSTANCE);
+
+          if( *((PULONG)ptru) != 2 )
+               ShowWindow( CWinInfo->hWnd, SW_RESTORE );    // restore main window
+       }
+  }
+
+#endif  //TWI_INTERFACE_ENABLED
+
+
     return( rc );
 }
 
@@ -926,7 +955,11 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
     /*
      *  Do not bother if we are iconic
      */
-    if ( IsIconic( hWnd ) ) {
+    if ( IsIconic( hWnd ) 
+#ifdef TWI_INTERFACE_ENABLED
+         || (TwiModeEnabledFlag == TRUE)
+#endif
+       ) {
         *lppRect = NULL;
         return( rc );
     }
@@ -1435,8 +1468,8 @@ MouseHookProc( int nCode, WPARAM wParam, LPARAM lParam )
        if( wParam == WM_RBUTTONDOWN ) MousePressedFlag |= 1;
        if( (wParam==WM_LBUTTONDOWN) || (wParam==WM_RBUTTONDOWN) ){
 
-          if( c_win->hWnd != GetForegroundWindow() )
-              SetForegroundWindow(c_win->hWnd);
+//          if( c_win->hWnd != GetForegroundWindow() )
+//              SetForegroundWindow(c_win->hWnd);
 
        }
     }
@@ -1651,7 +1684,7 @@ static  DWORD            lastTickCount = 0;
             }
             wdsi.WdInformationClass  = WdRedraw; // Redraw the invalid region
             wdsi.pWdInformation      = pRedraw;
-            rc = WdCall(vpVd, WD__SETINFORMATION, &wdsi);
+            rc = VdCallWd(vpVd, WD__SETINFORMATION, &wdsi);
         }
         else {
 

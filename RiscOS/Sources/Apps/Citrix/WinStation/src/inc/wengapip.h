@@ -10,49 +10,52 @@
 *
 *   $Log$
 *  
+*     Rev 1.53   01 Mar 1998 14:37:58   TOMA
+*  ce merge
+*
 *     Rev 1.52   Feb 17 1998 16:24:12   bills
 *  Changed the extern of gpszTitle from the DESCRIPTION typedef to show its
 *  new increased size.
-*  
+*
 *     Rev 1.51   29 Jan 1998 11:34:50   fredl
 *  corrected msg names for clip region
-*  
+*
 *     Rev 1.50   09 Jul 1997 15:50:10   davidp
 *  Added support for setting clip region
-*  
+*
 *     Rev 1.49   15 Apr 1997 18:46:14   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.49   09 Apr 1997 15:56:26   BillG
 *  update
-*  
-*  
+*
+*
 *     Rev 1.48   04 Mar 1997 17:41:14   terryt
 *  client shift states
-*  
+*
 *     Rev 1.47   20 Feb 1997 14:06:30   butchd
 *  update
-*  
+*
 *     Rev 1.46   05 Nov 1996 17:28:12   jeffm
 *  ICA open to version 4
-*  
+*
 *     Rev 1.45   16 Jul 1996 10:29:38   marcb
 *  update
-*  
+*
 *     Rev 1.44   12 Jun 1996 14:16:48   marcb
 *  update
-*  
+*
 *     Rev 1.43   01 Jun 1996 12:15:26   unknown
-*  
+*
 *     Rev 1.42   06 May 1996 19:19:18   jeffm
 *  update
-*  
+*
 *     Rev 1.41   27 Apr 1996 16:05:32   andys
 *  soft keyboard
-*  
+*
 *     Rev 1.40   04 Jan 1996 10:55:22   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 #ifndef __WENGAPIP_H__
 #define __WENGAPIP_H__
@@ -92,7 +95,7 @@ extern USHORT         gState;
 extern PFNUIPOLL      gpfnUIPoll;
 #endif
 extern CLIENTNAME     gpszClientname;
-extern CHAR			  gpszTitle[128];
+extern CHAR         gpszTitle[128];
 extern ULONG          gVersion;
 
 
@@ -210,7 +213,7 @@ typedef struct _IPCINST {
 #ifdef WIN32
    HANDLE     hProcess;    // this process handle
 #endif
-#ifdef DEBUG
+#if defined(DEBUG) || defined(TRACE_ENABLED)
    char       pszService[50];
 #endif
 } IPCINST, FAR *HIPCINST;
@@ -250,13 +253,22 @@ typedef struct _IPCDATAPTR {
 /*=============================================================================
  ==  Registered message names for plugin messages from engine
  ============================================================================*/
+#ifdef WINCE
+#define WFICA_MSGNAME_CALLBACK_STATUS (WM_USER+600)
+#define WFICA_MSGNAME_ENGINE_TEXT     (WM_USER+601)
+#define WFICA_MSGNAME_ENGINE_INIT     (WM_USER+602)
+#define WFICA_MSGNAME_ENGINE_UNINIT   (WM_USER+603)
+#define WFICA_MSGNAME_NEW_HWND        (WM_USER+604)
+#else
 #define WFICA_MSGNAME_CALLBACK_STATUS "WFEngineCallBackStatus" // engine status   name
 #define WFICA_MSGNAME_ENGINE_TEXT     "WFEngineText"           // error/status message
 #define WFICA_MSGNAME_ENGINE_INIT     "WFEngineInit"           // init: engine to plugin
 #define WFICA_MSGNAME_ENGINE_UNINIT   "WFEngineUninit"         // uninit: plugin to engine
 #define WFICA_MSGNAME_NEW_HWND        "WFEngineNewhWnd"        // plugin to engine: new hWnd
+#endif
 #define WFICA_MSGNAME_SET_CLIP_LR     "WFEngineSetClipLR"      // plugin to engine: new cliprect
 #define WFICA_MSGNAME_SET_CLIP_TB     "WFEngineSetClipTB"      // plugin to engine: new cliprect
+
 
 #define WFENG_SERVICEUI                  "WFServiceUI"
 #define WFENG_NONIPCCLASS                "WFIcaClient"

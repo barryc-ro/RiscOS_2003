@@ -9,12 +9,7 @@
 *
 *  Author: Andy  (3/15/94)
 *
-*  mouapi.h,v
-*  Revision 1.1  1998/01/12 11:36:52  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
 *  
 *     Rev 1.16   11 Jun 1997 10:16:58   terryt
 *  client double click support

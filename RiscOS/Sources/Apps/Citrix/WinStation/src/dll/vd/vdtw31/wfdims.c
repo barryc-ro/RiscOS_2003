@@ -11,6 +11,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.12   10 Mar 1998 17:05:30   kenb
+*  Change WdCall to be VdCallWd
+*  
 *     Rev 1.11   29 Sep 1997 20:32:06   kurtp
 *  persistent cache fix
 *  
@@ -1590,7 +1593,7 @@ twDIMCacheError( PVD pvd, CACHE_FILE_HANDLE fh  )
     /*
      *  Ship it off
      */
-    if ( rc = WdCall(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
+    if ( rc = VdCallWd(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
         TRACE((TC_WENG, TT_ERROR, 
                "twDIMCacheError:  Class WdDIMS,  Error (%d)", 
                rc));
@@ -1656,7 +1659,7 @@ twDIMCacheResize( PVD pvd, ULONG Size )
     /*
      *  Ship it off
      */
-    if ( rc = WdCall(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
+    if ( rc = VdCallWd(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
         TRACE((TC_WENG, TT_ERROR, 
                "twDIMCacheResize:  Class WdDIMS,  Error (%d)", 
                rc));
@@ -1728,7 +1731,7 @@ twDIMCacheStream( PVD pvd, UCHAR Count, UCHAR SigLev, PCACHE_FILE_CONTEXT fConte
     /* 
      *  Ship it off
      */
-    if ( rc = WdCall(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
+    if ( rc = VdCallWd(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
         TRACE((TC_WENG, TT_ERROR, 
                "twDIMCacheStream:  Class WdDIMS,  Error (%d)", 
                rc));
@@ -1793,7 +1796,7 @@ twDIMCacheDisable( PVD pvd )
     /*
      *  Ship it off
      */
-    if ( rc = WdCall(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
+    if ( rc = VdCallWd(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
         TRACE((TC_WENG, TT_ERROR, 
                "twDIMCacheDisable:  Class WdDIMS,  Error (%d)", 
                rc));
@@ -2029,7 +2032,7 @@ twDIMCacheDelete( PVD pvd, CACHE_FILE_HANDLE fh  )
     /*
      *  Ship it off
      */
-    if ( rc = WdCall(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
+    if ( rc = VdCallWd(pvd, WD__SETINFORMATION, &WdSetInfo) ) {
         TRACE((TC_WENG, TT_ERROR, 
                "twDIMCacheDelete:  Class WdDIMS,  Error (%d)", 
                rc));

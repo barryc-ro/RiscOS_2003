@@ -19,7 +19,7 @@ RMDIR=		rmdir
 
 # Flags
 
-CCFLAGS=	-c -fa ${INCLUDES} ${DFLAGS}
+CCFLAGS=	-c -fa -wanp -Fn ${INCLUDES} ${DFLAGS}
 ASFLAGS=	-Stamp -quit ${ASINCLUDES}
 LIBFILEFLAGS=	-c
 CPFLAGS=	-p
@@ -31,10 +31,11 @@ MCFLAGS=	-DMemCheck_MEMCHECK -zpc1 -fw
 
 # -DINCL_ENUM -DINCL_MODEM -DINCL_SCRIPT -DINCL_PRINTER -DINCL_ASYNC -DINCL_TCPIP
 
-DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4 -DINCL_PRINTER -DINCL_TCPIP
+DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4 -DVESA=0 -DINCL_PRINTER -DINCL_TCPIP -DINCL_REDUCER
 INCLUDES=	-Isrc/sys_inc \
 		-Isrc/sdk \
 		-Isrc/inc \
+		-Isrc/dll/vd/vdtwinc \
 		-I${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs \
 		-I$(RISCOS_BUILD_EXPORT)/Lib \
 		-I$(RISCOS_BUILD_EXPORT)/C \
@@ -82,6 +83,9 @@ NELIBZ=		src/dll/nelib.oz
 SDLIB=		src/dll/sdlib.o
 SDLIBD=		src/dll/sdlib.od
 SDLIBZ=		src/dll/sdlib.oz
+REDUCERLIB=	src/dll/reducerlib.o
+REDUCERLIBD=	src/dll/reducerlib.od
+REDUCERLIBZ=	src/dll/reducerlib.oz
 
 APP=		abs/icaclient
 APPD=		abs/icaclientd
@@ -105,15 +109,18 @@ COMMONLIBSZ=	${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs/inetlibzm.o \
 
 APPLIBS=	${WENGINELIB}  ${WDLIB}  ${PDLIB}  ${TDLIB}  ${NRLIB} ${NELIB}  ${SDLIB} \
 		${VDLIB} \
-		${CITRIXLIB}  
+		${CITRIXLIB} \
+		${REDUCERLIB}
 
 APPLIBSD=	${WENGINELIBD} ${WDLIBD} ${PDLIBD} ${TDLIBD} ${NRLIBD} ${NELIBD} ${SDLIBD} \
 		${VDLIBD} \
-		${CITRIXLIBD}
+		${CITRIXLIBD} \
+		${REDUCERLIBD}
 
 APPLIBSZ=	${WENGINELIBZ} ${WDLIBZ} ${PDLIBZ} ${TDLIBZ} ${NRLIBZ} ${NELIBZ} ${SDLIBZ} \
 		${VDLIBZ} \
-		${CITRIXLIBZ}
+		${CITRIXLIBZ} \
+		${REDUCERLIBZ}
 
 BASELIBS=	${COMMONLIBS} \
 		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
@@ -131,7 +138,7 @@ BASELIBSRM=	${COMMONLIBSZ} \
 		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
 
-SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} ${VDLIBSRC}
+SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} ${VDLIBSRC} ${REDUCERLIBSRC}
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -456,6 +463,30 @@ cleanne:
 	-${RM} ${NELIBZ}
 	-${RM} ${NELIBOBJSZ}
 	@echo cleaned ne libs
+
+# REDUCER
+
+REDUCERLIBSRC=	src/dll/reducer/icareduc.c  src/dll/reducer/reduce.c
+REDUCERLIBOBJS=	src/dll/reducer/icareduc.o  src/dll/reducer/reduce.o
+REDUCERLIBOBJSD=src/dll/reducer/icareduc.od src/dll/reducer/reduce.od
+REDUCERLIBOBJSZ=src/dll/reducer/icareduc.oz src/dll/reducer/reduce.oz
+
+${REDUCERLIB}:	${REDUCERLIBOBJS}
+	${LIBFILE} ${LIBFILEFLAGS} -o ${REDUCERLIB} ${REDUCERLIBOBJS}
+
+${REDUCERLIBD}:	${REDUCERLIBOBJSD}
+	${LIBFILE} ${LIBFILEFLAGS} -o ${REDUCERLIBD} ${REDUCERLIBOBJSD}
+${REDUCERLIBZ}:	${REDUCERLIBOBJSZ}
+	${LIBFILE} ${LIBFILEFLAGS} -o ${REDUCERLIBZ} ${REDUCERLIBOBJSZ}
+
+cleanreducer:
+	-${RM} ${REDUCERLIB}
+	-${RM} ${REDUCERLIBOBJS}
+	-${RM} ${REDUCERLIBD}
+	-${RM} ${REDUCERLIBOBJSD}
+	-${RM} ${REDUCERLIBZ}
+	-${RM} ${REDUCERLIBOBJSZ}
+	@echo cleaned reducer libs
 
 # WENGINE
 
@@ -935,7 +966,7 @@ cleansd:
 
 # generic dll
 
-cleandll: cleanwengine cleantd cleanpd cleanwd cleanvd cleannr cleanne cleansd
+cleandll: cleanwengine cleantd cleanpd cleanwd cleanvd cleannr cleanne cleansd cleanreducer
 	@echo cleaned dll files
 
 # ----------------------------------------------------------------------------------------------------

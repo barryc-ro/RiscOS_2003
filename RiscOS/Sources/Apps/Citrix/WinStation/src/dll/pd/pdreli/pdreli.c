@@ -12,6 +12,9 @@
 *
 * $Log$
 *  
+*     Rev 1.29   26 Apr 1998 15:10:54   terryt
+*  Free PDCOMP buffers for reducer
+*  
 *     Rev 1.28   Oct 31 1997 19:25:54   briang
 *  Remove pIniSection parameter from miGets
 *  
@@ -671,7 +674,7 @@ DeviceQuery( PPD pPd, PPDQUERYINFORMATION pPdQueryInformation )
     }
 
     /*
-     *  Pass request to next PD
+     *  Pass request to next PD             
      */
     return( PdNext( pPd, PD__QUERYINFORMATION, pPdQueryInformation ) );
 }
@@ -694,6 +697,27 @@ DeviceQuery( PPD pPd, PPDQUERYINFORMATION pPdQueryInformation )
 
 static int
 DeviceCallback( PPD pPd )
+{
+    return( CLIENT_STATUS_SUCCESS );
+}
+
+/*******************************************************************************
+ *
+ *  DeviceReducerEnabled
+ *
+ *  Process Reducer Enabled message
+ *
+ * ENTRY:
+ *    pPd (input)
+ *       Pointer to td data structure
+ *
+ * EXIT:
+ *    CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+
+int
+DeviceReducerEnabled( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );
 }

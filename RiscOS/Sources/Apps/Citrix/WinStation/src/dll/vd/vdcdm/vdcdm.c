@@ -10,6 +10,15 @@
 *
 * $Log$
 *  
+*     Rev 1.35   Mar 20 1998 16:07:14   xuanh
+*  optionally load VDCDM for DOS client, CPR9198
+*  
+*     Rev 1.34   13 Mar 1998 14:10:16   toma
+*  CE Merge
+*  
+*     Rev 1.34   10 Mar 1998 16:41:16   kenb
+*  Change WdCall to be VdCallWd
+*  
 *     Rev 1.33   Oct 31 1997 20:15:36   briang
 *  Remove pIniSection parameter from miGets
 *  
@@ -114,7 +123,7 @@ STATIC void WFCAPI ICADataArrival( LPVOID, USHORT, LPBYTE, USHORT );
 ==   External Functions used
 =============================================================================*/
 
-extern int WdCall( PVD pVd, USHORT ProcIndex, LPVOID pParam );
+extern int VdCallWd( PVD pVd, USHORT ProcIndex, LPVOID pParam );
 int CdmDosGetDrives ( LPBYTE pBuffer, USHORT ByteCount, PUSHORT pDriveCount );
 
 STATIC int RingBufWrite( LPBYTE, USHORT );
@@ -191,8 +200,27 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
    int rc;
    WDQUERYINFORMATION wdqi;
    OPENVIRTUALCHANNEL OpenVirtualChannel;
+   BOOL  fCDMAllowed;        // load CDM or not 
 
    TRACE(( TC_CDM, TT_API3, "VDCDM: DriverOpen"));
+
+
+   // Check whether to load Drive Mapping or not
+    if ( miGetPrivateProfileBool(INI_WFCLIENT,
+                                 INI_CDMALLOWED,
+                                 DEF_CDMALLOWED) ) {
+        fCDMAllowed = 1;
+    }
+    else {
+        fCDMAllowed = 0;
+    }
+
+    TRACE(( TC_CDM, TT_API3, "VDCDM: DriverOpen: CDM allowed = %d", fCDMAllowed));
+
+    if ( ! fCDMAllowed ) {
+        return(CLIENT_ERROR_VD_NOT_LOADED);
+    }
+
 
    /*
     * Get a virtual channel
@@ -201,7 +229,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
    wdqi.pWdInformation = &OpenVirtualChannel;
    wdqi.WdInformationLength = sizeof_OPENVIRTUALCHANNEL;
    OpenVirtualChannel.pVCName = VIRTUAL_CDM;
-   rc = WdCall( pVd, WD__QUERYINFORMATION, &wdqi );
+   rc = VdCallWd( pVd, WD__QUERYINFORMATION, &wdqi );
    VirtualCdm = OpenVirtualChannel.Channel;
    ASSERT( VirtualCdm == Virtual_Cdm, VirtualCdm );
 
@@ -220,7 +248,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
    wdsi.WdInformationClass  = WdVirtualWriteHook;
    wdsi.pWdInformation      = &vdwh;
    wdsi.WdInformationLength = sizeof(VDWRITEHOOK);
-   rc = WdCall(pVd, WD__SETINFORMATION, &wdsi);
+   rc = VdCallWd(pVd, WD__SETINFORMATION, &wdsi);
    TRACE(( TC_CDM, TT_API2, "VDCDM: writehook ch=%u p=%lx rc=%u", vdwh.Type, vdwh.pVdData, rc ));
 
    if( rc ) {

@@ -10,36 +10,43 @@
 *
 * $Log$
 *  
+*     Rev 1.40   11 May 1998 14:16:52   davids
+*  The "CreateFile" API wasn't working on ROM Modules for CE Birch, so use 
+*  FindFirstFile instead (in function _ReadHeader)
+*  
+*     Rev 1.39   01 Mar 1998 15:21:30   TOMA
+*  ce merge
+*
 *     Rev 1.37   26 Sep 1997 19:22:00   davidp
 *  Fixed setting of DllFlags
-*  
+*
 *     Rev 1.36   15 Apr 1997 18:50:24   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.35   28 May 1996 19:47:48   jeffm
 *  update
-*  
+*
 *     Rev 1.34   20 May 1996 15:48:24   jeffm
 *  update
-*  
+*
 *     Rev 1.32   14 Jul 1995 13:30:24   butchd
 *  generic CLIENT_ERROR_DLL_NOT_FOUND for _ReadHeader error
-*  
+*
 *     Rev 1.31   07 Jul 1995 15:42:16   kurtp
 *  update
-*  
+*
 *     Rev 1.30   26 Jun 1995 17:59:12   marcb
 *  update
-*  
+*
 *     Rev 1.29   10 May 1995 11:58:30   butchd
 *  update
-*  
+*
 *     Rev 1.28   04 May 1995 20:02:36   butchd
 *  update
-*  
+*
 *     Rev 1.27   03 May 1995 11:06:14   butchd
 *  clib.h now standard
-*  
+*
 *************************************************************************/
 
 /*
@@ -89,11 +96,10 @@ int WFCAPI ModuleCall( PDLLLINK, USHORT, PVOID );
 ==   Global Data
 =============================================================================*/
 
+FILEPATH gszLoadDllFileName;            // name of last DLL loaded
 static USHORT EngModDate;                      // Engine module date
 static USHORT EngModTime;                      // Engine module time
 static ULONG  EngModSize;                      // Engine module size
-
-FILEPATH gszLoadDllFileName;            // name of last DLL loaded
 
 /*******************************************************************************
  *
@@ -158,8 +164,8 @@ ModuleInit( PCHAR pName,
 
     /* save the engine file data for embedded DLLs */
     EngModDate = pDllLink->ModuleDate;
-    EngModTime = pDllLink->ModuleTime; 
-    EngModSize = pDllLink->ModuleSize; 
+    EngModTime = pDllLink->ModuleTime;
+    EngModSize = pDllLink->ModuleSize;
 
     /*
      *  Link exe module
@@ -372,7 +378,7 @@ ModuleCall( PDLLLINK pLink, USHORT ProcIndex, PVOID pParam )
 #ifdef DEBUG
     ASSERT( pLink->pProcedures, 0 );
     if ( ProcIndex >= pLink->ProcCount )
-	return( CLIENT_ERROR_BAD_PROCINDEX );
+   return( CLIENT_ERROR_BAD_PROCINDEX );
 #endif
     if (pLink->pProcedures == NULL)
 	return( CLIENT_ERROR_BAD_OVERLAY );

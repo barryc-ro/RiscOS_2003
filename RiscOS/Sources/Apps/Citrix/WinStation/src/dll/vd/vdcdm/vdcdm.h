@@ -1,5 +1,3 @@
-<<<<<<<<<<<<<< variant A
-
 #ifndef __VDCDM_H__
 #define __VDCDM_H__
 
@@ -413,6 +411,9 @@ typedef FIND far *          PFIND;
  *  Win32 Stuff
  */
 #ifdef  WIN32
+#ifdef WINCE
+#include <wcecalls.h>
+#endif
 
 //typedef struct _finddata_t  FIND;
 typedef WIN32_FIND_DATA     FIND;
@@ -421,8 +422,13 @@ typedef LPWIN32_FIND_DATA   PFIND;
 #define OPEN(a,b,c,d)       c = _lopen( a, b )
 #define CREATNEW(a,b,c,d)   c = _lcreat( a, b )
 #define CREAT(a,b,c,d)      c = _lcreat( a, b )
+#ifdef WINCE
+#define DELETEFILE(a)       DeleteFile( a )
+#define RENAMEFILE(a,b)     MoveFile( a, b )
+#else
 #define DELETEFILE(a)       remove( a )
 #define RENAMEFILE(a,b)     rename( a, b )
+#endif
 #define SEEK(a,b,c)         _llseek( a, b, c )
 #define CLOSE(a)            _lclose( a )
 #define FSREAD(a,b,c,d,e)   d = _lread( a, b, c )
@@ -479,6 +485,9 @@ void CdmDosSeek( USHORT, ULONG, UCHAR, PULONG, PUSHORT );
 void CdmDosVolumeInfo( USHORT, USHORT, PULONG, PULONG, PULONG, PULONG, PUSHORT, PUSHORT );
 BOOLEAN CdmHasDriveChanged( UCHAR DriveNumber );
 UCHAR _dos_mygetharderr( void );
+#ifdef WINCE
+BOOL CdmDriveStrip(PCHAR);
+#endif
 
 
 
@@ -675,4 +684,4 @@ BOOL w32CDMFindNextFile(HANDLE nexthandle, LPWIN32_FIND_DATA lpffd );
 #endif
 
 #endif //__VDCDM_H__
-======= end of combination
+

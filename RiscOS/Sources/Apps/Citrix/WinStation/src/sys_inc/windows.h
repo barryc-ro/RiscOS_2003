@@ -71,6 +71,7 @@ typedef PCHAR  * PPCHAR;
 typedef char UCHAR;
 typedef UCHAR *PUCHAR;
 typedef PUCHAR * PPUCHAR;
+typedef UCHAR FAR *LPUCHAR;
 
 typedef short SHORT;                        //      x
 
@@ -97,8 +98,9 @@ typedef WORD far            *LPWORD;
 typedef long		    LONG;
 typedef long far            *LPLONG;
 
-typedef unsigned long ULONG;
-typedef ULONG *PULONG;
+typedef unsigned long	    ULONG;
+typedef ULONG		    *PULONG;
+typedef ULONG far	    *LPULONG;
 
 typedef unsigned long       DWORD;
 typedef DWORD near          *PDWORD;

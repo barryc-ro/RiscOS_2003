@@ -13,6 +13,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.2   Apr 13 1998 16:57:52   sumitd
+*  removed warning messages from the build
+*  
 *     Rev 1.1   15 Apr 1997 16:53:30   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -101,6 +104,7 @@ fnSendString( PSD pSd )
 {
     int rc = SCRIPT_STATUS_SUCCESS;
     int token;
+    unsigned long ulCurrentTime;
 
     /*
      *  Command currently being processed?
@@ -110,7 +114,7 @@ fnSendString( PSD pSd )
         /*
          *  Check for command timeout
          */
-        if ( Getmsec() >= pSd->ulCommandTimeout ) {
+        if ( (ulCurrentTime=Getmsec()) >= pSd->ulCommandTimeout ) {
             (void) _SendString( pSd );
         }
     }

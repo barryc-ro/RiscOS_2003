@@ -9,6 +9,15 @@
 *
 *   $Log$
 *  
+*     Rev 1.13   26 Apr 1998 14:20:16   brada
+*  Add update in progress status value
+*  
+*     Rev 1.12   31 Mar 1998 14:25:26   brada
+*  Remove dead code
+*  
+*     Rev 1.11   24 Mar 1998 11:32:10   brada
+*  Add macro to declare function names in debug build
+*  
 *     Rev 1.10   20 Feb 1998 15:50:32   brada
 *  Add support to distinguish secure clients in model number
 *  
@@ -33,6 +42,13 @@
 /* Temporary #defines */
 #define TC_CM 1
 #define TT_INIT  TT_API1
+
+/* Debug Defines */
+#ifdef DEBUG
+#define DeclareFName(func)  const char fName[] = func;
+#else
+#define DeclareFName(func)
+#endif
 
 #pragma pack(1)
 
@@ -135,6 +151,7 @@ typedef ULONG CMCLIENTVERSION;
 #define VDCM_STATUS_NOT_ENOUGH_MEMORY           11
 #define VDCM_STATUS_UNABLE_TO_MOVE_FILES        12
 #define VDCM_STATUS_TIME_OUT                    13
+#define VDCM_STATUS_UPDATE_IN_PROGRESS          14
 
 /*
  * Constants
@@ -293,13 +310,6 @@ typedef struct _ICA_CMICU_FILE_INFO {
    ULONG  CachedFileSize;
    ULONG  CachedFileCRC;
 } ICA_CMICU_FILE_INFO, *PICA_CMICU_FILE_INFO;
-
-#ifdef notdef
-#define CMICU_FLAG_INPLACE      0x0001  // Allow overwrite existing file
-#define CMICU_FLAG_UNKNOWN      0x0002  // Unknown version data (update)
-#define CMICU_FLAG_NOTFOUND     0x0004  // File was not found
-#endif
-
 
 /*
  * CMICU_FILE_UPDATE is sent by the Host to begin an update of a file.

@@ -13,133 +13,94 @@
 *
 *   $Log$
 *  
+*     Rev 1.157   07 May 1998 18:52:10   terryt
+*  remove IMM calls - do not exist on NT 3.51
+*  
+*     Rev 1.156   06 May 1998 11:38:36   anatoliyp
+*  No change.
+*  
+*     Rev 1.155   May 04 1998 14:39:36   sumitd
+*  IPX watchdog timer started only for IPX connections
+*  
+*     Rev 1.154   May 04 1998 17:26:44   briang
+*  Fix build barning in Win16 with respect to keyboard type additions
+*  
+*     Rev 1.153   May 04 1998 10:28:46   sumitd
+*  IPX Connection timeout increased
+*  
+*     Rev 1.152   May 02 1998 20:51:40   briang
+*  Fix semantics error on comparison of keyboard layout
+*  
+*     Rev 1.151   May 02 1998 20:30:48   briang
+*  use correct keyboardtype section from INI file
+*  
+*     Rev 1.148   Apr 30 1998 18:35:20   sumitd
+*  Error when IPX connection limit is reached
+*  
+*     Rev 1.147   Apr 29 1998 20:21:24   BobC
+*  Adding thread to thinwire makes twstack code unnecessary
+*  
+*     Rev 1.146   29 Apr 1998 10:32:30   DAVIDS
+*  Fixed Alt-Tab and Alt-Backtab hotkeys for CE
+*  
+*     Rev 1.145   27 Apr 1998 21:44:14   terryt
+*  unload reducer
+*  
+*     Rev 1.144   21 Apr 1998 16:56:32   butchd
+*  CPR 10032: Ignore ALT-ESC hotkey if running in seamless mode
+*  
+*     Rev 1.143   Apr 20 1998 19:06:18   sumitd
+*  AutoLogonAllowed flag for Secure ICA client
+*  
+*     Rev 1.141.1.0   20 Apr 1998 15:37:10   toma
+*  Update
+*
+*     Rev 1.141   20 Apr 1998 15:30:34   toma
+*  Update
+*
+*     Rev 1.140   14 Apr 1998 21:32:24   derekc
+*  fixed build warning
+*
+*     Rev 1.139   14 Apr 1998 21:26:04   derekc
+*  added SwitchUiToUnicode() support
+*
+*     Rev 1.138   07 Apr 1998 08:32:40   DAVIDS
+*  Added client status "hotkey" for CE
+*
+*     Rev 1.137   07 Apr 1998 02:41:46   anatoliyp
+*  TWI update
+*
+*     Rev 1.136   04 Apr 1998 11:55:36   DAVIDS
+*  rev 1.135 was bad.
+*
+*     Rev 1.134   24 Mar 1998 15:35:28   toma
+*  Update
+*
+*     Rev 1.133   24 Mar 1998 14:45:30   toma
+*  Update
+*
+*     Rev 1.132   Mar 20 1998 15:33:34   xuanh
+*  add CTRL-SHIFT-ESC hotkey.
+*
+*     Rev 1.131   05 Mar 1998 16:28:36   toma
+*  ce merge
+*
+*     Rev 1.130   27 Feb 1998 18:13:00   TOMA
+*  ce merge
+*
 *     Rev 1.129   Feb 17 1998 16:18:18   bills
-*  gpszTitle was too small for the changes to the title of the client window. 
+*  gpszTitle was too small for the changes to the title of the client window.
 *  If the description entered for a session was over 27 bytes, lstrcat would
 *  spill over until it finally blew out gpfnStatusMsgProc.  The length of
-*  gpszTitle was increased to 128.  It is no longer using the DESCRIPTION 
+*  gpszTitle was increased to 128.  It is no longer using the DESCRIPTION
 *  typedef, since it was used elsewhere, I wanted to minimize the possibility
 *  of introducting new problems.
-*  
+*
 *     Rev 1.128   Feb 14 1998 18:15:24   briang
 *  Fix FindWindow(ConnectionCenter) to look for the correct class and name
-*  
+*
 *     Rev 1.127   Feb 11 1998 17:46:24   xuanh
 *  CPR8248 Win16 title bar could not toggle, fixed.
-*  
-*     Rev 1.126   Jan 28 1998 15:37:48   sumitd
-*  Windows in seemless mode not maximized
-*  
-*     Rev 1.125   Jan 27 1998 15:57:28   briang
-*  Add extra guards for TWI Stuff
-*  
-*     Rev 1.124   16 Jan 1998 09:54:02   butchd
-*  clean up type mismatch warning
-*  
-*     Rev 1.123   Jan 14 1998 16:42:08   briang
-*  TWI Integration
-*  
-*     Rev 1.122   Jan 08 1998 17:42:28   sumitd
-*  Clear Text Password accepted in .ICA file
-*  
-*     Rev 1.121   Jan 06 1998 18:38:20   briang
-*  Release the Memory Profile upon disconnect
-*  
-*     Rev 1.120   Nov 13 1997 18:50:34   briang
-*  Add WebClient IntlKB Support for WIN16
-*  
-*     Rev 1.119   Nov 03 1997 18:53:28   briang
-*  In the LoadSession we need to set the global section pointer for buffered ini gets if the profile pointer is not set
-*  
-*     Rev 1.118   Oct 31 1997 19:19:44   briang
-*  Call miSetSectionPointer when we load a PD, WD, VD and also use new miGet parameters
-*  
-*     Rev 1.117   Oct 09 1997 18:36:52   briang
-*  Conversion to MemIni use
-*  
-*     Rev 1.115   15 Oct 1997 16:01:14   kalyanv
-*  updated
-*  
-*     Rev 1.116   24 Sep 1997 09:18:50   x86fre
-*  updated
-*
-*     Rev 1.115   14 Oct 1997 16:54:38   kalyanv
-*  Added the EncryptionLevel not basic and USe of Username check
-*
-*     Rev 1.114   12 Aug 1997 22:34:06   tariqm
-*  win16 fix
-*
-*     Rev 1.113   08 Aug 1997 21:18:22   tariqm
-*  scripting support
-*
-*     Rev 1.112   21 Jul 1997 19:32:08   tariqm
-*  Update...
-*
-*     Rev 1.111   10 Jul 1997 22:54:00   tariqm
-*  Connection Status..
-*
-*     Rev 1.110   11 Jun 1997 10:29:46   terryt
-*  client double click support
-*
-*     Rev 1.109   27 May 1997 17:41:30   terryt
-*  client double click support
-*
-*     Rev 1.108   27 May 1997 14:26:24   terryt
-*  client double click support
-*
-*     Rev 1.107   15 Apr 1997 18:18:38   TOMA
-*  autoput for remove source 4/12/97
-*
-*     Rev 1.108   09 Apr 1997 16:06:38   BillG
-*  update
-*
-*
-*     Rev 1.107   21 Mar 1997 16:10:04   bradp
-*  update
-*
-*     Rev 1.106   10 Mar 1997 19:13:34   BillG
-*  filter client name
-*
-*     Rev 1.105   06 Mar 1997 10:49:18   kurtp
-*  fix CPR 4269
-*
-*     Rev 1.104   20 Feb 1997 14:10:26   butchd
-*  Added client data query support
-*
-*     Rev 1.103   26 Jun 1996 15:07:40   brucef
-*  Add DOS-specific INI Keyword processing and calls to new Mouse
-*  and Keyboard APIs to manage user preferences.
-*
-*     Rev 1.102   11 Jun 1996 14:55:00   jeffm
-*  update
-*
-*     Rev 1.101   28 May 1996 19:57:44   jeffm
-*  update
-*
-*     Rev 1.100   20 May 1996 15:49:34   jeffm
-*  update
-*
-*     Rev 1.97   27 Apr 1996 15:50:38   andys
-*  soft keyboard
-*
-*     Rev 1.96   14 Feb 1996 10:40:02   butchd
-*  must still force on top and foreground for Win32
-*
-*     Rev 1.95   12 Feb 1996 17:44:50   butchd
-*  fixed initial show and focus bugs
-*
-*     Rev 1.94   12 Feb 1996 09:40:06   richa
-*  Create and setup the G_fAsync flag so that we can mark async connections.
-*
-*     Rev 1.93   31 Jan 1996 17:22:26   kurtp
-*  update
-*
-*     Rev 1.92   30 Jan 1996 16:26:32   bradp
-*  update
-*
-*     Rev 1.91   30 Jan 1996 09:52:02   bradp
-*  update
-*
 *
 ****************************************************************************/
 
@@ -168,10 +129,41 @@
 #include "../../inc/wfcver.h"
 #include "../../inc/mouapi.h"
 
+//#include "resource.h"
+
 #include "citrix/ica.h"
 #include "citrix/ica-c2h.h"
 
+#include "../vd/vdtwinc/twi_en.h"
+
 #define DOS
+
+#ifdef TWI_INTERFACE_ENABLED
+#include "../vd/vdtwinc/aptwdef.h"    // TWI common data
+VOID
+TwiCallAgent(VOID);
+VOID
+TwiFullScreen(HWND hWnd, BOOLEAN flag);
+#endif  //TWI_INTERFACE_ENABLED
+
+#ifndef DOS
+// change cruntime string calls to windows string calls
+// Do before WINCE includes because it also remaps
+// strlen
+//#define strlen lstrlen
+#endif
+
+#ifdef WINCE
+#include <wcecalls.h>
+#include "..\vd\vdtw31ce\wcecursor.h"
+#endif // WINCE
+
+
+#ifdef WIN32  // IpxWatchdog
+#define IPX_TIMEOUT 25000
+#define IPX_PROTOCOL "IPX"
+#endif
+
 
 /*=============================================================================
 ==   Local Functions
@@ -184,6 +176,10 @@ INT wWFEngPoll( VOID );
 INT StopPolling( VOID );
 VOID SendKeySequence( LPBYTE pszKeySequence );
 INT wRegisterHotkey( PWFEHOTKEYINFO pHotkeyInfo );
+
+#ifdef WIN32
+VOID CALLBACK IpxTimeoutProc(HWND hWmd, UINT uMsg, UINT idEvent, DWORD CurrentTime);
+#endif
 
 /*=============================================================================
 ==   External Functions
@@ -209,7 +205,9 @@ LPBYTE gScriptDriver;
 ==  External Vars
 =============================================================================*/
 #ifdef WIN32
+#ifndef VDTW_THREAD
 extern VDTWSTACK vTWStack;
+#endif
 #endif
 extern HWND           g_hWndPlugin;
 
@@ -231,6 +229,9 @@ extern BOOL TwiModeEnableFlag = FALSE;
 BOOL gbContinuePolling           = FALSE;
 BOOL szClearPasswordTag          = FALSE;
 #if 0
+#ifdef WIN32 
+BOOL gfIpxWatchdogStarted        = FALSE;
+#endif
 PPLIBPROCEDURE pModuleProcedures = NULL;
 PPLIBPROCEDURE pLogProcedures    = NULL;
 PPLIBPROCEDURE pVioProcedures    = NULL;
@@ -247,7 +248,16 @@ PPLIBPROCEDURE pMouProcedures    = NULL;
 PPLIBPROCEDURE pXmsProcedures    = NULL;
 #endif
 #endif
-static HWND      ghwndMain = NULL;
+// For WinCE ghwndMain is defined
+// in citrixce.c.
+// This allows the PeekMessage override
+// to operate.
+#ifdef WINCE
+extern HWND ghwndMain;
+#else
+static HWND ghwndMain = NULL;
+#endif
+
 static DLLLINK   gExeLink = { 0 };
 static char      gpszExePath[MAXPATH] = { 0 };
 static char      gpszDllPath[MAXPATH] = { 0 };
@@ -257,6 +267,7 @@ BOOL             gfRemoveTitleBar = FALSE;
 #endif
 HANDLE           ghWFE = NULL;
 DLLLINK          gWdLink = { 0 };
+DLLLINK          gRedLink = { 0 };
 DLLLINK          gPdLink = { 0 };
 PDLLLINK *       gpaVdLink = NULL;
 USHORT           gMaxVirtualChannels = 0;
@@ -266,7 +277,7 @@ USHORT           gState = 0;
 static BOOL      gbPollingEnabled = FALSE;
 CLIENTNAME       gpszClientname = { 0 };
 CLIENTSN         gpszClientSN = { 0 };
-CHAR			 gpszTitle[128] = { 0 };
+CHAR         gpszTitle[128] = { 0 };
 ULONG            gVersion = 0;
 static PFNSTATUSMSGPROC gpfnStatusMsgProc = NULL;
 #ifdef DOS
@@ -304,6 +315,7 @@ USHORT  G_MouseDoubleClickWidth = DEF_MOUSEDOUBLECLICKWIDTH;
 USHORT  G_KeyboardTimer = DEF_KEYBOARDTIMER;
 BOOL    G_fEchoTTY = FALSE;
 BOOL    G_fAsync = FALSE;
+BOOL    G_fIpx  = FALSE;
 
 #ifdef DOS
 USHORT G_fNoUmb = FALSE;
@@ -350,6 +362,7 @@ static struct {
 { DEF_HOTKEY6_SHIFT, DEF_HOTKEY6_SHIFTV, DEF_HOTKEY6_CHAR, DEF_HOTKEY6_CHARV },
 { DEF_HOTKEY7_SHIFT, DEF_HOTKEY7_SHIFTV, DEF_HOTKEY7_CHAR, DEF_HOTKEY7_CHARV },
 { DEF_HOTKEY8_SHIFT, DEF_HOTKEY8_SHIFTV, DEF_HOTKEY8_CHAR, DEF_HOTKEY8_CHARV },
+{ DEF_HOTKEY9_SHIFT, DEF_HOTKEY9_SHIFTV, DEF_HOTKEY9_CHAR, DEF_HOTKEY9_CHARV },
 { NULL,              0,                  NULL,             0                 },
        };
 
@@ -510,12 +523,22 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
 {
     USHORT       Offset;
     ULONG        Layout;
+ 	 ULONG        lKeyboard;
+    KEYBOARDTYPE szKeyboard;
+#if defined(WIN32) || defined(DBCS)
+#ifndef WINCE
+#ifdef DBCS
+    CHAR         szimeFileName[IMEFILENAME_LENGTH+1];
+#endif
+#endif
+#endif
     LPBYTE       pBuf;
     USHORT       Length;
     USHORT       Len;
     ENCRYPTEDPASSWORD szEncryptedPassword;
     PASSWORD szPassword;
     KEYBOARDLAYOUT szKeyboardLayout;
+    int fAutoLogonAllowed;
     
     /* initialise some static variables here */
     G_Encrypted = FALSE;
@@ -539,11 +562,11 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
         }
     }
 
-    /* get worse case byte count */
+    /* get worst case byte count */
     G_pUiDataLength = sizeof(UI_C2H) + strlen(gpszExePath) +
                 DOMAIN_LENGTH + USERNAME_LENGTH + PASSWORD_LENGTH +
                 DIRECTORY_LENGTH + INITIALPROGRAM_LENGTH +
-                CLIENTNAME_LENGTH + CLIENTSN_LENGTH + 8;
+                CLIENTNAME_LENGTH + CLIENTSN_LENGTH + IMEFILENAME_LENGTH + 9;
 
     if ( G_pUiData )
         free( G_pUiData );
@@ -554,18 +577,39 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
     memset( G_pUiData, 0, G_pUiDataLength );
     Offset = sizeof(UI_C2H);
 
+#ifdef UNICODESUPPORT
+    /*
+     *  Copy encoding type and code page
+     *  We're cheating and using pNotUsed
+     *  as a Unicode flag.  Once the client
+     *  has received a PACKET_INIT_REQUEST
+     *  from the server, it knows that it
+     *  can or cannot accept Unicode.  If
+     *  it cannot, it will simply function
+     *  as normal.  If it can, it will call
+     *  this function again with the pNotUsed
+     *  flag set to Kbd_Unicode and the UI
+     *  will reconstruct its information.
+     */
+    G_pUiData->EncodingType = (USHORT) 0;   // 1=unicode, 0=ansi
+    G_pUiData->EncodingData = (USHORT) 0;
+    G_pUiData->KeyboardType = (USHORT) 0;
+    G_pUiData->KeyboardSubType = (BYTE) 0;
+    G_pUiData->KeyboardFunctionKey = (BYTE) 0;
+#endif
+
     /*
      * Until we connect, we don't know the encryption level
      */
     G_pUiData->EncryptionLevel = 0;
 
 #ifdef TWI_INTERFACE_ENABLED
-  
+
     TwiModeEnableFlag = miGetPrivateProfileBool( INI_SERVERSECTION,
                                                  INI_TWI_MODE,
                                                  DEF_TWI_MODE );
 
-    if (TwiModeEnableFlag) 
+    if (TwiModeEnableFlag)
         G_pUiData->fTwiModeEnableFlag=1;
     else
         G_pUiData->fTwiModeEnableFlag=0;
@@ -574,7 +618,7 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
     {
          ULONG ptru = (ULONG)GetWindowLong( ghwndMain, GWL_INSTANCEDATA );
          if( ptru ){
-  
+
             ptru += sizeof(WFEINSTANCE);
             *((PULONG)ptru) = TwiModeEnableFlag;
   //  if( TwiModeEnableFlag ) MessageBox(NULL, "saved TwiModeFlag=1", "AP", MB_OK | MB_ICONASTERISK | MB_TASKMODAL);
@@ -582,7 +626,7 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
          }
     }
 #endif  //TWI_INTERFACE_ENABLED
-  
+
     G_pUiData->fDisableSound = miGetPrivateProfileBool( INI_WFCLIENT, INI_SOUND,
                                                         DEF_SOUND );
 
@@ -664,7 +708,6 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
                                g_szEncryptionLevelConnStatus, sizeof(g_szEncryptionLevelConnStatus) );
 
     if ( (Length = strlen(pBuf)) > 0 ) {
-
         /*
          * Test: if EncryptionLevel is not Basic, then do not allow the client to connect
          *       by returning an error. Reason: User cannot specify Username and password
@@ -675,6 +718,15 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
 #else
         if ( strcmpi( g_szEncryptionLevelConnStatus, INI_ENCRYPTION_BASIC) ) {
 #endif
+        /* This code is added for the Banker's trust - they wanted the autologon
+         *  for the Secure ICA client as well - for that they will have to add
+         *  the flag AutoLogonAllowed in the INI file
+         */
+
+
+        fAutoLogonAllowed=miGetPrivateProfileBool(INI_SERVERSECTION,AUTOLOGON,DEF_AUTOLOGON);
+
+        if (!fAutoLogonAllowed)
            return( CLIENT_ERROR_ENCRYPT_LEVEL_INCORRECTUSE );
         }
 
@@ -701,7 +753,7 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
                                    szPassword,
                                    sizeof(szPassword) );
         if (!(*szPassword)) Len = 0;
-	else szClearPasswordTag=TRUE; 
+   else szClearPasswordTag=TRUE;
     }
     szPassword[Len] = 0;
 
@@ -714,14 +766,23 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
          */
 
        if (szClearPasswordTag==FALSE)
-	{
+   {
 #ifndef DOS
         if ( lstrcmpi( g_szEncryptionLevelConnStatus, INI_ENCRYPTION_BASIC) ) {
 #else
         if ( strcmpi( g_szEncryptionLevelConnStatus, INI_ENCRYPTION_BASIC) ) {
 #endif
+        /* This code is added for the Banker's trust - they wanted the autologon
+         *  for the Secure ICA client as well - for that they will have to add
+         *  the flag AutoLogonAllowed in the INI file
+         */
+
+
+        fAutoLogonAllowed=miGetPrivateProfileBool(INI_SERVERSECTION,AUTOLOGON,DEF_AUTOLOGON);
+
+        if (!fAutoLogonAllowed)
            return( CLIENT_ERROR_ENCRYPT_LEVEL_INCORRECTUSE );
-	}
+   }
         }
 
         memcpy(pBuf, szPassword, Length);
@@ -801,6 +862,20 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
     }
 
     /*
+     *  Copy IME file name
+     */
+    G_pUiData->oimeFileName = 0;
+#ifdef DBCS
+    pBuf = (LPBYTE)G_pUiData + Offset;
+    if ( (Length = strlen(szimeFileName)) > 0 ) {
+        strcpy( pBuf, szimeFileName );
+        G_pUiData->oimeFileName = Offset;
+        Offset += (Length + 1);  // skip over trailing null
+        TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: imeFileName: %s", pBuf ));
+    }
+#endif
+
+    /*
      *  Realloc data buffer to exact size
      */
     ASSERT( Offset <= G_pUiDataLength, Offset );
@@ -812,6 +887,110 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
     return( CLIENT_STATUS_SUCCESS );
 }
 
+#ifdef UNICODESUPPORT
+/*******************************************************************************
+ *
+ * SwitchUiToUnicode
+ *
+ * Changes the G_pUiData packet to contain Unicode
+ * data, instead of ASCII data.  We need to do this
+ * because by the time the client knows that it is
+ * communicating with a Unicode-enabled server, the
+ * UiOpen function has already been called and the
+ * packet has already been initialized.  When we
+ * receive the PACKET_INIT_REQUEST from the host,
+ * we need to go back and make the necessary changes
+ * if the server level is 4 or greater.
+ *
+ * ENTRY:
+ *   none
+ *
+ * EXIT:
+ *    CLIENT_STATUS_SUCCESS - no error
+ *
+ *******************************************************************************/
+
+USHORT TransferAndConvert( USHORT *oString, WCHAR *szUnicodeBuffer ) {
+
+    static USHORT oBufferOffset;
+    CHAR *        lpBufferA;
+    WCHAR *       lpBufferW;
+
+    if ( *oString > 0 ) {
+
+        // point lpBufferA to the string indicated
+        // by the offset oString for G_pUiData
+        lpBufferA = (LPBYTE)G_pUiData + *oString;
+        lpBufferW = (WCHAR *) ( (LPBYTE)szUnicodeBuffer + oBufferOffset );
+
+        // convert the string in G_pUiData to
+        // Unicode and transfer to the new buffer
+        MultiByteToWideChar( CP_ACP,
+                             0,
+                             lpBufferA,
+                             -1,
+                             lpBufferW,
+                             strlen( lpBufferA ) + sizeof(CHAR)
+                           );
+
+        *oString = oBufferOffset + sizeof(UI_C2H);
+
+        oBufferOffset += sizeof(WCHAR) * ( strlen( lpBufferA ) + 1 );
+
+        return( oBufferOffset );
+
+    } else {
+
+        return( oBufferOffset );
+
+    }
+
+}
+
+int SwitchUiToUnicode() {
+
+    USHORT    oDataSectionStart,
+              oDataSectionFinalSize;
+   WCHAR *   szDataSectionNew;
+    LPBYTE    szDataSectionFinal;
+   DWORD     dwDataSectionSize;
+
+   // set the offset to point to the
+   // data section of G_pUiData
+    oDataSectionStart = sizeof(UI_C2H);
+   dwDataSectionSize = G_pUiDataLength - sizeof(UI_C2H);
+
+   // create the new data section
+   szDataSectionNew = (WCHAR *) HeapAlloc ( GetProcessHeap(), 0, dwDataSectionSize * sizeof(WCHAR) );
+
+   TransferAndConvert( &G_pUiData->oDomain, szDataSectionNew );
+    TransferAndConvert( &G_pUiData->oUserName, szDataSectionNew );
+    TransferAndConvert( &G_pUiData->oPassword, szDataSectionNew );
+    TransferAndConvert( &G_pUiData->oClientDirectory, szDataSectionNew );
+    TransferAndConvert( &G_pUiData->oWorkDirectory, szDataSectionNew );
+    TransferAndConvert( &G_pUiData->oInitialProgram, szDataSectionNew );
+    //TransferAndConvert( &G_pUiData->oCloudName, szDataSectionNew );
+    TransferAndConvert( &G_pUiData->oClientName, szDataSectionNew );
+    oDataSectionFinalSize = TransferAndConvert( &G_pUiData->oClientLicense, szDataSectionNew );
+
+    // realloc G_pUiData to the exact size of the data structure
+    G_pUiDataLength = oDataSectionStart + oDataSectionFinalSize;
+    G_pUiData = realloc( G_pUiData, G_pUiDataLength );
+
+    // now copy the data from the buffer over
+    szDataSectionFinal = (LPBYTE)G_pUiData + oDataSectionStart;
+    memset( szDataSectionFinal, 0, oDataSectionFinalSize );
+    memcpy( szDataSectionFinal, (LPBYTE) szDataSectionNew, oDataSectionFinalSize );
+
+   // now set the encoding type to Unicode
+   G_pUiData->EncodingType = 1;
+
+   // reclaim the heap
+   HeapFree( GetProcessHeap(), 0, szDataSectionNew );
+   return ( CLIENT_STATUS_SUCCESS );
+
+}
+#endif
 
 /*******************************************************************************
  *
@@ -1066,7 +1245,7 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
 
     /*
      * Before we use any Gets on the INI information we must allow
-     * the miGet routines to initialize its Global pointer to the 
+     * the miGet routines to initialize its Global pointer to the
      * pIniProfile structure.
      */
     if (!miSetProfilePointer( pWFELoad->pIniSection )) {
@@ -1105,8 +1284,23 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
         G_fAsync = TRUE;
     }
 
+
+#ifdef WIN32
+
+    miGetPrivateProfileString(INI_SERVERSECTION,
+                              INI_TRANSPORTDRIVER,
+                              DEF_TRANSPORTDRIVER,
+                              pszBuffer, sizeof(pszBuffer));
+
+    if (lstrcmpi(pszBuffer,IPX_PROTOCOL)==0)
+        G_fIpx=TRUE;
+
+#endif
+
 #ifndef DOS
+#ifndef WINCE
     if(gbIPCEngine)
+#endif
 #endif
     for ( i = 0; gHotkeys[i].pszShiftState; i++ ) {
        /*
@@ -1142,22 +1336,22 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
     KBDPREFERENCES KPref;
     char szSwap[4];
 
-    KPref.KeyboardDelay = miGetPrivateProfileInt( INI_WFCLIENT, 
+    KPref.KeyboardDelay = miGetPrivateProfileInt( INI_WFCLIENT,
                                                   INI_KEYBOARDDELAY,
                                                   DEF_KEYBOARDDELAY );
-    KPref.KeyboardSpeed = miGetPrivateProfileInt( INI_WFCLIENT, 
+    KPref.KeyboardSpeed = miGetPrivateProfileInt( INI_WFCLIENT,
                                                   INI_KEYBOARDSPEED,
                                                   DEF_KEYBOARDSPEED );
 
     KbdLoadPreferences( &KPref );
 
-    MPref.HorizSpeed = miGetPrivateProfileInt( INI_WFCLIENT, 
+    MPref.HorizSpeed = miGetPrivateProfileInt( INI_WFCLIENT,
                                                INI_HORIZONTALSPEED,
                                                DEF_HORIZONTALSPEED );
-    MPref.VertSpeed = miGetPrivateProfileInt( INI_WFCLIENT, 
+    MPref.VertSpeed = miGetPrivateProfileInt( INI_WFCLIENT,
                                               INI_VERTICALSPEED,
                                               DEF_VERTICALSPEED );
-    MPref.DblSpeedThreshold = miGetPrivateProfileInt( INI_WFCLIENT, 
+    MPref.DblSpeedThreshold = miGetPrivateProfileInt( INI_WFCLIENT,
                                                       INI_DBLSPEEDTHRESHOLD,
                                                       DEF_DBLSPEEDTHRESHOLD );
 
@@ -1224,7 +1418,7 @@ INT WFCAPI srvWFEngLoadWd( HANDLE hWFE, PWFELOAD pWFELoad )
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngLoadWd: %08lX", (LONG)hWFE ));
 
     /*
-     * Before the WD does any gets for INI information we must set the 
+     * Before the WD does any gets for INI information we must set the
      * pointer to the Buffered INI section in case we are using an old-styled
      * top-end which uses the bINI routines still
      */
@@ -1233,7 +1427,9 @@ INT WFCAPI srvWFEngLoadWd( HANDLE hWFE, PWFELOAD pWFELoad )
     if ( (rc = LoadWd( (PCHAR)(pWFELoad->pIniSection),
                        (PCHAR)(pWFELoad->pszModuleName),
                        (PCHAR)(gpszDllPath),
-                       &gWdLink, &gPdLink,
+                       &gWdLink,
+                       &gRedLink,
+                       &gPdLink,
                        &gPdOpen,
                        &gMaxVirtualChannels ))
                         != CLIENT_STATUS_SUCCESS )
@@ -1306,7 +1502,7 @@ INT WFCAPI srvWFEngLoadPd( HANDLE hWFE, PWFELOAD pWFELoad )
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngLoadPd: %08lX", (LONG)hWFE ));
 
     /*
-     * Before the PD does any gets for INI information we must set the 
+     * Before the PD does any gets for INI information we must set the
      * pointer to the Buffered INI section in case we are using an old-styled
      * top-end which uses the bINI routines still
      */
@@ -1369,7 +1565,7 @@ INT WFCAPI srvWFEngLoadVd( HANDLE hWFE, PWFELOAD pWFELoad )
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngLoadVd: %08lX", (LONG)hWFE ));
 
     /*
-     * Before the VD does any gets for INI information we must set the 
+     * Before the VD does any gets for INI information we must set the
      * pointer to the Buffered INI section in case we are using an old-styled
      * top-end which uses the bINI routines still
      */
@@ -1431,9 +1627,10 @@ INT WFCAPI srvWFEngUnloadDrivers( HANDLE hWFE )
          (WFES_LOADEDWD | WFES_LOADEDPD | WFES_LOADEDVD) ) {
        wdDisconnect();
        wdDestroyWindow( (HWND)hWFE );
-       UnloadDrivers( &gWdLink, &gPdLink, gpaVdLink, gMaxVirtualChannels );
+       UnloadDrivers( &gWdLink, &gRedLink, &gPdLink, gpaVdLink, gMaxVirtualChannels );
        gState &= ~(WFES_LOADEDWD | WFES_LOADEDPD | WFES_LOADEDVD | WFES_LOADEDSESSION);
        memset( &gWdLink, 0, sizeof(gWdLink) );
+       memset( &gRedLink, 0, sizeof(gRedLink) );
        memset( &gPdLink, 0, sizeof(gPdLink) );
        memset( &gMaxVirtualChannels, 0, sizeof(gMaxVirtualChannels) );
        free( gpaVdLink );
@@ -1492,10 +1689,12 @@ INT WFCAPI srvWFEngConnect( HANDLE hWFE )
     wdVdAddress();
 
 #ifdef WIN32
+#ifndef VDTW_THREAD
     /*
      * Tell the Wd to pass the thinwire stack to the Vd
      */
     wdThinwireStack( &vTWStack );
+#endif
 #endif
 
     /*
@@ -1639,7 +1838,9 @@ INT WFCAPI srvWFEngSetInformation( HANDLE hWFE, WFEINFOCLASS type,
 
         case WFEHotkey:
 #ifndef DOS
+#ifndef WINCE
             if(gbIPCEngine)
+#endif
 #endif
                rc = wRegisterHotkey( (PWFEHOTKEYINFO)pData );
             break;
@@ -1988,18 +2189,87 @@ fProcCalled = TRUE;
                NotifyUI( hWFE, CLIENT_STATUS_DELETE_CONNECT_DIALOG, 0 );
                fProcCalled = FALSE;
                wdSetFocus();
+#ifndef DOS
+#ifdef WINCE
+               SetCursor( LoadCursorW( NULL, IDC_ARROW ) );
+#else
+               SetCursor( LoadCursor( NULL, IDC_ARROW ) );
+#endif
+#endif
            }
 
+#ifdef WIN32
+//  This code was added to make sure that if the Server maximum connection limit
+//  is reached and it is no longer accepting the connections, we can timeout
+            else if (G_fIpx){
+                gfIpxWatchdogStarted=TRUE;
+                SetTimer(hWFE,IDT_IPX_WATCHDOG,IPX_TIMEOUT, (TIMERPROC) IpxTimeoutProc);
+            }
+#endif
+        
            break;
 
        case CLIENT_STATUS_CONNECTED :
            TRACE(( TC_WENG, TT_L1,
                    "WFEngx.Exe: StatusMsgProc: CLIENT_STATUS_CONNECTED" ));
            if ( !G_fEchoTTY ) {
+#ifdef WIN32
+               if (G_fIpx && gfIpxWatchdogStarted) 
+                    KillTimer(hWFE,IDT_IPX_WATCHDOG);
+#endif
                NotifyUI( hWFE, CLIENT_STATUS_DELETE_CONNECT_DIALOG, 0 );
                fProcCalled = FALSE;
                wdSetFocus();
            }
+#ifndef DOS
+           //
+           // For initial time through, show and force local paint of
+           // window now (without title bar if we're fullscreen)
+           //
+           if ( !InitialShowWindow ) {
+              ShowWindow( ghwndMain, SW_SHOWNORMAL );
+
+#ifndef DOS
+#ifndef WINCE
+              if(gbIPCEngine)
+#endif
+#endif
+                 if ( gfRemoveTitleBar )
+                    ToggleWindowDressing( ghwndMain );
+
+              //
+              // Sometimes, Win95 doesn't make the window visible.
+              // This is harmless and will take care of the wierd
+              // Win95 scenario.
+#ifndef WINCE
+              if ( !IsWindowVisible(ghwndMain) )
+                 ShowWindow( ghwndMain, SW_RESTORE );
+
+
+#endif // WINCE
+
+#ifdef WIN32
+              //
+              // BUGBUG: Win32 needs to be in foreground and on top.  NT
+              // will give keyboard focus to this window even if it's
+              // not active, so we make sure that it's active and on top,
+              // even though this is very undesirable behavior!  This needs
+              // to be figured out and fixed in order to get launcher-passed
+              // showstate stuff to work (like to start minimized) once we
+              // put that feature in.
+              //
+              if(!g_hWndPlugin) {
+                 BringWindowToTop( ghwndMain );
+                 SetForegroundWindow( ghwndMain );
+                 }
+#endif
+
+              InvalidateRect( ghwndMain, NULL, FALSE );
+              LocalPaint( ghwndMain );
+
+              InitialShowWindow = TRUE;
+           }
+#endif
            break;
 
        case HOTKEY_EXIT:
@@ -2019,7 +2289,24 @@ fProcCalled = TRUE;
            break;
 
        case HOTKEY_ALT_ESC: // Alt+Esc
+#ifdef TWI_INTERFACE_ENABLED
+  {
+       ULONG ptru = (ULONG)GetWindowLong( ghwndMain, GWL_INSTANCEDATA );
+       if( ptru ){
+
+          ptru += sizeof(WFEINSTANCE);
+          if( !(*((PULONG)ptru)) ){
            SendKeySequence( "\x38\x01\x81\xB8" );
+          }
+       }
+       else {
+           SendKeySequence( "\x38\x01\x81\xB8" );
+       }
+  }
+#else   //TWI_INTERFACE_ENABLED
+           SendKeySequence( "\x38\x01\x81\xB8" );
+#endif  //TWI_INTERFACE_ENABLED
+
            fProcCalled = TRUE; // Don't notify UI on this
            break;
 
@@ -2032,6 +2319,13 @@ fProcCalled = TRUE;
            SendKeySequence( "\x2A\x0F\x8F\xAA" );
            fProcCalled = TRUE; // Don't notify UI on this
            break;
+
+
+       case HOTKEY_CTRL_SHIFT_ESC: // Ctrl+Shift+Esc
+           SendKeySequence( "\x1d\x2A\x01\x81\xAA\x9D" );
+           fProcCalled = TRUE; // Don't notify UI on this
+           break;
+
 
        case HOTKEY_UI: // UI hotkey
        {

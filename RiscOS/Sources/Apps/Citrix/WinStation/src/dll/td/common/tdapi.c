@@ -11,72 +11,87 @@
 *
 *  $Log$
 *  
+*     Rev 1.60   May 20 1998 15:31:50   xuanh
+*  get fUseAlternateAddress only for TCP connection.
+*
+*     Rev 1.59   May 18 1998 20:22:52   scottc
+*  failed to read alternate address from ini file
+*  
+*     Rev 1.58   May 16 1998 14:12:56   xuanh
+*  get IPX and NetBIOS server address from INI_WFCLIENT section.
+*  
+*     Rev 1.57   08 May 1998 17:51:26   brada
+*  Get browser addresses from WFCLIENT section
+*  
+*     Rev 1.56   26 Feb 1998 17:43:42   TOMA
+*  ce merge
+*
 *     Rev 1.55   Feb 09 1998 16:43:28   sumitd
 *  CPR #328 & 509 - DOS Client (TCP/IP) can now connect outside its subnet
-*  
+*
 *     Rev 1.54   Jan 26 1998 09:47:02   sumitd
-*  
+*
 *     Rev 1.53   Jan 23 1998 16:22:34   sumitd
 *  CPR 7206 - Dos client does not hang with wrong server name
-*  
+*
 *     Rev 1.52   Jan 06 1998 13:51:24   bills
 *  Added an EmulSetInfo function to the td's.  This will allow a pd to send info
 *  to the td.  This is currently only used by pdtapi to tell tdcomm32 the handle
 *  to read/write on.  All other tds currently have a stub function here.
-*  
+*
 *     Rev 1.51   03 Nov 1997 09:24:26   brada
 *  Added firewall load balancing support
-*  
+*
 *     Rev 1.50   Oct 31 1997 19:27:40   briang
 *  Remove pIniSection parameter from miGets
-*  
+*
 *     Rev 1.49   Oct 09 1997 17:28:30   briang
 *  Conversion to MemIni use
-*  
+*
 *     Rev 1.48   15 Apr 1997 16:54:46   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.48   21 Mar 1997 16:07:46   bradp
 *  update
-*  
+*
 *     Rev 1.47   08 Feb 1997 16:04:14   jeffm
 *  multiple browser support
-*  
+*
 *     Rev 1.46   16 May 1996 11:04:58   marcb
 *  update
-*  
+*
 *     Rev 1.45   08 May 1996 15:34:42   jeffm
 *  update
-*  
+*
 *     Rev 1.44   12 Apr 1996 16:31:34   richa
 *  Commented out WEP function.
-*  
+*
 *     Rev 1.43   12 Apr 1996 11:10:26   richa
 *  Added G_hModule for LoadString()
-*  
+*
 *     Rev 1.42   27 Mar 1996 09:22:36   richa
 *  Added GetModuleHandle.
-*  
+*
 *     Rev 1.41   20 Mar 1996 17:44:14   KenB
 *  Take out ErrorMessages[] (it was commented out anyway...)
-*  
+*
 *     Rev 1.40   20 Mar 1996 14:14:04   KenB
 *  remove a warning...
-*  
+*
 *     Rev 1.39   12 Mar 1996 13:15:10   richa
-*  
+*
 *     Rev 1.38   12 Mar 1996 11:46:30   KenB
 *  loadstr.h includes wferror.h, no reason to include it twice...
-*  
+*
 *     Rev 1.37   12 Mar 1996 11:32:12   KenB
 *  Include loadstr.h to put the LoadString() function in here (rather than including it in each component)
-*  
+*
 *     Rev 1.36   12 Mar 1996 11:13:02   KenB
 *  Include wferror.h; take out ErrorMessages[] and use LoadString() instead
-*  
+*
 *     Rev 1.35   13 Feb 1996 20:48:34   bradp
 *  update
-*  
+*
 *
 *************************************************************************/
 
@@ -109,6 +124,10 @@
 
 #include "../../../inc/tddevice.h"
 #include "../../../inc/tddevicep.h"
+
+#ifdef WINCE
+#include <wcecalls.h> // for LoadStringAW()                 KLB 09-05-97
+#endif // WINCE
 
 /*=============================================================================
 ==   External Functions Defined
@@ -294,7 +313,7 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
     BYTE BrowserKey[40];
     ADDRESS AddrList[MAX_BROWSERADDRESSLIST];
     LPBYTE lpAddrList;
-    int fUseAlternateAddress;
+	TRANSPORTNAME pszTransport;
 
 #if 0
     /*
@@ -326,28 +345,32 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
         strcpy( pPd->pNrDll, DllName );
     }
 
-    /* 
+    /*
      *  Get ICA browser parameters
      */
-    miGetPrivateProfileString( INI_WFCLIENT, INI_TCPBROWSERADDRESS, DEF_TCPBROWSERADDRESS, 
+    miGetPrivateProfileString( INI_WFCLIENT, INI_TCPBROWSERADDRESS, DEF_TCPBROWSERADDRESS,
                                pPd->TcpBrowserAddress, sizeof(pPd->TcpBrowserAddress) );
 
-    miGetPrivateProfileString( INI_IPXSECTION, INI_IPXBROWSERADDRESS, DEF_IPXBROWSERADDRESS, 
+    miGetPrivateProfileString( INI_WFCLIENT, INI_IPXBROWSERADDRESS, DEF_IPXBROWSERADDRESS,
                                pPd->IpxBrowserAddress, sizeof(pPd->IpxBrowserAddress) );
 
-    miGetPrivateProfileString( INI_NETBIOSSECTION, INI_NETBIOSBROWSERADDRESS, DEF_NETBIOSBROWSERADDRESS, 
+    miGetPrivateProfileString( INI_WFCLIENT, INI_NETBIOSBROWSERADDRESS, DEF_NETBIOSBROWSERADDRESS,
                                pPd->NetBiosBrowserAddress, sizeof(pPd->NetBiosBrowserAddress) );
 
-    fUseAlternateAddress = miGetPrivateProfileInt( INI_TRANSPORTSECTION,
+    /*
+     *  Get the transport name from INI file, if it's a kind of TCP/IP, 
+     *  then fetch the fUseAlternateAddress flag.
+     */
+    miGetPrivateProfileString( INI_SERVERSECTION, INI_TRANSPORTDRIVER, DEF_TRANSPORTDRIVER,
+                               pszTransport, sizeof(pszTransport) );
+
+    if ( !strnicmp(pszTransport, INI_TCP, sizeof(INI_TCPBROWSERSTRING)) )  {
+
+		pPd->fUseAlternateAddress = miGetPrivateProfileInt( INI_TRANSPORTSECTION,
                                                    INI_USEALTERNATEADDRESS,
                                                    DEF_USEALTERNATEADDRESS);
+    }
 
-    if ( fUseAlternateAddress ) {
-        pPd->fUseAlternateAddress = 1;
-    }
-    else {
-        pPd->fUseAlternateAddress = 0;
-    }
 
     /*
      *  determine if more than one browser address specified for TCP, IPX, NETBIOS
@@ -357,10 +380,10 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
        memcpy( AddrList[0], pPd->TcpBrowserAddress, sizeof(pPd->TcpBrowserAddress));
        for(i=1; i<MAX_BROWSERADDRESSLIST; i++) {
            sprintf(BrowserKey,"%s%d",INI_TCPBROWSERADDRESS,i+1);
-           miGetPrivateProfileString( INI_TCPSECTION,
+           miGetPrivateProfileString( INI_WFCLIENT,
                                       BrowserKey,
-                                      DEF_TCPBROWSERADDRESS, 
-                                      AddrList[i], 
+                                      DEF_TCPBROWSERADDRESS,
+                                      AddrList[i],
                                       sizeof(pPd->TcpBrowserAddress) );
        }
        lpAddrList = (char *)malloc( sizeof(AddrList) );
@@ -377,10 +400,10 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
        memcpy( AddrList[0], pPd->IpxBrowserAddress, sizeof(pPd->IpxBrowserAddress));
        for(i=1; i<MAX_BROWSERADDRESSLIST; i++) {
            sprintf(BrowserKey,"%s%d",INI_IPXBROWSERADDRESS,i+1);
-           miGetPrivateProfileString( INI_IPXSECTION,
+           miGetPrivateProfileString( INI_WFCLIENT,
                                       BrowserKey,
-                                      DEF_IPXBROWSERADDRESS, 
-                                      AddrList[i], 
+                                      DEF_IPXBROWSERADDRESS,
+                                      AddrList[i],
                                       sizeof(pPd->IpxBrowserAddress) );
        }
        lpAddrList = (char *)malloc( sizeof(AddrList) );
@@ -397,10 +420,10 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
        memcpy( AddrList[0], pPd->NetBiosBrowserAddress, sizeof(pPd->IpxBrowserAddress));
        for(i=1; i<MAX_BROWSERADDRESSLIST; i++) {
            sprintf(BrowserKey,"%s%d",INI_NETBIOSBROWSERADDRESS,i+1);
-           miGetPrivateProfileString( INI_NETBIOSSECTION,
+           miGetPrivateProfileString( INI_WFCLIENT,
                                       BrowserKey,
-                                      DEF_NETBIOSBROWSERADDRESS, 
-                                      AddrList[i], 
+                                      DEF_NETBIOSBROWSERADDRESS,
+                                      AddrList[i],
                                       sizeof(pPd->NetBiosBrowserAddress) );
        }
        lpAddrList = (char *)malloc( sizeof(AddrList) );
@@ -948,10 +971,10 @@ PdQueryInformation( PPD pPd, PPDQUERYINFORMATION pPdQueryInformation )
             PIOSTATUS pIOStat;
 
             pIOStat = (PIOSTATUS)pPdQueryInformation->pPdInformation;
-            pIOStat->BytesRecv      = pPd->BytesRecv;     
-            pIOStat->BytesSent      = pPd->BytesSent;     
-            pIOStat->FramesRecv     = pPd->FramesRecv;    
-            pIOStat->FramesSent     = pPd->FramesSent;    
+            pIOStat->BytesRecv      = pPd->BytesRecv;
+            pIOStat->BytesSent      = pPd->BytesSent;
+            pIOStat->FramesRecv     = pPd->FramesRecv;
+            pIOStat->FramesSent     = pPd->FramesSent;
             pIOStat->FrameRecvError = pPd->FrameRecvError;
             pIOStat->FrameSendError = pPd->FrameSendError;
             pPdQueryInformation->PdReturnLength = sizeof(IOSTATUS);
@@ -1003,7 +1026,7 @@ PdSetInformation( PPD pPd, PPDSETINFORMATION pPdSetInformation )
 
         case PdConnect :
             rc = DeviceConnect( pPd );
-	    if (rc) goto done;
+       if (rc) goto done;
             break;
 
         case PdDisconnect :
@@ -1036,7 +1059,7 @@ PdSetInformation( PPD pPd, PPDSETINFORMATION pPdSetInformation )
 
     }
 
-    /*
+   /*
      *  Send to transport driver
      */
 
@@ -1327,7 +1350,7 @@ LibMain( HINSTANCE hInst,
 //{
 //
 //    //  For future if needed
-//     
+//
 //    return( TRUE );
 //}
 //

@@ -10,9 +10,18 @@
 *
 *   $Log$
 *  
+*     Rev 1.36   Apr 29 1998 20:21:12   BobC
+*  Adding thread to thinwire makes twstack code unnecessary
+*  
+*     Rev 1.35   14 Apr 1998 21:25:10   derekc
+*  added wdUnicodeCode support
+*  
+*     Rev 1.34   27 Feb 1998 17:38:52   TOMA
+*  ce merge
+*
 *     Rev 1.33   Oct 09 1997 18:39:12   briang
 *  Conversion to MemIni use
-*  
+*
 *     Rev 1.32   18 Sep 1997 14:46:26   x86fre
 *  Modified for client split
 *
@@ -717,6 +726,76 @@ done:
    return( rc );
 }
 
+#ifdef UNICODESUPPORT
+/*******************************************************************************
+ *
+ *  Function: wdUnicodeCode
+ *
+ *  Purpose: Send Unicode code
+ *
+ *  Entry:
+ *     pUnicodeCodes (input)
+ *        pointer to scan code array
+ *     cUnicodeCodes (input)
+ *        number of scan codes in array
+ *
+ *  Exit:
+ *     0 if success, or error code
+ *
+ ******************************************************************************/
+INT wdUnicodeCode( PUNICODECHAR pUnicodeCodes, USHORT cUnicodeCodes )
+{
+   INT rc = CLIENT_STATUS_SUCCESS;
+   WDSETINFORMATION WdSetInfo;
+   UNICODECODE uc;
+   USHORT i;
+
+   for ( i=0; i<cUnicodeCodes; i++ ) {
+       LogPrintf( LOG_CLASS, LOG_KEYBOARD,
+                  "KEYBOARD: unicode(%02X)",
+                  *(pUnicodeCodes+i) );
+   }
+
+   TRACE(( TC_WENG, TT_L2,
+           "WENG: wdUnicodeCode: unicode(%02X)(%c) count(%d)",
+           *pUnicodeCodes, *pUnicodeCodes, cUnicodeCodes ));
+
+   /*
+    * Make sure there is a WD out there
+    */
+   if ( !(gState & WFES_LOADEDWD ) ) {
+       goto done;
+   }
+
+   /*
+    * If not connected, abort
+    */
+   if ( !(gState & WFES_CONNECTED) ) {
+       goto done;
+   }
+
+   /*
+    * Send keyboard event
+    */
+   uc.pUnicodeCodes = (LPVOID) pUnicodeCodes;
+   uc.cUnicodeCodes = cUnicodeCodes;
+   memset( &WdSetInfo, 0, sizeof( WdSetInfo ) );
+   WdSetInfo.WdInformationClass  = WdUnicodeCode;
+   WdSetInfo.pWdInformation      = (LPVOID)&uc;
+   WdSetInfo.WdInformationLength = sizeof( uc );
+   if ( rc = ModuleCall( &gWdLink, WD$SETINFORMATION, &WdSetInfo ) ) {
+       TRACE(( TC_WENG, TT_ERROR,
+          "WENG: wdUnicodeCode: Error (%d) from WdSetInfo-WdUnicodeCode", rc ));
+       ASSERT( 0, 0 );
+       goto done;
+   }
+
+done:
+   TRACE(( TC_WENG, TT_L1, "WENG: wdUnicodeCode: rc(%d)", rc ));
+   return( rc );
+}
+#endif
+
 /*******************************************************************************
  *
  *  Function: wdMouseData
@@ -1210,6 +1289,7 @@ done:
  *     0 if success, or error code
  *
  ******************************************************************************/
+#ifndef VDTW_THREAD
 INT wdThinwireStack( PVDTWSTACK pTWStack  )
 {
    INT rc = CLIENT_STATUS_SUCCESS;
@@ -1243,6 +1323,7 @@ done:
    TRACE(( TC_WENG, TT_L1, "WENG: wdThinwireStack: rc(%d)", rc ));
    return( rc );
 }
+#endif // ifndef VDTW_THREAD
 
 /*******************************************************************************
  *

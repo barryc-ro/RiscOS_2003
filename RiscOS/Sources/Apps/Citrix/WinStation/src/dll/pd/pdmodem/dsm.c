@@ -11,6 +11,12 @@
 *
 *  $Log$
 *  
+*     Rev 1.24   25 Feb 1998 16:44:28   TOMA
+*  CE Merge
+*  
+*     Rev 1.24   18 Aug 1997 14:02:34   anthonyu
+*  Added citrix.h include for WinCE.
+*  
 *     Rev 1.23   15 Apr 1997 16:52:26   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -46,6 +52,11 @@
 #include "../../../inc/pdapi.h"
 #include "../../../inc/logapi.h"
 #include "../inc/pd.h"
+
+
+#ifdef WINCE
+#include "citrix\citrix.h"
+#endif
 
 #include "pdmodem.h"
 

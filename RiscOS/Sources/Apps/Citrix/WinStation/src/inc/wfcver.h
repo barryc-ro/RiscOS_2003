@@ -35,237 +35,528 @@
 *
 *  $Log$
 *  
+*     Rev 1.384   27 May 1998 22:53:06   x86fre
+*  Update build number
+*  
+*     Rev 1.383   27 May 1998 22:53:04   x86fre
+*  Update build number
+*  
+*     Rev 1.382   27 May 1998 22:52:42   x86fre
+*  Update build number
+*  
+*     Rev 1.381   27 May 1998 22:52:40   x86fre
+*  Update build number
+*  
+*     Rev 1.380   22 May 1998 19:43:24   x86fre
+*  Update build number
+*  
+*     Rev 1.379   22 May 1998 19:43:22   x86fre
+*  Update build number
+*  
+*     Rev 1.378   20 May 1998 20:24:36   x86fre
+*  Update build number
+*  
+*     Rev 1.377   20 May 1998 20:24:24   x86fre
+*  Update build number
+*  
+*     Rev 1.376   19 May 1998 20:45:56   x86fre
+*  Update build number
+*  
+*     Rev 1.375   19 May 1998 20:45:52   x86fre
+*  Update build number
+*  
+*     Rev 1.374   18 May 1998 21:54:46   x86fre
+*  Update build number
+*  
+*     Rev 1.373   18 May 1998 21:54:44   x86fre
+*  Update build number
+*  
+*     Rev 1.372   17 May 1998 06:22:54   x86fre
+*  Update build number
+*  
+*     Rev 1.371   17 May 1998 06:22:52   x86fre
+*  Update build number
+*  
+*     Rev 1.370   15 May 1998 21:09:26   x86fre
+*  Update build number
+*  
+*     Rev 1.369   15 May 1998 21:09:22   x86fre
+*  Update build number
+*  
+*     Rev 1.368   14 May 1998 19:52:14   x86fre
+*  Update build number
+*  
+*     Rev 1.367   14 May 1998 19:52:12   x86fre
+*  Update build number
+*  
+*     Rev 1.366   13 May 1998 18:54:02   x86fre
+*  Update build number
+*  
+*     Rev 1.365   13 May 1998 18:53:58   x86fre
+*  Update build number
+*  
+*     Rev 1.364   12 May 1998 20:30:00   x86fre
+*  Update build number
+*  
+*     Rev 1.363   12 May 1998 20:29:56   x86fre
+*  Update build number
+*  
+*     Rev 1.362   11 May 1998 21:20:00   x86fre
+*  Update build number
+*  
+*     Rev 1.361   11 May 1998 21:19:56   x86fre
+*  Update build number
+*  
+*     Rev 1.360   07 May 1998 20:26:14   x86fre
+*  Update build number
+*  
+*     Rev 1.359   07 May 1998 20:26:10   x86fre
+*  Update build number
+*  
+*     Rev 1.358   06 May 1998 20:28:50   x86fre
+*  Update build number
+*  
+*     Rev 1.357   06 May 1998 20:28:36   x86fre
+*  Update build number
+*  
+*     Rev 1.356   05 May 1998 13:52:26   x86fre
+*  Update build number
+*  
+*     Rev 1.355   05 May 1998 13:52:24   x86fre
+*  Update build number
+*  
+*     Rev 1.354   04 May 1998 21:57:44   x86fre
+*  Update build number
+*  
+*     Rev 1.353   04 May 1998 21:57:40   x86fre
+*  Update build number
+*  
+*     Rev 1.352   04 May 1998 11:54:20   x86fre
+*  Update build number
+*  
+*     Rev 1.351   04 May 1998 11:54:16   x86fre
+*  Update build number
+*  
+*     Rev 1.350   03 May 1998 21:17:04   x86fre
+*  Update build number
+*  
+*     Rev 1.349   03 May 1998 21:16:46   x86fre
+*  Update build number
+*  
+*     Rev 1.348   02 May 1998 17:46:04   x86fre
+*  Update build number
+*  
+*     Rev 1.347   02 May 1998 17:46:00   x86fre
+*  Update build number
+*  
+*     Rev 1.346   01 May 1998 19:48:46   x86fre
+*  Update build number
+*  
+*     Rev 1.345   01 May 1998 19:48:42   x86fre
+*  Update build number
+*  
+*     Rev 1.344   30 Apr 1998 12:38:04   x86fre
+*  Update build number
+*  
+*     Rev 1.343   30 Apr 1998 12:38:00   x86fre
+*  Update build number
+*  
+*     Rev 1.342   29 Apr 1998 12:38:24   x86fre
+*  Update build number
+*  
+*     Rev 1.341   29 Apr 1998 12:38:20   x86fre
+*  Update build number
+*  
+*     Rev 1.340   28 Apr 1998 13:19:38   x86fre
+*  Update build number
+*  
+*     Rev 1.339   28 Apr 1998 13:19:34   x86fre
+*  Update build number
+*  
+*     Rev 1.338   27 Apr 1998 11:57:06   x86fre
+*  Update build number
+*  
+*     Rev 1.337   27 Apr 1998 11:57:02   x86fre
+*  Update build number
+*  
+*     Rev 1.336   26 Apr 1998 19:04:02   x86fre
+*  Update build number
+*  
+*     Rev 1.335   26 Apr 1998 19:03:58   x86fre
+*  Update build number
+*  
+*     Rev 1.334   25 Apr 1998 22:56:04   x86fre
+*  Update build number
+*  
+*     Rev 1.333   25 Apr 1998 22:55:46   x86fre
+*  Update build number
+*  
+*     Rev 1.332   24 Apr 1998 12:22:26   x86fre
+*  Update build number
+*  
+*     Rev 1.331   24 Apr 1998 12:22:22   x86fre
+*  Update build number
+*  
+*     Rev 1.330   22 Apr 1998 20:18:42   x86fre
+*  Update build number
+*  
+*     Rev 1.329   22 Apr 1998 20:18:40   x86fre
+*  Update build number
+*  
+*     Rev 1.328   21 Apr 1998 21:13:22   x86fre
+*  Update build number
+*  
+*     Rev 1.327   21 Apr 1998 21:13:18   x86fre
+*  Update build number
+*  
+*     Rev 1.326   20 Apr 1998 18:35:54   x86fre
+*  Update build number
+*  
+*     Rev 1.325   20 Apr 1998 18:35:52   x86fre
+*  Update build number
+*  
+*     Rev 1.324   20 Apr 1998 01:20:24   x86fre
+*  Update build number
+*  
+*     Rev 1.323   20 Apr 1998 01:20:20   x86fre
+*  Update build number
+*  
+*     Rev 1.322   18 Apr 1998 22:50:38   x86fre
+*  Update build number
+*  
+*     Rev 1.321   18 Apr 1998 22:50:36   x86fre
+*  Update build number
+*  
+*     Rev 1.320   17 Apr 1998 21:01:52   x86fre
+*  Update build number
+*  
+*     Rev 1.319   17 Apr 1998 21:01:48   x86fre
+*  Update build number
+*  
+*     Rev 1.318   16 Apr 1998 22:26:38   x86fre
+*  Update build number
+*  
+*     Rev 1.317   16 Apr 1998 22:26:36   x86fre
+*  Update build number
+*  
+*     Rev 1.316   15 Apr 1998 18:25:38   x86fre
+*  Update build number
+*  
+*     Rev 1.315   15 Apr 1998 18:25:34   x86fre
+*  Update build number
+*  
+*     Rev 1.314   14 Apr 1998 19:40:00   x86fre
+*  Update build number
+*  
+*     Rev 1.313   14 Apr 1998 19:39:56   x86fre
+*  Update build number
+*  
+*     Rev 1.312   13 Apr 1998 20:10:32   x86fre
+*  Update build number
+*  
+*     Rev 1.311   13 Apr 1998 20:10:26   x86fre
+*  Update build number
+*  
+*     Rev 1.310   10 Apr 1998 12:35:12   x86fre
+*  Update build number
+*  
+*     Rev 1.309   10 Apr 1998 12:35:08   x86fre
+*  Update build number
+*  
+*     Rev 1.308   08 Apr 1998 12:39:50   x86fre
+*  Update build number
+*  
+*     Rev 1.307   08 Apr 1998 12:39:46   x86fre
+*  Update build number
+*  
+*     Rev 1.306   07 Apr 1998 00:16:36   x86fre
+*  Update build number
+*  
+*     Rev 1.305   07 Apr 1998 00:16:32   x86fre
+*  Update build number
+*  
+*     Rev 1.304   03 Apr 1998 21:08:28   x86fre
+*  Update build number
+*  
+*     Rev 1.303   03 Apr 1998 21:08:26   x86fre
+*  Update build number
+*  
+*     Rev 1.302   02 Apr 1998 13:08:36   x86fre
+*  Update build number
+*  
+*     Rev 1.301   02 Apr 1998 13:08:32   x86fre
+*  Update build number
+*  
+*     Rev 1.300   01 Apr 1998 22:00:00   x86fre
+*  Update build number
+*  
+*     Rev 1.299   01 Apr 1998 21:59:56   x86fre
+*  Update build number
+*  
+*     Rev 1.298   30 Mar 1998 20:54:56   x86fre
+*  Update build number
+*  
+*     Rev 1.297   30 Mar 1998 20:54:52   x86fre
+*  Update build number
+*  
+*     Rev 1.296   Mar 23 1998 22:57:08   x86fre
+*  Update build number
+*  
+*     Rev 1.295   Mar 23 1998 22:57:04   x86fre
+*  Update build number
+*  
+*     Rev 1.294   18 Mar 1998 16:46:02   x86fre
+*  Update build number
+*  
+*     Rev 1.293   18 Mar 1998 16:45:58   x86fre
+*  Update build number
+*  
+*     Rev 1.292   16 Mar 1998 13:13:44   x86fre
+*  Update build number
+*  
+*     Rev 1.291   16 Mar 1998 13:13:40   x86fre
+*  Update build number
+*  
+*     Rev 1.290   14 Mar 1998 18:29:44   toma
+*  CE Merge
+*
+*     Rev 1.289   10 Mar 1998 22:29:46   x86fre
+*  Update build number
+*
+*     Rev 1.288   10 Mar 1998 22:29:42   x86fre
+*  Update build number
+*
 *     Rev 1.287   02 Mar 1998 21:02:28   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.286   02 Mar 1998 21:02:26   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.285   28 Feb 1998 22:56:34   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.284   28 Feb 1998 22:56:32   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.283   27 Feb 1998 19:41:40   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.282   27 Feb 1998 19:41:36   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.281   26 Feb 1998 19:16:38   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.280   26 Feb 1998 19:16:36   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.279   25 Feb 1998 23:42:24   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.278   25 Feb 1998 23:42:22   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.277   24 Feb 1998 22:01:52   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.276   24 Feb 1998 22:01:50   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.275   22 Feb 1998 14:33:42   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.274   22 Feb 1998 14:33:38   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.273   21 Feb 1998 19:51:46   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.272   21 Feb 1998 19:51:42   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.271   20 Feb 1998 18:19:00   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.270   20 Feb 1998 18:18:54   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.269   19 Feb 1998 18:56:30   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.268   19 Feb 1998 18:56:26   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.267   18 Feb 1998 21:44:44   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.266   18 Feb 1998 21:44:38   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.265   17 Feb 1998 19:32:42   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.264   17 Feb 1998 19:32:38   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.263   16 Feb 1998 18:09:38   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.262   16 Feb 1998 18:09:34   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.261   13 Feb 1998 19:32:40   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.260   13 Feb 1998 19:32:28   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.259   13 Feb 1998 10:41:52   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.258   13 Feb 1998 10:41:50   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.257   11 Feb 1998 00:40:20   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.256   11 Feb 1998 00:39:56   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.255   09 Feb 1998 20:58:48   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.254   09 Feb 1998 20:58:44   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.253   06 Feb 1998 17:55:32   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.252   06 Feb 1998 17:55:28   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.251   05 Feb 1998 20:36:30   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.250   05 Feb 1998 20:36:28   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.249   03 Feb 1998 19:53:00   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.248   03 Feb 1998 19:52:56   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.247   02 Feb 1998 18:10:36   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.246   02 Feb 1998 18:10:32   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.245   29 Jan 1998 14:17:08   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.244   29 Jan 1998 14:14:36   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.243   26 Jan 1998 15:41:04   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.242   26 Jan 1998 15:41:00   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.241   22 Jan 1998 13:12:46   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.240   22 Jan 1998 13:12:38   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.239   19 Jan 1998 13:52:24   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.238   19 Jan 1998 13:51:50   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.237   15 Jan 1998 13:37:08   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.236   15 Jan 1998 13:37:02   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.235   12 Jan 1998 17:15:14   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.234   12 Jan 1998 17:15:12   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.233   08 Jan 1998 19:16:20   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.232   08 Jan 1998 19:16:10   x86fre
 *  Update buildnumber to 505
-*  
+*
 *     Rev 1.231   06 Jan 1998 14:41:54   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.230   06 Jan 1998 14:41:50   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.229   22 Dec 1997 20:54:08   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.228   22 Dec 1997 20:54:04   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.227   18 Dec 1997 16:04:38   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.226   18 Dec 1997 16:04:36   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.225   17 Dec 1997 11:24:24   butchd
 *  Updated Citrix copyright to 1998
-*  
+*
 *     Rev 1.224   16 Dec 1997 10:54:42   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.223   16 Dec 1997 10:54:40   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.222   11 Dec 1997 19:24:48   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.221   11 Dec 1997 19:24:42   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.220   09 Dec 1997 10:27:14   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.219   09 Dec 1997 10:27:08   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.218   02 Dec 1997 18:31:58   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.217   02 Dec 1997 18:31:52   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.216   Nov 07 1997 15:53:30   briang
 *  Update version number to 4.0
-*  
+*
 *     Rev 1.215   Oct 17 1997 23:59:30   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.214   Oct 17 1997 23:59:26   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.213   Oct 15 1997 19:02:38   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.212   Oct 15 1997 19:02:34   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.211   15 Oct 1997 16:26:06   x86fre
 *  Update build number
-*  
+*
 *     Rev 1.210   18 Sep 1997 14:46:50   x86fre
 *  Modified for client split
 *
@@ -504,12 +795,12 @@
 #ifdef VER_CLIENTBUILD
 #undef VER_CLIENTBUILD
 #endif
-#define VER_CLIENTBUILD            532
+#define VER_CLIENTBUILD            581
 
 #ifdef VER_CLIENTBUILD_STR
 #undef VER_CLIENTBUILD_STR
 #endif
-#define VER_CLIENTBUILD_STR        "532"
+#define VER_CLIENTBUILD_STR        "581"
 
 /*--------------------------------------------------------------*/
 /* the following section defines values used in the version     */
@@ -518,7 +809,7 @@
 /*--------------------------------------------------------------*/
 
 /* default is nodebug */
-#if DEBUG
+#ifdef DEBUG
 #define VER_DEBUG                       VS_FF_DEBUG
 #else
 #define VER_DEBUG                       0
@@ -539,7 +830,7 @@
 #define VER_DOS_LEGALCOPYRIGHT_STR      "Copyright (c) 1990-1998 Citrix Systems, Inc."
 
 #define VER_COMPANYNAME_STR             "Citrix Systems, Inc."
-#define VER_PRODUCTNAME_STR             "Citrix WinFrame Client"
+#define VER_PRODUCTNAME_STR             "Citrix ICA Client"
 #define VER_PRODUCTVERSION_STR          "4.00"
 #define VER_CLIENTVERSION               4,00,VER_CLIENTBUILD
 #define VER_CLIENTVERSION_STR           VER_PRODUCTVERSION_STR "." VER_CLIENTBUILD_STR

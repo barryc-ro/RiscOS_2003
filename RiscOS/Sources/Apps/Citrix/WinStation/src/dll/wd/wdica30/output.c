@@ -11,6 +11,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.34   14 Apr 1998 21:23:14   derekc
+*  added Unicode KbdWrite support
+*  
 *     Rev 1.33   15 Apr 1997 18:18:00   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -138,6 +141,9 @@ int
 KbdWrite( PWD pWd, PUCHAR pKbdCodes, USHORT cKbdCodes )
 {
     BYTE str[1];
+#ifdef UNICODESUPPORT
+    BYTE ustr[2];
+#endif
     PWDICA pIca;
     USHORT OutBufKbdCount;
     int rc;
@@ -248,6 +254,20 @@ KbdWrite( PWD pWd, PUCHAR pKbdCodes, USHORT cKbdCodes )
         if ( rc )
             goto badappend;
     }
+
+#ifdef UNICODESUPPORT
+    if ( pIca->KbdMode == Kbd_Unicode ) {
+    
+        ustr[0] = LOBYTE( OutBufKbdCount );
+	     ustr[1] = HIBYTE( OutBufKbdCount );
+        rc = AppendICAPacket( pWd, PACKET_ALT_KEYBOARD2, ustr, 2 );
+
+		  if ( rc )   // BUGBUGCE:  move this into the if block above it
+		     goto badappend;
+    
+    }
+
+#endif
 
     /*
      *  Append buffered keyboard data to output buffer

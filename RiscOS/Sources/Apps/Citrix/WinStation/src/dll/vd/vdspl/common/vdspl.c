@@ -16,6 +16,12 @@
 *
 * $Log$
 *  
+*     Rev 1.8   13 Mar 1998 14:10:24   toma
+*  CE Merge
+*  
+*     Rev 1.8   10 Mar 1998 17:03:20   kenb
+*  Change WdCall to be VdCallWd
+*  
 *     Rev 1.7   Oct 31 1997 19:41:40   briang
 *  Remove pIniSection parameter from miGets
 *  
@@ -85,7 +91,7 @@ PLIBPROCEDURE VdSplDriverProcedures[VDDRIVER__COUNT] =
 ==   External Functions used
 =============================================================================*/
 
-extern int WdCall( PVD pVd, USHORT ProcIndex, PVOID pParam );
+extern int VdCallWd( PVD pVd, USHORT ProcIndex, PVOID pParam );
 
 extern int SplPollAllPorts(void );
 
@@ -190,7 +196,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
    wdqi.pWdInformation = &OpenVirtualChannel;
    wdqi.WdInformationLength = sizeof_OPENVIRTUALCHANNEL;
    OpenVirtualChannel.pVCName = VIRTUAL_CPM;
-   rc = WdCall( pVd, WD__QUERYINFORMATION, &wdqi );
+   rc = VdCallWd( pVd, WD__QUERYINFORMATION, &wdqi );
    VirtualCpm = OpenVirtualChannel.Channel;
    ASSERT( VirtualCpm == Virtual_Cpm, VirtualCpm );
 
@@ -644,7 +650,7 @@ SplHookChannel( PVD pVd, int Channel )
    wdsi.WdInformationClass  = WdVirtualWriteHook;
    wdsi.pWdInformation      = &vdwh;
    wdsi.WdInformationLength = sizeof(VDWRITEHOOK);
-   rc = WdCall(pVd, WD__SETINFORMATION, &wdsi);
+   rc = VdCallWd(pVd, WD__SETINFORMATION, &wdsi);
    TRACE(( TC_CPM, TT_API2, "VDCPM: writehook ch=%u p=%lx rc=%u", vdwh.Type, vdwh.pVdData, rc ));
 
    if( rc ) {

@@ -11,27 +11,30 @@
 *
 *  $Log$
 *  
+*     Rev 1.11   02 Mar 1998 15:57:06   TOMA
+*  ce merge
+*
 *     Rev 1.10   Feb 17 1998 20:59:06   sumitd
 *  SV_TYPE_TERMINALSERVER bit added
-*  
+*
 *     Rev 1.9   Feb 17 1998 19:36:20   briang
 *  Add virtual channel name definition for License VD
-*  
+*
 *     Rev 1.8   06 Feb 1998 15:20:54   miked
 *  bug fix
-*  
+*
 *     Rev 1.7   04 Feb 1998 16:56:20   brada
 *  Add VDCM
-*  
+*
 *     Rev 1.6   Jan 06 1998 14:07:10   bills
 *  Added a new PdTapi PDCLASS.
-*  
+*
 *     Rev 1.5   02 Dec 1997 16:49:40   KenB
 *  add 4 more virtual channels so WF APIs will work (see ...\client\wd\common\wdapi.c)
-*  
+*
 *     Rev 1.4   26 Sep 1997 17:48:34   davidp
 *  Added SubDriver type to module type enum
-*  
+*
 *     Rev 1.3   18 Sep 1997 14:47:12   x86fre
 *  Modified for client split
 *
@@ -153,7 +156,7 @@ typedef enum _PDCLASS {
     PdTelnet,          // 13 not implemented
     PdOemFilter,       // 14 user protocol driver
     PdNasi,            // 15 tdnasi.dll
-    PdTapi,            // 16 pdtapi.dll	
+    PdTapi,            // 16 pdtapi.dll   
     PdReserved1,       // 17
     PdReserved2,       // 18
     PdReserved3,       // 19
@@ -369,6 +372,8 @@ typedef struct _VDCLIENTDRIVES2 {
 // avoid 2 (andy)
 #define CLIENTID_CITRIX_CONSOLE      0x0003     // citrix console
 #define CLIENTID_CITRIX_TEXT_TERM    0x0004     // citrix text terminals
+#define CLIENTID_CITRIX_MVGA_TERM    0x0007     // citrix MVGA terminals
+#define CLIENTID_CITRIX_WINCE        0x0009     // citrix WinCE client
 
 #define CLIENTID_CITRIX_INTERNET     0x0101     // citrix internet client
 

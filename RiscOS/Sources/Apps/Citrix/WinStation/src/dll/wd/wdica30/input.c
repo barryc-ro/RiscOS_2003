@@ -9,12 +9,22 @@
 *  
 *   Author: Brad Pedersen (4/8/94)
 *  
-*   input.c,v
-*   Revision 1.1  1998/01/12 11:36:19  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.50   Apr 29 1998 11:34:46   DavidT
+*  Generic fix for ICA detect
+*  
+*     Rev 1.49   16 Apr 1998 11:07:12   kurtp
+*  merge UK  dos/Win16 fixes
+*  
+*     Rev 1.48   15 Apr 1998 19:16:56   kurtp
+*  UK fix for DOS/Win16
+*  
+*     Rev 1.47   14 Apr 1998 21:23:50   derekc
+*  added PACKET_ALT_KEYBOARD2 handler
+*  
+*     Rev 1.46   13 Apr 1998 18:29:20   kurtp
+*  add UK reducer code
 *  
 *     Rev 1.43   15 Apr 1997 18:17:52   TOMA
 *  autoput for remove source 4/12/97
@@ -66,6 +76,7 @@
 #include "../inc/wd.h"
 #include "wdica.h"
 
+#include "../../../inc/reducapi.h"
 
 /*=============================================================================
 ==   Defines and structures
@@ -183,7 +194,6 @@ void IcaSetVideoMode( PWD, LPBYTE, USHORT );
 void IcaSetLed( PWD, LPBYTE, USHORT );
 void IcaClientData( PWD, LPBYTE, USHORT );
 
-
 /*=============================================================================
 ==   Local data
 =============================================================================*/
@@ -277,10 +287,69 @@ static ICADATA ICAData[] =
    -2, NULL,                               // PACKET_MOUSE2           0x39
     0, NULL,                               // PACKET_COMMAND_CACHE    0x3A
    -2, IcaClientData,                      // PACKET_SET_CLIENT_DATA  0x3B
+#ifdef UNICODESUPPORT
+   -2, NULL,                               // PACKET_ALT_KEYBOARD2    0x3C
+#endif
 };
 #define PACKET_COMMAND_CACHE    0x3A // nn write n bytes of caching data
 #define PACKET_SET_CLIENT_DATA  0x3B // set n bytes of a data type 
 
+
+/*******************************************************************************
+ *
+ *  Activate Expansion
+ *
+ *  Activate the host to client expansion
+ *
+ * ENTRY:
+ *    pWd (input)
+ *       pointer to winstation driver data structure
+ *    powerOfTwo (input)
+ *       size of the histry buffer = 2**powerOf2
+ *
+ * EXIT:
+ *    CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+void ActivateExpansion(PWD pWd, ULONG powerOf2)
+{
+    TRACE(( TC_WD, TT_API1, "WD: ActivateExpansion Pow2 %d", powerOf2));
+
+	raInitExpanderDataQueueVariables(&pWd->expansionData, powerOf2, pWd->ExpanderBuffer, 0);
+
+	pWd->expansionEnabled = TRUE;
+}
+
+/*******************************************************************************
+ *
+ *  ActivateReduction
+ *
+ *  Activate the client to host reduction
+ *
+ * ENTRY:
+ *    pWd (input)
+ *       pointer to winstation driver data structure
+ *    powerOfTwo (input)
+ *       size of the histry buffer = 2**powerOf2
+ *	  maxNewData (input)
+ *		 maximum expanded packet size
+ *
+ * EXIT:
+ *    CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+void ActivateReduction(PWD pWd, ULONG powerOf2, USHORT maxNewdata)
+{
+    TRACE(( TC_WD, TT_API1, "WD: ActivateReduction Pow2 %d MaxData %d", powerOf2, maxNewdata));
+
+	raInitReducerDataQueueVariables(&pWd->reductionData, powerOf2, REDUCER_RING_BUF_POW2, pWd->ReducerBuffer, maxNewdata);
+
+	pWd->reductionEnabled = TRUE;
+
+	// we must reserve two bytes at the start of the buffer for expansion
+	pWd->OutBufMaxByteCount -= 2;
+	pWd->OutBufHeader += 2;
+}
 
 /*******************************************************************************
  *
@@ -308,176 +377,201 @@ WdICA30EmulProcessInput( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     PICASTATE pState;
     PWDICA pIca;
     USHORT Count;
+	/* handle the case of a double array, ie one which wraps around the buffer */
+	LPBYTE pInBuf[2];
+	ULONG inCount[2];
+	LPBYTE locpInBuf;
+	ULONG locInCount;
+	LONG numOfBuffers;
+	int i;
+
+	if ( pWd->expansionEnabled )
+	{
+		raConvertBufferIntoDataQueue(pInputBuffer, InputCount, &pWd->expansionData);
+		numOfBuffers = raExtractNewDataFromQueue(&pWd->expansionData, (BYTE FAR **)(&pInBuf), inCount);
+	} else
+	{
+		numOfBuffers = 1;
+		pInBuf[0] = pInputBuffer;
+		inCount[0] = InputCount;
+	}
 
     pIca = (PWDICA) pWd->pPrivate;
 
-    TRACE(( TC_WD, TT_IFRAME, "WdIca: %u [%02x %02x %02x %02x %02x %02x]",
-            InputCount, pInputBuffer[0], pInputBuffer[1], pInputBuffer[2],
-            pInputBuffer[3], pInputBuffer[4], pInputBuffer[5] ));
-
+    TRACE(( TC_WD, TT_IFRAME, "WdIca: %u+%u [%02x %02x %02x %02x %02x %02x]",
+            inCount[0], inCount[1], pInBuf[0][0], pInBuf[0][1], pInBuf[0][2],
+            pInBuf[0][3], pInBuf[0][4], pInBuf[0][5] ));
     /*
-     *  Check for ICA detection string
+     *  Loop here to handle the two possible input buffers
      */
-    if ( !pIca->fIcaDetected ) {
-        _CheckForIcaDetect( pWd, pInputBuffer, InputCount );
-        return( CLIENT_STATUS_SUCCESS );
-    }
+	for (i=0; i<numOfBuffers; i++)
+	{
 
-    /*
-     *  Process ICA data
-     */
-    while ( InputCount > 0 ) {
+		locpInBuf = pInBuf[i];
+		locInCount = inCount[i];
 
-        /*
-         *  Get pointer to correct state table entry
-         */
-        pState = &StateTable[ pIca->PacketState ];
+		/*
+		 *  Check for ICA detection string
+		 */
+		if ( !pIca->fIcaDetected ) {
+			_CheckForIcaDetect( pWd, pInBuf[i], InputCount );
+			return( CLIENT_STATUS_SUCCESS );
+		}
 
-        /*
-         *  Update next state
-         */
-        pIca->PacketState = pState->NextState;
+		/*
+		 *  Process ICA data
+		 */
+		while ( locInCount > 0 ) {
 
-        /*
-         *  Save input data
-         */
-        switch( pState->DataType ) {
+			/*
+			 *  Get pointer to correct state table entry
+			 */
+			pState = &StateTable[ pIca->PacketState ];
 
-            case dTYPE :  /* default next state is sTYPE */
+			/*
+			 *  Update next state
+			 */
+			pIca->PacketState = pState->NextState;
 
-                TRACE((TC_WD,TT_IFRAME2,"WdIca: dTYPE %02x", *pInputBuffer ));
-                *((LPBYTE) &pIca->PacketType) = *pInputBuffer++;
-                InputCount--;
+			/*
+			 *  Save input data
+			 */
+			switch( pState->DataType ) {
 
-                if ( (USHORT)pIca->PacketType >= PACKET_MAXIMUM ) {
-                    ASSERT( FALSE, pIca->PacketType );
-                    /* bad data was received - bit bucket packet */
-                    break;
-                }
+				case dTYPE :  /* default next state is sTYPE */
 
-                pIca->PacketLength = ICAData[ pIca->PacketType ].Length;
-                switch ( pIca->PacketLength ) {
+					TRACE((TC_WD,TT_IFRAME2,"WdIca: dTYPE %02x", *locpInBuf ));
+					*((LPBYTE) &pIca->PacketType) = *locpInBuf++;
+					locInCount--;
 
-                    case (USHORT)-2 :
-                        pIca->PacketLength = 0;
-                        pIca->PacketState = sLEN2L;
-                        break;
+					if ( (USHORT)pIca->PacketType >= PACKET_MAXIMUM ) {
+						ASSERT( FALSE, pIca->PacketType );
+						/* bad data was received - bit bucket packet */
+						break;
+					}
 
-                    case (USHORT)-1 :
-                        pIca->PacketLength = 0;
-                        pIca->PacketState = sLEN1;
-                        break;
+					pIca->PacketLength = ICAData[ pIca->PacketType ].Length;
+					switch ( pIca->PacketLength ) {
 
-                    case 0 :
-#ifdef DOS
-                        // hide mouse pointer if visible
-                        if ( pIca->fMouseVisible &&
-                             pIca->PacketType >= PACKET_CLEAR_SCREEN &&
-                             pIca->PacketType <= PACKET_SCROLLRT2 )
-                            (void) MouseShowPointer( FALSE );
-#endif
-                        if ( pProc = ICAData[ pIca->PacketType ].pProcedure )
-                            (*pProc)( pWd, NULL, 0 );
+						case (USHORT)-2 :
+							pIca->PacketLength = 0;
+							pIca->PacketState = sLEN2L;
+							break;
 
-#ifdef DOS
-                        // restore mouse pointer if visible
-                        if ( pIca->fMouseVisible &&
-                             pIca->PacketType >= PACKET_CLEAR_SCREEN &&
-                             pIca->PacketType <= PACKET_SCROLLRT2 )
-                            (void) MouseShowPointer( TRUE );
-#endif
-                        break;
+						case (USHORT)-1 :
+							pIca->PacketLength = 0;
+							pIca->PacketState = sLEN1;
+							break;
 
-                    default :
-                        pIca->PacketState = sDATA;
-                        break;
-                }
+						case 0 :
+	#ifdef DOS
+							// hide mouse pointer if visible
+							if ( pIca->fMouseVisible &&
+								 pIca->PacketType >= PACKET_CLEAR_SCREEN &&
+								 pIca->PacketType <= PACKET_SCROLLRT2 )
+								(void) MouseShowPointer( FALSE );
+	#endif
+							if ( pProc = ICAData[ pIca->PacketType ].pProcedure )
+								(*pProc)( pWd, NULL, 0 );
 
-                /* reset input buffer count */
-                pWd->InputCount = 0;
-                break;
+	#ifdef DOS
+							// restore mouse pointer if visible
+							if ( pIca->fMouseVisible &&
+								 pIca->PacketType >= PACKET_CLEAR_SCREEN &&
+								 pIca->PacketType <= PACKET_SCROLLRT2 )
+								(void) MouseShowPointer( TRUE );
+	#endif
+							break;
 
-            case dLEN1 :
+						default :
+							pIca->PacketState = sDATA;
+							break;
+					}
 
-                TRACE((TC_WD,TT_IFRAME2,"WdIca: dLEN1 %02x", *pInputBuffer));
-                *((LPBYTE) &pIca->PacketLength) = *pInputBuffer++;
-                InputCount--;
-                if ( pIca->PacketLength == 0 )
-                    goto data;
-                break;
+					/* reset input buffer count */
+					pWd->InputCount = 0;
+					break;
 
-            case dLEN2L :
+				case dLEN1 :
 
-                TRACE((TC_WD,TT_IFRAME2,"WdIca: dLEN2L %02x", *pInputBuffer));
-                *((LPBYTE) &pIca->PacketLength) = *pInputBuffer++;
-                InputCount--;
-                break;
+					TRACE((TC_WD,TT_IFRAME2,"WdIca: dLEN1 %02x", *locpInBuf));
+					*((LPBYTE) &pIca->PacketLength) = *locpInBuf++;
+					locInCount--;
+					if ( pIca->PacketLength == 0 )
+						goto data;
+					break;
 
-            case dLEN2H :
+				case dLEN2L :
 
-                TRACE((TC_WD,TT_IFRAME2,"WdIca: dLEN2H %02x", *pInputBuffer));
-                *(((LPBYTE) &pIca->PacketLength) + 1) = *pInputBuffer++;
-                InputCount--;
+					TRACE((TC_WD,TT_IFRAME2,"WdIca: dLEN2L %02x", *locpInBuf));
+					*((LPBYTE) &pIca->PacketLength) = *locpInBuf++;
+					locInCount--;
+					break;
 
-                if ( (USHORT)pIca->PacketLength > pWd->InputBufferLength ) {
-                    ASSERT( FALSE, pIca->PacketLength );
-                    pIca->PacketState = sTYPE;
-                    /* bad data was received - bit bucket packet */
-                    break;
-                }
+				case dLEN2H :
 
-                if ( pIca->PacketLength == 0 )
-                    goto data;
+					TRACE((TC_WD,TT_IFRAME2,"WdIca: dLEN2H %02x", *locpInBuf));
+					*(((LPBYTE) &pIca->PacketLength) + 1) = *locpInBuf++;
+					locInCount--;
 
-                break;
+					if ( (USHORT)pIca->PacketLength > pWd->InputBufferLength ) {
+						ASSERT( FALSE, pIca->PacketLength );
+						pIca->PacketState = sTYPE;
+						/* bad data was received - bit bucket packet */
+						break;
+					}
 
-            case dDATA :
-data:
-                ASSERT( pWd->InputCount < pWd->InputBufferLength, 0 );
-                Count = pIca->PacketLength - pWd->InputCount;
-                ASSERT( (int) Count >= 0, Count );
-                if ( Count > InputCount )
-                    Count = InputCount;
+					if ( pIca->PacketLength == 0 )
+						goto data;
 
-                memcpy( &pWd->pInputBuffer[pWd->InputCount], pInputBuffer, Count );
+					break;
 
-                pWd->InputCount += Count;
-                pInputBuffer += Count;
-                InputCount -= Count;
+				case dDATA :
+	data:
+					ASSERT( pWd->InputCount < pWd->InputBufferLength, 0 );
+					Count = pIca->PacketLength - pWd->InputCount;
 
-                TRACE(( TC_WD, TT_ICOOK,  "WdIca: dDATA %02x (%02x/%02x)",
-                        Count, pWd->InputCount, pIca->PacketLength ));
+					ASSERT( (int) Count >= 0, Count );
+					if ( Count > locInCount )
+						Count = (USHORT)locInCount;
 
-                if ( pWd->InputCount < pIca->PacketLength )
-                    break;
+					memcpy( &pWd->pInputBuffer[pWd->InputCount], locpInBuf, Count );
 
-#ifdef DOS
-                // hide mouse pointer if visible
-                if ( pIca->fMouseVisible &&
-                     pIca->PacketType >= PACKET_CLEAR_SCREEN &&
-                     pIca->PacketType <= PACKET_SCROLLRT2 )
-                    (void) MouseShowPointer( FALSE );
-#endif
+					pWd->InputCount += Count;
+					locpInBuf += Count;					
 
-                TRACE(( TC_WD, TT_ICOOK,  "WdIca: input buffer @%p count %d",
-                        pWd->pInputBuffer, pWd->InputCount ));
+					locInCount -= Count;
 
-                if ( pProc = ICAData[ pIca->PacketType ].pProcedure )
-                    (*pProc)( pWd, pWd->pInputBuffer, pWd->InputCount );
+					TRACE(( TC_WD, TT_ICOOK,  "WdIca: dDATA %02x (%02x/%02x)",
+							Count, pWd->InputCount, pIca->PacketLength ));
 
-#ifdef DOS
-                // restore mouse pointer if visible
-                if ( pIca->fMouseVisible &&
-                     pIca->PacketType >= PACKET_CLEAR_SCREEN &&
-                     pIca->PacketType <= PACKET_SCROLLRT2 )
-                    (void) MouseShowPointer( TRUE );
-#endif
+					if ( pWd->InputCount < pIca->PacketLength )
+						break;
 
-                pIca->PacketState = sTYPE;
-                break;
-        }
-    }
+	#ifdef DOS
+					// hide mouse pointer if visible
+					if ( pIca->fMouseVisible &&
+						 pIca->PacketType >= PACKET_CLEAR_SCREEN &&
+						 pIca->PacketType <= PACKET_SCROLLRT2 )
+						(void) MouseShowPointer( FALSE );
+	#endif
 
+					if ( pProc = ICAData[ pIca->PacketType ].pProcedure )
+						(*pProc)( pWd, pWd->pInputBuffer, pWd->InputCount );
+
+	#ifdef DOS
+					// restore mouse pointer if visible
+					if ( pIca->fMouseVisible &&
+						 pIca->PacketType >= PACKET_CLEAR_SCREEN &&
+						 pIca->PacketType <= PACKET_SCROLLRT2 )
+						(void) MouseShowPointer( TRUE );
+	#endif
+
+					pIca->PacketState = sTYPE;
+					break;
+			}
+		}
+	}
     return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -533,43 +627,46 @@ _CheckForIcaDetect( PWD pWd,
             case DETECT_INSTRING :
                 if ( pInputBuffer[i] != pDetectString[ pIca->IcaDetectOffset ] ) {
                     pIca->IcaDetectState = DETECT_LOOKING;
+					pIca->IcaDetectOffset = 0; // start looking for whole string again
                     if ( pWd->fFocus ) 
                         WriteTTY( (LPVOID)pIca, pDetectString, pIca->IcaDetectOffset );
                     Index = i;
                 }
+				else
+				{
+					pIca->IcaDetectOffset++;
+					if ( pIca->IcaDetectOffset == sizeof(ICA_DETECT_STRING)-1 ) {
 
-                pIca->IcaDetectOffset++;
-                if ( pIca->IcaDetectOffset == sizeof(ICA_DETECT_STRING)-1 ) {
+						TRACE(( TC_WD, TT_API1, "WdIca: ICA DETECTED" ));
+						pIca->IcaDetectState = DETECT_LOOKING;
+						pIca->IcaDetectOffset = 0;
 
-                    TRACE(( TC_WD, TT_API1, "WdIca: ICA DETECTED" ));
-                    pIca->IcaDetectState = DETECT_LOOKING;
-                    pIca->IcaDetectOffset = 0;
+						/* disable tty mode */
+						pWd->fTTYConnected = FALSE;
 
-                    /* disable tty mode */
-                    pWd->fTTYConnected = FALSE;
-
-                    /* delay on echo */
-                    if ( pIca->fEchoTTY ) {
-                        Delay( pIca->ulTTYDelay );
-                    }
+						/* delay on echo */
+						if ( pIca->fEchoTTY ) {
+							Delay( pIca->ulTTYDelay );
+						}
 #if !defined(DOS) && !defined(RISCOS)
-                    /* destroy vio window if allocated */
-                    if ( pIca->fVioInit ) {
-                        VioDestroyWindow( pIca->hVio );
-                    }
+						/* destroy vio window if allocated */
+						if ( pIca->fVioInit ) {
+							VioDestroyWindow( pIca->hVio );
+						}
 #endif
-                    /* enable ica protocol stack */
-                    pIca->fIcaDetected = TRUE;
-                    PdSetInfo.PdInformationClass  = PdIcaDetected;
-                    (void) PdCall( pWd, PD__SETINFORMATION, &PdSetInfo );
+						/* enable ica protocol stack */
+						pIca->fIcaDetected = TRUE;
+						PdSetInfo.PdInformationClass  = PdIcaDetected;
+						(void) PdCall( pWd, PD__SETINFORMATION, &PdSetInfo );
 
-                    /* enable scan mode keyboard */
-                    (void) WdKbdSetMode( pIca, Kbd_Scan );
-                    /* arm timer to send ica detect sequence to host */
-                    pIca->TimerIcaDetect = Getmsec();
+						/* enable scan mode keyboard */
+						(void) WdKbdSetMode( pIca, Kbd_Scan );
+						/* arm timer to send ica detect sequence to host */
+						pIca->TimerIcaDetect = Getmsec();
 
-                    return;
-                }
+						return;
+					}
+				}
                 break;
         }
     }

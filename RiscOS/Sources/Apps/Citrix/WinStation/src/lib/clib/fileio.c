@@ -190,7 +190,7 @@ int _findnext(long handle, struct _finddata_t *info)
 	    if (e->errnum == 214)
 		return -1;
 
-	    LOGERR(e);
+	    (void)LOGERR(e);
 	    return -1;
 	}
     }

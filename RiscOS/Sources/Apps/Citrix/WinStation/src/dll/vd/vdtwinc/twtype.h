@@ -11,18 +11,18 @@
 *
 *   $Log$
 *  
-*     Rev 1.0   03 Dec 1997 17:47:32   terryt
-*  Initial revision.
-*  
+*     Rev 1.1   Jan 14 1998 17:08:58   briang
+*  TWI Integration
+*
 *     Rev 1.6   15 Apr 1997 18:16:32   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.5   08 May 1996 14:45:20   jeffm
 *  update
-*  
+*
 *     Rev 1.4   03 Jan 1996 14:02:30   kurtp
 *  update
-*  
+*
 \**************************************************************************/
 
 #ifndef __TWTYPE_H__
@@ -68,5 +68,7 @@ typedef struct _RECTI       /* rcl */
 #define TWREALIZEPALETTE_FOCUS      4
 #define TWREALIZEPALETTE_SET_FG     5
 #define TWREALIZEPALETTE_SET_BG     6
+
+#include "twi_en.h"
 
 #endif //__TWTYPE_H__

@@ -11,6 +11,9 @@
 *
 *  $Log$
 *  
+*     Rev 1.28   29 Apr 1998 10:32:04   DAVIDS
+*  Fixed Alt-Tab and Alt-Backtab hotkeys for CE
+*  
 *     Rev 1.27   10 Dec 1997 11:10:48   fredl
 *  fix 9804600 cpr 7361, clear hotkeyId if ScanCode and ShiftState are 0 when hotkey is registered
 *  
@@ -664,6 +667,27 @@ KbdCheckHotkey( unsigned char ScanCode, int ShiftState )
             ((((ShiftState & KSS_EITHERSHIFT) ? 
              (ShiftState | KSS_EITHERSHIFT) : ShiftState))
                 & (KSS_EITHERSHIFT | KSS_EITHERALT | KSS_EITHERCTRL))) ) {
+#ifdef WINCE
+          unsigned char up;
+            //For certain hotkeys, we can't have the CTRL/ALT/SHIFT key down when the simulated
+		    //keystrokes are sent. So, send a CTRL/ALT/SHIFT up.           
+		   if ((achHotkey[i].HotkeyId == HOTKEY_ALT_TAB) || (achHotkey[i].HotkeyId == HOTKEY_ALT_BACKTAB))
+		   {
+			   //Make a global note that the user is currently using a hotkey.
+			   HKIndex = i;
+			   if (achHotkey[i].ShiftState & (KSS_LEFTCTRL | KSS_RIGHTCTRL | KSS_EITHERCTRL))
+			   {up = 0x9D;}
+			   else if (achHotkey[i].ShiftState & (KSS_LEFTALT | KSS_RIGHTALT | KSS_EITHERALT))
+			   { up = 0xB8; }
+			   else if (achHotkey[i].ShiftState & (KSS_LEFTSHIFT))
+			   { up = 0x2A; }
+			   else
+			   { up = 0x36; }
+
+			   wdScanCode(&up, 1);
+		   }
+#endif  //#ifdef WINCE
+
          return( achHotkey[i].HotkeyId );
       }
    }

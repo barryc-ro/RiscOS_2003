@@ -1058,6 +1058,7 @@ void session_run(const char *file, int file_is_url, const char *bfile)
 /* --------------------------------------------------------------------------------------------- */
 
 extern int SdLoad( PDLLLINK );
+extern int ReducerLoad( PDLLLINK pLink );
 
 int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable )
 {
@@ -1092,6 +1093,9 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 	{ "vdcam",	(PLIBPROCEDURE)VdLoad/*, VdCamDriverProcedures */ },
 #ifdef INCL_SCRIPT
 	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
+#endif
+#ifdef INCL_REDUCER
+	{ "icaredu",    (PLIBPROCEDURE)ReducerLoad, NULL },
 #endif
 	{ NULL,		0,	NULL }
     }, *mp;

@@ -14,6 +14,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.2   Jan 28 1998 21:08:26   briang
+*  fix revision to include vesa support
+*  
 *     Rev 1.0   03 Dec 1997 17:47:30   terryt
 *  Initial revision.
 *  
@@ -37,6 +40,47 @@
 #define LOWORD(l)           ((WORD)(DWORD)(l))
 #define HIWORD(l)           ((WORD)((((DWORD)(l)) >> 16) & 0xFFFF))
 #define MAKELONG(low, high) ((LONG)(((WORD)(low)) | (((DWORD)((WORD)(high))) << 16)))
+
+#endif
+
+
+#if !defined(WIN32) && !defined(RISCOS)
+
+typedef SHORT WCHAR;    // wc,   16-bit UNICODE character
+
+typedef struct _RECTL       /* rcl */
+{
+    LONG    left;
+    LONG    top;
+    LONG    right;
+    LONG    bottom;
+} RECTL, *PRECTL;
+
+typedef struct tagLOGFONTW
+{
+    LONG      lfHeight;
+    LONG      lfWidth;
+    LONG      lfEscapement;
+    LONG      lfOrientation;
+    LONG      lfWeight;
+    BYTE      lfItalic;
+    BYTE      lfUnderline;
+    BYTE      lfStrikeOut;
+    BYTE      lfCharSet;
+    BYTE      lfOutPrecision;
+    BYTE      lfClipPrecision;
+    BYTE      lfQuality;
+    BYTE      lfPitchAndFamily;
+    WCHAR     lfFaceName[LF_FACESIZE];
+} LOGFONTW, *PLOGFONTW, NEAR *NPLOGFONTW, FAR *LPLOGFONTW;
+
+typedef HANDLE   HPALETTE;
+
+typedef struct _POINTL      /* ptl  */
+{
+    LONG  x;
+    LONG  y;
+} POINTL, *PPOINTL;
 
 #endif
 
@@ -96,6 +140,8 @@ typedef struct  _XYPAIR
     USHORT  x;
     USHORT  y;
 } XYPAIR;
+
+#define LF_FACESIZE         32
 
 
 typedef struct  tagDEVINFO
@@ -516,4 +562,6 @@ rcl.bottom = rcl.top  + dy;                 \
 #define LFLOOR(x)             ((x) >> 4)
 #define FXFRAC(x)             ((x) & (F - 1))
 
+
+#include "twi_en.h"
 #endif //__TWSTROKE_H__

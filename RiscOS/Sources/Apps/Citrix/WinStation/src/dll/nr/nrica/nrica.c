@@ -11,42 +11,48 @@
 *
 *   $Log$
 *  
+*     Rev 1.19   29 Apr 1998 15:34:30   terryt
+*  free memory after use
+*  
+*     Rev 1.18   26 Feb 1998 16:28:20   TOMA
+*  ce merge
+*
 *     Rev 1.17   Jan 19 1998 16:07:38   sumitd
 *  CPR# 7252 - Having valid servers having only hex digits in their names
-*  
+*
 *     Rev 1.16   03 Nov 1997 09:26:46   brada
 *  Added firewall load balance support
-*  
+*
 *     Rev 1.15   Oct 09 1997 17:15:44   briang
 *  Conversion to MemIni use
-*  
+*
 *     Rev 1.14   28 Apr 1997 19:25:10   thanhl
 *  update
-*  
+*
 *     Rev 1.13   15 Apr 1997 16:19:48   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.13   19 Mar 1997 14:11:52   richa
 *  Send ClientName to the TD so that we'll be able to reconnect to disconnected session in a cluster.
-*  
+*
 *     Rev 1.12   06 Mar 1997 18:02:50   richa
 *  Fixed CPR 4535.
-*  
+*
 *     Rev 1.11   08 May 1996 16:28:02   jeffm
 *  update
-*  
+*
 *     Rev 1.10   20 Mar 1996 12:17:56   KenB
 *  moved error messages to nls\us\nricat.str
-*  
+*
 *     Rev 1.9   09 Feb 1996 13:42:02   butchd
 *  tweaked error messages
-*  
+*
 *     Rev 1.8   09 Jan 1996 16:37:00   bradp
 *  update
-*  
+*
 *     Rev 1.7   03 Jan 1996 18:17:34   bradp
 *  update
-*  
+*
 *
 *************************************************************************/
 
@@ -78,6 +84,10 @@
 #define NO_NRDEVICE_DEFINES
 #include "../../../inc/nrdevice.h"
 #include "../../../inc/nrdevicep.h"
+
+#ifdef WINCE
+#include <wcecalls.h>
+#endif
 
 /*=============================================================================
 ==   External Functions Defined
@@ -173,7 +183,7 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
     /*
      *  Open I/O
      */
-    if ( rc = IoOpen() ) 
+    if ( rc = IoOpen() )
         return( rc );
 
     /*
@@ -253,22 +263,26 @@ _GetBrowserAddress( PNR pNr,
         goto baddata1;
     }
 
-    /* 
+    /*
      *  Make sure name is uppercase
      */
+#ifdef WINCE
+    CharUpperA( pName );
+#else
     AnsiUpper( pName );
+#endif
 
-    /* 
-     *  Check for ":" in the name - if present => Can only be Address 
+    /*
+     *  Check for ":" in the name - if present => Can only be Address
      *  If not a valid address return an error
      */
 
     if (strstr(pName,":")!=NULL) {
 
-    	if ( IoAddressCheck( pName, pAddress, TRUE ) ) {
-        	return( BR_ERROR_SUCCESS );
-    	}
-    	else goto baddata;    // Cannot be a valid name
+      if ( IoAddressCheck( pName, pAddress, TRUE ) ) {
+         return( BR_ERROR_SUCCESS );
+      }
+      else goto baddata;    // Cannot be a valid name
     }
 
 
@@ -307,7 +321,15 @@ _GetBrowserAddress( PNR pNr,
             break;
     }
 
-    /* 
+    /*
+     * -- clean up
+     */
+    if ( pParams ) {
+        free( pParams );
+        pParams = NULL;
+    }
+
+    /*
      *  -- check if name is already an address
      *  -- check dns or bindery
      */

@@ -58,7 +58,12 @@
  */
 
 #define CPM_MIN_VERSION  0x0004
+#ifdef UNICODESUPPORT
+#define CPM_VERSION5     0x0005
+#define CPM_MAX_VERSION  CPM_VERSION5
+#else
 #define CPM_MAX_VERSION  0x0004
+#endif
 
 /*
  * WARNING: These are the same as defined in cdmwire.h

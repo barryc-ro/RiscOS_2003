@@ -13,6 +13,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.2   Apr 13 1998 16:58:30   sumitd
+*  removed warning messages from the build
+*  
 *     Rev 1.1   15 Apr 1997 16:53:32   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -99,6 +102,7 @@ fnWaitReceive( PSD pSd )
 {
     int token;
     int rc = SCRIPT_STATUS_SUCCESS;
+    unsigned long ulCurrentTime;
 
     /*
      *  Command currently being processed?
@@ -108,7 +112,7 @@ fnWaitReceive( PSD pSd )
         /*
          *  Check for command timeout
          */
-        if ( (Getmsec() >= pSd->ulCommandTimeout) || (pSd->ulInputTime != 0) ) {
+        if ( ((ulCurrentTime=Getmsec()) >= pSd->ulCommandTimeout) || (pSd->ulInputTime != 0) ) {
             pSd->fProcessingCommand = FALSE;
         }
     }
@@ -181,6 +185,7 @@ fnWaitSilence( PSD pSd )
 {
     int token;
     int rc = SCRIPT_STATUS_SUCCESS;
+    unsigned long ulCurrentTime;
 
     /*
      *  Command currently being processed?
@@ -190,7 +195,7 @@ fnWaitSilence( PSD pSd )
         /*
          *  Check for command timeout
          */
-        if ( Getmsec() >= (pSd->ulInputTime + pSd->ulCommandTimeout) ) {
+        if ( (ulCurrentTime=Getmsec()) >= (pSd->ulInputTime + pSd->ulCommandTimeout) ) {
             pSd->fProcessingCommand = FALSE;
         }
     }
@@ -246,6 +251,7 @@ fnWaitString( PSD pSd )
 {
     int token;
     int rc = SCRIPT_STATUS_SUCCESS;
+    unsigned long ulCurrentTime;
 
     /*
      *  Command currently being processed?
@@ -255,7 +261,7 @@ fnWaitString( PSD pSd )
         /*
          *  Check for command timeout
          */
-        if ( Getmsec() >= pSd->ulCommandTimeout ) {
+        if ( (ulCurrentTime=Getmsec()) >= pSd->ulCommandTimeout ) {
             pSd->fProcessingCommand = FALSE;
         }
     }
@@ -335,6 +341,7 @@ int  fnWaitTime( PSD pSd )
 {
     int token;
     int rc = SCRIPT_STATUS_SUCCESS;
+    unsigned long ulCurrentTime;
 
     /*
      *  Command currently being processed?
@@ -344,7 +351,7 @@ int  fnWaitTime( PSD pSd )
         /*
          *  Check for command timeout
          */
-        if ( Getmsec() >= pSd->ulCommandTimeout ) {
+        if ( (ulCurrentTime=Getmsec()) >= pSd->ulCommandTimeout ) {
             pSd->fProcessingCommand = FALSE;
         }
     }

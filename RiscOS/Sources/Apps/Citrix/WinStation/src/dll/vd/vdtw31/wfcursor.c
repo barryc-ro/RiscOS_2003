@@ -11,6 +11,12 @@
 *
 *   $Log$
 *  
+*     Rev 1.11   20 Apr 1998 11:18:26   kurtp
+*  fix win16 build break
+*  
+*     Rev 1.10   17 Apr 1998 18:07:42   kurtp
+*  fix CPR 8898
+*  
 *     Rev 1.9   Jan 27 1998 15:54:36   briang
 *  Fix revision erroprs
 *  
@@ -994,7 +1000,10 @@ CreateColorPointer( HWND   hWnd,
 VOID
 DestroyPointer( HWND hWnd )
 {
+
     POINT   pt;
+
+
     HCURSOR hCursor;
     HCURSOR hCursorNot;
     HCURSOR hCursorVis;

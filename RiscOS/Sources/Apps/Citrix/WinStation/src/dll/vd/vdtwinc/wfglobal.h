@@ -11,6 +11,12 @@
 *
 *   $Log$
 *  
+*     Rev 1.4   Jan 29 1998 17:23:42   briang
+*  fix for dos vesa
+*  
+*     Rev 1.3   Jan 28 1998 20:58:56   briang
+*  fix the revision to include the vesa stuff
+*  
 *     Rev 1.0   03 Dec 1997 17:47:32   terryt
 *  Initial revision.
 *  
@@ -62,15 +68,17 @@ extern BYTE Rop3ToRop2[256];
 extern HBRUSH hbrsolid[16];
 extern HBRUSH hbrsolid256[21];
 extern ULONG  lasthbrsolid256index;
-
+#if VESA == 0
 extern HPEN   hpensolid[16];
 extern HPEN   hpensolid256[21];
-
+#endif
 extern DCSTATE dcstate;
 
+#ifndef DOS
 extern BRUSHOBJOBJ brushobjobj[115];
 
 extern BRUSHDIB BrushDIB[MAXBRUSHREALIZED + 1];
+#endif
 
 /*
  *  This buffer size must be at least 3*2K + 4 for DIB caching!
@@ -87,4 +95,10 @@ extern int number_nonsolidbrushes_realized;
 extern HDC compatDC;
 
 extern COLOR_CAPS vColor;
+
+#if VESA
+#include "twgen.h"
+#include "vesa.h"
+#endif
+
 #endif //__WFGLOBAL_H__

@@ -9,18 +9,16 @@
 *
 *   Author: Brad Pedersen  (3/29/94)
 *
-*   buffer.c,v
-*   Revision 1.2  1998/06/19 17:11:58  smiddle
-*   Merged in Beta2 code. A few redundant header files removed, various new ones
-*   added. It all compiles and sometimes it runs. Mostly it crashes in the new
-*   ini code though.
-*   Added a check for the temporary ICA file being created OK. If not then it gives
-*   a warning that the scrap directory might need to be set up.
-*   Upped version number to 0.40 so that there is room for some bug fixes to the
-*   WF 1.7 code.
-*
-*   Version 0.40. Tagged as 'WinStation-0_40'
-*
+*   $Log$
+*  
+*     Rev 1.31   21 Apr 1998 13:21:16   terryt
+*  fix warnings
+*  
+*     Rev 1.30   15 Apr 1998 19:18:00   kurtp
+*  UK fix for DOS/Win16
+*  
+*     Rev 1.26   27 Feb 1998 17:22:32   TOMA
+*  ce merge
 *  
 *     Rev 1.25   Oct 09 1997 18:30:56   briang
 *  Conversion to MemIni use
@@ -72,6 +70,7 @@
 #include "../../../inc/pdapi.h"
 #include "../inc/wd.h"
 
+#include "../../../inc/reducapi.h"
 
 /*=============================================================================
 ==   External Functions Defined
@@ -83,6 +82,7 @@ void STATIC OutBufPoolFree( PWD );
 int  STATIC WFCAPI OutBufReserve( PWD, USHORT );
 int  STATIC WFCAPI OutBufAppend( PWD, LPBYTE, USHORT );
 int  STATIC WFCAPI OutBufWrite( PWD );
+int  STATIC WFCAPI OutBufWriteNow( PWD, POUTBUF );
 
 int  STATIC OutBufAlloc( PWD, POUTBUF * );
 void STATIC OutBufFree( PWD, POUTBUF );
@@ -92,6 +92,7 @@ void STATIC OutBufFree( PWD, POUTBUF );
 ==   Internal Functions Defined
 =============================================================================*/
 
+void MoveBufferIntoDataQueue(PUCHAR, USHORT, PDATA_QUEUE);
 
 
 /*=============================================================================
@@ -99,6 +100,7 @@ void STATIC OutBufFree( PWD, POUTBUF );
 =============================================================================*/
 
 int PdCall( PWD, USHORT, PVOID );
+
 
 
 /*******************************************************************************
@@ -295,6 +297,9 @@ OutBufReserve( PWD pWd, USHORT ByteCount )
     USHORT OutBufCount;
     int rc;
 
+    //BUGBUGCE This is remed out because it causes 100s of asserts.  However the standard
+    //Win32 client does the same so we are just remming it out.  But it will need to be
+    //fixed eventually.
     //ASSERT( pWd->pOutBufCurrent == NULL, 0 );
 
     /*
@@ -360,7 +365,6 @@ OutBufReserve( PWD pWd, USHORT ByteCount )
 int STATIC WFCAPI
 OutBufAppend( PWD pWd, LPBYTE pData, USHORT ByteCount )
 {
-    PDWRITE WriteData;
     POUTBUF pOutBuf;
     USHORT Count;
     int rc;
@@ -398,9 +402,8 @@ OutBufAppend( PWD pWd, LPBYTE pData, USHORT ByteCount )
             pWd->pOutBufCurrent = NULL;
 
             /* write outbuf */
-            WriteData.pOutBuf = pOutBuf;
-            if ( rc = PdCall( pWd, PD__WRITE, &WriteData ) )
-                return( rc );
+            if (rc = OutBufWriteNow(pWd, pOutBuf))
+               return(rc);
         }
     }
 
@@ -428,7 +431,6 @@ OutBufAppend( PWD pWd, LPBYTE pData, USHORT ByteCount )
 int STATIC WFCAPI
 OutBufWrite( PWD pWd )
 {
-    PDWRITE WriteData;
     POUTBUF pOutBuf;
 
     /*
@@ -450,11 +452,11 @@ OutBufWrite( PWD pWd )
     TRACE(( TC_WD, TT_API3, "OutBufWrite: %lx, mem %lx, param %lx, bc %u", 
             pOutBuf, pOutBuf->pMemory, pOutBuf->pParam, pOutBuf->ByteCount ));
 
+
     /* 
      *  Write data buffer to pd
      */
-    WriteData.pOutBuf = pOutBuf;
-    return( PdCall( pWd, PD__WRITE, &WriteData ) );
+	return ( OutBufWriteNow(pWd, pOutBuf));
 }
 
 
@@ -557,4 +559,101 @@ OutBufFree( PWD pWd, POUTBUF pOutBuf )
     }
 }
 
+/*******************************************************************************
+ *
+ *  OutBufWriteNow
+ *
+ * ENTRY:
+ *    pWd (input)
+ *       pointer to wd data structure
+ *    pOutBuf (input)
+ *       pointer to buffer structure
+ *
+ * EXIT:
+ *    CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+
+int  STATIC WFCAPI 
+OutBufWriteNow( PWD pWd, POUTBUF pOutBuf )
+{
+    PDWRITE WriteData;
+	ULONG newSize;
+	ULONG writeBase;
+	ULONG writeReached;
+	ULONG writeLimit;
+
+    /* 
+     *  Write data buffer to pd
+	 *	If reduction is enabled then we must reduce outbuf
+     */
+	if ( pWd->reductionEnabled ){
+		MoveBufferIntoDataQueue(
+			pOutBuf->pBuffer,		/* buffer to process */
+			pOutBuf->ByteCount,		/* its length */
+			&pWd->reductionData);	/* basic data queue control info */
+
+		// We must decrement pBuffer by two bytes, 
+		// this will use up the two bytes reserved when we activated 
+		// reduction
+		pOutBuf->pBuffer = pOutBuf->pBuffer - 2;
+
+		writeBase = pWd->reductionData.WriteBase;
+		writeReached = pWd->reductionData.WriteReached;
+		writeLimit = pWd->reductionData.WriteLimit;
+
+		newSize = raConvertDataQueueIntoBuffer( 
+			&pWd->reductionData,    /* basic data queue control info */
+			(OUTBUF FAR *)pOutBuf,       /* output buffer */
+			writeBase,				/* base of data to write */
+			writeReached,			/* end of data region to write */
+			writeLimit);			/* safety region limit */
+
+		// Now update the pointers
+		pWd->reductionData.WriteBase = writeBase + newSize;
+		pWd->reductionData.WriteLimit = writeLimit + newSize;
+
+	}
+
+	WriteData.pOutBuf = pOutBuf;
+	return( PdCall( pWd, PD__WRITE, &WriteData ) );
+
+}
+
+
+
+/*************************************************************************
+*
+*   MoveBufferIntoDataQueue
+*
+*   Copies a buffer into the history data
+*   Assumes there are no space or limit problems
+*   Updates the queue->WriteReached index
+*
+*************************************************************************/
+
+void MoveBufferIntoDataQueue(
+    PUCHAR      inputBuffer,        /* buffer to process */
+    USHORT      inputBufferLength,  /* its length */
+    PDATA_QUEUE dqp)                /* basic data queue control info */
+{
+    ULONG headIndex, index;
+    USHORT firstPortion;
+
+    headIndex = dqp->WriteReached;
+    index = headIndex & dqp->BufferMask;
+    if ((index + inputBufferLength) <= (dqp->BufferLen))
+    {
+        /* contiguous memory copy */
+        memcpy(&(dqp->Buffer[index]), inputBuffer, inputBufferLength);
+    }
+    else
+    {
+        /* split memory copy */
+        firstPortion = (USHORT)(dqp->BufferLen - index);
+        memcpy(&(dqp->Buffer[index]), inputBuffer, firstPortion);
+        memcpy(&(dqp->Buffer[0]), inputBuffer + firstPortion, inputBufferLength - firstPortion);
+    }
+    dqp->WriteReached = dqp->WriteReached + inputBufferLength;
+}
 

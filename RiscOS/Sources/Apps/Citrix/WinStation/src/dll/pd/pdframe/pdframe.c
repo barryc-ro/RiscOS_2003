@@ -25,6 +25,9 @@
 *
 * $Log$
 *  
+*     Rev 1.21   26 Apr 1998 15:10:14   terryt
+*  Free PDCOMP buffers for reducer
+*  
 *     Rev 1.20   15 Apr 1997 16:52:18   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -730,6 +733,27 @@ DeviceQuery( PPD pPd, PPDQUERYINFORMATION pPdQueryInformation )
 
 static int
 DeviceCallback( PPD pPd )
+{
+    return( CLIENT_STATUS_SUCCESS );
+}
+
+/*******************************************************************************
+ *
+ *  DeviceReducerEnabled
+ *
+ *  Process Reducer Enabled message
+ *
+ * ENTRY:
+ *    pPd (input)
+ *       Pointer to td data structure
+ *
+ * EXIT:
+ *    CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+
+int
+DeviceReducerEnabled( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );
 }

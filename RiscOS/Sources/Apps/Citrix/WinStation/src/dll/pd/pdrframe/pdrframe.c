@@ -18,12 +18,16 @@
 *
 *   Author: Kurt Perry (10/4/94)
 *
-*   pdrframe.c,v
-*   Revision 1.1  1998/01/12 11:35:50  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.15   26 Apr 1998 15:16:38   terryt
+*  Free PDCOMP buffers for reducer
+*  
+*     Rev 1.14   25 Feb 1998 16:44:30   TOMA
+*  CE Merge
+*  
+*     Rev 1.14   Oct 07 1997 15:51:36   anthonyu
+*  Added Alignment macros.
 *  
 *     Rev 1.13   15 Apr 1997 16:53:00   TOMA
 *  autoput for remove source 4/12/97
@@ -544,9 +548,9 @@ DeviceWrite( PPD pPd, PPDWRITE pPdWrite )
     /*
      *  Save byte count as header
      */
-    *((PUSHORT)pOutBuf->pBuffer) = (USHORT) pOutBuf->ByteCount;
-
-    /*
+    UNALIGNED_MOVE_SHORT(pOutBuf->pBuffer, &pOutBuf->ByteCount);
+    
+	/*
      *  Increment byte count to include size of header
      */
     pOutBuf->ByteCount += sizeof(USHORT);
@@ -628,6 +632,27 @@ DeviceQuery( PPD pPd, PPDQUERYINFORMATION pPdQueryInformation )
 
 static int 
 DeviceCallback( PPD pPd )
+{
+    return( CLIENT_STATUS_SUCCESS );
+}
+
+/*******************************************************************************
+ *
+ *  DeviceReducerEnabled
+ *
+ *  Process Reducer Enabled message
+ *
+ * ENTRY:
+ *    pPd (input)
+ *       Pointer to td data structure
+ *
+ * EXIT:
+ *    CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+
+static int
+DeviceReducerEnabled( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );
 }

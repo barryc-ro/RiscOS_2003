@@ -11,6 +11,12 @@
 *
 * $Log$
 *  
+*     Rev 1.21   13 Mar 1998 14:10:16   toma
+*  CE Merge
+*  
+*     Rev 1.21   10 Mar 1998 16:39:38   kenb
+*  Change WdCall to be VdCallWd
+*  
 *     Rev 1.20   Oct 09 1997 17:53:54   briang
 *  Conversion to MemIni use
 *  
@@ -76,7 +82,7 @@ int static WFCAPI VdPoll( PVD, PDLLPOLL );
 int static WFCAPI VdQueryInformation( PVD, PVDQUERYINFORMATION );
 int static WFCAPI VdSetInformation( PVD, PVDSETINFORMATION );
 
-int STATIC WdCall( PVD pVd, USHORT ProcIndex, PVOID pParam );
+int STATIC VdCallWd( PVD pVd, USHORT ProcIndex, PVOID pParam );
 
 
 /*=============================================================================
@@ -409,9 +415,9 @@ VdSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 
 /*******************************************************************************
  *
- *  WdCall
+ *  VdCallWd
  *
- *    WdCall is used to call the winstation driver
+ *    VdCallWd is used to call the winstation driver
  *
  * ENTRY:
  *    pWd (input)
@@ -427,7 +433,7 @@ VdSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
  ******************************************************************************/
 
 int  
-WdCall( PVD pVd, USHORT ProcIndex, PVOID pParam )
+VdCallWd( PVD pVd, USHORT ProcIndex, PVOID pParam )
 {
     PDLLLINK pLink;
     PDLLPROCEDURE pProcedure;

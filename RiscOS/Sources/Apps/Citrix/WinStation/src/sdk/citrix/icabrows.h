@@ -9,6 +9,9 @@
 *
 *  $Log$
 *  
+*     Rev 1.44   Apr 30 1998 17:24:20   scottc
+*  added new disconnect type, fixed firewalls
+*  
 *     Rev 1.43   03 Nov 1997 09:07:20   brada
 *  Added firewall load balancing support
 *  
@@ -406,6 +409,8 @@ typedef struct _ICA_BR_DATA_HEADER {
 #define DATATYPE_LICENSE      9  // license data (browser.serialnumber)
 #define DATATYPE_DISCONNECT  10  // disconnect session data (clientname:appname)
 #define DATATYPE_ALTADDRESS  11  // alternate address for server
+#define DATATYPE_DISCON_NAME 12  // NEW disconnect session data (clientname:appname)
+                                 // sends along browser name instead of address, alt-address fix
 
 /*
  *  DataFlags
@@ -542,6 +547,14 @@ typedef struct _ICA_BR_DATA_LOADDATA {
 } ICA_BR_DATA_LOADDATA, * PICA_BR_DATA_LOADDATA;
 
 #define sizeof_ICA_BR_DATA_LOADDATA	(13*4 + 2)
+
+/*
+ *  Browser data structure (DATATYPE_DISCON_NAME)
+ */
+typedef struct _ICA_BR_DATA_DISCON_NAME {
+    USHORT Version;                // version of this structure
+    USHORT oBrowserName;   // offset of null terminated browser name
+} ICA_BR_DATA_DISCON_NAME, * PICA_BR_DATA_DISCON_NAME;
 
 
 /*=============================================================================

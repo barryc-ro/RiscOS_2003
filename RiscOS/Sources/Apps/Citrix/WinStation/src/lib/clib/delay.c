@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
+
 /*  Get CLIB includes */
 #include "../../inc/client.h"
 #include "../../inc/clib.h"
@@ -87,5 +88,10 @@ Delay( int time )
 //     Yield();
     }
 #endif
+}
+
+int GetCurrentTime(void)
+{
+    return clock();
 }
 

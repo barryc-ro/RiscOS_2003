@@ -11,6 +11,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.16   May 01 1998 15:51:38   scottc
+*  remove client address from header, fixes firewall problem
+*  
 *     Rev 1.15   Feb 17 1998 19:23:46   sumitd
 *  IPX enumeration problem solved
 *  
@@ -457,14 +460,18 @@ BrWrite( PICA_BR_ADDRESS pAddress,
     /*
      *  Initialize source address
      */
-    if ( G_LocalAddrCount == 1 ) {
-        if ( fIncludeAddr ) {
-            memcpy( &pHeader->Address, G_pLocalAddr, sizeof(ICA_BR_ADDRESS) );
-        }
-        else {
+// Don't include the address in the header, if the client is behind a firewall this will
+// be the internal address, and not the externally visible address.  UDP will give the receiver
+// our correct address.
+
+//    if ( G_LocalAddrCount == 1 ) {
+//        if ( fIncludeAddr ) {
+//            memcpy( &pHeader->Address, G_pLocalAddr, sizeof(ICA_BR_ADDRESS) );
+//        }
+//        else {
             memset(&pHeader->Address, 0, sizeof(ICA_BR_ADDRESS));
-        }
-    }
+//        }
+//    }
 
     return( IoWrite( pAddress, pBuffer, ByteCount ) );
 }

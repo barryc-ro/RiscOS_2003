@@ -11,6 +11,15 @@
 *
 *   $Log$
 *  
+*     Rev 1.4   10 Mar 1998 17:08:04   kenb
+*  Change WdCall to be VdCallWd
+*  
+*     Rev 1.3   Jan 29 1998 17:23:16   briang
+*  fix for dos vesa
+*  
+*     Rev 1.2   Jan 28 1998 21:10:42   briang
+*  fix revision to include vesa support
+*  
 *     Rev 1.0   03 Dec 1997 17:47:32   terryt
 *  Initial revision.
 *  
@@ -36,8 +45,6 @@
 
 #ifndef __TWWIN_H__
 #define __TWWIN_H__
-
-#define VESA 0
 
 #include "../inc/vd.h"
 void TWCmdStrokePath( HWND hWnd, HDC hdc );                 // 0x80
@@ -101,10 +108,14 @@ void far _cdecl longjmpChangeStack(jmp_buf3, int);
 //Whether we can do this or not depends on the host state
 //if the host keeps state then we cannot do this!
 //
+#if VESA
+BOOL ThinInitOnce( void ); //called once when app started to initialize
+							//and create all thinwire persistant resources
+#else
 BOOL ThinInitOnce(UINT chunks_2K); //called once when app started to initialize
-                            //and create all thinwire persistant resources
-
-BOOL ThinDestroyOnce(void);     //called to delete all thinwire resource
+							//and create all thinwire persistant resources
+#endif
+BOOL ThinDestroyOnce();     //called to delete all thinwire resource
                             //when the app is going away
 
 int TWInitWindow( PVD pVd, HWND hWnd );
@@ -112,7 +123,7 @@ int TWDestroyWindow( HWND hWnd );
 int TWPaint( PVD pVd, HWND hWnd );
 INT  wfnEnumRects( HWND, HDC, LPRECT FAR *, INT *, LPRECT );
 VOID wfnFreeRects( LPRECT );
-int WdCall( PVD pVd, USHORT ProcIndex, PVOID pParam );
+int VdCallWd( PVD pVd, USHORT ProcIndex, PVOID pParam );
 
 void GetModeSpec(int *width, int *height);
 void SetMode(int colorcaps, int xres, int yres);
@@ -171,5 +182,8 @@ typedef struct _DIM_HEADER {
 
 #define SECTION_SIZE    2048
 
+#include "twi_en.h"
+ 
+//ULONG __cdecl Getmsec( VOID );
 
 #endif //__TWWIN_H__

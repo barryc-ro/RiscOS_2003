@@ -11,6 +11,9 @@
 *
 * $Log$
 *  
+*     Rev 1.36   26 Apr 1998 15:08:48   terryt
+*  Free PDCOMP buffers for reducer
+*  
 *     Rev 1.35   Oct 09 1997 17:18:38   briang
 *  Conversion to MemIni use
 *  
@@ -111,6 +114,7 @@ int STATIC DevicePoll( PPD, PDLLPOLL );
 int STATIC DeviceWrite( PPD, PPDWRITE );
 int STATIC DeviceCancelWrite( PPD );
 int STATIC DeviceCallback( PPD );
+int STATIC DeviceReducerEnabled( PPD );
 
 int  STATIC WFCAPI DeviceOutBufAlloc( PPD, POUTBUF * );
 void STATIC WFCAPI DeviceOutBufError( PPD, POUTBUF );
@@ -164,7 +168,7 @@ static DLLLINK PdLink = {0};
 STATIC PPLIBPROCEDURE pClibProcedures = NULL;
 STATIC PPLIBPROCEDURE pLogProcedures = NULL;
 STATIC PPLIBPROCEDURE pMemIniProcedures = NULL;
-
+*/
 
 /*******************************************************************************
  *
@@ -644,7 +648,7 @@ PdSetInformation( PPD pPd, PPDSETINFORMATION pPdSetInformation )
             rc = DeviceEnable( pPd );
             TRACE(( TC_PD, TT_API2, "PdEnableModule[%u], rc=%u", pPd->PdClass, rc ));
             if ( rc ) {
-	        return( rc );
+                return( rc );
             }
             if ( pPd->fInitModule ) {
                 pPd->fEnableModule = TRUE;
@@ -674,6 +678,10 @@ PdSetInformation( PPD pPd, PPDSETINFORMATION pPdSetInformation )
 
             /* callback logical layer */
             return( DeviceCallback( pPd ) );
+
+        case PdReducerEnabled :
+            (void) DeviceReducerEnabled( pPd );
+            break;
 
 
     }

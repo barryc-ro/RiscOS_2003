@@ -12,6 +12,21 @@
 *
 *  $Log$
 *  
+*     Rev 1.81   27 May 1998 17:39:02   terryt
+*  Change unicode version support to 6
+*  
+*     Rev 1.80   22 Apr 1998 18:51:26   thanhl
+*  UNICODE protocol support
+*  
+*     Rev 1.79   14 Apr 1998 21:12:44   derekc
+*  added PACKET_ALT_KEYBOARD2 support
+*  
+*     Rev 1.78   09 Apr 1998 20:03:38   kurtp
+*  Add versioning to reducer code
+*  
+*     Rev 1.76   Mar 30 1998 16:03:22   grega
+*  Merged in UK Reducer
+*  
 *     Rev 1.75   18 Sep 1997 14:47:08   x86fre
 *  Modified for client split
 *
@@ -131,9 +146,13 @@ extern "C" {
 #define PACKET_SOFT_KEYBOARD    0x39 // 1  raise or lower soft keyboard
 #define PACKET_COMMAND_CACHE    0x3A // nn write n bytes of caching data
 #define PACKET_SET_CLIENT_DATA  0x3B // set n bytes of a data type
-#define PACKET_MAXIMUM          0x3C // *** last packet type ***
+#define PACKET_ALT_KEYBOARD2    0x3C // support non-scan coding for keyboard
 
-
+#ifdef UNICODESUPPORT
+#define PACKET_MAXIMUM          0x3D  // *** last packet type ***
+#else
+#define PACKET_MAXIMUM          0x3C
+#endif
 
 /*=============================================================================
 ==   PACKET_TERMINATE
@@ -159,8 +178,10 @@ extern "C" {
  *   2 - WinFrame 1.6
  *   3 - WinFrame 1.7
  *   4 - WinFrame 2.0
+ *   5 - MetaFrame with bandwidth reducer
+ *   6 - MetaFrame with bandwidth reducer and Unicode
  */
-#define INIT_REQUEST_VERSION 4
+#define INIT_REQUEST_VERSION 6
 
 
 /*=============================================================================
@@ -199,6 +220,14 @@ typedef struct _MOUSEDATA {
 =============================================================================*/
 
 #define SOFTKEY_RAISE      0x01
+
+
+/*=============================================================================
+==   REDUCER MACROS
+=============================================================================*/
+
+#define WD_REDUCER_VERSION_1    1
+
 
 //#pragma pack()
 

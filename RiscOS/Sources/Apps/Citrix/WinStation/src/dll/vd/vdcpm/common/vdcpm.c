@@ -11,21 +11,33 @@
 *
 * $Log$
 *  
+*     Rev 1.13   15 Apr 1998 17:43:14   toma
+*  Update
+*
+*     Rev 1.12   Mar 20 1998 16:12:04   xuanh
+*  CPR9198 optionally load VDCPM for dos client
+*
+*     Rev 1.11   13 Mar 1998 14:10:22   toma
+*  CE Merge
+*
+*     Rev 1.11   10 Mar 1998 16:44:06   kenb
+*  Change WdCall to be VdCallWd
+*
 *     Rev 1.10   Oct 31 1997 19:41:02   briang
 *  Remove pIniSection parameter from miGets
-*  
+*
 *     Rev 1.9   Oct 09 1997 18:22:44   briang
 *  Conversion to MemIni use
-*  
+*
 *     Rev 1.8   15 Apr 1997 18:04:30   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.7   13 Nov 1996 09:18:32   richa
 *  Updated Virtual channel code.
-*  
+*
 *     Rev 1.6   04 Nov 1996 10:21:52   richa
 *  Change to dynamic allocation of virtual channel.
-*  
+*
 *     Rev 1.5   19 Dec 1995 18:20:38   JohnR
 *  update
 *
@@ -119,7 +131,7 @@ PLIBPROCEDURE VdCpmDriverProcedures[VDDRIVER__COUNT] =
 ==   External Functions used
 =============================================================================*/
 
-extern int WdCall( PVD pVd, int ProcIndex, PVOID pParam );
+extern int VdCallWd( PVD pVd, int ProcIndex, PVOID pParam );
 int CpmPollAllPorts( void );
 void CpmGetLptMask( PUCHAR pLptMask );
 void CpmGetComMask( PUCHAR pLptMask );
@@ -145,13 +157,13 @@ static POUTBUFAPPENDPROC OutBufAppend     = NULL;
 static POUTBUFWRITEPROC OutBufWrite       = NULL;
 static PAPPENDVDHEADERPROC AppendVdHeader = NULL;
 
-BYTE LptMask = 0;
-BYTE ComMask = 0;
+STATIC BYTE LptMask = 0;
+STATIC BYTE ComMask = 0;
 
 
 #if 0
 /*
- *  
+ *
  */
 typedef struct _CHANNELLIST {
     VIRTUALNAME VirtualName;
@@ -202,17 +214,36 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     OPENVIRTUALCHANNEL OpenVirtualChannel;
     int i;
     int rc;
+   BOOL fCPMAllowed;             //load CPM or not
+
 
     TRACE(( TC_CPM, TT_API1, "VDCPM: DriverOpen Called!"));
+
+   // Check whether to load Printer Mapping or not
+    if ( miGetPrivateProfileBool(INI_WFCLIENT,
+                                 INI_CPMALLOWED,
+                                 DEF_CPMALLOWED) ) {
+        fCPMAllowed = 1;
+    }
+    else {
+        fCPMAllowed = 0;
+    }
+
+    TRACE(( TC_CPM, TT_API1, "VDCPM: DriverOpen: CPM allowed = %d", fCPMAllowed));
+
+    if ( ! fCPMAllowed ) {
+        return(CLIENT_ERROR_VD_NOT_LOADED);
+    }
+
 
     /*
      * Get our settings from the profile file
      */
     MaxWindowSize = miGetPrivateProfileInt(
-                       INI_CPM15SECTION, 
+                       INI_CPM15SECTION,
                        INI_CPMWINDOWSIZE,
                        DEF_CPMWINDOWSIZE
-		       );
+             );
 
 #ifdef DOS
 #else
@@ -237,7 +268,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
      *  Initialize to zero
      */
     pVdOpen->ChannelMask = 0;
-   
+
     /*
      * Now register all LPT/COM channels that are valid
      */
@@ -246,7 +277,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     wdqi.WdInformationLength = sizeof_OPENVIRTUALCHANNEL;
 
     OpenVirtualChannel.pVCName = VIRTUAL_LPT1;
-    rc = WdCall( pVd, WD__QUERYINFORMATION, &wdqi );
+    rc = VdCallWd( pVd, WD__QUERYINFORMATION, &wdqi );
     Channel = OpenVirtualChannel.Channel;
 
     VirtualLPT1 = Channel;
@@ -254,7 +285,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     pVdOpen->ChannelMask |= ( 1L << Channel );
    
     TRACE(( TC_CPM, TT_API1, "VDCPM: mask 0x%lx", pVdOpen->ChannelMask ));
-   
+
     return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -719,7 +750,7 @@ CpmHookLpt( PVD pVd, int Channel, int TotalCount, int MaxCount )
    wdsi.WdInformationClass  = WdVirtualWriteHook;
    wdsi.pWdInformation      = &vdwh;
    wdsi.WdInformationLength = sizeof(VDWRITEHOOK);
-   rc = WdCall(pVd, WD__SETINFORMATION, &wdsi);
+   rc = VdCallWd(pVd, WD__SETINFORMATION, &wdsi);
    TRACE(( TC_CPM, TT_API2, "VDCPM: writehook ch=%u p=%lx rc=%u", vdwh.Type, vdwh.pVdData, rc ));
 
    if( rc ) {

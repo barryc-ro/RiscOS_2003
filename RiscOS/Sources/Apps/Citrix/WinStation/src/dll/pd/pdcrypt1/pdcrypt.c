@@ -7,14 +7,12 @@
 *
 * copyright notice: Copyright 1995, Citrix Systems Inc.
 *
-* smiddle
+* $Author$
 *
-* pdcrypt.c,v
-* Revision 1.1  1998/01/12 11:35:41  smiddle
-* Newly added.#
-*
-* Version 0.01. Not tagged
-*
+* $Log$
+*  
+*     Rev 1.14   26 Apr 1998 15:09:46   terryt
+*  Free PDCOMP buffers for reducer
 *  
 *     Rev 1.13   15 Apr 1997 16:52:02   TOMA
 *  autoput for remove source 4/12/97
@@ -616,6 +614,27 @@ DeviceQuery( PPD pPd, PPDQUERYINFORMATION pPdQueryInformation )
 
 static int 
 DeviceCallback( PPD pPd )
+{
+    return( CLIENT_STATUS_SUCCESS );
+}
+
+/*******************************************************************************
+ *
+ *  DeviceReducerEnabled
+ *
+ *  Process Reducer Enabled message
+ *
+ * ENTRY:
+ *    pPd (input)
+ *       Pointer to td data structure
+ *
+ * EXIT:
+ *    CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+
+static int
+DeviceReducerEnabled( PPD pPd )
 {
     return( CLIENT_STATUS_SUCCESS );
 }

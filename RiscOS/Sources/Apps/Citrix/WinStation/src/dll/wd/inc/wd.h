@@ -11,6 +11,12 @@
 *
 *  $Log$
 *  
+*     Rev 1.37   20 Apr 1998 17:54:28   terryt
+*  dos memory fix for reducer
+*  
+*     Rev 1.36   15 Apr 1998 19:14:52   kurtp
+*  UK fix for DOS/Win16
+*  
 *     Rev 1.32   15 Apr 1997 18:17:20   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -76,6 +82,23 @@ typedef struct _INFOBLOCK {
 } INFOBLOCK;
 
 /*
+ *  Expansion/reduction structure
+ */
+typedef struct _DATA_QUEUE FAR *PDATA_QUEUE;
+
+typedef struct _DATA_QUEUE {
+    ULONG       MaxNewData;         /* maximum amount of pending new data */
+        LONG                DistanceAdjustment;        /* bias for distance encoding */
+        ULONG                MinimumDistanceBits;/* miniumum bits for distance encoding */
+    PUCHAR      Buffer;                                /* main buffer - other data may follow at end */
+    ULONG       BufferLen;          /* main buffer length */
+    ULONG       BufferMask;         /* main buffer length - 1 */
+    ULONG       WriteBase;          /* tail index of new data */
+    ULONG       WriteReached;       /* head index of new data */
+    ULONG       WriteLimit;         /* limit point for new data = WriteBase + MaxNewData */
+} DATA_QUEUE;
+
+/*
  *  WD structure
  */
 typedef struct _WD {
@@ -121,6 +144,18 @@ typedef struct _WD {
     BYTE  EncryptionLevel;          // Encryption level from Init Request
 
     PINFOBLOCK pInfoBlockList;      // List of data blocks from the host
+
+    /*  Extra data structures for input expansion/reduction */
+    DATA_QUEUE expansionData;       // defines the expansion of incoming data
+    BOOL expansionEnabled;
+    DATA_QUEUE reductionData;       // defines the reduction of outgoing data
+    BOOL reductionEnabled;
+    BYTE C2H_PowerOf2Wanted;        // desired, not agreed on
+    BYTE H2C_PowerOf2Wanted;        // desired, not agreed on
+    USHORT H2C_MaxNewData;          // desired, not agreed on
+
+    LPBYTE ExpanderBuffer;          // memory allocated early on
+    LPBYTE ReducerBuffer;           // memory allocated early on
 
     PPLIBPROCEDURE pEmulProcedures;
 } WD;

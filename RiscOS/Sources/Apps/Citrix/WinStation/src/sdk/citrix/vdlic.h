@@ -10,6 +10,12 @@
 * 
 *  $Log$
 *  
+*     Rev 1.1   29 Apr 1998 12:50:22   wf20r
+*  Update to match picasso
+*  
+*     Rev 1.0   Feb 24 1998 20:38:22   brucef
+*  Initial revision.
+*  
 *     Rev 1.0   Feb 19 1998 22:02:24   briang
 *  Initial revision.
 * 
@@ -28,7 +34,7 @@
 //////////////////////////////////////////////////////////////////////////////
 // Timeout for client response to license operations
 //
-#define MAX_LICENSE_TIMEOUT        (10*1000)
+#define MAX_LICENSE_TIMEOUT        (20*1000)
 
 //////////////////////////////////////////////////////////////////////////////
 // virtual channel initialization packet
@@ -40,14 +46,6 @@ typedef struct _VDLIC_C2H
     ULONG   KeyExchangeAlg;
     ULONG   LicProtocolVer;        // version of MS licensing protocol
 } VDLIC_C2H, * PVDLIC_C2H;
-
-//////////////////////////////////////////////////////////////////////////////
-// H2C - Send Command
-
-typedef struct _LIC_SEND_COMMAND
-{
-    UCHAR       iCommand;
-} LIC_SEND_COMMAND, * PLIC_SEND_COMMAND;
 
 //////////////////////////////////////////////////////////////////////////////
 // H2C - Send Command With Data

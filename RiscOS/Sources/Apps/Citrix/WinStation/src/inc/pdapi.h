@@ -11,6 +11,12 @@
 *
 *  $Log$
 *  
+*     Rev 1.36   26 Apr 1998 11:36:56   terryt
+*  add new PD setinfo to free PDCOM buffers when reducer is enabled
+*  
+*     Rev 1.35   Mar 24 1998 15:14:20   scottc
+*  added webclient field to pdopen struct
+*  
 *     Rev 1.34   Jan 06 1998 14:01:28   bills
 *  Added a new pd info class, PdTapiHandle.  This is used by pdtapi to tell
 *  tdcomm32 the hande to read/write on.
@@ -69,6 +75,7 @@ typedef struct _PDOPEN {
     USHORT OutBufParam;         // out: number of parameter bytes to reserve
     BUSHORT fOutBufCopy : 1;      // out: pd copies data into new outbuf
     BUSHORT fOutBufFrame : 1;     // out: framing protocol driver (2x outbufs)
+    BUSHORT fWebClient: 1;
     PPLIBPROCEDURE   pDeviceProcedures;
 } PDOPEN, * PPDOPEN;
 
@@ -108,7 +115,8 @@ typedef enum _PDINFOCLASS {
     PdEnableModule,
     PdTimeoutStatus,
     PdIOStatus,
-	PdTapiHandle
+    PdTapiHandle,
+    PdReducerEnabled
 } PDINFOCLASS;
 
 /*

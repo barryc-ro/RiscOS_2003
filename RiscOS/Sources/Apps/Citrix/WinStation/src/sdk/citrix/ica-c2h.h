@@ -11,6 +11,27 @@
 *
 *  $Log$
 *  
+*     Rev 1.73   20 May 1998 17:20:00   terryt
+*  Change license checking for old clients
+*  
+*     Rev 1.72   May 03 1998 16:23:36   briang
+*  removed the IFDEF UNICODES
+*  
+*     Rev 1.71   22 Apr 1998 18:51:50   thanhl
+*  UNICODE protocol & Japanese support
+*  
+*     Rev 1.70   14 Apr 1998 21:11:36   derekc
+*  added version 4 information to UI_C2H
+*  
+*     Rev 1.69   09 Apr 1998 20:04:34   kurtp
+*  Add versioning to reducer code
+*  
+*     Rev 1.67   01 Apr 1998 14:01:18   miked
+*  UK Reducer fix
+*  
+*     Rev 1.66   Mar 30 1998 16:03:30   grega
+*  Merged in UK Reducer
+*  
 *     Rev 1.65   30 Jan 1998 18:17:28   terryt
 *  make twi compatible
 *  
@@ -67,7 +88,7 @@
 
 /* #pragma pack(1) */
 
-
+#define IMEFILENAME_LENGTH 32
 /*=============================================================================
 ==   Common Module Header
 =============================================================================*/
@@ -88,6 +109,9 @@ typedef struct _MODULE_C2H {
     ULONG ModuleSize;               // module file size in bytes
 } MODULE_C2H, * PMODULE_C2H;
 
+typedef struct _IMEFILENAME {
+      BYTE imeFileName[ IMEFILENAME_LENGTH + 1 ];     // IME file name (length 32)
+} IMEFileName, * pIMEFileName;
 
 /*=============================================================================
 ==   User Interfaces
@@ -96,7 +120,8 @@ typedef struct _MODULE_C2H {
 #define VERSION_CLIENTL_UI     1
 #define VERSION_CLIENTH_UI_15  2    // WinFrame 1.5
 #define VERSION_CLIENTH_UI_16  3    // WinFrame 1.6
-#define VERSION_CLIENTH_UI     VERSION_CLIENTH_UI_16
+#define VERSION_CLIENTH_UI_PICASSO 4 // picasso server
+#define VERSION_CLIENTH_UI     VERSION_CLIENTH_UI_PICASSO
 
 #define VERSION_CLIENTL_UIEXT  1
 #define VERSION_CLIENTH_UIEXT  1
@@ -143,6 +168,20 @@ typedef struct _UI_C2H {
     /* version 3 */
     USHORT oClientLicense;      // offset - client license number
 
+    /* version 4 */
+    USHORT EncodingType;        // Encoding type
+                                // - 0: ANSI/ASCII
+                                // - 1: UNICODE
+    USHORT EncodingData;        // Encoding data ( encoding type dependent )
+                                // - for ANSI/ASCII - code page
+                                //                    0: system default CP
+                                //                    1: system OEM CP
+	 USHORT KeyboardType;        // Keyboard type (PC/XT, PC/AT, Japanese...)
+	 BYTE KeyboardSubType;       // Keyboard subtype (US 101, JPN 106)
+	 BYTE KeyboardFunctionKey;   // Number of function keys
+    USHORT oimeFileName;        // Offset to IME file name
+    USHORT Reserved;            // keep the structure at multiple of 4 bytes
+
 } UI_C2H, * PUI_C2H;
 
 /*
@@ -163,9 +202,11 @@ typedef struct _UIEXT_C2H {
  *  Version 4 - Internet Client (new)
  *  Version 5 - WinFrame 2.0 beta
  *  Version 6 - WinFrame 2.0
+ *  Version 7 - Picasso with WD reducer
  */
 #define VERSION_CLIENTL_WD   1 
-#define VERSION_CLIENTH_WD   6
+#define MIN_WD_REDUCER_CLIENT_VERSION  7
+#define VERSION_CLIENTH_WD   7
 
 
 /*
@@ -176,6 +217,8 @@ typedef struct _UIEXT_C2H {
 #define CLIENTID_CITRIX_CONSOLE      0x0003     // citrix console
 #define CLIENTID_CITRIX_TEXT_TERM    0x0004     // citrix text terminals
 #define CLIENTID_CITRIX_MVGA_TERM    0x0007     // citrix MVGA terminals
+#define CLIENTID_CITRIX_NEW_JAVA     0x0008     // citrix JAVA client
+#define CLIENTID_CITRIX_WINCE        0x0009     // citrix WinCE client
 
 #define CLIENTID_CITRIX_INTERNET     0x0101     // citrix internet client
 
@@ -218,6 +261,13 @@ typedef struct _WD_C2H {
     /* version 5,6 */
     USHORT VcBindCount;         // number of WDVCBIND structures in array
     USHORT oVcBind;             // offset - array of WDVCBIND structures
+
+    /* version 7 */
+    BYTE C2H_PowerOf2Wanted;    // reduction buffer requested
+    BYTE H2C_PowerOf2Wanted;    // expansion buffer requested
+    USHORT H2C_MaxNewData;      // maximum expanded packet size
+    USHORT ReducerVersion;      // version of reducer
+
 } WD_C2H, * PWD_C2H;
 
 
@@ -273,6 +323,12 @@ typedef struct _VDCDM_C2H {
     /* version 2 */
     USHORT oClientDrives2;      // offset - array of VDCLIENTDRIVES2 structures
 
+#if defined(UNICODESUPPORT)
+    /* version 3 */
+    USHORT EncodingType;        // Encoding type 
+    USHORT EncodingData;        // Encoding data ( depending on type )
+#endif
+
 } VDCDM_C2H, * PVDCDM_C2H;
 
 #define sizeof_VDCDM_C2H	(sizeof(VD_C2H) + 14)
@@ -281,9 +337,18 @@ typedef struct _VDCDM_C2H {
  *  client printer mapping (vdcpm30.dll)
  */
 typedef struct _VDCPM_C2H {
+
+    /* version 1 */
     VD_C2H Header;
     BYTE LptMask;               // mask of available client lpt ports (b0=lpt1)
     BYTE ComMask;               // mask of available client com ports (b0=com1)
+
+#if defined(UNICODESUPPORT)
+    /* version 2 */
+    USHORT EncodingType;        // Encoding type 
+    USHORT EncodingData;        // Encoding data ( depending on type )
+#endif
+
 } VDCPM_C2H, * PVDCPM_C2H;
 
 #define sizeof_VDCPM_C2H	(sizeof(VD_C2H) + 2)

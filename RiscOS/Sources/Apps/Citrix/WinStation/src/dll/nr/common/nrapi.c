@@ -11,50 +11,53 @@
 *
 *  $Log$
 *  
+*     Rev 1.19   26 Feb 1998 16:23:38   TOMA
+*  ce merge
+*
 *     Rev 1.18   03 Nov 1997 09:28:12   brada
 *  Added firewall load balance support
-*  
+*
 *     Rev 1.17   15 Apr 1997 16:19:36   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.17   21 Mar 1997 16:06:48   bradp
 *  update
-*  
+*
 *     Rev 1.16   08 Feb 1997 16:05:24   jeffm
 *  multiple browser support
-*  
+*
 *     Rev 1.15   16 May 1996 11:04:12   marcb
 *  update
-*  
+*
 *     Rev 1.14   08 May 1996 16:26:20   jeffm
 *  update
-*  
+*
 *     Rev 1.13   23 Apr 1996 09:03:44   richa
 *  Added LibMain and DllMain to get the module instance handle.
-*  
+*
 *     Rev 1.12   27 Mar 1996 11:57:06   KenB
 *  LOADSTR.H should be included for everyone
-*  
+*
 *     Rev 1.11   27 Mar 1996 10:04:50   richa
-*  
+*
 *     Rev 1.10   20 Mar 1996 14:15:10   KenB
 *  Use LoadString(), not ErrorMessages[]...
-*  
+*
 *     Rev 1.9   20 Dec 1995 19:02:30   bradp
 *  update
-*  
+*
 *     Rev 1.8   05 Dec 1995 18:46:00   bradp
 *  update
-*  
+*
 *     Rev 1.7   10 Nov 1995 11:18:46   bradp
 *  update
-*  
+*
 *     Rev 1.6   02 May 1995 14:04:22   butchd
 *  update
-*  
+*
 *     Rev 1.5   17 Apr 1995 08:30:46   butchd
 *  removed winlink.h, changed pLogProcedures type
-*  
+*
 *     Rev 1.4   07 Apr 1995 11:49:36   richa
 *  Windows client.
 *
@@ -100,6 +103,11 @@
 #include "../../../inc/clib.h"
 
 #include "../../../inc/nrdevice.h"
+
+
+#ifdef WINCE
+#include <wcecalls.h> // LoadStringAW()                     KLB 09-05-97
+#endif // WINCE
 
 /*=============================================================================
 ==   External Functions Defined
@@ -446,7 +454,7 @@ NrErrorLookup( PNR pNr, PPDLASTERROR pErrorLookup )
                    (UINT)(ERROR_DEFAULT), 
                    pErrorLookup->Message,
                    sizeof(pErrorLookup->Message) );
-          
+
     }
 
     return( CLIENT_STATUS_SUCCESS );
@@ -496,7 +504,7 @@ LibMain( HINSTANCE hInst,
 //{
 //
 //    //  For future if needed
-//     
+//
 //    return( TRUE );
 //}
 //

@@ -11,42 +11,57 @@
 *
 *   $Log$
 *  
+*     Rev 1.63   13 Apr 1998 18:27:20   kurtp
+*  add UK reducer code
+*  
+*     Rev 1.62   Apr 03 1998 17:15:26   bills
+*  "backed out" the changes for the UK Reducer
+*  
+*     Rev 1.61   Mar 30 1998 16:16:10   grega
+*  Merged in UK Reducer
+*  
+*     Rev 1.60   Mar 24 1998 12:38:22   mykw
+*  Typos...
+*  
+*     Rev 1.58   27 Feb 1998 17:25:12   TOMA
+*  ce merge
+*
 *     Rev 1.57   05 Feb 1998 14:59:04   brada
 *  Do not allocate allocated virtual channals
-*  
+*
 *     Rev 1.56   25 Nov 1997 17:24:52   KenB
 *  Reserve 4 more channels so WF APIs work
-*  
+*
 *     Rev 1.55   Oct 31 1997 19:48:04   briang
 *  Remove pIniSection parameter from miGets
-*  
+*
 *     Rev 1.54   Oct 09 1997 18:30:16   briang
 *  Conversion to MemIni use
-*  
+*
 *     Rev 1.53   15 Apr 1997 18:17:18   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.53   21 Mar 1997 16:09:46   bradp
 *  update
-*  
+*
 *     Rev 1.52   20 Feb 1997 14:08:02   butchd
 *  update
-*  
+*
 *     Rev 1.51   07 Feb 1997 17:47:26   kurtp
 *  update
-*  
+*
 *     Rev 1.50   29 Jan 1997 21:05:14   jeffm
 *  fixed up free of INFOBLOCK data
-*  
+*
 *     Rev 1.49   22 Jan 1997 16:48:06   terryt
 *  client data
-*  
+*
 *     Rev 1.48   13 Nov 1996 09:04:50   richa
 *  Updated Virtual channel code.
-*  
+*
 *     Rev 1.47   08 May 1996 15:03:16   jeffm
 *  update
-*  
+*
 *     Rev 1.46   12 Feb 1996 09:36:00   richa
 *  added a WriteTTY (\r\n) so that the terminal window is brought up sooner.
 *
@@ -108,6 +123,11 @@
 
 #include "../../../inc/wdemul.h"
 #include "../../../inc/wdemulp.h"
+
+
+#ifdef WINCE
+#include <wcecalls.h>
+#endif
 
 /*=============================================================================
 ==   External Functions Defined
@@ -173,22 +193,36 @@ typedef struct _VC_MAP {
     USHORT      Channel;
 } VC_MAP, * PVC_MAP;
 
+/*
+ * Before there was dynamic allocation of virtual channel numbers, any virtual
+ * device needing a channel was assigned one statically.  In order to provide
+ * backward-compatibility (i.e., not break existing code), the following
+ * table has an entry for each channel that was statically assigned.
+ * Note that some entries from the VIRTUALCLASS enum in ica30.h (such as
+ * Virtual_Reserved1) have no entry in this list; this is intentional, as 
+ * these omitted channels were never assigned.
+ *
+ * This table should never be altered.
+ */ 
 VC_MAP VcCompatablityMap[]={
-    VIRTUAL_SCREEN   , Virtual_Screen   , // KLB 10-20-97 Screen
-    VIRTUAL_LPT1     , Virtual_LPT1     ,
-    VIRTUAL_LPT2     , Virtual_LPT2     ,
-    VIRTUAL_RESERVED3, Virtual_Reserved3, // KLB 10-24-97 Reserved3
-    VIRTUAL_COM1     , Virtual_COM1     ,
-    VIRTUAL_COM2     , Virtual_COM2     ,
-    VIRTUAL_CPM      , Virtual_Cpm      ,
-    VIRTUAL_RESERVED4, Virtual_Reserved4, // KLB 10-24-97 Reserved4
-    VIRTUAL_CCM      , Virtual_Ccm      ,
-    VIRTUAL_CDM      , Virtual_Cdm      ,
-    VIRTUAL_CLIPBOARD, Virtual_Clipboard,
-    VIRTUAL_THINWIRE , Virtual_ThinWire ,
-    VIRTUAL_PASSTHRU , Virtual_PassThru , // KLB 10-24-97 PassThru (for shadow)
+    VIRTUAL_SCREEN   , Virtual_Screen   ,   // 0
+    VIRTUAL_LPT1     , Virtual_LPT1     ,   // 1    (also AUX1)  
+    VIRTUAL_LPT2     , Virtual_LPT2     ,   // 2    (also AUX2)
+    VIRTUAL_RESERVED3, Virtual_Reserved3,   // 3    (used internally)
+    VIRTUAL_CPM      , Virtual_Cpm      ,   // 4    Client Printer Mapping
+    VIRTUAL_COM1     , Virtual_COM1     ,   // 5
+    VIRTUAL_COM2     , Virtual_COM2     ,   // 6
+    VIRTUAL_RESERVED4, Virtual_Reserved4,   // 7    (used internally)
+    VIRTUAL_CCM      , Virtual_Ccm      ,   // 8    Client COMM Mapping
+    VIRTUAL_THINWIRE , Virtual_ThinWire ,   // 9
+    VIRTUAL_CDM      , Virtual_Cdm      ,   // 10   Client Drive Mapping
+    VIRTUAL_PASSTHRU , Virtual_PassThru ,   // 11   Shadow
+    VIRTUAL_OEM      , Virtual_User3    ,   // 14   Allocated to OEM:Wyse
+    VIRTUAL_OEM2     , Virtual_Reserved2,   // 16   Allocated to OEM:Cruise
+    VIRTUAL_CLIPBOARD, Virtual_Clipboard,   // 17
     ""               , 0                ,
 };
+
 
 /*
  *  Define WinStation driver external procedures
@@ -227,6 +261,7 @@ STATIC PPLIBPROCEDURE pXmsProcedures = NULL;
 STATIC PPLIBPROCEDURE pLogProcedures = NULL;
 STATIC PPLIBPROCEDURE pMemIniProcedures = NULL;
 #endif
+STATIC PPLIBPROCEDURE pReduceProcedures = NULL;
 
 /*******************************************************************************
  *
@@ -330,9 +365,10 @@ WdOpen( PWD pWd, PWDOPEN pWdOpen )
     pLptProcedures        = pWdOpen->pLptProcedures;
     pXmsProcedures        = pWdOpen->pXmsProcedures;
     pLogProcedures        = pWdOpen->pLogProcedures;
-    pBIniProcedures       = pWdOpen->pMemIniProcedures;
+    pMemIniProcedures     = pWdOpen->pMemIniProcedures;
 #endif
-    
+    pReduceProcedures     = pWdOpen->pReduceProcedures;
+     
     /*
      *  Initialize WD data structure
      */
@@ -401,6 +437,13 @@ WdOpen( PWD pWd, PWDOPEN pWdOpen )
         rc = CLIENT_ERROR_NO_MEMORY;
         goto badinputbuffer;
     }
+
+    /*
+     * Initialise expansion/reduction to off
+     */
+
+    pWd->expansionEnabled = FALSE;
+    pWd->reductionEnabled = FALSE;
 
     /*
      *  Register address of OutBuf routines with PD
@@ -695,7 +738,7 @@ WdQueryInformation( PWD pWd, PWDQUERYINFORMATION pWdQueryInformation )
     QueryInfo.PdInformationLength = pWdQueryInformation->WdInformationLength;
 
     switch ( pWdQueryInformation->WdInformationClass ) {
-        
+
         case WdIOStatus :
              QueryInfo.PdInformationClass = PdIOStatus;
              break;
@@ -927,7 +970,7 @@ PdCall( PWD pWd, USHORT ProcIndex, PVOID pParam )
  *  ReservedVirtualChannel
  *
  *  This is called to determine if a given Channel is one from the
- *  compatability list.  
+ *  compatability list.
  *
  * ENTRY:
  *    pOVC
@@ -985,7 +1028,7 @@ GetFirstAvailableChannel( POPENVIRTUALCHANNEL pOVC )
 
     if ( strlen( pOVC->pVCName ) <= VIRTUALNAME_LENGTH  ) {
         for ( i=0; i <= VIRTUAL_MAXIMUM; i++ ) {
-            if ( HandleIsNotReserved( (USHORT)(i) ) && 
+            if ( HandleIsNotReserved( (USHORT)(i) ) &&
                  HandleIsNotAllocated( (USHORT)(i) ) ) {
                 strcpy( paWD_VcBind[iVc_Map].VirtualName, pOVC->pVCName );
                 paWD_VcBind[iVc_Map].VirtualClass = i;
@@ -1044,7 +1087,7 @@ HandleIsNotReserved( USHORT Channel )
 BOOL
 HandleIsNotAllocated( USHORT Channel )
 {
-    int i;
+    UINT i;
 
     /* Verify the handle is not allocated */
     for ( i=0 ; i < iVc_Map ; i++ ) {

@@ -9,17 +9,12 @@
 *  Author:  David Pope  8-6-97
 * 
 *  $Log$
-*  Revision 1.1  1998/06/19 17:13:21  smiddle
-*  Merged in Beta2 code. A few redundant header files removed, various new ones
-*  added. It all compiles and sometimes it runs. Mostly it crashes in the new
-*  ini code though.
-*  Added a check for the temporary ICA file being created OK. If not then it gives
-*  a warning that the scrap directory might need to be set up.
-*  Upped version number to 0.40 so that there is room for some bug fixes to the
-*  WF 1.7 code.
-*
-*  Version 0.40. Tagged as 'WinStation-0_40'
-*
+*  
+*     Rev 1.6   09 Apr 1998 14:28:40   davidp
+*  fixed stupid packet-header-size problem
+*  
+*     Rev 1.5   11 Mar 1998 09:28:44   davidp
+*  Added values for largest packet headers to support max-packet-size changes
 *  
 *     Rev 1.4   17 Dec 1997 13:08:48   davidp
 *  added Extra field to OPEN packet for wider format support
@@ -144,6 +139,7 @@ typedef unsigned char DEVICE_ID;
 //
 #define CAM_DEVICE_NONE             0x00    // no device type (for error cond.)
 #define CAM_DEVICE_PCM_OUT          0x01    // PCM output
+
 
 
 //////////////////////////////////////////////////////////////////////////////
@@ -333,6 +329,14 @@ typedef struct _CAM_RESOURCE_ACK
 #define CAM_COMMAND_RESOURCE_ACK        (CAM_C2H_BASE)
 #define CAM_COMMAND_RESET               (CAM_C2H_BASE + 0x1)
 #define CAM_COMMAND_CAPABILITY_INFO     (CAM_C2H_BASE + 0x2)
+
+
+//////////////////////////////////////////////////////////////////////////////
+// Size of largest packet header above - used for allocating buffers
+// Keep these updated as the protocol changes.
+
+#define CAM_MAX_H2C_HEADER_BYTES            sizeof(CAM_OPEN_REQUEST)
+#define CAM_MAX_C2H_HEADER_BYTES            sizeof(CAM_CAPABILITY_INFO)
 
 
 //// turn off packing

@@ -18,6 +18,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.4   25 Apr 1998 10:58:08   brada
+*  Move citrix specific macros to new cmctx.h
+*  
 *     Rev 1.3   02 Feb 1998 13:10:52   brada
 *  Add support to close file handles
 *  
@@ -29,29 +32,10 @@
 #ifndef _CMOEM_H_
 #define _CMOEM_H_
 
+#include "citrix/cmctx.h"
+
 #define _CMOEMAPI __cdecl
 
-
-/*
- *  Citrix specific 
- */
-
-#define CTX_MOVE_FILE  "files.mv"
-#define CTX_EXE_FILE   "files.ex"
-#define CTX_MERGE_FILE "files.mg"
-#define CTX_DEL_FILE   "files.dl"
-
-#define CTX_VERSION_FILE  "version.dat"
-
-#define CTX_BACKUP_DIR  "Backup"
-#define CTX_UPDATE_DIR  "Update"
-
-
-#if defined(WIN32)
-#define CTX_MOVE_PROGRAM  "wfcmoven.exe"
-#elif defined(WIN16)
-#define CTX_MOVE_PROGRAM  "wfcmovew.exe"
-#endif
 
 /*
  *  ICA Client Update Data Structures

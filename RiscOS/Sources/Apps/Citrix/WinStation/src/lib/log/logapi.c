@@ -9,25 +9,32 @@
 *
 *   Author:   Brad Pedersen
 *
-*   logapi.c,v
-*   Revision 1.11  1998/06/19 17:12:48  smiddle
-*   Merged in Beta2 code. A few redundant header files removed, various new ones
-*   added. It all compiles and sometimes it runs. Mostly it crashes in the new
-*   ini code though.
-*   Added a check for the temporary ICA file being created OK. If not then it gives
-*   a warning that the scrap directory might need to be set up.
-*   Upped version number to 0.40 so that there is room for some bug fixes to the
-*   WF 1.7 code.
-*
-*   Version 0.40. Tagged as 'WinStation-0_40'
-*
+*   $Log$
 *  
+*     Rev 1.30   25 Feb 1998 16:46:28   TOMA
+*  CE Merge
+*  
+*     Rev 1.35   28 Oct 1997 16:21:30   TOMA
+*  moved wcecalls.h
+*
+*     Rev 1.34   26 Sep 1997 16:31:26   TOMA
+*  update
+*
+*     Rev 1.32   Sep 17 1997 17:32:06   anthonyu
+*  Added ce include.
+*
+*     Rev 1.31   19 Aug 1997 15:00:12   TOMA
+*  update
+*
+*     Rev 1.30   12 Aug 1997 14:25:34   TOMA
+*  udpate
+*
 *     Rev 1.29   15 Apr 1997 18:52:52   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.28   27 Jan 1996 19:23:00   bradp
 *  update
-*  
+*
 *     Rev 1.27   24 Jul 1995 17:55:12   richa
 *
 *     Rev 1.26   20 Jul 1995 15:24:02   kurtp
@@ -73,6 +80,9 @@
 #include "../../inc/client.h"
 #include "../../inc/clib.h"
 #include "../../inc/logapi.h"
+#ifdef WINCE
+#include <wcecalls.h>
+#endif
 
 #include "swis.h"
 
@@ -167,9 +177,14 @@ int WFCAPI LogLoad( PPLIBPROCEDURE pfnLogProcedures )
 
 int WFCAPI LogOpen( PLOGOPEN pLogOpen )
 {
+
    // close old log file
    if(ghLogHandle != -1) {
+#ifdef WINCE
+      _lclose(ghLogHandle);
+#else
       close(ghLogHandle);
+#endif
       ghLogHandle = -1;
    }
 
@@ -194,17 +209,46 @@ int WFCAPI LogOpen( PLOGOPEN pLogOpen )
    if ( pLogOpen->LogFile[strlen(pLogOpen->LogFile)-1] == ':' ) {
 
       pLogOpen->LogFile[strlen(pLogOpen->LogFile)-1] = '\0';
+#if defined(DOS) || defined(RISCOS)
       ghLogHandle = open( pLogOpen->LogFile, O_RDWR );
+#else
+#ifdef WINCE
+      ghLogHandle = _lopen( pLogOpen->LogFile, OF_READWRITE );
+#else
+      ghLogHandle = open( pLogOpen->LogFile, O_RDWR, S_IREAD|S_IWRITE );
+#endif
+#endif
 
    } else if ( guLogFlags & LOG_APPEND ) {
-
+#if defined(DOS) || defined(RISCOS)
       ghLogHandle = open( pLogOpen->LogFile, O_CREAT|O_RDWR|O_APPEND );
+#else
+#ifdef WINCE
+      //BUGBUGCE Might have to change this to CreateFile
+      //This may truncate the log file when we don't want to
+      ghLogHandle = _lcreat( pLogOpen->LogFile, 0 );
+#else
+      ghLogHandle = open( pLogOpen->LogFile, O_CREAT|O_RDWR|O_APPEND, S_IREAD|S_IWRITE );
+#endif
+#endif
       if( ghLogHandle != -1 )
+#ifdef WINCE
+         _llseek(ghLogHandle, 0L, FILE_END);
+#else
          lseek(ghLogHandle, 0L, SEEK_END);
+#endif
 
    } else {
-
+#if defined(DOS) || defined(RISCOS)
       ghLogHandle = open( pLogOpen->LogFile, O_CREAT|O_TRUNC|O_RDWR );
+#else
+#ifdef WINCE
+      //BUGBUGCE Might have to change this to CreateFile see lcreat above
+      ghLogHandle = _lcreat( pLogOpen->LogFile, 0 );
+#else
+      ghLogHandle = open( pLogOpen->LogFile, O_CREAT|O_TRUNC|O_RDWR, S_IREAD|S_IWRITE );
+#endif
+#endif
    }
 
    if( ghLogHandle == -1 )
@@ -233,7 +277,11 @@ int WFCAPI LogClose( void )
 
    // close old log file
    if(ghLogHandle != -1) {
+#ifdef WINCE
+      _lclose(ghLogHandle);
+#else
       close(ghLogHandle);
+#endif
       ghLogHandle = -1;
    }
    return(CLIENT_STATUS_SUCCESS);
@@ -329,10 +377,22 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
    if( guLogFlags & LOG_PRINTF )
       printf( "%s", Buffer );
 
-   if ( ghLogHandle != -1 && guLogFlags & LOG_FILE) {
+   if ( ghLogHandle != -1 && guLogFlags & LOG_FILE ) {
+#ifdef WINCE
+      _lwrite( ghLogHandle, Buffer, strlen(Buffer) );
+#else
       write( ghLogHandle, Buffer, strlen(Buffer) );
+#endif
       if ( guLogFlags & LOG_FLUSH )
+#if defined(DOS) || defined(RISCOS)
          flush( ghLogHandle );
+#else
+#ifdef WINCE
+         FlushFileBuffers( (HANDLE)ghLogHandle );
+#else
+         _commit( ghLogHandle );
+#endif
+#endif
   }
 
 #if defined(REMOTE_DEBUG) && defined(DEBUG)
@@ -401,10 +461,22 @@ LogBuffer( ULONG LogClass, ULONG LogEnable,
       if( guLogFlags & LOG_PRINTF )
          printf( "\n" );
 
-      if ( ghLogHandle != -1 && guLogFlags & LOG_FILE ) {
+      if ( ghLogHandle != -1  && guLogFlags & LOG_FILE) {
+#ifdef WINCE
+         _lwrite(ghLogHandle, "\n", 1 );
+#else
          write(ghLogHandle, "\n", 1 );
+#endif
          if(guLogFlags & LOG_FLUSH)
+#if defined(DOS) || defined(RISCOS)
             flush( ghLogHandle );
+#else
+#ifdef WINCE
+         FlushFileBuffers( (HANDLE)ghLogHandle );
+#else
+            _commit(ghLogHandle);
+#endif
+#endif
       }
    }
 }
@@ -436,8 +508,12 @@ logWrite( char far * pFormat, ... )
    va_start( arg_marker, pFormat );
    bc = vsprintf( Buffer, pFormat, arg_marker );
 
-   if ( ghLogHandle != -1 && guLogFlags & LOG_FILE )
+   if ( ghLogHandle != -1 && guLogFlags & LOG_FILE)
+#ifdef WINCE
+      _lwrite(ghLogHandle, Buffer, bc);
+#else
       write(ghLogHandle, Buffer, bc);
+#endif
 
    if( guLogFlags & LOG_PRINTF )
       printf( "%s", Buffer );

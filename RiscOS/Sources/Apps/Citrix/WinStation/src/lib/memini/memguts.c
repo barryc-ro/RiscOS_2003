@@ -28,16 +28,16 @@ PCHAR gIniSection;   //BINI-styled buffered section bgets
  *
  *******************************************************************************/
 
-int WFCAPI miSetProfilePointer( PCHAR pProfile ) 
+int WFCAPI miSetProfilePointer( PCHAR pProfile )
 {
    int   BufferSize = 0;
    PCHAR pTemp = NULL;
 
-   if (pProfile[0]== '\0') { 
-      
+   if (pProfile[0]== '\0') {
+
       /*
-       * Determine the size of the Buffered Profile 
-       */ 
+       * Determine the size of the Buffered Profile
+       */
       pTemp = (pProfile + 1);    //plus one to skip over the magic number
       for (BufferSize = 0; ; BufferSize++) {
          if ( !*pTemp++ && !*pTemp ) {
@@ -45,10 +45,10 @@ int WFCAPI miSetProfilePointer( PCHAR pProfile )
             break;
          }
       }
-      
+
       gIniProfile = (PCHAR) malloc(BufferSize);
       memcpy(gIniProfile, (pProfile + 1), BufferSize);
-   
+
    } else {
       gIniProfile = NULL;
    }
@@ -77,12 +77,12 @@ int WFCAPI miReleaseProfile()
  * miSetSectionPointer
  *
  *    set the global buffered section pointer for BINI routines to the
- *    location passed in by the caller. The caller will free the memory 
+ *    location passed in by the caller. The caller will free the memory
  *    after used.
  *
  *******************************************************************************/
 
-int WFCAPI miSetSectionPointer( PCHAR pSection ) 
+int WFCAPI miSetSectionPointer( PCHAR pSection )
 {
    gIniSection = pSection;
 
@@ -98,7 +98,7 @@ int WFCAPI miSetSectionPointer( PCHAR pSection )
  *
  *    Returns the size of the ReturnBuffer Parameter
  *
- *******************************************************************************/ 
+ *******************************************************************************/
 
 int WFCAPI miGetPrivateProfileString(
     PCHAR     lpszSection,        // [in]     name of section to query
@@ -110,7 +110,7 @@ int WFCAPI miGetPrivateProfileString(
 {
    int      rc = strlen(lpszDefault);
    int      offset, len;
-   
+
    char     CurrSectionName[MAX_INI_LINE];
    char     CurrEntryName[MAX_INI_LINE];
 
@@ -119,41 +119,46 @@ int WFCAPI miGetPrivateProfileString(
    BOOL     EndEntryLoop = FALSE;
    PCHAR    pTempSec, pTempEntry, pRight, pEqual;
 
+   TRACE((TC_LIB, TT_API1, "miGetPrivateProfileString: S '%s' E '%s' D '%s'",
+	   lpszSection ? lpszSection : "",
+	   lpszEntry ? lpszEntry : "",
+	   lpszDefault ? lpszDefault : ""));
+
    //initialize the return buffer to default
    memcpy(lpszReturnBuffer, lpszDefault, rc);
    lpszReturnBuffer[rc] = 0;
 
    if (gIniProfile == NULL) {
-      
-      rc = bGetPrivateProfileString(gIniSection, lpszEntry, lpszDefault, 
+
+      rc = bGetPrivateProfileString(gIniSection, lpszEntry, lpszDefault,
                                     lpszReturnBuffer, cbSize);
    } else {
 
       pTempSec = gIniProfile;
-      while (!EndProfile && !SectionFound) {   
+      while (!EndProfile && !SectionFound) {
 
-         //search for the section 
+         //search for the section
          strcpy(CurrSectionName, (pTempSec + 1));  //plus 1 to skip the [
          pRight = strchr(CurrSectionName, ']');
          *pRight++ = 0;
-         
+
          offset = atoi(pRight);
-         
+
          if(!stricmp( CurrSectionName, lpszSection)) {
 
             SectionFound = TRUE;
             pTempEntry = pTempSec + strlen(pTempSec) + 1;
 
-            while (!EndEntryLoop) { 
-            
+            while (!EndEntryLoop) {
+
                //search for entry
                len = strlen(pTempEntry);
                strcpy(CurrEntryName, pTempEntry);
                pEqual = strchr(CurrEntryName, '=');
                *pEqual++ = 0;
-               
+
                if (!stricmp( CurrEntryName, lpszEntry)) {
-                  
+
                   EndEntryLoop = TRUE;       //exit since we got entry we need
                   rc = strlen(pEqual);
                   if (rc <= cbSize) {
@@ -161,9 +166,9 @@ int WFCAPI miGetPrivateProfileString(
                      lpszReturnBuffer[rc] = 0;
                   }
                }
-               
+
                pTempEntry += (len + 1);
-               
+
                if(!*pTempEntry) {
                   EndEntryLoop = TRUE;          //end of profile altogether
                } else {
@@ -182,7 +187,10 @@ int WFCAPI miGetPrivateProfileString(
       }
    }
 
-   return(rc);                                   
+   TRACE((TC_LIB, TT_API1, "miGetPrivateProfileString: rc=%d '%s'",
+	   rc, lpszReturnBuffer));
+
+   return(rc);
 }
 
 
@@ -190,7 +198,7 @@ int WFCAPI miGetPrivateProfileString(
  *
  * miGetPrivateProfileInt
  *
- *******************************************************************************/ 
+ *******************************************************************************/
 
 int WFCAPI miGetPrivateProfileInt(
     PCHAR       lpszSection,        // [in]     name of section to query
@@ -202,22 +210,22 @@ int WFCAPI miGetPrivateProfileInt(
    PCHAR buffer;
 
    buffer = (PCHAR) malloc(MAX_INI_LINE);
-   
+
    if (miGetPrivateProfileString(lpszSection, lpszEntry,
                                  "", buffer, MAX_INI_LINE)) {
       //key found, convert the string into an integer
         iReturn = _htoi(buffer);
    }
-   
+
    free(buffer);
-   return(iReturn);                            
+   return(iReturn);
 }
 
 /********************************************************************************
  *
  * miGetPrivateProfileLong
  *
- *******************************************************************************/ 
+ *******************************************************************************/
 
 long WFCAPI miGetPrivateProfileLong(
      PCHAR       lpszSection,        // [in]     name of section to query
@@ -227,7 +235,7 @@ long WFCAPI miGetPrivateProfileLong(
 {
    ULONG lReturn = lDefault;
    PCHAR buffer;
-   
+
    buffer = (PCHAR) malloc(MAX_INI_LINE);
 
    if (miGetPrivateProfileString(lpszSection, lpszEntry,
@@ -244,7 +252,7 @@ long WFCAPI miGetPrivateProfileLong(
  *
  * miGetPrivateProfileBool
  *
- *******************************************************************************/ 
+ *******************************************************************************/
 
 BOOL WFCAPI miGetPrivateProfileBool(
      PCHAR       lpszSection,        // [in]     name of section to query

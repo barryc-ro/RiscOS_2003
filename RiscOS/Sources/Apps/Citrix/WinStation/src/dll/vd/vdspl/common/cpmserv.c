@@ -667,7 +667,7 @@ SplPollAllPorts( )
 
     if( ActivePrinters == 0 ) {
 
-#if DBG
+#ifdef DEBUG
 	if( RequestPrintData == TRUE ) {
             TRACE((TC_CPM, TT_API4, "PrinterPoll: No Active Printers Now"));
         }

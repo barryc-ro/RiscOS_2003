@@ -126,9 +126,11 @@ int GetModeNumber(void)
     /* If new style mode must use new style sprites (3.5) */
     if ((unsigned)mode > 255)
     {
+	os_mode_selector *m;
+	
 	MEMCHECK_PUSH();
 	
-        os_mode_selector *m = (os_mode_selector *)(long)mode;
+        m = (os_mode_selector *)(long)mode;
 	mode = build_mode_number(m->log2_bpp);
 
 	MEMCHECK_POP();

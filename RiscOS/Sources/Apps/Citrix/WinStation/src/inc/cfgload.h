@@ -11,6 +11,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.5   27 Apr 1998 21:43:46   terryt
+*  unload reducer
+*  
 *     Rev 1.4   15 Apr 1997 18:44:46   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -33,8 +36,8 @@
  *  Library routines
  */
 int   LoadPd( PCHAR, PCHAR, PCHAR, PDLLLINK, PDLLLINK, PPDOPEN );
-int   LoadWd( PCHAR, PCHAR, PCHAR, PDLLLINK, PDLLLINK, PPDOPEN, PUSHORT );
+int   LoadWd( PCHAR, PCHAR, PCHAR, PDLLLINK, PDLLLINK, PDLLLINK, PPDOPEN, PUSHORT );
 int   LoadVd( PCHAR, PCHAR, PCHAR, PDLLLINK, PDLLLINK *, USHORT, PUSHORT );
-void  UnloadDrivers( PDLLLINK, PDLLLINK, PDLLLINK *, USHORT );
+void  UnloadDrivers( PDLLLINK, PDLLLINK, PDLLLINK, PDLLLINK *, USHORT );
 
 #endif //__CFGLOAD_H__

@@ -11,6 +11,16 @@
 *
 *  $Author$ Butch Davis
 *
+*  $Log$
+*  
+*     Rev 1.6   22 Apr 1998 20:18:30   x86fre
+*  ssync with picasso
+*  
+*     Rev 1.10   Apr 19 1998 18:15:12   brucef
+*  I really should have documented what I did...
+*  
+*     Rev 1.9   Apr 17 1998 17:08:34   JASONL
+*  new license enabler bits
 *  
 *     Rev 1.8   Feb 11 1998 15:36:04   JASONL
 *  unlimited license support
@@ -548,7 +558,7 @@ BOOLEAN WINAPI RegGetVersionEx( PVOID /* LPOSVERSIONINFO */ );
 #define LICENSE_ENABLER_NET_SHARE        0x00000001
 #define LICENSE_ENABLER_RAS_SERVER       0x00000002
 #define LICENSE_ENABLER_SFM              0x00000004
-// #define LICENSE_ENABLER_not_used      0x00000008   // see explanation above
+#define LICENSE_ENABLER_MODEM            0x00000008   // see explanation above
 #define LICENSE_ENABLER_DOMAIN           0x00000010
 #define LICENSE_ENABLER_CLIENTLICENSE    0x00000020
 #define LICENSE_ENABLER_NO_LAN_ICA       0x00000040
@@ -562,6 +572,19 @@ BOOLEAN WINAPI RegGetVersionEx( PVOID /* LPOSVERSIONINFO */ );
 #define LICENSE_ENABLER_NOCLILICENSE     0x00004000   // turn off CLIENTLICENSE
 #define LICENSE_ENABLER_DOM_ENCRYPTION   0x00008000   // North American SecureICA OptionPack
 #define LICENSE_ENABLER_INTL_ENCRYPTION  0x00010000   // Global SecureICA Option Pack
+#define LICENSE_ENABLER_NON_BUMPABLE     0x00020000   // For Base only
+#define LICENSE_ENABLER_EVALUATION       0x00040000
+#define LICENSE_ENABLER_IGNORE_OEM_LOCK  0x00080000
+#define LICENSE_ENABLER_LOCAL_LIC_ONLY   0x00100000   // Don't get lic's from pool
+#define LICENSE_ENABLER_RESERVED_21      0x00200000   // reserved see skudata.c - WF17
+#define LICENSE_ENABLER_RESERVED_22      0x00400000   // reserved see skudata.c
+#define LICENSE_ENABLER_RESERVED_23      0x00800000   // reserved see skudata.c
+#define LICENSE_ENABLER_RESERVED_24      0x01000000   // reserved see skudata.c
+#define LICENSE_ENABLER_RESERVED_31      0x02000000   // reserved see skudata.c - MetaFrame
+#define LICENSE_ENABLER_RESERVED_32      0x04000000   // reserved see skudata.c
+#define LICENSE_ENABLER_RESERVED_33      0x08000000   // reserved see skudata.c
+#define LICENSE_ENABLER_RESERVED_34      0x10000000   // reserved see skudata.c
+#define	LICENSE_ENABLER_UXIS			 0x20000000
 
 /*------------------------------------------------*/
 
