@@ -38,7 +38,7 @@ COMPONENT = MFSRA
 TARGET    = ${COMPONENT}
 OBJS      = avi.o cveneer.o error.o fileio.o header.o hub.o image.o main.o \
             memory.o part.o ra.o recognise.o replay.o sprite.o strncasecm.o \
-            unit.o var.o veneer.o wss.o
+            unit.o var.o wss.o
 LIBS      = ${WSSLIB}
 DIRS      = local_dirs
 RESFSDIR  = ${RESDIR}.^.Apps.!MovieFS
