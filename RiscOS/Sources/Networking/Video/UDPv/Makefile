@@ -1,29 +1,165 @@
-#Makefile for UDP stream control module
+# Makefile for UDPv
+#
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name         Description
+# ----       ----         -----------
+# 13-May-99  SNB          Created
+#
 
-CC= cc
-OBJASM= objasm
+#
+# Paths
+#
+EXP_HDR = <cexport$dir>
 
-CFLAGS=  -IC:,TCPIPLibs: -throwback -DINET -DCOMPAT_INET4 -Wp -Otime -c -zM -list 
-CLIB=    c:o.stubs
+#
+# Generic options:
+#
+AWK     = awk
+MKDIR   = cdir
+AS      = objasm
+CC      = cc
+CMHG    = cmhg
+CP      = copy
+LD      = link
+RM      = remove
+MODSQZ  = modsqz
+WIPE    = -wipe
+CD	= dir
+TOUCH   = create
 
-SRCS=   c.module c.bufs c.mbuf
+COMPONENT = UDPv
+CMHGNAME  = UdpVHdr
 
-OBJS=   o.module o.bufs o.mbuf o.irqs TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm
+EXPORTS = ${EXP_HDR}.h.${COMPONENT}
 
-udpv:    ${OBJS} Makefile udpvHdr
-            cmhg udpvHdr o.udpvhdr
-            link -map -o UDPv -rmf o.udpvhdr ${OBJS} ${CLIB} { > linkmap }
-            settype linkmap text
-            access UDPv wr/r
+DEPENDS = -depend !Depend ${THROWBACK}
 
-module.o:   c.module 
-            cc ${CFLAGS} c.module
+#
+# Internet version compatibility
+#
+COMPAT = -DCOMPAT_INET4 -DINET
 
-bufs.o:     c.bufs
-             ${CC} ${CFLAGS} c.bufs
+DEFINES = ${COMPAT} ${OPTIONS}
 
-mbuf.o:     c.mbuf
-             ${CC} ${CFLAGS} c.mbuf
+AFLAGS = ${DEPENDS} ${THROWBACK} -Stamp -quit
+CFLAGS  = -ffca -c -zM -zps1 -wp -Otime ${DEFINES} ${INCLUDES} ${DEPENDS}
+CMHGFLAGS = -p ${DEPENDS}
 
-o.irqs:     s.irqs
-            objasm -from s.irqs -to o.irqs -stamp -quit
+CPFLAGS = ~cfr~v
+WFLAGS  = ~c~v
+
+DIRS = o._dirs
+
+#
+# Libraries
+#
+CLIB      = CLIB:o.stubs
+RLIB      = RISCOSLIB:o.risc_oslib
+RSTUBS    = RISCOSLIB:o.rstubs
+ROMSTUBS  = RISCOSLIB:o.romstubs
+ROMCSTUBS = RISCOSLIB:o.romcstubs
+ABSSYM    = RISC_OSLib:o.AbsSym
+RPCLIB    = TCPIPLibs:rpc.o.rpc_datazm TCPIPLibs:rpc.o.rpclibzm
+INETLIB   = TCPIPLibs:o.inetlibzm
+SOCKLIB   = TCPIPLibs:o.socklibzm
+UNIXLIB   = TCPIPLibs:o.unixlibzm
+
+
+#
+# Include files
+#
+INCLUDES = -ITCPIPLibs:,C:
+
+#
+# Program specific options:
+#
+TARGET    = rm.${COMPONENT}
+CMHGOBJ   = o.$(CMHGNAME)
+ROMTARGET = aof.${COMPONENT}
+
+OBJS      =\
+ o.bufs\
+ o.module\
+ o.mbuf\
+ o.irqs\
+ $(CMHGOBJ)
+
+#
+# Rule patterns
+#
+.SUFFIXES:  .o .s .c .h .cmhg
+.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.s.o:;      ${AS} ${AFLAGS} $< $@
+
+
+#
+# build a UDPv module
+#
+all: ${TARGET}
+        @echo ${COMPONENT}: all complete
+
+#
+# RISC OS ROM build rules:
+#
+rom: ${ROMTARGET}
+        @echo ${COMPONENT}: rom module built
+
+export: ${EXPORTS}
+        @echo ${COMPONENT}: export complete
+
+install_rom: ${ROMTARGET}
+        ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom module installed
+
+clean:
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${RM} h.${CMHGNAME}
+        @echo ${COMPONENT}: cleaned
+
+#
+# Target 
+#
+${TARGET}: ${XTARGET} ${OBJS} ${INETLIB} ${SOCKLIB} ${CLIB} ${DIRS}
+	${MKDIR} rm
+        ${LD} -o $@ -rmf ${OBJS} ${INETLIB} ${SOCKLIB} ${CLIB}
+        $(MODSQZ) $@
+        Access $@ RW/R
+
+#
+# ROM Target 
+#
+${ROMTARGET}: ${OBJS} ${INETLIB} ${SOCKLIB} ${DIRS}
+	${MKDIR} aof
+        ${LD} -o $@ -aof ${OBJS} ${INETLIB} ${SOCKLIB} ${ROMCSTUBS}
+
+#
+# Final link for the ROM Image (using given base address)
+#
+rom_link:
+        ${MKDIR} linked
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
+
+
+h.${CMHGNAME}: ${CMHGOBJ}
+	@|
+
+${EXPORTS}: h.${CMHGNAME} ${DIRS}
+	${AWK} -- "/.define UDPV\_00/,/endif/" h.${CMHGNAME} { > $@ }
+	SetType $@ Text
+
+
+o.module: VersionNum
+
+${DIRS}:
+	${MKDIR} o
+	${TOUCH} $@
+
+# Dynamic dependencies:
