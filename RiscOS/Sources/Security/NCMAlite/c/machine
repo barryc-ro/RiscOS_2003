@@ -34,6 +34,8 @@ unsigned int bRedialRequested = 0; /* No redial has been requested */
 
 int bootblock_num_bytes = 0;  /* This variable is used to store the number of bytes held in the cache. */
 char *bootblock_copy;  /* This holds a copy of the memory area. */
+static NCMA_STATE after_pin(void); /* Declare this routine */
+
 #endif /* SC_SWAPPING */
 
 
@@ -582,13 +584,17 @@ NCMA_STATE machine(NCMA_TRANS trans)
                 pointless_button_clicked = 0;
 
 #endif
+
+#ifdef SC_SWAPPING
+                DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: setting flag bCardVerified to TRUE - the card has been verified.\n");
+                bCardVerified = 1; /* Card is known to be valid */
+                ncma_dbox_close(); /* Closing the 'enter pin' or 'insert smartcard' dialogues */
+                return(after_pin());
+#else
 		ncma_dbox_close();
 		ncma_url_open(URL_PATH(connect.html));
-#ifdef SC_SWAPPING
-		DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: setting flag bCardVerified to TRUE - the card has been verified.\n");
-                 bCardVerified = 1; /* Card is known to be valid */
-#endif /* SC_SWAPPING */
 		return(State_NCMAConnect);
+#endif /* SC_SWAPPING */
 
 
 #ifdef SC_SWAPPING
@@ -844,7 +850,23 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
     	 switch(trans) {
 
-	     case Trans_CardOK:
+#ifdef SC_SWAPPING
+             /* This transition must cope with the case where the card is
+                 removed whilst waiting for the pin to be verified when
+                 browsing. */
+             case Trans_CardRemoved:
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_CardRemoved recieved in State_NCMAPin\n");
+                  ncma_hourglass_off(); /* Always switch off the hourglass */
+                  if (bRedialRequested) /* Since it is a redial, it must be browsing */
+                  {
+                    /* Open the 'please insert smartcard' screen. */
+                    ncma_dbox_open(URL_PATH(splash.html));
+                    return(State_NCMANoCard);
+                  }
+                  break;
+#endif /* SC_SWAPPING */
+
+             case Trans_CardOK:
 	     	  return(State_NCMAPin);
 	     	  break;
 
@@ -945,36 +967,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                 ncma_dbox_close();
                 ncma_hourglass_off(); /* Pin checking finished */
 #ifdef SC_SWAPPING
-                if (!bNoScreenChanges) /* Screens can change */
-                {
-                  ncma_url_open(URL_PATH(connect.html));
-                }
-                else /* Screens cannot change */
-                {
-                  if (bCardVerified)
-                  {
-                    NCMA_STATE new_state;
-                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Screens cannot change, but card is now verified\n");
-                    if (bRedialRequested)
-                    {
-                      new_state = URLConnect_in_NCMA_Connect(); // Rebuild all caches.
-                    }
-                    if (new_state == State_NCMAWrongISPCard)
-                    {
-                      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Setting state to %s\n", state_string(new_state));
-                      return (new_state);
-                    }
-                    else
-                    {
-                      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Setting state to State_NCMADiallingISP\n");
-                      return(State_NCMADiallingISP);
-                    }
-                  }
-                  else
-                  {
-                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Screens cannot change, and card is unverified\n");
-                  }
-                }
+                return(after_pin());
 #else
                 ncma_url_open(URL_PATH(connect.html));
 #endif /* SC_SWAPPING */
@@ -1034,6 +1027,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
              case Trans_NCMAEnterEmailSelectUserOffline:
              {
                   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling the email client user selection (connect mode).\n");
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: uiemail_client_state = email_state_offline\n");
                   uiemail_client_state = email_state_offline;
                   ncma_url_open("ncmail:/?page=UserSel&button=Start&mode=email");
                   return (State_NCMAEmailSelectUser);
@@ -1042,6 +1036,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
              case Trans_NCMAEnterEmailSelectUserOnline:
              {
                   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling the email client user selection (email mode).\n");
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: uiemail_client_state = email_state_online\n");
                   uiemail_client_state = email_state_online;
                   ncma_url_open("ncmail:/?page=UserSel&button=Start&mode=connect");
                   return (State_NCMAEmailSelectUser);
@@ -1105,7 +1100,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 #ifdef SC_SWAPPING
                   if (bRedialRequested)
                   {
-                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: A redial was requested, so resetting bRedialRequested\n");
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: A redial has been requested, so resetting bRedialRequested to 0\n");
                     bRedialRequested = 0;
                   }
                   else
@@ -1207,19 +1202,28 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  return(State_NCMABooted);
 
 	     case Trans_HUP: /* we've lost our connection */
-
 #ifdef SILENT_HUP
+#ifdef EMAIL_CLIENT
+                  /* If we get a HUP when in the email client, return to State_NCMAEmailSelectUser. */
+                  if (uiemail_client_state != email_state_none) /* In the email client */
+                  {
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "Hanging up from the email client. Going back to State_NCMAEmailSelectUser\n");
+                    DBUG_PRINTF(DBUG_LVL_DIAG, "Email client status is %s\n", email_status_string(uiemail_client_state));
+                    return(State_NCMAEmailSelectUser);
+                  }
+#endif /* EMAIL_CLIENT */
        		  /* no special action - rely on browser to bring the line back up
        		     note that this might be thru a ref. to NCFresco$Home, which is
        		     a macro which evaluates to ncma:userhome, which fires Trans_NCMASurf,
        		     which calls the browser (first trans above) which brings the line
        		     up. :) */
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "HUP recieved. Doing nothing as email_client_state is unset.\n");
        		  return(State_NCMABooted);
 #else
 		  /* alternatively, bung the 'connect to isp' screen up and do all that pallaver */
        		  ncma_url_open(URL_PATH(connect.html));
 	     	  return(State_NCMAConnect);
-#endif
+#endif /* SILENT_HUP */
 
 	     case Trans_URLConnect:
 	     	  ncma_dbox_close();
@@ -1574,6 +1578,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                {
                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMAEmailSelectUserAck (email client state is offline)\n");
                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Moving to State_NCMAConnect.\n");
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: uiemail_client_state = email_state_none\n");
                  uiemail_client_state = email_state_none;
                  ncma_url_open(URL_PATH(connect.html));
                  return(State_NCMAConnect);
@@ -1583,6 +1588,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                {
                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMAEmailSelectUserAck (email client state is online)\n");
                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Moving to State_NCMAConnect.\n");
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: uiemail_client_state = email_state_none\n");
                  uiemail_client_state = email_state_none;
                  ncma_url_open(URL_PATH(connect.html));
                  return(State_NCMAConnect);
@@ -1592,6 +1598,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                {
                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Blarghh!!!! Unrecognised email client state!\n");
                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Moving to State_NCMAConnect.\n");
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: uiemail_client_state = email_state_none\n");
                  uiemail_client_state = email_state_none;
                  ncma_url_open(URL_PATH(connect.html));
                  return(State_NCMAConnect);
@@ -1732,7 +1739,7 @@ NCMA_STATE start_redial(void)
   bRedialRequested = 1;
   if (!bCardVerified) /* Card is unverified */
   {
-    DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): Card is unverified; setting bNoScreenChanges\n");
+    DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): Card is unverified; resetting smartcard cache and setting bNoScreenChanges\n");
     reset_cache();
     bNoScreenChanges = 1;
     /* Check the current status of the card (eg. invalid, inserted, bad) and go to the appropriate screen. */
@@ -1784,7 +1791,16 @@ NCMA_STATE start_redial(void)
     /* Card is verified, send a NCDialUI_Start */
     DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): DiallerUI_Start has been called.\n");
     DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): Card is verified; sending a NCDialUI_Start and returning State_NCMADiallingISP\n");
-    ncma_dial();
+    ncma_hourglass_on();
+    if(ncma_dial()<0)
+    {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: IAP dial initiation failed\n");
+      ncma_dbox_close();
+      ncma_url_open(URL_PATH(connect.html));
+      return(State_NCMAConnect);
+    }
+    ncma_hourglass_off();
+
 #ifdef EMAIL_CLIENT
     DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): Email client status is %s\n", email_status_string(uiemail_client_state));
 #endif /* EMAIL_CLIENT */
@@ -1792,4 +1808,51 @@ NCMA_STATE start_redial(void)
   return (State_NCMADiallingISP);
 }
 
+
+
+
+#ifdef SC_SWAPPING
+/* This routine does some stuff which needs to be done in several cases (in
+    apres_pin and after a default pin entry) to do with smartcard swapping
+   things. Moved into a routine to prevent having two copies of idetical
+   code. */
+
+static NCMA_STATE after_pin(void)
+{
+  if (!bNoScreenChanges) /* Screens can change */
+  {
+    ncma_url_open(URL_PATH(connect.html));
+  }
+  else /* Screens cannot change, obviously already booted. */
+  {
+    if (bCardVerified)
+    {
+      NCMA_STATE new_state;
+      DBUG_PRINTF(DBUG_LVL_DIAG, "after_pin(): Screens cannot change, but card is now verified\n");
+      if (bRedialRequested)
+      {
+        new_state = URLConnect_in_NCMA_Connect(); // Rebuild all caches.
+      }
+      if (new_state == State_NCMAWrongISPCard)
+      {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "after_pin(): Setting state to %s\n", state_string(new_state));
+        return (new_state);
+      }
+      else
+      {
+        DBUG_PRINTF(DBUG_LVL_DIAG, "after_pin(): Setting state to State_NCMADiallingISP\n");
+        return(State_NCMADiallingISP);
+      }
+    }
+    else
+    {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "after_pin(): Screens cannot change, and card is unverified\n");
+    }
+  }
+
+  DBUG_PRINTF(DBUG_LVL_ERROR, "after_pin(): Ooops, this should never be reached. Going back to State_Connect.\n");
+  /* This default return should never be used. */
+  return(State_NCMAConnect);
+}
+#endif /* SC_SWAPPING */
 
