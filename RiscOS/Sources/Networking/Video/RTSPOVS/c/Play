@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 #include <swis.h>
 
@@ -44,7 +45,9 @@
 
 /* Local functions */
 
-static bool play_slowmofwd (const char * scale);
+static bool play_slowmofwd    (const char * scale);
+static bool play_filter_range (session * s, const char * range, int * start_pos, int * end_pos);
+static bool play_is_forwards  (const char * scale);
 
 /**************************************************************/
 /* play_slowmofwd()                                           */
@@ -380,6 +383,7 @@ _kernel_oserror * play_replay(session * s)
   bool              slowmofwd;
   int               port;
   char            * range;
+  char              new_range[64]; /* Strictly even 64 is overkill - worst case is two 'full length' ints with 'npt=' and '-' in there */
   char            * scale;
   session         * new_s;
 
@@ -430,16 +434,63 @@ _kernel_oserror * play_replay(session * s)
 
   if (s->range_record != NULL)
   {
-    /* Reuse client's original range specifier */
+    int start, end;
 
-    range = s->range_record;
+    /* Reuse client's original range specifier. Must be careful to tidy */
+    /* it up; "now" specifiers, for example, won't have any meaning at  */
+    /* the loop point.                                                  */
+
+    if (play_filter_range(new_s, s->range_record, &start, &end) == false) start = end = -1;
+
+    if (play_is_forwards(scale))
+    {
+      if (start >= 0 && end >= 0)
+      {
+        range = s->range_record;
+      }
+      else if (end >= 0)
+      {
+        sprintf(new_range, "beginning-%d", end);
+        range = new_range;
+      }
+      else if (start >= 0) /* Do this just in case end point was 'now'... */
+      {
+        sprintf(new_range, "%d-end", start);
+        range = new_range;
+      }
+      else
+      {
+        range = Headers_HeaderValue_Range_Fwd;
+      }
+    }
+    else
+    {
+      if (start >= 0 && end >= 0)
+      {
+        range = s->range_record;
+      }
+      else if (end >= 0)
+      {
+        sprintf(new_range, "end-%d", end);
+        range = new_range;
+      }
+      else if (start >= 0) /* Do this just in case end point was 'now'... */
+      {
+        sprintf(new_range, "%d-beginning", start);
+        range = new_range;
+      }
+      else
+      {
+        range = Headers_HeaderValue_Range_Rwd;
+      }
+    }
   }
   else
   {
     /* Range will depend on direction of play */
 
-    if (*scale == '-') range = Headers_HeaderValue_Range_Rwd;
-    else               range = Headers_HeaderValue_Range_Fwd;
+    if (play_is_forwards(scale)) range = Headers_HeaderValue_Range_Fwd;
+    else                         range = Headers_HeaderValue_Range_Rwd;
   }
 
   /* Slow motion forwards play? */
@@ -567,4 +618,256 @@ _kernel_oserror * play_replay(session * s)
   dprintf(("", "play_replay: Successful\n"));
 
   return NULL;
+}
+
+/**************************************************************/
+/* play_filter_range()                                        */
+/*                                                            */
+/* Filter a Range header value - can we deal with it? The     */
+/* function also parses start and end values, and returns if  */
+/* required the values in seconds. This includes parsing      */
+/* key words like 'now' or 'end' and converting to times or   */
+/* an indication of no direct specifier.                      */
+/*                                                            */
+/* Parameters: Pointer to a relevant session structure.       */
+/*                                                            */
+/*             Pointer to the Range header value (may be NULL */
+/*             in which case true is returned);               */
+/*                                                            */
+/*             Pointer to an int to take starting position,   */
+/*             will be -1 if none or the start/end is         */
+/*             specified, may be NULL if not interested;      */
+/*                                                            */
+/*             Pointer to an int to take ending position,     */
+/*             will be -1 if none or the end/start is         */
+/*             specified, may be NULL if not interested.      */
+/*                                                            */
+/* Returns:    true if the item is understood, else false.    */
+/*             The integers, if given, may be updated even    */
+/*             when 'false' is returned.                      */
+/**************************************************************/
+
+static bool play_filter_range(session * s, const char * range, int * start_pos, int * end_pos)
+{
+  bool now      = false;
+  bool start    = false;
+  int  d_s, d_e;
+
+  /* Ensure we always have start and end positions to write to */
+
+  if (start_pos == NULL) start_pos = &d_s;
+  if (end_pos   == NULL) end_pos   = &d_e;
+
+  /* We expect "npt=..." or just a time (no '"' in the string). We support */
+  /* keywords 'now', 'end', 'beginning' and 'current' - well, subject to   */
+  /* whatever is defined in Headers.h anyway.                              */
+
+  *start_pos = -1;
+  *end_pos   = -1;
+
+  if (range == NULL) return true;
+
+  /* Skip white space */
+
+  while (*range != '\0' && *range <= ' ') range++;
+  if (*range == '\0') return true;
+
+  if (strchr(range, '=') != NULL)
+  {
+    /* Ensure we have "npt" */
+
+    if (!Strncmp_ci(range, Headers_HeaderValue_Range_NPT, sizeof(Headers_HeaderValue_Range_NPT) - 1))
+    {
+      range += sizeof(Headers_HeaderValue_Range_NPT) - 1;
+    }
+    else return false;
+
+    /* Skip white space, ensure we have "=", skip it and white space */
+
+    while (*range != '\0' && *range <= ' ') range++;
+    if (*range == '\0') return true;
+    else if (*range != '=') return false;
+    range++;
+    while (*range != '\0' && *range <= ' ') range++;
+    if (*range == '\0') return true;
+  }
+
+  /* Do we recognise any starting point specifier? */
+
+  if (!Strncmp_ci(range, Headers_HeaderValue_Range_Now1, sizeof(Headers_HeaderValue_Range_Now1) - 1))
+  {
+    now = true;
+    range += sizeof(Headers_HeaderValue_Range_Now1) - 1;
+  }
+  else if (!Strncmp_ci(range, Headers_HeaderValue_Range_Now2, sizeof(Headers_HeaderValue_Range_Now2) - 1))
+  {
+    now = true;
+    range += sizeof(Headers_HeaderValue_Range_Now2) - 1;
+  }
+  else if (!Strncmp_ci(range, Headers_HeaderValue_Range_Start1, sizeof(Headers_HeaderValue_Range_Start1) - 1))
+  {
+    *start_pos = -1;
+    range += sizeof(Headers_HeaderValue_Range_Start1) - 1;
+  }
+  else if (!Strncmp_ci(range, Headers_HeaderValue_Range_End1, sizeof(Headers_HeaderValue_Range_End1) - 1))
+  {
+    *start_pos = -1;
+    range += sizeof(Headers_HeaderValue_Range_End1) - 1;
+  }
+
+  /* If there's a number here, it's allowed to be a percentage or zero, and */
+  /* nothing else.                                                          */
+
+  else if (isdigit(*range))
+  {
+    unsigned int num;
+
+    num = atoi(range);
+    while (isdigit(*(++range)));
+
+    *start_pos = (int) num;
+  }
+
+  /* If there's something before the '-' and we get as far as this check, */
+  /* we can't handle it                                                   */
+
+  else if (*range != '-') return false;
+
+  /* Otherwise work out time based on 'now', 'beginning' etc. */
+
+  if (now)
+  {
+    if (s->started == 0) *start_pos = -1;
+    else
+    {
+      _kernel_oserror * e;
+      int               opts[4];
+
+      opts[0] = vc_tags_npt;
+      opts[1] = 1;
+      opts[2] = 0;
+      opts[3] = vc_tags__end;
+
+      e = _swix(VideoControl_ProtocolOptions,
+                _INR(0,2),
+
+                0,
+                s->vcid,
+                opts);
+
+      /* If there's an error, just use zero */
+
+      if (e == NULL)
+      {
+        *start_pos = (int) opts[2];
+      }
+      else *start_pos = 0;
+    }
+  }
+
+  /* Skip white space, ensure we have "-", skip it and white space */
+
+  while (*range != '\0' && *range <= ' ') range++;
+  if (*range == '\0') return true;
+  else if (*range != '-') return false;
+  range++;
+  while (*range != '\0' && *range <= ' ') range++;
+  if (*range == '\0') return true;
+
+  /* Do we recognise any ending point specifier? */
+
+  start = now = false;
+
+  if (!Strncmp_ci(range, Headers_HeaderValue_Range_Now1, sizeof(Headers_HeaderValue_Range_Now1) - 1))
+  {
+    now = true;
+    range += sizeof(Headers_HeaderValue_Range_Now1) - 1;
+  }
+  else if (!Strncmp_ci(range, Headers_HeaderValue_Range_Now2, sizeof(Headers_HeaderValue_Range_Now2) - 1))
+  {
+    now = true;
+    range += sizeof(Headers_HeaderValue_Range_Now2) - 1;
+  }
+  else if (!Strncmp_ci(range, Headers_HeaderValue_Range_Start1, sizeof(Headers_HeaderValue_Range_Start1) - 1))
+  {
+    *end_pos = -1;
+    range += sizeof(Headers_HeaderValue_Range_Start1) - 1;
+  }
+  else if (!Strncmp_ci(range, Headers_HeaderValue_Range_End1, sizeof(Headers_HeaderValue_Range_End1) - 1))
+  {
+    *end_pos = -1;
+    range += sizeof(Headers_HeaderValue_Range_End1) - 1;
+  }
+
+  /* Must be a number, or nothing */
+
+  else if (isdigit(*range))
+  {
+    unsigned int num;
+
+    num = atoi(range);
+    while (isdigit(*(++range)));
+
+    *end_pos = (int) num;
+  }
+
+  /* If there's anything after the specifier, there's something wrong... */
+
+  while (*range != '\0' && *range <= ' ') range++;
+  if (*range != '\0') return false;
+
+  /* Otherwise work out time, as before */
+
+  if (now)
+  {
+    if (s->started == 0)
+    {
+      *end_pos = -1;
+    }
+    else
+    {
+      _kernel_oserror * e;
+      int               opts[4];
+
+      opts[0] = vc_tags_npt;
+      opts[1] = 1;
+      opts[2] = 0;
+      opts[3] = vc_tags__end;
+
+      e = _swix(VideoControl_ProtocolOptions,
+                _INR(0,2),
+
+                0,
+                s->vcid,
+                opts);
+
+      if (e == NULL)
+      {
+        *end_pos = (int) opts[2];
+      }
+      else *end_pos = 0;
+    }
+  }
+
+  return true;
+}
+
+/**************************************************************/
+/* play_is_forwards()                                         */
+/*                                                            */
+/* Given a scale / speed header's value, return true if the   */
+/* header indicates a forwards play direction, else false.    */
+/*                                                            */
+/* Parameters: Pointer to the scale/speed header value.       */
+/*                                                            */
+/* Returns:    'true' if the given value indicates forwards   */
+/*             direction play, else 'false'.                  */
+/**************************************************************/
+
+static bool play_is_forwards(const char * scale)
+{
+  if (scale == NULL) return true;
+  while (*scale != '\0' && *scale <= ' ') scale++;
+  if (*scale != '-') return true;
+  return false;
 }
