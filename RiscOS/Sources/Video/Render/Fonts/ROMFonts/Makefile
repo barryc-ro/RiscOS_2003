@@ -52,7 +52,7 @@ resources:
 	${MKDIR} <Resource$Dir>.Fonts
         @Set Alias$MFD ${MKDIR} <Resource$Dir>.Fonts.%0
 	@Set Alias$CFF ${CP} Fonts.%0 <Resource$Dir>.Fonts.%0 ${CPFLAGS}
-	Obey Config.${SYSTEM}
+	Obey Config.${USERIF}
         @echo ${COMPONENT}: resource files copied
 
 o.ROMFonts: ${SOURCE}
