@@ -37,6 +37,15 @@ TARGET    = rm.Colours
 EXPORTS   = ${EXP_HDR}.ColourTran
 
 #
+# Binary build environment
+#
+# Enhance the export rule to include the Tables and MkTables directories
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_Dir Tables
+  BBE_Export_Dir MkTables
+
+#
 # Generic rules:
 #
 rom: ${TARGET}
