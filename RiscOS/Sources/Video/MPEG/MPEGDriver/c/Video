@@ -59,6 +59,7 @@ Date		Who	Change
 			internal WSS states deactivated on CloseStream
 11/05/2000	BJGA	Now checks video stream handles passed in; byte counters are now 64 bits wide;
 			implemented MPEGVideo_Stats; extra initialisation added to static_VideoStart()
+18/05/2000	BJGA	Issues UpCall_MPEG &1003 when the video speed indicator changes
 
 ***************************************************************************/
 
@@ -70,10 +71,13 @@ Date		Who	Change
 #include "kernel.h"
 #include "swis.h"
 
+#include "Global/RISCOS.h"
 #include "Global/SWIs.h"
+#include "Global/UpCall.h"
 #include "DebugLib/DebugLib.h"
 #include "MPEG/MPEGCtrl.h"
 #include "MPEG/MPEGVideo.h"
+#include "MPEG/UpCallMPEG.h"
 #include "NVRAM.h"
 
 #include "Defs.h"
@@ -363,6 +367,7 @@ _kernel_oserror *Video_SWISetSpeed (unsigned int flags, stream_handle_t vsh, uns
 {
   _kernel_oserror *e = NULL;
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  bool issue_the_upcall = false;
   e = static_CheckHandle (vsh);
   dprintf (("Video", "SWISetSpeed\n"));
   
@@ -376,10 +381,16 @@ _kernel_oserror *Video_SWISetSpeed (unsigned int flags, stream_handle_t vsh, uns
       Stream.fields_till_next_AU = (Stream.fields_till_next_AU & 1) + (2 * speed); /* maintain odd/evenness */
       Stream.reference_STC = Clk_ReadRawSTC (); /* make it as though STC hasn't incremented since we went into pause */
     }
-    /* If defer flag is clear, or if we're already at that speed, or if there's no audio, then don't activate deferring mechanism */
-    if ((flags & SetSpeedFlags_DeferSetSpeed) == 0 || speed == Stream.video.speed_indicator || !Stream.rs_flags.audio_present)
+    if (speed == Stream.video.speed_indicator)
     {
+      /* No change - do nothing */
+    }
+    else if ((flags & SetSpeedFlags_DeferSetSpeed) == 0 || !Stream.rs_flags.audio_present)
+    {
+      /* If defer flag is clear, or if there's no audio, then change speed immediately */
+      Stream.vid_flags.going_faster = Stream.vid_flags.going_slower = false; /* in case a deferred SetSpeed is still pending */
       Stream.video.speed_indicator = speed;
+      issue_the_upcall = true;
     }
     else if ((speed < Stream.video.deferred_speed_indicator && speed != 0) || Stream.video.deferred_speed_indicator == 0)
     {
@@ -393,10 +404,16 @@ _kernel_oserror *Video_SWISetSpeed (unsigned int flags, stream_handle_t vsh, uns
       Stream.vid_flags.going_slower = true;
       Stream.vid_flags.going_faster = false;
     }
-    /* The next time we stall, this is unconditionally the speed that should be asserted */
+    /* When the buffer reaches the required condition, this is the speed that should be asserted */
     Stream.video.deferred_speed_indicator = speed;
     
     if (irqs_were_enabled) _kernel_irqs_on ();
+    
+    if (issue_the_upcall)
+    {
+      /* OS_UpCall enables interrupts */
+      _swix (OS_UpCall, _INR(0,4), UpCall_MPEG, 0, Stream.csh, UpCallMPEG_SpeedChange, Stream.video.speed_indicator);
+    }
   }
   return e;
 }
