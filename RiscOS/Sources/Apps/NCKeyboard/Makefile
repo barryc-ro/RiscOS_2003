@@ -6,6 +6,10 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 17-Aug-98  SBF    NC on-screen keyboard
+# 04-Sep-98  KJB    ROM build optimised for link 5.08 to reduce module
+#                   binary size (so you must use 5.08 or later if
+#                   doing a ROM build)
+# 04-Sep-98  ADH    -DFUNAI3 added to DFLAGS
 #
 
 #
@@ -51,7 +55,7 @@ LIBS     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
 LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 
-DFLAGS   =
+DFLAGS   = -DFUNAI3
 
 #
 # Program specific options:
@@ -63,7 +67,6 @@ APP       = abs.!RunImage
 OBJS      = o.handlers o.main o.oskbutils o.windowops
 OBJSZ     = oz.handlers oz.main oz.oskbutils oz.windowops oz.ModuleWrap
 OBJSZRAM  = oz.handlers oz.main oz.oskbutils oz.windowops oz.ModuleWra1
-RDIR      = Resources.<UserIF>.${LOCALE}
 EXPORTS   = 
 
 .SUFFIXES: .oz
@@ -115,10 +118,11 @@ clean:
 
 resources:
         ${MKDIR} ${RESAPP}
-        ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot ${CPFLAGS}
-        ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run ${CPFLAGS}
-        ${CP} ${RDIR}.Messages ${RESAPP}.Messages ${CPFLAGS}
-        ${CP} ${RDIR}.Res ${RESAPP}.Res ${CPFLAGS}
+	TokenCheck LocalUserIFRes:Messages
+        ${CP} LocalUserIFRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
+        ${CP} LocalUserIFRes:!RunROM ${RESAPP}.!Run ${CPFLAGS}
+        ${CP} LocalUserIFRes:Messages ${RESAPP}.Messages ${CPFLAGS}
+        ${CP} LocalUserIFRes:Res ${RESAPP}.Res ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -151,8 +155,7 @@ ${TARGET}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ}
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
