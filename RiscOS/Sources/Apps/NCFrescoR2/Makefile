@@ -50,10 +50,15 @@ clean:
         ${WIPE} linked ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
+#
+# Resources phases
+
 resources: resources_${TARGET}
 
 resources_:
         @echo Need a defined target!
+
+# NCFresco resources
 
 resources_NCFresco: resources_NCFresco_${RES} resources_NCFresco_base
         @echo ${COMPONENT}: all resource files copied
@@ -118,37 +123,51 @@ resources_NCFresco_base:
 	${TR} -i NCFrescoROTransRes:html.url       -o ${RESRES}.html.url       ${TRFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
-        @echo ${COMPONENT}: resource files copied
+	@echo ${COMPONENT}: base resource files copied
+
+# HTTP resources
 
 resources_HTTP:
-        @echo ${COMPONENT}: resources files copied
+        @echo ${COMPONENT}: resource files copied
+
+# WebFTP resources
 
 resources_WebFTP:
-        @echo ${COMPONENT}: resources files copied
+        @echo ${COMPONENT}: resource files copied
+
+#
+# Install phases
 
 install: install_${TARGET}
 
 install_:
         @echo Need a defined target!
 
-install_NCFresco:
+# NCFresco install
+
+install_NCFresco: install_NCFresco_${ITYPE} install_NCFresco_common
+        @echo ${COMPONENT}: all files installed
+
+install_NCFresco_: install_NCFresco_application
+        @echo ${COMPONENT}: default install
+
+install_NCFresco_common:
 	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
 	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	${MKDIR} ${INSTALLDIR}
 	${MKDIR} ${INSTALLRESDIR}
 	${MKDIR} ${INSTALLRESLOCALEDIR}
 	${MKDIR} ${INSTALLRESLOCALEDIR}.html
-	${CP} NCFrescoRORes:!Boot    		${INSTALLDIR}.!Boot    ${CPFLAGS}
+	${CP} NCFrescoRORes:!Boot		${INSTALLDIR}.!Boot             ${CPFLAGS}
 	IfThere NCFrescoRORes:!Help Then ${CP} NCFrescoRORes:!Help ${INSTALLDIR}.!Help  ${CPFLAGS}
-	${CP} NCFrescoRORes:!Run     		${INSTALLDIR}.!Run     ${CPFLAGS}
-	${CP} NCFrescoRORes:!Sprites 		${INSTALLDIR}.!Sprites ${CPFLAGS}
-	${CP} NCFrescoRORes:Sprites  		${INSTALLRESLOCALEDIR}.Sprites  ${CPFLAGS}
+	${CP} NCFrescoRORes:!Sprites		${INSTALLDIR}.!Sprites ${CPFLAGS}
+	${CP} NCFrescoRORes:Sprites		${INSTALLRESLOCALEDIR}.Sprites  ${CPFLAGS}
 	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLRESLOCALEDIR}.Messages ${TRFLAGS}
-	${CP} NCFrescoRORes:Res         	${INSTALLRESLOCALEDIR}.Res      ${CPFLAGS}
-	${CP} NCFrescoRORes:MimeMap     	${INSTALLDIR}.MimeMap  ${CPFLAGS}
-	-${CP} NCFrescoRORes:Config      	${INSTALLRESLOCALEDIR}.Config   ${CPFLAGS}
-	${CP} NCFrescoRORes:fontmap/txt  	${INSTALLRESLOCALEDIR}.fontmap/txt ${CPFLAGS}
-	${CP} <Lib$Dir>.LocaleRes.LocaleRes     ${INSTALLDIR}.LocaleRes ${CPFLAGS}
+	${CP} NCFrescoRORes:Res			${INSTALLRESLOCALEDIR}.Res      ${CPFLAGS}
+	${CP} NCFrescoRORes:MimeMap		${INSTALLDIR}.MimeMap  ${CPFLAGS}
+	${CP} NCFrescoRORes:Config		${INSTALLRESLOCALEDIR}.Config   ${CPFLAGS}
+	${CP} NCFrescoRORes:fontmap/txt		${INSTALLRESLOCALEDIR}.fontmap/txt ${CPFLAGS}
+	${CP} <Lib$Dir>.LocaleRes.LocaleRes	${INSTALLDIR}.LocaleRes         ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLRESLOCALEDIR}.html.alert     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLRESLOCALEDIR}.html.badurl    ${TRFLAGS}
@@ -173,18 +192,46 @@ install_NCFresco:
 	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLRESLOCALEDIR}.html.sslserv   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLRESLOCALEDIR}.html.ssltoken  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLRESLOCALEDIR}.html.url       ${TRFLAGS}
-${CP} rm.ncfrrm-${TYPE}                ${INSTALLDIR}.!RunImage               ${CPFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
-        @echo ${COMPONENT}: resource files copied
+	@echo ${COMPONENT}: common files installed
+
+install_NCFresco_application:
+	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
+	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
+	${CP} NCFrescoRORes:!Run		${INSTALLDIR}.!Run        ${CPFLAGS}
+	${CP} abs.!RunIm-${TYPE}		${INSTALLDIR}.!RunImage   ${CPFLAGS}
+	Unset NCFrescoROTransRes$Path
+	Unset NCFrescoRORes$Path
+	@echo ${COMPONENT}: application files installed
+
+install_NCFresco_module:
+	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
+	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
+	${CP} NCFrescoRORes:!RunRAM		${INSTALLDIR}.!Run        ${CPFLAGS}
+	${CP} rm.ncfrrm-${TYPE}			${INSTALLDIR}.!RunImage   ${CPFLAGS}
+	Unset NCFrescoROTransRes$Path
+	Unset NCFrescoRORes$Path
+	@echo ${COMPONENT}: module files installed
+
+install_NCFresco_: install_NCFresco_application
+
+# HTTP install
 
 install_HTTP:
-        ${CP} rm.HTTP ${INSTDIR}.${TARGET}mod ${CPFLAGS}
-        ${CP} rm.HTTPs ${INSTDIR}.${TARGET}smod ${CPFLAGS}
-        ${CP} rm.HTTPsx ${INSTDIR}.${TARGET}sxmod ${CPFLAGS}
+        ${CP} rm.HTTP ${INSTDIR}.${TARGET}Mod ${CPFLAGS}
+        ${CP} rm.HTTPs ${INSTDIR}.${TARGET}sMod ${CPFLAGS}
+        ${CP} rm.HTTPsx ${INSTDIR}.${TARGET}sxMod ${CPFLAGS}
+        @echo ${COMPONENT}: files installed
+
+# WebFTP install
 
 install_WebFTP:
         ${CP} rm.WebFTP ${INSTDIR}.${TARGET} ${CPFLAGS}
+        @echo ${COMPONENT}: files installed
+
+#
+# Export phases
 
 export: export_${TARGET}
 
