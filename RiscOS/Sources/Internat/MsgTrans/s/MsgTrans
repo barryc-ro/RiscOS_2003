@@ -89,6 +89,7 @@ Module_BaseAddr
         GBLL    debugerr                                ; For MessageTrans_ErrorLookup
         GBLL    debugintr                               ; For internationalisation
         GBLL    debugFSW
+	GBLL	svcstkdescr				; Copy SVC stack based descriptors to RMA if true
 
 debug           SETL   false
 debugxx         SETL   debug :LAND: false
@@ -96,7 +97,8 @@ debugenum       SETL   debug :LAND: false
 debugservice    SETL   debug :LAND: false
 debugerr        SETL   debug :LAND: false
 debugintr       SETL   debug :LAND: false
-debugFSW        SETL   debug :LAND: true
+debugFSW        SETL   debug :LAND: false
+svcstkdescr	SETL   false
 
         GBLL    hostvdu
 hostvdu SETL    false
@@ -114,13 +116,16 @@ MessageFile_block               #       5*4
 GlobalMessageFile_block         #       5*4
 Dictionary                      #       4
 ThreadNess                      #       4
+	[ svcstkdescr
+SVCSTK_size			#	4
+	]
 MaxThreadNess * 2
 
         ASSERT  (link_header-wsorigin)=0
 
 ForegroundBuffersNo             *       16
 
-IRQBuffersNo                    *       2
+IRQBuffersNo                    *       8
 
 Buffersize                      *       &100
 
@@ -169,8 +174,16 @@ fcb_size        #       0
 flg_inresourcefs        *       1 :SHL: 0               ; file data is in resourcefs, else RMA
 flg_ourbuffer           *       1 :SHL: 1               ; means that on closing we must free the buffer
 flg_addtolist           *       1 :SHL: 2               ; means treat seeing as opening
+	[ svcstkdescr
+flg_freeblock  		*	1 :SHL: 29		; we allocated this descriptor in the RMA
+flg_ourdescriptor	*	1 :SHL: 30		; indirect messageblock - fcb_fileptr points to RMA descriptor
+	]
 flg_sqshinresourcefs    *       1 :SHL: 31              ; means a squashed file in resourcefs
 
+
+	[ svcstkdescr
+OldSVCStackSize		*	8192			; Ursula kernels will supply the correct absolute address
+	]
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Init entry - claim and initialise workspace.
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -188,6 +201,20 @@ Init    ENTRY
 
         STR     r2, [ r12 ]
 01      MOV     wp, r2
+
+	[ svcstkdescr
+	MOV	r0, #6
+	MOV	r1, #0
+	MOV	r2, #16				; Ursula: read top of SVC stack call
+	SWI	XOS_ReadSysInfo
+	MOV	r0, sp, LSR #20
+	MOVVS	r2, #OldSVCStackSize
+	ADDVSS	r2, r2, r0, LSL #20		; clears V
+	TEQ	r2, #0
+	MOVEQ	r2, #OldSVCStackSize
+	SUBNE	r2, r2, r0, LSL #20		; calculate stack size
+	STR	r2, SVCSTK_size
+	]
 
         MOV     r0, #0
         STR     r0, link_header
@@ -284,13 +311,28 @@ DieLoop
 ; Service call handling
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+;Ursula format
+;
+        ASSERT  Service_ResourceFSStarted < Service_ResourceFSDying
+        ASSERT  Service_ResourceFSDying   < Service_TerritoryStarted
+;
+UServTab
+        DCD     0                              ;flags
+        DCD     UService - Module_BaseAddr
+        DCD     Service_ResourceFSStarted
+        DCD     Service_ResourceFSDying
+        DCD     Service_TerritoryStarted
+        DCD     0                              ;terminator
+        DCD     UServTab - Module_BaseAddr     ;anchor
 Service
         Debug   service,"Service call entry: R0,R1,R2 =", r0, r1, r2
 
+        MOV     r0,r0                          ;magic instruction
         TEQ     r1, #Service_ResourceFSDying
         TEQNE   r1, #Service_TerritoryStarted
         TEQNE   r1, #Service_ResourceFSStarted
         MOVNE   pc, lr
+UService
         ;       It is possible that the contents of ResourceFS has now
         ;       changed.  We must now mark all message files that used
         ;       ResourceFS as being invalid i.e. the data pointer must be
@@ -414,7 +456,12 @@ error_badswi
 SWIMessageTrans_FileInfo ENTRY "r3"
 
         BL      internal_fileinfo
+	[ svcstkdescr
+        BICVC   r0, r0, #(flg_ourdescriptor :OR: flg_freeblock :OR: flg_sqshinresourcefs)
+              						; flags not for external consumption
+	|
         BICVC   r0, r0, #flg_sqshinresourcefs           ; flag not for external consumption
+	]
         MOVVC   r2, r3                                  ; R2 = size of buffer required
 
         EXIT
@@ -545,6 +592,9 @@ OpenScanLoop
         STR     r2, [ r4, #fcb_fileptr ]                ; R2 -> message data
 
 ExitOpenFile
+	[ svcstkdescr
+	BLVC	CopyDescriptorToRMA			; make duplicate of block in RMA if needed - updates R4
+	]
         LDRVC   r14, link_header                        ; If not an error, then link in to list
         STRVC   r14, [ r4, #fcb_link ]
         STRVC   r4, link_header
@@ -592,6 +642,55 @@ err_alreadyopen
         SWI     XMessageTrans_ErrorLookup
         Pull    "r1, r2"
         B       ExitOpenFile
+
+	[ svcstkdescr
+
+	; This routine examines the position of the client's supplied 4-word buffer to make sure
+ 	; that it isn't on the SVC stack.  It if isn't then all is left alone.  Otherwise, a new
+	; descriptor is grabbed from the RMA and the client's block is reset to be marked to point
+	; to the (safe) proxy RMA block.  The client's flags have flg_ourdescriptor set.
+	; Our real blocks have flg_freeblock set.
+
+CopyDescriptorToRMA Entry "r0-r3,r6"
+
+	MOV	r0, sp, LSR #20
+	SUBS	r0, r4, r0, LSL #20			; subtract base of SVC stack from descriptor
+	LDRHS	r3, SVCSTK_size				; get size of SVC mode stack
+	RSBHSS	r0, r0, r3				; was it between that and the top of the stack?
+	EXITS	LO					; it wasn't - so we won't bother copying this one
+
+
+	MOV	r3, #fcb_size
+	MOV	r0, #ModHandReason_Claim
+	SWI	XOS_Module				; Try and get a new RMA block for descriptor
+	EXITS	VS					; OK - leave it then
+
+	Debug	xx,"CopyToRMA *PERFORMING COPY* to RMA block",r2
+
+	LDMIA	r4, {r0,r1,r3,r5}			; get data from client's original descriptor block
+ 	ORR	r1, r1, #flg_ourdescriptor		; Set flag that we allocated this block
+	STR	r1, [ r4, #fcb_flags ]
+	STR	r2, [ r4, #fcb_fileptr ]		; link back to internal descriptor
+	EOR	r1, r1, #flg_freeblock :OR: flg_ourdescriptor	; set flg_freeblock, clears flg_ourdescriptor
+	STMIA	r2, {r0,r1,r3,r5}			; copy information to our own internal descriptor
+	MOV	r4, r2					; replace caller's descriptor pointer
+	EXITS						; and return.
+
+
+TranslateFindDescriptor Entry "r1"
+
+	; This routine checks a descriptor to see if it was a proxy that was set up previously
+	; by CopyDescriptorToRMA.  If it was, then the proxy pointer is dereferenced to get the
+	; real block 'saddress.
+
+	TEQ	r0, #0					; a null pointer?
+	LDRNE	r1, [ r0, #fcb_flags ]			; get flags from descriptor block
+	TSTNE	r1, #flg_ourdescriptor			; was it a proxy?
+	LDRNE	r0, [ r0, #fcb_fileptr ]		; It was - follow the proxy link
+	EXITS
+
+	]
+
 
 ; Subroutine for MessageTrans_OpenFile
 ;
@@ -882,6 +981,10 @@ SWIMessageTrans_EnumerateTokens Entry "r0-r9"
         Debug   enum,"MessageTrans_EnumerateTokens", r0, r1, r2, r3, r4
         DebugS  enum,"Token to match =",r1
 
+	[ svcstkdescr
+	BL	TranslateFindDescriptor
+	]
+
         MOV     r9, r1                                  ; Save a pointer to the client's token
         BL      EnsureFileIsOpen
         BVS     ExitEnumerateTokens
@@ -995,6 +1098,9 @@ EnumerateFoundToken
         BL      skiptonexttoken                         ; ignore errors (EOF), since that's for next time
 
         LDR     r0, stk_filedesc
+	[ svcstkdescr
+	BL	TranslateFindDescriptor
+	]
         LDR     r0, [ r0, #fcb_fileptr ]
         ADD     r0, r0, #4                              ; R0 -> start of file data (ignore size field)
         SUB     r3, r3, r0                              ; R3 = offset within file for next time
@@ -1094,8 +1200,17 @@ SWIMessageTrans_Lookup
 
         CMP     r0, #0                                  ; Were we given a message block?
         BEQ     DoGlobalLookup                          ; No, skip straight to global lookup
+	[ svcstkdescr
+        Push    "r0-r3"                                 ; Preserve the inputs in case it fails
+	BL	TranslateFindDescriptor
+	|
         Push    "r1-r3"                                 ; Preserve the inputs in case it fails
+	]
         BL      internal_lookup
+	[ svcstkdescr
+	LDRVC	r0, [sp], #4				; Restore old R0 on success to not confuse client
+	ADDVS	sp, sp, #4				; Junk old R0 on failure - client will get error block
+	]
         ADDVC   sp, sp, #12                             ; Remove the stored input values R1-R3
         Pull    "pc", VC                                ; Match found so return
         Pull    "r1-r3"                                 ; Restore the stored input values R1-R3
@@ -1449,6 +1564,9 @@ SWIMessageTrans_CloseFile ENTRY "r0-r2"
         Debug   xx,"MessageTrans_CloseFile",r0
 
         ADR     r11, link_header - fcb_link
+	[ svcstkdescr
+	BL	TranslateFindDescriptor
+	]
 CloseFileLoop
         LDR     r1, [ r11, #fcb_link ]
         TEQ     r1, #0
@@ -1463,11 +1581,26 @@ CloseFileLoop
         LDR     r14, [ r0, #fcb_link ]                  ; delete block from chain
         STR     r14, [ r11, #fcb_link ]
 
+	[ svcstkdescr
+	LDR	r14, [ r0, #fcb_flags ]
+	TST	r14, #flg_ourbuffer
+	MOVEQ	r2, #0					; ensure R2 is set correctly to avoid later test
+	TST	r14, #flg_freeblock
+	STMFD	sp!, {r2}
+	MOVNE	r2, r0
+        MOVNE   r0, #ModHandReason_Free
+	SWINE	XOS_Module
+	LDMFD	sp!, {r2}
+	ADDS	r2, r2, #0				; clears V and sets/clears Z appropriately
+	|
         TEQ     r2, #0                                  ; no file data to delete
+	]
         EXIT    EQ
 
+	[ :LNOT:svcstkdescr
         LDR     r14, [ r0, #fcb_flags ]                 ; delete file block if allocated
         TST     r14, #flg_ourbuffer                     ; client buffers not included
+	]
         MOVNE   r0, #ModHandReason_Free
         SWINE   XOS_Module
 
@@ -1489,6 +1622,10 @@ CloseFileLoop
 SWIMessageTrans_MakeMenus ENTRY "r1, r4-r11"
 
         Debug   xx,"MessageTrans_MakeMenus", r0, r1, r2, r3
+
+	[ svcstkdescr
+	BL	TranslateFindDescriptor
+	]
 
 loop1   LDRB    r14, [ r1 ]                             ; reached end if title token null
         TEQ     r14, #0
