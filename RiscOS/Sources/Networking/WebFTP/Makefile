@@ -6,7 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
-#
+
 
 #
 # Paths
@@ -45,8 +45,7 @@ SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 INETLIB_NORM=TCPIPLibs:o.inetlib
 SOCKLIB_NORM=TCPIPLibs:o.socklib
-#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
-REMOTEDB  = 
+DEBUGLIB  = <Lib$Dir>.DebugLib.o.DebugLibzm
 #
 # Include files
 #
@@ -63,14 +62,20 @@ DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -
 # Program specific options:
 #
 COMPONENT = webftp
+COMPONENTD = webftpD
 TARGET    = aof.${COMPONENT}
-OBJS      =  webftp.o q.o files.o header.o support.o misc.o db.o dirparse.o 
+OBJS      = webftp.o q.o files.o header.o support.o misc.o db.o dirparse.o 
+OBJSD     = od.webftp od.q od.files header.o support.o od.misc od.db od.dirparse
+LIBS      = ${CLIB} ${INETLIB} ${SOCKLIB}
+LIBSD     = ${CLIB} ${DEBUGLIB} ${INETLIB} ${SOCKLIB}
 EXPORTS   = h.webftp
 
 #
 # Rule patterns
 #
+.SUFFIXES:	.o .od .s .h .cmhg .c .z
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.c.od:;     ${CC} ${CFLAGS} -DDEBUGLIB -Fn -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
@@ -79,6 +84,8 @@ EXPORTS   = h.webftp
 # build a relocatable module:
 #
 all: rm.${COMPONENT}
+debug: rm.${COMPONENTD}
+
 #
 # RISC OS ROM build rules:
 #
@@ -100,6 +107,7 @@ install: rm.${COMPONENT}
 clean:
         ${WIPE} aof ${WFLAGS}
         ${WIPE} o ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
@@ -112,6 +120,7 @@ ${DIRS}:
         @${MKDIR} linked
         @${MKDIR} map
         @${MKDIR} o
+        @${MKDIR} od
         @${MKDIR} rm
         create ${DIRS}
         stamp  ${DIRS}
@@ -125,7 +134,7 @@ resources:
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${REMOTEDB} ${DIRS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${EXTRALIBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -136,9 +145,15 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${REMOTEDB} ${DIRS}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
+# Non-debug RAM target
+rm.${COMPONENT}: ${OBJS} ${LIBS} ${DIRS}
+        ${LD} -o $@ -module ${OBJS} ${LIBS}
         Access rm.${COMPONENT} RW/R
+
+# Debug RAM target
+rm.${COMPONENTD}: ${OBJSD} ${LIBSD} ${DIRS}
+        ${LD} -o $@ -module ${OBJSD} ${LIBSD}
+        Access rm.${COMPONENTD} RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
@@ -153,6 +168,8 @@ o.test1: c.test1
 # Static dependencies
 
 o.webftp:  h.header
+od.webftp: h.header
 o.misc:    h.header
+od.misc:   h.header
 
 # Dynamic dependencies:
