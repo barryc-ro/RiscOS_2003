@@ -129,7 +129,6 @@ rm.DeviceFSSA: hdr:Variables
 rm.DeviceFSSA: hdr:CMOS
 rm.DeviceFSSA: hdr:NewErrors
 rm.DeviceFSSA: hdr:Territory
-rm.DeviceFSSA: hdr:HostFS
 rm.DeviceFSSA: hdr:NdrDebug
 rm.DeviceFSSA: hdr:DDVMacros
 rm.DeviceFSSA: hdr:Proc
