@@ -41,7 +41,7 @@ SOURCE    = s.GetAll
 TARGET    = rm.Kernel
 AIFDBG    = aif.Kernel
 GPADBG    = GPA
-OBJECTS   = o.GetAll
+OBJECTS   = o.GetAll #o.ARMops o.End
 EXPORTS   = ${EXP_HDR}.EnvNumbers \
             ${EXP_HDR}.ModHand \
             ${EXP_HDR}.PublicWS \
@@ -57,7 +57,7 @@ EXPORTS   = ${EXP_HDR}.EnvNumbers \
 # Generic rules:
 #
 .SUFFIXES: .o .s
-.s.o:; ${ARMASM} ${ARMASMFLAGS} -o $@ $< -list list.$*
+.s.o:; ${ARMASM} ${ARMASMFLAGS} -o $@ $< #-list list.$*
 
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
@@ -75,6 +75,7 @@ clean:
         ${RM} ${TARGET}
         ${WIPE} aif ${WFLAGS}
         ${RM} ${GPADBG}
+        ${WIPE} list.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 export: ${EXPORTS}
