@@ -52,16 +52,20 @@ INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLibzm
+ASMUTILS	= $(LIBDIR).AsmUtils.o.AsmUtilszm
 
 LIBS =\
+ $(ASMUTILS)\
  ${INETLIB}\
  ${SOCKLIB}\
  ${UNIXLIB}\
+
 # MemCheck:o.MC_M\
 
 
 LIBSD =\
  $(DEBUGLIB)\
+ $(ASMUTILS)\
  ${INETLIB}\
  ${SOCKLIB}\
  ${UNIXLIB}\
@@ -189,7 +193,8 @@ local_dirs:
 #
 ${RAMTARGET}: pppd ${OBJS} ${HDRS} ${CLIB}
 	${LD} -rmf -o $@ pppd.o.pppd ${OBJS} ${LIBS} ${CLIB}
-	${MODSQZ} $@
+
+#	${MODSQZ} $@
 
 #
 # ROM Target (re-linked at ROM Image build time)
