@@ -618,7 +618,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 		    htmlctx->inhand_string.ptr));
 
 #if 1
-	    current.bytes = opt->text ? strlen(opt->text) : NULL;
+	    current.bytes = opt->text ? strlen(opt->text) : /*NULL*/ 0;
 	    current.ptr = opt->text;
 
 	    opt->text = get_tab_expanded_string(item, current).ptr;

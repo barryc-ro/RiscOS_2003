@@ -694,7 +694,7 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
 	success = flex_extend(&i->data_area, to);
     }
 
-    IMGDBG(("image_handle_internal: flex has returned success=%d\n", success));
+    IMGDBG(("image_handle_internal: flex has returned\n"));
 
     if (success)
     {
@@ -1699,6 +1699,8 @@ os_error *image_stream_data(image i, char *buffer, int len, int update)
 {
     int rd;
 
+    IMGDBG(("image_stream_data: i%p buffer %p len %d update %d\n", i, buffer, len, update));
+    
     if (i == NULL || i->magic != IMAGE_MAGIC)
     {
 	return makeerror(ERR_BAD_IMAGE_HANDLE);
@@ -1729,8 +1731,16 @@ os_error *image_stream_data(image i, char *buffer, int len, int update)
      * buffers aren't available and we can't back up.
      */
     
-    if (i->tt->status == thread_DEAD && (i->data_so_far == 0 || i->plotter != plotter_SPRITE) && i->our_area == NULL && !(i->flags & image_flag_ERROR) )
-	image_handle_internal(i, 0, buffer, i->data_so_far, i->data_so_far + len);
+    if (i->tt->status == thread_DEAD &&
+	(i->data_so_far == 0 || i->plotter != plotter_SPRITE) &&
+	i->our_area == NULL &&
+	(i->flags & (image_flag_ERROR | image_flag_LOAD_AT_END)) == 0)
+    {
+	if (i->data_so_far != 0 && i->data_area == NULL)
+	    i->flags |= image_flag_LOAD_AT_END;
+	else
+	    image_handle_internal(i, 0, buffer, i->data_so_far, i->data_so_far + len);
+    }
 #endif
 
     i->data_so_far += len;
@@ -1765,6 +1775,29 @@ os_error *image_stream_end(image i, char *cfile)
 
     rd = i->flags & image_flag_RENDERABLE;
 
+    if (cfile)
+    {
+	i->cfile = strdup(cfile);
+
+	ofs.action = 5;
+	ofs.name = i->cfile;
+	os_file(&ofs);
+
+	i->file_load_addr = ofs.loadaddr;
+	i->file_exec_addr = ofs.execaddr;
+	i->data_size = ofs.start;
+
+	if (i->flags & image_flag_LOAD_AT_END)
+	{
+	    int fh = ro_fopen(cfile, RO_OPEN_READ);
+
+	    if (fh)
+		image_handle_internal(i, fh, NULL, 0, i->data_size);
+
+	    ro_fclose(fh);
+	}
+    }
+
     if (i->tt)
     {
 	IMGDBGN(("Calling image_thread_end() from image_stream_end()\n"));
@@ -1785,18 +1818,6 @@ os_error *image_stream_end(image i, char *cfile)
     i->flags |= image_flag_FETCHED;
     i->flags &= ~image_flag_STREAMING;
 
-    if (cfile)
-    {
-	i->cfile = strdup(cfile);
-	ofs.action = 5;
-	ofs.name = i->cfile;
-	os_file(&ofs);
-
-	i->file_load_addr = ofs.loadaddr;
-	i->file_exec_addr = ofs.execaddr;
-	i->data_size = ofs.start;
-    }
-
     if (res == NULL)
 	i->flags |= image_flag_RENDERABLE;
     else
@@ -1804,6 +1825,9 @@ os_error *image_stream_end(image i, char *cfile)
 	usrtrc( "Image error 2 = %s\n", res);
 
 	free_area(&i->our_area);
+	flex_free(&i->data_area);
+	i->data_area = NULL;
+	
 	image_set_error(i);
     }
 
@@ -3190,8 +3214,7 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 
     image_reduce_scales(&facs);
 
-    _swix(OS_File, _INR(0,5), 10, "<NCFresco$Dir>.^.jpeg", 0xc85, 0, i->data_area, (char *)i->data_area + i->data_size);
-    IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d dx/dy %d/%d data ptr %p size %d pos %d,%d\n", i->width, i->height, w, h, i->xdpi, i->ydpi, i->dx, i->dy, i->data_area, i->data_size, x, y));
+    IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d\n", i->width, i->height, w, h, i->xdpi, i->ydpi));
 
     _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, config_display_jpeg & 3);
 }

@@ -33,7 +33,7 @@ extern void fe_set_pointer(int item_flags);
 extern fe_view main_view;
 extern fe_view last_click_view;
 extern fe_view dragging_view;
-extern fe_view resizing_view;
+/* extern fe_view resizing_view; */
 
 extern int last_click_x, last_click_y;
 
@@ -121,7 +121,6 @@ extern void fe_menu_event_handler(int event);
 
 extern BOOL fe_item_screen_box(fe_view v, be_item ti, wimp_box *box);
 extern void fe_fake_click(fe_view v, int x, int y);
-extern coords_cvtstr fe_get_cvt(fe_view v);
 
 extern BOOL fe_writeable_handle_keys(fe_view v, int key);
 

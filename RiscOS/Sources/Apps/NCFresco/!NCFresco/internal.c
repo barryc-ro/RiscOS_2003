@@ -33,6 +33,7 @@
 #include "stbopen.h"
 #include "stbutils.h"
 #include "stbtb.h"
+#include "frameutils.h"
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -69,17 +70,17 @@ static BOOL should_we_display_url(const char *url)
 {
     return url &&
 	strncasecomp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0 &&
-	strncasecomp(url, "ncint:", sizeof("ncint:")-1) != 0 && 
+	strncasecomp(url, "ncint:", sizeof("ncint:")-1) != 0 &&
 	strncasecomp(url, "file:/cache:", sizeof("file:/cache:")-1) != 0;
 }
 
 static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 {
     char *qlink, *qtitle;
-    
+
     qlink = extract_value(query, "url=");
     qtitle = extract_value(query, "title=");
-    
+
     fputs(msgs_lookup("versionT"), f);
     fprintf(f, msgs_lookup("version1"), ""/*fresco_version*/);
 
@@ -122,7 +123,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	    link = extract_value(qlink, "url=");
 	else
 	    link = qlink;
-	
+
 	if (should_we_display_url(link))
 	    fprintf(f, msgs_lookup("version3a"), link);
 
@@ -134,10 +135,10 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
     }
 
     fputs(msgs_lookup("versionF"), f);
-    
+
     mm_free(qlink);
     mm_free(qtitle);
-    
+
     return NULL;
 }
 
@@ -258,10 +259,10 @@ static void fe__print_frames(FILE *f, const char *spec, int w, int h)
     fe_view v = fe_frame_specifier_decode(main_view, spec);
 
     STBDBG(("fe__printframes: spec %s v%p children %p\n", spec, v, v ? v->children : NULL));
-    
+
     if (!v)
 	return;
-    
+
     if (v->children)
 	backend_layout_write_table(f, v->displaying, fe__print_frames, spec, w, h);
     else
@@ -405,13 +406,13 @@ static void fe_handle_playmovie(const char *query)
 	if (strcasecomp(scheme1, "file") == 0)
 	{
 	    char *path2 = url_path_to_riscos(path1);
-	    coords_cvtstr cvt = fe_get_cvt(v);
+	    coords_cvtstr cvt = frameutils_get_cvt(v);
 	    coords_pointstr off;
 
 	    off.x = off.y = 0;
 	    if (offset)
 		sscanf(offset, "%d,%d", &off.x, &off.y);
-		
+
 	    coords_point_toscreen((coords_pointstr *)&box.x0, &cvt);
 
 	    sprintf(buffer, "/%s -at %d,%d", path2, box.x0 + off.x/2, box.y0 + off.y/2);
@@ -449,7 +450,7 @@ static int internal_decode_find(const char *query)
     source = extract_value(query, "source=");
     v = get_source_view(source, TRUE);
     mm_free(source);
-    
+
     s = extract_value(query, "action=");
     cancel = strcasestr(s, "cancel") != 0;
     mm_free(s);
@@ -476,7 +477,7 @@ static int internal_decode_find(const char *query)
 	{
 	    fe_find(v, text, back, cases);
 	}
-    
+
 	mm_free(text);
 	mm_free(dir);
 	mm_free(casesense);
@@ -488,7 +489,7 @@ static int internal_decode_find(const char *query)
 static os_error *fe_find_write_file(FILE *f, const char *query)
 {
     char *source = extract_value(query, "source=");
-    
+
     fputs(msgs_lookup("findT"), f);
     fputc('\n', f);
 
@@ -501,7 +502,7 @@ static os_error *fe_find_write_file(FILE *f, const char *query)
     fputc('\n', f);
 
     mm_free(source);
-    
+
     return NULL;
 }
 
@@ -567,7 +568,7 @@ void fe_find(fe_view v, const char *text, int backwards, int casesense)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if 0  
+#if 0
 static int vals_to_bits(int n_vals)
 {
     int n_bits = 0;
@@ -597,11 +598,11 @@ static os_error *fe_custom_write_file(FILE *f, const char *tag, const char *nvra
 
     if (!nvram_read(nvram_tag, &val))
 	val = def;
-	
+
     /* binary wotsits are written in reverse order (on,off rather than offf,on) */
     if (n_vals == 2)
 	val = !val;
-    
+
     sprintf(tag_buf, "m%sT", tag);
     fprintf(f, msgs_lookup(tag_buf), val);
 
@@ -626,7 +627,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     char *beeps = extract_value(query, "beeps.");
     char *scaling = extract_value(query, "scaling.");
     int generated = fe_internal_url_NO_ACTION;
-    
+
     if (font)
     {
 	int font_val = atoi(font);
@@ -644,35 +645,35 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
 	nvram_write(NVRAM_SOUND_TAG, sound_val);
 
 	fe_bgsound_set(sound_val);
-	
+
 	*url = strdup("ncint:openpanel?name=customsound");
 	generated = fe_internal_url_REDIRECT;
     }
-    
+
     if (beeps)
     {
 	int beeps_val = !atoi(beeps);
 	nvram_write(NVRAM_BEEPS_TAG, beeps_val);
 
 	fe_beeps_set(beeps_val, FALSE);
-	
+
 	*url = strdup("ncint:openpanel?name=custombeeps");
 	generated = fe_internal_url_REDIRECT;
     }
-    
+
     if (scaling)
     {
 	int scaling_val = !atoi(scaling);
 	nvram_write(NVRAM_SCALING_TAG, scaling_val);
 
 	fe_scaling_set(scaling_val);
-	
+
 	*url = strdup("ncint:openpanel?name=customscaling");
 	generated = fe_internal_url_REDIRECT;
     }
 
     *flags = access_NOCACHE;
-    
+
     mm_free(font);
     mm_free(sound);
     mm_free(beeps);
@@ -693,7 +694,7 @@ static int internal_decode_hotlist_delete(const char *query)
 	if (!v) v = main_view;
 
 	strtok(id, "=");
-	
+
 	if (v && v->displaying)
 	{
 	    be_item ti = backend_locate_id(v->displaying, id);
@@ -708,7 +709,7 @@ static int internal_decode_hotlist_delete(const char *query)
     {
 	hotlist_remove_list(query);
     }
-    
+
     mm_free(id);
     mm_free(source);
     return fe_internal_url_NO_ACTION;
@@ -734,7 +735,7 @@ static int internal_decode_password(const char *query)
     if (cancel)
 	fe_passwd_abort();
     else
-    {	
+    {
 	name = extract_value(query, "uname=");
 	pass = extract_value(query, "pass=");
 
@@ -848,7 +849,7 @@ static os_error *fe_error_write_file(FILE *f, const char *query)
     STBDBG(("error: query '%s'\n", query));
     STBDBG(("error: which '%s'\n", which));
     STBDBG(("error: again '%s'\n", strsafe(again)));
-    
+
     /* write out header, including error for reference on return */
     fprintf(f, msgs_lookup("errorT"), which, strsafe(again));
 
@@ -861,7 +862,7 @@ static os_error *fe_error_write_file(FILE *f, const char *query)
 
     /* write button 1 */
     fputs(msgs_lookup("error1"), f);
-    
+
     sprintf(buffer, "%s_0:", which);
     s = msgs_lookup(buffer);
     fprintf(f, msgs_lookup("errorB"), 0, s && s[0] ? s : msgs_lookup("continue"));
@@ -879,7 +880,7 @@ static os_error *fe_error_write_file(FILE *f, const char *query)
     mm_free(which);
     mm_free(again);
     mm_free(message);
-    
+
     return NULL;
 }
 
@@ -933,7 +934,7 @@ static fe_view get_source_view(const char *query, BOOL default_top)
     /* if it is a transient then fall back to main view */
     if (v && v->open_transient)
 	v = main_view;
-    
+
     mm_free(source);
 
     return v;
@@ -968,7 +969,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 
     if (panel_name == NULL)
 	return generated;
-    
+
     if (strcasecomp(panel_name, "related") == 0)
     {
 	char *url = NULL;
@@ -1024,13 +1025,13 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    sound_event(snd_HOTLIST_SHOW);
 	    tb_status_button(fevent_HOTLIST_SHOW, TRUE);
 	    e = fe_hotlist_write_file(f);
-	}    
+	}
 	else if (strcasecomp(panel_name, "favsdelete") == 0)
 	{
 	    sound_event(snd_HOTLIST_DELETE_SHOW);
 	    tb_status_button(fevent_HOTLIST_SHOW_DELETE, TRUE);
 	    e = fe_hotlist_delete_write_file(f);
-	}    
+	}
 	else if (strcasecomp(panel_name, "find") == 0)
 	{
 	    tb_status_button(fevent_OPEN_FIND, TRUE);
@@ -1042,7 +1043,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    sound_event(snd_HISTORY_SHOW);
 	    tb_status_button(fevent_HISTORY_SHOW_ALPHA, TRUE);
 	    e = fe_global_write_list(f);
-	}    
+	}
 	else if (strcasecomp(panel_name, "historyrecent") == 0)
 	{
 	    v = get_source_view(query, TRUE);
@@ -1062,7 +1063,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 		tb_status_button(fevent_HISTORY_SHOW, TRUE);
 		e = fe_history_write_combined_list(f, v->first, v->hist_at);
 	    }
-	}    
+	}
 	else if (strcasecomp(panel_name, "info") == 0)
 	{
 	    v = get_source_view(query, FALSE);
@@ -1084,7 +1085,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    char *size = extract_value(query, "size=");
 
 	    v = get_source_view(query, TRUE);
-	    
+
  	    e = fe_print_frames_write_file(f, v, size);
 
 	    mm_free(size);
@@ -1097,31 +1098,31 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "url") == 0)
 	{
 	    char *def = extract_value(query, "def=");
-	    
+
 	    sound_event(snd_OPEN_URL_SHOW);
 	    tb_status_button(fevent_OPEN_URL, TRUE);
 	    e = fe_openurl_write_file(f, def ? def : msgs_lookup("opendef"));
 
 	    mm_free(def);
-	}    
+	}
 	else if (strcasecomp(panel_name, "urlfavs") == 0)
 	{
 	    sound_event(snd_HOTLIST_SHOW);
 	    tb_status_button(fevent_HOTLIST_SHOW_WITH_URL, TRUE);
 	    e = fe_hotlist_and_openurl_write_file(f);
-	}    
+	}
 	else if (strcasecomp(panel_name, "customfonts") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_FONT_SIZE, TRUE);
 	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS_TAG, 3, 0);
-	}    
+	}
 	else if (strcasecomp(panel_name, "customsound") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_SOUND, TRUE);
 	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND_TAG, 2, config_sound_background);
-	}    
+	}
 	else if (strcasecomp(panel_name, "custombeeps") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
@@ -1133,13 +1134,13 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    sound_event(snd_MENU_SHOW);
 	    tb_status_button(fevent_OPEN_SCALING, TRUE);
 	    e = fe_custom_write_file(f, "scaling", NVRAM_SCALING_TAG, 2, config_display_scale_fit);
-	}    
+	}
 	else if (strcasecomp(panel_name, "error") == 0)
 	{
 	    sound_event(snd_ERROR);
 	    e = fe_error_write_file(f, query);
 	}
-    
+
 	fclose(f);
 
 	if (!e)
@@ -1152,7 +1153,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
     }
     mm_free(panel_name);
     mm_free(mode);
-    
+
     return generated;
     NOT_USED(referer);
 }
@@ -1168,7 +1169,7 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
 	if (url)
 	    strtok(url, "=");
     }
-    
+
     if (url && url[0])
     {
 	char *nocache = extract_value(query, "opt=");
@@ -1178,7 +1179,7 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
 	    *flags |= access_NOCACHE;
 	else
 	    *flags &= ~access_NOCACHE;
-    
+
 	*new_url = check_url_prefix(url);
 
 	if (remember)
@@ -1186,9 +1187,9 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
 	    mm_free(loadurl_last);
 	    loadurl_last = strdup(*new_url);
 	}
-	
+
 	tb_status_button(fevent_OPEN_URL, FALSE);
-       
+
 	mm_free(nocache);
 	mm_free(remember);
 
@@ -1205,7 +1206,7 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
 static int internal_url_openpage(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     char *page_name = extract_value(query, "name=");
-    int generated = fe_internal_url_ERROR; 
+    int generated = fe_internal_url_ERROR;
 
     if (page_name == NULL)
 	return generated;
@@ -1295,14 +1296,14 @@ static int internal_action_back(const char *query, const char *bfile, const char
 	fevent_handler(fevent_HISTORY_BACK, v);
     return fe_internal_url_NO_ACTION;
 #else
-    { 
- 	sound_event(snd_HISTORY_BACK); 
-	
-  	*new_url = strdup(fe_history_get_url(v, history_PREV));  
-  	*flags &= ~access_CHECK_EXPIRE; 
-    } 
+    {
+ 	sound_event(snd_HISTORY_BACK);
 
-    return *new_url ? fe_internal_url_REDIRECT : fe_internal_url_ERROR; 
+  	*new_url = strdup(fe_history_get_url(v, history_PREV));
+  	*flags &= ~access_CHECK_EXPIRE;
+    }
+
+    return *new_url ? fe_internal_url_REDIRECT : fe_internal_url_ERROR;
 #endif
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1318,11 +1319,11 @@ static int internal_action_forward(const char *query, const char *bfile, const c
 	fevent_handler(fevent_HISTORY_FORWARD, v);
     return fe_internal_url_NO_ACTION;
 #else
-    { 
- 	sound_event(snd_HISTORY_FORWARD); 
- 	*new_url = strdup(fe_history_get_url(v, history_NEXT)); 
- 	*flags &= ~access_CHECK_EXPIRE; 
-    } 
+    {
+ 	sound_event(snd_HISTORY_FORWARD);
+ 	*new_url = strdup(fe_history_get_url(v, history_NEXT));
+ 	*flags &= ~access_CHECK_EXPIRE;
+    }
 
     return *new_url ? fe_internal_url_REDIRECT : fe_internal_url_ERROR;
 #endif
@@ -1348,7 +1349,7 @@ static int internal_action_close(const char *query, const char *bfile, const cha
 static int internal_action_playmovie(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_handle_playmovie(query);
-    
+
     return fe_internal_url_NO_ACTION;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1362,7 +1363,7 @@ static int internal_action_stop(const char *query, const char *bfile, const char
 
     if (v)
 	fevent_handler(fevent_STOP_LOADING, v);
-    
+
     return fe_internal_url_HELPER;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1376,7 +1377,7 @@ static int internal_action_reload(const char *query, const char *bfile, const ch
 
     if (v)
 	fevent_handler(fevent_RELOAD, v);
-    
+
     return fe_internal_url_HELPER;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1393,7 +1394,7 @@ static int internal_action_favoritesadd(const char *query, const char *bfile, co
 
     /* FIXME: add to messages file */
 /*     fe_report_error("Site added to favorites list"); */
-    
+
     return fe_internal_url_HELPER;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1410,7 +1411,7 @@ static int internal_action_favoritesremove(const char *query, const char *bfile,
 
     /* FIXME: add to messages file */
 /*     fe_report_error("Site removed from favorites list"); */
-    
+
     return fe_internal_url_HELPER;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1431,9 +1432,9 @@ static int internal_action_printpage(const char *query, const char *bfile, const
     size = extract_value(query, "size=");
     legal = size && strcasecomp(size, "legal") == 0;
     frontend_complain(fe_print(v, legal ? fe_print_LEGAL : fe_print_LETTER));
-    
+
     mm_free(size);
-    
+
     return generated;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1462,7 +1463,7 @@ static int internal_action_select(const char *query, const char *bfile, const ch
     fe_view v = fe_find_target(main_view, source);
     if (!v) v = fe_selected_view();
     if (!v) v = main_view;
-    
+
     if (v && v->displaying && id)
     {
 	be_item ti = backend_locate_id(v->displaying, id);
@@ -1475,7 +1476,7 @@ static int internal_action_select(const char *query, const char *bfile, const ch
 
     mm_free(id);
     mm_free(source);
-    
+
     return fe_internal_url_NO_ACTION;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1537,7 +1538,7 @@ static int internal_action_opentoolbar(const char *query, const char *bfile, con
 
 	generated = fe_internal_url_HELPER;
     }
-    
+
     return generated;
     NOT_USED(bfile);
     NOT_USED(referer);
@@ -1577,7 +1578,7 @@ static int internal_decode_error(const char *query, char **new_url, int *flags)
 	    generated = fe_internal_url_REDIRECT;
 	}
     }
-    
+
     mm_free(action);
     mm_free(which);
 
@@ -1601,9 +1602,9 @@ static int internal_decode_history_alpha(const char *query, char **new_url, int 
 
 	generated = fe_internal_url_REDIRECT;
     }
-        
+
     mm_free(which);
-    
+
     return generated;
 }
 
@@ -1624,9 +1625,9 @@ static int internal_decode_history_recent(const char *query, char **new_url, int
 
 	generated = fe_internal_url_REDIRECT;
     }
-        
+
     mm_free(which);
-    
+
     return generated;
 }
 
@@ -1679,7 +1680,7 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     {
 	generated = internal_decode_history_recent(query, new_url, flags);
     }
-    
+
     mm_free(page);
 
     return generated;

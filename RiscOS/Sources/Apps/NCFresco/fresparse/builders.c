@@ -203,9 +203,9 @@ extern void set_font_type(SGMLCTX *context, int type)
 	x &= WEBFONT_SIZE_MASK;
     else
 	x &= WEBFONT_SIZE_MASK | WEBFONT_FLAG_BOLD | WEBFONT_FLAG_ITALIC;
-    
+
     x |= type;
-    
+
     SET_EFFECTS(context->tos, STYLE_WF_INDEX, x);
 }
 
@@ -607,7 +607,7 @@ extern void text_item_push_image(HTMLCTX * me,
     }
     else
 	new->ww = -1;
-    
+
     if ( hh->type == value_integer )
 	new->hh = hh->u.i;
     else
@@ -648,10 +648,10 @@ extern void text_item_push_image(HTMLCTX * me,
 	IMGDBG(("text_item_push_image: src '%s' im %p bwidth %d, hspace %d, vspace %d\n",
 		tii->src, tii->im, tii->bwidth, tii->hspace, tii->vspace));
 
-#ifndef BUILDERS
+#if 0 /*ndef BUILDERS*/
 	if (tii->im == NULL)
 	    tii->im = oimage_fetch_image(doc, tii->src, tii->ww.type == value_none || tii->hh.type == value_none);
-#endif	
+#endif
     }
 #endif
 }
@@ -711,8 +711,7 @@ extern void new_option_item(HTMLCTX * me, VALUE *value, rid_input_flags flags)
     new = mm_calloc(1, sizeof(*new));
 
     new->flags = flags;
-    if (value->type == value_string)
-	new->value = stringdup(value->u.s);
+    new->value = valuestringdup(value);
 
     rid_option_item_connect(me->form->last_select, new);
 }
@@ -1150,7 +1149,7 @@ extern void push_fake_search_form(HTMLCTX * me, VALUE *prompt)
 
   SJM: Currently this is only called from the <BR> code. We don't want it to
   push a break if the previous word has line break set.
-  
+
   */
 
 extern void text_item_push_break(HTMLCTX * me)
@@ -1176,9 +1175,9 @@ extern void text_item_push_break(HTMLCTX * me)
 	rid_text_item_text *ti = mm_calloc(1, sizeof(*ti));
 
 	PRSDBG(("line break\n"));
-     
+
 	nb = (rid_text_item *) ti;
-     
+
 	nb->tag = rid_tag_TEXT;
 	nb->flag |= rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK;
 	nb->aref = me->aref;	/* Current anchor, or NULL */
@@ -1193,7 +1192,7 @@ extern void text_item_push_break(HTMLCTX * me)
 	flexmem_shift();
 
 	rid_text_item_connect(me->rh->curstream, nb);
-    
+
     }
     else
     {

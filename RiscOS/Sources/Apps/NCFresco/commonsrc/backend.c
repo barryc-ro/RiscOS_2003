@@ -496,7 +496,7 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
     {
 	return NULL;
     }
-    else if (href[0] == '#' && !new_win)
+    else if ( !new_win && href[0] == '#' )
     {
         /* Special case a move to a fragment in the same document and the same window */
         e = backend_goto_fragment(doc, (char *)&href[1]);
@@ -508,6 +508,18 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
 	char *dest;
 
 	base = url_join(BASE(doc), (char *)href);
+	if ( doc->url
+	     && *(doc->url)
+	     && strncmp( base, doc->url, strlen(doc->url) ) == 0
+	     && base[strlen(doc->url)] == '#' )
+        {
+            /* Verbose way of specifying a fragment of the same document,
+             * but it does happen.
+             */
+            mm_free( base );
+            return backend_goto_fragment( doc, 1+(char*)strchr(href,'#') );
+        }
+
 	if (query && *query)
 	{
 	    dest = url_join(base, (char *)query);
@@ -564,9 +576,19 @@ static void backend__doc_click(be_doc doc, be_item ti, int x, int y, wimp_bbits 
 #ifndef BUILDERS
 	            backend_update_link_activate(doc, ti, 1);
                     follow_link = wait_for_release(config_display_time_activate);
+
+                    /* pdh: Fresco seemed to want this, NCFresco may not */
+                    if ( follow_link )
+                        ti->aref->flags |= rid_aref_CHECKED_CACHE + rid_aref_IN_CACHE;
+
 	            backend_update_link_activate(doc, ti, 0);
 #endif
     	        }
+    	        else
+    	        {
+    	            ti->aref->flags |= rid_aref_CHECKED_CACHE + rid_aref_IN_CACHE;
+    	        }
+
 		if (follow_link)
 		    frontend_complain(antweb_handle_url(doc, ti->aref, NULL,
 							(bb & wimp_BRIGHT) ? "_blank" : ti->aref->target));
@@ -1382,9 +1404,11 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 #if USE_MARGINS
     ox += doc->margin.x0;
     oy += doc->margin.y1;
+    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, doc->margin.x0, doc->margin.y1));
+#else
+    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, 0, 0));
 #endif
 
-    RENDBG(("backend_render_rectangle: doc%p ox=%d, oy=%d, encoding=%d, margins %d,%d\n", doc, ox, oy, doc->encoding, doc->margin.x0, doc->margin.y1));
 
 #ifdef RISCOS
     if (doc->encoding != be_encoding_LATIN1)
@@ -1914,7 +1938,7 @@ extern os_error *antweb_trigger_fetching(antweb_doc *doc)
 	while (ti)
 	{   /* Tables will recurse on child objects */
 	    (object_table[ti->tag].size)(ti, doc->rh, doc);
-	    
+
 	    /* might be no pos list, so no scanfr() */
 	    /*ti = ti->next;*/
 	    ti = rid_scanf(ti);
@@ -3146,6 +3170,11 @@ static void be_set_dimensions(be_doc doc)
 
     BENDBG(( "be_set_dimensions: doc%p to %dx%d\n", doc, w, h));
 
+#if !defined(STBWEB) && !defined(BUILDERS)
+    /* pdh: Fresco wants this, don't know whether NCFresco does */
+    frontend_view_margins( doc->parent, &doc->margin );
+#endif
+
 #if USE_MARGINS
     w += doc->margin.x0 - doc->margin.x1;
     h -= doc->margin.y0 - doc->margin.y1;
@@ -3195,6 +3224,10 @@ os_error *backend_reset_width(be_doc doc, int width)
 #if 0
         doc->rh->stream.widest -= doc->margin.x0 - doc->margin.x1;
         doc->rh->stream.height -= doc->margin.y0 - doc->margin.y1;
+#endif
+
+#ifndef STBWEB
+        be_set_dimensions(doc);
 #endif
     }
     else
@@ -3248,7 +3281,7 @@ os_error *backend_goto_fragment(be_doc doc, char *frag)
 	if (ai == NULL)
 	    return doc->ah || doc->ph ? NULL : makeerror(ERR_NO_SUCH_FRAG); /* only give error if document fully downloaded */
 #endif
-	
+
         first = ai && ai->first ? ai->first : doc->rh->stream.text_list;
 	if (first)
 	{
@@ -4110,7 +4143,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
     }
 
     if (so_far > 0 && ftype != -1 && fh &&
-         (status == status_GETTING_BODY) || (status == status_COMPLETED_PART) )
+         ((status == status_GETTING_BODY) || (status == status_COMPLETED_PART) ) )
     {
 	int lastptr = doc->lbytes;
 
@@ -4363,10 +4396,12 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	    cfile = msgs_lookup(tag);
 	}
 
+#ifndef BUILDERS
 	frontend_view_visit(doc->parent, NULL, url,
 			    status == status_BAD_FILE_TYPE ?
 			    (char *)makeerror(ERR_UNSUPORTED_SCHEME) :
 			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile));
+#endif
 
 	backend_dispose_doc(doc);
 	return 0;
@@ -5052,6 +5087,39 @@ extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state)
 
     NOT_USED(doc);
 }
+
+
+/*---------------------------------------------------------------------------*
+ * backend_mark_page_visited                                                 *
+ * Go through all pages marking links to the given url as visited (so it     *
+ * shows up in visited colour when next redrawn)                             *
+ *---------------------------------------------------------------------------*/
+
+void backend_mark_page_visited( const char *url )
+{
+    be_doc doc = document_list;
+
+    while ( doc )
+    {
+        rid_header *rh = doc->rh;
+
+        if ( rh )
+        {
+            rid_aref_item *aref = rh->aref_list;
+
+            while ( aref )
+            {
+                if ( aref->href && !strcmp( aref->href, url ) )
+                    aref->flags &= ~rid_aref_CHECKED_CACHE;
+
+                aref = aref->next;
+            }
+        }
+
+        doc = doc->next;
+    }
+}
+
 
 extern be_item backend_locate_id(be_doc doc, const char *id)
 {

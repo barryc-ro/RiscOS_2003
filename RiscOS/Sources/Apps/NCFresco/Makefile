@@ -96,7 +96,8 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
 		files.o fvpr.o remote.o coalesce.o keyhl.o \
-		buildtime.o format.o colspan.o loformat.o cs2.o highlight.o
+		buildtime.o format.o colspan.o loformat.o cs2.o \
+		highlight.o frameutils.o csgraph.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -170,7 +171,7 @@ UNIX_GCC_FLAGS=-Wall \
 
 UNIX_INCS=	-I../rocompat -I../RISC_OSLib $(BASE_INCS) -I../unix
 UNIX_CFLAGS=	-DUNIX $(UNIX_INCS) -O -g $(UNIX_GCC_FLAGS)
-#UNIX_CFLAGS=	-DUNIX $(UNIX_INCS) -O -g 
+#UNIX_CFLAGS=	-DUNIX $(UNIX_INCS) -O -g
 
 UNIX_VPATH=	../rocompat:../RISC_OSLib:$(BASE_VPATH)
 UNIX_OBJS=	basic1.o $(BASE_OBJS)
@@ -223,7 +224,8 @@ BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
-		loformat.o cs2.o oscaff.o
+		loformat.o cs2.o oscaff.o \
+		csgraph.o 
 BUILDERS_LIBS=
 
 CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1
@@ -233,7 +235,8 @@ CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
-		loformat.o cs2.o oscaff.o
+		loformat.o cs2.o oscaff.o \
+		csgraph.o 
 CHECKERS_LIBS=
 
 HTMLCHECK_INCS=	-I../stdalone
@@ -255,7 +258,7 @@ FIXL_VPATH=	../!Fresco ../commonsrc
 FIXL_OBJS=	SerialEnc.o bittabenc.o fixlicence.o
 
 PLOTCHECK_INCS=	-I../plotcheck -I../RISC_OSLib
-PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -UNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -DBE_DEBUG=0 -O9 -g $(UNIX_CFLAGS)
+PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -UNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -DBE_DEBUG=0 -g $(UNIX_CFLAGS)
 PLOTCHECK_VPATH=$(RISCOS_VPATH)
 PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
@@ -263,7 +266,8 @@ PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
-		loformat.o cs2.o oscaff.o 
+		loformat.o cs2.o oscaff.o csgraph.o
+
 #PLOTCHECK_LIBS=
 PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
 
@@ -710,7 +714,7 @@ RECONS_UNIX:	$(PREDEPS)
 # ===========================================================================
 
 #uncomment this to build dependencies...
-#RISCOS_BUILD_EXPORT=../../../../Export
+RISCOS_BUILD_EXPORT=../../../../Export
 
 #Two possibilities for exporting to
 #RISCOS_BUILD_RESOURCES=../../../../Install
@@ -813,7 +817,8 @@ sr:		NCFRESCO_RISCOS
 NCFRESCO:	NCFRESCO_RISCOS
 
 NCFRESCO_DEPENDS:
-		cd ncfresco ; armdepend -M Makefile $(NCFRESCO_BUILD_CFLAGS) ../parser/*.c ../fresparse/*.c ../parser/*.c ../commonsrc/*.c ../!NCFresco/*.s
+		cd ncfresco ; armdepend -M Makefile $(NCFRESCO_BUILD_CFLAGS) ../parser/*.c ../fresparse/*.c ../parser/*.c ../commonsrc/*.c ../!NCFresco/*.s ../!NCFresco/*.c
+		cd ncfresco ; chmod a+w Makefile
 		@echo NCFresco dependencies generated
 
 # Export the NCFresco resources for ROM building
@@ -883,7 +888,7 @@ NCFRESCO_NT:
 		LIBS="$(NCFRESCO_ANT_LIBS) $(RISCOS_LIBS)" \
 		OBJS="$(NCFRESCO_ANT_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(NCFRESCO_ANT_CFLAGS) $(RISCOS_CFLAGS)" \
+		CFLAGS="-I../tcpiplibs $(NCFRESCO_ANT_CFLAGS) $(RISCOS_CFLAGS) -USTBWEB_BUILD" \
 		LDFLAGS="$(NCFRESCO_ANT_LDFLAGS)" \
 		$(POSTACTS)
 

@@ -198,7 +198,7 @@ typedef SHORTISH rid_flag;
 
 /* NOTE: THE ABILITY OF SOME NUMERIC FIELDS TO STORE NEGATIVE */
 /* VALUES IS USED TO INDICATE EXTRA INFORMATION. SUCH FIELDS ARE */
-/* leading: -2 == holder for pending items */
+/* leading: -2 == holder for pending items: 970519: DAF: not used anymore */
 
 #define IS_MAGIC_LEADING(n)	( (n) < 0 )
 #define MAGIC_LEADING_PENDING	-2
@@ -232,7 +232,7 @@ typedef struct rid_float_item
 {
     struct rid_float_item *	next;	/* next L/R float item */
     struct rid_text_item *	ti;	/* The item that is floating */
-    struct rid_pos_item *	pi;	/* The FIRST line that it floats on */
+    struct rid_pos_item *	pi;	/* The FIRST line that THIS item floats on */
     int				height;	/* The height of the floating object */
     int				height_left;
     int				entry_margin;
@@ -247,7 +247,7 @@ typedef struct rid_float_item
 typedef struct rid_floats_link {
     struct rid_float_item *	left; /* going rightwards */
     struct rid_float_item *	right; /* going leftwards */
-    int				right_margin;
+    int				right_margin; /* An absolute position */
 } rid_floats_link;
 
 /* This is just a hold-all used during formatting - only for old
@@ -558,7 +558,9 @@ typedef SHORTISH rid_cell_flags;
 #define rid_cf_RELATIVE		0x0080  /* Cell has WIDTH=N* */
 #define rid_cf_ABSOLUTE		0x0100  /* Cell has WIDTH=N  */
 #define rid_cf_BACKGROUND       0x0200  /* Cell has background colour */
-#define rid_cf_NOCONS		0x0400  /* Constraint has been stomped on */
+#define rid_cf_NOCONS		0x0400  /* WIDTH attribute has been overruled */
+#define rid_cf_ORNOWRAP		0x0800	/* Overruled NOWRAP attribute */
+#define rid_cf_ASAP		0x1000	/* Format as small as possible */
 
 /*****************************************************************************
 

@@ -21,7 +21,6 @@
 #define TARGET_ERROR	"__error"
 #define TARGET_FIND	"__find"
 
-extern fe_view fe_find_top(fe_view v);
 extern fe_view fe_find_window(fe_view start, wimp_w w);
 extern fe_view fe_find_target(fe_view start, const char *target);
 extern fe_view fe_find_top_popup(fe_view v);

@@ -102,3 +102,5 @@ extern os_error *webfont_declare_printer_fonts(void);
 extern os_error *webfont_drawfile_fontlist(int fh, int *writeptr);
 extern int webfont_font_width(int f, const char *s);
 extern int webfont_lookup(const char *font_name);
+extern int webfont_font_width_n(int f, const char *s, int n);
+extern int webfont_split_point(int f, const char *s, int width);

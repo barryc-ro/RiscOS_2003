@@ -73,6 +73,8 @@ struct _frontend_view
     wimp_box backend_margin;    /* any margin defined by a FRAMESET tag */
     wimp_box box;       /* this is the box as defined by the frameset */
 
+    int dbox_x, dbox_y;		/* sizes for dbox thingies */
+    
 /*    int scroll_x;       // distance from lwa origin to left of screen +ve right */
 /*    int scroll_y;       // distance from lwa origin to top of screen  +ve up */
 
@@ -188,10 +190,12 @@ extern int keyboard_state;
 
 #define STATUS_TOP_MARGIN		0 /* 16 */
 
-extern fe_view fe_find_top(fe_view v);
+extern fe_view frameutils_find_top(fe_view v);
 
 /* ----------------------------------------------------------------------------- */
 
+#define fe_position_TOOLBAR_WITH_COORDS		5
+#define fe_position_CENTERED_WITH_COORDS	4
 #define fe_position_COORDS	3
 #define fe_position_TOOLBAR	2
 #define fe_position_CENTERED	1

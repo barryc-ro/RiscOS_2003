@@ -25,6 +25,7 @@
 #include "stbutils.h"
 #include "stbfe.h"
 #include "fevents.h"
+#include "frameutils.h"
 
 #define X_BORDER 12
 #define Y_BORDER 12
@@ -257,7 +258,7 @@ static os_error *fe_menu_window(fe_menu mh)
 	    win.box.y0 = - (mh->size * line_space) - Y_BORDER;
 	    win.flags = (wimp_wflags) (win.flags | wimp_WVSCR);
 	    mh->vscroll = TRUE;
-	    
+
 	}
         else
         {
@@ -281,7 +282,7 @@ static os_error *fe_menu_window(fe_menu mh)
 
 	if (!config_display_frames_scrollbars)
 	    win.flags &= ~wimp_WVSCR;
-	
+
 	/* Create the window, dealing with errors */
 	ep = frontend_complain(wimp_create_wind(&win, &(mh->wh)));
 	if (ep)
@@ -319,7 +320,7 @@ static int get_widest_entry(fe_menu_item *items, int n)
 {
     int i, widest;
     fe_menu_item *item;
-    
+
     font_setfont(webfonts[MENU_FONT].handle);
     widest = 0;
 
@@ -405,7 +406,7 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
         return;
 #endif
 
-    cvt = fe_get_cvt(mh->parent);
+    cvt = frameutils_get_cvt(mh->parent);
     p.x = x;
     p.y = y;
     coords_point_toscreen(&p, &cvt);
@@ -448,7 +449,7 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
 
 	/* see if we overhang the bottom of the safe area */
         overhang = - state.o.box.y0 + text_safe_box.y0;
-	
+
 	/* move up */
         if (overhang > 0)
         {

@@ -25,6 +25,7 @@
 #include "stbhist.h"
 #include "stbutils.h"
 #include "stbtb.h"
+#include "frameutils.h"
 
 static void global_event_handler(int event)
 {
@@ -85,15 +86,15 @@ static void global_event_handler(int event)
 	fe_iconise(FALSE);
 	break;
 
-	
+
     case fevent_GLOBAL_FONT_INC:
 	fe_font_size_set(+1, FALSE);
 	break;
-	
+
     case fevent_GLOBAL_FONT_DEC:
 	fe_font_size_set(-1, FALSE);
 	break;
-	
+
     default:
 	if ((event &~ fevent_GLOBAL_FONT_MASK) == fevent_GLOBAL_FONT_SET)
 	{
@@ -111,7 +112,7 @@ static void toggle_event_handler(int event, fe_view v)
     {
         case fevent_TOGGLE_FRAMES:
             parse_frames(-1);
-            frontend_complain(fe_reload(fe_find_top(v)));
+            frontend_complain(fe_reload(frameutils_find_top(v)));
             break;
 
         case fevent_TOGGLE_STATUS:
@@ -274,11 +275,11 @@ static void misc_event_handler(int event, fe_view v)
     case fevent_PRINT_LETTER:
 	frontend_complain(fe_print(v, fe_print_LETTER));
 	break;
-	
+
     case fevent_PRINT_LEGAL:
 	frontend_complain(fe_print(v, fe_print_LEGAL));
 	break;
-	
+
     case fevent_OPEN_WRITEABLE:
 	tb_open_url_and_close();
 	break;
@@ -536,7 +537,7 @@ static void frame_link_event_handler(int event, fe_view v)
     case fevent_FRAME_LINK_LEFT:
 	fe_frame_link_move(v, be_link_BACK);
 	break;
-	
+
     case fevent_FRAME_LINK_RIGHT:
 	fe_frame_link_move(v, 0);
 	break;
@@ -574,7 +575,7 @@ static void encoding_event_handler(int event, fe_view v)
 void fevent_handler(int event, fe_view v)
 {
     STBDBG(("fevent_handler(): event %x v %p\n", event, v));
-    
+
     switch (event & fevent_CLASS_MASK)
     {
     case fevent_CLASS_GLOBAL:

@@ -544,6 +544,8 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action);
 
 extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state);
 
+extern void backend_mark_page_visited( const char *url );
+
 extern be_item backend_locate_id(be_doc doc, const char *id);
 
 #define be_encoding_READ	(-1)

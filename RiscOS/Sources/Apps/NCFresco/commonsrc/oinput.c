@@ -66,6 +66,8 @@
 
 #define DEFAULT_XSIZE		20
 
+#define INPUT_BUTTON_BORDER_X	10
+
 /* ---------------------------------------------------------------------- */
 
 #define BUTTON_NAME_OPTION	4
@@ -293,7 +295,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	{
 #ifdef STBWEB
 	    struct webfont *wf = &webfonts[ti->st.wf_index];
-	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(ti->st.wf_index, t) + 20;
+	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(ti->st.wf_index, t) + INPUT_BUTTON_BORDER_X*2;
 	    if (ii->hh.type != value_absunit)
 	    {
 		ti->max_up = wf->max_up + 4;
@@ -305,7 +307,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 		ti->max_down = (int)ii->hh.u.f - ti->max_up;
 	    }
 #else
-	    ti->width = webfont_tty_width(strlen(t), 1) + 20;
+	    ti->width = webfont_tty_width(strlen(t), 1) + INPUT_BUTTON_BORDER_X*2;
 	    ti->max_up = webfonts[WEBFONT_BUTTON].max_up + 4;
 	    ti->max_down = webfonts[WEBFONT_BUTTON].max_down + 4;
 #endif
@@ -538,13 +540,18 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_SUBMIT:
     case rid_it_RESET:
     case rid_it_BUTTON:
+    {
+	int split, width, t_len;
+	int fontnum;
+	
 	fg = ii->base.colours.back == -1 && ii->base.colours.select == -1 && ii->data.button.im == NULL ? render_colour_INPUT_F :
 	    render_text_link_colour(ti, doc);
 	bg = 0;
 
 	t = ii->value ? ii->value : ii->tag == rid_it_SUBMIT ? "Submit" : "Reset";
+	t_len = strlen(t);
 
-	wf = &webfonts[WEBFONT_BUTTON];
+	fontnum = WEBFONT_BUTTON;
 	
 	if (ii->data.button.im)
 	{
@@ -564,8 +571,10 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 			 ti->width/2, (ti->max_up + ti->max_down)/2,
 			 doc->scale_value, antweb_render_background, doc, oox, ooy);
 	    
-	    wf = &webfonts[ti->st.wf_index];
+	    fontnum = ti->st.wf_index;
 	    plotx = (ti->width - webfont_font_width(ti->st.wf_index, t))/2;
+	    if (plotx < INPUT_BUTTON_BORDER_X)
+		plotx = INPUT_BUTTON_BORDER_X;
 	}
 	else
 	{
@@ -579,6 +588,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 		    bg = render_colour_INPUT_S;
 		else
 		    bg = ii->base.colours.select | render_colour_RGB;
+		fg = render_colour_INPUT_B;
 	    }
 	    else
 		bg = (ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB);
@@ -591,16 +601,17 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 			       render_plinth_RIM | render_plinth_DOUBLE_RIM,
 			       hpos, bline - ti->max_down,
 			       ti->width, (ti->max_up + ti->max_down), doc );
-	    wf = &webfonts[ti->st.wf_index];
+	    fontnum = ti->st.wf_index;
 #else
 	    render_plinth(bg,
 			  ii->data.button.tick ? render_plinth_IN : 0,
 			  hpos, bline - ti->max_down,
 			  ti->width, (ti->max_up + ti->max_down), doc );
 #endif
-	    plotx = 10;
+	    plotx = INPUT_BUTTON_BORDER_X;
 	}
 	
+	wf = &webfonts[ti->st.wf_index];
 	if (fs->lf != wf->handle)
 	{
 	    fs->lf = wf->handle;
@@ -614,11 +625,39 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    render_set_font_colours(fg, bg, doc);
 	}
 
-	RENDBG(("oinput_redraw: wf_index %x wf->handle %d\n", ti->st.wf_index, wf->handle));
-	
-	font_paint(t, font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0), hpos + plotx, bline);
-	break;
+	/* see if it will fit */
+	split = t_len;
+	width = 0;
+	if (ii->data.button.im || ii->ww.type == value_absunit)
+	{
+	    split = webfont_split_point(fontnum, t, ti->width - INPUT_BUTTON_BORDER_X*2);
 
+	    /* if not then make room for the ... */
+	    if (split != t_len)
+	    {
+		split -= 3;
+		width = webfont_font_width_n(fontnum, t, split);
+	    }
+	}
+
+	RENDBG(("oinput_redraw: wf_index %x wf->handle %d split %d width %d\n", ti->st.wf_index, wf->handle, split, width));
+	
+	/* plot the main string */
+	_swix(Font_Paint, _INR(1,4)|_IN(7),
+	      t, font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0) + (1<<7),
+	      hpos + plotx, bline,
+	      split);
+
+	/* write ... if didn't fit */
+	if (split != t_len)
+	{
+	    _swix(Font_Paint, _INR(1,4),
+		  "...", font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0),
+		  hpos + plotx + width, bline);
+	}
+	break;
+    }
+    
     case rid_it_RADIO:
     case rid_it_CHECK:
     {

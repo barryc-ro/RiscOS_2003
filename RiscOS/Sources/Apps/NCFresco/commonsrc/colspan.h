@@ -6,6 +6,9 @@
  * (patrick@chaos.org.uk).
  *
  * Additional implementation by borris.
+ *
+ * Further applied hindsight by Patrick.
+ *
  */
 
 #ifndef __colspan_h
@@ -40,8 +43,20 @@
 
   Each pcp_cell also has two more fields, 'leftmost' and 'rightmost';
   these are used by the colspan algorithm itself to store the leftmost
-  and rightmost positions of the right boundary of the column while
-  considering one particular set of widths.
+  and rightmost positions of the *left* boundary (NB used to be right,
+  see below) of the column while considering one particular set of
+  widths.
+
+  PCP 8th May 1997: now changing the use of this datastructure so that
+  we store n+1 cell records instead of n, so that they can be used to
+  store sizes and flags on cell boundaries as well as the cells
+  themselves. Cells and their boundaries are both numbered from 0 at
+  the left, thus the last entry in a table's array of cell records
+  does not actually represent a cell but it stores its left boundary
+  which is the right-hand side of the table. This change not only
+  simplifies the internals of colspan_algorithm itself (avoiding the
+  need for special-case boundary code) but also gives us somewhere to
+  hang fields for the new constraints analysis code (eg 'dad').
 
   We also store two summary N_COLSPAN_WIDTHS widths arrays in the
   table - one for vertical information and the other for
@@ -178,11 +193,13 @@ struct pcp_cell_s
 {
     struct pcp_group_s * first_start; /* pointer to first group starting here */
     struct pcp_group_s * first_end; /* pointer to first group ending here */
-    int leftmost;		/* lowest possible position of end of cell */
-    int rightmost;		/* highest possible position of end of cell */
+    int leftmost;		/* lowest possible position of start of cell */
+    int rightmost;		/* highest possible position of start of cell */
     unsigned int flags;		/* bitmap of constraints satisfied */
     rid_table_cell *table_cell;	/* cell in table  */
     int width[N_COLSPAN_WIDTHS]; /* widths of this column on its own */
+    int dad;			/* index of another cell boundary connected
+				   to this via a particular kind of constraint */
 };
 
 typedef struct pcp_cell_s pcp_cell_t, *pcp_cell;
@@ -406,6 +423,21 @@ extern void colspan_all_and_eql_scale(rid_table_item *table,
 				      unsigned int AND,
 				      unsigned int EQL,
 				      double scale);
+
+/*****************************************************************************
+
+ from csgraph.c (added PCP 11/5/97) */
+
+extern int find_connected_components (rid_table_item *table, 
+				      unsigned int col_flags, 
+				      unsigned int grp_flags, 
+				      BOOL horiz);
+
+extern BOOL same_connected_component (pcp_cell the_cells, int i, int j);
+
+extern void csg_examine(pcp_cell the_cells, const int max);
+
+extern int csg_find_abs_floaters(rid_table_item *table, BOOL horiz);
 
 /*****************************************************************************/
 

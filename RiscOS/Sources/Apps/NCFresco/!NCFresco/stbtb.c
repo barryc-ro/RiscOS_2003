@@ -36,7 +36,38 @@
 #include "stbopen.h"
 #include "fevents.h"
 
+/* --------------------------------------------------------------------------*/
+
 #define LIGHT_OFF_DELAY     (2*100)
+
+/* --------------------------------------------------------------------------*/
+
+typedef void (*tb_bar_entry_fn)(fe_view v);
+typedef void (*tb_bar_exit_fn)();
+
+typedef struct
+{
+    char *tv_name;
+    char *monitor_name;
+
+    tb_bar_entry_fn entry_fn;
+    tb_bar_exit_fn exit_fn;
+
+    int initial_component;	/* when moving onto it */
+    int open_component;		/* when opening it */
+    int return_component;
+
+    int can_grey;
+
+    int return_bar;		/*  -1 means stack */
+} tb_bar_descriptor;
+
+#define BAR_CANT	(-2)
+#define BAR_STACK	(-1)
+#define BAR_MAIN	0
+#define BAR_EXTRAS	2
+#define BAR_STATUS	8
+#define BAR_CODEC	9
 
 /* --------------------------------------------------------------------------*/
 
@@ -674,8 +705,8 @@ static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
     int highlight = get_highlighted(tbi);
     int active = get_active(tbi);
 
-    /* if there is an active highlight then can only move off it */
-    if (active != -1 && active != highlight)
+    /* if there is an active highlight then can only move off it - unless on the codec toolbar */
+    if (active != -1 && active != highlight && tbi->num != BAR_CODEC)
 	return FALSE;
     
     /* get the position of the item we are moving off */
@@ -857,33 +888,6 @@ static void tb_bar_details_entry_fn(fe_view v)
 /* --------------------------------------------------------------------------*/
 
 /* This must agree with the defs in fevents.h */
-
-typedef void (*tb_bar_entry_fn)(fe_view v);
-typedef void (*tb_bar_exit_fn)();
-
-typedef struct
-{
-    char *tv_name;
-    char *monitor_name;
-
-    tb_bar_entry_fn entry_fn;
-    tb_bar_exit_fn exit_fn;
-
-    int initial_component;	/* when moving onto it */
-    int open_component;		/* when opening it */
-    int return_component;
-
-    int can_grey;
-
-    int return_bar;		/*  -1 means stack */
-} tb_bar_descriptor;
-
-#define BAR_CANT	(-2)
-#define BAR_STACK	(-1)
-#define BAR_MAIN	0
-#define BAR_EXTRAS	2
-#define BAR_STATUS	8
-#define BAR_CODEC	9
 
 static tb_bar_descriptor bar_names[] =
 {

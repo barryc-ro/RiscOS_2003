@@ -1791,7 +1791,7 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	break;
     }
 #endif
-    
+
     if (tab->props != NULL)
     {
 	TABDBG(("Setting table alignment %d\n", tab->props->halign));
@@ -2834,6 +2834,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     switch ( (attr = &attributes->value[HTML_TD_WIDTH])->type )
     {
     case value_absunit:
+	FMTDBG(("start_tdth: taking %%age value %d from %g\n", ceil(attr->u.f), attr->u.f));
 	cell->flags |= rid_cf_ABSOLUTE;
 	cell->userwidth = *attr;
 	break;
@@ -2850,6 +2851,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	TABDBG(("table cell size %g\n", attr->u.f));
 	if ( ceil(attr->u.f) > 0 )
 	{
+	    FMTDBG(("start_tdth: taking %%age value %d from %g\n", ceil(attr->u.f), attr->u.f));
 	    cell->flags |= rid_cf_PERCENT;
 	    cell->userwidth = *attr;
 	}

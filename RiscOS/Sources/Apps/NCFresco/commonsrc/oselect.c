@@ -259,20 +259,20 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	return;
     }
     
+    fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
+
     if (selected)
     {
 	if (sel->base.colours.select != -1)
 	    bg = sel->base.colours.select | render_colour_RGB;
 	else
 	    bg = render_colour_INPUT_S;
+	fg = render_colour_INPUT_B;
     }
     else
     {
 	bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back | render_colour_RGB;
     }
-
-    fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
-
     
 #ifdef STBWEB
     render_plinth_full(bg,

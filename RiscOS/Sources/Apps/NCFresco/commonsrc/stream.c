@@ -207,7 +207,10 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	    if (pi->floats->left)
 	    {
 		float_l = pi->floats->left->ti;
+		/* pdh: don't add this to left_margin as that includes floater
+		 * width these days
 		hpos += float_l->width;
+		 */
 	    }
 	    if (pi->floats->right)
 		float_r = pi->floats->right->ti;
@@ -303,7 +306,9 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
 		    pi->floats->left->ti, pi->floats->left->pi));
 
 	    float_l = pi->floats->left->ti;
+	    /* pdh: not with the new formatter it doesn't
 	    hpos += float_l->width;
+	     */
 	}
 	if (pi->floats->right)
 	{
@@ -485,8 +490,10 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 		float_r = NULL;
 	    }
 
+            /* pdh: left_margin now includes float width
 	    if (float_l)
 		hpos += float_l->width;
+             */
 	}
 
 	RENDBGN(("Base line at %d, hpos starts at %d\n", bline, hpos));
@@ -612,8 +619,10 @@ void stream_write_as_drawfile(be_doc doc, rid_text_stream *stream,
 		float_r = NULL;
 	    }
 
+            /* pdh: left_margin include floater width now
 	    if (float_l)
 		hpos += float_l->width;
+             */
 	}
 
 	bb.x0 = ox + dwidth;

@@ -293,7 +293,7 @@ static key_list nc_resizing_keys[] =
     { 0 }
 };
 
-/* mode keyboard = FALSE */   
+/* mode keyboard = FALSE */
 
 static key_list nc_movement2_keys[] =
 {
@@ -319,7 +319,7 @@ static key_list nc_movement2_keys[] =
     { 0 }
 };
 
-/* mode keyboard = TRUE */   
+/* mode keyboard = TRUE */
 
 static key_list nc_movement1_keys[] =
 {
@@ -418,7 +418,7 @@ static key_list rca_web_keys[] =
     { ctrl('r'),			fevent_RELOAD + fevent_WINDOW },
 
     { akbd_Fn12,			fevent_TOGGLE_STATUS },
-    
+
     { 30,				fevent_HOME + fevent_WINDOW },
     { kbd_handset_HOME,			fevent_HOME + fevent_WINDOW },
 
@@ -461,7 +461,7 @@ static key_list rca_resizing_keys[] =
     { 0 }
 };
 
-/* mode keyboard = FALSE */   
+/* mode keyboard = FALSE */
 
 static key_list rca_movement2_keys[] =
 {
@@ -490,7 +490,7 @@ static key_list rca_movement2_keys[] =
     { 0 }
 };
 
-/* mode keyboard = TRUE */   
+/* mode keyboard = TRUE */
 
 #define rca_movement1_keys	rca_movement2_keys
 
@@ -565,7 +565,7 @@ static key_list platform_riscos_keys[] =
     { 27, fevent_TOOLBAR_EXIT },
     { akbd_Fn+4, fevent_HISTORY_BACK+fevent_WINDOW },
     { akbd_Fn+5, fevent_HISTORY_FORWARD+fevent_WINDOW },
-    
+
     { 0 }
 };
 
@@ -708,7 +708,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
         event = fe_key_lookup(chcode, get_key_map(key_map_TOOLBAR));
     }
 
-    if (event == -1 && resizing_view)
+    if (event == -1 && frameutils_are_we_resizing() )
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_RESIZING));
         if (event == -1)
@@ -731,7 +731,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 
     if (event == -1 && on_screen_kbd)
 	event = fe_key_lookup(chcode, get_key_map(key_map_OSK));
-    
+
     if (event == -1 && fe_writeable_handle_keys(v, chcode))
     {
         event = 0;  /* key handled, no event */
@@ -771,11 +771,11 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 	event = fe_key_lookup(chcode, platform_trial_keys);
 	break;
     }
-    
+
     /* check for the handset transport keys */
     if (event == -1)
 	event = fe_key_lookup(chcode, get_key_map(key_map_CODECS));
-    
+
     /* call event handler or pass on */
     if (event != -1)
         fevent_handler(event, v ? v : main_view);

@@ -35,7 +35,7 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
     sa->sin_family = AF_INET;
     sa->sin_port = htons((short)def_port);
 
-    ACCDBGN(("netloc_resolve: %s setting port to 0x%04x (%d)\n", location,
+    ACCDBG(("netloc_resolve: %s setting port to 0x%04x (%d)\n", location,
 	             sa->sin_port, def_port ));
 
     if ( !location )
@@ -73,8 +73,9 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
 
     r.r[0] = (int) (long) location;
 
-    if ( strspn(location, "012345679.") == strlen(location) )
+    if ( strspn(location, "0123456789.") == strlen(location) )
     {
+        ACCDBG(("netloc_resolve: %s is numeric, calling inet_addr\n",location));
 	sa->sin_addr.s_addr = (unsigned int) inet_addr(location);
 	*status = 0;
 	ep = NULL;

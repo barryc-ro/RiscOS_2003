@@ -55,19 +55,19 @@ struct layout_spacing_info
  * down the frame sets to build it up.
  */
 
-static int be_get_frame_size(const rid_stdunits *val, double pcent_unit, double mult_unit, double px_unit)
+static int be_get_frame_size(const rid_stdunits *val, double pcent_unit, double mult_unit, double px_unit, int mask)
 {
     PRSDBG(( "layout: units %d/%g\n", val->type, val->u.f));
     switch (val->type)
     {
         case rid_stdunit_MULT:
-            return (int)(val->u.f*mult_unit) &~ 1;
+            return (int)(val->u.f*mult_unit) & mask;
 
         case rid_stdunit_PX:    /* pixels */
-            return (int)(val->u.f*px_unit) &~ 1;
+            return (int)(val->u.f*px_unit) & mask;
 
         case rid_stdunit_PCENT:
-            return (int)(val->u.f*pcent_unit) &~ 1;
+            return (int)(val->u.f*pcent_unit) & mask;
     }
     return 0;
 }
@@ -78,51 +78,70 @@ static int be_get_frame_size(const rid_stdunits *val, double pcent_unit, double 
  * ie one frame eneds at val[]-SPACING and the next starts at val[]+SPACING
  */
 
-static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_frame_unit_totals *totals, int start, int size, int spacing)
+static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_frame_unit_totals *totals, int start, int size, int spacing, int mask)
 {
     int *pos;
 
     pos = mm_calloc(n + 1, sizeof(int));
     pos[0] = start;
 
-    size -= (n-1)*spacing*2;
+    /* Force this one (it might not be so already, 'cos of rounding errors) */
+    pos[n] = start + size;
 
-    if (n == 1)
-    {
-        pos[1] = start + size;
-    }
-    else
+    /* Fill in middle ones */
+    if (n > 1)
     {
         double mult_unit = 0;
         double pcent_unit = 0;
         double px_unit = 1;
         int i;
+        int remaining;
 
-        if (totals->pcent == 0 && totals->mult == 0)
+        size -= (n-1)*spacing*2;
+
+        if ( (totals->pcent == 0 && totals->mult == 0)
+                || ( totals->px > size ) )
         {
             /* if only pixels then we might have to scale them up */
+            /* pdh: and if there's an explicitly-too-wide pixel thing,
+             * we might have to scale them down.
+             */
+
             /* remember size is in OS coords */
             px_unit = ((double)size)/totals->px;
         }
 
+        remaining = size - (int)(totals->px * px_unit);
+
         if (totals->pcent)
         {
-            /* if we have variables then percents are what they say they are */
-            if (totals->mult)
+            /* if we have variables AND there's enough space left then percents
+             * are what they say they are */
+
+            if (totals->mult
+                 && ( totals->pcent/100.0 <= (remaining/(double)size) ) )
+            {
                 pcent_unit = size / 100.0;
-            /* otherwise we have to scale the percent unit to fill the space */
-            /* taking into account what has been used by pixels (as a percentage) */
+            }
             else
-                pcent_unit = size / (totals->pcent + totals->px*100.0/size);
+            {
+                /* otherwise we have to scale the percent unit to fill the space
+                 * taking into account what has been used by pixels (as a
+                 * percentage)
+                 */
+                pcent_unit = remaining / totals->pcent;
+            }
         }
+
+        remaining -= (int)(totals->pcent * pcent_unit);
 
         /* if we have variables then divide up space not used by pixels and percents. */
         if (totals->mult)
-            mult_unit = ((double)size - (double)totals->px - totals->pcent*pcent_unit) / totals->mult;
+            mult_unit = remaining / (double) totals->mult;
 
-        for (i = 1; i <= n; i++)
+        for (i = 1; i < n; i++)
         {
-            pos[i] = pos[i-1] + be_get_frame_size(&vals[i-1], pcent_unit, mult_unit, px_unit);
+            pos[i] = pos[i-1] + be_get_frame_size(&vals[i-1], pcent_unit, mult_unit, px_unit, mask);
             if (i == 1 || i == n)
                 pos[i] += spacing;
             else
@@ -137,11 +156,11 @@ static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_fram
 /* correct backwards for all the spacing added */
 
 #if FRAMES
-static void fix_frame_sizes(rid_stdunits *vals, int n, rid_frame_unit_totals *totals, int size, int spacing)
+static void fix_frame_sizes(rid_stdunits *vals, int n, rid_frame_unit_totals *totals, int size, int spacing, int mask)
 {
     rid_stdunits *val;
     int i;
-    int *pos = be_build_frame_sizes(vals, n, totals, 0, size, spacing);
+    int *pos = be_build_frame_sizes(vals, n, totals, 0, size, spacing, mask);
 
     totals->px = 0;
     totals->mult = 0;
@@ -174,12 +193,18 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
     int i;
     int last_row_divider = 0, last_col_divider = 0;
     int bdflag = fs->bwidth ? 0 : rid_frame_divider_BORDERLESS;
+    int mask;   /* for rounding to nearest pixel. NOT always ~1 in Fresco! */
 
     PRSDBG(( "layout: %p/%p %dx%d sizes @%p,%p\n", frameset, fs, fs->ncols, fs->nrows, fs->widths, fs->heights));
 
     /* build the arrays of widths and heights */
-    xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, bbox->x0, bbox->x1 - bbox->x0, fs->bwidth);
-    ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, bbox->y0, bbox->y1 - bbox->y0, fs->bwidth);
+
+    /* mask=~0 (eig=0), mask=~1 (eig=1), mask=~3 (eig=2) etc */
+    mask = ~( ( 1 << bbc_modevar(-1,bbc_XEigFactor) ) - 1 );
+    xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, bbox->x0, bbox->x1 - bbox->x0, fs->bwidth, mask);
+
+    mask = ~( ( 1 << bbc_modevar(-1,bbc_YEigFactor) ) - 1 );
+    ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, bbox->y0, bbox->y1 - bbox->y0, fs->bwidth, mask);
 
     frame_previous_row = NULL;
 
@@ -297,7 +322,10 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 
                 /* copy information from the rid to fe structure */
                 info->name = f->name;
+#ifdef STBWEB
+                /* pdh: in Fresco we have widgets, not scrollbars */
                 info->scrolling = f->scrolling;
+#endif
                 info->noresize = f->noresize;
 
                 info->box.x0 = bb.x0;
@@ -538,6 +566,7 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
 {
     layout_spacing_info *spc = (layout_spacing_info *)(long) handle;
     rid_frameset_item *fs = spc->container;
+    int mask;
 
     PRSDBG(( "layout: resize doc %p handle %x to %d,%d\n", doc, handle, x, y));
 
@@ -548,8 +577,10 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
         if (y > spc->bbox.y1 - MIN_Y_SIZE)
             y = spc->bbox.y1 - MIN_Y_SIZE;
 
+        mask = ~( ( 1 << bbc_modevar(-1,bbc_YEigFactor) ) - 1 );
+
         fix_frame_sizes(fs->heights, fs->nrows, &fs->height_totals,
-            spc->container_box.y1 - spc->container_box.y0, fs->bwidth);
+            spc->container_box.y1 - spc->container_box.y0, fs->bwidth, mask);
 
         fs->heights[spc->index - 1].u.f = (spc->bbox.y1 - (double)y - fs->bwidth);
         fs->heights[spc->index].u.f     = ((double)y - spc->bbox.y0 - fs->bwidth);
@@ -563,8 +594,10 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
         if (x > spc->bbox.x1 - MIN_X_SIZE)
             x = spc->bbox.x1 - MIN_X_SIZE;
 
+        mask = ~( ( 1 << bbc_modevar(-1,bbc_XEigFactor) ) - 1 );
+
         fix_frame_sizes(fs->widths, fs->ncols, &fs->width_totals,
-            spc->container_box.x1 - spc->container_box.x0, fs->bwidth);
+            spc->container_box.x1 - spc->container_box.x0, fs->bwidth, mask);
 
         fs->widths[spc->index - 1].u.f  = ((double)x - spc->bbox.x0 - fs->bwidth);
         fs->widths[spc->index].u.f      = (spc->bbox.x1 - (double)x - fs->bwidth);
@@ -625,8 +658,8 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
     const rid_frameset_item *fs = &frameset->data.frameset;
     int i, count = base_count;
 
-    int *xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, 0, fmt_w, fs->bwidth);
-    int *ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, 0, fmt_h, fs->bwidth);
+    int *xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, 0, fmt_w, fs->bwidth, ~1);
+    int *ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, 0, fmt_h, fs->bwidth, ~1);
 
     PRSDBG(("layout__writetable: frameset %p prefix '%s' fn %p base count %d\n", frameset, strsafe(prefix), fn, base_count));
 

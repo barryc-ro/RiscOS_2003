@@ -82,6 +82,7 @@
 #include "stbfe.h"
 #include "stbopen.h"
 #include "fevents.h"
+#include "frameutils.h"
 
 #if MEMLIB
 #include "memheap.h"
@@ -173,13 +174,13 @@ extern void parse_frames(int yes);
 extern void image_get_cooler_table(void);
 
 static void fe_drag(const wimp_mousestr *m);
-static BOOL fe_resize(const wimp_mousestr *m);
+/* static BOOL fe_resize(const wimp_mousestr *m); */
 static void fe_status_mode(fe_view v, int mode, int override);
 static os_error *fe_status_state(fe_view v, int state);
 
 static void check_pending_scroll(fe_view v);
 
-static int fe_check_resize(fe_view start, int x, int y, wimp_box *box, int *handle, fe_view *resizing_v);
+/* static int fe_check_resize(fe_view start, int x, int y, wimp_box *box, int *handle, fe_view *resizing_v); */
 static void fe_update_page_info(fe_view v);
 static void fe_force_fit(fe_view v, BOOL force);
 static void fe_keyboard_close(void);
@@ -282,11 +283,12 @@ void frontend_pointer_set_position(fe_view v, int x, int y)
 
     if (v)
     {
-	coords_cvtstr cvt = fe_get_cvt(v);
+	coords_cvtstr cvt = frameutils_get_cvt(v);
 	coords_point_toscreen(&p, &cvt);
     }
-    
+
     pointer_set_position(p.x, p.y);
+
 /*     pointer_last_pos.x = p.x &~ (frontend_dx - 1); */
 /*     pointer_last_pos.y = p.y &~ (frontend_dy - 1); */
     pointer_ignore_next = TRUE;
@@ -368,7 +370,7 @@ void fe_set_pointer(int item_flags)
 
     if (!config_display_fancy_ptr && num > 0 && num < 5) /* no_fancy disables hand and caret pointers */
 	num = 0;
-    
+
     if (num != pointer_current)
     {
         pointer_info *info = &pointers[num];
@@ -414,8 +416,8 @@ int fe_bg_colour(fe_view v)
 
     if (v == NULL)		/* can happen on first page */
 	return 0;
-    
-    pw = render_get_colour(render_colour_BACK, fe_find_top(v)->displaying);
+
+    pw = render_get_colour(render_colour_BACK, frameutils_find_top(v)->displaying);
     wimp_readpalette(&pal);
 
     return find_closest_colour(pw.word, (int *)pal.c, 16);
@@ -470,12 +472,12 @@ static void adjust_box_for_toolbar(wimp_box *box)
     {
 	wimp_box bb;
 	tb_status_box(&bb);
-	
+
 	if (config_display_control_top)
 	{
 	    if (box->y1 > bb.y0)
 		box->y1 = bb.y0;
-	}		
+	}
 	else
 	{
 	    if (box->y0 < bb.y1)
@@ -519,7 +521,7 @@ static int fade_frame_rectangle(wimp_redrawstr *r, void *h, int update)
     int ref;
 
     STBDBG(("fade_frame_rectangle: %d,%d %d,%d\n", r->g.x0, r->g.y0, r->g.x1, r->g.y1));
-    
+
     if (_swix(ScreenFade_FadeRectangle, _INR(0,7) | _OUT(1),
 	  0 + (1<<8),
 	  r->g.x0, r->g.y0, r->g.x1, r->g.y1,
@@ -545,13 +547,13 @@ static os_error *fade_frame_child(fe_view v, void *handle)
     {
 	int colour = (int)handle;
 	wimp_box box;
-	
+
 	box.x0 = box.y0 = -0x4000;
 	box.x1 = box.y1 =  0x4000;
-    
+
 	/* set up fades */
 	frontend_view_update(v, &box, fade_frame_rectangle, (void *)colour, fe_update_IMAGE_RENDERING);
-    }    
+    }
     return NULL;
 }
 
@@ -559,7 +561,7 @@ static os_error *fade_frame_child(fe_view v, void *handle)
 static void fade_finish_wait(void)
 {
     int fading, i;
-    
+
     do
     {
 	int status;
@@ -595,10 +597,10 @@ void frontend_fade_frame(fe_view v, wimp_paletteword colour)
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return;
-    
+
     if (config_display_time_fade == 0)
 	return;
-    
+
     if (v->children)
     {
 	iterate_frames(v->children, fade_frame_child, (void *)colour.word);
@@ -625,7 +627,7 @@ void frontend_fade_frame_dispose(fe_view v)
 
     frontend_view_update(NULL, state.o.box, fade_frame_rectangle, NULL, fe_update_IMAGE_RENDERING);
 
-    fade_finish_wait();	
+    fade_finish_wait();
 }
 #endif
 
@@ -671,7 +673,7 @@ void fe_no_new_page(fe_view v, os_error *e)
 
     if (!v)
 	return;
-    
+
     /* restore the url of the displaying document */
     if (v->displaying)
     {
@@ -688,10 +690,10 @@ void fe_no_new_page(fe_view v, os_error *e)
 
     v->fetching_data.xscroll = v->fetching_data.yscroll = 0;
     v->fetching_data.hist = NULL;
-	
+
     /* update the toolbar */
     if (use_toolbox)
-	tb_status_update_fades(fe_find_top(v));
+	tb_status_update_fades(frameutils_find_top(v));
 
     fe_update_page_info(v);
 
@@ -718,7 +720,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 0;
-    
+
     if (doc == NULL)    /* lookup failed re visit the current one   */
     {
 	fe_no_new_page(v, (os_error *)title);
@@ -773,7 +775,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     /* clear fetching ptr */
     v->fetching = NULL;
-    
+
     /* this is only for STB use really  */
     session_log(url, session_CONNECTED);
 
@@ -783,7 +785,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     /* ensure caret isn't displayed currently on page */
     if (frontend_view_has_caret(v))
  	backend_remove_highlight(v->displaying);
-    
+
     /* fade down previous displayed frame */
     if (v->displaying)
     {
@@ -791,16 +793,16 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	backend_doc_info(v->displaying, NULL, NULL, &durl, NULL);
 	previous_url = strdup(durl);
-	
+
 	if (fe_map_view() == v)
             fe_map_mode(NULL, NULL);
 
 	/* store the positions of this frame in the history */
 	fe_history_update_current_state(v);
-	
+
 	/* do before disposing */
 	frontend_fade_frame(v, render_get_colour(render_colour_BACK, doc));
-    
+
         backend_dispose_doc(v->displaying);
     }
 
@@ -813,7 +815,6 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     v->displaying = doc;
 /*     v->current_link = NULL; */
     v->find_last_item = NULL;
-    
 
     /* initialise mode and toolbar_state */
     mode = fe_browser_mode_WEB;
@@ -876,16 +877,35 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		    box.x0 = box.x1 = box.y0 = box.y1 = -1;
 		    sscanf(vals[4].value, "%d,%d,%d,%d", &box.x0, &box.y0, &box.x1, &box.y1);
 
-		    if (box.x0 != -1 && box.x1 != -1 && box.y0 != -1 && box.y1 != -1)
+		    if (box.x0 != -1)
 		    {
-			v->box.x0 = text_safe_box.x0 + box.x0;
-			v->box.y0 = text_safe_box.y0 + box.y0;
-			v->box.x1 = text_safe_box.x0 + box.x1; 
-			v->box.y1 = text_safe_box.y0 + box.y1;
+			if (box.y0 != -1)
+			{
+			    if (box.x1 != -1 && box.y1 != -1)
+			    {
+				v->box.x0 = text_safe_box.x0 + box.x0*2;
+				v->box.y0 = text_safe_box.y0 + box.y0*2;
+				v->box.x1 = text_safe_box.x0 + box.x1*2; 
+				v->box.y1 = text_safe_box.y0 + box.y1*2;
 
-			memset(&v->margin , 0, sizeof(v->margin));
-			v->transient_position = fe_position_COORDS;
+				v->transient_position = fe_position_COORDS;
+			    }
+			    else
+			    {
+				v->dbox_x = box.x0*2;
+				v->dbox_y = box.y0*2;
+				v->transient_position = fe_position_CENTERED_WITH_COORDS;
+			    }
+			}
+			else
+			{
+			    v->dbox_y = box.y0*2;
+			    v->transient_position = fe_position_TOOLBAR_WITH_COORDS;
+			}
 		    }
+
+		    if (v->transient_position != fe_position_UNSET)
+			memset(&v->margin , 0, sizeof(v->margin));
 		}
 
 		/* check nohistory flag */
@@ -903,7 +923,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	    /* check fast load flag */
 	    v->fast_load = vals[8].value != 0;
-	    
+
 	    mm_free(ncmode);
 	}
 	else
@@ -930,7 +950,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		strcasecomp(bmode, "APP") == 0 ? fe_browser_mode_APP :
 		fe_browser_mode_WEB;
 	}
-	
+
 	/* decide on what to store in the way of return pages */
 	if (previous_mode == fe_browser_mode_DESKTOP)
 	{
@@ -951,7 +971,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    mm_free(v->app_return_page);
 	    v->app_return_page = NULL;
 	}
-	
+
 	switch (mode)
         {
 	case fe_browser_mode_WEB:
@@ -977,7 +997,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     {
 	/* transfer any fetching_data values over in to the real world */
-	fe_view top = fe_find_top(v);
+	fe_view top = frameutils_find_top(v);
 	if (top->fetching_data.hist)
 	{
 	    top->hist_at = top->fetching_data.hist;
@@ -1012,9 +1032,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	if (!v->open_transient && (!fe_check_download_finished(v) || !v->fetching_data.yscroll))
 	    frontend_view_ensure_visable(v, -1, 0, 0);
     }
-    
+
     mm_free(previous_url);
-    
+
     return 1;
 }
 
@@ -1087,9 +1107,9 @@ fe_view fe_dbox_view(const char *name)
 	box.y0 = text_safe_box.y0 + tb_status_height() + 32;
 	box.y1 = text_safe_box.y1 - 32;
 #endif
-    }	
+    }
 #endif
-    
+
     frontend_complain(fe_new_view(NULL, &box, &info, FALSE, &view));
 
     if (view)
@@ -1234,7 +1254,7 @@ static os_error *fe__print(fe_view v, int size)
     if (use_toolbox)
     {
 	fe_view vv;
-	
+
 	/* remove the view of frames to print */
 	if ((vv = fe_locate_view(print_targets[size])) != NULL)
 	    fe_dispose_view(vv);
@@ -1242,7 +1262,7 @@ static os_error *fe__print(fe_view v, int size)
 	tb_status_button(print_events[size], tb_status_button_ACTIVE);
 	tb_status_button(fevent_TOOLBAR_EXIT, tb_status_button_PRESSED);
     }
-    
+
     if (!e)
 	e = awp_print_document(v->displaying, config_print_scale,
 			       (config_print_nopics ? awp_print_NO_PICS : 0) |
@@ -1256,7 +1276,7 @@ static os_error *fe__print(fe_view v, int size)
 
     if (use_toolbox)
 	tb_status_button(print_events[size], tb_status_button_INACTIVE);
-    
+
     if (old_size != -1)
     {
 	nvram_write("PaperSize", old_size);
@@ -1311,7 +1331,7 @@ os_error *fe_print(fe_view v, int size)
 	    e = makeerror(ERR_PRINT_FAILED);
 	}
     }
-    
+
     return e;
 }
 
@@ -1350,7 +1370,7 @@ static void check_pending_scroll(fe_view v)
         int h, hh;
 
 	STBDBG(("check_pending_scrooll %d,%d\n", v->fetching_data.yscroll, v->fetching_data.xscroll));
-	
+
         frontend_view_bounds(v, &bb);
 
         h = bb.y1 - bb.y0;
@@ -1372,40 +1392,50 @@ static void check_pending_scroll(fe_view v)
 static int fe_transient_set_size(fe_view v)
 {
     int changed = FALSE;
+    int w, h;
     switch (v->transient_position)
     {
+    case fe_position_TOOLBAR_WITH_COORDS:
     case fe_position_TOOLBAR:
 	v->box.x0 = text_safe_box.x0;
 	v->box.x1 = text_safe_box.x1;
+	h = v->transient_position == fe_position_TOOLBAR_WITH_COORDS ? v->dbox_y : tb_status_height();
+	    
 	if (config_display_control_top)
 	{
-	    v->box.y1 = text_safe_box.y1 - tb_status_height() + 8; /* +8 to get it slightly above the toolbar */
+	    v->box.y1 = text_safe_box.y1 - h + 8; /* +8 to get it slightly above the toolbar */
 	    v->box.y0 = v->box.y1 - (-v->doc_height);
 	}
 	else
 	{
-	    v->box.y0 = text_safe_box.y0 + tb_status_height() - 8; /* -8 to get it slightly below the toolbar */
+	    v->box.y0 = text_safe_box.y0 + h - 8; /* -8 to get it slightly below the toolbar */
 	    v->box.y1 = v->box.y0 + (-v->doc_height);
 	}
-	memset(&v->margin , 0, sizeof(v->margin));
+	memset(&v->margin, 0, sizeof(v->margin));
 	changed = TRUE;
 	break;
 
+    case fe_position_CENTERED_WITH_COORDS:
     case fe_position_CENTERED:
     case fe_position_UNSET:
     {
 	int h = -v->doc_height;
-	if (h < DBOX_SIZE_Y)
-	    h = DBOX_SIZE_Y;
-	v->box.x0 = (text_safe_box.x0 + text_safe_box.x1)/2 - DBOX_SIZE_X/2;
-	v->box.x1 = v->box.x0 + DBOX_SIZE_X;
+	int ww, hh;
+
+	ww = v->transient_position == fe_position_CENTERED_WITH_COORDS ? v->dbox_x : DBOX_SIZE_X;
+	hh = v->transient_position == fe_position_CENTERED_WITH_COORDS ? v->dbox_y : DBOX_SIZE_Y;
+
+	if (h < hh)
+	    h = hh;
+	v->box.x0 = (text_safe_box.x0 + text_safe_box.x1)/2 - ww/2;
+	v->box.x1 = v->box.x0 + ww;
 	v->box.y0 = (text_safe_box.y0 + text_safe_box.y1)/2 - h/2;
 	v->box.y1 = v->box.y0 + h;
 	memset(&v->margin, 0, sizeof(v->margin));
 	changed = TRUE;
 	break;
     }
-    
+
     case fe_position_FULLSCREEN:
 	/* do nothing */
 	break;
@@ -1441,7 +1471,7 @@ static os_error *fe__download_finished(fe_view v, void *handle)
 	    vals[0]++;
         else
 	    vals[1]++;
-	
+
 	/* check displayed message if completed document */
 	if (v->had_completed && v->fetch_of > 0 && v->fetch_rx != v->fetch_of)
 	{
@@ -1468,7 +1498,7 @@ static int fe_is_download_finished(fe_view v)
 
     vals[0] = vals[1] = vals[2] = vals[3] = 0;
     iterate_frames(v, fe__download_finished, vals);
- 
+
     STBDBG(( "stbfe: is download finished pages %d/%d images %d/%d\n", vals[0], vals[1], vals[2], vals[3]));
 
     return vals[1] == 0 && (vals[3] == 0 || (v->flags & be_openurl_flag_DEFER_IMAGES));
@@ -1484,7 +1514,7 @@ static os_error *fe__lookfor_selected(fe_view v, void *handle)
 
 void fe_ensure_highlight_after_fetch(fe_view v)
 {
-    fe_view top = fe_find_top(v);
+    fe_view top = frameutils_find_top(v);
     fe_view vcaret = NULL;
 
     /*
@@ -1564,8 +1594,10 @@ void fe_ensure_highlight_after_fetch(fe_view v)
 	    flags |= be_link_ONLY_CURRENT;
 	}
 	    
-	fe_get_wimp_caret(vcaret->w);
-	backend_highlight_link(vcaret->displaying, item, flags | movepointer());
+	/* if there was anything to move to then set the caret in the window */
+	if (backend_highlight_link(vcaret->displaying, item, flags | movepointer()) != NULL)
+	    fe_get_wimp_caret(vcaret->w);
+
 	STBDBG(( "stbfe: current link %p\n", vcaret));
     }
 }
@@ -1573,7 +1605,7 @@ void fe_ensure_highlight_after_fetch(fe_view v)
 
 int fe_check_download_finished(fe_view v)
 {
-    fe_view top = fe_find_top(v);
+    fe_view top = frameutils_find_top(v);
     BOOL finished = FALSE;
 
     frontend_view_status(v, sb_status_WORLD);
@@ -1635,9 +1667,9 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 
     if (!v_orig || v_orig->magic != ANTWEB_VIEW_MAGIC)
 	return 0;
-    
+
     /* go to top of stack   */
-    v = fe_find_top(v_orig);
+    v = frameutils_find_top(v_orig);
 
     va_start(ap, status_type);
 
@@ -1674,7 +1706,7 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	}
 	break;
     }
-	
+
     case sb_status_FETCHED:     /* string giving amount of html document fetched    */
 	if (use_toolbox)
 	{
@@ -1683,7 +1715,7 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	    e = set_fetch_message(v_orig);
 
 	    STBDBG(( "stbfe: view status v %p fetching %d of %d bytes\n", v_orig, v_orig->fetch_rx, v_orig->fetch_of));
-    
+
 	    tb_status_set_lights(light_state_FETCHING);
 	}
 	else
@@ -1745,7 +1777,7 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	    errors = va_arg(ap, int);
 /* 	    so_far = va_arg(ap, int), */
 /* 	    in_trans = va_arg(ap, int); */
-	
+
 	if (use_toolbox)
 	{
 	    v_orig->images_had = fetched + errors;
@@ -1768,7 +1800,7 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	fe_check_download_finished(v_orig);
 	break;
     }
-	
+
     case sb_status_ABORTED:
 	STBDBG(( "stbfe: view status v %p aborted\n", v_orig));
 
@@ -1791,7 +1823,7 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	STBDBG(( "stbfe: view status v %p finished\n", v_orig));
 
 	check_pending_scroll(v_orig);
-	    
+
 	v_orig->had_completed = TRUE;
 	fe_check_download_finished(v_orig);
 	break;
@@ -1822,7 +1854,7 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	int closing = va_arg(ap, int);
 
 	STBDBG(("stbfe_view_status: pp %p busy %d state %d opening %d closing %d\n", pp, busy, state, opening, closing));
-	
+
 	if (use_toolbox)
 	    tb_codec_state_change(state, opening, closing);
 	break;
@@ -1875,7 +1907,7 @@ int frontend_is_interface_down(void)
 {
 #if CHECK_IF_WITH_REGISTRY
     STBDBG(("is_interface_down: var=%d fn=%d\n", connection_up, ncreg_interface_is_down()));
-    
+
     if (!connection_up)
         return 1;
 
@@ -1913,7 +1945,7 @@ void frontend_pass_doc(fe_view v, char *url, char *cfile, int ftype)
 	strcpy(msg.data.dataopen.name, cfile);
 	frontend_fatal_error(wimp_sendmessage(wimp_ESENDWANTACK, &msg, 0));
     }
-    
+
     if (v)
     {
 	fe_no_new_page(v, NULL);
@@ -1948,7 +1980,7 @@ void frontend_url_punt(fe_view v, char *url, char *bfile)
         return;
     }
 #endif
-    
+
     if (fe_stored_url)
     {
 	rma_free(fe_stored_url);
@@ -2034,7 +2066,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return;
-    
+
     /* get rid of the old layout before creating the new one */
     if (refresh_only)
         child = v->children;
@@ -2044,10 +2076,10 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
     /* ensure at top of visible screen  */
     frontend_view_ensure_visable(v, -v->margin.x0, 0, 0);
 
-    top = fe_find_top(v);
+    top = frameutils_find_top(v);
     top->dividers_max = dividers_max;
 
-    cvt = fe_get_cvt(v);
+    cvt = frameutils_get_cvt(v);
     for (i = 0; i < nframes; i++)
     {
         fe_frame_info *ip = &info[i];
@@ -2096,7 +2128,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
 
 		    STBDBG(("frontend_frame_layout: history override '%s' gets url '%s' offsets %dx%d\n", specifier, strsafe(new_url), vv->fetching_data.xscroll, vv->fetching_data.yscroll));
 		}
-		
+
 		if (url)
 		{
 		    os_error *e = frontend_open_url(url, vv, NULL, NULL, fe_open_url_FROM_FRAME);
@@ -2152,7 +2184,7 @@ void fe_font_size_set(int value, BOOL absolute)
     config_display_scale = config_display_scales[font_size_value];
 
     visdelay_begin();
-    
+
     frontend_complain(webfonts_init());
 
     iterate_frames(main_view, reformat_view, NULL);
@@ -2216,7 +2248,7 @@ void fe_beeps_set(int state, BOOL sound)
 
 /* ------------------------------------------------------------------------------------------- */
 
-/* 
+/*
  * Force this window to have no horizontal scrolling
  */
 
@@ -2224,8 +2256,8 @@ static void fe_force_fit(fe_view v, BOOL force)
 {
     int scale_value = 100;
 
-    v = fe_find_top(v);
-    
+    v = frameutils_find_top(v);
+
     if (!v->displaying)
 	return;
 
@@ -2250,7 +2282,7 @@ static void fe_force_fit(fe_view v, BOOL force)
 		    fe_refresh_window(v->w, NULL);
 		}
 	    }
-	}	    
+	}
 	while (v);
     }
     else
@@ -2284,7 +2316,7 @@ void fe_scaling_set(int state)
 	gbf_flags |= GBF_AUTOFIT;
     else
 	gbf_flags &= ~GBF_AUTOFIT;
-    
+
     fe_force_fit(main_view, config_display_scale_fit);
 }
 
@@ -2347,7 +2379,7 @@ BOOL fe_writeable_handle_keys(fe_view v, int key)
     {
 	fe_keyboard_close();
     }
-    
+
     return used;
 }
 
@@ -2423,7 +2455,7 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	char buffer[1024];
 	fe_view current;
 	char *current_url = NULL;
-	    
+
 	if ((current = fe_locate_view(TARGET_INFO)) != NULL)
 	    backend_doc_info(current->displaying, NULL, NULL, &current_url, NULL);
 
@@ -2447,11 +2479,11 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	    {
 		len += sprintf(buffer + len, "&title=");
 		len += url_escape_cat(buffer + len, title, sizeof(buffer) - len);
-	    }		    
+	    }
 	}
 
 	sound_event(snd_INFO_SHOW);
-	
+
 	STBDBG(("fe_open_info: toggle %d current %p url '%s' buf '%s'\n", toggle, current, strsafe(current_url), buffer));
 
 	if (toggle)
@@ -2595,7 +2627,7 @@ os_error *fe_hotlist_add(fe_view v)
 
 	while (time(NULL) < t)
 	    ;
-	    
+
 	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_PRESSED);
 	tb_status_button(fevent_HOTLIST_ADD, tb_status_button_INACTIVE);
     }
@@ -2640,7 +2672,7 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
 {
     wimp_wstate state;
     int movement = 0;
-	
+
     /* reopen window tiled with status window   */
     wimp_get_wind_state(v->w, &state);
     if (new_state_open)
@@ -2679,7 +2711,7 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
     STBDBG(("fe_status_set_margins: y %d to %d dy %d\n", v->margin.y0, v->margin.y1, movement));
 
     wimp_open_wind(&state.o);
-    
+
     /* cause a reformat */
     if (v->displaying)
     {
@@ -2698,7 +2730,7 @@ static os_error *fe_status_state(fe_view v, int state)
     if (new_state_open != is_open)
     {
 	int movement = fe_status_set_margins(v, state);
-	
+
 
         if (new_state_open)
         {
@@ -2721,7 +2753,7 @@ static os_error *fe_status_state(fe_view v, int state)
 		fe_view_scroll_y(v, movement, TRUE);
 #endif
 	}
-	
+
 /*         user_status_open = new_state_open; */
     }
     return NULL;
@@ -2746,7 +2778,7 @@ os_error *fe_status_toggle(fe_view v)
     }
     else
     {
-	v = fe_find_top(v);
+	v = frameutils_find_top(v);
 
 	user_status_open = !user_status_open;
 
@@ -2771,7 +2803,7 @@ void fe_status_clear_fetch_only(void)
         tb_status_hide(TRUE);
 
 	STBDBG(( "stbfe: finished lights\n"));
-    
+
         tb_status_set_lights(light_state_FINISHED);
 
 	/* reset 'globe' state */
@@ -2794,7 +2826,7 @@ void fe_status_open_fetch_only(fe_view v)
     {
         tb_status_show(TRUE);
 	STBDBG(( "stbfe: connecting lights\n"));
-    
+
         tb_status_set_lights(light_state_CONNECTING);
     }
     else
@@ -2818,7 +2850,7 @@ static void fe_status_mode(fe_view v, int mode, int override)
 	{
 	    if (override != -1)
 	    {
-		fe_status_state(fe_find_top(v), override);
+		fe_status_state(frameutils_find_top(v), override);
 	    }
 	    else switch (mode)
 	    {
@@ -2826,12 +2858,12 @@ static void fe_status_mode(fe_view v, int mode, int override)
 	    case fe_browser_mode_DESKTOP:
 /* 	    case fe_browser_mode_DBOX: leave it on for RCA use */
 	    case fe_browser_mode_APP:
-		fe_status_state(fe_find_top(v), 0);
+		fe_status_state(frameutils_find_top(v), 0);
 		break;
 
 		/* otherwise leave it in previous state */
 	    default:
-		fe_status_state(fe_find_top(v), user_status_open);
+		fe_status_state(frameutils_find_top(v), user_status_open);
 		break;
 	    }
 	}
@@ -2859,7 +2891,7 @@ os_error *fe_status_info_level(fe_view v, int level)
 
 os_error *fe_status_unstack(fe_view source_v)
 {
-    fe_view top = source_v ? fe_find_top_nopopup(source_v) : main_view; 
+    fe_view top = source_v ? fe_find_top_nopopup(source_v) : main_view;
 
     STBDBG(("fe_status_unstack: source %p %s top %p %s\n",
 	    source_v, source_v ? source_v->name : NULL,
@@ -2872,7 +2904,7 @@ os_error *fe_status_unstack(fe_view source_v)
     else if (on_screen_kbd)
     {
 	fe_keyboard_close();
-    }    
+    }
     else if (fe_passwd_abort())
     {
     }
@@ -2890,17 +2922,17 @@ os_error *fe_status_unstack(fe_view source_v)
 	}
 	else
             fe_history_move(source_v, history_PREV);
-    }	
+    }
 
     tb_status_update_fades(top);
-    
+
     return NULL;
 }
 
 BOOL fe_status_unstack_possible(fe_view source_v)
 {
     fe_view v;
-    
+
     if (stbmenu_is_open() || on_screen_kbd)
 	return TRUE;
 
@@ -2913,7 +2945,7 @@ BOOL fe_status_unstack_possible(fe_view source_v)
     
     if (tb_status_unstack_possible())
 	return TRUE;
-    
+
     return fe_history_possible(source_v, history_PREV);
 }
 
@@ -2992,7 +3024,7 @@ BOOL fe_item_screen_box(fe_view v, be_item ti, wimp_box *box)
 
     backend_doc_item_bbox(v->displaying, ti, box);
 
-    cvt = fe_get_cvt(v);
+    cvt = frameutils_get_cvt(v);
     coords_box_toscreen(box, &cvt);
     return TRUE;
 }
@@ -3005,7 +3037,7 @@ void fe_fake_click(fe_view v, int x, int y)
     if (!v || !v->displaying)
         return;
 
-    cvt = fe_get_cvt(v);
+    cvt = frameutils_get_cvt(v);
     p.x = x;
     p.y = y;
     coords_point_toworkarea(&p, &cvt);
@@ -3017,6 +3049,8 @@ void fe_fake_click(fe_view v, int x, int y)
     backend_doc_click(v->displaying, p.x, p.y, wimp_BLEFT);
 }
 
+#if 0
+/* pdh: now called frameutils_get_cvt and in commonsrc/frameutils.c */
 coords_cvtstr fe_get_cvt(fe_view v)
 {
     coords_cvtstr cvt;
@@ -3034,6 +3068,7 @@ coords_cvtstr fe_get_cvt(fe_view v)
     cvt.scx = cvt.scy = 0;
     return cvt;
 }
+#endif
 
 /* ------------------------------------------------------------------------------------------- */
 /* Idle handling - status stuff */
@@ -3047,14 +3082,14 @@ static os_error *get_item_info(fe_view v, const wimp_mousestr *mp, int *flags, c
     os_error *e;
 
     p = *(coords_pointstr *)&mp->x;
-    cvt = fe_get_cvt(v);
+    cvt = frameutils_get_cvt(v);
     coords_point_toworkarea(&p, &cvt);
 
     e = backend_doc_locate_item(v->displaying, &p.x, &p.y, &ti);
     if (!e) e = backend_item_pos_info(v->displaying, ti, &p.x, &p.y, flags, link, NULL, NULL);
     if (!e && ti_out)
 	*ti_out = ti;
-    
+
     return e;
 }
 
@@ -3258,9 +3293,10 @@ static void fe_idle_handler(void)
     }
 
     /* are we resizing a frame? */
-    if (resizing_view)
+    if ( frameutils_are_we_resizing() )
     {
-        fe_resize(&m);
+        if ( frameutils_resize(&m) )
+            fe_set_pointer( 0 );
         return;
     }
 
@@ -3347,7 +3383,7 @@ static void fe_idle_handler(void)
             }
         }
 
-        if (!dragging_view && !resizing_view)
+        if (!dragging_view && !frameutils_are_we_resizing() )
             fe_set_pointer(0);
 
 	if (use_toolbox)
@@ -3369,7 +3405,7 @@ static void fe_idle_handler(void)
     /* if old mode then pulse a bit */
     if (!use_toolbox)
     {
-        fe_view vv = fe_find_top(v);
+        fe_view vv = frameutils_find_top(v);
         if (vv && vv->fetch_document != 256)
             statuswin_update_fetch_status(vv, vv->fetch_status);
     }
@@ -3377,7 +3413,7 @@ static void fe_idle_handler(void)
     /* if we are a frameset then select resizable pointer   */
     if (v->children)
     {
-        int type = fe_check_resize(v, m.x, m.y, NULL, NULL, NULL);
+        int type = frameutils_check_resize(v, m.x, m.y, NULL, NULL, NULL);
 
         switch (type)
         {
@@ -3417,7 +3453,7 @@ static void fe_idle_handler(void)
 	yedge = check_edge_proximity(m.y, box.y0, box.y1, AUTOSCROLL_EDGE_THRESHOLD);
 
 /* 	STBDBG(("autoscroll: box %d to %d, mouse %d speed %d\n", box.y0, box.y1, m.y, yedge)); */
-	
+
 	/* we start scrolling if we stay in one place for AUTOSCROLL_DELAY
 	 * we continue scrolling as long as we are over the threshold
 	 */
@@ -3448,7 +3484,7 @@ static void fe_idle_handler(void)
 	}
     }
 #endif
-    
+
     /* otherwise update link from current position  */
     {
 	be_item ti = NULL;
@@ -3466,7 +3502,7 @@ static void fe_idle_handler(void)
 	/* zero ti if not something useful */
 	if ((flags & (be_item_info_LINK | be_item_info_INPUT | be_item_info_MENU | be_item_info_BUTTON | be_item_info_ACTION | be_item_info_LABEL)) == 0)
 	    ti = NULL;
-	
+
 	/* try dragging highlight */
 	if (!akbd_pollctl() && pointer_moved && v->displaying && ti != backend_read_highlight(v->displaying, NULL) /* v->current_link */)
 	{
@@ -3509,8 +3545,8 @@ static void fe_dragging_start(fe_view v, const wimp_mousestr *m)
     /* if it says no scrolling then assume it really means it */
     if (v->scrolling == fe_scrolling_NONE)
 	return;
-    
-    cvt = fe_get_cvt(v);
+
+    cvt = frameutils_get_cvt(v);
 
     extent.x1 = v->doc_width - cvt.scx + cvt.box.x0 - v->margin.x1;
     extent.x0 =              - cvt.scx + cvt.box.x0 - v->margin.x0;
@@ -3593,118 +3629,30 @@ static void fe_drag(const wimp_mousestr *m)
 
 /* ------------------------------------------------------------------------------------------- */
 
+#if 0
+/* pdh: this lot now all in commonsrc/frameutils.c */
 fe_view resizing_view = NULL;
-
-static void fe_resizing_start(fe_view v, const wimp_mousestr *m, const wimp_box *bounds, int type)
-{
-    wimp_dragstr drag;
-
-    drag.window = fe_find_top(v)->w;    /* we aleays actually dragging the top window   */
-    drag.type = wimp_USER_FIXED;
-    drag.parent = *bounds;
-    drag.box = *bounds;
-    if (type == be_resize_WIDTH)
-        drag.box.x0 = drag.box.x1 = m->x;
-    else
-        drag.box.y0 = drag.box.y1 = m->y;
-
-    STBDBG(( "resizing: start box %d,%d %d,%d\n", drag.parent.x0, drag.parent.y0, drag.parent.x1, drag.parent.y1));
-
-    if (frontend_complain(wimp_drag_box(&drag)) == NULL)
-    {
-        dragging_last_x = m->x;
-        dragging_last_y = m->y;
-
-	resizing_view = v;                  /* record the view containing the framese we are resizing   */
-	if (use_toolbox)
-	    tb_status_set_message(status_type_HELP, msgs_lookup("hrsz2"));
-	
-        STBDBG(( "resizing: started at %d,%d\n", m->x, m->y));
-    }
-}
-
-static BOOL fe_resize(const wimp_mousestr *m)
-{
-    if (m->bbits == 0)
-    {
-        fe_view v = resizing_view;
-        coords_cvtstr cvt = fe_get_cvt(v);
-
-        resizing_view = NULL;	
-	if (use_toolbox)
-	    tb_status_set_message(status_type_HELP, NULL);
-
-        STBDBG(( "resizing: buttons released\n"));
-
-        backend_frame_resize(v->displaying,
-            coords_x_toworkarea(m->x, &cvt),
-            coords_y_toworkarea(m->y, &cvt),
-            v->resize_handle);
-
-	fe_refresh_window(fe_find_top(v)->w, NULL);
-        fe_set_pointer(0);
-        return TRUE;
-    }
-#if 0
-    else if (m->x != dragging_last_x || m->y != dragging_last_y)
-    {
-#if 0
-        STBDBG(( "resizing: view %p to %d,%d\n", resizing_view, m->x, m->y));
+static void fe_resizing_start(fe_view v, const wimp_mousestr *m, const wimp_box *bounds, int type);
+static BOOL fe_resize(const wimp_mousestr *m);
 #endif
-        dragging_last_x = m->x;
-        dragging_last_y = m->y;
-    }
-#endif
-    return FALSE;
-}
 
 void fe_resize_abort(void)
 {
-    if (resizing_view)
+    if ( frameutils_are_we_resizing() )
     {
-        wimp_drag_box(NULL);
-
-        resizing_view = NULL;
+        frameutils_resize_abort();
         fe_set_pointer(0);
 	if (use_toolbox)
 	    tb_status_set_message(status_type_HELP, NULL);
     }
 }
 
+#if 0
+/* pdh: now called frameutils_check_resize and in commonsrc/frameutils.c */
 static int fe_check_resize(fe_view start, int x, int y, wimp_box *box, int *handle, fe_view *resizing_v)
 {
-    fe_view v;
-    for (v = start; v; v = v->next)
-    {
-#if 0
-        STBDBG(( "resize: view %p\n", v));
-#endif
-        if (v->displaying)
-        {
-            coords_cvtstr cvt = fe_get_cvt(v);
-
-            int type = backend_frame_resize_bounds(v->displaying,
-                coords_x_toworkarea(x, &cvt),
-                coords_y_toworkarea(y, &cvt),
-                box, handle);
-
-            if (type != be_resize_NONE)
-            {
-                if (resizing_v)
-                    *resizing_v = v;
-                return type;
-            }
-        }
-
-        if (v->children)
-        {
-            int type = fe_check_resize(v->children, x, y, box, handle, resizing_v);
-            if (type != be_resize_NONE)
-                return type;
-        }
-    }
-    return be_resize_NONE;
 }
+#endif
 
 /* ------------------------------------------------------------------------------------------- */
 
@@ -3729,7 +3677,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
         case wimp_BMID:
             if (use_toolbox &&
 		v->browser_mode != fe_browser_mode_DESKTOP &&
-		v->browser_mode != fe_browser_mode_DBOX && 
+		v->browser_mode != fe_browser_mode_DBOX &&
 		v->browser_mode != fe_browser_mode_APP)
                 fe_status_toggle(v);
             break;
@@ -3739,23 +3687,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
             {
                 if (v->children)
                 {
-                    wimp_box box;
-                    int type;
-                    fe_view vv;
-                    int resize_handle;
-
-                    type = fe_check_resize(v, m->x, m->y, &box, &resize_handle, &vv);
-
-                    if (type != be_resize_NONE)
-                    {
-                        coords_cvtstr cvt = fe_get_cvt(vv);
-                        vv->resize_handle = resize_handle;
-#if 0
-                        STBDBG(( "stbfe: resize %d\n", type));
-#endif
-                        coords_box_toscreen(&box, &cvt);
-                        fe_resizing_start(vv, m, &box, type);
-                    }
+                    frameutils_maybe_resize(v, m );
                 }
                 else
                 {
@@ -3774,7 +3706,7 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 	{
 	    wimp_wstate state;
 	    be_item ti;
-	    
+
 	    wimp_get_wind_state(m->w, &state);
 	    coords_point_toworkarea((coords_pointstr *)&m->x, (coords_cvtstr *)&state.o.box);
 
@@ -3851,7 +3783,7 @@ static void fe_redraw_handler(fe_view v, wimp_w w)
     }
 
     frontend_fatal_error(e);
-    
+
     while (box_list)
     {
         fe_redraw_box *next = box_list->next;
@@ -3955,7 +3887,7 @@ wimp_w frontend_get_window_handle(fe_view v)
 {
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 0;
-    
+
     return v->w;
 }
 
@@ -4034,16 +3966,16 @@ static void fe_keyboard__open(void)
     if (getenv("Alias$NCKeyBoard"))
     {
 	fe_view v;
-	
+
 	if (!tb_is_status_showing())
 	{
 	    user_status_open = TRUE;
 	    fe_status_state(main_view, user_status_open);
-	}    
+	}
 
 	n = sprintf(buffer, "NCKeyboard %s",
 		    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
-    
+
 	tb_status_box(&box);
 
 	/* add in open url box if present */
@@ -4100,7 +4032,7 @@ int fe_encoding(fe_view v, int encoding)
 	backend_reset_width(v->displaying, 0);
 	fe_refresh_window(v->w, NULL);
     }
-    
+
     return 0;
 }
 
@@ -4126,7 +4058,7 @@ static void fe_doc_bounce(wimp_msgdataopen *dataopen)
         sprintf(buffer, "/%s", dataopen->name);
 
 	file_lock(dataopen->name, TRUE);
-	
+
         frontend_complain(fe_start_task(buffer, NULL));
 
 	file_lock(dataopen->name, FALSE);
@@ -4185,7 +4117,7 @@ static void fe_url_bounce(wimp_msgstr *msg)
 	    strcat(buffer, scheme);
 	    run_task = getenv(buffer) != NULL;
 	}
-	
+
 	/* check for an unloaded external helper    */
 	if (run_cli || run_task)
 	{
@@ -4244,7 +4176,7 @@ static void fe_url_bounce(wimp_msgstr *msg)
 
 			    if (url1 && url1[0])
 				frontend_complain(frontend_open_url(url1, main_view, target1 ? target1 : target, NULL, 0));
-				
+
 			    mm_free(target1);
 			    mm_free(url1);
 			}
@@ -4273,7 +4205,7 @@ static void fe_url_bounce(wimp_msgstr *msg)
 		frontend_complain(makeerrorf(ERR_UNSUPORTED_SCHEME, scheme ? scheme : msgs_lookup("none")));
 	}
     }
-    
+
     url_free_parts(scheme, netloc, path, params, query, fragment);
 
     if (fe_stored_url)
@@ -4300,7 +4232,7 @@ static void fe_mode_changed(void)
     feutils_init_2();
 
     dbginit();
-    
+
     STBDBG(( "modechange: old eig %d,%d new %d,%d\n", dx, dy, frontend_dx, frontend_dy));
     STBDBG(( "modechange: new size %d,%d\n", screen_box.x1, screen_box.y1));
 
@@ -4334,7 +4266,7 @@ static void fe_mode_changed(void)
 	    v = fe_next_frame(v, TRUE);
 	    if (v)
 		v->pending_mode_change = TRUE;
-	}	    
+	}
 	while (v);
     }
     else
@@ -4553,16 +4485,16 @@ static void re_read_config(int flags)
 	flags |= ncfresco_loaddata_CONFIG | ncfresco_loaddata_COOKIES | ncfresco_loaddata_PASSWORDS |
 	    ncfresco_loaddata_HOTLIST | ncfresco_loaddata_PLUGINS | ncfresco_loaddata_ALLOW;
 
-    if ((flags & ncfresco_loaddata_CONFIG) && 
+    if ((flags & ncfresco_loaddata_CONFIG) &&
 	file_type("<"PROGRAM_NAME"$Config>") != -1)
     {
 	config_read_file_by_name("<"PROGRAM_NAME"$Config>");
 
 	/* force all the window stuff to be re read */
 	frontend_dx = frontend_dy = 0;
-	fe_mode_changed();	
+	fe_mode_changed();
     }
-    
+
     if (flags & ncfresco_loaddata_PASSWORDS)
 	auth_init_passwords();
 
@@ -4599,7 +4531,7 @@ static void fe_handle_service_message(wimp_msgstr *msg)
             int new_state = r->r[2];
 
 	    STBDBG(("DiallerStatus: state=%d, count=%d\n", new_state, connection_count));
-	    
+
 	    if (new_state == dialler_CONNECTED_OUTGOING)
             {
 		connection_up = 1;
@@ -4742,7 +4674,7 @@ void fe_event_process(void)
 	    {
 		tb_status_hide(FALSE);
 		tb_status_show(FALSE);
-		
+
 		toolbar_pending_mode_change = FALSE;
 	    }
 	    else
@@ -4771,7 +4703,7 @@ void fe_event_process(void)
 
 		keywatch_last_key_val = *keywatch_pollword;
 	    }
-	    
+
 	    /* process key press */
 	    v = find_view(e.data.key.c.w);
 	    STBDBG(( "\nkey: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
@@ -4804,7 +4736,7 @@ void fe_event_process(void)
 		/* if it was selected then clear and redraw the frame links */
                 if (v->is_selected)
                 {
-                    fe_view v_top = fe_find_top(v);
+                    fe_view v_top = frameutils_find_top(v);
                     if (v_top && v_top != v && pointer_mode == pointermode_OFF)
 			fe_frame_link_clear_all(v);
                 }
@@ -4814,7 +4746,7 @@ void fe_event_process(void)
 	    {
 		tb_status_highlight(FALSE);
 	    }
-	    
+
 	    break;
         }
 
@@ -4846,7 +4778,7 @@ void fe_event_process(void)
 		v_new->is_selected = TRUE;
 
 		/* if this isn't the top view then build and redraw the frame link array */
-		v_top = fe_find_top(v_new);
+		v_top = frameutils_find_top(v_new);
 		if (v_new != v_top)
 		{
 		    fe_frame_link_array_build(v_new);
@@ -4903,7 +4835,7 @@ void fe_event_process(void)
 	    }
 	    break;
 	}
-	
+
         case wimp_EPTRLEAVE:
 	    /* currently masked out */
             break;
@@ -4974,7 +4906,7 @@ void fe_event_process(void)
 	    case MESSAGE_NCKEYBOARD_CLOSED:
 		fe_keyboard_closed();
 		break;
-		
+
 	    case MESSAGE_OFFER_FOCUS:
 		offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]);
 		break;
@@ -5094,7 +5026,7 @@ static int my_wimp_initialise(int *message_list, int *wimp_version)
     frontend_fatal_error(os_swix(Wimp_Initialise,&r));
 
     *wimp_version = r.r[0];
-    
+
     return r.r[1];
 }
 
@@ -5104,8 +5036,8 @@ static void fe_tidyup(void)
 {
     STBDBG(( "\n*** Exit function called ***\n\n"));
 
-    MemCheck_SetChecking(0,0); 
-    
+    MemCheck_SetChecking(0,0);
+
 #if USE_DIALLER_STATUS
     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_DiallerStatus, task_handle);
 #endif
@@ -5115,7 +5047,7 @@ static void fe_tidyup(void)
     /* disable keywatch stuff */
     if (keywatch_pollword)
     {
-	frontend_complain(_swix(KeyWatch_Unregister, _IN(0), keywatch_pollword));
+	frontend_complain((os_error*)_swix(KeyWatch_Unregister, _IN(0), keywatch_pollword));
 	keywatch_pollword = NULL;
     }
 
@@ -5124,7 +5056,7 @@ static void fe_tidyup(void)
 	fe_dispose_view(main_view);
 	main_view = 0;
     }
-    
+
     if (dbox_view)
     {
 	fe_dispose_view(dbox_view);
@@ -5133,7 +5065,7 @@ static void fe_tidyup(void)
 
     if (use_toolbox)
 	tb_cleanup();
-    
+
     clipboard_Destroy();
 
     webfonts_tidyup();
@@ -5151,7 +5083,7 @@ static void fe_tidyup(void)
     auth_dispose();
 
     hotlist_shutdown();
-    
+
     if (fe_stored_url)
 	rma_free(fe_stored_url);
 
@@ -5183,10 +5115,10 @@ static int message_codes[] =
     MESSAGE_PLUGIN_URL_NOTIFY,
     MESSAGE_PLUGIN_STATUS,
     MESSAGE_PLUGIN_BUSY,
-    
+
     MESSAGE_NCKEYBOARD_WINDOW_SIZE,
     MESSAGE_NCKEYBOARD_CLOSED,
-    
+
     wimp_MDATAOPEN,
     wimp_MDATALOAD,
     wimp_MDATALOADOK,
@@ -5198,7 +5130,7 @@ static int message_codes[] =
 
     wimp_MOPENURL,
     wimp_MNCFRESCO,
-    
+
     wimp_MMODECHANGE,
     wimp_PALETTECHANGE,
     wimp_MSERVICE,
@@ -5264,7 +5196,7 @@ static BOOL fe_initialise(void)
 
 /*     gbf_flags &= ~(GBF_FVPR); */
     gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; /* this needs to not be defined to build a japanese version */
-    
+
     if ((s = getenv("NCFresco$GBF")) != NULL)
 	gbf_flags = (int)strtoul(s, NULL, 10);
 
@@ -5306,7 +5238,7 @@ static BOOL fe_initialise(void)
     auth_init();
     plugin_list_read_file();
     hotlist_init();
-    
+
     /* Check the licence */
     if (frontend_complain(licence_init()) != NULL)
     {
@@ -5343,7 +5275,7 @@ static BOOL fe_initialise(void)
 
 	for (i = 0; i < 4; i++)
 	    info.dividers[i] = i;
-	
+
         frontend_fatal_error(fe_new_view(NULL, &screen_box, &info, TRUE, &main_view));
         main_view->status_open = TRUE;
     }
@@ -5405,8 +5337,8 @@ int main(int argc, char **argv)
     MemCheck_SetAutoOutputBlocksInfo(FALSE);
     MemCheck_RegisterMiscBlock(0, 0); /* stop memcpy(x, 0, 0) from giving an error */
     MemCheck_SetStoreMallocFunctions(TRUE);
-    MemCheck_SetChecking(0,0); 
-    
+    MemCheck_SetChecking(0,0);
+
     init_usrtrc();
 
     progname = argv[0];
@@ -5423,7 +5355,7 @@ int main(int argc, char **argv)
 #endif
 
     os_cli("pointer 0");
-    
+
     init_ok = fe_initialise();
 
     if (init_ok)

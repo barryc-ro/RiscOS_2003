@@ -659,11 +659,21 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     int total;
     int max = (horiz ? table->cells.x : table->cells.y), x;
     int *master = HORIZCELLS(table,horiz);
-    int N;
+    int n_components;
+    BOOL pct_con = FALSE;
 
     FMTDBGN(("normalise_percentages(%p %s): starting\n",
 	    table, HORIZVERT(horiz)));
 
+    n_components =  find_connected_components (table, colspan_flag_ABSOLUTE_COL, colspan_flag_ABSOLUTE_GROUP, horiz);
+    FMTDBG(("%d absolute components\n", n_components));
+    /*csg_examine(table->colspans, max);*/
+    csg_find_abs_floaters(table, horiz);
+    n_components =  find_connected_components (table, colspan_flag_PERCENT_COL, colspan_flag_PERCENT_GROUP, horiz);
+    pct_con = (n_components < 2);
+    FMTDBG (("normalise_percentages: n_components %d\n", n_components));
+    
+    
     /* Initialise column header locations without a percentage
        contribution */
     colspan_column_and_eql_set(table, horiz, PCT_RAW,
@@ -676,33 +686,33 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
     colspan_column_init_from_leftmost(table, PCT_RAW, horiz);
 
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
 
     /* Zero contributions from percent groups */
     /*colspan_all_and_eql_set(table, horiz, PCT_RAW,
 			    colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP, 0);*/
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
 
     /* Mark all column headers with percentages as having a direct contribution */
     colspan_column_and_eql_bitset(table, horiz, PCT_RAW,
 				  colspan_flag_PERCENT, colspan_flag_PERCENT, colspan_flag_PERCENT_COL);
 
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
     /* Clear the flags for percent groups */
     colspan_all_and_eql_bitclr(table, horiz, PCT_RAW,
 			       colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP, colspan_flag_PERCENT_GROUP);
 
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
     /* Zero contributions that are not from percent columns */
     colspan_all_and_eql_set(table, horiz, PCT_RAW,
 			    colspan_flag_PERCENT_COL, 0, 0);
 
 
 
-    colspan_trace_cells(table, horiz);
+    /*colspan_trace_cells(table, horiz);*/
     /* At this point, all the percent group values are zero and they
        have had their flags removed. An arbitary (leftmost in this
        case) crystallisation of the group has been chosen and
@@ -738,7 +748,7 @@ static int normalise_percentages(rid_table_item *table, BOOL horiz)
 	/* We can now decide what our expectation of the total value
 	   is and what sort of corrections we will consider
 	   applying. */
-	if (non_percent_column)
+	if (/*non_percent_column*/!pct_con)
 	{
 	    /* Expect there to be some percentage points left for the
 	       entiries that exist and do not have percentage
@@ -1151,6 +1161,10 @@ static void basic_size_table(antweb_doc *doc,
 
   */
 
+extern void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+extern void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+extern void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+
 static void allocate_widths_table(antweb_doc *doc,
 				  rid_header *rh,
 				  rid_table_item *table,
@@ -1194,7 +1208,6 @@ static void allocate_widths_table(antweb_doc *doc,
 		rid_text_item_image *tii = (rid_text_item_image *)ti;
 		if (tii->ww.type == value_pcunit)
 		{
-		    extern void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
 		    oimage_size_allocate(ti, rh, doc, cell->stream.fwidth);
 		}
 	    }
@@ -1204,7 +1217,6 @@ static void allocate_widths_table(antweb_doc *doc,
 		rid_input_item *ii = ((rid_text_item_input *)ti)->input;
 		if (ii->tag == rid_it_IMAGE && ii->ww.type == value_pcunit)
 		{
-		    extern void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
 		    oinput_size_allocate(ti, rh, doc, cell->stream.fwidth);
 		}
 	    }
@@ -1214,7 +1226,6 @@ static void allocate_widths_table(antweb_doc *doc,
 		rid_object_item *obj = ((rid_text_item_object *)ti)->object;
 		if (obj->userwidth.type == value_pcunit)
 		{
-		    extern void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
 		    oobject_size_allocate(ti, rh, doc, cell->stream.fwidth);
 		}
 	    }
@@ -1240,6 +1251,10 @@ static void allocate_widths_table(antweb_doc *doc,
   The fwidth value is the full margin distance.
 
   */
+
+extern void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+extern void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
+extern void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
 
 static void allocate_widths_stream(antweb_doc *doc,
 				   rid_header *rh,
@@ -1267,7 +1282,6 @@ static void allocate_widths_stream(antweb_doc *doc,
 	    rid_text_item_image *tii = (rid_text_item_image *)ti;
 	    if (tii->ww.type == value_pcunit)
 	    {
-		extern void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
 		oimage_size_allocate(ti, rh, doc, fwidth);
 	    }
 	}
@@ -1277,7 +1291,6 @@ static void allocate_widths_stream(antweb_doc *doc,
 	    rid_input_item *ii = ((rid_text_item_input *)ti)->input;
 	    if (ii->tag == rid_it_IMAGE && ii->ww.type == value_pcunit)
 	    {
-		extern void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
 		oinput_size_allocate(ti, rh, doc, fwidth);
 	    }
 	}
@@ -1287,7 +1300,6 @@ static void allocate_widths_stream(antweb_doc *doc,
 	    rid_object_item *obj = ((rid_text_item_object *)ti)->object;
 	    if (obj->userwidth.type == value_pcunit)
 	    {
-		extern void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth);
 		oobject_size_allocate(ti, rh, doc, fwidth);
 	    }
 	}

@@ -4,6 +4,7 @@
 
 /* Font code for the ANTWeb WWW browser */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -180,26 +181,54 @@ os_error *webfonts_tidyup(void)
     return e2;
 }
 
-#if 1 /*daf #ifdef STBWEB */ /*pdh*/
+int webfont_font_width_n(int f, const char *s, int n)
+{
+    int length;
+    
+    _swix(Font_ScanString, _INR(0,4)|_IN(7) | _OUT(3),
+	  webfonts[f].handle,
+	  s,
+	  (1<<8) | (n == -1 ? 0 : (1<<7)),	/* pass handle, maybe length */
+	  INT_MAX, 0,
+	  n,
+	  &length);
+
+    return length / 400;	/* return length in OS units */
+}
+
 int webfont_font_width(int f, const char *s)
 {
-    webfont *wf = &webfonts[f];
-    font_string fs;
-    int result;
-
-    fs.s = (char *)s;
-    fs.x = fs.y = (1 << 30);
-    fs.split = -1;
-    fs.term = strlen(s);
-
-    if (font_setfont(wf->handle) == NULL && font_strwidth(&fs) == NULL)
-        result = (fs.x / MILIPOINTS_PER_OSUNIT);
-    else
-        result = fs.term * wf->space_width;
-
-    return result;
+    return webfont_font_width_n(f, s, -1);
 }
+
+/*
+ * Find the nearest split point before width OS units are passed
+ * and return its index. If the end of the string is reached
+ * then return length of string.
+ */
+
+int webfont_split_point(int f, const char *s, int width)
+{
+    int coords[5];
+    const char *split;
+    
+    memset(coords, 0, 4*sizeof(coords[0]));
+    coords[4] = -1;
+
+    _swix(Font_ScanString, _INR(0,5) | _OUT(1),
+	  webfonts[f].handle,
+	  s,
+	  (1<<8) | (1<<5),	/* pass handle, use coord block */
+	  width*400, 0,
+	  coords,
+	  &split);
+
+#if DEBUG >= 2
+    fprintf(stderr, "split_point: width %d inptr %p outptr %p\n", width, s, split);
 #endif
+    
+    return split - s;
+}
 
 /* Take a width either in OS units or in chars and return the value in the other for a string of TTY chars */
 

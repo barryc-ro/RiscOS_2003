@@ -18,6 +18,7 @@
 
 #include "config.h"
 #include "util.h"
+#include "frameutils.h"
 
 #include "stbfe.h"
 #include "stbtb.h"
@@ -99,10 +100,10 @@ static void convert_box_coords(wimp_box *box, fe_view v)
 {
     coords_cvtstr cvt;
 
-    cvt = fe_get_cvt(fe_find_top(v));
+    cvt = frameutils_get_cvt(frameutils_find_top(v));
     coords_box_toscreen(&box, &cvt);
 
-    cvt = fe_get_cvt(v);
+    cvt = frameutils_get_cvt(v);
     coords_box_toworkarea(&box, &cvt);
 }
 #endif
@@ -127,7 +128,7 @@ static int scroll_by_flags(fe_view v, int flags)
 static void centre_pointer(fe_view v)
 {
     int x, y;
-    coords_cvtstr cvt = fe_get_cvt(v);
+    coords_cvtstr cvt = frameutils_get_cvt(v);
     x = cvt.scx + (v->box.x1 - v->box.x0)/2;
     y = cvt.scy - (v->box.y1 - v->box.y0)/2;
     frontend_pointer_set_position(v, x, y);
@@ -136,8 +137,8 @@ static void centre_pointer(fe_view v)
 static void redraw_link(fe_view v, frame_link *link)
 {
     wimp_box box = link->box;
-    fe_view v_top = fe_find_top(v);
-    coords_cvtstr cvt = fe_get_cvt(v_top);
+    fe_view v_top = frameutils_find_top(v);
+    coords_cvtstr cvt = frameutils_get_cvt(v_top);
 
     coords_box_toworkarea(&box, &cvt);
     frontend_view_redraw(v_top, &box);
@@ -336,7 +337,7 @@ fe_view fe_next_frame(fe_view v, BOOL next)
 
 void fe_move_highlight_frame_direction(fe_view v, int flags)
 {
-    wimp_box box = fe_get_cvt(v).box;
+    wimp_box box = frameutils_get_cvt(v).box;
     fe_move_highlight_xy(v, &box, flags | be_link_XY | be_link_VISIBLE | be_link_DONT_WRAP_H | be_link_DONT_WRAP);
 }
 
@@ -347,7 +348,7 @@ void fe_move_highlight_frame(fe_view v, BOOL next)
     vv = fe_next_frame(v ? v : main_view, next);
     if (vv == NULL)
     {
-        vv = fe_find_top(v);	/* was main_view */
+        vv = frameutils_find_top(v);	/* was main_view */
         if (next)
         {
             while (vv->children)
@@ -513,7 +514,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    coords_cvtstr cvt;
 	    backend_doc_item_bbox(v->displaying, old_link, &link_box);
 
-	    cvt = fe_get_cvt(v);
+	    cvt = frameutils_get_cvt(v);
 	    coords_box_toscreen(&link_box, &cvt);
 	}
 
@@ -526,7 +527,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    frame_link *link;
 
 	    /* get coords relative to top level window */
-/* 	    cvt = fe_get_cvt(fe_find_top(v)); */
+/* 	    cvt = frameutils_get_cvt(frameutils_find_top(v)); */
 	    box = link_box;
 /* 	    coords_box_toworkarea(&box, &cvt); */
 
@@ -593,7 +594,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 		coords_cvtstr cvt;
 
 		/* get coords relative to new window */
-		cvt = fe_get_cvt(new_v);
+		cvt = frameutils_get_cvt(new_v);
 		coords_box_toworkarea(&link_box, &cvt);
 		
 		new_link = backend_highlight_link_xy(new_v->displaying, NULL, &link_box, flags | be_link_XY);
@@ -840,7 +841,7 @@ void fe_frame_link_array_build(fe_view v)
 
     STBDBG(("fe_frame_link_array_build: v %p size %dx%d OS units\n", v, vals[2], vals[3]));
 
-    iterate_frames(fe_find_top(v), fe_frame_link_array__build, vals);
+    iterate_frames(frameutils_find_top(v), fe_frame_link_array__build, vals);
 
     v->frame_links = (frame_link *)vals[1];
     STBDBG(("fe_frame_link_array_build: links %p\n", v->frame_links));
@@ -883,7 +884,7 @@ void fe_frame_link_move(fe_view v, int flags)
 	wimp_box box;
 	
 	box = link->box;
-/* 	cvt = fe_get_cvt(fe_find_top(v)); */
+/* 	cvt = frameutils_get_cvt(frameutils_find_top(v)); */
 /* 	coords_box_toscreen(&box, &cvt); */
 
 	STBDBG(("fe_frame_link_move: v %p sides link %d movement %d\n", v, link->side, side_movement));
@@ -964,7 +965,7 @@ static os_error *fe_frame_link_clear(fe_view v, void *handle)
 
 void fe_frame_link_clear_all(fe_view v)
 {
-    iterate_frames(fe_find_top(v), fe_frame_link_clear, NULL);
+    iterate_frames(frameutils_find_top(v), fe_frame_link_clear, NULL);
 }
 
 
@@ -979,7 +980,7 @@ static os_error *fe_frame_link_redraw(fe_view v, void *handle)
 
 void fe_frame_link_redraw_all(fe_view v)
 {
-    iterate_frames(fe_find_top(v), fe_frame_link_redraw, NULL);
+    iterate_frames(frameutils_find_top(v), fe_frame_link_redraw, NULL);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -987,7 +988,7 @@ void fe_frame_link_redraw_all(fe_view v)
 int frontend_view_get_dividers(fe_view v, int *dividers)
 {
     memcpy(dividers, v->dividers, sizeof(v->dividers));
-    return fe_find_top(v)->dividers_max;
+    return frameutils_find_top(v)->dividers_max;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -1089,11 +1090,10 @@ os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 	    last_click_y = box.y0;
 	    last_click_view = v;
 	    
-#if 1
-	    if (had_caret)
-		backend_highlight_link(v->displaying, ti, movepointer() | be_link_TEXT | be_link_CARETISE);
+
+	    if (flags & be_item_info_INPUT)
+ 		backend_highlight_link(v->displaying, ti, movepointer() | be_link_TEXT | be_link_CARETISE);
 	    else
-#endif
 		e = backend_activate_link(v->displaying, ti, 0);
 
 	    if (need_caret && !caretise())
