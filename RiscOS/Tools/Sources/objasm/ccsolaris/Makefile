@@ -12,8 +12,8 @@ DERIVED= datenow.h
 
 OBJALL=aasm.o apply.o applysub.o asdsupp.o asm.o cli.o code.o condasm.o \
 errors.o expr.o exprstor.o formatio.o fpio.o getdir.o getline.o globvars.o \
-initdir.o listing.o literals.o locallab.o macrotyp.o nametyp.o occur.o \
-opcode.o p1dir.o p1line.o p2dir.o p2line.o stats.o store.o symdump.o \
+initdir.o listing.o literals.o locallab.o macrotyp.o mapping.o nametyp.o \
+occur.o opcode.o p1dir.o p1line.o p2dir.o p2line.o stats.o store.o symdump.o \
 tables.o tokens.o vars.o 
 
 EXTDIR1=${CLXPATH}
@@ -22,7 +22,7 @@ EXTLIB1=${CLX}
 HSOURCE=aofvars.h apply.h applysub.h asd.h asdasm.h asdsupp.h asm.h cli.h \
 code.h condasm.h constant.h errors.h expr.h exprstor.h exprtyp.h formatio.h \
 fpio.h getdir.h getline.h globvars.h hostdep.h initdir.h listing.h \
-literals.h locallab.h macrotyp.h message.h nametyp.h occur.h opcode.h \
+literals.h locallab.h macrotyp.h message.h mapping.h nametyp.h occur.h opcode.h \
 options.h p1dir.h p1line.h p2dir.h p2line.h stats.h store.h symdump.h \
 tables.h tokens.h vars.h version.h 
 
