@@ -33,7 +33,7 @@ LD		= link
 LB		= libfile
 WIPE		= -wipe
 
-CFLAGS		= -c -depend !Depend -ffah -strict ${INCLUDES} ${DFLAGS}
+CFLAGS		= -c -depend !Depend -fah -strict ${INCLUDES} ${DFLAGS}
 AFLAGS		= -depend !Depend -Stamp -quit
 CPFLAGS		= ~CLFNR~V
 LBFLAGS		= -c
@@ -148,52 +148,6 @@ ${TARGETZ}: ${OBJSZ} local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.event:	c.event
-o.event:	C:h.kernel
-o.event:	h.debug
-o.event:	h.types
-o.event:	<Lib$Dir>.tboxlibs.h.wimp
-o.event:	<Lib$Dir>.tboxlibs.h.toolbox
-o.event:	h.event
-o.event:	h.event
-o.event:	h.wimpevent
-o.event:	h.tbevent
-o.event:	h.wimpmsg
-o.tbevent:	c.tbevent
-o.tbevent:	C:h.kernel
-o.tbevent:	h.event
-o.tbevent:	<Lib$Dir>.tboxlibs.h.wimp
-o.tbevent:	<Lib$Dir>.tboxlibs.h.toolbox
-o.tbevent:	h.debug
-o.tbevent:	h.types
-o.tbevent:	h.tbevent
-o.wimpevent:	c.wimpevent
-o.wimpevent:	C:h.kernel
-o.wimpevent:	h.debug
-o.wimpevent:	h.event
-o.wimpevent:	<Lib$Dir>.tboxlibs.h.wimp
-o.wimpevent:	<Lib$Dir>.tboxlibs.h.toolbox
-o.wimpevent:	h.types
-o.wimpevent:	h.wimpevent
-o.wimpmsg:	c.wimpmsg
-o.wimpmsg:	C:h.kernel
-o.wimpmsg:	h.debug
-o.wimpmsg:	h.event
-o.wimpmsg:	<Lib$Dir>.tboxlibs.h.wimp
-o.wimpmsg:	<Lib$Dir>.tboxlibs.h.toolbox
-o.wimpmsg:	h.types
-o.wimpmsg:	h.wimpmsg
-z.event:	c.event
-z.event:	C:h.kernel
-z.event:	h.debug
-z.event:	h.types
-z.event:	<Lib$Dir>.tboxlibs.h.wimp
-z.event:	<Lib$Dir>.tboxlibs.h.toolbox
-z.event:	h.event
-z.event:	h.event
-z.event:	h.wimpevent
-z.event:	h.tbevent
-z.event:	h.wimpmsg
 z.tbevent:	c.tbevent
 z.tbevent:	C:h.kernel
 z.tbevent:	h.event
@@ -218,4 +172,62 @@ z.wimpmsg:	<Lib$Dir>.tboxlibs.h.wimp
 z.wimpmsg:	<Lib$Dir>.tboxlibs.h.toolbox
 z.wimpmsg:	h.types
 z.wimpmsg:	h.wimpmsg
+o.tbevent:	c.tbevent
+o.tbevent:	C:h.kernel
+o.tbevent:	h.event
+o.tbevent:	<Lib$Dir>.tboxlibs.h.wimp
+o.tbevent:	<Lib$Dir>.tboxlibs.h.toolbox
+o.tbevent:	h.debug
+o.tbevent:	h.types
+o.tbevent:	h.tbevent
+o.wimpevent:	c.wimpevent
+o.wimpevent:	C:h.kernel
+o.wimpevent:	h.debug
+o.wimpevent:	h.event
+o.wimpevent:	<Lib$Dir>.tboxlibs.h.wimp
+o.wimpevent:	<Lib$Dir>.tboxlibs.h.toolbox
+o.wimpevent:	h.types
+o.wimpevent:	h.wimpevent
+o.wimpmsg:	c.wimpmsg
+o.wimpmsg:	C:h.kernel
+o.wimpmsg:	h.debug
+o.wimpmsg:	h.event
+o.wimpmsg:	<Lib$Dir>.tboxlibs.h.wimp
+o.wimpmsg:	<Lib$Dir>.tboxlibs.h.toolbox
+o.wimpmsg:	h.types
+o.wimpmsg:	h.wimpmsg
+o.event:	c.event
+o.event:	C:h.kernel
+o.event:	h.debug
+o.event:	h.types
+o.event:	<Lib$Dir>.tboxlibs.h.wimp
+o.event:	<Lib$Dir>.tboxlibs.h.toolbox
+o.event:	h.event
+o.event:	h.event
+o.event:	h.wimpevent
+o.event:	h.tbevent
+o.event:	h.wimpmsg
+z.event:	c.event
+z.event:	C:h.kernel
+z.event:	h.debug
+z.event:	h.types
+z.event:	<Lib$Dir>.tboxlibs.h.wimp
+z.event:	<Lib$Dir>.tboxlibs.h.toolbox
+z.event:	h.event
+z.event:	h.event
+z.event:	h.wimpevent
+z.event:	h.tbevent
+z.event:	h.wimpmsg
+z.event:	c.event
+z.event:	C:h.kernel
+z.event:	h.debug
+z.event:	h.types
+z.event:	<Lib$Dir>.tboxlibs.h.wimp
+z.event:	<Lib$Dir>.tboxlibs.h.toolbox
+z.event:	h.event
+z.event:	h.event
+z.event:	h.wimpevent
+z.event:	h.tbevent
+z.event:	h.wimpmsg
 o.!!version: s.!!version
+o.!!version: VersionASM
