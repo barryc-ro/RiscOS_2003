@@ -1,12 +1,4 @@
-# Skeleton OBJASM/C Makefile
-#
-# *****************************************
-# ***       C h a n g e   L i s t       ***
-# *****************************************
-# Date       	Name         	Description
-# ----       	----         	-----------
-# 17 Sep 1997	RWB		Created
-# 17 Sep 1997   RWB		Customised for SCTest
+# Makefile for the Upgrade Fetcher component.
 
 #
 # Paths
@@ -30,7 +22,7 @@ CD	= dir
 CHMOD	= access
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
-CFLAGS     = -c -Wa -depend !Depend ${THROWBACK} -ff ${INCLUDES} ${DFLAGS}
+CFLAGS     = -c -Wa -depend !Depend ${THROWBACK} -ff ${INCLUDES} ${OPTS}
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
@@ -50,6 +42,7 @@ ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
 REMOTEDB   = <Lib$Dir>.debug.o.remotezm
 EVENTLIB   = Tbox:o.eventlib
+LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
 TOOLBOXLIB = Tbox:o.toolboxlib
 WIMPLIB	   = Tbox:o.wimplib
 TCPIPLIB   = <Lib$Dir>.TCPIPLibs.o.*
@@ -71,6 +64,7 @@ o.main		\
 o.ui		\
 o.kill		\
 o.messages   	\
+o.DBUG          \
 
 
 #
@@ -116,7 +110,7 @@ dirs:
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} dirs
-        ${LD} -o $@ ${OBJS} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${ZLIB} ${TCPIPLIB}
+        ${LD} -o $@ ${OBJS} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${LIBSD} ${ZLIB} ${TCPIPLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 
 #
