@@ -97,6 +97,11 @@ Date		Who	Change
 			header search, to prevent corruption of the 3520 B-frame
 			pointers during the now unblanked ResetStream interval;
 			implemented deferred SetSpeed calls
+22/02/2000	BJGA	Implemented trickle-decoding of audio data during slow-motion play;
+			only waits for a single prefill anchor frame decode if the
+			trick-play ResetStream flag or low_delay bitstream flag is set;
+			delays enabling BBE interrupt until prefill end, rather than end of
+			initial header parsing
 
 ***************************************************************************/
 
@@ -719,6 +724,35 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
       /* Whilst decoding field pictures, always enable user field selection, but only change the choice of field when writing the task instruction */
       /* This enables us to avoid displaying any part of a frame buffer that the 3520 is currently using as scratch workspace! */
       VID_DCF_0 |= VID_DCF_USR; /* note this bit isn't latched, so has immediate effect */
+    }
+    
+    if (Stream.rs_flags.audio_present)
+    {
+      /* Deal with audio slow-motion start/stop */
+      if (Stream.audio.speed_indicator != 1)
+      {
+        Stream.audio_slowmo_field_count ++;
+        if (Stream.audio_slowmo_field_count == Stream.audio.speed_indicator)
+        {
+          Stream.audio_slowmo_field_count = 0;
+          AUD_PLY = 1;
+        }
+        else if (Stream.audio_slowmo_field_count == 1)
+        {
+          AUD_PLY = 0;
+        }
+      }
+      /* If video speed has changed since the last PU, restart the audio slow-motion state machine */
+      if (Stream.fields_into_this_PU == 0)
+      {
+        if (Stream.video.speed_indicator != Stream.audio.speed_indicator)
+        {
+          Stream.audio.speed_indicator = Stream.video.speed_indicator;
+          Stream.audio_slowmo_field_count = 0;
+          AUD_PLY = 1;
+          IRQ_UpdateMuteState ();
+        }
+      }
     }
     
     dprintf (("IRQ", "INT_VS: fields_till_next_AU = %d\n", Stream.fields_till_next_AU));
@@ -1765,9 +1799,6 @@ static void static_ProcessVideoSliceHdr (void)
     /* Now cap the value by the size of our allocated bit buffer */
     VideoPrefillSize = MIN(VideoPrefillSize, (SDRAM_VIDEO_BIT_BUFFER_END - SDRAM_VIDEO_BIT_BUFFER_START - 256) / 256);
     WRITE_VID_VBT(VideoPrefillSize);
-    /* Since we have now finished parsing the initial headers, we can enable the video underrun interrupt */
-    /* (we always get a couple of underruns during initial header parsing, so it's silly to count them) */
-    VID_ITM_0 |= VIDEO_INT_BBE>>0; /* enable bit buffer empty IRQ */
   }
   Stream.vid_flags.parsing_headers = false;
   Stream.vid_flags.next_frames_headers_have_been_decoded = true;
@@ -1864,7 +1895,9 @@ static void static_PerhapsWriteNewInstruction (void)
       dprintf (("IRQ", "PerhapsWriteNewInstruction: prefill_anchor_frames_decoded = %d\n", Stream.vid_flags.prefill_anchor_frames_decoded));
     }
     /* Are we ready to start display (discounting issues about synchronisation and field polarity) ? */
-    if (Stream.video.state == stream_prefilling && Stream.vid_flags.prefill_anchor_frames_decoded == 2)
+    if (Stream.video.state == stream_prefilling &&
+        (Stream.vid_flags.prefill_anchor_frames_decoded == 2 ||
+         (Stream.vid_flags.prefill_anchor_frames_decoded == 1 && (Stream.rs_flags.trick_play_mode || Stream.decode_frames->seq.low_delay))))
     {
       /* Update state machine */
       Stream.video.prefill_state = ps_waiting_for_play_command;
@@ -1872,7 +1905,9 @@ static void static_PerhapsWriteNewInstruction (void)
       /* Enable vsync interrupts now - but don't take any action on them until we receive the play command.         */
       /* This is necessary so that we can clear the relevant bits in VID_ITS - otherwise, if it takes a long time   */
       /* for audio prefilling to complete, then the first interrupt will have both VID_ITS.VST and VID_ITS.VSB set! */
-      VID_ITM_0 |= (VIDEO_INT_VSB>>0 | VIDEO_INT_VST>>0);
+      /* Also enable the video underrun interrupt, to count any video underruns - hopefully there will be none.     */
+      /* (We always get a couple of underruns during initial header parsing, so it's silly to count them.)          */
+      VID_ITM_0 |= (VIDEO_INT_VSB>>0 | VIDEO_INT_VST>>0 | VIDEO_INT_BBE>>0);
       /* Tell control unit that we've finished - we may be re-entered via SWI MPEGVideo_Play at this point */
       _swix (MPEGControl_Play, _INR(0,1), StreamFlags_VideoPresent, Stream.csh);
     }

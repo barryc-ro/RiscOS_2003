@@ -2,7 +2,7 @@
 
 Project:	STB-400
 Component:	MPEGDriver
-This file:	Line 23 WideScreen Signalling support
+This file:	Line 23 WideScreen Signalling and SCART pins 8/16 support
 
 Copyright 1999 Pace Micro Technology plc. All rights reserved.
 
@@ -19,6 +19,7 @@ Date		Who	Change
 14/02/2000	BJGA	Switched to using bottom field OSD (compensates for
 			3520 getting them the wrong way round!), and reversed
 			order of bits within each group
+02/03/2000	BJGA	Implemented all SCART signalling code
 
 ***************************************************************************/
 
@@ -26,9 +27,14 @@ Date		Who	Change
 /* Includes */
 /************/
 
+#include <stdlib.h>
+#include <string.h>
 #include <stdbool.h>
+#include "swis.h"
 
 #include "DebugLib/DebugLib.h"
+#include "MPEG/Macrovisio.h"
+#include "PortMan.h"
 
 #include "Defs.h"
 #include "Registers.h"
@@ -193,7 +199,8 @@ b_mask [14] =
 
 /******	WSS_Initialise() ***************************************************
 
-Purpose:	Initialises the 3520 OSD, but does not display it
+Purpose:	Initialises the 3520 OSD, but does not display it;
+		also initialises SCART state parameters
 Out:		Pointer to error block
 
 ***************************************************************************/
@@ -201,6 +208,9 @@ Out:		Pointer to error block
 _kernel_oserror *WSS_Initialise (void)
 {
   _kernel_oserror *e = NULL;
+  const char *tvon_setting;
+  scart_feature rgb;
+  scart_feature tvassert;
   /* Top-field OSD is at byte offset 0 */
   e = STi3520L_WriteSDRAM (OSD_soft_copy, SDRAM_OSD_START, 128);
   /* Bottom-field OSD is at byte offset 256 - just use the terminating word */
@@ -208,6 +218,25 @@ _kernel_oserror *WSS_Initialise (void)
   /* Set up OSD field pointers */
   WRITE_VID_OTP((SDRAM_OSD_START + 256) / 256); /* top/bottom OSD fields are actually inverted!! */
   WRITE_VID_OBP(SDRAM_OSD_START / 256);         /* another undocumented 3520 bug is my guess...  */
+  /* Set up SCART signalling according to TVOn variable */
+  tvon_setting = getenv ("TVOn");
+  if (tvon_setting == NULL)
+  {
+    rgb = tvassert = scart_disable;
+  }
+  else
+  {
+    if ((strcmp (tvon_setting, "CVBS") == 0) || (strcmp (tvon_setting, "YC") == 0))
+    {
+      rgb = scart_disable;
+      tvassert = scart_enable;
+    }
+    else
+    {
+      rgb = tvassert = scart_enable;
+    }
+  }
+  WSS_SetSCART (&rgb, &tvassert, NULL, scart_preserve);
   return e;
 }
 
@@ -249,6 +278,102 @@ _kernel_oserror *WSS_Set (unsigned char group [4], bool internal, unsigned char 
     VID_DCF_0 &= ~VID_DCF_EOS<<0; /* disable OSD */
   }
   return e;
+}
+
+/******	WSS_SetSCART() *****************************************************
+
+Purpose:	Reads/writes SCART signalling parameters
+In:		rgb, tvassert, external_anamorphic:
+		    pointers to read from / write to, or NULL to preserve state and not write back
+		internal_anamorphic:
+		    write-only parameter, used by ScalingType 0 with flag bit 1 set (auto SCART signalling)
+Notes:		internal_anamorphic has higher priority than external_anamorphic
+
+***************************************************************************/
+
+void WSS_SetSCART (scart_feature *rgb, scart_feature *tvassert, scart_feature *external_anamorphic, scart_feature internal_anamorphic)
+{
+  static scart_feature static_rgb;
+  static scart_feature static_tvassert;
+  static scart_feature static_external_anamorphic = scart_disable;
+  static scart_feature static_internal_anamorphic = scart_dontcare;
+  scart_feature new_value; /* a scratch value of type scart_feature */
+  unsigned int macrovision_state;
+  unsigned int macrovision_tvstandard;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  
+  /* Deal with inputs and outputs */
+  
+  if (irqs_were_enabled) _kernel_irqs_off ();
+  
+  if (rgb != NULL)
+  {
+    new_value = *rgb;
+    *rgb = static_rgb;
+    if (new_value != scart_preserve)
+    {
+      static_rgb = new_value;
+    }
+  }
+  
+  if (tvassert != NULL)
+  {
+    new_value = *tvassert;
+    *tvassert = static_tvassert;
+    if (new_value != scart_preserve)
+    {
+      static_tvassert = new_value;
+    }
+  }
+  
+  if (external_anamorphic != NULL)
+  {
+    new_value = *external_anamorphic;
+    *external_anamorphic = static_external_anamorphic;
+    if (new_value != scart_preserve)
+    {
+      static_external_anamorphic = new_value;
+    }
+  }
+  
+  if (internal_anamorphic != scart_preserve)
+  {
+    static_internal_anamorphic = internal_anamorphic;
+  }
+  
+  if (irqs_were_enabled) _kernel_irqs_on ();
+  
+  /* Apply static_rgb to the hardware */
+  
+  _swix (PortMan_AccessBit, _INR(0,1),
+      (static_rgb == scart_enable) ? PORTMAN_FLAG_CLEAR : PORTMAN_FLAG_SET, "SCART_CVBS");
+  
+  /* Apply everything else to the hardware */
+  
+  _swix (Macrovision_GetState, _IN(0)|_OUTR(1,2), 0, &macrovision_state, &macrovision_tvstandard);
+  macrovision_state &= ~MacroStateFlags_Pin8_Bits;
+  if (!static_tvassert)
+  {
+    macrovision_state |= MacroStateFlags_Pin8_0V;
+  }
+  else
+  {
+    new_value = static_internal_anamorphic;
+    if (new_value == scart_dontcare)
+    {
+      new_value = static_external_anamorphic;
+    }
+    if (new_value == scart_enable)
+    {
+      macrovision_state |= MacroStateFlags_Pin8_6V;
+    }
+    else
+    {
+      macrovision_state |= MacroStateFlags_Pin8_12V;
+    }
+  }
+  _swix (Macrovision_SetState, _INR(0,2),
+      MacroSetStateFlags_ChangeNow, macrovision_state, macrovision_tvstandard);
 }
 
 /*********************/

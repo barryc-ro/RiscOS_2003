@@ -42,6 +42,11 @@ Date		Who	Change
 			decoded into framebuffer 2 if framebuffer 1 is being displayed
 			(important now that blanking on ResetStream has been disabled);
 			support added for deferred SetSpeed calls
+22/02/2000	BJGA	Implemented CardControl 7; various flagging added to ensure that
+			*VideoInfo only prints video header info for video-only streams;
+			fixed bugs in deferred SetSpeed; fixed case where *second* prefill
+			anchor frame could be decoded into the current display framebuffer
+02/03/2000	BJGA	Implemented MPEGVideo_CardControl 2 and MPEGVideo_SetVideoParameters 2
 
 ***************************************************************************/
 
@@ -55,6 +60,7 @@ Date		Who	Change
 #include "Global/SWIs.h"
 #include "DebugLib/DebugLib.h"
 #include "MPEG/MPEGCtrl.h"
+#include "MPEG/MPEGVideo.h"
 
 #include "Defs.h"
 #include "IRQ.h"
@@ -258,6 +264,8 @@ _kernel_oserror *Video_SWICloseStream (unsigned int flags, stream_handle_t vsh)
   
   /* We now only blank the video output on CloseStream, not on ResetStream */
   VID_DCF_0 &= ~ VID_DCF_EVD;
+  
+  Stream.s_flags.video_present = false;
   return e;
 }
 
@@ -299,8 +307,7 @@ _kernel_oserror *Video_SWISetSpeed (unsigned int flags, stream_handle_t vsh, uns
   dprintf (("Video", "SWISetSpeed\n"));
   
   if (irqs_were_enabled) _kernel_irqs_off ();
-  /* The next time we stall, this is unconditionally the speed that should be asserted */
-  Stream.video.deferred_speed_indicator = speed;
+  
   /* Coming out of pause requires a little trickery */
   if (Stream.video.speed_indicator == 0 && speed != 0)
   {
@@ -313,6 +320,9 @@ _kernel_oserror *Video_SWISetSpeed (unsigned int flags, stream_handle_t vsh, uns
   {
     Stream.video.speed_indicator = speed;
   }
+  /* The next time we stall, this is unconditionally the speed that should be asserted */
+  Stream.video.deferred_speed_indicator = speed;
+  
   if (irqs_were_enabled) _kernel_irqs_on ();
   
   return e;
@@ -330,10 +340,21 @@ Out:		Pointer to error block
 _kernel_oserror *Video_SWICardControl2 (unsigned int EOR_mask, unsigned int AND_mask, unsigned int *return_old_value, unsigned int *return_new_value)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(EOR_mask);
-  IGNORE(AND_mask);
-  IGNORE(return_old_value);
-  IGNORE(return_new_value);
+  scart_feature rgb = scart_preserve;
+  scart_feature tvassert = scart_preserve;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  
+  if (irqs_were_enabled) _kernel_irqs_off ();
+  
+  WSS_SetSCART (&rgb, &tvassert, NULL, scart_preserve);
+  *return_old_value = ((rgb == scart_enable) ? UpdateControlRegister_CTRL1 : 0) | ((tvassert == scart_enable) ? UpdateControlRegister_CTRL0 : 0);
+  *return_new_value = (*return_old_value & AND_mask) ^ EOR_mask;
+  rgb = ((*return_new_value & UpdateControlRegister_CTRL1) != 0) ? scart_enable : scart_disable;
+  tvassert = ((*return_new_value & UpdateControlRegister_CTRL0) != 0) ? scart_enable : scart_disable;
+  WSS_SetSCART (&rgb, &tvassert, NULL, scart_preserve);
+  
+  if (irqs_were_enabled) _kernel_irqs_on ();
+  
   return e;
 }
 
@@ -348,8 +369,17 @@ Out:		Pointer to error block
 _kernel_oserror *Video_SWICardControl7 (unsigned int *return_flags, unsigned int *return_revision)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(return_flags);
-  IGNORE(return_revision);
+  unsigned char first_read = VID_REV;
+  unsigned char second_read = VID_REV;
+  if (first_read == second_read)
+  {
+    *return_flags = 0;
+  }
+  else
+  {
+    *return_flags = 1;
+  }
+  *return_revision = first_read;
   return e;
 }
 
@@ -497,8 +527,9 @@ _kernel_oserror *Video_SWISetVideoParameters2 (stream_handle_t vsh, unsigned int
 {
   _kernel_oserror *e = NULL;
   IGNORE(vsh);
-  IGNORE(new_state);
-  IGNORE(return_old_state);
+  
+  *return_old_state = new_state;
+  WSS_SetSCART (NULL, NULL, (scart_feature *) return_old_state, scart_preserve);
   return e;
 }
 
@@ -524,6 +555,7 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.video.state = stream_prefilling;
   Stream.video.prefill_state = ps_searching_for_first_PES_header;
   Stream.video.speed_indicator = 1;
+  Stream.video.deferred_speed_indicator = 1;
   Stream.video.packet_list_head = NULL;
   Stream.video.packet_list_tail = NULL;
   Stream.video.since_reset.amount_received = 0;
@@ -558,15 +590,22 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.unused_frames->decode_link->decode_link->decode_link = &(Stream.frame[3]);
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link = &(Stream.frame[4]);
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link->decode_link = NULL;
-  if ((VID_DFP & 0x3FFF) == SDRAM_FRAME_BUFFER_1_START/256)
+  /* If we are displaying one of the anchor frames, then we must decode the prefill anchor frames into the *other* two anchor frame buffers */
+  switch (VID_DFP & 0x3FFF)
   {
-    Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_2_START/256; /* only start decoding into frame 1 if we're sure we're not currently displaying it */
-  }
-  else
-  {
-    Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_1_START/256;
+    case SDRAM_FRAME_BUFFER_1_START/256:
+      Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_2_START/256;
+      break;
+    case SDRAM_FRAME_BUFFER_2_START/256:
+      Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_3_START/256;
+      break;
+    default:
+      Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_1_START/256;
+      break;
   }
   Stream.next_B_frame_buffer = SDRAM_FRAME_BUFFER_4_START/256;
+  WRITE_VID_VBT(0);
+  if (!Stream.rs_flags.audio_present) Stream.aud_flags.first_header_received = false; /* don't offer audio headers in *VideoInfo */
   
   /* Claim interrupts */
   IRQ_EnableCommonIRQs ();
