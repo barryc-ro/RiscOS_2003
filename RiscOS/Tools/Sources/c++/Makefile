@@ -28,7 +28,7 @@ WIPE    = -wipe
 SQUEEZE = squeeze
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
-CPPFLAGS= -c -depend !Depend -ff ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CPPFLAGS= -c -depend !Depend -zpz0 -ff -Wp ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
@@ -56,8 +56,8 @@ DFLAGS    = -DTHROWBACK
 #
 COMPONENT  = cfront
 TARGET     = ${COMPONENT}
-SOURCE     = 
-EXPORTS    = 
+SOURCE     =
+EXPORTS    =
 
 
 OBJS=	o.alloc o.bits o.block o.dcl o.dcl2 o.dcl3 o.dcl4 o.del o.discrim \
@@ -67,10 +67,6 @@ OBJS=	o.alloc o.bits o.block o.dcl o.dcl2 o.dcl3 o.dcl4 o.del o.discrim \
         o.throwback
 
 LIBS=	${CPPLIB} ${CLIB}
-
-CMD=cmd.cpp
-CMD_C=cmd.c.c++
-CMD_O=cmd.o.c++
 
 #
 # Rule patterns
@@ -103,30 +99,34 @@ install_rom: ${TARGET}
 
 clean:
         ${WIPE} o ${WFLAGS}
-        ${WIPE} cmd.o ${WFLAGS}
         ${RM} ${COMPONENT}
-        ${RM} ${CMD}
         @echo ${COMPONENT}: cleaned
 
-export_hdrs: 
+export_hdrs:
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: 
+export_libs:
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs:
+#
+# Special targets
+#
+o._dirs:
 	${MKDIR} o
-	${MKDIR} cmd.o
+	create $@
+
+o.ytab: c++.ytab
+        @echo "WARNING - this file may take a long time to compile  "
+        @echo "          due to the attempt to optimise the huge    "
+        @echo "          switch statement in this source file.      "
+        @echo "          Don't panic!                               "
+        ${CPP} ${CPPFLAGS} -o $@ c++.$*
 
 #
 # Final link
 #
-${TARGET}: ${OBJS} ${LIBS} local_dirs
+${TARGET}: ${OBJS} ${LIBS} o._dirs
         ${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
-	${SQUEEZE} $@
-
-${CMD}: ${CMD_O} ${CLIB} local_dirs
-        ${LD} ${LDFLAGS} -o $@ ${CMD_O} ${CLIB}
 	${SQUEEZE} $@
 
 # Dynamic dependencies:
