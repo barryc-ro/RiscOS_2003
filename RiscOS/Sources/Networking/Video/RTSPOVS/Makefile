@@ -210,7 +210,7 @@ all: ${RAM_MODULE} ${DIRS}
 
 install: ${RAM_MODULE}
 	${MKDIR} ${INSTDIR}
-	${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT}
+	${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Module installed (Disc)
 
