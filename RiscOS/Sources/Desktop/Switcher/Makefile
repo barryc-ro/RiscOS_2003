@@ -22,7 +22,7 @@ AS      = aasm
 CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 
 #
