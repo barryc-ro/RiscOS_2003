@@ -64,6 +64,7 @@ struct config_str
     int display_scale_image;
     int display_scales[config_SCALES];
     int display_scale_fit;
+    int display_scale_fit_mode;
     int display_width;
     int display_blending;
     wimp_box display_margin;
@@ -225,6 +226,7 @@ extern struct config_str config_array;
 
 #define config_display_scale (config_array.display_scale)
 #define config_display_scale_fit (config_array.display_scale_fit)
+#define config_display_scale_fit_mode (config_array.display_scale_fit_mode)
 #define config_display_scale_image (config_array.display_scale_image)
 #define config_display_scales (config_array.display_scales)
 #define config_display_width (config_array.display_width)

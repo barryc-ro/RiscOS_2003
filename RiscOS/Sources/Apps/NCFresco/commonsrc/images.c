@@ -830,6 +830,8 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
     else
     {
 	IMGDBG(("im%p: can't allocate %d-byte buffer\n", i, to ));
+
+	image_set_error(i);
 #ifndef STBWEB
 	mm_can_we_recover(FALSE);
 	image_flush( i, 0 );
@@ -1896,7 +1898,7 @@ os_error *image_stream_end(image i, char *cfile)
 	i->file_exec_addr = ofs.execaddr;
 	i->data_size = ofs.start;
 
-	if (i->flags & image_flag_LOAD_AT_END)
+	if ( (i->flags & (image_flag_LOAD_AT_END | image_flag_ERROR)) == image_flag_LOAD_AT_END)
 	{
 	    int fh = ro_fopen(cfile, RO_OPEN_READ);
 
@@ -1930,11 +1932,11 @@ os_error *image_stream_end(image i, char *cfile)
     i->flags |= image_flag_FETCHED;
     i->flags &= ~image_flag_STREAMING;
 
-    if (res == NULL)
+    if (res == NULL && (i->flags & image_flag_ERROR) == 0)
 	i->flags |= image_flag_RENDERABLE;
     else
     {
-	usrtrc( "Image error 2 = %s\n", res);
+	usrtrc( "Image error 2 = %s\n", strsafe(res));
 
 	free_area(&i->our_area);
 	flex_free(&i->data_area);

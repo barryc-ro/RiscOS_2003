@@ -149,7 +149,8 @@
 #define AUTOSCROLL_DELAY		100	/* delay before auto-scrolling takes affect */
 #define AUTOSCROLL_HOVER_AREA		8	/* space to stay within during DELAY period */
 
-#define NCFRESCO_CURRENT_PAGE		PROGRAM_NAME"$CurrentURL"
+#define NCFRESCO_CURRENT_URL		PROGRAM_NAME"$CurrentURL"
+#define NCFRESCO_CURRENT_TITLE		PROGRAM_NAME"$CurrentTitle"
 
 /* -------------------------------------------------------------------------- */
 
@@ -851,7 +852,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     /* set system variable for current page */
     if (v == main_view)
-	_kernel_setenv(NCFRESCO_CURRENT_PAGE, url);
+    {
+	_kernel_setenv(NCFRESCO_CURRENT_URL, url);
+	_kernel_setenv(NCFRESCO_CURRENT_TITLE, strsafe(title));
+    }
     
     previous_url = NULL;
     previous_mode = v->browser_mode;
@@ -4052,8 +4056,18 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 
     if (!v)
     {
-	if (m->bbits == wimp_BRIGHT)
+	switch (m->bbits)
+	{
+	case wimp_BRIGHT:
 	    fevent_handler(config_mode_mouse_adjust, main_view);
+	    break;
+	case wimp_BMID:
+	    if (keyboard_state == fe_keyboard_OFFLINE)
+		fevent_handler(fevent_STATUS_OFF, main_view);
+	    else
+		fevent_handler(config_mode_mouse_menu, main_view);
+	    break;
+	}
 
 	return FALSE;
     }
@@ -4063,12 +4077,16 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
     switch (m->bbits)
     {
     case wimp_BMID:
-	if ( v->browser_mode != fe_browser_mode_DESKTOP &&
-	    v->browser_mode != fe_browser_mode_DBOX &&
-	    v->browser_mode != fe_browser_mode_APP)
+	if (keyboard_state == fe_keyboard_OFFLINE ||
+	    v->browser_mode == fe_browser_mode_DESKTOP ||
+	    v->browser_mode == fe_browser_mode_DBOX ||
+	    v->browser_mode == fe_browser_mode_APP)
+	{
+	    fevent_handler(fevent_STATUS_OFF, v);
+	}
+	else
 	{
 	    fevent_handler(config_mode_mouse_menu, v);
-/* 	    fe_status_toggle(v); */
 	}
 	break;
 
@@ -5018,13 +5036,15 @@ void fe_user_load(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-/*
- * I can't do anything useful here as PREQUIT is sent before the user confirms it.
- */
+/* PREQUIT on an NC is sent before the confirm shutdown box is opened
+ * and again when it is confirmed */
 
 static void fe_handle_prequit(void)
 {
-/*     fe_status_unstack_all(); */
+    if (fe_map_view())
+	fe_map_mode(NULL, NULL);
+
+    stbmenu_close();
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -5806,6 +5826,10 @@ static void handler(int signal)
    _swix(Wimp_ReportError, _INR(0,5), &er, wimp_EOK | (1<<8), PROGRAM_NAME, NULL, NULL, 0);
 /*    wimp_reporterror(&er, wimp_EOK, PROGRAM_NAME); */
 /*    frontend_fatal_error(&er); */
+
+#if ROM
+   exit(EXIT_FAILURE);
+#endif
 }
 
 static void signal_init(void)
@@ -6039,6 +6063,16 @@ static BOOL fe_initialise(void)
 	gbf_flags |= GBF_AUTOFIT;
     else
 	gbf_flags &= ~GBF_AUTOFIT;
+
+    switch (config_display_scale_fit_mode)
+    {
+    case 0:
+	gbf_flags &= ~GBF_AUTOFIT_ALL_TEXT;
+	break;
+    case 1:	
+	gbf_flags |= GBF_AUTOFIT_ALL_TEXT;
+	break;
+    }
 
     gbf_init();
 

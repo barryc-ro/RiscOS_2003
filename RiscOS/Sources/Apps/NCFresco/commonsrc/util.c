@@ -884,7 +884,7 @@ char *rs_tmpnam(char *s)
 	    s = tmpnam_buf;
 
 	sprintf(s, "<Wimp$ScrapDir>.%08x", sig);
-	f = mmfopen(s, "w");
+	f = mmfopen(s, "r");	/* SJM: oops this used to be "w"! */
 	if (f)
 	{
 	    mmfclose(f);
