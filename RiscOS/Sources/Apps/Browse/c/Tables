@@ -59,7 +59,8 @@ static int width_table_leds = 1;
 
 /* Static function prototypes */
 
-static void tables_align_contents(browser_data * b, HStream * streambase, table_stream * table, reformat_cell * cellarray, int Row, int Column);
+static void tables_find_actual_size (table_stream * p, int * actual_colspan, int * actual_rowspan);
+static void tables_align_contents   (browser_data * b, HStream * streambase, table_stream * table, reformat_cell * cellarray, int Row, int Column);
 
 /*************************************************/
 /* tables_count_table()                          */
@@ -478,6 +479,81 @@ void tables_init_table(browser_data * b, table_stream * table, reformat_cell * c
 }
 
 /*************************************************/
+/* tables_find_actual_size()                     */
+/*                                               */
+/* Find the number of actual used rows and cols  */
+/* in a table, ignoring whatever colspan and     */
+/* rowspan attributes might say.                 */
+/*                                               */
+/* Expects each cell's RowOffs and ColOffs       */
+/* fields to hold the row/column offset of that  */
+/* cell within the table (tables_position_table  */
+/* must have been called beforehand).            */
+/*                                               */
+/* Parameters: Pointer to a table_stream struct  */
+/*             for the table;                    */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             number of columns is written;     */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             number of rows is written.        */
+/*                                               */
+/* Assumes:    The int pointers may be NULL.     */
+/*************************************************/
+
+static void tables_find_actual_size(table_stream * p, int * actual_colspan, int * actual_rowspan)
+{
+  table_row      * R;
+  table_headdata * D;
+  int              cellmax = p->ColSpan * p->RowSpan;
+  int              cs      = 0;
+  int              rs      = 0;;
+
+  if (cellmax)
+  {
+    R = p->List;
+
+    while (R)
+    {
+      int row, col;
+
+      D = R->List;
+
+      while (D && D->ColOffs < p->ColSpan)
+      {
+        col = D->ColOffs;
+        row = D->RowOffs;
+
+        switch (D->Tag)
+        {
+          case TagTableData:
+          case TagTableHead:
+          {
+            int cellnumber = D->RowOffs * p->ColSpan + D->ColOffs;
+
+            if (cellnumber < cellmax && col < p->ColSpan)
+            {
+              if (col + 1 > cs) cs = col + 1;
+              if (row + 1 > rs) rs = row + 1;
+            }
+          }
+        }
+
+        D = D->Next;
+      }
+
+      R = R->Next;
+    }
+  }
+
+  if (actual_colspan) *actual_colspan = cs;
+  if (actual_rowspan) *actual_rowspan = rs;
+
+  return;
+}
+
+/*************************************************/
 /* tables_width_table()                          */
 /*                                               */
 /* Works out the widths in millipoints for all   */
@@ -538,7 +614,7 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p,
 {
   table_row       * R;
   table_headdata  * D;
-  int               I; // S, T; // For code commented out below
+  int               I;
   int             * ColOffs;
   int               finding_widest;
 
@@ -559,16 +635,12 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p,
   int               have_pixels   = 0;
 
   int               have_checked  = 0;
+  int               subtract      = 0;
 
   int               cellspacingos = p->cellspacing * 2; /* 1 'web pixel' = 2 OS units */
   int               cellspacingmp;
 
   int               tbordmp;
-
-  // Trying to work out why the final 'are we underwidth' pass is needed,
-  // but due to code freeze (29/01/1998) have to put this on hold... :-(
-  //
-  // Printf("Table %p, aw %d, flags %x\n",p,available_width/400,flags);
 
   #ifdef TRACE
     if (tl & (1u<<20)) Printf("tables_width_table entered: 0x%x %d (%d OS) 0x%x\n", (int) P, available_width, available_width / 400, cellarray);
@@ -716,15 +788,63 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p,
     return 0;
   }
 
+  /* Decrease available width according to cell spacing constraints    */
+  /* and account for the overall table border.                         */
+
+  subtract = tbordmp * 2;
+
+  if (!choices.msie4_style_tables)
+  {
+    /* First case - Navigator / Browse behaviour. Here, we just subtract */
+    /* spacing for enough columns as there appear to be. However, if     */
+    /* there is a large colspan cell which effectively 'drops off' the   */
+    /* right hand edge of the notionally used cells, we could end up     */
+    /* with excess space allocated on the edge of the table:             */
+    /*                                                                   */
+    /* +===============================================================+ */
+    /* H                                                               H */
+    /* H +-----------------------------------------------------------+ H */
+    /* H | Cell with colspan value of, say, 7                        | H */
+    /* H +-----------------------------------------------------------+ H */
+    /* H                                                               H */
+    /* H +--------+ +--------+ +--------+ +--------+ +--------+        H */
+    /* H | There  | | only   | | actual | | really | | use... | Gap at H */
+    /* H | are    | | five   | | cells  | | in     | | So --> | right  H */
+    /* H |        | |        | |        | |        | |        | edge.  H */
+    /* H +--------+ +--------+ +--------+ +--------+ +--------+        H */
+    /* H                                                               H */
+    /* +===============================================================+ */
+
+    subtract += cellspacingmp * (p->ColSpan + 1);
+  }
+  else
+  {
+    int number_used;
+
+    /* Second case - MSIE 4 style behaviour. Here, MSIE seems to count   */
+    /* up and see which cells are actually in use, and only account for  */
+    /* spacing between them. This eliminates the spurious gap at the     */
+    /* right hand edge as above.                                         */
+    /*                                                                   */
+    /* Whilst choices.msie4_style_tables is generally only used to       */
+    /* switch on daft features for compatibility's sake, this seems at   */
+    /* first glance a sensible thing to have. However, the feature hides */
+    /* an error in the HTML - the top cell had too big a colspan value.  */
+    /* So really, to write better HTML, it's more sensible to not have   */
+    /* the browser hide such an error.                                   */
+
+    tables_find_actual_size(p, &number_used, NULL);
+
+    if (number_used) subtract += cellspacingmp * (number_used + 1);
+  }
+
+  /* Subtract the value from available_width, if the latter is a */
+  /* valid constraint (i.e. we're not trying to find the widest  */
+  /* the table can be).                                          */
+
   if (finding_widest != 1)
   {
-    /* Decrease available width according to cell spacing constraints */
-
-    if (p->ColSpan) available_width -= cellspacingmp * (p->ColSpan + 1);
-
-    /* Decrease available width according to overall table border */
-
-    available_width -= tbordmp * 2;
+    available_width -= subtract;
   }
 
   /* This can get s l o w... */
@@ -841,22 +961,25 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p,
                 break;
               }
 
-              if (finding_widest != 1)
-              {
-                /* Deal with garbage like 'TD WIDTH="2000"' - if a cell */
-                /* wants to be wider than the table can be, ignore the  */
-                /* width specifier completely.                          */
-
-                if (width > available_width) width = -1;
-              }
-              else
-              {
-                /* Because this is a scan to find the widest limit of a table, */
-                /* we can't use available_width to limit the item; so instead  */
-                /* use the browser's display width as a second best option.    */
-
-                if (width > display_width) width = -1;
-              }
+// Um... Improvements to other widthing code mean this doesn't seem to be
+// needed anymore. It was only causing problems in fact.
+//
+//              if (finding_widest != 1)
+//              {
+//                /* Deal with garbage like 'TD WIDTH="2000"' - if a cell */
+//                /* wants to be wider than the table can be, ignore it   */
+//                /* completely.                                          */
+//
+//                if (width > available_width) width = -1;
+//              }
+//              else
+//              {
+//                /* Because this is a scan to find the widest limit of a table, */
+//                /* we can't use available_width to limit the item; so instead  */
+//                /* use the browser's display width as a second best option.    */
+//
+//                if (width > display_width) width = -1;
+//              }
             }
 
             /* Unfortunately, still need to find the minimum size. So bang */
@@ -1331,12 +1454,22 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p,
                 table_headdata * lc = usedcells[p->ColSpan + col];
 
                 /* Only use the maximum value if the cell isn't 'locked' by one */
-                /* already in use that specifies a pixel size                   */
+                /* already in use that specifies a pixel size (provided this    */
+                /* one doesn't itself specify a greater pixel size).            */
 
-                if (TD_HAS_WIDTH(lc) && TD_WIDTH_UNITS(lc) == UNITS_PIXELS)
+                if (
+                     (
+                       !TD_HAS_WIDTH(D)                  ||
+                       TD_WIDTH_UNITS(D) != UNITS_PIXELS
+                     )
+                     && lc
+                     && TD_HAS_WIDTH(lc)
+                     && TD_WIDTH_UNITS(lc) == UNITS_PIXELS
+                   )
                 {
-                  /* May be forced to use this cell if the *minimum* value */
-                  /* ends up greater than the maximum!                     */
+                  /* May be forced to use this cell anyway, if the *minimum* value */
+                  /* of this cell is greater the maximum set from the one already  */
+                  /* marked for use in usedcells[]!                                */
 
                   if (mins[cellnumber] > overmaxs[col])
                   {
@@ -1708,8 +1841,15 @@ tables_width_table_assign_finals: /* (The colspan code below this section may ju
                 /* columns it spans. Using minimums ensures that when rewidthing    */
                 /* the table, we won't need to check colspan cells again in case    */
                 /* they are still undersize...!                                     */
+                /*                                                                  */
+                /* mins_total is checked because a colspan cell in a row above may  */
+                /* have already redistributed its width in overmins. If in total it */
+                /* was wider than this cell, mins[cellnumber] - mins_total would be */
+                /* negative. We'd then go and *reduce* the spanned width to this    */
+                /* cell's value, meaning the cell above ended up underwidth. Oops!  */
+                /* So, do this extra check to avoid making that error.              */
 
-                if (spanned_total < mins[cellnumber])
+                if (spanned_total < mins[cellnumber] && mins_total < mins[cellnumber])
                 {
                   int min_diff  = mins[cellnumber] - mins_total;
                   int basic     = min_diff / (D->ColSpan ? D->ColSpan : 1);
@@ -1778,13 +1918,18 @@ tables_width_table_assign_finals: /* (The colspan code below this section may ju
   /* Closure of 'if (have_colspans)' */
   }
 
-//  #ifdef TRACE
+  #ifdef TRACE
 
     /* Final sanity check - the algorithms above should ensure that */
     /* by this stage, no cell whether spanning multiple columns or  */
     /* not should be below its minimum size. In TRACE builds, this  */
     /* check warns if this is not the case (this indicates a bug in */
     /* the widthing code above).                                    */
+    /*                                                              */
+    /* A single cell being underwidth is really quite serious;      */
+    /* there is much more room for colspan to go wrong, really, so  */
+    /* the error this check raises is rather more urgent sounding   */
+    /* than the similar check for colspan cells.                    */
 
     R        = p->List;
     rowcount = 0;
@@ -1810,15 +1955,23 @@ tables_width_table_assign_finals: /* (The colspan code below this section may ju
                    ColOffs[currcol] < mins[cellnumber]
                  )
               {
+                /* This ifdef is left here so that in the event the widther is   */
+                /* changed so that this final 'emergency' check may be needed in */
+                /* non-trace builds, it can be brought back by just removing the */
+                /* outer ifdef checks. Be aware that any widther which does this */
+                /* *is* broken in some way!                                      */
+
                 #ifdef TRACE
 
                   erb.errnum = Utils_Error_Custom_Normal;
 
                   sprintf(erb.errmess,
-                          "Non-colspan cell %d would have ended up at %d OS units, below minimum width of %d",
+                          "Warning! NON-colspan cell %d would have ended up at %d OS units (%d mp), below minimum width of %d OS units (%d mp).",
                           cellnumber,
                           ColOffs[currcol] / 400,
-                          mins[cellnumber] / 400);
+                          ColOffs[currcol],
+                          mins[cellnumber] / 400,
+                          mins[cellnumber]);
 
                   show_error_ret(&erb);
 
@@ -1888,15 +2041,23 @@ tables_width_table_assign_finals: /* (The colspan code below this section may ju
                     int basic     = min_diff / (D->ColSpan ? D->ColSpan : 1);
                     int remainder = min_diff - (basic * D->ColSpan);
 
+                    /* This ifdef is left here so that in the event the widther is   */
+                    /* changed so that this final 'emergency' check may be needed in */
+                    /* non-trace builds, it can be brought back by just removing the */
+                    /* outer ifdef checks. Be aware that any widther which does this */
+                    /* *is* broken in some way!                                      */
+
                     #ifdef TRACE
 
                       erb.errnum = Utils_Error_Custom_Normal;
 
                       sprintf(erb.errmess,
-                              "Colspan cell %d would have ended up at %d OS units, below minimum width of %d",
+                              "Colspan cell %d would have ended up at %d OS units (%d mp), below minimum width of %d OS units (%d mp).",
                               cellnumber,
                               spanned_total / 400,
-                              mins[cellnumber] / 400);
+                              spanned_total,
+                              mins[cellnumber] / 400,
+                              mins[cellnumber]);
 
                       show_error_ret(&erb);
 
@@ -1947,7 +2108,7 @@ tables_width_table_assign_finals: /* (The colspan code below this section may ju
     /* Closure of 'if (have_colspans)' */
     }
 
-//  #endif
+  #endif
 
   /* Add up the widths */
 
@@ -2137,7 +2298,7 @@ tables_width_table_assign_finals: /* (The colspan code below this section may ju
   /* width to allow for cellspacing to the returned table width, */
   /* and allow for the outer table border.                       */
 
-  if (p->ColSpan) max_table_width += cellspacingmp * (p->ColSpan + 1) + tbordmp * 2;
+  max_table_width += subtract;
 
   return max_table_width;
 }
@@ -2272,7 +2433,6 @@ int tables_height_table(int toplevel, browser_data * b, table_stream * p, reform
       case UNITS_PERCENT:
       {
         convert_to_points(redraw_display_height(b, NULL), &height);
-
         height = (TABLE_HEIGHT(p) * height) / 100;
       }
       break;
@@ -2529,7 +2689,18 @@ int tables_height_table(int toplevel, browser_data * b, table_stream * p, reform
 
   /* Add in cell spacings and the table outer border */
 
-  if (p->RowSpan) ReturnHeight += cellspacingmp * (p->RowSpan + 1) + tbordmp * 2;
+  if (choices.msie4_style_tables)
+  {
+    int actual_rowspan;
+
+    tables_find_actual_size(p, NULL, &actual_rowspan);
+
+    ReturnHeight += cellspacingmp * (actual_rowspan + 1) + tbordmp * 2;
+  }
+  else
+  {
+    ReturnHeight += cellspacingmp * (p->RowSpan + 1) + tbordmp * 2;
+  }
 
   /* Return the height */
 
@@ -2636,14 +2807,26 @@ void tables_fix_table(browser_data * b, table_stream * p, reformat_cell * cellar
   int            * ColOffs;
   int            * RowOffs;
   int              CurX, CurY;
-  int              cellcount     = 0;
-  int              cellmax       = p->ColSpan * p->RowSpan;
-  int              cellspacingos = p->cellspacing * 2; /* 1 'web pixel' = 2 OS units */
+  int              cellcount      = 0;
+  int              cellmax        = p->ColSpan * p->RowSpan;
+  int              cellspacingos  = p->cellspacing * 2; /* 1 'web pixel' = 2 OS units */
   int              cellspacingmp;
   int              tbordmp;
+  int              actual_colspan = p->ColSpan;
+  int              actual_rowspan = p->RowSpan;
 
   convert_to_points(cellspacingos, &cellspacingmp);
   convert_to_points(TABLE_BORDER(p) * 2, &tbordmp); /* 1 'web pixel' = 2 OS units */
+
+  /* First thing - for MSIE4 compatibility regarding cell spacing, */
+  /* work out the number of actually used rows and columsn in the  */
+  /* table. For more, see comments around code calculating the     */
+  /* value of 'subtract' in tables_width_table.                    */
+
+  if (choices.msie4_style_tables)
+  {
+    tables_find_actual_size(p, &actual_colspan, &actual_rowspan);
+  }
 
   /* Have ColOffs and RowOffs as the arrays holding millipoint */
   /* offsets from the top left of the table.                   */
@@ -2696,6 +2879,8 @@ void tables_fix_table(browser_data * b, table_stream * p, reformat_cell * cellar
 
         if (D->ColSpan > 1)
         {
+          int spanned, available;
+
           for (I = 1; I < D->ColSpan; I++)
           {
             Width += abs(ColOffs[D->ColOffs + I]);
@@ -2703,7 +2888,12 @@ void tables_fix_table(browser_data * b, table_stream * p, reformat_cell * cellar
 
           /* Account for cell spacing */
 
-          Width += cellspacingmp * (D->ColSpan - 1);
+          spanned   = D->ColSpan;
+          available = actual_colspan - D->ColOffs;
+
+          if (spanned > available ) spanned = available;
+
+          Width += cellspacingmp * (spanned - 1);
         }
 
         /* Do the same for the height */
@@ -2712,14 +2902,21 @@ void tables_fix_table(browser_data * b, table_stream * p, reformat_cell * cellar
 
         if (D->RowSpan > 1)
         {
+          int spanned, available;
+
           for (I = 1; I < CorrectRowSpan(D, p); I++)
           {
             Height += abs(RowOffs[D->RowOffs + I]);
           }
 
+          spanned   = D->RowSpan;
+          available = actual_rowspan - D->RowOffs;
+
+          if (spanned > available ) spanned = available;
+
           /* Account for cell spacing */
 
-          Height += cellspacingmp * (D->RowSpan - 1);
+          Height += cellspacingmp * (spanned - 1);
         }
 
         /* We now know the X and Y millipoint offsets of the cell and */
