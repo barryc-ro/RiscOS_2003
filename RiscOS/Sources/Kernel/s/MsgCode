@@ -31,7 +31,7 @@ TranslateError  ROUT
         Pull    "r4,PC"
 
 TranslateError_UseR4
-        Push    "R8,LR"
+        Push    "R8,R9,LR"
         mrs    ,R8,CPSR
         ORR     R8,R8,#V_bit                    ; V set ready :)
 
@@ -40,20 +40,29 @@ TranslateError_UseR4
         TEQ     LR,#0
         BNE     %FT90
 
-        BIC     R8, R8, #&0F
-        ORR     R8, R8, #SVC_mode               ; SVC mode, preserve IRQ state
-        msr    ,CPSR_c, R8
+        BIC     R9, R8, #&0F
+        ORR     R9, R9, #SVC_mode               ; SVC mode, preserve IRQ state
+        msr    ,CPSR_c, R9
 
-        Push    "R0-R7,LR"
+        Push    "R0-R7,R8,R9,LR"
 
-        MOV     R2,#0
-        MOV     R1,#-1                          ; We are looking up an error, don't bother
-        STRB    R1, [R2, #ErrorSemaphore]       ; translating other errors.
-
-        ADR     R1,KernelMessagesBlock+4
         MOV     R5,#0
         MOV     R6,#0
         MOV     R7,#0
+        MOV     R1,#-1                          ; We are looking up an error, don't bother
+        STRB    R1, [R5, #ErrorSemaphore]       ; translating other errors.
+
+  [ CacheCommonErrors
+        BL      CheckCommonErrorCache           ; sets R9 to memory address for cached result
+        MOVNE   R1,#0
+        BNE     %FT80
+        MOV     R2,R9                           ; 0 - or our cached area!
+        MOV     R3,#256
+  |
+        MOV     R2,#0
+  ]
+
+        ADR     R1,KernelMessagesBlock+4
         SWI     XMessageTrans_ErrorLookup
         LDR     R14,[R0]
         LDR     R1,[SP]
@@ -61,13 +70,88 @@ TranslateError_UseR4
         CMP     R14,R1
         STREQ   R0,[SP]
 
-        MOV     R1,#0
+        MOV     R1,#0                           ; To clear the semaphore
+  [ CacheCommonErrors
+        TEQNE   R9,#0                           ; Did we try to cache this message?
+        STRNE   R1,[R9]                         ; blat out the error number
+80
+  ]
         STRB    R1, [R1 ,#ErrorSemaphore]       ; Clear error semaphore
 
-        Pull    "R0-R7,LR"
+        Pull    "R0-R7,R8,R9,LR"
 90
         msr    ,CPSR_cf, R8                     ; Back to original mode, V set
-        Pull    "R8,PC"
+        Pull    "R8,R9,PC"
+
+  [ CacheCommonErrors
+   ; This block MUST not be empty
+CommonErrorAddresses
+        &       ErrorBlock_BadNumb
+        &       ErrorBlock_BuffOverflow
+        &       ErrorBlock_VarNoRoom
+        &       ErrorBlock_ChDynamNotAllMoved
+        &       ErrorBlock_NaffRelease
+EndCommonErrorAddresses
+
+        GBLA    ECEACount
+ECEACount SETA  (EndCommonErrorAddresses-CommonErrorAddresses)/4
+        ASSERT  (EndCommonErrorAddresses <> CommonErrorAddresses)
+
+        ! 0, "Requiring ":CC:(:STR:(ECEACount*256)):CC:" bytes for error cache"
+        ! 0, "Cached error block pointer at ":CC::STR:CachedErrorBlocks
+
+; This routine exits with Z clear if it can supply a cached translation; else must set Z
+; so that the TranslateError_UseR4 routine continues to function and set R9 to the cache
+; block to use for the result (or set R9 to zero to indicate no cacheing for this error)
+CheckCommonErrorCache ROUT
+        Entry   "r1-r3"
+        CMP     r4, #1                      ; is R4 = 0?  If so, clear C for next instruction
+        SBCS    r9, r4, r4                  ; R9=0,Z set - if R4 was >0, else R9=-1, Z clear
+        EXIT    EQ
+        LDR     r9, [r4, #KernelMessagesBlock] ; R4 guaranteed zero from above
+        TEQ     r9, #0
+        EXIT    EQ                          ; not initialised messages yet!  Exit R9=0, Z set
+        LDR     r9, [r4, #CachedErrorBlocks]
+        TEQ     r9, #0
+        BLEQ    CommonErrorCacheInit
+        EXIT    EQ
+        ADR     lr, CommonErrorAddresses
+        MOV     r2, #ECEACount - 1
+10
+        LDR     r1, [lr, r2, LSL #2]
+        TEQ     r1, r0
+        BEQ     %FT20
+        SUBS    r2, r2, #1
+        BPL     %BT10
+        ; Set Z if message not found, set R9 zero to mark we don't want to cache this
+        MOVS    r9, #0
+        EXIT
+20
+        LDR     r1, [r9, r2, LSL #8]!
+        ; Set Z if we don't have that error cached yet, clear it and copy the cached
+        ; block to R0 if we do already have this message
+        TEQ     r1, #0
+        MOVNE   r0, r9
+        EXIT
+
+CommonErrorCacheInit
+        Entry   "r0-r9"
+        LDR     r3, =ECEACount*256
+        BL      ClaimSysHeapNode
+        MOVVS   r2, #0
+        MOV     r3, #0
+        STR     r2, [R3, #CachedErrorBlocks]
+
+        GBLA    CECLoop
+CECLoop SETA    0
+        WHILE CECLoop < ECEACount
+          STRVC r3, [r2, #CECLoop * 256]
+CECLoop SETA    CECLoop+1
+        WEND
+
+        TEQ     r2, #0
+        EXIT
+  ]
 
 ;----------------------------------------------------------------------------------------
 ;
