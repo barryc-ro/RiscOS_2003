@@ -9,12 +9,16 @@
 *
 *   Author: $
 *
-*   tcpro.c,v
-*   Revision 1.1  1998/01/12 11:37:29  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.5   Feb 17 1998 19:31:10   sumitd
+*  CPR 8630 - Second server location in TCP DOS client not respected
+*  
+*     Rev 1.4   16 Oct 1997 15:59:06   brada
+*  Clear the correct number of bytes for G_BrowserAddrList
+*  
+*     Rev 1.3   Oct 09 1997 19:04:36   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.2   13 Aug 1997 10:52:54   terryt
 *  fix for browser address
@@ -49,7 +53,7 @@
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
 #include "../../../inc/nrapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../../../dll/td/inc/td.h"
 
 #include "sys/types.h"

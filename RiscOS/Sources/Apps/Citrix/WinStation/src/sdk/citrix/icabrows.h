@@ -7,12 +7,13 @@
 *
 *  Author: Brad Pedersen (10/9/95)
 *
-*  icabrows.h,v
-*  Revision 1.1  1998/01/12 11:37:57  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.43   03 Nov 1997 09:07:20   brada
+*  Added firewall load balancing support
+*  
+*     Rev 1.42   18 Sep 1997 14:47:14   x86fre
+*  Modified for client split
 *  
 *     Rev 1.41   21 Apr 1997 16:56:52   TOMA
 *  update
@@ -120,6 +121,7 @@ extern "C" {
 ==   Common defines
 =============================================================================*/
 
+#define MAX_BR_NAME                 65
 #define MAX_BR_ADDRESS              20  // maximum length of network address (including family)
 #define MAX_BR_FORMATTED_ADDRESS    50  // maximum length of formatted network address (for BrFormatAddress API)
 #define MAX_BR_BUFFER               512 // maximum length of browser request buffer
@@ -197,9 +199,13 @@ typedef struct _ICA_BR_ELECTION {
 
     /* version 3 */
                              // Browser name in UNICODE
+    /* version 4 */
+    // SJM: use BYTE rather than ICA_BR_ADDRESS because of packing 
+    BYTE AlternateAddress[MAX_BR_ADDRESS];   // bytes 0,1 family, 2-n address
+    //ICA_BR_ADDRESS AlternateAddress;
 } ICA_BR_ELECTION, * PICA_BR_ELECTION;
 
-#define sizeof_ICA_BR_ELECTION	   (sizeof(ICA_BR_HEADER) + 6)
+#define sizeof_ICA_BR_ELECTION	   (sizeof(ICA_BR_HEADER) + 6 + MAX_BR_ADDRESS)
     
 /*
  *  Cause of election request
@@ -239,6 +245,9 @@ typedef struct _ICA_BR_ELECTION_CRITERIA {
  */
 typedef struct _ICA_BR_MASTER_DECLARE {
     ICA_BR_HEADER Header;
+
+    /* Version 2 */
+    ICA_BR_ADDRESS AlternateAddress;
 } ICA_BR_MASTER_DECLARE, * PICA_BR_MASTER_DECLARE;
 
 
@@ -396,6 +405,7 @@ typedef struct _ICA_BR_DATA_HEADER {
 #define DATATYPE_LOADDATA     8  // load balance data
 #define DATATYPE_LICENSE      9  // license data (browser.serialnumber)
 #define DATATYPE_DISCONNECT  10  // disconnect session data (clientname:appname)
+#define DATATYPE_ALTADDRESS  11  // alternate address for server
 
 /*
  *  DataFlags
@@ -554,7 +564,8 @@ typedef struct _ICA_BR_REQUEST_MASTER {
 /*
  *  MasterReqFlags
  */
-#define MASTERREQ_BROADCAST 0x0001  // broadcast request
+#define MASTERREQ_BROADCAST  0x0001  // broadcast request
+#define MASTERREQ_ALTADDRESS 0x0002  // get alternate address
 
 
 /*

@@ -10,73 +10,64 @@
 *   Author: Marc Bloomfield (marcb) 15-Apr-1994
 *
 *   $Log$
-*   Revision 1.3  1998/01/30 19:10:45  smiddle
-*   Fixed clipping (as long as its simple), and palettes (mostly) and text.
-*   Fixed a few more dodgy alignmenet structures and made some progress
-*   towards getting the save/restore screen code working.
-*
-*   Version 0.04. Tagged as 'WinStation-0_04'
-*
-*   Revision 1.2  1998/01/27 18:38:59  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
-*   Revision 1.1  1998/01/19 19:12:54  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.24   Jan 15 1998 23:35:10   briang
+*  guard twi statemenst
+*  
+*     Rev 1.23   Jan 14 1998 17:01:32   briang
+*  TWI Integration
+*
+*     Rev 1.23   08 Oct 1997 14:00:00   AnatoliyP
+*  TWI integration started
+*
+*     Rev 1.22   16 Sep 1997 20:10:30   CTXSRC2
+*  Modified for client split
+*
 *     Rev 1.19   08 Aug 1997 18:16:54   kurtp
 *  clipped text optimization
-*  
+*
 *     Rev 1.18   08 Aug 1997 17:55:52   kurtp
 *  clipped text optimization
-*  
+*
 *     Rev 1.17   08 Aug 1997 16:18:54   kurtp
 *  fix non-clipping glyph bug
-*  
+*
 *     Rev 1.16   07 Aug 1997 22:17:58   kurtp
 *  fix glyph bug from dawn of time
-*  
+*
 *     Rev 1.15   04 Aug 1997 19:14:36   kurtp
 *  update
-*  
+*
 *     Rev 1.12   25 Jul 1997 14:18:50   kurtp
 *  optimize transparent textout
-*  
+*
 *     Rev 1.11   15 Jul 1997 14:40:52   kurtp
 *  update
-*  
+*
 *     Rev 1.10   15 Jul 1997 14:21:04   kurtp
 *  update
-*  
+*
 *     Rev 1.9   14 Jul 1997 18:21:22   kurtp
 *  Add LVB to transparent text ops
-*  
+*
 *     Rev 1.8   08 Jul 1997 17:46:36   kurtp
 *  update
-*  
+*
 *     Rev 1.7   08 Jul 1997 17:40:06   kurtp
 *  optimize Opaque TextOut on slow VGA devices
-*  
+*
 *     Rev 1.6   15 Apr 1997 18:16:28   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.6   21 Mar 1997 16:09:34   bradp
 *  update
-*  
+*
 *     Rev 1.5   08 May 1996 14:53:44   jeffm
 *  update
-*  
+*
 *     Rev 1.4   03 Jan 1996 13:33:28   kurtp
 *  update
-*  
+*
 \**************************************************************************/
 
 #include <string.h>
@@ -115,10 +106,10 @@ static BOOL    vbComplex;  // TRUE if current operation is complex clipping
 
 static TWTOGLYPHDIMENSION vGlyphDimension;
 
-static TWTOGH vGH;         // For performance reasons, this structure is used 
-                           // as the working copy of the GlyphHeader - although 
-                           // the GlyphHeader bit fields work nicely when 
-                           // sending stuff across the wire, it causes the 
+static TWTOGH vGH;         // For performance reasons, this structure is used
+                           // as the working copy of the GlyphHeader - although
+                           // the GlyphHeader bit fields work nicely when
+                           // sending stuff across the wire, it causes the
                            // client to burn cpu when acessing repeatedly
 
 static TWTOGD vGD;         // For performance reasons, this structure is used
@@ -134,7 +125,7 @@ static USHORT vhCacheExtra[MAX_2K_CHUNKS_PER_GLYPH];
 
 static TWTOHCACHECACHE vhCacheCache[128];
 static USHORT vdxLast = TWTO_DEF_DX_X;
-static USHORT vdyLast = TWTO_DEF_DX_Y; 
+static USHORT vdyLast = TWTO_DEF_DX_Y;
 static TWTOCOLOR    vLastColor16  = { TWTO_DEF_FG_COLOR_16,
                                       TWTO_DEF_BG_COLOR_16 };
 static TWTOCOLOR256 vLastColor256 = { TWTO_DEF_FG_COLOR_256,
@@ -161,7 +152,7 @@ typedef struct _RECT_ENUM {
    RECTI arcl[TWTO_RCLCLIP_LIMIT];
 } RECT_ENUM, FAR * PRECT_ENUM;
 
-#define MAX_BYTES  (LARGE_CACHE_CHUNK_SIZE - SIZE_OF_GLYPHDIMENSION_WITH_WIDTH)   
+#define MAX_BYTES  (LARGE_CACHE_CHUNK_SIZE - SIZE_OF_GLYPHDIMENSION_WITH_WIDTH)
 
 #ifdef DOS
 
@@ -181,8 +172,8 @@ extern void far UnexcludeCursor( void );
 
 /*
  *  For the following we will use lpstatic_buffer space.
- *  Pointers vpEnr and vpStart will both point to the same 
- *  location in lpstatic_buffer, because we read in the 
+ *  Pointers vpEnr and vpStart will both point to the same
+ *  location in lpstatic_buffer, because we read in the
  *  clipping rects first then select them into the DC.
  *  After that the space is reused for the glyph data.
  */
@@ -191,23 +182,23 @@ LPBYTE      vpStart;
 LPBYTE      vpData;
 LPBYTE      vpBitmap;
 
-/* 
+/*
  *  Max bitmap can we build before we have to Blt?
  */
 #define MAX_BITMAP  (STATIC_BUFFER_SIZE - LARGE_CACHE_CHUNK_SIZE)
 
 
 /*
- *  The following are used for buffering Glyphs to reduce the number 
+ *  The following are used for buffering Glyphs to reduce the number
  *  of memory to screen BitBlts, performance stuff don't you know!
  */
 INT         vLeftGlyphBuf;
-INT         vTopGlyphBuf;   
-INT         vRightGlyphBuf; 
+INT         vTopGlyphBuf;
+INT         vRightGlyphBuf;
 INT         vBottomGlyphBuf;
 BOOL        vfGlyphBuf;
-USHORT      vcxGlyphBuf;    
-USHORT      vcyGlyphBuf;    
+USHORT      vcxGlyphBuf;
+USHORT      vcyGlyphBuf;
 ULONG       vcbGlyphBuf;
 HRGN        hrgnDest;
 
@@ -255,12 +246,12 @@ UCHAR    vMaskBits[9] = { 0x00, 0x01, 0x03, 0x07, 0x0f,
  *  PARAMETERS:
  *     USHORT              uscbData        - total size of cache object
  *
- *  RETURN: 
+ *  RETURN:
  *     none
  *
 \****************************************************************************/
 
-__inline void 
+__inline void
 CacheWrite( USHORT uscbData )
 {
 
@@ -276,18 +267,18 @@ CacheWrite( USHORT uscbData )
 
     /*
      *  Copy data and finish write
-     */ 
+     */
     if ( lpCacheArea ) {
 
         //  copy header
-        memcpy( lpCacheArea, 
-                &vGlyphDimension, 
+        memcpy( lpCacheArea,
+                &vGlyphDimension,
                 SIZE_OF_GLYPHDIMENSION_WITH_WIDTH );
-        
+
         //  copy data, only if different area
-        if ( (lpCacheArea + SIZE_OF_GLYPHDIMENSION_WITH_WIDTH) != vpGlyphData ) 
-            memcpy((lpCacheArea + SIZE_OF_GLYPHDIMENSION_WITH_WIDTH), 
-                    vpGlyphData, 
+        if ( (lpCacheArea + SIZE_OF_GLYPHDIMENSION_WITH_WIDTH) != vpGlyphData )
+            memcpy((lpCacheArea + SIZE_OF_GLYPHDIMENSION_WITH_WIDTH),
+                    vpGlyphData,
                    (uscbData   - SIZE_OF_GLYPHDIMENSION_WITH_WIDTH) );
 
         //  complete write
@@ -312,14 +303,14 @@ CacheWrite( USHORT uscbData )
  *  PARAMETERS:
  *     none  - all global for performance reasons
  *
- *  RETURN: 
- *     UCHAR       bMore  
+ *  RETURN:
+ *     UCHAR       bMore
  *                  TRUE      - Another glyph follows
  *                  FALSE     - This is the last glyph in the string
- *                                                   
+ *
 \****************************************************************************/
 
-__inline UCHAR 
+__inline UCHAR
 GlyphBlt( HDC hDC )
 {
     typedef struct {
@@ -435,10 +426,10 @@ static SHORT     yPos = 0, yBase = 0;
                    UCHAR  bTiny  = (UCHAR)((PTWTOGLYPHHEADERMEDIUM)&GlyphHeader)->bTiny;
                    USHORT hCache = ((PTWTOGLYPHHEADERMEDIUM)&GlyphHeader)->hCache;
 
-                   vGH.bLastGlyph     = FALSE; 
-                   vGH.bGetFromCache  = TRUE; 
-                   vGH.bPutInCache    = FALSE; 
-                   vGH.bWidthIncluded = FALSE; 
+                   vGH.bLastGlyph     = FALSE;
+                   vGH.bGetFromCache  = TRUE;
+                   vGH.bPutInCache    = FALSE;
+                   vGH.bWidthIncluded = FALSE;
                    vGH.hCache         = hCache;
                    vGH.ChunkType      = bTiny ? _32B : _128B;
                 }
@@ -454,16 +445,16 @@ static SHORT     yPos = 0, yBase = 0;
           vGH.bPutInCache    = (UCHAR)GlyphHeader.bPutInCache   ;
           vGH.bWidthIncluded = (UCHAR)GlyphHeader.bWidthIncluded;
           vGH.hCache         = (USHORT)GlyphHeader.hCache;
-          vGH.ChunkType      = (CHUNK_TYPE)GlyphHeader.ChunkType; 
-         
-          // Add the cache handle to the cache handle cache 
+          vGH.ChunkType      = (CHUNK_TYPE)GlyphHeader.ChunkType;
+
+          // Add the cache handle to the cache handle cache
           if ( GlyphHeader.bhCacheCache ) {
              GetNextTWCmdBytes( &hCacheCache, 1 );
              TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received hCacheCache(%02X)",
-                     hCacheCache ));                              
-         
+                     hCacheCache ));
+
              vhCacheCache[hCacheCache].hCache    = (USHORT)vGH.hCache;
-             vhCacheCache[hCacheCache].ChunkType = (USHORT)vGH.ChunkType; 
+             vhCacheCache[hCacheCache].ChunkType = (USHORT)vGH.ChunkType;
           }
        }
 
@@ -473,8 +464,8 @@ static SHORT     yPos = 0, yBase = 0;
     if ( GlyphHeader.bShortFormat ||
          (fMediumFormat == TWTO_MF_TRUNCATE) ) {
        TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Building GlyphHeader from hCacheCache(%02X) table",
-               hCacheCache ));                              
-       vGH.ChunkType = vhCacheCache[hCacheCache].ChunkType; 
+               hCacheCache ));
+       vGH.ChunkType = vhCacheCache[hCacheCache].ChunkType;
        vGH.hCache    = vhCacheCache[hCacheCache].hCache;
     }
 
@@ -486,20 +477,20 @@ static SHORT     yPos = 0, yBase = 0;
     } else {
        switch ( fMediumFormat ) {
           case TWTO_MF_TRUNCATE:
-             TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received Truncate format GlyphHeader:" )); 
-             DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)&GlyphHeader, 
+             TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received Truncate format GlyphHeader:" ));
+             DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)&GlyphHeader,
                                            (ULONG)SIZE_OF_GLYPHHEADERMEDIUM ));
              break;
 
           case TWTO_MF_MEDIUM:
-             TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received Medium format GlyphHeader:" )); 
-             TRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)&GlyphHeader, 
+             TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received Medium format GlyphHeader:" ));
+             TRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)&GlyphHeader,
                                      (ULONG)SIZE_OF_GLYPHHEADERMEDIUM ));
              break;
 
           case TWTO_MF_NORMAL:
-             TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received Normal format GlyphHeader:" )); 
-             DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)&GlyphHeader, 
+             TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received Normal format GlyphHeader:" ));
+             DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)&GlyphHeader,
                                      (ULONG)SIZE_OF_GLYPHHEADER ));
              break;
 
@@ -507,9 +498,9 @@ static SHORT     yPos = 0, yBase = 0;
              TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Invalid fMediumFormat(%d)",
                      (int)GlyphHeader.fMediumFormat ));
              break;
-    
+
        }
-    } 
+    }
     TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received - hCache(%04X) fPutInCache(%d) fGetFromCache(%d)",
                                    (int)GlyphHeader.hCache,
                                    (int)GlyphHeader.bPutInCache,
@@ -522,7 +513,7 @@ static SHORT     yPos = 0, yBase = 0;
 
     if ( !fMediumFormat && GlyphHeader.bhCacheCache ) {
        TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received hCacheCache(%02X)",
-               hCacheCache ));                              
+               hCacheCache ));
     }
 #endif
 
@@ -541,7 +532,7 @@ static SHORT     yPos = 0, yBase = 0;
                 if ( Position.bShortFormat ) {
                    {
                       int delta = (int)((PTWTOPOSITIONSHORT)&Position)->delta;
-      
+
                       Position.x = xPrevious + vGD.cx + delta;
                       TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received - Short Position (%d, %d) delta(%d)",
                           (int)Position.x, (int)Position.y, delta  ));
@@ -566,10 +557,10 @@ static SHORT     yPos = 0, yBase = 0;
                    memcpy( &Position, &vLastStringPos, SIZE_OF_POSITION );
                    GetNextTWCmdBytes( &deltaPos, sizeof(deltaPos) );
                    TRACE(( TC_TW, CTXDBG_TEXT,
-                      "DrvTextOut: Received %d bytes deltPos - %d: (%d,%d)", 
+                      "DrvTextOut: Received %d bytes deltPos - %d: (%d,%d)",
                       (int)sizeof(deltaPos), (int)deltaPos,
                       (int)Position.x, (int)Position.y  ));
-   
+
                    Position.x += deltaPos;
                 }
                 memcpy( &vLastStringPos, &Position, SIZE_OF_POSITION );
@@ -610,7 +601,7 @@ static SHORT     yPos = 0, yBase = 0;
     // global static buffer
     if ( (USHORT)vGH.bGetFromCache || (USHORT)vGH.bPutInCache ) {
        if ( (CHUNK_TYPE)vGH.ChunkType == _32B ) {
-          // <= 32 byte object are cached in low memory using a 
+          // <= 32 byte object are cached in low memory using a
           // directly addressable address space
           pCacheEntry = lp32ByteObject(vGH.hCache);
 
@@ -632,7 +623,7 @@ static SHORT     yPos = 0, yBase = 0;
           GetNextGlyphData( hDC, TRUE );
        }
 
-       DTRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received %u of %u bytes (%u left):", cbReceived, cbTotal, cbLeft ));                              
+       DTRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received %u of %u bytes (%u left):", cbReceived, cbTotal, cbLeft ));
        DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)vpGlyphData, (ULONG)vcbReceived ));
        
        TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Retrieved GlyphDimension from cache(%d X %d), data:",
@@ -647,7 +638,7 @@ static SHORT     yPos = 0, yBase = 0;
           TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received dxNext(%d)",
                     (int)vGlyphDimension.dxNext ));
 
-          // Now update the cache 
+          // Now update the cache
           if ( (CHUNK_TYPE)vGH.ChunkType == _32B ) {
              ((PTWTOGLYPHDIMENSION)pCacheEntry)->dxNext = vGD.dxNext;
           } else {
@@ -660,14 +651,14 @@ static SHORT     yPos = 0, yBase = 0;
 
        // Figure out how many bytes wide the glyph is and how many total bytes
        // there are in the glyph
-       cbWide  = (((vGD.cx - 1) / 8) + 1); 
-       cbTotal = cbWide * vGD.cy; 
+       cbWide  = (((vGD.cx - 1) / 8) + 1);
+       cbTotal = cbWide * vGD.cy;
        cbLeft  = cbTotal - vcbReceived;
     } else {
        // Get GlyphDimension
        GetNextTWCmdBytes( &vGlyphDimension,
                           vGH.bWidthIncluded ?
-                             SIZE_OF_GLYPHDIMENSION_WITH_WIDTH : 
+                             SIZE_OF_GLYPHDIMENSION_WITH_WIDTH :
                              SIZE_OF_GLYPHDIMENSION );
        vGD.cx             = (USHORT)vGlyphDimension.cx;
        vGD.cy             = (USHORT)vGlyphDimension.cy;
@@ -675,11 +666,11 @@ static SHORT     yPos = 0, yBase = 0;
        vGD.dxThis         = (SHORT)vGlyphDimension.dxThis;
 
        if ( vFlags.bCalcWidth ) {
-          vGD.dxNext = vGD.cx; 
+          vGD.dxNext = vGD.cx;
           if ( vGlyphDimension.bColumnRemoved ) {
               vGD.dxNext++;
           }
-          vGlyphDimension.dxNext = vGD.dxNext; 
+          vGlyphDimension.dxNext = vGD.dxNext;
        } else {
           vGD.dxNext = (USHORT)vGlyphDimension.dxNext;
        }
@@ -690,11 +681,11 @@ static SHORT     yPos = 0, yBase = 0;
 
        // Figure out how many bytes wide the glyph is and how many total bytes
        // there are in the glyph
-       cbWide  = (((vGD.cx - 1) / 8) + 1); 
-       cbTotal = cbWide * vGD.cy; 
+       cbWide  = (((vGD.cx - 1) / 8) + 1);
+       cbTotal = cbWide * vGD.cy;
        cbLeft  = cbTotal;
 
-       // For 32B objects cached in low memory, we want to cache the 
+       // For 32B objects cached in low memory, we want to cache the
        // GlyphDimensions here and now.
        if ( vGH.ChunkType == _32B ) {
           if ( vGH.bPutInCache ) {
@@ -715,8 +706,8 @@ static SHORT     yPos = 0, yBase = 0;
        }
        yPos = yBase;
     } else {
-       xPos = (SHORT)Position.x;   
-       yPos = (SHORT)Position.y;   
+       xPos = (SHORT)Position.x;
+       yPos = (SHORT)Position.y;
        yBase = yPos;
        xBase = xPos;
     }
@@ -746,7 +737,7 @@ static SHORT     yPos = 0, yBase = 0;
 
     // Get the other cache handle(s) (if any)
     if ( (USHORT)vGH.bGetFromCache || (USHORT)vGH.bPutInCache ) {
-      
+
        // Figure out the chunk type for caching
        cbData         = cbTotal + SIZE_OF_GLYPHDIMENSION_WITH_WIDTH;
 
@@ -754,12 +745,12 @@ static SHORT     yPos = 0, yBase = 0;
        cExtra2KChunks = 0;
        if ( (CHUNK_TYPE)vGH.ChunkType == _2K ) {
           cExtra2KChunks = ((USHORT)cbData-1)/2048;
-      
+
           // Now get the chained handles
           if ( cExtra2KChunks && vGH.bPutInCache ) {
              {
                 USHORT i;
-         
+
                 for ( i = 0; i < cExtra2KChunks; i++ ) {
                    GetNextTWCmdBytes( &vhCacheExtra[i], SIZE_OF_HCACHE_EXTRA );
                    vhCacheExtra[i] &= HCACHE_VALID_BITS;
@@ -813,13 +804,13 @@ static SHORT     yPos = 0, yBase = 0;
         /*
          * Blt the glyph to the memory buffer
          */
-        for ( i = vGD.cy; i; y++, i-- ) { 
+        for ( i = vGD.cy; i; y++, i-- ) {
 
             /*
              *  Get starting point of this scan line
              */
             pScreenStart = pScreen;
-       
+
             /*
              *  Need to read more data?
              */
@@ -830,11 +821,11 @@ static SHORT     yPos = 0, yBase = 0;
                cbLeft -= vcbReceived;
                GetNextGlyphData( hDC, FALSE );
                k = 0;
-    
-               TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received %u of %u bytes (%u left):", vcbReceived, cbTotal, cbLeft ));                              
+
+               TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Received %u of %u bytes (%u left):", vcbReceived, cbTotal, cbLeft ));
                DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)vpGlyphData, (ULONG)vcbReceived ));
             }
-        
+
             /*
              *  Special clipping case
              */
@@ -845,7 +836,7 @@ static SHORT     yPos = 0, yBase = 0;
                  */
                 fyClip =  (UCHAR)( (y >= (SHORT)prclClip->bottom) ||
                                    (y <  (SHORT)prclClip->top) );
-        
+
                 /*
                  *  Scan line is totally clipped
                  */
@@ -856,58 +847,58 @@ static SHORT     yPos = 0, yBase = 0;
                 // Output row of glyph, taking into consideration rotating bits
                 // relative to a screen byte boundary
                 else {
-    
+
                     for ( Data.Word = 0xffff, j = cbWide, Lx=xPos, Rx=xPos+8-1; j;
                           j--, Rx+=8,Lx+=8 ) { // For each byte wide...
-        
+
                         Data.Word <<= rotate;
-             
+
                         TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: j(%u) k(%u) p = (%02X) cbWide(%u)", j, k, ~vpGlyphData[k], cbWide ));
-            
+
                         bData = vpGlyphData[k]; // Get current byte
-            
+
                         // Adjust the data for left and right clipping
                         if ( Lx < (SHORT)prclClip->left ) {
                             LClipBits     = (USHORT)prclClip->left - (USHORT)Lx;
                             if ( LClipBits < 8 ) {
                                 TRACE(( TC_TW, TT_TW_TEXT, "ClipLeft: Stripping left %d bits from p[%d](%02X)",
                                                              LClipBits, k, vpGlyphData[k]));
-                                bData |= ~vMaskBits[8-LClipBits]; 
+                                bData |= ~vMaskBits[8-LClipBits];
                             } else {
                                 TRACE(( TC_TW, TT_TW_TEXT, "ClipLeft: Not blting p[%d](%02X)",
                                                              k, vpGlyphData[k]));
                                 bData = 0xff;
-                            } 
-                        } 
-            
+                            }
+                        }
+
                         // May need to clip right instead of or in addition to clip left
                         if ( Rx >= (SHORT)prclClip->right ) {
-            
+
                             RClipBits = (USHORT)Rx - (USHORT)prclClip->right + 1;
                             if ( RClipBits < 8 ) {
                                 TRACE(( TC_TW, TT_TW_TEXT, "ClipRight: Stripping right %d bits from p[%d](%02X)",
                                                              RClipBits, k, vpGlyphData[k]));
-                                bData |= vMaskBits[RClipBits]; 
+                                bData |= vMaskBits[RClipBits];
                             } else {
                                 TRACE(( TC_TW, TT_TW_TEXT, "ClipRight: Not blting p[%d](%02X)",
                                                              k, vpGlyphData[k]));
                                 bData = 0xff;
-                            } 
+                            }
                         }
-        
-                        Data.Byte.low = bData; 
+
+                        Data.Byte.low = bData;
                         k++;
-                    
+
                         Data.Word <<= invrotate;
                         Data.Word |= antimatter;
-    
+
                         if ( (Lx < 0) || (Data.Byte.high == 0xff) ) {
                             pScreen++;
                         } else {
                             *pScreen++ &= Data.Byte.high;
                         }
-                    } 
-        
+                    }
+
                     if ( (Lx < 0) || (Data.Byte.low == 0xff) ) {
                         pScreen++;
                     } else {
@@ -926,17 +917,17 @@ static SHORT     yPos = 0, yBase = 0;
                 /*
                  * This routine is rewritten in asm, below, to improve performance
                  */
-                
+
                 for ( Data.Word = 0xffff, j = cbWide; j; j-- ) { // For each byte wide...
-     
+
                     Data.Word <<= rotate;
                     Data.Byte.low = vpGlyphData[k++];
-                 
+
                     Data.Word <<= invrotate;
                     *pScreen++ &= Data.Byte.high;
 
                     Data.Word |= antimatter;
-                } 
+                }
                 *pScreen++ &= Data.Byte.low;
             }
 
@@ -949,7 +940,7 @@ static SHORT     yPos = 0, yBase = 0;
      *  Unbuffered glyph
      */
     else {
-    
+
         /*
          *  Need to flush out transparent glyphs now
          */
@@ -958,8 +949,8 @@ static SHORT     yPos = 0, yBase = 0;
         /*
          *  Glyph may come in in more than one chunk
          */
-        do { 
-        
+        do {
+
             /*
              *  Get data from stream or cache if not already read
              */
@@ -975,50 +966,50 @@ static SHORT     yPos = 0, yBase = 0;
                 cbLeft = 0;
                 cy = vGD.cy;
             }
-            
+
             /*
              *  Create padded bitmap
              */
             cx = (((vGD.cx - 1) / 16) + 1) * 2;  //  bytes for target
             CX =  ((vGD.cx - 1) /  8) + 1;       //  bytes for source (over estimate)
             for ( i=0; i<cy; i++ ) {
-        
+
                 /*
                  *  Opti!
                  */
                 p = (vpBitmap + (i * cx));
-        
+
                 /*
                  *  Pad to WORD boundary
                  */
                 memset( p, 0, cx );
                 memcpy( p, (vpGlyphData + (i * CX)), CX );
-        
+
             }
-        
+
             /*
              *  Create bitmap
              */
             hbmpGlyph = CreateBitmap( (cx * 8), cy, 1, 1, vpBitmap );
-        
+
             /*
              *  Select into compatible DC
              */
             hbmpOld = SelectObject( compatDC, hbmpGlyph );
-        
+
             /*
              *  Blt to screen
              */
             if ( vFlags.bOpaqueBackground ) {
-        
+
                 TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Opaque" ));
-        
+
                 BitBlt( hDC, xPos, yPos, vGD.cx, cy, compatDC, 0, 0, SRCCOPY  );
             }
             else {
-        
+
                 TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Transparent" ));
-            
+
                 BitBlt( hDC, xPos, yPos, vGD.cx, cy, compatDC, 0, 0, SRCAND );
                 oldBkColor = SetBkColor( hDC, ((vColor == Color_Cap_256) ? 
                                                 PALETTEINDEX(0) : 
@@ -1026,26 +1017,26 @@ static SHORT     yPos = 0, yBase = 0;
                 BitBlt( hDC, xPos, yPos, vGD.cx, cy, compatDC, 0, 0, SRCPAINT );
                 SetBkColor( hDC, oldBkColor );
             }
-        
+
             TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: BitBlt - Bitmap(%d X %d) at (%d,%d)",
                                        (int)vGD.cx, (int)cy, (int)xPos, (int)yPos ));
-        
+
             /*
              *  Delete bitmap
              */
             SelectObject( compatDC, hbmpOld );
             DeleteObject( hbmpGlyph );
-    
+
             /*
              *  Update yPos to reflect partial bitmap xfer
              */
             yPos += cy;
-    
+
             /*
              *  Again!
              */
             vcbReceived = 0;
-    
+
         }  while ( cbLeft );
     }
 
@@ -1060,7 +1051,7 @@ done:
  *  FillBackground
  *
  *  This routine will fill a rect with the specified solid color.  It is called
- *  for the opaque text background and also for the extra rects used for 
+ *  for the opaque text background and also for the extra rects used for
  *  underline and strikeout.
  *
  *  Note:  This function uses VGA write mode 3, where the color is put in the
@@ -1071,12 +1062,12 @@ done:
  *  PARAMETERS:
  *     ULONG  Color - color to fill it with
  *
- *  RETURN: 
+ *  RETURN:
  *     none
  *
 \****************************************************************************/
 
-__inline void 
+__inline void
 FillBackground( HDC hDC, ULONG Color )
 {
     /*
@@ -1091,7 +1082,7 @@ FillBackground( HDC hDC, ULONG Color )
         DeleteObject( hBrush );
     }
     else {
-        FillRect( hDC, (RECT FAR *) &vrclBackground, 
+        FillRect( hDC, (RECT FAR *) &vrclBackground,
                   hbrsolid[ (Color == TWCLR_CURRENT) ? vLastColor16.FG : Color ] );
     }
 }
@@ -1111,7 +1102,7 @@ FillBackground( HDC hDC, ULONG Color )
  *
 \****************************************************************************/
 
-__inline void 
+__inline void
 SelectVisibleRegionIntoDC( HDC hDC )
 {
     int  cRcl;
@@ -1119,7 +1110,7 @@ SelectVisibleRegionIntoDC( HDC hDC )
     HRGN hrgnSrc2 = NULL;
 
     /*
-     *  Empty by default 
+     *  Empty by default
      */
     hrgnDest = NULL;
 
@@ -1137,7 +1128,7 @@ SelectVisibleRegionIntoDC( HDC hDC )
          *  Combine all rects into one region
          */
         do {
-         
+
             /*
              *  Create latest region
              */
@@ -1180,7 +1171,7 @@ SelectVisibleRegionIntoDC( HDC hDC )
 
         } while ( cRcl-- );
 
-        /* 
+        /*
          *  Assign dest region
          */
         hrgnDest = hrgnSrc1;
@@ -1222,7 +1213,7 @@ SelectVisibleRegionIntoDC( HDC hDC )
  *
 \****************************************************************************/
 
-__inline void 
+__inline void
 CreateGlyphBuffer()
 {
     INT Size;
@@ -1232,7 +1223,7 @@ CreateGlyphBuffer()
      */
     vLeftGlyphBuf   = ((vrclBackground.left / 8)) * 8;
     vTopGlyphBuf    = vrclBackground.top;
-    vRightGlyphBuf  = ((vrclBackground.right / 8) + 1) * 8; 
+    vRightGlyphBuf  = ((vrclBackground.right / 8) + 1) * 8;
     vBottomGlyphBuf = vrclBackground.bottom;
 
     /*
@@ -1243,9 +1234,9 @@ CreateGlyphBuffer()
     }
 
     TRACE(( TC_TW, TT_TW_TEXT, "CreateGlyphBuffer: rect left %u, top %u, right %u, bottom %u",
-                                vLeftGlyphBuf,  
-                                vTopGlyphBuf,   
-                                vRightGlyphBuf, 
+                                vLeftGlyphBuf,
+                                vTopGlyphBuf,
+                                vRightGlyphBuf,
                                 vBottomGlyphBuf ));
 
     /*
@@ -1288,7 +1279,7 @@ CreateGlyphBuffer()
  *
 \****************************************************************************/
 
-void 
+void
 w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
 {
     USHORT       rc = 0;
@@ -1321,7 +1312,7 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
     TRACE(( TC_TW, TT_TW_TEXT,
             "TWCmdTextOut: Received - Flags(%02X)",
                                       *((UCHAR *)&vFlags) ));
-    
+
     // Get Color
     if ( !vFlags.bSameColor ) {
        if ( vColor == Color_Cap_256 ) {
@@ -1342,7 +1333,7 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
            DTRACE(( TC_TW, TT_TW_TEXT, "TWCmdTextOut: Using same color(%04X)",
                                        *((ULONG *)&vLastColor256) ));
        }
-       else 
+       else
        {
            DTRACE(( TC_TW, TT_TW_TEXT, "TWCmdTextOut: Using same color(%02X)",
                                        *((UCHAR *)&vLastColor16) ));
@@ -1362,7 +1353,7 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
     }
 #endif
 
-    // Get background rectangle (potentially already clipped) 
+    // Get background rectangle (potentially already clipped)
 
     if ( vFlags.bRclDelta ) {
        GetNextTWCmdBytes( &deltaRcl, sizeof(deltaRcl) );
@@ -1377,17 +1368,17 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
        DTRACE(( TC_TW, TT_TW_TEXT, "TWCmdTextOut: Receiving compressed rclBackground:" ));
        GetNextTWCmdBytes( &pt1Rcl, 3 );
        DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)&pt1Rcl, 3UL ));
-      
+
        // Get size of pt2Rcl
        GETNEXTPTSIZE( pt1Rcl, &uscbData );
        GetNextTWCmdBytes( ppt2Rcl, (int)uscbData );
        DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)ppt2Rcl, (ULONG)uscbData ));
-      
+
        // Put it all together
        GETTEXTPTDATA( pt1Rcl, vrclBackground, ppt2Rcl, vdxLast, vdyLast );
 
        vrclBackground.right++;        // Change LRH back to 1-based 1
-       vrclBackground.bottom++;                   
+       vrclBackground.bottom++;
        TRACE(( TC_TW, TT_TW_TEXT, "TWCmdTextOut: Decompressed - rclBackground l:%d t:%d r:%d b:%d",
                   vrclBackground.left, vrclBackground.top,
                   vrclBackground.right, vrclBackground.bottom ));
@@ -1543,27 +1534,27 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
      *  16 or 256 color case
      */
     if ( vColor == Color_Cap_256 ) {
-    
+
         /*
          *  Set the opaque or transparent FG/BG colors
          */
         if ( vFlags.bOpaqueBackground ) {
-    
+
             TRACE(( TC_TW, TT_TW_TEXT, "w_TWCmdTextOut: Opaque" ));
-            
+
             /*
              *  Fill clipping rect for non-buffered cases
              */
             if ( !vfGlyphBuf ) {
                 FillBackground( hDC, vLastColor256.BG );
             }
-    
+
             /*
              *  Set FG/BG colors if necessary and save state
              */
             if ( (dcstate.bkcolor  != PALETTEINDEX(vLastColor256.BG)) ||
                  (dcstate.txtcolor != PALETTEINDEX(vLastColor256.FG)) ) {
-                                                          
+
                 dcstate.txtcolor = PALETTEINDEX(vLastColor256.FG);
                 SetTextColor( hDC, dcstate.txtcolor );
                 dcstate.bkcolor  = PALETTEINDEX(vLastColor256.BG);
@@ -1571,45 +1562,45 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
             }
         }
         else {
-    
+
             TRACE(( TC_TW, TT_TW_TEXT, "w_TWCmdTextOut: Transparent" ));
-    
+
             /*
              *  Set FG/BG colors for mask trick
              */
             if ( (dcstate.bkcolor  != PALETTEINDEX(255)) ||
                  (dcstate.txtcolor != PALETTEINDEX(vLastColor256.FG)) ) {
-                             
+
                 dcstate.bkcolor  = PALETTEINDEX(255);
                 dcstate.txtcolor = PALETTEINDEX(vLastColor256.FG);
-    
+
                 SetBkColor( hDC, dcstate.bkcolor );
                 SetTextColor( hDC, dcstate.txtcolor );
             }
         }
     }
     else {      //  16 color
-    
+
         /*
          *  Set the opaque or transparent FG/BG colors
          */
         if ( vFlags.bOpaqueBackground ) {
-    
+
             TRACE(( TC_TW, TT_TW_TEXT, "w_TWCmdTextOut: Opaque" ));
-            
+
             /*
              *  Fill clipping rect for non-buffered cases
              */
             if ( !vfGlyphBuf ) {
                 FillBackground( hDC, vLastColor16.BG );
             }
-    
+
             /*
              *  Set FG/BG colors if necessary and save state
              */
             if ( (dcstate.bkcolor  != twsolidcolor[ vLastColor16.BG ]) ||
                  (dcstate.txtcolor != twsolidcolor[ vLastColor16.FG ]) ) {
-                                                          
+
                 dcstate.txtcolor = twsolidcolor[ vLastColor16.FG ];
                 SetTextColor( hDC, dcstate.txtcolor );
                 dcstate.bkcolor  = twsolidcolor[ vLastColor16.BG ];
@@ -1617,18 +1608,18 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
             }
         }
         else {
-    
+
             TRACE(( TC_TW, TT_TW_TEXT, "w_TWCmdTextOut: Transparent" ));
-    
+
             /*
              *  Set FG/BG colors for mask trick
              */
             if ( (dcstate.bkcolor != RGB( 255, 255, 255 )) ||
                  (dcstate.txtcolor != twsolidcolor[ vLastColor16.FG ]) ) {
-                             
+
                 dcstate.bkcolor = RGB( 255, 255, 255 );
                 dcstate.txtcolor = twsolidcolor[ vLastColor16.FG ];
-    
+
                 SetBkColor( hDC, dcstate.bkcolor );
                 SetTextColor( hDC, dcstate.txtcolor );
             }
@@ -1639,12 +1630,12 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
      *  Process all of the glyphs in the string
      */
     do {
-    
+
         /*
          *  Output the glyph to the screen
          */
         bMore = GlyphBlt( hDC );
-    
+
         /*
          *  No longer first glyph
          */
@@ -1674,16 +1665,16 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
          *  Blt to screen
          */
         if ( vFlags.bOpaqueBackground ) {
-    
+
             TRACE(( TC_TW, TT_TW_TEXT, "GlyphBlt: Buffered Opaque left %u, top %u, width %u, height %u",
                                         vLeftGlyphBuf, vTopGlyphBuf, vcxGlyphBuf, vcyGlyphBuf ));
-    
+
             /*
              *  Create bitmap and select it
              */
             hbmpGlyph = CreateBitmap( (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, 1, 1, vpBitmap );
             hbmpOld = SelectObject( compatDC, hbmpGlyph );
-        
+
             BitBlt( hDC, vLeftGlyphBuf, vTopGlyphBuf, (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, compatDC, 0, 0, SRCCOPY  );
     
             /*
@@ -1697,53 +1688,53 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
             /*
              *  If there is no LVB then let the video driver handle this
              */
-            if ( vpLVB == NULL ) { 
+            if ( vpLVB == NULL ) {
 
                 /*
                  *  Create bitmap and select it
                  */
                 hbmpGlyph = CreateBitmap( (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, 1, 1, vpBitmap );
                 hbmpOld = SelectObject( compatDC, hbmpGlyph );
-            
+
 #ifdef WIN32
-                if ( !MaskBlt( hDC, vLeftGlyphBuf, vTopGlyphBuf,   
-                     (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, 
-                     compatDC, 0, 0, 
-                     hbmpGlyph, 0, 0, 
-                     MAKEROP4(0x00AA0029, SRCCOPY))) 
+                if ( !MaskBlt( hDC, vLeftGlyphBuf, vTopGlyphBuf,
+                     (INT) vcxGlyphBuf, (INT) vcyGlyphBuf,
+                     compatDC, 0, 0,
+                     hbmpGlyph, 0, 0,
+                     MAKEROP4(0x00AA0029, SRCCOPY)))
 #endif
                 {
                     BitBlt( hDC, vLeftGlyphBuf, vTopGlyphBuf, (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, compatDC, 0, 0, SRCAND );
-                    oldBkColor = SetBkColor( hDC, ((vColor == Color_Cap_256) ? 
-                                                    PALETTEINDEX(0) : 
+                    oldBkColor = SetBkColor( hDC, ((vColor == Color_Cap_256) ?
+                                                    PALETTEINDEX(0) :
                                                     RGB( 0, 0, 0 )) );
                     BitBlt( hDC, vLeftGlyphBuf, vTopGlyphBuf, (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, compatDC, 0, 0, SRCPAINT );
                     SetBkColor( hDC, oldBkColor );
                 }
-        
+
                 /*
                  *  Delete bitmap
                  */
                 SelectObject( compatDC, hbmpOld );
                 DeleteObject( hbmpGlyph );
             }
-            else 
+            else
             {
-    
+
                 /*
                  *  Do not use LVB on complex clipping cases
                  */
-                if ( vbComplex ) 
+                if ( vbComplex )
                 {
                     /*
                      *  Create bitmap and select it
                      */
                     hbmpGlyph = CreateBitmap( (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, 1, 1, vpBitmap );
                     hbmpOld = SelectObject( compatDC, hbmpGlyph );
-                
+
                     BitBlt( hDC, vLeftGlyphBuf, vTopGlyphBuf, (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, compatDC, 0, 0, SRCAND );
-                    oldBkColor = SetBkColor( hDC, ((vColor == Color_Cap_256) ? 
-                                                    PALETTEINDEX(0) : 
+                    oldBkColor = SetBkColor( hDC, ((vColor == Color_Cap_256) ?
+                                                    PALETTEINDEX(0) :
                                                     RGB( 0, 0, 0 )) );
                     BitBlt( hDC, vLeftGlyphBuf, vTopGlyphBuf, (INT) vcxGlyphBuf, (INT) vcyGlyphBuf, compatDC, 0, 0, SRCPAINT );
                     SetBkColor( hDC, oldBkColor );
@@ -1766,7 +1757,7 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
     /*
      *  Restore previous clipping region
      */
-    if ( hrgnDest != NULL ) { 
+    if ( hrgnDest != NULL ) {
 
         /*
          *  Restore empty clipping region
@@ -1797,7 +1788,7 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
  *  PARAMETERS:
  *     BOOL bSetGD  TRUE - Set vGD with appropriate values
  *                  FALSE - Don't modify vGD
- *  RETURN: 
+ *  RETURN:
  *     none
  *
 \****************************************************************************/
@@ -1805,8 +1796,6 @@ w_TWCmdTextOut( HWND hWnd, HDC hDC, USHORT Options )
 void
 GetNextGlyphData( HDC hDC, BOOL bSetGD )
 {
-
-
     USHORT i;
     LPBYTE lpCacheArea;
 
@@ -1815,9 +1804,9 @@ GetNextGlyphData( HDC hDC, BOOL bSetGD )
         USHORT ulcbHigh;
     } Data;
     USHORT BeginBlock = 0, EndBlock = 0;
-   
+
     if (vGH.bGetFromCache ) {
-      
+
         // This object is being retrieved from the cache
         // Note that for _32B objects, we do nothing - pData was already set
         // up in GlyphBlt to point to the cache entry
@@ -1829,7 +1818,7 @@ GetNextGlyphData( HDC hDC, BOOL bSetGD )
                 case _128B: Data.uscb = 128; break;
                 case _512B: Data.uscb = 512; break;
                 default:    Data.uscb = 2048; break;
-            }                                  
+            }
             Data.ulcbHigh = 0;
 
             // Cache entry is in the XMS/DASD cache
@@ -1841,17 +1830,17 @@ GetNextGlyphData( HDC hDC, BOOL bSetGD )
              *  Get cache pointer
              */
             TRACE(( TC_TW, TT_TW_TEXT, "lpTWCacheRead: hCache %u, ChunkType %u", vGH.hCache, vGH.ChunkType ));
-            lpCacheArea = lpTWCacheRead( vGH.hCache, 
+            lpCacheArea = lpTWCacheRead( vGH.hCache,
                                          vGH.ChunkType,
                                          (LPUINT) &Data.uscb,
                                          BeginBlock );
-            TRACE(( TC_TW, TT_TW_TEXT, "lpTWCacheRead: hCache %u, ChunkType %u, Bytes %u, lpCacheArea %08x", 
+            TRACE(( TC_TW, TT_TW_TEXT, "lpTWCacheRead: hCache %u, ChunkType %u, Bytes %u, lpCacheArea %08x",
                     vGH.hCache, vGH.ChunkType, Data.uscb, lpCacheArea ));
             ASSERT( lpCacheArea != NULL, 0 );
 
             /*
              *  Copy data
-             */ 
+             */
             if ( lpCacheArea ) {
                 vpGlyphData = (lpCacheArea + SIZE_OF_GLYPHDIMENSION_WITH_WIDTH);
                 memcpy( &vGlyphDimension, lpCacheArea, SIZE_OF_GLYPHDIMENSION_WITH_WIDTH );
@@ -1864,35 +1853,35 @@ GetNextGlyphData( HDC hDC, BOOL bSetGD )
             vGD.dyThis = (SHORT)vGlyphDimension.dyThis;
             vGD.dxThis = (SHORT)vGlyphDimension.dxThis;
         }
-  
+
         // Figure out how many bytes were retrieved
         switch ( vGH.ChunkType ) {
             case _32B:
             case _128B:
                 // For these types, TWCacheRead does not remember the size
-                vcbReceived = (((vGD.cx - 1) / 8) + 1)  
+                vcbReceived = (((vGD.cx - 1) / 8) + 1)
                                 * vGD.cy;
                 DTRACE(( TC_TW, TT_TW_TEXT,
                          "GetNextGlyphData: cx(%u) cy(%u) cb(%u) cbl(%lu)",
                          vGD.cx, vGD.cy, vcbReceived, (ULONG)vcbReceived ));
                 break;
-  
+
                // For these types, TWCacheRead remembers the size
             case _512B:
                 vcbReceived = Data.uscb - SIZE_OF_GLYPHDIMENSION_WITH_WIDTH;
             case _2K:
                 vcbReceived = Data.uscb;
                 // First block contains GlyphDimension
-                if ( BeginBlock == 0 ) { 
+                if ( BeginBlock == 0 ) {
                     vcbReceived -= SIZE_OF_GLYPHDIMENSION_WITH_WIDTH;
                 }
                 break;
-        } 
+        }
         DTRACE(( TC_TW, TT_TW_TEXT,
                  "GetNextGlyphData: TWCacheRead - vpStart(%08lX) pData(%08lX) cbData(%ld) ID(%08lX)",
                  (char far *)vpStart, (char far *)vpGlyphData, (ULONG)vcbReceived, ulHandle));
         DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)vpGlyphData, (ULONG)vcbReceived ));
-    } 
+    }
     else {
 
         DTRACE(( TC_TW, TT_TW_TEXT, "GetNextGlyphData: Getting NextTWCmdBytes" ));
@@ -1918,8 +1907,8 @@ GetNextGlyphData( HDC hDC, BOOL bSetGD )
         if ( vGH.bPutInCache && ( vGH.ChunkType != _32B ) ) {
             ASSERT( vcbReceived, vcbReceived );
             CacheWrite( Data.uscb );
-        } 
-    } 
+        }
+    }
 }
 
 
@@ -2010,7 +1999,7 @@ TWCmdTextOutCmplxClip( HWND hWnd, HDC hDC )
 /****************************************************************************\
  *  TWCmdTextOutRclExtra (TWCMD_TEXTOUT_RCLEXTRA service routine)
  *
- *  This routine is called to draw the extra rectangles (underlines, 
+ *  This routine is called to draw the extra rectangles (underlines,
  *  strikeouts, etc.) sent by the DrvTextOut thinwire display driver function.
  *
  *  PARAMETERS:
@@ -2062,20 +2051,20 @@ TWCmdTextOutRclExtra( HWND hWnd, HDC hDC )
         DTRACE(( TC_TW, TT_TW_TEXT, "TWCmdTextOutRclExtra: Receiving compressed rclExtra:" ));
         GetNextTWCmdBytes( &pt1RclE, 3 );
         DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)&pt1RclE, 3UL ));
-      
+
         // Get size of pt2Rcl
         GETNEXTPTSIZE( pt1RclE, &uscbData );
         GetNextTWCmdBytes( ppt2Rcl, (int)uscbData );
         DTRACEBUF(( TC_TW, TT_TW_TEXT, (char far *)ppt2Rcl, (ULONG)uscbData ));
-      
+
         // Put it all together
         GETTEXTPTDATA( pt1RclE, vrclBackground, ppt2Rcl, vdxLast, vdyLast );
-  
+
         vrclBackground.right++;        // Change LRH back to 1-based 1
-        vrclBackground.bottom++;                   
-  
+        vrclBackground.bottom++;
+
         bMore = (UCHAR)pt1RclE.bMore;
-  
+
         TRACE(( TC_TW, TT_TW_TEXT,
         "TWCmdTextOutRclExtra: Received - rclExtra: l:%d t:%d r:%d b:%d",
                    vrclBackground.left,  vrclBackground.top,
@@ -2105,7 +2094,7 @@ TWCmdTextOutRclExtra( HWND hWnd, HDC hDC )
     /*
      *  Restore previous clipping region
      */
-    if ( hrgnDest != NULL ) { 
+    if ( hrgnDest != NULL ) {
 
         /*
          *  Restore empty clipping region
@@ -2144,7 +2133,7 @@ TWCmdTextOutRclExtra( HWND hWnd, HDC hDC )
 \****************************************************************************/
 
 void
-MaskRclExtraToLVB( HDC hDC, 
+MaskRclExtraToLVB( HDC hDC,
                  INT LeftGlyph,  INT TopGlyph,
                  INT RightGlyph, INT BottomGlyph )
 {
@@ -2153,7 +2142,7 @@ MaskRclExtraToLVB( HDC hDC,
     ULONG  cxBytes;
     LPBYTE p = (LPBYTE) lpstatic_buffer + LARGE_CACHE_CHUNK_SIZE;
     LPBYTE pbm;
-    
+
     if ( TopGlyph < vRectLVB.top )
         vRectLVB.top = TopGlyph;
     if ( BottomGlyph > vRectLVB.bottom )
@@ -2196,7 +2185,7 @@ MaskRclExtraToLVB( HDC hDC,
 /****************************************************************************\
  *  MaskGlyphsToLVB
  *
- *  This routine is called to mask the current transparent glyphs  
+ *  This routine is called to mask the current transparent glyphs
  *  to the LVB.
  *
  *  PARAMETERS:
@@ -2218,7 +2207,7 @@ MaskRclExtraToLVB( HDC hDC,
 \****************************************************************************/
 
 void
-MaskGlyphsToLVB( HDC hDC, 
+MaskGlyphsToLVB( HDC hDC,
                  LPBYTE pBitmap, INT cxGlyph,   INT cyGlyph,
                                  INT LeftGlyph, INT TopGlyph )
 {
@@ -2228,11 +2217,11 @@ MaskGlyphsToLVB( HDC hDC,
     LPBYTE pbm = pBitmap;
     INT   BottomGlyph = TopGlyph + cyGlyph;
     INT   RightGlyph  = LeftGlyph + cxGlyph;
-    
+
     /*
      *  Color change?
      */
-    if ( (vfLVB == TRUE) && (vTextColor != dcstate.txtcolor) ) 
+    if ( (vfLVB == TRUE) && (vTextColor != dcstate.txtcolor) )
     {
         MaskLVBToScreen( hDC, TRUE );
     }
@@ -2258,7 +2247,7 @@ MaskGlyphsToLVB( HDC hDC,
 
     /*
      *  New buffer
-     */ 
+     */
     if ( !vfLVB ) {
         memset( vpLVB, 0xFF, (INT) vcbLVB );
         vRectLVB.top    = TopGlyph;
@@ -2269,7 +2258,7 @@ MaskGlyphsToLVB( HDC hDC,
         vTextColor = dcstate.txtcolor;
     }
     else {
-    
+
         if ( TopGlyph < vRectLVB.top )
             vRectLVB.top = TopGlyph;
         if ( BottomGlyph > vRectLVB.bottom )
@@ -2387,7 +2376,7 @@ FlushLVB :
      *  Move the glyph buffer to the origin of the LVB
      */
     for ( cy=0;  cy<cyGlyph; cy++ ) {
-        
+
         /*
          *  Move source bytes to origin
          */
@@ -2425,25 +2414,30 @@ FlushLVB :
     }
 
     //  SCREEN to MEM
-    BitBlt( hdcMem, 0, 0, (INT) cxGlyph, (INT) cyGlyph, 
+    BitBlt( hdcMem, 0, 0, (INT) cxGlyph, (INT) cyGlyph,
             hDC, (INT) LeftGlyph, (INT) TopGlyph, SRCCOPY  );
 
     //  SCRAND
-    BitBlt( hdcMem, 0, 0, (INT) cxGlyph, (INT) cyGlyph, 
+    BitBlt( hdcMem, 0, 0, (INT) cxGlyph, (INT) cyGlyph,
             compatDC, 0, 0, SRCAND );
 
     SetTextColor( hdcMem, vTextColor );
-    SetBkColor( hdcMem, ((vColor == Color_Cap_256) ? 
-                        PALETTEINDEX(0) : 
+    SetBkColor( hdcMem, ((vColor == Color_Cap_256) ?
+                        PALETTEINDEX(0) :
                         RGB( 0, 0, 0 )) );
 
     //  SCRPAINT
-    BitBlt( hdcMem, 0, 0, (INT) cxGlyph, (INT) cyGlyph, 
+    BitBlt( hdcMem, 0, 0, (INT) cxGlyph, (INT) cyGlyph,
             compatDC, 0, 0, SRCPAINT );
 
     //  MEM to SCREEN
-    BitBlt( hDC, (INT) LeftGlyph, (INT) TopGlyph, (INT) cxGlyph, (INT) cyGlyph, 
+    BitBlt( hDC, (INT) LeftGlyph, (INT) TopGlyph, (INT) cxGlyph, (INT) cyGlyph,
             hdcMem, 0, 0, SRCCOPY  );
+
+#ifdef TWI_INTERFACE_ENABLED
+                MyBitBlt( (INT)LeftGlyph, (INT)TopGlyph, (INT)cxGlyph, (INT)cyGlyph );
+#endif  //TWI_INTERFACE_ENABLED
+
 
     if ( (vColor == Color_Cap_256) && (vhPalette != NULL) ) {
         SelectObject( hdcMem, hPaletteOld );
@@ -2458,7 +2452,7 @@ FlushLVB :
     /*
      *  Restore previous clipping region
      */
-    if ( hrgnDest != NULL ) { 
+    if ( hrgnDest != NULL ) {
         SelectClipRgn( hDC, hrgnDest );
     }
 

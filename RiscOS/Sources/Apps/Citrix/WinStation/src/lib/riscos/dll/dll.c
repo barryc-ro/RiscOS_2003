@@ -1,4 +1,3 @@
-
 /*************************************************************************
 *
 * dll.c
@@ -7,14 +6,12 @@
 *
 * Copyright 1994, Citrix Systems Inc.
 *
-* smiddle  Brad Pedersen  (3/15/94)
+* $Author$  Brad Pedersen  (3/15/94)
 *
-* dll.c,v
-* Revision 1.1  1998/01/12 11:37:32  smiddle
-* Newly added.#
-*
-* Version 0.01. Not tagged
-*
+* $Log$
+*  
+*     Rev 1.37   26 Sep 1997 19:22:00   davidp
+*  Fixed setting of DllFlags
 *  
 *     Rev 1.36   15 Apr 1997 18:50:24   TOMA
 *  autoput for remove source 4/12/97
@@ -217,7 +214,7 @@ int ModuleLoad( char * pName, PDLLLINK pLink )
      */
     if ( (pNewLink = (PDLLLINK) malloc( sizeof(DLLLINK) )) == NULL ) {
         rc = CLIENT_ERROR_NO_MEMORY;
-
+ 
 	ASSERT( rc == CLIENT_STATUS_SUCCESS, rc );
 	TRACE(( TC_LIB, TT_API1, "ModuleLoad: %s, rc=%u", pName, rc ));
         return rc;

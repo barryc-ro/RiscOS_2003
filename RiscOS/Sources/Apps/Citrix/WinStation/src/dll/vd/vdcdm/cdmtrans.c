@@ -11,6 +11,11 @@
 *
 * Author:  John Richardson 03/11/94
 *
+* $Log$
+*  
+*     Rev 1.14   Oct 09 1997 18:15:00   briang
+*  Conversion to MemIni use
+*  
 *     Rev 1.13   09 Jul 1997 16:09:26   davidp
 *  Added include for ica30.h because of Hydrix surgery
 *  
@@ -50,7 +55,7 @@
 #include "../../../inc/mouapi.h"
 #include "../../../inc/timapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/vd.h"
 #include "../../wd/inc/wd.h"
 #include "citrix/cdmwire.h" // Wire protocol definitions

@@ -14,12 +14,16 @@
 *
 *   Author: Brad Pedersen (4/9/94)
 *
-*   mode.c,v
-*   Revision 1.1  1998/01/12 11:36:22  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.40   21 Oct 1997 17:40:34   kalyanv
+*  fixed the tty bug in IcaSetLed
+*  
+*     Rev 1.42   29 Sep 1997 12:03:48   x86fre
+*  updated
+*  
+*     Rev 1.41   20 Oct 1997 11:34:50   kalyanv
+*  Made changes to the IcaSetLed for TTY bu
 *  
 *     Rev 1.39   30 Apr 1997 14:38:14   terryt
 *  shift states again
@@ -378,6 +382,15 @@ IcaSetLed( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 {
     int rc = 0;
     PWDICA pIca;
+
+    /* Kalyanv
+     * Bug Problem: In TTY mode, "7 " out bound characters appear on the terminal,
+     * when we switch between windows and come back to the terminal window.
+     * Bug Solution: We should not execute SET_LED in TTY mode.
+     */
+
+    if( pWd->fTTYConnected || !pWd->fConnected )
+       return ;
 
     pIca = (PWDICA) pWd->pPrivate;
 

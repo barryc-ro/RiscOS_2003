@@ -11,6 +11,9 @@
 *
 *  $Log$
 *  
+*     Rev 1.3   Feb 17 1998 20:54:24   sumitd
+*  SV_TYPE_TERMINALSERVER added
+*  
 *     Rev 1.2   11 Jun 1997 07:57:06   butchd
 *  Define SV_TYPE_APPSERVER bit if needed
 *  
@@ -33,6 +36,10 @@
 
 #ifndef SV_TYPE_APPSERVER
 #define SV_TYPE_APPSERVER   0x10000000
+#endif
+
+#ifndef SV_TYPE_TERMINALSERVER
+#define SV_TYPE_TERMINALSERVER   0x02000000
 #endif
 
 /*=============================================================================

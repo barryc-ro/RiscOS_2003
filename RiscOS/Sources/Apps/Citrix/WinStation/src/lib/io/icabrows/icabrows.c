@@ -9,12 +9,13 @@
 *
 *   Author: Brad Pedersen (12/5/95)
 *
-*   icabrows.c,v
-*   Revision 1.1  1998/01/12 11:37:28  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.15   Feb 17 1998 19:23:46   sumitd
+*  IPX enumeration problem solved
+*  
+*     Rev 1.13   03 Nov 1997 09:12:16   brada
+*  Added firewall load balancing support
 *  
 *     Rev 1.12   30 Apr 1997 19:07:04   thanhl
 *  update
@@ -77,9 +78,9 @@
 ==   External Functions Defined
 =============================================================================*/
 
-int BrRequestMasterBrowser( PICA_BR_ADDRESS );
+int BrRequestMasterBrowser( PICA_BR_ADDRESS, int );
 int BrRead( int, PICA_BR_ADDRESS, void *, int, int * );
-int BrWrite( PICA_BR_ADDRESS, void *, int );
+int BrWrite( PICA_BR_ADDRESS, void *, int, BOOL );
 int BrBroadcast( void *, int );
 int BrPurgeInput( void );
 
@@ -138,6 +139,8 @@ int fMasterAddress = FALSE;
  *  ENTRY:
  *     pAddress (output)
  *         address to return address of browser
+ *     Flags
+ *         Additional browser request flags
  *
  *  EXIT:
  *     BR_ERROR_SUCCESS - no error
@@ -145,7 +148,7 @@ int fMasterAddress = FALSE;
  ******************************************************************************/
 
 int
-BrRequestMasterBrowser( PICA_BR_ADDRESS pAddress )
+BrRequestMasterBrowser( PICA_BR_ADDRESS pAddress, int Flags )
 {
     ICA_BR_REQUEST_MASTER RequestMaster;
     ICA_BR_MASTER Master;
@@ -156,6 +159,7 @@ BrRequestMasterBrowser( PICA_BR_ADDRESS pAddress )
     int BytesRead;
     int i;
     int rc;
+    int rc1=0;
 
     if ( !fMasterAddress ) {
 
@@ -174,13 +178,16 @@ BrRequestMasterBrowser( PICA_BR_ADDRESS pAddress )
             /*
              *  Send either a directed write or a broadcast
              */
+
             if ( fTryNearest && IoLocateNearestServer( &Address ) == BR_ERROR_SUCCESS ) {
 
-                RequestMaster.MasterReqFlags = 0;
+                RequestMaster.MasterReqFlags = Flags;
                 BrPurgeInput();
-                rc = BrWrite( &Address, &RequestMaster, RequestMaster.Header.ByteCount );
-                while( !rc && IoLocateNextNearestServer(&Address) == BR_ERROR_SUCCESS) {
-                    rc = BrWrite( &Address, &RequestMaster, RequestMaster.Header.ByteCount );
+                rc = BrWrite( &Address, &RequestMaster, RequestMaster.Header.ByteCount, TRUE );
+                if (rc) goto badwrite;
+
+                while( !rc1 && IoLocateNextNearestServer(&Address) == BR_ERROR_SUCCESS) {
+                    rc1 = BrWrite( &Address, &RequestMaster, RequestMaster.Header.ByteCount, TRUE );
                 }
 
             } else if ( G_fBrowserAddress == FALSE ) {
@@ -188,12 +195,19 @@ BrRequestMasterBrowser( PICA_BR_ADDRESS pAddress )
                 /*
                  * Only broadcast if no explicit browser address was specified.
                  */
-                RequestMaster.MasterReqFlags = MASTERREQ_BROADCAST;
+
+                RequestMaster.MasterReqFlags = MASTERREQ_BROADCAST | Flags;
                 BrPurgeInput();
                 rc = BrBroadcast( &RequestMaster, RequestMaster.Header.ByteCount );
+                if (rc) goto badwrite;
             }
-            if ( rc )
-                goto badwrite;
+
+            if (rc1) 
+                {
+                    rc=rc1;
+                    goto badwrite;
+                }
+
 
             /*
              *  Wait for Response
@@ -204,7 +218,9 @@ BrRequestMasterBrowser( PICA_BR_ADDRESS pAddress )
                 continue;
             }
             if ( rc )
+                {
                 goto badread;
+                }
 
             /*
              *  Get master address
@@ -230,7 +246,7 @@ BrRequestMasterBrowser( PICA_BR_ADDRESS pAddress )
             Ping.DataLength = 0;
             Ping.oData = 0;
             BrPurgeInput();
-            if ( rc = BrWrite( &Address, &Ping, Ping.Header.ByteCount ) )
+            if ( rc = BrWrite( &Address, &Ping, Ping.Header.ByteCount, TRUE ) )
                 goto badwrite;
     
             /*
@@ -428,7 +444,8 @@ BrRead( int ExpectedCommand,
 int
 BrWrite( PICA_BR_ADDRESS pAddress, 
          void * pBuffer, 
-         int ByteCount )
+         int ByteCount,
+         BOOL fIncludeAddr )
 {
     PICA_BR_HEADER pHeader;
 
@@ -441,7 +458,12 @@ BrWrite( PICA_BR_ADDRESS pAddress,
      *  Initialize source address
      */
     if ( G_LocalAddrCount == 1 ) {
-        memcpy( &pHeader->Address, G_pLocalAddr, sizeof(ICA_BR_ADDRESS) );
+        if ( fIncludeAddr ) {
+            memcpy( &pHeader->Address, G_pLocalAddr, sizeof(ICA_BR_ADDRESS) );
+        }
+        else {
+            memset(&pHeader->Address, 0, sizeof(ICA_BR_ADDRESS));
+        }
     }
 
     return( IoWrite( pAddress, pBuffer, ByteCount ) );

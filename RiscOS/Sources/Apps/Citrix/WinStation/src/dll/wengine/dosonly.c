@@ -8,12 +8,10 @@
 *
 *   Author: Marc Bloomfield (marcb) 13-Mar-1995
 *
-*   dosonly.c,v
-*   Revision 1.1  1998/01/12 11:36:34  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.14   Oct 09 1997 18:35:40   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.13   11 Jun 1997 10:29:44   terryt
 *  client double click support
@@ -39,9 +37,10 @@
 #include "../../inc/wdapi.h"
 #include "../../inc/pdapi.h"
 #include "../../inc/vdapi.h"
-#include "../../inc/biniapi.h"
+#include "../../inc/miapi.h"
 #include "../../inc/wengapip.h"
 #include "../../inc/logapi.h"
+
 
 #include "swis.h"
 

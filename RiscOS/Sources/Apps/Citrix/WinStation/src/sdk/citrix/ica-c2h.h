@@ -9,12 +9,22 @@
 *
 *  Author: Brad Pedersen (8/27/94)
 *
-*  ica-c2h.h,v
-*  Revision 1.1  1998/01/12 11:37:53  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.65   30 Jan 1998 18:17:28   terryt
+*  make twi compatible
+*  
+*     Rev 1.64   Jan 28 1998 15:57:48   sumitd
+*  Seemless mode flag added in the Data transmitted to server
+*  
+*     Rev 1.63   28 Jan 1998 15:43:40   kalyanv
+*  updated
+*  
+*     Rev 1.61   26 Jan 1998 11:15:26   KenB
+*  add CLIENTIDs
+*  
+*     Rev 1.60   Jan 06 1998 14:09:54   bills
+*  Added version numbers for the new pdtapi.
 *  
 *     Rev 1.59   15 Jul 1997 15:46:02   bradp
 *  update
@@ -98,10 +108,11 @@ typedef struct _UI_C2H {
 
     /* version 1 */
     MODULE_C2H Header;
-    BULONG fDisableSound : 1;     // don't send sound to client
-    BULONG fReconnect : 1;        // request to reconnect to existing session
+    BULONG fDisableSound: 1;     // don't send sound to client
+    BULONG fReconnect: 1;        // request to reconnect to existing session
     BULONG fDisableCtrlAltDel: 1;// disable ctrl-alt-del on host for this client
     BULONG fPromptForPassword: 1;// force server to prompt for password
+    BULONG fTwiModeEnableFlag: 1;// Seemless mode or not
     ULONG KeyboardLayout;       // e.g. 409
     BYTE EncryptionLevel;       // encryption level of password (0=plain text)
     BYTE EncryptionSeed;        // seed for encryption
@@ -155,6 +166,22 @@ typedef struct _UIEXT_C2H {
  */
 #define VERSION_CLIENTL_WD   1 
 #define VERSION_CLIENTH_WD   6
+
+
+/*
+ *  Client product id
+ */
+#define CLIENTID_CITRIX_DOS          0x0001     // citrix dos client
+// avoid 2 (andy)
+#define CLIENTID_CITRIX_CONSOLE      0x0003     // citrix console
+#define CLIENTID_CITRIX_TEXT_TERM    0x0004     // citrix text terminals
+#define CLIENTID_CITRIX_MVGA_TERM    0x0007     // citrix MVGA terminals
+
+#define CLIENTID_CITRIX_INTERNET     0x0101     // citrix internet client
+
+#define CLIENTID_FORCESERIALIZE_FLAG 0x4000     // client requires license no.
+#define CLIENTID_TERMINAL_FLAG       0x8000     // terminal based client
+
 
 /*
  *  ica 3.0 (wdica30.dll)
@@ -280,6 +307,9 @@ typedef struct _VDCPM_C2H {
 #define VERSION_CLIENTL_PDMODEM     1
 #define VERSION_CLIENTH_PDMODEM     1
 
+#define VERSION_CLIENTL_PDTAPI		1
+#define VERSION_CLIENTH_PDTAPI		1
+
 /*
  *  common protocol driver header
  */
@@ -326,7 +356,7 @@ typedef struct _PDCRYPT1_C2H {
 #define sizeof_PDCRYPT1_C2H	(sizeof(PD_C2H) + 1)
 
 /*
- *  modem protocol driver (pdmodem.dll)
+ *  modem protocol driver (pdmodem.dll and pdtapi.dll)
  */
 typedef struct _PDMODEM_C2H {
     PD_C2H Header;

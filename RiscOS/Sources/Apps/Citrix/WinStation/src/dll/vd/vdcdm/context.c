@@ -30,7 +30,7 @@
 #include "../../../inc/mouapi.h"
 #include "../../../inc/timapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/vd.h"
 #include "../../wd/inc/wd.h"
 #include "citrix/cdmwire.h" // Wire protocol definitions

@@ -11,18 +11,21 @@
 *
 *   $Log$
 *  
+*     Rev 1.4   Jan 14 1998 17:00:50   briang
+*  TWI Integration
+*
 *     Rev 1.3   15 Apr 1997 18:15:56   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.3   21 Mar 1997 16:09:26   bradp
 *  update
-*  
+*
 *     Rev 1.2   30 May 1996 16:56:58   jeffm
 *  update
-*  
+*
 *     Rev 1.1   03 Jan 1996 13:32:50   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 
 #ifdef DOS
@@ -115,7 +118,7 @@ VOID bFlatten( ULONG *pcptfx, TWPOINTFIXI * *ppptfxBuf, BOOL fEllipse )
 
 
    for ( pptfxNext = *ppptfxBuf, pptfxLast = &((*ppptfxBuf)[*pcptfx-1]);
-         pptfxNext < pptfxLast; 
+         pptfxNext < pptfxLast;
          pptfxNext = &pptfxNext[3] ) {
       if ( !bBezierInit( pptfxNext, (RECTFX*)NULL )      ) {
          break;

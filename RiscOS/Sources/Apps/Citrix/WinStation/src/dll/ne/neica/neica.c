@@ -11,6 +11,12 @@
 *
 *   $Log$
 *  
+*     Rev 1.19   03 Nov 1997 09:30:42   brada
+*  Added firewall load balance support
+*  
+*     Rev 1.18   Oct 09 1997 17:14:40   briang
+*  Conversion to MemIni use
+*  
 *     Rev 1.17   03 May 1997 17:15:08   thanhl
 *  update
 *  
@@ -69,7 +75,7 @@
 
 #include "../../../inc/clib.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../../../inc/nrapi.h"
 #include "../../../inc/neapi.h"
 #include "../inc/ne.h"
@@ -96,9 +102,9 @@ int _BrEnum( PNEENUMERATE );
 
 int IoOpen( void );
 void IoClose( void );
-int BrRequestMasterBrowser( PICA_BR_ADDRESS );
+int BrRequestMasterBrowser( PICA_BR_ADDRESS, int );
 int BrRead( int, PICA_BR_ADDRESS, void *, int, int * );
-int BrWrite( PICA_BR_ADDRESS, void *, int );
+int BrWrite( PICA_BR_ADDRESS, void *, int, BOOL );
 int BrPurgeInput( void );
 
 
@@ -247,11 +253,19 @@ _BrEnum( PNEENUMERATE pNeEnum )
     int NamesLength;
     int BytesRead;
     int rc;
+    int MasterFlags;
+
+    if ( pNeEnum->fUseAlternateAddress ) {
+        MasterFlags = MASTERREQ_ALTADDRESS;
+    }
+    else {
+        MasterFlags = 0;
+    }
 
     /*
      *  Get address of browser
      */
-    if ( rc = BrRequestMasterBrowser( &Address ) )
+    if ( rc = BrRequestMasterBrowser( &Address, MasterFlags ) )
         goto badmaster;
 
     /*
@@ -272,7 +286,8 @@ tryagain:
     Request.DataType = pNeEnum->DataType;
     Request.EnumReqFlags = pNeEnum->EnumReqFlags;
     BrPurgeInput();
-    if ( rc = BrWrite( &Address, &Request, Request.Header.ByteCount ) )
+    if ( rc = BrWrite( &Address, &Request, Request.Header.ByteCount,
+                       !pNeEnum->fUseAlternateAddress ) )
         goto badwrite;
 
     /*

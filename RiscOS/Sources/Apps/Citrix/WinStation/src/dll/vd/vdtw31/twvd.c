@@ -9,84 +9,89 @@
 *
 *   Author: Andy Stergiades (andys) 6-Apr-1994
 *
-*   twvd.c,v
-*   Revision 1.1  1998/01/12 11:36:09  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
 *  
+*     Rev 1.43   19 Feb 1998 21:28:04   kurtp
+*  fix cpr 8750
+*  
+*     Rev 1.42   Feb 04 1998 22:06:30   briang
+*  if res too big win16 would cut off start menu since it didnt account for title bar size
+*  
+*     Rev 1.41   Jan 27 1998 22:26:36   briang
+*  Fix obstructed task bar in win16 client
+*  
+*     Rev 1.40   Jan 14 1998 17:01:38   briang
+*  TWI Integration
+*
 *     Rev 1.37   14 Aug 1997 15:07:26   kurtp
 *  fix full screen, again
-
-
-*  
+*
 *     Rev 1.36   05 Aug 1997 20:26:56   kurtp
 *  Add Full Screen Window support
-*  
+*
 *     Rev 1.35   04 Aug 1997 19:15:12   kurtp
 *  update
-*  
+*
 *     Rev 1.33   14 Jul 1997 18:21:26   kurtp
 *  Add LVB to transparent text ops
-*  
+*
 *     Rev 1.32   06 May 1997 21:28:50   kurtp
 *  update to last fix
-*  
+*
 *     Rev 1.31   06 May 1997 21:13:16   kurtp
 *  Fix connection/disconnect and shadow
-*  
+*
 *     Rev 1.30   28 Apr 1997 14:58:18   kurtp
 *  I fixed a bug in this file, update, duh!
-*  
+*
 *     Rev 1.29   18 Apr 1997 18:10:36   kurtp
 *  update
-*  
+*
 *     Rev 1.28   15 Apr 1997 18:16:34   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.28   21 Mar 1997 16:09:36   bradp
 *  update
-*  
+*
 *     Rev 1.27   07 Mar 1997 15:31:52   kurtp
 *  update
-*  
+*
 *     Rev 1.26   13 Jan 1997 16:52:06   kurtp
 *  Persistent Cache
-*  
+*
 *     Rev 1.25   13 Nov 1996 09:06:06   richa
 *  Updated Virtual channel code.
-*  
+*
 *     Rev 1.23   13 Aug 1996 13:19:12   jeffm
 *  Limit values for VRES and HRES
-*  
+*
 *     Rev 1.22   11 Jul 1996 10:44:56   jeffm
 *  Adjusted for Win95 work area for screen percent
-*  
+*
 *     Rev 1.21   27 Jun 1996 11:50:32   marcb
 *  update
-*  
+*
 *     Rev 1.20   26 Jun 1996 15:45:38   marcb
 *  update
-*  
+*
 *     Rev 1.19   13 Jun 1996 15:22:16   jeffm
 *  Got rid of compiler warning for DOS with iscreenpercent
-*  
+*
 *     Rev 1.18   14 May 1996 11:30:10   jeffm
 *  update
-*  
+*
 *     Rev 1.16   20 Jan 1996 14:28:10   kurtp
 *  update
-*  
+*
 *     Rev 1.15   18 Jan 1996 11:43:18   kurtp
 *  update
-*  
+*
 *     Rev 1.14   04 Jan 1996 16:26:40   kurtp
 *  Symbol Tech Variable DOS Resolution
-*  
+*
 *     Rev 1.13   03 Jan 1996 13:33:34   kurtp
 *  update
-*  
+*
 *************************************************************************/
 
 #include "windows.h"
@@ -120,7 +125,7 @@
 #include "../../../inc/mouapi.h"
 #include "../../../inc/timapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../../../inc/wengapip.h"
 
 #include "twwin.h"
@@ -166,7 +171,7 @@ PLIBPROCEDURE VdTW31DriverProcedures[VDDRIVER__COUNT] =
     (PLIBPROCEDURE)DriverPoll,
     (PLIBPROCEDURE)DriverSetInformation,
     (PLIBPROCEDURE)DriverQueryInformation,
-    (PLIBPROCEDURE)DriverGetLastError   
+    (PLIBPROCEDURE)DriverGetLastError
 };
 
 /*=============================================================================
@@ -179,7 +184,7 @@ extern USHORT TWDeallocCache( PVD pVd );
 extern USHORT far SaveVideoRegs( void );
 extern USHORT far RestoreVideoRegs( void );
 extern USHORT TWDetermineSVGA( PVD pVd );
-extern USHORT TWReadCacheParameters( PVOID );
+extern USHORT TWReadCacheParameters( );
 extern USHORT TWWindowsStart( PVD pVd, PTHINWIRECAPS pThinWireMode );
 extern USHORT TWWindowsStop( PVD pVd );
 extern USHORT TWRealizePalette( HWND, HDC, UINT *, USHORT );
@@ -223,7 +228,7 @@ int    viBitsPerPixel;
 
 ULONG  vDimCacheEnabled;
 ULONG  vDimCacheSize;
-ULONG  vDimBitmapMin;     
+ULONG  vDimBitmapMin;
 #define CCHMAXPATH 260
 PCHAR  vpszDimCachePath = NULL;
 
@@ -277,7 +282,7 @@ static BOOL UnderScanEnabled = FALSE;
  *
  ******************************************************************************/
 
-static int 
+static int
 DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 {
     WDSETINFORMATION wdsi;
@@ -286,11 +291,11 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     WDQUERYINFORMATION wdqi;
     OPENVIRTUALCHANNEL OpenVirtualChannel;
     char string[20];
- 
+
     /*
      *  Read Cache parameters from .ini file
      */
-    if ( rc = TWReadCacheParameters(pVdOpen->pIniSection) )
+    if ( rc = TWReadCacheParameters() )
        return( rc );
 
     /*
@@ -312,16 +317,16 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     rc = WdCall( pVd, WD__QUERYINFORMATION, &wdqi );
     VirtualThinWire = OpenVirtualChannel.Channel;
     ASSERT( VirtualThinWire == Virtual_ThinWire, VirtualThinWire );
- 
+
     /*
      *  Return virtual channel id mask
      */
     pVdOpen->ChannelMask = (1L << VirtualThinWire);
- 
+
     /*
      *  Check for super VGA
      */
-    bGetPrivateProfileString( pVdOpen->pIniSection, INI_SVGACAPABILITY, DEFAULT_SVGACAP,
+    miGetPrivateProfileString( INI_VDTW31, INI_SVGACAPABILITY, DEFAULT_SVGACAP,
                               string, sizeof(string) );
 
     vSVGAmode = 0;
@@ -334,29 +339,26 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 	/* Off means only 640x480 available */
     }
     else if (!stricmp(string, VARIABLE_SVGACAP)) {
-	/* auto means default to the set value and send complete set */
-        PrefHRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                          INI_DESIREDHRES, DEF_DESIREDHRES );
-     
-        PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                          INI_DESIREDVRES, DEF_DESIREDVRES );
-     
+        
+        PrefHRes = miGetPrivateProfileInt( INI_VDTW31, INI_DESIREDHRES, DEF_DESIREDHRES );
+        PrefVRes = miGetPrivateProfileInt( INI_VDTW31, INI_DESIREDVRES, DEF_DESIREDVRES );
+
         vSVGAmode = 1;
         vVariableRes = TRUE;
     }
     else {
 	/* auto means default to the set value and send complete set */
-        PrefHRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
+        PrefHRes = miGetPrivateProfileInt( INI_VDTW31,
                                           INI_DESIREDHRES, DEF_DESIREDHRES );
-     
-        PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
+
+        PrefVRes = miGetPrivateProfileInt( INI_VDTW31,
                                           INI_DESIREDVRES, DEF_DESIREDVRES );
-     
+
         vSVGAmode = 1;
     }
 
     TRACE((TC_TW,TT_API1, "VDTW: PrefRes %dx%d", PrefHRes, PrefVRes));
-    
+
     if (PrefHRes == -1 || PrefVRes == -1)
     {
         vfFullScreen = TRUE;
@@ -364,7 +366,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 	if (IsATV())
 	    UnderScanEnabled = TRUE;
 	else
-	    UnderScanEnabled = bGetPrivateProfileBool( pVdOpen->pIniSection,
+	    UnderScanEnabled = miGetPrivateProfileBool( INI_VDTW31,
 						       "UseSafeArea", FALSE);
 
 	TRACE((TC_TW,TT_API1, "VDTW: Underscan %d, is a tv %d", UnderScanEnabled, IsATV()));
@@ -379,37 +381,32 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     {
         if((PrefHRes==0) || (PrefHRes > MAX_DESIREDHRES ))
             PrefHRes = DEF_DESIREDHRES;
-
         if((PrefVRes==0) || (PrefVRes > MAX_DESIREDVRES ))
             PrefVRes = DEF_DESIREDVRES;
     }
 
-   
     /*
      *  Get preferred color depth
      */
-    iColorDepth = bGetPrivateProfileInt( pVdOpen->pIniSection,
-					 INI_DESIREDCOLOR, DEF_DESIREDCOLOR );
+    iColorDepth = miGetPrivateProfileInt( INI_VDTW31, INI_DESIREDCOLOR, DEF_DESIREDCOLOR );
 
     TRACE((TC_TW,TT_TW_PALETTE, "VDTW: Requested ColorDepth %04x", iColorDepth));
 
     /*
      *  Get persistent cache values
      */
-    vDimCacheEnabled = bGetPrivateProfileBool( pVdOpen->pIniSection,
-                                               INI_DIMCACHEENABLED,
-                                               DEF_DIMCACHEENABLED ); 
+    vDimCacheEnabled = miGetPrivateProfileBool( INI_VDTW31,
+                                                INI_DIMCACHEENABLED,
+                                                DEF_DIMCACHEENABLED );
 
-    vDimCacheSize = bGetPrivateProfileLong( pVdOpen->pIniSection,
-                                            INI_DIMCACHESIZE, 
-                                            DEF_DIMCACHESIZE );      
+    vDimCacheSize = miGetPrivateProfileLong( INI_VDTW31,
+                                             INI_DIMCACHESIZE,
+                                             DEF_DIMCACHESIZE );
 
-    vDimBitmapMin = bGetPrivateProfileLong( pVdOpen->pIniSection,
-                                            INI_DIMMINBITMAP, 
-                                            DEF_DIMMINBITMAP );
-
+    vDimBitmapMin = miGetPrivateProfileLong( INI_VDTW31,
+                                             INI_DIMMINBITMAP,
+                                             DEF_DIMMINBITMAP );
     TRACE((TC_TW,TT_TW_CACHE, "VDTW: Cache on %d size %d BitmapMin %d", vDimCacheEnabled, vDimCacheSize, vDimBitmapMin));
-
     if ( vDimCacheEnabled ) {
 
         PCHAR pszTemp;
@@ -417,10 +414,10 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
         pszTemp = (PCHAR) malloc(CCHMAXPATH+1);
         memset( pszTemp, 0, CCHMAXPATH+1);
 
-        bGetPrivateProfileString( pVdOpen->pIniSection, 
-                                  INI_DIMCACHEPATH, 
-                                  DEF_DIMCACHEPATH,
-                                  pszTemp, CCHMAXPATH );
+        miGetPrivateProfileString( INI_VDTW31,
+                                   INI_DIMCACHEPATH,
+                                   DEF_DIMCACHEPATH,
+                                   pszTemp, CCHMAXPATH );
 
 	TRACE((TC_TW,TT_TW_CACHE, "VDTW: Cache in '%s'", pszTemp));
 
@@ -444,17 +441,17 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
         free( pszTemp );
     }
- 
+
     /*
      *  Get click ticks
      */
-    bClickticks = (USHORT) bGetPrivateProfileInt( pVdOpen->pIniSection, INI_CLICKTICKS, DEF_CLICKTICKS );
- 
+    bClickticks = (USHORT) miGetPrivateProfileInt( INI_VDTW31, INI_CLICKTICKS, DEF_CLICKTICKS );
+
     /*
      * Initialize mode
      */
     memset( &vThinWireMode, 0, sizeof(vThinWireMode) );
- 
+
     /*
      *  Register write hooks for all virtual channels handled by this vd
      */
@@ -465,7 +462,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     wdsi.pWdInformation      = &vdwh;
     wdsi.WdInformationLength = sizeof(VDWRITEHOOK);
     rc = WdCall(pVd, WD__SETINFORMATION, &wdsi);
- 
+
     /*
      * This returns pointers to functions to use to send data to the host
      */
@@ -501,7 +498,7 @@ done:
  *
  ******************************************************************************/
 
-static int 
+static int
 DriverClose( PVD pVd, PDLLCLOSE pVdClose )
 {
    TWDeallocCache(pVd);
@@ -533,7 +530,7 @@ DriverClose( PVD pVd, PDLLCLOSE pVdClose )
  ******************************************************************************/
 
 
-static int 
+static int
 DriverInfo( PVD pVd, PDLLINFO pVdInfo )
 {
     USHORT ByteCount;
@@ -609,7 +606,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     viBitsPerPixel = iColorDepth == CCAPS_4_BIT ? 4 : 8;
 
     /*
-     *  Get host encryption level 
+     *  Get host encryption level
      */
     eieio.EncryptionLevel    = 1;
     wdqi.WdInformationClass  = WdEncryptionInit;
@@ -646,7 +643,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
 					   sizeof(pVdData->ResCaps)/sizeof(pVdData->ResCaps[0]) + 1, &viBitsPerPixel);
 	if (!vSVGAmode)
 	    pCaps->ResCapsCnt = 1;
-    
+
 	/* set pref to the first in the list */
 	pPref->ResCaps.HRes   = pCaps->ResCaps.HRes;
 	pPref->ResCaps.VRes   = pCaps->ResCaps.VRes;
@@ -659,7 +656,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     }
 
     TRACE((TC_TW,TT_TW_PALETTE, "VDTW: %d modes sent %d bpp", pCaps->ResCapsCnt, viBitsPerPixel));
-    
+
     /*
      *  Initialize cache data
      */
@@ -673,12 +670,12 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
      */
     pCaps->flGraphicsCaps &= ~GCAPS_BMPS_PRECACHED;
     if ( vDimCacheEnabled ) {
-    
+
         pCaps->flGraphicsCaps |= GCAPS_BMPS_PRECACHED;
         pPref->flGraphicsCaps |= GCAPS_BMPS_PRECACHED;
 
         pVdData->DimCacheSize       = vDimCacheSize;
-        pVdData->DimBitmapMin       = 
+        pVdData->DimBitmapMin       =
              (vDimBitmapMin < (2048 + DIM_SYSTEM_OVERHEAD + 1) ?
                               (2048 + DIM_SYSTEM_OVERHEAD + 1) :
                               vDimBitmapMin);
@@ -708,14 +705,14 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
  *
  ******************************************************************************/
 
-static int 
+static int
 DriverPoll( PVD pVd, PDLLPOLL pVdPoll )
 {
     int         rc = CLIENT_STATUS_SUCCESS;
     PTWBUFFER pTWBuffer;
 
     /*
-     *  If no work then ship out 
+     *  If no work then ship out
      */
     if ( (vfDimContinue == TRUE) && (ICAWriteQ.pNext == NULL) ) {
         if ( (ULONG)Getmsec() > (vTimeLastDim + 1000 /*DIM_YIELD*/) ) {
@@ -801,7 +798,7 @@ Exit:
  *
  ******************************************************************************/
 
-static int 
+static int
 DriverQueryInformation( PVD pVd, PVDQUERYINFORMATION pVdQueryInformation )
 {
     PVDTWCACHE pVdTWCache;
@@ -845,14 +842,14 @@ DriverQueryInformation( PVD pVd, PVDQUERYINFORMATION pVdQueryInformation )
  *
  ******************************************************************************/
 
-static int 
+static int
 DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 {
    PVDTWCACHE pCache;
    int rc = CLIENT_STATUS_SUCCESS;
 
    TRACE(( TC_UI, TT_API4, "DriverSetInformation: %d", pVdSetInformation->VdInformationClass ));
-   
+
    switch ( pVdSetInformation->VdInformationClass ) {
 
       case VdSetFocus:
@@ -936,11 +933,11 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
          }
 #endif
          break;
-	 
+
       case VdRealizePaletteFG:
          if ( vColor == Color_Cap_256 ) {
-           rc = TWRealizePalette( vhWnd, vhdc, 
-                                    (UINT *)pVdSetInformation->pVdInformation, 
+           rc = TWRealizePalette( vhWnd, vhdc,
+                                    (UINT *)pVdSetInformation->pVdInformation,
                                     TWREALIZEPALETTE_FG );
          }
          break;
@@ -948,16 +945,16 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
       case VdInactivate:
          if ( vColor == Color_Cap_256 ) {
            UINT cColors;
-             rc = TWRealizePalette( vhWnd, vhdc, 
-                                    (UINT *)&cColors, 
+             rc = TWRealizePalette( vhWnd, vhdc,
+                                    (UINT *)&cColors,
                                     TWREALIZEPALETTE_FOCUS );
          }
          break;
 
       case VdRealizePaletteBG:
          if ( vColor == Color_Cap_256 ) {
-           rc = TWRealizePalette( vhWnd, vhdc, 
-                                    (UINT *)pVdSetInformation->pVdInformation, 
+           rc = TWRealizePalette( vhWnd, vhdc,
+                                    (UINT *)pVdSetInformation->pVdInformation,
                                     TWREALIZEPALETTE_BG );
          }
          break;
@@ -1012,7 +1009,7 @@ static int DriverGetLastError( PVD pVd, PVDLASTERROR pLastError )
  *
  ******************************************************************************/
 
-int STATIC 
+int STATIC
 TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
 {
     int rc = CLIENT_STATUS_SUCCESS;
@@ -1034,7 +1031,7 @@ TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
     uY = (USHORT)(((ULONG)uY * vhScreen)/0x10000);
     rc = TWMoveCursor(uX, uY);
 #endif
-    
+
 #if !defined(DOS) && !defined(RISCOS)
     //  save moved to position for wengine
     SetWindowLong( vhWnd, GWL_MOUSE_X, (LONG) uX );
@@ -1064,7 +1061,7 @@ TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
 //          pVd right
 
 //#pragma optimize("",off)
-STATIC int WFCAPI 
+STATIC int WFCAPI
 TWCallSetMouseRanges( USHORT uHoriMin, USHORT uHoriMax, USHORT uVertMin, USHORT uVertMax )
 {
    int rc;
@@ -1091,7 +1088,7 @@ TWCallSetMouseRanges( USHORT uHoriMin, USHORT uHoriMax, USHORT uVertMin, USHORT 
  *
  ******************************************************************************/
 
-int STATIC 
+int STATIC
 TWCallHookMouse( PVD pVd, PVOID pMouseHook )
 {
    int rc;
@@ -1115,7 +1112,7 @@ TWCallHookMouse( PVD pVd, PVOID pMouseHook )
  *
  ******************************************************************************/
 
-int STATIC 
+int STATIC
 TWCallUnHookMouse( PVD pVd, PVOID pMouseHook )
 {
    int rc;
@@ -1139,7 +1136,7 @@ TWCallUnHookMouse( PVD pVd, PVOID pMouseHook )
  *
  ******************************************************************************/
 
-int STATIC 
+int STATIC
 TWCallResetMouse( PVD pVd )
 {
    int rc;
@@ -1166,7 +1163,7 @@ TWCallResetMouse( PVD pVd )
  *
  ******************************************************************************/
 
-int STATIC 
+int STATIC
 TWCallHookTimer( PVD pVd, PVOID pTimerHook )
 {
    int rc;
@@ -1192,7 +1189,7 @@ TWCallHookTimer( PVD pVd, PVOID pTimerHook )
  *
  ******************************************************************************/
 
-int STATIC 
+int STATIC
 TWCallUnHookTimer( PVD pVd, PVOID pTimerHook )
 {
    int rc;

@@ -8,6 +8,14 @@
 *
 *  Author:  JohnR 04/20/94
 *
+* $Log$
+*  
+*     Rev 1.33   Oct 31 1997 20:15:36   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.32   Oct 09 1997 18:15:04   briang
+*  Conversion to MemIni use
+*  
 *     Rev 1.31   09 Jul 1997 16:09:30   davidp
 *  Added include for ica30.h because of Hydrix surgery
 *  
@@ -71,7 +79,7 @@
 #include "../../../inc/mouapi.h"
 #include "../../../inc/timapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/vd.h"
 #include "../../wd/inc/wd.h"
 #include "citrix/cdmwire.h" // Wire protocol definitions
@@ -229,13 +237,13 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
    TRACE(( TC_CDM, TT_API3, "VDCDM: Registered"));
 
-   CdmMaxWindowSize = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                             INI_MAXWINDOWSIZE,
-                                             DEF_MAXWINDOWSIZE );
+   CdmMaxWindowSize = miGetPrivateProfileInt( INI_CDMSECTION,
+                                              INI_MAXWINDOWSIZE,
+                                              DEF_MAXWINDOWSIZE );
 
-   CdmMaxRequestSize = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                              INI_MAXREQUESTSIZE,
-                                              DEF_MAXREQUESTSIZE );
+   CdmMaxRequestSize = miGetPrivateProfileInt( INI_CDMSECTION,
+                                               INI_MAXREQUESTSIZE,
+                                               DEF_MAXREQUESTSIZE );
    if ( CdmMaxRequestSize > vdwh.MaximumWriteSize )
        CdmMaxRequestSize = vdwh.MaximumWriteSize;
 
@@ -255,25 +263,23 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     * Get the cache control parameters
     */
 
-   CacheTimeout0 = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                          INI_CACHETIMEOUT0,
-                                          DEF_CACHETIMEOUT0 );
+   CacheTimeout0 = miGetPrivateProfileInt( INI_CDMSECTION,
+                                           INI_CACHETIMEOUT0,
+                                           DEF_CACHETIMEOUT0 );
 
-   CacheTimeout1 = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                          INI_CACHETIMEOUT1,
-                                          DEF_CACHETIMEOUT1 );
+   CacheTimeout1 = miGetPrivateProfileInt( INI_CDMSECTION,
+                                           INI_CACHETIMEOUT1,
+                                           DEF_CACHETIMEOUT1 );
 
-   CacheXferSize = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                          INI_CACHEXFERSIZE,
-                                          DEF_CACHEXFERSIZE );
+   CacheXferSize = miGetPrivateProfileInt( INI_CDMSECTION,
+                                           INI_CACHEXFERSIZE,
+                                           DEF_CACHEXFERSIZE );
 
-   if ( bGetPrivateProfileBool( pVdOpen->pIniSection,
-                                INI_NOCACHE, DEF_NOCACHE ) ) {
+   if ( miGetPrivateProfileBool( INI_CDMSECTION, INI_NOCACHE, DEF_NOCACHE ) ) {
        CacheFlags |= CONNECT_NOCACHE;
    }
 
-   if ( bGetPrivateProfileBool( pVdOpen->pIniSection,
-                                INI_NOWRITEALLOC, DEF_NOWRITEALLOC ) ) {
+   if ( miGetPrivateProfileBool( INI_CDMSECTION, INI_NOWRITEALLOC, DEF_NOWRITEALLOC ) ) {
        CacheFlags |= CONNECT_NOWRITEALLOCATE;
    }
 

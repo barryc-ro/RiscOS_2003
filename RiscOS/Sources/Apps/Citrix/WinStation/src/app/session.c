@@ -22,7 +22,7 @@
 #include "../inc/logapi.h"
 #include "../inc/cfgini.h"
 #include "../inc/cfgload.h"
-#include "../inc/biniapi.h"
+#include "../inc/miapi.h"
 #include "../inc/wengapip.h"
 #include "../inc/timapi.h"
 #include "../inc/kbdapi.h"
@@ -30,7 +30,7 @@
 #include "../inc/dll.h"
 #include "../inc/iniapi.h"
 
-#include "citrix/ctxver.h"
+//#include "citrix/ctxver.h"
 #include "citrix/ica.h"
 #include "citrix/ica-c2h.h"
 
@@ -541,7 +541,7 @@ static int EMEngLoadwinframe_session(icaclient_session sess)
     
     pOverrides[i].pszKey = NULL;
     pOverrides[i].pszValue = NULL;
-
+    
     strcpy(sess->szClientType, INTERNET_CLIENT);
     
     rc = CfgIniLoad( sess->hWFE,
@@ -834,6 +834,13 @@ icaclient_session session_open_server(const char *host)
 	    sess->gszICAFile = strdup(name);
 	    sess->tempICAFile = TRUE;
 	}
+	else
+	{
+	    MessageBox(utils_msgs_lookup("noscrap"), host);
+
+	    free(sess);
+	    sess = NULL;
+	}
     }
     
     return sess;
@@ -1022,28 +1029,30 @@ void session_run(const char *file, int file_is_url, const char *bfile)
 	sess = session_open(file, FALSE);
 
     if (sess)
+    {
 	if (!session_connect(sess))
 	    return;
     
-    TRACE((TC_UI, TT_API1, "session_run: entering poll"));
+	TRACE((TC_UI, TT_API1, "session_run: entering poll"));
 
-    while (sess->HaveFocus && !sess->Connected)
-	session_poll(sess);
+	while (sess->HaveFocus && !sess->Connected)
+	    session_poll(sess);
 
-    TRACE((TC_UI, TT_API1, "session_run: entering close"));
+	TRACE((TC_UI, TT_API1, "session_run: entering close"));
 
-    session__close(sess);
+	session__close(sess);
 
-    if (!sess->HaveFocus)
-	restore_desktop();
+	if (!sess->HaveFocus)
+	    restore_desktop();
 
-    TRACE((TC_UI, TT_API1, "session_run: going for cleanup Focus %d", sess->HaveFocus));
+	TRACE((TC_UI, TT_API1, "session_run: going for cleanup Focus %d", sess->HaveFocus));
 
-    // allow cleanup
-    while (session_poll(sess))
-	;
+	// allow cleanup
+	while (session_poll(sess))
+	    ;
 
-    session_free(sess);
+	session_free(sess);
+    }
 }
 
 /* --------------------------------------------------------------------------------------------- */

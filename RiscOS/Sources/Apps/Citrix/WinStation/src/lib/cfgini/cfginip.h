@@ -11,6 +11,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.4   Oct 09 1997 18:58:20   briang
+*  Conversion to MemIni use
+*  
 *     Rev 1.3   15 Apr 1997 18:48:58   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -31,6 +34,15 @@ typedef struct _LIST {
     struct _LIST * pNext;
 } LIST, * PLIST;
 
+//  section list
+typedef struct _SECTIONLIST {
+    int   bValid;
+    PCHAR pElement;
+    PCHAR pFile;
+    struct _SECTIONLIST * pNext;
+} SECTIONLIST, * PSECTIONLIST;
+
+
 // GetSection (WIN16) list
 typedef struct _ENTRYLIST {
     PCHAR pEntryName;
@@ -43,7 +55,7 @@ typedef struct _ENTRYLIST {
 ==   Macros
 =============================================================================*/
 
-#define SECTIONSIZE 1024            // start value for a section
+#define SECTIONSIZE     1024            // start value for a section
 
 //  Profile Entries
 #define VIRTUAL_DRIVER      "VirtualDriver"

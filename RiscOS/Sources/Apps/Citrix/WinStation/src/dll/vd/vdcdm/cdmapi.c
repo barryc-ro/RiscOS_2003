@@ -31,7 +31,7 @@
 #include "../../../inc/mouapi.h"
 #include "../../../inc/timapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/vd.h"
 #include "../../wd/inc/wd.h"
 #include "citrix/cdmwire.h" // Wire protocol definitions
@@ -237,12 +237,17 @@ CdmDosCreate(
          *  If the file exists then don't do the create, assume an error
          *  indacates "file not found"
          */
-        if ( GetFileAttributes(pPathNameBuf) == -1L )
+        if ( GetFileAttributes(pPathNameBuf) != -1L ) {
+            SetLastError(ERROR_ALREADY_EXISTS);
+        } else
 #endif
         CREATNEW( pPathNameBuf, DosAttributes, p->x.pFileEnt->DosHandle, ret );
 
-        if ( (ret != 0) || (p->x.pFileEnt->DosHandle == 0xffff) ) {
+        if ( (ret != 0) || (p->x.pFileEnt->DosHandle == (int)-1)) {
             // Get the error code and class
+#ifdef  WIN32
+            ret = GetLastError();
+#endif
             CdmDosError( ret, &ErrClass, &ErrCode );
             TRACE(( TC_CDM, TT_API4, "CdmDosCreate: CREATNEW failed, ret=%d, ErrCode=%d", ret, ErrCode));
             FreeContext( Context );
@@ -271,7 +276,7 @@ CdmDosCreate(
                 p->x.pFileEnt->DosHandle = 0;
                 OPEN( pPathNameBuf, DosAccess, p->x.pFileEnt->DosHandle, ret );
 
-                if ( (ret != 0) || (p->x.pFileEnt->DosHandle == 0xffff) ) {
+                if ( (ret != 0) || (p->x.pFileEnt->DosHandle == (int)-1)) {
 #ifdef  WIN32
                     ret = GetLastError();
 #endif

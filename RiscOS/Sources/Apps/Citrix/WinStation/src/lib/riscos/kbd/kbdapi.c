@@ -9,12 +9,12 @@
 *
 *  Author: Kurt Perry (3/29/1994)
 *
-*  kbdapi.c,v
-*  Revision 1.1  1998/01/12 11:37:34  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.27   10 Dec 1997 11:10:48   fredl
+*  fix 9804600 cpr 7361, clear hotkeyId if ScanCode and ShiftState are 0 when hotkey is registered
+*  
+*     Rev 1.26   22 Sep 1997 20:30:46   yis
 *  
 *     Rev 1.25   15 Apr 1997 18:50:30   TOMA
 *  autoput for remove source 4/12/97
@@ -61,7 +61,7 @@
 #include "../../../inc/vdapi.h"
 #include "../../../inc/kbdapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../../../inc/wengapip.h"
 
 #include "swis.h"
@@ -267,6 +267,7 @@ KbdGetMode( KBDCLASS * pKbdClass )
 int WFCAPI
 KbdSetMode( KBDCLASS KbdClass )
 {
+ 
    // kbd open?
    if ( CurrentKbdMode == Kbd_Closed ) {
       return( CLIENT_ERROR_NOT_OPEN );
@@ -590,6 +591,13 @@ KbdRegisterHotkey( int HotkeyId, int ScanCode, int ShiftState )
    achHotkey[HotkeyId - CLIENT_STATUS_HOTKEY1].HotkeyId = HotkeyId;
    achHotkey[HotkeyId - CLIENT_STATUS_HOTKEY1].ScanCode = ScanCode;
    achHotkey[HotkeyId - CLIENT_STATUS_HOTKEY1].ShiftState = ShiftState;
+
+   // Mark a hotkey as undefined if both ScanCode and ShiftState are
+   // undefined.  This will make sure that no false hotkey is returned
+   // when it is searched with an undefined ScanCode and ShiftState.
+   if (ScanCode == 0 && ShiftState == 0) {
+      achHotkey[HotkeyId - CLIENT_STATUS_HOTKEY1].HotkeyId = 0;
+   }
 
    return( CLIENT_STATUS_SUCCESS );
 }

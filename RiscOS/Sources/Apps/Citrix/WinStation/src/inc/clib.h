@@ -9,12 +9,10 @@
 *
 *  $Author:      Brad Pedersen
 *
-*   clib.h,v
-*   Revision 1.1  1998/01/12 11:36:46  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.37   08 Jan 1998 15:23:58   brada
+*  Add additional clib functions for VDCM
 *  
 *     Rev 1.36   15 Apr 1997 18:44:50   TOMA
 *  autoput for remove source 4/12/97
@@ -61,7 +59,6 @@ extern char *strndup(const char *s, int maxlen);
 
 extern int strnicmp(const char *s1, const char *s2, int n);
 extern int stricmp(const char *s1, const char *s2);
-
 extern char *strupr(char *s);
 
 #define strcmpi(a,b) stricmp(a,b)

@@ -10,42 +10,34 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
-*   Revision 1.2  1998/01/27 18:39:11  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
-*   Revision 1.1  1998/01/19 19:12:58  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.16   Jan 14 1998 17:02:04   briang
+*  TWI Integration
+*
+*     Rev 1.16   08 Oct 1997 14:00:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.15   04 Aug 1997 19:18:22   kurtp
 *  update
-*  
+*
 *     Rev 1.14   15 Apr 1997 18:16:48   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.14   24 Mar 1997 11:23:02   kurtp
 *  update
-*  
+*
 *     Rev 1.13   13 Jan 1997 16:52:10   kurtp
 *  Persistent Cache
-*  
+*
 *     Rev 1.12   08 May 1996 14:54:14   jeffm
 *  update
-*  
+*
 *     Rev 1.11   27 Jan 1996 11:35:12   kurtp
 *  update
-*  
+*
 *     Rev 1.10   03 Jan 1996 13:33:40   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 
 #include <string.h>
@@ -1350,8 +1342,7 @@ void TWCmdBitBltScrToScrROP3( HWND hWnd, HDC device )
       srcbounds.bottom = ySrc + scrtoscrblt_dsdelta.deltay_last;
 
    }
-
-//we fall through to here with bRetcode1 having the return code for the operation
+   //we fall through to here with bRetcode1 having the return code for the operation
    //srcbounds has the source rectangle which is used to determine whether or not there
    //are any overlapping on top rectangles.  If there are then we need to request repaints.
 
@@ -1378,7 +1369,7 @@ void TWCmdBitBltScrToScrROP3( HWND hWnd, HDC device )
       wfnRepaintRects(lpoverlaprect,coverlaprect,TRUE);
       wfnFreeRects(lpoverlaprect);
    }
-   
+
    TRACE((TC_TW,TT_TW_COPY+TT_TW_ENTRY_EXIT,"TW: bitblt_scrtoscr_rop3 EXIT bRetcode1=%u\n", (UINT) bRetcode1));
 
    TWCmdReturn(bRetcode1);
@@ -1667,7 +1658,7 @@ more_data:
 
       //    validate signature is zero
       ASSERT( !(byte1 & 0x0f), byte1 );
-     
+
       if ( jtocache ) {
 
           // no object handle so ignore hi-byte and stuff low byte
@@ -1688,7 +1679,7 @@ more_data:
           GetNextTWCmdBytes((LPDWORD) &signatureHI, 4);
 
           (void) fTWDIMCacheRemove( signatureHI, signatureLO );
-          
+
           TRACE((TC_TW,TT_TW_BLT+TT_TW_DIM,"BltSrcCommon DIM remove from cache sig %8x%8x(C-0)\n", signatureHI, signatureLO));
 
           goto more_data;
@@ -2002,7 +1993,7 @@ more_data:
 
                   GetNextTWCmdBytes((LPDWORD) &signatureLO, 4);
                   GetNextTWCmdBytes((LPDWORD) &signatureHI, 4);
-        
+
                   TRACE((TC_TW,TT_TW_BLT+TT_TW_DIM,"BltSrcCommon DIM to cache sig %8x%8x(C-1)\n", signatureHI, signatureLO));
 
                   //jk256 - section 0 may have no data
@@ -2017,7 +2008,7 @@ more_data:
                if (section_count == 0) {
                   GetNextTWCmdBytes((LPWORD) &cache_handle, 2);
                   chain_handle = cache_handle;
-   
+
                   //jk256 - section 0 may have no data
                   if ((bitmap_header_flags(bm_header, color) == 2) && (dib_bytes_wide > 2040)) {
                      lpcache = lpTWCacheWrite((UINT) cache_handle, parm_chunk_type,
@@ -2028,7 +2019,7 @@ more_data:
                   }
                }
                else GetNextTWCmdBytes((LPWORD) &chain_handle, 2);
-   
+
                TRACE((TC_TW,TT_TW_BLT+TT_TW_CACHE,"TW: object handle=%u, chain handle=%u\n",
                                  (UINT) cache_handle, (UINT) chain_handle));
             }
@@ -2084,7 +2075,7 @@ more_data:
                   if (temp_scanlines_left > (UINT) total_scanlines_left) {
                      temp_scanlines_left = total_scanlines_left;
                   }
-                  num_bytes_to_unpack = temp_scanlines_left * 
+                  num_bytes_to_unpack = temp_scanlines_left *
                                         received_bytes_wide;
 
                   //  go do the unpack
@@ -2168,26 +2159,26 @@ more_data:
 #if 1
                   //  packed pixel format
                   if ( (vColor == Color_Cap_256) && (section_flags & 0x7000) ) {
-   
+
                      TRACE((TC_TW,TT_TW_BLT,"TW: CACHING, expanding rle data into temporary buffer\n",
                                           lpcache));
-   
+
                      section_bytecount = RleDecompress(section_rle_bytecount,
                                        (LPBYTE) lpstatic_buffer,
                                        (LPBYTE) (lpstatic_buffer+1022));
-   
+
                      TRACE((TC_TW,TT_TW_BLT,
                             "TW: unpacking pixels, flags %04x\n",
                             section_flags));
-   
+
                      // calculate byte to unpack
                      temp_scanlines_left = (2048 - cache_bytecount) / dib_bytes_wide;
                      if (temp_scanlines_left > (UINT) total_scanlines_left) {
                         temp_scanlines_left = total_scanlines_left;
                      }
-                     num_bytes_to_unpack = temp_scanlines_left * 
+                     num_bytes_to_unpack = temp_scanlines_left *
                                            received_bytes_wide;
-   
+
                      //  go do the unpack
                      bm_color = (BYTE) bitmap_header_flags(bm_header, color);
                      section_bytecount = UnpackPixels( (LPBYTE) (lpstatic_buffer+1022), 
@@ -2196,15 +2187,15 @@ more_data:
                                                        (WORD)   section_flags,
                                                        (BYTE)   bm_color,
                                                        (UINT)   num_bytes_to_unpack);
-   
+
                      TRACE((TC_TW, TT_TW_BLT, "TW: bytecount=%u\n",(UINT) section_bytecount));
                      ASSERT(section_bytecount > 0,0);
                      ASSERT(section_bytecount <= 2048,0);
-   
+
                      section_scanlines_left = section_bytecount / received_bytes_wide;
                      TRACE((TC_TW,TT_TW_BLT,"TW: CACHING total scanlines left=%u, scanlines in section=%u\n",
                                   total_scanlines_left,section_scanlines_left));
-   
+
                      finishedsize = cache_bytecount +
                                    MakeInvertedDibFormat((LPBYTE) lpstatic_buffer,
                                    (LPBYTE) lpcache,
@@ -2212,11 +2203,11 @@ more_data:
                                    section_scanlines_left);
                   }
                   else {
-   
+
                      //changing code to use RleInvertedDecompress
                      //need to compute section_scanlines_left from section size and
                      //the size of a color scanline in the cache == dib_bytes_wide
-   
+
                      section_scanlines_left = (2048 - cache_bytecount) / dib_bytes_wide;
                      if (section_scanlines_left > (UINT) total_scanlines_left) {
                         section_scanlines_left = total_scanlines_left;
@@ -2226,13 +2217,13 @@ more_data:
                                                 (LPBYTE) lpcache,
                                                 received_bytes_wide, dib_bytes_wide,
                                                 section_scanlines_left);
-   
+
                      TRACE((TC_TW, TT_TW_BLT, "TW: RleInverted Decompress bytecount=%u\n",(UINT) section_bytecount));
                      ASSERT(section_bytecount > 0,0);
                      ASSERT(section_bytecount <= (2048 - cache_bytecount),0);
                      TRACE((TC_TW,TT_TW_BLT,"TW: CACHING total scanlines left=%u, scanlines in section=%u\n",
                                   total_scanlines_left,section_scanlines_left));
-   
+
                      finishedsize = cache_bytecount + section_bytecount;
                   }
 #else
@@ -2294,7 +2285,7 @@ more_data:
                   if (temp_scanlines_left > (UINT) total_scanlines_left) {
                      temp_scanlines_left = total_scanlines_left;
                   }
-                  num_bytes_to_unpack = temp_scanlines_left * 
+                  num_bytes_to_unpack = temp_scanlines_left *
                                         received_bytes_wide;
 
                   //  go do the unpack
@@ -2354,7 +2345,7 @@ more_data:
 #endif
                   TRACE((TC_TW,TT_TW_BLT,"TW: CACHING total scanlines left=%u, scanlines in section=%u\n",
                                   total_scanlines_left,section_scanlines_left));
-    
+
                   //move directly into cache and we are done with this section
                   TRACE((TC_TW,TT_TW_BLT,"TW: moving data directly into cache at address=%lx\n",
                                        lpcache));
@@ -2389,9 +2380,9 @@ more_data:
                      if (temp_scanlines_left > (UINT) total_scanlines_left) {
                         temp_scanlines_left = total_scanlines_left;
                      }
-                     num_bytes_to_unpack = temp_scanlines_left * 
+                     num_bytes_to_unpack = temp_scanlines_left *
                                            received_bytes_wide;
-   
+
                      //  go do the unpack
                      bm_color = (BYTE) bitmap_header_flags(bm_header, color);
                      section_bytecount = UnpackPixels( (LPBYTE) (lpstatic_buffer+1022),
@@ -2414,7 +2405,7 @@ more_data:
 #endif
                   TRACE((TC_TW,TT_TW_BLT,"TW: CACHING total scanlines left=%u, scanlines in section=%u\n",
                                   total_scanlines_left,section_scanlines_left));
-    
+
                   finishedsize = cache_bytecount +
                                 MakeInvertedDibFormat((LPBYTE) lpstatic_buffer,
                                 (LPBYTE) lpcache,
@@ -2686,12 +2677,12 @@ more_data:
       }
       else {
          cache_handle = (word1 >> 8) | ((word1 << 8) & 0x0f00);
-   
+
          if (word1 & 0x0020) {
             parm_chunk_type = _512B;
          }
          else parm_chunk_type = _2K;
-   
+
          if (word1 & 0x0010) {
             //the special no header cached case
             bitmap_header_flags(bm_header, color) = 1;
@@ -2749,7 +2740,7 @@ more_data:
       // BUGBUG: read failed
       if ( jdim ) {
          if ( lpcache == NULL) {
-   
+
             // need to suck up more protocol
             if (working_case == cmplxclip) {
                cmplx_case = RECTFULL;
@@ -2757,12 +2748,12 @@ more_data:
                   cmplxCLPenum((LPINT) &cmplx_case, (LPRECT_ULH) &dest_rect);
                }
             }
-   
+
             // need to cache palette
             if (amountPaletteMapCache > 0) {
                PaletteMapCache(amountPaletteMapCache, handlePaletteMapCache);
             }
-   
+
             // notify host of error
             if ( vpVd ) {
                 CACHE_FILE_HANDLE fh;
@@ -2771,7 +2762,7 @@ more_data:
                 *((PULONG)&fh[4]) = signatureLO;
                 twDIMCacheError( vpVd, fh  );
             }
-   
+
             return(TRUE);
          }
       }
@@ -3077,7 +3068,7 @@ more_data:
       while (total_scanlines_left > 0) {
 
          if ( jdim ) {
-            lpcache = lpTWDIMCacheRead(signatureHI, signatureLO, 
+            lpcache = lpTWDIMCacheRead(signatureHI, signatureLO,
                                        (LPUINT) &cache_bytecount, section_count);
             // BUGBUG: dim file read error!
             if ( lpcache == NULL ) {
@@ -3090,7 +3081,7 @@ more_data:
                     *((PULONG)&fh[4]) = signatureLO;
                     twDIMCacheError( vpVd, fh  );
                 }
-       
+
                 return(TRUE);
             }
          }
@@ -3209,7 +3200,7 @@ more_data:
                                     DIB_ColorMode);
                TRACE((TC_TW,TT_TW_BLT,"SetDIBitsToDevice return code=%u\n",(UINT) retcode));
             }
-            else 
+            else
 #endif
             {
                //note: the following code was found to be 10 - 20% faster
@@ -3425,7 +3416,7 @@ more_data:
                      section_count, start_scanline, section_scanlines_left));
 
          if ( jdim ) {
-            lpcache = lpTWDIMCacheRead(signatureHI, signatureLO, 
+            lpcache = lpTWDIMCacheRead(signatureHI, signatureLO,
                                        (LPUINT) &cache_bytecount, section_count);
             // BUGBUG: dim file read error!
             if ( lpcache == NULL ) {
@@ -3438,14 +3429,14 @@ more_data:
                     *((PULONG)&fh[4]) = signatureLO;
                     twDIMCacheError( vpVd, fh  );
                 }
-       
+
                 break;
             }
          }
          else {
             lpcache = lpTWCacheRead((UINT) cache_handle, parm_chunk_type,
                                     (LPUINT) &cache_bytecount, section_count);
-         }                         
+         }
 
          //adjust lpcache if first section and has header
          if ( (!section_count) && (!bm_cache_special) ) {
@@ -3536,7 +3527,7 @@ more_data:
                                     DIB_ColorMode);
                TRACE((TC_TW,TT_TW_BLT,"SetDIBitsToDevice return code=%u\n",(UINT) retcode));
             }
-            else 
+            else
 #endif
             {
             //note: the following code was found to be 10 - 20% faster

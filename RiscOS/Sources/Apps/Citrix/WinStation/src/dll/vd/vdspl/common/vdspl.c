@@ -13,6 +13,14 @@
 *    Rewrote to support client-server model printers and
 *    Windows like print queues. This is to allow better integration
 *    of Windows printers into WinFrame.
+*
+* $Log$
+*  
+*     Rev 1.7   Oct 31 1997 19:41:40   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.6   Oct 09 1997 18:23:34   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.5   15 Apr 1997 18:05:20   TOMA
 *  autoput for remove source 4/12/97
@@ -35,7 +43,7 @@
 
 #include "cpmserv.h"
 
-#include "../../../../inc/biniapi.h"
+#include "../../../../inc/miapi.h"
 
 #include "../../../../inc/client.h"
 
@@ -131,23 +139,23 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
    /*
     * Get our settings from the profile file
     */
-   MaxWindowSize = bGetPrivateProfileInt(
-                       pVdOpen->pIniSection,
+   MaxWindowSize = miGetPrivateProfileInt(
+                       INI_VSLSECTION,
                        INI_CPMMAXWINDOWSIZE,
                        DEF_CPMMAXWINDOWSIZE
 		       );
 
-   WindowSize =    bGetPrivateProfileInt(
-                       pVdOpen->pIniSection,
+   WindowSize =    miGetPrivateProfileInt(
+                       INI_VSLSECTION,
                        INI_CPMWINDOWSIZE,
                        DEF_CPMWINDOWSIZE
 		       );
 
    //
    // Under windows the user can set a queue name to print to
-   // Under RISCOS use this for driver override
-   bGetPrivateProfileString(
-       pVdOpen->pIniSection,
+   //
+   miGetPrivateProfileString(
+       INI_VSLSECTION,
        INI_CPMQUEUE,
        DEF_CPMQUEUE,
        gcDefaultQueueName,
@@ -448,8 +456,6 @@ static int DriverGetLastError( PVD pVd, PVDLASTERROR pLastError )
  *    uChan (input)
  *       ICA channel the data is for.
  *
-
-
  *    pBuf (input)
  *       Buffer with arriving data packet
  *

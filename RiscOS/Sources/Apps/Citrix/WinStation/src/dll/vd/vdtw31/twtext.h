@@ -10,14 +10,9 @@
 *   Author: Marc Bloomfield (marcb) 15-Apr-1994 (tax day)
 *
 *   $Log$
-*   Revision 1.1  1998/01/19 19:12:55  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
+*  
+*     Rev 1.0   03 Dec 1997 17:47:30   terryt
+*  Initial revision.
 *  
 *     Rev 1.3   15 Apr 1997 18:16:30   TOMA
 *  autoput for remove source 4/12/97

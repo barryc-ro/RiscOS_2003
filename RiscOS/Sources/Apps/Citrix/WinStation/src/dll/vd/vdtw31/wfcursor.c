@@ -10,24 +10,25 @@
 *   Author: Kurt Perry (kurtp) 15-May-1995
 *
 *   $Log$
-*   Revision 1.1  1998/01/19 19:13:02  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.9   Jan 27 1998 15:54:36   briang
+*  Fix revision erroprs
+*  
+*     Rev 1.7   Jan 14 1998 17:02:18   briang
+*  TWI Integration
+*
+*     Rev 1.7   08 Oct 1997 15:00:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.6   15 Apr 1997 18:16:54   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.5   09 Feb 1996 11:27:52   kurtp
 *  update
-*  
+*
 *     Rev 1.4   03 Jan 1996 13:34:00   kurtp
 *  update
-*  
+*
 ****************************************************************************/
 
 #include "wfglobal.h"
@@ -139,7 +140,7 @@ int     vcyCursor = 32;
  *
  ****************************************************************************/
 
-void 
+void
 TWCmdPointerSetShape( HWND hWnd, HDC hDC )
 {
 
@@ -152,7 +153,7 @@ TWCmdPointerSetShape( HWND hWnd, HDC hDC )
 
         ASSERT( 0, 0 );
     }
- 
+
     TWCmdReturn( TRUE ); // return to NewNTCommand or ResumeNTCommand
 }
 
@@ -268,9 +269,9 @@ PointerSetShape( HWND hWnd, HDC hDC )
          *  Get color AND mask area in cache
          */
         if ( (fGeneral & GF_COLOR_POINTER) ) {
-    
+
             /*
-             *  Construct 12 bit color cache handle 
+             *  Construct 12 bit color cache handle
              */
             GetNextTWCmdBytes( &iTemp0, 1 );
             GetNextTWCmdBytes( &iTemp1, 1 );
@@ -297,7 +298,7 @@ PointerSetShape( HWND hWnd, HDC hDC )
          *  Get mono AND and XOR area in cache
          */
         else {
-            
+
             /*
              *  Construct 3 bit mono cache handle
              */
@@ -349,13 +350,13 @@ PointerSetShape( HWND hWnd, HDC hDC )
              *  For mono pointers get pointer to XOR area
              */
             if ( !(fGeneral & GF_COLOR_POINTER) ) {
-    
+
                 /*
                  *  Create XOR pointer just in case
                  */
                 lpXorMask = lpBuffer;
                 TRACE(( TC_TW, TT_TW_PTRSHAPE, "PointerSetShape: local pointer - lpXorMask=%08lx", lpXorMask ));
-    
+
                 /*
                  *  Move local buffer pointer
                  */
@@ -377,7 +378,7 @@ PointerSetShape( HWND hWnd, HDC hDC )
              *  Close the color write and open a read handle
              */
             if ( (fGeneral & GF_SAVE_MASK_AND_HOTSPOT) ) {
-    
+
                 finishedTWCacheWrite( BYTES_128 );
                 lpAndMask = lpTWCacheRead( hAndMask, _128B, &cbAndMask, 0 );
                 ASSERT( lpAndMask != NULL, 0 );
@@ -390,7 +391,7 @@ PointerSetShape( HWND hWnd, HDC hDC )
         else {
 
             /*
-             *  Retreive XOR mask 
+             *  Retreive XOR mask
              */
             GetNextTWCmdBytes( lpXorMask, SIZE_XOR_MASK );
 
@@ -404,7 +405,7 @@ PointerSetShape( HWND hWnd, HDC hDC )
                 ASSERT( lpAndMask != NULL, 0 );
             }
         }
-    }    
+    }
 
     /*
      *  Color?
@@ -446,13 +447,13 @@ PointerSetShape( HWND hWnd, HDC hDC )
         GetNextTWCmdBytes( &iTemp0, 1 );
         TRACE(( TC_TW, TT_TW_PTRSHAPE, "PointerSetShape: color specific command byte - %02x", iTemp0 ));
 
-        /* 
+        /*
          *  If storing or restoring bitmap get cache area for bitmap
          */
         if ( (iTemp0 & (CF_RESTORE_BITMAP | CF_SAVE_BITMAP)) ) {
 
             /*
-             *  Construct 12 bit color cache handle 
+             *  Construct 12 bit color cache handle
              */
             GetNextTWCmdBytes( &iTemp1, 1 );
             hBitmap = (int) ((iTemp0 & 0x0f) << 8) | (iTemp1 & 0xff);
@@ -520,7 +521,7 @@ PointerSetShape( HWND hWnd, HDC hDC )
                  */
                 lpBitmap = lpBuffer;
                 TRACE(( TC_TW, TT_TW_PTRSHAPE, "PointerSetShape: local pointer - lpBitmap=%08lx", lpBitmap ));
-    
+
                 /*
                  *  Move local buffer pointer
                  */
@@ -539,19 +540,19 @@ PointerSetShape( HWND hWnd, HDC hDC )
             llpBitmap = lpBuffer;
             lpBuffer += cbBitmap;
             for ( i = 0; i < vcyCursor; i++ ) {
-                memcpy( (llpBitmap + i * cbScanLine), 
-                        (lpBitmap + ((vcyCursor - i - 1) * cbScanLine)), 
+                memcpy( (llpBitmap + i * cbScanLine),
+                        (lpBitmap + ((vcyCursor - i - 1) * cbScanLine)),
                         cbScanLine );
             }
             memcpy( lpBitmap, llpBitmap, cbBitmap );
-        
+
             TRACE(( TC_TW, TT_TW_PTRSHAPE, "PointerSetShape: reversed color bitmap %08lx", (ULONG) llpBitmap ));
 
             /*
              *  Close the color write and open a read handle
              */
             if ( (iTemp0 & CF_SAVE_BITMAP) ) {
-    
+
                 finishedTWCacheWrite( cbCache );
                 lpBitmap = lpTWCacheRead( hBitmap, ChunkType, &cbRead, 0 );
                 ASSERT( cbRead == cbCache, cbRead );
@@ -578,13 +579,13 @@ PointerSetShape( HWND hWnd, HDC hDC )
          *  Remove current pointer and destroy it
          */
         DestroyPointer( hWnd );
-    
+
         /*
          *  Create color pointer
          *
          *  Note: CreateColorPointer does both image and ~image for WIN16
          */
-        hCursor = CreateColorPointer( hWnd, hDC, lpAndMask, lpBitmap, 
+        hCursor = CreateColorPointer( hWnd, hDC, lpAndMask, lpBitmap,
                                       bppBitmap, xHotSpot, yHotSpot );
 
 #ifdef WIN32
@@ -593,7 +594,7 @@ PointerSetShape( HWND hWnd, HDC hDC )
          *
          */
         InvertBitmap( lpAndMask, lpBitmap, cbBitmap );
-        vhCursorNot = CreateColorPointer( hWnd, hDC, lpAndMask, lpBitmap, 
+        vhCursorNot = CreateColorPointer( hWnd, hDC, lpAndMask, lpBitmap,
                                           bppBitmap, xHotSpot, yHotSpot );
         InvertBitmap( lpAndMask, lpBitmap, cbBitmap );
 #endif
@@ -613,7 +614,7 @@ PointerSetShape( HWND hWnd, HDC hDC )
          *  Remove current pointer and destroy it
          */
         DestroyPointer( hWnd );
-    
+
         /*
          *  Create mono pointer
          */
@@ -678,9 +679,9 @@ PointerSetShape( HWND hWnd, HDC hDC )
 
 HCURSOR
 CreateMonoPointer( HWND   hWnd,
-                   LPBYTE lpAndMask, 
-                   LPBYTE lpXorMask, 
-                   int    xHotSpot, 
+                   LPBYTE lpAndMask,
+                   LPBYTE lpXorMask,
+                   int    xHotSpot,
                    int    yHotSpot )
 {
     HCURSOR   hCursor = NULL;
@@ -698,12 +699,12 @@ CreateMonoPointer( HWND   hWnd,
     /*
      *  Create new cursor
      */
-    hCursor = CreateCursor( hInst, 
-                            xHotSpot, 
-                            yHotSpot, 
-                            vcxCursor, 
-                            vcyCursor, 
-                            lpAndMask, 
+    hCursor = CreateCursor( hInst,
+                            xHotSpot,
+                            yHotSpot,
+                            vcxCursor,
+                            vcyCursor,
+                            lpAndMask,
                             lpXorMask );
 
     ASSERT( hCursor != NULL, 0 );
@@ -738,11 +739,11 @@ CreateMonoPointer( HWND   hWnd,
 
 HCURSOR
 CreateColorPointer( HWND   hWnd,
-                    HDC    hDC, 
-                    LPBYTE lpAndMask, 
-                    LPBYTE lpBitmap, 
+                    HDC    hDC,
+                    LPBYTE lpAndMask,
+                    LPBYTE lpBitmap,
                     UINT   bppBitmap,
-                    int    xHotSpot, 
+                    int    xHotSpot,
                     int    yHotSpot )
 {
     HCURSOR hCursor   = NULL;
@@ -768,8 +769,8 @@ CreateColorPointer( HWND   hWnd,
     llpBitmap = lpBuffer;
     lpBuffer += (vcyCursor * cbScanLine);
     for ( i = 0; i < vcyCursor; i++ ) {
-        memcpy( (llpBitmap + i * cbScanLine), 
-                (lpBitmap + ((vcyCursor - i - 1) * cbScanLine)), 
+        memcpy( (llpBitmap + i * cbScanLine),
+                (lpBitmap + ((vcyCursor - i - 1) * cbScanLine)),
                 cbScanLine );
     }
 
@@ -781,24 +782,24 @@ CreateColorPointer( HWND   hWnd,
     if ( (vColor == Color_Cap_16) || (bppBitmap == BITMAP_4BPP) ) {
 
         for ( i=0, p=lpBuffer ; i<vcxCursor; i++ ) {
-    
+
             for ( j=0, dwMono=0; j<COLOR_BYTES_PER_SCANLINE_4BPP; j++ ) {
-    
+
                 b0 = *(llpBitmap + (i * COLOR_BYTES_PER_SCANLINE_4BPP) + j);
                 b1 = (b0 & 0x0f);
                 b0 = (b0 & 0xf0);
-    
+
                 dwMono = dwMono << 1;
                 if ( (b0 & 0x80) && (b0 != 0x90) && (b0 != 0xc0) )
                     ++dwMono;
-    
+
                 dwMono = dwMono << 1;
                 if ( (b1 & 0x08) && (b1 != 0x09) && (b1 != 0x0c) )
                     ++dwMono;
             }
-    
+
             for ( j=0; j<MONO_BYTES_PER_SCANLINE; j++ ) {
-    
+
                 *(p++) = (BYTE) ((dwMono & 0xff000000) >> 24);
                 dwMono = dwMono << 8;
             }
@@ -806,21 +807,21 @@ CreateColorPointer( HWND   hWnd,
     }
     else {
         for ( i=0, p=lpBuffer ; i<vcxCursor; i++ ) {
-    
+
             for ( j=0, dwMono=0; j<COLOR_BYTES_PER_SCANLINE_8BPP; j++ ) {
-    
+
                 b0 = *(llpBitmap + (i * COLOR_BYTES_PER_SCANLINE_8BPP) + j);
-    
+
                 dwMono = dwMono << 1;
-                if ( (((2 * vpLogPalette->palPalEntry[b0].peRed) + 
+                if ( (((2 * vpLogPalette->palPalEntry[b0].peRed) +
                        (1 * vpLogPalette->palPalEntry[b0].peBlue) +
                        (5 * vpLogPalette->palPalEntry[b0].peGreen)) / 8) > 128 ) {
                     ++dwMono;
                 }
             }
-    
+
             for ( j=0; j<MONO_BYTES_PER_SCANLINE; j++ ) {
-    
+
                 *(p++) = (BYTE) ((dwMono & 0xff000000) >> 24);
                 dwMono = dwMono << 8;
             }
@@ -833,7 +834,7 @@ CreateColorPointer( HWND   hWnd,
     hCursor = CreateMonoPointer( hWnd, lpAndMask, lpBuffer, xHotSpot, yHotSpot );
 
     /*
-     *  Invert pointer here for reverse image, more efficient for WIN16 
+     *  Invert pointer here for reverse image, more efficient for WIN16
      *  because there is no need to restore bitmap (transient).
      */
     InvertBitmap( lpAndMask, lpBuffer, BYTES_128 );
@@ -872,7 +873,7 @@ CreateColorPointer( HWND   hWnd,
      *  Create DIB different depending on color depth
      */
     if ( bppBitmap == BITMAP_4BPP ) {
-    
+
         /*
          *  Get local memory for bmi
          */
@@ -880,7 +881,7 @@ CreateColorPointer( HWND   hWnd,
         pbmi = (PBITMAPINFO) lpBuffer;
         lpBuffer += cbBMI;
         memset( pbmi, 0, cbBMI );
-     
+
         /*
          *  Create DI Bitmap
          */
@@ -891,9 +892,9 @@ CreateColorPointer( HWND   hWnd,
         pbmi->bmiHeader.biBitCount    = bppBitmap;
         pbmi->bmiHeader.biCompression = BI_RGB;
         memcpy( &(pbmi->bmiColors[0]), &(bitmapinfo_4BPP_RGBQUAD.bmiColors[0]), sizeof(RGBQUAD) * 16 );
-        hbmColor = CreateDIBitmap( hDC, 
-                                   (BITMAPINFOHEADER FAR *) pbmi, 
-                                   CBM_INIT, 
+        hbmColor = CreateDIBitmap( hDC,
+                                   (BITMAPINFOHEADER FAR *) pbmi,
+                                   CBM_INIT,
                                    lpBitmap,
                                    pbmi,
                                    DIB_RGB_COLORS );
@@ -908,7 +909,7 @@ CreateColorPointer( HWND   hWnd,
         pbmi = (PBITMAPINFO) lpBuffer;
         lpBuffer += cbBMI;
         memset( pbmi, 0, cbBMI );
-     
+
         /*
          *  Initialize header
          */
@@ -929,9 +930,9 @@ CreateColorPointer( HWND   hWnd,
         /*
          *  Create DI Bitmap
          */
-        hbmColor = CreateDIBitmap( hDC, 
-                                   (BITMAPINFOHEADER FAR *) pbmi, 
-                                   CBM_INIT, 
+        hbmColor = CreateDIBitmap( hDC,
+                                   (BITMAPINFOHEADER FAR *) pbmi,
+                                   CBM_INIT,
                                    lpBitmap,
                                    pbmi,
                                    DIB_PAL_COLORS );
@@ -1076,7 +1077,7 @@ DestroyPointer( HWND hWnd )
  *
  ****************************************************************************/
 
-VOID    
+VOID
 InvertBitmap( LPBYTE pAndMask, LPBYTE pBitmap, UINT cbBitmap )
 {
     BYTE c;
@@ -1090,9 +1091,9 @@ InvertBitmap( LPBYTE pAndMask, LPBYTE pBitmap, UINT cbBitmap )
      *  Handle mono and color differently
      */
     if ( cbBitmap == BYTES_128 ) {
-    
+
         for ( i=0; i<cbBitmap; i++ ) {
-    
+
             *(pBitmap+i) = *(pBitmap+i) ^ ~(*(pAndMask+i));
         }
     }
@@ -1102,8 +1103,8 @@ InvertBitmap( LPBYTE pAndMask, LPBYTE pBitmap, UINT cbBitmap )
          *  Reverse AND bitmap because DIBs are backwards
          */
         for ( i = 0; i < (UINT) vcyCursor; i++ ) {
-            memcpy( (lpBuffer + i * MONO_BYTES_PER_SCANLINE), 
-                    (pAndMask + ((vcyCursor - i - 1) * MONO_BYTES_PER_SCANLINE)), 
+            memcpy( (lpBuffer + i * MONO_BYTES_PER_SCANLINE),
+                    (pAndMask + ((vcyCursor - i - 1) * MONO_BYTES_PER_SCANLINE)),
                     MONO_BYTES_PER_SCANLINE );
         }
 
@@ -1129,8 +1130,8 @@ InvertBitmap( LPBYTE pAndMask, LPBYTE pBitmap, UINT cbBitmap )
          *  Reverse AND bitmap because DIBs are backwards
          */
         for ( i = 0; i < (UINT) vcyCursor; i++ ) {
-            memcpy( (lpBuffer + i * MONO_BYTES_PER_SCANLINE), 
-                    (pAndMask + ((vcyCursor - i - 1) * MONO_BYTES_PER_SCANLINE)), 
+            memcpy( (lpBuffer + i * MONO_BYTES_PER_SCANLINE),
+                    (pAndMask + ((vcyCursor - i - 1) * MONO_BYTES_PER_SCANLINE)),
                     MONO_BYTES_PER_SCANLINE );
         }
 

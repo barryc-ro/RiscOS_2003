@@ -6,14 +6,15 @@
 *
 *  Copyright Citrix Systems Inc. 1995
 *
-*  smiddle
+*  $Author$
 *
-*  logflags.h,v
-*  Revision 1.1  1998/01/12 11:36:51  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.8   Feb 17 1998 20:06:46   briang
+*  Add a trace flag for VDLIC virtual channel debugging
+*  
+*     Rev 1.7   26 Sep 1997 19:09:30   davidp
+*  Added TC_CAM trace flag
 *  
 *     Rev 1.6   15 Apr 1997 18:45:24   TOMA
 *  autoput for remove source 4/12/97
@@ -67,6 +68,8 @@
 #define TC_IPC      0x00080000
 #define LOG_WLOG    0x00100000     // Send to WFDBG instead of to a file
 #define TC_WFSHELL  0x00200000
+#define TC_CAM      0x00400000
+#define TC_VDLIC    0x00800000
 #define LOG_ASSERT  0x40000000     // Always log this class 
 #define LOG_CLASS   0x80000000     // UI: standard event logging class 
 #define TC_ALL      0xffffffff

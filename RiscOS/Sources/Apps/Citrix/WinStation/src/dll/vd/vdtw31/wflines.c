@@ -11,15 +11,24 @@
 *
 *   $Log$
 *  
+*     Rev 1.5   Jan 26 1998 23:50:46   briang
+*  Add more guards to TWI_Stuff since it broke Win16
+*  
+*     Rev 1.4   Jan 14 1998 17:02:36   briang
+*  TWI Integration
+*
+*     Rev 1.3   08 Oct 1997 15:00:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.2   15 Apr 1997 18:17:02   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.2   21 Mar 1997 16:09:38   bradp
 *  update
-*  
+*
 *     Rev 1.1   03 Jan 1996 13:34:10   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 
 #define CITRIX
@@ -38,7 +47,15 @@
 #include "twstroke.h"
 //#include "hw.h"
 
-#define ULONG_MAX	  0xffffffff	/* maximum unsigned long value */
+#include "twi_en.h"
+
+#ifdef TWI_INTERFACE_ENABLED
+
+#include "apdata1.h"    // TWI common data, ref only
+
+#endif  //TWI_INTERFACE_ENABLED
+
+#define ULONG_MAX         0xffffffff    /* maximum unsigned long value */
 #define abs labs
 
 #else
@@ -103,7 +120,7 @@ FLONG gaflRound[] = {
 VOID bIntegerLine(HDC, ULONG, ULONG, ULONG, ULONG);
 BOOL bHardwareLine(HDC, TWPOINTFIXI*, TWPOINTFIXI*);
 
-#else 
+#else
 
 BOOL bIntegerLine(PDEV*, ULONG, ULONG, ULONG, ULONG);
 BOOL bHardwareLine(PDEV*, POINTFIX*, POINTFIX*);
@@ -548,20 +565,20 @@ BOOL bHardwareLine(PDEV*, POINTFIX*, POINTFIX*);
 BOOL bLines(
 #ifdef CITRIX
 
-DEVSURF*     pdevsurf, 
+DEVSURF*     pdevsurf,
 HDC          hDC,
-TWPOINTFIXI* pptfxFirst, 
-TWPOINTFIXI* pptfxBuf, 
-TWRUNI*      prun, 
+TWPOINTFIXI* pptfxFirst,
+TWPOINTFIXI* pptfxBuf,
+TWRUNI*      prun,
 ULONG        cptfx,
-LINESTATE2*  pls, 
-RECTL*       prclClip, 
-PFNSTRIP2*   apfn, 
+LINESTATE2*  pls,
+RECTL*       prclClip,
+PFNSTRIP2*   apfn,
 FLONG        flStart)
 
 #else
 
-PDEV*	   ppdev,
+PDEV*      ppdev,
 POINTFIX*  pptfxFirst,  // Start of first line
 POINTFIX*  pptfxBuf,    // Pointer to buffer of all remaining lines
 RUN*       prun,        // Pointer to runs if doing complex clipping
@@ -614,7 +631,7 @@ FLONG      flStart)     // Flags for each line
 #endif
     STYLEPOS  spThis;                         // Style pos for this line
 
-    TRACE(( TC_TW, TT_TW_ENTRY_EXIT+TT_TW_STROKE, "bLines: entered" )); 
+    TRACE(( TC_TW, TT_TW_ENTRY_EXIT+TT_TW_STROKE, "bLines: entered" ));
 
     do {
 
@@ -631,16 +648,16 @@ FLONG      flStart)     // Flags for each line
         fl = flStart;
 
 #ifdef CITRIX
-	// Check for non-complex clipped, non-styled integer endpoint lines
+        // Check for non-complex clipped, non-styled integer endpoint lines
         if ((fl & (FL_COMPLEX_CLIP | FL_STYLED)) == 0)
 #else
-	// Check for non-clipped, non-styled integer endpoint lines
+        // Check for non-clipped, non-styled integer endpoint lines
         if ((fl & (FL_CLIP | FL_STYLED)) == 0)
 #endif
         {
             // Special-case integer end-point lines:
 
-	    if (((M0 | dM | N0 | dN) & (F - 1)) == 0)
+            if (((M0 | dM | N0 | dN) & (F - 1)) == 0)
             {
 #ifdef CITRIX
                 bIntegerLine( hDC, M0, N0, dM, dN );
@@ -660,8 +677,8 @@ FLONG      flStart)     // Flags for each line
 #endif
             }
         }
-	
-        TRACE(( TC_TW, TT_TW_STROKE, "bLines: COMPLEX_CLIP or STYLED" )); 
+
+        TRACE(( TC_TW, TT_TW_STROKE, "bLines: COMPLEX_CLIP or STYLED" ));
 
         if ((LONG) M0 > (LONG) dM)
         {
@@ -852,9 +869,9 @@ FLONG      flStart)     // Flags for each line
         // Calculate x0, x1
 
             ULONG N1 = FXFRAC(N0 + dN);
-	    ULONG M1 = FXFRAC(M0 + dM);
+            ULONG M1 = FXFRAC(M0 + dM);
 
-	    x1 = LFLOOR(M0 + dM);
+            x1 = LFLOOR(M0 + dM);
 
             if (fl & FL_FLIP_H)
             {
@@ -1265,7 +1282,7 @@ FLONG      flStart)     // Flags for each line
         plStripEnd = &strip.alStrips[STRIP_MAX];    // Is exclusive
         cStripsInNextRun   = 0x7fffffff;
 
-	strip.ptlStart = ptlStart;
+        strip.ptlStart = ptlStart;
 
         if (2 * dN > dM &&
             !(fl & FL_STYLED) &&
@@ -1423,39 +1440,50 @@ FLONG      flStart)     // Flags for each line
 VOID
 bIntegerLine (
 HDC     hDC,
-ULONG	X1,
-ULONG	Y1,
-ULONG	X2,
-ULONG	Y2
+ULONG   X1,
+ULONG   Y1,
+ULONG   X2,
+ULONG   Y2
 )
 {
 
+#ifdef TWI_INTERFACE_ENABLED
     X1 >>= 4;
     Y1 >>= 4;
     X2 >>= 4;
     Y2 >>= 4;
+#else
+    X1 = ((LONG)X1) >> 4;
+    Y1 = ((LONG)Y1) >> 4;
+    X2 = ((LONG)X2) >> 4;
+    Y2 = ((LONG)Y2) >> 4;
+#endif
 
-    TRACE(( TC_TW, 
-            TT_TW_STROKE, 
+    TRACE(( TC_TW,
+            TT_TW_STROKE,
 //          0x80000000,
             "bIntegerLine: x1 %x, y1 %x, x2 %x, y2 %x",
             X1, Y1, X2, Y2 ));
 
     if ( MoveToEx( hDC, (INT) X1, (INT) Y1, NULL ) ) {
         LineTo( hDC, (INT) X2, (INT) Y2 );
+#ifdef TWI_INTERFACE_ENABLED
+    MyLine( (INT)X1, (INT)Y1, (INT)X2, (INT)Y2 );
+#endif  //TWI_INTERFACE_ENABLED
+
     }
 #ifdef DEBUG
     else {
-        TRACE(( TC_TW, 
+        TRACE(( TC_TW,
 //              TT_TW_STROKE,
-                0x80000000, 
+                0x80000000,
                 "bIntegerLine: MoveTo failed x1 %x, y1 %x, x2 %x, y2 %x",
                 X1, Y1, X2, Y2 ));
     }
 #endif
 }
 
-#else 
+#else
 
 //////////////////////////////////////////////////////////////////////////
 // General defines for bHardwareLine

@@ -1,5 +1,4 @@
-
-/*************************************************************************
+/****************************************************************************
 *
 *   CFGINI.C
 *
@@ -9,12 +8,82 @@
 *
 *   Author: Butch Davis (5/12/95) [from Kurt Perry's CFG library]
 *
-*   cfgini.c,v
-*   Revision 1.1  1998/01/12 11:37:14  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.69   Feb 23 1998 17:25:56   sumitd
+*  Overwrote Kalyan's changes - oops...
+*  
+*     Rev 1.68   Feb 20 1998 11:12:50   sumitd
+*  CPR 8759 - Was freeing up already free memory
+*  
+*     Rev 1.67   18 Feb 1998 12:35:06   kalyanv
+*  fixed cpt 8660, removed the freeing of pList since
+*  
+*     Rev 1.66   16 Feb 1998 09:43:34   kalyanv
+*  fix for cpr 8442, added check for loading vdcm.dll
+*  
+*     Rev 1.65   Feb 06 1998 17:54:40   briang
+*  Fix Call to SupportRequired to use correct Section Name
+*  
+*     Rev 1.64   Jan 28 1998 18:57:54   briang
+*  Allow non-TCPIP ICA files connections if full client installed
+*  
+*     Rev 1.63   Jan 07 1998 21:33:54   briang
+*  Fix some memory leaking
+*  
+*     Rev 1.62   06 Jan 1998 16:11:14   butchd
+*  update
+*  
+*     Rev 1.61   03 Dec 1997 11:33:00   terryt
+*  vesa client
+*  
+*     Rev 1.60   Oct 28 1997 23:38:46   briang
+*  Fix for checking if support is required in INI files
+*  
+*     Rev 1.59   28 Oct 1997 16:44:14   stephens
+*  Added CLIENT_ERROR_DRIVER... for DOS Audio Driver
+*  
+*     Rev 1.58   Oct 22 1997 11:56:38   briang
+*  Allow Server section to overwrite WFClient sections
+*  
+*     Rev 1.57   Oct 21 1997 17:49:08   briang
+*  Allow for non-case matching INI entries
+*  
+*     Rev 1.51   17 Oct 1997 14:38:44   terryt
+*  fix audio disable
+*  
+*     Rev 1.50   Oct 16 1997 10:36:02   briang
+*  Add a generic section for serial conns
+*  
+*     Rev 1.49   15 Oct 1997 14:38:56   tariqm
+*  Audio disabling
+*  
+*     Rev 1.48   Oct 14 1997 15:20:36   briang
+*  add internetclient support
+*  
+*     Rev 1.47   Oct 13 1997 18:11:54   briang
+*  Fix Memory Leak in EatWhiteSpace
+*  
+*     Rev 1.46   Oct 13 1997 10:06:08   briang
+*  Get rid of my extra trace code
+*  
+*     Rev 1.43   Oct 10 1997 17:05:28   briang
+*  update
+*  
+*     Rev 1.40   Oct 10 1997 13:38:58   briang
+*  Update
+*  
+*     Rev 1.37   29 Sep 1997 16:02:28   davidp
+*  Put audio VD load hack into main VD load loop so it can be disabled
+*  
+*     Rev 1.36   26 Sep 1997 19:18:20   davidp
+*  Added temporary hack to load VDCAM in Win16 and Win32
+*  
+*     Rev 1.35   26 Sep 1997 15:50:52   dmitryv
+*  Changed GetSection() for WIN32 to work the same as WIN16 because of a WIN95 bug that won't open ReadOnly INI files
+*  
+*     Rev 1.35   25 Sep 1997 16:41:46   dmitryv
+*  Changed GetSection() for WIN32 to work the same as WIN16 because of a WIN95 bug that won't open ReadOnly INI files
 *  
 *     Rev 1.34   04 Aug 1997 20:11:26   tariqm
 *  Encryption support for web clients
@@ -76,30 +145,52 @@
 #include "inidef.h"
 
 /*=============================================================================
+==   If we're building for DOS model, we'll get our memINI routines through
+== the proctable method.  Otherwise (for Windows UI), we'll snarf in the guts
+== of the memINI APIs and build them in static-like.  To make life easier for
+== Windows UI OEMs wanting to add CFGINI support (or not).
+=============================================================================*/
+#ifdef DOS
+#include "../ini/helpers.c"
+#include "../../inc/miapi.h"
+#else
+#include "../memini/memguts.c"
+#endif
+
+/*=============================================================================
 ==   Local Functions Used
 =============================================================================*/
 
-int CombineAndLoadSession( HANDLE, PCHAR, PCFGINIOVERRIDE,
-                           PCHAR, PCHAR, PCHAR, PCHAR * );
-int MergeAndLoadPd( HANDLE, PCHAR, PCHAR, PCHAR );
-int MergeAndLoadWd( HANDLE, PCHAR, PCHAR ,PCHAR );
-int MergeAndLoadVd( HANDLE, PCHAR, PCHAR, PCHAR, PCHAR );
-int GetModuleName( PCHAR *, PCHAR );
+int MakeProfileAndLoadSession( HANDLE, PCHAR, PCHAR, PCFGINIOVERRIDE,
+                               PCHAR, PCHAR, PCHAR, BOOL);
+int LoadPdDll( HANDLE, PCHAR, PCHAR );
+int LoadWdDll( HANDLE, PCHAR, PCHAR );
+int LoadVdDll( HANDLE, PCHAR, PCHAR, PCHAR );
+
 PLIST BuildList( PCHAR, PCHAR, PCHAR, PCHAR, PCHAR );
+PLIST BuildMembersList( PCHAR, PCHAR, PCHAR );
+VOID  DestroyList( PLIST );
+VOID  DestroySList( PSECTIONLIST );
 PCHAR GetFirstElement( PCHAR );
 PCHAR GetNextElement( PCHAR );
-VOID  DestroyList( PLIST );
-int   SupportRequired( PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, PCHAR );
+PSECTIONLIST BuildAllSectionsList( PCHAR, PCHAR, PCHAR, PCHAR, PCHAR );
+
+char  * basename( char *);
 void  GetString( PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, int );
-int GetSection( PCHAR, PCHAR, PCHAR * );
-int GetSectionLength( PCHAR );
-PCHAR MergeSections( PCHAR, PCHAR, PCHAR );
-PCHAR MergePrivateProfileEntries( PCHAR, PCHAR );
-PCHAR CombinePrivateProfileEntries( PCHAR, PCHAR );
+int   SupportRequired( PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, BOOL );
+int   GetSection( PCHAR, PCHAR, PCHAR *, PLIST );
+int   GetPrivateProfileStringDefault( PCHAR pSection, PCHAR pKey, 
+                                      PCHAR pBuf, int cbLen, PCHAR pFile);
+int   GetPrivateProfileSectionDefault( PCHAR pSection, PCHAR pBuf, 
+                                       int cbLen, PCHAR pFile);
+int   GetSectionString(PCHAR, PCHAR, PCHAR, PCHAR, int);
+int   IniSize( PCHAR );
 PCHAR BuildCfgIniOverridesSection( PCFGINIOVERRIDE );
-char * basename( char *);
-int GetPrivateProfileSectionDefault( PCHAR pSection, PCHAR pBuf, int cbLen, PCHAR pFile);
-int GetPrivateProfileStringDefault( PCHAR pSection, PCHAR pKey, PCHAR pBuf, int cbLen, PCHAR pFile);
+PCHAR CombinePrivateProfileEntries( PCHAR, PCHAR );
+PCHAR ConcatSections( PCHAR, PCHAR );
+PCHAR AddHeaderSection(PCHAR , PCHAR );
+PCHAR AddEntrySection(PCHAR , PCHAR, PCHAR );
+void  EatWhiteSpace(PCHAR);
 
 /*=============================================================================
 ==   Local Variables
@@ -117,18 +208,6 @@ extern CLIENTNAME   gszClientName;
 /*=============================================================================
 ==   Global Data
 =============================================================================*/
-
-/*=============================================================================
-==   If we're building for DOS model, we'll get our bINI routines through
-== the proctable method.  Otherwise (for Windows UI), we'll snarf in the guts
-== of the bINI APIs and build them in static-like.  To make like easier for
-== Windows UI OEMs wanting to add CFGINI support (or not).
-=============================================================================*/
-#ifdef DOS
-#include "../../inc/biniapi.h"
-#else
-#include "../bini/biniguts.c"
-#endif
 
 /*******************************************************************************
  *
@@ -169,30 +248,25 @@ CfgIniLoad( HANDLE   hClientHandle,
     int    rc;
     PCHAR  pWdType;
     PCHAR  pPdType;
+    char   *pEncryption, *pTAPIModem;
     PLIST  pList = NULL;
     PLIST  pSave = NULL;
-    PCHAR  pModem = NULL;
-    PCHAR  pDriverList = NULL;
-    PCHAR  pConnSection = NULL;
-    PCHAR  pPdSection = NULL;
-    PCHAR  pPdSection2 = NULL;
-    PCHAR  pVdSection = NULL;
-    PCHAR  pVdSectionGlobal = NULL;
-    PCHAR  pWdSection = NULL;
-    PCHAR  pDeviceSection = NULL;
-    char   *pEncryption;
-    DEVICENAME pszDeviceName;
-    PCHAR pTemp;
-    BOOL bEncryption = FALSE;
-    BOOL bInternetConnection = FALSE;
-    char Buffer[sizeof(INI_CLIENTNAME) + sizeof(CLIENTNAME) + 4];
-    int i;
+    char   AudioOnOff[4]; // temp space for audio driver loading...
+    char   ClientUpdatesOnOff[4];
+    char   pszBuffer[20];   
+    char   *pszDriver = INI_DRIVERNAME;
+ 
+    DEVICENAME      pszDeviceName;
+    BOOL            bTapi = FALSE;
+    BOOL            bEncryption = FALSE;
+    BOOL            bInternetConnection = FALSE;
     ENCRYPTIONLEVEL szEncryptionLevelSession; 
+    int i;
 
 #ifdef RISCOS
     DefIniSect[0].pINISect = ModuleSect;
     DefIniSect[1].pINISect = WfclientSect;
-    
+
     WfclientSect[0].pSectDefault = szWFThinWireSect;
     WfclientSect[1].pSectDefault = szWfclientSect;
 
@@ -203,14 +277,17 @@ CfgIniLoad( HANDLE   hClientHandle,
     ModuleSect[4].pSectDefault = szThinwire30Sect;
     ModuleSect[5].pSectDefault = szClientDriveSect;
     ModuleSect[6].pSectDefault = szClientPrinterSect;
-    ModuleSect[7].pSectDefault = szClipboardSect;    
+    ModuleSect[7].pSectDefault = szClipboardSect;
 #endif
 
+     TRACE((TC_LIB, TT_API1, "CfgIniLoad: Connection %s, Server File %s, Protocol File %s", pConnection, pServerFile, pProtocolFile));
+    
     *pszDeviceName = '\0';
-    pEncryption = (char*) malloc(15);      // storage for our encryption PD trap
-    memset(pEncryption, 0, sizeof(pEncryption));
-    TRACE((TC_LIB, TT_API1, "CfgIniLoad: Connection %s, Server File %s, Protocol File %s", pConnection, pServerFile, pProtocolFile));
-
+    pEncryption = (char*)malloc(15);
+    memset(pEncryption, 0, 15);
+    pTAPIModem = (char*)malloc(strlen(INI_TAPIMODEM) + 1);
+    strcpy(pTAPIModem, INI_TAPIMODEM);
+    
     /*
      *  allocate space for protocol and winstation name
      */
@@ -235,7 +312,8 @@ CfgIniLoad( HANDLE   hClientHandle,
 #ifndef DOS
         /*
          * Windows ASYNC clients will have the TransportDriver specified in
-         * the device.  Check there before failing.
+         * the device, or will be implicit INI_SERIAL if TAPI is being used.
+         * Check device or for TAPI before failing.
          */
         GetPrivateProfileString( pConnection,
                                  INI_DEVICE,
@@ -244,12 +322,31 @@ CfgIniLoad( HANDLE   hClientHandle,
                                  sizeof(pszDeviceName),
                                  pServerFile );
         if ( *pszDeviceName ) {
-            GetPrivateProfileString( pszDeviceName,
-                                     INI_TRANSPORTDRIVER,
-                                     INI_SERIAL,    // default to standard COM
-                                     pPdType,
-                                     MAX_INI_LINE,
-                                     pConfigFile );
+
+            /*
+             * Check for TAPI first
+             */
+            GetPrivateProfileString( pConnection,
+                                     INI_TAPIDEVICE,
+                                     INI_OFF,
+                                     pszBuffer,
+                                     sizeof(pszBuffer),
+                                     pServerFile );
+
+            if ( !stricmp(pszBuffer, INI_ON) ) {
+
+                bTapi = TRUE;
+                strcpy(pPdType, INI_SERIAL);    // TAPI uses standard COM
+
+            } else {
+
+                GetPrivateProfileString( pszDeviceName,
+                                         INI_TRANSPORTDRIVER,
+                                         INI_SERIAL,
+                                         pPdType,
+                                         MAX_INI_LINE,
+                                         pConfigFile );
+            }
         }
 
         /*
@@ -280,83 +377,11 @@ CfgIniLoad( HANDLE   hClientHandle,
     }
     TRACE((TC_LIB, TT_API1, "CfgIniLoad: WinStation Type %s", pWdType));
 
-    /*
-     *  allocate space for driver list
-     */
-    if ( (pDriverList = (PCHAR) malloc( MAX_INI_LINE )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
-    }
-
-    /*         
-     * Form combined connection buffered INI section (with command-line
-     * overrides) and load session.
-     */
-    if ( rc = CombineAndLoadSession( hClientHandle, pConnection, 
-                                     pCfgIniOverrides,
-                                     pServerFile, pConfigFile, 
-                                     pProtocolFile, &pConnSection ) ) {
-        goto done;
-    }
 
     /*
-     *  get the primary sections buffered for passing to MergeAndLoadXd calls
+     * find out if this connection was made by an Internet client
+     * this will update the bInternetConnection boolean.
      */
-    if ( (rc = GetSection( pPdType, pProtocolFile, &pPdSection )) 
-                        != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_PD_SECTION_NOT_FOUND;
-        goto done;
-    }
-    else if ( (rc = GetSection( pWdType, pProtocolFile, &pWdSection ))
-                        != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_WD_SECTION_NOT_FOUND;
-        goto done;
-    }
-
-    /*
-     * Fetch the device section if specified.  (NOTE: Windows ASYNC will
-     * have already filled-in pszDeviceName at this point).
-     */
-    if ( !*pszDeviceName ) {
-        GetString( pPdType, pProtocolFile, pConnection, pServerFile, 
-                   INI_DEVICE, pszDeviceName, sizeof(pszDeviceName) );
-    }
-    TRACE((TC_LIB, TT_API1, "CfgIniLoad: Device(%s)", pszDeviceName ));
-
-    if ( *pszDeviceName ) {
-        if ( (rc = GetSection( pszDeviceName, pConfigFile, &pDeviceSection ))
-                        != CLIENT_STATUS_SUCCESS ) {
-            if ( rc == -1 )
-                rc = CLIENT_ERROR_DEVICE_SECTION_NOT_FOUND;
-            goto done;
-        }
-    }
-
-    /*
-     * Build the ClientName=xxx" entry and then Combine with pPdSection.
-     */
-    sprintf( Buffer, "%s=%s", INI_CLIENTNAME, gszClientName );
-    if ( (pTemp = CombinePrivateProfileEntries( pPdSection, Buffer )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
-    }
-
-    free( pPdSection );
-    pPdSection = pTemp;
-
-    /*
-     *  load transport Pd
-     */
-    if ( rc = MergeAndLoadPd( hClientHandle, pConnSection, 
-                              pPdSection, pDeviceSection ) ) {
-        goto done;
-    }
-
-    //find out if this connection was made by an Internet client
-    //this will update the bInternetConnection boolean.
-
     i = 0;
     bInternetConnection = FALSE;
     while ( pCfgIniOverrides[i].pszKey ) {
@@ -370,6 +395,35 @@ CfgIniLoad( HANDLE   hClientHandle,
       else 
        i++;
     }
+    
+    /*         
+     * Make a buffered profile from all our files and CfgIniOverrides
+     * and load the session.
+     */
+    if ( rc = MakeProfileAndLoadSession( hClientHandle, pConnection, 
+                                         pPdType, pCfgIniOverrides,
+                                         pServerFile, pConfigFile, 
+                                         pProtocolFile, bInternetConnection ) ) {
+        goto done;
+    }
+    
+    /*
+     * Fetch the device section if specified.  (NOTE: Windows ASYNC will
+     * have already filled-in pszDeviceName at this point).
+     */
+    if ( !*pszDeviceName ) {
+        GetString( pPdType, pProtocolFile, pConnection, pServerFile, 
+                   INI_DEVICE, pszDeviceName, sizeof(pszDeviceName) );
+    }
+    TRACE((TC_LIB, TT_API1, "CfgIniLoad: Device(%s)", pszDeviceName ));
+
+    /*
+     *  load transport Pd
+     */
+    if ( rc = LoadPdDll( hClientHandle, pPdType, pProtocolFile ) ) {
+        goto done;
+    }
+
 
     //We need to find out if this is a non-encrypted internet client..
     // ....backward compatibility. we will not call this an internet client/connection :)
@@ -381,7 +435,7 @@ CfgIniLoad( HANDLE   hClientHandle,
                               pServerFile);
       bInternetConnection = (strcmp(szEncryptionLevelSession, "Old") != 0);
     }
-
+    
     /*
      *  Build PD list and load in order.
      */
@@ -399,74 +453,60 @@ CfgIniLoad( HANDLE   hClientHandle,
         /*
          *  check if current Pd is required
          */
-
-        
           
-            if ( !SupportRequired( pProtocolFile, pPdType, 
-                               pServerFile, pConnection,
-                               pList->pElement, pDeviceSection ) )
+            if ( !SupportRequired( pPdType, pConnection,
+                                   pList->pElement, pszDeviceName,
+                                   pProtocolFile, pConfigFile, pServerFile,
+                                   bTapi ) )
             continue;
 
-        /*
-         *  get the secondary pd section for this pd
-         */
+         //trap here  for the special processing for Encrypt Pd.
+         if ( stricmp(pList->pElement, "Encrypt") == 0 ) { 
+ 
+             bEncryption = TRUE;   // this connection needs Encryption Pd
+ 
+             // get the encryption Level from the CfgIniOverrrides
+             
+             i = 0;
+             while ( pCfgIniOverrides[i].pszKey ) {
+                 if ( stricmp(pCfgIniOverrides[i].pszKey, INI_ENCRYPTIONDLL ) == 0) {
+                      strcpy(pEncryption, pCfgIniOverrides[i].pszValue);
+                      free(pList->pElement);            // free old list element
+                      pList->pElement = pEncryption;    // and assign new
+                      break;
+                 }
+                 else                         
+                     i++;
+             }
+ 
+         }
 
-        //trap here  for the special processing for Encrypt Pd.
-        if ( stricmp(pList->pElement, "Encrypt") == 0 ) { // this is the encryption pd
+        // Special processing for TAPI modem
+        if ( (stricmp(pList->pElement, "Modem") == 0) && bTapi ) {
 
-            bEncryption = TRUE;   // this connection needs Encryption Pd
-
-            // get the encryption Level from the CfgIniOverrrides
-            
-            i = 0;
-            while ( pCfgIniOverrides[i].pszKey ) {
-                if ( stricmp(pCfgIniOverrides[i].pszKey, INI_ENCRYPTIONDLL ) == 0) {
-                     strcpy(pEncryption, pCfgIniOverrides[i].pszValue);   // make a copy
-                     pList->pElement = pEncryption;
-                     break;
-                }
-                else                         
-                    i++;
-            }
-
-        }
-                    
-        if ( bEncryption && bInternetConnection) {   
-
-            // for Internet connections we will use the section in
-            // the ICAFile to get the encryption *.dll
-
-          if ( (rc = GetSection( pList->pElement, 
-                                 pServerFile, &pPdSection2 ))
-                          != CLIENT_STATUS_SUCCESS ) {
-              if ( rc == -1 )
-                  rc = CLIENT_ERROR_PD_SECTION_NOT_FOUND;
-              goto done;
-          }
-        }
-        else {
-
-          if ( (rc = GetSection( pList->pElement, 
-                                 pProtocolFile, &pPdSection2 ))
-                          != CLIENT_STATUS_SUCCESS ) {
-              if ( rc == -1 )
-                  rc = CLIENT_ERROR_PD_SECTION_NOT_FOUND;
-              goto done;
-          }
-
+            free(pList->pElement);          // free old list element
+            pList->pElement = pTAPIModem;   // and assign new
         }
 
         /*
          *  load the current Pd
          */
-        if ( rc = MergeAndLoadPd( hClientHandle, pConnSection, 
-                                  pPdSection2, pDeviceSection ) ) {
-            goto done;
-        }
-
-        //  free sections
-        free( pPdSection2 );
-        pPdSection2 = NULL;
+         if ( bEncryption && bInternetConnection) {   
+ 
+             /*
+              * for Internet connections we will use the section in
+              * the ICAFile (ServerFile) to get the encryption *.dll
+              */
+            if ( rc = LoadPdDll( hClientHandle, pList->pElement, pServerFile ) ) {
+                goto done;
+            }
+         }
+         else {
+            if ( rc = LoadPdDll( hClientHandle, pList->pElement, pProtocolFile ) ) {
+                goto done;
+            }
+ 
+         }
     }
 
     /*
@@ -475,13 +515,14 @@ CfgIniLoad( HANDLE   hClientHandle,
     DestroyList( pSave );
     pSave = NULL;
 
+
     /*
      *  load winstation driver next
      */
-    if ( rc = MergeAndLoadWd( hClientHandle, pConnSection, 
-                              pPdSection, pWdSection ) ) {
+    if ( rc = LoadWdDll( hClientHandle, pWdType, pProtocolFile ) ) {
         goto done;
     }
+
 
     /*
      *  Build VD list and load in order.
@@ -492,74 +533,76 @@ CfgIniLoad( HANDLE   hClientHandle,
           pList = pList->pNext ) {
 
         TRACE(( TC_LIB, TT_API1, "CfgIniLoad: vdSection(%s)", pList->pElement ));
-        /*
-         *  get the vd section
-         */
-        if ( (rc = GetSection( pList->pElement, 
-                               pProtocolFile, &pVdSection )) 
-                        != CLIENT_STATUS_SUCCESS ) {
-            if ( rc == -1 )
-                rc = CLIENT_ERROR_VD_SECTION_NOT_FOUND;
-            goto done;
-        }
+
 
         /*
-         *  get the global vd section (optional)
+         *  check if Client Audio Mapping has been disabled.
          */
-        TRACE(( TC_LIB, TT_API1, "CfgIniLoad: get global vd section" ));
-        GetSection( pList->pElement, pConfigFile, &pVdSectionGlobal );
+
+        if ( strcmp(pList->pElement, INI_CAM ) == 0) {
+           GetPrivateProfileString(  pConnection,
+                                     INI_CAM,
+                                     "On",   // default to On
+                                     AudioOnOff,
+                                     sizeof(AudioOnOff),
+                                     pServerFile ); 
+
+           if ( strcmp(AudioOnOff,"Off") == 0) 
+           continue;
+        }
+
+		/*
+         *  check if Client Updates has been disabled.
+         */
+        if ( strcmp(pList->pElement, INI_CM_VDSECTION ) == 0) {
+           GetPrivateProfileString(  INI_WFCLIENT,
+                                     INI_CM_UPDATESALLOWED,
+                                     "On",   // default to On
+                                     ClientUpdatesOnOff,
+                                     sizeof(ClientUpdatesOnOff),
+                                     pServerFile ); 
+
+           if ( stricmp(ClientUpdatesOnOff,"Off") == 0) 
+           continue;
+        }
+
+        GetPrivateProfileString(  pList->pElement,
+                                  INI_DRIVERNAMEALT,
+                                  INI_DRIVERNAME,
+                                  pszBuffer,
+                                  sizeof(pszBuffer),
+                                  pConfigFile ); 
+        
+        pszDriver = pszBuffer;
 
         /*
          *  load the current VD
          */
-        if ( rc = MergeAndLoadVd( hClientHandle, pConnSection, pWdSection, 
-                                  pVdSection, pVdSectionGlobal ) )  {
+        if ( rc = LoadVdDll( hClientHandle, pList->pElement, pProtocolFile, pszDriver ) )  {
             switch ( rc ) {
                 case CLIENT_ERROR_DRIVER_UNSUPPORTED:  // Non-fatal error
+                case CLIENT_ERROR_DRIVER_BAD_CONFIG:
                    rc = CLIENT_STATUS_SUCCESS; 
                    break;
-
+    
                 default:
-                   free( pVdSection );
-                   if ( pVdSectionGlobal )
-                      free( pVdSectionGlobal );
                    goto done;
                    break;
             }
         }
-
-        //  free section
-        free( pVdSection );
-        if ( pVdSectionGlobal )
-           free( pVdSectionGlobal );
     }
 
-    /*
-     *  free vd list memory
-     */
-    DestroyList( pSave );
-    pSave = NULL;
 done:
+    if (!bEncryption)
+        free(pEncryption);
+    if (!bTapi)
+        free(pTAPIModem);
+    
     if ( pSave )
         DestroyList( pSave );
-
-    if ( pDriverList )
-        free( pDriverList );
-
-    if ( pConnSection )
-        free( pConnSection );
-
-    if ( pPdSection )
-        free( pPdSection );
-
-    if ( pPdSection2 )
-        free( pPdSection2 );
-
-    if ( pWdSection )
-        free( pWdSection );
-
-    if ( pDeviceSection )
-        free( pDeviceSection );
+     
+    //if ( pList )
+     //   DestroyList( pList );
 
     if ( pPdType )
         (void) free( pPdType );
@@ -585,276 +628,560 @@ done:
     return( rc );
 }
 
+
 /*******************************************************************************
  *
- *  CombineAndLoadSession
+ *  MakeProfileAndLoadSession
  *
- *      Combines optional CfgIni overrides with the [pConnection] 
- *      section of the Server file, the [INI_WFCLIENT] section of the Server 
- *      file and the [INI_WFCLIENT] section of the Configuration file, with 
- *      precidence of common entries in that order.
- *
- *      Also will combine additional support sections as defined in the 
- *      <BUGBUG define this> section of the <BUGBUG define this> .INI file.
+ *    Will combine the cfgIniOverrides with all the sections found in the
+ *    INI files to form one buffered INI profile. When a section is found
+ *    in more than one file, the entries are combined with the following 
+ *    precedence: overrides, server file, config file, protocol file
  *
  *  ENTRY:
  *      hClientHandle (input)
  *          HANDLE of the client to load (from WFEngOpen call).
  *      pConnection (input)
  *          Name of connection entry in server file.
+ *      pTransportDriver
+ *          name of this connection's transport driver
  *      pCfgIniOverrides (input)
  *          NULL for no overrides, or points to array of CFGINIOVERRIDE 
- *          structures of key / value pairs to combine with [pConnection]
- *          section of the Server file.
+ *          structures of key / value pairs to combine with [Server]
+ *          section of the buffered INI profile.
  *      pServerFile (input)
  *          Server INI file name.
  *      pConfigFile (input)
  *          Config INI file name.
  *      pProtocolFile (input)
  *          Protocol INI file name.
- *      ppConnSection (output)
- *          Points to place to store final combined buffered INI section for 
- *          connection entry.
+ *      bInternet (input)
+ *          Signifies if this is an inetrnet connection in
+ *          which case we only work with the server file
  *
  *  EXIT:
  *      (int) return code: CLIENT_STATUS_SUCCESS - if no error;
  *                         else CLIENT_ERROR_xxx error code
  *
- *      NOTE: the caller must free the buffer pointer to by *ppConnSection
- *              when done.
- *
  ******************************************************************************/
 
 int
-CombineAndLoadSession( HANDLE hClientHandle,
-                       PCHAR pConnection,
-                       PCFGINIOVERRIDE pCfgIniOverrides,
-                       PCHAR pServerFile,
-                       PCHAR pConfigFile,
-                       PCHAR pProtocolFile,
-                       PCHAR *ppConnSection )
+MakeProfileAndLoadSession( HANDLE hClientHandle,
+                           PCHAR pConnection,
+                           PCHAR pTransportDriver,
+                           PCFGINIOVERRIDE pCfgIniOverrides,
+                           PCHAR pServerFile,
+                           PCHAR pConfigFile,
+                           PCHAR pProtocolFile,
+                           BOOL  bInternet )
 {
-    int    rc, cbCombinedSection;
-    PCHAR   pSection1 = NULL,
-            pSection2 = NULL,
-            pCombinedSection = NULL;
-    WFELOAD WFELoad;
+    int     rc,size,sections;
+    PCHAR   pSection1     = NULL, pTempSec1     = NULL,
+            pSection2     = NULL, pTempSec2     = NULL,
+            pSection3     = NULL, pTempSec3     = NULL,
+            pSerialSec    = NULL, pSerialTmp    = NULL,
+            pTransportSec = NULL, pTransportTmp = NULL,
+            pMergedSec    = NULL, pFinalSection = NULL;
+    
+    PSECTIONLIST   pSectionsList = NULL;     //list of all sections to retrieve
+    PSECTIONLIST   pSectionsHead = NULL;
+    PSECTIONLIST   pSectionsTemp = NULL;
+    PSECTIONLIST   pNew = NULL;
 
-    /*
-     * Build a buffered INI section from the CfgIni overrides.  Note: this 
-     * section may be 'empty'.
+    PLIST   pNewOverwrite, pList;
+    PLIST   pOverwrites = NULL;
+    PCHAR   pSerialPort = NULL;
+    PCHAR   nullPointer = NULL;
+    PCHAR   pTemp;
+    int     len;
+    
+    PDEFINISECT    pDefIniSect;
+    WFELOAD        WFELoad;
+    
+    /* 
+     * If this is an async connection we need to know which serial port 
+     * will be in use. There will be a special SerialPort Section with
+     * all the information regarding the port in use for this connection
      */
-    if ( (pSection1 = 
-            BuildCfgIniOverridesSection( pCfgIniOverrides )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
-    }
-    TRACE((TC_LIB, TT_API1, "CombineAndLoadSession: CfgIniOverridesSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pSection1, 
-              (ULONG)bGetSectionLength(pSection1) ));
-
+    pSerialPort = (PCHAR) malloc(MAX_INI_LINE);
+    GetPrivateProfileString(pConnection, INI_DEVICE, INI_EMPTY,
+                            pSerialPort, MAX_INI_LINE, pServerFile);
+    
     /*
-     * Get entry section.
+     * Build the [Server] Section which will act as the center of 
+     * INI information about the current connection session and the host. 
+     * This Section will be filled first with the cfgIniOverride 
+     *    entries which shall have top priority.
+     * The section specific to the current connection is then added in.
      */
-    if ( (rc = GetSection( pConnection, pServerFile, &pSection2 )) 
-                        != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_ENTRY_NOT_FOUND;
-        goto done;
+    pSection1 = BuildCfgIniOverridesSection( pCfgIniOverrides );
+    if (pSection1 == NULL) {
+       rc = CLIENT_ERROR_BAD_OVERRIDES;
+       goto done;
     }
-    TRACE((TC_LIB, TT_API1, "CombineAndLoadSession: EntrySection" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pSection2, 
-              (ULONG)bGetSectionLength(pSection2) ));
+    if (rc = GetSection(pConnection, pServerFile, &pSection2, pOverwrites)) {
+       if (rc == -1) {
+          rc = CLIENT_ERROR_MISSING_CONNECTION_SECTION;
+       }
+       goto done;
+    }
+    if ( (pMergedSec = 
+          CombinePrivateProfileEntries(pSection1, pSection2)) == NULL) {
+       rc = CLIENT_ERROR_BAD_COMBINE_ENTRIES;
+       goto done;
+    }
+    
+    //clean up the used sections for repeated use
+    free(pSection1);
+    free(pSection2);
+    pSection1 = pSection2 = NULL;
 
+#if 0    
     /*
-     * Combine CfgIniOverridesSection with EntryConfig section.
+     * Build a list of all entries in the profile so far so that they can be
+     * overwritten into any subsequent sections that have the same key
      */
-    if ( (pCombinedSection = 
-            CombinePrivateProfileEntries( pSection1, 
-                                          pSection2 )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
+    pTemp = pMergedSec; 
+    while (len = strlen(pTemp)) {
+       if (pTemp[0] != '[') {
+          
+          pNewOverwrite = (PLIST) malloc(sizeof(LIST));
+          pNewOverwrite->pElement = strdup(pTemp);
+          pNewOverwrite->pNext = NULL;
+          if (pOverwrites == NULL) {
+             pOverwrites = pList = pNewOverwrite;
+          } else {
+             pList->pNext = pNewOverwrite;
+             pList = pList->pNext;
+          }
+       }
+       pTemp += (len + 1);
     }
-    TRACE((TC_LIB, TT_API1, 
-           "CombineAndLoadSession: CfgIniOverridesSection+EntrySection" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pCombinedSection, 
-              (ULONG)bGetSectionLength(pCombinedSection) ));
+#endif
+    
+    /* 
+     * Get the WFClient section now because it is special and will be used
+     * as overwrite information along with the Server section
+     */
+    if (rc = GetSection(INI_WFCLIENT, pServerFile, &pSection1, pOverwrites)) {
+       if (rc == -1) {
+          //don't fail if the ICAFile does not have a WFClient section
+          goto skipcombine1;
+       }
+       goto done;
+    }
+    
+    //Construct a ClientName=XXX entry and add to the buffered secction
+    if ((pTempSec1 = 
+         AddEntrySection(pSection1, INI_CLIENTNAME, gszClientName)) == NULL) {
+       rc = CLIENT_ERROR_BAD_ENTRY_INSERTION;
+       goto done;
+    }
+    free(pSection1);
+    pSection1 = pTempSec1;
+    pTempSec1 = NULL;
+    
+    //add the section name as header to the sections we just retrieved
+    if ((pTempSec1 = 
+         AddHeaderSection(pSection1, INI_WFCLIENT)) == NULL) {
+       rc = CLIENT_ERROR_BAD_HEADER_INSERTION;
+       goto done;
+    }
+    free(pSection1);
+    pSection1 = NULL;
 
+    if (bInternet) {
+       //merge WFClient section into the profile
+       if ((pSection1 = 
+            ConcatSections(pMergedSec, pTempSec1)) == NULL) {
+          rc = CLIENT_ERROR_BAD_CONCAT_SECTIONS;
+          goto done;
+       }
+       free(pTempSec1);
+       free(pMergedSec);
+       
+       pMergedSec = pSection1;
+       pTempSec1 = pSection1 = NULL;
+
+       //skip the other two files since they don't exist in internet conn
+       goto skipcombine1;
+    }
+    
+    /* 
+     * Get the WFClient section from the other two files and merge
+     */
+    if (rc = GetSection(INI_WFCLIENT, pConfigFile, &pSection2, pOverwrites)) {
+       if (rc == -1) {
+          rc = CLIENT_ERROR_MISSING_WFCLIENT_SECTION;
+       }
+       goto done;
+    }
+    if (rc = GetSection(INI_WFCLIENT, pProtocolFile, &pSection3, pOverwrites)) {
+       if (rc == -1) {
+          rc = CLIENT_ERROR_MISSING_WFCLIENT_SECTION;
+       }
+       goto done;
+    }
+    
+    if ((pTempSec2 = 
+         AddHeaderSection(pSection2, INI_WFCLIENT)) == NULL) {
+       rc = CLIENT_ERROR_BAD_HEADER_INSERTION;
+       goto done;
+    }
+    if ((pTempSec3 = 
+         AddHeaderSection(pSection3, INI_WFCLIENT)) == NULL) {
+       rc = CLIENT_ERROR_BAD_HEADER_INSERTION;
+       goto done;
+    }
+    free(pSection2);
+    free(pSection3);
+    pSection2 = pSection3 = NULL;
+    
     /*
-     * Cleanup and combine resulting section with ServerConfig section.
+     * Combine the entries of the ConfigFile's WFClient with the 
+     *   ServerFile's WFClient sections making the ones from 
+     *   ServerFile the highest priority.
      */
-    free( pSection1 );
-    free( pSection2 );
-    pSection1 = pCombinedSection;
-    pCombinedSection = pSection2 = NULL;
-    if ( (rc = GetSection( INI_WFCLIENT, pServerFile, &pSection2 )) 
-                        != CLIENT_STATUS_SUCCESS ) {
-        // don't fail if we don't have WFCLIENT in ICA file
-        pCombinedSection = pSection1;
-        pSection1 = NULL;
-        goto skipcombine1;
+    if ((pSection1 = 
+         CombinePrivateProfileEntries(pTempSec1, pTempSec2)) == NULL) {
+       rc = CLIENT_ERROR_BAD_COMBINE_ENTRIES;
+       goto done;
     }
-    TRACE((TC_LIB, TT_API1, "CombineAndLoadSession: ServerConfigSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pSection2, 
-              (ULONG)bGetSectionLength(pSection2) ));
-
-    if ( (pCombinedSection = 
-            CombinePrivateProfileEntries( pSection1, 
-                                          pSection2 )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
-    }
-    TRACE((TC_LIB, TT_API1, 
-           "CombineAndLoadSession: ...+ServerConfigSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pCombinedSection, 
-              (ULONG)bGetSectionLength(pCombinedSection) ));
-
-skipcombine1:
+    free(pTempSec1);
+    free(pTempSec2);
+    pTempSec1 = pTempSec2 = NULL;
+    
     /*
-     * Cleanup and combine resulting section with ConfigConfig section.
+     * Combine the entries of the ModuleFile's WFClient with the 
+     *   previously combined Server and Config files' sections 
+     *   making the previous ones the highest priority.
      */
-    if(pSection1)
-       free( pSection1 );
-
-    if(pSection2)
-       free( pSection2 );
-
-    pSection1 = pCombinedSection;
-    pCombinedSection = pSection2 = NULL;
-    if ( (rc = GetSection( INI_WFCLIENT, pConfigFile, &pSection2 )) 
-                        != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_CONFIG_CONFIG_NOT_FOUND;
-        goto done;
+    if ((pSection2 = 
+         CombinePrivateProfileEntries(pSection1, pTempSec3)) == NULL) {
+       rc = CLIENT_ERROR_BAD_COMBINE_ENTRIES;
+       goto done;
     }
-    TRACE((TC_LIB, TT_API1, "CombineAndLoadSession: ConfigConfigSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pSection2, 
-              (ULONG)bGetSectionLength(pSection2) ));
+    free(pSection1);
+    free(pTempSec3);
+    pSection1 = pTempSec3 = NULL;
 
-    if ( (pCombinedSection = 
-            CombinePrivateProfileEntries( pSection1, 
-                                          pSection2 )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
+    
+    //add our new WFClient section onto the buffered profile
+    if ((pTempSec1 = 
+         ConcatSections(pMergedSec, pSection2)) == NULL) {
+       rc = CLIENT_ERROR_BAD_CONCAT_SECTIONS;
+       goto done;
     }
+    free(pSection2);
+    free(pMergedSec);
+    
+    pMergedSec = pTempSec1;
+    pSection2 = pTempSec1 = NULL;
 
+skipcombine1:    
     /*
-     * The mandantory sections are combined now.  Save away the current 
-     * section size of pCombinedSection now so we can realloc it back down 
-     * to this size after WFEngLoadSession returns.
+     * Build a list of all entries in the profile so far so that they can be
+     * overwritten into any subsequent sections that have the same key
      */
-    cbCombinedSection = bGetSectionLength(pCombinedSection);
-    TRACE((TC_LIB, TT_API1, 
-           "CombineAndLoadSession: ...+ConfigConfigSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pCombinedSection, 
-              (ULONG)cbCombinedSection ));
-
-    /*
-     * Cleanup and combine mandantory section with optional section(s).
-     */
-    /*
-     * HotkeyShiftStates
-     */
-    if(pSection1)
-       free( pSection1 );
-
-    if(pSection2)
-       free( pSection2 );
-
-    pSection1 = pCombinedSection;
-    pCombinedSection = pSection2 = NULL;
-    if ( (rc = GetSection( INI_HOTKEY_SHIFTSTATES, pProtocolFile, &pSection2 )) 
-                        != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_HOTKEY_SHIFTSTATES_NOT_FOUND;
-        //goto done;
+    DestroyList(pOverwrites);
+    pOverwrites = NULL;
+#if 0
+    pTemp = pMergedSec; 
+    while (len = strlen(pTemp)) {
+       if (pTemp[0] != '[') {
+          
+          pNewOverwrite = (PLIST) malloc(sizeof(LIST));
+          pNewOverwrite->pElement = strdup(pTemp);
+          pNewOverwrite->pNext = NULL;
+          if (pOverwrites == NULL) {
+             pOverwrites = pList = pNewOverwrite;
+          } else {
+             pList->pNext = pNewOverwrite;
+             pList = pList->pNext;
+          }
+       }
+       pTemp += (len + 1);
     }
-    if(pSection2) {
-       TRACE((TC_LIB, TT_API1, "CombineAndLoadSession: HotkeyShiftStates" ));
-       TRACEBUF((TC_LIB, TT_API1, (PCHAR)pSection2, 
-                 (ULONG)bGetSectionLength(pSection2) ));
+#endif
+    /*
+     * Now we shall get a list of all the sections we want to 
+     * add into the profile. This will consist of all sections in 
+     * the protocol file except those transport drivers that are not 
+     * currently active, all sections in the config file, and
+     * all sections in the server file except those ApplicationServer 
+     * sections not currently connected to.
+     */
+    
+    if (bInternet) {
+       /*
+        * only build a list out of the server file since internet 
+        * connections only have a server file
+        */
+       pSectionsList = BuildAllSectionsList(pConnection, pTransportDriver,
+                                    pServerFile, nullPointer, nullPointer);
+       
+       /* 
+        * Include the transport driver section if it is not TCP/IP and available. 
+        * This could happen if launching an IPX ICA file for example
+        * with the full client installed
+        */
+       
+       if (stricmp(pTransportDriver, INI_TCP)) {
+          pNew = (PSECTIONLIST) malloc(sizeof(SECTIONLIST));
+          pNew->pElement = strdup(pTransportDriver);
+          pNew->pFile    = strdup(pProtocolFile);
+          pNew->bValid   = 2;
+          pNew->pNext    = pSectionsList;
+          pSectionsList  = pNew;
        }
 
-    if ( (pCombinedSection = 
-            CombinePrivateProfileEntries( pSection1, 
-                                          pSection2 )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
-    }
-    TRACE((TC_LIB, TT_API1, 
-           "CombineAndLoadSession: ...+HotkeyShiftStates" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pCombinedSection, 
-              (ULONG)bGetSectionLength(pCombinedSection) ));
-
-    /*
-     * HotkeyKeys
-     */
-    if(pSection1)
-       free( pSection1 );
-    if(pSection2)
-       free( pSection2 );
-
-    pSection1 = pCombinedSection;
-    pCombinedSection = pSection2 = NULL;
-    if ( (rc = GetSection( INI_HOTKEY_KEYS, pProtocolFile, &pSection2 )) 
-                        != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_HOTKEY_KEYS_NOT_FOUND;
-        //goto done;
-    }
-    if(pSection2) {
-       TRACE((TC_LIB, TT_API1, "CombineAndLoadSession: HotkeyKeys" ));
-       TRACEBUF((TC_LIB, TT_API1, (PCHAR)pSection2, 
-                 (ULONG)bGetSectionLength(pSection2) ));
+       /*
+        * Also include the sections defined in the default inidef.h
+        */
+       pDefIniSect = ModuleSect;
+       while(pDefIniSect->pSectName != NULL) {
+          //add to list 
+          if (strcmp(INI_WFCLIENT, pDefIniSect->pSectName)) {
+             pNew = (PSECTIONLIST) malloc(sizeof(SECTIONLIST));
+             pNew->pElement = strdup(pDefIniSect->pSectName);
+             pNew->pFile    = strdup(pProtocolFile);
+             if (!strcmp(pTransportDriver, pDefIniSect->pSectName)) {
+                pNew->bValid = 2;   //indicates special transport section
+             } else {
+                pNew->bValid = 1;
+             }
+             pNew->pNext = pSectionsList;
+             pSectionsList = pNew;
+          }
+          pDefIniSect++;
+       }
+       pDefIniSect = WfclientSect;
+       while(pDefIniSect->pSectName != NULL) {
+          //add to list 
+          if (strcmp(INI_WFCLIENT, pDefIniSect->pSectName)) {
+             pNew = (PSECTIONLIST) malloc(sizeof(SECTIONLIST));
+             pNew->pElement = strdup(pDefIniSect->pSectName);
+             pNew->pFile    = strdup(pConfigFile);
+             pNew->bValid = 1;
+             pNew->pNext = pSectionsList;
+             pSectionsList = pNew;
+          }
+          pDefIniSect++;
        }
 
-    if ( (pCombinedSection = 
-            CombinePrivateProfileEntries( pSection1, 
-                                          pSection2 )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
+    } else {
+       pSectionsList = BuildAllSectionsList(pConnection, pTransportDriver,
+                                  pServerFile, pConfigFile, pProtocolFile);
     }
-    TRACE((TC_LIB, TT_API1, 
-           "CombineAndLoadSession: ...+HotkeyKeys" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pCombinedSection, 
-              (ULONG)bGetSectionLength(pCombinedSection) ));
+    
+    pSectionsHead = pSectionsList;
+    pSectionsTemp = pSectionsList;
+    while (pSectionsList != NULL) {
 
+       if (pSectionsList->bValid) {
+          
+          if (rc = GetSection(pSectionsList->pElement, 
+                   pSectionsList->pFile, &pSection1, pOverwrites)) {
+             if (rc == -1) {
+                rc = CLIENT_ERROR_MISSING_SECTION;
+             }
+             goto done;
+          }
+          
+          /* 
+           * if this section is the current connection's serial port
+           * then copy this into the generic SerialPortSection
+           */
+          if (!strcmp(pSerialPort, pSectionsList->pElement)) {
+             
+             //make a copy of the section
+             len = IniSize(pSection1);
+             pSerialSec = (PCHAR) malloc(len);
+             memcpy(pSerialSec, pSection1, len);
+
+             //add header to new copy
+             pSerialTmp = 
+                AddHeaderSection(pSerialSec, INI_SERIAL_VER1);
+             if (pSerialTmp == NULL) {
+                rc = CLIENT_ERROR_BAD_HEADER_INSERTION;
+                goto done;
+             }
+             free(pSerialSec);
+             pSerialSec = NULL;
+             
+             //add new serial section into buffered profile
+             pSerialSec = 
+                ConcatSections(pMergedSec, pSerialTmp);
+             if (pSerialSec == NULL) {
+                rc = CLIENT_ERROR_BAD_CONCAT_SECTIONS;
+                goto done;
+             }
+             free(pMergedSec);
+             free(pSerialTmp);
+             pMergedSec = pSerialSec;
+             pSerialSec = pSerialTmp = NULL;
+          }
+          
+          /*
+           * We must make a general [Transport] section based on 
+           * which transport driver is to be loaded so that common 
+           * routines know where to search for info.
+           * bValid == 2 if the magic number to signify that this is 
+           * the transport section
+           */
+          if (pSectionsList->bValid == 2) {  
+               
+               //make a copy of section1 the transportdriver section
+               len = IniSize(pSection1);
+               pTransportSec = (PCHAR) malloc(len);
+               memcpy(pTransportSec, pSection1, len);
+               
+               //add header to new copy
+               pTransportTmp = 
+                  AddHeaderSection(pTransportSec, INI_TRANSPORTSECTION);
+               if (pTransportTmp == NULL) {
+                  rc = CLIENT_ERROR_BAD_HEADER_INSERTION;
+                  goto done;
+               }
+               free(pTransportSec);
+               pTransportSec = NULL;
+               
+               //add new transport section into buffered profile
+               pTransportSec = 
+                  ConcatSections(pMergedSec, pTransportTmp);
+               if (pTransportSec == NULL) {
+                  rc = CLIENT_ERROR_BAD_CONCAT_SECTIONS;
+                  goto done;
+               }
+               free(pMergedSec);
+               free(pTransportTmp);
+               pMergedSec = pTransportSec;
+               pTransportSec = pTransportTmp = NULL;
+          }
+
+          pTempSec1 = 
+             AddHeaderSection(pSection1, pSectionsList->pElement);
+          if (pTempSec1 == NULL) {
+             rc = CLIENT_ERROR_BAD_HEADER_INSERTION;
+             goto done;
+          }
+          free(pSection1);
+          pSection1 = NULL;
+          sections = 1;
+          pSectionsList->bValid = 0;      //to ensure we dont repeat a section
+
+          /* 
+           * Search through rest of list and see if the other 2 files 
+           * had sections with the same name
+           */
+          pSectionsTemp = pSectionsList;
+          while (pSectionsTemp != NULL) {
+             
+             if (!strcmp(pSectionsList->pElement, pSectionsTemp->pElement) &&
+                 (pSectionsTemp->bValid)) {
+                
+                sections++;
+                pSectionsTemp->bValid = 0;
+                
+                if (sections == 2) {
+                   
+                   if (rc = GetSection(pSectionsTemp->pElement, 
+                              pSectionsTemp->pFile, &pSection2, pOverwrites)) {
+                      if (rc == -1) {
+                         rc = CLIENT_ERROR_MISSING_SECTION;
+                      }
+                      goto done;
+                   }
+                   if ((pTempSec2 = AddHeaderSection(
+                            pSection2, pSectionsTemp->pElement)) == NULL) {
+                      rc = CLIENT_ERROR_BAD_HEADER_INSERTION;
+                      goto done;
+                   }
+                   free(pSection2);
+                   pSection2 = NULL;
+                   
+                   pSection1 = 
+                      CombinePrivateProfileEntries(pTempSec1, pTempSec2);
+                   if (pSection1 == NULL) {
+                      rc = CLIENT_ERROR_BAD_COMBINE_ENTRIES;
+                      goto done;
+                   }
+                   free(pTempSec1);
+                   free(pTempSec2);
+                   
+                   //we need for consistency pTempSec1 to point to our working buffer
+                   pTempSec1 = pSection1;
+                   pSection1 = pTempSec2 = NULL;
+
+                } else {
+                   if (sections > 3) {
+                      rc = CLIENT_ERROR_DUPLICATE_SECTIONS;
+                      goto done;
+                   }
+                   
+                   if (rc = GetSection(pSectionsTemp->pElement, 
+                         pSectionsTemp->pFile, &pSection3, pOverwrites)) {
+                      if (rc == -1) {
+                         rc = CLIENT_ERROR_MISSING_SECTION;
+                      }
+                      goto done;
+                   }
+                   if ((pTempSec3 = AddHeaderSection(pSection3, 
+                                    pSectionsTemp->pElement)) == NULL) {
+                      rc = CLIENT_ERROR_BAD_HEADER_INSERTION;
+                      goto done;
+                   }
+                   free(pSection3);
+                   pSection3 = NULL;
+                   
+                   if (( pSection1 = CombinePrivateProfileEntries(
+                           pTempSec1, pTempSec3)) == NULL) {
+                      rc = CLIENT_ERROR_BAD_COMBINE_ENTRIES;
+                      goto done;
+                   }
+                   free(pTempSec1);
+                   free(pTempSec3);
+                   
+                   //we need for loop consistency pTempSec1 to point to our working buffer
+                   pTempSec1 = pSection1;
+                   pSection1 = pTempSec3 = NULL;
+                }
+             }
+             pSectionsTemp = pSectionsTemp->pNext;
+          }
+          
+          pSection1 = ConcatSections(pMergedSec, pTempSec1);
+          if (pSection1 == NULL) {
+             rc = CLIENT_ERROR_BAD_CONCAT_SECTIONS;
+             goto done;
+          }
+          free(pTempSec1);
+          free(pMergedSec);
+
+          //we need for loop consistency pMergedSection to point to our working buffer
+          pMergedSec = pSection1;
+          pSection1 = pTempSec1 = NULL;
+          
+       }
+       pSectionsList = pSectionsList->pNext;
+    }
 
     /*
-     * Keyboard Layout
+     * We need to add a Magic Number to the front of our buffer to indicate 
+     * that it is of the new-styled buffered profile structure. 
+     * This will simply be a NULL at the head of the buffer.
      */
-    if(pSection1)
-       free( pSection1 );
-    if(pSection2)
-       free( pSection2 );
-    pSection1 = pCombinedSection;
-    pCombinedSection = pSection2 = NULL;
-    if ( (rc = GetSection( INI_KEYBOARDLAYOUT, pProtocolFile, &pSection2 )) 
-                        != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_KEYBOARDLAYOUT_NOT_FOUND;
-        //goto done;
-    }
-    if(pSection2) {
-       TRACE((TC_LIB, TT_API1, "CombineAndLoadSession: KeyboardLayout" ));
-       TRACEBUF((TC_LIB, TT_API1, (PCHAR)pSection2, 
-                (ULONG)bGetSectionLength(pSection2) ));
-       }
-
-    if ( (pCombinedSection = 
-            CombinePrivateProfileEntries( pSection1, 
-                                          pSection2 )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
-    }
-    TRACE((TC_LIB, TT_API1, 
-           "CombineAndLoadSession: ...+KeyboardLayout" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pCombinedSection, 
-              (ULONG)bGetSectionLength(pCombinedSection) ));
-
+    size = IniSize(pMergedSec);
+    pFinalSection = (PCHAR) malloc(size + 1);
+    pFinalSection[0] = '\0';
+    memcpy( &(pFinalSection[1]), pMergedSec, size);
+    free(pMergedSec);
+    pMergedSec = NULL;
+    
     /*
      * Load the WFENGINE session.
      */
+    
 // BUGBUG: need a way to pass this stuff in:
 #ifdef DOS
     WFELoad.pszModuleName = (LPSTR)"wfclient.exe\0uicwin.ddl\0uiiniw.ddl\0uihelp.ddl\0uierror.ddl\0\0";
@@ -865,47 +1192,68 @@ skipcombine1:
 #ifdef WIN32
     WFELoad.pszModuleName = (LPSTR)"wfica32.exe\0\0";
 #endif
-    WFELoad.pIniSection = pCombinedSection;
+    
+    WFELoad.pIniSection = (LPVOID)pFinalSection;
     rc = WFEngLoadSession( hClientHandle, &WFELoad );
 
-    /*
-     * Realloc pCombinedSection back down to mandantory stuff.
-     */
-    *(pCombinedSection+(cbCombinedSection-1)) = '\0';   // make double NULL again
-    pCombinedSection = (PCHAR)realloc( pCombinedSection, cbCombinedSection );
-    TRACE((TC_LIB, TT_API1, 
-           "CombineAndLoadSession: FinalCombinedSection (mandantory stuff only)" ));
-    TRACEBUF((TC_LIB, TT_API1, (PCHAR)pCombinedSection, 
-              (ULONG)bGetSectionLength(pCombinedSection) ));
+done:                                                                                      
+    DestroySList( pSectionsHead );
+    DestroyList( pOverwrites );
 
-    /*
-     * Pass back final combined section and return.
-     */
-    *ppConnSection = pCombinedSection;
-
-done:
-    if ( pSection1 )
-        free( pSection1 );
-
-    if ( pSection2 )
-        free( pSection2 );
+    if ( pSection1 ) {
+       (void) free(pSection1);
+    }
+    if ( pSection2 ) {
+       (void) free(pSection2);
+    }
+    if ( pSection3 ) {
+       (void) free(pSection3);
+    }
+    if ( pMergedSec ) {
+       (void) free(pMergedSec);
+    }
+    if ( pTempSec1 ) {
+       (void) free(pTempSec1);
+    }
+    if ( pTempSec2 ) {
+       (void) free(pTempSec2);
+    }
+    if ( pTempSec3 ) {
+       (void) free(pTempSec3);
+    }
+    if ( pFinalSection ) {
+       (void) free(pFinalSection);
+    }
+    if ( pTransportSec ) {
+       (void) free(pTransportSec);
+    }
+    if ( pTransportTmp ) {
+       (void) free(pTransportTmp);
+    }
+    if ( pSerialSec ) {
+       (void) free(pSerialSec);
+    }
+    if ( pSerialTmp ) {
+       (void) free(pSerialTmp);
+    }
+    if ( pSerialPort ) {
+       (void) free(pSerialPort);
+    }
 
     return( rc );
 }
 
 /*******************************************************************************
  *
- *  MergeAndLoadPd
+ *  LoadPdDll
  *
  *  ENTRY:
  *      hClientHandle (input)
  *          HANDLE of the client to load (from WFEngOpen call).
- *      pConnSection (input)
- *          Points to buffered INI section for connection entry.
  *      pPdSection (input)
- *          Points to buffered INI section for the Pd entry.
- *      pPdSectionOptional (input)
- *          Points to optional buffered INI section for the Pd device.
+ *          Name of the VdSection to look in to find drivername.
+ *      pFile (input)
+ *          File to get the module name from
  *
  *  EXIT:
  *      (int) return code: CLIENT_STATUS_SUCCESS - if no error;
@@ -914,80 +1262,63 @@ done:
  ******************************************************************************/
 
 int
-MergeAndLoadPd( HANDLE   hClientHandle,
-                PCHAR    pConnSection,
-                PCHAR    pPdSection,
-                PCHAR    pPdSectionOptional )
+LoadPdDll( HANDLE hClientHandle, PCHAR pPdSection, PCHAR pFile )
 {
-    PCHAR  pModuleName = NULL;
-    int    rc;
-    PCHAR  pMergedSection = NULL, pS1, pS2;
+    int     rc;
+    PCHAR   pModuleName;
+    PCHAR   pIniSection;
     WFELOAD WFELoad;
-
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadPd: pConnSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pConnSection, 
-               (ULONG)bGetSectionLength(pConnSection) ));
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadPd: pPdSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pPdSection, 
-               (ULONG)bGetSectionLength(pPdSection) ));
-    if ( pPdSectionOptional ) {
-       TRACE((TC_LIB, TT_API1, "MergeAndLoadPd: pPdSectionOptional" ));
-       TRACEBUF((TC_LIB, TT_API1, (char far *)pPdSectionOptional, 
-                  (ULONG)bGetSectionLength(pPdSectionOptional) ));
-        pS1 = pPdSectionOptional;
-        pS2 = pPdSection;
-    } else {
-        pS1 = pPdSection;
-        pS2 = NULL;
-    }
-
+    
     /*
-     *  merge profile sections
+     * Set the Buffered Ini Section to empty since we are using the new
+     * buffered profile structure for INI information. We must still pass
+     * a buffered INI section to the engine for backward compatibility.
+     * The double NULL is necessary as opposed to a NULL pointer since
+     * procedures in the IPC required non-null buffer pointers.
      */
-    if ( (pMergedSection = MergeSections( pConnSection, pS1, pS2 )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
-    }
+    pIniSection = (PCHAR) malloc(2);
+    pIniSection[0] = 0;
+    pIniSection[1] = 0;
+    
+    pModuleName = (PCHAR) malloc(MAX_INI_LINE);           
 
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadPd: pMergedSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pMergedSection, 
-               (ULONG)bGetSectionLength(pMergedSection) ));
-
-    /*
-     * load the PD
-     */
-    if ( (rc = GetModuleName(&pModuleName, pPdSection)) != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_PD_NAME_NOT_FOUND;
-        goto done;
+    if ( !GetPrivateProfileString(pPdSection, INI_DRIVERNAME, INI_EMPTY,
+                                  pModuleName, MAX_INI_LINE, pFile)) {            
+       if (!GetPrivateProfileStringDefault(pPdSection, INI_DRIVERNAME,
+            pModuleName, MAX_INI_LINE, pFile)) {
+          rc = CLIENT_ERROR_PD_NAME_NOT_FOUND;
+          goto done;
+       }
     }
+    
+    if ( !strcmp(pModuleName, INI_DRIVERUNSUPPORTED)) {
+       rc = CLIENT_ERROR_DRIVER_UNSUPPORTED;
+       goto done;
+    }
+    
     WFELoad.pszModuleName = (LPSTR)pModuleName;
-    WFELoad.pIniSection = (LPVOID)pMergedSection;
+    WFELoad.pIniSection = (LPVOID)pIniSection;
     rc = WFEngLoadPd( hClientHandle, &WFELoad );
 
 done:
     if ( pModuleName )
         (void) free(pModuleName);
-
-    if ( pMergedSection )
-        (void) free( pMergedSection );
+    free(pIniSection);
 
     return( rc );
 }
 
 /*******************************************************************************
  *
- *  MergeAndLoadWd
+ *  LoadWdDll
  *
  *  ENTRY:
  *      hClientHandle (input)
  *          HANDLE of the client to load (from WFEngOpen call).
- *      pConnSection (input)
- *          Points to buffered INI section for connection entry.
- *      pPdSection (input)
- *          Points to buffered INI section for the Pd (transport) entry.
  *      pWdSection (input)
- *          Points to buffered INI section for the Wd entry.
+ *          Name of the VdSection to look in to find drivername.
+ *      pProtocolFile (input)
+ *          File to get the module name from
  *
  *  EXIT:
  *      (int) return code: CLIENT_STATUS_SUCCESS - if no error;
@@ -996,77 +1327,58 @@ done:
  ******************************************************************************/
 
 int
-MergeAndLoadWd( HANDLE   hClientHandle,
-                PCHAR    pConnSection,
-                PCHAR    pPdSection,
-                PCHAR    pWdSection )
+LoadWdDll( HANDLE hClientHandle, PCHAR pWdSection, PCHAR pProtocolFile )
 {
-    PCHAR  pModuleName = NULL;
-    int    rc;
-    PCHAR  pMergedSection = NULL;
+    int     rc;
+    PCHAR   pModuleName;
+    PCHAR   pIniSection;
     WFELOAD WFELoad;
 
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadWd: pConnSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pConnSection, 
-               (ULONG)bGetSectionLength(pConnSection) ));
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadWd: pPdSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pPdSection, 
-               (ULONG)bGetSectionLength(pPdSection) ));
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadWd: pWdSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pWdSection, 
-               (ULONG)bGetSectionLength(pWdSection) ));
-
-    /*
-     *  merge profile sections
-     */
-    if ( (pMergedSection = MergeSections( 
-                                pConnSection, 
-                                pPdSection, pWdSection )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
+    pIniSection = (PCHAR) malloc(2);
+    pIniSection[0] = 0;
+    pIniSection[1] = 0;
+    
+    pModuleName = (PCHAR) malloc(MAX_INI_LINE);           
+     
+    if ( !GetPrivateProfileString(pWdSection, INI_DRIVERNAME, INI_EMPTY,
+                                  pModuleName, MAX_INI_LINE, pProtocolFile)) {            
+       if (!GetPrivateProfileStringDefault(pWdSection, INI_DRIVERNAME,
+            pModuleName, MAX_INI_LINE, pProtocolFile)) {
+          rc = CLIENT_ERROR_WD_NAME_NOT_FOUND;
+          goto done;
+       }
     }
-
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadWd: pMergedSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pMergedSection, 
-               (ULONG)bGetSectionLength(pMergedSection) ));
-
-    /*
-     * Load the WD
-     */
-    if ( (rc = GetModuleName(&pModuleName, pWdSection)) != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_WD_NAME_NOT_FOUND;
-        goto done;
+    
+    if ( !strcmp(pModuleName, INI_DRIVERUNSUPPORTED)) {
+       rc = CLIENT_ERROR_DRIVER_UNSUPPORTED;
+       goto done;
     }
+    
     WFELoad.pszModuleName = (LPSTR)pModuleName;
-    WFELoad.pIniSection = (LPVOID)pMergedSection;
+    WFELoad.pIniSection = (LPVOID)pIniSection;
     rc = WFEngLoadWd( hClientHandle, &WFELoad );
 
 done:
     if ( pModuleName )
         (void) free(pModuleName);
-
-    if ( pMergedSection )
-        (void) free( pMergedSection );
+    free(pIniSection);
 
     return( rc );
 }
 
 /*******************************************************************************
  *
- *  MergeAndLoadVd
+ *  LoadVdDll
  *
  *  ENTRY:
  *      hClientHandle (input)
  *          HANDLE of the client to load (from WFEngOpen call).
- *      pConnSection (input)
- *          Points to buffered INI section for connection entry.
- *      pWdSection (input)
- *          Points to buffered INI section for the Wd entry.
  *      pVdSection (input)
- *          Points to buffered INI section for the Vd entry.
- *      pVdSectionGlobal (input)
- *          Points to buffered INI section for the Vd entry's global settings.
+ *          Name of the VdSection to look in to find drivername.
+ *      pProtocolFile (input)
+ *          File to get the module name from
+ *      pDriverName (input)
+ *          Name of the driver
  *
  *  EXIT:
  *      (int) return code: CLIENT_STATUS_SUCCESS - if no error;
@@ -1075,151 +1387,49 @@ done:
  ******************************************************************************/
 
 int
-MergeAndLoadVd( HANDLE   hClientHandle,
-                PCHAR    pConnSection,
-                PCHAR    pWdSection,
-                PCHAR    pVdSection,
-                PCHAR    pVdSectionGlobal )
+LoadVdDll( HANDLE hClientHandle, PCHAR pVdSection, PCHAR pProtocolFile, PCHAR pDriverName )
 {
-    PCHAR  pModuleName = NULL;
-    int    rc;
-    PCHAR  pMergedSection = NULL;
-    PCHAR  pMergedVdSection = NULL;
-    PCHAR  pVdSec;
+    int     rc;
+    PCHAR   pModuleName;
     WFELOAD WFELoad;
+    PCHAR   pIniSection;
 
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadVd: pConnSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pConnSection, 
-               (ULONG)bGetSectionLength(pConnSection) ));
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadVd: pWdSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pWdSection, 
-               (ULONG)bGetSectionLength(pWdSection) ));
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadVd: pVdSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pVdSection, 
-               (ULONG)bGetSectionLength(pVdSection) ));
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadVd: pVdSectionGlobal" ));
-    if (pVdSectionGlobal)
-    {
-	TRACEBUF((TC_LIB, TT_API1, (char far *)pVdSectionGlobal, 
-		  (ULONG)bGetSectionLength(pVdSectionGlobal) ));
-    }
-
-    /*
-     * Merge the VdSection with the global overrides
-     */
-    if ( pVdSectionGlobal ) {
-       if ( (pMergedVdSection = MergeSections( 
-                                    pVdSectionGlobal, 
-                                    pVdSection, NULL )) == NULL ) {
-           rc = CLIENT_ERROR_NO_MEMORY;
-           goto done;
+    pIniSection = (PCHAR) malloc(2);
+    pIniSection[0] = 0;
+    pIniSection[1] = 0;
+    
+    pModuleName = (PCHAR) malloc(MAX_INI_LINE);
+     
+    if ( !GetPrivateProfileString(pVdSection, pDriverName, INI_EMPTY,
+                                  pModuleName, MAX_INI_LINE, pProtocolFile)) {            
+       if (!GetPrivateProfileStringDefault(pVdSection, pDriverName,
+            pModuleName, MAX_INI_LINE, pProtocolFile)) {
+          rc = CLIENT_ERROR_VD_NAME_NOT_FOUND;
+          goto done;
        }
-       pVdSec = pMergedVdSection;
-    } else {
-       pVdSec = pVdSection;
     }
-
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadVd: pVdSec" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pVdSec, 
-               (ULONG)bGetSectionLength(pVdSec) ));
-
-    /*
-     *  merge profile sections
-     */
-    if ( (pMergedSection = MergeSections( 
-                                pConnSection, 
-                                pWdSection, pVdSec )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
+    
+    if ( !strcmp(pModuleName, INI_DRIVERUNSUPPORTED)) {
+       rc = CLIENT_ERROR_DRIVER_UNSUPPORTED;
+       goto done;
     }
-
-    TRACE((TC_LIB, TT_API1, "MergeAndLoadVd: pMergedSection" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pMergedSection, 
-               (ULONG)bGetSectionLength(pMergedSection) ));
-
-    /*
-     * Load the Vd
-     */
-    if ( (rc = GetModuleName(&pModuleName, pVdSection)) != CLIENT_STATUS_SUCCESS ) {
-        if ( rc == -1 )
-            rc = CLIENT_ERROR_VD_NAME_NOT_FOUND;
-        goto done;
-    }
+    
     WFELoad.pszModuleName = (LPSTR)pModuleName;
-    WFELoad.pIniSection = (LPVOID)pMergedSection;
+    WFELoad.pIniSection = (LPVOID)pIniSection;
     rc = WFEngLoadVd( hClientHandle, &WFELoad );
-
+    
 done:
     if ( pModuleName )
         (void) free(pModuleName);
-
-    if ( pMergedSection )
-        (void) free( pMergedSection );
-
-    if ( pMergedVdSection )
-        (void) free( pMergedVdSection );
+     free(pIniSection);
 
     return( rc );
-}
-
-/*******************************************************************************
- *
- *  GetModuleName
- *
- *      Retrieve the driver name from the specified bufered INI section.
- *
- *  ENTRY:
- *
- *  EXIT:
- *      (int) return code: CLIENT_STATUS_SUCCESS - if no error;
- *                         else CLIENT_ERROR_xxx error code
- *
- ******************************************************************************/
-
-int
-GetModuleName( PCHAR *ppModuleName, PCHAR pSection )
-{
-    int rc = CLIENT_STATUS_SUCCESS;
-
-    /*
-     *  allocate space for driver string
-     */
-    if ( (*ppModuleName = (PCHAR) malloc( MAXDRIVER )) == NULL ) {
-        rc = CLIENT_ERROR_NO_MEMORY;
-        goto done;
-    }
-
-    /*
-     *  get dll name string from section buffer
-     */
-    if ( !bGetPrivateProfileString( pSection,
-                                    INI_DRIVERNAME,
-                                    INI_EMPTY,
-                                    *ppModuleName,
-                                    MAXDRIVER ) ) {
-        free(*ppModuleName);
-        *ppModuleName = NULL;
-        rc = -1;   // error code resolved by caller
-        goto done;
-    }
-
-    /*
-     * If this driver is not supported by this emulator, fail this load
-     * but don't necessarily fail the connection
-     */
-    if ( !stricmp( *ppModuleName, INI_DRIVERUNSUPPORTED ) ) {
-        free( *ppModuleName );
-        *ppModuleName = NULL;
-        rc = CLIENT_ERROR_DRIVER_UNSUPPORTED;
-    }
-
-done:
-    return(rc);
 }
 
 /*******************************************************************************
  *
  *  SupportRequired
+ *       See if the current driver is supported as specified in the INI files
  *
  *  ENTRY:
  *
@@ -1229,27 +1439,24 @@ done:
  ******************************************************************************/
 
 int
-SupportRequired( PCHAR pPFile, PCHAR pPSec, PCHAR pSFile, PCHAR pSSec,
-                 PCHAR pEntry, PCHAR pDeviceSection )
+SupportRequired( PCHAR pPSec, PCHAR pSSec, PCHAR pEntry, PCHAR pDeviceName, 
+                 PCHAR pProtocolFile, PCHAR pConfigFile, PCHAR pServerFile,
+                 BOOL bTapi )
 {
     int   rc = FALSE;           // support not required
     CHAR  achAnswer[10];
 
-    /*
-     * If we're checking for Modem = On, we need to check the config file
-     * for the associated device
-     */
-    TRACE((TC_LIB, TT_API1, "SupportRequired: pDevSec(%s)",
-                  (pDeviceSection ? pDeviceSection : "<NULL>")));
-    if ( pDeviceSection && !stricmp( pEntry, INI_MODEM ) ) {
-       bGetPrivateProfileString( pDeviceSection, pEntry, INI_EMPTY,
-                                 achAnswer, sizeof(achAnswer) );
-    } else {
+    // if we are searching for modem=on then check in the device section
+    // (always return TRUE if TAPI is specified)
+    if ( !stricmp( pEntry, INI_MODEM ) ) {
 
-       /*
-        *  get answer from ini files
-        */
-       GetString( pPSec, pPFile, pSSec, pSFile, pEntry, achAnswer, 10 );
+       if ( bTapi )
+          strcpy(achAnswer, INI_ON);
+       else
+          GetPrivateProfileString( pDeviceName, pEntry, INI_EMPTY,
+                                   achAnswer, sizeof(achAnswer), pConfigFile );
+    } else {
+       GetString( pPSec, pProtocolFile, pSSec, pServerFile, pEntry, achAnswer, 10 );
     }
 
     /*
@@ -1454,6 +1661,48 @@ DestroyList( PLIST pList )
 
 /*******************************************************************************
  *
+ *  DestroySList
+ *
+ *  ENTRY:
+ *
+ *  EXIT:
+ *      CLIENT_STATUS_SUCCESS - no error
+ *
+ ******************************************************************************/
+
+VOID
+DestroySList( PSECTIONLIST pList )
+{
+    PSECTIONLIST pTemp = NULL;
+    PSECTIONLIST pNext;
+
+    /*
+     *  walk list freeing elements as we go
+     */
+    for ( pTemp=pList; pTemp!=NULL; pTemp=pNext ) {
+
+        /*
+         *  save address to next node
+         */
+        pNext = pTemp->pNext;
+
+        /*
+         *  free current node string
+         */
+        if ( pTemp->pElement )
+            (void) free( pTemp->pElement );
+        if ( pTemp->pFile )
+            (void) free( pTemp->pFile );
+
+        /*
+         *  free current node
+         */
+        (void) free( pTemp );
+    }
+}
+
+/*******************************************************************************
+ *
  *  GetFirstElement
  *
  *  ENTRY:
@@ -1531,7 +1780,8 @@ GetNextElement( PCHAR pPd )
  ******************************************************************************/
 
 void
-GetString( PCHAR pPSec, PCHAR pPFile, PCHAR pSSec, PCHAR pSFile, PCHAR pEntry, PCHAR pString, int cbString )
+GetString( PCHAR pPSec, PCHAR pPFile, PCHAR pSSec, PCHAR pSFile, 
+           PCHAR pEntry, PCHAR pString, int cbString )
 {
     PCHAR pBuffer;
 
@@ -1574,7 +1824,7 @@ GetString( PCHAR pPSec, PCHAR pPFile, PCHAR pSSec, PCHAR pSFile, PCHAR pEntry, P
 #if defined( DOS ) || defined( WIN32 ) || defined( RISCOS )
 /*******************************************************************************
  *
- *  GetSection (DOS and WIN32)
+ *  GetSection (DOS)
  *
  *  ENTRY:
  *      pSectionName (input)
@@ -1596,12 +1846,25 @@ GetString( PCHAR pPSec, PCHAR pPFile, PCHAR pSSec, PCHAR pSFile, PCHAR pEntry, P
 int
 GetSection( PCHAR pSectionName, 
             PCHAR pFileName,
-            PCHAR *ppSectionBuffer )
+            PCHAR *ppSectionBuffer,
+            PLIST pOverwrites )
 {
-    int rc = CLIENT_STATUS_SUCCESS;
+    int   rc = CLIENT_STATUS_SUCCESS;
     int   cb, cbSection = 0;
+    int   len1, len2, lenTemp;
     PCHAR pSectionBuffer = NULL;
+    PCHAR pTempBuffer = NULL;
+    PCHAR pTemp = NULL;
+    PCHAR pEqual1 = NULL;
+    PCHAR pEqual2 = NULL;
+    BOOL  KeyFound;
+    PLIST pList;
+    CHAR  OverwriteEntry[MAX_INI_LINE];
+    PCHAR pEntry;
 
+    TRACE((TC_LIB, TT_API1, "GetSection: S '%s' F '%s' Overwrites %p", pSectionName ? pSectionName : "", pFileName ? pFileName : "", pOverwrites));
+
+    pEntry = (PCHAR) malloc(MAX_INI_LINE);
 
     /*
      * continue till all is read
@@ -1616,11 +1879,11 @@ GetSection( PCHAR pSectionName,
         /*
          * allocate section buffer
          */
-        if ( (pSectionBuffer = (PCHAR) malloc( cbSection )) == NULL ) {
+        if ( (pTempBuffer = (PCHAR) malloc( cbSection )) == NULL ) {
             rc = CLIENT_ERROR_NO_MEMORY;
             goto ErrorReturn;
         }
-
+        
         /*
          * try and read this section
          */
@@ -1628,21 +1891,24 @@ GetSection( PCHAR pSectionName,
         if ( !(cb = GetPrivateProfileString( pSectionName,
                                              NULL,
                                              INI_EMPTY,
-                                             pSectionBuffer,
+                                             pTempBuffer,
                                              cbSection,
                                              pFileName )) ) {
-#else
+#else /* DmitryV 9/25/97
+         This code does not get executed anymore because we moved the WIN32 stuff to the
+         GetSection Function below.  Read the comments to the WIN16 GetSection().
+      */
         // win32 has a strange bug were it will create an empty INI file
         // if the requested INI file is not present.
         // to get around this, we will check for the INI file first.
         if ( (_access(pFileName,0)) || 
              !(cb = GetPrivateProfileSection( pSectionName,
-                                              pSectionBuffer,
+                                              pTempBuffer,
                                               cbSection,
                                               pFileName )) ) {
 #endif
             cb = GetPrivateProfileSectionDefault( pSectionName,
-                                                  pSectionBuffer,
+                                                  pTempBuffer,
                                                   cbSection,
                                                   pFileName);
             if(cb==0) {                          
@@ -1656,18 +1922,87 @@ GetSection( PCHAR pSectionName,
          * a bigger one.
          */
         if ( cb == cbSection-2 )
-            (void) free( pSectionBuffer );
+            (void) free( pTempBuffer );
         else
             break;  // got 'em all
-    }
+        }
 
     /*
      * realloc to true size
      */
-    pSectionBuffer = (PCHAR) realloc( pSectionBuffer, cb+1 );
+    pTempBuffer = (PCHAR) realloc( pTempBuffer, cb+1 );
 
-done:
+    TRACE((TC_LIB, TT_API2, "GetSection: got buffer at %p cb %d last three chars %d %d %d",
+	   pTempBuffer, cb, pTempBuffer[cb-2], pTempBuffer[cb-1], pTempBuffer[cb]));
+
+    /* 
+     * Second pass on the buffer to allow for overwrites and to eliminate 
+     * all whitespace
+     */
+    pSectionBuffer = (PCHAR) malloc(cb+1+SECTIONSIZE);
+    cb = 0;
+    pTemp = pTempBuffer;
+    while (lenTemp = strlen(pTemp)) {
+       
+       TRACE((TC_LIB, TT_API2, "GetSection: entry '%s' len %d", pTemp, lenTemp));
+
+       memcpy(pEntry, pTemp, lenTemp);
+       pEntry[lenTemp] = 0;
+       pEqual1 = strchr(pEntry, '=');
+       *pEqual1++ = 0;
+
+       EatWhiteSpace(pEntry);
+
+       KeyFound = FALSE;
+       pList = pOverwrites;
+       
+       while ((pList != NULL) && !KeyFound) {  
+	   TRACE((TC_LIB, TT_API2, "GetSection: overwrite element '%s'", pList->pElement));
+
+	   //see if this entry should be overwritten
+          strcpy(OverwriteEntry, pList->pElement);
+          
+          pEqual2  = strchr(OverwriteEntry, '=');
+          *pEqual2++ = 0;
+          
+          if (!stricmp(OverwriteEntry, pEntry)) {
+             KeyFound = TRUE;
+          } else {
+             pList = pList->pNext;
+          }
+       }
+       len1= strlen(pEntry);
+       memcpy( &(pSectionBuffer[cb]), pEntry, len1);
+       cb += len1;
+       pSectionBuffer[cb++] = '=';
+       
+       if (KeyFound) {  //use the value in the overwrites
+          len2 = strlen(pEqual2);
+          memcpy( &(pSectionBuffer[cb]), (pEqual2), len2);
+       } else {
+          EatWhiteSpace(pEqual1);
+          len2 = strlen(pEqual1);
+          memcpy( &(pSectionBuffer[cb]), pEqual1, len2);
+       }
+       
+       cb += len2;
+       pSectionBuffer[cb++] = 0;
+       pTemp += (lenTemp + 1);
+
+       TRACE((TC_LIB, TT_API2, "GetSection: entry end cb=%d", cb));
+    }
+    pSectionBuffer[cb++] = 0;
+    pSectionBuffer = (PCHAR) realloc(pSectionBuffer, cb);
+
+done: 
+    TRACE((TC_LIB, TT_API1, "GetSection: "));
+
+    free(pTempBuffer);
+    free(pEntry);
     *ppSectionBuffer = pSectionBuffer;
+
+    TRACE((TC_LIB, TT_API1, "GetSection: rc %d", rc));
+
     return( rc );
 
 //----------------
@@ -1679,14 +2014,32 @@ ErrorReturn:
     pSectionBuffer = NULL;
     goto done;
 
-}  // end GetSection (DOS and WIN32)
-#endif
+}  // end GetSection (DOS)
 
-
-#ifdef WIN16
+#else
 /*******************************************************************************
+ * 
+ *  GetSection (DmitryV 9/25/97 WIN16 doesn't have the GetPrivateProfileSection(), 
+ *                              and WIN32 fails on WINDOWS95 ReadOnly INI files,
+ *                              so we do have to use multiple steps)
  *
- *  GetSection (WIN16 - needs multiple steps to do what we want)
+ *  For WIN16, there is no api to get the whole section, so we need to do multiple
+ *  steps to do what we want.
+ *  For WIN32, there is an api -- GetPrivateProfileSection -- but on WIN95 it fails
+ *  if the *.INI file is marked "ReadOnly" because it tries to open it as "rw", not
+ *  just "r".  And our customers don't want their people to be able to modify the
+ *  INI files that MIS so painstakingly put together.
+ *
+ *  So, we could do two things:
+ *
+ *     1. Dynamically query to find out if we are on NT or 95, and then choose which
+ *        path to take based on the result, or
+ *     2. Do what WIN16 does, and parse the sections ourselves
+ *
+ *  For now, we will just do step 2, and let WIN32 and WIN16 execute this function,
+ *  especially since we know it worked for at least WIN16.  Maybe in the future
+ *  WIN95 will call LockFile rather than fopen(..., "rw"), and we can be more 
+ *  efficient.  If that happens, just move the || defined(WIN32) to other GetSection().
  *
  *  ENTRY:
  *      pSectionName (input)
@@ -1708,9 +2061,10 @@ ErrorReturn:
 int
 GetSection( PCHAR pSectionName, 
             PCHAR pFileName,
-            PCHAR *ppSectionBuffer )
+            PCHAR *ppSectionBuffer,
+            PLIST pOverwrites )
 {
-    int rc = CLIENT_STATUS_SUCCESS;
+    int  rc = CLIENT_STATUS_SUCCESS;
     int  cb, cbTemp, 
          cbSection = 0, 
          cbEntries = 0;
@@ -1722,6 +2076,14 @@ GetSection( PCHAR pSectionName,
           pEntry;
     CHAR  StringBuffer[MAX_INI_LINE];
 
+    PLIST pList;
+    CHAR  EntryCopy[MAX_INI_LINE];
+    CHAR  EntryCopy2[MAX_INI_LINE];
+    BOOL  KeyFound;
+    PCHAR pTemp;
+    PCHAR pEqual;
+    PCHAR pEqual2;
+    int   len;
 
     /*
      * First, get all entries in the section.
@@ -1750,25 +2112,84 @@ GetSection( PCHAR pSectionName,
                                              pEntriesBuffer,
                                              cbEntries,
                                              pFileName )) ) {
+            
             // try using default section values before
             // giving up
-            cb = GetPrivateProfileSectionDefault( pSectionName,
-                                                  pEntriesBuffer,
+            cb = GetPrivateProfileSectionDefault( pSectionName,pEntriesBuffer,
                                                   cbEntries,
                                                   pFileName);
             if(cb==0) {                          
                rc = -1;    // 'not found'
                goto ErrorReturn;
+               
+            } else {
+               
+               /* 
+                * Add bytes for the potential overrides
+                * This is a bit wasteful but will soon be freed anyway
+                * Possibly fix this in future
+                */
+               pList = pOverwrites;
+               while (pList != NULL) {
+                  cb += strlen(pList->pElement);
+                  pList = pList->pNext;
                }
-            else {
-                /*
-                 * realloc to true size
-                 */
-                pEntriesBuffer = (PCHAR) realloc( pEntriesBuffer, cb+1 );
-                
-                *ppSectionBuffer = pEntriesBuffer;
-                return( rc );
-                }
+               /*
+                * we must stop here and overwrite the values 
+                * if necessary as specified from the overwrites list
+                */
+               if ( (pSectionBuffer = (PCHAR) malloc(cb)) == NULL ) {
+                   rc = CLIENT_ERROR_NO_MEMORY;
+                   goto ErrorReturn;
+               }
+
+               pEntry = pSectionBuffer;    //buffer to write into
+               pTemp  = pEntriesBuffer;    //buffer reading from
+               
+               while (len = strlen(pTemp)) {
+                  KeyFound = FALSE;
+                  pList = pOverwrites;
+                  
+                  while ((pList != NULL) && !KeyFound) {  
+                     //see if this entry should be overwritten
+                     strcpy(EntryCopy,  pTemp);
+                     strcpy(EntryCopy2, pList->pElement);
+                     
+                     pEqual = strchr(EntryCopy, '=');
+                     *pEqual++ = 0;
+                     pEqual2 = strchr(EntryCopy2, '=');
+                     *pEqual2++ = 0;
+                     
+                     if (!stricmp(EntryCopy, EntryCopy2)) {
+                        KeyFound = TRUE;
+                     } else {
+                        pList = pList->pNext;
+                     }
+                  }
+                     
+                  if (KeyFound) {
+                     
+                     cbTemp = strlen(pList->pElement);
+                     memcpy( pEntry, pList->pElement, cbTemp );
+                     pEntry += cbTemp;
+                     *pEntry++ = '\0';
+          
+                  } else {
+                     
+                     memcpy(pEntry, EntryCopy, (cbTemp = strlen(EntryCopy)) );
+                     pEntry += cbTemp;
+                     *pEntry++ = '=';
+                     if ( *pEqual ) {
+                         memcpy( pEntry, pEqual, (cbTemp = strlen(pEqual)) );
+                         pEntry += cbTemp;
+                     }
+                     *pEntry++ = '\0'; //NULL terminate the entry/string pair
+                  }
+                  pTemp += (len + 1);  //move to next buffer entry
+               }
+               *pEntry = '\0'; //final NULL terminator.
+               goto done; //buffer is complete 
+            }
         }
 
         /*
@@ -1782,6 +2203,7 @@ GetSection( PCHAR pSectionName,
     }
 
     /*
+     * Section found in file... do the extra formatting now
      * realloc entries buffer to true size
      */
     pEntriesBuffer = (PCHAR)realloc( pEntriesBuffer, cb+1 );
@@ -1849,6 +2271,17 @@ GetSection( PCHAR pSectionName,
      */
     cbSection++;
 
+    /* 
+     * Add bytes for the potential overrides
+     * This is a bit wasteful but will soon be freed anyway
+     * Possibly fix this in future
+     */
+    pList = pOverwrites;
+    while (pList != NULL) {
+       cbSection += strlen(pList->pElement);
+       pList = pList->pNext;
+    }
+
     /*
      * allocate the section buffer
      */
@@ -1873,18 +2306,43 @@ GetSection( PCHAR pSectionName,
         pEntryList = pEntryListNext;        
         pEntryListNext = pEntryList->pNext;
 
-        memcpy( pEntry, pEntryList->pEntryName,
-                (cbTemp = strlen(pEntryList->pEntryName)) );
-        pEntry += cbTemp;
-        *pEntry++ = '=';
-        if ( pEntryList->pEntryString ) {
-            memcpy( pEntry, pEntryList->pEntryString,
-                    (cbTemp = strlen(pEntryList->pEntryString)) );
-            pEntry += cbTemp;
-            free(pEntryList->pEntryString);
+        KeyFound = FALSE;
+        pList = pOverwrites;
+        
+        while ((pList != NULL) && !KeyFound) {  
+           //see if this entry should be overwritten
+           strcpy(EntryCopy, pList->pElement);
+           
+           pEqual = strchr(EntryCopy, '=');
+           *pEqual = 0;
+           
+           if (!stricmp(EntryCopy, pEntryList->pEntryName)) {
+              KeyFound = TRUE;
+           } else {
+              pList = pList->pNext;
+           }
         }
-        *pEntry++ = '\0'; // NULL terminate the entry/string pair.
+           
+        if (KeyFound) {
+           
+           cbTemp = strlen(pList->pElement);
+           memcpy( pEntry, pList->pElement, cbTemp );
+           pEntry += cbTemp;
+           *pEntry++ = '\0';
 
+        } else {
+           memcpy( pEntry, pEntryList->pEntryName,
+                   (cbTemp = strlen(pEntryList->pEntryName)) );
+           pEntry += cbTemp;
+           *pEntry++ = '=';
+           if ( pEntryList->pEntryString ) {
+               memcpy( pEntry, pEntryList->pEntryString,
+                       (cbTemp = strlen(pEntryList->pEntryString)) );
+               pEntry += cbTemp;
+               free(pEntryList->pEntryString);
+           }
+           *pEntry++ = '\0'; // NULL terminate the entry/string pair.
+        }
         free(pEntryList);
     }
     *pEntry = '\0'; // final NULL terminator.
@@ -1925,199 +2383,7 @@ ErrorReturn:
     goto done;
 
 }  // end GetSection (WIN16)
-#endif
-
-/*******************************************************************************
- *
- *  MergeSections
- *
- *  ENTRY:
- *      pS0 (input)
- *          Primary section for merge.
- *      pS1 (input)
- *          Section to merge common pS0 entries into.
- *      pS2 (input)
- *          Optional section.  If not NULL, will first merge pS1 entries into
- *          this section.  Then, will merge the common pS0 entries into the
- *          intermediate merged section.
- *  EXIT:
- *      (PCHAR) pointer to final merged section
- *
- ******************************************************************************/
-
-PCHAR
-MergeSections( PCHAR pS0, PCHAR pS1, PCHAR pS2 )
-{
-    PCHAR pTemp;
-    PCHAR pMergedSection = NULL;
-
-    /*
-     *  if optional section exists merge it first
-     */
-    if ( pS2 ) {
-
-        TRACE((TC_LIB, TT_API1, "MergeSections: optional merge"));
-
-        if ( (pTemp = MergePrivateProfileEntries( pS2, pS1 )) == NULL )
-            return( NULL );
-    }
-    else {
-        pTemp = pS1;
-    }
-
-    /*
-     *  create final merged section
-     */
-    TRACE((TC_LIB, TT_API1, "MergeSections: final merge"));
-    pMergedSection = MergePrivateProfileEntries( pTemp, pS0 );
-
-    // if allocate buffer, free
-    if ( pS2 )
-        (void) free( pTemp );
-
-    //  return merged string
-    return( pMergedSection );
-}
-
-/*******************************************************************************
- *
- *  MergePrivateProfileEntries
- *
- *      This routine creates an output profile section consisting of all
- *      entry=value pairs in lpszPrimary, but with the values obtained from 
- *      lpszSecondary for entries which appear in both sections.
- *
- *  ENTRY:
- *      lpszPrimary (input)
- *          Primary profile entries.
- *      lpszSecondary (input)
- *          Secondary profile entries to merge into primary.
- *  EXIT:
- *      (PCHAR) pointer to merged profile entries; NULL if not enough
- *          memory to perform merge.
- *
- ******************************************************************************/
-
-PCHAR
-MergePrivateProfileEntries( PCHAR lpszPrimary, PCHAR lpszSecondary )
-{
-    int   len;
-    int   cb;
-    int   cbBufCur = 0;
-    int   cbBufMax = SECTIONSIZE;
-    PCHAR pSection = lpszPrimary;
-    PCHAR pReturn  = NULL;
-    PCHAR pEntry   = NULL;
-    PCHAR pString  = NULL;
-    PCHAR pLine    = NULL;
-    PCHAR pBuf     = NULL;
-    PCHAR p        = NULL;
-
-    //  malloc for return entries
-    if ( (pReturn = (PCHAR) malloc( cbBufMax )) == NULL )
-        goto NoMemory;
-
-    //  init return string and other junk
-    memset( pReturn, 0, cbBufMax );
-
-    //  malloc buffer for secondary profile entry
-    if ( (pBuf = (PCHAR) malloc(MAX_INI_LINE)) == NULL )
-        goto NoMemory;
-
-    /*
-     *  search while there are any entries left
-     */
-    while ( (len = strlen( pSection )) ) {
-
-        //  make copy so we may mess with it
-        if ( (pLine = strdup( pSection )) == NULL )
-            goto NoMemory;
-
-        //  find = sign, and use as temporary terminator
-        if ( (pString=strchr( pLine, '=' )) != NULL ) {
-
-            //  find begining of entry
-            pEntry = pLine + strspn( pLine, " \t" );
-
-            //  get past the = and terminate the pEntry
-            *(pString++) = 0;
-
-            //  find end of entry and terminate
-            if ( (p = strpbrk( pEntry, " \t" )) != NULL )
-               *p = 0;
-
-            //  now look for entry match in secondary string
-            if ( bGetPrivateProfileString( lpszSecondary,
-                                           pEntry,
-                                           "",
-                                           pBuf,
-                                           MAX_INI_LINE ) ) {
-
-                //  point to string
-                TRACE((TC_LIB, TT_API1, "Merging entry: %s -> %s", pEntry, pBuf));
-                pString = pBuf;
-            }
-            else {
-
-                //  find begining of string
-                pString = pString + strspn( pString, " \t" );
-
-                //  find the end of the string and terminate
-                p = pString + strlen( pString ) - 1;
-                while ( *p == ' ' || *p == '\t' )
-                    *(p--) = 0;
-
-            }
-
-            //  get length of pEntry, =, pString and NULL
-            cb = strlen( pEntry ) + strlen( pString ) + 2;
-
-            //  space left in buffer? no, then grow
-            if ( (cbBufCur + cb) >= cbBufMax ) {
-                cbBufMax += SECTIONSIZE;
-                if ( (pReturn = (char *) realloc( pReturn, cbBufMax )) == NULL )
-                    goto NoMemory;
-            }
-
-            //  get pointer to current location
-            p = &(pReturn[cbBufCur]);
-
-            //  copy into buffer
-            sprintf( p, "%s=%s", pEntry, pString );
-
-            //  index to next avail location in buffer
-            cbBufCur += cb;
-
-            //  double NULL terminate (last entry will remain this way).
-            pReturn[cbBufCur] = 0;
-        }
-
-        //  free duped line
-        (void) free( pLine );
-
-        //  next string
-        pSection += (len + 1);
-    }
-
-Done:
-    //  free temp buffer
-    if ( pBuf )
-        (void) free( pBuf );
-
-    //  return merged entries
-    return( pReturn );
-
-//----------------
-// error return
-//----------------
-NoMemory:
-    if ( pLine )
-        free(pLine);
-    if ( pReturn )
-        free(pReturn);
-    pReturn = NULL;
-    goto Done;
-}
+#endif //end ifdef DOS else
 
 
 /*******************************************************************************
@@ -2155,7 +2421,7 @@ CombinePrivateProfileEntries( PCHAR lpszPrimary, PCHAR lpszSecondary )
     PCHAR pBuf     = NULL;
     PCHAR p        = NULL;
 
-    cbBufCur = bGetSectionLength(lpszPrimary) - 1;  // don't include final NULL
+    cbBufCur = IniSize(lpszPrimary) - 1;  // don't include final NULL
 
     /*
      * malloc for combined entries
@@ -2199,11 +2465,11 @@ CombinePrivateProfileEntries( PCHAR lpszPrimary, PCHAR lpszSecondary )
                *p = 0;
 
             //  now look for entry match in primary buffer.
-            if ( !bGetPrivateProfileString( lpszPrimary,
-                                            pEntry,
-                                            "",
-                                            pBuf,
-                                            MAX_INI_LINE ) ) {
+            if ( !GetSectionString( lpszPrimary,
+                                    pEntry,
+                                    "",
+                                    pBuf,
+                                    MAX_INI_LINE ) ) {
 
                 /*                                                        
                  * Entry not in primary section; copy it there.
@@ -2255,6 +2521,37 @@ NoMemory:
     goto Done;
 }
 
+/*******************************************************************************
+ *
+ *  AddHeaderSection
+ *
+ *    will pad the header name to the front of the provided section
+ *
+ ******************************************************************************/
+
+PCHAR AddHeaderSection( PCHAR pSection, PCHAR pName )
+{
+   PCHAR pReturn;
+   int   curr;
+   int   len;
+   int   size;
+
+   len = strlen(pName);
+   size = IniSize(pSection);
+
+   pReturn = (PCHAR) malloc(size + (len + 4));    //we shall add four extra characters
+
+   curr = 0;
+   pReturn[curr++] = '[';
+   memcpy ( &(pReturn[curr]), pName, len);
+   curr += len;
+   pReturn[curr++] = ']';
+   pReturn[curr++] = '0';
+   pReturn[curr++] = 0;
+   memcpy ( &(pReturn[curr]), pSection, size);
+
+   return(pReturn);
+}
 
 /*******************************************************************************
  *
@@ -2273,10 +2570,11 @@ NoMemory:
 PCHAR
 BuildCfgIniOverridesSection( PCFGINIOVERRIDE pCfgIniOverrides )
 {
-    int rc = CLIENT_STATUS_SUCCESS;
-    int i, cbKey, cbValue,
-        cbBufCur = 0, cbBufMax = SECTIONSIZE;
-    PCHAR pReturn = NULL;
+    int   rc = CLIENT_STATUS_SUCCESS;
+    int   i, cbKey, cbValue, cbBufCur; 
+    int   cbBufMax = SECTIONSIZE;
+
+    PCHAR pReturn  = NULL;
 
     /*
      * Start with default section buffer.
@@ -2285,12 +2583,20 @@ BuildCfgIniOverridesSection( PCFGINIOVERRIDE pCfgIniOverrides )
         goto NoMemory;
 
     /*
-     * Default to an 'empty' (double null) section buffer.  Will remain this
-     * way if override loop encounters no overrides.
+     * Default to an 'empty' (double null) section buffer with
+     * [Server] Section Name and an 0 offset value. ie :: [Server]00000\0\0
+     * Will remain this way if override loop encounters no overrides.
      */
-    pReturn[0] = 0;
-    pReturn[1] = 0;
-
+    pReturn[0] = '[';
+    cbBufCur = 1;
+    cbKey = strlen( INI_SERVERSECTION );
+    memcpy( &(pReturn[cbBufCur]), INI_SERVERSECTION, cbKey );
+    cbBufCur += cbKey;
+    pReturn[cbBufCur++] = ']';
+    pReturn[cbBufCur++] = '0';
+    pReturn[cbBufCur++] = 0;
+    pReturn[cbBufCur] = 0;
+    
     /*
      * Loop through the overrides.
      */
@@ -2319,6 +2625,7 @@ BuildCfgIniOverridesSection( PCFGINIOVERRIDE pCfgIniOverrides )
             /*
              * Copy key, '=', value, and null into buffer.
              */
+
             memcpy( &(pReturn[cbBufCur]), pCfgIniOverrides[i].pszKey, cbKey );
             cbBufCur += cbKey;
             pReturn[cbBufCur++] = '=';
@@ -2522,3 +2829,536 @@ char * basename( char * pName )
 
     return( pBasename );
 }
+
+/*******************************************************************************
+ *
+ *  BuildMembersList
+ *
+ *    return pointer to a list of all section members
+ *
+ *    ValidSection (input)
+ *       name of the section we wish to make valid
+ *    ListSection
+ *       name of the Section where the list of available sections resides
+ *
+ ******************************************************************************/
+
+PLIST BuildMembersList( PCHAR ValidSection, PCHAR ListSection, 
+                        PCHAR lpszFileName) {
+
+   PLIST pList = NULL;
+   PLIST pRoot = NULL;
+   PLIST pTemp = NULL;
+   PCHAR pIniSection = NULL;
+   PCHAR pSave;
+   PCHAR p;
+   int   len;
+   PLIST pOverwrites = NULL;
+
+   GetSection(ListSection, lpszFileName, &pIniSection, pOverwrites);
+   
+   pSave = pIniSection; //save head of buffered section so we may free it all
+   while (len = strlen(pSave)) {
+      
+      pTemp = (PLIST) malloc(sizeof(LIST));
+      p = strchr(pSave, '=');
+      *p = 0;
+      pTemp->pElement = strdup( pSave );
+      
+      if (!strcmp(ValidSection, pSave)) { 
+         pTemp->bValid = 1;
+      } else { 
+         pTemp->bValid = 0; }
+      
+      pTemp->pNext = NULL;
+
+      if (pRoot == NULL) {
+         //first component
+         pList = pTemp;
+         pRoot = pList;
+      } else {
+         pList->pNext = pTemp;
+         pList = pList->pNext;
+      }
+      pSave += (len + 1);
+   }
+   
+   free(pIniSection);
+   return(pRoot);
+}
+
+/*******************************************************************************
+ *
+ *  BuildAllSectionsList
+ *
+ *    return pointer to a list of all valid sections in the specified files 
+ *
+ ******************************************************************************/
+
+PSECTIONLIST BuildAllSectionsList( PCHAR pConnection, 
+                                   PCHAR pTransport,
+                                   PCHAR pServerFile,
+                                   PCHAR pConfigFile,
+                                   PCHAR pProtocolFile ) 
+{   
+   FILE           *infile = NULL;
+   BOOL           InvalidSection;
+   BOOL           Transport;
+
+   PSECTIONLIST   pRoot = NULL;
+   PSECTIONLIST   pList = NULL;
+   PSECTIONLIST   pNew  = NULL;
+   PSECTIONLIST   pTemp = NULL;
+   
+   PLIST pAppServerList = NULL;
+   PLIST pTransportList = NULL;
+   PLIST pTemp2;
+
+   PCHAR CurrSectionName = NULL;
+   PCHAR p;
+   char  ReadBuf[MAX_INI_LINE];          // temp line buffer
+
+   /*
+    * Create our sections list starting with the valid sections in server file.
+    * Make a list of all ApplicationServer sections in the server file
+    */
+   pAppServerList = BuildMembersList(pConnection, INI_APPSERVERLIST, pServerFile);
+
+   //validate parameters
+   if ( pServerFile == NULL) {
+      goto done;
+   }
+
+   //open the server file
+   if ( (infile = fopen( pServerFile, "r" )) == NULL ) {
+      goto done;
+   }
+   
+   while( fgets(ReadBuf, MAX_INI_LINE, infile) != NULL ) {
+
+      // section header?
+      if( (ReadBuf[0] == '[') && ((p = strchr( ReadBuf, ']' )) != NULL) ) {
+            
+         //replace right bracket with null and extract section name
+         *p = 0;
+         CurrSectionName = &ReadBuf[1];
+         
+         //search the appserverlist to see if this is a appserver section
+         InvalidSection = FALSE;
+         pTemp2 = pAppServerList;
+         while (pTemp2 != NULL) {
+            if (!strcmp(pTemp2->pElement, CurrSectionName)) {
+               InvalidSection = TRUE;
+               break;
+            }
+            pTemp2 = pTemp2->pNext;
+         }
+      
+         //add to list if valid and not the WFClient section since we handle that special
+         if (!InvalidSection && (strcmp(INI_WFCLIENT, CurrSectionName))) {
+            pNew = (PSECTIONLIST) malloc(sizeof(SECTIONLIST));
+            pNew->pElement = strdup(CurrSectionName);
+            pNew->pFile    = strdup(pServerFile);
+            pNew->bValid = 1;
+            pNew->pNext = NULL;
+            if (pRoot == NULL) {
+               pList = pNew;
+               pRoot = pList;
+            } else {
+               pList->pNext = pNew;
+               pList = pList->pNext;
+            }
+         }
+      }
+   }
+
+   if (fclose( infile )) {
+      goto done;
+   }
+
+   /*
+    * Add to our sections list the sections in the config file
+    */
+   if ( pConfigFile == NULL) {
+      goto skipconfig;
+   }
+
+   //open the config file
+   if ( (infile = fopen( pConfigFile, "r" )) == NULL ) {
+      goto done;
+   }
+   
+   while( fgets(ReadBuf, MAX_INI_LINE, infile) != NULL ) {
+
+      if( (ReadBuf[0] == '[') && ((p = strchr( ReadBuf, ']' )) != NULL) ) {
+            
+         *p = 0;
+         CurrSectionName = &ReadBuf[1];
+         
+         //add to list 
+         if (strcmp(INI_WFCLIENT, CurrSectionName)) {
+            pNew = (PSECTIONLIST) malloc(sizeof(SECTIONLIST));
+            pNew->pElement = strdup(CurrSectionName);
+            pNew->pFile    = strdup(pConfigFile);
+            pNew->bValid = 1;
+            pNew->pNext = NULL;
+            if (pRoot == NULL) {
+               pList = pNew;
+               pRoot = pList;
+            } else {
+               pList->pNext = pNew;
+               pList = pList->pNext;
+            }
+         }
+      }
+   }
+
+   if (fclose( infile )) {
+      goto done;
+   }
+   
+skipconfig:   
+   if ( pProtocolFile == NULL) {
+      goto done;
+   }
+   
+   /*
+    * Add to our sections list the valid sections in the protocol file.
+    * make a list of all TransportDriver sections in the protocol file and 
+    * only make the one we are currently using valid
+    */
+   pTransportList = BuildMembersList(pTransport, INI_TRANSPORTDRIVER, pProtocolFile);
+
+   /*
+    * Add to our sections list the valid sections in the protocol file
+    */
+
+   //validate parameters
+   if ( pProtocolFile == NULL) {
+      goto done;
+   }
+
+   //open the server file
+   if ( (infile = fopen( pProtocolFile, "r" )) == NULL ) {
+      goto done;
+   }
+   
+   while( fgets(ReadBuf, MAX_INI_LINE, infile) != NULL ) {
+      
+      if( (ReadBuf[0] == '[') && ((p = strchr( ReadBuf, ']' )) != NULL) ) {
+         
+         *p = 0;
+         CurrSectionName = &ReadBuf[1];
+         
+         //search the transportlist to see if this is a transport section
+         InvalidSection = FALSE;
+         Transport = FALSE;
+         pTemp2 = pTransportList;
+         while (pTemp2 != NULL) {
+            if (!strcmp(pTemp2->pElement, CurrSectionName)) {
+               
+               //make sure we dont invalidate our actual transport driver section
+               if (pTemp2->bValid) {
+                  Transport = TRUE; //special case to indicate we need extra sec
+               } else {
+                  InvalidSection = TRUE;
+               }
+               break;
+            }
+            pTemp2 = pTemp2->pNext;
+         }
+      
+         //add to list if valid
+         if (!InvalidSection && (strcmp(INI_WFCLIENT, CurrSectionName))) {
+            pNew = (PSECTIONLIST) malloc(sizeof(SECTIONLIST));
+            pNew->pElement = strdup(CurrSectionName);
+            pNew->pFile    = strdup(pProtocolFile);
+            if (Transport) {
+               pNew->bValid = 2;
+            } else {
+               pNew->bValid = 1;
+            }
+            pNew->pNext = NULL;
+            if (pRoot == NULL) {
+               pList = pNew;
+               pRoot = pList;
+            } else {
+               pList->pNext = pNew;
+               pList = pList->pNext;
+            }
+         }
+      }
+   }
+
+   if (fclose( infile )) {
+      goto done;
+   }
+
+done:
+   DestroyList(pAppServerList);
+   DestroyList(pTransportList);
+
+   return(pRoot);
+}
+
+/*******************************************************************************
+ *
+ *  ConcatSections
+ *
+ *    take 2 sections concatenate the 2nd onto the front of the first, then
+ *    calculate the offset and put that into the first section
+ *
+ *******************************************************************************/
+
+PCHAR ConcatSections( PCHAR pMain, PCHAR pNew )
+{
+   int    len, 
+          offset,
+          mainSize,
+          finalSize; 
+   PCHAR  pReturn   = NULL;
+   PCHAR  offstring = NULL;
+   PCHAR  pTemp     = NULL;
+   PCHAR  pNewBody  = NULL;
+   PCHAR  pHeader   = NULL;
+
+   pHeader = (PCHAR) malloc(MAX_INI_LINE);
+
+   /* 
+    * Find the length of the new section minus its section name and current offset
+    * Subtract 1 from the length to remove the extra NULL at the end of the section
+    */
+   pNewBody = pNew + strlen(pNew);   
+   offset = IniSize(pNewBody) - 1;         
+
+   /*
+    * Make a new header for the new section with its section name 
+    * and the new calculated offset
+    */
+   
+   offstring = (PCHAR) malloc(MAX_INI_LINE);
+   sprintf( offstring, "%d", offset );
+   
+   memcpy(pHeader, pNew, strlen(pNew));
+   pTemp = strchr(pHeader, ']');
+   len = strlen(offstring);
+   memcpy( ++pTemp, offstring, len);  //place the new offset just behind the section name
+   pTemp += len;
+   *pTemp = 0;
+   len = strlen(pHeader);
+
+   /*
+    * Determine the size needed for our concatenated buffer and do it
+    */
+   mainSize = IniSize(pMain);
+   finalSize = offset + mainSize + len;  
+   pReturn = (PCHAR) malloc(finalSize);
+   memcpy(pReturn, pHeader, len);
+   
+   pTemp = pReturn + len;
+   memcpy(pTemp, pNewBody, offset);
+   
+   pTemp += offset;                  
+   memcpy(pTemp, pMain, mainSize); 
+   
+   free(offstring);
+   free(pHeader);
+
+   return(pReturn);
+}
+
+
+/*******************************************************************************
+ *
+ *  IniSize
+ *
+ *    Determine how many bytes of data that the specified INI file section consumes
+ *
+ * ENTRY:
+ *    pIniSection (input)
+ *       pointer to INI file section data
+ *
+ * EXIT:
+ *    number of bytes consumed by pIniSection
+ *
+ ******************************************************************************/
+INT IniSize( PCHAR pIniSection )
+{
+    INT cb = 0;
+
+    for ( cb = 0; ; cb++ ) {
+       if ( !*pIniSection++ && !*pIniSection ) {
+           cb += 2;
+           break;
+       }
+    }
+
+    return( cb );
+}
+
+
+/*******************************************************************************
+ *
+ *  AddEntrySection
+ *
+ *    This will add the key=value into section or overwrite the value already there
+ *
+ ******************************************************************************/
+ 
+PCHAR AddEntrySection( PCHAR pSection, PCHAR pEntry, PCHAR pValue ) 
+{
+   int      len, half1, half2;
+   PCHAR    pTemp      = NULL;
+   PCHAR    pEqual     = NULL;
+   PCHAR    pNewEntry  = NULL;
+   PCHAR    pReturn    = NULL;
+   BOOL     EntryFound = FALSE;
+
+   pNewEntry = (PCHAR) malloc(MAX_INI_LINE);
+
+   pTemp = pSection;
+   while ( (len = strlen(pTemp)) && !EntryFound) {
+      
+      memcpy(pNewEntry, pTemp, len);
+      pEqual = strchr(pNewEntry, '=');
+      
+      //remove the equal sign and leave just the entry naame
+      if (pEqual != NULL) {             
+         *pEqual = 0; 
+      }
+      
+      /*
+       * If the entry already exists in the section then mark the location
+       * of the entry with a NULL to cut off the first half of the buffer
+       * from the second half for a re-merge later
+       */
+      if (!strcmp(pNewEntry, pEntry)) {    
+         EntryFound = TRUE;             
+         *pTemp = 0;
+      }
+      pTemp += (len + 1);         
+   }
+
+   if (EntryFound) {                   
+      
+      len = strlen(pNewEntry);
+      pNewEntry[len++] = '=';
+      memcpy( &(pNewEntry[len]), pValue, strlen(pValue));
+      len += strlen(pValue);
+      pNewEntry[len] = 0;
+
+      half1 = IniSize(pSection) - 1;     //minus 1 to remove the extra NULL
+      half2 = IniSize(pTemp);            //pTemp points 1 entry behind found entry
+
+      pReturn = (PCHAR) malloc(half1 + half2 + len + 1);
+      memcpy( pReturn, pSection, half1);
+      memcpy( &(pReturn[half1]), pNewEntry, len);
+      half1 += len;
+      pReturn[half1++] = 0;
+      memcpy( &(pReturn[half1]), pTemp, half2);
+
+   } else {
+      
+      len = strlen(pEntry);
+      memcpy( pNewEntry, pEntry, len);
+      pNewEntry[len++] = '=';
+      memcpy( &(pNewEntry[len]), pValue, strlen(pValue));
+      len += strlen(pValue);
+      pNewEntry[len] = 0;
+
+      half1 = IniSize(pSection) - 1;
+      pReturn = (PCHAR) malloc (half1 + len + 2);
+      memcpy( pReturn, pSection, half1);
+      memcpy( &(pReturn[half1]), pNewEntry, len);
+      half1 += len;
+      pReturn[half1++] = 0;
+      pReturn[half1++] = 0;
+   }
+
+if (pNewEntry) {
+   free(pNewEntry);
+}
+
+   return(pReturn);
+}
+
+/*******************************************************************************
+ *
+ *  GetSectionString
+ *
+ *  ENTRY:
+ *      lpszSection (input)
+ *          Memory buffer to search.
+ *      lpszEntry (input)
+ *          Key name to search for associated entry.
+ *      lpszDefault (input)
+ *          String to return if lpszEntry not found.
+ *      lpszDefault (input)
+ *          String to return if lpszEntry not found.
+ *      cbReturnBuffer (input)
+ *          Maximum number of characters that can be written to lpszReturnBuffer.
+ *
+ *  EXIT:
+ *      (int) number of characters written to lpszReturnBuffer (not including
+ *          the terminating NULL).
+ *
+ ******************************************************************************/
+
+int GetSectionString( PCHAR lpszSection,
+                      PCHAR lpszEntry,
+                      PCHAR lpszDefault,
+                      PCHAR lpszReturnBuffer,
+                      int   cbReturnBuffer )
+{
+    int   cb;
+
+    /*
+     * Validate parameters.
+     */
+    ASSERT(lpszSection != NULL, 0);
+    ASSERT(lpszEntry != NULL, 0);
+    ASSERT(lpszDefault != NULL, 0);
+    ASSERT(lpszReturnBuffer != NULL, 0);
+
+    /*
+     * Search for string in buffer
+     */
+    if ( !(cb = _w_gpps( lpszSection, lpszEntry, -1,
+                         lpszReturnBuffer, cbReturnBuffer, -1 )) ) {
+
+        /*
+         * Not found - use default.
+         */
+        strncpy(lpszReturnBuffer, lpszDefault, cbReturnBuffer);
+        lpszReturnBuffer[cbReturnBuffer-1] = 0;
+        cb = strlen(lpszReturnBuffer);
+    }
+    return(cb);
+}  
+
+VOID EatWhiteSpace( PCHAR pString )
+{
+    PCHAR pTemp = NULL;
+    PCHAR pTempHead = NULL;
+    UINT  p;
+
+    pTemp = (PCHAR) malloc(MAX_INI_LINE);
+
+    strcpy(pTemp, pString);
+    pTempHead = pTemp;        //Save head of temp so we may free full string
+
+    //trim left: spaces and tabs
+    p = 0;
+    while ( (pTemp[p] == ' ') || (pTemp[p] == '\t') ) { p++; }
+    pTemp = &pTemp[p];
+
+    //trim right : newline, return, tab, spaces
+    p = strlen(pTemp);
+    while (   (pTemp[p-1] == '\n') || (pTemp[p-1] == '\r') 
+           || (pTemp[p-1] == ' ' ) || (pTemp[p-1] == '\t') ) 
+       { pTemp[--p] = 0; }
+    
+    strcpy(pString, pTemp); 
+    free(pTempHead);
+}
+

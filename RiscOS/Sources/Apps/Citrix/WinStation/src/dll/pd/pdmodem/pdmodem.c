@@ -10,14 +10,15 @@
 *  Author: Kurt Perry (6/2/94)
 *
 *  $Log$
-*  Revision 1.1  1998/01/19 19:12:16  smiddle
-*  Added loads of new files (the thinwire, modem, script and ne drivers).
-*  Discovered I was working around the non-ansi bitfield packing in totally
-*  the wrong way. When fixed suddenly the screen starts doing things. Time to
-*  check in.
-*
-*  Version 0.02. Tagged as 'WinStation-0_02'
-*
+*  
+*     Rev 1.24   Oct 31 1997 19:23:24   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.23   Oct 16 1997 10:24:40   briang
+*  Fix retrieval location for INI info
+*  
+*     Rev 1.22   Oct 09 1997 17:24:00   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.21   15 Apr 1997 16:52:30   TOMA
 *  autoput for remove source 4/12/97
@@ -61,7 +62,7 @@
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/pd.h"
 
 #include "pdmodem.h"
@@ -205,10 +206,10 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
     /*
      *  Get modem type
      */
-    bGetPrivateProfileString( pPdOpen->pIniSection, INI_MODEMTYPE, INI_EMPTY, Buffer, sizeof(Buffer) );
+    miGetPrivateProfileString( INI_SERIAL_VER1, INI_MODEMTYPE, INI_EMPTY, Buffer, sizeof(Buffer) );
     pPdModem->pModemName = strdup( Buffer );
 
-    pPdModem->fEchoTTY = bGetPrivateProfileBool( pPdOpen->pIniSection, INI_ECHO_TTY, DEF_ECHO_TTY );
+    pPdModem->fEchoTTY = miGetPrivateProfileBool( INI_WFCLIENT, INI_ECHO_TTY, DEF_ECHO_TTY );
 
     TRACE(( TC_MODEM, TT_API2, "PdModem: DeviceOpen, %s", pPdModem->pModemName ));
 

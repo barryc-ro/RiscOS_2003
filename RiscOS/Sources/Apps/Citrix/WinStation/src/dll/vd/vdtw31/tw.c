@@ -11,28 +11,31 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
-*   Revision 1.1  1998/01/27 18:38:43  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
 *  
+*     Rev 1.16   Jan 19 1998 16:07:36   briang
+*  Include twi_en.h
+*
+*     Rev 1.15   Jan 14 1998 17:00:46   briang
+*  TWI Integration
+*
+*     Rev 1.15   08 Oct 1997 13:50:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.14   28 Apr 1997 14:57:28   kurtp
 *  I fixed a bug in this file, update, duh!
-*  
+*
 *     Rev 1.13   15 Apr 1997 18:15:54   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.13   21 Mar 1997 16:09:24   bradp
 *  update
-*  
+*
 *     Rev 1.12   13 Jan 1997 16:52:04   kurtp
 *  Persistent Cache
-*  
+*
 *     Rev 1.11   08 May 1996 14:51:32   jeffm
 *  update
-*  
+*
 *     Rev 1.10   03 Jan 1996 13:32:46   kurtp
 *  update
 *
@@ -64,6 +67,14 @@
 
 #include "twwin.h"
 #include "twdata.h"
+
+#include "twi_en.h"
+#ifdef TWI_INTERFACE_ENABLED
+
+#include "apdata1.h"    // TWI common data, ref only
+
+#endif  //TWI_INTERFACE_ENABLED
+
 
 
 /*=============================================================================
@@ -307,8 +318,8 @@ void TWCmdInit( HWND hWnd, HDC hdc )
     /*
      *  Set global color mode
      */
-    for ( Color = vColor = Color_Cap_16, Mask=1; 
-          Color < Color_Cap_Max; 
+    for ( Color = vColor = Color_Cap_16, Mask=1;
+          Color < Color_Cap_Max;
           Color++, Mask <<= 1 ) {
 
         if ( (Mask & vThinWireMode.fColorCaps) ) {

@@ -10,60 +10,58 @@
 *   Author: Kurt Perry (kurtp) 14-Sep-1995
 *
 *   $Log$
-*   Revision 1.2  1998/01/28 18:14:47  smiddle
-*   Safety checkin
-*
-*   Revision 1.1  1998/01/19 19:12:43  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.49   Jan 19 1998 16:07:26   briang
+*  Include twi_en.h
+*
+*     Rev 1.48   Jan 14 1998 17:00:38   briang
+*  TWI Integration
+*
+*     Rev 1.48   08 Oct 1997 13:32:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.47   06 May 1997 15:44:32   kurtp
 *  Fix MSACCESS 2.0/Win95 bug
-*  
+*
 *     Rev 1.46   15 Apr 1997 18:15:40   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.47   09 Apr 1997 16:22:04   kurtp
 *  update
-*  
+*
 *     Rev 1.46   21 Mar 1997 16:09:22   bradp
 *  update
-*  
+*
 *     Rev 1.45   06 Dec 1996 12:00:22   kurtp
 *  update
-*  
+*
 *     Rev 1.44   20 Jun 1996 13:50:42   jeffm
 *  Don't use UpdateColors for plugin
-*  
+*
 *     Rev 1.43   11 Jun 1996 19:55:16   jeffm
 *  update
-*  
+*
 *     Rev 1.41   30 May 1996 16:56:24   jeffm
 *  update
-*  
+*
 *     Rev 1.40   20 May 1996 19:08:56   jeffm
 *  update
-*  
+*
 *     Rev 1.37   12 Feb 1996 17:15:30   kurtp
 *  update
-*  
+*
 *     Rev 1.36   08 Feb 1996 12:17:28   kurtp
 *  update
-*  
+*
 *     Rev 1.35   15 Jan 1996 15:42:34   kurtp
 *  update
-*  
+*
 *     Rev 1.34   12 Jan 1996 12:16:14   kurtp
 *  update
-*  
+*
 *     Rev 1.33   03 Jan 1996 13:32:36   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 
 #include "windows.h"
@@ -95,6 +93,15 @@
 #include "twdata.h"
 #include "wfcache.h"
 
+#include "twi_en.h"
+
+#ifdef TWI_INTERFACE_ENABLED
+
+#include "apdata1.h"    // TWI common data, ref only
+
+#endif  //TWI_INTERFACE_ENABLED
+
+
 /*
  *  Currently only valid for windows client's
  */
@@ -122,7 +129,7 @@ VOID    UpdateSystemColors( HWND, HDC, BOOL );
  *  Logical palette is 256 entries big, just the same as the
  *  system palette.  Entries 0 and 255 are reserved for colors
  *  BLACK (RGB 0x00,0x00,0x00) and WHITE (RGB 0xFF,0xFF,0xFF),
- *  therefore entry 0 and 255 are not accessable.  The high 
+ *  therefore entry 0 and 255 are not accessable.  The high
  *  static values start at entry 246.
  */
 
@@ -196,9 +203,9 @@ const PALETTEENTRY BASEPALETTE[20] =
 char * pszIdRealize[] = {
     "TWREALIZEPALETTE_INIT_FG",
     "TWREALIZEPALETTE_INIT_BG",
-    "TWREALIZEPALETTE_FG",    
-    "TWREALIZEPALETTE_BG",    
-    "TWREALIZEPALETTE_FOCUS", 
+    "TWREALIZEPALETTE_FG",
+    "TWREALIZEPALETTE_BG",
+    "TWREALIZEPALETTE_FOCUS",
     "TWREALIZEPALETTE_SET_FG",
     "TWREALIZEPALETTE_SET_BG",
 };
@@ -214,7 +221,7 @@ char * pszIdRealize[] = {
  *
  *  w_TWCmdPaletteSet
  *
- *  This is the worker routine 
+ *  This is the worker routine
  *
  *  PARAMETERS:
  *     USHORT Options
@@ -273,13 +280,13 @@ w_TWCmdPaletteSet( HWND hwnd,
         /*
          *  Get pointer to cache data
          */
-        lpCacheArea = lpTWCacheRead( hCache, 
+        lpCacheArea = lpTWCacheRead( hCache,
                                      ChunkType,
                                      (LPUINT) &uscb,
                                      0 );
 
-        TRACE((TC_TW,TT_TW_PALETTE, 
-               "w_TWCmdPaletteSet: lpTWCacheRead - hCache %u, ChunkType %u, Bytes %u, lpCacheArea %08x", 
+        TRACE((TC_TW,TT_TW_PALETTE,
+               "w_TWCmdPaletteSet: lpTWCacheRead - hCache %u, ChunkType %u, Bytes %u, lpCacheArea %08x",
                 hCache, ChunkType, uscb, lpCacheArea ));
         ASSERT( lpCacheArea != NULL, 0 );
 
@@ -293,22 +300,22 @@ w_TWCmdPaletteSet( HWND hwnd,
              */
             wControl = *((WORD *) lpCacheArea);
             lpCacheArea += sizeof(WORD);
-            ASSERT( (wControl >> 8) == (BYTES_PER_ENTRY - 1), wControl ); 
+            ASSERT( (wControl >> 8) == (BYTES_PER_ENTRY - 1), wControl );
 
             /*
              *  Extract entry count from control word
              */
             cEntry = (BYTE) (wControl & 0x00FF) + 1;
-    
+
             /*
-             *  Calculate end 
+             *  Calculate end
              */
             iStop = pTWPalHeader->iStart + (USHORT) cEntry;
-        
+
             ASSERT( iStop < LOGICAL_PALETTE_SIZE, iStop );
-        
+
             TRACE((TC_TW,TT_TW_PALETTE, "VDTW: w_TWCmdPaletteSet - retrieve cache entries %u up to %u", pTWPalHeader->iStart, iStop));
-        
+
             /*
              *  Read into logical palette
              */
@@ -323,37 +330,37 @@ w_TWCmdPaletteSet( HWND hwnd,
         }
     }
     else {
-    
+
         /*
          *  Get count, and make 1 based (comes across zero based one)
          */
         GetNextTWCmdBytes( &cEntry, 1 );
         ++cEntry;
-    
+
         /*
-         *  Calculate end 
+         *  Calculate end
          */
         iStop = pTWPalHeader->iStart + (USHORT) cEntry;
-    
+
         ASSERT( iStop < LOGICAL_PALETTE_SIZE, iStop );
-    
+
         TRACE((TC_TW,TT_TW_PALETTE, "VDTW: w_TWCmdPaletteSet - update entries %u up to %u", pTWPalHeader->iStart, iStop));
-    
+
         /*
          *  Read into logical palettes
          */
         for ( i = pTWPalHeader->iStart; ((i < iStop) && (i < LOGICAL_PALETTE_MAX)); i++ ) {
-    
+
             /*
              *  Get the RGB values
              */
             GetNextTWCmdBytes( &vpLogPalette->palPalEntry[i], 3 );
-    
+
             /*
              *  Fix magic school bus, animates palette with the color
              *  white(255,255,255) in index other than 255.  This cause
              *  SetBkColor all kinds of greif when doing a ROP with white
-             *  even using PALETTEINDEX the ROP colapses to the first 
+             *  even using PALETTEINDEX the ROP colapses to the first
              *  white it finds.  Boo hiss ...
              *
              *  Now it happens on MSACCESS 2.0 with grey (128,128,128) ...
@@ -362,26 +369,26 @@ w_TWCmdPaletteSet( HWND hwnd,
              */
             if ( vfPaletteDevice == TRUE ) {
                  if ( (vpLogPalette->palPalEntry[i].peRed   == 0xff) &&
-                      (vpLogPalette->palPalEntry[i].peGreen == 0xff) && 
+                      (vpLogPalette->palPalEntry[i].peGreen == 0xff) &&
                       (vpLogPalette->palPalEntry[i].peBlue  == 0xff) ) {
 
                      vpLogPalette->palPalEntry[i].peBlue = 0xfe;
-                     TRACE((TC_TW,TT_TW_PROTOCOLDATA, 
+                     TRACE((TC_TW,TT_TW_PROTOCOLDATA,
                             "w_TWCmdPaletteSet - oh yeah, give me a white not in index 255" ));
                  }
-                 else if ( (i > 9) && 
+                 else if ( (i > 9) &&
                            (i < LOGICAL_PALETTE_STATIC) &&
                            (vpLogPalette->palPalEntry[i].peRed   == 0x80) &&
-                           (vpLogPalette->palPalEntry[i].peGreen == 0x80) && 
+                           (vpLogPalette->palPalEntry[i].peGreen == 0x80) &&
                            (vpLogPalette->palPalEntry[i].peBlue  == 0x80) ) {
                      vpLogPalette->palPalEntry[i].peBlue = 0x7f;
-                     TRACE((TC_TW,TT_TW_PROTOCOLDATA, 
+                     TRACE((TC_TW,TT_TW_PROTOCOLDATA,
                             "w_TWCmdPaletteSet - oh yeah, give me a gray not in index 248" ));
                  }
             }
 
-            TRACE((TC_TW,TT_TW_PROTOCOLDATA, 
-                   "VDTW: w_TWCmdPaletteSet - Pal[%03u] = RGB(%u,%u,%u), RGB(%02x,%02x,%02x)", 
+            TRACE((TC_TW,TT_TW_PROTOCOLDATA,
+                   "VDTW: w_TWCmdPaletteSet - Pal[%03u] = RGB(%u,%u,%u), RGB(%02x,%02x,%02x)",
                    i,
                    vpLogPalette->palPalEntry[i].peRed,
                    vpLogPalette->palPalEntry[i].peGreen,
@@ -400,8 +407,8 @@ w_TWCmdPaletteSet( HWND hwnd,
              *  Get write pointer to cache object
              */
             lpCacheArea = lpTWCacheWrite( hCache,
-                                          ChunkType, 
-                                          ((USHORT) cEntry * BYTES_PER_ENTRY) + sizeof(WORD), 
+                                          ChunkType,
+                                          ((USHORT) cEntry * BYTES_PER_ENTRY) + sizeof(WORD),
                                           (ChunkType == _2K ? hCache : 0) );
             ASSERT( lpCacheArea != NULL, 0 );
 
@@ -409,12 +416,12 @@ w_TWCmdPaletteSet( HWND hwnd,
              *  Only write if valid
              */
             if ( lpCacheArea != NULL ) {
-    
+
                 /*
                  *  Build control word
                  */
                 wControl = ((BYTES_PER_ENTRY - 1) << 8) | (cEntry & 0x00FF) - 1;
-    
+
                 /*
                  *  Store control word
                  */
@@ -422,26 +429,26 @@ w_TWCmdPaletteSet( HWND hwnd,
                 lpCacheArea += sizeof(WORD);
 
                 /*
-                 *  Calculate end 
+                 *  Calculate end
                  */
                 iStop = pTWPalHeader->iStart + (USHORT) cEntry;
-            
+
                 ASSERT( iStop < LOGICAL_PALETTE_SIZE, iStop );
-            
+
                 TRACE((TC_TW,TT_TW_PALETTE, "VDTW: w_TWCmdPaletteSet - update cache entries %u up to %u", pTWPalHeader->iStart, iStop));
-            
+
                 /*
                  *  Store from logical palette
                  */
                 for ( i = pTWPalHeader->iStart; ((i < iStop) && (i < LOGICAL_PALETTE_MAX)); i++ ) {
-    
+
                     /*
                      *  Copy data from cache to logical palette
                      */
                     memcpy( lpCacheArea, &vpLogPalette->palPalEntry[i], 3 );
                     lpCacheArea += 3;
                 }
-    
+
                 /*
                  *  Complete cache write
                  */
@@ -481,7 +488,7 @@ w_TWCmdPaletteSet( HWND hwnd,
  *
  ****************************************************************************/
 
-VOID 
+VOID
 TWCreateDefaultPalette( HWND hwnd, HDC hdc )
 {
     UINT  i;
@@ -501,9 +508,9 @@ TWCreateDefaultPalette( HWND hwnd, HDC hdc )
         /*
          *  Allocate logical palette with static entries
          */
-        vhLogPalette = GlobalAlloc( GMEM_MOVEABLE, 
+        vhLogPalette = GlobalAlloc( GMEM_MOVEABLE,
                                 sizeof(LOGPALETTE) +
-                                sizeof(PALETTEENTRY) * 
+                                sizeof(PALETTEENTRY) *
                                 LOGICAL_PALETTE_SIZE );
 
         TRACE((TC_TW,TT_TW_PALETTE,
@@ -686,7 +693,7 @@ TWDeleteDefaultPalette( HWND hwnd, HDC hdc )
      *  Free static palette if allocated
      */
     if ( vhLogPalette ) {
-       
+
         if ( vpLogPalette ) {
             TRACE((TC_TW,TT_TW_PALETTE,
                    "VDTW: TWDeleteDefaultPalette - GlobalUnlock vhLogPalette %lx", (ULONG)vhLogPalette ));
@@ -714,7 +721,7 @@ TWDeleteDefaultPalette( HWND hwnd, HDC hdc )
  *
  *  TWRealizePalette
  *
- *  Realizes logical palette into system palette, taking into account 
+ *  Realizes logical palette into system palette, taking into account
  *  static colors and foreground and background considerations.
  *
  *  PARAMETERS:
@@ -727,10 +734,10 @@ TWRealizePalette( HWND hwnd, HDC hdc, UINT * pcColors, USHORT idRealizePalette )
     UINT i;
     BYTE peFlags = 0;
 
-    TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_PALETTE, 
+    TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_PALETTE,
            "VDTW: TWRealizePalette - %s", pszIdRealize[idRealizePalette] ));
 
-    /*     
+    /*
      *  Don't bother when palette not initialized
      */
     if ( !vfPaletteAvailable ) {
@@ -755,7 +762,7 @@ TWRealizePalette( HWND hwnd, HDC hdc, UINT * pcColors, USHORT idRealizePalette )
         for ( i = 1; i < 10; i++ ) {
             vpLogPalette->palPalEntry[i].peFlags = peFlags;
         }
-    
+
         /*
          *  Create logical palette (local)
          */
@@ -764,13 +771,13 @@ TWRealizePalette( HWND hwnd, HDC hdc, UINT * pcColors, USHORT idRealizePalette )
                "VDTW: TWRealizePalette - CreatePalette hNewPalette %lx", (ULONG)hNewPalette ));
 
         /*
-         *  Select palette into our dc 
+         *  Select palette into our dc
          */
         SelectPalette( hdc, (vhPalette = hNewPalette), TRUE );
         *pcColors = RealizePalette( hdc );
         TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - Select New Palette"));
         TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - %u colors realized", *pcColors ));
-    
+
         /*
          *  Select palette to compatible dc
          */
@@ -778,7 +785,23 @@ TWRealizePalette( HWND hwnd, HDC hdc, UINT * pcColors, USHORT idRealizePalette )
             SelectPalette( compatDC, vhPalette, TRUE );
             RealizePalette( compatDC );
         }
-    
+
+
+#ifdef TWI_INTERFACE_ENABLED
+
+        if ( ShadowDC ) {
+            SelectPalette( ShadowDC, vhPalette, IsPluginWindow(hwnd) );
+            RealizePalette( ShadowDC );
+        }
+
+        if ( ShadowDC2 ) {
+            SelectPalette( ShadowDC2, vhPalette, IsPluginWindow(hwnd) );
+            RealizePalette( ShadowDC2 );
+        }
+
+#endif  //TWI_INTERFACE_ENABLED
+
+
         /*
          *  Free any existing palette (global)
          */

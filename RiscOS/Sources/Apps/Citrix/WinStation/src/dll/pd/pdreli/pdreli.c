@@ -12,6 +12,12 @@
 *
 * $Log$
 *  
+*     Rev 1.28   Oct 31 1997 19:25:54   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.27   Oct 09 1997 17:27:00   briang
+*  Conversion to MemIni use
+*  
 *     Rev 1.26   15 Apr 1997 16:52:46   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -54,7 +60,7 @@
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/pd.h"
 
 #define NO_PDDEVICE_DEFINES
@@ -211,14 +217,14 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
     pPdReli->SlowStartThreshold  = pPd->OutBufCountClient;
     pPdReli->LastAckSequence     = 0xff;
 
-    pPdReli->MaxRetryTime      = bGetPrivateProfileLong( pPdOpen->pIniSection,
-                                  INI_MAXRETRYTIME, DEF_MAXRETRYTIME );
+    pPdReli->MaxRetryTime      = miGetPrivateProfileLong( 
+                                  INI_RELIABLESECTION, INI_MAXRETRYTIME, DEF_MAXRETRYTIME );
 
-    pPdReli->RetransmitTimeDelta = bGetPrivateProfileLong( pPdOpen->pIniSection,
-                                  INI_RETRANSMITDELTA, DEFAULT_RETRANSMIT_DELTA );
+    pPdReli->RetransmitTimeDelta = miGetPrivateProfileLong( 
+                                  INI_RELIABLESECTION, INI_RETRANSMITDELTA, DEFAULT_RETRANSMIT_DELTA );
 
-    pPdReli->DelayedAckTime    = bGetPrivateProfileLong( pPdOpen->pIniSection,
-                                  INI_DELAYEDACK, DEF_DELAYEDACK );
+    pPdReli->DelayedAckTime    = miGetPrivateProfileLong( 
+                                  INI_RELIABLESECTION, INI_DELAYEDACK, DEF_DELAYEDACK );
 
     return( CLIENT_STATUS_SUCCESS );
 }

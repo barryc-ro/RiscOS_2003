@@ -14,6 +14,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.0   03 Dec 1997 17:47:30   terryt
+*  Initial revision.
+*  
 *     Rev 1.3   15 Apr 1997 18:16:26   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -427,12 +430,16 @@ typedef struct _LINESTATE2 {
     ULONG           ulStyleMaskLtoR;// Original style mask, left-to-right order
     ULONG           ulStyleMaskRtoL;// Original style mask, right-to-left order
 
-    BOOL            ulStartMask;    // Determines if first element in style
-                                    // array is for a gap or a dash
+	BOOL            ulStartMask;    // Determines if first element in style
+									// array is for a gap or a dash
 
 } LINESTATE2;	                /* ls */
 
+#if VESA
+typedef VOID (*PFNSTRIP2)(HDC, struct _STRIP*, struct _LINESTATE2*, LONG*);
+#else
 typedef VOID (far *PFNSTRIP2)(HDC, struct _STRIP*, struct _LINESTATE2*, LONG*);
+#endif
 
 VOID vssSolidHorizontal( HDC, STRIP*, LINESTATE2*, LONG* );
 VOID vrlSolidHorizontal( HDC, STRIP*, LINESTATE2*, LONG * );
@@ -445,8 +452,12 @@ VOID vrlSolidDiagonalVertical(   HDC, STRIP*, LINESTATE2*, LONG * );
 VOID vStripStyledHorizontal(     HDC, STRIP*, LINESTATE2*, LONG * );
 VOID vStripStyledVertical(       HDC, STRIP*, LINESTATE2*, LONG * );
 
+#if VESA
+BOOL bLines(DEVSURF*, HDC, TWPOINTFIXI*, TWPOINTFIXI*, TWRUNI*, ULONG,
+#else
 BOOL far bLines(DEVSURF*, HDC, TWPOINTFIXI*, TWPOINTFIXI*, TWRUNI*, ULONG,
-            LINESTATE2*, RECTL*, PFNSTRIP2*, FLONG);
+#endif
+			LINESTATE2*, RECTL*, PFNSTRIP2*, FLONG);
 #endif
 
 // Decompress pt1Rcl & pt2Rcl

@@ -10,20 +10,9 @@
 *   Author: Kurt Perry (kurtp)
 *
 *   $Log$
-*   Revision 1.2  1998/01/27 18:39:29  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
-*   Revision 1.1  1998/01/19 19:13:03  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
+*  
+*     Rev 1.11   29 Sep 1997 20:32:06   kurtp
+*  persistent cache fix
 *  
 *     Rev 1.10   29 Apr 1997 14:55:54   kurtp
 *  I fixed a bug in this file, update, duh!
@@ -1347,7 +1336,9 @@ TWDIMCacheInit( PVD pvd, BOOL fContinue )
     /*
      *  No more files
      */
-     return(FALSE);
+    iPriorityDims = DIMS_PRIORITY_0;
+    return(FALSE);
+
 }
 
 

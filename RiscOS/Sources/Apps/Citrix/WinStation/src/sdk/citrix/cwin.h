@@ -11,6 +11,9 @@
 *
 *  $Log$
 *  
+*     Rev 1.30   08 Dec 1997 18:19:54   thanhl
+*  DOS_V merge
+*  
 *     Rev 1.29   21 Apr 1997 16:56:40   TOMA
 *  update
 *  
@@ -220,6 +223,13 @@ typedef void (*PHELPFUNC)( PWINDOW, int );
 /*=============================================================================
 ==   structures
 =============================================================================*/
+#ifdef DOS_V
+typedef struct _DOSVSPACEPOINT {
+int Y;				// Y cordinate in which the space was used for corrupted DBCS char
+char charsubsted[2];		// Substitued element - char and attribute
+struct _DOSVSPACEPOINT *next; 		// Next occurence of the point
+} DOSVSPACEPOINT, * PDOSVSPACEPOINT;
+#endif
 
 /*
  *  Save Rectangle structure
@@ -227,8 +237,12 @@ typedef void (*PHELPFUNC)( PWINDOW, int );
 typedef struct _SAVERECT {
    RECT Rect;                   // data rectangle on screen to save
    CHAR_INFO * pBuffer;         // pointer to saved screen data
+#ifdef DOS_V
+   PDOSVSPACEPOINT left_pspace_point;
+   PDOSVSPACEPOINT right_pspace_point;
+   RECT RectToProtect;  // available only when the shadow exists arround the rect
+#endif   
 } SAVERECT, * PSAVERECT;
-
 
 /*
  *  Message structure

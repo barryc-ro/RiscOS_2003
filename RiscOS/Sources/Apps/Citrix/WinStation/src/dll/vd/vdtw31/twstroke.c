@@ -10,27 +10,31 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
-*   Revision 1.1  1998/01/19 19:12:50  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.14   Jan 26 1998 23:50:56   briang
+*  Add more guards to TWI_Stuff since it broke Win16
+*  
+*     Rev 1.13   Jan 15 1998 23:34:24   briang
+*  fix  undefined var error in compile
+*  
+*     Rev 1.12   Jan 14 1998 17:01:24   briang
+*  TWI Integration
+*
+*     Rev 1.12   08 Oct 1997 14:00:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.11   15 Apr 1997 18:16:24   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.11   21 Mar 1997 16:09:32   bradp
 *  update
-*  
+*
 *     Rev 1.10   08 May 1996 14:51:04   jeffm
 *  update
-*  
+*
 *     Rev 1.9   03 Jan 1996 13:33:20   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 
 #ifdef DOS
@@ -123,13 +127,13 @@ INT arop2[] = {
     R2_NOTMERGEPEN,
     R2_MASKNOTPEN,
     R2_NOTCOPYPEN,
-    R2_MASKPENNOT, 
-    R2_NOT,        
+    R2_MASKPENNOT,
+    R2_NOT,
     R2_XORPEN,
-    R2_NOTMASKPEN, 
+    R2_NOTMASKPEN,
     R2_MASKPEN,
-    R2_NOTXORPEN,  
-    R2_NOP,        
+    R2_NOTXORPEN,
+    R2_NOP,
     R2_MERGENOTPEN,
     R2_COPYPEN,
     R2_MERGEPENNOT,
@@ -452,13 +456,13 @@ static TWSPPEN256  Pen256;
     if ( !Flags.fSamePen ) {
        // Get Pen
 #ifndef DOS
-       if ( vColor == Color_Cap_256 ) 
+       if ( vColor == Color_Cap_256 )
        {
           GetNextTWCmdBytes( &Pen256, sizeof_TWSPPEN256 );
           TRACE(( TC_TW, TT_TW_STROKE, "TWCmdStrokePath: Received - Pen256.color %u, Pen256.rop2 %u",
                   Pen256.color, Pen256.rop2));
        }
-       else 
+       else
 #endif
        {
           GetNextTWCmdBytes( &Pen16, sizeof_TWSPPEN );
@@ -505,17 +509,17 @@ static TWSPPEN256  Pen256;
        TRACE(( TC_TW, TT_TW_STROKE, "TWCmdStrokePath: Receiving compressed Bounds:" ));
        GetNextTWCmdBytes( &pt1Rcl, 3 );
        TRACEBUF(( TC_TW, TT_TW_STROKE, (char far *)&pt1Rcl, 3UL ));
-      
+
        // Get size of pt2Rcl
        GETNEXTPTSIZE2( pt1Rcl, &ulcbData );
        GetNextTWCmdBytes( ppt2Rcl, (int)ulcbData );
        TRACEBUF(( TC_TW, TT_TW_STROKE, (char far *)ppt2Rcl, ulcbData ));
-      
+
        // Put it all together
        GETSTROKEPTDATA( pt1Rcl, Bounds, ppt2Rcl );
 
        Bounds.right++;                   // Change LRH from 0-based 1
-       Bounds.bottom++;                   
+       Bounds.bottom++;
        TRACE(( TC_TW, TT_TW_STROKE, "TWCmdStrokePath: Received - Bounds left(%d) right(%d) top(%d) bottom(%d)",
           Bounds.left, Bounds.right, Bounds.top, Bounds.bottom ));
     }
@@ -525,30 +529,30 @@ static TWSPPEN256  Pen256;
     // Crack the protocol
     //
     switch ( Flags.style ) {
-  
+
         case TW_LINE_ALTERNATE:
             fl |= FL_ALTERNATESTYLED | FL_MASKSTYLED;
             break;
 
         case TW_LINE_DOT:
-   	    StyleMask = 0xAA;        // 10101010 DOT			
+            StyleMask = 0xAA;        // 10101010 DOT
             break;
-   
+
         case TW_LINE_DASH:
-            StyleMask = 0xCC;        // 11001100 DASH	
+            StyleMask = 0xCC;        // 11001100 DASH
             break;
-   
+
         case TW_LINE_DASHDOT:
-            StyleMask = 0xE4;        // 11100100 DASHDOT			
+            StyleMask = 0xE4;        // 11100100 DASHDOT
             break;
-   
+
         case TW_LINE_DASHDOTDOT:
             StyleMask = 0xEA;        // 11101010 DASHDOTDOT
             break;
-   
+
         case TW_LINE_MASK:
             break;                   // other 8-bit mask
-   
+
         case TW_LINE_OTHER:
 
             // Handle Arbitrary Styles
@@ -566,22 +570,22 @@ static TWSPPEN256  Pen256;
                 USHORT    * pstyle;
                 STYLEPOS*   pspDown;
                 STYLEPOS*   pspUp;
-     
-     
+
+
                 if ( !fAbort ) {
                     pstyle = &Style.pData[Style.cData];
-      
+
                     ls.spTotal   = 0;
                     while (pstyle-- > Style.pData)
                     {
                         ls.spTotal += (LONG)*pstyle;
                     }
-      
+
                     fl        |= FL_ARBITRARYSTYLED;
                     ls.cStyle  = (ULONG)Style.cData;
                     ls.aspRtoL = aspRtoL;
                     ls.aspLtoR = aspLtoR;
-      
+
                     if ( Flags.fStartGap ) {
 #ifdef DOS
                         ls.ulStartMask = (ULONG) ~0L;
@@ -591,22 +595,22 @@ static TWSPPEN256  Pen256;
                     } else {
                         ls.ulStartMask = 0;
                     }
-      
+
                     pstyle  = Style.pData;
                     pspDown = &ls.aspRtoL[ls.cStyle - 1];
                     pspUp   = &ls.aspLtoR[0];
-      
+
                     // We always draw strips left-to-right, but styles have to be laid
                     // down in the direction of the original line.  This means that in
                     // the strip code we have to traverse the style array in the
                     // opposite direction
-      
+
                     while (pspDown >= &ls.aspRtoL[0])
                     {
-      
+
                         *pspDown = (LONG)*pstyle * STYLE_DENSITY;
                         *pspUp   = *pspDown;
-      
+
                         pspUp++;
                         pspDown--;
                         pstyle++;
@@ -719,7 +723,7 @@ static TWSPPEN256  Pen256;
    }
 
 #else
- 
+
     /*
      *  Generate the LS for bLines
      */
@@ -744,7 +748,7 @@ static TWSPPEN256  Pen256;
         }
     }
     else if ( StyleMask ) {
- 
+
         USHORT         i;
         TWSPSTYLEMASK  hBit;
         TWSPSTYLEMASK  lBit;
@@ -756,7 +760,7 @@ static TWSPPEN256  Pen256;
         fl |= FL_STYLED;
 
         /*
-         *  Setup 
+         *  Setup
          */
         ls.spTotal     = 8 * STYLE_DENSITY;
         ls.spTotal2    = 8 * 2 * STYLE_DENSITY;
@@ -773,7 +777,7 @@ static TWSPPEN256  Pen256;
               TempMask |= 1 << (7-i);
            }
         }
-  
+
         /*
          *  Start on a gap?
          */
@@ -801,9 +805,9 @@ static TWSPPEN256  Pen256;
 
             lBit = (TempMask & 0x40) << 1;
 
-            if ( hBit == lBit ) 
+            if ( hBit == lBit )
                 aspLtoR[ls.cStyle]  += STYLE_DENSITY;
-            else 
+            else
                 aspLtoR[++ls.cStyle] = STYLE_DENSITY;
 
             hBit = lBit;
@@ -865,10 +869,11 @@ static TWSPPEN256  Pen256;
                     if ( hpensolid256[iPen] != NULL ) {
                         SelectObject( hDC, (HPEN) GetStockObject(BLACK_PEN) );
                         DeleteObject( hpensolid256[iPen] );
+
                     }
 
                     hpensolid256[iPen] = hPen;
-                    TRACE(( TC_TW, TT_TW_STROKE, "TWCmdStrokePath: CreatePen %u (index %u)", Pen256.color, iPen )); 
+                    TRACE(( TC_TW, TT_TW_STROKE, "TWCmdStrokePath: CreatePen %u (index %u)", Pen256.color, iPen ));
                 }
                 else {
 
@@ -898,7 +903,7 @@ static TWSPPEN256  Pen256;
         if ( dcstate.pencolor != Pen16.color ) {
             SelectObject( hDC, hpensolid[ dcstate.pencolor = Pen16.color]  );
         }
-    
+
         /*
          *  Set rop2 if not same as currently selected into DC
          */
@@ -920,22 +925,22 @@ static TWSPPEN256  Pen256;
         /*
          *  Create the simple region
          */
-        if ( (hrgnDest = CreateRectRgn( Bounds.left, 
-                                        Bounds.top, 
-                                        Bounds.right, 
+        if ( (hrgnDest = CreateRectRgn( Bounds.left,
+                                        Bounds.top,
+                                        Bounds.right,
                                         Bounds.bottom )) != NULL ) {
 
             TRACE(( TC_TW, TT_TW_STROKE,
             "TWCmdStrokePath: ClipRgn - left(%d) right(%d) top(%d) bottom(%d)",
                 Bounds.left, Bounds.right, Bounds.top, Bounds.bottom ));
-    
+
             /*
              *  Select the clipping region
              */
             SelectClipRgn( hDC, hrgnDest );
         }
 
-    } 
+    }
     else if ( Flags.clipping == TW_CLIP_COMPLEX ) {
         fl |= FL_COMPLEX_CLIP;
     }
@@ -1202,7 +1207,7 @@ GetMorePoints:
                     fVersionCheck  = TRUE;
                 }
 
-                /* 
+                /*
                  *  If this is just a solid ellipse then, hell we're
                  *  under windows let's just call the ellipst function.
                  *
@@ -1211,20 +1216,20 @@ GetMorePoints:
                 if ( fIsDriver32Bit ) {
 
                     if ( (Flags.style == TW_LINE_SOLID) && (SubPath.fType == TW_SP_ELLIPSE) ) {
-    
+
                         TWPOINTFIXI * pptfxNext;
                         INT           xLeft;
                         INT           yTop;
                         INT           xRight;
                         INT           yBottom;
-    
+
                         /*
                          *  Generiate the Bezier points from the Ellipse points,
                          *  Point to buffer just after the 3 points
                          */
                         pptfxNext = &((pptfxBuf)[3]);
                         EllipseToBeziers( (PELLIPSEDATA)(pptfxBuf), pptfxNext );
-                        
+
                         /*
                          *  Convert from 28.4 to 28.0
                          */
@@ -1232,7 +1237,7 @@ GetMorePoints:
                         yTop    = (INT) (pptfxNext[2].y >> 4);
                         xRight  = (INT) (pptfxNext[0].x >> 4) + 1;
                         yBottom = (INT) (pptfxNext[8].y >> 4) + 1;
-    
+
                         /*
                          *  Use windows to draw the Ellipse
                          */
@@ -1243,7 +1248,7 @@ GetMorePoints:
                             Ellipse( hDC, xLeft, yTop, xRight, yBottom );
                             SelectObject( hDC, hBrush );
                         }
-    
+
                         continue;
                     }
                 }
@@ -1295,7 +1300,7 @@ GetMorePoints:
           }
 
 
-          if ( SubPath.fClosed && 
+          if ( SubPath.fClosed &&
                ( (ptfxEndFigure.x != ptfxStartFigure.x) ||
                  (ptfxEndFigure.y != ptfxStartFigure.y) ) ) {
              TRACE(( TC_TW, TT_TW_STROKE, "TWCmdStrokePath: bLines close 1(%04X,%04X) 2(%04X,%04X)",
@@ -1384,7 +1389,7 @@ GetMorePoints:
 *
 \**************************************************************************/
 
-VOID far 
+VOID far
 vCatchTwoPass(STRIP* pstrip, LINESTATE* pls, LONG* plStripEnd)
 {
     BYTE*     pjScreen    = pstrip->pjScreen;
@@ -1420,7 +1425,7 @@ vCatchTwoPass(STRIP* pstrip, LINESTATE* pls, LONG* plStripEnd)
 #endif
 
 
-BOOL 
+BOOL
 FindBoundary( TWPOINTFIXI ptfxFirst, TWPOINTFIXI *pptfxBuf, TWRUNI *pRUN,
               ULONG cptfx, RECTI *prclBoundary )
 {

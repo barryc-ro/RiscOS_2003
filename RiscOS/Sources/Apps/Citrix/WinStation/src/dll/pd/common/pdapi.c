@@ -9,12 +9,10 @@
 *
 *  Author: Brad Pedersen  (4/2/94)
 *
-* pdapi.c,v
-* Revision 1.1  1998/01/12 11:35:34  smiddle
-* Newly added.#
-*
-* Version 0.01. Not tagged
-*
+* $Log$
+*  
+*     Rev 1.35   Oct 09 1997 17:18:38   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.34   15 Apr 1997 16:51:38   TOMA
 *  autoput for remove source 4/12/97
@@ -165,8 +163,8 @@ static DLLLINK PdLink = {0};
 /*
 STATIC PPLIBPROCEDURE pClibProcedures = NULL;
 STATIC PPLIBPROCEDURE pLogProcedures = NULL;
-STATIC PPLIBPROCEDURE pBIniProcedures = NULL;
-*/
+STATIC PPLIBPROCEDURE pMemIniProcedures = NULL;
+
 
 /*******************************************************************************
  *
@@ -281,7 +279,7 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
      *  Initialize PD function call tables: MUST BE FIRST!
      */
 //    pLogProcedures = pPdOpen->pLogProcedures;
-//    pBIniProcedures = pPdOpen->pBIniProcedures;
+//    pMemIniProcedures = pPdOpen->pMemIniProcedures;
 //    pClibProcedures = pPdOpen->pClibProcedures;
 
     /*

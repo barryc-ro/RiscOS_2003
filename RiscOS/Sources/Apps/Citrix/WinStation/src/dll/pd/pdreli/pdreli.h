@@ -9,7 +9,6 @@
 *
 * $Author$  Brad Pedersen
 *
-* $Log$
 *  
 *     Rev 1.9   15 Apr 1997 16:52:46   TOMA
 *  autoput for remove source 4/12/97

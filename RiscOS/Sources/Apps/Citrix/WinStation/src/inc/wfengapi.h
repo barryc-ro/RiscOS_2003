@@ -1,3 +1,4 @@
+
 /***************************************************************************
 *
 *  WFENGAPI.H
@@ -11,12 +12,91 @@
 *
 *  Author: Butch Davis (4/4/95)
 *
-*  wfengapi.h,v
-*  Revision 1.1  1998/01/12 11:37:11  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.76   Feb 22 1998 12:23:54   xuanh
+*  DEF_USEAREAANDCOUNTRY is TRUE.
+*  
+*     Rev 1.74   Feb 20 1998 11:30:46   xuanh
+*  DEF_SERIALBANDWIDTHLIMIT is added.
+*  
+*     Rev 1.73   Feb 17 1998 20:56:06   sumitd
+*  SV_TYPE_TERMINALSERVER added
+*  
+*     Rev 1.72   21 Jan 1998 15:19:08   butchd
+*  removed INI_CAM_AUDIOBANDWIDTHLIMIT and DEF_
+*  
+*     Rev 1.71   Jan 21 1998 14:05:14   xuanh
+*  update
+*  
+*     Rev 1.70   Jan 21 1998 14:02:14   xuanh
+*  add audio bandwidth limit
+*  
+*     Rev 1.69   20 Jan 1998 15:10:10   butchd
+*  Added TWI definitions
+*  
+*     Rev 1.68   19 Jan 1998 15:02:58   butchd
+*  update
+*  
+*     Rev 1.67   19 Jan 1998 15:01:06   butchd
+*  Added INI_CAM_BANDWIDTHLIMIT and DEF_
+*  
+*     Rev 1.66   16 Jan 1998 15:53:06   butchd
+*  update
+*  
+*     Rev 1.65   16 Jan 1998 13:34:16   brada
+*  Add INI file macros from vdcm.h
+*  
+*     Rev 1.64   14 Jan 1998 16:53:46   butchd
+*  added TAPI device configuration defines
+*  
+*     Rev 1.63   13 Jan 1998 23:01:54   davidp
+*  added values for audio converter module name
+*  
+*     Rev 1.62   Jan 08 1998 17:50:32   sumitd
+*  Clear Test Password acceptance
+*  
+*     Rev 1.61   06 Jan 1998 16:11:52   butchd
+*  update
+*  
+*     Rev 1.60   12 Dec 1997 15:03:20   butchd
+*  Added INI_COUNTRYSTRING for TAPI UI
+*  
+*     Rev 1.59   08 Dec 1997 18:44:46   butchd
+*  Add Direct Connection DEFAULT and MRU keys
+*  
+*     Rev 1.58   08 Dec 1997 16:57:10   butchd
+*  Add TAPI defines
+*  
+*     Rev 1.57   03 Dec 1997 11:32:14   terryt
+*  vesa client
+*  
+*     Rev 1.56   Nov 13 1997 18:51:42   briang
+*  Add WebClient IntlKB Support for WIN16
+*  
+*     Rev 1.55   03 Nov 1997 09:09:46   brada
+*  Added firewall load balancing support
+*  
+*     Rev 1.54   30 Oct 1997 20:43:52   tariqm
+*  fix for CPR 7250: When encryption is specified in the ICA file, the web client generates an error
+*  
+*     Rev 1.53   28 Oct 1997 16:41:20   stephens
+*  Added DRIVER_BAD_CONFIG for DOS Audio Driver
+*  
+*     Rev 1.52   Oct 10 1997 10:22:38   briang
+*  update
+*  
+*     Rev 1.50   09 Oct 1997 21:49:12   tariqm
+*  Audio UI
+*  
+*     Rev 1.49   Oct 09 1997 18:54:52   briang
+*  Conversion to MemIni use
+*  
+*     Rev 1.44   15 Oct 1997 16:18:06   kalyanv
+*  updated
+*  
+*     Rev 1.43   14 Oct 1997 17:07:24   kalyanv
+*  Added the EnCRYPT_LEVEL_INCORRECT_USE constant
 *  
 *     Rev 1.42   10 Sep 1997 16:09:16   kalyanv
 *  added the encryption level session names
@@ -159,10 +239,17 @@ extern "C" {
 
 /*=============================================================================
  ==   Define the Citrix/Hydrix SV_TYPE_APPSERVER bit if not defined
- ==   Future versions of lmserver.h should have this bit set (someday?)
+ ==   Future versions of lmserver.h should have this bit set (someday??? )
  ============================================================================*/
 #ifndef SV_TYPE_APPSERVER
 #define SV_TYPE_APPSERVER           0x10000000  /* Multi-User NT and Citrix WinFrame */
+#endif
+
+/* Due to contention in the bit, Citrix was given a different bit - 02/17/98 */
+
+#ifndef SV_TYPE_TERMINALSERVER
+#define SV_TYPE_TERMINALSERVER      0x02000000  
+                  /*  Multi-User NT and Citrix WinFrame (for Beta 2 and future) */
 #endif
 
 /*=============================================================================
@@ -367,8 +454,24 @@ typedef PLIBPROCEDURE far * PPLIBPROCEDURE;
 #define CLIENT_ERROR_HOST_NOT_SECURED             1076
 #define CLIENT_ERROR_ENCRYPT_UNSUPPORT_BYCLIENT   1077
 #define CLIENT_ERROR_ENCRYPT_UNSUPPORT_BYHOST     1078
-
-
+#define CLIENT_ERROR_ENCRYPT_LEVEL_INCORRECTUSE   1079
+#define CLIENT_ERROR_BAD_OVERRIDES                1080
+#define CLIENT_ERROR_MISSING_CONNECTION_SECTION   1081
+#define CLIENT_ERROR_BAD_COMBINE_ENTRIES          1082
+#define CLIENT_ERROR_MISSING_WFCLIENT_SECTION     1083
+#define CLIENT_ERROR_BAD_ENTRY_INSERTION          1084
+#define CLIENT_ERROR_BAD_HEADER_INSERTION         1085
+#define CLIENT_ERROR_BAD_CONCAT_SECTIONS          1086
+#define CLIENT_ERROR_MISSING_SECTION              1087
+#define CLIENT_ERROR_DUPLICATE_SECTIONS           1088
+#define CLIENT_ERROR_DRIVER_BAD_CONFIG            1089
+#define CLIENT_ERROR_MISMATCHED_ENCRYPTION        1090
+#define CLIENT_ERROR_TAPI_NO_INIT                 1091
+#define CLIENT_ERROR_TAPI_VER                     1092
+#define CLIENT_ERROR_TAPI_NO_LINES                1093
+#define CLIENT_ERROR_TAPI_LINE_NO_EXIST           1094
+#define CLIENT_ERROR_TAPI_NEGOTIATE_LINE          1095
+#define CLIENT_ERROR_TAPI_CALL_NOT_MADE           1096
 // Range of 1600-1899 is reserved for specific client implementations
 #define CLIENT_ERROR_RESERVED_16XX_18XX           1600
 
@@ -590,19 +693,28 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_KEYBOARDLAYOUT  "KeyboardLayout"
 #define DEF_KEYBOARDLAYOUT  "(User Profile)"      // user NT user profile code
 
+#define INI_KEYBOARDSECTION   "Keyboard"
+#define INI_KEYBOARDDLL       "keyboard.dll"
+#define INI_KBDLL_CODES       "Keyboard Dll Codes"
+
 #define MAX_BROWSERADDRESSLIST      5             // max count of browser addr
 
+#define INI_TCPSECTION              "TCP/IP"
 #define INI_TCPBROWSERADDRESS       "TcpBrowserAddress"
 #define DEF_TCPBROWSERADDRESS       ""
 #define INI_TCPBROWSERSTRING        "TCP/IP"        // for Server Location UI
 
+#define INI_IPXSECTION              "IPX"
 #define INI_IPXBROWSERADDRESS       "IpxBrowserAddress"
 #define DEF_IPXBROWSERADDRESS       ""
 #define INI_IPXBROWSERSTRING        "IPX/SPX"       // for Server Location UI
 
+#define INI_NETBIOSSECTION              "NETBIOS"
 #define INI_NETBIOSBROWSERADDRESS       "NetBiosBrowserAddress"
 #define DEF_NETBIOSBROWSERADDRESS       ""
 #define INI_NETBIOSBROWSERSTRING        "NETBIOS"   // For Server Location UI
+
+#define INI_SPXSECTION        "SPX"
 
 #define INI_BROWSERRETRY      "BrowserRetry"
 #define DEF_BROWSERRETRY      3
@@ -779,9 +891,15 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_KEYBOARDTIMER   50
 #define DEFSTR_KEYBOARDTIMER "50"
 
+#define INI_USEALTERNATEADDRESS "UseAlternateAddress"
+#define DEF_USEALTERNATEADDRESS 0
+
 #define INI_MRU_CONNECTION  "MRU Connection"
 #define INI_MRU_NETWORK     "Network Connection"
 #define INI_MRU_SERIAL      "Serial Connection"
+/* Windows Client 4.0: Serial Connection is for Dial-In */
+/*                     Direct Connection is for Direct */
+#define INI_MRU_DIRECT      "Direct Connection"
 
 #define INI_CURRENT_DIALPREFIX  "Current Dialing Prefix"
 #define DEF_DIALPREFIX      "No Prefix"
@@ -846,12 +964,16 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 /*
  * section names
  */
+#define INI_SERVERSECTION   "Server"
 #define INI_APPSERVERLIST   "ApplicationServers"
 #define INI_DEFAULT_COMMON  "Common Default Information"
 #define INI_DEFAULT_NETWORK "Default Network Connection"
 #define INI_PUBLISHEDAPP    "Published Application"
 #define DEF_PUBLISHEDAPP    FALSE
 #define INI_DEFAULT_SERIAL  "Default Serial Connection"
+/* Windows Client 4.0: Default Serial Connection is for Dial-In */
+/*                     Default Direct Connection is for Direct */
+#define INI_DEFAULT_DIRECT  "Default Direct Connection"
 #define INI_DIALPREFIX      "Dialing Prefixes"
 
 #define INI_DESCRIPTION     "Description"
@@ -865,6 +987,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_USERNAME        ""
 #define INI_PASSWORD        "Password"
 #define DEF_PASSWORD        ""
+#define INI_CLEAR_PASSWORD  "ClearPassword"   
+#define DEF_CLEAR_PASSWORD  ""		     	
 
 #define INI_AUTHENCRYPTIONLEVEL "AuthEncryptionLevel"
 #define INI_DATAENCRYPTIONLEVEL "DataEncryptionLevel"
@@ -899,18 +1023,21 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 
 #if defined(DOS) || defined(RISCOS)
 #define INI_DRIVERNAME      "DriverName"
+#define INI_DRIVERNAMEALT   "DriverNameAlt"
 #define INI_NAMEENUMERATOR  "NameEnumerator"
 #define INI_NAMERESOLVER    "NameResolver"
 #endif
 
 #ifdef WIN16
 #define INI_DRIVERNAME      "DriverNameWin16"
+#define INI_DRIVERNAMEALT   "DriverNameAltWin16"
 #define INI_NAMEENUMERATOR  "NameEnumeratorWin16"
 #define INI_NAMERESOLVER    "NameResolverWin16"
 #endif
 
 #ifdef WIN32
 #define INI_DRIVERNAME      "DriverNameWin32"
+#define INI_DRIVERNAMEALT   "DriverNameAltWin32"
 #define INI_NAMEENUMERATOR  "NameEnumeratorWin32"
 #define INI_NAMERESOLVER    "NameResolverWin32"
 #endif
@@ -943,6 +1070,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
  ==   Transport Driver INI keys (INI_) and defaults (DEF_)
  ============================================================================*/
 
+#define INI_TRANSPORTSECTION "Transport"
+
 #define INI_TRANSPORTDRIVER "TransportDriver"
 #define DEF_TRANSPORTDRIVER INI_SERIAL
 
@@ -962,6 +1091,16 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_LANANUMBER        0
 
 #define INI_COMPRESSION       "Compress"
+#define INI_CAM               "ClientAudio"
+#define INI_AUDIOBANDWIDTHLIMIT    "AudioBandwidthLimit"
+#define DEF_AUDIOBANDWIDTHLIMIT        1   // for network connection, default is "moderate"
+#define DEF_SERIALBANDWIDTHLIMIT       2   // for serial connection, default is "severe"
+
+#define INI_USETAPI                 "UseTAPI"
+#define INI_TAPIDEVICE              "TAPIDevice"
+#define INI_TAPIDEVICE_CONFIGSIZE   "TAPIDeviceConfigSize"
+#define INI_TAPIDEVICE_CONFIGLINE   "TAPIDeviceConfigLine"
+#define INI_TAPIMODEM               "TAPIModem"
 
 #define INI_ENCRYPTIONLEVELAUTH "EncryptionLevelAuth"
 #define INI_ENCRYPTIONLEVELSESSION "EncryptionLevelSession"
@@ -1094,6 +1233,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
  *  pdreli.dll
  */
 
+#define INI_RELIABLESECTION "Reliable"
+
 #define INI_MAXRETRYTIME    "MaxRetryTime"
 #define DEF_MAXRETRYTIME    60000                   // 1 minute
 
@@ -1203,6 +1344,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
  *  vdtw30.dll
  */
 #define INI_VDTW30        "Thinwire3.0"
+#define INI_VDTW31        "Thinwire3.0"
+#define INI_VDTWVESA      "DriverVesa"
 #define INI_MINSMALLCACHE "MinSpecialCache16Color"
 #define INI_MAXSMALLCACHE "MaxSpecialCache16Color"
 #define INI_MAXLARGECACHE "MaxCache16Color"
@@ -1255,6 +1398,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 /*
  * vdcom30.dll
  */
+#define INI_COMSECTION         "ClientComm"
+
 #define INI_CCMWINDOWSIZE      "WindowSize"
 #define DEF_CCMWINDOWSIZE      1024
 
@@ -1262,6 +1407,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 /*
  *  vdcdm30.dll
  */
+
+#define INI_CDMSECTION         "ClientDrive"
 
 #define INI_MAXWINDOWSIZE      "MaxWindowSize"
 #define DEF_MAXWINDOWSIZE      6276
@@ -1294,6 +1441,10 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
  *  vdcpm30.dll
  */
 
+#define INI_CPMSECTION       "ClientPrinter"
+#define INI_VSLSECTION       "ClientPrinter"
+#define INI_CPM15SECTION     "ClientPrinter1.5"
+
 #define INI_CPMMAXWINDOWSIZE "MaxWindowSize"
 #define DEF_CPMMAXWINDOWSIZE 1024
 
@@ -1306,9 +1457,103 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_CPMQUEUE        "WindowsPrinter"
 #define DEF_CPMQUEUE        ""
 
+/*
+ *  vdcam.dll
+ */
+
+#define INI_CAM_VDSECTION           "ClientAudio"
+
+#define INI_CAM_AUDHW_SECTIONNAME   "AudioHWSection"
+#define DEF_CAM_AUDHW_SECTIONNAME   "AudioHardware"
+
+#define INI_CAM_NUMCOMMANDBUFFERS   "NumCommandBuffers"
+#define DEF_CAM_NUMCOMMANDBUFFERS   64
+
+#define INI_CAM_NUMDATABUFFERS      "NumDataBuffers"
+#define DEF_CAM_NUMDATABUFFERS      32
+
+#define INI_CAM_MAXDATABUFFERSIZE   "MaxDataBufferSize"
+#define DEF_CAM_MAXDATABUFFERSIZE   2048
+
+#define INI_CAM_CMDACK_THRESH       "CommandAckThresh"
+#define DEF_CAM_CMDACK_THRESH       10
+
+#define INI_CAM_DATAACK_THRESH      "DataAckThresh"
+#define DEF_CAM_DATAACK_THRESH      10
+
+#define INI_CAM_MINCMD_THRESH       "MinCommandAckThresh"
+#define DEF_CAM_MINCMD_THRESH       2
+
+#define INI_CAM_MINDATA_THRESH      "MinDataAckThresh"
+#define DEF_CAM_MINDATA_THRESH      2
+
+#define INI_CAM_ACKDELAY_THRESH     "AckDelayThresh"
+#define DEF_CAM_ACKDELAY_THRESH     350
+
+#define INI_CAM_PLAYDELAY_THRESH    "PlaybackDelayThresh"
+#define DEF_CAM_PLAYDELAY_THRESH    250
+
+
+
+/*
+ *  audhal[WN].dll, sb16.ddl
+ */
+
+#define INI_AUDHW_SECTION           "AudioHardware"
+
+#if defined(DOS)
+#define DEF_AUDHW_DRIVERNAME        "SB16.DDL"
+#elif defined(WIN16)
+#define DEF_AUDHW_DRIVERNAME        "AUDHALW.DLL"
+#elif defined(WIN32)
+#define DEF_AUDHW_DRIVERNAME        "AUDHALN.DLL"
+#endif
+
+#define INI_AUDHW_BUFFERPOOLSIZE    "BufferPoolSize"
+#define DEF_AUDHW_BUFFERPOOLSIZE    8192
+
+#if defined(WIN32)
+#define INI_AUDHW_CONVERTERNAME     "ConverterNameWin32"
+#define DEF_AUDHW_CONVERTERNAME     "ADPCMN.DLL"
+#endif
+
+/*
+ *  vdcm.dll
+ */
+
+/*  Part of WFCLIENT section */
+#define INI_CM_UPDATESALLOWED    "UpdatesAllowed"
+#define DEF_CM_UPDATESALLOWED    TRUE
+
+/* Part of ClientManagement section*/
+#define INI_CM_VDSECTION        "ClientManagement"
+
+#define INI_CM_MAXDATABUFFERSIZE "MaxDataBufferSize"
+#define DEF_CM_MAXDATABUFFERSIZE 2048
+
+#define INI_CM_OEMSECTION       "OemSection"
+#define DEF_CM_OEMSECTION       "OEM Section"
+
+#define INI_CM_OEMMODULE        "Module"
+#if defined(WIN32)
+#define DEF_CM_OEMMODULE        "oemcmn.dll"
+#elif defined(WIN16)
+#define DEF_CM_OEMMODULE        "oemcmw.dll"
+#elif defined(DOS)
+#define DEF_CM_OEMMODULE        "oemcm.ddl"
+#endif
+
+
+/*
+ * Transparent Windows Interface (TWI)
+ */
+#define INI_TWI_MODE            "TWIMode"
+#define DEF_TWI_MODE            FALSE
+
 
 /*=============================================================================
  ==  Dialing Properties INI keys (INI_) and defaults (DEF_)
+ ==  (TAPI entries also use some of these #defines)
  ============================================================================*/
 
 #define INI_DIALPROP            "DialingProperties"
@@ -1317,7 +1562,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INI_AREACODE            "AreaCode"
 #define DEF_AREACODE            ""
 #define INI_COUNTRY             "Country"
-#define DEF_COUNTRY             "United States of America (1)"
+#define DEF_COUNTRY             1
+#define INI_COUNTRYSTRING       "CountryString"
 #define INI_LOCALACCESS         "LocalAccess"
 #define DEF_LOCALACCESS         ""
 #define INI_LONGDISTANCEACCESS  "LongDistanceAccess"
@@ -1328,6 +1574,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_DISABLECALLWAITING  ""
 #define INI_TONEDIALING         "ToneDialing"
 #define DEF_TONEDIALING         TRUE
+#define INI_USEAREAANDCOUNTRY   "UseAreaAndCountry"
+#define DEF_USEAREAANDCOUNTRY   TRUE
 
 
 /*=============================================================================
@@ -1516,7 +1764,7 @@ typedef struct _MINIDLL {
     LPVOID pKbdProcedures;          // Pointer to Kbd functions (output)
     LPVOID pMouProcedures;          // Pointer to Mou functions (output)
     LPVOID pXmsProcedures;          // Pointer to Xms functions (output)
-    LPVOID pBIniProcedures;         // Pointer to BIni functions (output)
+    LPVOID pMemIniProcedures;       // Pointer to MemIni functions (output)
     LPVOID pModuleProcedures;       // Pointer to full module functions (output)
     PFNLOGPROC * ppfnLogProcedures; // List of Logxxx() functions (input)
     PFNUNLOAD pfnUnload;            // Unload procedure (output)
@@ -1625,7 +1873,20 @@ extern PPLIBPROCEDURE pWFEngProcedures;
 
 #endif
 
-/* #pragma pack() */
+#ifdef DBCS
+#define IsDBCSLeadByte(ch)  (((ch & 0xe0) == 0x80) || ((ch & 0xe0) == 0xe0))
+#define IsDBCSSpace(p)      ((*p == 0x81) && (*(p+1) == 0x40))
+#endif
+
+#ifdef DOS
+#ifdef DBCS
+#define CharNext(p)         (IsDBCSLeadByte(*p) ? p+2 : p+1)
+#else
+#define CharNext(p)         (p+1)
+#endif
+#endif
+
+//#pragma pack()
 
 #ifdef __cplusplus
 }

@@ -10,20 +10,9 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
-*   Revision 1.2  1998/01/27 18:39:41  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
-*   Revision 1.1  1998/01/19 19:13:10  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
+*  
+*     Rev 1.0   03 Dec 1997 17:47:34   terryt
+*  Initial revision.
 *  
 *     Rev 1.7   15 Apr 1997 18:17:12   TOMA
 *  autoput for remove source 4/12/97
@@ -64,6 +53,13 @@
 
 #define MAXBRUSHREALIZED   16
 
+#if VESA
+#include "palette.h"
+
+#define _HBRUSH LPBITMAP
+#endif
+
+
 typedef  struct   _INPUT_WORD
 {
    BUWORD  lowbyte : 8;
@@ -92,7 +88,11 @@ typedef struct _DSDELTA
 //for anything that might change in it
 typedef struct _DCSTATE
 {
+#if VESA
+   _HBRUSH  hbr;        //currently selected brush handle. always solid or in objobj
+#else
    HBRUSH   hbr;        //currently selected brush handle. always solid or in objobj
+#endif
    int      bkmode;     //background mode. OPAQUE or TRANSPARENT
    COLORREF bkcolor;    //background color
    COLORREF txtcolor;   //text color
@@ -160,7 +160,11 @@ typedef  struct   _DSBITMAP_PARMS
 //                   how to access the cache
 typedef struct _BRUSHOBJOBJ
 {
+#if VESA
+   _HBRUSH  hbr;     //realized brush representing this objobj entry or NULL
+#else
    HBRUSH   hbr;     //realized brush representing this objobj entry or NULL
+#endif
    BYTE     previous;
    BYTE     next;
    WORD     cache_handle;  //10 bit client cache object handle
@@ -182,7 +186,9 @@ typedef struct _BRUSHOBJOBJ
 //handles and pointers obtained during initialization
 typedef  struct _BRUSHDIB
 {
+#if VESA == 0
    HGLOBAL  dib_handle;
+#endif
    LPVOID   dib_address;
 } BRUSHDIB, near * PBRUSHDIB, far * LPBRUSHDIB;
 

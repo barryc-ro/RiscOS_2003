@@ -8,12 +8,13 @@
 *
 *   Author: Brad Pedersen (4/8/94)
 *
-*   wdica.c,v
-*   Revision 1.1  1998/01/12 11:36:27  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.109   Oct 31 1997 19:49:56   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.108   Oct 09 1997 18:31:46   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.107   11 Jun 1997 10:17:22   terryt
 *  client double click support
@@ -94,7 +95,7 @@
 #include "../../../inc/vioapi.h"
 #include "../../../inc/logapi.h"
 #include "../../../inc/mouapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/wd.h"
 #include "wdica.h"
 
@@ -244,13 +245,13 @@ EmulOpen( PWD pWd, PWDOPEN pWdOpen )
     pIca->GlobalAttr = 0x07;
     pIca->TextIndex = 1;            // Text 80x25
 
-    pIca->fEchoTTY = bGetPrivateProfileBool( pWdOpen->pIniSection,
-                                             INI_ECHO_TTY,
-                                             DEF_ECHO_TTY );
+    pIca->fEchoTTY = miGetPrivateProfileBool( INI_WFCLIENT,
+                                              INI_ECHO_TTY,
+                                              DEF_ECHO_TTY );
 
-    pIca->ulTTYDelay = bGetPrivateProfileLong( pWdOpen->pIniSection,
-                                               INI_ECHO_TTY_DELAY,
-                                               DEF_ECHO_TTY_DELAY );
+    pIca->ulTTYDelay = miGetPrivateProfileLong( INI_TYPE,
+                                                INI_ECHO_TTY_DELAY,
+                                                DEF_ECHO_TTY_DELAY );
 
     /*
      *  Set screen dimensions in mouse library
@@ -265,9 +266,9 @@ EmulOpen( PWD pWd, PWDOPEN pWdOpen )
     if ( MouseReset() == CLIENT_STATUS_SUCCESS )
         pIca->fMouse = TRUE;
 
-    if ( bGetPrivateProfileLong( pWdOpen->pIniSection,
-                                 INI_MOUSEDOUBLECLICKTIMER,
-                                 DEF_MOUSEDOUBLECLICKTIMER ) )
+    if ( miGetPrivateProfileLong( INI_WFCLIENT,
+                                  INI_MOUSEDOUBLECLICKTIMER,
+                                  DEF_MOUSEDOUBLECLICKTIMER ) )
         pIca->fDoubleClickDetect = TRUE;
     else
         pIca->fDoubleClickDetect = FALSE;

@@ -10,30 +10,36 @@
 *
 *   $Log$
 *  
+*     Rev 1.33   Oct 09 1997 18:39:12   briang
+*  Conversion to MemIni use
+*  
+*     Rev 1.32   18 Sep 1997 14:46:26   x86fre
+*  Modified for client split
+*
 *     Rev 1.30   08 Aug 1997 21:18:54   tariqm
 *  scripting support
-*  
+*
 *     Rev 1.29   15 Jul 1997 15:58:12   davidp
 *  Added include for hydra/picasso surgery
-*  
+*
 *     Rev 1.28   15 Apr 1997 18:18:52   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.29   09 Apr 1997 13:38:48   terryt
 *  fix connection status
-*  
+*
 *     Rev 1.28   21 Mar 1997 16:10:06   bradp
 *  update
-*  
+*
 *     Rev 1.27   04 Mar 1997 17:41:52   terryt
 *  client shift states
-*  
+*
 *     Rev 1.26   20 Feb 1997 14:09:56   butchd
 *  Added client data to connection status dialog
-*  
+*
 *     Rev 1.25   22 Jan 1997 16:49:54   terryt
 *  client data
-*  
+*
 *     Rev 1.24   27 Apr 1996 15:50:28   andys
 *  soft keyboard
 *
@@ -73,7 +79,7 @@
 #include "../../inc/vioapi.h"
 #include "../../inc/logapi.h"
 #include "../../inc/cfgload.h"
-#include "../../inc/biniapi.h"
+#include "../../inc/miapi.h"
 #include "../../inc/wengapip.h"
 #include "../../inc/timapi.h"
 #include "../../inc/kbdapi.h"
@@ -83,9 +89,8 @@
 #include "../../inc/sdapi.h"
 
 
-#include "citrix/ctxver.h"
+//#include "citrix/ctxver.h"
 #include "citrix/ica.h"
-#include "citrix/hydrix.h"
 
 #include "../../inc/mouapi.h"
 
@@ -1356,7 +1361,7 @@ done:
  * CLIENT_ERROR_NO_MEMORY        - can't allocate memory
  * CLIENT_ERROR_BUFFER_TOO_SMALL - Buffer length too small
  * CLIENT_ERROR                  - Id not found
- * CLIENT_STATUS_SUCCESS         - Id found 
+ * CLIENT_STATUS_SUCCESS         - Id found
  *
  */
 INT WdGetInfoForId(LPBYTE Id, LPSTR pData, USHORT Length, USHORT *pReturnLength)
@@ -1419,7 +1424,7 @@ INT wdGetClientDataServer(LPSTR pData, USHORT Length)
 {
     USHORT ReturnLength;
     INT rc;
-    
+
     rc = WdGetInfoForId(CLIENTDATA_SERVER, pData, Length, &ReturnLength);
 
     if ( rc )
@@ -1449,7 +1454,7 @@ INT wdGetClientDataDomain(LPSTR pData, USHORT Length)
 {
     USHORT ReturnLength;
     INT rc;
-    
+
     rc = WdGetInfoForId(CLIENTDATA_DOMAIN, pData, Length, &ReturnLength);
 
     if ( rc )
@@ -1479,7 +1484,7 @@ INT wdGetClientDataUsername(LPSTR pData, USHORT Length)
 {
     USHORT ReturnLength;
     INT rc;
-    
+
     rc = WdGetInfoForId(CLIENTDATA_USERNAME, pData, Length, &ReturnLength);
 
     if ( rc )
@@ -1492,7 +1497,7 @@ INT wdGetClientDataUsername(LPSTR pData, USHORT Length)
  *
  *  Function: sdLoad
  *
- *  Purpose: 
+ *  Purpose:
  *
  *  Entry:
  *
@@ -1501,16 +1506,16 @@ INT wdGetClientDataUsername(LPSTR pData, USHORT Length)
  *
  ******************************************************************************/
 
-BOOL 
+BOOL
 sdLoad( LPBYTE pScriptFile, LPBYTE pScriptDriver )
 {
     int rc;
     SDOPEN SdOpen;
-           
-    TRACE((TC_WENG, TT_API2, "sdLoad: pScriptFile %s, pScriptDriver %s", 
+
+    TRACE((TC_WENG, TT_API2, "sdLoad: pScriptFile %s, pScriptDriver %s",
            pScriptFile, pScriptDriver));
-    
-   
+
+
     /*
      *  Load dll into memory
      */
@@ -1547,7 +1552,7 @@ sdLoad( LPBYTE pScriptFile, LPBYTE pScriptDriver )
  *
  *  Function: sdPoll
  *
- *  Purpose: 
+ *  Purpose:
  *
  *  Entry:
  *
@@ -1556,7 +1561,7 @@ sdLoad( LPBYTE pScriptFile, LPBYTE pScriptDriver )
  *
  ******************************************************************************/
 
-BOOL 
+BOOL
 sdPoll()
 {
     int rc;
@@ -1572,7 +1577,7 @@ sdPoll()
     if ( rc > SCRIPT_STATUS_COMPLETE ) {
 
         INT rc2;
-     
+
         /*
          * Get last error
          */
@@ -1584,7 +1589,7 @@ sdPoll()
             ASSERT( 0, 0 );
             goto done;
         }
-     
+
         /*
          *  Mark global error
          */
@@ -1607,7 +1612,7 @@ done:
  *
  *  Function: sdUnload
  *
- *  Purpose: 
+ *  Purpose:
  *
  *  Entry:
  *
@@ -1616,7 +1621,7 @@ done:
  *
  ******************************************************************************/
 
-VOID 
+VOID
 sdUnload()
 {
     int rc;

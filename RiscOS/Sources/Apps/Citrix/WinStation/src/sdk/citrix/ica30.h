@@ -10,37 +10,35 @@
 *
 *  Author: Brad Pedersen
 *
-*  ica30.h,v
-*  Revision 1.1  1998/01/12 11:37:56  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
 *  
+*     Rev 1.75   18 Sep 1997 14:47:08   x86fre
+*  Modified for client split
+*
 *     Rev 1.74   Jul 01 1997 19:36:34   billm
 *  Change PACKET_INIT_REQUEST version
-*  
+*
 *     Rev 1.73   20 Jun 1997 20:30:06   kurtp
 *  update
-*  
+*
 *     Rev 1.72   12 Jun 1997 18:23:54   kurtp
 *  update
-*  
+*
 *     Rev 1.71   28 May 1997 10:31:56   terryt
 *  client double click support
-*  
+*
 *     Rev 1.71   27 May 1997 14:29:26   terryt
 *  client double click support
-*  
+*
 *     Rev 1.70   21 Apr 1997 16:56:48   TOMA
 *  update
-*  
+*
 *     Rev 1.69   Mar 25 1997 23:47:40   billm
 *  Added extern C for C++
-*  
+*
 *     Rev 1.68   21 Mar 1997 16:10:34   bradp
 *  update
-*  
+*
 *
 *******************************************************************************/
 
@@ -132,7 +130,7 @@ extern "C" {
 #define PACKET_VIRTUAL_FLUSH    0x38 // 2  flush specified virtual channel
 #define PACKET_SOFT_KEYBOARD    0x39 // 1  raise or lower soft keyboard
 #define PACKET_COMMAND_CACHE    0x3A // nn write n bytes of caching data
-#define PACKET_SET_CLIENT_DATA  0x3B // set n bytes of a data type 
+#define PACKET_SET_CLIENT_DATA  0x3B // set n bytes of a data type
 #define PACKET_MAXIMUM          0x3C // *** last packet type ***
 
 
@@ -156,7 +154,7 @@ extern "C" {
 /*
  *  PACKET_INIT_REQUEST version level
  *
- *   0 - SouthBeach 
+ *   0 - SouthBeach
  *   1 - WinFrame 1.5
  *   2 - WinFrame 1.6
  *   3 - WinFrame 1.7
@@ -171,6 +169,7 @@ extern "C" {
 ==   PACKET_MOUSE2
 =============================================================================*/
 
+#ifndef MOU_STATUS_MOVED
 /*
  *  Mouse data structure
  */
@@ -192,6 +191,8 @@ typedef struct _MOUSEDATA {
 #define MOU_STATUS_B3UP    0x40
 #define MOU_STATUS_DBLCLK  0x80
 #define MOU_STATUS_ALL     0xFF
+#endif
+
 
 /*=============================================================================
 ==   PACKET_SOFT_KEYBOARD

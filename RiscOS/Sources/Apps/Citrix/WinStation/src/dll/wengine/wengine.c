@@ -11,87 +11,135 @@
 *
 *   Author: Marc Bloomfield (marcb) 27-Mar-1995
 *
-*   wengine.c,v
-*   Revision 1.1  1998/01/12 11:36:40  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
 *  
+*     Rev 1.129   Feb 17 1998 16:18:18   bills
+*  gpszTitle was too small for the changes to the title of the client window. 
+*  If the description entered for a session was over 27 bytes, lstrcat would
+*  spill over until it finally blew out gpfnStatusMsgProc.  The length of
+*  gpszTitle was increased to 128.  It is no longer using the DESCRIPTION 
+*  typedef, since it was used elsewhere, I wanted to minimize the possibility
+*  of introducting new problems.
+*  
+*     Rev 1.128   Feb 14 1998 18:15:24   briang
+*  Fix FindWindow(ConnectionCenter) to look for the correct class and name
+*  
+*     Rev 1.127   Feb 11 1998 17:46:24   xuanh
+*  CPR8248 Win16 title bar could not toggle, fixed.
+*  
+*     Rev 1.126   Jan 28 1998 15:37:48   sumitd
+*  Windows in seemless mode not maximized
+*  
+*     Rev 1.125   Jan 27 1998 15:57:28   briang
+*  Add extra guards for TWI Stuff
+*  
+*     Rev 1.124   16 Jan 1998 09:54:02   butchd
+*  clean up type mismatch warning
+*  
+*     Rev 1.123   Jan 14 1998 16:42:08   briang
+*  TWI Integration
+*  
+*     Rev 1.122   Jan 08 1998 17:42:28   sumitd
+*  Clear Text Password accepted in .ICA file
+*  
+*     Rev 1.121   Jan 06 1998 18:38:20   briang
+*  Release the Memory Profile upon disconnect
+*  
+*     Rev 1.120   Nov 13 1997 18:50:34   briang
+*  Add WebClient IntlKB Support for WIN16
+*  
+*     Rev 1.119   Nov 03 1997 18:53:28   briang
+*  In the LoadSession we need to set the global section pointer for buffered ini gets if the profile pointer is not set
+*  
+*     Rev 1.118   Oct 31 1997 19:19:44   briang
+*  Call miSetSectionPointer when we load a PD, WD, VD and also use new miGet parameters
+*  
+*     Rev 1.117   Oct 09 1997 18:36:52   briang
+*  Conversion to MemIni use
+*  
+*     Rev 1.115   15 Oct 1997 16:01:14   kalyanv
+*  updated
+*  
+*     Rev 1.116   24 Sep 1997 09:18:50   x86fre
+*  updated
+*
+*     Rev 1.115   14 Oct 1997 16:54:38   kalyanv
+*  Added the EncryptionLevel not basic and USe of Username check
+*
 *     Rev 1.114   12 Aug 1997 22:34:06   tariqm
 *  win16 fix
-*  
+*
 *     Rev 1.113   08 Aug 1997 21:18:22   tariqm
 *  scripting support
-*  
+*
 *     Rev 1.112   21 Jul 1997 19:32:08   tariqm
 *  Update...
-*  
+*
 *     Rev 1.111   10 Jul 1997 22:54:00   tariqm
 *  Connection Status..
-*  
+*
 *     Rev 1.110   11 Jun 1997 10:29:46   terryt
 *  client double click support
-*  
+*
 *     Rev 1.109   27 May 1997 17:41:30   terryt
 *  client double click support
-*  
+*
 *     Rev 1.108   27 May 1997 14:26:24   terryt
 *  client double click support
-*  
+*
 *     Rev 1.107   15 Apr 1997 18:18:38   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.108   09 Apr 1997 16:06:38   BillG
 *  update
-*  
-*  
+*
+*
 *     Rev 1.107   21 Mar 1997 16:10:04   bradp
 *  update
-*  
+*
 *     Rev 1.106   10 Mar 1997 19:13:34   BillG
 *  filter client name
-*  
+*
 *     Rev 1.105   06 Mar 1997 10:49:18   kurtp
 *  fix CPR 4269
-*  
+*
 *     Rev 1.104   20 Feb 1997 14:10:26   butchd
 *  Added client data query support
-*  
+*
 *     Rev 1.103   26 Jun 1996 15:07:40   brucef
 *  Add DOS-specific INI Keyword processing and calls to new Mouse
 *  and Keyboard APIs to manage user preferences.
-*  
+*
 *     Rev 1.102   11 Jun 1996 14:55:00   jeffm
 *  update
-*  
+*
 *     Rev 1.101   28 May 1996 19:57:44   jeffm
 *  update
-*  
+*
 *     Rev 1.100   20 May 1996 15:49:34   jeffm
 *  update
-*  
+*
 *     Rev 1.97   27 Apr 1996 15:50:38   andys
 *  soft keyboard
 *
 *     Rev 1.96   14 Feb 1996 10:40:02   butchd
 *  must still force on top and foreground for Win32
-*  
+*
 *     Rev 1.95   12 Feb 1996 17:44:50   butchd
 *  fixed initial show and focus bugs
-*  
+*
 *     Rev 1.94   12 Feb 1996 09:40:06   richa
 *  Create and setup the G_fAsync flag so that we can mark async connections.
 *
 *     Rev 1.93   31 Jan 1996 17:22:26   kurtp
 *  update
-*  
+*
 *     Rev 1.92   30 Jan 1996 16:26:32   bradp
 *  update
-*  
+*
 *     Rev 1.91   30 Jan 1996 09:52:02   bradp
 *  update
-*  
+*
 *
 ****************************************************************************/
 
@@ -109,7 +157,7 @@
 #include "../../inc/vioapi.h"
 #include "../../inc/logapi.h"
 #include "../../inc/cfgload.h"
-#include "../../inc/biniapi.h"
+#include "../../inc/miapi.h"
 #include "../../inc/wengapip.h"
 #include "../../inc/timapi.h"
 #include "../../inc/kbdapi.h"
@@ -172,17 +220,21 @@ extern BOOL gfIPCShutdown;
 extern BOOL gbIPCEngine;
 #endif
 
+#ifdef TWI_INTERFACE_ENABLED
+extern BOOL TwiModeEnableFlag = FALSE;
+#endif  //TWI_INTERFACE_ENABLED
 
 /*=============================================================================
 ==   Local Vars
 =============================================================================*/
 
 BOOL gbContinuePolling           = FALSE;
+BOOL szClearPasswordTag          = FALSE;
 #if 0
 PPLIBPROCEDURE pModuleProcedures = NULL;
 PPLIBPROCEDURE pLogProcedures    = NULL;
 PPLIBPROCEDURE pVioProcedures    = NULL;
-PPLIBPROCEDURE pBIniProcedures   = NULL;
+PPLIBPROCEDURE pMemIniProcedures   = NULL;
 PPLIBPROCEDURE pKbdProcedures    = NULL;
 #ifdef LPT_IN_ENGINE
 PPLIBPROCEDURE pLptProcedures    = NULL;
@@ -214,7 +266,7 @@ USHORT           gState = 0;
 static BOOL      gbPollingEnabled = FALSE;
 CLIENTNAME       gpszClientname = { 0 };
 CLIENTSN         gpszClientSN = { 0 };
-DESCRIPTION      gpszTitle = { 0 };
+CHAR			 gpszTitle[128] = { 0 };
 ULONG            gVersion = 0;
 static PFNSTATUSMSGPROC gpfnStatusMsgProc = NULL;
 #ifdef DOS
@@ -378,7 +430,7 @@ int WFCAPI
 srvWFEngUnload( PMINIDLL pLink )
 {
 //    VioUnload();
-//    BIniUnload();
+//    MemIniUnload();
 
 //     TimerUnload();
 //     KbdUnload();
@@ -456,8 +508,8 @@ INT WFCAPI MainLoad( PDLLLINK pLink )
 
 INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
 {
-    PCHAR        pIni = pUiOpen->pIniSection;
     USHORT       Offset;
+    ULONG        Layout;
     LPBYTE       pBuf;
     USHORT       Length;
     USHORT       Len;
@@ -471,13 +523,13 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
     /* check for script file and script driver */
     if ( ((gScriptFile   = malloc( FILEPATH_LENGTH+1 )) != NULL) &&
          ((gScriptDriver = malloc( FILEPATH_LENGTH+1 )) != NULL) ) {
-        
-        /* read profile */
-        bGetPrivateProfileString( pIni, INI_SCRIPT_DRIVER, INI_EMPTY, 
-                                  gScriptDriver, FILEPATH_LENGTH );
 
-        bGetPrivateProfileString( pIni, INI_SCRIPT_FILE, INI_EMPTY, 
-                                  gScriptFile,   FILEPATH_LENGTH );
+        /* read profile */
+        miGetPrivateProfileString( INI_WFCLIENT, INI_SCRIPT_DRIVER, INI_EMPTY,
+                                   gScriptDriver, FILEPATH_LENGTH );
+
+        miGetPrivateProfileString( INI_WFCLIENT, INI_SCRIPT_FILE, INI_EMPTY,
+                                   gScriptFile,   FILEPATH_LENGTH );
 
         /* valid script file and path */
         if ( !strlen( gScriptFile ) || !strlen( gScriptDriver ) ) {
@@ -507,26 +559,50 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
      */
     G_pUiData->EncryptionLevel = 0;
 
-    G_pUiData->fDisableSound = bGetPrivateProfileBool( pIni, INI_SOUND,
-                                                       DEF_SOUND );
+#ifdef TWI_INTERFACE_ENABLED
+  
+    TwiModeEnableFlag = miGetPrivateProfileBool( INI_SERVERSECTION,
+                                                 INI_TWI_MODE,
+                                                 DEF_TWI_MODE );
 
-    G_pUiData->fDisableCtrlAltDel = bGetPrivateProfileBool( pIni, INI_CTRLALTDEL,
-                                                            DEF_CTRLALTDEL );
+    if (TwiModeEnableFlag) 
+        G_pUiData->fTwiModeEnableFlag=1;
+    else
+        G_pUiData->fTwiModeEnableFlag=0;
+    //  if( TwiModeEnableFlag ) MessageBox(NULL, "TwiModeFlag=1", "AP", MB_OK | MB_ICONASTERISK | MB_TASKMODAL);
+    //  else                    MessageBox(NULL, "TwiModeFlag=0", "AP", MB_OK | MB_ICONASTERISK | MB_TASKMODAL);
+    {
+         ULONG ptru = (ULONG)GetWindowLong( ghwndMain, GWL_INSTANCEDATA );
+         if( ptru ){
+  
+            ptru += sizeof(WFEINSTANCE);
+            *((PULONG)ptru) = TwiModeEnableFlag;
+  //  if( TwiModeEnableFlag ) MessageBox(NULL, "saved TwiModeFlag=1", "AP", MB_OK | MB_ICONASTERISK | MB_TASKMODAL);
+  //  else                    MessageBox(NULL, "saved TwiModeFlag=0", "AP", MB_OK | MB_ICONASTERISK | MB_TASKMODAL);
+         }
+    }
+#endif  //TWI_INTERFACE_ENABLED
+  
+    G_pUiData->fDisableSound = miGetPrivateProfileBool( INI_WFCLIENT, INI_SOUND,
+                                                        DEF_SOUND );
 
-    G_MouseTimer = bGetPrivateProfileInt( pIni, INI_MOUSETIMER, DEF_MOUSETIMER );
+    G_pUiData->fDisableCtrlAltDel = miGetPrivateProfileBool( INI_WFCLIENT, INI_CTRLALTDEL,
+                                                             DEF_CTRLALTDEL );
+
+    G_MouseTimer = miGetPrivateProfileInt( INI_WFCLIENT, INI_MOUSETIMER, DEF_MOUSETIMER );
 
 #ifdef DOS
-    G_MouseDoubleClickTimer = bGetPrivateProfileInt( pIni, INI_MOUSEDOUBLECLICKTIMER, DEF_MOUSEDOUBLECLICKTIMER );
-    G_MouseDoubleClickHeight = bGetPrivateProfileInt( pIni, INI_MOUSEDOUBLECLICKHEIGHT, DEF_MOUSEDOUBLECLICKHEIGHT );
-    G_MouseDoubleClickWidth = bGetPrivateProfileInt( pIni, INI_MOUSEDOUBLECLICKWIDTH, DEF_MOUSEDOUBLECLICKWIDTH );
+    G_MouseDoubleClickTimer = miGetPrivateProfileInt(INI_WFCLIENT, INI_MOUSEDOUBLECLICKTIMER, DEF_MOUSEDOUBLECLICKTIMER );
+    G_MouseDoubleClickHeight = miGetPrivateProfileInt( INI_WFCLIENT, INI_MOUSEDOUBLECLICKHEIGHT, DEF_MOUSEDOUBLECLICKHEIGHT );
+    G_MouseDoubleClickWidth = miGetPrivateProfileInt( INI_WFCLIENT, INI_MOUSEDOUBLECLICKWIDTH, DEF_MOUSEDOUBLECLICKWIDTH );
 #endif
 
-    G_KeyboardTimer = bGetPrivateProfileInt( pIni, INI_KEYBOARDTIMER, DEF_KEYBOARDTIMER );
+    G_KeyboardTimer = miGetPrivateProfileInt(INI_WFCLIENT , INI_KEYBOARDTIMER, DEF_KEYBOARDTIMER );
 
-    G_fEchoTTY = bGetPrivateProfileBool( pIni, INI_ECHO_TTY, DEF_ECHO_TTY );
+    G_fEchoTTY = miGetPrivateProfileBool(INI_WFCLIENT , INI_ECHO_TTY, DEF_ECHO_TTY );
 
 
-    bGetPrivateProfileString( pIni, INI_KEYBOARDLAYOUT, DEF_KEYBOARDLAYOUT,
+    miGetPrivateProfileString( INI_WFCLIENT, INI_KEYBOARDLAYOUT, DEF_KEYBOARDLAYOUT,
 			      szKeyboardLayout, sizeof(szKeyboardLayout) );
 
     // special new string to say pick up from local machine configuration
@@ -542,21 +618,21 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
 	TRACE((TC_WENG, TT_API1, "KeyboardLayout: '%s' (local '%s')\n", szKeyboardLayout, LocalLayout));
     }
 
-    G_pUiData->KeyboardLayout = bGetPrivateProfileLong( pIni,
+    G_pUiData->KeyboardLayout = miGetPrivateProfileLong( INI_WFCLIENT,
 							szKeyboardLayout,
 							(long)0 );
 
     TRACE((TC_WENG, TT_API1, "KeyboardLayout: %d\n", G_pUiData->KeyboardLayout));
 
 #if 0
-    G_pUiData->Lpt1  = bGetPrivateProfileInt( pIni, INI_LPT1, DEF_LPT1 );
-    G_pUiData->Port1 = bGetPrivateProfileInt( pIni, INI_PORT1, DEF_PORT1 );
+    G_pUiData->Lpt1  = miGetPrivateProfileInt( INI_WFCLIENT, INI_LPT1, DEF_LPT1 );
+    G_pUiData->Port1 = miGetPrivateProfileInt( INI_WFCLIENT, INI_PORT1, DEF_PORT1 );
 
-    G_pUiData->Lpt2  = bGetPrivateProfileInt( pIni, INI_LPT2, DEF_LPT2 );
-    G_pUiData->Port2 = bGetPrivateProfileInt( pIni, INI_PORT2, DEF_PORT2 );
+    G_pUiData->Lpt2  = miGetPrivateProfileInt( INI_WFCLIENT, INI_LPT2, DEF_LPT2 );
+    G_pUiData->Port2 = miGetPrivateProfileInt( INI_WFCLIENT, INI_PORT2, DEF_PORT2 );
 
-    G_pUiData->Lpt3  = bGetPrivateProfileInt( pIni, INI_LPT3, DEF_LPT3 );
-    G_pUiData->Port3 = bGetPrivateProfileInt( pIni, INI_PORT3, DEF_PORT3 );
+    G_pUiData->Lpt3  = miGetPrivateProfileInt( INI_WFCLIENT, INI_LPT3, DEF_LPT3 );
+    G_pUiData->Port3 = miGetPrivateProfileInt( INI_WFCLIENT, INI_PORT3, DEF_PORT3 );
 #endif
 
     /*
@@ -568,8 +644,8 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
      *  Copy domain
      */
     pBuf = (LPBYTE)G_pUiData + Offset;
-    bGetPrivateProfileString( pIni, INI_DOMAIN, DEF_DOMAIN,
-                              pBuf, DOMAIN_LENGTH+1 );
+    miGetPrivateProfileString( INI_SERVERSECTION, INI_DOMAIN, DEF_DOMAIN,
+                               pBuf, DOMAIN_LENGTH+1 );
 
     if ( (Length = strlen(pBuf)) > 0 ) {
         G_pUiData->oDomain = Offset;
@@ -581,14 +657,27 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
      *  Copy username
      */
     pBuf = (LPBYTE)G_pUiData + Offset;
-    bGetPrivateProfileString( pIni, INI_USERNAME, DEF_USERNAME,
-                              pBuf, USERNAME_LENGTH+1 );
+    miGetPrivateProfileString( INI_SERVERSECTION, INI_USERNAME, DEF_USERNAME,
+                               pBuf, USERNAME_LENGTH+1 );
 
-    bGetPrivateProfileString( pIni, INI_ENCRYPTIONLEVELSESSION, DEF_ENCRYPTIONLEVEL,
-                                 g_szEncryptionLevelConnStatus, sizeof(g_szEncryptionLevelConnStatus) );
-
+    miGetPrivateProfileString( INI_SERVERSECTION, INI_ENCRYPTIONLEVELSESSION, DEF_ENCRYPTIONLEVEL,
+                               g_szEncryptionLevelConnStatus, sizeof(g_szEncryptionLevelConnStatus) );
 
     if ( (Length = strlen(pBuf)) > 0 ) {
+
+        /*
+         * Test: if EncryptionLevel is not Basic, then do not allow the client to connect
+         *       by returning an error. Reason: User cannot specify Username and password
+         *       when EncryptionLevel is not basic
+         */
+#ifndef DOS
+        if ( lstrcmpi( g_szEncryptionLevelConnStatus, INI_ENCRYPTION_BASIC) ) {
+#else
+        if ( strcmpi( g_szEncryptionLevelConnStatus, INI_ENCRYPTION_BASIC) ) {
+#endif
+           return( CLIENT_ERROR_ENCRYPT_LEVEL_INCORRECTUSE );
+        }
+
         G_pUiData->oUserName = Offset;
         Offset += (Length + 1);  // skip over trailing null
         TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: Username: %s", pBuf ));
@@ -598,9 +687,9 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
      *  Copy password
      */
     pBuf = (LPBYTE)G_pUiData + Offset;
-    bGetPrivateProfileString( pIni, INI_PASSWORD, DEF_PASSWORD,
-                              szEncryptedPassword,
-                              sizeof(szEncryptedPassword) );
+    miGetPrivateProfileString( INI_SERVERSECTION, INI_PASSWORD, DEF_PASSWORD,
+                               szEncryptedPassword,
+                               sizeof(szEncryptedPassword) );
 
     if ( *szEncryptedPassword ) {
         Len = DecryptFromAscii( szEncryptedPassword,
@@ -608,12 +697,32 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
                                 szPassword,
                                 sizeof(szPassword) );
     } else {
-        Len = 0;
+    Len=miGetPrivateProfileString( INI_SERVERSECTION, INI_CLEAR_PASSWORD, DEF_CLEAR_PASSWORD,
+                                   szPassword,
+                                   sizeof(szPassword) );
+        if (!(*szPassword)) Len = 0;
+	else szClearPasswordTag=TRUE; 
     }
     szPassword[Len] = 0;
 
-
     if ( (Length = strlen(szPassword)) > 0 ) {
+
+        /*
+         * Test: if EncryptionLevel is not Basic, then do not allow the client to connect
+         *       by returning an error. Reason: User cannot specify Username and password
+         *       when EncryptionLevel is not basic
+         */
+
+       if (szClearPasswordTag==FALSE)
+	{
+#ifndef DOS
+        if ( lstrcmpi( g_szEncryptionLevelConnStatus, INI_ENCRYPTION_BASIC) ) {
+#else
+        if ( strcmpi( g_szEncryptionLevelConnStatus, INI_ENCRYPTION_BASIC) ) {
+#endif
+           return( CLIENT_ERROR_ENCRYPT_LEVEL_INCORRECTUSE );
+	}
+        }
 
         memcpy(pBuf, szPassword, Length);
         pBuf[Length] = 0;
@@ -639,8 +748,8 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
      *  Copy working directory
      */
     pBuf = (LPBYTE)G_pUiData + Offset;
-    bGetPrivateProfileString( pIni, INI_WORKDIRECTORY, DEF_WORKDIRECTORY,
-                              pBuf, DIRECTORY_LENGTH+1 );
+    miGetPrivateProfileString( INI_SERVERSECTION, INI_WORKDIRECTORY, DEF_WORKDIRECTORY,
+                               pBuf, DIRECTORY_LENGTH+1 );
 
     if ( (Length = strlen(pBuf)) > 0 ) {
         G_pUiData->oWorkDirectory = Offset;
@@ -652,8 +761,8 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
      *  Copy initial program
      */
     pBuf = (LPBYTE)G_pUiData + Offset;
-    bGetPrivateProfileString( pIni, INI_INITIALPROGRAM, DEF_INITIALPROGRAM,
-                              pBuf, INITIALPROGRAM_LENGTH+1 );
+    miGetPrivateProfileString( INI_SERVERSECTION, INI_INITIALPROGRAM, DEF_INITIALPROGRAM,
+                               pBuf, INITIALPROGRAM_LENGTH+1 );
 
     if ( (Length = strlen(pBuf)) > 0 ) {
         G_pUiData->oInitialProgram = Offset;
@@ -667,7 +776,7 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
     pBuf = (LPBYTE)G_pUiData + Offset;
 
     if ( gpszClientname &&
-         (Length = strlen(gpszClientname)) ) {       
+         (Length = strlen(gpszClientname)) ) {
        strcpy( pBuf, gpszClientname );
     } else {
         strcpy( pBuf, DEF_CLIENTNAME );
@@ -815,7 +924,7 @@ INT WFCAPI srvWFEngOpen( PWFEOPEN pWFEOpen, LPHANDLE phWFE )
 
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngOpen: (entered)" ));
     gVersion = pWFEOpen->Version;
-        
+
       // filter out "#" for client name, it uses for icaname
     p = pWFEOpen->pszClientname;
     for ( i = 0; i < CLIENTNAME_LENGTH; i++, p++) {
@@ -956,6 +1065,16 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngLoadSession: %08lX", (LONG)hWFE ));
 
     /*
+     * Before we use any Gets on the INI information we must allow
+     * the miGet routines to initialize its Global pointer to the 
+     * pIniProfile structure.
+     */
+    if (!miSetProfilePointer( pWFELoad->pIniSection )) {
+         //if the profile was not set then we have an old-styled buffered ini
+         miSetSectionPointer( pWFELoad->pIniSection);
+    }
+
+    /*
      * Open the Exe
      */
     memset( &ExeOpen, 0, sizeof( ExeOpen ) );
@@ -978,37 +1097,37 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
     /*
      *  Determine if this is a Async connection
      */
-    if ( bGetPrivateProfileString( pWFELoad->pIniSection,   //
-                                   INI_DEVICE,              // "DeviceName"
-                                   INI_EMPTY,               //
-                                   pszBuffer,               //
-                                   sizeof(pszBuffer) ) ) {  //
+    if ( miGetPrivateProfileString( INI_TRANSPORTSECTION,
+                                    INI_DEVICE,              // "DeviceName"
+                                    INI_EMPTY,               //
+                                    pszBuffer,               //
+                                    sizeof(pszBuffer) ) ) {  //
         G_fAsync = TRUE;
     }
 
 #ifndef DOS
-    if(gbIPCEngine) 
+    if(gbIPCEngine)
 #endif
     for ( i = 0; gHotkeys[i].pszShiftState; i++ ) {
        /*
         * Get hotkey i shift state
         */
        sprintf( pszINIKey, INI_HOTKEY_SHIFT, i+1 );
-       bGetPrivateProfileString( pWFELoad->pIniSection, pszINIKey,
-                                 gHotkeys[i].pszShiftState,
-                                 pszBuffer, sizeof(pszBuffer) );
-       ShiftState = bGetPrivateProfileInt( pWFELoad->pIniSection, pszBuffer,
-                                           gHotkeys[i].ShiftState );
+       miGetPrivateProfileString( INI_WFCLIENT, pszINIKey,
+                                  gHotkeys[i].pszShiftState,
+                                  pszBuffer, sizeof(pszBuffer) );
+       ShiftState = miGetPrivateProfileInt( INI_HOTKEY_SHIFTSTATES, pszBuffer,
+                                            gHotkeys[i].ShiftState );
 
        /*
         * Get hotkey i key
         */
        sprintf( pszINIKey, INI_HOTKEY_CHAR, i+1 );
-       bGetPrivateProfileString( pWFELoad->pIniSection, pszINIKey,
-                                 gHotkeys[i].pszScanCode,
-                                 pszBuffer, sizeof(pszBuffer) );
-       ScanCode   = (UCHAR)bGetPrivateProfileInt( pWFELoad->pIniSection, pszBuffer,
-                                                  gHotkeys[i].ScanCode );
+       miGetPrivateProfileString( INI_WFCLIENT, pszINIKey,
+                                  gHotkeys[i].pszScanCode,
+                                  pszBuffer, sizeof(pszBuffer) );
+       ScanCode   = (UCHAR)miGetPrivateProfileInt( INI_HOTKEY_KEYS, pszBuffer,
+                                                   gHotkeys[i].ScanCode );
 
        TRACE(( TC_WENG, TT_L1,
                "WFEngx.Exe: srvWFEngLoadSession reg hotkey(%d) Scan(%d) shift(%X)",
@@ -1023,28 +1142,27 @@ INT WFCAPI srvWFEngLoadSession( HANDLE hWFE, PWFELOAD pWFELoad )
     KBDPREFERENCES KPref;
     char szSwap[4];
 
-    KPref.KeyboardDelay = bGetPrivateProfileInt( pWFELoad->pIniSection,
-                                                 INI_KEYBOARDDELAY,
-                                                 DEF_KEYBOARDDELAY );
-    KPref.KeyboardSpeed = bGetPrivateProfileInt( pWFELoad->pIniSection,
-                                                 INI_KEYBOARDSPEED,
-                                                 DEF_KEYBOARDSPEED );
+    KPref.KeyboardDelay = miGetPrivateProfileInt( INI_WFCLIENT, 
+                                                  INI_KEYBOARDDELAY,
+                                                  DEF_KEYBOARDDELAY );
+    KPref.KeyboardSpeed = miGetPrivateProfileInt( INI_WFCLIENT, 
+                                                  INI_KEYBOARDSPEED,
+                                                  DEF_KEYBOARDSPEED );
 
     KbdLoadPreferences( &KPref );
 
-    MPref.HorizSpeed = bGetPrivateProfileInt( pWFELoad->pIniSection,
-                                              INI_HORIZONTALSPEED,
-                                              DEF_HORIZONTALSPEED ); 
-    MPref.VertSpeed = bGetPrivateProfileInt( pWFELoad->pIniSection,
-                                             INI_VERTICALSPEED,
-                                             DEF_VERTICALSPEED );
-    MPref.DblSpeedThreshold = bGetPrivateProfileInt( pWFELoad->pIniSection,
-                                                     INI_DBLSPEEDTHRESHOLD,
-                                                     DEF_DBLSPEEDTHRESHOLD );
+    MPref.HorizSpeed = miGetPrivateProfileInt( INI_WFCLIENT, 
+                                               INI_HORIZONTALSPEED,
+                                               DEF_HORIZONTALSPEED );
+    MPref.VertSpeed = miGetPrivateProfileInt( INI_WFCLIENT, 
+                                              INI_VERTICALSPEED,
+                                              DEF_VERTICALSPEED );
+    MPref.DblSpeedThreshold = miGetPrivateProfileInt( INI_WFCLIENT, 
+                                                      INI_DBLSPEEDTHRESHOLD,
+                                                      DEF_DBLSPEEDTHRESHOLD );
 
-    bGetPrivateProfileString( pWFELoad->pIniSection, 
-                                       INI_SWAPBUTTONS, DEF_SWAPBUTTONS,
-                                       szSwap, sizeof(szSwap) );
+    miGetPrivateProfileString( INI_WFCLIENT, INI_SWAPBUTTONS, DEF_SWAPBUTTONS,
+                               szSwap, sizeof(szSwap) );
     szSwap[sizeof(szSwap)-1] = '\0';
 
     if ( !strcmpi( szSwap, INI_YES) ) {
@@ -1104,6 +1222,13 @@ INT WFCAPI srvWFEngLoadWd( HANDLE hWFE, PWFELOAD pWFELoad )
     INT          rc = CLIENT_STATUS_SUCCESS;
 
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngLoadWd: %08lX", (LONG)hWFE ));
+
+    /*
+     * Before the WD does any gets for INI information we must set the 
+     * pointer to the Buffered INI section in case we are using an old-styled
+     * top-end which uses the bINI routines still
+     */
+    miSetSectionPointer( pWFELoad->pIniSection );
 
     if ( (rc = LoadWd( (PCHAR)(pWFELoad->pIniSection),
                        (PCHAR)(pWFELoad->pszModuleName),
@@ -1180,6 +1305,13 @@ INT WFCAPI srvWFEngLoadPd( HANDLE hWFE, PWFELOAD pWFELoad )
 
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngLoadPd: %08lX", (LONG)hWFE ));
 
+    /*
+     * Before the PD does any gets for INI information we must set the 
+     * pointer to the Buffered INI section in case we are using an old-styled
+     * top-end which uses the bINI routines still
+     */
+    miSetSectionPointer( pWFELoad->pIniSection );
+
     rc = LoadPd( (PCHAR)(pWFELoad->pIniSection),
                  (PCHAR)(pWFELoad->pszModuleName),
                  (PCHAR)(gpszDllPath),
@@ -1235,6 +1367,13 @@ INT WFCAPI srvWFEngLoadVd( HANDLE hWFE, PWFELOAD pWFELoad )
     USHORT       Channel = 0;
 
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngLoadVd: %08lX", (LONG)hWFE ));
+
+    /*
+     * Before the VD does any gets for INI information we must set the 
+     * pointer to the Buffered INI section in case we are using an old-styled
+     * top-end which uses the bINI routines still
+     */
+    miSetSectionPointer( pWFELoad->pIniSection );
 
     rc = LoadVd( (PCHAR)(pWFELoad->pIniSection),
                  (PCHAR)(pWFELoad->pszModuleName),
@@ -1363,7 +1502,7 @@ INT WFCAPI srvWFEngConnect( HANDLE hWFE )
      *  Connect to application server
      */
     if ( !(rc = wdConnect( (HWND)hWFE )) ) {
- 
+
 #ifndef DOS
         /*
          * We're posting a NOP message just to break out of the GetMessage loop
@@ -1415,6 +1554,8 @@ INT WFCAPI WFEngConnect( HANDLE hWFE )
 INT WFCAPI srvWFEngDisconnect( HANDLE hWFE )
 {
     INT rc = CLIENT_STATUS_SUCCESS;
+
+    miReleaseProfile();
 
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngDisconnect (entered)" ));
 
@@ -1498,7 +1639,7 @@ INT WFCAPI srvWFEngSetInformation( HANDLE hWFE, WFEINFOCLASS type,
 
         case WFEHotkey:
 #ifndef DOS
-            if(gbIPCEngine) 
+            if(gbIPCEngine)
 #endif
                rc = wRegisterHotkey( (PWFEHOTKEYINFO)pData );
             break;
@@ -1831,7 +1972,6 @@ fProcCalled = TRUE;
  * Note - any lParam value that needs to be sent needs to be thunked
  *        in DDESERV.C and ..\WFCWIN\DDECLIEN.C
  */
-
     switch ( message ) {
        case CLIENT_STATUS_SUCCESS :
            fProcCalled = TRUE; // Don't notify UI on this
@@ -1849,6 +1989,7 @@ fProcCalled = TRUE;
                fProcCalled = FALSE;
                wdSetFocus();
            }
+
            break;
 
        case CLIENT_STATUS_CONNECTED :

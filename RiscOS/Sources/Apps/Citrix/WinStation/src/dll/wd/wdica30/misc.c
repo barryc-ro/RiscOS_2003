@@ -1,46 +1,44 @@
 /*************************************************************************
 *
 *   misc.c
-*  
+*
 *   ICA 3.0 WinStation Driver - misc packets
-*  
-*    PACKET_STOP_REQUEST   0  client->host stop sending screen data       
+*
+*    PACKET_STOP_REQUEST   0  client->host stop sending screen data
 *    PACKET_STOP_OK        0  host->client stop accepted
 *    PACKET_BEEP           2  DosBeep
 *    PACKET_CALLBACK       n  callback (enter auto-answer)
-*  
+*
 *   Copyright 1994, Citrix Systems Inc.
-*  
+*
 *   Author: Brad Pedersen (4/9/94)
-*  
-*   misc.c,v
-*   Revision 1.1  1998/01/12 11:36:21  smiddle
-*   Newly added.#
 *
-*   Version 0.01. Not tagged
-*
+*   $Log$
 *  
+*     Rev 1.19   18 Sep 1997 14:45:40   x86fre
+*  Modified for client split
+*
 *     Rev 1.16   15 Jul 1997 15:48:38   davidp
 *  updated headers for hydra/picasso surgery
-*  
+*
 *     Rev 1.15   27 May 1997 13:39:18   richa
 *  Fix for Boundless
-*  
+*
 *     Rev 1.14   15 Apr 1997 18:17:56   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.14   21 Mar 1997 16:09:50   bradp
 *  update
-*  
+*
 *     Rev 1.13   22 Jan 1997 16:46:54   terryt
 *  client data
-*  
+*
 *     Rev 1.12   04 Nov 1995 15:34:34   andys
 *  beep status
-*  
+*
 *     Rev 1.11   03 May 1995 11:45:56   kurtp
 *  update
-*    
+*
 *************************************************************************/
 
 /*
@@ -54,7 +52,7 @@
 
 #include "../../../inc/client.h"
 #include "citrix/ica.h"
-#include "citrix/hydrix.h"
+#include "citrix/ica30.h"
 
 #ifdef DOS
 #include "../../../inc/dos.h"
@@ -81,9 +79,9 @@ int PdCall( PWD, USHORT, PVOID );
 ==   External Functions Defined
 =============================================================================*/
 
-void IcaStopOk( PWD, LPBYTE, USHORT );            
-void IcaBeep( PWD, LPBYTE, USHORT );              
-void IcaCallback( PWD, LPBYTE, USHORT );          
+void IcaStopOk( PWD, LPBYTE, USHORT );
+void IcaBeep( PWD, LPBYTE, USHORT );
+void IcaCallback( PWD, LPBYTE, USHORT );
 
 
 /*******************************************************************************
@@ -113,7 +111,7 @@ IcaStopOk( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
          *  Set stop ok received flag
          */
         pWd->fReceivedStopOk = TRUE;
-    
+
         /*
          *  Clear stop ok timeout
          */
@@ -124,18 +122,18 @@ IcaStopOk( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 
 /*******************************************************************************
  *
- *  IcaBeep 
+ *  IcaBeep
  *
  *  PACKET_BEEP
  *  P1 - frequency (high byte)
  *  P2 - frequency (low byte)
  *  P3 - duration (high byte)
  *  P4 - duration (low byte)
- *  
- *  This command generates sound from the speaker.  P1:P2 specifies the 
- *  frequency of the sound in hertz.  P3:P4 specifies the duration of the 
+ *
+ *  This command generates sound from the speaker.  P1:P2 specifies the
+ *  frequency of the sound in hertz.  P3:P4 specifies the duration of the
  *  sound in milliseconds.
- *  
+ *
  *
  * ENTRY:
  *    pWd (input)
@@ -210,14 +208,14 @@ IcaCallback( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
  *  IcaClientData
  *
  *  PACKET_SET_CLIENT_DATA
- *  
+ *
  *  Gives an arbitrary peice of data to the client indexed by an ID token.
  *  This in intended to be informational data from the host.
  *  Initially this is User Name, User Domain Name, and Server Name.
  *
  *  The ID token is 8 byte data.  The first 3 bytes are an oem id (CTX).
  *  The following 4 bytes are arbitrary, and the last byte is always 0 (NULL).
- *  
+ *
  *
  * ENTRY:
  *    pWd (input)
@@ -268,7 +266,7 @@ IcaClientData( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 
     /*
      * Allocate the new data block
-     */ 
+     */
     pNew = malloc( sizeof( INFOBLOCK ) );
     if ( pNew == NULL ) {
             ASSERT( FALSE, 0 );
@@ -305,3 +303,4 @@ IcaClientData( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     pWd->pInfoBlockList = pNew;
 
 }
+

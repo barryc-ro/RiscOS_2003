@@ -1,3 +1,5 @@
+#include "../ini/helpers.h"
+
 /*************************************************************************
 *
 *   BINIGUTS.C
@@ -11,6 +13,12 @@
 *   Author: Butch Davis (5/10/95)
 *
 *   $Log$
+*  
+*     Rev 1.5   Dec 16 1997 21:12:52   briang
+*  update
+*  
+*     Rev 1.4   Oct 10 1997 14:31:30   briang
+*  update
 *  
 *     Rev 1.3   15 Apr 1997 18:48:52   TOMA
 *  autoput for remove source 4/12/97
@@ -26,7 +34,6 @@
 *
 *************************************************************************/
 
-#include "../ini/helpers.c"     // common helper routines
 
 /*******************************************************************************
  *
@@ -60,7 +67,7 @@ bGetPrivateProfileString( PCHAR lpszSection,
                           PCHAR lpszReturnBuffer,
                           int   cbReturnBuffer )
 {
-    int   cb, i;
+    int   cb;
 
     /*
      * Validate parameters.
@@ -84,27 +91,8 @@ bGetPrivateProfileString( PCHAR lpszSection,
         cb = strlen(lpszReturnBuffer);
     }
 
-#if 0
-    /*
-     * SJM: Scan from start since there can be no newlines in the middle of an entry.
-     * This also then always returns the correct length
-     */
-    for (i = 0; i < cb; i++)
-	switch (lpszReturnBuffer[i])
-	{
-	case '\r':
-	case '\n':
-	    lpszReturnBuffer[i] = '\0';
-	    cb = i;
-	    break;
-	case '\0':
-	    cb = i;
-	    break;
-	}
-#endif
-
     TRACE((TC_LIB, TT_API1,
-           "bGetPrivateProfileString: %s -> '%s', %u (default=%s)",
+           "bGetPrivateProfileString: %s -> %s, %u (default=%s)",
            lpszEntry, lpszReturnBuffer, cb, lpszDefault));
 
     return( cb );

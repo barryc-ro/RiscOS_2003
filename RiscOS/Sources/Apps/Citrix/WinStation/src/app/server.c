@@ -26,7 +26,8 @@ static int server_count = 0;
 
 /* -------------------------------------------------------------------------------- */
 
-extern int GetSection( PCHAR, PCHAR, PCHAR * );
+// this is evil and nasty
+extern int GetSection( PCHAR, PCHAR, PCHAR *, void *pOverwrites );
 
 /* -------------------------------------------------------------------------------- */
 
@@ -51,7 +52,7 @@ static int list_servers( const char *file, char **buf_out, const char ***list_ou
 
     TRACE((TC_UI, TT_API1, "list_servers: '%s'", file));
 
-    if (GetSection( INI_APPSERVERLIST, (PCHAR)file, &buf) == CLIENT_STATUS_SUCCESS)
+    if (GetSection( INI_APPSERVERLIST, (PCHAR)file, &buf, NULL) == CLIENT_STATUS_SUCCESS)
     {
 	TRACE((TC_UI, TT_API1, "list_servers: Section @%p", buf));
 

@@ -9,12 +9,10 @@
 *
 *  Author: Brad Pedersen  (3/25/94)
 *
-*  td.h,v
-*  Revision 1.1  1998/01/12 11:35:58  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.16   03 Nov 1997 09:17:32   brada
+*  Added firewall load balancing support
 *  
 *     Rev 1.15   15 Apr 1997 16:54:52   TOMA
 *  autoput for remove source 4/12/97
@@ -98,6 +96,7 @@ typedef struct _PD {
     int fReceiveActive/* : 1 */;              // receive is currently active
     int fSendStart/* : 1 */;                  // returned STATUS_SEND_START on poll
     int fSendStop/* : 1 */;                   // returned STATUS_SEND_STOP on poll
+    int fUseAlternateAddress/*: 1*/;        // Use the alternate address
 
     LPBYTE pNrDll;                      // pointer to name resolver dll
     BYTE TcpBrowserAddress[ ADDRESS_LENGTH+1 ];  // addr of tcp ica browser

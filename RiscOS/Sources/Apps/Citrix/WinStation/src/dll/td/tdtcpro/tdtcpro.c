@@ -15,6 +15,19 @@
 *
 *  Version 0.01. Not tagged
 *
+*  $Log$
+*  
+*     Rev 1.25   07 Jan 1998 08:15:06   butchd
+*  removed EOF from last line comment
+*  
+*     Rev 1.24   Jan 06 1998 16:13:26   bills
+*  Added the EmulSetInfo stub function.
+*  
+*     Rev 1.23   Oct 31 1997 19:38:50   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.22   Oct 09 1997 17:43:28   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.21   15 Apr 1997 17:48:24   TOMA
 *  autoput for remove source 4/12/97
@@ -65,7 +78,7 @@
 #include "../../../inc/nrapi.h"
 #include "../../../inc/pdapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/td.h"
 
 #define NO_TDDEVICE_DEFINES
@@ -93,6 +106,7 @@ static int DeviceWrite( PPD, POUTBUF, PUSHORT );
 static int DeviceCheckWrite( PPD, POUTBUF );
 static int DeviceCancelWrite( PPD, POUTBUF );
 static int DeviceSendBreak( PPD );
+static int EmulSetInfo( PPD pPd, PPDSETINFORMATION pPdSetInformation);
 
 PLIBPROCEDURE TdTcpRODeviceProcedures[TDDEVICE__COUNT] =
 {
@@ -110,7 +124,8 @@ PLIBPROCEDURE TdTcpRODeviceProcedures[TDDEVICE__COUNT] =
     (PLIBPROCEDURE)DeviceCheckWrite,
     (PLIBPROCEDURE)DeviceCancelWrite,
 
-    (PLIBPROCEDURE)DeviceSendBreak
+    (PLIBPROCEDURE)DeviceSendBreak,
+    (PLIBPROCEDURE)EmulSetInfo
 };
 
 /*=============================================================================
@@ -210,7 +225,7 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
     /*
      *  Get application server hostname
      */
-   bGetPrivateProfileString( pPdOpen->pIniSection,      // buffered section
+   miGetPrivateProfileString( INI_TCP,
                               INI_ADDRESS,
                               DEF_ADDRESS,
 			     szHostString,
@@ -219,7 +234,7 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
     /*
      *  Get client name
      */
-   bGetPrivateProfileString( pPdOpen->pIniSection,      // buffered section
+   miGetPrivateProfileString( INI_WFCLIENT,
                               INI_CLIENTNAME,
                               "",
 			     pPdTcp->NameAddress.ClientName,
@@ -229,9 +244,8 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
     GetTCPHostNamePort( (char *) szHostString, (char *) pPdTcp->NameAddress.Name, &iPortNumber);					
 
     if (iPortNumber == 0)       // get the Port Number from .ini file
-	iPortNumber = bGetPrivateProfileInt( pPdOpen->pIniSection, 
-					     INI_ICAPORTNUMBER, 
-					     DEF_ICAPORTNUMBER);
+	iPortNumber = miGetPrivateProfileInt( INI_TCP, INI_ICAPORTNUMBER, 
+						DEF_ICAPORTNUMBER);
 
     if (iPortNumber!= 0 ) gTCP_PortNumber = iPortNumber ;	
 	
@@ -641,4 +655,22 @@ SetLastError( PPD pPd, int Error )
     ASSERT( FALSE, Error );
     return( CLIENT_ERROR_PD_ERROR );
 }
+
+// Function: int STATIC EmulSetInfo( PPD pPd, PPDSETINFORMATION pPdSetInformation)
+//=======================================================
+//
+// Desc: used to let pd's send information to td's
+//
+// Input: PPD, PPDSETINFORMATION -- the info
+//
+// Return: client status
+//
+// Misc: 
+//
+//=======================================================						  
+static int EmulSetInfo( PPD pPd, PPDSETINFORMATION pPdSetInformation)
+{
+    return CLIENT_STATUS_SUCCESS;
+}																				
+// end - int STATIC EmulSetInfo( PPD pPd, PPDSETINFORMATION pPdSetInformation)
 

@@ -11,6 +11,9 @@
 *
 *  $Log$
 *  
+*     Rev 1.52   08 Jan 1998 16:56:18   brada
+*  Added typedefs
+*  
 *     Rev 1.51   15 Apr 1997 18:44:52   TOMA
 *  autoput for remove source 4/12/97
 *  

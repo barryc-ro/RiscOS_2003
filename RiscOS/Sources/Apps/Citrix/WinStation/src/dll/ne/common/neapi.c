@@ -10,6 +10,14 @@
 *  Author: Brad Pedersen  (11/11/94)
 *
 *  $Log$
+*  Revision 1.1  1998/01/19 19:11:55  smiddle
+*  Added loads of new files (the thinwire, modem, script and ne drivers).
+*  Discovered I was working around the non-ansi bitfield packing in totally
+*  the wrong way. When fixed suddenly the screen starts doing things. Time to
+*  check in.
+*
+*  Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.9   15 Apr 1997 16:18:46   TOMA
 *  autoput for remove source 4/12/97

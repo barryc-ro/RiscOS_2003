@@ -21,6 +21,10 @@ static char szTCPIPSect[] =
  "NameResolverWin16=NRTCPW.DLL\0"  
  "NameResolverWin32=NRTCPN.DLL\0" \
  "TcpBrowserAddress=\0" \
+ "TcpBrowserAddress2=\0" \
+ "TcpBrowserAddress3=\0" \
+ "TcpBrowserAddress4=\0" \
+ "TcpBrowserAddress5=\0" \
  "BrowserRetry=\0" \
  "BrowserTimeout=\0" \
  "OutBufCountHost=6\0" \
@@ -79,7 +83,7 @@ static char szThinwire30Sect[] =
  "WindowsCache=3072\0" \
  "ClickTicks=5\0" \
  "DesiredColor=0x0001\0" \
- "ScreenPercent=0\0" \
+ "ScreenPercent=0" \
 "\0\0";
 
 
@@ -188,6 +192,32 @@ static char szClipboardSect[] =
 //"US-International=0x00020409\0"  
 //"\0\0";
 
+//[Keyboard Dll Codes]
+static char szKBDllSect[] = 
+   "kbdbe.dll=0x0000080C\0"
+   "kbdbr.dll=0x00000416\0"
+   "kbduk.dll=0x00000809\0"
+   "kbdfc.dll=0x00001009\0"
+   "kbdda.dll=0x00000406\0"
+   "kbdne.dll=0x00000413\0"
+   "kbdfi.dll=0x0000040B\0"
+   "kbdfr.dll=0x0000040C\0"
+   "kbdca.dll=0x00010C0C\0"
+   "kbdgr.dll=0x00000407\0"
+   "kbdic.dll=0x0000040F\0"
+   "kbdit.dll=0x00000410\0"
+   "kbdla.dll=0x0000080A\0"
+   "kbdno.dll=0x00000414\0"
+   "kbdpo.dll=0x00000816\0"
+   "kbdsp.dll=0x0000040A\0"
+   "kbdsw.dll=0x0000041D\0"
+   "kbdsf.dll=0x0000100C\0"
+   "kbdsg.dll=0x00000807\0"
+   "kbdus.dll=0x00000409\0" 
+   "kbddv.dll=0x00010409\0"
+   "kbdusx.dll=0x00020409\0"
+"\0\0";
+
 static DEFINISECT ModuleSect[] = {
     {"TCP/IP"/*,szTCPIPSect*/},
     {"ICA 3.0"/*,szICA30Sect*/},
@@ -197,6 +227,7 @@ static DEFINISECT ModuleSect[] = {
     {"ClientDrive"/*,szClientDriveSect*/},
     {"ClientPrinter"/*,szClientPrinterSect*/},
     {"Clipboard"/*,szClipboardSect*/},
+//    {"Keyboard Dll Codes"/*,szKBDllSect*/},
 //    {"Hotkey Shift States",szHotkeyShiftSect},
 //    {"Hotkey Keys",szHotkeyKeysSect},
 //    {"KeyboardLayout",szKeyboardLayoutSect},

@@ -9,12 +9,10 @@
 *
 *  Author: Kurt Perry (3/28/1994)
 *
-*  vioscrll.c,v
-*  Revision 1.1  1998/01/12 11:37:40  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.8   22 Sep 1997 20:37:58   yis
+*  update for DOS_V
 *  
 *     Rev 1.7   15 Apr 1997 18:51:42   TOMA
 *  autoput for remove source 4/12/97
@@ -41,7 +39,9 @@
 #include "../../../inc/clib.h"
 #include "../../../inc/vioapi.h"
 
+//  Get private includes
 #include "vio.h"
+
 
 /*=============================================================================
  ==   Functions Used
@@ -59,11 +59,6 @@
 // extern int fCGA;
 extern unsigned int usMaxRow;
 extern unsigned int usMaxCol;
-
-/*****************************************************************************
-*
-****************************************************************************/
-
 
 /*****************************************************************************
 *
@@ -118,7 +113,6 @@ int WFCAPI VioScrollDn (USHORT usTopRow, USHORT usLeftCol,
       }
    }
 
-  
    return( CLIENT_STATUS_SUCCESS );
 }
 

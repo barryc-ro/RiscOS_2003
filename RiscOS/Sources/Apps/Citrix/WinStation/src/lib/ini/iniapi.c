@@ -9,12 +9,10 @@
 *
 *   Author: Kurt Perry (4/08/1994)
 *
-*   iniapi.c,v
-*   Revision 1.1  1998/01/12 11:37:26  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.36   12 Feb 1998 13:35:30   butchd
+*  CPR 8345: fixed existing max() logic to work correctly
 *  
 *     Rev 1.35   15 Apr 1997 18:52:26   TOMA
 *  autoput for remove source 4/12/97
@@ -98,7 +96,7 @@ static PFILECACHE pFileRoot = NULL;
 ==   Local Functions Used
 =============================================================================*/
 
-#include "helpers.c"    // common helper routines used in both 'internal'
+#include "helpers.h"    // common helper routines used in both 'internal'
                         // INI apis and 'external' INI apis.
 
 FILE * inifopen( PCHAR );
@@ -113,6 +111,7 @@ static wGetPrivateProfileString( PCHAR lpszSection,
                                  PEXTRAINFO pExtraInfo );
 
 static char *myfgets(char *buf, int n, FILE *f);
+//#define myfgets(a,b,c) fgets(a,b,c)
 
 /*******************************************************************************
  *
@@ -145,26 +144,20 @@ dosGetPrivateProfileString( PCHAR lpszSection,
 
 #if 0
     /*
-     * SJM: Scan from start since there can be no newlines in the middle of an entry.
-     * This also then always returns the correct length
+     * For windows, we need to make sure that no \r or \n
+     * is at the end of the return buffer and adjust rc
+     * accordingly.
      */
-    for (i = 0; i < rc; i++)
-	switch (lpszReturnBuffer[i])
-	{
-	case '\r':
-	case '\n':
-	    lpszReturnBuffer[i] = '\0';
-	    rc = i;
-	    break;
-	case '\0':
-	    rc = i;
-	    break;
-	}
+    while ( rc &&
+            ((lpszReturnBuffer[rc-1] == '\r') ||
+             (lpszReturnBuffer[rc-1] == '\n')) )
+        lpszReturnBuffer[--rc] = '\0';
+
 #endif
     
     TRACE((TC_LIB, TT_API1, "dosGetPrivateProfileString: rc=%d s='%s'\n", rc, lpszReturnBuffer));
 
-    return((int)rc);
+    return((int)rc);                                    
 }
 
 /*******************************************************************************
@@ -205,6 +198,11 @@ wGetPrivateProfileString( PCHAR lpszSection,
     UINT  cbKey;
     int   fDoScan    = TRUE;
     int   fDontRead  = FALSE;
+
+    TRACE((TC_LIB, TT_API1, "wGetPrivateProfileString: S '%s' E '%s' F '%s'",
+	   lpszSection ? lpszSection : "",
+	   lpszEntry ? lpszEntry : "",
+	   lpszFilename ? lpszFilename : ""));
 
     //  init return value
     ASSERT( lpszReturnBuffer != NULL, 0 );
@@ -313,7 +311,7 @@ scanagain:
         pTemp->cbBufMax  = START_BUFFER_SIZE;
         pTemp->cbBufCur  = 0;
         pTemp->pNext     = pSectionRoot;
-        pTemp->offBegin  = max( 0, (UINT)ftell( infile ) - cbRead);
+        pTemp->offBegin  = max( 0, (int)((UINT)ftell(infile) - cbRead));
         pSectionRoot     = pTemp;
     }
     else {
@@ -912,6 +910,7 @@ done:
     return( fSuccess );
 }
 
+#if 1
 /*
  * Like fgets() but strips leading and trailing NL and CR
  */
@@ -939,3 +938,4 @@ static char *myfgets(char *buf, int n, FILE *f)
     
     return ferror(f) ? NULL : buf;
 }
+#endif

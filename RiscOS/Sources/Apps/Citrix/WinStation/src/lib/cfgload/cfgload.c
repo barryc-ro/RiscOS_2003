@@ -30,7 +30,7 @@
 #include "../../inc/wdapi.h"
 #include "../../inc/pdapi.h"
 #include "../../inc/vdapi.h"
-#include "../../inc/biniapi.h"
+#include "../../inc/miapi.h"
 #include "../../inc/cfgload.h"
 /* #include "../../inc/wengapip.h" */
 #include "../../inc/logapi.h"
@@ -121,7 +121,7 @@ LoadPd( PCHAR    pMergedSection,
     PdOpen.pClibProcedures   = NULL;
 #endif
     PdOpen.pLogProcedures    = pLogProcedures;
-    PdOpen.pBIniProcedures   = pBIniProcedures;
+    PdOpen.pMemIniProcedures = pMemIniProcedures;
 #endif
     PdOpen.pIniSection       = pMergedSection;
     PdOpen.pExePath          = (LPBYTE)pDLLPath;
@@ -213,7 +213,7 @@ LoadWd( PCHAR     pMergedSection,
     WdOpen.pLptProcedures    = NULL;
 #endif
     WdOpen.pLogProcedures    = pLogProcedures;
-    WdOpen.pBIniProcedures   = pBIniProcedures;
+    WdOpen.pMemIniProcedures = pMemIniProcedures;
 #endif
     WdOpen.pPdLink           = pPdLink;
     WdOpen.pIniSection       = pMergedSection;
@@ -262,7 +262,6 @@ LoadVd( PCHAR    pMergedSection,
     PDLLLINK pVdLink = NULL;
     USHORT   Channel;
 
-
 //  TRACE((TC_LIB, TT_API1, "LoadVd: pMergedSection" ));
 //  TRACEBUF((TC_LIB, TT_API1, (char far *)pMergedSection, (ULONG)500 ));
 
@@ -308,7 +307,7 @@ LoadVd( PCHAR    pMergedSection,
 #endif
 #ifndef RISCOS
     VdOpen.pLogProcedures      = pLogProcedures;
-    VdOpen.pBIniProcedures     = pBIniProcedures;
+    VdOpen.pMemIniProcedures   = pMemIniProcedures;
     VdOpen.pKbdProcedures      = pKbdProcedures;
 #endif
 #endif

@@ -10,36 +10,28 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
-*   Revision 1.2  1998/01/27 18:39:31  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
-*   Revision 1.1  1998/01/19 19:13:06  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.16   Jan 14 1998 17:02:50   briang
+*  TWI Integration
+*
+*     Rev 1.16   08 Oct 1997 15:00:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.15   15 Apr 1997 18:17:04   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.14   08 May 1996 14:54:36   jeffm
 *  update
-*  
+*
 *     Rev 1.13   30 Jan 1996 18:12:56   kurtp
 *  update
-*  
+*
 *     Rev 1.12   27 Jan 1996 11:10:48   kurtp
 *  update
-*  
+*
 *     Rev 1.11   03 Jan 1996 13:34:16   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 
 #include "wfglobal.h"
@@ -272,7 +264,14 @@ Init16Color()
 
     //only destroyed once
     if (compatDC == NULL) {
+#ifdef TWI_INTERFACE_ENABLED
+      compatDC = CreateCompatibleDC( DesktopDC );
+
+#else //TWI_INTERFACE_ENABLED
+
         compatDC = CreateCompatibleDC(vhdc);
+#endif  //TWI_INTERFACE_ENABLED
+
         if (compatDC == NULL) {
             ASSERT(0,0);
             jreturn = FALSE;
@@ -500,7 +499,13 @@ Init256Color()
 
     //only destroyed once
     if (compatDC == NULL) {
+#ifdef TWI_INTERFACE_ENABLED
+      compatDC = CreateCompatibleDC( DesktopDC );
+
+#else //TWI_INTERFACE_ENABLED
+
         compatDC = CreateCompatibleDC(vhdc);
+#endif  //TWI_INTERFACE_ENABLED
         if (compatDC == NULL) {
             jretcode = FALSE;
         }

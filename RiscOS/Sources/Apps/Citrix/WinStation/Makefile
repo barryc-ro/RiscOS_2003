@@ -318,9 +318,10 @@ CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/clib/delay.c src/lib/clib/fileio.c src/lib/clib/loadstr.c src/lib/clib/machine.c \
 		src/lib/clib/misc.c src/lib/clib/string.c src/lib/clib/vdu.c \
 		src/lib/encrypt/encrypt.c \
-		src/lib/ini/iniapi.c \
+		src/lib/ini/iniapi.c src/lib/ini/helpers.c \
 		src/lib/io/icabrows/icabrows.c src/lib/io/tcpro/tcpro.c \
 		src/lib/log/logapi.c \
+		src/lib/memini/memini.c \
 		src/lib/riscos/dll/dll.c \
 		src/lib/riscos/kbd/kbdapi.c \
 		src/lib/riscos/mou/mouapi.c \
@@ -333,9 +334,10 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/machine.o \
 		src/lib/clib/misc.o src/lib/clib/string.o src/lib/clib/vdu.o \
 		src/lib/encrypt/encrypt.o \
-		src/lib/ini/iniapi.o \
+		src/lib/ini/iniapi.o src/lib/ini/helpers.o \
 		src/lib/io/icabrows/icabrows.o src/lib/io/tcpro/tcpro.o \
 		src/lib/log/logapi.o \
+		src/lib/memini/memini.o \
 		src/lib/riscos/dll/dll.o \
 		src/lib/riscos/kbd/kbdapi.o \
 		src/lib/riscos/mou/mouapi.o \
@@ -348,9 +350,10 @@ CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/machine.od \
 		src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
 		src/lib/encrypt/encrypt.od \
-		src/lib/ini/iniapi.od \
+		src/lib/ini/iniapi.od src/lib/ini/helpers.od \
 		src/lib/io/icabrows/icabrows.od src/lib/io/tcpro/tcpro.od \
 		src/lib/log/logapi.od \
+		src/lib/memini/memini.od  \
 		src/lib/riscos/dll/dll.od \
 		src/lib/riscos/kbd/kbdapi.od \
 		src/lib/riscos/mou/mouapi.od \
@@ -364,9 +367,10 @@ CITRIXLIBOBJSZ=	src/lib/cfgini/cfgini.oz \
 		src/lib/clib/delay.oz src/lib/clib/fileio.oz src/lib/clib/loadstr.oz src/lib/clib/machine.oz \
 		src/lib/clib/misc.oz src/lib/clib/string.oz src/lib/clib/vdu.oz \
 		src/lib/encrypt/encrypt.oz \
-		src/lib/ini/iniapi.oz \
+		src/lib/ini/iniapi.oz src/lib/ini/helpers.oz \
 		src/lib/io/icabrows/icabrows.oz src/lib/io/tcpro/tcpro.oz \
 		src/lib/log/logapi.oz \
+		src/lib/memini/memini.oz \
 		src/lib/riscos/dll/dll.oz \
 		src/lib/riscos/kbd/kbdapi.oz \
 		src/lib/riscos/mou/mouapi.oz \

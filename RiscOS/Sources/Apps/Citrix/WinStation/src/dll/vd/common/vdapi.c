@@ -9,12 +9,10 @@
 *
 *  Author: Andy 4/6/94
 *
-* vdapi.c,v
-* Revision 1.1  1998/01/12 11:36:06  smiddle
-* Newly added.#
-*
-* Version 0.01. Not tagged
-*
+* $Log$
+*  
+*     Rev 1.20   Oct 09 1997 17:53:54   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.18   15 Apr 1997 18:02:30   TOMA
 *  autoput for remove source 4/12/97
@@ -123,13 +121,14 @@ STATIC PDLLPROCEDURE VdProcedures[ VD__COUNT ] = {
 =============================================================================*/
 
 /*
+STATIC PPLIBPROCEDURE pModuleProcedures = NULL;
 STATIC PPLIBPROCEDURE pClibProcedures  = NULL;
 STATIC PPLIBPROCEDURE pMouProcedures   = NULL;
 STATIC PPLIBPROCEDURE pTimerProcedures = NULL;
 STATIC PPLIBPROCEDURE pLptProcedures   = NULL;
 STATIC PPLIBPROCEDURE pXmsProcedures   = NULL;
 STATIC PPLIBPROCEDURE pLogProcedures   = NULL;
-STATIC PPLIBPROCEDURE pBIniProcedures  = NULL;
+STATIC PPLIBPROCEDURE pMemIniProcedures  = NULL;
 STATIC PPLIBPROCEDURE pKbdProcedures   = NULL;
 */
 STATIC PFNWFENGPOLL   gpfnWFEngPoll    = NULL;
@@ -220,13 +219,14 @@ VdOpen( PVD pVd, PVDOPEN pVdOpen )
     /*
      *  Initialize global data
      */
+    pModuleProcedures = pVdOpen->pModuleProcedures;
     pClibProcedures   = pVdOpen->pClibProcedures;
     pMouProcedures    = pVdOpen->pMouProcedures;
     pTimerProcedures  = pVdOpen->pTimerProcedures;
     pLptProcedures    = pVdOpen->pLptProcedures;
     pXmsProcedures    = pVdOpen->pXmsProcedures;
     pLogProcedures    = pVdOpen->pLogProcedures;
-    pBIniProcedures   = pVdOpen->pBIniProcedures;
+    pMemIniProcedures = pVdOpen->pMemIniProcedures;
     pKbdProcedures    = pVdOpen->pKbdProcedures;
 #endif
     gpfnWFEngPoll     = (PFNWFENGPOLL)pVdOpen->pfnWFEngPoll;

@@ -9,46 +9,65 @@
 *
 *  Author: Brad Pedersen
 *
-*  ica.h,v
-*  Revision 1.1  1998/01/12 11:37:55  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
 *  
+*     Rev 1.10   Feb 17 1998 20:59:06   sumitd
+*  SV_TYPE_TERMINALSERVER bit added
+*  
+*     Rev 1.9   Feb 17 1998 19:36:20   briang
+*  Add virtual channel name definition for License VD
+*  
+*     Rev 1.8   06 Feb 1998 15:20:54   miked
+*  bug fix
+*  
+*     Rev 1.7   04 Feb 1998 16:56:20   brada
+*  Add VDCM
+*  
+*     Rev 1.6   Jan 06 1998 14:07:10   bills
+*  Added a new PdTapi PDCLASS.
+*  
+*     Rev 1.5   02 Dec 1997 16:49:40   KenB
+*  add 4 more virtual channels so WF APIs will work (see ...\client\wd\common\wdapi.c)
+*  
+*     Rev 1.4   26 Sep 1997 17:48:34   davidp
+*  Added SubDriver type to module type enum
+*  
+*     Rev 1.3   18 Sep 1997 14:47:12   x86fre
+*  Modified for client split
+*
 *     Rev 1.2   25 Aug 1997 12:00:20   BillG
 *  update
-*  
+*
 *     Rev 1.1   20 Jun 1997 20:30:04   kurtp
 *  update
-*  
+*
 *     Rev 1.8   16 Jun 1997 21:52:16   kurtp
 *  update
-*  
+*
 *     Rev 1.7   12 Jun 1997 18:26:30   kurtp
 *  make ica.h shared
-*  
+*
 *     Rev 1.6   11 Jun 1997 07:40:36   butchd
 *  backed out last change
-*  
+*
 *     Rev 1.5   10 Jun 1997 15:26:20   butchd
 *  define SV_TYPE_APPSERVER for DOS and WIN16 client usage
-*  
+*
 *     Rev 1.4   05 Jun 1997 19:35:20   kurtp
 *  I fixed a bug in this file, update, duh!
-*  
+*
 *     Rev 1.3   23 May 1997 14:14:36   butchd
 *  SV_TYPE_APPSERVER part of lmserver.h now
-*  
+*
 *     Rev 1.2   May 06 1997 18:07:24   billm
 *  added virtual_oem2
-*  
+*
 *     Rev 1.1   21 Apr 1997 16:56:44   TOMA
 *  update
-*  
+*
 *     Rev 1.0   21 Mar 1997 15:43:06   bradp
 *  Initial revision.
-*  
+*
 *
 *******************************************************************************/
 
@@ -81,6 +100,9 @@
 #define SV_TYPE_APPSERVER   0x10000000
 #endif
 
+#ifndef SV_TYPE_TERMINALSERVER   // part of lmserver.h now
+#define SV_TYPE_TERMINALSERVER   0x02000000
+#endif
 
 /*=============================================================================
 ==   Client Modules
@@ -98,7 +120,8 @@ typedef enum _MODULECLASS {
     Module_TransportDriver,
     Module_NameResolver,
     Module_NameEnumerator,
-    Module_Scripting
+    Module_Scripting,
+    Module_SubDriver
 } MODULECLASS;
 
 
@@ -108,10 +131,13 @@ typedef enum _MODULECLASS {
 
 /*
  *  protocol driver classes
- *  NOTE: don't change the order of this structure
+ *
+ *  NOTE: don't change the order of this structure it will break
+ *  NOTE: the Host.  Also, any additions to this structure must
+ *  NOTE: be reflected into the SDCLASS in HYDRIX.H or else we're SOL.
  */
 typedef enum _PDCLASS {
-    PdNone,            // 0 
+    PdNone,            // 0
     PdConsole,         // 1  no dll
     PdNetwork,         // 2  tdnetb.dll, tdspx.dll, tdftp.dll tdipx.dll
     PdAsync,           // 3  tdasync.dll
@@ -127,7 +153,11 @@ typedef enum _PDCLASS {
     PdTelnet,          // 13 not implemented
     PdOemFilter,       // 14 user protocol driver
     PdNasi,            // 15 tdnasi.dll
-    PdClass_Maximum    // 16 -- must be last
+    PdTapi,            // 16 pdtapi.dll	
+    PdReserved1,       // 17
+    PdReserved2,       // 18
+    PdReserved3,       // 19
+    PdClass_Maximum    // 20 must be last
 } PDCLASS;
 
 
@@ -212,16 +242,22 @@ typedef LONG * PVIRTUALCLASS;
  *    <null> - trailing null
  */
 
+#define VIRTUAL_SCREEN    "CTXSCRN"   // reserved channel for screen data
 #define VIRTUAL_LPT1      "CTXLPT1"   // old client printer mapping
 #define VIRTUAL_LPT2      "CTXLPT2"   // old client printer mapping
+#define VIRTUAL_RESERVED3 "CTXRES3"   // reserved channel
 #define VIRTUAL_COM1      "CTXCOM1"   // old client printer mapping
 #define VIRTUAL_COM2      "CTXCOM2"   // old client printer mapping
 #define VIRTUAL_CPM       "CTXCPM "   // new client printer mapping (spooling)
+#define VIRTUAL_RESERVED4 "CTXRES4"   // reserved channel
 #define VIRTUAL_CCM       "CTXCCM "   // client com mapping
 #define VIRTUAL_CDM       "CTXCDM "   // client drive mapping
 #define VIRTUAL_CLIPBOARD "CTXCLIP"   // clipboard
 #define VIRTUAL_THINWIRE  "CTXTW  "   // remote windows data
+#define VIRTUAL_PASSTHRU  "CTXPASS"   // reserved channel for shadowing
 #define VIRTUAL_CAM       "CTXCAM "   // client audio mapping
+#define VIRTUAL_CM        "CTXCM  "   // client management
+#define VIRTUAL_LIC       "CTXLIC"    // license management
 #define VIRTUAL_OEM       "OEMOEM "   // used by oems
 #define VIRTUAL_OEM2      "OEMOEM2"   // used by oems
 
@@ -333,7 +369,6 @@ typedef struct _VDCLIENTDRIVES2 {
 // avoid 2 (andy)
 #define CLIENTID_CITRIX_CONSOLE      0x0003     // citrix console
 #define CLIENTID_CITRIX_TEXT_TERM    0x0004     // citrix text terminals
-#define CLIENTID_CITRIX_TEXT_TERM    0x0004     // citrix text terminals
 
 #define CLIENTID_CITRIX_INTERNET     0x0101     // citrix internet client
 
@@ -344,6 +379,28 @@ typedef struct _VDCLIENTDRIVES2 {
 #define CLIENTID_FORCESERIALIZE_FLAG 0x4000     // client requires license no.
 #define CLIENTID_TERMINAL_FLAG       0x8000     // terminal based client
 
-/* #pragma pack() */
+/*
+ *  Client Data Name
+ */
+#define CLIENTDATANAME_LENGTH  7
+
+typedef CHAR CLIENTDATANAME[ CLIENTDATANAME_LENGTH + 1 ];  // includes null
+typedef CHAR * PCLIENTDATANAME;
+
+/*
+ *  Client data names  (CLIENTDATANAME)
+ *
+ *  name syntax:  xxxyyyy<null>
+ *
+ *    xxx    - oem id (CTX - Citrix Systems)
+ *    yyyy   - client data name
+ *    <null> - trailing null
+ */
+
+#define CLIENTDATA_SERVER      "CTXSRVR"   // WF Server Name
+#define CLIENTDATA_USERNAME    "CTXUSRN"   // WF User Name
+#define CLIENTDATA_DOMAIN      "CTXDOMN"   // WF User Domain Name
+
+//#pragma pack()
 
 #endif //__ICA_H__

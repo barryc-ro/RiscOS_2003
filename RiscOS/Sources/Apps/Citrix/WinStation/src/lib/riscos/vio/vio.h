@@ -8,12 +8,10 @@
 *
 *  Author: Kurt Perry (4/4/94)
 *
-*  vio.h,v
-*  Revision 1.1  1998/01/12 11:37:35  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.2   22 Sep 1997 20:36:48   yis
+*  update for DOS_V
 *  
 *     Rev 1.1   15 Apr 1997 18:51:24   TOMA
 *  autoput for remove source 4/12/97

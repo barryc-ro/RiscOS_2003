@@ -9,12 +9,16 @@
 *
 *   Author: Brad Pedersen (11/7/95)
 *
-*   nrica.c,v
-*   Revision 1.1  1998/01/12 11:35:29  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.17   Jan 19 1998 16:07:38   sumitd
+*  CPR# 7252 - Having valid servers having only hex digits in their names
+*  
+*     Rev 1.16   03 Nov 1997 09:26:46   brada
+*  Added firewall load balance support
+*  
+*     Rev 1.15   Oct 09 1997 17:15:44   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.14   28 Apr 1997 19:25:10   thanhl
 *  update
@@ -67,7 +71,7 @@
 
 #include "../../../inc/clib.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../../../inc/nrapi.h"
 #include "../inc/nr.h"
 
@@ -102,9 +106,9 @@ int IoOpen( void );
 void IoClose( void );
 int IoAddressCheck( char *, PICA_BR_ADDRESS, int );
 int IoSameAddress( PICA_BR_ADDRESS, PICA_BR_ADDRESS );
-int BrRequestMasterBrowser( PICA_BR_ADDRESS );
+int BrRequestMasterBrowser( PICA_BR_ADDRESS, int );
 int BrRead( int, PICA_BR_ADDRESS, void *, int, int * );
-int BrWrite( PICA_BR_ADDRESS, void *, int );
+int BrWrite( PICA_BR_ADDRESS, void *, int, BOOL );
 int BrPurgeInput( void );
 
 
@@ -171,7 +175,7 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
      */
     if ( rc = IoOpen() ) 
         return( rc );
-    
+
     /*
      *  Resolve name
      */
@@ -196,7 +200,7 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
      *  Close I/O
      */
     IoClose();
-    
+
     pNameAddress->LanaNumber = G_LanaNumber;
 
     return( rc );
@@ -233,6 +237,7 @@ _GetBrowserAddress( PNR pNr,
 {
     ICA_BR_DATA_ADDRESS DataAddress;
     PICA_BR_ADDRESS_PARAMS pParams = NULL;
+    int DataType = DATATYPE_ADDRESS;
     int ParamsLength = 0;
     int ClientNameLength;
     int DataLength;
@@ -253,12 +258,19 @@ _GetBrowserAddress( PNR pNr,
      */
     AnsiUpper( pName );
 
-    /*
-     *  Check for numeric address  ( e.g. cc:43434dfd324, 128.1.4.3 )
+    /* 
+     *  Check for ":" in the name - if present => Can only be Address 
+     *  If not a valid address return an error
      */
-    if ( IoAddressCheck( pName, pAddress, TRUE ) ) {
-        return( BR_ERROR_SUCCESS );
+
+    if (strstr(pName,":")!=NULL) {
+
+    	if ( IoAddressCheck( pName, pAddress, TRUE ) ) {
+        	return( BR_ERROR_SUCCESS );
+    	}
+    	else goto baddata;    // Cannot be a valid name
     }
+
 
     /*
      *  Initialize address request parameters
@@ -282,17 +294,20 @@ _GetBrowserAddress( PNR pNr,
         memcpy( (char*)pParams + Offset, pClientName, ClientNameLength );
     }
 
+    if ( pNr->fUseAlternateAddress ) {
+        DataType = DATATYPE_ALTADDRESS;
+    }
+
     /*
      *  Get address data from master browser
      */
     for ( i=0; i < (int)G_RequestRetry; i++ ) {
-        rc = _GetBrowserData( pNr, pName, DATATYPE_ADDRESS, pParams, ParamsLength, &DataAddress, &DataLength );
+        rc = _GetBrowserData( pNr, pName, DataType, pParams, ParamsLength, &DataAddress, &DataLength );
         if ( rc != BR_ERROR_READ_TIMEOUT )
             break;
     }
 
     /* 
-     *  Check for browser error
      *  -- check if name is already an address
      *  -- check dns or bindery
      */
@@ -376,7 +391,8 @@ _GetBrowserData( PNR pNr,
     /*
      *  Get address of master browser
      */
-    if ( rc = BrRequestMasterBrowser( &Address ) )
+    if ( rc = BrRequestMasterBrowser( &Address, pNr->fUseAlternateAddress ?
+                                                 MASTERREQ_ALTADDRESS : 0 ) )
         goto badmaster;
 
     /*
@@ -407,7 +423,8 @@ _GetBrowserData( PNR pNr,
     }
 
     BrPurgeInput();
-    if ( rc = BrWrite( &Address, pRequest, pRequest->Header.ByteCount ) )
+    if ( rc = BrWrite( &Address, pRequest, pRequest->Header.ByteCount,
+                       !pNr->fUseAlternateAddress ) )
         goto badwrite;
 
     /*

@@ -8,12 +8,10 @@
 *
 *  Author: Andy 4/6/94
 *
-*  vdapi.h,v
-*  Revision 1.1  1998/01/12 11:37:03  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.37   Oct 09 1997 18:48:42   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.35   15 Apr 1997 18:46:04   TOMA
 *  autoput for remove source 4/12/97
@@ -74,7 +72,7 @@ typedef struct _VDOPEN {
     PPLIBPROCEDURE pLptProcedures;
     PPLIBPROCEDURE pXmsProcedures;
     PPLIBPROCEDURE pLogProcedures;
-    PPLIBPROCEDURE pBIniProcedures;
+    PPLIBPROCEDURE pMemIniProcedures;
     PPLIBPROCEDURE pKbdProcedures;
     LPVOID pIniSection;
     PDLLLINK pWdLink;

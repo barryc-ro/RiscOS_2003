@@ -10,24 +10,19 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
-*   Revision 1.1  1998/01/19 19:12:46  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.3   Jan 14 1998 17:01:06   briang
+*  TWI Integration
+*
 *     Rev 1.2   15 Apr 1997 18:16:14   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.2   21 Mar 1997 16:09:28   bradp
 *  update
-*  
+*
 *     Rev 1.1   03 Jan 1996 13:33:00   kurtp
 *  update
-*  
+*
 \*****************************************************************************/
 
 #include "windows.h"
@@ -55,6 +50,7 @@
 jmp_buf3  vjmpSuspend;
 jmp_buf3  vjmpResume;
 jmp_buf3  vjmpComplete;
+
 
 THINWIRECAPS vThinWireMode;
 

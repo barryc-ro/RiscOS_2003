@@ -1,0 +1,7 @@
+/*
+
+ */
+
+#ifdef TWI_INTERFACE_ENABLED
+#undef TWI_INTERFACE_ENABLED
+#endif

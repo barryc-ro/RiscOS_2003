@@ -11,6 +11,18 @@
  *
  *  $Log$
 *  
+*     Rev 1.17   Oct 31 1997 19:24:12   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.16   18 Oct 1997 17:11:32   brada
+*  BuildModemString needs to copy default value to the returned buffer
+*  
+*     Rev 1.15   Oct 16 1997 10:25:54   briang
+*  Fix retrieval location for INI info
+*  
+*     Rev 1.14   Oct 09 1997 17:24:42   briang
+*  Conversion to MemIni use
+*  
 *     Rev 1.13   15 Apr 1997 16:52:38   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -41,7 +53,7 @@
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/pd.h"
 
 #include "pdmodem.h"
@@ -127,7 +139,8 @@ GetModemStrings( PPDMODEM pPdModem, PPDOPEN pPdOpen )
     /*
      *  Get times
      */
-    pPdModem->cRetryTimeout  = (USHORT) bGetPrivateProfileInt( pPdOpen->pIniSection, INI_DIALTIMEOUT, DEF_DIALTIMEOUT );
+    pPdModem->cRetryTimeout  = (USHORT) miGetPrivateProfileInt( INI_MODEM, INI_DIALTIMEOUT, DEF_DIALTIMEOUT );
+
     pPdModem->ulRetryTimeout = (ULONG) pPdModem->cRetryTimeout * 1000L;
 
     return( CLIENT_STATUS_SUCCESS );
@@ -191,8 +204,8 @@ BuildModemString( PPDOPEN pPdOpen, char * pszEntry, char * pszDefault )
          *  In other words, we look for COMMAND_xxx1 even if we can't
          *  find COMMAND_xxx.
          */
-        if ( !bGetPrivateProfileString( pPdOpen->pIniSection, achEntry,
-                                        INI_EMPTY, buffer, sizeof(buffer) )
+        if ( !miGetPrivateProfileString( INI_SERIAL_VER1, achEntry,
+                                         INI_EMPTY, buffer, sizeof(buffer) )
              && iEntry != 0 ) {
             break;
         }
@@ -241,9 +254,9 @@ BuildModemString( PPDOPEN pPdOpen, char * pszEntry, char * pszDefault )
                          *  Is this the phone number entry
                          */
                         if ( j == PHONENUMBER ) {
-                            bGetPrivateProfileString( pPdOpen->pIniSection, 
-                                                      INI_PHONENUMBER, INI_EMPTY, 
-                                                      buffer2, sizeof(buffer2) );
+                            miGetPrivateProfileString( INI_MODEM, INI_PHONENUMBER, INI_EMPTY, 
+                                                       buffer2, sizeof(buffer2) );
+
                             vaInitStrings[j].pszString = buffer2;
                         }
 
@@ -305,7 +318,13 @@ get_next:
         pszString[iString] = '\0';
     }
     else {
-        pszString = pszDefault;
+        iString = strlen(pszDefault);
+
+        if ( cbString <= iString ) {
+            pszString = realloc(pszString, iString + 1);
+        }
+        strcpy(pszString, pszDefault);
+
     }
 
     TRACE(( TC_MODEM, TT_API1, "PdModem: %s=%s", pszEntry, pszString ));

@@ -9,12 +9,7 @@
 *
 *   Author:   Brad Pedersen
 *
-*   logapi.c,v
-*   Revision 1.1  1998/01/12 11:37:31  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
 *  
 *     Rev 1.29   15 Apr 1997 18:52:52   TOMA
 *  autoput for remove source 4/12/97

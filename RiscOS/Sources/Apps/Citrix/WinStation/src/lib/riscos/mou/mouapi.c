@@ -9,33 +9,9 @@
 * $Author$  Andy (3/15/94)
 *
 * $Log$
-* Revision 1.4  1998/02/06 17:11:36  smiddle
-* First alpha release. Fixed problems with palettes, brushes. Added mouse
-* pointers and sorted out running and quitting problems.
-*
-* Version 0.06. Tagged as 'WinStation-0_06'
-*
-* Revision 1.3  1998/01/30 19:11:02  smiddle
-* Fixed clipping (as long as its simple), and palettes (mostly) and text.
-* Fixed a few more dodgy alignmenet structures and made some progress
-* towards getting the save/restore screen code working.
-*
-* Version 0.04. Tagged as 'WinStation-0_04'
-*
-* Revision 1.2  1998/01/27 18:40:26  smiddle
-* Lots more work on Thinwire, resulting in being able to (just) see the
-* log on screen on the test server.
-*
-* Version 0.03. Tagged as 'WinStation-0_03'
-*
-* Revision 1.1  1998/01/19 19:13:36  smiddle
-* Added loads of new files (the thinwire, modem, script and ne drivers).
-* Discovered I was working around the non-ansi bitfield packing in totally
-* the wrong way. When fixed suddenly the screen starts doing things. Time to
-* check in.
-*
-* Version 0.02. Tagged as 'WinStation-0_02'
-*
+*  
+*     Rev 1.24   02 Dec 1997 17:33:56   terryt
+*  vesa driver
 *  
 *     Rev 1.23   Jun 27 1997 20:24:52   scottc
 *  fixed scrolling to far problem (merge from 1.6)
@@ -83,6 +59,9 @@
 #include "../../../inc/logapi.h"
 
 #include "swis.h"
+
+//*  Added enhanced mouse resolution for new vesa driver see EQU ENH_RES
+#define ENH_RES 1
 
 /*=============================================================================
 ==   Functions used

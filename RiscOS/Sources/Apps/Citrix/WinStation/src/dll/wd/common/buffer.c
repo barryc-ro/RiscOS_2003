@@ -11,6 +11,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.25   Oct 09 1997 18:30:56   briang
+*  Conversion to MemIni use
+*  
 *     Rev 1.24   15 Apr 1997 18:17:16   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -281,7 +284,7 @@ OutBufReserve( PWD pWd, USHORT ByteCount )
     USHORT OutBufCount;
     int rc;
 
-    ASSERT( pWd->pOutBufCurrent == NULL, 0 );
+    //ASSERT( pWd->pOutBufCurrent == NULL, 0 );
 
     /*
      *  Query protocol drivers to see if it's ok to allocate a buffer (pdreli)

@@ -9,12 +9,19 @@
 *
 *   Author: Brad Pedersen  (3/25/94)
 *
-*   wdapi.c,v
-*   Revision 1.1  1998/01/12 11:36:13  smiddle
-*   Newly added.#
-*
-*   Version 0.01. Not tagged
-*
+*   $Log$
+*  
+*     Rev 1.57   05 Feb 1998 14:59:04   brada
+*  Do not allocate allocated virtual channals
+*  
+*     Rev 1.56   25 Nov 1997 17:24:52   KenB
+*  Reserve 4 more channels so WF APIs work
+*  
+*     Rev 1.55   Oct 31 1997 19:48:04   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.54   Oct 09 1997 18:30:16   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.53   15 Apr 1997 18:17:18   TOMA
 *  autoput for remove source 4/12/97
@@ -96,7 +103,7 @@
 #include "../../../inc/logapi.h"
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/wd.h"
 
 #include "../../../inc/wdemul.h"
@@ -124,6 +131,7 @@ int  PdCall( PWD, USHORT, PVOID );
 BOOL ReservedVirtualChannel( POPENVIRTUALCHANNEL pOVC );
 VOID GetFirstAvailableChannel( POPENVIRTUALCHANNEL pOVC );
 BOOL HandleIsNotReserved( USHORT Channel );
+BOOL HandleIsNotAllocated( USHORT Channel );
 
 
 /*=============================================================================
@@ -166,16 +174,19 @@ typedef struct _VC_MAP {
 } VC_MAP, * PVC_MAP;
 
 VC_MAP VcCompatablityMap[]={
-
+    VIRTUAL_SCREEN   , Virtual_Screen   , // KLB 10-20-97 Screen
     VIRTUAL_LPT1     , Virtual_LPT1     ,
     VIRTUAL_LPT2     , Virtual_LPT2     ,
+    VIRTUAL_RESERVED3, Virtual_Reserved3, // KLB 10-24-97 Reserved3
     VIRTUAL_COM1     , Virtual_COM1     ,
     VIRTUAL_COM2     , Virtual_COM2     ,
     VIRTUAL_CPM      , Virtual_Cpm      ,
+    VIRTUAL_RESERVED4, Virtual_Reserved4, // KLB 10-24-97 Reserved4
     VIRTUAL_CCM      , Virtual_Ccm      ,
     VIRTUAL_CDM      , Virtual_Cdm      ,
     VIRTUAL_CLIPBOARD, Virtual_Clipboard,
     VIRTUAL_THINWIRE , Virtual_ThinWire ,
+    VIRTUAL_PASSTHRU , Virtual_PassThru , // KLB 10-24-97 PassThru (for shadow)
     ""               , 0                ,
 };
 
@@ -214,7 +225,7 @@ STATIC PPLIBPROCEDURE pTimerProcedures = NULL;
 STATIC PPLIBPROCEDURE pLptProcedures = NULL;
 STATIC PPLIBPROCEDURE pXmsProcedures = NULL;
 STATIC PPLIBPROCEDURE pLogProcedures = NULL;
-STATIC PPLIBPROCEDURE pBIniProcedures = NULL;
+STATIC PPLIBPROCEDURE pMemIniProcedures = NULL;
 #endif
 
 /*******************************************************************************
@@ -319,7 +330,7 @@ WdOpen( PWD pWd, PWDOPEN pWdOpen )
     pLptProcedures        = pWdOpen->pLptProcedures;
     pXmsProcedures        = pWdOpen->pXmsProcedures;
     pLogProcedures        = pWdOpen->pLogProcedures;
-    pBIniProcedures       = pWdOpen->pBIniProcedures;
+    pBIniProcedures       = pWdOpen->pMemIniProcedures;
 #endif
     
     /*
@@ -338,17 +349,18 @@ WdOpen( PWD pWd, PWDOPEN pWdOpen )
     pWd->fOutBufFrame      = pWdOpen->fOutBufFrame;
     pWd->fAsync            = pWdOpen->fAsync;
 
-    pWd->XmsReserve = bGetPrivateProfileLong( pWdOpen->pIniSection,
-                                              INI_XMSRESERVE,
-                                              (long) DEF_XMSRESERVE );
+    pWd->XmsReserve = miGetPrivateProfileLong( INI_ICA30,
+                                               INI_XMSRESERVE,
+                                               (long) DEF_XMSRESERVE );
 
-    pWd->LowMemReserve = bGetPrivateProfileLong( pWdOpen->pIniSection,
-                                                 INI_LOWMEMRESERVE,
-                                                 (long) DEF_LOWMEMRESERVE );
+    pWd->LowMemReserve = miGetPrivateProfileLong( INI_ICA30,
+                                                  INI_LOWMEMRESERVE,
+                                                  (long) DEF_LOWMEMRESERVE );
 
-    pWd->InputBufferLength = bGetPrivateProfileInt( pWdOpen->pIniSection,
-                                                    INI_BUFFERLENGTH,
-                                                    DEF_BUFFERLENGTH );
+    pWd->InputBufferLength = miGetPrivateProfileInt( INI_ICA30,
+                                                     INI_BUFFERLENGTH,
+                                                     DEF_BUFFERLENGTH );
+
 
     /*
      *  Query size of input and output buffers from PD
@@ -499,10 +511,8 @@ WdClose( PWD pWd, PDLLCLOSE pWdClose )
      *  Free WD data structures
      */
     if ( pWd->pAppServer )
-    {
         free( pWd->pAppServer );
-    }
- 
+
     p = pWd->pInfoBlockList;
 
     while ( p != NULL) {
@@ -975,7 +985,8 @@ GetFirstAvailableChannel( POPENVIRTUALCHANNEL pOVC )
 
     if ( strlen( pOVC->pVCName ) <= VIRTUALNAME_LENGTH  ) {
         for ( i=0; i <= VIRTUAL_MAXIMUM; i++ ) {
-            if ( HandleIsNotReserved( (USHORT)(i) ) ) {
+            if ( HandleIsNotReserved( (USHORT)(i) ) && 
+                 HandleIsNotAllocated( (USHORT)(i) ) ) {
                 strcpy( paWD_VcBind[iVc_Map].VirtualName, pOVC->pVCName );
                 paWD_VcBind[iVc_Map].VirtualClass = i;
                 pOVC->Channel = i;
@@ -997,8 +1008,8 @@ GetFirstAvailableChannel( POPENVIRTUALCHANNEL pOVC )
  *       Virtual Channel handle
  *
  * EXIT:
- *    TRUE  - It is a reserved handle
- *    FALSE - It is not a reserved handle
+ *    TRUE  - It is not a reserved handle
+ *    FALSE - It is a reserved handle
  *
  ******************************************************************************/
 
@@ -1007,12 +1018,41 @@ HandleIsNotReserved( USHORT Channel )
 {
     int i;
 
+    /* Verify handle not reserved */
     for ( i=0; VcCompatablityMap[i].VirtualName[0] != '\0'; i++ ) {
         if ( Channel == VcCompatablityMap[i].Channel ) {
             return( FALSE );
         }
     }
-
     return( TRUE );
 }
+
+/*******************************************************************************
+ *
+ *  HandleIsNotAllocated
+ *
+ * ENTRY:
+ *    Channel
+ *       Virtual Channel handle
+ *
+ * EXIT:
+ *    TRUE  - It is not an allocated handle
+ *    FALSE - It is an allocated handle
+ *
+ ******************************************************************************/
+
+BOOL
+HandleIsNotAllocated( USHORT Channel )
+{
+    int i;
+
+    /* Verify the handle is not allocated */
+    for ( i=0 ; i < iVc_Map ; i++ ) {
+        if ( paWD_VcBind[i].VirtualClass == Channel ) {
+            return( FALSE );
+        }
+    }
+    return( TRUE );
+}
+
 

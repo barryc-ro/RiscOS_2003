@@ -12,6 +12,21 @@
 *
 *   $Log$
 *  
+*     Rev 1.22   07 Jan 1998 08:11:50   butchd
+*  removed EOF from last line comment
+*  
+*     Rev 1.21   Jan 06 1998 14:47:34   bills
+*  Added the EmulSetInfo stub function.
+*  
+*     Rev 1.20   Oct 31 1997 19:28:36   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.19   Oct 16 1997 10:27:04   briang
+*  Fix retrieval location for INI info
+*  
+*     Rev 1.18   Oct 09 1997 17:33:14   briang
+*  Conversion to MemIni use
+*  
 *     Rev 1.17   15 Apr 1997 16:55:12   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -52,7 +67,7 @@
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/td.h"
 
 #define NO_TDDEVICE_DEFINES
@@ -60,6 +75,7 @@
 #include "../../../inc/tddevicep.h"
 
 #include "tdasync.h"
+
 
 /*=============================================================================
 ==   External Functions Defined
@@ -75,6 +91,7 @@ static int DeviceWrite( PPD, POUTBUF, PUSHORT );
 static int DeviceCheckWrite( PPD, POUTBUF );
 static int DeviceCancelWrite( PPD, POUTBUF );
 static int DeviceSendBreak( PPD );
+static int EmulSetInfo( PPD pPd, PPDSETINFORMATION pPdSetInformation);
 
 PLIBPROCEDURE TdAsyncDeviceProcedures[TDDEVICE__COUNT] =
 {
@@ -92,7 +109,8 @@ PLIBPROCEDURE TdAsyncDeviceProcedures[TDDEVICE__COUNT] =
     (PLIBPROCEDURE)DeviceCheckWrite,
     (PLIBPROCEDURE)DeviceCancelWrite,
 
-    (PLIBPROCEDURE)DeviceSendBreak
+    (PLIBPROCEDURE)DeviceSendBreak,
+    (PLIBPROCEDURE)EmulSetInfo
 };
 
 /*=============================================================================
@@ -150,7 +168,6 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
     BYTE * pBuf;
     DCBINFO * pDcb;
     LINECONTROL * pLc;
-    PVOID pIni;
 
     TRACE((TC_TD,TT_API1, "DeviceOpen: in"));
 
@@ -182,18 +199,17 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
      */
     pDcb = &pPdAsync->Dcb;
     pLc  = &pPdAsync->LineControl;
-    pIni = pPdOpen->pIniSection;
 
     /*
      *  Get communication parameters
      */
 
-    pPdAsync->PortNumber = bGetPrivateProfileInt( pIni, INI_PORTNUMBER, DEF_PORTNUMBER );
-    pPdAsync->BaudRate   = bGetPrivateProfileLong(pIni, INI_BAUD, DEF_BAUD );
+    pPdAsync->PortNumber = miGetPrivateProfileInt( INI_SERIAL_VER1, INI_PORTNUMBER, DEF_PORTNUMBER );
+    pPdAsync->BaudRate   = miGetPrivateProfileLong(INI_SERIAL_VER1, INI_BAUD, DEF_BAUD );
 
     /* get i/o address */
     pBuf = Buf;
-    bGetPrivateProfileString( pIni, INI_IOADDR, INI_DEFAULT, Buf, sizeof(Buf) );
+    miGetPrivateProfileString( INI_SERIAL_VER1, INI_IOADDR, INI_DEFAULT, Buf, sizeof(Buf) );
     if ( !stricmp( Buf, INI_DEFAULT ) ) {
         switch ( pPdAsync->PortNumber ) {
             case 2:  pBuf = "0x02F8"; break;
@@ -206,7 +222,7 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
 
     /* get interrupt level */
     pBuf = Buf;
-    bGetPrivateProfileString( pIni, INI_IRQ, INI_DEFAULT, Buf, sizeof(Buf) );
+    miGetPrivateProfileString( INI_SERIAL_VER1, INI_IRQ, INI_DEFAULT, Buf, sizeof(Buf) );
     if ( !stricmp( Buf, INI_DEFAULT ) ) {
         switch ( pPdAsync->PortNumber ) {
             case 2:
@@ -217,17 +233,17 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
     pPdAsync->ComIRQ = (USHORT) atoi( pBuf );
 
 
-    if ( bGetPrivateProfileBool( pIni, INI_DTR, DEF_DTR ) ) 
+    if ( miGetPrivateProfileBool( INI_SERIAL_VER1, INI_DTR, DEF_DTR ) ) 
         pDcb->fbCtlHndShake |= MODE_DTR_CONTROL;
 
-    if ( bGetPrivateProfileBool( pIni, INI_RTS, DEF_RTS ) ) 
+    if ( miGetPrivateProfileBool( INI_SERIAL_VER1, INI_RTS, DEF_RTS ) ) 
         pDcb->fbFlowReplace |= MODE_RTS_CONTROL;
 
     pDcb->fbTimeout = MODE_WAIT_READ_TIMEOUT;
 
-    pLc->bDataBits = (BYTE) bGetPrivateProfileInt(pIni, INI_DATA, DEF_DATA );
+    pLc->bDataBits = (BYTE) miGetPrivateProfileInt( INI_SERIAL_VER1, INI_DATA, DEF_DATA );
 
-    bGetPrivateProfileString( pIni, INI_STOP, DEFSTR_STOP, Buf, sizeof(Buf));
+    miGetPrivateProfileString( INI_SERIAL_VER1, INI_STOP, DEFSTR_STOP, Buf, sizeof(Buf));
 
     if ( !stricmp( Buf, "1" ) ) 
        pLc->bStopBits = DOS_STOP1;
@@ -238,7 +254,7 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
     else 
        pLc->bStopBits = DOS_STOP1;
 
-    bGetPrivateProfileString( pIni, INI_PARITY, DEF_PARITY, Buf, sizeof(Buf));
+    miGetPrivateProfileString( INI_SERIAL_VER1, INI_PARITY, DEF_PARITY, Buf, sizeof(Buf));
     if ( !stricmp( Buf, "ODD" ) ) 
         pLc->bParity = 1;
     else if ( !stricmp( Buf, "EVEN" ) ) 
@@ -249,15 +265,15 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
         pLc->bParity = 4;
 
 
-    if ( bGetPrivateProfileBool( pIni, INI_SW, DEF_SW ) ) {
+    if ( miGetPrivateProfileBool( INI_SERIAL_VER1, INI_SW, DEF_SW ) ) {
         pDcb->fbFlowReplace |= (MODE_AUTO_TRANSMIT | MODE_AUTO_RECEIVE);
-        pDcb->bXONChar  = (BYTE) bGetPrivateProfileInt(pIni, INI_XON, DEF_XON);
-        pDcb->bXOFFChar = (BYTE) bGetPrivateProfileInt(pIni, INI_XOFF,DEF_XOFF);
+        pDcb->bXONChar  = (BYTE) miGetPrivateProfileInt( INI_SERIAL_VER1, INI_XON, DEF_XON);
+        pDcb->bXOFFChar = (BYTE) miGetPrivateProfileInt( INI_SERIAL_VER1, INI_XOFF,DEF_XOFF);
     }
 
-    if ( bGetPrivateProfileBool( pIni, INI_HW, DEF_HW ) ) {
+    if ( miGetPrivateProfileBool( INI_SERIAL_VER1, INI_HW, DEF_HW ) ) {
 
-        bGetPrivateProfileString( pIni, INI_HW_RX, DEF_HW_RX, Buf, sizeof(Buf));
+        miGetPrivateProfileString( INI_SERIAL_VER1, INI_HW_RX, DEF_HW_RX, Buf, sizeof(Buf));
         if ( !stricmp( Buf, "DTR" ) ) {
             pDcb->fbCtlHndShake &= ~MODE_DTR_CONTROL;
             pDcb->fbCtlHndShake |= MODE_DTR_HANDSHAKE;
@@ -266,7 +282,7 @@ DeviceOpen( PPD pPd, PPDOPEN pPdOpen )
             pDcb->fbFlowReplace |= MODE_RTS_HANDSHAKE;
 	}
 
-        bGetPrivateProfileString( pIni, INI_HW_TX, DEF_HW_TX, Buf, sizeof(Buf));
+        miGetPrivateProfileString( INI_SERIAL_VER1, INI_HW_TX, DEF_HW_TX, Buf, sizeof(Buf));
         if ( !stricmp( Buf, "CTS" ) ) {
             pDcb->fbCtlHndShake |= MODE_CTS_HANDSHAKE;
 	} else if ( !stricmp( Buf, "DSR" ) ) {
@@ -674,7 +690,7 @@ SetLastError( PPD pPd, int Error )
     return( CLIENT_ERROR_PD_ERROR );
 }
 
-
+#if 0 /* not needed as it's in lib/ini/helpers.c */
 /*******************************************************************************
  *
  *  _htol
@@ -722,3 +738,23 @@ _htol( PCHAR s )
 
     return(val);
 }
+#endif
+
+// Function: int STATIC EmulSetInfo( PPD pPd, PPDSETINFORMATION pPdSetInformation)
+//=======================================================
+//
+// Desc: used to let pd's send information to td's
+//
+// Input: PPD, PPDSETINFORMATION -- the info
+//
+// Return: client status
+//
+// Misc: 
+//
+//=======================================================						  
+static int EmulSetInfo( PPD pPd, PPDSETINFORMATION pPdSetInformation)
+{
+    return CLIENT_STATUS_SUCCESS;
+}																				
+// end - int STATIC EmulSetInfo( PPD pPd, PPDSETINFORMATION pPdSetInformation)
+

@@ -9,12 +9,29 @@
 *
 *  Author: Brad Pedersen  (3/25/94)
 *
-*  tdapi.c,v
-*  Revision 1.1  1998/01/12 11:35:52  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.55   Feb 09 1998 16:43:28   sumitd
+*  CPR #328 & 509 - DOS Client (TCP/IP) can now connect outside its subnet
+*  
+*     Rev 1.54   Jan 26 1998 09:47:02   sumitd
+*  
+*     Rev 1.53   Jan 23 1998 16:22:34   sumitd
+*  CPR 7206 - Dos client does not hang with wrong server name
+*  
+*     Rev 1.52   Jan 06 1998 13:51:24   bills
+*  Added an EmulSetInfo function to the td's.  This will allow a pd to send info
+*  to the td.  This is currently only used by pdtapi to tell tdcomm32 the handle
+*  to read/write on.  All other tds currently have a stub function here.
+*  
+*     Rev 1.51   03 Nov 1997 09:24:26   brada
+*  Added firewall load balancing support
+*  
+*     Rev 1.50   Oct 31 1997 19:27:40   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.49   Oct 09 1997 17:28:30   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.48   15 Apr 1997 16:54:46   TOMA
 *  autoput for remove source 4/12/97
@@ -86,7 +103,7 @@
 #include "../../../inc/pdapi.h"
 #include "../../../inc/nrapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../inc/td.h"
 //#include "../../../inc/loadstr.h"
 
@@ -133,6 +150,7 @@ int STATIC DeviceWrite( PPD, POUTBUF, PUSHORT );
 int STATIC DeviceCheckWrite( PPD, POUTBUF );
 int STATIC DeviceCancelWrite( PPD, POUTBUF );
 int STATIC DeviceSendBreak( PPD );
+int STATIC EmulSetInfo( PPD, PPDSETINFORMATION );
 */
 
 /*=============================================================================
@@ -174,7 +192,7 @@ static PDLLPROCEDURE PdProcedures[ PD__COUNT ] = {
 STATIC PPLIBPROCEDURE pModuleProcedures = NULL;
 STATIC PPLIBPROCEDURE pClibProcedures = NULL;
 STATIC PPLIBPROCEDURE pLogProcedures = NULL;
-STATIC PPLIBPROCEDURE pBIniProcedures = NULL;
+STATIC PPLIBPROCEDURE pMemIniProcedures = NULL;
 #endif
 
 //extern LPBYTE pProtocolName;
@@ -276,6 +294,7 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
     BYTE BrowserKey[40];
     ADDRESS AddrList[MAX_BROWSERADDRESSLIST];
     LPBYTE lpAddrList;
+    int fUseAlternateAddress;
 
 #if 0
     /*
@@ -283,7 +302,7 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
      */
     pModuleProcedures = pPdOpen->pModuleProcedures;
     pLogProcedures    = pPdOpen->pLogProcedures;
-    pBIniProcedures   = pPdOpen->pBIniProcedures;
+    pMemIniProcedures = pPdOpen->pMemIniProcedures;
     pClibProcedures   = pPdOpen->pClibProcedures;
 #endif
     /*
@@ -295,8 +314,8 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
     /*
      *  Get name of name resolver dll
      */
-    bGetPrivateProfileString( pPdOpen->pIniSection, INI_NAMERESOLVER,
-                             INI_EMPTY, DllName, sizeof(DllName) );
+    miGetPrivateProfileString( INI_TRANSPORTSECTION, INI_NAMERESOLVER,
+                               INI_EMPTY, DllName, sizeof(DllName) );
     if ( DllName[0] ) {
         pPd->pNrDll = (char *) malloc( /*strlen(pPdOpen->pExePath) + */strlen(DllName) + 1 );
         if ( pPd->pNrDll == NULL ) {
@@ -310,17 +329,25 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
     /* 
      *  Get ICA browser parameters
      */
-    bGetPrivateProfileString( pPdOpen->pIniSection, 
-                              INI_TCPBROWSERADDRESS, DEF_TCPBROWSERADDRESS, 
-                              pPd->TcpBrowserAddress, sizeof(pPd->TcpBrowserAddress) );
+    miGetPrivateProfileString( INI_WFCLIENT, INI_TCPBROWSERADDRESS, DEF_TCPBROWSERADDRESS, 
+                               pPd->TcpBrowserAddress, sizeof(pPd->TcpBrowserAddress) );
 
-    bGetPrivateProfileString( pPdOpen->pIniSection, 
-                              INI_IPXBROWSERADDRESS, DEF_IPXBROWSERADDRESS, 
-                              pPd->IpxBrowserAddress, sizeof(pPd->IpxBrowserAddress) );
+    miGetPrivateProfileString( INI_IPXSECTION, INI_IPXBROWSERADDRESS, DEF_IPXBROWSERADDRESS, 
+                               pPd->IpxBrowserAddress, sizeof(pPd->IpxBrowserAddress) );
 
-    bGetPrivateProfileString( pPdOpen->pIniSection, 
-                              INI_NETBIOSBROWSERADDRESS, DEF_NETBIOSBROWSERADDRESS, 
-                              pPd->NetBiosBrowserAddress, sizeof(pPd->NetBiosBrowserAddress) );
+    miGetPrivateProfileString( INI_NETBIOSSECTION, INI_NETBIOSBROWSERADDRESS, DEF_NETBIOSBROWSERADDRESS, 
+                               pPd->NetBiosBrowserAddress, sizeof(pPd->NetBiosBrowserAddress) );
+
+    fUseAlternateAddress = miGetPrivateProfileInt( INI_TRANSPORTSECTION,
+                                                   INI_USEALTERNATEADDRESS,
+                                                   DEF_USEALTERNATEADDRESS);
+
+    if ( fUseAlternateAddress ) {
+        pPd->fUseAlternateAddress = 1;
+    }
+    else {
+        pPd->fUseAlternateAddress = 0;
+    }
 
     /*
      *  determine if more than one browser address specified for TCP, IPX, NETBIOS
@@ -330,11 +357,11 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
        memcpy( AddrList[0], pPd->TcpBrowserAddress, sizeof(pPd->TcpBrowserAddress));
        for(i=1; i<MAX_BROWSERADDRESSLIST; i++) {
            sprintf(BrowserKey,"%s%d",INI_TCPBROWSERADDRESS,i+1);
-           bGetPrivateProfileString( pPdOpen->pIniSection, 
-                                     BrowserKey,
-                                     DEF_TCPBROWSERADDRESS, 
-                                     AddrList[i], 
-                                     sizeof(pPd->TcpBrowserAddress) );
+           miGetPrivateProfileString( INI_TCPSECTION,
+                                      BrowserKey,
+                                      DEF_TCPBROWSERADDRESS, 
+                                      AddrList[i], 
+                                      sizeof(pPd->TcpBrowserAddress) );
        }
        lpAddrList = (char *)malloc( sizeof(AddrList) );
        if(lpAddrList == NULL) {
@@ -350,11 +377,11 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
        memcpy( AddrList[0], pPd->IpxBrowserAddress, sizeof(pPd->IpxBrowserAddress));
        for(i=1; i<MAX_BROWSERADDRESSLIST; i++) {
            sprintf(BrowserKey,"%s%d",INI_IPXBROWSERADDRESS,i+1);
-           bGetPrivateProfileString( pPdOpen->pIniSection, 
-                                     BrowserKey,
-                                     DEF_IPXBROWSERADDRESS, 
-                                     AddrList[i], 
-                                     sizeof(pPd->IpxBrowserAddress) );
+           miGetPrivateProfileString( INI_IPXSECTION,
+                                      BrowserKey,
+                                      DEF_IPXBROWSERADDRESS, 
+                                      AddrList[i], 
+                                      sizeof(pPd->IpxBrowserAddress) );
        }
        lpAddrList = (char *)malloc( sizeof(AddrList) );
        if(lpAddrList == NULL) {
@@ -370,11 +397,11 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
        memcpy( AddrList[0], pPd->NetBiosBrowserAddress, sizeof(pPd->IpxBrowserAddress));
        for(i=1; i<MAX_BROWSERADDRESSLIST; i++) {
            sprintf(BrowserKey,"%s%d",INI_NETBIOSBROWSERADDRESS,i+1);
-           bGetPrivateProfileString( pPdOpen->pIniSection, 
-                                     BrowserKey,
-                                     DEF_NETBIOSBROWSERADDRESS, 
-                                     AddrList[i], 
-                                     sizeof(pPd->NetBiosBrowserAddress) );
+           miGetPrivateProfileString( INI_NETBIOSSECTION,
+                                      BrowserKey,
+                                      DEF_NETBIOSBROWSERADDRESS, 
+                                      AddrList[i], 
+                                      sizeof(pPd->NetBiosBrowserAddress) );
        }
        lpAddrList = (char *)malloc( sizeof(AddrList) );
        if(lpAddrList == NULL) {
@@ -385,28 +412,23 @@ PdOpen( PPD pPd, PPDOPEN pPdOpen )
        pPd->pNetBiosBrowserAddrList = lpAddrList;
     }
 
-    pPd->BrowserRetry = bGetPrivateProfileInt( pPdOpen->pIniSection,
-                                               INI_BROWSERRETRY,
-                                               DEF_BROWSERRETRY );
+    pPd->BrowserRetry = miGetPrivateProfileInt( INI_TRANSPORTSECTION, INI_BROWSERRETRY,
+                                                DEF_BROWSERRETRY );
 
-    pPd->BrowserTimeout = bGetPrivateProfileInt( pPdOpen->pIniSection,
-                                                 INI_BROWSERTIMEOUT,
-                                                 DEF_BROWSERTIMEOUT );
+    pPd->BrowserTimeout = miGetPrivateProfileInt( INI_TRANSPORTSECTION, INI_BROWSERTIMEOUT,
+                                                  DEF_BROWSERTIMEOUT );
     /*
      *  Get buffer lengths and counts
      */
 
-    pPd->OutBufLength = bGetPrivateProfileInt( pPdOpen->pIniSection,
-                                               INI_OUTBUFLENGTH,
-                                               DEF_OUTBUFLENGTH );
+    pPd->OutBufLength = miGetPrivateProfileInt( INI_TRANSPORTSECTION, INI_OUTBUFLENGTH,
+                                                DEF_OUTBUFLENGTH );
 
-    pPd->OutBufCountHost = bGetPrivateProfileInt( pPdOpen->pIniSection,
-                                                  INI_OUTBUFCOUNTHOST,
-                                                  DEF_OUTBUFCOUNTHOST );
+    pPd->OutBufCountHost = miGetPrivateProfileInt( INI_TRANSPORTSECTION, INI_OUTBUFCOUNTHOST,
+                                                   DEF_OUTBUFCOUNTHOST );
 
-    pPd->OutBufCountClient = bGetPrivateProfileInt( pPdOpen->pIniSection,
-                                                    INI_OUTBUFCOUNTCLIENT,
-                                                    DEF_OUTBUFCOUNTCLIENT );
+    pPd->OutBufCountClient = miGetPrivateProfileInt( INI_TRANSPORTSECTION, INI_OUTBUFCOUNTCLIENT,
+                                                     DEF_OUTBUFCOUNTCLIENT );
 
     /*
      *  Initialize low level structures
@@ -981,6 +1003,7 @@ PdSetInformation( PPD pPd, PPDSETINFORMATION pPdSetInformation )
 
         case PdConnect :
             rc = DeviceConnect( pPd );
+	    if (rc) goto done;
             break;
 
         case PdDisconnect :
@@ -1013,6 +1036,13 @@ PdSetInformation( PPD pPd, PPDSETINFORMATION pPdSetInformation )
 
     }
 
+    /*
+     *  Send to transport driver
+     */
+
+    rc = DeviceSetInfo(pPd, pPdSetInformation );
+
+done:
     TRACE(( TC_TD, TT_API1, "TdSetInformation(%u): rc=0x%x",
             pPdSetInformation->PdInformationClass, rc ));
 
@@ -1185,6 +1215,7 @@ NameToAddress( PPD pPd, PNAMEADDRESS pNameAddress )
     NrOpen.pNetBiosBrowserAddrList= pPd->pNetBiosBrowserAddrList;
     NrOpen.BrowserRetry           = pPd->BrowserRetry;
     NrOpen.BrowserTimeout         = pPd->BrowserTimeout;
+    NrOpen.fUseAlternateAddress   = pPd->fUseAlternateAddress;
 
     ModuleLookup(pPd->pNrDll, NULL, &NrOpen.pDeviceProcedures);
     rc = ModuleCall( &NrLink, DLL__OPEN, &NrOpen );
@@ -1218,15 +1249,16 @@ NameToAddress( PPD pPd, PNAMEADDRESS pNameAddress )
              */
             ErrorLookup.Error = rc;
 
-            rc = ModuleCall( &NrLink, NR__ERRORLOOKUP, &ErrorLookup );
+            rc2 = ModuleCall( &NrLink, NR__ERRORLOOKUP, &ErrorLookup );
 
             TRACE((TC_TD, TT_API2, "NameToAddress: ModuleCall NR__ERRORLOOKUP, rc=%u", rc));
-            if ( rc == CLIENT_STATUS_SUCCESS ) {
+            if ( rc2 == CLIENT_STATUS_SUCCESS ) {
                 pPd->ErrorMessage = strdup( ErrorLookup.Message );
                 if ( pPd->ErrorMessage == NULL ) {
                    rc = CLIENT_ERROR_NO_MEMORY;
                 }
                 else {
+
                     pPd->LastError = ErrorLookup.Error;
                     strcpy( pPd->ErrorProtocolName, ErrorLookup.ProtocolName );
                     rc = CLIENT_ERROR_PD_ERROR;

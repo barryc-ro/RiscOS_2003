@@ -11,8 +11,22 @@
 *
 *  $Author$ Butch Davis
 *
-*  $Log$
 *  
+*     Rev 1.8   Feb 11 1998 15:36:04   JASONL
+*  unlimited license support
+*  
+*     Rev 1.7   Feb 09 1998 11:48:34   jeffst
+*  changed loadbalancing min and max #defines to -10000 and 10000
+*  
+*     Rev 1.6   23 Dec 1997 13:56:22   scottn
+*  oops...
+*
+*     Rev 1.5   23 Dec 1997 13:54:00   scottn
+*  Add fMaximize to APPCONFIG.
+*
+*     Rev 1.4   24 Dec 1997 10:25:58   kalyanv
+*  update
+*
 *     Rev 1.3   26 Aug 1997 21:32:30   scottn
 *  Add hydra version defines.
 *
@@ -55,8 +69,8 @@ extern "C" {
 
 // these must be changed for each release of Picasso to match the
 // hydra release (so if they upgrade hydra, picasso stops working)
-#define EXPECTED_HYDRA_MAJOR	4
-#define EXPECTED_HYDRA_MINOR	0
+#define EXPECTED_HYDRA_MAJOR    4
+#define EXPECTED_HYDRA_MINOR    0
 
 // BUGBUG: moved these to MS40 winsta.h - may move back
 /*
@@ -85,15 +99,16 @@ typedef struct _APPCONFIGW {
     ULONG fInheritClientSize : 1;   // Client specifies window size
     ULONG fInheritClientColors : 1; // Client specifies window colors
     ULONG fHideTitleBar : 1;        // Application title bar is removed
+    ULONG fMaximize : 1;            // Application is maximized at startup
 
     ULONG WindowScale;              // Percent of client desktop (1-100%)
     ULONG WindowWidth;              // Width of window (in pixels)
     ULONG WindowHeight;             // Height of window (in pixels)
     ULONG WindowColor;              // Window color:
-                                    //   0x0001 = 16 color
-                                    //   0x0002 = 256 color
-                                    //   0x0004 = 64K color (future)
-                                    //   0x0008 = 16M color (future)
+				    //   0x0001 = 16 color
+				    //   0x0002 = 256 color
+				    //   0x0004 = 64K color (future)
+				    //   0x0008 = 16M color (future)
 } APPCONFIGW, * PAPPCONFIGW;
 
 typedef struct _APPCONFIGA {
@@ -102,15 +117,16 @@ typedef struct _APPCONFIGA {
     ULONG fInheritClientSize : 1;   // Client specifies window size
     ULONG fInheritClientColors : 1; // Client specifies window colors
     ULONG fHideTitleBar : 1;        // Application title bar is removed
+    ULONG fMaximize : 1;            // Application is maximized at startup
 
     ULONG WindowScale;              // Percent of client desktop (1-100%)
     ULONG WindowWidth;              // Width of window (in pixels)
     ULONG WindowHeight;             // Height of window (in pixels)
     ULONG WindowColor;              // Window color:
-                                    //   0x0001 = 16 color
-                                    //   0x0002 = 256 color
-                                    //   0x0004 = 64K color (future)
-                                    //   0x0008 = 16M color (future)
+				    //   0x0001 = 16 color
+				    //   0x0002 = 256 color
+				    //   0x0004 = 64K color (future)
+				    //   0x0008 = 16M color (future)
 } APPCONFIGA, * PAPPCONFIGA;
 
 #ifdef UNICODE
@@ -187,6 +203,21 @@ typedef WCHAR * PREG_LICENSENUMBER;
 #define CLIENT_DESCRIPTION_LENGTH            32
 #define FEATURE_DESCRIPTION_LENGTH           64
 
+// these constants are used to represent an unlimited license count
+//
+// MAX_SN_USER_COUNT   represents the actual user count shown by the license serial
+// number to represent an unlimited user count.  This is the value that will be 
+// returned if a license count is queried directly from the license registry key.
+//
+// USER_COUNT_UNLIMITED is the value that will be returned by the UlmQuery or 
+// WinstationQuery calls if an unlimited license is present, and applications which
+// use these APIs should check for a count equal to this number to see if a license
+// is unlimited.
+
+#define MAX_SN_LICENSE_COUNT         4095
+#define USER_COUNT_UNLIMITED        32767
+
+
 
 /**********************
  *  License Structures
@@ -205,13 +236,13 @@ typedef struct _LICENSE{
     ULONG               CodeLevel;      // for 1.5, was ClientProductId
     ULONG               BumpLevel;
     ULONG               ProductId;
-    ULONG	        SerialNumberSeq;
-    ULONG	        SerialNumberCrc;
-    ULONG	        InstallationCode;
-    ULONG	        LicenseNumberCrc;
+    ULONG               SerialNumberSeq;
+    ULONG               SerialNumberCrc;
+    ULONG               InstallationCode;
+    ULONG               LicenseNumberCrc;
     ULONG               InstallTime;
-    ULONG		ActivationCode;
-    ULONG		fRegistered : 1;
+    ULONG               ActivationCode;
+    ULONG               fRegistered : 1;
     ULONG               fConversion : 1; // set if converting entries
     WCHAR               ClientDescription[ CLIENT_DESCRIPTION_LENGTH + 1 ];
     WCHAR               FeatureDescription[ FEATURE_DESCRIPTION_LENGTH + 1 ];
@@ -240,8 +271,8 @@ typedef struct _LICENSE_COUNTS {
 
 
 typedef BOOLEAN (WINAPI * PWINSTATIONQUERYLICENSE)( HANDLE,
-                                                    PLICENSE_COUNTS,
-                                                    ULONG );
+						    PLICENSE_COUNTS,
+						    ULONG );
 
 
 /***************************************************
@@ -264,15 +295,15 @@ typedef PFNREGAPPCONFIGSTATUSW * PPFNREGAPPCONFIGSTATUSW;
 
 LONG WINAPI
 RegAppConfigSetW( PAPPLICATIONNAMEW       pAppName,
-                  PAPPCONFIGW             pAppConfig,
-                  ULONG                   AppConfigLength,
-                  PSRVAPPCONFIGW          pSrvAppConfig,
-                  ULONG                   SrvAppConfigLength,
-                  ULONG                   SrvAppConfigCount,
-                  LPWSTR                  pUserList,
-                  LPWSTR                  pGroupList,
-                  LPWSTR                  pLocalGroupList,
-                  PPFNREGAPPCONFIGSTATUSW pfnRegAppConfigStatus );
+		  PAPPCONFIGW             pAppConfig,
+		  ULONG                   AppConfigLength,
+		  PSRVAPPCONFIGW          pSrvAppConfig,
+		  ULONG                   SrvAppConfigLength,
+		  ULONG                   SrvAppConfigCount,
+		  LPWSTR                  pUserList,
+		  LPWSTR                  pGroupList,
+		  LPWSTR                  pLocalGroupList,
+		  PPFNREGAPPCONFIGSTATUSW pfnRegAppConfigStatus );
 #ifdef UNICODE
 #define RegAppConfigSet RegAppConfigSetW
 #else
@@ -282,21 +313,21 @@ RegAppConfigSetW( PAPPLICATIONNAMEW       pAppName,
 /*------------------------------------------------*/
 
 typedef LONG (WINAPI * PREGAPPCONFIGQUERYW)( PAPPLICATIONNAMEW, WCHAR *,
-                                             PAPPCONFIGW, ULONG, PSRVAPPCONFIGW *,
-                                             PULONG, PULONG, LPWSTR *, LPWSTR *,
-                                             LPWSTR *, PPFNREGAPPCONFIGSTATUSW );
+					     PAPPCONFIGW, ULONG, PSRVAPPCONFIGW *,
+					     PULONG, PULONG, LPWSTR *, LPWSTR *,
+					     LPWSTR *, PPFNREGAPPCONFIGSTATUSW );
 LONG WINAPI
 RegAppConfigQueryW( PAPPLICATIONNAMEW       pAppName,
-                    WCHAR *                 pServerName,
-                    PAPPCONFIGW             pAppConfig,
-                    ULONG                   AppConfigLength,
-                    PSRVAPPCONFIGW *        ppSrvAppConfig,
-                    PULONG                  pSrvAppConfigLength,
-                    PULONG                  pSrvAppConfigCount,
-                    LPWSTR *                ppUserList,
-                    LPWSTR *                ppGroupList,
-                    LPWSTR *                ppLocalGroupList,
-                    PPFNREGAPPCONFIGSTATUSW pfnRegAppConfigStatus );
+		    WCHAR *                 pServerName,
+		    PAPPCONFIGW             pAppConfig,
+		    ULONG                   AppConfigLength,
+		    PSRVAPPCONFIGW *        ppSrvAppConfig,
+		    PULONG                  pSrvAppConfigLength,
+		    PULONG                  pSrvAppConfigCount,
+		    LPWSTR *                ppUserList,
+		    LPWSTR *                ppGroupList,
+		    LPWSTR *                ppLocalGroupList,
+		    PPFNREGAPPCONFIGSTATUSW pfnRegAppConfigStatus );
 
 #ifdef UNICODE
 #define RegAppConfigQuery RegAppConfigQueryW
@@ -308,13 +339,13 @@ RegAppConfigQueryW( PAPPLICATIONNAMEW       pAppName,
 
 LONG WINAPI
 RegAppConfigServerQueryW( PAPPLICATIONNAMEW       pAppName,
-                          PAPPCONFIGW             pAppConfig,
-                          ULONG                   AppConfigLength,
-                          PSRVAPPCONFIGW          pSrvAppConfig,
-                          ULONG                   SrvAppConfigLength,
-                          LPWSTR *                ppUserList,
-                          LPWSTR *                ppGroupList,
-                          LPWSTR *                ppLocalGroupList );
+			  PAPPCONFIGW             pAppConfig,
+			  ULONG                   AppConfigLength,
+			  PSRVAPPCONFIGW          pSrvAppConfig,
+			  ULONG                   SrvAppConfigLength,
+			  LPWSTR *                ppUserList,
+			  LPWSTR *                ppGroupList,
+			  LPWSTR *                ppLocalGroupList );
 
 #ifdef UNICODE
 #define RegAppConfigServerQuery RegAppConfigServerQueryW
@@ -326,8 +357,8 @@ RegAppConfigServerQueryW( PAPPLICATIONNAMEW       pAppName,
 
 LONG WINAPI
 RegAppConfigDeleteW( PAPPLICATIONNAMEW       pAppName,
-                     WCHAR *                 pServerName,
-                     PPFNREGAPPCONFIGSTATUSW pfnRegAppConfigStatus );
+		     WCHAR *                 pServerName,
+		     PPFNREGAPPCONFIGSTATUSW pfnRegAppConfigStatus );
 
 #ifdef UNICODE
 #define RegAppConfigDelete RegAppConfigDeleteW
@@ -339,9 +370,9 @@ RegAppConfigDeleteW( PAPPLICATIONNAMEW       pAppName,
 
 LONG WINAPI
 RegAppConfigEnumerateW( WCHAR *  pDomainName,
-                        WCHAR *  pServerName,
-                        BOOLEAN bIgnoreDomainAndServer,
-                        LPWSTR * ppBuffer );
+			WCHAR *  pServerName,
+			BOOLEAN bIgnoreDomainAndServer,
+			LPWSTR * ppBuffer );
 
 #ifdef UNICODE
 #define RegAppConfigEnumerate RegAppConfigEnumerateW
@@ -353,8 +384,8 @@ RegAppConfigEnumerateW( WCHAR *  pDomainName,
 
 LONG WINAPI
 RegAppConfigServerEnumerateW( WCHAR *  pDomainName,
-                              ULONG    EnumFlags,
-                              LPWSTR * ppBuffer );
+			      ULONG    EnumFlags,
+			      LPWSTR * ppBuffer );
 
 /* EnumFlags */
 #define REGSERVER_ANONYMOUS   0x00000001
@@ -370,7 +401,7 @@ RegAppConfigServerEnumerateW( WCHAR *  pDomainName,
 
 LONG WINAPI
 RegAppConfigPendingW( LPWSTR                  pServerName,
-                      PPFNREGAPPCONFIGSTATUSW pfnRegAppConfigStatus );
+		      PPFNREGAPPCONFIGSTATUSW pfnRegAppConfigStatus );
 
 #ifdef UNICODE
 #define RegAppConfigPending RegAppConfigPendingW
@@ -404,9 +435,9 @@ RegICABrowserResetW( LPWSTR pServerName );
 
 LONG WINAPI
 RegICABrowserGatewayUpdateW( LPWSTR pServerName,
-                             int AddressFamily,
-                             LPWSTR pUpdateItem,
-                             BOOLEAN fDelete );
+			     int AddressFamily,
+			     LPWSTR pUpdateItem,
+			     BOOLEAN fDelete );
 
 #ifdef UNICODE
 #define RegICABrowserGatewayUpdate RegICABrowserGatewayUpdateW
@@ -431,8 +462,8 @@ typedef struct _LOADBALANCING {
 
 } LOADBALANCING, * PLOADBALANCING;
 
-#define LOADBALANCING_BIAS_MIN              -100
-#define LOADBALANCING_BIAS_MAX              100
+#define LOADBALANCING_BIAS_MIN              -10000
+#define LOADBALANCING_BIAS_MAX              10000
 #define LOADBALANCING_WEIGHTING_MIN         0
 #define LOADBALANCING_WEIGHTING_MAX         1000
 #define LOADBALANCING_MAXUSERLICENSES_MIN   0
@@ -446,8 +477,8 @@ typedef struct _LOADBALANCING {
 
 LONG WINAPI
 RegICABrowserLoadBalancingSetW( LPWSTR pServerName,
-                                PLOADBALANCING pLoadBalancing,
-                                ULONG LoadBalancingLength );
+				PLOADBALANCING pLoadBalancing,
+				ULONG LoadBalancingLength );
 
 #ifdef UNICODE
 #define RegICABrowserLoadBalancingSet RegICABrowserLoadBalancingSetW
@@ -459,8 +490,8 @@ RegICABrowserLoadBalancingSetW( LPWSTR pServerName,
 
 LONG WINAPI
 RegICABrowserLoadBalancingQueryW( LPWSTR pServerName,
-                                  PLOADBALANCING pLoadBalancing,
-                                  ULONG LoadBalancingLength );
+				  PLOADBALANCING pLoadBalancing,
+				  ULONG LoadBalancingLength );
 
 #ifdef UNICODE
 #define RegICABrowserLoadBalancingQuery RegICABrowserLoadBalancingQueryW
@@ -479,7 +510,7 @@ typedef VOID (WINAPI * PREGAPPQUERYANONYMOUSUSERCOUNTS)( PULONG, PULONG );
 
 VOID WINAPI
 RegAppQueryAnonymousUserCounts( PULONG pAnonymousUsersAvailable,
-                                PULONG pAnonymousUsersTotal );
+				PULONG pAnonymousUsersTotal );
 
 /*------------------------------------------------*/
 
@@ -529,6 +560,8 @@ BOOLEAN WINAPI RegGetVersionEx( PVOID /* LPOSVERSIONINFO */ );
 #define LICENSE_ENABLER_INTERNET_SERVER  0x00001000
 #define LICENSE_ENABLER_LOADBALANCE      0x00002000
 #define LICENSE_ENABLER_NOCLILICENSE     0x00004000   // turn off CLIENTLICENSE
+#define LICENSE_ENABLER_DOM_ENCRYPTION   0x00008000   // North American SecureICA OptionPack
+#define LICENSE_ENABLER_INTL_ENCRYPTION  0x00010000   // Global SecureICA Option Pack
 
 /*------------------------------------------------*/
 

@@ -10,6 +10,13 @@
 *
 *   $Log$
 *  
+*     Rev 1.52   Feb 17 1998 16:24:12   bills
+*  Changed the extern of gpszTitle from the DESCRIPTION typedef to show its
+*  new increased size.
+*  
+*     Rev 1.51   29 Jan 1998 11:34:50   fredl
+*  corrected msg names for clip region
+*  
 *     Rev 1.50   09 Jul 1997 15:50:10   davidp
 *  Added support for setting clip region
 *  
@@ -85,7 +92,7 @@ extern USHORT         gState;
 extern PFNUIPOLL      gpfnUIPoll;
 #endif
 extern CLIENTNAME     gpszClientname;
-extern DESCRIPTION    gpszTitle;
+extern CHAR			  gpszTitle[128];
 extern ULONG          gVersion;
 
 
@@ -248,8 +255,8 @@ typedef struct _IPCDATAPTR {
 #define WFICA_MSGNAME_ENGINE_INIT     "WFEngineInit"           // init: engine to plugin
 #define WFICA_MSGNAME_ENGINE_UNINIT   "WFEngineUninit"         // uninit: plugin to engine
 #define WFICA_MSGNAME_NEW_HWND        "WFEngineNewhWnd"        // plugin to engine: new hWnd
-#define WFICA_MSGNAME_SET_CLIP_LR     "WFEngineNewhWnd"        // plugin to engine: new cliprect
-#define WFICA_MSGNAME_SET_CLIP_TB     "WFEngineNewhWnd"        // plugin to engine: new cliprect
+#define WFICA_MSGNAME_SET_CLIP_LR     "WFEngineSetClipLR"      // plugin to engine: new cliprect
+#define WFICA_MSGNAME_SET_CLIP_TB     "WFEngineSetClipTB"      // plugin to engine: new cliprect
 
 #define WFENG_SERVICEUI                  "WFServiceUI"
 #define WFENG_NONIPCCLASS                "WFIcaClient"

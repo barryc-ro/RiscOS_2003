@@ -10,66 +10,67 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
-*   Revision 1.2  1998/01/27 18:39:44  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
-*   Revision 1.1  1998/01/19 19:13:11  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.33   Jan 27 1998 21:34:08   briang
+*  Fix TWI display error
+*  
+*     Rev 1.32   Jan 26 1998 23:50:24   briang
+*  Add more guards to TWI_Stuff since it broke Win16
+*  
+*     Rev 1.31   Jan 15 1998 23:36:52   briang
+*  fix undefined var error in compile
+*
+*     Rev 1.29   Jan 14 1998 17:03:30   briang
+*  TWI Integration
+*
+*     Rev 1.26   08 Oct 1997 13:00:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.25   14 Aug 1997 20:34:34   kurtp
 *  update
-*  
+*
 *     Rev 1.24   14 Aug 1997 15:55:10   kurtp
 *  fix full screen, again
-*  
+*
 *     Rev 1.23   05 Aug 1997 18:33:08   kurtp
 *  fix WF1.7 trap as reported by terryt
-*  
+*
 *     Rev 1.22   04 Aug 1997 19:19:20   kurtp
 *  update
-*  
+*
 *     Rev 1.20   14 Jul 1997 18:21:28   kurtp
 *  Add LVB to transparent text ops
-*  
+*
 *     Rev 1.19   15 Apr 1997 18:17:14   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.19   21 Mar 1997 16:09:44   bradp
 *  update
-*  
+*
 *     Rev 1.18   06 Mar 1997 15:07:36   kurtp
 *  update
-*  
+*
 *     Rev 1.17   18 Jul 1996 13:27:44   marcb
 *  update
-*  
+*
 *     Rev 1.16   17 Jul 1996 19:36:48   jeffm
 *  Take the union of the desktop with the browser window.
-*  
+*
 *     Rev 1.15   28 Jun 1996 13:08:12   marcb
 *  update
-*  
+*
 *     Rev 1.14   25 Jun 1996 17:27:24   marcb
 *  update
-*  
+*
 *     Rev 1.13   30 May 1996 16:55:30   jeffm
 *  update
-*  
+*
 *     Rev 1.12   08 May 1996 14:56:46   jeffm
 *  update
-*  
+*
 *     Rev 1.11   20 Jan 1996 14:29:06   kurtp
 *  update
-*  
+*
 *     Rev 1.10   03 Jan 1996 13:34:44   kurtp
 *  update
 *
@@ -96,13 +97,20 @@
 #include "../../../inc/vdapi.h"
 #include "../../../inc/mouapi.h"
 #include "../../../inc/logapi.h"
-#include "../../../inc/biniapi.h"
+#include "../../../inc/miapi.h"
 #include "../../../inc/wengapip.h"
 
 #include "twwin.h"
 #include "twdata.h"
 
 #include "swis.h"
+
+#ifdef TWI_INTERFACE_ENABLED
+
+#include "apdata1.h"    // TWI common data, ref only
+
+#endif  //TWI_INTERFACE_ENABLED
+
 
 ULONG TinyCacheSize  = (ULONG)((USHORT)32*(USHORT)1024);
 ULONG LargeCacheSize;
@@ -215,14 +223,14 @@ void far InitThinwire( COLOR_CAPS reqColorCaps, USHORT uWidth, USHORT uHeight )
          */
         vcxLVB = (ULONG) uWidth;
         vcyLVB = (ULONG) uHeight;
-    
+
         /*
          *  Dword align width of LVB
          */
         if (vcxLVB % 32 ) {
             vcxLVB += (32L - (vcxLVB % 32L));
         }
-    
+
         /*
          *  Generate byte sizes (extra dword for DWORD aligned bitmaps)
          */
@@ -247,7 +255,8 @@ void far InitThinwire( COLOR_CAPS reqColorCaps, USHORT uWidth, USHORT uHeight )
             }
         }
     }
-#endif    
+#endif
+
     /*
      *  Add in border size
      */
@@ -358,6 +367,14 @@ void far InitThinwire( COLOR_CAPS reqColorCaps, USHORT uWidth, USHORT uHeight )
      *  Save current color caps
      */
     curColorCaps = reqColorCaps;
+
+#ifdef TWI_INTERFACE_ENABLED
+
+      if( HostAgentReadyFlag ){
+         MyInit( 0 );
+      }
+
+#endif  //TWI_INTERFACE_ENABLED
 }
 
 /****************************************************************************\
@@ -384,6 +401,54 @@ int TWInitWindow( PVD pVd, HWND hWnd )
      */
     ASSERT( vhdc == NULL, 0 );
 
+    vpVd = pVd;
+    vhWnd = hWnd;
+
+#ifdef TWI_INTERFACE_ENABLED
+    TwiModeEnabledFlag = FALSE;
+  {
+       ULONG ptru = (ULONG)GetWindowLong( hWnd, GWL_INSTANCEDATA );
+       if( !ptru ) goto bad_main_window;
+
+       ptru += sizeof(WFEINSTANCE);
+
+       TwiModeEnabledFlag = *((PULONG)ptru);
+//       if( TwiModeEnabledFlag &&
+//           (GetWindowLong(hWnd, GWL_WINDOWWIDTH) != GetSystemMetrics(SM_CXSCREEN)) ){
+//  UCHAR  tmps[256];
+//  wsprintf( tmps, "Requested x=%i, avail.x=%i",
+//            GetWindowLong(hWnd, GWL_WINDOWWIDTH), GetSystemMetrics(SM_CXSCREEN) );
+//      MessageBox( NULL, tmps, "AP", MB_OK);
+//
+//          TwiModeEnabledFlag = FALSE;
+//          *((PULONG)ptru) = TwiModeEnabledFlag;
+//       }
+
+
+    if( TwiModeEnabledFlag ){
+//        MessageBox( NULL, "TWI mode enabled", "AP", MB_OK);
+
+       MyInit( hWnd );
+       *((PULONG)(ptru+4)) = (ULONG)CommWindow;
+       SetWindowLong( CommWindow, 0, TRUE );
+
+       BringWindowToTop( hWnd );
+       SetForegroundWindow( hWnd );
+
+       MainWindowDC = GetDC( hWnd );
+       vhdc = ShadowDC;
+    }
+    else {
+bad_main_window:
+
+       if ( !(vhdc = GetDC( vhWnd = hWnd )) ) {
+           rc = CLIENT_ERROR_VD_ERROR;
+           TRACE(( TC_TW, TT_ERROR, "TWInitWindow: GetDC failed" ));
+           ASSERT( 0, 0 );
+       }
+    }
+  }
+#endif  //TWI_INTERFACE_ENABLED
     /*
      *  Set mouse hook
      */
@@ -585,23 +650,21 @@ int TWFreeObjectCaches( VOID )
  *   Get caching parameters from protocol.ini
  *
  * ENTRY:
- *    pInitSection (input)
- *       pointer to ini file section
  *
  * EXIT:
  *    CLIENT_STATUS_SUCCESS
  *
  ******************************************************************************/
-USHORT TWReadCacheParameters( PVOID pIniSection )
+USHORT TWReadCacheParameters( )
 {
     int freemem, limit;
     
     /*
      *  Get large cache size (in 1KB chunks)
      */
-    LargeCacheSize = (ULONG) bGetPrivateProfileLong( pIniSection,
-                                                     INI_LARGECACHE, 
-                                                     DEF_LARGECACHE );
+    LargeCacheSize = (ULONG) miGetPrivateProfileLong( INI_VDTW31,
+                                                      INI_LARGECACHE,
+                                                      DEF_LARGECACHE );
 
     /*
      *  Never greater than 8MB (8KB)
@@ -650,10 +713,23 @@ TWMoveCursor(USHORT uX, USHORT uY)
 #if 0
     POINT pt;
 
+
+#ifdef TWI_INTERFACE_ENABLED
+
+  if( TwiModeEnabledFlag && !HostPausedFlag ){
+          /*
+           *  Move it
+           */
+          SetCursorPos( uX, uY );
+  }
+  else {
+
+
     /*
      *  Get current cursor position
      */
     GetCursorPos( &pt );
+
 
     /*
      *  Only position cursor if we have focus and mouse is within our window
@@ -676,6 +752,40 @@ TWMoveCursor(USHORT uX, USHORT uY)
          */
         SetCursorPos( pt.x, pt.y );
     }
+
+  }
+
+#else //TWI_INTERFACE_ENABLED
+
+
+    /*
+     *  Get current cursor position
+     */
+    GetCursorPos( &pt );
+
+
+    /*
+     *  Only position cursor if we have focus and mouse is within our window
+     */
+    if ( (vhWnd == GetFocus()) && (vhWnd == WindowFromPoint(pt)) ) {
+
+        /*
+         *  Setup up client point and map to screen
+         */
+        pt.x = uX;
+        pt.y = uY;
+        ClientToScreen( vhWnd, &pt );
+
+        TRACE(( TC_TW, TT_TW_PTRMOVE,
+                "TWMoveCursor: client( %d, %d ) screen( %d, %d )",
+                uX, uY, pt.x, pt.y ));
+
+        /*
+         *  Move it
+         */
+        SetCursorPos( pt.x, pt.y );
+    }
+#endif
 #endif
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -866,7 +976,7 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
                             pClipRect->top, pClipRect->left, pClipRect->bottom, pClipRect->right ));
 
     /*
-     * Get the screen window handle 
+     * Get the screen window handle
      * (If embedded, the screen is the browser window)
      */
     if ( pInstanceData && pInstanceData->hWndPlugin ) {
@@ -884,14 +994,14 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
          * adjust the screen boundaries inside them
          */
         Style = GetWindowLong( hWndParent, GWL_STYLE );
-        
+
         if ( Style & WS_HSCROLL ) {
             ParentRect.bottom -= GetSystemMetrics( SM_CYHSCROLL );
         }
         if ( Style & WS_VSCROLL ) {
             ParentRect.right -= GetSystemMetrics( SM_CXVSCROLL );
         }
-        
+
 #ifdef WIN32
         /*
          * If the "screen" has a 3d edge,
@@ -908,7 +1018,7 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
          */
         hWndScreen = GetDesktopWindow();
 #ifdef WIN32
-        if ( !SystemParametersInfo( SPI_GETWORKAREA, sizeof(RECT), &screenRect, 0)) 
+        if ( !SystemParametersInfo( SPI_GETWORKAREA, sizeof(RECT), &screenRect, 0))
 #endif
         GetWindowRect( hWndScreen, &screenRect );
 
@@ -921,12 +1031,12 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
 //        char szBuf[128];
 //
 //        wsprintf(szBuf, "left %u top %u right %u bottom %u",
-//                 screenRect.left, 
+//                 screenRect.left,
 //                 screenRect.top,
 //                 screenRect.right,
 //                 screenRect.bottom);
 //        MessageBox( NULL, szBuf, "Screen limit", MB_OK);
-//         
+//
 //      }
 
     } else {
@@ -1208,6 +1318,25 @@ VOID
 SetMouseHook( HWND hWnd )
 {
 
+
+#ifdef TWI_INTERFACE_ENABLED
+
+  if( TwiModeEnabledFlag ){
+
+    /*
+     *  Set hook
+     */
+    vhHook = SetWindowsHookEx( WH_MOUSE,
+                               (HOOKPROC) MouseHookProc,
+//                               ghInstance,
+                               0,
+                               (DWORD) GetCurrentThreadId() );
+//                               0 );
+  }
+
+#endif  //TWI_INTERFACE_ENABLED
+
+
 //    /*
 //     *  Set hook
 //     */
@@ -1284,6 +1413,114 @@ MouseHookProc( int nCode, WPARAM wParam, LPARAM lParam )
 {
     MOUSEHOOKSTRUCT FAR * pMHS = (MOUSEHOOKSTRUCT FAR *) lParam;
 
+
+#ifdef TWI_INTERFACE_ENABLED
+
+    PMYWIN_INFO  c_win;
+    HWND         c_wnd;
+    DWORD        new_msg;
+
+    if( !TwiModeEnabledFlag ) goto no_twi;
+    if( HostPausedFlag ) return 0;
+
+    c_wnd = pMHS->hwnd;
+
+//    if( nCode < 0 )
+//         return( CallNextHookEx( vhHook, nCode, wParam, lParam ) );
+
+    c_win = FindWinPointer(c_wnd);
+
+    if( c_win ){
+       if( wParam == WM_LBUTTONDOWN ) MousePressedFlag |= 2;
+       if( wParam == WM_RBUTTONDOWN ) MousePressedFlag |= 1;
+       if( (wParam==WM_LBUTTONDOWN) || (wParam==WM_RBUTTONDOWN) ){
+
+          if( c_win->hWnd != GetForegroundWindow() )
+              SetForegroundWindow(c_win->hWnd);
+
+       }
+    }
+       if( wParam == WM_LBUTTONUP ) MousePressedFlag &= ~2;
+       if( wParam == WM_RBUTTONUP ) MousePressedFlag &= ~1;
+
+
+    if( !WindowMoveFlag && !HostPausedFlag ){
+       WPARAM  nm = wParam;
+
+       new_msg = pMHS->pt.x + ((pMHS->pt.y<<16) & 0x0ffff0000);
+
+       if( (nm == WM_LBUTTONUP) ){
+          if( c_win ){
+             if( c_win->IconicFlag ){
+                SendMessage( MainWindow, WM_LBUTTONDOWN, pMHS->dwExtraInfo, new_msg );
+                SendMessage( MainWindow, WM_LBUTTONUP, pMHS->dwExtraInfo, new_msg );
+                goto  xx1;
+             }
+          }
+       }
+       if( (nm == WM_NCLBUTTONUP) ){
+          if( c_win ){
+             if( c_win->IconicFlag ){
+                SendMessage( MainWindow, WM_LBUTTONDOWN, pMHS->dwExtraInfo, new_msg );
+                SendMessage( MainWindow, WM_LBUTTONUP, pMHS->dwExtraInfo, new_msg );
+                goto  xx1;
+             }
+          }
+       }
+       if( nm != WM_NCLBUTTONDOWN )
+          if( GetCapture() != MainWindow )
+               SendMessage( MainWindow, nm, pMHS->dwExtraInfo, new_msg );
+    }
+
+xx1:
+
+    if ( (nCode == HC_ACTION) && (fWindowsSynced == TRUE) ) {
+
+        switch ( wParam ) {
+
+            case WM_LBUTTONDOWN :
+            case WM_MBUTTONDOWN :
+            case WM_RBUTTONDOWN :
+
+
+//            if( GetFocus() != c_wnd ) SetFocus(c_wnd);
+//
+//                       Set click tick timer
+//
+
+                    if ( bClickticks &&
+                         SetTimer( CommWindow,
+                                   TIMER_CLICK_TICK,
+                                   bClickticks * 50,    // tick * 1/20 of a sec
+                                   (TIMERPROC) TimerProc ) ) {
+                        vhCursorVis = vhCursorNot;
+                    }
+                    SetCursor( vhCursorVis );
+
+                break;
+
+            case WM_LBUTTONUP :
+            case WM_MBUTTONUP :
+            case WM_RBUTTONUP :
+
+//
+//                   Only change cursor for our window
+//
+                    SetCursor( vhCursorVis );
+                break;
+
+            default :
+
+                break;
+        }
+    }
+
+    return 0;
+
+no_twi:
+
+#endif  //TWI_INTERFACE_ENABLED
+
     /*
      *  Only act on pulled messages, while in thinwire and not iconic
      */
@@ -1314,7 +1551,11 @@ MouseHookProc( int nCode, WPARAM wParam, LPARAM lParam )
                      *  Set click tick timer
                      */
                     if ( bClickticks &&
+#ifdef TWI_INTERFACE_ENABLED
+                         SetTimer( CommWindow,
+#else
                          SetTimer( vhWnd,
+#endif
                                    TIMER_CLICK_TICK,
                                    bClickticks * 50,    // tick * 1/20 of a sec
                                    (TIMERPROC) TimerProc ) ) {
@@ -1343,6 +1584,8 @@ MouseHookProc( int nCode, WPARAM wParam, LPARAM lParam )
     }
 
     return( CallNextHookEx( vhHook, nCode, wParam, lParam ) );
+
+
 }
 #endif
 

@@ -7,33 +7,28 @@
 *
 *   Copyright (c) Citrix Systems Inc. 1995-1996
 *
-*   Author: Jeff Krantz (jeffk) 
+*   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
-*   Revision 1.2  1998/01/27 18:39:34  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
-*   Revision 1.1  1998/01/19 19:13:07  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
 *  
+*     Rev 1.8   Jan 26 1998 23:50:40   briang
+*  Add more guards to TWI_Stuff since it broke Win16
+*  
+*     Rev 1.7   Jan 14 1998 17:02:58   briang
+*  TWI Integration
+*
+*     Rev 1.7    08 Oct 1997 15:00:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.6   04 Aug 1997 19:19:48   kurtp
 *  update
-*  
+*
 *     Rev 1.5   15 Apr 1997 18:17:06   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.4   03 Jan 1996 13:34:22   kurtp
 *  update
-*  
+*
 ****************************************************************************/
 
 #include <string.h>
@@ -41,6 +36,13 @@
 #include "wfglobal.h"
 #include "../../../inc/wdapi.h"
 #include "../../../inc/clib.h"
+
+#ifdef TWI_INTERFACE_ENABLED
+
+#include "apdata1.h"    // TWI common data, ref only
+
+#endif  //TWI_INTERFACE_ENABLED
+
 
 /*=============================================================================
 ==  Local Functions
@@ -53,6 +55,7 @@ void  w_TWCmdSSBRestoreBitmap4BPP( HWND, HDC );
 void  w_TWCmdSSBRestoreBitmap8BPP( HWND, HDC );
 void  w_TWCmdSSBRestoreBitmap24BPP( HWND, HDC );
 
+extern HDC  vhdc;
 
 /*=============================================================================
 ==  Local Functions
@@ -134,7 +137,7 @@ extern int viBitsPerPixel;
  *
 \****************************************************************************/
 
-void 
+void
 TWCmdSSBSaveBitmap( HWND hWnd, HDC device )
 {
     if ( vColor == Color_Cap_256 ) {
@@ -151,7 +154,7 @@ TWCmdSSBSaveBitmap( HWND hWnd, HDC device )
 }
 
 
-void 
+void
 w_TWCmdSSBSaveBitmap4BPP( HWND hWnd, HDC device )
 {
    HBITMAP hbmcompat, hbmold;
@@ -255,7 +258,14 @@ w_TWCmdSSBSaveBitmap4BPP( HWND hWnd, HDC device )
    //do some common processing
 
    if (compatDC == NULL) {
-      compatDC = CreateCompatibleDC(device);
+#ifdef TWI_INTERFACE_ENABLED
+      compatDC = CreateCompatibleDC( DesktopDC );
+
+#else //TWI_INTERFACE_ENABLED
+
+        compatDC = CreateCompatibleDC(device);
+#endif  //TWI_INTERFACE_ENABLED
+
    }
 
    //biggest compatible bitmap that might need is scanlines_in_blockn + 1
@@ -412,6 +422,7 @@ w_TWCmdSSBSaveBitmap4BPP( HWND hWnd, HDC device )
                            (int) (ssb_header.ULH_x & 0xfff8),     //source x
                            (int) current_y,                       //source y
                            SRCCOPY);
+
          ASSERT(jretcode, 0);
 
          //process whole scanlines directly into the cache in DIB format
@@ -954,7 +965,7 @@ w_TWCmdSSBRestoreBitmap4BPP( HWND hWnd, HDC device )
 
          //ASSERT(retcode != GDI_ERROR,0);
 #elif setdibits_ssb
-         SetDIBitsToDevice(device, 
+         SetDIBitsToDevice(device,
                            (int) rULH_x, (int) current_y,
                            ssb_header.pixel_width,
                            scanlines_current_view,
@@ -965,6 +976,14 @@ w_TWCmdSSBRestoreBitmap4BPP( HWND hWnd, HDC device )
                            lpcache,
                            lpbitmapinfo,
                            DIB_RGB_COLORS);
+#ifdef TWI_INTERFACE_ENABLED
+
+     MyBitBlt( (int)rULH_x, (int)current_y,
+                           ssb_header.pixel_width,
+                           scanlines_current_view );
+
+#endif  //TWI_INTERFACE_ENABLED
+
 #else
         /*
          *  wkp: 7/25/97
@@ -992,6 +1011,14 @@ w_TWCmdSSBRestoreBitmap4BPP( HWND hWnd, HDC device )
                   (int) ssb_header.ULH_x & 0x0007, //xSrcULH - pixel offset
                   (int) 0,                         //ySrcULH
                   SRCCOPY);
+
+#ifdef TWI_INTERFACE_ENABLED
+
+     MyBitBlt( (int)rULH_x, (int)current_y,
+                           ssb_header.pixel_width,
+                           scanlines_current_view );
+
+#endif  //TWI_INTERFACE_ENABLED
 
          ASSERT(jretcode,0);
 
@@ -1071,6 +1098,14 @@ w_TWCmdSSBRestoreBitmap4BPP( HWND hWnd, HDC device )
                            lpbitmapinfo,
                            DIB_RGB_COLORS);
 
+#ifdef TWI_INTERFACE_ENABLED
+
+     MyBitBlt( (int)rULH_x, (int)current_y,
+                           ssb_header.pixel_width,
+                           wholescanlines_current_view );
+
+#endif  //TWI_INTERFACE_ENABLED
+
 #else
         /*
          *  wkp: 7/25/97
@@ -1099,6 +1134,13 @@ w_TWCmdSSBRestoreBitmap4BPP( HWND hWnd, HDC device )
                   (int) 0,                      //ySrcULH
                   SRCCOPY);
 
+#ifdef TWI_INTERFACE_ENABLED
+
+     MyBitBlt( (int)rULH_x, (int)current_y,
+                           ssb_header.pixel_width,
+                           wholescanlines_current_view );
+
+#endif  //TWI_INTERFACE_ENABLED
          ASSERT(jretcode,0);
 
          SelectObject(compatDC,hbmold);
@@ -1178,6 +1220,13 @@ w_TWCmdSSBRestoreBitmap4BPP( HWND hWnd, HDC device )
                                  lpstatic_buffer,
                                  lpbitmapinfo,
                                  DIB_RGB_COLORS);
+#ifdef TWI_INTERFACE_ENABLED
+
+     MyBitBlt( (int)rULH_x, (int)current_y,
+                           ssb_header.pixel_width, 1 );
+
+#endif  //TWI_INTERFACE_ENABLED
+
 #else
                /*
                 *  wkp: 7/25/97
@@ -1193,9 +1242,9 @@ w_TWCmdSSBRestoreBitmap4BPP( HWND hWnd, HDC device )
                            lpstatic_buffer,
                            lpbitmapinfo,
                            DIB_RGB_COLORS);
- 
+
                hbmold = SelectObject(compatDC,hbmcurrent);
- 
+
                jretcode = BitBlt(
                         device,
                         (int) rULH_x, (int) current_y,
@@ -1205,13 +1254,19 @@ w_TWCmdSSBRestoreBitmap4BPP( HWND hWnd, HDC device )
                         (int) ssb_header.ULH_x & 0x0007, //xSrcULH - pixel offset
                         (int) 0,                      //ySrcULH
                         SRCCOPY);
- 
+
+#ifdef TWI_INTERFACE_ENABLED
+
+     MyBitBlt( (int)rULH_x, (int)current_y,
+                           ssb_header.pixel_width, 1 );
+
+#endif  //TWI_INTERFACE_ENABLED
                ASSERT(jretcode,0);
- 
+
                SelectObject(compatDC,hbmold);
- 
+
                jretcode = DeleteObject(hbmcurrent);
- 
+
                ASSERT(jretcode,0);
 #endif
 

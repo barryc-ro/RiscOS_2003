@@ -13,6 +13,9 @@
 *
 *   $Log$
 *  
+*     Rev 1.2   22 Sep 1997 19:52:14   yis
+*  Update for DBCS
+*  
 *     Rev 1.1   15 Apr 1997 16:53:26   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -108,3 +111,39 @@ int  fnWaitReceive( PSD );
 int  fnWaitSilence( PSD );
 int  fnWaitString( PSD );
 int  fnWaitTime( PSD );
+
+
+
+#ifdef DOS
+#undef AnsiUpper
+#ifdef DBCS
+#define IsDBCSLeadByte(ch)  (((ch & 0xe0) == 0x80) || ((ch & 0xe0) == 0xe0))
+#define AnsiUpper(p)                                \
+    {                                               \
+        USHORT i;                                   \
+        BYTE   c;                                   \
+        for ( i=0; i<strlen(p); i++ ) {             \
+			if IsDBCSLeadByte(*(p+i)) {             \
+			    i++;                                \
+		    } else {                                \
+	            c = *(p+i);                         \
+                if ( (c >= 'a') && (c <= 'z') ) {   \
+                    *(p+i) = 'A' + (c - 'a');       \
+                }             					    \
+	        }                                       \
+        }                                           \
+    }
+#else
+#define AnsiUpper(p)                                \
+    {                                               \
+        USHORT i;                                   \
+        BYTE   c;                                   \
+        for ( i=0; i<strlen(p); i++ ) {             \
+            c = *(p+i);                             \
+            if ( (c >= 'a') && (c <= 'z') ) {       \
+                *(p+i) = 'A' + (c - 'a');           \
+            }                                       \
+        }                                           \
+    }
+#endif
+#endif

@@ -9,12 +9,10 @@
 *
 *  Author: Brad Pedersen  (11/3/94)
 *
-*  nrapi.c,v
-*  Revision 1.1  1998/01/12 11:35:21  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.18   03 Nov 1997 09:28:12   brada
+*  Added firewall load balance support
 *  
 *     Rev 1.17   15 Apr 1997 16:19:36   TOMA
 *  autoput for remove source 4/12/97
@@ -280,6 +278,7 @@ NrOpen( PNR pNr, PNROPEN pNrOpen )
      *  Initialize NR data structure
      */
     memset( pNr, 0, sizeof(NR) );
+    pNr->fUseAlternateAddress = pNrOpen->fUseAlternateAddress;
 
     pNr->pDeviceProcedures = pNrOpen->pDeviceProcedures;
 
@@ -449,7 +448,7 @@ NrErrorLookup( PNR pNr, PPDLASTERROR pErrorLookup )
                    sizeof(pErrorLookup->Message) );
           
     }
-    
+
     return( CLIENT_STATUS_SUCCESS );
 }
 

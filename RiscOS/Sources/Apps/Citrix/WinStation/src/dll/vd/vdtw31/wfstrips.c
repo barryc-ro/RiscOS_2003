@@ -11,15 +11,31 @@
 *
 *   $Log$
 *  
+*     Rev 1.6   Jan 27 1998 20:35:30   briang
+*  No change.
+*  
+*     Rev 1.5   Jan 26 1998 23:50:34   briang
+*  Add more guards to TWI_Stuff since it broke Win16
+*  
+*     Rev 1.4   Jan 15 1998 23:36:18   briang
+*  fix undefined var error in compile
+*  
+*     Rev 1.3   Jan 14 1998 17:03:22   briang
+*  TWI Integration
+*
+*
+*     Rev 1.3    08 Oct 1997 16:00:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.2   15 Apr 1997 18:17:10   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.2   21 Mar 1997 16:09:40   bradp
 *  update
-*  
+*
 *     Rev 1.1   03 Jan 1996 13:34:40   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 
 #define CITRIX
@@ -37,7 +53,18 @@
 #include "twstroke.h"
 //#include "hw.h"
 
-#define ULONG_MAX	  0xffffffff	/* maximum unsigned long value */
+#include "twi_en.h"
+
+
+#ifdef TWI_INTERFACE_ENABLED
+
+#include "apdata1.h"    // TWI common data, ref only
+
+#endif  //TWI_INTERFACE_ENABLED
+
+static INT tmpx1, tmpy1;
+
+#define ULONG_MAX         0xffffffff    /* maximum unsigned long value */
 
 #else
 
@@ -168,19 +195,24 @@ LINESTATE*  pLineState)
     {
 #ifdef CITRIX
 #ifdef DEBUG
-        if ( yInc == 1 ) 
+        if ( yInc == 1 )
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidHorizontal: MoveToEx(%u,%u)", x, y ));
         else
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidHorizontal: MoveToEx(%u,%u), FLIP_V", x, y ));
 #endif
         MoveToEx( hDC, (INT) x, (INT) y, NULL );
 #ifdef DEBUG
-        if ( yInc == 1 ) 
+        if ( yInc == 1 )
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidHorizontal: LineTo(%u,%u)", (x + *pStrips), y ));
         else
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidHorizontal: LineTo(%u,%u) FLIP_V", (x + *pStrips), y ));
 #endif
         LineTo( hDC, (INT) (x + *pStrips), (INT) y );
+
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)x, (INT)y, (INT)(x+*pStrips), (INT)y );
+#endif  //TWI_INTERFACE_ENABLED
+
 #else
         IO_FIFO_WAIT(ppdev, 4);
 
@@ -317,6 +349,11 @@ LINESTATE*  pLineState)
             MoveToEx( hDC, (INT) x, (INT) y, NULL );
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidVertical: LineTo(%u,%u)", x, (y + *pStrips) ));
             LineTo( hDC, (INT) x, (INT) (y + *pStrips) );
+
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)x, (INT)y, (INT)x, (INT)(y+*pStrips) );
+#endif  //TWI_INTERFACE_ENABLED
+
             y += *pStrips++;
             x++;
         }
@@ -348,6 +385,11 @@ LINESTATE*  pLineState)
             MoveToEx( hDC, (INT) x, (INT) y, NULL );
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidVertical: LineTo(%u,%u), FLIP_V", x, (y - *pStrips) ));
             LineTo( hDC, (INT) x, (INT) (y - *pStrips) );
+
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)x, (INT)y, (INT)x, (INT)(y-*pStrips) );
+#endif  //TWI_INTERFACE_ENABLED
+
             y -= *pStrips++;
             x++;
         }
@@ -500,6 +542,11 @@ LINESTATE*  pLineState)
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidDiagonalHorizontal: LineTo(%u,%u)", (x + *pStrips), (y + *pStrips) ));
             LineTo( hDC, (INT) (x + *pStrips), (INT) (y + *pStrips) );
 
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)x, (INT)y, (INT)(x+*pStrips), (INT)(y+*pStrips) );
+#endif  //TWI_INTERFACE_ENABLED
+
+
             y += *pStrips - 1;
             x += *pStrips++;
         }
@@ -531,6 +578,11 @@ LINESTATE*  pLineState)
             MoveToEx( hDC, (INT) x, (INT) y, NULL );
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidDiagonalHorizontal: LineTo(%u,%u), FLIP_V", (x + *pStrips), (y + *pStrips) ));
             LineTo( hDC, (INT) (x + *pStrips), (INT) (y - *pStrips) );
+
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)x, (INT)y, (INT)(x+*pStrips), (INT)(y-*pStrips) );
+#endif  //TWI_INTERFACE_ENABLED
+
 
             y -= *pStrips - 1;
             x += *pStrips++;
@@ -681,6 +733,11 @@ LINESTATE*  pLineState)
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidDiagonalVertical: LineTo(%u,%u)", (x + *pStrips), (y + *pStrips) ));
             LineTo( hDC, (INT) (x + *pStrips), (INT) (y + *pStrips) );
 
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)x, (INT)y, (INT)(x+*pStrips), (INT)(y+*pStrips) );
+#endif  //TWI_INTERFACE_ENABLED
+
+
             y += *pStrips;
             x += *pStrips++ - 1;
         }
@@ -713,6 +770,11 @@ LINESTATE*  pLineState)
             MoveToEx( hDC, (INT) x, (INT) y, NULL );
             TRACE(( TC_TW, TT_TW_STROKE, "vrlSolidDiagonalVertical: LineTo(%u,%u), V_FLIP", (x + *pStrips), (y - *pStrips) ));
             LineTo( hDC, (INT) (x + *pStrips), (INT) (y - *pStrips) );
+
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)x, (INT)y, (INT)(x+*pStrips), (INT)(y-*pStrips) );
+#endif  //TWI_INTERFACE_ENABLED
+
 
             y -= *pStrips;
             x += *pStrips++ - 1;
@@ -955,9 +1017,18 @@ PrepareToOutputADash:
         Y = y;
         MoveToEx( hDC, (INT) X, (INT) Y, NULL );
         TRACE(( TC_TW, TT_TW_STROKE, "vStripStyledHorizontal: MoveToEx(%u,%u)", X, Y ));
+
+#ifdef TWI_INTERFACE_ENABLED
+        tmpx1 = X;
+#endif  //TWI_INTERFACE_ENABLED
         X = x;
         LineTo( hDC, (INT) X, (INT) Y );
         TRACE(( TC_TW, TT_TW_STROKE, "vStripStyledHorizontal: LineTo(%u,%u)", X, Y ));
+
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)tmpx1, (INT)Y, (INT)x, (INT)Y );
+#endif  //TWI_INTERFACE_ENABLED
+
 #else
         // Short stroke vectors can handle lines that are a maximum of
         // 15 pels long.  When we have to draw a longer consecutive
@@ -1210,9 +1281,18 @@ PrepareToOutputADash:
         X = x;
         MoveToEx( hDC, (INT) X, (INT) Y, NULL );
         TRACE(( TC_TW, TT_TW_STROKE, "vStripStyledVertical: MoveToEx(%u,%u)", X, Y ));
+
+#ifdef TWI_INTERFACE_ENABLED
+        tmpy1 = Y;
+#endif  //TWI_INTERFACE_ENABLED
         Y = y;
         LineTo( hDC, (INT) X, (INT) Y );
         TRACE(( TC_TW, TT_TW_STROKE, "vStripStyledVertical: LineTo(%u,%u)", X, Y ));
+
+#ifdef TWI_INTERFACE_ENABLED
+   MyLine( (INT)X, (INT)tmpy1, (INT)X, (INT)y );
+#endif  //TWI_INTERFACE_ENABLED
+
 #else
         // Short stroke vectors can handle lines that are a maximum of
         // 15 pels long.  When we have to draw a longer consecutive

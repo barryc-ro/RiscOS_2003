@@ -11,6 +11,9 @@
 *
 *  $Log$
 *  
+*     Rev 1.15   03 Nov 1997 09:16:26   brada
+*  Added firewall load balancing support
+*  
 *     Rev 1.14   15 Apr 1997 18:45:38   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -90,6 +93,7 @@ typedef struct _NEENUMERATE {
     LPBYTE  pTcpBrowserAddrList;
     LPBYTE  pIpxBrowserAddrList;
     LPBYTE  pNetBiosBrowserAddrList;
+    BULONG  fUseAlternateAddress:1;
 } NEENUMERATE, * PNEENUMERATE;
 
 #ifndef DOS

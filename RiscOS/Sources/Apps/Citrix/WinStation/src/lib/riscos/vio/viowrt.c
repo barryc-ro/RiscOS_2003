@@ -11,6 +11,9 @@
 *
 *  $Log$
 *  
+*     Rev 1.8   22 Sep 1997 20:39:02   yis
+*  update for DOS_V
+*  
 *     Rev 1.7   15 Apr 1997 18:52:12   TOMA
 *  autoput for remove source 4/12/97
 *  
@@ -83,12 +86,7 @@ int WFCAPI VioWrtCellStr (PCH pchCellStr, USHORT cb, USHORT usRow,
    /*
     * Get the phys address.
     */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
+   pLVB = TEXT_SCREEN_ADDRESS();
 
    /*
     * Add in row/colomn offset
@@ -106,7 +104,7 @@ int WFCAPI VioWrtCellStr (PCH pchCellStr, USHORT cb, USHORT usRow,
    
    // call hook routines
    for ( pVioHook=pVioRootHook; pVioHook != NULL; pVioHook=pVioHook->pNext ) {
-      for ( i=0; i<cb; i++ ) {
+      for ( i=0; i<cb/2; i++ ) {
          (pVioHook->pProcedure)( usRow, usColumn+i, *(pchCellStr+(i*2)), 1 );
       }
    }
@@ -142,12 +140,7 @@ int WFCAPI VioWrtCharStr (PCH pchStr, USHORT cb, USHORT usRow,
    /*
     * Get the phys address.
     */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
+   pLVB = TEXT_SCREEN_ADDRESS();
 
    /*
     * Add in row/colomn offset
@@ -199,12 +192,7 @@ int WFCAPI VioWrtNAttr (LPBYTE pAttr, USHORT cb, USHORT usRow,
    /*
     * Get the phys address.
     */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
+   pLVB = TEXT_SCREEN_ADDRESS();
 
    /*
     * Add in row/colomn offset
@@ -239,6 +227,7 @@ int WFCAPI VioWrtNCell (LPBYTE pCell, USHORT cb, USHORT usRow,
    PCH pLVB;
    PVIOHOOK pVioHook;
 
+
    /*
     * Check for out of bounds values.
     */
@@ -253,12 +242,7 @@ int WFCAPI VioWrtNCell (LPBYTE pCell, USHORT cb, USHORT usRow,
    /*
     * Get the phys address.
     */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
+   pLVB = TEXT_SCREEN_ADDRESS();
 
    /*
     * Add in row/colomn offset
@@ -278,7 +262,7 @@ int WFCAPI VioWrtNCell (LPBYTE pCell, USHORT cb, USHORT usRow,
    
    // call hook routines
    for ( pVioHook=pVioRootHook; pVioHook != NULL; pVioHook=pVioHook->pNext ) {
-      for ( i=0; i<cb; i++ ) {
+      for ( i=0; i<cb/2; i++ ) {
          (pVioHook->pProcedure)( usRow, usColumn+i, pCell, 1 );
       }
    }
@@ -314,12 +298,7 @@ int WFCAPI VioWrtNChar (PCH pchChar, USHORT cb, USHORT usRow,
    /*
     * Get the phys address.
     */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
+   pLVB = TEXT_SCREEN_ADDRESS();
 
    /*
     * Add in row/colomn offset
@@ -339,7 +318,7 @@ int WFCAPI VioWrtNChar (PCH pchChar, USHORT cb, USHORT usRow,
    
    // call hook routines
    for ( pVioHook=pVioRootHook; pVioHook != NULL; pVioHook=pVioHook->pNext ) {
-      for ( i=0; i<cb; i++ ) {
+      for ( i=0; i<cb/2; i++ ) {
          (pVioHook->pProcedure)( usRow, usColumn+i, pchChar, 1 );
       }
    }
@@ -376,12 +355,7 @@ int WFCAPI VioWrtCharStrAtt (PCH pch, USHORT cb, USHORT usRow,
    /*
     * Get the phys address.
     */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
+   pLVB = TEXT_SCREEN_ADDRESS();
 
    /*
     * Add in row/colomn offset

@@ -11,36 +11,34 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
-*   Revision 1.1  1998/01/19 19:12:49  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-* 
 *  
+*     Rev 1.10   Jan 14 1998 17:01:12   briang
+*  TWI Integration
+*
+*     Rev 1.10   08 Oct 1997 13:55:00   AnatoliyP
+*  TWI integration started
+*
 *     Rev 1.9   04 Aug 1997 19:14:12   kurtp
 *  update
-*  
+*
 *     Rev 1.7   25 Jul 1997 14:16:52   kurtp
 *  Add Complex clip case to LVB
-*  
+*
 *     Rev 1.6   14 Jul 1997 18:21:20   kurtp
 *  Add LVB to transparent text ops
-*  
+*
 *     Rev 1.5   15 Apr 1997 18:16:20   TOMA
 *  autoput for remove source 4/12/97
-*  
+*
 *     Rev 1.5   21 Mar 1997 16:09:30   bradp
 *  update
-*  
+*
 *     Rev 1.4   08 May 1996 14:50:40   jeffm
 *  update
-*  
+*
 *     Rev 1.3   03 Jan 1996 13:33:16   kurtp
 *  update
-*  
+*
 *******************************************************************************/
 
 #include "windows.h"
@@ -405,12 +403,10 @@ static BOOL far NewNTCommand(CHAR Cmd)
        // ResumeNTCommand will then jump to the GetNextTWCmdBytes routine
        // when more thinwire packet command data is available.
        //====================================================================
-
-	TWSetJmpNewStack( vjmpSuspend, 
+       TWSetJmpNewStack( vjmpSuspend, 
 			  cmd <= TWCMD_LAST ? pfnCallTable[cmd-1] : pfnNTCallTable[cmd-TWCMD_NT]);
-
-	fComplete = FALSE;
-	TRACE(( TC_TW, TT_TW_PACKET, "NewNTCommand: returning from NewStack" ));
+       fComplete = FALSE;
+       TRACE(( TC_TW, TT_TW_PACKET, "NewNTCommand: returning from NewStack" ));
     }
     TRACE(( TC_TW, TT_TW_PACKET, "NewNTCommand: returning(%d)", fComplete ));
 

@@ -10,20 +10,12 @@
 *  Author:  JohnR 05/06/94
 *
 * $Log$
-* Revision 1.1  1998/03/10 16:20:43  smiddle
-* Redid the !Run files to allow command line options to be configured externally.
-* Added cpm and spl virtual drivers - two versions of the printer spooling mechanism.
-* Not properly tested but client still works if ClientPrinter is enabled. Doesn't work if
-* ClientPrinter1.5 is enabled though.
-* Made Module list in session.c dependant on #defines set in the Makefile.
-* Split off exported defines into winframe.h which is exported to WinFrameRO and thence to
-* the Export directory.
-* Added a Message control interface to main.c. Not complete or tested.
-* Added a loop forever option (CLI) for Xemplar.
-* Added support for an ica: pseudo-URL scheme. ANT protocol only at the moment.
-*
-* Version 0.14. Tagged as 'WinStation-0_14'
-*
+*  
+*     Rev 1.10   Oct 31 1997 19:41:02   briang
+*  Remove pIniSection parameter from miGets
+*  
+*     Rev 1.9   Oct 09 1997 18:22:44   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.8   15 Apr 1997 18:04:30   TOMA
 *  autoput for remove source 4/12/97
@@ -86,7 +78,7 @@
 #include "cpmserv.h"
 #include "cpmtrans.h"
 
-#include "../../../../inc/biniapi.h"
+#include "../../../../inc/miapi.h"
 
 #define NO_VDDRIVER_DEFINES
 #include "../../../../inc/vddriver.h"
@@ -216,8 +208,8 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     /*
      * Get our settings from the profile file
      */
-    MaxWindowSize = bGetPrivateProfileInt(
-                       pVdOpen->pIniSection,
+    MaxWindowSize = miGetPrivateProfileInt(
+                       INI_CPM15SECTION, 
                        INI_CPMWINDOWSIZE,
                        DEF_CPMWINDOWSIZE
 		       );
@@ -227,12 +219,12 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     //
     // Under windows the user can set a queue name to print to
     //
-    bGetPrivateProfileString(
-        pVdOpen->pIniSection,
-        INI_CPMQUEUE,
-        DEF_CPMQUEUE,
-        gcDefaultQueueName,
-        sizeof(gcDefaultQueueName)
+    miGetPrivateProfileString(
+         INI_CPM15SECTION,
+         INI_CPMQUEUE,
+         DEF_CPMQUEUE,
+         gcDefaultQueueName,
+         sizeof(gcDefaultQueueName)
         );
 #endif
 

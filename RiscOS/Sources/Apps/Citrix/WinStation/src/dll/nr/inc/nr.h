@@ -9,12 +9,10 @@
 *
 *  Author: Brad Pedersen  (11/3/94)
 *
-*  nr.h,v
-*  Revision 1.1  1998/01/12 11:35:26  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.4   03 Nov 1997 09:25:24   brada
+*  Added firewall load balance support
 *  
 *     Rev 1.3   15 Apr 1997 16:19:38   TOMA
 *  autoput for remove source 4/12/97
@@ -53,6 +51,8 @@ typedef struct _NR {
 //   USHORT NotUsed;
     PCHAR pProtocolName;
     PPLIBPROCEDURE pDeviceProcedures;
+    BULONG fUseAlternateAddress: 1;
+
 } NR;
 
 /*

@@ -9,12 +9,10 @@
 *
 *  Author: Brad Pedersen  (11/3/94)
 *
-*  nrapi.h,v
-*  Revision 1.1  1998/01/12 11:36:54  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.12   03 Nov 1997 09:13:48   brada
+*  Added firwall load balancing support
 *  
 *     Rev 1.11   15 Apr 1997 18:45:44   TOMA
 *  autoput for remove source 4/12/97
@@ -71,6 +69,7 @@ typedef struct _NROPEN {
     LPBYTE pTcpBrowserAddrList;
     LPBYTE pIpxBrowserAddrList;
     LPBYTE pNetBiosBrowserAddrList;
+    BULONG  fUseAlternateAddress:1;
 
     PPLIBPROCEDURE pDeviceProcedures;
 } NROPEN, * PNROPEN;

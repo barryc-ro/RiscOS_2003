@@ -9,12 +9,14 @@
 *
 *  Author: Brad Pedersen  (3/25/94)
 *
-*  pdapi.h,v
-*  Revision 1.1  1998/01/12 11:36:55  smiddle
-*  Newly added.#
-*
-*  Version 0.01. Not tagged
-*
+*  $Log$
+*  
+*     Rev 1.34   Jan 06 1998 14:01:28   bills
+*  Added a new pd info class, PdTapiHandle.  This is used by pdtapi to tell
+*  tdcomm32 the hande to read/write on.
+*  
+*     Rev 1.33   Oct 09 1997 18:49:18   briang
+*  Conversion to MemIni use
 *  
 *     Rev 1.32   15 Apr 1997 18:45:48   TOMA
 *  autoput for remove source 4/12/97
@@ -59,7 +61,7 @@ typedef struct _PDOPEN {
     PPLIBPROCEDURE   pModuleProcedures;
     PPLIBPROCEDURE   pClibProcedures;
     PPLIBPROCEDURE   pLogProcedures;
-    PPLIBPROCEDURE   pBIniProcedures;
+    PPLIBPROCEDURE   pMemIniProcedures;
     LPVOID           pIniSection;
     LPBYTE           pExePath;
     USHORT OutBufHeader;        // out: number of header bytes to reserve
@@ -105,7 +107,8 @@ typedef enum _PDINFOCLASS {
     PdOutBufReserve,
     PdEnableModule,
     PdTimeoutStatus,
-    PdIOStatus
+    PdIOStatus,
+	PdTapiHandle
 } PDINFOCLASS;
 
 /*

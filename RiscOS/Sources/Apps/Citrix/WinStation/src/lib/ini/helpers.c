@@ -1,4 +1,20 @@
 
+#include "windows.h"
+#include "fileio.h"
+
+/*  Get the standard C includes */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+/*  Get CLIB includes */
+#include "../../inc/client.h"
+#include "../../inc/logapi.h"
+#include "../../inc/clib.h"
+#include "../../inc/iniapi.h"
+
+#include "helpers.h"
+
 /*************************************************************************
 *
 *   HELPERS.C
@@ -30,7 +46,7 @@
  *
  ******************************************************************************/
 
-static int
+int
 _w_gpps( PCHAR pBuffer, PCHAR pEntry, int cbKey,
          PCHAR pReturn, int cbReturn, int entry )
 {
@@ -146,7 +162,7 @@ _w_gpps( PCHAR pBuffer, PCHAR pEntry, int cbKey,
 *
 ****************************************************************************/
 
-static ULONG
+ULONG
 _htol( PCHAR s )
 {
     CHAR c;
@@ -179,4 +195,56 @@ _htol( PCHAR s )
     return(val);
 }
 
+
+/*****************************************************************************
+*
+*   _htoi:
+*
+*   ENTRY:
+*      s     -  string to convert to UINT
+*
+*   EXIT:
+*      Normal:
+*         USHORT value
+*
+*      Error:
+*         NONE
+*
+*   ALGORITHM:
+*
+*
+****************************************************************************/
+
+UINT
+_htoi( PCHAR s )
+{
+    CHAR c;
+    PCHAR p;
+    UINT val = 0;
+
+    // look for '0x' prefix
+    if( (p = strstr( s, "0x" )) != NULL || (p = strstr( s, "0X" )) != NULL ) {
+        s = (p + 2);     // remove '0x' prefix
+    }
+
+    // look for 'h' suffix
+    else if ( (p = strchr( s, 'h' )) != NULL || (p = strchr ( s, 'H' )) != NULL ) {
+        *p = 0;     // remove 'h' suffix
+    }
+
+    // just plain decimal number
+    else {
+        return( atoi( s ) );
+    }
+
+    // do the hex conversion
+    while(((c = (CHAR)toupper(*s++)) >= '0' && c <= '9') ||
+           (c >='A' && c <= 'F')) {
+        val = (val << 4)
+            + ((c >= '0' && c <= '9') ? (UINT)(c - '0') :
+                                        (UINT)(10 + (c - 'A')));
+    }
+
+    return(val);
+}
 

@@ -10,20 +10,9 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
-*   Revision 1.2  1998/01/27 18:39:19  smiddle
-*   Lots more work on Thinwire, resulting in being able to (just) see the
-*   log on screen on the test server.
-*
-*   Version 0.03. Tagged as 'WinStation-0_03'
-*
-*   Revision 1.1  1998/01/19 19:13:00  smiddle
-*   Added loads of new files (the thinwire, modem, script and ne drivers).
-*   Discovered I was working around the non-ansi bitfield packing in totally
-*   the wrong way. When fixed suddenly the screen starts doing things. Time to
-*   check in.
-*
-*   Version 0.02. Tagged as 'WinStation-0_02'
-*
+*  
+*     Rev 1.4   13 Oct 1997 19:46:58   brada
+*  Fixup malformed if then TRACE statements
 *  
 *     Rev 1.3   15 Apr 1997 18:16:52   TOMA
 *  autoput for remove source 4/12/97
@@ -473,8 +462,10 @@ LPBYTE lpTWCacheWrite(UINT object_handle, CHUNK_TYPE chunk_type,
             TRACE((TC_TW,TT_TW_CACHE,
                  "TW: current_write_type is nochain2K so error or begin_chain\n"));
          }
-         else TRACE((TC_TW,TT_TW_CACHE,
+         else {
+             TRACE((TC_TW,TT_TW_CACHE,
                   "TW: current_write_type is middle_chain\n"));
+         }
 #endif
 
          TRACE((TC_TW,TT_TW_CACHE,"TW: current_write_object_handle=%u\n",
@@ -657,8 +648,11 @@ LPBYTE lpTWCacheRead(UINT object_handle, CHUNK_TYPE chunk_type,
       TRACE((TC_TW,TT_TW_CACHE,"monoptr\n"));
       ASSERT(object_handle < 8, 0);
 
-      if (*lpcontrol_area != (BYTE) (CACHE_TYPE) random)
+#ifdef DEBUG
+      if (*lpcontrol_area != (BYTE) (CACHE_TYPE) random) {
          TRACE((TC_TW,TT_TW_CACHE,"TW: inconsistancy of read chunk_type with cache state\n"));
+      }
+#endif
 
       //address calculated the same for WIN16 and WIN32
       return(large_cache_segments[0].lpsegment + (object_handle << 8));

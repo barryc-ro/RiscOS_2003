@@ -1,4 +1,3 @@
-
 /***************************************************************************
 *
 *  DLL.H
@@ -10,6 +9,9 @@
 *  Author: Butch Davis (5/22/95) - from client.h
 *
 *  $Log$
+*  
+*     Rev 1.4   26 Sep 1997 19:08:30   davidp
+*  moved DllFlags into main DLLLink struct
 *  
 *     Rev 1.3   15 Apr 1997 18:45:04   TOMA
 *  autoput for remove source 4/12/97
@@ -51,19 +53,13 @@ typedef struct _DLLLINK {
 #if 0 // ndef DOS
     HINSTANCE hinst;
 #endif
+    ULONG DllFlags;                 // DLL flags (embed..)
     // everything after here is not included for the ModuleEnum call.
     // be sure to readjust the ENUM_DLLLINK_SIZE if you add new fields
     // below here
-    ULONG DllFlags;                 // DLL flags (embed..)
 } DLLLINK, * PDLLLINK;
 
-//
-// we can only copy some of the information for ModuleEnum
-// since we want to stay compatible with different WDs.
-// this keeps us compatible with old calls to ModuleEnum
-// from WDICA???.DLL
-//
-#define ENUM_DLLLINK_SIZE (sizeof(DLLLINK)-sizeof(ULONG))  
+#define ENUM_DLLLINK_SIZE (sizeof(DLLLINK))  
 
 // Dll flags definition (32 of them possible)
 #define DLL_FLAGS_EMBED    1
