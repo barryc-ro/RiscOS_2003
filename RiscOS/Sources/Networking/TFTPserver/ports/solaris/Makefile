@@ -26,6 +26,8 @@ RM      = -rm
 WIPE    = -rm
 CD	= cd
 TOUCH   = touch
+LEX	= flex
+YACC	= bison
 
 COMPONENT = mtftpd
 
@@ -37,6 +39,7 @@ DEFINES = ${COMPAT} ${OPTIONS} -DARCHTYPES="\"${ARCH}.h\""
 
 CFLAGS  = -c -g ${DEFINES} ${INCLUDES} ${DEPENDS}
 WFLAGS  = -rf
+LEXFLAGS= -i
 
 #
 # Libraries
@@ -44,6 +47,7 @@ WFLAGS  = -rf
 CLIB      =
 INETLIBS  = -lsocket -lnsl
 
+SUPPORT   = inet_net_pton.o inet_net_ntop.o
 #
 # Include files
 #
@@ -55,7 +59,9 @@ INCLUDES =
 TARGET    = exe.${COMPONENT}
 
 OBJS      = tftpserver.o main.o Strcmp_ci.o Strdup.o momanager.o \
-mofile.o moobject.o configure.o i18n.o icmpsocket.o ${ARCH}.o
+mofile.o moobject.o configure.o i18n.o icmpsocket.o parser.o lexer.o \
+${ARCH}.o ${SUPPORT}
+
 
 #
 # Rule patterns
@@ -73,12 +79,21 @@ all: ${TARGET}
 clean:
 	${WIPE} ${WFLAGS} *.o
 	${RM} ${TARGET}
+	${RM} parser.c
+	${RM} lexer.c
+	${RM} parser.h
 	@echo ${COMPONENT}: cleaned
 
 #
 # Target 
 #
 ${TARGET}: ${OBJS} ${INETLIBS} ${CLIB}
-	${LD} -o $@ ${LDFLAGS} ${OBJS} ${INETLIBS} ${CLIB}
+	${LD} -o $@ ${LDFLAGS} ${OBJS} ${INETLIBS} -lresolv ${CLIB}
+
+parser.c parser.h: parser.y
+	${YACC} ${YACCFLAGS} --name-prefix=parser -d --output=parser.c parser.y
+
+lexer.c: lexer.l
+	${LEX} ${LEXFLAGS} -t >$@ lexer.l
 
 # Dynamic dependencies:
