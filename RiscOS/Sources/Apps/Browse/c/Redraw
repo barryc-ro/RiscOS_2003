@@ -64,7 +64,9 @@ static void redraw_button       (browser_data * b, HStream * t, BBox * box, int 
 static void redraw_switch       (browser_data * b, HStream * t, int x, int y, char * spr, WimpRedrawWindowBlock * r);
 static void redraw_bullet       (int x, int y, int bullet, WimpRedrawWindowBlock * r);
 
-/* Used for printing */
+/* Used for printing. Needed because redraw_token_colour takes no "noback" flag. */
+/* Could add it, but it'd hit efficiency to add a parameter to such a commonly   */
+/* called function - a static is hacky but faster and means far fewer changes.   */
 
 static int use_noback = 0;
 
@@ -258,13 +260,17 @@ int redraw_token_colour(browser_data * b, HStream * t)
 
   if (ISLINK(t))
   {
-    /* If tokens are highlighted, return the appropriate colour */
-
-    if (b->highlight) return (b->use_source_cols ? b->followed_colour : choices.followed_colour);
-
     /* If tokens are selected, return the appropriate colour */
 
     if (redraw_selected(b, t)) return (b->use_source_cols ? b->selected_colour : choices.selected_colour);
+
+    /* If the token has attached specific colour information, return that */
+
+    if ((t->type & TYPE_COLOURED) && b->use_source_cols) return (t->colour << 8);
+
+    /* If tokens are highlighted, return the appropriate colour */
+
+    if (b->highlight) return (b->use_source_cols ? b->followed_colour : choices.followed_colour);
 
     /* If the token has been followed in the past, give the used colour */
     /* - otherwise give the unfollowed link colour.                     */
@@ -1604,175 +1610,29 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
               /* to the function. The printing routines use this to work   */
               /* out where to start the next redraw from.                  */
               /*                                                           */
-              /* However, for large lines - e.g. very big images, tables,  */
-              /* or lines taller than the whole page - we either should,   */
-              /* or in the latter case must, split that line. So, if the   */
-              /* line is taller than 1/PrintSplitFraction of the page      */
-              /* height, will indeed be split over the page boundary.      */
-              /*                                                           */
               /* If you add code here, remember that xscroll must be       */
               /* filled in eventually or the printing loop will exit,      */
               /* assuming there's no more page to draw.                    */
 
-              if (osyorg + d->ldata[l].y < page_bottom)
+              HStream * split_token;
+              int       split_y;
+              int       store;
+
+              split_token = print_find_splitting_point(d,
+                                                       osyorg,
+                                                       l,
+                                                       page_bottom,
+                                                       page_height,
+                                                       &split_y,
+                                                       &store);
+
+              if (split_token != NULL)
               {
-                if (d->ldata[l].h <= ((page_height * 100) / PrintSplitFraction)) /* (See Print.h) */
-                {
-                  HStream * t1 = d->cdata[d->ldata[l].chunks].t;
+                r->xscroll = split_y;
 
-                  r->xscroll = osyorg + d->ldata[l].y + d->ldata[l].h;
-
-                  /* Possibly store inferred section */
-
-                  if (
-                       choices.print_page_break_hx > 0 &&
-                       reformat_istext(t1)             &&
-                       redraw_header(t1->style) > 0    &&
-                       redraw_header(t1->style) <= choices.print_page_break_hx
-                     )
-                     redraw_read_section(b, t1);
-
-                  return NULL;
-                }
-
-                /* The effective 'else' case here has to be handled at the end */
-                /* of printing, or you've just scrolled the page a long way to */
-                /* right...                                                    */
-              }
-
-              /* The unusual one-off case where the line exactly fits on the page */
-
-              else if (
-                        osyorg + d->ldata[l].y == page_bottom &&
-                        l + 1 < d->nlines
-                      )
-              {
-                HStream * t1 = d->cdata[d->ldata[l + 1].chunks].t;
-
-                r->xscroll = osyorg + d->ldata[l + 1].y + d->ldata[l + 1].h;
-
-                /* Possibly store inferred section */
-
-                if (
-                     choices.print_page_break_hx > 0 &&
-                     reformat_istext(t1)             &&
-                     redraw_header(t1->style) > 0    &&
-                     redraw_header(t1->style) <= choices.print_page_break_hx
-                   )
-                   redraw_read_section(b, t1);
+                if (store == 1) redraw_read_section(b, split_token);
 
                 return NULL;
-              }
-
-              /* Trying to get clever now. Here we look one line ahead, and see if */
-              /* this line would fall off the page. If so, then should we allow it */
-              /* to get seperated from the current line, or should we put *both*   */
-              /* onto the next side? (Above caveat on fraction of page height of   */
-              /* the line we're looking ahead to applies).                         */
-
-              if (
-                   (l + 1 < d->nlines)                                               &&
-                   osyorg + d->ldata[l + 1].y < page_bottom                          &&
-                   (d->ldata[l + 1].h <= ((page_height * 100) / PrintSplitFraction))
-                 )
-              {
-                HStream * t1 = d->cdata[d->ldata[l].chunks].t;
-                HStream * t2 = d->cdata[d->ldata[l + 1].chunks].t;
-
-                /* If current line is a heading and next line isn't, or current line */
-                /* is a definition list term (heading) and the next line is data,    */
-                /* then don't split up the two lines.                                */
-
-                if (
-                     reformat_istext(t1) &&
-                     (
-                       (
-                         ((t1->style & H_MASK) != 0) &&
-                         (
-                           (t2->style & H_MASK) == 0 ||
-                           !reformat_istext(t2)
-                         )
-                       )
-                       ||
-                       (
-                         reformat_istext(t2)     &&
-                         ((t1->style & DT) != 0) &&
-                         ((t2->style & DD) != 0)
-                       )
-                     )
-                   )
-                {
-                  r->xscroll = osyorg + d->ldata[l].y + d->ldata[l].h;
-
-                  /* Possibly store inferred section */
-                  /* Possibly store inferred section */
-
-                  if (
-                       choices.print_page_break_hx > 0 &&
-                       reformat_istext(t1)             &&
-                       redraw_header(t1->style) > 0    &&
-                       redraw_header(t1->style) <= choices.print_page_break_hx
-                     )
-                     redraw_read_section(b, t1);
-
-                  return NULL;
-                }
-              }
-
-              /* There's also a case for look-behind. If this line is heading 1 or 2 */
-              /* and the previous wasn't, start a new page here.                     */
-
-              if (l > 0 && choices.print_page_break_hx != 0)
-              {
-                int       scan = l - 1;
-
-                HStream * t1   = d->cdata[d->ldata[scan].chunks].t;
-                HStream * t2   = d->cdata[d->ldata[l].chunks].t;
-
-                int       h1;
-                int       h2;
-
-                if (reformat_istext(t2))
-                {
-                  /* The previous line might not be useful (e.g. two H2s in a row */
-                  /* would have a dummy tag in between occuping a zero height     */
-                  /* line of its own). So we need to scan backwards to get a      */
-                  /* useful token.                                                */
-
-                  while (
-                          t1 != NULL &&
-                          (
-                            reformat_istext(t1) &&
-                            t1->text == NULL
-                          )
-                          && --scan >= 0
-                        )
-                        t1 = d->cdata[d->ldata[scan].chunks].t;
-
-                  h1 = reformat_istext(t1) ? redraw_header(t1->style) : 0;
-                  h2 = redraw_header(t2->style);
-
-                  if (
-                       osyorg + d->ldata[scan].y < wbox.ymax &&
-                       osyorg + d->ldata[scan].y + d->ldata[scan].h <= wbox.ymax
-                       &&
-                       (
-                         h1 > choices.print_page_break_hx ||
-                         h1 == 0
-                       )
-                       && h2 <= choices.print_page_break_hx
-                       && h2 > 0
-                     )
-                  {
-                    r->xscroll = osyorg + d->ldata[l].y + d->ldata[l].h;
-
-                    /* Store inferred section */
-
-                    redraw_read_section(b, t2);
-
-                    return NULL;
-                  }
-                }
               }
             }
 
@@ -2072,6 +1932,13 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
                                                 r,
                                                 t_noback,
                                                 nocontent);
+
+                                  /* Restore print loop noback flag. Since noback is a parameter it stacks and */
+                                  /* unstacks as we call the redraw function recursively, but the static       */
+                                  /* use_noback doesn't. So we have to ensure it is kept in step with noback   */
+                                  /* after any recursive redraw calls.                                         */
+
+                                  use_noback = noback;
 
                                   /* Restore the WimpRedrawWindowBlock redraw rectangle */
 
