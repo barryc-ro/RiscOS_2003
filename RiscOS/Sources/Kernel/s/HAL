@@ -1,6 +1,8 @@
         GBLL    MajorL2PThack
-MajorL2PThack SETL {TRUE}
+MajorL2PThack SETL {FALSE}
 
+        GBLL    MinorL2PThack
+MinorL2PThack SETL :LNOT:MajorL2PThack
 
 ; Fixed page allocation is as follows
 
@@ -318,6 +320,13 @@ RISCOS_Start
 ; v2 -> next address to allocate in v1 (may point at end of v1)
 ; v3 -> L1PT (or 0 if MMU on - not yet)
 
+; Allocate the L2PT backing store for the logical L2PT space, to
+; prevent recursion.
+        LDR     a1, =L2PT
+        MOV     a2, #&400000
+        LDR     a3, =(AP_None * L2_APMult)
+        BL      AllocateL2PT
+
 ; Allocate workspace for the HAL
 
         ADD     a4, v3, #DRAMOffset_PageZero - DRAMOffset_L1PT
@@ -564,12 +573,19 @@ MMUon_nol1ptoverlap
 
         LDR     sp, =ScratchSpace + ScratchSpaceSize - 4*3 ; 3 items already on stack :)
 
+        LDR     a1, =ZeroPage
+
         ADD     lr, v3, #DRAMOffset_PageZero-DRAMOffset_L1PT   ; lr = PhysAddr of zero page
         SUB     v1, v1, lr
-        ADD     v1, v1, a1                              ; turn v1 from LogAddr to PhysAddr
+        ADD     v1, v1, a1                              ; turn v1 from PhysAddr to LogAddr
+
+        LDR     a2, [a1, #InitUsedBlock]                ; turn this from Phys to Log too
+        SUB     a2, a2, lr
+        ADD     a2, a2, a1
+        STR     a2, [a1, #InitUsedBlock]
+
 
 ; Store the logical address of the HAL descriptor
-        LDR     a1, =ZeroPage
         LDR     a2, [sp, #8]
         STR     a2, [a1, #HAL_Descriptor]
 
@@ -592,10 +608,20 @@ MMUon_nol1ptoverlap
 
         BL      SetUpHALEntryTable
 
-; Initialise the HAL
+; Initialise the HAL. Due to its memory claiming we need to get our v1 and v2 values
+; into workspace and out again around it.
+
+        MOV     a1, #ZeroPage
+        STR     v1, [a1, #InitUsedBlock]
+        STR     v2, [a1, #InitUsedEnd]
+
         LDR     a1, =RISCOS_Header
         AddressHAL
         CallHAL HAL_Init
+
+        MOV     a1, #ZeroPage
+        LDR     v1, [a1, #InitUsedBlock]
+        LDR     v2, [a1, #InitUsedEnd]
 
 ; Start timer zero, at 100 ticks per second
         MOV     a1, #0
@@ -665,6 +691,24 @@ MMUon_nol1ptoverlap
         LDR     a2, =(AP_None * L2_APMult) + L2_C + L2_B
         LDR     a3, =32*1024
         BL      Init_MapInRAM
+
+ [ MinorL2PThack
+; Allocate backing L2PT for the free pool
+        MOV     a1, #FreePoolAddress
+        LDR     a2, [v8, #RAMLIMIT]
+        LDR     a3, =(AP_None * L2_APMult) + L2_B
+        BL      AllocateL2PT
+; And for application space
+        MOV     a1, #0
+        LDR     a2, [v8, #RAMLIMIT]             ; Not quite right, but the whole thing's wrong anyway
+        LDR     a3, =(AP_Full * L2_APMult) + L2_C + L2_B
+        BL      AllocateL2PT
+; And for the system heap. Sigh
+        LDR     a1, =SysHeapAddress
+        LDR     a2, =SysHeapMaxSize
+        LDR     a3, =(AP_Full * L2_APMult) + L2_C + L2_B
+        BL      AllocateL2PT
+ ]
 
         LDR     a1, =ZeroPage
         STR     v2, [a1, #InitUsedEnd]
@@ -1068,21 +1112,29 @@ AllocateL2PT
         ORR     a3, a3, lr, LSL #10
         STR     a3, [v6, v8, LSL #2]            ; fill in the L1PT
 
-        TEQ     v3, #0                          ; MMU off?
-  [ EmulatorSupport
-        ARM_on_emulator a1,NE                   ; and not on the emulator?
-  ]
-        MOVNE   a1, v4                          ; if so, zero out the L2PT
-        MOVNE   a2, #0                          ; (if it's on then it will already
-        MOVNE   a3, #4*1024                     ; be clear from ClearPhysRAM, and
-        BLNE    memset                          ; it's not mapped in yet anyway)
+; Need to zero the L2PT. Must do it before calling in MapInPage, as that may well
+; want to put something in the thing we are clearing. If the MMU is off, no problem,
+; but if the MMU is on, then the L2PT isn't accessible until we've called MapInPage.
+; Solution is to use the AccessPhysicalAddress call.
+
+        TEQ     v3, #0                          ; MMU on?
+        MOVNE   a1, v4                          ; if not, just access v4
+        MOVEQ   a1, #L1_B                       ; if so, map in v4
+        MOVEQ   a2, v4
+        MOVEQ   a3, #0
+        BLEQ    RISCOS_AccessPhysicalAddress
+
+        MOV     a2, #0
+        MOV     a3, #4*1024
+        BL      memset
 
         MOV     a1, v4                          ; Map in the L2PT page itself
-        LDR     a2, =L2PT                       ; (will recurse...)
-        ADD     a2, a2, v8, LSL #10
+        LDR     a2, =L2PT                       ; (can't recurse, because L2PT
+        ADD     a2, a2, v8, LSL #10             ; backing for L2PT is preallocated)
         BIC     a2, a2, #&C00
         LDR     a3, =(AP_None * L2_APMult) + L2_SmallPage
         BL      Init_MapInPage
+
 
 40      ADD     v8, v8, #1                      ; go back until all
         CMP     v8, v7                          ; pages allocated
@@ -1374,6 +1426,9 @@ RISCOS_MapInIO
         MOV     v3, #0
         BL      Init_MapIn
         MOV     a1, v4
+        MOV     ip, #ZeroPage
+        STR     v1, [ip, #InitUsedBlock]
+        STR     v2, [ip, #InitUsedEnd]
         EXIT
 
 ; In:  a1 = Physical address

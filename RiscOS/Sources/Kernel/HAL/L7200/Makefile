@@ -39,7 +39,8 @@ DBGTARGET = aif.L7200
 GPATARGET = gpa.L7200
 EXPORTS   = 
 
-OBJECTS   = o.Boot o.Timers o.IIC o.NVMemory o.MachineID o.Interrupts o.Matrix o.Video
+OBJECTS   = o.Boot o.Timers o.IIC o.NVMemory o.MachineID o.Interrupts o.Matrix \
+            o.SIB o.Video
 
 .s.o:;	${ARMASM} ${ARMASMFLAGS} $< $@
 
@@ -67,23 +68,8 @@ clean:
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        Set Kernel$Messages LocalRes:Messages
-        IfThere LocalRes:<UserIF>.Messages Then Set Kernel$Messages LocalRes:<UserIF>.Messages
-        TokenCheck LocalRes:<UserIF>.Messages
-        ${CP} <Kernel$Messages>  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        UnSet Kernel$Messages
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-        TokenCheck LocalRes:Messages
-        print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+resources:
+        @echo ${COMPONENT}: no resources
 
 ${TARGET}: ${OBJECTS}
 	Link -bin -o $@ ${OBJECTS}
@@ -95,3 +81,10 @@ ${GPATARGET}: ${DBGTARGET}
 	ToGPA -s ${DBGTARGET} $@
 
 # Dynamic dependencies:
+o.NVMemory: s.NVMemory
+o.Video: s.Video Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:IO.IOMD Hdr:Proc Hdr:OSEntries Hdr:HALEntries hdr.StaticWS hdr.Video hdr.Hardware
+o.Timers: s.Timers Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:OSEntries Hdr:HALEntries hdr.StaticWS hdr.Hardware
+o.Interrupts: s.Interrupts Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:OSEntries hdr.StaticWS hdr.Hardware hdr.Video
+o.Matrix: s.Matrix Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:OSEntries hdr.StaticWS hdr.Hardware
+o.Boot: s.Boot Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:ImageSize.<ImageSize> Hdr:Proc Hdr:OSEntries Hdr:HALEntries hdr.StaticWS hdr.Hardware
+o.SIB: s.SIB Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS Hdr:OSEntries hdr.StaticWS hdr.Hardware
