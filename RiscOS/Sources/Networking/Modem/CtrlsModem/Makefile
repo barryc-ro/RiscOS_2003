@@ -140,7 +140,6 @@ resources:
 clean:
         ${RM} ${ROM_MODULE}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${WIPE} o.* ${WFLAGS}
 	${WIPE} Syms $(WFLAGS)
         @echo ${COMPONENT}: cleaned
@@ -152,9 +151,7 @@ ${ROM_MODULE}: ${TARGET} ${ROMCSTUBS}
 # final link for ROM Image (using given base address)
 rom_link: ${ROM_MODULE}
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
