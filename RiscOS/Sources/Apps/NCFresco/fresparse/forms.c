@@ -395,9 +395,6 @@ extern void finishoption (SGMLCTX * context, ELEMENT * element)
         STRING s;
 
 	opt = me->form->last_select->last_option;
-
-	PRSDBG(("Option text='%.*s'\n", me->inhand_string.bytes, me->inhand_string.ptr));
-
         s = me->inhand_string;
 
         /* Expand the entities and strip newlines */
@@ -406,11 +403,18 @@ extern void finishoption (SGMLCTX * context, ELEMENT * element)
 	/* SJM: FIXME: check this still works, entity translation should have been done in state machine */
 	opt->text = stringdup(string_strip_space(s));
 
+	PRSDBG(("Option text='%s'\n", opt->text));
+
 	/* check for wide font necessity and record in main item */
+	PRSDBG(("finishoption: item %p flags %x\n", me->rh->curstream->text_last, me->rh->curstream->text_last->flag));
+
 	if ((me->rh->curstream->text_last->flag & rid_flag_WIDE_FONT) == 0)
 	{
 	    if (webfont_need_wide_font(s.ptr, s.bytes))
+	    {
+		PRSDBG(("finishoption: wide\n"));
 		me->rh->curstream->text_last->flag |= rid_flag_WIDE_FONT;
+	    }
 	}
     }
     else

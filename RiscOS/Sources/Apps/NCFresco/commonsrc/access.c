@@ -336,6 +336,12 @@ static http_header_item nocache_hdr = {
     "no-cache"
     };
 
+static http_header_item accept_charset_hdr = {
+    NULL,
+    "Accept-Charset",
+    NULL
+    };
+
 #if SEND_HOST
 static http_header_item host_hdr = {
     NULL,
@@ -994,6 +1000,14 @@ static os_error *access_http_fetch_start(access_handle d)
         hlist = &accept_language_hdr;
     }
 
+    /* accept charset */
+    if ( config_encoding_accept )
+    {
+        accept_charset_hdr.next = hlist;
+        accept_charset_hdr.value = config_encoding_accept;
+        hlist = &accept_charset_hdr;
+    }
+    
     /* normal authentication */
     if ((authenticate_hdr.value = auth_lookup_string(d->url)) != NULL)
     {

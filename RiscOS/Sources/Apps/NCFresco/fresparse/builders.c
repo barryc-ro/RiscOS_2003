@@ -666,6 +666,12 @@ extern void text_item_push_image(HTMLCTX * me,
     if (me->mode == HTMLMODE_PRE || me->no_break)
 	nb->flag |= rid_flag_NO_BREAK;
 #endif
+
+#if UNICODE
+    if (new->alt && webfont_need_wide_font(new->alt, strlen(new->alt)))
+	nb->flag |= rid_flag_WIDE_FONT;
+#endif
+
     nb->aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;

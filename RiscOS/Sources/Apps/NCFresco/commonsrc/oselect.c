@@ -165,8 +165,8 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     width = webfont_tty_width(6, 1); /* Length of '<none>' in chars */
 #endif
     
-    if (font_setfont(wf->handle) != 0)
-	return;
+/*     if (font_setfont(wf->handle) != 0) */
+/* 	return; */
 
     height = 0;
 
@@ -180,14 +180,19 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 #if 0
 	    oi->text = strdup("");
 #else
-            oi->text = "";
+	oi->text = "";
 #endif
 
 	/* Start at the end; while not before the start and on a space; work backwards */
-	    /* SJM. this is now done in the parser */
+	/* SJM. this is now done in the parser */
 /* 	for(i = strlen(oi->text)-1; i>=0 && isspace(oi->text[i]); i--) */
 /* 	    oi->text[i] = 0; */
 
+#if 1
+	fs.x = webfont_font_width(wf->handle, oi->text);
+	if (width < fs.x)
+	    width = fs.x;
+#else
 	fs.s = oi->text;
 	fs.x = fs.y = fs.term = (1 << 30);
 	fs.split = -1;
@@ -197,7 +202,10 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    if (width < (fs.x / MILIPOINTS_PER_OSUNIT))
 		width = (fs.x / MILIPOINTS_PER_OSUNIT);
 	}
-
+#endif
+	
+	BENDBG(("oselect_size: ti %p font %d %s opt '%s' size %d (max %d)\n", ti, whichfont, ti->flag & rid_flag_WIDE_FONT ? "WIDE" : "NARROW", oi->text, fs.x, width));
+	
 	height ++;
     }
 

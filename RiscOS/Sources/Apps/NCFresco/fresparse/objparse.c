@@ -171,7 +171,7 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 			  const VALUE *width, const VALUE *height, const VALUE *align, 
 			 const VALUE *hspace, const VALUE *vspace, const VALUE *codebase)
 {
-    rid_flag flag;
+    rid_flag flag = 0;
 
     obj->standby = valuestringdup(standby);
 #if 0				/* moved to redraw routine */
@@ -183,6 +183,12 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 	    obj->standby = strdup(s);
     }
 #endif
+
+#if UNICODE
+    if (obj->standby && webfont_need_wide_font(obj->standby, strlen(obj->standby)))
+	flag |= rid_flag_WIDE_FONT;
+#endif
+
     obj->name = valuestringdup(name);
 
     obj->userwidth = *width;
@@ -192,7 +198,6 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
 
     obj->codebase = valuestringdup(codebase);
 
-    flag = 0;
     decode_img_align(align->type == value_enum ? align->u.i : -1, &obj->iflags, &flag);
 
     return flag;

@@ -90,6 +90,7 @@ struct config_str
     int encoding_user;
     int encoding_user_override;
     int encoding_internal;
+    char *encoding_accept;
 
     int proxy_http_on;
     int proxy_https_on;
@@ -252,6 +253,7 @@ extern struct config_str config_array;
 #define config_encoding_user (config_array.encoding_user)
 #define config_encoding_user_override (config_array.encoding_user_override)
 #define config_encoding_internal (config_array.encoding_internal)
+#define config_encoding_accept (config_array.encoding_accept)
 
 #define highlight_style_SIMPLE	0
 #define highlight_style_RCA	1

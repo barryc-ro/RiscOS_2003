@@ -331,6 +331,11 @@ config_item citems[] = {
       (void *)offsetof(struct config_str, encoding_internal),
       "0 = Latin1, 1 = UTF8",
       (void *)0 },
+{ config_STRING,
+      "encoding.accept",
+      (void *)offsetof(struct config_str, encoding_accept),
+      "Accept-Charset header text",
+      (void *)0 },
 { config_COMMENT, NULL, NULL, "", NULL },
 
 { config_FILE,

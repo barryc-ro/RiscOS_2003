@@ -1015,14 +1015,19 @@ extern os_error *antweb_doc_ensure_font( be_doc doc, int whichfont )
 
 int antweb_getwebfont(antweb_doc *doc, rid_text_item *ti, int base)
 {
+    return antweb_getwebfont2(doc, ti->flag, ti->st.wf_index, base);
+}
+
+int antweb_getwebfont2(antweb_doc *doc, rid_flag text_flags, int font1, int base)
+{
     int whichfont;
 
-    if (ti->flag & rid_flag_WIDE_FONT)
-	whichfont = (ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
+    if (text_flags & rid_flag_WIDE_FONT)
+	whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
     else if (base != -1)
 	whichfont = base;
     else
-	whichfont = ti->st.wf_index;
+	whichfont = font1;
 
     /* pdh: autofit bodge */
     if ( gbf_active( GBF_AUTOFIT ) )
@@ -1043,7 +1048,7 @@ int antweb_getwebfont(antweb_doc *doc, rid_text_item *ti, int base)
 
 #if UNICODE && defined(RISCOS)
     /* if we are claiming a wide font then set it to the appropriate encoding */
-    if (ti->flag & rid_flag_WIDE_FONT)
+    if (text_flags)
 	webfont_set_wide_format(webfonts[whichfont].handle);
 #endif
 
