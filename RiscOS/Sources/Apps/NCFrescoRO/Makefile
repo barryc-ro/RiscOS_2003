@@ -8,7 +8,7 @@ EXP_HDR = <CExport$Dir>
 RESAPP = <Resource$Dir>.Apps.!NCFresco
 RESRES = <Resource$Dir>.Resources.NCFresco
 RESRES_ALT = <Resource$Dir>.Resources.NCFrescoA
-INSTALLDIR = $(INSTDIR).!NCFresco
+INSTALLDIR = ${INSTDIR}.!NCFresco
 #
 # Generic options:
 #
@@ -24,7 +24,7 @@ GETVERS = perl bin.GetVersion
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
-TRFLAGS = $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë" -m NCFrescoROTransRes:Mappings
+TRFLAGS = ${THROWBACK} -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë" -m NCFrescoROTransRes:Mappings
 SQFLAGS = 
 
 #
@@ -51,8 +51,8 @@ resources_:
         @echo ${COMPONENT}: dummy alt resource files copied
 
 resources_alt:
-	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.<Build>.,Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.<Build>.,Resources.<UserIF>.UK.,Resources.Common.UK.
-	Set NCFrescoROTransRes$Path Translate.<UserIF>.<Locale>.<Build>.,Translate.<UserIF>.<Locale>.,Translate.Common.<Locale>.,Translate.<UserIF>.UK.<Build>.,Translate.<UserIF>.UK.,Translate.Common.UK.
+	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
+	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	Set NCFrescoROAltRes$Path NCFrescoRORes:Alt.,NCFrescoRORes:
 	Set NCFrescoROAltTransRes$Path NCFrescoROTransRes:Alt.,NCFrescoROTransRes:
 	${MKDIR} ${RESRES_ALT}
@@ -67,8 +67,8 @@ resources_alt:
         @echo ${COMPONENT}: alt resource files copied
 
 resources_base:
-	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.<Build>.,Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.<Build>.,Resources.<UserIF>.UK.,Resources.Common.UK.
-	Set NCFrescoROTransRes$Path Translate.<UserIF>.<Locale>.<Build>.,Translate.<UserIF>.<Locale>.,Translate.Common.<Locale>.,Translate.<UserIF>.UK.<Build>.,Translate.<UserIF>.UK.,Translate.Common.UK.
+	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
+	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
 	${MKDIR} ${RESRES}.html
@@ -101,8 +101,8 @@ resources_base:
         @echo ${COMPONENT}: resource files copied
 
 install:
-	Set NCFrescoRORes$Path Resources.<UserIF>.<Locale>.<Build>.,Resources.<UserIF>.<Locale>.,Resources.Common.<Locale>.,Resources.<UserIF>.UK.<Build>.,Resources.<UserIF>.UK.,Resources.Common.UK.
-	Set NCFrescoROTransRes$Path Translate.<UserIF>.<Locale>.<Build>.,Translate.<UserIF>.<Locale>.,Translate.Common.<Locale>.,Translate.<UserIF>.UK.<Build>.,Translate.<UserIF>.UK.,Translate.Common.UK.
+	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
+	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	${MKDIR} ${INSTALLDIR}
 	${MKDIR} ${INSTALLDIR}.html
 	${CP} NCFrescoRORes:!Boot    		${INSTALLDIR}.!Boot    ${CPFLAGS}
