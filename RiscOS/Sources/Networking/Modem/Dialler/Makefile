@@ -57,7 +57,7 @@ ABSSYM		= RISC_OSLib:o.c_AbsSym
 DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLibzm
 INETLIB		= TCPIPLibs:o.inetlibzm
 SOCKLIB		= TCPIPLibs:o.socklib5zm
-LIBS		= $(DEBUGLIB) $(SOCKLIB) $(INETLIB)
+LIBSD		= $(DEBUGLIB) $(SOCKLIB) $(INETLIB)
 
 
 # ------------------------------------------------------------------------------
@@ -242,7 +242,7 @@ rom_link_ rom_link_new:
 $(EXP_C_H).$(COMPONENT): h.$(COMPONENT)
 	$(CP) h.$(COMPONENT) $@ $(CPFLAGS)
 
-rm.DiallerD: $(OBJSD) $(HDR) $(CLIB)
-	$(LD) -rmf -o $@ $(OBJSD) $(LIBS) $(CLIB)
+rm.DiallerD: $(OBJSD) $(HDR) $(LIBSD) $(CLIB)
+	$(LD) -rmf -o $@ $(OBJSD) $(LIBSD) $(CLIB)
 
 # Dynamic dependencies:
