@@ -1,0 +1,408 @@
+
+Caret / Selection / Clipboard control
+=====================================
+
+In the brave new RISC OS world:
+
+        There is only one caret at a time
+        There is only one selection at a time
+        There is only one clipboard
+
+If we are using the cut/copy/paste (CCP) model (as opposed to the Edit
+model), there is an additional restriction: there may not be a caret and a
+selection at the same time.
+
+The following description takes account of either type of selection model,
+noting the differences where they occur.  From an implementation point of
+view, it is not difficult to support both models, with a user-defined
+(system-wide) switch to choose between them.
+
+
+Ownership of the caret / selection / clipboard
+----------------------------------------------
+
+Each task keeps a separate record for each of the caret, selection and
+clipboard, with a value of 'elsewhere' to indicate that it does not own the
+entity.
+
+To ensure that there is only one of each of the above entities active in the
+system at one time, the following message is used:
+
+        Message_ClaimEntity (15)
+                0       message size (24)
+                4       handle of task claiming the caret/selection/clipboard
+                8       message id
+                12      your_ref (0)
+                16      Message_ClaimEntity
+                20      flags:
+                            bit 0 set => caret being claimed
+                            bit 1 set => selection being claimed
+                            bit 2 set => clipboard being claimed
+                            all other bits reserved (must be 0)
+
+This message should be broadcast to all tasks as the caret / selection or
+clipboard are claimed.
+
+If using the CCP model, bits 0 and 1 should be set, to claim the caret and
+selection as a single entity.  When claiming the selection, the application
+should also set the caret to the window containing the selection, but
+invisible.  This is to direct keys to this window.
+
+Any task receiving this message which thinks that it owns the entity(s)
+indicated should clear them, ie. indicate that they are held 'elsewhere' and
+update the screen (in the case of the selection) or deallocate the memory
+(in the case of the clipboard).  Note that the Wimp takes care of redrawing
+the caret on screen, but the record of where the caret is should still be
+updated.
+
+To improve performance, the following optimisation should be made:
+
+When claiming the caret/selection/clipboard, a task should check to see if
+it already owns that entity, and if so, there is no need to issue the
+broadcast.  It should then take care of updating the caret / selection /
+clipboard to the new value (including the display in the case of the
+selection).
+
+
+LoseCaret / GainCaret events
+----------------------------
+
+Applications implementing the above set of protocols should ignore
+LoseCaret/GainCaret messages as far as keeping track of whether they have
+the input focus is concerned.
+
+This is because the Wimp often 'borrows' the caret to put it in writable
+menu icons, and when this happens the caret/selection etc. must not
+disappear from the application which had it before, at least in terms of
+where the application thinks the caret is.
+
+Other applications which claim the caret without using the claiming
+mechanism described will also not indulge in the cut/copy/paste protocol, so
+again the losecaret event should be ignored.
+
+
+Moving / Copying data by keypress
+---------------------------------
+
+Since keys are directed to the owner of the caret, the receiver of the data
+controls the process.
+
+The following keys are used:
+        ctrl-X, delete, copy    cut     (if there's a selection)
+        ctrl-C,       F7        copy    meaning depends on model in use
+        ctrl-V, shift-F7        paste   meaning depends on model in use
+
+If using the CCP model:
+        cut     copies the selection onto the clipboard, then deletes the selection
+        copy    copies the selection onto the clipboard
+        paste   copies the clipboard to the caret/selection, deleting the selection
+
+If using the Edit model:
+        cut     does a CCP cut
+        copy    does a CCP copy, followed by a CCP paste to the caret
+        paste   does a CCP cut,  followed by a CCP paste to the caret
+
+When attempting to read data from the selection or clipboard, the application should:
+
+    *   check to see if it owns the entity, and grab the data directly if so;
+
+    *   if it doesn't own the entity, the following message should be broadcast:
+
+        Message_DataSuck (16)
+                0       message size
+                4       handle of task requesting data
+                8       message id
+                12      your_ref (0)
+                16      Message_DataSuck
+                20      window
+                24      internal handle to indicate destination of data
+                28      x
+                32      y
+                36      flags:
+                                bit 1 set => send data from selection
+                                bit 2 set => send data from clipboard
+                                bit 3 set => delete source data afterwards
+                                all other bits reserved (must be 0)
+                40      list of filetypes in order of preference,
+                        terminated by -1
+
+If an application receiving this message owns the relevant data, it should
+reply using the normal Message_DataSave protocol, with the sender using the
+values passed in the DataSuck message (except for the estimated size field,
+filetype and filename, which are filled in by the sender).
+
+The sender should choose the earliest filetype in the list that it can
+provide, and if none are possible it should provide the data anyway, in its
+original format.  Note that the list can be null, to indicate that the
+native data should be sent.
+
+Note that when using the Edit model, it is possible to do a cut operation
+between two applications, since the caret owner may not be the selection
+owner.  In this case the 'icon handle' in the message should be set to some
+coded value to indicate that the destination for the data is the clipboard.
+
+Note also that when using the Edit model, a copy or paste operation will
+attempt to transfer the data from the selection to the caret, but if there
+is no selection, then the contents of the clipboard will be transferred
+instead.  I claim this is a useful additional feature!
+
+
+Drag and drop
+-------------
+
+The following mouse controls exist on a text area:
+
+    *   Clicking Select where there is no selection sets the caret position
+
+    *   Clicking Adjust when there is a caret creates a selection between
+        the old caret position and the mouse position.
+
+    *   Dragging with Select where there is no selection starts a new
+        selection, and subsequent dragging moves the other end.
+
+    *   Dragging with Adjust alters the 'nearest' end of the selection.
+
+    *   Clicking Select over the selection has no effect (to allow the drag
+        to occur properly - see below).
+
+    *   Dragging with Select over the selection causes a box the size of the
+        selection to be dragged.  If the drag is started with SHIFT held
+        down, the data will be copied when the mouse button is released,
+        else it will be moved.
+
+While the selection is being dragged, the following message protocol is used
+to implement auto-scroll and 'ghost caret' positioning:
+
+        Message_Dragging (17)
+                0       message size
+                4       handle of task performing the drag
+                8       message id
+                12      your_ref (0)
+                16      Message_Dragging
+                20      window
+                24      icon
+                28      x
+                32      y
+                36      flags:
+                                bit 1 set => sending data from selection
+                                bit 2 set => sending data from clipboard
+                                bit 3 set => source data will be deleted
+                                bit 4 set => do NOT claim this message
+                                all other bits reserved (must be 0)
+                40      bounding box of data relative to the pointer,
+                        in 1/72000" (in internal units, ie. not scaled
+                        according to the zoom factors of the source window)
+                        x0 > x1 => source data size unknown
+                56      list of filetypes in sender's order of preference,
+                        terminated by -1
+
+        Message_DragClaim (18)
+                0       message size
+                4       handle of task replying to Message_Dragging
+                8       message id
+                12      your_ref (refers to Message_Dragging sent)
+                16      Message_DragClaim
+                20      flags:
+                                bit 0 set => pointer shape has been changed
+                                bit 1 set => remove wimp dragbox
+                                bit 3 set => source data should be deleted
+                                all other bits reserved (must be 0)
+                24      list of filetypes in receiver's order of preference,
+                        terminated by -1
+
+All messages are sent using type 18 (reply required), and the your_ref field
+of each message is sent to that which it is replying, unless otherwise
+stated.
+
+During the drag, the dragging task enables null events (using Wimp_PollIdle
+with a minimum return time of (say) 0.25 secs.  On each null event, it finds
+the current mouse position using Wimp_GetPointerInfo.  The message block is
+then constructed using the information gleaned.
+
+If no task has claimed control of the pointer (none has at the start), the
+message is sent to the owner of the window/icon pair found.
+
+If a DragClaim is received as a result, the task / your_ref / flags of the
+message are stored to indicate that the given task has claimed the drag
+process.
+
+On the next null event, if the drag has been claimed, the Message_Dragging
+is sent to the claimant (with your_ref set as appropriate), otherwise it is
+sent to the window/icon owner as before.
+
+If the Message_Dragging bounces (note that a DragClaim reply is required for
+each Message_Dragging that is sent), and the drag was being claimed, the
+record of the claimant is reset and the Message_Dragging is resent, this
+time to the window/icon pair (with a your_ref of 0).
+
+The claimant will normally only claim the drag again if the pointer is still
+within its window, but it may continue if it has started auto-scrolling.  If
+bit 4 of the flags in the Message_Dragging is set, the claimant MUST
+relinquish the drag, since this indicates that the sender is terminating the
+drag process.
+
+When the drag terminates, a flag is set and the null event code is called
+(to ensure that the mouse position is up-to-date).  This will result in a
+Message_Dragging being sent, either to the claimant or to the window/icon
+pair.
+
+This will result in a DragClaim being returned, or the message bouncing.  If
+the message bounces, and there was a claimant, the Message_Dragging is
+resent, as for a null event.
+
+However, if a DragClaim is received, or the Message_Dragging bounces and
+there is no claimant, then the 'drag terminated' flag is inspected, and if
+set, the data can finally be saved to the destination.
+
+The sender is also responsible for detecting the user aborting the drag
+using Escape - in this case it should set an internal 'Aborted' flag, call
+Wimp_DragBox with -1 to terminate the drag, and then proceed as for drag
+finished, terminating the process just before the DataSave would have been
+sent.
+
+NB: Before sending the data, the sender should now reset the pointer shape
+to the default if the claimant's last DragClaim had the 'pointer shape
+altered' flag set.
+
+NB2: The sender should in fact keep a record of whether the pointer shape
+has been changed (ie. keep a copy of the last set of DragClaim flags
+received), and reset the pointer shape whenever the 'pointer altered' bit
+changes from a 1 to a 0.  Thus if the other application first changes the
+pointer shape, sending a DragClaim with flags bit 0 set, then next time does
+not wish to change the pointer shape, but nevertheless wants to keep the
+drag, it will send a DragClaim with flags bit 0 clear, so the sender should
+reset the pointer shape.
+
+The 'remove wimp dragbox' flag works slightly differently - since the
+receiver is not allowed to alter the wimp dragbox, it should instead ask the
+sender to do this by setting bit 1 of the dragclaim message.  If at some
+later time a dragclaim is sent without this bit set, or the Message_Dragging
+bounces, the sender should restore the wimp dragbox.  It should do this by
+calling Wimp_DragBox again with the appropriate drag type.
+
+The bounding box in internal units allows the receiver to display the exact
+position of where the data will be placed if the mouse button is released,
+and is an exact analogy of the ghost caret for text.  The receiver should
+display the box exactly where the data would go, ie. corrected for grid
+alignment, snap to frames etc.
+
+Note that sometimes the sender does not know the bounding box of the data,
+or sometimes the concept may be meaningless (eg. for text transfer).  In
+this case the bounding box in the Message_Dragging will be set so x0 > x1
+and the receiver should not use a box to display the position of the data
+(although it may still use a ghost caret if appropriate). The Wimp drag box
+should be used if the receiver has no way to display the destination
+position.
+
+Bit 3 of the DragClaim message can be set to indicate that the sender should
+delete the source data even if the user did not press the Shift key.  This
+option could be used by a trashcan application, so that objects dragged to
+it are simply deleted.
+
+When the sender finally comes to save the data, it should send in its own
+preferred format, unless a dragclaim is in force and the sender can do one
+of the the filetypes in the list returned.  If so, it must do the first one
+in the list that it can.
+
+The normal Message_DataSave protocol is used, except that the your_ref of
+the Message_DataSave is set to 0 if there was no claimant, and to the stored
+claimant's last DragClaim message id otherwise.
+
+Thus the receiver of the Message_DataSave knows whether to alter the
+insertion point according to the x,y position indicated, and whether the
+'ghost caret' needs to be removed from view.
+
+In summary, the two tasks should behave as follows:
+
+Sender:
+
+    start:
+        call Wimp_DragBox to start the drag, and enable null events
+        set claimant to 'none'
+        set drag_finished to 'false'
+        set drag_aborted to 'false'
+
+    null event:
+        read mouse position and construct Message_DataSaved
+        if claimant
+          send message (18) to claimant (your_ref = DragClaim my_ref)
+        else
+          send message (17/18) to window/icon pair (your_ref = 0)
+        endif
+
+    escape pressed:
+        set drag_aborted to 'true'
+        call Wimp_DragBox with -1 to terminate the drag
+        proceed as for drag finished
+
+    drag finished:
+        set drag_finished to 'true', then call null event code
+
+    Message_DragClaim received:
+        if drag_finished
+          reset pointer shape if claimant altered it
+          unless drag_aborted send data to claimant (your_ref = my_ref of DragClaim)
+        else
+          reset pointer shape if (old_flags and not new_flags) has bit 0 set
+          set claimant to task handle of DragClaim message
+          set lastref to my_ref of DragClaim message
+        endif
+
+    Message_Dragging bounced:
+        if claimant,
+          reset pointer shape if claimant altered it
+          set claimant to 'none'
+          resend message to window/icon pair (type 17/18)
+        else
+          if drag_finished
+            unless drag_aborted send data to window/icon pair (your_ref = 0)
+          endif
+        endif
+
+        '17/18' means 'if drag_finished, send as type 18, else as type 17'.
+        bit 4 of any Message_Dragging sent is set if drag_aborted is true.
+
+Receiver:
+
+    start:
+        set claiming to 'false'
+        set pointer_altered to 'false'
+
+    Message_Dragging received:
+        if claiming,
+          if flags bit 4 clear, and we're still auto-scrolling or in a text area
+            reply with Message_DragClaim (type 17)
+            perform auto-scroll if required
+            update ghost caret if required
+          else
+            set claiming false
+            undraw ghost caret if necessary
+            don't reply to message
+          endif
+        else
+          if flags bit 4 clear
+            if we're in the auto-scroll area
+              change pointer shape to indicate auto-scroll
+              set timer for auto-scroll
+              set pointer_altered to 'true'
+              reply with Message_DragClaim (type 17)
+            elif we're in a text area
+              draw ghost caret in correct place
+              set pointer_altered to 'false'
+              reply with Message_DragClaim (type 17)
+            endif
+          endif
+        endif
+
+    Message_DataSave received:
+        if your_ref indicates we're claiming:
+          if ghost caret is set up
+            set insertion point to ghost caret
+            undraw ghost caret
+          endif
+        endif
+        import data to insertion point
+
+    All Message_DragClaim's are sent with bit 0 of the flags indicating the
+    current value of the 'pointer_altered' flag.
+

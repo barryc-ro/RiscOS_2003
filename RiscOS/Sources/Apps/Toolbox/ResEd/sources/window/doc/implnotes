@@ -1,0 +1,2490 @@
+Implementation notes for the !Window CSE of !ResEd
+==================================================
+
+Contents
+--------
+
+1  Main structures
+2  Redraw loop
+3  Loading and saving protocols
+  3.1  User double-clicks on object in Shell window
+  3.2  User makes a change to an object in a CSE editing window
+  3.3  User closes a CSE editing window
+  3.4  Shell wishes to retrieve an object from a CSE
+  3.5  Shell wishes to "force-load" an object into the CSE
+    3.5.1  Shell wishes to update a CSE's view of an object
+    3.5.2  Shell wishes to use the CSE to ensure the consistency of an object
+  3.6  User renames an object in the shell
+  3.7  An object is removed from a shell window
+  3.8  User loads new sprites file
+  3.9  User drops object in dialogue box
+4  Generic gadget handling
+  4.1  Gadget definitions - GadgetDefRecs
+  4.2  Relocation specifications - RefDefRecs
+  4.3  Field/icon relationships - FieldDefRecs
+  4.4  Mouse click specifications - ClickDefRecs
+  4.5  Drag-n-drop specifications - DropDefRecs
+  4.6 Treatment of properties common to all gadget types
+  4.7 How to add a new gadget type
+5  Permanent Dialogue boxes
+6  Borderutils
+7  Length of indirected fields in dbox template icons
+8  Validation strings for writables
+9  Editing window fields
+10 Notes on the meaning of the "pane" flag bit (Keyboard shortcuts dbox)
+11 Other notes on keyboard shortcuts code
+12 Coordinates
+13 "gui" functions
+14 Length fields and '*'
+15 Unknown gadget types
+16 Sorting gadgets for "Link writables"
+17 Responding to HelpRequest messages
+  17.1  Gadget properties dialogue box
+  17.2  Other dialogue box
+  17.3  Menu
+  17.4  Editing window
+  17.5  Palette window
+18 Alignment
+19 The Grid
+20 Dragging selections
+  20.1  Principles
+  20.2  Improving the appearance of "circulation"
+  20.3  Improving the appearance of auto-scrolling
+21 Radio buttons
+  21.1  Make radio group
+  21.2  Marking a radio button as "on"
+  21.3  Copying radio buttons within the same window
+  21.4  Adding new radio buttons to a window
+
+
+1  Main structures
+------------------
+
+Each window object template is represented by a WindowObjRec which includes:
+
+  - a WindowRec containing the wimp window (with no icons)
+  - the Toolbox description of the window object
+  - information about the corresponding editing window, such as:
+        - number of gadgets selected
+        - documentID and objectID supplied by the shell when the object was
+           sent over
+        etc.
+  - a pointer to a list of the gadgets belonging to the window
+
+Each gadget is represented by a GadgetRec which includes:
+
+  - the Toolbox description of the gadget
+
+ [ This is in contrast to the !WinEdit structures, where each WindowObjRec
+   includes:
+
+     - an array of icon structures
+     - a pointer to a list of item structures   ("item" = "gadget")
+
+   Each item structure includes an array containing the numbers of the icons
+   which comprise that item (often only one, of course).
+
+   The ith element of the array of icons represents icon number i and
+   includes:
+
+     - a wimp icon structure
+     - a pointer to the item structure of which the icon is a part
+
+   The reason for the difference is that !WinEdit has to store icons as
+   part of the Templates file that it creates, whereas !ResEd has only to
+   paint them. ]
+
+
+2  Redraw loop
+--------------
+
+Window redraw is not automatic, and !ResEd must plot each gadget inside a
+redraw loop. To do this, ResEd loads the Toolbox Window module and calls
+Window_PlotGadget; this makes sure that the visual representation of any
+gadget is always as up-to-date as the version of the Window module that is
+loaded.
+
+To make sure that labelled boxes are always behind the gadgets which they
+enclose, they must be plotted first: the redraw loop is, in fact:
+
+  - plot all gadgets with flags bit 30 set (these are those at the back);
+  - plot all other gadgets
+  - plot highlighting for selected gadgets (red bounding box, and ears
+     if the window has input focus)
+  - plot the grid if enabled
+
+One of the reasons why icons are plotted (as opposed to being added to the
+window definition) is to make creation/deletion faster; it's also quite
+tricky to keep track of icon numbers (and so, for example, make sure that
+labelled boxes appear at the back) when using CreateIcon (for example, a new
+icon will replace the earliest deleted one in the array following a window
+definition).
+
+Any error returned from Window_PlotGadget is ignored (unless DEBUG is 1 in
+which case windowedit_redraw_window(..) returns the *first* such error
+returned in a redraw loop); this means that ResEd can process unknown gadget
+types without falling over.
+
+
+3  Loading and saving protocols
+-------------------------------
+
+These notes describe how the shell and the CSE keep in step with each other.
+
+Flags of interest are:
+
+  The shell associates these flags with each object:
+
+    - editing:   TRUE iff the shell believes that some CSE has a copy of that
+                 object which is being edited.
+
+    - modified:  If editing = TRUE, this flag is TRUE iff the shell believes 
+                 that the CSE's version of the object differs from its own
+                 (ie is more up-to-date).
+
+                 This flag should not be confused with the flag of the same
+                 name which is associated with each *document*: if set, the
+                 flag means that the document in memory differs from that,
+                 if any, that is saved in a file.
+
+    - importing: This flag is set when the object contains revised messages
+                 following message import; it remains set until the object
+                 has been successfully processed by the CSE to ensure that
+                 any "length" fields are consistent with any revised
+                 messages.
+
+  The CSE associates these two flags with each editing window:
+
+    - modified:  If TRUE, the CSE believes that its version of the object is
+                 more up-to-date than the shell's version.
+
+    - pendingclose:
+                 TRUE iff the window is to be closed after its contents have
+                 been successfully returned to the shell. This flag allows
+                 the code that deals with confirmation of a successful load
+                 (received_resed_object_loaded(..)) to distinguish between
+                 a transfer initiated by the shell, and one initiated by the
+                 CSE.               
+
+
+3.1 User double-clicks on object in Shell window
+------------------------------------------------
+
+Shell sends OBJECT_LOAD message recorded delivery, with "force-load" bit set
+to zero.
+
+  If there is no reply, the Shell assumes that the CSE has died, issues an
+  appropriate error message to the user, and takes recovery action.
+
+If the CSE already has this object loaded, it simply raises its editing
+window to the top; if not, it loads the object and creates an editing window
+for it, with modified = FALSE* (this assignment is not explicit - but a new
+window structure will have been calloc'd, and so have zero in fields which
+have not been set).
+
+  If the CSE cannot load the object for some reason, it displays a suitable
+  error message and replies OBJECT_LOADED with an error indication.
+
+  The shell takes appropriate recovery action upon receipt of this message
+  with error indication.
+
+The CSE replies OBJECT_LOADED with no error indication.
+
+The shell simply sets editing = TRUE*.
+
+ [ * If the object was not previously loaded into the CSE, the effect of
+     this is to set modified = FALSE in both Shell and CSE, and to set
+     editing = TRUE in the shell.
+
+     If the object *was* previously loaded, the effect is to leave modified
+     untouched (and so the same in both shell and CSE) and to leave editing
+     TRUE. ]
+
+
+3.2 User makes a change to an object in a CSE editing window
+------------------------------------------------------------
+
+If modified = TRUE, no further action is taken (so only the *first*
+modification since (re)loading is signalled).
+
+CSE sets modified = TRUE.
+
+CSE sends OBJECT_MODIFIED message to shell.
+
+Shell sets modified = TRUE.
+
+
+3.3 User closes a CSE editing window
+------------------------------------
+
+If modified = FALSE:
+
+  CSE sends OBJECT_CLOSED to the shell, and closes the editing window.
+
+  The shell sets editing = FALSE, modified = FALSE.
+
+If modified = TRUE:
+
+  CSE sets pendingclose = TRUE and sends OBJECT_SENDING to the shell,
+  recorded delivery.
+
+    If there is no reply, the CSE assumes that the shell has died; it sets
+    pendingclose FALSE, and takes no further action (ie does *not* close
+    the editing window).
+
+  The shell copies across the new object data, and sets modified = FALSE.
+
+    If the shell is unable to copy the object data for some reason, it issues
+    a suitable error message and replies with an OBJECT_LOADED message with
+    an error indication.
+
+    The CSE sets pendingclose FALSE, but otherwise takes no further action
+    (so does *not* set modified FALSE, and does *not* close the window).
+
+  The shell replies OBJECT_LOADED with no error indication.
+
+  The CSE sends OBJECT_CLOSED to the shell, and, because pendingclose = TRUE,
+  closes the editing window.
+
+  The shell sets editing = FALSE, modified = FALSE.
+
+
+3.4 Shell wishes to retrieve an object from a CSE
+-------------------------------------------------
+
+This may arise because:
+
+  - User has asked to save a remote* object
+
+  - User has dropped a text file containing messages onto the shell's window,
+    and some of these refer to a remote* object
+
+  - User has signalled his intention to export messages from a selection
+    which includes a remote* object
+
+where a "remote object" is one which has both "editing" and "modified" flags
+set TRUE.
+
+Other occasions are when the user copies or moves a selection from one
+document window to another, or makes a copy of an object within a document
+window.
+
+  [ * Actually, the shell retrieves *all* modified objects from CSEs even
+      if the user's actions do not impinge on any remote objects; the
+      relevant function call is document_recover_document(..).  ]
+
+The shell sends OBJECT_SEND to the CSE, recorded delivery.
+
+  If there is no reply, the shell takes no further action (assuming the CSE
+  to be dead).
+
+  If the CSE is unable to send the object, it replies OBJECT_SENDING with an
+  error indication after displaying a suitable error message; the shell takes
+  appropriate recovery action.
+
+The CSE replies OBJECT_SENDING, recorded delivery.
+
+  If there is no reply, no further action is necessary.
+
+The shell copies the data across, and sets modified = FALSE.
+
+  If the shell is unable to load the revised data, it displays a suitable
+  error message and replies OBJECT_LOADED with an error code.
+
+  The CSE takes no further action.
+
+The shell replies OBJECT_LOADED with no error indication.
+
+The CSE sets modified = FALSE.
+
+
+3.5 Shell wishes to "force-load" an object into the CSE
+-------------------------------------------------------
+
+3.5.1 Shell wishes to update a CSE's view of an object
+------------------------------------------------------
+
+This can only arise when:
+
+  - User has dropped a text file containing messages onto the shell's window,
+    and some of the messages pertaining to a remote object have changed.
+
+The object must be reloaded into the CSE for two reasons:
+
+  - The CSE needs to be aware of the revised message text.
+
+  - Any length fields associated with revised messages must be checked, and
+    increased in size where necessary to accommodate the new messages; this
+    checking is always done as part of the process of loading an object into
+    a CSE.
+
+The shell sets importing = TRUE, modified = FALSE, and sends OBJECT_LOAD
+recorded delivery with the "force-load" bit set TRUE.
+
+  If there is no reply, the shell assumes the CSE has died, and marks all
+  objects which were being edited by it as modified = FALSE, editing= FALSE,
+  importing = FALSE.
+
+The CSE first deletes the current editing window for the object, deleting any
+associated dialogue boxes that were open a the time. Next, the object is
+reloaded into the CSE, and its new editing window displayed (not forgetting
+to restore the previous grid settings). The reload ensures that all length
+fields are consistent again.
+
+  If the CSE is unable to reload the data, it issues an appropriate error
+  message, and replies OBJECT_LOADED with an error indication.
+
+  The shell takes appropriate recovery action.
+
+The CSE replies OBJECT_LOADED with no error indication.
+
+The shell sets importing = FALSE and modified = TRUE - since the CSE now
+contains a copy of the object which differs from the shell's version in that
+any incorrect "length" fields have been updated.
+
+
+3.5.2 Shell wishes to use the CSE to ensure the consistency of an object
+------------------------------------------------------------------------
+
+This can only arise when:
+
+  - User has dropped a text file containing messages onto the shell's window,
+    and some of the messages pertaining to a non-remote object have been
+    changed.
+
+This case is similar to 3.5.1 above, except that the CSE must not display the
+object after loading it, and it should be returned to the shell immediately.
+
+The shell sets importing = TRUE, modified = FALSE, and sends OBJECT_LOAD
+recorded delivery with the "force-load" bit set TRUE.
+
+  If there is no reply, the shell assumes the CSE has died, and marks all
+  objects which were being edited by it as modified = FALSE, editing= FALSE,
+  importing = FALSE.
+
+The CSE notes that this is a force-reload request for an object which it does
+not possess - so simply loads the object (thus updating length fields where
+necessary) but does not open an editing window for it.
+
+  If the CSE is unable to reload the data, it issues an appropriate error
+  message, and replies OBJECT_LOADED with an error indication.
+
+  The shell takes appropriate recovery action.
+
+The CSE replies OBJECT_LOADED with no error indication.
+
+The shell must now ask for the revised object to be returned, and so sends
+OBJECT_SEND recorded delivery with flag bit 0 set: this means "delete after
+sending".
+
+  If there is no reply, the shell displays a suitable error message and then
+  tidies up assuming that the CSE has died (see above).
+
+  If the CSE is unable to send the object back, it displays a suitable error
+  message and replies OBJECT_SENDING with an error indication; the shell
+  then displays a further error message and tidies up if the error indicates
+  that the CSE has died.
+
+The CSE replies OBJECT_SENDING recorded delivery after setting
+pendingclose = TRUE for the object.
+
+  If there is no reply, the CSE resets the pendingclose flag and takes no
+  further action.
+
+  If the Shell cannot load the object, it replies OBJECT_LOADED with an
+  error indication; the CSE does not delete the object, but resets the
+  pendingclose flag instead.
+
+The Shell sets modified = FALSE, importing = FALSE and replies OBJECT_LOADED.
+
+The CSE notes pendingclose = TRUE, and deletes the window.
+
+
+3.6 User renames an object in the shell
+---------------------------------------
+
+If editing = TRUE, the shell sends an OBJECT_RENAMED message to the CSE.
+
+The CSE notes the new name.
+
+
+3.7 An object is removed from a shell window
+--------------------------------------------
+
+This may arise because:
+
+  - User has closed shell window
+
+  - User has deleted object from shell window
+
+  - User has moved object from one shell window to another
+
+If editing = TRUE, the shell sends an OBJECT_DELETED message to the CSE.
+
+The CSE closes the corresponding editing window (but does *not* send an
+OBJECT_CLOSED message).
+
+
+3.8 User loads new sprites file
+-------------------------------
+
+Shell sends SPRITES_CHANGED message to CSE.
+
+The CSE then force-redraws all of its editing windows.
+
+
+3.9 User drops object in dialogue box
+-------------------------------------
+
+This is one way of inserting an object name into a suitable field in one of
+the dialogue boxes maintained by the CSE.
+
+CSE receives DATASAVE message, and responds by sending OBJECT_NAME_REQUEST
+to the shell.
+
+  If there is a problem (eg multiple objects are dragged, or objects have
+  been dragged from the wrong document window) the Shell issues an
+  appropriate error message and replies OBJECT_NAME with an error indication.
+
+The shell replies with an OBJECT_NAME message and no error indication.
+
+
+4 Generic gadget handling
+-------------------------
+
+At present, there are 14 different gadget types which have to be handled.
+There are generic similarities - each one has to be displayed, each has a
+dialogue box to alter its properties etc. - but detailed processing is
+specific to the gadget type. To keep the amount of code to a minimum, each
+gadget type is described by a data-structure which is interpreted by generic
+gadget functions.
+
+
+4.1  Gadget definitions - GadgetDefRecs
+---------------------------------------
+
+This data structure - a GadgetDefRec - is created statically: see c.gadgdefs
+for examples. The fields are as follows:
+
+  type         - the gadget's type - eg 128 for an action button.
+
+  templatename - the name of the template for the gadget's properties
+                 dialogue box; this will be found in !Window.Templates.
+
+  proto        - this is filled in when the template is loaded; it addresses
+                 the dbox' prototype.
+
+  protosize    - this is filled in when the template is loaded; it is the
+                 size of the dbox' prototype in bytes.
+
+  body         - this is a BodyDefRec which describes the structure of the
+                 gadget's body: how big it is, and which fields inside it
+                 need relocating. It contains the following fields:
+
+        size           - the size of the gadget's body in bytes
+        usecount       - for unknown gadget types only (see separate section)
+        refs           - the address of an array of RefDefRecs, each of which
+                         describes a field within the gadget's body that
+                         requires relocation
+
+  fields       - this addresses an array of FieldDefRecs; each one describes
+                 the relationship between one or more fields in the gadget
+                 and one or more icons in the gadget's properties dbox.
+
+  clicks       - this addresses an array of ClickDefRecs; each one describes
+                 the action to be taken when mouse clicks on icons in the
+                 gadget's properties dbox occur.
+
+  drops        - this addresses an array of DropDefRecs; each one describes
+                 what action to take when the user drops an object or gadget
+                 into the gadget's properties dbox.
+
+  icons        - this is a sub-record that gives the handles of icons that
+                 are common to all gadget properties dbox's:
+
+        firstwritable  - the icon to which the caret should be given when
+                         the dbox is first opened
+        ok             - the OK button
+        cancel         - the Cancel button
+        id             - the icon containing the gadget's Component ID
+        window         - the icon containing the name of the window in
+                         which the gadget is situated
+        hashelp        - the option icon for Help text
+        help           - the writable icon for help text
+        helpmax        - the writable icon containing the maximum length
+                         for help text (or '*')
+        helpmaxadjup   - the 'up' adjuster arrow for helpmax
+        helpmaxadjdown - the 'down' adjuster arrow for helpmax
+        faded          - the option icon which determines whether the gadget
+                         is faded or not
+
+  align        - this sub-record describes the position of the gadget's
+                 alignment point (for "Snap to grid"):
+
+        horizontal     - ALIGNPOS_CENTRE, ALIGNPOS_TOP, ALIGNPOS_BOTTOM
+        vertical       - ALIGNPOS_CENTRE, ALIGNPOS_LEFT, ALIGNPOS_RIGHT
+
+                 Finally, special cases are catered for by setting the
+                 'horizontal' field to ALIGNPOS_SPECIAL, and storing the
+                 address of a function in the 'vertical' field. (At present
+                 there is only one special case: the alignment point for a
+                 label gadget depends on how its text is aligned - see
+                 gadget_lb_alignpos(..).)
+
+  minsize      - this PointRec gives the minimum size for the bounding box
+                 of the gadget in OS units; the values must be multiples
+                 of 4.
+
+  specialinit  - if special action has to be taken when the gadget's
+                 properties dbox is initialised, this field contains the
+                 address of the function to call; otherwise it is NULL.
+                 The function is called *after* other icons have been filled
+                 in as specified by the 'fields' array above.
+
+  specialapply - if special action has to be taken when the gadget's
+                 properties dbox is applied, this field contains the address
+                 of the function to call; otherwise it is NULL. The function
+                 is called *before* other fields of the gadget are filled
+                 in as specified by the 'fields' array above.
+
+When a window object is loaded, a GadgetRec is created for each gadget
+template inside it; these gadget records are linked together and attached
+to the WindowObjRec that represents the window object.
+
+Gadget record creation is performed by the generic gadget function
+gadget_load(..). This function first examines the gadget template to
+determine its type, so that the corresponding GadgetDefRec can be located.
+This definition record includes sufficient information to create and
+initialise a new gadget record.
+
+A pointer to this definition record is also stored in the gadget record
+itself; this avoids the need to search for it whenever the gadget needs to
+be processed.
+
+
+4.2  Relocation specifications - RefDefRecs
+-------------------------------------------
+
+These fields describe how StringReference and MessageReference fields inside
+a gadget are to be treated.
+
+When an object template is loaded from the shell, it is relocated without
+reference to these specifications, so that gadget_load(..) is presented
+with a template in which every StringReference or MessageReference field
+already contains either NULL or the address of a valid string. But these
+strings are still part of the template itself, and copies must be made for
+the GadgetRec before the template is deleted.
+
+When a GadgetRec is "re-assembled" as a component of a window object template
+in preparation for delivery back to the shell, the relocation tables must be
+reconstructed; RefDefRecs are used then to determine which fields must be
+relocated and into which tables the entries should be placed.
+
+The fields of a RefDefRec are as follows:
+
+  type        - possibilities are:
+
+                   REF_STR      - describes a StringReference field
+                   REF_MSG      - describes a MessageReference field
+                   REF_STRORMSG - describes a field which may contain either
+                                   a StringReference or a MessageReference
+                   REF_END      - identifies the end of the RefDefRec array;
+                                   other fields of this record are ignored.
+
+  offset      - the offset of the field within the gadget's body.
+
+  emptyisnull - if this is TRUE, any empty string value is replaced by a
+                NULL value when the gadget is loaded (this does not have to
+                be done when saving, because internal processing will ensure
+                that no empty string value is ever stored for this field -
+                see FieldDefRecs below).
+
+ The following two fields are relevant only if type = REF_STRORMSG:
+
+  mask        - this bit-string identifies those bits in the gadget's flags
+                word which determine whether the field contains a String or
+                a MessageReference value.
+
+  ismsg       - this bit-string is the value of (flags & mask) which says
+                that the field contains a MessageReference.
+
+These records are used by:
+
+  gadget_load(..)     - to find out where the strings in the template are,
+                        and how to copy them
+
+  gadget_save(..)     - to find out which fields need to be relocated, and
+                        in what way
+
+  gadget_copy(..)     - to find out where the strings are which need to be
+                        copied
+
+  gadget_free(..)     - to find out where the strings are which need to be
+  compare_gadgets(..) - free'd
+
+
+4.3  Field/icon relationships - FieldDefRecs
+--------------------------------------------
+
+Each FieldDefRec describes a property of the gadget; it includes information
+about how this property is represented by fields in the gadget's template,
+and how it is represented by icons in the gadget's properties dialogue box.
+
+Each FieldDefRec consists of a 'type' field, and a 'def' field which points
+to <type>FldRec; that is, the 'def' field is of type:
+
+        "pointer-to-union-of <type1>FldRec, <type2>FldRec ..."
+
+The possible types are as follows:
+
+  FLD_INTEGER        - describes an integer property.
+
+    int valicon       - its icon
+    int offset        - its offset
+    Bool displayashex - TRUE if the value is to be displayed in hexadecimal
+
+  FLD_MAND_ASS_STR   - describes a "mandatory assignable" string property:
+                       NULL values and empty strings are indistinguishable,
+                       and it has an associated buffer.
+
+                       It is represented in the gadget template by a
+                       String or Message Reference field coupled with an
+                       integer field which contains its length.
+
+                       It is represented in the properties dbox by a writable
+                       icon for the value, a writable icon for the length,
+                       and two adjusters.
+
+    int valicon       - the writable icon containing the text of the string
+    int lenicon       - the writable icon containing the length of the field
+    int upicon        - the 'up' adjuster arrow associated with lenicon
+    int downicon      - the 'down' adjuster arrow associated with lenicon
+    int valoffset     - the offset of the corresponding StringReference or
+                        MessageReference field
+    int lenoffset     - the offset of the corresponding length field
+
+      Initialisation behaviour is as follows:
+        A NULL field value is represented by the empty string.
+
+      Update behaviour is as follows:
+        An empty string is stored as a NULL field value.
+        The length field is made large enough to hold the string, and can
+         only be zero when the string field is NULL.
+
+
+  FLD_OPT_ASS_STR    - describes an "optional assignable" string property:
+                       NULL values and empty strings have distinct meanings,
+                       and there is an associated buffer.
+
+    int opticon       - the option icon which determines whether the
+                        property is present or not
+    int valicon       - the writable icon for the string
+    int lenicon       - the writable icon for the field's length, and its
+    int upicon          associated adjusters
+    int downicon
+    int valoffset     - the offset for the string field
+    int lenoffset     - the offset for the length field
+
+      Initialisation behaviour is as follows:
+        If the field is NULL, the option icon is deselected and the string
+        writable is faded.
+
+      Update behaviour is as follows:
+        If the option icon is deselected, a NULL value is retrieved.
+        The length field is made large enough to hold the string, and can
+         only be zero when the string field is NULL.
+
+  FLD_MAND_CONST_STR - describes a "mandatory constant" string property:
+                       the empty string and the NULL value mean the same
+                       thing, and there is no associated buffer.
+
+    int icon          - the writable icon for the string
+    int offset        - the offset for the string field
+
+      Initialisation behaviour is as follows:
+        A NULL value is represented by the empty string.
+
+      Update behaviour is as follows:
+        An empty string is represented by a NULL value (since this occupies
+         less space in the Resource file).
+
+  FLD_OPT_CONST_STR  - describes an "optional constant" string property:
+                       the empty string and a NULL value are distinct, but
+                       there is no associated buffer.
+
+    int opticon       - the option icon
+    int valicon       - the writable icon for the string
+    int offset        - the offset for the string field
+
+      Initialisation behaviour is as follows:
+        If the field is NULL, the option icon is deselected and the string
+        writable is faded.
+
+      Update behaviour is as follows:
+        If the option icon is deselected, a NULL value is retrieved.
+
+  FLD_FLAG           - describes a Boolean property represented by the state
+                       of a bit in the gadget's flags word and an option icon
+                       in its properties dbox.
+
+    int opticon       - the option icon
+    unsigned mask     - identifies the bit in the flags word
+    Bool flagmeanson  - if TRUE, a set flag bit is represented by a selected
+                        option icon, else by an unselected icon.
+
+  FLD_XFLAG          - describes a Boolean property represented by the state
+                       of a bit in the body of a gadget, and an option icon
+                       in its properties dbox.
+
+    int opticon       - the option icon
+    int offset        - offset of the field containing the flag bit
+    unsigned mask     - identifies the flag bit in the field
+    Bool flagmeanson  - if TRUE, a set flag bit is represented by a selected
+                        option icon, else by an unselected icon.
+
+  FLD_XPACKED        - describes an integer property represented by a
+                       subfield of a field in the gadget, and by a decimal
+                       writable icon in its properties dbox.
+
+    int valicon       - the writable icon
+    int offset        - the gadget's field
+    unsigned mask     - identifies the location and size of the subfield
+    int shift         - the offset of the subfield from the base of the field
+
+      [ For example, a subfield held in bits 4 to 7 would be defined by:
+         mask = 0xf0, shift = 4. ]
+
+  FLD_BITS           - describes a Boolean property which is represented by
+                       a particular state of a set of bits in the gadget's
+                       flags word, and an option icon in its properties
+                       dbox.
+
+    int opticon       - the option icon (often a radio button - see note)
+    unsigned mask     - identifies the bits in the gadget's flags word of
+                        interest
+    unsigned value    - if the bits have this value, then the option icon
+                        should be selected.
+
+  FLD_MAND_EVENT     - describes a "mandatory" event property. This is
+                       represented by an integer field in the gadget, where
+                       a value of zero means "use the default event". It is
+                       represented in the properties dbox by two radio
+                       buttons ("Default" and "Other") and a writable field.
+
+    int dflticon      - the "Default" radio button
+    int othericon     - the "Other" radio button
+    int valicon       - the writable icon
+    int offset        - the offset of the event field inside the gadget
+
+      Initialisation behaviour is as follows:
+        Set the "Default" radio button if the field value is 0; otherwise
+         set the "Other" button and display the value in hexadecimal in the
+         writable field.
+
+      Update behaviour is as follows:
+        If the default button is selected, or if the writable field contains
+         zero or is empty, store zero; otherwise copy the value in the
+         writable to the gadget's field.
+
+  FLD_OPT_EVENT      - describes an "optional" event property. This is a
+                       mandatory event property with an additional option of
+                       "None" - which is represented by a "None" radio button
+                       in the properties dbox, and by a bit in the gadget's
+                       flags word.
+
+    int dflticon      - the "Default" radio button
+    int othericon     - the "Other" radio button
+    int noneicon      - the "None" radio button
+    int valicon       - the writable icon
+    int offset        - the offset of the event field inside the gadget
+    int mask          - identifies the "raise event" bit in the gadget's
+                        flags word
+
+      Initialisation behaviour is as follows:
+        If the flags bit is not set, the "None" radio button is selected;
+         otherwise proceed as for a mandatory event property.
+
+      Update behaviour is as follows:
+        If the "None" radio button is selected, set the flags bit to zero;
+         otherwise set the flags bit to one and proceed as for a mandatory
+         event property.
+
+  FLD_ALLOWABLE      - describes a "validation string" property. This is
+                       represented inside the gadget by a StringReference
+                       field and a corresponding Length field; NULL and
+                       the empty string are distinct values. Inside the
+                       properties dbox it is represented by an option icon,
+                       a length icon and associated adjuster arrows, option
+                       icons to select a-z, A-Z and 0-9, and an option icon
+                       with an associated writable to add further allowable
+                       characters.
+
+    int opticon       - the option icon
+    int lcicon        - the a-z option icon
+    int ucicon        - the A-Z option icon
+    int numicon       - the 0-9 option icon
+    int otheropticon  - the "Other" option icon ...
+    int othervalicon  - ... and its associated writable icon 
+    int lenicon       - the length icon ...
+    int upicon        - ... and its associated adjuster icons
+    int downicon
+    int valoffset     - offset of the StringReference inside the gadget
+    int lenoffset     - offset of its corresponding length field
+
+      Initialisation behaviour is as follows:
+        If the string field is NULL, the option icon is switched off;
+         otherwise the various icons are initialised according to the content
+         of the string. The length icons are dealt with in the usual way.
+
+      Update behaviour is as follows:
+        If the option icon is deselected, then the string field is set to
+         NULL; otherwise its value is derived from the various icons in an
+         obvious way. The code always ensures that the length value is at
+         least large enough to hold the validation string (not just the
+         "Other" string").
+
+  FLD_LINK           - describes a "link" property. This is represented by
+                       a component ID value in a field in the gadget, and by
+                       two icons - an option and a writable - in the
+                       gadget's properties dbox. A value of -1 in the field
+                       indicates "no link".
+
+    int opticon       - the option icon
+    int valicon       - the writable
+    int valoffset     - the offset of the field
+
+      Initialisation behaviour is as follows:
+        If the value of the field is -1, the option icon is deselected and
+        the writable is faded; otherwise the option icon is selected, and
+        the field's value is displayed in hexadecimal in the writable.
+
+      Update behaviour is as follows:
+        If the option icon is off, a value of -1 is stored in the field;
+        otherwise the writable's value is copied to the field.
+                      
+  FLD_COLOUR         - describes a colour property that is stored as a
+                       subfield in the gadget's flags word, and is
+                       represented by an icon containing a value in the
+                       gadget's properties dbox. The value is always less
+                       than 256, and may be less than 16 if it is a desktop
+                       colour. The way in which the icon in the dbox is
+                       set is determined by other considerations - it might
+                       be a writable, or it might be a display field which
+                       is filled in by choosing an item from an associated
+                       pop-up menu.
+
+    int valicon       - the icon containing the colour number
+    unsigned mask     - a mask identifying the location and size of the
+                        subfield
+    int shift         - the offset of the subfield from the base of the field
+
+  FLD_XCOLOUR        - as FLD_COLOUR, except the subfield is part of a field
+                       inside the gadget's body.
+
+    int valicon       - the icon containing the colour number
+    int offset        - the offset of the field containing the subfield
+    unsigned mask     - a mask identifying the location and size of the
+                        subfield
+    int shift         - the offset of the subfield from the base of the field
+
+  FLD_LENGTH         - describes a "length" property: this is used only for
+                       special cases (most length fields are handled as part
+                       of other properties, such as MAND_ASS_STR) - in fact,
+                       the only use at present is for the Length field
+                       associated with a string set.
+ 
+    int icon          - the writable icon containing the length
+    int offset        - the offset of the corresponding field
+    int (*f) (GadgetPtr gadget)
+                      - when called, this function calculates the minimum
+                        value that the length field may take (which depends
+                        on the lengths of various strings in the gadget).
+
+      There are two copies of the length field. One is the "real" value
+      which is held inside the gadget's body and is always >= 0: this must
+      be correct in order to plot the gadget properly. The second value is
+      held in the gadget's "extension record" (see separate note) and is
+      allowed also to take the value -1, which means "minimum size possible"
+      and is represented by * in the writable icon.
+
+      Initialisation behaviour is as follows:
+        If the extension value is -1, display *; otherwise display the
+         extension value in decimal.
+
+      Update behaviour is as follows:
+        Call the supplied function to determine the minimum length. If the
+         value is *, store -1 as the extension value, and the minimum length
+         as the real value. Otherwise, let len be the greater of the minimum
+         length and the value of the writable: store len both as the real
+         value and as the extension value.
+
+  FLD_END            - identifies the end of the FieldDefRec array.
+
+
+Notes:
+
+  All offsets are relative to the start of the gadget's *header*.
+
+  An "opticon" value can identify a radio button icon as well as an option
+  icon.
+
+  Many of the functions which are used to initialise properties dboxes and
+  to update gadget fields are in the module gui.c; for example:
+
+    gui_put_link(..)  -  initialises the icons describing a link property
+                         from the corresponding fields in the gadget
+
+    gui_get_link(..)  -  updates the fields describing a link property from
+                         the corresponding icons in the dbox
+
+
+The FieldDefRecs list is used by:
+
+  gadget_load(..)       - to create and initialise the gadget's 'extension
+                          record' - see separate section for details
+
+  gadget_init_dbox(..)  - to initialise the icons within the gadget's
+                          properties dialogue box
+
+  gadget_apply_dbox(..) - to set the fields of the gadget according to the
+                          settings of the icons in the gadget's properties
+                          dialogue box
+
+
+4.4  Mouse click specifications - ClickDefRecs
+----------------------------------------------
+
+Each ClickDefRec describes how to respond to a user mouse click on some icon
+in a gadget's properties dialogue box; its format is as follows:
+
+  icon     - the icon of interest ("control icon")
+  action   - the action desired
+  params   - addresses a record containing additional parameters for the
+             action; the form of this record varies according to the desired
+             action.
+
+Every mouse click gives input focus to the window, and the software ensures
+that the caret is placed in a non-faded writable (or is "invisible" if no
+such writables are present).
+
+Possible actions are as follows, where the bracketted letters indicate
+which mouse buttons are recognised ([SMA] = [Select, Menu, Adjust]):
+
+  ACT_FADE [SA]       - A click on the control icon fades the target icon.
+
+    int valicon        - target icon
+
+  ACT_UNFADE  [SA]    - A click on the control icon unfades the target icon
+                         and, if the target icon is writable, the caret is
+                         placed inside it.
+
+    int valicon        - target icon
+
+  ACT_TOGGLEFADE [SA] - A click on the control icon toggles the target icon's
+                         state of "fadedeness". If the target is now an
+                         unfaded writable, the caret is placed inside it.
+
+    int valicon        - target icon
+
+  ACT_RADIO [SA]      - The control icon should be a radio button. It is
+                         switched on - thus causing all others in the same
+                         ESG to be switched off.
+
+  ACT_ADJUST [SA]     - The control icon is expected to be an adjuster arrow,
+                         and the target icon is a writable icon representing
+                         a "length" field that may be associated with a
+                         "string" field represented by the value icon. The
+                         adjuster may be an "up" or a "down" adjuster, and
+                         the absolute adjustment corresponding to each click
+                         depends on whether SHIFT is held down or not.
+                        The amount by which the target icon should be
+                         adjusted is determined according to the kind of
+                         adjuster, whether SHIFT was held down, and whether
+                         it was a SELECT or ADJUST click.
+                        If the target icon contains '*', its pre-adjustment
+                         value is taken as strlen(value icon) + 1.
+                        The target icon value is then adjusted as requested
+                         subject to its value remaining non-negative.
+                        
+    int valicon        - value icon (or -1 if none)
+    int lenicon        - target icon
+    Bool increase      - TRUE for 'up' adjuster, FALSE for 'down'
+    int increment      - for each click
+    int shiftincrement - for each SHIFT-click
+
+  ACT_ALLOW [SA]      - the control icon is expected to be an option icon
+                         that determines whether a gadget has an allowable
+                         string or not; a click on this icon toggles the
+                         state.
+                        If the control icon is now on, then the dependent
+                         option icons (lcicon, ucicon, numicon, otheropticon)
+                         will be unfaded, and the writable associated with
+                         otheropticon will also be unfaded iff otheropticon
+                         is set.
+                        If the control icon is now off, the dependent option
+                         icons and the associated writable will all be faded.
+
+    int lcicon         - option icon for 'a-z'
+    int ucicon         - option icon for 'A-Z'
+    int numicon        - option icon for '0-9'
+    int otheropticon   - option icon for 'Other'
+    int othervalicon   - writable icon associated with 'Other'
+
+  ACT_COLOUR [SM]     - the control icon is a pop-up menu icon associated
+                         with a display icon. A suitable colour selection
+                         menu is displayed, and the user may choose an entry;
+                         if so, the colour number is entered into the display
+                         icon, and its background is set to the corresponding
+                         colour.
+
+    int displayicon    - associated display field icon
+    int menuicon       - pop-up menu icon  [for historical reasons*]
+    Bool allowtransparent
+                       - TRUE iff the menu should include a "transparent"
+                          option.
+
+  ACT_BUTTON [SM]     - the control icon is a pop-up menu icon associated
+                         with a display icon. A suitable button-type
+                         selection menu is displayed, and the user may choose
+                         an entry; if he does, the corresponding number is
+                         entered into the display field.
+
+    int displayicon    - associated display field icon
+    int menuicon       - pop-up menu icon [for historical reasons*]
+
+  ACT_SPECIAL [SA]    - the escape mechanism: the function provided is called
+                         to process the mouse click.
+
+    error * (*f) (GadgetPtr gadget)
+                       - special function to process mouse-click.
+
+  ACT_END [-]         - indicates the end of the list of ClickDefRecs; other
+                         fields are ignored.
+
+    [* Early versions of !ResEd supported menu clicks on the display field
+       as equivalent to menu or select clicks on the pop-up menu icon, but
+       this functionality was removed after round condemnation by the "Style
+       Council". ]
+
+The ClickDefRec list is processed whenever a mouse click is received for a
+gadget properties dialogue box; see the function gadget_dbox_mouse_click(..).
+
+
+Notes:
+
+  The whole array is scanned, and so a number of different actions can be
+  associated with a single mouse click; they will be executed in the same
+  order as they appear in the list.
+
+
+4.5  Drag-n-drop specifications - DropDefRecs
+---------------------------------------------
+
+Each DropDefRec specifies what action to take when a gadget or object is
+dropped into a gadget properties dialogue box. Each record has the following
+fields:
+
+  icon     -  a)  A value of -2 identifies the end of the array of
+                  DropDefRecs; such a record is otherwise ignored.
+
+              b)  A value of -1 means that the record specifies an action to
+                  be taken when a drop occurs anywhere within the dbox.
+
+              c)  A value n >= 0 means that the record specifies an action to
+                  be taken when a drop onto icon n occurs.
+
+  details  -  addresses a sub-record containing the following fields:
+
+    type    -  this field can have one of two values - GADGET_DROP and
+               OBJECT_DROP - which determine what sort of drop is to be
+               recognised. For example, if this field has the value
+               GADGET_DROP, then the specified action is only carried
+               out if it is a gadget that has been dropped.
+
+    class   -  this field is relevant only if type = OBJECT_DROP, and then
+               identifies the class of object required. If its value is -1,
+               then any class of object will be accepted; otherwise, only
+               objects of the given class will cause the specified action
+               to be carried out.
+
+    action  -  this determines the kind of action to be carried out.
+
+    params  -  this addresses a record which contains further parameters to
+               describe the intended action; its format depends on the
+               particular action.
+
+Possibilities are:
+
+  DROP_SET      - The name of the object is stored in the target writable
+                   icon (this possibility is not available for gadgets).
+
+    int valicon      - the target icon
+                     
+  DROP_SETOPT   - The name of the object (or the component ID of the gadget)
+                   is stored in the target writable icon, and the associated
+                   option icon is switched on.
+                  If the option icon is unfaded, the target icon is unfaded.
+
+    int valicon      - the target icon
+    int opticon      - the associated option icon
+
+  DROP_SETOPT2  - The name of the object (or the component ID of the gadget)
+                   is stored in the target writable icon, and the associated
+                   option icon is switched on.
+                  If the option icon is unfaded, the target icon and the
+                   'othericon' are unfaded.
+
+    int valicon      - the target icon
+    int opticon      - the associated option icon
+    int othericon    - another associated icon
+
+  DROP_SETOPT3  - The name of the object (or the component ID of the gadget)
+                   is stored in the target writable icon, and the associated
+                   option icon is switched on.
+                  If the option icon is unfaded, the target icon and the two
+                   other icons are all unfaded.
+
+    int valicon      - the target icon
+    int opticon      - the associated option icon
+    int othericon1   - another associated icon
+    int othericon2   - a further associated icon
+
+It is the functions gadget_object_drop(..) and gadget_gadget_drop(..) which
+scans the DropDefRecs array whenever a gadget or object is dropped onto a
+dialogue box.
+
+
+Notes:
+
+  Only "writable" gadgets (writable field, number range or string set) are
+  accepted; other gadget drops are simply ignored.
+
+
+4.6 Treatment of properties common to all gadget types
+------------------------------------------------------
+
+These properties are:
+
+  componentid - This field contains the gadget's componentID and is
+                 represented by a writable icon in which the value is
+                 displayed in hexadecimal; a new value may be entered in
+                 either hexadecimal or decimal.
+                Before updating the field, a check is made to see that the
+                 new value has not already been allocated to another gadget
+                 in the window: if so, an error is raised and the dialogue
+                 box is not closed.
+
+  window      - This is a display icon in which the name of the window
+                 containing the gadget is displayed.
+
+  help text   - This group of fields/icons is treated like a FLD_OPT_ASS_STR
+                property, and the behaviour of the option icon and adjuster
+                icons are just as if they were described by the appropriate
+                ACT_TOGGLEFADE and ACT_ADJUST mouse-click actions.
+
+  faded       - This is a Boolean property represented by an option icon.
+
+
+Every dialogue box also has OK and Cancel buttons which are treated in the
+standard way:
+
+  SELECT-click OK, or RETURN:
+    gadget_apply_dbox(..)
+    gadget_close_dbox(..)
+
+  ADJUST-click OK, or SHIFT-RETURN:
+    gadget_apply_dbox(..)
+    gadget_init_dbox(..)
+
+  SELECT-click Cancel, or ESCAPE:
+    gadget_close_dbox(..)
+
+  ADJUST-click Cancel, or SHIFT-ESCAPE:
+    gadget_init_dbox(..)
+
+
+4.7 How to add a new gadget type
+--------------------------------
+
+This section just lists the various steps to be taken - see the relevant
+header and source files for details.
+
+  Add a suitable #define for the gadget type to the "gadget types" section
+  in the "Gadget template headers" section in h.format.
+
+  Add a suitable description of the gadget's body to the "Gadget template
+  bodies" section in h.format: this should include #defines for any gadget-
+  specific flag bits, and a type definition for the structure: let's call
+  this WidgetTemplateRec.
+
+  Add "WidgetTemplateRec widget;" as a further entry to the union type
+  GadgetTemplateBodyRec in the "Gadget templates" section of h.format.
+
+  Use !WinEdit to edit the Templates file, and add a new template for the
+  Widget properties dialogue box: remember to give a name to each icon which
+  will be referenced when creating the gadget's definition (GadgetDefRec).
+  Use other dialogue boxes as a guide to spacing, appropriate validation
+  strings, and other conventions. Icon naming also controls how the dialogue
+  box responds to interactive help - see later for details.
+
+  Add a new GadgetDefRec to the array gadgetdefs[] defined in the section
+  "the array of all gadget definitions" in c.gadgdefs; it's probably most
+  sensible to insert this entry before the entry for GADGET_WIMP_ICON.
+
+  The entry above will refer to variables which define the RefDefRecs,
+  FieldDefRecs, ClickDefRecs and DropDefRecs for the gadget type; these
+  should be defined in a new section in c.gadgdefs preceding the section
+  "button gadget definition" and headed "widget gadget definition".
+
+  If any special functionality is required, define the functions in the
+  form "gadget_wf_...(..)"; declare them in the header h.gadget, and define
+  them in the source file c.gadget.
+
+  Add the gadget to the Gadgets Prototype window.
+
+  Where necessary, add new help message text to the Messages file: see later
+  for more details.
+
+  Make sure that a suitable version of the Window module is loaded which is
+  able to plot gadgets of the new type: this can be ensured by updating the
+  !Run file appropriately.
+
+
+5 Permanent Dialogue boxes
+--------------------------
+
+Permanent dialogue boxes - such as Window properties, Extent etc. - behave in
+a similar way to gadget property dialogue boxes:
+
+  A template is read in from the Templates file during initialisation (by a
+  ..._load_prototypes() function).
+
+  Whenever the user wishes to display the dbox, a new window is created from
+  the template. This will be displayed in a default position* if it is the
+  first time that the dbox has been created; otherwise it will be displayed
+  in the same position as the last window created from this template.
+
+     * default => as in template, at present.
+
+  The window is deleted whenever it is closed.
+
+These rules mean that such dialogue boxes only occupy space when they are on
+view.
+
+Fields in the WindowObjRec structure determine whether particular dboxes are
+present or not (eg window->propsdbox); these are used to make sure that any
+such dboxes are deleted when the editing window itself is closed.
+
+
+6 Borderutils
+-------------
+
+A bug in RISC OS 3.10 means that the machine may crash if a window with a
+pressed-in slabbed icon is deleted. The workaround is to load BorderUtils
+version 0.05 or later, and make a special service call immediately before
+deleting a suspect window; see gadget_close_dbox(..), for example.
+
+
+7 Length of indirected fields in dbox template icons
+----------------------------------------------------
+
+Remember these must allow for a zero terminator.
+
+  Title text  256
+  Help text   256
+  Length        3 or 4  (as appropriate)
+  Object name  12
+  Sprite name  13
+  Coordinates   6   (eg -1234)
+  Key code      4   (eg &FF, 255)
+  Event code   10   (eg &abcdef01)
+
+
+8 Validation strings for writables
+----------------------------------
+
+Pptr_write;        - to change pointer shape
+KAT;               - cursor and (SHFT) tab keys cycle through writables
+A0-9               - for non-negative numerics
+A0-9&A-Fa-f
+A0-9\-             - for signed numerics
+A0-9\-&A-Fa-f
+AA-Za-z0-9_        - for object names
+
+
+9 Editing window fields
+-----------------------
+
+Changes to a window's properties are - in general - reflected immediately
+in the window on display, but this is not always possible/sensible. For
+example, the "window is moveable" flag should always be set when ResEd is
+displaying the window to allow the user to change its position - although
+the user may wish the window template to be marked as unmoveable.
+
+This means that some of a window's properties have to held separately from
+the wimp window structure; some of them are also "forced" by ResEd - for
+example, every window template has -1 as its "behind" value*, so that the
+window is displayed on top of all others by default.
+
+  [ * except those with the "Backdrop" bit (bit 11) set which use -2 ]
+
+It is usually necessary to delete and then recreate the window when its
+properties have been changed; for example, when a horizontal scroll bar is
+added. When this is done, a call is made to Window_GetWindowState to find
+out the window's stacking position before deleting it so that it can be
+recreated in the same position.
+
+Here is a list of all the window fields showing which are duplicated and
+which are forced; ResEd's wimp.h names for the fields are given in [..]
+following the PRM names:
+
+
+    int visxmin;   [ RectRec visarea; ]
+    int visymin;
+    int visxmax;
+    int visymax;
+
+      These fields will reflect the position of the window on the screen at
+      the time the template is saved.
+
+      Note that when a window is first displayed, it will - if necessary - be
+      forced partly (or fully) on-screen according to the user settings of
+      the appropriate Configure flags. If this results in new position
+      co-ordinates, then these are noted as a change, and the window will
+      be saved with these new values.
+
+    int scrollx;   [ PointRec scrolloffset; ]
+    int scrolly;
+
+      These fields will reflect that part of the work area displayed at the
+      time the template is saved.
+
+      In fact, the visarea and scrolloffset fields are copied back to the
+      wimp template whenever an Open_Window request is received.
+
+    int behind;
+
+      Forced to -1 (on top) or -2 (at the bottom) - according to flag bit 11.
+
+    unsigned int windowflags;   [ unsigned int flags; ]
+
+      "Old-style" control icon flags are not supported.
+
+      Values marked "*" below are set according to the properties set by the
+      Window properties dbox at the time the template is saved; other flags
+      are forced as shown.
+
+      bit  value  meaning
+
+       0     0    obsolete
+       1     *    window is moveable
+       2     0    obsolete
+       3     0    obsolete
+       4     *    window can be redrawn entirely by the Wimp
+       5     *    window is a pane
+       6     *    window can be opened or dragged outside the screen area
+       7     0    obsolete
+       8     *    Scroll_Request events with auto-repeat on arrows
+       9     *    Scroll_Request events with no auto-repeat on arrows
+      10     *    Use real colours
+      11     *    Don't allow any other windows to open below this one
+      12     *    Generate events for "hot-keys" if this window is open
+      13     *    Force window to stay on screen
+      14     *    Ignore rh extent if size box dragged
+      15     *    Ignore lower extent if size box dragged
+      16     0    open             )         
+      17     0    not covered      )
+      18     0    full size        )   these flags are set by the Wimp
+      19     0    toggled          )
+      20     0    input focus      )
+      21     0    force next time  )
+      22     0    reserved
+      23     0    reserved
+      24     *    has back icon
+      25     *    has close icon
+      26     *    has title bar
+      27     *    has toggle size icon
+      28     *    has vertical scroll bar
+      29     *    has adjust size icon
+      30     *    has horizontal scroll bar
+      31     1    "New-style" - use bits 24-30, ignore bits 0, 2, 3, 7
+
+      ResEd ensures that at most one of bits 8 and 9 is set.
+
+      During editing, the window flags are set as above except for the
+      following flags which are forced as shown:
+
+      bit  value  meaning
+
+       1     1    window can be moved
+       4     0    redraw events are generated for ResEd
+       5     0    window never behaves as a pane
+       6     0    window cannot be dragged/opened outside screen area except
+                   as permitted by configured wimpflags
+       8     0    no Scroll_Request events generated
+       9     0    no Scroll_Request events generated
+      11     0    do not restrict opening of other windows below this one
+      12     0    do not look for hot-keys
+      13     0    allow window off-screen if CMOS bits permit
+      14     0    do not allow flexible extent
+      15     0    do not allow flexible extent
+
+      These effects are achieved by maintaining a copy of the window flags
+      outside the wimp template; we have:
+
+        w->windowflags      - window object template windowflags value
+        w->window->flags    - wimp window template windowflags value
+
+      w->windowflags is created when the window object template is loaded,
+      with bits being forced as shown above; it is also this field which is
+      updated when the window properties are altered, and it is this field
+      which is copied back to the window object template when it is sent
+      back to the shell.
+
+      Whenever the window is displayed, a suitably masked version of
+      w->windowflags is copied to w->window->flags just before the window is
+      created.
+   
+    char titlefore;   [ WindowColoursRec colours; ]
+    char titleback;
+    char workfore;
+    char workback;
+    char scrollouter;
+    char scrollinner;
+    char titleinputfocus;
+
+      These fields reflect the colours assigned (and displayed) at the time
+      the template is saved.
+
+      If the user specifies a transparent background for the workarea, then
+      ResEd displays this as a white background; so w->workBG contains the
+      workarea background value that will be stored in the template, and
+      this value (or "white" if it is "transparent") is copied to
+      w->window->colours.workBG just before the window is created and
+      displayed.
+
+    char filler;
+
+      Must be zero.
+
+    int workxmin;   [ RectRec workarea; ]
+    int workymin;
+    int workxmax;
+    int workymax;
+
+      These fields reflect the values assigned at the time the template is
+      saved.
+
+    unsigned int titleflags;
+
+      Values marked "*" below are set according to the properties set by the
+      Window properties dbox at the time the template is saved; other flags
+      are forced as shown.
+
+      bit  value  meaning
+
+       0     1    text title
+       1     0    title is not a sprite
+       2     0    ignored
+       3     *    centre horizontally
+       4     1    centre vertically
+       5     0    ignored
+       6     0    text is system font
+       7     0    ignored
+       8     1    title is indirected
+       9     *    text is right-justified
+      10     0    ignored
+      11     0    display sprite at half-size
+      12-15  0    ignored
+      16-20  0    ignored
+      21     0    ignored
+      22     0    ignored
+      23     0    icon is deleted
+      24-27  0    ignored
+      28-31  0    ignored
+
+      ResEd ensures that at most one of bits 3 and 9 is set, and forces the
+      other bits as shown above when the window object template is first
+      loaded from the shell.
+
+    int buttontype;   [ unsigned int workareaflags; ]
+
+      This field is set according to the value most recently assigned by the
+      Window properties box at the time the template is saved.
+
+      The value for the window object template is held in w->buttontype: this
+      is created when the template is loaded, changed if the user alters the
+      button type in the Window properties dbox, and saved when the template
+      is returned to the shell.
+
+      In the meantime, w->window->workareaflags is forced to 10 (Double/
+      Click/Drag) so that ResEd can process clicks on the editing window
+      background.
+
+    SpriteAreaReference spritearea;
+
+      ResEd allows either the Client or Wimp Sprite Area to be specified:
+      the client area is represented by 0 and the Wimp area by -1 in the
+      window object template in the resource file.
+
+      Note that since -1 represents a NULL reference, then relocation of
+      SpriteAreaReferences must change the NULL value into +1 - which is
+      what the Wimp itself expects.
+
+      The value for this field is held in w->spritearea; the "real" value in
+      w->window->spritearea is always set to +1, since ResEd always loads
+      sprites into the Wimp's sprite pool.
+
+    char minwidth[2];   [ ShortSizeRec minsize; ]
+    char minheight[2];
+
+      These fields are set using the Extent dialogue box, and settings are
+      immediately reflected during editing.
+
+    MessageReference titletext;      [ int titledata[3]; ]
+    StringReference titlevalidation;
+    int titlebuflen;
+
+      ResEd assumes that the window's title will be represented as an
+      indirected text-only icon.
+
+      The Window properties dialogue allows the user to edit the title text,
+      and set the buffer length - but no facility is provided to set the
+      title validation string.
+
+      Note that the titletext and titlebuflen are treated just like any other
+      string, and so ResEd allows the user to specify NULL for the titletext
+      together with a possibly zero titlebuflen.
+
+      When the template is saved, titlevalidation will be null (ie -1 before
+      relocating); the Toolbox must therefore set the titlevalidation field
+      to -1 before opening the window (since it will have been reset to zero
+      by relocation code when the template was loaded).
+
+      During editing, w->window->titledata[1] is forced to -1.
+
+      The window object template values for titledata[0] and titledata[2] are
+      kept separately as w->title and w->maxtitle, and it is these values
+      which are altered by the Window properties dbox. The corresponding
+      fields in the wimp window template are set just before the window is
+      created, and an empty string is assigned to titledata[0] if the value
+      of w->title is NULL.
+
+    int numicons;
+
+      Always forced to zero.
+
+
+10 Notes on the meaning of the "pane" flag bit (Keyboard shortcuts dbox)
+------------------------------------------------------------------------
+
+The idea is that a pane "sticks" to its "parent" window - but, as usual, the
+application and Wimp must cooperate to ensure this is so.
+
+The client should always (re)open a pane window on top of its parent whenever
+it receives an Open_Window request for the parent.
+
+This ensures that the parent starts as the window immediately below the pane
+in the window stack, and the Wimp helps to keep it this way:
+
+  When a mode change occurs, the Wimp reopens all windows *except* panes - on
+  the assumption that the client will reopen the pane when it receives an
+  open request for its parent.
+
+  Wimp_GetWindowState ignores the presence of panes - so does *not* return
+  the handle of its pane as the handle of the window in front of its parent.
+
+  Any attempt to give input focus to a pane gives it to its parent.
+
+
+The "Keyboard shortcuts" dbox is implemented as a parent window with a
+scrolling pane inside it.
+
+Open_Window requests for the parent arrive whenever the user drags the title
+bar of the dbox, or when there is a mode change; Open_Window requests for the
+pane arrive whenever the user clicks in the scroll bar area, or drags the
+scroll bar.
+
+The procedure for responding to an Open_Window request for the parent is as
+follows:  [keycuts_reopen_dbox(..)]
+
+  - open the pane at the requested position;   [open_pane(..)]
+  - open the parent behind the pane;           [open_parent(..)]
+  - if the Wimp moved the parent when opening it (to force it on-screen, for
+     example) then open the pane again at the new position.
+        [open_parent(..) calls open_pane(..)]
+
+The procedure for responding to an Open_Window request for the pane is as
+follows:  [keycuts_reopen_pane(..)]
+
+  - open the pane at the requested position;  [Wimp_OpenWindow(..)]
+  - if the Wimp moved the pane when opening it, then open the parent at the
+     new position;  [open_parent(..)]
+  - if the Wimp moved the parent when opening it, then open the pane at the
+     new position.  [open_parent(..) calls open_pane(..)]
+
+There is no possibility that the pane will be moved when it is opened on top
+of its parent immediately following a successful parent open - so the call of
+open_pane(..) from open_parent(..) does not need to be checked.
+
+On the other hand, consider the situation where parent and pane are partly
+off-screen to the left and to the bottom; now the user constrains the Wimp
+(using !Configure) so that windows must all be on-screen. He now clicks in
+the pane's scroll bar:
+
+  - keycuts_reopen_pane(..) is called, and the pane is opened; the wimp
+     forces it to be on-screen.
+  - keycuts_reopen_pane(..) notices the change in position, and so calls
+     open_parent(..) to open the parent in the new position. The wimp now
+     forces the parent to be on-screen - which moves it so that it no longer
+     registers correctly with the pane.
+  - open_parent(..) notices this change, and so calls open_pane(..) to reopen
+     the pane in the correct position.
+  - whew!
+
+Note that the code relies on an undocumented feature of the Wimp: if a window
+is opened at a position different to that specified, then Wimp_OpenWindow
+updates the coordinates in the open block to the new position before
+returning to the client.
+
+There are also some fascinating effects which can occur when, for example,
+windows are allowed off-screen "to top and left" but not "to bottom and
+right" - when an attempt is made to drag a window off the bottom of the
+screen the window dosen't move, but the mouse pointer does; this causes
+nasty flickery redraw effects with the keyboard shortcuts window.
+
+
+11 Other notes on keyboard shortcuts code
+-----------------------------------------
+
+In order to maintain the dialogue box paradigm (no change until the user
+clicks "OK"), a copy has to be taken of the keycuts list whenever the keycuts
+dialogue box is created. It is this copy that is edited by the user using the
+ADD, EDIT and DELETE facilities of the dbox; only when he clicks OK does the
+copy replace the original.
+
+Details of the "original" or "secured" keycuts are held in the following
+fields of a WindowObjRec:
+
+  numkeyboardshortcuts  -  number of keycuts defined for this window
+  keyboardshortcuts     -  addresses the list of keycut records for the
+                            window
+
+During editing, the following fields are also meaningful:
+
+  keycutsdbox           -  the parent keycuts dbox window pointer; it is a
+                            non-NULL value here that indicates that editing
+                            of the window's keycuts is in progress
+  keycutspane           -  the keycuts pane window pointer
+
+  numkeys               -  number of keycuts in copy
+  keys                  -  addresses the list containing the edited copy of
+                            the window's keycut records
+
+  numkeysselected       -  number of keycuts selected in the keycuts pane
+
+
+The redraw (and work area invalidation) code for the pane is based on lines
+only - no attempt is made to identify which characters within a line need
+to be redrawn.
+
+
+12 Coordinates
+--------------
+
+To try to avoid problems with rounding etc. coordinates are all forced to be
+multiples of 4 - this also helps to give mode-independence to applications
+which use the template files.
+
+The functions and macro used are:
+
+  WIMP_ALIGN_COORD(x)     - which rounds x to the nearest multiple of 4
+  wimp_align_point(..)    - which uses WIMP_ALIGN_COORD
+  wimp_align_rect(..)     - which uses WIMP_ALIGN_COORD
+
+To achieve this:
+
+  - Gadget bounding box coordinates, window visarea, scrolloffset and
+     workarea coordinates are aligned as necessary on loading.
+
+  - The "extent" dialogue box aligns typed-in coordinates as necessary,
+     and the adjuster buttons alter values by 4 (or 40 if SHIFT is held
+     down).
+
+  - When dragging gadgets, the distance moved is always forced to be a
+     multiple of 4.
+
+  - Whenever an Open_Request is received for an editing window, the visarea
+     and scroll offsets are forced to be a multiple of 4.
+
+
+13 "gui" functions
+------------------
+
+Each of the CSEs has a module called "gui" - general user interface - which
+includes functions to support the user interface for altering many of the
+properties of objects and gadgets. A future iteration of ResEd should
+coalesce these modules into a single module which would then be moved to
+commonlib; in the meantime this is a summary of which CSEs use which macros
+and routines, and where they differ [Window, Misc, menU]:
+
+  GUI_PUT_FLAG(..)  [WMU]
+  GUI_GET_FLAG(..)  [WMU]
+
+  GUI_TOGGLE_FADE(..)  [WMU]
+
+  gui_load_len_field(..)  [WMU]
+    This is a routine for M and U; for W it is a function. The difference
+     arises because the Window CSE has to maintain both a "real" length
+     and an "extension" length for each gadget, whereas this is not necessary
+     for the other CSEs (since they do not call Toolbox modules to display
+     objects).
+  gui_save_len_field(..)  [WMU]
+    This is a routine for M and U; for W it is a function. See above.
+
+  gui_put_len_opt_str(..)  [WMU]
+  gui_get_len_opt_str(..)  [WMU]
+
+  gui_put_opt_str(..)  [WMU]
+  gui_get_opt_str(..)  [WMU]
+
+  gui_put_len_str(..)  [WMU]
+  gui_get_len_str(..)  [WMU]
+
+  gui_put_str(..)  [WM]
+  gui_get_str(..)  [WM]
+
+  gui_adjust_len(..)  [WMU]
+
+  gui_adjust_coord(..)  [W]
+
+  gui_put_opt_event(..)  [WMU]  
+  gui_get_opt_event(..)  [WMU]  
+
+  gui_put_mand_event(..)  [WU]  
+  gui_get_mand_event(..)  [WU]  
+
+  gui_put_allowable(..)  [W]
+  gui_get_allowable(..)  [W]
+
+  gui_put_link(..)  [W]
+  gui_get_link(..)  [W]
+
+  gui_put_filetype(..)  [M]
+  gui_get_filetype(..)  [M]
+
+  gui_put_filetype_string(..)  [M]
+  gui_get_filetype_string(..)  [M]
+
+  gui_put_filetype_from_user(..)  [M]
+
+  gui_put_colour(..)  [WM]
+    Has extra parameter 'realcolours' for !Window.
+    Refers to "noneval" in !Misc, and "transpval" in !Window.
+  gui_get_colour(..)  [WM]
+    Refers to "noneval" in !Misc, and "transpval" in !Window.
+
+  gui_put_rgb_colour(..)  [M]
+  gui_get_rgb_colour(..)  [M]
+
+  gui_put_event(..)  [W]
+  gui_get_event(..)  [W]
+
+
+14 Length fields and '*'
+------------------------
+
+Treatment is summarised as follows:
+
+  When an object template is loaded into a CSE, any length field is set to
+  the value -1 if it is exactly equal to strlen(val) + 1.
+
+  When the corresponding properties dbox is filled in, an asterisk is used
+  if the length = -1.
+
+  When the dbox is applied, the length is set to -1 if (the first character
+  of) the field is '*'.
+
+  When an obect template is saved back to the shell, any length field set
+  equal to -1 is replaced by strlen(val) + 1.
+
+  Clicking on an adjuster icon must take account of '*': this value will be
+  interpeted as meaning strlen(val) + 1.
+
+The above rules are fine for !Misc, but for !Window an additional
+complication arises: Window_PlotGadget is called during the redraw loop to
+display the gadgets in an editing window, and the length fields must then be
+correct (ie not equal to -1!).
+
+So each gadget has three extra fields in its GadgetRec:
+
+   localmaxhelp    -  which contains the "local copy" of the Help text length
+                      (this is the value that may be -1)
+
+   extension       -  which points to an extension record whose size is
+                      gadget-type dependent (this value may be NULL if there
+                      is no need for an extension record)
+
+   extensionsize   -  the size of the extension record (for convenience)
+
+The extension record contains the local copies of any FLD_MAND_ASS_STR,
+FLD_OPT_ASS_STR, FLD_ALLOWABLE or FLD_LENGTH length fields; it is processed
+as follows:
+
+  gadget_load(..)        - creates any extension record required: the fields
+                           are allocated in the order in which they are
+                           encountered in the FieldDefRecs array.
+
+  gadget_free(..)        - frees any extension record.
+
+  gadget_copy(..)        - creates a copy of any extension record for the new
+                           gadget.
+
+  gadget_init_dbox(..)   - uses the extension record for length field values.
+
+  gadget_apply_dbox(..)  - updates both the "real" length fields (in the
+                           gadget's body) and the local copies in the
+                           extension record.
+
+  compare_gadgets(..)    - compares (and frees) extension records.
+
+
+15 Unknown gadget types
+-----------------------
+
+This version (0.28) of ResEd is capable of handling unknown gadget types in a
+limited way: they may be loaded and saved, copied, deleted, and fields in the
+gadget's header can be edited; these are:
+
+    "Faded" flag
+    Size and location   (normally edited by dragging)
+    Component ID
+    Help text
+
+This functionality is achieved as follows:
+
+  When a gadget of unknown type is encountered by gadget_load(..), a special
+  GadgetDefRec is created to describe its format. This has a number of fixed
+  fields defined by unkgadgetdef in c.gadgdefs (such as icon numbers for the
+  various icons in the unknown gadget properties dialogue box), and then a
+  dynamic part which is created by create_body_description(..) in c.gadget:
+  this function examines the gadget template's relocation table, and
+  constructs a corresponding RefDefRecs array.
+
+The unknown gadget can now be treated exactly like any other gadget: we only
+require that the Window module is able to make some attempt at plotting it
+(perhaps just drawing an outline if the Window module, too, does not
+recognise it).
+
+There are, however, some other special actions that need to be taken for
+unknown gadgets:
+
+  When an unknown gadget is copied, its definition is *not* copied - instead,
+  a usecount held within the definition is incremented.
+
+  When an unknown gadget is freed, its definition's usecount is decremented,
+  and the definition itself is only freed if the usecount is now zero.
+
+
+Changes made for Aquarius Update 1 (version 0.33):
+
+It's now possible to edit any fields of an unknown gadget. Most of this is
+achieved by special functions and a revised unknown gadgets properties
+dialogue box, but three less obvious changes have also been made:
+
+  A new reference type "REF_SPRITE" has been added, which allows unknown
+  gadgets to include SpriteAreaReference fields.
+
+  A new click type "ACT_SPECIALX" has been added, which is like ACT_SPECIAL
+  except that extra parameters icon and mouse are passed.
+
+  Every unknown gadget includes an extension record in which a copy of the
+  body is maintained whilst the properties dialogue box is on display;
+  without this, it would not be possible for an ADJ-click on "Cancel" to
+  reset the dialogue to its initial state.
+
+Note that this is a completely different use of the "extension record" from
+the way it is used by ordinary gadget types: in the latter case, the
+extension record is part of the *gadget*, whereas in the former case it is
+really part of the *dbox*. The overall scheme is as follows:
+
+  gadget_open_dbox(..):
+    If this call results in the dialogue box being created, then an extension
+    record is also created. Its size is that of the gadget's body, and it is
+    initialised to zero.
+
+  gadget_uk_init(..):
+    This must (re)initialise the extension record as follows:
+        a) Free any strings inside it
+        b) Copy the gadget's body to the extension record
+        c) Clone any copied strings in the extension record
+    The "Other fields" fields in the dbox are now initialised by reference
+    to the value of the "Offset" display (this is zero in the template, and
+    will otherwise have the value most recently assigned to it - this avoids
+    the offset being reset to zero whenever the user ADJ-clicks CANCEL).
+
+  gadget_uk_offset_up(..):
+  gadget_uk_offset_down(..):
+    First, update the extension record according to the "Other fields" icons:
+        a) If its a string field, free it in the extension record first
+        b) Create a copy of the dbox value and store it in the extension
+           record
+    Next update the "Offset" value according to the adjuster click, and then
+    set the "Other fields" from the extension record.
+
+  gadget_uk_apply(..):
+    This makes any changes temporarily recorded in the extension record
+    permanent.
+    First, update the extension record according to the "Other fields" icons,
+    as above; next, update the gadget's body from the extension record:
+        a) Free any strings inside the body
+        b) Copy the extension record "en-masse" to the body
+        c) Clone any copied strings in the body
+
+  gadget_copy(..):
+    This does not copy the extension record (remember, it's really part of
+    the dialogue box).
+
+  compare_gadgets(..):
+    This doesn't compare the extension record (after all, the copy won't
+    even have one).
+
+  gadget_close_dbox(..):
+    This function releases space occupied by the extension record:
+        a) Free any strings inside it
+        b) Free the extension record itself
+
+
+16 Sorting gadgets for "Link writables"
+---------------------------------------
+
+A gadget B is "after" a gadget A if:
+
+  - B is completely below A
+
+  - A is not completely below B, and B is completely to the right of A
+
+But if A and B overlap, then their order is undefined.
+
+The code used (from Steve) is as follows (see compare_writables(..) in the
+module c.gadget):
+
+  if (A->miny > B->maxy)
+    return -1;
+  if (A->maxy < B->miny)
+    return 1;
+  if (A->maxx < B->minx)
+    return -1;
+  if (A->minx > B->maxx)
+    return 1;
+  return 0;
+
+
+17 Responding to HelpRequest messages
+-------------------------------------
+
+The following contexts are distinguished, each giving rise to a "base" help
+token as shown. If there is no entry for the base token in the Messages file,
+then simpler derived tokens are looked up until one is found to be present:
+the priority order is as shown.
+
+
+17.1  Gadget properties dialogue box
+------------------------------------
+
+  Token:  Hlp.G.<gadget-type>.<icon-name>   - if pointer over named icon
+          Hlp.G.<gadget-type>               - if pointer not over named icon
+
+    where  <gadget-type> is the name of the template for the gadget proerties
+     dialogue box; possibilities are:
+
+                 ActionButt
+                 OptionButt
+                 LabelledBox
+                 Label
+                 RadioButt
+                 Display
+                 Writable
+                 Slider
+                 Draggable
+                 PopUpMenu
+                 AdjArrow
+                 NumberRange
+                 StringSet
+                 WimpIcon
+                 Unknown
+
+     and   <icon-name> is the name of the icon.
+
+  Example:  Hlp.G.ActionButt.TEXTMAX
+
+  Lookup order:  Hlp.G.<gadget-type>.<icon-name>
+                 Hlp.G.<icon-name>
+                 Hlp.<icon-name>
+                 Hlp.ADJ_UP       - if <icon-name> ends in ADJ_UP
+                 Hlp.ADJ_DOWN     - if <icon-name> ends in ADJ_DOWN
+                 Hlp.MAX          - if <icon-name> ends in MAX
+                 Hlp.G.<gadget-type>
+                 Hlp.G
+
+    The special cases (ADJ_UP, etc.) make it possible, for example, to supply
+    a single (or default) help response for all maximum length fields: the
+    base token might be Hlp.G.ActionButt.TEXTMAX with the first match in the
+    list above being Hlp.MAX.
+
+
+17.2  Other dialogue box
+------------------------
+
+  Token:  Hlp.W<n>.<icon-name>     - if pointer over named icon
+          Hlp.W<n>                 - if pointer not over named icon
+
+    where  <n> is the registered window type:
+
+                 2  WindInfo
+                 3  Grid
+                 4  MainProps
+                 5  OtherProps
+                 6  Colours
+                 7  Extent
+                 8  Coords
+                 9  KeyParent
+                10  KeyPane
+                11  Toolbars
+
+     and   <icon-name> is the name of the icon.
+
+  Lookup order:  Hlp.W<n>.<icon-name>
+                 Hlp.<icon-name>
+                 Hlp.ADJ_UP       - if <icon-name> ends in ADJ_UP
+                 Hlp.ADJ_DOWN     - if <icon-name> ends in ADJ_DOWN
+                 Hlp.MAX          - if <icon-name> ends in MAX
+                 Hlp.W<n>
+
+
+17.3  Menu
+----------
+
+  Token:  Hlp.M<n>.<h1>.<h2>...
+
+    where  <n> is the registered menu type:
+
+                 1  colour selection menu
+                 2  button type selection menu
+                 3  editing window menu
+
+     and   <h1>, <h2>, ... is the "hit list" which identifies the entry
+            chosen from the menu (the first entry has index 0).
+
+  Lookup order:  Hlp.M<n>.<h1>.<h2> ... <hn-1><hn>
+                 Hlp.M<n>.<h1>.<h2> ... <hn-1>
+                           ...
+                 Hlp.M<n>.<h1>
+                 Hlp.M<n>
+
+
+17.4  Editing window
+--------------------
+
+  Token:  Hlp.E            - if pointer not over gadget
+
+    If the pointer is over a gadget of type <gadget-type>, then the help
+    response text is made up of two parts as follows:
+
+      a) Let 'basehelp' hold the result of looking up the token Hlp.EG, and
+         let 'type' hold the result of looking up the token
+         Hlp.T.<gadget-type>; then the first part is given by the string 's'
+         after:
+
+             sprintf(s, basehelp, type, id, x, y, width, height)
+
+         where:
+
+             id      - is the gadget's component ID
+             x, y    - are the coordinates of the gadget's top LH corner
+             width   - is the gadget's width
+             height  - is the gadget's height
+
+      b) The second part is given by looking up the token:
+
+            Hlp.EGN   - if the gadget is not selected;
+
+            Hlp.EGS   - if the gadget is selected, and the pointer is not
+                        over a resize ear;
+
+            Hlp.EG<c> - if the gadget is selected, and the pointer is over
+                        one of the resize ears; <c> is determined as follows:
+
+                                   6----7----8
+                                   |         |
+                                   3    4    5
+                                   |         |
+                                   0----1----2
+
+                               C  -  corner       0, 2, 6, 8
+                               H  -  horizontal   3, 5
+                               V  -  vertical     1, 7
+                               I  -  internal     4
+
+  Example:
+
+    Suppose the pointer is over the lower central resize ear of a selected
+    action button gadget, and that the Messages file contains the following
+    entries:
+
+        Hlp.EG:This is %s with ID = &%x at (%d,%d), size (%d,%d).
+        Hlp.T.ActionButt:an action button
+        Hlp.EGV:\Dalter height.
+
+    Then the help response text might be:
+
+        This is an action button with ID = &2 at (20,-100), size (188,88).
+        Drag SELECT to alter height.
+
+
+17.5  Palette window
+--------------------
+
+  Token:  Hlp.P            - if pointer not over gadget
+
+    If the pointer is over a gadget of type <gadget-type>, then the help
+    response text is made up of two parts as follows:
+
+      a) Let 'basehelp' hold the result of looking up the token Hlp.PG, and
+         let 'type' hold the result of looking up the token
+         Hlp.T.<gadget-type>; then the first part is given by the string 's'
+         after:
+
+             sprintf(s, basehelp, type)
+
+      b) The second part is given by looking up the token Hlp.PGS (if the
+         gadget is selected) and Hlp.PGN (if the gadget is not selected).
+
+
+18 Alignment
+------------
+
+The "Align =>" menu entry is unshaded only if:
+
+  a) The mouse is over a gadget (which becomes the "nominated" gadget to
+     which others will be aligned);
+
+  b) There is at least one (other) gadget selected.
+
+Note that the nominated gadget does not have to be selected.
+
+No account of grid lock is taken when aligning objects.
+
+Alignment is chosen by menu rather than by dialogue box - which was the
+original proposal. This latter allowed, eg, top and bottom alignment to be
+specified in a single interaction, thus forcing the gadgets to be all the
+same height: but this extra flexibility was felt not to be worth the increase
+in complexity of the interface.
+
+Centre alignment may not be perfect, since the coordinates of the top LH
+corner of each gadget must always be multiples of 4 OS units and will be
+rounded accordingly.
+ 
+
+19 The Grid
+-----------
+
+Grid spacings are forced to be multiples of 4 OS units.
+
+When "Show grid" is selected, the grid is displayed as a matrix of dots which
+overlays everything else. The colour chosen for the grid is the "opposite" of
+the colour of the window's background.
+
+The grid's origin is the window's work area origin; this allows a user to
+adjust the origin of his window's visible area in such a way that the grid
+appears to be originated in whatever position he wishes with respect to the
+top left hand corner of his dialogue box.
+
+The "Snap to grid" menu option processes each selected object as follows:
+
+  - Identify the "alignment point" (usually the centre of the left hand edge
+    of the bounding box).
+
+  - Find the grid point nearest to the alignment point.
+
+  - Work out the coordinates of the gadget's top left hand corner assuming
+    the alignment point is moved to the grid point.
+
+  - Round these coordinates to multiples of 4 OS units.
+
+When "Grid lock" is on:
+
+  - Resizing a gadget forces its new size to be a multiple of the grid
+    spacing (but does not affect any unchanged dimension - so extending
+    horizontally does not force a gadget's height to be a multiple of the
+    grid spacing). Note also that no change should be made unless the
+    gadget actually *is* resized.
+
+  - When a selection of gadgets is moved or copied from one place to another
+    within the same window, the distance moved is forced to be a multiple of
+    the grid spacing.
+
+  - But the "Coordinates" dialogue can still be used to position and size a
+    gadget without reference to the grid spacing, and the "Align=>" option
+    takes no account of grid lock.
+
+
+20 Dragging selections
+----------------------
+
+[ These notes may no longer be completely accurate, but the principles are
+  certainly still valid. See c.drag for the code. ]
+
+
+20.1  Principles
+----------------
+
+  WindowObjPtr  window  -  source window
+  WindowObjPtr  target  -  destination window (or NULL if none)
+  PointRec      start   -  work area coordinates of mouse when drag started
+  RectRec       dragbox -  work area coordinates of drag box when drag
+                           started
+
+
+          ---------------------
+         |                     |  drag box
+         |    * start          |
+         |                     |
+         |                     |
+          ---------------------
+
+There are three cases to consider whilst the drag is in progress:
+
+  a) Mouse is in source window
+  b) Mouse is in another WindowEdit window (belonging to this application)
+  c) Mouse is somewhere else
+
+For cases (a) and (b), the drag box is drawn by the application - that is, a
+type 7 drag is used.
+
+For case (c), a type 5 drag is used and the drag box is drawn by the Wimp.
+
+Further, in case (a), when "Grid lock" is on, the distance dragged is
+constrained to be a multiple of the grid spacing, and so the darg box does
+not move smoothly as the mouse is moved.
+
+Finally, in cases (a) and (b) under appropriate conditions, auto-scrolling
+may occur.
+
+
+  a) Mouse is in source window:
+
+        WindowObjPtr target  - source window
+        PointRec offset      - offset* of mouse from start position
+
+     * If "Grid lock" is on, then offset.x is an exact multiple of the
+       horizontal grid spacing, and offset.y is an exact multiple of the
+       vertical grid spacing.
+
+     The work area coordinates of the drag box are given by:
+
+        dragbox.minx + offset.x
+        dragbox.maxx + offset.x
+        dragbox.miny + offset.y
+        dragbox.maxy + offset.y
+
+
+  b) Mouse is in another WindowEdit window:
+
+        WindowObjPtr target  - that other WindowEdit window
+        PointRec offset      - offset of mouse from start position where
+                               start is interpreted as a position specified                                 in work area coordinates for the target
+                               window
+
+     Note that offset is never "grid-locked" in this case.
+
+     The location of the drag box in work area coordinates for the target
+     window is calculated exactly as in case (a).
+
+
+  c) Mouse is somewhere else:
+
+        WindowObjPtr target  - NULL
+        PointRec offset      - undefined
+
+     We do not need to maintain any state because the Wimp is handling the
+     drag box for us.
+
+
+There are a number of state changes we must consider, corresponding to mouse
+movement between NULL calls.
+
+  (1)  The mouse remains in the source window            (a) -> (a)
+  (2)  The mouse remains in another window               (b) -> (b)
+  (3)  The mouse remains elsewhere                       (c) -> (c)
+  (4)  The moves from source to another                  (a) -> (b)
+  (5)  The moves from source to elsewhere                (a) -> (c)
+  (6)  The moves from another to source                  (b) -> (a)
+  (7)  The moves from another to elsewhere               (b) -> (c)
+  (8)  The moves from elsewhere to source                (c) -> (a)
+  (9)  The moves from elsewhere to another               (c) -> (b)
+
+We can simplify these possibilities by treating exit and entry separately,
+and by treating cases (a) and (b) as nearly identical.
+
+  (1), (2):
+    - Determine position of mouse in work area coordinates of target window.
+    - Subtract start.
+    - If case (1) - ie target == window - snap to grid spacing.
+    - Compare with offset:
+        - If equal, call wimp_cycle_eor_box(..)
+        - If different:
+            - Use wimp_update_eor_box(..) to obliterate previous drag box
+            - Update offset
+            - Use wimp_update_eor_box(..) to plot new drag box
+
+  (3):
+    No action is necessary: the Wimp will take care of everything.
+
+  (4), (5), (6), (7):  [the mouse is leaving a WindowEdit window]
+    - Use wimp_update_eor_box(..) to remove the drag box from target.
+    - If it is entering elsewhere [(5), (7)]:
+        - Cancel the current drag
+        - Create a new type 5 drag with initial drag box given by dragbox +
+           offset converted to screen coordinates via target window
+        - Set target = NULL
+
+  (8), (9):  [the mouse is leaving elsewhere]
+    - Cancel the current drag.
+    - Create a new type 7 drag.
+    - Set target = window just entered.
+    - We now know that the mouse has just moved into a WindowEdit window, and
+      that an appropriate Wimp drag is in progress:
+        - Determine position of mouse in work area coordinates of target.
+        - Subtract start.
+        - If case (8) - target == window - snap to grid spacing.
+        - Set offset.
+        - Use wimp_update_eor_box(..) to plot the drag box.
+
+    
+20.2  Improving the appearance of "circulation"
+-----------------------------------------------
+
+This is achieved by treating the case where the drag box has not moved as a
+special case:
+
+  If the drag box has moved:
+    plot_drag_box(drag)   -  removes previous box
+    drag += offset;
+    plot_drag_box(drag)   -  draws new box
+
+  If the drag box has not moved:
+    cycle_drag_box(drag)  -  "cycles" the drag box in its current position
+
+plot_drag_box(..) simply calls wimp_update_eor_box(..) to plot/unplot the
+box.
+
+cycle_drag_box(..) calls:
+  wimp_start_rotate_box(..)  - chooses the "rotate in-situ" dot-dash pattern
+  wimp_update_eor_box(..)
+  wimp_end_rotate_box(..)    - chooses the "remove/create" dot-dash pattern,
+                               and "cycles" both patterns
+
+wimp_update_eor_box(..) does 'EOR' plotting which, when using the correct
+"pattern", can:
+  - plot a new dotted box
+  - remove a previous dotted box
+  - make a dotted box appear to "circulate"
+
+The basic pattern is:    111111001111110011111100 ...
+
+
+20.3  Improving the appearance of auto-scrolling
+------------------------------------------------
+
+If autoscroll is to take place:
+
+  - Erase the drag box in the NULL event code (nb - this has to be done
+    before the window's scroll offsets are changed).
+
+  - But do not redraw it.
+
+  - Use windowedit_redraw_window(..) in the REDRAW event code, and then call
+    plot_drag_box(..) afterwards to plot the drag box (ie do not plot the
+    drag box inside the redraw loop - it might not all be plotted).
+
+
+21 Radio buttons
+----------------
+
+Here are some miscellaneous notes about the manipulation of radio buttons.
+
+Note that ResEd ensures dynamically that at most one radio button in each
+group is marked as "on", but does *not* ensure that at least one button is
+"on".
+
+
+21.1  Make radio group
+----------------------
+
+This menu item is faded unless all gadgets in the selection are radio
+buttons.
+
+Its effect is as follows:
+
+  - Find a group number that is not in use by any other radio buttons in the
+    window.
+
+  - Assign this group number to every selected radio button.
+
+  - If the selection includes more than one "on" button, mark all other than
+    the first one encountered as "off":
+        - reset flag bit
+        - invalidate radio button bbox
+        - update any associated properties dbox
+
+
+21.2  Marking a radio button as "on"
+------------------------------------
+
+If any other button in the same group is "on", it must be marked "off" as
+follows:
+
+  - reset flag bit
+  - invalidate radio button bbox
+  - update any associated properties dbox
+
+
+21.3  Copying radio buttons within the same window
+--------------------------------------------------
+
+If a copy is made of a radio button within the same window (ie using
+SHIFT/SEL/DRAG) then the copy keeps the same group number and so remains
+within the same group.
+
+To avoid possible multiple "on" buttons, the copy is always marked "off".
+
+
+21.4  Adding new radio buttons to a window
+------------------------------------------
+
+This is done by dragging a selection from one window (possibly the palette)
+to another.
+
+The "dragged-in" buttons retain their relative groupings (and any "on" state)
+- but these must not merge with any pre-existing groups which just happen to
+have the same group number in the destination window:
+
+  For each separate group in the selection:
+
+    - Find a group number that is not in use (by any other radio buttons in
+      the target window).
+
+    - Assign this group number to the group.
+
+    - Add the group to the window.
+
+In fact, the algorithm used is:
+
+  - Find a group number which exceeds any group numbers in use in either the
+    destination window or the selected gadgets.
+
+  - Repeatedly scan the selected gadgets renumbering one group at a time:
+    it's easy to see whether a radio button in the list of selected gadgets
+    belongs to a renumbered group by testing to see if its group number is
+    greater than or equal to the group number determined in the first step.
