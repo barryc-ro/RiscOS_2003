@@ -1169,9 +1169,14 @@ IconSprites_Code
 getspritefname
         Push    "R0,LR"
 
+      [ false
         ADRL    R2,watchdogerrtxt       ; changed from errorbuffer to fix nager:sprites occurring cos
                                         ; this was writing over the errorblock before it was presented
                                         ; to the user
+      |
+        ADRL    R2, path_buffer         ; watchdogerrtxt isn't big enough for long pathnames, and was getting
+                                        ; overwritten by the new Service_SwitchingOutputToSprite handler
+      ]
 
 01      LDRB    R14,[R1],#1             ; skip leading spaces
         CMP     R14,#" "
@@ -1184,7 +1189,11 @@ getspritefname
         ADR     R0,romspr_suffix
         MOV     R1,R2
         BL      copy0                   ; copy from R0 to R1
+      [ false
         ADRL    R1,watchdogerrtxt
+      |
+        ADRL    R1, path_buffer
+      ]
         DebugS  xx,"getspritefname: ",R1
 
         Pull    "R0,PC",,^
@@ -2238,10 +2247,10 @@ loseromsprites
 ; Service_SwitchingOutputToSprite: cache limited graphics parameters
 
 switchingtosprite
-        Push    "R5-R6,LR"
+        Push    "R0,R5-R6,LR"
         BL      readvduvars2            ; including new screen/sprite size etc.
         BLVC    calcborders             ; to set up dx, dy
-        Pull    "R5-R6,PC"
+        Pull    "R0,R5-R6,PC"
   ]
 
 ; Service_ModeChange: cache new graphics parameters
@@ -3143,7 +3152,7 @@ dragsubr_on     #       4               ; for user-supplied subroutines
 dragsubr_off    #       4               ; for user-supplied subroutines
 dragsubr_move   #       4               ; for user-supplied subroutines
  [ Autoscr
-dragflags       #       4               ; as passed to Wimp_DragBox in R0
+dragflags       #       4               ; as passed to Wimp_DragBox in R3
  ]
 
 drg_on          *       dragsubr_on   - dragwsptr
@@ -3767,6 +3776,8 @@ memory_claims   #       8               ; build a list of mem claims for debuggi
  ALIGN
 
 inverselookup   #       1024            ; what colour numbers to use when EOR'ing an area
+
+path_buffer     #       1024            ; for building Sprites<x><y> pathnames
 
  ALIGN
 
@@ -5215,7 +5226,7 @@ justsetshape
 
 
 ;;-----------------------------------------------------------------------------
-;; Rectangle handling routines: intrect, subrect, addrects, addtolist
+;; Rectangle handling routines: intrect, subrect, addrect, addtolist
 ;;-----------------------------------------------------------------------------
 
 ;;------------------------------------
@@ -5271,6 +5282,7 @@ subwindowrect
         MOV     R1,R0
 
 subrect
+;        Debug   opn, "subrect: called with R0,R1,cx0-cy1 =", R0, R1, cx0, cy0, cx1, cy1
         Push    "R0,R1,userblk,handle,LR"
         SetRectPtrs
 ;
@@ -5306,7 +5318,7 @@ addrect
 
 ;;---------------------------
 ;; addsub - used by both of the above routines
-;; Entry :  R1 --> item under consideration
+;; Entry :  R0 --> item under consideration
 ;;          cx0,cy0,cx1,cy1 = rectangle to (not) clip to
 ;; Exit :   'torects' list updated
 ;;---------------------------
@@ -5587,6 +5599,27 @@ errnorects
         STR     R14,BPR_indication
         MOV     R1,#nullptr
         Pull    PC
+
+;;-----------------------------------------------------------------------
+;; listrects - print rectangle list to debug output
+;; Entry: R0 = index of header of list to print
+;;-----------------------------------------------------------------------
+
+      [ debugopn
+listrects
+        ENTRY   "x0-y1, handle, userblk"
+        SetRectPtrs
+        Debug   opn, "Rectangle list", R0
+        B       %FT02
+01
+        getxy   R0, x, y
+        Debug   opn, "Link / x0-y1 =", R0, x0, y0, x1, y1
+
+02      LDR     R0, [rectlinks, R0]
+        CMP     R0, #nullptr
+        BNE     %BT01
+        EXITS
+      ]
 
 ;;-----------------------------------------------------------------------
 ;; Zap all rectangle lists and invalidate whole screen
@@ -6091,7 +6124,13 @@ subtract_openingchildren ROUT
         Pull    "handle"
 
         Debug   child,"Subtracting opening child window rectangle",handle,cx0,cy0,cx1,cy1
+     [ true                                             ; BJGA bugfix
+        CMP     cx0, cx1                                ; optimise out these cases -
+        CMPLT   cy0, cy1                                ; they are unnecessary, and can cause intermittent bugs
+        BLLT    subrect
+     |
         BL      subrect
+     ]
 
         LDR     handle,[handle,#w_opening_link + ll_forwards]
         B       %BT10
@@ -6114,6 +6153,15 @@ oldsubtract_openingchildren ROUT
 
         LDR     handle, openingwinds + lh_forwards
 10
+;      [ debugopn
+;        Push    "R0, R1, rectcoords, rectlinks"
+;        SetRectPtrs
+;        MOV     R0, #borderrects
+;        LDR     R0, [rectlinks, R0]
+;        LDR     R1, [sp, #2*4] ; get handle from stack
+;        Debug   opn, "oldsubtract_openingchildren: next handle, borderrects =", R1, R0
+;        Pull    "R0, R1, rectcoords, rectlinks"
+;      ]
         ASSERT  ll_forwards = 0
         LDR     R14,[handle],#-w_opening_link
         CMP     R14,#nullptr                            ; Has end been reached?
@@ -6123,12 +6171,23 @@ oldsubtract_openingchildren ROUT
         B       %FT14
 
 12      LDR     R14,[R2,#w_opening_link + ll_forwards]
-        TEQ     R14,#0
+        TEQ     R14,#0                                  ; shouldn't that be CMP R14, #nullptr?  BJGA Apr98
         BNE     %FT15                                   ; if intervening window is opening anyway, we can ignore this one
 
         LDR     R2,[R2,#w_old_parent]
 
-14      CMP     R2,userblk
+14      ; handle = valid handle from openingwinds
+        ; R2     = handle's old parent / old ancestor
+;      [ debugopn
+;        Push    "R0, R1, rectcoords, rectlinks"
+;        SetRectPtrs
+;        MOV     R0, #borderrects
+;        LDR     R0, [rectlinks, R0]
+;        LDR     R1, [sp, #2*4] ; get handle from stack
+;        Debug   opn, "oldsubtract_openingchildren: borderrects, handle, ancestor =", R0, R1, R2
+;        Pull    "R0, R1, rectcoords, rectlinks"
+;      ]
+        CMP     R2,userblk
         BEQ     %FT25
 
         CMP     R2,#nullptr
@@ -6137,11 +6196,28 @@ oldsubtract_openingchildren ROUT
 15      LDR     handle,[handle,#w_opening_link + ll_forwards]
         B       %BT10
 20
+;      [ debugopn
+;        Push    "R0, rectcoords, rectlinks"
+;        SetRectPtrs
+;        MOV     R0, #borderrects
+;        LDR     R0, [rectlinks, R0]
+;        Debug   opn, "oldsubtract_openingchildren: opening list scan complete, borderrects =", R0
+;        Pull    "R0, rectcoords, rectlinks"
+;      ]
         Pull    "cx0,cy0,cx1,cy1,x0,y0,x1,y1,handle,userblk,PC"
 
 ; we've found a child window in the opening list that's a descendent of the window in question
 
 25
+;      [ debugopn
+;        Push    "R0, R1, rectcoords, rectlinks"
+;        SetRectPtrs
+;        MOV     R0, #borderrects
+;        LDR     R0, [rectlinks, R0]
+;        LDR     R1, [sp, #2*4] ; get handle from stack
+;        Debug   opn, "oldsubtract_openingchildren: found a descendent, borderrects, handle =", R0, R1
+;        Pull    "R0, R1, rectcoords, rectlinks"
+;      ]
         Push    "handle"
 
         ADD     R14,handle,#w_old_x0
@@ -6165,7 +6241,29 @@ oldsubtract_openingchildren ROUT
         Pull    "handle"
 
         Debug   child,"Old Subtracting opening child window rectangle",handle,cx0,cy0,cx1,cy1
+;      [ debugopn
+;        Push    "R0, rectcoords, rectlinks"
+;        SetRectPtrs
+;        MOV     R0, #borderrects
+;        LDR     R0, [rectlinks, R0]
+;        Debug   opn, "oldsubtract_openingchildren: before subrect, borderrects =", R0
+;        Pull    "R0, rectcoords, rectlinks"
+;      ]
+     [ true                                             ; BJGA bugfix
+        CMP     cx0, cx1                                ; optimise out these cases -
+        CMPLT   cy0, cy1                                ; they are unnecessary, and can cause intermittent bugs
+        BLLT    subrect
+     |
         BL      subrect
+     ]
+;      [ debugopn
+;        Push    "R0, rectcoords, rectlinks"
+;        SetRectPtrs
+;        MOV     R0, #borderrects
+;        LDR     R0, [rectlinks, R0]
+;        Debug   opn, "oldsubtract_openingchildren: after subrect,  borderrects =", R0
+;        Pull    "R0, rectcoords, rectlinks"
+;      ]
 
         LDR     handle,[handle,#w_opening_link + ll_forwards]
         B       %BT10
