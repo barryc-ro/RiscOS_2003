@@ -17,7 +17,7 @@ RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 SDIR       = Sources
 INSTDIR    = ${INSTDIR}.${APP}
-RESD       = ${RESDIR}.Internet.bin
+RESD       = ${RESDIR}.Internet
 
 # Generic options:
 #
@@ -69,8 +69,12 @@ NETUTILS = \
         ${SDIR}.utils.utl.RMFind     \
         ${SDIR}.route.Route          \
         ${SDIR}.sysctl.SysCtl        \
-        ${SDIR}.traceroute.TraceRoute\
-        ${SDIR}.utils.utl.X          
+        ${SDIR}.traceroute.TraceRoute \
+        ${SDIR}.utils.utl.X           \
+        ${RDIR}.!Boot                 \
+        ${RDIR}.!Run                  \
+        ${RDIR}.!Sprites              \
+        ${RDIR}.!Sprites22
 
 #
 # Main rules:
@@ -122,9 +126,9 @@ resources-:
 	@echo ${COMPONENT}: No resource files to copy
 
 resources-NetUtils: ${NETUTILS}
-	${MKDIR} ${RESDIR}.Internet
 	${MKDIR} ${RESD}
 	${MKDIR} ${RESD}.bin
+	${MKDIR} ${RESD}.files
         ${CP} ${SDIR}.arp.ARP               ${RESD}.bin.ARP          ${CPFLAGS}
         ${CP} ${SDIR}.ifconfig.IfConfig     ${RESD}.bin.IfConfig     ${CPFLAGS}
         ${CP} ${SDIR}.inetstat.InetStat     ${RESD}.bin.InetStat     ${CPFLAGS}
@@ -135,6 +139,15 @@ resources-NetUtils: ${NETUTILS}
         ${CP} ${SDIR}.sysctl.SysCtl         ${RESD}.bin.SysCtl       ${CPFLAGS}
         ${CP} ${SDIR}.traceroute.TraceRoute ${RESD}.bin.TraceRoute   ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.X           ${RESD}.bin.X            ${CPFLAGS}
+        ${CP} ${RDIR}.files.AUNMap          ${RESD}.files.AUNMap     ${CPFLAGS}
+        ${CP} ${RDIR}.files.Hosts           ${RESD}.files.Hosts      ${CPFLAGS}
+        ${CP} ${RDIR}.files.Networks        ${RESD}.files.Networks   ${CPFLAGS}
+        ${CP} ${RDIR}.files.Protocols       ${RESD}.files.Protocols  ${CPFLAGS}
+        ${CP} ${RDIR}.files.Services        ${RESD}.files.Services   ${CPFLAGS}
+        ${CP} ${RDIR}.!Boot                 ${RESD}.!Boot      ${CPFLAGS}
+        ${CP} ${RDIR}.!Run                  ${RESD}.!Run       ${CPFLAGS}
+        ${CP} ${RDIR}.!Sprites              ${RESD}.!Sprites   ${CPFLAGS}
+        ${CP} ${RDIR}.!Sprites22            ${RESD}.!Sprites22 ${CPFLAGS}
 
 ${SDIR}.arp.ARP: ${SDIR}.arp.c.ARP
 	dir ${SDIR}.arp
