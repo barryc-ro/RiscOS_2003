@@ -6,6 +6,10 @@
  * Copyright (c) 1995 ANT Ltd., Cambridge, England
  *
  * $Log$
+ * Revision 4.4  1998/06/17 17:39:15  celkins
+ * ReCommit of filer.c, since NFS appears to be responsible for a block
+ * deletion/insertion fault (401 bytes at a non-aligned offset ????).
+ *
  *
  * 96/11/18 C.Elkins
  * Modifications to CMOS handling code to only use bottom nibble
@@ -77,6 +81,9 @@
 
 #define USESTEMPLATES		/* define if we use a template file */
 #define HASUNIMPORTMENU		/* provide unimport option */
+
+#define DragsToIconBar 1        /* RML: Allow copies/saves to icon bar */
+#define wimp_MFILERDEVICEPATH 0x408
 
  /* #define NOSPECIALFIELDS *//* Use bare filenames */
  /* #define SHOWDISCS *//* Use ShareFS style Resources:$.Discs */
@@ -1347,6 +1354,58 @@ static int addvolume(char *name)
 #endif
 extern int strlen_ctrl(char *buf);
 
+
+#if DragsToIconBar
+/* Given a string, append the value of string variable ShareFSFiler$DefaultPath */
+static void append_dotdefault_path(char *string, int size)
+{
+    _kernel_swi_regs r;
+    char             var_name[] = "ShareFSFiler$DefaultPath";
+    char             var_value[256];
+    int              length;
+
+    /* Check if ShareFSFiler$DefaultPath exists - can't use _swix, must use _kernel_swi */
+    r.r[0] = (int)var_name;
+    r.r[1] = 0;
+    r.r[2] = -1;
+    r.r[3] = 0;
+    r.r[4] = 0;
+    _kernel_swi(OS_ReadVarVal, &r, &r);
+
+    if (r.r[2] < 0)
+    {
+        length = -r.r[2];
+        if ((length + strlen(string)) < size)
+        {
+            r.r[0] = (int)var_name;
+            r.r[1] = (int)var_value;
+            r.r[2] = size - strlen(string);
+            r.r[3] = 0;
+            r.r[4] = 0;
+            _kernel_swi(OS_ReadVarVal, &r, &r);
+
+            var_value[length-1] = 0;
+            strcat(string, ".");                                        
+            strcat(string, var_value);
+        }
+    }
+}    
+
+
+/* Given the handle of a device icon, do a filer_opendir on the device */
+static void do_filer_opendir(int icon)
+{
+    char cmd_string[256];
+        
+    sprintf(cmd_string, "Filer_OpenDir Share::%s.$", volumenames[icon]);
+    append_dotdefault_path(cmd_string, 256);
+        
+    _swix(OS_CLI, _IN(0), cmd_string);
+}
+#endif
+
+
+
 int filertask(char *cmdtail)
 {
     os_error *err;		/* P:6 */
@@ -1376,6 +1435,7 @@ int filertask(char *cmdtail)
 #endif
     int maydataload = 0;
     char *pendingcmd = NULL;
+    char fname_str[256];
     static int messages_wanted[] = {wimp_MCLOSEDOWN, wimp_MDATASAVEOK, wimp_MDATASAVE, wimp_MDATALOAD,
 	      wimp_MDATAOPEN, wimp_MMENUWARN, wimp_MHELPREQUEST, 0};
 #ifndef RUNNABLE
@@ -2491,10 +2551,21 @@ pol:				/* P:192136 */
 		if (icon < 0)
 		    continue;
 #endif
-#ifdef NOSPECIALFIELDS
-		sprintf(ev.data.msg.data.datasaveok.name, FS "::%s.$.%s", volumenames[icon], sstr(ev.data.msg.data.datasaveok.name));
+
+
+#if DragsToIconBar
+                do_filer_opendir(icon);
+		sprintf(fname_str, FS "::%s.$", volumenames[icon]);
+		append_dotdefault_path(fname_str, 256-20);
+		strcat(fname_str, ".");
+		strcat(fname_str, sstr(ev.data.msg.data.datasaveok.name));
+                strcpy(ev.data.msg.data.datasaveok.name, fname_str);
 #else
+  #ifdef NOSPECIALFIELDS
+		sprintf(ev.data.msg.data.datasaveok.name, FS "::%s.$.%s", volumenames[icon], sstr(ev.data.msg.data.datasaveok.name));
+  #else
 		sprintf(ev.data.msg.data.datasaveok.name, FS "#%s::%s.$.%s", transportnames[icon], volumenames[icon], sstr(ev.data.msg.data.datasaveok.name));
+  #endif
 #endif
 		ev.data.msg.hdr.size = (strlen(ev.data.msg.data.datasaveok.name) | 3) + 1 + 44;
 		ev.data.msg.hdr.your_ref = ev.data.msg.hdr.my_ref;
@@ -2502,7 +2573,13 @@ pol:				/* P:192136 */
 		wimp_sendmessage(wimp_ESEND, &ev.data.msg, ev.data.msg.hdr.task);
 		maydataload = 1;/* flag to bounce next dataload */
 		goto pol;
+
+
 	      case wimp_MDATALOAD:	/* P:0 */
+	        /* RML: There are (now) two cases of Message_DataLoad:
+	              CASE 1: As part of the save protocol (in which case maydataload will be set to 1)
+	              CASE 2: Because of a file drag to one of our icons.
+	           So, first deal with case 1: */
 		if (maydataload)
 		{
 		    ev.data.msg.hdr.your_ref = ev.data.msg.hdr.my_ref;	/* P:0 */
@@ -2511,15 +2588,17 @@ pol:				/* P:192136 */
 		    maydataload = 0;
 		    continue;
 		}
+
+                /* RML: HASEXPORTWINDOW code now largely redundant */
 #ifdef HASEXPORTWINDOW
 		if (ev.data.msg.data.dataload.w == exportwindow || ev.data.msg.data.dataload.w == -2)
 		{
-#if 1
+  #if 1
 		    char buf[256];
 		    sprintf(buf, "Export %s", sstr(ev.data.msg.data.dataload.name));
 		    if (_kernel_ERROR == _kernel_oscli(buf))
 			wimp_reporterror((os_error *) _kernel_last_oserror(), 0, ModuleName);
-#else
+  #else
 		    char *p, *q, *n = sstr(ev.data.msg.data.dataload.name);
 		    char *b = FS "#local::ALL.$.";
 		    int k = strlen(b);
@@ -2543,7 +2622,7 @@ pol:				/* P:192136 */
 		    wimp_set_icon_state(exportwindow, 0, 0, 0);
 		    wimp_set_icon_state(exportwindow, 2, 0, 0);
 		    wimp_set_icon_state(exportwindow, 6, 0, 0);
-#endif
+  #endif
 		    ev.data.msg.hdr.your_ref = ev.data.msg.hdr.my_ref;
 		    ev.data.msg.hdr.action = wimp_MDATALOADOK;
 		    wimp_sendmessage(wimp_ESEND, &ev.data.msg, ev.data.msg.hdr.task);
@@ -2554,8 +2633,30 @@ pol:				/* P:192136 */
 			    goto error;
 		    }
 		}
+#else
+                /* RML: DataLoad CASE 2 - check it's iconbar and if so, send Message_FilerDevicePath */
+    #if DragsToIconBar
+                if (ev.data.msg.data.dataload.w == -2)
+                {
+    		    for (icon = 0; icon < numvolumes; icon++)	/* P:0 */
+    		    {
+    		        if (ev.data.msg.data.datasave.i == volumeicons[icon])	/* P:0 */
+    			    break;	/* P:0 */
+    		    }
+
+                    ev.data.msg.hdr.size = 256;
+		    ev.data.msg.hdr.your_ref = 0;
+		    ev.data.msg.hdr.action = wimp_MFILERDEVICEPATH;
+		    sprintf(ev.data.msg.data.chars, FS "::%s.$", volumenames[icon]);
+		    append_dotdefault_path(ev.data.msg.data.chars, 256-20);
+		    wimp_sendmessage(wimp_ESEND,&ev.data.msg, ev.data.msg.hdr.task);
+		    do_filer_opendir(icon);
+                }
+    #endif                
+
 #endif
 		continue;
+
 
 	      case wimp_MDATAOPEN:	/* P:29 */
 #ifndef SHOWDISCS
