@@ -77,15 +77,17 @@ ${TARGET}: ${OBJS}
 
 #
 # Dynamic dependencies:
+o.riscos:	c.riscos
+o.riscos:	C:h.kernel
+o.riscos:	C:h.swis
+o.riscos:	h.srcbuild
+o.parse:	c.parse
+o.parse:	h.srcbuild
 o.srcbuild:	c.srcbuild
 o.srcbuild:	h.srcbuild
 o.srcbuild:	h.build
 o.srcbuild:	h.parse
 o.srcbuild:	h.riscos
-o.riscos:	c.riscos
-o.riscos:	C:h.kernel
-o.riscos:	C:h.swis
-o.riscos:	h.srcbuild
 o.build:	c.build
 o.build:	h.srcbuild
 o.build:	h.riscos
