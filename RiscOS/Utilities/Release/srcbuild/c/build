@@ -13,6 +13,8 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+#include <time.h>
 
 /* RISC OS Includes */
 #include "kernel.h"
@@ -116,6 +118,7 @@ extern podule_info_t podule_info;
 /*
  * perform a amu_machine call with printf style parameter passing
  */
+#pragma check_printf_formats
 static int
 amu_machinef(char *format, ...)
 {
@@ -154,6 +157,7 @@ amu_machinef(char *format, ...)
 
   return ret;
 }
+#pragma -v0
 
 
 /*
@@ -181,6 +185,34 @@ _check_dir(char *prefix, char *filename)
     case 1:
       error(1, "found file %s when it should be a directory.", buffer);
   }
+  return 0;
+}
+
+/* Construct a set of directories, one level at a time. Each arg is parsed for directory
+ * separators too to enable arbitrary paths to be easily created.
+ */
+static int
+_check_dir_v(char *prefix, ...)
+{
+  va_list ap;
+  const char *arg;
+  char buffer[BUFFER_LEN];
+
+  buffer[0] = '\0';
+
+  va_start(ap, prefix);
+  for (arg = prefix; arg; arg = va_arg(ap, const char *)) {
+      const char *next, *p;
+      for (p = arg, next = NULL; *p; p = next)
+      {
+        if (*buffer) strcat(buffer, ".");
+        next = p + strcspn(p, ".");
+        strncat(strchr(buffer, '\0'), p, next - p);
+        _check_dir(NULL, buffer);
+        if (*next) ++next;
+      }
+  }
+  va_end(ap);
   return 0;
 }
 
@@ -410,47 +442,53 @@ int build_export_libs(void)
 
 
 
-int build_resources(void)
+int build_resources_(int generate_script)
 {
   component_entry_t *component;
   module_entry_t *module;
   char buffer[BUFFER_LEN];
+  char bbe_dir[BUFFER_LEN];
+  char scriptfilename[BUFFER_LEN];
   module_type_t type;
   char* locale = NULL;
 
-  /* Read the numeric locale list */
-  if ((locale = read_env(ENV_NUM_LOCALE)) == NULL)
+
+  if (!generate_script)
   {
-    error(1, "Could not read the numeric lcoale list system variable. */");
+    /* Read the numeric locale list */
+    if ((locale = read_env(ENV_NUM_LOCALE)) == NULL)
+    {
+      error(1, "Could not read the numeric lcoale list system variable. */");
+    }
+
+    /*
+     * Force a make clean on the messages module. Note that this is independent
+     * of any settings in the module database or component database, apart from %messages.
+     * We are assuming quite a lot about the Messages module here...
+     */
+    printf("\nCleaning Messages...\n");
+    sprintf(buffer, "%s.%s", build_dir, messages_filename);
+
+    printf("\nCleaning Messages directory %s...\n", buffer);
+    if (chdir(buffer))
+      error(0, "cannot locate '%s'", buffer);
+    else
+    {
+      sprintf(buffer,"-k clean COMPONENT=Messages TARGET=Messages NUMLOCALE=%s", locale);
+      if (amu_machinef(buffer) != 0)
+        error(0, "running make clean on module 'Messages'.");
+    }
+
+    /* Free the numeric locale list sys var memory. */
+    if (locale) /* Usual memory-tidying gubbins */
+    {
+      free (locale);
+      locale = NULL;
+    }
+
+    /* Build all the resource directories that are required. Can only be done after they have been cleaned as above. */
+    build_dirs();
   }
-
-  /*
-   * Force a make clean on the messages module. Note that this is independent
-   * of any settings in the module database or component database, apart from %messages.
-   * We are assuming quite a lot about the Messages module here...
-   */
-  printf("\nCleaning Messages...\n");
-  sprintf(buffer, "%s.%s", build_dir, messages_filename);
-
-  printf("\nCleaning Messages directory %s...\n", buffer);
-  if (chdir(buffer))
-    error(0, "cannot locate '%s'", buffer);
-  else
-  {
-    sprintf(buffer,"-k clean COMPONENT=Messages TARGET=Messages NUMLOCALE=%s", locale);
-    if (amu_machinef(buffer) != 0)
-      error(0, "running make clean on module 'Messages'.");
-  }
-
-  /* Free the numeric locale list sys var memory. */
-  if (locale) /* Usual memory-tidying gubbins */
-  {
-    free (locale);
-    locale = NULL;
-  }
-
-  /* Build all the resource directories that are required. Can only be done after they have been cleaned as above. */
-  build_dirs();
 
   /*
    * now get on with rest
@@ -477,13 +515,24 @@ int build_resources(void)
 	  error(0, "cannot locate '%s'", buffer);
 	}
 	else
-	{
+        {
           if (num_of_territories > 0)
           {
             /* We have been given a list of territories - iterate down them */
             unsigned int loop;
             for (loop=0; loop < num_of_territories; loop++)
             {
+              if (generate_script)
+              {
+                sprintf(bbe_dir, "%s.%s.BBE.%s.%s", INSTALL_DIR, build_name, SOURCE_DIR, module->path);
+                sprintf(scriptfilename, "-o %s.%s.BBE_Res.%s ", build_dir, bbe_dir, supported_territories[loop]);
+                remove(scriptfilename + 3);
+                _check_dir_v(bbe_dir, "BBE_Res", NULL);
+              }
+              else
+              {
+                *scriptfilename = '\0';
+              }
               /* set the Resource$Dir and Locale environment variable to the current */
               sprintf(buffer, "%s", supported_territories[loop]);
               setenv("Locale", buffer);
@@ -491,7 +540,8 @@ int build_resources(void)
               setenv("Resource$Dir", buffer);
               get_amu_machine(); /* Reset amu_machine to include the new values */
 
-              if (amu_machinef("-k resources %s RESDIR=<Resource$Dir>.Resources COMPONENT=%s %s%s",
+              if (amu_machinef("-k resources %s%s RESDIR=<Resource$Dir>.Resources COMPONENT=%s %s%s",
+                    scriptfilename,
 		    component->options ? component->options : "",
 		    component->name,
 		    module->filename?"TARGET=":"",
@@ -499,17 +549,264 @@ int build_resources(void)
 	      error(0, "running make resources on module '%s'.", component->name);
             }
           }
-          else
+        }
+    }
+    component = component->next;
+  }
+
+  /* Finally change the locale back to the default one (the first in the list). */
+  sprintf(buffer, "%s", supported_territories[0]);
+  setenv("Locale", buffer);
+  sprintf(buffer, "%s.%s.Resources."RESDIR, build_dir, messages_filename, supported_territories[0]);
+  setenv("Resource$Dir", buffer);
+  if (verbose)
+  {
+    printf ("Set Locale and Resource$Dir to %s\n", buffer);
+  }
+
+  return 0;
+}
+
+int build_resources(void)
+{
+  return build_resources_(0);
+}
+
+static void line_by_line_copy(FILE *dest, FILE *source)
+{
+  char buffer[BUFFER_LEN * 2];
+
+  while (fgets(buffer, sizeof(buffer), source) != NULL) {
+    fputc('\t', dest);
+    if (strncmp("echo", buffer, sizeof("echo")-1) == 0)
+    {
+      fputc('@', dest);
+    }
+    fputs(buffer, dest);
+  }
+}
+
+static void copy_file(const char *destination, const char *source)
+{
+  _swix(OS_FSControl, _INR(0,3), 26, source, destination, 1<<1 /* force */);
+}
+
+static void copy_rom_link_rules(FILE *dest, FILE *source, const char *aof_target, const char *componentname)
+{
+  char buffer[BUFFER_LEN * 2];
+  char link_args[BUFFER_LEN];
+  int skip_next;
+  enum skip_flags {
+    skip_read = 0,
+    skip_ignore = 1,
+    skip_copy = 2,
+    skip_copy_and_ignore = (skip_ignore | skip_copy)
+  };
+
+  strcpy(link_args, "link -o linked.${TARGET} -rmf -base ${ADDRESS} aof.${TARGET}");
+
+  while (fgets(buffer, sizeof(buffer), source) != NULL) {
+    char *next, *p, *source_file = NULL;
+    if (!isspace(buffer[4])) continue;
+    buffer[4] = '\0';
+    if (cstrcmp("link", buffer)) continue;
+    buffer[4] = ' ';
+
+    /* Parse this link command to determine where the source file is and what abssym file it is linking against */
+    buffer[strcspn(buffer, "\r\n")] = '\0'; /* strip eol - zero terminate */
+    skip_next = skip_ignore;
+    for (p = buffer, next = NULL; *p; p = next) {
+      next = p;
+      while (*next && !isspace(*next)) ++next;
+      if (*next) *next++ = '\0';
+      while (*next && isspace(*next)) ++next;
+      if (skip_next != skip_read)
+      {
+        if (skip_next & skip_copy)
+        {
+          strcat(link_args, p);
+        }
+        skip_next = 0;
+        continue;
+      }
+      if (*p == '-') {
+        if (cstrcmp(p+1, "base") == 0 || cstrcmp(p+1, "o") == 0 || cstrcmp(p+1, "linkversion") == 0) {
+          skip_next = skip_ignore;
+        }
+        else if (cstrcmp(p+1, "symdefs") == 0 || cstrcmp(p+1, "S") == 0 || cstrcmp(p+1, "syms") == 0 || cstrcmp(p+1, "symbols") == 0) {
+          sprintf(strchr(link_args, '\0'), " %s ", p);
+          skip_next = skip_copy_and_ignore;
+        }
+        continue;
+      }
+      if (*p == '>')
+      {
+        skip_next = p[1] ? skip_read : skip_ignore;
+        continue;
+      }
+
+      if (source_file == NULL)
+        source_file = p;
+
+      strcat(link_args, " ");
+      strcat(link_args, p);
+    }
+
+    copy_file(aof_target, source_file);
+    fprintf(dest,
+      "rom_link:\n"
+      "\t${MKDIR} linked\n\t%s\n"
+      "\t@${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}\n\n",
+      link_args);
+  }
+}
+
+
+int
+build_install_rom_(int generate_script);
+
+int build_bbe(void)
+{
+  component_entry_t *component;
+  module_entry_t *module;
+  char buffer[BUFFER_LEN];
+  char bbe_dir[BUFFER_LEN];
+  char aof_target[BUFFER_LEN];
+  char rom_link_name[BUFFER_LEN];
+  char *end_bbe_dir;
+  module_type_t type;
+  FILE *makefile;
+  FILE *rom_link_file;
+  FILE *resources_file;
+
+  build_resources_(1);
+  build_install_rom_(1);
+
+  /*
+   * now get on with rest
+   */
+  component = component_database;
+  while (component) {
+    module = lookup_module(component->name);
+    type = component->type;
+    if (type == UNDEF)
+      type = module->type;
+
+    switch (type) {
+      case C:
+      case ASM:
+      case BAS:
+      case KERNEL:
+      case DATA:
+      case RES:
+        printf("\n%s...\n", component->name);
+        sprintf(bbe_dir, "%s.%s.BBE.%s.%s", INSTALL_DIR, build_name, SOURCE_DIR, module->path);
+        end_bbe_dir = strchr(bbe_dir, '\0');
+        _check_dir_v(bbe_dir, "aof", NULL);
+        sprintf(aof_target, "%s.%s", build_dir, bbe_dir);
+        strcpy(bbe_dir, aof_target);
+        end_bbe_dir = strchr(bbe_dir, '\0');
+        strcpy(aof_target, bbe_dir);
+        strcat(aof_target, ".aof.");
+        strcat(aof_target, module->filename?module->filename:component->name);
+        strcpy(end_bbe_dir, ".Makefile");
+        makefile = fopen(bbe_dir, "w");
+        if (makefile != NULL)
+        {
+          time_t now;
+          time(&now);
+          fprintf(makefile,
+            "# Binary Build Environment Makefile for %s\n"
+            "#\n"
+            "# Generated at %s"
+            "#\n"
+            "\n"
+            "include Makefiles:StdTools\n"
+            "\n"
+            "resources: resources-${LOCALE}\n"
+            "\t@echo ${COMPONENT}: resources exported\n"
+            "\n"
+            "\n",
+            component->name,
+            ctime(&now));
+        }
+        strcpy(end_bbe_dir, ".BBE_ROM.rom_link");
+        strcpy(rom_link_name, bbe_dir);
+        sprintf(buffer, "%s.%s.%s", build_dir, SOURCE_DIR, module->path);
+        if (makefile == NULL)
+        {
+          error(0, "cannot open BBE makefile");
+        }
+        else if (chdir(buffer))
+        {
+          error(0, "cannot locate '%s'", buffer);
+        }
+        else
+        {
+          /* We have been given a list of territories - iterate down them */
+          unsigned int loop, done_uk = 0;
+          for (loop=0; loop < num_of_territories && !done_uk; loop++)
           {
-            /* Use the original locale as set in the env file */
-	    if (amu_machinef("-k resources %s RESDIR=<Resource$Dir>.Resources COMPONENT=%s %s%s",
-		  component->options ? component->options : "",
-		  component->name,
-		  module->filename?"TARGET=":"",
-		  module->filename?module->filename:"") != 0)
-	    error(0, "running make resources on module '%s'.", component->name);
+            if (strcmp(supported_territories[loop], "UK") == 0) done_uk = 1;
           }
-	}
+          for (loop=0; loop < num_of_territories; loop++)
+          {
+            char *locale;
+            /* set the Resource$Dir and Locale environment variable to the current */
+            if (!done_uk) {
+              locale = "UK";
+              done_uk = 1;
+              --loop;
+            }
+            else {
+              locale = supported_territories[loop];
+            }
+            setenv("Locale", locale);
+            get_amu_machine(); /* Reset amu_machine to include the new values */
+            *end_bbe_dir = '\0';
+
+            if (amu_machinef("-k -f Makefiles:BBEExport bbe COMPONENTTYPE=%s %s BBEDIR=%s COMPONENT=%s %s%s",
+                  module_type_names[type],
+                  component->options ? component->options : "",
+                  bbe_dir,
+                  component->name,
+                  module->filename?"TARGET=":"",
+                  module->filename?module->filename:"") != 0)
+              error(0, "running make bbe on module '%s'.", component->name);
+
+            /* Now read the locale script */
+            strcpy(end_bbe_dir, ".BBE_Res.");
+            strcat(end_bbe_dir, locale);
+            resources_file = fopen(bbe_dir, "r");
+            if (resources_file == NULL)
+            {
+              error(0, "loading BBE resource phase on module '%s'.", component->name);
+            }
+            else
+            {
+              /* Write out the rules for generating this locale's resource export */
+              fprintf(makefile, "resources-%s:\n", locale);
+              line_by_line_copy(makefile, resources_file);
+              fprintf(makefile, "\t@| End of resource export for locale %s\n\n", locale);
+              fclose(resources_file);
+            }
+          }
+        }
+        rom_link_file = fopen(rom_link_name, "r");
+        if (makefile)
+        {
+          if (rom_link_file)
+          {
+            copy_rom_link_rules(makefile, rom_link_file, aof_target, component->name);
+          }
+          fclose(makefile);
+          makefile = NULL;
+        }
+        if (rom_link_file)
+        {
+          fclose(rom_link_file);
+          rom_link_file = NULL;
+        }
     }
     component = component->next;
   }
@@ -622,12 +919,14 @@ int build_rom(void)
 static int ran_install_rom;
 
 int
-build_install_rom(void)
+build_install_rom_(int generate_script)
 {
   component_entry_t *component;
   module_entry_t *module;
   char buffer[BUFFER_LEN];
   char output_path[BUFFER_LEN];
+  char scriptdirname[BUFFER_LEN];
+  char scriptfilename[BUFFER_LEN];
   module_type_t type;
   unsigned long int position_in_rom = 0x03800000;
   int size;
@@ -683,11 +982,22 @@ build_install_rom(void)
     	        position_in_rom = component->force_position;
     	      }
     	    }
+            if (generate_script)
+            {
+              sprintf(scriptdirname, "%s.%s.BBE.%s.%s.%s", INSTALL_DIR, build_name, SOURCE_DIR, module->path, "BBE_ROM");
+              _check_dir_v(scriptdirname, NULL);
+              sprintf(scriptfilename, "-o %s.%s.rom_link ADDRESS=<Address>", build_dir, scriptdirname);
+            }
+            else
+            {
+              sprintf(scriptfilename, "ADDRESS=%lu", position_in_rom);
+            }
 	    switch (type) {
 	      case C:
 		/* if module is C, link things correctly */
-		if (amu_machinef("rom_link ADDRESS=%lu LINKDIR=%s %s COMPONENT=%s %s%s",
-			position_in_rom, output_path,
+		if (amu_machinef("rom_link %s LINKDIR=%s %s COMPONENT=%s %s%s",
+                        scriptfilename,
+			output_path,
 			component->options ? component->options : "",
 			component->name,
 			module->filename?"TARGET=":"",
@@ -763,6 +1073,12 @@ build_install_rom(void)
   ran_install_rom = 1;
 
   return 0;
+}
+
+int
+build_install_rom(void)
+{
+  return build_install_rom_(0);
 }
 
 /*
