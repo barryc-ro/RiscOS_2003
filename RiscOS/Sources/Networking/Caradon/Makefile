@@ -3,9 +3,9 @@
 
 # Toolflags:
 # CCflags  = -c -depend !Depend -IC:, -throwback
-CCflags  = -c -depend !Depend -IC:, -throwback -zM 
-C++flags = -c -depend !Depend -throwback -IC:
-Pascalflags = -c -depend !Depend -throwback -IP:
+CCflags  = -c -depend !Depend -IC:, -zM 
+C++flags = -c -depend !Depend -IC:
+Pascalflags = -c -depend !Depend -IP:
 # Linkflags = -aif -o $@
 Linkflags = -m -o $@
 ObjAsmflags = -depend !Depend -ThrowBack -Stamp -quit -CloseExec
