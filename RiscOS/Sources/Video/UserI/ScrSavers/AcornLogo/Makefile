@@ -47,9 +47,7 @@ INCLUDES = -Itbox:,C:
 
 
 FILES =\
- ${RDIR}.!Boot \
  ${RDIR}.!Run \
- ${RDIR}.!Sprites22 \
  ${RDIR}.Frames \
  ${RDIR}.!RunImage \
  ${LDIR}.Messages \
@@ -78,9 +76,7 @@ install: ${FILES}
          @echo
          @echo ${COMPONENT}: Creating application ${APP}
          ${MKDIR} ${INSTDIR}.${APP}
-         ${CP} ${RDIR}.!Boot      ${INSTDIR}.${APP}.!Boot      ${CPFLAGS}
          ${CP} ${RDIR}.!Run       ${INSTDIR}.${APP}.!Run       ${CPFLAGS}
-         ${CP} ${RDIR}.!Sprites22 ${INSTDIR}.${APP}.!Sprites22 ${CPFLAGS}
          ${CP} ${RDIR}.Frames     ${INSTDIR}.${APP}.Frames     ${CPFLAGS}
          ${CP} ${RDIR}.!RunImage  ${INSTDIR}.${APP}.!RunImage  ${CPFLAGS} 
          ${CP} ${LDIR}.Messages   ${INSTDIR}.${APP}.Messages   ${CPFLAGS}
@@ -105,3 +101,13 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.acornlogo:	c.acornlogo
+o.acornlogo:	tbox:h.wimp
+o.acornlogo:	tbox:h.wimplib
+o.acornlogo:	C:h.kernel
+o.acornlogo:	C:h.swis
+o.acornlogo:	tbox:h.wimplib
+o.acornlogo:	tbox:h.toolbox
+o.acornlogo:	tbox:h.event
+o.acornlogo:	tbox:h.window
+o.acornlogo:	tbox:h.gadgets
