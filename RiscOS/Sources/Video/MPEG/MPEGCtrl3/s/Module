@@ -1736,21 +1736,37 @@ GetSprite Entry "r1"
 ; out:  Depends on reason code
 ;
 
-ReadParameters Entry "r0,r1"
+ReadParameters Entry "r0"
         Debug   entry, "MPEGControl_ReadParameters: ", r0, r1, r2
       [ Multi
         BL      CheckCSH
         STRVS   r0, [sp]
         EXIT    VS
       ]
-        ORR     r0, r0, #ReadParametersReason_HandleProvided
         LDR     lr, [r1, #CSH_StreamFlags]
         TST     lr, #StreamFlags_VideoPresent
-        LDRNE   r1, [r1, #CSH_VideoStreamHandle]
-        SWINE   XMPEGVideo_ReadParameters               ; only execute it if video present
-        ; Should think about this - we might legitiamately want to read the STC of an audio-only stream
+        BEQ     %FT10
+        ORR     r0, r0, #ReadParametersReason_HandleProvided
+        LDR     r1, [r1, #CSH_VideoStreamHandle]
+        SWI     XMPEGVideo_ReadParameters
         STRVS   r0, [sp]
         EXIT
+10      ; No video present - is it an audio-only stream?
+        TST     lr, #StreamFlags_AudioPresent
+        BEQ     %FT20
+        LDR     r1, [r1, #CSH_AudioStreamHandle]
+        SWI     XMPEGAudio_ReadParameters
+        STRVS   r0, [sp]
+        EXIT
+20      ; No handle to give to MPEGDriver
+        ADR     r0, %FT99
+        STR     r0, [sp]
+        SETV
+        EXIT
+99
+        &       0
+        =       "No video or audio in this stream", 0
+        ALIGN
 
 ; **************************************************************************
 ;
@@ -2529,7 +2545,7 @@ int_reset_stream                                ; may also be called from within
         EXIT    VS
 20
 
-        Push    "r4"
+        Push    "r4,r5"
         BIC     r4, r0, #ResetStreamFlags_Private       ; externally meaningful ResetStream flags
                                                         ; used for handler ResetStream entries and UpCall_MPEG
  [ DoPEH :LOR: DoNDS
@@ -2537,45 +2553,48 @@ int_reset_stream                                ; may also be called from within
  ]
  [ DoPEH
         LDR     r3, [r1, #CSH_ListOfPEHPIDs]
-35
         TEQ     r3, #0                                  ; any more PEHPIDs to consider
         BEQ     %FT50                                   ; [no, so exit]
+35
+        LDR     r5, [r3, #PEHPID_Link]
         MOV     r0, #PEHReason_ResetStream
         MOV     r1, r4                                  ; reset stream flags
         LDR     r2, [r3, #PEHPID_ProgramElementStreamHandle]
         LDR     r6, [r3, #PEHPID_PEH]                   ; point r6 at PEH for CallPEH
         BL      CallPEH
-        LDR     r3, [r3, #PEHPID_Link]                  ; advance to next
-        B       %BT35
+        MOVS    r3, r5                                  ; advance to next
+        BNE     %BT35
 50
  ] ; DoPEH
  [ DoNDS
         LDR     r1, [sp, #0*4]                          ; retrieve control stream handle
         LDR     r3, [r1, #CSH_ListOfDHIs]
-35
         TEQ     r3, #0                                  ; any more DHIs to consider
         BEQ     %FT50                                   ; [no, so exit]
+35
+        LDR     r5, [r3, #DHI_Link]
         MOV     r0, #DHReason_ResetStream
         MOV     r1, r4                                  ; reset stream flags
         LDR     r2, [r3, #DHI_DescriptorStreamHandle]
         LDR     r6, [r3, #DHI_DH]                       ; point r6 at DH for CallDH
         BL      CallDH
-        LDR     r3, [r3, #DHI_Link]                     ; advance to next
-        B       %BT35
+        MOVS    r3, r5                                  ; advance to next
+        BNE     %BT35
 50
 
         LDR     r1, [sp, #0*4]                          ; retrieve control stream handle
         LDR     r3, [r1, #CSH_ListOfPSHIs]
-35
         TEQ     r3, #0                                  ; any more PSHIs to consider
         BEQ     %FT50                                   ; [no, so exit]
+35
+        LDR     r5, [r3, #PSHI_Link]
         MOV     r0, #PSHReason_ResetStream
         MOV     r1, r4                                  ; reset stream flags
         LDR     r2, [r3, #PSHI_PayloadScramblingHandle]
         LDR     r6, [r3, #PSHI_PSH]                     ; point r6 at PSH for CallPSH
         BL      CallPSH
-        LDR     r3, [r3, #PSHI_Link]                    ; advance to next
-        B       %BT35
+        MOVS    r3, r5                                  ; advance to next
+        BNE     %BT35
 50
  ] ; DoNDS
  [ DoPEH :LOR: DoNDS
@@ -2596,7 +2615,7 @@ int_reset_stream                                ; may also be called from within
         MOV     r0, #UpCall_MPEG
         SWI     XOS_UpCall
         CMP     r0, r0  ; clear V
-        Pull    "r4"
+        Pull    "r4,r5"
 
         EXIT
 
@@ -4714,7 +4733,11 @@ ts_process_rest_of_PMT
 	STR	lr, [r1, #CSH_TempAudioStream]
 10
         SUBS    r5, r5, #5                      ; if no room for another stream type and PID
+      [ DoNDS
+        BLT     ts_finished_PMT
+      |
         BLT     ts_skip_to_next_packet
+      ]
         BL      getbytedec                      ; get stream type
         MOV     r9, r7
         BL      getbytedec
@@ -4866,6 +4889,25 @@ ts_process_program_element_descriptor
         SUB     r5, r5, r10
         BL      ts_skipbytes
         B       %BT10
+ ]
+ [ DoNDS
+ts_finished_PMT
+        ; Now inform descriptor handlers that they're not going to get any more information
+        Push    "r0-r2,r4"
+        LDR     r5, [r1, #CSH_ListOfDHIs]
+        TEQ     r5, #0
+        BEQ     %FT89
+88      MOV     r0, #DHReason_EndOfTable
+        MOV     r1, #0
+        LDR     r2, [r5, #DHI_DescriptorStreamHandle]
+        LDR     r4, [r5, #DHI_Link]
+        LDR     r6, [r5, #DHI_DH]
+        BL      CallDH
+        MOVS    r5, r4
+        BNE     %BT88
+89
+        Pull    "r0-r2,r4"
+        B       ts_skip_to_next_packet
  ]
 
 ts_process_PCR_PID ROUT  ; only used when there is a dedicated PCR PID, ie PCRs are not on video or audio PIDs
