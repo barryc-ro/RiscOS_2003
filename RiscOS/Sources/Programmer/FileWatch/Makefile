@@ -1,4 +1,4 @@
-# Makefile for filewatch
+# Makefile for FileWatch
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
@@ -57,7 +57,7 @@ RESDIR = <resource$dir>.Resources2.${COMPONENT}
 #
 # Program specific options:
 #
-COMPONENT = filewatch
+COMPONENT = FileWatch
 TARGET    = aof.${COMPONENT}
 BASEOBJS  = o.modhdr o.msgs o.utils \
 	o.filechange o.handlers o.interest
