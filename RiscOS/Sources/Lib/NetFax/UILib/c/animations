@@ -1,0 +1,385 @@
+/************************************************************************/
+/* File:    Animations.c                                                */
+/* Purpose: Code to handle animations and the clock in Daytona.         */
+/*                                                                      */
+/* Author:  John Beranek <mailto:jberanek@acorn.com>                    */
+/*          taken over from Neil Bingham                                */
+/*                                                                      */
+/************************************************************************/
+
+
+/* -------------------------------------- LIBRARY IMPORTS ------------------ */
+#include "include.h"
+#include "windows.h"
+#include "animations.h"
+#include "globals.h"
+
+/* ---------------------- LOCAL FUNCTIONS ---------------------------------- */
+static void next_animation_frame (void);
+static void show_next_frame (AnimationRec *, ComponentId);
+static void show_frame (AnimationRec *, ComponentId);
+
+/* ---------------------- LOCAL VARIABLES ---------------------------------- */
+static AnimationRec	centre;
+static AnimationRec	left;
+static AnimationRec	right;
+
+/* ---------------------- GLOBAL VARIABLES --------------------------------- */
+clock_t         confirm_start = 0, decide_start = 0;
+
+/* ---------------------- FUNCTIONS ---------------------------------------- */
+
+/************************************************************************/
+/* ui_read_time                                                         */
+/*                                                                      */
+/* Function reads the monotonic time of the system for timing null poll */
+/* events.  This is then used to kick off the ui_pollword_handler       */
+/* function for controlling the animations and clock.                   */
+/*                                                                      */
+/* Parameters: void.                                                    */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void ui_read_time (unsigned int *p_time)
+{
+  _swix (OS_ReadMonotonicTime, _OUT(0), p_time);
+}
+
+
+/************************************************************************/
+/* ui_pollword_handler                                                  */
+/*                                                                      */
+/* Function kicks off the animations etc. on null wimp polls.           */
+/*                                                                      */
+/* Parameters: WimpEventHandler parameters                              */
+/*                                                                      */
+/* Returns:    TRUE or FALSE.                                           */
+/*                                                                      */
+/************************************************************************/
+int ui_pollword_handler (int event_code, WimpPollBlock *event, IdBlock *id_block,
+                         void *handle)
+{
+  static char time_counter = 0;
+
+  IGNORE (event_code); IGNORE (event); IGNORE (id_block); IGNORE (handle);
+
+  ui_read_time (&current);
+
+  /* Animations */
+  if ((future + Poll_Delay_Animations) <= current)
+  {
+    /* Only do something if there are any windows open */
+    if (ui_currently_open_win != NULL)
+    {
+      /* Animation Polling */
+      if (ui_currently_open_win == Home_WindowHandle)
+      {
+        next_animation_frame ();
+      }
+      future = current + Poll_Delay_Animations;
+
+      time_counter++;
+
+      /* If there's a "confirm" in operartion */
+      if (confirm_start != 0)
+      {
+        /* Check if it's timed out */
+        if (clock () > (confirm_start + (Timeout_Confirm * CLOCKS_PER_SEC)))
+        {
+          dprintf (("", ">>UI<< Confirm window timed-out\n"));
+          /* If it has, call the correct function and reset the confirm time */
+          (*confirm_fun_point)(ConfirmAction_Finished);
+          confirm_start = 0;
+        }
+      }
+
+      /* If there's a "decide" in operation */
+      if (decide_start != 0)
+      {
+        /* Check if it's timed out */
+        if (clock () > (decide_start + (Timeout_Decide * CLOCKS_PER_SEC)))
+        {
+          dprintf (("", ">>UI<< Decide window timed-out\n"));
+          /* If it has, call the correct function with the timeout default,
+             and reset the decide time */
+          (*decide_fun_point)(DecideAction_Finished, decide_timeout_default);
+          decide_start = 0;
+        }
+      }
+
+      if (time_counter > 9)
+      {
+        /* Because we don't need to update the clock every 1/3 seconds, add
+           the clock code in here where it will poll every 6 seconds or so. */
+        ui_update_clock_display ();
+        time_counter = 0;
+      }
+    }
+  }
+  return 1;
+}
+
+
+/************************************************************************/
+/* ui_initialise_animations                                             */
+/*                                                                      */
+/* Function initialises the animations code.                            */
+/*                                                                      */
+/* Parameters: void.                                                    */
+/*                                                                      */
+/* Returns:    _kernel_oserror.                                         */
+/*                                                                      */
+/************************************************************************/
+_kernel_oserror *ui_initialise_animations (void)
+{
+#if DAYTONA
+
+  /* Left */
+  left.leaf_name[0] = '\0';
+  left.last_frame = -1;
+  left.current_frame = -1;
+  left.loop_once = FALSE;
+  /* Centre */
+  centre.leaf_name[0] = '\0';
+  centre.last_frame = -1;
+  centre.current_frame = -1;
+  centre.loop_once = FALSE;
+  /* Right */
+  right.leaf_name[0] = '\0';
+  right.last_frame = -1;
+  right.current_frame = -1;
+  right.loop_once = FALSE;
+#endif
+  return NULL;
+}
+
+
+/************************************************************************/
+/* ui_register_animation                                                */
+/*                                                                      */
+/* Function registers an animation set for one of the three on-screen   */
+/* buttons.                                                             */
+/*                                                                      */
+/* Parameters: flags     - Bit Set Meaning                              */
+/*                          0   Y  Left side button.                    */
+/*                          1   Y  Centre button.                       */
+/*                          2   Y  Right side button.                   */
+/*                          3   Y  Stop animation after one sequence.   */
+/* Parameters: flags    - Bit 0 (Left), Bit 1 (Centre), Bit 2 (Right)   */
+/*             leaf_name- Name for sprite set.                          */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+_kernel_oserror *ui_register_animation (int flags, char *leaf_name)
+{
+#if DAYTONA
+  int last_frame = atoi (lookup_message_token (&message_block, leaf_name));
+
+  if (flags & AnimationRegister_Left)
+  {
+    strcpy (left.leaf_name, leaf_name);
+    left.last_frame = last_frame;
+    left.current_frame = 0;
+    left.loop_once = FALSE;
+
+    show_frame (&left, home_left_sprite);
+  }
+  else if (flags & AnimationRegister_Centre)
+  {
+    /* Bit 1 is set */
+    strcpy (centre.leaf_name, leaf_name);
+    centre.last_frame = last_frame;
+    centre.current_frame = 0;
+    centre.loop_once = FALSE;
+
+    show_frame (&centre, home_centre_sprite);
+  }
+  else if (flags & AnimationRegister_Right)
+  {
+    /* Bit 2 is set */
+    strcpy (right.leaf_name, leaf_name);
+    right.last_frame = last_frame;
+    right.current_frame = 0;
+
+    /* Check to see if Bit 3 is set */
+    if (flags & AnimationRegister_Once)
+      right.loop_once = TRUE;
+    else
+      right.loop_once = FALSE;
+
+    show_frame (&right, home_right_sprite);
+  }
+#endif
+  return NULL;
+}
+
+
+/************************************************************************/
+/* ui_deregister_animation                                              */
+/*                                                                      */
+/* Function deregisters an animation set for one of the three on-screen */
+/* buttons.                                                             */
+/*                                                                      */
+/* Parameters: flags     - Bit Set Meaning                              */
+/*                          0   Y  Left side button.                    */
+/*                          1   Y  Centre button.                       */
+/*                          2   Y  Right side button.                   */
+/*                          3   Y  Do not replace animation with blank  */
+/*                                 sprite - stops flicker.              */
+/*                                                                      */
+/* Returns:    _kernel_oserror block.                                   */
+/*                                                                      */
+/************************************************************************/
+_kernel_oserror *ui_deregister_animation (int flags)
+{
+#if DAYTONA
+
+  _kernel_oserror *er = NULL;
+
+  if (flags & AnimationDeregister_Left)
+  {
+    if (left.last_frame != -1)
+    {
+      left.last_frame = -1;
+      left.current_frame = -1;
+
+      /* If bit 3 is not set then blank the button */
+      if (!(flags & AnimationDeregister_NoReplace))
+      {
+        /* Blank Button */
+        er = button_set_value (0, Home_WindowHandle, home_left_sprite, "blank_a");
+        if (er)
+          return er;
+      }
+    }
+  }
+  else if (flags & AnimationDeregister_Centre)
+  {
+    if (centre.current_frame != -1)
+    {
+      centre.last_frame = -1;
+      centre.current_frame = -1;
+
+      /* If bit 3 is set then do not blank the button */
+      if (!(flags & AnimationDeregister_NoReplace))
+      {
+        /* Blank Button */
+        er = button_set_value (0, Home_WindowHandle, home_centre_sprite, "blank_c");
+        if (er)
+          return er;
+      }
+    }
+  }
+  else if (flags & AnimationDeregister_Right)
+  {
+    if (right.last_frame != -1)
+    {
+      right.last_frame = -1;
+      right.current_frame = -1;
+
+      /* If bit 3 is set then do not blank the button */
+      if (!(flags & AnimationDeregister_NoReplace))
+      {
+        /* Blank Button */
+        er = button_set_value (0, Home_WindowHandle, home_right_sprite, "blank_a");
+        if (er)
+          return er;
+      }
+    }
+  }
+  return er;
+#else
+  return NULL;
+#endif
+}
+
+
+/************************************************************************/
+/* next_animation_frame                                                 */
+/*                                                                      */
+/* Function will cycle through the sprite set.  It determines which     */
+/* buttons to animate depending on which buttons have sprites registered*/
+/* to them.                                                             */
+/*                                                                      */
+/* Parameters: void.                                                    */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+static void next_animation_frame (void)
+{
+  /* See if left button is set */
+  if (left.last_frame > 0)
+  {
+    /* Left sprite */
+    show_next_frame (&left, home_left_sprite);
+  }
+  if (centre.last_frame > 0)
+  {
+    /* Centre sprite */
+    show_next_frame (&centre, home_centre_sprite);
+  }
+  if (right.last_frame > 0)
+  {
+    /* Right sprite */
+    show_next_frame (&right, home_right_sprite);
+  }
+}
+
+
+/************************************************************************/
+/* show_next_frame                                                      */
+/*                                                                      */
+/* Function will show the next frame in the button specified in         */
+/* Animation Rec.                                                       */
+/*                                                                      */
+/* Parameters: record   - Information on the current sequence.          */
+/*             button   - the button to show the next frame in.         */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+static void show_next_frame (AnimationRec *record, ComponentId button)
+{
+#if DAYTONA
+  dprintf (("","Leaf_name:     %s\n", record->leaf_name));
+  dprintf (("","last_frame:    %d\n", record->last_frame));
+  dprintf (("","Current_frame: %d\n", record->current_frame));
+
+  record->current_frame++;
+
+  /* Are we at the end of the sequence? */
+  if (record->current_frame > record->last_frame)
+  {
+    dprintf (("","Reached end of sequence\n"));
+
+    if (record->loop_once == TRUE)
+    {
+      dprintf (("","Stopping\n"));
+
+      ui_deregister_animation (AnimationDeregister_Right);
+    }
+    else
+    {
+      dprintf (("","Starting again\n"));
+      /* Start back at 0 */
+      record->current_frame = 0;
+    }
+  }
+  show_frame (record, button);
+#endif
+}
+
+static void show_frame (AnimationRec *record, ComponentId button)
+{
+#if DAYTONA
+  char frame_name[13];
+
+  /* Build spritename */
+  sprintf (frame_name, "%s_%d", record->leaf_name, record->current_frame);
+
+  button_set_value (0, Home_WindowHandle, button, frame_name);
+#endif
+}
