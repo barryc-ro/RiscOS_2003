@@ -25,7 +25,7 @@ CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 TRFLAGS = ${THROWBACK} -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë" -m NCFrescoROTransRes:Mappings
-SQFLAGS =
+SQFLAGS = 
 
 #
 # Program specific options:
@@ -44,11 +44,13 @@ bbe-fresco: bbe-generic
 #
 # Generic rules:
 #
-rom:
+rom: 
         @echo ${COMPONENT}: rom module built
 
 clean:
         @echo ${COMPONENT}: cleaned
+
+# Resources phase
 
 resources: resources_${RES} resources_base
         @echo ${COMPONENT}: all resource files copied
@@ -70,7 +72,7 @@ resources_alt:
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoROAltRes$Path
 	Unset NCFrescoROAltTransRes$Path
-        @echo ${COMPONENT}: alt resource files copied
+	@echo ${COMPONENT}: alt resource files copied
 
 resources_base:
 	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
@@ -104,23 +106,30 @@ resources_base:
 	${TR} -i NCFrescoROTransRes:html.url       -o ${RESRES}.html.url       ${TRFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
-        @echo ${COMPONENT}: resource files copied
+	@echo ${COMPONENT}: resource files copied
 
-install:
+# Install phases
+
+install: install_${ITYPE} install_common
+	@echo ${COMPONENT}: all files installed
+
+install_: install_application
+	@echo ${COMPONENT}: default install
+
+install_common:
 	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
 	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
 	${MKDIR} ${INSTALLDIR}
 	${MKDIR} ${INSTALLDIR}.html
-	${CP} NCFrescoRORes:!Boot    		${INSTALLDIR}.!Boot    ${CPFLAGS}
+	${CP} NCFrescoRORes:!Boot			${INSTALLDIR}.!Boot     ${CPFLAGS}
 	IfThere NCFrescoRORes:!Help Then ${CP} NCFrescoRORes:!Help ${INSTALLDIR}.!Help  ${CPFLAGS}
-	${CP} NCFrescoRORes:!Run     		${INSTALLDIR}.!Run     ${CPFLAGS}
-	${CP} NCFrescoRORes:!Sprites 		${INSTALLDIR}.!Sprites ${CPFLAGS}
-	${CP} NCFrescoRORes:Sprites  		${INSTALLDIR}.Sprites  ${CPFLAGS}
+	${CP} NCFrescoRORes:!Sprites			${INSTALLDIR}.!Sprites  ${CPFLAGS}
+	${CP} NCFrescoRORes:Sprites			${INSTALLDIR}.Sprites   ${CPFLAGS}
 	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLDIR}.Messages ${TRFLAGS}
-	${CP} NCFrescoRORes:Res         	${INSTALLDIR}.Res      ${CPFLAGS}
-	${CP} NCFrescoRORes:MimeMap     	${INSTALLDIR}.MimeMap  ${CPFLAGS}
-	-${CP} NCFrescoRORes:Config      	${INSTALLDIR}.Config   ${CPFLAGS}
-${CP} ${Lib$Dir}.LocaleRes.LocaleRes${INSTALLDIR}.LocaleRes
+	${CP} NCFrescoRORes:Res				${INSTALLDIR}.Res       ${CPFLAGS}
+	${CP} NCFrescoRORes:MimeMap			${INSTALLDIR}.MimeMap   ${CPFLAGS}
+	${CP} NCFrescoRORes:Config			${INSTALLDIR}.Config    ${CPFLAGS}
+	${CP} ${Lib$Dir}.LocaleRes.LocaleRes		${INSTALLDIR}.LocaleRes ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLDIR}.html.favs      ${TRFLAGS}
@@ -139,10 +148,29 @@ install:
 	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLDIR}.html.sslserv   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLDIR}.html.ssltoken  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLDIR}.html.url       ${TRFLAGS}
-${CP} rm.ncfrrm-${ITYPE}               ${INSTALLDIR}.!RunImage      ${CPFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
-        @echo ${COMPONENT}: resource files copied
+	@echo ${COMPONENT}: common files installed
+
+install_application:
+	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
+	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
+	${CP} NCFrescoRORes:!Run			${INSTALLDIR}.!Run      ${CPFLAGS}
+	${SQ} abs.!RunIm-${TYPE}			${INSTALLDIR}.!RunImage ${SQFLAGS}
+	Unset NCFrescoROTransRes$Path
+	Unset NCFrescoRORes$Path
+	@echo ${COMPONENT}: application files installed
+
+install_module:
+	Set NCFrescoRORes$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.Common.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.,Resources.Common.UK.
+	Set NCFrescoROTransRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.Common.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.,Translate.Common.UK.
+	${CP} NCFrescoRORes:!RunRAM			${INSTALLDIR}.!Run      ${CPFLAGS}
+	${CP} rm.ncfrrm-${TYPE}				${INSTALLDIR}.!RunImage ${CPFLAGS}
+	Unset NCFrescoROTransRes$Path
+	Unset NCFrescoRORes$Path
+	@echo ${COMPONENT}: module files installed
+
+# Export phases
 
 export: export_${PHASE}
 
@@ -162,7 +190,7 @@ export_hdrs:
 rom_link: dirs
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link for ${ITYPE} build complete
+        @echo ${COMPONENT}: rom_link for ${TYPE} build complete
 
 dirs:
 	${MKDIR} linked
