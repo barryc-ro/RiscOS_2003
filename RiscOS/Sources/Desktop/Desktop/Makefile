@@ -46,6 +46,7 @@ clean:
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.Templates  ${RESDIR}.${COMPONENT}.Templates  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
@@ -61,6 +62,7 @@ rm.Desktop: Hdr:IO.GenericIO
 rm.Desktop: Hdr:RISCOS
 rm.Desktop: Hdr:ModHand
 rm.Desktop: Hdr:Services
+rm.Desktop: Hdr:Machine.<Machine>
 rm.Desktop: Hdr:CMOS
 rm.Desktop: Hdr:Proc
 rm.Desktop: Hdr:FSNumbers

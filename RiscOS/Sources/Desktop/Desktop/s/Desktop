@@ -32,6 +32,10 @@
 ; 12-Jul-93  BCockburn   Removed GET of Hdr:Compress
 ; 26-Jul-93  JRoach      If OS_GBPB on Resources:$.Apps gives trouble then stop pumping
 ;                        ROM apps rather than giving an error
+; 26-Jan-95  JRH         Quick hack to stop filer_booting files in Resources:$.Apps
+; 15-May-95  RWB	 Make welcome banner not appear
+
+;NK version, uses template for welcome banner
 
 Module_BaseAddr
 
@@ -41,6 +45,7 @@ Module_BaseAddr
 ;        GET     Hdr:EnvNumbers
         GET     Hdr:ModHand
         GET     Hdr:Services
+	GET	Hdr:Machine.<Machine>
         GET     Hdr:CMOS
         GET     Hdr:Proc
         GET     Hdr:FSNumbers
@@ -57,11 +62,14 @@ Module_BaseAddr
         GET     Hdr:Draw
         GET     Hdr:ColourTran
         GET     Version
-
         GET     Hdr:NDRDebug
 
         GBLL    DesktopAllAtOnce
 DesktopAllAtOnce SETL {TRUE}
+	GBLL	NewBanner
+NewBanner SETL	{TRUE} :LAND: :LNOT: STB
+        GBLL    KeepItUp
+KeepItUp SETL   {TRUE} :LAND: NewBanner
 
         GBLL    debug
         GBLL    debugxx
@@ -70,7 +78,7 @@ DesktopAllAtOnce SETL {TRUE}
         GBLL    debugtm
         GBLL    hostvdu
 
-debug   SETL    false
+debug   SETL    {FALSE}
 debugxx SETL    true :LAND: debug
 debugwe SETL    true :LAND: debug
 debugcr SETL    true :LAND: debug
@@ -93,13 +101,17 @@ MessageBlock            #       16
 Workspace               #       4
 nactive                 #       4               ; no of active tasks when we started
 nactive1                #       4
+BannerCloseTime         #       4
+NewWelcomeWorkspace     #       4
+IconHandle		#	4
+WindowHandle		#	4
 NextPump                #       4
 PumpHidden              #       4
 PumpParams_0            #       4
 PumpParams_1            #       4
 PumpParams_2            #       4
-scratchbuffer1          #       256
-scratchbuffer2          #       256
+scratchbuffer1		#	256
+scratchbuffer2		#	256
 Working_Stack           #       128
 Working_StackEnd        #       0
 
@@ -212,9 +224,16 @@ execcommand =   "EXEC", 0
 
 
 MyMessagesFile  DCB     "Resources:$.Resources.Desktop.Messages",0
+ [ STB
+filerboot	DCB	"|"
+ |
 filerboot       DCB     "Filer_Boot "
+ ]
 appsdir         DCB     "Resources:$.Apps", 0
 plingstar       DCB     "!*", 0
+; RWB - Remove welcome screen for STB
+; NDT - Merged conditionals from RiscOS 3.70 and NCOS 1.06
+ [ :LNOT: STB :LAND: :LNOT: NewBanner
 WelcomeString1  DCB     "RO3",0
 WelcomeString2  DCB     "CopyRt",0
 WelcomeString3  DCB     "Init",0
@@ -237,7 +256,7 @@ Welcome_AcornPath
         DCD  &11C00, &3E00, &1D200, &5, &0
 
         DCD  0
-
+ ]
                 ALIGN
 
 ;------------------------------------------------
@@ -348,6 +367,9 @@ Desktop_Start ROUT
         ADREQL  R0,com_unset
         SWIEQ   XOS_CLI                 ; ignore errors
 
+	MOV	R14,#0
+	STR	R14,NewWelcomeWorkspace
+
 StartAsTask
         ; Up we come as a task
         ADRL    r1, Desktop_Title
@@ -379,6 +401,7 @@ StartAsTask
         LDR     r0,nactive1
         Debug   we,"nactive ",r0
         CMP     r0,#0
+	MOVNE	r0,#0			; Keep it up for 0 seconds
         BNE     NoWelcome
 
         ; Only handle Boot$Error on start up (ie. when we display welcome screen).
@@ -466,21 +489,37 @@ ClearScreen
         SWI     XWimp_ForceRedraw
         LDRVC   r0, =&1CE3972
         ADRVC   r1, scratchbuffer1
+	ADR	r3, ClearScreen		; somewhere which is non-zero
         SWIVC   XWimp_Poll
 
 NoBootError
 
         MOV     R1,#Service_DesktopWelcome
         SWI     XOS_ServiceCall
+	MOVVS	R0,#0
         BVS     NoWelcome
         TEQ     R1,#0                   ; Was it claimed ?
+ [ :LNOT: STB					; RWB - Remove welcome screen
+	MOVEQ	R0,#0
         BEQ     NoWelcome
 
         Debug   we,"Service not claimed"
 
+  [ NewBanner
+    [ KeepItUp
+	BL	IconbarHack
+    ]
+        BL      DisplayNewWelcome
+  |
         BL      DisplayWelcomeScreen
+  ]
+        SWI     XOS_ReadMonotonicTime
+        MOVVS   r0, #0
+        ADD     r0, r0, #400            ; Keep it up for 4 seconds
 
+ ]
 NoWelcome
+        STR     r0, BannerCloseTime
         ADR     r0, StartPumpModuleApps
         STR     r0, NextPump
         MOV     r0, #1
@@ -507,8 +546,8 @@ IgnoreEvent
         ADR     r3, IgnoreEvent                 ; somewhere which is non-zero
         SWI     XWimp_Poll
         BVS     Exit
-        TEQNE   r0, #User_Message
-        TEQ     r0, #User_Message_Recorded
+        TEQ     r0, #User_Message
+        TEQNE   r0, #User_Message_Recorded
         BEQ     MessageGotten
         TEQ     r0, #PollWord_NonZero
         BNE     IgnoreEvent
@@ -518,11 +557,80 @@ MessageGotten ROUT
         LDR     r0, scratchbuffer1 + ms_action
         TEQ     r0, #Message_Quit
         BNE     IgnoreEvent
-
-        ; drop through to...
+        B       Exit
  ]
 
 AllDone
+ [     KeepItUp
+	LDR	r2, BannerCloseTime
+	TEQ	r2, #0
+	BEQ	Exit			; Nothing to keep up... (no banner)
+
+	BL	IconBarHackClose
+
+KeepItUpLoop
+        MOV     r0, #0
+        ADR     r1, scratchbuffer1
+        LDR     r2, BannerCloseTime
+        SWI     XWimp_PollIdle
+        BVS     Exit
+1
+        Push    r0
+	LDR	r2, BannerCloseTime
+        SWI     XOS_ReadMonotonicTime
+        CMP     r0, r2
+        Pull    r0
+        BHS     Exit
+        TEQ     r0, #Mouse_Button_Change
+        BEQ     Exit
+        TEQ     r0, #User_Message
+        TEQNE   r0, #User_Message_Recorded
+        BEQ	GotMessageKeepingItUp
+        B       KeepItUpLoop
+
+GotMessageKeepingItUp
+        LDR     lr, scratchbuffer1 + ms_action
+        TEQ     lr, #Message_Quit
+	LDRNE	r2, =Message_ModeChange
+	TEQNE	lr, r2			; Because we can't be bothered to recache fonts...
+        BEQ     Exit
+	B	KeepItUpLoop
+
+; If we just open the window, the iconbar will open later and will be in front of us. Thus
+; when the pinboard opens at the back (-2), it will open in front of the (backwindow) iconbar
+; and hence in front of us :-( Thus put an invisible icon on the iconbar before we start,
+; then delete it when all module tasks are started (ie before any redrawing actually gets
+; a chance to happen, hopefully, so it will never be seen)..
+;
+; A better solution would be to modify the wimp to ensure the icon bar isn't created at the front
+IconbarHack
+	Push	"r0-r1,lr"
+	SUB	sp,sp,#36
+	MOV	r1,sp
+	MOV	r0,#-1
+	STR	r0,[r1,#0]	; Open at left
+	MOV	r0,#0
+	STR	r0,[r1,#4]	; min x
+	STR	r0,[r1,#8]	; min y
+	STR	r0,[r1,#16]	; max y
+	STR	r0,[r1,#20]	; flags
+	MOV	r0,#-16
+	STR	r0,[r1,#12]	; max x (hack to make it take up no space on iconbar)
+	SWI	XWimp_CreateIcon
+	STR	r0,IconHandle
+	ADD	sp,sp,#36
+	Pull	"r0-r1,pc"
+
+IconBarHackClose
+	Push	"r0-r1,lr"
+	MOV	r0,#-2
+	LDR	r1,IconHandle
+	STMFD	sp!,{r0-r1}
+	MOV	r1,sp
+	SWI	XWimp_DeleteIcon
+	ADD	sp,sp,#8
+	Pull	"r0-r1,pc"
+ ]
 ;
 ; call OS_Exit - exits back to Wimp if any tasks started
 ;
@@ -548,6 +656,10 @@ Exit
  ]
 
 Exit2
+ [ NewBanner
+	BL	FreeFontsEtc
+ ]
+
         ; Close messages file
         ADR     r0, MessageBlock
         SWI     XMessageTrans_CloseFile
@@ -578,7 +690,7 @@ str_desktopfile DCB     "Desktop$File", 0
 ;
 bootcommands
 com1    DCB     com2 - com1, "Alarm", 0
-com2    DCB     com3 - com2, "Calc", 0
+com2    DCB     com3 - com2, "Printers", 0	; was Calc
 com3    DCB     com4 - com3, "Chars", 0
 com4    DCB     com5 - com4, "Config", 0
 com5    DCB     com6 - com5, "Draw", 0
@@ -707,7 +819,6 @@ PumpOneBootROMApp ALTENTRY
         ADR     r0, StartPumpStartROMApps
         STR     r0, NextPump
         EXIT
-
 ; -----------------------------------------------------------------------------
 ;
 ; PumpStartROMApps
@@ -841,8 +952,8 @@ executefile
 
 PumpOneDesktopCommand ALTENTRY
 01
-        ; Use whole of scratch space for reading lines of file.
-        ASSERT  scratchbuffer2 = scratchbuffer1 + ?scratchbuffer1
+	; Use whole of scratch space for reading lines of file.
+	ASSERT	scratchbuffer2 = scratchbuffer1 + ?scratchbuffer1
         LDR     r1, PumpParams_0
         ADR     r2, scratchbuffer1
         MOV     r3, #?scratchbuffer1 + ?scratchbuffer2
@@ -904,11 +1015,13 @@ PumpOneDesktopCommand ALTENTRY
         STR     r0, NextPump
         EXIT
 
+ [ :LNOT:NewBanner
 
 ; *****************************************************************************
 ;
 ; DisplayWelcomeScreen
 ;
+ [ :LNOT: STB					; RWB - Remove welcome screen
         ^       0,sp
 Welcome_font    #       4
 Welcome_font1   #       4
@@ -1277,9 +1390,187 @@ WelcomeError_OneFont
 WelcomeError_NoFont
 
         EXITS
-
+ ]
       [ debug
         InsertNDRDebugRoutines
       ]
+
+ | ; NewBanner
+
+templatename    DCB     "Resources:$.Resources.Desktop.Templates",0
+backdropname    DCB     "backdrop",0
+desktopname     DCB     "desktop",0
+
+DisplayNewWelcome
+        Push    "R1-R7,lr"
+        ADR     R1,templatename
+        SWI     XWimp_OpenTemplate
+        Pull    "R1-R7,PC",VS
+        MOV     R0,#ModHandReason_Claim
+        MOV     R3,#1024
+        SWI     XOS_Module
+        Pull    "R1-R7,PC",VS
+        MOV     R7,R2
+	STR	R7,NewWelcomeWorkspace
+
+        MOV     R0,#64
+        MOV     R1,#0
+        ADD     R3,R2,#768
+05
+        STR     R1,[R3],#4                      ; clear font ref count
+        SUBS    R0,R0,#1
+        BNE     %BT05
+
+        MOV     r0,#-1
+        MOV     r1,#11
+        SWI     XOS_ReadModeVariable
+        MOVVC   r6,r2
+        MOVVC   r1,#4
+        SWIVC   XOS_ReadModeVariable    ;Get xeig
+        SUBVS   SP,SP,#12
+        BVS     ExitDisplay
+        MOV     r6,r6,ASL r2
+
+        ADD     R6,R6,#16
+        Push    R6
+
+        MOV     r0,#-1
+        MOV     r1,#12
+        SWI     XOS_ReadModeVariable
+        MOVVC   r6,r2
+        MOVVC   r1,#5
+        SWIVC   XOS_ReadModeVariable    ;Get yeig
+        SUBVS   SP,SP,#8
+        BVS     ExitDisplay
+        MOV     r6,r6,ASL r2
+
+        SUB     R6,R6,#16                ; drop shadow
+        Push    R6
+
+        MOV     R2,R7
+        ADR     R5,backdropname
+        MOV     R0,#0
+        BL      displaywindow
+	STR	R9,WindowHandle
+;        SWI     XWimp_DeleteWindow
+
+        Pull    "R5,R6"
+
+        ADD     R5,R5,#16
+        SUB     R6,R6,#16
+
+        Push    "R5,R6"
+
+        MOV     R2,R7
+
+        ADR     R5,desktopname
+        BL      displaywindow
+;        SWI     XWimp_DeleteWindow
+        SWI     XWimp_CloseTemplate
+
+	MOV	R0,R9
+	BL	redrawwindow
+	LDR	R0,WindowHandle
+	BL	redrawwindow
+
+        B       ExitDisplay2
+
+displaywindow
+        Push    "lr"
+        MOV     R1,R2
+        ADD     R2,R2,#512
+        ADD     R3,R2,#256
+        ADD     R4,R7,#768
+        MOV     R6,#0
+        SWI     XWimp_LoadTemplate
+        BVS     ExitDisplay
+
+        SWI     XWimp_CreateWindow
+        BVS     ExitDisplay
+
+	STR	R0,[SP,#-44]!
+	MOV	R1,SP
+        SWI     XWimp_GetWindowState
+
+        ADD     R14,R1,#4
+        LDMIA   R14,{R2-R5}
+        LDR     R6,[SP,#52]                     ; xpix
+        SUB     R4,R4,R2                        ; width
+        SUB     R2,R6,R4
+        MOV     R2,R2, LSR #1
+        ADD     R4,R2,R4
+
+        LDR     R6,[SP,#48]                     ; ypix
+        SUB     R5,R5,R3
+        SUB     R3,R6,R5
+        MOV     R3,R3, LSR #1
+        ADD     R5,R3,R5
+
+        STMIA   R14,{R2-R5}
+
+        MOV     R14,#-1
+        STR     R14,[R1,#28]                    ; make absolutely sure we open on top
+
+        SWI     XWimp_OpenWindow
+	LDRVC	R9,[R1,#0]
+	ADD	SP,SP,#44
+	Pull	"PC",VC
+	B	ExitDisplay
+
+redrawwindow
+	Push	"LR"
+	SUB	SP,SP,#44
+	MOV	R1,SP
+	STR	R0,[SP,#0]
+        SWI     XWimp_RedrawWindow
+        ADDVS   SP,SP,#44
+        BVS     ExitDisplay
+01
+        TEQ     R0,#0
+        ADDEQ   SP,SP,#44
+        Pull    PC,EQ
+        SWI     XWimp_GetRectangle
+        ADDVS   SP,SP,#44
+        BVS     ExitDisplay
+        B       %BT01
+
+
+
+ExitDisplay
+        ADD     SP,SP,#4                        ; skip lr on stack
+ExitDisplay2
+        ADD     SP,SP,#8                        ; npix
+ [ KeepItUp
+	Pull	"R1-R7,PC"
+FreeFontsEtc
+	Push	"R1-R7,LR"
+	LDR	R7,NewWelcomeWorkspace
+	TEQ	R7,#0
+	Pull	"R1-R7,PC",EQ
+ ]
+        Push    R0
+        ADD     R1,R7,#768
+        MOV     R0,#255
+05
+        LDRB    R14,[R1,R0]
+07
+        TEQ     R14,#0
+08
+        SUBNE   R14,R14,#1
+        SWINE   Font_LoseFont
+
+        TEQ     R14,#0
+        BNE     %BT08
+
+        SUBS    R0,R0,#1
+        BNE     %BT05
+
+        MOV     R2,R7
+        MOV     R0,#ModHandReason_Free
+        SWI     XOS_Module
+        Pull    R0
+        Pull    "R1-R7,PC"
+
+ ]
 
         END
