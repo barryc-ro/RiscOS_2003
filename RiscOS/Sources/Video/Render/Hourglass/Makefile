@@ -78,18 +78,3 @@ version:
         Version
 
 # Dynamic dependencies:
-rm.Hourglass: s.Module
-rm.Hourglass: Hdr:ListOpts
-rm.Hourglass: Hdr:Macros
-rm.Hourglass: Hdr:System
-rm.Hourglass: Hdr:SWIs
-rm.Hourglass: Hdr:CPU.Generic26
-rm.Hourglass: Hdr:IO.GenericIO
-rm.Hourglass: Hdr:RISCOS
-rm.Hourglass: Hdr:ModHand
-rm.Hourglass: Hdr:Services
-rm.Hourglass: Hdr:Hourglass
-rm.Hourglass: Hdr:MsgTrans
-rm.Hourglass: Hdr:FSNumbers
-rm.Hourglass: Hdr:NewErrors
-rm.Hourglass: Time+Date
