@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.09 for RISC OS
+#	VERSION:	0.10 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -26,6 +26,7 @@
 #	25/02/98	0.09	RDW	Commented out DEBUG so it can be passed from
 #					amu commandline
 #					create_ent, extract_hdr and utils objects added
+#	25/02/98	0.10	RDW	Fixed so only NFELib.h is exported.
 
 #
 # Paths
@@ -134,7 +135,7 @@ clean:
 export: export_${PHASE}
 
 export_hdrs: ${HDRS} dirs
-	${CP}	h.*		${EXPORT_DIR}.h.*		${CPFLAGS}
+	${CP}	h.NFELib	${EXPORT_DIR}.h.NFELib		${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} dirs
