@@ -77,10 +77,23 @@ BufferIcon
         MOV     r0,#ModHandReason_Claim ; Claim RMA block.
         LDR     r3,[sp,#3*4]
         ADD     r3,r3,#ic_block_size
+
+        [ truncate_filenames
+        ; find out how much extra space is required to store the icon text
+        ; ie. the truncated leafname.
+        Push    "r2-r3"
+        LDR     r2, [sp, #(2+2)*4]      ; pointer to path
+        MOV     r3, #0
+        BL      do_truncation           ; return truncated length in r3
+        ADD     r8, r3, #4              ; add extra for ellipsis and terminator
+        Pull    "r2-r3"
+        ADD     r3, r3, r8
+        ]
+
         SWI     XOS_Module
         STRVS   r0,[sp]
         Pull    "r0-r7,PC",VS
-
+        
 ; Block claimed, now fill in the details.
         ASSERT  ic_next=0
 
@@ -100,7 +113,7 @@ BufferIcon
         STR     r14,[r2,#ic_prev]
         MOV     r0,#0
         STR     r0,[r2,#ic_next]
-
+        
         LDR     r0,[sp,#0*4]
         STR     r0,[r2,#ic_action]
 
@@ -117,6 +130,18 @@ BufferIcon
         STRB    r5,[r4], #1
         SUBS    r3,r3,#1
         BNE     %BT01
+
+        [ truncate_filenames
+        Push    "r0-r3"
+        LDR     r1, [sp, #(4+3)*4]      ; length of path
+        ADD     r3, r2, #ic_path
+        ADD     r3, r3, r1              ; offset to icon text
+        STR     r3, [r2, #ic_icontext]  ; store this offset
+        ADD     r2, r2, #ic_path        ; address of path
+        BL      do_truncation
+        Pull    "r0-r3"
+        ]
+
        
 10
         TST     r1,#1:SHL:1             ; Window handle ?
@@ -759,6 +784,159 @@ FindNearestGridXY ENTRY "r0-r4, r7-r11"
         ADD     r6, r9, r0
         EXIT
 
-        
-        LNK     s.Buffered
 
+ [ truncate_filenames
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; In: r2 -> path string
+;     r3 -> destination, or =0 to return number of displayable characters.
+;
+; Out: r3 = number of characters displayed, if r3 = 0 on entry, else preserved.
+
+do_truncation ENTRY "r0-r2, r4-r9"
+
+        ; find leafname and put into r6
+        MOV     r6, r2                       ; first guess for leafname is start of string
+        MOV     r1, #0                       ; r1 is byte counter
+04      LDRB    r0, [r2, r1]                 ; load next byte of string
+        CMP     r0, #"."
+        ADDEQ   r6, r2, r1                   ; if it's a dot, then it's our best guess so far
+        ADDEQ   r6, r6, #1
+        CMP     r0, #32                      ; if it's <32, then it's the string end
+        BLT     %FT08
+        ADD     r1, r1, #1                   ; next character
+        CMP     r1, #256                     ; gone too far?
+        BLT     %BT04
+        
+        ; truncate it
+08      MOV     r7, r3
+        BL      truncate_filename
+        MOV     r3, r7
+        EXIT
+
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; truncate_filename
+;
+; Take a filename in and output the truncated version (including ellipsis).
+;
+; In:   r6 -> filename
+;       r7 -> output buffer (or 0 to return size)
+;
+; Out: r7 = truncation length (no.chars) if r7 = 0 on entry, else preserved.
+;      All other regs preserved.
+
+truncate_filename ENTRY "r0-r6, r10-r11"
+
+        ; What's the maximum width we allow?
+        MOV     r1, #grid_x_spacing
+        SUB     r1, r1, #4
+        MOV     r2, r1
+        SWI     XFont_Converttopoints
+        MOV     r8, r2
+
+        ; Set font to desktop font
+        MOV     r0, #8
+        SWI     XWimp_ReadSysInfo
+        CMP     r0, #0            ; If system font, skip to different routine
+        BEQ     %FT30
+        SWI     XFont_SetFont
+
+        ; Where would we need to split the string to fit the maximum width?
+        MOV     r1, r6
+        MOV     r2, r8
+        MOV     r3, r8
+        MOV     r4, #-1
+        MOV     r5, #256
+        SWI     XFont_StringWidth
+        MOV     r10, r4        
+
+        ; Now find the length of the filename string 
+        MOV     r2, r6
+        BL      strlen
+        SUB     r11, r3, #1
+        
+        ; If the string is split before end of length, then find the new split size, taking
+        ; into account the ellipsis character which we will add.
+        CMP     r11, r10
+        BLE     %FT20
+        MOV     r1, r6
+        LDR     r3, ellipsis_width
+        SUB     r2, r8, r3
+        MOV     r3, r8
+        MOV     r4, #-1
+        MOV     r5, #256
+        SWI     XFont_StringWidth
+        MOV     r10, r4
+
+        ; Copy string (upto split character) to icon buffer
+20      B       %FT40
+          
+        ; Deal with system font
+        ; Covert millipoints back to OS units
+        ; Shift right 5 to divide by 32 and find number of characters
+        ; If less than string width, subtract 1 and add ellipsis.        
+30      MOV     r1, r8
+        MOV     r2, #0
+        SWI     XFont_ConverttoOS    ; this returns max width in OS units
+        MOV     r0, r1, LSR #4       ; divide max width by 16 to get number of chars
+                
+        MOV     r2, r6
+        BL      strlen               
+        SUB     r11, r3, #1          ; r11 = length of string
+        MOV     r10, r11             ; r10 = how many characters we'll display (try for whole length)
+        CMP     r10, r0              ; see if whole length will fit
+        SUBGT   r10, r0, #1          ; if not, put max characters-1 (we'll ad an ellipsis)
+        
+        ; Copy string (upto split character) to icon buffer        
+40      CMP     r7, #0
+        MOVEQ   r7, r10
+        EXIT    EQ
+
+        MOV     r0, r7
+        MOV     r1, r6
+        MOV     r2, r10
+
+44      LDRB    r14, [r1], #1
+        STRB    r14, [r0], #1
+        SUB     r2, r2, #1
+        CMP     r2, #0
+        BGT     %BT44
+        
+        ; If necessary, add ellipsis character
+        CMP     r11, r10
+        MOVGT   r14, #140
+        STRGTB  r14, [r0], #1
+        MOV     r14, #0
+        STRB    r14, [r0], #1
+        EXIT
+
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; read_font_widths
+;
+; Read some widths needed by the truncation code
+
+read_font_widths ENTRY "r0-r6"
+
+        ; Set font to desktop font
+        MOV     r0, #8
+        SWI     XWimp_ReadSysInfo
+        CMP     r0, #0
+        SWINE   XFont_SetFont
+
+        ; What's the width of an ellipsis in the current font?
+        ADR     r1, ellipsis_str
+        MOV     r2, #71680
+        ADD     r2, r2, #320
+        MOV     r3, r2
+        MOV     r4, #-1
+        MOV     r5, #1
+        SWI     XFont_StringWidth
+        STR     r2, ellipsis_width
+
+        EXIT
+
+ellipsis_str DCB "Œ",0
+ ]
+
+        LNK     s.Buffered

@@ -1,0 +1,677 @@
+; s.Tidy
+; Tidying and placing of icons
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; tidy_icons
+;
+; Tidies either the file icons or the window icons. Which is done depends
+; on the value PinboardFlag_TidyWindows (set tidy window icons, clear
+; tidy files).
+;
+; In:  Nothing.
+;
+; Out: All regs preserved.
+
+tidy_icons ENTRY "r0-r11"
+
+        LDR     r8, Pinboard_options
+        TST     r8, #PinboardFlag_PinboardFull
+        BICNE   r8, r8, #PinboardFlag_PinboardFull  ; Assume pinboard isn't yet full
+        TST     r8, #PinboardFlag_TidyWindows
+        BICNE   r8, r8, #PinboardFlag_UseWindowList ; Set UseWindowList flag for later functions
+        ORREQ   r8, r8, #PinboardFlag_UseWindowList
+        STR     r8, Pinboard_options
+ 
+        ; Deecide starting position
+        BL      tidy_decide_origin
+        MOV     r9, sp                              ; r9 is now data pointer
+
+        ; Where's the icon data?
+        TST     r8, #PinboardFlag_TidyWindows
+        LDRNE   r11, iconized_ptr                   ; First window icon in list
+        LDREQ   r11, Icon_list                      ; First file icon in list
+        
+        ; Now, go through all the icons and move them, if selected.                
+50      CMP     r11, #0                             ; have we reached the end of list?
+        EXIT    EQ
+        
+        LDR     r0, backdrop_handle
+        LDR     r1, [r11, #ic_window]
+        CMP     r0, r1                              ; is the next icon on the backdrop?
+        BNE     %FT70
+        
+        BL      tidy_move_icon_if_selected          ; move icon, if selected.
+        BLEQ    tidy_find_next_icon_space           ; if we've moved an icon, find where to put next
+
+70      LDR     r11, [r11, #ic_next]                ; find next icon data block
+        B       %BT50
+
+        EXIT
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; tidy_find_next_icon_space
+;
+; Where will the next icon we tidy go?
+
+tidy_find_next_icon_space ENTRY "r0, r4"
+
+        MOV     r4, r3
+        MOV     r3, r2
+        
+         ; Find the next grid position
+        TST     r8, #PinboardFlag_TidyWindows
+        MOVEQ   r2, r8, LSR #3                  ; shift the flags if files, so they look like
+        MOVNE   r2, r8                          ; window flags.
+        BL      find_next_x_and_y
+        BNE     %FT10                           ; NE if the screen was filled up with this call
+        
+        ; If the screen is already full, then we don't bother to check for clashes anymore
+        TST     r8, #PinboardFlag_PinboardFull
+        MOVNE   r2, r3
+        MOVNE   r3, r4
+        EXIT    NE        
+
+        ; Screen not full - try and find the next free space
+        BL      tidy_find_next_free
+        MOVEQ   r2, r3
+        MOVEQ   r3, r4
+        EXIT    EQ
+  
+        ; The screen is now full - reset to origin
+10      ORR     r8, r8, #PinboardFlag_PinboardFull
+        STR     r8, Pinboard_options
+        BL      tidy_decide_origin
+        EXIT
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; tidy_decide_origin
+;
+; Decide where the origin of a tidy is. By that we mean the x and y
+; co-ordinate of the grid position of the corner we're tidying from.
+;
+; In: Nothing.
+;
+; Out: r2, r3 = x and y co-ordinates of start grid position.
+
+tidy_decide_origin ENTRY "r0-r1, r4-r6"
+
+        LDR     r5, Pinboard_options                ; Pinboard options
+        ADR     r6, bounding_box                    ; Screen bouding box
+
+        ; Decide on initial left/right positioning
+        LDR     r1, [r6, #8]                        ; load screen max_x
+        TST     r5, #PinboardFlag_TidyWindows       ; see if we're dealing with windows or files        
+        MOVNE   r0, #PinboardOption_WinToCornerLR   ; if windows, then we'll test WinToCornerLR bit
+        MOVEQ   r0, #PinboardOption_TidyToCornerLR  ; if files, then we'll test TidyToCornerLR bit
+        TST     r5, r0                              ; test the bit
+        MOVEQ   r3, #0                              ; if not set, then use left of screen
+        SUBNE   r3, r1, #grid_x_spacing             ; if set, then use right of screen
+
+        ; Decide on initial up/down positiong
+        LDR    r1, [r6, #12]                        ; load screen max_y
+        TST    r5, #PinboardFlag_TidyWindows        ; see if we're dealing with windows or files 
+        MOVNE  r0, #PinboardOption_WinToCornerTB    ; if windows, then we'll test WinToCornerTB
+        MOVEQ  r0, #PinboardOption_TidyToCornerTB   ; if files, then we'll test TidyToCornerTB
+        TST    r5, r0                               ; test the bit
+        SUBEQ  r4, r1, #grid_y_spacing              ; if not set, then use top of screen
+        LDRNE  r4, icon_bar_height                  ; if set, then use bottom of screen
+
+        ; If we're doing files, then check initial position for clash
+        ; ie. windows are higher priority.
+        TST     r5, #PinboardFlag_PinboardFull
+        BNE     %FT10
+        TST     r5, #PinboardFlag_TidyWindows
+        BLEQ    tidy_find_next_free
+
+10      MOV     r2, r3
+        MOV     r3, r4
+
+        EXIT
+        
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; tidy_move_icon_if_selected
+;
+; Check if icon whose details are in the structure in r11 is selected and
+; if so, move it to the grid co-ordinates pointed to by r2, r3.
+; 
+; In: r2, r3 = x, y grid co-ordinate to move to
+;     r11 -> icon data structure
+;
+; Out: NE = didn't move icon
+;      EQ = did move icon.
+
+tidy_move_icon_if_selected ENTRY "r0-r1, r4-r10"
+
+        SUB     sp, sp, #48                           ; Use stack for temporary storage.
+        MOV     r1, sp
+        
+        LDR     r9, backdrop_handle
+        LDR     r8, Pinboard_options
+        
+        ; If pinboard full, we offset the icons a little
+        TST     r8, #PinboardFlag_PinboardFull
+        MOVNE   r10, #(grid_x_spacing/2)
+        MOVEQ   r10, #0
+
+        ; Get the current wimp state of the icon
+        STR     r9, [r1]                              ; Backdrop handle               
+        LDR     r0, [r11, #ic_icon]                   ; Icon handle
+        STR     r0, [r1, #4]                        
+        SWI     XWimp_GetIconState
+        BVS     %FT10
+
+        ; We'll only move it if it's selected
+        LDR     r0, [r1, #24]                       ; icon flags
+        TST     r0, #is_selected
+        BEQ     %FT10
+
+        ; Resize it...
+        LDR     r4, [r1, #8]                        ; How wide is the icon?
+        LDR     r5, [r1, #16]
+        SUB     r6, r5, r4
+        LDR     r4, [r1, #12]                       ; How tall is the icon?
+        LDR     r5, [r1, #20]
+        SUB     r7, r5, r4
+
+        Push    "r2"
+        MOV     r0, #grid_x_spacing                 ; Adjust for centre alignment
+        SUBS    r1, r0, r6                          ; x1
+        ADDPL   r2, r2, r1, LSR #1                  ; x2
+        SUBMI   r1, r6, r0
+        SUBMI   r2, r2, r1, LSR #1
+
+        ADD     r4, r2, r6                          ; x2
+        ADD     r5, r3, r7                          ; y2
+
+        ADD     r2, r2, r10                         ; icon offset if pinboard full
+        ADD     r4, r4, r10                         ; icon offset if pinboard full
+
+        TST     r8, #PinboardFlag_TidyWindows
+        STREQ   r2, [r11, #ic_x]                    ; store x
+        STREQ   r3, [r11, #ic_y]                    ; store y
+
+        MOV     r0, r9
+        LDR     r1, [r11, #ic_icon]
+        SWI     XWimp_ResizeIcon                    ; Move icon to new x and y
+        Pull    "r2"
+        BVS     %FT10
+        
+        ADD     sp, sp, #48                         ; exit EQ
+        CMP     r8, r8
+        EXIT
+        
+10      ADD     sp, sp, #48
+        CMP     pc, r8                              ; exit NE
+        EXIT        
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; tidy_find_next_free
+;
+; Given an initial grid position, check if it's space is occupied. If it
+; is, then move to the next position and try again.
+;
+; In: r3, r4 = x and y co-ordinates
+;
+; Out: r3, r4  = next free slot
+;      r0 - r2 = corrupted.
+
+tidy_find_next_free ENTRY
+
+        LDR     r2, Pinboard_options
+        TST     r2, #PinboardFlag_TidyWindows
+        BNE     %FT20
+
+10
+        LDR     r2, Pinboard_options
+        BL      is_something_there
+        BNE     %FT20
+        MOV     r2, r2, LSR #3
+        BL      find_next_x_and_y
+        EXIT    NE
+        B       %BT10
+
+20
+        CMP     r0, r0        
+        EXIT
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; is_something_there
+;
+; Test if a grid position is occupied. As to which list of icons is
+; checked depends on the value of PinboardFlag_TidyWindows. If set,
+; then the file icon list is searched, else the iconised window list.
+;
+; In: r3, r4 = x and y co-ordinate of grid position
+;
+; Out: EQ if something there, NE if not.
+;      All regs. preserved.
+
+is_something_there ENTRY "r2, r5-r11"
+
+        LDR     r2, Pinboard_options
+        TST     r2, #PinboardFlag_TidyWindows
+        LDREQ   r11, iconized_ptr                 ; first window in list?
+        LDRNE   r11, Icon_list                    ; or first icon in list?
+        SUB     sp, sp, #40                       ; grab some stack space to put data block
+        MOV     r9, sp
+
+20      ; next icon
+        CMP     r11, #0                           ; is this the end of the linked list?
+        BEQ     %FT90
+        BL      get_next_icon_bbox                ; get the icon's bounding box
+        CMP     r10, #0                           ; icon not on backdrop if r10 is zero
+        BEQ     %FT80
+        
+        ADD     r5, r3, #grid_x_spacing           ; make r3, r4, r5, r6 the proposed bounding box.
+        ADD     r6, r4, #grid_y_spacing
+
+        ; Check the proposed icon's left and right bounds against the current stored icon
+        LDR     r7, [r10] 
+        CMP     r5, r7                            ; Check proposed x2 <= icon x1
+        BLE     %FT80                             ; If it is, then this icon presents no problems - try next
+        LDR     r7, [r10, #8]
+        CMP     r3, r7                            ; Check proposed x1 >= icon x2
+        BGE     %FT80                             ; If it is, then this icon presents no problems - try next
+        
+        ; Check the proposed icon's top and bottom bounds against the current stored icon
+        LDR     r7, [r10, #4]
+        CMP     r6, r7                            ; Check proposed y2 <= icon y1
+        BLE     %FT80                             ; If it is, then this icon present no problems.
+        LDR     r7, [r10, #12]
+        CMP     r4, r7                            ; Check proposed y1 >= store y2
+        BGE     %FT80                             ; If it is, then this icon presents no problems
+        
+70      ; Exit EQ
+        ADD     sp, sp, #40
+        CMP     sp, sp
+        EXIT
+
+80      ; this icon doesn't occupy the space - try next
+        LDR     r11, [r11, #ic_next]
+        B       %BT20
+
+90      ; something ISN'T there - Exit NE
+        ADD     sp, sp, #40
+        CMP     sp, #0
+        EXIT        
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; next_grid_row_or_column
+;
+; Depending on PinboardOption_WinToCornerXX, return the X and Y
+; co-ordinate of the start of the next row or column.
+;
+; In: r2     = options
+;     r3, r4 = x and y co-ordinate of grid position
+
+;
+; Out: r3, r4 = x and y co-ordinate of next row or column
+
+next_grid_row_or_column ENTRY "r5"
+
+        ADR     r5, bounding_box
+        TST     r2, #PinboardOption_WinToCornerHV ; Are we dealing with rows or columns?
+        BNE     %FT20
+        
+10      ; rows - reset x to left/right and move up/down a row
+        LDR     r0, [r5, #8] ; x2
+        TST     r2, #PinboardOption_WinToCornerLR
+        SUBNE   r3, r0, #grid_x_spacing
+        MOVEQ   r3, #0
+
+        TST     r2, #PinboardOption_WinToCornerTB
+        ADDNE   r4, r4, #grid_y_spacing
+        SUBEQ   r4, r4, #grid_y_spacing
+
+        ; Check we haven't moved up/down too far
+        LDR     r0, [r5, #12] ; y2
+        SUB     r0, r0, #grid_y_spacing
+        CMP     r4, r0
+        SUBGT   r4, r4, #grid_y_spacing
+
+        LDR     r0, icon_bar_height
+        CMP     r4, r0
+        ADDLT   r4, r4, #grid_y_spacing
+        EXIT
+
+20      ; columns - reset y to top/bottom and move left/right a column
+        LDR     r0, [r5, #12] ; y2
+        TST     r2, #PinboardOption_WinToCornerTB
+        LDRNE   r4, icon_bar_height
+        SUBEQ   r4, r0, #grid_y_spacing
+        
+        TST     r2, #PinboardOption_WinToCornerLR
+        SUBNE   r3, r3, #grid_x_spacing
+        ADDEQ   r3, r3, #grid_x_spacing
+
+        ; Check we haven't moved left/right too far
+        LDR     r0, [r5, #8] ; x2
+        SUB     r0, r0, #grid_x_spacing
+        CMP     r3, r0
+        SUBGT   r3, r3, #grid_x_spacing
+        
+        CMP     r3, #0
+        ADDLT   r3, r3, #grid_x_spacing
+        EXIT
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; get_iconise_position
+;
+; Decide where to put the icon for a window that's just been iconized.
+; The process involves choosing a location, then searching first the window list, then the
+; file list, to see if the space is occupied. If it is, then we move to the next space
+; (dependent on PinboardOption_WinToCorner...) and check through each list again.
+;
+; In: Nothing.
+;
+; Out: The memory locations iconise_x and iconise_y are set to the position for the icon.
+;      All regs preserved.
+
+get_iconise_position ENTRY
+
+        Push    "r0-r12"
+
+        LDR     r2, Pinboard_options                ; Pinboard options
+        ORR     r2, r2, #PinboardFlag_UseWindowList ; Start with the window list
+        STR     r2, Pinboard_options
+        ADR     r0, bounding_box                    ; Screen bouding box
+
+        LDR     r1, [r0, #8]                        ; Decide on initial left/right positioning
+        TST     r2, #PinboardOption_WinToCornerLR   ; 0 = Left (EQ), 1 = Right (NE)
+        MOVEQ   r3, #0
+        SUBNE   r3, r1, #grid_x_spacing
+
+        LDR     r1, [r0, #12]                       ; Decide on initial up/down positioning
+        TST     r2, #PinboardOption_WinToCornerTB   ; 0 = Top (EQ), 1 = Bottom (NE)
+        SUBEQ   r4, r1, #grid_y_spacing
+        LDRNE   r4, icon_bar_height
+                 
+        SUB     sp, sp, #48                         ; Increase stack - we'll use it for getting icon data
+
+        ; Now loop through linked list of icons and see if they present a problem (occupy the space that
+        ; our 'proposed' icon is going to use). If so, try another space. If not, then we can use the coords. 
+        ; (Surely there's an easier way?)
+        ; r2 = options
+        ; r3 = iconize_x
+        ; r4 = iconize_y
+        ; r3-r6 = attempted bounding box
+        ; r11 -> current iconized icon we're checking
+        ; r10 -> bounding box of the icon we're checking
+        
+10 ; tryagain
+        ORR     r2, r2, #PinboardFlag_UseWindowList ; reset the list we're using to the window_list
+        STR     r2, Pinboard_options
+        LDR     r11, iconized_ptr                   ; location of first icon data
+        CMP     r11, #0                             ; check there's actuallly icons in this list
+        BNE     %FT20
+        
+        BIC     r2, r2, #PinboardFlag_UseWindowList ; There weren't any icons in the window_list
+        STR     r2, Pinboard_options                ; so move to the file list.
+        LDR     r11, Icon_list
+
+20 ; nexticon
+        CMP     r11, #0                             ; check for the end of the list
+        BEQ     %FT86
+        MOV     r9, sp
+        BL      get_next_icon_bbox                  ; Get the next bounding box
+        CMP     r10, #0
+        BEQ     %FT80                               ; if bbox -> 0, icon was not on backdrop - go to next
+        
+        ADD     r5, r3, #grid_x_spacing             ; make r3, r4, r5, r6 the proposed bounding box.
+        ADD     r6, r4, #grid_y_spacing
+
+        ; Check the proposed icon's left and right bounds against the current stored icon
+        LDR     r7, [r10] 
+        CMP     r5, r7                              ; Check proposed x2 <= icon x1
+        BLE     %FT80                               ; If it is, then this icon presents no problems - try next
+        LDR     r7, [r10, #8]
+        CMP     r3, r7                              ; Check proposed x1 >= icon x2
+        BGE     %FT80                               ; If it is, then this icon presents no problems - try next
+        
+        ; Check the proposed icon's top and bottom bounds against the current stored icon
+        LDR     r7, [r10, #4]
+        CMP     r6, r7                              ; Check proposed y2 <= icon y1
+        BLE     %FT80                               ; If it is, then this icon present no problems.
+        LDR     r7, [r10, #12]
+        CMP     r4, r7                              ; Check proposed y1 >= store y2
+        BGE     %FT80                               ; If it is, then this icon presents no problems
+
+        ; The bounds checks have failed - the stored icon overlaps with our proposed one.
+        ; So, we've got to move onto the next possible slot on the pinboard.
+        BL  find_next_x_and_y
+        BNE %FT84
+        B   %BT10
+        
+80 ; try_next
+        BL      get_next_icon_block
+        B       %BT20                               ; Next icon - go back and check it
+
+84 ; screen_full
+        B       %FT88
+ 
+86 ; got_one
+        STR     r3, iconize_x
+        STR     r4, iconize_y
+                
+88 ; exit
+        ADD     sp, sp, #48
+        Pull    "r0-r12"
+        EXIT
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; get_next_icon_box
+;
+; Given a pointer to a data block, find the icon's bounding box.
+; PinboardFlag_UseWindowList sets if the block is in the window or file list
+;
+; In: r2 = Pinboard_options
+;     r11 -> icon data block
+;     r9  -> 40 byte block of temporary memory (typically stack)
+;
+; Out: r10 -> bounding box (which will be 16 bytes within the 40 bytes)
+;             if r10 is zero, icon is not on backdrop.
+;      r0, r1 corrupted
+
+get_next_icon_bbox ENTRY
+
+        MOV     r10, #0        
+        TST     r2, #PinboardFlag_UseWindowList ; Is the data -> by r9 in the window or file list?
+        BNE     %FT20
+
+10      ; find the icon handle from the file icon list
+        LDR     r0, [r11, #ic_icon]
+        B       %FT30
+        
+20      ; find the icon handle from the window icon list
+        LDR     r0, backdrop_handle
+        LDR     r1, [r11, #w_icon_id]
+        CMP     r0, r1
+        EXIT    NE                              ; icon not on backdrop - exit
+        LDR     r0, [r11, #w_icon_handle]
+
+30      ; found an icon handle - get it's bounding box
+        STR     r0, [r9, #4]
+        LDR     r0, backdrop_handle
+        STR     r0, [r9]
+        MOV     r1, r9
+        SWI     Wimp_GetIconState
+        ADD     r10, r1, #8
+        
+        EXIT        
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; get_next_icon_block
+;
+; Given an icon data block, find the next icon in the linked list. Includes
+; both file icon list and window icon list. PinboardFlag_UseWindowList
+; indicates if we are currently on the window list (set) or file list
+; (clear). If we've reached the end of the window list, we'll move to
+; the file list, but not vice-versa.
+;
+; In:  r2 = Pinboard_options
+;      r11 -> icon data block
+;
+; Out: r10 -> bounding box (which will be 16 bytes within the 40 bytes)
+;      r0, r1 corrupted
+
+get_next_icon_block ENTRY
+
+        TST     r2, #PinboardFlag_UseWindowList
+        LDRNE   r11, [r11, #w_next_ptr]    ; if iconised window
+        LDREQ   r11, [r11, #ic_next]       ; if file icon
+        CMP     r11, #0
+        EXIT    NE
+        
+        TST     r2, #PinboardFlag_UseWindowList
+        EXIT    EQ                         ; if this is the file list, we can go no further
+        
+        BIC     r2, r2, #PinboardFlag_UseWindowList
+        STR     r2, Pinboard_options
+        LDR     r11, Icon_list
+        
+        EXIT
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; find_next_x_and_y
+;
+; What are x and y co-ordinates of the next spot on the grid?
+; This depends on the start corner and the direction of stacking.
+;
+; In: r2 = pinboard options
+;     r3 = x co-ord.
+;     r4 = y co-ord.
+;
+; Out: r3, r4 = x and y co-ordinates
+;      NE     = Screen full
+;      EQ     = Found new position (in r3, r4)
+;      r0, r1 = corrupted.
+
+find_next_x_and_y ENTRY
+
+        ; Which way are we stacking?
+        TST     r2, #PinboardOption_WinToCornerHV ; 0 = horizontally (EQ), 1 = vertically (NE)
+        BEQ     find_next_horizontal
+        BNE     find_next_vertical
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+find_next_vertical
+
+        TST     r2, #PinboardOption_WinToCornerTB ; 0 = top (EQ) 1 = bottom (NE)
+        BNE     %FT12
+
+        ADR     r0, bounding_box  
+        LDR     r1, [r0, #12]
+        SUB     r1, r1, #grid_y_spacing
+        LDR     r0, icon_bar_height
+       
+        ; move down
+        SUBS    r4, r4, #grid_y_spacing
+        MOVMI   r4, r1
+        BMI     %FT16
+        CMP     r4, r0
+        MOVLT   r4, r1
+        BLT     %FT16
+        B       find_next_found
+        
+12      ; move up
+        ADD     r4, r4, #grid_y_spacing
+        CMP     r4, r1
+        MOVGE   r4, r0
+        BGE     %FT16
+        B       find_next_found
+
+16      ; we've hit the edge - move left/right
+        ADR     r0, bounding_box  
+        TST     r2, #PinboardOption_WinToCornerLR
+        BEQ     %FT18
+        
+        ; move left
+        SUBS    r3, r3, #grid_x_spacing
+        BMI     find_next_screen_full
+        B       find_next_found        
+        
+18      ; move right
+        ADD     r3, r3, #grid_x_spacing
+        LDR     r1, [r0, #8]
+        SUB     r1, r1, #grid_x_spacing
+        CMP     r3, r1
+        BGT     find_next_screen_full
+        B       find_next_found
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+find_next_horizontal
+
+        ADR     r0, bounding_box  
+        LDR     r1, [r0, #8]
+        SUB     r1, r1, #grid_x_spacing
+
+        ; which direction do we move?
+        TST     r2, #PinboardOption_WinToCornerLR ; 0 = left (EQ), 1 = right (NE)
+        BEQ     %FT22
+
+        ; move left
+        SUBS    r3, r3, #grid_x_spacing
+        MOVMI   r3, r1
+        BMI     %FT26
+        B       find_next_found
+
+22      ; move right
+        ADD     r3, r3, #grid_x_spacing
+        CMP     r3, r1
+        MOVGE   r3, #0
+        BGE     %FT26
+        B       find_next_found
+
+26      ; we've hit the edge - move up/down
+        TST     r2, #PinboardOption_WinToCornerTB
+        BNE     %FT28
+
+        ; move down
+        SUBS    r4, r4, #grid_y_spacing
+        BMI     find_next_screen_full
+        LDR     r1, icon_bar_height
+        CMP     r4, r1
+        BLT     find_next_screen_full
+        B       find_next_found
+
+28      ; move up
+        ADD     r4, r4, #grid_y_spacing
+        LDR     r1, [r0, #12]
+        SUB     r1, r1, #grid_y_spacing
+        CMP     r4, r1
+        BGT     find_next_screen_full
+        B       find_next_found
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+find_next_found
+
+        ; We've found the next slot - exit EQ
+        MOV     r0, #24
+        CMP     r0, #24
+        EXIT
+
+
+find_next_screen_full
+
+        ; The screen was full - exit NE
+        MOV     r0, #24
+        CMP     r0, #23
+        EXIT
+        
+
+        LNK     s.Tail
