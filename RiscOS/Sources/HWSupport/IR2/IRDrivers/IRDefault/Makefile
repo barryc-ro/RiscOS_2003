@@ -61,7 +61,7 @@ all: rm.${COMPONENT}
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} dirs
 	@echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -79,7 +79,10 @@ clean:
 	${RM} ${TARGET}
 	@echo ${COMPONENT}: cleaned
 
-
+dirs:
+	${MKDIR} o
+	${MKDIR} rm
+	${MKDIR} aof
 #
 # Stand-alone module
 #
@@ -90,7 +93,6 @@ rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
-	${MKDIR} aof
 	${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
@@ -120,3 +122,9 @@ o.driver:	h.utils
 o.driver:	h.ir_api
 o.driver:	h.driver
 o.driver:	h.veneers
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
