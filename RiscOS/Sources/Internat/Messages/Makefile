@@ -9,7 +9,7 @@
 # 08-Dec-94  AMcC         Adjust rules and dependencies so that
 #                         tokens don't need to be generated every time
 #                         - remove data.Dictionary to regenerate tokens
-#
+# 05 Sep 1997 RWB	Corrected error on usage of WFLAGS
 
 #
 # Generic options:
@@ -84,7 +84,7 @@ clean:
 
 clean_all:
 	${WIPE} Data.* ${WFLAGS}
-	${WIPE} rm.* {WFLAGS}
+	${WIPE} rm.* ${WFLAGS}
         ${WIPE} Resources.* ${WFLAGS}
         @echo ${COMPONENT}: all cleaned
 
