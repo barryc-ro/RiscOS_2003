@@ -62,6 +62,8 @@ INCLUDES= -IC:
 # use TEST_CRON to test cron - normal cron service will be unusual
 # use SEND_SERIALID_LENGTH to include length data as first 2 bytes of the serial ID string
 # use ENABLE_HTTP_PROXY / ENABLE_HTTPS_PROXY to enable ROM based proxies for http and/or SSL http
+# use PRODUCTION_KEYS to use final 'live' RSA crypto stuff (MFRKEYlive from resources, not MFRKEY)
+# use DEBUG_DISCONNECTS to set all PPP line drop timeouts to a minute
 
 # debugging
 
@@ -70,21 +72,21 @@ ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DSHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK -DSECURE_RELATIONSHIP_SERVER \
 		-UMANUFACTURER_KEY_X509 -DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-DETHERNET -DTEST_CRON -DSEND_SERIALID_LENGTH \
-		-UENABLE_HTTP_PROXY -UENABLE_HTTPS_PROXY
+		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY -DPRODUCTION_KEYS -DDEBUG_DISCONNECTS
 
 ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
 		-DSHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK -DSECURE_RELATIONSHIP_SERVER \
 		-UMANUFACTURER_KEY_X509 -DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-UETHERNET -DTEST_CRON -DSEND_SERIALID_LENGTH \
-		-UENABLE_HTTP_PROXY -UENABLE_HTTPS_PROXY
+		-UENABLE_HTTP_PROXY -UENABLE_HTTPS_PROXY -DPRODUCTION_KEYS -DDEBUG_DISCONNECTS
 
 NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
 		-USHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK -DSECURE_RELATIONSHIP_SERVER \
 		-UMANUFACTURER_KEY_X509 -DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-UETHERNET -UTEST_CRON -DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY
+		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY -DPRODUCTION_KEYS -UDEBUG_DISCONNECTS
 
 #
 # select one of these
@@ -184,7 +186,6 @@ clean:
 resources:
         ${MKDIR} <resource$dir>.Resources
         ${MKDIR} <resource$dir>.Resources.NCMA
-        ${CP} Resources.MFRCERT  <resource$dir>.Resources.NCMA.MFRCERT ${CPFLAGS}
         ${CP} Resources.MFRKEY <resource$dir>.Resources.NCMA.MFRKEY ${CPFLAGS}
         ${CP} Resources.Boot <resource$dir>.Resources.NCMA.Boot ${CPFLAGS}
         ${CP} Resources.BootFast <resource$dir>.Resources.NCMA.BootFast ${CPFLAGS}
@@ -223,21 +224,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	C:h.DBUG
-o.module:	h.machine
-o.module:	h.vectors
-o.module:	h.ncma_cmds
-o.module:	h.ncma_swis
-o.module:	h.ncma_ncma
-o.module:	h.ncma_scard
-o.module:	h.ncma_dial
-o.module:	h.ncma_uid
-o.module:	h.dynalloc
-o.module:	C:h.DBUG
 o.header:	cmhg.header
 o.header:	h.cmhg_defs
 o.vectors:	c.vectors
@@ -249,22 +235,6 @@ o.vectors:	h.vectors
 o.vectors:	h.module
 o.vectors:	C:h.DBUG
 o.vectors:	h.scinter
-o.ncma_cmds:	c.ncma_cmds
-o.ncma_cmds:	C:h.kernel
-o.ncma_cmds:	C:h.swis
-o.ncma_cmds:	h.ncma_cmds
-o.ncma_cmds:	h.ncma_ncma
-o.ncma_cmds:	h.ncma_utils
-o.ncma_cmds:	h.ncma_url
-o.ncma_cmds:	h.ncma_scard
-o.ncma_cmds:	h.ncma_cache
-o.ncma_cmds:	h.ncma_mime
-o.ncma_cmds:	h.machine
-o.ncma_cmds:	h.ncma_cron
-o.ncma_cmds:	h.vectors
-o.ncma_cmds:	h.kprintf
-o.ncma_cmds:	h.dynalloc
-o.ncma_cmds:	C:h.DBUG
 o.ncma_swis:	c.ncma_swis
 o.ncma_swis:	C:h.kernel
 o.ncma_swis:	C:h.swis
@@ -501,3 +471,36 @@ o.ncma_fx:	c.ncma_fx
 o.ncma_fx:	C:h.kernel
 o.ncma_fx:	C:h.swis
 o.ncma_fx:	h.ncma_fx
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.module
+o.module:	C:h.DBUG
+o.module:	h.machine
+o.module:	h.vectors
+o.module:	h.ncma_cmds
+o.module:	h.ncma_swis
+o.module:	h.ncma_ncma
+o.module:	h.ncma_scard
+o.module:	h.ncma_dial
+o.module:	h.ncma_uid
+o.module:	h.dynalloc
+o.module:	h.ncma_url
+o.module:	C:h.DBUG
+o.ncma_cmds:	c.ncma_cmds
+o.ncma_cmds:	C:h.kernel
+o.ncma_cmds:	C:h.swis
+o.ncma_cmds:	h.ncma_cmds
+o.ncma_cmds:	h.ncma_ncma
+o.ncma_cmds:	h.ncma_utils
+o.ncma_cmds:	h.ncma_url
+o.ncma_cmds:	h.ncma_scard
+o.ncma_cmds:	h.ncma_cache
+o.ncma_cmds:	h.ncma_mime
+o.ncma_cmds:	h.ncma_dial
+o.ncma_cmds:	h.machine
+o.ncma_cmds:	h.ncma_cron
+o.ncma_cmds:	h.vectors
+o.ncma_cmds:	h.kprintf
+o.ncma_cmds:	h.dynalloc
+o.ncma_cmds:	C:h.DBUG
