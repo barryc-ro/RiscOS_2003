@@ -39,7 +39,17 @@
 ;            Made it not hang up if no keyboard attached (bug RP-1355).
 ; 27-Jun-94  Sorted out sources for international build.
 ;            Added offsets in key structure so that keypad chars can be changed.
+; 10-Aug-98  BJGA Added PC-style delete capability and Ursula service call table.
+; 18-Aug-98  BJGA Fixed numerous layout bugs
+; 31-Aug-98  Internals fully revised to use new UCS layout structures created
+;            by keygen. Alphabet adaptive, including UTF-8.
 ;
+
+        GBLL    PCDel           ; option to have Delete key return &8B (Copy) instead
+PCDel   SETL    {TRUE}
+
+        GBLL    Ursula          ; add Ursula service call table
+Ursula  SETL    {TRUE}
 
         GET     Hdr:ListOpts
         GET     Hdr:Macros
@@ -48,19 +58,17 @@
         GET     Hdr:Services
         GET     Hdr:Proc
 
-        GET     !IKHG.Source.Chars.Latin1
-
-TAB     *       9
-LF      *       10
-FF      *       12
-CR      *       13
-
 OsbyteSetCountry * &46
 OsbyteSetAlphKey * &47
 OsbyteFindOsbyteVars * &A6
 OsbyteTABch     * &DB
 OsbyteKeyBase   * &EE
 OsbyteKeyOpt    * &FE
+ [ PCDel
+OsbyteReadCmos  * &A1
+CmosDelByte     * &C3
+CmosDelBit      * 1
+ ]
 
 Country_UK      * 1
 Country_Master  * 2
@@ -99,6 +107,7 @@ Country_Switzerland * 35
 Country_Wales   * 36
 
 Country_USA     * 48
+Country_Wales2   * 49
 
 Country_ISO1    * 80
 Country_ISO2    * 81
@@ -112,10 +121,7 @@ Country_ISO9    * 88
 
 Country_DvorakUK  * 70
 Country_DvorakUSA * 71
-Country_DvorakLH  * 78
-Country_DvorakRH  * 79
 
-Alphabet_Bfont  * 100
 Alphabet_Latin1 * 101
 Alphabet_Latin2 * 102
 Alphabet_Latin3 * 103
@@ -125,22 +131,15 @@ Alphabet_Arabic * 106
 Alphabet_Greek  * 107
 Alphabet_Hebrew * 108
 Alphabet_Latin5 * 109
-
-Alphabet_Cyrillic2 * 120
+Alphabet_Welsh  * 110
+Alphabet_UTF8   * 111
+Alphabet_Latin9 * 112
+Alphabet_Latin6 * 113
 
 Keyboard_A500   * 0
 Keyboard_A1     * 1
 Keyboard_Perth  * 2
 Keyboard_None   * &FF
-
-        GBLL    BleedinDaveBell
-BleedinDaveBell SETL    {TRUE}
-
-        [ BleedinDaveBell
-Alphabet_Default * Alphabet_Latin1
-        |
-Alphabet_Default * Alphabet_Bfont
-        ]
 
         MACRO
         IKT     $A, $B, $C, $D, $E, $F, $G, $H
@@ -168,27 +167,6 @@ T       SETA    T :OR: &FF0000
 T       SETA    T :OR: &FF000000
         ]
         &       T
-        MEND
-
-        MACRO
-        BodgeKeyHandler $cond
-        MEND
-
-        MACRO
-$label  DoTopBit        $No
-$label  ROUT
-        ADRL    R3, TopBitSetTable$No-((K$No.TopBitSet-SpecialList$No):SHL:4)
-        B       DoTopBitCommon
-        MEND
-
-        MACRO
-        DoAccent $No, $AName
-PendingAltCode$No
-        ADR     R6, KeyReturn
-        STRB    R3, [R6, #1]
-PendingAltSpecial$No
-        ADRL    R4, AccentTable_$AName
-        B       PendingAltSpecialCommon
         MEND
 
 ; UK Keyboard keys
@@ -270,7 +248,7 @@ K1NumPad5       * &49
 K1NumPad6       * &4A
 K1NumPadPlus    * &4B
 K1ShiftLeft     * &4C
-K1NotFitted     * &4D
+K1NotFittedLeft * &4D
 K1LetterZ       * &4E
 K1LetterX       * &4F
 K1LetterC       * &50
@@ -297,6 +275,13 @@ K1CursorRight   * &64
 K1NumPad0       * &65
 K1NumPadDot     * &66
 K1NumPadEnter   * &67
+K1AcornLeft     * &68
+K1AcornRight    * &69
+K1Menu          * &6A
+K1NoConvert     * &6B
+K1Convert       * &6C
+K1Kana          * &6D
+K1NotFittedRight * &6E
 K1LeftMouse     * &70
 K1CentreMouse   * &71
 K1RightMouse    * &72
@@ -309,10 +294,23 @@ KBAlt_AltDown        * (1 :SHL: 5)
 KBAlt_DigitsPresent  * (1 :SHL: 6)
 KBAlt_SelectKeyboard * (1 :SHL: 7)      ; set after CTRL-ALT-F12
 
-KVPendingAltSpecial  * &20 ; offset from structure to new entry
-KVPadNumTran         * &24 ; offset from structure to new entry for keypad numerics
-KVPadCurTran         * &28 ; offset from structure to new entry for keypad non-numerics
-KVSize               * &2C ; size of key structure header
+; Kernel-referenced entries
+KVKeyTran            * &0
+KVKeyTranSize        * &4
+KVInkeyTran          * &8
+KVShiftingList       * &C
+KVSpecialList        * &10
+KVSpecialCodeTable   * &14
+KVInit               * &18
+KVPendingAltCode     * &1C
+; Private entries
+KVPadNumTran         * &20 ; offset from structure to new entry for keypad numerics
+KVPadCurTran         * &24 ; offset from structure to new entry for keypad non-numerics
+KVUCSTable0          * &28
+KVUCSTable1          * &2C
+KVSize               * &30 ; size of key structure header
+
+KBStat_NoKanaLock    * KBStat_NoShiftLock  ; we've reassigned this bit
 
 ; Module workspace allocation
 
@@ -321,18 +319,30 @@ KVSize               * &2C ; size of key structure header
 NewKeyStructWP  # KVSize        ; key structure header, must be first thing
 OldKeyHandler   # 4
 CurrentKeyboard # 4     ; current keyboard setting
-CurrentKeyAlphabet # 4  ; alphabet for current keyboard
 OsbyteVars      # 4
 AltDigitValue   # 4
+CurrentAlphabet # 4
+AlphabetTable   # 4
+FallbackCode    # 4
+ [ PCDel
+DeleteChar      # 1
+unused          # 3
+ ]
 
 A1Key_WorkspaceSize * :INDEX: @
 
         ^ :INDEX: CurrentKeyboard, R0
 
 R0CurrentKeyboard # 4
-R0CurrentKeyAlphabet # 4
 R0OsbyteVars    # 4
 R0AltDigitValue # 4     ; value of ALT+digits so far
+R0CurrentAlphabet # 4
+R0AlphabetTable # 4
+R0FallbackCode  # 4
+ [ PCDel
+R0DeleteChar    # 1
+R0unused        # 3
+ ]
 
 ; User key workspace allocation
 
@@ -342,9 +352,12 @@ ShiftCount      # 1
 CtrlCount       # 1
 AltCount        # 1
 MyMouseButtons  # 1     ; bit0=R, bit1=C, bit2=L
+TempAction      # 1     ; to remember the action in ProcessUCS
 KeyReturn       # 2     ; length byte (1), value byte
 KeyNULReturn    # 3     ; length byte (2), NUL, value byte
 NowtReturn      * KeyNULReturn +1 ; zero length list
+KeyUTFReturn    # 13    ; length byte (up to 12), 6 * (NUL, value)
+KeyUTFReturnEnd # 0
 
 ; **************** Module code starts here **********************
 
@@ -364,9 +377,7 @@ A1Key_Title
         =       "InternationalKeyboard", 0
 
 A1Key_HelpStr
-        =       "Int'l Keyboard"
-        =       TAB
-        =       "0.41 (07 Aug 1998)"
+        =       "Int'l Keyboard", 9, "0.50 (01 Sep 1998)"
  [ Keyboard <> "All"
         =       " $Keyboard"
  ]
@@ -443,11 +454,27 @@ A1Key_Die Entry
 ;       R2 preserved
 ;
 
+ [ Ursula
+ServiceTable
+        DCD     0 ; flags
+        DCD     Service2 - Module_BaseAddr
+        DCD     Service_Reset         ; &27
+        DCD     Service_International ; &43
+        DCD     Service_KeyHandler    ; &44
+        DCD     0 ; terminator
+        DCD     ServiceTable - Module_BaseAddr
 A1Key_Service ROUT
+        MOV     R0, R0
+ |
+A1Key_Service ROUT
+ ]
         TEQ     r1, #Service_Reset
         TEQNE   r1, #Service_KeyHandler
         TEQNE   r1, #Service_International
         MOVNES  pc, lr
+ [ Ursula
+Service2
+ ]
 
         Entry   "r1"
         LDR     wp, [r12]                       ; point to workspace
@@ -506,14 +533,12 @@ SetUpKeyStructureAndHandlerIfUs Entry "r0,r1"
         SWI     XOS_Byte
         STR     r1, CurrentKeyboard
 
-        Push    R1
-        MOV     r3, r1
-        MOV     r1, #Service_International
-        MOV     r2, #Inter_CNoToANo
-        MOV     r4, #Alphabet_Default
-        SWI     XOS_ServiceCall
-        STR     r4, CurrentKeyAlphabet  ; alphabet associated with this kb
-        Pull    R1
+        MOV     r0, #-1
+        STR     r0, CurrentAlphabet
+        STR     r0, FallbackCode
+
+        MOV     r0, r12
+        BL      GetAlphabetTable
 
         ADRL    R0, KeyStructureTable
         MOV     R4, R0
@@ -525,9 +550,10 @@ SetUpKeyStructureAndHandlerIfUs Entry "r0,r1"
         ADD     R0, R0, R3              ; point to found table or default
 
         TEQP    pc, #SVC_mode + I_bit   ; disable IRQs round this bit
+        NOP                             ; needed to get objasm to assemble cleanly
 
-        SUB     r1, r0, r12             ; offset from workspace to structure
         MOV     r2, #KVSize-4
+        SUB     r1, r0, r12             ; offset from workspace to structure
 10
         LDR     r3, [r0, r2]
         TEQ     r2, #&04                ; is it KeyTranSize ?
@@ -545,9 +571,19 @@ SetUpKeyStructureAndHandlerIfUs Entry "r0,r1"
         MOVNE   r0, r12
         SWINE   XOS_InstallKeyHandler
 
+ [ PCDel
+; scan CMOS to determine delete type
+        MOV     r0, #OsbyteReadCmos
+        MOV     r1, #CmosDelByte
+        SWI     XOS_Byte
+        TST     r2, #1 :SHL: CmosDelBit
+        MOVEQ   r0, #&7F
+        MOVNE   r0, #&8B
+        STRB    r0, DeleteChar
+ ]
+
         Pull    "r0-r4,lr"
         TEQP    r0, #0                  ; return to original mode and IRQ state
-        NOP
 
         MOV     r0, #0
         STR     r0, [sp, #4]            ; set stacked r1 to 0, so we claim the service
@@ -567,6 +603,49 @@ SetUpKeyStructureAndHandlerIfUs Entry "r0,r1"
         TEQP    r0, #0                  ; return to original mode and IRQ state
         NOP
         EXITS
+
+; **************************************************************************
+
+; Find out what alphabet the system is using
+;
+; on entry: r0 -> my workspace
+; on exit: r3 = CurrentAlphabet = alphabet number
+;          r4 = AlphabetTable = alphabet table or 0
+
+GetAlphabetTable ROUT
+        Entry   "r0,r1,r12"
+        MOV     r12, r0
+        MOV     r0, lr          ; switch into SVC mode so we can issue SWIs
+        ORR     r1, r0, #SVC_mode
+        TEQP    r1, #0
+        NOP
+
+        Push    "r0-r2,lr"
+        MOV     r0, #OsbyteSetAlphKey
+        MOV     r1, #&7F                ; read alphabet number
+        SWI     XOS_Byte
+        LDR     r3, CurrentAlphabet
+        TEQ     r1, r3
+        BNE     %FT50
+        LDR     r4, AlphabetTable
+20
+        Pull    "r0-r2,lr"
+        TEQP    r0, #0                  ; return to original mode and IRQ state
+        NOP
+        EXITS
+
+50      MOV     r3, r1
+        STR     r3, CurrentAlphabet
+        TEQ     r3, #Alphabet_UTF8
+        BEQ     %BT20
+
+        MOV     r4, #0
+        MOV     r1, #Service_International
+        MOV     r2, #Inter_UCSTable
+        SWI     XOS_ServiceCall
+        STR     r4, AlphabetTable
+        B       %BT20
+
 
 ; **************************************************************************
 
@@ -596,6 +675,7 @@ KeyStructInit ROUT
         STRB    R0, KeyNULReturn+0
 
         BIC     R5, R5, #(KBStat_ShiftEngaged :OR: KBStat_CtrlEngaged :OR: KBStat_PendingAlt)
+        ORR     R5, R5, #KBStat_NoKanaLock
         MOV     R7, #0                  ; 0 pending ALT
         MOV     PC, R14
 
@@ -650,18 +730,35 @@ ProcessKAlt ROUT
         TST     R7, #KBAlt_DigitsPresent ; if no digits present
         BEQ     %FT05                   ; then skip
 
-        LDR     R0, R0AltDigitValue     ; load digits
+        LDR     R1, R0AltDigitValue     ; load digits
         TST     R7, #KBAlt_SelectKeyboard ; selecting keyboard (CTRL-ALT-F12)?
-        ADREQ   R6, KeyNULReturn        ; no, then return NUL char
-        STREQB  R0, [R6, #2]
-        BEQ     %FT05
+        BNE     SelectIDDKeyboard
 
-        ADR     R1, IDDTable
+; return either byte, or UCS character
+
+        Push    R14
+        BL      GetAlphabetTable
+        Pull    R14
+        TEQ     R3, #Alphabet_UTF8
+        BNE     %FT02
+
+        BIC     R1, R1, #&80000000      ; strip down to 31 bits
+        BICS    R7, R7, #(KBAlt_AltDown :OR: KBAlt_DigitsPresent)
+        BICEQ   R5, R5, #KBStat_PendingAlt
+        B       ReturnUCS
+
+02
+        ADR     R6, KeyNULReturn        ; return 0 then byte
+        STRB    R1, [R6, #2]
+        B       %FT05
+
+SelectIDDKeyboard
+        ADR     R0, IDDTable
 03
-        LDMIA   R1!, {R2, R3}           ; load IDD number, country number
+        LDMIA   R0!, {R2, R3}           ; load IDD number, country number
         CMP     R2, #-1                 ; end of table ?
         BEQ     %FT05                   ; then not recognised, so do nothing
-        TEQ     R2, R0                  ; found match ?
+        TEQ     R2, R1                  ; found match ?
         BNE     %BT03
 
         ORR     R1, R3, #&80
@@ -693,18 +790,18 @@ IDDTable
         &        45, Country_Denmark
         &        47, Country_Norway
         &       354, Country_Iceland
-        &	 90, Country_Turkey
+        &        90, Country_Turkey
         &       353, Country_Ireland
         &       852, Country_HongKong
         &         7, Country_Russia
         &       972, Country_Israel
         &        52, Country_Mexico
-        &	 61, Country_Australia
-        &	 43, Country_Austria
-        &	 32, Country_Belgium
-        &	 81, Country_Japan
-        &	 31, Country_Netherlands
-        &	 41, Country_Switzerland
+        &        61, Country_Australia
+        &        43, Country_Austria
+        &        32, Country_Belgium
+        &        81, Country_Japan
+        &        31, Country_Netherlands
+        &        41, Country_Switzerland
         &         1, Country_USA
 
         &      1001, Country_ISO1
@@ -731,23 +828,31 @@ ProcessKCaps ROUT
         MOV     PC, R14
 
 ProcessKTab ROUT
-        LDR     R1, R0OsbyteVars
-        LDRB    R1, [R1, #OsbyteTABch]          ; TAB key code
-        TST     R1, #&80                        ; top bit set ?
+        LDR     R3, R0OsbyteVars
+        LDRB    R3, [R3, #OsbyteTABch]          ; TAB key code
+        TST     R3, #&80                        ; top bit set ?
         BEQ     ReturnOneCharAlt                ; no, don't shift or ctrl it
         TST     R5, #KBStat_ShiftEngaged
-        EORNE   R1, R1, #&10                    ; modify for shift
+        EORNE   R3, R3, #&10                    ; modify for shift
         TST     R5, #KBStat_CtrlEngaged
-        EORNE   R1, R1, #&20                    ; modify for ctrl
+        EORNE   R3, R3, #&20                    ; modify for ctrl
 ReturnOneCharAlt
-        ADR     R6, KeyReturn                   ; pass pointer back to MOS
-        STRB    R1, [R6, #1]                    ; having poked byte in
-ReturnCharAlt
         TST     R5, #KBStat_PendingAlt          ; if no pending alt
         TSTNE   R7, #KBAlt_AccentMask           ; or its not an accent
-        MOVEQ   PC, R14                         ; then return this
-        LDR     R1, [R0, #KVPendingAltSpecial]  ; else call the special entry
-        ADD     PC, R0, R1
+        ADREQ   R6, KeyReturn
+        STREQB  R3, [R6, #1]                    ; then return this
+        MOVEQ   PC, R14
+        LDR     R4, [R0, #KVPendingAltCode]
+        ADD     PC, R0, R4                      ; call PendingAltCode, as the Kernel wolud
+
+
+ProcessKDelete ROUT
+ [ PCDel
+        LDRB    R1, R0DeleteChar
+ |
+        MOV     R1, #&7F
+ ]
+        B       ReturnOneChar
 
 ProcessKNum ROUT
         TEQ     R1, #2                          ; is it first press ?
@@ -758,6 +863,20 @@ ProcessKScroll ROUT
         TEQ     R1, #2                          ; is it first press ?
         EOREQ   R5, R5, #KBStat_ScrollLock      ; yes, then toggle scroll lock
         MOV     PC, R14                         ; (don't auto-repeat)
+
+ProcessKKana ROUT
+        TEQ     R1, #2                          ; is it first press ?
+        EOREQ   R5, R5, #KBStat_NoKanaLock      ; yes, then toggle kana lock
+        MOV     PC, R14                         ; (don't auto-repeat)
+
+ProcessKShiftCaps ROUT
+        TEQ     R1, #2                          ; is it first press ?
+        MOVNE   PC, R14                         ; (don't auto-repeat)
+        EOR     R5, R5, #KBStat_NoCapsLock      ; toggle caps lock
+        TST     R5, #KBStat_NoCapsLock
+        ORREQ   R5, R5, #KBStat_ShiftEnable     ; set shift enable if caps lock on
+        BICNE   R5, R5, #KBStat_ShiftEnable
+        MOV     PC, R14
 
 ProcessKBreak ROUT
         ADD     PC, R3, #4                      ; offset for break routine
@@ -772,35 +891,35 @@ ProcessK1Pad ROUT
         BICS    R7, R7, #KBAlt_AccentMask       ; cancel accents
         BICEQ   R5, R5, #KBStat_PendingAlt
 
-        LDR     R1, R0OsbyteVars
+        LDR     R6, R0OsbyteVars
         LDR     R2, [R0, #KVPadCurTran]
         ADD     R2, R2, R0
 ;        ADRL    R2, PadK1CurTran-(SpecialList1Pad-SpecialList1) ; off
         TST     R5, #KBStat_NoNumLock           ; test num lock
         MOVNE   R3, R2                          ; numlock off -> use R2
-        LDRB    R0, [R3, R4]                    ; get table entry
-        TEQ     R0, #&FF                        ; dummy key ?
+        LDRB    R1, [R3, R4]                    ; get table entry
+        TEQ     R1, #&FF                        ; dummy key ?
         MOVEQ   PC, R14                         ; then exit
 
-        LDRB    R2, [R1, #OsbyteKeyBase]        ; add on numeric key base
-        SUB     R0, R0, #"0"
-        ADD     R0, R0, R2
+        LDRB    R2, [R6, #OsbyteKeyBase]        ; add on numeric key base
+        SUB     R1, R1, #"0"
+        ADD     R1, R1, R2
 
-        LDRB    R2, [R1, #OsbyteKeyOpt]         ; zero => ctrl/shift modifies
+        LDRB    R2, [R6, #OsbyteKeyOpt]         ; zero => ctrl/shift modifies
         TEQ     R2, #0
         BNE     %FT10                           ; [don't modify]
 
-        TST     R0, #&80                        ; top bit set ?
+        TST     R1, #&80                        ; top bit set ?
         BEQ     %FT10                           ; no, then don't modify
 
         TST     R5, #KBStat_ShiftEngaged
-        EORNE   R0, R0, #&10                    ; modify for shift
+        EORNE   R1, R1, #&10                    ; modify for shift
         TST     R5, #KBStat_CtrlEngaged
-        EORNE   R0, R0, #&20                    ; modify for ctrl
+        EORNE   R1, R1, #&20                    ; modify for ctrl
 10
 ReturnOneChar
         ADR     R6, KeyReturn                   ; pass pointer back to MOS
-        STRB    R0, [R6, #1]                    ; having poked byte in
+        STRB    R1, [R6, #1]                    ; having poked byte in
         MOV     PC, R14
 
 AltKeyPad ROUT
@@ -820,121 +939,251 @@ AltKeyPad ROUT
         STR     R3, R0AltDigitValue
         MOV     PC, R14
 
-ReturnNULCharAlt
-        ADR     R6, KeyNULReturn                ; store char
-        STRB    R1, [R6, #2]
-        B       ReturnCharAlt
-
 ReturnNULChar
         ADR     R6, KeyNULReturn
-        STRB    R0, [R6, #2]
-        MOV     PC, R14
-
-DoTopBitCommon ROUT
-        TST     R5, #KBStat_ShiftEngaged
-        ADDNE   R3, R3, #2
-        TST     R5, #KBStat_CtrlEngaged
-        ADDNE   R3, R3, #4
-        TST     R7, #KBAlt_AltDown
-        ADDNE   R3, R3, #8
-        LDRB    R1, [R3, R4, LSL #4]!
-        LDRB    R6, [R3, #1]
-
-; 0 => non-alpha, 1 => alpha, 2 => dead accent, 3 => nowt
-
-        MOVS    R6, R6, LSL #31         ; put bit 1 into C, bit 0 into N
-        BCS     %FT20
-        BPL     ReturnOneOrNULAlt       ; not alpha, so skip
-
-        TST     R5, #KBStat_ShiftEnable
-        EORNE   R3, R3, #2
-        TSTEQ   R5, #KBStat_NoCapsLock
-        ORREQ   R3, R3, #2
-        LDRB    R1, [R3]
-ReturnOneOrNULAlt
-        CMP     R1, #0                  ; if zero (C=1 if equal)
-        CMPNE   R1, #&80                ; or if >= &80
-        BCS     ReturnNULCharAlt        ; then return NUL char
-        B       ReturnOneCharAlt
-
-; come here for dead accent (N=0) or for nowt (N=1)
-
-20
-        ADR     R6, NowtReturn          ; point to zero length list
-        BICPL   R7, R7, #KBAlt_AccentMask ; if accent, then clear accents
-        ORRPL   R7, R7, R1              ; put in new accent
-        ORRPL   R5, R5, #KBStat_PendingAlt ; and indicate it
+        STRB    R1, [R6, #2]
         MOV     PC, R14
 
 ; **************************************************************************
 ;
-;       PendingAltCode1 - Process Alt+Char or Accent+Char
+; In:  R0->handler
+;      R1=action (shifting key:0,1=up,down;  non-shifting:2=first,3=autorepeat)
+;      R2=low-level key number
+;      R3->table of exit points
+;      R4=special key number (eg 1 for first special key)
+;      R5=KeyBdStatus
+;      R6->a zero byte (so left unmodified -> no output)
+;      R7=PendingAltType
+;      R12->fixed workspace (allocated by kernel) - approx 170 bytes, not aligned
 ;
-; in:   R0 -> key structure
-;       R2 = internal key number for char
-;       R3 = character which would be returned if not an ALT, if not special
-;       R4 -> accent table for this keyboard's alphabet
-;       R5 = keyboard status
-;       R6 -> list that would be returned if not an ALT
-;       R7 = pending alt type
-;
-; out:  R6 -> returned key list
-;
+; Out: R0-R4 preserved
+;      R5 updated
+;      R6->output (first byte=length, subsequent bytes to insert into buffer)
+;      R7 updated
 
-PendingAltSpecialCommon ROUT
-        TST     R7, #KBAlt_AccentMask   ; is it due to dead accent ?
-        BEQ     AlternateChar           ; no, then must be Alt down
+ProcessUCS ROUT
+        TST     R5, #KBStat_NoKanaLock
+        LDRNE   R2, [R0, #KVUCSTable0]
+        LDREQ   R2, [R0, #KVUCSTable1]
+        ADD     R4, R4, R4, LSL #3      ; R4 = key * 9
+        ADD     R2, R0, R2
+        ADD     R2, R2, R4, LSL #2      ; R2 -> 36-byte entry for key
 
-; called because of accented char
+; select the correct Shift/Ctrl/Alt variant.
+        STRB    R1, TempAction
+        MOV     R1, #0
+        TST     R5, #KBStat_ShiftEngaged
+        ORRNE   R1, R1, #4
+        TST     R5, #KBStat_CtrlEngaged
+        ORRNE   R1, R1, #8
+        TST     R7, #KBAlt_AltDown
+        ORRNE   R1, R1, #16
 
-        AND     R2, R7, #KBAlt_AccentMask ; get just the accent
+        TST     R5, #KBStat_NoCapsLock
+        BNE     %FT05
+
+; process Caps Lock
+        LDR     R4, [R2, #32]           ; get the capital-mapping word
+        MOV     R4, R4, LSR R1
+        AND     R4, R4, #&F             ; R4=alternate form for this character
+        TST     R4, #8                  ; bit 3 of R4 set if only Shift-Caps changes
+        BEQ     %FT03
+
+        TST     R5, #KBStat_ShiftEnable
+        BEQ     %FT05
+
+        AND     R4, R4, #7
+03      MOV     R1, R4, LSL #2
+
+05      LDR     R1, [R2, R1]
+
+        TST     R1, #&80000000
+        BNE     FunnyUCS
+
+ReturnUCSAlt
+        ANDS    R2, R7, #KBAlt_AccentMask   ; Check if we've got a pending accent
+        MOVEQ   R2, #-1
+        STREQ   R2, R0FallbackCode          ; clear "fallback" character
+        BEQ     ReturnUCS
+
+; We have to apply a dead accent now.
+
+        ADRL    R4, AccentTable
         LDR     R2, [R4, R2, LSL #2]    ; offset to appropriate accent
         ADD     R4, R4, R2              ; R4 now points to accent list
 
         BICS    R7, R7, #KBAlt_AccentMask ; no more accents
         BICEQ   R5, R5, #KBStat_PendingAlt ; if no more then zero status bit
+07
+        LDR     R3, [R4], #8            ; R3 = base character
+        CMP     R3, R1
+        BHI     ReturnUCS               ; we're not in the list - return char unmodified
+        BNE     %BT07                   ; not found it yet
 
-        LDRB    R2, [R6]                ; load length of current returned list
-        LDRB    R2, [R6, R2]            ; R2 = unaccented character
+        STR     R1, R0FallbackCode      ; remember unaccented form, in case accented form
+                                        ; not available
+        LDR     R1, [R4, #-4]           ; R1 = accented form
+
+;       R1 = real UCS code
+ReturnUCS
+        CMP     R1, #&80
+        BLO     ReturnOneOrNUL          ; 00-7F always the same
+
+        Push    R14
+        BL      GetAlphabetTable
+        Pull    R14
+
+        TEQ     R3, #Alphabet_UTF8
+        BNE     ReturnUCSForAlphabet
+
+; Create the UTF-8 sequence
+        Push    R5
+        ADR     R6, KeyUTFReturnEnd
+        MOV     R5, #2
+        MOV     R4, #2_00100000
 10
-        LDRB    R3, [R4], #2            ; R3 = source char
-        TEQ     R3, #0                  ; zero => end of list
-        MOVEQ   PC, R14                 ; so return char unmodified
-        TEQ     R3, R2                  ; if not the char we want
-        BNE     %BT10                   ; then loop
+        AND     R2, R1, #2_00111111     ; continuation byte
+        ORR     R2, R2, #2_10000000
+        STRB    R2, [R6, #-1]!
+        MOV     R2, #0                  ; don't forget the 0 padding...
+        STRB    R2, [R6, #-1]!
+        MOV     R1, R1, LSR #6
+        CMP     R1, R4
+        MOVHS   R4, R4, LSR #1
+        ADDHS   R5, R5, #1
+        BHS     %BT10
 
-        LDRB    R0, [R4, #-1]           ; else load translated char
+; and the leading byte...
+        MOV     R4, #&FF00
+        ORR     R2, R1, R4, LSR R5
+        STRB    R2, [R6, #-1]!
+        MOV     R2, #0                  ; don't forget the 0 padding...
+        STRB    R2, [R6, #-1]!
+        MOV     R5, R5, LSL #1
+        STRB    R5, [R6, #-1]!
+        Pull    R5
+        MOV     PC, R14
+
+ReturnUCSForAlphabet
+        MOVS    R3, R4                  ; alphabet table
+        BEQ     ReturnUCSForNoAlphabet
+
+; find which (if any) of codes &80-&FF is what we want
+        MOV     R6, #&80
+
+13      LDR     R2, [R3, R6, LSL #2]
+        TEQ     R1, R2
+        MOVEQ   R1, R6
+        BEQ     ReturnNULChar
+        ADD     R6, R6, #1
+        CMP     R6, #&FF
+        BLS     %BT13
+
+; can't find it - do we have a fallback?
+15      LDR     R1, R0FallbackCode
+        CMP     R1, #-1
+        MOVNE   R6, #-1
+        STRNE   R6, R0FallbackCode    ; clear fallback, else infinite loop
+        BNE     ReturnUCS
+
+; give up - output nothing
+        ADR     R6, NowtReturn
+        MOV     PC, R14
+
+ReturnUCSForNoAlphabet                  ; Assume pure ISO Latin 1
+        CMP     R1, #&FF
+        BHI     %BT15
+        B       ReturnNULChar
+
+FunnyUCS
+        CMN     R1, #1                 ; Check for &FFFFFFFF - nothing
+        ADREQ   R6, NowtReturn
+
+        BIC     R1, R1, #&80000000     ; &800000xx - a raw buffer code
+        CMP     R1, #&100
+        ADRLO   R6, KeyReturn
+        STRLOB  R1, [R6, #1]
+        MOVLO   PC, R14
+
+; Oooh - it's summat special
+        CMP     R1, #&10000
+        BLO     %FT40                  ; &8000xxxx - daft
+        CMP     R1, #&20000
+        BLO     SpecialKey             ; &8001xxxx - special key
+        CMP     R1, #&30000
+        BLO     DeadKey                ; &8002xxxx - dead key
+
+40      ADRHI   R6, NowtReturn
+        MOV     PC, R14
+
+SpecialKey
+        SUB     R4, R1, #&10000
+        CMP     R4, #10
+        LDRB    R1, TempAction
+        ADDLO   PC, PC, R4, LSL #2
+        B       %BT40
+        B       ProcessKScroll
+        B       ProcessKNum
+        B       ProcessKTab
+        B       ProcessKCaps
+        B       ProcessKKana
+        B       ProcessKShiftCaps
+        B       ProcessKDefaultKeyboard
+        B       ProcessKConfiguredKeyboard
+        B       ProcessKDialKeyboard
+	B	ProcessKDelete
+
+DeadKey
+        SUB     R1, R1, #&20000
+        BIC     R7, R7, #KBAlt_AccentMask  ; clear accents
+        ORR     R7, R7, R1                 ; put in new accent
+        ORR     R5, R5, #KBStat_PendingAlt ; and indicate it
+        MOV     PC, R14
+
+; **************************************************************************
+;
+; in:   R0 -> key structure
+;       R1 = action (2=first,3=autorepeat)
+;       R2 = internal key number for char
+;       R3 = character which would be returned if not an ALT
+;       R5 = keyboard status
+;       R6 -> a zero byte
+;       R7 = pending alt type
+
+PendingAltCode ROUT
+        TST     R7, #KBAlt_AccentMask   ; is it due to dead accent ?
+        MOVEQ   PC, R14                 ; no, then must be Alt down - any real Alts are
+                                        ; special - simple keys return nothing.
+
+; called because of accented char
+
+        MOV     R1, R3
+        CMP     R1, #&80                ; is it a Basic Latin character?
+        BLO     ReturnUCSAlt            ; if so - get ProcessUCS to add the accent
+
+; Boring - it's just a function key. Remove the dead accent and
+; output the function key.
+
+        BICS    R7, R7, #KBAlt_AccentMask ; no more accents
+        BICEQ   R5, R5, #KBStat_PendingAlt ; if no more then zero status bit
+
+        B       ReturnOneChar
+
 ReturnOneOrNUL
-        CMP     R0, #0                  ; if 0 then return 0 0 (C=1)
-        CMPNE   R0, #&80                ; elif -ve return 0 char
+        CMP     R1, #0                  ; if 0 then return 0 0 (C=1)
+        CMPNE   R1, #&80                ; elif -ve return 0 char
         BCS     ReturnNULChar
         B       ReturnOneChar           ; else return 0 char
 
+ProcessKDialKeyboard
+        TST     R7, #KBAlt_AltDown              ; ensure Alt is down...
+        ORRNE   R7, R7, #KBAlt_SelectKeyboard   ; set IDD selection flag
+        MOV     PC, R14
 
-AlternateChar ROUT
-        MOV     R2, R2, LSL #2                  ; multiply index by 4
-
-        TST     R5, #KBStat_CtrlEngaged
-        ADDNE   R2, R2, #2
-
-        TST     R5, #KBStat_ShiftEngaged
-        ADDNE   R2, R2, #1
-
-        TEQ     R2, #(K1Function1 :SHL: 2) +2   ; is it CTRL-ALT-F1 ?
-        BEQ     SelectUKKeyboard                ; then select UK keyboard
-        TEQ     R2, #(K1Function2 :SHL: 2) +2   ; is it CTRL-ALT-F2 ?
-        BEQ     SelectConfiguredKeyboard        ; then select configured kb
-        TEQ     R2, #(K1Function12 :SHL: 2) +2  ; is it CTRL-ALT-F12
-        ORREQ   R7, R7, #KBAlt_SelectKeyboard   ; then set IDD selection flag
-
-        B       ReturnNowt                      ; if not one of these
-                                                ; then return nowt, since all
-                                                ; real ALTs are special
-
-SelectConfiguredKeyboard ROUT
+ProcessKConfiguredKeyboard ROUT
         MOV     R1, #&80                        ; select default keyboard
         B       SelectKeyboard
-SelectUKKeyboard
+ProcessKDefaultKeyboard
         MOV     R1, #&81                        ; select UK keyboard
 SelectKeyboard
         MOV     R3, PC
@@ -954,12 +1203,150 @@ ReturnNowt
         ADR     R6, NowtReturn                  ; return nowt
         MOV     PC, R14
 
-        OutputAccentTable_Latin1
-
 ; **************************************************************************
 ;
 ;       Reverse table lookup for INKEY(-ve)
 ;
+
+; For reference, here is the definitive internal key list. A number of codes
+; are for BBC compatibility. For example, code 71 was the "@" key on the
+; BBC micro - there was no separate @ key on the Archimedes UK layout,
+; so the 2 key (Shift-2 was @) generates this internal code. These compatibility
+; codes should not be used by new programs.
+;
+; Don't forget that these codes are supposed to be for _physical_ keys -
+; the code for the key to the left of backspace never changes, no matter
+; how it is marked.
+;
+; Internal code    Key                Low-level codes
+; 0                Shift              4C or 58
+; 1                Ctrl               3B or 61
+; 2                Alt                5E or 60
+; 3                Left Shift         4C
+; 4                Left Ctrl          3B
+; 5                Left Alt           5E
+; 6                Right Shift        58
+; 7                Right Ctrl         61
+; 8                Right Alt          60
+; 9                Select             70
+; 10               Menu               71
+; 11               Adjust             72
+; 12               (not defined)
+; 13               (not defined)
+; 14               (not defined)
+; 15               (not defined)
+; 16               Q                  27
+; 17               3                  13
+; 18               4                  14
+; 19               5                  15
+; 20               F4                 04
+; 21               8                  18
+; 22               F7                 07
+; 23               -                  1B
+; 24               ^                  16 (BBC compatibility - see 52)
+; 25               Left Arrow         62
+; 26               Keypad 6           4A
+; 27               Keypad 7           37
+; 28               F11                0B
+; 29               F12                0C
+; 30               F10                0A
+; 31               Scroll Lock        0E
+; 32               Print              0D
+; 33               W                  28
+; 34               E                  29
+; 35               T                  2B
+; 36               7                  17
+; 37               I                  2E
+; 38               9                  19
+; 39               0                  1A
+; 40               _                  1B (BBC compatibility - see 23)
+; 41               Down Arrow         63
+; 42               Keypad 8           38
+; 43               Keypad 9           39
+; 44               Break              0F
+; 45               `                  10
+; 46               Pound              1D (not fitted)
+; 47               Backspace          1E
+; 48               1                  11
+; 49               2                  12
+; 50               D                  3E
+; 51               R                  2A
+; 52               6                  16
+; 53               U                  2D
+; 54               O                  2F
+; 55               P                  30
+; 56               [                  31
+; 57               Up Arrow           59
+; 58               Keypad +           4B
+; 59               Keypad -           39
+; 60               Keypad Enter       67
+; 61               Insert             1F
+; 62               Home               20
+; 63               Page Up            21
+; 64               Caps Lock          5D
+; 65               A                  3C
+; 66               X                  4F
+; 67               F                  3F
+; 68               Y                  2C
+; 69               J                  42
+; 70               K                  43
+; 71               @                  12 (BBC compatibility - see 49)
+; 72               :                  45
+; 73               Enter              47
+; 74               Keypad /           23
+; 75               Keypad Delete      (not mapped)
+; 76               Keypad .           66
+; 77               Num Lock           22
+; 78               Page Down          36
+; 79               '                  46
+; 80               Shift Lock         (not mapped)
+; 81               S                  3D
+; 82               C                  50
+; 83               G                  40
+; 84               H                  41
+; 85               N                  53
+; 86               L                  44
+; 87               ;                  45 (BBC compatibility - see 72)
+; 88               ]                  32
+; 89               Delete             34
+; 90               Keypad #           25 (not normally fitted)
+; 91               Keypad *           24
+; 92               Keypad ,           (not mapped)
+; 93               =                  1C
+; 94               \                  4D
+; 95               Not fitted (R)     6E (between / and Shift on Japanese keyboard)
+; 96               Tab                26
+; 97               Z                  4E
+; 98               Space              5F
+; 99               V                  51
+; 100              B                  52
+; 101              M                  54
+; 102              ,                  55
+; 103              .                  56
+; 104              /                  57
+; 105              End                35
+; 106              Keypad 0           65
+; 107              Keypad 1           5A
+; 108              Keypad 3           5C
+; 109              No Convert         6B
+; 110              Convert            6C
+; 111              Kana               6D
+; 112              Escape             00
+; 113              F1                 01
+; 114              F2                 02
+; 115              F3                 03
+; 116              F5                 05
+; 117              F6                 06
+; 118              F8                 08
+; 119              F9                 09
+; 120              # (\ on BBC+Arch)  33
+; 121              Right Arrow        64
+; 122              Keypad 4           48
+; 123              Keypad 5           49
+; 124              Keypad 2           5B
+; 125              Left Acorn         68
+; 126              Right Acorn        69
+; 127              Menu               6A
 
 InkeyTran
         IKT     &6A, &69, &68, &5B, &49, &48, &64, &33          ; 80-87
@@ -987,6 +1374,150 @@ ShiftingKeyList
         =       K1AltLeft, K1AltRight
         =       K1RightMouse, K1CentreMouse, K1LeftMouse, K1Break
 ShiftingKeyListEnd
+        ALIGN
+
+; **************************************************************************
+;
+; A general purpose special code list used by most UCS keyboard drivers -
+; long enough for 128 keys, every one special.
+;
+SpecialCodeTable
+        &       ProcessKShift - SpecialCodeTable
+        &       ProcessKShift - SpecialCodeTable
+        &       ProcessKCtrl - SpecialCodeTable
+        &       ProcessKCtrl - SpecialCodeTable
+        &       ProcessKAlt - SpecialCodeTable
+        &       ProcessKAlt - SpecialCodeTable
+        &       ProcessKLeft - SpecialCodeTable
+        &       ProcessKCentre - SpecialCodeTable
+        &       ProcessKRight - SpecialCodeTable
+        &       ProcessKBreak - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessK1Pad - SpecialCodeTable
+        &       ProcessKScroll - SpecialCodeTable
+        &       ProcessKNum - SpecialCodeTable
+        &       ProcessKTab - SpecialCodeTable
+        &       ProcessKCaps - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+        &       ProcessUCS - SpecialCodeTable
+SpecialCodeTableEnd
+
+; And the default keypad layout.
+
+PadKNumTran
+        =       "/*#789-456+1230.",&0D
+PadKCurTran
+        =       "/*#",&1E,&8F,&9F,"-",&8C,&FF,&8D,"+",&8B,&8E,&9E,&CD,&7F,&0D
         ALIGN
 
         END
