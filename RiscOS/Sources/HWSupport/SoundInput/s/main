@@ -41,8 +41,11 @@ flag_HaveMessages		* 1:SHL:6	; set => opened messages file
 module          & 0
                 & init    -module               ; => initalise routine
                 & final   -module               ; => finalise routine
+ [ standalonemessages
                 & service -module               ; => service trap
-
+ |
+                & 0                             ; => no services needed!
+ ]
                 & title -module                 ; => title string
                 & help  -module                 ; => help string
                 & command_table-module		; => command table
@@ -52,14 +55,19 @@ module          & 0
                 & swi_table    -module		; => table of supported SWIs
                 & 0
 
-title           = "SoundInput", 0
-
- [ debug
-help            = "SoundInput", 9, "$VString ($Date) (Debug on)", 0
- |
-help            = "SoundInput", 9, "$VString ($Date)", 0
+ [ :LNOT: No32bitCode
+                & 0                             ; => not internationalised
+                & flags -module                 ; => module flags
  ]
 
+
+help            = "SoundInput", 9, "$Module_HelpVersion"
+ [ debug
+help            = "(debug on)"
+ ]
+                = 0
+
+title
 swi_table       = "SoundInput", 0
                 = "Frequency", 0
 		= "Format",0
@@ -68,6 +76,10 @@ swi_table       = "SoundInput", 0
 		= "Halt",0
                 = 0
 		ALIGN
+
+ [ :LNOT: No32bitCode
+flags           DCD     ModuleFlag_32bit
+ ]
 
 command_table   = "SoundInputInfo", 0
 		ALIGN
@@ -154,7 +166,7 @@ init            ENTRY	"r7-r11"
                 MOV     wp, r2                  ; wp -> workspace
 
  [ standalonemessages
-                ADRL    r0, resource_file_block
+                ADR     r0, resource_file_block
                 SWI     XResourceFS_RegisterFiles
  ]
 
@@ -168,11 +180,8 @@ init            ENTRY	"r7-r11"
 		STR	r0, LostCount
  ]
 		BL	hardware_probe
-		EXIT	VS
-		BL	hardware_initialise
-		EXIT	VS
-		BL 	hardware_claim
-		EXIT	VS
+		BLVC	hardware_initialise
+		BLVC 	hardware_claim
 
                 EXIT
 
@@ -202,10 +211,11 @@ final           ENTRY	"r0-r1,r11"
 		BL	hardware_remove		; release any owned IRQs
 
  [ standalonemessages
-                ADRL    R0, resource_file_block
+                ADR     R0, resource_file_block
                 SWI     XResourceFS_DeregisterFiles
  ]
-                EXITS
+                CLRV
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -215,25 +225,26 @@ final           ENTRY	"r0-r1,r11"
 ;
 ; Quickly test to see if they are of interest to use and pass on.
 
-service         ROUT
  [ standalonemessages
-                TEQNE   r1, #Service_ResourceFSStarting
- ]
-                MOVNES  pc, lr
 
+ursula_service
+                &       0
+                &       fastservice -module
+                &       Service_ResourceFSStarting
+                &       0
+                &       ursula_service -module
+service         MOV     r0, r0
+                TEQNE   r1, #Service_ResourceFSStarting
+                MOVNE   pc, lr
+fastservice
                 LDR     wp, [r12]	; sort the workspace pointer out
 
- [ standalonemessages
-                TEQ     r1, #Service_ResourceFSStarting
-                BNE     %FT30					; no so continue
                 Push    "r0-r3,lr"
-                ADRL    r0, resource_file_block
+                ADR     r0, resource_file_block
                 MOV     lr, pc
                 MOV     pc, r2
-                Pull    "r0-r3,pc",,^				; and exit
-30
+                Pull    "r0-r3,pc"				; and exit
  ]
-                MOVS  	pc, lr
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -257,8 +268,8 @@ swi_handler	ROUT
 		B	swi_halt
 30
                 ADR     r0, ErrorBlock_SoundInput_BadSWI
-
-		MOV	pc, lr
+                SETV
+                MOV     pc, lr
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -346,7 +357,7 @@ soundinfo_command	ENTRY "r0-r3"
 		BL	Show_Integer
 		SWI	XOS_NewLine
  ]
-		EXITS
+		EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -365,7 +376,7 @@ Show_Integer
         SWI     XOS_ConvertInteger4
         SWIVC	OS_Write0
         ADD     r13, r13, #16
-        Pull    "r1-r2, pc",,^
+        Pull    "r1-r2, pc"
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -375,20 +386,24 @@ Show_Integer
 ; are correctly opened and then return the relevant data.
 ;
 ; Attempt to open the messages file.
+; If messages not available, Z is set (and V will be set)
+; If messages are available, Z will be clear (V state is unreliable)
 
 open_messages   ENTRY   "r0-r3"
                 LDRB    r3, Flags
                 TST     r3, #flag_HaveMessages
-                EXITS   NE
+                EXIT    NE                    ; ensure Z clear
 
                 ADR     r0, MessagesWorkspace
                 ADRL    r1, resource_file     ; -> path to be opened
                 MOV     r2, #0                ; allocate some wacky space in RMA
                 SWI     XMessageTrans_OpenFile
                 LDRVCB  r3, Flags
-                ORRVC   r3, r3, #flag_HaveMessages
+                ORRVCS  r3, r3, #flag_HaveMessages ; ensure Z clear
                 STRVCB  r3, Flags
-                EXITS
+                MOVVSS  r3, #0                ; ensure Z set
+
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -397,14 +412,12 @@ open_messages   ENTRY   "r0-r3"
 close_messages  ENTRY   "r0"
                 LDRB    r0, Flags
                 TST     r0, #flag_HaveMessages
-                EXITS   EQ
+                BICNE   r0, r0, #flag_HaveMessages
+                STRNE   r0, Flags
 
-                ADR     r0, MessagesWorkspace
-                SWI     XMessageTrans_CloseFile
-                LDRVCB  r0, Flags
-                BICVC   r0, r0, #flag_HaveMessages
-                STRVCB  r0, Flags
-                EXITS
+                ADRNE   r0, MessagesWorkspace
+                SWINE   XMessageTrans_CloseFile
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -416,17 +429,11 @@ make_error_with_name ENTRY
 		ADRL	r4, title
 		B	make_error_entry
 
-make_error      ENTRY
+make_error      ALTENTRY
                 MOV     r4, #0
 make_error_entry
-                LDRB    r1, Flags
-                TST     r1, #flag_HaveMessages
-                BLEQ    open_messages
-
-                LDRB    r1, Flags
-                TST     r1, #flag_HaveMessages
-                PullEnv EQ
-                ORREQS  pc, lr, #VFlag
+                BL      open_messages
+                EXIT    EQ                     ; V will be set
 
                 ADR     r1, MessagesWorkspace
                 MOV     r2, #0
@@ -435,7 +442,9 @@ make_error_entry
                 MOV     r6, #0
                 MOV     r7, #0
                 SWI     XMessageTrans_ErrorLookup
+                SavePSR r1
                 BL      close_messages
+                RestPSR r1,,f
 
                 EXIT                           ; return, r0 -> block, V set
 
@@ -448,7 +457,7 @@ make_error_entry
 
  [ standalonemessages
 resource_file_block
-	ResourceFile Resources.<Locale>.Messages, Resources.SoundInput.Messages
+	ResourceFile LocalRes:Messages, Resources.SoundInput.Messages
 	DCD     0
  ]
 
