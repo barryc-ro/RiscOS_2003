@@ -8,6 +8,8 @@
 ;; rml change for Ursula - added TaskManager_StartTask and *StartDesktopTask
 ;;                       - added ursula service call table
 ;; bjga change for Ursula - added Key$...$Task hotkey support
+;; WT - 09 Sep 98 :Added PowerDownReset which allows softpowerdown on Phoebe, and merged
+;;		   in TrueMemorySize code which reports true RAMsize even after softload
 ;;
 ;;------------------------------------------------------------------------------------
 
@@ -51,6 +53,13 @@ ProvideStartTask SETL    {TRUE}         ; Include TaskManager_StartTask SWI?
 
                 GBLL    KeyTasks        ; Respond to hotkey events according to Key$xxxx$Task system variables
 KeyTasks        SETL    {TRUE}
+
+		GBLL	TrueMemorySize
+TrueMemorySize	SETL	{TRUE}
+
+		GBLL	PowerDownReset
+PowerDownReset	SETL	{TRUE}
+
 
    [ UseOSD6and7
      ! 0, ""
@@ -157,6 +166,9 @@ cx0     RN      R2
 ;;-----------------------------------------------------------------------------
 
 bignum          *       &10000000
+PowerDownDelay	*	500	   ;Power down delay time in cs
+DEVSel7		*	&83900000  ;Address to access to poweroff
+PowerDownFeature *	1<<3
 
 ;
 ; icon numbers in template file
@@ -267,6 +279,9 @@ windowy         #       4
 dragBar         #       4       ; 0 if task display closed, -1 if open
                                 ; >0 if dragging, -2 if just finished
 svcstacksize    #       4
+ [ TrueMemorySize
+SoftROMsize	#	4
+ ]
 
 menuhandle      #       4
 prequitref      #       4
@@ -1173,6 +1188,14 @@ get_err
         MOVVC   r2, r2, LSL #12         ;else assume stack base on 1M boundary...
         MOVVC   r2, r2, LSR #12         ;..and get size from address
         STR     r2, svcstacksize
+ [ TrueMemorySize
+;find amount of hidden RAM in soft ROM, to add to total
+        LDR     r0,=&508
+        SWI     XOS_Memory              ;returns amount of soft ROM (pages) in r1
+        MOVVS   r1, #0
+        MOV     r1, r1, LSL #12
+        STR     r1, SoftROMsize
+ ]
         CLRV
 
         EXIT
@@ -1388,6 +1411,11 @@ wn_savedbox     DCB     "save",0                ; must be word-aligned
 
                 ALIGN
 wn_shutdown     DCB     "shutdown",0            ; must be word-aligned
+
+ [ PowerDownReset
+                ALIGN
+wn_powrdown     DCB     "powrdown",0            ; must be word-aligned
+ ]
 
                 ALIGN
 wn_powerdown    DCB     "power",0               ; must be word-aligned
@@ -1607,11 +1635,26 @@ Start   LDR     wp, [r12]               ; get workspace pointer
         MOVVC   R1,sp
         SWIVC   XWimp_OpenWindow
         ADD     sp,sp,#4*8
-
-        ADRVC   R1,pollblock
+ [ PowerDownReset
+        BVS     %FT10                   ; if errored then feck it.
+        ;See whether we capable of softpowerdown
+        MOV	r0, #8
+        SWI	XOS_ReadSysInfo
+        MOVVS	r1, #0			;Nowt doing
+        AND	r0, r1, r2		;Bits set that are relevant
+        CLRV
+        TST	r0, #PowerDownFeature
+        ADRNE   R5,wn_powrdown		;5sec warning
+        ADREQ   R5,wn_shutdown		;ye olde style
+        ADR     R1,pollblock
+        BL      loadtemplate
+        SWIVC   XWimp_CreateWindow
+ |
         ADRVC   R5,wn_shutdown
+        ADRVC   R1,pollblock
         BLVC    loadtemplate
         SWIVC   XWimp_CreateWindow
+ ]
         STRVC   R0,h_shutdown           ; create the shutdown window
         BVS     %FT10                   ; if errored then skip over this dinkey bit
 ;
@@ -2185,6 +2228,10 @@ gotcounts
         MOV     r0,#6+128                   ; freepool
         SWI     XOS_ReadDynamicArea
         STRVC   r1, [sp, #7*4]
+ [ TrueMemorySize
+        LDRVC   r0, SoftROMsize
+        ADDVC   r2, r2, r0
+ ]
         STRVC   r2, [sp,#nareas*4]           ; total memory in system
 05
         MOV     r1,#0                   ; add up used memory
@@ -3004,8 +3051,22 @@ doshutdown
                                 ;RCM says: comment out above branch to get the error reported
 33
  ]
-;
+ [ PowerDownReset
+ 	;Fire off a callafter to do the dirty deed, if we can powerdown.
+        MOV	r0, #8
+        SWI	XOS_ReadSysInfo
+        MOVVS	r1, #0			;Nowt doing
+        AND	r0, r1, r2		;Bits set that are relevant
+        CLRV
+        TST	r0, #PowerDownFeature
+        Pull	"PC", EQ		;Cannae powerdoon, so reloop
+ 	LDR	r0, =PowerDownDelay
+ 	ADR	r1, powerdown
+ 	MOV	r2, r12
+ 	SWI	XOS_CallAfter
+ ]
         Pull    "PC"                    ; just loop to ensure redraw!
+
 
 str_shutdown    DCB     "WimpTask ShutDown", 0
                 ALIGN
@@ -3032,6 +3093,14 @@ restart BL      freeworkspace
         SWI     XOS_CLI                 ; ignore errors
         SWI     OS_Exit
 
+;..............................................................................
+ [ PowerDownReset
+powerdown
+	Push 	lr
+	LDR	r0, =DEVSel7
+	LDR	r0, [r0]
+	Pull	pc
+ ]
 ;..............................................................................
 
 done_prequit
