@@ -24,6 +24,7 @@
  * AJS 29-May-97 Added certificate ageing to http_vmd
  * SJM 01-Jun-97 Moved socket count incrementing to start of http_open_socket.
  * pdh 04-Jun-97 Allow spaces at the beginning of headers (sigh)
+ * SJM 11-Jun-97 Only strip multiple copies of headers if it's not set-cookie.
  */
 
 #include <errno.h>
@@ -2983,7 +2984,9 @@ int http_send_request_headers( http_connection *c )
                 if (c->data_size == -1)
                     c->data_size = http_file_size(c->bname);
                 sprintf(tmp_buffer, "Content-length: %d\r\n", c->data_size);
-
+#if ADD_CRLF
+		c->data_size += 2;
+#endif		
                 fdebugf( log_file, "(7) %p: txheader Content-length: %d\n",
                                    c, c->data_size );
             }
@@ -3063,6 +3066,15 @@ int http_send_request_headers( http_connection *c )
                          c->bh);
                 c->data_so_far = 0;
 
+#if ADD_CRLF
+		/* this goes wrong if data_size = MAX_INPUT+1 ! */
+		if (c->data_size <= MAX_INPUT)
+		{
+		    char *s = c->buffer + c->data_size - 2;
+		    *s++ = '\r';
+		    *s++ = '\n';
+		}
+#endif
                 fdebugf( log_file, "%p: setting so_far=0 in sendrh\n", c );
             }
             else
@@ -3117,7 +3129,15 @@ int http_send_request_body(http_connection *c)
                 memmove(c->buffer, c->buffer + sent, MAX_INPUT - sent);
 
             ro_fread(c->buffer + MAX_INPUT - sent, 1, sent > to_go ? to_go : sent, c->bh);
-        }
+#if ADD_CRLF
+	    if (sent >= to_go)
+	    {
+		char *s = c->buffer + MAX_INPUT - sent + to_go - 2;
+		*s++ = '\r';
+		*s++ = '\n';
+	    }
+#endif
+	}
         else
         {
             c->data_size = c->data_so_far = -1;
@@ -3285,19 +3305,25 @@ static http_header_item *http_add_header_line( http_connection *c,
 {
     http_header_item *hi;
 
-    for ( hi = c->headers; hi; hi = hi->next )
+    /* SJM: vital that multiple set-cookie: lines are held.
+     * I'm unsure whether it is wise to strip multiples generally.
+     */
+    if (strcasecmp(key, "SET-COOKIE") != 0)
     {
-        /* Make sure duplicate headers only go in once (important in
-         * server-push case)
-         */
-        if ( strcasecmp( hi->key, key ) == 0 )
-        {
-            free( hi->value );
-            hi->value = strdup( value );
-            return hi;
-        }
+	for ( hi = c->headers; hi; hi = hi->next )
+	{
+	    /* Make sure duplicate headers only go in once (important in
+	     * server-push case)
+	     */
+	    if ( strcasecmp( hi->key, key ) == 0 )
+	    {
+		free( hi->value );
+		hi->value = strdup( value );
+		return hi;
+	    }
+	}
     }
-
+    
     hi = malloc(sizeof(http_header_item));
     if (hi)
     {
