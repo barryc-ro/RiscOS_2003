@@ -30,7 +30,6 @@ PollMax		*	150	; Number of times to poll for an Ack (increase if you clock faste
 
 ; Device addresses
 RTCAddress		*	&a0     ; traditional RTC / 240 byte CMOS
-  [	E2ROMSupport
 E2ROMAddress		*	&a8     ; 24C08 device - 512 byte or 1K
 E2ROMAddress2K		*	&e0     ; 24C174 device - 2K
 E2ROMAddress2K_OTP	*	&60     ; 24C174 device - OTP section
@@ -38,7 +37,6 @@ E2ROMAddress4K          *       &a4     ; 24C32 device - 4K (top 1K protectable)
 E2ROMAddress8K          *       &a2     ; 24C64 device - 8K (top 2K protectable)
 E2ROMAddress16K         *       &a8     ; 24C128 device - 16K
 E2ROMAddress32K         *       &a6     ; 24CS256 device - 32K (top 2K possibly OTP)
-  ]
 
 ; Choose a lower limit on the number of ticks per clock phase based on the
 ; MaxI2Cspeed variable defined in Hdr:Machine.<Machine>
@@ -51,6 +49,7 @@ I2Cticks        *       3
 I2Cticks        *       10
   ]
   ]
+
 
 ; *****************************************************************************
 ;
@@ -99,7 +98,7 @@ SetC1C0 ROUT
         AddressHAL
         MOV     R2, R1
         MOV     R1, R0
-        MOV     R0, #1
+        MOV     R0, #0
         CallHAL HAL_IICSetLines
  |
 	ADD	R0, R0, R1, LSL #1	; R0 := C0 + C1*2
@@ -117,12 +116,8 @@ SetC1C0 ROUT
  ]
 
       [ E2ROMSupport
-        [ :LNOT: :DEF: TestHarness
         MOV	R0, #0
         LDRB	R0, [R0, #NVRamSpeed]
-        |
-        LDRB	R0, NVSpeed
-        ]
         TEQ     R0, #0
         MOVEQ   R0, #10                         ; default value if speed not checked yet
       |
@@ -271,13 +266,14 @@ Start	ROUT
 	MOV	R1, #1
 	BL	SetC1C0
 
- [ I2Cticks >= 10
 ; Hold start condition for BMU
+        LDR	R0, =ZeroPage
+        LDRB	R0, [R0, #NVRamSpeed]
 
-	MOV	R2, #IOC
-        MOV     R0, #10
-	BL	DoMicroDelay
- ]
+    	CMP 	R0, #10
+	MOVGE	R2, #IOC
+        MOVGE   R0, #10
+	BLGE	DoMicroDelay
 
 ; Delay here must be >= 4.0 microsecs (0.6 for fast device)
 
@@ -593,17 +589,40 @@ Write
 	ORREQ	R4, R4, #&1000000	; if checksum is being written
  ]
 10
- [ CacheCMOSRAM
 	CMP	r2, #&100		; check small cache limit
 	BCS	%FT15
-  [ :LNOT: :DEF: TestHarness
 	LDR	R1, =CMOSRAMCache	; update cache, but always write to
-  |
-        ADR     R1, i2cWorkSpace
-  ]
 	STRB	R3, [R1, R2]		; real hardware as well
 15
- ]
+
+  [ HAL
+    	Push	"R12,sb"
+    	AddressHAL
+    	MOV 	R12, R2
+    	CallHAL	HAL_NVMemoryType
+    	AND 	R0, R0, #NVMemoryFlag_Provision
+    	TEQ 	R0, #NVMemoryFlag_None
+
+    	; If there's no NVmemory, all we have is the internal cache.
+    	Pull 	"R12,sb", EQ
+	Pull	"R0-R4,PC", EQ
+
+    	TEQ 	R0, #NVMemoryFlag_HAL
+    	BNE 	%FT20	    	    	; Go and do IIC stuff.
+
+    	; Make the HAL call - we have to write the data into a buffer.
+    	Push	"R3"
+    	MOV 	R0, R12
+    	MOV 	R1, sp
+    	MOV 	R2, #1
+    	CallHAL	HAL_NVMemoryWrite
+    	Pull	"R3"
+    	Pull	"R12,sb"
+    	Pull	"R0-R4,PC"
+20
+  ]
+
+
  [ E2ROMSupport
 	MOV	R0, R2
 	BL	GetI2CAddress		; convert to device address + offset
@@ -650,15 +669,10 @@ Write
 WriteBlock ROUT
         Push    "R0-R4,R14"
   [     E2ROMSupport
-        [ :LNOT: :DEF: TestHarness
         MOV	R14, #0
         LDRB    R4, [R14, #NVRamWriteSize]
         LDRB	R14, [R14, #NVRamSize]
         MOV     R4, R4, LSL #8
-        |
-        LDRB	R14, NVSize
-        MOV     R4, R14
-        ]
         MOV     R14, R14, LSL #8
   |
         MOV     R14, #240
@@ -779,12 +793,8 @@ WriteSubBlock ROUT
         MOVHI   R3, R14
  [ E2ROMSupport
 ; R3 = logical end of possible transaction (exclusive). Now check we don't cross page boundaries.
-        [ :LNOT: :DEF: TestHarness
         MOV	R14, #0
         LDRB	R14, [R14, #NVRamPageSize]
-        |
-        LDRB	R14, NVPageSize
-        ]
         MOV     R5, #1
         MOV     R14, R5, LSL R14        ; R14 = (1<<pagesize)
 
@@ -798,15 +808,10 @@ WriteSubBlock ROUT
         MOVLO   R3, R5                  ; adjust R3 to not cross page boundary
  ]
 
-  [     CacheCMOSRAM
         CMP     R0, #&100               ; check it's a cacheable segment
         BHS     %FT15
 
-  [ :LNOT: :DEF: TestHarness
         LDR     R14, =CMOSRAMCache
-  |
-        ADR     R14, i2cWorkSpace
-  ]
         Push    "R3, R4"
         ADD     R3, R3, R4              ; R3 = physical end address
         ADD     R4, R4, R0              ; R4 = physical address
@@ -820,10 +825,40 @@ WriteSubBlock ROUT
         BLO     %BT12
         MOV     R1, R5                  ; restore R1, and continue to update real memory
         Pull    "R3, R4"
-  ]
 15
         Push    "R0-R2"
         ADD     R0, R0, R4              ; R0 = physical address
+  [ HAL
+    	Push	"R12, sb"
+    	MOV 	R5, R0	    	    	; save address
+    	AddressHAL
+    	CallHAL	HAL_NVMemoryType
+    	AND 	R0, R0, #NVMemoryFlag_Provision
+    	TEQ 	R0, #NVMemoryFlag_None
+
+    	; If there's no NVmemory, tough - we just return.
+    	Pull 	"R12,sb", EQ
+    	Pull	"R0-R2", EQ
+    	MOVEQ 	R2, #0	    	    	; nothing written
+	Pull	"R3,R5-R6,PC", EQ
+
+    	TEQ 	R0, #NVMemoryFlag_HAL
+    	MOV 	R0, R5	    	    	; restore address
+    	BNE 	%FT17	    	    	; do IIC things.
+
+    	; Make the HAL call
+    	CallHAL	HAL_NVMemoryWrite    	; returns bytes wrtten in R0
+    	MOV 	R2, R0
+    	ADD 	R0, R0, R2  	    	; update return R0
+    	ADD 	R4, R4, R2
+    	Pull	"R12,sb"
+    	Pull	"R0-R2"
+    	Pull	"R3,R5-R6,PC"
+
+17
+    	Pull	"sb"
+  ]
+
   [	E2ROMSupport
 	BL	GetI2CAddress		; convert to device address and offset
   |
@@ -895,7 +930,6 @@ Read
 	MOVCS	R0, #0			; pretend illegal addresses contain 0
 	Pull	"R1,R2,PC", CS
 10
-  [	CacheCMOSRAM
 	TEQ	R0, #&40		; is it Econet station number
 	BEQ	%FT15	 		; if so then don't use cache
         CMP     R0, #&10                ; don't cache the clock
@@ -909,16 +943,40 @@ Read
         BLO     %FT15
   ]
 13	CMP	R0, #&100		; check small cache limit
-  [ :LNOT: :DEF: TestHarness
 	LDRCC	R2, =CMOSRAMCache	; if in range
-  |
-	ADRCC	R2, i2cWorkSpace
-  ]
 	LDRCCB	R0, [R2, R0]		; read from cache
 	Pull	"R1,R2,PC", CC		; and exit
 15
 
 ; else drop thru into real CMOS reading code
+
+  [ HAL
+    	Push	"R4, sb"
+    	MOV 	R4, R0	    	    	; save address
+    	AddressHAL
+    	CallHAL	HAL_NVMemoryType
+    	AND 	R0, R0, #NVMemoryFlag_Provision
+    	TEQ 	R0, #NVMemoryFlag_None
+
+    	; If there's no NVmemory, pretend addresses contain 0
+    	Pull 	"R4, sb", EQ
+    	MOVEQ 	R0, #0
+	Pull	"R1,R2,PC", EQ
+
+    	TEQ 	R0, #NVMemoryFlag_HAL
+    	MOV 	R0, R4	    	    	; restore address
+    	BNE 	%FT20
+
+    	; Make the HAL call - we have to provide a buffer.
+    	SUB 	sp, sp, #4	    	; make some space on the stack
+    	MOV 	R1, sp
+    	MOV 	R2, #1
+    	CallHAL	HAL_NVMemoryRead
+    	LDRB 	R0, [sp], #4	    	; read back from stack and restore
+    	Pull	"R4, sb"
+    	Pull	"R1,R2,PC"
+
+20
   ]
 
   [	E2ROMSupport
@@ -971,12 +1029,8 @@ Read
 ReadBlock ROUT
         Push    "R0-R3,R14"
   [     E2ROMSupport
-        [ :LNOT: :DEF: TestHarness
         MOV	R14, #0
         LDRB	R14, [R14, #NVRamSize]
-        |
-        LDRB	R14, NVSize
-        ]
         MOV     R14, R14, LSL #8
   |
         MOV     R14, #240
@@ -1049,17 +1103,12 @@ ReadSubBlock ROUT
         CMP     R3, R14
         MOVHI   R3, R14
 ; R3 = logical end of this transaction (exclusive)
-  [     CacheCMOSRAM
         TEQ     R0, #0                  ; check it's a cacheable segment
         BEQ     %FT15
         CMP     R0, #&100
         BHS     %FT15
 
-  [ :LNOT: :DEF: TestHarness
         LDR     R14, =CMOSRAMCache
-  |
-        ADR     R14, i2cWorkSpace
-  ]
         ADD     R3, R3, R4              ; R3 = physical end address
         ADD     R4, R4, R0              ; R4 = physical address
         ADD     R3, R3, R14             ; R3 = cache end address
@@ -1073,10 +1122,41 @@ ReadSubBlock ROUT
         STRB    R14, [R1], #1
         BLO     %BT12
         Pull    "R3-R5,PC"              ; V will be clear
-  ]
 15
         Push    "R0-R2"
         ADD     R0, R0, R4              ; R0 = physical address
+  [ HAL
+    	Push	"sb"
+    	MOV 	R5, R0	    	    	; save address
+    	AddressHAL
+    	Push	"R1-R3,R12"
+    	CallHAL	HAL_NVMemoryType
+    	Pull	"R1-R3,R12"
+    	AND 	R0, R0, #NVMemoryFlag_Provision
+    	TEQ 	R0, #NVMemoryFlag_None
+
+    	; If there's no NVmemory, tough - we just return.
+    	MOVEQ 	R2, #0	    	    	; nothing read
+    	Pull 	"sb", EQ
+	Pull	"R3-R5,PC", EQ
+
+    	TEQ 	R0, #NVMemoryFlag_HAL
+    	MOV 	R0, R5	    	    	; restore address
+    	BNE 	%FT17	    	    	; do IIC things.
+
+    	; Make the HAL call
+    	Push	"R12"
+    	CallHAL	HAL_NVMemoryRead    	; returns bytes read in R0
+    	Pull	"R12"
+    	MOV 	R2, R0
+    	ADD 	R0, R0, R1  	    	; update return R0
+    	Pull	"sb"
+    	Pull	"R3-R5,PC"
+
+17
+    	Pull	"sb"
+  ]
+
   [	E2ROMSupport
 	BL	GetI2CAddress		; convert to device address and offset
   |
@@ -1193,17 +1273,12 @@ ChecksumSubBlock ROUT
         MOVHI   R3, R14
 ; R3 = logical end of this transaction (exclusive)
 
-  [     CacheCMOSRAM
         TEQ     R0, #0                  ; check it's a cacheable segment
         BEQ     %FT15
         CMP     R0, #&100
         BHS     %FT15
 
-  [ :LNOT: :DEF: TestHarness
         LDR     R14, =CMOSRAMCache
-  |
-        ADR     R14, i2cWorkSpace
-  ]
         ADD     R3, R3, R4              ; R3 = physical end address
         ADD     R4, R4, R0              ; R4 = physical address
         ADD     R3, R3, R14             ; R3 = cache end address
@@ -1217,7 +1292,6 @@ ChecksumSubBlock ROUT
         ADD     R1, R1, R14
         BLO     %BT12
         Pull    "R3-R5,PC"
-  ]
 15
         Push    "R0-R2"
         ADD     R0, R0, R4              ; R0 = physical address
@@ -1282,30 +1356,18 @@ ChecksumSubBlock ROUT
   [	E2ROMSupport
 GetI2CAddress ROUT
 	Push	"R14"
-	[ :LNOT: :DEF: TestHarness
 	MOV	R14, #0			; get no 256 byte blocks and calculate end address
 	LDRB	R14, [R14, #NVRamSize]
-	|
-	LDRB	R14, NVSize
-	]
 	MOV	R14, R14, LSL #8
 	CMP	R0, R14
 	Pull	"PC",CS 		; indicate invalid
 
 ; address is < end address -> is valid
-	[ :LNOT: :DEF: TestHarness
 	MOV	R1, #0
 	LDRB	R1, [R1, #RTCFitted]
-	|
-	LDRB	R1, RTCFlag
-	]
 	TEQ	R1, #0
 	MOVNE	R1, #RTCAddress
-	[ :LNOT: :DEF: TestHarness
 	LDREQB  R1, [R1, #NVRamBase]
-	|
-	LDREQB  R1, NVBase
-	]
 
         CMP     R14, #2*1024            ; is the device bigger than 2K? If so, new addressing scheme
         ORRHI   R1, R1, #&100           ; set magic bit => 2 byte address
@@ -1339,12 +1401,8 @@ GetI2CAddress ROUT
 MangleCMOSAddress ROUT
  [ E2ROMSupport
 	Push	"R14"
-	[ :LNOT: :DEF: TestHarness
 	MOV	R14, #0			; read no 256 byte blocks and calculate end address
 	LDRB	R14, [R14, #NVRamSize]
-	|
-	LDRB	R14, NVSize
-	]
 	MOV	R14, R14, LSL #8
 	CMP	R0, R14			; if >= end address then
 	Pull	"R14"
@@ -1396,12 +1454,8 @@ ValChecksum	Entry "R1-R2"
         MOV     R0, #0
         MOV     R1, #CMOSxseed
    [ E2ROMSupport
-	[ :LNOT: :DEF: TestHarness
 	MOV	R2, #0			; read number of 256 byte blocks and calculate end address
 	LDRB	R2, [R2, #NVRamSize]
-	|
-	LDRB	R2, NVSize
-	]
 	MOV	R2, R2, LSL #8
    |
 	MOV	R2, #240
@@ -1438,12 +1492,8 @@ MakeChecksum	ROUT
         MOV     R0, #0
         MOV     R1, #CMOSxseed
   [ E2ROMSupport
-	[ :LNOT: :DEF: TestHarness
 	MOV	R2, #0
 	LDRB	R2, [R2, #NVRamSize]
-	|
-	LDRB	R2, NVSize
-	]
 	MOV	R2, R2, LSL #8
   |
 	MOV	R2, #240
@@ -1477,21 +1527,16 @@ SetTime ROUT
 	Push	"R4, R14"		; save registers
 
  [ E2ROMSupport
-	[ :LNOT: :DEF: TestHarness
 	MOV	R14, #0
 	LDRB	R14, [R14, #RTCFitted]
-	|
-	LDRB	R14, RTCFlag
-	]
 
         TEQ     R14, #0
         BNE     %FT20
 
 ; no RTC - just set soft copy
 
- [ :LNOT: :DEF: TestHarness
         BL      RegToRealTime
- ]
+
         Pull    "R4, PC"
  ]
 20
@@ -1556,9 +1601,8 @@ SetTime ROUT
 
 40
 	MOV	R0, R4			; put hours back in R0
-  [ :LNOT: :DEF: TestHarness
 	BL	RTCToRealTime
-  ]
+
 	Pull	"R4, PC"
 
 ; *****************************************************************************
@@ -1642,35 +1686,73 @@ ReadTime ROUT
 ; *****************************************************************************
 ;
 ;	InitCMOSCache - Initialise cache of CMOS RAM
+;  in: -
+;
+;  out: R0 = 0 for failure
 
-  [	CacheCMOSRAM
-
-InitCMOSCache	Entry "r0-r6"
+InitCMOSCache	Entry "r1-r6, sb"
     [	E2ROMSupport
 
 ; Need to set the slowest speed so we can probe
 
-        MOV     R2, #0
+        LDR     R4, =ZeroPage
         MOV     R3, #10         ; Default speed setting (5µs delays)
-	[ :LNOT: :DEF: TestHarness
-        STRB    R3, [R2, #NVRamSpeed]
-	|
-        STRB    R3, NVSpeed
-	]
+        STRB    R3, [R4, #NVRamSpeed]
 
 ;	First determine what hardware we've got fitted, R4 holds the number of
 ;	256 byte blocks that we've found
 
+ [ HAL
+        AddressHAL
+    	CallHAL	HAL_NVMemoryType
+    	ANDS 	R0, R0, #NVMemoryFlag_Provision
+    	EXIT	EQ
+    	MOV 	R5, R0
+
+    	; If it's only a maybe, then we probe
+    	TEQ 	R5, #NVMemoryFlag_MaybeIIC
+    	BEQ 	%FT03
+
+    	; Else we read the size
+
+    	CallHAL	HAL_NVMemorySize	; returns number of bytes but..
+    	MOV 	R0, R0, LSR#8	    	; .. expecting no. of 256 blocks
+    	STRB 	R0, [R4, #NVRamSize]
+
+    	CallHAL	HAL_NVMemoryIICAddress
+    	STRB 	R0, [R4, #NVRamBase]
+
+    	MOV 	R0, #0
+    	CallHAL	HAL_IICType
+    	MOV 	R3, #10
+    	TST 	R0, #IICFlag_Fast
+    	MOVNE	R3, #3
+    	TST 	R0, #IICFlag_HighSpeed
+    	MOVNE	R3, #1
+    	STRB	R3, [R4, #NVRamSpeed]
+
+    	; If we're using IIC then read in the cache manually
+    	TEQ 	R0, #NVMemoryFlag_IIC
+    	BEQ   	%FT06
+
+    	; Else use HAL routine.
+    	MOV 	R0, #0
+    	LDR 	R1, =CMOSRAMCache
+    	MOV 	R2, #&100
+    	CallHAL	HAL_NVMemoryRead
+    	TEQ 	R0, #&100
+    	MOVNE	R0, #0	    	    	; Failure exit condition
+    	EXIT
+03
+ ]
 	; Have we got an RTC ?
 	MOV	R0, #RTCAddress
+    	LDR 	R2, =ZeroPage
 	BL	DummyAccess
 	MOVVS	R4, #0
 	MOVVC	R4, #1
-	[ :LNOT: :DEF: TestHarness
 	STRB	R4, [R2, #RTCFitted]
-	|
-	STRB	R4, RTCFlag
-	]
+
         MOV     R3, #10         ; assume 100kHz to start with
         MOV     R5, #4          ; assume 16 byte page size to start with
         MOV     R6, #0          ; assume not protected
@@ -1739,13 +1821,21 @@ InitCMOSCache	Entry "r0-r6"
         MOVVC   R6, #120        ; Only bottom 30K writable
         MOVVC   R5, #6          ; 64 byte page size
         MOVVC   R3, #1          ; Hyper-fast speed setting (0.5µs delays - 1MHz part)
+    	BVC 	%FT5
 
         MOVVS   R1, #RTCAddress
-        MOVVS   R5, #8          ; 256 byte page size for CMOS
+        MOVVS   R0, #RTCAddress
+    	BL  	DummyAccess
+        MOV     R5, #8          ; 256 byte page size for CMOS
+    	BVC 	%FT5
+
+; We ain't got any bloody thing!
+        STRB    R5, [R2, #NVRamPageSize]
+    	MOV 	R0, #0	    	; Exit failure
+    	EXIT
 
 5
 	; Set the NVRam count
-	[ :LNOT: :DEF: TestHarness
 	STRB    R1, [R2, #NVRamBase]
 	STRB	R4, [R2, #NVRamSize]
         STRB    R5, [R2, #NVRamPageSize]
@@ -1756,17 +1846,10 @@ InitCMOSCache	Entry "r0-r6"
         CMP     R3, #I2Cticks   ; clamp speed to maximum bus speed
         MOVLO   R3, #I2Cticks
         STRB    R3, [R2, #NVRamSpeed]
-
-	LDR	R3, =CMOSRAMCache
-	|
-	STRB    R1, NVBase
-	STRB	R4, NVSize
-        STRB    R5, NVPageSize
-        STRB    R3, NVSpeed
-	ADR	R3, i2cWorkSpace
-	]
-
+06
 	; Initialise the cache
+	LDR	R3, =CMOSRAMCache
+
         TEQ     R4, #8                  ; check for 2K part
 	MOVNE	r0, #&00		; if not, then start at 0 anyway and read non-OTP data into location 0..15
         BNE     %FT07
@@ -1780,11 +1863,7 @@ InitCMOSCache	Entry "r0-r6"
 	MOV	R1, #RTCAddress
 	MOV	R2, #&10
 	MOV	R4, #&100		; stop at address &100
-        [	:LNOT: :DEF: TestHarness
 	LDR	R3, =CMOSRAMCache
-        |
-	ADR	R3, i2cWorkSpace
-        ]
     ]
 09
 	BL	Start
@@ -1830,6 +1909,7 @@ InitCMOSCache	Entry "r0-r6"
 
    [ E2ROMSupport
         TEQ     R4, #&100               ; have we reached the end?
+    	MOV 	R0, #1	    	    	; ensure exit success
         EXIT    EQ                      ; exit if so
 
         MOV     R0, R4                  ; start next block from R4
@@ -1864,9 +1944,6 @@ ReadOTPArea Entry
 	BL	Stop
 	EXIT
    ]
-
-  ]
-
 
 ; *****************************************************************************
 ;
