@@ -26,13 +26,26 @@
 /* CLib */
 #include <ctype.h>
 
+
+// Email
+#include "Email/Common/bool.h"
+#include "Email/Common/list.h"
+
+#include "Email/Mailbox/WimpRegistry.h"
+
+extern "C"
+{
 #include "WebMail.h"
+}
 
 /* Miscellaneous */
 #include "URI.h"
 
 /* Local */
 #include "BrowserIF.h"
+
+extern "C"
+{
 #include "URLOpen.h"		/* From NCFresco's source */
 #include "WebMail.h"
 #include "Inbox.h"
@@ -40,6 +53,8 @@
 #include "ReadMsg.h"
 #include "SendMsg.h"
 #include "PopUp.h"
+#include "MailTo.h"
+}
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
@@ -56,11 +71,19 @@
 /* Macro definitions */
 #define M_unused(a) (void) (a)
 
+// For some strange reason our C implementation of the 'offsetof' macro doesn't work in C++.
+#undef offsetof
+#define offsetof(type, member) \
+    ((size_t)((char *)&(((type *)0)->member) - (char *)0))
+
+
+
+
 /* -------------------------------------- TYPE DEFINITIONS -------------------------------------- */
 typedef struct
 {
     char *  name;
-    bool (*handler) (char *, const char *);
+    bool (*handler) (char *, const char *const);
 } scheme_handler_t;
 
 typedef struct
@@ -68,6 +91,27 @@ typedef struct
     char *  page;
     bool (*fn) (int, url_param *);
 } url_handler_t;
+
+class RMABlockList : public ELib_list
+{
+    // Member functions
+    public:
+                       RMABlockList ();
+        virtual       ~RMABlockList ();
+        void *         Insert (const size_t  size);
+        virtual void   Delete (void *const   ptr);
+        void           FreeAllBlocks ();
+
+    private:
+        void *   claim_block (const size_t  size);
+        void     free_block (void *const  ptr);
+
+    // Data members
+    private:
+        int  count;
+};
+
+
 
 
 /* ------------------------------------ FUNCTION PROTOTYPES ------------------------------------- */
@@ -77,11 +121,13 @@ static bool  write_url_string (WimpMessage *const   message,
                                const char *const    string,
                                const size_t         string_size);
 
+static void  destroy_openurl_message (WimpMessage *const  message);
+
 static const char *  extract_indirect_string (
                          const urlopen_data *const  openurl,
                          const string_value         indirect_string);
 
-static bool  process_url (char *const        url,
+static bool  process_url (char *             url,
                           const char *const  body_filename);
 
 static bool  process_ncmail (char *             url,
@@ -108,6 +154,9 @@ static bool  write_body_argument (FILE *const        in_file,
 
 static bool  unescape_url_string (char *  string);
 
+
+
+
 /* -------------------------------------- GLOBAL VARIABLES -------------------------------------- */
 
 static scheme_handler_t  scheme[] =
@@ -128,8 +177,32 @@ static url_handler_t  url_handler[] =
     { "PopUp", popup_message_received }
 };
 
+static RMABlockList  rma_list;
+
+// Register with WimpRegistry
+class webmail_wimp_register
+{
+  public:
+    webmail_wimp_register (void);
+};
+
+webmail_wimp_register::webmail_wimp_register(void)
+{
+    WimpRegistry::Instance()->RegisterMessage(wimp_MOPENURL);
+}
+
+webmail_wimp_register webmail_wr;	// private static var that on construction
+					// registers with WimpRegistry so that
+					// before main() is entered, WimpRegistry
+					// is set up.
+
+
+
 
 /* ----------------------------------------- FUNCTIONS ------------------------------------------ */
+
+extern "C"
+{
 
 /************************************************************************/
 /* browserif_sendurl                                                    */
@@ -173,6 +246,10 @@ extern bool  browserif_sendurl (const char *const  url,
                                        DBOX_TARGET,
                                        sizeof (DBOX_TARGET)))
                 {
+                    if (open->indirect.url.ptr >= URL_PTR)
+                    {
+                        rma_list.Delete (open->indirect.url.ptr);
+                    }
                     rc = false;
                 }
             }
@@ -200,9 +277,9 @@ extern bool  browserif_sendurl (const char *const  url,
                                &message,
                                0,
                                0,
-                               NULL) == NULL)
+                               NULL))
         {
-            rc = true;
+            destroy_openurl_message (&message);
         }
     }
 
@@ -212,44 +289,67 @@ extern bool  browserif_sendurl (const char *const  url,
 
 
 
-static bool  write_url_string (WimpMessage *const   message,
-                               string_value *const  string_val,
-                               const char *const    string,
-                               const size_t         string_size)
+extern int  browserif_bounced_msg_handler (int              event_code,
+                                           WimpPollBlock *  event,
+                                           IdBlock *        id_block,
+                                           void *           handle)
 {
-    int   space_left = sizeof(WimpMessage) - message->hdr.size;
-    bool  rc         = true;
+    NB_UNUSED (event_code);
+    NB_UNUSED (id_block);
+    NB_UNUSED (handle);
 
-    if (string_size <= space_left)
+    int  rc = 0;
+
+    if (event->user_message_acknowledge.hdr.action_code == wimp_MOPENURL)
     {
-        /* offset is relative to data start */
-        string_val->offset = message->hdr.size - sizeof(message->hdr);
-        memcpy (message->data.bytes + string_val->offset,
-                string,
-                string_size);
-        message->hdr.size += string_size;
-    }
-    else
-    {
-        if (_swix (OS_Module,
-                   _IN (0) | _IN (3) | _OUT (2),
+        // Must be one of ours - we can only receive bounced messages
+        // from ourself!
 
-                   OS_Module_Claim,
-                   string_size,
-
-                   &string_val->ptr) == NULL)
-        {
-             memcpy (string_val->ptr,
-                     string,
-                     string_size);
-        }
-        else
-        {
-            rc = false;
-        }
+        destroy_openurl_message (&event->user_message_acknowledge);
+        rc = 1;
     }
 
     return rc;
+}
+
+
+
+
+extern int  browserif_null_event_handler (int              event_code,
+                                          WimpPollBlock *  event,
+                                          IdBlock *        id_block,
+                                          void *           handle)
+{
+    // This routine is a revolting hack to get around the deficiencies in the
+    // ANT URL protocol, but it appears to be the only hack possible in the
+    // context in which we are operating, so it'll have to do.
+    //
+    // The deficiency is as follows: if we send a URL with 'indirect' data
+    // allocated from the RMA and a task (usually NCFresco) claims the message
+    // then we never get to know about it because ANT didn't bother including an
+    // 'acknowledge' message in their protocol.  This means we never know when
+    // the RMA which we claimed for the message is no longer being used, hence
+    // we can't ever be 100% sure that no other applications are using it,
+    // therefore can never be 100% sure that it is safe to free it.  Lovely.
+    //
+    // The revolting hack relies on undocumented, implementation dependent
+    // behaviour of the Wimp.  If *any* task has any Wimp messages in it's
+    // message queue then *no* task will get any *null* events until *all* tasks
+    // have had their Wimp messages delivered.  This means that whenever we
+    // get a *null* event we can be sure that no tasks have any Open URL
+    // messages waiting to be delivered to them, so we can free any RMA claimed
+    // for previously sent messages.  The only slight flaw with this is when we
+    // quit we can't be 100% sure that all apps have recieved any pending
+    // messages, but we'll just have to lump it with this case.
+
+    NB_UNUSED (event_code);
+    NB_UNUSED (event);
+    NB_UNUSED (id_block);
+    NB_UNUSED (handle);
+
+    rma_list.FreeAllBlocks ();
+
+    return 0;
 }
 
 
@@ -292,8 +392,9 @@ extern int  browserif_openurl_msg_handler (WimpMessage *  message,
             offsetof (urlopen_data, indirect.body_file) < message->hdr.size)
         {
             /* Field might possibly contain valid data */
-            body_filename = extract_indirect_string (openurl,
-                                                     openurl->indirect.body_file);
+            body_filename = extract_indirect_string (
+                                openurl,
+                                openurl->indirect.body_file);
         }
     }
     else
@@ -340,6 +441,77 @@ extern int  browserif_openurl_msg_handler (WimpMessage *  message,
     return rc;
 }
 
+} // extern "C"
+
+
+
+
+static bool  write_url_string (WimpMessage *const   message,
+                               string_value *const  string_val,
+                               const char *const    string,
+                               const size_t         string_size)
+{
+    int   space_left = sizeof(WimpMessage) - message->hdr.size;
+    bool  rc         = true;
+
+    if (string_size <= space_left)
+    {
+        /* offset is relative to data start */
+        string_val->offset = message->hdr.size - sizeof(message->hdr);
+        memcpy (message->data.bytes + string_val->offset,
+                string,
+                string_size);
+        message->hdr.size += string_size;
+    }
+    else
+    {
+        string_val->ptr = (char *) rma_list.Insert (string_size);
+        if (string_val->ptr)
+        {
+             memcpy (string_val->ptr,
+                     string,
+                     string_size);
+        }
+        else
+        {
+            rc = false;
+        }
+    }
+
+    return rc;
+}
+
+
+
+
+static void  destroy_openurl_message (WimpMessage *const  message)
+{
+    urlopen_data *  openurl = (urlopen_data *) &message->data;
+
+    if (openurl->indirect.tag == 0)
+    {
+        // Message contains indirect data, possibly allocated from RMA
+        if (openurl->indirect.url.ptr >= URL_PTR)
+        {
+            // RMA used to store URL
+            rma_list.Delete (openurl->indirect.url.ptr);
+        }
+
+        if (offsetof (WimpMessage, data) +
+            offsetof (urlopen_data, indirect.target) < message->hdr.size)
+        {
+            // Target field of message may contain data
+            if (openurl->indirect.target.ptr >= URL_PTR)
+            {
+                // RMA used to store target
+                rma_list.Delete (openurl->indirect.target.ptr);
+            }
+        }
+    }
+}
+
+
+
 
 /************************************************************************/
 /* extract_indirect_string                                              */
@@ -385,7 +557,7 @@ static const char *  extract_indirect_string (
 /* Returns:    true (handled URL), false (didn't handle URL).           */
 /*                                                                      */
 /************************************************************************/
-static bool  process_url (char *const        url,
+static bool  process_url (char *             url,
                           const char *const  body_filename)
 {
     bool  rc = false;
@@ -530,7 +702,7 @@ static url_param *  process_ncmail_args_mem (char *      s,
             /* Allocate space for arguments in blocks */
             if (*count % ARG_GRANULARITY == 0)
             {
-                url_param *  temp =
+                url_param *  temp = (url_param *)
                     realloc (
                         arg,
                         sizeof (url_param) * (*count + ARG_GRANULARITY));
@@ -578,7 +750,7 @@ static url_param *  process_ncmail_args_mem (char *      s,
          */
         if (*count % ARG_GRANULARITY == 0)
         {
-            url_param *  temp =
+            url_param *  temp = (url_param *)
                     realloc (
                         arg,
                         sizeof (url_param) * (*count + 1));
@@ -643,7 +815,7 @@ static url_param *  process_ncmail_args_file (const char *const  filename,
             /* Allocate space for arguments in blocks */
             if (*count % ARG_GRANULARITY == 0)
             {
-                url_param *  temp =
+                url_param *  temp = (url_param *)
                     realloc (
                         arg,
                         sizeof (url_param) * (*count + ARG_GRANULARITY));
@@ -702,7 +874,7 @@ static url_param *  process_ncmail_args_file (const char *const  filename,
          */
         if (*count % ARG_GRANULARITY == 0)
         {
-            url_param *  temp =
+            url_param *  temp = (url_param *)
                     realloc (
                         arg,
                         sizeof (url_param) * (*count + 1));
@@ -760,14 +932,75 @@ cleanup:
 /* Returns:    true (handled), false (not handled).                     */
 /*                                                                      */
 /************************************************************************/
-static bool  process_mailto (char *const        s,
+static bool  process_mailto (char *             s,
                              const char *const  body_filename)
 {
-    /* Not implemented yet, so pass on URL */
-  NB_UNUSED(s);
-  NB_UNUSED(body_filename);
+    bool  rc = false;
 
-  return false;
+    if (body_filename)
+    {
+        size_t  body_file_size =
+            nb_file_get_size (1,    // next parameter contains full path
+                              (char *) body_filename,
+                              NULL);
+
+        s = malloc (body_file_size + 1);
+        if (s)
+        {
+             FILE *  fp = fopen (body_filename, "rb");
+             if (fp)
+             {
+                 if (fread (s,
+                            sizeof (char),
+                            body_file_size,
+                            fp) == body_file_size)
+                 {
+                     rc = true;
+                 }
+
+                 fclose (fp);
+             }
+
+             if (rc == false)
+             {
+                 free (s);
+                 s = NULL;
+             }
+        }
+    }
+
+    if (s)
+    {
+        rc = false;
+
+        // Only support simple mailto as in RFC 1738
+        // Assume that nul or any URL reserved char terminates the
+        // mailbox name (not 100% sure about this since the original
+        // RFC 1738 says that no characters are reserved in mailto
+        // wherea RFC 2368 states that all URL reserved characters
+        // in the mailbox name must be encoded.
+
+        // Find terminating character
+        char *  t = s + strcspn (s, "?=&");
+        *t = 0;
+        if (unescape_url_string (s))
+        {
+            url_param  param[2];
+            param[0].name = "to";
+            param[0].value = s;
+            param[1].name = 0;
+            param[1].value = 0;
+            mailto_send_message_request (1, param);
+            rc = true;
+        }
+
+        if (body_filename)
+        {
+            free (s);
+        }
+    }
+
+    return rc;
 }
 
 
@@ -1112,4 +1345,141 @@ static bool  unescape_url_string (char *  string)
     }
 
     return rc;
+}
+
+
+
+
+/* ---------------------------------- CLASS MEMBER FUNCTIONS ------------------------------------ */
+
+RMABlockList::RMABlockList ()
+    : count (0)
+{
+}
+
+
+
+
+RMABlockList::~RMABlockList ()
+{
+    FreeAllBlocks ();
+}
+
+
+
+
+void *  RMABlockList::Insert (const size_t  size)
+{
+    void *  p = claim_block (size);
+    if (p)
+    {
+        // Block claimed successfully - insert at end of list
+        End ();
+        if (ELib_list::Insert (p))
+        {
+            // Insertion succeeded - increment count
+            if (count++ == 0)
+            {
+                // Want null events
+                eng_null_events (true);
+                if (event_register_wimp_handler (-1,
+                                                 Wimp_ENull,
+                                                 browserif_null_event_handler,
+                                                 NULL))
+                {
+                    // Failed - free block
+                    Delete (p);
+                    p = 0;
+                }
+            }
+        }
+        else
+        {
+            // Insertion failed - free block
+            free_block (p);
+            p = 0;
+        }
+    }
+
+    return p;
+}
+
+
+
+
+void  RMABlockList::Delete (void *const  p)
+{
+    void *  current = Current ();
+
+    // If the current item is not the one we want then search the list to
+    // find the required item
+    if (current != p)
+    {
+        Start ();
+
+        while (current = Current (), current && current != p)
+        {
+            Next ();
+        }
+    }
+
+    if (current == p)
+    {
+        free_block (p);
+        ELib_list::Delete ();
+        if (--count == 0)
+        {
+            // Don't need null events any more
+            eng_null_events (false);
+            (void) event_deregister_wimp_handler (-1,
+                                                  Wimp_ENull,
+                                                  browserif_null_event_handler,
+                                                  NULL);
+        }
+    }
+}
+
+
+
+
+void RMABlockList::FreeAllBlocks ()
+{
+    for (Start (); !Nul (); Next ())
+    {
+        Delete (Current ());
+    }
+}
+
+
+
+
+void *  RMABlockList::claim_block (const size_t  size)
+{
+    void *  p;
+
+    if (_swix (OS_Module,
+               _IN (0) | _IN (3) | _OUT (2),
+
+               OS_Module_Claim,
+               size,
+
+               &p))
+    {
+        // Allocation failed
+        p = 0;
+    }
+
+    return p;
+}
+
+
+
+
+void  RMABlockList::free_block (void *const  p)
+{
+    (void) _swix (OS_Module,
+                  _IN (0) | _IN (2),
+
+                  OS_Module_Free,
+                  p);
 }

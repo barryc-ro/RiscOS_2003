@@ -66,7 +66,7 @@ LDFLAGS		= -c++ -aof
 CPFLAGS         = ~cfr~v~n
 SQFLAGS         = -f
 WFLAGS          = ~cf~vr
-LBFLAGS		= -c
+LBFLAGS		= -c -o
 
 
 # -----------------------------------------------------------------------------
@@ -119,7 +119,6 @@ OBJS = 	o.EscapeHTML 	\
 	o.BrowserIF	\
 	o.Entry		\
 	o.ReadMsg	\
-	o.WimpReg	\
 	o.PopUp		\
 	o.Feedback	\
  	o.Compose	\
@@ -134,7 +133,6 @@ OBJSD = od.EscapeHTML 	\
 	od.BrowserIF	\
 	od.Entry	\
 	od.ReadMsg	\
-	od.WimpReg	\
 	od.Feedback	\
 	od.PopUp		\
 	od.SendMsg	\
@@ -149,7 +147,6 @@ OBJSZ = oz.EscapeHTML 	\
 	oz.BrowserIF	\
 	oz.Entry	\
 	oz.ReadMsg	\
-	oz.WimpReg	\
 	oz.Feedback	\
 	oz.Compose	\
 	oz.PopUp	\
@@ -317,16 +314,16 @@ clean_all: clean
 
 
 abs.!RI: $(OBJS) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.o.NCMailUI $(OBJS) $(LIBS)
+	$(LB) $(LBFLAGS) ^.Build.o.NCMailUI $(OBJS)
 
 $(ROM_MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.oz.NCMailUI $(OBJSZ) $(LIBSZ)
+	$(LB) $(LBFLAGS) ^.Build.oz.NCMailUI $(OBJSZ)
 
 $(MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.oz.NCMailUI $(OBJSZ) $(LIBSZ)
+	$(LB) $(LBFLAGS) ^.Build.oz.NCMailUI $(OBJSZ)
 
 abs.!RI_D: $(OBJSD) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.od.NCMailUI $(OBJSD) $(LIBSD)
+	$(LB) $(LBFLAGS) ^.Build.od.NCMailUI $(OBJSD)
 
 
 # -----------------------------------------------------------------------------
