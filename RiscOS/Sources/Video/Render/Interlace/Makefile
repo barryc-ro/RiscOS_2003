@@ -9,7 +9,6 @@
 #
 
 COMPONENT = Interlace
-HEADER1   = Interlace
 RESOURCES = no
 
 include StdTools
