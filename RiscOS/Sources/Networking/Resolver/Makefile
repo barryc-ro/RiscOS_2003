@@ -20,7 +20,7 @@ EXP_HDR = <Cexport$dir>
 include Makefiles:StdTools
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -W -c -depend !Depend -zM -zps1 -throwback -pcc -fahn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
+CFLAGS  = -W -c -depend !Depend -zM -zps1 ${THROWBACK} -pcc -fahn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -depend !Depend -p
