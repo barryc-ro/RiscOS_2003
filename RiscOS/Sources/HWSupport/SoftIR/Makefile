@@ -29,7 +29,7 @@ CD      = dir
 TOUCH   = create
 STRIP   = -stripdepnd
 
-AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit -PD "${Build}${UserIF} SETL {TRUE}"
+AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit -PD "${Build}${UserIF} SETL {TRUE}" -PD "${IRPROTO} SETL {TRUE}" 
 CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ffa ${INCLUDES} ${DFLAGS} -DSysIdent=${Build}${UserIF} -DIrProtocol="${IRPROTO}"
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
