@@ -30,9 +30,8 @@ DATA      = Data.<Build>
 # Note: RESDATA mustn't be in RESDIR !!
 RESDATA   = ${DATA}.Data
 SHRINKFILE = ${DATA}.MkShrink
-SPECIALFILE = ${DATA}.MkSpecial
-SPECIALMFILE = ${DATA}.MkSpecialM
-
+SPECIALSRC = Special
+SPECIALBLD = ${DATA}.Special
 #
 # Utility programs:
 #
@@ -66,25 +65,26 @@ ${TARGET}: ${SOURCE} ${RESDATA} dirs
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
-${RESDATA}: ${SHRINKFILE} ${SPECIALFILE} ${SPECIALMFILE}
+${RESDATA}: ${SHRINKFILE} ${OPTIONS} u<UserIf> s<System>
         @RMEnsure ShrinkWrap 0.00 Error *** ShrinkWrap must be loaded ***
         Run ${SHRINKFILE}
-        IfThere ${SPECIALFILE} Then Run ${SPECIALFILE}
-        IfThere ${SPECIALMFILE} Then Run ${SPECIALMFILE}
+        Repeat Run ${SPECIALBLD} -files -verbose
         ${SCANRES} ${RESDIR} $@
 
 ${SHRINKFILE}:
         ${BUILDWRAP} Resources ${RESDIR} $@
 
-${SPECIALFILE}:
-        IfThere Special.<UserIF> Then ${BUILDWRAP} Special.<UserIF> ${RESDIR} $@
+# Optional extra files
+# to use, set in OPTIONS variable in the main build Config
+# eg OPTIONS="RealAudio Cinepak"
 
-${SPECIALMFILE}:
-        IfThere SpecialM.<Machine> Then ${BUILDWRAP} SpecialM.<Machine> ${RESDIR} $@
+Cinepak RealAudio u<UserIf> s<System>:
+        IfThere ${SPECIALSRC}.$@ Then ${BUILDWRAP} ${SPECIALSRC}.$@ ${RESDIR} ${SPECIALBLD}.$@
 
 dirs:
         ${MKDIR} ${TDIR}
         ${MKDIR} ${RESDIR}
         ${MKDIR} ${DATA}
+        ${MKDIR} ${SPECIALBLD}
 
 # Dynamic dependencies:
