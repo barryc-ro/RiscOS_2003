@@ -117,7 +117,7 @@ resources: ${SOUNDS}
         ${CP} ${RDIR}.EventMap          ${RESDIR}.EventMap      ${CPFLAGS}
         ${CP} ${SDIR}.connect           ${RESSOUDIR}.connect    ${CPFLAGS}
         ${CP} ${SDIR}.disconnect        ${RESSOUDIR}.disconnect ${CPFLAGS}
-        ${CP} ${SDIR}.go~back           ${RESSOUDIR}.home       ${CPFLAGS}
+        ${CP} ${SDIR}.go~back           ${RESSOUDIR}.go~back    ${CPFLAGS}
         ${CP} ${SDIR}.handshake         ${RESSOUDIR}.handshake  ${CPFLAGS}
         ${CP} ${SDIR}.home              ${RESSOUDIR}.home       ${CPFLAGS}
         ${CP} ${SDIR}.imminent~t        ${RESSOUDIR}.imminent~t ${CPFLAGS}
