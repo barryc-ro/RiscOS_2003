@@ -123,8 +123,8 @@ install:
 resources:
         @echo Starting ARMovie resources phase
         @RMEnsure ShrinkWrap 0.00 Error *** ShrinkWrap must be loaded ***
-        @set Alias$MMD $(MKDIR) $(RESDIR).%0
-        @set Alias$CMF ShrinkWrapZipCompress %0 $(RESDIR).%1
+        @set Alias$MMD $(MKDIR) $(RESDIR).^.Apps.%0
+        @set Alias$CMF ShrinkWrapZipCompress %0 $(RESDIR).^.Apps.%1
         @setmacro Alias$If1bpp If "<Mk1bpp>"="1" OR "<MkEncoders>"="1" then %*0
         @setmacro Alias$If2bpp If "<Mk2bpp>"="1" OR "<MkEncoders>"="1" then %*0
         @setmacro Alias$If4bpp If "<Mk4bpp>"="1" OR "<MkEncoders>"="1" then %*0
