@@ -61,7 +61,7 @@ all: rm.${COMPONENT}
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET} dirs
+rom: ${TARGET}
 	@echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -79,10 +79,7 @@ clean:
 	${RM} ${TARGET}
 	@echo ${COMPONENT}: cleaned
 
-dirs:
-	${MKDIR} o
-	${MKDIR} rm
-	${MKDIR} aof
+
 #
 # Stand-alone module
 #
@@ -93,6 +90,7 @@ rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
+	${MKDIR} aof
 	${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
