@@ -19,7 +19,7 @@ RM	= remove
 WIPE	= -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} -DDONT_BUILD_RESOURCES -DSTRING_SCRIPT ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -Wp -ff ${INCLUDES} -DDONT_BUILD_RESOURCES -DSTRING_SCRIPT ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 Datatoaofflags = -d "" -l _len -dp -s -p
@@ -60,7 +60,7 @@ EXPORTS	  =
 # Rule patterns
 #
 .c.o:;	    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} $< -o $@ h.cmhg_modem
+.cmhg.o:;   ${CMHG} -p $< -o $@
 .s.o:;	    ${AS} ${AFLAGS} $< $@
 .d.o:;	    datatoaof -f $< -o $@ $(Datatoaofflags)
 
@@ -68,6 +68,9 @@ EXPORTS	  =
 # build a relocatable module:
 #
 all: ${TARGETSA}
+
+h.cmhg_modem: cmhg.HeaderMod
+        ${CMHG} -p cmhg.HeaderMod -d h.cmhg_modem
 
 #
 # RISC OS ROM build rules:
@@ -87,10 +90,11 @@ install: ${TARGETSA}
 	@echo ${COMPONENT}: module installed
 
 clean:
+	${WIPE} aof ${WFLAGS}
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} rm.* ${WFLAGS}
 	${WIPE} linked.* ${WFLAGS}
-	${WIPE} map.* ${WFLAGS}
+	${RM} h.cmhg_modem
 	${RM} ${TARGET}
 	@echo ${COMPONENT}: cleaned
 
@@ -103,6 +107,7 @@ resources:
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
+	${MKDIR} aof
 	${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
 #
@@ -110,9 +115,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 rom_link:
 	${MKDIR} linked
-	${MKDIR} map
-	${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-	truncate map.${COMPONENT} linked.${COMPONENT}
+	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
