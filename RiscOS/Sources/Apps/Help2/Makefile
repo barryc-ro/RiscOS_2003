@@ -27,7 +27,7 @@ SQUISH  = squish
 WIPE    = -wipe
 
 AFLAGS  = ${THROWBACK} -depend !Depend -nocache -stamp -quit -module
-CFLAGS  = ${THROWBACK} -depend !Depend -ffah ${INCLUDES} 
+CFLAGS  = ${THROWBACK} -depend !Depend -ffa ${INCLUDES} 
 CPFLAGS = ~cfr~v
 SQFLAGS = -nolist
 WFLAGS  = ~c~v
@@ -93,7 +93,7 @@ install: ${FILES}
 
 clean:
         ${WIPE} o.*      ${WFLAGS}
-        ${WIPE} ${APP}.*
+        ${WIPE} ${APP}.* ${WFLAGS}
         ${RM} ${RDIR}.!RunImage
         ${RM} ${APP}
         @echo ${COMPONENT}: cleaned
@@ -107,37 +107,3 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.main:	c.main
-o.main:	tbox:h.wimp
-o.main:	tbox:h.wimplib
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	tbox:h.wimplib
-o.main:	tbox:h.toolbox
-o.main:	tbox:h.event
-o.main:	tbox:h.window
-o.main:	tbox:h.gadgets
-o.main:	tbox:h.iconbar
-o.main:	tbox:h.proginfo
-o.main:	tbox:h.fontmenu
-o.main:	tbox:h.menu
-o.main:	h.help
-o.main:	h.common
-o.main:	h.defines
-o.help:	c.help
-o.help:	C:h.swis
-o.help:	C:h.kernel
-o.help:	tbox:h.gadgets
-o.help:	tbox:h.toolbox
-o.help:	tbox:h.wimp
-o.help:	h.common
-o.help:	h.help
-o.common:	c.common
-o.common:	C:h.kernel
-o.common:	tbox:h.wimp
-o.common:	tbox:h.wimplib
-o.common:	tbox:h.toolbox
-o.common:	tbox:h.gadgets
-o.common:	C:h.swis
-o.common:	h.common
-o.common:	h.defines
