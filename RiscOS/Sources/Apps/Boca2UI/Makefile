@@ -49,9 +49,12 @@ clean:
 
 resources:
         ${CP} Resources.<UserIf>.${LOCALE}.${APP}   ${RESAPP}   ${CPFLAGS}
-        ${CP} Resources.<UserIf>.${LOCALE}.SetMAC ${RESRES}.^.SetMAC ${CPFLAGS}
-        ${CP} Resources.<UserIf>.${LOCALE}.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
         ${CP} Resources.<UserIf>.${LOCALE}.LED.InitState ${RESRES}.LED.InitState ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.Monitors.VGA ${RESRES}.Monitors.VGA ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.Monitors.VGAplus ${RESRES}.Monitors.VGAplus ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.SetMAC ${RESRES}.^.SetMAC ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.SetMode ${RESRES}.^.SetMode ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
         
 # Dynamic dependencies:
