@@ -310,6 +310,7 @@ static _kernel_oserror *ftp_readdata_dispatch(Session *s, _kernel_swi_regs *r)
 			e = NULL;
 		}
 		else {
+		        s->server_code = 400;
 			s->state = FTP_STATUS_DEAD;
 		}
 	}
@@ -320,13 +321,12 @@ static _kernel_oserror *ftp_readdata_dispatch(Session *s, _kernel_swi_regs *r)
 static _kernel_oserror *ftp_exec_readdata(_kernel_swi_regs *r)
 {
 	Session *ses  = NULL;
+	_kernel_oserror *e;
 
 	/*
 	 * Check to see session exists and has connected cleanly first
 	 * If it doesn't/hasn't, reject this request cleanly
 	 */
-
-	r->r[5] = 0;
 
 	ses = find_session(r->r[1]);
 	if (ses == NULL) {
@@ -340,9 +340,19 @@ static _kernel_oserror *ftp_exec_readdata(_kernel_swi_regs *r)
 	ses->r = r;
 
 	r->r[0] = *((int *)r->r[1]) = ses->reported_state;
-	r->r[5] = ses->size;
 
-	return ftp_readdata_dispatch(ses, r);
+	e = ftp_readdata_dispatch(ses, r);
+	if (e == NULL) {
+	        if (ses->size > 0) {
+		        r->r[5] = ses->size - ses->total_bytes_transferred;
+		        if (r->r[5] < 0) r->r[5] = -1;
+		}
+		else {
+	        	r->r[5] = -1;
+		}
+		r->r[0] = *((int *)r->r[1]) = ses->reported_state;
+	}
+	return e;
 }
 
 static _kernel_oserror *gen_error(Session *s, char *errmess)
@@ -434,6 +444,7 @@ static _kernel_oserror *ftp_read_data_connection(Session *s, _kernel_swi_regs *r
 	else {
 		int result;
 
+		s->flags &= ~ftpflags_DONT_INCREMENT_TOTALS;
 		errno = 0;
 		result = recv(s->data_sd, (char *) r->r[2], r->r[3], 0);
 		#ifdef TRACE
@@ -479,6 +490,7 @@ static _kernel_oserror *ftp_write_data_connection(Session *s, _kernel_swi_regs *
 	int result = send(s->data_sd, s->put_data.data + s->put_data.done, remaining, 0);
 
 	(void) r;
+	s->flags &= ~ftpflags_DONT_INCREMENT_TOTALS;
 
 	if (result > 0) {
 		s->put_data.done += result;
@@ -522,7 +534,9 @@ static _kernel_oserror *ftp_pump_data(Session *s, _kernel_swi_regs *r, ftp_arbit
 		r->r[2] += size;
 		r->r[3] -= size;
 		r->r[4] += size;
-		s->total_bytes_transferred += size;
+		if ((s->flags & ftpflags_DONT_INCREMENT_TOTALS) == 0) {
+		        s->total_bytes_transferred += size;
+		}
 		data->done += size;
 		if (data->done != data->length) {
 			return state_BLOCKING;
@@ -569,6 +583,7 @@ static char *ftp_copy_data_type(const char *uri)
 static _kernel_oserror *ftp_init_read_file(Session *s, _kernel_swi_regs *r)
 {
 	(void) r;
+	s->reported_state = status_READING_REPLY;
 	s->is_dir = 0;
 	if (s->headers_sent == 0) {
 		_kernel_oserror *e;
@@ -578,6 +593,7 @@ static _kernel_oserror *ftp_init_read_file(Session *s, _kernel_swi_regs *r)
 			data ? data : "application/octet-stream",
 			FTP_OK_DATA_2, NULL);
 		free(data);
+		s->flags |= ftpflags_DONT_INCREMENT_TOTALS;
 		return e;
 	}
 	else {
@@ -589,6 +605,7 @@ static _kernel_oserror *ftp_init_read_file(Session *s, _kernel_swi_regs *r)
 static _kernel_oserror *ftp_init_write_file(Session *s, _kernel_swi_regs *r)
 {
 	(void) r;
+	s->reported_state = status_READING_REPLY;
 	s->state = FTP_WRITE_DATA;
 	return NULL;
 }
@@ -599,6 +616,7 @@ static _kernel_oserror *ftp_init_read_directory(Session *s, _kernel_swi_regs *r)
         const int next_state = verbatim ? FTP_READ_DATA : FTP_READ_DIR_DATA;
 
 	(void) r;
+	s->reported_state = status_READING_REPLY;
 	s->is_dir = 1;
 
 	if (s->headers_sent == 0) {
@@ -671,6 +689,7 @@ static _kernel_oserror *ftp_got_retr_dir_response(Session *s, _kernel_swi_regs *
 			s->url, data ? "/\r\nContent-Type: text/html\r\n\r\n" : "/\r\n\r\n",
 			data, NULL);
 		if (data) free(data);
+		s->reported_state = status_READING_REPLY;
 		return e;
 	}
 }
@@ -893,6 +912,7 @@ static _kernel_oserror *ftp_got_stat_response(Session *s, _kernel_swi_regs *r)
 	if (cl != ftp_OK && cl != ftp_SERVER_ERROR) {
 		return gen_error(s, s->response.data);
 	}
+	s->reported_state |= status_SENT_REQUEST;
 	s->size = -1;
 	return vcommands_send(s, FTP_RETR_RESP_RECEIVED, "RETR", s->target_name);
 }
@@ -904,6 +924,7 @@ static _kernel_oserror *ftp_got_size_response(Session *s, _kernel_swi_regs *r)
 	if (ftp_class(s->response_code) != ftp_OK) {
 		return vcommands_send(s, FTP_STAT_RESP_RECEIVED, "STAT", s->target_name);
 	}
+	s->reported_state |= status_SENT_REQUEST;
 	s->size = atoi(s->response.data + 4);
 	return vcommands_send(s, FTP_RETR_RESP_RECEIVED, "RETR", s->target_name);
 }
@@ -1316,6 +1337,7 @@ static _kernel_oserror *ftp_got_pass_response(Session *s, _kernel_swi_regs *r)
 		default:
 		        if (s->user != NULL) {
 		                s->cacheable = 0;
+		                s->server_code = 401;
 				return ftp_start_client_pump_va(s, FTP_STATUS_ENDED, FTP_AUTH_REQUIRED,
 					s->user, FTP_AUTH_REQD_2, s->user, FTP_AUTH_REQD_3, NULL);
 		        }
@@ -1337,6 +1359,7 @@ static _kernel_oserror *ftp_got_user_response(Session *s, _kernel_swi_regs *r)
 		case ftp_PENDING:
 			if (s->user != NULL && (s->pass == NULL || s->pass[0] == '\0'))  {
 				s->cacheable = 0;
+				s->server_code = 401;
 				return ftp_start_client_pump_va(s, FTP_STATUS_ENDED, FTP_AUTH_REQUIRED,
 					s->user, FTP_AUTH_REQD_2, s->user, FTP_AUTH_REQD_3, NULL);
 			}
