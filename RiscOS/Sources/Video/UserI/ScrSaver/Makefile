@@ -88,12 +88,14 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources: ${APPTARGET}
+        Set ScrSaverRes$Path Resources.${Locale}.${UserIF}.${UI_VARIANT}.,Resources.{Locale}.{UserIF}.,Resources.UK.{UserIF}.${UI_VARIANT}.,Resources.UK.{UserIF}.
         ${MKDIR} ${RESDIR}.ScrSaver
-        ${CP} ${APPTARGET}                               ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
+        ${CP} ${APPTARGET}                    ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
         ${CP} Resources.!Run                  ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
-        ${CP} LocalRes:${UserIF}.Messages     ${RESDIR}.ScrSaver.Messages   ${CPFLAGS}
+        ${CP} ScrSaverRes:Messages            ${RESDIR}.ScrSaver.Messages   ${CPFLAGS}
+        ${CP} ScrSaverRes:Sprites             ${RESDIR}.ScrSaver.Sprites    ${CPFLAGS}
         ${CP} Resources.Templates             ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
-        ${SHRINK} LocalRes:${UserIF}.Sprites  ${RESDIR}.ScrSaver.Sprites
+        UnSet ScrSaverRes$Path
         @echo ${COMPONENT}: resource files copied
 
 #
