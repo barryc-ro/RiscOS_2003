@@ -123,6 +123,9 @@ Module_Base
  |
         DCD     0
  ]
+ [ :LNOT: No32bitCode
+        DCD     ModuleFlags          - Module_Base
+ ]
 
 Module_Name
         DCB     "SoundChannels", 0
@@ -202,6 +205,10 @@ Module_Keywords
 
         ALIGN
 
+ [ :LNOT: No32bitCode
+ModuleFlags
+        DCD     1       ; 32-bit compatible
+ ]
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0-r6 trashable
 
@@ -240,12 +247,14 @@ Tuning_Code ALTENTRY
         TEQ     r3, #"-"                ; if it was -ve, invert now
         RSBEQ   r2, r2, #0
 
+        Push    "r10,r11"
+        MOV     r0, #0
+        BL      SoundTuning             ; no need to call the SWI!
         CMP     r2, #0
         LDREQ   r0, =DefMasterPitch
-        MOVNE   r0, #0                  ; get old
-        SWINE   XSound_Tuning           ; preserves flags
         ADDNE   r0, r0, r2              ; offset by given amount
-        SWI     XSound_Tuning
+        BL      SoundTuning
+        Pull    "r10,r11"
         EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -324,7 +333,8 @@ ReturnError ; For star commands
 
         BL      CopyError
         PullEnv
-        ORRS    pc, lr, #V_bit
+        SETV
+        MOV     pc, lr
 
         MakeInternatErrorBlock BadSoundParameter,,M00
 
@@ -495,12 +505,22 @@ SoundDefault_Code ENTRY "r0-r2"
 ;       r12 = private word^
 
 Sound_SWI_Code ROUT
-
         LDR     wp, [r12]
-        TEQP    pc, #I_bit + SVC_mode   ; Disable IRQ, we probably expect it
+        Push    R14
+        PHPSEI  R14, R10
+        BL      Original_SWI_Code
+        Pull    R14
+        MOV     R10,#0
+        mrs  AL,R10,CPSR                ; NOP on pre-ARM6
+        TST     R10,#2_11100            ; EQ if in 26-bit mode - C,V unaltered
+        MOVNE   PC,R14                  ; 32-bit exit: NZ corrupted, CV passed back
+        MOVVCS  PC,R14                  ; 26-bit exit: NZC preserved, V clear
+        ORRVSS  PC,R14,#V_bit           ; 26-bit exit: NZC preserved, V set
+
+Original_SWI_Code
         CMP     r11, #(EndOfJumpTable-JumpTable)/4
         ADDCC   pc, pc, r11, LSL #2
-        MOVS    pc, lr                  ; Reenable caller's IRQ state
+        MOV     pc, lr
 
 JumpTable
         B       SoundVol     ; set master volume
@@ -536,8 +556,8 @@ SoundVol ENTRY
         STRNEB  r0, [r11, #SoundLevel1MaxAmp]
         BLNE    BuildLogTable
 
-        MOV     r0, r10                 ; return old
-        EXITS
+        ADDS    r0, r10, #0               ; return old, clears V
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Linear -> Log transform
@@ -553,7 +573,7 @@ SoundLog ROUT
         LDR     r10, [r11, #SoundLevel1LogTable]
 
         LDRB    r0, [r10, r0, LSR #19]  ; 2's comp to index
-        MOVS    pc, lr
+        MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Log amplitude modulation
@@ -570,7 +590,7 @@ SoundScale ROUT
 
         AND     r0, r0, #&FF            ; byte ONLY
         LDRB    r0, [r10, r0]           ; index includes sign
-        MOVS    pc, lr
+        MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0 is 0 or new master pitch value (16-bit)
@@ -580,14 +600,13 @@ SoundScale ROUT
 
 SoundTuning ROUT
 
-        CMP     r0, #0
-        MOVNE   r10, r0, LSL #16        ; mask to 16-bit
+        MOVS    r10, r0, ROR #16        ; mask to 16-bit, avoiding CMP r0, #0
         MOVNE   r10, r10, LSR #16
 
         LDR     r11, =SoundLevel1Base
         LDR     r0,  [r11, #SoundLevel1MasterPitch]
         STRNE   r10, [r11, #SoundLevel1MasterPitch]
-        MOVS    pc, lr
+        MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -670,14 +689,14 @@ installvoice1
 
         TEQ     r0, #0                          ; Old style interrogate
         MOVEQ   r0, r10                         ; so return name in R0
-        EXITS   EQ
+        EXIT    EQ
 
         MOV     r2, r10                         ; Name in R2 for new style
         ADRL    r3, LocalNameArray
         LDR     r3, [r3, r1, LSL #2]            ; Local name
         TEQ     r3, #0                          ; If no local name then
         MOVEQ   r3, r2                          ; return invariant name
-        EXITS
+        EXIT
 
 installvoice2
         LDR     r14, [r11, r1, LSL #2]  ; check if any existing voice here
@@ -692,15 +711,15 @@ installvoice2
 ; OSS New flavour insert.
         MOVEQ   r0, r2                          ; voice in r2 for new style
         STR     r0, [r11, r1, LSL #2]           ; r0in - allocate voice
-        BL      CheckAttachments                ; MUST PRESERVE FLAGS
-        EXITS   NE
+        BL      CheckAttachments                ; MUST PRESERVE FLAGS - actually only Z
+        EXIT    NE
         MOV     r0, #1
 
 ; OSS Jumps to here to change an existing local name
 
 install_change
         MOVS    r10, r3                         ; local name now in r10
-        EXITS   EQ                              ; Give up if no local name
+        EXIT    EQ                              ; Give up if no local name
 
         MOV     r3, #0
 42      LDRB    r14, [r10, r3]                  ; Count length of local name
@@ -742,23 +761,20 @@ install_change
         CMP     r14, #31                        ; <32 terminates
         BHI     %BT47
 
-        MOV     r14, #0
+        SUBS    r14, r14, r14                   ; R14=0, V cleared
         STRB    r14, [r2, r3]                   ; Null terminate our copy
-        CLRV
 
 ; restore registers and exit
 48      MOV     r3, r10
-        MOV     r2, r11
+        MOVS    r2, r11                         ; set up Z - check voice point zero
         EXIT    VS
 
-        TEQ     r2, #0                          ; Check voice point zero
         MOVEQ   r0, #3                          ; It was a name change
         MOVNE   r0, #1                          ; It was an install
-        EXITS
+        EXIT
 
 
 50 ; scan looking for first space to insert into
-
         MOV     r1, #1
 
 60      LDR     r14, [r11, r1, LSL #2]
@@ -774,7 +790,7 @@ install_change
         BLE     %BT60
 80
         MOV     r1, #0
-        EXITS
+        EXIT
 
 NullVoice
         DCB     "NullVoice", 0
@@ -788,9 +804,11 @@ NullVoice
 ; the voice to each such channel.
 ; In:   r0 -> voice generator
 ;       r1 = voice number
-; Out:  Preserve everything (especially flags)
+; Out:  Preserve everything (especially flags) - well, only Z really
 ;
-CheckAttachments ENTRY "r0-r4,r10"
+CheckAttachments ENTRY "r0-r5,r10"
+        MOVEQ   r5, #0
+        MOVNE   r5, #1
         MOV     r3, #SoundPhysChannels          ; start at last channel and work down to channel 1
         MOV     r4, r1
         LDR     r10, =SoundLevel1Base + SoundLevel1ChannelTable + SoundChannelVoiceIndexB - (1 :SHL: SoundChannelCBLSL)
@@ -803,7 +821,8 @@ CheckAttachments ENTRY "r0-r4,r10"
         SWIEQ   XSound_AttachVoice
         SUBS    r3, r3, #1
         BNE     %BT10
-        EXITS
+        MOVS    r5, r5                          ; restore Z
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0 is don't care
@@ -831,7 +850,7 @@ removevoice0
         LDR     r10, [r11, r1, LSL #2]  ; what's there ?
         CMP     r10, #0
         ADREQ   r0, NullVoice           ; [wasn't allocated]
-        EXITS   EQ
+        EXIT    EQ
 
         BL      CheckRemovals
 
@@ -849,13 +868,13 @@ removevoice0
         MOV     r10, #0
         STR     r10, [r11, r1, LSL #2]  ; deallocate voice
         STR     r10, [r3, r1, LSL #2]   ; zero out local name
-        EXITS
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; If a voice is removed then this is called to call the free entry of the
 ; voice for each channel which it is attached to.
 ; In:   r1 = voice number
-; Out:  Preserve everything
+; Out:  Preserve everything (except flags)
 ;
 CheckRemovals   ENTRY "r0-r4,r10"
         MOV     r3, #SoundPhysChannels          ; start at last channel and work down to channel 1
@@ -871,7 +890,7 @@ CheckRemovals   ENTRY "r0-r4,r10"
 20
         SUBS    r3, r3, #1
         BNE     %BT10
-        EXITS
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0 is channel number (1-8)
@@ -941,15 +960,15 @@ AttachVoice ENTRY "r2, r5"
         B       %FA85                   ; [bad voice]
 
 
-80      ADD     r0, r0, #1              ; renormalise channel no.
-        EXITS                           ; VClear
+80      ADDS    r0, r0, #1              ; renormalise channel no.
+        EXIT                            ; VClear
 
 
 85      ADR     r0, ErrorBlock_BadSoundVoice
 
-90      BL      CopyError
+90      BL      CopyError               ; Will set V
         PullEnv
-        ORRS    pc, lr, #V_bit
+        MOV     pc, lr
 
         MakeInternatErrorBlock BadSoundVoice,,M02
 
@@ -1019,12 +1038,11 @@ AttachNamedVoice ENTRY "r1, r3-r5"
         MOV     r1, r10                 ; attach voice by number
         SWI     XSound_AttachVoice      ; r0 is still channel number
         PullEnv
-        ORRVS   lr, lr, #V_bit
-        MOVS    pc, lr
+        MOV     pc, lr                  ; V alreay set how we want it!
 
-90      BL      CopyError
+90      BL      CopyError               ; sets V
         PullEnv
-        ORRS    pc, lr, #V_bit
+        MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; R0,R1 are copy of OSWORD params
@@ -1040,7 +1058,7 @@ SoundPacked ENTRY "r0-r6"
         MOV     r0, r0, LSR #16
         B       SoundShared
 
-; .............................................................................
+; ..............................................................................
 ; R0 - R3 as packed SoundOSWORD?
 ;       r10, r11 trashable
 
@@ -1052,7 +1070,7 @@ SoundShared ; channel processing
         AND     r4, r0, #&0F            ; r0b = channel number
         SUB     r4, r4, #1
         CMP     r4, #SoundPhysChannels
-        EXITS   HS
+        EXIT    HS
 
  [ True
         LDR     r14, =:INDEX: SoundSuppressAddr
@@ -1074,14 +1092,14 @@ SoundShared ; channel processing
 
         CMP     r4, #1                  ; my expansion
         BEQ     %FT20
-        EXITS                           ; otherwise unrecognised
+        EXIT                            ; otherwise unrecognised
 
 10 ; emulation of amp/(env !)
 
         MOV     r1, r1, LSL #16
         MOV     r1, r1, ASR #16         ; sign extend
         CMP     r1, #0
-        EXITS   GT                      ; ENVELOPE!
+        EXIT    GT                      ; ENVELOPE!
 
         SUB     r1, r1, #1              ; 0000 => -1
         AND     r1, r1, #&0F            ; accept -1 to -16 (&F to &0)
@@ -1155,7 +1173,8 @@ SoundShared ; channel processing
         ORREQ   r4, r4, #SoundChannelGateOn ; +SoundChannelGateOff
         ORRNE   r4, r4, #SoundChannelUpdate
         STRB    r4, [r6, #SoundChannelFlagsB]
-        EXITS
+        CLRV
+        EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0 is channel
@@ -1174,9 +1193,10 @@ ReadWord ROUT
         LDR     r11, =SoundLevel1Base + SoundLevel1ChannelTable
         ADD     r11, r11, r10, LSL #SoundChannelCBLSL ; address
         LDR     r2, [r11, r1]           ; get old
-        MOVS    pc, lr
+        CLRV
+        MOV     pc, lr
 
-; .............................................................................
+; ..............................................................................
 ; In    r0 is channel
 ;       r1 is offset to read from
 ;       r2 is data word to write
@@ -1195,13 +1215,13 @@ WriteWord ROUT
         ADD     r11, r11, r10, LSL #SoundChannelCBLSL ; address
         LDR     r10, [r11, r1]          ; get old
         STR     r2,  [r11, r1]
-        MOV     r2, r10                 ; return last
-        MOVS    pc, lr
+        ADDS    r2, r10, #0                 ; return last, clears V
+        MOV     pc, lr
 
 
 ReadWriteWordError
-        MOV     r0, #0                  ; return error
-        MOVS    pc, lr
+        SUBS    r0, r0, r0              ; return error (R0=0, clear V - apparently!)
+        MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0 is pitch
@@ -1227,7 +1247,7 @@ SoundPitch ROUT
         LDRLT   r11, [r11, r0, LSR #22] ; get 32-bit frac
         EORLT   r0, r0, #&F             ; invert octave
         MOVLT   r0, r11, LSR r0         ; build
-        MOVS    pc, lr
+        MOV     pc, lr                  ; V will be clear
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1346,8 +1366,8 @@ Level1Fill ROUT
    STMFD   R13!,{R1,R5,R6,R7,R8,R9,R10,R11,R12}
 ;; {R1} return address MUST BE LAST ON STACK!
    ADD     R12,R12,R7    ; R12 is Channel dma base
-   ORR     R2,R2,#&00000002 ; re-enable IRQs in fill code
-   MOVS    PC,R2        ; MUST return with LDMFD R13!,{PC} to re-disable IRQs
+   WritePSRc IRQ_mode, r5
+   MOV     PC,R2        ; MUST return with LDMFD R13!,{PC} to re-disable IRQs
 
 40 MOV     R1,#0
 41 ; Level1FlushLoop
@@ -1358,8 +1378,9 @@ Level1Fill ROUT
    CMP     R12,R10
    BLT     %41 ; Level1FlushLoop
    LDMFD   R13!,{PC}
-45 TEQP    PC,#&08000002 ; FORCE IRQ MODE, IRQS OFF
-   MOV     R0,R0 ; wait while bank settles!
+45
+   WritePSRc I_bit :OR: IRQ_mode, r5
+   MOV     R0,R0
    LDMFD   R13!,{R5,R6,R7,R8,R9,R10,R11,R12}
    B       %90 ; Next
 
@@ -1388,9 +1409,10 @@ Level1Fill ROUT
    STMFD   R13!,{R1,R5,R6,R7,R8,R9,R10,R11,R12}
 ;; {R1} return address MUST BE LAST ON STACK!
    ADD     R12,R12,R7    ; R12 is Channel dma base
-   ORR     R2,R2,#&00000002 ; re-enable IRQs in fill code
-   MOVS    PC,R2        ; MUST return with LDMFD R13!,{PC} to re-disable IRQs
-60 TEQP    PC,#&08000002 ; FORCE IRQ MODE, IRQS OFF
+   WritePSRc IRQ_mode, r5
+   MOV     PC,R2        ; MUST return with LDMFD R13!,{PC} to re-disable IRQs
+60
+   WritePSRc I_bit :OR: IRQ_mode, r5
    MOV     R0,R0 ; wait while bank settles!
    LDMFD   R13!,{R5,R6,R7,R8,R9,R10,R11,R12}
    LDRB    R1,[R9,#SoundChannelFlagsB]  ; update flags byte
@@ -1720,7 +1742,8 @@ Finalise_Module ENTRY
         MOV     r3, #SoundSystemNIL     ; Remove Level1 handler
         MOV     r4, #0
         SWI     XSound_Configure        ; Level0 SWI, won't give error
-        EXITS                           ; Mustn't refuse to die
+        CLRV
+        EXIT                            ; Mustn't refuse to die
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1748,7 +1771,7 @@ UService
  ]
         SUBS    r1, r1, #1
         BPL     %BT10                                ; loop for each channel
-        EXITS                                        ; No error returnable
+        EXIT                                         ; No error returnable
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1763,13 +1786,14 @@ lookup_r0 ENTRY r1-r7
         MOV     r6, #0
         MOV     r7, #0
         SWI     XMessageTrans_Lookup
-        EXIT    VS
-        MOV     r0, r2
+        MOVVC   r0, r2
         EXIT
 
 message_writes
         ENTRY   r0-r7
-        BIC     r0, lr, #&fc000003
+        SUB     r0, lr, pc
+        ADD     r0, pc, r0
+        SUB     r0, r0, #4
         MOV     r2, r0
 10      LDRB    r1, [r2], #1
         CMP     r1, #0
@@ -1793,9 +1817,9 @@ message_writes
         EXIT    VS
 10      LDRB    r0, [r2], #1
         CMP     r0, #32
+        EXIT    CC
         SWICS   XOS_WriteC
-        EXIT    VS
-        BCS     %B10
+        BVC     %B10
         EXIT
 
 CopyError ENTRY r1-r7
@@ -1837,3 +1861,4 @@ open_messagefile ENTRY r0-r2
  ]
 
         END
+
