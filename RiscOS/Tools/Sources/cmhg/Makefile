@@ -11,6 +11,8 @@
 #
 # Paths
 #
+LIBDIR	= <Tools$Dir>.Acorn
+
 #
 # Generic options:
 #
@@ -54,12 +56,14 @@ DFLAGS    = -DDDE
 #
 COMPONENT  = cmhg
 TARGET     = ${COMPONENT}
-SOURCE     = 
-EXPORTS    = 
+SOURCE     =
+EXPORTS    =
 
-OBJS=	o.cmhg o.outaof o.veneers o.throwback 
+OBJS=	o.cmhg o.outaof o.veneers o.throwback
 
 LIBS=	${CLXLIB} ${CLIB}
+
+DIRS    = o._dirs
 
 #
 # Rule patterns
@@ -85,24 +89,30 @@ export: export_${PHASE}
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
+install_tool: ${TARGET}
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+	${CP} Docs.${TARGET} ${LIBDIR}.Docs.${TARGET} ${CPFLAGS}
+	@echo ${COMPONENT}: tool and docs installed in library
+
 clean:
         ${WIPE} o ${WFLAGS}
         ${RM} ${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
-export_hdrs: 
+export_hdrs:
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: 
+export_libs:
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs: 
+${DIRS}:
 	${MKDIR} o
+	${TOUCH} $@
 
 #
 # Final link
 #
-${TARGET}: ${OBJS} ${LIBS} local_dirs
+${TARGET}: ${OBJS} ${LIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
 	${SQUEEZE} ${COMPONENT}
 
