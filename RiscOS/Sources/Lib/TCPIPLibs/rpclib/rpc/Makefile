@@ -18,15 +18,19 @@ CPFLAGS = ~cflnr~v
 
 INCLUDES=	TCPIPLibs:,C:
 
-CFLAGS = -c -pcc -I${INCLUDES} -Darm -DRISCOS -DCOMPAT_INET4 -depend !Depend
-CFLAGSM = -c -pcc -ff -zps1 -zM -I${INCLUDES} -Darm -DRISCOS -DCOMPAT_INET4 -depend !Depend
+OPTIONS=-DSUPPORT_TCP
+
+DEFINES=-Darm -DRISCOS -DDOMPAT_INET4 ${OPTIONS}
+
+CFLAGS = -c -pcc -I${INCLUDES} ${DEFINES} -depend !Depend ${THROWBACK} 
+CFLAGSM = -c -pcc -ff -zps1 -zM -I${INCLUDES} ${DEFINES} -depend !Depend ${THROWBACK}
 
 CFILES = c.auth_none c.auth_unix  c.authunix_p c.bindresvpo \
         c.clnt_gener c.clnt_perro c.clnt_raw c.clnt_simpl\
         c.clnt_udp c.rpc_dtable c.get_myaddr c.getrpcent c.getrpcport \
         c.pmap_clnt c.pmap_getma c.pmap_getpo c.pmap_prot \
         c.pmap_prot2 c.pmap_rmt c.rpc_prot c.rpc_common c.rpc_callms \
-        c.xdr c.xdr_array c.xdr_float c.xdr_mem \
+        c.xdr c.xdr_array c.xdr_float c.xdr_mem c.clnt_tcp \
         c.xdr_rec c.xdr_refere c.xdr_stdio
 
 OFILES = o.auth_none o.auth_unix  o.authunix_p o.bindresvpo \
@@ -34,7 +38,7 @@ OFILES = o.auth_none o.auth_unix  o.authunix_p o.bindresvpo \
         o.clnt_udp o.rpc_dtable o.get_myaddr o.getrpcent o.getrpcport \
         o.pmap_clnt o.pmap_getma o.pmap_getpo o.pmap_prot \
         o.pmap_prot2 o.pmap_rmt o.rpc_prot o.rpc_common o.rpc_callms \
-        o.xdr o.xdr_array o.xdr_mem \
+        o.xdr o.xdr_array o.xdr_mem o.clnt_tcp \
         o.xdr_rec o.xdr_refere o.xdr_stdio o.callback
 
 ZFILES = z.auth_none z.auth_unix  z.authunix_p z.bindresvpo \
@@ -42,7 +46,7 @@ ZFILES = z.auth_none z.auth_unix  z.authunix_p z.bindresvpo \
         z.clnt_udp z.rpc_dtable z.get_myaddr z.getrpcent z.getrpcport \
         z.pmap_clnt z.pmap_getma z.pmap_getpo z.pmap_prot \
         z.pmap_prot2 z.pmap_rmt z.rpc_prot z.rpc_common z.rpc_callms \
-        z.xdr z.xdr_array z.xdr_mem \
+        z.xdr z.xdr_array z.xdr_mem z.clnt_tcp \
         z.xdr_rec z.xdr_refere z.xdr_stdio o.callback
 
 HDRS = h.auth h.auth_unix h.clnt h.pmap_clnt \
