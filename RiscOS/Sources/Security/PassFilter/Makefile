@@ -191,35 +191,3 @@ rom_link:
 o.Header: h.Header
 
 # Dynamic dependencies:
-o.Module:	c.Module
-o.Module:	C:h.kernel
-o.Module:	C:h.swis
-o.Module:	C:Debuglib.h.Debuglib
-o.Module:	h.Module
-o.Module:	h.Filter
-o.Module:	h.Header
-o.Filter:	c.Filter
-o.Filter:	C:h.kernel
-o.Filter:	C:h.swis
-o.Filter:	tbox:h.wimp
-o.Filter:	C:DebugLib.h.DebugLib
-o.Filter:	h.Module
-o.Filter:	h.Filter
-o.Filter:	h.Header
-o.Header:	cmhg.Header
-o.Header:	VersionNum
-od.Module:	c.Module
-od.Module:	C:h.kernel
-od.Module:	C:h.swis
-od.Module:	C:Debuglib.h.Debuglib
-od.Module:	h.Module
-od.Module:	h.Filter
-od.Module:	h.Header
-od.Filter:	c.Filter
-od.Filter:	C:h.kernel
-od.Filter:	C:h.swis
-od.Filter:	tbox:h.wimp
-od.Filter:	C:DebugLib.h.DebugLib
-od.Filter:	h.Module
-od.Filter:	h.Filter
-od.Filter:	h.Header
