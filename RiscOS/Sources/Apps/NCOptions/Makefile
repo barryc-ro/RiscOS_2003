@@ -75,6 +75,9 @@ rom:	rom_aof
 	Echo		Component $(COMPONENT): 'rom' finished.
 
 
+install: install_ram
+
+
 install_ram:	ram_module
 	Copy		$(RAM_MODULE) $(INSTDIR).$(COMPONENT) ~cfr~v
 	Echo		Component $(COMPONENT): 'install_ram' finished.
