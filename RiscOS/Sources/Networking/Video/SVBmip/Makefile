@@ -9,9 +9,12 @@
 # 20-Sep-99  SAR          Forced fussy compilation
 
 COMPONENT = SVBmip
+SWI_PREFIX = SVB
+CMHG_HDR   = SVBmip
 RAM_MODULE = rm.${COMPONENT}
 ROM_MODULE = aof.${COMPONENT}
 DBG_MODULE = rm.${COMPONENT}D
+EXPORTS = <CExport$Dir>.h.${COMPONENT}
 
 #
 # Paths
@@ -77,7 +80,7 @@ DBG_OBJS        = od.Module od.mipSWI od.Parser od.Channels o.SVBmip
 .c.o:;          ${CC} ${CFLAGS} -o $@ $<
 .c.or:;         ${CC} ${CFLAGS} -DROM -o $@ $<
 .c.od:;         ${CC} ${CFLAGS} ${DBGFLAGS} -o $@ $<
-.cmhg.o:;       ${CMHG} ${CMHGFLAGS} -o $@ $< -d h.SVBmip
+.cmhg.o:;       ${CMHG} ${CMHGFLAGS} -o $@ $< -d h.${CMHG_HDR}
 .cmhg.h:;       ${CMHG} ${CMHGFLAGS} -d $@ $<
 .cmhg.od:;      ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;          ${AS} ${ASFLAGS} -o $@ $<
@@ -118,7 +121,7 @@ clean:
         ${WIPE} or ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
-        ${WIPE} h.SVBmip ${WFLAGS}
+        ${WIPE} h.${CMHG_HDR} ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
@@ -128,7 +131,8 @@ o._dirs:
         ${MKDIR} or
         create $@
 
-export:
+export: ${EXPORTS}
+        @echo
         @echo ${COMPONENT}: export complete
 
 
@@ -159,5 +163,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
+${EXPORTS}: h.Export
+        ${CP} h.Export $@ ${CPFLAGS}
+        Do ${AWK} -- "/.define ${SWI_PREFIX}\_00/,/endif/" h.${CMHG_HDR} >>$@
 
 # Dynamic dependencies:
