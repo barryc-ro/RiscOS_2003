@@ -28,6 +28,7 @@
 #					amu commandline
 #	23/03/98	0.11D	RDW	analyse target added
 #	27/05/98	0.12D	RDW	-ffa added to C++FLAGS
+#	16/07/98	0.13D	RDW	MIMEmsg.c++ and bodyrfc822.c++ added
 
 #
 # Paths
@@ -99,33 +100,38 @@ HDRS=		h.822parser body.h bodymulti.h contentT.h contentTE.h date.h elibbase.h e
 		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.h XNFdevicec.h \
 		XNFfaxnum.h XNFfaxpage.h XNFmsgclas.h XNFphoneno.h XNFserial.h XNFsoftrev.h Xorganiz.h \
 		subject.h base64.h ELib.h ELib_priv.h MIMEtext.h ELib_OS.h XNFrtnrcpt.h \
+		MIMEmsg.h bodyrfc822.h \
 		@.qautils.h.list @.qautils.h.olist @.qautils.h.indxlist
 
 OBJS=		o.822parser body.o bodymulti.o contentT.o contentTE.o date.o elibbase.o entity.o \
 		from.o header.o headers.o messageid.o MIMEentity.o MIMEimage.o MIMEmultip.o mimevers.o \
 		parameter.o replyto.o resentdate.o rfc822msg.o to.o XNFdevice.o XNFdevicec.o \
 		XNFfaxnum.o XNFfaxpage.o XNFmsgclas.o XNFphoneno.o XNFserial.o XNFsoftrev.o Xorganiz.o \
-		subject.o base64.o ELib.o ELib_priv.o MIMEtext.o ELib_OS.o XNFrtnrcpt.o
+		subject.o base64.o ELib.o ELib_priv.o MIMEtext.o ELib_OS.o XNFrtnrcpt.o \
+		MIMEmsg.o bodyrfc822.o 
 
 OBJSZ=		z.822parser z.body z.bodymulti z.contentT z.contentTE z.date z.elibbase z.entity \
 		z.from z.header z.headers z.messageid z.MIMEentity z.MIMEimage z.MIMEmultip z.mimevers \
 		z.parameter z.replyto z.resentdate z.rfc822msg z.to z.XNFdevice z.XNFdevicec \
 		z.XNFfaxnum z.XNFfaxpage z.XNFmsgclas z.XNFphoneno z.XNFserial z.XNFsoftrev z.Xorganiz \
-		z.subject z.base64 z.ELib z.ELib_priv z.MIMEtext z.ELib_OS z.XNFrtnrcpt
+		z.subject z.base64 z.ELib z.ELib_priv z.MIMEtext z.ELib_OS z.XNFrtnrcpt \
+		z.MIMEmsg z.bodyrfc822
 
 OBJSD =		od.822parser od.body od.bodymulti od.contentT od.contentTE od.date od.elibbase \
 		od.entity od.from od.header od.headers od.messageid od.MIMEentity od.MIMEimage \
 		od.MIMEmultip od.mimevers od.parameter od.replyto od.resentdate od.rfc822msg \
 		od.to od.XNFdevice od.XNFdevicec od.XNFfaxnum od.XNFfaxpage od.XNFmsgclas \
 		od.XNFphoneno od.XNFserial od.XNFsoftrev od.Xorganiz od.subject od.base64 od.ELib \
-		od.ELib_priv od.MIMEtext od.ELib_OS od.XNFrtnrcpt
+		od.ELib_priv od.MIMEtext od.ELib_OS od.XNFrtnrcpt \
+		od.MIMEmsg od.bodyrfc822
 
 OBJSCP=		cp.822parser cp.body cp.bodymulti cp.contentT cp.contentTE cp.date cp.elibbase \
 		cp.entity cp.from cp.header cp.headers cp.messageid cp.MIMEentity cp.MIMEimage \
 		cp.MIMEmultip cp.mimevers cp.parameter cp.replyto cp.resentdate cp.rfc822msg \
 		cp.to cp.XNFdevice cp.XNFdevicec cp.XNFfaxnum cp.XNFfaxpage cp.XNFmsgclas \
 		cp.XNFphoneno cp.XNFserial cp.XNFsoftrev cp.Xorganiz cp.subject cp.base64 cp.ELib \
-		cp.ELib_priv cp.MIMEtext cp.ELib_OS cp.XNFrtnrcpt
+		cp.ELib_priv cp.MIMEtext cp.ELib_OS cp.XNFrtnrcpt \
+		cp.MIMEmsg cp.bodyrfc822
 
 QAOBJS=		@.qautils.o.list @.qautils.o.olist @.qautils.o.indxlist
 
@@ -167,6 +173,10 @@ clean:		cleanqautils
 		$(WIPE) od.*		$(WFLAGS)
 		$(WIPE) z.*		$(WFLAGS)
 		$(WIPE) cp.*		$(WFLAGS)
+		$(RM) o
+		$(RM) od
+		$(RM) z
+		$(RM) cp
 		@echo $(COMPONENT): cleaned out
 
 export: export_${PHASE}

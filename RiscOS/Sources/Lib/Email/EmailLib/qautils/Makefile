@@ -103,12 +103,18 @@ all: 		${TARGET} ${TARGETZ}
 
 clean:		
 		$(WIPE) o.*		$(WFLAGS)
+		$(WIPE) od.*		$(WFLAGS)
 		$(WIPE) z.*		$(WFLAGS)
 		$(WIPE) l.*		$(WFLAGS)
+		$(RM) o
+		$(RM) od
+		$(RM) z
+		$(RM) l
                 @echo ${COMPONENT}: cleaned out
 
 local_dirs:
 	${MKDIR} o
+	${MKDIR} od
 	${MKDIR} z
 	${MKDIR} l
 
@@ -122,21 +128,3 @@ ${TARGETZ}:	$(OBJSZ) local_dirs
 		$(LIBFILE) -c -o $(TARGETZ) $(OBJSZ)
 
 # Dynamic dependencies:
-o.list:	c++.list
-o.list:	h.list
-o.olist:	c++.olist
-o.olist:	h.olist
-o.olist:	h.indxlist
-o.olist:	h.list
-o.indxlist:	c++.indxlist
-o.indxlist:	h.indxlist
-o.indxlist:	h.list
-o.list:	c++.list
-o.list:	h.list
-o.olist:	c++.olist
-o.olist:	h.olist
-o.olist:	h.indxlist
-o.olist:	h.list
-o.indxlist:	c++.indxlist
-o.indxlist:	h.indxlist
-o.indxlist:	h.list
