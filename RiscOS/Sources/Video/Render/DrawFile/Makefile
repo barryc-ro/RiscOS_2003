@@ -11,16 +11,13 @@
 #
 # Paths
 #
-VPATH = @ <Support$Dir>
-
-OSLIB_DEFS = <OSLibDef$Dir>
 
 RESDIR = <resource$dir>.Resources2
 
 #
 # Generic options:
 #
-CC     = cc -ISupport:,OS: -fach -wp -throwback -DDRAWFILE
+CC     = cc -IOS: -fach -wp -DDRAWFILE
 CP     = copy
 OBJASM = ObjAsm ${THROWBACK} -depend !Depend -stamp -quit
 CMHG   = CMHG
@@ -45,7 +42,6 @@ ABSSYM = RISC_OSLib:o.abssym
 #
 COMPONENT = DrawFile
 TARGET    = aof.DrawFile
-#EXPORTS   = ${OSLIB_DEFS}.DrawFile
 
 
 OBJS = o.bbox o.callback o.declare o.header o.main \
@@ -93,9 +89,6 @@ resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.Messages       ${RESDIR}.${COMPONENT}.Messages       ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
-
-#${OSLIB_DEFS}.DrawFile: def.DrawFile
-#        ${CP} def.DrawFile $@ ${CPFLAGS}
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -178,38 +171,6 @@ o.Message310: Resources.Message310
 #                Wipe l.$* ~C~FR~V
 
 # Dynamic dependencies:
-oSA.main:	c.main
-oSA.main:	C:h.kernel
-oSA.main:	OS:h.messagetrans
-oSA.main:	OS:h.types
-oSA.main:	OS:h.os
-oSA.main:	OS:h.macros
-oSA.main:	OS:h.os
-oSA.main:	OS:h.osfile
-oSA.main:	OS:h.osmodule
-oSA.main:	OS:h.resourcefs
-oSA.main:	Support:h.m
-oSA.main:	Support:h.realloc
-oSA.main:	Support:h.trace
-oSA.main:	Support:h.riscos
-oSA.main:	OS:h.territory
-oSA.main:	Support:h.trace
-oSA.main:	h.bbox
-oSA.main:	OS:h.drawfile
-oSA.main:	OS:h.osspriteop
-oSA.main:	OS:h.draw
-oSA.main:	OS:h.font
-oSA.main:	OS:h.wimp
-oSA.main:	OS:h.jpeg
-oSA.main:	h.declare
-oSA.main:	Support:h.callback
-oSA.main:	h.main
-oSA.main:	C:h.kernel
-oSA.main:	h.files
-oSA.main:	h.render
-oSA.main:	h.verify
-o.files: asm.files
-o.files: OS:Hdr.Types
 o.bbox:	c.bbox
 o.bbox:	OS:h.drawfile
 o.bbox:	OS:h.types
@@ -220,24 +181,25 @@ o.bbox:	OS:h.font
 o.bbox:	OS:h.wimp
 o.bbox:	OS:h.jpeg
 o.bbox:	OS:h.os
-o.bbox:	Support:h.trace
-o.bbox:	Support:h.trfm
+o.bbox:	h.jc_trace
+o.bbox:	h.trfm
 o.bbox:	h.bbox
 o.bbox:	h.main
 o.bbox:	C:h.kernel
 o.bbox:	OS:h.messagetrans
-o.bbox:	Support:h.callback
+o.bbox:	h.callback
 o.bbox:	h.verify
-o.callback:	<Support$Dir>.c.callback
+o.callback:	c.callback
 o.callback:	OS:h.types
-o.callback:	<Support$Dir>.h.callback
+o.callback:	h.callback
 o.callback:	OS:h.os
-o.callback:	<Support$Dir>.h.trace
-o.callback:	<Support$Dir>.h.m
-o.callback:	<Support$Dir>.h.realloc
-o.callback:	<Support$Dir>.h.riscos
+o.callback:	C:h.trace
+o.callback:	h.m
+o.callback:	h.realloc
+o.callback:	C:h.trace
+o.callback:	h.riscos
 o.callback:	OS:h.territory
-o.callback:	<Support$Dir>.h.trace
+o.callback:	C:h.trace
 o.declare:	c.declare
 o.declare:	OS:h.drawfile
 o.declare:	OS:h.types
@@ -250,12 +212,12 @@ o.declare:	OS:h.jpeg
 o.declare:	OS:h.os
 o.declare:	OS:h.pdriver
 o.declare:	OS:h.messagetrans
-o.declare:	Support:h.riscos
+o.declare:	h.riscos
 o.declare:	OS:h.territory
-o.declare:	Support:h.trace
-o.declare:	Support:h.trfm
+o.declare:	h.jc_trace
+o.declare:	h.trfm
 o.declare:	h.declare
-o.declare:	Support:h.callback
+o.declare:	h.callback
 o.declare:	h.main
 o.declare:	C:h.kernel
 o.declare:	h.textarea
@@ -271,12 +233,12 @@ o.main:	OS:h.osfile
 o.main:	OS:h.fileswitch
 o.main:	OS:h.osmodule
 o.main:	OS:h.resourcefs
-o.main:	Support:h.m
-o.main:	Support:h.realloc
-o.main:	Support:h.trace
-o.main:	Support:h.riscos
+o.main:	h.m
+o.main:	h.realloc
+o.main:	C:h.trace
+o.main:	h.riscos
 o.main:	OS:h.territory
-o.main:	Support:h.trace
+o.main:	h.jc_trace
 o.main:	h.bbox
 o.main:	OS:h.drawfile
 o.main:	OS:h.osspriteop
@@ -285,13 +247,13 @@ o.main:	OS:h.font
 o.main:	OS:h.wimp
 o.main:	OS:h.jpeg
 o.main:	h.declare
-o.main:	Support:h.callback
+o.main:	h.callback
 o.main:	h.main
 o.main:	C:h.kernel
 o.main:	h.files
 o.main:	h.render
 o.main:	h.verify
-o.muldiv: <Support$Dir>.asm.muldiv
+o.muldiv: asm.muldiv
 o.render:	c.render
 o.render:	OS:h.colourtrans
 o.render:	OS:h.types
@@ -302,13 +264,13 @@ o.render:	OS:h.draw
 o.render:	OS:h.jpeg
 o.render:	OS:h.macros
 o.render:	OS:h.os
-o.render:	Support:h.callback
-o.render:	Support:h.trace
-o.render:	Support:h.muldiv
-o.render:	Support:h.riscos
+o.render:	h.callback
+o.render:	C:h.trace
+o.render:	h.muldiv
+o.render:	h.riscos
 o.render:	OS:h.territory
-o.render:	Support:h.trace
-o.render:	Support:h.trfm
+o.render:	h.jc_trace
+o.render:	h.trfm
 o.render:	OS:h.drawfile
 o.render:	OS:h.wimp
 o.render:	h.main
@@ -317,7 +279,7 @@ o.render:	OS:h.messagetrans
 o.render:	h.render
 o.render:	h.textarea
 o.render:	h.verify
-o.riscos:	<Support$Dir>.c.riscos
+o.riscos:	c.riscos
 o.riscos:	OS:h.messagetrans
 o.riscos:	OS:h.types
 o.riscos:	OS:h.os
@@ -327,13 +289,12 @@ o.riscos:	OS:h.territory
 o.riscos:	OS:h.wimp
 o.riscos:	OS:h.osspriteop
 o.riscos:	OS:h.font
-o.riscos:	<Support$Dir>.h.m
-o.riscos:	<Support$Dir>.h.realloc
-o.riscos:	<Support$Dir>.h.trace
-o.riscos:	<Support$Dir>.h.riscos
-o.riscos:	<Support$Dir>.h.trace
-o.riscos:	<Support$Dir>.h.x
-o.riscosa: <Support$Dir>.asm.riscosa
+o.riscos:	h.m
+o.riscos:	h.realloc
+o.riscos:	C:h.trace
+o.riscos:	h.riscos
+o.riscos:	C:h.trace
+o.riscosa: asm.riscosa
 o.riscosa: OS:Hdr.OS
 o.riscosa: OS:Hdr.Types
 o.textarea:	c.textarea
@@ -347,12 +308,12 @@ o.textarea:	OS:h.macros
 o.textarea:	OS:h.os
 o.textarea:	OS:h.pdriver
 o.textarea:	OS:h.messagetrans
-o.textarea:	Support:h.callback
-o.textarea:	Support:h.trace
-o.textarea:	Support:h.riscos
+o.textarea:	h.callback
+o.textarea:	C:h.trace
+o.textarea:	h.riscos
 o.textarea:	OS:h.territory
-o.textarea:	Support:h.trace
-o.textarea:	Support:h.trfm
+o.textarea:	h.jc_trace
+o.textarea:	h.trfm
 o.textarea:	OS:h.drawfile
 o.textarea:	OS:h.wimp
 o.textarea:	OS:h.jpeg
@@ -360,20 +321,20 @@ o.textarea:	h.main
 o.textarea:	C:h.kernel
 o.textarea:	h.textarea
 o.textarea:	h.verify
-o.trfm:	<Support$Dir>.c.trfm
+o.trfm:	c.trfm
 o.trfm:	OS:h.macros
 o.trfm:	OS:h.os
 o.trfm:	OS:h.types
-o.trfm:	<Support$Dir>.h.muldiv
-o.trfm:	<Support$Dir>.h.trace
-o.trfm:	<Support$Dir>.h.trfm
+o.trfm:	h.muldiv
+o.trfm:	C:h.trace
+o.trfm:	h.trfm
 o.verify:	c.verify
 o.verify:	OS:h.macros
 o.verify:	OS:h.os
 o.verify:	OS:h.types
-o.verify:	Support:h.riscos
+o.verify:	h.riscos
 o.verify:	OS:h.territory
-o.verify:	Support:h.trace
+o.verify:	h.jc_trace
 o.verify:	OS:h.drawfile
 o.verify:	OS:h.osspriteop
 o.verify:	OS:h.draw
@@ -383,5 +344,5 @@ o.verify:	OS:h.jpeg
 o.verify:	h.main
 o.verify:	C:h.kernel
 o.verify:	OS:h.messagetrans
-o.verify:	Support:h.callback
+o.verify:	h.callback
 o.verify:	h.verify
