@@ -6,6 +6,8 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 23-Feb-95  AMcC         Created.
+# 29-Nov-95  RWB          Added install: option
+#  6-Jan-96  NDT          Moved list file to machine (new) directory
 #
 
 #
@@ -26,11 +28,11 @@ WFLAGS  = ~cr~v
 # Program specific options:
 #
 COMPONENT   = CDFSRes
-VERSION     = 2.34
+VERSION     = 2.36
 TARGET      = rm.CDFSRes
 MODULE_HELP = "CDFSResources"
 MODULE_NAME = CDFSResources
-FILELIST    = Resources.${LOCALE}.List
+FILELIST    = Resources.${LOCALE}.${MACHINE}.List
 
 #
 # Generic rules:
@@ -41,6 +43,10 @@ rom: ${TARGET}
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
+
+install: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: module installed
 
 clean:
         ${RM} ${TARGET}
