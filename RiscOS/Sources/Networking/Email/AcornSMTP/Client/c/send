@@ -4,7 +4,7 @@
 
 	FILE:		send.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.04 for RISC OS
+	VERSION:	0.05 for RISC OS
 
 	OVERVIEW
 	========
@@ -21,6 +21,8 @@
 					on a EWOULDBLOCK.  Also, on exit now
 					ensures there is no callafter or
 					callback pending
+	02/06/98	0.05	RDW	Re-entracy changes as per cmdresp.c
+					0.05
 */
 
 
@@ -55,6 +57,7 @@
 #include "errortable.h"
 #include "callbacks.h"
 #include "send.h"
+#include "smtp_utils.h"
 
 
 /* ************************************************************************** */
@@ -68,11 +71,13 @@ typedef enum
   SEND_PART,
   ERROR,
   COMPLETED
-} send_STATES;								/* States for send_from_server FSM                                */
+} send_STATES;									/* States for send_from_server FSM                                */
 
 typedef struct
 {
-  int               sem;
+  BOOL              in_FSM;							/* Thread currently executing in FSM                                   */
+  BOOL              pending_CB;							/* There is a CallBack/re-entrancy into the FSM pending                */
+  BOOL              need_CB;							/* There needs to be a CallBack set to re-enter the FSM                */
   int               s;								/* socket to read from                                                 */
   int               timeout;							/* timeout for this send line                                          */
   CONNECTION_EVENT  event;							/* event from Internet Event handler if it is driving the FSM          */
@@ -126,6 +131,7 @@ static void              send_FSM_COMPLETED(send_context *context);
 										   are really needed or not...*/
 static _kernel_oserror*  send_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror*  send_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror*  CA_send_to_server(void *data);
 
 
 /* ************************************************************************** */
@@ -174,11 +180,11 @@ extern _kernel_oserror *send_to_server(int               s,
   _kernel_oserror *error = 0;
   
   if ((s < 0) || (func == 0) || (internet_err == 0))				/* If invalid socket or function */
-    error = ERROR(NULLADDR);						/* error is NULL address         */
+    error = ERROR(NULLADDR);							/* error is NULL address         */
   
   if (!error)
   {
-    send_context *context = new_send_context();			/* create a new context for the FSM */
+    send_context *context = new_send_context();					/* create a new context for the FSM */
     process1.send_context = context;
     
     if (context)
@@ -195,13 +201,11 @@ extern _kernel_oserror *send_to_server(int               s,
       context->end      = FALSE;
       context->data     = data;
       context->error2   = error2;
-//      error = send_FSM(context);
-//      error = callx_add_callafter(SLEEP_TIME, &send_CAhandler, context);
-/*      process1.state = SEND;*/
+      process1.state    = PROCESSING;						/* make sure main state is IDLE so event handler doesn't do anything */
       error = CB_send_to_server(context);
     }
     else									/* else, malloc failed           */
-      error = ERROR(MALLOCFAILED);					/* return error                  */
+      error = ERROR(MALLOCFAILED);						/* return error                  */
   }
 
   return error;
@@ -230,14 +234,13 @@ extern _kernel_oserror *send_to_server(int               s,
 /* ************************************************************************** */
 static send_context *new_send_context(void)
 {
-  send_context *c = malloc(sizeof(send_context));			/* create new context        */
+  send_context *c = malloc(sizeof(send_context));				/* create new context        */
   
   if (c)									/* if created, initialise it */
   {
-    memset(c, 0, sizeof(send_context));					/* init. context to NULL     */
+    memset(c, 0, sizeof(send_context));						/* init. context to NULL     */
     c->s        = -1;								/* init. socket to INVALID   */
     c->state    = INIT;								/* init. FSM state           */
-    c->sem      = 0;
   }
   
   return c;
@@ -255,8 +258,7 @@ static _kernel_oserror *send_FSM(send_context *context)
   if (!error)
   {
     context->t_slice = clock() + TIME_SLICE;
-    context->sem--;
-    if (context->sem < 0) context->sem = 0;
+    context->exit = FALSE;
     do
     {
       if (context->error)
@@ -303,26 +305,30 @@ static _kernel_oserror *send_FSM(send_context *context)
     } while ((!expired(context->t_slice)) && (!context->end) && (!context->exit));	// end while on FSM
   }
   
-//      callx_remove_callafter(&send_CAhandler, context);
-//      callx_remove_callback(&send_CBhandler, context);
   if (!error)
   {
-    if (context->end)
+    int state = smtp_irqs_off();						/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
-      process1.state = PROCESSING;
-      callx_remove_callafter(&send_CAhandler, context);
-      callx_remove_callback(&send_CBhandler, context);
-      free(context);
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&send_CAhandler, context);				/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&send_CBhandler, context);				/* Ensure any pending callback is removed     */
+      free(context);								/* destroy the context                        */
       context = 0;
     }
-    else if (!context->exit)
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
     {
-      error = CA_send_to_server(context);
-//      error = callx_add_callafter(SLEEP_TIME, &send_CAhandler, context);
-//      error = set_callback(/*CB_DATA_SENDLINE, */CB_CALLER_FSM, EVENT_NONE, send_CBhandler, context);
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_send_to_server(context);					/* set a callafter to re-enter the FSM later  */
     }
-    else
-      context->exit = FALSE;
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_send_to_server(context);					/* set a callback to re-enter the FSM         */
+    }
+    smtp_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
 
   return error;
@@ -331,34 +337,38 @@ static _kernel_oserror *send_FSM(send_context *context)
 
 extern _kernel_oserror* CB_send_to_server(void *data)
 {
-  send_context *c = (send_context*)data;
+  _kernel_oserror *error = 0;
+  int              state;
+  send_context *context = (send_context*)data;
   
-  if (c->sem == 0)
+  if (context)
   {
-    dprintf(("", "SETTING CALLBACK to send\n"));
-    c->sem++;
-    if (expired(c->t_slice))						/* if our t_slice is exhausted then callback */
-      return callx_add_callback(&send_CBhandler, data);
-    else
-      return callx_add_callafter(SLEEP_TIME, &send_CAhandler, c);	/* else, do call after to introduce a break */
+    state = smtp_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&send_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    smtp_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
   }
   else
-    return 0;
+    error = ERROR(NULLADDR);
+    
+  return error;
 }
 
 
 extern _kernel_oserror* CA_send_to_server(void *data)
 {
-  send_context *c = (send_context*)data;
-  
-  if (c->sem == 0)
-  {
-    dprintf(("", "SETTING CALLAFTER to send\n"));
-    c->sem++;
-    return callx_add_callafter(SLEEP_TIME, &send_CAhandler, c);
-  }
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &send_CAhandler, data);
   else
-    return 0;
+    return ERROR(NULLADDR);
 }
 
 
@@ -367,16 +377,32 @@ extern _kernel_oserror* send_CAhandler(_kernel_swi_regs *r, void *pw, void *data
   UNUSED(r);
   UNUSED(pw);
   
-  return callx_add_callback(&send_CBhandler, data);
+  return CB_send_to_server(data);
 }
 
 
 extern _kernel_oserror* send_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  send_context *context = (send_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
+  dprintf(("", "ENTERED: send_CBhandler\n"));
   UNUSED(r);
   UNUSED(pw);
   
-  return send_FSM(data);
+  if (context)
+  {
+    state = smtp_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    smtp_restore_irqs(state);
+    error = send_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
 }
 
 

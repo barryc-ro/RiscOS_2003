@@ -4,7 +4,7 @@
 
 	FILE:		sendmail.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.14 for RISC OS
+	VERSION:	0.15 for RISC OS
 
 	OVERVIEW
 	========
@@ -58,6 +58,12 @@
 	06/04/98	0.14	RDW	#ifdef MEMCHECK changed to MemCheck_MEMCHECK
 				RDW	Elib_priv.h taken from EmailLib now
 					DebugLib taken from exported lib now
+	28/05/98	0.15	RDW	moved switch to process1.state CONNECTING to
+					exit from CONNECT state where it should be!
+					And ensure on end of FSM CallAfter/Backs
+					are removed and process1.state = PROCESSING
+					Fixed MemCheck faulting on read in GET_HOST_NB
+					Re-entracy changes as per cmdresp.c 0.05
 */
 
 
@@ -160,6 +166,9 @@ typedef enum
 
 typedef struct
 {
+  BOOL                in_FSM;							/* Thread currently executing in FSM                   */
+  BOOL                pending_CB;						/* There is a CallBack/re-entrancy into the FSM pending*/
+  BOOL                need_CB;							/* There needs to be a CallBack set to re-enter the FSM*/
   time_t              t_slice;							/* timeslice, time to exit FSM by for re-entracy later */
   _kernel_oserror    *error;							/* OS error                                            */
   int                 errno;							/* Internet errno copy                                 */
@@ -244,6 +253,7 @@ static void strip_CRLF(char *string);						/* function to walk down a null termi
 void do_senders(int timeout, sendmail_context *c);
 void do_recipients(int timeout, sendmail_context *c);
 void data(int timeout, sendmail_context *c);
+static _kernel_oserror* CA_sendmail(void *data);
 
 
 /* ************************************************************************** */
@@ -390,7 +400,7 @@ extern _kernel_oserror* sendmail(BOOL  file,
         context->num_of_senders = num_senders;
         context->port_number = port_number;
         process1.sendmail_context = context;
-        process1.state = CONNECTING;
+        process1.state = PROCESSING;
         
         dprintf(("", "recipients: &%x\nnum_recipients: %d\nsenders: &%x\nnum_senders: %d\nport_number: %d\nhostname: %s\n", context->recipients, context->num_of_recipients, context->senders, context->num_of_senders, context->port_number, context->hostname));
         error = CB_sendmail(context);						/* set a callback to re-enter the FSM later   */
@@ -506,6 +516,7 @@ static _kernel_oserror *sendmail_FSM(sendmail_context *context)
   if (!error)
   {
     context->t_slice = clock() + TIME_SLICE;
+    context->exit = FALSE;
     do										/* FSM do-while loop                    */
     {
       if ((context->error) && (context->state != FATALERROR))
@@ -611,16 +622,29 @@ static _kernel_oserror *sendmail_FSM(sendmail_context *context)
   
   if (!error)
   {
-    if (context->end)								/* if end of the FSM                          */
+    int state = smtp_irqs_off();						/* CRITICAL SECTION start, turn off interrupts */
+    context->in_FSM = FALSE;							/* Clear the in_FSM flag as we are about to return */
+    if (context->end)								/* If this is the end of the FSM execution, then */
     {
+      process1.state = PROCESSING;						/* Ensure main state is IDLE                  */
+      callx_remove_callafter(&sendmail_CAhandler, context);			/* Ensure any pending callafter is removed    */
+      callx_remove_callback(&sendmail_CBhandler, context);			/* Ensure any pending callback is removed     */
       process1.socknum = context->sock;
       destroy_sendmail_context(&context);
       notify_client(&(process1.sendmail));
     }
-    else if (!context->exit)							/* else, if not told to exit FSM, then        */
-      error = CA_sendmail(context);						/* set a callback to re-enter the FSM later   */
-    else									/* else we were told to exit the FSM as it    */
-      context->exit = FALSE;							/* will be called back by anothe event        */
+    else if (!context->exit)							/* else, if exit not set then t_slice must have expired, so */
+    {
+      context->pending_CB = FALSE;						/* ensure pending flag is FALSE, it should be */
+      context->need_CB = FALSE;							/* set need_CB to FALSE as we are going to set a callback */
+      error = CA_sendmail(context);						/* set a callafter to re-enter the FSM later  */
+    }
+    else if (context->need_CB)							/* else, if need callback flag is set, then   */
+    {
+      context->need_CB = FALSE;							/* clear the flag and                         */
+      error = CB_sendmail(context);						/* set a callback to re-enter the FSM         */
+    }
+    smtp_restore_irqs(state);							/* End of CRITICAL SECTION, restore irqs      */
   }
   
   return error;
@@ -629,13 +653,38 @@ static _kernel_oserror *sendmail_FSM(sendmail_context *context)
 
 extern _kernel_oserror* CA_sendmail(void *data)
 {
-  return callx_add_callafter(SLEEP_TIME, &sendmail_CAhandler, data);
+  if (data)
+    return callx_add_callafter(SLEEP_TIME, &sendmail_CAhandler, data);
+  else
+    return ERROR(NULLADDR);
 }
 
 
 extern _kernel_oserror* CB_sendmail(void *data)
 {
-  return callx_add_callback(&sendmail_CBhandler, data);
+  _kernel_oserror *error = 0;
+  int              state;
+  sendmail_context *context = (sendmail_context*)data;
+  
+  if (context)
+  {
+    state = smtp_irqs_off();							/* CRITICAL SECTION - Turn off interrupts */
+    if (!context->pending_CB)							/* If there is not a callback already set to go off, then */
+    {
+      if (context->in_FSM)							/* If there is currently a thread of execution in the FSM, then */
+        context->need_CB = TRUE;						/* a callback needs to be set by that thread when it terminats  */
+      else									/* otherwise */
+      {
+        context->pending_CB = TRUE;						/* We can set a callback, so set the flag and set the callback */
+        error = callx_add_callback(&sendmail_CBhandler, data);
+      }										/* endif current thread executing check */
+    }										/* endif pending callback check */
+    smtp_restore_irqs(state);							/* End of CRITICAL SECTION - Restore interrupts */
+  }
+  else
+    error = ERROR(NULLADDR);
+    
+  return error;
 }
 
   
@@ -643,16 +692,35 @@ static _kernel_oserror* sendmail_CAhandler(_kernel_swi_regs *r, void *pw, void *
 {
   UNUSED(r);
   UNUSED(pw);
+
   dprintf(("", "ENTERED: get_line_CAhandler\n"));
-  return callx_add_callback(&sendmail_CBhandler, data);
+
+  return CB_sendmail(data);
 }
 
 
 static _kernel_oserror *sendmail_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
 {
+  sendmail_context *context = (sendmail_context*)data;
+  int state;
+  _kernel_oserror *error = 0;
+  
+  dprintf(("", "ENTERED: sendmail_CBhandler\n"));
   UNUSED(r);
   UNUSED(pw);
-  return sendmail_FSM(data);
+  
+  if (context)
+  {
+    state = smtp_irqs_off();
+    context->in_FSM     = TRUE;
+    context->pending_CB = FALSE;
+    smtp_restore_irqs(state);
+    error = sendmail_FSM(data);
+  }
+  else
+    error = ERROR(NULLADDR);
+  
+  return error;
 }
 
 
@@ -761,15 +829,23 @@ static void sendmail_FSM_GET_HOST_NB(sendmail_context *c)
     {
       /* success */
       c->smtp_server = (struct hostent*)c->r.r[1];
+      #ifdef MemCheck_MEMCHECK
+        MemCheck_RegisterMiscBlock((void*)c->smtp_server->h_length, sizeof(c->smtp_server->h_length));
+        MemCheck_RegisterMiscBlock((void*)c->smtp_server->h_addr, c->smtp_server->h_length);
+      #endif
       memcpy((char*)&(c->smtp_server_addr.sin_addr),
              c->smtp_server->h_addr,
              c->smtp_server->h_length);
       c->smtp_server_addr.sin_family = AF_INET;
       c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT               */
       #ifdef MemCheck_MEMCHECK  
-        MemCheck_UnRegisterMiscBlock((void*)c->r.r[1]);
+        MemCheck_UnRegisterMiscBlock((void*)c->smtp_server->h_length);
+        MemCheck_UnRegisterMiscBlock((void*)c->smtp_server->h_addr);
       #endif
     }
+    #ifdef MemCheck_MEMCHECK  
+      MemCheck_UnRegisterMiscBlock((void*)c->r.r[1]);
+    #endif
   }
 }
 
@@ -888,6 +964,7 @@ static void sendmail_FSM_CONNECT(sendmail_context *c)
     else if (errno != EISCONN)							/* else if error is NOT ALREADY CONNECTED then                            */
     {
       c->state = CONNECT;							/* stay in this state                                                     */
+      process1.state = CONNECTING;      
       c->exit = TRUE;
     }
     else									/* else, we are connected so switch to GREETING state                     */
