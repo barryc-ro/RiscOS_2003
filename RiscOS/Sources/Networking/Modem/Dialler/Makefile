@@ -70,11 +70,11 @@ ROMTARGET	= aof.Dialler
 EXPORTS		= ${EXP_C_H}.${COMPONENT}
 
 OBJS =\
+ o.asmutils\
  o.chat\
  o.dialler\
  o.error\
  o.handlers\
- o.interrupts\
  o.list\
  o.log\
  o.modhdr\
@@ -85,11 +85,11 @@ OBJS =\
  o.utils
 
 OBJSD =\
+ od.asmutils\
  od.chat\
  od.dialler\
  od.error\
  od.handlers\
- od.interrupts\
  od.list\
  od.log\
  od.module\
@@ -100,11 +100,11 @@ OBJSD =\
  od.utils
 
 OLDOBJS =\
+ o.asmutils\
  o_old.chat\
  o_old.dialler\
  o_old.error\
  o_old.handlers\
- o.interrupts\
  o_old.list\
  o_old.log\
  o_old.modhdr\
@@ -115,11 +115,11 @@ OLDOBJS =\
  o_old.utils
 
 OLDOBJSD =\
+ o.asmutils\
  od_old.chat\
  od_old.dialler\
  od_old.error\
  od_old.handlers\
- od.interrupts\
  od_old.list\
  od_old.log\
  od_old.modhdr\
