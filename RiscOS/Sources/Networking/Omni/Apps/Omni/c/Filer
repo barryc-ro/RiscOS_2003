@@ -216,8 +216,8 @@ _kernel_oserror *fs_initialise(const char *cmd_tail, int podule_base, void *priv
 
   debug_initialise ("", "Omni", NULL);
   debug_set_options (0, 0, 0);
-  debug_output_device (FILE_OUTPUT);
-  debug_initialise_trace (FILE_OUTPUT, "memcheck*");
+  debug_output_device (TML_OUTPUT);
+  debug_initialise_trace (TML_OUTPUT, "memcheck*");
 
   MemCheck_InitNoDebug ();
   MemCheck_RedirectToFunction (memcheck_vprintf, 0);
@@ -411,7 +411,8 @@ _kernel_oserror *fs_command(const char *arg_string, int argc, int cmd_no, void *
 
         /* Check we are really in the desktop.
          */
-        dprintf (("", "OMNI running for first time - checking Desktop running\n"));
+        dprintf (("", "running for first time\n"));
+        dprintf (("", "checking Desktop running\n"));
 
         /* Check number of active tasks */
         if (_swix (Wimp_ReadSysInfo, _IN (0) | _OUT (0), 0, &active) == NULL)
@@ -427,12 +428,13 @@ _kernel_oserror *fs_command(const char *arg_string, int argc, int cmd_no, void *
         }
         if (!start)
         {
+          dprintf (("", "not starting\n"));
           /* Preserve command line string, because we'll start later */
           if (argc > 1) MountCLI(arg_string, false);
           return(NULL);
         }
 
-        dprintf (("", "OMNI running for first time - calling Desktop_OmniClient\n"));
+        dprintf (("", "entering module startcode\n"));
         currentslot = 32*1024;
         nextslot = -1;
         Desk_Wimp_SlotSize(&currentslot, &nextslot, &freepool);
@@ -440,7 +442,7 @@ _kernel_oserror *fs_command(const char *arg_string, int argc, int cmd_no, void *
       }
       else
       {
-        dprintf (("", "OMNI running for nth time\n"));
+        dprintf (("", "running for nth time\n"));
         return(MakeError(err_RESTART));
       }
       break;
@@ -950,9 +952,9 @@ static _kernel_oserror *SendJob(_kernel_swi_regs *r)
   if ((cr = ClientFind(pr->client_id, NULL, -1, NULL)) == NULL)
     return(MakeError(err_NOTREGISTERED));
   /* Make call onto client */
-  err = _swix (pr->client_id, _INR (0, 3) | _OUT (3),
-               11, pr->pjob_id, r->r[1], r->r[2],
-               &r->r[2]);
+  err = ClientSendPrintData (pr->client_id,
+                             pr->pjob_id, (char *) r->r[1], r->r[2],
+                             (unsigned int *) &r->r[2]);
   if (!err) returnOK();
   r->r[0] = (int) err;
   return(err);
@@ -976,7 +978,7 @@ static _kernel_oserror *EndJob(_kernel_swi_regs *r)
   if ((cr = ClientFind(pr->client_id, NULL, -1, NULL)) == NULL)
     return(MakeError(err_NOTREGISTERED));
   /* Make call onto client */
-  err = _swix(pr->client_id, _INR (0, 1), 12, pr->pjob_id);
+  err = ClientEndPrintJob(pr->client_id, pr->pjob_id);
   /* Mark as complete */
   if (!err)
   {
@@ -1012,7 +1014,7 @@ static _kernel_oserror *AbortJob(_kernel_swi_regs *r)
       if (PrintFind(-1, -1, cr->client_id, -1) != NULL)
       {
         /* Don't stop if an error occurs, but remember the first one */
-        _kernel_oserror *temp_err = _swix(cr->client_id, _INR (0, 1), 13, 0);
+        _kernel_oserror *temp_err = ClientAbortPrintJobs(cr->client_id, 0);
         if (temp_err != NULL && err == NULL)
         {
           err = temp_err;
@@ -1037,7 +1039,7 @@ static _kernel_oserror *AbortJob(_kernel_swi_regs *r)
     if ((cr = ClientFind(pr->client_id, NULL, -1, NULL)) == NULL)
       return(MakeError(err_NOTREGISTERED));
     /* Make call onto client */
-    err = _swix(pr->client_id, _INR (0, 1), 13, pr->pjob_id);
+    err = ClientAbortPrintJobs(pr->client_id, pr->pjob_id);
     /* Delete from list */
     if (!err)
     {
@@ -1087,9 +1089,14 @@ static _kernel_oserror *JobStatus(_kernel_swi_regs *r)
     return(MakeError(err_NOTREGISTERED));
 
   /* Make call onto client */
-  err = _swix (pr->client_id, _INR (0, 1) | _OUTR (1, 6),
-               14,pr->pjob_id,
-               &r->r[1], &r->r[2], &r->r[3], &r->r[4], &r->r[5], &r->r[6]);
+  err = ClientGetPrintJobInfo (pr->client_id,
+                               pr->pjob_id,
+                               (unsigned int *) &r->r[1],
+                               (unsigned int *) &r->r[2],
+                               (void **) &r->r[3],
+                               (unsigned int *) &r->r[4],
+                               (unsigned int *) &r->r[5],
+                               (void **) &r->r[6]);
 
   if (!err) returnOK();
   r->r[0] = (int) err;
@@ -1114,7 +1121,7 @@ static _kernel_oserror *ClearJob(_kernel_swi_regs *r)
   print_record *pr = NULL;
   _kernel_oserror *err = NULL;
   client_record *cr = NULL;
-  int lstatus, rstatus;
+  unsigned int lstatus, rstatus;
 
   dprintf (("", "ClearJob:\n"));
   if (r->r[0] == 0)
@@ -1125,14 +1132,12 @@ static _kernel_oserror *ClearJob(_kernel_swi_regs *r)
     {
       print_record *pr_tmp = (print_record *) pr->header.next;
 
-      /* Call OmniOp, 14 (Get Print Job Info) */
-      err = _swix (pr->client_id, _INR (0, 1) | _OUT (1) | _OUT (4),
-                   14, pr->pjob_id,
-                   &lstatus, &rstatus);
+      err = ClientGetPrintJobInfo (pr->client_id, pr->pjob_id,
+                                   &lstatus, NULL, NULL, &rstatus, NULL, NULL);
       if ((!err) && ((pflagSET(lstatus, print_COMPLETE)) || (pflagSET(lstatus, print_ERROR))))
       {
         /* Make call onto client */
-        err = _swix (pr->client_id, _INR (0, 1), 15, pr->pjob_id);
+        err = ClientClearPrintJobs (pr->client_id, pr->pjob_id);
         if (!err) PrintClear(pr);
       }
       pr = pr_tmp;
@@ -1145,10 +1150,8 @@ static _kernel_oserror *ClearJob(_kernel_swi_regs *r)
     if ((cr = ClientFind(pr->client_id, NULL, -1, NULL)) == NULL)
       return(MakeError(err_NOTREGISTERED));
 
-    /* Call OmniOp, 14 (Get Print Job Info) */
-    err = _swix (pr->client_id, _INR (0, 1) | _OUT(1) | _OUT (4),
-                 14, pr->pjob_id,
-                 &lstatus, &rstatus);
+    err = ClientGetPrintJobInfo (pr->client_id, pr->pjob_id,
+                                 &lstatus, NULL, NULL, &rstatus, NULL, NULL);
     dprintf (("", "ClearJob: jobinfo = %x\n", (int) err));
     dprintf (("", "ClearJob: %x\n", lstatus));
     dprintf (("", "ClearJob: %x %x\n", pflagSET(lstatus, print_COMPLETE),
@@ -1156,7 +1159,7 @@ static _kernel_oserror *ClearJob(_kernel_swi_regs *r)
     if ((!err) && ((pflagSET(lstatus, print_COMPLETE)) || (pflagSET(lstatus, print_ERROR))))
     {
       /* Make call onto client */
-      err = _swix (pr->client_id, _INR (0, 1), 15, pr->pjob_id);
+      err = ClientClearPrintJobs (pr->client_id, pr->pjob_id);
       dprintf (("", "ClearJob: clearclient = %x\n", (int) err));
       if (!err) PrintClear(pr);
     }
