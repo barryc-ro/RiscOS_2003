@@ -83,18 +83,18 @@
   bool	g_card1_in = false;
   bool	g_card2_in = false;
   bool	g_card2_insertpending = false;
+
   unsigned int g_slot2_readtime = 0;
   apdu  g_slot2_apdu;
+
+#define UPCALLQUEUESIZE 10
+  static bool upcall_callback_pending = false;  /* Flag when a callback is pending to process upcall data */
+
   #ifdef OLD_GETATR
   int   g_slot2_cardtype = CARD_NOCARD;
   #else
   type_card_descriptor g_card_descriptor;
   #endif
-#endif
-
-#ifdef EVENT_RETRY
-  unsigned int	g_event_busy = EVENT_IDLE;
-  _kernel_swi_regs g_callback_block;
 #endif
 
 /*
@@ -331,143 +331,103 @@ timer_handler(_kernel_swi_regs *r, void *pw)
   return (NULL);
 }
 
-/*
- * handle events, select ones of interest to us and setup a callback to handle
- * them later.
- *
- * due to the way received data flushed from the buffer, ignore any rx data
- * events if there are two or more events already pending in the queue.
- */
-int
-upcall_handler(_kernel_swi_regs *r, void *pw)
+/*       Callback Handler to Process New Data
+         ------------------------------------
+
+When we receive an Upcall to say new data has arrived in our input buffer
+we cannot process it immediately, as we are in an interrupt handler.
+
+Note that the only Upcall we set a callback for is new serial input data,
+so we don't need to worry about any other cases.
+*/
+
+void callback_new_serial_input()
 {
   int	eof=0;
 
-  switch (r->r[0])
-  {
-    case UpCall_DeviceRxDataPresent : case UpCall_DeviceThresAbove :
-      if (iInputStream>0)
-      {
-
-        if (r->r[1]==iInputStream)
-        {
-#ifdef EVENT_RETRY
-	  /** Well, it's definitely for us... **/
-	  if(g_event_busy != EVENT_IDLE)
-	  {
-	    /** If we're already in the upcall handler and have a callback, leave. **/
-	    if(g_event_busy == EVENT_BUSY)
-	    {
-	      /** If we're in the handler with no callback, set the callback flag, and leave. **/
-	      g_event_busy = EVENT_BUSYCB;
-	    }
-	    return(0); /* This has been 'handled' now */
-          }
-	  /** Otherwise, handler proceeds **/
-	  g_event_busy = EVENT_BUSY;
-#endif
 #ifdef FUNAI_TWINSLOT
-	  if(g_uc_state != UC_BUSY)   /* New serial data is Funai header */
-          {
-            do {
-              /* We have new serial data bytes to process and we are expecting a 2 byte header from
-                 the Funai microcontroller.
-                 com_ReadFunaiHeader reads the two header header bytes from the microcontroller
-                 (one byte per call), and if both bytes are read and it represents new data for
-                 slot 2 then it reads and processes the data from the slot 2 Smart Card.
-                 Note that slot 1 is treated differently and is not processed by com_ReadFunaiHeader */
-              com_ReadFunaiHeader();
-  	      _swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), 5, r->r[1], &eof);  /* Any more bytes in input stream? */
+  if(g_uc_state != UC_BUSY)   /* New serial data is Funai header */
+  {
+    _kernel_irqs_on();  /* Ensure interrupts are enabled - we need them to be for
+                           com_ReadFunaiHeader to work... */
+    do
+    {
+      /* We have new serial data bytes to process and we are expecting a 2 byte header from
+         the Funai microcontroller.
+         com_ReadFunaiHeader reads the two header header bytes from the microcontroller
+         (one byte per call), and if both bytes are read and it represents new data for
+         slot 2 then it reads and processes the data from the slot 2 Smart Card.
+         Note that slot 1 is treated differently and is not processed by com_ReadFunaiHeader */
+       com_ReadFunaiHeader();
+       _swix(OS_Args, _IN(0)|_IN(1)|_OUT(2), 5, iInputStream, &eof);  /* Any more bytes in input stream? */
 
-	    } while(!eof && g_uc_state != UC_BUSY); /* If so, go round again, UNLESS our state has changed and we
-	                                               have data to process (bug fix in v0.46) */
-          }
-
-          if (g_uc_state == UC_BUSY && !eof)  /* We have unprocessed serial data which is from Smart Card itself */
-          {
-            if(g_slot2_state != IDLE)
-            {
-#ifdef EVENT_RETRY
-  	      _kernel_irqs_off();
-	      if(g_event_busy == EVENT_BUSYCB)
-  	      {
-  	        g_callback_block = *r; /** Store the register block **/
-  	        _swix(OS_AddCallBack, _IN(0)|_IN(1), upcall_callback_entry, pw);
-  	      }
-  	      g_event_busy = EVENT_IDLE;
-  	      _kernel_irqs_on();
-#endif
-              return(0);   /* Handled */
-            }
-            else
-#endif
-            //sys_CancelWaitTimer();
-            if (num_data_events_pending<2)
-            {
-              num_data_events_pending++;
-
-              if (flags&flag_debouncing)  /* if currently debouncing, defer */
-                SET_FLAG(flags,flag_data_pending);
-              else
-                setup_event(SC_Event_DataPresent);
-            }
-          }
-        }
-        else
-        {
-#ifdef EVENT_RETRY
-	    _kernel_irqs_off();
-	    if(g_event_busy == EVENT_BUSYCB)
-	    {
-	      g_callback_block = *r; /** Store the register block **/
-	      _swix(OS_AddCallBack, _IN(0)|_IN(1), upcall_callback_entry, pw);
-	    }
-	    g_event_busy = EVENT_IDLE;
-	    _kernel_irqs_on();
-#endif
-          return(1);
-        }
-      }
-      else
-      {
-#ifdef EVENT_RETRY
-	    _kernel_irqs_off();
-	    if(g_event_busy == EVENT_BUSYCB)
-	    {
-	      g_callback_block = *r; /** Store the register block **/
-	      _swix(OS_AddCallBack, _IN(0)|_IN(1), upcall_callback_entry, pw);
-	    }
-	    g_event_busy = EVENT_IDLE;
-	    _kernel_irqs_on();
-#endif
-        return(1);
-      }
-      break;
-    default :
-#ifdef EVENT_RETRY
-	    _kernel_irqs_off();
-	    if(g_event_busy == EVENT_BUSYCB)
-	    {
-	      g_callback_block = *r; /** Store the register block **/
-	      _swix(OS_AddCallBack, _IN(0)|_IN(1), upcall_callback_entry, pw);
-	    }
-	    g_event_busy = EVENT_IDLE;
-	    _kernel_irqs_on();
-#endif
-      return (1); /* pass on */
+     } while(!eof && g_uc_state != UC_BUSY); /* If so, go round again, UNLESS our state has changed and we
+                                                have actual card data to process (as opposed to microcontroller information) */
   }
-#ifdef EVENT_RETRY
-	    _kernel_irqs_off();
-	    if(g_event_busy == EVENT_BUSYCB)
-	    {
-	      g_callback_block = *r; /** Store the register block **/
-	      _swix(OS_AddCallBack, _IN(0)|_IN(1), upcall_callback_entry, pw);
-	    }
-	    g_event_busy = EVENT_IDLE;
-	    _kernel_irqs_on();
+
+   if (g_uc_state == UC_BUSY && !eof)  /* We have unprocessed serial data which is from Smart Card itself */
+   {
+      if(g_slot2_state == IDLE)
 #endif
-  return (0); /* handled */
+        //sys_CancelWaitTimer();
+        if (num_data_events_pending<2)
+        {
+          num_data_events_pending++;
+
+          if (flags&flag_debouncing)  /* if currently debouncing, defer */
+            SET_FLAG(flags,flag_data_pending);
+          else
+            setup_event(SC_Event_DataPresent);
+        }
+   }
 }
+
+
+/*  Upcall Entry Point
+    ------------------
+
+We monitor Upcalls so that we can detect new data arriving in our
+serial input buffer. When we see new data we set up a Callback to process
+the data.
+
+We cannot do anything here as we are executing within an Interrupt Service Routine.
+
+*/
+
+int upcall_handler(_kernel_swi_regs *r, void *pw)
+{
+  /* If the Upcall is new data received or device above threshold, and it is for our input stream, then enable a callback to read it */
+  if ( (r->r[0] == UpCall_DeviceRxDataPresent || r->r[0] == UpCall_DeviceThresAbove) && iInputStream>0 && r->r[1] == iInputStream)
+  {
+    if (upcall_callback_pending == false)  /* Check whether a callback is already pending */
+    {
+      upcall_callback_pending=true;
+      _swix(OS_AddCallBack, _IN(0)|_IN(1), upcall_callback_entry, pw);  /* Set up Callback to process new serial input data */
+    }
+    return 0;  /* Claim the call - nobody else needs to see this */
+  }
+  else
+    return 1;  /* Pass it on - this Upcall wasn't for us */
+}
+
+
+/*  Callback Handler
+    ----------------
+
+An Upcall arrived to say that new data has arrived in our serial input buffer.
+We couldn't process it at the time as the Upcall executes within an Interrupt
+Service Routine, so we simply set a callback.
+
+*/
+
+_kernel_oserror *upcall_callback_handler(_kernel_swi_regs *r, void *pw)
+{
+  upcall_callback_pending=false;      /* Ensure that another Callback is generated if new serial input arrives now */
+  callback_new_serial_input();        /* Process data in serial input buffer */
+
+  return(NULL);
+}
+
 
 /*
  * debounce timer has fired
@@ -1021,13 +981,3 @@ starting_handler(_kernel_swi_regs *r, void *pw)
   return (NULL);
 }
 
-/** This is a callback to come and pretend to be the original upcall,
-    Note that the original reason for the upcall may or may not be valid....
-**/
-_kernel_oserror *
-upcall_callback_handler(_kernel_swi_regs *r, void *pw)
-{
-  upcall_handler(&g_callback_block,pw);
-
-  return(NULL);
-}
