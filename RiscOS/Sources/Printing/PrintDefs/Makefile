@@ -12,13 +12,13 @@
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 CP      = copy
 RM      = remove
 WIPE    = -wipe
 COMPRESS = squash
 
-CPFLAGS = ~cfr~vr
+CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 #
@@ -33,6 +33,7 @@ COMPONENT   = STBPrint
 RDIR        = Resources
 RSRC        = ResSrc
 LDIR        = LocalRes:${SYSTEM}
+APP         = ${INSTDIR}.!${COMPONENT}
 
 # Include these in the ROM module
 #
@@ -117,6 +118,13 @@ bbe-printdefs: bbe-generic-resources-get-alias
   ${CP} ${RDIR}.PaperA4 ${BBEDIR}.Resources.PaperA4 ${CPFLAGS}
   ${CP} ${RDIR}.PaperLet ${BBEDIR}.Resources.PaperLet ${CPFLAGS}
   ${CP} ${RDIR}.PaperLegal ${BBEDIR}.Resources.PaperLegal ${CPFLAGS}
+
+install:
+        ${MKDIR} ${APP}.Printers
+        ${CP} ${LDIR}.!Boot      ${APP}.!Boot      ${CPFLAGS}
+        ${CP} ${LDIR}.Supported  ${APP}.Supported  ${CPFLAGS}
+        ${CP} ${RSRC}.Printers.* ${APP}.Printers.* ${CPFLAGS}
+        @echo ${COMPONENT}: install (disc) complete
 
 #
 # Squash resource files
