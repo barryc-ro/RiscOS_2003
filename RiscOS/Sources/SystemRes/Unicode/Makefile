@@ -102,4 +102,19 @@ module:
 	modgen UnicodeRes UnicodeRes UnicodeRes 0.18 -via viafile
 	echo built softload UnicodeRes 
 
+BBETYPE = unicode
+bbe-unicode: bbe-unicode-${SUBSET}
+        @| Need to cope with Japanese exports correctly
+
+bbe-unicode-: bbe-generic
+        BBE_Export_Dir Resources.Encodings
+        @|
+
+bbe-unicode-Japan: bbe-generic
+        BBE_Export_Dir Resources.Encodings
+        ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.*CNS* ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.*KS*  ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.*GB*  ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.BigFive              ${WFLAGS}
+  
 # Dynamic dependencies:
