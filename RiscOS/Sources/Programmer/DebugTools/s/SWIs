@@ -25,6 +25,7 @@ Area_Unknown		*	@	; 9 - Some other type of area
 RMA			*	1	; Dynamic area number for RMA
 Max_Vector		*	0x30	; Number of software vectors
 Max_Swi			*	0x100	; Maximum number of OS SWIs
+NodeCopy_Size		*	4096	; Size of buffer to copy the TickNodeChain into
 
 
 ; ****************************************************
@@ -657,68 +658,121 @@ Enum_vector Entry "R1-R2, R6-R7"
 ; *   R13	= full-descending stack pointer
 ; *   R14	= return address
 ; * Out...
-; *   R0	= preserved (or pointer to error block)
+; *   R0	= corrupted (or pointer to error block)
 ; *   R1-R9	= preserved
 ; *   R10-R12	= corrupted
 ; *   R13	= preserved
 ; *   V flag	= set if R0 is a pointer to an error block
 ; *
-SWI_Tickers Entry "R0-R6"
-	; Load the address of the TickNodeChain pointer...
-	LDR	R2, [R12, #WSP_TickNodeChain]
-	; Output the title line...
+SWI_Tickers Entry "R1-R8"
+	; Output the header string...
+	LDR	R1, [R12, #WSP_TickNodeChain]
 	SWI	XOS_WriteS
 	DCB	"Ticker event claimants...", 10, 13, 0
 	ALIGN
-	; Load the pointer to the first node...
-	TEQ	R2, #0
-	LDRNE	R2, [R2]
-	TEQNE	R2, #0
-	BNE	%FT00
+	; Attempt to copy the ticker node chain into a temporary buffer...
+	TEQ	R1, #0
+	BEQ	%FT97
+	MOV	R0, #ModHandReason_Claim
+	MOV	R3, #NodeCopy_Size
+	SWI	XOS_Module
+	EXIT	VS
+	SCPSR	I_bit, 0, R0,, R14	; IRQs off
+	; Move to the first ticker node...
+	LDR	R1, [R1]
+	MOV	R0, R2
+	TEQ	R1, #0
+	BEQ	%FT98
+	; Copy all of the ticker node chain entries into our buffer...
+00	LDMIA	R1, {R1, R4-R7}
+	SUBS	R3, R3, #4*4
+	STMIA	R0!, {R4-R7}
+	TEQNE	R1, #0
+	BNE	%BT00
+	RestPSR	R14			; IRQs on
+	; Did we copy all of the chain, or run out of buffer space?
+	TEQ	R1, #0
+	BNE	%FT99
+	Push	"R2"
+	MOV	R5, R2
+	MOV	R6, R0
+	; Enumerate our copy of the chain...
+01	LDMIA	R5!, {R3, R4, R7, R8}
+	;
+	; R0-R2	= scratch
+	; R3	= reload flag (no of ticks for callevery)
+	; R4	= code address
+	; R5	= pointer to start of copied chain
+	; R6	= pointer to end of copied chain
+	; R7	= value to place in R12 for code call
+	; R8	= no of ticks remaining before call
+	; R12	= module workspace pointer
+	; R14	= scratch
+	;
+	; Output ticker type for this node...
+	TEQ	R3, #0
+	ADREQ	R0, %FT95
+	MOVEQ	R3, R8
+	ADRNE	R0, %FT96
+	SWI	XOS_Write0
+	; Output the ticker delay...
+	MOV	R0, R3
+	ADD	R1, R12, #WSP_ScratchBuffer
+	MOV	R2, #16
+	SWI	XOS_ConvertCardinal4
+	SWIVC	XOS_Write0
+	; Output the details of where this ticker event handler is...
+	ADR	R0, %FT94
+	SWIVC	XOS_Write0
+	Push	"R12"
+	MOV	R0, #0
+	MOV	R1, R4
+	BL	SWI_Where
+	Pull	"R12"
+	; Output it's workspace pointer...
+	SWI	XOS_WriteS
+	DCB	"  Wkspc - &", 0
+	ALIGN
+	MOV	R0, R7
+	ADD	R1, R12, #WSP_ScratchBuffer
+	MOV	R2, #16
+	SWI	XOS_ConvertHex8
+	SWIVC	XOS_Write0
+	SWIVC	XOS_NewLine
+	; Move on to the next ticker node entry...
+	CMP	R5, R6
+	BLO	%BT01
+	; Free our temporary buffer and exit...
+	Pull	"R2"
+	MOV	R0, #ModHandReason_Free
+	SWI	XOS_Module
+	EXIT
+94	;
+	DCB	" cs", 10, 13, "  Code  - ", 0
+95	;
+	DCB	" CallAfter ", 0
+96	;
+	DCB	" CallEvery ", 0
+	ALIGN
+97	; Failure case: we don't know where the ticker node chain is...
+	SWI	XOS_WriteS
+	DCB	"Cannot find the ticker node chain.", 10, 13, 0
+	ALIGN
+	EXIT
+98	;
+	RestPSR	R14			; IRQs on
+	MOV	R0, #ModHandReason_Free
+	SWI	XOS_Module
 	SWI	XOS_WriteS
 	DCB	"List empty.", 10, 13, 0
 	ALIGN
 	EXIT
-00	; Enumerate the ticker node chain...
-	LDMIA	R2, {R2-R6}
-	Push	"R2"
-	TEQ	R3, #0
-	BNE	%FT01
+99	; Failure case: there are too many ticker nodes in the chain to fit into our buffer...
+	MOV	R0, #ModHandReason_Free
+	SWI	XOS_Module
 	SWI	XOS_WriteS
-	DCB	" CallAfter ", 0
+	DCB	"Too many events (" :CC: :STR: (NodeCopy_Size / 4*4) :CC: " max)", 10, 13, 0
 	ALIGN
-	MOV	R0, R6
-	B	%FT02
-01	SWI	XOS_WriteS
-	DCB	" CallEvery ", 0
-	ALIGN
-	MOV	R0, R3
-02 	ADD	R1, R12, #WSP_ScratchBuffer
-	MOV	R2, #12
-	SWI	XOS_ConvertCardinal4
-	SWIVC	XOS_Write0
-	SWI	XOS_WriteS
-	DCB	" cs", 10, 13
-	DCB	"  Code  - ", 0
-	ALIGN
-	Push	"R12"
-	MOV	R1, R4
-	MOV	R0, #0
-	BL	SWI_Where
-	Pull	"R12"
-	SWI	XOS_WriteS
-	DCB	"  Wkspc - &", 0
-	ALIGN
-	MOV	R0, R5
- 	ADD	R1, R12, #WSP_ScratchBuffer
-	MOV	R2, #12
-	SWI	XOS_ConvertHex8
-	SWIVC	XOS_Write0
-	SWIVC	XOS_NewLine
-	Pull	"R2"
-	; Move on to the next claimant (if any)...
-	TEQ	R2, #0
-	BNE	%BT00
 	EXIT
 
 
