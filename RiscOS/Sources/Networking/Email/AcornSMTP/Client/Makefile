@@ -46,7 +46,7 @@ EXP_HDR =	<export$dir>
 #
 # Generic options:
 #
-MKDIR =		cdir
+MKDIR =		do mkdir -p
 AS =		objasm -tb
 CC =		$(MemCheckCC) cc
 CMHG =		cmhg
@@ -90,7 +90,7 @@ ABSSYM =	RISC_OSLib:o.c_AbsSym
 COMPAT=		-DCOMPAT_INET4
 
 CFLAGS=		-ffah -zM -I$(INCLUDES) -DINET -DCOMPAT_INET4 $(DEBUG)\
-		-zps1 -Wp -depend !Depend -c -throwback $(TINYSTUBS)\
+		-zps1 -Wp -depend !Depend -c $(THROWBACK) $(TINYSTUBS)\
 		-D$(SYSTEM) $(EXTRACCFLAGS)
 
 CMHGFLAGS =	-p -I$(INCLUDES) $(THROWBACK)
@@ -149,6 +149,11 @@ export_hdrs: h.AcornSMTP local_dirs
 export_libs: o.AcornSMTP local_dirs
 	$(CP)	o.AcornSMTP	$(EXP_C_O).AcornSMTP	$(CPFLAGS)
 	@echo $(COMPONENT): export complete (libs)
+
+install: $(TARGET)
+	$(MKDIR) $(INSTDIR)
+	$(CP) $(TARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+	@echo $(COMPONENT): ram module installed
 
 install_rom: $(ROMTARGET)
 	$(CP) $(ROMTARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
