@@ -141,6 +141,7 @@ resources:
 
 clean:
         ${RM} ${ROM_MODULE}
+        ${RM} ${TARGET}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${WIPE} o.* ${WFLAGS}
@@ -159,7 +160,6 @@ rom_link:
         ${MKDIR} map
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
               -map > map.${COMPONENT}
-        |truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
