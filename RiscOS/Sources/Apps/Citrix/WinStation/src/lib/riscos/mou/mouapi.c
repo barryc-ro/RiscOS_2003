@@ -166,7 +166,7 @@ int MouseReadAvail( PUSHORT puCountAvail )
 {
     *puCountAvail = 1;
     
-    LastT = 0;
+    //LastT = 0;
 
     return CLIENT_STATUS_SUCCESS;
 }
@@ -201,15 +201,15 @@ int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
 	if (diff & 4)		// left
 	    pMouData->cMouState |= b & 4 ? MOU_STATUS_B1DOWN : MOU_STATUS_B1UP;
 
+	TRACE(( TC_MOU, TT_API2, "MouseRead: cooked st=0x%x X=%04x Y=%04x (OS pos %d,%d scrn %d,%d) dT %d",
+		pMouData->cMouState, pMouData->X, pMouData->Y,
+		x, y, gWidth, gHeight, t - LastT));
+	
 	LastB = b;
 	LastT = t;
 	LastX = x;
 	LastY = y;
 
-	TRACE(( TC_MOU, TT_API2, "MouseRead: cooked st=0x%x X=%04x Y=%04x (OS pos %d,%d scrn %d,%d)",
-		pMouData->cMouState, pMouData->X, pMouData->Y,
-		x, y, gWidth, gHeight));
-	
 	*puCount = 1;
 
 	return CLIENT_STATUS_SUCCESS;;

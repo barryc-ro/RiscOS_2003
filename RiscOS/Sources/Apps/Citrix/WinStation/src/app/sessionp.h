@@ -10,7 +10,7 @@
 #ifndef __sessionp_h
 # define __sessionp_h
 
-struct session_
+struct winframe_session_
 {
     DESCRIPTION gszServerLabel;
     ENCRYPTIONLEVEL szEncryptionDLL;
@@ -30,9 +30,9 @@ struct session_
 };
 
 
-extern void connect_open(Session sess);
-extern void connect_status(Session sess, int state);
-extern void connect_close(Session sess);
+extern void connect_open(winframe_session sess);
+extern void connect_status(winframe_session sess, int state);
+extern void connect_close(winframe_session sess);
 
 #endif
 

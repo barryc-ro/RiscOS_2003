@@ -88,7 +88,7 @@ static OVERRIDELIST g_pOverrides[OVERRIDE_COUNT] = {
                     { NULL,               NULL,            }
                   };
 
-static Session		global_session = NULL;
+static winframe_session		global_session = NULL;
        CLIENTNAME	gszClientName = { 0 };			// this must be global as cfgini.c uses it
 static BOOL		bPDError=FALSE;
 
@@ -145,7 +145,7 @@ static void MessageBox(const char *message, const char *server)
  *
  ******************************************************************************/
 
-static BOOL EMGetErrorMessage( Session sess, int iErrorCode, LPSTR chBuffer, int cbBuffSize )
+static BOOL EMGetErrorMessage( winframe_session sess, int iErrorCode, LPSTR chBuffer, int cbBuffSize )
 {
     INT rc, nResourceId;
     WFELASTERROR LastError;
@@ -262,7 +262,7 @@ static BOOL EMGetErrorMessage( Session sess, int iErrorCode, LPSTR chBuffer, int
     return (bErrorCodeInMessage);
 }
 
-static int EMErrorPopup(Session sess, int iError)
+static int EMErrorPopup(winframe_session sess, int iError)
 {
    char szErrorMsg[MAX_ERRORMSG];
 
@@ -303,7 +303,7 @@ static void restore_desktop(void)
  *
  ******************************************************************************/
 
-static void WFEngineStatusCallback( Session sess, int message )
+static void WFEngineStatusCallback( winframe_session sess, int message )
 {
     int rc;
     LRESULT lResult = 0;
@@ -418,7 +418,7 @@ static void WFEngineStatusCallback( Session sess, int message )
  *  Start the engine window
  *
  */
-static int EMEngOpen(Session sess)
+static int EMEngOpen(winframe_session sess)
 {
     WFEOPEN  WFEOpen;
     INT rc = CLIENT_STATUS_SUCCESS;
@@ -456,12 +456,12 @@ static int EMEngOpen(Session sess)
 }                          
 
 /*
- *  EMEngLoadSession
+ *  EMEngLoadwinframe_session
  *
  *  Start the session
  *
  */
-static int EMEngLoadSession(Session sess)
+static int EMEngLoadwinframe_session(winframe_session sess)
 {
     INT rc = CLIENT_STATUS_SUCCESS;
     CFGINIOVERRIDE pOverrides[OVERRIDE_COUNT];
@@ -480,7 +480,7 @@ static int EMEngLoadSession(Session sess)
 	    pOverrides[j].pszValue = g_pOverrides[i].pszValue;
 	    pOverrides[j++].pszKey = g_pOverrides[i].pszKey;
 	    TRACE(( TC_WENG, TT_L1,
-		    "WFEngx.Exe EMEngLoadSession: Override key(%s) value(%s)",
+		    "WFEngx.Exe EMEngLoadwinframe_session: Override key(%s) value(%s)",
 		    g_pOverrides[i].pszKey,  g_pOverrides[i].pszValue ));
 	}
     }
@@ -500,7 +500,7 @@ static int EMEngLoadSession(Session sess)
 
 /* --------------------------------------------------------------------------------------------- */
 
-static void session_free(Session sess)
+static void session_free(winframe_session sess)
 {
     TRACE((TC_UI, TT_API1, "session_free: %p", sess));
 
@@ -516,7 +516,7 @@ static void session_free(Session sess)
     free(sess);
 }
 
-static int session_abort(Session sess, int rc)
+static int session_abort(winframe_session sess, int rc)
 {
     TRACE((TC_UI, TT_API1, "session_abort: %p state %d", sess, rc));
 
@@ -528,7 +528,7 @@ static int session_abort(Session sess, int rc)
     return rc;
 }
 
-static int session__open(Session sess)
+static int session__open(winframe_session sess)
 {
     int rc;
     char *pEnvVar;
@@ -562,7 +562,7 @@ static int session__open(Session sess)
 	return rc;
 
     // load the session
-    rc = EMEngLoadSession(sess);
+    rc = EMEngLoadwinframe_session(sess);
     if (rc != CLIENT_STATUS_SUCCESS)
 	return rc;
 
@@ -599,7 +599,7 @@ static int session__open(Session sess)
     return rc;
 }
 
-static void session__close(Session sess)
+static void session__close(winframe_session sess)
 {
     TRACE((TC_UI, TT_API1, "session_close: %p", sess));
 
@@ -629,7 +629,7 @@ static void session__close(Session sess)
     connect_close(sess);
 }
 
-Session session_open_url(const char *url)
+winframe_session session_open_url(const char *url)
 {
     char *host = NULL;
     char *path = NULL;
@@ -665,16 +665,16 @@ Session session_open_url(const char *url)
     return session_open_server(host);
 }
 
-Session session_open_server(const char *host)
+winframe_session session_open_server(const char *host)
 {
-    Session sess = NULL;
+    winframe_session sess = NULL;
     int rc;
     if (host)
     {
 	char name[L_tmpnam];
 	FILE *f;
 
-	global_session = sess = calloc(sizeof(struct session_), 1);
+	global_session = sess = calloc(sizeof(struct winframe_session_), 1);
 	sess->HaveFocus = TRUE;
 
 	strncpy(sess->gszServerLabel, host, sizeof(sess->gszServerLabel));
@@ -701,14 +701,14 @@ Session session_open_server(const char *host)
     return sess;
 }
 
-Session session_open(const char *ica_file)
+winframe_session session_open(const char *ica_file)
 {
-    Session sess;
+    winframe_session sess;
     int rc;
 
     TRACE((TC_UI, TT_API1, "session_open: '%s'", ica_file));
 
-    global_session = sess = calloc(sizeof(struct session_), 1);
+    global_session = sess = calloc(sizeof(struct winframe_session_), 1);
 
     sess->gszICAFile = strdup(ica_file);
     sess->HaveFocus = TRUE;
@@ -763,7 +763,7 @@ Session session_open(const char *ica_file)
     return sess;
 }
 
-int session_poll(Session sess)
+int session_poll(winframe_session sess)
 {
     int rc;
     
@@ -794,7 +794,7 @@ int session_poll(Session sess)
     return gbContinuePolling;
 }
 
-void session_close(Session sess)
+void session_close(winframe_session sess)
 {
     session__close(sess);
 
@@ -806,7 +806,7 @@ void session_close(Session sess)
 
 /* --------------------------------------------------------------------------------------------- */
 
-void session_resume(Session sess)
+void session_resume(winframe_session sess)
 {
     TRACE((TC_UI, TT_API1, "session_resume: %p", sess));
 
@@ -817,7 +817,7 @@ void session_resume(Session sess)
 
 void session_run(const char *file, int file_is_url)
 {
-    Session sess;
+    winframe_session sess;
 
     TRACE((TC_UI, TT_API1, "session_run: %s url %d", file, file_is_url));
 

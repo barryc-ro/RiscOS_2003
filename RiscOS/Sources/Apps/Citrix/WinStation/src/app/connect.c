@@ -23,7 +23,7 @@
 
 #define I_MESSAGE		1
 
-void connect_open(Session sess)
+void connect_open(winframe_session sess)
 {
     if (!sess->connect_d)
 	toolbox_create_object(0, tbres_WIN_CONNECT, &sess->connect_d);
@@ -36,7 +36,7 @@ void connect_open(Session sess)
     }
 }
 
-void connect_status(Session sess, int state)
+void connect_status(winframe_session sess, int state)
 {
     char buf[12];
     sprintf(buf, "msg%d", state);
@@ -45,7 +45,7 @@ void connect_status(Session sess, int state)
     //DBG(("connect_status: sess %p d %p state %d\n", sess, sess->connect_d, state));
 }
 
-void connect_close(Session sess)
+void connect_close(winframe_session sess)
 {
     if (sess->connect_d)
     {

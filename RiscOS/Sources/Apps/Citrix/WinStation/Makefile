@@ -158,7 +158,7 @@ all:	${APP}
 clean:	cleanlib cleandll cleanapp
 	echo cleaned all
 
-realclean: clean cleanmisc cleaninstall
+realclean: clean cleanmisc cleaninstall cleanmakepass
 	echo realcleaned all
 
 cleanmisc:
@@ -239,6 +239,19 @@ cleaninstall:
 	${RM}	 ${APPNAME}/*
 	${RMDIR} ${APPNAME}
 	echo Cleaned install
+
+# ----------------------------------------------------------------------------------------------------
+
+makepass: makepass,ff8
+
+makepass,ff8: src/app/makepass.o ${CITRIXLIB}
+	${LD} ${LDFLAGS} -o 'makepass,ff8' src/app/makepass.o ${CITRIXLIB} $(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
+	ls -l '$@'
+
+
+cleanmakepass:
+	${RM} src/app/makepass.o 'makepass,ff8'
+	echo cleaned makepass
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -821,8 +834,9 @@ ${APPZ}: ${APPOBJSZ} ${MODULEWRAP_ROM} ${APPLIBSZ} ${BASELIBSZ} local_dirs
 	ls -l $@
 
 ${APPRM}: ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSRM} local_dirs
-	${LD} -rmf -o ${APPRM} ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSRM}
-	ls -l $@
+	echo Current armlink cannot generate relocatable modules correctly. Use RISC OS instead.
+	echo ${LD} -rmf -o ${APPRM} ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSRM}
+	echo ls -l $@
 
 cleanapp:
 	-${RM} ${APPOBJS}

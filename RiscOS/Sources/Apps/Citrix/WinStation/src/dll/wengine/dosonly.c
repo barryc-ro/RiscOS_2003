@@ -68,7 +68,7 @@ extern USHORT G_KeyboardTimer;
 ==   Local Vars
 =============================================================================*/
 static LONG vWindowLong = NULL;
-static BYTE fMouse = TRUE;
+static BYTE fMouse = FALSE;
 static ULONG KeyboardTime = 0;
 
 

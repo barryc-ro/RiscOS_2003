@@ -87,6 +87,15 @@ typedef union {
 
 /* --------------------------------------------------------------------------------------------- */
 
+/* Acorn URI protocol */
+
+#define MESSAGE_URI_MPROCESS		0x4E383
+#define MESSAGE_URI_MPROCESSACK		0x4E384
+
+#define URI_RequestURI			0x4E382
+
+/* --------------------------------------------------------------------------------------------- */
+
 static MessagesFD message_block;    /* declare a message block for use with toolbox initialise */
 static IdBlock event_id_block;      /* declare an event block for use with toolbox initialise  */
 
@@ -105,6 +114,8 @@ static int Wimp_MessageList[] =
 {
     message_WINFRAME_CONTROL,
     wimp_MOPENURL,
+    MESSAGE_URI_MPROCESS,
+    MESSAGE_URI_MPROCESSACK,
     Wimp_MDataLoad,
     Wimp_MDataSave,
     Wimp_MDataOpen,
@@ -122,7 +133,7 @@ static void *splash_coltrans = NULL;
 static ObjectId splash_id = NULL_ObjectId;
 static int splash_timer = 0;
 
-static Session current_session = NULL;
+static winframe_session current_session = NULL;
 
 static int scrap_ref = -1;
 
@@ -206,7 +217,7 @@ static void signal_setup(void)
 
 static void kill_current_session(void)
 {
-    Session s = current_session;
+    winframe_session s = current_session;
     if (s)
     {
 	current_session = NULL;
@@ -214,22 +225,24 @@ static void kill_current_session(void)
     }
 }
 
-static void control_ack(WimpMessage *message, BOOL success)
+static void control_ack(WimpMessage *message, winframe_session session_handle, int error)
 {
     WimpMessage reply;
-    winframe_message_control *control = (winframe_message_control *) &message->data;
     winframe_message_control_ack *ack = (winframe_message_control_ack *) &reply.data;
 
     reply.hdr.size = sizeof(reply.hdr) + sizeof(winframe_message_control_ack);
     reply.hdr.your_ref = message->hdr.my_ref;
     reply.hdr.action_code = message_WINFRAME_CONTROL_ACK;
-    ack->reason = control->reason;
-    ack->flags = success ? 1 : 0;
+    ack->reason = message->data.words[0];
+    ack->flags = error != 0 ? 1 : 0;
+    ack->session_handle = session_handle;
+    ack->errnum = error;
+    ack->errmess[0] = 0;
 
     LOGERR(wimp_send_message(Wimp_EUserMessage, &reply, message->hdr.sender, 0, NULL));
 }
 
-static void status_message(int status)
+static void status_message(int status, winframe_session session_handle)
 {
     WimpMessage message;
     winframe_message_status *s = (winframe_message_status *) &s;
@@ -239,6 +252,7 @@ static void status_message(int status)
     message.hdr.action_code = message_WINFRAME_STATUS;
     s->reason = status;
     s->flags = 0;
+    s->session_handle = session_handle;
 
     LOGERR(wimp_send_message(Wimp_EUserMessage, &message, 0, 0, NULL));
 }
@@ -594,65 +608,143 @@ static int openurl_handler(WimpMessage *message, void *handle)
     NOT_USED(handle);
 }
 
+static int openuri_handler(WimpMessage *message, void *handle)
+{
+    int flags = message->data.words[0];
+    const char *uri = (const char *)message->data.words[1];
+    int uri_handle = message->data.words[2];
+
+    if (strnicmp(uri, "ica:", 4) == 0)
+    {
+	WimpMessage reply;
+
+	/* report error if we are already connected */
+	if (current_session)
+	{
+	    msg_report(utils_msgs_lookup("conn"));
+	    return 0;
+	}
+
+	if ((flags & 0x01) == 0)
+	{
+	    int len;
+	    char *url = NULL;
+	    _kernel_oserror *e;
+
+	    e = _swix(URI_RequestURI, _INR(0,1) | _IN(3) | _OUT(2), 0, 0, uri_handle, &len);
+	    if (!e)
+	    {
+		url = malloc(len);
+		e = _swix(URI_RequestURI, _INR(0,3), 0, url, len, uri_handle);
+	    }
+
+	    if (!e)
+	    {
+		/* wait for splash screen to close */
+		while (!splash_check_close())
+		    ;
+
+		current_session = session_open_url(url);
+	    }
+	    
+	    free(url);
+	}
+
+	reply = *message;
+	reply.hdr.your_ref = message->hdr.my_ref;
+	reply.hdr.action_code = MESSAGE_URI_MPROCESSACK;
+	wimp_send_message(Wimp_EUserMessage, &reply, message->hdr.sender, NULL, 0);
+	
+	return 1;
+    }
+
+    return 0;
+
+    NOT_USED(handle);
+}
+
 static int control_handler(WimpMessage *message, void *handle)
 {
     winframe_message_control *control = (winframe_message_control *)&message->data;
-	
-    TRACE((TC_UI, TT_API1, "control_handler: reason %d flags 0x%x server '%s'\n", control->reason, control->flags, strsafe(control->server)));
+
+    TRACE((TC_UI, TT_API1, "control_handler: reason %d flags 0x%x\n", control->reason, control->flags));
 
     switch (control->reason)
     {
     case winframe_CONTROL_CONNECT:
+    {
+	winframe_message_control_connect *control = (winframe_message_control_connect *)&message->data;
+	
 	/* report error if we are already connected */
 	if (current_session)
 	{
-	    control_ack(message, FALSE);
+	    control_ack(message, NULL, winframe_ERROR_CONNECTION_OPEN);
 	    return 1;
 	}
-
-	control_ack(message, TRUE);
 
 	/* wait for splash screen to close */
 	while (!splash_check_close())
 	    ;
 
-	current_session = session_open_server(control->server);
-	break;
+	/* start the open */
+	current_session = control->flags & winframe_connect_ICA_FILE ?
+		session_open(control->data.ica_file) :
+		session_open_server(control->data.server_name);
 
+	/* report the status */
+	control_ack(message, current_session, current_session == NULL ? winframe_ERROR_CONNECTION_FAILED : 0);
+
+	/* set up the delete flag ??*/
+	break;
+    }
+    
     case winframe_CONTROL_RECONNECT:
-	if (current_session == NULL)
+    {
+	winframe_message_control_reconnect *control = (winframe_message_control_reconnect *)&message->data;
+	
+	if (control->session_handle != current_session)
 	{
-	    control_ack(message, FALSE);
+	    control_ack(message, control->session_handle, winframe_ERROR_HANDLE_UNKNOWN);
 	    return 1;
 	}
 
-	control_ack(message, TRUE);
+	control_ack(message, current_session, 0);
 
 	session_resume(current_session);
 	break;
-
+    }
+    
     case winframe_CONTROL_DISCONNECT:
-	if (current_session == NULL)
+    {
+	winframe_message_control_disconnect *control = (winframe_message_control_disconnect *)&message->data;
+	
+	if (control->session_handle != current_session)
 	{
-	    control_ack(message, FALSE);
+	    control_ack(message, control->session_handle, winframe_ERROR_HANDLE_UNKNOWN);
 	    return 1;
 	}
 
-	control_ack(message, TRUE);
+	control_ack(message, current_session, 0);
 
-	kill_current_session();
+	session_close(current_session);
+	current_session = NULL;
 	break;
-
+    }
+    
     case winframe_CONTROL_QUIT:
-	if (current_session)
+    {
+	winframe_message_control_quit *control = (winframe_message_control_quit *)&message->data;
+	
+	if (current_session != NULL)
 	{
-	    control_ack(message, FALSE);
+	    control_ack(message, NULL, winframe_ERROR_CONNECTION_OPEN);
 	    return 1;
 	}
 
-	control_ack(message, TRUE);
+	control_ack(message, NULL, 0);
 	running = FALSE;
 	break;
+    }
     }
 
     return 1;
@@ -859,7 +951,7 @@ static int log_init(void)
        EMLogInfo.LogFlags |= LOG_FILE;
 
 #if 1
-   EMLogInfo.LogClass   = TC_WD;
+   EMLogInfo.LogClass   = TC_MOU;
    EMLogInfo.LogEnable  = TT_ERROR;
    EMLogInfo.LogTWEnable = TT_TW_res1;
 #else
@@ -985,6 +1077,7 @@ static void initialise(int argc, char *argv[])
     err_fatal(event_register_message_handler(Wimp_MDataLoad, dataload_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataSave, datasave_handler, NULL));
     err_fatal(event_register_message_handler(wimp_MOPENURL, openurl_handler, NULL));
+    err_fatal(event_register_message_handler(MESSAGE_URI_MPROCESS, openuri_handler, NULL));
     err_fatal(event_register_message_handler(message_WINFRAME_CONTROL, control_handler, NULL));
 
     err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
