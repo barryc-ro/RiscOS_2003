@@ -59,11 +59,19 @@ Stream::test_empty_buffers(void)
   
   	if ( (result != ErrorOccurred)&&(state != state_stop)&&(token_id != -1) ) {
 		buffers[token_id].in_use = claim_token;	// paired with free block
-	    	result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw));
+		int scene_num = 0;
+	    	result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num);
  	
 	 	if (result != ErrorOccurred){
 	 		if(buffers[token_id].block != NULL){
 				buffers[token_id].blocks_returned = 0;
+				if ((scene_blanking == true)&&(scene_num != 0)){
+					if (current_scene != scene_num){
+					  	if (current_scene != 0)
+							reset_sink(mysource->get_most_significant_mode());
+						current_scene = scene_num;
+					}
+				}
 				if ((result = mysink.FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
 				  	if (err_ptr == NULL) err_ptr = &(mysink.ReturnCopyOfError());
 					buffers[token_id].in_use = free_token;
@@ -99,12 +107,20 @@ Stream::test_empty_buffers(void)
   	MACRO_getFreeToken(token_id);
   
   	if ( (result != ErrorOccurred)&&(state != state_stop)&&(token_id != -1) ) {
-		buffers[token_id].in_use = claim_token;	// paired with free block		
-	    	result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw));
+		buffers[token_id].in_use = claim_token;	// paired with free block
+		int scene_num = 0;		
+	    	result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num);
  	
 	 	if (result != ErrorOccurred){
 	 		if(buffers[token_id].block != NULL){
 				buffers[token_id].blocks_returned = 0;
+				if ((scene_blanking == true)&&(scene_num != 0)){
+					if (current_scene != scene_num){
+					  	if (current_scene != 0)
+							reset_sink(mysource->get_most_significant_mode());
+						current_scene = scene_num;
+					}
+				}
 				if ((result = mysink.FullBuffer(buffers[token_id].mpeg_buffer)) == ErrorOccurred){
 				  	if (err_ptr == NULL) err_ptr = &(mysink.ReturnCopyOfError());
 					buffers[token_id].in_use = free_token;
@@ -137,7 +153,9 @@ Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_
   from = endofstream = 0; 	
   callback_pending = callback_bufferswait;	// buffer management is in a state of waiting for buffer blocks
   state = state_play;				// set the state of play
-  buffer_blocks = BufferBlocks;	
+  buffer_blocks = BufferBlocks;
+  current_scene = 0;
+  scene_blanking = false;
    
   if (mysink.ErrorExists()) {
     	if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
@@ -164,7 +182,7 @@ Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_
 // stream constructor MULTICAST
 
 Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlist, int play_num, Server *server, int NumBlocks, 
-	int source_recvspace, int BufferBlocks, void *pwork, int in_from):mysink(MPEGid)
+	int source_recvspace, int BufferBlocks, void *pwork, bool sceneblank, int in_from):mysink(MPEGid)
 {
   // server specific variables
   int BlockSize;		// data size calculation
@@ -180,6 +198,8 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   callback_pending = callback_bufferswait;	// buffer management is in a state of waiting for buffer blocks
   state = state_prestart;			// set the state of play
   buffer_blocks = BufferBlocks;	
+  current_scene = 0;
+  scene_blanking = sceneblank;
    
   if ((!ErrorExists())&&(mysink.ErrorExists())) {
     	if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
@@ -188,6 +208,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
     	myserver = server;
 
     	server->set_stream_owner();
+     	server->reset_message_sent();
   	mysource = new Source((comms_timeout+1)>>1, source_recvspace);			// create UDP socket
  	
  	if (server->ErrorExists()){ 				// errors on creation of TCP
@@ -320,10 +341,13 @@ Stream::~Stream(void)
 inline error_flag
 Stream::swap_source(void)
 {
+  	
   	if (source == source_streamlive){
      		Source *tmp = mysource;
+        	_kernel_irqs_off();
      		mysource = new Source((*tmp));
-     		delete tmp;
+     		delete tmp; tmp = NULL;
+        	_kernel_irqs_on();
      		if (mysource->ErrorExists()){
      			if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
      		}
@@ -335,8 +359,10 @@ Stream::swap_source(void)
         else {
         	if (source == source_vod){
     	  		Source *tmp = mysource;
+        		_kernel_irqs_off();
      	  		mysource = new SourceLIVE((*tmp));
-     	  		delete tmp;
+     	  		delete tmp; tmp = NULL;
+        		_kernel_irqs_on();
      			if (mysource->ErrorExists()){
      			  	if (err_ptr == NULL) err_ptr = &ReturnCopyOfError();
      			}
@@ -712,26 +738,7 @@ Stream::timeslice(Statistics *stats)
 			MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), comms_timeout, VSP_CallAfterVeneer, pw));
  		}
  		
- 		if (mysource->getStartEnd()){
- 		  	bool used_buffer = false;
-     				
-     			for (int i=0; i < NUM_MPEG_Tokens; i++){
-     				if (buffers[i].in_use != free_token)
-     					used_buffer = true;	
-     	                }
- 			if ((used_buffer == false)&&(mysource->getFullBlocks() == 0)){
- 		  	    	if ((mysource->get_most_significant_mode() == mode_fastrewind)||(mysource->get_most_significant_mode() == mode_backwardskip)){
- 			       		myserver->send_message_StartNotification(mysource->getStartEnd());
- 					callback_pending += callback_startend;
- 		    		}
- 				else {
-					myserver->send_message_EndNotification(mysource->getStartEnd());
-					callback_pending += callback_startend;
-					change_state(state_endreceived);
-		        	}
-		        }
-		}
-  	}
+ 	}
   	else {
 		if (callback_pending & callback_trickplay){
 		  
@@ -823,6 +830,27 @@ Stream::timeslice(Statistics *stats)
  		}
   	}
   }
+
+  if (mysource->getStartEnd()){
+   	bool used_buffer = false;
+     				
+ 	for (int i=0; i < NUM_MPEG_Tokens; i++){
+     		if (buffers[i].in_use != free_token)
+     		used_buffer = true;	
+     	}
+	if ((used_buffer == false)&&(mysource->getFullBlocks() == 0)){
+ 	    	if ((mysource->get_most_significant_mode() == mode_fastrewind)||(mysource->get_most_significant_mode() == mode_backwardskip)){
+ 	       		myserver->send_message_StartNotification(mysource->getStartEnd());
+ 			callback_pending += callback_startend;
+ 		}
+ 		else {
+			myserver->send_message_EndNotification(mysource->getStartEnd());
+			callback_pending += callback_startend;
+			change_state(state_endreceived);
+	       	}
+	}
+  }
+ 
   if ((state != state_stop)&&(ErrorExists())){
     	myserver->send_message_Error(err_ptr);
   }
@@ -885,7 +913,7 @@ Stream::source_inetevent(int code, Statistics *stats)
 				}
 				
       			  	if (!(callback_pending & callback_nak_now)){// if a callback is not in the pipe
-					if (timeout > 1){
+					if (timeout > 5){
 #ifdef DEBUGLIB
 						if (Debug(debug_callbacks))
   					  		Debug("+callback_after ie");
@@ -922,13 +950,15 @@ Stream::source_inetevent(int code, Statistics *stats)
                                 }
                                 else {
   					if (mysource->getFullBlocks() > buffer_blocks){
-  						play_mode mode = mysource->get_most_significant_mode();
-  				  	
+  				  		reset_sink(mysource->get_most_significant_mode());
+  				  	/*
+  				  		play_mode mode = mysource->get_most_significant_mode();
+  				  		
   					  	if ((mode == mode_fastforward)||(mode == mode_fastrewind))
 							mysink.ResetStream(1);
 						else
 							mysink.ResetStream(3);
-					
+					 */
 						callback_pending -= callback_bufferswait;
 						test_empty_buffers();
 					}

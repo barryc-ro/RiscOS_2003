@@ -212,9 +212,22 @@ Source::calculatePosNAKSequence(InternetObject *server, Statistics *stats, size_
         	        }// while datagrams
         	        stats->naks_sent += local_naks;
         	}//else
-        	        
-        	if ((local_naks > 0)&&((++mb->resends) > Acceptable_NAKS)&&(getStartEnd() == 0))
-        	      	result = MakeError(IP_TimeOutOnCommunication);
+
+        	if ((local_naks > 0)&&((++mb->resends) > Acceptable_NAKS)){
+#ifdef DEBUGLIB        	  
+        	  	if (Debug(debug_naks)) Debug("deleting block [%i]", mb->block_id);
+#endif        	  	
+        		mb->deleted_block = 1;
+        		mb->completed = 1;	// assign completed block
+			mb->pending_nak = 0;
+								
+			++(stats->deleted_blocks);
+			result = calculateMaxCompleteBlock();	// calculate most completed
+			
+			if (( ++deleted_blocks > Acceptable_deleted_blocks)&&(getStartEnd() == 0))
+				result = MakeError(IP_TimeOutOnCommunication);			
+		}
+			
 #ifdef DEBUGLIB				
         	if (Debug(debug_naks))
         		Debug("nak (%i)(%i)[%i] @ %i, %i/%i (%i)",
@@ -239,6 +252,7 @@ Source::Source(size_t set_nak_timeout, size_t source_recvspace)
   	nak_timeout = set_nak_timeout;
         most_significant_time = 0;
         start_end_block = 0;
+        deleted_blocks = 0;
   	
     	// Initialisation completed successfully
         sd.creat(PF_INET, SOCK_DGRAM);
@@ -256,6 +270,7 @@ Source::Source(Source& live)
   nak_timeout = 0;
   current_play_id = 0;		// this is the trickplay flag this changes with each new trickplay
   start_end_block = 0;
+  deleted_blocks = 0;
   
   live.SetSourceVar(&sd, &mem_map);
 
@@ -510,7 +525,7 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
 //
 //
 error_flag
-Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw)
+Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw, int *scene)
 {
        MemBlock *mb;
        error_flag result = ErrorState();
@@ -560,7 +575,8 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
 					
           		  	++(*block)->num_buffers;     		
           	        }
-                }	
+                }
+                (*scene) = ((NECBlockHeader*)(*block)->buffers[0].buffer_ptr)->scene_number;
            	(*block)->buffers[0].buffer_ptr    +=  sizeof(NECBlockHeader);
   		(*block)->buffers[0].buffer_length -=  sizeof(NECBlockHeader);
   		
@@ -642,11 +658,14 @@ Source::foregroundExecute(InternetObject *server, Statistics *stats, ULINT *time
 {
     size_t naks = 0;
     	
-    if (ErrorState() != ErrorOccurred){	// ack problem not ours
+    if (!ErrorExists()){	// ack problem not ours
  	       	 		
        	calculatePosNAKSequence(server, stats, &naks, timeout);
         	
        	if ((naks != 0)&&(naks != -1)) (*timeout) = nak_timeout;
+       	
+       	if ((!ErrorExists())&&(full_blocks == 0)) // incase we are deleting 
+       		calculatePosAckSequence(server, stats, (*timeout));
     }
     	
     return ErrorState();
@@ -765,6 +784,7 @@ Source::ReadDatagrams(callback_flag *flags, InternetObject *server, Statistics *
 						  		
 								mb->completed = 1;	// assign completed block
 								mb->pending_nak = 0;
+								deleted_blocks = 0;
 													
 	       							result = calculateMaxCompleteBlock();	// calculate most completed
 								//result = calculatePosAckSequence(server, stats, (*timeout));
@@ -893,6 +913,7 @@ SourceLIVE::SourceLIVE(Source& vod):Source(0,0)
   nak_timeout = 0;
   current_play_id = 0;		// this is the trickplay flag this changes with each new trickplay
   start_end_block = 0;
+  deleted_blocks = 0;
   	// Network information
   vod.SetSourceVar(&sd, &mem_map);
   
@@ -1052,6 +1073,7 @@ SourceMultiCast::SourceMultiCast(InternetObject *server, size_t source_recvspace
         most_significant_time = 0;
         current_play_id = 0;
         start_end_block = 0;
+        deleted_blocks = 0;
         mem_map = NULL;
   	struct ip_mreq mreq;
 
@@ -1149,7 +1171,7 @@ SourceMultiCast::SourceMultiCast(InternetObject *server, size_t source_recvspace
 //
 //
 error_flag
-SourceMultiCast::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw)
+SourceMultiCast::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int free_routine, int pw, int*)
 {
         MemBlock *mb;
         error_flag result = ErrorState();
