@@ -154,13 +154,6 @@ rm.${COMPONENT}: ${OBJS} ${OSLIB}
         ${LD} -o $@ -module ${OBJS} ${OSLIB} ${CLIB}
 
 # Dynamic dependencies:
-o.utils:	c.utils
-o.utils:	C:h.swis
-o.utils:	C:h.kernel
-o.utils:	h.msgs
-o.utils:	OS:h.os
-o.utils:	OS:h.types
-o.utils:	h.utils
 o.resources: s.resources
 o.resources: hdr:ListOpts
 o.resources: hdr:Macros
@@ -200,6 +193,13 @@ o.msgs:	OS:h.osspriteop
 o.msgs:	OS:h.font
 o.msgs:	OS:h.messagetrans
 o.msgs:	h.msgs
+o.utils:	c.utils
+o.utils:	C:h.swis
+o.utils:	C:h.kernel
+o.utils:	h.msgs
+o.utils:	OS:h.os
+o.utils:	OS:h.types
+o.utils:	h.utils
 o.toolact:	c.toolact
 o.toolact:	C:h.swis
 o.toolact:	C:h.kernel
