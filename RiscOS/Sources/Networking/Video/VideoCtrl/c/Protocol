@@ -138,7 +138,13 @@ static _kernel_oserror * protocol_match(url_description * d, const char ** param
             &match,
             param);
 
-  if (e != NULL && e->errnum == cu_ERROR_AREA_NOT_KNOWN && allow_fail)
+  if (e == NULL)
+  {
+    /* If no match, clear "param" (R1 is preserved on exit for no match) */
+
+    if ((match & CU_Check_OnExit_MatchFound) == 0) *param = NULL;
+  }
+  else if (e->errnum == cu_ERROR_AREA_NOT_KNOWN && allow_fail)
   {
     /* Since allow_fail is true, we area allowed to fail on an area ID */
     /* lookup. This is because we know IDs can become stale. In this   */
@@ -301,7 +307,7 @@ _kernel_oserror * protocol_deregister(_kernel_swi_regs * r)
   client             * list    = client_list;
   unsigned int         cleared = 0;
 
-  dprintf(("", "protocol_register: called\n"));
+  dprintf(("", "protocol_deregister: called\n"));
 
   for (proto=protocols; proto; owner=proto, proto=proto->next)
   {
@@ -339,7 +345,7 @@ _kernel_oserror * protocol_deregister(_kernel_swi_regs * r)
 
   r->r[1] = cleared;
 
-  dprintf(("", "protocol_register: Sucessful (%d affected)\n", cleared));
+  dprintf(("", "protocol_deregister: Sucessful (%d affected)\n", cleared));
 
   return NULL;
 }
@@ -433,7 +439,7 @@ _kernel_oserror * protocol_notify(_kernel_swi_regs * r)
 
   switch (r->r[2])
   {
-    case VideoControlProtocolNotifyResponseReceived:
+    case VideoControlProtocolNotifyNewStatus:
     {
       return protocol_notify_0(list, r->r[3], (char *) r->r[4], r->r[5]);
     }
@@ -442,6 +448,12 @@ _kernel_oserror * protocol_notify(_kernel_swi_regs * r)
     case VideoControlProtocolNotifyMessageReceived:
     {
       return protocol_notify_1(list);
+    }
+    break;
+
+    case VideoControlProtocolNotifyNewPlayState:
+    {
+      return protocol_notify_2(list, (vc_play_state) r->r[3]);
     }
     break;
   }
@@ -464,7 +476,7 @@ static _kernel_oserror * protocol_notify_0(client * list, unsigned int flags, ch
     printf("Protocol_Notify 0\n");
   #endif
 
-  if ((flags & VC_ProtocolNotify_ResponseReceived_Prepare) != 0)
+  if ((flags & VC_ProtocolNotify_NewStatus_Prepare) != 0)
   {
     dprintf(("", "protocol_notify_0: Prepare for playback\n"));
 
@@ -472,7 +484,7 @@ static _kernel_oserror * protocol_notify_0(client * list, unsigned int flags, ch
       printf("PN0 Prepare\n");
     #endif
 
-    if ((flags & VC_ProtocolNotify_ResponseReceived_PortInR5) != 0) list->port = port;
+    if ((flags & VC_ProtocolNotify_NewStatus_PortInR5) != 0) list->port = port;
 
     if (list->ctrlhand == 0 && (list->ctrl.flags & VC_ProtocolRegister_IHandleMPEG) == 0)
     {
@@ -507,7 +519,7 @@ static _kernel_oserror * protocol_notify_0(client * list, unsigned int flags, ch
       }
       else
       {
-        list->opts.play_status = vc_play_status_streaming;
+        protocol_notify_2(list, vc_play_state_streaming);
       }
 
 //    /* Possible trick play preparation; errors currently ignored */
@@ -520,12 +532,12 @@ static _kernel_oserror * protocol_notify_0(client * list, unsigned int flags, ch
     /* transition as possible.                                         */
   }
 
-  /* Finally, send the ResponseReceived service call */
+  /* Finally, send the NewStatus service call */
 
   return _swix(OS_ServiceCall,
                _INR(0,2),
 
-               VideoControlResponseReceived,
+               VideoControlNewStatus,
                Service_VideoControl,
                (int) list);
 }
@@ -539,8 +551,6 @@ static _kernel_oserror * protocol_notify_0(client * list, unsigned int flags, ch
 
 static _kernel_oserror * protocol_notify_1(client * list)
 {
-  (void) list;
-
   /* Send the MessageReceived service call */
 
   return _swix(OS_ServiceCall,
@@ -549,6 +559,54 @@ static _kernel_oserror * protocol_notify_1(client * list)
                VideoControlMessageReceived,
                Service_VideoControl,
                (int) list);
+}
+
+/**************************************************************/
+/* protocol_notify_2()                                        */
+/*                                                            */
+/* Implement VideoControl_ProtocolNotify reason code 2. See   */
+/* the Video Control specification, 2501,817/FS issue 3E or   */
+/* later for more.                                            */
+/*                                                            */
+/* This function is also called internally to raise the       */
+/* service call when state is changed elsewhere. Callers      */
+/* expect it to update the session's state and send the       */
+/* service call around.                                       */
+/*                                                            */
+/* Parameters: Pointer to the session in question, still      */
+/*             holding its old state;                         */
+/*                                                            */
+/*             New play state to move to.                     */
+/**************************************************************/
+
+_kernel_oserror * protocol_notify_2(client * list, vc_play_state new_state)
+{
+  unsigned int flags = 0;
+
+  /* Work out the flags */
+
+  if (new_state != list->opts.play_state)
+  {
+    flags |= VC_SVC_NewPlayState_ReadNewState;
+    list->opts.play_state = new_state;
+  }
+
+  if (
+       new_state == vc_play_state_normal_eos  ||
+       new_state == vc_play_state_timeout_eos
+     )
+     flags |= VC_SVC_NewPlayState_EndOfStreamSignalled;
+
+  /* Send the NewPlayStatus service call */
+
+  return _swix(OS_ServiceCall,
+               _INR(0,3),
+
+               VideoControlNewPlayState,
+               Service_VideoControl,
+               (int) list,
+               flags);
+
 }
 
 /**************************************************************/
