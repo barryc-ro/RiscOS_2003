@@ -36,7 +36,10 @@ SignalDiscontinuities SETL {TRUE} :LAND: CountDiscontinuities ; set packet descr
 InsertErrorCodes SETL {FALSE} :LAND: SignalDiscontinuities ; overwrite video data with sequence_error_code after a TS discontinuity
 
                 GBLL    HarvardCache
-HarvardCache    SETL    {TRUE}                         ; support StrongARM/ARM9 caches
+HarvardCache    SETL    {TRUE}                          ; support StrongARM/ARM9 caches
+
+                GBLL    Multi
+Multi           SETL    {TRUE}                          ; support multiple control stream handles
 
                 GBLL    DebugNPT
 DebugNPT        SETL    {FALSE}                         ; print NPT debug to vdu
@@ -190,6 +193,12 @@ PSHISize                        *       :INDEX: @
 ; Control stream handle structure
 
                         ^       0
+ [ Multi
+CSH_HeapBlockReserved   #       4                       ; first word of each quad-word-aligned heap block is used by heap manager
+CSH_VersionBits         #       4                       ; for checking handle validity (special value -1 => stream dead)
+CSH_Next                #       4
+CSH_Prev                #       4
+ ]
 CSH_ModuleWsPtr         #       4
 CSH_StreamFlags         #       4
 CSH_VideoStreamHandle   #       4
@@ -304,7 +313,11 @@ AutoTSDetect_Scans      *       21      ; 21 passes over the bins covers nearly 
 AutoTSDetect_MinMatches *       11      ; even if there is one non-packet-multiple discontinuity, there should be at least this many sync codes in a run
 AutoSCDetect_LookAhead  *       68*1024 ; enough for the maximum length of one PES packet plus a bit more
 
+ [ Multi
+CSHSize                 *       @ - 4   ; exclude heap block reserved word
+ |
 CSHSize                 *       @
+ ]
 
 
                         ^       0, wp
@@ -334,7 +347,11 @@ Saved_FPSR              #       4       ; for saving the fp context
 Saved_FPRegs            #       12*4    ;
 
  [ Capture
+ [ Multi
+CaptureStream           #       4       ; 0 = inactive, else internal handle of stream to capture
+ |
 CaptureEnable           #       4       ; 0 = inactive, 1 = active
+ ]
 CaptureDANo             #       4       ; dynamic area number
 CaptureDAStart          #       4       ; base address of dynamic area
 CaptureDASize           #       4       ; size of dynamic area
@@ -348,8 +365,15 @@ GlobalDemuxType         #       4       ; as used by MPEGControl_ControlOp - cop
 Discontinuity           #       4       ; nonzero => this TS packet follows a discontinuity
  ]
 
+ [ Multi
+VersionBitsSeed                 #       4
+ControlStreamHandleListHeadPtr  #       4       ; doubly-linked list of control stream handles
+ControlStreamHandleListTerminator #     4       ; always 0 (prev pointer for list head, and next pointer for list tail)
+ControlStreamHandleListTailPtr  #       4
+ |
 ControlStreamHandle     #       CSHSize ; goes at the end cos likely to be long (with stack)
                                         ; NB this could be dynamically allocated on OpenStream eventually
+ ]
 
 Module_WorkspaceSize * :INDEX: @
 
@@ -532,6 +556,29 @@ Mod_Init Entry
 
         Debug_Open "MPEGDebug"
 
+ [ Multi
+
+        MOV     r0, #1
+        STR     r0, VersionBitsSeed
+        ADR     r0, ControlStreamHandleListTerminator - CSH_Next
+        STR     r0, ControlStreamHandleListHeadPtr
+        ADR     r0, ControlStreamHandleListTerminator - CSH_Prev
+        STR     r0, ControlStreamHandleListTailPtr
+        MOV     r0, #0
+        STR     r0, ControlStreamHandleListTerminator
+        STR     r0, FreePacketListHeadPtr
+        STR     r0, FreePacketListTailPtr
+        STR     r0, DebugFlag
+ [ DoPEH
+	STR	r0, GlobalPEHList	; no handlers on list to start with
+ ]
+ [ DoNDS
+        STR     r0, GlobalDHList
+        STR     r0, GlobalPSHList
+ ]
+
+ |
+
         STR     r12, ControlStreamHandle+CSH_ModuleWsPtr
 
         MOV     r0, #StreamFlags_StreamClosing
@@ -552,8 +599,15 @@ Mod_Init Entry
         STR     r0, ControlStreamHandle+CSH_ListOfPSHIs
  ]
         STR     r0, ControlStreamHandle+CSH_CoroutineStackCopy ; to catch anyone deregistering a handler before the first OpenStream
+
+ ]
+
  [ Capture
+ [ Multi
+        STR     r0, CaptureStream
+ |
         STR     r0, CaptureEnable
+ ]
  ]
  [ :LNOT: HarvardCache
         LDR     r0, PullPCInstruction
@@ -593,6 +647,28 @@ Mod_Die Entry
 
         BL      IssueServiceMPEGControlDying
 
+      [ Multi
+; Close all streams (since people can't call MPEGControl_CloseStream)
+        LDR     r1, ControlStreamHandleListHeadPtr
+10      LDR     r2, [r1, #CSH_Next]
+        TEQ     r2, #0
+        BEQ     %FT90
+        LDR     lr, [r1, #CSH_VersionBits]
+        TST     lr, #1:SHL:31
+        MOVNE   r1, r2
+        BNE     %BT10
+        MOV     r0, #CloseStreamFlags_BlankVideo
+        BL      int_close_stream
+        MOV     r1, r2
+        B       %BT10
+90      ; If any streams have been opened, then there will still be one phantom struct on the list
+        LDR     r2, ControlStreamHandleListHeadPtr
+        LDR     r1, [r2, #CSH_Next]
+        TEQ     r1, #0
+        MOVNE   r0, #ModHandReason_Free
+        SWINE   XOS_Module
+      ]
+
 ; Free all the packets on our free list
 
 	LDR	r1, FreePacketListHeadPtr
@@ -606,6 +682,7 @@ Mod_Die Entry
 
 90
 
+      [ DoPEH
 ; Free all the PEHs
         LDR     r1, GlobalPEHList
 10
@@ -616,12 +693,44 @@ Mod_Die Entry
         SWI     XOS_Module
         B       %BT10
 90
+      ]
+      [ DoNDS
+; Free all the DHs
+        LDR     r1, GlobalDHList
+10
+        MOVS    r2, r1
+        BEQ     %FT90
+        LDR     r1, [r2, #DH_Link]
+        MOV     r0, #ModHandReason_Free
+        SWI     XOS_Module
+        B       %BT10
+90
+
+; Free all the PSHs
+        LDR     r1, GlobalPSHList
+10
+        MOVS    r2, r1
+        BEQ     %FT90
+        LDR     r1, [r2, #PSH_Link]
+        MOV     r0, #ModHandReason_Free
+        SWI     XOS_Module
+        B       %BT10
+90
+      ]
 
       [ Capture
+      [ Multi
+        LDR     r0, CaptureStream
+        TEQ     r0, #0
+        MOVNE   r0, #1
+        LDRNE   r1, CaptureDANo
+        SWINE   XOS_DynamicArea
+      |
         LDR     r0, CaptureEnable
         TEQ     r0, #1             ; is also the "remove" reason code to OS_DynamicArea
         LDREQ   r1, CaptureDANo
         SWIEQ   XOS_DynamicArea
+      ]
       ]
 
         Debug_Close
@@ -721,6 +830,25 @@ NoSuchSWIError
         =       "No such MPEGControl SWI", 0
         ALIGN
 
+ [ Multi
+CheckCSH
+        ; In:  r1 = external control stream handle
+        ; Out: r1 = internal control stream handle, or V set and r0 -> error
+        Entry   "r2"
+        AND     lr, r1, #&F
+        BIC     r1, r1, #&F
+        LDR     r2, [r1, #CSH_VersionBits]
+        CMP     r2, lr
+        EXIT    EQ
+        ADR     r0, IllegalCSHError
+        SETV
+        EXIT
+IllegalCSHError
+        &       0
+        =       "Illegal control stream handle", 0
+        ALIGN
+ ]
+
 ; **************************************************************************
 ;
 ;       OpenStream - Open MPEG stream
@@ -733,9 +861,55 @@ NoSuchSWIError
 ; out:  r0 = control stream handle (for now)
 ;
 
-OpenStream Entry "r0-r2"
+OpenStream
+      [ Multi
+        Entry   "r0-r3"
+        Debug   entry, "MPEGControl_OpenStream: ", r0, r1, r2, r3
+        SCPSR   I_bit, 0, lr,, r1
+
+        ; If there's a dead handle at the head of the list then re-use it, else allocate a new one
+        LDR     r2, ControlStreamHandleListHeadPtr
+        LDR     lr, [r2, #CSH_Next]
+        CMP     lr, #0          ; nothing on the list at all?
+        LDRNE   lr, [r2, #CSH_VersionBits]
+        TSTNE   lr, #1:SHL:31
+        MOVEQ   r0, #ModHandReason_Claim
+        MOVEQ   r3, #CSHSize
+        SWIEQ   XOS_Module      ; returns (quad-word-aligned + 4) address in r2
+        STRVS   r0, [sp]
+        EXIT    VS
+        MOV     r3, r1
+        BIC     r1, r2, #&F     ; new internal control stream handle
+
+        ; Assign version bits
+        LDR     r0, VersionBitsSeed
+        STR     r0, [r1, #CSH_VersionBits]
+        ADD     r0, r0, #1
+        CMP     r0, #16
+        MOVEQ   r0, #1
+        STR     r0, VersionBitsSeed
+
+        ; Insert at head of list (become new preferred handle for *CtrlInfo etc)
+        LDR     r0, ControlStreamHandleListHeadPtr
+        TEQ     r0, r1
+        STRNE   r1, ControlStreamHandleListHeadPtr
+        STRNE   r0, [r1, #CSH_Next]
+        STRNE   r1, [r0, #CSH_Prev]
+        ADRNE   r0, ControlStreamHandleListHeadPtr - CSH_Next
+        STRNE   r0, [r1, #CSH_Prev]
+        RestPSR r3
+
+        STR     r12, [r1, #CSH_ModuleWsPtr]
+        ; Other stuff that used to be in Mod_Init gets reset below anyway
+
+        LDR     r0, [sp]        ; retrieve r0
+        ADD     lr, sp, #8
+        LDMIA   lr, {r2, r3}    ; retrieve r2 and r3
+      |
+        Entry   "r0-r2"
         Debug   entry, "MPEGControl_OpenStream: ", r0, r1, r2, r3
         ADR     r1, ControlStreamHandle
+      ]
 
         STR     r0, [r1, #CSH_StreamFlags]
 
@@ -752,6 +926,15 @@ OpenStream Entry "r0-r2"
 	STR     lr, [r1, #CSH_DemuxType]
 
  [ Capture
+ [ Multi
+        LDR     lr, CaptureStream
+        TEQ     lr, #0                                  ; if capturing enabled
+        STRNE   r1, CaptureStream                       ; then take over capturing from previous
+        LDRNE   lr, CaptureDAStart
+        STRNE   lr, CaptureWritePtr
+        MOVNE   lr, #0
+        STRNE   lr, CaptureAmount
+ |
         LDR     lr, CaptureEnable
         TEQ     lr, #1
         LDREQ   lr, CaptureDAStart
@@ -759,26 +942,36 @@ OpenStream Entry "r0-r2"
         MOVEQ   lr, #0
         STREQ   lr, CaptureAmount
  ]
+ ]
 
         TST     r0, #StreamFlags_VideoPresent
         BEQ     %FT10
 
+        Push    "r1"
+      [ Multi
+        LDR     lr, [r1, #CSH_VersionBits]
+        ORR     r1, r1, lr
+      ]
         SWI     XMPEGVideo_OpenStream                   ; in: r0 = stream flags
-        STRVS   r0, [sp]
+        STRVS   r0, [sp, #4]!
         EXIT    VS
-        ADR     r1, ControlStreamHandle
+        Pull    "r1"
         STR     r0, [r1, #CSH_VideoStreamHandle]
         LDR     r0, [r1, #CSH_StreamFlags]
 10
         TST     r0, #StreamFlags_AudioPresent
         BEQ     %FT20
 
+        Push    "r1"
+      [ Multi
+        LDR     lr, [r1, #CSH_VersionBits]
+        ORR     r1, r1, lr
+      ]
         MOV     r2, r3
         SWI     XMPEGAudio_OpenStream                   ; in: r0 = stream flags
-        STRVS   r0, [sp]
+        STRVS   r0, [sp, #4]!
         EXIT    VS
-
-        ADR     r1, ControlStreamHandle
+        Pull    "r1"
         STR     r0, [r1, #CSH_AudioStreamHandle]
 20
  [ DoPEH :LOR: DoNDS
@@ -806,6 +999,7 @@ OpenStream Entry "r0-r2"
 	MOV	r3, #PEHPIDSize
 	SWI	XOS_Module
 	Pull	"r3-r6", VS				; if failed to claim PEHPID, exit with error
+        STRVS   r0, [sp]
 	EXIT	VS
 
 ;   Issue OpenStream reason code to program element handler
@@ -813,8 +1007,14 @@ OpenStream Entry "r0-r2"
 30
 	Push	"r1,r2"
 	MOV	r0, #PEHReason_OpenStream
+      [ Multi
+        LDR     r2, [r1, #CSH_VersionBits]
+        ORR     r2, r1, r2                              ; r2 = external control stream handle
+        LDR     r1, [r1, #CSH_StreamFlags]              ; r1 = stream flags
+      |
 	MOV	r2, r1					; r2 = control stream handle
 	LDR	r1, [r2, #CSH_StreamFlags]		; r1 = stream flags
+      ]
 	MOV	r3, #0					; no program element parameters struct yet
 	BL	CallPEH
 	Pull	"r1,r2"
@@ -877,6 +1077,7 @@ OpenStream Entry "r0-r2"
         MOV     r3, #DHISize
         SWI     XOS_Module
         Pull    "r3-r6", VS                             ; if failed to claim DHI, exit with error
+        STRVS   r0, [sp]
         EXIT    VS
 
 ;   Issue OpenStream reason code to handler
@@ -884,8 +1085,14 @@ OpenStream Entry "r0-r2"
 30
         Push    "r1,r2"
         MOV     r0, #DHReason_OpenStream
+      [ Multi
+        LDR     r2, [r1, #CSH_VersionBits]
+        ORR     r2, r1, r2                              ; r2 = external control stream handle
+        LDR     r1, [r1, #CSH_StreamFlags]              ; r1 = stream flags
+      |
         MOV     r2, r1                                  ; r2 = control stream handle
         LDR     r1, [r2, #CSH_StreamFlags]              ; r1 = stream flags
+      ]
         MOV     r3, #0                                  ; no descriptor parameters struct yet
         BL      CallDH
         Pull    "r1,r2"
@@ -934,6 +1141,7 @@ OpenStream Entry "r0-r2"
         MOV     r3, #PSHISize
         SWI     XOS_Module
         Pull    "r3-r6", VS                             ; if failed to claim PSHI, exit with error
+        STRVS   r0, [sp]
         EXIT    VS
 
 ;   Issue OpenStream reason code to handler
@@ -941,8 +1149,14 @@ OpenStream Entry "r0-r2"
 30
         Push    "r1,r2"
         MOV     r0, #PSHReason_OpenStream
+      [ Multi
+        LDR     r2, [r1, #CSH_VersionBits]
+        ORR     r2, r1, r2                              ; r2 = external control stream handle
+        LDR     r1, [r1, #CSH_StreamFlags]              ; r1 = stream flags
+      |
         MOV     r2, r1                                  ; r2 = control stream handle
         LDR     r1, [r2, #CSH_StreamFlags]              ; r1 = stream flags
+      ]
         MOV     r3, #0                                  ; no descrambler parameters struct yet
         BL      CallPSH
         Pull    "r1,r2"
@@ -1031,7 +1245,12 @@ OpenStream Entry "r0-r2"
         MOV     r0, r1
         BL      coinit                                  ; initialise coroutines
 
+      [ Multi
+        LDR     r0, [r1, #CSH_VersionBits]
+        ADDS    r0, r1, r0                              ; convert to external CSH (with version bits), clearing V
+      |
         CLRV
+      ]
         STR     r0, [sp]
         EXIT
 
@@ -1052,7 +1271,13 @@ OpenStream Entry "r0-r2"
 
 Play    Entry "r0-r3"
         Debug   entry, "MPEGControl_Play: ", r0, r1
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      |
         ADR     r1, ControlStreamHandle
+      ]
 
       [ EOSDetect
         TST     r0, #PlayFlags_VideoReady :OR: PlayFlags_AudioReady
@@ -1128,7 +1353,6 @@ Play    Entry "r0-r3"
         ; End Of Stream has occurred
         BL      RemoveTimeoutTicker                     ; don't generate timeouts after this point
         ADR     r0, CallBack_UpCall_EndOfStream
-        MOV     r1, r12
         SWI     XOS_AddCallBack                         ; do it on a callback because we may have been triggered from an IRQ handler
         EXIT
 
@@ -1137,7 +1361,6 @@ Play    Entry "r0-r3"
 
         ; Stream has timed out and stopped decoding
         ADR     r0, CallBack_UpCall_TimeOut
-        MOV     r1, r12
         SWI     XOS_AddCallBack                         ; do it on a callback because we may have been triggered from an IRQ handler
         EXIT
 
@@ -1148,7 +1371,7 @@ CallBack_UpCall_EndOfStream
       ]
         MOV     r0, #UpCall_MPEG
         MOV     r1, #0
-        ADR     r2, ControlStreamHandle
+        MOV     r2, r12
         MOV     r3, #UpCallMPEG_EndOfStream
         SWI     XOS_UpCall
         EXIT
@@ -1160,7 +1383,7 @@ CallBack_UpCall_TimeOut
       ]
         MOV     r0, #UpCall_MPEG
         MOV     r1, #0
-        ADR     r2, ControlStreamHandle
+        MOV     r2, r12
         MOV     r3, #UpCallMPEG_TimeOut
         SWI     XOS_UpCall
         EXIT
@@ -1238,7 +1461,13 @@ CheckVidAudUnitsIdle
 
 SetSpeed Entry "r0-r3"
         Debug   entry, "MPEGControl_SetSpeed: ", r0, r1, r2
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      |
         ADR     r1, ControlStreamHandle
+      ]
         STR     r2, [r1, #CSH_NextSpeedIndicator]               ; store the speed indicator for future use
         LDR     lr, [r1, #CSH_ControlStreamType]
         TEQ     lr, #ControlStreamType_MPEG2Transport           ; if it's a stream type that can generate internal resets
@@ -1306,8 +1535,13 @@ SetSpeed Entry "r0-r3"
 
 MuteSound Entry "r0-r3"
         Debug   entry, "MPEGControl_MuteSound: ", r0, r1
-	CLRV
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      |
         ADR     r1, ControlStreamHandle
+      ]
 
         LDR     lr, [r1, #CSH_StreamFlags]
         TST     lr, #StreamFlags_AudioPresent
@@ -1330,8 +1564,13 @@ MuteSound Entry "r0-r3"
 
 SoundVolume Entry "r0,r1"
         Debug   entry, "MPEGControl_SoundVolume: ", r0, r1, r2
-	CLRV
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      |
         ADR     r1, ControlStreamHandle
+      ]
 
         LDR     lr, [r1, #CSH_StreamFlags]
         TST     lr, #StreamFlags_AudioPresent
@@ -1353,7 +1592,11 @@ SoundVolume Entry "r0,r1"
 
 SetAudioParameters Entry "r0,r1"
         Debug   entry, "MPEGControl_SetAudioParameters: ", r0, r1, r2
-	CLRV
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      ]
         LDR     lr, [r1, #CSH_StreamFlags]
         TST     lr, #StreamFlags_AudioPresent
 	LDRNE	r1, [r1, #CSH_AudioStreamHandle]
@@ -1374,9 +1617,13 @@ SetAudioParameters Entry "r0,r1"
 
 SetVideoParameters Entry "r0,r1"
         Debug   entry, "MPEGControl_SetVideoParameters: ", r0, r1, r2
-	CLRV
 	TEQ     r0, #0
 	BNE     %FT01
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      ]
         LDR     lr, [r1, #CSH_StreamFlags]
         TST     lr, #StreamFlags_VideoPresent
 	LDRNE	r1, [r1, #CSH_VideoStreamHandle]
@@ -1398,9 +1645,13 @@ SetVideoParameters Entry "r0,r1"
 
 GetSprite Entry "r1"
         Debug   entry, "MPEGControl_GetSprite: ", r0, r1, r2, r3
-        CLRV
         TEQ     r1, #0                                  ; pass a value of 0 straight through
         BEQ     %FT01
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      ]
         LDR     lr, [r1, #CSH_StreamFlags]
         TST     lr, #StreamFlags_VideoPresent
         BEQ     %FT90
@@ -1446,6 +1697,10 @@ FullBuffers_DirectAccessWrapper
         ; CheckSanity "Buffer pointer passed to APCS FullBuffers", r2
         LDR     r1, [r2, #BufferDescriptor_CSH]
         CheckSanity "Control stream handle in buffer descriptor", r1
+      [ Multi
+        ; Assume this caller is safe (it has been up to now!)
+        BIC     r1, r1, #&F
+      ]
         LDR     r12, [r1, #CSH_ModuleWsPtr]             ; needed for things like accessing FreePacketList
         CheckSanity "Module workspace pointer from CSH", r12
         BL      int_full_buffers
@@ -1459,16 +1714,32 @@ FullBuffers_DirectAccessWrapper
 ;       r2 -> one or more linked bitstream buffers
 
 FullBuffers
-;        TST     r0, #FullBuffersFlags_UsingNewBSBufFormat
-;        BEQ     Unsupported_FullBuffers_Call
+      [ Multi
+        TST     r0, #FullBuffersFlags_UsingNewBSBufFormat
+        BEQ     Unsupported_FullBuffers_Call
+        CheckSanity "Control stream handle passed to SWI FullBuffers", r1
+        ; CheckSanity "Buffer pointer passed to SWI FullBuffers", r2
+        Entry   "r0-r5"
+        BL      CheckCSH
+        BVC     %FT01
+        EXIT
+int_full_buffers ALTENTRY
+01
+      |
         CheckSanity "Control stream handle passed to SWI FullBuffers", r1
         ; CheckSanity "Buffer pointer passed to SWI FullBuffers", r2
         ; drop through to...
 int_full_buffers Entry "r0-r5"
+      ]
         Debug   entry, "MPEGControl_FullBuffers: ", r0, r1, r2
  [ Capture
+ [ Multi
+        LDR     lr, CaptureStream
+        TEQ     lr, r1
+ |
         LDR     lr, CaptureEnable
         TEQ     lr, #1
+ ]
         BNE     %FT10
 
         Push    "r0-r5"
@@ -1638,14 +1909,14 @@ xdebug   SETL    {FALSE}
 
 xdebug   SETL    {FALSE}
 
-;Unsupported_FullBuffers_Call
-;        ADR     r0, %FT00
-;        SETV
-;        MOV     pc, lr
-;00
-;        &       0
-;        =       "This version of MPEGControl does not support old-format bitstream buffer descriptors", 0
-;        ALIGN
+Unsupported_FullBuffers_Call
+        ADR     r0, %FT00
+        SETV
+        MOV     pc, lr
+00
+        &       0
+        =       "This version of MPEGControl does not support old-format bitstream buffer descriptors", 0
+        ALIGN
 
 ; **************************************************************************
 ;
@@ -1655,9 +1926,22 @@ xdebug   SETL    {FALSE}
 ;       r1 = control stream handle
 ;
 
+ [ Multi
+int_close_stream ; internally, we don't need the check
+        Entry   "r0,r1"
+        B       %FT01
+CloseStream
+        Entry   "r0,r1" ; probably ought to preserve r1, even though the old code didn't!
+        Debug   entry, "MPEGControl_CloseStream: ", r0, r1
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+01
+ |
 CloseStream Entry "r0"
         Debug   entry, "MPEGControl_CloseStream: ", r0, r1
         ADR     r1, ControlStreamHandle
+ ]
         STR     r0, [r1, #CSH_CloseStreamFlags]
         LDR     r0, [r1, #CSH_StreamFlags]
         ORR     r0, r0, #StreamFlags_StreamClosing	; first set the stream closing bit, so any incoming data gets junked
@@ -1768,7 +2052,7 @@ CloseStream Entry "r0"
 
 ; Now free the coroutine stack block
 
-	Push	"r0-r2"
+	Push	"r0,r2"
 	LDR	r2, [r1, #CSH_CoroutineStackCopy]
 	TEQ	r2, #0
 	MOVNE	r0, #ModHandReason_Free
@@ -1776,7 +2060,28 @@ CloseStream Entry "r0"
 	MOV	r2, #0
 	STR	r2, [r1, #CSH_CoroutineStackCopy]
 	STR	r2, [r1, #CSH_CoroutineStackBlockSize]
-	Pull	"r0-r2"
+ [ Multi
+        ; Mark the stream as dead, in case anyone tries to reference it again
+        MOV     lr, #-1
+        STR     lr, [r1, #CSH_VersionBits]
+        ; Unless this is the most recently-opened stream, delink and free the CSH structure
+        LDR     lr, [r1, #CSH_Prev]
+        LDR     lr, [lr, #CSH_Prev]
+        TEQ     lr, #0
+        MRSNE   r2, CPSR
+        ORRNE   r0, r2, #I32_bit
+        MSRNE   CPSR_c, r0 ; IRQs off, leave flags unchanged
+        LDRNE   r0, [r1, #CSH_Prev]
+        LDRNE   lr, [r1, #CSH_Next]
+        STRNE   lr, [r0, #CSH_Next]
+        STRNE   r0, [lr, #CSH_Prev]
+        MSRNE   CPSR_c, r2
+        MOVNE   r0, #ModHandReason_Free
+        MOVNE   r2, r1
+        SWINE   XOS_Module
+ ]
+	Pull	"r0,r2"
+
         CLRV
         EXIT
 
@@ -1792,8 +2097,18 @@ CloseStream Entry "r0"
 ;
 ; out:	-
 
-SelectProgram Entry "r3,r4"
+SelectProgram
+      [ Multi
+        Entry   "r1,r3,r4"
+      |
+        Entry   "r3,r4"
+      ]
         Debug   entry, "MPEGControl_SelectProgram: ", r0, r1, r2, r3, r4
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      ]
 	LDR	lr, [r1, #CSH_StreamFlags]
 	TEQ	r2, #0
 	ORREQ	lr, lr, #StreamFlags_NoProgramSelected ; if zero then don't allow any elementary/system/program stream data through
@@ -1985,6 +2300,11 @@ ChangePacketCount
 
 ResetStream Entry "r0-r3"
         Debug   entry, "MPEGControl_ResetStream: ", r0, r1, r2
+      [ Multi
+        BL      CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+      ]
         STR     r0, [r1, #CSH_NextResetStreamFlags]
         TST     r0, #ResetStreamFlags_DeferReset
         EXIT    NE
@@ -2200,8 +2520,21 @@ int_reset_stream                                ; may also be called from within
 ;
 ; out:	All registers preserved
 
-RegisterProgramElementHandler Entry "r4"
+RegisterProgramElementHandler Entry "r4,r5"
         Debug   entry, "MPEGControl_RegisterProgramElementHandler: ", r0, r1, r2, r3
+
+        TST     r0, #PEHFlags_StreamSpecific
+        MOVEQ   r5, #0
+        MOVNE   r5, r4
+      [ Multi
+        BEQ     %FT05
+        Push    "r1"
+        MOV     r1, r4
+        BL      CheckCSH
+        Pull    "r1"
+        EXIT    VS
+05
+      ]
 
 ; check if stream type in r1 matches any PEH on global list - if so, error
 
@@ -2213,12 +2546,20 @@ RegisterProgramElementHandler Entry "r4"
 	LDR	lr, [r4, #PEH_StreamType]	; then load streamtype
 	TEQ	lr, r1				; if a match
 	LDREQ	lr, [r4, #PEH_Flags]		; then check flags also match
-	TEQEQ	lr, r0	 			; to avoid problems if one is a stream_type and one is a PID
+        EOREQ   lr, lr, r0
+        TSTEQ   lr, #PEHFlags_StreamIdentifiedByPID ; to avoid problems if one is a stream_type and one is a PID
 	LDRNE	r4, [r4, #PEH_Link]		; if no match then goto next
 	BNE	%BT10				; and loop
-
-	TEQ	r4, #0				; did we get to end of list?
-	BNE	%FT90				; if not, then already a handler for that
+     [ Multi
+        ; if stream-specific, but to different streams, then it's okay
+        TEQ     r5, #0
+        LDRNE   lr, [r4, #PEH_CSH]
+        TEQNE   lr, #0
+        TEQNE   lr, r5
+        LDRNE   r4, [r4, #PEH_Link]
+        BNE     %BT10
+     ]
+        B       %FT90				; already a handler for that
 						; stream type, so report an error
 ; allocate a PEH node - if fail, then error
 
@@ -2238,6 +2579,7 @@ RegisterProgramElementHandler Entry "r4"
 	STR	r1, [r4, #PEH_StreamType]
 	STR	r2, [r4, #PEH_HandlerCode]
 	STR	r3, [r4, #PEH_HandlerWS]
+	STR     r5, [r4, #PEH_CSH]
 
 ; add PEH to global list (at head of list is easiest)
 ; NB no atomicity problems - PEH list can only be updated from foreground
@@ -2246,23 +2588,45 @@ RegisterProgramElementHandler Entry "r4"
 	STR	lr, [r4, #PEH_Link]
 	STR	r4, GlobalPEHList
 
-; create a PEHPID node if stream open (eventually, do this for each open control stream handle)
+; create a PEHPID node if stream open
 
         Push    "r0-r4,r6"
+        MOV     r6, r4
+      [ Multi
+        ADR     r5, ControlStreamHandleListHeadPtr - CSH_Next
+21      LDR     r5, [r5, #CSH_Next]
+        LDR     lr, [r5, #CSH_Next]
+        TEQ     lr, #0
+        BEQ     %FT30
+        LDR     lr, [r5, #CSH_VersionBits]
+        TST     lr, #1:SHL:31                   ; stream closed?
+        BNE     %BT21
+        ORR     r0, r5, lr                      ; external handle
+        LDR     lr, [r6, #PEH_CSH]
+        TEQ     lr, #0                          ; generic handler, or
+        TEQNE   lr, r0                          ; specific to this stream?
+        BNE     %BT21
+      ]
         ; Allocate the PEHPID block we'll use if handler opens sucessfully
         MOV     r0, #ModHandReason_Claim
         MOV     r3, #PEHPIDSize
         SWI     XOS_Module
-        Pull    "r0-r4,r6", VS
+        ADDVS   sp, sp, #4
+        Pull    "r1-r4,r6", VS
         EXIT    VS
-        MOV     r6, r4
         MOV     r4, r2
 
         ; Issue OpenStream
+      [ Multi
+        LDR     r2, [r5, #CSH_VersionBits]
+        ORR     r2, r2, r5
+        LDR     r1, [r5, #CSH_StreamFlags]
+      |
         ADR     r2, ControlStreamHandle
         LDR     r1, [r2, #CSH_StreamFlags]
         TST     r1, #StreamFlags_StreamClosing
-        BNE     %FT30                           ; do nothing if stream closed (or closing)
+        BNE     %FT80                           ; do nothing if stream closed (or closing)
+      ]
         BIC     r1, r1, #StreamFlags_Private
         MOV     r0, #PEHReason_OpenStream
         MOV     r3, #0                          ; still no program element parameters struct yet
@@ -2298,18 +2662,29 @@ RegisterProgramElementHandler Entry "r4"
       ]
 
         ; In case we're in a trick play mode, we must issue ResetStream too
+        MOV     r2, r0                                  ; still holds client handle
+      [ Multi
+        LDR     r1, [r5, #CSH_LastResetStreamFlags]
+      |
         ADR     lr, ControlStreamHandle
         LDR     r1, [lr, #CSH_LastResetStreamFlags]
+      ]
         BIC     r1, r1, #ResetStreamFlags_Private
         MOV     r0, #PEHReason_ResetStream
-        LDR     r2, [r2, #PEHPID_ProgramElementStreamHandle]
         BL      CallPEH
 
         ; Link into PEHPID chain
+      [ Multi
+        LDR     lr, [r5, #CSH_ListOfPEHPIDs]            ; add PEHPID onto list for this stream
+        STR     lr, [r4, #PEHPID_Link]
+        STR     r4, [r5, #CSH_ListOfPEHPIDs]
+        B       %BT21
+      |
         ADR     r1, ControlStreamHandle
         LDR     lr, [r1, #CSH_ListOfPEHPIDs]            ; add PEHPID onto list for this stream
         STR     lr, [r4, #PEHPID_Link]
         STR     r4, [r1, #CSH_ListOfPEHPIDs]
+      ]
 30
         Pull    "r0-r4,r6"
 
@@ -2350,6 +2725,7 @@ DeregisterProgramElementHandler Entry "r4-r6"
 
 ; check if (stream type,entry,ws) matches any PEH on global list - if not, error
 
+        MOV     r5, r4
 	ADR	r6, GlobalPEHList
 	LDR	r4, [r6]
 10
@@ -2364,6 +2740,8 @@ DeregisterProgramElementHandler Entry "r4-r6"
 	TEQEQ	lr, r2				; and check for match
 	LDREQ	lr, [r4, #PEH_HandlerWS]	; if match then load handler WS ptr
 	TEQEQ	lr, r3				; and check for match
+        LDREQ   lr, [r4, #PEH_CSH]              ; if match then load control stream handle
+        TEQEQ   lr, r5                          ; and check for match
 	MOVNE	r6, r4				; if no match then update prev ptr
 	LDRNE	r4, [r4, #PEH_Link]		; if no match then goto next
 	BNE	%BT10				; and loop
@@ -2374,27 +2752,43 @@ DeregisterProgramElementHandler Entry "r4-r6"
 	STR	lr, [r6, #PEH_Link]
 
 ; close any PEHPID nodes that were using the PEH
-; eventually, this will need to loop round all control stream handles
         Push    "r0-r3"
         MOV     r6, r4                          ; PEH being deregistered
+      [ Multi
+        ADR     r5, ControlStreamHandleListHeadPtr - CSH_Next
+31      LDR     r5, [r5, #CSH_Next]
+        LDR     lr, [r5, #CSH_Next]
+        TEQ     lr, #0
+        BEQ     %FT50
+        ADD     r3, r5, #CSH_ListOfPEHPIDs - PEHPID_Link
+      |
         ADR     r3, ControlStreamHandle+CSH_ListOfPEHPIDs-PEHPID_Link
-40      LDR     r5, [r3, #PEHPID_Link]
-        TEQ     r5, #0
+      ]
+40      LDR     r4, [r3, #PEHPID_Link]
+        TEQ     r4, #0
+      [ Multi
+        BEQ     %BT31                           ; checked all PEHPIDs for this stream
+      |
         BEQ     %FT50                           ; checked all PEHPIDs for this stream
-        LDR     lr, [r5, #PEHPID_PEH]           ; get corresponding PEH
-        TEQ     lr, r4                          ; does it match the PEH we're deregistering?
-        MOVNE   r3, r5                          ; no then move to next one
+      ]
+        LDR     lr, [r4, #PEHPID_PEH]           ; get corresponding PEH
+        TEQ     lr, r6                          ; does it match the PEH we're deregistering?
+        MOVNE   r3, r4                          ; no then move to next one
         BNE     %BT40
 
         ; found the (only one possible) PEHPID for this PEH/ControlStreamHandle combination
         ; delink PEHPID node
-        LDR     lr, [r5, #PEHPID_Link]
+        LDR     lr, [r4, #PEHPID_Link]
         STR     lr, [r3, #PEHPID_Link]
 
         ; if a coroutine was in the middle of a packet that was being dispatched to this PEH,
         ; then bodge coroutine state so that the remainder of the packet is discarded
         SCPSR   I_bit, 0, lr,, r2
+      [ Multi
+        LDR     lr, [r5, #CSH_CoroutineStackCopy]
+      |
         LDR     lr, ControlStreamHandle+CSH_CoroutineStackCopy
+      ]
         TEQ     lr, #0
         BEQ     %FT45                           ; coroutine not started yet
         LDR     r0, [lr, #4*7]                  ; retrieve coroutine lr (r5-r11,lr are at base of stack)
@@ -2403,7 +2797,7 @@ DeregisterProgramElementHandler Entry "r4-r6"
         ADRL    r1, ts_peh_deregister_check
         TEQ     r0, r1                          ; address match?
         LDREQ   r0, [lr, #4*0]                  ; retrieve coroutine r5
-        TEQEQ   r0, r5                          ; PEHPID match?
+        TEQEQ   r0, r4                          ; PEHPID match?
         ADREQL  r0, ts_skip_to_next_packet
         STREQ   r0, [lr, #4*7]                  ; update coroutine lr (PSR bits are ignored)
 45
@@ -2411,19 +2805,23 @@ DeregisterProgramElementHandler Entry "r4-r6"
 
         MOV     r0, #PEHReason_CloseStream
         MOV     r1, #CloseStreamFlags_BlankVideo ; have to invent a sensible value for this, since client hasn't called it yet!
-        LDR     r2, [r5, #PEHPID_ProgramElementStreamHandle]
+        LDR     r2, [r4, #PEHPID_ProgramElementStreamHandle]
         BL      CallPEH
 
         ; free PEHPID node
         MOV     r0, #ModHandReason_Free
-        MOV     r2, r5
+        MOV     r2, r4
         SWI     XOS_Module
+
+      [ Multi
+        B       %BT31
+      ]
 50
 
 ; free PEH node
 
 	MOV	r0, #ModHandReason_Free
-	MOV	r2, r4
+	MOV	r2, r6
 	SWI	XOS_Module			; ignore any error from free - we can't do much about it
         Pull    "r0-r3"
 
@@ -2461,8 +2859,21 @@ ProgramElementHandlerNotFoundError
 ;
 ; out:  All registers preserved
 
-RegisterDescriptorHandler Entry "r4"
+RegisterDescriptorHandler Entry "r4,r5"
         Debug   entry, "MPEGControl_RegisterDescriptorHandler: ", r0, r1, r2, r3
+
+        TST     r0, #DHFlags_StreamSpecific
+        MOVEQ   r5, #0
+        MOVNE   r5, r4
+      [ Multi
+        BEQ     %FT05
+        Push    "r1"
+        MOV     r1, r4
+        BL      CheckCSH
+        Pull    "r1"
+        EXIT    VS
+05
+      ]
 
 ; allocate a DH node - if fail, then error
 
@@ -2483,6 +2894,7 @@ RegisterDescriptorHandler Entry "r4"
         STR     r1, [r4, #DH_Tag]
         STR     r2, [r4, #DH_HandlerCode]
         STR     r3, [r4, #DH_HandlerWS]
+        STR     r5, [r4, #DH_CSH]
 
 ; add DH to global list (at head of list is easiest)
 
@@ -2490,23 +2902,45 @@ RegisterDescriptorHandler Entry "r4"
         STR     lr, [r4, #DH_Link]
         STR     r4, GlobalDHList
 
-; create a DHI node if stream open (eventually, do this for each open control stream handle)
+; create a DHI node if stream open
 
         Push    "r0-r4,r6"
+        MOV     r6, r4
+      [ Multi
+        ADR     r5, ControlStreamHandleListHeadPtr - CSH_Next
+21      LDR     r5, [r5, #CSH_Next]
+        LDR     lr, [r5, #CSH_Next]
+        TEQ     lr, #0
+        BEQ     %FT30
+        LDR     lr, [r5, #CSH_VersionBits]
+        TST     lr, #1:SHL:31                   ; stream closed?
+        BNE     %BT21
+        ORR     r0, r5, lr                      ; external handle
+        LDR     lr, [r6, #DH_CSH]
+        TEQ     lr, #0                          ; generic handler, or
+        TEQNE   lr, r0                          ; specific to this stream?
+        BNE     %BT21
+      ]
         ; Allocate the DHI block we'll use if handler opens sucessfully
         MOV     r0, #ModHandReason_Claim
         MOV     r3, #DHISize
         SWI     XOS_Module
-        Pull    "r0-r4,r6", VS
+        ADDVS   sp, sp, #4
+        Pull    "r1-r4,r6", VS
         EXIT    VS
-        MOV     r6, r4
         MOV     r4, r2
 
         ; Issue OpenStream
+      [ Multi
+        LDR     r2, [r5, #CSH_VersionBits]
+        ORR     r2, r2, r5
+        LDR     r1, [r5, #CSH_StreamFlags]
+      |
         ADR     r2, ControlStreamHandle
         LDR     r1, [r2, #CSH_StreamFlags]
         TST     r1, #StreamFlags_StreamClosing
-        BNE     %FT30                           ; do nothing if stream closed (or closing)
+        BNE     %FT80                           ; do nothing if stream closed (or closing)
+      ]
         BIC     r1, r1, #StreamFlags_Private
         MOV     r0, #DHReason_OpenStream
         MOV     r3, #0                          ; still no program element parameters struct yet
@@ -2523,18 +2957,29 @@ RegisterDescriptorHandler Entry "r4"
         STR     lr, [r2, #DHI_Flags]                    ; no meaning to this yet
 
         ; In case we're in a trick play mode, we must issue ResetStream too
+        MOV     r2, r0                                  ; still holds client handle
+      [ Multi
+        LDR     r1, [r5, #CSH_LastResetStreamFlags]
+      |
         ADR     lr, ControlStreamHandle
         LDR     r1, [lr, #CSH_LastResetStreamFlags]
+      ]
         BIC     r1, r1, #ResetStreamFlags_Private
         MOV     r0, #DHReason_ResetStream
-	LDR     r2, [r2, #DHI_DescriptorStreamHandle]
         BL      CallDH
 
         ; Link into DHI chain
+      [ Multi
+        LDR     lr, [r5, #CSH_ListOfDHIs]               ; add DHI onto list for this stream
+        STR     lr, [r4, #DHI_Link]
+        STR     r4, [r5, #CSH_ListOfDHIs]
+        B       %BT21
+      |
         ADR     r1, ControlStreamHandle
         LDR     lr, [r1, #CSH_ListOfDHIs]               ; add DHI onto list for this stream
         STR     lr, [r4, #DHI_Link]
         STR     r4, [r1, #CSH_ListOfDHIs]
+      ]
 30
         Pull    "r0-r4,r6"
 
@@ -2563,6 +3008,7 @@ DeregisterDescriptorHandler Entry "r4-r6"
 
 ; check if (tag,entry,ws) matches any DH on global list - if not, error
 
+        MOV     r5, r4
         ADR     r6, GlobalDHList
         LDR     r4, [r6]
 10
@@ -2577,6 +3023,8 @@ DeregisterDescriptorHandler Entry "r4-r6"
         TEQEQ   lr, r2                          ; and check for match
         LDREQ   lr, [r4, #DH_HandlerWS]         ; if match then load handler WS ptr
         TEQEQ   lr, r3                          ; and check for match
+        LDREQ   lr, [r4, #DH_CSH]               ; if match then load control stream handle
+        TEQEQ   lr, r5                          ; and check for match
         MOVNE   r6, r4                          ; if no match then update prev ptr
         LDRNE   r4, [r4, #DH_Link]              ; if no match then goto next
         BNE     %BT10                           ; and loop
@@ -2587,40 +3035,56 @@ DeregisterDescriptorHandler Entry "r4-r6"
         STR     lr, [r6, #DH_Link]
 
 ; close any DHI nodes that were using the DH
-; eventually, this will need to loop round all control stream handles
         Push    "r0-r3"
         MOV     r6, r4                          ; DH being deregistered
+      [ Multi
+        ADR     r5, ControlStreamHandleListHeadPtr - CSH_Next
+31      LDR     r5, [r5, #CSH_Next]
+        LDR     lr, [r5, #CSH_Next]
+        TEQ     lr, #0
+        BEQ     %FT50
+        ADD     r3, r5, #CSH_ListOfDHIs - DHI_Link
+      |
         ADR     r3, ControlStreamHandle+CSH_ListOfDHIs-DHI_Link
-40      LDR     r5, [r3, #DHI_Link]
-        TEQ     r5, #0
+      ]
+40      LDR     r4, [r3, #DHI_Link]
+        TEQ     r4, #0
+      [ Multi
+        BEQ     %BT31                           ; checked all DHIs for this stream
+      |
         BEQ     %FT50                           ; checked all DHIs for this stream
-        LDR     lr, [r5, #DHI_DH]               ; get corresponding DH
-        TEQ     lr, r4                          ; does it match the DH we're deregistering?
+      ]
+        LDR     lr, [r4, #DHI_DH]               ; get corresponding DH
+        TEQ     lr, r6                          ; does it match the DH we're deregistering?
         MOVNE   r3, r5                          ; no then move to next one
         BNE     %BT40
 
         ; found the (only one possible) DHI for this DH/ControlStreamHandle combination
         ; delink DHI node
-        LDR     lr, [r5, #DHI_Link]
+        LDR     lr, [r4, #DHI_Link]
         STR     lr, [r3, #DHI_Link]
 
         ; coroutines are never left with descriptor handler pointers active, so no bodge required here
 
         MOV     r0, #DHReason_CloseStream
         MOV     r1, #CloseStreamFlags_BlankVideo ; have to invent a sensible value for this, since client hasn't called it yet!
-        LDR     r2, [r5, #DHI_DescriptorStreamHandle]
+        LDR     r2, [r4, #DHI_DescriptorStreamHandle]
         BL      CallDH
 
         ; free DHI node
         MOV     r0, #ModHandReason_Free
-        MOV     r2, r5
+        MOV     r2, r4
         SWI     XOS_Module
+
+      [ Multi
+        B       %BT31
+      ]
 50
 
 ; free DH node
 
         MOV     r0, #ModHandReason_Free
-        MOV     r2, r4
+        MOV     r2, r6
         SWI     XOS_Module                      ; ignore any error from free - we can't do much about it
         Pull    "r0-r3"
 
@@ -2654,8 +3118,21 @@ DescriptorHandlerNotFoundError
 ;
 ; out:  All registers preserved
 
-RegisterPayloadDescramblingHandler Entry "r4"
+RegisterPayloadDescramblingHandler Entry "r4,r5"
         Debug   entry, "MPEGControl_RegisterPayloadDescramblingHandler: ", r0, r1, r2, r3
+
+        TST     r0, #PSHFlags_StreamSpecific
+        MOVEQ   r5, #0
+        MOVNE   r5, r4
+      [ Multi
+        BEQ     %FT05
+        Push    "r1"
+        MOV     r1, r4
+        BL      CheckCSH
+        Pull    "r1"
+        EXIT    VS
+05
+      ]
 
 ; allocate a PSH node - if fail, then error
 
@@ -2674,6 +3151,7 @@ RegisterPayloadDescramblingHandler Entry "r4"
         STR     r0, [r4, #PSH_Flags]
         STR     r2, [r4, #PSH_HandlerCode]
         STR     r3, [r4, #PSH_HandlerWS]
+        STR     r5, [r4, #PSH_CSH]
 
 ; add PSH to global list (at head of list is easiest)
 
@@ -2681,23 +3159,45 @@ RegisterPayloadDescramblingHandler Entry "r4"
         STR     lr, [r4, #PSH_Link]
         STR     r4, GlobalPSHList
 
-; create a PSHI node if stream open (eventually, do this for each open control stream handle)
+; create a PSHI node if stream open
 
         Push    "r0-r4,r6"
+        MOV     r6, r4
+      [ Multi
+        ADR     r5, ControlStreamHandleListHeadPtr - CSH_Next
+21      LDR     r5, [r5, #CSH_Next]
+        LDR     lr, [r5, #CSH_Next]
+        TEQ     lr, #0
+        BEQ     %FT30
+        LDR     lr, [r5, #CSH_VersionBits]
+        TST     lr, #1:SHL:31                   ; stream closed?
+        BNE     %BT21
+        ORR     r0, r5, lr                      ; external handle
+        LDR     lr, [r6, #PSH_CSH]
+        TEQ     lr, #0                          ; generic handler, or
+        TEQNE   lr, r0                          ; specific to this stream?
+        BNE     %BT21
+      ]
         ; Allocate the PSHI block we'll use if handler opens sucessfully
         MOV     r0, #ModHandReason_Claim
         MOV     r3, #PSHISize
         SWI     XOS_Module
-        Pull    "r0-r4,r6", VS
+        ADDVS   sp, sp, #4
+        Pull    "r1-r4,r6", VS
         EXIT    VS
-        MOV     r6, r4
         MOV     r4, r2
 
         ; Issue OpenStream
+      [ Multi
+        LDR     r2, [r5, #CSH_VersionBits]
+        ORR     r2, r2, r5
+        LDR     r1, [r5, #CSH_StreamFlags]
+      |
         ADR     r2, ControlStreamHandle
         LDR     r1, [r2, #CSH_StreamFlags]
         TST     r1, #StreamFlags_StreamClosing
-        BNE     %FT30                           ; do nothing if stream closed (or closing)
+        BNE     %FT80                           ; do nothing if stream closed (or closing)
+      ]
         BIC     r1, r1, #StreamFlags_Private
         MOV     r0, #PSHReason_OpenStream
         MOV     r3, #0                          ; still no program element parameters struct yet
@@ -2714,18 +3214,29 @@ RegisterPayloadDescramblingHandler Entry "r4"
         STR     lr, [r2, #PSHI_Flags]                   ; no meaning to this yet
 
         ; In case we're in a trick play mode, we must issue ResetStream too
+        MOV     r2, r0                                  ; still holds client handle
+      [ Multi
+        LDR     r1, [r5, #CSH_LastResetStreamFlags]
+      |
         ADR     lr, ControlStreamHandle
         LDR     r1, [lr, #CSH_LastResetStreamFlags]
+      ]
         BIC     r1, r1, #ResetStreamFlags_Private
         MOV     r0, #PSHReason_ResetStream
-        LDR	r2, [r2, #PSHI_PayloadScramblingHandle]
         BL      CallPSH
 
         ; Link into PSHI chain
+      [ Multi
+        LDR     lr, [r5, #CSH_ListOfPSHIs]              ; add PSHI onto list for this stream
+        STR     lr, [r4, #PSHI_Link]
+        STR     r4, [r5, #CSH_ListOfPSHIs]
+        B       %BT21
+      |
         ADR     r1, ControlStreamHandle
         LDR     lr, [r1, #CSH_ListOfPSHIs]              ; add PSHI onto list for this stream
         STR     lr, [r4, #PSHI_Link]
         STR     r4, [r1, #CSH_ListOfPSHIs]
+      ]
 30
         Pull    "r0-r4,r6"
 
@@ -2753,6 +3264,7 @@ DeregisterPayloadDescramblingHandler Entry "r4-r6"
 
 ; check if (entry,ws) matches any PSH on global list - if not, error
 
+        MOV     r5, r4
         ADR     r6, GlobalPSHList
         LDR     r4, [r6]
 10
@@ -2765,6 +3277,8 @@ DeregisterPayloadDescramblingHandler Entry "r4-r6"
         TEQEQ   lr, r2                          ; and check for match
         LDREQ   lr, [r4, #PSH_HandlerWS]        ; if match then load handler WS ptr
         TEQEQ   lr, r3                          ; and check for match
+        LDREQ   lr, [r4, #PSH_CSH]              ; if match then load control stream handle
+        TEQEQ   lr, r5                          ; and check for match
         MOVNE   r6, r4                          ; if no match then update prev ptr
         LDRNE   r4, [r4, #PSH_Link]             ; if no match then goto next
         BNE     %BT10                           ; and loop
@@ -2775,40 +3289,56 @@ DeregisterPayloadDescramblingHandler Entry "r4-r6"
         STR     lr, [r6, #PSH_Link]
 
 ; close any PSHI nodes that were using the PSH
-; eventually, this will need to loop round all control stream handles
         Push    "r0-r3"
         MOV     r6, r4                          ; PSH being deregistered
+      [ Multi
+        ADR     r5, ControlStreamHandleListHeadPtr - CSH_Next
+31      LDR     r5, [r5, #CSH_Next]
+        LDR     lr, [r5, #CSH_Next]
+        TEQ     lr, #0
+        BEQ     %FT50
+        ADD     r3, r5, #CSH_ListOfPSHIs - PSHI_Link
+      |
         ADR     r3, ControlStreamHandle+CSH_ListOfPSHIs-PSHI_Link
-40      LDR     r5, [r3, #PSHI_Link]
-        TEQ     r5, #0
+      ]
+40      LDR     r4, [r3, #PSHI_Link]
+        TEQ     r4, #0
+      [ Multi
+        BEQ     %BT31                           ; checked all PSHIs for this stream
+      |
         BEQ     %FT50                           ; checked all PSHIs for this stream
-        LDR     lr, [r5, #PSHI_PSH]             ; get corresponding PSH
-        TEQ     lr, r4                          ; does it match the PSH we're deregistering?
-        MOVNE   r3, r5                          ; no then move to next one
+      ]
+        LDR     lr, [r4, #PSHI_PSH]             ; get corresponding PSH
+        TEQ     lr, r6                          ; does it match the PSH we're deregistering?
+        MOVNE   r3, r4                          ; no then move to next one
         BNE     %BT40
 
         ; found the (only one possible) PSHI for this PSH/ControlStreamHandle combination
         ; delink PSHI node
-        LDR     lr, [r5, #PSHI_Link]
+        LDR     lr, [r4, #PSHI_Link]
         STR     lr, [r3, #PSHI_Link]
 
         ; coroutines are never left with descrambling handler pointers active, so no bodge required here
 
         MOV     r0, #PSHReason_CloseStream
         MOV     r1, #CloseStreamFlags_BlankVideo ; have to invent a sensible value for this, since client hasn't called it yet!
-        LDR     r2, [r5, #PSHI_PayloadScramblingHandle]
+        LDR     r2, [r4, #PSHI_PayloadScramblingHandle]
         BL      CallPSH
 
         ; free PSHI node
         MOV     r0, #ModHandReason_Free
-        MOV     r2, r5
+        MOV     r2, r4
         SWI     XOS_Module
+
+      [ Multi
+        B       %BT31
+      ]
 50
 
 ; free PSH node
 
         MOV     r0, #ModHandReason_Free
-        MOV     r2, r4
+        MOV     r2, r6
         SWI     XOS_Module                      ; ignore any error from free - we can't do much about it
         Pull    "r0-r3"
 
@@ -2847,7 +3377,12 @@ FreeBuffer Entry "r0-r3,r12"
         LDR     lr, [r1, #BufferDescriptor_Packets]
         TST     lr, #BufferDescriptorFlags_NewFormat
         LDRNE   lr, [r1, #BufferDescriptor_CSH]
+      [ Multi
+        BICNE   lr, lr, #&F
+        BEQ     FreeBuffer_BailOut      ; old BSBufs are no longer supported
+      |
         ADREQ   lr, ControlStreamHandle
+      ]
 	LDR	r0, [lr, #CSH_DataReturned]
 	ADD	r0, r0, r2
 	STR	r0, [lr, #CSH_DataReturned]
@@ -2909,6 +3444,12 @@ FreeBuffer Entry "r0-r3,r12"
         SUB     r0, r0, #1
         STR     r0, [r3, #CSH_BufferCount]
         RestPSR r2                                      ; restore IRQ state
+        EXIT
+ ]
+
+ [ Multi
+FreeBuffer_BailOut ; should never be called!
+        RestPSR r3
         EXIT
  ]
 
@@ -5143,6 +5684,10 @@ CallPSH Entry   "r12"
 StatsTable_Tag	#	4
 StatsTable_ID	#	4	; if +ve, then offset in workspace of word to return
 				; if -ve, then -offset into module code of routine to handle it
+ [ Multi
+StatsTable_Flags #      4
+StatsTableFlag_DoesntNeedHandle *       1 :SHL: 0
+ ]
 StatsTableEntrySize	#	0
 
 ; In contrast to the implementations in the elementary modules, the MPEGControl items
@@ -5152,16 +5697,31 @@ StatsTableEntrySize	#	0
 ; we have to have an explicit flag on the macro.
 
 	MACRO
-	StatsTableEntry	$tag, $value, $codeP
+	StatsTableEntry	$tag, $value, $codeP, $nohandle
  [ "$codeP"=""
 	&	$tag, :INDEX: ($value)
  |
 	&	$tag, (Module_BaseAddr - ($value))
  ]
+ [ Multi
+ [ "$nohandle"=""
+        &       0
+ |
+        &       StatsTableFlag_DoesntNeedHandle
+ ]
+ ]
 	MEND
 
 Stats	Entry "r0-r2, r5-r6"
         Debug   entry, "MPEGControl_Stats: ", r0, r1, r2, r3, r4
+
+ [ Multi
+        CMP     r1, #0
+        BLNE    CheckCSH
+        STRVS   r0, [sp]
+        EXIT    VS
+        Push    "r0,r1"
+ ]
 
 ; First call video and audio to output their stuff
 
@@ -5175,9 +5735,21 @@ Stats	Entry "r0-r2, r5-r6"
 
 ; Note: r3 and r4 will have been updated after those
 
+ [ Multi
+        Pull    "r0,r1"
+        ; For compatibility, if no handle given then use most recently opened handle
+        TEQ     r1, #0
+        LDREQ   r1, ControlStreamHandleListHeadPtr
+        ; However, if no stream has yet been opened, we can't fill in some stats
+        LDREQ   lr, [r1, #CSH_Next]
+        LDREQ   lr, [lr, #CSH_Next]
+        TEQEQ   lr, #0
+        MOVEQ   r1, #0
+ |
 	LDMIA	sp, {r0,r1}			; reload flags + control handle again
 	TEQ	r1, #0				; if no handle specified
 	ADREQ	r1, ControlStreamHandle		; then use global one
+ ]
 
 ; loop over all tags in input list, advancing input list pointer r2
 
@@ -5195,6 +5767,12 @@ StatsLoopReEntry
 	TEQ	lr, r5				; is it his tag
 	ADDNE	r6, r6, #StatsTableEntrySize
 	BNE	%BT20				; no, so loop
+ [ Multi
+        LDR     lr, [r6, #StatsTable_Flags]
+        TST     lr, #StatsTableFlag_DoesntNeedHandle
+        TEQEQ   r1, #0                          ; if needs handle and we don't have one, give up
+        BEQ     %BT10
+ ]
 
 	LDR	lr, [r6, #StatsTable_ID]
 	TEQ	lr, #0
@@ -5265,9 +5843,11 @@ Stats_NPTDescriptor ROUT
 	BCS	%BT10
 	B	StatsLoopReEntry		; now parse next tag
 
+ [ :LNOT: Multi
 Stats_CSH Entry
         MOV     r6, r1
         EXIT
+ ]
 
 Stats_Bitrate Entry "r0-r5"
         LDR     lr, [r1, #CSH_ControlStreamType]
@@ -5341,10 +5921,12 @@ StatsTable
 	StatsTableEntry &0007, Stats_SkippingUntilCorrectMode, Code
 	StatsTableEntry &0008, CSH_DataDiscarded
 	StatsTableEntry &0009, Stats_NPTDescriptor, Code
+ [ :LNOT: Multi
         StatsTableEntry &000A, Stats_CSH, Code
+ ]
         StatsTableEntry &000B, Stats_Bitrate, Code
-        StatsTableEntry &000C, Stats_DirectFullBuffers, Code
-        StatsTableEntry &000D, Stats_ChangePacketCount, Code
+        StatsTableEntry &000C, Stats_DirectFullBuffers, Code, NoHandle
+        StatsTableEntry &000D, Stats_ChangePacketCount, Code, NoHandle
 	&	-1
 
 ; **************************************************************************
@@ -5356,13 +5938,34 @@ StatsTable
 
 CtrlInfo_Code Entry "r7"
         LDR     wp, [r12]
+      [ Multi
+        LDR     r1, ControlStreamHandleListHeadPtr ; only ever print info for most recently opened stream
+        LDR     lr, [r1, #CSH_Next]
+        TEQ     lr, #0
+        BNE     %FT01
+        ADR     r0, NoDataYetError
+        SETV
+        EXIT
+NoDataYetError
+        &       0
+        =       "No stream has yet been opened", 0
+        ALIGN
+01
+      |
         ADR     r1, ControlStreamHandle
+      ]
 
         LDR     r7, [r1, #CSH_ControlStreamType]
         ADRL    r0, StreamTypeStrings
         ADD     r0, r0, r7, LSL #5
         SWI     XOS_Write0
         SWI     XOS_NewLine
+
+      [ Multi
+        LDR     lr, [r1, #CSH_VersionBits]
+        ORR     lr, r1, lr
+        DREG    lr, "Control stream handle "
+      ]
 
         TEQ     r7, #ControlStreamType_MPEG2Transport
         BNE     %FT01
@@ -5526,8 +6129,8 @@ CtrlInfo_Code Entry "r7"
 	BNE	%BT42
 50
 	DLINE	"PEH PID nodes:", cc
-	ADR	r0, ControlStreamHandle
-	LDR	r1, [r0, #CSH_ListOfPEHPIDs]
+	Push    "r1"
+	LDR	r1, [r1, #CSH_ListOfPEHPIDs]
 	TEQ	r1, #0
 	BNE	%FT60
 
@@ -5554,6 +6157,7 @@ CtrlInfo_Code Entry "r7"
 	TEQ	r1, #0
 	BNE	%BT61
 70
+        Pull    "r1"
  ] ; DoPEH
 
  [ DoNDS
@@ -5573,8 +6177,8 @@ CtrlInfo_Code Entry "r7"
         BNE     %BT42
 50
         DLINE   "Descriptor Handler Instances:", cc
-        ADR     r0, ControlStreamHandle
-        LDR     r1, [r0, #CSH_ListOfDHIs]
+        Push    "r1"
+        LDR     r1, [r1, #CSH_ListOfDHIs]
         TEQ     r1, #0
         BNE     %FT60
 
@@ -5593,6 +6197,7 @@ CtrlInfo_Code Entry "r7"
         TEQ     r1, #0
         BNE     %BT61
 70
+        Pull    "r1"
 
         DLINE   "Payload Descrambling Handlers:", cc
         LDR     r0, GlobalPSHList
@@ -5610,8 +6215,8 @@ CtrlInfo_Code Entry "r7"
         BNE     %BT42
 50
         DLINE   "Payload Descrambling Handler Instances:", cc
-        ADR     r0, ControlStreamHandle
-        LDR     r1, [r0, #CSH_ListOfPSHIs]
+        Push    "r1"
+        LDR     r1, [r1, #CSH_ListOfPSHIs]
         TEQ     r1, #0
         BNE     %FT60
 
@@ -5630,6 +6235,7 @@ CtrlInfo_Code Entry "r7"
         TEQ     r1, #0
         BNE     %BT61
 70
+        Pull    "r1"
  ] ; DoNDS
         CLRV
         EXIT
@@ -5639,11 +6245,13 @@ OutputPEHInfo Entry "r1"
 	LDR	r1, [r0, #PEH_StreamType]
 	DREG	r1, " StreamType=", cc
 	LDR	r1, [r0, #PEH_Flags]
-	DREG	r1, " Flags=", cc
+	DREG	r1, " Flgs=", cc
 	LDR	r1, [r0, #PEH_HandlerCode]
 	DREG	r1, " Code=", cc
 	LDR	r1, [r0, #PEH_HandlerWS]
-	DREG	r1, " WS="
+        DREG    r1, " WS=", cc
+        LDR     r1, [r0, #PEH_CSH]
+        DREG    r1, " CSH="
 	EXIT
  ] ; DoPEH
 
@@ -5656,20 +6264,24 @@ OutputDHInfo Entry "r1"
         BL      Tutu_Byte
         Pull	"r0"
         LDR     r1, [r0, #DH_Flags]
-        DREG    r1, " Flags=", cc
+        DREG    r1, " Flgs=", cc
         LDR     r1, [r0, #DH_HandlerCode]
         DREG    r1, " Code=", cc
         LDR     r1, [r0, #DH_HandlerWS]
-        DREG    r1, " WS="
+        DREG    r1, " WS=", cc
+        LDR     r1, [r0, #DH_CSH]
+        DREG    r1, " CSH="
         EXIT
 
 OutputPSHInfo Entry "r1"
         LDR     r1, [r0, #PSH_Flags]
-        DREG    r1, " Flags=", cc
+        DREG    r1, " Flgs=", cc
         LDR     r1, [r0, #PSH_HandlerCode]
         DREG    r1, " Code=", cc
         LDR     r1, [r0, #PSH_HandlerWS]
-        DREG    r1, " WS="
+        DREG    r1, " WS=", cc
+        LDR     r1, [r0, #PSH_CSH]
+        DREG    r1, " CSH="
         EXIT
  ] ; DoNDS
 
@@ -5723,12 +6335,22 @@ MPEGCapture_Code
         EXIT    VS
         MOV     r2, r2, LSL#20    ; convert to bytes
 
+ [ Multi
+        LDR     r0, CaptureStream
+        MOV     lr, #0
+        STR     lr, CaptureStream ; disable capturing while DA is invalid
+        TEQ     r0, #0
+        MOVNE   r0, #1
+        LDRNE   r1, CaptureDANo   ; if a DA is already allocated, then remove it
+        SWINE   XOS_DynamicArea
+ |
         LDR     r0, CaptureEnable
         MOV     lr, #0
         STR     lr, CaptureEnable ; disable capturing while DA is invalid
         TEQ     r0, #1
         LDREQ   r1, CaptureDANo   ; if a DA is already allocated, then remove it
         SWIEQ   XOS_DynamicArea
+ ]
         EXIT    VS
 
         TEQ     r2, #0
@@ -5751,16 +6373,28 @@ MPEGCapture_Code
         STR     r3, CaptureWritePtr
         MOV     lr, #0
         STR     lr, CaptureAmount
+ [ Multi
+        LDR     lr, ControlStreamHandleListHeadPtr
+        STR     lr, CaptureStream ; start with most recently opened stream
+                                  ; doesn't matter if this points at list terminator, since it'll never be matched in FullBuffers
+ |
         MOV     lr, #1
         STR     lr, CaptureEnable
+ ]
         EXIT
 
 MPEGSave_Code
         Entry
         LDR     wp, [r12]
+ [ Multi
+        LDR     lr, CaptureStream
+        TEQ     lr, #0
+        BEQ     %FT99
+ |
         LDR     lr, CaptureEnable
         TEQ     lr, #1
         BNE     %FT99
+ ]
 
         MOV     r1, r0   ; filename is specified in command tail
         MOV     r0, #&80 ; open new file
