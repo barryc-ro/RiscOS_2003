@@ -37,6 +37,8 @@ INRESDIR	= LocalUserIFRes:Root
 INARMDIR	= LocalUserIFRes:ARMBoot
 INIMGDIR	= LocalUserIFRes:Images
 INVODDIR	= LocalUserIFRes:VOD
+INAUDDIR	= LocalUserIFRes:Audio
+INSNDDIR	= LocalUserIFRes:Sounds
 INMULTIDIR	= LocalUserIFRes:Multicast
 
 #
@@ -49,6 +51,8 @@ OUT400DIR	= $(OUTRESDIR).Content.HTML.400
 OUTHELPDIR	= $(OUTRESDIR).Content.HTML.Help
 OUTJSCRDIR	= $(OUTRESDIR).Content.HTML.JScript
 OUTIMGDIR	= $(OUTRESDIR).Content.HTML.images
+OUTAUDDIR	= $(OUTRESDIR).Content.HTML.Audio
+OUTSNDDIR	= $(OUTRESDIR).Content.Sounds
 OUTVODDIR	= $(OUTIMGDIR).vod
 OUTMULTIDIR	= $(OUTIMGDIR).multicast
 
@@ -94,6 +98,8 @@ install: translate dirs
 	$(CP) $(INIMGDIR).*      $(OUTIMGDIR).*      $(CPFLAGS)
 	$(CP) $(INVODDIR).*      $(OUTVODDIR).*      $(CPFLAGS)
 	$(CP) $(INMULTIDIR).*    $(OUTMULTIDIR).*    $(CPFLAGS)
+	$(CP) $(INAUDDIR).*      $(OUTAUDDIR).*      $(CPFLAGS)
+	$(CP) $(INSNDDIR).*      $(OUTSNDDIR).*      $(CPFLAGS)
 	$(CHMOD) $(INSTDIR)
 	$(CHMODRW) $(OUTRESDIR).Public
 	@echo $(COMPONENT): RAM module installed
@@ -117,6 +123,8 @@ dirs:
 	$(MKDIR) $(OUTIMGDIR)
 	$(MKDIR) $(OUTVODDIR)
 	$(MKDIR) $(OUTMULTIDIR)
+	$(MKDIR) $(OUTAUDDIR)
+	$(MKDIR) $(OUTSNDDIR)
 	$(MKDIR) $(OUTRESDIR).Content.Java
 	$(MKDIR) $(OUTRESDIR).Content.MPEG
 	$(MKDIR) $(OUTRESDIR).Content.Sounds
