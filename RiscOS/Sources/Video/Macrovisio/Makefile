@@ -22,6 +22,7 @@ AS      = aasm
 CP      = copy
 RM      = remove
 WIPE    = wipe
+STRIP   = -stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
@@ -45,8 +46,9 @@ rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom modules built
 
 clean:
-	-${WIPE} rm.* ~CR~V
+	-${WIPE} rm ~CR~V
 	${RM} data.YUVTable
+	${STRIP}
         @echo ${COMPONENT}: module cleaned
 
 export: ${EXPORTS}
@@ -84,15 +86,19 @@ rm.STB3.Macrovisio: rm.MacroD
 	${CP} $? $@ ${CPFLAGS}
 
 rm.MacroA: Data.YUVTable Hdr.MacroA
+	${MKDIR} rm
 	${AS} ${ASFLAGS} -From Hdr.MacroA -To rm.MacroA
 
 rm.MacroB: Data.YUVTable Hdr.MacroB
+	${MKDIR} rm
 	${AS} ${ASFLAGS} -From Hdr.MacroB -To rm.MacroB
 
 rm.MacroC: Data.YUVTable Hdr.MacroC
+	${MKDIR} rm
 	${AS} ${ASFLAGS} -From Hdr.MacroC -To rm.MacroC
 
 rm.MacroD: Data.YUVTable Hdr.MacroD
+	${MKDIR} rm
 	${AS} ${ASFLAGS} -From Hdr.MacroD -To rm.MacroD
 
 Data.YUVTable: BASIC.GenYUVTab
