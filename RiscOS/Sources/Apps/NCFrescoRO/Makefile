@@ -56,7 +56,7 @@ resources1:
         @echo ${COMPONENT}: resource files copied
 
 resources:
-	${CP} Resources.* <resource$dir> ${CPFLAGS}
+	${CP} Resources.* <resource$dir>.* ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 export: export_${PHASE}
