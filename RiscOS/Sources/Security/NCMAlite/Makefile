@@ -63,6 +63,7 @@ INCLUDES= -IC:
 # use USE_NETINIT to invoke the NetInit module instead of bringing the network stuff up ourself
 # use SILENT_HUP to ignore the line dropping out from under us, otherwise return to the 'Connect' screen
 # use VERIFY_URL to check the home URL before sending it to the browser and generating an error if it seems bogus
+# use SC_SWAPPING if you want to enable the smartcard swapping extensions used in th Funai 2 project.
 
 # Override any options by setting the OPTS in the Build options
 
@@ -93,7 +94,7 @@ NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-UETHERNET -DSEND_SERIALID_LENGTH \
 		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
 		-DISP_CAPTURE -UTRAP_PPP_TIMEOUTS -UUSE_NETINIT \
-		-DSILENT_HUP -UVERIFY_URL
+		-DSILENT_HUP -UVERIFY_URL ${TYPE}
 
 #
 # select one of these
