@@ -79,7 +79,7 @@ bbe-local: bbe-generic-resources-get-alias
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} ${APPTARGET}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
