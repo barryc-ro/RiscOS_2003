@@ -66,16 +66,3 @@ ${EXP_HDR}.HostDebug: hdr.HostDebug
         ${CP} hdr.HostDebug $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.TML_HostFS: Hdr:ListOpts
-rm.TML_HostFS: Hdr:Macros
-rm.TML_HostFS: Hdr:System
-rm.TML_HostFS: Hdr:SWIs
-rm.TML_HostFS: Hdr:CPU.Generic26
-rm.TML_HostFS: Hdr:IO.GenericIO
-rm.TML_HostFS: Hdr:RISCOS
-rm.TML_HostFS: Hdr:ModHand
-rm.TML_HostFS: Hdr:Services
-rm.TML_HostFS: Hdr:Proc
-rm.TML_HostFS: Hdr:EnvNumbers
-rm.TML_HostFS: Hdr:HostFS
-rm.TML_HostFS: Version
