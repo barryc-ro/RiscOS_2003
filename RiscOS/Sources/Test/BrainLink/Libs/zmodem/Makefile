@@ -21,7 +21,7 @@ EXP_C_O     = <Cexport$dir>.o
 #
 include Makefiles:StdTools
 
-COMPONENT = zmodem
+COMPONENT = BLzmodem
 TARGET   ?= ${COMPONENT}
 TARGETZ   = ${TARGET}ZM
 
