@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 #include "kernel.h"
 #include "swis.h"
@@ -40,8 +41,8 @@
 #include "netinet/if_ether.h"
 
 #include "enhdr.h"
-#include "e2module.h"
 #include "if_en.h"
+#include "e2module.h"
 #include "parallel.h"
 #include "mbuf.h"
 #include "support.h"
@@ -65,15 +66,7 @@
 #define IS_BROADCAST(x)	(*(u_int *)(x) == 0xffffffff && \
 			 *(u_short *)((x) + 4) == 0xffff)
 
-/*
- * XXX
- *
- * cannot find an unambiguous definition for multicast addresses,
- * the best we have is a statement that "all multicast addresses
- * have an MSB of 1" without any clarification whether `B' means
- * bit or byte.  This test *assumes* that it stands for bit.
- */
-#define IS_MULTICAST(x)	((*(u_char *)(x) & 0x80) && \
+#define IS_MULTICAST(x)	((*(u_char *)(x) & 0x01) && \
 			 (*(u_char *)(x)) != 0xff)
 
 struct swient
@@ -394,6 +387,8 @@ static void undo_chainfilter(u_int unit, u_int pwp, u_int level,
     {
 	if( fc->fc_pwptr == pwp )
 	{
+	    int hash;
+	    struct en_softc *en = en_softc[unit];
 	    u_int ftype;
 	    SET_FRAMETYPE(ftype, fc->fc_type);
 	    SET_FRAMELEVEL(ftype, level);
@@ -405,6 +400,13 @@ static void undo_chainfilter(u_int unit, u_int pwp, u_int level,
 	    *fcprev = fc->fc_next;
 	    send_frametypefree(unit, ftype, &(fc->fc_filter));
 
+#ifdef HASHED_MULTICAST
+	    for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
+	    {
+		if (fc->fc_filter.fs_multicount[hash] > 0)
+		    en->en_multicount[hash]--;
+	    }
+#else
 	    /* Free the multitable if it's not static */
 	    if ( fc->fc_filter.fs_multitable )
 	    {
@@ -416,6 +418,7 @@ static void undo_chainfilter(u_int unit, u_int pwp, u_int level,
 	            memset ( fc->fc_filter.fs_multitable, 0, 512*sizeof(struct multitable) );
 	        }
 	    }
+#endif
 
 	    (void)free(fc);
 
@@ -456,9 +459,19 @@ static void undo_singlefilter(u_int unit, u_int pwp, u_int level,
 	 * available.
 	 */
 	u_int ftype = 0;
+	int hash;
+	struct en_softc *en = en_softc[unit];
+
 	SET_FRAMELEVEL(ftype, level);
 	send_frametypefree(unit, ftype, fs);
 
+#ifdef HASHED_MULTICAST
+	for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
+	{
+	    if (fs->fs_multicount[hash] > 0)
+	        en->en_multicount[hash]--;
+	}
+#else
 	if ( fs->fs_multitable )
 	{
 	    if ( fs->fs_multitable!=fs->static_multitable )
@@ -469,6 +482,7 @@ static void undo_singlefilter(u_int unit, u_int pwp, u_int level,
 	        memset ( fs->fs_multitable, 0, 512*sizeof(struct multitable) );
 	    }
 	}
+#endif
 
 	(void)free(fs);
 	*fsrptr = NULL;
@@ -522,6 +536,7 @@ static int do_chainfilter(_kernel_swi_regs *r,
 {
     FilterChainRef fc, *fcprev;
     int unit = r->r[1];
+    struct en_softc *en = en_softc[unit];
 
     /*
      * search down the FilterChain, looking for this frametype
@@ -542,6 +557,8 @@ static int do_chainfilter(_kernel_swi_regs *r,
      */
     if( r->r[0] & FILTER_RELEASE )
     {
+        int hash;
+
 	if( !fc )
 	    /*
 	     * trying to free a non-existent claim
@@ -565,6 +582,13 @@ static int do_chainfilter(_kernel_swi_regs *r,
 	*fcprev = fc->fc_next;
 	send_frametypefree(unit, r->r[2], &(fc->fc_filter));
 
+#ifdef HASHED_MULTICAST
+	for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
+	{
+	    if (fc->fc_filter.fs_multicount[hash] > 0)
+	        en->en_multicount[hash]--;
+	}
+#else
 	    if ( fc->fc_filter.fs_multitable )
 	    {
 	        if ( fc->fc_filter.fs_multitable!=fc->fc_filter.static_multitable )
@@ -575,6 +599,7 @@ static int do_chainfilter(_kernel_swi_regs *r,
 	            memset ( fc->fc_filter.fs_multitable, 0, 512*sizeof(struct multitable) );
 	        }
 	    }
+#endif
 
 	(void)free(fc);
 
@@ -587,7 +612,6 @@ static int do_chainfilter(_kernel_swi_regs *r,
     else
     {
 	int error;
-	struct en_softc *en = en_softc[unit];
 
 	/*
 	 * claiming
@@ -641,6 +665,7 @@ static int do_chainfilter(_kernel_swi_regs *r,
 	if( (error = enioctl(unit, 1, 1)) != 0 )
 	{
 
+#ifndef HASHED_MULTICAST
 	    if ( fc->fc_filter.fs_multitable )
 	    {
 	        if ( fc->fc_filter.fs_multitable!=fc->fc_filter.static_multitable )
@@ -651,6 +676,7 @@ static int do_chainfilter(_kernel_swi_regs *r,
 	            memset ( fc->fc_filter.fs_multitable, 0, 512*sizeof(struct multitable) );
 	        }
 	    }
+#endif
 
 	    (void)free(fc);
 	    return(error);
@@ -668,10 +694,20 @@ static int do_chainfilter(_kernel_swi_regs *r,
 	fc->fc_errlevel = r->r[4];
 	fc->fc_handler = (void (*)())r->r[6];
 	fc->fc_pwptr = r->r[5];
+#ifdef HASHED_MULTICAST
+	memset(fc->fc_filter.fs_multicount, (r->r[0]&4)?0:0xFF, sizeof fc->fc_filter.fs_multicount);
+	if (!(r->r[0] & FILTER_SPECIFIC_MCAST))
+	{
+	    int hash;
+	    for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
+	        en->en_multicount[hash]++;
+	}
+#else
 	fc->fc_filter.fs_multitable = fc->fc_filter.static_multitable;
 	fc->fc_filter.fs_multitablesize = 512;
 	memset ( fc->fc_filter.fs_multitable, 0, 512*sizeof(struct multitable) );
   	fc->fc_filter.fs_multiall = (r->r[0]&4) ? 0 : 1;
+#endif
 
 	/*
 	 * set receive level for this unit to the
@@ -697,12 +733,15 @@ static int do_singlefilter(_kernel_swi_regs *r,
 {
     FilterSingleRef fs = *level;
     int unit = r->r[1];
+    struct en_softc *en = en_softc[unit];
 
     /*
      * check whether claiming or releasing
      */
     if( (r->r[0] & FILTER_RELEASE) )
     {
+        int hash;
+
 	if( !fs )
 	    /*
 	     * trying to free a non-existent claim
@@ -720,6 +759,13 @@ static int do_singlefilter(_kernel_swi_regs *r,
 	 */
 	send_frametypefree(unit, r->r[2], fs);
 
+#ifdef HASHED_MULTICAST
+	for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
+	{
+	    if (fs->fs_multicount[hash] > 0)
+	        en->en_multicount[hash]--;
+	}
+#else
 	if ( fs->fs_multitable )
 	{
 	    if ( fs->fs_multitable!=fs->static_multitable )
@@ -730,6 +776,7 @@ static int do_singlefilter(_kernel_swi_regs *r,
 	        memset ( fs->fs_multitable, 0, 512*sizeof(struct multitable) );
 	    }
 	}
+#endif
 
 	(void)free(fs);
 	*level = NULL;
@@ -743,7 +790,6 @@ static int do_singlefilter(_kernel_swi_regs *r,
     else
     {
 	int error;
-	struct en_softc *en = en_softc[unit];
 
 	/*
 	 * it's a claim - most values have been range checked, but
@@ -798,17 +844,26 @@ static int do_singlefilter(_kernel_swi_regs *r,
 	 */
 	if( (error = enioctl(unit, 1, 1)) != 0 )
 	{
+	    int hash;
 
-	if ( fs->fs_multitable )
-	{
-	    if ( fs->fs_multitable!=fs->static_multitable )
+#ifdef HASHED_MULTICAST
+	    for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
 	    {
-	        free ( fs->fs_multitable );
-	        fs->fs_multitable = fs->static_multitable;
-	        fs->fs_multitablesize = 512;
-	        memset ( fs->fs_multitable, 0, 512*sizeof(struct multitable) );
+	      	if (fs->fs_multicount[hash] > 0)
+	    	    en->en_multicount[hash]--;
 	    }
-	}
+#else
+	    if ( fs->fs_multitable )
+	    {
+		if ( fs->fs_multitable!=fs->static_multitable )
+		{
+		    free ( fs->fs_multitable );
+	            fs->fs_multitable = fs->static_multitable;
+	            fs->fs_multitablesize = 512;
+	            memset ( fs->fs_multitable, 0, 512*sizeof(struct multitable) );
+	        }
+	    }
+#endif
 
 	    (void)free(fs);
 	    return(error);
@@ -822,6 +877,17 @@ static int do_singlefilter(_kernel_swi_regs *r,
 	fs->fs_errlevel = r->r[4];
 	fs->fs_handler = (void (*)())r->r[6];
 	fs->fs_pwptr = r->r[5];
+#ifdef HASHED_MULTICAST
+	memset(fs->fs_multicount,
+		(r->r[0] & FILTER_SPECIFIC_MCAST) ? 0 : 0xFF,
+		sizeof fs->fs_multicount);
+	if (!(r->r[0] & FILTER_SPECIFIC_MCAST))
+	{
+	    int hash;
+	    for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
+	        en->en_multicount[hash]++;
+	}
+#else
 	fs->fs_multitable = fs->static_multitable;
 	fs->fs_multitablesize = 512;
 	memset ( fs->fs_multitable, 0, 512*sizeof(struct multitable) );
@@ -829,6 +895,7 @@ static int do_singlefilter(_kernel_swi_regs *r,
 	fs->fs_multiall = 0;
 	if ( fs->fs_addrlevel==ADDRLVL_MULTICAST )
     	    fs->fs_multiall = (r->r[0]&4) ? 0 : 1;
+#endif
 
 	/*
 	 * set receive level for this unit to the
@@ -901,12 +968,29 @@ static int en_multicast(_kernel_swi_regs *r)
 {
     int error = 0;
     u_int unit = r->r[1];
+    u_int hash;
     struct en_softc *en = en_softc[unit];
     FilterSingleRef filter=0;
     FilterChainRef chain;
     unsigned char zeroaddr[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
     unsigned int set;
     unsigned int c;
+
+#if 0
+    printf("ei%d: MulticastRequest(%s %s): frame type %05X, hwaddr %02X:%02X:%02X:%02X:%02X:%02X,"
+           " addr %s\n",
+           unit,
+           r->r[0] & MULTICAST_ADDR_REL ? "release" : "claim",
+           r->r[0] & MULTICAST_ALL_ADDR ? "all" : "1",
+           r->r[2],
+           ((unsigned char *)(r->r[3]))[0],
+           ((unsigned char *)(r->r[3]))[1],
+           ((unsigned char *)(r->r[3]))[2],
+           ((unsigned char *)(r->r[3]))[3],
+           ((unsigned char *)(r->r[3]))[4],
+           ((unsigned char *)(r->r[3]))[5],
+           inet_ntoa(*(struct in_addr *)r->r[4]));
+#endif
 
     /* Check unit valid */
     if ( unit>encnt )
@@ -920,7 +1004,7 @@ static int en_multicast(_kernel_swi_regs *r)
 
     switch( GET_FRAMELEVEL( r->r[2]) )
     {
-        case 0:
+        case 0: /* Yuck! The first Internet modules to use this call did this :( */
         case FRMLVL_E2SPECIFIC:
         {
             /* Run the filter chain to find one which matched the frame type */
@@ -961,9 +1045,15 @@ static int en_multicast(_kernel_swi_regs *r)
     if ( error )     return error;
     if ( filter==0 ) return EINVAL;
 
-    switch ( r->r[0] & 3 )
+    switch ( r->r[0] & (MULTICAST_ADDR_REL | MULTICAST_ALL_ADDR) )
     {
-        case 0:		/* Request single */
+        case MULTICAST_ADDR_REQ | MULTICAST_SPECIFIC_ADDR:
+#ifdef HASHED_MULTICAST
+	    hash = MULTICAST_HASH((unsigned char *)r->r[3]);
+	    if (filter->fs_multicount[hash] != UINT_MAX)
+	        if (filter->fs_multicount[hash]++ == 0)
+	            en->en_multicount[hash]++;
+#else
             /* Doesn't matter if we are in multiall, still set this entry for future reference */
             for ( set=0, c=0; c<filter->fs_multitablesize; c++ )
             {
@@ -994,25 +1084,53 @@ static int en_multicast(_kernel_swi_regs *r)
                 /* if we do, the amount of memory in the machine is finite            */
                 filter->fs_multiall = 1;
             }
+#endif
             break;
 
-        case 1:		/* Release single */
+        case MULTICAST_ADDR_REL | MULTICAST_SPECIFIC_ADDR:
+#ifdef HASHED_MULTICAST
+	    hash = MULTICAST_HASH((unsigned char *) r->r[3]);
+	    if (filter->fs_multicount[hash] == 0)
+	        return EINVAL;
+	    if (filter->fs_multicount[hash] != UINT_MAX)
+	        if (--filter->fs_multicount[hash] == 0)
+	            en->en_multicount[hash]--;
+#else
             /* Doesn't matter if we are in multiall, still remove this entry for future reference */
             for ( c=0; c<filter->fs_multitablesize; c++ )
             {
                 if ( !memcmp ( &filter->fs_multitable[c], (void *) r->r[3], 6 ) )
                     memset ( &filter->fs_multitable[c], 0, 8 );
             }
+#endif
             break;
 
-        case 2:		/* Request all multicast */
+        case MULTICAST_ADDR_REQ | MULTICAST_ALL_ADDR:
+#ifdef HASHED_MULTICAST
+	    for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
+	    {
+	        if (filter->fs_multicount[hash] == 0)
+	            en->en_multicount[hash]++;
+	        filter->fs_multicount[hash] = UINT_MAX;
+	    }
+#else
             filter->fs_multiall = 1;
+#endif
             break;
 
-        case 3:		/* Release all multicast */
+        case MULTICAST_ADDR_REL | MULTICAST_ALL_ADDR:
+#ifdef HASHED_MULTICAST
+	    for (hash=0; hash<MULTICAST_HASHSIZE; hash++)
+	    {
+	        if (filter->fs_multicount[hash] > 0)
+	            en->en_multicount[hash]--;
+	        filter->fs_multicount[hash] = 0;
+	    }
+#else
             filter->fs_multiall = 0;
             for ( c=0; c<filter->fs_multitablesize; c++ )
                 memset ( &filter->fs_multitable[c], 0, 8 );
+#endif
             break;
     }
 

@@ -21,7 +21,7 @@ CD	= dir
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -ff -zps1 -Wp -zM -I${INCLUDES} -DINET ${OPTIONS} \
-	${DEBUG} -depend !Depend ${THROWBACK} -DCOMPAT_INET4# -DSUPPORT_TRADITIONAL_MBUFS
+	${DEBUG} -depend !Depend ${THROWBACK} -DHASHED_MULTICAST -DCOMPAT_INET4# -DSUPPORT_TRADITIONAL_MBUFS
 
 
 CPFLAGS = ~cfr~v
