@@ -38,12 +38,12 @@ typedef unsigned char bool;
 #define SCREEN_GAMMA 2.2
 
 #define DITHERING
-/*#define GAMMA_DITHER*/
 
 /*#define GIVE_WARNINGS*/
 
 #define MODE(t,x,y) (((t) << 27) | ((x) << 14) | ((y) << 1) | 1)
 
+#define PutSprite 34
 #define PutSpriteScaled 52
 #define PutSpriteScaled_UseMask 0x08
 #define PutSpriteScaled_UsePalette 0x10
@@ -60,6 +60,7 @@ static int osver;
 static int log2bpp;
 static png_bytep screen_to_1, screen_from_1, hack_to_screen, hack_to_1;
 static int ct32k_buffer[3];
+static char *ro310_2nd_table;
 
 static _kernel_oserror *LoadPNG(Image *this, const char *data, int len, BBox *changed);
 static _kernel_oserror *EndLoad(Image *this, BBox *changed);
@@ -71,6 +72,7 @@ static _kernel_oserror *LoadFromCache(Image *this, const char *filename);
 static _kernel_oserror *StartExportPNG(Image *this, int *size);
 static _kernel_oserror *BGColPNG(Image *this, int *bgcol, int dontoverride);
 static _kernel_oserror *RegisterFiller(Image *this, FillerFunction *fill_fn, void *handle1, int *handle2);
+static _kernel_oserror *SaveSpriteAlphaPNG(Image *this, const char *filename, int maxbpp);
 
 typedef struct png_loaddata
 {
@@ -80,6 +82,7 @@ typedef struct png_loaddata
     unsigned int eightbpphack:1; /* Processing 8bpp + alpha data */
     unsigned int have_bkgd:1;
     unsigned int isreally32bit:1;
+    unsigned int convto16bit:1;
     unsigned int bkgd;
     #ifdef TRACE
     FILE *trace;
@@ -297,7 +300,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
     bool have_mask;
     int riscos_rowbytes;
     png_bytep trans = NULL;
-    int num_trans = 0, useropal = 0;
+    int num_trans = 0;
     png_color_16p trans_values = NULL;
 
     /* First decide if we're going to do alpha processing */
@@ -326,13 +329,13 @@ void info_callback(png_struct *png_ptr, png_info *info)
     //if (/*this->flags & IMAGE_FAST ||*/ osver < 0xA5)
        // this->full_alpha = 0;
 
-    if (this->full_alpha)
+    /*if (this->full_alpha)
     {
         ModeChange(NULL);
 
         if (log2bpp < 3)
             this->full_alpha = 0;
-    }
+    }*/
 
     if (this->full_alpha)
     {
@@ -343,38 +346,42 @@ void info_callback(png_struct *png_ptr, png_info *info)
         /*
          * file gamma -> linear
          */
-        if (info->gamma)
+        if (info->valid & PNG_INFO_gAMA)
             g = 1.0 / info->gamma;
         else
-            g = 1.0 / 0.45;
+            g = SCREEN_GAMMA;
 
         load->file_to_1 = malloc(256);
         if (!load->file_to_1)
             png_error(png_ptr, "Insufficient memory");
 
-        for (i = 0; i < 256; i++)
+        for (i = 1; i <= 254; i++)
         {
            load->file_to_1[i] = (png_byte)(pow((double)i / 255.0,
               g) * 255.0 + .5);
         }
+        load->file_to_1[0] = 0;
+        load->file_to_1[255] = 255;
 
         /*
          * file gamma -> screen gamma
          */
-        if (info->gamma)
+        if (info->valid & PNG_INFO_gAMA)
             g = 1.0 / (info->gamma * SCREEN_GAMMA);
         else
-            g = 1.0 / (0.45 * SCREEN_GAMMA);
+            g = 1.0;
 
         load->file_to_screen = malloc(256);
         if (!load->file_to_screen)
             png_error(png_ptr, "Insufficient memory");
 
-        for (i = 0; i < 256; i++)
+        for (i = 1; i <= 254; i++)
         {
             load->file_to_screen[i] = (png_byte)(pow((double)i / 255.0,
                g) * 255.0 + .5);
         }
+        load->file_to_screen[0] = 0;
+        load->file_to_screen[255] = 255;
 
         /*
          * screen gamma -> linear
@@ -387,11 +394,13 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
             g = 1.0 / SCREEN_GAMMA;
 
-            for (i = 0; i < 256; i++)
+            for (i = 1; i <= 254; i++)
             {
                screen_from_1[i] = (png_byte)(pow((double)i / 255.0,
                   g) * 255.0 + .5);
             }
+            screen_from_1[0] = 0;
+            screen_from_1[255] = 255;
         }
 
         /*
@@ -405,11 +414,13 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
             g = SCREEN_GAMMA;
 
-            for (i = 0; i < 256; i++)
+            for (i = 1; i <= 254; i++)
             {
                 screen_to_1[i] = (png_byte)(pow((double)i / 255.0,
                    g) * 255.0 + .5);
             }
+            screen_to_1[0] = 0;
+            screen_to_1[255] = 255;
         }
 
         hack_to_1 = load->file_to_1;
@@ -425,22 +436,77 @@ void info_callback(png_struct *png_ptr, png_info *info)
         if (this->full_alpha)
         {
             /* Need 8bpp data for blending code */
-            png_set_expand(png_ptr);
+            png_set_packing(png_ptr);
         }
         else
             png_set_packswap(png_ptr);
     }
 
+    if ((info->color_type == PNG_COLOR_TYPE_RGB ||
+         info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && osver >= 0xA5)
+    {
+        if (!this->full_alpha && (info->valid & PNG_INFO_sBIT))
+        {
+            if (info->sig_bit.red <= 5 && info->sig_bit.green <= 5 && info->sig_bit.blue <= 5)
+                load->convto16bit=1;
+        }
+    }
+
+    if (info->color_type == PNG_COLOR_TYPE_RGB)
+        png_set_filler(png_ptr, load->convto16bit ? 255 : 0, PNG_FILLER_AFTER);
+
+    /* Can't handle RGB data with transparency - need to know data
+     * values pre-gamma for palette/greyscale trick to work - get the library
+     * to turn it into RGBA. Also, 16-bit greyscale will have to be turned into
+     * grey+alpha...
+     */
+    if (info->valid & PNG_INFO_tRNS)
+    {
+        if (info->color_type == PNG_COLOR_TYPE_RGB ||
+            info->color_type == PNG_COLOR_TYPE_GRAY && info->bit_depth == 16)
+            png_set_expand(png_ptr);
+    }
+
+    if (!this->full_alpha)
+    {
+        if (info->color_type & PNG_COLOR_MASK_COLOR) /* We do greyscale ourselves */
+        {
+            if (info->valid & PNG_INFO_gAMA)
+                png_set_gamma(png_ptr, SCREEN_GAMMA, info->gamma);
+            else
+                png_set_gamma(png_ptr, SCREEN_GAMMA, 1.0 / SCREEN_GAMMA);
+        }
+    }
+    else
+    {
+        if (info->color_type != PNG_COLOR_TYPE_PALETTE)
+            png_set_premultiply_alpha(png_ptr);
+    }
+
+    /* Enable filling in of interlace */
+    png_set_interlace_handling(png_ptr);
+
+    png_read_update_info(png_ptr, info);
+
+    /*
+     * Okay, we will now be getting data in one of these formats:
+     *            1 bpp paletted/greyscale }
+     *            2 bpp paletted/greyscale } only if no alpha in palette
+     *            4 bpp paletted/greyscale }
+     *            8 bpp paletted/greyscale
+     *            8 bpp greyscale + alpha (=> 2 bytes per pixel)
+     *           24 bpp colour (with or without alpha, 32 bit packed)
+     */
+
     if (info->color_type == PNG_COLOR_TYPE_RGB ||
         info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
-        /* Add a filler if alpha missing */
-        if (info->color_type == PNG_COLOR_TYPE_RGB)
-            png_set_filler(png_ptr, 0, PNG_FILLER_AFTER);
-
         if (osver >= 0xA5)
         {
-            mode = MODE(6,90,90);
+            if (load->convto16bit)
+                mode = MODE(5,90,90);
+            else
+                mode = MODE(6,90,90);
         }
         else
         {
@@ -461,49 +527,12 @@ void info_callback(png_struct *png_ptr, png_info *info)
     {
         switch (info->bit_depth)
         {
-            case 1:  mode = 25; break;
-            case 2:  mode = 26; break;
-            case 4:  mode = 27; break;
-            case 8:
-            case 16: mode = 28; break;
+            case 1: mode = 25; break;
+            case 2: mode = 26; break;
+            case 4: mode = 27; break;
+            case 8: mode = 28; break;
         }
     }
-
-    /* Can't handle 16bpp data with transparency - turn it into 8bpp with alpha */
-    if (info->valid & PNG_INFO_tRNS)
-    {
-        if (info->bit_depth == 16 || info->color_type == PNG_COLOR_TYPE_RGB)
-            png_set_expand(png_ptr);
-    }
-
-    if (!this->full_alpha)
-    {
-        if (info->valid & PNG_INFO_gAMA)
-            png_set_gamma(png_ptr, SCREEN_GAMMA, info->gamma);
-        else
-            png_set_gamma(png_ptr, SCREEN_GAMMA, 0.45);
-    }
-    else
-    {
-        if (info->color_type != PNG_COLOR_TYPE_PALETTE)
-            png_set_premultiply_alpha(png_ptr);
-    }
-
-
-    /* Enable filling in of interlace */
-    png_set_interlace_handling(png_ptr);
-
-    png_read_update_info(png_ptr, info);
-
-    /*
-     * Okay, we will now be getting data in one of these formats:
-     *            1 bpp paletted/greyscale }
-     *            2 bpp paletted/greyscale } only if no alpha in palette
-     *            4 bpp paletted/greyscale }
-     *            8 bpp paletted/greyscale
-     *            8 bpp greyscale + alpha (=> 2 bytes per pixel)
-     *           24 bpp colour (with or without alpha, 32 bit packed)
-     */
 
     this->width = info->width;
     this->height = info->height;
@@ -519,6 +548,8 @@ void info_callback(png_struct *png_ptr, png_info *info)
     {
         if (osver < 0xA5 && !this->full_alpha)
             riscos_rowbytes = info->width;
+        else if (load->convto16bit)
+            riscos_rowbytes = info->width * 2;
         else
             riscos_rowbytes = info->width * 4;
     }
@@ -533,10 +564,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
     else if (info->color_type == PNG_COLOR_TYPE_PALETTE)
     {
         num_palette = info->num_palette;
-        if (num_palette > 16)     pal_entries = 256;
-        else if (num_palette > 4) pal_entries = 16;
-        else if (num_palette > 2) pal_entries = 4;
-        else                      pal_entries = 2;
+        pal_entries = 1 << info->bit_depth;
     }
     else if (osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
     {
@@ -624,28 +652,19 @@ void info_callback(png_struct *png_ptr, png_info *info)
         if (e)
             goto error;
 
-        if (info->color_type == PNG_COLOR_TYPE_GRAY ||
-            info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
-        {
-            palette = png_malloc(png_ptr, num_palette * sizeof(png_color));
-            png_build_grayscale_palette(min(info->bit_depth, 8), palette);
-            png_correct_palette(png_ptr, palette, num_palette);
-            png_ptr->transformations &= ~PNG_GAMMA;
-        }
-        else
-            palette = info->palette;
+        palette = info->palette;
 
         if (num_palette == 0)
             goto leave_default_palette;
 
         /* If full_alpha, must be palette data with hard tRNS chunk */
-        if (this->full_alpha)
+        if (this->full_alpha && info->color_type == PNG_COLOR_TYPE_PALETTE)
         {
             /* We manipulate the palette (har har har).
              * 255 alpha -> colour gamma corrected ready for screen
              * other alpha -> linearise and premultiply
              */
-            for (i = 0; i < pal_entries; i++)
+            for (i = 0; i < num_palette; i++)
             {
                 int r, g, b, a;
 
@@ -656,15 +675,9 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
                 if (a == 255)
                 {
-                    #ifdef GAMMA_DITHER
-                    r = load->file_to_1[r];
-                    g = load->file_to_1[g];
-                    b = load->file_to_1[b];
-                    #else
                     r = load->file_to_screen[r];
                     g = load->file_to_screen[g];
                     b = load->file_to_screen[b];
-                    #endif
                 }
                 else
                 {
@@ -677,23 +690,72 @@ void info_callback(png_struct *png_ptr, png_info *info)
                 this->private_data2[15 + i * 2] =
                 this->private_data2[15 + i * 2 + 1] = c;
             }
+
+            /* Any spare palette entries are zeroed */
+            for ( ; i < pal_entries; i++)
+                this->private_data2[15 + i * 2] =
+                this->private_data2[15 + i * 2 + 1] = 0;
+
         }
         else
         {
-            for (i = 0; i < pal_entries; i++)
+            if (info->color_type == PNG_COLOR_TYPE_GRAY ||
+                info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
             {
-                c = (palette[i].blue << 24) |
-                    (palette[i].green << 16) |
-                    (palette[i].red << 8);
-                this->private_data2[15 + i * 2] =
-                this->private_data2[15 + i * 2 + 1] = c;
-            }
-        }
+                if (this->full_alpha || !(info->valid & PNG_INFO_gAMA))
+                {
+                    /* Palette not important - just fill a simple one in anyway */
+                  dont_bother_with_gray_gamma:
+                    for (i = 0; i < num_palette; i++)
+                    {
+                        c = (i << 24) | (i << 16) | (i << 8);
+                        this->private_data2[15 + i * 2] =
+                        this->private_data2[15 + i * 2 + 1] = c;
+                    }
+                }
+                else
+                {
+                    /* Need a gamma corrected palette */
+                    int g, end, step;
+                    double gamma = 1.0 / (info->gamma * SCREEN_GAMMA);
 
-        if (info->color_type == PNG_COLOR_TYPE_GRAY ||
-            info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
-        {
-            png_free(png_ptr, palette);
+                    if (fabs(gamma - 1.0) < PNG_GAMMA_THRESHOLD)
+                        goto dont_bother_with_gray_gamma;
+
+                    this->private_data2[15] = this->private_data2[16] = 0;
+
+                    end = (1 << info->bit_depth) - 1;
+                    step = 255 / end;
+
+                    for (i = 1, g = step; i < end; i++, g += step)
+                    {
+                        c = (png_byte)(pow((double)g / 255.0, gamma) * 255.0 + .5);
+                        c = (c << 24) | (c << 16) | (c << 8);
+
+                        this->private_data2[15 + i * 2] =
+                        this->private_data2[15 + i * 2 + 1] = c;
+                    }
+
+                    this->private_data2[15 + i * 2] = this->private_data2[15 + i * 2 + 1] = 0xFFFFFF00;
+                }
+            }
+            else
+            {
+                /* Normal palette - phew */
+                for (i = 0; i < num_palette; i++)
+                {
+                    c = (palette[i].blue << 24) |
+                        (palette[i].green << 16) |
+                        (palette[i].red << 8);
+                    this->private_data2[15 + i * 2] =
+                    this->private_data2[15 + i * 2 + 1] = c;
+                }
+
+                /* Any spare palette entries are zeroed */
+                for ( ; i < pal_entries; i++)
+                    this->private_data2[15 + i * 2] =
+                    this->private_data2[15 + i * 2 + 1] = 0;
+            }
         }
     }
 
@@ -707,7 +769,8 @@ void info_callback(png_struct *png_ptr, png_info *info)
             longjmp(png_ptr->jmpbuf, 1);
         }
     }
-    else if (osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
+    else if ((osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
+                  || load->convto16bit)
     {
         if (!flex_alloc((flex_ptr) &load->temp, info->width * 4))
         {
@@ -726,20 +789,22 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
     load->color_type = info->color_type;
 
-    if (info->valid & PNG_INFO_bKGD && !(osver < 0xA5 && mode==MODE(6,90,90)))
+    if (info->valid & PNG_INFO_bKGD)
     {
-        /* Clear the background */
         load->bkgd = ((info->background.blue>>(info->bit_depth-8))<<24) |
                      ((info->background.green>>(info->bit_depth-8))<<16) |
                      ((info->background.red>>(info->bit_depth-8))<<8);
-
-        _swix(OS_SpriteOp, _INR(0,3)|_OUTR(1,3), 256+60, this->private_data2, "png", 0,
-        	    	    	    	    	     &r1, &r2, &r3);
-        _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), load->bkgd, 128, 0);
-        _swix(OS_WriteI + 16, 0);
-        _swix(OS_SpriteOp, _INR(0,3), 256+60, r1, r2, r3);
-
         load->have_bkgd = 1;
+
+        if (!(osver < 0xA5 && mode==MODE(6,90,90)))
+        {
+            /* Clear the background */
+            _swix(OS_SpriteOp, _INR(0,3)|_OUTR(1,3), 256+60, this->private_data2, "png", 0,
+            	    	    	    	    	     &r1, &r2, &r3);
+            _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), load->bkgd, 128, 0);
+            _swix(OS_WriteI + 16, 0);
+            _swix(OS_SpriteOp, _INR(0,3), 256+60, r1, r2, r3);
+        }
     }
 
     return;
@@ -753,6 +818,8 @@ static void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_ui
 static void convert_32bit_alpha_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width);
 static void convert_row_24bit_to_8bit(const png_byte *row, png_byte *data, png_byte *mask, const char *itable, unsigned int width);
 static void convert_row_8bit_to_24bit(png_byte *row, const png_byte *data, const png_byte *mask, const unsigned int *palette, unsigned int width);
+static void convert_row_24bit_to_15bit(const png_byte *row, png_byte *data, unsigned int width);
+static void convert_row_15bit_to_24bit(png_byte *row, const png_byte *data, unsigned int width);
 
 void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, int pass)
 {
@@ -794,6 +861,12 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
         our_row = row;
         row = load->temp;
     }
+    else if (load->convto16bit)
+    {
+        convert_row_15bit_to_24bit(load->temp, row, info->width);
+        our_row = row;
+        row = load->temp;
+    }
     else if (osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
     {
         convert_row_8bit_to_24bit(load->temp, row, mask_row, (unsigned int *) this->private_data2 + 15, info->width);
@@ -830,6 +903,13 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
                 *mp++ = *sp++ ? 255 : 0;
             }
         }
+    }
+    else if (load->convto16bit)
+    {
+        row = our_row;
+        if (mask_row)
+            convert_32bit_alpha_to_mask(load->temp, mask_row, info->width);
+        convert_row_24bit_to_15bit(load->temp, row, info->width);
     }
     else if (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
@@ -941,7 +1021,7 @@ static void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_ui
                 shift += s_inc;
         }
     }
-    else if (color_type == PNG_COLOR_TYPE_GRAY)
+    else /* color_type == PNG_COLOR_TYPE_GRAY */
     {
         for (i = width; i; i--)
         {
@@ -966,39 +1046,6 @@ static void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_ui
                 shift += s_inc;
         }
     }
-    else /* color_type == PNG_COLOR_TYPE_RGB && bit_depth == 8 */
-    {
-        unsigned int trans_col = (trans_values->blue << 16) |
-                                 (trans_values->green << 8) |
-                                 trans_values->red;
-
-        dp = mask_row + ((width - 1) >> 3);
-        shift = 7;
-
-        for (i = width; i; i--)
-        {
-            int pix;
-
-            pix = *(int *) sp;
-            if (pix & 0x00ffffff == trans_col)
-                alpha = 0;
-            else
-                alpha = 1;
-
-            *dp &= (png_byte)((0x7f7f >> (7 - shift)) & 0xff);
-            *dp |= (png_byte)(alpha << shift);
-
-            if (shift == 0)
-            {
-                shift = 7;
-                dp--;
-            }
-            else
-                shift--;
-
-            sp -= 4;
-        }
-    }
 }
 
 /*
@@ -1008,8 +1055,7 @@ static void convert_32bit_alpha_to_mask(const png_bytep row, png_bytep mask_row,
 {
     png_bytep sp;
     png_bytep dp;
-    int shift, alpha, i;
-    unsigned int pix;
+    png_uint_32 i, shift, alpha;
 
     sp = row + (width - 1) * 4 + 3;
     dp = mask_row + ((width - 1) >> 3);
@@ -1072,9 +1118,52 @@ static void convert_row_8bit_to_24bit(png_byte *row, const png_byte *data, const
     }
 }
 
+/*
+ * Turn 32-bit RGBA into 16-bit RGBM
+ */
+void convert_row_24bit_to_15bit(const png_byte *row, png_byte *data, unsigned int width)
+{
+    unsigned int x;
+    unsigned int r, g, b, a, col;
+
+    for (x = width; x; x--)
+    {
+        r = *row++; g = *row++; b = *row++; a = *row++;
+        col = ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3);
+        if (a==0) col |= 0x8000;
+        *(unsigned short *) data = col;
+        data += 2;
+    }
+}
+
+/*
+ * Convert 16-bit RGBM into 32-bit RGBA.
+ */
+void convert_row_15bit_to_24bit(png_byte *row, const png_byte *data, unsigned int width)
+{
+    unsigned int x;
+    unsigned int col;
+
+    /*
+     * Only need to do this approximately as we're just going to munge the
+     * data back into 15 bits anyway.
+     */
+    for (x = width; x; x--)
+    {
+        col = *(unsigned int *) data;
+        data += 2;
+        *row++ = col << 3;
+        *row++ = col >> 2;
+        *row++ = col >> 7;
+        *row++ = col & 0x8000 ? 0 : 255;
+    }
+}
+
 void png_premultiply_and_gamma_correct(png_row_infop row_info, png_bytep row)
 {
-    int a, r, g, b, x;
+    int a, r, g, b;
+    png_uint_32 x;
+
     png_bytep file_to_1 = hack_to_1;
     png_bytep file_to_screen = hack_to_screen;
 
@@ -1140,6 +1229,9 @@ _kernel_oserror *SaveSpritePNG(Image *this, const char *filename, int maxbpp)
     _kernel_oserror *e;
     PNGloaddata *load = (PNGloaddata *) this->private_data;
 
+    if (this->full_alpha)
+        return SaveSpriteAlphaPNG(this, filename, maxbpp);
+
     if (load->isreally32bit)
         this->private_data2[14] = MODE(6,90,90);
 
@@ -1148,6 +1240,92 @@ _kernel_oserror *SaveSpritePNG(Image *this, const char *filename, int maxbpp)
     if (load->isreally32bit)
         this->private_data2[14] = 28;
 
+    return e;
+}
+
+static _kernel_oserror *SaveSpriteAlphaPNG(Image *this, const char *filename, int maxbpp)
+{
+    _kernel_oserror *e;
+    PNGloaddata *load = (PNGloaddata *) this->private_data;
+    int *temppal, i;
+    unsigned int bg_r, bg_g, bg_b;
+
+    if (load->have_bkgd)
+    {
+        bg_r = (load->bkgd & 0xFF00) >> 8;
+        bg_g = (load->bkgd & 0xFF0000) >> 16;
+        bg_b = load->bkgd >> 24;
+    }
+    else
+        bg_r = bg_g = bg_b = 0;
+
+    switch (load->color_type)
+    {
+      case PNG_COLOR_TYPE_PALETTE:
+        /*
+         * We have an 8bpp sprite with true colour palette - just convert the palette
+         * entries and save.
+         */
+        temppal = malloc(256*2*4);
+        if (!temppal) return pngError("Insufficient memory");
+        memcpy(temppal, this->private_data2+15, 256*2*4);
+        for (i = 0; i < 256; i++)
+        {
+            unsigned int r, g, b, a, c;
+            c = this->private_data2[15 + i * 2];
+            b = c >> 24;
+            g = (c & 0xFF0000) >> 16;
+            r = (c & 0xFF00) >> 8;
+            a = c & 0xFF;
+
+            if (a == 255)
+                continue;
+
+            if (a == 0)
+            {
+                r = load->file_to_screen[bg_r];
+                g = load->file_to_screen[bg_g];
+                b = load->file_to_screen[bg_b];
+            }
+            else
+            {
+                a = 256 - (a + (a >> 7)); /* Rescale to 256..0 */
+                r += (load->file_to_1[bg_r] * a) >> 8;
+                g += (load->file_to_1[bg_g] * a) >> 8;
+                b += (load->file_to_1[bg_b] * a) >> 8;
+                r = screen_from_1[r];
+                g = screen_from_1[g];
+                b = screen_from_1[b];
+            }
+
+            c = (b << 24) | (g << 16) | (r << 8);
+            this->private_data2[15 + i * 2] =
+            this->private_data2[15 + i * 2 + 1] = c;
+        }
+        break;
+      case PNG_COLOR_TYPE_GRAY_ALPHA:
+        break;
+      case PNG_COLOR_TYPE_RGB_ALPHA:
+        if (load->isreally32bit)
+            this->private_data2[14] = MODE(6, 90, 90);
+        break;
+    }
+
+    e = _swix(OS_SpriteOp, _INR(0,2), 256+12, this->private_data2, filename);
+
+    switch (load->color_type)
+    {
+      case PNG_COLOR_TYPE_PALETTE:
+        memcpy(this->private_data2+15, temppal, 256*2*4);
+        free(temppal);
+        break;
+      case PNG_COLOR_TYPE_GRAY_ALPHA:
+        break;
+      case PNG_COLOR_TYPE_RGB_ALPHA:
+        if (load->isreally32bit)
+            this->private_data2[14] = 28;
+        break;
+    }
     return e;
 }
 
@@ -1256,11 +1434,21 @@ static _kernel_oserror *ModeChange(Image *this)
     _kernel_oserror *e=0;
     int bufsize;
 
-    if (osver >= 0xA5)
-        ct32k_buffer[0] = 0;
-
     e=_swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 9, &log2bpp);
     if (e) return e;
+
+    if (osver >= 0xA5)
+        ct32k_buffer[0] = 0;
+    else if (log2bpp < 3)
+    {
+        if (!ro310_2nd_table)
+            ro310_2nd_table = malloc(256);
+        if (!ro310_2nd_table)
+            return pngError("Insufficient memory");
+
+        e = _swix(ColourTrans_GenerateTable, _INR(0,5), 28, 0, -1, -1, ro310_2nd_table, 0);
+        if (e) return e;
+    }
 
     /*don't need a table if going into 16 or 32bpp*/
 
@@ -1276,14 +1464,18 @@ static _kernel_oserror *ModeChange(Image *this)
         if (!e)
         {
             free(this->table);
-            this->table=malloc(bufsize);
-            if (!this->table)
-                e=pngError("Insufficient memory");
+            if (bufsize)
+            {
+                this->table=malloc(bufsize);
+                if (!this->table)
+                    e=pngError("Insufficient memory");
+
+                if (!e)
+                    e=_swix(ColourTrans_GenerateTable, _INR(0,5), this->private_data2, "png", -1, -1,
+                                                                  this->table, 0);
+            }
         }
 
-        if (!e)
-        e=_swix(ColourTrans_GenerateTable, _INR(0,5), this->private_data2, "png", -1, -1,
-                                                    this->table, 0);
     }
 
     if (!e)
@@ -1333,7 +1525,7 @@ static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size,
     {
         int job = 0;
         _swix(PDriver_CurrentJob, _OUT(0), &job);
-        if (job || log2bpp >= 3)
+        //if (job || log2bpp >= 3)
             return RenderWithAlpha(this, x, y, scale, x_size, y_size, job ? (osver >= 0xA5 ? 5 : 3) : log2bpp, job);
     }
 
@@ -1362,16 +1554,24 @@ static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size,
         fac[3]*=100;
     }
 
-    if (!e)
-    e=_swix(OS_SpriteOp, _INR(0,7), 256+PutSpriteScaled,
-                                    this->private_data2,
-                                    "png",
-                                    x, y,
-                                    osver >= 0xa5 ? PutSpriteScaled_UsePalette |
-                                                    PutSpriteScaled_UseMask
-                                                  : PutSpriteScaled_UseMask,
-                                    fac,
-                                    log2bpp <=3 ? this->table : 0);
+    if (e) return e;
+
+    if (log2bpp <= 3 && this->table == NULL && fac[0] == fac[2] && fac[1] == fac[3])
+        e=_swix(OS_SpriteOp, _INR(0,5), 256+PutSprite,
+                                        this->private_data2,
+                                        "png",
+                                        x, y,
+                                        PutSpriteScaled_UseMask);
+    else
+        e=_swix(OS_SpriteOp, _INR(0,7), 256+PutSpriteScaled,
+                                        this->private_data2,
+                                        "png",
+                                        x, y,
+                                        osver >= 0xa5 ? PutSpriteScaled_UsePalette |
+                                                        PutSpriteScaled_UseMask
+                                                      : PutSpriteScaled_UseMask,
+                                        fac,
+                                        log2bpp <=3 ? this->table : 0);
 
     return e;
 }
@@ -1383,21 +1583,15 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
  */
 static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, int x_size, int y_size, int log2bpp, int printing)
 {
-    int bgmem;
     int bgwidth;
     int mode;
-    sprite_area *bgarea;
-    int oldsw0, oldsw1, oldsw2, oldsw3;
-    int savesize;
-    void *table = 0, *savearea = 0;
+    void *table = 0;
     int fac[4];
     _kernel_oserror *e;
-    int oldbudge, oldcompact;
-    int *palette = 0;
+    int oldbudge;
     int *bgpal;
     char *bgptr;
     PNGloaddata *load=(PNGloaddata *) this->private_data;
-    static int imageno;
     int width = this->width, height = this->height;
     int clipoffset = 0, xo = 0, yo = 0;
 
@@ -1483,13 +1677,13 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
 
     switch (log2bpp)
     {
+        case 0: mode = 25;              break;
+        case 1: mode = 26;              break;
+        case 2: mode = 27;              break;
         case 3: mode = 28;              break;
         case 4: mode = MODE(5, 90, 90); break;
         case 5: mode = MODE(6, 90, 90); break;
     }
-
-    bgwidth = width * (1 << (log2bpp - 3));
-    bgwidth = (bgwidth + 3) &~ 3;
 
     e = MakeBufferSprite((void *) mode, width, height, &bgpal);
     if (e) return e;
@@ -1567,29 +1761,36 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
         fac[3]*=100;
     }
 
-    if (log2bpp == 3 || printing)
+    /* Selection table should be unnecessary for the screen... One exception
+     * is an A4 in mode 28 in LCD, as the screen palette won't be that in
+     * the 8desktop file, but this isn't worth worrying about. They should
+     * be using mode 27 anyway.
+     */
+    if (printing)
     {
         int bufsize;
 
         e=BufferSprite_TableSize(&bufsize);
         if (e) goto error2;
 
-        table = malloc(bufsize);
-        if (!table)
+        if (bufsize)
         {
-            e=pngError("Insufficient memory");
-            goto error2;
-        }
+            table = malloc(bufsize);
+            if (!table)
+            {
+                e=pngError("Insufficient memory");
+                goto error2;
+            }
 
-        e=BufferSprite_GenerateTable(table);
-        if (e) goto error2;
+            e=BufferSprite_GenerateTable(table);
+            if (e) goto error2;
+        }
     }
 
     e=BufferSprite_PlotScaled(x - xo, y - yo, osver >= 0xa5 ? PutSpriteScaled_UsePalette : 0, fac, table);
 
     free(table);
  error2:
- error1:
     FreeBufferSprite();
 
     return e;
@@ -1619,7 +1820,6 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol, int dontoverride)
     void *mode;
     Spriteloaddata *l;
     char temp[16];
-    int bufsiz;
     int fac[4];
     int r1, r2, r3;
     PNGloaddata *load = (PNGloaddata *) this->private_data;
@@ -1786,12 +1986,12 @@ static _kernel_oserror *RegisterFiller(Image *this, FillerFunction *fill_fn, voi
 
 static void blend_image(int width, int height, char *sprdata, char *maskdata, int *palette, int type, int rowwidth, char *bgsprdata, int bgrowwidth, int *bgpalette, int bglog2bpp)
 {
-    int bgdepth = 1 << (bglog2bpp - 3);
+    unsigned int bgdepth = 1 << bglog2bpp;
     int red, green, blue;
     int bgred, bggreen, bgblue;
-    unsigned int fg, bg;
+    unsigned int fg, bg, c;
     int alpha, bg_alpha;
-    int x, y;
+    int x, y, bbit;
     char *s, *m, *b;
     char *cttable;
     #ifdef DITHERING
@@ -1801,11 +2001,11 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
     int error_red, error_green, error_blue;
     #endif
 
-    if (bgdepth == 1 & !ct32k_buffer[0] && osver >= 0xA5)
+    if (bgdepth <= 8 && osver >= 0xA5)
     {
         _kernel_oserror *e;
 
-        /* Get the magic "table" from ColourTrans ( { '32K.', table_ptr, '32K. } ) */
+        /* Get the magic "table" from ColourTrans ( { '32K.', table_ptr, '32K.' } ) */
         e = _swix(ColourTrans_GenerateTable, _INR(0,5), MODE(5, 90, 90), -1, -1, -1, ct32k_buffer, 0);
         if (e) return;
     }
@@ -1816,6 +2016,7 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
         s = sprdata;   sprdata   += rowwidth;
         m = maskdata;  maskdata  += rowwidth;
         b = bgsprdata; bgsprdata += bgrowwidth;
+        bbit = 0;
 
         #ifdef DITHERING
         if (dir == -1)
@@ -1825,7 +2026,8 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
             else
                 s += width-1;
             m += width-1;
-            b += (width-1) * bgdepth;
+            b += ((width-1) * bgdepth) >> 3;
+            bbit = ((width-1) * bgdepth) & 7;
         }
 
         error_red = error_green = error_blue = 0;
@@ -1844,18 +2046,7 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                 #endif
                 alpha = fg & 0xFF;
                 if (alpha == 0)
-                {
-                    #ifdef DITHERING
-                    error_red = error_green = error_blue = 0;
-                    if (dir == 1)
-                        b += bgdepth;
-                    else
-                        b -= bgdepth;
-                    #else
-                    b += bgdepth;
-                    #endif
-                    continue;
-                }
+                    goto leave_background;
                 blue = fg >> 24;
                 green = (fg >> 16) & 0xFF;
                 red = (fg >> 8) & 0xFF;
@@ -1875,16 +2066,7 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                     #else
                     s++;
                     #endif
-                    #ifdef DITHERING
-                    error_red = error_green = error_blue = 0;
-                    if (dir == 1)
-                        b += bgdepth;
-                    else
-                        b -= bgdepth;
-                    #else
-                    b += bgdepth;
-                    #endif
-                    continue;
+                    goto leave_background;
                 }
                 #ifdef DITHERING
                 red = green = blue = *s;
@@ -1904,14 +2086,46 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                 alpha = fg >> 24;
                 if (alpha == 0)
                 {
+                  leave_background:
                     #ifdef DITHERING
                     error_red = error_green = error_blue = 0;
-                    if (dir == 1)
+                    if (bgdepth >= 8)
+                    {
+                        if (dir == 1)
+                            b += bgdepth >> 3;
+                        else
+                            b -= bgdepth >> 3;
+                    }
+                    else
+                    {
+                        if (dir == 1)
+                        {
+                            if ((bbit += bgdepth) == 8)
+                            {
+                                bbit = 0;
+                                b++;
+                            }
+                        }
+                        else
+                        {
+                            if ((bbit -= bgdepth) < 0)
+                            {
+                                bbit = 8-bgdepth;
+                                b--;
+                            }
+                        }
+                    }
+                    #else
+                    if (bgdepth >= 8)
                         b += bgdepth;
                     else
-                        b -= bgdepth;
-                    #else
-                    b += bgdepth;
+                    {
+                        if ((bbit += bgdepth) == 8)
+                        {
+                            bbit = 0;
+                            b++;
+                        }
+                    }
                     #endif
                     continue;
                 }
@@ -1926,13 +2140,27 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                 switch (bgdepth)
                 {
                   case 1:
-                    bg = bgpalette[*b * 2];
+                    bg = (*b >> bbit) & 1;
+                    goto read_palette;
+
+                  case 2:
+                    bg = (*b >> bbit) & 3;
+                    goto read_palette;
+
+                  case 4:
+                    bg = (*b >> bbit) & 0xF;
+                    goto read_palette;
+
+                  case 8:
+                    bg = *b;
+                  read_palette:
+                    bg = bgpalette[bg * 2];
                     bgblue = bg >> 24;
                     bggreen = (bg >> 16) & 0xFF;
                     bgred = (bg >> 8) & 0xFF;
                     break;
 
-                  case 2:
+                  case 16:
                   {
                     bg = *((unsigned short *) b);
                     bgred   = (bg << 3) & 0xF8; bgred   |= bgred   >> 5;
@@ -1941,7 +2169,7 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                     break;
                   }
 
-                  case 4:
+                  case 32:
                     bg = *((unsigned int *) b);
                     bgblue = (bg >> 16) & 0xFF;
                     bggreen = (bg >> 8) & 0xFF;
@@ -1969,18 +2197,6 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                 blend(bggreen, bg_alpha, green);
                 blend(bgred,   bg_alpha, red);
 
-                #if defined(DITHERING) && defined(GAMMA_DITHER)
-                bgblue += error_blue;
-                bggreen += error_green;
-                bgred += error_red;
-                if (bgblue < 0) bgblue = 0; else if (bgblue > 255) bgblue = 255;
-                if (bggreen < 0) bggreen = 0; else if (bggreen > 255) bggreen = 255;
-                if (bgred < 0) bgred = 0; else if (bgred > 255) bgred = 255;
-                truered = bgred;
-                truegreen = bggreen;
-                trueblue = bgblue;
-                #endif
-
                 bgblue  = screen_from_1[bgblue];
                 bggreen = screen_from_1[bggreen];
                 bgred   = screen_from_1[bgred];
@@ -1991,27 +2207,12 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                  * Fully opaque case - we "cheat" by stored fully screen
                  * gamma corrected data in this case only!
                  */
-                #ifdef GAMMA_DITHER
-                blue += error_blue;
-                green += error_green;
-                red += error_red;
-                if (blue < 0) blue = 0; else if (blue > 255) blue = 255;
-                if (green < 0) green = 0; else if (green > 255) green = 255;
-                if (red < 0) red = 0; else if (red > 255) red = 255;
-                truered = red;
-                truegreen = green;
-                trueblue = blue;
-                bgblue  = screen_from_1[blue];
-                bggreen = screen_from_1[green];
-                bgred   = screen_from_1[red];
-                #else
                 bgblue = blue;
                 bggreen = green;
                 bgred = red;
-                #endif
             }
 
-            #if defined(DITHERING) && !defined(GAMMA_DITHER)
+            #ifdef DITHERING
             bgblue += error_blue;
             bggreen += error_green;
             bgred += error_red;
@@ -2023,7 +2224,7 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
             trueblue = bgblue;
             #endif
 
-            if (bgdepth != 4)
+            if (bgdepth != 32)
                 bg = ((bgblue & 0xF8) << 7) | ((bggreen & 0xF8) << 2) | (bgred >> 3);
             else
                 bg = (bgblue << 16) | (bggreen << 8) | bgred;
@@ -2031,14 +2232,61 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
             switch (bgdepth)
             {
               case 1:
-              {
-                int c = cttable[bg];
+                c = cttable[bg];
+                if (osver < 0xA5)
+                    c = ro310_2nd_table[c];
+                *b = (*b &~ (1 << bbit)) | (c << bbit);
+                goto advance_bit;
+
+              case 2:
+                c = cttable[bg];
+                if (osver < 0xA5)
+                    c = ro310_2nd_table[c];
+                *b = (*b &~ (3 << bbit)) | (c << bbit);
+                goto advance_bit;
+
+              case 4:
+                c = cttable[bg];
+                if (osver < 0xA5)
+                    c = ro310_2nd_table[c];
+                *b = (*b &~ (0xF << bbit)) | (c << bbit);
+              advance_bit:
+                #ifdef DITHERING
+                if (dir == 1)
+                {
+                    if ((bbit += bgdepth) == 8)
+                    {
+                        bbit = 0;
+                        b++;
+                    }
+                }
+                else
+                {
+                    if ((bbit -= bgdepth) < 0)
+                    {
+                        bbit = 8 - bgdepth;
+                        b--;
+                    }
+                }
+                goto get_result;
+                #else
+                if ((bbit += bgdepth) == 8)
+                {
+                    bbit = 0;
+                    b++;
+                }
+                #endif
+                break;
+
+              case 8:
+                c = cttable[bg];
                 #ifdef DITHERING
                 *b = c;
                 if (dir == 1)
                     b++;
                 else
                     b--;
+              get_result:
                 result = bgpalette[c * 2];
                 result_blue = result >> 24;
                 result_green = (result >> 16) & 0xFF;
@@ -2047,8 +2295,8 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                 *b++ = c;
                 #endif
                 break;
-              }
-              case 2:
+
+              case 16:
                 *(unsigned short *) b = bg;
                 #ifdef DITHERING
                 if (dir == 1)
@@ -2062,7 +2310,7 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                 b += 2;
                 #endif
                 break;
-              case 4:
+              case 32:
                 *(unsigned int *) b = bg;
                 #ifdef DITHERING
                 if (dir == 1)
@@ -2076,15 +2324,9 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
             }
 
             #ifdef DITHERING
-            #ifdef GAMMA_DITHER
-            error_red = truered - screen_to_1[result_red];
-            error_green = truegreen - screen_to_1[result_green];
-            error_blue = trueblue - screen_to_1[result_blue];
-            #else
             error_red = truered - result_red;
             error_green = truegreen - result_green;
             error_blue = trueblue - result_blue;
-            #endif
             #endif
 
         } /* end x loop */
