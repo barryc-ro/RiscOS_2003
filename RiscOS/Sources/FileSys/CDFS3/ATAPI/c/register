@@ -1,0 +1,1433 @@
+/* register.c for ATAPI module */
+
+
+#include "main.h"
+#include "register.h"
+#include "atapi.h"
+
+#include "drives.h"
+#include "cdmgr.h"
+
+
+DrivePtr drivelist;            /* addresses list of known drives */
+
+
+/*
+ * IDE buses available for inspection - hard-wired in this version, but
+ *  could be configured in a future version.
+ */
+
+#define  NUM_INTERFACES  1
+
+static IDEBusRec interfaces [] = {
+
+ /* RISC PC motherboard interface */
+  {  (char *) 0x030107c0,     /* address of ATAPI Command Block Registers */
+     (char *) 0x03010fc0,     /* address of ATAPI Control Block Registers */
+     "Motherboard"  }         /* description */
+
+};
+
+
+/* Registration SWI and reason codes */
+
+#define  CDMgr_Registration    0x4b74a
+
+#define  REGISTER     0
+#define  DEREGISTER   1
+
+
+/* macro to convert BCD to binary */
+
+#define  bcd_to_bin(x)   ((((x) >> 4) * 10) + ((x) & 0xf))
+
+
+/*
+ * Errors returned to CDManager can either be in the form of an error block
+ *  complete with text - in which case the error number is >= 128 - or can
+ *  be in a shortened form - in which case the number is < 128.
+ *
+ * The shortened form is represented just by an integer, and is made by
+ *  calling register_simple_error (n).
+ */
+
+static int errnum;         /* used to return a standard error to CDManager */
+
+Error * register_simple_error (int n)
+{
+    errnum = n;
+
+    return (Error *) &errnum;
+}
+
+
+#if debugging
+
+/*
+ * Auxiliary function to output error return details when debugging.
+ */
+
+static void output_error_info (char *allow, Error *err)
+{
+    int errnum = err->errnum;
+
+    if ((errnum & 0xff) < 128)
+        debug_output (allow, "errnum = %d\n", errnum & 0xff);
+    else
+        debug_output (allow, "errnum = %d: %s\n",
+                             errnum & 0xff, err->errmess);
+
+    return;
+}
+
+#else
+
+static void output_error_info (char *allow, Error *err)
+{
+    return;
+}
+
+#endif
+
+
+/*
+ * Main entry point called from CDManager.
+ *
+ *  'driveid' is the address of a DriveRec describing the device.
+ *  'opcode' is the operation code
+ *  'parmblk' addresses a block of parameters
+ *
+ * On exit, the paramater block may have been updated, and the result is 0
+ *  unless an error is being returned.
+ */
+
+static Error * register_entry_point (int driveid, int opcode, void *parmblk)
+{
+    DrivePtr drive = (DrivePtr) driveid;
+    char cpkt [CPKT_SIZE];
+    int count;
+    Error *err;
+    char t;
+
+
+    /* clear command packet etc. */
+    memset (cpkt, 0, CPKT_SIZE);
+    err = NULL;
+    count = 0;
+
+
+    switch (opcode)
+    {
+
+    case OP_READTOC:
+        {
+            ReadTocPtr p = (ReadTocPtr) parmblk;
+            ReadTocCpktPtr c = (ReadTocCpktPtr) cpkt;
+            ReadToc2HdrPtr hdr = (ReadToc2HdrPtr) (p->buff);
+            int len;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - READTOC: dib = &%x, buff = &%x, len = %d\n",
+      (int) &drive->dib, p->buff, p->len);
+
+            c->opcode = ATAPI_READTOC;
+            c->len1 = p->len >> 8;
+            c->len0 = p->len;
+            c->format = READTOC_TYPE2;
+
+            if (drive->features->flags & DRVINFO_TOC_BIN) {
+                c->rsvd1 = 0x02;  /* this drive needs the MSF bit set */
+            }
+
+            err = atapi_execute (drive, (char *) c,
+                                 p->buff, p->len, TR_READ, &count);
+
+            /* calculate size of TOC */
+            len = (hdr->len1 << 8) + hdr->len0 + 2;
+
+            DEBUG debug_output (T_ENTRY, "Calculated size = %d\n", len);
+
+            if (drive->features->flags & DRVINFO_POINT_BIN) {
+
+                /*
+                 * Special code for the Sony CDU50E etc.:
+                 *  This drive returns PM, PS, PF values in binary (fine),
+                 *  but also returns POINT values in binary (not so fine).
+                 */
+
+                if (!err)
+                {
+                    char *top = p->buff + p->len;
+                    char *t = (char *) (hdr + 1);
+
+                    if (top > p->buff + len)
+                        top = p->buff + len;
+
+                    while (t + TRACK_DESCRIPTOR_SIZE <= top)
+                    {
+                        /* only change POINT values for "normal" descriptors */
+                        if ((t[READTOC_TD_ADRCTRL] & 0xf0) == 0x10) /* ADR = 1 */
+                        {
+                            int trk = t[READTOC_TD_POINT];
+
+                            /* only change genuine track numbers */
+                            if (trk < 100)
+                                t[READTOC_TD_POINT] = (trk / 10 << 4) | trk % 10;
+                        }
+
+                        t += TRACK_DESCRIPTOR_SIZE;
+                    }
+                }
+            }
+            if (~drive->features->flags & DRVINFO_PMSF_BIN) {
+
+                /*
+                 * Special code for the Sony CDU76E (and some older drives):
+                 *  ATAPI spec says M, S, F and PM, PS, PF values should be
+                 *  returned in binary, not BCD: but this drive returns them
+                 *  in BCD.
+                 */
+
+                if (!err)
+                {
+                    char *top = p->buff + p->len;
+                    char *t = (char *) (hdr + 1);
+
+                    if (top > p->buff + len)
+                        top = p->buff + len;
+
+                    while (t + TRACK_DESCRIPTOR_SIZE <= top)
+                    {
+                        t[READTOC_TD_MIN] = bcd_to_bin (t[READTOC_TD_MIN]);
+                        t[READTOC_TD_SEC] = bcd_to_bin (t[READTOC_TD_SEC ]);
+                        t[READTOC_TD_FRM] = bcd_to_bin (t[READTOC_TD_FRM]);
+                        t[READTOC_TD_PMIN] = bcd_to_bin (t[READTOC_TD_PMIN]);
+
+                        /*
+                         * Must not change the PSEC field if it contains the
+                         *  disc type - ie if the POINT value is &a0 (aargh!)
+                         */
+                        if (t[READTOC_TD_POINT] != 0xa0)
+                            t[READTOC_TD_PSEC] = bcd_to_bin (t[READTOC_TD_PSEC]);
+
+                        t[READTOC_TD_PFRM] = bcd_to_bin (t[READTOC_TD_PFRM]);
+                        t += TRACK_DESCRIPTOR_SIZE;
+                    }
+                }
+            }
+
+            /* return error if some of the TOC is missing */
+            if (!err && len > p->len)
+                err = register_simple_error (ERR_BUFFERTOOSMALL);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - READTOC: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+    {
+        char *t = (char *) (hdr + 1);
+        int len = (hdr->len1 << 8) + hdr->len0;
+        char *top = p->buff + p->len;
+
+        if (top > p->buff + len + 2)
+            top = p->buff + len + 2;
+
+        debug_output (T_EXIT, "%d bytes read\n", count);
+        debug_output (T_EXIT, "  TOC data length = %d\n", len);
+        debug_output (T_EXIT, "  First session = %d, last session = %d\n",
+                              hdr->firstsession, hdr->lastsession);
+
+        debug_output (T_EXIT,
+             "     SS  AM  TN  PT   M   S   F   Z  PM  PS  PF\n");
+        while (t + TRACK_DESCRIPTOR_SIZE <= top)
+        {
+            debug_output (T_EXIT,
+            "    &%02x &%02x &%02x &%02x %3d:%3d:%3d &%02x %3d:%3d:%3d\n",
+                 t[0], t[1], t[2], t[3], t[4], t[5],
+                 t[6], t[7], t[8], t[9], t[10]);
+
+            t += TRACK_DESCRIPTOR_SIZE;
+        }
+    }
+}
+
+            return err;
+        }
+
+
+    case OP_READCD:
+        {
+            ReadCDPtr p = (ReadCDPtr) parmblk;
+            ReadCDCpktPtr c = (ReadCDCpktPtr) cpkt;
+            int bufflen;
+            int type = p->u.flags.type;
+            Bool rawread = p->u.flags.rawread;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - ReadCD: dib = &%x, %sData, type = %s, read %d sectors from sector %d to buff &%x\n",
+      (int) &drive->dib,
+      rawread ? "Raw" : "User",
+      type == READCD_TYPE_ANY ? "Any" :
+      type == READCD_TYPE_AUDIO ? "Audio" :
+      type == READCD_TYPE_MODE1 ? "Mode 1" :
+      type == READCD_TYPE_MODE2 ? "Mode 2" :
+      type == READCD_TYPE_MODE2_FORM1 ? "Mode 2 Form 1" :
+      type == READCD_TYPE_MODE2_FORM2 ? "Mode 2 Form 2" :
+      type == 6 ? "Type 6 (rsvd)" : "Type 7 (rsvd)",
+      p->numsectors, p->addr, (int) p->buff);
+
+            c->opcode = ATAPI_READCD;
+            c->type = type << READCD_SECTORTYPE_SHFT;
+            c->lba3 = p->addr >> 24;
+            c->lba2 = p->addr >> 16;
+            c->lba1 = p->addr >> 8;
+            c->lba0 = p->addr;
+            c->num2 = p->numsectors >> 16;
+            c->num1 = p->numsectors >> 8;
+            c->num0 = p->numsectors;
+
+            if (rawread)
+            {
+                c->flags = READCD_FLAGS_SYNCH |
+                           READCD_FLAGS_SUBHEADER |
+                           READCD_FLAGS_HEADER |
+                           READCD_FLAGS_USERDATA |
+                           READCD_FLAGS_EDCECC;
+                bufflen = p->numsectors * RAW_SECTOR_SIZE;
+            }
+            else
+            {
+                int len;
+
+                c->flags = READCD_FLAGS_USERDATA;
+                switch (type)
+                {
+                case READCD_TYPE_ANY:
+                case READCD_TYPE_AUDIO:
+                    len = RAW_SECTOR_SIZE;
+                    break;
+
+                case READCD_TYPE_MODE1:
+                    len = MODE1_DATA_SIZE;
+                    break;
+
+                case READCD_TYPE_MODE2:
+                    len = MODE2_DATA_SIZE;
+                    break;
+
+                case READCD_TYPE_MODE2_FORM1:
+                    len = MODE2_FORM1_DATA_SIZE;
+                    break;
+
+                case READCD_TYPE_MODE2_FORM2:
+                    len = MODE2_FORM2_DATA_SIZE;
+                    break;
+                }
+                bufflen = p->numsectors * len;
+            }
+
+            err = atapi_execute (drive, (char *) c,
+                                 p->buff, bufflen, TR_READ, &p->u.count);
+
+            /*
+             * The Sony CDU76E drive gives an error if an attempt is made to
+             *  read an AUDIO sector with type = ANY; so if a raw read
+             *  returns this error, then a second attempt is made with the
+             *  type set to AUDIO.
+             *
+             * This is *not* a perfect fix: it will not work if the sectors
+             *  to be read are a mixture of AUDIO and DATA sectors, but this
+             *  is not likely.
+             */
+
+            if (rawread && type == READCD_TYPE_ANY &&
+                err->errnum == ERR_WRONGMODE)
+            {
+
+DEBUG debug_output (T_ENTRY,
+      "ReadCD - RawRead, type = ANY, failed: retrying with type = AUDIO\n");
+
+                c->type = READCD_TYPE_AUDIO << READCD_SECTORTYPE_SHFT;
+                err = atapi_execute (drive, (char *) c,
+                                     p->buff, bufflen, TR_READ, &p->u.count);
+            }
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - ReadCD: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "%d bytes read\n", p->u.count);
+}
+
+            return err;
+        }
+
+
+    case OP_READ2048:
+        {
+            Read2048Ptr p = (Read2048Ptr) parmblk;
+            Read12CpktPtr c = (Read12CpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - Read2048: dib = &%x, read %d sectors from sector %d to buff &%x\n",
+      (int) &drive->dib, p->numsectors, p->addr, (int) p->buff);
+
+            c->opcode = ATAPI_READ12;
+            c->lba3 = p->addr >> 24;
+            c->lba2 = p->addr >> 16;
+            c->lba1 = p->addr >> 8;
+            c->lba0 = p->addr;
+            c->num3 = p->numsectors >> 24;
+            c->num2 = p->numsectors >> 16;
+            c->num1 = p->numsectors >> 8;
+            c->num0 = p->numsectors;
+
+            err = atapi_execute (drive, (char *) c,
+                                 p->buff, p->numsectors * MODE1_DATA_SIZE,
+                                 TR_READ, &p->count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - Read2048: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "%d bytes read\n", p->count);
+}
+
+            return err;
+        }
+
+
+    case OP_GIVESECTORDATAMODE:
+        {
+            GiveSectorDataModePtr p = (GiveSectorDataModePtr) parmblk;
+            ReadHeaderCpktPtr c = (ReadHeaderCpktPtr) cpkt;
+            ReadHeaderBuffRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - GiveSectorDataMode: dib = &%x, sector = %d\n",
+      (int) &drive->dib, p->u.addr);
+
+            c->opcode = ATAPI_READHEADER;
+            c->lba3 = p->u.addr >> 24;
+            c->lba2 = p->u.addr >> 16;
+            c->lba1 = p->u.addr >> 8;
+            c->lba0 = p->u.addr;
+            c->len0 = sizeof (r);
+
+            err = atapi_execute (drive, (char *) c, (char *) &r, sizeof (r),
+                                 TR_READ, &count);
+
+            if (!err)
+            {
+                p->u.mode = r.mode;
+            }
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - GiveSectorDataMode: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "mode = %d\n", p->u.mode);
+}
+
+            return err;
+        }
+
+
+    case OP_ADDRESS:
+        {
+            AddressPtr p = (AddressPtr) parmblk;
+            ReadSubChannelCpktPtr c = (ReadSubChannelCpktPtr) cpkt;
+            ReadSubChannelBuffRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - Address: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_READSUBCHANNEL;
+            c->flags = READSUBCHANNEL_SUBQ;
+            c->format = READSUBCHANNEL_CURRENT;
+            c->len0 = sizeof (r);
+
+            err = atapi_execute (drive, (char *) c,
+                                 (char *) &r, sizeof (r), TR_READ, &count);
+
+            /*
+             * The layout of an AddressRec and of the info field inside a
+             *  ReadSubChannelBuffRec are similar - we just have to reverse
+             *  the byte order of the addresses.
+             */
+            t = r.info.lba3; r.info.lba3 = r.info.lba0; r.info.lba0 = t;
+            t = r.info.lba2; r.info.lba2 = r.info.lba1; r.info.lba1 = t;
+            t = r.info.rellba3;
+                    r.info.rellba3 = r.info.rellba0; r.info.rellba0 = t;
+            t = r.info.rellba2;
+                    r.info.rellba2 = r.info.rellba1; r.info.rellba1 = t;
+            *p = * (AddressPtr) &r.info;
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - Address: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT,
+         "addr = %d, reladdr = %d, audiomode = %x, track = %d, index = %d\n",
+         p->addr, p->reladdr,
+         p->info.audiomode, p->info.track, p->info.index);
+}
+
+            return err;
+        }
+
+
+    case OP_READDISCSIZE:
+        {
+            ReadDiscSizePtr p = (ReadDiscSizePtr) parmblk;
+            ReadCapacityCpktPtr c = (ReadCapacityCpktPtr) cpkt;
+            ReadCapacityBuffRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - ReadDiscSize: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_READCAPACITY;
+
+            err = atapi_execute (drive, (char *) c,
+                                 (char *) &r, sizeof (r), TR_READ, &count);
+
+            p->size = (r.lba3<<24) + (r.lba2<<16) + (r.lba1<<8) + r.lba0;
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - ReadDiscSize: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "size = %d\n", p->size);
+}
+
+            return err;
+        }
+
+
+    case OP_DRIVESTATUS:
+        {
+            TestUnitReadyCpktPtr c = (TestUnitReadyCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - DriveStatus: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_TESTUNITREADY;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - DriveStatus: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_GETDRIVESPEED:
+        {
+            GetDriveSpeedPtr p = (GetDriveSpeedPtr) parmblk;
+            ModeSenseCpktPtr c = (ModeSenseCpktPtr) cpkt;
+            ModeCapabilitiesPageRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - GetDriveSpeed: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_MODESENSE;
+            c->page = MODESENSE_CAPABILITIES_PAGE;
+            c->len0 = sizeof (r);
+
+            err = atapi_execute (drive, (char *) c,
+                                 (char *) &r, sizeof (r), TR_READ, &count);
+
+            if (!err)
+            {
+                p->currspeed = (r.currspeed1 << 8) + r.currspeed0;
+                p->minspeed = CDROM_MIN_SPEED;
+                p->maxspeed = (r.maxspeed1 << 8) + r.maxspeed0;
+            }
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - GetDriveSpeed: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "current = %d, minimum = %d, maximum = %d\n",
+                      p->currspeed, p->minspeed, p->maxspeed);
+}
+
+            return err;
+        }
+
+
+    case OP_SETDRIVESPEED:
+        {
+            SetDriveSpeedPtr p = (SetDriveSpeedPtr) parmblk;
+            SetSpeedCpktPtr c = (SetSpeedCpktPtr) cpkt;
+            int newspeed = p->speed;
+
+            if (newspeed < CDROM_MIN_SPEED)
+                newspeed = CDROM_MIN_SPEED;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - SetDriveSpeed: dib = &%x, speed = %d\n",
+      (int) &drive->dib, p->speed);
+
+            c->opcode = ATAPI_SETSPEED;
+            c->speed1 = newspeed >> 8;
+            c->speed0 = newspeed;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - SetDriveSpeed: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_OPENDRAWER:
+        {
+            StartStopUnitCpktPtr c = (StartStopUnitCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - OpenDrawer: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_STARTSTOPUNIT;
+            c->flags2 = STARTSTOPUNIT_LOADEJECT;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - OpenDrawer: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_CLOSEDRAWER:
+        {
+            StartStopUnitCpktPtr c = (StartStopUnitCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - CloseDrawer: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_STARTSTOPUNIT;
+            c->flags2 = STARTSTOPUNIT_LOADEJECT | STARTSTOPUNIT_START;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - CloseDrawer: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_GETLOCKEDSTATUS:
+        {
+            GetLockedStatusPtr p = (GetLockedStatusPtr) parmblk;
+            ModeSenseCpktPtr c = (ModeSenseCpktPtr) cpkt;
+            ModeCapabilitiesPageRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - GetLockedStatus: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_MODESENSE;
+            c->page = MODESENSE_CAPABILITIES_PAGE;
+            c->len0 = sizeof (r);
+
+            err = atapi_execute (drive, (char *) c,
+                                 (char *) &r, sizeof (r), TR_READ, &count);
+
+            if (!err)
+                p->locked = (r.flags3 & MODE_CAPABILITIES_LOCKED) != 0;
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - GetLockedStatus: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "drive is %slocked\n", p->locked ? "" : "un");
+}
+
+            return err;
+        }
+
+
+    case OP_LOCKDRIVE:
+        {
+            LockUnlockCpktPtr c = (LockUnlockCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - LockDrive: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_LOCKUNLOCK;
+            c->flags = LOCKUNLOCK_LOCK;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - LockDrive: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_UNLOCKDRIVE:
+        {
+            LockUnlockCpktPtr c = (LockUnlockCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - UnlockDrive: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_LOCKUNLOCK;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - UnlockDrive: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_SEEK:
+        {
+            SeekPtr p = (SeekPtr) parmblk;
+            SeekCpktPtr c = (SeekCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - Seek: dib = &%x, seek to %d\n",
+      (int) &drive->dib, p->addr);
+
+            c->opcode = ATAPI_SEEK;
+            c->lba3 = p->addr >> 24;
+            c->lba2 = p->addr >> 16;
+            c->lba1 = p->addr >> 8;
+            c->lba0 = p->addr;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - Seek: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_GETVOLUME:
+        {
+            VolumePtr p = (VolumePtr) parmblk;
+            ModeSenseCpktPtr c = (ModeSenseCpktPtr) cpkt;
+            ModeAudioPageRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - GetVolume: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_MODESENSE;
+            c->page = MODESENSE_AUDIO_PAGE;
+            c->len0 = sizeof (r);
+
+            err = atapi_execute (drive, (char *) c,
+                                 (char *) &r, sizeof (r), TR_READ, &count);
+
+            if (!err)
+            {
+                p->left = (r.leftvol << 8) | r.leftvol;
+                p->right = (r.rightvol << 8) | r.rightvol;
+            }
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - GetVolume: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "left = &%02x, right = &%02x\n",
+                      p->left, p->right);
+}
+
+            return err;
+        }
+
+
+    case OP_SETVOLUME:
+        {
+            VolumePtr p = (VolumePtr) parmblk;
+            ModeSenseCpktPtr c = (ModeSenseCpktPtr) cpkt;
+            ModeAudioPageRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - SetVolume: dib = &%x, left = &%02x, right = &%02x\n",
+      (int) &drive->dib, p->left, p->right);
+
+            /* first read current state of Audio Control Mode Page */
+            c->opcode = ATAPI_MODESENSE;
+            c->page = MODESENSE_AUDIO_PAGE;
+            c->len0 = sizeof (r);
+
+            err = atapi_execute (drive, (char *) c,
+                                 (char *) &r, sizeof (r), TR_READ, &count);
+
+            /* and, if all is well, update it */
+            if (!err)
+            {
+                ModeSelectCpktPtr c = (ModeSelectCpktPtr) cpkt;
+
+                r.leftvol = p->left >> 8;
+                r.rightvol = p->right >> 8;
+
+                memset (cpkt, 0, CPKT_SIZE);
+                c->opcode = ATAPI_MODESELECT;
+                c->flags = MODESELECT_FLAGS;
+                c->len0 = sizeof (r);
+
+                err = atapi_execute (drive, (char *) c, (char *) &r,
+                                             sizeof (r), TR_WRITE, &count);
+            }
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - SetVolume: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_PLAY:
+        {
+            PlayPtr p = (PlayPtr) parmblk;
+            PlayAudioMSFCpktPtr c = (PlayAudioMSFCpktPtr) cpkt;
+            int n;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - Play: dib = &%x, play from %d to %d\n",
+      (int) &drive->dib, p->startaddr, p->stopaddr);
+
+            /*
+             * Note - we cannot use PLAY AUDIO, because this has only a
+             *  16-bit field for number of sectors to play, which gives a
+             *  maximum of 14.5 minutes or so at a time.
+             */
+
+            c->opcode = ATAPI_PLAYAUDIOMSF;
+            if (p->startaddr == PLAY_FROM_CURRENT_POS)
+                c->smin = c->ssec = c->sfrm = 0xff;
+            else
+            {
+                n = p->startaddr + 150;   /* block 0 is 00:02:00 */
+                c->sfrm = n % 75;
+                n /= 75;
+                c->ssec = n % 60;
+                c->smin = n/60;
+            }
+            n = p->stopaddr + 150;
+            c->efrm = n % 75;
+            n /= 75;
+            c->esec = n % 60;
+            c->emin = n/60;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - Play: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_STOP:
+        {
+            StopPlayScanCpktPtr c = (StopPlayScanCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - Stop: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_STOPPLAYSCAN;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - Stop: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_PAUSE:
+        {
+            PauseResumeCpktPtr c = (PauseResumeCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - Pause: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_PAUSERESUME;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - Pause: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_RESUME:
+        {
+            PauseResumeCpktPtr c = (PauseResumeCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - Resume: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_PAUSERESUME;
+            c->flags = PAUSERESUME_RESUME;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - Resume: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_AUDIOSCANFORWARD:
+        {
+            AudioScanPtr p = (AudioScanPtr) parmblk;
+            ScanCpktPtr c = (ScanCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - AudioScanForward: dib = &%x, from sector %d\n",
+      (int) &drive->dib, p->addr);
+
+            c->opcode = ATAPI_SCAN;
+            c->lba3 = p->addr >> 24;
+            c->lba2 = p->addr >> 16;
+            c->lba1 = p->addr >> 8;
+            c->lba0 = p->addr;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - AudioScanForward: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_AUDIOSCANREVERSE:
+        {
+            AudioScanPtr p = (AudioScanPtr) parmblk;
+            ScanCpktPtr c = (ScanCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - AudioScanReverse: dib = &%x, from sector %d\n",
+      (int) &drive->dib, p->addr);
+
+            c->opcode = ATAPI_SCAN;
+            c->flags = SCAN_BACKWARDS;
+            c->lba3 = p->addr >> 24;
+            c->lba2 = p->addr >> 16;
+            c->lba1 = p->addr >> 8;
+            c->lba0 = p->addr;
+
+            err = atapi_execute (drive, (char *) c, 0, 0, TR_NONE, &count);
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - AudioScanReverse: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "OK\n");
+}
+
+            return err;
+        }
+
+
+    case OP_AUDIOSTATUS:
+        {
+            AudioStatusPtr p = (AudioStatusPtr) parmblk;
+            ReadSubChannelCpktPtr c = (ReadSubChannelCpktPtr) cpkt;
+            ReadSubChannelHdrRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - AudioStatus: dib = &%x\n", (int) &drive->dib);
+
+            c->opcode = ATAPI_READSUBCHANNEL;
+            c->format = READSUBCHANNEL_CURRENT;
+            c->len0 = sizeof (r);
+
+            err = atapi_execute (drive, (char *) c,
+                                 (char *) &r, sizeof (r), TR_READ, &count);
+
+            if (!err)
+            {
+                switch (r.audiostatus)
+                {
+                case ATAPI_AUDIOSTATUS_PLAYING:
+                    p->status = AUDIO_PLAYING;
+                    break;
+
+                case ATAPI_AUDIOSTATUS_PAUSED:
+                    p->status = AUDIO_PAUSED;
+                    break;
+
+                default:
+                    p->status = AUDIO_NONE;
+                    break;
+                }
+            }
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - AudioStatus: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "%s\n",
+             p->status == AUDIO_NONE ? "no audio operation in progress" :
+             p->status == AUDIO_PLAYING ? "audio playing" :
+             p->status == AUDIO_PAUSED ? "audio paused" :
+             "unexpected status value");
+}
+
+            return err;
+        }
+
+
+    case OP_CALLDEVICEDRIVER:
+        {
+            CallDeviceDriverPtr p = (CallDeviceDriverPtr) parmblk;
+
+DEBUG
+{
+    debug_output (T_ENTRY,
+        "ATAPI entry - CallDeviceDriver: dib = &%x; ", (int) &drive->dib);
+    if (p->u.flags.otheratapi)
+    {
+        if (p->v.ATAcode == ATAPI_SOFT_RESET)
+        {
+            debug_output (T_ENTRY, "ATAPI Soft Reset\n");
+        }
+        else if (p->v.ATAcode == ATAPI_IDENTIFY_DEVICE)
+        {
+            debug_output (T_ENTRY,
+                "ATAPI Identify Device, buff = &%x, len = %d\n",
+                (int) p->buff, p->len);
+        }
+        else
+        {
+            debug_output (T_ENTRY, "Undefined ATA command &%02x\n",
+                p->v.ATAcode);
+        }
+    }
+    else
+    {
+        debug_output (T_ENTRY,
+            "ATAPI Packet Command, transfer = %s, buff = &%x, len = %d\n",
+            p->u.flags.transfer == TR_NONE ? "NONE" :
+            p->u.flags.transfer == TR_READ ? "READ" :
+            p->u.flags.transfer == TR_WRITE ? "WRITE" : "RSVD",
+            (int) p->buff, p->len);
+        debug_output (T_ENTRY,
+            "    command packet = (%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x)\n",
+            p->v.cpkt[0], p->v.cpkt[1], p->v.cpkt[2], p->v.cpkt[3],
+            p->v.cpkt[4], p->v.cpkt[5], p->v.cpkt[6], p->v.cpkt[7],
+            p->v.cpkt[8], p->v.cpkt[9], p->v.cpkt[10], p->v.cpkt[11]);
+    }
+}
+
+            if (p->u.flags.otheratapi)
+            {
+                err = atapi_ata_execute (drive, p->v.ATAcode, p->buff,
+                                p->len, p->u.flags.transfer, &p->u.count);
+            }
+            else
+            {
+                err = atapi_execute (drive, p->v.cpkt, p->buff, p->len,
+                                        p->u.flags.transfer, &p->u.count);
+            }
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - CallDeviceDriver: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+    else
+        debug_output (T_EXIT, "count = %d\n", p->u.count);
+}
+
+            return err;
+        }
+
+    case OP_SETRELIABILITY:
+        {
+           ReliabilityPtr p = (ReliabilityPtr) parmblk;
+           ModeSenseCpktPtr c = (ModeSenseCpktPtr) cpkt;
+           ModeErrorPageRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - SetReliability: dib = &%x, reliability = &%x\n", (int) &drive->dib,
+      p->reliability);
+
+            /* first read current state of Audio Control Mode Page */
+            c->opcode = ATAPI_MODESENSE;
+            c->page   = MODESENSE_ERROR_PAGE;
+            c->len0   = sizeof(r);
+
+            err = atapi_execute (drive, (char *) c,
+                                 (char *) &r, sizeof (r), TR_READ, &count);
+
+            /* and, if all is well, update it */
+            if (!err)
+            {
+                ModeSelectCpktPtr c = (ModeSelectCpktPtr) cpkt;
+
+                if (p->reliability & RELIABILITY_CONTINUOUS) {
+                   r.flags |= MODE_ERROR_RC;
+                } else {
+                   r.flags &= ~MODE_ERROR_RC;
+                }
+                memset (cpkt, 0, CPKT_SIZE);
+                c->opcode = ATAPI_MODESELECT;
+                c->flags  = MODESELECT_FLAGS;
+                c->len0   = sizeof (r);
+
+                err = atapi_execute (drive, (char *) c, (char *) &r,
+                                             sizeof (r), TR_WRITE, &count);
+            }
+
+DEBUG
+{
+    debug_output (T_EXIT, "ATAPI exit - SetReliability: ");
+    if (err)
+        output_error_info (T_EXIT, err);
+}
+        }
+
+    default:
+
+DEBUG debug_output (T_ENTRY,
+                    "ATAPI entry - opcode = %d: dib = &%x, params = &%x\n",
+                    opcode, (int) &drive->dib, (int) parmblk);
+
+        err = register_simple_error(ERR_BADOPCODE);
+
+DEBUG debug_output (T_EXIT, "ATAPI exit - opcode = %d: errnum = %d\n",
+                            opcode, err->errnum);
+
+        return err;
+    }
+
+    return NULL;
+}
+
+
+/*
+ * Called during module initialisation to locate any ATAPI drives present.
+ *
+ * Each drive found is added to a list of DriveRecs whose address is assigned
+ *  to 'head'; if none are found, 'head' is set to NULL.
+ */
+
+Error * register_scan_for_drives (DrivePtr *head)
+{
+    int i;
+    DrivePtr drives = NULL;
+    int device;
+    DrivePtr drive = NULL;
+    IdentifyDevicePtr buff;
+
+    /*
+     * Allocate a buffer for ATA/ATAPI Identify Device commands; this buffer
+     *  is used by atapi_exists ().
+     */
+    buff = (IdentifyDevicePtr) malloc (sizeof (IdentifyDeviceRec));
+    if (buff == 0)
+        return msgs_make_error (ERR_NOMEM + PROG_ERR);
+
+    /* scan interfaces backwards so that drives appear in sensible order */
+    for (i = NUM_INTERFACES - 1; i >= 0; i--)
+    {
+        char *commregs = interfaces[i].commregs;
+        char *ctrlregs = interfaces[i].ctrlregs;
+
+DEBUG debug_output (T_IDENTIFY, "Looking at interface %d (commregs = &%x)\n",
+      i, (int) commregs);
+
+        for (device = 1; device >= 0; device--)
+        {
+
+DEBUG debug_output (T_IDENTIFY, "  Looking for device %d\n", device);
+
+            /* allocate a new drive information record if necessary */
+            if (!drive)
+            {
+                int size = sizeof (DriveRec) + (MAX_MODEL_ID + 1) +
+                                               (MAX_FIRMWARE_REV + 1);
+
+                drive = (DrivePtr) malloc (size);
+
+                if (!drive)   /* no memory available */
+                {
+                    DrivePtr drv;
+
+                    /* free memory already allocated */
+                    free (buff);
+                    while (drives)
+                    {
+                        drv = drives;
+                        drives = drives->next;
+                        free (drv);
+                    }
+
+                    return msgs_make_error (ERR_NOMEM + PROG_ERR);
+                }
+
+                drive->dib.descr.model = (char *) drive + sizeof (DriveRec);
+                drive->dib.descr.firmware =
+                                drive->dib.descr.model + (MAX_MODEL_ID + 1);
+            }
+
+            /* fill in initial info before calling atapi_exists (..) */
+            drive->device = device;
+            drive->commregs = commregs;
+            drive->ctrlregs = ctrlregs;
+            drive->pendingdiscchange = FALSE;
+            drive->dib.function = register_entry_point;
+            drive->dib.driveid = (int) drive;
+            drive->dib.flags = C_DRIVER;
+            drive->dib.pw = privword;
+            drive->dib.version = VERSION_UNDERSTOOD;
+            drive->dib.supported = DFLT_SUPPORTED;
+            drive->dib.timeout = DFLT_TIMEOUT;
+            drive->dib.descr.majoraddress =
+                                 interfaces[i].description;
+            drive->dib.descr.interfacetype = INTERFACE_TYPE;
+            drive->dib.descr.minoraddress =
+                             (device == 0) ? "0" : "1";
+            drive->registered = FALSE;
+
+            if (atapi_exists (drive, buff))
+            {
+
+DEBUG debug_output (T_IDENTIFY,
+      "  Device %d is %s [%s] with %sINTRQ after command, supports &%x\n",
+      device, drive->dib.descr.model, drive->dib.descr.firmware,
+      drive->noIRQafterCMD ? "no " : "", drive->dib.supported);
+
+                /* add to front of list */
+                drive->next = drives;
+                drives = drive;
+                drive = NULL;   /* to force allocation of a new record */
+            }
+            else
+            {
+
+DEBUG debug_output (T_IDENTIFY,
+      "  Device %d does not exist or is not an ATAPI device\n", device);
+
+            }
+        }
+    }
+
+    /* free any unused drive information record, and the buffer */
+    free (buff);
+    if (drive)
+        free (drive);
+
+    *head = drives;
+
+    return NULL;
+}
+
+
+/*
+ * Called in response to Service_CDNewDrivePoll, R0 = 1.
+ */
+
+void register_all_drives (void)
+{
+    int version;
+    DrivePtr drive = drivelist;
+
+    while (drive)
+    {
+        if (!_swix (CDMgr_Registration, I0|I1|O0,
+                      REGISTER,
+                      &drive->dib,
+                      &version))
+            drive->registered = TRUE;
+
+        drive = drive->next;
+    }
+
+    return;
+}
+
+
+/*
+ * Called in response to Service_CDNewDrivePoll, R0 = 0.
+ */
+
+void register_new_drives (void)
+{
+    int version;
+    DrivePtr drive = drivelist;
+
+    while (drive && !drive->registered)
+    {
+        if (!_swix (CDMgr_Registration, I0|I1|O0,
+                      REGISTER,
+                      &drive->dib,
+                      &version))
+            drive->registered = TRUE;
+
+        drive = drive->next;
+    }
+
+    return;
+}
+
+
+/*
+ * Called during module finalisation to deregister all drives from CDManager
+ *  before dying.
+ *
+ * Each DriveRec is also removed from drivelist and all malloc'd space is
+ *  free'd.
+ */
+
+void register_deregister (void)
+{
+    DrivePtr drive = drivelist;
+
+    while (drive)
+    {
+        _swix (CDMgr_Registration, I0|I1, DEREGISTER, &drive->dib);
+
+        drivelist = drive->next;
+
+        /* free space malloc'd for drive */
+        free (drive);
+
+        drive = drivelist;
+    }
+
+    return;
+}
+
+
+/*
+ * Called as a result of the arrival of Service_CountATAPIDevices.
+ *
+ * 'count' is incremented by the number of ATAPI devices under the control of
+ *  this driver on the interface identified by 'interface'.
+ */
+
+void register_count_atapi_devices (char *interface, int *count)
+{
+    DrivePtr drive = drivelist;
+
+    while (drive)
+    {
+        if (strcmp (interface, drive->dib.descr.majoraddress) == 0)
+            (*count)++;
+
+        drive = drive->next;
+    }
+
+    return;
+}
