@@ -75,37 +75,109 @@ DebugClass::Debug(char *format, ...) const
 
 static MessagesFile *messages_file = 0;
 
-MessagesFile::MessagesFile(const char *filename)
-        : data(0)
+MessagesFile::MessagesFile( )
 {
-        _kernel_oserror *e;
-        int size;
+    const char *by_path = Module_Title ":Messages";
+    const char *by_res  = "Resources:$.Resources.VideoCtrl." Module_Title ".Messages";
 
-        e = _swix(MessageTrans_FileInfo, _IN(1)|_OUT(2), filename, &size);
-        if (e == NULL) {
-                data = new char[size];
-                if (data != NULL) {
-                        e = _swix(MessageTrans_OpenFile, _INR(0,2), &msgtrans_desc, filename, data);
-                        if (e != NULL) {
+#if ALLOCATE_MESSAGE_FILE
+    int size;
+/* this was included as part of the VSP version of the module.
+ * in the VideoControl version it uses resources as per all of the other protocol
+ * modules
+ */
+    err = _swix(MessageTrans_FileInfo, _IN(1)|_OUT(2), by_path, &size);
+
+    if (err == NULL)
+    {
+        data = new char[size];
+        if (data != NULL)
+        {
+            err = _swix(MessageTrans_OpenFile, _INR(0,2), &msgtrans_desc, by_path, data);
+
+            if (err != NULL)
+            {
                                 delete[] data;
                                 data = 0;
-                        }
-                }
+            }
         }
+    }
+#else
 
+#ifndef ROM
+#ifdef DEBUGLIB
+    dprintf(("", "registering resource files\n"));
+#endif
+    err = _swix(ResourceFS_RegisterFiles,
+                  _IN(0),
+                  messages_resource());
+
+    if (err != NULL) return;
+#endif
+
+    if (getenv(Module_Title "$Path"))
+    {
+      err = _swix(MessageTrans_OpenFile, _INR(0,2),
+                               &msgtrans_desc,
+                               by_path,
+                               0);
+    }
+    else
+    {
+      err = _swix(MessageTrans_OpenFile, _INR(0,2),
+                               &msgtrans_desc,
+                               by_res,
+                               0);
+    }
+
+#ifndef ROM
+    if (err != NULL)
+    {
+#ifdef DEBUGLIB
+        dprintf(("", "deregistering resource files\n"));
+#endif
+        (void) _swix(ResourceFS_DeregisterFiles,
+                      _IN(0),
+                      messages_resource());
+
+
+        return;
+    }
+#endif
+#endif /* allocate for message file */
 }
 
 MessagesFile::~MessagesFile()
 {
-        (void) _swix(MessageTrans_CloseFile, _IN(0), &msgtrans_desc);
+    _kernel_oserror* err;
+    
+    err = _swix(MessageTrans_CloseFile, _IN(0), &msgtrans_desc);
+
+#ifdef DEBUGLIB
+#endif
+#ifndef ROM
+    err = _swix(ResourceFS_DeregisterFiles,
+                      _IN(0),
+                      messages_resource());
+
+#ifdef DEBUGLIB
+    dprintf(("", "deregistering resource files\n"));
+    if (err)
+    {
+        dprintf(("", "error deregistering messages file (%d:%s)\n", err->errnum, err->errmess));
+    }
+#endif
+#endif
+#if ALLOCATE_MESSAGE_FILE
         delete[] data;
         data = 0;
+#endif
 }
 
-int MessagesFile::init()
+_kernel_oserror* MessagesFile::init()
 {
-        messages_file = new MessagesFile(FILENAME_MESSAGES);
-        return messages_file != 0;
+        messages_file = new MessagesFile( );
+        return messages_file->err;
 }
 
 void MessagesFile::finalise()
@@ -117,11 +189,15 @@ void MessagesFile::finalise()
 _kernel_oserror *MessagesFile::ErrorLookup(_kernel_oserror *e, int errnum,
 	const char *p1, const char *p2, const char *p3, const char *p4)
 {
+#if ALLOCATE_MESSAGE_FILE
         if (data == 0) {
                 e->errnum = VSP_Alloc;
                 (void) strncpy(e->errmess, "Out of memory for messages file", sizeof(e->errmess));
         }
-        else {
+        else
+#endif
+        {
+
                 e->errnum = errnum;
                 if (errnum == VSP_BadSWI) {
                         /* Generate the standard OS error for this and not a module specific
@@ -146,6 +222,15 @@ _kernel_oserror *MessagesFile::ErrorLookup(_kernel_oserror *e, int errnum,
         }
 
         return e;
+}
+
+_kernel_oserror*
+MessagesFile::TokenLookup(const char** ret_val, VSPTokenCodes token)
+{
+    char tokenbuf[8];
+    sprintf(tokenbuf, "T%2.2X\0", (int)token);
+
+    return _swix(MessageTrans_Lookup, _INR(0,1)|_OUT(2), &msgtrans_desc, tokenbuf, ret_val);
 }
 
 ErrorBlk::ErrorBlk(char *s_token, int token)
@@ -237,6 +322,19 @@ ErrorBlk::error_print(void)
 
 /************************************************************************/
 // Error SuperClass
+
+_kernel_oserror*
+Error::getTokenVal(const char** ret_val, VSPTokenCodes token)
+{
+    if (messages_file)
+    {
+        return messages_file->TokenLookup(ret_val, token);
+    }
+    else
+    {
+        return NULL;
+    }
+}
 
 ErrorBlk&
 Error::ReturnCopyOfError(void)

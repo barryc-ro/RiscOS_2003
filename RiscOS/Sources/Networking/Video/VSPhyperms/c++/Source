@@ -325,7 +325,7 @@ Source::Source(size_t set_nak_timeout, size_t source_recvspace)
    	mem_map = NULL;
   	nak_timeout = set_nak_timeout;
         most_significant_time = 0;
-        start_end_block = 0;
+        start_end_block = start_end_time = 0;
         deleted_blocks = 0;
         max_completed_block = prior_max_request = 0;
 
@@ -344,7 +344,7 @@ Source::Source(Source& live)
   most_significant_time = live.get_most_significant_time();
   nak_timeout = live.get_nakTimeout();
   current_play_id = live.get_current_play_id();		// this is the trickplay flag this changes with each new trickplay
-  start_end_block = 0;
+  start_end_block = start_end_time = 0;
   deleted_blocks = 0;
 
   live.SetSourceVar(&sd, &mem_map);
@@ -603,10 +603,11 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
 
 	(*max_complete) = (int)(last_block_sent = max_completed_block = prior_max_request);
 
-        setStartEnd((*request_num) + max_completed_block);
+        start_end_time = (LINT)(*request_num);
+        
+        setStartEnd(0);
 
 	(*request_num) =  max_completed_block + freebuf;
-
 
    	if (mode != mode_streamlive){
 		unsigned int systime;
@@ -670,57 +671,73 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
   	_kernel_irqs_on(); // claimed our block
 
   	if (mb != NULL){
-        	result = mem_map->memMemBlockToNECBlock(mb, block);
-        	//------- optimisation --
-          	int j, i;
+                result = mem_map->memMemBlockToNECBlock(mb, block);
+                LINT time = (LINT) ntohl(((NECBlockHeader*)(*block)->buffers[0].buffer_ptr)->playback_time);
+
           	(*block)->num_buffers = 0;
-          	(*block)->max_buffers = mb->dgrams_in_block;
-          	if ((*block)->buffers[0].buffer_length < sizeof(NECBlockHeader)){
-          		result = MakeError(VSP_DatagramSizeError);
-#ifdef DEBUGLIB
-				if (Debug(debug_always))
-					Debug("datagram size error %i < %i", (*block)->buffers[0].buffer_length,  sizeof(NECBlockHeader));
-#endif
-		}
-          	else
-          	{
-          	  	for (i = 0; i < mb->dgrams_in_block; ++i){
-          		  	j = i;
-          		  	while ((i+1 < mb->dgrams_in_block)&&
-          		  	    ((*block)->buffers[i+1].buffer_ptr == (*block)->buffers[i].buffer_ptr + (*block)->buffers[i].buffer_length)){
-          		  		(*block)->buffers[j].buffer_length += (*block)->buffers[i+1].buffer_length;
-          		  		i++;
-          		  	}
 
-          		  	if ((i+1) == mb->dgrams_in_block)
-          		  	  	(*block)->buffers[j].link = NULL;
-          		  	else
-          		  		(*block)->buffers[j].link = &((*block)->buffers[i+1]);
-
-          		  	(*block)->buffers[j].free_routine = free_routine;
-          		  	(*block)->buffers[j].free_workspace = pw;
-				(*block)->buffers[j].packets = 0;
-
-          		  	++(*block)->num_buffers;
-          	        }
+ 	        if (((start_end_time > 0)&&(time >= start_end_time)) ||
+                     ((start_end_time <= 0) && (time <= (-1*start_end_time))))
+                {
+                    if (0 == getStartEnd())
+                    {
+                        setStartEnd(mb->block_id);
+                    }
+                    mb->to_be_freed = 1;
+                    (*block) = NULL;
                 }
-                (*scene) = ((NECBlockHeader*)(*block)->buffers[0].buffer_ptr)->scene_number;	// in network order, no problem
-           	(*playid) = mb->special_play_id;
+                else
+                {
+          	    int j, i;
+        	    //------- optimisation --
+          	    (*block)->max_buffers = mb->dgrams_in_block;
+          	    if ((*block)->buffers[0].buffer_length < sizeof(NECBlockHeader)){
+          	    	result = MakeError(VSP_DatagramSizeError);
 #ifdef DEBUGLIB
-	if (Debug(debug_time))
-		if (mb != NULL)
-			Debug("b[%i] t=%i p_id = %i",
-			 mb->block_id, ntohl(((NECBlockHeader*)(*block)->buffers[0].buffer_ptr)->playback_time), (mb->special_play_id >> 24));
+		    	if (Debug(debug_always))
+		    		Debug("datagram size error %i < %i", (*block)->buffers[0].buffer_length,  sizeof(NECBlockHeader));
 #endif
-           	(*block)->buffers[0].buffer_ptr    +=  sizeof(NECBlockHeader);
-  		(*block)->buffers[0].buffer_length -=  sizeof(NECBlockHeader);
+		    }
+          	    else
+          	    {
+          	      	for (i = 0; i < mb->dgrams_in_block; ++i){
+          	    	  	j = i;
+          	    	  	while ((i+1 < mb->dgrams_in_block)&&
+          	    	  	    ((*block)->buffers[i+1].buffer_ptr == (*block)->buffers[i].buffer_ptr + (*block)->buffers[i].buffer_length)){
+          	    	  		(*block)->buffers[j].buffer_length += (*block)->buffers[i+1].buffer_length;
+          	    	  		i++;
+          	    	  	}
 
-  		if ( (*block)->buffers[0].buffer_length == 0 )
-    			(*mpeg_buffer) = (BitstreamBufferDescriptor*)((*block)->buffers[0].link);
-    		else {
+          	    	  	if ((i+1) == mb->dgrams_in_block)
+          	    	  	  	(*block)->buffers[j].link = NULL;
+          	    	  	else
+          	    	  		(*block)->buffers[j].link = &((*block)->buffers[i+1]);
 
-			(*mpeg_buffer) = &((*block)->buffers[0]);
-		}
+          	    	  	(*block)->buffers[j].free_routine = free_routine;
+          	    	  	(*block)->buffers[j].free_workspace = pw;
+		    		(*block)->buffers[j].packets = 0;
+
+          	    	  	++(*block)->num_buffers;
+          	            }
+                    }
+                    (*scene) = ((NECBlockHeader*)(*block)->buffers[0].buffer_ptr)->scene_number;	// in network order, no problem
+           	    (*playid) = mb->special_play_id;
+#ifdef DEBUGLIB
+	            if (Debug(debug_time))
+		        if (mb != NULL)
+		            Debug("b[%i] t=%i p_id = %i",
+		            mb->block_id, time, (mb->special_play_id >> 24));
+#endif
+           	    (*block)->buffers[0].buffer_ptr    +=  sizeof(NECBlockHeader);
+  		    (*block)->buffers[0].buffer_length -=  sizeof(NECBlockHeader);
+
+  		    if ( (*block)->buffers[0].buffer_length == 0 )
+    		    	(*mpeg_buffer) = (BitstreamBufferDescriptor*)((*block)->buffers[0].link);
+    		    else {
+
+		    	(*mpeg_buffer) = &((*block)->buffers[0]);
+		    }
+                }
 	}
         else
                 *block = 0;
@@ -767,9 +784,10 @@ Source::freeBlock(const NECBlock *block)
 // calculates if any blocks need to be freed
 
 error_flag
-Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pending, Statistics *stats, ULINT timeout, bool* ret_end_block)
+Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pending, Statistics *stats, ULINT timeout)
 {
     	int i;
+    	int start_end_found = 0;
  	error_flag result = ErrorState();
 
         for (i = 0; ( (i < mem_map->maxBlocks())&&(result != ErrorOccurred)); i++)
@@ -777,9 +795,6 @@ Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pen
             MemBlock *mb = mem_map->getBlock(i);
             if (mb->to_be_freed != 0)
             {
-                if (ret_end_block)
-                  (*ret_end_block) = ((mb->block_id == getStartEnd()) ? true : false);
-
                 result = mem_map->freeBlock_background(mb);
             }
         }
@@ -791,7 +806,6 @@ Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pen
 		if (Debug(debug_callbacks)) Debug("-callback_fullblocks fb");
 #endif
   	}
-
 	result = calculatePosAckSequence(server, stats, timeout);
 
         return result;
@@ -1108,7 +1122,7 @@ SourceLIVE::SourceLIVE(Source& vod):Source(0,0)
   most_significant_time = 0;
   nak_timeout = vod.get_nakTimeout();
   current_play_id = 0;		// this is the trickplay flag this changes with each new trickplay
-  start_end_block = 0;
+  start_end_block = start_end_time = 0;
   deleted_blocks = 0;
   	// Network information
   vod.SetSourceVar(&sd, &mem_map);
@@ -1120,7 +1134,7 @@ SourceLIVE::SourceLIVE(Source& vod):Source(0,0)
 
 // this is the same as source free blocks but doesn't send naks if the blocks are full
 error_flag
-SourceLIVE::calculate_freeBlocks(InternetObject *, callback_flag*, Statistics*, ULINT, bool*)
+SourceLIVE::calculate_freeBlocks(InternetObject *, callback_flag*, Statistics*, ULINT)
 {
     	int i;
 
@@ -1274,7 +1288,7 @@ SourceMultiCast::SourceMultiCast(InternetObject *server, size_t source_recvspace
         nak_timeout = 0;
         most_significant_time = 0;
         current_play_id = 0;
-        start_end_block = 0;
+        start_end_block = start_end_time = 0;
         deleted_blocks = 0;
         mem_map = NULL;
 

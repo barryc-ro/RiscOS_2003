@@ -60,6 +60,8 @@ INCLUDES = -ITCPIPLibs:,C:
 TARGET    = rm.${COMPONENT}
 TARGETDB  = rm.${DEBUG_COMPONENT}
 
+MSGSF     = o.msgs
+
 OBJS      =	\
 o.VSPHdr	\
 o.main		\
@@ -185,12 +187,16 @@ clean:
         ${WIPE} oi ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-# Final targets:
-${TARGET}: ${OBJS} o.VSPHdr
-        ${LD} ${Linkflags} -s syms ${OBJS} ${COBJ} ${CLIB} ${TCPIPLib}
+${MSGSF}: LocalRes:Messages
+	TokenCheck LocalRes:Messages
+	resgen messages_resource ${MSGSF} LocalRes:Messages Resources.VideoCtrl.${COMPONENT}.Messages
 
-${TARGETDB}: ${d_OBJS} o.VSPHdr
-        ${LD} ${Linkflags} -s syms ${d_OBJS} ${COBJ} ${CLIB} ${TCPIPLib} ${DebugLib}
+# Final targets:
+${TARGET}: ${OBJS} ${MSGSF} o.VSPHdr
+        ${LD} ${Linkflags} -s syms ${OBJS} ${MSGSF} ${COBJ} ${CLIB} ${TCPIPLib}
+
+${TARGETDB}: ${d_OBJS} ${MSGSF} o.VSPHdr
+        ${LD} ${Linkflags} -s syms ${d_OBJS} ${MSGSF} ${COBJ} ${CLIB} ${TCPIPLib} ${DebugLib}
 
 h.VSPHdr:	cmhg.VSPHdr
 		${CMHG} ${CMHGFLAGS} -o o.$* $? $@
