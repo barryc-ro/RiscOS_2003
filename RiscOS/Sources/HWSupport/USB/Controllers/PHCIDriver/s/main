@@ -23,19 +23,21 @@ EPHeadIsochronous       # 4     ; head endpoint structure
 EPHeadBulk              # 4     ; head endpoint structure
 EPHeadInterrupt         # 4     ; head endpoint structure
 EPATLHead               # 4     ; head endpoint from last fill of ATL buffer
+ [ USBDevice
+DevEPHead               # 4     ; head of device endpoint structures
+ ]
 ClkReadyCount           # 4     ; |
 HCSuspendedCount        # 4     ; |
 OPR_RegCount            # 4     ; |--- counts for each type of IRQ
 AllEOTIntCount          # 4     ; |
 ATLIntCount             # 4     ; |
 SOFITLIntCount          # 4     ; |
+ErrorCount              # 4     ; |
 ATLSize                 # 4     ; size of ATL buffer
 ATLUsed                 # 4     ; amount of ATL buffer currently used
 ITLSize                 # 4     ; size of ITL buffers
 ITL0Used                # 4     ; amount of ITL buffer 0 used
 ITL1Used                # 4     ; amount of ITL buffer 1 used
-TransferList            # 4     ; list of transfers being processed
-;OHCIRegs                # OHCI_regs_size
 ATLBufferSize           # 4     ; amount of data written to ATL buffer
 SoftATLBuffer           # &1000 ; soft copy of ATL buffer
 workspace               * :INDEX: @
@@ -49,29 +51,6 @@ flag_Registered         * 1:SHL:4  ; set => registered device
 flag_ATLBufferFilled    * 1:SHL:5  ; set => there is data in the ATL buffer
 flag_ATLBufferPending   * 1:SHL:6  ; set => an endpoint requires the ATL buffer
 flag_Testing            * 1:SHL:7  ; set => in test mode - don't process ATL buffer in interrupts
-
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-; port specific workspace
-
-                        ^ 0, r11
-InputStream		# 4	; devicefs stream handle
-OutputStream		# 4	; devicefs stream handle
-InputFSHandle		# 4     ; file switch handle of input stream
-OutputFSHandle		# 4     ; file switch handle of output stream
-InputBuffer		# 4	; buffer manager handle
-OutputBuffer		# 4	; buffer manager handle
-InputBufferPrivId      	# 4	; buffer managers private buffer id
-OutputBufferPrivId	# 4	; buffer managers private buffer id
-InputBufferSize		# 4	; buffer size in bytes
-OutputBufferSize	# 4	;
-InputBufferThreshold	# 4	; buffer threshold point in bytes
-OutputBufferThreshold	# 4	;
-port_workspace		* :INDEX: @
-
-;
-; bit definitions for ControlLines
-;
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -127,6 +106,7 @@ command_table
                 Command PHCIDevDesc,    1, 0, 0
                 Command PHCIReset,      0, 0, 0
                 Command PHCITestBuild,  0, 0, 0
+                Command PHCIList,       0, 0, 0
  ]
                 DCB 0
 
@@ -134,16 +114,6 @@ command_table
 
  [ :LNOT: No32bitCode
 moduleflags     DCD ModuleFlag_32bit
- ]
-
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-; debug options
- [ debug
-Host_Debug  	SETL 	False
-HostDebugViaTML	SETL 	False
-Debug_Module	SETL	True
-;Debug_File      SETS	"$.Debug"
  ]
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -300,32 +270,6 @@ serviceentry    LDR     wp, [r12]
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-; establish device
-;
-; in  : r9 address of devicefs registration block
-;       r10 hardware base address
-;
-; out : r10 address if port is present, 0 otherwise
-;       r11 port workspace pointer
-;
-establish_device Entry "r0-r3"
-
-; we need some workspace
-                MOV     r0, #ModHandReason_Claim
-                LDR     r3, =port_workspace	; amount of workspace
-                SWI     XOS_Module
-                STRVS   r0, [sp]
-                EXIT    VS                      ; return if didn't work
-
-		MOV	r11, r2			; establish port workspace
-
-		MOV	r0, #0
-		EXIT
-
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
  [ test
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -409,6 +353,7 @@ PHCIRegs_Code Entry "r1-r5"
                 MOV     r4, r0
                 MOV     r0, r1
                 HCLDR   r0, r0, r2
+                Debug   module, "", r0
                 BL      show_hex8
                 SWI     XOS_NewLine
                 CMP     r4, r3
@@ -448,6 +393,7 @@ PHCIRegs_Code Entry "r1-r5"
                 WRTIRQ  AllEOTInt
                 WRTIRQ  ATLInt
                 WRTIRQ  SOFITLInt
+                WRTIRQ  Error
 
 		EXIT
 
@@ -623,6 +569,9 @@ PHCITest_Code   Entry
 ;                MOV     r0, #HcATLBufferLength
 ;                HCSTRH  r2, r0
 15
+                Debug   module, "about to write bytes (nbytes, from): ", r2, r3
+                LDR     r5, ATLIntCount
+
                 ; Setup the transfer length
                 MOV     r0, #HcTransferCounter
                 HCSTRH  r2, r0
@@ -665,7 +614,7 @@ PHCITest_Code   Entry
                 B       %f35
 25
                 ; Wait for the next interrupt
-                LDR     R3, ATLIntCount
+                MOV     r3, r5                  ; restore saved IRQ value
                 SWI     XOS_ReadMonotonicTime
                 ADD     R2, R0, #100
                 MOV     R1, #0                  ; taskwindow yield
@@ -679,10 +628,12 @@ PHCITest_Code   Entry
                 CMP     R0, R2
                 BLT     %b30
 35
-                Pull    "r2, r3"
+;                Pull    "r2, r3"
                 SWI     OS_WriteS
                 =       "Timeout waiting for device reply",10,13,0
-                EXIT
+                ALIGN
+;                BL      release_test_semaphore
+;                EXIT
 40
                 ; Read back the data
                 Pull    "r2, r3"
@@ -721,6 +672,7 @@ PHCIDevDesc_Code   Entry "r0-r1", &14
 
                 ; Go into test mode
                 BL      claim_test_semaphore
+                STRVS   r0, [sp, #Proc_RegOffset]
                 EXIT    VS
 
                 ; Ramp up FSLargest packet so that we can read low speed devices !?!?!
@@ -952,7 +904,7 @@ PHCIReadATL_Help       = "Dump the contents of the ATL buffer", 13
 PHCIReadATL_Syntax     = "Syntax: *PHCIReadATL [<nbytes>]", 0
                 ALIGN
 PHCIReadATL_Code
-                Entry "r0-r6", 16 ; workspace for ConvertHex
+                Entry "r0-r7", 16 ; workspace for ConvertHex
                 LDR     r12, [r12]
                 LDR     r11, BaseAddress
 
@@ -1009,17 +961,21 @@ PHCIReadATL_Code
                 MOV     r4, r5
                 ADR     r5, SoftATLBuffer
 20
-                LDR     r0, [R5], #2
-                MOV     r0, r0, LSL#16
-                MOV     r0, r0, LSR#16
+;                LDR     r0, [R5], #2
+;                MOV     r0, r0, LSL#16
+;                MOV     r0, r0, LSR#16
+;                MOV     r1, r13
+;                MOV     r2, #16
+;                SWI     XOS_ConvertHex4
+                LDR     r0, [R5], #4
                 MOV     r1, r13
                 MOV     r2, #16
-                SWI     XOS_ConvertHex4
+                SWI     XOS_ConvertHex8
                 SWIVC   XOS_Write0
 
                 ; Put a space between each read, and a newline every 8
-                SUBS    r4, r4, #2
-                BEQ     %FT30
+                SUBS    r4, r4, #4
+                BLE     %FT30
 
                 TST     r4, #&1f
                 SWIEQ   XOS_NewLine
@@ -1150,7 +1106,59 @@ PHCITestBuild_Code
 
                 EXIT
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- ] ; end if debug commands
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; Handles *PHCIList
+;
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+PHCIList_Help      = "List the current set of endpoints", 13
+PHCIList_Syntax    = "Syntax: PHCIList", 0
+                ALIGN
+PHCIList_Code   Entry
+                LDR     r12, [r12]
+
+                MACRO
+                LISTEP
+10
+                TEQ     r2, #0
+                BEQ     %FT20
+                Push    "r2"
+                LDR     r0, ep_fileswitch
+                BL      show_hex2
+                SWI     XOS_WriteI+32
+                LDR     r0, ep_ptd_header0
+                BL      show_hex8
+                SWI     XOS_WriteI+32
+                LDR     r0, ep_ptd_header4
+                BL      show_hex8
+                SWI     XOS_NewLine
+                Pull    "r2"
+                LDR     r2, ep_next
+                B       %BT10
+20
+                MEND
+
+                SWI     XOS_WriteS
+                =       "Control:",13,10,0
+                ALIGN
+                LDR     r2, EPHeadControl
+                LISTEP
+                SWI     XOS_WriteS
+                =       "Bulk:",13,10,0
+                ALIGN
+                LDR     r2, EPHeadBulk
+                LISTEP
+                SWI     XOS_WriteS
+                =       "Interrupt:",13,10,0
+                ALIGN
+                LDR     r2, EPHeadInterrupt
+                LISTEP
+                LDR     r0, [sp]
+                BL      show_hex8
+                SWI     XOS_NewLine
+;                Debug   module, "return address: ", r0
+
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Wait for an ATL interrupt
@@ -1173,6 +1181,7 @@ claim_test_semaphore
                 Debug   module, "Already claimed"
                 ADR     R0, ErrorBlock_PHCI_TestSem
                 BL      make_error
+                STR     r0, [sp, #Proc_RegOffset]
                 EXIT
 
                 MakeErrorBlock  PHCI_TestSem
@@ -1287,38 +1296,25 @@ show_integer	Entry "r1-r2"
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+ ] ; end if debug commands
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Routine to write a hex number to the screen
 ; in:
 ;    r0 - value to be displayed
-show_hex8
-        Push    "r1-r2, lr"
-        SUB     r13, r13, #16
+        MACRO
+$label  SHOW_HEX    $n
+$label  Entry   "r0-r2", 16
         MOV     r1, r13
         MOV     r2, #16
-        SWI     XOS_ConvertHex8
+        SWI     XOS_ConvertHex$n
         SWIVC	OS_Write0
-        ADD     r13, r13, #16
-        Pull    "r1-r2, pc"
-show_hex4
-        Push    "r1-r2, lr"
-        SUB     r13, r13, #16
-        MOV     r1, r13
-        MOV     r2, #16
-        SWI     XOS_ConvertHex4
-        SWIVC	OS_Write0
-        ADD     r13, r13, #16
-        Pull    "r1-r2, pc"
-show_hex2
-        Push    "r0-r2, lr"
-        SUB     r13, r13, #16
-        MOV     r1, r13
-        MOV     r2, #16
-        SWI     XOS_ConvertHex2
-        SWIVC	OS_Write0
-        ADD     r13, r13, #16
-        Pull    "r0-r2, pc"
+        EXIT
+        MEND
 
+show_hex8 SHOW_HEX  8
+show_hex4 SHOW_HEX  4
+show_hex2 SHOW_HEX  2
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1426,7 +1422,10 @@ make_error_exit1
  [ standalonemessages
 resource_file_block
 	ResourceFile $MergedMsgs, Resources.PHCI.Messages
-;        ResourceFile Test.HardwareTest, !Boot.!Run
+ [ :DEF:HardwareTest
+        ! 0, "Incorporating hardware test"
+        ResourceFile Test.HardwareTest, !Boot.!Run
+ ]
 	DCD     0
  ]
 
