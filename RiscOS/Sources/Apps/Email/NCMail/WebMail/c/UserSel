@@ -130,14 +130,17 @@ void usersel_start_selected(int num_args, url_param *  arg)
    */
   if (nb_ensure_module(0, "NCMALite") == FALSE)
   {
+    dprintf(("UI", "Getting NCMA Details (NCMA **NOT** present)\n"));
     /* We are probably running on a RiscPC, so setup Fake data */
     rc = usersel_get_fake_user_details(&num_users);
   }
   else
   {
+    dprintf(("UI", "Getting NCMA Details (NCMA present)\n"));
     rc = usersel_get_user_details(&num_users);
   }
 #else
+  dprintf(("UI", "Getting NCMA Details (#else clause)\n"));
   rc = usersel_get_user_details(&num_users);
 #endif
 
@@ -173,7 +176,19 @@ void usersel_start_selected(int num_args, url_param *  arg)
     else if (num_users == 1)
     {
       dprintf(("UI", "One user\n"));
-      usersel_setup_one_valid_user();
+      if (usersel_setup_one_valid_user() == true)
+      {
+        /* Call NCMA */
+        usersel_call_ncma(NCMA_Success);
+      }
+      else
+      {
+        popup_1_open_dialogue(nb_messagetrans_lookup(message_block, "USERSEL_BadData"),
+                              nb_messagetrans_lookup(message_block, "BUTTON_OK"),
+                              usersel_popup_cbf,
+                              NULL);
+        usersel_reset_struct();
+      }
     }
     else
     {
@@ -267,10 +282,10 @@ bool usersel_email_selected(int num_args, url_param *arg)
   do
   {
     counter++;
+    dprintf(("UI", "Name[%d]: '%s', Value: '%s'\n", counter,arg[counter].name, arg[counter].value));
 
     if (nb_case_insensitive_strcmp(arg[counter].name, UserSel_Mode) == 0)
     {
-      dprintf(("UI", "Found mode\n"));
       if (nb_case_insensitive_strcmp(arg[counter].value, UserSel_Mode_Email) == 0)
         return(true);
       else
@@ -387,7 +402,7 @@ void usersel_output_users(FILE *out)
   len = nb_messagetrans_token_length(message_block, "USERSEL_UserRow");
   dprintf(("UI", "Len: %d\n", len));
 
-  if ((token = malloc(len + 2)) == NULL)
+  if ((token = malloc(len+10)) == NULL)
   {
     ncmui_error_display(1);
   }
@@ -395,6 +410,7 @@ void usersel_output_users(FILE *out)
   {
     /* Get token from messages file */
     strcpy(token, nb_messagetrans_lookup(message_block, "USERSEL_UserRow"));
+    dprintf(("UI", "Token:  %s\n",token));
 
     for (counter = 0; counter <= UserSel_NumUsers; counter++)
     {
@@ -431,6 +447,9 @@ bool usersel_output_user_line(FILE *out, uint32 item, char *html, uint32 len)
        ) ||
        ( (user_details.user[item].address == NULL) ||
          (strcmp(user_details.user[item].address, "")==0)
+       ) ||
+       ( (user_details.user[item].password == NULL) ||
+         (strcmp(user_details.user[item].password, "")==0)
        )
      )
   {
@@ -543,6 +562,28 @@ bool usersel_setup_one_valid_user(void)
 
 
 /************************************************************************/
+/* usersel_boot_ncma                                                    */
+/*                                                                      */
+/* Function kicks NCMA (hopefully) to build it's cache.                 */
+/*                                                                      */
+/* Parameters:                                                          */
+/*                                                                      */
+/* Returns:                                                             */
+/*                                                                      */
+/************************************************************************/
+void usersel_boot_ncma(void)
+{
+  _kernel_swi_regs	 regs;
+
+  dprintf(("UI", "Calling NCMA MiscOP\n"));
+
+  regs.r[0] = 0;
+  _kernel_swi(NCMA_MiscOp, &regs, &regs);
+
+  return;
+}
+
+/************************************************************************/
 /* usersel_get_user_details                                             */
 /*                                                                      */
 /* Function extracts the data from the smartcard, storing it in the     */
@@ -561,6 +602,9 @@ bool usersel_get_user_details(int32 *num_users)
 
   dprintf(("UI", "Getting user details\n"));
 
+  /* Tell NCMA to build its Cache */
+  usersel_boot_ncma();
+
   /* Get POP3 Server */
   rc = usersel_get_tag_details(NCMA_Tag_POP3_SERVER, &user_details.pop3_server);
   if (rc == false)
@@ -578,7 +622,9 @@ bool usersel_get_user_details(int32 *num_users)
   rc = usersel_get_tag_details(NCMA_Tag_POLL_DELAY, &poll_delay_tmp);
   if (rc == false)
   {
-    return(false);
+    // TEMPORY hack.
+    user_details.poll_delay = 2;
+//    return(false);
   }
   else
   {
@@ -589,9 +635,9 @@ bool usersel_get_user_details(int32 *num_users)
   /* Do Users */
   for (counter = 0; counter <= UserSel_NumUsers; counter++)
   {
-    dprintf(("UI", "User     %s\n", ncma_tags[counter].user));
-    dprintf(("UI", "Password %s\n", ncma_tags[counter].password));
-    dprintf(("UI", "Address  %s\n", ncma_tags[counter].address));
+    dprintf(("UI", "User     [%d]: %s\n", counter, ncma_tags[counter+1].user));
+    dprintf(("UI", "Password [%d]: %s\n", counter, ncma_tags[counter+1].password));
+    dprintf(("UI", "Address  [%d]: %s\n", counter, ncma_tags[counter+1].address));
 
     /* User Name */
     rc = usersel_get_tag_details(ncma_tags[counter+1].user, &user_details.user[counter].name);
@@ -607,8 +653,11 @@ bool usersel_get_user_details(int32 *num_users)
       return(false);
   }
 
+  num = 0;
   rc = usersel_validate_data(&num);
   *num_users = num;
+
+  dprintf(("UI", "Number of users: %d\n", num));
   return(rc);
 }
 
@@ -627,35 +676,62 @@ bool usersel_get_user_details(int32 *num_users)
 bool usersel_get_tag_details(char *tag, char **location)
 {
   _kernel_swi_regs	 regs;
+  _kernel_oserror	*er;
   char			*ptr;
   int32			 len;
+
+  dprintf(("UI", "Get Tag: %s\n", tag));
 
   regs.r[0] = (int) tag;
   regs.r[1] = NULL;
   regs.r[2] = 0;
 
-  _kernel_swi(NCMA_CacheEnquiry, &regs, &regs);
-  len = regs.r[0];
-
-  if (len < 0)
+  er = _kernel_swi(NCMA_CacheEnquiry, &regs, &regs);
+  if (er != NULL)
   {
+    dprintf(("UI", "Cache Enquiry get length failed with number %d and text:\n", er->errnum));
+    dprintf(("UI", "  %s\n", er->errmess));
     return(false);
   }
   else
   {
-    if ((ptr= malloc(len + 2)) == NULL)
+    dprintf(("UI", "Length of tag: %d\n", regs.r[0]));
+    len = regs.r[0];
+
+    if (len < 0)
     {
+      dprintf(("UI", "Tag length of 0 returned\n"));
       return(false);
     }
     else
     {
-      regs.r[0] = (int) tag;
-      regs.r[1] = (int) ptr;
-      regs.r[2] = len;
+      if ((ptr= malloc(len + 2)) == NULL)
+      {
+        dprintf(("UI", "Memory allocation failed\n"));
+        return(false);
+      }
+      else
+      {
+        regs.r[0] = (int) tag;
+        regs.r[1] = (int) ptr;
+        regs.r[2] = len;
 
-      _kernel_swi(NCMA_CacheEnquiry, &regs, &regs);
-      *location = ptr;
-      return(true);
+        er = _kernel_swi(NCMA_CacheEnquiry, &regs, &regs);
+
+        if (er != NULL)
+        {
+          dprintf(("UI", "Cache Enquiry failed with number %d and text:\n", er->errnum));
+          dprintf(("UI", "  %s\n", er->errmess));
+          return(false);
+        }
+        else
+        {
+          dprintf(("UI", "Tag '%s' returned data: '%s'\n", tag, ptr));
+          *location = ptr;
+          return(true);
+        }
+        free(ptr);
+      }
     }
   }
 }
@@ -759,19 +835,6 @@ bool usersel_get_tag_details(char *tag, char **location)
     dprintf(("UI", "   SMTP:    %s\n", user_details.smtp_server));
     dprintf(("UI", "   Poll:    %d\n", user_details.poll_delay));
 
-//    user_details.poll_for_mail = true;
-//    user_details.poll_delay = 5;
-//
-//    nb_strcpy_malloc(&user_details.pop3_server, "rwarren.acorn.co.uk");
-//    nb_strcpy_malloc(&user_details.smtp_server, "rwarren.acorn.co.uk");
-//
-//    nb_strcpy_malloc(&user_details.user[0].name, "nbingham");
-//    nb_strcpy_malloc(&user_details.user[0].password, "pop3test");
-//    nb_strcpy_malloc(&user_details.user[0].address, "nbingham@rwarren.acorn.co.uk");
-//    nb_strcpy_malloc(&user_details.user[1].name, "pop3test");
-//    nb_strcpy_malloc(&user_details.user[1].password, "pop3test");
-//    nb_strcpy_malloc(&user_details.user[1].address, "pop3test@rwarren.acorn.co.uk");
-
     rc = usersel_validate_data(&num);
 
     *num_users = num;
@@ -795,18 +858,23 @@ bool usersel_get_tag_details(char *tag, char **location)
 bool usersel_validate_data(int32 *num_users)
 {
   int32		counter;
+  int32		users;
   bool		name = true;
   bool		address = true;
   bool		password = true;
 
+  users = 0;
+
   /* Pop3 server */
   if ( (user_details.pop3_server == NULL) || (strcmp(user_details.pop3_server, "") == 0) )
   {
+    dprintf(("", "POP3 server invalid\n"));
     return(false);
   }
   /* SMTP server */
   if ( (user_details.smtp_server == NULL) || (strcmp(user_details.smtp_server, "") == 0) )
   {
+    dprintf(("", "SMTP server invalid\n"));
     return(false);
   }
 
@@ -838,15 +906,20 @@ bool usersel_validate_data(int32 *num_users)
     if ( ((name == false) && (address == false) && (password == false)) ||
          ((name == true) && (address == true) && (password == true)) )
     {
-      *num_users = *num_users + 1;
+      /* Valid data must be all filled in, or all empty.  If all filled in, increment users */
+      if ((name == true) && (address == true) && (password == true))
+        users++;
     }
     else
     {
+      dprintf(("UI", "Failed on user %d\n", counter));
+      *num_users = users;
       return(false);
     }
   }
   /* If we got here it is good */
   dprintf(("UI", "All valid\n"));
+  *num_users = users;
   return(true);
 }
 
