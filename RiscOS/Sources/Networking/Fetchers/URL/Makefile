@@ -28,7 +28,7 @@ RESDIR = <resource$dir>.Resources2.URL
 #
 # Generic options:
 #
-MKDIR	= cdir
+MKDIR	= mkdir -p
 CC	= cc
 CMHG	= cmhg
 CP	= copy
@@ -37,6 +37,7 @@ TLD	= tlink
 RM	= remove
 WIPE	= -wipe
 MODSQZ  = modsqz
+TOUCH   = create
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -111,6 +112,19 @@ MSGSF=o.msgs
 
 DBGFLAGS=-DTRACE -DUSE_SYSLOG
 
+PNGS=\
+  LocalRes:images.internal-gopher-binary\
+  LocalRes:images.internal-gopher-image\
+  LocalRes:images.internal-gopher-index\
+  LocalRes:images.internal-gopher-menu\
+  LocalRes:images.internal-gopher-menu-grey\
+  LocalRes:images.internal-gopher-movie\
+  LocalRes:images.internal-gopher-sound\
+  LocalRes:images.internal-gopher-telnet\
+  LocalRes:images.internal-gopher-text\
+  LocalRes:images.internal-gopher-unknown\
+  LocalRes:images.internal-gopher-unknown-grey
+
 #
 # Rule patterns
 #
@@ -148,7 +162,7 @@ install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: Module installed (ROM)
 
-resources: LocalRes:Messages LocalRes:ResList LocalRes:images
+resources: LocalRes:Messages LocalRes:ResList ${PNGS}
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESDIR}.${COMPONENT}
 	TokenCheck LocalRes:Messages
@@ -161,7 +175,7 @@ o.dirs:
 	${MKDIR} i
 	${MKDIR} oi
 	${MKDIR} inst
-	create o.dirs
+	${TOUCH} $@
 
 clean:
 	${WIPE} o ${WFLAGS}
@@ -186,7 +200,7 @@ rom_link: o.dirs
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-${MSGSF}: LocalRes:Messages LocalRes:ResList
+${MSGSF}: LocalRes:Messages LocalRes:ResList ${PNGS}
 	TokenCheck LocalRes:Messages
 	resgen messages_file ${MSGSF} -via LocalRes:ResList
 
