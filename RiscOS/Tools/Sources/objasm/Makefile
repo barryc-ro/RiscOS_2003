@@ -12,11 +12,13 @@
 # Paths
 #
 VPATH=  @ riscos
+LIBDIR	= ${INSTDIR}.Library.Acorn
+INSTAPP    = ${INSTDIR}.Apps.!ObjAsm
 
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CP      = copy
 CC      = cc
@@ -91,6 +93,26 @@ export: export_${PHASE}
 
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
+
+install_tool: ${TARGET}
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+	@echo ${COMPONENT}: tool and docs installed in library
+
+install: install_tool install_dirs
+	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
+	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
+	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
+	${CP} LocalRes:!Sprites ${INSTAPP}.!Sprites ${CPFLAGS}
+	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
+	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
+	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
+	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
+
+install_dirs:
+	${MKDIR} ${INSTAPP}
+	${MKDIR} ${INSTAPP}
+	${MKDIR} ${LIBDIR}.Docs
 
 clean:
         ${WIPE} o.* ${WFLAGS}
