@@ -275,6 +275,7 @@ install_common: ${FILES}
 	${CP} LocalRes:WebPages.05   		${INSTDIR}.WebPages.05   ${CPFLAGS}
 	${CP} LocalRes:WebPages.06   		${INSTDIR}.WebPages.06   ${CPFLAGS}
 	${CP} LocalRes:WebPages.07   		${INSTDIR}.WebPages.07   ${CPFLAGS}
+	${CP} LocalRes:WebPages.08   		${INSTDIR}.WebPages.08   ${CPFLAGS}
 	${CP} LocalRes:WebPages.11   		${INSTDIR}.WebPages.11   ${CPFLAGS}
 	${CP} LocalRes:WebPages.21   		${INSTDIR}.WebPages.21   ${CPFLAGS}
 	${CP} LocalRes:WebPages.22   		${INSTDIR}.WebPages.22   ${CPFLAGS}
@@ -345,6 +346,7 @@ resources:
 	${CP} LocalRes:WebPages.05   	${RESDIR}.WebPages.05   ${CPFLAGS}
 	${CP} LocalRes:WebPages.06   	${RESDIR}.WebPages.06   ${CPFLAGS}
 	${CP} LocalRes:WebPages.07   	${RESDIR}.WebPages.07   ${CPFLAGS}
+	${CP} LocalRes:WebPages.08   	${RESDIR}.WebPages.08   ${CPFLAGS}
 	${CP} LocalRes:WebPages.11   	${RESDIR}.WebPages.11   ${CPFLAGS}
 	${CP} LocalRes:WebPages.21   	${RESDIR}.WebPages.21   ${CPFLAGS}
 	${CP} LocalRes:WebPages.22   	${RESDIR}.WebPages.22   ${CPFLAGS}
