@@ -138,6 +138,25 @@ ${WIMPLIB}:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.globals:	c.globals
+o.globals:	tbox:h.const
+o.globals:	tbox:h.macros
+o.globals:	tbox:h.services
+o.globals:	tbox:h.debug
+o.globals:	tbox:h.mem
+o.globals:	tbox:h.string32
+o.globals:	tbox:h.messages
+o.globals:	C:h.kernel
+o.globals:	tbox:objects.h.toolbox
+o.globals:	tbox:objects.h.toolbox
+o.globals:	tbox:objects.h.window
+o.globals:	tbox:h.twimp
+o.globals:	C:h.kernel
+o.globals:	tbox:objects.h.menu
+o.globals:	h.globals
+o.globals:	C:h.kernel
+o.slider_ven: gadgets.s.slider_ven
+o.toolbox: s.toolbox
 o.actbut:	gadgets.c.actbut
 o.actbut:	C:h.swis
 o.actbut:	C:h.kernel
@@ -470,23 +489,6 @@ o.getstate:	h.object
 o.getstate:	h.task
 o.getstate:	h.getstate
 o.getstate:	C:h.kernel
-o.globals:	c.globals
-o.globals:	tbox:h.const
-o.globals:	tbox:h.macros
-o.globals:	tbox:h.services
-o.globals:	tbox:h.debug
-o.globals:	tbox:h.mem
-o.globals:	tbox:h.string32
-o.globals:	tbox:h.messages
-o.globals:	C:h.kernel
-o.globals:	tbox:objects.h.toolbox
-o.globals:	tbox:objects.h.toolbox
-o.globals:	tbox:objects.h.window
-o.globals:	tbox:h.twimp
-o.globals:	C:h.kernel
-o.globals:	tbox:objects.h.menu
-o.globals:	h.globals
-o.globals:	C:h.kernel
 o.hide:	c.hide
 o.hide:	C:h.kernel
 o.hide:	C:h.swis
@@ -897,7 +899,6 @@ o.slider:	C:h.swis
 o.slider:	gadgets.^.h.main
 o.slider:	C:h.kernel
 o.slider:	gadgets.h.slider
-o.slider_ven: gadgets.s.slider_ven
 o.stringset:	gadgets.c.stringset
 o.stringset:	C:h.swis
 o.stringset:	C:h.kernel
@@ -1001,7 +1002,6 @@ o.toolbar:	C:h.kernel
 o.toolbar:	h.veneers
 o.toolbar:	h.toolbar
 o.toolbar:	C:h.kernel
-o.toolbox: s.toolbox
 o.utils:	c.utils
 o.utils:	h.utils
 o.utils:	tbox:h.twimp

@@ -62,8 +62,7 @@ extern _kernel_oserror *show_object (_kernel_swi_regs *r, TaskDescriptor *t)
     * (ie catch it in the prefilter).
     *
     */
-   _kernel_swi_regs     regs,
-                       *user_regs = (_kernel_swi_regs *) r->r[4];
+   _kernel_swi_regs    *user_regs = (_kernel_swi_regs *) r->r[4];
    _kernel_oserror     *e;
    FontMenuInternal    *menu_int  = (FontMenuInternal *) r->r[2];
    FontMenu_AboutToBeShown_Event
@@ -72,54 +71,27 @@ extern _kernel_oserror *show_object (_kernel_swi_regs *r, TaskDescriptor *t)
 
    DEBUG debug_output ("s","FontMenu: entering show, menu_int @0x%x, object_id = 0x%x\n",(int)menu_int, (int)menu_int->object_id);
 
-   if (global_menu.wimp_menu)
-      mem_freek (global_menu.wimp_menu);
-   if (global_menu.wimp_menu_indirect)
-      mem_freek (global_menu.wimp_menu_indirect);
-
+   /* Ensure a HasBeenHidden event arrives before the AboutToBeShown */
+   if (global_menu.flags & GLOBAL_MENU_INFO_FLAGS_IS_SHOWING)
+   {
+      if ((e = has_been_hidden()) != NULL)
+         return e;
+   }
    global_menu.current = menu_int;
 
    if ((e = show_menu_coords (user_regs)) != NULL)
       return e;
 
-   DEBUG debug_output ("s","FontMenu: entering Font_ListFonts\n");
-
-   regs.r[1] = 0;
-   regs.r[2] = (1<<21|1<<19) /* tick font indicated by R6 + return font menu defn */
-             | ((global_menu.current->flags & FontMenuInternal_IncludeSystemFont) ? 1<<20: 0);
-   regs.r[3] = 0;
-   regs.r[4] = 0;
-   regs.r[5] = 0;
-   regs.r[6] = 0;
-
-   if ((e = _kernel_swi (Font_ListFonts, &regs, &regs)) != NULL)
+   if ((e = allocate_fontmenu_memory()) != NULL)
       return e;
-
-   if ((global_menu.wimp_menu = mem_alloc (regs.r[3])) == NULL)
-      return make_error (FontMenu_AllocFailed,0);
-
-   global_menu.menu_size = regs.r[3];
-
-   if ((global_menu.wimp_menu_indirect = mem_alloc (regs.r[5])) == NULL) {
-      e = make_error (FontMenu_AllocFailed,0);
-      goto clearup1;
-   }
-   global_menu.indirect_size = regs.r[5];
-
-   DEBUG debug_output ("s","FontMenu: global_menu.current @0x%x; menu_int @0x%x\n",(int)global_menu.current,(int)menu_int);
-   if ((e = generate_fontmenu()) != NULL)
-      goto clearup2;
 
    global_menu.t = t;
 
    if (user_regs->r[0] & 2) {
       global_menu.flags &= ~GLOBAL_MENU_INFO_FLAGS_TOP_LEVEL;
 
-      regs.r[0] = 0;
-      regs.r[1] = (int) global_menu_state;
-
-      if ((e = _kernel_swi (Wimp_GetMenuState, &regs, &regs)) != NULL) {
-         goto clearup2;
+      if ((e = _swix (Wimp_GetMenuState, _INR(0,1), 0, global_menu_state)) != NULL) {
+         goto clearup;
       }
       r->r[0] = (int) global_menu.wimp_menu;
    } else {
@@ -131,11 +103,6 @@ extern _kernel_oserror *show_object (_kernel_swi_regs *r, TaskDescriptor *t)
 
       global_menu.flags &= ~GLOBAL_MENU_INFO_FLAGS_SHOW_NEXT;
 
-      regs.r[0]                    =  0;                     /* flags*/
-      regs.r[1]                    =  user_regs->r[1];       /* Object id */
-      regs.r[2]                    =  -1;                    /* Component id */
-      regs.r[3]                    =  (int) &toolbox_event;
-
       toolbox_event.hdr.size       =  sizeof(FontMenu_AboutToBeShown_Event);
       toolbox_event.hdr.event_code =  FontMenu_AboutToBeShown;
       toolbox_event.hdr.flags      =  user_regs->r[0];
@@ -145,19 +112,27 @@ extern _kernel_oserror *show_object (_kernel_swi_regs *r, TaskDescriptor *t)
       about_to_be_shown->x         = global_menu.x;
       about_to_be_shown->y         = global_menu.y;
 
-      if ((e = _kernel_swi (Toolbox_RaiseToolboxEvent, &regs, &regs)) != NULL)
-         return e;
-
+      if ((e = _swix (Toolbox_RaiseToolboxEvent, _INR(0,3),
+                                               0,               /* flags */
+                                               user_regs->r[1], /* Object id */
+                                               -1,              /* Component id */
+                                               &toolbox_event
+                     )) != NULL)
+         goto clearup;
    } else {
+      if ((e = generate_fontmenu()) != NULL)
+         goto clearup;
+
+      if ((e = (~user_regs->r[0] & 2) ? menu_show_actual () : menu_show_submenu_actual ()) != NULL)
+         goto clearup;
+
       global_menu.flags |= GLOBAL_MENU_INFO_FLAGS_IS_SHOWING;
-      return (~user_regs->r[0] & 2) ? menu_show_actual () : menu_show_submenu_actual ();
    }
    return NULL;
 
-   clearup2:
+   clearup:
       mem_freek(global_menu.wimp_menu_indirect);
       global_menu.wimp_menu_indirect = NULL;
-   clearup1:
       mem_freek(global_menu.wimp_menu);
       global_menu.wimp_menu = NULL;
       global_menu.current   = NULL;
@@ -167,7 +142,6 @@ extern _kernel_oserror *show_object (_kernel_swi_regs *r, TaskDescriptor *t)
 _kernel_oserror *show_menu_coords (_kernel_swi_regs *user_regs) {
 
    _kernel_oserror  *e           = NULL;
-   _kernel_swi_regs  regs;
    DisplayInfo      *coords      = (DisplayInfo *) user_regs->r[3];
    wimp_PointerInfo  ptr_info;
 
@@ -179,9 +153,7 @@ _kernel_oserror *show_menu_coords (_kernel_swi_regs *user_regs) {
          global_menu.y = coords->y;
          break;
       default:
-         regs.r[1] = (int) &ptr_info;
-
-         if ((e = _kernel_swi (Wimp_GetPointerInfo, &regs, &regs)) != NULL) return e;
+         if ((e = _swix (Wimp_GetPointerInfo, _IN(1), &ptr_info)) != NULL) return e;
 
          global_menu.x = ptr_info.x - 64;
          global_menu.y = ptr_info.y;

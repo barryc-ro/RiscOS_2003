@@ -226,6 +226,7 @@ o.events:	C:h.kernel
 o.events:	tbox:objects.h.toolbox
 o.events:	tbox:objects.h.toolbox
 o.events:	tbox:objects.h.fontmenu
+o.events:	tbox:objects.h.menu
 o.events:	h.object
 o.events:	h.auxiliary
 o.events:	C:h.kernel

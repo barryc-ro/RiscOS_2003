@@ -53,7 +53,7 @@ INCLUDES = -IOS:,C:
 #
 # Export Paths for Messages module
 #
-RESDIR = <resource$dir>.Resources.${COMPONENT}
+RESDIR = <resource$dir>.Resources2.${COMPONENT}
 
 #
 # Program specific options:
@@ -179,6 +179,31 @@ o.main:	h.msgs
 o.main:	h.resources
 o.main:	h.utils
 o.main:	h.toolact
+oz.resources: s.resources
+oz.resources: hdr:ListOpts
+oz.resources: hdr:Macros
+oz.resources: hdr:System
+oz.resources: Hdr:SWIs
+oz.resources: Hdr:CPU.Generic26
+oz.resources: Hdr:IO.GenericIO
+oz.resources: Hdr:RISCOS
+oz.resources: hdr:ModHand
+oz.resources: hdr:MsgTrans
+oz.resources: hdr:ResourceFS
+oz.resources: hdr:Proc
+oz.resources: hdr.CVars
+oz.main:	c.main
+oz.main:	C:h.swis
+oz.main:	C:h.kernel
+oz.main:	OS:h.os
+oz.main:	OS:h.types
+oz.main:	OS:h.resourcefs
+oz.main:	OS:h.fileswitch
+oz.main:	h.modhdr
+oz.main:	h.msgs
+oz.main:	h.resources
+oz.main:	h.utils
+oz.main:	h.toolact
 o.string32:	c.string32
 o.string32:	h.string32
 o.msgs:	c.msgs
