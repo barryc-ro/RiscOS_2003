@@ -16,6 +16,7 @@ MKDIR    = cdir
 AS       = aasm
 CP       = copy
 RM       = remove
+STRIP    = stripdepnd
 
 CFLAGS   = -c -depend !Depend -IC:
 AFLAGS   = -depend !Depend -Stamp -quit -module
@@ -50,18 +51,10 @@ resources:
 
 clean:
         ${RM} ${TARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.Hitachi: hdr.Hashes
-rm.Hitachi: hdr.Macros
-rm.Hitachi: Version
-rm.Hitachi: s.Strings
-rm.Hitachi: s.DriverCode
-rm.Hitachi: s.Extras
-rm.Hitachi: s.OnError
-rm.Hitachi: s.Module
-rm.Hitachi: s.Variables
