@@ -42,7 +42,7 @@ export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
-        ${CP} Hourglass.Hourglass <Build$Dir>.Install.${BUILD}.Video.Hourglass ${CPFLAGS}
+        ${CP} Hourglass.Hourglass ${INSTDIR}.Hourglass ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
