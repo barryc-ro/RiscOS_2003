@@ -308,8 +308,18 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	else
 	{
 #ifdef STBWEB
-	    struct webfont *wf = &webfonts[ti->st.wf_index];
-	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(ti->st.wf_index, t) + INPUT_BUTTON_BORDER_X*2;
+	    int whichfont = ti->st.wf_index;
+	    struct webfont *wf;
+
+	    if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
+		 doc->scale_value < 100
+		 && (whichfont & WEBFONT_SIZE_MASK) > 0 )
+	    {
+		whichfont -= (1<<WEBFONT_SIZE_SHIFT);
+	    }
+
+	    wf = &webfonts[whichfont];
+	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(whichfont, t) + INPUT_BUTTON_BORDER_X*2;
 	    if (ii->hh.type != value_absunit)
 	    {
 		ti->max_up = wf->max_up + 4;
@@ -628,6 +638,13 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 			  ti->width, (ti->max_up + ti->max_down), doc );
 #endif
 	    plotx = INPUT_BUTTON_BORDER_X;
+	}
+
+	if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
+	     doc->scale_value < 100
+	     && (fontnum & WEBFONT_SIZE_MASK) > 0 )
+	{
+	    fontnum -= (1<<WEBFONT_SIZE_SHIFT);
 	}
 
 	wf = &webfonts[fontnum];
@@ -1575,11 +1592,19 @@ int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp
 
     case rid_it_CHECK:
     case rid_it_RADIO:
-	/* this is actually dependant on whether the xxxon1 and xxxoff1 buttons are present */
+    {
 #ifdef STBWEB
-	own = TRUE;
+	static int have_selected_sprites = -1;
+	if (have_selected_sprites != -1)
+	    own = !have_selected_sprites;
+	else
+	{
+	    have_selected_sprites = render_sprite_locate(button_names[ 0 + BUTTON_NAME_HIGHLIGHT ], NULL) != NULL;
+	    own = !have_selected_sprites;
+	}
 #endif
 	break;
+    }
 
     case rid_it_HIDDEN:
 	own = TRUE;

@@ -357,7 +357,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	fe_status_open_fetch_only(parent);
 
     /* move the highlight */
-    if ((flags & fe_open_url_FROM_FRAME) == 0 && !parent->open_transient && pointer_mode == pointermode_OFF && tb_is_status_showing())
+    if ((flags & fe_open_url_FROM_FRAME) == 0 && !parent->open_transient && pointer_mode == pointermode_OFF && tb_is_status_showing() && config_mode_cursor_toolbar)
 	tb_status_highlight_stop();
 
     /* setup the opening flags */

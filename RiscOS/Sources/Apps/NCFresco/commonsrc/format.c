@@ -57,12 +57,12 @@
 
 
 
-static void basic_size_stream(antweb_doc *doc,
+static BOOL basic_size_stream(antweb_doc *doc,
 			      rid_header *rh,
 			      rid_text_stream *stream,
 			      int depth);
 
-static void basic_size_table(antweb_doc *doc,
+static BOOL basic_size_table(antweb_doc *doc,
 			     rid_header *rh,
 			     rid_table_item *table,
 			     int depth);
@@ -99,6 +99,12 @@ static void format_one_off_assertions(void)
     ASSERT(PCT_MIN == ABS_MIN + 1);
     ASSERT(PCT_MAX == ABS_MAX + 1);
     ASSERT(FIRST_MIN == 0);
+
+    /* Should have only one minwidth style active at once! */
+    ASSERT( !!gbf_active(GBF_MINWIDTH_A) + 
+	    !!gbf_active(GBF_MINWIDTH_B) + 
+	    !!gbf_active(GBF_MINWIDTH_C) + 
+	    !!gbf_active(GBF_MINWIDTH_D) == 1 );
 }
 
 
@@ -122,12 +128,13 @@ static void format_width_checking_assertions(rid_table_item *table, BOOL horiz)
 
 /*****************************************************************************/
 
-static void basic_size_stream(antweb_doc *doc,
+static BOOL basic_size_stream(antweb_doc *doc,
 			      rid_header *rh,
 			      rid_text_stream *stream,
 			      int depth)
 {
     rid_text_item *ti;
+    BOOL si1_pct = FALSE;
 
     FMTDBGN(("basic_size_stream(%p %p %p): basic stream sizing\n",
 	     doc, rh, stream));
@@ -137,7 +144,7 @@ static void basic_size_stream(antweb_doc *doc,
 	if (ti->tag == rid_tag_TABLE)
 	{
 	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
-	    basic_size_table(doc, rh, table, depth+1);
+	    si1_pct |= basic_size_table(doc, rh, table, depth+1);
 	}
 	else
 	{
@@ -165,6 +172,8 @@ static void basic_size_stream(antweb_doc *doc,
     stream->fwidth = 1000000000;
     format_stream(doc, rh, stream, DONT, depth);
     stream->width_info.maxwidth = stream->widest;
+
+    return si1_pct;
 }
 
 /*****************************************************************************/
@@ -442,8 +451,9 @@ static int largest_implied_table_width(rid_table_item *table,
 		    const int F = (a * SI1_PCT_WIDTH) / 100;
 		    if (z > F)
 		    {
-			FMTDBG(("largest_implied_table_width: SI1_PCT triggered on column %d\n", x));
-			table->flags |= 0;
+			FMTDBG(("largest_implied_table_width: SI1_PCT (A) triggered: NUKING COLUMN %d (%d > %d)\n", x, z, F));
+			table->flags |= rid_tf_SI1_PCT;
+			table->colspans[x].flags |= colspan_flag_STOMP_PERCENT;
 		    }
 		}
 		FMTDBGN(("q %d, a %d, z %d, widest %d\n", q,a,z,widest));
@@ -463,6 +473,16 @@ static int largest_implied_table_width(rid_table_item *table,
 
 	    if (x > widest)
 	    {
+		const int z = ((100 - pct_used) * SI1_PCT_WIDTH) / 100;
+		if (x > z && gbf_active(GBF_SI1_PCT))
+		{
+		    int i;
+		    FMTDBG(("\n\nlargest_implied_table_width: SI1_PCT (B) triggered: NUKING ALL PERCENTAGES! (%d > %d)\n\n\n", x, z));
+		    table->flags |= rid_tf_SI1_PCT;
+		    for (i = 0; i < max; i++)
+			table->colspans[i].flags |= colspan_flag_STOMP_PERCENT;
+
+		}
 		if (horiz)
 		    table->flags |= rid_tf_NON_PCT_GREW_HORIZ;
 		else
@@ -565,72 +585,6 @@ static int largest_implied_table_width(rid_table_item *table,
     return widest;
 }
 
-/*****************************************************************************
-
-  Force a total size change or +1 or -1 (the bias parameter) to the
-  table, supplying the expected resulting size. This is a potentially
-  expensive operation, as we might have to alter each group.
-
-  We operate by running though each column with a group, L to R, and
-  alter any PERCENT_THIS widths by the bias factor. Eventually, this
-  should hit a point where a maximumal constraint gets lowered and the
-  size changes. We also alter any such column header, just in case. We
-  are careful about -1 (NOTINIT), 0 (INAVCTIVE) and 1 (DON'T GO LOWER
-  THAN) and their meanings when we start altering them.
-
-  @@@@ FIXME: There is probably a case that causes us to spin: A table
-  where all width contributions come from percentages, where each such
-  width is a group, each percentage is 1% and there are about target
-  of them. Only another browser hacker is going to have a page like
-  this, so delay fixing.
-
- */
-
-#if 0
-static int tiresome_pct_forced_change(rid_table_item *table, BOOL horiz, int bias, int target)
-{
-    const width_array_e max = HORIZMAX(table, horiz);
-    const int bias2 = bias == 1 ? 0 : 1;
-    int total = 0;
-    int x;
-
-    ASSERT(bias == -1 || bias == 1);
-
-    FMTDBG(("tiresome_pct_forced_change(dp %d, id %d, %s) bias=%d, target=%d\n",
-	    table->depth, table->idnum, HORIZVERT(horiz), bias, target));
-    for (x = 0; x < max; x++)
-    {
-	pcp_cell cell = &table->colspans[x];
-	pcp_group grp = cell->first_start;
-
-	if (cell->flags & colspan_flag_PERCENT_THIS)
-	    if (cell->width[PCT_RAW] > bias2)
-		cell->width[PCT_RAW] += bias;
-
-	if (grp != NULL)
-	{
-	    do
-	    {
-		if (grp->flags & colspan_flag_PERCENT_THIS)
-		    if (grp->width[PCT_RAW] > bias2 )
-			grp->width[PCT_RAW] += bias;
-		grp = grp->next_start;
-	    } while (grp != NULL);
-	}
-
-	total = pct_raw_recalc(table, horiz);
-
-	if (total == target)
-	    break;
-
-	ASSERT(total == target - 1 || total == target + 1);
-    }
-
-    ASSERT(total == target);
-
-    return total;
-}
-#endif
 /*****************************************************************************
 
   Normalise the percentage specifications.
@@ -1108,7 +1062,7 @@ static void calc_rel_maxwidth(antweb_doc *doc,
 
 /*****************************************************************************/
 
-static void basic_size_table(antweb_doc *doc,
+static BOOL basic_size_table(antweb_doc *doc,
 			     rid_header *rh,
 			     rid_table_item *table,
 			     int depth)
@@ -1202,6 +1156,20 @@ static void basic_size_table(antweb_doc *doc,
     /* notice we don't free the colspan structure here, as we need it during
      * the "real" format recursion
      */
+
+    if (table->flags & rid_tf_SI1_PCT)
+    {
+	table->flags &= ~rid_tf_SI1_PCT;
+
+	if (gbf_active(GBF_SI1_PCT))
+	{
+	    FMTDBG(("basic_size_table: S1_PCT TRIGGERED - NUKING NOW: id %d\n", table->idnum));
+	    colspan_do_the_stomping(table, HORIZONTALLY);
+	    return TRUE;
+	}
+    }
+
+    return FALSE;
 }
 
 /*****************************************************************************
@@ -1567,7 +1535,8 @@ static void recurse_format_stream(antweb_doc *doc,
 
 /* Never scale things to under this percentage */
 /* 576/640 = 0.9 = ideal ratio. go for less though! */
-#define MIN_SCALE 80
+#define MIN_SCALE	80
+#define SCALE_UNIT	10
 
 /* Allow a bit of play to avoid a few pixels over becoming a lot of pixels under */
 #define AUTOFIT_THRESHOLD 32
@@ -1607,21 +1576,39 @@ extern void rid_toplevel_format(antweb_doc *doc,
 /* 	doc->scale_value = 100; */
 
 	FMTDBG(("Sizing root stream\n"));
-	basic_size_stream(doc, rh, root_stream, 0);
+	if ( basic_size_stream(doc, rh, root_stream, 0) && gbf_active(GBF_SI1_PCT))
+	{
+	    FMTDBG(("\nDone sizing root stream: min %d, max %d, fwidth %d, scale_value %d, MIN_SCALE %d\n",
+		    root_stream->width_info.minwidth,
+		    root_stream->width_info.maxwidth,
+		    fwidth,
+		    doc->scale_value,
+		    MIN_SCALE));
+	    FMTDBG(("\nSI1_PCT CAUSING PERCENTAGE NUKING AND RESIZING\n\n\n"));
+	    /* Nuking will have taken place during sizing on each
+               table as it applies. Haven't the foggiest how many
+               times one should iterate to achieve stability, so no
+               iteration and just hope it's sensible. */
+	    antweb_uncache_image_info(doc);
+	    rid_zero_widest_height( root_stream );
+	    fvpr_forget( root_stream );
+	    basic_size_stream(doc, rh, root_stream, 0);
+	}
 	FMTDBG(("\nDone sizing root stream: min %d, max %d, fwidth %d, scale_value %d, MIN_SCALE %d\n",
 		root_stream->width_info.minwidth,
 		root_stream->width_info.maxwidth,
 		fwidth,
 		doc->scale_value,
 		MIN_SCALE));
+	
 #if 0
 	dump_header(rh);
 #endif
-	if (rh->stream.width_info.minwidth > fwidth)
+	while ( (rh->stream.width_info.minwidth > fwidth + AUTOFIT_THRESHOLD) && 
+	       gbf_active(GBF_AUTOFIT) &&
+		doc->scale_value > MIN_SCALE )
 	{
-	    if ( gbf_active(GBF_AUTOFIT) && rh->stream.width_info.minwidth > fwidth + AUTOFIT_THRESHOLD  && doc->scale_value > MIN_SCALE)
-	    {
-		doc->scale_value = MIN_SCALE;
+		doc->scale_value -= SCALE_UNIT;
 
 #ifndef BUILDERS
 		/* It's all changed -- force a redraw of a view (using
@@ -1634,6 +1621,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
                         root_stream, rh->stream.width_info.minwidth, fwidth,
                         doc->scale_value ));
 
+		antweb_uncache_image_info(doc);
 		rid_zero_widest_height( root_stream );
 		fvpr_forget( root_stream );
 		basic_size_stream( doc, rh, root_stream, 0 );
@@ -1641,10 +1629,6 @@ extern void rid_toplevel_format(antweb_doc *doc,
 			root_stream,
 			root_stream->width_info.minwidth,
 			root_stream->width_info.maxwidth));
-
-		/* ensure that bg and animations are cached at the right size */
-		antweb_uncache_image_info( doc );
-	    }
 	}
 
 	if (rh->stream.width_info.minwidth > fwidth)

@@ -439,55 +439,64 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
     return render_colour_BACK;
 }
 
-os_error *render_plot_icon(char *sprite, int x, int y)
+void *render_sprite_locate(const char *sprite, void **sptr_out)
 {
-    sprite_pixtrans pt[256];
-    sprite_factors facs;
-    sprite_header *sph;
-    sprite_area *area;
     sprite_id id;
+    sprite_ptr sph;
+    sprite_area *area;
     os_regset r;
     os_error *ep;
 
     id.tag = sprite_id_name;
-    id.s.name = sprite;
+    id.s.name = (char *)sprite;
 
     area = resspr_area();
-    ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
+    ep = sprite_select_rp(area, &id, &sph);
 
     if (ep)
     {
 	ep = os_swix(Wimp_BaseOfSprites, &r);
-
 	if (ep)
-	    return ep;
+	    return NULL;
 
 	area = (sprite_area *) (long) r.r[1];
 
-	ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
+	ep = sprite_select_rp(area, &id, &sph);
 
 	if (ep)
 	{
 	    area = (sprite_area *) (long) r.r[0];
+
+	    sprite_select_rp(area, &id, &sph);
 	}
     }
 
-    ep = sprite_select_rp(area, &(id), (sprite_ptr *) &sph);
+    if (sptr_out)
+	*sptr_out = sph;
 
-    if (ep)
-	return ep;
+    return area;
+}
+
+
+os_error *render_plot_icon(char *sprite, int x, int y)
+{
+    sprite_pixtrans pt[256];
+    sprite_factors facs;
+    sprite_area *area;
+    sprite_id id;
+    os_error *ep;
 
     id.tag = sprite_id_addr;
-    id.s.addr = sph;
+    area = render_sprite_locate(sprite, &id.s.addr);
 
     /* read the scaling factors */
     if ((ep = wimp_readpixtrans(area, &id, &facs, pt)) != NULL)
 	return ep;
 
     /* if 8bpp or more then read the colourtrans table separately */
-    if (bbc_modevar(sph->mode, bbc_Log2BPP) > 2)
+    if (bbc_modevar(((sprite_header *)id.s.addr)->mode, bbc_Log2BPP) > 2)
     {
-	if ((ep = _swix(ColourTrans_GenerateTable, _INR(0,5), area, sph, -1, -1, pt, 1)) != NULL)
+	if ((ep = _swix(ColourTrans_GenerateTable, _INR(0,5), area, id.s.addr, -1, -1, pt, 1)) != NULL)
 	    return ep;
     }
 

@@ -664,7 +664,7 @@ void fevent_handler(int event, fe_view v)
 	    break;
 	}
 	if (event & fevent_UNSTACK_TOOLBAR)
-	    tb_status_unstack();
+	    tb_status_unstack(TRUE);
 	break;
 
     case fevent_CLASS_MENU:

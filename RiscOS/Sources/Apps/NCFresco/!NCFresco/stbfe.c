@@ -1268,6 +1268,7 @@ fe_view fe_dbox_view(const char *name)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+#if 0
 static void fe_move_window_to_top(fe_view v)
 {
     wimp_wstate state;
@@ -1285,6 +1286,7 @@ static void fe_move_window_to_top(fe_view v)
 
     v->box = state.o.box;
 }
+#endif
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -1772,7 +1774,9 @@ void fe_ensure_highlight_after_fetch(fe_view v)
 	    flags = be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise();
 	    if (pointer_mode != pointermode_OFF)
 		flags |= be_link_TEXT;
-	    flags |= be_link_ONLY_CURRENT;
+
+	    /* need to remove ONLY_CURRENT otherwise it can't ensure the link is visible */
+/* 	    flags |= be_link_ONLY_CURRENT; */
 	}
 	    
 	/* if there was anything to move to then set the caret in the window */
@@ -3156,7 +3160,7 @@ os_error *fe_status_unstack(fe_view source_v)
 		fe_dispose_view(v);
 	    }
 	}
-	else if (tb_status_unstack())
+	else if (tb_status_unstack(TRUE))
 	{
 	}
 	else
@@ -4189,9 +4193,23 @@ static void fe_keyboard_closed(void)
 
     on_screen_kbd = 0;
 
-    tb_status_button(fevent_OPEN_KEYBOARD, tb_status_button_INACTIVE);
-
     fe_status_set_margins(main_view, FALSE);
+
+    if (pointer_mode == pointermode_OFF)
+    {
+	fe_view v;
+
+	v = fe_find_top_popup(main_view);
+	if (!v || v == main_view)
+	    v = fe_selected_view();
+	if (!v)
+	    v = main_view;
+
+	/* putting the VERT and BACK flags on means it will try and move the toolbar if it fails */
+	fe_move_highlight(v, be_link_INCLUDE_CURRENT | be_link_VISIBLE | be_link_TEXT | be_link_VERT | (config_display_control_top ? be_link_BACK : 0));
+    }
+
+    tb_status_button(fevent_OPEN_KEYBOARD, tb_status_button_INACTIVE);
 }
 
 static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
@@ -4507,11 +4525,26 @@ static void fe_url_bounce(wimp_msgstr *msg)
     }
 }
 
+static void read_gbf(void)
+{
+    char *s;
+    char buf[12];
+
+    /* reread gbf values */
+    if ((s = getenv("NCFresco$GBFEOR")) != NULL)
+    {
+	gbf_flags ^= (int)strtoul(s, NULL, 0);
+	_swix(OS_SetVarVal, _INR(0,2), "NCFresco$GBFEOR", NULL, -1);
+    }
+
+    sprintf(buf, "0x%x", gbf_flags);
+    _kernel_setenv("NCFresco$GBF", buf);
+}
+
 static void fe_mode_changed(void)
 {
     int dx, dy;
     wimp_box old_screen, old_text;
-    char *s;
 
     dx = frontend_dx;
     dy = frontend_dy;
@@ -4528,10 +4561,8 @@ static void fe_mode_changed(void)
     STBDBG(( "modechange: old eig %d,%d new %d,%d\n", dx, dy, frontend_dx, frontend_dy));
     STBDBG(( "modechange: new size %d,%d\n", screen_box.x1, screen_box.y1));
 
-    /* reread gbf values */
-    if ((s = getenv("NCFresco$GBF")) != NULL)
-	gbf_flags = (int)strtoul(s, NULL, 10);
-
+    read_gbf();
+    
     /* Inform backend to recache fonts and colours */
     if ((frontend_dx != dx) || (frontend_dy != dy))
 	frontend_complain(webfonts_reinitialise());
@@ -5186,10 +5217,12 @@ void fe_event_process(void)
         case wimp_EPTRENTER:
 	{
 	    int mode;
+	    fe_view v = find_view(e.data.c.w);
 
-            fe_update_page_info(find_view(e.data.c.w));
+            fe_update_page_info(v);
 
-	    fe_get_wimp_caret(e.data.c.w);
+	    if (v || config_mode_cursor_toolbar)
+		fe_get_wimp_caret(e.data.c.w);
 
 	    /* see if iconhigh is running, no iconhigh means not active obviously */
 	    if (_swix(IconHigh_GetDirection, _IN(0) | _OUT(3), 0, &mode) != NULL)
@@ -5600,8 +5633,7 @@ static BOOL fe_initialise(void)
 
 /*  gbf_flags &= ~GBF_TRANSLATE_UNDEF_CHARS; this needs to not be defined to build a japanese version */
 
-    if ((s = getenv("NCFresco$GBF")) != NULL)
-	gbf_flags = (int)strtoul(s, NULL, 10);
+    read_gbf();
 
     /* Init our configuration */
     config_init();
@@ -5623,7 +5655,6 @@ static BOOL fe_initialise(void)
 	gbf_flags &= ~GBF_AUTOFIT;
 
     gbf_init();
-
 
     stbkeys_init();
 

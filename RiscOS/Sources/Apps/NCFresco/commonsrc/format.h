@@ -46,17 +46,24 @@ typedef struct RID_FMT_STATE
     int			fmt_method;
     int			previous_pad;
     int			format_width;
+    int			format_width2;/* To support GBF_MINWIDTH_A */
     int			y_text_pos; /* Distance so far (-ve) */
     int			linenum;
     int			depth;
+    int			LM_widest; /* To support GBF_MINWIDTH_A */
+    int			CW_widest; /* To support GBF_MINWIDTH_A */
+    int			RM_widest; /* To support GBF_MINWIDTH_A */
+
     /* Per text line */
     rid_pos_item *	text_line;
     int			x_text_pos; /* From current left margin */
+
     /* Per unbreakable sequence */
     int			unbreakable_width;
     rid_text_item *	unbreakable_start;
     rid_text_item *	unbreakable_stop;
     rid_text_item *	last_last_unbreakable; /* Cleared each line */
+
     /* Per floating line(s) region */
 /*     rid_pos_item *	float_line; */
 

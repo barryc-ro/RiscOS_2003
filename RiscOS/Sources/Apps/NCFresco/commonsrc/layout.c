@@ -5,6 +5,7 @@
 
 #include "bbc.h"
 #include "coords.h"
+#include "msgs.h"
 
 #include "antweb.h"
 #include "interface.h"
@@ -662,7 +663,7 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
 
     PRSDBG(("layout__writetable: frameset %p prefix '%s' fn %p base count %d\n", frameset, strsafe(prefix), fn, base_count));
 
-    fprintf(f, "<TABLE BORDER CELLSPACING=0 CELLPADDING=0>\n");
+    fprintf(f, msgs_lookup("printft1"));
 
     /* for all frames in the frameset */
     for (frame = frameset->data.frameset.frame_list, i = 0; frame; frame = frame->next, i++)
@@ -676,7 +677,7 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
         row = i/fs->ncols;
 
 	if (col == 0)
-	    fprintf(f, "<TR>");
+	    fprintf(f, msgs_lookup("printft2"));
 
 	w = xpos[col+1] - xpos[col];
 	h = ypos[row+1] - ypos[row];
@@ -684,7 +685,7 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
 	scaled_w = w * width / fmt_w;
 	scaled_h = h * height / fmt_h;
 
-	fprintf(f, "<TD WIDTH=%d HEIGHT=%d ALIGN=CENTER VALIGN=MIDDLE>", scaled_w/2, scaled_h/2);
+	fprintf(f, msgs_lookup("printft3"), scaled_w/2, scaled_h/2);
 
 	switch (frame->tag)
         {
@@ -701,7 +702,7 @@ static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_wri
 	}
     }
 
-    fprintf(f, "</TABLE>\n");
+    fprintf(f, msgs_lookup("printft4"));
 
     mm_free(xpos);
     mm_free(ypos);

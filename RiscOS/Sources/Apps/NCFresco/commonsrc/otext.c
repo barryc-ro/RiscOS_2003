@@ -77,7 +77,7 @@ static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
     {
         if ( doc->scale_value < 100
              && ( (whichfont & WEBFONT_FLAG_SPECIAL) == 0 )
-             && ( (whichfont & WEBFONT_FLAG_FIXED) == WEBFONT_FLAG_FIXED )
+             && ( gbf_active(GBF_AUTOFIT_ALL_TEXT) || (whichfont & WEBFONT_FLAG_FIXED) == WEBFONT_FLAG_FIXED )
              && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
         {
            /* make it one size smaller */

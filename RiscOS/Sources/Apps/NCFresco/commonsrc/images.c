@@ -54,6 +54,7 @@
 #include "config.h"
 #include "rcolours.h"
 #include "dfsupport.h"
+#include "gbf.h"
 
 #include "threads.h"
 #include "version.h"
@@ -235,6 +236,8 @@ static void image_issue_callbacks(image i, int changed, wimp_box *box);
 static void image_animation_alarm(int at, void *h);
 static void image_startup_animation(image i);
 static os_error *find_area_and_info(image i, sprite_info *info);
+static char *image_thread_end(image i);
+static void image_set_error(image i);
 
 /* ------------------------------------------------------------------------- */
 
@@ -382,7 +385,7 @@ static int new_image_get_bytes(char *buf, int buf_len, void *h, BOOL *flush)
     {
 	thread_wait("Need more data");
 
-	IMGDBG(("im%p: getbytes(%d), have none\n", h, buf_len));
+	IMGDBGN(("im%p: getbytes(%d), have none\n", h, buf_len));
     }
 
     if (image_thread_data_size == 0)
@@ -409,7 +412,7 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 {
     image i = (image) h;
 
-    IMGDBG(("put_bytes: in: Putting 0x%x bytes at 0x%p to offset 0x%x\n", buf_len, buf, i->put_offset));
+    IMGDBGN(("put_bytes: in: Putting 0x%x bytes at 0x%p to offset 0x%x\n", buf_len, buf, i->put_offset));
 
     if ( !i->our_area )
         return;
@@ -447,7 +450,7 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 		 0xff :		/* Without a mask fill with 0xff */
 		 image_white_byte(i, i->cache_bgcol)));	/* unless we can do better */
 
-	IMGDBG(("image fill: bg %08x fill %08x mask %d\n", i->cache_bgcol.word, fill, i->flags & image_flag_MASK ? 1 : 0));
+	IMGDBGN(("image fill: bg %08x fill %08x mask %d\n", i->cache_bgcol.word, fill, i->flags & image_flag_MASK ? 1 : 0));
 
         if (fill & 0xffffff00)
 	{
@@ -458,7 +461,7 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 	}
 	else
 	{
-	    IMGDBG(("image fill: memset %p %x %d\n", ((char*) i->our_area) + i->put_offset, fill, i->our_area->size - i->put_offset));
+	    IMGDBGN(("image fill: memset %p %x %d\n", ((char*) i->our_area) + i->put_offset, fill, i->our_area->size - i->put_offset));
 
 	    /* I think this may be necessary */
 	    if (i->our_area->size - i->put_offset > 0)
@@ -504,7 +507,7 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 
     i->flags |= image_flag_CHANGED;
 
-    IMGDBG(("im%p: put_bytes: out: flags %x\n", i, i->flags));
+    IMGDBGN(("im%p: put_bytes: out: flags %x\n", i, i->flags));
 }
 
 static void image_seek_fn(int pos, void *h)
@@ -693,7 +696,7 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
 {
     BOOL success;
 
-    IMGDBG(("image_handle_internal: i%p fh %d buffer %p from %d to %d\n", i, fh, buffer, from, to));
+    IMGDBGN(("image_handle_internal: i%p fh %d buffer %p from %d to %d\n", i, fh, buffer, from, to));
 
     if (i->data_area == NULL)
     {
@@ -705,7 +708,7 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
 	success = flex_extend(&i->data_area, to);
     }
 
-    IMGDBG(("image_handle_internal: flex has returned\n"));
+    IMGDBGN(("image_handle_internal: flex has returned\n"));
 
     if (success)
     {
@@ -768,7 +771,7 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
 	    }
 	}
 
-	IMGDBG(("image_handle_internal: plotter %d size %dx%d\n", i->plotter, i->width, i->height));
+	IMGDBGN(("image_handle_internal: plotter %d size %dx%d\n", i->plotter, i->width, i->height));
 
 	flexmem_shift();
     }
@@ -836,7 +839,7 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    image_thread_data_ptr = buffer;
 	    image_thread_data_more = ((from + len) < to);
 
-	    IMGDBG(("im%p: running thread again (%d..%d, %s)\n",
+	    IMGDBGN(("im%p: running thread again (%d..%d, %s)\n",
 	            i, from, from+len, ((from+len)<to) ? "more" : "final"));
 
 	    MemCheck_RegisterMiscBlock(buffer, IMAGE_THREAD_BUFFER_SIZE);
@@ -852,21 +855,41 @@ static int image_thread_process(image i, int fh, int from, int to)
      * and no sprite has been created
      * pdh: *And* there wasn't an error.
      */
-    if (i->tt->status == thread_DEAD && (from_base == 0 || i->plotter != plotter_SPRITE) && i->our_area == NULL && !(i->flags & image_flag_ERROR) )
+    if (!do_memory_panic &&
+	i->tt->status == thread_DEAD &&
+	(from_base == 0 || i->plotter != plotter_SPRITE) &&
+	i->our_area == NULL &&
+	!(i->flags & image_flag_ERROR) )
+    {
 	image_handle_internal(i, fh, NULL, from_base, to);
+    }
 #endif
 
-    IMGDBG(("im%p: image_thread_process out: status %d\n", i, i->tt->status));
+    IMGDBGN(("im%p: image_thread_process out: status %d\n", i, i->tt->status));
 
     mm_free(buffer);
 
-#ifndef STBWEB
     if ( do_memory_panic )
     {
+#ifdef STBWEB
+	IMGDBG(("im%p: destroy thread %p due to panic\n", i, i->tt));
+
+	image_thread_end(i);
+
+	if (i->ah)
+	{
+	    access_abort(i->ah);
+	    i->ah = NULL;
+
+	    being_fetched--;
+	}
+
+	image_set_error(i);
+#else
         image_memory_panic();
+#endif
         return FALSE;
     }
-#endif
 
     return (i->tt->status == thread_ALIVE);
 }
@@ -1022,7 +1045,7 @@ static void image_issue_callbacks(image i, int changed, wimp_box *box)
 	while (cb)
 	{
 
-	    IMGDBG(("Callback, handle=0x%p, uses=%d, next=0x%p, changed=%d\n",
+	    IMGDBGN(("Callback, handle=0x%p, uses=%d, next=0x%p, changed=%d\n",
 		    cb->h, cb->use_count, cb->next, changed));
 
 	    if (cb->cb && (cb->use_count > 0))
@@ -1045,7 +1068,7 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 
     rd = i->flags & image_flag_RENDERABLE;
 
-    IMGDBG(("im%p: progress in, status %d, data %d/%d\n",i,status,so_far,size));
+    IMGDBGN(("im%p: progress in, status %d, data %d/%d\n",i,status,so_far,size));
 
     if (so_far == -1)
 	so_far = 0;
@@ -1083,7 +1106,7 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 		image_thread_start(i);
 	    }
 
-	    IMGDBG(("im%p: data arriving; file=%d, last had %d, now got %d\n",
+	    IMGDBGN(("im%p: data arriving; file=%d, last had %d, now got %d\n",
 		    i, fh, i->data_so_far, so_far));
 
 	    if (i->tt)
@@ -1115,7 +1138,7 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 	image_issue_callbacks(i, changed, NULL);
     }
 
-    IMGDBG(("...image progress out.\n"));
+    IMGDBGN(("...image progress out.\n"));
 }
 
 static access_complete_flags image_completed(void *h, int status, char *cfile, char *url)
@@ -1139,8 +1162,15 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
     i->ah = NULL;
 
     /* SJM: free thread if it has died */
-    if (i->tt && i->tt->status == thread_DEAD)
-	image_thread_end(i);
+    if (i->tt)
+    {
+/* 	if (i->tt->status == thread_DEAD) */
+	    image_thread_end(i);
+/* 	else */
+/* 	{ */
+/* 	    DBG(("image_completed: im%p thread not dead yet\n", i)); */
+/* 	} */
+    }
 
     if (status == status_COMPLETED_FILE)
     {
@@ -1235,7 +1265,7 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
     /* @@@@ Fire up the animation process here */
     image_startup_animation(i);
 
-    IMGDBG(("Returning from image completed function\n"));
+    IMGDBG(("image_completed: im%p returning\n", i));
 
     return (access_CACHE | access_KEEP); /* Cache the file and try to hold on to it */
 }
@@ -1583,8 +1613,8 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	i->url = strdup(url);
 	i->hash = hash;
 	i->flags = image_flag_WAITING;
-	/* DAF: This clashed on merging. I presume the former is wanted? */
-#if 1
+	/* DAF: This clashed on merging. I presume the former is wanted? SJM: NOooooooooooooooooo! the latter!*/
+#if 0
 	if (flags & image_find_flag_DEFER)
 #else
 	if ((flags & image_find_flag_DEFER) || gbf_active(GBF_LOW_MEMORY) )
@@ -2062,6 +2092,9 @@ int image_memory_panic(void)
 
 	    IMGDBG(("im%p: disposal in panic", i));
 
+	    /* call thread end to ensure that all the thread/image heap memory gets freed */
+	    image_thread_end(i);	    IMGDBG(("..0"));
+	    
 	    free_area(&i->our_area);        IMGDBG(("..1"));
 	    free_area(&i->cache_area);      IMGDBG(("..2"));
 	    free_data_area(&i->data_area);  IMGDBG(("..3"));
@@ -2336,8 +2369,8 @@ os_error *image_info_frame(image i, wimp_box *box, int *bpp, image_flags *flags)
 	if (flags)
 	    *flags = (i->flags &~ image_flag_MASK) | (rec->mask ? image_flag_MASK : 0);
 
-	IMGDBG(("image_info_frame(): box %d,%d,%d,%d\n", box->x0, box->y0, box->x1, box->y1));
-	IMGDBG(("image_info_frame(): flags=0x%x\n", flags ? *flags : 0));
+	IMGDBGN(("image_info_frame(): box %d,%d,%d,%d\n", box->x0, box->y0, box->x1, box->y1));
+	IMGDBGN(("image_info_frame(): flags=0x%x\n", flags ? *flags : 0));
     }
     else
     {
@@ -2361,7 +2394,7 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
     int ex = 0, ey = 0, l2bpp = 0;
     /*int lbit;*/
 
-    IMGDBG(("image_info: im%p\n", i));
+    IMGDBGN(("image_info: im%p\n", i));
 
     if (i == NULL || i->magic != IMAGE_MAGIC)
     {
@@ -2379,12 +2412,12 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
 	{
 	    if (i->id.tag == sprite_id_name)
 	    {
-		IMGDBG(("image_info: areap %p id '%s'\n", i->areap, i->id.s.name));
+		IMGDBGN(("image_info: areap %p id '%s'\n", i->areap, i->id.s.name));
 		ep = sprite_select_rp(*(i->areap), &(i->id), (sprite_ptr *) &sph);
 	    }
 	    else
 	    {
-		IMGDBG(("image_info: add %p\n", i->id.s.addr));
+		IMGDBGN(("image_info: add %p\n", i->id.s.addr));
 		sph = (sprite_header *) i->id.s.addr;
 	    }
 
@@ -2392,7 +2425,7 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
 	    {
 		checking = MemCheck_SetChecking(0, 0);
 
-		IMGDBG(("image_info: sprite is at 0x%p, mode value is 0x%x\n", sph, sph ? sph->mode : 0));
+		IMGDBGN(("image_info: sprite is at 0x%p, mode value is 0x%x\n", sph, sph ? sph->mode : 0));
 
 		ex = bbc_modevar(sph->mode, bbc_XEigFactor);
 		ey = bbc_modevar(sph->mode, bbc_YEigFactor);
@@ -2432,7 +2465,7 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
     if (url)
 	*url = i->url;
 
-    IMGDBG(("Returning, width=%d, height=%d, flags=0x%x\n", width ? *width : 0, height ? *height : 0, flags ? *flags : 0));
+    IMGDBGN(("Returning, width=%d, height=%d, flags=0x%x\n", width ? *width : 0, height ? *height : 0, flags ? *flags : 0));
 
     return ep;
 }
@@ -2515,7 +2548,7 @@ static void check_scaling(image i, sprite_id *id, int w, int h, int scale_image,
 {
     if ((i->flags & image_flag_REALTHING) && (w != -1 && h != -1))
     {
-#if 1   /*pdh*/
+#if 0   /*pdh*/
 	facs->xmag = w*2;
 	facs->xdiv = i->width * i->dx;
 	facs->ymag = h*2;
@@ -2665,7 +2698,7 @@ static int get_mode_number(void)
     }
 #endif
 
-    IMGDBG(("img: current sprite mode %08x\n", mode));
+    IMGDBGN(("img: current sprite mode %08x\n", mode));
 
     return mode;
 }
@@ -3188,7 +3221,7 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
     {
 	sprite_header *sph;
 
-	IMGDBG(("img: __render frame %p cache %p\n", i->frame, i->cache_area));
+	IMGDBGN(("img: __render frame %p cache %p\n", i->frame, i->cache_area));
 
 	if (i->frame && i->cache_area)
 	{
@@ -3384,7 +3417,7 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
 	return;
     }
 
-    IMGDBG(("im%p: rendering at %d,%d plotter %d\n", i, x, y, i->plotter));
+    IMGDBGN(("im%p: rendering at %d,%d plotter %d\n", i, x, y, i->plotter));
 
     if (w == 0 || h == 0)
 	return;
@@ -3417,7 +3450,7 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
 	return;
     }
 
-    IMGDBG(("Asked to render image handle 0x%p at %d,%d\n", i, x, y));
+    IMGDBGN(("Asked to render image handle 0x%p at %d,%d\n", i, x, y));
 
     flexmem_noshift();
 
@@ -4207,7 +4240,7 @@ static void image_animation_render_frame(image i, int flags)
     const frame_rec *rec = i->frame + i->cur_frame;
     int x, y;
 
-    IMGDBG(("animation: render frame %d flags %x mask %d\n", i->cur_frame, flags, rec->mask));
+    IMGDBGN(("animation: render frame %d flags %x mask %d\n", i->cur_frame, flags, rec->mask));
 
     flexmem_noshift();
 
@@ -4312,7 +4345,7 @@ static int image_animation_render_background(image i, image_rectangle_fn plot_bg
     os_error *e;
     int bg_id = -1, save_size, *save_area;
 
-    IMGDBG(("animation: render background fn 0x%p handle 0x%p scroll %d,%d\n", plot_bg, handle, scx, scy));
+    IMGDBGN(("animation: render background fn 0x%p handle 0x%p scroll %d,%d\n", plot_bg, handle, scx, scy));
 
     if (plot_bg == 0)
 	return bg_id;
@@ -4443,7 +4476,7 @@ static void image_animation_alarm(int at, void *h)
     /* if we'd cancelled the cache (on palette change) then just call startup again */
     if (i->cur_frame == -1)
     {
-	IMGDBG(("animation: restart\n"));
+	IMGDBGN(("animation: restart\n"));
 
 	image_issue_callbacks(i, image_cb_status_UPDATE_ANIM, NULL);
 
@@ -4477,7 +4510,7 @@ static void image_animation_alarm(int at, void *h)
 	break;
     }
 
-    IMGDBG(("animation: remove frame %d type %d box %d,%d %d,%d\n", i->cur_frame, rec->removal, box_1.x0, box_1.y0, box_1.x1, box_1.y1));
+    IMGDBGN(("animation: remove frame %d type %d box %d,%d %d,%d\n", i->cur_frame, rec->removal, box_1.x0, box_1.y0, box_1.x1, box_1.y1));
 
     /* increment the frame number */
     i->cur_frame++;
@@ -4527,16 +4560,16 @@ static void image_animation_alarm(int at, void *h)
 	    /* Use one or two updates, depending on whether old and new boxes overlap */
 	    image_info_frame(i, &box_2, NULL, NULL);
 
-	    IMGDBG(("animation: add frame %d box %d,%d %d,%d\n", i->cur_frame, box_2.x0, box_2.y0, box_2.x1, box_2.y1));
+	    IMGDBGN(("animation: add frame %d box %d,%d %d,%d\n", i->cur_frame, box_2.x0, box_2.y0, box_2.x1, box_2.y1));
 
 	    if (coords_union(&box_1, &box_2, &box_u))
 	    {
-		IMGDBG(("animation: redraw union box %d,%d %d,%d\n", box_u.x0, box_u.y0, box_u.x1, box_u.y1));
+		IMGDBGN(("animation: redraw union box %d,%d %d,%d\n", box_u.x0, box_u.y0, box_u.x1, box_u.y1));
 		image_issue_callbacks(i, image_cb_status_UPDATE_ANIM, &box_u);
 	    }
 	    else
 	    {
-		IMGDBG(("animation: redraw separates\n"));
+		IMGDBGN(("animation: redraw separates\n"));
 		image_issue_callbacks(i, image_cb_status_UPDATE_ANIM, &box_1);
 		image_issue_callbacks(i, image_cb_status_UPDATE_ANIM, &box_2);
 	    }

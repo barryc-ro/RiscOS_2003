@@ -2920,11 +2920,18 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     if (element->id == HTML_TH)
 	cell->flags |= rid_cf_HEADER;
+#ifdef STBWEB
+    /* SJM: need to ignore == 0 behaviour as no one else understands it */
+    if (cell->span.x <= 0)
+	cell->span.x = 1;
+    if (cell->span.y <= 0)
+	cell->span.y = 1;
+#else
     if (cell->span.x < 0)
 	cell->span.x = 1;
     if (cell->span.y < 0)
 	cell->span.y = 1;
-
+#endif
     /* Note basic shaping information */
     if (cell->span.y == 0)
 	cell->flags |= rid_cf_INF_VERT;

@@ -88,19 +88,33 @@ static void write_url_with_breaks(FILE *f, const char *url)
 {
     const char *s = url;
     int c, count = 0;
+    BOOL in_tag = FALSE;
 
     fputs("<NOBR>", f);
     for (c = *s++; c; c = *s++)
     {
 	fputc(c, f);
-	if (ispunct(c) || isspace(c) || count == 16)
+
+	if (in_tag)
 	{
-	    fputs("<WBR>", f);
-	    count = 0;
+	    if (c == '>')
+		in_tag = FALSE;
+	}
+	else if (c == '<')
+	{
+	    in_tag = TRUE;
 	}
 	else
 	{
-	    count++;
+	    if (ispunct(c) || count == 16)
+	    {
+		fputs("<WBR>", f);
+		count = 0;
+	    }
+	    else
+	    {
+		count++;
+	    }
 	}
     }
     fputs("</NOBR>", f);
@@ -337,10 +351,10 @@ static os_error *fe_print_frames_write_file(FILE *f, fe_view v, const char *size
 {
     STBDBG(("fe__print_frames_write_file: size %s v%p children %p\n", size, v, v->children));
 
-    fputs(msgs_lookup("printfT"), f);
+    fprintf(f, msgs_lookup("printfT"), size);
 
     print_size = size;
-    backend_layout_write_table(f, v->displaying, fe__print_frames, "_0", DBOX_SIZE_X, DBOX_SIZE_Y - 80);
+    backend_layout_write_table(f, v->displaying, fe__print_frames, "_0", DBOX_SIZE_X-40, DBOX_SIZE_Y - 160);
     print_size = NULL;
 
     fputs(msgs_lookup("printfF"), f);
@@ -1957,6 +1971,10 @@ void fe_internal_deleting_view(fe_view v)
     else if (strcasecomp(v->name, "__print") == 0)
     {
 	tb_status_button(fevent_PRINT, tb_status_button_INACTIVE);
+
+	/* move highlight back to PRINT SETUP button */
+	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
+	    tb_status_button(fevent_PRINT, tb_status_button_PRESSED);
     }
     else if (strcasecomp(v->name, "__printoptions") == 0)
     {
@@ -1969,10 +1987,18 @@ void fe_internal_deleting_view(fe_view v)
     else if (strcasecomp(v->name, "__printletter") == 0)
     {
 	tb_status_button(fevent_PRINT_LETTER, tb_status_button_INACTIVE);
+
+	/* move highlight back to PRINT SETUP button */
+	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
+	    tb_status_button(fevent_PRINT_LETTER, tb_status_button_PRESSED);
     }
     else if (strcasecomp(v->name, "__printlegal") == 0)
     {
 	tb_status_button(fevent_PRINT_LEGAL, tb_status_button_INACTIVE);
+
+	/* move highlight back to PRINT SETUP button */
+	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
+	    tb_status_button(fevent_PRINT_LEGAL, tb_status_button_PRESSED);
     }
     else if (strcasecomp(v->name, TARGET_ERROR) == 0 ||
 	     strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)

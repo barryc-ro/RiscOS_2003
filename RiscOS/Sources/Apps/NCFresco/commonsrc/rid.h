@@ -1034,6 +1034,7 @@ typedef struct {
     void *im;
     char *usemap;               /* client side image map */
     int hspace, vspace;         /* gutters */
+    int hgap, vgap;		/* bwidth + ww or bwodth + hh in OS units - scaled */
     struct
     {
         struct
