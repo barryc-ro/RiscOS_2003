@@ -24,23 +24,16 @@
 #define IDLE            0
 #define PLAYING         1
 
-#define IDLE_TIMEOUT    2
-
 #define TickerV         28
 
-extern int tick_entry();
 extern char *malloc();
 void *module_wsp = 0;
 struct bs_buffer *get_empty_buffer();
 int v_state = IDLE;
 extern int bs_sent = 0;
 int discards = 0;
-int idletimer = 0;
-int idleval = 0;
-static int is_paused = 0;
 int video_port = 0;
 int rxsize = 0;
-int skipsize = 0;
 int bs_bufsize = 0;
 int n_bs_buffers = 0;
 extern int skipcnt;
@@ -93,13 +86,12 @@ struct client {
         int (*cli_call)();      /* cli handler */
 };
 
-#define MAXCLIENT 3
+#define MAXCLIENT 2
 
-int udpv_show(), udpv_tout();
+int udpv_show();
 
 struct client udpv_cli_call[MAXCLIENT] = {
     udpv_show,
-    udpv_tout,
     0,
 };
 
@@ -117,14 +109,6 @@ void *pw;
     char buf[32];
 
     module_wsp = pw;
-    if (read_sysvar("MPEG$EOSTimeout", buf, sizeof(buf)) != 0) 
-        idleval = atoi(buf);
-    if (idleval > 100) 
-        idleval = idleval / 100;
-    else
-        idleval = IDLE_TIMEOUT;
-    if (read_sysvar("OVS$SkipHdrCnt", buf, sizeof(buf)) != 0) 
-        skipsize = atoi(buf);
     if (!mb_present())
         return ((_kernel_oserror *)0);
     (void) mb_entryinit();
@@ -137,44 +121,9 @@ void *pw;
     else
         bs_bufsize = 8192;
     n_bs_buffers = (850 * 376) / bs_bufsize;
-    (void) enable_tick_handler();
     init_bs_buffers();
     vsock = -1;
-    atexit(udpv_final);
     return ((_kernel_oserror *)0);
-}
-
-int tick_handler(r)
-_kernel_swi_regs *r;
-{
-    if (!is_paused && (idletimer > 0 && --idletimer == 0)) 
-        v_state = IDLE;
-    return (1);
-}
-
-int enable_tick_handler(void)
-{
-  _kernel_swi_regs r;
-
-  r.r[0] = 100;
-  r.r[1] = (int)tick_entry;
-  r.r[2] = (int)module_wsp;
-  return (_kernel_swi(XOS_Bit | OS_CallEvery, &r, &r) != 0 ? -1 : 0);
-}
-
-int disable_tick_handler(void)
-{
-  _kernel_swi_regs r;
-
-  r.r[0] = (int)tick_entry;
-  r.r[1] = (int)module_wsp;
-  return (_kernel_swi(XOS_Bit | OS_RemoveTickerEvent, &r, &r) != 0 ? -1 : 0);
-}
-
-int udpv_final(void)
-{
-   (void) disable_tick_handler();
-   return (0);
 }
 
 /*ARGSUSED*/
@@ -215,22 +164,10 @@ udpv_show(argc, argv)
 int argc;
 char **argv;
 {
-    printf("idleval=%d, videoport=%d (%x), rxbufsize=%d\n", 
-               idleval, video_port, video_port, rxsize);
+    printf("videoport=%d (%x), rxbufsize=%d\n", 
+               video_port, video_port, rxsize);
     printf("n_buffers+%d, bufsize=%d\n", n_bs_buffers, bs_bufsize);
     print_bufs();
-}
-
-udpv_tout(argc, argv)
-int argc;
-char **argv;
-{
-    int val = atoi(argv[0]);
-
-    if (val > 0)
-        idleval = val * 100;
-    else
-        idleval = 0;
 }
 
 _kernel_oserror *
@@ -325,9 +262,6 @@ int udpv_getstatus(r)
 _kernel_swi_regs *r;
 {
     send_buffers();
-    is_paused = r->r[1];
-    if (is_paused)
-        idletimer = 0;
     r->r[0] = (v_state == PLAYING) ? PLAY_INPROGRESS : PLAY_TERMINATED;
     r->r[1] = 0;
     r->r[2] = 0;
@@ -335,61 +269,24 @@ _kernel_swi_regs *r;
     return (0);
 }
 
-init_session(macadr, id, handle, doskiphdr) 
+init_session(macadr, id, handle, skipsize) 
 char *macadr; 
 u_short id; 
 int handle;
-int doskiphdr;
+int skipsize;
 {
     macadr = macadr;
     id = id;
     mpeg_handle = handle;
-    is_paused = 0;
     v_state = PLAYING;
-    if (doskiphdr != 0)
-        skipcnt = skipsize;
+    skipcnt = skipsize;
 }
 
 close_session()
 {
-    is_paused = 0;
     v_state = IDLE;
 }
 
-#if 0
-int
-vs_process_input(a, b, ack_src, ack_unit, ack_swi, ack_buf)
-int a, b;
-char *ack_src;
-int ack_unit, ack_swi, ack_buf;
-{                
-    struct mbuf *m, *m0, *m1;
-    struct bs_buffer *bs;
-
-    m0 = (struct mbuf *)a;
-    m1 = (struct mbuf *)ack_buf;
-    if (m0 == 0) 
-        goto out;
-    for (m = m0; m; m = m->m_next) {
-        if (m->m_len == 0)
-            continue;
-        idletimer = idleval;
-        if ((bs = get_empty_buffer()) == 0) {
-            discards++;
-            break;
-        }
-        memcpy(bs->bs_data, mtod(m, char *), m->m_len);
-        bs->bs_len = m->m_len;
-        bs->bs_handle = 0;
-        bs->bs_flags = FREE_BUFFER_SWI;
-        save_full_buf(bs, 0);
-    }
-    m0->m_len = 0;
-out:
-    if (m1) 
-        m_freem(m1);
-}
-#else
 int
 vs_process_input(a, b, ack_src, ack_unit, ack_swi, ack_buf)
 int a, b;
@@ -408,7 +305,6 @@ int ack_unit, ack_swi, ack_buf;
     for (m = m0; m; m = m->m_next) {
         if ((mlen = m->m_len) == 0)
             continue;
-        idletimer = idleval;
         if (mlen > residue) {
             if (bs != 0) 
                 save_full_buf(bs, 0);
@@ -437,7 +333,6 @@ out:
     if (m1) 
         m_freem(m1);
 }
-#endif
 
 #define MPEGControl_FullBuffers 0x492c1
 
