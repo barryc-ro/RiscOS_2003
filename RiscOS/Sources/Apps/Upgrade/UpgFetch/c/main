@@ -61,7 +61,7 @@ static  IdBlock        id_block;
 #define NCMATwin_Enquiry                0x04f000
 
 /* This flag below states how much data we wish to read from the URL at any time. */
-#define URL_CHUNK_SIZE 32768
+#define URL_CHUNK_SIZE 8192
 
 
 /* A structure to hold the list of known tags. */
@@ -180,7 +180,7 @@ int main(int argc, char *argv[])
 
   /* Initialise the DebugLib library. */
   debug_initialise ("UpgradeFetcher", "izipfs:$.FetchOut", "");
-  debug_output_device (PRINTF_OUTPUT);
+  debug_output_device (FILE_OUTPUT);
   debug_atexit ();
 
   DBUG_PRINTF(DBUG_LVL_DIAG, "main()\n");
@@ -479,8 +479,9 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
 {
   _kernel_swi_regs regs;
   _kernel_oserror *error = NULL;
-  char buffer[URL_CHUNK_SIZE];                  /* buffer for the latest chunk of data from the URL. */
-  int bytes_read;                               /* bytes read in a single pass */
+  char buff_in[URL_CHUNK_SIZE];                  /* buffer for the latest chunk of data from the URL. */
+  int raw_bytes_read;                           /* bytes read in a single pass */
+  int valid_bytes_read;                         //bytes read minus any header bytes stripped
   int total_bytes_read = 0;                     /* total bytes read */
   int bytes_left_to_read = -1;                  /* bytes left to read */
 
@@ -497,6 +498,10 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
 
   char* start = NULL;
   bool finished_parsing = false;
+  char* data_out;  //pointer to start of data
+  int l;
+  char state='?';
+  int got_http_header=0;
 
   while (!error)
   {
@@ -507,7 +512,7 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
 
     regs.r[0] = 0;
     regs.r[1] = session_identifier;
-    regs.r[2] = (int)buffer;
+    regs.r[2] = (int)buff_in;
     regs.r[3] = URL_CHUNK_SIZE;
 
     /* Read next 32k chunk */
@@ -533,15 +538,70 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
       break;
     }
 
-    bytes_read = regs.r[4];
+    raw_bytes_read = regs.r[4];
 
-    /* ignores initial HTTP header */
-    if ((bytes_read > 0) && strncmp(buffer,"HTTP/",5))
+    valid_bytes_read=raw_bytes_read;
+    data_out=buff_in;
+
+    if(!got_http_header)
     {
-      DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): We have read %d bytes from the URL.\n", bytes_read);
+      //search for the CRLFCRLF at the end of the http header
+      for(l=0;l<raw_bytes_read;l++)
+        {
+          switch(state)
+          {
+            case '\r':
+
+              DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Got an \\r\n");
+              if(*data_out=='\n')
+                state='\n';
+              else
+                state='?';
+
+             break;
+
+             case '\n':
+
+               DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Got an \\n\n");
+               if(*data_out=='\r')
+                 state='R';
+               else
+                 state='?';
+               break;
+
+               case 'R':
+
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Got an \\r\n");
+                 if(*data_out=='\n')
+                 {
+                   DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Got final \\n\n");                 state ='\r';
+                   got_http_header=1;
+                   l=raw_bytes_read; //force end of for loop
+                 }
+                 else
+                   state ='?';
+
+               break;
+
+               case '?':
+
+                 if (*data_out=='\r') //possible end of HTTP header
+                   state='\r';
+
+               break;
+          }
+          data_out++;
+          valid_bytes_read--;
+        }
+    }
+
+
+    if (valid_bytes_read > 0)
+    {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): We have read %d bytes from the URL.\n", valid_bytes_read);
 
       /* update the variable holding the total bytes read */
-      total_bytes_read += bytes_read;
+      total_bytes_read += valid_bytes_read;
 
        // if we haven't already done so update the display
        if (started_getting_data == false)
@@ -563,7 +623,7 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
           if (bytes_left_to_read != -1)
           {
             total_bytes_to_read = bytes_left_to_read + total_bytes_read;
-            amount_to_allocate = bytes_left_to_read + bytes_read;
+            amount_to_allocate = bytes_left_to_read + valid_bytes_read;
           }
           else
           {
@@ -584,7 +644,7 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
          else
          {
            mem_da_size+=amount_to_allocate;
-           mem_da_used+=bytes_read;
+           mem_da_used+=valid_bytes_read;
          }
 
          checked_free_memory = true;
@@ -595,7 +655,7 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
          for the currently read block (dynamically). This needs to be done to the nearest page size. */
      if (checked_free_memory == false)
      {
-       double d_mem_requested = (double) bytes_read;
+       double d_mem_requested = (double) valid_bytes_read;
        int i_mem_requested;
        d_mem_requested = ceil(d_mem_requested/4096)*4096; /* Page-align it */
        i_mem_requested = (int)d_mem_requested;
@@ -612,23 +672,23 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
          error = _kernel_swi(OS_ChangeDynamicArea, &regs, &regs);
          if (error)
          {
-           DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Incremental DA area increase failed - allocated %d bytes instead of the required %d bytes (message %s).\n", regs.r[1], bytes_read, error->errmess);
+           DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Incremental DA area increase failed - allocated %d bytes instead of the required %d bytes (message %s).\n", regs.r[1], valid_bytes_read, error->errmess);
            error_occurred("NotEnoughMemory");
          }
          else
          {
            mem_da_size+=i_mem_requested;
-           mem_da_used+=bytes_read;
+           mem_da_used+=valid_bytes_read;
          }
        }
        else
        {
-         mem_da_used+=bytes_read;
+         mem_da_used+=valid_bytes_read;
        }
      }
      else
      {
-       mem_da_used+=bytes_read;
+       mem_da_used+=valid_bytes_read;
        DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Current DA size is %d bytes, used is %d bytes\n", mem_da_size, mem_da_used);
      }
 
@@ -636,10 +696,10 @@ bool fetch_data(const int session_identifier, const int dynamic_area_number, cha
      if (!error)
      {
        /* copy the memory block into the dynamic area */
-       DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Copying %d bytes of memory\n", bytes_read);
-       memcpy(*dynamic_area_current_ptr, buffer, bytes_read);
+       DBUG_PRINTF(DBUG_LVL_DIAG, "fetch_data(): Copying %d bytes of memory\n", valid_bytes_read);
+       memcpy(*dynamic_area_current_ptr, data_out, valid_bytes_read);
        update_status_screen(total_bytes_read, total_bytes_to_read);
-       *dynamic_area_current_ptr += bytes_read; // increment the memory pointer
+       *dynamic_area_current_ptr += valid_bytes_read; // increment the memory pointer
      }
      else
      {
