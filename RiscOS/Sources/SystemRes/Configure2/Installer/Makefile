@@ -35,6 +35,7 @@ WIPE    = -wipe
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+CMHGFLAGS = ${OPTIONS}
 
 CFLAGS   = -c -depend !Depend -ffah -gflv ${INCLUDES} -throwback -zM
 INCLUDES = -IC:,<Lib$Dir>.ConfigLib.
@@ -82,10 +83,10 @@ ${RAM_MODULE}: ${OBJS} ${CONLIB} ${CLIB}
         access $@ RW/R
 
 ModHdr.h: cmhg.ModHdr
-	${CMHG} -p -o o.ModHdr cmhg.ModHdr h.ModHdr
+	${CMHG} -p ${CMHGFLAGS} -o o.ModHdr cmhg.ModHdr h.ModHdr
 
 ModHdr.o: cmhg.ModHdr
-	${CMHG} -p -o o.ModHdr cmhg.ModHdr h.ModHdr
+	${CMHG} -p ${CMHGFLAGS} -o o.ModHdr cmhg.ModHdr h.ModHdr
 
 ResMess.o: ${LDIR}.Messages
 	ResGen resourcesfiles o.ResMess ${LDIR}.Messages Resources.Installer.Messages
