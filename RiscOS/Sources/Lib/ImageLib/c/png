@@ -36,6 +36,9 @@ typedef unsigned char bool;
 
 #define SCREEN_GAMMA 2.2
 
+#define DITHERING
+/*#define GAMMA_DITHER*/
+
 /*#define GIVE_WARNINGS*/
 
 #define MODE(t,x,y) (((t) << 27) | ((x) << 14) | ((y) << 1) | 1)
@@ -158,7 +161,7 @@ int NewPNG(Image *im)
     im->EndLoad=EndLoad;
     im->Delete=Delete;
     im->Render=Render;
-    im->ModeChange=ModeChange;
+    /*im->ModeChange=ModeChange;*/
     im->LoadFromCache=LoadFromCache;
     im->DumpToCache=DumpToCache;
     im->StartExport=StartExportPNG;
@@ -257,7 +260,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
     bool have_mask;
     int riscos_rowbytes;
     png_bytep trans = NULL;
-    int num_trans = 0;
+    int num_trans = 0, useropal = 0;
     png_color_16p trans_values = NULL;
 
     /* First decide if we're going to do alpha processing */
@@ -394,20 +397,30 @@ void info_callback(png_struct *png_ptr, png_info *info)
     if (info->color_type == PNG_COLOR_TYPE_RGB ||
         info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
-        if (osver >= 0xA5)
+        if (osver >= 0xA5 || this->full_alpha)
         {
             /* Add a filler if alpha missing */
             if (info->color_type == PNG_COLOR_TYPE_RGB)
-            {
                 png_set_filler(png_ptr, 0, PNG_FILLER_AFTER);
-            }
 
             mode = MODE(6,90,90);
         }
         else
         {
             /* If on an old OS, get it to spit out 8bpp data :-( */
-            png_set_dither(png_ptr, riscospal, 256, 256, NULL, 0);
+            _swix(Hourglass_On, 0);
+            if (png_get_valid(png_ptr, info, PNG_INFO_PLTE))
+            {
+                png_uint_16p histogram = NULL;
+                png_get_hIST(png_ptr, info, &histogram);
+                png_set_dither(png_ptr, info->palette, info->num_palette, 256, histogram, 1);
+            }
+            else
+            {
+                png_set_dither(png_ptr, riscospal, 256, 256, NULL, 1);
+                useropal=1;
+            }
+            _swix(Hourglass_Off, 0);
             mode = 28;
         }
     }
@@ -481,7 +494,10 @@ void info_callback(png_struct *png_ptr, png_info *info)
         num_palette = pal_entries = 1 << min(info->bit_depth, 8);
     else if (info->color_type == PNG_COLOR_TYPE_PALETTE)
     {
-        num_palette = info->num_palette;
+        if (useropal)
+            num_palette = 256;
+        else
+            num_palette = info->num_palette;
         if (num_palette > 16)     pal_entries = 256;
         else if (num_palette > 4) pal_entries = 16;
         else if (num_palette > 2) pal_entries = 4;
@@ -508,6 +524,9 @@ void info_callback(png_struct *png_ptr, png_info *info)
        mem += load->maskwidth * info->height;
 
        have_mask = true;
+
+       if (!this->full_alpha)
+           this->transparent = 1;
     }
     else
        have_mask = false;
@@ -564,6 +583,8 @@ void info_callback(png_struct *png_ptr, png_info *info)
             png_correct_palette(png_ptr, palette, num_palette);
             png_ptr->transformations &= ~PNG_GAMMA;
         }
+        else if (useropal)
+            palette = riscospal;
         else
             palette = info->palette;
 
@@ -586,9 +607,15 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
                 if (a == 255)
                 {
+                    #ifdef GAMMA_DITHER
+                    r = load->file_to_1[r];
+                    g = load->file_to_1[g];
+                    b = load->file_to_1[b];
+                    #else
                     r = load->file_to_screen[r];
                     g = load->file_to_screen[g];
                     b = load->file_to_screen[b];
+                    #endif
                 }
                 else
                 {
@@ -657,7 +684,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
     longjmp(png_ptr->jmpbuf, 1);
 }
 
-static void convert_palette_trns_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width, int depth, png_bytep trans, int num_trans, const png_color_16 *trans_values, int color_type);
+static void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width, int depth, png_bytep trans, int num_trans, const png_color_16 *trans_values, int color_type);
 static void convert_32bit_alpha_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width);
 
 void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, int pass)
@@ -733,10 +760,10 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
         if (!this->full_alpha)
             convert_32bit_alpha_to_mask(row, mask_row, info->width);
     }
-    else if (info->color_type == PNG_COLOR_TYPE_PALETTE && info->valid & PNG_INFO_tRNS)
+    else if (info->valid & PNG_INFO_tRNS)
     {
         if (!this->full_alpha)
-            convert_palette_trns_to_mask(row, mask_row, info->width, info->bit_depth, info->trans, info->num_trans, &info->trans_values, info->color_type);
+            convert_trns_to_mask(row, mask_row, info->width, info->bit_depth, info->trans, info->num_trans, &info->trans_values, info->color_type);
     }
 
     flex_set_budge(oldbudge);
@@ -763,7 +790,7 @@ void end_callback(png_struct *png_ptr, png_info *info)
 /*
  * process_transparency - deal with transparency specified by the tRNS chunk
  */
-static void convert_palette_trns_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width, int depth, png_bytep trans, int num_trans, const png_color_16 *trans_values, int color_type)
+static void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width, int depth, png_bytep trans, int num_trans, const png_color_16 *trans_values, int color_type)
 {
     int i;
     png_uint_32 mask1, mask2;
@@ -805,10 +832,8 @@ static void convert_palette_trns_to_mask(const png_bytep row, png_bytep mask_row
     sp =      row + (width - 1) * depth/8;
     dp = mask_row + (width - 1) * depth/8;
 
-    #if 0
     if (color_type == PNG_COLOR_TYPE_PALETTE)
     {
-    #endif
         for (i = width; i; i--)
         {
             int pix;
@@ -831,7 +856,6 @@ static void convert_palette_trns_to_mask(const png_bytep row, png_bytep mask_row
             else
                 shift += s_inc;
         }
-    #if 0
     }
     else if (color_type == PNG_COLOR_TYPE_GRAY)
     {
@@ -891,7 +915,6 @@ static void convert_palette_trns_to_mask(const png_bytep row, png_bytep mask_row
             sp -= 4;
         }
     }
-    #endif
 }
 
 /*
@@ -1165,10 +1188,11 @@ static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size,
         return e;
     }
 
-    if (!this->factors[0])
+    if (this->modechanged || !this->factors[0])
     {
         e=ModeChange(this);
         if (e) return e;
+        this->modechanged = 0;
     }
 
     if (this->full_alpha)
@@ -1255,8 +1279,8 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
 
         if (x_size > 0 && y_size > 0)
         {
-            if (width << var.xeig != x_size ||
-                height << var.yeig != y_size)
+            if (width * 2 != x_size ||
+                height * 2 != y_size)
                 goto dont_clip;
         }
         else if (scale != 100)
@@ -1639,6 +1663,12 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
     int x, y;
     char *s, *m, *b;
     char *cttable;
+    #ifdef DITHERING
+    int dir=1;
+    unsigned int result;
+    int truered, truegreen, trueblue, result_red, result_green, result_blue;
+    int error_red, error_green, error_blue;
+    #endif
 
     if (bgdepth == 1 & !ct32k_buffer[0])
     {
@@ -1656,16 +1686,43 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
         m = maskdata;  maskdata  += rowwidth;
         b = bgsprdata; bgsprdata += bgrowwidth;
 
+        #ifdef DITHERING
+        if (dir == -1)
+        {
+            if (type == PNG_COLOR_TYPE_RGB_ALPHA)
+                s += (width-1) * 4;
+            else
+                s += width-1;
+            m += width-1;
+            b += (width-1) * bgdepth;
+        }
+
+        error_red = error_green = error_blue = 0;
+        #endif
+
         for (x = width; x; x--)
         {
             switch (type)
             {
               case PNG_COLOR_TYPE_PALETTE:
+                #ifdef DITHERING
+                fg = palette[*s * 2];
+                s += dir;
+                #else
                 fg = palette[*s++ * 2];
+                #endif
                 alpha = fg & 0xFF;
                 if (alpha == 0)
                 {
+                    #ifdef DITHERING
+                    error_red = error_green = error_blue = 0;
+                    if (dir == 1)
+                        b += bgdepth;
+                    else
+                        b -= bgdepth;
+                    #else
                     b += bgdepth;
+                    #endif
                     continue;
                 }
                 blue = fg >> 24;
@@ -1674,23 +1731,57 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                 break;
 
               case PNG_COLOR_TYPE_GRAY_ALPHA:
+                #ifdef DITHERING
+                alpha = *m;
+                m += dir;
+                #else
                 alpha = *m++;
+                #endif
                 if (alpha == 0)
                 {
+                    #ifdef DITHERING
+                    s += dir;
+                    #else
                     s++;
+                    #endif
+                    #ifdef DITHERING
+                    error_red = error_green = error_blue = 0;
+                    if (dir == 1)
+                        b += bgdepth;
+                    else
+                        b -= bgdepth;
+                    #else
                     b += bgdepth;
+                    #endif
                     continue;
                 }
+                #ifdef DITHERING
+                red = green = blue = *s;
+                s += dir;
+                #else
                 red = green = blue = *s++;
+                #endif
                 break;
 
               case PNG_COLOR_TYPE_RGB_ALPHA:
                 fg = *((int *) s);
+                #ifdef DITHERING
+                s += 4 * dir;
+                #else
                 s += 4;
+                #endif
                 alpha = fg >> 24;
                 if (alpha == 0)
                 {
+                    #ifdef DITHERING
+                    error_red = error_green = error_blue = 0;
+                    if (dir == 1)
+                        b += bgdepth;
+                    else
+                        b -= bgdepth;
+                    #else
                     b += bgdepth;
+                    #endif
                     continue;
                 }
                 blue = (fg >> 16) & 0xFF;
@@ -1743,9 +1834,21 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                  * linear)
                  */
 
-                blend(bgblue,  bg_alpha, blue/*,  alpha*/);
-                blend(bggreen, bg_alpha, green/*, alpha*/);
-                blend(bgred,   bg_alpha, red/*,   alpha*/);
+                blend(bgblue,  bg_alpha, blue);
+                blend(bggreen, bg_alpha, green);
+                blend(bgred,   bg_alpha, red);
+
+                #if defined(DITHERING) && defined(GAMMA_DITHER)
+                bgblue += error_blue;
+                bggreen += error_green;
+                bgred += error_red;
+                if (bgblue < 0) bgblue = 0; else if (bgblue > 255) bgblue = 255;
+                if (bggreen < 0) bggreen = 0; else if (bggreen > 255) bggreen = 255;
+                if (bgred < 0) bgred = 0; else if (bgred > 255) bgred = 255;
+                truered = bgred;
+                truegreen = bggreen;
+                trueblue = bgblue;
+                #endif
 
                 bgblue  = screen_from_1[bgblue];
                 bggreen = screen_from_1[bggreen];
@@ -1757,10 +1860,37 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
                  * Fully opaque case - we "cheat" by stored fully screen
                  * gamma corrected data in this case only!
                  */
+                #ifdef GAMMA_DITHER
+                blue += error_blue;
+                green += error_green;
+                red += error_red;
+                if (blue < 0) blue = 0; else if (blue > 255) blue = 255;
+                if (green < 0) green = 0; else if (green > 255) green = 255;
+                if (red < 0) red = 0; else if (red > 255) red = 255;
+                truered = red;
+                truegreen = green;
+                trueblue = blue;
+                bgblue  = screen_from_1[blue];
+                bggreen = screen_from_1[green];
+                bgred   = screen_from_1[red];
+                #else
                 bgblue = blue;
                 bggreen = green;
                 bgred = red;
+                #endif
             }
+
+            #if defined(DITHERING) && !defined(GAMMA_DITHER)
+            bgblue += error_blue;
+            bggreen += error_green;
+            bgred += error_red;
+            if (bgblue < 0) bgblue = 0; else if (bgblue > 255) bgblue = 255;
+            if (bggreen < 0) bggreen = 0; else if (bggreen > 255) bggreen = 255;
+            if (bgred < 0) bgred = 0; else if (bgred > 255) bgred = 255;
+            truered = bgred;
+            truegreen = bggreen;
+            trueblue = bgblue;
+            #endif
 
             if (bgdepth != 4)
                 bg = ((bgblue & 0xF8) << 7) | ((bggreen & 0xF8) << 2) | (bgred >> 3);
@@ -1770,19 +1900,65 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
             switch (bgdepth)
             {
               case 1:
-                *b++ = cttable[bg];
+              {
+                int c = cttable[bg];
+                #ifdef DITHERING
+                *b = c;
+                if (dir == 1)
+                    b++;
+                else
+                    b--;
+                result = bgpalette[c * 2];
+                result_blue = result >> 24;
+                result_green = (result >> 16) & 0xFF;
+                result_red = (result >> 8) & 0xFF;
+                #else
+                *b++ = c;
+                #endif
                 break;
+              }
               case 2:
                 *(unsigned short *) b = bg;
+                #ifdef DITHERING
+                if (dir == 1)
+                    b += 2;
+                else
+                    b -= 2;
+                result_red = (bgred & 0xF8) | (bgred >> 5);
+                result_green = (bggreen & 0xF8) | (bggreen >> 5);
+                result_blue = (bgblue & 0xF8) | (bgblue >> 5);
+                #else
                 b += 2;
+                #endif
                 break;
               case 4:
                 *(unsigned int *) b = bg;
+                #ifdef DITHERING
+                if (dir == 1)
+                    b += 4;
+                else
+                    b -= 4;
+                #else
                 b += 4;
-                break;
+                #endif
+                continue;
             }
 
+            #ifdef DITHERING
+            #ifdef GAMMA_DITHER
+            error_red = truered - screen_to_1[result_red];
+            error_green = truegreen - screen_to_1[result_green];
+            error_blue = trueblue - screen_to_1[result_blue];
+            #else
+            error_red = truered - result_red;
+            error_green = truegreen - result_green;
+            error_blue = trueblue - result_blue;
+            #endif
+            #endif
+
         } /* end x loop */
+
+        dir = -dir;
 
     } /* end y loop */
 
