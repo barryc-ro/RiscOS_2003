@@ -41,7 +41,7 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD      = dir
 TOUCH   = stamp
-AWK     = awk
+AWK     = do awk
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
