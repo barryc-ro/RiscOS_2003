@@ -28,6 +28,7 @@ RM      = remove
 WIPE    = -wipe
 DEFMOD  = DefMod
 MODSQZ  = modsqz
+RESGEN	= resgen
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} -DNDEBUG
@@ -61,11 +62,10 @@ RESDIR = <resource$dir>.Resources2.${COMPONENT}
 #
 COMPONENT = ToolAction
 TARGET    = aof.${COMPONENT}
-BASEOBJS  = o.modhdr o.msgs o.utils \
-	o.toolact
+BASEOBJS  = o.msgs o.utils o.toolact
 
-OBJS	= o.resources o.main o.string32 ${BASEOBJS} 
-ROMOBJS	= oz.resources oz.main o.string32 ${BASEOBJS} 
+OBJS	= o.modhdr o.resources o.resource o.resdata o.main o.string32 ${BASEOBJS} 
+ROMOBJS	= oz.modhdr oz.main oz.string32 ${BASEOBJS} 
 
 EXPORTS   = h.ToolAction hdr.ToolAction o.ToolAction
 
@@ -74,8 +74,9 @@ EXPORTS   = h.ToolAction hdr.ToolAction o.ToolAction
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
-.cmhg.o:;   ${CMHG} -p -o $@ $< h.$*
-.cmhg.h:;   ${CMHG} -p -o o.$* $< $@
+.cmhg.o:;   ${CMHG} -p -o $@ $< h.$* -DROM=0
+.cmhg.oz:;  ${CMHG} -p -o $@ $< h.$* -DROM=1
+.cmhg.h:;   ${CMHG} -p -o null:o.$* $< $@ -DROM=0
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
 
@@ -156,5 +157,10 @@ rm.${COMPONENT}: ${OBJS} ${OSLIB}
         Access $@ WR/R
 
 o.msgs oz.msgs: h.ToolAction
+
+o.main oz.main: h.modhdr
+
+o.resdata: LocalRes:Messages
+	${RESGEN} toolaction_resources $@ LocalRes:Messages Resources.ToolAction.Messages
 
 # Dynamic dependencies:
