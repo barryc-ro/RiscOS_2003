@@ -100,6 +100,8 @@ EVENTLIB	= $(LIBDIR).tboxlibs.o.eventlib
 TOOLBOXLIB	= $(LIBDIR).tboxlibs.o.toolboxlib
 WIMPLIB		= $(LIBDIR).tboxlibs.o.wimplib
 
+UNICODELIB      = $(LIBDIR).Unicode.o.ucodelib
+
 ACORNPOP3	= $(EXP_C_O).AcornPOP3
 ACORNSMTP	= $(EXP_C_O).AcornSMTP
 EMAILCOMMONLIB	= $(LIBDIR).Email.Common.o.Common
@@ -117,6 +119,7 @@ RMVERSION	= $(LIBDIR).RMVersion.o.RMVersion
 LIBS = \
  $(NBLIB)\
  $(RMVersion) \
+ $(UNICODELIB) \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
@@ -134,6 +137,7 @@ LIBS = \
 LIBSM = \
  $(NBLIB)zm\
  $(RMVersion) \
+ $(UNICODELIB)z \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)m\
@@ -151,6 +155,7 @@ LIBSM = \
 LIBSD = \
  $(NBLIB)\
  $(RMVersion) \
+ $(UNICODELIB)d \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
@@ -168,6 +173,7 @@ LIBSD = \
 LIBSHP = \
  $(NBLIB)\
  $(RMVersion) \
+ $(UNICODELIB) \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
@@ -185,6 +191,7 @@ LIBSHP = \
 LIBSMC = \
  $(NBLIB)MC\
  $(RMVersion) \
+ $(UNICODELIB) \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
