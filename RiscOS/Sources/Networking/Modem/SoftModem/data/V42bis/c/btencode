@@ -1,0 +1,547 @@
+/*********************************************************************
+/
+/       Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
+/       All Rights Reserved by:
+/               RSA
+/               7701 Six Forks Road
+/               Suite 120
+/               Raleigh, NC 27615
+/               (919) 846-7171
+/
+/       This document contains material confidential to RSA.
+/       Its contents must not be revealed, used or disclosed to
+/       anyone or company with out written permission by RSA.
+/       The information contained herein is solely for the use of RSA.
+/
+/       File:           BTENCODE.C
+/
+/       Module Version: 4.02
+/
+/       Function:       This file contains the routines needed for BTLZ data encoding.
+/
+/       Product:        V.42/V.42bis
+/
+/       History:
+/
+/           Created:    8/12/92
+/                       11/1/94 (V4.01) - Add ETC and MNP10 updates
+/
+/           ---------------------------------------------------------
+/           -                   Modifications                       -
+/           ---------------------------------------------------------
+/
+/           Author & Date:	RSA
+/           Description:
+/           Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"
+#include "btlz_ede.h"
+#include "edf.dte"
+
+void BTEncode(void);
+void BTFlush(void);
+void process_first_char (void);
+
+/********************************************************************
+/
+/	Procedure:  BTEncode
+/
+/	Author: RSA
+/
+/	Creation Date:	8/12/92
+/
+/	Description:  Performs the V.42bis data compression algorithm on
+/                     a block of data received from the DTE.
+/
+/	Input Parameters:  NONE
+/
+/	Output Parameters: NONE
+/
+/	Global Variables Changed:
+/
+/	Users:	LAPM_BTLZ_Balance, MNP_BTLZ_Balance
+/
+/	-------------------------
+/	-     Modifications	-
+/	-------------------------
+/
+/	Author & Date: RSA
+/	Description:
+/	Reason:
+/
+********************************************************************/
+
+
+void BTEncode(void)
+{
+/* Local register variables allow for performance increases */
+
+register uword reg_sptr;
+register ubyte reg_val;
+
+/* check for first string  */
+
+	if (!s_ptr)
+	{
+        process_first_char();
+
+		if (index >= index_max)
+		{
+			btlztx_done = TRUE;
+			return;
+		}
+
+        if (--dte_from_block_num_count == 0)
+            return;
+    }
+
+
+    reg_sptr = s_ptr; /* use local register variables for speed */
+    reg_val  = encode_in_val;
+
+	do  /* loop while there is data in DTE Rx Buffer */
+	{
+		reg_val = *dte_rx_block_pointer++; /* get next rx character */
+		++dte_from_block_update_count;           /* increment block update count */
+
+        /* the tcount variable is used to keep track of the number of
+            characters processed by the encoder in order to toggle transparent
+            mode if necessary. When count exceeds axf_delay, the compression
+            ratio is calculated.
+        */
+
+		tcount++;  /* anti-expansion function (axf) character count */
+
+
+		stleng++;
+		encode_c_ptr = encode_i_ptr = reg_sptr;	/* use s_ptr to do string search */
+		reg_sptr = deplist[reg_sptr] & 0xFFF;         /* Never larger then 4K */
+
+    	/* search for match */
+
+		while ((reg_sptr) && (symbol[reg_sptr] < reg_val))
+		{
+			encode_i_ptr = reg_sptr;
+			reg_sptr = right[reg_sptr];
+		}
+
+		/* check exit conditions */
+
+		encode_found = reg_sptr && (symbol[reg_sptr] == reg_val);
+
+	       /*
+			* if string == last string or just flushed then
+			* force end of string but inhibit dictionary update.
+			*/
+
+		if (encode_found && (flushed || (reg_sptr == last_C1)))
+		{
+			encode_inhibit = TRUE;
+			encode_found = FALSE;
+		}
+		else
+			encode_inhibit = FALSE;
+
+
+		if (!encode_found)
+		{
+			if(!flushed)
+			{
+				/* output compressed codeword */
+
+				if (!transparent)
+				{
+                       /* create codeword based on it's bit size */
+
+					if (C_2 < V42bis_N_1)
+					{
+
+                        /* step up codeword size if necessary */
+
+						while (encode_c_ptr >= C_3)
+						{
+                                /* create and send STEPUP codeword */
+
+							ob |= STEPUP << bt_m;
+
+							*btlzdataptr++ = (ubyte)ob;
+							index++;
+							ob >>= 8;
+
+							bt_m += C_2 - 8;
+
+							if (bt_m >= 8)
+							{
+								bt_m -= 8;
+								*btlzdataptr++ = (ubyte)ob;
+								index++;
+								ob >>= 8;
+							}
+							++C_2; /* increment current codeword size */
+
+							C_3 <<= 1;
+
+						} /* new codeword size */
+
+                    }
+
+
+            /* shift low order byte of codeword into bit buffer and output */
+
+					ob |= (encode_c_ptr & 0xFF) << bt_m;
+
+					*btlzdataptr++ = (ubyte)ob;
+					index++;
+
+					ob >>= 8; /* shift high order byte into bit buffer */
+
+					ob |= (encode_c_ptr & 0xFF00) >> (8 - bt_m);
+					bt_m += C_2 - 8;
+
+                   /* if number of remain bits > 1 byte output */
+
+					if (bt_m >= 8)
+					{
+						bt_m -= 8;
+						*btlzdataptr++ = (ubyte)ob;
+						index++;
+						ob >>= 8;
+					}
+				}
+				comp_bits += C_2;  /*number of compressed bits created */
+
+			}    /* update compressed bits count for axf */
+
+
+				/* do expansion check */
+			if (tcount > axf_delay)
+			{
+				if (!transparent)
+				{
+					if (tcount * V42bis_N_3 < (comp_bits - AXF_HYST))
+					{
+						/* switch to transparent mode */
+						axf_delay = AXF_MIN;   /* decrease check interval */
+
+						/* send ETM, octet align, and send next character */
+						*btlzdataptr++ = (ubyte)ob;
+						index++;
+						ob >>= 8;
+
+						bt_m += C_2 - 8;
+
+						if (bt_m >= 8)
+						{
+							bt_m -= 8;
+							*btlzdataptr++ = (ubyte)ob;
+							index++;
+							ob >>= 8;
+						}
+
+						if (bt_m)
+						{
+							bt_m = 0;
+							*btlzdataptr++ = (ubyte)ob;	/* lose upper byte */
+							index++;
+							ob = 0;
+						}
+						transparent = TRUE;
+					}
+				}
+	   			else /* transparent */
+	   			{
+	   				if (tcount * V42bis_N_3 > (comp_bits + AXF_HYST))
+	   				{
+	   					/* switch to compression mode */
+	   					axf_delay = AXF_MAX;	 /* increase check interval */
+	   					*btlzdataptr++ = esc_char;/* command code seq */
+	   					index++;
+	   					*btlzdataptr++ = ECM;
+	   					index++;
+	   					transparent = FALSE;
+	   				}
+	   			}
+	   			comp_bits = tcount = 0;  /* reset counts */
+	   		}
+
+	   		/* update dictionary unless string > maximum allowed */
+	   		encode_inhibit |= (stleng > V42bis_N_7);
+
+	   		if (!encode_inhibit)
+	   		{
+	   			symbol[C_1] = reg_val; /* character */
+	   			parent[C_1] = encode_c_ptr & 0xFF; /* parent LSB */
+
+	   			/* sets deplist to NULL*/
+	   			deplist[C_1] = (encode_c_ptr & 0xF00 ) << 4;
+	   			right[C_1] = reg_sptr; /* right hand neighbor */
+	   			if (encode_i_ptr == encode_c_ptr)
+	   			{
+	   				deplist[encode_c_ptr] &= 0xF000;
+	   				deplist[encode_c_ptr] |= C_1;  /* first dependent in list */
+	   			}
+	   			else
+	   				right[encode_i_ptr] = C_1;    /* not first dependent */
+
+	   			last_C1 = C_1; /* save for use in next match */
+
+					/* storage recovery */
+	   			if (!dictfull)
+	   			{
+	   				/* dictionary not yet full */
+	   				if (++C_1 > (V42bis_N_2-1))
+	   					dictfull = TRUE;
+	   			}
+
+	   			if (dictfull) /* dictionary is full, delete entry */
+	   			{
+	   				do
+	   				{
+	   					/* search for next entry */
+	   					if (++C_1 > (V42bis_N_2-1))
+	   						C_1 = (V42bis_N_4+V42bis_N_6);
+	   				}
+	   				while (deplist[C_1] & 0xFFF);
+
+	   				encode_p = ((deplist[C_1] & 0xF000) >> 4) + parent[C_1];
+	   				if ((deplist[encode_p] & 0xFFF) == C_1)
+	   				{
+	   					deplist[encode_p] &= 0xF000;
+	   					deplist[encode_p] |= right[C_1];   /* disconnect first entry */
+	   				}
+	   				else
+	   				{
+	   					/* disconnect subsequent one */
+	   					encode_p = deplist[encode_p] & 0xFFF;
+	   					while (right[encode_p] != C_1)
+	   						encode_p = right[encode_p];
+	   					right[encode_p] = right[C_1];
+	   				}
+	   			}
+	   		} /* end of !encode_inhibit */
+	   		else
+	   			last_C1 = NULL; /* no new entry created */
+
+	   		reg_sptr = reg_val + V42bis_N_6;
+	   		stleng = 1;
+
+	   	} /* end of !encode_found */
+
+		/* output character if in transparent mode */
+
+		if (transparent)
+		{
+			*btlzdataptr++ = reg_val;
+			index++;
+			if (reg_val == esc_char)
+			{
+				/* check for escape character */
+				*btlzdataptr++ = EID;
+				index++;
+			}
+		}
+
+		/* cycle escape character if in data stream */
+		if (reg_val == esc_char)
+			esc_char += ESC_INCR;
+
+		flushed = FALSE;  /* no longer in flush mode */
+
+		if (index >= index_max)
+		{
+			btlztx_done = TRUE;
+			break;
+		}
+	}
+	while (--dte_from_block_num_count);
+
+    /* restore register variables */
+
+    s_ptr = reg_sptr;
+    encode_in_val = reg_val ;
+}
+/********************************************************************
+/
+/	Procedure:  process_first_char
+/
+/	Author: RSA
+/
+/	Creation Date:	9/1/95
+/
+/	Description:  V42.bis first character processing.
+/
+/
+/	Input Parameters:  NONE
+/
+/	Output Parameters: NONE
+/
+/	Global Variables Changed:
+/   V42bis Variables Changed: s_ptr, encode_in_val,btlzdataptr,index
+/
+/	Users:	LAPM_BTLZ_Balance, MNP_BTLZ_Balance
+/
+/	-------------------------
+/	-     Modifications	-
+/	-------------------------
+/
+/	Author & Date: RSA
+/	Description:
+/	Reason: This logic was removed from BTEncode() so the
+/   encode would not have to perform a check for the first character
+/   in the body of the loop. Previously this check burned about 3% of
+/   the Encoder's time do the the check and jump to the non-first char case which
+/   was >99% of the time.
+/
+********************************************************************/
+
+void process_first_char (void)
+{
+   		encode_in_val = *dte_rx_block_pointer++; /* get next rx character */
+		++dte_from_block_update_count;           /* increment block update count */
+
+        /* the tcount variable is used to keep track of the number of
+            characters processed by the encoder in order to toggle transparent
+            mode if necessary. When count exceeds axf_delay, the compression
+            ratio is calculated.
+        */
+
+		tcount++;  /* anti-expansion function (axf) character count */
+
+		s_ptr = encode_in_val + V42bis_N_6; /* N6 = control codewords */
+		stleng = 1;
+
+	    if (transparent)
+		{
+			*btlzdataptr++ = encode_in_val;
+			index++;
+			if (encode_in_val == esc_char)
+			{
+				/* check for escape character */
+				*btlzdataptr++ = EID;
+				index++;
+			}
+		}
+
+		/* cycle escape character if in data stream */
+		if (encode_in_val == esc_char)
+			esc_char += ESC_INCR;
+
+		flushed = FALSE;  /* no longer in flush mode */
+
+}
+
+/********************************************************************
+/
+/	Procedure:  BTFlush
+/
+/	Author: RSA
+/
+/	Creation Date: 8/12/92
+/
+/	Description:  Sends out partially encoded data, if any.
+/		      Used to force the data out when the DTE
+/		      stops sending data.
+/
+/	Input Parameters:  NONE
+/
+/	Output Parameters: NONE
+/
+/	Global Variables Changed:
+/
+/	Users:
+/
+/	-------------------------
+/	-     Modifications	-
+/	-------------------------
+/
+/	Author & Date: RSA
+/	Description:
+/	Reason:
+/
+********************************************************************/
+void BTFlush(void)
+{
+	/* BTFlush:  END of message */
+	if (!transparent && !flushed)
+	{
+		mmu_open_btlz_win
+
+		if(s_ptr)
+		{
+		/* send partially matched string */
+			if (C_2 < V42bis_N_1)
+				while (s_ptr >= C_3)
+				{
+					ob |= (STEPUP) << bt_m;
+
+					*btlzdataptr++ = (ubyte)ob;
+					index++;
+					ob >>= 8;
+
+					bt_m += C_2 - 8;
+
+					if (bt_m >= 8)
+					{
+						bt_m -= 8;
+						*btlzdataptr++ = (ubyte)ob;
+						index++;
+						ob >>= 8;
+					}
+
+					C_2++;
+					C_3 <<= 1;
+				}
+			flushed = TRUE;
+
+			ob |= (s_ptr & 0xFF) << bt_m;
+
+			*btlzdataptr++ = (ubyte)ob;
+			index++;
+			ob >>= 8;
+
+			ob |= (s_ptr & 0xFF00) >> (8-bt_m);
+			bt_m += C_2 - 8;
+
+			if (bt_m >= 8)
+			{
+				bt_m -= 8;
+				*btlzdataptr++ = (ubyte)ob;
+				index++;
+				ob >>= 8;
+			}
+
+			comp_bits += C_2;
+		}
+
+		/* send FLUSHED control codeword */
+		ob |= (FLUSH) << bt_m;
+
+		*btlzdataptr++ = (ubyte)ob;
+		index++;
+		ob >>= 8;
+
+		bt_m += C_2 - 8;
+
+		if (bt_m >= 8)
+		{
+			bt_m -= 8;
+			*btlzdataptr++ = (ubyte)ob;
+			index++;
+			ob >>= 8;
+		}
+
+		/* flush remaining bits from bit buffer */
+		if (bt_m)
+		{
+			bt_m = 0;
+			*btlzdataptr++ = (ubyte)ob;	/* lose upper byte */
+			index++;
+			ob = 0;
+		}
+
+		mmu_close_btlz_win
+	}
+}
+

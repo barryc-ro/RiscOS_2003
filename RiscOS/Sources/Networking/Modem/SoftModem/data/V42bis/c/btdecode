@@ -1,0 +1,445 @@
+/*********************************************************************
+/
+/       Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
+/       All Rights Reserved by:
+/               RSA
+/               7701 Six Forks Road
+/               Suite 120
+/               Raleigh, NC 27615
+/               (919) 846-7171
+/
+/       This document contains material confidential to RSA.
+/       Its contents must not be revealed, used or disclosed to
+/       anyone or company with out written permission by RSA.
+/       The information contained herein is solely for the use of RSA.
+/
+/       File:           BTDECODE.C
+/
+/       Module Version: 4.02
+/
+/       Function:       This file contains the code needed for BTLZ data decoding.
+/
+/       Product:        V.42/V.42bis
+/
+/       History:
+/
+/           Created:    8/14/92
+/                       11/1/94 (V4.01) - Add ETC and MNP10 updates
+/
+/           ---------------------------------------------------------
+/           -                   Modifications                       -
+/           ---------------------------------------------------------
+/
+/           Author & Date:	RSA
+/           Description:
+/           Reason:
+/
+*****************************************************************************/
+
+#include "sys_def.h"
+#include "btlz_ede.h"
+#include "edf.btinit"
+#include "edf.dte"
+#include "edf.lapm_fnc"
+#include "edf.v42"
+
+void BTDecode(void);
+
+/* look up table for bit masks */
+const uword mask[9] = { 0x0000, 0x0001, 0x0003, 0x0007, 0x000F,
+			0x001F, 0x003F, 0x007F, 0x00FF };
+
+/********************************************************************
+/
+/	Procedure:  BTDecode
+/
+/	Author: RSA
+/
+/	Creation Date: 8/14/92
+/
+/	Description: Decodes a block of BTLZ compressed data and passes it
+/                    to the DTE.
+/
+/	Input Parameters:  NONE
+/
+/	Output Parameters: NONE
+/
+/	Global Variables Changed:
+/
+/	Users:	LAPM_BTLZ_Balance, MNP_BTLZ_Balance
+/
+/	-------------------------
+/	-     Modifications	-
+/	-------------------------
+/
+/	Author & Date: RSA
+/	Description:
+/	Reason:
+/
+********************************************************************/
+void BTDecode(void)
+{
+register uword reg_uword;
+
+	if (reenter_decode)
+	{
+		reenter_decode = FALSE;
+		do /* read string from stack */
+		{
+			if (*decode_sp == De_esc_char)
+				De_esc_char += ESC_INCR;
+			*dte_tx_block_pointer++ = *decode_sp++;
+			if (++dte_to_block_update_count == dte_to_block_free_count)
+			{
+				if (decode_sp <= top)
+					reenter_decode = TRUE;
+				return;
+			}
+		}
+		while (decode_sp <= top);
+	}
+
+top_of_while:
+	while ((dte_to_block_update_count < dte_to_block_free_count) && (!btlzrx_done))
+	{
+		decode_in_val = (word)*btlzrxdataptr++;
+
+		if (--btlz_empty_count == 0)
+			btlzrx_done = TRUE;
+
+		if (De_transparent)
+		{
+			decode_inhibit = FALSE;
+
+			/* transparent mode .... do string match */
+			if (De_esc_mode)
+			{
+				switch(decode_in_val)
+				{
+					case ECM:	De_bf_full = (De_stleng >= V42bis_N_7);
+							De_c_ptr = De_s_ptr;
+							De_esc_mode = FALSE;
+							De_s_ptr = De_c_ptr;
+							De_transparent = !De_transparent;
+							return;
+
+					case EID:	/* escape occurred in data stream */
+							*dte_tx_block_pointer++ = De_esc_char;
+							++dte_to_block_update_count;
+							decode_firstchar = De_esc_char;
+							De_esc_char += ESC_INCR;
+							De_esc_mode = FALSE;
+							break;
+
+					case RESET:	BTInitDe();
+							return;
+
+					default:	v42_call_err(decode_in_val);
+				}
+			}
+			else
+			{
+				/* not escape mode */
+				if ((decode_firstchar=(ubyte)decode_in_val) == De_esc_char)
+				{
+					De_esc_mode = TRUE;
+					return;
+				}
+
+				*dte_tx_block_pointer++ = decode_firstchar;
+				++dte_to_block_update_count;
+			}
+			if (!De_s_ptr)	       /* first character */
+			{
+				De_s_ptr = V42bis_dbase + decode_firstchar + V42bis_N_6;
+				decode_l_ptr = NULL;	     /* no last string */
+				decode_found = TRUE;
+				De_bf_full = FALSE;
+				De_stleng = 1;
+			}
+			else
+			{
+				/* match character */
+				De_stleng++;
+
+				/* move to next level on trie */
+				decode_l_ptr = decode_i_ptr = De_s_ptr;
+
+				De_s_ptr = deplist[De_s_ptr] & 0xFFF;
+
+				/* search for match */
+				while ((De_s_ptr) && (symbol[De_s_ptr] < decode_firstchar))
+				{
+					decode_i_ptr = De_s_ptr;
+					De_s_ptr = right[De_s_ptr];
+				}
+
+				/* check exit conditions */
+				decode_found = De_s_ptr && (symbol[De_s_ptr] == decode_firstchar);
+
+				if (mode_sw)
+				{
+					if (decode_found)
+					{
+						decode_found = FALSE;
+						decode_inhibit = TRUE;
+					}
+					mode_sw = FALSE;
+				}
+
+				/* check if match with last created entry */
+				if (decode_found && (De_s_ptr == De_last_C1))
+				{
+					decode_inhibit = TRUE;
+					decode_found = FALSE;
+				}
+
+				/* check max string length */
+				if (!decode_found && De_stleng > V42bis_N_7)
+					decode_inhibit = TRUE;
+
+			} /* end of match a character */
+		}
+		else /* compressed mode */
+		{
+			if (bt_k < 8)
+			{
+				bitbuff |= (uword)decode_in_val << bt_k;
+				if ((bt_k += 8) < De_C_2)
+				       /*
+					* We need to stay inside the while loop
+					* so we don't BTDecode as often.  So do
+					* not return here, but jump to the top
+					* of the loop.
+					*/
+					goto top_of_while;
+			}
+
+			decode_in_word = (uword)((ubyte)bitbuff);
+			bitbuff >>= 8;
+			bt_k -= 8;
+			if ((bt_k+8) < De_C_2)
+			{
+				bitbuff |= (uword)decode_in_val << bt_k;
+				bt_k += 8;
+			}
+
+			decode_in_word |= (bitbuff & mask[De_C_2-8]) << 8;
+
+			bitbuff >>= (De_C_2 - 8);
+			bt_k -= (De_C_2 - 8);
+
+			if ((decode_in_val=(word)decode_in_word) < V42bis_N_6)
+			{
+				/* input value is a control codeword */
+				decode_found = TRUE;
+				switch(decode_in_val)
+				{
+					case ETM:	/* octet align */
+							/* buffer flush condition */
+							if (bt_k > 8)
+							{
+								bitbuff >>= (bt_k - 8);
+								bt_k = 8;
+							}
+							else
+								if (bt_k < 8)
+									bitbuff = bt_k = 0;
+
+							mode_sw = TRUE;
+							De_s_ptr = De_c_ptr;
+							De_transparent = !De_transparent;
+							return;
+
+					case FLUSH:	/* buffer flush condition */
+							if (bt_k > 8)
+							{
+								bitbuff >>= (bt_k - 8);
+								bt_k = 8;
+							}
+							else
+								if (bt_k < 8)
+									bitbuff = bt_k = 0;
+							break;
+
+					case STEPUP:	if (++De_C_2 > V42bis_N_1)
+							{
+								v42_call_err(STEPUP);
+								return;
+							}
+
+				}
+			}
+			else /* input value is a valid codeword */
+			{
+				/* if previous string was max length */
+				decode_bf_inh = De_bf_full;
+
+				/* save last string ptr and make new one */
+				decode_l_ptr = De_c_ptr;
+				decode_p = De_c_ptr = V42bis_dbase + (uword)decode_in_val;
+
+				/*
+				 * Check codeword validity....invalid if:-
+				 * (i) Corresponds to empty entry (includes De_C_1)
+				 * (ii) Corresponds to value greater than dict. size.
+				 */
+
+				if( (((uword)decode_in_val >= V42bis_N_5) &&
+				     (((deplist[decode_p] & 0xF000) >> 4) + parent[decode_p] == NULL)) ||
+				     ((uword) decode_in_val > V42bis_N_2-1) )
+				{
+					v42_call_err(decode_in_val);
+					return;
+				}
+
+				De_stleng = 0;
+				decode_sp = top;
+
+                reg_uword = decode_p;
+
+				do  /* read string into buffer */
+				{
+					*decode_sp = symbol[reg_uword];
+					De_stleng++;
+					reg_uword = ((deplist[reg_uword] & 0xF000) >> 4) + parent[reg_uword];
+				}
+				while ((--decode_sp >= buff) && (reg_uword));
+
+                decode_p = reg_uword;
+
+				/* was string maximum length ? */
+				De_bf_full = (decode_sp++ < buff);
+
+				/* save 1st character for update */
+				decode_firstchar = *decode_sp;
+
+				do /* read string from stack */
+				{
+					if (*decode_sp == De_esc_char)
+						De_esc_char += ESC_INCR;
+					*dte_tx_block_pointer++ = *decode_sp++;
+					if (++dte_to_block_update_count == dte_to_block_free_count)
+					{
+						if (decode_sp <= top)
+							reenter_decode = TRUE;
+						break;
+					}
+				}
+				while (decode_sp <= top);
+
+				/* generate update pointers from decode_l_ptr and decode_firstchar */
+				if (!decode_bf_inh && decode_l_ptr)
+				{
+					De_s_ptr = deplist[decode_l_ptr] & 0xFFF;
+					decode_i_ptr = decode_l_ptr;
+
+					/* look for match to obtain decode_i_ptr */
+
+                    reg_uword = De_s_ptr;
+
+					while ((reg_uword) && (symbol[reg_uword] < decode_firstchar))
+					{
+						decode_i_ptr = reg_uword;
+						reg_uword = right[reg_uword];
+					}
+					decode_inhibit = decode_found =
+                        reg_uword && (symbol[reg_uword] == decode_firstchar);
+
+                    De_s_ptr = reg_uword;
+
+				}
+				else
+					/* no previous string to append char to */
+					decode_inhibit = TRUE;
+			}
+		}/* end of decode string */
+
+		if (!decode_found ) /* end of string match .. update & recover storage */
+		{
+			/* update dictionary using decode_l_ptr, decode_i_ptr, and decode_firstchar */
+			if (!decode_inhibit)
+			{
+				/* create new entry */
+				symbol[De_C_1] = decode_firstchar;
+
+				/* set parent LSB */
+				parent[De_C_1] = decode_l_ptr & 0xFF;
+
+				/* parent MSB & deplist=NULL */
+				deplist[De_C_1] = (decode_l_ptr & 0xF00) << 4;
+				right[De_C_1] = De_s_ptr;
+				if (decode_i_ptr == decode_l_ptr)
+				{
+					deplist[decode_l_ptr] &= 0xF000;
+
+					/* first entry in list */
+					deplist[decode_l_ptr] |= De_C_1;
+				}
+				else
+					/* not 1st entry */
+					right[decode_i_ptr] = De_C_1;
+
+				De_last_C1 = De_C_1;
+
+				/* storage recovery */
+				if (!De_dictfull)
+				{
+					/* next available entry */
+					if (++De_C_1 > (V42bis_dbase + V42bis_N_2 - 1))
+						De_dictfull = TRUE;
+				}
+
+				if (De_dictfull)  /* dictionary full */
+				{
+                    reg_uword = De_C_1; /* use register for speed */
+
+					do /* search for suitable entry */
+					{
+						if (++reg_uword > (V42bis_dbase + V42bis_N_2 - 1))
+							reg_uword = V42bis_dbase + V42bis_N_5;
+					}
+					while (deplist[reg_uword] & 0xFFF);
+
+					decode_p = ((deplist[reg_uword] & 0xF000) >> 4)
+                                    + parent[reg_uword];
+
+                    De_C_1 = reg_uword;  /* restore variable */
+
+                    reg_uword = decode_p; /* use register variable */
+
+					if ((deplist[reg_uword] & 0xFFF) == De_C_1)
+					{
+						deplist[reg_uword] &= 0xF000;
+
+						/* disconnect 1st entry in list */
+						deplist[reg_uword] |= right[De_C_1];
+					}
+					else
+					{
+						reg_uword = deplist[reg_uword] & 0xFFF;
+						while (right[reg_uword] != De_C_1)
+							reg_uword = right[reg_uword];
+						right[reg_uword] = right[De_C_1];
+					}
+                    decode_p = reg_uword;  /* restore variable */
+
+				}
+
+				/* mark as empty (parent MSB) */
+				deplist[De_C_1] &= 0xFFF;
+				parent[De_C_1] = NULL;	 /* mark as empty */
+			} /* end !decode_inhibit */
+			else
+				De_last_C1 = NULL;   /* no new entry */
+
+			if (De_transparent)
+			{
+				/* start new string */
+				De_s_ptr = V42bis_dbase + decode_firstchar + V42bis_N_6;
+				De_stleng = 1;
+			}
+		}/* end !decode_found */
+	}
+}
+

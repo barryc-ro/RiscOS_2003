@@ -1,0 +1,898 @@
+/****************************************************************************
+/
+/       Copyright, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995.
+/       All Rights Reserved by:
+/               RSA
+/               7701 Six Forks Road
+/               Suite 120
+/               Raleigh, NC  27615
+/               (919) 846-7171
+/
+/
+/       This document contains material confidential to RSA its contents must
+/       not be revealed, used or disclosed to anyone or company with out
+/       written permission by RSA.  The information contained herein is solely
+/       for the use of RSA.
+/
+/       File:           M10_LIB.C
+/
+/       Module Version: 4.02
+/
+/       Function:       This file contains misc routines for the MNP 10 code.
+/
+/       Product:        V.42/V.42bis
+/
+/       History:
+/
+/           Created:
+/                       11/1/94 (V4.01) - Add ETC and MNP10 updates
+/
+/           ---------------------------------------------------------
+/           -                   Modifications                       -
+/           ---------------------------------------------------------
+/
+/           Author & Date:	RSA
+/           Description:
+/           Reason:
+/
+*****************************************************************************/
+#include "sys_def.h"
+#include "m10_def.h"
+#include "dp10.edf"
+#include "m10_lm.edf"
+#include "m10_fffb.edf"
+#include "mnp_if.edf"
+
+ubyte cd_present(void);
+ubyte highest_negot_speed(void);
+ubyte update_mnp10_speed(ubyte);
+ubyte higher_speed_avail(void);
+void update_tx_level(void);
+void check_lmi_rcv(void);
+
+extern ubyte mnp10_current_speed;
+extern uword mnp10_possible_rates;
+extern uword mnp10_carrier_loss_delay;
+extern uword mnp10_100ms_timer;
+extern ubyte mnp10_100ms_timer_started;
+extern ubyte mnp10_orig_speed;
+extern ubyte mnp10_neg_cellular;
+extern ubyte mnp10_tx_level;
+extern ubyte mnp10_level_offset;
+extern ubyte mnp10_RCV_AGC10_value;
+extern ubyte mnp10_AGC10_value;
+extern ubyte mnp10_RCV_EQM10_value;
+extern ubyte mnp10_EQM10_value;
+extern ubyte mnp10_last_LMI_RCV_recv_seq_num;
+extern ubyte mnp10_LMI_RCV_recv_seq_num;
+extern ubyte mnp10_LMI_send_seq_num;
+extern ubyte mnp10_LMI_nak_confirm;
+extern ubyte mnp10_LMI_RCV_nak_request;
+extern ubyte mnp10_BLER;
+extern ubyte mnp10_got_BLER;
+extern ubyte mnp10_fallback_APS_count;
+extern ubyte mnp10_retrain_state;
+extern ubyte mnp10_fffb_state;
+extern uword mnp10_BLER_timer;
+extern ubyte mnp10_BLER_timer_started;
+extern ubyte mnp10_rcv_lm__fb_cmd;
+extern ubyte mnp10_rcv_lm__ff_cmd;
+extern ubyte mnp10_carrier_loss;
+extern ubyte mnp10_number_of_retrains;
+extern ubyte mnp10_initiator;
+extern ubyte mnp10_startup_mode;
+extern uword mnp10_cd_wait_time;
+extern uword FBI_timer;
+extern uword FFI_timer;
+extern uword shift_timer;
+extern ubyte *tx_holding;
+extern ubyte *tx_data_holding;
+extern ubyte mnp10_EQM_timer;
+
+extern ubyte mnp10_last_tx_level;
+extern ubyte mnp10_last_RCV_EQM10_value;
+extern ubyte mnp10_last_RCV_AGC10_value;
+extern ubyte mnp10_initial_tx_level;
+
+
+
+
+/*******************************************************************************
+/
+/	Routine: proc_mnp10_bg
+/
+/	Author : RSA
+/
+/	Creation Date: 03/13/92
+/
+/	Description : This Routine is the background processing for the MNP 10
+/		      code.
+/
+/	Input Parameters: None
+/
+/	Output Parameters: ubyte mnp 10 status
+/				0  -  Stay in the IDLE state
+/				1  -  Move to initiate Fallforward procedures
+/				2  -  Move to accept Fallforward
+/				3  -  Move to initiate Fallback procedures
+/				4  -  Move to accept Fallback
+/				5  -  Start MNP 10 retrain
+/
+/	Global Variables Changed: mnp10_number_of_retrains, mnp10_retrain_state,
+/				  mnp10_initiator, mnp10_rcv_lm__fb_cmd,
+/				  mnp10_rcv_lm__ff_cmd
+/
+/	Users: mnp10_bg()
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+ubyte proc_mnp10_bg(void)
+{
+    /*	Give the Data Pump code background processing time	*/
+    dp10_bg();
+
+    mnp10_EQM10_value = dp10_get_EQM10_value();
+    mnp10_AGC10_value = dp10_get_AGC10_value();
+
+    /*	If line rate is 4800 or greater and a rate renegotiation is detected,
+        then the peer has initiated a fallback and we have missed the
+        fallback command.  Therefore we need to change states in order to
+        process the fallback. */
+    if (dp10_detect_rate_renegot())
+    {
+        if (mnp10_current_speed > BPS2400)
+        {
+            mnp10_retrain_state = PROC_FALLBACK;
+            mnp10_fffb_state = WAIT_FOR_RR_COMPLETE;
+            shift_timer = mnp10_cd_wait_time;
+            mnp10_startup_mode = ANSWER;
+            mnp10_100ms_timer = WAIT_FOR_RENEGOT_TIME;
+            return (MNP10_BG__FB_INIT);
+        }
+    }
+    /*	Else if a retrain is detected, then the peer has
+            (1) initiated a fallback and we missed the fallback command, or
+            (2) a physical link retrain occured.
+        Therefore we need to change states in order to process the retrain or
+        fallback. */
+    else if (dp10_detect_retrain())
+    {
+        /* Can only retrain in V.32/bis, and V.22bis */
+        if (mnp10_current_speed > BPS1200)
+        {
+            /* Change states to wait for completed retrain */
+            mnp10_retrain_state = WAIT_RETRAIN_COMPLETE;
+            mnp10_startup_mode = ANSWER;
+            mnp10_100ms_timer = WAIT_FOR_RETRAIN_TIME;
+            return (MNP10_BG__FB_INIT);
+        }
+    }
+
+    /*	If carrier is lost for greater then the delay for hangup (s10) a
+        fallback needs to be initiated. */
+    if (!cd_present())
+    {
+        if (fallback_allowed())
+        {
+            mnp10_carrier_loss = TRUE;
+            mnp10_initiator = TRUE;
+            mnp10_100ms_timer = 0;
+            mnp10_retrain_state = FB_DETERMINE_TYPE;
+            return (MNP10_BG__FB_INIT);
+        }
+        else
+            return (MNP10_BG__HALT);
+    }
+
+    /*	Need to fallback if 8 consecutive LT's are sent with an APS of less
+        than 16. */
+    if ((mnp10_fallback_APS_count == 0) && (!FBI_timer) && (fallback_allowed()))
+    {
+        mnp10_retrain_state = INITIATE_FALLBACK;
+        return (MNP10_BG__FB_INIT);
+    }
+
+    /*	Check Block error rate	*/
+    if (mnp10_BLER >= MAX_BLER)
+    {
+        /*	Start timming of BLER > MAX_BLER for 4 seconds during cellular processing */
+        if (!mnp10_BLER_timer_started)
+        {
+            mnp10_BLER_timer_started = TRUE;
+            mnp10_BLER_timer = SEC_1 * 4;
+        }
+
+        if ((!mnp10_neg_cellular || (mnp10_neg_cellular && !mnp10_BLER_timer))
+            && !FBI_timer && fallback_allowed())
+        {
+            mnp10_BLER_timer_started = FALSE;
+            mnp10_retrain_state = INITIATE_FALLBACK;
+            return (MNP10_BG__FB_INIT);
+        }
+    }
+    else
+    {
+        mnp10_BLER_timer_started = FALSE;
+        mnp10_BLER_timer = 0;
+
+        /* Increase Block Error rate if line condition is poor.
+            Improvision on MNP10 spec for Microcom's SNR stairwell curve. */
+        if (dp10_EQM_status() == DP10_EQM_STATUS__RETRAIN)
+        {
+            /* If we're above 1200 BPS increase the BLER to match
+                Microcom SNR stair-well fallback curve */
+            if (mnp10_current_speed > BPS1200)
+            {
+                /* Use 100msec timer base for platform independence */
+                if (!mnp10_EQM_timer)
+                {
+                    /* Inc BLER by 1/10 of the MAX for bad line condition */
+                    mnp10_BLER += MAX_BLER/10;
+
+                    /* Reset timer */
+                    mnp10_EQM_timer = MSEC_100;
+                }
+            }
+        }
+    }
+
+    /*	Change state to fallback if a LM-FB command has been received from
+        the peer. */
+    if (mnp10_rcv_lm__fb_cmd)
+    {
+        mnp10_rcv_lm__fb_cmd = FALSE;
+        mnp10_retrain_state = ACCEPT_FALLBACK;
+        return (MNP10_BG__FB_RSP);
+    }
+
+    /* Change state to fallforward if a LM-FF command has been received
+        from the peer AND we don't have an LM-I awaiting transmission */
+    if (mnp10_rcv_lm__ff_cmd && mnp10_clear_to_build_lm())
+    {
+        if (fallforward_allowed() && FFI_timer <= MIN_1 * 7 )
+        {
+            mnp10_rcv_lm__ff_cmd = FALSE;
+            mnp10_retrain_state = ACCEPT_FALLFORWARD;
+
+            /* If V.22, delete buffered data frames to send the FF ACK ASAP */
+            if (mnp10_current_speed == BPS1200)
+            {
+                tx_holding = tx_data_holding = 0;
+            }
+
+            return (MNP10_BG__FF_RSP);
+        }
+        else if (tx_holding == 0)
+        {
+            mnp10_rcv_lm__ff_cmd = FALSE;
+            mnp10_build_lm(LM_TYPE__FF_NAK);
+            mnp10_send_lm();
+            return (MNP10_BG__IDLE);
+        }
+    }
+
+    /*	Change state to fallforward if the Fallforward interval timer has
+        expired, and we aren't waiting to ACK a remote FF. */
+    if (!FFI_timer && fallforward_allowed() &&
+        (mnp10_retrain_state != ACCEPT_FALLFORWARD))
+    {
+        mnp10_retrain_state = INITIATE_FALLFORWARD;
+        return (MNP10_BG__FF_INIT);
+    }
+
+	return (MNP10_BG__IDLE);
+}
+
+/*******************************************************************************
+/
+/	Routine: cd_present
+/
+/	Author : RSA
+/
+/	Creation Date: 03/13/92
+/
+/	Description : This Routine will determine if carrier is present after
+/		      qualifing it for the time specified in S-reg 10.
+/
+/	Input Parameters: None
+/
+/	Output Parameters: ubyte cd status
+/				FALSE - carrier not present
+/				TRUE - carrier present
+/
+/	Global Variables Changed: None
+/
+/	Users: mnp10_bg()
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+ubyte cd_present(void)
+{
+	ubyte cd_status;
+
+	cd_status = dp10_check_CD();
+
+/*	If not running V.32/V.32bis need to debounce the carrier detection  */
+	if (mnp10_current_speed < BPS4800)
+	{
+		if (cd_status)
+		{
+			mnp10_100ms_timer_started = FALSE;
+			mnp10_100ms_timer = 0;
+		}
+		else
+		{
+			if (!mnp10_100ms_timer_started)
+			{
+				mnp10_100ms_timer = mnp10_carrier_loss_delay;
+				mnp10_100ms_timer_started = TRUE;
+			}
+			else
+			{
+				if (!mnp10_100ms_timer)
+				{
+					mnp10_100ms_timer_started = FALSE;
+					mnp10_100ms_timer = 0;
+					return (FALSE);
+				}
+			}
+		}
+		return (TRUE);
+	}
+
+	return (cd_status);
+}
+
+/*******************************************************************************
+/
+/	Routine: highest_negot_speed
+/
+/	Author : RSA
+/
+/	Creation Date: 03/13/92
+/
+/	Description : This Routine will determine the speed negotiated with
+/		      the peer modem.
+/
+/	Input Parameters: None
+/
+/	Output Parameters: ubyte speed - Highest negotiated speed
+/				3 = 1200 bps
+/				4 = 2400 bps
+/				5 = 4800 bps
+/				6 = 7200 bps
+/				7 = 9600 bps
+/				8 = 12000 bps
+/				9 = 14400 bps
+/
+/	Global Variables Changed: None
+/
+/	Users: mnp10_retrain_init()
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+ubyte highest_negot_speed(void)
+{
+	if (mnp10_possible_rates & BPS14400_BIT)
+		return (BPS14400);
+	if (mnp10_possible_rates & BPS12000_BIT)
+		return (BPS12000);
+	if (mnp10_possible_rates & BPS9600_BIT)
+		return (BPS9600);
+	if (mnp10_possible_rates & BPS7200_BIT)
+		return (BPS7200);
+	if (mnp10_possible_rates & BPS4800_BIT)
+		return (BPS4800);
+	if (mnp10_possible_rates & BPS2400_BIT)
+		return (BPS2400);
+	if (mnp10_possible_rates & BPS1200_BIT)
+		return (BPS1200);
+	else
+		return(BPS1200);
+}
+
+/*******************************************************************************
+/
+/	Routine: update_mnp10_speed
+/
+/	Author : RSA
+/
+/	Creation Date: 03/13/92
+/
+/	Description : This Routine will determine the speed to fallforward
+/		      or fallback to.
+/
+/	Input Parameters: ubyte type - Type of speed needed.
+/				0 - Find next lower speed
+/				1 - Find next higher speed
+/
+/	Output Parameters: ubyte speed - Next lower or higher speed available
+/				3 = 1200 bps
+/				4 = 2400 bps
+/				5 = 4800 bps
+/				6 = 7200 bps
+/				7 = 9600 bps
+/				8 = 12000 bps
+/				9 = 14400 bps
+/
+/	Global Variables Changed:  None
+/
+/	Users: mnp10_retrain_bg()
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+ubyte update_mnp10_speed(ubyte type)
+{
+	ubyte speed;
+
+	speed = mnp10_current_speed;
+	mnp10_orig_speed = mnp10_current_speed;
+
+	if (type == FALLFORWARD)
+	{
+		switch (mnp10_current_speed)
+		{
+			case BPS1200:
+				if (mnp10_possible_rates & BPS2400_BIT)
+					speed = BPS2400;
+				else if (mnp10_possible_rates & BPS4800_BIT)
+					speed = BPS4800;
+				else if (mnp10_possible_rates & BPS7200_BIT)
+					speed = BPS7200;
+				else if (mnp10_possible_rates & BPS9600_BIT)
+					speed = BPS9600;
+				else if (mnp10_possible_rates & BPS12000_BIT)
+					speed = BPS12000;
+				else if (mnp10_possible_rates & BPS14400_BIT)
+					speed = BPS14400;
+				break;
+
+			case BPS2400:
+				if (mnp10_possible_rates & BPS4800_BIT)
+					speed = BPS4800;
+				else if (mnp10_possible_rates & BPS7200_BIT)
+					speed = BPS7200;
+				else if (mnp10_possible_rates & BPS9600_BIT)
+					speed = BPS9600;
+				else if (mnp10_possible_rates & BPS12000_BIT)
+					speed = BPS12000;
+				else if (mnp10_possible_rates & BPS14400_BIT)
+					speed = BPS14400;
+				break;
+
+			case BPS4800:
+				if (mnp10_possible_rates & BPS7200_BIT)
+					speed = BPS7200;
+				else if (mnp10_possible_rates & BPS9600_BIT)
+					speed = BPS9600;
+				else if (mnp10_possible_rates & BPS12000_BIT)
+					speed = BPS12000;
+				else if (mnp10_possible_rates & BPS14400_BIT)
+					speed = BPS14400;
+				break;
+
+			case BPS7200:
+				if (mnp10_possible_rates & BPS9600_BIT)
+					speed = BPS9600;
+				else if (mnp10_possible_rates & BPS12000_BIT)
+					speed = BPS12000;
+				else if (mnp10_possible_rates & BPS14400_BIT)
+					speed = BPS14400;
+				break;
+
+			case BPS9600:
+				if (mnp10_possible_rates & BPS12000_BIT)
+					speed = BPS12000;
+				else if (mnp10_possible_rates & BPS14400_BIT)
+					speed = BPS14400;
+				break;
+
+			case BPS12000:
+				if (mnp10_possible_rates & BPS14400_BIT)
+					speed = BPS14400;
+				break;
+		}
+	}
+	else
+	{
+		switch (mnp10_current_speed)
+		{
+			case BPS2400:
+				if (mnp10_possible_rates & BPS1200_BIT)
+					speed = BPS1200;
+				break;
+
+			case BPS4800:
+				if (mnp10_possible_rates & BPS2400_BIT)
+					speed = BPS2400;
+				else if (mnp10_possible_rates & BPS1200_BIT)
+					speed = BPS1200;
+				break;
+
+			case BPS7200:
+				if (mnp10_possible_rates & BPS4800_BIT)
+					speed = BPS4800;
+				else if (mnp10_possible_rates & BPS2400_BIT)
+					speed = BPS2400;
+				else if (mnp10_possible_rates & BPS1200_BIT)
+					speed = BPS1200;
+				break;
+
+			case BPS9600:
+				if (mnp10_possible_rates & BPS7200_BIT)
+					speed = BPS7200;
+				else if (mnp10_possible_rates & BPS4800_BIT)
+					speed = BPS4800;
+				else if (mnp10_possible_rates & BPS2400_BIT)
+					speed = BPS2400;
+				else if (mnp10_possible_rates & BPS1200_BIT)
+					speed = BPS1200;
+				break;
+
+			case BPS12000:
+				if (mnp10_possible_rates & BPS9600_BIT)
+					speed = BPS9600;
+				else if (mnp10_possible_rates & BPS7200_BIT)
+					speed = BPS7200;
+				else if (mnp10_possible_rates & BPS4800_BIT)
+					speed = BPS4800;
+				else if (mnp10_possible_rates & BPS2400_BIT)
+					speed = BPS2400;
+				else if (mnp10_possible_rates & BPS1200_BIT)
+					speed = BPS1200;
+				break;
+
+			case BPS14400:
+				if (mnp10_possible_rates & BPS12000_BIT)
+					speed = BPS12000;
+				else if (mnp10_possible_rates & BPS9600_BIT)
+					speed = BPS9600;
+				else if (mnp10_possible_rates & BPS7200_BIT)
+					speed = BPS7200;
+				else if (mnp10_possible_rates & BPS4800_BIT)
+					speed = BPS4800;
+				else if (mnp10_possible_rates & BPS2400_BIT)
+					speed = BPS2400;
+				else if (mnp10_possible_rates & BPS1200_BIT)
+					speed = BPS1200;
+		}
+	}
+	return (speed);
+}
+
+/*******************************************************************************
+/
+/	Routine: higher_speed_avail
+/
+/	Author : RSA
+/
+/	Creation Date: 04/27/92
+/
+/	Description : This Routine will determine if there is a higher speed
+/		      available.
+/
+/	Input Parameters: None
+/
+/	Output Parameters: ubyte status
+/				0 - Higher speed is not available
+/				1 - Higher speed is available
+/
+/	Global Variables Changed:  None
+/
+/	Users: mnp10_retrain_init(), fallforward_allowed()
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+ubyte higher_speed_avail(void)
+{
+	ubyte higher_rate_enabled;
+
+	switch (mnp10_current_speed)
+	{
+		case BPS1200:
+			higher_rate_enabled = mnp10_possible_rates & ~MASK_2400;
+			break;
+
+		case BPS2400:
+			higher_rate_enabled = mnp10_possible_rates & ~MASK_4800;
+			break;
+
+		case BPS4800:
+			higher_rate_enabled = mnp10_possible_rates & ~MASK_7200;
+			break;
+
+		case BPS7200:
+			higher_rate_enabled = mnp10_possible_rates & ~MASK_9600;
+			break;
+
+		case BPS9600:
+			higher_rate_enabled = mnp10_possible_rates & ~MASK_12000;
+			break;
+
+		case BPS12000:
+			higher_rate_enabled = mnp10_possible_rates & ~MASK_14400;
+			break;
+
+		case BPS14400:
+			higher_rate_enabled = FALSE;
+			break;
+	}
+	return (higher_rate_enabled);
+}
+
+
+
+/*******************************************************************************
+/
+/   Routine:	AGC10_to_rx_level
+/
+/   Author: 	RSA
+/
+/   Creation Date:	08/30/94
+/
+/   Description:	This routine will convert AGC10 to -dBm (+/- 1 dBm).
+/
+/   Input Parameters: ubyte - AGC10 value
+/
+/   Output Parameters: ubyte - Receive level in -dBm.
+/
+/   Global Variables Changed: None.
+/
+/   Users: update_tx_level()
+/
+/   *****************************************************************
+/   *                       Modifications                           *
+/   *****************************************************************
+/
+/   Author & Date:
+/   Description:
+/   Reason:
+*******************************************************************************/
+ubyte AGC10_to_rx_level(ubyte agc10)
+{
+    ubyte rxlvl;
+
+    /* Formula is based on Table D.1/MNP10, MNP10 Specification V1.1 */
+    rxlvl = (ubyte)(agc10 + (MNP10_AGC10_RX_LVL_MAX - (agc10/4)));
+
+    /* Check bounds from same Table (implied minus sign) */
+    if (rxlvl < MNP10_AGC10_RX_LVL_MAX)
+        rxlvl = MNP10_AGC10_RX_LVL_MAX;
+    else if (rxlvl > MNP10_AGC10_RX_LVL_MIN)
+        rxlvl = MNP10_AGC10_RX_LVL_MIN;
+
+    return rxlvl;
+}
+
+/*******************************************************************************
+/
+/	Routine:	update_tx_level
+/
+/	Author: 	RSA
+/
+/	Creation Date:	02/07/91
+/
+/	Description:	This routine will calculate the transmit level
+/			based upon the peers AGC10 and EQM10 values.
+/
+/	Input Parameters: None
+/
+/	Output Parameters: None
+/
+/	Global Variables Changed:
+/
+/	Users:
+/
+/	*****************************************************************
+/	*			  Modifications 			*
+/	*****************************************************************
+/
+/	Author & Date: RSA
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+void update_tx_level(void)
+{
+    ubyte attenuation,next_tx_level,rx_level;
+
+    /* Don't update tx levels if not running in "cellular mode" */
+    if (!mnp10_neg_cellular)
+    {
+        mnp10_tx_level = MNP10_TX_LVL_IGNORE;
+        return;
+    }
+
+    /* Use custom default level for first tx level change */
+    if (mnp10_initial_tx_level)
+    {
+        /* This level is based on mobile (cellular) or PSTN modem configurations */
+        /* Note: This level is platform specific */
+        next_tx_level = dp10_get_initial_tx_lvl();
+        mnp10_initial_tx_level = FALSE;
+    }
+
+    /* Else, don't update tx level if remote's data is unkown
+        or we're at 1200 BPS (V.22 should always be -10 dBm) */
+    else if ((mnp10_RCV_EQM10_value == LMI_RCV__UNAVAILABLE) ||
+        (mnp10_RCV_AGC10_value == LMI_RCV__UNAVAILABLE) ||
+        (mnp10_current_speed == BPS1200))
+    {
+        return;
+    }
+
+    /* Else, good data, and not initial level , and not 1200 */
+    else
+    {
+        /* Compute remote's receive level from it's AGC10s */
+        rx_level = AGC10_to_rx_level(mnp10_RCV_AGC10_value);
+
+        /* If we have a valid EQM10 and we changed tx levels last time */
+        if ((mnp10_last_RCV_EQM10_value < MNP10_EQM10_MAX) &&
+            (mnp10_tx_level != mnp10_last_tx_level))
+        {
+            /* If the link has gotten more noisy */
+            if (mnp10_RCV_EQM10_value > mnp10_last_RCV_EQM10_value)
+            {
+                /* If we went louder, go softer */
+                if (mnp10_tx_level < mnp10_last_tx_level)
+                    next_tx_level = mnp10_tx_level + 4;
+                /* Else we went softer, so go louder */
+                else
+                    next_tx_level = mnp10_tx_level - 4;
+            }
+            /* Else the link has gotten less noisy */
+            else
+            {
+                /* If we went louder, go louder */
+                if (mnp10_tx_level < mnp10_last_tx_level)
+                    next_tx_level = mnp10_tx_level - 2;
+                /* Else we went softer, so go softer */
+                else
+                    next_tx_level = mnp10_tx_level + 2;
+            }
+        }
+        /* Else invalid EQM10 or we haven't changed tx levels, so... */
+        /* If we're loud, go softer */
+        else if ((mnp10_tx_level >= MNP10_TX_LVL_MAX) &&
+            (mnp10_tx_level <= MNP10_TX_LVL_17DBM))
+            next_tx_level = mnp10_tx_level + 2;
+        /* Else if we're soft, go louder */
+        else if ((mnp10_tx_level >= MNP10_TX_LVL_18DBM) &&
+            (mnp10_tx_level <= MNP10_TX_LVL_27DBM))
+            next_tx_level = mnp10_tx_level - 2;
+        /* Else if the remote's rx level is < -32dBm go louder */
+        else if (rx_level > 32)
+            next_tx_level = mnp10_tx_level - 2;
+        /* Else go softer */
+        else
+            next_tx_level = mnp10_tx_level + 2;
+    }
+
+    /* Bounds checking... */
+    /* Never go above the max level */
+    if (next_tx_level < MNP10_TX_LVL_MAX)
+    {
+        next_tx_level = MNP10_TX_LVL_MAX;
+    }
+    else
+    {
+        /* Never go below the min level */
+        if (next_tx_level > MNP10_TX_LVL_MIN)
+            next_tx_level = MNP10_TX_LVL_MIN;
+
+        /* Don't transmit so low that the remote receives us below -40 dBm. */
+
+         /* Compute link attenuation in our TX direction */
+        attenuation = mnp10_tx_level - rx_level;
+
+        /* Adjust tx level if our signal is received below -40 dBm */
+        if ((next_tx_level - attenuation) >= MNP10_RX_LVL_MIN)
+            next_tx_level = MNP10_RX_LVL_MIN + attenuation;
+    }
+
+    /* Set new MNP10 parameters (if vaild) */
+    if ((mnp10_RCV_EQM10_value < MNP10_EQM10_MAX) &&
+        (mnp10_RCV_AGC10_value < MNP10_AGC10_MAX))
+    {
+        mnp10_last_RCV_EQM10_value = mnp10_RCV_EQM10_value;
+        mnp10_last_RCV_AGC10_value = mnp10_RCV_AGC10_value;
+    }
+
+    /* Save last level and set new TX level */
+    mnp10_last_tx_level = mnp10_tx_level;
+    mnp10_tx_level = next_tx_level;
+}
+
+/*******************************************************************************
+/
+/	Routine:	check_lmi_rcv
+/
+/	Author: 	RSA
+/
+/	Creation Date:	02/07/91
+/
+/	Description:	This routine will check the received sequence numbers
+/			in the LMI packets.
+/
+/	Input Parameters: None
+/
+/	Output Parameters: None
+/
+/	Global Variables Changed: mnp10_last_LMI_RCV_recv_seq_num,
+/				  mnp10_LMI_send_seq_num,
+/				  mnp10_LMI_nak_confirm,
+/
+/	Users: mnp10_proc_rcv_frame()
+/
+/	*****************************************************************
+/	*			  Modifications 			*
+/	*****************************************************************
+/
+/	Author & Date:
+/	Description:
+/	Reason:
+*******************************************************************************/
+void check_lmi_rcv(void)
+{
+    ubyte tmp = 1;
+
+    /* Parse LMI_RSN */
+    if (mnp10_LMI_RCV_nak_request == mnp10_LMI_nak_confirm)
+    {
+        if (mnp10_LMI_RCV_recv_seq_num >= mnp10_last_LMI_RCV_recv_seq_num)
+        {
+            tmp += mnp10_LMI_RCV_recv_seq_num - mnp10_last_LMI_RCV_recv_seq_num;
+        }
+        else
+        {
+            tmp += 0x7f - (mnp10_last_LMI_RCV_recv_seq_num - mnp10_LMI_RCV_recv_seq_num);
+        }
+
+        mnp10_last_LMI_RCV_recv_seq_num = mnp10_LMI_RCV_recv_seq_num;
+        mpg_do_inc_dynamic_tx(tmp);
+    }
+    else
+    {
+        mnp10_LMI_send_seq_num = mnp10_LMI_RCV_recv_seq_num;
+        mnp10_LMI_nak_confirm = mnp10_LMI_RCV_nak_request;
+        mpg_div_dynamic_tx();
+    }
+}
+
+
