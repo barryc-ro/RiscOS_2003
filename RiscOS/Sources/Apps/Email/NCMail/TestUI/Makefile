@@ -291,31 +291,3 @@ abs.!RI_D: $(OBJSD) o.dirs
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
-o.engtempui:	c.engtempui
-o.engtempui:	C:h.string
-o.engtempui:	C:h.kernel
-o.engtempui:	C:h.swis
-o.engtempui:	C:h.stdlib
-o.engtempui:	C:tboxlibs.h.event
-o.engtempui:	C:tboxlibs.h.wimp
-o.engtempui:	C:tboxlibs.h.toolbox
-o.engtempui:	C:tboxlibs.h.toolbox
-o.engtempui:	C:tboxlibs.h.wimplib
-o.engtempui:	C:tboxlibs.h.gadgets
-o.engtempui:	C:tboxlibs.h.window
-o.engtempui:	C:DebugLib.h.DebugLib
-o.engtempui:	C:Email.Common.h.bool
-o.engtempui:	C:Email.Common.h.types
-o.engtempui:	^.Build.h.engtypes
-o.engtempui:	C:h.stdio
-o.engtempui:	C:h.time
-o.engtempui:	C:Email.Common.h.bool
-o.engtempui:	C:Email.Common.h.types
-o.engtempui:	^.Engine.h.enginit
-o.engtempui:	C:h.kernel
-o.engtempui:	C:tboxlibs.h.wimp
-o.engtempui:	C:tboxlibs.h.toolbox
-o.engtempui:	^.Engine.h.engtypes
-o.engtempui:	^.Build.h.enguiapi
-o.engtempui:	C:h.kernel
-o.engtempui:	^.Build.h.engtypes
