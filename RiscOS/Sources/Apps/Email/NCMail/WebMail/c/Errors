@@ -20,13 +20,277 @@
 #include "Popup.h"
 #include "UserSel.h"
 
+#include <stdarg.h>
+
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
+#define Error_SysEnv_Buffer	260
+
+#define Error_ErrorLevelFail	"The level specified in NCMail$ErrorLevel is out of range"
+#define Error_InitNoMemory	"Not enough memory available to initialise the error system"
+#define Error_InvalidFile	"The file specified in NCMail$ErrorsFile can't be created"
 
 /* -------------------------------------- GLOBAL VARIABLES -------------------------------------- */
 
 
 /* ----------------------------------------- FUNCTIONS ------------------------------------------ */
+
+/************************************************************************/
+/* error_initialise                                                     */
+/*                                                                      */
+/* Function initialises the error reporting system.  Must read the      */
+/* state of NCMail$ErrorLevel and NCMail$ErrorsToThrowback              */
+/*                                                                      */
+/* Parameters: void.                                                    */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void error_initialise(void)
+{
+  _kernel_oserror	*er = NULL;
+  char			*buffer = NULL;
+  int32		 levelconv = 0;
+
+  status.error_level = 0;
+  status.error_throwback = false;
+  status.error_filename = NULL;
+
+  dprintf(("UI", "******************************************************************\n"));
+  dprintf(("UI", "Error Reporting System Initialising\n"));
+
+  /* Set the Errors system variable to NULL */
+  _kernel_setenv(Error_ReportError, "");
+
+  if ((buffer = malloc(Error_SysEnv_Buffer)) == NULL)
+  {
+    /* Don't know what to do.  What do you say when you can't allocate memory for your error
+     * reporting!
+     */
+    error_output_to_sysvar(Error_ReportError, "%s", Error_InitNoMemory);
+  }
+  else
+  {
+    /* Read the Level system variable */
+    er = _kernel_getenv(Error_LevelSysVar, buffer, Error_SysEnv_Buffer);
+    if (er == NULL)
+    {
+      /* System variable setup.  Convert to integer and see if it is in the range. */
+      levelconv = atoi(buffer);
+
+      if ( (levelconv >= 0) && (levelconv <= ErrorLevel_MaxLevel) )
+      {
+        dprintf(("UI", "Selected level: %d\n", levelconv));
+        status.error_level = levelconv;
+      }
+      else
+      {
+        dprintf(("UI", "No error reporting - value out of range\n"));
+        error_output_to_sysvar(Error_ReportError, "%s", Error_ErrorLevelFail);
+      }
+    }
+    else
+    {
+      /* No debugging. */
+      dprintf(("UI", "Er (ErrorLevel):  %s\n", er->errmess));
+    }
+
+    /* Read the Throwback system variable */
+    buffer[0] = '\0';
+    er = _kernel_getenv(Error_Throwback, buffer, Error_SysEnv_Buffer);
+    if (er == NULL)
+    {
+      /* System variable set.  Doesn't matter what with, just that it is setup */
+      dprintf(("UI", "Throwback: %s\n", buffer));
+
+      if ( (nb_ensure_module(0,"OSVersion") == FALSE) && (nb_ensure_module(0,"DDEUtils") == TRUE) )
+      {
+        /* RiscOS, rather than STBOS or NCOS */
+        status.error_throwback = true;
+      }
+    }
+    else
+    {
+      dprintf(("UI", "Er (Throwback):  %s\n", er->errmess));
+      status.error_throwback = false;
+    }
+
+    /* Read the File system variable */
+    buffer[0] = '\0';
+    er = _kernel_getenv(Error_Filename, buffer, Error_SysEnv_Buffer);
+    if (er == NULL)
+    {
+      /* System variable set.  Doesn't matter what with, just that it is setup */
+      dprintf(("UI", "Filename: %s\n", buffer));
+
+      if ((status.error_filename = malloc(strlen(buffer) + 2)) == NULL)
+      {
+        dprintf(("UI", "Unable to allocate memory to store filename!!!!\n"));
+      }
+      else
+      {
+        strcpy(status.error_filename, buffer);
+      }
+    }
+    else
+    {
+      dprintf(("UI", "Er (Filename):  %s\n", er->errmess));
+    }
+
+    free(buffer);
+  }
+  dprintf(("UI", "******************************************************************\n"));
+}
+
+
+/************************************************************************/
+/* error_atexit                                                         */
+/*                                                                      */
+/* Function called on termination to tidy up.                           */
+/*                                                                      */
+/* Parameters: void.                                                    */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void error_atexit(void)
+{
+  /* Free up status.error_filename */
+  if (status.error_filename != NULL)
+    free(status.error_filename);
+}
+
+
+/************************************************************************/
+/* error_display_error_dialogue                                         */
+/*                                                                      */
+/* Function puts the supplied text into a RiscOS error box.             */
+/*                                                                      */
+/* Parameters: format - printf-style format.                            */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void error_display_error_dialogue(const char *format, ...)
+{
+  _kernel_oserror	 er;
+  _kernel_oserror	*is_error = NULL;
+  _kernel_swi_regs	 regs;
+  va_list		 p;
+
+  er.errnum = 0;
+
+  va_start(p, format);
+  vsprintf(er.errmess, format, p);
+  va_end(p);
+
+  /* Setup registers */
+  regs.r[0] = (int) &er;
+  regs.r[1] = 1;
+  regs.r[2] = (int) nb_messagetrans_lookup(message_block, "_TaskName");
+
+  is_error = _kernel_swi(Wimp_ReportError, &regs, &regs);
+}
+
+
+/************************************************************************/
+/* error_output_to_sysvar                                               */
+/*                                                                      */
+/* Function outputs the printf-style formatted text to the specified    */
+/* system variable.                                                     */
+/*                                                                      */
+/* Parameters: var    - system variable.                                */
+/*             format - printf-style format.                            */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void error_output_to_sysvar(char *var, const char *format, ...)
+{
+  _kernel_oserror	 er;
+  va_list		 p;
+
+  er.errnum = 0;
+
+  va_start(p, format);
+  vsprintf(er.errmess, format, p);
+  va_end(p);
+
+  _kernel_setenv(var, er.errmess);
+}
+
+
+/************************************************************************/
+/* error_output_to_file                                                 */
+/*                                                                      */
+/* Function outputs the printf-style formatted text to the file pointed */
+/* to by status.error_filename.                                         */
+/*                                                                      */
+/* Parameters: format - printf-style format.                            */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void error_output_to_file(const char *format, ...)
+{
+  _kernel_oserror	 er;
+  va_list		 p;
+  FILE			*fp = NULL;
+
+  er.errnum = 0;
+
+  va_start(p, format);
+  vsprintf(er.errmess, format, p);
+  va_end(p);
+
+  fp = fopen(status.error_filename, "a+");
+  if (fp == NULL)
+  {
+    /* File didn't open */
+    error_display_error_dialogue("%s", Error_InvalidFile);
+  }
+  else
+  {
+    fprintf(fp, "%s\n", er.errmess);
+    fclose(fp);
+  }
+}
+
+
+/************************************************************************/
+/* error_output_to_throwback                                            */
+/*                                                                      */
+/* Function outputs the printf-style formatted text to DDEUtils if      */
+/* running.                                                             */
+/*                                                                      */
+/* Parameters: file   - file error is in.                               */
+/*             line   - line problem is at.                             */
+/*             format - printf-style format.                            */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void error_output_to_throwback(char *file, int line_num, const char *format, ...)
+{
+  _kernel_oserror	 er;
+  _kernel_swi_regs	 regs;
+  va_list		 p;
+
+  va_start (p, format);
+  vsprintf (er.errmess, format, p);
+  va_end (p);
+
+  regs.r[0] = 2;
+  regs.r[1] = NULL;
+  regs.r[2] = (int) file;
+  regs.r[3] = line_num;
+  regs.r[4] = 0;
+  regs.r[5] = (int) er.errmess;
+
+  _kernel_swi(DDEUtils_ThrowbackSend, &regs, &regs);
+}
+
+
 
 /************************************************************************/
 /* error_display                                                        */
@@ -38,6 +302,74 @@
 /* Returns:    void.                                                    */
 /*                                                                      */
 /************************************************************************/
+void error_display(ui_errorcodes errnum, char *errmess, char *file, int line)
+{
+  switch(status.error_level)
+  {
+    case(ErrorLevel_None):
+    {
+      /* Do nothing */
+      break;
+    }
+    case(ErrorLevel_SysVar):
+    {
+      error_output_to_sysvar(Error_ReportError, "%s %d: %s\n",
+                             nb_messagetrans_lookup(message_block, "ERROR_Error"), errnum, errmess);
+      break;
+    }
+    case(ErrorLevel_File):
+    {
+      error_output_to_file("%s %d: %s\n", nb_messagetrans_lookup(message_block, "ERROR_Error"),
+                           errnum, errmess);
+      /* Output Sysvar too */
+      error_output_to_sysvar(Error_ReportError, "%s %d: %s\n",
+                             nb_messagetrans_lookup(message_block, "ERROR_Error"), errnum, errmess);
+      break;
+    }
+    case(ErrorLevel_WimpFriendly):
+    {
+      error_display_error_dialogue(nb_messagetrans_lookup(message_block, "ERROR_Report"), errnum);
+      /* Output Sysvar too */
+      error_output_to_sysvar(Error_ReportError, "%s %d: %s\n",
+                             nb_messagetrans_lookup(message_block, "ERROR_Error"), errnum, errmess);
+      break;
+    }
+    case(ErrorLevel_WimpTechnical):
+    {
+      error_display_error_dialogue("%s %d: %s\n", nb_messagetrans_lookup(message_block,
+                                   "ERROR_Error"), errnum, errmess);
+      /* Output Sysvar too */
+      error_output_to_sysvar(Error_ReportError, "%s %d: %s\n",
+                             nb_messagetrans_lookup(message_block, "ERROR_Error"), errnum, errmess);
+      break;
+    }
+    case(ErrorLevel_WimpFullInfo):
+    {
+      error_display_error_dialogue("%s %d: %s (%s, %s %d)\n", nb_messagetrans_lookup(message_block,
+                                   "ERROR_Error"), errnum, errmess, file,
+                                   nb_messagetrans_lookup(message_block, "ERROR_Line"), line);
+      /* Output Sysvar too */
+      error_output_to_sysvar(Error_ReportError, "%s %d: %s\n",
+                             nb_messagetrans_lookup(message_block, "ERROR_Error"), errnum, errmess);
+      break;
+    }
+  }
+
+  if (status.error_throwback == true)
+  {
+    error_output_to_throwback(file, line, "%s %d: %s",
+                              nb_messagetrans_lookup(message_block, "ERROR_Error"), errnum,
+                              errmess);
+
+  }
+
+  /* Output to DebugLib if available */
+  dprintf(("UI", "****************************************************************************\n"));
+  dprintf(("Error", "Error %d: %s (%s, line %d)\n", errnum, errmess, file, line));
+  dprintf(("UI", "****************************************************************************\n"));
+}
+
+
 void _error_display(int32 code)
 {
   dprintf(("UI", "****************************************************************************\n"));
