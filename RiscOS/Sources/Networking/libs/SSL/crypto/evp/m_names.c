@@ -63,6 +63,7 @@ char *name;
 		(strcmp(name,LN_md5withRSAEncryption) == 0) ||
 		(strcmp(name,LN_md5) == 0))
 		return(EVP_md5());
+#ifndef NO_SHA
 	if (	(strcmp(name,SN_sha) == 0) ||
 		(strcmp(name,SN_shaWithRSAEncryption) == 0) ||
 		(strcmp(name,LN_shaWithRSAEncryption) == 0) ||
@@ -79,6 +80,7 @@ char *name;
 	if (	(strcmp(name,SN_dsaWithSHA1) == 0) ||
 		(strcmp(name,LN_dsaWithSHA1) == 0))
 		return(EVP_dss1());
+#endif
 	return(NULL);
 	}
 
