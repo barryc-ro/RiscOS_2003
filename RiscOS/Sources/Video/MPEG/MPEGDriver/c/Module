@@ -105,7 +105,7 @@ extern program_element_structure_t Stream;
 #else
 program_element_structure_t Stream;
 #endif
-    /*  
+    /*
      *  Unfortunately, this is a structure not a class, so it forces all items to be global; however
      *  it's the only way to make everything stream-handle-relative. The naming convention is broken
      *  because it's going to be referenced all the time, and Module_Stream feels too long a name...
@@ -118,6 +118,7 @@ int Module_OriginYOffset; /* vertical       "      "     "     "     "     "    
 void *Module_PrivateWord; /* so we don't have to worry about passing pw around as a parameter to dozens of functions */
 int Module_MessageFD [4] = { 0, 0, 0, 0 };  /* message file descriptor */
 bool Module_Dying = false; /* for the use of ModHdr2.s */
+bool CallBack_Pending = false; /* is there a CallBack for our init service calls pending? */
 
 /*********************/
 /* Private variables */
@@ -151,6 +152,7 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
   IGNORE(cmd_tail);
 
   Module_PrivateWord = pw;
+  CallBack_Pending = false;
 
   debug_initialise ("MPEGDriver", "null:", "");
   debug_atexit ();
@@ -177,7 +179,7 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
   {
     SecondaryModuleInitialised = true;
 #endif
-    
+
     e = _swix (MessageTrans_OpenFile, _INR(0,2), &Module_MessageFD, "Resources:$.Resources.MPEGDriver.Messages", 0);
   }
   if (!e)
@@ -193,7 +195,7 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
   }
   if (!e)
   {
-    
+
     /* Initialise the program_element_structure_t */
     Stream.csh = NULL_CSH;                        /* signals no streams are open yet */
     Stream.s_flags.video_present = false;
@@ -203,7 +205,7 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
     Stream.discarded_audio_bit_buffer_data = -1;
     /* Cache mode variables as though a mode change had just happened */
     Service_ServiceModeChange ();
-    
+
     /* Attempt to register program element handlers */
     /* Don't complain if it fails, it may be that we're in ROM and MPEGTransport hasn't initialised yet */
     _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3),
@@ -212,9 +214,16 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
         1 << PEHFlags_RequiredFlag_Shift, 2 /* MPEG-2 video */, video_program_element_handler, pw);
     _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3),
         2 << PEHFlags_RequiredFlag_Shift, 3 /* MPEG-1 audio */, audio_program_element_handler, pw);
-    
+
     /* Set up Module_AudioSpeedIndicatorOffset (can't be done on static init) */
     Module_AudioSpeedIndicatorOffset = (char *) &Stream.audio.speed_indicator - (char *) &Stream;
+  }
+
+  if (!e)
+  {
+    /* Create a CallBack to issue our "starting" service calls */
+    e = _swix (OS_AddCallBack, _INR(0,1), CallBack_Entry, pw);
+    if (!e) CallBack_Pending = true;
   }
 
   if (e && MessagesOpen) _swix (MessageTrans_CloseFile, _IN(0), &Module_MessageFD);
@@ -225,6 +234,31 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
 #if Debugging==1 && DebugProtectMemory==1
   TrapVect_InvalidatePages ();
 #endif
+  return e;
+}
+
+/******	CallBack_Handler() *****************************************************
+
+Purpose:	Issue service calls to inform interested parties that we've started
+In:		Standard args
+Out:		Pointer to error block if failed
+
+***************************************************************************/
+
+_kernel_oserror *CallBack_Handler(_kernel_swi_regs *r, void *pw)
+{
+  _kernel_oserror *e = NULL;
+  IGNORE(r);
+  IGNORE(pw);
+
+  /* Issue the "video unit has started" service call */
+  e = _swix (OS_ServiceCall, _INR(0,1), (3<<1) | 1, Service_MPEGControlStarting);
+  if (!e)
+  {
+    /* Issue the "audio unit has started" service call */
+    e = _swix (OS_ServiceCall, _INR(0,1), (5<<1) | 1, Service_MPEGControlStarting);
+  }
+
   return e;
 }
 
@@ -245,7 +279,7 @@ extern _kernel_oserror *Module_Final(int fatal, int podule, void *pw)
 #if Debugging==1 && DebugProtectMemory==1
   TrapVect_RevalidatePages ();
 #endif
-  
+
   if (Stream.video.state != stream_closed || Stream.audio.state != stream_closed)
   {
     e = Mess_GenerateError ("Err_CantDie", errno_CANT_DIE, 0);
@@ -254,13 +288,28 @@ extern _kernel_oserror *Module_Final(int fatal, int podule, void *pw)
   {
     handler_t *ptr = Module_Handlers;
     handler_t *next;
+
+    if (CallBack_Pending)
+    {
+      /* If the CallBack is still pending, remove it */
+      _swix (OS_RemoveCallBack, _INR(0,1), CallBack_Entry, pw);
+      CallBack_Pending = false;
+    }
+    else
+    {
+      /* Issue the "video unit has died" service call */
+      _swix (OS_ServiceCall, _INR(0,1), (2<<1) | 1, Service_MPEGControlStarting);
+      /* Issue the "audio unit has died" service call */
+      _swix (OS_ServiceCall, _INR(0,1), (4<<1) | 1, Service_MPEGControlStarting);
+    }
+
     while (ptr != NULL)
     {
       next = ptr->next;
       _swix (OS_Module, _IN(0)|_IN(2), 7 /*ModHandReason_Free*/, ptr);
       ptr = next;
     }
-    
+
     _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
         2 << PEHFlags_RequiredFlag_Shift, 3, audio_program_element_handler, pw);
     _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
