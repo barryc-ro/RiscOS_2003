@@ -17,6 +17,7 @@ typedef struct
 	Desk_linklist_header	header;
 	void*			fn;
 	void*			pw;
+	int			afternull;
 }
 handler_block;
 
@@ -30,7 +31,14 @@ void	TaskModule_RemoveCallBackFn( _kernel_swi_regs* r, void* pw)
 	handler_block*	handler;
 	for ( handler=Desk_LinkList_FirstItem( &handler_list); handler; handler=Desk_LinkList_NextItem( &handler->header))
 	{
-		if ( handler->fn==(void*) r->r[1] && handler->pw==(void*) r->r[2])
+		if ( handler->fn==(void*) r->r[1] && handler->pw==(void*) r->r[2]
+				&&
+				(
+					( (r->r[0] & 1)==0 && handler->afternull==0)
+					||
+					( (r->r[0] & 1)==1 && handler->afternull>0)
+				)
+			)
 		{
 			RemoveHandler( handler);
 			break;
@@ -40,13 +48,35 @@ void	TaskModule_RemoveCallBackFn( _kernel_swi_regs* r, void* pw)
 	Desk_UNUSED( pw);
 }
 
+
+static Desk_bool	NullHandler( Desk_event_pollblock* event, void* reference)
+{
+	handler_block*	handler = (handler_block*) reference;
+	Desk_Debug_Printf( Desk_error_PLACE "Running handler 0x%p\n", handler);
+	if ( handler->fn)	TaskModule_CallBack_CallHandler( handler->fn, handler->pw);
+	RemoveHandler( handler);
+	return Desk_bool_FALSE;
+	Desk_UNUSED( event);
+}
+
 static Desk_bool	NonZeroPollWordHandler( Desk_event_pollblock* event, void* reference)
 {
 	handler_block*	handler = (handler_block*) reference;
 	
-	Desk_Debug_Printf( Desk_error_PLACE "Running handler 0x%p\n", handler);
-	if ( handler->fn)	TaskModule_CallBack_CallHandler( handler->fn, handler->pw);
-	RemoveHandler( handler);
+	if ( handler->afternull==1)
+	{
+		handler->afternull=2;
+		TaskModule_globalblock.pollword--;
+		Desk_Event_Release( Desk_event_NONZEROPOLLWORD, Desk_event_ANY, Desk_event_ANY, NonZeroPollWordHandler, handler);
+		Desk_Event_Claim( Desk_event_NULL, Desk_event_ANY, Desk_event_ANY, NullHandler, handler);
+	}
+	
+	else
+	{
+		Desk_Debug_Printf( Desk_error_PLACE "Running handler 0x%p\n", handler);
+		if ( handler->fn)	TaskModule_CallBack_CallHandler( handler->fn, handler->pw);
+		RemoveHandler( handler);
+	}
 	
 	return Desk_bool_FALSE;
 	
@@ -58,10 +88,19 @@ static void	RemoveHandler( handler_block* handler)
 {
 	Desk_Debug_Printf( Desk_error_PLACE "RemoveHandler called, handler = 0x%p\n", handler);
 	Desk_LinkList_Unlink( &handler_list, &handler->header);
-	Desk_Event_Release( Desk_event_NONZEROPOLLWORD, Desk_event_ANY, Desk_event_ANY, NonZeroPollWordHandler, handler);
+	
+	if ( handler->afternull==1 || handler->afternull==0)
+	{
+		Desk_Event_Release( Desk_event_NONZEROPOLLWORD, Desk_event_ANY, Desk_event_ANY, NonZeroPollWordHandler, handler);
+		TaskModule_globalblock.pollword--;
+	}
+	
+	if ( handler->afternull==2)
+		Desk_Event_Release( Desk_event_NULL, Desk_event_ANY, Desk_event_ANY, NullHandler, handler);
+	
 	Desk_DeskMem_Free( handler);
-	TaskModule_globalblock.pollword--;
 }
+
 
 
 
@@ -69,11 +108,13 @@ void	TaskModule_AddCallBackFn( _kernel_swi_regs* r, void* pw)
 {
 	handler_block*	handler;
 	int		flags = r->r[0];
-	if ( flags!=0)	Desk_Error2_HandleTextf( "Unrecognised r0 (0x%08x) passed to TaskModule_AddCallBack", flags);
-	handler = Desk_DeskMem_MallocType( handler_block);
-	handler->fn	= (void*) r->r[1];
-	handler->pw	= (void*) r->r[2];
+	if ( (flags & (~1)) !=0 )
+		Desk_Error2_HandleTextf( "Unrecognised r0 (0x%08x) passed to TaskModule_AddCallBack", flags);
 	
+	handler = Desk_DeskMem_MallocType( handler_block);
+	handler->fn		= (void*) r->r[1];
+	handler->pw		= (void*) r->r[2];
+	handler->afternull	= (r->r[0] & 1) ? 1 : 0;
 	{
 		int	irqoff = _kernel_irqs_disabled();
 		if ( !irqoff)	_kernel_irqs_off();
