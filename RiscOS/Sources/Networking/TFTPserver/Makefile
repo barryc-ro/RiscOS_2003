@@ -49,7 +49,7 @@ AFLAGS = ${DEPENDS} -Stamp -quit
 CFLAGS  = -c -Wp ${DEFINES} ${INCLUDES} ${DEPENDS}
 CMHGFLAGS = -p ${DEPENDS}
 
-LDFLAGS = -S symbols
+#LDFLAGS = -S symbols
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
