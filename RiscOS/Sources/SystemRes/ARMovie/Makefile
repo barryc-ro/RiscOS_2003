@@ -101,6 +101,10 @@ export_hdrs:
         @amu_machine export PHASE=hdrs
         @Up 2
         |
+        @Dir Sound16.G723-1
+        @amu_machine export PHASE=hdrs
+        @Up 2
+        |
         @Dir Sound16.g723_24
         @amu_machine export PHASE=hdrs
         @Up 2
@@ -133,6 +137,10 @@ export_libs:
         @Up 2
         |
         @Dir Sound16.g721
+        @amu_machine export PHASE=libs
+        @Up 2
+        |
+        @Dir Sound16.G723-1
         @amu_machine export PHASE=libs
         @Up 2
         |
@@ -297,6 +305,11 @@ clean:
         @Up 2
         |
         @Dir Sound16.g721
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.G723-1
         @amu_machine clean
         @stripdepnd
         @Up 2
@@ -2002,11 +2015,15 @@ g721_Encode_16:       Sound16.g721.Decode \
         CMF Sound16.g721.Encodex2                  $(AUD16DIR).g721.Encodex2
         CMF Sound16.g721.Resources.CInfo           $(AUD16DIR).g721.CInfo
 
-G723-1_Decode_16:     Sound16.g721.Play \
-                      Sound16.g721.Resources.Info
+G723-1_Decode_16:     Sound16.G723-1.Play \
+                      Sound16.G723-1.Resources.Info
         MMD $(AUD16DIR).G723-1
         CMF Sound16.G723-1.Play                    $(AUD16DIR).G723-1.Play
         CMF Sound16.G723-1.Resources.Info          $(AUD16DIR).G723-1.Info
+Sound16.G723-1.Play:
+        @Dir Sound16.G723-1
+        @amu_machine
+        @Up 2
 
 G723-1_Encode_16:     Sound16.G723-1.Decode \
                       Sound16.G723-1.Encode \

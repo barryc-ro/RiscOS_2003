@@ -1,0 +1,1049 @@
+/*
+**
+** File:    lpc.c
+**
+** Description: Functions that implement linear predictive coding
+**      (LPC) operations.
+**
+** Functions:
+**
+**  Computing LPC coefficients:
+**
+**      Comp_Lpc()
+**      Durbin()
+**
+**  Perceptual noise weighting:
+**
+**      Wght_Lpc()
+**      Error_Wght()
+**
+**  Computing combined impulse response:
+**
+**      Comp_Ir()
+**
+**  Computing ringing response:
+**
+**      Sub_Ring()
+**      Upd_Ring()
+**
+**  Synthesizing speech:
+**
+**      Synt()
+**      Spf()
+*/
+
+/*
+    ITU-T G.723 Speech Coder   ANSI-C Source Code     Version 5.00
+    copyright (c) 1995, AudioCodes, DSP Group, France Telecom,
+    Universite de Sherbrooke.  All rights reserved.
+*/
+
+#include <stdio.h>
+
+#include "typedef.h"
+#include "basop.h"
+#include "cst_lbc.h"
+#include "tab_lbc.h"
+#include "lbccodec.h"
+#include "coder.h"
+#include "decod.h"
+#include "util_lbc.h"
+#include "lpc.h"
+#include "cod_cng.h"
+
+/*
+**
+** Function:        Comp_Lpc()
+**
+** Description:     Computes the tenth-order LPC filters for an
+**          entire frame.  For each subframe, a
+**          Hamming-windowed block of 180 samples,
+**          centered around the subframe, is used to
+**          compute eleven autocorrelation coefficients.
+**          The Levinson-Durbin algorithm then generates
+**          the LPC coefficients.  This function requires
+**          a look-ahead of one subframe, and hence
+**          introduces a 7.5 ms encoding delay.
+**
+** Links to text:   Section 2.4
+**
+** Arguments:
+**
+**  Word16 *UnqLpc      Empty Buffer
+**  Word16 PrevDat[]    Previous 2 subframes of samples (120 words)
+**  Word16 DataBuff[]   Current frame of samples (240 words)
+**
+** Outputs:
+
+**
+**  Word16 UnqLpc[]     LPC coefficients for entire frame (40 words)
+**
+** Return value:    None
+**
+*/
+void  Comp_Lpc( Word32 *UnqLpc, Word16 *PrevDat, Word16 *DataBuff )
+{
+    int   i,j,k ;
+
+    static Word32   Dpnt[Frame+LpcFrame-SubFrLen] ;
+    Word32  *DpntP = Dpnt;
+    static Word32   Vect[LpcFrame] ;
+    static Word32   Acf_sf[LpcOrderP1*SubFrames];
+    static Word32   ShAcf_sf[SubFrames];
+    Word32   Exp   ;
+    Word32   *curAcf;
+    Word32   Pk2;
+
+    Word32   Acc1   ;
+
+    /*
+     * Generate a buffer of 360 samples.  This consists of 120 samples
+     * from the previous frame and 240 samples from the current frame.
+     */
+    for ( i = LpcFrame-SubFrLen ; i > 0  ; i -- )
+        *DpntP++ = *PrevDat++ ;
+    for ( i = Frame ; i > 0 ; i -- )
+        *DpntP++ = *DataBuff++ ;
+    DpntP -= LpcFrame-SubFrLen+Frame;
+
+
+    /*
+     * Repeat for all subframes
+     */
+    curAcf = Acf_sf;
+    for ( k = 0 ; k < 4 ; k ++ ) {		//SubFrames
+
+
+        /*
+        * Do windowing
+        */
+
+        /* Get block of 180 samples centered around current subframe */
+        for ( i = 0 ; i < 180 ; i ++ )		//LpcFrame
+            Vect[i] = *DpntP++ ;		//SubFrLen
+        DpntP -= 180-60;
+
+        /* Normalize */
+        ShAcf_sf[k] = Vec_Norm2( Vect, LpcFrame ) ;
+
+        /* Apply the Hamming window */
+	Acc1 = 0;
+        for ( i = 0 ; i < 180 ; i ++ ) {	//LpcFrame
+            Vect[i] = (Vect[i] * HammingWindowTable[i] + 16384)>>15 ;
+	    Acc1 += ( Vect[i] * Vect[i] );
+        }
+
+        /*
+        * Compute the autocorrelation coefficients
+        */
+
+        /* Compute the zeroth-order coefficient (energy) */
+        //Acc1 = (Word32) 0 ;
+        //for ( i = 0 ; i < 180 ; i ++ ) {	//LpcFrame
+        //    Acc0 = ( Vect[i] * Vect[i] ) ;
+            //Acc0 >>= 1 ;
+        //    Acc1 += Acc0 ;
+        //}
+
+        /* Apply a white noise correction factor of (1025/1024) */
+        Acc1 += Acc1 >> RidgeFact ;
+
+        /* Normalize the energy */
+        Exp = norm_l( Acc1 ) ;
+        Acc1 <<= Exp ;
+
+        curAcf[0] = round( Acc1 ) ;
+        if(curAcf[0] == 0) {
+            for ( i = 1 ; i <= LpcOrder ; i ++ )
+                curAcf[i] = 0;
+            ShAcf_sf[k] = 40;
+        } else {
+            /* Compute the rest of the autocorrelation coefficients.
+               Multiply them by a binomial coefficients lag window. */
+            for ( i = 1 ; i <= LpcOrder ; i ++ ) {
+                Acc1 = (Word32) 0 ;
+                for ( j = i ; j < LpcFrame ; j ++ ) {
+                    Acc1 += ( Vect[j] * Vect[j-i] ) ;
+                }
+                Acc1 = Acc1 << Exp ;
+                Acc1 = L_mls( Acc1, BinomialWindowTable[i-1] ) ;
+                curAcf[i] = round(Acc1) ;
+            }
+            /* Save Acf scaling factor */
+            ShAcf_sf[k] = (Exp + (ShAcf_sf[k] << 1));
+        }
+
+        /*
+         * Apply the Levinson-Durbin algorithm to generate the LPC
+         * coefficients
+        */
+        Durbin( &UnqLpc[k*LpcOrder], &curAcf[1], curAcf[0], &Pk2 );
+        CodStat.SinDet <<= 1;
+        if ( Pk2 > 0x799a ) {
+            CodStat.SinDet ++ ;
+        }
+        curAcf += LpcOrderP1;
+    }
+
+    /* Update sine detector */
+    CodStat.SinDet &= 0x7fff ;
+
+#if 0
+    j = CodStat.SinDet ;
+    k = 0 ;
+    for ( i = 15 ; i > 0 ; i -- ) {
+        k += j & 1 ;
+        j >>= 1 ;
+    }
+    j = (~CodStat.SinDet)<<17;
+    if ( k >= 14 )
+        CodStat.SinDet |= 0x8000 ;
+    if ((j^(j&(-j))) == 0) {
+      if (k < 14)
+        printf("\n\n%x\n\n", ~j);
+    } else {
+      if (k >= 14)
+        printf("\n\n%x\n\n", ~j);
+    }
+#else
+    // Look upon my hacks, ye mighty, and despair
+    j = (~CodStat.SinDet)<<17 ;
+    if ((j^(j&(-j))) == 0)
+      CodStat.SinDet |= 0x8000;
+#endif
+
+    /* Update CNG Acf memories */
+    Update_Acf(Acf_sf, ShAcf_sf);
+
+}
+
+
+/*
+**
+** Function:        Durbin()
+**
+** Description:     Implements the Levinson-Durbin algorithm for a
+**          subframe.  The Levinson-Durbin algorithm
+**          recursively computes the minimum mean-squared
+**          error (MMSE) linear prediction filter based on the
+**          estimated autocorrelation coefficients.
+**
+** Links to text:   Section 2.4
+**
+** Arguments:
+**
+**  Word16 *Lpc Empty buffer
+**  Word16 Corr[]   First- through tenth-order autocorrelations (10 words)
+**  Word16 Err  Zeroth-order autocorrelation, or energy
+**
+** Outputs:
+**
+**  Word16 Lpc[]    LPC coefficients (10 words)
+**
+** Return value:    The error
+**
+*/
+Word32  Durbin( Word32 *Lpc, Word32 *Corr, Word32 Err, Word32 *Pk2 )
+{
+    int   i,j   ;
+
+    static Word32   Temp[LpcOrder] ;
+    Word32   Pk ;
+
+    Word32   Acc0,Acc1,Acc2 ;
+
+ /*
+  * Initialize the LPC vector
+  */
+    for ( i = 0 ; i < LpcOrder ; i ++ )
+        Lpc[i] = (Word16) 0 ;
+
+ /*
+  * Do the recursion.  At the ith step, the algorithm computes the
+  * (i+1)th - order MMSE linear prediction filter.
+  */
+    for ( i = 0 ; i < LpcOrder ; i ++ ) {
+
+/*
+ * Compute the partial correlation (parcor) coefficient
+ */
+
+        /* Start parcor computation */
+        Acc0 = ( Corr[i] )<<13 ;
+        for ( j = 0 ; j < i ; j ++ )
+            Acc0 -= ( Lpc[j] * Corr[i-j-1]) ;
+        Acc0 <<= 3 ;
+
+        /* Save sign */
+        Acc1 = Acc0 ;
+        Acc0 = L_abs( Acc0 ) ;
+
+        /* Finish parcor computation */
+        Acc2 = L_deposit_h( Err ) ;
+        if ( Acc0 >= Acc2 ) {
+            *Pk2 = 32767;
+            break ;
+        }
+
+        Pk = div_l( Acc0, Err ) ;
+
+        if ( Acc1 >= 0 )
+            Pk = negate(Pk) ;
+
+ /*
+  * Sine detector
+  */
+        if ( i == 1 ) *Pk2 = Pk;
+
+ /*
+  * Compute the ith LPC coefficient
+  */
+        //Acc0 = L_shr( Acc0, (Word16) 2 ) ;
+        Lpc[i] = ( 2-Pk)>>2 ;
+
+ /*
+  * Update the prediction error
+  */
+        Acc1 = L_mls( Acc1, Pk ) ;
+        Acc1 += Acc2 ;
+        Err = round( Acc1 ) ;
+
+ /*
+  * Compute the remaining LPC coefficients
+  */
+        for ( j = 0 ; j < i ; j ++ )
+            Temp[j] = Lpc[j] ;
+
+        for ( j = 0 ; j < i ; j ++ ) {
+            Acc0 = ( Lpc[j] )<<15 ;
+            Acc0 += Pk * Temp[i-j-1] ;
+            Lpc[j] = ( Acc0 + 0x4000)>>15 ;
+        }
+    }
+
+    return Err ;
+}
+
+/*
+**
+** Function:        Wght_Lpc()
+**
+** Description:     Computes the formant perceptual weighting
+**          filter coefficients for a frame.  These
+**          coefficients are geometrically scaled versions
+**          of the unquantized LPC coefficients.
+**
+** Links to text:   Section 2.8
+**
+** Arguments:
+**
+**  Word16 *PerLpc      Empty Buffer
+**  Word16 UnqLpc[]     Unquantized LPC coefficients (40 words)
+**
+** Outputs:
+
+**
+**  Word16 PerLpc[]     Perceptual weighting filter coefficients
+**              (80 words)
+**
+** Return value:    None
+**
+*/
+void  Wght_Lpc( Word32 *PerLpc, Word32 *UnqLpc )
+{
+    int   i,j   ;
+
+
+ /*
+  * Do for all subframes
+  */
+    for ( i = 0 ; i < SubFrames ; i ++ ) {
+
+
+ /*
+  * Compute the jth FIR coefficient by multiplying the jth LPC
+  * coefficient by (0.9)^j.
+  */
+        for ( j = 0 ; j < LpcOrder ; j ++ )
+            PerLpc[j] = ( UnqLpc[j] * PerFiltZeroTable[j] +16384)>>15 ;
+        PerLpc += LpcOrder ;
+
+
+/*
+ * Compute the jth IIR coefficient by multiplying the jth LPC
+ * coefficient by (0.5)^j.
+ */
+        for ( j = 0 ; j < LpcOrder ; j ++ )
+            PerLpc[j] = ( UnqLpc[j] * PerFiltPoleTable[j] +16384)>>15 ;
+        PerLpc += LpcOrder ;
+        UnqLpc += LpcOrder ;
+    }
+}
+
+/*
+**
+** Function:        Error_Wght()
+**
+** Description:     Implements the formant perceptual weighting
+**          filter for a frame. This filter effectively
+**          deemphasizes the formant frequencies in the
+**          error signal.
+**
+** Links to text:   Section 2.8
+**
+** Arguments:
+**
+**  Word16 Dpnt[]       Highpass filtered speech x[n] (240 words)
+**  Word16 PerLpc[]     Filter coefficients (80 words)
+**
+** Inputs:
+**
+**  CodStat.WghtFirDl[] FIR filter memory from previous frame (10 words)
+**  CodStat.WghtIirDl[] IIR filter memory from previous frame (10 words)
+
+**
+** Outputs:
+**
+**  Word16 Dpnt[]       Weighted speech f[n] (240 words)
+**
+** Return value:    None
+**
+*/
+void  Error_Wght( Word16 *Dpnt, Word32 *PerLpc )
+{
+    int   i,j,k ;
+    Word32   Acc0  ;
+    Word32  *wfd;
+    Word32  *wid;
+/*
+ * Do for all subframes
+ */
+    wfd = CodStat.WghtFirDl+240;
+    wid = CodStat.WghtIirDl+240;
+    for ( k = 4 ; k > 0 ; k -- ) {
+        for ( i = 60 ; i > 0 ; i -- ) {
+/*
+ * Do the FIR part
+ */
+            /* Filter */
+            Acc0 = ( *Dpnt) <<13;// (Word16) 0x2000 ) ;
+            for ( j = 10 ; j > 0 ; j -- )
+                Acc0 -= *PerLpc++ * *(wfd++) ;
+            /* Update memory */
+	    wfd -= 11;
+            wfd[0] = *Dpnt ;
+ /*
+  * Do the IIR part
+  */
+            /* Filter */
+            for ( j = 10 ; j > 0 ; j -- )
+                Acc0 += *PerLpc++ * *(wid++) ;
+            PerLpc -= 20;
+	    wid -= 11;
+            /* Update memory */
+            wid[0] = ( Acc0 + 0x1000)>>13 ;
+            *Dpnt ++ = wid[0] ;
+        }
+        PerLpc += 2*LpcOrder ;
+    }
+    for ( j = 10 ; j > 0 ; j -- ) {
+      wfd[240] = *wfd ;
+      wfd++;
+      wid[240] = *wid ;
+      wid++;
+    }
+}
+
+/*
+**
+** Function:        Comp_Ir()
+**
+** Description:     Computes the combined impulse response of the
+**          formant perceptual weighting filter, harmonic
+**          noise shaping filter, and synthesis filter for
+**          a subframe.
+**
+** Links to text:   Section 2.12
+**
+** Arguments:
+**
+**  Word16 *ImpResp     Empty Buffer
+**  Word16 QntLpc[]     Quantized LPC coefficients (10 words)
+**  Word16 PerLpc[]     Perceptual filter coefficients (20 words)
+**  PWDEF Pw        Harmonic noise shaping filter parameters
+**
+** Outputs:
+**
+**  Word16 ImpResp[]    Combined impulse response (60 words)
+**
+** Return value:    None
+**
+*/
+void  Comp_Ir( Word16 *ImpResp, Word32 *QntLpc, Word32 *PerLpc, PWDEF Pw )
+{
+    int   i,j   ;
+
+    static Word32   FirDl[60+LpcOrder] ;
+    static Word32   IirDl[60+LpcOrder] ;
+    static Word32   Temp[PitchMax+SubFrLen] ;
+    Word32  *TempP  = Temp;
+    Word32  *FirDlP = FirDl+60;
+    Word32  *IirDlP = IirDl+60;
+
+    Word32   Acc0,Acc1 ;
+
+ /*
+  * Clear all memory.  Impulse response calculation requires
+  * an all-zero initial state.
+  */
+    /* Perceptual weighting filter */
+    for ( i = 10 ; i > 0 ; i -- )
+        *FirDlP++ = *IirDlP++ = 0 ;
+    FirDlP -= 10;
+    IirDlP -= 10;
+    /* Harmonic noise shaping filter */
+    TempP +=PitchMax-Pw.Indx;
+    for ( i = PitchMax-Pw.Indx ; i < PitchMax+SubFrLen ; i ++ )
+        *TempP++ = 0 ;
+    TempP -= SubFrLen;
+ /*
+  * Input a single impulse
+  */
+    Acc0 = (Word32) 0x02000000L ;
+ /*
+  * Do for all elements in a subframe
+  */
+    for ( i = 60 ; i > 0 ; i -- ) {
+ /*
+  * Synthesis filter
+  */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 += ( *QntLpc++ * *FirDlP++) ;
+        QntLpc -= 10;
+        FirDlP  -= 10;
+        Acc1 = (Acc0 + 0x1000)>>13 ;
+ /*
+  * Perceptual weighting filter
+  */
+        /* FIR part */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 -= ( *PerLpc++ * *FirDlP++) ;
+        FirDlP -= 11;
+        Acc0 <<= 1;
+        FirDlP[0] = Acc1 ;
+        /* Iir part */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 += (*PerLpc++ * *IirDlP++) ;
+        PerLpc -= 20;
+        IirDlP -= 11;
+        IirDlP[0] = ( Acc0 + 0x1000)>>13 ;
+        *TempP = IirDlP[0] ;
+ /*
+  * Harmonic noise shaping filter
+  */
+        Acc0 = IirDlP[0]<<15 ;
+        Acc0 -= Pw.Gain * (TempP++)[-Pw.Indx] ;
+        *ImpResp++ = ( Acc0 + 0x4000)>>15 ;
+        Acc0 = (Word32) 0 ;
+    }
+    for (i = 10; i > 0; i--) {
+      FirDlP[60] = *FirDlP;
+      FirDlP++;
+      IirDlP[60] = *IirDlP;
+      IirDlP++;
+    }
+}
+
+/*
+**
+** Function:        Sub_Ring()
+**
+** Description:     Computes the zero-input response of the
+**          combined formant perceptual weighting filter,
+**          harmonic noise shaping filter, and synthesis
+**          filter for a subframe.  Subtracts the
+**          zero-input response from the harmonic noise
+**          weighted speech vector to produce the target
+**          speech vector.
+**
+** Links to text:   Section 2.13
+**
+** Arguments:
+**
+**  Word16 Dpnt[]       Harmonic noise weighted vector w[n] (60 words)
+**  Word16 QntLpc[]     Quantized LPC coefficients (10 words)
+**  Word16 PerLpc[]     Perceptual filter coefficients (20 words)
+**  Word16 PrevErr[]    Harmonic noise shaping filter memory (145 words)
+**  PWDEF Pw        Harmonic noise shaping filter parameters
+**
+** Inputs:
+**
+**  CodStat.RingFirDl[] Perceptual weighting filter FIR memory from
+**               previous subframe (10 words)
+**  CodStat.RingIirDl[] Perceptual weighting filter IIR memory from
+**               previous subframe (10 words)
+**
+** Outputs:
+**
+**  Word16 Dpnt[]       Target vector t[n] (60 words)
+**
+** Return value:    None
+**
+*/
+#if 0
+void  Sub_Ring( Word16 *Dpnt, Word32 *QntLpc, Word32 *PerLpc, Word32
+*PrevErr, PWDEF Pw )
+{
+    int   i,j   ;
+    Word32   Acc0,Acc1 ;
+
+    static Word32   FirDl[70] ;			//LpcOrder
+    static Word32   IirDl[70] ;			//LpcOrder
+    static Word32   *FirDlPtr = &FirDl[60];
+    static Word32   *IirDlPtr = &IirDl[60];
+    static Word32   Temp[145+60] ;			//PitchMax+SubFrLen
+    Word32  *TempPtr;
+
+
+ /*
+  * Initialize the memory
+  */
+    TempPtr = Temp    + (145-Pw.Indx);
+    PrevErr = PrevErr + (145-Pw.Indx);
+
+    for ( i = (int)Pw.Indx ; i > 0 ; i -- )	//PitchMax
+        *(TempPtr++) = *(PrevErr++) ;
+
+    FirDlPtr = CodStat.RingFirDl + 60;
+    IirDlPtr = CodStat.RingIirDl + 60 ;
+
+ /*
+  * Do for all elements in a subframe
+  */
+    for ( i = 60 ; i > 0 ; i -- ) {		//SubFrLen
+
+ /*
+  * Input zero
+  */
+        Acc0 = (Word32) 0x1000 ;
+
+ /*
+  * Synthesis filter
+  */
+        for ( j = 0 ; j < 10 ; j ++ )		//LpcOrder
+            Acc0 += QntLpc[j] * FirDlPtr[j] ;
+        Acc1 = (Acc0)>>13;
+
+ /*
+  * Perceptual weighting filter
+  */
+
+        /* Fir part */
+        for ( j = 0 ; j < 10 ; j ++ )		//LpcOrder
+            Acc0 -= *(PerLpc++) * *(FirDlPtr++) ;
+        FirDlPtr -= 11;
+        FirDlPtr[0] = Acc1 ;
+
+        /* Iir part */
+        for ( j = 0 ; j < 10 ; j ++ )		//LpcOrder
+            Acc0 += *(PerLpc++) * *(IirDlPtr++) ;	//LpcOrder+j
+        IirDlPtr -= 11;
+        IirDlPtr[0] = Acc0>>13 ;
+        *TempPtr = IirDlPtr[0] ;
+        PerLpc -= 20;
+
+ /*
+  * Do the harmonic noise shaping filter and subtract the result
+  * from the harmonic noise weighted vector.
+  */
+        Acc0 = ( sub(*Dpnt, IirDlPtr[0] ) )<<16 ;
+        Acc0 = L_add( Acc0, Pw.Gain * (TempPtr++)[-(int)Pw.Indx] * 2) ;
+        *(Dpnt++) = ( Acc0 + 0x8000)>>16 ;
+    }
+}
+#endif
+/*
+**
+** Function:        Upd_Ring()
+**
+** Description:     Updates the memory of the combined formant
+**          perceptual weighting filter, harmonic noise
+**          shaping filter, and synthesis filter for a
+**          subframe.  The update is done by passing the
+**          current subframe's excitation through the
+**          combined filter.
+**
+** Links to text:   Section 2.19
+**
+** Arguments:
+**
+**  Word16 Dpnt[]       Decoded excitation for the current subframe e[n]
+**               (60 words)
+**  Word16 QntLpc[]     Quantized LPC coefficients (10 words)
+**  Word16 PerLpc[]     Perceptual filter coefficients (20 words)
+**  Word16 PrevErr[]    Harmonic noise shaping filter memory (145 words)
+**
+** Inputs:
+**
+**  CodStat.RingFirDl[] Perceptual weighting filter FIR memory from
+
+**               previous subframe (10 words)
+**  CodStat.RingIirDl[] Perceptual weighting filter IIR memory from
+**               previous subframe (10 words)
+**
+** Outputs:
+**
+**  Word16 PrevErr[]    Updated harmonic noise shaping filter memory
+**  CodStat.RingFirDl[] Updated perceptual weighting filter FIR memory
+**  CodStat.RingIirDl[] Updated perceptual weighting filter IIR memory
+**
+** Return value:    None
+**
+*/
+void  Upd_Ring( Word16 *Dpnt, Word32 *QntLpc, Word32 *PerLpc, Word32
+*PrevErr )
+{
+    int   i,j   ;
+
+    Word32   Acc0,Acc1   ;
+    Word32  *rfd;
+    Word32  *rid;
+ /*
+  * Shift the harmonic noise shaping filter memory
+  */
+    for ( i = 85 ; i > 0 ; i -- ) {
+        *(PrevErr) = PrevErr[60] ;
+        PrevErr++;
+    }
+ /*
+  * Do for all elements in the subframe
+  */
+    rfd = CodStat.RingFirDl + 60;
+    rid = CodStat.RingIirDl + 60;
+    for ( i = 60 ; i > 0 ; i -- ) {
+ /*
+  * Input the current subframe's excitation
+  */
+        Acc0 = (*Dpnt) <<12 ;
+ /*
+  * Synthesis filter
+  */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 += *(QntLpc++) * *(rfd++);
+        rfd -= 10;
+	QntLpc -= 10;
+        Acc1 = ( Acc0 + 0x1000 )>>13 ;
+        *Dpnt++ = ( Acc0 + 0x800 )>>12 ;
+ /*
+  * Perceptual weighting filter
+  */
+        /* FIR part */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 -= *(PerLpc++) * *(rfd++);
+        /* Update FIR memory */
+        rfd -= 11;
+        rfd[0] = Acc1;
+        /* IIR part */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 += *(PerLpc++) * *(rid++) ;
+        PerLpc -= 20;
+        rid -= 11;
+        *rid = ( Acc0+ 0x1000 )>>13 ;
+        /* Update harmonic noise shaping memory */
+        *(PrevErr)++ = *rid;
+    }
+    for (j = 10; j>0; j--) {
+      rfd[60] = *rfd;
+      rfd++;
+      rid[60] = *rid;
+      rid++;
+    }
+}
+
+/*
+**
+** Function:        Synt()
+**
+** Description:     Implements the decoder synthesis filter for a
+**          subframe.  This is a tenth-order IIR filter.
+**
+** Links to text:   Section 3.7
+**
+** Arguments:
+**
+**  Word16 Dpnt[]       Pitch-postfiltered excitation for the current
+**               subframe ppf[n] (60 words)
+**  Word16 Lpc[]        Quantized LPC coefficients (10 words)
+**
+** Inputs:
+**
+**  DecStat.SyntIirDl[] Synthesis filter memory from previous
+subframe (10 words)
+**
+** Outputs:
+**
+**  Word16 Dpnt[]       Synthesized speech vector sy[n]
+**  DecStat.SyntIirDl[] Updated synthesis filter memory
+**
+** Return value:    None
+**
+*/
+#if 0
+void     Synt( Word16 *Dpnt, Word32 *Lpc, Flag usepf )
+{
+    int   i,j   ;
+
+    Word32   Acc0  ;
+    Word32  *sid = DecStat.SyntIirDl + 60;
+ /*
+  * Do for all elements in the subframe
+  */
+    for ( i = 60 ; i > 0 ; i -- ) {
+ /*
+  * Input the current subframe's excitation
+  */
+        Acc0 = ( *Dpnt )<<16 ;
+        Acc0 >>= 3;
+ /*
+  * Synthesis
+  */
+        /* Filter */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 = L_add( Acc0, *Lpc++ * *sid++ * 2) ;
+        sid -= 11;
+        Lpc -= 10;
+        Acc0 = L_shl(Acc0, 2);
+	printf("%x\n", Acc0);
+
+        *sid = round( Acc0 ) ;
+ /*
+  * Scale output if postfilter is off.  (Otherwise output is
+  * scaled by the gain scaling unit.)
+  */
+        if ( usepf )
+            *Dpnt++ = *sid ;
+        else
+            *Dpnt++ = shl( *sid, (Word16) 1 ) ;
+    }
+    for (i = 10; i > 0; i--) {
+      sid[60] = *sid;
+      sid++;
+    }
+}
+#endif
+/*
+**
+** Function:        Spf()
+**
+** Description:     Implements the formant postfilter for a
+**          subframe.  The formant postfilter is a
+**          10-pole, 10-zero ARMA filter followed by a
+**          single-tap tilt compensation filter.
+**
+** Links to text:   Section 3.8
+**
+** Arguments:
+**
+**  Word16 Tv[]     Synthesized speech vector sy[n] (60 words)
+**  Word16 Lpc[]        Quantized LPC coefficients (10 words)
+**
+** Inputs:
+**
+**  DecStat.PostIirDl[] Postfilter IIR memory from previous
+subframe (10 words)
+**  DecStat.PostFirDl[] Postfilter FIR memory from previous
+subframe (10 words)
+**  DecStat.Park        Previous value of compensation filter parameter
+**
+** Outputs:
+**
+**  Word16 Tv[]     Postfiltered speech vector pf[n] (60 words)
+**  DecStat.PostIirDl[] Updated postfilter IIR memory
+**  DecStat.PostFirDl[] Updated postfilter FIR memory
+**  DecStat.Park        Updated compensation filter parameter
+**
+** Return value: Input vector energy
+**
+*/
+#if 0
+Word32  Spf( Word16 *Tv, Word32 *Lpc )
+{
+    int   i,j   ;
+
+    Word32   Acc0,Acc1   ;
+    Word32   Sen ;
+    Word32   Tmp ;
+    Word32   Exp ;
+
+    static Word32   FirCoef[10] ;
+    static Word32   IirCoef[10] ;
+
+    static Word32   TmpVect[60] ;
+    static Word32  *pfd = DecStat.PostFirDl + 60;
+    static Word32  *pid = DecStat.PostIirDl + 60;
+    Word32  *fc = FirCoef;
+    Word32  *ic = IirCoef;
+
+    static Word32   Lpc2[10];
+    static Word16   Tv2[60];
+    int      dp, dp2;
+    static Word32   DPFD[70];
+    static Word32   DPID[70];
+    static Word32   DPFD2[70];
+    static Word32   DPID2[70];
+    static Word32   hack[60];
+    static Word32   hack2[60];
+    Word32  *hackptr = hack2;
+    int Sen2;
+
+    memcpy(Lpc2, Lpc, sizeof(Word32)*10);
+    memcpy(Tv2,  Tv,  sizeof(Word16)*60);
+    memcpy(DPFD, DecStat.PostFirDl, sizeof(Word32)*70);
+    memcpy(DPID, DecStat.PostIirDl, sizeof(Word32)*70);
+    dp = DecStat.Park;
+    Sen2 = aSpf(Tv2, Lpc2, hack);
+    dp2 = DecStat.Park;
+    DecStat.Park = dp;
+    memcpy(DPFD2, DecStat.PostFirDl, sizeof(Word32)*70);
+    memcpy(DPID2, DecStat.PostIirDl, sizeof(Word32)*70);
+    memcpy(DecStat.PostFirDl, DPFD, sizeof(Word32)*70);
+    memcpy(DecStat.PostIirDl, DPID, sizeof(Word32)*70);
+
+ /*
+  * Compute ARMA coefficients.  Compute the jth FIR coefficient by
+  * multiplying the jth quantized LPC coefficient by (0.65)^j.
+  * Compute the jth IIR coefficient by multiplying the jth quantized
+  * LPC coefficient by (0.75)^j.  This emphasizes the formants in
+  * the frequency response.
+  */
+    for ( i = 0 ; i < 10 ; i ++ ) {
+        *fc++ = ( *Lpc   * PostFiltZeroTable[i] + 0x4000)>>15 ;
+        *ic++ = ( *Lpc++ * PostFiltPoleTable[i] + 0x4000)>>15 ;
+    }
+
+ /*
+  * Normalize the speech vector.
+  */
+    for ( i = 0 ; i < 60 ; i ++ )
+        TmpVect[i] = Tv[i] ;
+    Exp = Vec_Norm2( TmpVect, 60 ) ;
+
+ /*
+  * Compute the first two autocorrelation coefficients R[0] and R[1]
+  */
+    Acc0 = (Word32) 0 ;
+    Acc1 = ( TmpVect[0] * TmpVect[0]) ;
+    for ( i = 1 ; i < SubFrLen ; i ++ ) {
+        Acc0 += TmpVect[i] * TmpVect[i-1] ;
+        Acc1 += TmpVect[i] * TmpVect[i] ;
+    }
+
+ /*
+  * Scale the energy for the later use.
+  */
+    // must be a L_shr, not >>
+    Exp = 3 + (Exp<<1);
+    Sen = L_shr( Acc1, Exp ) ;
+
+ /*
+  * Compute the first-order partial correlation coefficient of the
+  * input speech vector.
+  */
+    Tmp = ( Acc1 )>>15 ;
+    if ( Tmp != (Word16) 0 ) {
+
+        /* Compute first parkor */
+        Acc1 = Acc0 ;
+        Acc0 = L_abs( Acc0 ) ;
+
+        Tmp = div_l( Acc0, Tmp ) ;
+
+        if ( Acc1 < (Word32) 0 )
+            Tmp = -( Tmp ) ;
+    }
+
+ /*
+  * Compute the compensation filter parameter and update the memory
+  */
+    Acc0 = ( DecStat.Park )<<2 ;
+    Acc0 += (Tmp-DecStat.Park) ;
+    DecStat.Park = ( Acc0 + 2)>>2 ;
+
+    Tmp  = ( -DecStat.Park )>>3 ;
+    Tmp <<=2;
+    //Tmp &= (Word16) 0xfffc ;
+
+ /*
+  *  Do for all elements in the subframe
+  */
+    for ( i = 60 ; i > 0 ; i-- ) {
+
+ /*
+  * Input the speech vector
+  */
+    fc -= 10;
+    ic -= 10;
+        Acc0 = ( *Tv <<13) ;
+
+ /*
+  * Formant postfilter
+  */
+
+        /* FIR part */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 -= ( *fc++ * *pfd++) ;
+        pfd -= 11;
+
+        /* Update FIR memory */
+        pfd[0] = *Tv ;
+
+        /* IIR part */
+        for ( j = 10 ; j > 0 ; j -- )
+            Acc0 += *ic++ * *pid++ ;
+        pid -= 11;
+
+        /* Update IIR memory */
+        Acc0 = L_shl( Acc0, (Word16) 3 ) ;
+        Acc0 = L_add( Acc0, 0x8000);
+
+        *hackptr++ = Acc0;
+        pid[0] = Acc0>>16 ;
+
+ /*
+  * Compensation filter
+  */
+        Acc0 = L_add( Acc0, pid[1] * Tmp * 2) ;
+
+        *Tv++ = Acc0>>16 ;
+    }
+    for (i = 10; i > 0; i--) {
+      pfd[60] = *pfd;
+      pfd++;
+      pid[60] = *pid;
+      pid++;
+    }
+    /* Now we have the crufty comparison code... */
+    Lpc -= 10;
+    Tv -= 60;
+    if (memcmp(Lpc2, Lpc, 10*sizeof(Word32)) != 0) {
+      printf("\nLpc differs\n");
+      for (i = 0; i < 10; i++)
+        printf("%x %x\n", Lpc[i], Lpc2[i]);
+    }
+    if (dp2 != DecStat.Park)
+      printf("\ndp differs: %d %d\n", dp2, DecStat.Park);
+    if (Sen != Sen2)
+      printf("\nsen differs: %d %d\n", Sen, Sen2);
+    if (memcmp(DPFD2, DecStat.PostFirDl, 70*sizeof(Word32)) != 0)
+      printf("\nDPFD differs\n");
+    if (memcmp(DPID2, DecStat.PostIirDl, 70*sizeof(Word32)) != 0)
+      printf("\nDPID differs\n");
+    if (memcmp(Tv, Tv2, 60*sizeof(Word16)) != 0) {
+      printf("\nTv differs (Tmp = %x, %x)\n", Tmp, fuck);
+      for (i = 0; i < 60; i++)
+        if (Tv[i] != Tv2[i])
+          printf("%d) %x %x    %x     %x %x\n", i, Tv[i], Tv2[i], DPID2[61-i], hack[i], hack2[i]);
+    }
+    return Sen ;
+}
+#endif
