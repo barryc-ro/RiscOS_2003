@@ -118,7 +118,6 @@ resources: translate
           $(CP) Resources.$(USERIF).$(LOCALE).NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS) \
         Else \
           $(CP) Resources.$(USERIF).UK.NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
-        $(CP) Resources.$(USERIF).$(LOCALE).NCDialCtrl.Files.PPP.IP-Up $(RESRES).NCDialCtrl.Files.PPP.IP-Up $(CPFLAGS)
         $(CP) Resources.$(USERIF).$(LOCALE).STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
         
