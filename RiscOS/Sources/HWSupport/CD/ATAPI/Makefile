@@ -21,6 +21,7 @@ MKDIR    = cdir
 AS       = aasm
 CP       = copy
 RM       = remove
+STRIP    = stripdepnd
 
 CFLAGS   = -c -depend !Depend -IC:
 AFLAGS   = -depend !Depend -Stamp -quit -module
@@ -56,6 +57,7 @@ resources:
 
 clean:
         ${RM} ${TARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
@@ -65,16 +67,3 @@ ${EXP_HDR}.ATAPI: hdr.ATAPI
         ${CP} hdr.ATAPI $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.ATAPI: Version
-rm.ATAPI: hdr.Hashes
-rm.ATAPI: hdr.IDEdefs
-rm.ATAPI: hdr.Macros
-rm.ATAPI: hdr:ListOpts
-rm.ATAPI: hdr:CMOS
-rm.ATAPI: s.DriverCode
-rm.ATAPI: s.ATAPIStuff
-rm.ATAPI: s.Extras
-rm.ATAPI: s.OnError
-rm.ATAPI: s.Module
-rm.ATAPI: s.Variables
-rm.ATAPI: s.Strings
