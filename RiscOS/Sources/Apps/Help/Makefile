@@ -15,6 +15,7 @@ COMPONENT  = Help
 APP        = !${COMPONENT}
 ROM_MODULE = rm.${COMPONENT}
 RDIR       = Resources
+LDIR       = ${RDIR}.${LOCALE}
 
 #
 # Export Paths for Messages module
@@ -77,30 +78,23 @@ install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed {ROM}
 
-resources-BAS: LocalRes:ROM.!RunLink
-        ${MKDIR} <resource$dir>.Apps
-	${MKDIR} ${RESAPP}
+resources: ${LDIR}.ROM.!RunLink
+        ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
         |
         ${CP} LocalRes:!Help         ${RESAPP}.!Help     ${CPFLAGS}
         ${CP} LocalRes:ROM.!Run      ${RESAPP}.!Run      ${CPFLAGS}
         |
-        ${CP} LocalRes:ROM.!RunLink  ${RESDIR}.!RunLink  ${CPFLAGS}
-        ${CP} LocalRes:Templates     ${RESDIR}.Templates ${CPFLAGS}
-
-resources-RES: 
-        ${MKDIR} ${RESDIR}
-
-resources:
-        ${MKDIR} <resource$dir>.Resources
-        ${MKDIR} ${RESDIR}
+        ${CP} ${LDIR}.ROM.!RunLink   ${RESDIR}.!RunLink  ${CPFLAGS}
         ${CP} LocalRes:Messages      ${RESDIR}.Messages  ${CPFLAGS}
+        ${CP} LocalRes:Templates     ${RESDIR}.Templates ${CPFLAGS}
+        |
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
         ${RM} ${ROM_MODULE}
         ${RM} ${RDIR}.!RunImage
-        ${RM} LocalRes:ROM.!RunLink
+        ${RM} ${LDIR}.ROM.!RunLink
         ${RM} s.Version
         ${WIPE} crunched.* ${WFLAGS}
         ${STRIP}
@@ -122,7 +116,7 @@ ${RDIR}.!RunImage: crunched.!RunImage
 crunched.!RunImage: bas.!RunImage
         crunch.!RunImage; BASIC
 
-LocalRes:ROM.!RunLink: bas.!RunLink
+${LDIR}.ROM.!RunLink: bas.!RunLink
         ${SQUISH} ${SQFLAGS} -from bas.!RunLink -to $@
 
 #---------------------------------------------------------------------------
