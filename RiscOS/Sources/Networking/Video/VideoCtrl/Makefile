@@ -15,6 +15,7 @@
 #			independent ROM / RAM builds, exports header file
 # 05-Apr-2000	ADH	Corrected path and filenames in ROM resources
 #			export rule
+# 15-Nov-2001	ADH	Added dependency between Register.c and VCHdr.h.
 
 # -----------------------------------------------------------------------------
 # Component specific options
@@ -297,6 +298,8 @@ o.VCHdr h.VCHdr: VersionNum
 o.Module oSL.Module oSLd.Module: VCHdr.h
 
 o.Protocol oSL.Protocol oSLd.Protocol: VCHdr.h
+
+o.Register oSL.Register oSLd.Register: VCHdr.h
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
