@@ -41,11 +41,11 @@ CD	= dir
 
 #AFLAGS  = -depend !Depend -Stamp -quit -To $@ -From
 AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS}
+CFLAGS  = -c -depend !Depend ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} ${EXT_FLAGS}
 LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-DFLAGS  = ${DEBUG}
+DFLAGS  = ${DEBUG} -g
 BFLAGS  = 31
 
 #
@@ -95,7 +95,7 @@ Daytona   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${O
 
 STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
             ${OM}.Graphics ${OM}.CMOS ${OM}.SerialTest ${OM}.TestCard ${OM}.Printer \
-            ${OM}.MPEG
+            ${OM}.MPEG ${OM}.Server
 
 OBJS      = ${STB3}
 
@@ -153,6 +153,7 @@ dirs:
 #
 ${TARGET}: ${OBJS} dirs
         ${LD} ${LDFLAGS} -o $@ ${OBJS} ${CLIB}
+        @echo ${COMPONENT}: link stage complete
         ${CRUNCH} ${BFLAGS} @.b.TestCard @.${CRUNCHED}.TestCard
         ${CRUNCH} ${BFLAGS} @.b.Printer @.${CRUNCHED}.Printer
         ${CRUNCH} ${BFLAGS} @.b.Gen_lib @.${CRUNCHED}.Gen_Lib
