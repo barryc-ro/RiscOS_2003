@@ -95,6 +95,7 @@ o.fpe: Hdr:t.^.ListOpts
 o.fpe: Hdr:t.^.Macros
 o.fpe: Hdr:t.^.Services
 o.fpe: Hdr:t.^.ModHand
+o.fpe: Hdr:t.^.EnvNumbers
 o.fpe: ^.coresrc.^.vensrc.riscos.FPEMacros
 o.fpe: ^.coresrc.^.vensrc.riscos.^.^.VersionASM
 o.fpe: Hdr:t.^.SWIs
