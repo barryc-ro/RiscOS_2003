@@ -1,0 +1,1924 @@
+/* atapi.c for ATAPI module */
+
+
+#include "main.h"
+#include "register.h"
+#include "atapi.h"
+#include "drives.h"
+
+
+/*
+ * IRQ status register and IDE flag bit (IOMD)
+ */
+
+static volatile char *IRQstatus = (char *) 0x3200020;
+#define  IDE_IRQ_BIT  BIT(1)
+
+
+/*
+ * About ADFS_LockUnlockIDE - used to claim Motherboard IDE bus on
+ *  RISC PCs
+ */
+
+#define  DRIVER_IN_USE    0x108a0   /* error number */
+#define  TO_IDELOCK           100   /* timeout in csecs for bus claim */
+#define  TO_IDENTIFY         1000   /* timeout in csecs for identification */
+
+
+/* number of reads of IDE or IRQstatus registers between timeout checks */
+
+#define  READS_BEFORE_TIMECHECK  10000
+
+
+static char *state = "";   /* identifies current state for debugging */
+
+
+#if WATCH
+
+/*
+ * These variables and functions are used to record changes in the contents
+ *  of the STATUS register and INTRQ values during waits.
+ *
+ * Note that the macros watch_init () and  watch_for_change (count) assume
+ *  that local variables  status, prevstatus and intrq, previntrq are
+ *  available.
+ */
+
+#define  WATCH_MAX_CHANGES  10
+
+static int wcount [WATCH_MAX_CHANGES];
+static char wstatus [WATCH_MAX_CHANGES];
+static char wintrq [WATCH_MAX_CHANGES];
+static int ww;
+
+#define  watch_init()              \
+    ww = 0;                        \
+    prevstatus = previntrq = 0xff;
+
+#define  watch_for_change(count)                    \
+    if (status != prevstatus || intrq != previntrq) \
+    {                                               \
+        if (ww < WATCH_MAX_CHANGES)                 \
+        {                                           \
+            wcount[ww] = (count);                   \
+            prevstatus = wstatus[ww] = status;      \
+            previntrq = wintrq[ww] = intrq;         \
+            ww++;                                   \
+        }                                           \
+    }
+
+static void watch_output_changes ()
+{
+    int i;
+
+    for (i = 0; i < ww; i++)
+        debug_output (NULL, "   count = %6d, status = %02x, intrq = %d\n",
+                            wcount[i], wstatus[i], wintrq[i] != 0);
+
+    return;
+}
+
+#endif
+
+
+/* macros and variables for handling timeouts */
+
+static unsigned int timenow;
+static unsigned int timeout;
+
+/*
+ * Set time out to n centiseconds.
+ */
+
+#define  set_time_out(n) \
+    _swix (OS_ReadMonotonicTime, O0, &timenow); \
+    timeout = timenow + (n)
+
+/*
+ * Return TRUE if time out period has passed.
+ */
+
+#define  timed_out() \
+    (_swix (OS_ReadMonotonicTime, O0, &timenow), timenow > timeout)
+
+
+/*
+ * These variables are set to the addresses of the task file registers by
+ *  atapi_execute (..), and remain valid throughout ATAPI Packet Command
+ *  execution.
+ */
+
+static volatile unsigned int * tfdata;
+static volatile char * tferror;
+static volatile char * tffeatures;
+static volatile char * tfcountlow;
+static volatile char * tfcounthigh;
+static volatile char * tfdriveselect;
+static volatile char * tfstatus;
+static volatile char * tfcommand;
+static volatile char * tfaltstatus;
+
+
+/*
+ * Returns a copy of s from which any trailing spaces have been removed.
+ *
+ * On entry, s[0] ... s[n-1] are the characters of the string which is not
+ *  necessarily terminated.
+ *
+ * If n exceeds MAX_STRING it is truncated.
+ */
+
+#define  MAX_STR    40
+static char str[MAX_STR + 1];   /* allows for terminator */
+
+char * str_from (char *s, int n)
+{
+    char *t;
+
+    if (n > MAX_STR)
+        n = MAX_STR;
+
+    memcpy (str, s, n);
+    t = str + n;
+
+    while (t > str && *(t-1) == ' ')
+        t--;
+
+    *t = 0;
+
+    return str;
+}
+
+
+/*
+ * This function repeatedly reads the ALTERNATE STATUS register until the
+ *  BSY flag is clear.
+ *
+ * The wait is considered timed out when the current time exceeds the value
+ *  in the static 'timeout'. This is not checked every read, but every
+ *  READS_BEFORE_TIMECHECK reads.
+ *
+ * If the wait is not timed out, the result is the final value of the
+ *  ALTERNATE STATUS register; otherwise, the result is -1.
+ *
+ * There are two versions: the production version (WATCH = 0), and a special
+ *  version (WATCH = 1) which can be used to investigate the behaviour of new
+ *  ATAPI devices.
+ */
+
+#if !WATCH
+
+static int await_not_BSY ()
+{
+    int i;
+    char status;
+
+    while (TRUE)
+    {
+        for (i = 0; i < READS_BEFORE_TIMECHECK; i++)
+        {
+            status = *tfaltstatus;
+
+            if (!(status & SF_BSY))
+            {
+                return status;
+            }
+        }
+
+        /* time to look at the time */
+        if (timed_out ())
+        {
+
+DEBUG debug_output (T_PACKET, "  Timed out during %s\n", state);
+
+            return -1;
+        }
+    }
+}
+
+#else
+
+static int await_not_BSY ()
+{
+    int i, k;
+    char status, prevstatus;
+    char intrq, previntrq;
+    int res;
+
+    watch_init ()               /* no ; because it's a macro ... */
+
+    k = 0;
+
+    /*
+     * Start with some fixed number of reads to allow the interface to
+     *  settle down prior to examining the BSY flag.
+     */
+
+    for (i = 0; i < SETTLE_DOWN; i++)
+    {
+        intrq = *IRQstatus & IDE_IRQ_BIT;
+        status = *tfaltstatus;
+        watch_for_change (i)    /* no ; because it's a macro ... */
+    }
+
+    /*
+     * Continue watching the interface until the BSY flag is clear or the
+     *  wait is timed out.
+     */
+
+    while (TRUE)
+    {
+        for (; i < READS_BEFORE_TIMECHECK; i++)
+        {
+            intrq = *IRQstatus & IDE_IRQ_BIT;
+            status = *tfaltstatus;
+
+            if (!(status & SF_BSY))
+            {
+                int endi = i + SETTLE_DOWN;
+
+                /*
+                 * BSY flag has cleared; do a final few reads to allow other
+                 *  flags to settle, just in case ...
+                 */
+
+                for (; i < endi; i++)
+                {
+                    intrq = *IRQstatus & IDE_IRQ_BIT;
+                    status = *tfaltstatus;
+                    watch_for_change (i + k)     /* no ;  */
+                }
+
+                res = status;
+                goto ret;
+            }
+        }
+
+        k += READS_BEFORE_TIMECHECK;
+
+        /* time to look at the time */
+        if (timed_out ())
+        {
+            res = -1;
+            goto ret;
+        }
+    }
+
+  ret:
+    debug_output (NULL, "Awaiting !BSY during %s phase (maxcount = %d):\n",
+                               state, i + k);
+    watch_output_changes ();
+
+    return res;
+}
+
+#endif
+
+
+/*
+ * This function awaits assertion of INTRQ and then reads the STATUS
+ *  register:
+ *
+ *   1)  Makes repeated reads of IRQ STATUS register until the IDE bit is
+ *        set as a result of the device asserting INTRQ.
+ *
+ *   2)  Reads STATUS register to clear INTRQ signal.
+ *
+ *   3)  Makes repeated reads of IRQ STATUS register until the IDE bit is
+ *        clear.
+ *
+ *   4)  Makes repeated reads of ALTERNATE STATUS until BSY is clear.
+ *
+ * The wait is considered timed out when the current time exceeds the value
+ *  in the static 'timeout'. This is not checked every read, but every
+ *  READS_BEFORE_TIMECHECK reads.
+ *
+ * If the wait is not timed out, the result is the final value of the
+ *  ALTERNATE STATUS register; otherwise, the result is -1.
+ *
+ * There are two versions: the production version (WATCH = 0), and a special
+ *  version (WATCH = 1) which can be used to investigate the behaviour of new
+ *  ATAPI devices.
+ */
+
+#if !WATCH
+
+static int await_INTRQ ()
+{
+    char irqstatus;
+    char status;
+    int phase = 0;
+    int i;
+
+    while (TRUE)
+    {
+        for (i = 0; i < READS_BEFORE_TIMECHECK; i++)
+        {
+            switch (phase)
+            {
+            case 0:
+                irqstatus = *IRQstatus;
+                if (!(irqstatus & IDE_IRQ_BIT))
+                    continue;
+
+                status = *tfstatus;  /* to clear INTRQ */
+                phase = 1;
+
+            case 1:
+                irqstatus = *IRQstatus;
+                if ((irqstatus & IDE_IRQ_BIT))
+                    continue;
+                phase = 2;
+
+            case 2:
+                status = *tfaltstatus;
+                if ((status & SF_BSY))
+                    continue;
+
+                return status;
+            }
+        }
+
+        /* time to look at the time */
+        if (timed_out ())
+        {
+
+DEBUG debug_output (T_PACKET, "  Timed out during %s\n", state);
+
+            return -1;
+        }
+/*        DEBUG debug_output (T_PACKET, "  In IRQ poll loop,now %d timeout @%d\n", timenow, timeout);*/
+    }
+}
+
+#else
+
+static int await_INTRQ ()
+{
+    int phase = 0;
+    int i, k;
+    char status, prevstatus;
+    char intrq, previntrq;
+    int res;
+
+    watch_init ()               /* no ; because it's a macro ... */
+
+    k = 0;
+
+    while (TRUE)
+    {
+        for (i = 0; i < READS_BEFORE_TIMECHECK; i++)
+        {
+            switch (phase)
+            {
+                /*
+                 * First, watch the interface until INTRQ is asserted.
+                 */
+            case 0:
+                intrq = *IRQstatus & IDE_IRQ_BIT;
+                status = *tfaltstatus;
+
+                watch_for_change (i + k)  /* no ; because it's a macro ... */
+
+                if (intrq == 0)
+                    continue;
+
+                intrq = *IRQstatus & IDE_IRQ_BIT;
+                status = *tfstatus;    /* this read should deassert INTRQ */
+                i++;
+
+                watch_for_change (i + k)  /* no ; because it's a macro ... */
+
+                phase = 1;
+                i++;
+
+                /*
+                 * Now watch the interface until INTRQ is deasserted.
+                 */
+            case 1:
+                intrq = *IRQstatus & IDE_IRQ_BIT;
+                status = *tfaltstatus;
+
+                watch_for_change (i + k)  /* no ; because it's a macro ... */
+
+                if (intrq != 0)
+                    continue;
+
+                phase = 2;
+                i++;
+
+                /*
+                 * Now watch the interface until the BSY flag is clear.
+                 */
+            case 2:
+                intrq = *IRQstatus & IDE_IRQ_BIT;
+                status = *tfaltstatus;
+
+                watch_for_change (i + k)  /* no ; because it's a macro ... */
+
+                if ((status & SF_BSY) != 0)
+                    continue;
+
+                /*
+                 * Finally execute a few more reads to allow time for the
+                 *  other flags to settle, just in case ...
+                 */
+                {
+                    int endi = i + SETTLE_DOWN;
+
+                    for (; i < endi; i++)
+                    {
+                        intrq = *IRQstatus & IDE_IRQ_BIT;
+                        status = *tfaltstatus;
+
+                        watch_for_change (i + k)  /* no ; ... */
+                    }
+
+                    res = status;
+                    goto ret;
+                }
+            }
+        }
+
+        k += READS_BEFORE_TIMECHECK;
+
+        /* time to look at the time */
+        if (timed_out ())
+        {
+            res = -1;
+            goto ret;
+        }
+    }
+
+  ret:
+    debug_output (NULL, "Awaiting INTRQ during %s phase (maxcount = %d):\n",
+                               state, i + k);
+    watch_output_changes ();
+
+    return res;
+}
+
+#endif
+
+
+/*
+ * This function implements the ATAPI protocol to issue an ATAPI Packet
+ *  Command to a device.
+ *
+ * The protocol used can be summarised as follows:
+ *
+ *    -  wait until drive is not BSY
+ *    -  write to interface registers to select device and issue command:
+ *            drive select       (for device 0 or device 1)
+ *            features           (to 0)
+ *            count low and high (to buffer size)
+ *            command            (to &A0 - ATAPI Packet Command)
+ *    -  wait until drive is ready to receive Command Packet
+ *    -  write 12-byte command packet, 2 bytes at a time, to data register
+ *    -  transfer any data as requested by the device:
+ *        while (TRUE)
+ *        {
+ *           - await interrupt request from device
+ *           - if device does not wish to transfer any more data, exit
+ *           - read count low and high to find out how much data to transfer
+ *           - transfer this amount of data to/from the data register from/to
+ *              the supplied buffer
+ *        }
+ *
+ * If the device requests more than bufflen bytes of data, the transfer is
+ *  padded with zeros.
+ *
+ * If the device supplies more than bufflen bytes of data, excess bytes are
+ *  read and discarded.
+ *
+ * *count is set to the total number of bytes transferred to/from the device,
+ *  including any padding or discarded bytes.
+ *
+ * On exit, *status is set to the value of the status register at the end of
+ *  the command.
+ *
+ * Note that 'transfer' is used only to determine the direction of data
+ *  transfer: whether data is transferred or not is at the sole discretion of
+ *  the device itself.
+ *
+ * Each period of waiting is capable of being timed out. If this happens, the
+ *  function returns a suitable error; otherwise, no errors are generated.
+ */
+
+static Error * atapi_packet_command
+(
+    DrivePtr drive,
+    char *cpkt,       /* addresses 12 byte Command Packet */
+    char *buff,       /* addresses buffer ... */
+    int bufflen,      /* ... of this length   */
+    int transfer,     /* TR_READ, TR_WRITE or TR_NONE */
+    int *count,       /* set to number of bytes transferred to/from device */
+    char *finalstatus /* set to status reg value on command completion */
+)
+{
+    int status;
+    int i;
+    int bytes;
+    int buffp;
+    int dummy;
+
+DEBUG
+{
+debug_output (T_PACKET, "Packet command for device %d:\n", drive->device);
+debug_output (T_PACKET,
+      "  cpkt = %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x\n",
+      cpkt[0], cpkt[1], cpkt[2], cpkt[3], cpkt[4], cpkt[5],
+      cpkt[6], cpkt[7], cpkt[8], cpkt[9], cpkt[10], cpkt[11]);
+debug_output (T_PACKET, "  buff = %x, len = %d, transfer = %s\n",
+      (int) buff, bufflen, (transfer == TR_READ) ? "READ" :
+                           (transfer == TR_WRITE) ? "WRITE" : "NONE");
+}
+
+    /* set timeout for selection and command issue phase */
+    set_time_out (drive->dib.timeout);
+
+#if debugging
+    state = "Pre-selection";
+#endif
+
+    /* wait for device to be !BSY */
+    status = await_not_BSY ();
+    if (status < 0)
+        return msgs_make_error (ERR_TIMEOUT + PROG_ERR, "pre-selection");
+
+#if debugging
+    state = "Post-selection";
+#endif
+
+    /* select drive */
+    *tfdriveselect = (drive->device << DS_DRIVE_SHFT) | DS_ALWAYS;
+    status = await_not_BSY ();
+    if (status < 0)
+        return msgs_make_error (ERR_TIMEOUT + PROG_ERR, "post-selection");
+
+#if debugging
+    state = "Post-command";
+#endif
+
+    /* set ATA registers and issue ATAPI Packet Command */
+    *tffeatures = 0;
+    *tfcountlow = bufflen;
+    *tfcounthigh = bufflen >> 8;
+    *tfcommand = ATAPI_PACKET_COMMAND;
+
+    /* wait until device is ready to receive 12-byte command packet */
+    if (drive->noIRQafterCMD)
+        status = await_not_BSY ();
+    else
+        status = await_INTRQ ();
+    if (status < 0)
+        return msgs_make_error (ERR_TIMEOUT + PROG_ERR, "post-command");
+
+    /* write command packet to device */
+    for (i = 0; i < CPKT_SIZE; i += 2)
+        *tfdata = cpkt[i] | (cpkt[i + 1] << 8);
+
+    /* transfer data - it may appear/be requested in more than one chunk */
+    buffp = 0;   /* current position in output buffer */
+    *count = 0;  /* total number of bytes transferred */
+
+#if debugging
+    state = "Command execution";
+#endif
+
+    while (TRUE)
+    {
+        /* set timeout for each data transfer phase */
+        set_time_out (drive->dib.timeout);
+
+        /* wait for device ready to transfer data (or command complete) */
+        status = await_INTRQ ();
+
+/*        DEBUG debug_output (T_PACKET, "  After IRQ\n");*/
+
+        if (status < 0)
+            return msgs_make_error (ERR_TIMEOUT + PROG_ERR,
+                                                  "command execution");
+
+        /* if the device does not wish to transfer any data, that's it */
+        if (!(status & SF_DRQ))
+        {
+            *finalstatus = status;
+            break;
+        }
+
+        /* find out how much data to transfer ... */
+        bytes = (*tfcounthigh << 8) + *tfcountlow;
+        *count += bytes;
+
+        /* ... and transfer it */
+        if (transfer == TR_READ)
+        {
+            /* copy bytes to the buffer */
+            while (bytes > 0 && buffp < bufflen)
+            {
+                int x = *tfdata;
+
+                buff[buffp] = x;
+                if (buffp + 1 < bufflen)      /* allow odd buffer length */
+                    buff[buffp + 1] = x >> 8;
+
+                buffp += 2;
+                bytes -= 2;
+            }
+
+            /* throw away extra bytes that the drive might wish to supply */
+            while (bytes > 0)
+            {
+                dummy = *tfdata;
+                bytes -= 2;
+            }
+        }
+        else         /* must be TR_WRITE */
+        {
+            /* copy bytes from the buffer */
+            while (bytes > 0 && buffp < bufflen)
+            {
+                int x = buff[buffp];
+
+                if (buffp + 1 < bufflen)      /* allow odd buffer length */
+                    x |= (buff[buffp + 1] << 8);
+
+                *tfdata = x;
+
+                buffp += 2;
+                bytes -= 2;
+            }
+
+            /* supply any extra bytes that the drive might request */
+            while (bytes > 0)
+            {
+                *tfdata = 0;
+                bytes -= 2;
+            }
+        }
+    }
+
+DEBUG debug_output (T_PACKET,
+      "  command completed successfully: count = %d, status = %02x\n",
+      *count, *finalstatus);
+
+    return NULL;
+}
+
+
+/*
+ * This function is called after a device has timed out during execution of
+ *  an ATAPI Packet Command.
+ *
+ * This is a "last-ditch" attempt to recover, and so no further action is
+ *  taken if the ATAPI Soft Reset command also fails.
+ */
+
+static void atapi_soft_reset (DrivePtr drive)
+{
+    int status;
+
+    /* select device and issue ATAPI Soft Reset command */
+    *tfdriveselect = (drive->device << DS_DRIVE_SHFT) | DS_ALWAYS;
+    *tfcommand = ATAPI_SOFT_RESET;
+
+    /* set timeout and wait for BSY flag to clear */
+    set_time_out (drive->dib.timeout);
+    status = await_not_BSY ();
+
+DEBUG
+{
+if (status < 0)
+    debug_output (T_RESET,
+          "Device %d remains busy after reset\n", drive->device);
+else
+    debug_output (T_RESET, "Device %d successfully reset\n", drive->device);
+}
+
+    return;
+}
+
+
+/*
+ * This is called in two circumstances:
+ *
+ * Firstly, after the device has signalled a CHECK condition following
+ *  execution of an ATAPI command, in which case 'opcode' gives the command
+ *  which failed.
+ *
+ * Secondly, as a way of determining the current status of the drive - in
+ *  which case, 'opcode' is set to ATAPI_REQUESTSENSE.
+ *
+ * The REQUEST SENSE command is issued, and - if this is successful - its
+ *  results are interpreted: see the ATAPI Driver FS for details.
+ *
+ * A special error is returned if the REQUEST SENSE command itself fails.
+ */
+
+static Error * atapi_get_error (DrivePtr drive, char opcode)
+{
+    RequestSenseCpktRec c;
+    RequestSenseBuffRec r;
+    Error *err;
+    int count;
+    char status;
+
+    /* clear command packet */
+    memset ((char *) &c, 0, CPKT_SIZE);
+
+    /* issue REQUEST SENSE command */
+    c.opcode = ATAPI_REQUESTSENSE;
+    c.len = offsetof (RequestSenseBuffRec, dummy);
+    err = atapi_packet_command (drive, (char *) &c, (char *) &r, c.len,
+                                       TR_READ, &count, &status);
+    if (!err)
+    {
+        char errortype = r.errorcode & REQUESTSENSE_ERRORCODE_MASK;
+        char sensekey = r.sensekey & REQUESTSENSE_SENSEKEY_MASK;
+        char asc = r.asc;
+        char ascq = r.ascq;
+
+DEBUG debug_output (T_ERROR,
+      "errortype = &%02x, sensekey = &%x, ASC = &%02x, ASCQ = &%02x\n",
+      errortype, sensekey, asc, ascq);
+
+        /* just check that REQUEST SENSE has not raised a CHECK condition */
+        if (status & SF_CHECK)
+        {
+
+DEBUG debug_output (T_ERROR,
+      "REQUEST SENSE command raised CHECK condition\n");
+
+            return msgs_make_error (ERR_REQSENSE + PROG_ERR);
+        }
+
+        /*
+         * These are the error translations for the Sony CDU76E drive.
+         *
+         * Undoubtedly, different translations will be required for
+         *  different ATAPI drives.
+         */
+
+        if (errortype == REQUESTSENSE_NORMALERROR)
+        {
+            switch (sensekey)
+            {
+            case SENSEKEY_NOSENSE:
+
+                if (drive->features->flags & DRVINFO_WRONG_EJECT_ERROR) {
+
+                    /*
+                     * The Sony CDU50E returns this "error" if the drive is opened
+                     *  while a READ (12) command is in progress; note that the
+                     *  CDU76E more sensibly indicates "Drive empty" directly!
+                     */
+
+                    if (opcode == ATAPI_READ12 && asc == 0 && ascq == 0)
+                        return register_simple_error (ERR_DRIVEEMPTY);
+                }
+                /*
+                 * Ignore this "error" if this is a call of REQUEST SENSE
+                 *  simply to determine the state of the drive, rather than
+                 *  a call in response to a CHECK condition.
+                 */
+
+                if (opcode == ATAPI_REQUESTSENSE)
+                    return NULL;
+
+                break;
+
+            case SENSEKEY_RECOVERED:
+                return NULL;
+
+            case SENSEKEY_NOTREADY:
+                switch (asc)
+                {
+                case ASC_TOCUNOBTAINABLE:
+                    if (drive->features->flags & DRVINFO_ERRONEOUS_NO_TOC) {
+                        return register_simple_error (ERR_DRIVEBUSY);
+                    }
+                    break;
+                case ASC_NOTREADY:
+                    if (ascq == ASCQ_BECOMINGREADY)
+                        return register_simple_error (ERR_DRIVEBUSY);
+                    break;
+
+                case ASC_DRIVEEMPTY:
+                    return register_simple_error (ERR_DRIVEEMPTY);
+
+                case ASC_LOCKED:
+                    if (ascq == ASCQ_DRAWERLOCKED)
+                        return register_simple_error (ERR_DRAWERLOCKED);
+                    break;
+                }
+                break;
+
+            case SENSEKEY_ILLEGALREQUEST:
+                switch (asc)
+                {
+                case ASC_OUTOFRANGE:
+                    return register_simple_error (ERR_BADADDR);
+
+                case ASC_ILLEGALMODE:
+                    return register_simple_error (ERR_WRONGMODE);
+
+                case ASC_INVALIDFIELD:
+                    if (opcode == ATAPI_PLAYAUDIOMSF)
+                        return register_simple_error (ERR_BADADDR);
+                }
+                break;
+
+            case SENSEKEY_UNITATTENTION:
+                switch (asc)
+                {
+                case ASC_RESET:
+                case ASC_DISCCHANGED:
+                    return register_simple_error (ERR_DISCCHANGED);
+                }
+                break;
+
+            case SENSEKEY_ABORTEDCOMMAND:
+                if (asc == ASC_PLAYABORTED)
+                    return register_simple_error (ERR_NOAUDIOOP);
+            }
+        }
+
+        /* it wasn't an error we were expecting */
+        return msgs_make_error (ERR_UNEXPECTED + PROG_ERR,
+                                errortype, sensekey, asc, ascq);
+    }
+
+    /* only gets here if REQUEST SENSE timed out */
+
+DEBUG debug_output (T_ERROR, "REQUEST SENSE command timed out\n");
+
+    return err;
+}
+
+
+/*
+ * This is called in two situations.
+ *
+ * It is called on entry to atapi_execute if the "pendingdiscchange" flag is
+ *  set for the drive. This means that there is a "Disc changed" error yet
+ *  to be returned to the client. If the drive is now ready, the error is
+ *  returned; otherwise it remains deferred and the current state of the
+ *  drive is returned instead (as, eg, empty, busy).
+ *
+ * It is called just before exit from atapi_execute if the error returned
+ *  from the drive is "Disc changed". In this case, the state of the drive is
+ *  queried again to make sure that it is now ready. If not, the error is
+ *  deferred and the true state of the drive returned instead.
+ *
+ * All this is because the Sony CDU76E drive responds as follows to repeated
+ *  REQUEST SENSE (or TEST UNIT READY) calls when the drive is opened and
+ *  closed:
+ *
+ *      Drive empty (repeated while drawer is open)
+ *      Disc may have changed (when drawer has closed)
+ *      Drive empty (once or twice)
+ *      Drive busy  (repeated while TOC is read (I think))
+ *      Drive ready
+ */
+
+static Error * atapi_disc_changed (DrivePtr drive)
+{
+    Error * err;
+
+DEBUG debug_output (T_ERROR,
+      "Entering atapi_disc_changed - pendingdiscchange = %d\n",
+      drive->pendingdiscchange);
+
+#if FALSE
+    do
+#endif
+    {
+
+    if (~drive->features->flags & DRVINFO_NOT_READ_SUB) {
+      char cpkt [CPKT_SIZE] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+      int count;
+      char status;
+      ReadSubChannelCpktPtr c = (ReadSubChannelCpktPtr) cpkt;
+      ReadSubChannelBuffRec r;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - DriveStatus: dib = &%x\n", (int) &drive->dib);
+
+      c->opcode = ATAPI_READSUBCHANNEL;
+      c->flags = READSUBCHANNEL_SUBQ;
+      c->format = READSUBCHANNEL_CURRENT;
+      c->len0 = sizeof (r);
+
+      /* /* zero remaining cpkt fields? */
+
+      /* A call to atapi_execute here would go recursive (trying to lock the
+       * bus again, severe danger of knackering the supervisor stack etc.
+       */
+
+      err = atapi_packet_command (drive, cpkt, NULL, 0,
+                                         TR_NONE, &count, &status);
+
+      if (err)    /* must have timed out */
+      {
+
+DEBUG debug_output (T_RESET,
+        "About to reset device following timeout during command %02x\n",
+        cpkt[0]);
+
+          atapi_soft_reset (drive);
+      }
+      else
+      {
+          /* retrieve and interpret any error condition */
+          if (status & SF_CHECK)
+          {
+DEBUG debug_output (T_ERROR,
+        "Issuing REQUEST SENSE following CHECK condition from ReadSubChannel\n");
+
+              err = atapi_get_error (drive, ATAPI_READSUBCHANNEL);
+          }
+      }
+    } else {
+      char cpkt [CPKT_SIZE] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+      int count;
+      char status;
+      TestUnitReadyCpktPtr c = (TestUnitReadyCpktPtr) cpkt;
+
+DEBUG debug_output (T_ENTRY,
+      "ATAPI entry - DriveStatus: dib = &%x\n", (int) &drive->dib);
+
+      c->opcode = ATAPI_TESTUNITREADY;
+
+      /* /* zero remaining cpkt fields? */
+
+      /* A call to atapi_execute here would go recursive (trying to lock the
+       * bus again, severe danger of knackering the supervisor stack etc.
+       */
+
+      err = atapi_packet_command (drive, cpkt, NULL, 0,
+                                         TR_NONE, &count, &status);
+
+      if (err)    /* must have timed out */
+      {
+
+DEBUG debug_output (T_RESET,
+        "About to reset device following timeout during command %02x\n",
+        cpkt[0]);
+
+          atapi_soft_reset (drive);
+      }
+      else
+      {
+          /* retrieve and interpret any error condition */
+          if (status & SF_CHECK)
+          {
+DEBUG debug_output (T_ERROR,
+        "Issuing REQUEST SENSE following CHECK condition from TestUnitReady\n");
+
+              err = atapi_get_error (drive, ATAPI_TESTUNITREADY);
+          }
+    }
+//#else
+//        err = atapi_get_error (drive, ATAPI_REQUESTSENSE);
+    }
+    }
+#if FALSE
+    while ((err->errnum & 0xff) == ERR_DISCCHANGED);
+#endif
+
+    drive->pendingdiscchange = (err != 0);
+
+    if (!err)
+        err = register_simple_error (ERR_DISCCHANGED);
+
+DEBUG debug_output (T_ERROR,
+      "Leaving atapi_disc_changed - pendingdiscchange = %d, errnum = %d\n",
+      drive->pendingdiscchange, err->errnum);
+
+    return err;
+}
+
+
+/*
+ * Claim exclusive use of the hardware interface.
+ *
+ * At present, this function assumes that the interface is that controlled
+ *  by ADFS, and so calls ADFS_LockUnlockIDE.
+ *
+ * The call may time out, in which case a suitable error is returned.
+ */
+
+static Error * atapi_lock_bus (DrivePtr drive)
+{
+    int count;
+
+#if debugging
+count = 1;
+#endif
+
+DEBUG debug_output (T_LOCK, "atapi_lock_bus: ");
+
+    set_time_out (TO_IDELOCK);
+
+    while (TRUE)
+    {
+        Error *err = _swix (ADFS_LockIDE, I0, TRUE);
+
+        if (err == 0)
+            break;
+
+        if (err->errnum == DRIVER_IN_USE)
+        {
+            if (!timed_out ())
+            {
+
+#if debugging
+count++;
+#endif
+                continue;
+            }
+
+            err = msgs_make_error (ERR_LOCKTIMEOUT + PROG_ERR);
+        }
+
+DEBUG debug_output (T_LOCK, "gave up after %d tries\n", count);
+
+        return err;
+    }
+
+DEBUG debug_output (T_LOCK, "successful after %d tries\n", count);
+
+    return NULL;
+}
+
+
+/*
+ * Release the hardware interface.
+ */
+
+static void atapi_unlock_bus (DrivePtr drive)
+{
+DEBUG debug_output (T_LOCK, "atapi_unlock_bus\n");
+
+    _swix (ADFS_LockIDE, I0, FALSE);
+
+    return;
+}
+
+
+/*
+ * Called from the main entry point routine register_entry_point (..) to
+ *  execute an ATAPI command. The following actions take place:
+ *
+ *    - lock the bus
+ *    - issue the command
+ *    - if the device indicates an error, issue REQUEST SENSE and interpret
+ *       the error
+ *    - unlock the bus
+ *
+ * If at any time the bus or device times out, the device is reset and the
+ *  bus is unlocked before returning a suitable error.
+ */
+
+Error * atapi_execute
+(
+    DrivePtr drive,
+    char *cpkt,
+    char *buff,
+    int bufflen,
+    int transfer,
+    int *count
+)
+{
+    char status;
+    Error *err;
+    char *commregs = drive->commregs;
+    char *ctrlregs = drive->ctrlregs;
+    char opcode = cpkt[0];
+
+    /* initialise addresses of task file registers */
+    tfdata = (volatile unsigned int *) (commregs + COMMREG_DATA);
+    tferror = (volatile char *) (commregs + COMMREG_ERROR);
+    tffeatures = (volatile char *) (commregs + COMMREG_FEATURES);
+    tfcountlow = (volatile char *) (commregs + COMMREG_COUNTLOW);
+    tfcounthigh = (volatile char *) (commregs + COMMREG_COUNTHIGH);
+    tfdriveselect = (volatile char *) (commregs + COMMREG_DRIVESELECT);
+    tfstatus = (volatile char *) (commregs + COMMREG_STATUS);
+    tfcommand = (volatile char *) (commregs + COMMREG_COMMAND);
+    tfaltstatus = (volatile char *) (ctrlregs + CTRLREG_ALTSTATUS);
+
+    /* lock the bus */
+    err = atapi_lock_bus (drive);
+
+    if (err)    /* must have timed out */
+        return err;
+
+
+    /*
+     * Unless the command is one which can be executed regardless of the
+     *  presence or absence of a disc, check out any pending "Disc changed"
+     *  error first
+     */
+    if (drive->pendingdiscchange)
+    {
+
+DEBUG debug_output (T_ERROR,
+      "There is a pending 'disc changed' error on entry to atapi_execute\n");
+
+        switch (opcode)
+        {
+            case ATAPI_INQUIRY:
+            case ATAPI_MODESENSE:
+            case ATAPI_MODESELECT:
+            case ATAPI_SETSPEED:
+            case ATAPI_LOCKUNLOCK:
+                break;
+
+            case ATAPI_STARTSTOPUNIT:
+                if (((StartStopUnitCpktPtr) &cpkt)->flags2 &
+                                             STARTSTOPUNIT_LOADEJECT)
+                    break;
+
+            default:
+                err = atapi_disc_changed (drive);
+                atapi_unlock_bus (drive);
+                return err;
+        }
+    }
+
+
+    /* issue the command */
+    err = atapi_packet_command (drive, cpkt, buff, bufflen,
+                                       transfer, count, &status);
+
+    if (err)    /* must have timed out */
+    {
+
+DEBUG debug_output (T_RESET,
+      "About to reset device following timeout during command %02x\n",
+      cpkt[0]);
+
+        atapi_soft_reset (drive);
+    }
+    else
+    {
+        /* retrieve and interpret any error condition */
+        if (status & SF_CHECK)
+        {
+
+DEBUG debug_output (T_ERROR,
+      "Issuing REQUEST SENSE following CHECK condition from command &%02x\n",
+      opcode);
+
+            err = atapi_get_error (drive, opcode);
+
+            /*
+             * May need to defer return of a "Disc changed" error; but entry
+             *  points which can execute successfully regardless of the
+             *  presence or absence of a disc are exempt.
+             */
+            if ((err->errnum & 0xff) == ERR_DISCCHANGED)
+            {
+
+                 if (drive->features->flags & DRVINFO_READ_DETECTS_CHANGE) {
+
+                 /*
+                  * But first we must issue a null READ (12) command; this
+                  *  appears to be sufficient to re-trigger the "look for
+                  *  disc changed" mechanism in the Sony CDU76E.
+                  *
+                  * Without this, sequences such as:
+                  *
+                  *   PLAY AUDIO MSF
+                  *   <swap disc>
+                  *   PLAY AUDIO MSF
+                  *
+                  * or even:
+                  *
+                  *   READ TOC
+                  *   <swap disc>
+                  *   READ TOC
+                  *
+                  * will execute without a "Disc changed" error being raised
+                  * by the drive.
+                  */
+
+                    Read12CpktRec c;
+                    int count;
+                    char status;
+                    Error *err;
+
+DEBUG debug_output (T_ERROR,
+      "Issuing dummy READ (12) following 'disc changed' error\n");
+
+                    /* clear command packet */
+                    memset ((char *) &c, 0, CPKT_SIZE);
+                    c.opcode = ATAPI_READ12;
+
+                    /* read 0 sectors starting at sector 0 */
+                    err = atapi_packet_command (drive, (char *) &c, NULL, 0,
+                                       TR_READ, &count, &status);
+
+                    /* ignore any problems with this command */
+                }
+                switch (opcode)
+                {
+                    case ATAPI_INQUIRY:
+                    case ATAPI_MODESENSE:
+                    case ATAPI_MODESELECT:
+                    case ATAPI_SETSPEED:
+                    case ATAPI_LOCKUNLOCK:
+                        break;
+
+                    case ATAPI_STARTSTOPUNIT:
+                        if (((StartStopUnitCpktPtr) &cpkt)->flags2 &
+                                                     STARTSTOPUNIT_LOADEJECT)
+                            break;
+
+                    default:
+                        err = atapi_disc_changed (drive);
+                }
+            }
+        }
+    }
+
+    /* unlock the bus */
+    atapi_unlock_bus (drive);
+
+    return err;
+}
+
+
+/*
+ * This function is called during initialisation as part of the process of
+ *  identifying which devices are ATAPI and which are not.
+ *
+ * There are two ATA Identify Device commands as follows:
+ *    &EC  -  Identify Device
+ *    &A1  -  ATAPI Identify Device
+ *
+ * The first of these gives information about non-ATAPI devices, and should
+ *  be faulted by an ATAPI device, whereas the second gives information about
+ *  ATAPI devices but should be faulted by a non-ATAPI device.
+ *
+ * Furthermore, the first should only be issued when DRDY = 1, whereas the
+ *  second can be issued to an ATAPI device regardless of the state of DRDY.
+ *
+ * At entry, registers for the bus have been set up, the bus is locked, the
+ *  device selected, and the status register indicates !BSY; if the command
+ *  requested is &EC, the status register also indicates DRDY = 1.
+ *
+ * If the command times out, the result is -1.
+ * If the command returns an error, the result is -2.
+ * Otherwise the command executes successfully and the result is 0.
+ *
+ * The returned data is copied to the buffer supplied, and, if 'swap' is
+ *  TRUE, each pair of bytes in the model and firmware identification strings
+ *  is swapped around.
+ */
+
+static int atapi_identify_device (char code, char *buff, Bool swap)
+{
+    int status;
+    int i;
+
+    /* issue command */
+
+#if debugging
+    state = "Device identification - ATAxx - command";
+    if (code == ATA_IDENTIFY_DEVICE)
+        state[27] = state[28] = ' ';
+    else
+    {
+        state[27] = 'P';
+        state[28] = 'I';
+    }
+#endif
+
+    *tfcommand = code;
+    status = await_INTRQ ();
+    if (status < 0)   /* timed out during command phase */
+    {
+
+DEBUG debug_output (T_IDENTDET,
+      "ATA%s Identify Device command timed out\n",
+      code == ATAPI_IDENTIFY_DEVICE ? "PI" : "");
+
+        return -1;
+    }
+
+    /* check for errors */
+    if (status & SF_CHECK)
+    {
+
+DEBUG debug_output (T_IDENTDET,
+      "ATA%s Identify Device command failed: status = %02x, error = %02x\n",
+      code == ATAPI_IDENTIFY_DEVICE ? "PI" : "",
+      status, *tferror);
+
+        return -2;
+    }
+
+    /* read data from device */
+    for (i = 0; i < 512; i += 2)
+    {
+        int x = *tfdata;
+
+        buff[i] = x;
+        buff[i + 1] = x >> 8;
+    }
+
+    /* swap bytes in model and firmware fields */
+    {
+        IdentifyDevicePtr p = (IdentifyDevicePtr) buff;
+        char t;
+
+        if (swap)
+        {
+            for (i = 0; i < MAX_MODEL_ID; i += 2)
+            {
+                t = p->model[i];
+                p->model[i] = p->model[i+1];
+                p->model[i+1] = t;
+            }
+
+            for (i = 0; i < MAX_FIRMWARE_REV; i += 2)
+            {
+                t = p->firmware[i];
+                p->firmware[i] = p->firmware[i+1];
+                p->firmware[i+1] = t;
+            }
+        }
+
+DEBUG debug_output (T_IDENTDET,
+      "ATA%s Identify Device command completed successfully for %s",
+      code == ATAPI_IDENTIFY_DEVICE ? "PI" : "",
+      str_from (p->model, MAX_MODEL_ID));
+DEBUG debug_output (T_IDENTDET, " (%s)\n",
+      str_from (p->firmware, MAX_FIRMWARE_REV));
+
+    }
+
+    return 0;
+}
+
+
+/*
+ * This is called as soon as a device has been identified, and a DriveRec
+ *  filled in with default configuration information.
+ *
+ * Further configuration information is obtained - either from a
+ *  configuration file, or by reading the Capabilities Mode Page in the
+ *  device itself.
+ *
+ * Finally, the INQUIRY command is issued to set revised model and firmware
+ *  revision values in the DriveRec.
+ */
+
+static void atapi_configure (DrivePtr drive)
+{
+    /*
+     * If there is a configuration file for the device, read further details
+     *  from it. The device is identified by drive->dib.descr.model, and the
+     *  file may contain different sections identified by the firmware
+     *  revision given in drive->dib.descr.firmware.
+     *
+     * The format of this file is still to be determined.
+     */
+
+    /*    ....    */
+
+
+   /* TGR: I'm not going to implement the file lookup stuff (yet). I believe that
+    * it may be overkill if ATAPI drives are converging. Equally I something doesn't
+    * quite gel with me when it comes to H/W drivers looking up config info in files.
+    * The following is a hacky hardwaired lookup of drive capabilities for some
+    * common older drives.
+    */
+
+    {
+      drive->features = (DriveFeatures *)
+                        bsearch (drive->dib.descr.model, drive_features,
+                          drive_features_size / sizeof (DriveFeatures),
+                          sizeof (DriveFeatures),
+                          drive_test);
+
+      if (!drive->features) {
+        drive->features = &drive_features_default;
+      }
+
+      DEBUG debug_output (T_IDENTDET,
+                          "Drive %s idenitifed as %s\n", drive->dib.descr.model, drive->features->model);
+    }
+
+    /*
+     * If no configuration file exists, then the default configuration data
+     *  set in register_scan_for_drives (..) is left untouched, except for
+     *  the "supported bits" - which are determined from the flags in the
+     *  Capabilities Mode Page by issuing the MODE SENSE command.
+     */
+
+    {
+        ModeSenseCpktRec c;
+        ModeCapabilitiesPageRec r;
+        int count;
+        char status;
+
+      reissue:
+        memset ((char *) &c, 0, CPKT_SIZE);
+        c.opcode = ATAPI_MODESENSE;
+        c.page = MODESENSE_CAPABILITIES_PAGE;
+        c.len0 = sizeof (r);
+
+
+DEBUG debug_output (T_IDENTDET,
+      "Issuing MODE SENSE (capabilities) command\n");
+
+        if (!atapi_packet_command (drive, (char *) &c,
+                                   (char *) &r, sizeof (r), TR_READ,
+                                   &count, &status))
+        {
+            if (!(status & SF_CHECK))  /* command completed successfully */
+            {
+                unsigned flags = SUPPORTED_SEEK;
+
+                if (count >= sizeof (r))
+                {
+                    if (r.flags1 & MODE_CAPABILITIES_AUDIOPLAY)
+                    {
+                        flags |= SUPPORTED_COREAUDIO |
+                                 SUPPORTED_AUDIOSCAN |
+                                 SUPPORTED_SUBCHANNEL;
+                        if (r.vollevels == 0 || r.vollevels > 2)
+                            flags |= SUPPORTED_VOLUME;
+                    }
+
+                    if (r.flags1 & MODE_CAPABILITIES_MODE2FORM2)
+                    {
+                        flags |= SUPPORTED_FORM2 |
+                                 SUPPORTED_CONTINUOUS;
+                        if (r.flags2 & MODE_CAPABILITIES_AUDIOREAD)
+                            flags |= SUPPORTED_RAWREAD;
+                    }
+
+                    if (r.flags2 & MODE_CAPABILITIES_AUDIOREAD)
+                        flags |= SUPPORTED_AUDIOREAD;
+
+                    if (r.flags1 & MODE_CAPABILITIES_MULTISESSION)
+                        flags |= SUPPORTED_MULTISESSION;
+
+                    if (r.flags3 & MODE_CAPABILITIES_EJECT)
+                        flags |= SUPPORTED_EJECT;
+
+                    if (r.flags3 & MODE_CAPABILITIES_LOCKABLE)
+                        flags |= SUPPORTED_LOCK;
+
+                    if (r.flags4 & MODE_CAPABILITIES_SEPARATEVOLUMES)
+                        flags |= SUPPORTED_STEREOVOLUME;
+
+                    drive->dib.supported = flags;
+
+DEBUG debug_output (T_IDENTDET,
+      "Supported bits derived from MODE SENSE (capabilities) are &%x\n",
+      flags);
+
+                }
+                else
+                {
+
+DEBUG debug_output (T_IDENTDET,
+      "MODE SENSE (capabilities) returned too little data (%d)\n", count);
+
+                }
+            }
+            else    /* command ended in error */
+            {
+                Error *err;
+
+DEBUG debug_output (T_IDENTDET,
+      "MODE SENSE (capabilities) ended in error - error register = &%02x\n",
+      *tferror);
+
+                /* try again if "Disc changed" error */
+                err = atapi_get_error (drive, ATAPI_MODESENSE);
+                if (err->errnum == ERR_DISCCHANGED)
+                    goto reissue;
+            }
+        }
+        else
+        {
+
+DEBUG debug_output (T_IDENTDET,
+      "MODE SENSE (capabilities) timed out\n");
+
+        }
+    }
+
+    /*
+     * Next, the INQUIRY command is issued to determine the definitive
+     *  model and firmware revision data.
+     *
+     * Note that this command should never fail (in particular, it should
+     *  not return "Disc may have changed" or "Becoming ready" errors).
+     */
+
+    {
+        InquiryCpktRec c;
+        InquiryBuffRec r;
+        int count;
+        char status;
+
+        memset ((char *) &c, 0, CPKT_SIZE);
+        c.opcode = ATAPI_INQUIRY;
+        c.len = sizeof (r);
+
+DEBUG debug_output (T_IDENTDET, "Issuing ATAPI Inquiry command\n");
+
+        if (!atapi_packet_command (drive, (char *) &c,
+                                   (char *) &r, sizeof (r), TR_READ,
+                                   &count, &status))
+        {
+            if (!(status & SF_CHECK))  /* command completed successfully */
+            {
+                if (count >= sizeof (r))
+                {
+                    strcpy (drive->dib.descr.model,
+                            str_from (r.vendor, sizeof (r.vendor)));
+                    strcat (drive->dib.descr.model, " ");
+                    strcat (drive->dib.descr.model,
+                            str_from (r.model, sizeof (r.model)));
+                    strcpy (drive->dib.descr.firmware,
+                            str_from (r.firmware, sizeof (r.firmware)));
+                }
+                else
+                {
+
+DEBUG debug_output (T_IDENTDET,
+      "ATAPI Inquiry returned too little data (%d)\n", count);
+
+                }
+            }
+            else
+            {
+
+DEBUG debug_output (T_IDENTDET,
+      "ATAPI Inquiry ended in error - error register = &%02x\n",
+      *tferror);
+
+            }
+        }
+        else
+        {
+
+DEBUG debug_output (T_IDENTDET,
+      "ATAPI Inquiry timed out\n");
+
+        }
+    }
+
+
+    if (drive->features->flags & DRVINFO_READ_DETECTS_CHANGE) {
+    /*
+     * Finally, a dummy READ (12) command is issued to make sure that the
+     *  "disc changed" mechanism is "triggered" properly; any errors at
+     *  this point are ignored.
+     */
+
+        Read12CpktRec c;
+        int count;
+        char status;
+
+        memset ((char *) &c, 0, CPKT_SIZE);
+        c.opcode = ATAPI_READ12;
+
+DEBUG debug_output (T_IDENTDET, "Issuing dummy READ (12) command\n");
+
+        atapi_packet_command (drive, (char *) &c, NULL, 0, TR_READ,
+                                          &count, &status);
+    }
+
+
+    return;
+}
+
+
+/*
+ * Returns TRUE if the specified drive exists and is an ATAPI device.
+ *
+ * If so, details of its identification and protocol characteristics are
+ *  added to the drive information record before calling atapi_configure ()
+ *  for any further configuration information.
+ *
+ * On entry, 'buff' addresses a 512-byte buffer into which Identify Device
+ *  information can be placed.
+ */
+
+Bool atapi_exists (DrivePtr drive, IdentifyDevicePtr buff)
+{
+    int status;
+    Error *err;
+    char *commregs = drive->commregs;
+    char *ctrlregs = drive->ctrlregs;
+    Bool isatapi = FALSE;
+
+    /* initialise addresses of task file registers */
+    tfdata = (volatile unsigned int *) (commregs + COMMREG_DATA);
+    tferror = (volatile char *) (commregs + COMMREG_ERROR);
+    tffeatures = (volatile char *) (commregs + COMMREG_FEATURES);
+    tfcountlow = (volatile char *) (commregs + COMMREG_COUNTLOW);
+    tfcounthigh = (volatile char *) (commregs + COMMREG_COUNTHIGH);
+    tfdriveselect = (volatile char *) (commregs + COMMREG_DRIVESELECT);
+    tfstatus = (volatile char *) (commregs + COMMREG_STATUS);
+    tfcommand = (volatile char *) (commregs + COMMREG_COMMAND);
+    tfaltstatus = (volatile char *) (ctrlregs + CTRLREG_ALTSTATUS);
+
+
+    /*
+     * Determine if this device exists and is an ATAPI device.
+     */
+
+    /* lock the bus */
+    err = atapi_lock_bus (drive);
+    if (err)    /* must have timed out */
+        return FALSE;
+
+    set_time_out (TO_IDENTIFY);
+
+#if debugging
+    state = "Device identification - pre-selection";
+#endif
+
+    status = await_not_BSY ();
+    if (status < 0)    /* timed out before selection */
+    {
+        atapi_unlock_bus (drive);
+        return FALSE;
+    }
+
+    /* select device */
+    *tfdriveselect =  (drive->device << DS_DRIVE_SHFT) | DS_ALWAYS;
+
+#if debugging
+    state = "Device identification - selection";
+#endif
+
+    status = await_not_BSY ();
+    if (status < 0)    /* timed out during selection */
+    {
+        atapi_unlock_bus (drive);
+        return FALSE;
+    }
+
+    /*
+     * Try the ATA Identify Device command first:
+     *
+     *  If the device exists and is not ATAPI, the command will execute
+     *   successfully.
+     *
+     *  If the device exists and is ATAPI, the command will abort.
+     *
+     *  If the device does not exist and device 0 follows the 'first method'
+     *   (see ATA-2, para 9.7), the command will time out.
+     *
+     *  If the device does not exist and device 0 follows the 'second method'
+     *   (see ATA-2, para 9.7), the command will abort.
+     *
+     * Note: this code assumes that any devices on the bus have already
+     *  completed their initialisation: in particular, any ATA device will
+     *  show DRDY = 1 now that BSY = 0.
+     */
+
+DEBUG debug_output (T_IDENTDET,
+      "Pre-identification signature = %02x %02x\n",
+      *tfcounthigh, *tfcountlow);
+
+    status = atapi_identify_device (ATA_IDENTIFY_DEVICE,
+                                    (char *) buff, TRUE);
+
+    if (status == 0)          /* ATA identify successful */
+    {
+        /*
+         * device accepted ATA Identify Device command: must be a
+         *  disc drive
+         */
+
+DEBUG debug_output (T_IDENTDET, "Device %d is ATA - probably a disc drive\n",
+      drive->device);
+
+    }
+
+    else if (status == -1)    /* ATA identify timed out */
+    {
+
+        /*
+         * ATA Identify Device command timed out; must be a non-existent
+         *  device 1 where device 0 uses the 'first method'.
+         */
+
+DEBUG debug_output (T_IDENTDET,
+      "Device %d does not exist - master uses 'first method'\n",
+      drive->device);
+
+    }
+
+    else                      /* ATA identify aborted */
+    {
+        /*
+         * Now try the ATAPI Identify Device command:
+         *
+         *  If the device exists and is ATAPI, the command will execute
+         *   successfully.
+         *
+         *  If the device does not exist and device 0 follows the 'second
+         *   method', the command will abort.
+         */
+
+DEBUG debug_output (T_IDENTDET,
+      "Post-ATA-identification signature = %02x %02x\n",
+      *tfcounthigh, *tfcountlow);
+
+        status = atapi_identify_device (ATAPI_IDENTIFY_DEVICE,
+                                        (char *) buff, TRUE);
+
+        if (status == 0)          /* ATAPI identify successful */
+        {
+            /*
+             * We've found an ATAPI device!
+             */
+
+DEBUG debug_output (T_IDENTDET,
+      "Device %d is ATAPI - probably a CD-ROM drive\n", drive->device);
+
+                    isatapi = TRUE;
+        }
+
+        else if (status == -1)    /* ATAPI identify timed out */
+        {
+            /*
+             * This is a surprise - possibly a faulty device.
+             */
+
+DEBUG debug_output (T_IDENTDET, "Device %d appears faulty\n", drive->device);
+
+        }
+
+        else                      /* ATAPI identify aborted */
+        {
+            /*
+             * Both ATA and ATAPI identify commands have aborted; must be
+             *  a non-existent device 1 where device 0 follows the 'second
+             *  method'.
+             */
+
+DEBUG debug_output (T_IDENTDET,
+      "Device %d does not exist - master uses 'second method'\n",
+      drive->device);
+
+        }
+    }
+
+
+    if (isatapi)
+    {
+        /*
+         * Copy initial model and firmware description from the information
+         *  returned by ATAPI Identify Device.
+         */
+        strcpy (drive->dib.descr.model,
+                str_from (buff->model, MAX_MODEL_ID));
+        strcpy (drive->dib.descr.firmware,
+                str_from (buff->firmware, MAX_FIRMWARE_REV));
+        drive->noIRQafterCMD = buff->cmddrqtype != INTERRUPT_DRQ;
+
+DEBUG debug_output (T_IDENTDET,
+      "ATAPI Identify Device gives model = '%s', firmware = '%s'\n",
+      drive->dib.descr.model, drive->dib.descr.firmware);
+
+        /* complete configuration */
+        atapi_configure (drive);
+
+DEBUG debug_output (T_IDENTDET,
+      "ATAPI Inquiry gives model = '%s', firmware = '%s'\n",
+      drive->dib.descr.model, drive->dib.descr.firmware);
+
+    }
+
+
+    /* unlock the bus */
+    atapi_unlock_bus (drive);
+
+    return isatapi;
+}
+
+
+/*
+ * Called from the main entry point routine register_entry_point (..) to
+ *  execute an ATA command. This can only arise through the CallDeviceDriver
+ *  entry point, and the only supported operation codes at present are
+ *  ATAPI_SOFT_RESET and ATAPI_IDENTIFY_DEVICE.
+ */
+
+Error * atapi_ata_execute
+(
+    DrivePtr drive,
+    char opcode,
+    char *buff,
+    int bufflen,
+    int transfer,
+    int *count
+)
+{
+    Error *err;
+    char *commregs = drive->commregs;
+    char *ctrlregs = drive->ctrlregs;
+
+    /* generate error immediately if it is not a supported command */
+    switch (opcode)
+    {
+    case ATAPI_SOFT_RESET:
+    case ATAPI_IDENTIFY_DEVICE:
+        break;
+
+    default:
+        return msgs_make_error (ERR_BADATACODE + PROG_ERR, opcode);
+    }
+
+    /* initialise addresses of task file registers */
+    tfdata = (volatile unsigned int *) (commregs + COMMREG_DATA);
+    tferror = (volatile char *) (commregs + COMMREG_ERROR);
+    tffeatures = (volatile char *) (commregs + COMMREG_FEATURES);
+    tfcountlow = (volatile char *) (commregs + COMMREG_COUNTLOW);
+    tfcounthigh = (volatile char *) (commregs + COMMREG_COUNTHIGH);
+    tfdriveselect = (volatile char *) (commregs + COMMREG_DRIVESELECT);
+    tfstatus = (volatile char *) (commregs + COMMREG_STATUS);
+    tfcommand = (volatile char *) (commregs + COMMREG_COMMAND);
+    tfaltstatus = (volatile char *) (ctrlregs + CTRLREG_ALTSTATUS);
+
+    /* lock the bus */
+    err = atapi_lock_bus (drive);
+
+    if (err)    /* must have timed out */
+        return err;
+
+    /* issue the ATA command */
+    switch (opcode)
+    {
+    case ATAPI_SOFT_RESET:
+        atapi_soft_reset (drive);
+        *count = 0;
+        break;
+
+    case ATAPI_IDENTIFY_DEVICE:
+        {
+            int status;
+
+            set_time_out (TO_IDENTIFY);
+
+#if debugging
+    state = "Device identification - pre-selection";
+#endif
+
+            status = await_not_BSY ();
+
+            if (status >= 0)
+            {
+                /* select device */
+                *tfdriveselect =  (drive->device << DS_DRIVE_SHFT) |
+                                  DS_ALWAYS;
+
+#if debugging
+    state = "Device identification - selection";
+#endif
+
+                status = await_not_BSY ();
+            }
+
+            if (status >= 0)
+                status = atapi_identify_device (ATAPI_IDENTIFY_DEVICE,
+                                                               buff, FALSE);
+
+            switch (status)
+            {
+            case -1:   /* timed out at some stage */
+                err = msgs_make_error (ERR_ATATIMEOUT + PROG_ERR);
+                break;
+
+            case -2:   /* CHECK condition */
+                err = msgs_make_error (ERR_ATAERROR + PROG_ERR,
+                                                    *tfaltstatus, *tferror);
+                break;
+
+            default:
+                *count = 512;
+                break;
+            }
+        }
+        break;
+    }
+
+    /* unlock the bus */
+    atapi_unlock_bus (drive);
+
+    return err;
+}
