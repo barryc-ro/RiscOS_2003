@@ -26,7 +26,7 @@ RESAPP = <resource$dir>.Apps.${APP}
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p 
 AS      = aasm
 CP      = copy
 RM      = remove
@@ -117,6 +117,7 @@ crunched.!RunImage: bas.!RunImage
         crunch.!RunImage; BASIC
 
 ${LDIR}.ROM.!RunLink: bas.!RunLink
+        ${MKDIR} ${LDIR}.ROM    
         ${SQUISH} ${SQFLAGS} -from bas.!RunLink -to $@
 
 #---------------------------------------------------------------------------
