@@ -20,7 +20,7 @@ DIRS   = o._dirs
 
 
 CINCLUDES = -ITCPIPLibs: -IC:
-CFLAGS    = -Wp
+CFLAGS    = -Wp -zm -zps1
 
 include Makefiles:StdTools
 include Makefiles:StdRules
@@ -53,7 +53,3 @@ ${DIRS}:
         ${TOUCH} $@
 
 # Dynamic dependencies:
-o.base64: c.base64 h.base64
-o.dns: c.dns TCPIPLibs:sys.h.errno C:h.kernel C:h.swis TCPIPLibs:h.inetlib TCPIPLibs:sys.h.types TCPIPLibs:sys.h.cdefs TCPIPLibs:machine.h.endian TCPIPLibs:machine.h.ansi TCPIPLibs:machine.h.types TCPIPLibs:netinet.h.in TCPIPLibs:h.socklib TCPIPLibs:sys.h.types TCPIPLibs:sys.h.socket TCPIPLibs:sys.h.cdefs TCPIPLibs:sys.h.stat TCPIPLibs:sys.h.time TCPIPLibs:sys.h.cdefs TCPIPLibs:sys.h.cdefs TCPIPLibs:sys.h.time TCPIPLibs:sys.h.uio TCPIPLibs:sys.h.cdefs C:h.kernel TCPIPLibs:sys.h.types TCPIPLibs:sys.h.socket TCPIPLibs:netinet.h.in TCPIPLibs:h.netdb TCPIPLibs:sys.h.cdefs TCPIPLibs:sys.h.ioctl TCPIPLibs:sys.h.ttycom TCPIPLibs:sys.h.ioccom TCPIPLibs:sys.h.ioccom TCPIPLibs:sys.h.filio TCPIPLibs:sys.h.ioccom TCPIPLibs:sys.h.sockio TCPIPLibs:sys.h.ioccom TCPIPLibs:sys.h.cdefs TCPIPLibs:sys.h.types TCPIPLibs:sys.h.time TCPIPLibs:sys.h.ioctl TCPIPLibs:arpa.h.inet TCPIPLibs:sys.h.cdefs h.dns
-o.generic: c.generic C:h.kernel TCPIPLibs:sys.h.types TCPIPLibs:sys.h.cdefs TCPIPLibs:machine.h.endian TCPIPLibs:machine.h.ansi TCPIPLibs:machine.h.types TCPIPLibs:sys.h.socket TCPIPLibs:sys.h.cdefs TCPIPLibs:sys.h.errno C:h.kernel TCPIPLibs:h.socklib TCPIPLibs:sys.h.types TCPIPLibs:sys.h.socket TCPIPLibs:sys.h.stat TCPIPLibs:sys.h.time TCPIPLibs:sys.h.cdefs TCPIPLibs:sys.h.cdefs TCPIPLibs:sys.h.time TCPIPLibs:sys.h.uio TCPIPLibs:sys.h.cdefs C:h.kernel h.generic
-o.URLclient: c.URLclient C:h.kernel C:h.swis h.URLstruct h.URLclient
