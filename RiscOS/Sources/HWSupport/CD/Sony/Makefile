@@ -16,6 +16,7 @@ MKDIR    = cdir
 AS       = aasm
 CP       = copy
 RM       = remove
+STRIP    = stripdepnd
 
 CFLAGS   = -c -depend !Depend -IC:
 AFLAGS   = -depend !Depend -Stamp -quit -module
@@ -50,18 +51,10 @@ resources:
 
 clean:
         ${RM} ${TARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
         ${AS} ${AFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.Sony: Version
-rm.Sony: hdr.Hashes
-rm.Sony: hdr.Macros
-rm.Sony: s.Strings
-rm.Sony: s.DriverCode
-rm.Sony: s.Extras
-rm.Sony: s.OnError
-rm.Sony: s.Module
-rm.Sony: s.Variables
