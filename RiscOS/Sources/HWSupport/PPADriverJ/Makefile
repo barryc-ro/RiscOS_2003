@@ -64,16 +64,3 @@ ${TARGET}: ${SRC}
         ${AS} ${ASFLAGS} ${SRC}
 
 # Dynamic dependencies:
-rm.PPADriverJ: s.AcornHdr
-rm.PPADriverJ: Hdr:ListOpts
-rm.PPADriverJ: Hdr:Macros
-rm.PPADriverJ: Hdr:System
-rm.PPADriverJ: Hdr:SWIs
-rm.PPADriverJ: Hdr:CPU.Generic26
-rm.PPADriverJ: Hdr:IO.GenericIO
-rm.PPADriverJ: Hdr:RISCOS
-rm.PPADriverJ: Hdr:ModHand
-rm.PPADriverJ: Hdr:Parallel
-rm.PPADriverJ: Hdr:Buffer
-rm.PPADriverJ: Hdr:IZipFS
-rm.PPADriverJ: Version
