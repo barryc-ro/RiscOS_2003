@@ -334,19 +334,62 @@ cts_sc_status cts_sc_send_apdu(
         return res;
 }
 
+/*      Read Data from Card
+        -------------------
+
+Use SCTransport_ReadResponse to read data from the SCTransport buffer that
+has been returned from the card.
+
+Entry:          buffer          points to buffer to hold returned data
+                                (encoded using 2 hex digit for each byte).
+                                The copied data will include SW1 and SW2 after the
+                                main data (again, using 2 hex digits per byte).
+                buffer_length   specifies size of buffer
+                data_size       points to word to hold size of data read into buffer
+                sw1_sw2response points to 2 bytes to hold returned SW1 and SW2 status bytes
+
+Exit:           *buffer          Data returned in buffer with status byte(s), hex encoded
+                                 (ASCII text, but NOT null terminated)
+                *data_size       Updated with number of chars copied to *buffer, or size
+                                 of buffer required if buffer=NULL
+
+The returned data and the data_size normally INCLUDE the SW1 and SW2 status bytes as
+the last 4 characters in the string. The only exception is when we have an S block response
+in which case we return SW1 as two hex characters.
+
+cts_sc_read_data MUST always be called twice:
+
+First call cts_sc_read_data(NULL, 0, &length, NULL) to read length of returned data,
+then use this to create a buffer of the required size and call again to read data into the buffer.
+
+(The first call actually stores a local copy cof the data here, as SCTrans will not preserve it).
+
+Any of the pointers may be null to indicate that the caller is not interested in the returned data
+(in which case we use our own dummy buffers to hold the returned data).
+
+Bug fixes, 25 Jan 2000, Paul Skirrow:
+  last_response was never being updated with the size of the data read from the card in the
+  first call, so we were never returning the data, just the SW1 and SW2 bytes.
+
+  SCTransport_ReadResponse returned the incorrect buffer length. Fixed in SC_Transport.
+
+  size_t types were being compared with < to test for -1. This fails as they are unsigned.
+
+*/
+
 cts_sc_status cts_sc_read_data(
-        void *buffer,
-        size_t buffer_length,
-        size_t *data_size,
-        char *sw1sw2_response)
+        void *buffer,          /* Pointer to buffer to hold data read from card*/
+        size_t buffer_length,  /* Length of buffer in bytes */
+        size_t *data_size,     /* Pointer to word to hold size of returned data */
+        char *sw1sw2_response) /* Pointer to SW1 and SW2 buffer - read from card after data */
 {
         static char inbuffer[4096 * 2];
-        static size_t temporary;
-        static size_t last_response;
-        static char last_sw[2];
+        static size_t temporary;     /* Dummy buffer to hold data_size if caller's pointer is null */
+        static size_t last_response; /* Size of data read from card by last SCTransport_ReadRespsonse */
+        static char last_sw[2];      /* Last SW1/SW2 read from card */
         static cts_sc_status last_res;
         cts_sc_status res;
-        char sw[2];
+        char sw[2];                  /* Dummy SW1 SW2 buffer to use if caller has given us a null pointer */
 
         if (!read_response_available) {
                 return cts_sc_status_INPROGRESS;
@@ -367,24 +410,32 @@ cts_sc_status cts_sc_read_data(
         }
 
         if (data_size == NULL) {
-                data_size = &temporary;
+                data_size = &temporary;    /* Caller doesn't want size, so use our dummy buffer */
         }
 
         if (sw1sw2_response == NULL) {
-                sw1sw2_response = sw;
+                sw1sw2_response = sw;      /* Caller doesn't want SW1/SW2 so use our dummy buffer */
         }
 
-        buffer_length >>= 1;
+        buffer_length >>= 1;               /* Equivalent buffer length for binary buffer, instead of 2 byte hex which we return */
 
         if (buffer == NULL) {
                 *data_size = sizeof(inbuffer) >> 1;
+                /* Read data from card into our local inbuffer */
                 last_res = res = cts_swix(SCTransport_ReadResponse, _INR(0,4), actual_card_handle,
                         inbuffer, sizeof(inbuffer)>>1, data_size, last_sw);
+                dprintf(("cts_sc", "ReadResponse returned size=%d\n", *data_size));
+                last_response=*data_size;           /* Save size of data in last_response (fix in v0.65) */
+
                 memcpy(sw1sw2_response, last_sw, 2);
         }
         else {
-                size_t size_to_copy = last_response > buffer_length ? buffer_length : last_response;
-                *data_size = size_to_copy;
+                /* Bug fix: next three lines were missing, and comparison failed if last_response ==-1
+                   as it is unsigned comparison. Fix in v0.65 - Paul Skirrow 25 Jan 2000 */
+                if (last_response==-1)
+                  *data_size=-1;             /* -1 indicates no data and only one status byte */
+                else
+                  *data_size=last_response > buffer_length ? buffer_length : last_response;   /* Note all unsigned */
                 memcpy(sw1sw2_response, last_sw, 2);
                 res = last_res;
         }
@@ -413,12 +464,16 @@ cts_sc_status cts_sc_read_data(
                 }
         }
         else if (res == cts_sc_status_COMPLETE) {
+                /* If  buffer pointer is not null then copy the data and SW1 and SW1 bytes
+                   into the buffer using two byte hex encoding: */
                 if (buffer != NULL) {
                         dprintf(("cts_sc", "Adding [%02x:%02x] at offset %d in buffer\n",
                                 sw1sw2_response[0],
                                 sw1sw2_response[1],
                                 *data_size));
+                        /* Append SW1 and SW2 status bytes to end of buffer: */
                         memcpy(&inbuffer[*data_size], sw1sw2_response, 2);
+                        /* Copy data to buffer using 2 byte hex encoding */
                         cts_utils_binary_encode(buffer, inbuffer, 2 + *data_size);
                         dprintf(("cts_sc", "Encoded response is %.*s\n",
                                 (2 + *data_size) << 1, buffer));
@@ -435,6 +490,9 @@ cts_sc_status cts_sc_read_data(
                 res = cts_sc_status_COMPLETE;
         }
 
+        /* Modify data size to return size in chars, including SW1 and SW2 bytes.
+           Note if *data_size is -1 this indicates that we have read an S block response and
+           should return the single byte SW1, hex encoded. ie -1 is translated correctly to 2 chars*/
         *data_size = (*data_size + 2) << 1;
 
         return res;
@@ -570,7 +628,6 @@ extern void SCEvent_handler (void);
 /* One-time initialisation for getting events out of the smartcard module */
 enum {
         Event_Vector = 16,
-/*        Event_Expansion = 21, /* Event number */
         EnableEvent = 14, /* OSByte code */
         DisableEvent = 13 /* OSByte code */
 };
