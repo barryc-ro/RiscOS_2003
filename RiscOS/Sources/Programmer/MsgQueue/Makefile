@@ -22,7 +22,7 @@ EXP_HDR = <export$dir>
 #
 # Export Paths for Messages module
 #
-RESDIR = <resource$dir>.Resources2.${COMPONENT}
+RESDIR = <resource$dir>.Resources2.${FULL_COMPONENT}
 RESFSDIR   = Resources.${FULL_COMPONENT}
 
 #
