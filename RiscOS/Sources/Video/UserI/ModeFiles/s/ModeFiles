@@ -23,6 +23,7 @@ Module_BaseAddr
         GET     Hdr:HighFSI
         GET     Hdr:NewErrors
         GET     Hdr:MsgTrans
+        GET     Hdr:UpCall
         GET     VersionASM
 
 TAB     *       9
@@ -31,6 +32,12 @@ MonitorResolutionBits   *       &1F
 MonitorDepthShift       *       5
 MonitorDepthBits        *       &60
 MonitorFrameRateBit     *       &80
+
+; Pixel aspect ratios when pixel clock is 13.5 MHz (eg STB-400)
+PixelAspectRatio_NTSC           *       &0E38E
+PixelAspectRatio_PAL            *       &11111
+PixelAspectRatio_PAL_anamorphic *       &16C17
+PixelAspectRatio_square         *       &10000
 
 ; Sort out PAL/NTSC build type.
  [ :DEF: DontDetectHardware
@@ -90,7 +97,13 @@ workspace       RN      r12
 wsorigin                #       0
 
  [ DontDetectHardware
-unused                  #       1    ; I don't want the workspace size to be zero
+pixel_aspect_ratio      #       4
+   [ STB
+WSS_overscan_left       #       4
+WSS_overscan_bottom     #       4
+WSS_overscan_right      #       4
+WSS_overscan_top        #       4
+   ]
  |
 display_mode            #       6*4
 monitor_type            #       1
@@ -107,10 +120,15 @@ max_running_work        *       :INDEX:@
 
 	&       0					; Start
 	&       Mod_Init	- Module_BaseAddr
-	&       0                                       ; Die
  [ DontDetectHardware
+      [ STB
+	&       Mod_Die         - Module_BaseAddr       ; Die
+      |
+	&       0                                       ; Die
+      ]
 	&       0                                       ; Service
  |
+	&       0                                       ; Die
 	&       Mod_Service	- Module_BaseAddr	; Service
  ]
 	&       Mod_Title	- Module_BaseAddr
@@ -156,6 +174,26 @@ Mod_Init
 
  [ DontDetectHardware
 
+      [ STB
+        MOV     r0, #UpCallV
+        ADR     r1, UpCallV_Handler             ; r2 is already set up
+        SWI     XOS_Claim                       ; get on UpCallV
+
+        MOV     r0, #0                          ; start by assuming no extra overscan due to WSS signalling
+        STR     r0, WSS_overscan_left
+        STR     r0, WSS_overscan_bottom
+        STR     r0, WSS_overscan_right
+        STR     r0, WSS_overscan_top
+
+        BL      MonitorType
+        TEQ     r0, #0                          ; is it PAL?
+        LDREQ   r0, =PixelAspectRatio_PAL       ; assume non-anamorphic until told otherwise
+        LDRNE   r0, =PixelAspectRatio_NTSC
+      |
+        MOV     r0, #PixelAspectRatio_square    ; don't know about anything else - just assume square pixels
+      ]
+        STR     r0, pixel_aspect_ratio
+
         ADR     r0, ModeFilesPathVar
         ADR     r1, ModeFilesPathValue
         MOV     r2, #ModeFilesPathValueEnd - ModeFilesPathValue
@@ -172,6 +210,16 @@ ModeFilesPathValue
 ModeFilesPathValueEnd
         =       0
         ALIGN
+
+      [ STB
+Mod_Die
+        ENTRY
+        MOV     r0, #UpCallV
+        ADR     r1, UpCallV_Handler
+        LDR     r2, [r12]
+        SWI     XOS_Release                     ; get off UpCallV
+        EXIT
+      ]
 
  | ; options out everything until Mod_SWIHandler!
 
@@ -508,7 +556,10 @@ NTSCString      = "NTSC"
  ]
 
 SafeArea
-        ENTRY   "r4-r8"
+        ENTRY   "r4-r9"
+        LDR     r9, =&45444957          ; "WIDE"
+        TEQ     r0, r9                  ; was magic word used?
+        MOVNE   r9, #0                  ; flag that we shouldn't return pixel aspect ratio
 
         MOV     r2, #11                 ; x pixels
         MOV     r3, #12                 ; y pixels
@@ -542,6 +593,16 @@ SafeArea
         ADREQ   lr, PALPercentages
         ADRNE   lr, NTSCPercentages
         LDMIA   lr, {r6-r8,lr}
+      [ DontDetectHardware :LAND: STB
+        Push    "r2,r3"
+        ADR     r0, WSS_overscan_left
+        LDMIA   r0, {r0-r3}
+        ADD     r6, r6, r0
+        ADD     r7, r7, r1
+        ADD     r8, r8, r2
+        ADD     lr, lr, r3
+        Pull    "r2,r3"
+      ]
 
         MOV     r1, #100                ; divisor is always 100
 
@@ -569,6 +630,13 @@ SafeArea
         MOV     r2, r2, LSL r4
         MOV     r3, r3, LSL r5
 
+        TEQ     r9, #0
+      [ DontDetectHardware
+        LDRNE   r4, pixel_aspect_ratio
+      |
+        MOVNE   r4, #PixelAspectRatio_square ; for non-Slave builds, we don't know any better
+      ]
+        STRNE   r4, [sp]
         EXIT
 
 ; Percentages for left, bottom, right, top of screen giving borders round safe area.
@@ -578,5 +646,24 @@ PALPercentages
 
 NTSCPercentages
         DCD     $NTSCSafeArea
+
+ [ DontDetectHardware :LAND: STB
+UpCallV_Handler
+        ENTRY
+        TEQ     r0, #UpCall_MPEG
+        EXIT    NE
+        TEQ     r3, #&1000
+        EXIT    NE
+
+        ASSERT  :INDEX: pixel_aspect_ratio = 0
+        STMIA   r12, {r4-r8}
+
+        Push    "r0,r1"
+        MOV     r0, #0                  ; flags word - currently unused
+        LDR     r1, =&4D480             ; Service_SafeAreaChanged - not yet in HdrSrc at time of writing
+        SWI     XOS_ServiceCall
+        Pull    "r0,r1"
+        EXIT                            ; pass on call
+ ]
 
         END
