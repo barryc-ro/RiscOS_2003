@@ -14,6 +14,17 @@
 
 #include "trace.h"
 
+/* Define this if you never want the module to write to the NVRAM. This
+   might be useful for debugging, rather than overwriting the settings of
+   the machine you are using. */
+/* #define NO_WRITES */
+
+/* Define this to ensure that every time the module starts up it applies
+   the reset to the entries - this is purely a debug option and is unlikely
+   to be useful on non=DEBUG builds; it'll also stop the machine from
+   rebooting when it's done as this would be slightly annoying */
+/* #define ALWAYS_FULL_RESET */
+
 
 ERROR_STRUCT( NOMEM, "NoMem" );
 
@@ -47,6 +58,7 @@ RawRead( char *pbuf, int byte, int count )
 static void
 RawWrite( char *pbuf, int byte, int count )
 {
+#ifndef NO_WRITES
 	/* Write 'count' bytes from buffer into NV-RAM starting at location 'byte'. */
 	char *ptmp = pbuf + byte;
 
@@ -62,12 +74,14 @@ RawWrite( char *pbuf, int byte, int count )
 
 	/* Update checksum in 'pbuf' by reading back from Kernel. */
 	RawRead( pbuf, NVRAM_CHECKSUM_BYTE, 1 );
+#endif
 }
 
 
 static void
 RawConsistent( char *pold, char *pnew, int byte, int count )
 {
+#ifndef NO_WRITES
 	/* Current NV-RAM contents are in 'pold' buffer, new contents are in	*/
 	/* 'pnew' buffer. Go through 'count' bytes starting at location 'byte'	*/
 	/* and set any bytes from 'pnew' that are different from those in	*/
@@ -107,6 +121,7 @@ RawConsistent( char *pold, char *pnew, int byte, int count )
 
 	/* Update checksum in 'pnew' by reading back from Kernel. */
 	RawRead( pnew, NVRAM_CHECKSUM_BYTE, 1 );
+#endif
 }
 
 
@@ -338,7 +353,11 @@ nvram_initialise( void )
 			RawRead( pbuf, 0, nvram_size );
 
 			/* Determine whether we need to do a full NVRAM reset. */
+#ifdef ALWAYS_FULL_RESET
+			full_reset = 1;
+#else
 			full_reset = ReadValue( pbuf, NVRAM_LASTRESET_BYTE, NVRAM_LASTRESET_BIT, 1 );
+#endif
 
 			if ( full_reset )
 			{
@@ -366,8 +385,11 @@ nvram_initialise( void )
 				RawConsistent( pbuf, pCache, 0, nvram_size );
 
 				/* If we've done a full reset then reboot the box so that it starts up in a consistent state. */
+#ifdef ALWAYS_FULL_RESET
+				TRACE("I would have RESET!!!!!!\n");
+#else
 				if ( full_reset ) _swix( OS_Reset, 0 );
-				//TRACE(" I would have RESET!!!!!!\n");
+#endif
 			}
 
 			/* Free temporary cache copy. */
@@ -396,47 +418,47 @@ nvram_finalise( void )
 
 
 _kernel_oserror *
-nvram_read( _kernel_swi_regs *r )
+nvram_read( char *tag, void *buffer, int bufferlen, int *retvalue )
 {
 	location loc;
 	char *descbuf = (char *)malloc( TMPBUF_SIZE );
 
 	if ( descbuf == NULL ) return ERROR( NOMEM );
 
-	if ( GetLocation((char *)r->r[0], descbuf, &loc) )
+	if ( GetLocation(tag, descbuf, &loc) )
 	{
 		int req_bufsz = (loc.length + loc.start_bit + 7) / 8;
 
-		if ( r->r[1] == 0 )
+		if ( buffer == 0 )
 		{
 			/* Buffer pointer is 0 so just return required buffer size. */
-			r->r[0] = req_bufsz;
+			*retvalue = req_bufsz;
 		}
 		else
 		{
-			if ( r->r[2] == 0 )
+			if ( bufferlen == 0 )
 			{
 				/* We have a buffer but want to read a value so check this location	*/
-				/* fits in a word and assume r->r[1] points to an int.			*/
+				/* fits in a word and assume buffer points to an int.			*/
 				if ( loc.length <= 32 )
 				{
 					/* Read current NVRAM contents into cache in case it's changed	*/
 					/* under our feet.						*/
 					RawRead( pCache, loc.location, req_bufsz );
 
-					*(int *)(r->r[1]) = ReadValue( pCache, loc.location, loc.start_bit, loc.length );
-					r->r[0] = 4;
+					*(int *)(buffer) = ReadValue( pCache, loc.location, loc.start_bit, loc.length );
+					*retvalue = 4;
 				}
 				else
-					r->r[0] = NVRAM_READ_BUFERR;
+					*retvalue = NVRAM_READ_BUFERR;
 			}
 			else
 			{
 				/* We have a buffer and want to read directly into it so check the	*/
 				/* buffer size, zero the buffer and do the copy.			*/
-				if ( r->r[2] >= req_bufsz )
+				if ( bufferlen >= req_bufsz )
 				{
-					memset( (char *)r->r[1], 0, r->r[2] );
+					memset( buffer, 0, bufferlen );
 
 					/* Read current NVRAM contents into cache in case it's changed	*/
 					/* under our feet.						*/
@@ -445,16 +467,16 @@ nvram_read( _kernel_swi_regs *r )
 					/* Destination pointer gets loc.location added so subtract	*/
 					/* before calling and we definitely don't want to update the	*/
 					/* cache!							*/
-					CopyBuffer( pCache, (char *)(r->r[1] - loc.location), loc.location, loc.start_bit, loc.length, NVRAM_FLAGS_WRITECACHE );
-					r->r[0] = req_bufsz;
+					CopyBuffer( pCache, ((char *)buffer) - loc.location, loc.location, loc.start_bit, loc.length, NVRAM_FLAGS_WRITECACHE );
+					*retvalue = req_bufsz;
 				}
 				else
-					r->r[0] = NVRAM_READ_BUFERR;
+					*retvalue = NVRAM_READ_BUFERR;
 			}
 		}
 	}
 	else
-		r->r[0] = NVRAM_READ_TAGERR;
+		*retvalue = NVRAM_READ_TAGERR;
 
 	free( descbuf );
 
@@ -463,51 +485,51 @@ nvram_read( _kernel_swi_regs *r )
 
 
 _kernel_oserror *
-nvram_write( _kernel_swi_regs *r )
+nvram_write( char *tag, void *buffer, int bufferlen, int *retvalue )
 {
 	location loc;
 	char *descbuf = (char *)malloc( TMPBUF_SIZE );
 
 	if ( descbuf == NULL ) return ERROR( NOMEM );
 
-	if ( GetLocation((char *)r->r[0], descbuf, &loc) )
+	if ( GetLocation( tag, descbuf, &loc) )
 	{
 		if ( loc.flags & LOCATION_FLAGS_LOCKED )
 		{
 			/* Location is locked so can't be updated. */
-			r->r[0] = NVRAM_WRITE_LOCKERR;
+			*retvalue = NVRAM_WRITE_LOCKERR;
 		}
 		else
 		{
 			int req_bufsz = (loc.length + loc.start_bit + 7) / 8;
 
-			if ( r->r[2] == 0 )
+			if ( bufferlen == 0 )
 			{
 				/* Read current NVRAM contents into cache in case it's changed	*/
 				/* under our feet.						*/
 				RawRead( pCache, loc.location, req_bufsz );
 
-				/* Want to write a value so assume r->r[1] points to an int. */
-				WriteValue( pCache, *(unsigned int *)(r->r[1]), loc.location, loc.start_bit, loc.length, NVRAM_FLAGS_WRITETHROUGH );
+				/* Want to write a value so assume data points to an int. */
+				WriteValue( pCache, *(unsigned int *)(buffer), loc.location, loc.start_bit, loc.length, NVRAM_FLAGS_WRITETHROUGH );
 			}
 			else
 			{
 				/* Have a buffer so copy bits into cache and update NV-RAM but	*/
 				/* make sure we don't go past the end of the caller's buffer.	*/
-				int length = r->r[2] * 8 - loc.start_bit;
+				int length = bufferlen * 8 - loc.start_bit;
 				if ( length > loc.length ) length = loc.length;
 
 				/* Read current NVRAM contents into cache in case it's changed	*/
 				/* under our feet.						*/
 				RawRead( pCache, loc.location, req_bufsz );
 
-	                        CopyBuffer( (char *)(r->r[1] - loc.location), pCache, loc.location, loc.start_bit,
+	                        CopyBuffer( ((char *)buffer) - loc.location, pCache, loc.location, loc.start_bit,
 	                        		length, NVRAM_FLAGS_WRITETHROUGH );
 	                }
-	                r->r[0] = 0;	/* Return no error. */
+	                *retvalue = 0;	/* Return no error. */
                 }
 	} else
-		r->r[0] = NVRAM_WRITE_TAGERR;
+		*retvalue = NVRAM_WRITE_TAGERR;
 
 	free( descbuf );
 
