@@ -12,10 +12,6 @@
 #include "swis.h"
 #include <string.h>
 #include "sys/errno.h"
-#include "module.h"
-#include "processdir.h"
-#include "generic.h"
-#include "protocol.h"
 #include "sys/types.h"
 #include "sys/socket.h"
 #include "unixlib.h"
@@ -25,6 +21,10 @@
 #pragma warn_deprecated
 #include "socklib.h"
 #include "sys/ioctl.h"
+#include "module.h"
+#include "processdir.h"
+#include "generic.h"
+#include "protocol.h"
 #include "utils.h"
 #include "commands.h"
 #include "FTPhdr.h"
@@ -48,6 +48,7 @@ static _kernel_oserror *ftp_got_initial_greeting(Session *s, _kernel_swi_regs *r
 static _kernel_oserror *ftp_wait_initial_greeting(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_logged_in_ok(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_got_pasv_response(Session *s, _kernel_swi_regs *r);
+static _kernel_oserror *ftp_got_port_response(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_got_pwd_response(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_send_cwd_home(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_got_cwd_home_response(Session *s, _kernel_swi_regs *r);
@@ -59,6 +60,7 @@ static _kernel_oserror *ftp_got_dele_response(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_initiate_file_transfer(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_initiate_directory_transfer(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_got_cwd_dir_response(Session *s, _kernel_swi_regs *r);
+static _kernel_oserror *ftp_wait_data_connection(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_got_stor_response(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_got_retr_response(Session *s, _kernel_swi_regs *r);
 static _kernel_oserror *ftp_got_retr_dir_response(Session *s, _kernel_swi_regs *r);
@@ -153,6 +155,8 @@ static const char *ftp_state_name(int state)
 		case FTP_CWD_DIR_RESP_RECEIVED: return "FTP_CWD_DIR_RESP_RECEIVED";
 		case FTP_LIST_RESP_RECEIVED: return "FTP_LIST_RESP_RECEIVED";
 		case FTP_PASV_RESP_RECEIVED: return "FTP_PASV_RESP_RECEIVED";
+		case FTP_PORT_RESP_RECEIVED: return "FTP_PASV_PORT_RECEIVED";
+		case FTP_WAIT_DATA_CONNECTION: return "FTP_WAIT_DATA_CONNECTION";
 		case FTP_INITIATE_DIR_TRANSFER: return "FTP_INITIATE_DIR_TRANSFER";
 		case FTP_INITIATE_FILE_TRANSFER: return "FTP_INITIATE_FILE_TRANSFER";
 		case FTP_STOR_RESP_RECEIVED: return "FTP_STOR_RESP_RECEIVED";
@@ -221,7 +225,7 @@ static _kernel_oserror *ftp_readdata_dispatch(Session *s, _kernel_swi_regs *r)
 	_kernel_oserror *e = NULL;
 	int ctr = 0;
 
-	while (ftp_show_state(s), e == NULL && ctr++<64) switch (s->state) {
+	while (ftp_show_state(s), e == NULL && ctr++<100) switch (s->state) {
 		case FTP_STATUS_DNS:		e = ftp_wait_dns(s, r);	break;
 		case FTP_CONNECTED:		e = ftp_wait_initial_greeting(s, r); break;
 		case FTP_GREETING_RECEIVED:	e = ftp_got_initial_greeting(s, r); break;
@@ -243,6 +247,8 @@ static _kernel_oserror *ftp_readdata_dispatch(Session *s, _kernel_swi_regs *r)
 		case FTP_CWD_DIR_RESP_RECEIVED:	e = ftp_got_cwd_dir_response(s, r); break;
 		case FTP_LIST_RESP_RECEIVED:	e = ftp_got_list_response(s, r); break;
 		case FTP_PASV_RESP_RECEIVED:	e = ftp_got_pasv_response(s, r); break;
+		case FTP_PORT_RESP_RECEIVED:	e = ftp_got_port_response(s, r); break;
+		case FTP_WAIT_DATA_CONNECTION:	e = ftp_wait_data_connection(s, r); break;
 
 		case FTP_INITIATE_DIR_TRANSFER:	e = ftp_initiate_directory_transfer(s, r); break;
 		case FTP_INITIATE_FILE_TRANSFER:e = ftp_initiate_file_transfer(s, r); break;
@@ -383,11 +389,14 @@ static _kernel_oserror *ftp_return_no_more_data(Session *s, _kernel_swi_regs *r)
 	if (s->data_sd != -1) {
 		close_socket(&s->data_sd);
 	}
+	if (s->listen_sd != -1) {
+		close_socket(&s->listen_sd);
+	}
 	if (s->control_sd != -1) {
 		/*s->cacheable = 1;*/
 		new_connection(s);
 		#ifdef TRACE
-		protocol_debug("Sockets being disassociated with session %p\n", s);
+		protocol_debug("Sockets being dissociated with session %p\n", s);
 		#endif
 	}
 	return state_BLOCKING;
@@ -616,6 +625,38 @@ static _kernel_oserror *ftp_init_read_directory(Session *s, _kernel_swi_regs *r)
 	}
 }
 
+static _kernel_oserror *ftp_wait_data_connection(Session *s, _kernel_swi_regs *r)
+{
+        int res = accept(s->listen_sd, NULL, 0);
+
+	if (res >= 0) {
+	        ftp_callback cb = s->next_state;
+	        if (cb == NULL) {
+	                s->state = FTP_STATUS_DEAD;
+	                return NULL;
+	        }
+	        s->next_state = NULL;
+	        s->data_sd = res;
+	        close_socket(&s->listen_sd);
+	        return (cb)(s, r);
+	}
+	else if (errno == EINPROGRESS) {
+        	return state_BLOCKING;
+	}
+	else {
+	        s->state = FTP_STATUS_ERROR_CONN;
+	        return NULL;
+	}
+}
+
+static _kernel_oserror *ftp_accept_data_connection(Session *s, _kernel_swi_regs *r, ftp_callback fn)
+{
+	(void) r;
+        s->next_state = fn;
+        s->state = FTP_WAIT_DATA_CONNECTION;
+        return NULL;
+}
+
 static _kernel_oserror *ftp_got_retr_dir_response(Session *s, _kernel_swi_regs *r)
 {
 	(void) r;
@@ -644,6 +685,9 @@ static _kernel_oserror *ftp_got_retr_response(Session *s, _kernel_swi_regs *r)
 			 */
 		case ftp_INFORMATIONAL:
 			s->had_final_response = s->response_code;
+			if (s->listen_sd != -1) {
+			        return ftp_accept_data_connection(s, r, ftp_init_read_file);
+			}
 			return ftp_init_read_file(s, r);
 
 		case ftp_SERVER_ERROR:
@@ -666,6 +710,9 @@ static _kernel_oserror *ftp_got_stor_response(Session *s, _kernel_swi_regs *r)
 			 */
 		case ftp_INFORMATIONAL:
 			s->had_final_response = s->response_code;
+			if (s->listen_sd != -1) {
+			        return ftp_accept_data_connection(s, r, ftp_init_write_file);
+			}
 			return ftp_init_write_file(s, r);
 
 		default:
@@ -684,6 +731,9 @@ static _kernel_oserror *ftp_got_list_response(Session *s, _kernel_swi_regs *r)
 			 */
 		case ftp_INFORMATIONAL:
 			s->had_final_response = s->response_code;
+			if (s->listen_sd != -1) {
+			        return ftp_accept_data_connection(s, r, ftp_init_read_directory);
+			}
 			return ftp_init_read_directory(s, r);
 
 		default:
@@ -1037,7 +1087,45 @@ static _kernel_oserror *ftp_got_pasv_response(Session *s, _kernel_swi_regs *r)
 	/* Find out to where we need to connect - parse response to find out */
 
 	if (s->response_code != 227) {
-		return gen_error(s, s->response.data);
+	        if (s->response_code == 425) {
+	                /* 425: Unable to build data connection: permission denied - almost certainly */
+	                char port_data[sizeof("123,123,123,123,123,123")], *ptr;
+	                struct sockaddr_in sin;
+	                int sk;
+
+			#ifdef TRACE
+			if (s->connectionflags & connectionflags_NO_PASV) {
+			        protocol_debug("We remember this server - it didn't like PASV earlier\n");
+			}
+			else {
+				protocol_debug("Server rejected PASV with permission denied - I think\n");
+			}
+			protocol_debug("We'll remember this server and try PORT instead\n");
+			#endif
+
+			/* Remember that this server doesn't like PASV connections */
+			s->connectionflags |= connectionflags_NO_PASV;
+
+	                sk = ftp_bindsock(s->control_sd, &sin);
+	                if (sk<0) {
+	        		s->state = FTP_STATUS_ERROR_CONN;
+	                        return gen_error(s, s->response.data);
+	                }
+	                s->listen_sd = sk;
+	                /* This is OK - inet_ntoa not allowed to generate IPv6 strings */
+	                strcpy(port_data, inet_ntoa(sin.sin_addr));
+			for (ptr=port_data;*ptr;++ptr) {
+			        if (*ptr == '.') *ptr = ',';
+			}
+			sprintf(ptr, ",%d,%d", sin.sin_port & 0xFF, (sin.sin_port >> 8) & 0xFF);
+			#ifdef TRACE
+			protocol_debug("Sending PORT command to `%s'\n", port_data);
+			#endif
+	                return vcommands_send(s, FTP_PORT_RESP_RECEIVED, "PORT", port_data);
+	        }
+	        else {
+			return gen_error(s, s->response.data);
+	        }
 	}
 	else {
 		int ip[6];
@@ -1082,6 +1170,18 @@ static _kernel_oserror *ftp_got_pasv_response(Session *s, _kernel_swi_regs *r)
 	return ftp_start_transfer_request(s, r);
 }
 
+static _kernel_oserror *ftp_got_port_response(Session *s, _kernel_swi_regs *r)
+{
+	/* Find out to where we need to connect - parse response to find out */
+
+	if (s->response_code != 200) {
+		return gen_error(s, s->response.data);
+	}
+	else {
+		return ftp_start_transfer_request(s, r);
+	}
+}
+
 #if 0
 static _kernel_oserror *ftp_initiate_null_redirect(Session *s, _kernel_swi_regs *r)
 {
@@ -1116,7 +1216,18 @@ static _kernel_oserror *ftp_initiate_command(Session *s, _kernel_swi_regs *r)
                                 return ftp_initiate_null_redirect(s, r);
 			}
 			*/
-			return commands_send(s, FTP_PASV_RESP_RECEIVED, "PASV");
+                        if (s->connectionflags & connectionflags_NO_PASV) {
+				/* Previous experience of this server shows that it is
+				 * a waste of time trying PASV connections
+				 */
+                                /* We will "pretend" that we have just received the PASV
+                                 * refusal and fall into the code directly
+                                 */
+                                s->state = FTP_PASV_RESP_RECEIVED;
+                                s->response_code = 425;
+                                return ftp_got_pasv_response(s, r);
+                        }
+		        return commands_send(s, FTP_PASV_RESP_RECEIVED, "PASV");
 		case method_FTP_MKDIR:
 			return ftp_initiate_mkdir(s, r);
 		case method_FTP_RMDIR:
