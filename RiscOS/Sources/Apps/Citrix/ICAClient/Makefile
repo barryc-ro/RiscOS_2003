@@ -25,6 +25,7 @@ WIPE	= @-wipe
 
 CCFLAGS = -c -depend !Depend ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend ${ASINCLUDES} -predefine "HOST SETS \"RISCOS\""
+LDFLAGS =
 CPFLAGS = ~cfr~v
 WIPEFLAGS = ~c
 LIBFILEFLAGS = -c
@@ -59,7 +60,7 @@ resources:
 	${CP} ${SRC}.Messages    ${RESRES}.Messages ${CPFLAGS}
 	${CP} ${SRC}.Res         ${RESRES}.Res      ${CPFLAGS}
 	${CP} ${SRC}.Splash      ${RESRES}.Splash   ${CPFLAGS}
-	${CP} ${SRC}.Keywatch    ${RESRES}.Keywatch ${CPFLAGS
+	${CP} ${SRC}.KeyWatch    ${RESRES}.KeyWatch ${CPFLAGS}
 	${CP} ${SRC}.ini.AppSrv   ${RESRES}.ini.AppSrv   ${CPFLAGS}
 	${CP} ${SRC}.ini.Module   ${RESRES}.ini.Module   ${CPFLAGS}
 	${CP} ${SRC}.ini.WFClient ${RESRES}.ini.WFClient ${CPFLAGS}
@@ -226,7 +227,7 @@ install_base:
 	${CP} Resources.app.${COUNTRY}.EnsureTB	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
 	${CP} Resources.app.${COUNTRY}.Messages	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
 	${CP} Resources.app.${COUNTRY}.Splash	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
-	${CP} Resources.app.${COUNTRY}.Keywatch	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
+	${CP} Resources.app.${COUNTRY}.KeyWatch	${INSTALLDIR}.${APPNAME}.* ${CPFLAGS} 
 	${CP} Resources.ini.appsrv			${INSTALLDIR}.${APPNAME}.ini.AppSrv ${CPFLAGS} 
 	${CP} Resources.ini.module			${INSTALLDIR}.${APPNAME}.ini.Module ${CPFLAGS} 
 	${CP} Resources.ini.wfclient			${INSTALLDIR}.${APPNAME}.ini.WFClient ${CPFLAGS} 
@@ -646,7 +647,8 @@ VDTW31LIBOBJS=	\
 		src.dll.vd.vdtw31.o.wfssb256 \
 		src.dll.vd.vdtw31.o.wfssbtru \
 		src.dll.vd.vdtw31.o.wfstrips \
-		src.dll.vd.vdtw31.o.winonly
+		src.dll.vd.vdtw31.o.winonly \
+		src.dll.vd.vdtw31.o.twitter
 
 VDTW31LIBOBJSZ=	\
 		src.dll.vd.vdtw31.oz.palette \
@@ -672,7 +674,8 @@ VDTW31LIBOBJSZ=	\
 		src.dll.vd.vdtw31.oz.wfssb256 \
 		src.dll.vd.vdtw31.oz.wfssbtru \
 		src.dll.vd.vdtw31.oz.wfstrips \
-		src.dll.vd.vdtw31.oz.winonly
+		src.dll.vd.vdtw31.oz.winonly \
+		src.dll.vd.vdtw31.oz.twitter
 
 # Client drive mapping driver
 
@@ -763,6 +766,8 @@ cleanvd:
 	${RM} ${VDLIB}
 	${RM} ${VDLIBZ}
 	${WIPE} src.dll.vd.common.o ${WIPEFLAGS}
+	${WIPE} src.dll.vd.vdcam.audcvt.audcvt.o ${WIPEFLAGS}
+	${WIPE} src.dll.vd.vdcam.audcvt.converters.common.o ${WIPEFLAGS}
 	${WIPE} src.dll.vd.vdcam.common.o ${WIPEFLAGS}
 	${WIPE} src.dll.vd.vdcam.drivers.riscos.o ${WIPEFLAGS}
 	${WIPE} src.dll.vd.vdcpm.common.o ${WIPEFLAGS}
@@ -771,6 +776,8 @@ cleanvd:
 	${WIPE} src.dll.vd.vdspl.spool.o ${WIPEFLAGS}
 	${WIPE} src.dll.vd.vdtw31.o ${WIPEFLAGS}
 	${WIPE} src.dll.vd.common.oz ${WIPEFLAGS}
+	${WIPE} src.dll.vd.vdcam.audcvt.audcvt.oz ${WIPEFLAGS}
+	${WIPE} src.dll.vd.vdcam.audcvt.converters.common.oz ${WIPEFLAGS}
 	${WIPE} src.dll.vd.vdcam.common.oz ${WIPEFLAGS}
 	${WIPE} src.dll.vd.vdcam.drivers.riscos.oz ${WIPEFLAGS}
 	${WIPE} src.dll.vd.vdcpm.common.oz ${WIPEFLAGS}
@@ -782,6 +789,8 @@ cleanvd:
 
 dirsvd:
 	${MKDIR} src.dll.vd.common.o
+	${MKDIR} src.dll.vd.vdcam.audcvt.audcvt.o
+	${MKDIR} src.dll.vd.vdcam.audcvt.converters.common.o
 	${MKDIR} src.dll.vd.vdcam.common.o
 	${MKDIR} src.dll.vd.vdcam.drivers.riscos.o
 	${MKDIR} src.dll.vd.vdcpm.common.o
@@ -790,6 +799,8 @@ dirsvd:
 	${MKDIR} src.dll.vd.vdspl.spool.o
 	${MKDIR} src.dll.vd.vdtw31.o
 	${MKDIR} src.dll.vd.common.oz
+	${MKDIR} src.dll.vd.vdcam.audcvt.audcvt.oz
+	${MKDIR} src.dll.vd.vdcam.audcvt.converters.common.oz
 	${MKDIR} src.dll.vd.vdcam.common.oz
 	${MKDIR} src.dll.vd.vdcam.drivers.riscos.oz
 	${MKDIR} src.dll.vd.vdcpm.common.oz
