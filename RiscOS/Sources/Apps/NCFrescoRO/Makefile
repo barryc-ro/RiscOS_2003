@@ -89,5 +89,6 @@ rom_link_: dirs
 
 dirs:
 	${MKDIR} linked
+	${MKDIR} map
 
 # Dynamic dependencies:
