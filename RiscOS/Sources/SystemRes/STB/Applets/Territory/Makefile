@@ -9,6 +9,9 @@ INSTOPTS  = ${INSTAPP}.<STB$OS>.${Locale}
 INSTPICS  = ${INSTOPTS}.pics
 HTMLDIR   = ${INSTHTML}.<STB$OS>
 
+IFTHERE    = IfThere
+IFTHEN     = Then
+IFELSE     = Else
 TRANSLATE  = translate
 TRANSFLAGS = ${THROWBACK} -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë" -m TerrTrans:Mappings
 
@@ -51,33 +54,33 @@ unset_vars:
 	@unset STB$OS
 
 resources:
-	IfThere TerrRes:!Run      Then ${CP} TerrRes:!Run      ${INSTAPP}.!Run           ${CPFLAGS}
-	IfThere TerrRes:!RunImage Then ${CP} TerrRes:!RunImage ${INSTAPP}.!RunImage      ${CPFLAGS}
-	IfThere TerrRes:banners   Then ${CP} TerrRes:banners   ${INSTOPTS}.pics.banners  ${CPFLAGS}
-	IfThere TerrRes:misc      Then ${CP} TerrRes:misc      ${INSTOPTS}.pics.misc     ${CPFLAGS}
-	IfThere TerrRes:teleopts  Then ${CP} TerrRes:teleopts  ${INSTOPTS}.pics.teleopts ${CPFLAGS}
+	${IFTHERE} TerrRes:!Run      ${IFTHEN} ${CP} TerrRes:!Run      ${INSTAPP}.!Run           ${CPFLAGS}
+	${IFTHERE} TerrRes:!RunImage ${IFTHEN} ${CP} TerrRes:!RunImage ${INSTAPP}.!RunImage      ${CPFLAGS}
+	${IFTHERE} TerrRes:banners   ${IFTHEN} ${CP} TerrRes:banners   ${INSTOPTS}.pics.banners  ${CPFLAGS}
+	${IFTHERE} TerrRes:misc      ${IFTHEN} ${CP} TerrRes:misc      ${INSTOPTS}.pics.misc     ${CPFLAGS}
+	${IFTHERE} TerrRes:teleopts  ${IFTHEN} ${CP} TerrRes:teleopts  ${INSTOPTS}.pics.teleopts ${CPFLAGS}
 
 translate:
-	IfThere TerrTrans:Acknow            Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Acknow            -o ${INSTOPTS}.Acknow
-	IfThere TerrTrans:BSD               Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:BSD               -o ${INSTOPTS}.BSD
-	IfThere TerrTrans:ImageLib          Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:ImageLib          -o ${INSTOPTS}.ImageLib
-	IfThere TerrTrans:Options           Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Options           -o ${INSTOPTS}.Options
-	IfThere TerrTrans:Printing          Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Printing          -o ${INSTOPTS}.Printing
-	IfThere TerrTrans:Printing2         Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Printing2         -o ${INSTOPTS}.Printing2
-	IfThere TerrTrans:Sounds            Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Sounds            -o ${INSTOPTS}.Sounds
-	IfThere TerrTrans:SSL               Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:SSL               -o ${INSTOPTS}.SSL
-	IfThere TerrTrans:StartUp           Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:StartUp           -o ${INSTOPTS}.StartUp
-	IfThere TerrTrans:Software          Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Software          -o ${INSTOPTS}.Software
-	IfThere TerrTrans:Television        Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Television        -o ${INSTOPTS}.Television
-	IfThere TerrTrans:Text              Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Text              -o ${INSTOPTS}.Text
-	IfThere TerrTrans:html.body/html    Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body/html    -o ${HTMLDIR}.body/html
-	IfThere TerrTrans:html.body_h/html  Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body_h/html  -o ${HTMLDIR}.body_h/html
-	IfThere TerrTrans:html.home/html    Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home/html    -o ${HTMLDIR}.home/html
-	IfThere TerrTrans:html.home_h/html  Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home_h/html  -o ${HTMLDIR}.home_h/html
-	IfThere TerrTrans:html.index/html   Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.index/html   -o ${HTMLDIR}.index/html
-	IfThere TerrTrans:html.index_h/html Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.index_h/html -o ${HTMLDIR}.index_h/html
-	IfThere TerrTrans:html.side/html    Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.side/html    -o ${HTMLDIR}.side/html
-	IfThere TerrTrans:html.top/html     Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.top/html     -o ${HTMLDIR}.top/html
-	IfThere TerrTrans:html.homecss/css  Then ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.homecss/css  -o ${HTMLDIR}.homecss/css
+	${IFTHERE} TerrTrans:Acknow            ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Acknow            -o ${INSTOPTS}.Acknow
+	${IFTHERE} TerrTrans:BSD               ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:BSD               -o ${INSTOPTS}.BSD
+	${IFTHERE} TerrTrans:ImageLib          ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:ImageLib          -o ${INSTOPTS}.ImageLib
+	${IFTHERE} TerrTrans:Options           ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Options           -o ${INSTOPTS}.Options
+	${IFTHERE} TerrTrans:Printing          ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Printing          -o ${INSTOPTS}.Printing
+	${IFTHERE} TerrTrans:Printing2         ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Printing2         -o ${INSTOPTS}.Printing2
+	${IFTHERE} TerrTrans:Sounds            ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Sounds            -o ${INSTOPTS}.Sounds
+	${IFTHERE} TerrTrans:SSL               ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:SSL               -o ${INSTOPTS}.SSL
+	${IFTHERE} TerrTrans:StartUp           ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:StartUp           -o ${INSTOPTS}.StartUp
+	${IFTHERE} TerrTrans:Software          ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Software          -o ${INSTOPTS}.Software
+	${IFTHERE} TerrTrans:Television        ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Television        -o ${INSTOPTS}.Television
+	${IFTHERE} TerrTrans:Text              ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Text              -o ${INSTOPTS}.Text
+	${IFTHERE} TerrTrans:html.body/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body/html    -o ${HTMLDIR}.body/html
+	${IFTHERE} TerrTrans:html.body_h/html  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body_h/html  -o ${HTMLDIR}.body_h/html
+	${IFTHERE} TerrTrans:html.home/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home/html    -o ${HTMLDIR}.home/html
+	${IFTHERE} TerrTrans:html.home_h/html  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home_h/html  -o ${HTMLDIR}.home_h/html
+	${IFTHERE} TerrTrans:html.index/html   ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.index/html   -o ${HTMLDIR}.index/html
+	${IFTHERE} TerrTrans:html.index_h/html ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.index_h/html -o ${HTMLDIR}.index_h/html
+	${IFTHERE} TerrTrans:html.side/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.side/html    -o ${HTMLDIR}.side/html
+	${IFTHERE} TerrTrans:html.top/html     ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.top/html     -o ${HTMLDIR}.top/html
+	${IFTHERE} TerrTrans:html.homecss/css  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.homecss/css  -o ${HTMLDIR}.homecss/css
 
 # Dynamic dependencies:
