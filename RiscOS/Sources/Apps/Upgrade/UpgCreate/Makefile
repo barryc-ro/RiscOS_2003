@@ -42,7 +42,6 @@ COMPONENT = UpgCreate
 TARGET    = UpgCreate
 APP       = !${COMPONENT}
 INSTAPP   = ${INSTDIR}.Apps.${APP}
-INSTLOCAL = Targets.${APP}
 OM        = o
 
 OBJS      =	${OM}.compress 		\
@@ -67,54 +66,43 @@ OBJS      =	${OM}.compress 		\
 all: ${TARGET}
 	@echo ${COMPONENT}: all complete
 
-clean:
-	${WIPE}		o.*		${WFLAGS}
-	${RM}				${TARGET}
-	@echo ${COMPONENT}: cleaned
-
-clean_all: clean
+clean_all:
 	${RM} ${TARGET}
-	${WIPE} ${APP}		${WFLAGS}
 	${WIPE} o		${WFLAGS}r
+	${WIPE} Dirs		${WFLAGS}
 	${WIPE} Targets		${WFLAGS}r
-	@echo Stripping dependencies from makefile...
-	${STRIP}
+	@echo
 	@echo ${COMPONENT}: cleaned all
 
-resources: ${TARGET} dirs
-	${MKDIR} ${RESDIR}
-	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
-	@echo ${COMPONENT}: all complete
-
-local: ${TARGET}
-	${MKDIR} ${INSTLOCAL}
-	${CP} LocalRes:!Boot      ${INSTLOCAL}.!Boot      ${CPFLAGS}
-	${CP} LocalRes:!Run       ${INSTLOCAL}.!Run       ${CPFLAGS}
-	${CP} LocalRes:!Help      ${INSTLOCAL}.!Help      ${CPFLAGS}
-	${CP} LocalRes:!Sprites   ${INSTLOCAL}.!Sprites   ${CPFLAGS}
-	${CP} LocalRes:!Sprites22 ${INSTLOCAL}.!Sprites22 ${CPFLAGS}
-	${CP} LocalRes:Messages   ${INSTLOCAL}.Messages   ${CPFLAGS}
-	${CP} LocalRes:Templates  ${INSTLOCAL}.Templates  ${CPFLAGS}
-	${CP} ${TARGET}           ${INSTLOCAL}.${TARGET}  ${CPFLAGS}
+resources: ${TARGET}
+	${MKDIR} ${RESDIR}.^.Apps.${APP}
+	${CP} LocalRes:!Boot      ${RESDIR}.^.Apps.${APP}.!Boot        ${CPFLAGS}
+	${CP} LocalRes:!Run       ${RESDIR}.^.Apps.${APP}.!Run         ${CPFLAGS}
+	${CP} LocalRes:!Help      ${RESDIR}.^.Apps.${APP}.!Help        ${CPFLAGS}
+	${CP} LocalRes:!Sprites   ${RESDIR}.^.Apps.${APP}.!Sprites     ${CPFLAGS}
+	${CP} LocalRes:!Sprites22 ${RESDIR}.^.Apps.${APP}.!Sprites22   ${CPFLAGS}
+	${CP} LocalRes:Messages   ${RESDIR}.^.Apps.${APP}.Messages     ${CPFLAGS}
+	${CP} LocalRes:Templates  ${RESDIR}.^.Apps.${APP}.Templates    ${CPFLAGS}
+	${CP} ${TARGET}           ${RESDIR}.^.Apps.${APP}.${TARGET}    ${CPFLAGS}
 	@echo Putting version and date into Desc file...
 	@${GETVERSION} UpgFetchTool$MajorVersion UpgFetchTool$FullVersion "" "" "" UpgFetchTool$AppDateFour
 	@Set UpgFetchTool$FullVersion s/Module_FullVersion/<UpgFetchTool$FullVersion>/g
-	@do ${SED} "<UpgFetchTool$FullVersion>" > ${INSTLOCAL}.DescTemp < LocalRes:Desc
+	@do ${SED} "<UpgFetchTool$FullVersion>" > ${RESDIR}.^.Apps.${APP}.DescTemp < LocalRes:Desc
 	@Set UpgFetchTool$AppDateFour s/Module_ApplicationDate4/<UpgFetchTool$AppDateFour>/g
-	@do ${SED} "<UpgFetchTool$AppDateFour>" > ${INSTLOCAL}.Desc < ${INSTLOCAL}.DescTemp
-	@${RM} ${INSTLOCAL}.DescTemp
-	@echo ${COMPONENT}: installed locally
+	@do ${SED} "<UpgFetchTool$AppDateFour>" > ${RESDIR}.^.Apps.${APP}.Desc < ${RESDIR}.^.Apps.${APP}.DescTemp
+	@${RM} ${RESDIR}.^.Apps.${APP}.DescTemp
+	@echo ${COMPONENT}: all complete
 
 install: ${TARGET}
 	${MKDIR} ${INSTAPP}
-	${CP} LocalRes:!Boot      ${INSTAPP}.!Boot      ${CPFLAGS}
-	${CP} LocalRes:!Run       ${INSTAPP}.!Run       ${CPFLAGS}
-	${CP} LocalRes:!Help      ${INSTAPP}.!Help      ${CPFLAGS}
-	${CP} LocalRes:!Sprites   ${INSTAPP}.!Sprites   ${CPFLAGS}
-	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
-	${CP} LocalRes:Messages   ${INSTAPP}.Messages   ${CPFLAGS}
-	${CP} LocalRes:Templates  ${INSTAPP}.Templates  ${CPFLAGS}
-	${CP} ${TARGET}           ${INSTAPP}.${TARGET}  ${CPFLAGS}
+	${CP} LocalRes:!Boot      ${INSTAPP}.!Boot        ${CPFLAGS}
+	${CP} LocalRes:!Run       ${INSTAPP}.!Run         ${CPFLAGS}
+	${CP} LocalRes:!Help      ${INSTAPP}.!Help        ${CPFLAGS}
+	${CP} LocalRes:!Sprites   ${INSTAPP}.!Sprites     ${CPFLAGS}
+	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22   ${CPFLAGS}
+	${CP} LocalRes:Messages   ${INSTAPP}.Messages     ${CPFLAGS}
+	${CP} LocalRes:Templates  ${INSTAPP}.Templates    ${CPFLAGS}
+	${CP} ${TARGET}           ${INSTAPP}.${TARGET}    ${CPFLAGS}
 	@echo Putting version and date into Desc file...
 	@${GETVERSION} UpgFetchTool$MajorVersion UpgFetchTool$FullVersion "" "" "" UpgFetchTool$AppDateFour
 	@Set UpgFetchTool$FullVersion s/Module_FullVersion/<UpgFetchTool$FullVersion>/g
@@ -122,10 +110,12 @@ install: ${TARGET}
 	@Set UpgFetchTool$AppDateFour s/Module_ApplicationDate4/<UpgFetchTool$AppDateFour>/g
 	@do ${SED} "<UpgFetchTool$AppDateFour>" > ${INSTAPP}.Desc < ${INSTAPP}.DescTemp
 	@${RM} ${INSTAPP}.DescTemp
-	@echo ${COMPONENT}: installed locally
+	@echo ${COMPONENT}: all complete
 
 dirs:
 	${MKDIR} o
+	Create Dirs 0
+	Stamp Dirs
 
 #
 # Target
