@@ -21,7 +21,7 @@ C_EXP_HDR = <lib$dir>.MPEG
 # Generic options:
 #
 MKDIR   = mkdir -p
-AS      = aasm
+AS      = objasm
 CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
@@ -31,8 +31,19 @@ PLFLAGS = -swi
 WIPE    = -wipe
 WFLAGS  = FR~C~V
 CAT     = print
+LIBFILE = libfile
+
+AFLAGS  = -depend !Depend $(THROWBACK)
+LIBFILEFLAGS = -c -o $@
 
 PERL    = perl Build:Hdr2H ${PLFLAGS}
+
+#
+# Rule patterns:
+#
+
+.SUFFIXES: .o .s
+.s.o:;     $(AS) $(AFLAGS) -o $@ $<
 
 #
 # Program specific options:
@@ -67,6 +78,10 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${C_EXP_HDR}.h.Macrovisio \
             ${C_EXP_HDR}.h.UpCallMPEG \
             ${C_EXP_HDR}.h.TTextSubs \
+            ${C_EXP_HDR}.h.mpegtime \
+
+MPEGLIB =   MPEG.o.MPEG
+LIBOBJS =   o.mpegtime \
 
 #
 # Generic rules:
@@ -74,19 +89,35 @@ EXPORTS   = ${EXP_HDR}.AV110 \
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS} Dirs
-        @echo ${COMPONENT}: export complete
+export: export_${PHASE}
+
+export_: export_libs export_hdrs
+        @|
+
+export_hdrs: ${EXPORTS} Dirs
+        @echo ${COMPONENT}: export hdrs complete
+
+export_libs: ${MPEGLIB} Dirs
+        ${CP} ${MPEGLIB} <Lib$Dir>.${MPEGLIB} ${CPFLAGS}
+        @echo ${COMPONENT}: export libs complete
 
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+        ${WIPE} o ${WFLAGS}
         ${WIPE} MPEG ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 Dirs:
+        ${MKDIR} o
         ${MKDIR} MPEG.h
+        ${MKDIR} MPEG.o
         ${MKDIR} <lib$dir>.MPEG.h
+        ${MKDIR} <lib$dir>.MPEG.o
+
+${MPEGLIB}: ${LIBOBJS}
+        ${LIBFILE} ${LIBFILEFLAGS} ${LIBOBJS}
 
 #
 # Exported interface headers
@@ -189,6 +220,9 @@ ${C_EXP_HDR}.h.UpCallMPEG: Hdr.UpCallMPEG
 
 ${C_EXP_HDR}.h.TTextSubs: h.TTextSubs
         ${CP} h.TTextSubs $@ ${CPFLAGS}
+
+${C_EXP_HDR}.h.mpegtime: h.mpegtime
+        ${CP} h.mpegtime $@ ${CPFLAGS}
 
 
 # Dynamic dependencies:
