@@ -283,10 +283,35 @@ resources:
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESDIR}.User
+	${CP} LocalRes:ROM.!Boot	${RESAPP}.!Boot		${CPFLAGS}
 	${CP} LocalRes:ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
-	${CP} LocalRes:!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
+	${CP} LocalRes:!Sprites		${RESAPP}.!Sprites	${CPFLAGS}
 	${CP} LocalRes:Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} LocalRes:Res		${RESDIR}.Res		${CPFLAGS}
+	${MKDIR} ${RESAPP}.WebPages
+	${CP} LocalRes:WebPages.01-1 	${RESAPP}.WebPages.01-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.01-2 	${RESAPP}.WebPages.01-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.01-3 	${RESAPP}.WebPages.01-3 ${CPFLAGS}
+	${CP} LocalRes:WebPages.02   	${RESAPP}.WebPages.02   ${CPFLAGS}
+	${CP} LocalRes:WebPages.03   	${RESAPP}.WebPages.03   ${CPFLAGS}
+	${CP} LocalRes:WebPages.04   	${RESAPP}.WebPages.04   ${CPFLAGS}
+	${CP} LocalRes:WebPages.05   	${RESAPP}.WebPages.05   ${CPFLAGS}
+	${CP} LocalRes:WebPages.06   	${RESAPP}.WebPages.06   ${CPFLAGS}
+	${CP} LocalRes:WebPages.07   	${RESAPP}.WebPages.07   ${CPFLAGS}
+	${CP} LocalRes:WebPages.11   	${RESAPP}.WebPages.11   ${CPFLAGS}
+	${CP} LocalRes:WebPages.21   	${RESAPP}.WebPages.21   ${CPFLAGS}
+	${CP} LocalRes:WebPages.22   	${RESAPP}.WebPages.22   ${CPFLAGS}
+	${CP} LocalRes:WebPages.23   	${RESAPP}.WebPages.23   ${CPFLAGS}
+	${CP} LocalRes:WebPages.24   	${RESAPP}.WebPages.24   ${CPFLAGS}
+	${CP} LocalRes:WebPages.25-1  	${RESAPP}.WebPages.25-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.25-2  	${RESAPP}.WebPages.25-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.26   	${RESAPP}.WebPages.26   ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-1 	${RESAPP}.WebPages.27-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-2 	${RESAPP}.WebPages.27-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.27-3 	${RESAPP}.WebPages.27-3 ${CPFLAGS}
+	${CP} LocalRes:WebPages.28-1 	${RESAPP}.WebPages.28-1 ${CPFLAGS}
+	${CP} LocalRes:WebPages.28-2 	${RESAPP}.WebPages.28-2 ${CPFLAGS}
+	${CP} LocalRes:WebPages.30   	${RESAPP}.WebPages.30   ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
