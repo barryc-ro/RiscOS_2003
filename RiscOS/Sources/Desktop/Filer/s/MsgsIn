@@ -78,10 +78,10 @@ messages_processed_start
  ]
         DCD     Message_FontChanged
         B       message_fontchanged_code
-        [ version >=186
         DCD     Message_ClaimEntity
         B       message_claim_entity
-        ]
+        DCD     Message_FilerDevicePath
+        B       message_filerdevicepath
         DCD     -1
  |
 event_user_message ENTRY
@@ -667,6 +667,9 @@ newdirboxiconname_offset *       w_icons + i_size*2 + i_data
         ;ADD     r1, r1, #newdirboxiconname_offset
         ;BL      strcpy
         
+        LDR     r1, newdirbox_text
+        ADR     r2, newdirdefaultname
+        BL      strcpy                   ; Default dir name
         
         LDR     r1, newdirbox_ptr
         SWI     XWimp_CreateWindow
@@ -677,11 +680,7 @@ newdirboxiconname_offset *       w_icons + i_size*2 + i_data
         EXIT    VS
         ADRL    r14, newdirsubmenu
         STR     r14, h_menuwindow_loc
-        STR     r1, [r14]
-        
-        LDR     r1, newdirbox_text
-        ADR     r2, newdirdefaultname
-        BL      strcpy                   ; Default dir name
+        STR     r1, [r14]        
 
         EXIT
         
@@ -1106,6 +1105,17 @@ cache_length_lookup
 
         Pull    "r1-r3,pc"
  
+
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; message_claimentity
+; 
+; Message_ClaimEntity received when another task claims the caret.
+;
+;  In: r1 -> wimp message block
+;
+; Out: registers may be corrupted - return to Wimp_Poll.
+
 message_claim_entity ;ENTRY
 
         LDR     r0, [r1, #4]              ; load sender's task handle
@@ -1114,6 +1124,187 @@ message_claim_entity ;ENTRY
         BLNE    remove_rename_writeable   ; if different, remove the writeable icon
         EXIT
 
+    
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; message_filerdevicepath
+;
+; Start a copy of previously selected files.
+;
+;  In: r1 -> wimp message block.
+;
+; Out: registers may be corrupted - return to Wimp_Poll.
+;
+; dirnamebuffer
 
+message_filerdevicepath
+
+        ; Is there a previous selection to deal with?
+        LDR     r0, was_seldir
+        CMP     r0, #0
+        EXIT    EQ
+        
+        ; Copy the device path into dirnamebuffer
+        ADD     r2, r1, #20
+        MOV     r8, r2
+        ADR     r1, dirnamebuffer
+        BL      strcpy_excludingspaces
+        LDR     r4, was_seldir        
+        BL      InitWasSelection       
+
+        ; Do we single task or use FilerAction ?
+        MOV     R0,#&A1
+        MOV     R1,#FileSwitchCMOS
+        SWI     XOS_Byte
+        MOVVS   R2,#0
+        TST     R2,#4
+        MOVNE   r0,#0
+        MOVEQ   r0, #Filer_Action_Memory_CopyRename
+        BLEQ    StartActionWindow
+        BVS     %FT02
+        TEQ     r0, #0
+        BEQ     %FT02
+
+; Filer Action Copy/Move
+        LDR     r1, sel_dirname
+        SWI     XFilerAction_SendSelectedDirectory
+        BVS     %FT02
+        BL      SendWasSelectedFiles
+        BVS     %FT02
+        
+        LDR     r1, [r4, #d_dirnamestore]        
+        ADR     r1, dirnamebuffer         ; dirname buffer contains destination directory
+        BL      strlen                    ; find length
+        ADD     r4, r3, #1
+        MOV     r3, r1
+        LDRB    r1, initshiftstate        ; do we copy or move?
+        TEQ     r1, #&FF
+        MOVNE   r1, #Action_Copying
+        MOVEQ   r1, #Action_Moving
+        
+        ; Check if last drag was from the copy box.
+        LDRB    r7, last_drag_type
+        CMP     r7, #drag_copysave
+        BNE     %FT01
+
+        ; Last drag was from copybox - do a CopyLocal and change the filename
+        LDR     r1, csavebox_text
+        BL      FindLeafname              ; Find the leafname
+        ADR     r1, dirnamebuffer
+        BL      AppendLeafnameToDirname   ; Add it to the dirname
+        BL      strlen                    ; find the new length
+        ADD     r4, r3, #1
+        MOV     r3, r1                    ; New string length
+        MOV     r1, #Action_CopyLocal     ; Do a copy local                
+
+01      ; Start the operation
+        BL      ExtractCMOSOptions        ; Put options into r2
+        SWI     XFilerAction_SendStartOperation
+        B       %FT49
+
+star_copy_prefix_ib
+        DCB     "Copy ", 0
+
+star_copy_postfix_ib                    
+        DCB     " ~P~QR~T~LF", 0         ; Don't alter A(ccess),S(tamp)
+aspace_ib
+        DCB     space, 0
+
+; Single tasking copy/move
+02
+        CLRV
+        LDRB    r14, initshiftstate
+        TEQ     r14, #&FF
+
+        ADRNE   r0, copy_commandtitle_ib
+        ADRNE   r6, copydrag_postfix_ib
+        ADREQ   r0, move_commandtitle_ib
+        ADREQ   r6, movedrag_postfix_ib
+
+        BL      messagetrans_lookup      ; SMC: look up command window title
+        SWI     XWimp_CommandWindow
+        EXIT    VS
+
+        MOV     r7, #0                   ; Close command window with prompt
+
+05      CMP     r5, #Nowt
+        BEQ     %FT48                    ; [finished]
+
+        ADR     r1, userdata
+        ADR     r2, star_copy_prefix_ib  ; 'copy src.leaf dst.leaf opt1 opt2'
+        BL      strcpy
+        LDR     r2, sel_dirname          ; +srcdirname
+        BL      strcat_excludingspaces
+        LDR     r2, sel_leafname         ; +leafname
+        BL      AppendLeafnameToDirname
+        ADR     r2, aspace_ib
+        BL      strcat
+        ADR     r2, dirnamebuffer
+        BL      strcat_excludingspaces
+
+        ; Check if last drag was from a save box
+        LDRB    r2, last_drag_type
+        CMP     r2, #drag_copysave
+        BNE     %FT08
+        
+        ; Copy was from save box - read new filename from that
+        Push    "r1"
+        LDR     r1, csavebox_text
+        BL      FindLeafname              ; Find the leafname
+        Pull    "r1"
+        BL      AppendLeafnameToDirname
+        B       %FT10
+
+08
+        LDR     r2, sel_leafname         ; +leafname
+        BL      AppendLeafnameToDirname
+
+10
+        ADR     r2, star_copy_postfix_ib ; +static options
+        BL      strcat
+        MOV     r2, r6                   ; +dynamic options
+        BL      strcat
+        BL      AppendConfirmVerboseForceAndNewer
+        ADR     r0, userdata
+        SWI     XOS_CLI                  ; Doing this in a box
+        BVS     %FT45
+
+        Push    r4                       ; Want to preserve dest dirviewer^
+        BL      GetWasSelection
+        Pull    r4
+        B       %BT05
+
+45      BL      LocalReportError         ; Prints the error; gives 'Press SPACE'
+        MOV     r7, #-1                  ; Close command window without prompt
+
+48      MOV     r0, r7                   ; 'Press SPACE' if command printed 'owt
+        SWI     XWimp_CommandWindow      ; Or close window without prompt if err
+
+
+; +++ Finish for FilerAction and single tasking
+
+49
+        MOV     r2, #Nowt
+        BL      ClearAllWasSelections
+
+90
+        BL      CloseInitiatingDir
+        EXIT
+
+
+copy_commandtitle_ib
+        DCB     "TCopy", 0
+
+move_commandtitle_ib
+        DCB     "TMove", 0
+
+copydrag_postfix_ib
+        DCB     "~D", 0                  ; ~D(elete)
+
+movedrag_postfix_ib
+        DCB     "D", 0                   ; D(elete)
+
+        ALIGN
+rmlcr   DCB 10
 
         END
