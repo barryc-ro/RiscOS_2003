@@ -101,7 +101,7 @@ Source::calculateMaxCompleteBlock(void)
 // it is better to undercalculate than overestimate.
 
 error_flag 
-Source::calculatePosAckSequence(Server *server, Statistics *stats)
+Source::calculatePosAckSequence(InternetObject *server, Statistics *stats)
 {
     size_t freeblocks;
     ULINT MAX_block_request = 0;
@@ -127,7 +127,7 @@ Source::calculatePosAckSequence(Server *server, Statistics *stats)
 	   		if (MAX_block_request > prior_max_request){
 	   		  	++(stats->acks_sent);
 	   		  	//Debug("send ack %i-%i", MAX_block_request, max_completed_block);
-             			if (server->SendAck(MAX_block_request, max_completed_block) == ErrorOccurred) {
+             			if (server->SendAck(MAX_block_request, max_completed_block, data) == ErrorOccurred) {
          				err = &server->ReturnCopyOfError();
           				result = ErrorOccurred;
                			}
@@ -148,7 +148,7 @@ Source::calculatePosAckSequence(Server *server, Statistics *stats)
 }
 
 error_flag          
-Source::calculatePosNAKSequence(Server *server, Statistics *stats, size_t *naks)
+Source::calculatePosNAKSequence(InternetObject *server, Statistics *stats, size_t *naks)
 {
         MemBlock *mb;
         int dgm, min_val, max_val;	// nak calcs
@@ -201,6 +201,9 @@ Source::calculatePosNAKSequence(Server *server, Statistics *stats, size_t *naks)
         	         	}// while datagrams
         	         	stats->naks_sent += local_naks;
         	        }//else
+        	        
+        	        if ((local_naks > 0)&&((++mb->resends) > Acceptable_NAKS))
+        	        	result = MakeError(IP_TimeOutOnCommunication);
         	}
         	else 
         		local_naks = -1;
@@ -232,7 +235,6 @@ Source::Source(size_t set_nak_timeout, size_t source_recvspace)
         nak_block = 0;
         nak_timeout = set_nak_timeout;
         most_significant_time = 0;
-  	
   	
     	// Initialisation completed successfully
         sd.creat(PF_INET, SOCK_DGRAM);
@@ -380,7 +382,7 @@ Source::setServerDetails(const char *hostname, const char *port)
 }
 
 error_flag
-Source::setServerDetails(struct in_addr address, int port)
+Source::setServerDetails(struct in_addr *address, int port)
 {
         sd.eventsOn();
         sd.makeNonBlocking();
@@ -583,7 +585,7 @@ Source::freeBlock(const NECBlock *block)
 // calculates if any blocks need to be freed
 
 error_flag
-Source::calculate_freeBlocks(Server *server, callback_flag callback_pending, Statistics *stats)
+Source::calculate_freeBlocks(InternetObject *server, callback_flag callback_pending, Statistics *stats)
 {  
     	int i;
   	
@@ -597,8 +599,9 @@ Source::calculate_freeBlocks(Server *server, callback_flag callback_pending, Sta
         }
         full_blocks = (int)(max_completed_block - last_block_sent);
 
-       if (!(callback_pending & callback_timeout))
+       if (!(callback_pending & callback_timeout)){
           	result = calculatePosAckSequence(server, stats);
+       }
           	
        return result;
 }
@@ -611,38 +614,40 @@ Source::calculate_freeBlocks(Server *server, callback_flag callback_pending, Sta
 //
 //
 error_flag
-Source::foregroundExecute(callback_flag *callback_flags, Server *server, Statistics *stats)
+Source::foregroundExecute(callback_flag *callback_flags, InternetObject *server, Statistics *stats)
 {
     error_flag result = ErrorState();
     size_t naks = 0;
+    
     	
- 	if ((result != ErrorOccurred)&&(max_completed_block != server->getMaxRequestedBlock())){	// ack problem not ours
+    if ((result != ErrorOccurred)&&(max_completed_block != server->getMaxRequestedBlock())){	// ack problem not ours
  	
- 		if ((*callback_flags) & callback_block){
- 	     		// we would expect to find no nak_block
- 	     		nak_block = max_completed_block + 1;
- 		}
+ 	if ((*callback_flags) & callback_block){
+      		// we would expect to find no nak_block
+      		nak_block = max_completed_block + 1;
+ 	}
              	 
- 		(*callback_flags) -= callback_timeout;
+ 	(*callback_flags) -= callback_timeout;
  	
- 		if (nak_block == 0){	// missing datagrams have turned up
- 				// in this case the callback has been placed by inet event
-        		(*callback_flags) += callback_block;
-        	}
-        	else {           	 		
-         		result = calculatePosNAKSequence(server, stats, &naks);
-         		        		
-        		if (naks != 0)	// -1 signifies no naks sent for time reasons
-        			(*callback_flags) += callback_nak;
-        	}
-        }
-    	else {
-    		(*callback_flags) -= callback_timeout;
-    	}
+ 	if (nak_block == 0){	// missing datagrams have turned up
+ 		// in this case the callback has been placed by inet event
+       		(*callback_flags) += callback_block;
+       	}
+       	else {          	 		
+       		result = calculatePosNAKSequence(server, stats, &naks);
+        		        		
+       		if (naks != 0)	// -1 signifies no naks sent for time reasons
+       			(*callback_flags) += callback_nak;
+       	}
+    }
+    else {
+    	(*callback_flags) -= callback_timeout;
+    }
     	
-    	if (result != ErrorOccurred)
-    		result = calculatePosAckSequence(server, stats);
-    		
+    if (result != ErrorOccurred)
+    	result = calculatePosAckSequence(server, stats);
+
+   		
     return result;
 }
 
@@ -692,7 +697,7 @@ Source::getSocketDescriptor(int *s)
 //
 //
 error_flag
-Source::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout)
+Source::ReadDatagrams(callback_flag current_flags, callback_flag *flags, InternetObject *server, Statistics *stats, int timeout)
 {
         error_flag result = ErrorState();
         
@@ -763,6 +768,7 @@ Source::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server 
 													// stream live or full buffers
 								if ( max_completed_block == server->getMaxRequestedBlock() ){
 									(*flags) += callback_fullblocks;
+									nak_block = 0;
 								}
 								else{					// otherwise set block timeout
 									if (dgram->block_number <= max_completed_block){
@@ -890,7 +896,7 @@ Source::getMiscInfo(misc_info_flags flags, void *ptr)
 }
 
 //---------------------------------------------------------------------- LIVE specific --------------------
-SourceLIVE::SourceLIVE(Source& vod)
+SourceLIVE::SourceLIVE(Source& vod):Source(0,0)
 {
   last_block_sent = 0;
   max_completed_block = 0;
@@ -909,7 +915,7 @@ SourceLIVE::SourceLIVE(Source& vod)
 
 // this is the same as source free blocks but doesn't send naks if the blocks are full
 error_flag
-SourceLIVE::calculate_freeBlocks(Server *server, callback_flag callback_pending, Statistics *stats)
+SourceLIVE::calculate_freeBlocks(InternetObject *server, callback_flag callback_pending, Statistics *stats)
 {  
     	int i;
     	server = server;
@@ -930,32 +936,28 @@ SourceLIVE::calculate_freeBlocks(Server *server, callback_flag callback_pending,
 }
 
 error_flag
-SourceLIVE::foregroundExecute(callback_flag *callback_flags, Server *server, Statistics *stats)
+SourceLIVE::foregroundExecute(callback_flag *callback_flags, InternetObject *server, Statistics *stats)
 {
   server = server;
   stats = stats;
+  error_flag result = ErrorState();
   
-  MemBlock *mb = mem_map->findExistingBlock(nak_block);
+  if (mem_map == NULL)
+  	result = MakeError(VSP_SourceUninit);
+  else {
+  	MemBlock *mb = mem_map->findExistingBlock(nak_block);
   
-  if (mb != NULL){
-    	unsigned int systime;
-	_swix(OS_ReadMonotonicTime, _OUT(0), &systime);
-        if (mb->nak_timeout < systime){
-  		(*callback_flags) += callback_nak;
- 	}
+  	if ((mb != NULL)&&((++mb->resends) > Acceptable_NAKS))
+  		MakeError(IP_TimeOutOnCommunication);
   }
-  else
-  	if (nak_block <= last_block_sent){
-  		(*callback_flags) += callback_nak;
-  	}		
   // this will continue the callback untill timeout or data
   (*callback_flags) += callback_block;
 
-  return NoError;
+  return result;
 }
 
 error_flag
-SourceLIVE::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout)
+SourceLIVE::ReadDatagrams(callback_flag current_flags, callback_flag *flags, InternetObject *server, Statistics *stats, int timeout)
 {
   current_flags = current_flags;
   server = server;
@@ -1065,11 +1067,8 @@ SourceLIVE::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Ser
 }
 
 //---------------------------------------------------------------------- BroadCast specific --------------------
-SourceMultiCast::SourceMultiCast(const char *hostname, size_t source_recvspace, int portnumber, size_t numBlocks, int timeout)
+SourceMultiCast::SourceMultiCast(InternetObject *server, size_t source_recvspace, size_t numBlocks, int timeout):SourceLIVE(0, source_recvspace)
 {
-#ifdef DEBUGLIB
-	Debug("connect to multicast %s:%i", hostname, portnumber);
-#endif        
  	// unused
   	stream_end_block = full_blocks = 0;
         nak_block = 0;
@@ -1077,10 +1076,16 @@ SourceMultiCast::SourceMultiCast(const char *hostname, size_t source_recvspace, 
         most_significant_time = 0;
         current_play_id = 0;
         mem_map = NULL;
+  	struct ip_mreq mreq;
 
         sd.creat(PF_INET, SOCK_DGRAM);
         
-        setSocketError(sd.joinMulti(hostname));
+	mreq.imr_interface.s_addr = INADDR_ANY;
+        mreq.imr_multiaddr.s_addr = server->address.s_addr;
+        	
+        setSocketError(setsockopt(sd.getSocketDescriptor(), IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)));
+        
+        //setSocketError(sd.joinMulti(hostname));
         
         sd.setrecvspace(source_recvspace);
         
@@ -1090,7 +1095,7 @@ SourceMultiCast::SourceMultiCast(const char *hostname, size_t source_recvspace, 
         if (!ErrorExists()) setSocketError(sd.eventsOn());
         if (!ErrorExists()) setSocketError(sd.makeNonBlocking());
        
-        if (!ErrorExists()) setSocketError(sd.bind(portnumber));
+        if (!ErrorExists()) setSocketError(sd.bind((int)(server->portnumber)));
         
         if (!ErrorExists()){
           	int size;
@@ -1253,7 +1258,7 @@ SourceMultiCast::freeBlock(const NECBlock *block)
 // if an MPC packet is fragmented it is joined here.
 
 error_flag
-SourceMultiCast::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout)
+SourceMultiCast::ReadDatagrams(callback_flag current_flags, callback_flag *flags, InternetObject *server, Statistics *stats, int timeout)
 {
   current_flags = current_flags;
   server = server;

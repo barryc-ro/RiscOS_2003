@@ -119,7 +119,7 @@ Stream::test_empty_buffers(void)
 #endif
 
 
-Stream::Stream(int inet_timeout, char* group, int port, int MPEGid, int source_recvspace, int NumBlocks, int BufferBlocks, int TCP_TimeOut, void *pwork):Error()
+Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_recvspace, int NumBlocks, int BufferBlocks, int TCP_TimeOut, void *pwork)
 {
   // MULTICAST CONSTRUCTOR
   
@@ -149,8 +149,8 @@ Stream::Stream(int inet_timeout, char* group, int port, int MPEGid, int source_r
    	result = ErrorOccurred;
   }
   else{ 	
-    	myserver = NULL;
-  	mysource = new SourceMultiCast(group, source_recvspace, port, NumBlocks, TCP_TimeOut);		// create UDP socket
+    	myserver = server;
+  	mysource = new SourceMultiCast(server, source_recvspace, NumBlocks, TCP_TimeOut);		// create UDP socket
   	if  ( mysource->ErrorExists() ){ // errors on creation of UDP
   		err = &mysource->ReturnCopyOfError();
   		result = ErrorOccurred;
@@ -168,7 +168,7 @@ Stream::Stream(int inet_timeout, char* group, int port, int MPEGid, int source_r
 // stream constructor MULTICAST
 
 Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlist, int play_num, Server *server, int NumBlocks, 
-	int source_recvspace, int BufferBlocks, void *pwork, int in_from, int in_to):Error()
+	int source_recvspace, int BufferBlocks, void *pwork, int in_from, int in_to)
 {
   // server specific variables
   int BlockSize;		// data size calculation
@@ -177,7 +177,6 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   in_addr ipAddress;		// structure defined in internet library
   ULINT portnum;		// of server object, receiving
     
-
   // STB specific variables
   message_sent = false;
   high_speed_file = false;
@@ -209,13 +208,13 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
 
 #ifdef DEBUGLIB
 	Debug("creating  messageQ id 0x07");
-	myserver->create_message_pipe(0x07, 0);
+	server->create_message_pipe(0x07, 0);
 #endif	  
-    	myserver->set_stream_owner();
+    	server->set_stream_owner();
   	mysource = new Source((comms_timeout+1)>>1, source_recvspace);			// create UDP socket
  	
- 	if (myserver->ErrorExists()){ 				// errors on creation of TCP
-  		err = &myserver->ReturnCopyOfError();
+ 	if (server->ErrorExists()){ 				// errors on creation of TCP
+  		err = &server->ReturnCopyOfError();
   		result = ErrorOccurred;
   	}
   	else 
@@ -233,22 +232,21 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   }
   
   if ((result != ErrorOccurred)&&
-  		((myserver->getSocketDescriptor(&server_sd)) == ErrorOccurred)) {
-    			err = &(myserver->ReturnCopyOfError());
-    			result = ErrorOccurred;
+  		((server_sd = server->getSocketDescriptor()) == -1)) {
+    			result = MakeError(IP_SocketError);
   }
   
   if ((result != ErrorOccurred)&&
-  		(myserver->getLocalAddress((in_addr*)&ipAddress) == ErrorOccurred) ){
-    			err = &(myserver->ReturnCopyOfError());
+  		(server->getLocalAddress((in_addr*)&ipAddress) == ErrorOccurred) ){
+    			err = &(server->ReturnCopyOfError());
     			result = ErrorOccurred;
   }
   ULINT fast_playback;
   
   if ((result != ErrorOccurred)&&
-  		((myserver->AssetPresentation(initial_block, playlist, play_num, &endofstream,
+  		((server->AssetPresentation(initial_block, playlist, play_num, &endofstream,
   						 &ipAddress, &portnum, &dgram_size, &bitrate, &fast_playback)) == ErrorOccurred)) {
-   			err = &myserver->ReturnCopyOfError();
+   			err = &server->ReturnCopyOfError();
    			result = ErrorOccurred;
   }
   trick_modes = implemented_trick_modes | (fast_playback >> 24);
@@ -271,7 +269,6 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
 	MakeError(VSP_InvalidValue);
 	
 #ifdef DEBUGLIB
-	ErrorDump();
 	if (trick_modes & trick_jump_most_rec)
 		Debug("Being Registered tricks %8.8X", trick_modes);
 	else
@@ -289,20 +286,20 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   }
   ipAddress.s_addr = ntohl(ipAddress.s_addr);		// ipaddress of server as port are set in the asset presentation
   if ((result != ErrorOccurred)&&
-  	(mysource->setServerDetails(ipAddress, (int)portnum) == ErrorOccurred)) {
+  	(mysource->setServerDetails(&ipAddress, (int)portnum) == ErrorOccurred)) {
   		      	   err = &mysource->ReturnCopyOfError();
  	 	      	   result = ErrorOccurred;
   }
 
   if ((result != ErrorOccurred)&&
- 	(myserver->SendAck(myserver->getMaxRequestedBlock(), myserver->getMaxRequestedBlock(), play_preparation) == ErrorOccurred)){
-  		  err = &myserver->ReturnCopyOfError();
+ 	(server->SendAck(server->getMaxRequestedBlock(), server->getMaxRequestedBlock()/*, play_preparation*/) == ErrorOccurred)){
+  		  err = &server->ReturnCopyOfError();
   		  result = ErrorOccurred;
  	}// send request for play
   if (result != ErrorOccurred){
         result = change_state(state_play);	// this will make an imediate callback for trickplay.
-        if (myserver != NULL){
-        	myserver->send_message_StartNotification(initial_block);
+        if (server != NULL){
+        	server->send_message_StartNotification(initial_block);
         	message_sent = true;
         }
   }
@@ -316,10 +313,6 @@ Stream::~Stream(void)
   
   source_flag = claim_token;
   
-  if (myserver != NULL){
-  	myserver->AssetEnd(status, (state != state_endreceived));
-  }
- 
   if ((change_state(state_stop) != ErrorOccurred)||(ErrorNum() != VSP_CantDeleteSharedMemory)){
     	// this is because errors can occur including errors returned from the server not always shared memory
     	delete mysource; mysource = NULL;
@@ -335,18 +328,19 @@ Stream::~Stream(void)
 
   delete mysink;   mysink = NULL;
   
-  if (myserver != NULL){
-    
-    	myserver->send_message_StreamClosing(err);
-    	
-  	if (myserver->interface_uses()){
-    		myserver->clear_stream_owner();
-  	}
-  	else  {
-  		delete myserver; myserver = NULL;
-  	}
+  myserver->AssetEnd(status, (state != state_endreceived));
+
+  myserver->send_message_StreamClosing(err);
+ 	
+  if (myserver->interface_uses()){
+  	myserver->clear_stream_owner();
+  }
+  else  {
+  	delete myserver;
+  	myserver = NULL;
   }
 }
+
 inline error_flag
 Stream::swap_source(void)
 {
@@ -357,7 +351,7 @@ Stream::swap_source(void)
      		mysource = new Source((*tmp));
      		delete tmp;
      		if (mysource->ErrorExists()){
-     			err = &ReturnCopyOfError();
+     			err = &mysource->ReturnCopyOfError();
      			result = ErrorOccurred;
      		}
      		source = source_vod;
@@ -641,13 +635,13 @@ error_flag
 Stream::ReadNPT(ULINT *NPT_time)
 { 
    if (!ErrorExists()){
-	//if (source == source_multicast){
-	//	if (mysink->ReadNPT(NPT_time) == ErrorOccurred)
-	//		err = &(mysink->ReturnCopyOfError());
-	//}
-	//else {
+	if (source == source_multicast){
+		if (mysink->ReadNPT(NPT_time) == ErrorOccurred)
+			err = &(mysink->ReturnCopyOfError());
+	}
+	else {
 		(*NPT_time) = (getNECTime() >> 1);
-	//}
+	}
    }
    else
    	*NPT_time = 0xFFFFFFFF;
@@ -898,12 +892,12 @@ Stream::DummyAckCall(void)
   error_flag result = NoError;
   
   if ((myserver != NULL)&&(state != state_stop)) { //server is null if multicast
-  	if (myserver->comms_flag != comms)	// defined in the server class
+  	if (myserver->comms_flag == false)	// defined in the server class
  		if (myserver->SendAck(myserver->getMaxRequestedBlock(), myserver->getMaxRequestedBlock(), dummy_ack) == ErrorOccurred){
  			err = &(myserver->ReturnCopyOfError());
  			result = ErrorOccurred;
  		}
- 		myserver->comms_flag = no_comms;
+ 		myserver->comms_flag = false;
   }
   if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
     	myserver->send_message_Error(err);
@@ -1045,107 +1039,41 @@ StreamList::StreamList(void):List()
 error_flag
 StreamList::Add(Stream *str, int *id)
 {
-  int identifier;
-  error_flag result = ErrorState();
-  
-  if (result != ErrorOccurred) {
-  
-  	identifier = str->GetSinkHandle();
-  
-  	while (EnsureUnique(identifier) == ErrorOccurred){
-  	  RemoveErr();
-  	  identifier++;
-  	}
-  	
 	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &(str->start_time));
 	str->data_at_start = stats.bytes_received;
 	str->acks_at_start = stats.acks_sent;
 	str->naks_at_start = stats.naks_sent + stats.block_naks_sent;
-	
-  
-  	result = List::Add((void*)str, &identifier);
-  	
-  	(*id) = identifier;
-  }	// if we cannot recover from this error
 
-  return result;
+  	*id = str->GetSinkHandle();
+    
+  	return List::Add((ListObject*)str, id);
 }
 
-error_flag
-StreamList::identify(Stream **item, int identifier)
-{
-  return List::identify((void**)item, identifier);
-}
-
-StreamList::~StreamList(void)
-{
-  int i;
-  
-  ExpectedSize = 0;
-  
-  for (i=(CurrentSize-1); i>=0; i--){
-    	delete (Stream*)object[i];			// delete from the top to the bottom
-    	object[i] = NULL;
-  }
-  
-  delete[] object; object = NULL;
-  delete[] identifiers; identifiers = NULL;
-  
-  CurrentSize = 0;
-}
 
 error_flag
 StreamList::Remove(int identifier)	// returns a boolean success value
 {
-  int i = 0;	// count value
   error_flag result = ErrorState();
-   
  
   if (result != ErrorOccurred) {
-   	if (ExpectedSize != CurrentSize){
- 		MakeError(VSP_BadDelete);
-  		return ErrorOccurred;
-        }
-        
-  	--ExpectedSize;
-  	
-   	while( (i < CurrentSize)&&(identifiers[i] != identifier) ) i++;
-   	
-   	identifiers[i] = INVALID_LIST_ID;
-  
-  	if (i == CurrentSize){
-  		MakeError(VSP_UnknownObj);
-        	result = ErrorOccurred;
-  	}
-
-	if (result != ErrorOccurred){
-	  	unsigned int mt_time;
-	  	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &mt_time);
+	  unsigned int mt_time;
+	  (void) _swix(OS_ReadMonotonicTime, _OUT(0), &mt_time);
 	  	
-	  	if (mt_time > ((Stream*)object[i])->start_time){
-	  	// stream bytes received
-	  		stats.last_stream_bytes_received = (ULINT)(stats.bytes_received - ((Stream*)object[i])->data_at_start);
-	  		stats.last_stream_time = (ULINT)(mt_time - ((Stream*)object[i])->start_time);
-	  		stats.last_stream_acks = (ULINT)(stats.acks_sent - ((Stream*)object[i])->acks_at_start);
-	  		stats.last_stream_naks = (ULINT)((stats.naks_sent + stats.block_naks_sent) - ((Stream*)object[i])->naks_at_start);
+	  Stream *str;
+	  	
+	  if (identify((ListObject**)&str, identifier) != ErrorOccurred) {
+	  	
+	  	if (mt_time > str->start_time){
+	  		// stream bytes received
+	  		stats.last_stream_bytes_received = (ULINT)(stats.bytes_received - str->data_at_start);
+	  		stats.last_stream_time = (ULINT)(mt_time - str->start_time);
+	  		stats.last_stream_acks = (ULINT)(stats.acks_sent - str->acks_at_start);
+	  		stats.last_stream_naks = (ULINT)((stats.naks_sent + stats.block_naks_sent) - str->naks_at_start);
 	  	} // bitrate calculation
-
-  		delete (Stream*)object[i]; 
-  		object[i] = NULL;
-  
-  		while (i < CurrentSize -1){
-    			object[i] = object[i+1];
-    			identifiers[i] = identifiers[i+1];
-    			i++;
-  		}
-  		--CurrentSize;
-
-  		if (decreasesize() == ErrorOccurred)		// this does test for sufficient decrease in size
-  			result = ErrorOccurred;
-#ifdef DEBUGLIB  			
-  		Debug("close asset");
-#endif  		
-  	}
+	  	
+	  	result = List::Remove(identifier);
+         }
+         result = ErrorOccurred;
   }
 
   return result;
@@ -1159,7 +1087,7 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
   error_flag result = ErrorState();
   int i;
   if (result != ErrorOccurred){
-  	for (i=0;i<CurrentSize;i++){
+  	for (i=0;i<Size();i++){
   		Stream *stream = ((Stream*)object[i]);
     		if ((stream->source_sd == identifier)&&(stream->getstate() != state_stop)) {
 	       	   if (code == Socket_Broken_Event){
@@ -1219,8 +1147,9 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
     		else 
     		if (((stream->server_sd) == identifier)&&(identifier != -1)) {
         	   if (code == Socket_Broken_Event){
-        	     	stream->MakeError(IP_SocketError);
+        	     	stream->myserver->MakeError(IP_SocketError);
         	     	err = &stream->ReturnCopyOfError();
+        		stream->myserver->send_message_Error(err);
         	     	result = ErrorOccurred;
         	   }
         	   else {
@@ -1237,6 +1166,7 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
     		}
         }
   }
+
   return result;
 }
 
@@ -1248,7 +1178,7 @@ StreamList::TimeSliceCall(void *)
   int i;
   
   if (result != ErrorOccurred){
-  	for (i=0;i<CurrentSize;i++){
+  	for (i=0;i<Size();i++){
     		Stream *stream = ((Stream*)object[i]);
     		if ((stream != NULL)&&(stream->callback_pending != callback_none)){
     			if (stream->source_flag == free_token ){
@@ -1292,7 +1222,7 @@ StreamList::MPEGInterrupt(int buffer_descriptor)
   error_flag result = ErrorState();
   
   if (result !=ErrorOccurred){
-  	for (i=0;((i<CurrentSize)&&(result != ErrorOccurred));i++) {
+  	for (i=0;((i<Size())&&(result != ErrorOccurred));i++) {
   	  
   	  	Stream *stream = (Stream*)object[i];
   	  	
@@ -1312,7 +1242,7 @@ StreamList::DummyAckPoll(void)
   error_flag result = ErrorState();
 
   if (result != ErrorOccurred){
-  	for (i=0;((i<CurrentSize)&&(result != ErrorOccurred));i++)
+  	for (i=0;((i<Size())&&(result != ErrorOccurred));i++)
     		if ( ((Stream*)object[i])->DummyAckCall() ) {
     			err = &((Stream*)object[i])->ReturnCopyOfError();
     			result = ErrorOccurred;
@@ -1328,7 +1258,7 @@ StreamList::ServiceDynamicAreaRenumber(int old_id, int new_id)
   error_flag result = ErrorState();
   
   if (result != ErrorOccurred){
-  	for (i=0;i<CurrentSize;i++)
+  	for (i=0;i<Size();i++)
   		if ( ((Stream*)object[i])->ServiceDynamicAreaRenumber(old_id, new_id) == ErrorOccurred) {
     			err = &((Stream*)object[i])->ReturnCopyOfError();
     			result = ErrorOccurred;
