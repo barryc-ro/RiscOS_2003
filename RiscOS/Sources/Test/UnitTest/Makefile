@@ -21,7 +21,8 @@
 # 1999-03-08    SBF             Modified install phase to build targets (if necessary)
 # 1999-08-04    NCE             Created resource directorys for individual machine builds.
 # 1999-08-04    NCE		Added -DUSERIF${USSERIF} to cflags so that I can switch things
-#				on UserIF.  This is used on Lazarus builds.
+# 				on UserIF.  This is used on Lazarus builds.
+# 1999-08-10	NCE		Added Lazarus Target
 
 #
 # Paths
@@ -101,8 +102,12 @@ Daytona   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${O
 STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
             ${OM}.Graphics ${OM}.CMOS ${OM}.SerialTest ${OM}.TestCard ${OM}.Printer \
             ${OM}.MPEG ${OM}.Server
+            
+Lazarus   = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
+            ${OM}.Graphics ${OM}.CMOS ${OM}.SerialTest ${OM}.TestCard ${OM}.Printer \
+            ${OM}.MPEG ${OM}.Server ${OM}.Parallel ${OM}.Pop          
 
-OBJS      = ${STB3}
+OBJS      = ${Lazarus}
 
 
 .SUFFIXES: .${OM}
