@@ -67,7 +67,7 @@ bool check_values(void);
 static int output_list_of_tags(const char* const filename, sc_bootblock_data_struct* bootblock, const char* const prefix);
 static int return_external_number_from_bbtag_number(const int number);
 static char* return_external_name_from_tag_number(const int number);
-static bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb);
+static bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, const unsigned int line_number);
 static int match_values(const char* const target, const char* const tag, const char* const value, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb);
 static int return_struct_position_from_ncitag_number(const int number, sc_bootblock_data_struct* bbdata);
 static bool write_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, int flags);
@@ -173,23 +173,27 @@ static bool parse_file_for_flags(const char* const memory_pointer, const int mem
         continue;
       }
 
+      dprintf(("", "parse_file_for_flags(): line is %s\n", alt));
+
       /* Search the line for the magic keywords */
-      if (strcmp(alt, "INCREMENTAL_UPDATE_BOOTBLOCK") == 0)
+      if (strncmp(alt, "INCREMENTAL_UPDATE_BOOTBLOCK", 28) == 0)
       {
         upgrade_file_flags.incremental_update = true;
         dprintf(("", "parse_file_for_flags(): Incremental update set.\n"));
       }
 
-      if (strcmp(alt, "RETURN_URL=") == 0)
+      if (strncmp(alt, "RETURN_URL=", 11) == 0)
       {
+        char* pos = NULL;
+        dprintf(("", "parse_file_for_flags(): return_url spotted.\n"));
         /* Strip off the "return_url" string */
-        char* pos = strstr(alt, "RETURN_URL=")+strlen("RETURN_URL=");
+        pos = strstr(alt, "RETURN_URL=")+strlen("RETURN_URL=");
         upgrade_file_flags.return_url=(char*)rmalloc(strlen(pos)+1, "Return URL storage");
         strcpy(upgrade_file_flags.return_url, pos);
         dprintf(("", "parse_file_for_flags(): return URL set to %s.\n", upgrade_file_flags.return_url));
       }
 
-      if (strcmp(alt, "SESSION_ID=") == 0)
+      if (strncmp(alt, "SESSION_ID=", 11) == 0)
       {
         /* Strip off the session id number */
         char* pos = strstr(alt, "SESSION_ID=")+strlen("SESSION_ID=");
@@ -206,9 +210,23 @@ static bool parse_file_for_flags(const char* const memory_pointer, const int mem
   }
   while ((count < memory_area_size));
 
-  /* Ensure the correct vales have been set. */
-  if (!upgrade_file_flags.return_url || upgrade_file_flags.session_id == 0)
+  /* Ensure the correct values have been set. */
+  if (!upgrade_file_flags.return_url)
+  {
+    /* Add the relevant error to the errors file. */
+    char error_string[255];
+    sprintf(error_string, "Mandatory flag RETURN_URL missing.");
+    append_error(error_string, E_ERROR_MANDATORY_FLAG_ABSENT, 1);
     return (false);
+  }
+  if (upgrade_file_flags.session_id == 0)
+  {
+    /* Add the relevant error to the errors file. */
+    char error_string[255];
+    sprintf(error_string, "Mandatory flag SESSION_ID missing.");
+    append_error(error_string, E_ERROR_MANDATORY_FLAG_ABSENT, 2);
+    return (false);
+  }
 
   return (true);
 }
@@ -223,7 +241,8 @@ static bool parse_file_for_flags(const char* const memory_pointer, const int mem
 static bool parse_file(const char* const memory_pointer, const int memory_area_size, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb)
 {
   char* line = NULL;
-  unsigned int count = 0;
+  unsigned int byte_count = 0;
+  unsigned int line_count = 0;
   char* memory = (char*) memory_pointer;
 
   dprintf(("", "parse_file(): Parsing file at %p (size %d)\n", memory, memory_area_size));
@@ -232,21 +251,22 @@ static bool parse_file(const char* const memory_pointer, const int memory_area_s
   do
   {
     line =  get_line_buffer(memory, memory_pointer+memory_area_size);
+    line_count++;
     if (line)
     {
-      dprintf(("", "parse_file(): line is %s (count %d memory_area_size %d)\n", line, count, memory_area_size));
-      count+=strlen(line)+1;
+      dprintf(("", "parse_file(): line is %s (count %d memory_area_size %d)\n", line, byte_count, memory_area_size));
+      byte_count+=strlen(line)+1;
       memory+=strlen(line)+1;
-      parse_line(line, main_bb, default_bb);
+      parse_line(line, main_bb, default_bb, line_count);
     }
     else
     {
       /* Skip over blank lines. */
       memory++;
-      count++;
+      byte_count++;
     }
   }
-  while ((count < memory_area_size));
+  while ((byte_count < memory_area_size));
 
   return (true);
 }
@@ -262,7 +282,7 @@ static bool parse_file(const char* const memory_pointer, const int memory_area_s
    line contains a valid tag/value combination it returns true, otherwise it
    returns false.
 */
-bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb)
+bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, const unsigned int line_number)
 {
   char* ptr = NULL;
   char target[LINE_BUFFER_SIZE];
@@ -284,12 +304,29 @@ bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data
     return (false);
   }
 
+  /* Ignore the line if it is a flags line. */
+  if (strncmp(line, "SESSION_ID=", 11) == 0)
+  {
+    return(false);
+  }
+  if (strncmp(line, "RETURN_URL=", 11) == 0)
+  {
+    return(false);
+  }
+  if (strncmp(line, "INCREMENTAL_UPDATE_BOOTBLOCK", 28) == 0)
+  {
+    return(false);
+  }
+
   /* Now split the line into a <loc>:<tag>=<value> couplet. */
   ptr = strpbrk(line,":");
   if (!ptr)
   {
     /*  No : seperator, therefore line is malformed */
+    char error_string[255];
     dprintf(("", "parse_line(): No : seperator, therefore line is malformed\n"));
+    sprintf(error_string, "Line %d malformed (No : seperator)", line_number);
+    append_error(error_string, E_ERROR_MALFORMED_UPDATE_FILE, line_number);
     return (false);
   }
   else
@@ -306,6 +343,9 @@ bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data
   if (!ptr)
   {
     /*  No = seperator, therefore line is malformed */
+    char error_string[255];
+    sprintf(error_string, "Line %d malformed (No = seperator)", line_number);
+    append_error(error_string, E_ERROR_MALFORMED_UPDATE_FILE, line_number);
     return (false);
   }
   else
@@ -326,7 +366,7 @@ bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data
 
 
 
-
+#if 0
 /* This routine goes through the entered fields and checks to see if they have any values entered.
     If any fields must have a value and do not, then it returns false
 */
@@ -346,7 +386,10 @@ bool check_values(void)
     {
       if (strlen(biglist[field_number].value) > biglist[field_number].maxlen)
       {
+        char error_string[255];
         dprintf(("", "Tag %s is too long (is %d bytes, should be <%d)", biglist[field_number].name, strlen(biglist[field_number].value), biglist[field_number].maxlen));
+        sprintf(error_string, "Tag %s too long", biglist[field_number].name);
+        append_error(error_string, MALFORMED_UPDATE_FILE, line_number);
         return (false);
       }
     }
@@ -367,7 +410,7 @@ bool check_values(void)
 
   return (true);
 }
-
+#endif /* 0 */
 
 
 
@@ -385,7 +428,7 @@ bool read_configuration_file(const char* const memory_area, const int memory_are
   debug_rmstat();
 
   /* Clear all errors ready for new operation. */
-  clear_errors();
+  clear_error_structure();
 
   /* Parse a configuration file. */
   default_bootblock = (sc_bootblock_data_struct*)rmalloc(sizeof(sc_bootblock_data_struct), "Default bootblock");
@@ -393,7 +436,12 @@ bool read_configuration_file(const char* const memory_area, const int memory_are
 
   /* Obtain the flags from the file. */
   dprintf(("", "read_configuration_file(): Parsing file for flags.\n"));
-  parse_file_for_flags(memory_area, memory_area_size);
+  if (!parse_file_for_flags(memory_area, memory_area_size))
+  {
+    /* An error occured. */
+    dprintf(("", "read_configuration_file(): Error: Error occured whilst parsing for flags. Aborting file load.\n"));
+    return (false);
+  }
 
   dprintf(("", "read_configuration_file(): Initialising structures.\n"));
   initialise_sc_bootblock_data_struct(default_bootblock);
@@ -420,7 +468,7 @@ bool read_configuration_file(const char* const memory_area, const int memory_are
   /* Parse the file and save the altered bootblock tags. */
   parse_file(memory_area, memory_area_size, main_bootblock, default_bootblock);
 
-  /* Now check that the values are correct. */
+  /* Now check that the values are valid. */
   if (!validate_values(main_bootblock, default_bootblock, configs_to_update, exclusions_filename))
   {
     dprintf(("", "read_configuration_file(): Error whilst validating alterations.\n"));
@@ -451,6 +499,11 @@ bool read_configuration_file(const char* const memory_area, const int memory_are
     {
       dprintf(("", "read_configuration_file(): %d errors\n", number));
     }
+
+    /* Display all errors in a debug build. */
+    debug_display_errors();
+    /* Clear all memory used by the errors code during this operation. */
+    clear_error_structure();
   }
 
   /* Check memory allocation (should not be anything allocated here). */
@@ -506,6 +559,9 @@ void get_current_configuration(const unsigned int bitfield, const char* filename
     dprintf(("", "get_current_configuration():   Bit 3 is set : all known NVRAM tags required.\n"));
     output_nvram_tags(filename);
   }
+
+  /* Check memory allocation (should not be anything allocated here). */
+  debug_rmstat();
 }
 
 
@@ -737,8 +793,11 @@ int match_values(const char* const target, const char* const tag, const char* co
           }
           else
           {
-             dprintf(("", "match_values(): Silly value for target.\n"));
-             return (-1);
+            char error_string[255];
+            sprintf(error_string, "Unrecognised target %s", target);
+            append_error(error_string, E_ERROR_UNRECOGNISED_TARGET, -1);
+            dprintf(("", "match_values(): Unrecognised target.\n"));
+            return (-1);
           }
         }
 
@@ -750,6 +809,9 @@ int match_values(const char* const target, const char* const tag, const char* co
           dprintf(("","match_values(): Freeing existing BB tag %s (%s)\n", tag, target_bb->tag_cache->tag[tag_number].val));
           rmfree((unsigned char*)target_bb->tag_cache->tag[tag_number].val);
         }
+
+        /* Before writing the value, ensure that this tag is not excluded. */
+
         /* Write the new values into the structure */
         dprintf(("","match_values(): Writing BB tag %s with value %s\n", tag, value));
         target_bb->tag_cache->tag[tag_number].val = (char*)rmalloc(strlen(value)+1, "Tag store.");
@@ -813,7 +875,6 @@ bool write_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* d
   if (flags_bitfield & (1L << 1))
   {
     char* bootblock = NULL;
-//    _kernel_oserror* err = NULL;
     _kernel_swi_regs regs;
 
     dprintf(("", "write_values(): Writing main bootblock values\n"));
@@ -883,7 +944,11 @@ bool validate_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct
 {
   dprintf(("", "validate_values(): Validating file %s\n", filename));
 
-  read_exclusions_file(filename);
+  if (!read_exclusions_file(filename))
+  {
+    /* An error occured reading the exclusions file... */
+    dprintf(("", "validate_values(): Error: Error loading exclusions file %s.\n", filename));
+  }
 
   if (flags_bitfield & (1L << 0))
   {

@@ -14,7 +14,7 @@
 #include "NVRAM.h"
 #include "kernel.h"
 
-#include "sys/queue.h"		/* get SLIST macros */
+#include "sys/queue.h"  /* get SLIST macros */
 
 /* Include headers from ncmalib */
 #include "dynalloc.h"
@@ -27,8 +27,22 @@
 
 static int exclusions_file_valid = -1; /* No attempt as been made to load file. */
 
-static bool parse_exclusions_file_line(const char* const line);
-static void debug_display_lists(void);
+static bool parse_exclusions_file_line(const char* const line, const unsigned int line_number);
+static void debug_display_exclusions_list(void);
+
+
+
+
+#define EXCLUSION_RULE_TYPE_INCLUDED 1
+#define EXCLUSION_RULE_TYPE_EXCLUDED 2
+
+typedef enum
+{
+  E_TARGET_TYPE_NO_TARGET = -1,
+  E_TARGET_TYPE_MAIN_BB = 0,
+  E_TARGET_TYPE_DEFAULT_BB,
+  E_TARGET_TYPE_NVRAM
+} TARGET_TYPE;
 
 
 /* This file uses the queue functionality provided by TCPIPLibs inthe file sys.queue.h.
@@ -40,23 +54,24 @@ static SLIST_HEAD(list2, list) *inclusions;
 struct list
 {
   SLIST_ENTRY(list) list_link; /* list macro glue */
-  /*
-   struct {
-	struct list *sle_next;	// next element
-  */
   int rule_type;         /* 1 = include, 2 = exclude */
-  int nci_tag_number;    /* The nci_ tag number of the tag this rule represents. */
+  int nci_tag_number;    /* The nci_tag number of the tag this rule represents. */
+  TARGET_TYPE target;   /* 0 = main bb, 1 = default bb, 2 = NVRAM. */
   char* rule_text;       /* An additional rule (e.g. a DNS range ) */
 };
 
 
 
-/* This routine reads the exclusions file into memory. */
+
+
+
+/* This routine reads the contents of the exclusions file into a list. It reutrns false if there was an error parsing the file, true otherwise. */
 bool read_exclusions_file(const char* const filename)
 {
   bool file_valid = true;
   FILE* fp = NULL;
   char line[256];
+  unsigned int line_count = 0;
 
   dprintf(("", "read_exclusions_file(): reading filename %s\n", filename));
 
@@ -73,10 +88,11 @@ bool read_exclusions_file(const char* const filename)
   /* Read the file line-by-line */
   while (fgets(line, LINE_BUFFER_SIZE, fp))
   {
-    dprintf (("", "read_exclusions_file(): Line is %s", line));
+    line_count++;
+    dprintf (("", "read_exclusions_file(): Line %d is \'%s\'", line_count, line));
 
     /* Malformed lines *must* stop the module from doing anything more. */
-    if (!parse_exclusions_file_line(line))
+    if (!parse_exclusions_file_line(line, line_count))
     {
       file_valid = false;
     }
@@ -88,6 +104,7 @@ bool read_exclusions_file(const char* const filename)
     /* Now do what we need to do... Remove the list so no rules are visible to the rest of the system. */
     clear_all_lists();
     exclusions_file_valid = 0;
+    return (false);
   }
   else
   {
@@ -95,36 +112,40 @@ bool read_exclusions_file(const char* const filename)
     exclusions_file_valid = 1;
 
     /* Debug display contents of lists. */
-    debug_display_lists();
+    debug_display_exclusions_list();
   }
 
   /* Close the file */
   fclose(fp);
 
-  return (false);
+  return (true);
 }
 
 
 
 
 
-/* This tourine scans a line for valid exclusion or inclusion rules, and if
-they are present adds them to the relevant lists. It returns false if the line is malformed, otherwise it returns true. */
-static bool parse_exclusions_file_line(const char* const line)
+/* This routine scans a line for valid exclusion or inclusion rules, and if
+they are present adds them to the relevant lists. It returns false if the
+line is malformed, otherwise it returns true. */
+
+static bool parse_exclusions_file_line(const char* const line, const unsigned int line_number)
 {
   struct list *p = NULL;
   char* line_ptr = NULL;
   char* ptr = NULL;
   char* equals_ptr = NULL;
-  char fragment[3][256];
-  int fragment_length[3]; /* Stores te length of each text fragment */
+  char* target_ptr = NULL;
+  char fragment[4][256];
+  int fragment_length[4]; /* Stores the length of each text fragment */
   unsigned int line_type = 0; /* 0 = comment, 1 = inclusion, 2 = exclusion, 3 = blank */
+  TARGET_TYPE target = E_TARGET_TYPE_NO_TARGET;
   int loop;
 
   dprintf(("", "parse_exclusions_file_line()\n"));
 
   /* Initialise temproary data structures */
-  for (loop=0; loop<=2; loop++)
+  for (loop=0; loop<=3; loop++)
   {
     strcpy(fragment[loop],"");
     fragment_length[loop] = 0;
@@ -136,7 +157,7 @@ static bool parse_exclusions_file_line(const char* const line)
   if (strlen(line_ptr) > 1)
   {
     convert_linefeeds(line_ptr);
-    dprintf(("", "parse_exclusions_file_line(): Line is %s\n", line_ptr));
+    dprintf(("", "parse_exclusions_file_line(): Line is \'%s\'\n", line_ptr));
   }
   else
   {
@@ -151,58 +172,91 @@ static bool parse_exclusions_file_line(const char* const line)
     return (true);
   }
 
-  /* Now split the line into a <param>:<tag>=<value> triplet. */
+  /* Now split the line into a <param>:<target>:<tag>=<value> triplet, starting with the param */
   ptr = strpbrk(line_ptr,":");
   if (!ptr)
   {
     /* No : seperator, therefore line is malformed */
+    char error_string[255];
     dprintf(("", "parse_exclusions_file_line(): No : seperator, therefore line is malformed\n"));
+    sprintf(error_string, "Malformed exclusions file (No : seperator) at line %d.", line_number);
+    append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, line_number);
     return (false);
   }
   else
   {
     fragment_length[0] = ptr-line_ptr;
     strncat(fragment[0], line_ptr, fragment_length[0]);
-    dprintf(("", "parse_exclusions_file_line(): first part of line is %s\n", fragment[0]));
-    dprintf(("", "parse_exclusions_file_line(): Next part of line is %s\n", ptr));
+    dprintf(("", "parse_exclusions_file_line(): first part of line is \'%s\' (length %d)\n", fragment[0], fragment_length[0]));
+    dprintf(("", "parse_exclusions_file_line(): Next part of line is \'%s\'\n", ptr));
   }
-  equals_ptr = strpbrk(ptr,"=");
+  ptr++; /* Miss the : */
+  while (*ptr == ' ') ptr++; /* Skip whitespace */
+
+  /* Get the target */
+  target_ptr = strpbrk(ptr,":");
+  if (!target_ptr)
+  {
+    /* No : seperator, therefore line is malformed */
+    char error_string[255];
+    dprintf(("", "parse_exclusions_file_line(): No : seperator, therefore line is malformed\n"));
+    sprintf(error_string, "Malformed exclusions file (No : seperator) at line %d.", line_number);
+    append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, line_number);
+    return (false);
+  }
+  else
+  {
+    fragment_length[1] = target_ptr-ptr;
+    strncat(fragment[1], ptr, fragment_length[1]);
+    dprintf(("", "parse_exclusions_file_line(): Second part of line is \'%s\' (length %d)\n", fragment[1], fragment_length[1]));
+    dprintf(("", "parse_exclusions_file_line(): Next part of line is \'%s\'\n", target_ptr));
+  }
+  while (*target_ptr == ' ') target_ptr++; /* Skip whitespace */
+
+  /* Get the tag and rule. */
+  target_ptr++; /* Move past the : */
+  equals_ptr = strpbrk(target_ptr,"=");
   if (!equals_ptr)
   {
-    /* No = seperator *is* allowed. */
+    /* No = seperator *is* allowed and is not an error. */
     dprintf(("", "parse_exclusions_file_line(): No = seperator\n"));
   }
   else
   {
-    dprintf(("", "parse_exclusions_file_line(): Third part of line is %s\n", equals_ptr+1));
+    dprintf(("", "parse_exclusions_file_line(): Third part of line is \'%s\'\n", equals_ptr+1));
   }
+  while (*equals_ptr == ' ') equals_ptr++; /* Skip whitespace */
 
   /* Decode the second and third parts of the line. */
   if (equals_ptr)
   {
-    fragment_length[1] = equals_ptr-ptr-1;
-    fragment_length[2] = strlen(equals_ptr+1);
-    strncat(fragment[1], ptr+1, fragment_length[1]);
-    strncat(fragment[2], equals_ptr+1, fragment_length[2]);
-    dprintf(("", "parse_exclusions_file_line(): 2nd line fragment is %s (length %d).\n", fragment[1], strlen(fragment[1])));
-    dprintf(("", "parse_exclusions_file_line(): 3rd line fragment is %s (length %d).\n", fragment[2], strlen(fragment[2])));
+    fragment_length[2] = equals_ptr-target_ptr-1;
+    fragment_length[3] = strlen(equals_ptr);
+    strncat(fragment[2], target_ptr, fragment_length[2]);
+    strncat(fragment[3], equals_ptr, fragment_length[3]);
+    dprintf(("", "parse_exclusions_file_line(): 2nd line fragment is \'%s\' (length %d).\n", fragment[2], strlen(fragment[2])));
+    dprintf(("", "parse_exclusions_file_line(): 3rd line fragment is \'%s\' (length %d).\n", fragment[3], strlen(fragment[3])));
   }
   else
   {
-    fragment_length[1] = strlen(ptr+1);
-    strncat(fragment[1], ptr+1, fragment_length[1]);
-    dprintf(("", "parse_exclusions_file_line(): 2nd line fragment is %s (length %d).\n", fragment[1], strlen(fragment[1])));
+    fragment_length[2] = strlen(target_ptr);
+    strncat(fragment[2], target_ptr, fragment_length[2]);
+    dprintf(("", "parse_exclusions_file_line(): 2nd line fragment is \'%s\' (length %d).\n", fragment[2], strlen(fragment[2])));
   }
 
   /* Ensure that there is something after the = */
-  if (fragment_length[1] == 0)
+  if (fragment_length[2] == 0)
   {
+    char error_string[255];
     dprintf(("", "parse_exclusions_file_line(): Error: Non-existant second fragment.\n"));
+    sprintf(error_string, "Malformed exclusions file (Non-existant second fragment) at line %d.", line_number);
+    append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, line_number);
     return (false);
   }
 
+#ifdef DEBUGLIB
   dprintf(("", "Fragment lengths and contents:\n"));
-  for (loop=0; loop<=2; loop++)
+  for (loop=0; loop<=3; loop++)
   {
     char* foo = NULL;
     char* foo2=NULL;
@@ -211,14 +265,15 @@ static bool parse_exclusions_file_line(const char* const line)
     strcpy(foo,foo2);
     strcpy(fragment[loop], foo);
     fragment_length[loop] = strlen(fragment[loop]);
-    dprintf(("", "%d: %d %s\n", loop, fragment_length[loop], fragment[loop]));
+    dprintf(("", "Fragment %d: %d \'%s\'\n", loop, fragment_length[loop], fragment[loop]));
     if (foo)
     {
       rmfree((unsigned char*)foo);
     }
   }
+#endif /* DEBUGLIB */
 
-  /* The line should begin with either include: or exclude:, be a comment or a blankline. Find out which it is, otherwise it is rubbish. */
+  /* The line should begin with either include: or exclude:, be a comment or a blank line. Find out which it is, otherwise it is rubbish. */
   if (strncmp(fragment[0], "include", 7) == 0)
   {
     dprintf(("", "parse_exclusions_file_line(): Line is an inclusion.\n"));
@@ -232,9 +287,18 @@ static bool parse_exclusions_file_line(const char* const line)
 
   if (line_type > 2 || line_type < 1)
   {
+    char error_string[255];
     dprintf(("", "parse_exclusions_file_line(): Error, unrecognised line type.\n"));
+    sprintf(error_string, "Malformed exclusions file (Unrecognised line type) at line %d.", line_number);
+    append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, line_number);
     return (false);
   }
+
+  /* Get the target type */
+  dprintf(("", "parse_exclusions_file_line(): Target is \'%s\'\n", fragment[1]));
+  if (strcmp(fragment[1], "BBMAIN")==0) target = E_TARGET_TYPE_MAIN_BB;
+  if (strcmp(fragment[1], "BBDEFAULT")==0) target = E_TARGET_TYPE_DEFAULT_BB;
+  if (strcmp(fragment[1], "NVRAM")==0) target = E_TARGET_TYPE_NVRAM;
 
   /* Create a node and add to the list. Only do this if the line has been verified as being correct. */
   p = (struct list *)rmalloc(sizeof(struct list), "exclusions list node");
@@ -244,13 +308,18 @@ static bool parse_exclusions_file_line(const char* const line)
   }
   else
   {
-    /* Convert the rule_type fragment to an number. */
+    /* Store the target. */
+    p->target = target;
+    /* Store the rule_type. */
     p->rule_type = line_type;
-    /* Convert the tag string to an nci_tag number. */
-    p->nci_tag_number = return_nci_tag_number_from_tag_string(fragment[1]);
+    /* Convert the tag string to an nci_tag number and store. */
+    p->nci_tag_number = return_nci_tag_number_from_tag_string(fragment[2]);
     if (p->nci_tag_number == -1)
     {
-      dprintf(("", "parse_exclusions_file_line(): Unrecognised tag %s\n", fragment[1]));
+      char error_string[255];
+      dprintf(("", "parse_exclusions_file_line(): Unrecognised tag %s\n", fragment[2]));
+      sprintf(error_string, "Malformed exclusions file (Unrecognised tag) at line %d.", line_number);
+      append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, line_number);
       /* Tidy up memory allocated for this node. */
       rmfree((unsigned char*)p);
       p = NULL;
@@ -258,19 +327,19 @@ static bool parse_exclusions_file_line(const char* const line)
     }
     else
     {
-      dprintf(("", "parse_exclusions_file_line(): nci_tag_number for %s is %d\n", fragment[1], p->nci_tag_number));
+      dprintf(("", "parse_exclusions_file_line(): nci_tag_number for \'%s\' is %d\n", fragment[1], p->nci_tag_number));
     }
 
-    if (fragment_length[2] > 0) /* There is a value present */
+    if (fragment_length[3] > 0) /* There is a value present */
     {
-      p->rule_text = (char*)rmalloc(fragment_length[2], "exclusions list node contents");
+      p->rule_text = (char*)rmalloc(fragment_length[3], "exclusions list node contents");
       if (!p->rule_text)
       {
         dprintf(("", "parse_exclusions_file_line(): Error allocating memory for node contents.\n"));
       }
       else
       {
-        strcpy (p->rule_text, fragment[2]);
+        strcpy (p->rule_text, fragment[3]);
       }
     }
     else
@@ -300,7 +369,7 @@ bool clear_exclusions_file(void)
 
 
 /* This routine displays a debug list of all the known rules. */
-static void debug_display_lists(void)
+static void debug_display_exclusions_list(void)
 {
   struct list *p;
   unsigned int count = 0;
@@ -309,7 +378,7 @@ static void debug_display_lists(void)
   SLIST_FOREACH(p, inclusions, list_link)
   {
     count++;
-    dprintf(("", "debug_display_lists(): Node %d is: %d %d \"", count, p->rule_type, p->nci_tag_number));
+    dprintf(("", "debug_display_exclusions_list(): Node %d is: %d %d %d \"", count, p->target, p->rule_type, p->nci_tag_number));
     if (p->rule_text)
     {
       dprintf(("", "%s", p->rule_text));
@@ -317,7 +386,7 @@ static void debug_display_lists(void)
     dprintf(("", "\"\n"));
   }
 
-  dprintf(("", "debug_display_lists(): There were %d nodes.\n", count));
+  dprintf(("", "debug_display_exclusions_list(): There were %d nodes.\n", count));
 }
 
 
@@ -384,12 +453,8 @@ static struct list* search_exclusions_file_for_tag(const int nci_tag)
 
 
 
-
-#define EXCLUSION_RULE_TYPE_INCLUDED 1
-#define EXCLUSION_RULE_TYPE_EXCLUDED 2
-
 /* This routine ensures that all the tags in the target are valid against the rules held in the exclusions file, i.e. that any included tags are present and that excluded ones are not. Also any extended rules (e.g. DNS ranges) need to be checked.
-   It returns 0 if all tags match, otherwise it returns non-zero. Any errors encoutnered should be added to the errors list. */
+   It returns 0 if all tags match, otherwise it returns non-zero. Any errors encountered should be added to the errors list. */
 
 unsigned int validate_bootblock_data(sc_bootblock_data_struct* bootblock)
 {
@@ -399,14 +464,40 @@ unsigned int validate_bootblock_data(sc_bootblock_data_struct* bootblock)
     We then need to do 2 parses:
     1) Scan through all the tags in the CU file and ensure that they should all be present (i.e. none are excluded in the exclusions file);
     2) Scan through the exclusions file and ensure that all tags that are included are present in the CU file.
-    As well as th above, we also need to ensure that any extended rule (for example DNS ranges) are validated.
+    As well as the above, we also need to ensure that any extended rule (for example DNS ranges) are validated.
  */
 
-  /* Ensure that the same tag is not mentioned in both exclusion and inclusion rules. */
-  struct list *p;
+  /* Ensure that the same tag is not mentioned in both exclusion and inclusion rules. Also ensure that if nci_tag > 500 it is an nvram target, otherwise a main or default bootblock target */
+  struct list *p = NULL;
   SLIST_FOREACH(p, inclusions, list_link)
   {
-    struct list *p_inner;
+    struct list *p_inner = NULL;
+    /* Perform nci_tag to target type checks. */
+    if (p->nci_tag_number >= 500 && p->target != E_TARGET_TYPE_NVRAM)
+    {
+      char error_string[255];
+      dprintf(("", "validate_bootblock_data(): Error: Target is inconsistent with nci_tag\n"));
+      sprintf(error_string, "nci_tag %0x is not an NVRAM tag.", p->nci_tag_number);
+      append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, p->nci_tag_number);
+      return (-1);
+    }
+    if (p->nci_tag_number >= 500 && p->target == E_TARGET_TYPE_MAIN_BB)
+    {
+      char error_string[255];
+      dprintf(("", "validate_bootblock_data(): Error: Target is inconsistent with nci_tag\n"));
+      sprintf(error_string, "nci_tag %0x is not a main bootblock tag.", p->nci_tag_number);
+      append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, p->nci_tag_number);
+      return (-1);
+    }
+    if (p->nci_tag_number >= 500 && p->target == E_TARGET_TYPE_DEFAULT_BB)
+    {
+      char error_string[255];
+      dprintf(("", "validate_bootblock_data(): Error: Target is inconsistent with nci_tag\n"));
+      sprintf(error_string, "nci_tag %0x is not a default bootblock tag.", p->nci_tag_number);
+      append_error(error_string, E_ERROR_MALFORMED_EXCLUSIONS_FILE, p->nci_tag_number);
+      return (-1);
+    }
+    /* Ensure that the same <target>:<tag> combination is not mentioned twice. */
     SLIST_FOREACH(p_inner, inclusions, list_link)
     {
       dprintf(("", "validate_bootblock_data(): Node %p is: %d %d (%p %d %d)", p, p->rule_type, p->nci_tag_number, p_inner, p_inner->rule_type, p_inner->nci_tag_number));
@@ -416,12 +507,12 @@ unsigned int validate_bootblock_data(sc_bootblock_data_struct* bootblock)
         continue;
       }
 
-      if (p->nci_tag_number == p_inner->nci_tag_number)
+      if ((p->nci_tag_number == p_inner->nci_tag_number) && (p->target == p_inner->target))
       {
         char error_string[255];
         dprintf(("", "validate_bootblock_data(): Error: The same tag number has two rules.\n"));
         sprintf(error_string, "Tag %d has two exclusions rules.", p->nci_tag_number);
-        append_error(error_string);
+        append_error(error_string, E_ERROR_EXCLUSIONS_TAG_PRESENT_MULTIPLY, p->nci_tag_number);
         return (-1);
       }
     }
@@ -446,14 +537,35 @@ unsigned int validate_bootblock_data(sc_bootblock_data_struct* bootblock)
           char error_string[255];
           dprintf(("", "validate_bootblock_data(): Error: Attempt to alter tag %s (it is excluded in the exclusions file).\n", bootblock->tag_cache->tag[loop].tag));
           sprintf(error_string, "Tag %s excluded in exclusions file.", bootblock->tag_cache->tag[loop].tag);
-          append_error(error_string);
+          append_error(error_string, E_ERROR_EXCLUDED_TAG_INCLUDED,  bootblock->tag_cache->tag[loop].nci_tag);
           return (loop);
         }
       }
     }
   }
+  return (0);
+}
+
+
+
+bool is_tag_excluded(const unsigned int nci_tag_number, TARGET_TYPE target)
+{
+  struct list *p = NULL;
+  dprintf(("", "is_tag_excluded(): \n"));
 
   /* Ensure that all tags that need including are included. */
+  SLIST_FOREACH(p, inclusions, list_link)
+  {
+    if (p->rule_type == EXCLUSION_RULE_TYPE_INCLUDED)
+    {
+      /* This tag should be included in the CU file. */
+      dprintf(("", "is_tag_excluded(): \n"));
+      if (p->nci_tag_number == nci_tag_number && p->target == target)
+      {
 
-  return (0);
+      }
+    }
+  }
+
+  return (false);
 }
