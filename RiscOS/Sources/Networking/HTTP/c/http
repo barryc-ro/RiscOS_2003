@@ -39,6 +39,8 @@
  *		 ensured SSL context is freed in socket close, stopped 'object' field from being
  *		 modified when sending headers, and stopped the zeroing of data_so_far on reopening
  *		 SSL connection.
+ * SJM 27-Feb-98 Removed sendv() use in send request and send request headers as they fail to work
+ *		 (When using ssl) with the lotus domino server.
  */
 
 #include <errno.h>
@@ -83,6 +85,9 @@ extern void riscos_SSLLib_Init( void );
 
 #if DEBUG
 #include "err.h"
+#ifndef NO_SECURE
+#include "SSL/buffer.h"
+#endif
 #endif
 
 #ifdef CSFS
@@ -239,6 +244,8 @@ static void http_queue_allow_read( http_connection *c );
 static void http_queue_allow_write( http_connection *c );
 static void http_requeue( http_connection *c );
 static void http_queue_dec_nsockets( http_connection *c );
+
+void http_set_server_flag( http_connection *c, int flag );
 
 #if DEBUG
 static void http_show_flags( http_connection *c );
@@ -465,7 +472,7 @@ extern int socketwritev( int d, struct iovec *iov, int iovcnt );
  * blocking I/O.                                                             *
  *---------------------------------------------------------------------------*/
 
-#ifndef NO_SECURE
+#if 0
 static int SSL_writev( SSL *s, struct iovec *iov, int iovcnt )
 {
     int bytes = 0;
@@ -477,7 +484,12 @@ static int SSL_writev( SSL *s, struct iovec *iov, int iovcnt )
         if ( rc < 0 )
         {
             if ( errno == EWOULDBLOCK && bytes )
+	    {
+		fdebugf(log_file, "SSL_writev: EWOULDBLOCK %d bytes, %d vectors left\n", bytes, iovcnt);
                 return bytes;
+	    }
+
+	    fdebugf(log_file, "SSL_writev: errno %d\n", errno);
             return -1;
         }
         else
@@ -583,7 +595,6 @@ _debug_printf(FILE *file, char *format, ...)
 #if DEBUG
 void fprintf_and_flush(FILE *file, char *format, ...)
 {
-  char debug_line[256];
   va_list list;
 
   va_start (list, format);
@@ -639,6 +650,13 @@ extern _kernel_oserror *module_initialise(char *cmd_tail, int pbase, void *pw)
     ssl_present = TRUE;
     riscos_ZM_Initialise();
     riscos_SSLLib_Init();
+#if DEBUG && !defined(REMOTE_DEBUG)
+    {
+	extern FILE *SSL_ERR;
+	SSL_ERR = log_file;
+    }
+#endif
+
     {
         ssl_context = SSL_CTX_new();
         SSL_load_error_strings();
@@ -1584,7 +1602,7 @@ static void http_fail( http_connection *c, transfer_status status )
 
 static _kernel_oserror *http_prosecute( http_connection *c )
 {
-    int needToRead = 1;  /* used in "line reading" states */
+    /*int needToRead = 1;*/  /* used in "line reading" states */
     char *l;            /* ditto */
     int rc;
 
@@ -1727,7 +1745,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
         /* Expecting a response line */
         l = http_getline(c, 1); /* Get the next line, doing a read */
-        needToRead = 0;
+        /*needToRead = 0;*/
         if (l)
             http_process_response_line(c, l);
         if ( c->status != status_GETTING_HEADERS )
@@ -1735,7 +1753,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
         /* else we can drop through */
 
     case status_GETTING_HEADERS:
-        l = http_getline(c, needToRead);
+        l = http_getline(c, 0/*needToRead*/);
         while (l && c->status == status_GETTING_HEADERS)
         {
                 http_process_header_line(c, l);
@@ -1744,6 +1762,18 @@ static _kernel_oserror *http_prosecute( http_connection *c )
         }
         if (c->status != status_GETTING_BODY)
             return NULL;
+
+#if 0
+	/* some kind of check is needed here but I don't know quite what */
+	if ((c->flags & (http_open_flags_IMAGE | http_flags_RANGEBROKEN | http_flags_GOTFIRST)) ==
+	    http_open_flags_IMAGE)
+	{
+	    http_set_server_flag( c, http_flags_RANGEBROKEN );
+            fdebugf( log_file, "%p: BYTE RANGES ARE BROKEN (no CONTENT-RANGE))\n", c );
+            http_requeue( c );
+	    return NULL;
+	}
+#endif
         /* else we can drop through */
 
         rc = c->flags;
@@ -1852,6 +1882,15 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                 if (rc == 0 || errno != EWOULDBLOCK)
                 {
                     fdebugf(log_file, "%p: Connection closed on socket %d, errno=%d\n", c, c->socket, errno);
+
+#if DEBUG && !defined(NO_SECURE)
+		    if (rc && c->SSL)
+		    {
+			fdebugf(log_file, "** crypto error log: ssl errno %d\n", SSL_errno());
+			ERR_print_errors_fp(log_file);
+			fdebugf(log_file, "** end\n");
+		    }
+#endif
                     http_set_status( c, status_COMPLETED_FILE );
 
                     http_socket_close( c );
@@ -2183,6 +2222,54 @@ static _kernel_oserror *check_proxy_redirect(struct sockaddr_in *sa, int *pflags
 }
 #endif
 
+#if DEBUG
+static void dump(FILE *out, char *data, int size)
+{
+    int i;
+    for (i = 0; i < size; i++)
+    {
+	fdebugf(out, "%02x ", data[i]);
+	if ((i & 15) == 15)
+	    fdebugf(out, "\n");
+    }
+
+    if ((i & 15) != 0)
+	fdebugf(out, "\n");
+}
+#endif
+
+#if DEBUG && !defined(NO_SECURE)
+
+static long bio_dump_cb(BIO *bio, int cmd, char *argp, int argi, long argl, long ret)
+{
+    FILE *out = log_file;
+    if (cmd == (BIO_CB_READ|BIO_CB_RETURN))
+    {
+	fdebugf(out,"read from %08X [%08lX] (%d bytes => %ld (0x%X))\n",
+		bio,argp,argi,ret,ret);
+	if (ret > 0)
+	    dump(out,argp,ret);
+	return(ret);
+    }
+    else if (cmd == (BIO_CB_WRITE|BIO_CB_RETURN))
+    {
+	fdebugf(out,"write to %08X [%08lX] (%d bytes => %ld (0x%X))\n",
+		bio,argp,argi,ret,ret);
+	if (ret > 0)
+	    dump(out,argp,ret);
+	return(ret);
+    }
+    else if (cmd == (BIO_CB_CTRL|BIO_CB_RETURN))
+	return ret;
+    return ret == 0 ? 1 : ret;
+}
+
+static void bio_debug_open(SSL *s)
+{
+    BIO_set_callback((BIO *)SSL_get_rbio(s), bio_dump_cb);
+}
+#endif
+
         /*===================*
          *   SWI HTTP_Open   *
          *===================*/
@@ -2244,10 +2331,10 @@ static _kernel_oserror *http_open(http_open_args *args)
     if (new->flags & http_open_flags_TUNNEL)
 	new->flags &= ~http_open_flags_IMAGE;
      */
-    
+
 #if EXTEND_BUFFER
-    new->buffer = malloc(MAX_LINE);
-    new->buf_size = MAX_LINE;
+    new->buffer = malloc(MAX_INPUT);
+    new->buf_size = MAX_INPUT;
 #else
     new->buffer = (char*) (new + 1);
 #endif
@@ -2507,7 +2594,11 @@ static int http_open_socket( http_connection *c )
                                 &cert_verify_callback );
             else
                 SSL_set_verify( c->SSL, SSL_VERIFY_NONE, NULL );
-        }
+
+#if DEBUG
+	    bio_debug_open( c->SSL );
+#endif
+	}
 #endif
     }
 
@@ -3279,8 +3370,9 @@ void http_send_request(http_connection *c)
     char *meth = c->bh ? "POST " :
                  (c->flags & http_open_flags_HEAD ) ? "HEAD "
                                                     : "GET ";
-    struct iovec iov[3];
-
+    int len;
+    char *s, *obj;
+    
 #ifndef NO_SECURE
     /* semi-bodge */
     if ( c->flags & http_flags_TUNNELLING
@@ -3314,48 +3406,36 @@ void http_send_request(http_connection *c)
     }
 #endif
 
-    sprintf( tmp_buffer, " %s\r\n", http_version );
-
-    iov[0].iov_base = meth;
-    iov[0].iov_len  = strlen(meth);
-#if 0
-    iov[1].iov_base = c->object;
-    iov[1].iov_len  = strlen(c->object);
-#else
+    /* get ptr to the object we will use */
 #ifndef NO_SECURE
     /* SJM: if tunnelling then skip to path */
     if (c->SSL && (c->flags & http_open_flags_TUNNEL))
     {
         char *slash = strchr(c->object + 8, '/' );
-	if (slash)
-	{
-	    iov[1].iov_base = slash;
-	    iov[1].iov_len  = strlen(slash);
-	}
-	else
-	{
-	    iov[1].iov_base = "/";
-	    iov[1].iov_len  = 1;
-	}
+	obj = slash ? slash : "/";
     }
     else
 #endif
     {
-	iov[1].iov_base = c->object;
-	iov[1].iov_len  = strlen(c->object);
+	obj = c->object;
     }
-#endif    
-    iov[2].iov_base = tmp_buffer;
-    iov[2].iov_len  = strlen(tmp_buffer);
 
-    fdebugf( log_file, "%p: sending %d request %s%s %s\n", c, c->onthissocket,
-             meth, iov[1].iov_base, http_version );
+    /* get length needed for header */
+    len = strlen(meth) + strlen(obj) + 1 + strlen(http_version) + 2;
 
+    /* malloc space if it won't fit in the buffer */
+    s = tmp_buffer;
+    if (len >= sizeof(tmp_buffer))
+	s = malloc(len + 1);
+
+    sprintf( s, "%s%s %s\r\n", meth, obj, http_version);
+
+    fdebugf( log_file, "%p: sending %d request %s\n", c, c->onthissocket, s);
+    
     /* Note there's an assumption here that we can send the whole request
      * line without getting an EWOULDBLOCK.
      */
-
-    if (http_sendv(c, iov, 3 ) < 0)
+    if (http_send(c, s, strlen(s) ) < 0)
     {
         http_fail( c, status_FAIL_REQUEST );
     }
@@ -3365,31 +3445,8 @@ void http_send_request(http_connection *c)
         c->sendhead = c->sendhead_base;
     }
 
-#if 0
-    if ( strlen( c->object ) > TMP_BUF_SIZE - 20 )
-    {
-
-        http_send(c, meth, strlen(meth) );
-        http_send(c, c->object, strlen(c->object) );
-
-        sprintf(tmp_buffer, " %s\r\n", http_version);
-    }
-    else
-    {
-        sprintf(tmp_buffer, "%s%s %s\r\n",
-                           meth, c->object, http_version);
-    }
-
-    if (http_sendv(c, iov, 3 ) < 0)
-    {
-        http_fail( c, status_FAIL_REQUEST );
-    }
-    else
-    {
-        http_set_status( c, status_REQUEST_HEADERS );
-        c->sendhead = c->sendhead_base;
-    }
-#endif
+    if (s != tmp_buffer)
+	free(s);
 }
 
 
@@ -3407,22 +3464,17 @@ int http_send_request_headers( http_connection *c )
     {
         if ( c->sendhead )
         {
-	    /* SJM: converted this call into a sendv to avoid overrunning tmp_buffer */
-	    struct iovec iov[4];
+	    int len = strlen(c->sendhead->key) + 2 + strlen(c->sendhead->value) + 2 ;
+	    char *s = tmp_buffer;
 
-	    iov[0].iov_base = c->sendhead->key;
-	    iov[0].iov_len  = strlen(c->sendhead->key);
-	    iov[1].iov_base = ": ";
-	    iov[1].iov_len  = 2;
-	    iov[2].iov_base = c->sendhead->value;
-	    iov[2].iov_len  = strlen(c->sendhead->value);
-	    iov[3].iov_base = "\r\n";
-	    iov[3].iov_len  = 2;
+	    if (len >= sizeof(tmp_buffer))
+		s = malloc(len + 1);
+	    
+	    sprintf( s, "%s: %s\r\n", c->sendhead->key, c->sendhead->value );
+	    rc = http_send(c, s, len);
 
-	    rc = http_sendv( c, iov, sizeof(iov)/sizeof(iov[0]) );
-
-/* 	    sprintf( tmp_buffer, "%s: %s\r\n", c->sendhead->key, */
-/*                                  c->sendhead->value ); */
+	    if (s != tmp_buffer)
+		free(s);	    
 
             fdebugf( log_file, "%p: (7) txheader %s: %s\n", c, c->sendhead->key,
                                c->sendhead->value );
@@ -3496,7 +3548,7 @@ int http_send_request_headers( http_connection *c )
 
             strcat(tmp_buffer, "\r\n");
 
-	    /* SJM: moved call inside else as if version is a sendv */
+	    /* SJM: moved call inside */
 	    rc = http_send( c, tmp_buffer, strlen(tmp_buffer) );
         }
 
@@ -3607,12 +3659,14 @@ int http_send_request_body(http_connection *c)
     return 0;
 }
 
+#if !EXTEND_BUFFER
 #define MAX_LINE 256
+#endif
 
 /*
  * Read some more data from the line and return the next line of data
  */
-char* http_getline(http_connection *c, int read)
+char* http_getline(http_connection *c, int readResponse)
 {
     char *end;
     int rc = 1;     /* any non-zero value */
@@ -3622,6 +3676,8 @@ char* http_getline(http_connection *c, int read)
     int buf_size = MAX_LINE;
 #endif
     
+    fdebugf(log_file, "%p: getline buf_size %d buf_off %d buf_used %d\n", c, c->buf_size, c->buf_off, c->buf_used );
+
     if (c->buf_used)
     {
         memmove(c->buffer, c->buffer + c->buf_used, c->buf_off - c->buf_used + 1);
@@ -3629,170 +3685,187 @@ char* http_getline(http_connection *c, int read)
         c->buf_used = 0;
     }
 
-    /* pdh: might as well always read it */
-    if ( buf_size - c->buf_off - 1 > 0 )
+#if EXTEND_BUFFER
+    /* need to loop to ensure that all the data is read from the internet module */
+    for (;;)
+#endif
     {
-        /* pdh: for the insecure prefix to a tunnelled conversation, peek
-         * don't read
-        if ( (c->flags & http_open_flags_TUNNEL)
+	/* pdh: might as well always read it */
+	if ( buf_size - c->buf_off - 1 > 0 )
+	{
+	    /* pdh: for the insecure prefix to a tunnelled conversation, peek
+	     * don't read
+	     if ( (c->flags & http_open_flags_TUNNEL)
              && !c->SSL )
-        {
-            rc = recv(c->socket,c->buffer + c->buf_off,
-                            buf_size - c->buf_off - 1, MSG_PEEK);
-            if ( rc>0 )
-                fdebugf( log_file, "%p: peeked %d bytes\n", c, rc );
-        }
-        else
-         */
+	     {
+	     rc = recv(c->socket,c->buffer + c->buf_off,
+	     buf_size - c->buf_off - 1, MSG_PEEK);
+	     if ( rc>0 )
+	     fdebugf( log_file, "%p: peeked %d bytes\n", c, rc );
+	     }
+	     else
+	    */
             rc = http_recv( c, c->buffer + c->buf_off,
                             buf_size - c->buf_off - 1);
 
-        if ( rc==0 )
-        {
-            fdebugf(log_file, "%p: EOF in getline (%d chars)\n", c,c->buf_off );
+	    if ( rc==0 )
+	    {
+		fdebugf(log_file, "%p: EOF in getline (%d chars)\n", c,c->buf_off );
 
-            if ( c->buf_off == 0 )
-            {
-                if ( c->onthissocket > 1 )
-                {
-                    /* We may have been thrown off.
-                     * *CAREFUL* not to cause infinite loops here, the
-                     * use of onthissocket makes sure of it.
-                     */
-                    fdebugf( log_file,
-                             "%p: server lied about keep-alive\n", c );
+		if ( c->buf_off == 0 )
+		{
+		    if ( c->onthissocket > 1 )
+		    {
+			/* We may have been thrown off.
+			 * *CAREFUL* not to cause infinite loops here, the
+			 * use of onthissocket makes sure of it.
+			 */
+			fdebugf( log_file,
+				 "%p: server lied about keep-alive\n", c );
 
-                    /* Don't let socket_close delete the queue! */
-                    if ( c->queue )
-                        c->queue->nsockets++;
+			/* Don't let socket_close delete the queue! */
+			if ( c->queue )
+			    c->queue->nsockets++;
 
-                    http_socket_close( c );
+			http_socket_close( c );
 
-                    c->flags &= ( http_open_flags_ALLUSER | http_flags_SERVER
-                                    | http_flags_GOTFIRST );
+			c->flags &= ( http_open_flags_ALLUSER | http_flags_SERVER
+				      | http_flags_GOTFIRST );
 
-                    http_open_socket( c );
+			http_open_socket( c );
 
-                    c->onthissocket = 1;
+			c->onthissocket = 1;
 
-                    if ( c->queue )
-                        c->queue->nsockets--;
-                }
-                else
-                {
-                    http_fail( c, status_FAIL_REQUEST );
-                }
-                return NULL;
-            }
-        }
+			if ( c->queue )
+			    c->queue->nsockets--;
+		    }
+		    else
+		    {
+			http_fail( c, status_FAIL_REQUEST );
+		    }
+		    return NULL;
+		}
+	    }
 
-        if ( rc < 0 )
-        {
-            if (errno != EWOULDBLOCK)
-            {
-                if ( errno == ECONNRESET )
-                {
-                    /* This is Netscape's ever-so-polite way of telling us
-                     * not to do any more fetches down this socket
-                     */
-                    fdebugf( log_file,
-                             "%p: ECONNRESET, retrying on new socket\n", c );
+	    if ( rc < 0 )
+	    {
+		if (errno != EWOULDBLOCK)
+		{
+		    if ( errno == ECONNRESET )
+		    {
+			/* This is Netscape's ever-so-polite way of telling us
+			 * not to do any more fetches down this socket
+			 */
+			fdebugf( log_file,
+				 "%p: ECONNRESET, retrying on new socket\n", c );
 
-                    /* Don't let socket_close delete the queue! */
-                    if ( c->queue )
-                        c->queue->nsockets++;
+			/* Don't let socket_close delete the queue! */
+			if ( c->queue )
+			    c->queue->nsockets++;
 
-                    http_socket_close( c );
+			http_socket_close( c );
 
-                    c->flags &= ( http_open_flags_ALLUSER | http_flags_SERVER
-                                    | http_flags_GOTFIRST );
+			c->flags &= ( http_open_flags_ALLUSER | http_flags_SERVER
+				      | http_flags_GOTFIRST );
 
-                    http_open_socket( c );
+			http_open_socket( c );
 
-                    if ( c->queue )
-                        c->queue->nsockets--;
-                }
-                else
-                {
-                    fdebugf( log_file, "%p: *** failed in getline (errno=%d)\n",
-                             c, errno );
+			if ( c->queue )
+			    c->queue->nsockets--;
+		    }
+		    else
+		    {
+			fdebugf( log_file, "%p: *** failed in getline (errno=%d)\n",
+				 c, errno );
 
-                    http_fail( c, status_FAIL_REQUEST );
-                }
-                return NULL;
-            }
-        }
-        else
-        {
-            c->buf_off += rc;
-        }
-    }
+			http_fail( c, status_FAIL_REQUEST );
+		    }
+		    return NULL;
+		}
+	    }
+	    else
+	    {
+#if DEBUG
+		fdebugf(log_file, "%p: read %d bytes\n", c, rc);
+		dump(log_file, c->buffer + c->buf_off, rc);
+#endif
+		c->buf_off += rc;
+	    }
+	}
 
-    /* pdh: moved this termination outside the if */
-    c->buffer[c->buf_off] = 0; /* Make use we always have a NULL at the end */
-    end = strchr(c->buffer, '\n');
+	/* pdh: moved this termination outside the if */
+	c->buffer[c->buf_off] = 0; /* Make use we always have a NULL at the end */
+	end = strchr(c->buffer, '\n');
 
-    if (end)
-    {
-        c->buf_used = (end - c->buffer) + 1;
-
-        /* pdh: for the insecure prefix to a tunnelled conversation, we know
-         * we want to read this much now
-        if ( (c->flags & http_open_flags_TUNNEL)
-             && !c->SSL )
-        {
-            recv( c->socket, c->buffer, c->buf_used, 0 );
-            fdebugf( log_file, "%p: really read %d\n", c, c->buf_used );
-        }
-         */
-
-        if (end[-1] == '\r')
-            end[-1] = 0;
-        end[0] = 0;
-        return c->buffer;
-    }
-#if EXTEND_BUFFER
-    else if ( !rc ) /* EOF but no new line */
-    {
-        /* This is not a good situation, the buffer is full but we don't have
-         * a line feed */
-        c->buf_used = c->buf_off + 1;
-        fdebugf(log_file, "%p: EOF without newline (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
-        return c->buffer;
-    }
-    else if ( (buf_size - c->buf_off - 1 == 0) ) /* Phrased like this as this is the formula used in the recv() call */
-    {
-	char *new_buf;
-
-        /* This is not a good situation, the buffer is full but we don't have
-         * a line feed so extend buffer and continue */
-
-	new_buf = malloc(c->buf_size + MAX_LINE);
-	if (!new_buf)
+	if (end)
 	{
-	    c->buf_used = c->buf_off + 1;
-	    fdebugf(log_file, "%p: getline buffer filled up - can't extend (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+	    c->buf_used = (end - c->buffer) + 1;
+
+	    /* pdh: for the insecure prefix to a tunnelled conversation, we know
+	     * we want to read this much now
+	     if ( (c->flags & http_open_flags_TUNNEL)
+             && !c->SSL )
+	     {
+	     recv( c->socket, c->buffer, c->buf_used, 0 );
+	     fdebugf( log_file, "%p: really read %d\n", c, c->buf_used );
+	     }
+	    */
+
+	    if (end[-1] == '\r')
+		end[-1] = 0;
+	    end[0] = 0;
 	    return c->buffer;
 	}
 
-	fdebugf(log_file, "%p: getline buffer filled up - extended (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+#if EXTEND_BUFFER
+	if ( !rc ) /* EOF but no new line */
+	{
+	    /* This is not a good situation the stream has ended with no line feed */
+	    c->buf_used = c->buf_off + 1;
+	    fdebugf(log_file, "%p: EOF without newline (%d chars %d %d %d)\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+	    return c->buffer;
+	}
 
-	memcpy(new_buf, c->buffer, c->buf_off+1);
-	free(c->buffer);
+	if ( (buf_size - c->buf_off - 1 == 0) ) /* Phrased like this as this is the formula used in the recv() call */
+	{
+	    char *new_buf;
 
-	c->buffer = new_buf;
-	c->buf_size += MAX_LINE;
-    }
+	    /* This is not a good situation, the buffer is full but we don't have
+	     * a line feed so extend buffer and continue */
+
+	    new_buf = malloc(c->buf_size + MAX_INPUT);
+	    if (!new_buf)
+	    {
+		c->buf_used = c->buf_off + 1;
+		fdebugf(log_file, "%p: getline buffer filled up - can't extend (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+		return c->buffer;
+	    }
+
+	    memcpy(new_buf, c->buffer, c->buf_off+1);
+	    free(c->buffer);
+
+	    c->buffer = new_buf;
+	    c->buf_size += MAX_INPUT;
+
+	    buf_size = c->buf_size;
+	    
+	    fdebugf(log_file, "%p: getline buffer filled up - extended to %d (%d chars %d %d %d)\n", c, c->buf_size, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+	}
+	else
+	{
+	    return NULL;
+	}
 #else
-    else if ( (buf_size - c->buf_off - 1 == 0) || !rc ) /* Phrased like this as this is the formula used in the recv() call */
-    {
-        /* This is not a good situation, the buffer is full but we don't have
-         * a line feed */
-        c->buf_used = c->buf_off + 1;
-        fdebugf(log_file, "%p: getline buffer filled up (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
-        return c->buffer;
-    }
+	if ( (buf_size - c->buf_off - 1 == 0) || !rc ) /* Phrased like this as this is the formula used in the recv() call */
+	{
+	    /* This is not a good situation, the buffer is full but we don't have
+	     * a line feed */
+	    c->buf_used = c->buf_off + 1;
+	    fdebugf(log_file, "%p: getline buffer filled up (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
+	    return c->buffer;
+	}
 #endif
+    }
     return NULL;
 }
 

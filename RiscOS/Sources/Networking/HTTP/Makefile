@@ -44,8 +44,7 @@ INETLIB   = C:TCPIPLibs.o.inetlibzm
 SOCKLIB   = C:TCPIPLibs.o.socklibzm
 UNIXLIB   = C:TCPIPLibs.o.unixlibzm
 SSLDIR    = C:SSL
-REMOTEDB  =
-#REMOTEDB  = C:debug.o.remotezm
+REMOTEDB  = C:debug.o.lremotezm
 
 INSECURELIBS= ${INETLIB} ${SOCKLIB}
 SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
@@ -53,8 +52,7 @@ SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
 # Include files
 #
 INCLUDES  = -IC:,C:TCPIPLibs.,${SSLDIR}.
-DFLAGS =  ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DPROXY_REDIRECT=0 -DUSE_MIMEMAPMOD=0 -DCSFS -DVERIFY_MD
-#DFLAGS = ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DPROXY_REDIRECT=1 -DUSE_MIMEMAPMOD=0
+DFLAGS =  ${DB} -DCOMPAT_INET4 -DUSING_INET5 -DUSE_MIMEMAPMOD=0 -DPROXY_REDIRECT=0 -DVERIFY_MD
 #
 # Program specific options:
 #
@@ -133,12 +131,12 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}mod: ${OBJS} ${CLIB} ${INSECURELIBS} ${REMOTEDB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${INSECURELIBS} ${REMOTEDB}
+rm.${COMPONENT}mod: ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS}
+        ${LD} -o $@ -module ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}smod: ${SECUREOBJS} ${CLIB} ${SECURELIBS} ${REMOTEDB}
-        ${LD} -o $@ -module ${SECUREOBJS} ${CLIB} ${SECURELIBS} ${REMOTEDB}
+rm.${COMPONENT}smod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS}
+        ${LD} -o $@ -module ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS}
         Access $@ RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
@@ -204,7 +202,9 @@ o.http:	h.pads
 o.http:	h.http
 o.http:	h.files
 o.http:	h.mimemap
-o.http:	h.csfs
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
 os.mimemap:	c.mimemap
 os.mimemap:	C:h.kernel
 os.mimemap:	h.mimemap
@@ -291,4 +291,3 @@ os.http:	h.pads
 os.http:	h.http
 os.http:	h.files
 os.http:	h.mimemap
-os.http:	h.csfs
