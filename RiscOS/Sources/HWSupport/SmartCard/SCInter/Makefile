@@ -7,6 +7,7 @@
 # ----       ----         -----------
 # 14-Jun-96  RWB 	  New for SCInterface
 # 11-Sep-96  RWB	  Corrected a major flaw in ROM build
+# 07 May 1997 RWB	  Now supports remote debug library
 
 #
 # Paths
@@ -31,11 +32,12 @@ DEFMOD  = DefMod
 AR	= LibFile
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
-#DFLAGS  = -DARM -D_DEBUG
-DFLAGS  = -DARM -DUSE_TINY
+CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
+
+DFLAGS  = -DUSE_TINY ${DEBUG}
 #
 # Libraries
 #
@@ -45,10 +47,11 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
+REMOTEDB   = <Lib$Dir>.debug.o.remotezm
 #
 # Include files
 #
-INCLUDES = -IC: 
+INCLUDES = -IC:,<Lib$Dir>.
 
 # Program specific options:
 #
@@ -58,7 +61,6 @@ EXPORTS   = ${EXP_C_H}.${COMPONENT}
 
 OBJS      =	\
 o.module	\
-o.db		\
 o.sctrans	\
 o.irqs		\
 o.path		\
@@ -71,7 +73,7 @@ o.header
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} $< $@ 
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -115,14 +117,12 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 #
-# Target 
+# Target
 #
-rm.${COMPONENT}: ${OBJS} ${SERIALLIB}
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB} 
+rm.${COMPONENT}: ${OBJS} ${SERIALLIB} ${REMOTEDB}
+        ${LD} -rmf -o $@ ${OBJS} ${CLIB} ${REMOTEDB}
+        Access rm.${COMPONENT} RW/R
 
-o.header: cmhg.header
-        $(CMHG) cmhg.header $@ h.header
-        	
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
@@ -133,14 +133,15 @@ o.module:	C:h.kernel
 o.module:	C:h.swis
 o.module:	h.sctrans
 o.module:	h.module
+o.module:	C:debug.h.remote
 o.module:	h.irqs
 o.module:	h.header
 o.module:	h.scinter
 o.module:	h.cards
 o.module:	h.path
-o.db:	c.db
 o.sctrans:	c.sctrans
 o.sctrans:	h.module
+o.sctrans:	C:debug.h.remote
 o.sctrans:	C:h.kernel
 o.sctrans:	h.sctrans
 o.irqs: s.irqs
@@ -156,22 +157,26 @@ o.path:	c.path
 o.path:	C:h.kernel
 o.path:	C:h.swis
 o.path:	h.module
+o.path:	C:debug.h.remote
 o.path:	h.scinter
 o.orga:	c.orga
 o.orga:	C:h.kernel
 o.orga:	C:h.string
 o.orga:	h.module
+o.orga:	C:debug.h.remote
 o.orga:	h.scinter
 o.orga:	h.sctrans
 o.incard:	c.incard
 o.incard:	C:h.kernel
 o.incard:	C:h.string
 o.incard:	h.module
+o.incard:	C:debug.h.remote
 o.incard:	h.scinter
 o.incard:	h.sctrans
 o.schlumb:	c.schlumb
 o.schlumb:	C:h.kernel
 o.schlumb:	C:h.string
 o.schlumb:	h.module
+o.schlumb:	C:debug.h.remote
 o.schlumb:	h.scinter
 o.schlumb:	h.sctrans
