@@ -1,0 +1,406 @@
+/*
+ * sr.c: Live range splitting
+ * Copyright (C) Advanced Risc Machines Ltd., 1993
+ */
+
+/*
+ * RCS $Revision$ Codemist 2
+ * Checkin $Date$
+ * Revising $Author$
+ */
+
+#include <stdio.h>
+#ifdef __STDC__
+#  include <string.h>
+#else
+#  include <strings.h>
+#endif
+
+#include "globals.h"
+#include "aeops.h"
+#include "cgdefs.h"
+#include "jopcode.h"
+#include "regsets.h"
+#include "sr.h"
+#include "store.h"
+#include "flowgraf.h"
+#include "builtin.h"
+#include "cg.h"
+#include "regalloc.h"
+#include "bind.h"
+#include "mcdep.h"
+#include "errors.h"
+
+struct CSEBlockHead {
+  VRegSetP reach, gen, kill, use;
+};
+
+#define sr_kill_(p) ((p)->cse->kill)
+#define sr_use_(p) ((p)->cse->use)
+#define sr_gen_(p) ((p)->cse->gen)
+#define sr_reach_(p) ((p)->cse->reach)
+
+typedef struct SR_UseList SR_UseList;
+typedef struct SR_Def SR_Def;
+struct SR_Def {
+  SR_Def *cdr;
+  unsigned32 index;
+  BlockHead *block;
+  int32 ic;
+  SR_UseList *uses;
+  bool disjoint;
+  Binder *newb;
+};
+
+typedef struct SR_Use SR_Use;
+struct SR_Use {
+  SR_Use *cdr;
+  BlockHead *block;
+  int32 ic;
+  VRegSetP def;
+};
+
+struct SR_UseList {
+  SR_UseList *cdr;
+  SR_Use *use;
+};
+
+typedef struct SR_Binder SR_Binder;
+struct SR_Binder {
+  SR_Binder *cdr;
+  unsigned32 index;
+  Binder *binder;
+  SR_Def *defs;
+  SR_Use *uses;
+  VRegSetP defset;
+  SuperBinder *super;
+};
+
+SuperBinder *superbinders;
+
+#define SRSEGSIZE 512
+#define SRINDEXSIZE 64
+#define SRSEGBITS 9
+
+static SR_Binder **binderindex[SRINDEXSIZE];
+
+#define sr_binder_(id) (binderindex[(id)>>SRSEGBITS])[(id)&(SRSEGSIZE-1)]
+
+#define SRHASHSIZE 512
+#define SRHASH(b) ((((int32)b>>2) |((int32)b>>11)) & (SRHASHSIZE-1))
+
+static SR_Binder **binderhash;
+
+static unsigned32 bindercount;
+static unsigned32 nonargument_index;
+static unsigned32 defcount;
+
+static VRegSetAllocRec allocrec;
+static unsigned32 nsets, newsets, setbytes;
+
+#define debug_sr debugging(DEBUG_SPILL)
+
+static SR_Binder *LookupBinder(Binder *b) {
+  SR_Binder *p, **pp = &binderhash[SRHASH(b)];
+  if (
+#ifdef CODE_AS_WRITTEN
+/* /* Due to a bug (now fixed) in bind.c (Checkin Date: 93/10/01 15:23:28
+    *                                     Revising $Author: hmeekings),
+    * isgensym() always returned false, but this improves code quality
+    * over code as written.  Hence AM has commented out the following
+    * call to preserve equality of new and old code...
+    */
+      isgensym(bindsym_(b)) ||
+#endif
+      (bindstg_(b) & (b_addrof+b_globalregvar)) || bindxx_(b) == GAP)
+    return NULL;
+  for (; (p = *pp) != NULL; pp = &cdr_(p))
+    if (p->binder == b) return p;
+  { unsigned32 id = bindercount++;
+    SR_Binder **index = binderindex[id>>SRSEGBITS];
+    p = (SR_Binder *)SynAlloc(sizeof(SR_Binder));
+    cdr_(p) = NULL; p->index = id; p->binder = b;
+    p->defs = NULL; p->uses = NULL; p->defset = NULL;
+    p->super = NULL;
+    *pp = p;
+    if (index == NULL) {
+      index = (SR_Binder **)SynAlloc(SRSEGSIZE * sizeof(SR_Binder **));
+      binderindex[id>>SRSEGBITS] = index;
+      ClearToNull((void **)index, SRSEGSIZE);
+    }
+    index[id & (SRSEGSIZE-1)] = p;
+  }
+  return p;
+}
+
+static SR_Binder *AddDef(Binder *b, BlockHead *block, int32 ic) {
+  SR_Binder *sr = LookupBinder(b);
+  if (sr != NULL) {
+    unsigned32 n = defcount++;
+    SR_Def *p = (SR_Def *)SynAlloc(sizeof(SR_Def));
+    cdr_(p) = sr->defs; sr->defs = p;
+    p->index = n;
+    p->block = block; p->ic = ic;
+    p->uses = NULL; p->disjoint = YES;
+    p->newb = NULL;
+    sr->defset = vregset_insert(n, sr->defset, NULL, &allocrec);
+  }
+  return sr;
+}
+
+static void Scan_MakeGenSet(int32 n, void *arg) {
+  BlockHead *b = (BlockHead *)arg;
+  SR_Binder *sr = sr_binder_(n);
+  sr_gen_(b) = vregset_insert(sr->defs->index, sr_gen_(b), NULL, &allocrec);
+}
+
+static void ScanBlock(BlockHead *block) {
+  Icode *c, *limit;
+  VRegSetP use = NULL, kill = NULL, gen = NULL;
+  /* gen   set of binders defined in this blocks whose definition reaches the end.
+     kill  set of binders whose definition on block entry is killed before block
+           end (since we only concern ourself with simple non-address-taken object
+           binders, gen and kill are very similar. In fact. they differ only for
+           top_block, where arguments are members of gen but not kill.
+     use   the set of binders read in the block where the read is reached by
+           definitions entering the block.
+   */
+  if (block == top_block) {
+    BindList *bl = argument_bindlist;
+    for (; bl != NULL; bl = bl->bindlistcdr) {
+      SR_Binder *sr = AddDef(bl->bindlistcar, block, 0);
+      if (sr != NULL) gen = vregset_insert(sr->index, gen, NULL, &allocrec);
+    }
+    nonargument_index = bindercount;
+  }
+  for (c = blkcode_(block), limit = c + blklength_(block); c < limit; ++c)
+    switch (c->op & J_TABLE_BITS) {
+    case J_LDRBV: case J_LDRWV:
+    case J_LDRV:  case J_LDRLV:
+    case J_LDRFV: case J_LDRDV:
+      { SR_Binder *sr = LookupBinder(c->m.b);
+        if (sr != NULL) {
+          SR_Use *p = (SR_Use *)SynAlloc(sizeof(SR_Use));
+          cdr_(p) = sr->uses; sr->uses = p;
+          p->block = block; p->ic = c - blkcode_(block);
+          /* Uses with a definition in the same block do not get added to the use
+             set, but must be linked to the definition immediately.
+           */
+          if (!vregset_member(sr->index, gen)) {
+            use = vregset_insert(sr->index, use, NULL, &allocrec);
+            p->def = NULL;
+          } else
+            p->def = vregset_insert(sr->defs->index, NULL, NULL, &allocrec);
+        }
+        break;
+      }
+
+    case J_INIT: case J_INITF: case J_INITD:
+    case J_STRBV: case J_STRWV:
+    case J_STRV:  case J_STRLV:
+    case J_STRFV: case J_STRDV:
+      { SR_Binder *sr = AddDef(c->m.b, block, c - blkcode_(block));
+        if (sr != NULL) {
+          kill = vregset_insert(sr->index, kill, NULL, &allocrec);
+          gen = vregset_insert(sr->index, gen, NULL, &allocrec);
+        }
+        break;
+      }
+    }
+  /* We can turn gen directly into a set of binder definitions now: use and kill
+     must wait until all blocks have been scanned (when we know the set of all
+     definitions for each binder).
+   */
+  sr_use_(block) = use;
+  sr_kill_(block) = kill;
+  sr_gen_(block) = NULL;
+  sr_reach_(block) = NULL;
+  vregset_map(gen, Scan_MakeGenSet, (void *)block);
+  vregset_discard(gen);
+}
+
+static void SR_MakeKilledSet(int32 n, void *arg) {
+  BlockHead *b = (BlockHead *)arg;
+  SR_Binder *sr = sr_binder_(n);
+  sr_kill_(b) = vregset_union(sr_kill_(b), sr->defset, &allocrec);
+}
+
+static bool ReachSucc(LabelNumber *lab, VRegSetP reachpred) {
+  if (!is_exit_label(lab)) {
+    BlockHead *b = lab->block;
+    if (vregset_compare(reachpred, sr_reach_(b)) > VR_EQUAL) {
+      sr_reach_(b) = vregset_union(sr_reach_(b), reachpred, &allocrec);
+      return YES;
+    }
+  }
+  return NO;
+}
+
+static void ReplaceBinder(SR_Def *def, Binder *newb, Binder *oldb) {
+  SR_UseList *p = def->uses;
+  Icode *ip = &blkcode_(def->block)[def->ic];
+  ip->m.b = newb;
+  switch (ip->op & J_TABLE_BITS)
+  {
+case J_INIT: case J_INITF: case J_INITD:
+    ip->r1.r = bindxx_(newb);
+    if (p != NULL && (feature & FEATURE_ANOMALY))
+      cc_warn(regalloc_warn_use_before_set, oldb);
+  }
+  for (; p != NULL; p = cdr_(p))
+    blkcode_(p->use->block)[p->use->ic].m.b = newb;
+}
+
+static Binder *SubBinder(SR_Binder *p, SR_Def *def) {
+  Binder *newb;
+  Binder *oldb = p->binder;
+  if (p->super == NULL) {
+    SuperBinder *super = (SuperBinder *)BindAlloc(sizeof(SuperBinder));
+    cdr_(super) = superbinders; superbinders = super;
+    super->binder = oldb;
+    super->spillcount = 0;
+    p->super = super;
+  }
+  /* @@@ The following code should share with with addcsebinder(),      */
+  /* particularly beware te_int for 64-bit machines.                    */
+  { TypeExpr *te; VRegnum r;
+    switch (vregsort(bindxx_(oldb))) {
+      case FLTREG: te = te_float; r = vregister(FLTREG); break;
+      case DBLREG: te = te_double; r = vregister(DBLREG); break;
+#ifdef ADDRESS_REG_STUFF
+      case ADDRREG:te = te_int; r = vregister(ADDRREG); break;
+#endif
+      default:     te = te_int; r = vregister(INTREG); break;
+    }
+    { char name[128];
+      if (def != NULL)
+        sprintf(name, "<%s__%ld:%ld>", symname_(bindsym_(oldb)), lab_name_(blklab_(def->block)), def->ic);
+      else
+        sprintf(name, "<%s__rest>", symname_(bindsym_(oldb)));
+      newb = gentempbinderwithname(te, name);
+      bindxx_(newb) = r;
+      newb->bindmcrep = oldb->bindmcrep;
+      bindstg_(newb) = (bindstg_(oldb) & ~b_bindaddrlist) | b_pseudonym;
+      newb->bindaddr.super = p->super;
+      return newb;
+    }
+  }
+}
+
+BindList *splitranges(void) {
+  BindList *newbinders = NULL;
+  BlockHead *b;
+  if (!usrdbg(DBG_LINE+DBG_VAR) &&
+      !(var_cc_private_flags & 256L)) {
+    defcount = bindercount = 0;
+    vregset_init();
+    binderhash = (SR_Binder **)SynAlloc(SRHASHSIZE * sizeof(SR_Binder *));
+    ClearToNull((void **)binderhash, SRHASHSIZE);
+    ClearToNull((void **)binderindex, SRINDEXSIZE);
+    for (b = top_block; b != NULL; b = blkdown_(b)) {
+      b->cse = (CSEBlockHead *)SynAlloc(sizeof(CSEBlockHead));
+      ScanBlock(b);
+    }
+    for (b = top_block; b != NULL; b = blkdown_(b)) {
+      VRegSetP killedbinders = sr_kill_(b);
+      sr_kill_(b) = NULL;
+      vregset_map(killedbinders, SR_MakeKilledSet, (void *)b);
+    }
+    { bool changed;
+      do {
+        if (debug_sr) cc_msg("Reaching definition iteration\n");
+        changed = NO;
+        for (b = top_block; b != NULL; b = blkdown_(b)) {
+          VRegSetP reachend = vregset_copy(sr_reach_(b), &allocrec);
+          reachend = vregset_difference(reachend, sr_kill_(b));
+          reachend = vregset_union(reachend, sr_gen_(b), &allocrec);
+          if (blkflags_(b) & BLKSWITCH) {
+            LabelNumber **v = blktable_(b);
+            int32 i, n = blktabsize_(b);
+            for (i = 0 ; i < n ; i++)
+              changed |= ReachSucc(v[i], reachend);
+          } else {
+            changed |= ReachSucc(blknext_(b), reachend);
+            if (blkflags_(b) & BLK2EXIT)
+              changed |= ReachSucc(blknext1_(b), reachend);
+          }
+        }
+      } while (changed);
+    }
+
+    { unsigned32 bno = 0;
+      superbinders = NULL;
+      for (; bno < bindercount; bno++)
+      /* Caution here avoids splitting an argument binder, since I fear (possibly
+         without justification) that is more difficult. Investigation is needed.
+       */
+        if (bno >= nonargument_index) {
+          SR_Binder *p = sr_binder_(bno);
+          SR_Use *use = p->uses;
+          SR_Def *def;
+          for (; use != NULL; use = cdr_(use))
+            if (use->def == NULL) {
+              use->def = vregset_copy(sr_reach_(use->block), &allocrec);
+              use->def = vregset_intersection(use->def, p->defset);
+            }
+          for (def = p->defs; def != NULL; def = cdr_(def)) {
+            unsigned32 ix = def->index;
+            VRegSetP justd = vregset_insert(ix, NULL, NULL, &allocrec);
+            for (use = p->uses; use != NULL; use = cdr_(use))
+              if (vregset_member(ix, use->def)) {
+                def->uses = (SR_UseList *)syn_list2(def->uses, use);
+                if (vregset_compare(use->def, justd) != VR_EQUAL) def->disjoint = NO;
+              }
+            if (def->disjoint) {
+              Binder *newb = SubBinder(p, def);
+              newbinders = mkBindList(newbinders, newb);
+              ReplaceBinder(def, newb, p->binder);
+              def->newb = newb;
+            }
+          }
+          if (p->super != NULL) {
+            Binder *newb = NULL;
+            if (debug_sr)
+              cc_msg("Split $b: disjoint", p->binder);
+            for (def = p->defs; def != NULL; def = cdr_(def))
+              if (def->disjoint) {
+                if (debug_sr)
+                  cc_msg(" $b", def->newb);
+              } else {
+                if (newb == NULL) {
+                  newb = SubBinder(p, NULL);
+                  newbinders = mkBindList(newbinders, newb);
+                }
+                ReplaceBinder(def, newb, p->binder);
+              }
+            if (debug_sr) {
+              if (newb != NULL) cc_msg(": remainder $b", newb);
+              cc_msg("\n");
+            }
+            bindxx_(p->binder) = GAP;
+          }
+        }
+      if (debugging(DEBUG_CG))
+        flowgraf_print("After range splitting:");
+    }
+  }
+  for (b = top_block; b != NULL; b = blkdown_(b)) {
+    /* Although flowgraf also wants blkusedfrom_() for cross-jumping and
+       conditionalising, it wants a version after branch chaining, and the
+       branch chaining algorithm can't easily adjust it.
+     */
+    BlockList *bl = blkusedfrom_(b);
+    while (bl != NULL) bl = (BlockList *)discard2((List *)bl);
+    blkusedfrom_(b) = NULL;
+    vregset_discard(blk_dominators_(b));
+    blk_dominators_(b) = NULL;
+  }
+  return newbinders;
+}
+
+void splitrange_init(void) {
+  allocrec.alloctype = AT_Syn;
+  allocrec.statsloc = &nsets;
+  allocrec.statsloc1 = &newsets;
+  allocrec.statsbytes = &setbytes;
+}

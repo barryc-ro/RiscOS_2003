@@ -1,0 +1,1215 @@
+/*
+ * C compiler file arm/peephole.c.
+ * Copyright (C) Codemist Ltd, 1988.
+ * Copyright (C) Acorn Computers Ltd., 1988
+ * Copyright (C) Advanced Risc Machines Ltd., 1991
+ */
+
+/*
+ * RCS $Revision$
+ * Checkin $Date$
+ * Revising $Author$
+ */
+
+#include <string.h>
+
+#include "globals.h"
+#include "mcdep.h"
+#include "mcdpriv.h"
+#include "aeops.h"
+#include "ops.h"
+#include "jopcode.h"
+#include "store.h"
+#include "errors.h"
+#include "cg.h"        /* for procflags, greatest_stackdepth */
+#include "regalloc.h"  /* regmask */
+
+#define PendingStackSize 30
+#define PeepholeWindowSize 10
+
+static PendingOp *pendingstack;
+static PendingOp *pending;
+
+typedef struct RegisterUsage {
+  int32 kill,
+        use;
+} RegisterUsage;
+
+typedef union {
+  int32 i;
+  unsigned32 u;
+  PendingOp *p;
+} IntOrP;
+
+#define p_value_unused(u, a)     (!((u)->use & regbit(a)))
+#define p_value_unchanged(u, a)  (!((u)->kill & regbit(a)))
+#define p_reg_unused(u, a)       (!(((u)->use | (u)->kill) & regbit(a)))
+#define p_psr_unchanged(u)       (!((u)->kill & M_PC))
+#define p_regset_unused(u, a)    (!(((u)->use | (u)->kill) & (a)))
+#define p_regset_unchanged(u, a) (!((u)->kill & (a)))
+
+typedef enum P_OpType {
+   pot_none,
+   pot_and,
+   pot_or,
+   pot_andnot,
+   pot_prop,
+   pot_peep,
+   pot_peep_m,
+   pot_op,
+   pot_op_m,
+   pot_opinset,
+   pot_opinset_m
+} P_OpType;
+
+typedef enum {
+   prt_none,
+   prt_kill,
+   prt_swapr2r3,
+   prt_set,
+   prt_asr,
+   prt_proc
+} P_ReplaceType;
+
+typedef enum {
+   pf_op,
+   pf_peep,
+   pf_r1,
+   pf_r2,
+   pf_r3,
+   pf_r4,
+   pf_dataflow,
+   pf_cond,
+   pf_none
+} P_Field;
+
+typedef struct PeepReplace {
+  /* P_ReplaceType */ unsigned char type;
+  /* P_Field */ unsigned char field;
+  /* P_FieldType */ unsigned char valtype;
+  int32 val;
+  /* we really want val to be something like :
+    union {
+      struct {
+        unsigned char inst;
+        unsigned char field;
+      } field;
+      int32 value;
+      bool (*proc)(PendingOp *, PendingOp **, RegisterUsage *);
+    } val;
+  but that can't be initialised.
+  */
+} PeepReplace;
+
+#define pr_type_(r) ((P_ReplaceType)((r)->type))
+#define pr_field_(r) ((P_Field)((r)->field))
+#define pr_valtype_(r) ((P_FieldType)((r)->valtype))
+#define pr_val_(r) ((r)->val)
+
+typedef bool RProc(PendingOp *, PendingOp **, RegisterUsage *);
+
+#define valproc_(p) (rprocs[(p)->val])
+
+typedef enum {
+   pct_none,
+   pct_eq,
+   pct_ne,
+   pct_lt,
+   pct_le,
+   pct_gt,
+   pct_ge,
+   pct_ltu,
+   pct_leu,
+   pct_gtu,
+   pct_geu,
+   pct_proc0,
+   pct_proc1,
+   pct_proc2,
+   pct_negate,
+   pct_or
+} PC_Type;
+
+typedef enum {
+  pft_none,
+  pft_val,
+  pft_exprn,
+  pft_field,
+  pft_inst
+} P_FieldType;
+
+typedef enum PE_Op {
+  peo_proc1,
+  peo_proc2,
+  peo_or,
+  peo_and,
+  peo_eor,
+  peo_add,
+  peo_sub,
+  peo_shr,
+  peo_shl,
+  peo_div,
+  peo_mul,
+  peo_last
+} PE_Op;
+
+typedef bool P1Proc(IntOrP *resp, IntOrP r1);
+typedef bool P2Proc(IntOrP *resp, IntOrP r1, IntOrP r2);
+
+static bool p_log2(IntOrP *resp, IntOrP r1);
+static bool p_bit(IntOrP *resp, IntOrP r1);
+static bool p_bitcount(IntOrP *resp, IntOrP r1);
+static bool p_lsb(IntOrP *resp, IntOrP r1);
+static bool p_lsbpair(IntOrP *resp, IntOrP r1);
+static bool p_shift_p(IntOrP *resp, IntOrP r1);
+static bool p_shift_k(IntOrP *resp, IntOrP r1, IntOrP r2);
+
+#define pep_argct_log2 1
+#define pep_argct_bit 1
+#define pep_argct_bitcount 1
+#define pep_argct_lsb 1
+#define pep_argct_lsbpair 1
+#define pep_argct_shift_p 1
+#define pep_argct_shift_k 2
+
+typedef enum PE_Proc {
+  pep_bit,
+  pep_bitcount,
+  pep_lsb,
+  pep_lsbpair,
+  pep_log2,
+  pep_shift_k,
+  pep_shift_p,
+  pep_last
+} PE_Proc;
+
+static P1Proc * const pprocs[pep_last] = {
+  p_bit,
+  p_bitcount,
+  p_lsb,
+  p_lsbpair,
+  p_log2,
+  (P1Proc *)p_shift_k,
+  p_shift_p,
+};
+
+typedef struct PeepExprn {
+  /* PE_Op */   unsigned char op;
+  /* PE_Proc */ unsigned char fn;
+  /* P_FieldType */ unsigned char f1type,
+                                  f2type;
+  int32 f1,
+        f2;
+} PeepExprn;
+
+typedef struct PeepConstraint{
+  /* PC_Type */ unsigned char type;
+  /* PC_Proc */ unsigned char fn;
+  /* P_FieldType */ unsigned char f1type, f2type;
+  int32 f1, f2;
+  /* we really want f1 & f2 to be something like :
+    union {
+      struct {
+        unsigned char inst;
+        unsigned char field;
+      } field;
+      int32 value;
+    };
+  but that can't be initialised.
+  */
+} PeepConstraint;
+
+#define pe_op_(c) ((PE_Op)((c)->op))
+#define pe_fn_(c) ((PE_Proc)((c)->fn))
+
+#define pc_type_(c) ((PC_Type)((c)->type))
+#define pc_fn_(c) ((PC_Proc)((c)->fn))
+#define f1type_(c) ((P_FieldType)((c)->f1type))
+#define f2type_(c) ((P_FieldType)((c)->f2type))
+#define f1_(c) ((c)->f1)
+#define f2_(c) ((c)->f2)
+
+#define inst_(f) ((int)((f)>>8))
+#define field_(f) ((P_Field)((f)&255))
+#define pexprn_(f) (&peepexprns[f])
+
+typedef enum {
+  pub_r1,
+  pub_r2,
+  pub_r3,
+  pub_r4,
+  pub_r3mask
+} P_Use;
+
+#define pu_r1 (1<<pub_r1)
+#define pu_r2 (1<<pub_r2)
+#define pu_r3 (1<<pub_r3)
+#define pu_r4 (1<<pub_r4)
+#define pu_r3mask (1<<pub_r3mask)
+
+typedef struct PeepOpDef {
+  /* P_OpType */ unsigned char type;
+  unsigned char maynotuse,   /* constraints on register fields between the */
+               maynotkill;  /* participants in a peephole */
+                    /* (only used in top level - the PeepOpDef in a PeepOp */
+  unsigned char setcount;
+  int32 n;
+} PeepOpDef;
+
+typedef struct PeepOp {
+  PeepOpDef p;
+  unsigned char dead;
+  unsigned char replacecount;
+  short replaceix;
+} PeepOp;
+
+#define peepop_(p) ((p)->n)
+#define peepprop_(p) (peepprops[(p)->n])
+#define peepsub1_(p) (peepsubs[((p)->n)>>16])
+#define peepsub2_(p) (peepsubs[((p)->n)&0xffff])
+#define peepset_(p) (peepsets[((p)->n)&0xffff])
+#define peepopi_(p) (peepsets[((p)->n)&0xffff])
+#define peepmask_(p) (peepsets[((p)->n)>>16])
+
+#define G_ANY 0xff
+#define G_STR 1
+
+typedef struct PeepHole {
+  PeepOp const *insts;
+  PeepConstraint const *constraint;
+  unsigned char instcount;
+  unsigned char constraintcount;
+  unsigned char trace;
+  unsigned char gapconstraint;
+} PeepHole;
+
+typedef enum {
+  pcp_notcall,
+  pcp_regset_unused,
+  pcp_regset_unkilled,
+  pcp_notleafproc,
+  pcp_movc_pres_r1r2,
+  pcp_nostackrefsbelow,
+  pcp_difficult_constant,
+  pcp_config
+} PC_Proc;
+
+#define pcp_argct_notcall 1
+#define pcp_argct_regset_unused 1
+#define pcp_argct_regset_unkilled 1
+#define pcp_argct_notleafproc 0
+#define pcp_argct_movc_pres_r1r2 2
+#define pcp_argct_nostackrefsbelow 2
+#define pcp_argct_difficult_constant 1
+#define pcp_argct_config 1
+
+typedef int C0Proc(RegisterUsage *);
+typedef int C1Proc(RegisterUsage *, IntOrP);
+typedef int C2Proc(RegisterUsage *, IntOrP, IntOrP);
+
+#define RETLABV ((int32)RETLAB)
+
+#define p_dead_r1 1
+#define p_dead_r2 2
+#define p_dead_r3 4
+
+static int32 const dead_bits[] = { /* translation from p_dead_xx */
+   0,         J_DEAD_R1,           J_DEAD_R2,           J_DEAD_R1+J_DEAD_R2,
+   J_DEAD_R3, J_DEAD_R3+J_DEAD_R1, J_DEAD_R3+J_DEAD_R2, J_DEAD_R3+J_DEAD_R1+J_DEAD_R2
+};
+
+#define M_SP regbit(R_SP)
+
+#define J_SHIFTVAL (SHIFT_MASK << J_SHIFTPOS)
+#define J_SHIFTR   (SHIFT_RIGHT << J_SHIFTPOS)
+#define J_SHIFTA   (SHIFT_ARITH << J_SHIFTPOS)
+
+#include "peeppat.c"
+
+extern int Profiler_Count_Index_Max;
+extern int Profiler_Count_Index;
+
+int Profiler_Count_Index_Max = PeepholeMax;
+int Profiler_Count_Index;
+
+#ifdef ENABLE_LOCALCG
+
+static int32 p_count[PeepholeMax+1];
+
+static bool uses_r4_field(J_OPCODE op) {
+ /* but not as a register */
+  return op == J_MOVC || op == J_CLRC || op == J_PUSHC;
+}
+
+static void a_pr_jopcode_nodeadbits(PendingOp *p)
+{
+  if ((p->op & J_TABLE_BITS) <= J_LAST_JOPCODE) {
+    VRegInt r1, r2, m;
+    r1.i = p->r1, r2.i = p->r2, m.i = p->m;
+    print_jopcode_1(p->op, r1, r2, m);
+  } else {
+    char v[20];
+    unsigned32 attr = a_attributes(p->op);
+    strcpy(v, a_joptable[(p->op & J_TABLE_BITS)-J_LAST_JOPCODE-1].name);
+    if (p->op & J_NEGINDEX) strcat(v, "m");
+    if (p->op & J_SHIFTMASK)
+    {   int32 m = (p->op & J_SHIFTMASK) >> J_SHIFTPOS;
+        if ((m & SHIFT_RIGHT) == 0) strcat(v, "<<");
+        else if (m & SHIFT_ARITH) strcat(v, ">>");
+        else strcat(v, ">>L");
+        sprintf(v+strlen(v), "%ld", (long)(m & SHIFT_MASK));
+    }
+    cc_msg("%8s%-12s", "", v);
+    if (attr & _a_gap_r1)
+      cc_msg("-, ");
+    else if (attr & _a_regmask_r1)
+      cc_msg("%#lx, ", p->r1);
+    else
+      cc_msg("%ld, ", p->r1);
+    if (attr & _a_call) {
+      cc_msg("%ld(%ld,%ld", k_argwords_(p->r2), k_intregs_(p->r2), k_fltregs_(p->r2));
+      if (k_resultregs_(p->r2) > 1) cc_msg("=>%ld", k_resultregs_(p->r2));
+      cc_msg(")");
+    } else if (attr & _a_gap_r2)
+      cc_msg("-");
+    else
+      cc_msg("%ld", p->r2);
+    if (attr & _a_regmask_r3)
+      cc_msg(", %#lx", p->m);
+    else
+      cc_msg(", %ld", p->m);
+  }
+  if (a_uses_r4(p->op, p->peep))
+    cc_msg(", %ld", (long)p->r4);
+  else if (uses_r4_field(p->op))
+    cc_msg(", %#lx", (long)p->r4);
+  if (p->peep == 0)
+    cc_msg("\n");
+  else
+    cc_msg("  <%lx>\n", (long)p->peep);
+}
+
+static void pr_patno(int n) {
+  if (n > 0)
+    cc_msg("{%3d} ", n);
+  else
+    cc_msg("      ");
+}
+
+void a_pr_jopcode(PendingOp *p) {
+  cc_msg("%c%c%c", (p->dataflow & J_DEAD_R1 ? '1': '-'),
+                   (p->dataflow & J_DEAD_R2 ? '2': '-'),
+                   (p->dataflow & J_DEAD_R3 ? '3': '-'));
+  a_pr_jopcode_nodeadbits(p);
+}
+
+static void pr_res(PendingOp *pending, int n)
+{ if (localcg_debug(2)) {
+    cc_msg("%2d> ", pending - pendingstack);
+    pr_patno(n);
+    a_pr_jopcode(pending);
+  }
+  if (pending < pendingstack) syserr("pr_res not in stack");
+}
+
+static void pr_cur(int n, PendingOp *cur, PendingOp *limit)
+{
+  if (localcg_debug(2)) {
+    cc_msg("    ");
+    pr_patno(n+1);
+    cc_msg("%16s", "");
+    cc_msg("%2d: ", limit+1 - &pendingstack[0]);
+    a_pr_jopcode(cur);
+  }
+}
+
+#define count_p(n) (p_count[n]++)
+
+#else
+
+#define pr_res(a, b)
+#define pr_cur(n, a, b)
+#define count_p(n)
+
+#endif
+
+static bool needs_ip(PendingOp *p)
+{
+    switch (p->op & ~(J_SHIFTMASK | J_SIGNED | J_UNSIGNED | Q_MASK))
+    {
+    case J_ADCON:      return arthur_module;
+#ifdef RANGECHECK_SUPPORTED
+    case J_CHKLK:
+    case J_CHKUK:
+    case J_CHKNEK:
+#endif
+    case J_CMPK:       return eightbits(p->m) < 0 && eightbits(-(p->m)) < 0;
+    case J_CLRC:
+    case J_MOVC:
+    case J_PUSHC:
+    /* J_CASEBRANCH may use IP, but can't be the value of p->op as it causes
+       pendingstack to be flushed.
+     */
+    case J_MULK:       return YES;
+    case J_LDRWR:      return (config & CONFIG_NO_UNALIGNED_LOADS) != 0;
+    case J_LDRWK:      return (config & CONFIG_NO_UNALIGNED_LOADS) &&
+                              p->r2 != R_SP && p->r2 != R_FP;
+    default:           return NO;
+    }
+}
+
+static int32 movc_workregs(PendingOp *p)
+{ /* p->op  is known to be one of CLRC, MOVC or PUSHC */
+    int32 set = regbit(R_A4) | regbit(R_IP) | p->r4;  /* always used */
+    if (p->m > MOVC_LOOP_THRESHOLD)
+        set |= regbit(R_A2) | regbit(R_A3);
+    if (p->peep & P_A2FREE) set |= regbit(R_A2);
+    if (p->peep & P_A3FREE) set |= regbit(R_A3);
+    if (p->peep & P_LRFREE) set |= regbit(R_LR);
+    set &= ~regbit(p->r1);
+    return set;
+}
+
+static bool movc_preserving_r1r2(PendingOp *p, bool maynotuser2)
+{
+    if (p->op == J_PUSHC) return NO;
+    {   int32 workregs = movc_workregs(p);
+        int32 workcount = 4*bitcount(workregs);
+        if (p->op == J_MOVC && !maynotuser2 && !(workregs & regbit(p->r2)))
+            return p->m <= workcount + 4;
+        else
+            return p->m <= workcount;
+    }
+}
+
+#define aru_updatekills 1
+#define aru_ignorepreuse 2
+#define aru_fieldbit_(r) (1<<((r)-pf_r1+2))
+#define aru_ignore_r1 (1<<2)
+#define aru_ignore_r2 (1<<3)
+#define aru_ignore_r3 (1<<4)
+#define aru_ignore_r4 (1<<5)
+
+static void AccumulateRegisterUse(RegisterUsage *u, PendingOp *c, int flags) {
+  if (a_loads_r1(c->op)) {
+    if (flags & aru_updatekills)
+      u->kill |= regbit(c->r1);
+  } else if (a_reads_r1(c->op) && !(flags & aru_ignore_r1))
+    u->use |= regbit(c->r1);
+
+  if (a_loads_r2(c->op)) {
+    if (flags & aru_updatekills)
+      u->kill |= regbit(c->r2);
+  } else if (a_reads_r2(c->op) && !(flags & aru_ignore_r2)) {
+      if (!(c->peep & P_PRE && (flags & aru_ignorepreuse)))
+        u->use |= regbit(c->r2);
+  }
+  if (a_uses_r3(c->op) && !(flags & aru_ignore_r3))
+    u->use |= regbit(c->m);
+  if (a_uses_r4(c->op, c->peep) && !(flags & aru_ignore_r4))
+    u->use |= regbit(c->r4);
+  if (c->peep & (P_PRE | P_POST) && (flags & aru_updatekills))
+    u->kill |= regbit(c->r2);
+  if (((c->peep & P_CMPZ) || setspsr(c->op, c->m)) &&
+      (flags & aru_updatekills))
+    u->kill |= regbit(R_PC);
+  if (needs_ip(c)) u->kill |= regbit(R_IP);
+  if (c->op == J_MOVC || c->op == J_CLRC || c->op == J_PUSHC) {
+    u->kill |= movc_workregs(c);
+    if (!movc_preserving_r1r2(c, YES))
+      u->kill |= regbit(c->r1) | regbit(c->r2);
+  } else if (c->op == J_POPMB) {
+    if (flags & aru_updatekills) u->kill |= c->m | regbit(R_SP);
+    u->use |= regbit(R_SP);
+  } else if (c->op == J_PUSHM || c->op == J_PUSHF || c->op == J_PUSHD) {
+    if (flags & aru_updatekills) u->kill |= regbit(R_SP);
+    u->use |= c->m | regbit(R_SP);
+  } else if (c->op == J_TAILCALLK || c->op == J_TAILCALLR) {
+    u->kill |= regbit(R_LR) | (regbit(R_V1+NVARREGS) - regbit(R_V1));
+  } else if (c->op == J_MOVDIM || c->op == J_MOVIDM) {
+    if (flags & aru_updatekills) u->kill |= c->r1;
+    u->use |= c->m;
+  }
+}
+
+static bool NoStackReferencesBelow(PendingOp *p, PendingOp *limit, int32 n)
+{
+  for (; ++p <= limit; )
+    if ( (a_reads_r2(p->op) && p->r2 == R_SP &&
+           (a_uses_r3(p->op) || p->m < n ||
+            p->op == J_PUSHC || p->op == J_MOVC)) ||
+         (a_reads_r1(p->op) && p->r1 == R_SP) ||
+         (a_uses_r3(p->op) && p->m == R_SP && p->op != J_MOVR) ||
+         (p->op == J_PUSHM || p->op == J_PUSHD || p->op == J_PUSHF)
+       )
+      return NO;
+  return YES;
+}
+
+#ifdef ENABLE_LOCALCG
+#define AdjustStackRefs(a,b,c,d) Real__AdjustStackRefs(a,b,c,d)
+#else
+#define AdjustStackRefs(a,b,c,d) Real__AdjustStackRefs(a,b,c)
+#endif
+
+static void AdjustStackRefs(PendingOp *p, PendingOp *limit, int32 n, int ix)
+{
+  for (; p <= limit; p++)
+    if (a_reads_r2(p->op) && p->r2 == R_SP) {
+      p->m -= n;
+      pr_res(p, ix);
+    } else if (a_uses_r3(p->op) && p->m == R_SP) {
+      p->op = J_ADDK;
+      p->r2 = R_SP;
+      p->m = -n;
+      pr_res(p, ix);
+    }
+}
+
+static bool p_log2(IntOrP *resp, IntOrP r1) {
+  resp->i = power_of_two(r1.i); return YES;
+}
+
+static bool p_bit(IntOrP *resp, IntOrP r1) {
+  resp->i = 1L << r1.i;  return YES;
+}
+
+static bool p_bitcount(IntOrP *resp, IntOrP r1) {
+  resp->i = 4 * bitcount(r1.i); return YES;
+}
+
+static bool p_lsb(IntOrP *resp, IntOrP r1) {
+  if (r1.i == 0) return NO;
+  resp->i = r1.i & -r1.i; return YES;
+}
+
+static bool p_lsbpair(IntOrP *resp, IntOrP r1) {
+  int32 i1;
+  if (r1.i == 0) return NO;
+  i1 = r1.i & -r1.i;
+  r1.i ^= i1;
+  if (r1.i == 0) return NO;
+  resp->i = i1 | (r1.i & -r1.i);
+  return YES;
+}
+
+static bool p_shift_p(IntOrP *resp, IntOrP r1) {
+  int32 shiftop = r1.i & ~(J_SIGNED|J_UNSIGNED);
+  resp->i = shiftop == J_SHLR ? P_LSL :
+            shiftop == J_RORR ? P_ROR :
+            (r1.i & J_SIGNED) ? P_ASR :
+                                P_LSR;
+  return YES;
+}
+
+static bool p_shift_k(IntOrP *resp, IntOrP r1, IntOrP r2) {
+  int32 shiftop = r1.i & ~(J_SIGNED|J_UNSIGNED);
+  int32 type = shiftop == J_SHLK ? 0 :
+               shiftop == J_RORK ? SHIFT_ARITH :
+          /* perhaps a bit delicate : an extra bit would be better */
+               (r1.i & J_SIGNED) ? (SHIFT_RIGHT+SHIFT_ARITH) :
+                                   SHIFT_RIGHT;
+  resp->i = (type + r2.i) << J_SHIFTPOS;
+  return YES;
+}
+
+static int32 opfield(PendingOp *op, P_Field field, int32 *dead) {
+  switch (field) {
+  case pf_op:   return op->op;
+  case pf_peep: return op->peep;
+  case pf_r1:   *dead = a_uses_r1(op->op) && (op->dataflow & J_DEAD_R1); return op->r1;
+  case pf_r2:   *dead = a_uses_r2(op->op) && (op->dataflow & J_DEAD_R2); return op->r2;
+  case pf_r3:   *dead = a_uses_r3(op->op) && (op->dataflow & J_DEAD_R2); return op->m;
+  case pf_r4:   return op->r4;
+  case pf_dataflow: return op->dataflow;
+  case pf_cond: return op->cond;
+  default:      syserr(syserr_peep_bad_field);
+                return 0;
+  }
+}
+
+static void setopfield(PendingOp *op, P_Field field, int32 val, int32 dead) {
+  switch (field) {
+  case pf_op:   op->op = val; break;
+  case pf_peep: op->peep = val; break;
+  case pf_r1:   op->dataflow &= ~J_DEAD_R1; if (dead) op->dataflow |= J_DEAD_R1;
+                op->r1 = val; break;
+  case pf_r2:   op->dataflow &= ~J_DEAD_R2; if (dead) op->dataflow |= J_DEAD_R2;
+                op->r2 = val; break;
+  case pf_r3:   op->dataflow &= ~J_DEAD_R3; if (dead) op->dataflow |= J_DEAD_R3;
+                op->m = val; break;
+  case pf_r4:   op->r4 = val; break;
+  case pf_dataflow: op->dataflow = val; break;
+  case pf_cond: op->cond = val; break;
+  default:      syserr(syserr_peep_bad_field);
+                break;
+  }
+}
+
+static int32 readsfield(J_OPCODE op, int32 peep, P_Field field) {
+  switch (field) {
+  case pf_r1: return a_reads_r1(op);
+  case pf_r2: return a_reads_r2(op);
+  case pf_r3: return a_uses_r3(op);
+  case pf_r4: return a_uses_r4(op, peep);
+  default:    return NO;
+  }
+}
+
+static bool isregfield(PendingOp *op, P_Field field) {
+  return (field == pf_r1 && a_loads_r1(op->op)) ||
+         readsfield(op->op, op->peep, field);
+}
+
+static bool ValidField(PendingOp *ops[], P_FieldType type, int32 val,
+                       int n, IntOrP *resp, int32 *dead) {
+  switch (type) {
+  case pft_none:
+    resp->i = 0;
+    return YES;
+
+  case pft_val:
+    resp->i = val;
+    return YES;
+
+  case pft_field:
+    if (inst_(val) <= n) {
+      resp->i = opfield(ops[inst_(val)], field_(val), dead);
+      return YES;
+    }
+    break;
+
+  case pft_inst:
+    if (inst_(val) <= n) {
+      resp->p = ops[inst_(val)];
+      return YES;
+    }
+    break;
+
+  case pft_exprn:
+    { const PeepExprn *ex = pexprn_(val);
+      int32 ignore;
+      IntOrP r1, r2;
+      if (ValidField(ops, f1type_(ex), f1_(ex), n, &r1, &ignore) &&
+          ValidField(ops, f2type_(ex), f2_(ex), n, &r2, &ignore))
+        switch (pe_op_(ex)) {
+        case peo_add: resp->i = r1.i + r2.i; return YES;
+        case peo_sub: resp->i = r1.i - r2.i; return YES;
+        case peo_or:  resp->i = r1.i | r2.i; return YES;
+        case peo_and: resp->i = r1.i & r2.i; return YES;
+        case peo_eor: resp->i = r1.i ^ r2.i; return YES;
+        case peo_shr: resp->i = r1.i >> r2.i; return YES;
+        case peo_shl: resp->i = r1.i << r2.i; return YES;
+        case peo_div: resp->i = r1.i / r2.i; return YES;
+        case peo_mul: resp->i = r1.i * r2.i; return YES;
+
+        case peo_proc1:return (pprocs[pe_fn_(ex)])(resp, r1);
+        case peo_proc2:return ((P2Proc *)pprocs[pe_fn_(ex)])(resp, r1, r2);
+        }
+    }
+    break;
+  }
+  return NO;
+}
+
+#define DummyReg 31
+
+#define Op_Altered 1
+#define Op_Cant 2
+
+static int UpdateOp(PendingOp *op, PendingOp *ops[], PeepHole const *p,
+                     int count, int ix, RegisterUsage *u, bool dummyregs) {
+  bool altered = 0;
+  IntOrP val;
+  PeepReplace const *r = &replacements[ix];
+  for (; --count >= 0; r++) {
+    int32 dead = 0;
+    switch (pr_type_(r)) {
+    case prt_kill:
+      op->op = J_NOOP;
+      op->peep = 0;
+      altered = Op_Altered;
+      break;
+    case prt_proc:
+      if (valproc_(r)(op, ops, u)) altered |= Op_Altered;
+      break;
+    case prt_set:
+      if (dummyregs && isregfield(op, pr_field_(r)))
+        val.i = DummyReg;
+      else
+        ValidField(ops, pr_valtype_(r), pr_val_(r), p->instcount-1, &val, &dead);
+      setopfield(op, pr_field_(r), val.i, dead);
+      altered = Op_Altered;
+      break;
+    case prt_swapr2r3:
+      { RealRegister r2 = op->r2;
+        int32 df = op->dataflow;
+        if (a_uses_r4(op->op, op->peep)) {
+          if (dummyregs)
+            return Op_Cant;
+          else
+            syserr(syserr_peep_cant_swap);
+        }
+        op->r2 = op->m;
+        op->m = r2;
+        df &= ~(J_DEAD_R2 | J_DEAD_R3);
+        if (op->dataflow & J_DEAD_R2) df |= J_DEAD_R3;
+        if (op->dataflow & J_DEAD_R3) df |= J_DEAD_R2;
+        op->dataflow = df;
+        altered = Op_Altered;
+        break;
+      }
+    case prt_asr:
+      if (!dummyregs) {
+        ValidField(ops, pr_valtype_(r), pr_val_(r), p->instcount-1, &val, &dead);
+        AdjustStackRefs(op+1, ops[-1], val.i, p-patterns+1);
+      }
+      break;
+    }
+  }
+  return altered;
+}
+
+static int notcall(RegisterUsage *u, IntOrP p) {
+  IGNORE(u);
+  return ((p.p->op & J_TABLE_BITS) <= J_LAST_JOPCODE) ?
+            (p.p->op != J_OPSYSK &&
+             p.p->op != J_CALLK && p.p->op != J_CALLR &&
+             p.p->op != J_TAILCALLR && p.p->op != J_TAILCALLK) :
+           !(a_attributes(p.p->op) & _a_call);
+}
+
+static int notleafproc(RegisterUsage *u) {
+  IGNORE(u);
+  return (procflags & NONLEAF) != 0 && !(pcs_flags & PCS_NOFP) &&
+         !(procauxflags & bitoffnaux_(s_irq));
+}
+
+static int regset_unused(RegisterUsage *u, IntOrP p) {
+  return !((u->use | u->kill) & p.i);
+}
+
+static int regset_unkilled(RegisterUsage *u, IntOrP p) {
+  return !(u->kill & p.i);
+}
+
+static int movc_pres_r1r2(RegisterUsage *u, IntOrP p1, IntOrP p2) {
+  IGNORE(u);
+  return movc_preserving_r1r2(p1.p, p2.i != 0);
+}
+
+static int difficult_constant(RegisterUsage *u, IntOrP p) {
+  IGNORE(u);
+  return eightbits(p.i) < 0;
+}
+
+static int config_set(RegisterUsage *u, IntOrP p) {
+  IGNORE(u);
+  return (config & p.i) == p.i;
+}
+
+static C0Proc * const cprocs[] = {
+  (C0Proc *)notcall,
+  (C0Proc *)regset_unused,
+  (C0Proc *)regset_unkilled,
+  (C0Proc *)notleafproc,
+  (C0Proc *)movc_pres_r1r2,
+            0, /* NoStackRefsBelow */
+  (C0Proc *)difficult_constant,
+  (C0Proc *)config_set
+};
+
+static bool MatchOp(PeepOpDef const *p, PendingOp *op) {
+  J_OPCODE opc = op->op;
+  switch (p->type) {
+  default:            syserr(syserr_peep_bad_optype); return NO;
+  case pot_and:       return MatchOp(&peepsub1_(p), op) &&
+                             MatchOp(&peepsub2_(p), op);
+  case pot_or:        return MatchOp(&peepsub1_(p), op) ||
+                             MatchOp(&peepsub2_(p), op);
+  case pot_andnot:    return MatchOp(&peepsub1_(p), op) &&
+                             !MatchOp(&peepsub2_(p), op);
+  case pot_prop:      return (bool)((peepprop_(p))(opc));
+  case pot_peep:      opc = op->peep;
+  case pot_op:        return opc == peepop_(p);
+  case pot_peep_m:    opc = op->peep;
+  case pot_op_m:      return (opc & peepmask_(p)) == peepopi_(p);
+  case pot_opinset_m: opc &= peepmask_(p);
+  case pot_opinset:   { int i;
+                        J_OPCODE const *setp = &peepset_(p);
+                        for (i = 0; i < p->setcount; i++)
+                          if (opc == setp[i])
+                            return YES;
+                      }
+                      return NO;
+  }
+}
+
+static int32 UseConstraint(PendingOp *op, int constraint) {
+  int32 res = 0;
+  int n = pu_r1;
+  for (; constraint != 0 && n <= pu_r3mask; n <<= 1)
+    if (constraint & n) {
+      constraint ^= n;
+      switch (n) {
+      case pu_r1:     res |= regbit(op->r1); break;
+      case pu_r2:     res |= regbit(op->r2); break;
+      case pu_r3:     res |= regbit(op->m);  break;
+      case pu_r4:     if (a_uses_r4(op->op, op->peep))
+                        res |= regbit(op->r4);
+                      break;
+      case pu_r3mask: res |= op->m;
+      }
+    }
+  if (constraint != 0) syserr(syserr_bad_useconstraint);
+  return res;
+}
+
+static bool SatisfiedConstraint(
+    PendingOp * ops[], PeepHole const *ph, int n, RegisterUsage *u, int i, bool okifinvalid) {
+
+#define tracing(p) (localcg_debug(2) && (p)->trace)
+
+#define CFailI2(op) \
+{ if (tracing(ph)) \
+    cc_msg("constraint %d fails: !(%ld %s %ld)\n", \
+           i+1, (long)f1.i, op, (long)f2.i); \
+  return NO; \
+}
+
+  PeepConstraint const *c = &ph->constraint[i];
+  int32 ignore;
+  IntOrP f1, f2;
+  if (!ValidField(ops, f1type_(c), f1_(c), n, &f1, &ignore) ||
+      !ValidField(ops, f2type_(c), f2_(c), n, &f2, &ignore))
+    return okifinvalid;
+
+  switch (pc_type_(c)) {
+  case pct_eq:   if (f1.i == f2.i) return YES; CFailI2("==");
+  case pct_ne:   if (f1.i != f2.i) return YES; CFailI2("!=");
+  case pct_lt:   if (f1.i < f2.i) return YES; CFailI2("<");
+  case pct_le:   if (f1.i <= f2.i) return YES; CFailI2("<=");
+  case pct_gt:   if (f1.i > f2.i) return YES; CFailI2(">");
+  case pct_ge:   if (f1.i >= f2.i) return YES; CFailI2(">=");
+  case pct_ltu:  if (f1.u < f2.u) return YES; CFailI2("<u");
+  case pct_leu:  if (f1.u <= f2.u) return YES; CFailI2("<=u");
+  case pct_gtu:  if (f1.u > f2.u) return YES; CFailI2(">u");
+  case pct_geu:  if (f1.u >= f2.u) return YES; CFailI2(">=u");
+
+  case pct_negate: return !SatisfiedConstraint(ops, ph, n, u, (int)f1.i, !okifinvalid);
+  case pct_or:   return SatisfiedConstraint(ops, ph, n, u, (int)f1.i, okifinvalid) ||
+                        SatisfiedConstraint(ops, ph, n, u, (int)f2.i, okifinvalid);
+
+  case pct_proc0:if (((C0Proc *)cprocs[pc_fn_(c)])(u)) return YES;
+                 if (tracing(ph)) cc_msg("constraint %d fails\n", i);
+                 return NO;
+  case pct_proc1:if (((C1Proc *)cprocs[pc_fn_(c)])(u, f1)) return YES;
+                 if (tracing(ph)) cc_msg("constraint %d fails\n", i);
+                 return NO;
+  case pct_proc2:if (pc_fn_(c) != pcp_nostackrefsbelow) {
+                   if (((C2Proc *)cprocs[pc_fn_(c)])(u, f1, f2)) return YES;
+                   if (tracing(ph)) cc_msg("constraint %d fails\n", i);
+                 } else {
+                   if (NoStackReferencesBelow(f1.p, ops[-1], f2.i)) return YES;
+                   if (tracing(ph))
+                     cc_msg("constraint %d fails: stack references in (%d, %d) below %ld\n",
+                            i, f1.p-pendingstack, ops[-1]-pendingstack, (long)f2.i);
+                 }
+                 return NO;
+  }
+  return YES;
+}
+
+static int FieldsToIgnore(PeepHole const *ph, int inst, int flags) {
+  int n = ph->constraintcount;
+  PeepConstraint const *pc = ph->constraint;
+  for (; --n >= 0; pc++) {
+    if (pc->type == pct_eq) {
+      if (f1type_(pc) == pft_field && inst_(f1_(pc)) == inst) {
+        P_Field field = field_(f1_(pc));
+        if (pf_r1 <= field && field <= pf_r4)
+          flags |= aru_fieldbit_(field);
+      }
+      if (f2type_(pc) == pft_field && inst_(f2_(pc)) == inst) {
+        P_Field field = field_(f2_(pc));
+        if (pf_r1 <= field && field <= pf_r4)
+          flags |= aru_fieldbit_(field);
+      }
+    }
+  }
+  return flags;
+}
+
+static bool MayMatch(PendingOp *ops[], PeepOp const peepops[],
+                     PeepHole const *ph, int n, RegisterUsage *u) {
+  int i;
+
+  if (!MatchOp(&peepops[n].p, ops[n]) ||
+      (ops[n]->dataflow & dead_bits[peepops[n].dead]) != dead_bits[peepops[n].dead])
+    return NO;
+
+  if (tracing(ph)) {
+    cc_msg("%d: match %d ", ph - patterns+1, n);
+    if (n != 0) cc_msg("at %d ", ops[n] - pendingstack);
+  }
+
+  for (i = 0; i < ph->constraintcount; i++)
+    if (!SatisfiedConstraint(ops, ph, n, u, i, YES))
+      return NO;
+
+  if (n+1 == ph->instcount) {
+    RegisterUsage maynot, ucopy;
+    ucopy = *u;
+    maynot.use = maynot.kill = 0;
+    if (needs_ip(ops[n])) ucopy.kill |= regbit(R_IP);
+    for (i = 0; i <= n; i++) {
+      PeepOp const *p = &peepops[i];
+      PendingOp o; o = *(ops[i]);
+      if (UpdateOp(&o, ops, ph, p->replacecount, p->replaceix, u, YES) & Op_Cant) return NO;
+      if (tracing(ph)) { cc_msg("updated: "); a_pr_jopcode_nodeadbits(&o); }
+      if (i == 0) AccumulateRegisterUse(&ucopy, &o, FieldsToIgnore(ph, 0, aru_ignorepreuse));
+      maynot.use |= UseConstraint(ops[i], peepops[i].p.maynotuse);
+      maynot.kill |= UseConstraint(ops[i], peepops[i].p.maynotkill);
+    }
+    if ((ucopy.use & maynot.use) || (ucopy.kill & maynot.kill)) {
+      if (tracing(ph))
+        cc_msg("use constraint failure: ucopy <%lx %lx> maynot <%lx %lx>\n",
+                (long)ucopy.use, (long)ucopy.kill,
+                (long)maynot.use, (long)maynot.kill);
+      return NO;
+    }
+  }
+
+  if (tracing(ph)) cc_msg("constraints ok\n");
+  return YES;
+}
+
+static bool peepop_loads_r1(PeepOpDef const *p) {
+  switch (p->type) {
+  case pot_op:        return !!a_loads_r1(peepop_(p));
+  case pot_prop:      return p->n == p_loads_r1;
+  case pot_op_m:      return !!a_loads_r1(peepopi_(p));
+  case pot_opinset:
+  case pot_opinset_m: return !!a_loads_r1(peepset_(p));
+  case pot_and:
+  case pot_or:
+  case pot_andnot:    return peepop_loads_r1(&peepsub1_(p)) ||
+                             peepop_loads_r1(&peepsub2_(p));
+  }
+  return NO;
+}
+
+static void flush_pending(int leave)
+{ PendingOp *p = &pendingstack[0];
+  for (; p <= pending-leave; p++)
+    if (p->op != J_NOOP)
+      show_inst_direct(p);
+  if (leave == 0)
+  { pending = &pendingstack[0];
+    pending->op = J_NOOP;
+  } else {
+    int i;
+    for (i = 0; i < leave; i++)
+    { pendingstack[i] = pending[i-leave+1];
+      pr_res(&pendingstack[i], 0);
+    }
+    pending = &pendingstack[leave-1];
+  }
+}
+
+static bool InterferingStore(PendingOp *cur, PendingOp *prev) {
+  if (prev->op == J_STRK && prev->r2 == cur->r2 && prev->m != cur->m)
+    return NO;
+  return a_modifies_mem(prev->op) != 0;
+}
+
+static void KillDeadBits(PendingOp **ops, int depth, RealRegister r, int ix) {
+  PendingOp *limit = ops[depth];
+  PendingOp *p = ops[0];
+  for (; p != limit; p--) {
+    if (a_reads_r1(p->op) && p->r1 == r && (p->dataflow & J_DEAD_R1)) {
+      p->dataflow &= ~J_DEAD_R1; break;
+    }
+    if (a_uses_r2(p->op) && p->r2 == r && (p->dataflow & J_DEAD_R2)) {
+      p->dataflow &= ~J_DEAD_R2; break;
+    }
+    if (a_uses_r3(p->op) && (RealRegister)p->m == r && (p->dataflow & J_DEAD_R3)) {
+      p->dataflow &= ~J_DEAD_R3; break;
+    }
+  }
+  if (p != limit) pr_res(p, ix+1);
+}
+
+static PendingOp *peephole_jopcode(int pat, PendingOp *limit, PendingOp *cur, bool toplevel)
+{
+  PendingOp *ops[MaxInst+1];
+  PeepOp const *peepops;
+  RegisterUsage use;
+  PendingOp dummy[MaxInst];
+  int peepcount;
+  int const *peepv;
+  int peepix = 0; /* shut up compiler */
+  int depth, second;
+  PeepHole const *curpeep;
+  ops[0] = limit;
+  ops[1] = cur;
+retry:
+  peepcount = peepholeperop[cur->op & J_TABLE_BITS].i;
+  peepv = peepholeperop[cur->op & J_TABLE_BITS].peepv;
+  pr_cur(pat, cur, limit);
+  for (pat = 0; pat < peepcount; pat++) {
+    PendingOp *prev;
+    int matched = 0;
+    peepix = peepv[pat];
+    curpeep = &patterns[peepix];
+    Profiler_Count_Index = peepix;
+    peepops = curpeep->insts;
+    use.kill = use.use = 0;
+    depth = 0;
+    for (;;) {
+      if (peepops[depth].p.type == pot_none) {
+        if (!toplevel) goto next_pattern;
+        ++depth;
+        ops[depth] = &dummy[depth-matched-1];
+        dummy[depth-matched-1].op = J_NOOP;
+        dummy[depth-matched-1].peep = 0;
+      } else {
+        if (matched++ != 0) break;
+        if (!MayMatch(ops+1, peepops, curpeep, depth, &use))
+          goto next_pattern;
+        ops[++depth] = cur;
+      }
+      if (curpeep->instcount == depth) {
+        second = depth;
+        goto peephole_found;
+      }
+    }
+    second = depth;
+    for (prev = limit;
+         pending - prev < PeepholeWindowSize;
+         prev--) {
+      (ops+1)[depth] = prev;
+      if (MayMatch(ops+1, peepops, curpeep, depth, &use)) {
+        if (++depth == curpeep->instcount)
+          goto peephole_found;
+        if (depth == MaxInst) syserr(syserr_bad_maxinst);
+      } else if (curpeep->gapconstraint == G_ANY ||  /* ops required to be adjacent */
+                 ((curpeep->gapconstraint & G_STR) && InterferingStore(cur, prev)) ||
+                 (prev->op & ~Q_MASK) == J_CONDEXEC /* allowed only if matched in pattern */)
+        break;
+      if (prev == pendingstack) /* run out of ops */
+        break;
+      AccumulateRegisterUse(&use, prev, aru_updatekills);
+    }
+next_pattern:;
+  }
+  goto no_peephole_found;
+
+peephole_found:
+  {
+    PendingOp opcopy[MaxInst];
+    PendingOp *opp[MaxInst+1];
+    int d;
+#ifdef ENABLE_LOCALCG
+    p_count[peepix]++;
+#endif
+    if (depth > second)
+      for (d = 0; d < depth; d++) {
+        if (peepops[d].p.maynotkill & pu_r1) KillDeadBits(ops, depth, (ops+1)[d]->r1, peepix);
+        if (peepops[d].p.maynotkill & pu_r2) KillDeadBits(ops, depth, (ops+1)[d]->r2, peepix);
+        if (peepops[d].p.maynotkill & pu_r3) KillDeadBits(ops, depth, (ops+1)[d]->m, peepix);
+      }
+    opp[0] = ops[0];
+    for (d = 1; d <= depth; d++) {
+      opcopy[d-1] = *ops[d];
+      opp[d] = &opcopy[d-1];
+    }
+    for (d = depth; --d >= 0; ) {
+      PendingOp *op = (ops+1)[d];
+      if (UpdateOp(op, opp+1, curpeep,
+                   peepops[d].replacecount, peepops[d].replaceix, &use, NO) & Op_Altered) {
+        if (d == 0) {
+          if (op->op != J_NOOP) {
+            pat = peepix;
+            goto retry;
+          }
+
+        } else if (d < second) {
+          /* new op being added to top of pending stack.  If it's not the
+             only one, we must take care to maintain the 'always one slot
+             free' guarantee.  The call to flush_pending will invalidate
+             any pointers to pendingstack we are holding, but we're not
+             going to look at them again (since the loop on d is from lowest
+             upward)
+           */
+          if (op->op != J_NOOP)
+            limit = peephole_jopcode(peepix, limit, op, NO);
+          if (d > 0 && limit == &pendingstack[PendingStackSize-1]) {
+            pending++;
+            flush_pending(PeepholeWindowSize+2);
+            limit = pending;
+          }
+        } else if (op->op != J_NOOP && op != &pendingstack[0]) {
+          PendingOp temp; temp = *op;
+          op->op = J_NOOP;
+          op->peep = 0;
+          (void)peephole_jopcode(peepix, op-1, &temp, NO);
+        } else {
+          pr_res(op, peepix+1);
+        }
+      } else if (tracing(curpeep)) {
+        cc_msg("unchanged ");
+        pr_res(op, peepix+1);
+      }
+    }
+  }
+no_peephole_found:
+  if (cur->op != J_NOOP) {
+    if (limit < pendingstack || limit->op != J_NOOP) limit++;
+    if (limit >= &pendingstack[PendingStackSize])
+      syserr(syserr_pendingstack_overflow);
+    *limit = *cur;
+    pr_res(limit, pat == peepcount ? 0 : peepix+1);
+  }
+  Profiler_Count_Index = 0;
+  return limit;
+}
+
+/* Exported routines...                                               */
+
+/* The peepholer: */
+
+void peephole_op(PendingOp *cur, bool flush) {
+  if (var_cc_private_flags & 8L) {
+    show_inst_direct(cur);
+  } else {
+    pending = peephole_jopcode(-1, pending, cur, YES);
+    if (flush)
+      flush_pending(0);
+    else if (pending == &pendingstack[PendingStackSize-1])
+      flush_pending(PeepholeWindowSize+2);
+  }
+}
+
+void peephole_reinit(void) {
+  pendingstack = (PendingOp *)SynAlloc(PendingStackSize * sizeof(PendingOp));
+  pending = &pendingstack[0];
+  pending->op = J_NOOP;
+}
+
+void peephole_init(void) {
+#ifdef ENABLE_LOCALCG
+  int i;
+  for (i = 0; i <= PeepholeMax; i++) p_count[i] = 0;
+#endif
+}
+
+void peephole_tidy(void) {
+#ifdef ENABLE_LOCALCG
+  if (localcg_debug(1) || debugging(DEBUG_STORE))
+  { int i;
+    for (i = 0; i <= PeepholeMax; i++)
+      if (p_count[i] != 0)
+        cc_msg("{%3d}%6ld\n", i+1, p_count[i]);
+  }
+#endif
+}
