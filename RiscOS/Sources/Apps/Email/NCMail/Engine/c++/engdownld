@@ -170,7 +170,17 @@ void DownloadFailure(bool headers)
     case ELIB_ECONRESPTIMEDOUT :
 
       downloadstate.context = conbroken;
+
+#ifdef NEW_BROKEN_CONNECTION_BEHAVIOUR
+      /*
+      ** Note that the behaviour changes if NCMail is going
+      ** to attempt reconnection. In this case we don't want
+      ** the flag set because if reconnection succeeds we just
+      ** carry on where we left off with nothing changed.
+      */
+#else
       flag = true;
+#endif
 
       break;
 
@@ -200,8 +210,7 @@ void DownloadFailure(bool headers)
   if (flag)
   {
     /*
-    ** Either we have tried twice to fetch this message,
-    ** or the connection is broken.
+    ** We have tried twice to fetch this message,
     */
     downloadstate.msg = msg->next;
     if (headers)
@@ -338,8 +347,43 @@ void DoDownloadHeader(void)
       */
 
       popstatus = acctcreated;
+
+#ifdef NEW_BROKEN_CONNECTION_BEHAVIOUR
+      /*
+      ** If we're going to try reconnection then we can
+      ** go straight back to the PROCESSPOP state, but with
+      ** BROKENHDR state set as well so we know what's happening.
+      */
+      state |= (BROKENHDR + PROCESSPOP);
+      state &= ~DOWNLOADHDR;
+      popprocessstate.context = readytoconnect;
+#else
+      downloadstate.context = readytodownload;
+#endif
+
+      break;
+
+#ifdef NEW_BROKEN_CONNECTION_BEHAVIOUR
+    case reconfailure :
+
+      /*
+      ** Reconnection has failed.
+      ** The unconnected state will be picked up next time
+      ** round the download cycle and it will be stopped.
+      */
+      state &= ~BROKENHDR;
+      popmbox->flags |= MBOXINCOMPLETE;
       downloadstate.context = readytodownload;
       break;
+
+    case reconnected :
+
+      /* Reconnection has succeeded */
+      state &= ~BROKENHDR;
+      downloadstate.msg = transmbox->list;
+      downloadstate.context = readytodownload;
+      break;
+#endif
 
     case downloaddone :
 
@@ -649,8 +693,44 @@ void DoDownloadMessage(void)
       */
 
       popstatus = acctcreated;
+
+#ifdef NEW_BROKEN_CONNECTION_BEHAVIOUR
+      /*
+      ** If we're going to try reconnection then we can
+      ** go straight back to the PROCESSPOP state, but with
+      ** BROKENMSG state set as well so we know what's happening.
+      */
+      state |= (BROKENMSG + PROCESSPOP);
+      state &= ~DOWNLOADMSG;
+      popprocessstate.context = readytoconnect;
+#else
+      downloadstate.context = readytodownload;
+#endif
+      break;
+
+#ifdef NEW_BROKEN_CONNECTION_BEHAVIOUR
+    case reconfailure :
+
+      /*
+      ** Reconnection has failed.
+      ** The unconnected state will be picked up next time
+      ** round the download cycle and it will be stopped.
+      */
+
+      /* This falls through since both states behave similarly */
+
+    case reconnected :
+
+      /*
+      ** Reconnection has succeeded.
+      ** Next time round the download loop the pointer should
+      ** still be pointing to the message that was interrupted.
+      */
+      state &= ~BROKENMSG;
       downloadstate.context = readytodownload;
       break;
+#endif
+
   }
 
 }
@@ -805,7 +885,7 @@ void DoRetrieve(void)
     case downloadpending :
 
       /*
-      ** This is message is in the process of being downloaded.
+      ** This message is in the process of being downloaded.
       ** We simply wait until its DOWNLOADED flag is set
       ** and then proceed.
       */
@@ -851,9 +931,17 @@ void DoRetrieve(void)
         ** nested messages, each of which may be an entity
         ** or a message. If the latter, their descriptors are
         ** not part of a linked list and therefore cannot easily
-        ** be referred to later. On exit from DecodeMessage(),
+        ** be referred to later. This makes life difficult
+        ** when writing out the message, since having navigated
+        ** down a branch of entities leading off an embedded
+        ** message, there is no way back to the trunk.
+        ** On exit from DecodeMessage(), therefore
         ** the retrievelist will contain a list of all the
         ** descriptors found while parsing the entire message.
+        ** This enables writing out to be done in stages,
+        ** each stage starting with one of the messages on the list
+        ** and continuing until all its non-message entities
+        ** have been written out.
         */
         retrievestate.retrievelist = new RetrieveList();
         DecodeMessage(retrievestate.msg, retrievestate.rfc);
