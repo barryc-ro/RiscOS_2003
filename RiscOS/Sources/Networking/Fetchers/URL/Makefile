@@ -24,38 +24,23 @@ RESFSDIR   = Resources.URL.${COMPONENT}
 # Export Paths for Messages module
 #
 RESDIR = <resource$dir>.Resources2.URL
+EXP_HDR = <cexport$dir>.Interface
 
 #
 # Generic options:
 #
-MKDIR	= mkdir -p
-CC	= cc
-CMHG	= cmhg
-CP	= copy
-LD	= link
-TLD	= tlink
-RM	= remove
-WIPE	= -wipe
-MODSQZ  = modsqz
-TOUCH   = create
+CFLAGS    = ${INCLUDES} -zM -Wp -ffah -zps1 ${DFLAGS}
+CDEFINES  = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UDIRECTSWI
+CINCLUDES = -IC: -IC:TCPIPLibs
+ROMFLAGS  = -DROM
+DBGFLAGS  = -DDEBUGLIB
 
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
-
-CFLAGS	 = -c -depend !Depend ${INCLUDES} -zM -Wp -ffah -zps1 ${DFLAGS}
-DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UDIRECTSWI
-ROMFLAGS = -DROM
-INCLUDES = -ITCPIPLibs:,C:
+include Makefiles:StdTools
 
 #
 # Libraries
 #
-ANSILIB	  = CLib:o.ansilib
-CLIB	  = CLIB:o.stubs
-RLIB	  = RISCOSLIB:o.risc_oslib
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM	  = RISC_OSLib:o.abssym
-TCPIPLIBS = TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
+include Makefiles:ModuleLibs
 
 OBJS =\
  o.directswi\
@@ -70,7 +55,6 @@ OBJS =\
  o.register\
  o.status\
  o.stop\
- o.svcprint\
  o.utils\
  o.URLHdr
 
@@ -87,7 +71,6 @@ RAM_OBJS =\
  o.register\
  o.status\
  o.stop\
- o.svcprint\
  o.utils\
  o.URLHdr
 
@@ -104,13 +87,11 @@ DBG_OBJS =\
  od.register\
  od.status\
  od.stop\
- od.svcprint\
  od.utils\
  o.URLHdr
 
 MSGSF=o.msgs
 
-DBGFLAGS=-DTRACE -DUSE_SYSLOG
 
 PNGS=\
   LocalRes:images.internal-gopher-binary\
@@ -129,12 +110,12 @@ PNGS=\
 # Rule patterns
 #
 .SUFFIXES: .c .s .o .od .i .oi .inst
-.c.o:;	  ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
+.c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
 .c.i:;    ${CC} ${CFLAGS} ${ROMFLAGS} -C -E $< >$@
-.s.o:;	  objasm -depend !Depend -throwback -o $@ $<
-.c.od:;	  ${CC} ${CFLAGS} ${ROMFLAGS} ${DBGFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -p -o $@ $<
-.cmhg.h:; ${CMHG} -p -d $@ $<
+.s.o:;    ${AS} ${ASFLAGS} -o $@ $<
+.c.od:;   ${CC} ${CFLAGS} ${ROMFLAGS} ${DBGFLAGS} -o $@ $<
+.cmhg.o:; ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:; ${CMHG} ${CMHGFLAGS} -d $@ $<
 
 od.protocol protocol.o: URLHdr.h
 
@@ -169,6 +150,15 @@ resources: LocalRes:Messages LocalRes:ResList ${PNGS}
 	${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied to Messages module
 
+export: export_${PHASE}
+
+export_hdrs: ${EXP_HDR}.h.${COMPONENT}
+	@echo ${COMPONENT}: export complete
+
+${EXP_HDR}.h.${COMPONENT}: h.URLHdr
+	awk -- "/.define URL\_00/,/endif/" h.URLHdr { > $@ }
+	@SetType $@ Text
+
 o.dirs:
 	${MKDIR} o
 	${MKDIR} od
@@ -191,7 +181,7 @@ clean:
 
 ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
 	${MKDIR} aof
-	${LD} -o $@ -aof ${OBJS} ${TCPIPLIBS} ${ROMCSTUBS}
+	${LD} -o $@ -aof ${OBJS} ${NET4LIBS} ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link: o.dirs
@@ -204,16 +194,16 @@ ${MSGSF}: LocalRes:Messages LocalRes:ResList ${PNGS}
 	TokenCheck LocalRes:Messages
 	resgen messages_file ${MSGSF} -via LocalRes:ResList
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${NET4LIBS} ${CLIB}
 	${mkdir} rm
-	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${NET4LIBS} ${CLIB}
 	${MODSQZ} $@
-	Access $@ RW/R
+	${CHMOD} u+w,a+r $@
 
-${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${NET4LIBS} ${CLIB} ${DEBUGLIB}
 	${mkdir} rm
-	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} c:o.syslog
-	Access $@ RW/R
+	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${DEBUGLIB} ${NET4LIBS} ${CLIB}
+	${CHMOD} u+w,a+r $@
 
 o.moduleRAM: module.c
 	$(CC) ${CFLAGS} -o $@ module.c
