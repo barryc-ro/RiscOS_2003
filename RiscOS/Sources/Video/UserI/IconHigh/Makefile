@@ -26,6 +26,7 @@ COMPONENT	= IconHigh
 
 
 ROM_AOF_FILE	= @.!ROM_AOF.Output_M
+RAM_MODULE	= @.!Module.Output_M
 
 
 all:
@@ -40,6 +41,9 @@ rom_aof:
 	Obey		@.!ROM_AOF.!Run
 
 
+ram_module:
+	Obey		@.!Module.!Run
+
 
 # Now all main targets required during ROM builds.
 
@@ -47,6 +51,7 @@ rom_aof:
 clean:
 	Remove		linked.$(COMPONENT)
 	Remove		$(ROM_AOF_FILE)
+	Remove		$(RAM_MODULE)
 	Every.Every2	-c "@.!*.Sources @.!*.Output* @.!*.Makefile"	Wipe %0 ~cr~v
 	Echo		Component $(COMPONENT): 'clean' finished.
 
@@ -60,8 +65,20 @@ resources:
 	Echo		Component $(COMPONENT): 'resources' finished.
 
 
+ram:	ram_module
+	Echo		Component $(COMPONENT): 'ram' finished.
+
+
 rom:	rom_aof
 	Echo		Component $(COMPONENT): 'rom' finished.
+
+
+install: install_ram
+
+
+install_ram:	ram_module
+	Copy		$(RAM_MODULE) $(INSTDIR).$(COMPONENT) ~cfr~v
+	Echo		Component $(COMPONENT): 'install_ram' finished.
 
 
 install_rom:	rom_aof
@@ -76,7 +93,8 @@ rom_link:	rom_aof
 	Echo		Component $(COMPONENT): 'rom_link' finished.
 
 
-
+rm:
+	${MKDIR} rm
 
 
 # Dynamic dependencies:
