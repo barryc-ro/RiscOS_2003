@@ -219,6 +219,11 @@ void frontend_menu_update_item(fe_menu mh, int i);
 #define fe_scrolling_YES    1
 #define fe_scrolling_NO     2
 
+#define fe_divider_LEFT		0 /* must match with values in rid.h */
+#define fe_divider_TOP		1
+#define fe_divider_RIGHT	2
+#define fe_divider_BOTTOM	3
+
 typedef struct
 {
     char *name;         /* this pointer can be copied */
@@ -230,7 +235,8 @@ typedef struct
     int dividers[4];
 } fe_frame_info;
 
-void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refresh_only);
+void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refresh_only, int dividers_max);
+extern int frontend_view_get_dividers(fe_view v, int *dividers);
 
 int frontend_test_history(char *url);
 
@@ -421,6 +427,12 @@ extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_bo
 #define be_link_CARETISE	(1 << 11)	/* if a writeabnle ends up with the highlight then caretise it */
 #define be_link_MOVE_POINTER	(1 << 12)	/* move the pointer with the highlight */
 
+extern void backend_remove_highlight(be_doc doc);
+extern be_item backend_read_highlight(be_doc doc, BOOL *had_caret);
+extern void backend_set_caret(be_doc doc, be_item ti, int offset);
+extern void backend_set_highlight(be_doc doc, be_item item);
+
+
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);
 
@@ -430,9 +442,12 @@ extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);
  * returns old position of caret
  */
 
+#if 0
 #define backend_place_caret_READ	((be_item)-1)
 
 extern be_item backend_place_caret(be_doc doc, be_item item);
+extern be_item backend_read_highlight(be_doc doc);
+#endif
 
 /* Get a name for a file in the cache */
 
@@ -452,13 +467,12 @@ extern void backend_temp_file_register(char *url, char *file_name);
 
 extern const char *backend_check_meta(be_doc doc, const char *name);
 
+#if 0
 /* Clear selection from all items */
 extern void backend_clear_selected(be_doc doc);
 
-#if 0
 /* Select an item, whatever its type */
 extern void backend_select_item(be_doc doc, be_item ti, int select);
-#endif
 
 /* return the first item with SELETED bit set */
 extern be_item backend_find_selected(be_doc doc);
@@ -467,6 +481,7 @@ extern be_item backend_find_selected(be_doc doc);
  * It returns item or if item is a link then the first item in that anchor sequence
  */
 extern be_item backend_update_link(be_doc doc, be_item item, int selected);
+#endif
 
 /* this takes 0 or 1 to change the ACTIVATED flag status */
 extern void backend_update_link_activate(be_doc doc, be_item item, int activated);
@@ -482,7 +497,10 @@ extern void backend_frame_resize(be_doc doc, int x, int y, int handle);
 extern void backend_set_margin(be_doc doc, wimp_box *margin);
 #endif
 
+#if 0
 extern void backend_image_expire(be_doc doc, void *imh);
+#endif
+
 extern void backend_doc_reformat(be_doc doc);
 extern void backend_doc_set_scaling(be_doc doc, int scale_value);
 

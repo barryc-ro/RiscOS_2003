@@ -154,6 +154,8 @@ extern void fe_cursor_movement(fe_view v, int x, int y);
 
 extern int fe_encoding(fe_view v, int encoding);
 
+extern int caretise(void);
+
 /* From internal.h */
 
 extern int print__copies, print__ul;
@@ -201,6 +203,13 @@ extern char *ncreg_enquiry(const char *tag);
 
 extern os_error *fe_search_page(fe_view v);
 extern os_error *fe_offline_page(fe_view v);
+
+/* From stblinks.c */
+
+extern void fe_frame_link_array_build(fe_view v);
+extern void fe_frame_link_array_free(fe_view v);
+
+extern fe_view fe_next_frame(fe_view v, BOOL next);
 
 /* stbfe.h*/
 

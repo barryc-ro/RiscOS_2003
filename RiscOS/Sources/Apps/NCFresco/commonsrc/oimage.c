@@ -368,7 +368,7 @@ BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp
 /* 		tii->data.usemap.selection = NULL; */
 #ifndef BUILDERS
 		if (was_selected)
-		    backend_update_link(doc, ti, 1);
+		    backend_set_highlight(doc, ti);
 #endif
 	    }
 

@@ -2105,11 +2105,11 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 {
     access_handle d = NULL;
     os_error *ep = NULL;
-    int fh = ro_fopen(file, RO_OPEN_READ);
+    int fh = _kernel_osfind(0x4f, (char *)file); /* use kernel_osfind deliberately so we can get the error properly */
 
     ACCDBG(("access_new_file: file %s fh %d ft %03x flags %x\n", file, fh, ft, flags));
 
-    if (fh)
+    if (fh > 0)
     {
 	d = mm_calloc(1, sizeof(*d));
 

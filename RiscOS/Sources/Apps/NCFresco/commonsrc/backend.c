@@ -277,38 +277,6 @@ static int rid_table_holds_image(rid_text_item *item, void *i, antweb_doc *doc)
 
 
 /**********************************************************************/
-#if 0
-/*
- * This mechanism bypasses the code in antweb_place_input() and so may need updating.
- */
-
-static rid_text_item *antweb_prev_text_input(rid_text_item *ti, be_doc doc)
-{
-    while (ti)
-    {
-	if (ti && object_table[ti->tag].caret &&
-	    (object_table[ti->tag].caret)(ti, doc->rh, doc, object_caret_REPOSITION))
-	    break;
-        ti = rid_scanbr(ti);
-    }
-
-    return ti;
-}
-
-static rid_text_item *antweb_next_text_input(rid_text_item *ti, be_doc doc)
-{
-    while (ti)
-    {
-	if (ti && object_table[ti->tag].caret &&
-	    (object_table[ti->tag].caret)(ti, doc->rh, doc, object_caret_REPOSITION))
-	    break;
-        ti = rid_scanfr(ti);
-    }
-
-    return ti;
-}
-#endif
-/*****************************************************************************/
 
 #define CLESS(x)	(cless ? toupper(x) : (x))
 
@@ -552,6 +520,7 @@ static void backend__doc_click(be_doc doc, be_item ti, int x, int y, wimp_bbits 
 	}
 	else if (ti->aref && (ti->aref->href || (ti->aref->flags & rid_aref_LABEL)))
 	{
+#if 0
 	    if (akbd_pollctl())
 	    {
 #ifndef BUILDERS
@@ -559,6 +528,7 @@ static void backend__doc_click(be_doc doc, be_item ti, int x, int y, wimp_bbits 
 #endif
 	    }
 	    else
+#endif
 	    {
 		BOOL follow_link = TRUE;
                 if (config_display_time_activate)
@@ -1814,36 +1784,6 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 
 }
 
-#if 0
-void antweb_place_caret(antweb_doc *doc, rid_text_item *ti)
-{
-    rid_text_item *old_ti = doc->input;
-    int repos = object_caret_REPOSITION;
-
-    doc->input = ti;		/* must set doc->input before calling the remove() function */
-
-    if (old_ti != ti)
-    {
-	BEDBG((stderr, "antweb_place_caret(): input changed from %p to %p\n", old_ti, ti));
-
-	repos = object_caret_FOCUS;
-
-	if (old_ti && object_table[old_ti->tag].caret)
-	    object_table[old_ti->tag].caret(old_ti, doc->rh, doc, object_caret_BLUR);
-    }
-
-    if (ti && object_table[ti->tag].caret)
-    {
-	(object_table[ti->tag].caret)(ti, doc->rh, doc, repos);
-    }
-    else
-    {
-	/* Give the window the input focus but no visable caret */
-	frontend_view_caret(doc->parent, 0, 0, -1, 0);
-    }
-}
-#endif
-
 extern os_error *antweb_document_sizeitems(antweb_doc *doc)
 {
     rid_text_item *ti;
@@ -1858,6 +1798,7 @@ extern os_error *antweb_document_sizeitems(antweb_doc *doc)
      * the background image to be fetched first, not last */
     if ((doc->rh->bgt & rid_bgt_IMAGE) && (doc->rh->tile.im == NULL))
     {
+        BEDBG((stderr, "Calling fetch_bg from document_sizeitems\n" ));
         be_doc_fetch_bg(doc);
     }
 
@@ -2944,11 +2885,13 @@ static
 void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_width)
 {
     int height;
-    rid_text_item *ti;
+    rid_text_item *ti = NULL;
     rid_pos_item *new;
     wimp_box bb;
 
     FMTDBG(("be_document_reformat_tail(%p,%p,%d)\n", doc, oti,user_width));
+    if ( doc )
+        FMTDBG(("be_document_reformat_tail: doc->rh=%p\n", doc->rh ));
 
     if (doc->rh->flags & rid_hf_FULL_REFORMAT)
     {
@@ -2967,12 +2910,14 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 	    ti = NULL;
 	else
 #endif
-	    ti = oti->line->first;
+            if ( oti->line )
+                ti = oti->line->first;
     }
-    else
+
+    if ( !ti )
 	ti = doc->rh->stream.text_list;
 
-    if (ti == NULL)
+    if ( !ti )
 	return;
 
     FMTDBG(("Line start item is %p\n", ti));
@@ -3066,7 +3011,7 @@ static void be_set_dimensions(be_doc doc)
     h = doc->rh->stream.height;
 
     BEDBG((stderr, "be_set_dimensions: doc%p to %dx%d\n", doc, w, h));
-    
+
 #if USE_MARGINS
     w += doc->margin.x0 - doc->margin.x1;
     h -= doc->margin.y0 - doc->margin.y1;
@@ -3107,9 +3052,9 @@ os_error *backend_reset_width(be_doc doc, int width)
     if (doc->rh->frames)
     {
         /* always relay if this is called */
-        frontend_view_get_dimensions(doc->parent, &fvd);
+	frontend_view_get_dimensions(doc->parent, &fvd);
 
-        layout_layout(doc, fvd.layout_width, fvd.layout_height, 1);
+        layout_layout(doc, fvd.layout_width, fvd.layout_height, 1, NULL, 0);
 
         doc->rh->stream.widest = fvd.wa_width;
         doc->rh->stream.height = fvd.wa_height;
@@ -3910,6 +3855,16 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
             ti = rid_scanf(ti);
 	PPDBG(("Moved on from last item to 0x%p\n", ti));
     }
+
+    /* pdh: do this *BEFORE* starting any other image fetches! (please) */
+    if ( (doc->rh->bgt & rid_bgt_IMAGE)
+         && (doc->rh->tile.im == NULL) )
+    {
+        BEDBG((stderr, "Calling fetch_bg from pparse_doc\n"));
+	be_doc_fetch_bg(doc);
+    }
+
+
     PPDBG(("Sizing objects from 0x%p\n", ti));
     while (ti)
     {
@@ -4031,13 +3986,6 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 
 	    PPDBG(("pparse from progress done\n"));
 
-	    /* pdh: only do this if it's not already been done */
-	    if ( (doc->rh->bgt & rid_bgt_IMAGE)
-		 && (doc->rh->tile.im == NULL) )
-	    {
-		be_doc_fetch_bg(doc);
-	    }
-
             /* If the last item is a table, we must still be within the */
             /* table, so redisplaying it probably isn't a bad thing to do */
             /* Once the table is completed, another pad tag will be added */
@@ -4093,6 +4041,8 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 			((!doc->rh->form_last->last_select) ||
 			 (ooi != doc->rh->form_last->last_select->last_option) ) )
 		    {
+			PPDBG(( "Select found, reformatting the lot, doc=%p rh=%p\n", doc, doc->rh ));
+
 			/* dispose of the item and resize it */
 			if (osi && osi->base.display && object_table[osi->base.display->tag].dispose)
 			{
@@ -4124,6 +4074,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 #else
 			frontend_view_redraw(doc->parent, NULL);
 #endif
+			PPDBG(( "Tail reformat (with select items) done\n"));
 		    }
 		    else
 		    {
@@ -4163,77 +4114,6 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 
     threaded = NULL;
 }
-
-#if 0
-static os_error *be_parse_file_to_end(antweb_doc *doc)
-{
-    os_filestr osf;
-    os_error *ep;
-    int fsize;
-    int fh;
-    os_regset r;
-    rid_text_item *ti;
-
-    osf.action = 5;
-    osf.name = doc->cfile;
-
-    ep = os_file(&osf);
-
-    if (ep)
-	return ep;
-
-    fsize = osf.start;
-
-    BEDBG((stderr, "Final file size is %d\n", fsize));
-
-    r.r[0] = 0x4f;		/* Make errors rather than give a 0 handle */
-    r.r[1] = (int) (long) doc->cfile;
-
-    ep = os_find(&r);
-    if (ep)
-	return ep;
-
-    fh = r.r[0];
-    PPDBG(( "Opened file on handle %d\n", fh));
-    if (doc->lbytes != fsize)
-    {
-	PPDBG(( "Calling pparse from parse_to_end\n"));
-	be_pparse_doc(doc, fh, doc->lbytes, fsize);
-	PPDBG(( "pparse from parse_to_end done\n"));
-    }
-
-    /* OH BARF BARF BARF BARF */
-
-    if (doc->rh == NULL)
-	doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
-
-    ti = doc->rh->stream.text_last;
-
-    PPDBG(( "Closing file %d\n", fh));
-    r.r[0] = 0;
-    r.r[1] = fh;
-
-    os_find(&r);
-    PPDBG(( "Closing parser down\n"));
-    doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
-    doc->ph = NULL;
-
-    /* REPULSIVE HACK - BUT HEY, SO THE REST OF THIS ACCESS CODE */
-
-    while (ti)
-    {
-	(object_table[ti->tag].size)(ti, doc->rh, doc);
-
-	/*ti = ti->next;*/
-        ti = rid_scanf(ti);
-    }
-
-
-
-    PPDBG(( "New rid_header at 0x%p\n", doc->rh));
-    return NULL;
-}
-#endif
 
 /*
  * If the status is status_FAILL_CONNECT then 'cfile' is actually the error message.
@@ -4329,6 +4209,12 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
         doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
         doc->ph = NULL;
 
+	if ((doc->rh->bgt & rid_bgt_IMAGE) && (doc->rh->tile.im == NULL))
+	{
+	    BEDBG((stderr, "Calling fetch_bg from doc_complete\n" ));
+	    be_doc_fetch_bg(doc);
+	}
+
 	/* SJM: temporary hack to try and see pages... */
 /* 	fvpr_progress_stream_flush(&doc->rh->stream); */
 
@@ -4342,9 +4228,12 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
         if (doc->rh->frames)
         {
             fe_view_dimensions fvd;
-            frontend_view_get_dimensions(doc->parent, &fvd);
+	    int dividers[4], max;
 
-	    layout_layout(doc, fvd.layout_width, fvd.layout_height, 0);
+            frontend_view_get_dimensions(doc->parent, &fvd);
+	    max = frontend_view_get_dividers(doc->parent, dividers);
+
+	    layout_layout(doc, fvd.layout_width, fvd.layout_height, 0, dividers, max);
 
 	    doc->rh->stream.widest = fvd.wa_width;
 	    doc->rh->stream.height = fvd.wa_height;
@@ -4357,11 +4246,6 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
         be_set_dimensions(doc);
 
 	be_update_image_info(doc);
-
-	if ((doc->rh->bgt & rid_bgt_IMAGE) && (doc->rh->tile.im == NULL))
-	{
-	    be_doc_fetch_bg(doc);
-	}
 
 #if !defined(STBWEB) && !defined(BUILDERS)
 	if (frontend_view_has_caret(doc->parent))
@@ -4387,6 +4271,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     	    parse_http_header(s, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
 
     	    doc->rh->refreshurl = strdup(vals[0].value);
+	    /* YUCH - conditional; ? : */
 	    doc->rh->refreshtime = vals[1].name == NULL ? -1 :
 #ifdef STBWEB
 		!strcasecomp(vals[1].name, "ondispose") ? -2 :
@@ -4552,6 +4437,8 @@ extern os_error *backend_doc_set_flags(be_doc doc, int mask, int eor)
 static void be_refresh_document(int at, void *h)
 {
     be_doc doc = (be_doc) h;
+
+    BEDBG((stderr, "doc%p: be_refresh_document()\n", doc ));
 
     if (doc->url || doc->rh->refreshurl)
     {
@@ -4743,95 +4630,6 @@ os_error *backend_doc_key(be_doc doc, int key, int *used)
     return NULL;
 }
 
-#if 0
-os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
-{
-    int redraw = FALSE;
-    rid_text_item *ti = doc->input;
-    rid_text_item *also_redraw = NULL;
-    int old_offset = doc->text_input_offset;
-
-    doc->text_input_offset = -1;
-
-    *used = 0;
-
-    if (ti == NULL)
-	return NULL;
-
-    redraw = TRUE;		/* The default case negates this if we don't use the key */
-    also_redraw = ti;
-    switch (motion)
-    {
-    case be_cursor_UP:
-    case (be_cursor_UP | be_cursor_WRAP):
-	/*ti = antweb_prev_text_item(ti);*/
-        ti = rid_scanbr(ti);
-        ti = antweb_prev_text_input(ti, doc);
-	if (ti)
-	{
-	    break;
-	}
-	if (motion == 0)
-	{
-	    ti = doc->input;
-	    redraw=FALSE;
-	    break;
-	}
-	/* Otherwise fall through */
-    case (be_cursor_DOWN | be_cursor_LIMIT):
-	ti = antweb_prev_text_input(doc->rh->stream.text_last, doc);
-	break;
-
-    case be_cursor_DOWN:
-    case (be_cursor_DOWN | be_cursor_WRAP):
-	/*ti = ti->next;*/
-        ti = rid_scanfr(ti);
-	ti = antweb_next_text_input(ti, doc);
-	if (ti)
-	{
-	    break;
-	}
-	if (motion == be_cursor_DOWN)
-	{
-	    ti = doc->input;
-	    redraw=FALSE;
-	    break;
-	}
-	/* Otherwise fall through */
-    case (be_cursor_UP | be_cursor_LIMIT):
-	ti = antweb_next_text_input(doc->rh->stream.text_list, doc);
-	break;
-
-    default:
-	redraw=FALSE;
-	also_redraw = NULL;
-	break;
-    }
-
-    if (ti != doc->input)
-    {
-/* 	doc->input = ti; */
-	antweb_place_caret(doc, ti);
-    }
-    else
-    {
-	doc->text_input_offset = old_offset;
-    }
-
-    if (redraw)
-    {
-	antweb_update_item(doc, doc->input);
-
-	if (also_redraw && also_redraw != doc->input)
-	    antweb_update_item(doc, also_redraw);
-
-	*used = TRUE;
-    }
-
-    return NULL;
-}
-#endif
-
 #ifdef STBWEB
 os_error *backend_doc_images(be_doc doc, int *waiting, int *fetching, int *fetched, int *errors, int* in_trans, int *so_far)
 {
@@ -4848,322 +4646,6 @@ os_error *backend_doc_images(be_doc doc, int *waiting, int *fetching, int *fetch
 
 /* ============================================================================= */
 
-/* This code has all been moved into keyhl.c */
-
-#if 0
-
-static int adjust_flag(int old_flag, int select, BOOL *changed)
-{
-    int new_flag = 0;
-
-    switch (select)
-    {
-        case -1:
-            new_flag = old_flag ^ rid_flag_SELECTED;
-            break;
-        case 1:
-            new_flag = old_flag | rid_flag_SELECTED;
-            break;
-        case 0:
-            new_flag = old_flag &~ rid_flag_SELECTED;
-            break;
-    }
-
-    if (changed)
-	*changed = (new_flag ^ old_flag) & rid_flag_SELECTED ? 1 : 0;
-
-    return new_flag;
-}
-
-/*
- * Refresh the highlighting on an object
- * Uses a specific method if there is one else just
- * redraws the whole box.
- */
-
-static void be_update_item_highlight(be_doc doc, be_item ti)
-{
-    if (object_table[ti->tag].update_highlight)
-        object_table[ti->tag].update_highlight(ti, doc);
-    else
-        antweb_update_item(doc, ti);
-}
-
-/*
- * if selected is -1 then it toggles the state of the selected bit
- */
-
-be_item backend_update_link(be_doc doc, be_item item, int selected)
-{
-    be_item ti;
-    BOOL changed;
-
-    if (item == NULL)
-        return NULL;
-
-/*     BEDBG((stderr, "backend_update_link: item %p tag %d aref %p href %s updating %d\n", item, item->tag, item->aref, item->aref ? strsafe(item->aref->href) : "", selected)); */
-
-    /* if it isn't actually a link then toggle the flag anyway */
-    if (item->aref == NULL)
-    {
-	doc->selection.tag = doc_selection_tag_TEXT;
-	doc->selection.data.text = item;
-
-	item->flag = adjust_flag(item->flag, selected, &changed);
-	if (changed)
-	    be_update_item_highlight(doc, item);
-        return item;
-    }
-    else
-    {
-	doc->selection.tag = doc_selection_tag_AREF;
-	doc->selection.data.aref = item->aref;
-    }
-
-    for (ti = item->aref->first; ti && ti->aref == item->aref; ti = rid_scanfr(ti))
-    {
-        ti->flag = adjust_flag(ti->flag, selected, &changed);
-
-/* 	BEDBG((stderr, "                     item %p tag %d changed %d\n", ti, ti->tag, changed)); */
-
-	if (changed)
-	    be_update_item_highlight(doc, ti);
-    }
-
-    return item->aref->first;
-}
-
-void backend_update_link_activate(be_doc doc, be_item item, int activate)
-{
-    be_item ti;
-
-    if (item == NULL || item->aref == NULL)
-        return;
-
-#if 0				/* This is too often wrong to be useful */
-    /* When deactivating mark as visited so frame links update correctly */
-    if (!activate)
-        item->aref->flags |= rid_aref_IN_CACHE;
-#endif
-
-    for (ti = item->aref->first; ti && ti->aref == item->aref; ti = rid_scanfr(ti))
-    {
-	if (activate)
-	    ti->flag |= rid_flag_ACTIVATED;
-	else
-	    ti->flag &= ~rid_flag_ACTIVATED;
-	be_update_item_highlight(doc, ti);
-    }
-}
-
-/* ----------------------------------------------------------------------------- */
-
-static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int flags)
-{
-    wimp_box box;
-    backend_doc_item_bbox(doc, ti, &box);
-#if 0
-    if (
-       ((box.y1 > bounds->y0 && box.y1 <= bounds->y1) ||
-        (box.y0 >= bounds->y0 && box.y0 < bounds->y1)) &&
-
-       ((box.x1 > bounds->x0 && box.x1 <= bounds->x1) ||
-        (box.x0 >= bounds->x0 && box.x0 < bounds->x1))
-        )
-        return TRUE;
-#else
-    if (flags & be_link_BACK)
-    {
-        if (box.y0 >= bounds->y0 && box.y0 < bounds->y1)
-            return TRUE;
-    }
-    else
-    {
-        if (box.y1 > bounds->y0 && box.y1 <= bounds->y1)
-            return TRUE;
-    }
-#endif
-    return FALSE;
-}
-
-static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
-{
-    BOOL aref_valid = ti->aref && (ti->aref->href || (ti->aref->flags & rid_aref_LABEL));
-    BOOL aref_changed_enough = ti->aref != aref || (flags & (be_link_INCLUDE_CURRENT | be_link_ONLY_CURRENT));
-
-    if (ti->tag == rid_tag_TEXTAREA)
-    {
-	if (((rid_text_item_textarea *)ti)->area->base.tabindex == -1)
-	    return FALSE;
-
-	if ((flags & be_link_TEXT) == 0)
-	{
-	    if (aref_valid && !aref_changed_enough)
-		return FALSE;
-	}
-	return TRUE;
-    }
-
-    if (ti->tag == rid_tag_INPUT)
-    {
-	if (((rid_text_item_input *)ti)->input->base.tabindex == -1)
-	    return FALSE;
-
-	if (flags & be_link_TEXT)
-	{
-	    rid_input_tag tag = ((rid_text_item_input *)ti)->input->tag;
-	    return tag == rid_it_TEXT || tag == rid_it_PASSWD;
-	}
-
-	if (aref_valid && !aref_changed_enough)
-	    return FALSE;
-
-	return TRUE;
-    }
-
-    if ((flags & be_link_TEXT) == 0)
-    {
-	if (ti->tag == rid_tag_OBJECT)
-	{
-	    rid_text_item_object *tio = (rid_text_item_object *)ti;
-	    if (tio->object->type == rid_object_type_PLUGIN)
-		return TRUE;
-	}
-
-	if (ti->tag == rid_tag_SELECT)
-	{
-	    if (aref_valid && !aref_changed_enough)
-		return FALSE;
-	    return TRUE;
-	}
-
-	if (ti->tag == rid_tag_IMAGE && ((rid_text_item_image *)ti)->usemap)
-	    return TRUE;
-
-	/* check for tag specifically in case a table gets an AREF around it */
-	if ((ti->tag == rid_tag_TEXT || ti->tag == rid_tag_IMAGE || ti->tag == rid_tag_OBJECT) &&
-	    aref_valid && aref_changed_enough)
-	    return TRUE;
-    }
-
-    return FALSE;
-}
-
-be_item backend_highlight_link(be_doc doc, be_item item, int flags)
-{
-    rid_aref_item *aref;
-    be_item ti;
-    wimp_box bounds, margins;
-    const int scan_flags = SCAN_RECURSE | ( (flags & be_link_BACK) ? SCAN_BACK : SCAN_FWD );
-
-    LKDBG((stderr, "Highlight from item %p, flags=0x%x, line=%p\n", item, flags, item ? item->line : NULL));
-
-    if (item == NULL)
-    {
-	ti = (flags & be_link_BACK) ? doc->rh->stream.text_last : doc->rh->stream.text_list;
-	aref = NULL;
-    }
-    else
-    {
-        if (flags & (be_link_INCLUDE_CURRENT|be_link_ONLY_CURRENT))
-            ti = item->aref ? item->aref->first : item;			/* backtrack to start of anchor sequence */
-        else
-            ti = rid_scan(item, scan_flags);
-
-	aref = item->aref;
-    }
-
-    LKDBG((stderr, "Start search at %p, aref=%p, line=%p\n", ti, aref, ti ? ti->line : NULL));
-
-    frontend_view_bounds(doc->parent, &bounds);
-#if USE_MARGINS
-    margins = doc->margin;
-#else
-    frontend_view_margins(doc->parent, &margins);
-#endif
-    bounds.x0 += margins.x0;
-    bounds.y0 += margins.y0;
-    bounds.x1 += margins.x1;
-    bounds.y1 += margins.y1;
-
-    if ((flags & (be_link_ONLY_CURRENT|be_link_TEXT)) == 0)
-	ti = backend_highlight_link_2D(doc, item, flags);
-    else
-    {
-	while (ti)
-	{
-	    if (match_item(ti, flags, aref))
-	    {
-		if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, &bounds, flags))
-		    break;
-	    }
-
-	    if (flags & be_link_ONLY_CURRENT)
-	    {
-		ti = NULL;
-		break;
-	    }
-	    else
-	    {
-		ti = rid_scan(ti, scan_flags);
-		LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
-	    }
-	}
-
-	if (ti == NULL && (flags & (be_link_DONT_WRAP | be_link_ONLY_CURRENT)) == 0)
-	{
-	    ti = (flags & be_link_BACK) ? doc->rh->stream.text_last : doc->rh->stream.text_list;
-
-	    LKDBG((stderr, "No link found, ti wraped to %p\n", ti));
-
-	    while (ti)
-	    {
-		if (match_item(ti, flags | be_link_INCLUDE_CURRENT, aref))
-		{
-		    if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, &bounds, flags))
-			break;
-		}
-
-		ti = rid_scan(ti, scan_flags);
-		LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
-	    }
-	}
-    }
-
-    if ((flags & be_link_DONT_HIGHLIGHT) == 0)
-    {
-	BOOL item_changed = item != ti && (item == NULL || item->aref != ti->aref);
-
-	/* de highlight original only if the highlight has ended up changing */
-        if (item_changed && item && (flags & be_link_ONLY_CURRENT) == 0)
-	    backend_update_link(doc, item, 0);
-
-        if (ti)
-        {
-	    int x, y;
-
-	    LKDBG((stderr, "New link at %p\n", ti));
-
-	    if ((flags & be_link_VISIBLE) == 0 && stream_find_item_location(ti, &x, &y))
-	    {
-#if USE_MARGINS
-	        frontend_view_ensure_visable(doc->parent, x, y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
-#else
-		frontend_view_ensure_visable(doc->parent, x, y + ti->max_up, y - ti->max_down);
-#endif
-	    }
-
-            if (item_changed || (flags & be_link_ONLY_CURRENT))
-                backend_update_link(doc, ti, 1);
-        }
-    }
-
-    LKDBG((stderr, "About to return %p\n", ti));
-
-    return ti;
-}
-#endif
-
 os_error *backend_activate_link(be_doc doc, be_item item, int flags)
 {
     if (!item)
@@ -5175,18 +4657,6 @@ os_error *backend_activate_link(be_doc doc, be_item item, int flags)
 
     return NULL;
 }
-
-#if 0
-be_item backend_place_caret(be_doc doc, be_item item)
-{
-    be_item input = doc->input;
-
-    if (item != backend_place_caret_READ)
-	antweb_place_caret(doc, item);
-
-    return input;
-}
-#endif
 
 /* veneers onto access.c functions */
 
@@ -5203,8 +4673,6 @@ void backend_temp_file_register(char *url, char *file_name)
     access_insert(url, file_name, cache_flag_OURS);
 }
 #endif
-
-#ifdef STBWEB
 
 #define TIME_FORMAT	"%a, %d %b %Y %H:%M:%S GMT"
 
@@ -5232,7 +4700,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
 
     if (strcasecomp(name, "last-modified") == 0)
     {
-	unsigned last_modified;
+	unsigned last_modified = 0;
 	if (!access_get_header_info(doc->url, NULL, &last_modified, NULL) || last_modified == 0)
 	    return NULL;
 
@@ -5242,72 +4710,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
 
     return NULL;
 }
-#endif
 
-#if 0
-void backend_clear_selected(be_doc doc)
-{
-    be_item ti = doc->rh->stream.text_list;
-    while (ti)
-    {
-	if (ti->flag & rid_flag_SELECTED)
-	{
-	    ti->flag &= ~rid_flag_SELECTED;
-	    be_update_item_highlight(doc, ti);
-	}
-
-	ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
-    }
-
-    doc->selection.data.text = NULL;
-}
-#endif
-
-#if 0
-void backend_select_item(be_doc doc, be_item item, int select)
-{
-    int new_flag;
-
-    /* alter the selection state of this item */
-    new_flag = adjust_flag(item->flag, select, NULL);
-
-    /* if the new item ends up selected then deselect everything else in the document */
-    if (new_flag & rid_flag_SELECTED)
-    {
-	be_item ti = doc->rh->stream.text_list;
-	while (ti)
-	{
-            if (ti->flag & rid_flag_SELECTED)
-            {
-                ti->flag &= ~rid_flag_SELECTED;
-                be_update_item_highlight(doc, ti);
-            }
-
-            ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
-	}
-    }
-
-    /* update the new item */
-    item->flag = new_flag;
-    be_update_item_highlight(doc, item);
-}
-#endif
-
-#if 0
-/* FIXME: this needs to be updated for the new selection model */
-be_item backend_find_selected(be_doc doc)
-{
-    be_item ti = doc->rh->stream.text_list;
-    while (ti)
-    {
-        if (ti->flag & rid_flag_SELECTED)
-            break;
-
-        ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
-    }
-    return ti;
-}
-#endif
 
 #ifdef STBWEB
 int backend_frame_resize_bounds(be_doc doc, int x, int y, wimp_box *box, int *handle)
@@ -5503,7 +4906,7 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 	    }
 
 	    BEDBG((stderr, "locate_id: ti=%p tag %d this_id='%s'\n", ti, ti->tag, strsafe(this_id)));
-	    
+
 	    /* and compare what is going in */
 	    if (this_id && strcmp(this_id, id) == 0)
 		return ti;

@@ -260,7 +260,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back | render_colour_RGB;
     }
 
-    fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
+    fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
 
     render_plinth(bg, render_plinth_IN,
 		  hpos, bline - ti->max_down,

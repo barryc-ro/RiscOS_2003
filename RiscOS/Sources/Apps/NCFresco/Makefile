@@ -700,7 +700,7 @@ NCFRESCO_VPATH=			../!NCFresco
 
 NCFRESCO_BASE_OBJS=		clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 				stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
-				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o \
+				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o \
 				$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 
 
@@ -822,7 +822,7 @@ NCFRESCO_RAM:	$(PREDEPS)
 
 ncfresco_srclist:
 		@for dir in fresparse parser commonsrc ./!NCFresco \
-		http ebftp webgopher webimage \
+		http webftp webgopher webimage \
 		 ; do find $$dir -type f \
 		\( -name \*.h -o -name \*.c \) ; done > srclist
 

@@ -170,7 +170,7 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 
     tai = ((rid_text_item_textarea *)ti)->area;
 
-    fg = tai->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
+    fg = tai->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
     bg = tai->base.colours.back == -1 ? render_colour_WRITE :
 	    be_item_has_caret(doc, ti) && tai->base.colours.select != -1 ?
 	    tai->base.colours.select | render_colour_RGB : tai->base.colours.back | render_colour_RGB;

@@ -29,6 +29,76 @@
 #define LKDBG(a)
 #endif
 
+#if LINK_DEBUG >= 2
+#define LKDBGN(a) fprintf a
+#else
+#define LKDBGN(a)
+#endif
+
+/* ----------------------------------------------------------------------------- */
+
+static int item_to_descriptor_index(be_doc doc, be_item ti)
+{
+    antweb_selection_descr *link;
+    int i;
+    for (i = 0, link = doc->selection_list.list; i < doc->selection_list.count; i++, link++)
+    {
+	if (link->item.tag == doc_selection_tag_TEXT &&
+	    link->item.data.text.item == ti)
+	{
+	    return i;
+	}
+    }
+    
+    return -1;
+}
+
+static be_item selection_to_item(antweb_selection_t *link)
+{
+    be_item new_item = NULL;
+    if (link) switch (link->tag)
+    {
+    case doc_selection_tag_NONE:
+	break;
+	
+    case doc_selection_tag_TEXT:
+	new_item = link->data.text.item;
+	if (new_item->aref)
+	    new_item = link->data.text.item->aref->first;
+	break;
+
+    case doc_selection_tag_AREF:
+	new_item = link->data.aref->first;
+	break;
+	
+    case doc_selection_tag_MAP:
+	new_item = link->data.map.item;
+	break;
+    }
+    return new_item;
+}
+
+static be_item descriptor_to_item(antweb_selection_descr *link)
+{
+    return selection_to_item(link ? &link->item : NULL);
+}
+
+/* ----------------------------------------------------------------------------- */
+
+static void aref_union_box(be_doc doc, rid_aref_item *aref, wimp_box *box_out)
+{
+    be_item item = aref->first;
+
+    backend_doc_item_bbox(doc, item, box_out);
+
+    for (item = item->next; item && item->next && item->next->aref == aref; item = item->next)
+    {
+	wimp_box box;
+	backend_doc_item_bbox(doc, item, &box);
+	coords_union(&box, box_out, box_out);
+    }
+}
+
 /* ----------------------------------------------------------------------------- */
 
 static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int flags)
@@ -61,6 +131,10 @@ static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int
 
 /* ----------------------------------------------------------------------------- */
 
+#define match_item_NONE	0
+#define match_item_LINK	1
+#define match_item_TEXT	2
+
 static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 {
     BOOL aref_valid = ti->aref && (ti->aref->href || (ti->aref->flags & rid_aref_LABEL));
@@ -69,31 +143,30 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
     if (ti->tag == rid_tag_TEXTAREA)
     {
 	if (((rid_text_item_textarea *)ti)->area->base.tabindex == -1)
-	    return FALSE;
+	    return match_item_NONE;
 
 	if ((flags & be_link_TEXT) == 0)
 	{
 	    if (aref_valid && !aref_changed_enough)
-		return FALSE;
+		return match_item_NONE;
 	}
-	return TRUE;
+	return match_item_TEXT;
     }
 
     if (ti->tag == rid_tag_INPUT)
     {
+	rid_input_tag tag = ((rid_text_item_input *)ti)->input->tag;
+
 	if (((rid_text_item_input *)ti)->input->base.tabindex == -1)
-	    return FALSE;
+	    return match_item_NONE;
 
 	if (flags & be_link_TEXT)
-	{
-	    rid_input_tag tag = ((rid_text_item_input *)ti)->input->tag;
-	    return tag == rid_it_TEXT || tag == rid_it_PASSWD;
-	}
+	    return tag == rid_it_TEXT || tag == rid_it_PASSWD ? match_item_TEXT : match_item_NONE;
 
 	if (aref_valid && !aref_changed_enough)
-	    return FALSE;
+	    return match_item_NONE;
 
-	return TRUE;
+	return tag == rid_it_TEXT || tag == rid_it_PASSWD ? match_item_TEXT : match_item_LINK;
     }
 
     if ((flags & be_link_TEXT) == 0)
@@ -102,26 +175,26 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 	{
 	    rid_text_item_object *tio = (rid_text_item_object *)ti;
 	    if (tio->object->type == rid_object_type_PLUGIN)
-		return TRUE;
+		return match_item_LINK;
 	}
 
 	if (ti->tag == rid_tag_SELECT)
 	{
 	    if (aref_valid && !aref_changed_enough)
-		return FALSE;
-	    return TRUE;
+		return match_item_NONE;
+	    return match_item_LINK;
 	}
 
 	if (ti->tag == rid_tag_IMAGE && ((rid_text_item_image *)ti)->usemap)
-	    return TRUE;
+	    return match_item_LINK;
 
 	/* check for tag specifically in case a table gets an AREF around it */
 	if ((ti->tag == rid_tag_TEXT || ti->tag == rid_tag_IMAGE || ti->tag == rid_tag_OBJECT) &&
 	    aref_valid && aref_changed_enough)
-	    return TRUE;
+	    return match_item_LINK;
     }
 
-    return FALSE;
+    return match_item_NONE;
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -177,7 +250,8 @@ void antweb_build_selection_list(be_doc doc)
 #endif
     for (ti = doc->rh->stream.text_list; ti; ti = rid_scanfr(ti))
     {
-	if (match_item(ti, be_link_ONLY_CURRENT, NULL))
+	int match = match_item(ti, be_link_ONLY_CURRENT, NULL);
+	if (match)
 	{
 	    /* FIXME: this is rather inefficient - need a better way */
 	    backend_doc_item_bbox(doc, ti, &link->bbox);
@@ -239,6 +313,8 @@ void antweb_build_selection_list(be_doc doc)
     LKDBG((stderr, "antweb_build_selection_list(): count %d new list %p\n", count, doc->selection_list.list));
 }
 
+/* ----------------------------------------------------------------------------- */
+
 static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb_selection_t *initial, const wimp_box *from, int flags, const wimp_box *bounds)
 {
     antweb_selection_descr *link;
@@ -269,13 +345,13 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	int dist1 = -1, secdist1 = INT_MAX;
 	BOOL on_screen = FALSE;
 
-/* 	LKDBG((stderr, "                        : link %p item %p box    x=%d-%d y=%d-%d\n", link, link->item.data.text, link->bbox.x0, link->bbox.x1, link->bbox.y0, link->bbox.y1)); */
+ 	LKDBGN((stderr, "                        : link %p item %p box    x=%d-%d y=%d-%d\n", link, link->item.data.text, link->bbox.x0, link->bbox.x1, link->bbox.y0, link->bbox.y1));
 
 	if (link->item.tag == doc_selection_tag_TEXT)
 	{
 	    if (start_aref != NULL && link->item.data.text.item->aref == start_aref)	/* mustn't be part of same link */
 	    {
-/* 		LKDBG((stderr, "                        : same aref\n")); */
+ 		LKDBGN((stderr, "                        : same aref\n"));
 		continue;
 	    }
 	}
@@ -295,7 +371,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	/* if not visible then continue on to next immediately */
 	if (!on_screen)
 	{
-/* 	    LKDBG((stderr, "                        : not on screen\n")); */
+ 	    LKDBGN((stderr, "                        : not on screen\n"));
 	    continue;
 	}
 	
@@ -401,19 +477,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
     return min_link;
 }
 
-static void aref_union_box(be_doc doc, rid_aref_item *aref, wimp_box *box_out)
-{
-    be_item item = aref->first;
-
-    backend_doc_item_bbox(doc, item, box_out);
-
-    for (item = item->next; item && item->next && item->next->aref == aref; item = item->next)
-    {
-	wimp_box box;
-	backend_doc_item_bbox(doc, item, &box);
-	coords_union(&box, box_out, box_out);
-    }
-}
+/* ----------------------------------------------------------------------------- */
 
 static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_selection_t *initial, int flags, const wimp_box *bounds)
 {
@@ -467,11 +531,10 @@ static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_sel
 
 /* ----------------------------------------------------------------------------- */
 
-static be_item backend_highlight_link_2D(be_doc doc, be_item item, int flags, const wimp_box *bounds)
+static be_item scan_links_2D(be_doc doc, be_item item, int flags, const wimp_box *bounds)
 {
     antweb_selection_t sel;
     antweb_selection_descr *link;
-    be_item new_item;
 
     LKDBG((stderr, "backend_highlight_link_2D: doc %p item %p flags %x\n", doc, item, flags));
 
@@ -512,22 +575,98 @@ static be_item backend_highlight_link_2D(be_doc doc, be_item item, int flags, co
 
     LKDBG((stderr, "backend_highlight_link_2D: return link %p tag %d item %p\n", link, link ? link->item.tag : 0, link ? link->item.data.text.item : 0));
 
-    new_item = NULL;
-    if (link) switch (link->item.tag)
-    {
-    case doc_selection_tag_TEXT:
-	new_item = link->item.data.text.item;
-	if (new_item->aref)
-	    new_item = link->item.data.text.item->aref->first;
-	break;
-
-    case doc_selection_tag_MAP:
-	new_item = link->item.data.map.item;
-	break;
-    }
-    
-    return new_item;
+    return descriptor_to_item(link);
 }				
+
+static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp_box *bounds)
+{
+    int i;
+    int inc, term;
+    be_item ti;
+    rid_aref_item *aref;
+
+    LKDBG((stderr, "scan_links_linear: doc %p item %p flags %x\n", doc, item, flags));
+
+    /* get increment and end */
+    inc = flags & be_link_BACK ? -1 : +1;
+    term = flags & be_link_BACK ? -1 : doc->selection_list.count;
+
+    /* set up start position */
+    if (item)
+    {
+	aref = item->aref;
+
+	i = item_to_descriptor_index(doc, item);
+	if (i == -1)
+	    i = term;
+
+	if ((flags & (be_link_INCLUDE_CURRENT|be_link_ONLY_CURRENT)) == 0 && i != term)
+	    i += inc;
+    }
+    else
+    {
+	aref = NULL;
+
+	if (flags & be_link_BACK)
+	    i = doc->selection_list.count-1;
+	else
+	    i = 0;
+    }
+
+    ti = NULL;
+
+    /* search from current position to end of list */
+    while (i != term)
+    {
+	LKDBG((stderr, "scan_links_linear: 1st pass i %d\n", i));
+
+	ti = descriptor_to_item(&doc->selection_list.list[i]);
+
+	if (match_item(ti, flags, aref))
+	{
+	    if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, bounds, flags))
+		break;
+	}
+	
+	if (flags & be_link_ONLY_CURRENT)
+	{
+	    i = term;		/* exit after first check
+				 */
+	    break;
+	}
+	else
+	{
+	    i += inc;
+	}
+    }    
+
+    /* search from one extent to the other */
+    if (i == term && (flags & (be_link_DONT_WRAP | be_link_ONLY_CURRENT)) == 0)
+    {
+	i = flags & be_link_BACK ? doc->selection_list.count - 1 : 0;
+
+	while (i != term)
+	{
+	    LKDBG((stderr, "scan_links_linear: 2nd pass i %d\n", i));
+
+	    ti = descriptor_to_item(&doc->selection_list.list[i]);
+
+	    if (match_item(ti, flags | be_link_INCLUDE_CURRENT, aref))
+	    {
+		if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, bounds, flags))
+		    break;
+	    }
+
+	    i += inc;
+	}
+    }
+
+    LKDBG((stderr, "scan_links_linear: return i %d item %p\n", i, ti));
+
+    return i == term ? NULL : ti;
+}
+
+/* ----------------------------------------------------------------------------- */
 
 static int adjust_flag(int old_flag, int select, BOOL *changed)
 {
@@ -571,15 +710,13 @@ static void be_update_item_highlight(be_doc doc, be_item ti)
 /* ----------------------------------------------------------------------------- */
 
 /*
- * Highlight the nearest link in the given direction from the given point.
+ * Highlight the nearest link in the given direction from the given point or link.
  */
 
 be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box, int flags)
 {
-    rid_aref_item *aref;
     be_item ti;
     wimp_box bounds, margins;
-    const int scan_flags = SCAN_RECURSE | ( (flags & be_link_BACK) ? SCAN_BACK : SCAN_FWD );
 
     LKDBG((stderr, "Highlight from item %p, flags=0x%x, line=%p\n", item, flags, item ? item->line : NULL));
 
@@ -601,88 +738,15 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 
 	link = antweb_highlight_scan_xy(doc, NULL, box, flags, &bounds);
     
-	ti = NULL;
-	if (link) switch (link->item.tag)
-	{
-	case doc_selection_tag_TEXT:
-	    ti = link->item.data.text.item;
-	    if (ti->aref)
-		ti = link->item.data.text.item->aref->first;
-	    break;
-	    
-	case doc_selection_tag_MAP:
-	    ti = link->item.data.map.item;
-	    break;
-	}
+	ti = descriptor_to_item(link);
+    }
+    else if ((flags & (be_link_ONLY_CURRENT|be_link_TEXT)) == 0)
+    {
+	ti = scan_links_2D(doc, item, flags, &bounds);
     }
     else
     {
-	if ((flags & (be_link_ONLY_CURRENT|be_link_TEXT)) == 0)
-	{
-	    /* 2D match algorithm */
-	    ti = backend_highlight_link_2D(doc, item, flags, &bounds);
-	}
-	else
-	{
-	    /* work out from which item to start searchingm, and aref to match against */
-	    if (item == NULL)
-	    {
-		ti = (flags & be_link_BACK) ? doc->rh->stream.text_last : doc->rh->stream.text_list;
-		aref = NULL;
-	    }
-	    else
-	    {
-		if (flags & (be_link_INCLUDE_CURRENT|be_link_ONLY_CURRENT))
-		    ti = item->aref ? item->aref->first : item;			/* backtrack to start of anchor sequence */
-		else
-		    ti = rid_scan(item, scan_flags);
-
-		aref = item->aref;
-	    }
-
-/* 	    LKDBG((stderr, "Start search at %p, aref=%p, line=%p\n", ti, aref, ti ? ti->line : NULL)); */
-
-	    /* search from here to the end of the list */
-	    while (ti)
-	    {
-		if (match_item(ti, flags, aref))
-		{
-		    if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, &bounds, flags))
-			break;
-		}
-
-		if (flags & be_link_ONLY_CURRENT)
-		{
-		    ti = NULL;
-		    break;
-		}
-		else
-		{
-		    ti = rid_scan(ti, scan_flags);
-/* 		    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line)); */
-		}
-	    }
-
-	    /* search from the top to the end of the list */
-	    if (ti == NULL && (flags & (be_link_DONT_WRAP | be_link_ONLY_CURRENT)) == 0)
-	    {
-		ti = (flags & be_link_BACK) ? doc->rh->stream.text_last : doc->rh->stream.text_list;
-
-/* 		LKDBG((stderr, "No link found, ti wraped to %p\n", ti)); */
-
-		while (ti)
-		{
-		    if (match_item(ti, flags | be_link_INCLUDE_CURRENT, aref))
-		    {
-			if ((flags & be_link_VISIBLE) == 0 || be_item_onscreen(doc, ti, &bounds, flags))
-			    break;
-		    }
-
-		    ti = rid_scan(ti, scan_flags);
-/* 		    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line)); */
-		}
-	    }
-	}
+	ti = scan_links_linear(doc, item, flags, &bounds);
     }
     
     /* check for highlighting needed */
@@ -690,12 +754,8 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
     {
 	BOOL item_changed = item != ti && (item == NULL || item->aref == NULL || item->aref != ti->aref);
 
-	/* de highlight original only if the highlight has ended up changing */
-        if (item_changed && item && (flags & be_link_ONLY_CURRENT) == 0)
-	{
-	    antweb_place_caret(doc, NULL, 0);
-	    backend_update_link(doc, item, 0);
-	}
+	if ((flags & be_link_CLEAR_REST) && (!ti || (!item_changed && (flags & (be_link_ONLY_CURRENT|be_link_CARETISE)) == 0)))
+	    backend_remove_highlight(doc);
 
         if (ti)
         {
@@ -726,16 +786,15 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 			offset = flags & be_link_BACK ? -1 : 0;			/* end : beginning */
 
 		    LKDBG((stderr, "move_highlight: caretise flags %x old offset %d offset %d old item %p old input %p\n", flags, doc->selection.data.text.input_offset, offset, item, doc->selection.data.text.item));
-		    antweb_place_caret(doc, ti, offset);
+		    backend_set_caret(doc, ti, offset);
 		}
 		else
 		{
-		    antweb_place_caret(doc, NULL, 0);
-		    backend_update_link(doc, ti, 1);
+		    backend_set_highlight(doc, ti);
 		}
 
 		if (flags & be_link_MOVE_POINTER)
-		    frontend_pointer_set_position(doc->parent, x + ti->width/2, y);
+		    frontend_pointer_set_position(doc->parent, x + 4 /* ti->width/2*/, y);
 	    }
         }
     }
@@ -754,48 +813,43 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 
 /* ----------------------------------------------------------------------------- */
 
-/*
- * if selected is -1 then it toggles the state of the selected bit
- */
-
-be_item backend_update_link(be_doc doc, be_item item, int selected)
+static void be_update_link(be_doc doc, antweb_selection_t *selection, int selected)
 {
     be_item ti;
     BOOL changed;
 
-    if (item == NULL)
-        return NULL;
-
-    /* if it isn't actually a link then toggle the flag anyway */
-    if (item->aref == NULL)
+    if (selection == NULL)
+	return;
+    
+    switch (selection->tag)
     {
-	if (selected)
-	{
-	    doc->selection.tag = doc_selection_tag_TEXT;
-	    doc->selection.data.text.item = item;
-	    doc->selection.data.text.input_offset = doc_selection_offset_NO_CARET;
-	}
-	
-	item->flag = adjust_flag(item->flag, selected, &changed);
-	if (changed)
-	    be_update_item_highlight(doc, item);
-        return item;
-    }
-    else
-    {
-	doc->selection.tag = doc_selection_tag_AREF;
-	doc->selection.data.aref = item->aref;
-    }
+    case doc_selection_tag_NONE:
+	break;
 
-    for (ti = item->aref->first; ti && ti->aref == item->aref; ti = rid_scanfr(ti))
-    {
-        ti->flag = adjust_flag(ti->flag, selected, &changed);
-
+    case doc_selection_tag_TEXT:
+	ti = selection->data.text.item;
+	ti->flag = adjust_flag(ti->flag, selected, &changed);
 	if (changed)
 	    be_update_item_highlight(doc, ti);
-    }
+	break;
 
-    return item->aref->first;
+    case doc_selection_tag_AREF:
+	for (ti = selection->data.aref->first; ti && ti->aref == selection->data.aref; ti = rid_scanfr(ti))
+	{
+	    ti->flag = adjust_flag(ti->flag, selected, &changed);
+
+	    if (changed)
+		be_update_item_highlight(doc, ti);
+	}
+	break;
+
+    case doc_selection_tag_MAP:
+	ti = selection->data.map.item;
+	ti->flag = adjust_flag(ti->flag, selected, &changed);
+	if (changed)
+	    be_update_item_highlight(doc, ti);
+	break;
+    }
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -823,40 +877,6 @@ void backend_update_link_activate(be_doc doc, be_item item, int activate)
     }
 }
 
-
-void backend_clear_selected(be_doc doc)
-{
-    be_item ti = doc->rh->stream.text_list;
-    while (ti)
-    {
-	if (ti->flag & rid_flag_SELECTED)
-	{
-	    ti->flag &= ~rid_flag_SELECTED;
-	    be_update_item_highlight(doc, ti);
-	}
-
-	ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
-    }
-
-    doc->selection.data.text.item = NULL;
-}
-
-#ifdef STBWEB
-/* FIXME: this needs to be updated for the new selection model */
-be_item backend_find_selected(be_doc doc)
-{
-    be_item ti = doc->rh->stream.text_list;
-    while (ti)
-    {
-        if (ti->flag & rid_flag_SELECTED)
-            break;
-
-        ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
-    }
-    return ti;
-}
-#endif
-
 /* ----------------------------------------------------------------------------- */
 
 /* caret related routines  */
@@ -867,74 +887,12 @@ void antweb_default_caret(antweb_doc *doc, BOOL take_caret)
     {
 	rid_text_item *ti = be_doc_read_caret(doc);
 	if (ti)
-	    antweb_place_caret(doc, ti, doc->selection.data.text.input_offset);
-    }
-}
-
-void antweb_place_caret(antweb_doc *doc, rid_text_item *ti, int offset)
-{
-    rid_text_item *old_ti = be_doc_read_caret(doc);
-    int repos = object_caret_REPOSITION;
-
-    doc->selection.tag = doc_selection_tag_TEXT;
-    doc->selection.data.text.item = ti;		/* must set doc->input before calling the remove() function */
-    doc->selection.data.text.input_offset = offset;
-
-    if (old_ti != ti)
-    {
-	LKDBG((stderr, "antweb_place_caret(): input changed from %p to %p\n", old_ti, ti));
-
-	repos = object_caret_FOCUS;
-
-	if (old_ti && object_table[old_ti->tag].caret)
-	    object_table[old_ti->tag].caret(old_ti, doc->rh, doc, object_caret_BLUR);
-    }
-
-    if (ti && object_table[ti->tag].caret)
-    {
-	(object_table[ti->tag].caret)(ti, doc->rh, doc, repos);
-    }
-    else
-    {
-	/* Give the window the input focus but no visable caret */
-	frontend_view_caret(doc->parent, 0, 0, -1, 0);
+	    backend_set_caret(doc, ti, doc->selection.data.text.input_offset);
+/* 		antweb_place_caret(doc, ti, doc->selection.data.text.input_offset); */
     }
 }
 
 /* ----------------------------------------------------------------------------- */
-#if 0
-/*
- * This mechanism bypasses the code in antweb_place_input() and so may need updating.
- */
-
-static rid_text_item *antweb_prev_text_input(rid_text_item *ti, be_doc doc)
-{
-    while (ti)
-    {
-	if (ti && object_table[ti->tag].caret &&
-	    (object_table[ti->tag].caret)(ti, doc->rh, doc, object_caret_REPOSITION))
-	    break;
-        ti = rid_scanbr(ti);
-    }
-
-    return ti;
-}
-
-static rid_text_item *antweb_next_text_input(rid_text_item *ti, be_doc doc)
-{
-    while (ti)
-    {
-	if (ti && object_table[ti->tag].caret &&
-	    (object_table[ti->tag].caret)(ti, doc->rh, doc, object_caret_REPOSITION))
-	    break;
-        ti = rid_scanfr(ti);
-    }
-
-    return ti;
-}
-
-/* ----------------------------------------------------------------------------- */
-#endif
 
 os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
 {
@@ -980,15 +938,6 @@ os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
     return NULL;
 }
 
-be_item backend_place_caret(be_doc doc, be_item item)
-{
-    if (item == backend_place_caret_READ)
-	return be_doc_read_caret(doc);
-
-    antweb_place_caret(doc, item, doc_selection_offset_UNKNOWN);
-    return item;
-}
-
 /* ----------------------------------------------------------------------------- */
 
 be_item be_doc_read_caret(be_doc doc)
@@ -1001,6 +950,106 @@ be_item be_doc_read_caret(be_doc doc)
 BOOL be_item_has_caret(be_doc doc, be_item ti)
 {
     return ti == be_doc_read_caret(doc);
+}
+
+/* ----------------------------------------------------------------------------- */
+
+void backend_set_highlight(be_doc doc, be_item item)
+{
+    if (item == NULL)
+	backend_remove_highlight(doc);
+
+    if (item->aref)
+    {
+	if (doc->selection.tag == doc_selection_tag_AREF &&
+	    doc->selection.data.aref == item->aref)
+	    return;
+
+	backend_remove_highlight(doc);
+
+	doc->selection.tag = doc_selection_tag_AREF;
+	doc->selection.data.aref = item->aref;
+    }
+    else
+    {
+	if (doc->selection.tag == doc_selection_tag_TEXT &&
+	    doc->selection.data.text.item == item)
+	    return;
+
+	backend_remove_highlight(doc);
+
+	doc->selection.tag = doc_selection_tag_TEXT;
+	doc->selection.data.text.item = item;
+	doc->selection.data.text.input_offset = doc_selection_offset_NO_CARET;
+    }
+
+    be_update_link(doc, &doc->selection, TRUE);
+}
+
+void backend_set_caret(be_doc doc, be_item ti, int offset)
+{
+    int repos = object_caret_REPOSITION;
+
+    if (ti == NULL)
+    {
+	backend_remove_highlight(doc);
+	return;
+    }
+    
+    if (!be_item_has_caret(doc, ti))
+    {
+	backend_remove_highlight(doc);
+
+	doc->selection.tag = doc_selection_tag_TEXT;
+	doc->selection.data.text.item = ti;
+
+	repos = object_caret_FOCUS;
+    }
+
+    doc->selection.data.text.input_offset = offset;
+
+    if (ti && object_table[ti->tag].caret)
+    {
+	(object_table[ti->tag].caret)(ti, doc->rh, doc, repos);
+    }
+    else
+    {
+	/* Give the window the input focus but no visable caret */
+	frontend_view_caret(doc->parent, 0, 0, -1, 0);
+    }
+}
+
+void backend_remove_highlight(be_doc doc)
+{
+    /* see if anyone had the caret */
+    be_item old_ti = be_doc_read_caret(doc);
+
+    /* redraw the selected links */
+    be_update_link(doc, &doc->selection, FALSE);
+
+    /* set none selected */
+    doc->selection.tag = doc_selection_tag_NONE;
+
+    /* tell the object the caret has been removed */
+    if (old_ti)
+    {
+	if (object_table[old_ti->tag].caret)
+	    object_table[old_ti->tag].caret(old_ti, doc->rh, doc, object_caret_BLUR);
+
+	/* Give the window the input focus but no visable caret */
+	frontend_view_caret(doc->parent, 0, 0, -1, 0);
+    }
+}
+
+be_item backend_read_highlight(be_doc doc, BOOL *had_caret)
+{
+    if (had_caret)
+    {
+	*had_caret = doc->selection.tag == doc_selection_tag_TEXT &&
+	    doc->selection.data.text.input_offset != doc_selection_offset_NO_CARET;
+    }
+
+    return selection_to_item(&doc->selection);
 }
 
 /* ----------------------------------------------------------------------------- */

@@ -359,7 +359,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	slen = strlen(ii->data.str);
 
-	fg = ii->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
+	fg = ii->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
 	bg = ii->base.colours.back == -1 ? render_colour_WRITE :
 	    be_item_has_caret(doc, ti) && ii->base.colours.select != -1 ?
 	    ii->base.colours.select | render_colour_RGB : ii->base.colours.back | render_colour_RGB;
@@ -453,7 +453,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_SUBMIT:
     case rid_it_RESET:
     case rid_it_BUTTON:
-	fg = ii->base.colours.back == -1 && ii->data.button.im == NULL ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
+	fg = ii->base.colours.back == -1 && ii->data.button.im == NULL ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
 	bg = ii->data.button.tick ? render_colour_ACTION : ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB;
 	t = ii->value ? ii->value : ii->tag == rid_it_SUBMIT ? "Submit" : "Reset";
 

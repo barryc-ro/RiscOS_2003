@@ -11,9 +11,11 @@
 #include "colourtran.h"
 #include "wimp.h"
 
+#include "interface.h"
+#include "render.h"
+
 #include "config.h"
 #include "consts.h"
-#include "interface.h"
 #include "util.h"
 #include "stbview.h"
 #include "stbutils.h"
@@ -208,6 +210,7 @@ int fe_view_scroll_x(fe_view v, int val)
 
 int fe_view_scroll_y(fe_view v, int val)
 {
+    STBDBG(("fe_view_scroll_y: v%p w%x val %d\n", v, v->w, val));
     if (v->w)
     {
         wimp_wstate state;
@@ -219,6 +222,27 @@ int fe_view_scroll_y(fe_view v, int val)
 	return fe_scroll_request(v, &state.o, 0, val);
     }
     return 0;
+}
+
+/* ----------------------------------------------------------------------------*/
+
+static char *frame_link_sprite[] =
+{
+    "flleft",
+    "fltop",
+    "flright",
+    "flbottom"
+};
+
+static void draw_frame_links(wimp_redrawstr *r, fe_view v, const frame_link *fl)
+{
+    while (fl)
+    {
+/* 	STBDBG(("draw_frame_links: fl %p ", fl)); */
+/* 	STBDBG(("side %d pos %d,%d\n", fl->side, fl->box.x0, fl->box.y0)); */
+	render_plot_icon(frame_link_sprite[fl->side], fl->box.x0, fl->box.y0);
+	fl = fl->next;
+    }
 }
 
 /* ----------------------------------------------------------------------------*/
@@ -259,6 +283,7 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 {
     int            more;
     wimp_redrawstr r;
+    fe_view selected;
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;
@@ -276,6 +301,8 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 
     frontend_fatal_error(wimp_update_wind(&r, &more));
 
+    selected = v->parent == NULL && v->children ? fe_selected_view() : NULL;
+    
     while (more)
     {
 	/* 3rd param must be 0 if we want the background to be redrawn by the backend redraw function 
@@ -284,8 +311,11 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
 
 	/* if we are top view above a selected view and are in web mode */
-/*         if (fe_find_top(selected_view) == v && v->browser_mode == fe_browser_mode_WEB) */
-/*             draw_view_outline(selected_view->w); */
+        if (selected)
+	{
+/* 	    STBDBG(("frontend_view_update: selected %p\n", v)); */
+	    draw_frame_links(&r, v, selected->frame_links);
+	}
 
         if ((flags & fe_update_IMAGE_RENDERING) == 0)
             fe_anti_twitter(&r.g);
@@ -720,10 +750,7 @@ int frontend_view_caret(fe_view v, int x, int y, int hh, int on_screen)
     r = frontend_complain(wimp_set_caret_pos(&cs)) == NULL;
 
     if (height >= 0 && v->current_link)
-    {
-        backend_update_link(v->displaying, v->current_link, 0);
-        v->current_link = backend_place_caret(v->displaying, backend_place_caret_READ);
-    }
+        v->current_link = backend_read_highlight(v->displaying, NULL);
 
     STBDBGN(("viewcaret: end %p \n", v->current_link));
 

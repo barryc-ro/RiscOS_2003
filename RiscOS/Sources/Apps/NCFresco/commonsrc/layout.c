@@ -155,7 +155,7 @@ static int divider_current_index = 0;
 static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe_frame_info *info, char **urls, antweb_doc *doc)
 {
     const rid_frameset_item *fs = &frameset->data.frameset;
-    rid_frame *frame;
+    rid_frame *frame, *frame_previous_row;
     int nframes = fs->ncols*fs->nrows;
     int frames_added = 0;
     int *xpos, *ypos;
@@ -168,6 +168,8 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
     xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, bbox->x0, bbox->x1 - bbox->x0, fs->bwidth);
     ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, bbox->y0, bbox->y1 - bbox->y0, fs->bwidth);
 
+    frame_previous_row = NULL;
+    
     for (i = 0, frame = fs->frame_list; i < nframes && frame; i++, frame = frame->next)
     {
         wimp_box bb;
@@ -192,20 +194,20 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 
 	/* set up dividers */
 	frame->dividers[rid_frame_divider_TOP] = row == 0 ?
-	    frameset->dividers[rid_frame_divider_TOP] :		/* copy top from parent */
-	    last_row_divider;					/* use the divider created last time around */
+	    frameset->dividers[rid_frame_divider_TOP] :			/* copy top from parent */
+	    frame_previous_row->dividers[rid_frame_divider_BOTTOM];	/* use the divider from the row above */
 	
 	frame->dividers[rid_frame_divider_BOTTOM] = row == fs->nrows-1 ?
-	    frameset->dividers[rid_frame_divider_BOTTOM] :	/* copy bottom from parent */
+	    frameset->dividers[rid_frame_divider_BOTTOM] :		/* copy bottom from parent */
 	    (last_row_divider = divider_current_index++);		/* create new divider and store */
 
 	
 	frame->dividers[rid_frame_divider_LEFT] = col == 0 ?
 	    frameset->dividers[rid_frame_divider_LEFT] :		/* copy left from parent */
-	    last_col_divider;					/* use the divider created last time around */
+	    last_col_divider;						/* use the divider created last time around */
 	
-	frame->dividers[rid_frame_divider_RIGHT] = row == fs->ncols-1 ?
-	    frameset->dividers[rid_frame_divider_RIGHT] :	/* copy right from parent */
+	frame->dividers[rid_frame_divider_RIGHT] = col == fs->ncols-1 ?
+	    frameset->dividers[rid_frame_divider_RIGHT] :		/* copy right from parent */
 	    (last_col_divider = divider_current_index++);		/* create new divider and store */
 
 
@@ -314,6 +316,13 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
                 break;
             }
         }
+
+
+	/* incement on the previous row ptr or kick it off if at the end of the first row */
+	if (frame_previous_row)
+	    frame_previous_row = frame_previous_row->next;
+	else if (i == fs->ncols-1)
+	    frame_previous_row = fs->frame_list;
     }
 
     mm_free(xpos);
@@ -324,7 +333,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 
 /* ---------------------------------------------------------------------------------------------------------- */
 
-void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only)
+void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only, int *dividers, int max)
 {
     fe_frame_info *info;
     wimp_box box;
@@ -348,23 +357,26 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only)
     /* the initial frame count is the maximum there could be not counting nesting */
 
     /* initialise the outermost divider array */
-    divider_current_index = 0;
-    for (i = 0; i < 4; i++)
-	doc->rh->frames->dividers[i] = divider_current_index++;
-
+    if (!refresh_only)
+    {
+	divider_current_index = max;
+	memcpy(doc->rh->frames->dividers, dividers, sizeof(doc->rh->frames->dividers));
+    }
+    
     /* kick off the layout with the outer frameset */
     doc->rh->nframes = be_frame_layout_1(doc->rh->frames, &box, info, urls, doc);
 
-#if DEBUG >= 2
+#if DEBUG
 {
     fprintf(stderr, "layout: actually %d frames\n", doc->rh->nframes);
     for (i = 0; i < doc->rh->nframes; i++)
     {
         fe_frame_info *ip = &info[i];
-        fprintf(stderr, "'%16s' %4d,%4d %4d,%4d '%s'\n",
-            ip->name ? ip->name : "<none>",
-            ip->box.x0, ip->box.y0, ip->box.x1, ip->box.y1,
-            urls && urls[i] ? urls[i] : "<none>");
+        fprintf(stderr, "'%16s' %4d,%4d %4d,%4d div %d,%d,%d,%d '%s'\n",
+		ip->name ? ip->name : "<none>",
+		ip->box.x0, ip->box.y0, ip->box.x1, ip->box.y1,
+		ip->dividers[0], ip->dividers[1], ip->dividers[2], ip->dividers[3], 
+		urls && urls[i] ? urls[i] : "<none>");
     }
 }
 #endif
@@ -372,7 +384,7 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only)
     if (!refresh_only) for (i = 0; i < doc->rh->nframes; i++)
         info[i].src = urls[i] ? url_join(BASE(doc), urls[i]) : NULL;
 
-    frontend_frame_layout(doc->parent, doc->rh->nframes, info, refresh_only);
+    frontend_frame_layout(doc->parent, doc->rh->nframes, info, refresh_only, divider_current_index);
 
     if (!refresh_only) for (i = 0; i < doc->rh->nframes; i++)
         mm_free(info[i].src);

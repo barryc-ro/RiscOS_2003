@@ -259,8 +259,8 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     fstr.s = buffer;
     font_strwidth(&fstr);
 
-    tfc = render_text_link_colour(rh, ti, doc);
-    tbc = render_background(rh, ti, doc);
+    tfc = render_text_link_colour(ti, doc);
+    tbc = render_background(ti, doc);
 
     if ( fs->lfc != tfc || fs->lbc != tbc )
     {

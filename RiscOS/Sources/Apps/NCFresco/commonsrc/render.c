@@ -289,7 +289,7 @@ int render_link_colour(rid_text_item *ti, antweb_doc *doc)
     else if (ti->flag & rid_flag_ACTIVATED)
 	rcol = render_colour_ACTIVATED;
     else
-        rcol = render_text_link_colour(NULL, ti, doc);
+        rcol = render_text_link_colour(ti, doc);
     return rcol;
 }
 
@@ -298,7 +298,7 @@ int render_link_colour(rid_text_item *ti, antweb_doc *doc)
  * as NULL (in this case aref should never be null though)
  */
 
-int render_text_link_colour(rid_header *rh, rid_text_item *ti, antweb_doc *doc)
+int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
 {
     int rcol;
 
@@ -307,8 +307,8 @@ int render_text_link_colour(rid_header *rh, rid_text_item *ti, antweb_doc *doc)
         /* pdh: It's not a link -- but what colour is it? */
         int no = RID_COLOUR(ti);    /* defined in rid.h */
 
-        if ( no && rh && doc && (doc->flags & doc_flag_DOC_COLOURS) )
-            rcol = render_colour_RGB | rh->extracolourarray[no];
+        if ( no && doc && (doc->flags & doc_flag_DOC_COLOURS) )
+            rcol = render_colour_RGB | doc->rh->extracolourarray[no];
         else
             rcol = render_colour_PLAIN;
     }
@@ -353,7 +353,7 @@ int render_text_link_colour(rid_header *rh, rid_text_item *ti, antweb_doc *doc)
  * background colours, is not as easy as it used to be
  */
 
-int render_background( rid_header *rh, rid_text_item *ti, antweb_doc *doc )
+int render_background(rid_text_item *ti, antweb_doc *doc )
 {
     if ( doc && !( doc->flags & doc_flag_DOC_COLOURS ) )
         return render_colour_BACK;

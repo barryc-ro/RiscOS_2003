@@ -758,12 +758,16 @@ void fe_click_sound(void)
 void fe_get_wimp_caret(wimp_w w)
 {
     wimp_caretstr c;
-    c.w = w;
-    c.i = -1;
-    c.x = -0x4000;
-    c.y = -0x4000;
-    c.height = -1;
-    wimp_set_caret_pos(&c);
+    wimp_get_caret_pos(&c);
+    if (c.w != w)
+    {
+	c.w = w;
+	c.i = -1;
+	c.x = -0x4000;
+	c.y = -0x4000;
+	c.height = -1;
+	wimp_set_caret_pos(&c);
+    }
 }
 
 /* ----------------------------------------------------------------------------------------------------- */

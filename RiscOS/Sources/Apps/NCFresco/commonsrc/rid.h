@@ -1122,9 +1122,9 @@ struct rid_frameset_item
 	rid_frame               *old_frameset;
 };
 
-#define rid_frame_divider_LEFT		0
+#define rid_frame_divider_LEFT		0 /* must match with values in interface.h */
 #define rid_frame_divider_TOP		1
-#define rid_frame_divider_RIGHT		1
+#define rid_frame_divider_RIGHT		2
 #define rid_frame_divider_BOTTOM	3
 
 struct rid_frame

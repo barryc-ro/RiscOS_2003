@@ -112,6 +112,7 @@ struct config_str
 
     int history_length;
     int history_global_length;
+    int history_persist;
 
     char *sound_click;
     int sound_fx;
@@ -245,6 +246,7 @@ extern struct config_str config_array;
 
 #define config_history_length (config_array.history_length)
 #define config_history_global_length (config_array.history_global_length)
+#define config_history_persist (config_array.history_persist)
 
 #define config_sound_click (config_array.sound_click)
 #define config_sound_fx (config_array.sound_fx)

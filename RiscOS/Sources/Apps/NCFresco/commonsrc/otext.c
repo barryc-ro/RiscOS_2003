@@ -146,7 +146,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 	ti->pad = (width1 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT - ti->width;
 
-#if DEBUG
+#if 0
 	fprintf(stderr, "otext: scanstring '%s' str_len %d width1 %d width2 %d\n", s, str_len, width1, width2);
 #endif
     }
@@ -270,8 +270,8 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     if (rh->texts.data[tit->data_off] == 0)
 	return;
     
-    tfc = render_text_link_colour(rh, ti, doc);
-    tbc = render_background(rh, ti, doc);
+    tfc = render_text_link_colour(ti, doc);
+    tbc = render_background(ti, doc);
 
 #ifdef STBWEB
     draw_highlight_box = ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL) &&

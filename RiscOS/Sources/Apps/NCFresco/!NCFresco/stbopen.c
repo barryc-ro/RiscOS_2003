@@ -530,14 +530,16 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 
     view->scrolling = ip->scrolling;
 
-#if 1
     if (ip->scrolling == fe_scrolling_YES)
         view->x_scroll_bar = view->y_scroll_bar = TRUE;
-#endif
 
     view->name = strdup(ip->name);
     view->parent = parent;
 
+    if (ip->dividers)
+	memcpy(view->dividers, ip->dividers, sizeof(view->dividers));
+    view->dividers_max = 4;	/* ??? */
+    
     /* add to end of chain in parent */
     /* if this changes then frontend_frame_layout(refresh) may have to change */
     if (parent)

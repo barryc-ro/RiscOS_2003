@@ -997,13 +997,20 @@ static void filewatcher_poll(int called_at, void *handle)
             {
                 cache_dir *dir;
                 cache_item *item = cache_ptr_from_file(s, &dir);
-
+		
+		ACCDBG(("filewatcher_poll: remove '%s' item %p dir %p\n", s, item, dir));
+				
                 if (item)
                     cache_remove_file(item, dir);
-
+		
                 s += strlen(s) + 1;
             }
         }
+	else
+	{
+	    ACCDBG(("filewatcher_poll: error %x '%s'\n", e->errnum, e->errmess));
+	}
+
     }
     while (!e && file_count);
 
@@ -1012,27 +1019,35 @@ static void filewatcher_poll(int called_at, void *handle)
 
 static void filewatcher_init(void)
 {
+    ACCDBG(("filewatcher_init:"));
+
     if (strncasecomp(scrapname, "cache:", 6) == 0)
     {
         int reasons[2];
 
-        reasons[0] = 6;      /* delete */
+	reasons[0] = 6;      /* delete */
         reasons[1] = -1;     /* terminator */
 
         *scrap_leaf_ptr = 0;
 
+	ACCDBG((" register interest in '%s'", scrapname));
+
         if (_swix(FileWatch_RegisterInterest, _INR(0,2)|_OUT(0),
             0, reasons, scrapname, &filewatcher_handle) == NULL)
         {
-            filewatcher_poll(0, NULL);
+	    ACCDBG((" handle %d", filewatcher_handle));
+            filewatcher_poll(0, (void *)filewatcher_handle);
         }
     }
+
+    ACCDBG(("\n"));
 }
 
 static void filewatcher_final(void)
 {
     if (filewatcher_handle)
     {
+	alarm_removeall((void *)filewatcher_handle);
         _swix(FileWatch_DeRegisterInterest, _INR(0,1), 0, filewatcher_handle);
         filewatcher_handle = 0;
     }

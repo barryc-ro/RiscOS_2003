@@ -47,9 +47,10 @@ typedef struct awp_page_str {
 #define doc_flag_SECURE		(1<<18)	/* A secure method, such as SSL, was used. */
 
 
-#define doc_selection_tag_TEXT	0
-#define doc_selection_tag_AREF	1
-#define doc_selection_tag_MAP	2
+#define doc_selection_tag_NONE	0
+#define doc_selection_tag_TEXT	1
+#define doc_selection_tag_AREF	2
+#define doc_selection_tag_MAP	3
 
 #define doc_selection_offset_UNKNOWN	(-1)
 #define doc_selection_offset_NO_CARET	(-2)
@@ -169,7 +170,9 @@ extern rid_header *parse_gif_file(char *fname, char *url);
 extern void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box);
 extern void antweb_update_item(antweb_doc *doc, rid_text_item *ti);
 extern void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right);
-extern void antweb_place_caret(antweb_doc *doc, rid_text_item *ti, int offset);
+
+#define antweb_place_caret(doc, ti, offset) backend_set_caret(doc, ti, offset)
+
 extern void antweb_default_caret(antweb_doc *doc, BOOL take_caret);
 extern BOOL antweb_pointer_in_image(antweb_doc *doc, rid_text_item *ti, wimp_mousestr *m, int *xx, int *yy, BOOL in_pixels);
 extern BOOL antweb_locate_item(rid_text_item *ti, int *xx, int *yy);

@@ -1515,8 +1515,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 		OBJDBG(("plugin: msg focus %p state %d\n", pp, pp->state));
 
-		backend_place_caret(pp->doc, NULL);
-		backend_update_link(pp->doc, pp->parent_item, 1);
+		backend_set_highlight(pp->doc, pp->parent_item);
 	    }	    
 	    break;
 

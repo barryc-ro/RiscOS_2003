@@ -2,7 +2,19 @@
 
 /* view.h */
 
-/* This describes what is in a view.  Only the front end needs to know. */
+/* ----------------------------------------------------------------------------- */
+
+typedef struct frame_link frame_link;
+
+struct frame_link
+{
+    frame_link *next;		/* next link in chain */
+    fe_view v;			/* the frame this link goes to */
+    int side;			/* the side that this link is on (so we know which arrow to display) */
+    wimp_box box;		/* bounding box of this link, in parent relative coordinates */
+};
+
+/* ----------------------------------------------------------------------------- */
 
 typedef struct fe_message_handler_item fe_message_handler_item;
 
@@ -14,12 +26,16 @@ struct fe_message_handler_item
     void *handle;
 };
 
+/* ----------------------------------------------------------------------------- */
+
 struct _frontend_passwd_handle
 {
     backend_passwd_callback cb; /* values passed in originally */
     void *h;
     char *realm, *site, *user;
 };
+
+/* ----------------------------------------------------------------------------- */
 
 typedef struct fe_global_history_item fe_global_history_item;
 typedef struct fe_global_history_fragment fe_global_history_fragment;
@@ -51,6 +67,10 @@ struct fe_global_history_item
     char *title;
     unsigned int url_hash;            /* ash lookup of title string */
 };
+
+/* ----------------------------------------------------------------------------- */
+
+/* This describes what is in a view.  Only the front end needs to know. */
 
 #define ANTWEB_VIEW_MAGIC	0x469034fb
 
@@ -147,7 +167,12 @@ struct _frontend_view
     int frame_index;		/* frame number from 0 */
 
     int dividers[4];
+    int dividers_max;
+
+    frame_link *frame_links;
 };
+
+/* ----------------------------------------------------------------------------- */
 
 #define fe_keyboard_UNKNOWN	(-1)
 #define fe_keyboard_ONLINE	0
@@ -166,3 +191,7 @@ struct _frontend_view
 #define STATUS_TOP_MARGIN		0 /* 16 */
 
 extern fe_view fe_find_top(fe_view v);
+
+/* ----------------------------------------------------------------------------- */
+
+/* eof stbview.h */
