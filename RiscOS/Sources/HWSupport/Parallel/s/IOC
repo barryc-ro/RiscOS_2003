@@ -18,7 +18,12 @@
 
 IOCdevice       ROUT
 
+                Push    lr
+                SavePSR lr
                 BIC     lr, lr, #V_bit+ C_bit                   ; just ensure that all is OK
+                Push    lr
+                ADR     lr, ioc_device_call_exit
+
                 CMP     r0, #(%10-%00)/4
                 ADDCC   pc, pc, r0, LSL #2                      ; despatch the event
                 B       %10                                     ; if not valid then give an error
@@ -26,18 +31,25 @@ IOCdevice       ROUT
                 B       ioc_open                                ; open a stream
                 B       ioc_close                               ; close the stream
                 B       ioc_wakeup                              ; wake up because someone's transferring
-                MOVS    pc, lr
-                MOVS    pc, lr
-                MOVS    pc, lr
+                MOV     pc, lr
+                MOV     pc, lr
+                MOV     pc, lr
                 B       common_createTX
-                MOVS    pc, lr
-                MOVS    pc, lr
-                MOVS    pc, lr
-                MOVS    pc, lr
+                MOV     pc, lr
+                MOV     pc, lr
+                MOV     pc, lr
+                MOV     pc, lr
                 B       ioc_created                             ; stream created
 10
                 ADRL    r0, ErrorBlock_Parallel_BadCall         ; if not within valid range
                 DoError                                         ; then generate an error
+
+ioc_device_call_exit
+                Pull    lr
+                ORRVS   lr, lr, #V_bit
+                ORRCS   lr, lr, #C_bit
+                RestPSR lr,,f
+                Pull    pc
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -115,12 +127,11 @@ ioc_close       ENTRY   "r0-r2"
 ; data in the buffer to be sent.
 ;
 
-ioc_wakeup      ENTRY   "r0-r3"
+ioc_wakeup      EntryS  "r0-r3"
 
                 Debug   out,"ioc_wakeup"
 
-                ORR     lr, lr, #I_bit          ; disable IRQs round this bit
-                TEQP    lr, #0
+                SETPSR  I_bit,lr
                 MOV     r3, #IOC
                 BL      ioc_busy                ; returns EQ if not busy
                 BLEQ    ioc_strobe              ; if not busy, strobe char
@@ -141,10 +152,10 @@ ioc_wakeup      ENTRY   "r0-r3"
 
                 EXITS
 
+                ; Entered in IRQ mode with IRQs disabled
 ioc_busy_check_callafter ENTRY "r0"
-                MOV     r0, pc
-                ORR     lr, r0, #SVC_mode :OR: I_bit
-                TEQP    lr, #0                          ; switch to SVC mode, IRQs off
+                ASSERT  (SVC_mode :EOR: IRQ_mode) = (SVC32_mode :EOR: IRQ32_mode)
+                TOGPSR  (SVC_mode :EOR: IRQ_mode),lr,,r0
                 NOP
                 Push    "r0, lr"                        ; save old flags, r14_svc
                 LDRB    r0, IRQFlags
@@ -152,9 +163,9 @@ ioc_busy_check_callafter ENTRY "r0"
                 STRB    r0, IRQFlags
                 BL      ioc_wakeup                      ; and call wakeup routine
                 Pull    "r0, lr"
-                TEQP    r0, #0                          ; restore old mode
+                RestPSR r0                              ; restore old mode
                 NOP
-                EXITS                                   ; and exit
+                EXIT                                    ; and exit
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -173,7 +184,7 @@ ioc_busy_check_callafter ENTRY "r0"
 ; This routine is called when an input or output stream has been created.
 ;
 
-ioc_created     ENTRY   "r0-r2"
+ioc_created     EntryS  "r0-r2"
 
                 Debug   open,"ioc_created, buffer handle =",r3
 
@@ -182,7 +193,7 @@ ioc_created     ENTRY   "r0-r2"
  [ FastBufferMan
                 MOV     r0, r3
                 SWI     XBuffer_InternalInfo
-                STRVS   r0, [sp]
+                STRVS   r0, [sp, #Proc_RegOffset]
                 EXIT    VS
                 STR     r0, BufferId
                 STR     r1, BuffManService
@@ -209,26 +220,23 @@ ioc_created     ENTRY   "r0-r2"
 ; In the routine will simply read the IOC masks to see what is should do.
 ;
 
-ioc_busy        ENTRY   "r0"
+ioc_busy        ENTRY   "r0,r1"
                 LDR     lr, [r3, #IOCIRQSTAA]
-                TST     lr, #pbusy_bit                          ; 0 => busy
-                PullEnv NE
-                ORRNES  pc, lr, #Z_bit                          ; indicate not busy, Z=1.
+                AND     r0, lr, #pbusy_bit                      ; 0 => busy
+                EORS    r0, r0, #pbusy_bit                      ; set Z for exit
+
+                EXIT    EQ
 
                 Debug   out,"busy"
 
-                MOV     lr, #F_bit                              ; disable FIQs round updates
-                TST     lr, pc                                  ; to IOCIRQMSKA
-                TEQEQP  lr, pc
+                SETPSR  F_bit,lr,,r1                            ; disable FIQs round updates
 
                 LDRB    r0, [r3, #IOCIRQMSKA]
                 ORR     r0, r0, #pack_bit                       ; is busy, so enable pack IRQ
                 STRB    r0, [r3, #IOCIRQMSKA]
 
-                TEQEQP  lr, pc                                  ; restore FIQ status
-
-                PullEnv
-                BICS    pc, lr, #Z_bit                          ; and Z=0 on exit, busy
+                RestPSR r1
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -270,7 +278,7 @@ ioc_irq         ROUT
 
                 MOV     r0, #pack_bit                           ; PACK not gone high (probably printer off)
                 STRB    r0, [r3, #IOCIRQCLRA]                   ; so clear interrupt and wait for printer on
-                MOVS    pc, lr
+                MOV     pc, lr
 
 15
  [ CheckBusyAfterAck
@@ -288,11 +296,12 @@ ioc_irq         ROUT
 
                 LDRB    r2, IRQFlags                            ; if we already have a pending callafter
                 TST     r2, #if_PendingCallAfter
-                MOVNES  pc, lr                                  ; then exit
+                MOVNE   pc, lr                                  ; then exit
 
-                MOV     r3, pc
-                ORR     r0, r3, #SVC_mode                       ; go into SVC_mode to issue SWI call
-                TEQP    r0, #0
+                SavePSR r3
+                BIC     r3, r3, #2_01100
+                ORR     r3, r3, #SVC_mode
+                RestPSR r3,,c
                 NOP
 
                 Push    "r2, lr"
@@ -304,9 +313,9 @@ ioc_irq         ROUT
                 ORRVC   r2, r2, #if_PendingCallAfter
                 STRVCB  r2, IRQFlags
 
-                TEQP    r3, #0                                  ; restore IRQ mode
+                RestPSR r3                                      ; restore IRQ mode
                 NOP
-                MOVS    pc, lr                                  ; and exit
+                MOV     pc, lr                                  ; and exit
 
  ]
 
@@ -331,11 +340,12 @@ ioc_strobe      ENTRY
                 LDR     r1, BufferId
                 CallBuffMan
  |
-                MOV     r2, pc
+                SavePSR r2
                 BIC     r2, r2, #C_bit + V_bit                  ; clear C&V for entering mode
-                ORR     lr, r2, #SVC_mode                       ; derive SVC mode (NB if entered in SVC mode, then
+                BIC     lr, r2, #2_01100
+                ORR     lr, lr, #SVC_mode                       ; derive SVC mode (NB if entered in SVC mode, then
                                                                 ; we've already saved lr_svc, so we can junk it now)
-                TEQP    lr, #0                                  ; change to SVC mode with C and V clear
+                RestPSR lr                                      ; change to SVC mode with C and V clear
                 NOP
 
                 Push    "lr"
@@ -344,20 +354,20 @@ ioc_strobe      ENTRY
                 Pull    "lr"                                    ; preserve link register
 
                 ORRCS   r2, r2, #C_bit                          ; ensure C flag reflected correctly
-                TEQP    r2, #0
+                RestPSR r2
                 NOP                                             ; back to original mode (IRQ or SVC)
  ]
 
-                MOV     lr, #F_bit
-                TST     lr, pc
-                TEQEQP  lr, pc                                  ; FIQs now disabled!
+                SETPSR  F_bit,lr,,tmp                           ; disable FIQs
+                Push    tmp
 
                 LDRB    tmp, [r3, #IOCIRQMSKA]                  ; get IRQ mask A
                 ORRCC   tmp, tmp, #pack_bit
                 BICCS   tmp, tmp, #pack_bit                     ; if char enable printer IRQ, else disable!
                 STRB    tmp, [r3, #IOCIRQMSKA]
 
-                TEQEQP  lr, pc                                  ; restore FIQ status (IRQs still disabled)
+                Pull    tmp
+                RestPSR tmp
 
                 EXITS   CS                                      ; if no character then exit
 
@@ -388,9 +398,10 @@ ioc_strobe      ENTRY
                 TST     r0, #if_PendingCallAfter
                 EXITS   EQ
 
-                MOV     r2, pc
-                ORR     lr, r2, #SVC_mode                       ; force SVC mode
-                TEQP    lr, #0
+                SavePSR r2
+                BIC     lr, r2, #2_01100
+                ORR     lr, lr, #SVC_mode
+                RestPSR lr
                 NOP
 
                 Push    "r0,lr"
@@ -399,7 +410,7 @@ ioc_strobe      ENTRY
                 SWI     XOS_RemoveTickerEvent
                 Pull    "r0,lr"
 
-                TEQP    r2, #0                                  ; switch back
+                RestPSR r2                                      ; switch back
                 NOP
 
                 BIC     r0, r0, #if_PendingCallAfter

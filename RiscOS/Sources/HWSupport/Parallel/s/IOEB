@@ -71,7 +71,11 @@ $label          LDRB    $v0, InterruptBit
 
 IOEBdevice      ROUT
 
+                Push    lr
+                SavePSR lr
                 BIC     lr, lr, #V_bit+ C_bit                   ; just ensure that all is OK
+                Push    lr
+                ADR     lr, device_call_exit
                 CMP     r0, #(%10-%00)/4
                 ADDCC   pc, pc, r0, LSL #2                      ; despatch the event
                 B       %10                                     ; if not valid then give an error
@@ -79,21 +83,30 @@ IOEBdevice      ROUT
                 B       ioeb_open                               ; open a stream
                 B       ioeb_close                              ; close the stream
                 B       ioeb_wakeupTX                           ; wake up because someones transfering
-                MOVS    pc, lr					; wakeup RX
-                MOVS    pc, lr					; sleep RX
-                MOVS    pc, lr					; enum dir
+                MOV     pc, lr                                  ; wakeup RX
+                MOV     pc, lr                                  ; sleep RX
+                MOV     pc, lr                                  ; enum dir
                 B       common_createTX                         ; create buffer for TX
                 B       common_createRX                         ; create buffer for RX
-                MOVS    pc, lr					; halt
+                MOV     pc, lr                                  ; halt
                 B       ioeb_resume                             ; start sender sending again
-                MOVS    pc, lr					; end of data
+                MOV     pc, lr                                  ; end of data
                 B       ioeb_created                            ; output or input stream created
-		B	ioeb_monitorTX				; check sending is okay
-		MOVS	pc, lr					; monitor rx
-		MOVS	pc, lr					; ioctl
+                B       ioeb_monitorTX                          ; check sending is okay
+                MOV     pc, lr                                  ; monitor rx
+                MOV     pc, lr                                  ; ioctl
 10
+                Pull    lr
                 ADRL    r0, ErrorBlock_Parallel_BadCall         ; if not within valid range
-                DoError                                         ; then generate an error
+                Pull    lr
+                B       make_error
+
+device_call_exit
+                Pull    lr
+                ORRVS   lr, lr, #V_bit
+                ORRCS   lr, lr, #C_bit
+                RestPSR lr,,f
+                Pull    pc
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -111,7 +124,7 @@ IOEBdevice      ROUT
 ; by the device to a nice set of defaults.
 ;
 
-IOEBreset       ENTRY   "r0,r1"
+IOEBreset       EntryS   "r0,r1"
 
                 ClearPINTR r0,r1                                ; attempt to clear any pending interrupts
 
@@ -210,7 +223,7 @@ ioeb_close      ENTRY   "r0-r2"
 ; This routine is called when an input or output stream has been created.
 ;
 
-ioeb_created    ENTRY   "r0-r2"
+ioeb_created    EntryS  "r0-r2"
 
                 Debug   open,"ioeb_created, buffer handle =",r3
 
@@ -219,7 +232,7 @@ ioeb_created    ENTRY   "r0-r2"
         [ FastBufferMan
                 MOV     r0, r3
                 SWI     XBuffer_InternalInfo
-                STRVS   r0, [sp]
+                STRVS   r0, [sp, #Proc_RegOffset]
                 EXIT    VS
                 STR     r0, BufferId
                 STR     r1, BuffManService
@@ -228,9 +241,7 @@ ioeb_created    ENTRY   "r0-r2"
 
                 ClearPINTR r0,lr                ; attempt to clear any pending interrupts
 
-                MOV     lr, pc
-                TST     lr, #I_bit              ; if IRQs enabled then
-                TEQEQP  lr, #I_bit              ; disable them
+                SETPSR  I_bit,lr                ; Disable interrupts
 
                 LDRB    r0, Flags
                 TST     r0, #f_OpenForRead
@@ -246,8 +257,7 @@ ioeb_created    ENTRY   "r0-r2"
                 MOV     r0, #IOC
                 LDRB    r2, InterruptBit
 
-                TST     lr, #F_bit              ; if FIQs enabled then
-                TEQEQP  lr, #F_bit              ; disable them
+                SETPSR  F_bit,lr                ; disable FIQs
 
                 LDRB    r1, [r0, #IOCIRQMSKA]
                 ORR     r1, r1, r2              ; enable device interrupts
@@ -276,43 +286,6 @@ printer		=		"Printer", 0
 continue	=		"Continue",0
 cancel		=		"Cancel",0
 		ALIGN
-
-		[		false
-
-; First, a version that just returns any printer error straight back to the caller (for testing).
-
-ioeb_monitorTX	ROUT
-		LDR 		r1, =pp_stat
-		LDRB		r0, [r1]		; read status register byte
-
-		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
-		MOVNES		pc, lr			; All o k
-
-		;We've got an error, so what type is it?
-		Debug		j, "some sort of error"
-		TST		r0, #pp_stat_pe		; out of paper?
-		BNE		paper_out
-
-		TST		r0, #pp_stat_slct	; off-line?
-		BEQ		off_line
-		B		not_working
-
-paper_out	ADRL		r0, ErrorBlock_Parallel_PaperOut
-		B		make_error
-
-off_line	ADRL		r0, ErrorBlock_Parallel_Offline
-		B		make_error
-
-not_working	ADRL		r0, ErrorBlock_Parallel_OtherError
-		;fall through
-
-make_error
-		[		international
-		B		MakeError
-		|
-		ORRS		pc, lr, #V_bit
-		]
-		|
 
 ; Now the real code: make an upcall on printer error, resuming if it's handled properly.
 
@@ -412,8 +385,6 @@ do_lookup_and_upcall
 		MOVVC		r6, r2
 		ADDVS		r6, r0, #4		;if it went wrong, use the error as the message
 
-		BL		CloseMessages
-
 do_upcall	;Make the upcall
 
 		MOV		r0, #UpCall_MediaNotPresent
@@ -459,57 +430,17 @@ make_error
 		[		international
 		B		MakeError
 		|
-		ORRS		pc, lr, #V_bit
+		RETURNVS
 		]
 
 not_cancel
-		[ {TRUE}
+                ; New strategy. Just exit with continuing message and let the higher levels
+                ; raise the error again if necessary. This should be cleaner and provides
+                ; more feedback to the user.
 
-		; New strategy. Just exit with continuing message and let the higher levels
-		; raise the error again if necessary. This should be cleaner and provides
-		; more feedback to the user.
-
-		ADRL		r6, continue		;move the specific error "continue"
-		BL		exit_with_message	; All o k
-		EXIT		VS			;This is the actual correct exit of this routine
-		EXITS
-
-		|
-
-		TEQ		r0, #0
-		DebugIf		NE, j, "never happens (intercepted vector should always have r0 == 0 or -1)", r0
-		EXITS		NE
-
-confirm
-		Debug		j, "user said it's ok now"
-		;checking that there is really media there now
-		LDR 		r0, =pp_stat
-		LDRB		r0, [r0]		; read status register byte
-		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
-		BEQ		stillerr
-		ADRL		r6, continue		;move the specific error "continue"
-		BL		exit_with_message	; All o k
-		EXIT		VS			;This is the actual correct exit of this routine
-		EXITS
-
-		;Still got an error, so what type is it now?
-stillerr	TST		r0, #pp_stat_pe
-		ADRNEL		r6, paper		; paper out
-		BNE		media_missing
-
-		TST		r0, #pp_stat_slct
-		ADREQL		r6, online		; off-line
-		ADRNEL		r6, printer		; miscellaneous
-		;fall through
-
-media_missing
-		Debug		j, "media still missing", r4
-		ADD		r4, r4, #1		;increment iteration count
-		B		do_lookup_and_upcall	;make upcall again
-		EXIT		VS
-		EXITS
-		]
-		]
+                ADRL            r6, continue            ;move the specific error "continue"
+                BL              exit_with_message       ; All o k
+                EXIT                                    ;This is the actual correct exit of this routine
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -530,8 +461,6 @@ exit_with_message
 		MOVVC		r6, r2
 		ADDVS		r6, r0, #4
 
-		BL		CloseMessages
-
 send_exit	; call the end media search call
 
 		MOV		R1, R6
@@ -539,8 +468,7 @@ send_exit	; call the end media search call
 		Debug		j, "OS_UpCall called", r0
 		SWI		XOS_UpCall
 		Debug		j, "OS_UpCall returned", r0
-		EXIT		VS
-		EXITS
+		EXIT
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -555,10 +483,9 @@ send_exit	; call the end media search call
 ; Handle waking up the device, something has happened to it.
 ;
 
-ioeb_wakeupTX   ENTRY   "r0-r3"
+ioeb_wakeupTX   EntryS  "r0-r3"
 
-                ORR     lr, lr, #I_bit          ; disable IRQs round this bit
-                TEQP    lr, #0
+                SETPSR  I_bit, lr               ; disable IRQs round this bit
 
                 MOV     r3, #IOC
                 BL      ioeb_busy               ; returns EQ if not busy
@@ -566,7 +493,7 @@ ioeb_wakeupTX   ENTRY   "r0-r3"
                 EXITS   EQ
 
                 MOV     r0, #0                  ; indicate we wish to remain dormant
-                STR     r0, [sp]
+                STR     r0, [sp, #Proc_RegOffset]
                 LDRB    r3, IRQFlags
                 TST     r3, #if_PendingCallAfter ; if we've already asked for a callafter
                 EXITS   NE                      ; then exit
@@ -580,19 +507,13 @@ ioeb_wakeupTX   ENTRY   "r0-r3"
 
                 EXITS
 
-ioeb_busy_check_callafter ENTRY "r0"
-                MOV     r0, pc
-                ORR     lr, r0, #SVC_mode :OR: I_bit
-                TEQP    lr, #0                          ; switch to SVC mode, IRQs off
-                NOP
-                Push    "r0, lr"                        ; save old flags, r14_svc
+                ; CallAfter routine.  Entered in SVC mode with IRQs disabled.
+                ; Must preserve all registers and exit with MOV pc, lr (PRM 1-429)
+ioeb_busy_check_callafter EntryS "r0"
                 LDRB    r0, IRQFlags
                 BIC     r0, r0, #if_PendingCallAfter    ; indicate no pending callafter any more
                 STRB    r0, IRQFlags
                 BL      ioeb_wakeupTX                   ; and call wakeup routine
-                Pull    "r0, lr"
-                TEQP    r0, #0                          ; restore old mode
-                NOP
                 EXITS                                   ; and exit
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -614,24 +535,20 @@ ioeb_busy_check_callafter ENTRY "r0"
 ioeb_busy       ENTRY   "r0,r1"
                 LDR     lr, =pp_stat
                 LDRB    lr, [lr]                                ; lr  = status byte
-                TST     lr, #pp_stat_notbusy                    ; is the port busy? =0 if so
-                PullEnv NE
-                ORRNES  pc, lr, #Z_bit                          ; return EQ, ie. port free
+                AND     r1, lr, #pp_stat_notbusy                ; is the port busy? =0 if so
+                EORS    r1, r1, #pp_stat_notbusy                ; invert Z to be correct for any exit
+                EXIT    EQ                                      ; return EQ, ie. port free
 
                 LDRB    r1, InterruptBit
 
-                MOV     lr, #F_bit                              ; disable FIQs round updates
-                TST     lr, pc                                  ; to IOCIRQMSKA
-                TEQEQP  lr, pc
-
+                ; disable FIQs round updates to IOCIRQMSKA
+                SETPSR  F_bit,r0,,lr                            ; old PSR into lr (note: Z clear in lr!)
                 LDRB    r0, [r3, #IOCIRQMSKA]
                 ORR     r0, r0, r1
                 STRB    r0, [r3, #IOCIRQMSKA]
+                RestPSR lr,,cf                                  ; restores PSR
 
-                TEQEQP  lr, pc
-
-                PullEnv
-                BICS    pc, lr, #Z_bit                          ; Z=0, ie. printer is busy, NE
+                EXIT                                            ; Z=0, ie. printer is busy, NE
 
                 LTORG
 
@@ -678,7 +595,7 @@ ioeb_irqwrite   ROUT
                 BNE     %BT10
 
                 ClearPINTR r0,r1                                ; PACK not gone high (probably printer off)
-                MOVS    pc, lr                                  ; so clear interrupt and exit (printer on will start again)
+                MOV     pc, lr                                  ; so clear interrupt and exit (printer on will start again)
 
 15
         [ CheckBusyAfterAck
@@ -694,15 +611,13 @@ ioeb_irqwrite   ROUT
 
                 LDRB    r2, IRQFlags
                 TST     r2, #if_PendingCallAfter                ; if we already have a pending callafter
-                MOVNES  pc, lr                                  ; then exit
+                MOVNE   pc, lr                                  ; then exit
 
-                MOV     r3, pc
-                ORR     r0, r3, #SVC_mode                       ; go into SVC_mode to issue SWI call
-                TEQP    r0, #0
-                NOP
+                ASSERT  (IRQ_mode :EOR: SVC_mode) = (IRQ32_mode :EOR: SVC32_mode)
+                TOGPSR  (IRQ_mode :EOR: SVC_mode),r0,,r3        ; move from IRQ into SVC mode.
 
+                LDR     r0, =BusyCheckInterval                  ; takes place of NOP
                 Push    "r2, lr"
-                LDR     r0, =BusyCheckInterval
                 ADR     r1, ioeb_busy_check_callafter
                 MOV     r2, wp
                 SWI     XOS_CallAfter
@@ -710,9 +625,9 @@ ioeb_irqwrite   ROUT
                 ORRVC   r2, r2, #if_PendingCallAfter
                 STRVCB  r2, IRQFlags
 
-                TEQP    r3, #0                                  ; restore IRQ mode
+                RestPSR r3,,cf                                  ; restore IRQ mode
                 NOP
-                MOVS    pc, lr                                  ; and exit
+                MOV     pc, lr                                  ; and exit
 
         ]
 
@@ -723,7 +638,7 @@ ioeb_irqwrite   ROUT
 ; out: r0-r2 corrupted
 ;
 
-ioeb_strobe     ENTRY
+ioeb_strobe     EntryS
 
                 ClearPINTR r0,r1                                ; clear interrupt after PACK has gone high again
                                                                 ; note this is done inside the strobe routine in order
@@ -735,34 +650,33 @@ ioeb_strobe     ENTRY
                 LDR     r1, BufferId
                 CallBuffMan
         |
-                MOV     r2, pc
+                SavePSR r2
                 BIC     r2, r2, #C_bit + V_bit                  ; clear C&V for entering mode
-                ORR     lr, r2, #SVC_mode                       ; derive SVC mode (NB if entered in SVC mode, then
+                BIC     lr, r2, #2_01100
+                ORR     lr, lr, #SVC_mode                       ; derive SVC mode (NB if entered in SVC mode, then
                                                                 ; we've already saved lr_svc, so we can junk it now)
-                TEQP    lr, #0                                  ; change to SVC mode with C and V clear
+                RestPSR lr                                      ; change to SVC mode with C and V clear
                 LDR     r1, StreamHandle
                 Push    "lr"                                    ; preserve SVC_LR
                 SWI     XDeviceFS_TransmitCharacter             ; get character to send
                 Pull    "lr"
 
                 ORRCS   r2, r2, #C_bit                          ; ensure C flag reflected correctly
-                TEQP    r2, #0
+                RestPSR r2
                 NOP                                             ; back to original mode (IRQ or SVC)
         ]
 
                 LDRB    r1, InterruptBit
 
-                MOV     lr, #F_bit
-                TST     lr, pc                                  ; FIQs currently enabled?
-                TEQEQP  lr, pc                                  ; ensure that they are no longer
+                SETPSR  F_bit,tmp,,lr                           ; set F bit, old PSR into lr
 
                 LDRB    tmp, [r3, #IOCIRQMSKA]
                 ORRCC   tmp, tmp, r1                            ; re-enable printer interrupts
                 BICCS   tmp, tmp, r1
                 STRB    tmp, [r3, #IOCIRQMSKA]
 
-                TEQEQP  lr, pc                                  ; restore FIQ status (IRQs still disabled)
                 EXITS   CS                                      ; if no character then exit
+                RestPSR lr,,c                                   ; restore FIQ status (IRQs still disabled)
 
                 LDR     lr, =IOEB_ASICPresent                   ; a safe place to read in IOC controlled
                                                                 ; space to give us at least 5 ticks delay
@@ -798,9 +712,10 @@ ioeb_strobe     ENTRY
                 TST     r0, #if_PendingCallAfter
                 EXITS   EQ
 
-                MOV     r2, pc
-                ORR     lr, r2, #SVC_mode                       ; force SVC mode
-                TEQP    lr, #0
+                SavePSR r2
+                BIC     lr, r2, #2_01100
+                ORR     lr, lr, #SVC_mode                       ; force SVC mode
+                RestPSR lr
 
                 MOV     r1, wp
                 Push    "r0,lr"
@@ -808,7 +723,7 @@ ioeb_strobe     ENTRY
                 SWI     XOS_RemoveTickerEvent
                 Pull    "r0,lr"
 
-                TEQP    r2, #0                                  ; switch back
+                RestPSR r2                                      ; switch back
 
                 BIC     r0, r0, #if_PendingCallAfter
                 STRB    r0, IRQFlags
@@ -823,7 +738,7 @@ ioeb_strobe     ENTRY
 ;       Process incoming bytes.
 ;
 
-ioeb_irqread    ENTRY   "r0-r3"
+ioeb_irqread    EntryS  "r0-r3"
 
                 LDR     r1, =pp_data
                 LDRB    byte, [r1]                      ; get input byte
@@ -840,10 +755,10 @@ buffer_byte
                 LDR     r1, BufferId
                 CallBuffMan
         |
-                MOV     r3, pc
-                BIC     r3, r3, #C_bit :OR: V_bit
-                ORR     lr, r3, #SVC_mode
-                TEQP    lr, #0                          ; change to SVC mode (C & V clear)
+                SavePSR r3
+                BIC     lr, r3, #2_01100 + C_bit + V_bit
+                ORR     lr, lr, #SVC_mode
+                RestPSR lr,,cf                          ; change to SVC mode (C & V clear)
 
                 LDR     r1, BufferHandle
                 Push    "r9,lr"
@@ -852,22 +767,22 @@ buffer_byte
                 Pull    "r9,lr"
 
                 ORRCS   r3, r3, #C_bit                  ; reflect C flag in PSR
-                TEQP    r3, #0                          ; back to old mode
+                RestPSR r3                              ; back to old mode
                 MOV     r3, #IOC                        ; restore r3
         ]
 
                 LDRB    r1, InterruptBit
 
-                MOV     lr, pc
-                TST     lr, #F_bit
-                TEQEQP  lr, #F_bit                      ; disable FIQs
+                SETPSR  F_bit,tmp,,lr                   ; disable FIQs
 
                 LDR     tmp, [r3, #IOCIRQMSKA]
                 BICCS   tmp, tmp, r1                    ; if buffer is full, disable device interrupts
                 ORRCC   tmp, tmp, r1                    ; else ensure they are enabled
                 STRB    tmp, [r3, #IOCIRQMSKA]
 
-                TEQEQP  lr, #0                          ; restore FIQs
+                BICCC   lr, lr, #C_bit
+                ORRCS   lr, lr, #C_bit
+                RestPSR lr,,c                           ; restore FIQs
 
                 STRCS   byte, ByteBuffer                ; remember the byte that couldn't be buffered
                 LDRCSB  r0, IRQFlags
@@ -901,8 +816,7 @@ buffer_byte
 
 ioeb_resume     ALTENTRY                        ; needs to push same stuff as ioeb_irqread
 
-                ORR     lr, lr, #I_bit
-                TEQP    lr, #0                  ; disable IRQs
+                SETPSR  I_bit,lr                ; disable IRQs
 
                 LDRB    r0, IRQFlags
                 TST     r0, #if_ReadHalted
@@ -933,14 +847,14 @@ ioeb_resume     ALTENTRY                        ; needs to push same stuff as io
 ;
 
 IOEB_ReadDataStatus
-                ORR     r1, lr, #I_bit
-                TEQP    r1, #0                                  ; disable IRQs
+                EntryS
+                SETPSR  I_bit,r2                        ; disable IRQs
 
                 LDR     r1, =pp_data
                 LDRB    r2, [r1, #pp_stat-pp_data]
                 LDRB    r1, [r1]
 
-                MOVS    pc, lr
+                EXITS
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -960,7 +874,7 @@ IOEB_WriteData
                 ENTRY
                 LDR     lr, =pp_data            ; no need to disable IRQs
                 STRB    r1, [lr]                ; it's atomic
-                EXITS
+                EXIT
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -982,10 +896,9 @@ IOEB_WriteData
 ;
 
 IOEB_ReadWriteCtrl
-                ENTRY   "r0"
+                EntryS   "r0"
 
-                ORR     lr, lr, #I_bit
-                TEQP    lr, #0                                  ; disable IRQs
+                SETPSR  I_bit, r0                               ; disable IRQs
 
                 LDR     r0, =pp_ctrl                            ; -> control port
                 LDRB    lr, [r0]
@@ -1014,10 +927,9 @@ IOEB_ReadWriteCtrl
 ; control = (control AND r1) EOR r0
 ;
 
-UpdateIOEBCtrl  ENTRY   "r2"
+UpdateIOEBCtrl  EntryS  "r2"
 
-                ORR     lr, lr, #I_bit
-                TEQP    lr, #0                                  ; disable IRQs
+                SETPSR  I_bit,r2                                ; disable IRQs
 
                 LDR     r2, =pp_ctrl                            ; -> control port
                 LDRB    lr, [r2]
