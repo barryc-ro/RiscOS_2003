@@ -46,6 +46,16 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 TARGET    = aof.${COMPONENT}
 OBJS      = module.o handset.o ir_api.o header.o veneers.o
 
+
+
+dirs:
+        ${MKDIR} o
+        ${MKDIR} aof
+        ${MKDIR} rm
+        ${MKDIR} linked
+        ${MKDIR} map
+
+
 #
 # Rule patterns
 #
@@ -83,13 +93,13 @@ clean:
 #
 # Stand-alone module
 #
-rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} dirs
 	${LD} -o $@ -module ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} dirs
 	${MKDIR} aof
 	${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
@@ -97,8 +107,6 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-	${MKDIR} linked
-	${MKDIR} map
 	${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
 	truncate map.${COMPONENT} linked.${COMPONENT}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
@@ -114,12 +122,6 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.handset
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
 o.handset:	c.handset
 o.handset:	C:h.kernel
 o.handset:	C:h.swis
@@ -127,3 +129,9 @@ o.handset:	h.utils
 o.handset:	h.ir_api
 o.handset:	h.handset
 o.handset:	h.veneers
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
