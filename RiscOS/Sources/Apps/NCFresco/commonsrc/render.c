@@ -623,11 +623,11 @@ int render_text_full(be_doc doc, int font_index, const char *text, int x, int y,
     if (text == NULL || *text == 0)
 	return FALSE;
 
+    flags = 0;
 #if 1
     if (config_display_blending)
 	flags = 1<<11;
 #else
-    flags = 0;
     /* do we need font blending? */
     if (config_display_blending &&
 	doc && (doc->flags & doc_flag_DOC_COLOURS))
@@ -649,7 +649,8 @@ int render_text_full(be_doc doc, int font_index, const char *text, int x, int y,
     if (font_index != -1)
     {
 	fh = webfonts[font_index].handle;
-	flags |= 1<<8;
+	font_setfont(fh);
+	/* flags |= 1<<8; */
     }
 
 #if UNICODE
