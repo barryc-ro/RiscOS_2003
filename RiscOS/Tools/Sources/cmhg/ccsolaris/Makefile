@@ -13,8 +13,8 @@ DERIVED_SRC=veneers.o
 EXTDIR1=${CLXPATH}
 EXTLIB1=${CLX}
 
-all: armcmhg
-	@echo "Made armcmhg (the default target)"
+all: cmhg
+	@echo "Made cmhg (the default target)"
 
 # Dependencies
 
@@ -26,16 +26,16 @@ gen.h gen.c: veneers.o
 
 cmhg.o: gen.h
 
-armcmhg: $(DERIVED_SRC)
-armcmhg: $(DERIVED)
-armcmhg: $(OBJALL)
-armcmhg: $(EXTLIB1)
-	$(CC) -o armcmhg $(OBJALL) $(EXTLIB1)
-	@echo "Made armcmhg"
+cmhg: $(DERIVED_SRC)
+cmhg: $(DERIVED)
+cmhg: $(OBJALL)
+cmhg: $(EXTLIB1)
+	$(CC) -o cmhg $(OBJALL) $(EXTLIB1)
+	@echo "Made cmhg"
 
 clean:
 	-rm ${OBJALL}
-	-rm armcmhg
+	-rm cmhg
 	-rm $(DERIVED)
 	-rm $(DERIVED_SRC)
 	@echo cleaned cmhg
@@ -48,6 +48,6 @@ links:
 	./mklinks
 	@echo made cmhg links
 
-install: armcmhg
-	cp -p armcmhg ${RISCOS_BUILD_TOOLS}
+install: cmhg
+	cp -p cmhg ${RISCOS_BUILD_TOOLS}
 	@echo "Installed cmhg"
