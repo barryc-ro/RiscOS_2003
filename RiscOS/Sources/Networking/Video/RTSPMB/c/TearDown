@@ -85,6 +85,30 @@ _kernel_oserror * teardown_tear_down(_kernel_swi_regs * r)
     return NULL;
   }
 
+  /* Have to send a command; is there a background one already though? */
+
+  if (s->child != NULL)
+  {
+    dprintf(("", "teardown_tear_down: Background command running, have to wait\n"));
+
+    /* We have to wait */
+
+    s->td_r0_record = r->r[0];
+
+    /* Make sure the status details are cleared for clients polling the */
+    /* status SWI                                                       */
+
+    s->state          = protostate_INITIAL;
+    s->reported_state = 0;
+
+    s->teardown_wait = 1;
+    timeout(teardown_retry_delayed_on_callout, s, Session_State_Retry);
+
+    dprintf(("", "teardown_tear_down: Retry call set up\n"));
+
+    return NULL;
+  }
+
   /* Ensure everything is reset for a new command */
 
   session_reset_session(s);
@@ -170,4 +194,70 @@ _kernel_oserror * teardown_tear_down(_kernel_swi_regs * r)
   dprintf(("", "teardown_tear_down: Successful\n"));
 
   return NULL;
+}
+
+/**************************************************************/
+/* teardown_retry_delayed_on_callout()                        */
+/*                                                            */
+/* Retry a delayed foreground command that was waiting for a  */
+/* background command to complete.                            */
+/*                                                            */
+/* Parameters: The handle should point to the session struct  */
+/*             we're interested in.                           */
+/**************************************************************/
+
+void teardown_retry_delayed_on_callout(void * handle)
+{
+  session * s = (session *) handle;
+
+  dprintf(("", "teardown_retry_delayed_on_callout: Called\n"));
+
+  if (s->dying != 0) return;
+
+  if (s->teardown_wait != 0)
+  {
+    /* Is there an in-transit foreground or background command already? */
+
+    if (
+         s->state != protostate_COMPLETED &&
+         s->state != protostate_INITIAL
+       )
+    {
+      /* Foreground command in progress! Should never happen... Abandon */
+      /* this wait state.                                               */
+
+      dprintf(("", "teardown_retry_delayed_on_callout: Foreground command already running!\n"));
+
+      s->teardown_wait = 0;
+      return;
+    }
+    else if (s->child != NULL)
+    {
+      /* Background command - wait for it to finish */
+
+      dprintf(("", "teardown_retry_delayed_on_callout: Background command still running...\n"));
+
+      timeout(teardown_retry_delayed_on_callout, s, Session_State_Retry);
+      return;
+    }
+    else
+    {
+      _kernel_swi_regs r;
+
+      /* Clear to send the command */
+
+      s->teardown_wait = 0;
+
+      r.r[0] = s->td_r0_record;
+      r.r[1] = (int) s->id;
+
+      dprintf(("", "teardown_retry_delayed_on_callout: Clear to try again, calling teardown_tear_down\n"));
+
+      /* No point trying to deal with errors since the caller will have had */
+      /* the SWI return already and since the session is torn down at the   */
+      /* Video Control end there's no way to extract further status data.   */
+
+      teardown_tear_down(&r);
+    }
+  }
 }

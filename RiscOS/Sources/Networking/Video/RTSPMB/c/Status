@@ -129,6 +129,8 @@ void status_proceed_on_callout(void * handle)
 
   dprintf(("", "status_proceed_on_callout: Called for %p, forwarding to status_proceed\n", s));
 
+  if (s->dying != 0) return;
+
   if (s->callout_set != 0)
   {
     s->callout_set = 0;
@@ -575,13 +577,10 @@ static bool status_proceed_sending(session * s, bool * repeat)
 
     if (sent != 0)
     {
-//printf("Sent %d (reqptr, reqlen = %d, %d)   ",sent,s->reqptr,s->reqlen);
 {FILE*f=fopen("Cache:$.Test","ab");
 if(f!=NULL){fprintf(f,"SEND (%p):\r\n", s);fwrite(s->full_request,1,s->reqlen,f);
 fclose(f);}
 }
-
-if (!strncmp(s->full_request, "RTSP/1.0", 8)) printf("\n********* FAIL\n\n");
 
       s->last = now;
     }
@@ -701,8 +700,6 @@ static bool status_proceed_receiving(session * s, bool * repeat)
 
         s->data[s->data_len] = '\0'; /* Correct as data_len is always 1 byte behind actual allocation */
         dprintf(("", "status_proceed_receving: Receive complete with %d bytes -\n'%s'\n", s->data_len, s->data));
-
-        /* printf("\nReceive:\n===\n%s\n=== for %p\n",s->data,s); */
 
         /* We've received the response now */
 
@@ -871,18 +868,18 @@ static bool status_proceed_completed(session * s, bool * repeat)
 
   s->state = protostate_INITIAL;
 
-  if (s->destruct)
-  {
-    /* We're on the way out - no status change to Video Control... */
-
-    dprintf(("", "status_proceed_completed: Session self-destructing (completed), state machine exitting\n"));
-
-    /* Destroy the session */
-
-    session_free_item(s);
-    return true;
-  }
-  else
+//  if (s->destruct)
+//  {
+//    /* We're on the way out - no status change to Video Control... */
+//
+//    dprintf(("", "status_proceed_completed: Session self-destructing (completed), state machine exitting\n"));
+//
+//    /* Destroy the session */
+//
+//    session_free_item(s);
+//    return true;
+//  }
+//  else
   {
     _kernel_oserror * e;
 
@@ -894,62 +891,106 @@ static bool status_proceed_completed(session * s, bool * repeat)
 
       if (e != NULL)
       {
-        final.errnum = e->errnum;
-        strncpy(final.errmess, e->errmess, sizeof(final.errmess));
+        if (s->destruct)
+        {
+          session_free_item(s);
+          return true;
+        }
+        else
+        {
+          final.errnum = e->errnum;
+          strncpy(final.errmess, e->errmess, sizeof(final.errmess));
 
-        s->state = protostate_ERROR_VCPN;
-        *repeat  = true;
+          s->state = protostate_ERROR_VCPN;
+          *repeat  = true;
+        }
       }
 
       return false;
     }
     else
     {
-      bool prepare;
+      bool prepare = false;
 
       /* We're more or less finished, just need to let Video Control */
       /* know about the status change.                               */
 
-      if (s->play_record != NULL && s->started == 0) prepare = true;
-      else                                           prepare = false;
-
-      e = _swix(VideoControl_ProtocolNotify,
-                _INR(0,4),
-
-                0,
-                s->id,
-                VideoControlProtocolNotifyNewStatus,
-                prepare ? VC_ProtocolNotify_NewStatus_Prepare : 0,
-                s->play_record);
-
-      if (e != NULL)
+      if (s->destruct == 0)
       {
-        final.errnum = e->errnum;
-        strncpy(final.errmess, e->errmess, sizeof(final.errmess));
+        if (s->play_record != NULL && s->started == 0) prepare = true;
+        else                                           prepare = false;
 
-        s->state = protostate_ERROR_VCPN;
-        *repeat  = true;
+        e = _swix(VideoControl_ProtocolNotify,
+                  _INR(0,4),
 
-        return false;
+                  0,
+                  s->id,
+                  VideoControlProtocolNotifyNewStatus,
+                  prepare ? VC_ProtocolNotify_NewStatus_Prepare : 0,
+                  s->play_record);
+
+        if (e != NULL)
+        {
+          final.errnum = e->errnum;
+          strncpy(final.errmess, e->errmess, sizeof(final.errmess));
+
+          s->state = protostate_ERROR_VCPN;
+          *repeat  = true;
+
+          return false;
+        }
       }
 
       /* Things seem to be working */
 
+      if (prepare)
+      {
+        s->started = 1;
+      }
       else
       {
-        if (prepare)
+        play_alter_playback_characteristics(s, s->playmode);
+
+        if (s->destruct)
         {
-          s->started = 1;
-        }
-        else
-        {
-          play_alter_playback_characteristics(s, s->playmode);
+          session_free_item(s);
+          return true;
         }
       }
     }
   }
 
   return false;
+}
+
+/**************************************************************/
+/* status_record_error()                                      */
+/*                                                            */
+/* Record an error from some external routine (e.g. a PLAY    */
+/* command being sent after a delay owing to an in-progress   */
+/* background operation on the same socket).                  */
+/*                                                            */
+/* Parameters: Pointer to the session structure relevant to   */
+/*             the effected session;                          */
+/*                                                            */
+/*             Pointer to an error block with the error       */
+/*             details held in it.                            */
+/**************************************************************/
+
+void status_record_error(session * s, _kernel_oserror * e)
+{
+  final.errnum = e->errnum;
+  strncpy(final.errmess, e->errmess, sizeof(final.errmess));
+
+  s->state = protostate_ERROR_VCPN;
+
+  if (s->callout_set == 0)
+  {
+    s->callout_set = 1;
+    timeout(status_proceed_on_callout, s, Session_State_Timer);
+  }
+
+  return;
 }
 
 /**************************************************************/
