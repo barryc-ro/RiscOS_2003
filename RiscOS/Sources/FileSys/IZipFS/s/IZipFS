@@ -182,6 +182,7 @@ SCSITempW	#	64				; Some temporary printing space
  ]
 Stack__Free	#	32				; 32 bytes for free stack
 FreeStack	#	96				; Temporary space for Free code
+DiscDescriptor  #       64                              ; 64 byte block to hold disc descriptor (FileCore_DescribeDisc)
 CurrentStatus	#	4				; Current disc status
 EjectCount	#	4				; Eject count number
 CurrentDiscName	#	12				; Current disc name
@@ -220,7 +221,11 @@ start							; No start of code
 	DCD     moduleflags-s                           ; Module flags
  ]
 
-help	=	"IZipFS",9,9,"$Module_HelpVersion",0
+help	=	"IZipFS",9,9,"$Module_HelpVersion; PPA"
+  [ IMMSupport
+        =       "/IMM"
+  ]
+        =       0
 	ALIGN
 
 hcom	=	"IZipFS",0
@@ -326,6 +331,7 @@ switabl	=	"IZipFS",0				; SWI Group name
 	=	"DiscStatus",0				; Check the disc status
 	=	"EnableInterrupt",0			; Enable the interrupt code
 	=	"DismountAndEject",0			; This performs a dismount and eject sequence
+	=       "FreeOp",0
 	=	0
 	ALIGN
 
@@ -339,20 +345,26 @@ WriteS
         STMFD   r13!,{r0-r3}
         RSB     r0, pc, pc                              ; R0 = current PSR flags if in 26-bit mode, 0 otherwise
         SUB     r0, lr, r0                              ; Remove flags from lr
-        MOV     r3, lr
+        MOV     r3, r0
         SWI     XOS_Write0
         MOV     lr, r3
-        MOV     r2, #0x80
-        ORR     r2, r2, LSL #8
-        ORR     r2, r2, LSL #16                         ; R2 = 0x80808080
-        MOVS    r1, r2, LSR #7                          ; R1 = 0x01010101, clear C
-WSL     LDR     r0,[lr],#4
-        SUB     r3, r0, r1                              ; R3 = w - ones_word
-        BIC     r3, r3, r0                              ;      & ~w
-        BICS    r3, r3, r2                              ;      & eights_word
-        BEQ     WSL
+;        MOV     r2, #&80
+;        ORR     r2, r2, r2, LSL #8
+;        ORR     r2, r2, r2, LSL #16                     ; R2 = 0x80808080
+;        MOVS    r1, r2, LSR #7                          ; R1 = 0x01010101, clear C
+;WSL     LDR     r0,[lr],#4
+;        SUB     r3, r0, r1                              ; R3 = w - ones_word
+;        BIC     r3, r3, r0                              ;      & ~w
+;        BICS    r3, r3, r2                              ;      & eights_word
+;        BEQ     WSL
+WSL     LDRB    r0,[lr],#1
+        TEQ     r0,#0
+        BNE     WSL
+        ADD     lr,lr,#3
+
         LDMFD   r13!,{r0-r3}                            ; return
-        MOV     pc, lr
+;        MOV     pc, lr
+        BIC     pc, lr, #3
 
 Write0
 ; r0 points to string
@@ -636,6 +648,7 @@ swijump	B	Initialise
 	B	DiscStatus
 	B	EnableInterruptCode
 	B	DismountAndEject
+	B       FreeOp
 
 ukswi
         SETV
@@ -753,7 +766,10 @@ UDE	DCD	errorchunk+error_unlock
 ; Resets the ZIP drive
 
 Reset
-	MOV	pc,lr
+        STMFD   r13!,{r0,lr}
+        SWI     XPPADriver_Reset
+        SWI     XPPADriver_Initialise
+        LDMFD   r13!,{r0,pc}
 
 ; SCSICommand sends a SCSI command to the ZIP drive
 ; r0 is pointer to SCSI command header
@@ -1782,6 +1798,7 @@ PollChanged
 	LDMEQFD	r13!,{r0-r2,r4-r8,pc}			; And return
 
 PC_Loop
+        BL      Reset
 	BL	GetStatus				; Get the SCSI status
 
 	CMP	r0,#0                                   ; clears V for *both* exits below
@@ -1793,6 +1810,7 @@ PC_Loop
 	LDMEQFD	r13!,{r0-r2,r4-r8,pc}			; Oh well, just exit anyway!
 
 	TEQ	r0,#&28					; Is it disc changed?
+	TEQNE   r0,#&29                                 ; By the looks of it, &29 is the code returned by the IMM protocol.
 	BNE	PC_CheckEmpty				; No, so see if it's empty
  [ DebugMiscOp = 1
 	SWI	&20100+'C'
@@ -2063,109 +2081,104 @@ UnprotectPassword
 	BVS	NoProtect
 	LDMFD	r13!,{r0-r3,pc}
 
-; FreeSpaceH is code that was pretty much copied from the Free module.
-; However, for some reason, it doesn't work. It has been left here, so that
-; when I can get it to work, it's still here.
+; FreeSpaceH is the handler code for the Free module
 
 FreeSpaceH
-	STMFD	r12!,{r13}
-	MOV	r13,r12
-	ADR	r14,Freecnt
-	STMFD	r13!,{r14}
-	B	Free_DFS				; Do the freespace call
-Freecnt	LDMFD	r13,{r13}
+        SWI     XZipFS_FreeOp                           ; This prevents the need to set up a seperate SVR stack...
 	LDMFD	r13!,{pc}
 
-Free_DFS
-	TEQ	r0,#1
-	BEQ	Free_1104
-	TEQ	r0,#2
-	BEQ	Free_1144
-	TEQ	r0,#3
-	BEQ	Free_11f8
+FreeOp
+        STMFD   r13!,{lr}
+	CMP	r0,#1
+	LDMLOFD r13!,{pc}                               ; No-op
+	BEQ	Free_1104                               ; Get device name
+	CMP	r0,#3
+        BLO	Free_1144                               ; Get free space for drive (32 bit)
+	BEQ	Free_11f8                               ; Compare device
+	CMP     r0,#4
+	LDMNEFD r13!,{pc}                               ; Unrecognised reason code
+
+Free64bit                                               ; Get free space for drive (64 bit)
+        ; write this when ready (don't actually need it as Zip discs < (1<<31 bytes) anyway
 	LDMFD	r13!,{pc}
 
 Free_1104
-	STMFD	r13!,{r1-r3}
-	MOV	r0,r3
-	ADD	r1,r12,#4
-	SWI	XZipFS_DescribeDisc
-	LDMVSFD	r13!,{r1-r3,pc}
-	ADD	r4,r1,#22
-	MOV	r0,#0
+        STMFD   r13!,{r1-r3}
+        MOV     r0,r3
+        ADR     r1,DiscDescriptor
+        SWI     XZipFS_DescribeDisc
+        LDMVSFD r13!,{r1-r3,pc}
+        ADD     r4,r1,#22
 
-L1104L	LDRB	r3,[r4,r0]
-	CMP	r3,#32
-	MOVLE	r3,#0
-	STRB	r3,[r2,r0]
-	ADD	r0,r0,#1
-	TEQLE	r3,#0
-	LDMLEFD	r13!,{r1-r3,pc}
-	TEQ	r0,#10
-	BNE	L1104L
+        LDRB    r14,[r4]
+        CMP     r14,#" "
+        MOVLE   r14,#":"
+        STRLEB  r14,[r2],#1
+        MOVLE   r4,r3
 
-	MOV	r3,#0
-	STRB	r3,[r2,r0]
-	ADD	r0,r0,#1
-	LDMFD	r13!,{r1-r3,pc}
+        MOV     r0,r2
+        MOV     r3,#10
+L1104L  LDRB    r14,[r4],#1
+        CMP     r14,#32
+        MOVLE   r14,#0
+        STRB    r14,[r0],#1
+        SUBS    r3,r3,#1
+        CMPNE   r14,#0
+        BNE     L1104L
+        CMP     r3,#0
+        STREQB  r3,[r0],#1
+        SUB     r0,r0,#1
+
+        MOV     r0,#11
+        LDMFD   r13!,{r1-r3,pc}
 
 Free_1144
 	STMFD	r13!,{r1-r3}
 	MOV	r0,r3
-	ADD	r1,r12,#4
+        ADR     r1,DiscDescriptor
 	SWI	XZipFS_DescribeDisc
 	LDMVSFD	r13!,{r1-r3,pc}
 	LDR	r0,[r1,#16]
-	STR	r0,[r2,#0]
+        STR     r0,[r2]
 	MOV	r0,r3
 	SWI	XZipFS_FreeSpace
+        LDMVSFD r13!,{r1-r3,pc}
 	STR	r0,[r2,#4]
 	LDR	r1,[r2]
 	SUB	r1,r1,r0
 	STR	r1,[r2,#8]
-	MOV	r0,#2
 	LDMFD	r13!,{r1-r3,pc}
 
-colon0	=	":0",0
-
 Free_11f8
-	STMFD	r13!,{r0-r4,r7}
-	ADD	r1,r12,#80
+        STMFD   r13!,{r0-r9}
+        ADR     r1,FreeStack
+L11F8L0
+        LDRB    r0,[r2],#1
+        CMP     r0,#"."
+        MOVEQ   r0,#0
+        STRB    r0,[r1],#1
+        CMP     r0,#0
+        BNE     L11F8L0
 
-	LDRB	r0,[r2,#0]
-	TEQ	r0,#':'
-	ADDEQ	r2,r2,#1
+        ADR     r3,FreeStack
+        MOV     r2,r3
+        STMFD   r13!,{pc}
+        B       Free_1104                       ; Get device name
+        MOV     r0,r0
 
-L11F8L0	LDRB	r0,[r2],#1
-	TEQ	r0,#'.'
-	MOVEQ	r0,#0
-	STRB	r0,[r1],#1
-	TEQ	r0,#0
-	BNE	L11F8L0
+        ADR     r2,FreeStack
+        LDR     r3,[sp,#3*4]
+cmpstr
+        LDRB    r1,[r2],#1
+        BIC     r1,r1,#&20
+        LDRB    r0,[r3],#1
+        BIC     r0,r0,#&20
+        CMP     r1,r0
+        LDMNEFD r13!,{r0-r9,pc}
+        CMP     r1,#0
+        BNE     cmpstr
 
-	MOV	r7,r2
-	ADR	r0,colon0
-	ADD	r1,r12,#4
-	SWI	XZipFS_DescribeDisc
-	LDMVSFD	r13!,{r0-r4,r7,pc}
-	ADD	r4,r1,#22
-
-	ADD	r2,r12,#80
-	LDR	r3,[r13,#12]					; Get the original pointer
-
-	LDRB	r0,[r7],#1					; Skip past the ZipFS:: part
-
-L11f8L	LDRB	r0,[r2],#1
-	LDRB	r1,[r3],#1
-	TEQ	r0,#0
-	TEQEQ	r1,#0
-	LDMEQFD	r13!,{r0-r4,r7,pc}
-
-	TEQ	r0,r1
-	LDMNEFD	r13!,{r0-r4,r7,pc}
-
-	MOVS	r0,#0
-	LDMFD	r13!,{r0-r4,r7,pc}
+        LDMFD   r13!,{r0-r9,pc}
 
 ; ZipErase is the code for *IZipErase
 
@@ -2279,6 +2292,10 @@ DS_readstatus
 
 	SWI	XPPADriver_VPI0Detect				; Find out if the drive's there
 	TEQ	r0,#1
+  [ IMMSupport
+        SWINE   XPPADriver_VPI2Detect
+        TEQNE   r0,#1
+  ]
 	BNE	DS_nodrive
 
 	LDRB	r0,InterruptDoing
