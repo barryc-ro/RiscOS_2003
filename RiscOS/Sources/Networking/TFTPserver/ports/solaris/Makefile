@@ -55,7 +55,7 @@ INCLUDES =
 TARGET    = exe.${COMPONENT}
 
 OBJS      = tftpserver.o main.o Strcmp_ci.o Strdup.o momanager.o \
-mofile.o moobject.o configure.o i18n.o ${ARCH}.o
+mofile.o moobject.o configure.o i18n.o icmpsocket.o ${ARCH}.o
 
 #
 # Rule patterns

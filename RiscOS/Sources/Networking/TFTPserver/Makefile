@@ -79,7 +79,7 @@ TARGET    = aif.${COMPONENT}
 ROMTARGET = aof.${COMPONENT}
 
 OBJS      = tftpserver.o main.o Strcmp_ci.o Strdup.o momanager.o \
-mofile.o moobject.o configure.o i18n.o ${ARCH}.o
+mofile.o moobject.o configure.o i18n.o icmpsocket.o ${ARCH}.o
 
 DEBOBJS   =	\
  od.i18n	\
@@ -91,6 +91,7 @@ DEBOBJS   =	\
  od.moobject	\
  od.mofile	\
  od.configure	\
+ od.icmpsocket	\
  od.armriscos
 
 #
