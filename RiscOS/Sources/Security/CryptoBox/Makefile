@@ -102,8 +102,9 @@ export_libs: ${LIB} export_dirs
 	${CP} ${LIB}  ${CRYPTOLIBDIR}.o.* ${CPFLAGS}
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs:
+o.local_dirs:
 	${MKDIR} o
+	${TOUCH} $@
 
 export_dirs:
         ${MKDIR} ${LIBDIR}
@@ -111,19 +112,16 @@ export_dirs:
         ${MKDIR} ${CRYPTOLIBDIR}.h
         ${MKDIR} ${CRYPTOLIBDIR}.o
 
-dirs:
-	${MKDIR} linked
-	${MKDIR} map
-
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_link: dirs
+rom_link:
+	${MKDIR} linked
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${CPPLIB} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${LIB}: ${OBJS} local_dirs
+${LIB}: ${OBJS} o.local_dirs
         ${LB} ${LBFLAGS} -o ${LIB} ${OBJS}
 
 # Dynamic dependencies:
