@@ -5,6 +5,7 @@
 
 #include "kernel.h"
 #include "string.h"
+#include "swis.h"
 
 #include "Email/Mailbox/Message.h"
 
@@ -130,20 +131,35 @@ extern "C" eng_rcode eng_get_mailbox_list(MessageDescriptor **msg)
 
   if (ourmboxin->flags & MBOXPROCESSED)
   {
-    if (retrievestate.msg)
+    MessageDescriptor *msgptr = retrievestate.msg;
+
+    if (msgptr)
     {
       /*
       ** Inbox is being displayed after reading message.
       ** We can therefore destroy rfc object
       ** and remove entities from message.
       */
-      RemoveEntities(retrievestate.msg);
-      if (retrievestate.msg->elibobj)
+      RemoveEntities(msgptr);
+      if (msgptr->elibobj)
       {
-        delete retrievestate.msg->elibobj;
-        retrievestate.msg->elibobj = 0;
+        delete msgptr->elibobj;
+        msgptr->elibobj = 0;
       }
+      UnlockFile(SetFilename(msgptr->ID, false));
       retrievestate.msg = 0;
+    }
+
+    /* check that files are still downloaded */
+    dprintf(("Eng", "About to check that files are actually downloaded\n"));
+    msgptr = ourmboxin->list;
+    while (msgptr)
+    {
+      if (FileExists(SetFilename(msgptr->ID, false)))
+        msgptr->flags |= DOWNLOADED;
+      else
+        msgptr->flags &= ~DOWNLOADED;
+      msgptr = msgptr->next;
     }
 
     *msg = ourmboxin->list;
@@ -196,6 +212,7 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
   if ((retrievestate.msg->flags & DOWNLOADED) && (FileExists(SetFilename(msg_id, false))))
   {
     dprintf(("Eng", "File is already downloaded\n"));
+    LockFile(SetFilename(msg_id, false));
     retrievestate.context = readytoparse;
   }
 
@@ -240,21 +257,26 @@ extern "C" eng_rcode eng_create_message(uint32 msg_id, void *handle, eng_cbf_get
   if (state & (CREATE | REPLY))
     return ENG_CREATING;
 
-  else if ((createstate.msg = NewDescriptor(0, ourmboxout)) == 0)
+  LockFile(SetFilename(msg_id, true));
+
+  if ((createstate.msg = NewDescriptor(0, ourmboxout)) == 0)
   {
     /* not enough memory for new message */
+    UnlockFile(SetFilename(msg_id, true));
     return ENG_NOMEMORY;
   }
 
   if ((createstate.msg->fromreal = malloc(strlen(realname) + 1)) == 0)
   {
     /* not enough memory for new message */
+    UnlockFile(SetFilename(msg_id, true));
     return ENG_NOMEMORY;
   }
 
   if ((createstate.msg->fromaddr = malloc(strlen(emailaddr) + 1)) == 0)
   {
     /* not enough memory for new message */
+    UnlockFile(SetFilename(msg_id, true));
     return ENG_NOMEMORY;
   }
 
@@ -307,7 +329,10 @@ extern "C" eng_rcode eng_send_message(uint32 msg_id, char *bodyfile, void *handl
     callbacklist.sendfunc = func;
     callbacklist.sendhandle = handle;
     state |= SEND;
+    LockFile(SetFilename(msg_id, true));
     sendstate.msg = FindDescriptor(msg_id, ourmboxout);
+    if (sendstate.msg->forward_list)
+      state |= FORWARD;
     sendstate.bodyname = bodyfile;
     sendstate.context = readytoparse;
     dprintf(("Eng", "Sending message %d, body in file %s\n",msg_id,sendstate.bodyname));
@@ -410,6 +435,10 @@ extern "C" eng_rcode eng_email_active(bool status)
 
   emailactive = status;
   dprintf(("Eng", "Email Client is now %sactive\n",(status) ? "" : "in"));
+#ifdef CHECK_FOR_NCMALITE
+  if (emailactive)
+    ChangeUser();
+#endif
 
   if ((emailactive) && (popstatus == acctnonexistent))
   {
@@ -428,27 +457,27 @@ extern "C" eng_rcode eng_email_active(bool status)
     while (msgptr)
     {
       if (FileExists(SetFilename(msgptr->ID, false)))
+      {
         msgptr->flags |= DOWNLOADED;
+        dprintf(("Eng", "Message %d is downloaded\n",msgptr->ID));
+      }
       msgptr = msgptr->next;
     }
-    LockFile("<NCMailStore$Dir>");
-    LockFile("<NCMailStore$Dir>.<NCMail$User>");
-    LockFile("<NCMailStore$Dir>.<NCMail$User>.*");
-#ifdef CHECK_FOR_NCMALITE
-    ChangeUser();
-#endif
+/*     LockFile("<NCMailStore$Dir>.<NCMail$User>"); */
+/*     LockFile("<NCMailStore$Dir>.<NCMail$User>.*"); */
   }
   else
   {
-    UnlockFile("<NCMailStore$Dir>");
-    UnlockFile("<NCMailStore$Dir>.<NCMail$User>");
-    UnlockFile("<NCMailStore$Dir>.<NCMail$User>.*");
+/*     UnlockFile("<NCMailStore$Dir>.<NCMail$User>"); */
+/*     UnlockFile("<NCMailStore$Dir>.<NCMail$User>.*"); */
   }
 
   if (online)
   {
     if (emailactive)
+    {
       StartProcess();
+    }
     else
     {
       /* disconnect from mail server in case user drops line
@@ -525,3 +554,75 @@ extern "C" void eng_null_events(bool yes)
     state &= ~UINULLS;
 
 }
+
+
+extern "C" eng_rcode eng_mem_available(uint32 *free)
+{
+
+  if (!cachefs)
+  {
+    *free = 0xffffffff;
+    return ENG_NOCACHEFS;
+  }
+
+  regs.r[0] = 5;
+  regs.r[1] = -1;
+  _kernel_swi(OS_DynamicArea,&regs,&regs);
+  dprintf(("Eng", "Free memory is %dK\n",regs.r[2] / 1024));
+  *free = regs.r[2];
+
+  return ENG_COMPLETED;
+
+}
+
+
+#ifdef gorilla
+extern "C" eng_rcode eng_clear_memory(uint32 bestguess)
+{
+
+  /*
+  ** If we are running on a CacheFS system:
+  ** Remove any message files that can be removed.
+  ** Start at oldest and remove one at a time
+  ** until min is cleared.
+  */
+
+  if (!cachefs)
+    return ENG_NOCACHEFS;
+
+  else if (!ourmboxin->list)
+    return ENG_NOMEMORY;
+
+  else
+  {
+    MessageDescriptor *msgptr = ourmboxin->list, *lastptr;
+    uint32 released;
+    eng_mem_available(&released);
+
+    /* find last message in list */
+    dprintf(("Eng", "Looking for last message in list\n"));
+    while (msgptr)
+    {
+      lastptr = msgptr;
+      msgptr = msgptr->next;
+    }
+
+    while ((released < bestguess) && (lastptr))
+    {
+      if (lastptr->flags & DOWNLOADED)
+      {
+        char *f = SetFilename(lastptr->ID, false);
+        released += GetFileLength(f);
+        UnlockFile(f);
+        remove(f);
+        lastptr->flags &= ~DOWNLOADED;
+        dprintf(("Eng", "Removing message %d to make more room\n",lastptr->ID));
+      }
+      lastptr = lastptr->last;
+    }
+
+    return ((lastptr == 0) ? ENG_NOMEMORY : ENG_COMPLETED);
+  }
+
+}
+#endif
