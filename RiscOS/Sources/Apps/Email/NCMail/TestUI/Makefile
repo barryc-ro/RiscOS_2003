@@ -231,22 +231,29 @@ install_rom: $(ROM_MODULE)
 
 install_common: $(FILES)
         @echo
-        $(CP) $(LPATH)Res               ^.Build.$(INSTDIR).Res           $(CPFLAGS)
-        $(CP) $(LPATH)Messages                  ^.Build.$(INSTDIR).Messages $(CPFLAGS)
+	$(MKDIR)^.Build.$(INSTDIR).NCMail
+        $(CP) $(LPATH)Res               ^.Build.$(INSTDIR).NCMail.Res       $(CPFLAGS)
+        $(CP) $(LPATH)Messages          ^.Build.$(INSTDIR).NCMail.Messages  $(CPFLAGS)
 
 install: install_common
         @echo
+        $(CP) $(LPATH)!BootUI           ^.Build.$(INSTDIR).!BootUI          $(CPFLAGS)
+        $(CP) $(LPATH)!RunUI            ^.Build.$(INSTDIR).!RunUI           $(CPFLAGS)
         @echo $(COMPONENT): Application installed to ^.Build.$(INSTDIR)
 
 
 installd: install_common
         @echo
+        $(CP) $(LPATH)!BootDUI          ^.Build.$(INSTDIR).!BootUI          $(CPFLAGS)
+        $(CP) $(LPATH)!RunDUI           ^.Build.$(INSTDIR).!RunUI           $(CPFLAGS)
         @echo $(COMPONENT): Debug application installed ^.Build.$(INSTDIR)
 
 resources:
 	@echo $(RESDIR)
         $(MKDIR) $(RESDIR)
         $(MKDIR) $(RESAPP)
+        $(CP) $(LPATH)!BootROMUI        $(RESAPP).!BootUI        $(CPFLAGS)
+        $(CP) $(LPATH)!RunROMUI         $(RESAPP).!RunUI         $(CPFLAGS)
         $(CP) $(LPATH)Messages          $(RESDIR).Messages      $(CPFLAGS)
         $(CP) $(LPATH)Res               $(RESDIR).Res           $(CPFLAGS)
         @echo
