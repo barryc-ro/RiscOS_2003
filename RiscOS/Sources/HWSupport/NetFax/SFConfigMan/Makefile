@@ -19,23 +19,23 @@ EXP_C_O = <Cexport$dir>.o
 #
 MKDIR   = cdir
 AS      = objasm
-CC      = cc
+CC      = $(MemCheckCC) cc
 CMHG    = cmhg515
 CP      = copy
-LD      = link
+LD      = $(MemCheckLD) link
 RM      = remove
 WIPE    = -wipe
 CD	= dir
 CHMOD	= access
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
-CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
+CFLAGS     = -c -depend !Depend ${THROWBACK} -zM ${INCLUDES} ${DFLAGS}
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
 CHMODFLAGS = RW/R
 
-DFLAGS     = -DPODULE_2
+DFLAGS     = -DPODULE_1 -DNO_FLASH_READY -DFAKE_FLASH
 # DFLAGS     = -DNO_FLASH_READY -DFAKE_FLASH
 
 # DFLAGS  = -DUSE_TINY ${DEBUG}
@@ -61,8 +61,9 @@ TARGET    = aof.${COMPONENT}
 RMTARGET  = rm.${COMPONENT}
 EXPORTS   = ${EXP_C_H}.${COMPONENT}
 
-OBJS      = o.module o.header o.heap o.flashlib o.resourcefs o.swiven
-
+OBJS      = o.module o.header o.heap o.flashlib o.resourcefs o.swiven \
+            MemCheck:o.MC_M
+            
 #
 # Rule patterns
 #
@@ -126,27 +127,3 @@ o.resourcefs:
 
 #
 # Dynamic dependencies:
-o.swiven: s.swiven
-o.swiven: h.regdefs
-o.swiven: h.swinos
-o.swiven: h.macros
-o.heap:	c.heap
-o.heap:	h.defs
-o.heap:	h.dayheap
-o.heap:	h.defs
-o.heap:	C:h.kernel
-o.heap:	C:h.swis
-o.module:	c.module
-o.module:	h.dayheap
-o.module:	h.defs
-o.module:	C:h.kernel
-o.module:	h.defs
-o.module:	h.flashlib
-o.module:	h.header
-o.module:	h.module
-o.module:	C:h.swis
-o.flashlib:	c.flashlib
-o.flashlib:	C:h.swis
-o.flashlib:	C:h.kernel
-o.flashlib:	C:h.kernel
-o.flashlib:	h.flashlib
