@@ -22,7 +22,7 @@ WFLAGS  = ~cfr~v
 # Program specific options:
 #
 COMPONENT = SSound
-TARGET    = Modules.${COMPONENT}
+TARGET    = ${COMPONENT}
 SOURCE    = Source
 SL        = ${SOURCE}.o
 SSLIB     = ${SL}.Drivers ${SL}.Handler ${SL}.Linear ${SL}.Memory ${SL}.Module \
@@ -62,10 +62,10 @@ ${TARGET}: o.SharedSoun makebasic
         Run o.SharedSoun
         ${WIPE} o.* ~cv
 
-import: Drivers.c Handler.c Linear.c Memory.c Module.c SampleRate.c SWIS.c Vars.c Volume.c SharedSoun.c
+import: Debug.c Drivers.c Handler.c Linear.c Memory.c Module.c SampleRate.c SWIS.c Vars.c Volume.c SharedSoun.c
 	echo made text files
 
-makebasic: Drivers.o Handler.o Linear.o Memory.o Module.o SampleRate.o SWIS.o Vars.o Volume.o SharedSoun.o
+makebasic: Debug.o Drivers.o Handler.o Linear.o Memory.o Module.o SampleRate.o SWIS.o Vars.o Volume.o SharedSoun.o
 	echo made basic files
 
 # Dynamic dependencies:
