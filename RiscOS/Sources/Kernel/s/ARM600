@@ -16,14 +16,19 @@ DebugAborts SETL {FALSE}
 
 ; Workspace needed for ARM600 work is as follows:
 ;
-; * Level 2 page tables for a contiguous logical area starting at zero
-;     This consists of:
-;       a) a fixed size bit covering 0 to 192M (currently)
-;       b) a variable size bit covering the free pool - 192M to 192M + (memsize rounded up to 4M)
-;     Note that the 192M value is sufficient to cover all the fixed size areas at present.
-;     As more areas switch to new world, this limit will come down and down, but free pool must always
-;      start at the end of the fixed areas.
-;     (Level 2 for areas outside this region are allocated dynamically afterwards)
+; * Level 2 page tables for a logical area starting at zero. This consists of:
+;       a) a fixed size bit covering 0 to 96M
+;       b) a variable size bit covering the free pool - 96M to 96M + (memsize rounded up to 4M)
+;     - Note that the 96M value is sufficient to cover all the fixed size areas (including screen).
+;     - Free pool must always start at the end of the fixed areas.
+;     - Level 2 for areas outside this region are allocated dynamically afterwards (eg. to support
+;       dynamic areas).
+;     - Level 2 is always 'monotonic' for RAM mappings - ie. the logical address of the L2 entry
+;       for an address (*if* it is validly L2 mapped) can be calculated directly as an offset from
+;       the L2PT base. Non-RAM addresses will normally be Level 1 mapped (I/O, ROM). A patched
+;       ROM will cause Level 2 mapping of ROM that is *not* in the monotonic area.
+;     - The monotonic Level 2 is not always contiguous. Most/all of the areas a) and b) will be, except
+;       that some Level 2 pages may be rescued after initial boot (see L1L2PTenhancements routine). 
 ;
 ; * Level 1 page table (16K, stored in the middle of L2PT, where the I/O + ROM would be if it wasn't section mapped)
 ;
@@ -35,7 +40,7 @@ DebugAborts SETL {FALSE}
 ; video RAM starting at &02000000 size 480K, and an area of "non-video RAM" starting at &02078000, size (totalRAM-480K)
 ; IOMD has 1 area of video RAM and up to 4 areas of non-video RAM.
 ;
-; (Note: when OS is soft-loaded, a 2 Mbyte chunk of DRAM is removed from the RAM map, therefore the model allows for
+; (Note: when OS is soft-loaded, an ROM-sized chunk of DRAM is removed from the RAM map, therefore the model allows for
 ;  1 area of video RAM and up to 5 areas of non-video RAM)
 ;
 ; The fixed system pages (which include those described above) start at the base of the first bank of non-video RAM
@@ -84,7 +89,16 @@ UndStackSoftCamChunk    *       &01E00000
 UndStackSize            *       8*1024
 CamEntriesForVicky      *       UndStackSoftCamChunk + &2000
 UNDSTK                  *       CamEntriesForVicky ; points to end of stack
-PhysSpace               *       &80000000       ; Map of MEMC/IOMD physical space (64M/512M in size)
+
+; logical base address of map of IOMD physical space, excluding RAM
+;
+; after kernel boot, this mapping covers IOMD physical space 0..256M, but is set to fault
+; for 32M..48M - hence VRAM and DRAM are not accessible through this physical copy
+;
+; during kernel boot, the ClearPhysRAM routine uses a temporary mapping of RAM here (hence
+; mapping is temporarily extended to 0..512M)
+;
+PhysSpace               *       &80000000
 
 
 ; - address for virtual area for StrongARM data cache cleaning (32k, for two 16k areas)
@@ -384,7 +398,13 @@ BangCamAltEntry
 ;
 ; exit: r0,r1,r4,r6 corrupted
 ;
+        ASSERT  DuffEntry :AND: &0FFFF000 = DuffEntry
+;
 BangL2PT                                        ; internal entry point used only by BangCamUpdate
+        MOV     r4,#DuffEntry:AND:&0FF00000
+        ORR     r4,r4,#DuffEntry:AND:&000FF000  ; logical address of Nowhere
+        TEQ     r3,r4
+        MOVEQ   pc,lr                           ; never need to (nor should) MMU map a page moved to Nowhere
   [ AlwaysSledgehammer
         B       BangL2PT_sledgehammer
   |
@@ -630,6 +650,9 @@ SSETMEMC ROUT
 
 ; This routine must work in 32-bit mode.
 
+; This routine assumes that there is to be no mapping of VRAM or DRAM in the PhysSpace
+; area after boot, but that it can create such a mapping temporarily
+
 ; in:   r7 = memory speed
 ;       r8 = page size
 ;       r9 = MEMC control register
@@ -643,38 +666,50 @@ SSETMEMC ROUT
      GBLL ClearPhysRAMspeedup
 ClearPhysRAMspeedup SETL {TRUE}
 
+
+    ASSERT MEMC_Type = "IOMD"
+;
+CPRTempMappingBase * PhysSpace   ;base address for temporary logical mapping of physical RAM
+;
+CPRTable
+        DCD     &02000000        ;VRAM physical start
+        DCD     &01000000        ;VRAM physical size (16M)
+        DCD     &10000000        ;DRAM physical start
+        DCD     &10000000        ;DRAM physical size (256M)
+        DCD     0                ;terminator
+        DCD     0                ;terminator
+
 ClearPhysRAM ROUT
 
     [ :LNOT: RunningOnEmul
 
-;StrongARM - We will make the logical representation of physical space for RAM temporarily bufferable
-;            and cacheable if StrongARM. This is a big speed benefit for StrongARM (which won't burst
-;            write in non bufferable+cacheable areas). There is no cache coherency issue after this,
-;            since we only do writes to this space and StrongARM does not allocate cache lines on write
+; When creating the temporary mapping for physical RAM, we make it bufferable and cacheable. This is
+; a big speed benefit for StrongARM (which won't burst write in non bufferable+cacheable areas). There
+; is no cache coherency issue after this, since we only do writes to this space and ARMs do not allocate
+; cache lines on write.
 ;
-        ARM_read_ID r0
-        AND     r0, r0, #&F000
-        CMP     r0, #&A000
-        BNE     %FT06
-        LDR     r0,  =L1PT
-        LDR     r12, =PhysRamTable
-        ADD     r4, r12, #PhysRamTableEnd-PhysRamTable  ; r4 -> end of table
-02
-        LDMIA   r12!, {r10, r11}                        ; load next address, size
-        SUB     r11,r11,#&100000                        ; 1 Mb will be done on first L1PT update
-        ORR     r10, r10, #PhysSpace                    ; point to logical representation of physical space
-        ADD     r1,r0,r10,LSR #(20-2)                   ; L1PT address for same
-        BIC     r1,r1,#3                                ; in case address picked up was not 1Mb aligned
 
+;make temporary logical mapping for all physical RAM areas
+;
+        LDR     r0,  =L1PT
+        ADR     r12, CPRTable
+02
+        LDMIA   r12!, {r10, r11}                        ; load next physical address, size (1Mb aligned)
+        CMP     r10, #0
+        BEQ     %FT06
+
+        ORR     r4, r10, #CPRTempMappingBase            ; logical address for temporary mapping
+        ADD     r1, r0, r4, LSR #(20-2)                 ; L1PT address for same
+        ORR     r4, r10, #&410
+        ORR     r4, r4, #&00E                           ; L1PT value - section mapped, svc access, C=1, B=1
 04
-        LDR     r2,[r1]
-        ORR     r2,r2,#&C                               ; set cacheable and bufferable bits
-        STR     r2,[r1],#4
-        SUBS    r11,r11,#&100000                        ; another 1 Mb done
-        BPL     %BT04
-        TEQ     r12, r4                                 ; have we done all areas?
-        BNE     %BT02
-        ARMA_flush_DTLB                                 ; make sure we benefit from the mapping change
+        STR     r4,[r1],#4                              ; update L1PT
+        ADD     r4, r4, #&100000
+        SUBS    r11, r11, #&100000                      ; another 1 Mb done
+        BNE     %BT04
+        B       %BT02                                   ; next physical RAM area
+        ARM_flush_TLB r11                               ; mapping change
+
 06
 ;now let us do the clear
   [ ClearPhysRAMspeedup
@@ -697,7 +732,7 @@ ClearPhysRAM ROUT
 
         LDMIA   r12!, {r10, r11}                        ; load next address, size
 
-        ORR     r10, r10, #PhysSpace                    ; point to logical representation of physical space
+        ORR     r10, r10, #CPRTempMappingBase           ; point to temporary RAM mapping
         ADD     r11, r11, r10                           ; r11 -> end address of this area
 15
         ADD     r5, r5, r10                             ; r5 -> skip address if any
@@ -731,32 +766,25 @@ ClearPhysRAM ROUT
         STMIA   r12!,{r0-r3}
   ]
 
-;StrongARM - now let us remove bufferable and cacheable status of logical representation of physical space,
-;            if running on StrongARM
+;remove temporary mapping of physical RAM
 ;
-        ARM_read_ID r0
-        AND     r0, r0, #&F000
-        CMP     r0, #&A000
-        BNE     %FT36
         LDR     r0,  =L1PT
-        LDR     r12, =PhysRamTable
-        ADD     r4, r12, #PhysRamTableEnd-PhysRamTable  ; r4 -> end of table
+        ADR     r12, CPRTable
 32
-        LDMIA   r12!, {r10, r11}                        ; load next address, size
-        SUB     r11,r11,#&100000                        ; 1 Mb will be done on first L1PT update
-        ORR     r10, r10, #PhysSpace                    ; point to logical representation of physical space
-        ADD     r1,r0,r10,LSR #(20-2)                   ; L1PT address for same
-        BIC     r1,r1,#3                                ; in case address picked up was not 1Mb aligned
+        LDMIA   r12!, {r10, r11}                        ; load next address, size (1Mb aligned)
+        CMP     r10, #0
+        BEQ     %FT36
 
+        ORR     r4, r10, #CPRTempMappingBase            ; logical address for temporary mapping
+        ADD     r1, r0, r4, LSR #(20-2)                 ; L1PT address for same
+        MOV     r4, #0                                  ; L1PT value - fault
 34
-        LDR     r2,[r1]
-        BIC     r2,r2,#&C                               ; clear cacheable and bufferable bits
-        STR     r2,[r1],#4
-        SUBS    r11,r11,#&100000                        ; another 1 Mb done
-        BPL     %BT34
-        TEQ     r12, r4                                 ; have we done all areas?
-        BNE     %BT32
-        ARMA_flush_DTLB
+        STR     r4,[r1],#4                              ; update L1PT
+        SUBS    r11, r11, #&100000                      ; another 1 Mb done
+        BNE     %BT34
+        B       %BT32                                   ; next physical RAM area
+        ARM_flush_TLB r11                               ; mapping change
+
 36
 
     ] ;RunningOnEmul
@@ -827,12 +855,8 @@ RamSkipTable
 ;
 ;       InitMEMC - Initialise memory controller - now for IOMD only
 ;
-; in:   If ResetIndirection assembly flag set, then
-;         r1 = 0 if reset, 1 if break
-;       else
-;         r1 undefined
-;       endif
-
+; in:   r1 = 0 if reset, 1 if break
+;
 InitMEMC ROUT
 
 ; Note: On IOMD, all accesses go to ROM until the first write cycle.
@@ -1082,34 +1106,35 @@ CommonInit
 ; The MMU is on and we want it off: whether we're executing out of ROM or RAM, we
 ; have to jump to the physical location of our image, which means paging it in at its
 ; own physical address.
-
-; On MEMC1 systems it's possible that the L1/L2 logical address is the same as the image's physical
-; address, which causes a headache, so we'd best use the physical mapping of the page tables (this
-; can't clash as IOMD only goes up to 2000 0000 and our physical mapping is above that).
-
+;
+; mjs 02 Oct 97 - modernised code here, provoked by desire to remove reliance on PhysSpace copy of RAM:
+;
+; We only map in the 1st Mb of ROM at its own physical address - ie. we are assuming kernel reset
+; stuff all fits in 1st Mb (reasonable since whole kernel is much less than 1 Mb).
+; Now, this involves the mapping of 1M at either logical address 0 (the physical address of hard ROM)
+; or at logical address somewhere within &10000000 to &20000000 (the physical address of softloaded
+; ROM somewhere in DRAM). We can do this without stuffing things because interrupts are off, so
+; the only old mapping that might be relevant is the L1PT itself (no clash with these addresses),
+; and soon we are going to completely recast things as part of reset.
+;
 05
-        MOV     r0, #0
-        LDR     r0, [r0, #DRAMPhysAddrA]        ; get address of 1st DRAM bank
-        LDR     r1, =PhysSpace + DRAMOffset_L1PT ; offset to start of L1
-        ADD     r0, r0, r1                      ; r0 -> L1 in physical mapped logical space
-
+        LDR     r0,=L1PT
         LDR     r1, [r0, #ROM :SHR: (20-2)]     ; load L1 entry for 1st Mbyte of ROM
-        MOV     r1, r1, LSR #20                 ; knock off other bits
+        MOV     r1, r1, LSR #20                 ; r1 := physical address of ROM >> 20
         LDR     r2, =(AP_None * L1_APMult) + L1_Section
                                                 ; (svc-only access) + ~ucb + section mapped
-        ORR     r2, r2, r1, LSL #20             ; merge in address
-        STR     r2, [r0, r1, LSL #2]!           ; store in L1PT for 1st Mbyte
-        ADD     r2, r2, #1 :SHL: 20             ; move on to 2nd Mbyte
-        STR     r2, [r0, #4]                    ; and store in next entry
+        ORR     r2, r2, r1, LSL #20             ; munge in physical address
+        STR     r2, [r0, r1, LSL #2]            ; store flat mapping in L1PT for physical address of 1st Mbyte of ROM
 
         ARM_flush_cacheandTLB r0
 
         MOV     r0, r1, LSL #20
-        SUB     r0, r0, #ROM                    ; form RAM-ROM offset
-        ADD     pc, pc, r0                      ; jump to RAM code (when we get onto IOMD, we'll have to be in 32-bit mode)
+        SUB     r0, r0, #ROM                    ; form physical minus logical offset
+        ADD     pc, pc, r0                      ; jump to ourselves at equivalent physical address (having flat mapped)
         NOP                                     ; this instruction will be skipped
 
-; we're now in RAM, so it's safe to turn the MMU off, but leave us in 32-bit config (and 32-bit mode)
+; we're now in flat map physical equivalent, so it's safe to turn the MMU off, 
+; but leave us in 32-bit config (and 32-bit mode)
 
         BIC     lr, lr, #&FC000003              ; knock out PSR bits from return address
                                                 ; (we know we were in 32-bit config, 26-bit mode on entry)
@@ -1824,7 +1849,7 @@ MemSizeTotalRAM
         STR     r7, [r3, r5, LSL #2]            ; store replacement entry in L1 (not U,C or B)
 
         ARM_MMU_transbase r3                    ; set up MMU pointer to L1
-        ADD     r3, r3, #PhysSpace              ; when we put L1 entry back later, we need to use the copy in PhysSpace area
+        LDR     r3, =L1PT                       ; when we put L1 entry back later, we will want to use logical address
 
         MOV     r7, #1
         ARM_MMU_domain r7                       ; only use domain 0
@@ -1832,12 +1857,6 @@ MemSizeTotalRAM
         ARM_flush_cacheandTLB r7                ; flush cache + TLB just in case
 
         ARM_number r2                           ;should be 6,7,8 or &A
- [ ARM810support
-   ;ARM810 has already had fast clock selected (MemSizeIOMD) - so has StrongARM, therefore code below removed
- |
-        CMP     r2,#&A
-        ARMA_fastcoreclock EQ                   ;otherwise StrongARM is going to have a limp wrist
- ]
         SUB     r2,r2,#6                        ; r2 := 0..4 for ARM 6,7,8,(9),&A
         ADRL    r7,ARM_default_MMU_CR_table
         LDR     r7,[r7,r2,LSL #2]               ;get appropriate default value for MMU control reg
@@ -1845,7 +1864,7 @@ MemSizeTotalRAM
 CritStart
         ARM_write_control r7
 
-; now we can jump into the ROM space (if we're not already there)
+; now we can jump into the logical ROM space
 
         RSB     r4, r4, #ROM                    ; make offset from current address to ROM
         ADD     pc, pc, r4                      ; jump up into ROM area
@@ -1894,7 +1913,7 @@ CritEnd                                         ; 2 words after we go up into RO
 
 ROMbit  *       1 :SHL: 12
 Vidbit  *       1 :SHL: 13
-PSS     *       PhysSpaceSize           :SHR: 20  ; Number of megabytes in physical space (used in table generation)
+PSS     *       PhysSpaceSize_Full  :SHR: 20  ; Number of megabytes in full IOMD physical space
 
         MACRO
         MemInitSection  $size, $U, $C, $B, $logaddr, $ap, $physaddr
@@ -1958,7 +1977,9 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
         ]
   ]
 
-        MemInitSection PSS, 1, 0, 0, PhysSpace, AP_None, &00000000      ; map of physical space
+        ; map of IOMD physical space, including RAM (need for POST) - RAM part will be reset to inaccessible after
+        ; ClearPhysRAM (and hence this mapping will be reduced to cover only PhysSpaceSize_NoDRAM by end of boot)
+        MemInitSection PSS, 1, 0, 0, PhysSpace, AP_None, &00000000
 
         MemInitROMs      2, 1, 1, 1, &FF800000, AP_Read                 ; ROM
         MemInitROMs      2, 1, 1, 1, &FFA00000, AP_Read                 ; ROM
@@ -1967,7 +1988,13 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
 
 ; Now explicit initialisation of L2 for static pages
 
-        MemInitPagesL2  &8000, 0, 0, CursorChunkAddress, AP_Read, DRAMOffset_CursorChunk  ;but see L1L2PTenhancements
+;3.6 has whole cursor chunk ~C~B which is disaster for SWI dispatcher etc
+;3.7 still declares like this but 'fixes' it in the L2PT later (5 pages CB, 3 pages ~CB)
+;now we just do what 3.7 did, but do it more elegantly by declaring properly in the table
+;note this all assumes 4k pages, but kernel no longer supports pre-Medusa stuff anyway
+;
+        MemInitPagesL2  &5000, 1, 1, CursorChunkAddress, AP_Read, DRAMOffset_CursorChunk              ;first 5 pages CB (SWI dispatcher etc)
+        MemInitPagesL2  &3000, 0, 1, CursorChunkAddress+&5000, AP_Read, DRAMOffset_CursorChunk+&5000  ;next 3 pages ~CB (cursor data)
         MemInitPagesL2  &8000, 1, 1, &00000000, AP_Full, DRAMOffset_PageZero
         MemInitPagesL2  &8000, 1, 1, SysHeapChunkAddress, AP_Full, DRAMOffset_SystemHeap
 
@@ -3112,19 +3139,37 @@ ProcessTransfer ENTRY "r1-r7,r12"
 
 
 ; it's page mapped, so check L2PT
-; lr = L1 table entry
-; We use the logical copy of physical space here, in order to access the entry pointed to by the L1 entry
+; lr = L1PT entry
+;
+; mjs 02 Oct 97: We can no longer use logical copy of physical space (now removed for RAM) to look up L2PT
+;                entry. We cannot use trick of assumed monotonic L2PT because this is not true
+;                for a patched ROM, for example. Therefore, we have to explicitly find logical
+;                address of L2PT entry from physical address.
 
 CheckPage
+        MOV     lr, lr, LSR #10
+        MOV     lr, lr, LSL #10                         ; physical address of base of page table, from L1PT entry
+
+        Push    "r6,r8"
+        MOV     r5, #PhysRamTable                       ; converting physical address to page number...
+        MOV     r6, #0                                  ; start at page number 0
+checkpage_loop
+        LDMIA   r5!, {r7,r8}                            ; start address, size of physical chunk
+        SUB     r7, lr, r7                              ; see if we are in this chunk
+        CMP     r7, r8
+        ADDCS   r6, r6, r8, LSR #SmallPageSizeShift     ; move on to next chunk
+        BCS     checkpage_loop
+        ADD     r6, r6, r7, LSR #SmallPageSizeShift     ; found page number
+        MOV     r5, #0                                  ; converting page number to logical address...
+        LDR     r5, [r5, #CamEntriesPointer]
+        LDR     lr, [r5, r6, LSL #3]                    ; found logical address
+        Pull    "r6,r8"
+
         MOV     r5, r2, LSR #SmallPageSizeShift         ; r2 as a multiple of 4K
         MOV     r5, r5, LSL #SmallPageSizeShift
         ADD     r5, r5, #SmallPageSize                  ; if translation fault, then it applies to small page
 
-        MOV     lr, lr, LSR #10                         ; remove domain and U bits
-        MOV     lr, lr, LSL #10
-        ORR     lr, lr, #PhysSpace                      ; now physical address is converted to a logical one (in physspace)
         AND     r7, r2, #&000FF000                      ; extract bits which are to form L2 offset
-
         LDR     lr, [lr, r7, LSR #10]                   ; lr = L2PT entry
         ANDS    r7, lr, #3                              ; 00 => trans.fault, 01 => large page
                                                         ; 10 => small page, 11 => reserved (fault)
@@ -3242,27 +3287,6 @@ L1L2PTe_WPROMdone
         MOV     r0,#IOC
         MOV     r1,#5
         STRB    r1,[r0, #IOMD_ROMCR1]           ;ROM bank 1 speed = fastest (62.5 ns)
-
-;make first 5 pages of cursor chunk cacheable and bufferable - this is rather handy, 'coz things
-;like the SWI dispatcher, IRQ dispatcher are here. May be a slight worry over cursor data
-;being write-back cached (StrongARM) - should strictly clean,drain write buffer or whatever for shape change.
-        LDR     r0,=L2PT :OR: (CursorChunkAddress :SHR: 10)  ;address of 1st L2PT word for CursorChunk
-        MOV     R2,#5                           ;5 entries to adjust
-01
-        LDR     r1,[r0]
-        ORR     r1,r1,#&C                       ;make page cacheable and bufferable
-        STR     r1,[r0],#4
-        SUBS    r2,r2,#1
-        BNE     %BT01
-
-;make other 3 pages of chunk bufferable
-        MOV     R2,#3
-02
-        LDR     r1,[r0]
-        ORR     r1,r1,#&4                       ;make page bufferable
-        STR     r1,[r0],#4
-        SUBS    r2,r2,#1
-        BNE     %BT02
 
 ;if we are on StrongARM, make the pages of the L2PT itself (for AppSpace only), bufferable (improves task swap speed)
 ;AppSpace is 0-28M
@@ -3431,37 +3455,12 @@ SyncCodeAreasSWI ROUT
 
         LTORG
 
-;
-;some service routines here for easy patchability
         ALIGN
-
-dtgps_SAcleanflush  ; used during pages_unsafe/safe in ChangeDyn
-    ADR     r0,PageBlock1
-    ADD     r0,r0,#4        ; r0 -> page block (logical addresses)
-    LDR     r1,NumEntries
-dtgps_SAloop0
-    LDR     r2,[r0],#12
-    ADD     r3,r2,#4096     ; 4k page
-dtgps_SAloop1
-    ARMA_cleanflush_DCentry r2
-    ADD     r2,r2,#32
-    ARMA_cleanflush_DCentry r2
-    ADD     r2,r2,#32
-    ARMA_cleanflush_DCentry r2
-    ADD     r2,r2,#32
-    ARMA_cleanflush_DCentry r2
-    ADD     r2,r2,#32
-    CMP     r2,r3
-    BLO     dtgps_SAloop1
-    SUBS    r1,r1,#1
-    BNE     dtgps_SAloop0
-    ARMA_drain_WB           ; squeeze out those last drops
-    MOV     pc,lr
 
  ]
 
-;ARM810 equiv of dtgps_SAcleanflush must clean/flush whole cache (cannot clean/flush by virtual address)
-;and is shared with code in meminfo_flushplease, below
+;
+;some service routines here for easy patchability
 
 meminfo_flushplease         ; used by MemInfo
         ARM_read_ID r0
@@ -3487,7 +3486,6 @@ mifp_SA
         MOV     pc,lr
   [ ARM810support
 mifp_810
-dtgps_810cleanflush                     ;entry point also used during pages_unsafe/safe in ChangeDyn
     [ ARM810cleanflushbroken
         ARM8_cleanflush_IDC r0,r1
     |
