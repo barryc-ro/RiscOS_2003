@@ -85,6 +85,7 @@ rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
 	${MKDIR} aof
+	${MKDIR} o
 	${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
