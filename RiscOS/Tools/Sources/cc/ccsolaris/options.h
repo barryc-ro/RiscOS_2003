@@ -3,12 +3,6 @@
  * Copyright (C) 1991, 1992 Advanced RISC Machines Ltd. All rights reserved.
  */
 
-/*
- * RCS $Revision$
- * Checkin $Date$
- * Revising $Author$
- */
-
 #ifndef _options_LOADED
 #define _options_LOADED
 
