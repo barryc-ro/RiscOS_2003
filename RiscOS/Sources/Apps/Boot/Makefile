@@ -48,7 +48,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${CP} Resources.${LOCALE}.${APP}   ${RESAPP}   ${CPFLAGS}
+        ${CP} Resources.<Machine>.${LOCALE}.${APP}   ${RESAPP}   ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 # Dynamic dependencies:
