@@ -200,7 +200,7 @@ finalise_end_call
 01      SUB     sl, sl, #0000
         STMIA   sl, {v1, v2}            ; restore old reloc modifiers
         MOVNE   r1, #0
-        CMPNE   r1, #&80000000
+        CMPNE   r1, #&80000000          ; set V
         LDMFD   sp!, {r7-r12, pc}
 finalise_end_end
 
@@ -255,9 +255,14 @@ service_call_start
         STMFD   sp!, {r0-r9, sl, fp, lr}; create args in store
         MOV     a1, r1                  ; service call number
         MOV     a2, sp                  ; regset *
-        MRS     v3, CPSR                ; get hold of processor status register
-        ORR     a4, v3, #SVC_Mode       ; force SVC mode (preserve 26/32 bitness)
-        MSR     CPSR_ctl, a4            ; change mode, preserving interrupt enable
+        MOV     v3, #0                  ; default for 26-bit processors
+        MRS     v3, CPSR                ; get hold of processor status register (or NOP)
+        TST     v3, #&1C                ; NE if in a 32-bit mode
+        ORRNE   a4, v3, #SVC_Mode       ; force SVC mode (preserve 26/32 bitness)
+        MSRNE   CPSR_ctl, a4            ; change mode, preserving interrupt enable
+        MOVEQ   v5, pc
+        BICEQ   a4, v5, #SVC_Mode
+        TEQEQP  a4, #SVC_Mode           ; to SVC mode, preserving int'rupt enbl
         MOV     fp, #0                  ; halt C backtrace here!
         MOV     v4, lr                  ; save r14_SWI (lest entry mode = IRQ)
         MOV     sl, sp, LSR #20
@@ -265,15 +270,17 @@ service_call_start
         LDMIA   sl, {v1, v2}            ; save old reloc modifiers over fn call
         MOV     a3, r12                 ; private word ptr.
         LDR     r12, [r12]              ; -> static data
-        LDMIB   r12, {v5, v6}           ; new relocation modifiers
-        STMIA   sl,  {v5, v6}           ; set by module init
+        LDMIB   r12, {r12, r14}         ; new relocation modifiers
+        STMIA   sl,  {r12, r14}         ; set by module init
 01      ADD     sl, sl, #0000
 
 service_call_call
         BL      .
 
         MOV     lr, v4                  ; retrieve SWI r14
-        MSR     CPSR_ctl, v3            ; back to entry mode
+        TST     v3, #&1C                ; NE if in a 32-bit mode
+        MSRNE   CPSR_ctl, v3            ; back to entry mode (32-bit style)
+        TEQEQP  v5, #0                  ; back to entry mode (26-bit style)
 02      SUB     sl, sl, #0000
         STMIA   sl, {v1, v2}            ; restore old reloc modifiers
         LDMFD   sp!, {r0-r9, sl, fp, pc}
@@ -365,11 +372,12 @@ swi_handler_veneer_32_adrtoken_offset
 ; _kernel_oserror *swi_handler(int swi_no, _kernel_swi_regs *r, void *pw);
 swi_handler_start
         STMFD   sp!, {r0-r9, lr}        ; create args in store; save lr;
+        MOV     v5, #0                  ; default for 26-bit processors
         MRS     v5, CPSR                ; get hold of the flags
         MOV     sl, sp, LSR #20
         MOV     sl, sl, LSL #20         ; SP_LWM
         MOV     a1, r11                 ; swi_no
-        ADD     a2, sp, #4              ; 'r'
+        MOV     a2, sp                  ; 'r'
         LDMIA   sl, {v1, v2}            ; save old reloc modifiers over fn call
         MOV     a3, r12                 ; private word ptr.
         LDR     r12, [r12]              ; -> static data
@@ -385,12 +393,18 @@ swi_handler_call
         STMIA   sl, {v1, v2}            ; restore old reloc modifiers
         TEQ     a1, #0                  ; restore (pos modified) regs
         BNE     %FT05                   ; jump to error exit case
+        TST     v5, #&1C                ; NE if in 32-bit mode
+        LDMEQFD sp!, {r0-r9, pc}^       ; return from SWI
         MSR     CPSR_all, v5            ; restore flags (clears V, corrupts Z!)
         LDMFD   sp!, {r0-r9, pc}        ; return from SWI
 05      ADD     sp, sp, #4              ; junk old R0 in saved registers
-        ORR     v5, v5, #V_Bit          ; set V flag in saved PSR ready for exit
         CMP     a1, #-1
         BEQ     swi_handler_bad_swi     ; go and get the BadSWI translated error
+swi_handler_error_exit
+        TST     v5, #&1C                ; NE if in 32-bit mode
+        LDMEQFD sp!, {r1-r9, lr}        ; exit the 26-bit way
+        ORREQS  pc, lr, #V_Bit
+        ORR     v5, v5, #V_Bit          ; set V flag in saved PSR ready for exit
         MSR     CPSR_all, v5            ; restore flags (sets V)
         LDMFD   sp!, {r1-r9, pc}        ; return value (error pointer) => r0
 swi_handler_bad_swi
@@ -400,8 +414,7 @@ swi_handler_bad_swi
 03      SUB     r4,pc,#0,30             ; gets relocated in write_output
         SUB     r4,r4,#0,22             ; this instruction might get removed by CMHG
         SWI     XMessageTrans_ErrorLookup
-        MSR     CPSR_all, v5            ; restore flags (sets V)
-        LDMFD   sp!, {r1-r9, pc}
+        B       swi_handler_error_exit
 BadSwiToken
         &       Error_BadSWI
         =       "BadSWI", 0
@@ -526,9 +539,14 @@ irq_common_head_veneer_32
 ; int irq_handler(_kernel_swi_regs *r, void *private_word);
 irq_common_head_start
         MOV     a1, sp                  ; input register set (possible args)
-        MRS     v3, CPSR                ; get hold of the flags
-        ORR     a4, v3, #SVC_Mode       ; force SVC mode (preserve 32-bitness)
-        MSR     CPSR_ctl, a4            ; switch mode
+        MOV     v3, #0                  ; default for 26-bit processors
+        MRS     v3, CPSR                ; get hold of the flags (or NOP)
+        TST     v3, #&1C                ; NE if in a 32-bit mode
+        MOVEQ   v5, pc
+        ORREQ   a4, v5, #SVC_Mode
+        TEQEQP  a4, #0                  ; to SVC mode, preserving int'rupt enbl
+        ORRNE   a4, v3, #SVC_Mode       ; force SVC mode (preserve 32-bitness)
+        MSRNE   CPSR_ctl, a4            ; switch mode
         MOV     a2, r12                 ; private word ptr.
 
         MOV     v4, lr                  ; remember SWI r14
@@ -561,6 +579,13 @@ irq_common_tail_start
 02      SUB     sl, sl, #0000
         STMIA   sl, {v1, v2}            ; restore old reloc modifiers
         MOV     lr, v4                  ; restore SWI r14
+        TST     v3, #&1C                ; NE if in a 32-bit mode
+        BNE     irq_common_tail_32bit_exit
+        TEQP    v5, #0                  ; back to entry mode
+        TEQS    r0, #0                  ; did he return 0?
+        LDMEQFD sp!, {r0-r9, sl, fp, lr, pc}^ ; Yes
+        LDMNEFD sp!, {r0-r9, sl, fp, pc}^     ; No, pass it on
+irq_common_tail_32bit_exit
         MOV     ip, v3                  ; copy flags to non-blatted register
         MSR     CPSR_ctl, v3            ; back to entry mode
         TEQS    r0, #0                  ; did he return 0?
@@ -594,9 +619,14 @@ generic_common_head_veneer_32
 ; _kernel_oserror *generic_handler(_kernel_swi_regs *r, void *private_word);
 generic_common_head_start
         MOV     a1, sp                  ; input register set (possible args)
-        MRS     v3, CPSR                ; get hold of the flags
-        ORR     a4, v3, #SVC_Mode       ; force SVC mode (preserve 32-bitness)
-        MSR     CPSR_ctl, a4            ; switch mode
+        MOV     v3, #0                  ; default for 26-bit processors
+        MRS     v3, CPSR                ; get hold of the flags (or NOP)
+        TST     v3, #&1C                ; NE if in a 32-bit mode
+        MOVEQ   v5, pc
+        ORREQ   a4, v5, #SVC_Mode
+        TEQEQP  a4, #0                  ; to SVC mode, preserving int'rupt enbl
+        ORRNE   a4, v3, #SVC_Mode       ; force SVC mode (preserve 32-bitness)
+        MSRNE   CPSR_ctl, a4            ; switch mode
         MOV     a2, r12                 ; private word ptr.
 
         MOV     v4, lr                  ; remember SWI r14
@@ -628,6 +658,15 @@ generic_common_tail_start
 02      SUB     sl, sl, #0000
         STMIA   sl, {v1, v2}            ; restore old reloc modifiers
         MOV     lr, v4                  ; restore r14_svc
+        TST     v3, #&1C                ; NE if in a 32-bit mode
+        BNE     generic_common_tail_32bit_exit
+        TEQP    v5, #0                  ; back to entry mode
+        TEQ     a1, #0
+        LDMEQFD sp!, {r0-r9, sl, fp, pc}^ ; return with unmodified flags
+        ADD     sp, sp, #4
+        LDMFD   sp!, {r1-r9, sl, fp, lr}; unless return value was non-0
+        ORRS    pc, lr, #V_Bit          ; in which case its an error.
+generic_common_tail_32bit_exit
         MSR     CPSR_ctl, v3            ; back to entry mode
         TEQ     a1, #0
         STRNE   a1, [sp]                ; blat stacked R0
