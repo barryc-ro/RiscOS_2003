@@ -249,7 +249,7 @@ static _kernel_oserror *open_modefile (const char *filename)
             /* Couldn't open file but only C library knows why: let's find out. */
             regs.r[0] = 0x4f;           /* go try opening it */
             regs.r[1] = (int) filename;  regs.r[2] = 0;
-            res = _kernel_swi (OS_Find | XOS_Bit, &regs, &regs);
+            res = _kernel_swi (OS_Find, &regs, &regs);
             if (res == NULL)
             {
                 /*
@@ -258,7 +258,7 @@ static _kernel_oserror *open_modefile (const char *filename)
                  */
                 int fh = regs.r[0];
                 regs.r[0] = 0;  regs.r[1] = fh;
-                (void) _kernel_swi (OS_Find | XOS_Bit, &regs, &regs);
+                (void) _kernel_swi (OS_Find, &regs, &regs);
                 res = error (ERR_OPENFAIL, filename, 0, 0);
             }
         }
@@ -944,7 +944,7 @@ static _kernel_oserror *set_monitortype (int monitortype)
     _kernel_swi_regs regs;
     regs.r[0] = 3;
     regs.r[1] = monitortype;
-    return _kernel_swi (OS_ScreenMode | XOS_Bit, &regs, &regs);
+    return _kernel_swi (OS_ScreenMode, &regs, &regs);
 }
 
 static int read_monitortype ()
@@ -952,7 +952,7 @@ static int read_monitortype ()
     _kernel_swi_regs regs;
     _kernel_oserror *res;
     regs.r[0] = 1;
-    res = _kernel_swi (OS_ReadSysInfo | XOS_Bit, &regs, &regs);
+    res = _kernel_swi (OS_ReadSysInfo, &regs, &regs);
     if (res) return -1; else return regs.r[1];
 }
 
@@ -974,7 +974,7 @@ static void inform_modefilechanged ()
 {
     _kernel_swi_regs regs;
     regs.r[1] = Service_ModeFileChanged;
-    (void)_kernel_swi (OS_ServiceCall | XOS_Bit, &regs, &regs);
+    (void)_kernel_swi (OS_ServiceCall, &regs, &regs);
 }
 
 #if DODEBUG
@@ -1098,7 +1098,7 @@ static _kernel_oserror *vidcbandwidthlimit (char *numstring)
     if (res) return res;                        /* if error return it */
 
     r.r[0] = 0x208;                                     /* reason code for 'read amount of VRAM' */
-    res = _kernel_swi (OS_Memory | XOS_Bit, &r, &r);    /* returns r1 = number of pages, r2 = page size */
+    res = _kernel_swi (OS_Memory, &r, &r);              /* returns r1 = number of pages, r2 = page size */
     if (res) return res;
 
     vram = r.r[1] * r.r[2];                     /* vram = total amount of VRAM in bytes */
@@ -1470,6 +1470,126 @@ static void service_enumeratescreenmodes (_kernel_swi_regs *regs)
     }
 }
 
+static int mode_available(uns32 xres, uns32 yres, int depth, int framerate)
+{
+    ModeDescriptionRef mp;
+    int nmodes;
+
+    mp = find_by_xy( current_monitor->modelist, xres, yres, &nmodes);
+    if (!mp)
+        return 0;
+    do
+    {
+        if ((framerate == -1 || framerate == mp->frame_hz) &&
+            mode_valid (mp, depth, 0xFFFFFFFF, 0xFFFFFFFF))
+        {
+            return 1;
+        }
+        mp = mp->next;
+    } while (--nmodes);
+
+    return 0;
+}
+
+static void service_modetranslation (_kernel_swi_regs *regs)
+{
+    unsigned int flags;
+    int depth;
+
+    static const char pal[4]  = {  0,  8, 12, 15 };
+    static const char ntsc[4] = { 44, 45, 46, 46 };
+    static const char vga[4]  = { 25, 26, 27, 28 };
+
+    /* We do monitor type 7 only */
+    if (regs->r[3] != 7 || !current_monitor)
+        return;
+
+    /*
+     * Someone has asked for an old-style mode number, but we
+     * must have refused it.
+     *
+     * If we don't handle this, the Kernel will select one of
+     * modes 25, 26, 27 or 28. This would be fine, except
+     * we may not have mode 25, due to interlacing problems, or
+     * we may have only non-interlaced modes.
+     *
+     * Note we're not told the bandwidth and memory limits.
+     * Could deal with this by issuing OS_CheckModeValid for
+     * each mode, but that adds reentrancy problems :) The
+     * selection of modes above are within the limits of even
+     * an A310, so we assume they won't be too big/fast.
+     */
+
+    /* What depth are they looking for? */
+    if (_swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2)|_OUT(_FLAGS),
+              regs->r[2], 9, &depth, &flags) || (flags & _C))
+        return;
+
+    /*
+     * Clamp depth to 8bpp to restrict ourselves to old-style
+     * modes.
+     */
+    if (depth > 3)
+        depth = 3;
+
+  retry_with_4bpp:
+
+    /*
+     * Check if 640x480xdepth @ 60Hz is available. If so, allow
+     * kernel to do normal.
+     */
+     if (mode_available(640, 480, depth, 60))
+     {
+         regs->r[1] = 0;                /* Service_Serviced */
+         regs->r[2] = vga[depth];       /* substitute mode */
+         return;
+     }
+
+     /*
+      * We don't have a standard VGA mode. Let's try a PAL TV
+      * mode.
+      */
+     if (mode_available(640, 256, depth, 50))
+     {
+         regs->r[1] = 0;                /* Service_Serviced */
+         regs->r[2] = pal[depth];       /* substitute mode */
+         return;
+     }
+
+     /*
+      * Alright then. How about a NTSC TV mode?
+      */
+     if (mode_available(640, 200, depth, 60))
+     {
+         regs->r[1] = 0;                /* Service_Serviced */
+         regs->r[2] = ntsc[depth];      /* substitute mode */
+         return;
+     }
+
+     /*
+      * Check if 640x480xdepth @ any rate is available.
+      */
+     if (mode_available(640, 480, depth, -1))
+     {
+         regs->r[1] = 0;                /* Service_Serviced */
+         regs->r[2] = vga[depth];       /* substitute mode */
+         return;
+     }
+
+     /*
+      * Still getting nowhere? Maybe we can't do 1bpp or 8bpp for
+      * various reasons. Try again with 4bpp.
+      */
+     if (depth != 2)
+     {
+         depth = 2;
+         goto retry_with_4bpp;
+     }
+
+     /* I give up. Let someone else worry about it. */
+     return;
+}
+
 static void module_shutdown ()
 {
     (void) restore_monitortype (); /* restore old value */
@@ -1481,7 +1601,7 @@ static int we_are_preferred (void *pw)
     _kernel_swi_regs sregs;
     sregs.r[0] = 18;
     sregs.r[1] = (int)"ScreenModes";
-    (void)_kernel_swi (OS_Module | XOS_Bit, &sregs, &sregs);
+    (void)_kernel_swi (OS_Module, &sregs, &sregs);
     return (sregs.r[4] == *(int *)pw);
 }
 
@@ -1495,7 +1615,7 @@ _kernel_oserror *ScreenModes_init (char *cmd_tail, int podule_base, void *pw)
 
     /* Determine Video Controller type for this machine. */
     regs.r[0] = 2;
-    res = _kernel_swi (OS_ReadSysInfo | XOS_Bit, &regs, &regs);
+    res = _kernel_swi (OS_ReadSysInfo, &regs, &regs);
     if (res != NULL)
         return res;                     /* ought never to happen! */
     vcode = (enum vidctype) ((regs.r[0] >> 24) & 0xFF);
@@ -1543,6 +1663,8 @@ void ScreenModes_servicecall (int servicecallno, _kernel_swi_regs *regs, void *p
         service_modeextension (regs);
     else if (servicecallno == Service_EnumerateScreenModes)
         service_enumeratescreenmodes (regs);
+    else if (servicecallno == Service_ModeTranslation)
+        service_modetranslation (regs);
 }
 
 
