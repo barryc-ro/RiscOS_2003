@@ -1,29 +1,37 @@
-/***************************************************/
-/* File   : Object.c                               */
-/*                                                 */
-/* Purpose: Handling OBJECT, APPLET and EMBED.     */
-/*                                                 */
-/* Author : A.D.Hodgkinson                         */
-/*                                                 */
-/* History: 05-Oct-97: Created.                    */
-/***************************************************/
+/**************************************************************/
+/* File:    Object.c                                          */
+/*          (C) 2000 Pace Micro Technology PLC                */
+/*          All rights reserved                               */
+/*                                                            */
+/* Purpose: Handling OBJECT, APPLET and EMBED.                */
+/*                                                            */
+/* Author:  A.D.Hodgkinson.                                   */
+/*                                                            */
+/* History: 05-Oct-1997 (ADH): Created.                       */
+/*          24-May-2000 (ADH): 64-wide comments adopted.      */
+/**************************************************************/
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "swis.h"
-#include "flex.h"
+#include <kernel.h>
+#include <swis.h>
+#include <tboxlibs/flex.h>
 
-#include "HTMLLib.h" /* HTML library API, Which will include html2_ext.h, tags.h and struct.h */
+#include <HTMLLib/HTMLLib.h>
 
-#include "wimp.h"
-#include "wimplib.h"
-#include "event.h"
+#include <tboxlibs/wimp.h>
+#include <tboxlibs/wimplib.h>
+#include <tboxlibs/event.h>
 
-#include "toolbox.h"
+#include <tboxlibs/toolbox.h>
 
-#include "svcprint.h"
+#ifdef TRACE
+  #define DEBUGLIB
+#endif
+#include <debuglib/debuglib.h>
+
 #include "Global.h"
 #include "FromROSLib.h"
 #include "Utils.h"
@@ -42,6 +50,7 @@
 #include "Reformat.h"
 #include "TokenUtils.h"
 #include "Toolbars.h"
+#include "URLutils.h"
 #include "URLveneer.h"
 #include "Windows.h"
 
@@ -56,19 +65,102 @@ static int               object_get_object_position (browser_data * b, int objec
 static _kernel_oserror * object_get_object_plugin   (browser_data * b, int object, unsigned int * plugin_instance, unsigned int * plugin_task);
 static _kernel_oserror * object_set_object_plugin   (browser_data * b, int object, unsigned int plugin_instance, unsigned int plugin_task);
 
-/*************************************************/
-/* object_new_object()                           */
-/*                                               */
-/* Adds a structure for a new Object to a        */
-/* browser's array of Objects.                   */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             to add to;                        */
-/*                                               */
-/*             Pointer to a token representing   */
-/*             the Object (OBJECT, EMBED or      */
-/*             APPLET tag).                      */
-/*************************************************/
+/**************************************************************/
+/* object_retrieve_filetype()                                 */
+/*                                                            */
+/* Given a browser and token relative to an OBJECT, APPLET or */
+/* EMBED, plus an optional mimetype or data (URL leaf) field, */
+/* return an appropriate filetype from the mimetype or URL.   */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the object;                                    */
+/*                                                            */
+/*             Pointer to an HStream struct relevant to the   */
+/*             object;                                        */
+/*                                                            */
+/*             Pointer to the MIME type (if any) for the      */
+/*             object;                                        */
+/*                                                            */
+/*             Pointer to the URL (if any) for the object,    */
+/*             which may be relative rather than absolute.    */
+/*                                                            */
+/*             Pointer to a char * which will be updated, if  */
+/*             possible, to point to an absolute form of the  */
+/*             URL given (may be NULL, and may end up holding */
+/*             NULL on exit). This is allocated by HTMLLib    */
+/*             within the context of the HStream given above, */
+/*             and so is freed whenever the stream is.        */
+/**************************************************************/
+
+int object_retrieve_filetype(browser_data * b, HStream * t, const char * type, const char * data, const char ** absolute)
+{
+  const char * current  = NULL;
+  const char * newdata  = NULL;
+  int          filetype = -1;
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("object_retrieve_filetype: For type '%s' / data '%s'\n", type ? type : "<NULL>", data ? data : "<NULL>"); 
+  #endif
+
+  if (absolute) *absolute = NULL;
+
+  /* If we have a Mime type, use it */
+
+  if (type && *type)
+  {
+    if (mimemap_mime_to_riscos(type, &filetype)) filetype = -1;
+  }
+
+  /* Otherwise, try to work it out from the filename extension */
+
+  else if (data && *data)
+  {
+    /* Must relativise the data URL... */
+
+    current = browser_base_url(b);
+
+    if (current)
+    {
+      newdata = HtmlRelativiseURL(current, data, t);
+      if (absolute) *absolute = newdata;
+
+      if (newdata)
+      {
+        url_description * d = urlutils_return_description(newdata);
+
+        if (d && d->path)
+        {
+          const char * ext = strrchr(d->path, '.');
+
+          if (ext)
+          {
+            if (mimemap_extension_to_riscos(ext, &filetype)) filetype = -1;
+          }
+
+          urlutils_free_description(d);
+        }
+      }
+    }
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<30)) Printf("object_retrieve_filetype: Returning &%X\n", filetype);
+  #endif
+
+  return filetype;
+}
+
+/**************************************************************/
+/* object_new_object()                                        */
+/*                                                            */
+/* Adds a structure for a new Object to a browser's array of  */
+/* Objects.                                                   */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct to add to;    */
+/*                                                            */
+/*             Pointer to a token representing the Object     */
+/*             (OBJECT, EMBED or APPLET tag).                 */
+/**************************************************************/
 
 _kernel_oserror * object_new_object(browser_data * b, HStream * t)
 {
@@ -131,36 +223,16 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
 
   b->nobjects++;
 
-  /* Now deal with data types we can handle inline */
+  /* First, deal with object types we can handle inline, such */
+  /* as images.                                               */
 
   data = HtmlOBJECTdata(t);
   type = HtmlOBJECTtype(t);
 
   if (data && *data)
   {
-    int filetype;
-
-    /* If we have a Mime type, use it */
-
-    if (type && *type)
-    {
-      if (mimemap_mime_to_riscos(type, &filetype)) filetype = FileType_DATA;
-    }
-
-    /* Otherwise, try to work it out from the filename extension */
-
-    else
-    {
-      const char * ext;
-
-      ext = strrchr(data, '.');
-
-      if (ext)
-      {
-        if (mimemap_extension_to_riscos(ext, &filetype)) filetype = FileType_DATA;
-      }
-      else filetype = FileType_DATA;
-    }
+    const char * absolute;
+    int          filetype = object_retrieve_filetype(b, t, type, data, &absolute);
 
     /* Is it an image we can handle? */
 
@@ -174,32 +246,19 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
          filetype == FileType_BMP
        )
     {
-      const char * current;
-      const char * newdata;
-
-      /* Must relativise the data URL... */
-
-      current = browser_fetch_url(b);
-      if (!current) current = browser_current_url(b);
-
-      if (current)
+      if (absolute)
       {
-        newdata = HtmlRelativiseURL(current, data, t);
+        /* If we've managed all that, call image_new_image */
 
-        if (newdata)
-        {
-          /* If we've managed all that, call image_new_image */
+        RetError(image_new_image(b,
+                                 absolute,
+                                 t,
+                                 0,
+                                 NULL));
 
-          RetError(image_new_image(b,
-                                   newdata,
-                                   t,
-                                   0,
-                                   NULL));
+        b->odata[b->nobjects - 1].isimage = 1;
 
-          b->odata[b->nobjects - 1].isimage = 1;
-
-          return NULL;
-        }
+        return NULL;
       }
     }
   }
@@ -207,6 +266,9 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
   /* Deal with external objects */
 
   else data = HtmlOBJECTclassid(t);
+
+  /* Since we've modified the 'data' source (i.e. where we're expecting */
+  /* the URL to come from), we need to work the filetype out again.     */
 
   if (data && *data)
   {
@@ -221,49 +283,30 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
 
     else
     {
-      const char * type = HtmlOBJECTcodetype(t);
-      const char * ext  = strrchr(data, '.');
+      int filetype = object_retrieve_filetype(b, t, type, data, NULL);
 
-      /* Can't handle it if there's no extension or code type */
-
-      if (!ext && (!type || (type && !*type))) cannot_handle = 1;
-      else
+      if (filetype != -1)
       {
-        int filetype;
+        char             var[32];
+        _kernel_swi_regs r;
 
-        /* Can't handle it if we don't have a Mime map entry for it */
+        /* Final check is to see if there's an Alias$@PlugInType_xxx variable */
 
-        if (type)
-        {
-          if (mimemap_mime_to_riscos(type, &filetype)) cannot_handle = 1;
-        }
-        else
-        {
-          if (mimemap_extension_to_riscos(ext, &filetype)) cannot_handle = 1;
-        }
+        sprintf(var, "Alias$@PlugInType_%03X", filetype);
 
-        if (!cannot_handle)
-        {
-          char             var[32];
-          _kernel_swi_regs r;
+        r.r[0] = (int) var;
+        r.r[1] = (int) NULL;
+        r.r[2] = -1;
+        r.r[3] = 0;
+        r.r[4] = 0;
 
-          /* Final check is to see if there's an Alias$@PlugInType_xxx variable */
+        /* *Not* _swix, we want the R2 value of 0 for 'unset'... */
 
-          sprintf(var, "Alias$@PlugInType_%03X", filetype);
+        _kernel_swi(OS_ReadVarVal, &r, &r);
 
-          r.r[0] = (int) var;
-          r.r[1] = (int) NULL;
-          r.r[2] = -1;
-          r.r[3] = 0;
-          r.r[4] = 0;
-
-          /* *Not* _swix, we want the R2 value of 0 for 'unset'... */
-
-          _kernel_swi(OS_ReadVarVal, &r, &r);
-
-          if (!r.r[2]) cannot_handle = 1;
-        }
+        if (!r.r[2]) cannot_handle = 1;
       }
+      else cannot_handle = 1;
     }
 
     /* If we can handle it, flag this as a Plug-In */
@@ -401,14 +444,14 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
   return NULL;
 }
 
-/*************************************************/
-/* object_discard()                              */
-/*                                               */
-/* Discards all Objects held by a given browser. */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Objects.          */
-/*************************************************/
+/**************************************************************/
+/* object_discard()                                           */
+/*                                                            */
+/* Discards all Objects held by a given browser.              */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Objects.                                   */
+/**************************************************************/
 
 _kernel_oserror * object_discard(browser_data * b)
 {
@@ -474,23 +517,22 @@ _kernel_oserror * object_discard(browser_data * b)
   return e;
 }
 
-/*************************************************/
-/* object_get_token_object()                     */
-/*                                               */
-/* Return the number of the Object represented   */
-/* in the given browser by the given token.      */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Pointer to a token representing   */
-/*             the Object (OBJECT, EMBED or      */
-/*             APPLET tag).                      */
-/*                                               */
-/* Returns:    Number of the Object from 0 to    */
-/*             number of Objects minus 1, or -1  */
-/*             if the Object cannot be found.    */
-/*************************************************/
+/**************************************************************/
+/* object_get_token_object()                                  */
+/*                                                            */
+/* Return the number of the Object represented in the given   */
+/* browser by the given token.                                */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Pointer to a token representing the Object     */
+/*             (OBJECT, EMBED or APPLET tag).                 */
+/*                                                            */
+/* Returns:    Number of the Object from 0 to number of       */
+/*             Objects minus 1, or -1 if the Object cannot be */
+/*             found.                                         */
+/**************************************************************/
 
 static int object_get_token_object(browser_data * b, HStream * t)
 {
@@ -534,21 +576,19 @@ static int object_get_token_object(browser_data * b, HStream * t)
   return found;
 }
 
-/*************************************************/
-/* object_get_object_size()                      */
-/*                                               */
-/* Returns the size of a given Object.           */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             to add to;                        */
-/*                                               */
-/*             Number of the Object, from 0 to   */
-/*             number of Objects minus 1;        */
-/*                                               */
-/*             Pointer to a BBox, in which the   */
-/*             size of the Object will be        */
-/*             written.                          */
-/*************************************************/
+/**************************************************************/
+/* object_get_object_size()                                   */
+/*                                                            */
+/* Returns the size of a given Object.                        */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct to add to;    */
+/*                                                            */
+/*             Number of the Object, from 0 to number of      */
+/*             Objects minus 1;                               */
+/*                                                            */
+/*             Pointer to a BBox, in which the size of the    */
+/*             Object will be written.                        */
+/**************************************************************/
 
 static _kernel_oserror * object_get_object_size(browser_data * b, int object, BBox * size)
 {
@@ -670,43 +710,41 @@ static _kernel_oserror * object_get_object_size(browser_data * b, int object, BB
   return NULL;
 }
 
-/*************************************************/
-/* object_get_token_object_size()                */
-/*                                               */
-/* Returns the size of a given Object.           */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Pointer to a token representing   */
-/*             the Object (OBJECT, EMBED or      */
-/*             APPLET tag);                      */
-/*                                               */
-/*             Pointer to a BBox, in which the   */
-/*             size of the Object will be        */
-/*             written.                          */
-/*************************************************/
+/**************************************************************/
+/* object_get_token_object_size()                             */
+/*                                                            */
+/* Returns the size of a given Object.                        */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Pointer to a token representing the Object     */
+/*             (OBJECT, EMBED or APPLET tag);                 */
+/*                                                            */
+/*             Pointer to a BBox, in which the size of the    */
+/*             Object will be written.                        */
+/**************************************************************/
 
 _kernel_oserror * object_get_token_object_size(browser_data * b, HStream * t, BBox * size)
 {
   return object_get_object_size(b, object_get_token_object(b, t), size);
 }
 
-/*************************************************/
-/* object_set_object_size()                      */
-/*                                               */
-/* Sets the size of a given Object.              */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Number of the Object, from 0 to   */
-/*             number of Objects minus 1;        */
-/*                                               */
-/*             Pointer to a BBox, from which the */
-/*             xmax - xmin and ymax - ymin       */
-/*             values are used to set the size.  */
-/*************************************************/
+/**************************************************************/
+/* object_set_object_size()                                   */
+/*                                                            */
+/* Sets the size of a given Object.                           */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Number of the Object, from 0 to number of      */
+/*             Objects minus 1;                               */
+/*                                                            */
+/*             Pointer to a BBox, from which the xmax - xmin  */
+/*             and ymax - ymin values are used to set the     */
+/*             size.                                          */
+/**************************************************************/
 
 static _kernel_oserror * object_set_object_size(browser_data * b, int object, BBox * size)
 {
@@ -767,50 +805,49 @@ static _kernel_oserror * object_set_object_size(browser_data * b, int object, BB
   return NULL;
 }
 
-/*************************************************/
-/* object_set_token_object_size()                */
-/*                                               */
-/* Sets the size of a given Object.              */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Pointer to a token representing   */
-/*             the Object (OBJECT, EMBED or      */
-/*             APPLET tag);                      */
-/*                                               */
-/*             Pointer to a BBox, from which the */
-/*             xmax - xmin and ymax - ymin       */
-/*             values are used to set the size.  */
-/*************************************************/
+/**************************************************************/
+/* object_set_token_object_size()                             */
+/*                                                            */
+/* Sets the size of a given Object.                           */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Pointer to a token representing the Object     */
+/*             (OBJECT, EMBED or APPLET tag);                 */
+/*                                                            */
+/*             Pointer to a BBox, from which the xmax - xmin  */
+/*             and ymax - ymin values are used to set the     */
+/*             size.                                          */
+/**************************************************************/
 
 _kernel_oserror * object_set_token_object_size(browser_data * b, HStream * t, BBox * size)
 {
   return object_set_object_size(b, object_get_token_object(b, t), size);
 }
 
-/*************************************************/
-/* object_get_object_position()                  */
-/*                                               */
-/* Returns the x and y fields of the object_info */
-/* structure for a given Object.                 */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Number of the Object;             */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             X coordinate is returned;         */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             Y coordinate is returned.         */
-/*                                               */
-/* Returns:    1 if the object number is invalid */
-/*             or 0 for success.                 */
-/*                                               */
-/* Assumes:    Neither pointer is NULL.          */
-/*************************************************/
+/**************************************************************/
+/* object_get_object_position()                               */
+/*                                                            */
+/* Returns the x and y fields of the object_info structure    */
+/* for a given Object.                                        */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Number of the Object;                          */
+/*                                                            */
+/*             Pointer to an int, in which the X coordinate   */
+/*             is returned;                                   */
+/*                                                            */
+/*             Pointer to an int, in which the Y coordinate   */
+/*             is returned.                                   */
+/*                                                            */
+/* Returns:    1 if the object number is invalid or 0 for     */
+/*             success.                                       */
+/*                                                            */
+/* Assumes:    Neither pointer is NULL.                       */
+/**************************************************************/
 
 static int object_get_object_position(browser_data * b, int object, int * x, int * y)
 {
@@ -822,30 +859,28 @@ static int object_get_object_position(browser_data * b, int object, int * x, int
   return 0;
 }
 
-/*************************************************/
-/* object_get_token_object_position()            */
-/*                                               */
-/* Returns the x and y fields of the object_info */
-/* structure for a given Object.                 */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Pointer to the token representing */
-/*             the Object;                       */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             X coordinate is returned;         */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             Y coordinate is returned.         */
-/*                                               */
-/* Returns:    1 if the object could not be      */
-/*             found from the given token, or 0  */
-/*             for success.                      */
-/*                                               */
-/* Assumes:    Neither pointer is NULL.          */
-/*************************************************/
+/**************************************************************/
+/* object_get_token_object_position()                         */
+/*                                                            */
+/* Returns the x and y fields of the object_info structure    */
+/* for a given Object.                                        */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Pointer to the token representing the Object;  */
+/*                                                            */
+/*             Pointer to an int, in which the X coordinate   */
+/*             is returned;                                   */
+/*                                                            */
+/*             Pointer to an int, in which the Y coordinate   */
+/*             is returned.                                   */
+/*                                                            */
+/* Returns:    1 if the object could not be found from the    */
+/*             given token, or 0 for success.                 */
+/*                                                            */
+/* Assumes:    Neither pointer is NULL.                       */
+/**************************************************************/
 
 int object_get_token_object_position(browser_data * b, HStream * t, int * x, int * y)
 {
@@ -854,27 +889,25 @@ int object_get_token_object_position(browser_data * b, HStream * t, int * x, int
   return object_get_object_position(b, object, x, y);
 }
 
-/*************************************************/
-/* object_set_token_object_position()            */
-/*                                               */
-/* Sets the x and y fields of the object_info    */
-/* structure for a given Object, so that it may  */
-/* be [partially] plotted during a fetch.        */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the object;           */
-/*                                               */
-/*             Pointer to the token representing */
-/*             the Object;                       */
-/*                                               */
-/*             X coordinate (window coords);     */
-/*                                               */
-/*             Y coordinate (window coords).     */
-/*                                               */
-/* Returns:    Number of the Object that was     */
-/*             changed, or -1 if none could be   */
-/*             found for the given token.        */
-/*************************************************/
+/**************************************************************/
+/* object_set_token_object_position()                         */
+/*                                                            */
+/* Sets the x and y fields of the object_info structure for a */
+/* given Object, so that it may be [partially] plotted during */
+/* a fetch.                                                   */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the object;                                    */
+/*                                                            */
+/*             Pointer to the token representing the Object;  */
+/*                                                            */
+/*             X coordinate (window coords);                  */
+/*                                                            */
+/*             Y coordinate (window coords).                  */
+/*                                                            */
+/* Returns:    Number of the Object that was changed, or -1   */
+/*             if none could be found for the given token.    */
+/**************************************************************/
 
 int object_set_token_object_position(browser_data * b, HStream * t, int x, int y)
 {
@@ -884,7 +917,7 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
     if (tl & (1u<<30))
     {
       char debugbuf[1024];
-      sprintf(debugbuf,"object_set_token_object_positon: Called for %p, %p at %d, %d",b,t,x,y);
+      sprintf(debugbuf,"object_set_token_object_position: Called for %p, %p at %d, %d",b,t,x,y);
       Printf("%s\n",debugbuf);
     }
   #endif
@@ -925,7 +958,7 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
       BBox position;
 
       #ifdef TRACE
-        if (tl & (1u<<30)) Printf("object_set_token_object_positon: Is Plug-In\n");
+        if (tl & (1u<<30)) Printf("object_set_token_object_position: Is Plug-In\n");
       #endif
 
       show_error_ret(object_get_object_size(b, object, &position));
@@ -958,7 +991,7 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
           b->odata[object].broadcast_sent = 1; /* Don't try over and over if the first gives an error */
 
           #ifdef TRACE
-            if (tl & (1u<<30)) Printf("object_set_token_object_positon: Starting Plug-In\n");
+            if (tl & (1u<<30)) Printf("object_set_token_object_position: Starting Plug-In\n");
           #endif
 
           show_error_ret(plugin_add_queue_item(b, t, &position));
@@ -1006,7 +1039,7 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
         /* Send the reshape message */
 
         #ifdef TRACE
-          if (tl & (1u<<30)) Printf("object_set_token_object_positon: Moving Plug-In\n");
+          if (tl & (1u<<30)) Printf("object_set_token_object_position: Moving Plug-In\n");
         #endif
 
         if (!plugin_obtain_instance(b, b->odata[object].token, &instance))
@@ -1021,38 +1054,35 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
   }
 
   #ifdef TRACE
-    if (tl & (1u<<30)) Printf("object_set_token_object_positon: Successful, returning Object number %d\n",object);
+    if (tl & (1u<<30)) Printf("object_set_token_object_position: Successful, returning Object number %d\n",object);
   #endif
 
   return object;
 }
 
-/*************************************************/
-/* object_return_info()                          */
-/*                                               */
-/* Return information on an Object identified by */
-/* a Plug-In instance handle.                    */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             holding the Objects to search;    */
-/*                                               */
-/*             Plug-In instance handle;          */
-/*                                               */
-/*             Pointer to an HStream *, in which */
-/*             the token the Object is represen- */
-/*             ting is written;                  */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             Plug-In task handle for this      */
-/*             Object is written.                */
-/*                                               */
-/* Returns:    Returns 1 if the item was found,  */
-/*             else 0. If 0, the contents of the */
-/*             given pointers are not changed.   */
-/*                                               */
-/* Assumes:    Either of the last two pointers   */
-/*             may be NULL.                      */
-/*************************************************/
+/**************************************************************/
+/* object_return_info()                                       */
+/*                                                            */
+/* Return information on an Object identified by a Plug-In    */
+/* instance handle.                                           */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct holding the   */
+/*             Objects to search;                             */
+/*                                                            */
+/*             Plug-In instance handle;                       */
+/*                                                            */
+/*             Pointer to an HStream *, in which the token    */
+/*             the Object is represen- ting is written;       */
+/*                                                            */
+/*             Pointer to an int, in which the Plug-In task   */
+/*             handle for this Object is written.             */
+/*                                                            */
+/* Returns:    Returns 1 if the item was found, else 0. If 0, */
+/*             the contents of the given pointers are not     */
+/*             changed.                                       */
+/*                                                            */
+/* Assumes:    Either of the last two pointers may be NULL.   */
+/**************************************************************/
 
 int object_return_info(browser_data * b, unsigned int plugin_instance_handle, HStream ** token, unsigned int * plugin_task)
 {
@@ -1076,25 +1106,22 @@ int object_return_info(browser_data * b, unsigned int plugin_instance_handle, HS
   return 0;
 }
 
-/*************************************************/
-/* object_get_token_object_box()                 */
-/*                                               */
-/* Returns a bounding box filled in with parent  */
-/* window work area coordinates for a given      */
-/* Object.                                       */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Pointer to the token representing */
-/*             the Object;                       */
-/*                                               */
-/*             Pointer to a BBox to return the   */
-/*             work area coordinates describing  */
-/*             the Object's size.                */
-/*                                               */
-/* Returns:    1 for failure, 0 for success.     */
-/*************************************************/
+/**************************************************************/
+/* object_get_token_object_box()                              */
+/*                                                            */
+/* Returns a bounding box filled in with parent window work   */
+/* area coordinates for a given Object.                       */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Pointer to the token representing the Object;  */
+/*                                                            */
+/*             Pointer to a BBox to return the work area      */
+/*             coordinates describing the Object's size.      */
+/*                                                            */
+/* Returns:    1 for failure, 0 for success.                  */
+/**************************************************************/
 
 int object_get_token_object_box(browser_data * b, HStream * t, BBox * box)
 {
@@ -1125,29 +1152,27 @@ int object_get_token_object_box(browser_data * b, HStream * t, BBox * box)
   return 0;
 }
 
-/*************************************************/
-/* object_get_object_plugin()                    */
-/*                                               */
-/* Returns details of any Plug-In associated     */
-/* with a given Object (referenced by number).   */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Number of the Object;             */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             Plug-In instance handle will be   */
-/*             written;                          */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             Plug-In task handle will be       */
-/*             written, or 0 if the Object       */
-/*             does not have an associated       */
-/*             Plug-In or can't be found.        */
-/*                                               */
-/* Assumes:    Either pointer may be NULL.       */
-/*************************************************/
+/**************************************************************/
+/* object_get_object_plugin()                                 */
+/*                                                            */
+/* Returns details of any Plug-In associated with a given     */
+/* Object (referenced by number).                             */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Number of the Object;                          */
+/*                                                            */
+/*             Pointer to an int, in which the Plug-In        */
+/*             instance handle will be written;               */
+/*                                                            */
+/*             Pointer to an int, in which the Plug-In task   */
+/*             handle will be written, or 0 if the Object     */
+/*             does not have an associated Plug-In or can't   */
+/*             be found.                                      */
+/*                                                            */
+/* Assumes:    Either pointer may be NULL.                    */
+/**************************************************************/
 
 static _kernel_oserror * object_get_object_plugin(browser_data * b, int object, unsigned int * plugin_instance, unsigned int * plugin_task)
 {
@@ -1191,30 +1216,27 @@ static _kernel_oserror * object_get_object_plugin(browser_data * b, int object, 
   return NULL;
 }
 
-/*************************************************/
-/* object_get_token_object_plugin()              */
-/*                                               */
-/* Returns details of any Plug-In associated     */
-/* with a given Object (referenced by token).    */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Pointer to the token representing */
-/*             the Object;                       */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             Plug-In instance handle will be   */
-/*             written;                          */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             Plug-In task handle will be       */
-/*             written, or 0 if the Object       */
-/*             does not have an associated       */
-/*             Plug-In or can't be found.        */
-/*                                               */
-/* Assumes:    Either pointer may be NULL.       */
-/*************************************************/
+/**************************************************************/
+/* object_get_token_object_plugin()                           */
+/*                                                            */
+/* Returns details of any Plug-In associated with a given     */
+/* Object (referenced by token).                              */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Pointer to the token representing the Object;  */
+/*                                                            */
+/*             Pointer to an int, in which the Plug-In        */
+/*             instance handle will be written;               */
+/*                                                            */
+/*             Pointer to an int, in which the Plug-In task   */
+/*             handle will be written, or 0 if the Object     */
+/*             does not have an associated Plug-In or can't   */
+/*             be found.                                      */
+/*                                                            */
+/* Assumes:    Either pointer may be NULL.                    */
+/**************************************************************/
 
 _kernel_oserror * object_get_token_object_plugin(browser_data * b, HStream * t, unsigned int * plugin_instance, unsigned int * plugin_task)
 {
@@ -1224,23 +1246,23 @@ _kernel_oserror * object_get_token_object_plugin(browser_data * b, HStream * t, 
                                   plugin_task);
 }
 
-/*************************************************/
-/* object_set_object_plugin()                    */
-/*                                               */
-/* Sets details of any Plug-In associated with   */
-/* a given Object (referenced by number).        */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Number of the Object;             */
-/*                                               */
-/*             Plug-In instance handle to set;   */
-/*                                               */
-/*             Plug-In task handle to set.       */
-/*                                               */
-/* Assumes:    Either pointer may be NULL.       */
-/*************************************************/
+/**************************************************************/
+/* object_set_object_plugin()                                 */
+/*                                                            */
+/* Sets details of any Plug-In associated with a given Object */
+/* (referenced by number).                                    */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Number of the Object;                          */
+/*                                                            */
+/*             Plug-In instance handle to set;                */
+/*                                                            */
+/*             Plug-In task handle to set.                    */
+/*                                                            */
+/* Assumes:    Either pointer may be NULL.                    */
+/**************************************************************/
 
 static _kernel_oserror * object_set_object_plugin(browser_data * b, int object, unsigned int plugin_instance, unsigned int plugin_task)
 {
@@ -1279,26 +1301,25 @@ static _kernel_oserror * object_set_object_plugin(browser_data * b, int object, 
   return NULL;
 }
 
-/*************************************************/
-/* object_set_token_object_plugin()              */
-/*                                               */
-/* Sets details of any Plug-In associated with   */
-/* a given Object (referenced by token).         */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Pointer to the token representing */
-/*             the Object (usually have to       */
-/*             remember this when the initial    */
-/*             Message_PlugIn_Open is sent);     */
-/*                                               */
-/*             Plug-In instance handle to set;   */
-/*                                               */
-/*             Plug-In task handle to set.       */
-/*                                               */
-/* Assumes:    Either pointer may be NULL.       */
-/*************************************************/
+/**************************************************************/
+/* object_set_token_object_plugin()                           */
+/*                                                            */
+/* Sets details of any Plug-In associated with a given Object */
+/* (referenced by token).                                     */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Pointer to the token representing the Object   */
+/*             (usually have to remember this when the        */
+/*             initial Message_PlugIn_Open is sent);          */
+/*                                                            */
+/*             Plug-In instance handle to set;                */
+/*                                                            */
+/*             Plug-In task handle to set.                    */
+/*                                                            */
+/* Assumes:    Either pointer may be NULL.                    */
+/**************************************************************/
 
 _kernel_oserror * object_set_token_object_plugin(browser_data * b, HStream * t, unsigned int plugin_instance, unsigned int plugin_task)
 {
@@ -1308,31 +1329,29 @@ _kernel_oserror * object_set_token_object_plugin(browser_data * b, HStream * t, 
                                   plugin_task);
 }
 
-/*************************************************/
-/* object_redraw()                               */
-/*                                               */
-/* Does a high level redraw of an Object, using  */
-/* an outline to show where the Object should be */
-/* if it isn't plotted by some other method.     */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object;           */
-/*                                               */
-/*             Pointer to a RedrawWindowBlock    */
-/*             struct which holds information    */
-/*             about the current redraw session; */
-/*                                               */
-/*             Address of the token representing */
-/*             the OBJECT, APPLET or EMBED tag;  */
-/*                                               */
-/*             The X offset in window coords (so */
-/*             OS units) of the left hand edge   */
-/*             of the Object;                    */
-/*                                               */
-/*             The Y offset in window coords (so */
-/*             OS units) of the bottom edge of   */
-/*             the Object.                       */
-/*************************************************/
+/**************************************************************/
+/* object_redraw()                                            */
+/*                                                            */
+/* Does a high level redraw of an Object, using an outline to */
+/* show where the Object should be if it isn't plotted by     */
+/* some other method.                                         */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the Object;                                    */
+/*                                                            */
+/*             Pointer to a RedrawWindowBlock struct which    */
+/*             holds information about the current redraw     */
+/*             session;                                       */
+/*                                                            */
+/*             Address of the token representing the OBJECT,  */
+/*             APPLET or EMBED tag;                           */
+/*                                                            */
+/*             The X offset in window coords (so OS units) of */
+/*             the left hand edge of the Object;              */
+/*                                                            */
+/*             The Y offset in window coords (so OS units) of */
+/*             the bottom edge of the Object.                 */
+/**************************************************************/
 
 _kernel_oserror * object_redraw(browser_data * b, WimpRedrawWindowBlock * r, HStream * token, int x, int y)
 {
@@ -1372,21 +1391,20 @@ _kernel_oserror * object_redraw(browser_data * b, WimpRedrawWindowBlock * r, HSt
   return e;
 }
 
-/*************************************************/
-/* object_token_is_image()                       */
-/*                                               */
-/* Finds out whether an Object is acting as an   */
-/* an inline image or not.                       */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the object;           */
-/*                                               */
-/*             Pointer to the token representing */
-/*             the Object.                       */
-/*                                               */
-/* Returns:    1 if the Object is acting as an   */
-/*             inline image, else 0.             */
-/*************************************************/
+/**************************************************************/
+/* object_token_is_image()                                    */
+/*                                                            */
+/* Finds out whether an Object is acting as an an inline      */
+/* image or not.                                              */
+/*                                                            */
+/* Parameters: Pointer to a browser_data struct relevant to   */
+/*             the object;                                    */
+/*                                                            */
+/*             Pointer to the token representing the Object.  */
+/*                                                            */
+/* Returns:    1 if the Object is acting as an inline image,  */
+/*             else 0.                                        */
+/**************************************************************/
 
 int object_token_is_image(browser_data * b, HStream * t)
 {
