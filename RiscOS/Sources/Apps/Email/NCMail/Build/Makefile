@@ -59,6 +59,7 @@ LB		= libfile
 RM              = remove
 SQUEEZE         = squeeze
 WIPE            = -wipe
+TOUCH		= create
 
 AFLAGS          = $(THROWBACK) -depend !Depend -nocache -stamp -quit
 CFLAGS          = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp
@@ -97,6 +98,7 @@ WIMPLIB		= $(LIBDIR).tboxlibs.o.wimplib
 
 ACORNPOP3	= $(EXP_C_O).AcornPOP3
 ACORNSMTP	= $(EXP_C_O).AcornSMTP
+EMAILCOMMONLIB	= $(LIBDIR).Email.Common.o.Common
 ELIB		= $(LIBDIR).Email.EmailLib.o.EmailLib
 MBOXLIB		= $(LIBDIR).Email.Mailbox.o.Mailbox
 NETLINKLIB	= $(LIBDIR).Email.NetLink.o.NetLink
@@ -108,30 +110,26 @@ NBLIB	        = $(LIBDIR).NBLib.o.nblib
 ERRORLIB	= $(LIBDIR).ErrorLib.o.ErrorLib
 
 LIBS = \
- $(SOCKLIB)\
- $(DEBUGLIB)\
- $(INETLIB)\
- $(UNIXLIB)\
  $(NBLIB)\
- $(ERRORLIB)\
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
- $(MBOXLIB)$(MC)\
+ $(MBOXLIB)\
+ $(EMAILCOMMONLIB)\
  $(NETLINKLIB)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
- $(ELIB)$(MC)\
+ $(ELIB)\
  $(EXTRALIBS)\
  $(C++LIB)\
  $(CLIB)\
 
 LIBSM = \
  $(NBLIB)zm\
- $(ERRORLIB)zm\
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)m\
+ $(EMAILCOMMONLIB)\
  $(MBOXLIB)zm\
  $(NETLINKLIB)zm\
  $(ACORNPOP3)\
@@ -142,20 +140,46 @@ LIBSM = \
 
 
 LIBSD = \
- $(SOCKLIB)\
- $(DEBUGLIB)\
- $(INETLIB)\
- $(UNIXLIB)\
  $(NBLIB)\
- $(ERRORLIB)\
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
+ $(EMAILCOMMONLIB)\
  $(MBOXLIB)\
  $(NETLINKLIB)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
  $(ELIB)\
+ $(EXTRALIBS)\
+ $(C++LIB)\
+ $(CLIB)\
+
+LIBSHP = \
+ $(NBLIB)\
+ $(WIMPLIB)\
+ $(TOOLBOXLIB)\
+ $(EVENTLIB)\
+ $(EMAILCOMMONLIB)HP\
+ $(MBOXLIB)HP\
+ $(NETLINKLIB)HP\
+ $(ACORNPOP3)\
+ $(ACORNSMTP)\
+ $(ELIB)HP\
+ $(EXTRALIBS)\
+ $(C++LIB)\
+ $(CLIB)\
+
+LIBSMC = \
+ $(NBLIB)\
+ $(WIMPLIB)\
+ $(TOOLBOXLIB)\
+ $(EVENTLIB)\
+ $(EMAILCOMMONLIB)MC\
+ $(MBOXLIB)MC\
+ $(NETLINKLIB)MC\
+ $(ACORNPOP3)\
+ $(ACORNSMTP)\
+ $(ELIB)MC\
  $(EXTRALIBS)\
  $(C++LIB)\
  $(CLIB)\
@@ -180,9 +204,13 @@ OBJS =  o.NCMailUI o.Engine
 
 OBJSD = od.NCMailUI od.Engine
 
+OBJSMC = oMC.NCMailUI oMC.Engine
+
+OBJSHP = oHP.NCMailUI oHP.Engine
+
 OBJSZ=  oz.NCMailUI oz.Engine
 
-OBJSZSL=  ozsl.NCMailUI ozsl.Engine
+#OBJSZSL=  ozsl.NCMailUI ozsl.Engine
 
 
 
@@ -284,50 +312,65 @@ ram: $(MODULE) $(UI) $(APPENGINE) o.dirs
 rom: $(ROM_MODULE) $(UI) $(APPENGINE) o.dirs
         @echo $(COMPONENT): Module built (ROM)
 
-install_common: $(UI) $(APPENGINE) o.dirs
+install_common: $(TARGET) $(UI) $(APPENGINE) o.dirs
 	@echo
 
-install: $(TARGET) install_common
+preprocess: $(TARGET) $(UI) $(APPENGINE) o.dirs
+	@echo Preprocessed output done.
+
+installMC: $(TARGET) $(UI) $(APPENGINE) o.dirs
         @echo
-        $(CP) $(TARGET)                         $(INSTDIR).!RunImage            $(CPFLAGS)
+        @$(CP) $(TARGET)                         $(INSTDIR).!RunImage            $(CPFLAGS)
+        @echo $(COMPONENT): Application (MemCheck) installed to $(INSTDIR)
+
+installHP: $(TARGET) $(UI) $(APPENGINE) o.dirs
+        @echo
+        @$(CP) $(TARGET)                         $(INSTDIR).!RunImage            $(CPFLAGS)
+        @echo $(COMPONENT): Application (HierProf) installed to $(INSTDIR)
+
+install: install_common
+        @echo
+        @$(CP) $(TARGET)                         $(INSTDIR).!RunImage            $(CPFLAGS)
         @echo $(COMPONENT): Application installed to $(INSTDIR)
 
-installd: $(TARGET) install_common
+installd: install_common
         @echo
-        $(CP) $(TARGET)                         $(INSTDIR).!RunImage            $(CPFLAGS)
+        @$(CP) $(TARGET)                         $(INSTDIR).!RunImage            $(CPFLAGS)
         @echo $(COMPONENT): Debug application installed $(INSTDIR)
 
 install_rom: $(ROM_MODULE)
-        $(CP) $(ROM_MODULE) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+        @$(CP) $(ROM_MODULE) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
         @echo
         @echo $(COMPONENT): Module installed (ROM)
 
 resources: 	$(UI) $(APPENGINE) o.dirs
 	@echo $(RESDIR)
-        $(MKDIR) $(RESDIR)
-        $(MKDIR) $(RESAPP)
-	
+        @$(MKDIR) $(RESDIR)
+        @$(MKDIR) $(RESAPP)
         @echo
         @echo $(COMPONENT): Resource files copied to Messages module
 
-clean:  $(APPENGINE) cleanWebMail cleanTestUI
-        @echo starting
-        $(WIPE) abs             $(WFLAGS)
-        $(WIPE) aof             $(WFLAGS)
-        $(WIPE) linked          $(WFLAGS)
-        $(WIPE) map             $(WFLAGS)
-        $(WIPE) o               $(WFLAGS)
-        $(WIPE) od              $(WFLAGS)
-        $(WIPE) oz              $(WFLAGS)
-        $(WIPE) ozsl            $(WFLAGS)
-        $(WIPE) odz             $(WFLAGS)
-        $(WIPE) rm              $(WFLAGS)
-        $(WIPE) syms            $(WFLAGS)
-        $(RM)   s.ModuleWrap
-	$(RM)   syms
-        $(RM)   o.dirs
-        @echo
+clean:  $(APPENGINE) $(UI) clean_common
         @echo $(COMPONENT): Cleaned
+
+clean_common:
+        @$(WIPE) abs             $(WFLAGS)
+        @$(WIPE) aof             $(WFLAGS)
+        @$(WIPE) linked          $(WFLAGS)
+        @$(WIPE) map             $(WFLAGS)
+        @$(WIPE) o               $(WFLAGS)
+        @$(WIPE) oMC             $(WFLAGS)
+        @$(WIPE) oHP             $(WFLAGS)
+        @$(WIPE) od              $(WFLAGS)
+        @$(WIPE) oz              $(WFLAGS)
+        @$(WIPE) i               $(WFLAGS)
+        @$(WIPE) ozsl            $(WFLAGS)
+        @$(WIPE) odz             $(WFLAGS)
+        @$(WIPE) rm              $(WFLAGS)
+        @$(WIPE) syms            $(WFLAGS)
+        @$(RM)   s.ModuleWrap
+	@$(RM)   syms
+        @$(RM)   o.dirs
 
 o.dirs:
         @$(MKDIR) abs
@@ -335,6 +378,8 @@ o.dirs:
         @$(MKDIR) linked
         @$(MKDIR) map
         @$(MKDIR) o
+        @$(MKDIR) oMC
+        @$(MKDIR) oHP
         @$(MKDIR) od
         @$(MKDIR) oz
 	@$(MKDIR) ozsl
@@ -343,8 +388,7 @@ o.dirs:
         @$(MKDIR) syms
         @$(MKDIR) Targets
         @$(MKDIR) Targets.$(APP)
-        create o.dirs
-        stamp  o.dirs
+        @$(TOUCH) $@
 
 localdirs:
 	@$(MKDIR) h
@@ -354,12 +398,12 @@ localdirs:
 #
 
 linkmap: $(OBJS) $(LIBS)
-        $(LD) -map -o null:x $(OBJS) $(LIBS) > map.linked
+        @$(LD) -map -o null:x $(OBJS) $(LIBS) > map.linked
 
 map:
-        $(LD) -map -bin -base 0 -o null: $(OBJS) $(LIBS) > map.base0
+        @$(LD) -map -bin -base 0 -o null: $(OBJS) $(LIBS) > map.base0
 
-clean_all: clean $(APPENGINE) $(UI)
+clean_all: $(APPENGINE) $(UI) clean_common
         $(WIPE) Targets         $(WFLAGS)
         @echo $(COMPONENT): Cleaned all
 
@@ -369,74 +413,87 @@ clean_all: clean $(APPENGINE) $(UI)
 #
 
 rom_link:
-        $(LD) -o linked.$(COMPONENT) -rmf -base $(ADDRESS) \
+        @$(LD) -o linked.$(COMPONENT) -rmf -base $(ADDRESS) \
                 $(ROM_MODULE) $(ABSSYM) -map > map.$(COMPONENT)
-        $(CP) linked.$(COMPONENT) $(LINKDIR).$(COMPONENT) $(CPFLAGS)
+        @$(CP) linked.$(COMPONENT) $(LINKDIR).$(COMPONENT) $(CPFLAGS)
         @echo $(COMPONENT): rom_link complete
 
 ozsl.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
-	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETL {TRUE}" s.ModuleWrap $@
+	@${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETL {TRUE}" s.ModuleWrap $@
 
 oz.ModuleWrap: s.ModuleWrap s.AppName $(RESFILES)
-        $(AS) $(AFLAGS) s.ModuleWrap $@
+        @$(AS) $(AFLAGS) s.ModuleWrap $@
 
 s.ModuleWrap: $(WRAPPER)
-        $(CP) $(WRAPPER) $@ $(CPFLAGS)
+        @$(CP) $(WRAPPER) $@ $(CPFLAGS)
 
 
 # -----------------------------------------------------------------------------
 # Static dependencies
 #
 
-abs.!RI: 
+abs.!RI: $(UI) $(APPENGINE) 
         @echo
-        $(LD) $(LDFLAGS) -s syms.!RI -o $@ $(OBJS) $(LIBS)
-        $(SQUEEZE) $(SQFLAGS) $@
+        @$(LD) $(LDFLAGS) -s syms.!RI -o $@ $(OBJS) $(LIBS)
+        @$(SQUEEZE) $(SQFLAGS) $@
 
-abs.!RI_D: 
+abs.!RI_MC: $(UI) $(APPENGINE) 
         @echo
-        $(LD) $(LDFLAGS) -debug -s syms.!RI_D -o $@ $(OBJSD) $(LIBSD)
+        @$(LD) $(LDFLAGS) -s syms.!RI_MC -o $@ $(OBJSMC) $(LIBSMC) MemCheck:o.MC
+        @$(SQUEEZE) $(SQFLAGS) $@
 
-$(MODULE): ozsl.ModuleWrap $(LIBSM) $(CLIB) o.dirs
+abs.!RI_HP: $(UI) $(APPENGINE) 
         @echo
-        $(LD) -s syms.RAMMod -o $@ -module ozsl.ModuleWrap $(OBJSZSL) $(LIBSM) $(CLIB)
+        @$(LD) $(LDFLAGS) -s syms.!RI_MC -o $@ $(OBJSHP) $(LIBSHP) MemCheck:o.MC
+        @$(SQUEEZE) $(SQFLAGS) $@
 
-$(ROM_MODULE): oz.ModuleWrap $(ROMCSTUBS) $(LIBSM) o.dirs
+abs.!RI_D: $(UI) $(APPENGINE) 
         @echo
-        $(LD) -s syms.ROMMod -o $@ -aof oz.ModuleWrap $(OBJSZ) $(LIBSM) $(ROMCSTUBS)
+        @$(LD) $(LDFLAGS) -debug -s syms.!RI_D -o $@ $(OBJSD) $(LIBSD)
 
-rm.$(APP)D: odz.ModuleWrap  $(LIBSM) o.dirs
+$(MODULE): ozsl.ModuleWrap $(LIBSM) $(CLIB) $(UI) $(APPENGINE) o.dirs
         @echo
-        $(LD) -s syms.ROMDMod -o $@ -module oz.ModuleWrap $(OBJSDZ) $(LIBSM)
+        @$(LD) -s syms.RAMMod -o $@ -module ozsl.ModuleWrap $(OBJSZ) $(LIBSM) $(CLIB)
 
+$(ROM_MODULE): oz.ModuleWrap $(ROMCSTUBS) $(LIBSM) $(UI) $(APPENGINE) o.dirs
+        @echo
+        @$(LD) -s syms.ROMMod -o $@ -aof oz.ModuleWrap $(OBJSZ) $(LIBSM) $(ROMCSTUBS)
 
-Engine:
+rm.$(APP)D: odz.ModuleWrap  $(LIBSM) $(UI) $(APPENGINE) o.dirs
+        @echo
+        @$(LD) -s syms.ROMDMod -o $@ -module oz.ModuleWrap $(OBJSDZ) $(LIBSM)
+
+#$(APPENGINE):
+#	@echo Calling Engine Makefile
+#	dir ^.Engine
+#	@amu -f Makefile $(MFLAGS)
+#	@echo Returned from Engine Makefile
+#	dir ^.Build
+#$(UI):
+#	@echo Calling $(UI) Makefile
+#	dir ^.$(UI)
+#	@amu -f Makefile $(MFLAGS)
+#	@echo Returned from $(UI) Makefile
+#	dir ^.Build
+
+# The above *showuld* work, but due to broken AMU, it gets itself into a recusive loop
+# as it sets up the MFLAGS to hold ALL the -f <filename> options as it calls other
+# makefiles, therefore, you get to a point where its MFLAGS have -f MainMake -f Makefile
+# -f Makefile, so it executes the MainMake, then the Makefile AGAIN, which executes the
+# MainMake, then Makefile, AGAIN..... spot the loop!
+
+$(APPENGINE):
 	@echo Calling Engine Makefile
-	dir ^.Engine
-	@amu -f Makefile $(MFLAGS)
+	@dir ^.Engine
+	@amu  $(MFLAGS)
 	@echo Returned from Engine Makefile
-	dir ^.Build
-
+	@dir ^.Build
 $(UI):
 	@echo Calling $(UI) Makefile
-	dir ^.$(UI)
-	@amu -f Makefile $(MFLAGS)
+	@dir ^.$(UI)
+	@amu  $(MFLAGS)
 	@echo Returned from $(UI) Makefile
-	dir ^.Build
-
-cleanWebMail:
-	@echo Calling WebMail Makefile
-	dir ^.WebMail
-	@amu -f Makefile $(MFLAGS)
-	@echo Returned from WebMail Makefile
-	dir ^.Build
-
-cleanTestUI:
-	@echo Calling TestUI Makefile
-	dir ^.TestUI
-	@amu -f Makefile $(MFLAGS)
-	@echo Returned from TestUI Makefile
-	dir ^.Build
+	@dir ^.Build
 
 
 # -----------------------------------------------------------------------------
