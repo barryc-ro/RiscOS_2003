@@ -109,6 +109,12 @@ clean:
 ${ROM_MODULE}: ${OBJS} ${RMALIB} ${FSLIB} ${ROMCSTUBS}
         ${LD} -o $@ -aof ${OBJS} ${RMALIB} ${FSLIB} ${ROMCSTUBS}
 
+${FSLIB}:
+        dir ^.fslib; amu fslib.o; back
+
+${RMALIB}:
+        dir ^.rmalib; amu rmalib.o; back
+
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} map
