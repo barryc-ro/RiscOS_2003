@@ -78,6 +78,7 @@ install_dirs:
 clean:
         ${WIPE} o ${WFLAGS}
         ${RM} ${COMPONENT}
+        ${RM} dbgreadmk
         @echo ${COMPONENT}: cleaned
 
 export_hdrs: 
@@ -113,5 +114,11 @@ tests: ${TARGET}
         @run @.${TARGET} -f test.functest
         @echo Conditionals tests ...
         @run @.${TARGET} -f test.condtest
+
+dbgreadmk: o.dbgreadmk o.utility
+        ${LD} ${LDFLAGS} -o $@ o.dbgreadmk o.utility ${LIBS}
+
+o.dbgreadmk: readmk.c
+        ${CC} ${CFLAGS} -DDEBUG -o $@ readmk.c
 
 # Dynamic dependencies:
