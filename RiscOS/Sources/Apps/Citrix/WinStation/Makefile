@@ -121,11 +121,11 @@ BASELIBSD=	$(RISCOS_BUILD_EXPORT)/Lib/debug/lremote.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o
 
 BASELIBSZ=	${COMMONLIBSZ} \
-		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
+		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibz.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o
 
 BASELIBSRM=	${COMMONLIBSZ} \
-		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o \
+		$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibz.o \
 		$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o
 
 SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} ${VDLIBSRC}
