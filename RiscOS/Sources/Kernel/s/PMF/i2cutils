@@ -26,12 +26,6 @@ RTCAddress	* &a0
 E2ROMAddress	* &a8
   ]
 
-; i2cWorkSpace is defined elsewhere to point somewhere sensible when debugging
-  [ :LNOT: :DEF: TestHarness
-i2cWorkSpace	* 0
-  ]
-	
-
 ; *****************************************************************************
 ;
 ;	HexToBCD - Convert byte in hex to BCD
@@ -285,8 +279,8 @@ Stop	ROUT
 
 TXByte	ROUT
 	Push	"R0-R2,R14"
-	MOV	R2, R0			; byte goes into R2
 	MOV	R1, #&80		; 2^7 the bit mask
+	MOV	R2, R0			; byte goes into R2
 10
 	ANDS	R0, R2, R1		; zero if bit is zero
 	MOVNE	R0, #1
@@ -425,11 +419,17 @@ Write	ROUT
  ]
 10
  [ CacheCMOSRAM
-	ADR	R1, CMOSRAMCache-16	; update cache, but always write to
-  [ :DEF: TestHarness
-	ADD	R1, R1, #i2cWorkSpace
+  [ :LNOT: FullCMOSRAMCache
+	CMP	r2, #&100		; check small cache limit
+	BCS	%FT15
+  ]
+  [ :LNOT: :DEF: TestHarness
+	LDR	R1, =CMOSRAMCache-16	; update cache, but always write to
+  |
+        ADR     R1, i2cWorkSpace-16
   ]
 	STRB	R3, [R1, R2]		; real hardware as well
+15
  ]
  [ E2ROMSupport
 	MOV	R0, R2
@@ -482,11 +482,15 @@ Read
   [	CacheCMOSRAM
 	TEQ	R0, #&40		; is it Econet station number
 	BEQ	%FT15	 		; if so then don't use cache
+    [	:LNOT: FullCMOSRAMCache
+	CMP	R0, #&100		; check small cache limit
+	BCS	%FT15
+    ]
 	CMP	R0, #&10		; don't cache values < &10
-	ADRCS	R2, CMOSRAMCache-&10	; if in range
-
-  [ :DEF: TestHarness
-	ADD	R2, R2, #i2cWorkSpace
+  [ :LNOT: :DEF: TestHarness
+	LDRCS	R2, =CMOSRAMCache-&10	; if in range
+  |
+	ADRCS	R2, i2cWorkSpace-&10
   ]
 	LDRCSB	R0, [R2, R0]		; read from cache
 	Pull	"R1,R2,PC", CS		; and exit
@@ -545,16 +549,26 @@ Read
 
   [	E2ROMSupport
 GetI2CAddress ROUT
-	CMP	R0, #&100
+	Push	"R14"
+	MOV	R14, #0			; get no 256 byte blocks and calculate end address
+	LDR	R14, [R14, #NVRamSize]
+	MOV	R14, R14, LSL #8
+	CMP	R0, R14
+	Pull	"R14",CS
 	ORRCSS	PC, R14, #C_bit		; indicate invalid
 
-; address is <&100 -> is valid
-	MOV	R1, #i2cWorkSpace
+; address is < end address -> is valid
+	MOV	R1, #0
 	LDRB	R1, [R1, #RTCFitted]
 	TEQ	R1, #1
 	MOVEQ	R1, #RTCAddress
 	MOVNE	R1, #E2ROMAddress
 
+	MOVS	R14, R0, LSR #8		; put top two bits of physical address into device address
+	ORRNE	R1, R1, R14, LSL #1
+	ANDNE	R0, R0, #&FF		; and use address within 256 byte block
+
+	Pull	"R14"
 	BICS	PC, R14, #C_bit		; indicate valid
   ]
 
@@ -574,16 +588,26 @@ GetI2CAddress ROUT
 ;	 R0 preserved
 ;
 
-MangleCMOSAddress ROUT
-	CMP	R0, #&F0		; if address &f0 or above
-	ORRCSS	PC, R14, #C_bit		; indicate invalid
+MangleCMOSAddress
+	Push	"R14"
+	MOV	R14, #0			; read no 256 byte blocks and calculate end address
+	LDR	R14, [R14, #NVRamSize]
+	MOV	R14, R14, LSL #8
+	CMP	R0, R14			; if >= end address then
+	Pull	"R14"
+	ORRCSS	PC, R14, #C_bit		;    invalid
+
+	CMP	R0, #&100		; if < end address && >= &100 then
+	BICCSS	PC, R14, #C_bit		;    valid (no mungeing)
+
+	CMP	R0, #&F0		; if < &100 && >= &f0 then
+	ORRCSS	PC, R14, #C_bit		;    invalid
 
 	ADD	R0, R0, #&40		; now in range &40..&13F
 	CMP	R0, #&100
 	SUBCS	R0, R0, #(&100-&10)	; now in range &40..&FF, &10..&3F
-	BICS	PC, R14, #C_bit		; indicate valid
+	BICCSS	PC, R14, #C_bit		; valid
 
-		
 ; *****************************************************************************
 ;
 ;	ValChecksum - test to see if the CMOS checksum is OK
@@ -600,16 +624,20 @@ MangleCMOSAddress ROUT
 
   [ ChecksumCMOS
 
-ValChecksum	ENTRY "R1,R2,R3"
+ValChecksum	ENTRY "R1-R4"
 
 	MOV	R3, #CMOSxseed
     [ E2ROMSupport
 	MOV	R0, #&40
 	BL	GetI2CAddress		; r1 = device address, r0 = offset
 	MOV	R2, R0			; save the offset
+	MOV	R4, #0			; read number of 256 byte blocks and calculate end address
+	LDR	R4, [R4, #NVRamSize]
+	MOV	R4, R4, LSL #8
     |
 	MOV	R2, #&40
 	MOV	R1, #RTCAddress
+	MOV	R4, #&100		; end address is always &100
     ]
 10
 	MOV	R0, R1	 		; device write address
@@ -624,7 +652,7 @@ ValChecksum	ENTRY "R1,R2,R3"
 	BL	TXAck
 
 ;
-; Read data from locations &40 through &FF, then
+; Read data from locations &40 through to the end address, then
 ; loop back to &10 (we have to write the address again) and read
 ; on until &3E .. thus missing out the checksum location.
 ;
@@ -633,23 +661,30 @@ ValChecksum	ENTRY "R1,R2,R3"
 	ADD	R3, R3, R0		; accumulate into R3
 
 	ADD	R2, R2, #1		; increment R2 to phys. address
-	TEQ	R2, #&100		; limit
+	TEQ	R2, R4			; limit
 	BEQ	%30
 	TEQ	R2, #PhysChecksum	; or until checksum.
 	BEQ	%30			; then we're finished
 
-	MOV	R0, #0			; not done .. ACK that byte
+	TST	R2, #&FF		; still in same 256 byte block?
+	MOVNE	R0, #0			; yes => not done .. ACK that byte
+	MOVEQ	R0, #1			; no => finish off reading block
 	BL	ClockData
-	B	%BT20			; .. and continue reading
+	BNE	%BT20			; yes => continue reading
+
+	BL	Stop
+	MOV	R0, R2			; in next 256 byte block so get device + address
+	BL	GetI2CAddress
+	B	%BT10			; and start next block
 
 30
 	MOV	R0, #1			; finish off reading block
 	BL	ClockData
 	BL	Stop
 
-        TST     R2, #&100		; either go back for bytes 10 - 3f
-        MOVNE   R2, #&10		; or finish up completely.
-	BNE	%BT10
+        TEQ     R2, R4			; either go back for bytes 10 - 3f
+        MOVEQ   R2, #&10		; or finish up completely.
+	BEQ	%BT10
 
 ;
 ; R3 contains the actual checksum. Compare it with the recorded checksum
@@ -683,6 +718,8 @@ MakeChecksum	ROUT
 	BL	Write
 	Pull	PC
 	]
+
+        LTORG
 
 ; *****************************************************************************
 ;
@@ -854,39 +891,46 @@ ReadTime ROUT
 
   [	CacheCMOSRAM
 
-InitCMOSCache	ENTRY "r0-r3"
+InitCMOSCache	ENTRY "r0-r4"
     [	E2ROMSupport
 
-;	First determine what hardware we've got fitted, R3 holds the number of
+;	First determine what hardware we've got fitted, R4 holds the number of
 ;	256 byte blocks that we've found
 	
 	; Have we got an RTC ?
 	MOV	R0, #RTCAddress
 	BL	DummyAccess
-	MOVVS	R3, #0
-	MOVVC	R3, #1
-	MOV	R2, #i2cWorkSpace
-	STRB	R3, [R2, #RTCFitted]
+	MOVVS	R4, #0
+	MOVVC	R4, #1
+	MOV	R2, #0
+	STRB	R4, [R2, #RTCFitted]
 
 ; Have we got a 1K E² ?
 	MOV	r0, #(E2ROMAddress+6)
 	BL	DummyAccess
-	ADDVC	R3, R3, #4
+	MOVVC	R4, #4
 	BVC	%FT5
 
 ; Have we got 512 bytes of E² ?
 	MOV	r0, #(E2ROMAddress+2)
 	BL	DummyAccess
-	ADDVC	R3, R3, #4
+	MOVVC	R4, #2
 	BVC	%FT5
 
 ; Have we got any E² ?
 	MOV	r0, #(E2ROMAddress)
 	BL	DummyAccess
-	ADDVC	R3, R3, #1
+	MOVVC	R4, #1
 
 	; Set the NVRam count
-5	STRB	R3, [R2, #NVRamSize]
+5	STRB	R4, [R2, #NVRamSize]
+
+	[ FullCMOSRAMCache
+	; Calculate address at which to stop
+	MOV	R4, R4, LSL #8		; number of 256 byte blocks * 256
+	|
+	MOV     R4, #&100		; stop at address &100
+	]
 
 	; Initialise the cache
 	MOV	R0, #&10
@@ -895,12 +939,14 @@ InitCMOSCache	ENTRY "r0-r3"
     |
 	MOV	R1, #RTCAddress
 	MOV	R2, #&10
+	MOV	R4, #&100		; stop at address &100
     ]
-	ADR	R3, CMOSRAMCache-16
-
-    [	:DEF: TestHarness
-	ADD	R3, R3, #i2cWorkSpace
+    [	:LNOT: :DEF: TestHarness
+	LDR	R3, =CMOSRAMCache-16
+    |
+	ADR	R3, i2cWorkSpace-16
     ]
+09
 	BL	Start
 
 	MOV	R0, R1			; write address
@@ -918,12 +964,19 @@ InitCMOSCache	ENTRY "r0-r3"
 	BL	RXByte			; returned in R0
 	STRB	R0, [R3, R2]
 	ADD	R2, R2, #1		; increment R2 to phys. address
-	CMP	R2, #&100
-	BEQ	%FT20
+	CMP	R2, R4			; stop when we hit end address
+	BGE	%FT20
 
-	MOV	R0, #0			; not done .. ACK that byte
+	TST	R2, #&FF		; still in same 256 byte block?
+	MOVNE	R0, #0			; yes => not done .. ACK that byte
+	MOVEQ	R0, #1			; no => finish off reading block
 	BL	ClockData
-	B	%BT10			; .. and continue reading
+	BNE	%BT10			; yes => continue reading
+
+	BL	Stop
+	MOV	R0, R2			; in next 256 byte block so get device + address
+	BL	GetI2CAddress
+	B	%BT09			; and start next block
 20
 	MOV	R0, #1			; finish off reading block
 	BL	ClockData
