@@ -39,11 +39,12 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
+ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 
 #
 # Include files
 #
-INCLUDES = -IC:
+INCLUDES = -IC:AsmUtils -IC:
 
 DFLAGS   =
 
@@ -60,7 +61,7 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -96,43 +97,20 @@ resources:
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${ASMUTILS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 ${RAMTARGET}: ${OBJS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB}
+        ${LD} -o $@ -module ${OBJS} ${ASMUTILS} ${CLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.frontpanel
-o.veneer: s.veneer
-o.veneer: Hdr:ListOpts
-o.veneer: Hdr:Macros
-o.veneer: Hdr:System
-o.veneer: Hdr:SWIs
-o.veneer: Hdr:CPU.Generic26
-o.veneer: Hdr:IO.GenericIO
-o.veneer: Hdr:RISCOS
-o.veneer: Hdr:ModHand
-o.frontpanel:	c.frontpanel
-o.frontpanel:	C:h.kernel
-o.frontpanel:	C:h.swis
-o.frontpanel:	h.module
-o.frontpanel:	h.frontpanel
-o.frontpanel:	h.standby
-o.frontpanel:	h.veneer
-o.frontpanel:	h.iomd
