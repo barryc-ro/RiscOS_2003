@@ -94,16 +94,3 @@ release:      ;net
               access $(RELEASEFS).src.resgen$(DOTVSN).h.*                wr/r
 
 # Dynamic dependencies:
-o.resgen:	c.resgen
-o.resgen:	C:h.kernel
-o.resgen:	C:h.swis
-o.resgen:	h.objflfmt
-o.binaof:	c.binaof
-o.binaof:	C:h.kernel
-o.binaof:	C:h.swis
-o.binaof:	h.objflfmt
-o.binasm:	c.binasm
-o.binasm:	C:h.kernel
-o.modgen:	c.modgen
-o.modgen:	C:h.kernel
-o.modgen:	C:h.swis

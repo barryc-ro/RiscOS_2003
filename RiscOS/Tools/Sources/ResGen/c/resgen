@@ -2,15 +2,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __riscos
 #include "kernel.h"
-#include "swis.h"
+#else
+typedef struct {
+   int load, exec;       /* load, exec addresses */
+   int start, end;       /* start address/length, end address/attributes */
+} _kernel_osfile_block;
+#include <sys/stat.h>
+#endif
+
 #include "objflfmt.h"
 
+#ifdef __riscos
 extern int resource_adr;
 extern int resources;
 
 #define resource_adr ((int)&resource_adr)
 #define resources    ((int)&resources)
+#else
+#include "rveneers1.h"
+#endif
 
 typedef struct ResFile {
     struct ResFile *next;
@@ -34,6 +46,32 @@ static void *check_malloc(int n)
 #define malloc(n) check_malloc(n)
 
 #define IDFNSTR "ResGen Version 1.00"
+
+
+static int fileinfo(_kernel_osfile_block *info, const char *name)
+{
+#ifdef __riscos
+    if (_kernel_osfile(READINFO, name, info) != FILEFOUND)
+	return -1;
+#else
+    struct stat buf;
+    int len, ftype;
+
+    if (stat(name, &buf) != 0) return -1;
+
+    len = strlen(name);
+    if (len > 4 && name[len-4] == ',')
+	ftype = (int)strtoul(name + len - 4, NULL, 16);
+    else
+	ftype = 0xfff;
+
+    info->load = 0xfff00000 | (ftype << 8);
+    info->exec = buf.st_mtime * 100 / 256;
+    info->start = buf.st_size;
+    info->end = 0;
+#endif
+    return 0;
+}
 
 static FILE *open_chunkfile(char *name, int numchunks, int maxchunks)
 {
@@ -119,14 +157,12 @@ int main(int argc, char **argv)
     char *outfile, *symbol;
     int wsize, size, i;
     FILE *f;
-    _kernel_osfile_block b;
     char cmdline[80];
     ResFile *reslist, *res, **pres;
     char *s;
     int area_size, offset;
     char *p;
     char *viafile;
-    _kernel_swi_regs r;
 
     if (argc < 3) {
         fprintf(stderr, "Usage: ResGen <Area name> <Object file> { <Binary file> <Resource file> | -via <viafile> }\n");
@@ -148,25 +184,17 @@ int main(int argc, char **argv)
                 fprintf(stderr, "No filename on -via flag\n");
                 exit(1);
             }
-            r.r[0] = 17;
-            r.r[1] = (int)viafile;
-            if (_kernel_swi(OS_File, &r, &r)) {
-                fprintf(stderr, "Error opening %s\n", viafile);
+	    size = wf_filesize(viafile);
+	    if (size == -1) {
+                fprintf(stderr, "Error finding %s\n", viafile);
                 exit(1);
             }
-            if (r.r[0] != 1) {
-                fprintf(stderr, "File %s not found or is a directory\n", viafile);
-                exit(1);
-            }
-            infile_buffer = malloc(r.r[4] + 1);
-            r.r[0] = 16;
-            r.r[2] = (int)infile_buffer;
-            r.r[3] = 0;
-            if (_kernel_swi(OS_File, &r, &r)) {
+            infile_buffer = malloc(size + 1);
+	    if (wf_load(viafile, infile_buffer, size) == -1) {
                 fprintf(stderr, "Error loading %s\n", viafile);
                 exit(1);
             }
-            infile_buffer[r.r[4]] = 0;
+            infile_buffer[size] = 0;
             p = infile_buffer;
             while (1) {
                 while (isspace(*p)) p++;
@@ -184,11 +212,11 @@ int main(int argc, char **argv)
                 while (*p && !isspace(*p)) p++;
                 if (*p) *p++ = 0;
                 res->next = 0;
-                if (_kernel_osfile(17, res->infile, &b) != 1) {
+                size = wf_filesize(res->infile);
+		if (size == -1) {
                     fprintf(stderr, "Error opening %s\n", res->infile);
                     exit(1);
                 }
-                size = b.start;
                 area_size += ((size + 3) & ~3) +
                          ((strlen(res->resfile) + 4) & ~3) + 6 * sizeof(int);
                 pres = &(res->next);
@@ -201,11 +229,11 @@ int main(int argc, char **argv)
                 fprintf(stderr, "No matching resource file for %s\n", res->infile);
                 exit(1);
             }
-            if (_kernel_osfile(17, res->infile, &b) != 1) {
-                fprintf(stderr, "Error opening %s\n", res->infile);
-                exit(1);
-            }
-            size = b.start;
+	    size = wf_filesize(res->resfile);
+	    if (size == -1) {
+		fprintf(stderr, "Error finding %s\n", res->resfile);
+		exit(1);
+	    }
             area_size += ((size + 3) & ~3) +
                          ((strlen(res->resfile) + 4) & ~3) + 6 * sizeof(int);
             pres = &(res->next);
@@ -227,28 +255,28 @@ int main(int argc, char **argv)
     write_data(f, (void *)resource_adr, resources - resource_adr);
     res = reslist;
     while (res) {
+	_kernel_osfile_block b;
         int res_hdr[5];
 
         if (!size)
             fprintf(stderr, "Warning: %s has size 0\n", res->infile);
-        if (_kernel_osfile(17, res->infile, &b) != 1) {
-            fprintf(stderr, "Error reading %s\n", res->infile);
-            exit(1);
-        }
-        size = b.start;
+	fileinfo(&b, res->infile);
+	size = b.start;
+	if (size == -1) {
+	    fprintf(stderr, "Error finding %s\n", res->infile);
+	    exit(1);
+	}
         res_hdr[0] = ((size + 3) & ~3) +
                          ((strlen(res->resfile) + 4) & ~3) + 6 * sizeof(int);
         res_hdr[1] = b.load;
         res_hdr[2] = b.exec;
-        res_hdr[3] = b.start;
+        res_hdr[3] = size;
         res_hdr[4] = 3;
         write_data(f, res_hdr, sizeof(res_hdr));
         write_data(f, res->resfile, strlen(res->resfile) + 1);
         write_word(f, size + 4);
         infile_buffer = malloc(size);
-        b.load = (int)infile_buffer;
-        b.exec = 0;
-        if (_kernel_osfile(16, res->infile, &b) != 1) {
+	if (wf_load(res->infile, infile_buffer, size) == -1) {
             fprintf(stderr, "Error reading %s\n", res->infile);
             exit(1);
         }
