@@ -77,16 +77,20 @@ TARGETSA	= rm.FlashWri
 TARGETSA_D	= rm.FlashWriD
 
 OBJS = \
+ o.calls \
  o.Header \
+ o.error \
  o.Module \
  o.FlashProg \
- o.calls \
+ 
 
 OBJSD = \
+ o.calls \
  o.Header \
+ od.error \
  od.Module \
  od.FlashProg \
- o.calls \
+ 
 
 EXPORTS =
 
