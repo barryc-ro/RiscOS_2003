@@ -147,6 +147,11 @@ export_hdrs: h.${COMPONENT}
 export_libs: ${LIBTARGET}
 	${CP} ${LIBTARGET} ${EXP_C_O}.${COMPONENT} ${CPFLAGS}
 
+install: ${RAMTARGET}
+	${CP} ${RAMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+	@echo
+	@echo ${COMPONENT}: ram module installed
+
 install_rom: ${ROMTARGET}
 	${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo
