@@ -47,7 +47,7 @@ WIPE    = -wipe
 STRIP   = stripdepnd
 
 AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -ff ${INCLUDES}
+CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${BUILDFLAGS}
 LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
@@ -78,7 +78,7 @@ LIBSZ     = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM  = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAMD = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib ${LIBSD} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
 
-DFLAGS   = ${BUILDFLAGS} -DDEBUGLIB
+DFLAGS   = -DDEBUGLIB
 
 # -----------------------------------------------------------------------------
 # Program specific options
