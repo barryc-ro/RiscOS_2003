@@ -18,6 +18,7 @@
 #include "functions.h"
 #include "kernel.h"
 #include "misc.h"
+#include "load.h"
 #include "scheduler.h"
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
@@ -57,9 +58,7 @@ void ui_alter_flag(ObjectId object, ComponentId component, unsigned int flaggy)
  */
 void ui_update_login(ComponentId option, ComponentId component)
 {
-  _kernel_oserror	*er;
-  _kernel_swi_regs	regs;
-  int			handle;
+  _kernel_oserror    *er;
 
   if (misc_tag_lookup(OptISP2_WindowHandle, option, "OptISP2_LoginField") == 1)
   {
@@ -79,16 +78,6 @@ void ui_update_login(ComponentId option, ComponentId component)
     ui_alter_flag(OptISP2_WindowHandle, component, 0);
     er = writablefield_set_value(0, OptISP2_WindowHandle, component, "");
   }
-
-  er = window_get_wimp_handle(0, OptISP2_WindowHandle, &handle);
-  regs.r[0] = handle;
-  regs.r[1] = -1;
-  regs.r[2] = 0;
-  regs.r[3] = 0;
-  regs.r[4] = 1<<25;
-  regs.r[5] = 0;
-  _kernel_swi(Wimp_SetCaretPosition, &regs, &regs);
-
 }
 
 
@@ -228,11 +217,11 @@ void optdate_optionfields(int updown, ComponentId comp)
 {
   _kernel_oserror	*er;
   _kernel_swi_regs	regs;
-  char			buffer[50], buffer2[50], oscli[30];
+  char			buffer[50], oscli[30];
   struct tm		*local_time;
-  int			secs, mins, hours, days, months, years, id, offset;
+  int			secs, mins, hours, days, months, years, id, offset, offset2;
   int			secs2, mins2, hours2, days2, months2, years2;
-  int			original_offset;
+  int			original_offset, error;
 
   if (comp == optdate_month_border)
   {
@@ -295,11 +284,14 @@ void optdate_optionfields(int updown, ComponentId comp)
     /* Get ID from this string */
     id = misc_tag_lookup(OptDate_WindowHandle, optdate_toffset_string, "OptDate_TOffset");
 
-    /* Calculate an offset, and shove into a string */
-    er = button_get_value(0, OptDate_WindowHandle, optdate_toffset_string, buffer2, sizeof(buffer2), 0);
+
+    /* Load our current timezone */
+    error = load_swi_call("TimeZone", (char *)&offset2, 0);
+
+    /* Load the selected timezone*/
     offset = misc_lookup_timezone();
 
-    /* Get the original timezone offset */
+    /* Get the current timezone offset stored in CMOS */
     regs.r[0] = 161;
     regs.r[1] = 139;
     _kernel_swi(OS_Byte, &regs, &regs);
@@ -311,32 +303,51 @@ void optdate_optionfields(int updown, ComponentId comp)
     regs.r[2] = sizeof(buffer);
     _kernel_swi(OS_ConvertInteger1, &regs, &regs);
 
-    /* Work out the time *now* */
+    /* As the timezone is stored in 15 min intervals, we divide by 4 to get it in hours */
+    original_offset = atoi(buffer)/4;
+
+    /* Get the present time from the system clock */
     optdate_get_time_now(&local_time);
     secs = local_time->tm_sec; mins = local_time->tm_min; hours = local_time->tm_hour;
     days = local_time->tm_mday; months = local_time->tm_mon; years = local_time->tm_year;
     optdate_set_clock('N', secs, mins, hours, days, months, years);
 
-    /* Set the writeable data (this should be quick enough not to update) */
+    /* Set the date and time from the writables in the Date/Time window */
     optdate_set_datetime();
     optdate_set_clock('S', 0, 0, 0, 0, 0, 0);
 
-    /* Now set the timezone flags */
+    /*************************************************************************************************************
+     We have to work out the correct offset to add/subtract to the current timezone. As all timezone
+     information stored in the messages file is relative to GMT, we use the current timezone's GMT offset,
+     the selected timezones GMT offset. We then subtract the selected timezone offset from the current timezone
+     offset to get the difference in hours between the two timezones. This we then subtract from the original
+     timezone offset to find the value (relative to GMT) to add/subtract to the current timezone. In short:
+
+     difference between timezones = current_timezone - selected_timezone;
+
+     offset to add to current timezone = current timezone - difference between timezones
+     ************************************************************************************************************/
+    offset = (original_offset - (offset2 - offset));
+
+    /* Now set the timezone according to our calculation */
     sprintf(oscli, "co. timezone %d\0", offset);
     _kernel_oscli(oscli);
+
+    /* Get the time now the timezone has been set */
     optdate_get_time_now(&local_time);
     secs2 = local_time->tm_sec; mins2 = local_time->tm_min; hours2 = local_time->tm_hour;
     days2 = local_time->tm_mday; months2 = local_time->tm_mon; years2 = local_time->tm_year;
 
-    /* Set the clock again */
+    /* Set the system clock with the new timezone'd time */
     optdate_set_clock('N', secs2, mins2, hours2, days2, months2, years2);
     optdate_set_datetime();
 
-    /* And reset the actual timezone */
+    /* Reset the timezone to its oRIginAL vALuE */
+    sprintf(buffer, "%d", original_offset);
     sprintf(oscli, "co. timezone %s\0", buffer);
     _kernel_oscli(oscli);
 
-    /* Grab parameters and return clock values to normallity */
+    /* Reset the system clock to it's original value */
     optdate_set_clock('N', secs, mins, hours, days, months, years);
   }
 }
@@ -361,6 +372,55 @@ void optmisc_optionfields(int updown, ComponentId comp)
     {
       /* Capture timeout option */
       ui_optionfield_update(updown, "OptMisc_Capture_", OptMisc_WindowHandle, optmisc_capturetime_string, Optionfield_Wrap|Optionfield_Numerical);
+      break;
+    }
+
+    case(optmisc_enotes_border):
+    {
+      /* Enote printing option */
+      ui_optionfield_update(updown, "Opt_YesNo_", OptMisc_WindowHandle, optmisc_enotes_string, Optionfield_Wrap|Optionfield_NonNumerical);
+      break;
+    }
+
+    case(optmisc_faxredial_border):
+    {
+      /* Fax redial count option */
+      ui_optionfield_update(updown, "OptMisc_FaxRedial_", OptMisc_WindowHandle, optmisc_faxredial_string, Optionfield_Wrap|Optionfield_Numerical);
+      break;
+    }
+
+    case(optmisc_pulsetone_border):
+    {
+      /* Pulse/Tone dial option */
+      ui_optionfield_update(updown, "OptMisc_PulseTone_", OptMisc_WindowHandle, optmisc_pulsetone_string, Optionfield_Wrap|Optionfield_NonNumerical);
+      break;
+    }
+
+    case(optmisc_receipts_border):
+    {
+      /* Request Receipts option */
+      ui_optionfield_update(updown, "Opt_YesNo_", OptMisc_WindowHandle, optmisc_receipts_string, Optionfield_Wrap|Optionfield_NonNumerical);
+      break;
+    }
+
+    case(optmisc_faxmethod_border):
+    {
+      /* Fax Method option */
+      ui_optionfield_update(updown, "OptMisc_FaxMethod_", OptMisc_WindowHandle, optmisc_faxmethod_string, Optionfield_Wrap|Optionfield_NonNumerical);
+      break;
+    }
+
+    case(optmisc_prefixpause_border):
+    {
+      /* Post Prefix Pause */
+      ui_optionfield_update(updown, "OptMisc_Pause_", OptMisc_WindowHandle, optmisc_prefixpause_string, Optionfield_Wrap|Optionfield_NonNumerical);
+      break;
+    }
+
+    case(optmisc_interpause_border):
+    {
+      /* Post International Pause */
+      ui_optionfield_update(updown, "OptMisc_Pause_", OptMisc_WindowHandle, optmisc_interpause_string, Optionfield_Wrap|Optionfield_NonNumerical);
       break;
     }
   }
@@ -501,6 +561,14 @@ void optisp2_optionfields(int updown, ComponentId comp)
       break;
     }
 
+    case(optisp2_emailreceipt_border):
+    {
+      /* Print Optionfield */
+      ui_optionfield_update(updown, "Opt_YesNo_", OptISP2_WindowHandle, optisp2_emailreceipt_string, Optionfield_Wrap|Optionfield_NonNumerical);
+
+      break;
+    }
+
     case(optisp2_switch1_border):
     {
       /* Alter the contents of the switch to either password mode or non-password */
@@ -614,7 +682,6 @@ void optsched_optionfields(int updown, ComponentId comp)
     case(optschedule_peakstart_hour_border):
     {
       ui_sched_time_fields(OptSchedule_WindowHandle, optschedule_peakstart_hour_string, 1, TRUE, updown);
-
       break;
     }
     case(optschedule_peakstart_min_border):
@@ -655,11 +722,12 @@ void optsched_optionfields(int updown, ComponentId comp)
   }
 }
 
-/*  Name        : ui_sched_fade_fields
- *  Parameters  : TRUE/FALSE (greyed out fields or not)
- *  Description : Greys out the scheduler fields if TRUE is passed, else makes them selectable
- *  Returns     : Nothing
- */
+/***********************************************************************************************
+ *  Name        : ui_sched_fade_fields                                                         *
+ *  Parameters  : TRUE/FALSE (greyed out fields or not)                                        *
+ *  Description : Greys out the scheduler fields if TRUE is passed, else makes them selectable *
+ *  Returns     : Nothing                                                                      *
+ ***********************************************************************************************/
 void ui_sched_fade_fields(int grey)
 {
   int         loop;
@@ -704,11 +772,12 @@ void ui_sched_fade_fields(int grey)
   }
 }
 
-/*  Name        : ui_sched_time_fields
- *  Parameters  : Window handle/Component handle/schedule time type/hour or minute flag/updown
- *  Description : Updates the time set for the scheduler and updates the displayed times
- *  Returns     : Nothing
- */
+/***********************************************************************************************
+ *  Name        : ui_sched_time_fields                                                         *
+ *  Parameters  : Window handle/Component handle/schedule time type/hour or minute flag/updown *
+ *  Description : Updates the time set for the scheduler and updates the displayed times       *
+ *  Returns     : Nothing                                                                      *
+ ***********************************************************************************************/
 void ui_sched_time_fields(ObjectId window, ComponentId comp, int type, int hom, int updown)
 {
   _kernel_oserror	*er;
@@ -769,11 +838,12 @@ void ui_sched_time_fields(ObjectId window, ComponentId comp, int type, int hom, 
 }
 
 
-/*  Name        : ui_sched_update_fields
- *  Parameters  : None
- *  Description : Updates the icons in which the times are displayed
- *  Returns     : Nothing
- */
+/*********************************************************************
+ *  Name        : ui_sched_update_fields                             *
+ *  Parameters  : None                                               *
+ *  Description : Updates the icons in which the times are displayed *
+ *  Returns     : Nothing                                            *
+ *********************************************************************/
 void ui_sched_update_fields(void)
 {
   _kernel_oserror	*er;
@@ -817,11 +887,12 @@ void ui_sched_update_fields(void)
 }
 
 
-/*  Name        : ui_update_sched_time
- *  Parameters  : day/time specifier/new time
- *  Description : Updates the times from the time passed to the function depending on the specifier
- *  Returns     : Nothing
- */
+/****************************************************************************************************
+ *  Name        : ui_update_sched_time                                                              *
+ *  Parameters  : day/time specifier/new time                                                       *
+ *  Description : Updates the times from the time passed to the function depending on the specifier *
+ *  Returns     : Nothing                                                                           *
+ ****************************************************************************************************/
 void ui_update_sched_time(int day, int specifier, int new_time)
 {
   int	day_loop;
