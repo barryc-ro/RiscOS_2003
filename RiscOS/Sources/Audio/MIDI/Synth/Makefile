@@ -59,11 +59,9 @@ clean:
 resources:
         @echo ${COMPONENT}: resource files copied
 
-${TARGET1}: ${SOURCES} ${SYNTHLIB} dirs
-        Run ${S}.!Run
-
-dirs:
+${TARGET1}: ${SOURCES} ${SYNTHLIB} 
         ${MKDIR} ${O}
         ${MKDIR} ${OD}
+        Run ${S}.!Run
 
 # Dynamic dependencies:

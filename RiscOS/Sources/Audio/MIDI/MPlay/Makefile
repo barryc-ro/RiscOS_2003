@@ -48,11 +48,9 @@ clean:
 resources:
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE}.MPlayCode ${OBJS} vars
-        Run ${SOURCE}.MPlayCode
-
-vars:
+${TARGET}: ${SOURCE}.MPlayCode ${OBJS} 
         Set MPlayBuild$Dir ${SOURCE}
+        Run ${SOURCE}.MPlayCode
 
 ${O}.Din: ${SOURCE}.DInCode
         Run ${SOURCE}.DInCode
