@@ -79,18 +79,6 @@ $l      LDR     $reg1, =VIDC
         ORR     lr,lr,$temp
         MEND
 
-; Ickle macros. We want to be able to turn IRQs on and off fast in the
-; code in various places. To do this easily, have a name for the
-; SVC26/32 mode we run in
-
- [ No26bitCode
-USR2632 * USR32_mode
-SVC2632 * SVC32_mode
- |
-USR2632 * USR26_mode
-SVC2632 * SVC26_mode
- ]
-
 ;
 
     [ AddTubeBashers
@@ -181,7 +169,11 @@ MinAplWork * 40*1024         ; minimum size of AplWork
 ; Fixed addresses
 
 MEMCADR  * &3600000
+ [ HAL32
+ROM      * &FC000000
+ |
 ROM      * &3800000
+ ]
 OSMD     * &11111111
 
 VideoPhysRam *  &02000000               ; Amazing - it's in the same place!
@@ -216,10 +208,20 @@ CBack_VectorReq * 4
 
 ; Set up symbols for the SWIs which aren't really there yet
 
-AbortTrapSWI * NoSuchSWI
 
         SUBT    Arthur Code
         OPT     4
+
+  [ HAL
+        ORG     ROM + 64*1024
+  |
+        ORG     ROM
+  ]
+
+        AREA    |!!!!OSBase|,CODE,READONLY
+
+        ENTRY                   ; Not really, but we need it to link
+KernelBase
 
 ; *****************************************************************************
 ;
@@ -227,31 +229,55 @@ AbortTrapSWI * NoSuchSWI
 ;
 ; *****************************************************************************
 
-        ORG     ROM
+  [ HAL
+;        ORG     ROM + 64*1024
+  |
+;        ORG     ROM
+  ]
 
         GBLS    DoMorrisROMHeader
+        GBLS    DoTestThings
+DoMorrisROMHeader SETS ""
+DoTestThings      SETS ""
+
+  [ HAL
+;        BIN     HAL.L7200.HAL
+
+; RISC OS image header
+RISCOS_Header
+        =       "ROIm"
+        DCD     0
+        DCD     ROM
+        DCD     1*1024*1024 - 64*1024
+        DCD     RISCOS_Entries - RISCOS_Header
+        DCD     (RISCOS_Entries_End - RISCOS_Entries) / 4
+
+RISCOS_Entries
+        DCD     RISCOS_InitARM - RISCOS_Entries
+        DCD     RISCOS_AddRAM  - RISCOS_Entries
+        DCD     RISCOS_Start   - RISCOS_Entries
+RISCOS_Entries_End
+
+  |
+
 
  [ MorrisSupport
 DoMorrisROMHeader SETS  " GET s.Morris"
- |
-DoMorrisROMHeader SETS  ""
  ]
 
 ; now include the test code, if there is any
 
-        GBLS    DoTestThings
 
  [ IncludeTestSrc
 DoTestThings    SETS    " GET TestSrc.Begin"
- |
-DoTestThings    SETS    ""
  ]
-        $DoTestThings
 
  [ IncludeTestSrc
 DoMorrisROMHeader SETS  ""
  ]
 
+  ]
+        $DoTestThings
         $DoMorrisROMHeader
 
 
@@ -260,7 +286,7 @@ DoMorrisROMHeader SETS  ""
 ; handle reset and any aborts etc. in the reset code.
 ; If MorrisSupport we've already generated 16/32 ROM entry code, so skip this bit
 
-  [ :LNOT: IncludeTestSrc :LAND: :LNOT: MorrisSupport
+  [ :LNOT: IncludeTestSrc :LAND: :LNOT: MorrisSupport :LAND: :LNOT: HAL
    [ ResetIndirected
         LDR     pc, .+ResetIndirection ; load PC, PC relative
    |
@@ -351,7 +377,7 @@ AdXPreVeneer    *       ProcVecPreVeneers+(.-DefaultPreVeneers)
         ASSERT  (.-DefaultPreVeneers) = ProcVecPreVeneersSize
 
 
- [ ResetIndirected :LAND: :LNOT: IncludeTestSrc
+ [ ResetIndirected :LAND: :LNOT: IncludeTestSrc :LAND: :LNOT: HAL
 
 ; We now waste space until the offset into the ROM is the same as the RAM address of ResetIndirection
 ; This is so that
@@ -388,19 +414,18 @@ EndData
 
 SVCDespatcher ROUT
 
-SWIRelocation * SVCDespatcher-SWIDespatch
-
-SLVK_SetV * {PC}-SWIRelocation
+SLVK_SetV * SWIDespatch + {PC}-SVCDespatcher
 
         ORR     lr, lr, #V_bit
 
-SLVK_TestV * {PC}-SWIRelocation
+SLVK_TestV * SWIDespatch + {PC}-SVCDespatcher
  ! 0,"SLVK_TestV at ":CC:(:STR:SLVK_TestV)
 
         ORRVS   lr, lr, #V_bit
 
-SLVK * {PC}-SWIRelocation
+SLVK * SWIDespatch + {PC}-SVCDespatcher
  ! 0,"SLVK       at ":CC:(:STR:SLVK)
+Local_SLVK
 
         LDR     r12, [sp], #4
         MOV     r10, #0
@@ -409,41 +434,49 @@ SLVK * {PC}-SWIRelocation
         TST     lr, #V_bit
         BNE     %FT50
 
-SWIReturnWithCallBackFlag * {PC}-SWIRelocation
+SWIReturnWithCallBackFlag * SWIDespatch + {PC}-SVCDespatcher
  ! 0,"SWIReturnWithCallBackFlag at ":CC:(:STR:SWIReturnWithCallBackFlag)
 
 40      TEQ     r11, #0
 
-        msr EQ ,CPSR_c, #I32_bit + SVC32_mode           ; IRQs off for SPSR use
-        msr EQ ,SPSR_cxsf, lr
+        MSREQ   CPSR_c, #I32_bit + SVC32_mode           ; IRQs off for SPSR use
+        MSREQ   SPSR_cxsf, lr
         LDREQ   lr, [sp], #4
         Pull    "r10-r12", EQ
         MOVEQS  pc, lr
 
-        B       callback_checking + SWIRelocation
+ [ HAL
+        BKPT 2
+ |
+        B       callback_checking + SVCDespatcher - SWIDespatch
+ ]
 
- ! 0,"VSetReturn at ":CC:(:STR:({PC}-SWIRelocation))
+ ! 0,"VSetReturn at ":CC:(:STR:(SWIDespatch + {PC}-SVCDespatcher))
 50      TST     r12, #Auto_Error_SWI_bit
         BNE     %BT40
 
-        B       VSet_GenerateError + SWIRelocation
+ [ HAL
+        BKPT 2
+ |
+        B       VSet_GenerateError + SVCDespatcher - SWIDespatch
+ ]
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; The SWI Despatch routine
 
-SVC * {PC}-SWIRelocation
+SVC * SWIDespatch + {PC}-SVCDespatcher
 
         Push    "r10-r12"
  [ No26bitCode
-        mrs    ,r12, SPSR               ; r12 = saved PSR
+        MRS     r12, SPSR               ; r12 = saved PSR
         TST     r12, #T32_bit           ; depending on processor state (ARM/Thumb)
         LDREQ   r11, [r14, #-4]         ; extract SWI number to r11
         LDRNEB  r11, [r14, #-2]         ; (ordering to prevent interlocks)
         BICEQ   r11, r11, #&FF000000
  |
         LDR     r11, [r14, #-4]         ; extract SWI number to r11
-        mrs    ,r12, SPSR               ; r12 = saved PSR
+        MRS     r12, SPSR               ; r12 = saved PSR
         BIC     r11, r11, #&FF000000    ; (ordering to prevent interlocks)
  ]
 
@@ -451,19 +484,27 @@ SVC * {PC}-SWIRelocation
 
         AND     r10, r12, #I32_bit+F32_bit
         ORR     r10, r10, #SVC2632      ; set IFTMMMMM = IF0x0011
-        msr    ,CPSR_c, r10             ; restore caller's IRQ state
+        MSR     CPSR_c, r10             ; restore caller's IRQ state
 
         BIC     r14, r12, #V_bit        ; clear V (some SWIs need original PSR in r12)
 
-SVC_CallASWI * {PC}-SWIRelocation       ; CallASWI,CallASWIR12 re-entry point
+SVC_CallASWI * SWIDespatch + {PC}-SVCDespatcher ; CallASWI,CallASWIR12 re-entry point
 
         BICS    r11, r11, #Auto_Error_SWI_bit
-        BEQ     SWIWriteC + SWIRelocation
+ [ HAL
+        BKPT 2
+ |
+        BEQ     SWIWriteC + SVCDespatcher - SWIDespatch
+ ]
 
         CMP     r11, #OS_WriteI
         LDRLO   pc, [pc, r11, LSL #2]
 
-        B       NotMainMOSSwi + SWIRelocation
+ [ HAL
+        BKPT 2
+ |
+        B       NotMainMOSSwi + SVCDespatcher - SWIDespatch
+ ]
 
  ASSERT {PC}-SVCDespatcher = SWIDespatch_Size
 
@@ -580,7 +621,7 @@ JTABLE  & SWIWriteC             ; this entry never gets used (see ^)
  ]
         & ScreenModeSWI
         & DynamicAreaSWI
-        & AbortTrapSWI
+        & NoSuchSWI                     ; OS_AbortTrap
  [ CPU_Type = "ARM600"
         & MemorySWI
  |
@@ -628,8 +669,8 @@ JTABLE  & SWIWriteC             ; this entry never gets used (see ^)
  ]
         & NVMemorySWI
 
-MaxSwi * (.-JTABLE)/4
 
+ ASSERT (.-JTABLE)/4 = MaxSwi
  ASSERT MaxSwi < OS_ConvertStandardDateAndTime
 
 ; SWIs for time/date conversion are poked in specially
@@ -638,7 +679,7 @@ MaxSwi * (.-JTABLE)/4
 ; The fudge branch to exit a dirty SWI handler
 
 DirtyBranch
-        B       SLVK +DirtyBranch-BranchToSWIExit
+        B       Local_SLVK
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -729,13 +770,11 @@ ErrHandler ROUT
         LDRB    r11, [r10, #CallBack_Flag]
         CMP     r11, #0
 
-        mrs    ,r12, CPSR
+        MRS     r12, CPSR
         BIC     r12, r12, #I32_bit+F32_bit+&0F  ; USR26/32 mode, ARM, IRQs enabled
 
-  [ :LNOT: NoSPSRcorruption
-        msr EQ, CPSR_c, #I32_bit+SVC32_mode ; disable interrupts for SPSR use
-  ]
-        msr EQ, SPSR_cxsf, r12
+        MSREQ   CPSR_c, #I32_bit+SVC32_mode ; disable interrupts for SPSR use
+        MSREQ   SPSR_cxsf, r12
 
         Pull    "r10-r12", EQ
         MOVEQS  pc, r14                 ; USR mode, IRQs enabled
@@ -752,8 +791,8 @@ ErrHandler ROUT
 callback_checking
 
         TST     lr, #I32_bit+&0F        ; user 26/32 mode, ints enabled?
-        msr NE ,CPSR_c, #I32_bit + SVC32_mode
-        msr NE ,SPSR_cxsf, lr
+        MSRNE   CPSR_c, #I32_bit + SVC32_mode
+        MSRNE   SPSR_cxsf, lr
         LDRNE   lr, [sp], #4
         Pull    "r10-r12", NE
         MOVNES  pc, lr                  ; Skip the branch for SVC code speed
@@ -767,14 +806,14 @@ callback_checking
         CMP     r0, #ROM
         BGE     Do_CallBack
 
-        msr    ,CPSR_c, #I32_bit + SVC32_mode  ; ints off while flag updated
+        MSR     CPSR_c, #I32_bit + SVC32_mode  ; ints off while flag updated
         LDRB    r11, [r10, #CallBack_Flag]
         ORR     r11, r11, #CBack_Postpone      ; signal to IRQs
         STRB    r11, [r10, #CallBack_Flag]
 back_to_user
-        msr    ,CPSR_c, #I32_bit + SVC32_mode
+        MSR     CPSR_c, #I32_bit + SVC32_mode
 back_to_user_irqs_already_off
-        msr    ,SPSR_cxsf, lr
+        MSR     SPSR_cxsf, lr
         LDR     lr, [sp], #4
         Pull    "r10-r12"
         MOVS    pc, lr
@@ -798,7 +837,7 @@ Do_CallBack                                    ; CallBack allowed:
         CMP     sp, r11                         ; Stack empty?
         BLO     back_to_user                    ; No then no call back
  ]
-        msr    ,CPSR_c, #I32_bit + SVC2632      ; ints off while flag updated
+        MSR     CPSR_c, #I32_bit + SVC2632      ; ints off while flag updated
         LDRB    r11, [r10, #CallBack_Flag]
         BIC     r11, r11, #CBack_Postpone+CBack_OldStyle
         STRB    r11, [r10, #CallBack_Flag]
@@ -835,18 +874,18 @@ process_callback_chain ROUT
         Push   "r0-r6, r10-r12, lr"             ; save some for the callee too.
         MOV     r10, #0
 
-        msr    ,CPSR_c, #I32_bit + SVC2632      ; ints off while flag updated
+        MSR     CPSR_c, #I32_bit + SVC2632      ; ints off while flag updated
         LDRB    r11, [r10, #CallBack_Flag]
         BIC     r11, r11, #CBack_VectorReq
         STRB    r11, [r10, #CallBack_Flag]
 
 01
-        msr    ,CPSR_c, #I32_bit + SVC2632      ; ints off while flag updated
+        MSR     CPSR_c, #I32_bit + SVC2632      ; ints off while flag updated
         MOV     r2, #0
         LDR     r2, [r2, #CallBack_Vector]
         TEQ     r2, #0
       [ No26bitCode
-        msr EQ ,CPSR_c, #SVC2632                ; ensure exit with ints on
+        MSREQ   CPSR_c, #SVC2632                ; ensure exit with ints on
         Pull   "r0-r6, r10-r12, PC",EQ
       |
         Pull   "r0-r6, r10-r12, PC",EQ,^
@@ -856,7 +895,7 @@ process_callback_chain ROUT
         MOV     r0, #HeapReason_Free
         STR     r10, [r0, #CallBack_Vector-HeapReason_Free] ; Keep head valid
 
-        msr    ,CPSR_c, #SVC2632                ; enable ints for long bits
+        MSR     CPSR_c, #SVC2632                ; enable ints for long bits
 
   [ ChocolateSysHeap
         ASSERT  ChocolateCBBlocks = ChocolateBlockArrays + 0
@@ -884,7 +923,7 @@ process_callback_chain ROUT
 
 SWIWriteC ROUT
 
-        msr    ,CPSR_c, #SVC2632        ; enable interrupts
+        MSR     CPSR_c, #SVC2632        ; enable interrupts
 
         STR     lr, [sp, #-4]!
 
@@ -1020,7 +1059,7 @@ VectorUserSWI                   ; Not in a module, so call vec
  |
         Pull    "r9,lr"
  ]
-        mrs     AL, r10, CPSR
+        MRS     r10, CPSR
         BIC     lr, lr, #&F0000000      ; Can mangle any/all of punter NZCV flags
         AND     r10, r10, #&F0000000
         ORR     lr, lr, r10
@@ -1178,12 +1217,12 @@ VecSwiDespatch ROUT
         MOV     r10, r11                ; SWI number from R11->R10
 
   [ No26bitCode
-        mrs     AL, r11, CPSR
+        MRS     r11, CPSR
         AND     r14, r14, #&F0000000    ; extract caller's CCs
         BIC     r11, r11, #&F0000000    ; mask out ours
         BIC     r11, r11, #I32_bit      ; enable IRQs
         ORR     r11, r11, r14           ; add in CCs
-        msr    ,CPSR_cf, r11            ; and set it all up
+        MSR     CPSR_cf, r11            ; and set it all up
   |
         ORR     r14, lr, #SVC_mode
         BIC     r14, r14, #I_bit        ; Enable IRQs
@@ -1210,12 +1249,12 @@ NoIrqVecSwiDespatch ROUT
         Push    lr                      ; this is user's link
         MOV     r10, r11                ; SWI number from R11->R10
   [ No26bitCode
-        mrs     AL, r11, CPSR
+        MRS     r11, CPSR
         AND     r14, r14, #&F0000000    ; extract caller's CCs
         BIC     r11, r11, #&F0000000    ; mask out ours
         ORR     r11, r11, #I32_bit      ; disable IRQs
         ORR     r11, r11, r14           ; add in CCs
-        msr     AL, CPSR_cf, r11        ; and set it all up
+        MSR     CPSR_cf, r11            ; and set it all up
   |
         ORR     r14, lr, #SVC_mode+I_bit ; Disable IRQ
         TEQP    r14, #0
@@ -1268,12 +1307,10 @@ SEXIT ROUT
         LDR     r12, [r0, #SExitA_ws]
         LDR     sp_svc, =SVCSTK
  [ No26bitCode
-        mrs     AL, r0, CPSR
-   [ :LNOT: NoSPSRcorruption
-        msr    ,CPSR_c, #I32_bit+SVC2632 ; IRQs off (to protect SPSR_svc)
-   ]
+        MRS     r0, CPSR
+        MSR     CPSR_c, #I32_bit+SVC2632 ; IRQs off (to protect SPSR_svc)
         BIC     r0, r0, #I32_bit+F32_bit+&0F
-        msr     AL, SPSR_cxsf, r0       ; Get ready for USR26/32, IRQs on
+        MSR     SPSR_cxsf, r0            ; Get ready for USR26/32, IRQs on
         MOVS    pc, lr                  ; lr->pc, SPSR->CPSR
  |
         BICS    pc, lr, #ARM_CC_Mask

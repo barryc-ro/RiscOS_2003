@@ -19,11 +19,16 @@ C_EXP_HDR = <cexport$dir>.Global.h
 #
 MKDIR   = mkdir -p
 AS      = aasm
+ARMASM  = objasm
+LD      = link
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -To $@ -From
+ASFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit -To $@ -From
+ARMASMFLAGS = -depend !Depend -g ${THROWBACK}
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 TOKENISE = tokenise
 TOKENS   = Hdr:Tokens
@@ -33,7 +38,10 @@ TOKENS   = Hdr:Tokens
 #
 COMPONENT = Kernel
 SOURCE    = s.GetAll
-TARGET    = rm.${MACHINE}.Kernel
+TARGET    = rm.Kernel
+AIFDBG    = aif.Kernel
+GPADBG    = GPA
+OBJECTS   = o.GetAll
 EXPORTS   = ${EXP_HDR}.EnvNumbers \
             ${EXP_HDR}.ModHand \
             ${EXP_HDR}.PublicWS \
@@ -45,16 +53,25 @@ EXPORTS   = ${EXP_HDR}.EnvNumbers \
 #
 # Generic rules:
 #
+.SUFFIXES: .o .s
+.s.o:; ${ARMASM} ${ARMASMFLAGS} -o $@ $<
+
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
+
+debug: ${GPADBG}
+        @echo ${COMPONENT}: debug image built
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${RM} ${TARGET}
         ${RM} s.TMOSHelp
+        ${WIPE} o.* ${WFLAGS}
+        ${RM} ${TARGET}
+        ${WIPE} aif ${WFLAGS}
+        ${RM} ${GPADBG}
         @echo ${COMPONENT}: cleaned
 
 export: ${EXPORTS}
@@ -78,13 +95,20 @@ resources-: resources_common
         TokenCheck LocalRes:Messages
         print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
-${TARGET}: ${SOURCE} s.TMOSHelp
-        ${MKDIR} rm.${MACHINE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-        stamp $@
+${TARGET}: ${OBJECTS}
+        ${LD} -bin -o ${TARGET} ${OBJECTS}
+
+${AIFDBG}: ${OBJECTS}
+        ${MKDIR} aif
+        ${LD} -aif -bin -d -o ${AIFDBG} ${OBJECTS}
+
+${GPADBG}: ${AIFDBG}
+        ToGPA ${AIFDBG} ${GPADBG}
 
 s.TMOSHelp: ${TOKENS} HelpStrs
         ${TOKENISE} ${TOKENS} HelpStrs $@
+
+o.GetAll: s.TMOSHelp
 
 #
 # Exported interface headers
@@ -108,7 +132,7 @@ ${EXP_HDR}.Variables: hdr.Variables
         ${CP} hdr.Variables $@ ${CPFLAGS}
         
 ${C_EXP_HDR}.RISCOS: hdr.RISCOS
-	${MKDIR} ${C_EXP_HDR}
-	perl Build:Hdr2H hdr.RISCOS $@
+        ${MKDIR} ${C_EXP_HDR}
+        perl Build:Hdr2H hdr.RISCOS $@
 
 # Dynamic dependencies:
