@@ -33,6 +33,7 @@ install: ram
 ram: make_mappings dirs
 	${TRANSLATE} ${TRANSFLAGS} -i TranslateRes:AC3-US/sh    -o bin.AC3-US/sh
 	${TRANSLATE} ${TRANSFLAGS} -i TranslateRes:HwaCom/sh    -o bin.HwaCom/sh
+	${TRANSLATE} ${TRANSFLAGS} -i TranslateRes:HwaComV2/sh  -o bin.HwaComV2/sh
 	${TRANSLATE} ${TRANSFLAGS} -i TranslateRes:iMagicCAN/sh -o bin.iMagicCAN/sh
 	${TRANSLATE} ${TRANSFLAGS} -i TranslateRes:iMagicUK/sh  -o bin.iMagicUK/sh
 	${TRANSLATE} ${TRANSFLAGS} -i TranslateRes:Japan/sh     -o bin.Japan/sh
