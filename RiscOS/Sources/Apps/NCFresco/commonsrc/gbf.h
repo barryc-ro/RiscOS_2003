@@ -9,6 +9,9 @@
 
 #define GBF_TABLES_UNEXPECTED		0x00000001
 #define GBF_FVPR			0x00000002
+#define GBF_GUESS_ELEMENTS		0x00000004
+#define GBF_GUESS_ATTRIBUTES		0x00000008
+#define GBF_GUESS_ENUMERATIONS		0x00000010
 
 extern int gbf_flags;
 extern int gbf_active(int gbf);

@@ -2,14 +2,19 @@
  *
  * (C) Copyright ANT Limited 1997. All rights reserved.
  *
+ * In the long run, this probably wants to exist in !Fresco and !NCFresco.
+ * For now, let's just get NCFresco going and let the desktop version have
+ * the same behaviour. Once we've got a release done, we can improve this.
  */
 
 #include "gbf.h"
 #include "htmlparser.h"
 
-
 int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1 ) +
-		( GBF_FVPR * 1 )
+		( GBF_FVPR * 1 ) +
+		( GBF_GUESS_ELEMENTS * 0 ) +
+		( GBF_GUESS_ATTRIBUTES * 1 ) +
+		( GBF_GUESS_ENUMERATIONS * 1 )
 ;
 
 extern int gbf_active(int gbf)

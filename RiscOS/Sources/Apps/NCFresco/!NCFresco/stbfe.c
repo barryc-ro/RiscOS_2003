@@ -4947,7 +4947,7 @@ static BOOL fe_initialise(void)
 #endif
     atexit(&fe_tidyup);
 
-    gbf_flags &= ~GBF_FVPR;
+    gbf_flags &= ~GBF_FVPR | GBF_GUESS_ELEMENTS;
     gbf_init();
 
     STBDBG(( "task handle: %x\n", task_handle));

@@ -1,14 +1,13 @@
 /* support.c - assorted support routines */
 /* (C) Copyright ANT Limited 1996. All rights reserved. */
 
-/* PREVENT_ELEMENT_GUESSING   */
-/* PREVENT_ATTRIBUTE_GUESSING */
-
 #include "sgmlparser.h"
 
 #ifdef STDALONE
 #include "htmlcheck.h"
 #endif
+
+#include "gbf.h"
 
 STRING empty_string = { NULL, 0 },
     space_string = { " ", 1 },
@@ -601,55 +600,55 @@ extern int find_element(SGMLCTX *context, STRING s)
 		      sizeof(ELEMENT),
 		      element_search_fn);
 
-#ifndef PREVENT_ELEMENT_GUESSING
-
-    if (element == NULL)
+    if (gbf_active(GBF_GUESS_ELEMENTS))
     {
-	/* Linear search, but only in user-error cases */
-
-	int best_ix, best_len, ix;
-
-	PRSDBGN(("Attempting to guess-match '%.*s'\n", s.bytes, s.ptr));
-
-	for (ix = 0, element = context->elements, best_ix = best_len = -1; 
-	     ix < NUMBER_SGML_ELEMENTS; 
-	     ix++, element++)
+	if (element == NULL)
 	{
-	    int x;
-
-	    for (x = 1; x <= s.bytes; x++)
+	    /* Linear search, but only in user-error cases */
+	    
+	    int best_ix, best_len, ix;
+	    
+	    PRSDBGN(("Attempting to guess-match '%.*s'\n", s.bytes, s.ptr));
+	    
+	    for (ix = 0, element = context->elements, best_ix = best_len = -1; 
+		 ix < NUMBER_SGML_ELEMENTS; 
+		 ix++, element++)
 	    {
-		if (x > element->name.bytes)
-		    break;
-
-		if ( strnicmp(element->name.ptr, s.ptr, x) != 0 )
-		    continue;
-
-		PRSDBG(("%.*s against %.*s, x %d, best_ix %d, best_len %d\n",
-			s.bytes, s.ptr, 
-			element->name.bytes, element->name.ptr,
-			x, best_ix, best_len));
-
-		if (x > best_len)
+		int x;
+		
+		for (x = 1; x <= s.bytes; x++)
 		{
-		    best_len = x;
-		    best_ix = ix;
+		    if (x > element->name.bytes)
+			break;
+		    
+		    if ( strnicmp(element->name.ptr, s.ptr, x) != 0 )
+			continue;
+		    
+		    PRSDBG(("%.*s against %.*s, x %d, best_ix %d, best_len %d\n",
+			    s.bytes, s.ptr, 
+			    element->name.bytes, element->name.ptr,
+			    x, best_ix, best_len));
+		    
+		    if (x > best_len)
+		    {
+			best_len = x;
+			best_ix = ix;
+		    }
 		}
 	    }
-	}
-
-	if (best_ix != -1)
-	{
-	    element = &context->elements[best_ix];
-	    PRSDBGN(("Guessed '%.*s' best matches '%.*s'\n",
-		     element->name.bytes, element->name.ptr, s.bytes, s.ptr));
-	}
-	else
-	{
-	    PRSDBGN(("No guess what element '%.*s' is meant to be\n", s.bytes, s.ptr));
+	    
+	    if (best_ix != -1)
+	    {
+		element = &context->elements[best_ix];
+		PRSDBGN(("Guessed '%.*s' best matches '%.*s'\n",
+			 element->name.bytes, element->name.ptr, s.bytes, s.ptr));
+	    }
+	    else
+	    {
+		PRSDBGN(("No guess what element '%.*s' is meant to be\n", s.bytes, s.ptr));
+	    }
 	}
     }
-#endif
 
     return element == NULL ? SGML_NO_ELEMENT : element->id;
 }
@@ -687,30 +686,31 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s)
 	attributep++;
     }
 
-    PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.bytes, s.ptr));
-
-#ifndef PREVENT_ATTRIBUTE_GUESSING
-    for (len = s.bytes; len > 0; len--)
+    if (gbf_active(GBF_GUESS_ATTRIBUTES))
     {
-	attributep = element->attributes;
-	ix = 0;
+	PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.bytes, s.ptr));
 
-	while ( (attribute = *attributep)->name.ptr != NULL )
+	for (len = s.bytes; len > 0; len--)
 	{
-	    if ( strnicmp(s.ptr, attribute->name.ptr, len) == 0 )
-	    {
-		PRSDBGN(("Guessed attribute '%.*s' is %d ('%.*s')\n", 
-			 s.bytes, s.ptr, ix, attribute->name.bytes, attribute->name.ptr));
-		return ix;
-	    }
+	    attributep = element->attributes;
+	    ix = 0;
 	    
-	    ix++;
-	    attributep++;
+	    while ( (attribute = *attributep)->name.ptr != NULL )
+	    {
+		if ( strnicmp(s.ptr, attribute->name.ptr, len) == 0 )
+		{
+		    PRSDBGN(("Guessed attribute '%.*s' is %d ('%.*s')\n", 
+			     s.bytes, s.ptr, ix, attribute->name.bytes, attribute->name.ptr));
+		    return ix;
+		}
+		
+		ix++;
+		attributep++;
+	    }
 	}
-    }
-#endif
 
-    PRSDBGN(("Failed to make any form of guess on the attribute!\n"));
+	PRSDBGN(("Failed to make any form of guess on the attribute!\n"));
+    }
 
     return SGML_NO_ATTRIBUTE;
 }
