@@ -34,8 +34,8 @@
 unsigned int ir_driver_id = 0x00000006;
 static ir_client_callbacks_t callbacks =
 {
-    veneer_accept_data_packet,
-    veneer_accept_report_packet,
+    driver_accept_data_packet,
+    driver_accept_report_packet,
     0
 };
 
@@ -100,15 +100,29 @@ _kernel_oserror *driver_finalise(void *pw)
     Returns the maximum length of the string, in bytes.
 */
 
-static unsigned int make_blast_data(code_table_t *table, unsigned int command)
+static unsigned int make_blast_data(unsigned int type,
+                                    unsigned int number,
+                                    code_table_t *table,
+                                    unsigned int command)
 {
+    unsigned int loop;
     unsigned int hs = (table->header_size+1)>>1;
     unsigned int ds = (table->data_size+1)>>1;
+    unsigned int type_number;
     unsigned char *header=(unsigned char *)(table->header);
     unsigned char *data=(unsigned char *)(table->data);
+    unsigned int tds=table->data_size;
 
-    blast_data[1] = table->header_size+table->data_size;
-    memcpy(&blast_data[2],header,hs);
+    if (tds&1)tds++;
+
+    type_number = ((type&7)<<13)|(number&1023);
+
+
+    blast_data[1] = table->header_size+tds+4;
+    blast_data[2] = (unsigned char)((type_number&0xff00)>>8);
+    blast_data[3] = (unsigned char)(type_number&0xff);
+
+    memcpy(&blast_data[4],header,hs);
 
     if (table->header_size&1)
     {
@@ -120,7 +134,7 @@ static unsigned int make_blast_data(code_table_t *table, unsigned int command)
         unsigned int loop;
 
         src = &data[command*ds];            /* src  --> 1234 (start of command) */
-        dest = &blast_data[1+hs];           /* dest --> 56xx (last byte in header) */
+        dest = &blast_data[3+hs];           /* dest --> 56xx (last byte in header) */
 
         for (loop = 0; loop < table->data_size; loop +=2)
         {
@@ -136,10 +150,80 @@ static unsigned int make_blast_data(code_table_t *table, unsigned int command)
         /*
             Even number of nibbles in header. Easy.
         */
-        memcpy(&blast_data[2+hs],&data[command*ds],ds);
+        memcpy(&blast_data[4+hs],&data[command*ds],ds);
     }
 
-    return hs+ds+2;
+#ifdef SWAP_NIBBLE_ORDER
+    for (loop = 0; loop < table->header_size + table->data_size;loop+=2)
+    {
+        unsigned char c = blast_data[4+(loop>>1)]&0x0f;
+        c <<= 4;
+        c |=  ((blast_data[4+(loop>>1)]&0xf0)>>4);
+
+        blast_data[4+(loop>>1)]=c;
+
+/*
+        if ((table->data_size&1)&&
+            (loop == table->header_size+table->data_size-1))
+	{
+        }
+        else
+        {
+	    blast_data[4+(loop>>1)]=c;
+        }
+*/
+    }
+#endif
+
+#if (DEBUG > 0)
+    {
+        printf("\n\nRCABlast Module:\n");
+        printf("total size of data: &%02x bytes\n",hs+ds+4);
+        printf("contents:           &01 &%02x (1 string of length %d nibbles)\n",
+                blast_data[1],
+                blast_data[1]);
+
+        printf("device type & no.:  &%x &%x &%x &%x\n",
+               (blast_data[2]&0xf0)>>4,
+               blast_data[2]&0x0f,
+               (blast_data[3]&0xf0)>>4,
+               blast_data[3]&0x0f);
+
+        for (loop = 0; loop < table->header_size + tds;loop++)
+        {
+            if ((loop&7) == 0)
+            {
+                if (loop == 0)
+                {
+                    printf("data:               ");
+                }
+                else
+                {
+                    printf("                    ");
+                }
+            }
+
+
+            if (loop&1)
+            {
+                printf("&%x ",blast_data[4+(loop>>1)]&0x0f);
+            }
+            else
+            {
+                printf("&%x ",(blast_data[4+(loop>>1)]&0xf0)>>4);
+            }
+
+            if ((loop&7) == 7)
+            {
+                printf("\n");
+            }
+        }
+        printf("\n");
+
+    }
+#endif
+
+    return hs+ds+4;
 }
 
 static _kernel_oserror *blast_to_tv(unsigned int tv_number,
@@ -158,7 +242,7 @@ static _kernel_oserror *blast_to_tv(unsigned int tv_number,
         {
             DEBUGFN(3,db_printf("RCABlast: good code_number\n"));
             ir_blast(blast_data,
-                     make_blast_data(&tv_tables[tv_number],code_number),
+                     make_blast_data(0,tv_number,&tv_tables[tv_number],code_number),
                      bs);
         }
         else
@@ -186,7 +270,7 @@ static _kernel_oserror *blast_to_vcr(unsigned int vcr_number,
         if (code_number < vcr_tables[vcr_number].num_commands)
         {
             ir_blast(blast_data,
-                     make_blast_data(&vcr_tables[vcr_number],code_number),
+                     make_blast_data(1,vcr_number,&vcr_tables[vcr_number],code_number),
                      bs);
         }
         else
@@ -214,7 +298,7 @@ static _kernel_oserror *blast_to_cable(unsigned int cable_number,
         if (code_number < cable_tables[cable_number].num_commands)
         {
             ir_blast(blast_data,
-                     make_blast_data(&cable_tables[cable_number],code_number),
+                     make_blast_data(2,cable_number,&cable_tables[cable_number],code_number),
                      bs);
         }
         else
@@ -362,26 +446,5 @@ void driver_accept_report_packet(unsigned char report_code,
             DEBUGFN(3,db_printf("RCABlast: Blasting complete\n"));
         }
     }
-}
-
-
-void generic_accept_data_packet(_kernel_swi_regs *r)
-{
-    unsigned char data[4];
-    *(unsigned int *)(data) = r->r[2];
-
-    driver_accept_data_packet((unsigned int)r->r[0],
-                              (unsigned char)r->r[1],
-                              data);
-}
-
-
-
-void generic_accept_report_packet(_kernel_swi_regs *r)
-{
-    unsigned char data[4];
-    *(unsigned int *)(data) = r->r[1];
-    driver_accept_report_packet((unsigned int)r->r[0],
-                                data);
 }
 
