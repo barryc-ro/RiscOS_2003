@@ -107,10 +107,10 @@ LIBS = \
  ${EVENTLIB} \
  ${CLIB} \
  ${NUMCONVERTLIB} \
- ${DEBUGLIB} \
- TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.unixlib \
- TCPIPLibs:o.inetlib \
+# ${DEBUGLIB} \
+# TCPIPLibs:o.socklib5 \
+# TCPIPLibs:o.unixlib \
+# TCPIPLibs:o.inetlib \
 
 
 LIBSD = \
