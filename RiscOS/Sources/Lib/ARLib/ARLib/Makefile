@@ -95,9 +95,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.arhdr: c.arhdr C:ARLib.h.msgs C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.armovie C:ARLib.h.memalloc C:ARLib.h.replaytype C:ARLib.h.arline C:ARLib.h.utils C:ARLib.h.arutils
-o.arhdr1: c.arhdr1 C:ARLib.h.msgs C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.armovie C:ARLib.h.memalloc C:ARLib.h.replaytype C:ARLib.h.utils
-o.armovie: c.armovie C:ARLib.h.alarm C:h.kernel C:ARLib.h.msgs C:ARLib.h.os C:h.swis C:ARLib.h.werr C:ARLib.h.wimp C:ARLib.h.armovie C:ARLib.h.memalloc C:ARLib.h.replaytype C:ARLib.h.arsound C:ARLib.h.arutils C:ARLib.h.utils
-o.arsndcode: c.arsndcode C:ARLib.h.alarm C:h.kernel C:ARLib.h.msgs C:ARLib.h.os C:h.swis C:ARLib.h.werr C:ARLib.h.device C:ARLib.h.armovie C:ARLib.h.memalloc C:ARLib.h.replaytype C:ARLib.h.arsound C:ARLib.h.arutils C:ARLib.h.utils
-o.arsnd: c.arsnd C:ARLib.h.arutils C:ARLib.h.armovie C:ARLib.h.os C:ARLib.h.memalloc C:ARLib.h.replaytype C:ARLib.h.utils
-o.arlibmain: c.arlibmain C:ARLib.h.win C:ARLib.h.wimp C:ARLib.h.armovie C:ARLib.h.os C:ARLib.h.memalloc C:ARLib.h.replaytype C:ARLib.h.arsound C:ARLib.h.utils

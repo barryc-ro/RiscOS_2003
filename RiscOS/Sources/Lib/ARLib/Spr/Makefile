@@ -93,8 +93,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.res_spr: c.res_spr C:ARLib.h.res C:ARLib.h.spr C:ARLib.h.memalloc C:ARLib.h.os C:ARLib.h.werr C:ARLib.h.res_spr
-o.spr: c.spr C:ARLib.h.file C:ARLib.h.os C:ARLib.h.msgtrans C:h.swis C:h.kernel C:ARLib.h.werr C:ARLib.h.screenmode C:ARLib.h.spr_intern C:ARLib.h.spr C:ARLib.h.memalloc
-o.sprasm: s.sprasm Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS ^.Hdr.CRegs Hdr:Proc ^.Hdr.Macros2 Hdr:ModHand Hdr:Wimp
-o.spr_disp: c.spr_disp C:ARLib.h.bbc C:ARLib.h.os C:ARLib.h.coords C:ARLib.h.wimp C:ARLib.h.template C:ARLib.h.visdelay C:ARLib.h.werr C:ARLib.h.wimpx C:ARLib.h.win C:ARLib.h.macros C:ARLib.h.redraw C:ARLib.h.wmisc C:ARLib.h.spr C:ARLib.h.memalloc C:ARLib.h.screenmode C:ARLib.h.spr_disp
-o.spr_icons: c.spr_icons C:ARLib.h.screenmode C:ARLib.h.os C:h.swis C:h.kernel C:ARLib.h.spr_intern C:ARLib.h.spr C:ARLib.h.memalloc

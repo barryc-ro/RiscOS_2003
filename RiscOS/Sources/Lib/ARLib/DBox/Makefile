@@ -96,11 +96,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.dbox: c.dbox C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.os C:ARLib.h.akbd C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.wimpt C:ARLib.h.win C:ARLib.h.menu C:ARLib.h.event C:ARLib.h.dbox C:ARLib.h.res C:ARLib.h.template C:ARLib.h.alarm C:ARLib.h.msgs C:ARLib.h.coords C:ARLib.h.help C:h.swis C:h.kernel C:ARLib.h.icons C:ARLib.h.wmisc
-o.dboxes2: c.dboxes2 C:ARLib.h.dbox C:ARLib.h.template C:ARLib.h.wimp C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.dboxes C:ARLib.h.strfn C:ARLib.h.wmisc C:ARLib.h.win C:ARLib.h.icons
-o.dboxinc: c.dboxinc C:ARLib.h.akbd C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.dboxinc C:ARLib.h.dbox
-o.dboxquery: c.dboxquery C:ARLib.h.dbox C:ARLib.h.msgs C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.os C:ARLib.h.dboxquery
-o.popup: c.popup C:ARLib.h.dbox C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.wimp C:ARLib.h.menu C:ARLib.h.saveas C:ARLib.h.xfersend C:ARLib.h.template C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimp C:ARLib.h.wimpx C:ARLib.h.wimpt C:ARLib.h.win C:ARLib.h.macros C:ARLib.h.screenmode C:ARLib.h.popup
-o.saveas: c.saveas C:ARLib.h.dboxes C:ARLib.h.dbox C:ARLib.h.wimp C:ARLib.h.fileicon C:ARLib.h.help C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.macros C:ARLib.h.msgs C:ARLib.h.xfersend C:ARLib.h.visdelay C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.strfn C:ARLib.h.saveas
-o.tasksave: c.tasksave C:ARLib.h.msgs C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.file C:ARLib.h.filetypes C:ARLib.h.macros C:ARLib.h.popup C:ARLib.h.dbox C:ARLib.h.xfersend C:ARLib.h.wimp C:ARLib.h.strfn C:ARLib.h.tasksum C:ARLib.h.taskwindow C:ARLib.h.memalloc
-o.tasksum: c.tasksum C:ARLib.h.dbox C:ARLib.h.dboxquery C:ARLib.h.font C:ARLib.h.os C:ARLib.h.drawmod C:ARLib.h.msgs C:h.swis C:h.kernel C:ARLib.h.template C:ARLib.h.wimp C:ARLib.h.werr C:ARLib.h.wimpx C:ARLib.h.win C:ARLib.h.macros C:ARLib.h.tasksum C:ARLib.h.taskwindow C:ARLib.h.memalloc C:ARLib.h.wmisc

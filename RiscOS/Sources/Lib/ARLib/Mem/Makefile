@@ -94,10 +94,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.c_alloc: c.c_alloc C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.memalloc C:ARLib.h.mem_int
-o.f_alloc: c.f_alloc C:ARLib.h.flex C:ARLib.h.memalloc C:ARLib.h.mem_int
-o.d_alloc: c.d_alloc C:ARLib.h.os C:h.kernel C:h.swis C:ARLib.h.werr C:ARLib.h.wimpt C:ARLib.h.wimp C:ARLib.h.memalloc C:ARLib.h.mem_int
-o.m_alloc: c.m_alloc C:h.kernel C:ARLib.h.os C:h.swis C:ARLib.h.werr C:ARLib.h.memalloc C:ARLib.h.mem_int
-o.h_alloc: c.h_alloc C:ARLib.h.heap C:ARLib.h.os C:ARLib.h.memalloc C:ARLib.h.mem_int
-o.flex: c.flex C:h.kernel C:h.swis C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.flex C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.msgs C:ARLib.h.memalloc C:ARLib.h.mem_int C:ARLib.h.flex_int
-o.heap: c.heap C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.heap C:ARLib.h.os C:ARLib.h.flex C:ARLib.h.msgs C:h.kernel C:ARLib.h.mem_int

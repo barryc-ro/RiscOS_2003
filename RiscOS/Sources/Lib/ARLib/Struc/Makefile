@@ -90,4 +90,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.array: c.array C:ARLib.h.msgs C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.macros C:ARLib.h.array C:ARLib.h.memalloc

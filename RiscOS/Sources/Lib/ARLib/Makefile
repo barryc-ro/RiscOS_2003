@@ -38,33 +38,43 @@ COMPONENT       = ARLib
 clean:
         ${CD}   ARLib
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   DBox
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   Draw
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   File
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   Mem
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   Replay
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   Spr
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   Struc
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   Sys
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         ${CD}   Wimp
         ${MAKE} clean
+        stripdepnd
         ${CD}   ^
         @echo   Library $(COMPONENT): clean complete.
 

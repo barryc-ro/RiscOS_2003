@@ -118,33 +118,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.poll: s.poll
-o.msgclaim: c.msgclaim C:ARLib.h.win C:ARLib.h.wimp C:ARLib.h.msgclaim
-o.alarm: c.alarm C:ARLib.h.alarm C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.os C:ARLib.h.msgs C:h.swis C:h.kernel
-o.baricon: c.baricon C:ARLib.h.os C:ARLib.h.screenmode C:ARLib.h.spr C:ARLib.h.memalloc C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.win C:ARLib.h.baricon
-o.clipboard: c.clipboard C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.wimp C:ARLib.h.file C:ARLib.h.os C:ARLib.h.macros C:ARLib.h.msgs C:ARLib.h.werr C:ARLib.h.wimpx C:ARLib.h.win C:ARLib.h.taskman C:ARLib.h.xfersend C:ARLib.h.clipboard C:ARLib.h.memalloc
-o.coords: c.coords C:ARLib.h.wimp C:ARLib.h.coords
-o.device: c.device C:ARLib.h.alarm C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.wimp C:ARLib.h.msgs C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimpt C:ARLib.h.win C:ARLib.h.device
-o.event: c.event C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.werr C:ARLib.h.wimpt C:ARLib.h.win C:ARLib.h.menu C:ARLib.h.alarm C:ARLib.h.event
-o.fileicon: c.fileicon C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.fileicon C:ARLib.h.werr
-o.help: c.help C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.wimpt C:ARLib.h.werr C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.dbox C:ARLib.h.msgs C:ARLib.h.help C:ARLib.h.menu
-o.iconmenu: c.iconmenu C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.wimp C:ARLib.h.help C:ARLib.h.dbox C:ARLib.h.msgs C:ARLib.h.wimpx C:ARLib.h.os C:ARLib.h.wimpt C:ARLib.h.werr C:ARLib.h.macros C:ARLib.h.iconmenu
-o.icons: c.icons C:ARLib.h.msgs C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.icons C:ARLib.h.wmisc C:ARLib.h.win
-o.menu: c.menu C:ARLib.h.os C:ARLib.h.wimp C:ARLib.h.werr C:ARLib.h.menu C:ARLib.h.res_spr C:ARLib.h.spr C:ARLib.h.memalloc C:ARLib.h.msgs
-o.pane: c.pane C:ARLib.h.coords C:ARLib.h.wimp C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.win C:ARLib.h.macros C:ARLib.h.screenmode C:ARLib.h.wmisc C:ARLib.h.pane
-o.redraw: c.redraw C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.redraw
-o.template: c.template C:h.swis C:h.kernel C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.res C:ARLib.h.res_spr C:ARLib.h.spr C:ARLib.h.memalloc C:ARLib.h.werr C:ARLib.h.template C:ARLib.h.msgs
-o.wimp: c.wimp C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp
-o.wimpt: c.wimpt C:ARLib.h.os C:ARLib.h.bbc C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.werr C:ARLib.h.alarm C:ARLib.h.msgs C:ARLib.h.win C:h.swis C:h.kernel C:ARLib.h.wmisc C:ARLib.h.wimpt
-o.win: c.win C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.werr C:ARLib.h.wimpt C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.msgs C:ARLib.h.win
-o.wintitle: c.wintitle C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.werr C:ARLib.h.win
-o.wmiscclose: c.wmiscclose C:ARLib.h.akbd C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.os C:ARLib.h.fileract C:ARLib.h.werr C:ARLib.h.wmisc C:ARLib.h.win
-o.wmiscflush: c.wmiscflush C:ARLib.h.akbd C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.wimp C:h.swis C:h.kernel C:ARLib.h.wimpx C:ARLib.h.os C:ARLib.h.werr C:ARLib.h.wimpt C:ARLib.h.win C:ARLib.h.macros C:ARLib.h.wmisc
-o.wmiscshift: c.wmiscshift C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.wmisc C:ARLib.h.win
-o.xferrecv: c.xferrecv C:ARLib.h.os C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.wimpt C:ARLib.h.win C:ARLib.h.xfersend C:ARLib.h.werr C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.xferrecv C:ARLib.h.msgs
-o.xfersend: c.xfersend C:ARLib.h.os C:ARLib.h.bbc C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.wimpt C:ARLib.h.win C:ARLib.h.xfersend C:ARLib.h.fileicon C:ARLib.h.werr C:ARLib.h.menu C:ARLib.h.event C:ARLib.h.msgs C:ARLib.h.strfn
-o.wimpasm: s.wimpasm Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS ^.Hdr.CRegs ^.Hdr.Macros2 Hdr:ModHand Hdr:Wimp Hdr:Proc
-o.plotsprite: c.plotsprite C:ARLib.h.coords C:ARLib.h.wimp C:ARLib.h.res_spr C:ARLib.h.spr C:ARLib.h.memalloc C:ARLib.h.os C:ARLib.h.screenmode C:h.swis C:h.kernel C:ARLib.h.werr C:ARLib.h.wimpx C:ARLib.h.macros C:ARLib.h.plotsprite
-o.taskwindow: c.taskwindow C:h.kernel C:ARLib.h.msgs C:ARLib.h.werr C:ARLib.h.os C:ARLib.h.wimpt C:ARLib.h.wimp C:ARLib.h.wimpx C:ARLib.h.win C:ARLib.h.macros C:ARLib.h.taskwindow
-o.wmiscquit: c.wmiscquit C:ARLib.h.akbd C:ARLib.h.wimpx C:ARLib.h.wimp C:ARLib.h.os C:ARLib.h.werr C:ARLib.h.win C:ARLib.h.macros C:ARLib.h.wmisc
-o.wmisc: c.wmisc C:ARLib.h.dbox C:ARLib.h.help C:ARLib.h.wimp C:ARLib.h.event C:ARLib.h.menu C:ARLib.h.msgs C:ARLib.h.res C:ARLib.h.screenmode C:ARLib.h.os C:ARLib.h.werr C:ARLib.h.wimpx C:ARLib.h.wimpt C:ARLib.h.win C:ARLib.h.file C:ARLib.h.macros C:ARLib.h.wmisc

@@ -93,7 +93,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.arvid: c.arvid C:ARLib.h.macros C:ARLib.h.arvid C:ARLib.h.armovie C:ARLib.h.os C:ARLib.h.memalloc C:ARLib.h.replaytype
-o.arinfo: c.arinfo C:ARLib.h.msgs C:ARLib.h.file C:ARLib.h.os C:ARLib.h.macros C:ARLib.h.strfn C:ARLib.h.arinfo C:ARLib.h.replaytype
-o.arinfo2: c.arinfo2 C:ARLib.h.msgs C:ARLib.h.array C:ARLib.h.memalloc C:ARLib.h.file C:ARLib.h.os C:ARLib.h.filetypes C:ARLib.h.macros C:ARLib.h.strfn C:ARLib.h.array C:ARLib.h.arinfo C:ARLib.h.replaytype
-o.replayhdr: c.replayhdr C:ARLib.h.msgs C:ARLib.h.spr C:ARLib.h.memalloc C:ARLib.h.os C:ARLib.h.werr C:ARLib.h.file C:ARLib.h.strfn C:ARLib.h.arvid C:ARLib.h.armovie C:ARLib.h.replaytype C:ARLib.h.replayhdr C:ARLib.h.replaymsgs

@@ -104,13 +104,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.os: c.os C:ARLib.h.os C:h.kernel
-o.visdelasm: s.visdelasm Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS ^.Hdr.CRegs ^.Hdr.Macros2 Hdr:ModHand Hdr:Hourglass
-o.akbd: c.akbd C:ARLib.h.os C:ARLib.h.akbd
-o.msgs: c.msgs C:ARLib.h.os C:ARLib.h.res C:h.swis C:h.kernel C:ARLib.h.werr C:ARLib.h.msgs C:ARLib.h.msgtrans
-o.res: c.res C:ARLib.h.file C:ARLib.h.os C:ARLib.h.macros C:ARLib.h.strfn C:ARLib.h.res C:h.swis C:h.kernel
-o.screenmode: c.screenmode C:ARLib.h.bbc C:ARLib.h.os C:h.swis C:h.kernel C:ARLib.h.screenmode
-o.strfn: c.strfn C:h.swis C:h.kernel C:ARLib.h.strfn
-o.sys: c.sys C:h.swis C:h.kernel C:ARLib.h.osreasons C:ARLib.h.os C:ARLib.h.sys
-o.werr: c.werr C:h.swis C:h.kernel C:ARLib.h.sys C:ARLib.h.os C:ARLib.h.werr C:ARLib.h.msgs C:h.kernel C:ARLib.h.wimp
-o.bbcasm: s.bbcasm Hdr:ListOpts Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS ^.Hdr.Macros2 ^.Hdr.CRegs Hdr:Proc
