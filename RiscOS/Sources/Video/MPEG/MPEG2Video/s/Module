@@ -164,6 +164,7 @@
 ; 28-May-99  BJGA 2.85          Moved the part of the code that extracts data about a new access unit and schedules it for use in calculating the future 3:2 pulldown
 ;                                state away from the picture start code interrupt code, and into the auxiliary FIFO parsing code. Fixes field inversion artifacts.
 ; 21-Jun-99  BJGA 2.86          Added MPEG2$HorizontalShift variable.
+; 23-Jun-99  BJGA 2.87          Implemented StartVideoAtSeqHdr code.
 ;
 
 	LEADR	Module_LoadAddr
@@ -278,16 +279,24 @@ Captions SETL   {TRUE}                  ; extract closed captions and exended da
         GBLL    Pulldown
 Pulldown SETL   {TRUE}                  ; work around L64002's bugs in 3:2 pull-down support
 
+        GBLL    StartVideoAtSeqHdr
+StartVideoAtSeqHdr SETL {TRUE}          ; this helps initial synchronisation
+
         GBLL    HShiftVariable
 HShiftVariable  SETL    {TRUE}          ; allow horizontal shifting of MPEG video under system variable control
 
 DefaultHShift   *       -11
+
+        GBLL    dadebug_module          ; these are only strictly necessary if the module is
+        GBLL    debug_irqsafe           ; being built against an old version of Hdr:NdrDebug
 
 debug           SETL    false           ; false turns off all NdrDebug debugging
 dadebug_module  SETL    true            ; the only debug output method that'll work in IRQ mode
 debug_irqsafe   SETL    true            ; only conditional so that other users of NdrDebug are insulated from the change
                 GBLL    debugpulldown
 debugpulldown   SETL    false           ; 3:2 pulldown debug
+                GBLL    debugskip
+debugskip       SETL    false           ; StartVideoAtSeqHdr debug
 
 
 ; Structure of a PTS list entry
@@ -346,6 +355,20 @@ SIS_SystemUnderruns	#	4	; number of underruns of system buffer
 SIS_SystemWrite0Group	#	4	; L64002 register group for system write ptr 0
 SIS_SystemWrite0Reg	#	4	; L64002 register within group for system write ptr 0
 SISSize			*	@
+
+ [ StartVideoAtSeqHdr
+
+ ; Structure of a queued FullPackets call
+
+                        ^       0
+FPQ_Next                #       4       ; link
+FPQ_VideoAudio          #       4       ; 0 => video, 1 => audio
+FPQ_Flags               #       4       ; as passed in r0 to FullPackets
+FPQ_StreamHandle        #       4       ; as passed in r1 to FullPackets
+FPQ_PacketList          #       4       ; as passed in r2 to FullPackets
+FPQSize                 *       @
+
+ ]
 
 ; Workspace declarations
 
@@ -658,6 +681,18 @@ HandlersMagic           #       4       ; is the list still valid from before th
 magicword_handlers      *     &54504143 ; 'CAPT'
  ]
 
+ [ StartVideoAtSeqHdr
+FullPacketsQueue        #       4       ; queue of FullPackets calls
+FullPacketsFree         #       4       ; unused links (not freed until finalisation, to ease memory fragmentation)
+LastVideoDTS0           #       4       ; bits 0-31 = bits 0-31 of the last DTS recorded in the video stream
+LastVideoDTS1           #       4       ; bit 0 = bit 32 of the DTS; or -1 if no DTS has yet been found
+SkippingToSeqHdr        #       1       ; 0 => not skipping, 1 => discarding video packets
+StartCodeSearchState    #       1       ; 0 => nothing found, 1 => found &00, 2 => found &0000, 3 => found &000001
+DeferVideoStart         #       1       ; 0 => start video at same time as audio, 1 => start video at LastVideoDTS[0,1]
+FirstAudioPTS           #       1       ; 0 => we've had at least one audio PES header, 1 => the next one will be the first
+        AlignSpace
+ ]
+
  [ SkippingCode
 StartSkipCode		#	4	; bottom byte of start code to skip to initially, or zero if no skip
  ]
@@ -717,6 +752,8 @@ EvenOddIndicator        #       1       ; 0 => currently in an odd field, 1 => c
  [ HShiftVariable
 HShift                  #       4       ; shift displayed frame right by this (signed) amount; measured in 1/720th of displayed frame width
  ]
+
+        AlignSpace 16
 
 ; Large blocks
 
@@ -915,6 +952,11 @@ Mod_Init Entry
 	STR	r0, AudioFasts
 	STR	r0, AudioSlows
 	STR	r0, AudioBufferChecks
+      [ StartVideoAtSeqHdr
+        Debug   skip, "Initialising queues"
+        STR     r0, FullPacketsQueue
+        STR     r0, FullPacketsFree
+      ]
       [ Captions
         LDR     r1, =magicword_handlers :AND: &FFFFFF00 ; do in two stages
         ORR     r1, r1, #magicword_handlers :AND: &FF   ; to reduce chances of misinterpretation
@@ -1044,6 +1086,13 @@ Mod_Die Entry
 	ADR	r2, VideoStreamHandler
 	MOV	r3, wp
 	SWI	XMPEGControl_DeregisterProgramElementHandler
+ ]
+ [ StartVideoAtSeqHdr
+        Debug   skip, "Freeing queues"
+        LDR     r3, FullPacketsQueue
+        BL      FreeFullPacketsLinkedList
+        LDR     r3, FullPacketsFree
+        BL      FreeFullPacketsLinkedList
  ]
 
 	MOV	r0, #UKSWIV
@@ -1311,6 +1360,13 @@ VideoOpenStream Entry "r1,r2, r11"
 	STR	r1, VideoChannelUnderruns
 	STR	r1, UnderrunIRQState
  ]
+ [ StartVideoAtSeqHdr
+        AND     lr, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
+        TEQ     lr, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
+        MOVEQ   lr, #1                                          ; only skip to sequence header if there are both video and audio in the new stream
+        MOVNE   lr, #0
+        STRB    lr, SkippingToSeqHdr
+ ]
 	BL	VideoReset
 
 	LDR	r1, [r2, #VideoStructure_BorderLeft]
@@ -1543,9 +1599,17 @@ VideoSetSpeed Entry "r0-r2, r11"
 	BNE	%FT15			; and put into play mode
  ]
 10
+ [ StartVideoAtSeqHdr
+        ADR     lr, VideoLastPTS
+        LDMIA   lr, {r0, r1}
+        TEQ     r0, #0
+        TEQEQ   r1, #0                  ; if VideoLastPTS still holds 0,0 then it's probably still invalid from prebuffering stage
+        BLNE    WriteSCR                ; set SCR from last video PTS that was posted, if it appears to be valid
+ |
 	ADR	lr, VideoLastPTS	; set SCR from last video PTS that was posted
 	LDMIA	lr, {r0, r1}
 	BL	WriteSCR
+ ]
  [ SlowMotionSupport
 	MOV	lr, #0
 	STR	lr, TrickStopFreeze	; ensure no left-over slow-mo freeze
@@ -1571,6 +1635,11 @@ VideoSetSpeed Entry "r0-r2, r11"
 ;
 
 VideoPlay Entry "r0,r2, r11"
+      [ StartVideoAtSeqHdr
+        LDRB    lr, DeferVideoStart
+        TEQ     lr, #1
+        EXIT    EQ                      ; don't start yet if deferred
+      ]
 	LDR	r2, VideoSpeedSetting
 	BIC	r2, r2, #&80000000	; clear pre-buffering bit
 	STR	r2, VideoSpeedSetting
@@ -1610,6 +1679,30 @@ VideoFullPackets Entry "r0,r2,r11"
 	BNE	%BT10					; then loop
 	EXIT						; else exit
 20
+ ]
+ [ StartVideoAtSeqHdr
+        LDRB    lr, SkippingToSeqHdr
+        TEQ     lr, #1
+        BEQ     %FT21
+        BL      int_video_full_packets                  ; if we're not skipping, process packets normally
+        EXIT
+21
+        Push    "r3"                                    ; otherwise, queue the call
+        BL      NewFullPacketsLink
+        MOVVC   lr, #0
+        STRVC   lr, [r3, #FPQ_VideoAudio]
+        STRVC   r0, [r3, #FPQ_Flags]
+        STRVC   r1, [r3, #FPQ_StreamHandle]
+        STRVC   r2, [r3, #FPQ_PacketList]
+        Pull    "r3"
+        EXIT    VS
+        Debug   skip, "Queuing VideoFullPackets call"
+
+        BL      ProcessQueuedVideoPackets               ; may or may not call int_video_full_packets and int_audio_full_packets
+        EXIT
+
+
+int_video_full_packets Entry "r0,r11"
  ]
  [ Save1stFullPacket
 	LDR	r11, [r2, #PacketDescriptor_Length]
@@ -1726,6 +1819,210 @@ VideoFullPackets Entry "r0,r2,r11"
 
 	EXIT
 
+ [ StartVideoAtSeqHdr
+
+; ProcessQueuedVideoPackets
+;
+; Checks the packets referenced by the new FullPackets link to see if they contain a sequence header
+; If so, then previous video packets are freed and subsequent ones are passed to int_video_full_packets
+; If not, then some or all of them are left queuing
+;
+; in:   r2 -> first packet belonging to this FullPackets link
+
+ProcessQueuedVideoPackets
+        Entry   "r0-r7"
+        Debug   skip, "Entering ProcessQueuedVideoPackets, r2 =", r2
+        MOV     r3, r2
+30      TEQ     r3, #0
+        EXIT    EQ                                      ; run out of packets, and still no sequence header, so exit with things still queued
+
+        LDR     r7, [r3, #PacketDescriptor_Flags]
+        TST     r7, #PacketDescriptorFlags_MPEGStart    ; if it's the first in a PES packet, free all previous video packets
+        MOVNE   r4, #0
+        BLNE    DiscardSelectedPackets
+
+        TST     r7, #PacketDescriptorFlags_DTSValid     ; if the packet has a DTS, remember it
+        ADDNE   lr, r3, #PacketDescriptor_DTS
+        ADDEQ   lr, r3, #PacketDescriptor_PTS           ; if there's a PTS but no DTS, DTS equals PTS
+        TST     r7, #PacketDescriptorFlags_PTSValid :OR: PacketDescriptorFlags_DTSValid
+        BEQ     %FT35
+        LDMIA   lr, {r5, r6}
+        LDR     lr, =6000                               ; fudge factor: the L64002's video decoder seems to need this much warning to initialise itself
+        SUBS    r5, r5, lr
+        SBC     r6, r6, #0
+        ADR     lr, LastVideoDTS0
+        STMIA   lr, {r5, r6}
+
+35      LDR     r4, [r3, #PacketDescriptor_Start]       ; r4 -> start of packet data
+        LDR     r5, [r3, #PacketDescriptor_Length]
+        ADD     r5, r5, r4                              ; r5 -> end of packet data
+        LDRB    r6, StartCodeSearchState
+40      TEQ     r4, r5                                  ; processed all data?
+        STREQB  r6, StartCodeSearchState                ; store search state
+        LDREQ   r3, [r3, #FPQ_Next]                     ; and try next packet (if any)
+        BEQ     %BT30
+        LDRB    lr, [r4], #1                            ; get a byte of packet data
+        TEQ     lr, #&B3
+        TEQEQ   r6, #3                                  ; if we've got a complete sequence header start code
+        BEQ     %FT50                                   ; then break from the loop
+        TEQ     lr, #&01
+        TEQEQ   r6, #2                                  ; if &01 follows 2 or more &00s
+        MOVEQ   r6, #3                                  ; then up the search state to 3
+        BEQ     %BT40
+        CMP     r6, #3                                  ; if we've got an uninteresting start code
+        CMPLT   lr, #&01                                ; or new byte is nonzero ( => not in a start code prefix)
+        MOVGE   r6, #0                                  ; then reset search state to 0
+        BGE     %BT40
+        TEQ     r6, #0                                  ; we got a zero
+        MOVEQ   r6, #1                                  ; either it's the first zero (set state to 1)
+        MOVNE   r6, #2                                  ; or we've had two or more in a row (set state to 2)
+        B       %BT40
+
+50      ; We've found the first sequence header!
+        ; Note that we don't need to queue FullPackets calls from now on
+        MOV     r0, #0
+        STRB    r0, SkippingToSeqHdr
+
+        ; Pass all remaining packets to int_video/audio_full_packets, freeing FullPackets links when done
+        ; If we find an audio packet with a PTS earlier than the video start DTS, then set DeferVideoStart to 1
+        ADR     r5, LastVideoDTS0
+        LDMIA   r5, {r5, r6}
+60      LDR     r3, FullPacketsQueue
+        TEQ     r3, #0                                  ; done all FullPackets links?
+        EXIT    EQ
+        LDR     r0, [r3, #FPQ_Flags]
+        LDR     r1, [r3, #FPQ_StreamHandle]
+        LDR     r2, [r3, #FPQ_PacketList]
+        LDR     lr, [r3, #FPQ_VideoAudio]
+        TEQ     lr, #0
+        BEQ     %FT69
+        ; Look for audio PTSs in the audio FullPackets call
+        TEQ     r6, #0
+        BMI     %FT63                                   ; if video DTS invalid, don't bother comparing with audio PTSs
+        MOV     r4, r2                                  ; r4 points at each packet sequentially
+61      TEQ     r4, #0
+        BEQ     %FT63                                   ; break from loop when no more packets
+        LDR     lr, [r4, #PacketDescriptor_Flags]
+        TST     lr, #PacketDescriptorFlags_PTSValid
+        BEQ     %FT62                                   ; skip next bit if no timestamp (audio never has DTS)
+        ADD     r7, r4, #PacketDescriptor_PTS
+        LDMIA   r7, {r7, lr}
+        SUBS    r7, r5, r7                              ; find video DTS - audio PTS
+        SBC     lr, r6, lr
+        TST     lr, #1                                  ; test sign bit of result
+        MOVEQ   lr, #1
+        STREQB  lr, DeferVideoStart
+62      LDR     r4, [r4, #PacketDescriptor_Link]
+        B       %BT61
+63      BL      int_audio_full_packets
+        B       %FT70
+69      BL      int_video_full_packets
+70      ADR     r0, FullPacketsQueue - FPQ_Next
+        MOV     r1, r3
+        BL      DeleteFullPacketsLink
+        B       %BT60
+
+; NewFullPacketsLink
+;
+; Creates a new link, first by checking the free list, and failing that,
+; by claiming RMA, then places it at the end of the list
+;
+; out:  r3 -> new link
+;       V set if error
+
+NewFullPacketsLink
+        Entry   "r0,r2"
+        LDR     r3, FullPacketsFree
+        CMP     r3, #0                          ; also clears V
+        BEQ     %FT10
+        ; Get a link from the free list
+        LDR     r0, [r3, #FPQ_Next]
+        STR     r0, FullPacketsFree
+        B       %FT20
+10      ; Get a link from RMA
+        MOV     r0, #ModHandReason_Claim
+        MOV     r3, #FPQSize
+        SWI     XOS_Module
+        EXIT    VS
+        MOV     r3, r2
+20      ; Add link to end of list
+        ADR     r0, FullPacketsQueue - FPQ_Next
+30      LDR     r2, [r0, #FPQ_Next]
+        TEQ     r2, #0
+        MOVNE   r0, r2
+        BNE     %BT30
+        STR     r2, [r3, #FPQ_Next]             ; zero the next pointer in the new link
+        STR     r3, [r0, #FPQ_Next]             ; point previous link at it
+        Debug   skip, "NewFullPacketsLink: new link is", r3
+        EXIT
+
+; DeleteFullPacketsLink
+;
+; Moves a FullPackets link to the free list
+;
+; in:   r0 -> link before the one to be deleted
+;       r1 -> link to be deleted
+
+DeleteFullPacketsLink
+        Entry
+        Debug   skip, "DeleteFullPacketsLink: r0, r1 =", r0, r1
+        LDR     lr, [r1, #FPQ_Next]
+        STR     lr, [r0, #FPQ_Next]             ; remove from active list
+        LDR     lr, FullPacketsFree
+        STR     lr, [r1, #FPQ_Next]
+        STR     r1, FullPacketsFree             ; and add to the free list
+        EXITS
+
+; DiscardSelectedPackets
+;
+; Discards packets and FullPackets links according to certain criteria
+;
+; in:   r3: if you find this packet, do not discard it, nor subsequent packets
+;       r4 = 0 (discard packets from video FullPackets links) or 1 (audio)
+
+DiscardSelectedPackets
+        Entry   "r0-r2, r7, r8"
+        Debug   skip, "Entering DiscardSelectedPackets: r3, r4 =", r3, r4
+        ADR     r0, FullPacketsQueue - FPQ_Next
+01      LDR     r1, [r0, #FPQ_Next]     ; r0 stays pointing at previous link, so we can update its next pointer
+        TEQ     r1, #0
+        EXIT    EQ                      ; exit if we've processed all FullPackets links
+        LDR     lr, [r1, #FPQ_VideoAudio]
+        TEQ     lr, r4                  ; if the FullPackets link is the wrong video/audio type
+        MOVNE   r0, r1                  ; then move on to the next link
+        BNE     %BT01
+        ; now r1 -> next FullPackets link of the correct video/audio type
+        LDR     r2, [r1, #FPQ_PacketList]
+02      TEQ     r2, #0                  ; last packet in the list?
+        BNE     %FT03
+        BL      DeleteFullPacketsLink   ; if so, then free the FullPackets link,
+        B       %BT01                   ; and move on to the next link
+03      ; r2 -> next bitstream buffer to discard
+        TEQ     r2, r3                  ; stop discarding packets if we reach r3
+        STREQ   r2, [r1, #FPQ_PacketList]
+        EXIT    EQ
+        BL      DiscardPacket           ; also updates r2 to point to next packet
+        B       %BT02
+
+; FreeFullPacketsLinkedList
+;
+; Actually frees the RMA blocks making up the list
+;
+; in:   r3 -> first link in list (or 0 if none)
+; out:  r0, r2 corrupted
+
+FreeFullPacketsLinkedList
+        Entry
+        Debug   skip, "FreeFullPacketsLinkedList: r3 =", r3
+        ASSERT  FPQ_Next = 0
+01      MOVS    r2, r3
+        EXITS   EQ
+        LDR     r3, [r2, #FPQ_Next]
+        MOV     r0, #ModHandReason_Free
+        SWI     XOS_Module
+        B       %BT01
+ ]
+
 xdebug  SETL    {FALSE}
 
 ; **************************************************************************
@@ -1799,6 +2096,16 @@ VideoCloseStream Entry "r0-r2,r11"
 	BLNE	VideoFreePacket
 	BNE	%BT60
 70
+      [ StartVideoAtSeqHdr
+        Debug   skip, "Discarding queued calls on CloseStream"
+        Push    "r3-r4"
+        MOV     r3, #0
+        MOV     r4, #0                                  ; discard all queued VideoFullPackets calls
+        BL      DiscardSelectedPackets
+        MOV     r4, #1                                  ; discard all queued AudioFullPackets calls
+        BL      DiscardSelectedPackets
+        Pull    "r3-r4"
+      ]
 	BL	VideoReleaseInterruptVectors
 	LDR	r0, AudioControlStreamHandle		; if audio not open
 	TEQ	r0, #0
@@ -2173,6 +2480,26 @@ VideoResetStream Entry "r0-r2, r11"
 	STR	r2, SyncMode
  ]
 
+ [ StartVideoAtSeqHdr
+        Debug   skip, "Discarding queued calls on ResetStream"
+        Push    "r3-r4"
+        MOV     r3, #0
+        MOV     r4, #0                                  ; discard all queued VideoFullPackets calls
+        BL      DiscardSelectedPackets
+        MOV     r4, #1                                  ; discard all queued AudioFullPackets calls
+        BL      DiscardSelectedPackets
+        Pull    "r3-r4"
+
+        ASSERT  StreamFlags_VideoPresent = ResetStreamFlags_VideoPresent
+        ASSERT  StreamFlags_AudioPresent = ResetStreamFlags_AudioPresent
+        LDR     lr, VideoStreamFlags
+        AND     lr, lr, r0
+        AND     lr, lr, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
+        TEQ     lr, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
+        MOVEQ   lr, #1                                  ; only skip to sequence header if there are both video and audio in the new stream
+        MOVNE   lr, #0
+        STRB    lr, SkippingToSeqHdr
+ ]
 	LDR	lr, AudioControlStreamHandle		; is there an audio stream open?
 	TEQ	lr, #0
 	BEQ	%FT10					; [if not then skip]
@@ -2234,6 +2561,15 @@ VideoReset Entry "r0"
  [ DiscardPartialPackets
 	STR	r0, VideoHadFirstPacket				; not had PES packet
 	STR	r0, AudioHadFirstPacket
+ ]
+ [ StartVideoAtSeqHdr
+        STRB    r0, StartCodeSearchState                        ; mark no start code found
+        STRB    r0, DeferVideoStart                             ; by default, start video at same time as audio
+        MOV     r0, #1
+        STRB    r0, FirstAudioPTS                               ; the next PES header we process will be the first one
+        MOV     r0, #-1
+        STR     r0, LastVideoDTS0                               ; mark DTS invalid
+        Debug   skip, "ResetStream: last video DTS marked invalid"
  ]
 	MOV	r0, #1
 	STR	r0, VideoPreFilling				; we are now pre-filling
@@ -4238,6 +4574,27 @@ SkipPostedPTS
 
 SCRStatusIRQ Entry "r0"
 	BL	CheckErrorStatus
+      [ StartVideoAtSeqHdr
+        ; We may have got here because it's time to start the video off
+        LDRB    r0, DeferVideoStart
+        TEQ     r0, #0                          ; if not deferring video start
+        LDRNE   r0, VideoSpeedSetting
+        TSTNE   r0, #&80000000                  ; or we've already started playing
+        LDRNEB  r0, FirstAudioPTS
+        TEQNE   r0, #1                          ; or if SCR hasn't yet been initialised by first audio PTS
+        EXIT    EQ                              ; then exit now
+        BL      ReadSCR                         ; get SCR in r1, r2
+        ADR     r0, LastVideoDTS0
+        LDMIA   r0, {r0, r3}                    ; get video start time in r0, r3
+        SUBS    r1, r0, r1                      ; find video DTS - current SCR
+        SBC     r2, r3, r2
+        TST     r2, #1                          ; test sign bit
+        EXIT    EQ                              ; exit if we haven't reached video start time yet
+        LDR     r2, VideoSpeedSetting
+        BIC     r2, r2, #&80000000              ; clear pre-buffering bit
+        STR     r2, VideoSpeedSetting
+        BL      VideoSetSpeed
+      ]
 	EXIT
 
 	MACRO
@@ -4791,6 +5148,25 @@ ProcessAudioReadPtr Entry
 	BL	CheckPTSList
 	TEQ	r1, #0
 	EXIT	MI					; if no PTS, just exit
+
+      [ StartVideoAtSeqHdr
+        LDRB    lr, FirstAudioPTS
+        TEQ     lr, #1
+        BNE     %FT90
+        ; The first time, set the SCR from the audio PTS unconditionally
+        MOV     lr, #0
+        STRB    lr, FirstAudioPTS
+        BL      WriteSCR
+        ; Now we can work out what to set the L64002 SCR compare value to to trigger video start
+        LDR     r2, LastVideoDTS0                       ; bottom 32 bits of LastVideoDTS
+        LDR     r3, SCROffset                           ; bottom 32 bits of SCROffset
+        SUB     r2, r2, r3                              ; find difference (only bottom 16 bits will be used)
+        MOV     r3, r2, LSR#8                           ; so r3 bits 0-7 are SCR bits 8-15
+        WriteRegI r2, SCRCompare0, lr
+        WriteRegI r3, SCRCompare1, lr
+        EXIT
+90
+      ]
 
  [ VetSCRValues
 	MOV	r2, pc
@@ -6063,6 +6439,12 @@ VideoInfo_Code Entry "r8"
 	DREG	r0, "Video prefilling = "
 	LDR	r0, AudioPreFilling
 	DREG	r0, "Audio prefilling = "
+ [ StartVideoAtSeqHdr
+        LDRB    r0, SkippingToSeqHdr
+        DREG    r0, "Skipping to sequence header = "
+        LDRB    r0, DeferVideoStart
+        DREG    r0, "Deferred video start = "
+ ]
  [ CountFieldInversions
 	LDR	r0, FieldInversions
 	DREG	r0, "Field inversions = "
@@ -6789,6 +7171,27 @@ AudioFullPackets Entry "r0,r11"
 	EXIT						; else exit
 20
  ]
+ [ StartVideoAtSeqHdr
+        LDRB    lr, SkippingToSeqHdr
+        TEQ     lr, #1
+        BEQ     %FT21
+        BL      int_audio_full_packets                  ; if we're not skipping video, process packets normally
+        EXIT
+21
+        Push    "r3"                                    ; otherwise, just queue the call
+        BL      NewFullPacketsLink
+        MOVVC   lr, #1
+        STRVC   lr, [r3, #FPQ_VideoAudio]
+        STRVC   r0, [r3, #FPQ_Flags]
+        STRVC   r1, [r3, #FPQ_StreamHandle]
+        STRVC   r2, [r3, #FPQ_PacketList]
+        Pull    "r3"
+        Debug   skip, "Queuing AudioFullPackets call"
+        EXIT
+
+
+int_audio_full_packets Entry "r0,r11"
+ ]
  [ AudioDebug
 	Push	"r1-r5"
 	MOV	r0, r2
@@ -6919,7 +7322,7 @@ AudioSendDebug Entry "r0"
 	STR	lr, AudioCaptureBlockLength
 	EXITS
  ]
- [ DiscardPartialPackets
+ [ DiscardPartialPackets :LOR: StartVideoAtSeqHdr
 ; in: r2 -> packet to discard by calling packet free routine
 ; out: r2 -> next packet
 ; This routine is used instead of FreePacket because the packet
