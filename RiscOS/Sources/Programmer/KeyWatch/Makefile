@@ -19,7 +19,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -125,6 +125,13 @@ o.KeyWatch:	c.KeyWatch
 o.KeyWatch:	C:h.kernel
 o.KeyWatch:	C:h.swis
 o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
+o.KeyWatch:	VersionNum
 o.KeyWatch:	h.KeyWatchHd
 o.KeyWatch:	h.KeyWatch
+o.KeyWatch:	c.KeyWatch
+o.KeyWatch:	C:h.kernel
+o.KeyWatch:	C:h.swis
+o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
 o.KeyWatch:	VersionNum
+o.KeyWatch:	h.KeyWatchHd
+o.KeyWatch:	h.KeyWatch
