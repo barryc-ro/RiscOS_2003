@@ -22,6 +22,7 @@
 
 #include "utils.h"
 
+#include "irqs.h"
 #include "ir_api.h"
 #include "handset.h"
 #include "veneers.h"
@@ -31,13 +32,16 @@
  */
 
 unsigned int ir_driver_id = 0x00000005;
-unsigned int ir_driver_revision = 0x0106;
+unsigned int ir_driver_revision = 0x0109;
 
 static ir_client_callbacks_t callbacks =
 {
     handset_accept_data_packet,
     handset_accept_report_packet,
 };
+
+
+static tag_info_t tags[NUM_TAGS];
 
 static void *private_word;
 
@@ -75,12 +79,12 @@ static unsigned char handset_table[NUMTABLES][HANDSETCODES] =
 _kernel_oserror *handset_initialise(void *pw,unsigned int reason)
 {
     _kernel_oserror *err;
-
+    unsigned int state;
+    unsigned int loop;
 
 
     if (reason == 0)
     {
-        unsigned int state;
 
         private_word = pw;
 
@@ -95,6 +99,16 @@ _kernel_oserror *handset_initialise(void *pw,unsigned int reason)
         {
             flags |= HANDSET_FLAGS_STANDBY_MODE;
         }
+
+        for (loop = 0; loop< NUM_TAGS; loop++)
+        {
+            tags[loop].PrivateWord = pw;
+            tags[loop].tag_number = loop;
+            tags[loop].ignore_keys = 0;
+            tags[loop].last_buffer_code = 0xff;
+            tags[loop].context.word = INACTIVE;
+        }
+
     }
 
     err = ir_initialise(&callbacks,pw);
@@ -104,10 +118,21 @@ _kernel_oserror *handset_initialise(void *pw,unsigned int reason)
     return err;
 }
 
+
+
 _kernel_oserror *handset_finalise(void *pw)
 {
     _kernel_oserror *err=NULL;
+    unsigned int loop;
     NOT_USED(pw);
+
+    for (loop = 0; loop< NUM_TAGS; loop++)
+    {
+        if (tags[loop].context.word != INACTIVE)
+        {
+            ir_cancel_timeout(loop);
+        }
+    }
 
     err = ir_finalise();
     if (!err)
@@ -221,35 +246,96 @@ static int handset_lookup(int code, int mods, int tableno)
 
 
 
+void ir_timeout(int tag_number)
+{
+    context_t *context = &(tags[tag_number].context);
+
+    DEBUGFN(1, db_printf("Device with tag %d timed out!\n", tag_number));
+    if (context->word != INACTIVE)
+    {
+        context->word = INACTIVE;
+    }
+    tags[tag_number].ignore_keys = 0;
+
+}
+
+
+void ir_set_timeout(int tag_number, context_t context)
+{
+  tags[tag_number].context = context;
+  _swix(OS_CallAfter,_INR(0,2),
+        TIMEOUT_DELAY, timeout_preveneer, &(tags[tag_number].PrivateWord));
+}
+
+
+void ir_cancel_timeout(int tag_number)
+{
+    if (tags[tag_number].context.word != INACTIVE)
+    {
+        _swix(OS_RemoveTickerEvent, _INR(0,1),
+              timeout_preveneer, &(tags[tag_number].PrivateWord));
+        tags[tag_number].context.word = INACTIVE;
+    }
+}
+
 
 void handset_accept_data_packet(unsigned int registry_number,
                                 unsigned char tag_number,
                                 unsigned char data[3])
 {
     unsigned int buffer_code;
+    tag_info_t *tag = &tags[tag_number];
+    context_t context = tags[tag_number].context;
 
     NOT_USED(registry_number);
-    NOT_USED(tag_number);
 
-    buffer_code = handset_lookup(data[1], (data[2]&0xf8)>>3,0);
 
-    /*
-        If not in Standby mode, insert buffer_code into keyboard buffer
-    */
-    if ((buffer_code == 0xc9) || ((buffer_code != -1) && (!(flags & HANDSET_FLAGS_STANDBY_MODE))))
+
+    if (!(data[0] & 0x80))
     {
-        /*
-            Special case. Need to escape £ so it doesn't look like Ctrl-F3
-            May need to escape other top-bit-set characters
-        */
-        if (buffer_code == '£') /* this is a pound sterling symbol */
+        DEBUGFN(3,db_printf("First key in sequence!\n"));
+        ir_cancel_timeout(tag_number);
+        tag->ignore_keys = 2; /* start ignoring from the next one. */
+        ir_set_timeout(tag_number, context);
+    }
+    else
+    {
+        DEBUGFN(3,db_printf("Repeated key!\n"));
+    }
+
+
+    if (tag->ignore_keys != 1)
+    {
+        if (tag->ignore_keys)
         {
-            _swix(OS_Byte, _INR(0,2), 153, 0, 0);
+            tag->ignore_keys = 1;
         }
 
-        _swix(OS_Byte, _INR(0,2), 153, 0, buffer_code);
-        DEBUGFN(2, db_printf("BufferCode: %x\n", buffer_code));
+        buffer_code = handset_lookup(data[1], (data[2]&0xf8)>>3,0);
+
+        /*
+            If not in Standby mode, insert buffer_code into keyboard buffer
+        */
+        if ((buffer_code == 0xc9) || ((buffer_code != -1) && (!(flags & HANDSET_FLAGS_STANDBY_MODE))))
+        {
+            /*
+                Special case. Need to escape £ so it doesn't look like Ctrl-F3
+                May need to escape other top-bit-set characters
+            */
+            if (buffer_code == '£') /* this is a pound sterling symbol */
+            {
+                _swix(OS_Byte, _INR(0,2), 153, 0, 0);
+            }
+
+            _swix(OS_Byte, _INR(0,2), 153, 0, buffer_code);
+            DEBUGFN(2, db_printf("BufferCode: %x\n", buffer_code));
+        }
     }
+    else
+    {
+        DEBUGFN(3,db_printf("Duplicate key in timeout period\n"));
+    }
+
 }
 
 

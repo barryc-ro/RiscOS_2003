@@ -44,7 +44,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Program specific options:
 #
 TARGET    = aof.${COMPONENT}
-OBJS      = module.o handset.o ir_api.o header.o veneers.o
+OBJS      = module.o handset.o ir_api.o header.o veneers.o irqs.o
 
 
 
@@ -122,16 +122,17 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.handset
-o.handset:	c.handset
-o.handset:	C:h.kernel
-o.handset:	C:h.swis
-o.handset:	h.utils
-o.handset:	h.ir_api
-o.handset:	h.handset
-o.handset:	h.veneers
 o.ir_api:	c.ir_api
 o.ir_api:	C:h.kernel
 o.ir_api:	C:h.swis
 o.ir_api:	h.utils
 o.ir_api:	h.ir_api
 o.ir_api:	h.veneers
+o.handset:	c.handset
+o.handset:	C:h.kernel
+o.handset:	C:h.swis
+o.handset:	h.utils
+o.handset:	h.irqs
+o.handset:	h.ir_api
+o.handset:	h.handset
+o.handset:	h.veneers
