@@ -70,6 +70,7 @@ OBJS =\
  o.ralloc \
  o.robase \
  o.task \
+ o.debug \
  o.URIswis
 
 HDRS =	h.ModHdr
