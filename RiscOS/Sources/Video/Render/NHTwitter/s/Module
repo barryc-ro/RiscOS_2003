@@ -17,6 +17,14 @@
 ; 05-Aug-99  KJB  0.08		Added service call table.
 ; 16-Feb-00  KJB  0.09		Cunning stunt for modes with "1MB+half a line" LineLength - stick to the first
 ;				two copies to save thrashing the MMU's TLB. Gives a 15% speed up.
+; 24-Feb-00  KJB  0.10          Supports supremacy bit - transparent areas will not be touched, and solid
+;                               areas will not blend with them.
+;                               Version number wasn't reported correctly.
+;                               Made 32-bit compatible.
+;                               Added OS_SynchroniseCodeAreas for dynamic code.
+;                               Issues OS_Remove/RestoreCursors around screen update.
+;                               Updates OS_ChangedBox.
+;                               Errors now have sensible numbers, rather than zero.
 
         LEADR   Module_LoadAddr
 
@@ -28,7 +36,6 @@ CR      *       13
         	^       0, wp
 TwitterOK	#	4	; 0 => can't anti-twitter in this mode
 				; 1 => OK
-
 OutVarTable	#	0
 VScreenStart	#	4
 VLineLen	#	4
@@ -37,6 +44,8 @@ VYEig		#	4
 VXWindLimit	#	4
 VYWindLimit	#	4
 VLog2BPC	#	4
+
+ChangedBox      #       4       ; address of OS_ChangedBox block
 
 VolatileCodeBlock #	0
 
@@ -57,12 +66,17 @@ Module_BaseAddr
         &       Mod_SWIHandler-Module_BaseAddr
         &       Mod_SWITable-Module_BaseAddr
         &       0                               ; no swi name decode entry
+        &       0                               ; no internationalised help
+        &       Mod_Flags   -Module_BaseAddr
 
 Mod_Title
         =       "NHTwitter", 0
 
 Mod_HelpStr
         =       "NHTwitter", TAB, "$Module_MajorVersion ($Module_Date)"
+ [ Supremacy
+        =       " Supremacy"
+ ]
 	= 0
         ALIGN
 
@@ -72,12 +86,15 @@ Mod_SWITable
 	=	0
 	ALIGN
 
+Mod_Flags
+        =       1       ; 32-bit compatible
+
 Mod_HC_Table
         Command NHAntiTwitter, 4, 4
         =       0
 
 NHAntiTwitter_Help
-	=	"*NHAntiTwitter performs an anti-twitter filter on part of the screen", 13
+	=	"*NHAntiTwitter performs an anti-twitter filter on part of the screen.", 13
 NHAntiTwitter_Syntax
         =       "Syntax: *NHAntiTwitter <x> <y> <w> <h>", 0
         ALIGN
@@ -111,7 +128,7 @@ Mod_Init Entry
 05
         MOV     r12, r2
 
-	ADR	r0, CodeBlockStart
+	ADRL	r0, CodeBlockStart
 	ADR	r1, VolatileCodeBlock
 	LDR	r2, =CodeBlockEnd-CodeBlockStart
 10
@@ -119,6 +136,11 @@ Mod_Init Entry
 	STR	r3, [r1], #4
 	SUBS	r2, r2, #4
 	BNE	%BT10
+
+        MOV     r0, #-1
+        SWI     XOS_ChangedBox
+        EXIT    VS
+        STR     r1, ChangedBox
 
 	BL	GetScreenVars
 	EXIT
@@ -141,7 +163,7 @@ Mod_Service ROUT
 	MOV	r0, r0
 	TEQ	r1, #Service_ModeChange
 	TEQNE	r1, #Service_SwitchingOutputToSprite
-	MOVNES	pc, lr
+	MOVNE	pc, lr
 Mod_ServiceEntry
 	LDR	wp, [r12]
 
@@ -183,7 +205,7 @@ NoSuchSWI
         MOV     pc, lr
 
 NoSuchSWIError
-        &       0
+        &       ErrorNumber_ModuleBadSWI
         =       "No such NHTwitter SWI", 0
         ALIGN
 
@@ -226,6 +248,13 @@ GetScreenVars Entry
 	STR	r4, [lr]
 	B	%BT10
 80
+
+        MOV     r0, #1
+        ADR     r1, VolatileCodeBlock
+        LDR     r2, =CodeBlockEnd-CodeBlockStart-4
+        ADD     r2, r1, r2
+        SWI     XOS_SynchroniseCodeAreas
+
 	MOV	r0, #1			; indicate OK
 90
 	STR	r0, TwitterOK
@@ -246,6 +275,17 @@ CodePatchTable
 	&	codepatch3_2 - CodeBlockStart
 	&	codepatch3_3 - CodeBlockStart
 	&	codepatch3_4 - CodeBlockStart
+ [ Supremacy
+	&	codepatch4_0 - CodeBlockStart
+	&	codepatch4_1 - CodeBlockStart
+	&	codepatch4_2 - CodeBlockStart
+	&	codepatch5_0 - CodeBlockStart
+	&	codepatch5_1 - CodeBlockStart
+	&	codepatch5_2 - CodeBlockStart
+	&	codepatch6_0 - CodeBlockStart
+	&	codepatch6_1 - CodeBlockStart
+	&	codepatch6_2 - CodeBlockStart
+ ]
 	&	-1
 
 ; in:	r0 = value to convert to two immediate values
@@ -346,6 +386,13 @@ AntiTwitterSWI Entry "r0-r7"
 	SUBS	r6, r6, r7		; r6 = bottom-top (inclusive)
 	BLT	%FT95			; top below bottom
 
+        LDR     r0, ChangedBox
+        LDR     r14, [r0]
+        TST     r14, #1                 ; ChangedBox enabled?
+        BLNE    UpdateChangedBox
+
+20      SWI     XOS_RemoveCursors
+
 	LDR	r0, VScreenStart
 	ADD	r0, r0, r4, LSL #1
 	LDR	r3, VLineLen
@@ -363,6 +410,9 @@ AntiTwitterSWI Entry "r0-r7"
 	MOV	lr, pc
 	ADR	pc, VolatileCodeBlock
  ]
+
+        SWI     XOS_RestoreCursors
+
 	CLRV
 	EXIT
 
@@ -379,12 +429,12 @@ AntiTwitterSWI Entry "r0-r7"
 	MOV	pc, lr
 
 BadCoordsError
-	&	0
+	&	ErrorNumber_BadParameters
 	=	"Invalid coordinates", 0
 	ALIGN
 
 TwitterFailError
-	&	0
+	&	ErrorNumber_BadPixelDepth
 	=	"Can't perform anti-twitter in this mode", 0
 	ALIGN
 
@@ -404,18 +454,34 @@ Keys
 	ALIGN
 
 lbpp		*	4
-fl_mask1    	*	&7C1F03E0
-fl_mask2	*	&03E07C1F
+fl_mask1    	*	2_01111100000111110000001111100000
+fl_mask2	*	2_00000011111000000111110000011111
 
 	MACRO
 	FNdo2words $w00,$w10,$w01,$w11,$w02,$w12,$w0d,$w1d,$temp,$gm,$gm2,$entry
 fl_entry$entry
 	LDMIA	r0, {$w02,$w12}
+ [ Supremacy
+	ORR	$temp, $w00, $w01		; check for any supremacy bits set
+	ORR	$temp, $temp, $w02
+	ORR	$temp, $temp, $w10
+	ORR	$temp, $temp, $w11
+	ORR	$temp, $temp, $w12
+ ]
+ [ TestWhite
+        MOV     $w0d, #-1
+        MOV     $w1d, #-1
+ ]
 	STMCSIA	r1, {$w0d,$w1d}
+
 codepatch2_$entry
 	ADDCS	r1, r1, #0			; addcs dstlen
 	ADDCS	r1, r1, #0
-	SUBS	r2, r2, #1
+ [ Supremacy
+	ORRS	$temp, $temp, $temp, ROR #16
+	BMI	transparency_$entry		; if supremacy bit set in any of 12 pixels
+ ]
+10	SUBS	r2, r2, #1
 codepatch3_$entry
 	ADDNE	r0, r0, #0			; addne srclen
 	ADDNE	r0, r0, #0			; (advance src ptr except on last time but one - don't care on last time)
@@ -452,21 +518,67 @@ codepatch3_$entry
 
 	AND	$w1d, $w1d, $w10		; BGRBGR word 1 line 0/4 + 1/2 + 2/4
 
+ [ TestWhite
+        MOV     $w0d, #-1
+        MOV     $w1d, #-1
+ ]
+ [ Supremacy
+	BCS	%FT99
+	B	exitcolumn
+
+transparency_$entry
+; we know at least one pixel is transparent
+	ORR	$temp, $w01, $w11
+	TST	$temp, $temp, ROR #16
+	BPL	%FT70
+; fast case first - both words of line 1 totally transparent
+	SUBS	r2, r2, #1
+codepatch4_$entry
+	ADDNE	r0, r0, #0
+	ADDNE	r0, r0, #0
+	BCC	exitcolumn2
+codepatch5_$entry
+	ADD	r1, r1, #0
+	ADDS	r1, r1, #0	; clears carry, so no store (or increment) next time
+	B	%FT99
+
+; and the hard case
+70
+	FNdo1wordtrans $w00,$w01,$w02,$w0d,$temp,$gm,$gm2
+	FNdo1wordtrans $w10,$w11,$w12,$w1d,$temp,$gm,$gm2
+	SUBS	r2, r2, #1
+codepatch6_$entry
+	ADDNE	r0, r0, #0
+	ADDNE	r0, r0, #0
+ ]
+ [ TestWhite
+        MOV     $w0d, #-1
+        MOV     $w1d, #-1
+ ]
 	BCC	exitcolumn
+99
 	MEND
 
+ [ Supremacy
 	MACRO
-	FNdo1word $w00,$w01,$w02,$w0d,$temp,$gm,$gm2,$entry
-fl_entry$entry
-	LDR	$w02, [r0]
-	STRCS	$w0d, [r1]
-codepatch2_$entry
-	ADDCS	r1, r1, #0			; addcs dstlen
-	ADDCS	r1, r1, #0
-	SUBS	r2, r2, #1
-codepatch3_$entry
-	ADDNE	r0, r0, #0			; addne srclen
-	ADDNE	r0, r0, #0			; (advance src ptr except on last time but one - don't care on last time)
+	FNdo1wordtrans $w00,$w01,$w02,$w0d,$temp,$gm,$gm2
+	Push	"$w02"
+	MOV	$temp, $w01, LSL #16
+	MOV	$temp, $temp, LSR #16		; temp = centre left
+	TST	$w00, #1:SHL:15			; top left clear?
+	MOVNE	$w00, $w00, LSR #16		; make same as centre left
+	ORRNE	$w00, $temp, $w00, LSL #16
+	TST	$w02, #1:SHL:15			; bottom left clear?
+	MOVNE	$w02, $w02, LSR #16		; make same as centre left
+	ORRNE	$w02, $temp, $w02, LSL #16
+	MOV	$temp, $w01, LSR #16
+	MOV	$temp, $temp, LSL #16		; temp = centre right
+	TST	$w00, #1:SHL:31			; top right clear?
+	MOVNE	$w00, $w00, LSL #16		; make same as centre right
+	ORRNE	$w00, $temp, $w00, LSR #16
+	TST	$w02, #1:SHL:31			; bottom right clear?
+	MOVNE	$w02, $w02, LSL #16		; make same as centre right
+	ORRNE	$w02, $temp, $w02, LSR #16
 
 	AND	$w0d, $w00, $gm			; B_R_G_ word 0 line 0
 	AND	$temp, $w02, $gm		; B_R_G_ word 0 line 2
@@ -483,22 +595,95 @@ codepatch3_$entry
 	ORR 	$w00, $gm, $w00, LSR #1		; FGFBFR word 0 line 0/4 + 1/2 + 2/4
 
 	AND	$w0d, $w0d, $w00		; BGRBGR word 0 line 0/4 + 1/2 + 2/4
+
+	TST	$w01, #1:SHL:15			; centre left clear?
+	MOVNE	$w0d, $w0d, LSR #16		; make destination left = centre left
+	MOVNE	$temp, $w01, LSL #16
+	MOVNE	$temp, $temp, LSR #16
+	ORRNE	$w0d, $temp, $w0d, LSL #16
+	TST	$w01, #1:SHL:31			; centre right clear?
+	MOVNE	$w0d, $w0d, LSL #16		; make destination right = centre left
+	MOVNE	$temp, $w01, LSR #16
+	MOVNE	$temp, $temp, LSL #16
+	ORRNE	$w0d, $temp, $w0d, LSR #16
+	Pull	"$w02"
+	MEND
+ ]
+
+	MACRO
+	FNdo1word $w00,$w01,$w02,$w0d,$temp,$gm,$gm2,$entry
+fl_entry$entry
+	LDR	$w02, [r0]
+ [ Supremacy
+	ORR	$temp, $w00, $w01		; check for any supremacy bits set
+	ORR	$temp, $temp, $w02
+ ]
+	STRCS	$w0d, [r1]
+codepatch2_$entry
+	ADDCS	r1, r1, #0			; addcs dstlen
+	ADDCS	r1, r1, #0
+ [ Supremacy
+	ORRS	$temp, $temp, $temp, ROR #16
+	BMI	transparency1_$entry		; if supremacy bit set in any of 12 pixels
+ ]
+
+	AND	$w0d, $w00, $gm			; B_R_G_ word 0 line 0
+	AND	$temp, $w02, $gm		; B_R_G_ word 0 line 2
+	ADD	$w0d, $w0d, $temp		; B_R_G_ word 0 line 0+2
+	AND	$temp, $w01, $gm		; B_R_G_ word 0 line 1
+	ADD	$w0d, $temp, $w0d, LSR #1	; B_R_G_ word 0 line 0/2 + 1 + 2/2
+	ORR	$w0d, $gm2, $w0d, LSR #1	; BFRFGF word 0 line 0/4 + 1/2 + 2/4
+
+	BIC	$w00, $w00, $gm			; _G_B_R word 0 line 0
+	BIC	$temp, $w02, $gm		; _G_B_R word 0 line 2
+	ADD	$w00, $w00, $temp		; _G_B_R word 0 line 0+2
+	BIC	$temp, $w01, $gm		; _G_B_R word 0 line 1
+	ADD	$w00, $temp, $w00, LSR #1	; _G_B_R word 0 line 0/2 + 1 + 2/2
+	ORR 	$w00, $gm, $w00, LSR #1		; FGFBFR word 0 line 0/4 + 1/2 + 2/4
+
+	AND	$w0d, $w0d, $w00		; BGRBGR word 0 line 0/4 + 1/2 + 2/4
+ [ Supremacy
+	B	%FT99
+
+transparency1_$entry
+; we know at least one pixel is transparent
+	TST	$w01, $w01, ROR #16
+; fast case first - both pixels of line 1 totally transparent
+	MOVMI	$w0d, $w01
+	BMI	%FT99
+
+; and the hard case
+	FNdo1wordtrans $w00,$w01,$w02,$w0d,$temp,$gm,$gm2
+99
+ ]
+	SUBS	r2, r2, #1
+codepatch3_$entry
+	ADDNE	r0, r0, #0			; addne srclen
+	ADDNE	r0, r0, #0			; (advance src ptr except on last time but one - don't care on last time)
+
+ [ TestWhite
+        MOV     $w0d, #-1
+ ]
 	MEND
 
 	MACRO
 	FNdohalfword $w00,$w01,$w02,$w0d,$temp,$gm,$gm2,$entry
 fl_entry$entry
 	LDR	$w02, [r0]			; NB may not be word-aligned
+ [ Supremacy
+	ORR	$temp, $w00, $w01		; check for any supremacy bits set
+	ORR	$temp, $temp, $w02
+ ]
 	STRCSB	$w0d, [r1]
 	MOVCS	$w0d, $w0d, LSR #8
 	STRCSB	$w0d, [r1, #1]
 codepatch2_$entry
 	ADDCS	r1, r1, #0			; addcs dstlen
 	ADDCS	r1, r1, #0
-	SUBS	r2, r2, #1
-codepatch3_$entry
-	ADDNE	r0, r0, #0			; addne srclen
-	ADDNE	r0, r0, #0			; (advance src ptr except on last time but one - don't care on last time)
+ [ Supremacy
+	TST	$temp, #1:SHL:15
+	BNE	transparencyh_$entry
+ ]
 
 	AND	$w0d, $w00, $gm			; B_R_G_ word 0 line 0
 	AND	$temp, $w02, $gm		; B_R_G_ word 0 line 2
@@ -515,6 +700,28 @@ codepatch3_$entry
 	ORR 	$w00, $gm, $w00, LSR #1		; FGFBFR word 0 line 0/4 + 1/2 + 2/4
 
 	AND	$w0d, $w0d, $w00		; BGRBGR word 0 line 0/4 + 1/2 + 2/4
+ [ Supremacy
+	B	%FT99
+
+transparencyh_$entry
+; we know at least one pixel is transparent
+	TST	$w01, #1:SHL:16
+; fast case first - line 1 transparent
+	MOVNE	$w0d, $w01
+	BNE	%FT99
+
+; and the hard case
+	FNdo1wordtrans $w00,$w01,$w02,$w0d,$temp,$gm,$gm2
+99
+ ]
+	SUBS	r2, r2, #1
+codepatch3_$entry
+	ADDNE	r0, r0, #0			; addne srclen
+	ADDNE	r0, r0, #0			; (advance src ptr except on last time but one - don't care on last time)
+ [ TestWhite
+        MOV     $w0d, #-1
+ ]
+
 	MEND
 
 CodeBlockStart
@@ -543,8 +750,7 @@ fl_startofcolumn
 	MOV	r6, r4
 codepatch1a
 	ADD	r0, r0, #0		; add srclen
-	ADD	r0, r0, #0
-	CMP	r0, #-1			; clear carry, so store doesn't happen 1st time thru
+	ADDS	r0, r0, #0			; clear carry, so store doesn't happen 1st time thru
 fl_columnloop
 	FNdo2words r3,r4,r5,r6,r7,r8,r9,r10,r11,r14,r12,0
 	FNdo2words r5,r6,r7,r8,r3,r4,r9,r10,r11,r14,r12,1
@@ -553,6 +759,7 @@ fl_columnloop
 
 exitcolumn
 	STMIA	r1, {r9,r10}
+exitcolumn2
 	LDMFD	r13!, {r0-r2,r5}
 	ADD	r0, r0, #8
 	ADD	r1, r1, #8
@@ -608,6 +815,7 @@ fl_onecolumnloop
 	MOV	r5, r7
 	BCS	fl_onecolumnloop
 	STR	r9, [r1]
+exitonewordcolumn2
 	LDMFD	r13!, {r0-r2,r5}
 	ADD	r0, r0, #4
 	ADD	r1, r1, #4
@@ -616,6 +824,33 @@ fl_onecolumnloop
 
 
 CodeBlockEnd
+
+; On entry: R0 -> changed box block
+;           R4 = x0 (pixels)
+;           R5 = x1 - x0 (pixels)
+;           R6 = y0 - y1 (pixels)
+;           R7 = y1 (pixels from top)
+; On exit:  R1-R3 corrupted
+UpdateChangedBox
+        Entry   "R4-R7"
+        ADD     R5, R4, R5
+        SUB     R5, R5, #1
+        LDR     R1, VYWindLimit
+        ADD     R6, R6, R7
+        SUB     R6, R1, R6
+        SUB     R7, R1, R7
+        LDMIB   R0, {R1,R2,R3,R14}
+        CMP     R4, R1
+        MOVLT   R1, R4
+        CMP     R6, R2
+        MOVLT   R2, R6
+        CMP     R5, R3
+        MOVGT   R3, R5
+        CMP     R7, R8
+        MOVGT   R8, R7
+        STMIB   R0, {R1,R2,R3,R14}
+        EXIT
+
 ;	BIN	"o.filter"
 
 ;	InsertDebugRoutines
