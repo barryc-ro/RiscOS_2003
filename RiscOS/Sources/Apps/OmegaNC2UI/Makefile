@@ -144,6 +144,8 @@ resources: translate
         Else \
           $(CP) Resources.$(USERIF).UK.NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) Resources.$(USERIF).$(LOCALE).NCDialCtrl.Files.PPP.IP-Up $(RESRES).NCDialCtrl.Files.PPP.IP-Up $(CPFLAGS)
+        $(CP) Resources.$(USERIF).$(LOCALE).NCDialCtrl.Files.InetDConf $(RESRES).NCDialCtrl.Files.InetDConf $(CPFLAGS)
+        $(CP) Resources.$(USERIF).$(LOCALE).NCDialCtrl.Files.Passwd $(RESRES).NCDialCtrl.Files.Passwd $(CPFLAGS)
         $(CP) Resources.$(USERIF).$(LOCALE).STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
         $(CP) Resources.$(USERIF).$(LOCALE).Wimp.Sprites $(RESRES).Wimp.Sprites $(CPFLAGS)
         $(CP) Resources.$(USERIF).$(LOCALE).NCFresco.Res $(RESRES).NCFresco.Res $(CPFLAGS)
