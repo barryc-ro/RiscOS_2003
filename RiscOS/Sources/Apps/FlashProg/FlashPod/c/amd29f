@@ -1,0 +1,304 @@
+/*  amd29f.c
+ *
+ *  Routines for programming an AMD29F-type flash memory device.
+ *  See AMD data sheet in doc.21445a/pdf (Adobe Acrobat format).
+ * 
+ *  04-Sep-1997 jfarrell - Created.
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "amd29f.h"
+#include "csleep.h"
+
+
+/*  AMD 29F-compatible commands and addresses.
+ *  The data sheets suggests that maybe these are JEDEC standard.
+ */
+#define JEDEC_ADDR_1		0x00005555	/* 29F010 value works for F040 too */
+#define JEDEC_ADDR_2		0x00002AAA	/* 29F010 value works for F040 too */
+#define JEDEC_ADDR_MAN_ID	0x00000000
+#define JEDEC_ADDR_DEV_ID	0x00000001
+
+#define JEDEC_CMD_UNLK1		0x000000AA
+#define JEDEC_CMD_UNLK2		0x00000055
+#define JEDEC_CMD_AUTOSELECT    0x00000090
+#define JEDEC_CMD_PROG_BYTE    	0x000000A0
+#define JEDEC_CMD_RESET		0x000000F0
+#define JEDEC_CMD_ERASE_SETUP	0x00000080
+#define JEDEC_CMD_ERASE_SECTOR	0x00000030
+
+
+/*
+ * Macros
+ */
+#define peek(addr)	\
+	(*((volatile unsigned char *) (addr)))
+
+#define poke(addr, value)	\
+	(*((volatile unsigned char *) (addr)) = ((unsigned char) (value)))
+
+#define device_write(base, addr, value) \
+        poke(base+addr, value)
+        
+#define device_read(base, addr) \
+        peek(base+addr)
+
+
+/* Variables
+ */
+ 
+/* Table mapping manufacturer/device code pair to useful information.
+ */
+static struct flash devtab[] =
+{
+    {
+      	MAN_AMD, DEV_29F010, 1*MEGBIT, "AMD 29F010 1Mbit (128k x 8) Flash Memory",
+      	8, {0x00000, 0x04000, 0x08000, 0x0C000, 0x10000, 0x14000, 0x18000, 0x1C000}
+    },
+    {
+      	MAN_AMD, DEV_29F040, 4*MEGBIT, "AMD 29F040 4Mbit (512k x 8) Flash Memory",
+      	8, {0x00000, 0x10000, 0x20000, 0x30000, 0x40000, 0x50000, 0x60000, 0x70000}
+    },
+    {
+      	MAN_FUJITSU, DEV_29F040, 4*MEGBIT, "Fujitsu 29F040 4Mbit (512k x 8) Flash Memory",
+      	8, {0x00000, 0x10000, 0x20000, 0x30000, 0x40000, 0x50000, 0x60000, 0x70000}
+    }    
+};
+
+
+/*  Forward declarations.
+ */ 
+static int amd29f_data_poll(
+    unsigned int *addr, 
+    int value
+);
+
+static int amd29f_read (
+    const struct flash *device,
+    size_t size,
+    unsigned char *buff
+);
+
+static int amd29f_erase_sector (
+    const struct flash *device,
+    unsigned sector
+);
+
+static int amd29f_erase (
+    const struct flash *device
+);
+
+static int amd29f_write (
+    const struct flash *device, 
+    const unsigned char *buff
+);
+ 
+
+
+/*  Create a 'flash' object of the correct type for the AMD29F-type device
+ *  that is memory mapped at 'address'.
+ */
+struct flash *amd29f_create (unsigned int *address)
+{
+    static struct flash *object;
+    int man, dev;
+    int i;
+
+    object = malloc(sizeof (struct flash));
+    if (object == NULL)
+        return NULL;
+            
+    /*  Write the command sequence to put the flash into Autoselect mode.
+     */
+    device_write(address, JEDEC_ADDR_1, JEDEC_CMD_UNLK1);
+    device_write(address, JEDEC_ADDR_2, JEDEC_CMD_UNLK2);
+    device_write(address, JEDEC_ADDR_1, JEDEC_CMD_AUTOSELECT);
+
+    /*  In Autoselect mode, we may read the manufacturer and device codes.
+     */
+    man = device_read(address, JEDEC_ADDR_MAN_ID);
+    dev = device_read(address, JEDEC_ADDR_DEV_ID);
+  
+    /* Reset the chip to return to read mode.
+     */
+    device_write(address, JEDEC_ADDR_1, JEDEC_CMD_RESET);
+    
+
+    /* See if this is a known device and return information about it.
+     */
+    for (i = 0; i < sizeof(devtab)/sizeof(struct flash); i++)
+    {
+        if ((devtab[i].man == man) && (devtab[i].dev == dev))
+        {
+            *object = devtab[i]; /* struct copy */
+
+	    /* fill in device address */
+	    object->baseaddr = address;
+
+	    /* fill in method pointers */
+	    object->read = amd29f_read;
+	    object->erase = amd29f_erase;;
+	    object->erase_sector = amd29f_erase_sector;
+	    object->write = amd29f_write;
+
+            return object;
+        }
+    }
+    
+    /* Unrecognised device.
+     */
+    object->man = man;
+    object->dev = dev;
+    object->size = 0;
+    sprintf(object->name, "Unknown device: manufacturer 0x%x, device code 0x%x", man, dev);
+    object->baseaddr= 0;
+    return object;
+}
+
+
+
+/*  Read 'size' bytes from 'device' into 'buffer'.
+ */
+static int amd29f_read (const struct flash *device, size_t size, unsigned char *buff)
+{
+    size_t offset;
+        
+    for (offset = 0; offset < size; offset++)
+    {
+        *buff++ = device_read(device->baseaddr, offset);
+    }
+    return 0;
+}
+
+
+/*  Erase sector number 'sector' in 'device'.
+ */
+static int amd29f_erase_sector (const struct flash *device, unsigned sector)
+{
+    if (sector > device->nsectors)
+    {
+        fprintf(stderr, "Cannot erase sector %u - device has only %d sectors\n", 
+        	sector, device->nsectors);
+        return 1;
+    }
+    
+    
+    device_write(device->baseaddr, JEDEC_ADDR_1, JEDEC_CMD_UNLK1);
+    device_write(device->baseaddr, JEDEC_ADDR_2, JEDEC_CMD_UNLK2);
+
+    device_write(device->baseaddr, JEDEC_ADDR_1, JEDEC_CMD_ERASE_SETUP);
+
+    device_write(device->baseaddr, JEDEC_ADDR_1, JEDEC_CMD_UNLK1);
+    device_write(device->baseaddr, JEDEC_ADDR_2, JEDEC_CMD_UNLK2);
+
+    device_write(device->baseaddr, device->sectors[sector-1], JEDEC_CMD_ERASE_SECTOR);    
+
+ 
+    /*  Wait at least 100us (actually 1 csec) to let the erase get under way.  
+     *  Other commands during this window may abort the erase.
+     */
+    csleep(1);
+ 
+    /* Wait for data within sector to become erased (0xff) */
+    if (amd29f_data_poll(device->baseaddr+device->sectors[sector-1], 0xff))
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+
+
+/*  Erase 'device'.
+ *  Uses a sequence of sector erase commands rather than the chip erase
+ *  function - it's just as fast and more exciting to watch.
+ */
+static int amd29f_erase (const struct flash *device)
+{
+    int i;
+    
+    for (i = 1; i <= device->nsectors; i++)
+    {
+        if (amd29f_erase_sector(device, i))
+            return 1;
+    }            
+
+    return 0;
+}
+
+
+/*  Program 'device' with data in 'buff'.
+ */
+static int amd29f_write (const struct flash *device, const unsigned char *buff)
+{
+    int offset;
+    
+    /*  Program each byte in turn.
+     */    
+    for (offset = 0; offset < device->size; offset++)
+    {
+        
+        /* Write two unlock cycles to the device */
+    	device_write(device->baseaddr, JEDEC_ADDR_1, JEDEC_CMD_UNLK1);
+    	device_write(device->baseaddr, JEDEC_ADDR_2, JEDEC_CMD_UNLK2);
+
+	/* Write program setup command */
+    	device_write(device->baseaddr, JEDEC_ADDR_1, JEDEC_CMD_PROG_BYTE);
+      	
+      	/* Write address and byte to be programmed */
+	device_write(device->baseaddr, offset, buff[offset]);  
+
+	/* Wait for completion */
+ 	if (amd29f_data_poll(device->baseaddr+offset, buff[offset]))
+    	{
+            return 1;
+    	}
+    }
+    
+    return 0;
+}
+
+
+
+/*  Wait for an erase or program command to complete.
+ *  'addr' is the address being programmed or an address
+ *  in the sector being erased.
+ *  'value' is the byte value being programmed or erased.
+ */
+static int amd29f_data_poll(unsigned int *addr, int value)
+{   
+    /*  Perform the AMD Data# Polling algorithm on a location in 
+     *  the sector being erased or programmed.
+     *  This waits until 'address' has 'value', or a timeout occurs.
+     */
+    for (;;)
+    {
+ 	int datapoll;
+ 	
+	/* Check for DQ7 == programmed value.
+	 * This indicates embedded programming complete.
+	 */
+	datapoll = peek(addr);   
+	if ((datapoll & 0x80) == (value & 0x80))
+ 	    return 0;
+ 	 
+ 	/* Check for DQ5 -> timeout.
+ 	 * If true, poll DQ7 again in case of simultanoeus transitions.
+ 	 */
+ 	if ((datapoll & 0x20))
+	{
+	    datapoll = peek(addr);
+
+	    if ((datapoll & 0x80) == (value & 0x80)) /* DQ7 == programmed value */	
+ 	        return 0;
+	    else
+ 	        return 1;
+ 	}
+    }
+}
