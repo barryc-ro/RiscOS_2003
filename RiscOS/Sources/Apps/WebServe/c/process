@@ -92,6 +92,8 @@ static int id=0;
 process_list global_processes;
 
 
+char **blocked_schemes = NULL;
+
 static fd_set fdr; /* server read */
 static fd_set fdw; /* server write */
 static fd_set fde; /* server exceptions */
@@ -402,6 +404,10 @@ static void process_connect(void)
 				debug(("%p> New send buffer size is %d bytes (&%x)\n", newproc,
 					size, size));
 			}
+			newproc->local_request = 1;
+		}
+		else {
+		        newproc->local_request = 0;
 		}
 		if (newproc != NULL) {
 			lastproc->next = newproc;
@@ -639,6 +645,20 @@ static int process_determine_method(const char *method)
 	return method__UNKNOWN;
 }
 
+static int process_is_scheme_blocked(const char *url)
+{
+        char **ptr;
+        if (blocked_schemes == NULL) return 0;
+        for (ptr = blocked_schemes; *ptr; ++ptr) {
+                if (strncmp(url, *ptr, strlen(*ptr)) == 0) {
+                        debug(("Attempt to read blocked scheme (kill match on `%s')\n", *ptr));
+                        return 1;
+                }
+        }
+
+	return 0;
+}
+
 static void process_filter_headers(process_list proc)
 {
 	/* We need to remove "dangerous" headers - including hop-by-hop headers */
@@ -786,8 +806,15 @@ static void process_parse_request(process_list proc)
 		return;
 	}
 
+        if (!local_only && !proc->local_request && process_is_scheme_blocked(urlbuf)) {
+                free(urlbuf);
+                reroute(proc, error_search("censor"));
+                return;
+        }
+
 	process_filter_headers(proc);
 	if (urlbuf[0] != '/' && process_in_infinite_loop(proc)) {
+                free(urlbuf);
 		return;
 	}
 
@@ -1749,6 +1776,47 @@ static int data_to_user(process_list proc, char *buffer, int received, int xferc
 }
 
 
+typedef union date {
+        struct {
+                unsigned int loword;
+                int hibyte;
+        } asints;
+	unsigned char odat[8];
+        struct {
+                unsigned char date[8];
+        } aschars;
+} date;
+
+static void read_utc_date_now(void *buffer) /* MUST be eight bytes minimum */
+{
+        char *b = buffer;
+        b[0] = 3;
+	(void) _swix(OS_Word, _INR(0,1), 14, buffer);
+}
+
+static date *read_date_now(void)
+{
+        static date d;
+
+	read_utc_date_now(&d);
+        return &d;
+}
+
+static char *date_to_rfcdate(date *d, char *buffer)
+{
+	#define DATE_FORMAT "%W3, %DY %M3 %CE%YR %24:%MI:%SE GMT"
+        static const char days[] = "Woo\0Sun\0Mon\0Tue\0Wed\0Thu\0Fri\0Sat";
+        static const char months[] =
+        	"Woo\0Jan\0Feb\0Mar\0Apr\0May\0Jun\0Jul\0Aug\0Sep\0Oct\0Nov\0Dec";
+	int ord[10];
+
+	_swix(Territory_ConvertTimeToUTCOrdinals, _INR(1,2), &d->odat, ord);
+	sprintf(buffer, "%3s, %02d %3s %04d %02d:%02d:%02d GMT",
+		days + (ord[7]<<2), ord[4], months + (ord[5]<<2), ord[6],
+		ord[3], ord[2], ord[1]);
+	return buffer;
+}
+
 static void header_to_user(process_list proc, int *p_errorsending)
 {
 	int error = (proc->sd == -1); /* error if socket closed on entry, */
@@ -1756,14 +1824,11 @@ static void header_to_user(process_list proc, int *p_errorsending)
 	if (!error) {
 		char buf[128];
 		http_header *tmp;
-		time_t timenow = time(NULL);
 
 		proc->rheaders = NULL;
 		http_add_header(&proc->rheaders, "HTTP/1.0", "200 OK");
 		http_add_header(&proc->rheaders, "Server", main_get_product_token());
-
-		strftime(buf, 120, "%a, %d %b %Y %H:%M:%S GMT", localtime(&timenow));	   /* "Thu, 29 Feb 1996 14:01:31 GMT" */
-		http_add_header(&proc->rheaders, "Date", buf);
+		http_add_header(&proc->rheaders, "Date", date_to_rfcdate(read_date_now(), buf));;
 		sprintf(buf, "%d", proc->cacheentry->filesize);
 		http_add_header(&proc->rheaders, "Content-length", buf);
 		convert_date_and_time(buf, 120, proc->cacheentry->LoadAddress, proc->cacheentry->ExecAddress);
