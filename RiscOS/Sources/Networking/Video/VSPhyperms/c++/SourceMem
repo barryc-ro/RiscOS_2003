@@ -1,7 +1,7 @@
 /**************************************
- Source.c++
+ SourceMem.c++
 
-implements Source class
+implements Source class memory management
 © Acorn Computers Ltd
 
 History:
@@ -250,43 +250,43 @@ SourceMemMap::initDynamicArea()
 }
 
 error_flag
+SourceMemMap::blockReset(void)
+{
+  error_flag result = ErrorState();
+  
+  if (result == ErrorOccurred)
+  	if (ErrorNum() == VSP_Alloc){
+  	  RemoveErr();
+  	  result = NoError;
+  	}
+  
+  for (size_t i=0;i<max_blocks; i++){
+	MemBlock *mb = macro_getBlock(i);
+       	if ((mb!=NULL)&&(mb->inuse)&&(!mb->mpeg_owned))
+       		   freeBlock_background(mb);
+  }
+  return result;
+}
+
+error_flag
 SourceMemMap::freeBlock_background(MemBlock *mb)
 {
        error_flag result = ErrorState();
                
        if (result == NoError) {
                 // De-allocate all the datagrams associated with this block
-                size_t i;
-#ifdef MEM_SANE_CHECK        
-                int dgram_num;
-                NECDatagram* header;
-                
-                for (int j = 0; j < mb->dgrams_in_block; j++){
-                  dgram_num = findDatagramNumber((NECPayload*)(mb->nec_block.buffers[j].buffer_ptr));
-                  header = &(dgram_hd[dgram_num]);
-                  	Debug("free %i = dgram [%i][%i] @ %i", j , header->block_number, header->dgram_seq, dgram_num);
-                	result = NoError;
-                }
-#endif     
-                for (i = 0; ((i<dgrams_per_block)&&(result!=ErrorOccurred)); i++) {
+                for (size_t i = 0; ((i<dgrams_per_block)&&(result!=ErrorOccurred)); i++) {
                         NECPayload *payload = (NECPayload *)mb->nec_block.buffers[i].buffer_ptr;
                         if (payload != NULL) {
                                result = memFreeDatagram(findDatagramNumber(payload));				
                         }
                         mb->nec_block.buffers[i].buffer_ptr = NULL;
-                }
-#ifdef DEBUGLIB                
-                if (result == ErrorOccurred){ 
-                	Debug("free block exit early\n");
-                	ErrorDump();
-                }
-#endif                
+               }
                mb->block_id = 0;
                mb->completed = 0;
                mb->inuse = 0;
                mb->to_be_freed = 0;
         }
-       
        return result;
 }
 
@@ -431,9 +431,12 @@ MemBlock *SourceMemMap::findBlock(ULONG id, size_t *block_num)
                 if (!mb->inuse) {
                         mb->inuse = 1;
                         mb->completed = 0;
+                        mb->mpeg_owned = 0;
                         mb->block_id = id;
                         mb->nak_timeout = 0;			// AR
                         mb->dgrams_received = 0;		// AR
+                        mb->deleted_block = 0;
+                        mb->dgrams_in_block = 0;
                         if (block_num != 0) {
                                 *block_num = i;
                         }
@@ -460,6 +463,56 @@ MemBlock *SourceMemMap::findExistingBlock(ULONG id, size_t *block_num)
        }
        // return null if you cannot find this block
        return NULL;
+}
+
+MemBlock *SourceMemMap::findOrReplaceBlock(ULONG id, ULONG *last_block_sent, ULONG *most_complete)
+{
+  MemBlock *mb, *not_in_use = NULL;
+  size_t n;
+  ULONG min_block_num = 0xFFFFFFFF;
+
+        for (n = 0; n < max_blocks; n++) {	// find existing
+               mb = macro_getBlock(n);
+               
+               if (mb->inuse){
+                 	if (mb->block_id == id) {
+                        	return mb;
+               		}
+               }
+               else
+               		not_in_use = mb;	// note a block not in use, thinking ahead
+               		
+               if ((mb->block_id < min_block_num)&&(!(mb->mpeg_owned)))    // clean up, catches blocks waiting for deletion
+               		min_block_num = mb->block_id;	
+        }
+       	
+	if ( not_in_use == NULL ){ // if there are no freeblocks
+  		mb = findExistingBlock(min_block_num);				// delete an old one
+  	  	
+  		if (mb != NULL)
+  			freeBlock_background(mb);
+  			
+  	  	if ((*last_block_sent) < min_block_num){
+  	  		(*last_block_sent) = min_block_num;
+  	  		if ((*last_block_sent) > (*most_complete))
+  	  			(*most_complete) = (*last_block_sent);
+  	  	}
+  	  	
+  	 }
+  	 else 
+  	 	mb = not_in_use;
+  	 
+  	 if (mb != NULL) {			// set variables
+  	 	mb->inuse = 1;
+            	mb->completed = 0;
+		mb->mpeg_owned = 0;
+                mb->block_id = id;
+                mb->nak_timeout = 0;			// AR
+                mb->dgrams_received = 0;		// AR
+                mb->deleted_block = 0;
+                mb->dgrams_in_block = 0;
+        }
+        return mb;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////

@@ -222,24 +222,34 @@ Server::get_assetlist_response(int *number, AssetIDDescriptor *buffer, int *buff
   	MakeError(VSP_ServerCertError);
   	return ErrorOccurred;
   }
-  if ((*number) == 0)
+#ifdef DEBUGLIB  
+  Debug("number %i, assets %i, entries %i, cont %x, result %i", (*number), alr_header.total_number_of_assets, 
+  				alr_header.number_of_entries, alr_header.continuity_flag, alr_header.result);
+#endif  
+  if ((*number) == 0) // if a request for the number of assets
   	(*number) = (int)alr_header.total_number_of_assets;
   else {
     	asset_count = 0;
-    	//AssetIDDescriptor *asset;
     	while ((asset_count < (*number))&&(asset_count < alr_header.number_of_entries)
     		&&( (asset_count+1) * sizeof(AssetIDDescriptor) <= (*buffer_size)) ) {
     		  
-   		if (GetData((void*)&(buffer[asset_count]), sizeof(AssetIDDescriptor)) == ErrorOccurred)
-  			return ErrorOccurred;	//Null
+   		if (GetData((void*)&(buffer[asset_count]), sizeof(AssetIDDescriptor)) == ErrorOccurred){
+   		  	if (ErrorNum() == TCP_TimeOutOnReceive){
+   		  		RemoveErr();
+   		  		break;
+   		  	}
+   		  	else
+   		  		return ErrorOccurred;	//Null
+  		}
   		
   		if (ntoh_structure((void*)&(buffer[asset_count]), map_AssetIDDescriptor, AssetIDDescriptor) == ErrorOccurred){
   	  		MakeError(TCP_ReadFail);
   			return ErrorOccurred;
   		}
   		/*
-  		asset = &buffer[asset_count];
-  		Debug("asset id (%i)", asset->asset_id);  
+    		AssetIDDescriptor *asset = &buffer[asset_count];
+    		
+  		Debug("asset id (%i)", asset->asset_id); 
         	Debug("last update%8.8X%8.8X", (int)asset->time_of_last_update[8], (int)asset->time_of_last_update);     
         	Debug("registration %i", asset->registration);         
         	Debug("bitrate %i", asset->bit_rate);            
@@ -411,7 +421,8 @@ Server::send_assetpresentation_request(int init_value, PlayElementRequest playli
 }
 
 error_flag
-Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULINT *dgram_size, ULINT *bitrate, int *fast_playback_ratio)
+Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, unsigned int *stream_time, 
+						ULINT *dgram_size, ULINT *bitrate, int *fast_playback_ratio)
 {
   PacketHeader header;
   AssetPresentationResponse response;
@@ -451,12 +462,22 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
   	}
   } // scene info exists
   
-  ipaddr->s_addr = (u_long) response.server_IP;
+   ipaddr->s_addr = (u_long) response.server_IP;
   *port = response.server_port;
-  *dgram_size = assetresponse_dgram_size = response.datagram_size;
+  //if (response.datagram_size != 0)
+  	*dgram_size = assetresponse_dgram_size = response.datagram_size;
+  //else
+  //	*dgram_size = assetresponse_dgram_size = SocketDescriptor.getDgramSize();
+  
   *bitrate = response.bit_rate;
   *fast_playback_ratio = (int)response.ff_ratio;
-
+  *fast_playback_ratio |= (int)((response.fast_playback)<<24);
+  
+  if (response.video_status != 0)
+  	(*stream_time) = 0xFFFFFFFF;
+  else
+  	(*stream_time) = (unsigned int)response.total_time;
+  
   if (response.result != 0){
     MakeError(VSP_ServerError);
     return ErrorOccurred;
@@ -471,6 +492,9 @@ Server::send_playback_request(int state_id, ULINT MAX_storableBlock, ULONG AckSe
   PlayBackRequest request;
  
   if ((MAX_storableBlock-AckSeq) > NEC_databurstval){
+#ifdef DEBUGLIB
+	Debug("invalid value in play request, %i-%i", MAX_storableBlock, AckSeq);
+#endif	    
     MakeError(VSP_InvalidValue);
     return ErrorOccurred;
   }
@@ -482,13 +506,8 @@ Server::send_playback_request(int state_id, ULINT MAX_storableBlock, ULONG AckSe
   request.command_length = sizeof(PlayBackRequest) - 8;
   request.certification_code = certification_code;
   request.playback_id = state_id;
-  //if (time == 0) {
-  	request.playback_mode = mode;
- 	request.time_mode = 0;	// always normal
-  //}else {
-  //	request.playback_mode = 0;
-  //	request.time_mode = mode;
-  //}    
+  request.playback_mode = mode;
+  request.time_mode = 0;		// always normal ?? time specified means nothing
   request.time_spec = time;
   request.skip_rate = 0;
   request.data_type = 0;
@@ -807,6 +826,9 @@ Server::SendAck(ULINT MAX_storableBlocks, ULINT MAX_complete_block, ACK_type dat
   	
   	int size = SocketDescriptor.write((void*)&ack, sizeof(ACK_Block));
   	if (size < 0){
+#ifdef DEBUGLIB  	  
+  	  	Debug("error sending ACK %i", errno);
+#endif  	  	
      		result = setSocketError(size);
      		if (ErrorNum() == TCP_NoBuffer){
   			RemoveErr();
@@ -830,10 +852,10 @@ Server::SendNak(ULINT BlockStart, LINT DatagramStart, ULINT BlockEnd, LINT Datag
 	
   	int size = SocketDescriptor.write((void*)&nak, sizeof(NAK_Block));
   	if (size < 0){
-  		if (ErrorNum() == TCP_NoBuffer){
 #ifdef DEBUGLIB  		  
-  		  	Debug("buffers full on sending nak");
+  	  	Debug("error sending NAK %i", errno);
 #endif  		  	
+  		if (ErrorNum() == TCP_NoBuffer){
   			RemoveErr();
   		}
   	}
@@ -844,7 +866,13 @@ Server::SendNak(ULINT BlockStart, LINT DatagramStart, ULINT BlockEnd, LINT Datag
 error_flag
 Server::GetAssetList(_kernel_swi_regs *regs)
 {
-  int expected_num_assets;
+  // register usage
+  // r2 = selection flags
+  // r3 = start
+  // r4 = number of entries;
+  // r5 = buffer
+  // r6 = size of r5
+  
   error_flag result = ErrorState();
   
   if (  (result != ErrorOccurred)&&(regs->r[4] == 0)&&
@@ -852,21 +880,43 @@ Server::GetAssetList(_kernel_swi_regs *regs)
   	    (get_assetlist_response(&(regs->r[4]), NULL, 0)== ErrorOccurred)) )
   		result = ErrorOccurred;		
   
-  expected_num_assets = regs->r[4];	// this is the number of assets that we expect to receive
   
   if ((result != ErrorOccurred)&&(regs->r[5] == 0)){
     	regs->r[6] = regs->r[4] * sizeof(AssetIDDescriptor);
   }
   else {
-  	if ((result != ErrorOccurred)&&(( send_assetlist_request(regs->r[2], regs->r[3], regs->r[4]) == ErrorOccurred) ||
-  	    (get_assetlist_response(&(regs->r[4]), (AssetIDDescriptor*)regs->r[5], &(regs->r[6])) == ErrorOccurred)))
-  		result = ErrorOccurred;
-  	else {
-  	  if (regs->r[4] == expected_num_assets)
-  		regs->r[3] += regs->r[4] + 1;
-  	  else
-  	  	regs->r[3] = -1;
+  	// read r4 assets whilst avoiding overflowing the socket buffer
+    	int expected_num_assets = regs->r[4];
+    	AssetIDDescriptor *buffer_offset = (AssetIDDescriptor*)regs->r[5];
+    	
+	// this is the number of entries that can be read at once without overflow
+    	int number_entries = (int)((SocketDescriptor.getrecvspace()) - 
+    				(sizeof(PacketHeader)+sizeof(AssetListResponseHeader)))/sizeof(AssetIDDescriptor); 	
+    	
+    	while ((result != ErrorOccurred)&&(regs->r[4] > 0)){
+    	  
+    	  	if (regs->r[4] < number_entries)
+    	  		number_entries = regs->r[4];
+    	  		
+  		expected_num_assets = number_entries;	// this is the number of assets that we expect to receive
+#ifdef DEBUGLIB  			
+  		Debug("from %i buffer %8.8X, size %i expected num %i", regs->r[3], buffer_offset, regs->r[6], expected_num_assets);
+#endif   		
+  		if ((result != ErrorOccurred)&&(( send_assetlist_request(regs->r[2], regs->r[3], expected_num_assets) == ErrorOccurred) ||
+  	    		(get_assetlist_response(&expected_num_assets, buffer_offset, &(regs->r[6])) == ErrorOccurred)))
+  			result = ErrorOccurred;
+  		else {
+  		  	regs->r[4] -= expected_num_assets;		// decrement request count
+  		  	regs->r[3] += expected_num_assets;		// increment start position
+  		  	buffer_offset += expected_num_assets;
+  		}
+#ifdef DEBUGLIB  		
+  		Debug("read %i buffer %8.8X, size %i new start %i", expected_num_assets, buffer_offset, regs->r[6], regs->r[3]);
+#endif
+   		if (expected_num_assets < number_entries)
+  			break;
   	}
+ 	regs->r[4] = (buffer_offset - (AssetIDDescriptor*)regs->r[5]);
   }
   return result;
 }
@@ -893,7 +943,7 @@ Server::GetSceneAssetList(_kernel_swi_regs *regs)
 }
 
 error_flag
-Server::AssetPresentation(int init_value, PlayElementRequest playlist[], int size, struct in_addr *ipaddr, 
+Server::AssetPresentation(int init_value, PlayElementRequest playlist[], int size, unsigned int *stream_time, struct in_addr *ipaddr, 
 								ULINT *port, ULINT *dgram_size, ULINT *bitrate, int *fast_playback_ratio)
 {
   if (ErrorExists()) {
@@ -901,7 +951,7 @@ Server::AssetPresentation(int init_value, PlayElementRequest playlist[], int siz
   }
 
   if (	(send_assetpresentation_request(init_value, playlist, size, (*ipaddr), (*port)) == ErrorOccurred ) ||
- 	(get_assetpresentation_response(ipaddr, port, dgram_size, bitrate, fast_playback_ratio) == ErrorOccurred) )
+ 	(get_assetpresentation_response(ipaddr, port, stream_time, dgram_size, bitrate, fast_playback_ratio) == ErrorOccurred) )
      return ErrorOccurred;
 
   SocketDescriptor.eventsOn();

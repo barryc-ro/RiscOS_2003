@@ -32,13 +32,18 @@ class Source;
 
 class Statistics {
   public:
-  	unsigned int last_stream_bitrate;
+  	unsigned int last_stream_bytes_received;
+  	unsigned int last_stream_time;
+  	unsigned int last_stream_acks;
+  	unsigned int last_stream_naks;
+  	
   	unsigned int dgrams_read;
   	unsigned int duplicate_dgrams;
   	unsigned int bytes_received;
   	unsigned int acks_sent;
   	unsigned int naks_sent;
   	unsigned int block_naks_sent;
+  	unsigned int deleted_blocks;
   
   	Statistics(void);
   	~Statistics(void) {}
@@ -49,7 +54,7 @@ class Statistics {
 typedef struct {
   size_t	max_buffers;	// this gives an outside on the array
   size_t	num_buffers;	// this is the number of buffers used after optimisation
-  BitstreamBufferDescriptor buffers[1];
+  BitstreamBufferDescriptor buffers[1];	// see vsp_types header
 } NECBlock;
 
 // Payload data is opaque to us
@@ -71,12 +76,7 @@ class DatagramBitfield;
 // this class controls the dynamic area used by the source class
 //
 class SourceMemMap : public Error
-{
-  friend Source;	// Originally these two classes were one however due to the complexity of supporting two
-  			// concepts within one class I believe it better to seperate it into the memory management
-  			// and the block management as such the source class consults the source memory map for
-  			// memory allocation and destruction.  I is ideal if we can get rid of the friend clause.
-  
+{ 
   private:
 	size_t max_block_size;		// maximum size of each block
 	size_t total_dgrams;		// total dgram buffers for object
@@ -117,6 +117,10 @@ class SourceMemMap : public Error
 	
   public:
   	// block location
+  	error_flag	blockReset(void);	// this sets all blocks to empty
+  	
+	MemBlock 	*findOrReplaceBlock(ULONG id, ULONG *last_block_sent, ULONG *max_complete);	
+										// finds a block, if it cannot find it allocate it, replace least	
 	MemBlock 	*findExistingBlock(ULONG id, size_t *block_num = 0);	// finds a block based on an allocated block id, null on error
 	MemBlock 	*findBlock(ULONG id, size_t *block_num = 0);		// finds a block, if it cannot find it allocate it, null on erro	
 	MemBlock 	*getBlock(size_t n) const;		// returns a block addressed by its array offset in the dynamic area 
@@ -147,54 +151,49 @@ class SourceMemMap : public Error
 
 class Source : public Error
 {
-  private:
+  protected:
 	// Stream related data
 	ULONG last_block_sent;		// ID of the last block returned to caller
 	ULONG max_completed_block;	// ID of the greatest completed block in source.
-	int most_significant_time;
+	unsigned int most_significant_time;
 	ULONG nak_block;
-	int   nak_timeout;
+	ULONG nak_timeout;
+	int full_blocks;
 	
 	int current_play_id;		// this is the trickplay flag this changes with each new trickplay
 	ULONG stream_end_block;		// this is set when we know what the last block in the stream is
 	
 	// Network information
+	
 	Socket 		sd;
-	
 	SourceMemMap	*mem_map;	// if this is not allocated it is assigned to null
-     					// if it is null and any method attempts to use it it will result in an error
-     //public:
-	int full_blocks;
-	
-      private:	// object manipulation
-	
+     					// if it is null and any method attempts to use it it will result in an error    		
 	error_flag calculateMaxCompleteBlock(void);
-	error_flag calculatePosAckSequence(Server *server, Statistics *stats);
-	//error_flag calculatePosNAKSequence(int *naks_sent, Server *server, int max_block);
-	error_flag calculatePosNAKSequence(Server *server, Statistics *stats, int *naks = NULL);
+	
+	virtual error_flag calculatePosAckSequence(Server *server, Statistics *stats);
+	virtual error_flag calculatePosNAKSequence(Server *server, Statistics *stats, int *naks = NULL);
 
-      public:	// object creation destruction
+  public:	// object creation destruction
+  
+     	void SetSourceVar(Socket *socket, SourceMemMap **mem);	// only to be used in live->stored conversions
+     	
+     	Source(void) {};
         Source(int set_nak_timeout, int source_recvspace);
         ~Source(void);
+        
         error_flag Allocate(size_t max_blocks, size_t max_block_size, size_t initial_block_num, size_t datagram_size);
 
-        	// processor entry points
-        error_flag calculate_freeBlocks(Server *server, callback_flag callback_pending, Statistics *stats);
-        error_flag foregroundExecute(callback_flag *callback_flags, Server *server, Statistics *stats);
-	error_flag serviceDynamicAreaRenumber(int old_id, int new_id);
-		// reads off the socket
-        error_flag ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout);
-
 		// block manipulation
-	ULONG 	   getAckSeq(void) { return max_completed_block; }
-	int	   getCurrentPlayId() {return current_play_id; }
+	ULONG 	   getAckSeq(void)	{ return max_completed_block; }
+	int	   getCurrentPlayId()	{ return current_play_id; }
 	
   	int	   getFullBlocks(void)			{ return full_blocks; }
-  	void	   setEndPlayState(void);
-  	error_flag setNewPlayState(int *play_state, int *request_num, int *max_complete);
+  	void	   setEndPlayState(void);		// resets the mem_map and ignores any further incomming data
+  	error_flag setNewPlayState(int *play_state, int *request_num, int *max_complete, int play_mode);
+  							// returns freeblocks etc.
         error_flag getBlockStatus(size_t *num_blocks, size_t *max_blocks, size_t *num_free);
-        int	   get_most_significant_block(void) 	{ return last_block_sent; }
-        int 	   get_most_significant_time(void)	{ return most_significant_time; }
+        unsigned int get_most_significant_block(void) 	{ return (unsigned int)last_block_sent; }
+        unsigned int get_most_significant_time(void)	{ return most_significant_time; }
         
         void	   clearFinalBlock(void)		{ stream_end_block = 0; }
 	void 	   setFinalBlock(ULONG final_block) 	{ stream_end_block = final_block; }
@@ -211,6 +210,50 @@ class Source : public Error
         error_flag getLocalPort(int *port);
 	error_flag getSocket(Socket *);
         error_flag setSocketError(int socket_result);
+        
+        	// processor entry points
+        error_flag foregroundExecute(callback_flag *callback_flags, Server *server, Statistics *stats);
+	error_flag serviceDynamicAreaRenumber(int old_id, int new_id);
+        error_flag calculate_freeBlocks(Server *server, callback_flag callback_pending, Statistics *stats);
+		// reads off the socket
+        virtual error_flag ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout);
+};
+
+class SourceVOD : public Source
+{
+    public:
+    	SourceVOD(Source& live);
+  	SourceVOD(int set_nak_timeout, int source_recvspace):Source(set_nak_timeout, source_recvspace) {};
+  	~SourceVOD();
+  		
+	error_flag calculatePosAckSequence(Server *server, Statistics *stats);
+	error_flag calculatePosNAKSequence(Server *server, Statistics *stats, int *naks = NULL);
+
+        error_flag ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout);
+};
+
+class SourceLIVE : public Source
+{
+    public:
+    	SourceLIVE(Source& vod); // it can only be made by converting the VOD object
+ 	~SourceLIVE();
+  		
+	error_flag calculatePosAckSequence(Server *server, Statistics *stats);
+	error_flag calculatePosNAKSequence(Server *server, Statistics *stats, int *naks = NULL);
+
+        error_flag ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout);
+};
+
+class SourceBroadCast : public Source
+{
+    public:
+  	SourceBroadCast(const char *hostname, int source_recvspace, int newTimeOut);
+  	~SourceBroadCast();
+  		
+	error_flag calculatePosAckSequence(Server *server, Statistics *stats);
+	error_flag calculatePosNAKSequence(Server *server, Statistics *stats, int *naks = NULL);
+
+        error_flag ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout);
 };
 
 #endif
