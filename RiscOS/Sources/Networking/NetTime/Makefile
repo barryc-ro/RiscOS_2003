@@ -53,6 +53,7 @@ INETLIB	   = TCPIPLibs:o.inetlibzm
 # Rule patterns
 #
 .c.o:;      ${CC} ${CCFLAGS} -o $@ $<
+.cmhg.h:;   ${CMHG} -p -d $@ $<
 .cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${ASFLAGS} $< $@
 
@@ -87,6 +88,7 @@ clean:
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
+        ${RM} h.header
         @echo ${COMPONENT}: cleaned
 
 ${TARGETSA}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
@@ -110,6 +112,8 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
+module.o: header.h
+machine.o: header.h
 
 #
 # Dynamic dependencies:
