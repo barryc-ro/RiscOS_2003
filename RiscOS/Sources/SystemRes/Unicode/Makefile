@@ -7,6 +7,8 @@
 # ----       ----         -----------
 # 11-Nov-97  SJM          Created.
 # 28-Nov-97  ADH          Added !Sprites, !Sprites22, !Sprites23
+# 19-Nov-99  SNB          Updated to allow slimmed down STB !Unicode to be built.
+#                         Passing OPTIONS=STB builds a cut down structure.
 
 #
 # Generic options:
@@ -16,10 +18,12 @@ AS      = aasm
 CP      = copy
 RM      = remove
 WIPE    = -wipe
+CHMOD   = attr ${CHMODFLAGS}
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 WFLAGS  = ~cfr~v
+CHMODFLAGS = +ow +or +wr -ww
 
 #
 # Program specific options:
@@ -58,6 +62,11 @@ resources-Japan: resources-
         ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.*GB*  ${WFLAGS}
         ${WIPE} ${RESDIR}.Encodings.BigFive              ${WFLAGS}
 
+resources-NoCJK: resources-
+        ${WIPE} ${RESDIR}.Encodings.ISO2022.G94x94.* ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.BigFive          ${WFLAGS}
+        ${WIPE} ${RESDIR}.Encodings.Microsoft.CP932  ${WFLAGS}
+
 resources-:
         ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
@@ -69,18 +78,28 @@ resources-:
         ${CP} LocalRes:!Sprites22 ${RESAPP}.!Sprites22 ${CPFLAGS}
         ${CP} LocalRes:!Sprites23 ${RESAPP}.!Sprites23 ${CPFLAGS}
 
-install: 
-        ${MKDIR} ${INSTDIR}
-        ${CP} Resources.Encodings ${INSTDIR}.Encodings  ${CPFLAGS}
+install_STB:
+        ${CP} LocalUserIFRes:!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
+        ${CP} LocalUserIFRes:!Run       ${INSTDIR}.!Run       ${CPFLAGS}
+
+install_:
         ${CP} LocalRes:!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
         ${CP} LocalRes:!Run       ${INSTDIR}.!Run       ${CPFLAGS}
         ${CP} LocalRes:!Help      ${INSTDIR}.!Help      ${CPFLAGS}
         ${CP} LocalRes:!Sprites   ${INSTDIR}.!Sprites   ${CPFLAGS}
         ${CP} LocalRes:!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
         ${CP} LocalRes:!Sprites23 ${INSTDIR}.!Sprites23 ${CPFLAGS}
+        
+install_dirs:
+        ${MKDIR} ${INSTDIR}
+
+install: install_${OPTIONS} install_dirs
+        ${CP} Resources.Encodings ${INSTDIR}.Encodings  ${CPFLAGS}
+        ${CHMOD} ${INSTDIR}
+	echo ${COMPONENT}: Installed.
 
 module:
-	modgen UnicodeRes UnicodeRes UnicodeRes 0.03 -via viafile
+	modgen UnicodeRes UnicodeRes UnicodeRes 0.18 -via viafile
 	echo built softload UnicodeRes 
 
 # Dynamic dependencies:
