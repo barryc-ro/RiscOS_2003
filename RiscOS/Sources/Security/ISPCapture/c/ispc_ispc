@@ -42,6 +42,8 @@
 #include "callbacks.h"
 
 static int finish_compile(char *start, char *end);
+static char *collapse_quotes(char const *s);
+static char *expand_ctrls(char const *s);
 
 /* characters allowed by the SoftModem. Not including dash and space
    which are allowed but screw up DiallerB and are disallowed by the
@@ -107,7 +109,7 @@ char *getline(char *p, char *s, int n)
     return NULL;
 }
 
-int caseless_strncmp(char *a, char *b, int n)
+int caseless_strncmp(char const *a, char const *b, int n)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "caseless_strncmp()\n");
 
@@ -119,7 +121,16 @@ int caseless_strncmp(char *a, char *b, int n)
 }
 
 /* erg. UNIXy bits commented out, because they don't work under RISC OS. ntohs is really broken */
-char *tag(char *d, unsigned int t, char *s, int n)
+/*******************************************************************
+ Function:     tag
+ Description:  Write a tag into the output buffer
+ Parameters:   d-> output block
+               t = tag value
+               s-> source data to write
+               n = length of source data
+ Returns:      pointer to new output block (ie end of data written)
+ ******************************************************************/
+char *tag(char *d, unsigned int t, char const *s, int n)
 {
     DBUG_PRINTF(DBUG_LVL_DIAG, "tag()\n");
 
@@ -148,7 +159,7 @@ char *tag(char *d, unsigned int t, char *s, int n)
     return d;
 }
 
-void set_base(char *buff, char *param)
+void set_base(char *buff, char const *param)
 {
     DBUG_PRINTF(DBUG_LVL_DIAG, "set_base()\n");
     if(strstr(param, "0x")) strcpy(buff, "0x%x");
@@ -157,13 +168,13 @@ void set_base(char *buff, char *param)
     return;
 }
 
-/* Modify 's' in place to get rid of any characters that aren't in the
- * 'allowed' string. */
+/* Process 's' into buffer 'out' to get rid of any characters that aren't
+ * in the 'allowed' string.
+ * 'out' should be at least as long as 's'. */
 
-static void strip_disallowed_chars(char *s, const char *allowed)
+static void strip_disallowed_chars(char const *s, char *out, const char *allowed)
 {
     const char *in = s;
-    char *out = s;
     char c;
 
     DBUG_PRINTF(DBUG_LVL_DIAG, "strip_disallowed_chars()\n");
@@ -176,25 +187,32 @@ static void strip_disallowed_chars(char *s, const char *allowed)
     *out++ = 0;
 }
 
-char *write_tags(char *iptr, char *optr)
+char *write_tags(char const *iptr, char *optr)
 {
   int l;
-  char *param;
+  char const *param;
   unsigned int i;
   char buff[8];
 
   DBUG_PRINTF(DBUG_LVL_DIAG, "write_tags()\n");
 
   for(l = 0; (tag_cache.tag[l].tag != NULL) && (l < MAX_TAG_CACHE); l++) {
-      if(caseless_strncmp((char *)(tag_cache.tag[l].tag), iptr, strlen(tag_cache.tag[l].tag))==0) { /* match */
+      if(caseless_strncmp(tag_cache.tag[l].tag, iptr, strlen(tag_cache.tag[l].tag))==0) { /* match */
 	  DBUG_PRINTF(DBUG_LVL_DIAG, "write_tags: matched tag %s: ", tag_cache.tag[l].tag);
 	  param = iptr + strlen(tag_cache.tag[l].tag);
 	  switch(tag_cache.tag[l].mapping) {
 
 	  case TAG_MAPPING_PHONE:
-	      strip_disallowed_chars(param, phone_allowable_chars);
-	      optr = tag(optr, tag_cache.tag[l].nci_tag, param, strlen(param));
+	  {
+	      char *stripped=(char *)rmalloc(strlen(param), "Strip temporary buffer");
+	      if (stripped == NULL)
+	           return NULL; /* Failed to allocate out temporary buffer */
+	      strip_disallowed_chars(param, stripped,phone_allowable_chars);
+	      optr = tag(optr, tag_cache.tag[l].nci_tag, stripped, strlen(param));
+	      rmfree ((unsigned char *)stripped);
+	      
 	      return optr;
+	  }
 
 	  case TAG_MAPPING_HTTP_URL:
 	       while(isspace(*param)) param++;
@@ -224,7 +242,9 @@ char *write_tags(char *iptr, char *optr)
 	       else
 	       {
 	         /* ... else there is a colon, assume we have a valid URL with a protocol */
-	         str = param;
+	         str = (char *)param; /* Icky cast ! Sorry -
+	                                 str isn't written to anywhere
+	                                 from here on anyhow */
 	       }
 	       optr = tag(optr, tag_cache.tag[l].nci_tag, str, strlen(str));
 	       if (no_proto)
@@ -237,16 +257,33 @@ char *write_tags(char *iptr, char *optr)
 	  case TAG_MAPPING_STRING:
 	       while(isspace(*param)) param++;
 	       if((i = nquotes(param))>0) {
+	           char *collapsed;
+	           char *expanded;
 		   if(i & 1) {
 		       DBUG_PRINTF(DBUG_LVL_DIAG, "\nwrite_tags: Unbalanced quotes at line %d -->\"%s\"\n", input_line, param);
 		       return(NULL);
 		   }
 		   DBUG_PRINTF(DBUG_LVL_DIAG, "found %d quotes in string\n", i);
-		   collapse_quotes(param);
-		   expand_ctrls(param);
+		   collapsed=collapse_quotes(param);
+		   if (collapsed==NULL) {
+		       DBUG_PRINTF(DBUG_LVL_DIAG, "collapse_quotes failed, returning failure\n");
+		       return(NULL);
+		   }
+		   expanded=expand_ctrls(collapsed);
+		   free(collapsed);
+		   if (expanded==NULL) {
+		       DBUG_PRINTF(DBUG_LVL_DIAG, "expand_ctrls failed, returning failure\n");
+		       return(NULL);
+		   }
+		   DBUG_PRINTF(DBUG_LVL_DIAG, "String after expansion: %s\n", param);
+		   optr = tag(optr, tag_cache.tag[l].nci_tag, expanded, strlen(expanded));
+		   free(expanded);
 	       }
-	       DBUG_PRINTF(DBUG_LVL_DIAG, "String: %s\n", param);
-	       optr = tag(optr, tag_cache.tag[l].nci_tag, param, strlen(param));
+	       else
+	       {
+		       DBUG_PRINTF(DBUG_LVL_DIAG, "String: %s\n", param);
+		       optr = tag(optr, tag_cache.tag[l].nci_tag, param, strlen(param));
+	       }
 	       return(optr);
 
 	  case TAG_MAPPING_INT:
@@ -349,7 +386,7 @@ static int finish_compile(char *start, char *end)
     return bytes;
 }
 
-int validate_host(char *host, unsigned int *ret)
+int validate_host(char const *host, unsigned int *ret)
 {
     unsigned long l;
 
@@ -364,7 +401,7 @@ int validate_host(char *host, unsigned int *ret)
     return(1);
 }
 
-int validate_proxy(char *proxy, unsigned int *ret)
+int validate_proxy(char const *proxy, unsigned int *ret)
 {
     char *q;
 
@@ -379,7 +416,7 @@ int validate_proxy(char *proxy, unsigned int *ret)
 }
 
 
-int nquotes(char *s)
+int nquotes(char const *s)
 {
     int n;
 
@@ -506,16 +543,23 @@ int putline(char *s) /* s is of the form "[tagname] [tag value]" */
 }
 
 
-void collapse_quotes(char *s)
+/******************************************************************
+ Function:     collapse_quotes
+ Description:  
+ Parameters:   
+ Returns:      
+ ******************************************************************/
+static char *collapse_quotes(char const *s)
 {
-    char *q, *pq, *ps;
+    char *q, *pq;
+    char const *ps;
     int quote = 0;
 
     DBUG_PRINTF(DBUG_LVL_DIAG, "collapse_quotes()\n");
 
     if((q = (char *)rmalloc(strlen(s), "CQ buffer"))==NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "collapse_quotes: not enough memory\n");
-        return;
+        return NULL;
     }
     memset(q, 0, strlen(s));
     memcpy(q, s, strlen(s));
@@ -523,16 +567,16 @@ void collapse_quotes(char *s)
     pq = q;
     ps = s;
 
-    while(*ps != 0x0) {
+    while (*ps) {
 	/* first check for quote status */
-	if((*ps == 0x5c) && (*(ps+1) == 0x22)) { /* escaped quote */
+	if((*ps == '\\') && (*(ps+1) == '"')) { /* escaped quote */
 	    memcpy(pq, ps, 2);
 	    pq+=2;
 	    ps+=2;
 	    continue;
 	}
 
-	else if(*ps == 0x22) { /* bare quote */
+	else if(*ps == '"') { /* bare quote */
 	    quote++;
 	    ps++;
 	    continue;
@@ -549,28 +593,23 @@ void collapse_quotes(char *s)
     }
     *pq = 0;
     //DBUG_PRINTF(DBUG_LVL_DIAG,  "collapse_quotes: from %s to %s\n", s, q);
-    strcpy(s, q);
-    rmfree((unsigned char *)q);
-    return;
+    return q;
 }
 
-void expand_ctrls(char *s)
+static char *expand_ctrls(char const *s)
 {
     char *q;
 
     DBUG_PRINTF(DBUG_LVL_DIAG, "expand_ctrls()\n");
 
-    if((q = (char *)rmalloc(strlen(s), "CQ buffer"))==NULL) {
+    if((q = (char *)rmalloc(strlen(s)+1, "EC buffer"))==NULL) {
         DBUG_PRINTF(DBUG_LVL_ERROR, "expand_ctrls: not enough memory\n");
-        return;
+        return NULL;
     }
-    memset(q, 0, strlen(s));
-    memcpy(q, s, strlen(s));
 
-    strccpy(s, q);
+    strccpy(q, s);
     //DBUG_PRINTF(DBUG_LVL_DIAG, "expand_ctrls: from %s to %s\n", s, q);
-    rmfree((unsigned char *)q);
-    return;
+    return q;
 }
 
 /* emulation of POSIX strccpy() libgen.a */
@@ -578,7 +617,7 @@ void expand_ctrls(char *s)
 		       	    src++; \
 		       	    break;
 
-char *strccpy(char *dst, char *src)
+char *strccpy(char *dst, char const *src)
 {
     int n,m;
     char *q = dst;
@@ -595,7 +634,7 @@ char *strccpy(char *dst, char *src)
 
     src++; /* skip first char - our focus is char _after_ a '\' */
 
-    while(*src != 0x0) {
+    while(*src) {
         if(*(src-1) == '\\') {
             switch(*src) {
 	        MKCTRL('a', '\a'); /* audible bell */
