@@ -15,6 +15,7 @@
 # 				instead of leaving the object files in the root.  Also
 #				creates directories at build time.
 # 1999-02-12	NCE		Added Printer BASIC prog
+# 1998-02-16    SBF             Added LDFLAGS to allow addition of link tool flags
 
 
 #
@@ -38,11 +39,10 @@ STRIP   = -stripdepnd
 CRUNCH  = bascrunch
 CD	= dir
 
-# BASIC Flags:
-#BasCrunchflags = 31
 #AFLAGS  = -depend !Depend -Stamp -quit -To $@ -From
 AFLAGS  = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS}
+LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 DFLAGS  = ${DEBUG}
@@ -94,8 +94,8 @@ Daytona   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${O
             ${OM}.CheckIC ${OM}.serflash ${OM}.ledtest
 
 STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
-            ${OM}.Graphics ${OM}.TestCard ${OM}.CMOS ${OM}.Printer 
-            
+            ${OM}.Graphics ${OM}.CMOS ${OM}.SerialTest ${OM}.TestCard ${OM}.Printer
+
 OBJS      = ${STB3}
 
 
@@ -151,11 +151,10 @@ dirs:
 # Target
 #
 ${TARGET}: ${OBJS} dirs
-        ${LD} -o $@ ${OBJS} ${CLIB}
+        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${CLIB}
         ${CRUNCH} ${BFLAGS} @.b.TestCard @.${CRUNCHED}.TestCard
         ${CRUNCH} ${BFLAGS} @.b.Printer @.${CRUNCHED}.Printer
         ${CRUNCH} ${BFLAGS} @.b.Gen_lib @.${CRUNCHED}.Gen_Lib
-        
-           
-        
+
+
 # Dynamic dependencies:
