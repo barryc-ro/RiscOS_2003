@@ -8,6 +8,7 @@
 # 28-Apr-98  SNB    Created
 # 05-May-98  SNB    Added dual build capability
 # 23-Jul-98  SNB    !Connect provlist file generated automatically
+# 05-Aug-98  SNB    Added provlist protection
 #
 .SUFFIXES: .o .o_su .c
 
@@ -37,6 +38,7 @@ RM	= remove
 SQZ     = squeeze
 WIPE	= -wipe
 SED	= sed
+AWK     = awk
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
@@ -44,10 +46,14 @@ WFLAGS  = ~c~vr
 SQZFLAGS =
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -faf -Wp -throwback ${DFLAGS}
 DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 ${TRFLAGS} -UTIMEBOMBED
-TRFLAGS  = -UTML -UTRACE -DDEBUG_ON
+TRFLAGS  = -UTML -UTRACE -UDEBUG_ON
 INCLUDES = -IC:,TCPIPLibs:
 
 SEDFLAGS = -e "s/MailServ/Connect/g" -e "s/InterTalk Server/Connect/g"
+
+# This is the exit code which awk will use if it detects "Acorn" in
+# the provlist file.  It is used to fault builds to avoid "mistakes"...
+AWKFLAGS = -v ERRORCODE=1 -f Resources.awkscript
 
 #
 # Libraries
@@ -129,6 +135,7 @@ commonmessages: commonbase
 	  ${EXPDIR}.!${SU_COMPONENT}.Messages
 	${SED} ${SEDFLAGS} CommonBase.!${MU_COMPONENT}.provlist > \
 	  ${EXPDIR}.!${SU_COMPONENT}.provlist
+	${AWK} ${AWKFLAGS} < Export.!${MU_COMPONENT}.provlist
 
 export: commonmessages all
 	${SQZ} ${SU_TARGET} ${EXPDIR}.!${SU_COMPONENT}.!RunImage ${SQZFLAGS}
