@@ -17,6 +17,7 @@ CP      = copy
 LD      = link
 REMOVE  = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -fah ${INCLUDES} ${DFLAGS}
@@ -98,6 +99,7 @@ clean:
         ${WIPE} map.* ${WFLAGS}
         ${REMOVE} ${TARGET}
         ${REMOVE} h.KeyWatchHd
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -131,11 +133,3 @@ ${RMD}: ${OBJSD} ${LIBSD} ${CLIB}
 KeyWatch.c: KeyWatchHd.h
 
 # Dynamic dependencies:
-o.KeyWatch:	c.KeyWatch
-o.KeyWatch:	C:h.kernel
-o.KeyWatch:	C:h.swis
-o.KeyWatch:	C:tboxlibs.h.wimp
-o.KeyWatch:	VersionNum
-o.KeyWatch:	h.KeyWatchHd
-o.KeyWatch:	h.KeyWatch
-o.KeyWatch:	C:debug.h.remote
