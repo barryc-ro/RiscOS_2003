@@ -58,7 +58,7 @@ ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DLOCAL_URL_PATHS -UDIAL_ON_CO
 
 ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
 
-NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
+NODB  =         -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
 
 #
 # select one of these
@@ -240,7 +240,7 @@ ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INET
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${DIRS} header.h
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${ASMUTILS}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${ASMUTILS} ${LIBSD}
 
 
 #
@@ -248,7 +248,7 @@ ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${DIRS} head
 #
 rom_link:
         ${MKDIR} linked
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} ${LIBSD} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
