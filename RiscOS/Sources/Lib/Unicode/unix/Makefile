@@ -109,6 +109,7 @@ riscos_export: riscos_libs
 	@cp -p unictype.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p encoding.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p iso10646.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
+	@cp -p iso3166.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p languages.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p utf8.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p utf16.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/

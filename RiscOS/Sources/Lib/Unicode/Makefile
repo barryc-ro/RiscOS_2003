@@ -129,7 +129,7 @@ OBJSD = \
 	od.combine \
 	od.riscos
 
-HDRS = autojp.h charsets.h encoding.h iso10646.h languages.h unictype.h utf8.h combine.h
+HDRS = autojp.h charsets.h encoding.h iso10646.h iso3166.h languages.h unictype.h utf8.h combine.h
 
 LIBS = ${TARGET} ${TARGETD} ${TARGETZ} 
 
@@ -178,6 +178,7 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.combine  ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.encoding ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.iso10646 ${UNICODELIBDIR}.h.* ${CPFLAGS}
+	${CP} h.iso3166  ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.languages ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.unictype ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.utf8     ${UNICODELIBDIR}.h.* ${CPFLAGS}
