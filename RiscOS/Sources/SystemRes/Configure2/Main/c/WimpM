@@ -1,0 +1,216 @@
+/******	WimpM.c ***********************************************************\
+
+Project:	Ursula (RISC OS for Risc PC II)
+Component:	Configure central application
+This file:	Wimp message code
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+10/12/1997	BJGA	Split from Main
+			Added these headers
+15/12/1997	BJGA	Now claims Message_FSLockStateChangeRequest, so the
+			  FSLock plug-in can assume that a bounced message
+			  means it has been run independently of Configure
+15/12/1997	BJGA	Responds to Message_PreQuit with flags bit 1 set
+
+\**************************************************************************/
+
+/* CLib */
+#include <string.h>
+/* Toolbox */
+#include "event.h"
+#include "toolbox.h"
+/* Common */
+#include "misc.h"
+#include "message.h"
+#include "str.h"
+/* local headers */
+#include "Main.h"
+#include "Plugin.h"
+#include "Selector.h"
+#include "State.h"
+#include "WimpM.h"  /* includes prototypes for this file */
+
+static int wimpm_quit (WimpMessage *message, void *handle);
+static int wimpm_prequit (WimpMessage *message, void *handle);
+static int wimpm_pluginquitcontinue (WimpMessage *message, void *handle);
+static int wimpm_fslockstatechangerequest (WimpMessage *message, void *handle);
+static int wimpm_helprequest (WimpMessage *message, void *handle);
+static int wimpm_taskinitialise (WimpMessage *message, void *handle);
+static int wimpm_taskclosedown (WimpMessage *message, void *handle);
+static int wimpm_fontchanged (WimpMessage *message, void *handle);
+
+int wimpm_messages [9] =      { Wimp_MPreQuit,
+  				Wimp_MPlugInQuit,
+  				Wimp_MPlugInQuitContinue,
+  				Wimp_MFSLockStateChangeRequest,
+  				Wimp_MHelpRequest,
+  				Wimp_MTaskInitialise,
+  				Wimp_MTaskCloseDown,
+  				Wimp_MFontChanged,
+  				0 };
+
+void wimpm_register (void)
+{
+  throw (event_register_message_handler (Wimp_MQuit, wimpm_quit, NULL));
+  throw (event_register_message_handler (Wimp_MPreQuit, wimpm_prequit, NULL));
+  throw (event_register_message_handler (Wimp_MPlugInQuitContinue, wimpm_pluginquitcontinue, NULL));
+  throw (event_register_message_handler (Wimp_MFSLockStateChangeRequest, wimpm_fslockstatechangerequest, NULL));
+  throw (event_register_message_handler (Wimp_MHelpRequest, wimpm_helprequest, NULL));
+  throw (event_register_message_handler (Wimp_MTaskInitialise, wimpm_taskinitialise, NULL));
+  throw (event_register_message_handler (Wimp_MTaskCloseDown, wimpm_taskclosedown, NULL));
+  throw (event_register_message_handler (Wimp_MFontChanged, wimpm_fontchanged, NULL));
+}
+
+/******	wimpm_quit() ******************************************************\
+
+Purpose:	Handles Message_Quit
+
+\**************************************************************************/
+
+static int wimpm_quit (WimpMessage *message, void *handle)
+{
+  quit = TRUE;
+  return 1;
+}
+
+/******	wimpm_prequit() ***************************************************\
+
+Purpose:	Handles Message_PreQuit
+
+\**************************************************************************/
+
+static int wimpm_prequit (WimpMessage *message, void *handle)
+{
+  if ((message -> hdr.size > 20) && (message -> data.words[0] & 1)) {
+    /* We're being quit as a single task from the Task Manager */
+    /* (We mustn't intercept general desktop closedown here) */
+
+    message -> hdr.your_ref = message -> hdr.my_ref;
+    throw (wimp_send_message (19, message, message -> hdr.sender, 0, NULL));
+      /* claim message, we'll be quitting ourselves if we want to without
+       * prompting by a later Message_Quit  */
+
+    state_quit (FALSE);
+  }
+  return 1;
+}
+
+/******	wimpm_pluginquitcontinue() ****************************************\
+
+Purpose:	Handles Message_PlugInQuitContinue
+
+\**************************************************************************/
+
+static int wimpm_pluginquitcontinue (WimpMessage *message, void *handle)
+{
+  state_resumequit ();
+  return 1;
+}
+
+/******	wimpm_fslockstatechangerequest() **********************************\
+
+Purpose:	Handles Message_FSLockStateChangeRequest
+
+\**************************************************************************/
+
+static int wimpm_fslockstatechangerequest (WimpMessage *message, void *handle)
+{
+  if (state_locked != 2) {
+    if (message -> data.words[0] == 2) state_quit (TRUE);
+    else state_lock (message -> data.words[0]);
+  }
+  /* Now claim the message - otherwise LockSetup will assume it's
+   * running independently and change the lock status anyway  */
+  message -> hdr.your_ref = message -> hdr.my_ref;
+  throw (wimp_send_message (19, message, message -> hdr.sender, 0, NULL));
+  return 1;
+}
+
+/******	wimpm_helprequest() ***********************************************\
+
+Purpose:	Handles Message_HelpRequest
+
+\**************************************************************************/
+
+static int wimpm_helprequest (WimpMessage *message, void *handle)
+{
+  selector_item item;
+  WimpGetWindowStateBlock state;
+  WimpMessage reply;
+  if (message -> data.help_request.window_handle != selector_get_wimp_handle (plugin_selector)) return 0;
+  state.window_handle = message -> data.help_request.window_handle;
+  throw (wimp_get_window_state (&state));
+  item = selector_get (plugin_selector, message -> data.help_request.mouse_x - state.visible_area.xmin + state.xscroll,
+                                 message -> data.help_request.mouse_y - state.visible_area.ymax + state.yscroll, NULL, NULL);
+  if (item == -1 || (plugin_list + item) -> help == -1) {
+    message_lookup_buffer(reply.data.bytes,messages,state_locked?(state_locked==1?"MainHelpLocked":"MainHelpLocked2"):"MainHelp");
+  }
+  else {
+    str_ncpy ((char *) reply.data.bytes, plugin_text + (plugin_list + item) -> help, sizeof (reply.data.bytes));
+  }
+  reply.hdr.size = sizeof (reply.hdr) + ((str_len (reply.data.bytes) + 1 + 3) & ~3);
+  reply.hdr.your_ref = message -> hdr.my_ref;
+  reply.hdr.action_code = Wimp_MHelpReply;
+  throw (wimp_send_message (17, &reply, message -> hdr.sender, 0, NULL));
+  return 1;
+}
+
+/******	wimpm_taskinitialise() ********************************************\
+
+Purpose:	Handles Message_TaskInitialise
+
+\**************************************************************************/
+
+static int wimpm_taskinitialise (WimpMessage *message, void *handle)
+{
+  /* Old !Configure doesn't recognise us: its name is null-terminated, we have to be LF-terminated */
+  /* so we have to object from this end as well in order to prevent multiple instantiation */
+  char taskname [2] [32];  /* for holding task names */
+  char sprite [13];
+  WimpMessage block;
+  str_ncpy (taskname [0], ((char *) message) + 28, sizeof (taskname [0]));
+  if (*(((char *) message) + 28 + strlen (taskname [0])) == 0) {  /* it's the old !Configure */
+    message_lookup_buffer(taskname[1],messages,"_TaskName");
+    message_lookup_buffer(sprite,messages,"_ConfigSprite");
+    if (strcmp (taskname [0], taskname [1]) == 0 && *(((int *) message) + 1) != thandle) {
+      _kernel_oserror err_multi = { 0, "Err_Multi" };
+      wimp_report_error (
+        (_kernel_oserror *) _swix (MessageTrans_ErrorLookup, _INR(0,7)|_RETURN(0), (int) &err_multi, (int) &messages, 0, 0, 0, 0, 0, 0),
+        Wimp_ReportError_Cancel | 1u << 8 | 2u << 9,
+        taskname [1], sprite, (void *) 1, 0);
+      block.hdr.size = 20;
+      block.hdr.your_ref = 0;
+      block.hdr.action_code = Wimp_MQuit;
+      throw (wimp_send_message (17, &block, message -> hdr.sender, 0, NULL));
+    }
+  }
+  return 1;
+}
+
+/******	wimpm_taskclosedown() *********************************************\
+
+Purpose:	Handles Message_TaskCloseDown
+
+\**************************************************************************/
+
+static int wimpm_taskclosedown (WimpMessage *message, void *handle)
+{
+  int plugin;
+  for (plugin = 0; plugin < plugin_no; plugin++)
+    if ((plugin_list + plugin) -> task_handle == message -> hdr.sender) (plugin_list + plugin) -> alive = FALSE;
+  return 1;
+}
+
+/******	wimpm_fontchanged() ***********************************************\
+
+Purpose:	Handles Message_FontChanged
+
+\**************************************************************************/
+
+static int wimpm_fontchanged (WimpMessage *message, void *handle)
+{
+  selector_recalculate (plugin_selector);
+  return 1;
+}

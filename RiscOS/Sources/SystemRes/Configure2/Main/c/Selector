@@ -1,0 +1,393 @@
+/******	Selector.c ********************************************************\
+
+Project:	Ursula (RISC OS for Risc PC II)
+Component:	Configure central application
+This file:	General handling of Filer-like "selector" window
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+10/12/1997	BJGA	Split from Main
+			Added these headers
+17/12/1997	BJGA	Initialised variables in selector_get
+
+\**************************************************************************/
+
+/* CLib */
+#include <stdlib.h>
+#include <string.h>
+#include "swis.h"
+/* Toolbox */
+#include "wimplib.h"
+#include "toolbox.h"
+#include "window.h"
+/* Common */
+#include "misc.h"
+#include "message.h"
+#include "str.h"
+/* Local headers */
+#include "Main.h"
+#include "Selector.h"  /* includes prototypes for this file */
+
+typedef struct { selector_item next;
+		 int text;
+		 int sprite;
+		 BOOL shaded; } sel_intern;
+
+_kernel_oserror err_alloc = { 0, "Err_Alloc" };
+
+/* We're only supporting a single selector window for !Configure, so we can get
+ * away with using static externs rather than allocating workspace properly, as
+ * would be necessary if this were to be converted to general-purpose code.
+ */
+
+static char window [13];
+static ObjectId window_id;
+static void *window_template;
+static int icon_w = 0, icon_h = 0; /* currently-selected icon size */
+static int gap_w = 0, gap_h = 0; /* currently-selected gap size */
+static int icon_w_min = 0, icon_h_min = 0; /* minimum size to which icons can shrink */
+#define text_h ((int) 40) /* fixed height reserved for text */
+static selector_size (*width) (int iconw, int gapw, int windw, int nicons) = NULL;
+static selector_size (*height) (int iconh, int gaph, int windh, int nrows) = NULL;
+static BOOL window_created = FALSE;
+static unsigned int flags_x = -1, flags_y = -1;
+static int visible_w = -1, visible_h = -1;
+static int min_w = -1, min_h = -1, max_w = -1, max_h = -1;
+static int nicons_x = -1, nicons_y = -1;
+static sel_intern *iconlist = NULL;
+static int nicons = 0, start = -1;
+static char *textbuf = NULL;
+static int textbufsize = 0;
+
+static void selector_resizeicons (selector_id window);
+
+
+/******	selector_create() *************************************************\
+
+Purpose:	Initialises selector data
+In:		Selector name, gap and minimal icon sizes,
+		  callback routines for generating window size/min/max
+Out:		Selector ID
+
+\**************************************************************************/
+
+selector_id selector_create (const char *name, int ix_min, int iy_min, int gx, int gy,
+	selector_size (*width_query) (int iconw, int gapw, int windw, int nicons),
+	selector_size (*height_query) (int iconh, int gaph, int windh, int nrows))
+{
+  str_ncpy (window, name, 13);
+  icon_w = icon_w_min = ix_min;
+  icon_h = icon_h_min = iy_min;
+  gap_w = gx;
+  gap_h = gy;
+  width = width_query;
+  height = height_query;
+  return window;
+}
+
+/******	selector_add_icon() ***********************************************\
+
+Purpose:	Adds a new icon to the selector
+In:		Selector ID, icon text and sprite name pointers.
+		  Internal copies are taken of the strings.
+		  Sprite must be from Wimp sprite pool.
+Out:		Selector item ID
+
+\**************************************************************************/
+
+selector_item selector_add_icon (selector_id window, const char *text, const char *sprite)
+{
+  sel_intern *newicon = NULL;
+  
+  if ((iconlist = realloc (iconlist, (nicons + 1) * sizeof (sel_intern))) == NULL) message_error(messages,err_alloc);
+  newicon = iconlist + nicons;
+  
+  newicon -> shaded = FALSE;
+
+  if (start == -1) {          /* Calculate the "next" fields, sorted alphabetically */
+    newicon -> next = -1;
+    start = 0;
+  }
+  else if (_swi (Territory_Collate, _INR(0,3)|_RETURN(0),
+               -1, text, textbuf + (iconlist + start) -> text, 3) < 0) {
+    newicon -> next = start;
+    start = newicon - iconlist;
+  }
+  else {
+    int i;
+    for (i = start; i != -1; i = (iconlist + i) -> next) {
+      if ((iconlist + i) -> next == -1 ||
+          (_swi (Territory_Collate, _INR(0,3)|_RETURN(0),
+              -1, text, textbuf + (iconlist + (iconlist + i) -> next) -> text, 3) < 0)) {
+        newicon -> next = (iconlist + i) -> next;
+        (iconlist + i) -> next = newicon - iconlist;
+        break;
+      }
+    }
+  }
+                              /* And copy and point at the text and sprite name */
+  if ((textbuf = realloc (textbuf, textbufsize += str_len (text) + str_len (sprite) + 2)) == NULL) message_error(messages,err_alloc);
+  newicon -> text = textbufsize - str_len (text) - str_len (sprite) - 2;
+  newicon -> sprite = textbufsize - str_len (sprite) - 1;
+  str_cpy (textbuf + (newicon -> text), text);
+  str_cpy (textbuf + (newicon -> sprite), sprite);
+  
+  if (window_created) selector_recalculate (window); /* Not currently used by Configure, so untested */
+  return nicons++;
+}
+
+/******	selector_set_fade() ***********************************************\
+
+Purpose:	Fades or unfades an icon in a selector
+In:		Selector ID, selector item ID, whether faded or unfaded
+
+\**************************************************************************/
+
+void selector_set_fade (selector_id window, selector_item item, BOOL faded)
+{
+  (iconlist + item) -> shaded = faded;
+}
+
+/******	selector_open() ***************************************************\
+
+Purpose:	Opens or re-opens the selector window
+		  Uses callback functions to set min/max/current size
+		  as necessary. If first time opening, centres it on screen.
+In:		Selector ID, Wimp_OpenWindow block
+
+\**************************************************************************/
+
+void selector_open (selector_id window, WimpOpenWindowBlock *block)
+{
+  WindowShowObjectBlock pos;
+  WimpGetWindowStateBlock state;
+  BOOL window_was_created = window_created;
+  selector_size temp;
+  BBox bbox;
+  int old_nicons_x = nicons_x, old_max_w = max_w, old_max_h = max_h;
+  
+  if (window_created) {
+    visible_w = block->visible_area.xmax - block->visible_area.xmin;
+    visible_h = block->visible_area.ymax - block->visible_area.ymin;
+  }
+  else {
+    selector_resizeicons (window);
+  }
+    /* Get specs from callback functions */
+  temp = width (icon_w, gap_w, visible_w, nicons);
+  flags_x = temp.flags; visible_w = temp.visible;
+  min_w = temp.min; max_w = temp.max;
+  
+  nicons_x = (visible_w - gap_w) / (icon_w + gap_w);
+  nicons_y = nicons == 0 ? 1 : ((nicons - 1) / nicons_x) + 1;
+  
+  temp = height (icon_h, gap_h, visible_h, nicons_y);
+  flags_y = temp.flags; visible_h = temp.visible;
+  min_h = temp.min; max_h = temp.max;
+  
+    /* Set min values */
+  if (!window_created) {   /* Note, min values can currently only be set at creation */
+    short *ptr;
+    throw (toolbox_template_lookup (0, window, &window_template));
+    ptr = (short *) (*((char **) window_template + 7) + 4*19 + 68); /* yuk yuk yuk */
+    *ptr = (short) min_w;
+    *(ptr + 1) = (short) min_h;
+    throw (toolbox_create_object (1, window_template, &window_id));
+    window_created = TRUE;
+  }
+    /* Now set max values. Note we don't have to cope with ensuring visible area is
+     * wholly within work area for !Configure, because we haven't implemented remove_icon
+     * and so the work area can only grow
+     */
+  if ((max_w != old_max_w) || (max_h != old_max_h)) {
+    bbox.xmin = 0; bbox.xmax = max_w;
+    bbox.ymin = -max_h; bbox.ymax = 0;
+    throw (window_set_extent (0, window_id, &bbox));
+  }
+    /* Now set visible area and scrollbars (if necessary) */
+  if (window_was_created) {
+    pos.visible_area.xmin = block->visible_area.xmin;
+    pos.visible_area.ymax = block->visible_area.ymax;
+    pos.xscroll = block->xscroll;
+    pos.yscroll = block->yscroll;
+    pos.behind = block->behind;
+  }
+  else {  /* centre the window */
+    int dx = 1u << _swi (OS_ReadModeVariable, _INR(0,1)|_RETURN(2), -1, 4);
+    int dy = 1u << _swi (OS_ReadModeVariable, _INR(0,1)|_RETURN(2), -1, 5);
+    int xs = dx * (1 + _swi (OS_ReadModeVariable, _INR(0,1)|_RETURN(2), -1, 11));
+    int ys = dy * (1 + _swi (OS_ReadModeVariable, _INR(0,1)|_RETURN(2), -1, 12));
+    pos.visible_area.xmin = (xs - visible_w) / 2;
+    pos.visible_area.ymax = (ys + visible_h) / 2;
+    pos.xscroll = -0xFFFFFF; /* force scroll to left  */
+    pos.yscroll = +0xFFFFFF; /* force scroll to top   */
+    pos.behind = -1;         /* force to top of stack */
+  }
+  pos.visible_area.xmax = pos.visible_area.xmin + visible_w;  /* preserve top-left visible corner */
+  pos.visible_area.ymin = pos.visible_area.ymax - visible_h;
+  
+  state.window_handle = selector_get_wimp_handle (window);
+  throw (wimp_get_window_state (&state));
+  pos.window_flags = state.flags & 0x00FFFFFF;
+  pos.window_flags |= 0x87000000; /* always have at least title, back and close */
+  if (flags_x & 1) pos.window_flags |= 0x68000000; /* add hscroll, toggle and adjust */
+  if (flags_y & 1) pos.window_flags |= 0x38000000; /* add vscroll, toggle and adjust */
+  
+  pos.parent_window_handle = -1;
+  pos.alignment_flags = 1;
+  
+  throw (toolbox_show_object (Toolbox_ShowObject_AsSubWindow, window_id, 1, &pos, NULL_ObjectId, NULL_ComponentId));
+  
+  if ((old_nicons_x != -1) && (nicons_x != old_nicons_x))
+    throw (wimp_force_redraw (selector_get_wimp_handle (window), 0, -0xFFFFFF, 0xFFFFFF, 0));
+}
+
+/******	selector_redraw() *************************************************\
+
+Purpose:	Plots icons in correct positions
+		  Note, the icons are never actually created, just plotted
+		  during the redraw loop (ie here)
+In:		Selector ID
+
+\**************************************************************************/
+
+void selector_redraw (selector_id window)
+{
+  WimpRedrawWindowBlock block;
+  WimpPlotIconBlock icon;
+  int more;
+  
+  block.window_handle = selector_get_wimp_handle (window);
+  throw (wimp_redraw_window (&block, &more));
+  while (more != 0) {
+    int i, x = 0, y = 0;
+    char valid [14] = "S";
+    for (i = start; i != -1; i = (iconlist + i) -> next) {
+      str_ncpy (valid + 1, textbuf + (iconlist + i) -> sprite, 14);
+      icon.bbox.xmin = gap_w + x * (icon_w + gap_w);
+      icon.bbox.xmax = (x + 1) * (icon_w + gap_w);
+      icon.bbox.ymax = -(gap_h + y * (icon_h + gap_h));
+      icon.bbox.ymin = -((y + 1) * (icon_h + gap_h));
+      icon.flags = (iconlist + i) -> shaded ? 0x1740010B : 0x1700010B;
+      icon.data.ist.buffer = textbuf + (iconlist + i) -> text;
+      icon.data.ist.validation = valid;
+      icon.data.ist.buffer_size = str_len (textbuf + (iconlist + i) -> text) + 1;
+      throw (wimp_plot_icon (&icon));
+      x++; if (x == nicons_x) { x = 0; y++; }
+    }
+    throw (wimp_get_rectangle (&block, &more));
+  }
+}
+
+/******	selector_recalculate() ********************************************\
+
+Purpose:	Re-opens the selector window at its current position
+		  (may involve some shuffling of icons, hence the name)
+In:		Selector ID
+
+\**************************************************************************/
+
+void selector_recalculate (selector_id window)
+{
+  WimpGetWindowStateBlock state;
+  selector_resizeicons (window);
+  state.window_handle = selector_get_wimp_handle (window);
+  throw (wimp_get_window_state (&state));
+  selector_open (window, (WimpOpenWindowBlock *) &state);
+}
+
+/******	selector_resizeicons() ********************************************\
+
+Purpose:	Ensures that the icons are big enough for the sprites
+		and text (eg if new Wimp font has been activated)
+Note:		Static function
+In:		Selector ID
+
+\**************************************************************************/
+
+static void selector_resizeicons (selector_id window)
+{
+  int i;
+  icon_w = icon_w_min;
+  icon_h = icon_h_min;
+  for (i = start; i != -1; i = (iconlist + i) -> next) {
+    int sw, sh, smode;
+    if (_swix (Wimp_SpriteOp, _IN(0)|_IN(2)|_OUTR(3,4)|_OUT(6), 40, (int) textbuf + (iconlist + i) -> sprite, &sw, &sh, &smode) == 0) {
+      sw *= 1u << _swi (OS_ReadModeVariable, _INR(0,1)|_RETURN(2), smode, 4); /* convert to OS units */
+      sh *= 1u << _swi (OS_ReadModeVariable, _INR(0,1)|_RETURN(2), smode, 5);
+      icon_w = max(icon_w, sw);
+      icon_h = max(icon_h, sh + text_h);
+    }
+    icon_w = max(icon_w, _swi (Wimp_TextOp, _INR(0,2)|_RETURN(0), 1, (int) textbuf + (iconlist + i) -> text, 0));
+  }
+}
+
+/******	selector_get() ****************************************************\
+
+Purpose:	Gets the icon at a particular position (eg mouse click)
+In:		Selector ID, query position, references to returned variables
+Out:		Selector item ID, position of top-left corner of that item
+
+\**************************************************************************/
+
+selector_item selector_get (selector_id window, int get_x, int get_y, int *ic_x0, int *ic_y1)
+{
+  int x = 0, y = 0, x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+  selector_item i, result = -1;
+  for (i = start; i != -1; i = (iconlist + i) -> next) {
+    x0 = gap_w + x * (icon_w + gap_w);
+    x1 = (x + 1) * (icon_w + gap_w);
+    y1 = -(gap_h + y * (icon_h + gap_h));
+    y0 = -((y + 1) * (icon_h + gap_h));
+    if ((x0 <= get_x) && (get_x < x1) && (y0 <= get_y) && (get_y < y1) && !((iconlist + i) -> shaded)) {
+      result = i;
+      break;
+    }
+    x++; if (x == nicons_x) { x = 0; y++; }
+  }
+  if (ic_x0) *ic_x0 = x0;
+  if (ic_y1) *ic_y1 = y1;
+  return result;  /* -1 means position is over no (unshaded) icon */
+}
+
+/******	selector_get_wimp_handle() ****************************************\
+
+Purpose:	Returns Wimp window handle corresponding to a selector ID
+In:		Selector ID
+Out:		Window handle
+
+\**************************************************************************/
+
+int selector_get_wimp_handle (selector_id window)
+{
+  int handle;
+  throw (window_get_wimp_handle (0, window_id, &handle));  /* If made more general, window_id */
+  return handle;                                           /* will be determined from window */
+}
+
+/******	selector_get_text() ***********************************************\
+
+Purpose:	Returns pointer to the text of a particular item
+In:		Selector ID
+Out:		Window handle
+
+\**************************************************************************/
+
+char *selector_get_text (selector_id window, selector_item item)
+{
+  return textbuf + (iconlist + item) -> text;
+}
+
+/******	selector_finalise() ***********************************************\
+
+Purpose:	Tidy-up on exit
+In:		Selector ID
+
+\**************************************************************************/
+
+void selector_finalise (selector_id window)
+{
+  free (iconlist);
+  free (textbuf);
+}
