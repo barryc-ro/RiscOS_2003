@@ -52,8 +52,10 @@ clean:
 
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} LocalRes:Messages   ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
-        ${CP} LocalRes:Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
+        Set SwitcherRes$Path LocalUserIFRes:,LocalRes:
+        ${CP} SwitcherRes:Messages   ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${CP} SwitcherRes:Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
+        Unset SwitcherRes$Path
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
