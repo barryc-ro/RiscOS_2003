@@ -69,8 +69,15 @@ all: ${TARGET}
 
 clean:
 	${WIPE} ${WFLAGS} *.o
-	${RM} ${TARGET}
+	${RM} -f ${TARGET}
 	@echo ${COMPONENT}: cleaned
+
+links:
+	./mklinks
+
+realclean: clean
+	find . -type l -exec rm -f {} \;
+	@echo ${COMPONENT}: symlinks removed
 
 #
 # Target 

@@ -108,6 +108,8 @@ typedef struct datahdr {
     word  swihandler;
     word  switable;
     word  swicode;
+    word  intlmsgs;
+    word  flagsoffset;
     char  titlestring [1];
 } datahdr;
 
@@ -118,9 +120,14 @@ static const struct datahdr fred;
 /* TITHELPWORDS is a reasonable number of words to allocate for the title
  * and help strings of the module
  */
-
 #define TITHELPWORDS 128
 #define TITHELPBYTES (TITHELPWORDS * 4)
+/* NOFLAGSSAVE is the number of bytes we save if there are no flags words.
+ * We can remove everything from swichunk onwards if this offset is going
+ * to be zero.
+ */
+#define NOFLAGSSAVEWORDS ((word *)(fred.titlestring)-&fred.swichunk)
+#define NOFLAGSSAVEBYTES (4*(NOFLAGSSAVEWORDS))
 
 /*
  * The Info structure is really a 3-word thing, but we are keen to save
@@ -163,7 +170,6 @@ struct Info {
 
 #define inccount(p,n,c)   { ++(c); assert((c) != 0); (p)->count = (c); (p)->next = (n); }
 
-/* XXX: SNB portability OK below here */
 
 typedef Info *HashTab[HASHSIZE];
 
@@ -670,7 +676,7 @@ static int modsqz_is_a_riscos_module(datahdr *header, int size)
 
 static int squeeze(char *in, char *out)
 {
-  int rc, size, t, squeezed, titlen, helplen;
+  int rc, size, t, squeezed, titlen, helplen, flagswords, savedbytes;
   datahdr *d1, *d2;
   word *code, *block;
   char *top, *p, *titleptr, *helpptr;
@@ -678,7 +684,7 @@ static int squeeze(char *in, char *out)
   if (verbose) fprintf(stderr, "-- squeezing '%s' to '%s'\n", in, out);
   squeezed = 0;
 
-  if (verbose > 1) fprintf(stderr, "-- %saving sex\n", bytesex_reversing() ? "H" : "Not h");
+  if (verbose > 1) fprintf(stderr, "-- bytesex reversal is %sactive\n", bytesex_reversing() ? "" : "in");
 
   size = (int) wf_filesize(in);
   if (size == -1) err_fail("'%s' does not exist or cannot be read", in);
@@ -719,12 +725,47 @@ static int squeeze(char *in, char *out)
   helplen = (strlen(helpptr) + 1 + 3) & ~3;             /* helplen is length of title string, (+1 for null) */
                                                         /* rounded up to a whole number of words      */
 
-  d2 = (datahdr *) ((char *)code - titlen - helplen - DATABYTES);     /* d2 is the dummy header */
-  strcpy(d2->titlestring, titleptr);                    /* copy title string to new header */
-  strcpy((char *)(d2->titlestring)+titlen, helpptr);    /* copy help string to new header */
+  flagswords = 0;
+  if (((bytesex_hostval(d1->swichunk) & 0xFF02003F) == 0) &&
+      modsqz_valid_header_offset(size, d1->swihandler, 1) &&
+      modsqz_valid_header_offset(size, d1->switable, 0) &&
+      modsqz_valid_header_offset(size, d1->swicode, 1) &&
+      modsqz_valid_header_offset(size, d1->intlmsgs, 0) &&
+      modsqz_valid_header_offset(size, d1->flagsoffset, 1))
+  {
+    word offset = bytesex_hostval(d1->flagsoffset), *pflags;
+    pflags = (word *) (((char *)code) + offset);
+    if (offset) for (;;) {
+      flagswords++;
+      if (bytesex_hostval(*pflags) & (1u<<31)) {
+        ++pflags;
+      }
+      else {
+        break;
+      }
+    }
+    if (verbose) fprintf(stderr, "-- flags words counted (%d)\n", flagswords);
+  }
 
-  d2->titleoffset = (char *)(d2->titlestring)-(char *)d2; /* set up offset to titlestring in new header */
+  if (!flagswords) {
+    savedbytes = NOFLAGSSAVEBYTES;
+  }
+  else {
+    savedbytes = 0;
+  }
+
+  /* d2 is the dummy header */
+  d2 = (datahdr *) ((char *)code - titlen - helplen - flagswords * 4 - DATABYTES + savedbytes);
+  strcpy(d2->titlestring - savedbytes, titleptr);                    /* copy title string to new header */
+  strcpy((char *)(d2->titlestring-savedbytes)+titlen, helpptr);    /* copy help string to new header */
+
+  d2->titleoffset = (char *)(d2->titlestring-savedbytes)-(char *)d2; /* set up offset to titlestring in new header */
   d2->helpoffset = d2->titleoffset + titlen;            /* set up offset to helpstring in new header */
+
+  if (flagswords) {
+    d2->flagsoffset = d2->helpoffset + helplen;
+    memcpy(((char *)d2) + d2->flagsoffset, ((char *)d1) + bytesex_hostval(d1->flagsoffset), 4 * flagswords);
+  }
 
   top = compresscode(code, size);                       /* squeeze the code (in place) */
 
@@ -740,6 +781,9 @@ static int squeeze(char *in, char *out)
     }
     d2->titleoffset = bytesex_hostval(d2->titleoffset);
     d2->helpoffset = bytesex_hostval(d2->helpoffset);
+    if (flagswords) {
+      d2->flagsoffset = bytesex_hostval(d2->flagsoffset);
+    }
     squeezed = 1;
   } else {
     if (verbose) err_report("can't compress '%s', will copy", in);
@@ -778,19 +822,6 @@ static void handle_escape(int signo)
   exit(EXIT_FAILURE);
 }
 
-static void init_sex(void)
-{
-  /* Determine sex of machine.  Relies on memory encoding of integers */
-  union {
-    char c[sizeof(unsigned int)];
-    unsigned int i;
-  } gross_ugly_hack;
-  gross_ugly_hack.i = 1;
-  /* If that statement sets c[0], this is little endian and we don't need
-   * sexing.  Only need sexing if we are big endian */
-  bytesex_reverse(gross_ugly_hack.c[0] != 1);
-}
-
 static void initialise(void)
 {
   signal(SIGINT, handle_escape);
@@ -799,7 +830,7 @@ static void initialise(void)
   debug = 0; force = 0; verbose = 0;
   curchunk = NULL;
   ticks();
-  init_sex();
+  bytesex_reverse_auto(bytesex_WANT_LITTLE_ENDIAN);
 }
 
 int main(int argc, char *argv[])
