@@ -24,8 +24,6 @@ scripts:
 	cp Unix/Sources/Scripts/blconf ${TARDIR}/blconf
 	cp Unix/Sources/Scripts/blbuild ${TARDIR}/blbuild
 	cp Unix/Sources/Scripts/blswinst ${TARDIR}/blswinst
-	cp Unix/Sources/Scripts/S94mtftpd ${TARDIR}/S94mtftpd
-	cp Unix/Sources/Scripts/mtftpd.conf ${TARDIR}/mtftpd.conf
 
 modgen resgen: clx
 	(cd RiscOS/Tools/Sources/ResGen/ports/solaris; ./mklinks; make)
