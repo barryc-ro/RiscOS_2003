@@ -95,7 +95,7 @@ MSGSF=o.msgs
 # Rule patterns
 #
 .c.o:;	  ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $< -d $*.h
+.cmhg.o:; ${CMHG} -p -o $@ $< -d $*.h
 
 WhoIsHdr.h: WhoIsHdr.o
 	 @|
