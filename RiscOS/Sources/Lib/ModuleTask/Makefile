@@ -19,6 +19,7 @@ all:
 
 
 clean clean_all:
+	-wipe            o.Lib* ~c~r~vf
 	Every.Every2	-c "@.o.Sources.!*.Sources @.o.Sources.!*.Makefile" wipe %0 ~c~vr
 	Echo		Library $(COMPONENT): '$@' finished.
 
