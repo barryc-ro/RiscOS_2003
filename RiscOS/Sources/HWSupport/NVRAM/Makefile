@@ -41,9 +41,6 @@ DEBUGLIB  = <Lib$Dir>.DebugLib.o.DebugLibzm TCPIPLibs:o.unixlibzm TCPIPLibs:o.in
 #
 INCLUDES = -IC:
 
-#DFLAGS   = -dDEBUG
-#DFLAGS   =
-
 #
 # Program specific options:
 #
@@ -54,6 +51,8 @@ TRACERAMTARGET = rm.${COMPONENT}db
 OBJS      = header.o module.o nvram.o msgfile.o parse.o trace.o
 EXPORTS   = ${EXP_H}.${COMPONENT} ${EXP_HDR}.${COMPONENT}
 RDIR      = ${RESDIR}.NVRAM
+
+DIRS    = o._dirs
 
 #
 # Rule patterns
@@ -74,10 +73,22 @@ trace: ${TRACERAMTARGET}
 
 o.module: h.header
 
+
+#
+# Create local directories
+#
+${DIRS}:
+        ${MKDIR} o
+        ${MKDIR} aof
+        ${MKDIR} rm
+        ${MKDIR} linked
+        create ${DIRS}
+        stamp  ${DIRS}
+
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} ${DIRS}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -93,6 +104,10 @@ clean:
         ${RM} ${TARGET}
         ${RM} ${RAMTARGET}
         ${RM} h.header
+        ${RM} o
+        ${RM} rm
+        ${RM} aof
+        ${RM} linked
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -118,10 +133,10 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${RAMTARGET}: ${OBJS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${CLIB} ${DIRS}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
-${TRACERAMTARGET}: ${OBJS} ${CLIB}
+${TRACERAMTARGET}: ${OBJS} ${CLIB} ${DIRS}
         ${LD} -o $@ -module ${OBJS} ${CLIB} ${DEBUGLIB}
 
 ${EXP_H}.${COMPONENT}: export.h.${COMPONENT}
