@@ -66,6 +66,7 @@ WFLAGS		= ~cf~vr
 DFLAGS		= 
 #DFLAGS 		= -DMEMCHECK
 DDFLAGS		= -fn -DDEBUGLIB -DTEST
+#DDFLAGS		= -DMEMCHECK -fn -DDEBUGLIB -DTEST
 DZFLAGS		= 
 DDZFLAGS	= ${DZFLAGS} -fn
 
@@ -137,7 +138,8 @@ LIBSD = \
  TCPIPLibs:o.socklib5 \
  TCPIPLibs:o.unixlib \
  TCPIPLibs:o.inetlib \
- ${NUMCONVERTLIB}
+ ${NUMCONVERTLIB} \
+# ${MEMCHECK_LIB} \
 
 
 # -----------------------------------------------------------------------------
