@@ -1,0 +1,433 @@
+/*###########################################################################*
+*                                                                            *
+* FILE:    filegen.c                                                         *
+*                                                                            *
+* PROJECT: NCDialCtrl module - Funai                                         *
+*                                                                            *
+* PURPOSE: Supporting source for 'module.c' (generate dialler files from     *
+*                                            smartcard data)                 *
+*                                                                            *
+* VERSION: Version 1.00, Steve Revill 2nd/March/1998                         *
+*                                                                            *
+*###########################################################################*/
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "module.h"
+#include "defs.h"
+#include "filegen.h"
+#include "swis.h"
+#include "sys/types.h"
+#include "netinet/in.h"
+#include "arpa/inet.h"
+#define NCDIAL_POP_ENV_VAR "NCDial$TelephoneNumber"
+#define unsilent(u) if (!silent) { _swix(NCDialUI_Debug, _INR(0, 1), 0, u); \
+                                   fprintf(stderr, "%s\n", u); }
+
+ErrorPtr err;
+
+extern BOOL silent;
+extern void osmodfree(char *);
+extern char *osmodget(int);
+extern char *cmos_number(void);
+extern int  MAM_Enq(char *, void *, int);
+extern void oscli(char *);
+
+char *quote(char *in, char *out);
+BOOL create_diallerB_script(int size, FILE *out);
+void debug_out(char *text, long number, char *string);
+int  set_env_var(char *, char *);
+char *get_string(char *ptr, char *script);
+void debug_string(char *text, char *string);
+void debug_value(char *text, long number);
+
+typedef struct
+{
+  unsigned int cntrl;
+  char *string;
+  void *next;
+} script_list;
+
+/***************
+*
+* FUNCTION: quote
+*
+* PURPOSE:  Replace certain chars with some text string
+*
+*/
+char *quote(char *in, char *out)
+{
+  char c;
+  int inl = 0, outl = 0;
+
+  do
+  {
+    c = in[inl];
+    switch (c)
+    {
+      case '<':
+      {
+        inl++;
+        out[outl++] = '&';
+        out[outl++] = 'l';
+        out[outl++] = 't';
+        out[outl++] = ';';
+        break;
+      }
+      case '>':
+      {
+        inl++;
+        out[outl++] = '&';
+        out[outl++] = 'g';
+        out[outl++] = 't';
+        out[outl++] = ';';
+        break;
+      }
+      case '&':
+      {
+        inl++;
+        out[outl++] = '&';
+        out[outl++] = 'a';
+        out[outl++] = 'm';
+        out[outl++] = 'p';
+        out[outl++] = ';';
+        break;
+      }
+      case '"':
+      {
+        inl++;
+        out[outl++] = '&';
+        out[outl++] = 'q';
+        out[outl++] = 'u';
+        out[outl++] = 'o';
+        out[outl++] = 't';
+        out[outl++] = ';';
+        break;
+      }
+      default:
+      {
+        out[outl++] = in[inl++];
+        break;
+      }
+    }
+  } while (c);
+
+  return(out);
+}
+
+/***************
+*
+* FUNCTION: set_env_var
+*
+* PURPOSE:  Set an environment (system) variable
+*
+*/
+int set_env_var(char *name, char *value)
+{
+    _kernel_swi_regs r;
+
+    r.r[0] = (int)name;
+    r.r[1] = (int)value;
+    r.r[2] = strlen(value)+1;
+    r.r[3] = 0;
+    r.r[4] = 0;
+    _kernel_swi(OS_SetVarVal, &r, &r);
+if(!silent)fprintf(stderr,"set %s to %s (%d)\n",name,value,strlen(value));
+
+    return(0);
+}
+
+/***************
+*
+* FUNCTION: get_string
+*
+* PURPOSE:  Extract a line from the script (upto a \n) and replace \n with zero
+*
+* NOTES:    Returns the new position in the script
+*
+*/
+char *get_string(char *ptr, char *script)
+{
+  while (*script != asc_lnfd)
+  {
+    *ptr = *script;
+    ptr++;
+    script++;
+  }
+  *ptr = asc_zero;
+  script++;
+
+  return(script);
+}
+
+/***************
+*
+* FUNCTION: create_diallerB_script
+*
+* PURPOSE:  Generate the DaillerB script file from the smart card data
+*
+* NOTES:    Returns TRUE if an error occurs
+*
+*/
+BOOL create_diallerB_script(int size, FILE *out)
+{
+  char *script;          /* pointer to (a position in) the smartcard script */
+  char expect[80] = "";  /* expect field */
+  char send[80]   = "";  /* send field   */
+
+  /* Hack to put some essential lines at the start of the DiallerB script */
+  fprintf(out, abort_0);
+  fprintf(out, abort_1);
+  fprintf(out, abort_2);
+  fprintf(out, abort_3);
+  fprintf(out, timeout);
+
+  if (size > 0)
+  {
+    /* Check that the buffer is big enough */
+    script = osmodget(size + 10);
+    if (NULL == script)
+    {
+      fclose(out);
+      return(TRUE);
+    }
+    MAM_Enq("SEND_EXPECT", script, size + 10);
+    /* Loop through the script data, extracting the fields to a file */
+    while (*script)
+    {
+      if (strchr(script, asc_lnfd))
+      {
+        /* Extract the (LF terminated) expect string into a zero-terminated string */
+        script = get_string(expect, script);
+
+        /* Extract the (LF terminated) send string into a zero-terminated string */
+        script = get_string(send, script);
+
+        /* Write the expect string to the script file (or a special 'empty field' char sequence) */
+        if (expect[0])
+        {
+          /* This is a hack to get smart card script 'OK's into a diallerB format */
+          if (('O' == expect[0]) & ('K' == expect[1]))
+          {
+            strcpy(expect, new_ok);
+          }
+
+          fputs(expect, out);
+          fputc(' ', out);
+        }
+        else
+        {
+          fputs(asc_noxp, out);
+        }
+
+        /* Write the send string to the script file (or a special 'empty field' char sequence) */
+        if (send[0])
+        {
+          /* Expand some info like 'send_user' and 'send_pass' with data from the smart card/CMOS */
+          fputs(expand_special(send), out);
+          fputc(asc_lnfd, out);
+        }
+        else
+        {
+          fputs(asc_nosd, out);
+        }
+      }/*if*/
+    }/*while*/
+    osmodfree(script);
+  }
+
+  return(FALSE);
+}
+
+/***************
+*
+* FUNCTION: debug_string
+*
+* PURPOSE:  Output some text for debugging (either a number or a string)
+*
+*/
+void debug_string(char *text, char *string)
+{
+/*   char buffer[80];
+  sprintf(buffer, text, string);
+  fprintf(stderr, "%s\n", buffer); */
+  fprintf(stderr, text, string);
+}
+
+/***************
+*
+* FUNCTION: debug_value
+*
+* PURPOSE:  Output some text for debugging (either a number or a string)
+*
+*/
+void debug_value(char *text, long number)
+{
+  fprintf(stderr, text, number);
+}
+
+/***************
+*
+* FUNCTION: CreateFiles
+*
+* PURPOSE:  Create all the files initially needed by the dialler
+*
+*/
+BOOL CreateFiles(carddata *scard)
+{
+  BOOL exitstat = FALSE;
+  FILE *out;
+  char *ht_id = NULL;
+  char *ht_pw = NULL;
+  char buffer[512];
+  char *ht_num = NULL;
+  int  byte;
+  int  failed;
+  int  length;
+  int  big;
+  struct in_addr ina;
+
+  /* Create some directories (if not there already) */
+  if (_swix(OS_File, _INR(0, 1) | _IN(4), 8, "<Wimp$ScrapDir>", 75))
+  {
+    unsilent("No Wimp$ScrapDir set!");
+    return(FALSE);
+  }
+
+  if (_swix(OS_File, _INR(0, 1) | _IN(4), 8, scrap_dial_dir, 75)) return(FALSE);
+  if (_swix(OS_File, _INR(0, 1) | _IN(4), 8, scrap_file_dir, 75)) return(FALSE);
+  if (_swix(OS_File, _INR(0, 1) | _IN(4), 8, scrap_ppp_dir,  75)) return(FALSE);
+
+  /* Read info from the smart card into the 'card' struct */
+  if (scard->loginid)
+  {
+    free(scard->loginid);
+    scard->loginid = NULL;
+  }
+
+  length = MAM_Enq("LOGIN_ID", scard->loginid, 0);
+if(!silent)debug_value("loginid length %d", (long) length);
+  if (length > 0)
+  {
+    scard->loginid = malloc(length + 4);
+  }
+  if ((length <= 0) || (NULL == scard->loginid)) goto genexit;
+
+  MAM_Enq("LOGIN_ID", scard->loginid, length + 2);
+  ht_id = malloc(3 * length + 4);
+  if (NULL == ht_id) goto genexit;
+
+  quote(scard->loginid, ht_id);
+if(!silent)debug_string("loginid %s", ht_id);
+  if (scard->loginsecret)
+  {
+    free(scard->loginsecret);
+    scard->loginsecret = NULL;
+  }
+  length = MAM_Enq("LOGIN_SECRET", scard->loginsecret, 0);
+if(!silent)debug_value("loginsecret length %d", (long) length);
+  if (length > 0) scard->loginsecret = malloc(length + 4);
+  if ((length <= 0) || (NULL == scard->loginsecret)) goto genexit;
+
+  MAM_Enq("LOGIN_SECRET", scard->loginsecret, length + 2);
+  ht_pw = malloc(3 * length + 4);
+  if (NULL == ht_pw) goto genexit;
+
+  quote(scard->loginsecret, ht_pw);
+if(!silent)debug_string("loginsecret %s", ht_pw);
+
+  if (scard->pstnnum)
+  {
+    free(scard->pstnnum);
+    scard->pstnnum = NULL;
+  }
+  length = MAM_Enq("PSTN_NUM", scard->pstnnum, 0);
+if(!silent)debug_value("pstnnum length %d", (long) length);
+  scard->pstnnum = malloc(length + 4);
+  if ((length <= 0) || (NULL == scard->pstnnum)) goto genexit;
+
+  MAM_Enq("PSTN_NUM", scard->pstnnum, length + 2);
+  if (length > 0) ht_num = malloc(3 * length + 4);
+  if (NULL == ht_num) goto genexit;
+
+  quote(scard->pstnnum, ht_num);
+if(!silent)debug_string("pstnnum %s", ht_num);
+
+  /* Set a system variable to reflect the phone number being dialled (for the UI) */
+  set_env_var(NCDIAL_POP_ENV_VAR, scard->pstnnum);
+
+  /* Create the PPP options file */
+  out = fopen(scrap_ppp_opts, "w");
+    if (NULL == out)
+    {
+if(!silent)fprintf(stderr, " failed\n");
+      goto genexit;
+    }
+    fprintf(out, "%s\n", device_name);
+    fprintf(out, "%d\n", dial_speed);
+    fprintf(out, "name %s\n", scard->loginid);
+    fprintf(out, "noipdefault\n");
+    fprintf(out, "dialler\n");
+    if (MAM_Enq("STATIC_IP", &ina.s_addr, 16) > 0)
+    {
+      if (0 != ina.s_addr)
+      {
+        fprintf(out, "%s:\n", inet_ntoa(ina));
+      }
+    }
+    fprintf(out, "defaultroute\n");
+    fprintf(out, "modem\n");
+    fprintf(out, "crtscts\n");
+    fprintf(out, "asyncmap 0\n");
+    _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemTimeout", &byte, 0, &failed);
+    if (failed >= 0 && (byte & 0x3F))
+    {
+      fprintf(out, "idle-disconnect %d\n", (byte & 0x3F) * 60);
+    }
+  fclose(out);
+
+if(!silent)fprintf(stderr, "Generating the script...\n");
+
+  /* Create the dialler script file (from the smart card) */
+  out = fopen(scrap_dial_scr, "w");
+  if (NULL == out) goto genexit;
+    big = MAM_Enq("SEND_EXPECT", buffer, 0);
+    if (create_diallerB_script(big, out))
+    {
+if(!silent)fprintf(stderr,"create_diallerB_script() returned with an error\n");
+      goto genexit;
+    }
+  fclose(out);
+
+  /* Create the PAP secrets file */
+if(!silent)fprintf(stderr,"creating the PAP secrets file %s\n",scrap_pap);
+  out = fopen(scrap_pap, "w");
+    if (NULL == out)
+    {
+if(!silent)fprintf(stderr," failed");
+      goto genexit;
+    }
+    fprintf(out, "%s * %s\n", scard->loginid, scard->loginsecret);
+  fclose(out);
+
+  /* Create the CHAP secrets file */
+if(!silent)fprintf(stderr,"creating the CHAP secrets file %s\n",scrap_chap);
+  out = fopen(scrap_chap, "w");
+    if (NULL == out)
+    {
+if(!silent)fprintf(stderr," failed");
+      goto genexit;
+    }
+    fprintf(out, "%s * %s\n", scard->loginid, scard->loginsecret);
+  fclose(out);
+  exitstat = TRUE;
+
+genexit:
+  if (ht_id)  free(ht_id);
+  if (ht_pw)  free(ht_pw);
+  if (ht_num) free(ht_num);
+
+  return(exitstat);
+}
