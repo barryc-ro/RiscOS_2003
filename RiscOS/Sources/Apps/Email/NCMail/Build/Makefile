@@ -15,6 +15,7 @@
 #			to rom target rule
 # 1998-10-20	RDW	amu_machine changed back to amu.
 #			RAM module target added
+# 1999-01-08	RDW	Changes to allow build env. option files
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -61,15 +62,18 @@ SQUEEZE         = squeeze
 WIPE            = -wipe
 TOUCH		= create
 
+BUILDFLAGS      = -DLOC_$(LOCALE) -DKBRD_$(KEYBOARD)                \
+                  -DMACH_$(MACHINE) -DSYS_$(SYSTEM) -DUIF_$(USERIF) \
+                  -DDISP_$(DISPLAY) -DBUILD_$(BUILD)
+
 AFLAGS          = $(THROWBACK) -depend !Depend -nocache -stamp -quit
-CFLAGS          = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp
-C++FLAGS        = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp
+CFLAGS          = $(THROWBACK) $(BUILDFLAGS) -depend !Depend -ffa $(INCLUDES) -wp
+C++FLAGS        = $(THROWBACK) $(BUILDFLAGS) -depend !Depend -ffa $(INCLUDES) -wp
 LDFLAGS		= -c++ $(EXTRALDFLAGS)
 CPFLAGS         = ~cfr~v~n
 SQFLAGS         = -f
 WFLAGS          = ~cf~vr
 LBFLAGS		= -c
-
 
 # -----------------------------------------------------------------------------
 # Flags
@@ -303,6 +307,8 @@ OBJSZ=  oz.NCMailUI oz.Engine
 export: export_$(PHASE) $(UI) $(APPENGINE) localdirs
 
 export_hdrs: 
+	@$(CP) Env.h.CommonEnv	h.CommonEnv	$(CPFLAGS)
+	@$(CP) Env.h.$(BUILDENV)	h.Env		$(CPFLAGS)
 	@echo $(COMPONENT): export complete (hdrs)		$(CPFLAGS)
 
 export_libs: 
@@ -398,6 +404,7 @@ o.dirs:
 localdirs:
 	@$(MKDIR) h
 
+
 # -----------------------------------------------------------------------------
 # Development rules
 #
@@ -409,6 +416,8 @@ map:
         @$(LD) -map -bin -base 0 -o null: $(OBJS) $(LIBS) > map.base0
 
 clean_all: $(APPENGINE) $(UI) clean_common
+	@$(RM)   h.CommonEnv
+	@$(RM)   h.Env
         $(WIPE) Targets         $(WFLAGS)
         @echo $(COMPONENT): Cleaned all
 
