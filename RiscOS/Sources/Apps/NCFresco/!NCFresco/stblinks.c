@@ -114,9 +114,9 @@ static int scroll_by_flags(fe_view v, int flags)
     if (v->displaying && v->scrolling != fe_scrolling_NONE)
     {
 	if (flags & be_link_VERT)
-	    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
+	    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, 0);
 	else
-	    scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, FALSE);
+	    scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, 0);
     }
     return scrolled;
 }
@@ -576,9 +576,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	if (v->displaying && v->scrolling != fe_scrolling_NONE)
 	{
 	    if (flags & be_link_VERT)
-		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
+		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, 0);
 	    else
-		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, FALSE);
+		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, 0);
 	    
 	    if (scrolled)
 	    {
@@ -648,9 +648,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	if (v->displaying && v->scrolling != fe_scrolling_NONE)
 	{
 	    if (flags & be_link_VERT)
-		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, FALSE);
+		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1, 0);
 	    else
-		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, FALSE);
+		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1, 0);
 
 	    if (scrolled)
 	    {

@@ -75,7 +75,7 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
 #if DEBUG
     if (context->pending_close)
     {
-	PRSDBG(("sgml_feed_characters(%p): aborted after %d of %d bytes\n", i, bytes));
+	PRSDBG(("sgml_feed_characters(%p): aborted after %d of %d bytes\n", context, i, bytes));
     }
 #endif
 }

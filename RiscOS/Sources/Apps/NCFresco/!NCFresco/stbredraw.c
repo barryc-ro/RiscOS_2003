@@ -154,7 +154,7 @@ int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y)
     }
     else
     {
-	sound_event(snd_SCROLL_FAILED);
+/* 	sound_event(snd_SCROLL_FAILED); */
     }
 
     if (v->stretch_document && signy > 0)
@@ -197,26 +197,33 @@ static void draw_view_outline(wimp_w w)
 
 /* ----------------------------------------------------------------------------*/
 
-int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight)
+int fe_view_scroll_x(fe_view v, int val, int flags)
 {
-    STBDBG(("fe_view_scroll_x: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
+    STBDBG(("fe_view_scroll_x: v%p w%x val %d flags %x\n", v, v->w, val, flags));
+
     if (v->w && v->scrolling != fe_scrolling_NONE)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
         if (fe_scroll_request(v, &state.o, val, 0))
 	{
-	    if (ensure_highlight)
+	    if (flags & fe_view_scroll_ENSURE)
 		fe_ensure_highlight(v, val < 0 ? be_link_BACK : 0);
 	    return 1;
+	}
+	else
+	{
+	    if (flags & fe_view_scroll_BEEP)
+		sound_event(snd_SCROLL_FAILED);
 	}
     }
     return 0;
 }
 
-int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight)
+int fe_view_scroll_y(fe_view v, int val, int flags)
 {
-    STBDBG(("fe_view_scroll_y: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
+    STBDBG(("fe_view_scroll_y: v%p w%x val %d flags %x\n", v, v->w, val, flags));
+
     if (v->w && v->scrolling != fe_scrolling_NONE)
     {
         wimp_wstate state;
@@ -227,9 +234,14 @@ int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight)
 
 	if (fe_scroll_request(v, &state.o, 0, val))
 	{
-	    if (ensure_highlight)
+	    if (flags & fe_view_scroll_ENSURE)
 		fe_ensure_highlight(v, be_link_VERT | (val > 0 ? be_link_BACK : 0));
 	    return 1;
+	}
+	else
+	{
+	    if (flags & fe_view_scroll_BEEP)
+		sound_event(snd_SCROLL_FAILED);
 	}
     }
     return 0;

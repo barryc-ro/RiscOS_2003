@@ -1559,6 +1559,9 @@ static void recurse_format_stream(antweb_doc *doc,
 /* 576/640 = 0.9 = ideal ratio. go for less though! */
 #define MIN_SCALE 80
 
+/* Allow a bit of play to avoid a few pixels over becoming a lot of pixels under */
+#define AUTOFIT_THRESHOLD 32
+
 extern void rid_toplevel_format(antweb_doc *doc,
 				rid_header *rh,
 				rid_text_item *start_from,
@@ -1605,7 +1608,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
 	if (rh->stream.width_info.minwidth > fwidth)
 	{
-	    if ( gbf_active(GBF_AUTOFIT) )
+	    if ( gbf_active(GBF_AUTOFIT) && rh->stream.width_info.minwidth > fwidth + AUTOFIT_THRESHOLD )
 	    {
 		doc->scale_value = MIN_SCALE;
 

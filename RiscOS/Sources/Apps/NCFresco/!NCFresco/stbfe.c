@@ -2931,7 +2931,7 @@ static os_error *fe_status_state(fe_view v, int state)
 	    if (v->children)
 		fe_refresh_window(v->w, NULL);
 	    else
-		fe_view_scroll_y(v, movement, TRUE);
+		fe_view_scroll_y(v, movement, fe_view_scroll_ENSURE);
 #endif
 	}
 

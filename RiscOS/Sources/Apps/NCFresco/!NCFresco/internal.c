@@ -35,6 +35,7 @@
 #include "stbutils.h"
 #include "stbtb.h"
 #include "frameutils.h"
+#include "memflex.h"
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -1885,6 +1886,12 @@ void fe_internal_deleting_view(fe_view v)
     }
     else if (strcasecomp(v->name, TARGET_ERROR) == 0)
     {
+    }
+    else if (strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
+    {
+/* 	if (pointer_mode == fe_pointermode_OFF) */
+/* 	{ */
+/* 	} */
     }
 }
 

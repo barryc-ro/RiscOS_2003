@@ -249,8 +249,12 @@ static void misc_event_handler(int event, fe_view v)
             break;
 
        case fevent_OPEN_URL:
-            frontend_complain(fe_url_open(v));
-            break;
+	   /* if the on screen keyboard is open already then don't open the  */
+	   if (on_screen_kbd == 0)
+	       frontend_complain(fe_url_open(v));
+	   else
+	       sound_event(snd_WARN_BAD_KEY);
+	   break;
 
     case fevent_SEARCH_PAGE:
 	if (!fe_popup_open() && on_screen_kbd == 0)
@@ -355,28 +359,28 @@ static void scroll_event_handler(int event, fe_view v)
     switch (event)
     {
         case fevent_SCROLL_LEFT:
-            fe_view_scroll_x(v, -1, TRUE);
+            fe_view_scroll_x(v, -1, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_RIGHT:
-            fe_view_scroll_x(v, +1, TRUE);
+            fe_view_scroll_x(v, +1, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_UP:
-            fe_view_scroll_y(v, +1, TRUE);
+            fe_view_scroll_y(v, +1, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_DOWN:
-            fe_view_scroll_y(v, -1, TRUE);
+            fe_view_scroll_y(v, -1, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_PAGE_UP:
-            fe_view_scroll_y(v, +2, TRUE);
+            fe_view_scroll_y(v, +2, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_PAGE_DOWN:
-            fe_view_scroll_y(v, -2, TRUE);
+            fe_view_scroll_y(v, -2, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_TOP:
-            fe_view_scroll_y(v, +3, TRUE);
+            fe_view_scroll_y(v, +3, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_BOTTOM:
-            fe_view_scroll_y(v, -3, TRUE);
+            fe_view_scroll_y(v, -3, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_OR_CURSOR_UP:
 	    fe_cursor_movement(v, 0, +1);
@@ -385,16 +389,16 @@ static void scroll_event_handler(int event, fe_view v)
 	    fe_cursor_movement(v, 0, -1);
             break;
         case fevent_SCROLL_FAR_LEFT:
-            fe_view_scroll_x(v, -3, TRUE);
+            fe_view_scroll_x(v, -3, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_FAR_RIGHT:
-            fe_view_scroll_x(v, +3, TRUE);
+            fe_view_scroll_x(v, +3, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_PAGE_LEFT:
-            fe_view_scroll_x(v, -2, TRUE);
+            fe_view_scroll_x(v, -2, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
         case fevent_SCROLL_PAGE_RIGHT:
-            fe_view_scroll_x(v, +2, TRUE);
+            fe_view_scroll_x(v, +2, fe_view_scroll_ENSURE | fe_view_scroll_BEEP);
             break;
     }
 }

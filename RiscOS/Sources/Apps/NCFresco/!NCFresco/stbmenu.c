@@ -50,6 +50,11 @@ static fe_menu current_menu = 0;
 
 /* ensure that the given item is visible */
 
+static int get_line_space(void)
+{
+    return (webfonts[MENU_FONT].max_up + webfonts[MENU_FONT].max_down + 1) &~ 1;
+}
+
 static void fe_menu_ensure_item(fe_menu mh, int item)
 {
     int line_space, move;
@@ -57,7 +62,7 @@ static void fe_menu_ensure_item(fe_menu mh, int item)
     wimp_wstate ws;
     wimp_box box;
 
-    line_space = webfonts[MENU_FONT].max_up + webfonts[MENU_FONT].max_down;
+    line_space = get_line_space();
 
     top = - line_space*item;
     bottom = top - line_space;
@@ -106,7 +111,7 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 
     width = r.box.x1 - r.box.x0 - 2*X_BORDER;
 
-    line_space = webfonts[MENU_FONT].max_up + webfonts[MENU_FONT].max_down;
+    line_space = get_line_space();
 
     more = TRUE;
     while (more)
@@ -201,7 +206,7 @@ static void fe_menu_window_click(fe_menu mh, wimp_mousestr *m)
     int line_space;
     int right = TRUE;		/* Keep the window open if it is a middle button */
 
-    line_space = webfonts[MENU_FONT].max_up + webfonts[MENU_FONT].max_down;
+    line_space = get_line_space();
 
     if (m->bbits & (wimp_BRIGHT | wimp_BLEFT))
     {
@@ -236,7 +241,7 @@ static os_error *fe_menu_window(fe_menu mh)
     {
 	int line_space;
 
-	line_space = webfonts[MENU_FONT].max_up + webfonts[MENU_FONT].max_down;
+	line_space = get_line_space();
 
         memset(&win, 0, sizeof(win));
 
@@ -352,7 +357,7 @@ void frontend_menu_update_item(fe_menu mh, int i)
 
     STBDBG(("stbmenu: update mh %p item %d\n", mh, i));
 
-    line_space = webfonts[MENU_FONT].max_up + webfonts[MENU_FONT].max_down;
+    line_space = get_line_space();
 
     r.w = mh->wh;
     r.box.x0 = - X_BORDER;
@@ -419,7 +424,7 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
         int overhang, line_space;
 
         current_menu = mh;
-        line_space = webfonts[MENU_FONT].max_up + webfonts[MENU_FONT].max_down;
+        line_space = get_line_space();
 #if 1
         state.o.w = mh->wh;
         state.o.box.x0 = p.x;
@@ -501,7 +506,7 @@ fe_menu frontend_menu_create(fe_view v, be_menu_callback cb, void *handle, int n
     menu->h = handle;
     menu->n = n;
     menu->items = items;
-    menu->size = n; /* size; change to use the full size */
+    menu->size = 0; /* size; change to use as much as possible */
     menu->width = get_widest_entry(items, n);
     menu->parent = v;
 

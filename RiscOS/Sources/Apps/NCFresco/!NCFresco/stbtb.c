@@ -2212,12 +2212,14 @@ void tb_event_handler(int event, fe_view v)
 	{
 	case fevent_TOOLBAR_MOVE_LEFT:
 	    /* move to previous icon */
-	    movehighlight(tbi, -1);
+	    if (!movehighlight(tbi, -1))
+		sound_event(snd_WARN_BAD_KEY);
 	    break;
 
 	case fevent_TOOLBAR_MOVE_RIGHT:
 	    /* move to next icon */
-	    movehighlight(tbi, +1);
+	    if (!movehighlight(tbi, +1))
+		sound_event(snd_WARN_BAD_KEY);
 	    break;
 
 	case fevent_TOOLBAR_PAGE_UP:

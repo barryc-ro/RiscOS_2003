@@ -177,8 +177,12 @@ extern os_error *fe_internal_toggle_panel(const char *panel_name);
 
 /* from stbredraw.c*/
 
-extern int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight);
-extern int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight);
+#define fe_view_scroll_ENSURE	0x01
+#define fe_view_scroll_BEEP	0x02
+
+extern int fe_view_scroll_x(fe_view v, int val, int flags);
+extern int fe_view_scroll_y(fe_view v, int val, int flags);
+
 extern int fe_scroll_request(fe_view v, wimp_openstr *o, int x, int y);
 
 /* from stbevents.c*/
