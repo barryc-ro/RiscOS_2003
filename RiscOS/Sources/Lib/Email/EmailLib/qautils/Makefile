@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.05 for RISC OS
+#	VERSION:	0.06 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -21,6 +21,7 @@
 #					correctly
 #	18/02/98	0.04	RDW	throwback now from define
 #	24/03/98	0.05	RDW	local_dirs didn't create l dir. does now
+#	27/05/98	0.06	RDW	-ffa added to C++FLAGS
 
 #
 # Paths
@@ -42,7 +43,7 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 LIBFILE = libfile
-MemCheckCC	= #MemCheck.CC
+#MemCheckCC	= MemCheck.CC
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
@@ -78,7 +79,7 @@ DEBUG=		#-DMEMCHECK #-DDEBUGLIB
 CFLAGS=		-ffah -I${INCLUDES} ${DEBUG}\
 		-Wp -depend !Depend -c ${THROWBACK} ${TINYSTUBS}
 
-C++FLAGS=	-I${INCLUDES} ${DEBUG}\
+C++FLAGS=	-ffa -I${INCLUDES} ${DEBUG}\
 		-Wp -depend !Depend -c ${THROWBACK} ${TINYSTUBS}		
 
 ASMFLAGS=       
@@ -121,3 +122,21 @@ ${TARGETZ}:	$(OBJSZ) local_dirs
 		$(LIBFILE) -c -o $(TARGETZ) $(OBJSZ)
 
 # Dynamic dependencies:
+o.list:	c++.list
+o.list:	h.list
+o.olist:	c++.olist
+o.olist:	h.olist
+o.olist:	h.indxlist
+o.olist:	h.list
+o.indxlist:	c++.indxlist
+o.indxlist:	h.indxlist
+o.indxlist:	h.list
+o.list:	c++.list
+o.list:	h.list
+o.olist:	c++.olist
+o.olist:	h.olist
+o.olist:	h.indxlist
+o.olist:	h.list
+o.indxlist:	c++.indxlist
+o.indxlist:	h.indxlist
+o.indxlist:	h.list

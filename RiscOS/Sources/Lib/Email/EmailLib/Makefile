@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.10 for RISC OS
+#	VERSION:	0.11 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -26,6 +26,7 @@
 #	20/02/98	0.09	RDW	added XNFrtnrcpt to OBJS, HDRS, OBJSZ, OBJSD
 #	25/02/98	0.10	RDW	Commented out DEBUG so it can be passed from
 #					amu commandline
+#	27/05/98	0.11	RDW	-ffa added to C++FLAGS
 
 #
 # Paths
@@ -50,7 +51,7 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 LIBFILE = libfile
-MemCheckCC	= #MemCheck.CC
+#MemCheckCC	= MemCheck.CC
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
@@ -87,14 +88,14 @@ C++LIB=		C:o.c++lib
 CFLAGS=		-ffah -I${INCLUDES} ${DEBUG}\
 		-Wp -depend !Depend -c ${THROWBACK} ${TINYSTUBS}
 
-C++FLAGS=	-I${INCLUDES} ${DEBUG}\
+C++FLAGS=	-ffa -I${INCLUDES} ${DEBUG}\
 		-Wp -depend !Depend -c ${THROWBACK} ${TINYSTUBS}		
 
 ASMFLAGS=       
 
 HDRS=		h.822parser body.h bodymulti.h contentT.h contentTE.h date.h elibbase.h entity.h \
 		from.h header.h headers.h messageid.h MIMEentity.h MIMEimage.h MIMEmultip.h mimevers.h \
-		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.o XNFdevicec.o \
+		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.h XNFdevicec.h \
 		XNFfaxnum.h XNFfaxpage.h XNFmsgclas.h XNFphoneno.h XNFserial.h XNFsoftrev.h Xorganiz.h \
 		subject.h base64.h ELib.h ELib_priv.h MIMEtext.h ELib_OS.h XNFrtnrcpt.h \
 		@.qautils.h.list @.qautils.h.olist @.qautils.h.indxlist
