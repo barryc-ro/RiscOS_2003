@@ -75,8 +75,8 @@ DOBJS      =	od.sys od.com od.data od.api od.atr od.t0_sm od.t1 od.chan od.irqs 
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
-.c.od:;     ${CC} ${CFLAGS} -o $@ $< -DREMOTE_DEBUG
-.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< h.$* -DREMOTE_DEBUG
+.c.od:;     ${CC} ${CFLAGS} -o $@ $<
+.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.od:;     ${AS} ${AFLAGS} $< $@
 
 #
