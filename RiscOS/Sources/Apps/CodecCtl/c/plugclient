@@ -28,6 +28,10 @@
 #include "client.h"
 #include "utils.h"
 
+/*Note. A sensible thing to do would be to write an explicit ctor and dtor
+   for a plugin object, calling the ctor from immediate_file_play() and
+   plugin_open(). JRC 11 Jul 1997*/
+
 /* --------------------------------------------------------------------------------------------- */
 
 #define APP_DIR		            "<" APP_NAME "$Dir>"
@@ -597,7 +601,8 @@ static void remove_window_handlers (pluginclient_instance *plugin)
 static void close_child_window(pluginclient_instance *plugin)
 {
    TRACE2("+close_child_window() : plugin %p\n" _ plugin);
-    
+   m_ASSERT (plugin != NULL);
+
    remove_window_handlers (plugin);
 
    /* remove window */
@@ -617,6 +622,7 @@ static void close_child_window(pluginclient_instance *plugin)
 static void dispose_plugin_info(pluginclient_instance *plugin)
 {
     TRACE2("+dispose_plugin_info(): instance %p\n" _ plugin);
+    m_ASSERT (plugin != NULL);
 
     /* free memory and zero pointers */
     free_params (plugin);
@@ -738,6 +744,7 @@ void pluginclient_send_busy(pluginclient_instance *plugin, BOOL busy, int state)
 
    TRACE2 ("+pluginclient_send_busy: plugin 0x%X, busy %s, state %s\n" _
          plugin _ busy? "TRUE": "FALSE" _ plugin_STATE_STRING (state));
+   m_ASSERT (plugin != NULL);
 
    /*Might not exist yet. JRC 1 Jul 1997*/
    message.hdr.your_ref = 0;
@@ -1207,6 +1214,7 @@ static int plugin_open_handler(WimpMessage *message, void *handle)
    _kernel_oserror         *error = NULL; /*error indicator*/
    BOOL                     handled = FALSE;
    BOOL                     incremented_count = FALSE;
+   BOOL                     parsed = FALSE;
 #if CHECK
    WimpGetWindowStateBlock  state;
 #endif
@@ -1250,6 +1258,7 @@ static int plugin_open_handler(WimpMessage *message, void *handle)
       if ((error = parse_parameter_file (plugin, get_ptr (msg, msg->file_name))) !=
             NULL)
   	goto finish;
+      parsed = TRUE;
 
       /* call the client */
       TRACE5("Calling client_open()\n");
@@ -1314,7 +1323,7 @@ finish:
       err_fatal (wimp_send_message (Wimp_EUserMessage, message,
             message->hdr.sender, 0, NULL));
 
-      free_params (plugin); /*harmless*/
+      if (parsed) free_params (plugin);
       if (incremented_count) pluginclient_decrement_count ();
       if (plugin != NULL) m_FREE (plugin, sizeof *plugin);
    }
@@ -1329,6 +1338,7 @@ static int plugin_close_handler(WimpMessage *message, void *handle)
    pluginclient_instance *plugin = (pluginclient_instance *) plugin_close->instance.plugin;
 
    TRACE1("+plugin_close_handler: plugin 0x%X\n" _ plugin);
+   m_ASSERT (plugin != NULL);
 
    if (pluginclient_exists (plugin))
    {
@@ -1423,6 +1433,7 @@ static int plugin_stream_new_handler(WimpMessage *message, void *handle)
    
    TRACE1 ("+plugin_stream_new_handler: plugin 0x%X, flags 0x%X\n" _ plugin _ msg->flags);
    m_ASSERT (handle == NULL); NOT_USED (handle);
+   m_ASSERT (plugin != NULL);
 
    if (pluginclient_exists (plugin))
    {
@@ -1515,6 +1526,7 @@ static int plugin_stream_as_file_handler(WimpMessage *message, void *handle)
    _kernel_oserror *error;
 
    TRACE1("+plugin_stream_as_file_handler: plugin 0x%X\n" _ plugin);
+   m_ASSERT (plugin != NULL);
 
    if (pluginclient_exists (plugin))
    {
@@ -1572,6 +1584,7 @@ static int plugin_action_handler(WimpMessage *message, void *handle)
    NOT_USED(handle);
 
    TRACE1 ("+plugin_action_handler: plugin 0x%X\n" _ plugin);
+   m_ASSERT (plugin != NULL);
    
    if (pluginclient_exists (plugin))
       if (plugin->plugin_fns->client_action != NULL)
@@ -1754,6 +1767,9 @@ static int immediate_file_play(char *file_name)
    pluginclient_instance *plugin = NULL;
    int                    file_type;
    BOOL                   handled = TRUE; /*error indicator*/
+   BOOL                   incremented = FALSE;
+   BOOL                   created = FALSE;
+   BOOL                   added = FALSE;
  
    TRACE2("+immediate_file_play\n");
  
@@ -1766,9 +1782,9 @@ static int immediate_file_play(char *file_name)
       handled = FALSE;
       goto finish;
    }
- 
+
    /* create a plugin so we can close down later in the same way */
-   if ((plugin = m_CALLOC (sizeof (struct pluginclient_instance), 1)) == NULL)
+   if ((plugin = m_CALLOC (sizeof *plugin, 1)) == NULL)
    {
       handled = FALSE;
       goto finish;
@@ -1777,14 +1793,18 @@ static int immediate_file_play(char *file_name)
    plugin->plugin_fns = pluginclient_fns;
  
    pluginclient_increment_count();
+   incremented = TRUE;
  
    if (toolbox_create_object (0, OUR_OBJECT, &plugin->window) != NULL)
    {
       handled = FALSE;
       goto finish;
    }
+   created = TRUE;
    err_fatal(window_get_wimp_handle(0, plugin->window, &plugin->wimp_window));
+   
    add_window_handlers (plugin);
+   added = TRUE;
  
    dispose_helpers_except (plugin);  /* kills all helpers _except_ plugin */
    plugin->helper = TRUE;
@@ -1805,31 +1825,29 @@ static int immediate_file_play(char *file_name)
 
    /* add to list */
    plugin->next = plugin_list;
-   if (plugin_list)
+   if (plugin_list != NULL)
       plugin_list->prev = plugin;
    plugin_list = plugin;
-   
+
 finish:
    if (!handled)
    {
       /*Something went wrong---tidy up.*/
-      if (plugin != NULL)
-      {
-         if (plugin->window != NULL_ObjectId)
-         {
-            close_child_window (plugin);
-            pluginclient_decrement_count ();
-         }
-         m_FREE (plugin, sizeof *plugin);
-      }
+      if (added) remove_window_handlers (plugin);
+
+      if (created) toolbox_delete_object (0, plugin->window);
+
+      if (incremented) pluginclient_decrement_count ();
+
       /*Don't call client specific code---if something went wrong, the window
          was never opened! Deleted code |if (plugin->plugin_fns->client_close
-         != NULL) plugin->plugin_fns->client_close (&plugin->client_data); JRC
-         18 Jun 1997*/
+         != NULL) plugin->plugin_fns->client_close (&plugin->client_data);
+         JRC 18 Jun 1997*/
 
-      /* free memory and zero pointers */
-      free_params (plugin);
-      free_rma_strings (NULL, plugin);
+      /*Don't call dispose_plugin_info() functions free_params(),
+         free_rma_strings(). JRC 11 Jul 1997*/
+
+      if (plugin != NULL) m_FREE (plugin, sizeof *plugin);
    }
 
    return handled;
