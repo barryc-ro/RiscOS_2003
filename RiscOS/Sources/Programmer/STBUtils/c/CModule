@@ -1,101 +1,281 @@
+/* >c.CModule
+ *
+ * STBUtils module - an unsavoury collection of hacks for STBs.
+ *
+ */
+
 #include "kernel.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "swis.h"
+#include "interface/HighFSI.h"
 
 #include "CModuleHdr.h"
 
-#define  TM                     "STBUtils"
-#define  UNUSED(x)              (x = x) /* suppress warnings */
-static void leds(int p);
-static int colour(int col);
-static int rectangle(int x, int y, int w, int h);
-static int readVarValue(char *name);
+#define TM                     "STBUtils"
+#define UtilsDA_Name           "Pre-Module Area"
 
-#define Service_PreReset 0x45
+#define ModHandReason_Enter    2
+#define ModHandReason_AddArea  10
+#define ModHandReason_CopyArea 11
 
-#define UpcallV  0x1d
+#define CLI_Bar                0
+#define CLI_LEDs               1
+#define CLI_StandbyFunction    2
+#define CLI_RMLoad2            3
+#define CLI_RMRun2             4
 
-#define Upcall_Online   0x0d
-#define Upcall_Standby  0x0e
-#define STBState_Busy   0x4B403
+#define Service_PreReset       0x45
+#define UpcallV                0x1d
+#define Upcall_Online          0x0d
+#define Upcall_Standby         0x0e
+#define STBState_Busy          0x4B403
+#define FS_ResourceFS          0x2E
+#define UtilsFlags_Loading     1
+
+#define UNUSED(x) (x = x) /* suppress warnings */
+
+/* Function prototypes */
+static void             bar(int p);
+static void             leds(int p);
+static _kernel_oserror *rmxxx2(const char *tail);
+static _kernel_oserror *enter_module(const char *tail);
+static int              colour(int col);
+static int              rectangle(int x, int y, int w, int h);
+static int              readVarValue(char *name);
 
 /* Global variables */
-static void *module_wspG = NULL;
-int standbyFunction=0 ;
+static void          *module_wspG  = NULL;
+int                   standbyFunction = 0;
+static unsigned int   UtilsDA_Num  = 0;
+static unsigned int  *UtilsDA_Base = NULL;
+static unsigned int   Page_Size    = 4096;
+static unsigned int   UtilsFlags   = 0;
+static unsigned char  module_title[64];
 
+/* Global error blocks */
+static _kernel_oserror Error_Loading = {0x1, TM " cannot be used to load itself. Use %RMLoad."};
+
+/************************************************************
+ *
+ * FUNCTION: stbutils_cmd() - CLI command handler
+ */
 _kernel_oserror *stbutils_cmd(const char *arg_string, int argc, int cmd_no, void *pw)
 {
+  _kernel_oserror *error = NULL;
+  UNUSED(pw);
 
-    int p  = 0 ;
-    int x  = 0 ;
-    int xe = 0 ;
-    int y  = 0 ;
-    int ye = 0 ;
-    int margin  = 32 ;   /* percentage width of box border */
-    int hmargin = 25 ;   /* percentage horizontal margin   */
-    int bheight = 10 ;   /* percentage vertical height     */
-
-    int fullbarwidth = 0 ;
-    int barheight    = 0 ;
-    int xpos         = 0 ;
-    int ypos         = 0 ;
-
-    _kernel_swi_regs  regs;
-
-    UNUSED(pw);
-    if (cmd_no == 0) {             /* *Bar  */
-       p = atoi(arg_string) ;
-       regs.r[0] =      -1 ;
-       regs.r[1] =      11 ;
-       _kernel_swi (OS_ReadModeVariable, &regs, &regs) ;
-       x = regs.r[2] + 1;
-       regs.r[0] =      -1 ;
-       regs.r[1] =      12 ;
-       _kernel_swi (OS_ReadModeVariable, &regs, &regs) ;
-       y = regs.r[2] + 1;
-       regs.r[0] =      -1 ;
-       regs.r[1] =       4 ;
-       _kernel_swi (OS_ReadModeVariable, &regs, &regs) ;
-       xe = regs.r[2]      ;
-       regs.r[0] =      -1 ;
-       regs.r[1] =       5 ;
-       _kernel_swi (OS_ReadModeVariable, &regs, &regs) ;
-       ye = regs.r[2]      ;
-       x = x << xe ;
-       y = y << ye ;
-
-       fullbarwidth = x * (100-hmargin) / 100 ;
-       barheight    = y * bheight / 100       ;
-       xpos         = x * hmargin / 2 / 100   ;
-       ypos         = (y - barheight) / 2     ;
-
-       colour(0x00f00000) ;  /* 0xbbggrr00 */
-       rectangle(xpos,ypos,fullbarwidth,barheight) ;
-       colour(0) ;
-       rectangle(xpos+margin/2,ypos+margin/2,fullbarwidth-margin,barheight-margin) ;
-       colour(0x00f00000) ;  /* 0xbbggrr00 */
-       rectangle(xpos+margin/2,ypos+margin/2,fullbarwidth*p/100,barheight-margin) ;
+  switch (cmd_no)
+  {
+    case (CLI_Bar):
+    {
+      bar( atoi(arg_string) );
+      break;
     }
-    
-    if (cmd_no == 1) {             /* LEDs  */    
-       p = atoi(arg_string) ;
-       leds(p) ;
+    case (CLI_LEDs):
+    {
+      leds( atoi(arg_string) );
+      break;
     }
-
-    if (cmd_no == 2) {             /* StandbyFuction  */    
-       standbyFunction = atoi(arg_string) ;
+    case (CLI_StandbyFunction):
+    {
+      standbyFunction = atoi(arg_string);
+      break;
     }
-    return NULL;
+    case (CLI_RMLoad2):
+    case (CLI_RMRun2):
+    {
+      UtilsFlags |= UtilsFlags_Loading;
+      error       = rmxxx2(arg_string);
+      UtilsFlags &= ~UtilsFlags_Loading;
+      if ((error == NULL) && (cmd_no == CLI_RMRun2)) error = enter_module(arg_string);
+      break;
+    }
+  }
+  return error;
 }
 
-static void leds(int p){
+
+/************************************************************
+ *
+ * FUNCTION: bar() - CLI command *Bar <percentage>
+ */
+static void bar(int p)
+{
+  _kernel_swi_regs regs;
+
+  int x  = 0 ;
+  int xe = 0 ;
+  int y  = 0 ;
+  int ye = 0 ;
+  int margin  = 32 ;   /* percentage width of box border */
+  int hmargin = 25 ;   /* percentage horizontal margin   */
+  int bheight = 10 ;   /* percentage vertical height     */
+
+  int fullbarwidth = 0 ;
+  int barheight    = 0 ;
+  int xpos         = 0 ;
+  int ypos         = 0 ;
+
+   regs.r[0] = -1 ;
+   regs.r[1] = 11 ;
+   _kernel_swi (OS_ReadModeVariable, &regs, &regs) ;
+   x = regs.r[2] + 1;
+   regs.r[0] = -1 ;
+   regs.r[1] = 12 ;
+   _kernel_swi (OS_ReadModeVariable, &regs, &regs) ;
+   y = regs.r[2] + 1;
+   regs.r[0] = -1 ;
+   regs.r[1] = 4 ;
+   _kernel_swi (OS_ReadModeVariable, &regs, &regs) ;
+   xe = regs.r[2] ;
+   regs.r[0] = -1 ;
+   regs.r[1] = 5 ;
+   _kernel_swi (OS_ReadModeVariable, &regs, &regs) ;
+   ye = regs.r[2] ;
+   x = x << xe ;
+   y = y << ye ;
+
+   fullbarwidth = x * (100-hmargin) / 100 ;
+   barheight    = y * bheight / 100       ;
+   xpos         = x * hmargin / 2 / 100   ;
+   ypos         = (y - barheight) / 2     ;
+
+   colour(0x00f00000) ;  /* 0xbbggrr00 */
+   rectangle(xpos,ypos,fullbarwidth,barheight) ;
+   colour(0) ;
+   rectangle(xpos+margin/2,ypos+margin/2,fullbarwidth-margin,barheight-margin) ;
+   colour(0x00f00000) ;  /* 0xbbggrr00 */
+   rectangle(xpos+margin/2,ypos+margin/2,fullbarwidth*p/100,barheight-margin) ;
+}
+
+
+/************************************************************
+ *
+ * FUNCTION: leds() - CLI command *LEDs <0 | 1>
+ */
+static void leds(int p)
+{
     _kernel_swi_regs  regs;
     if (p != 0 ) {
       p = 1 ;
     }
     regs.r[0] = p ;
     _kernel_swi (STBState_Busy, &regs, &regs) ;
+}
+
+
+/************************************************************
+ *
+ * FUNCTION: rmxxx2 - CLI commands RMLoad2/RMRun2 <module filename> [...parameters...]
+ */
+static _kernel_oserror *rmxxx2(const char *tail)
+{
+  _kernel_oserror *error = NULL;
+  unsigned int     handle;
+  unsigned int     filesys;
+  unsigned int     fsize;
+  unsigned int     dasize;
+  unsigned int    *base;
+
+  /* Open the file */
+  error = _swix(OS_Find, _INR(0,1) | _OUT(0), OSFind_OpenIn | 0xF, tail, &handle);
+  if (error) return error;
+
+  /* Extract the filing system number */
+  error = _swix(OS_FSControl, _INR(0,1) | _OUTR(1,2), FSControl_ReadFSHandle, handle, &base, &filesys);
+  if (error) goto close_exit;
+
+  /* Is the module in ResourceFS? */
+  if ((filesys & 0xFF) == FS_ResourceFS)
+  {
+    /* Close the file */
+    error = _swix(OS_Find, _INR(0,1), 0, handle);
+
+    /* Make a copy of the module title string */
+    strcpy((char *)module_title, (char *)base + base[4]);
+
+    /* Link the module into the module chain in place (i.e. in memory) */
+    if (error == NULL) error = _swix(OS_Module, _INR(0,1), ModHandReason_AddArea, base);
+    return error;
+  }
+
+  /* Read the size of the module */
+  error = _swix(OS_Args, _INR(0,1) | _OUT(2), OSArgs_ReadEXT, handle, &fsize);
+  if (error) goto close_exit;
+
+  /* Read the size of our dynamic area */
+  error = _swix(OS_DynamicArea, _INR(0,1) | _OUT(2), 2, UtilsDA_Num, &dasize);
+  if (error) goto close_exit;
+
+  /* Change our dynamic area to be large enough to load the file */
+  error = _swix(OS_ChangeDynamicArea, _INR(0,1), UtilsDA_Num, fsize - dasize);
+  if (error) goto close_exit;
+
+  /* Store the module size in the bottom word of the dynamic area */
+  UtilsDA_Base[0] = fsize; /* Required for the initialise-in-place OS_Module call */
+
+  /* Load the module into the dynamic area */
+  error = _swix(OS_GBPB, _INR(0,3), OSGBPB_ReadFromPTR, handle, UtilsDA_Base + 1, fsize);
+  if (error) goto empty_exit;
+
+  /* Make a copy of the module title string */
+  strcpy((char *)module_title, (char *)UtilsDA_Base + UtilsDA_Base[5]);
+
+  /* Is the module is compressed (i.e. modsqz'd) */
+  if (UtilsDA_Base[2] & 0x80000000)
+  {
+    /* Yes. Initialise in place - the Kernel will move it into RMA during decompression */
+    error = _swix(OS_Module, _INR(0,1), ModHandReason_AddArea, UtilsDA_Base + 1);
+  }
+  else
+  {
+    /* No. Copy into RMA and then initialise */
+    error = _swix(OS_Module, _INR(0,2), ModHandReason_CopyArea, UtilsDA_Base + 1, UtilsDA_Base[0]);
+  }
+  if (error) goto empty_exit;
+
+  /* Shrink the dynamic area */
+  fsize = (fsize + Page_Size) & ~(Page_Size - 1);
+  error = _swix(OS_ChangeDynamicArea, _INR(0,1), UtilsDA_Num, -fsize);
+
+  /* Close the file */
+  if (error == NULL) error = _swix(OS_Find, _INR(0,1), 0, handle);
+  return error;
+
+  /* Shrink the dynamic area, close the file and exit with an error */
+  empty_exit:
+    fsize = (fsize + Page_Size) & ~(Page_Size - 1);
+    (void) _swix(OS_ChangeDynamicArea, _INR(0,1), UtilsDA_Num, -fsize);
+
+  /* Close the file and exit with an error */
+  close_exit:
+
+    (void) _swix(OS_Find, _INR(0,1), 0, handle);
+    return error;
+}
+
+
+/************************************************************
+ *
+ * FUNCTION: enter_module() - enter a module as the current task
+ */
+static _kernel_oserror *enter_module(const char *tail)
+{
+  char  buffer[512];
+  char *end = buffer;
+
+  while(*tail == ' ') tail++; /* Skip leading spaces  */
+  while(*tail >  ' ') tail++; /* Skip module filename */
+  while(*tail == ' ') tail++; /* Skip trailing spaces */
+  do                          /* Copy remaining parameters (ctrl-terminated string) */
+  {
+    *end++ = *tail;
+  }
+  while (*tail++ >= ' ');
+
+  return _swix(OS_Module, _INR(0,2), ModHandReason_Enter, module_title, buffer);
 }
 
 
@@ -113,11 +293,11 @@ static int rectangle(int x, int y, int w, int h) {
     regs.r[0] = 4 ;                            /* Move absolute       */
     regs.r[1] = x ;
     regs.r[2] = y ;
-    _kernel_swi (OS_Plot, &regs, &regs) ;    
+    _kernel_swi (OS_Plot, &regs, &regs) ;
     regs.r[0] = 96+1 ;                         /* Plot solid relative */
     regs.r[1] = w ;
     regs.r[2] = h ;
-    _kernel_swi (OS_Plot, &regs, &regs) ;  
+    _kernel_swi (OS_Plot, &regs, &regs) ;
     return 0;
 }
 
@@ -153,42 +333,58 @@ int readVarValue(char *name)
 
 _kernel_oserror * stbutils_initialise(const char *cmd_tail, int podule_base, void *private_word)
 {
-    _kernel_swi_regs  regs;
-    UNUSED(cmd_tail);
-    UNUSED(podule_base);
-    module_wspG = private_word ;
+  _kernel_oserror  *error = NULL;
+  _kernel_swi_regs  regs;
+  UNUSED(cmd_tail);
+  UNUSED(podule_base);
+  module_wspG = private_word ;
 
-    regs.r[0] = UpcallV;
-    regs.r[1] = (int)UpcallHandler_entry;
-    regs.r[2] = (int)module_wspG;
+  regs.r[0] = UpcallV;
+  regs.r[1] = (int)UpcallHandler_entry;
+  regs.r[2] = (int)module_wspG;
 
-    _kernel_swi(OS_AddToVector, &regs, &regs);
+  _kernel_swi(OS_AddToVector, &regs, &regs);
 
-    leds(1) ;   /* Turn red LED off and flash green LED */
+  leds(1) ;   /* Turn red LED off and flash green LED */
 
-   return NULL;
+  /* Attempt to create the STBUtils dynamic area */
+  error = _swix(OS_DynamicArea, _INR(0,8) | _OUT(1) | _OUT(3), 0, -1, 0, -1, 1<<7, 8*1024*1024, 0, 0, UtilsDA_Name, &UtilsDA_Num, &UtilsDA_Base);
+  if (error == NULL) error = _kernel_setenv("Alias$RMLoad", "RMLoad2 %*0");
+  if (error == NULL) error = _kernel_setenv("Alias$RMRun", "RMRun2 %*0");
+  return error;
 }
 
 _kernel_oserror *stbutils_finalise(int fatal, int podule, void *private_word)
 {
-   _kernel_swi_regs regs;
+  _kernel_oserror  *error = NULL;
+  _kernel_swi_regs  regs;
 
-    UNUSED(fatal);
-    UNUSED(podule);
-    UNUSED(private_word);
+  UNUSED(fatal);
+  UNUSED(podule);
+  UNUSED(private_word);
 
-   /* release Upcall vector */
-   regs.r[0] = UpcallV;
-   regs.r[1] = (int)UpcallHandler_entry;
-   regs.r[2] = (int)module_wspG;
+  /* Refuse to finalise if the cause was an attempt to load this module with our *RMLoad2 or *RMRun2 commands */
+  if (UtilsFlags & UtilsFlags_Loading)
+  {
+    return &Error_Loading;
+  }
 
-   _kernel_swi(OS_Release, &regs, &regs);
+  /* release Upcall vector */
+  regs.r[0] = UpcallV;
+  regs.r[1] = (int)UpcallHandler_entry;
+  regs.r[2] = (int)module_wspG;
 
-    return NULL;
+  _kernel_swi(OS_Release, &regs, &regs);
+
+  /* Attempt to remove the STBUtils dynamic area */
+  error = _swix(OS_SetVarVal, _IN(0) | _INR(2,3), "Alias$RMLoad", -1, 0);
+  if (error == NULL) error = _swix(OS_SetVarVal, _IN(0) | _INR(2,3), "Alias$RMRun", -1, 0);
+  if (error == NULL) error = _swix(OS_DynamicArea, _INR(0,1), 1, UtilsDA_Num);
+  return error;
 }
 
 int UpcallHandler(_kernel_swi_regs *regs, void *private_word)
-{                                                            
+{
    /* This routine called when Standby presses to turn STB off         *
     * Read setting of STB$StandbyFunction and then:                    *
     *    Unset or not Number then equate to function 0                 *
@@ -204,7 +400,7 @@ int UpcallHandler(_kernel_swi_regs *regs, void *private_word)
    if ( (regs->r[0] == Upcall_Standby) || (regs->r[0] == Upcall_Online) )
    {
       /* printf("ClaimSvc: just received Upcall %i ", regs->r[0]); */
-      
+
       if(regs->r[0] == Upcall_Online)
       {
          /* Do nothing on coming back up. Handle this with Service_PreReset instead */

@@ -11,7 +11,7 @@ EXP_C_O = <Cexport$dir>.o
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -77,6 +77,11 @@ rom: ${TARGET} local_dirs
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
+
+install: ${RMTARGET} local_dirs
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${RMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
 
 install_rom: ${TARGET} local_dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
