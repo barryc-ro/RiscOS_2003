@@ -71,7 +71,9 @@ export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        Set Hourglass2Res$Path rm.${UserIF}.${UI_VARIANT}.,rm.${UserIF}.
+        ${CP} Hourglass2Res:Hourglass ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        UnSet Hourglass2Res$Path
         @echo ${COMPONENT}: rom module installed
 
 clean:
