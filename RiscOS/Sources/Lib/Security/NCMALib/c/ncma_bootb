@@ -17,6 +17,10 @@
 #include "swis.h"
 #include "NVRAM.h"
 
+#include "socklib.h"
+#include "inetlib.h"
+#include "debuglib/debuglib.h"
+
 /* Local includes */
 #include "smtags.h"
 #include "ncma_bootb.h"
@@ -26,8 +30,6 @@
 #include "ncma_utils.h"
 #include "smcard.h"
 #include "dynalloc.h"
-#include "debuglib/debuglib.h"
-#include "DBUG.h"
 
 
 
@@ -57,11 +59,11 @@ int select_scard_iap(sc_bootblock_data_struct* bb_data)
 
     unsigned int tmp;
 
-    DBUG_PRINTF(DBUG_LVL_DIAG, "select_scard_iap()\n");
+    dprintf(("", "select_scard_iap()\n"));
 
     if((matrix_ptr = find_tag_in_block(bb_data->sc_eb_ptr, bb_data->sc_eb_bytes, NCIIAPConnectMatrixTag, &matrix_bytes, NULL))==NULL)
     {
-      DBUG_PRINTF(DBUG_LVL_ERROR, "select_scard_iap: no IAPConnectMatrix in s/card block\n");
+      dprintf(("", "select_scard_iap: no IAPConnectMatrix in s/card block\n"));
       return(-1);
     }
 
@@ -69,18 +71,18 @@ int select_scard_iap(sc_bootblock_data_struct* bb_data)
     {
         if((group_ptr = find_tag_in_block(matrix_ptr, matrix_bytes, NCIGroupTag, &group_bytes, group_ptr))==NULL)
         {
-          DBUG_PRINTF(DBUG_LVL_ERROR, "select_scard_iap: exhausted s/card IAP groups\n");
+          dprintf(("", "select_scard_iap: exhausted s/card IAP groups\n"));
           return(-1);
         }
         if((id_ptr = find_tag_in_block(group_ptr, group_bytes, NCIIAPIDTag, &id_bytes, NULL))==NULL)
         {
-          DBUG_PRINTF(DBUG_LVL_DIAG, "select_scard_iap: no IAP ID in this block\n");
+          dprintf(("", "select_scard_iap: no IAP ID in this block\n"));
           continue;
         }
 
         tmp = read_big_word((char *)id_ptr);
         bb_data->iap_id = tmp;
-        DBUG_PRINTF(DBUG_LVL_DIAG, "select_scard_iap: using IAP ID %d\n", bb_data->iap_id);
+        dprintf(("", "select_scard_iap: using IAP ID %d\n", bb_data->iap_id));
         bb_data->sc_iap_ptr = group_ptr;
         bb_data->sc_iap_bytes = group_bytes;
         return(1);
@@ -108,39 +110,39 @@ int virgin_smartcard(void)
     int i;
     _kernel_swi_regs r;
 
-    DBUG_PRINTF(DBUG_LVL_DIAG, "virgin_smartcard()\n");
+    dprintf(("", "virgin_smartcard()\n"));
 
     r.r[0] = 1; /* gimme data whether it's authentic or not */
     r.r[2] = 0; /* initialise to zero in case it's a substitute BB module
                    that doesn't fill these in (eg NCBBnvram or NCBBtwin) */
     if(_kernel_swi(NCBootblock_Enquiry, &r, &r)!=NULL)
     {
-        DBUG_PRINTF(DBUG_LVL_ERROR, "virgin_smartcard: Bootblock enquiry SWI failed!\n");
+        dprintf(("", "virgin_smartcard: Bootblock enquiry SWI failed!\n"));
         return(-1);
     }
 
     if(r.r[0] != -2)
     {
-      DBUG_PRINTF(DBUG_LVL_DIAG, "virgin_smartcard(): r0 != -2\n");
+      dprintf(("", "virgin_smartcard(): r0 != -2\n"));
       if (r.r[2])
       {
         i = *(unsigned int *)(r.r[2]);
 
-        //DBUG_PRINTF(DBUG_LVL_DIAG, "virgin_smartcard: purity rating: 0x%x\n", i);
+        //dprintf(("", "virgin_smartcard: purity rating: 0x%x\n", i));
         if((i == 0x00000000) || (i == 0xffffffff))
         {
-            DBUG_PRINTF(DBUG_LVL_DIAG, "virgin_smartcard: VIRGIN CARD\n");
+            dprintf(("", "virgin_smartcard: VIRGIN CARD\n"));
             return(1);
         }
       }
     }
     else
     {
-        DBUG_PRINTF(DBUG_LVL_DIAG, "virgin_smartcard: SWI returned error %d\n", r.r[0]);
+        dprintf(("", "virgin_smartcard: SWI returned error %d\n", r.r[0]));
         return(-1);
     }
 
-    DBUG_PRINTF(DBUG_LVL_DIAG, "virgin_smartcard: SULLIED CARD\n");
+    dprintf(("", "virgin_smartcard: SULLIED CARD\n"));
     return(0);
 }
 
@@ -517,12 +519,89 @@ char* create_bootblock(const sc_bootblock_data_struct* const bootblock)
     if(bootblock->tag_cache->tag[l].bytes != 0) /* Tag has a value */
     {
       dprintf(("", "create_bootblock(): tag %d (%0x %s) has a value\n", l, bootblock->tag_cache->tag[l].nci_tag, bootblock->tag_cache->tag[l].tag));
+
       switch (bootblock->tag_cache->tag[l].mapping)
       {
-        case TagType_String: /* Tag is a string  */
-        case TagType_Proxy:  /* Proxy is a string  */
-        case TagType_Host:   /* Tag is a hostname / textual IP, just like a string  */
+        case TagType_Host:
         {
+          if(validate_host(bootblock->tag_cache->tag[l].val, NULL)<0)
+          {
+            dprintf(("", "create_bootblock(): tag value %s is not a valid host.\n", bootblock->tag_cache->tag[l].val));
+            continue;
+          }
+
+          dprintf(("", "create_bootblock(): Host: %s\n", bootblock->tag_cache->tag[l].val));
+
+          /* Write the tag number and tag value size */
+          write_big_word(body_data+bootblock_body_count, bootblock->tag_cache->tag[l].nci_tag);
+          bootblock_body_count+=4;
+          write_big_short(body_data+bootblock_body_count, strlen(bootblock->tag_cache->tag[l].val));
+          bootblock_body_count+=2;
+          /* Now write the actual string value into the bootblock data */
+          for (loop2=0; loop2 < strlen(bootblock->tag_cache->tag[l].val); loop2++)
+          {
+            body_data[bootblock_body_count+loop2] = bootblock->tag_cache->tag[l].val[loop2];
+          }
+          bootblock_body_count+=strlen(bootblock->tag_cache->tag[l].val);
+          dprintf(("", "create_bootblock(): tag %d has string value %s\n", l, bootblock->tag_cache->tag[l].val));
+        }
+        break;
+
+        case TagType_Proxy:  /* Proxy is a string  */
+        {
+          if(validate_proxy(bootblock->tag_cache->tag[l].val, NULL)<0)
+          {
+            dprintf(("", "create_bootblock(): Bad Proxy %s\n", bootblock->tag_cache->tag[l].val));
+            continue;
+          }
+          dprintf(("", "create_bootblock(): %s\n", bootblock->tag_cache->tag[l].val));
+
+          /* Write the tag number and tag value size */
+          write_big_word(body_data+bootblock_body_count, bootblock->tag_cache->tag[l].nci_tag);
+          bootblock_body_count+=4;
+          write_big_short(body_data+bootblock_body_count, strlen(bootblock->tag_cache->tag[l].val));
+          bootblock_body_count+=2;
+          /* Now write the actual string value into the bootblock data */
+          for (loop2=0; loop2 < strlen(bootblock->tag_cache->tag[l].val); loop2++)
+          {
+            body_data[bootblock_body_count+loop2] = bootblock->tag_cache->tag[l].val[loop2];
+          }
+          bootblock_body_count+=strlen(bootblock->tag_cache->tag[l].val);
+          dprintf(("", "create_bootblock(): tag %d has string value %s\n", l, bootblock->tag_cache->tag[l].val));
+        }
+        break;
+
+        case TagType_String: /* Tag is a string  */
+        {
+          int i=0;
+          if((i = nquotes(bootblock->tag_cache->tag[l].val))>0)
+          {
+            char *collapsed;
+            char *expanded;
+            if(i & 1)
+            {
+              dprintf(("", "create_bootblockwrite_tags(): Unbalanced quotes in string %s\n", bootblock->tag_cache->tag[l].val));
+              continue;
+            }
+            dprintf(("", "create_bootblock(): found %d quotes in string\n", i));
+            collapsed=collapse_quotes(bootblock->tag_cache->tag[l].val);
+            if (collapsed==NULL)
+            {
+              dprintf(("", "create_bootblock(): collapse_quotes failed, returning failure\n"));
+              continue;
+            }
+            expanded=expand_ctrls(collapsed);
+            rmfree((unsigned char*)collapsed);
+            if (expanded==NULL)
+            {
+              dprintf(("", "create_bootblock(): expand_ctrls failed, returning failure\n"));
+              continue;
+            }
+            dprintf(("", "create_bootblock(): String after expansion: %s\n", bootblock->tag_cache->tag[l].val));
+
+            rmfree((unsigned char*)expanded);
+          }
+
           /* Write the tag number and tag value size */
           write_big_word(body_data+bootblock_body_count, bootblock->tag_cache->tag[l].nci_tag);
           bootblock_body_count+=4;
@@ -583,6 +662,26 @@ char* create_bootblock(const sc_bootblock_data_struct* const bootblock)
             body_data[bootblock_body_count++]=nums[2];
             body_data[bootblock_body_count++]=nums[3];
           }
+        }
+        break;
+
+
+        /* An integer */
+        case TagType_Int:
+        {
+          int i;
+          char buff[8];
+
+          set_base(buff, bootblock->tag_cache->tag[l].val);
+          if(sscanf(bootblock->tag_cache->tag[l].val, buff, &i)!=1)
+          {
+            dprintf(("", "write_tags(): Bad integer %s\n", bootblock->tag_cache->tag[l].val));
+            return(NULL);
+          }
+
+          i = (int)htonl(i);
+          dprintf(("", "write_tags(): Int: 0x%x\n", i));
+          dprintf(("", "write_tags(): Warning: need to implement code to write word Int's to the bootblock.\n"));
         }
         break;
 
