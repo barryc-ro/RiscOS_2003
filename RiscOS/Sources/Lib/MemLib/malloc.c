@@ -23,7 +23,8 @@
 
 
 mbinptr av_[NAV * 2 + 2] = {
- 0,
+#if !ROM
+    0,
  IAV(0),   IAV(1),   IAV(2),   IAV(3),   IAV(4),   IAV(5),   IAV(6),   IAV(7),
  IAV(8),   IAV(9),   IAV(10),  IAV(11),  IAV(12),  IAV(13),  IAV(14),  IAV(15),
  IAV(16),  IAV(17),  IAV(18),  IAV(19),  IAV(20),  IAV(21),  IAV(22),  IAV(23),
@@ -40,7 +41,8 @@ mbinptr av_[NAV * 2 + 2] = {
  IAV(104), IAV(105), IAV(106), IAV(107), IAV(108), IAV(109), IAV(110), IAV(111),
  IAV(112), IAV(113), IAV(114), IAV(115), IAV(116), IAV(117), IAV(118), IAV(119),
  IAV(120), IAV(121), IAV(122), IAV(123), IAV(124), IAV(125), IAV(126), IAV(127),
- 0
+#endif
+    0
 };
 
 
@@ -308,7 +310,15 @@ os_error *MemHeap_Initialise( char *pDynamicAreaName )
         && !DynamicArea_Alloc( 0, pDynamicAreaName,
                                &malloc_da, (void**)&malloc_base ) )
     {
-        atexit( MemHeap__atexit );
+#if ROM
+	int i;
+	/* do the nasty fixup for ROM builds */
+	for (i = 0; i < sizeof(av_)/sizeof(av_[0]) - 2; i++)
+	{
+	    av_[i+1] = IAV(i);
+	}
+#endif
+	atexit( MemHeap__atexit );
         return NULL;
     }
 
