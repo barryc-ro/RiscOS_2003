@@ -88,6 +88,7 @@ cp15		CP	15
                 IMPORT  bindings
                 IMPORT  breaklist
                 IMPORT  missing_media
+		IMPORT	add_asd_C
 
 o_user_sp       EQU     16 * 4 + 8 * 12 + 4
 o_user_lr       EQU     o_user_sp + 4
@@ -122,6 +123,7 @@ ddt_swi_debugaif      EQU 0
 ddt_swi_beingdebugged EQU 1
 ddt_swi_startdebug    EQU 2
 ddt_swi_enddebug      EQU 3
+ddt_swi_addasd        EQU 4
 
 xos_writec      EQU     &20000
 xos_writes      EQU     &20001
@@ -159,6 +161,7 @@ n_changeenv_vector EQU  &1e
 os_claim        EQU     &1f
 os_release      EQU     &20
 os_releaseswiv  EQU     &ff
+os_claimprocessorvector	EQU	&69
 
 n_kbd_buffer    EQU     0
 
@@ -695,61 +698,31 @@ exit_handler    STR     lr, regs_r14
 
 old_swiv        DCD     0
 
-; MEDUSA - new SWI intercept claim
-intercept_addr  DCD     &1f033c4
+; Medusa->Ursula->??? compatible SWI interception
+;intercept_addr  DCD     &1f033c4	; Only valid <= RO 3.70
+old_swi_handler	DCD	0
 
 ; StrongARM - must be careful modifying the SWI code as we need to call
 ;             a SWI to synchronise it :-)
 claim_swiv
-		LDR	r3, intercept_addr
-		ADR	r2, swi_branch
-		SUB	r2, r3, r2
-		SUB	r2, r2, #4
-		MOV	r2, r2, LSR #2
-		BIC	r2, r2, #&ff000000
-		ORR	r2, r2, #&ea000000
-		STR	r2, swi_branch
-                [ StrongARM
-		MOV	ip, lr
-		MOV	r0, #1
-		ADR	r1, swi_branch
-		MOV	r2, r1
-		SWI	xos_synchronisecodeareas
-		]
-		ADR	r2, swi_intercept
-		SUB	r2, r2, r3
-		SUB	r2, r2, #8
-		MOV	r2, r2, LSR #2
-		BIC	r2, r2, #&ff000000
-		ORR	r2, r2, #&ea000000
-		STR	r2, [r3]
-		[ StrongARM
-		MOV	r0, #1
-		MOV	r1, r3
-		MOV	r2, r3
-		SWI	xos_synchronisecodeareas
-		MOVS	pc, ip
-		|
-                MOVS    pc, lr
-		]
+		MOV	r3, lr
+		MOV	r0, #2
+		ORR	r0, r0, #1<<8
+		ADR	r1, swi_intercept
+		SWI	os_claimprocessorvector
 
-release_swiv    MOV     r3, lr
-                LDR     r14, intercept_addr
-                LDR     r2, intercept_inst
-                STR     r2, [r14]
-		[ StrongARM
-		; Can't use SynchroniseCodeAreas because it's a SWI
-		; and it will probably re-enter us nastily...
-		MRC	cp15, 0, r0, c0, c0	; get processor ID
-		AND	r0, r0, #&f000
-		TEQ	r0, #&a000
-		MOVNES	pc, r3			; not a StrongARM
-		MCR	cp15, 0, r14, c7, c10, 1   ; clean D-cache entry
-		MOV	r0, #0
-		MCR	cp15, 0, r0, c7, c10, 4    ; drain write buffer
-		MCR	cp15, 0, r0, c7, c5	   ; flush I-cache
-		]
+		STR	r1, old_swi_handler
+
                 MOVS    pc, r3
+
+release_swiv
+		MOV	r3, lr
+		MOV	r0, #2
+		LDR	r1, old_swi_handler
+		ADR	r2, swi_intercept
+		SWI	os_claimprocessorvector
+
+		MOVS	pc, r3
 
 release_flag        DCD 0
 event_break_mask    DCD 0
@@ -760,13 +733,26 @@ cout_intercept_flag DCD 0
 os_exit_lr          DCD 0
 
 ; MEDUSA - POP regs saved by ROM swi intercept
-swi_intercept   LDMIA   sp!, {r10-r12}
-                STMDB   sp!, {r0, r12, lr}
-                EOR     r0, lr, lr, LSR #1
-                TST     r0, #1          ; IRQ or FIQ
-                BNE     swi_cont        ; Don't even think about it
+swi_intercept	; Entered in 32-bit mode
+		STMFD	sp!, {r0, r10-r12, lr, pc}
+		MRS	r11, SPSR_all
+		LDR	r0, old_swi_handler
+		STR	r0, [sp, #20]		; Overwrite PC on stack
 
-                BIC     lr, lr, #&fc000003
+		ANDS	r0, r11, #&1f		; USR_26 ?
+		TEQNE	r0, #3			; SVC_26 ?
+		LDMNEFD	sp!, {r0, r10-r12, lr, pc}
+
+		STMFD	sp!, {r11}	; Save SPSR on stack
+
+		; Change from SVC_32 to SVC_26
+		MRS	r11, CPSR_all
+		BIC	r11, r11, #&1f
+		ORR	r11, r11, #&03		; Set SVC_26
+		MSR	CPSR_all, r11
+
+		LDR	r11, [sp, #12]
+
                 LDR     r14, [lr, #-4]
                 BIC     r14, r14, #&ff000000      ; r14 = SWI number as read from code
 ; MEDUSA - remove wacky SWI intercept SWI
@@ -797,8 +783,8 @@ swi_intercept4  LDR     r12, [r12]
                 BNE     swi_intercept4
                 LDR     r0, stepflag              ; found a breakpoint! Are we single-stepping?
                 CMP     r0, #0
-                LDREQ   r0, [sp, #8]              ; get address from LR, or from R12 if this
-                LDRNE   r0, [sp, #4]              ; SWI was called in the single-stepper
+                LDREQ   r0, [sp, #20]              ; get address from LR, or from R12 if this
+                LDRNE   r0, [sp, #16]              ; SWI was called in the single-stepper
                 BIC     r0, r0, #&fc000003
                 SUB     r0, r0, #4
                 LDR     r12, exec_addr            ; is this the first instruction executed?
@@ -807,8 +793,13 @@ swi_intercept4  LDR     r12, [r12]
                 STR     r0, exec_addr
                 BEQ     swi_intercept3
                 LDR     r0, stepflag
+
+		LDR	r11, [sp], #4		  ; Load SPSR
+		MSR	SPSR_all, lr		  ; Restore SPSR
+
                 CMP     r0, #0
-                LDMIA   sp!, {r0, r12, lr}
+                LDMIA   sp!, {r0, r10-r12, lr}
+		ADD	sp, sp, #4		  ; Skip past pc
                 ORRNE   lr, r11, r12              ; Single step leaves pc in r11, r12
                 SUB     lr, lr, #4
                 STR     lr, regs_r15
@@ -854,7 +845,7 @@ swi_intercept0  MOV     r12, #0
                 LDMIA   sp!, {r0, r1, r2, r3, r4, sl, fp, lr}
                 ; Now check for exciting SWIs.
 swi_intercept1  TEQ     r14, #os_exit
-                LDREQ   r12, [sp, #8]
+                LDREQ   r12, [sp, #20]
                 STREQ   r12, os_exit_lr                      ; note address of OS_Exit for later
                 SUB     r14, r14, #wimp_swibase_h
                 TEQ     r14, #wimp_poll_l                    ; check for Wimp_Poll[Idle] or
@@ -863,13 +854,13 @@ swi_intercept1  TEQ     r14, #os_exit
                 TEQNE   r14, #ddt_swibase_l + ddt_swi_debugaif
                 TEQNE   r14, #ddt_swibase_l + ddt_swi_startdebug
                 TEQNE   r14, #ddt_swibase_l + ddt_swi_enddebug
+		TEQNE	r14, #ddt_swibase_l + ddt_swi_addasd
                 BEQ     swi_intercept6
                 ; and continue with SWI as normal
-swi_cont        LDMIA   sp!, {r0, r12, lr}
-; MEDUSA - 1st 2 instructions of 'real' SWI intercept
-                STMDB   sp!, {r10-r12}
-intercept_inst  BIC     r12, r14, #&fc000003
-swi_branch      DCD     0
+swi_cont	LDMFD	sp!, {lr}		; Load saved SPSR
+		MSR	SPSR_all, lr		; Restore it
+		LDMFD	sp!, {r0, r10-r12, lr, pc}	; Pass to next SWIV claimant
+
 
                 ; special handler for Wimp_Poll[Idle] and Debugger_*
 swi_intercept6  TEQ     r14, #ddt_swibase_l + ddt_swi_debugaif
@@ -883,11 +874,20 @@ swi_intercept6  TEQ     r14, #ddt_swibase_l + ddt_swi_debugaif
                 TEQ     r14, #ddt_swibase_l + ddt_swi_enddebug
                 BEQ     end_debug
 
+		TEQ	r14, #ddt_swibase_l + ddt_swi_addasd
+		BEQ	add_asd
+
                 ; Now we deal with Wimp_Poll or Wimp_PollIdle (luverly)
 
                 LDR     r14, poll_intercept_flag
                 TEQ     r14, #1
-                LDMEQIA sp!, {r0, r12, lr} ; If forcing single tasking
+		LDREQ	r0, [sp], #4
+		MSREQ	SPSR_all, r0
+		LDREQ	lr, [sp, #16]	   ; load lr
+		ANDEQ	r0, r0, #&f0000003
+		ORREQ	lr, lr, r0	   ; set SPSR flags right
+                LDMEQIA sp!, {r0, r10-r12} ; If forcing single tasking
+		ADDEQ	sp, sp, #8	   ; skip lr and pc
                 BICEQ   lr, lr, #overflow  ; dummy a NULL event from
                 MOVEQ   r0, #0             ; Wimp_Poll or Wimp_PollIdle
                 MOVEQS  pc, lr             ; & hope program can handle it.
@@ -909,11 +909,12 @@ swi_intercept6  TEQ     r14, #ddt_swibase_l + ddt_swi_debugaif
                 BL      unprotmem
                 LDMFD   sp!, {r1}
 
-                LDR     lr, [sp, #8]
+                LDR     lr, [sp, #20]	   ; Load lr
                 STR     lr, wimppoll_lr
                 BIC     lr, lr, #&fc000003
 		[ StrongARM
-		LDMFD	sp!, {r0, r12}
+		ADD	sp, sp, #4
+		LDMFD	sp!, {r0, r10-r12}
 		STR	r12, temp_r12
 		LDR	r14, [lr, #-4]
 		BIC	r12, r14, #&ff000000
@@ -924,6 +925,7 @@ swi_intercept6  TEQ     r14, #ddt_swibase_l + ddt_swi_debugaif
 		TEQ	r14, #os_callaswir12
 		LDREQ	r12, temp_r12
 01		LDMFD	sp!, {lr}
+		ADD	sp, sp, #4	   ; Skip over pc
 		BIC	lr, lr, #&0c000003 ; Force to user mode and enable
                 TEQP    pc, lr             ; interrupts so callback works!!!!
 		SWI	os_callaswir12
@@ -972,6 +974,27 @@ swi_inst        DCD     0                  ; Call the SWI (saved above)
                 STMIA   lr, {r0-r13}
 swi_intercept7  MOV     r0, #n_break_event
                 B       retfromexec
+
+add_asd
+		LDR	r0, [sp, #4]
+
+		STMFD	sp!, {r1-r9}
+		MOV	sl, sp
+		AND	sl, sl, #&ff00000
+		ADD	sl, sl, #512
+		MOV	fp, #0
+
+	SWI &107
+		BL	add_asd_C
+		LDMFD	sp!, {r1-r9}
+
+		LDMFD	sp!, {r0}
+		MSR	SPSR_all, r0		; restore SPSR
+
+		LDMFD	sp!, {r0, r10-r12, lr}
+		ADD	sp, sp, #4
+
+		MOVS	pc, lr
 
 wimppoll_lr     DCD     0
 wimppoll_pc     DCD     0
@@ -1379,7 +1402,9 @@ end_debug       MVN     r14, #I_bit
                 TSTP    r14, pc
                 LDR     r14, stepflag
                 CMP     r14, #0
-                LDMNEIA sp!, {r0, r12, lr}
+		ADDNE	sp, sp, #4		; skip spsr
+                LDMNEIA sp!, {r0, r10-r12, lr}
+		ADDNE	sp, sp, #4		; skip pc
                 MOVNE   r0, #n_enddebug
                 BNE     retfromexec    ; Use parent register if stepping
                 ADRL    r14, registers
