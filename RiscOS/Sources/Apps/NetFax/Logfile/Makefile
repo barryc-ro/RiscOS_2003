@@ -147,11 +147,9 @@ RESFILES = \
 #
 
 OBJS = \
- o.error\
  o.fontsetup\
  o.main\
  o.misc\
- o.miscwimp\
  o.optionlib\
  o.recordlib\
  o.runes\
@@ -161,11 +159,9 @@ OBJS = \
 
 
 OBJSZ = \
- oz.error\
  oz.fontsetup\
  oz.main\
  oz.misc\
- oz.miscwimp\
  oz.optionlib\
  oz.recordlib\
  oz.runes\
@@ -175,11 +171,9 @@ OBJSZ = \
 
 
 OBJSD =\
- od.error\
  od.fontsetup\
  od.main\
  od.misc\
- od.miscwimp\
  od.optionlib\
  od.recordlib\
  od.runes\
