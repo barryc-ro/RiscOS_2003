@@ -7,6 +7,7 @@
 
 #include <socklib.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <swis.h>
 
@@ -112,16 +113,25 @@ static _kernel_oserror *pumptofile(const void *data, u_long offset, size_t len, 
     fileinfo *fi = (fileinfo *) handle;
     _kernel_oserror *e;
 
-    if (offset != fi->pos)
-       if ((e=_swix(OS_Args, _INR(0,2)|_OUT(2), 1, fi->file, offset, &fi->pos)) != NULL)
-       {
-           _inet_error.errnum = ERRORBASE + ENOSPACE;
-           strcpy(_inet_error.errmess, e->errmess);
-           return &_inet_error;
-       }
+    if (len == 0)
+    {
+        /* OS_Args 1 would work, but this is faster as it doesn't fill with zeroes */
+        if ((e = _swix(OS_Args, _INR(0,2), 6, fi->file, offset)) != NULL)
+            goto error;
+    }
+    else
+    {
+        if (offset != fi->pos)
+           if ((e=_swix(OS_Args, _INR(0,2)|_OUT(2), 1, fi->file, offset, &fi->pos)) != NULL)
+           {
+               _inet_error.errnum = ERRORBASE + ENOSPACE;
+               strcpy(_inet_error.errmess, e->errmess);
+               return &_inet_error;
+           }
 
-    if ((e=_swix(OS_GBPB, _INR(0,3)|_OUT(4), 2, fi->file, data, len, &fi->pos)) != NULL)
-        goto error;
+        if ((e=_swix(OS_GBPB, _INR(0,3)|_OUT(4), 2, fi->file, data, len, &fi->pos)) != NULL)
+            goto error;
+    }
 
     return NULL;
 
@@ -135,18 +145,39 @@ static _kernel_oserror *fetchfile(const char *filename, struct in_addr server, c
 {
     fileinfo fi;
     _kernel_oserror *e;
+    int size;
+    char *canonical = NULL;
 
+    /* Open file for output */
     e = _swix(OS_Find, _INR(0,1)|_OUT(0), 0x80, local, &fi.file);
     if (e) return e;
 
+    /* Find canonical name of file, in case some bugger changes directory while
+     * multitasking in a task window.
+     */
+    e = _swix(OS_Args, _INR(0,2)|_IN(5)|_OUT(5), 7, fi.file, NULL, NULL, &size);
+    if (!e)
+    {
+        size = -size + 1;
+        canonical = malloc(size);
+
+        if (canonical)
+            e = _swix(OS_Args, _INR(0,2)|_IN(5), 7, fi.file, canonical, size);
+    }
+
+    /* Pump the file */
     fi.pos = 0;
+    if (!e)
+        e = tftpreadfile(filename, server, pumptofile, &fi);
 
-    e = tftpreadfile(filename, server, pumptofile, &fi);
-
+    /* Close the file */
     _swix(OS_Find, _INR(0,1), 0, fi.file);
 
+    /* If an error occured, delete the file */
     if (e)
-        _swix(OS_File, _INR(0,1), 6, local);
+        _swix(OS_File, _INR(0,1), 6, canonical ? canonical : local);
+
+    free(canonical);
 
     return e;
 }
