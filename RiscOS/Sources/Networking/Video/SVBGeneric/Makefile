@@ -1,5 +1,5 @@
 # Makefile for SVBGeneric
-# ====================
+# =======================
 #
 
 # -----------------------------------------------------------------------------
@@ -11,6 +11,8 @@
 # 08-Nov-1999	ADH	Created from VideoControl Makefile
 # 09-Nov-1999	ADH	Reworking for cleaner compile-time messages and
 #			independent ROM / RAM builds
+# 05-Apr-2000	ADH	Corrected path and filenames in ROM resources
+#			export rule
 
 # -----------------------------------------------------------------------------
 # Component specific options
@@ -214,14 +216,14 @@ install_rom: ${ROM_MODULE}
 	@echo
 	@echo ${COMPONENT}: Module installed (ROM)
 
-resources: LocalRes:Messages LocalRes:ResList
+resources: LocalRes:Messages
 	@echo
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESDIR}.${COMPONENT}
 	TokenCheck LocalRes:Messages
-	${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
+	${CP} LocalRes:Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
 	@echo
-	@echo ${COMPONENT}: resource files copied to Messages module
+	@echo ${COMPONENT}: Resource files copied to Messages module
 
 ${DIRS}:
 	@echo
@@ -259,9 +261,9 @@ rom_link: ${DIRS} ${ROM_MODULE}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-${MSGSF}: LocalRes:Messages LocalRes:ResList
+${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
-	resgen messages_file ${MSGSF} -via LocalRes:ResList
+	resgen messages_file ${MSGSF}
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	@echo
