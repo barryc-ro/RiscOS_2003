@@ -11,5 +11,6 @@
 /* but keeps the standalone code going */
 #include "flex.h"
 #else
-#include "../memlib/memflex.h"
+/* memlib is on include path so don't need the explicit path */
+#include "memflex.h"
 #endif

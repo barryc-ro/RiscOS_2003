@@ -9,7 +9,7 @@
 #include "myassert.h"
 
 
-extern void __ASSERT(int v, char *expr, char *file, int line)
+extern void __ASSERT(int v, const char *expr, const char *file, int line)
 {
         if (!v)
         {

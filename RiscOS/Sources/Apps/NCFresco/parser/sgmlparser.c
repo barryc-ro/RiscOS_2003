@@ -7,7 +7,7 @@
 
 #if SGML_REPORTING
 
-extern void sgml_note_unknown_element (SGMLCTX * context, char *fmt, ...) 
+extern void sgml_note_unknown_element (SGMLCTX * context, const char *fmt, ...) 
 {
     va_list list;
     va_start(list, fmt);
@@ -15,7 +15,7 @@ extern void sgml_note_unknown_element (SGMLCTX * context, char *fmt, ...)
     va_end(list);
 }
 
-extern void sgml_note_unknown_attribute (SGMLCTX * context, char *fmt, ...) 
+extern void sgml_note_unknown_attribute (SGMLCTX * context, const char *fmt, ...) 
 {
     va_list list;
     va_start(list, fmt);
@@ -23,7 +23,7 @@ extern void sgml_note_unknown_attribute (SGMLCTX * context, char *fmt, ...)
     va_end(list);
 }
 
-extern void sgml_note_bad_attribute (SGMLCTX * context, char *fmt, ...)
+extern void sgml_note_bad_attribute (SGMLCTX * context, const char *fmt, ...)
 {
     va_list list;
     va_start(list, fmt);
@@ -31,7 +31,7 @@ extern void sgml_note_bad_attribute (SGMLCTX * context, char *fmt, ...)
     va_end(list);
 }
 
-extern void sgml_note_message(SGMLCTX * context, char *fmt, ... )
+extern void sgml_note_message(SGMLCTX * context, const char *fmt, ... )
 {
     va_list list;
     va_start(list, fmt);

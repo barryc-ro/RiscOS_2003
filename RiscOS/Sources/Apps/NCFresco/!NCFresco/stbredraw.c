@@ -262,11 +262,9 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	 */
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
 
-#if 0
 	/* if we are top view above a selected view and are in web mode */
-        if (fe_find_top(selected_view) == v && v->browser_mode == fe_browser_mode_WEB)
-            draw_view_outline(selected_view->w);
-#endif
+/*         if (fe_find_top(selected_view) == v && v->browser_mode == fe_browser_mode_WEB) */
+/*             draw_view_outline(selected_view->w); */
 
         if ((flags & fe_update_IMAGE_RENDERING) == 0)
             fe_anti_twitter(&r.g);

@@ -147,6 +147,7 @@ os_error *webfonts_tidyup(void)
     return e2;
 }
 
+#ifdef STBWEB /*pdh*/
 int webfont_font_width(int f, const char *s)
 {
     webfont *wf = &webfonts[f];
@@ -165,6 +166,7 @@ int webfont_font_width(int f, const char *s)
 
     return result;
 }
+#endif
 
 /* Take a width either in OS units or in chars and return the value in the other for a string of TTY chars */
 
@@ -243,8 +245,8 @@ os_error *webfont_declare_printer_fonts(void)
     {
 	r.r[0] = item->handle;
 	ep = os_swix(PDriver_DeclareFont, &r);
-    }	
-    
+    }
+
     if (ep == NULL)
     {
 	r.r[0] = 0;
@@ -275,7 +277,7 @@ os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
 	webfont_font_name(WEBFONT_SYMBOL(1), buffer);
 	size += strlen(buffer)+2;
     }
-    
+
     size = RND(size);
 
     size += 2 * sizeof(int);	/* Two word header */

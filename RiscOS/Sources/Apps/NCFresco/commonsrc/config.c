@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <assert.h>
 
 #include "memwatch.h"
 
@@ -37,6 +38,7 @@
 #include "filetypes.h"
 #include "rcolours.h"
 #include "url.h"
+#include "myassert.h"
 #include "version.h"
 
 #ifndef DEBUG
@@ -211,6 +213,20 @@ extern void config_init(void)
     config_read_file();
 #ifdef STBWEB
     config_read_variables();
+#endif
+
+#ifndef STBWEB
+    /* If this assert fails then SOMEBODY has been adding items to the above
+     * array without adding corresponding ones in the array in
+     * !Fresco/configgui.c ...
+     */
+
+    {
+        extern const int configgui_array_size;    /* in configgui.c */
+
+        ASSERT( (sizeof(citems)/sizeof(config_item))
+                 == configgui_array_size );
+    }
 #endif
 
     /* SJM */

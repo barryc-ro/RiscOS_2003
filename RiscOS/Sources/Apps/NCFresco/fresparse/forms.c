@@ -73,7 +73,7 @@ static void check_radio(rid_form_element *fe, void *handle)
 
 extern void finishform (SGMLCTX * context, ELEMENT * element)
 {
-    HTMLCTX *me = htmlctxof(context);
+    /*HTMLCTX *me = htmlctxof(context);*/
 
     generic_finish (context, element);
 

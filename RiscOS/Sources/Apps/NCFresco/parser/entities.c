@@ -16,6 +16,8 @@
 #include "htmlparser.h"
 #endif
 
+#include "util.h"
+
 /** THIS TABLE MUST BE IN strncmp() ORDER FOR THIS TO WORK **/
 /** ALSO, NO NAME MAY ALSO BE A STEM OF ANOTHER NAME */
 

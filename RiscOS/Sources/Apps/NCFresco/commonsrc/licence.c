@@ -85,7 +85,7 @@ extern os_error *licence_init(void)
 #endif /* TIMEOUT */
 
 /*#ifndef MemCheck_MEMCHECK*/
-#if PRODUCTION && !defined(MemCheck_MEMCHECK)
+#if !DEVELOPMENT && !defined(MemCheck_MEMCHECK)
     if (VerifySerial(key_string) == 0)
     {
 	os_error *ep = (os_error *) &key_string;

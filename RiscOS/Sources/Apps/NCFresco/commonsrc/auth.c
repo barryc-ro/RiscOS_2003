@@ -43,7 +43,7 @@
 #if DEBUG
 #define AUTHDBG(a) fprintf a
 #else
-#define AUTHDBG(a) 
+#define AUTHDBG(a)
 #endif
 
 extern void translate_escaped_text(char *src, char *dest, int len);
@@ -90,6 +90,7 @@ static char *auth_type_names[] = {
 static int auth_read_allow_file(char *fname, allow_item **head);
 static int auth_test_allow(char *site, allow_item *list);
 
+#ifdef STBWEB
 static void auth_realm_dispose(auth_realm *r)
 {
     if (r)
@@ -171,6 +172,7 @@ void auth_dispose(void)
     auth_allows_dispose(deny_list);
     deny_list = NULL;
 }
+#endif
 
 /* ------------------------------------------------------------------------- */
 
@@ -363,7 +365,7 @@ char *auth_lookup_string(char *url)
     char *passwd;
     char temp[256];
     char *buffer = NULL;
-    
+
     if (auth_lookup(url, &type, &user, &passwd) == auth_lookup_FAIL)
 	return NULL;
 
@@ -384,10 +386,12 @@ char *auth_lookup_string(char *url)
     return buffer;
 }
 
+#ifdef STBWEB
 int auth_remove(char *url)
 {
     return FALSE;
 }
+#endif
 
 os_error *auth_write_realms(char *fname, auth_passwd_store pws)
 {
@@ -398,7 +402,7 @@ os_error *auth_write_realms(char *fname, auth_passwd_store pws)
 
     if (!gstrans_not_null(fname))
 	return NULL;
-    
+
     fh = fopen(fname, "w");
 
     if (fh == NULL)
@@ -466,7 +470,7 @@ os_error *auth_load_file(char *fname)
 
     if (file_type(fname) == -1)
 	return NULL;
-    
+
     fh = fopen(fname, "r");
 
     if (fh == NULL)
@@ -529,7 +533,7 @@ static int auth_read_allow_file(char *fname, allow_item **head)
 
     if (file_type(fname) == -1)
 	return 0;
-    
+
     f = fopen(fname, "r");
 
     if (f == NULL)

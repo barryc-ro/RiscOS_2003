@@ -228,12 +228,13 @@ rid_area_item *imagemap_find_area(rid_map_item * map, int x, int y)
     if (!found && default_area)
         found = default_area;
 #endif
-    
+
     IMGDBG(( "found at %p\n", found));
 
     return found;
 }
 
+#ifdef STBWEB
 rid_area_item *imagemap_find_area_from_name(rid_header * rh, const char *name, int x, int y)
 {
     rid_map_item *map;
@@ -242,6 +243,7 @@ rid_area_item *imagemap_find_area_from_name(rid_header * rh, const char *name, i
         return imagemap_find_area(map, x, y);
     return NULL;
 }
+#endif
 
 rid_map_item *imagemap_find_map(rid_header * rh, const char *name)
 {
@@ -493,7 +495,7 @@ static void imagemap_check_all_image_fn(int called_at, void *handle)
     IMGDBG(( "imagemap: scan from %p\n", ti));
 
     for (ti = rid_scan(ti, SCAN_THIS | SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_IMAGE);
-	 ti; 
+	 ti;
 	 ti = rid_scan(ti, SCAN_FWD | SCAN_RECURSE | SCAN_FILTER | rid_tag_IMAGE))
     {
         rid_text_item_image *tii = (rid_text_item_image *)ti;

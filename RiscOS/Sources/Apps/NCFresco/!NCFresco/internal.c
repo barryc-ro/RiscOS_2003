@@ -629,7 +629,9 @@ static os_error *fe_mem_dump_write_file(FILE *f)
     fprintf(f, "</PRE>");
 
     fprintf(f, "<H2><A NAME='image'>Image heap</A></H2><PRE>");
+#if !MEMLIB
     heap__dump(f);
+#endif
     fprintf(f, "</PRE>");
 
     return NULL;

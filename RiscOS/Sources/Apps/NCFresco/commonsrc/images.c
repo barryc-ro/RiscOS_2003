@@ -195,7 +195,7 @@ typedef struct _image_info
 #if NEW_WEBIMAGE == 2
     void *data_area;
     int plotter;
-    int xdpi, ydpi;		
+    int xdpi, ydpi;
     int dx, dy;
     int offset_x, offset_y;	/* for DrawFile only */
 #endif
@@ -213,6 +213,7 @@ static char *image_thread_data_ptr;
 static int image_thread_data_more;
 static int image_thread_data_status;
 
+/* extern for use of NCFresco frontend */
 int spriteextend_version;
 
 /* ------------------------------------------------------------------------- */
@@ -343,7 +344,7 @@ static void fillin_scales(image i, int mode)
     i->dx = 1 << bbc_modevar(mode, bbc_XEigFactor);
     i->dy = 1 << bbc_modevar(mode, bbc_YEigFactor);
     i->xdpi = 180 / i->dx;
-    i->ydpi = 180 / i->dy; 
+    i->ydpi = 180 / i->dy;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -371,7 +372,7 @@ static int new_image_get_bytes(char *buf, int buf_len, void *h, BOOL *flush)
 
 	IMGDBG(("Now have %d bytes\n", image_thread_data_size));
     }
-    
+
     if (image_thread_data_size == 0)
     {
 	IMGDBG(("get_bytes: out: rc=-1\n"));
@@ -550,7 +551,7 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 	    if (i->frames > 1)
 		i->flags |= image_flag_ANIMATION;
 	}
-	
+
 	return OK;
     }
 
@@ -593,7 +594,7 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     IMGDBGN(("rec_fn: out: have info; x=%d, y=%d\n", ir->x, ir->y));
 
 /*     access_pause(i->ah); */
-    
+
     return TRUE;
 }
 
@@ -643,7 +644,7 @@ static int image_thread_start(image i)
     image_thread_data_status = 0;
 
     MemCheck_SetChecking(1,1);
-    
+
     i->tt = thread_start(&bastard_main, 0, (char**) i, 4096);
 
     IMGDBG(("New thread 0x%p\n", i->tt));
@@ -681,7 +682,7 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    thread_run(i->tt);
 	    MemCheck_UnRegisterMiscBlock(buffer);
 	}
-	    
+
 	from += len;
     }
 
@@ -764,13 +765,13 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    IMGDBG(("image_thread_process: plotter %d size %dx%d\n", i->plotter, i->width, i->height));
 
 	    flexmem_shift();
-	}	    
+	}
 
 	if (i->plotter == plotter_UNKNOWN)
 	    free_data_area(&i->data_area);
     }
 #endif
-    
+
     IMGDBGN(("image_thread_process: out: status %d\n", i->tt->status));
 
     return (i->tt->status == thread_ALIVE);
@@ -792,7 +793,7 @@ static char *image_thread_end(image i)
 	image_thread_data_ptr = 0;
 	image_thread_data_more = 0;
 	thread_run(i->tt);
-    }    
+    }
 
     _kernel_osbyte(0xE5, 0xFF, 0);
     _kernel_osbyte(0x7C, 0xFF, 0);
@@ -807,7 +808,7 @@ static char *image_thread_end(image i)
     IMGDBGN(("About to destroy thread 0x%p\n", i->tt));
 
     thread_destroy(i->tt);
- 
+
     i->tt = NULL;
 
     IMGDBGN(("image_thread_end: out: res='%s'\n", strsafe(res)));
@@ -825,7 +826,7 @@ static char *image_process(image i, char *cfile)
 
     if ((fh = ro_fopen(cfile, RO_OPEN_READ)) == 0)
 	return ro_ferror();
-    
+
     i->flags |= image_flag_NO_BLOCKS;
 
     if (image_thread_start(i))
@@ -1118,6 +1119,9 @@ os_error *image_init(void)
     image_list = image_last = NULL;
     being_fetched = 0;
 
+    /* pdh: I had my doubts, but shockingly this *does* seem to be the
+     * easiest way of doing it
+     */
     os_cli("Set "PROGRAM_NAME"$Temp 99");
     os_cli("RMEnsure SpriteExtend 0.99 Set "PROGRAM_NAME"$Temp 61");
     spriteextend_version = atoi(getenv(PROGRAM_NAME"$Temp"));
@@ -1127,7 +1131,7 @@ os_error *image_init(void)
 #ifndef STBWEB
     image_poll_reaper(0, (void *) translators);	/* Use translators' address as a safe handle */
 #endif
-    
+
     return NULL;
 }
 
@@ -1213,6 +1217,9 @@ void image_palette_change(void)
 	    strncpy(i->sname, ((sprite_header *) (i->our_area + 1))->name, 12);
 	    flexmem_shift();
 	}
+
+	/* pdh: depth may have changed */
+	i->table_type = pixtrans_UNKNOWN;
     }
 }
 
@@ -1358,7 +1365,7 @@ static os_error *image_find_icontype(image i)
     i->height = info.height;
 
     fillin_scales(i, info.mode);
-    
+
     if (info.mask)
 	i->flags |= image_flag_MASK;
 
@@ -1908,6 +1915,7 @@ os_error *image_flush(image i, int flags)
 
 	/* Remove any animations */
 	alarm_removeall(i);
+	i->cur_repeat = 0;
 
 	free_data_area(&i->data_area);
 	free_area(&i->cache_area);
@@ -2005,6 +2013,7 @@ os_error *image_flush_marked(void)
     return NULL;
 }
 
+#ifdef STBWEB
 os_error *image_expire(image i)
 {
     if (i == NULL || i->magic != IMAGE_MAGIC)
@@ -2015,9 +2024,10 @@ os_error *image_expire(image i)
     IMGDBGN(("image: expire %p\n", i));
 
     access_set_header_info(i->url, 1, 0, 0); /* date > expires */
-    
+
     return NULL;
 }
+#endif
 
 os_error *image_data_size(image i, image_flags *flags, int *data_so_far, int *data_size)
 {
@@ -2206,7 +2216,7 @@ static BOOL image_reduce_scales(sprite_factors *facs)
 	facs->ymag = facs->ydiv = 1;
 	return FALSE;
     }
-    
+
     r = im_gcf(facs->xmag, facs->xdiv);
     if (r != 1)
     {
@@ -2418,7 +2428,7 @@ static int image_size_needed(int c_w, int c_h, int bpp, image_cache_t mask)
     if (mask != image_cache_SOLID)
     {
 	int mask_data_size;
-	if (spriteextend_version >= 99 || bpp >= 16)	/* mask bpp = 1 bpp */
+	if ( spriteextend_version >= 99 || bpp >= 16)	/* mask bpp = 1 bpp */
 	    mask_data_size = ((c_w + 31)/32)*4*c_h;
 	else						/* mask bpp = image bpp */
 	    mask_data_size = data_size;
@@ -2513,7 +2523,7 @@ static os_error *image_init_cache_sprite(image i, int w, int h, int limit, image
     size = image_size_needed(w, h, bpp, mask);
 #if ADD_PALETTE
     size += 2*4*256;
-#endif    
+#endif
     IMGDBG(("image: build cache size %d limit %d mask %d dims %dx%d\n", size, limit, mask, w, h));
 
     if (size > limit)
@@ -2543,7 +2553,7 @@ static os_error *image_init_cache_sprite(image i, int w, int h, int limit, image
 	IMGDBGN(("image: added palette to sprite error '%s'\n", e ? e->errmess : ""));
     }
 #endif
-    
+
     i->cache_mask = 0;
     if (!e && mask != image_cache_SOLID)
     {
@@ -2636,7 +2646,7 @@ static os_error *image_get_trans(sprite_area *area, sprite_ptr sptr, sprite_pixt
 	    r.r[3] = -1;
 	    r.r[4] = 0;
 	    r.r[5] = (1 << 0);
-	    if (spriteextend_version >= 99)
+	    if ( spriteextend_version >= 99 )
 		r.r[5] |= (1 << 4);   /* SJM: allow wide tables */
 
 	    e = os_swix(ColourTrans_GenerateTable, &r);
@@ -2743,7 +2753,7 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
     {
 	c_h = i_h * cceil(128, i_h);
 	c_w = i_w * cceil(MAX_CACHE_BYTES*8, i_w*c_h*bpp);
-    }	
+    }
 
     if (i->cache_area == NULL)
     {
@@ -2807,8 +2817,9 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 
 	    if (!e)
 	    {
-		int flags, q, p;
-		BOOL scale_needed;
+		/* DAF: is init on flags and scale_needed the right values? */
+		int flags = 0, q, p;
+		BOOL scale_needed = FALSE;
 
 #if NEW_WEBIMAGE == 2
                 i_w_os = i_w * i->dx;
@@ -2833,7 +2844,7 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 		}
 
 		IMGDBGN(("image: cache do plot scale %d table %d @ %p\n", scale_needed, table_type, pt));
-		
+
 		for (q = 0; q < c_h_os; q += i_h_os)
 	            for (p = 0; p < c_w_os; p += i_w_os)
 		    {
@@ -2934,7 +2945,7 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
 
 	MemCheck_UnRegisterMiscBlock(sph);
 #endif
-	
+
 	/* If we don't have a pixtrans then build one, unless plotting from the cache which is
  	 * always in the current mode/palette
 	 */
@@ -3021,7 +3032,7 @@ static void image_drawfile_render(image i, int x, int y, int w, int h, int scale
 
     if ((i->flags & image_flag_RENDERABLE) == 0)
 	return;
-    
+
     trfm[0] = (w << 16) / i->width;
     trfm[3] = (h << 16) / i->height;
     trfm[1] = trfm[2] = 0;
@@ -3036,7 +3047,7 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 
     if ((i->flags & image_flag_RENDERABLE) == 0)
 	return;
-    
+
 #if 0				/* If you trust the dpi in the jpeg... */
     facs.xmag = w*2 * i->xdpi;
     facs.xdiv = i->width * 180;
@@ -3048,11 +3059,11 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
     facs.ymag = h*2;
     facs.ydiv = i->height * i->dy;
 #endif
-    
+
     image_reduce_scales(&facs);
 
     IMGDBGN(("jpeg_render: size %dx%d at %dx%d dpi %dx%d\n", i->width, i->height, w, h, i->xdpi, i->ydpi));
-    
+
     _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, config_display_jpeg & 3);
 }
 
@@ -3101,12 +3112,12 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
 
     if ( (i->flags & image_flag_REALTHING) == 0 )
 	plotter = plotter_SPRITE;
-	
+
     flexmem_noshift();
 
     if (plotters[plotter].render)
 	plotters[plotter].render(i, x, y, w, h, scale_image, plot_bg, handle, ox, oy);
-    
+
     flexmem_shift();
 }
 
@@ -3266,7 +3277,7 @@ int image_tile(image i, int x, int y, wimp_box *bb, wimp_paletteword bgcol, int 
 	IMGDBG(("image_tile(): ptr %p translate %d pt %p type %d mask %d os_size %dx%d\n",
 		id.s.addr, translate, pt, table_type, i->flags & image_flag_MASK ? 1 : 0,
 		width, height));
-	
+
 	/* plot the sprite */
 	for (q=minq; q < bb->y1; q+= height)
 	    for (p=minp; p < bb->x1; p+= width)
@@ -3598,7 +3609,7 @@ os_error *image_save_as_sprite(image i, char *fname)
 
     if (plotters[i->plotter].save_as_sprite)
 	e = plotters[i->plotter].save_as_sprite(i, fname);
-    
+
     flexmem_shift();
 
     return e;
@@ -3717,7 +3728,7 @@ void image_save_as_draw(image i, int fh, wimp_box *bb, int *fileoff)
 
     if (plotters[i->plotter].save_as_draw)
 	plotters[i->plotter].save_as_draw(i, fh, bb, fileoff);
-    
+
     flexmem_shift();
 }
 
@@ -4140,14 +4151,14 @@ static void image_animation_alarm(int at, void *h)
     if (i->cur_frame == -1)
     {
 	IMGDBG(("animation: restart\n"));
-	
+
 	image_issue_callbacks(i, image_cb_status_UPDATE_ANIM, NULL);
 
 	image_startup_animation(i);
 
 	return;
     }
-    
+
     rec = i->frame + i->cur_frame;
     switch (rec->removal)
     {
@@ -4180,7 +4191,9 @@ static void image_animation_alarm(int at, void *h)
     if (i->cur_frame == i->frames)
     {
 	i->cur_repeat++;
-	if (i->cur_repeat >= i->repeats)
+
+	/* Repeats==0 means loop indefinitely */
+	if ( i->repeats > 0 && (i->cur_repeat >= i->repeats) )
 	{
 	    i->cur_frame--;
 	    redraw = 0;		/* Cancel the redraw if this is the last frame */
@@ -4260,7 +4273,7 @@ static void image_startup_animation(image i)
 	image_animation_dump_info(i);
 
 	e = image_animation_init_cache(i);
-	
+
 	if (e) usrtrc( "animation: start error %x %s\n", e->errnum, e->errmess);
 
 	IMGDBGN(("Setting animation alarm for %dcs from now.\n", i->frame->delay));

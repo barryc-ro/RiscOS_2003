@@ -125,6 +125,7 @@ static int *be_build_frame_sizes(const rid_stdunits *vals, int n, const rid_fram
 /* convert all the variable size fields into fixed pixel amounts */
 /* correct backwards for all the spacing added */
 
+#ifdef STBWEB
 static void fix_frame_sizes(rid_stdunits *vals, int n, rid_frame_unit_totals *totals, int size, int spacing)
 {
     rid_stdunits *val;
@@ -148,6 +149,7 @@ static void fix_frame_sizes(rid_stdunits *vals, int n, rid_frame_unit_totals *to
     }
     mm_free(pos);
 }
+#endif
 
 static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe_frame_info *info, char **urls, antweb_doc *doc)
 {
@@ -347,6 +349,7 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only)
     mm_free(urls);
 }
 
+#ifdef STBWEB
 int layout_frame_resize_bounds(antweb_doc *doc, int x, int y, wimp_box *box, int *handle)
 {
     layout_spacing_info *spc;
@@ -368,6 +371,7 @@ int layout_frame_resize_bounds(antweb_doc *doc, int x, int y, wimp_box *box, int
     }
     return be_resize_NONE;
 }
+#endif
 
 void layout_free_spacing_list(antweb_doc *doc)
 {
@@ -384,6 +388,7 @@ void layout_free_spacing_list(antweb_doc *doc)
 #define MIN_X_SIZE  0
 #define MIN_Y_SIZE  0
 
+#ifdef STBWEB
 void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
 {
     layout_spacing_info *spc = (layout_spacing_info *)(long) handle;
@@ -404,7 +409,7 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
         fs->heights[spc->index - 1].u.f = (spc->bbox.y1 - (double)y - YSPACING)/PX_TO_OS;
         fs->heights[spc->index].u.f     = ((double)y - spc->bbox.y0 - YSPACING)/PX_TO_OS;
 
-#if DEBUG >=2 
+#if DEBUG >=2
 {
     int i;
     fprintf(stderr, "layout: update heights to");
@@ -440,6 +445,7 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
 
     backend_reset_width(doc, 0);
 }
+#endif
 
 /* ---------------------------------------------------------------------------------------------------------- */
 

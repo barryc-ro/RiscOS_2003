@@ -31,10 +31,10 @@
 #define sgml_note_has_frames(a) a->callback.note_has_frames(a)
 #define sgml_note_has_address(a) a->callback.note_has_address(a)
 
-extern void sgml_note_unknown_element (SGMLCTX * context, char *fmt, ...) ;
-extern void sgml_note_unknown_attribute (SGMLCTX * context, char *fmt, ...) ;
-extern void sgml_note_bad_attribute (SGMLCTX * context, char *fmt, ...);
-extern void sgml_note_message(SGMLCTX * context, char *fmt, ... );
+extern void sgml_note_unknown_element (SGMLCTX * context, const char *fmt, ...) ;
+extern void sgml_note_unknown_attribute (SGMLCTX * context, const char *fmt, ...) ;
+extern void sgml_note_bad_attribute (SGMLCTX * context, const char *fmt, ...);
+extern void sgml_note_message(SGMLCTX * context, const char *fmt, ... );
 
 #else /* SGML_REPORTING */
 

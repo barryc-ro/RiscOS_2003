@@ -64,7 +64,7 @@ extern char *get_state_name(state_fn fn);
 
 /* support.c */
 
-extern int strnicmp(char *a, char *b, int n);
+extern int strnicmp(const char *a, const char *b, int n);
 extern char *stringdup(STRING s);
 extern char *strip_stringdup(STRING s);
 extern char *valuestringdup(const VALUE *v);

@@ -15,7 +15,7 @@ extern void init_usrtrc(void)
 }
 
 #pragma -v1
-extern void usrtrc(char *fmt, ...)
+extern void usrtrc(const char *fmt, ...)
 #pragma -v0
 {
     if (emit)

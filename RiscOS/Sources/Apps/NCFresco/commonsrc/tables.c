@@ -69,7 +69,7 @@ Music used:
     At /colgroup, if no cols have been entered, create to the span
     given in the colgroup. If cols have been given, the colgroup spans
     to the end of the last col and is then closed.
-    
+
 */
 
 /*****************************************************************************/
@@ -131,6 +131,7 @@ static VALUE no_value = { value_none, {0} };
 /* Can be called with a cell or cell==NULL and x and y given */
 /* Work out the borders for a given cell */
 
+#ifdef STBWEB /*pdh*/
 void table_cell_borders(rid_table_item *table, rid_table_cell *cell, int x, int y, border_str *bb)
 {
     if (cell == NULL)
@@ -148,6 +149,7 @@ void table_cell_borders(rid_table_item *table, rid_table_cell *cell, int x, int 
     bb->l = table->cellspacing + table->cellpadding;
     bb->r = table->cellpadding;
 }
+#endif
 
 /* Return the offset from the top left of the cell to the origin of the enclosed stream */
 
@@ -203,7 +205,7 @@ void table_cell_stream_origin(rid_table_item *table, rid_table_cell *cell, int *
 }
 
 /*****************************************************************************
-  
+
   On entry *xp and *yp indicate where the last match was.  That cell can
   never be returned.  If NULL is returned, there are no further cells in
   the table and *xp and *yp values should not be used.  If a cell is
@@ -211,19 +213,19 @@ void table_cell_stream_origin(rid_table_item *table, rid_table_cell *cell, int *
   rid_next_root_cell, first call should have *xp=-1 and *yp=0.  For
   rid_prev_root_cell, first call should have *xp=table->cells.x,
   *yp=table->cells.y-1.
-  
+
   */
 
 extern rid_table_cell * rid_next_root_cell(rid_table_item *table, int *xp, int *yp)
 {
     rid_table_cell *cell = NULL;
     int x = *xp, y = *yp;
-    
+
     TASSERT(table != NULL);
-    
+
     if (table->cells.x == 0 || table->cells.y == 0)
 	return NULL;
-    
+
     while (1)
     {
 	x++;
@@ -244,7 +246,7 @@ extern rid_table_cell * rid_next_root_cell(rid_table_item *table, int *xp, int *
 	    return cell;
 	}
     }
-    
+
     return NULL;
 }
 
@@ -252,12 +254,12 @@ extern rid_table_cell *rid_prev_root_cell(rid_table_item *table, int *xp, int *y
 {
     rid_table_cell *cell = NULL;
     int x = *xp, y = *yp;
-    
+
     TASSERT(table != NULL);
-    
+
     if (table->cells.x == 0 || table->cells.y == 0)
 	return NULL;
-    
+
     while (1)
     {
 	x--;
@@ -278,13 +280,13 @@ extern rid_table_cell *rid_prev_root_cell(rid_table_item *table, int *xp, int *y
 	    return cell;
 	}
     }
-    
+
     return NULL;
 }
 
 /*****************************************************************************/
 
-extern void floating_table_format_alert_begin(SGMLCTX *context)
+static void floating_table_format_alert_begin(SGMLCTX *context)
 {
     rid_header *rh = htmlctxof(context)->rh;
 
@@ -293,7 +295,7 @@ extern void floating_table_format_alert_begin(SGMLCTX *context)
     FMTDBG(("floating_table_format_alert_begin() - now %d\n", rh->full_format_nest));
 }
 
-extern void floating_table_format_alert_finish(SGMLCTX *context)
+static void floating_table_format_alert_finish(SGMLCTX *context)
 {
     rid_header *rh = htmlctxof(context)->rh;
 
@@ -306,20 +308,20 @@ extern void floating_table_format_alert_finish(SGMLCTX *context)
 }
 
 /*****************************************************************************
-  
+
   Extract properties information from the attributes given and generate
   a rid_table_props structure to describe them iff any attributes need
-  recording, else just return NULL (ie this item will inherit all 
+  recording, else just return NULL (ie this item will inherit all
   properties and save some memory whilst doing it).
-  
+
   Note that the inheritence order requirements mean that we cannot just
   let style information stack as normal, as this doesn't spot vertically
   inherited alignment information form column groups, for example.
-  
+
   Both the alignment attributes has an accompanying table that converts
   from the attributes specific enumeration through to generic align
   enumeration values. The table is terminated with (-1,-1).
-  
+
   */
 
 static rid_table_props *parse_table_props(VALUE *valign,
@@ -336,17 +338,17 @@ static rid_table_props *parse_table_props(VALUE *valign,
 {
     rid_table_props *p;
     int used = 0;
-    
+
     p = mm_calloc(1, sizeof(*p));
-    
+
     if (p == NULL)
 	return NULL;
-    
+
     if (valign->type == value_enum)
     {
 	int spec = valign->u.i;
 	align_table *ptr = valign_index;
-	
+
 	while (ptr->specific != (unsigned int) -1)
 	{
 	    if (ptr->specific == spec)
@@ -361,13 +363,13 @@ static rid_table_props *parse_table_props(VALUE *valign,
 	if (ptr->specific == (unsigned int) -1)
 	    fprintf(stderr, "parse_table_props(): unknown valign tag %d\n", spec);
 #endif
-    }		
-    
+    }
+
     if (halign->type == value_enum)
     {
 	int spec = halign->u.i;
 	align_table *ptr = halign_index;
-	
+
 	while (ptr->specific != (unsigned int) -1)
 	{
 	    if (ptr->specific == spec)
@@ -382,33 +384,33 @@ static rid_table_props *parse_table_props(VALUE *valign,
 	if (ptr->specific == (unsigned int) -1)
 	    fprintf(stderr, "parse_table_props(): unknown valign tag %d\n", spec);
 #endif
-    }		
-    
+    }
+
     if (dir->type == value_enum)
     {
 	/* Either LTR or RTL - no other choices */
 	p->dir = dir->u.i == HTML_TABLE_DIR_LTR ? rid_dt_LTR : rid_dt_RTL;
 	used++;
     }
-    
+
     if (ch->type == value_string)
     {
 	used++;
 	p->ch = ch->u.s.ptr[0];
     }
-    
+
     if (choff->type == value_absunit)
     {
 	used++;
 	p->choff = *choff;
     }
-    
+
     if (lang->type == value_string)
     {
 	used++;
 	p->lang = stringdup(lang->u.s);
     }
-    
+
     if (style->type == value_string)
     {
 	used++;
@@ -427,7 +429,7 @@ static rid_table_props *parse_table_props(VALUE *valign,
 	mm_free(p);
 	return NULL;
     }
-    
+
     return p;
 }
 
@@ -435,18 +437,18 @@ static rid_table_props *parse_table_props(VALUE *valign,
 
   Generate a copy of a set of properties, including replicating any
   additional memory necessary.
-  
+
  */
 
 static rid_table_props *replicate_props(rid_table_props *props)
 {
     rid_table_props *new;
-    
+
     if (props == NULL)
 	return NULL;
-    
+
     new = mm_calloc(1, sizeof(*new));
-    
+
     new->valign = props->valign;
     new->halign = props->halign;
     new->dir = props->dir;
@@ -454,7 +456,7 @@ static rid_table_props *replicate_props(rid_table_props *props)
     new->choff = props->choff;
     new->lang = strdup(props->lang);
     new->style = strdup(props->style);
-    
+
     return new;
 }
 
@@ -501,7 +503,7 @@ static void set_column_flags(rid_table_item *table, int x)
 }
 
 /*****************************************************************************
-  
+
   Add a column before reached end of colgroup section. No rows exist.
   table->scaff.x is next column header to initialise, and not advanced
   here. There might or might not be an existing colgroup. If one does
@@ -509,37 +511,37 @@ static void set_column_flags(rid_table_item *table, int x)
   header is sorted out when the colgroupsection is closed. Once this
   point has been passed, we use add_retro_col(), which does its own
   thing.
-  
+
   */
 
 static rid_table_colhdr * add_new_colhdr(rid_table_item *table)
 {
     const int x = table->cells.x++;
-    
-    TABDBG(("add_new_colhdr(%p): from %d to %d columns, %p\n", 
+
+    TABDBG(("add_new_colhdr(%p): from %d to %d columns, %p\n",
 	    table, x, table->cells.x, table->colhdrs));
-    
+
     ASSERT(table->cells.x == 1 || table->colhdrs != NULL);
-    
+
     table->colhdrs = mm_realloc(table->colhdrs, (x + 1) * sizeof(rid_table_colhdr *));
     table->colhdrs[x] = mm_calloc(1, sizeof(rid_table_colhdr));
-    
+
     return table->colhdrs[x];
 }
 
 /*****************************************************************************
-  
+
   Column groups are only added during the colgroup section - there can be
   no rows in the table at this point.
-  
+
   */
 
 static rid_table_colgroup * add_new_colgroup(rid_table_item *table)
 {
     const int x = table->num_groups.x++;
-    
+
     TABDBG(("add_new_colgroup(%p): from %d to %d colgroups\n", table, x, table->num_groups.x));
-    
+
     table->flags |= rid_tf_IN_COLGROUP;
     table->colgroups = mm_realloc(table->colgroups, (x+1) * sizeof(rid_table_colgroup *) );
     table->colgroups[x] = mm_calloc(1, sizeof(rid_table_colgroup) );
@@ -554,18 +556,18 @@ static void mark_row_as_end_rowgroup(HTMLCTX *me)
 
     if (table->cells.y == 0)
 	return;
-    
-    table->rowhdrs[table->cells.y-1]->flags |= rid_rhf_GROUP_BELOW; 
+
+    table->rowhdrs[table->cells.y-1]->flags |= rid_rhf_GROUP_BELOW;
 }
 
 static void mark_row_as_begin_rowgroup(HTMLCTX *me)
 {
     rid_table_item *table = me->table;
-    
+
     if (table->cells.y == 0)
 	return;
-    
-    table->rowhdrs[table->cells.y-1]->flags |= rid_rhf_GROUP_ABOVE; 
+
+    table->rowhdrs[table->cells.y-1]->flags |= rid_rhf_GROUP_ABOVE;
 }
 #endif
 
@@ -574,12 +576,12 @@ static void mark_row_as_begin_rowgroup(HTMLCTX *me)
 static rid_table_rowgroup * add_new_rowgroup(rid_table_item *table)
 {
     const int y = table->num_groups.y++;
-    
+
     TABDBG(("add_new_rowgroup(%p): from %d to %d rowgroups\n", table, y, table->num_groups.y));
-    
+
     table->rowgroups = mm_realloc(table->rowgroups, (y+1) * sizeof(rid_table_rowgroup *) );
     table->rowgroups[y] = mm_calloc(1, sizeof(rid_table_rowgroup));
-    
+
     return table->rowgroups[y];
 }
 
@@ -587,7 +589,7 @@ static void copy_colhdr_props(rid_table_colhdr *from, rid_table_colhdr *to)
 {
     /* Bulk copy */
     *to = *from;
-    
+
     /* Replicate subsidary allocated memory */
     to->props         = replicate_props(to->props);
     to->id            = strdup(to->id);
@@ -596,7 +598,7 @@ static void copy_colhdr_props(rid_table_colhdr *from, rid_table_colhdr *to)
 
 
 /*****************************************************************************
-  
+
   Add a column to the table after the end of the colgroup section.  We
   perform the array reshaping through a memory copy - it's easy.  A
   new rid_table_colhdr item is also added.  If the number of columns
@@ -621,27 +623,27 @@ static void add_retro_col(rid_table_item *table)
     rid_table_colhdr *colhdr;
     size_t dsts, srcs, cpys, size;
     int x, y;
-    
-    TABDBG(("add_retro_col(%p) - from %d to %d columns\n", 
+
+    TABDBG(("add_retro_col(%p) - from %d to %d columns\n",
 	    table, table->cells.x, table->cells.x+1));
-    
+
     if (table->state == tabstate_BAD)
 	return;
-    
+
     ASSERT( (table->flags & rid_tf_COLS_FIXED) == 0 );
-    
+
     /* First add a column header */
-    
+
     colhdr = add_new_colhdr(table);
-    
+
     /* Maybe replicate previous colhdr attributes */
-    
+
     if ( table->cells.x > 1 && (table->colhdrs[table->cells.x-2]->flags & rid_chf_REPLICATE) != 0 )
     {
 	TABDBG(("Replicating previous colhdr properties\n"));
 	copy_colhdr_props(table->colhdrs[table->cells.x-2], colhdr);
     }
-    
+
     set_column_flags(table, table->cells.x - 1);
 
     if ( table->cur_colgroup != NULL )
@@ -669,7 +671,7 @@ static void add_retro_col(rid_table_item *table)
     }
 
     /* Then add another column */
-    
+
     size = (table->cells.x) * table->cells.y * sizeof(*cellp);
     cellp = mm_calloc( 1, size );
 
@@ -680,33 +682,33 @@ static void add_retro_col(rid_table_item *table)
     dsts = table->cells.x;
     srcs = table->cells.x - 1;
     cpys = srcs * sizeof(*cellp);
-    
+
     TABDBGN(("Reshape array: size %d, dstp %p, srcp %p, dsts %d, srcs %d, cpys %d\n",
 	     (int) size, dstp, srcp, (int) dsts, (int) srcs, (int) cpys));
-    
+
     /* Reshape the array by copying slices - no overlaps as new memory */
-    
+
     for (y = 0; y < table->cells.y; y++)
     {
 	memcpy(dstp, srcp, cpys);
 	dstp += dsts;
 	srcp += srcs;
     }
-    
+
     mm_free(table->array);
     table->array = cellp;
-    
+
     /* Then spread any cells wanting it */
-    
+
     x = table->cells.x - 1;
     if (x < 1)
     {
 	TABDBG(("Not enough columns to have any replication\n"));
 	return;
     }
-    
+
     TABDBG(("Replicating any necessary cells\n"));
-    
+
     for (y = 0; y < table->cells.y; y++)
     {
 	cell = * CELLFOR(table, x - 1, y);
@@ -722,7 +724,7 @@ static void add_retro_col(rid_table_item *table)
 
 
 /*****************************************************************************
-  
+
   Add a row to the table and then spread any existing rid_cf_MULTIPLE
   cells.  No rowgroup is created here.  No header/footer count is
   incrememented here.  If there are no columns, we add one - the
@@ -733,10 +735,10 @@ static void add_retro_col(rid_table_item *table)
   columns covered by a rid_cf_INF_VERT item must be incremented so it
   has the actual span count by the time we come to format the table.
   The span count of the current rowgroup is also incremented.
-  
+
   Assert that we have a colgroup by the time we create a row - and
   it's current if we're not fixed width.
-  
+
   */
 
 static void add_new_row(rid_table_item *table)
@@ -745,19 +747,19 @@ static void add_new_row(rid_table_item *table)
     rid_table_rowhdr *rowhdr;
     size_t size, off;
     int x, y, did_repl;
-    
+
     TABDBGN(("add_new_row(%p) - from %d to %d rows ptr is %p\n",
 	     table, table->cells.y, table->cells.y+1, table->rowhdrs));
-    
+
     if (table->state == tabstate_BAD)
 	return;
-    
+
     if (table->cells.x == 0)
     {
 	TABDBGN(("No columns when adding a row - force one\n"));
 	add_retro_col(table);
     }
-    
+
     /* Add another rowhdr item */
 
     y = table->cells.y;
@@ -772,7 +774,7 @@ static void add_new_row(rid_table_item *table)
     rowhdr->rowgroup = table->cur_rowgroup;
     rowhdr->rowgroup->span += 1;
 
-    TABDBGN(("Bumping rowgroup span from %d to %d\n", 
+    TABDBGN(("Bumping rowgroup span from %d to %d\n",
 	     rowhdr->rowgroup->span-1, rowhdr->rowgroup->span));
 
     /* Note what sort of row it is */
@@ -801,7 +803,7 @@ static void add_new_row(rid_table_item *table)
     }
 
     /* then add another row */
-    
+
     size = table->cells.x * (table->cells.y + 1) * sizeof(*cellp);
     cellp = table->array == NULL ? mm_calloc(1, size) : mm_realloc(table->array, size);
     off = table->cells.x * table->cells.y * sizeof(*cellp);
@@ -809,16 +811,16 @@ static void add_new_row(rid_table_item *table)
     memset(off + (char *) cellp, 0, size);
     table->cells.y++;
     table->array = cellp;
-    
+
     y = table->cells.y - 1;
     if (y < 1)
     {
 	TABDBGN(("Not enough rows to have anything to spread\n"));
 	return;
     }
-    
+
     TABDBGN(("Performing any spreading to row %d from row %d\n", y, y-1));
-    
+
     for (did_repl = 0, x = 0; x < table->cells.x; x++)
     {
 	cell = * CELLFOR(table, x, y - 1);
@@ -836,17 +838,17 @@ static void add_new_row(rid_table_item *table)
 	    cell->sleft -= 1;
 	}
     }
-    
+
     if (! did_repl)
     {
 	TABDBGN(("No completion to check for\n"));
 	return;
     }
-    
+
     TABDBGN(("Replicated non INF_VERT item - checking for completion\n"));
-    
+
     /* Then spread completions of cells */
-    
+
     for (x = 0; x < table->cells.x; x++)
     {
 	cell = * CELLFOR(table, x, y - 1);
@@ -856,13 +858,13 @@ static void add_new_row(rid_table_item *table)
 	    TABDBGN(("Considering cell %d,%d\n", cell->cell.x, cell->cell.y));
 	    if (cell->sleft <= 0)
 	    {
-		TABDBGN(("Marking cell %d,%d as completed vertically, spans %d, %d\n", 
+		TABDBGN(("Marking cell %d,%d as completed vertically, spans %d, %d\n",
 			 cell->cell.x, cell->cell.y, cell->span.x, cell->span.y));
 		cell->flags |= rid_cf_COMPLETE;
 	    }
 	}
     }
-    
+
     /* And update row group */
 }
 
@@ -969,7 +971,7 @@ static void do_tfoot_swapping(rid_table_item *table)
 		  1,
 		  span,
 		  table->cells.y - tfoot_line - span);
-		  
+
     shuffle_array(table->rowgroups + tfoot_group,
 		  sizeof(rid_table_rowgroup *),
 		  1,
@@ -993,12 +995,12 @@ static void do_tfoot_swapping(rid_table_item *table)
 
 static void start_col_fixed(rid_table_item *table, int cols, int *firstp, int *countp)
 {
-    TABDBG(("start_col_fixed(%p,%d,%p=%d,%p=%d)\n", 
+    TABDBG(("start_col_fixed(%p,%d,%p=%d,%p=%d)\n",
 	    table, cols, firstp, *firstp, countp, *countp));
-    
+
     ASSERT( table->cur_colgroup != NULL );
     ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
-    
+
     if (cols == 0)
     {       /* Replicate to last column then no more columns */
 	*firstp = table->scaff.x;
@@ -1016,20 +1018,20 @@ static void start_col_fixed(rid_table_item *table, int cols, int *firstp, int *c
 	*countp = cols;
 	table->scaff.x += cols;
     }
-    
+
     table->cur_colgroup->span += *countp;
 }
 
 static void start_col_growing(rid_table_item *table, int cols, int *firstp, int *countp)
 {
     rid_table_colhdr *colhdr = table->cells.x == 0 ? NULL : table->colhdrs[table->cells.x -1];
-    
+
     TABDBG(("start_col_growing(%p,%d,%p=%d,%p=%d)\n",
 	    table, cols, firstp, *firstp, countp, *countp));
-    
+
     ASSERT( table->cur_colgroup != NULL );
     ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
-    
+
     if ( table->cells.x > 0 && (colhdr->flags & rid_chf_REPLICATE) != 0 )
     {       /* Have to replicate previous column */
 	*firstp = *countp = 0;  /* Current <COL> contributes only a span */
@@ -1084,13 +1086,13 @@ static void table_consistency_checks(HTMLCTX *me, rid_table_item *table)
 #endif /* DEBUG */
 
 /*****************************************************************************
-  
+
   Reel back any cells spanning multiple rows that never actually saw
   as many rows as expected (ie N for ROWSPAN=N greater than number of
   <TR>s) needs reeling back in. Used after TFOOT section and the end
   of the table. Argument could be made either way for this being
   good/bad after THEAD and TBODY.
-  
+
   */
 
 static void restrain_rowspan_cells(HTMLCTX *me, rid_table_item *table)
@@ -1098,7 +1100,7 @@ static void restrain_rowspan_cells(HTMLCTX *me, rid_table_item *table)
     const int maxy = table->cells.y;
     int x, y;
     rid_table_cell *cell;
-    
+
     for (x = -1, y = 0; (cell = rid_next_root_cell(table,&x,&y)) != NULL; )
     {
 	if (cell->cell.y + cell->span.y > maxy)
@@ -1110,9 +1112,9 @@ static void restrain_rowspan_cells(HTMLCTX *me, rid_table_item *table)
 }
 
 /*****************************************************************************
-  
+
   The table is finished. The dimensions are now stable.
-  
+
   */
 
 static void tidy_table(HTMLCTX *me, rid_table_item *table)
@@ -1123,13 +1125,13 @@ static void tidy_table(HTMLCTX *me, rid_table_item *table)
 }
 
 /*****************************************************************************
-  
+
   Inheritence of attributes:
-  
+
   Each cell can have a number of attributes, either directly specified with
   the cell or inherited from its surroundings.  The order of inheritence is
   defined as follows:
-  
+
   HALIGN, CHAR, CHAROFF
   cells > columns > column groups > rows > row groups > default
   xcCrRd
@@ -1141,10 +1143,10 @@ static void tidy_table(HTMLCTX *me, rid_table_item *table)
   BGCOLOR
   cells > columns > column groups > rows > row groups > table > default
   xcCrRtd
-  
+
   Within rid_getprop(), this is translated into a control string indicating
   where to look next for the attribute.  The magic characters are:
-  
+
   x       cells
   r       rows
   R       row groups
@@ -1152,10 +1154,10 @@ static void tidy_table(HTMLCTX *me, rid_table_item *table)
   C       column groups
   t       table
   d       default
-  
+
   Given how frequently this gets used, should perhaps be writing something
   that executes faster.
-  
+
   colhdr gets userwidth copied automatically from its colgroup
   */
 
@@ -1177,12 +1179,12 @@ extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *res
 #endif
 
     rid_stdunits dsu = { rid_stdunit_MULT};
-    
+
     char *control;
     rid_table_cell *cell = * CELLFOR(table, x, y);
     rid_table_props *props = NULL;
     int hdr = cell ? (cell->flags & rid_cf_HEADER) : 0;
-    
+
     dsu.u.f = 1.0;
 
     ASSERT(x < table->cells.x);
@@ -1203,19 +1205,19 @@ extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *res
     case rid_PROP_BGCOLOR:
 	control = "xcCrRtd";
 	break;
-	
+
     case rid_PROP_VALIGN:
     case rid_PROP_DIR   :
     case rid_PROP_LANG  :
     case rid_PROP_STYLE :
 	control = "xrRcCtd";
 	break;
-	
+
     case rid_PROP_WIDTH :
     {
 	rid_table_colhdr *hdr = table->colhdrs[x];
 	rid_table_colgroup *grp = hdr->colgroup;
-	
+
 	ASSERT(hdr != NULL);
 
 	/*TABDBGN(("rid_getprop(): hdr %p, grp %p\n", hdr, grp));*/
@@ -1247,13 +1249,13 @@ extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *res
 	return;
     }
     break;
-    
+
     default:
 	usrtrc( "\n\n\n\nRID_GETPROP(): UNKNOWN PROPERTY\n\n\n\n\n");
 	return;
 	break;
     }
-    
+
     while (1)
     {
 	/*TABDBGN(("rid_getprop(): control string is '%s'\n", control));*/
@@ -1316,7 +1318,7 @@ extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *res
 	    }
 	    break;
 	}
-	
+
 	if (props == NULL)
 	    continue;
 
@@ -1484,7 +1486,7 @@ static BOOL find_empty_cell_this_line(rid_table_item *table)
 	    return TRUE;
 	}
     }
-    
+
     if ( (table->flags & rid_tf_COLS_FIXED) != 0 )
 	return FALSE;
 
@@ -1527,12 +1529,12 @@ static BOOL find_empty_cell(HTMLCTX *htmlctx, rid_table_item *table)
 	    TABDBG(("Found an empty cell\n"));
 	    return TRUE;
 	}
-	
+
 	/* won't fit on this line - insert presumed implied <TR> */
 	/* until a free cell is made available, unless all the */
 	/* cells have infinite height, in which case leave the */
 	/* current cell selected. */
-	
+
 	TABDBG(("Cell won't fit - earlier COLSPAN=0 on this row\n"));
 
 	for (x = 0; inf && x < table->cells.x; x++)
@@ -1544,7 +1546,7 @@ static BOOL find_empty_cell(HTMLCTX *htmlctx, rid_table_item *table)
 		inf = FALSE;
 	    }
 	}
-    
+
 	if (inf)
 	{
 	    TABDBG(("Infinite cells occupy rest of table - no more room\n"));
@@ -1628,7 +1630,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 	    context->force_deliver = TRUE;
 	    (*context->dlist->this_fn) (context, reason, item, element);
 	    break;
-	}	
+	}
 
 	PRSDBG(("table_deliver(): removing table_deliver for pre open <%s>\n", element->name.ptr));
 	sgml_remove_deliver(context, &table_deliver);
@@ -1648,7 +1650,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 		if (element->group != HTML_GROUP_TABLE && element->group != HTML_GROUP_COLGROUP)
 		    include = TRUE;
 	    }
-		
+
 	    if (include)
 	    {
 		/* Element is either <TABLE> or not a table element */
@@ -1673,7 +1675,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 	    context->force_deliver = TRUE;
 	    (*context->dlist->this_fn) (context, reason, item, element);
 	    break;
-	}	
+	}
 
 	PRSDBG(("table_deliver(): removing table_deliver before closing <%s>\n", element->name.ptr));
 	sgml_remove_deliver(context, &table_deliver);
@@ -1702,28 +1704,28 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 
 
 /*****************************************************************************
-  
+
   <TABLE>
-  
+
   A new table is inserted as a single rid_text_item within the current
   rid_text_stream.
-  
+
   Values are parsed and a rid_table_item initialised accordingly.
-  
+
   A rid_text_stream is created in the caption position to capture any
   "floating" text outside <TD> items.  If we didn't do this, the creation
   would be performed by table_start_caption().
-  
+
   curstream of the rid_header is updated to reference the caption item.
-  
+
   <TABLE COLS=N> causes initialisation and fixing of the number of columns.
   COLGROUP and COL can still initialise them.
-  
+
   */
 
 extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 {
-    static align_table at[] = 
+    static align_table at[] =
     {
 	{ HTML_TABLE_ALIGN_LEFT,	STYLE_ALIGN_LEFT    },
 	{ HTML_TABLE_ALIGN_CENTER,	STYLE_ALIGN_CENTER  },
@@ -1746,18 +1748,18 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     /* New block level stuff should ensure this? */
     /*must_have_a_word_pushed(me);*/
-    
+
     /* tab is the new table. rtit contains tab and rtc is contained by tab */
     /* Very important that everything in the table starts at zero! */
-    
+
     tab = (rid_table_item *) mm_calloc(1, sizeof(*tab));
     rtit = (rid_text_item_table *) mm_calloc(1, sizeof(*rtit));
 /*  rtc = (rid_table_caption *) mm_calloc(1, sizeof(*rtc)); SJM: This was never used!!*/
-    
+
     /* Set by default, clear if get a <COLGROUP> */
     tab->flags = rid_tf_IMPLIED_COLGROUP;
     tab->state = tabstate_PRE;
-    
+
     /* Link structures together */
 
     rtit->table = tab;
@@ -1767,10 +1769,10 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     nb->aref = me->aref;	/* Current anchor, or NULL */
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
-    
+
     GET_ROSTYLE(nb->st);	/* Must be before set anything */
     /* and before center stuff below */
-    
+
     tab->props = parse_table_props(&no_value,
 				   &attributes->value[HTML_TABLE_ALIGN],
 				   &attributes->value[HTML_TABLE_CHAR],
@@ -1837,7 +1839,7 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     {
 	tab->cellpadding = DEFAULT_CELL_PADDING;
     }
-    
+
     tab->usercellspacing = attributes->value[HTML_TABLE_CELLSPACING];
     if (tab->usercellspacing.type != value_integer ||
 	(tab->cellspacing = tab->usercellspacing.u.i*2) < 0 )
@@ -1921,19 +1923,19 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	}
 	/* else let table size itself */
     }
-#endif    
+#endif
 
     rid_text_item_connect(me->rh->curstream, &rtit->base);
-    
+
     /* Switch over to the caption stream until we know better */
-    
+
     tab->oldstream = me->rh->curstream;
     tab->oldtable = me->table;
     /* NULL is the most dangerous choice, but won't matter */
     /* if everything else is correct. */
     me->rh->curstream = NULL;
     me->table = tab;
-    
+
     TABDBGN(("Started table %p, current stream now %p\n", tab, me->rh->curstream));
 
 #if 0 && DEBUG
@@ -1946,21 +1948,21 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 }
 
 /*****************************************************************************
-  
+
   </TABLE>
-  
+
   This routine is called when the </TABLE> tag is found.  This triggers
   some post processing.
-  
+
   me->rh->curstream and me->table are updated to reflect the unwinding of
   nesting.
-  
+
   Maybe should add a soft space after the table - this means, once the
   document has been fully parsed, text_last of rid_text_stream cannot refer
   to a table, which simplifies possible reformatting tests (might otherwise
   have last item as a table that was incomplete and is now complete but the
   text_last item is still the same).
-  
+
   */
 
 #if DEBUG == 3
@@ -1998,7 +2000,7 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 {
     HTMLCTX *me = htmlctxof(context);
     rid_table_item *table = me->table;
-    
+
     generic_finish(context, element);
 
     restrain_rowspan_cells(me, table);
@@ -2009,9 +2011,9 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 
     if (table->flags & rid_tf_HAVE_TFOOT)
 	do_tfoot_swapping(table);
-    
+
     tidy_table(me, table);
-    
+
     me->rh->curstream = table->oldstream;
     me->table = table->oldtable;
 
@@ -2035,7 +2037,7 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 	}
     }
 
-    
+
     /* New block level stuff should ensure this? */
     /*must_have_a_word_pushed(me);*/
 
@@ -2054,12 +2056,12 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 }
 
 /*****************************************************************************
-  
+
   <CAPTION>
-  
+
   The caption alignment is recorded directly, rather than being
   recorded in the style - it's enough of a one off.
-  
+
   */
 
 extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
@@ -2068,9 +2070,9 @@ extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     rid_table_caption *cap;
     rid_table_item *tab = me->table;
     VALUE *attr;
-    
+
     TABDBG(("Starting to do a caption\n"));
-    
+
     generic_start(context, element, attributes);
 
     cap = (rid_table_caption *) mm_calloc(1, sizeof(*cap));
@@ -2079,13 +2081,13 @@ extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     cap->stream.parent = cap;
     cap->stream.partype = rid_pt_CAPTION;
     me->rh->curstream = &cap->stream;
-    
+
     if ( (attr = &attributes->value[HTML_CAPTION_CLASS])->type == value_string )
 	cap->class = stringdup(attr->u.s);
-    
+
     if ( (attr = &attributes->value[HTML_CAPTION_ID])->type == value_string )
 	cap->id = stringdup(attr->u.s);
-    
+
     switch ( (attr = &attributes->value[HTML_CAPTION_ALIGN])->type == value_enum
 	     ? attr->u.i : HTML_CAPTION_ALIGN_TOP )
     {
@@ -2102,7 +2104,7 @@ extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	cap->calign = rid_ct_RIGHT;
 	break;
     }
-    
+
     cap->props = parse_table_props(&no_value,
 				   &no_value,
 				   &no_value,
@@ -2113,7 +2115,7 @@ extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 				   &no_value,
 				   NULL,
 				   NULL);
-    
+
     PACK(context->tos->effects_active, STYLE_ALIGN, STYLE_ALIGN_CENTER);
 
     TABDBG(("Caption entered\n"));
@@ -2186,7 +2188,7 @@ extern void startcolgroupsection (SGMLCTX * context, ELEMENT * element, VALUES *
 {
     HTMLCTX *me = htmlctxof(context);
 
-    generic_start (context, element, attributes); 
+    generic_start (context, element, attributes);
 
     me->table->flags |= rid_tf_COLGROUPSECTION;
 
@@ -2200,7 +2202,7 @@ extern void finishcolgroupsection (SGMLCTX * context, ELEMENT * element)
 
     generic_finish (context, element);
 
-    TABDBG(("Checking for columns not assigned to a column group yet\n"));    
+    TABDBG(("Checking for columns not assigned to a column group yet\n"));
 
     if ( (table->flags & rid_tf_IMPLIED_COLGROUP) != 0 )
     {
@@ -2232,16 +2234,16 @@ extern void finishcolgroupsection (SGMLCTX * context, ELEMENT * element)
 }
 
 /*****************************************************************************
-  
+
   <COLGROUP>
-  
+
   Starts a new column group, unless columns already full.  If a span
   is supplied, start with this but get ready for <COL> overwriting it.
   Span can be zero to permit things like <COLGROUP SPAN=0 ID="wibble">
-  
+
   If no more cells will fit, then we do not add a COLGROUP, even for
   <COLGROUP SPAN=0 ID="wibble"></COLGROUP>
-  
+
   */
 
 
@@ -2252,9 +2254,9 @@ extern void startcolgroup(SGMLCTX *context, ELEMENT *element, VALUES *attributes
     rid_table_colgroup *colgroup;
     int cols;
     VALUE *attr;
-    
+
     generic_start(context, element, attributes);
-    
+
     if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
     {
 	TABDBG(("startcolgroup(): rid_tf_NO_MORE_CELLS set - not doing anything\n"));
@@ -2262,11 +2264,11 @@ extern void startcolgroup(SGMLCTX *context, ELEMENT *element, VALUES *attributes
     }
 
     /* else must be enough room for at least one cell */
-    
+
     table->flags &= ~rid_tf_IMPLIED_COLGROUP;
     colgroup = add_new_colgroup(table);
     colgroup->userwidth = attributes->value[HTML_COLGROUP_WIDTH];
-    
+
     colgroup->props = parse_table_props(&attributes->value[HTML_COLGROUP_VALIGN],
 					&attributes->value[HTML_COLGROUP_ALIGN],
 					&attributes->value[HTML_COLGROUP_CHAR],
@@ -2277,18 +2279,18 @@ extern void startcolgroup(SGMLCTX *context, ELEMENT *element, VALUES *attributes
 					&attributes->value[HTML_COLGROUP_BGCOLOR],
 					valign_table,
 					halign_table);
-    
+
     if (attributes->value[HTML_COLGROUP_BGCOLOR].type != value_none)
 	table->flags |= rid_tf_BGCOLOR;
     if ( (attr = &attributes->value[HTML_COLGROUP_ID])->type == value_string)
 	colgroup->id = stringdup(attr->u.s);
     if ( (attr = &attributes->value[HTML_COLGROUP_CLASS])->type == value_string)
 	colgroup->class = stringdup(attr->u.s);
-    
+
     table->cur_colgroup = colgroup;
-    
+
     attr = &attributes->value[HTML_COLGROUP_SPAN];
-    
+
     if ( attr->type != value_integer )
     {
 	cols = 1;
@@ -2300,9 +2302,9 @@ extern void startcolgroup(SGMLCTX *context, ELEMENT *element, VALUES *attributes
 	if (cols < 0)
 	    cols = 0;
     }
-    
+
     colgroup->span = cols;
-    
+
     if (cols > 0)
     {       /* <COLGROUP> may span zero columns */
 	table->flags |= rid_tf_GROUP_SPAN;
@@ -2314,12 +2316,12 @@ extern void startcolgroup(SGMLCTX *context, ELEMENT *element, VALUES *attributes
 }
 
 /*****************************************************************************
-  
+
   </COLGROUP>
-  
+
   Close the current column group. If no <COL> items were found, then we
   can use any <COLGROUP SPAN=N> value.
-  
+
   */
 
 extern void finishcolgroup(SGMLCTX *context, ELEMENT *element)
@@ -2334,20 +2336,20 @@ extern void finishcolgroup(SGMLCTX *context, ELEMENT *element)
     ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
     ASSERT( table->cur_colgroup != NULL );
     ASSERT( table->num_groups.x > 0 );
-    
+
     table->flags &= ~ rid_tf_IN_COLGROUP;
     table->cur_colgroup = NULL;
-    
+
     if ( (table->flags & rid_tf_GROUP_SPAN) == 0 )
 	return;
-    
+
     TABDBG(("Create implied columns - no <COL> within <COLGROUP>\n"));
-    
+
     table->flags &= ~rid_tf_GROUP_SPAN;
     group = table->colgroups[table->num_groups.x - 1];
 
     ASSERT(group->span != 0) ;
-    
+
     if ( (table->flags & rid_tf_COLS_FIXED) != 0 )
     {
 	TABDBG(("Constrained by <TABLE COLS=N>\n"));
@@ -2377,22 +2379,22 @@ extern void finishcolgroup(SGMLCTX *context, ELEMENT *element)
 }
 
 /*****************************************************************************
-  
+
   <COL>
-  
+
   Add another column header (rid_table_colhdr) to the table.  If the
   maximum number of columns have already been supplied, do nothing.
   Replicate attributes across multiple columns if <COL SPAN=N> with N > 1.
   A <COL SPAN=0> does not automatically prevent other <COL> items being
   processed - it merely overrides the user attributes with those of the
   colhdr being replicated.
-  
+
   We must be in a COLGROUP: increment it's span.  xscaff on entry
   indicates the (first) column we refer to.  xscaff on exit indicates
   the next column to write to, or rid_tf_NO_MORE_CELLS is set to
   indicate we cannot accomodate any more colhdr items (either reached
   column count or last colhdr extends to extent of table).
-  
+
   */
 
 
@@ -2404,28 +2406,28 @@ extern void startcol(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 /*    rid_table_colgroup *group;*/
     int cols, first, count, x;
     VALUE *attr;
-    
+
     generic_start(context, element, attributes);
-    
+
     if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
     {
 	TABDBG(("startcol(): rid_tf_NO_MORE_CELLS set - not doing anything\n"));
 	return;
     }
-    
+
     ASSERT( table->cur_colgroup != NULL );
     ASSERT( (table->flags & rid_tf_IN_COLGROUP) != 0 );
-    
+
     if ( (table->flags & rid_tf_GROUP_SPAN) != 0 )
     {
-	TABDBG(("startcol(): Cancelling <COLGROUP SPAN=%d> from earlier\n", 
+	TABDBG(("startcol(): Cancelling <COLGROUP SPAN=%d> from earlier\n",
 		table->cur_colgroup->span));
 	table->flags &= ~rid_tf_GROUP_SPAN;
 	table->cur_colgroup->span = 0;
     }
-    
+
     attr = &attributes->value[HTML_COL_SPAN];
-    
+
     if ( attr->type != value_integer )
     {
 	cols = 1;
@@ -2434,18 +2436,18 @@ extern void startcol(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     {
 	cols = 1;
     }
-    
+
     if ( (table->flags & rid_tf_COLS_FIXED) != 0 )
 	start_col_fixed(table, cols, &first, &count);
     else
 	start_col_growing(table, cols, &first, &count);
-    
+
     /* Columns will have been created. Range to initialise has */
     /* been determined. Any replication has already been handled. */
-    
+
     TABDBG(("startcol(): <COL SPAN=%d>: properties init: first %d, count %d\n",
 	    cols, first, count));
-    
+
     for (x = first; count > 0; x++, count--)
     {
 	hdr = table->colhdrs[x];
@@ -2459,33 +2461,33 @@ extern void startcol(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 				       &attributes->value[HTML_COL_BGCOLOR],
 				       valign_table,
 				       halign_table);
-	
+
 	if (attributes->value[HTML_COL_BGCOLOR].type != value_none)
 	    table->flags |= rid_tf_BGCOLOR;
 
 	hdr->userwidth = attributes->value[HTML_COL_WIDTH];
 	hdr->colgroup = table->cur_colgroup;
-	
+
 	if ( (attr = &attributes->value[HTML_COL_ID])->type == value_string)
 	    hdr->id = stringdup(attr->u.s);
 	if ( (attr = &attributes->value[HTML_COL_CLASS])->type == value_string)
 	    hdr->class = stringdup(attr->u.s);
     }
-    
+
     sgml_install_deliver(context, &table_deliver);
 
     return;
 }
 
 /*****************************************************************************
-  
+
   <THEAD> <TFOOT> <TBODY>
-  
+
   element_number is one of HTML_THEAD, HTML_TFOOT or HTML_TBODY.  Each
   introduces the start of a new row group, which must contain at least one
   <TR> item.  This creates a new entry in the rowgroups list, and advances
   the state.
-  
+
   */
 
 
@@ -2495,9 +2497,9 @@ static void start_headfootbody(SGMLCTX *context, ELEMENT *element, VALUES *attri
     rid_table_item *table = me->table;
     rid_table_rowgroup *rowgroup;
     VALUE *attr;
-    
+
     generic_start(context, element, attributes);
-    
+
     rowgroup = add_new_rowgroup(table);
     rowgroup->props = parse_table_props(&attributes->value[HTML_TBODY_VALIGN],
 					&attributes->value[HTML_TBODY_ALIGN],
@@ -2516,7 +2518,7 @@ static void start_headfootbody(SGMLCTX *context, ELEMENT *element, VALUES *attri
 	rowgroup->id = stringdup(attr->u.s);
     if ( (attr = &attributes->value[HTML_TBODY_CLASS])->type == value_string)
 	rowgroup->class = stringdup(attr->u.s);
-    
+
     table->cur_rowgroup = rowgroup;
 
     sgml_install_deliver(context, &table_deliver);
@@ -2590,13 +2592,13 @@ extern void finishtbody(SGMLCTX *context, ELEMENT *element)
 
 
 /*****************************************************************************
-  
+
   <TR>
-  
+
   Start a new table row.  We might increment the header_rows or footer_rows
   values.  A new row is added to the table, initially containing empty
   cells.
-  
+
   Any previous cells that have not yet finished spreading are grown down by
   one row.  A new rowhdr value is added and filled in with the <TR>
   attributes.  We then determine the first free position to put the
@@ -2604,8 +2606,8 @@ extern void finishtbody(SGMLCTX *context, ELEMENT *element)
   all the cells of the row were occupied by the spreading.  If this flag is
   not set, the scaffolding refers to the cell to contain the text stream
   that the next <TH> or <TD> should create and attach.
-  
-  
+
+
   */
 
 extern void starttr(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
@@ -2622,16 +2624,16 @@ extern void starttr(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	TABDBG(("starttr(): table full\n"));
 	return;
     }
-    
+
     TABDBG(("starttr(): scaff (%d,%d), cells (%d,%d)\n",
 	    table->scaff.x, table->scaff.y, table->cells.x, table->cells.y));
-    
+
     /* Add another row, and perform any necessary spreading */
-    
+
     add_new_row(table);		/* bumps row span */
-    
+
     /* fill in rowhdr values */
-    
+
     ASSERT( table->cur_rowgroup->span != 0 );
     /*table->cur_rowgroup->span += 1;*/
     hdr = table->rowhdrs[table->cells.y - 1];
@@ -2645,16 +2647,16 @@ extern void starttr(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 				   &attributes->value[HTML_TR_BGCOLOR],
 				   valign_table,
 				   halign_table);
-    
+
     if (attributes->value[HTML_TR_BGCOLOR].type != value_none)
 	table->flags |= rid_tf_BGCOLOR;
     if ( (attr = &attributes->value[HTML_TR_ID])->type == value_string)
 	hdr->id = stringdup(attr->u.s);
     if ( (attr = &attributes->value[HTML_TR_CLASS])->type == value_string)
 	hdr->class = stringdup(attr->u.s);
-    
+
     /* Position the scaffolding for where we are to start looking for an empty cell */
-    
+
     ASSERT(table->cells.y > 0);
     table->scaff.x = 0;
     table->scaff.y = table->cells.y - 1;
@@ -2710,23 +2712,23 @@ extern void pre_thtd_warning(HTMLCTX *me)
 }
 
 /*****************************************************************************
-  
+
   <TH> <TD>
-  
+
   Attempt to create a new text stream for writing into.  The scaffolding
   indicates where to start looking for an empty cell - it might not be
   empty itself.
-  
+
   If we are operating with a known number of columns, we might not be able
   to find an empty cell. Even if we are operating with a flexible number
   of columns, we still might not be able to find an item. If a new cell
   cannot be located, the current cell (or caption) is retained.
-  
+
   Adding a rid_cf_INF_HORIZ item will set rid_tf_NO_MORE_CELLS -
   new_retro_col() will ensure this gets grown as far as
   required. Otherwise, all the span of a cell will either be created
   or truncated (eg ROWSPAN=2 from above).
-  
+
   When the current row cannot offer a location for the cell, we need
   to check whether we should insert <TR> elements or stop because an
   infinite number of <TR> elements will never find an empty cell. This
@@ -2745,24 +2747,24 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     unsigned char tag;
     int x;
     VALUE *attr;
-    
+
     generic_start(context, element, attributes);
-    
+
     /* Might be directed not to add more cells */
     if ( (table->flags & rid_tf_NO_MORE_CELLS) != 0 )
 	return;
-    
+
     /* Create a new cell and text stream at the specified scaffold position */
     cellp = CELLFOR(table, table->scaff.x, table->scaff.y);
     cell = mm_calloc(1, sizeof(*cell));
-    
+
     cell->parent = table;
     cell->stream.parent = cell;
     cell->stream.partype = rid_pt_CELL;
-    
+
     ASSERT(*cellp == NULL);
     *cellp = cell;
-    
+
     cell->props = parse_table_props(&attributes->value[HTML_TD_VALIGN],
 				    &attributes->value[HTML_TD_ALIGN],
 				    &attributes->value[HTML_TD_CHAR],
@@ -2773,9 +2775,9 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 				    &attributes->value[HTML_TD_BGCOLOR],
 				    valign_table,
 				    halign_table);
-    
+
     /* Sketch out values */
-    
+
     if (attributes->value[HTML_TD_BGCOLOR].type != value_none)
     {
 	table->flags |= rid_tf_BGCOLOR;
@@ -2790,7 +2792,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     if ( (attr = &attributes->value[HTML_TD_CLASS])->type == value_string)
 	cell->class = stringdup(attr->u.s);
 
-    switch ( (attr = &attributes->value[HTML_TD_WIDTH])->type ) 
+    switch ( (attr = &attributes->value[HTML_TD_WIDTH])->type )
     {
     case value_absunit:
 	/*cell->flags |= rid_cf_ABSOLUTE;*/
@@ -2831,7 +2833,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     cell->flags |= attributes->value[HTML_TD_NOWRAP].type == value_void ? rid_cf_NOWRAP : 0;
     cell->cell.x = table->scaff.x;
     cell->cell.y = table->scaff.y;
-    
+
     if ( (attr = &attributes->value[HTML_TD_COLSPAN])->type == value_integer)
     {
 	if ( (cell->span.x = attr->u.i) < 0 )
@@ -2839,7 +2841,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     }
     else
 	cell->span.x = 1;
-    
+
     if ( (attr = &attributes->value[HTML_TD_ROWSPAN])->type == value_integer)
     {
 	if ( (cell->span.y = attr->u.i) < 0 )
@@ -2847,7 +2849,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     }
     else
 	cell->span.y = 1;
-    
+
     /* Refine */
     if (element->id == HTML_TH)
 	cell->flags |= rid_cf_HEADER;
@@ -2855,22 +2857,22 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	cell->span.x = 1;
     if (cell->span.y < 0)
 	cell->span.y = 1;
-    
+
     cell->sleft = (cell->span.y - 1)*cell->span.x; /* SJM: added *span.x */
-    
+
     table->scaff.x += 1;		/* Starting looking after this */
-    
+
     /* That's the new cell created at the right position */
     /* Do cell spreading: horizontal now, vertical row by row as table grows */
     /* Advance scaffolding and see if still have room. */
 
     if (cell->span.x != 1 || cell->span.y != 1)
 	cell->flags |= rid_cf_MULTIPLE;
-    
+
     /* Select new text stream */
-    
+
     me->rh->curstream = &cell->stream;
-    
+
     rid_getprop(table, cell->cell.x, cell->cell.y, rid_PROP_HALIGN, &tag);
     PACK(context->tos->effects_active, STYLE_ALIGN, tag);
     /* SJM: added bold in headers */
@@ -2900,10 +2902,10 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	TABDBG(("** CONFUSED HORIZONTAL CHARACTER ALIGNMENT %d **\n", tag));
 	break;
     }
-    
+
     rid_getprop(table, cell->cell.x, cell->cell.y, rid_PROP_VALIGN, &tag);
     PACK(context->tos->effects_active, STYLE_VALIGN, tag);
-    
+
     switch (tag)
     {
     case STYLE_VALIGN_TOP:
@@ -2922,35 +2924,35 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	TABDBG(("** CONFUSED VERTICAL CHARACTER ALIGNMENT %d **\n", tag));
 	break;
     }
-    
+
     if (cell->span.y == 0)
 	cell->flags |= rid_cf_INF_VERT;
     if (cell->span.x == 0)
 	cell->flags |= rid_cf_INF_HORIZ;
     if (cell->span.x != 1 || cell->span.y != 1)
 	cell->flags |= rid_cf_MULTIPLE;
-    
+
     /* Common work done - can start returning now */
-    
+
     if (cell->span.x == 1 && cell->span.y == 1)
     {       /* 1x1 cell - no more work */
 	cell->flags |= rid_cf_COMPLETE;
 	return;
     }
-    
+
     if (cell->span.x == 1)
     {       /* Only vertical growth - done in add_row() */
 	return;
     }
-    
+
     /* Something about the cell's shape requires extra work */
-    
+
     if ( (table->flags & rid_tf_COLS_FIXED) != 0 )
     {       /* Constrained in number of columns */
 	TABDBG(("More work needed, fixed columns\n"));
 	if (cell->span.x == 0)
-	{       
-	    TABDBG(("Extend to end of row, then we're full %d...%d\n", 
+	{
+	    TABDBG(("Extend to end of row, then we're full %d...%d\n",
 		    cell->cell.x, table->cells.x));
 	    for (x = cell->cell.x + 1; x < table->cells.x; x++)
 	    {       /* Stop early if hit cell coming down from above */
@@ -2980,13 +2982,13 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    cell->span.x = x - cell->cell.x;
 	    ASSERT(cell->span.x > 0);
 	}
-	
+
 	return;
     }
-    
+
     if (cell->span.x == 0)
     {
-	TABDBG(("Cell (%d,%d) extends right as far as possible\n", 
+	TABDBG(("Cell (%d,%d) extends right as far as possible\n",
 		table->scaff.x, table->scaff.y));
 	for (x = cell->cell.x + 1; x < table->cells.x; x++)
 	{
@@ -3000,12 +3002,12 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
 	return;
     }
-    
+
     /* Grow col(s) to fit cell, if possible */
     /* Have cell->span.x > 1 and not fixed columns. */
-    
+
     TABDBGN(("Growing to meet span of %d\n", cell->span.x));
-    
+
     for (x = 1; x < cell->span.x; x++)
     {       /* Add another column if we need it */
 	if (cell->cell.x + x >= table->cells.x)
@@ -3040,7 +3042,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    /* Grow the cell horizontally into the neighbouring cell */
 	*cellp = cell;
     }
-    
+
     if (cell->span.y == 1)
 	cell->flags |= rid_cf_COMPLETE;
 }
@@ -3057,7 +3059,7 @@ extern void startth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 }
 
 /*****************************************************************************
-  
+
   We note whether a cell has any background colour property that it
   can see, so that rendering knows on a cell by cell basis whether to
   apply background colours and bother doing the rid_getprop() call at
@@ -3071,7 +3073,7 @@ extern void finishtd (SGMLCTX * context, ELEMENT * element)
     rid_table_cell *cell;
     int i;
 
-    generic_finish (context, element);	
+    generic_finish (context, element);
 
 /*     TASSERT(me->partype == rid_pt_CELL); */
     cell = (rid_table_cell *)(me->rh->curstream->parent);
@@ -3086,7 +3088,7 @@ extern void finishtd (SGMLCTX * context, ELEMENT * element)
 
 extern void finishth (SGMLCTX * context, ELEMENT * element)
 {
-    generic_finish (context, element);	
+    generic_finish (context, element);
 
 /*     sgml_install_deliver(context, &table_deliver); */
 }
@@ -3096,15 +3098,15 @@ extern void finishth (SGMLCTX * context, ELEMENT * element)
 /* Sizing of tables - maybe no pos list */
 
 /*****************************************************************************
-  
+
   Called after the size method of each object has been invoked and before
   the outermost be_formater_loop().  This will recursively descend the text
   stream tree, calculating minimum and maximum width information.  All of
   this information must be collected prior to formatting.
-  
+
   For the minimum width, we require a smallest value that will not cause
   overflow.  This hsa to tie up with the way formatting is actually done.
-  
+
   */
 
 
@@ -3119,7 +3121,7 @@ static void dummy_table_min(rid_text_stream *stream, rid_text_item *item, rid_fm
 }
 
 static void dummy_table_max(rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
-{ 
+{
     rid_table_item *table = ((rid_text_item_table *)item)->table;
 
     item->width = table->width_info.maxwidth;
@@ -3134,11 +3136,11 @@ extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flag
 
     if (ti == NULL)
 	ti = stream->text_list;
-    
+
     TABDBG(("rid_size_stream(%p, %p, %x, %p)\n", stream, fmt, flags, ti));
-    
+
     /* Do this seperately or we do twice the work? */
-    
+
     for (; ti != NULL; ti = rid_scanf(ti))
     {
 	if (ti->tag == rid_tag_TABLE)
@@ -3146,7 +3148,7 @@ extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flag
 	    rid_size_table( ((rid_text_item_table *)ti)->table, fmt );
 	}
     }
-    
+
     if ( (flags & rid_fmt_MAX_WIDTH) == 0 )
     {
 	fmt->left  = &info->minleft;
@@ -3161,7 +3163,7 @@ extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flag
 	dump_width_info(*info);
 #endif
     }
-    
+
     if ( (flags & rid_fmt_MIN_WIDTH) == 0 )
     {
 	fmt->left  = &info->maxleft;
@@ -3176,7 +3178,7 @@ extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flag
 	dump_width_info(*info);
 #endif
     }
-    
+
     if ( (flags & rid_fmt_MIN_WIDTH) != 0 )
     {
 	info->maxleft  = info->minleft;
@@ -3187,7 +3189,7 @@ extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flag
 	dump_width_info(*info);
 #endif
     }
-    
+
     if ( (flags & rid_fmt_MAX_WIDTH) != 0 )
     {
 	info->minleft  = info->maxleft;

@@ -333,7 +333,7 @@ static os_error *fe__reload_possible(fe_view v, void *handle)
     int *possible = handle;
     
     if (v && v->displaying && v->browser_mode == fe_browser_mode_WEB)
-	*possible++;
+	(*possible)++;
 
     return NULL;
 }

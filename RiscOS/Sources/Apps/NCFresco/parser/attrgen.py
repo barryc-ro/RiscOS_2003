@@ -45,6 +45,12 @@ copyright = '(C) Copyright ANT Limited 1996. All rights reserved.'
 logmsg = """
 
 $Log$
+Revision 1.8  1997/02/24 16:28:26  borris
+Merged diffs from Si into BORRIS_970218
+
+Revision 1.1.2.2  1997/02/18 20:40:31  smiddle
+Modified and new files from the great merge
+
 Revision 1.7  1996/07/05 02:40:46  fresco
 Modified attrgen.py so that enumeration items are not forced to upper
 case. Warings when user might have got it wrong. Added $ and $E processing.

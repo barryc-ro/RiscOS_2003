@@ -16,7 +16,7 @@
  #define ASSERT(__ignore)               ((void)0)
  #define ASSERT2(__ignore1, __ignore2)    ((void)0)
 #else
- extern void __ASSERT( int, char *, char *, int );
+ extern void __ASSERT( int, const char *, const char *, int );
  #define ASSERT(expr)           ((expr)?(void)0:__ASSERT(0,#expr,__FILE__,__LINE__))
  #define ASSERT2(expr, msg)     ((expr)?(void)0:__ASSERT(0, msg, __FILE__,__LINE__))
 #endif

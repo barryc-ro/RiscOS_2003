@@ -173,7 +173,11 @@ static int rh_find_colour( rid_header *rh, int colour )
     int i;
 
     if ( rh->extracolours >= rid_EXTRACOLOURS )
-        return rid_EXTRACOLOURS-1;      /* abject failure */
+    {
+        /* Oooh, we've got fifteen already: pick the closest */
+        return 1 + find_closest_colour( colour, rh->extracolourarray+1,
+                                        rid_EXTRACOLOURS-1 );
+    }
 
     /* not 0 as that means "use the normal colour" */
     for ( i=1; i < rh->extracolours; i++ )
@@ -192,6 +196,7 @@ static int rh_find_colour( rid_header *rh, int colour )
 extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *me = htmlctxof(context);
+    int colour = -1;
 
     generic_start (context, element, attributes);
 
@@ -230,10 +235,19 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
     /* pdh: font colour */
     if (attributes->value[HTML_FONT_COLOR].type != value_none)
     {
+	colour = HTML_FONT_COLOR;
+    }
+    else if (attributes->value[HTML_FONT_COLOUR].type != value_none)
+    {
+	colour = HTML_FONT_COLOUR;
+    }
+
+    if (colour != -1)
+    {
         int thecolour;
         unsigned int no;
 
-	htmlriscos_colour( &attributes->value[HTML_FONT_COLOR], &thecolour );
+	htmlriscos_colour( &attributes->value[colour], &thecolour );
 
 	no = rh_find_colour( me->rh, thecolour );
 

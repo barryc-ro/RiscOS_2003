@@ -1,380 +1,7 @@
-## fresco/Makefile - top level Fresco makefile.
+# fresco/Makefile - top level Fresco makefile.
 #
 # Although currently targeted at UN*X type make's, the intention is that
 # this file be movable to a RISC OS compilation host if desired.
-#
-#############################################################################
-#
-# $Log$
-# Revision 1.1.2.4  1997/02/21 20:01:57  smiddle
-# Interim checkin before sending diffs
-#
-# Revision 1.1.2.3  1997/02/19 14:17:47  smiddle
-# Sources fully up to date with ANT and Acorn changes since November
-#
-# Revision 1.1.2.2  1997/02/18 19:41:28  smiddle
-# Fixed up makefile and include so it would compile with external resources
-#
-# Revision 1.116  1997/02/18 18:57:30  borris
-# realclean target removes all links. fresh target creates links, HTML and TAGS
-#
-# Revision 1.1.2.1  1997/02/18 15:40:07  smiddle
-# NCFresco 1.06 in cross-compile form (!RunImage form only)
-#
-# Revision 1.115  1997/02/18 18:02:23  borris
-# First commit after major merge.
-#
-# Revision 1.114  1997/02/14 10:40:13  borris
-# Merged Peter\'s recent changes. symlink tweaks
-#
-# Revision 1.113  1997/02/13 23:22:02  borris
-# Added dave-970213-a changes
-#
-# Revision 1.112  1997/02/07 15:48:11  borris
-# minc/maxc fudge
-#
-# Revision 1.111  1997/01/29 16:02:48  borris
-# rid.h change, minor tweaks.
-#
-# Revision 1.110  1997/01/13 11:43:45  fresco
-# Minor changes - start of new formatter
-#
-# Revision 1.109  1996/12/10 00:45:08  fresco
-# Fixed couple of minor bugs from Fresco Problem pages
-#
-# Revision 1.108  1996/12/09 13:51:31  fresco
-# Added CBFresco-related targets (principally CBFRESCO_ZM)
-#
-# Revision 1.107  1996/11/13 14:03:23  fresco
-# Merged SI_961112
-#
-# Revision 1.106  1996/11/07 17:19:05  fresco
-# Updated Help file version number
-#
-# Revision 1.105  1996/11/05 11:42:47  fresco
-# NT build in separate directory
-#
-# Revision 1.104  1996/10/28 18:01:25  fresco
-# Version frozen for NCFresco for ROM
-#
-# Revision 1.103  1996/10/25 10:54:31  fresco
-# Merged SI_961024
-#
-# Revision 1.102  1996/10/24 20:41:07  fresco
-# Added memcheck header file
-#
-# Revision 1.101  1996/10/24 02:29:28  fresco
-# Merged SI_961023
-#
-# Revision 1.100  1996/10/18 11:45:05  fresco
-# Merged SI_961017
-#
-# Revision 1.99  1996/10/16 02:52:11  fresco
-# Merged SI_961015
-#
-# Revision 1.98  1996/10/15 15:35:31  fresco
-# Added FRESCO_PC and fp targets
-#
-# Revision 1.97  1996/10/14 22:00:25  fresco
-# Merged SI_961014
-#
-# Revision 1.96  1996/10/14 20:25:53  fresco
-# Table width desperation stomping code
-#
-# Revision 1.95  1996/10/14 02:09:22  fresco
-# Back to old table height sharing code
-#
-# Revision 1.94  1996/10/13 16:14:14  fresco
-# Minor bug tweaks
-#
-# Revision 1.93  1996/10/13 14:47:39  fresco
-# Intermediate state
-#
-# Revision 1.92  1996/10/10 23:46:31  fresco
-# Makefile tweak
-#
-# Revision 1.91  1996/10/10 23:37:51  fresco
-# Gopher tweak, etc.
-#
-# Revision 1.90  1996/10/10 23:33:41  fresco
-# Merged SI_961010
-#
-# Revision 1.89  1996/10/09 17:15:41  fresco
-# Fixed a few bugs
-#
-# Revision 1.88  1996/10/09 16:29:37  fresco
-# Merged SI_961009
-#
-# Revision 1.87  1996/10/09 16:18:50  fresco
-# Fixed more table bugs
-#
-# Revision 1.86  1996/10/04 00:57:22  fresco
-# Merged SI_961003
-#
-# Revision 1.85  1996/10/03 17:17:11  fresco
-# New memory management stuff (in directory memlib)
-#
-# Revision 1.84  1996/09/27 01:52:35  fresco
-# Various production build tweaks
-#
-# Revision 1.83  1996/09/27 01:24:12  fresco
-# Merged SI_960926
-#
-# Revision 1.82  1996/09/26 05:36:55  fresco
-# Merged SI_960925
-#
-# Revision 1.81  1996/09/24 17:32:19  fresco
-# 1.30 production
-#
-# Revision 1.80  1996/09/24 17:00:20  fresco
-# Guess what - bug fixes
-#
-# Revision 1.79  1996/09/24 01:01:24  fresco
-# <LI> bug fix
-#
-# Revision 1.78  1996/09/23 23:51:46  fresco
-# Formatting bug fixes. Tidy up
-#
-# Revision 1.77  1996/09/23 16:58:17  fresco
-# More bloody table formatting
-#
-# Revision 1.76  1996/09/23 03:17:26  fresco
-# Merging 1.30a bits
-#
-# Revision 1.75  1996/09/23 02:08:56  fresco
-# Minor tweaks
-#
-# Revision 1.74  1996/09/23 00:28:35  fresco
-# 1.30 tentative
-#
-# Revision 1.73  1996/09/22 23:30:31  fresco
-# Proto 1.30 version
-#
-# Revision 1.72  1996/09/20 16:59:27  fresco
-# SGML_REPORTING changes, font fix
-#
-# Revision 1.71  1996/09/20 16:46:40  fresco
-# Merged SI_960919
-#
-# Revision 1.70  1996/09/19 13:52:57  fresco
-# Oops, undid changes I'd made and accidentally committed. Apologies. -- pdh
-#
-# Revision 1.69  1996/09/19 13:15:53  fresco
-# Changed fontmenu.c to use RO3.1 swis: fixes a couple of bugs
-#
-# Revision 1.68  1996/09/16 19:05:10  fresco
-# Merged SI_960916
-#
-# Revision 1.67  1996/09/16 12:57:23  fresco
-# Merged SI_960913
-#
-# Revision 1.66  1996/09/12 07:09:42  fresco
-# Merged SI_960911
-#
-# Revision 1.65  1996/09/12 07:02:57  fresco
-# More tweaking to table borders
-#
-# Revision 1.64  1996/09/11 01:07:42  fresco
-# Merged SI_960910
-#
-# Revision 1.63  1996/09/09 17:40:20  fresco
-# Merged SI_960909
-#
-# Revision 1.62  1996/09/08 05:27:05  fresco
-# Merged SI_960906
-#
-# Revision 1.61  1996/09/06 03:39:52  fresco
-# Merged SI_960905 and bits
-#
-# Revision 1.60  1996/09/04 19:58:21  fresco
-# Merged SI_960904 and TAR file
-#
-# Revision 1.59  1996/09/04 15:32:22  fresco
-# Twweks to the debug code in access.c.  Tweeks to http.  Messed about with tablesize.c
-#
-# Revision 1.58  1996/09/02 17:21:40  fresco
-# Tweeks to the drawfile code for tables and floating images.  New files for the \!Fresco directory
-#
-# Revision 1.57  1996/08/29 15:20:18  fresco
-# Merged SI_960828
-#
-# Revision 1.56  1996/08/22 15:55:06  fresco
-# Merged SI_960822
-#
-# Revision 1.55  1996/08/20 16:11:17  fresco
-# Merged SI_960820
-#
-# Revision 1.54  1996/08/20 14:27:05  fresco
-# Better table size handling
-#
-# Revision 1.53  1996/08/16 16:54:42  fresco
-# Merged SI_960816
-#
-# Revision 1.52  1996/08/15 17:50:56  fresco
-# A number of minor tweeks listed in the CHANGES file
-#
-# Revision 1.51  1996/08/14 00:06:41  fresco
-# Merged BORRIS_960807 with SI_960813
-#
-# Revision 1.50  1996/08/07 18:29:55  fresco
-# Merged BORRIS_960806 with SI_960807
-#
-# Revision 1.49  1996/08/06 18:42:30  fresco
-# Intermediate and broken checkin
-#
-# Revision 1.48  1996/08/05 10:31:55  fresco
-# Fixes brought in from Si to deal with broken tables code
-#
-# Revision 1.47  1996/07/29 17:32:16  fresco
-# After the big merge... I have no idea what has been changed by Borris and Si
-#
-# Revision 1.44  1996/07/17 00:34:39  fresco
-# Merged SI_960716
-#
-# Revision 1.43  1996/07/16 15:13:42  fresco
-# Intermediate commit
-#
-# Revision 1.42  1996/07/15 15:55:43  fresco
-# Minor changes
-#
-# Revision 1.41  1996/07/15 10:51:00  fresco
-# Update builddate.h
-#
-# Revision 1.40  1996/07/12 18:23:49  fresco
-# <PRE> mode handles tabs better
-#
-# Revision 1.39  1996/07/11 19:09:12  fresco
-# Added couple more files
-#
-# Revision 1.38  1996/07/11 17:17:46  fresco
-# Fixed RISC OS includes to be able to find tcpiplibs
-#
-# Revision 1.37  1996/07/11 06:13:29  fresco
-# Reworked linebreak and markup behaviour, esp. for top of doc.
-# <STYLE> reworked. Fixed table column group span bug.
-#
-# Revision 1.36  1996/07/11 00:26:53  fresco
-# Merged at SI_960710_BRANCH
-#
-# Revision 1.35  1996/07/10 04:44:11  fresco
-# Modifications to make compile
-#
-# Revision 1.34  1996/07/10 00:28:10  fresco
-# Minor changes
-#
-# Revision 1.33  1996/07/09 16:49:33  fresco
-# Made RISC OS stuff compile
-#
-# Revision 1.32  1996/07/09 15:01:34  fresco
-# Lots of table fixes. Minor other fixes. Makefile reorganise.
-#
-# Revision 1.31  1996/07/05 11:28:59  fresco
-# A number of changes in different places.
-# Nicko has updated the version of RISC_OSLib to have a number of fixes.
-# The formter code has had a couple of fixes to deal with floating tables
-# and also errors when formatting stops half way though a table.
-# The http code has been altered to support https using SSLeay.
-# The frontend for !Fresco now supports calling of helper applications
-# to load up files that can not be directly displayed.
-#
-# Revision 1.30  1996/07/04 20:23:43  fresco
-# Minor adjustments to DIST target.
-#
-# Revision 1.29  1996/07/04 11:56:39  fresco
-# Adding DIST target
-#
-# Revision 1.28  1996/07/03 14:16:49  fresco
-# Fixed minor bugs resulting from merge
-#
-# Revision 1.27  1996/07/03 12:28:49  fresco
-# Incorporated SI_960702_PATCHED => SI_960702_MERGED
-#
-#
-# Revision 1.26  1996/07/03 09:49:35  fresco
-# Auto open of text documents working
-#
-# Revision 1.25  1996/07/02 18:40:01  fresco
-# Lots of changes to fix floating images and tables
-#
-#
-# Revision 1.24.2.1  1996/07/03 12:10:53  fresco
-# Merged in Si's changes to SI_960702_BRANCH
-#
-#
-# Revision 1.24  1996/07/02 04:41:54  fresco
-# Added FIXME target to find all those @@@@, XXX and FIXME comments
-# that get added. Maybe someday we'll even sort them out!
-#
-# Revision 1.23  1996/06/30 23:42:22  fresco
-# Tweaked attrconf
-#
-# Revision 1.22  1996/06/26 17:47:14  fresco
-# Tidied up after changes to stream.c and sorted out configgui.c
-#
-# Revision 1.21  1996/06/26 15:17:45  fresco
-# stream.c and h created and functions to do with streams moved around
-#
-# Revision 1.20  1996/06/25 06:54:03  fresco
-# Reordered directories in TAGS: target to get Fresco definitions before
-# stdalone ones. Updated CHANGES file to reflect work done.
-#
-# Revision 1.19  1996/06/25 01:16:31  fresco
-# Few list bugs sorted out
-#
-# Revision 1.18  1996/06/24 17:19:38  fresco
-# Nicko changes.
-#
-# Revision 1.17  1996/06/20 01:57:27  fresco
-# Changes during debugging.
-#
-# Revision 1.16  1996/06/19 00:04:11  fresco
-# Various edits.
-#
-# Revision 1.15  1996/06/18 00:52:52  fresco
-# Moved Fresco run image into !Fresco directory and altered clean target.
-#
-# Revision 1.14  1996/06/17 06:13:35  fresco
-# Started using regression testing on standalone parser. Even found some bugs
-# from it already. Now fixed.
-#
-# Revision 1.13  1996/06/17 02:28:58  fresco
-# Added html/regtests/htmlcheck link. Tidied Makefile a bit.
-#
-# Revision 1.12  1996/06/16 05:01:41  fresco
-# Starting to add a test target.
-#
-# Revision 1.11  1996/06/16 04:25:28  fresco
-# Minor adjustments.
-#
-# Revision 1.10  1996/06/16 03:27:49  borris
-# Aborted attempt at xref target.
-#
-# Revision 1.9  1996/06/15 14:52:11  borris
-# Getting stdalone target going.
-#
-# Revision 1.8  1996/06/14 09:38:32  fresco
-# More kludges for poor RiscIx make program.
-#
-# Revision 1.7  1996/06/14 08:28:36  fresco
-# Lose .PHONY target for RiscIx make.
-#
-# Revision 1.6  1996/06/14 08:22:01  borris
-# Added bogus target as RiscIx make seems to fall straight past the all
-# target into the clean target!
-#
-# Revision 1.5  1996/06/14 07:36:26  borris
-# Cosmetic tweak.
-#
-# Revision 1.4  1996/06/14 07:21:56  borris
-# New style global makefile. Part way through changes.
-#
-# Revision 1.3  1996/06/13 20:11:53  fresco
-# Minor tweaks.
-#
-# Revision 1.2  1996/06/13 05:12:41  fresco
-# Add link and tags targets to Makefile. You will need to do 'make links'
-# after a 'cvs checkout' as CVS does not preserve links. This will be
-# automated soon. BUGS file moved under repository tree.
 #
 #############################################################################
 #
@@ -461,17 +88,17 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		files.o rlib_alloc.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
-BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser -I../memlib
+BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
 
 #############################################################################
 
 # This set of variables is the basic control over what is built
 
-RISCOS_INCS=	-I../RISC_OSLib -I../include/unix -I../tcpiplibs $(BASE_INCS) -J../clib
+RISCOS_INCS=	-I../RISC_OSLib -I../include/unix -I../tcpiplibs $(BASE_INCS)  -I../memlib -J../clib
 #RISCOS_INCS=	-I../RISC_OSLib -I../tcpiplibs $(BASE_INCS) -I../clib
 # -Fn *includes* function names (at least for this option set)
 #RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
-RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -Fn
+RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
 RISCOS_VPATH=	$(BASE_VPATH)
 RISCOS_OBJS=	$(BASE_OBJS)
 RISCOS_LIBS=	../RISC_OSLib/risc_oslib \
@@ -495,6 +122,18 @@ unused1=	\
 		-Wunused \
 		-Wwrite-strings \
 		-pedantic
+
+zzz=		-W \
+		-Waggregate-return \
+		-Wcast-align \
+		-Wconversion \
+		-Winline \
+		-Wno-switch \
+		-Wpointer-arith \
+		-Wunused \
+		-Wwrite-strings \
+		-pedantic \
+		\
 
 UNIX_INCS=	-I../rocompat -I../RISC_OSLib $(BASE_INCS) -I../unix
 UNIX_CFLAGS=	-DUNIX $(UNIX_INCS) -O -g \
@@ -520,8 +159,8 @@ PC_CFLAGS =     -apcs 3/26/hardfp
 
 FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
-#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
-FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
+FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
+#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
@@ -532,7 +171,7 @@ FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 # ----------------------------------------------------------------------
 
 NCFRESCO_INCS=	-I../\!NCFresco
-NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0
+NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0 -DCOMPAT_INET4
 
 # Production flag set
 # NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
@@ -547,11 +186,14 @@ NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_
 #NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
 
 NCFRESCO_VPATH=	../!NCFresco
-NCFRESCO_OBJS=	clipboard.o flex.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
+NCFRESCO_BASEOBJS=	clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 		stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
-		heap.o da.o alarm.o sutil.o ncreg.o internal.o \
+		alarm.o sutil.o ncreg.o internal.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
+NCFRESCO_MEMOBJS= flex.o heap.o da.o 
 
+# NCFRESCO_OBJS=	$(NCFRESCO_BASEOBJS)
+NCFRESCO_OBJS=	$(NCFRESCO_BASEOBJS) $(NCFRESCO_MEMOBJS)
 NCFRESCO_LIBS=	../webimage/webimage1
 # NCFRESCO_LIBS=	../webimage/webimage1m ../memcheck/MC
 NCFRESCO_LDFLAGS=
@@ -711,17 +353,17 @@ buildstamp-trigger:
 clean:		sanity
 		@echo "Cleaning out objects and executables"
 		-cd ./fresco_pc ; $(RM) *.o *,ff8 *,fd3
-		cd ./fresco ; $(RM) *.o *,ff8 *,fd3
-		cd ./unix ; $(RM) *.o
-		cd ./ncfresco ; $(RM) *.o *,ff8 *,fd3
-		cd ./stdalone; $(RM) *.o htmlcheck
-		cd ./bunix ; $(RM) *.o builders
-		cd ./cunix ; $(RM) builders parse_check format_check check_all
-		cd ./hriscos ; $(RM) *.o htmlcheck,ff8
-		cd ./\!Fresco ; $(RM) *,ff8 *,fd3
-		cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
-		cd ./abs ; $(RM) *
-		$(RM) */builddate.h $(PREDEPS)
+		@cd ./fresco ; $(RM) *.o *,ff8 *,fd3
+		@cd ./unix ; $(RM) *.o
+		@cd ./ncfresco ; $(RM) *.o *,ff8 *,fd3
+		@cd ./stdalone; $(RM) *.o htmlcheck
+		@cd ./bunix ; $(RM) *.o builders
+		@cd ./cunix ; $(RM) builders parse_check format_check check_all
+		@cd ./hriscos ; $(RM) *.o htmlcheck,ff8
+		@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
+		@cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
+		@echo "Removing some build control files"
+		@$(RM) */builddate.h $(PREDEPS)
 
 depends:
 		@echo "Generating dependencies"
@@ -857,8 +499,10 @@ mu:		MOST_UNIX
 
 realclean:	clean sanity
 		@echo "Cleaning generated files (eg htmldefs.c)"
-		$(RM) -r $(ATTREXTRA) srclist RELEASE buildstamp TAGS
-		find . -type l -exec rm {} \;
+		@$(RM) -r $(ATTREXTRA) srclist RELEASE buildstamp TAGS \
+		cscope.files cscope.out
+		@echo "Removing ALL symbolic links"
+		@find . -type l -exec rm {} \;
 
 # File holding filenames of each source file. These are the files
 # that are considered for searching with tools, etc.
@@ -895,19 +539,24 @@ NCFRESCO_BUILD_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/InetLib/inetlib.o
+#			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
 
 NCFRESCO_ROM_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/CLib/romstubs.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/InetLib/inetlibzm.o
+			$(RISCOS_BUILD_EXPORT)/Lib/InetLib/inetlibzm.o \
+			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
 
 NCFRESCO_BUILD_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/InetLib \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
+#			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
+
 NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/InetLib \
+			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
 NCFRESCO_ROM_LDFLAGS=	-aof

@@ -839,7 +839,7 @@ static os_error *access_http_fetch_start(access_handle d)
 	hlist = &host_hdr;
     }
 #endif
-    
+
     ACCDBG(("Opening connection to host 0x%08x, port 0x%04x, request '%s', handle %p\n",
 	    (int) d->addr.sin_addr.s_addr, d->addr.sin_port, d->request_string, d));
 
@@ -1107,7 +1107,7 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     int cache_it;
     char *cfile;
     MemCheck_checking checking;
-    
+
     /* Time to stop */
     ACCDBGN(( "Transfer complete for %s\n", d->url));
 
@@ -1121,7 +1121,7 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
 	ACCDBGN(("access: final size %d bytes (est %d bytes) - flushing\n", si->out.data_so_far, si->out.data_size));
 	d->progress(d->h, status_GETTING_BODY, si->out.data_so_far, si->out.data_so_far, si->out.ro_fh, d->ftype, d->url);
 	ACCDBGN(("access: flushed\n"));
-    }    
+    }
 
     /* Temporary insertion in case the url is re-requested inside the completed call (e.g. for a GIF) */
     cache->insert(d->url, cfile, cache_flag_OURS | (si->out.data_size == -1 ? cache_flag_IGNORE_SIZE : 0));
@@ -1299,7 +1299,7 @@ static void access_http_fetch_alarm(int at, void *h)
 	BOOL done = TRUE;
 
 	memcheck_register_list(si.out.headers);
-	
+
 #if DUMP_HEADERS
 	usrtrc("\nHeaders...\n");
 	for (list = si.out.headers; list; list = list->next)
@@ -1967,7 +1967,7 @@ static void access_file_fetch_alarm(int at, void *h)
 		    d->data.file.ofh ? d->data.file.ofh : d->data.file.fh,
 		    d->ftype, d->url );
 	}
-	
+
 	/* We are done */
 	if (d->data.file.fh)
 	{
@@ -2407,7 +2407,7 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
     int rtype;
 
     file = strdup(ofile ? ofile : cache->scrapfile_name());
-    
+
     ACCDBG(( "Making new internal fetch flags=%x path='%s' query='%s' cache file='%s'\n", flags, path, strsafe(query), file));
 
     new_url = NULL;
@@ -2433,7 +2433,7 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 
 	    d->url = new_url;
 	    new_url = NULL;
-	
+
 	    if (ofile)
 	    {
 		d->ofile = file;
@@ -2497,10 +2497,10 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 	access_free_item(d);
 	d = NULL;
     }
-    
+
     mm_free(file);
     *result = d;
-    
+
     return ep;
 }
 #endif
@@ -2511,7 +2511,7 @@ static void write_buf(char *buffer, const char *path, const char *params, const 
 	strcpy(buffer, path);
     else
 	strcpy(buffer, "/");
-    
+
     if (params)
     {
 	strcat(buffer, ";");
@@ -2537,7 +2537,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
     /* this prevents internal state flags from being passed back in from relocates (like proxy and secure flags) */
     flags &= access_INTERNAL_FLAGS;
-    
+
     usrtrc( "access_url: %s from %s\n", url, referer ? referer : "<none>" );
 
     *result = 0;
@@ -2574,12 +2574,12 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	}
     }
 #endif
-    
+
     if (cfile)
     {
 	access_complete_flags fl;
 	BOOL file_missing = FALSE;
-	
+
 	if (ofile)
 	{
 	    os_regset r;
@@ -2606,7 +2606,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    else
 	    {
 		fl = complete(h, status_COMPLETED_FILE, ofile ? ofile : cfile, url);
-		
+
 		if (fl & access_KEEP)
 		    cache->keep(url);
 	    }
@@ -2625,7 +2625,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    *result = NULL;
 	}
     }
-    
+
 #endif /*ndef FILEONLY */
 
     /* if cache is no good then go and fetch it for real */
@@ -3247,11 +3247,12 @@ os_error *access_init(int size)
     return ep;
 }
 
+#ifdef STBWEB
 int access_safe_to_quit(void)
 {
     return (access_pending_list == NULL);
 }
-
+#endif
 
 static void access_abort_item(access_handle d)
 {
@@ -3395,13 +3396,16 @@ void access_remove(char *url)
 #endif
 }
 
+#ifdef STBWEB
 void access_insert(char *url, char *file_name, cache_flags flags)
 {
 #ifndef FILEONLY
     cache->insert(url, file_name, flags);
 #endif
 }
+#endif
 
+#ifdef STBWEB
 char *access_scrapfile(void)
 {
 #ifdef FILEONLY
@@ -3410,6 +3414,7 @@ char *access_scrapfile(void)
     return cache->scrapfile_name();
 #endif
 }
+#endif
 
 int access_test_cache(char *url)
 {
@@ -3420,6 +3425,7 @@ int access_test_cache(char *url)
 #endif
 }
 
+#ifdef STBWEB
 void access_flush_cache(void)
 {
 #ifndef FILEONLY
@@ -3427,7 +3433,9 @@ void access_flush_cache(void)
 	cache->flush();
 #endif
 }
+#endif
 
+#ifdef STBWEB
 void access_set_header_info(char *url, unsigned date, unsigned last_modified, unsigned expires)
 {
 #ifndef FILEONLY
@@ -3435,6 +3443,7 @@ void access_set_header_info(char *url, unsigned date, unsigned last_modified, un
 	cache->header_info(url, date, last_modified, expires);
 #endif
 }
+#endif
 
 void access_optimise_cache(void)
 {

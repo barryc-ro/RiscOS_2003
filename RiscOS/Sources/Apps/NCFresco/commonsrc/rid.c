@@ -16,11 +16,7 @@
 #include "tables.h"
 #include "memwatch.h"
 #include "util.h"
-#ifdef STBWEB
-#include "flex.h"
-#else
 #include "flexwrap.h"
-#endif
 
 #include "myassert.h"
 

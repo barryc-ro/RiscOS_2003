@@ -1,4 +1,18 @@
-/* plugin.h */
+/************************************************************************/
+/*                  Copyright 1997 Acorn Computers Ltd                  */
+/*                                                                      */
+/*  This material is the confidential trade secret and proprietary      */
+/*  information of Acorn Computers. It may not be reproduced, used      */
+/*  sold, or transferred to any third party without the prior written   */
+/*  consent of Acorn Computers. All rights reserved.                    */
+/*                                                                      */
+/************************************************************************/
+
+/* 
+ * plugin.h 
+ *
+ * Version 1.02: 24-Feb-97
+ */
 
 #ifndef __plugin_h
 # define __plugin_h
@@ -26,6 +40,8 @@
 #define MESSAGE_PLUGIN_URL_NOTIFY	0x4D54E
 #define MESSAGE_PLUGIN_STATUS		0x4D54F
 #define MESSAGE_PLUGIN_BUSY		0x4D550
+#define MESSAGE_PLUGIN_ACTION		0x4D551
+#define MESSAGE_PLUGIN_ABORT		0x4D552
 
 /* ----------------------------------------------------------------------------- */
 
@@ -35,25 +51,6 @@ typedef enum
     plugin_reason_NETWORK_ERROR,
     plugin_reason_USER_BREAK
 } plugin_reason;
-/*
-typedef enum
-{
-    plugin_error_NONE,
-    plugin_error_GENERIC_ERROR,
-    plugin_error_INVALID_INSTANCE,
-    plugin_error_INVALID_FUNCTABLE,
-    plugin_error_MODULE_LOAD_FAILED,
-    plugin_error_OUT_OF_MEMORY,
-    plugin_error_INVALID_PLUGIN,
-    plugin_error_INVALID_PLUGIN_DIR,
-    plugin_error_INCOMPATIBLE_VERSION,
-    plugin_error_INVALID_PARAM,
-    plugin_error_INVALID_URL,
-    plugin_error_FILE_NOT_FOUND,
-    plugin_error_NO_DATA,
-    plugin_error_STREAM_NOT_SEEKABLE
-} plugin_stream_error;
- */
 
 /* ----------------------------------------------------------------------------- */
 
@@ -100,8 +97,11 @@ typedef struct
 #define plugin_parameter_USER_AGENT	"USERAGENT"
 #define plugin_parameter_UA_VERSION	"UAVERSION"
 #define plugin_parameter_API_VERSION	"APIVERSION"
+#define plugin_parameter_PASSWORDS	"PASSWORDS"
 
-#define plugin_API_VERSION	"1.00"
+#define plugin_API_VERSION_100	"1.00"
+#define plugin_API_VERSION_110	"1.10"
+#define plugin_API_VERSION	plugin_API_VERSION_110
 
 /* ============================================================================= */
 
@@ -111,7 +111,9 @@ typedef union
     int				offset;			/* offset is from the start of the message data area */
 } plugin_string_value;
 
-#define plugin_string_ptr(msg, sv)	((sv).offset <= 236 ? (char *)(msg) + (sv).offset : (sv).ptr)
+#define plugin_string_ptr(msg, sv) \
+	((sv).offset == 0 ? 0 : \
+	 (sv).offset <= 236 ? (char *)(msg) + (sv).offset : (sv).ptr)
 
 /* ----------------------------------------------------------------------------- */
 
@@ -144,6 +146,8 @@ typedef struct
 
 /* Messages sent by the parent to the plugin */
 
+#define plugin_open_HELPER	0x00000001	/* Open as helper, window_handle and box are invalid */
+
 typedef struct
 {
     int				flags;
@@ -175,22 +179,17 @@ typedef struct
     int				notify_data;	/* as passed in to get/post url */
 } message_plugin_url_notify;
 
-typedef struct
-{
-    int				flags;
-    plugin_private_data		instance;
-    plugin_stream		stream;
-    plugin_string_value		file_name;
-} message_plugin_stream_as_file;
-
 /* ----------------------------------------------------------------------------- */
 
 /* Message sent by the plugin to the parent */
 
-#define plugin_opening_CAN_FOCUS 0x00000001		/* This plugin can accept the input focus */
-#define plugin_opening_FETCH_CODE 0x00000002		/* fetch the code resource and send it to plugin */
-#define plugin_opening_FETCH_DATA 0x00000004		/* fetch the data resource and send it to plugin */
-#define plugin_opening_NEED_FILE 0x00000008		/* plugin will delete the parameter file */
+#define plugin_opening_CAN_FOCUS	0x00000001		/* This plugin can accept the input focus */
+#define plugin_opening_FETCH_CODE	0x00000002		/* fetch the code resource and send it to plugin */
+#define plugin_opening_FETCH_DATA	0x00000004		/* fetch the data resource and send it to plugin */
+#define plugin_opening_NEED_FILE	0x00000008		/* plugin will delete the parameter file */
+#define plugin_opening_BUSY		0x00000010		/* plugin is still busy, will send BUSY message to clear later */
+#define plugin_opening_CAN_ACTION	0x00000020		/* plugin understands ACTION messages */
+#define plugin_opening_HELPER		0x00000040		/* plugin instance was actually opened as a helper */
 
 typedef message_plugin_base	message_plugin_opening;
 
@@ -243,6 +242,32 @@ typedef struct
     plugin_private_data		instance;
     plugin_string_value		message;
 } message_plugin_status;
+
+#define plugin_busy_BUSY	0x00000001	/* Plugin is busy */
+#define plugin_busy_STATE_VALID	0x00000002	/* State word is valid*/
+
+#define plugin_state_STOP		0	/* State definitions used in BUSY and ACTION messages */
+#define plugin_state_PLAY		1
+#define plugin_state_PAUSE		2
+#define plugin_state_REWIND		3
+#define plugin_state_FAST_FORWARD	4
+#define plugin_state_RECORD		5
+
+typedef struct
+{
+    int				flags;
+    plugin_private_data		instance;
+    int				state;		/* see state definition above */
+} message_plugin_busy;
+
+typedef struct
+{
+    int				flags;
+    plugin_private_data		instance;
+    int				new_state;      /* new state to enter, see definitions above */
+} message_plugin_action;
+
+typedef message_plugin_base	message_plugin_abort;
 
 /* ============================================================================= */
 
@@ -321,6 +346,14 @@ typedef struct
     plugin_stream		stream;
     int				written;	/* n bytes actually written */
 } message_plugin_stream_written;
+
+typedef struct
+{
+    int				flags;
+    plugin_private_data		instance;
+    plugin_stream		stream;
+    plugin_string_value		file_name;
+} message_plugin_stream_as_file;
 
 /* ----------------------------------------------------------------------------- */
 

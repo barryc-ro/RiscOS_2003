@@ -47,6 +47,7 @@
 #define LOCATEDBG(X)
 #endif
 
+#if 0 /*not called?*/
 void stream_iterate(rid_text_stream *st, stream_callback_fn cbf, void *params)
 {
     rid_text_item *ti;
@@ -56,6 +57,7 @@ void stream_iterate(rid_text_stream *st, stream_callback_fn cbf, void *params)
 	cbf(st, ti, params);
     }
 }
+#endif
 
 static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be_item *ti)
 {
@@ -64,52 +66,52 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
     /*        rid_table_cell *cell;*/
 
     LOCATEDBG((stderr, "Locating item in table %p, offset %d,%d\n", table, tx, ty));
-    
+
     ty -= table->cellspacing + table->cellpadding;
-    
+
     if (ty < 0)
     {
 	LOCATEDBG((stderr, "Below the bottom border\n"));
 	return;
     }
-    
+
     y = table->cells.y - 1;
     while (y >= 0)
     {
 	ty -= table->rowhdrs[y]->sizey;
-	
+
 	if (ty < 0)
 	    break;
 	y--;
     }
-    
-    
+
+
     if (ty < 0)
     {
 	LOCATEDBG((stderr, "Matched vertically within row %d\n", y));
-	
+
 	tx -= table->cellspacing + table->cellpadding;
-	
+
 	if (tx < 0)
 	{
 	    LOCATEDBG((stderr, "In the left border\n"));
 	    return;
 	}
-	
+
 	x = 0;
 	while (x < table->cells.x)
 	{
 	    tx -= table->colhdrs[x]->sizex;
-	    
+
 	    if (tx < 0)
 		break;
 	    x++;
 	}
-	
+
 	if (tx < 0 && y >= 0)
 	{
 	    rid_table_cell *cell = *CELLFOR(table, x, y);
-	    
+
 	    LOCATEDBG((stderr, "Matched horizontally within cell %d,%d - %s\n", x, y, cell ? "Occupied" : "No cell"));
 	    if (cell != NULL)
 	    {
@@ -119,9 +121,9 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 		tx = *xp - tx;
 		/* Y offset is from top left, *yp is from bottom left */
 		ty = (*yp - table->size.y) - ty;
-		
+
 		stream_find_item_at_location(&cell->stream, &tx, &ty, &my_ti);
-		
+
 		if (my_ti != NULL)
 		{
 		    LOCATEDBG((stderr, "Returning matched child item\n"));
@@ -132,11 +134,11 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 		}
 	    }
 	}
-	
+
 	LOCATEDBG((stderr, "Either beyond right border or not over an item\n"));
 	return;
     }
-    
+
     LOCATEDBG((stderr, "Trying to match within caption\n"));
 
     /* @@@@ this is probably wrong */
@@ -144,7 +146,7 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
     {
 	ty = (*yp - table->size.y);
 	stream_find_item_at_location(&table->caption->stream, &tx, &ty, &my_ti);
-	
+
 	if (my_ti != NULL)
 	{
 	    LOCATEDBG((stderr, "Matched in the caption\n"));
@@ -154,9 +156,9 @@ static void stream_table_locate_item(rid_table_item *table, int *xp, int *yp, be
 	    return;
 	}
     }
-    
+
     LOCATEDBG((stderr, "Failed to match any item - just returning the table\n"));
-    
+
     return;
 }
 
@@ -233,20 +235,20 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	    {
 #if 0
 		fprintf(stderr, "Pointer to the left of all items\n");
-#endif		
+#endif
 	    }
 	    else
 	    {
 		for(ti2 = pi->first; ti2 != pi->next->first; ti2 = ti2->next)
 		{
 		    int ohpos = hpos;
-		    
+
 		    if ((ti2->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) == 0)
 		    {
 			hpos += ti2->width;
 			hpos += ti2->pad;
 			hpos += pi->leading;
-			
+
 			if (*x < hpos || ti2->width == -1)
 			{
 			    *y -= (pi->top - pi->max_up);         /* Relative to baseline */
@@ -265,7 +267,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 	    fprintf(stderr, "Found item\n");
 #endif
 	    *ti = ti2;
-	    
+
 	    if (ti2->tag == rid_tag_TABLE)
 	    {
 		stream_table_locate_item( ((rid_text_item_table *)ti2)->table, x, y, ti);
@@ -356,7 +358,7 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
 	    }
 	}
     }
-	
+
     if (found)
     {
 	*xx = hpos;
@@ -366,13 +368,13 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
 	    int px, py;
 	    rid_text_item *par_table_ti;
 	    rid_table_item *tabi;
-	    
+
 	    if (ti->line->st->partype == rid_pt_CAPTION)
 	    {
 		rid_table_caption *capt = (rid_table_caption *) ti->line->st->parent;
-		
+
 		tabi = capt->table;
-		
+
 		/* Adjust offset to be within table */
 		TABDBG(("stream_find_item_location() 2\n"));
 		table_caption_stream_origin(tabi, &px, &py);
@@ -389,19 +391,19 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
 		TASSERT(ti->line->st->parent != NULL);
 		TASSERT(ti->line->st->partype == rid_pt_CELL);
 		tabi = cell->parent;
-		
+
 		/* Adjust offset to be within table */
 		TABDBG(("stream_find_item_location() 1\n"));
 		table_cell_stream_origin(tabi, cell, &px, &py);
 		*xx += px;
 		*yy += py;
 	    }
-	    
+
 	    par_table_ti = &(tabi->parent->base);
-	    
+
 	    /* Adjust offset to be within work area */
 	    stream_find_item_location(par_table_ti ,&px, &py);
-	    
+
 	    *xx += px;
 	    *yy += py;
 	    *yy += tabi->size.y;
@@ -425,10 +427,10 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
     rid_pos_item *pi;
     rid_text_item *ti;
     rid_text_item *float_l, *float_r;
-    
+
     if (stream == NULL || stream->pos_list == NULL)
 	return;
-    
+
     RENDBG(("Rendering rectangle.  ox=%d, oy=%d.\n", ox, oy));
     RENDBG(("Top work area = %d, bottom = %d\n", top, bot));
     RENDBG(("Left = %d, right = %d\n", left, right));
@@ -440,11 +442,11 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
     }
 
     float_l = float_r = NULL;
-    
+
     for( ; pi && pi->top > bot; pi = pi->next)
     {
 	int hpos, bline;
-	
+
 	RENDBG(("Got line in range, top=%d\n", pi->top));
 
 	hpos = ox + pi->left_margin;
@@ -489,7 +491,7 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 	    if (float_l)
 		hpos += float_l->width;
 	}
-	
+
 	RENDBG(("Base line at %d, hpos starts at %d\n", bline, hpos));
 
 	for (ti = pi->first; ti && ti != pi->next->first; ti = rid_scanf(ti) /*ti->next*/ )
@@ -511,7 +513,7 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 		    (object_table[ti->tag].redraw)(ti, doc->rh, doc, hpos, bline,
 						   fs, g, ox, oy, update);
 		}
-	    
+
 		hpos += ti->width;
 		hpos += ti->pad;
 		hpos += pi->leading;
@@ -618,7 +620,7 @@ void stream_write_as_drawfile(be_doc doc, rid_text_stream *stream,
 
 	    if (float_l)
 		hpos += float_l->width;
-	}	
+	}
 
 	bb.x0 = ox + dwidth;
 	bb.y0 = bline + pi->max_up;
@@ -649,17 +651,17 @@ void stream_write_as_drawfile(be_doc doc, rid_text_stream *stream,
 		    tb.y0 = bline - ti->max_down;
 		    tb.x1 = hpos + w;
 		    tb.y1 = bline + ti->max_up;
-		    
+
 		    df_stretch_bb(&bb, &tb);
-		    
+
 		    df_write_filled_rect(fh, &tb, render_get_colour(render_colour_PLAIN, doc), trans,
 					 writepoint);
 		}
-		
+
 		hpos += w + ti->pad + pi->leading;
 	    }
 	}
-	
+
         /* Close off the line bounding object */
 	df_write_box_fix(fh, line_base, &bb, writepoint);
     }

@@ -171,7 +171,7 @@ extern void startover (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 
 extern void startp (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
-    generic_start (context, element, attributes);	
+    generic_start (context, element, attributes);
 
     text_item_ensure_break(htmlctxof(context));
 
@@ -387,7 +387,7 @@ extern void finishover (SGMLCTX * context, ELEMENT * element)
 
 extern void finishp (SGMLCTX * context, ELEMENT * element)
 {
-    generic_finish (context, element);	
+    generic_finish (context, element);
 
 /*     text_item_ensure_break(htmlctxof(context)); */
 }
@@ -483,13 +483,16 @@ extern void finishstrike (SGMLCTX * context, ELEMENT * element)
 extern void finishstyle (SGMLCTX * context, ELEMENT * element)
 {
     HTMLCTX *htmlctx = htmlctxof(context);
-    generic_finish (context, element);	
+    generic_finish (context, element);
 
     PRSDBG(("Collected <STYLE> string is:\n'%.*s'\n",
 	    htmlctx->inhand_string.bytes,
 	    htmlctx->inhand_string.ptr));
 
     string_free(&htmlctx->inhand_string);
+
+    /* pdh: stuck this in, patterning it on </script> */
+    select_fmt_mode(htmlctx);
 }
 
 extern void finishxmp (SGMLCTX * context, ELEMENT * element)

@@ -14,10 +14,21 @@
 # ifndef __heap_h
 # define __heap_h
 
+#if MEMLIB
+
+#define heap_init(h) 
+#define heap_alloc(s) mm_malloc(s)
+#define heap_free(h) mm_free(h)
+#define heap_realloc(h, s) mm_realloc(h, s)
+
+#else
+
 #define heap_init(h) heapda_init(h)
-#define heap_alloc(s) heapda_size(s)
+#define heap_alloc(s) heapda_alloc(s)
 #define heap_free(h) heapda_free(h)
 #define heap_realloc(h, s) heapda_realloc(h, s)
+
+#endif
 
 extern void heapda_init(const char *programname);
 extern void *heapda_alloc(unsigned int size);

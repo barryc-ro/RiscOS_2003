@@ -131,7 +131,7 @@ extern void report_finish (SGMLCTX * context, ELEMENT * element);
 /* Out of date: No more than MAX_STRING character should result from formatting. */
 /* Use %.*s formatting if uncertain */
 extern void new_option_item(HTMLCTX * me, VALUE *value, rid_input_flags flags);
-extern void pseudo_html(HTMLCTX *context, char *fmt, ... );
+extern void pseudo_html(HTMLCTX *context, const char *fmt, ... );
 extern void select_pre_mode(HTMLCTX *context);
 extern void select_fmt_mode(HTMLCTX *context);
 extern void select_str_mode(HTMLCTX *context);

@@ -53,6 +53,8 @@ extern void tb_status_unstack(void);
 extern void tb_status_new(fe_view v, int bar_num);
 extern BOOL tb_status_highlight(BOOL gain);
 
+extern BOOL tb_status_check_pointer(wimp_mousestr *mp);
+
 extern void tb_open_url(void);
 extern void tb_open_url_and_close(void);
 

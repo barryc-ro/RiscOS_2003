@@ -1226,7 +1226,7 @@ extern void text_item_push_bullet(HTMLCTX * me, int item_type)
 
  */
 
-extern void pseudo_html(HTMLCTX *ctx, char *fmt, ...)
+extern void pseudo_html(HTMLCTX *ctx, const char *fmt, ...)
 {
     SGMLCTX *context = ctx->sgmlctx;
     char buffer[MAXSTRING + 32];

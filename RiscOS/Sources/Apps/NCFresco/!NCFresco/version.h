@@ -16,7 +16,7 @@ extern char *program_title;
 #define PROGRAM_NAME		"NCFresco"
 #define PROGRAM_TITLE		"NCBrowser"
 #define VERSION_NUMBER		"1.07"
-#define BASE_VERSION_NUMBER	"1.36" /* Fresco version */
+#define BASE_VERSION_NUMBER	"1.39" /* Fresco version */
 
 #ifdef PRODUCTION
 #define VERSION_QUALIFIER	"("BASE_VERSION_NUMBER")"
@@ -56,7 +56,7 @@ extern char *program_title;
 /* Use this instead of fprintf(stderr,...) for production messages */
 
 #pragma -v1
-extern void usrtrc(char *fmt, ...);
+extern void usrtrc(const char *fmt, ...);
 #pragma -v0
 
 #endif /* __version_h */

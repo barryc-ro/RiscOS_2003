@@ -19,6 +19,7 @@
 #define MAX_LINE	256
 
 /* pmatch2 always does a case sensitive match and calls itself recursively */
+#if 0 /*not called?*/
 extern int pmatch2(char *s, char *p)
 {
     char *q, *r;
@@ -121,7 +122,9 @@ extern int pmatch2(char *s, char *p)
 
     return 0;
 }
+#endif
 
+#if 0 /*not called?*/
 extern int pattern_match(char *s, char *pat, int cs)
 {
     char *ss, *pp;
@@ -150,6 +153,7 @@ extern int pattern_match(char *s, char *pat, int cs)
     mm_free(pp);
     return match;
 }
+#endif
 
 
 extern char *strdup(const char *s)
@@ -166,6 +170,7 @@ extern char *strdup(const char *s)
     return ss;
 }
 
+#ifdef STBWEB
 extern char *strndup(const char *s, size_t maxlen)
 {
     char *s1 = NULL;
@@ -182,6 +187,7 @@ extern char *strndup(const char *s, size_t maxlen)
     }
     return s1;
 }
+#endif
 
 void strncpysafe(char *s1, const char *s2, int n)
 {
@@ -219,6 +225,7 @@ unsigned int string_hash(const char *s)
     return h;
 }
 
+#ifdef STBWEB
 extern char *strcasestr(const char *s1, const char *s2)
 {
     if (s1 && s2)
@@ -233,6 +240,7 @@ extern char *strcasestr(const char *s1, const char *s2)
     }
     return NULL;
 }
+#endif
 
 char encode_table[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -440,6 +448,8 @@ static int find_tag(const char *tags[], const char *name)
 
  */
 
+#if 1
+
 static int add_tag(char *name, int name_len, char *value, int value_len, const char *tags[], name_value_pair *output, int free_offset)
 {
     int tag_num;
@@ -519,14 +529,14 @@ int parse_http_header(char *header_data, const char *tags[], name_value_pair *ou
 
 	case lookingfor_NAME_END:
 	    if (c == 0 || c == ';')
-	    {		
+	    {
 		name_end = s-1;
 
 		/* we've completed a NAME/VALUE without an equals */
 		unknown += add_tag(name, name_end - name, NULL, 0, tags, output, unknown_offset);
 
 		state = lookingfor_NAME;
-		name = name_end = NULL;		
+		name = name_end = NULL;
 	    }
 	    else if (isspace(c))
 	    {
@@ -546,12 +556,12 @@ int parse_http_header(char *header_data, const char *tags[], name_value_pair *ou
 		state = lookingfor_VALUE;
 	    }
 	    else if (c == 0 || c == ';' || isalnum(c))
-	    {			
+	    {
 		/* we've completed a NAME/VALUE without an equals */
 		unknown += add_tag(name, name_end - name, NULL, 0, tags, output, unknown_offset);
 
 		state = c == ';' ? lookingfor_NAME : lookingfor_SEPARATOR;
-		name = name_end = NULL;		
+		name = name_end = NULL;
 	    }
 	    break;
 
@@ -633,6 +643,59 @@ int parse_http_header(char *header_data, const char *tags[], name_value_pair *ou
     return unknown;
 }
 
+#else
+
+#define SEPARATORS ";\n\r"
+
+
+void parse_http_header(char *header_data, const char *tags[], char *values[])
+{
+    char *s;
+    int i;
+
+    /* zero the output array first */
+    for (i = 0; tags[i]; i++)
+        values[i] = NULL;
+
+    s = strtok(header_data, SEPARATORS);
+    if (s) do
+    {
+        char *name;
+        char *equals, *value;
+        int tag_num;
+
+        /* s is either NAME or VALUE or NAME=VALUE, whitespace can be anywhere */
+        name = skip_space(s);
+        value = "";
+        equals = strchr(s, '=');
+
+        if (equals)
+        {
+            *equals = '\0';
+            value = equals + 1;
+        }
+
+        tag_num = find_tag(tags, name);
+        if (tag_num != -1)
+        {
+            values[tag_num] = skip_space(value);
+        }
+        else
+        {
+            /* if searching for the null entry use full NAME=VALUE */
+            if (equals)
+                *equals = '=';
+
+            tag_num = find_tag(tags, "");
+            if (tag_num != -1)
+                values[tag_num] = name;
+        }
+    }
+    while ((s = strtok(NULL, SEPARATORS)) != NULL);
+}
+
+#endif
+
 /* ---------------------------------------------------------------------------------------------------------- */
 
 char *skip_space(const char *s)
@@ -663,6 +726,7 @@ extern void translate_escaped_text(char *src, char *dest, int len)
     dest[new_len] = 0;
 }
 
+#ifdef STBWEB
 extern void translate_escaped_form_text(char *src, char *dest, int len)
 {
     int new_len;
@@ -676,31 +740,32 @@ extern void translate_escaped_form_text(char *src, char *dest, int len)
 
     dest[new_len] = 0;
 }
+#endif
 
 
 /*****************************************************************************
-  
+
   share_span_evenly():  the supplied width is shared equally amongst the
   range of items.
-  
+
   ensure_span_evenly():  On exit, the sum of the widths of the items
   spanned will equal or exceed the width value supplied.
-  
+
   A negative value indicates the item has a used specified fixed size.  If
   there are items with positive values, then negative items are ignored
   when distributing size.  If only negative values are present, then we
   still need to force the minimum size.
-  
+
   */
 
 extern void share_span_evenly(int *list, const int start, const int span, const int width)
 {
     const int end = start + span;
     int num_neg = 0, num_pos = 0, x, wleft = width, step;
-    
+
     if (list == NULL || start < 0 || span <= 0 || width <= 0)
 	return;
-    
+
     for (x = start; x < end; x++)
     {
 	if (list[x] < 0)
@@ -708,11 +773,11 @@ extern void share_span_evenly(int *list, const int start, const int span, const 
 	else
 	    num_pos += 1;
     }
-    
+
     TABDBGN(("%d negative items, %d positive items\n", num_neg, num_pos));
-    
+
     TASSERT(num_neg > 0 || num_pos > 0);
-    
+
     if (num_neg == 0 && num_pos != 0)
     {       /* Simple case - no notched out columns */
 	TASSERT(num_pos == span);
@@ -775,7 +840,7 @@ extern void share_span_evenly(int *list, const int start, const int span, const 
 	}
 	ASSERT(wleft == 0);
     }
-    
+
 #if DEBUG == 3
     dump_span(list + start, span);
 #endif
@@ -785,7 +850,7 @@ extern void ensure_span_evenly(int *list, const int start, const int span, const
 {
     const int end = start + span;
     int got, x;
-    
+
     TABDBG(("ensure_span_evenly(%p, %d, %d, %d)\n", list, start, span, width));
 
     if (span < 1)
@@ -793,13 +858,14 @@ extern void ensure_span_evenly(int *list, const int start, const int span, const
 
     for (got = 0, x = start; x < end; x++)
 	got += abs( list[x] );
-    
+
     if (got < width)
 	share_span_evenly(list, start, span, width - got);
 }
 
 /* sum of all items in list, not getting confused by NOTINIT */
 
+#if 0 /*not called?*/
 extern int sum_list(int *ptr, const int num)
 {
     int x, sum, *p;
@@ -810,9 +876,11 @@ extern int sum_list(int *ptr, const int num)
 
     return sum;
 }
+#endif
 
 /* Scale non-NOTINIT items to sum to max */
 
+#if 0 /*not called?*/
 extern void list_lower(int *ptr, const int num, const int max)
 {
     if (num == 0)
@@ -857,6 +925,7 @@ extern void list_lower(int *ptr, const int num, const int max)
 	/* Just iterate - equiv to recursing */
     }
 }
+#endif
 
 /* Print out a list for debugging */
 
@@ -896,6 +965,7 @@ extern void set_list(int *ptr, const int num, const int val)
 /* Share amt out over the specified range */
 /* NOTINIT items will get written to as well */
 
+#if 0 /*not called?*/
 extern void range_spread(int *ptr, const int num, const int amt)
 {
     int x, q, *p;
@@ -918,9 +988,11 @@ extern void range_spread(int *ptr, const int num, const int amt)
 	*p += 1;
     }
 }
+#endif
 
 /* Ensure the specified range accounts for amt */
 
+#if 0 /*not called?*/
 extern void ensure_range(int *ptr, const int num, const int amt)
 {
     int *p, got, x;
@@ -936,9 +1008,11 @@ extern void ensure_range(int *ptr, const int num, const int amt)
     if (got < amt)
 	RANGE_SPREAD(ptr, num, amt - got);
 }
+#endif
 
 /* Use new value if lower than existing value */
 
+#if 0 /*not called?*/
 extern void min_merge(int *lhs, int *rhs, const int num)
 {
     int x, *p1, *p2;
@@ -951,9 +1025,11 @@ extern void min_merge(int *lhs, int *rhs, const int num)
 	    *p1 = *p2;
     }
 }
+#endif
 
 /* Use new value if higher than existing value */
 
+#if 0 /*not called?*/
 extern void max_merge(int *lhs, int *rhs, const int num)
 {
     int x, *p1, *p2;
@@ -966,9 +1042,11 @@ extern void max_merge(int *lhs, int *rhs, const int num)
 	    *p1 = *p2;
     }
 }
+#endif
 
 /* Ensure all points rightwards are at least a given size */
 
+#if 0 /*not called?*/
 extern void ensure_rightwards(int *ptr, /* base of list */
 			      const int num, /* items in list */
 			      const int from, /* 1st of two items */
@@ -994,10 +1072,11 @@ extern void ensure_rightwards(int *ptr, /* base of list */
     for (x = to; x < num; x++)
 	ptr[x] += d;
 }
+#endif
 
 /*****************************************************************************/
 
-/* 
+/*
  * find out whether two boxes overlap and returns the common area in out_box
  * returns TRUE if there is any overlap
  */
@@ -1014,7 +1093,7 @@ BOOL coords_intersection(const wimp_box *box1, const wimp_box *box2, wimp_box *o
     return out.x1 > out.x0 && out.y1 > out.y0;
 }
 
-/* 
+/*
  * find out whether two boxes overlap and returns a box covering both in out_box
  * returns TRUE if there is any overlap
  * x1 < x0 or y1 < y0 mean empty box so return TRUE and the other box
@@ -1176,7 +1255,7 @@ int find_closest_colour(int colour, const int *palette, int n_entries)
 {
     int i, best, besterr;
     int bb, gg, rr;
-        
+
     best = -1;
     besterr = 0x7fffffff;
 
@@ -1204,7 +1283,7 @@ int find_closest_colour(int colour, const int *palette, int n_entries)
 	    besterr = err;
 	    best = i;
 	}
-    }    
+    }
 
     return best;
 }
@@ -1224,7 +1303,7 @@ int find_closest_colour(int colour, const int *palette, int n_entries)
   The size of individual elements is esize - typically sizeof(ptr*), etc
   The x dimension is xsize.
   asize is height of first section.
-  bsize is height of second section 
+  bsize is height of second section
 
 
  */

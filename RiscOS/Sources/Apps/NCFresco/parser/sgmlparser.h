@@ -330,10 +330,10 @@ typedef struct
     void (* note_has_scripts) (SGMLCTX * context);
     void (* note_has_frames) (SGMLCTX * context);
     void (* note_has_address) (SGMLCTX * context);
-    void (* note_unknown_element) (SGMLCTX * context, char *fmt, va_list list) ;
-    void (* note_unknown_attribute) (SGMLCTX * context, char *fmt, va_list list) ;
-    void (* note_bad_attribute) (SGMLCTX * context, char *fmt, va_list list);
-    void (* note_message) (SGMLCTX * context, char *fmt, va_list list );
+    void (* note_unknown_element) (SGMLCTX * context, const char *fmt, va_list list) ;
+    void (* note_unknown_attribute) (SGMLCTX * context, const char *fmt, va_list list) ;
+    void (* note_bad_attribute) (SGMLCTX * context, const char *fmt, va_list list);
+    void (* note_message) (SGMLCTX * context, const char *fmt, va_list list );
     void (* reset_report) (SGMLCTX * context);
     void (* pre_open) (SGMLCTX *context, ELEMENT *element);
 } SGMLBACK;

@@ -448,7 +448,7 @@ os_error *antweb_handle_url(be_doc doc, const char *href, const char *query, con
 
     if (!href)
         return NULL;
-    
+
     BEDBG((stderr, "antweb_handle_url for '%s' target '%s'\n", strsafe(href), strsafe(target)));
 
 #ifndef STBWEB
@@ -896,10 +896,12 @@ static os_error *backend__dispose_doc(be_doc doc)
 
     alarm_removeall(doc);
 
-    /* check for undispose URL action */
+#ifdef STBWEB
+    /* check for ondispose URL action */
     if (doc->rh->refreshtime == -2)
 	be_refresh_document(0, doc);
-    
+#endif
+
 #if DEBUG  > 2
     if (doc->rh) dump_header(doc->rh);
 #endif
@@ -1028,9 +1030,9 @@ os_error *backend_dispose_doc(be_doc doc)
     }
     else if (--doc->pending_delete > 0)
 	return NULL;
-    
+
     antweb_unlink_doc(doc);
-    
+
     BEDBG((stderr, "dispose_doc: calling real dispose doc\n"));
 
     return backend__dispose_doc(doc);
@@ -2556,7 +2558,7 @@ static void sizing_sharing_table_proc(
 }
 #endif
 
-
+#if DEBUG
 static void stomp_contained_widths(rid_text_stream *st)
 {
     rid_text_item *ti;
@@ -2594,6 +2596,7 @@ static void stomp_contained_widths(rid_text_stream *st)
 
     FMTDBG(("stomp_contained_widths() finished\n"));
 }
+#endif
 
 static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
 {
@@ -2625,7 +2628,7 @@ static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
 	    memset(&st->width_info, 0, sizeof(st->width_info));
 
 	    FMTDBG(("be_formater_loop(%p, %p, %d) - STOMPED sizing\n", rh, ti, scale_value));
-	    
+
 	    fmt.margin_proc = &be_margin_proc;
 	    fmt.tidy_proc = &dummy_tidy_proc;
 	    fmt.table_proc = &dummy_table_proc;
@@ -2683,7 +2686,7 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
     be_formater_loop(doc->rh, ti, doc->scale_value);
 
     objects_check_movement(doc);
-    
+
 #if DEBUG
     FMTDBG(("antweb_document_format() done doc %p, rid_header %p\n", doc, doc->rh));
 
@@ -3729,7 +3732,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 
 	PPDBG((stderr, "Data arriving; type = 0x%03x, file=%d, last had %d, now got %d\n",
 		ftype, fh, lastptr, so_far));
-	
+
 	if (doc->pd == NULL)
 	    doc->pd = be_lookup_parser(ftype);
 
@@ -3817,7 +3820,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 			}
 			else if (clock() < doc->start_time + config_display_time_background)
 			{
-			    waiting_for_bg = TRUE;	
+			    waiting_for_bg = TRUE;
 			    BEDBG((stderr, "waiting for background\n"));
 			}
 			else
@@ -4043,131 +4046,18 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
     ft = file_type(cfile);
 
-#if 0
-    if (doc->pd == NULL)
-	doc->pd = be_lookup_parser(ft);
-    if (doc->ph || ((pparse_details*)doc->pd)->whole)
-#else
     if (doc->ph)
-#endif
     {
-#if 0
-	int need_to_parse = (doc->ph == NULL);
-	if (!need_to_parse)
-	{
-	    rid_text_item *oti;
-	    rid_form_item *ofi;
-	    rid_select_item *osi;
-	    rid_option_item *ooi;
+        PPDBG((stderr, "Closing parser down\n"));
+        doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
+        doc->ph = NULL;
 
-	    oti = doc->rh->stream.text_last;
-	    ofi = doc->rh->form_last;
-	    osi = ofi ? ofi->last_select : NULL;
-	    ooi = osi ? osi->last_option : NULL;
-
-	    be_parse_file_to_end(doc);
-
-	    if (oti &&
-		ofi == doc->rh->form_last &&
-		osi == (ofi ? ofi->last_select : NULL) &&
-		ooi == (osi ? osi->last_option : NULL) )
-	    {
-		if (oti != doc->rh->stream.text_last)
-		    be_document_reformat_tail(doc, oti, doc->rh->stream.fwidth);
-	    }
-	    else
-	    {
-		fe_view_dimensions fvd;
-		rid_pos_item *hiline;
-		wimp_box bb;
-
-		if ((ooi || (osi && osi->last_option)) &&
-		    ((!doc->rh->form_last->last_select) ||
-		     (ooi != doc->rh->form_last->last_select->last_option) ) )
-		{
-		    /* dispose of the item and resize it */
-		    (object_table[osi->base.display->tag].dispose)(osi->base.display, doc->rh, doc);
-		    (object_table[osi->base.display->tag].size)(osi->base.display, doc->rh, doc);
-    		}
-
-		frontend_view_get_dimensions(doc->parent, &fvd);
-
-		doc->rh->stream.fwidth = fvd.user_width;
-#if USE_MARGINS
-		doc->rh->stream.fwidth -= doc->margin.x0 - doc->margin.x1;
-#endif
-
-		antweb_document_format(doc, doc->rh->stream.fwidth);
-
-		be_set_dimensions(doc);
-
-		if (oti == NULL)
-		    oti = doc->rh->stream.text_list;
-
-		if (oti)
-		{
-		    hiline = ((ooi == NULL ||
-			       oti->line->top > osi->base.display->line->top) ?
-			      oti->line :
-			      osi->base.display->line );
-		    frontend_view_bounds(doc->parent, &bb);
-
-		    if (hiline->top > bb.y0)
-		    {
-			bb.y1 = hiline->top;
-			be_view_redraw(doc, &bb);
-		    }
-		}
-	    }
-	}
-	else
-	{
-	    doc->rh = ((pparse_details*)doc->pd)->whole(doc->cfile, doc->url);
-
-#if USE_MARGINS
-	    if (doc->rh->margin.left != -1)
-		doc->margin.x0 = doc->rh->margin.left*2;
-	    if (doc->rh->margin.top != -1)
-		doc->margin.y1 = - doc->rh->margin.top*2;
-	    PPDBG((stderr, "setting margins to %d,%d\n", doc->margin.x0, doc->margin.y1));
-#endif
-	}
-#else
-	doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
-	doc->ph = NULL;
-#endif
-	
-#if 1
 	if ((doc->flags & doc_flag_DISPLAYING) == 0)
 	{
 	    BEDBG((stderr, "visit called from complete\n"));
 	    antweb_init_page(doc);
 	}
-#else
-	if ((doc->flags & doc_flag_DISPLAYING) == 0)
-	{
-	    BEDBG((stderr, "visit called from complete\n"));
-	    be_view_visit(doc);
 
-	    doc->flags |= doc_flag_DISPLAYING;
-#if 0
-	    if (need_to_parse)	/* If we parsed on the way we sized then too. */
-	    {
-		fe_view_dimensions fvd;
-		frontend_view_get_dimensions(doc->parent, &fvd);
-
-		doc->rh->stream.fwidth = fvd.user_width;
-#if USE_MARGINS
-		doc->rh->stream.fwidth -= doc->margin.x0 - doc->margin.x1;
-#endif
-
-		antweb_document_sizeitems(doc);
-		antweb_document_format(doc, doc->rh->stream.fwidth);
-	    }
-#endif
-	}
-
-#endif
         /* SJM: layout frames */
         if (doc->rh->frames)
         {
@@ -4178,10 +4068,6 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
 	    doc->rh->stream.widest = fvd.wa_width;
 	    doc->rh->stream.height = fvd.wa_height;
-#if 0
-	    doc->rh->stream.widest -= doc->margin.x0 - doc->margin.x1;
-	    doc->rh->stream.height -= doc->margin.y0 - doc->margin.y1;
-#endif
         }
 
         /* SJM: check the images for external client-side imagemaps */
@@ -4292,6 +4178,7 @@ os_error *backend_doc_abort(be_doc doc)
     return NULL;
 }
 
+#ifdef STBWEB
 int antweb_doc_abort_all(void)
 {
     be_doc doc;
@@ -4317,6 +4204,7 @@ int antweb_doc_abort_all(void)
     }
     return count;
 }
+#endif
 
 extern os_error *backend_doc_set_flags(be_doc doc, int mask, int eor)
 {
@@ -4459,7 +4347,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 	MemCheck_checking checking = MemCheck_SetChecking(0, 0);
 	int errnum = ep->errnum;
 	MemCheck_RestoreChecking(checking);
-    
+
 	switch (errnum)
 	{
 	case ANTWEB_ERROR_BASE + ERR_USED_HELPER:
@@ -4472,7 +4360,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 	    ep = NULL;
 	    break;
 	}
-	    
+
 	/* only free if still in list in case already freed */
 	if (antweb_doc_in_list(new))
 	{
@@ -4528,7 +4416,7 @@ os_error *backend_doc_key(be_doc doc, int key, int *used)
     *used = 0;
 
     doc->threaded++;
-    
+
     if (ti && object_table[ti->tag].key)
     {
 	*used = (object_table[ti->tag].key)(ti, doc->rh, doc, key);
@@ -4628,6 +4516,7 @@ os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
     return NULL;
 }
 
+#ifdef STBWEB
 os_error *backend_doc_images(be_doc doc, int *waiting, int *fetching, int *fetched, int *errors, int* in_trans, int *so_far)
 {
     *waiting = doc->im_unfetched;
@@ -4639,6 +4528,7 @@ os_error *backend_doc_images(be_doc doc, int *waiting, int *fetching, int *fetch
 
     return NULL;
 }
+#endif
 
 static int adjust_flag(int old_flag, int select, BOOL *changed)
 {
@@ -4926,16 +4816,21 @@ be_item backend_place_caret(be_doc doc, be_item item)
 
 /* veneers onto access.c functions */
 
+#ifdef STBWEB
 char *backend_temp_file_name(void)
 {
     return access_scrapfile();
 }
+#endif
 
+#ifdef STBWEB
 void backend_temp_file_register(char *url, char *file_name)
 {
     access_insert(url, file_name, cache_flag_OURS);
 }
+#endif
 
+#ifdef STBWEB
 const char *backend_check_meta(be_doc doc, const char *name)
 {
     char *name2 = (char *) name;
@@ -4949,6 +4844,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
     }
     return NULL;
 }
+#endif
 
 void backend_clear_selected(be_doc doc)
 {
@@ -4995,6 +4891,7 @@ void backend_select_item(be_doc doc, be_item item, int select)
 }
 #endif
 
+#ifdef STBWEB
 be_item backend_find_selected(be_doc doc)
 {
     be_item ti = doc->rh->stream.text_list;
@@ -5007,7 +4904,9 @@ be_item backend_find_selected(be_doc doc)
     }
     return ti;
 }
+#endif
 
+#ifdef STBWEB
 int backend_frame_resize_bounds(be_doc doc, int x, int y, wimp_box *box, int *handle)
 {
     return layout_frame_resize_bounds(doc, x, y, box, handle);
@@ -5017,7 +4916,9 @@ void backend_frame_resize(be_doc doc, int x, int y, int handle)
 {
     layout_frame_resize(doc, x, y, handle);
 }
+#endif
 
+#ifdef STBWEB
 void backend_image_expire(be_doc doc, void *imh)
 {
 #ifdef BUILDERS
@@ -5050,6 +4951,7 @@ void backend_image_expire(be_doc doc, void *imh)
 	}
     }
 }
+#endif
 
 void backend_doc_reformat(be_doc doc)
 {

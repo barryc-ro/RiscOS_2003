@@ -8,7 +8,7 @@
 #endif
 
 STRING empty_string = { NULL, 0 },
-    space_string = { " ", 1 }, 
+    space_string = { " ", 1 },
     eol_string = { "\n", 1};
 
 
@@ -43,10 +43,10 @@ static void dump_stack(SGMLCTX *ctx)
 	item = item->outer;
 
     /* Dump stack */
-    
+
     while (item != NULL)
     {
-	PRSDBG(("This %p, outer %p(%p), inner %p(%p)\n", 
+	PRSDBG(("This %p, outer %p(%p), inner %p(%p)\n",
 		item, item->outer, &item->outer, item->inner, &item->inner));
 	item = item->inner;
     }
@@ -74,11 +74,11 @@ extern void nullfree(void **vpp)
 **	----------------
 */
 
-extern int strnicmp(char *a, char *b, int n)
+extern int strnicmp(const char *a, const char *b, int n)
 {
     const char *p =a;
     const char *q =b;
-    
+
     for(p=a, q=b;; p++, q++) {
 	int diff;
 	if (p == a+n) return 0;	/*   Match up to n characters */
@@ -96,18 +96,19 @@ extern int strnicmp(char *a, char *b, int n)
 extern char *stringdup(STRING s)
 {
     char *ptr = mm_calloc(1, s.bytes + 1);
-    
+
     ASSERT(ptr != NULL);
-    
+
     if (s.bytes)
 	memcpy(ptr, (const void *) s.ptr, (size_t) s.bytes);
     ptr[s.bytes] = 0;
-    
+
     return ptr;
 }
 
 /* FROM STRING TO CHAR* VIA ALLOC WITH SPACES STRIPPED */
 
+#if 0 /*notcalled?*/
 extern char *strip_stringdup(STRING s)
 {
     char *ptr = s.ptr, *x;
@@ -135,6 +136,8 @@ extern char *strip_stringdup(STRING s)
 
     return x;
 }
+#endif
+
 
 /* From VALUE to malloced string iff of type string */
 
@@ -150,7 +153,7 @@ char *valuestringdup(const VALUE *v)
 extern STRING mkstring(char *ptr, int n)
 {
     STRING s;
-    
+
     if ( (s.bytes = n) == 0 )
     {
 	s.ptr = NULL;
@@ -167,7 +170,7 @@ extern STRING mkstring(char *ptr, int n)
 	    memcpy(s.ptr, ptr, n);
 	}
     }
-    
+
     return s;
 }
 
@@ -175,10 +178,11 @@ extern STRING mkstring(char *ptr, int n)
 
 /* FROM CHAR * TO STRING, BUT NO ALLOCATES */
 
+#if 0 /*not called?*/
 extern STRING mktempstring(char *ptr)
 {
     STRING s;
-    
+
     if (ptr == NULL)
     {
 	s.ptr = NULL;
@@ -189,9 +193,10 @@ extern STRING mktempstring(char *ptr)
 	s.ptr = ptr;
 	s.bytes = (int) strlen( (const char *) ptr);
     }
-    
+
     return s;
 }
+#endif
 
 /*****************************************************************************/
 
@@ -200,7 +205,7 @@ extern STRING mktempstring(char *ptr)
 extern STRING stringcat(STRING a, STRING b)
 {
     STRING r;
-    
+
     r.bytes = a.bytes + b.bytes;
     r.ptr = mm_malloc(r.bytes);
 
@@ -217,49 +222,54 @@ extern STRING stringcat(STRING a, STRING b)
 
     return r;
 }
-	
+
 /*****************************************************************************/
 
+#if 0 /*not called?*/
 STRING string_skip_chars(STRING s, const char *p)
                                         /* find first char in s not in p */
-{   
+{
     STRING out;
     out.ptr = s.ptr;
     out.bytes = s.bytes;
     for (; out.bytes; out.ptr++, out.bytes--)
-    {   
+    {
 	const char *pp;
         for ( pp = p; ; )
-        {   
+        {
 	    char c1 = *pp++;
-            if (c1 == 0) 
+            if (c1 == 0)
 		return out;
-            if (c1 == *out.ptr) 
+            if (c1 == *out.ptr)
 		break;
         }
     }
     return out;
 }
+#endif
 
+#if 0 /*not called?*/
 STRING string_skip_to_chars(STRING s, const char *p)
                                         /* find first char in s not in p */
-{   
+{
     STRING out;
     out.ptr = s.ptr;
     out.bytes = s.bytes;
     for (; out.bytes; out.ptr++, out.bytes--)
-    {   
+    {
 	const char *pp;
 	char c1;
         for ( pp = p; (c1 = *pp++) != 0; )
-            if (c1 == *out.ptr) 
+            if (c1 == *out.ptr)
 		return out;
     }
     return out;
 }
+#endif
 
+#if 0 /*not called?*/
 STRING stringtok(STRING *s1, const char *s2)
-{   
+{
     STRING s, ss;
 
     s = string_skip_chars(*s1, s2);
@@ -278,8 +288,9 @@ STRING stringtok(STRING *s1, const char *s2)
 
     return s;
 }
+#endif
 
-	
+
 /*****************************************************************************/
 
 /* strip spaces from the start of a string, modifying the STRING */
@@ -310,6 +321,7 @@ extern STRING string_strip_space(STRING in)
 
 /* count occurrences of character c */
 
+#if 0 /*not called?*/
 extern int string_count_elements(STRING s, int c)
 {
     const char *ss;
@@ -322,6 +334,7 @@ extern int string_count_elements(STRING s, int c)
 
     return n;
 }
+#endif
 
 /* int strcspn(char *s, char *sep) returns the length of initial segment of chars not from sep */
 /* int strspn(char *s, char *sep) returns the length of initial segment of chars from sep */
@@ -382,7 +395,7 @@ extern void sgml_support_initialise(void)
     PRSDBGN(("sgml_support_initialise()\n"));
 
     memset( char_decode, 0, sizeof(char_decode) );
-    
+
     set_char_decode(
 	"\t\r\n ",
 	decode_whitespace );
@@ -400,7 +413,7 @@ extern void sgml_support_initialise(void)
 	decode_value_start |
 	decode_element_body |
 	decode_attribute_body |
-	decode_value_body | 
+	decode_value_body |
 	decode_entity );
     set_char_decode(
 	"-._",
@@ -544,12 +557,12 @@ extern int find_element(SGMLCTX *context, STRING s)
 {
     ELEMENT *element;
 
-    element = bsearch(&s, 
-		      context->elements, 
+    element = bsearch(&s,
+		      context->elements,
 		      NUMBER_SGML_ELEMENTS,
 		      sizeof(ELEMENT),
 		      element_search_fn);
-    
+
     return element == NULL ? SGML_NO_ELEMENT : element->id;
 }
 
@@ -559,7 +572,7 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s)
 {
     int ix = 0;
     ATTRIBUTE **attributep = element->attributes, *attribute;
-    
+
     while ( (attribute = *attributep)->name.ptr != NULL )
     {
 	if ( s.bytes == attribute->name.bytes && strnicmp(s.ptr, attribute->name.ptr, s.bytes) == 0 )
@@ -567,13 +580,13 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s)
 	    PRSDBGN(("Attribute '%.*s' is %d\n", s.bytes, s.ptr, ix));
 	    return ix;
 	}
-	
+
 	ix++;
 	attributep++;
     }
-    
+
     PRSDBGN(("Attribute '%.*s' is %d\n", s.bytes, s.ptr, SGML_NO_ATTRIBUTE));
-    
+
     return SGML_NO_ATTRIBUTE;
 }
 
@@ -589,19 +602,19 @@ extern void clear_stack_item(STACK_ITEM *stack)
     memset( &stack->effects_active, 0, sizeof(stack->effects_active) );
 }
 
-extern void clear_stack(SGMLCTX *context) 
+extern void clear_stack(SGMLCTX *context)
 {
     STACK_ITEM *tos = context->tos;
-    
+
     ASSERT(context->magic == SGML_MAGIC);
-    
+
     PRSDBGN(("clear_stack(%p)\n", context));
 
     if (tos == NULL)
     {
 	PRSDBG(("clear_stack(): created an initial stack item\n"));
 	tos = context->tos = mm_calloc(1, sizeof(*tos));
-    }    
+    }
 
     while (tos != NULL)
     {
@@ -613,9 +626,9 @@ extern void clear_stack(SGMLCTX *context)
 	}
 	tos = tos->inner;
     }
-    
+
     tos = context->tos;
-    
+
     if (tos != NULL)
     {
 	while (tos->outer != NULL)
@@ -628,7 +641,7 @@ extern void clear_stack(SGMLCTX *context)
 	    }
 	    tos = tos->outer;
 	}
-	
+
 	context->tos = tos;
     }
 
@@ -649,7 +662,7 @@ extern void sgml_free_stack(STACK_ITEM *item)
     {
 	;
     }
-    
+
     while (item != NULL)
     {
 	STACK_ITEM *next = item->inner;
@@ -663,7 +676,7 @@ extern void sgml_free_stack(STACK_ITEM *item)
 extern void reset_lexer_state(SGMLCTX *context)
 {
     PRSDBGN(("reset_lexer_state(%p)\n", context));
-    
+
     ASSERT(context->magic == SGML_MAGIC);
 
     clear_stack(context);
@@ -671,18 +684,20 @@ extern void reset_lexer_state(SGMLCTX *context)
     context->apply_heuristics = FALSE;
 }
 
+#if 0 /*not called?*/
 extern char *elements_name(SGMLCTX *context, int ix)
 {
     static char buf[32];
-    
+
     if (ix < 0 || ix > NUMBER_SGML_ELEMENTS)
     {
 	return "** BOGUS **";
     }
-    
+
     sprintf(buf, "<%s>", context->elements[ix].name.ptr);
     return buf;
 }
+#endif
 
 /*****************************************************************************/
 
@@ -706,7 +721,7 @@ extern void push_stack(SGMLCTX *context, ELEMENT *element)
 	from->inner->outer = from;
 	from->inner->inner = NULL;
     }
-    
+
     to = from->inner;
 
 #if 0
@@ -715,18 +730,18 @@ extern void push_stack(SGMLCTX *context, ELEMENT *element)
 #endif
 
     ASSERT(to->outer == from);
-    
+
     ta = to->inner;		/* NULL if new bottom of stack */
     tb = to->outer;
     *to = *from;
-    
+
     to->element = element->id;
     to->inner = ta;
     to->outer = tb;
-    
+
     context->tos = to;
 
-#if 0    
+#if 0
     PRSDBGN(("push_stack(): tos %p, inner %p, outer %p\n", to, to->inner, to->outer));
     dump_stack(context);
 #endif
@@ -736,20 +751,20 @@ extern void pop_stack(SGMLCTX *context)
 {
     STACK_ITEM *new_tos = context->tos->outer;
 
-    PRSDBGN(("pop_stack(%p): tos %p, inner %p, outer %p\n", 
+    PRSDBGN(("pop_stack(%p): tos %p, inner %p, outer %p\n",
 	     context, context->tos, context->tos->inner, context->tos->outer));
 
     ASSERT(context->tos != NULL);
-    
+
     if (new_tos != NULL)
     {
 	int ix;
-	
+
 	for (ix = 0; ix < words_of_elements_bitpack; ix++)
 	{
 	    new_tos->elements_seen[ix] |= context->tos->elements_seen[ix];
 	}
-	
+
 	if (new_tos != NULL)
 	{
 	    context->tos = new_tos;
@@ -809,7 +824,7 @@ extern void add_to_buffer(BUFFER *buffer, char input)
 {
     ASSERT( buffer->max >= buffer->ix );
     ASSERT( buffer->ix >= 0 );
-    
+
     if (buffer->max == buffer->ix)
     {
 	char *newptr = mm_realloc( buffer->data, buffer->max + 256 );
@@ -821,20 +836,20 @@ extern void add_to_buffer(BUFFER *buffer, char input)
 	buffer->data = newptr;
 	buffer->max += 256;
     }
-    
+
     buffer->data[ buffer->ix++ ] = input;
 }
 
 extern void add_char_to_inhand(SGMLCTX *context, char input)
 {
     ASSERT(context->magic == SGML_MAGIC);
-    
+
 #if 1
     add_to_buffer(&context->inhand, input);
 #else
     ASSERT( context->inhand.max >= context->inhand.ix );
     ASSERT( context->inhand.ix >= 0 );
-    
+
     if ( context->inhand.max == context->inhand.ix )
     {
 	char *newptr = mm_realloc( context->inhand.data, context->inhand.max + 256 );
@@ -842,7 +857,7 @@ extern void add_char_to_inhand(SGMLCTX *context, char input)
 	context->inhand.data = newptr;
 	context->inhand.max += 256;
     }
-    
+
     context->inhand.data[ context->inhand.ix++ ] = input;
 #endif
 #if 0
@@ -854,9 +869,9 @@ extern void add_char_to_inhand(SGMLCTX *context, char input)
 extern void push_inhand(SGMLCTX *context)
 {
     STRING s;
-    
+
     ASSERT(context->magic == SGML_MAGIC);
-   
+
     s.ptr = context->inhand.data;
     s.bytes = context->inhand.ix;
     /* chopper doesn't free strings itself */
@@ -864,14 +879,14 @@ extern void push_inhand(SGMLCTX *context)
     /* to flush chopper state */
     if (s.bytes > 0)
 	(*context->chopper) (context, s);
-    
+
     context->inhand.ix = 0;
 }
 
 extern void push_bar_last_inhand(SGMLCTX *context)
 {
     ASSERT(context->magic == SGML_MAGIC);
-    
+
     if (context->inhand.ix > 1)
     {
 	STRING s;
@@ -881,7 +896,7 @@ extern void push_bar_last_inhand(SGMLCTX *context)
 	context->inhand.data[0] = context->inhand.data[context->inhand.ix - 1];
 	context->inhand.ix = 1;
     }
-    
+
 }
 
 /*****************************************************************************/

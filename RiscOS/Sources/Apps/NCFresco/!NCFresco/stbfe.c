@@ -24,7 +24,7 @@
 #include "swis.h"
 #include "alarm.h"
 #include "kernel.h"
-#include "flex.h"
+#include "flexwrap.h"
 #include "heap.h"
 #include "colourtran.h"
 #include "visdelay.h"
@@ -616,8 +616,14 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    /* set up a pending line drop */
 	    if (vals[1].value && linedrop_time == 0)
 	    {
-		linedrop_time = alarm_timenow() + atoi(vals[1].value)*100;
-		alarm_set(linedrop_time, fe_linedrop, &linedrop_time);
+		linedrop_time = atoi(vals[1].value)*100;
+/* 		set line drop linedrop_time */
+/* 		linedrop_time += alarm_timenow() */
+/* 		alarm_set(linedrop_time, fe_linedrop, &linedrop_time); */
+	    }
+	    else
+	    {
+/* 		set line drop default */
 	    }
 
 	    mm_free(ncmode);
@@ -2794,6 +2800,7 @@ static void fe_idle_handler(void)
     if (pointer_mode == pointermode_OFF)
     {
 	fe_view v = selected_view;
+
 	if (v)
 	{
 	    highlight_moved = v->current_link != highlight_last_link;
@@ -2804,13 +2811,13 @@ static void fe_idle_handler(void)
 
 	    if (highlight_moved)
 		fe_update_link(v, flags, link);
+	}
 
-	    /* check if the pointer has been moved and we need to go to pointer mode    */
-	    if (pointer_moved)
-	    {
-		STBDBG(( "idle: pointer moved\n"));
-		fe_pointer_mode_update(pointermode_ON);
-	    }
+	/* check if the pointer has been moved and we need to go to pointer mode    */
+	if (pointer_moved)
+	{
+	    STBDBG(( "idle: pointer moved\n"));
+	    fe_pointer_mode_update(pointermode_ON);
 	}
         return;
     }
@@ -2834,7 +2841,11 @@ static void fe_idle_handler(void)
 
         if (!dragging_view && !resizing_view)
             fe_set_pointer(0);
-        return;
+
+	if (use_toolbox)
+	    tb_status_check_pointer(&m);
+
+	return;
     }
 
     v = v_over;
@@ -2877,8 +2888,8 @@ static void fe_idle_handler(void)
     {
 	be_item ti = NULL;
         get_item_info(v, &m, &flags, &link, &ti);
-        if (pointer_moved/*  || shift_changed */)
-            fe_update_link(v, flags, /* !akbd_pollsh() ? NULL : */ link);
+        if (pointer_moved)
+            fe_update_link(v, flags, link);
 
         /* don't want the pointer changing if on a blank section of a usemap    */
         if ((flags & be_item_info_USEMAP) && (!link || !*link))
@@ -4248,6 +4259,7 @@ static BOOL fe_initialise(void)
     __heap_checking_on_all_allocates();
     __heap_checking_on_all_deallocates();
 #endif
+
     /* Initialise the WIMP stuff */
     visdelay_init();
     visdelay_begin();
@@ -4273,10 +4285,15 @@ static BOOL fe_initialise(void)
         msgs_init();
     }
 
+#if !MEMLIB
     /* Now bring up the flex system->.. */
     flex_init(program_name);
     heap_init(program_name);
+#else
+    MemFlex_Initialise2(program_name);
 
+    MemHeap_Initialise(NULL /* program_name */);
+#endif
     atexit(&fe_tidyup);
 
     STBDBG(( "task handle: %x\n", task_handle));

@@ -286,8 +286,6 @@ void rma_free(void *p)
 
 /**********************************************************************/
 
-#ifndef STBWEB
-
 #if MEMLIB
 
 static int locks = 0;
@@ -313,7 +311,8 @@ void flexmem_shift( void )
     }
 }
 
-#else /* 0 */
+#elif !defined(STBWEB)
+
 static int _no_budge_count = 0;
 static _kernel_ExtendProc *old_budge = 0;
 
@@ -352,8 +351,6 @@ void flexmem_shift(void)
 #endif
 }
 #endif /* 0 */
-
-#endif /* STBWEB */
 
 
 

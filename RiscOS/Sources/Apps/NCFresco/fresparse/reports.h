@@ -32,10 +32,10 @@ extern void my_sgml_note_has_forms (SGMLCTX * context);
 extern void my_sgml_note_has_scripts (SGMLCTX * context);
 extern void my_sgml_note_has_frames (SGMLCTX * context);
 extern void my_sgml_note_has_address (SGMLCTX * context);
-extern void my_sgml_note_unknown_element (SGMLCTX * context, char *fmt, va_list arglist); 
-extern void my_sgml_note_unknown_attribute (SGMLCTX * context, char *fmt, va_list arglist); 
-extern void my_sgml_note_bad_attribute (SGMLCTX * context, char *fmt, va_list arglist);
-extern void my_sgml_note_message(SGMLCTX * context, char *fmt, va_list arglist );
+extern void my_sgml_note_unknown_element (SGMLCTX * context, const char *fmt, va_list arglist); 
+extern void my_sgml_note_unknown_attribute (SGMLCTX * context, const char *fmt, va_list arglist); 
+extern void my_sgml_note_bad_attribute (SGMLCTX * context, const char *fmt, va_list arglist);
+extern void my_sgml_note_message(SGMLCTX * context, const char *fmt, va_list arglist );
 
 #endif /* __reports_h */
 

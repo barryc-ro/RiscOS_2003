@@ -268,8 +268,16 @@ static int tb_list[] =
 /* toolbox object handles*/
 static int menu_object[2] = { 0, 0 };
 
+/* --------------------------------------------------------------------------*/
+
 /* which sprite from the animation*/
+
+#define TURN_SPEED	4	/* frames per second */
+
 static int turn_ctr = 0;
+static int turn_start = -1;
+
+/* --------------------------------------------------------------------------*/
 
 static tb_status_state_t status_state = status_CLOSED;
 
@@ -549,8 +557,11 @@ static os_error *setfocus(int obj)
 
 static void tb_bar_set_highlight(tb_bar_info *tbi, int index, int on)
 {
-    STBDBG(("tb_bar_set_highlight(): bar %d index %d on %d obj %x, cmp %x\n", tbi ? tbi->num : -1, index, on, tbi->object_handle, tbi->buttons[index].cmp));
-    setstate(tbi->object_handle, tbi->buttons[index].cmp, on);
+    if (index != -1)
+    {
+	STBDBG(("tb_bar_set_highlight(): bar %d index %d on %d obj %x, cmp %x\n", tbi ? tbi->num : -1, index, on, tbi->object_handle, tbi->buttons[index].cmp));
+	setstate(tbi->object_handle, tbi->buttons[index].cmp, on);
+    }
 }
 
 static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
@@ -1571,15 +1582,19 @@ int tb_status_check_message(wimp_mousestr *mp)
     return TRUE;
 }
 
-
 void tb_status_rotate(void)
 {
     if (bar_list)
     {
 	char sprite_name[40];
 
-	if (++turn_ctr == config_animation_frames)
-	    turn_ctr = 0;
+	if (turn_ctr == -1)
+	    turn_start = alarm_timenow();
+	
+	turn_ctr = ((alarm_timenow() - turn_start) * TURN_SPEED / 100) % config_animation_frames;
+	
+/* 	if (++turn_ctr == config_animation_frames) */
+/* 	    turn_ctr = 0; */
 
 	sprintf(sprite_name, "%s%02d,%s%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
 	_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 0x140140, I_WORLD, sprite_name);
@@ -1936,13 +1951,28 @@ int tb_print_redraw(wimp_redrawstr *r)
 
 /* --------------------------------------------------------------------------*/
 
+static int movehighlightto(tb_bar_info *tbi, int cmp)
+{
+    if (tbi->highlight != cmp)
+    {
+	tb_bar_set_highlight(tbi, tbi->highlight, FALSE);
 
-static void movehighlight(tb_bar_info *tbi, int direction)
+	tbi->highlight = cmp;
+
+	tb_bar_set_highlight(tbi, cmp, TRUE);
+
+	return TRUE;
+    }
+
+    return FALSE;
+}
+
+static int movehighlight(tb_bar_info *tbi, int direction)
 {
     int next;
 
     if (tbi == NULL)
-	return;
+	return FALSE;
 
     next = tbi->highlight + direction;
 
@@ -1953,14 +1983,7 @@ static void movehighlight(tb_bar_info *tbi, int direction)
     
     STBDBG(("movehighlight(): dir %d from %d to %d\n", direction, tbi->highlight, next));
 
-    if (tbi->highlight != next)
-    {
-	if (tbi->highlight != -1)
-	    tb_bar_set_highlight(tbi, tbi->highlight, FALSE);
-
-	tbi->highlight = next;
-	tb_bar_set_highlight(tbi, tbi->highlight, TRUE);
-    }
+    return movehighlightto(tbi, next);
 }
 
 void tb_events(int *event, fe_view v)
@@ -2001,6 +2024,29 @@ void tb_events(int *event, fe_view v)
 
 /* --------------------------------------------------------------------------*/
 
+BOOL tb_status_check_pointer(wimp_mousestr *mp)
+{
+    tb_bar_info *tbi = bar_list;
+
+    STBDBG(("tb_key_handler(): w %x i %d\n", mp->w, mp->i));
+
+    if (tbi && tbi->window_handle == mp->w)
+    {
+	int cmp;
+
+	if (_swix(Window_WimpToToolbox, _INR(0,2) | _OUT(1), 0, mp->w, mp->i, &cmp) == NULL)
+	{
+	    movehighlightto(tbi, cmp);
+	}
+
+	return TRUE;
+    }
+    
+    return  FALSE;
+}
+
+/* --------------------------------------------------------------------------*/
+
 BOOL tb_key_handler(wimp_caretstr *cs, int key)
 {
     tb_bar_info *tbi = bar_list;
@@ -2029,7 +2075,7 @@ BOOL tb_key_handler(wimp_caretstr *cs, int key)
 
 	case akbd_DownK:
 	    pointer_mode = pointermode_ON;
-	    fevent_handler(fevent_SCROLL_PAGE_DOWN, NULL);
+	    fevent_handler(fevent_SCROLL_PAGE_DOWN, selected_view ? selected_view : main_view);
 	    pointer_mode = pointermode_OFF;
 	    break;
 
