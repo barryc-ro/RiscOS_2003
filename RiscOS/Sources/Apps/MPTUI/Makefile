@@ -120,7 +120,7 @@ translate: dirs
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Timeout -o ${RESAPP}.HTML.Setup.Timeout
         
 resources: translate
-	@echo ** Exporting untranslated resource files
+	@echo ** Exporting non-translatable resource files
         IfThere Resources.${USERIF}.${LOCALE}.${APP} Then \
           ${CP} Resources.${USERIF}.${LOCALE}.${APP} ${RESAPP} ${CPFLAGS} \
         Else \
