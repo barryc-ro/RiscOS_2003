@@ -23,6 +23,7 @@ DBG_MODULE = rm.${COMPONENT}D
 # -DINHIBIT_AUTO_START              - wait for a prod before doing anything
 # -DINHIBIT_CMOS_EDITOR             - stop editor running (for STB400)
 # -DUSENVRAM                        - use NVRAM module and not CMOS directly
+# -DINHIBIT_ALT_KEYS                - Alt keys have no effect on behaviour
 #
 # None of these are included by default.
 
