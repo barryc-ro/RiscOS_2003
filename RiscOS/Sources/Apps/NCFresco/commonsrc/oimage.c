@@ -69,7 +69,7 @@
 
 /* ----------------------------------------------------------------------------- */
 
-static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int fwidth, int *iw, int *ih)
+static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int fwidth, int *iw, int *ih, int scalefactor )
 {
     font_string fs;
     struct webfont *wf;
@@ -88,12 +88,12 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 	    break;
 
 	case value_absunit:
-	    *iw = (int)req_ww->u.f;
+	    *iw = (int)(req_ww->u.f * scalefactor / 100);
 	    break;
 	}
 
 	if (req_hh->type == value_absunit)
-	    *ih = (int)req_hh->u.f;
+	    *ih = (int)(req_hh->u.f * scalefactor / 100);
         return;
     }
 
@@ -117,7 +117,9 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 	    fs.x /= MILIPOINTS_PER_OSUNIT;
 
 	    imw = fs.x + PLINTH_PAD;
-	    imh = defer_images || req_hh->type != value_absunit ? (wf->max_up + wf->max_down + PLINTH_PAD*2) : (int)(req_hh->u.f*2);
+	    imh = (defer_images || req_hh->type != value_absunit)
+	             ? (wf->max_up + wf->max_down + PLINTH_PAD*2)
+	             : (int)(req_hh->u.f * scalefactor / 50.0); /* "*2/100" */
         }
         else
         {
@@ -133,7 +135,7 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 		break;
 
 	    case value_absunit:
-    	        ww = (int)req_ww->u.f;
+    	        ww = (int)(req_ww->u.f * scalefactor / 100);
 		break;
 	    }
 
@@ -196,6 +198,9 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
 	    }
             case value_absunit:
 		width = (int)(req_ww->u.f * scale_value/100);
+
+		IMGDBG(("osi: abswidth %f * scale %d%% gives width %d\n",
+		        req_ww->u.f, scale_value, width ));
 		break;
 
     	    case value_none:
@@ -204,14 +209,16 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
 		break;
     	    }
 
-    	    height = req_hh->type == value_absunit ? (int)req_hh->u.f : (int)((double)width * scale_value/100 / aspect);
+    	    height = (req_hh->type == value_absunit)
+    	                 ? (int)(req_hh->u.f * scale_value / 100 )
+    	                 : (int)((double)width * scale_value/100 / aspect);
     	}
     }
     else
     {
         /* if not real then size from the text */
 #ifndef BUILDERS
-	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, fwidth, &width, &height);
+	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, fwidth, &width, &height, scale_value);
 #else
 	width = 16;
 	height = 16;

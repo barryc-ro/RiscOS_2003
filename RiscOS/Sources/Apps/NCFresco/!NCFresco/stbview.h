@@ -159,6 +159,9 @@ struct _frontend_view
 	int xscroll, yscroll;	/* scroll positions to move to - used in check_pending_scroll */
 	fe_history_item *hist;	/* history item to be current  - used in visit */
     } fetching_data;
+
+    char *real_url;		/* with NCOPTIONS pages this will give the url to put in the history list */
+    int offline_mode;
 };
 
 /* ----------------------------------------------------------------------------- */

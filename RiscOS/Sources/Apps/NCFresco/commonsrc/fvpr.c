@@ -65,6 +65,43 @@ static void set_fvpr_and_below(rid_text_item *item)
 
 }
 
+
+/*****************************************************************************
+
+  Clear FVPR flag on this item and any items it contains.
+
+  */
+
+static void forget_fvpr_and_below(rid_text_item *item)
+{
+    if ( gbf_active(GBF_FVPR) )
+    {
+        item->flag &= ~rid_flag_FVPR;
+
+        switch (item->tag)
+        {
+        case rid_tag_TABLE:
+        {
+	    rid_table_item *table = ((rid_text_item_table *)item)->table;
+            int x, y;
+    	    rid_table_cell *cell;
+    	    rid_text_item *ti;
+
+	if (table->caption != NULL)
+	    for (ti = table->caption->stream.text_list; ti != NULL; ti = rid_scanf(ti))
+		forget_fvpr_and_below(ti);
+
+	for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
+	    for (ti = cell->stream.text_list; ti != NULL; ti = rid_scanf(ti))
+		forget_fvpr_and_below(ti);
+        }
+        break;
+        case rid_tag_OBJECT:
+	    break;
+	}
+    }
+}
+
 /*****************************************************************************
 
   Images flags that, when any of them is set, indicates we have final
@@ -409,6 +446,20 @@ extern BOOL fvpr_progress_stream_flush(rid_text_stream *stream)
     return changed;
 }
 
+/*****************************************************************************/
+
+extern void fvpr_forget( rid_text_stream *stream )
+{
+    if ( gbf_active( GBF_FVPR ) )
+    {
+        rid_text_item *ti;
+
+        for ( ti = stream->text_list; ti; ti = rid_scanf(ti) )
+            forget_fvpr_and_below(ti);
+
+        stream->text_fvpr = NULL;
+    }
+}
 
 /* eof fvpr.c */
 

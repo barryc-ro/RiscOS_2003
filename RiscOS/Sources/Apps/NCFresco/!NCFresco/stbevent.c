@@ -260,7 +260,7 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_OFFLINE_PAGE:
-	tb_status_unstack_all();
+	fe_status_unstack_all();
 	frontend_complain(fe_offline_page(v));
 	break;
 

@@ -41,6 +41,9 @@
 #include "htmlparser.h"
 #include "dump.h"
 #include "util.h"
+#include "gbf.h"
+#include "config.h"
+#include "fvpr.h"
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -1123,9 +1126,19 @@ static void basic_size_table(antweb_doc *doc,
     calc_raw_minwidth(doc, rh, table, HORIZONTALLY);
     calc_raw_maxwidth(doc, rh, table, HORIZONTALLY);
 
+    FMTDBG(( "table%d: bst2 calling trace_cells(HORIZ)\n", table->idnum ));
+    colspan_trace_cells(table, HORIZONTALLY);
+
     calc_abs_minwidth(doc, rh, table, HORIZONTALLY);
+
+    FMTDBG(( "table%d: bst3 calling trace_cells(HORIZ)\n", table->idnum ));
+    colspan_trace_cells(table, HORIZONTALLY);
+
     calc_pct_minwidth(doc, rh, table, HORIZONTALLY);
     calc_rel_minwidth(doc, rh, table, HORIZONTALLY);
+
+    FMTDBG(( "table%d: bst1 calling trace_cells(HORIZ)\n", table->idnum ));
+    colspan_trace_cells(table, HORIZONTALLY);
 
     calc_abs_maxwidth(doc, rh, table, HORIZONTALLY);
     calc_pct_maxwidth(doc, rh, table, HORIZONTALLY);
@@ -1163,7 +1176,6 @@ static void basic_size_table(antweb_doc *doc,
 	break;
     }
 #endif
-    /*colspan_trace_cells(table, HORIZONTALLY);*/
 
     format_width_checking_assertions(table, HORIZONTALLY);
 
@@ -1526,6 +1538,9 @@ static void recurse_format_stream(antweb_doc *doc,
 
  */
 
+/* Never scale things to under this percentage */
+#define MIN_SCALE 60
+
 extern void rid_toplevel_format(antweb_doc *doc,
 				rid_header *rh,
 				rid_text_item *start_from,
@@ -1568,8 +1583,43 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
 	if (rh->stream.width_info.minwidth > fwidth)
 	{
-	    FMTDBG(("\n\nCASE WHERE AUTOFIT MIGHT DO SOMETHING BETTER\n\n\n"));
-	    fwidth = rh->stream.fwidth = rh->stream.width_info.minwidth;
+	    if ( gbf_active(GBF_AUTOFIT) )
+	    {
+	        int scale = (int)((double) doc->scale_value * fwidth
+	                                 / rh->stream.width_info.minwidth );
+
+                if ( scale < MIN_SCALE )
+                {
+                    FMTDBG(("st%p: autofit wants %d%% but that's not very much, using %d%%\n",
+                            root_stream,
+                            scale, MIN_SCALE ));
+                    scale = MIN_SCALE;
+                }
+
+                if ( scale < doc->scale_value )
+                {
+                    doc->scale_value = scale;
+
+                    FMTDBG(("st%p: minwidth %d > fwidth %d, autofit to %d%%\n",
+                        root_stream, rh->stream.width_info.minwidth, fwidth,
+                        doc->scale_value ));
+
+                    rid_zero_widest_height( root_stream );
+                    fvpr_forget( root_stream );
+                    basic_size_stream( doc, rh, root_stream, 0 );
+	            FMTDBG(("st%p: resized due to autofit, min now %d, max %d\n",
+	                    root_stream,
+                            root_stream->width_info.minwidth,
+		            root_stream->width_info.maxwidth));
+		}
+	    }
+	    else
+	    {
+	        FMTDBG(("doc%p: minwidth %d > fwidth %d, autofit not active\n",
+                        doc, rh->stream.width_info.minwidth, fwidth ));
+
+	        fwidth = rh->stream.fwidth = rh->stream.width_info.minwidth;
+	    }
 	}
 
 	FMTDBG(("Allocating widths to root stream\n"));

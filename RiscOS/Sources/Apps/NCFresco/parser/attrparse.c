@@ -27,7 +27,7 @@
     PARSE_INTEGER_VOID,
     PARSE_STDUNIT_VOID,
     PARSE_STDUNIT_LIST
-    PARSE_ENUM_CASE
+    PARSE_ENUM_CASE (not used any more)
 
 */
 
@@ -100,6 +100,24 @@ static VALUE sgml_do_parse_enum_void_case(SGMLCTX *context, ATTRIBUTE *attribute
     {
 	PRSDBGN(("Attempting to guess enumeration '%.*s'\n", string.bytes, string.ptr));
 
+#if 1
+        /* pdh: less OOC guessing. Note that this is always case-insensitive.
+         */
+        list = attribute->templates;
+
+        for ( v.u.i = 0; list->ptr; list++, v.u.i++ )
+        {
+            if ( strnearly( list->ptr, list->bytes,
+                            string.ptr, string.bytes, 2 ) )
+            {
+                v.type = value_enum;
+                v.u.i++;		/* enumerations from one */
+	        PRSDBGN(("Guessed '%.*s' for '%.*s'\n",
+		          list->bytes, list->ptr, string.bytes, string.ptr));
+		return v;
+            }
+        }
+#else
 	for (w = string.bytes - 1; w > 0; w--)
 	{
 	    list = attribute->templates;
@@ -120,6 +138,7 @@ static VALUE sgml_do_parse_enum_void_case(SGMLCTX *context, ATTRIBUTE *attribute
 		}
 	    }
 	}
+#endif
 
 	PRSDBGN(("Could not guess a matching enumeration\n"));
     }

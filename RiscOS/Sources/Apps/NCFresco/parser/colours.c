@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 #include "sgmlparser.h"
+#include "gbf.h"
 #include "util.h"
 
 typedef struct
@@ -179,14 +180,14 @@ VALUE colour_lookup(STRING name)
     VALUE v;
 
     PRSDBGN(("colour_lookup: %.*s\n", name.bytes, name.ptr));
-    
+
     /* special processing for grey */
     if (name.bytes >= 4 &&
 	(strncasecomp(name.ptr, "grey", 4) == 0 ||
 	 strncasecomp(name.ptr, "gray", 4) == 0))
     {
 	v.type = value_tuple;
-	
+
 	if (name.bytes > 4 && isdigit(name.ptr[4]))
 	{
 	    int n;
@@ -200,16 +201,35 @@ VALUE colour_lookup(STRING name)
 	{
 	    v.u.b = 0x888888;
 	}
-	
+
 	PRSDBGN(("colour_lookup: grey %08x\n", v.u.b));
 
 	return v;
     }
-    
+
     /* else look it up in the array */
     test.name = stringdup(name);
     match = bsearch(&test, colour_array, sizeof(colour_array) / sizeof(colour_array[0]), sizeof(colour_array[0]), colour_compare_function);
     mm_free(test.name);
+
+    if ( match == NULL && gbf_active( GBF_GUESS_ENUMERATIONS ) )
+    {
+        int i;
+
+        for ( i=0; i < (sizeof(colour_array)/sizeof(colour_info)); i++ )
+        {
+            colour_info *c = colour_array+i;
+
+            if ( strnearly( name.ptr, name.bytes,
+                            c->name, strlen(c->name), 2 ) )
+            {
+                match = c;
+                PRSDBGN(("colour_lookup: guessed %s for %.*s\n",
+                          c->name, name.bytes, name.ptr ));
+                break;
+            }
+        }
+    }
 
     if (match == NULL)
     {
@@ -222,7 +242,7 @@ VALUE colour_lookup(STRING name)
 	v.u.b = match->rgb_word;
 	PRSDBGN(("colour_lookup: tuple %08x\n", v.u.b));
     }
-    
+
     return v;
 }
 

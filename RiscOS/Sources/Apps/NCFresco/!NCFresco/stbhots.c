@@ -220,9 +220,8 @@ static void hotlist__remove_oldest(void)
 
 static void hotlist__trim_length(void)
 {
-    if (config_hots_length > 0)
-	while (hotlist_count > config_hots_length)
-	    hotlist__remove_oldest();
+    if (config_hots_length > 0 && hotlist_count > config_hots_length)
+	hotlist__remove_oldest();
 }
 
 /* ---------------------------------------------------------------------- */

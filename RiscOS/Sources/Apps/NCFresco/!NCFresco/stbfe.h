@@ -90,6 +90,7 @@ extern os_error *fe_status_info_level(fe_view v, int level);
 extern int fe_status_open(fe_view v);
 extern os_error *fe_status_unstack(fe_view v);
 extern BOOL fe_status_unstack_possible(fe_view source_v);
+extern void fe_status_unstack_all(void);
 
 extern os_error *fe_status_open_toolbar(fe_view v, int bar);
 

@@ -15,6 +15,7 @@
 #include "stbfe.h"
 #include "stbmenu.h"
 #include "stbtb.h"
+#include "stbopen.h"
 
 #include "frameutils.h"
 
@@ -176,7 +177,8 @@ static key_list stb_function_keys[] =
 #define stb_resizing_keys	0
 #define stb_toolbar_keys	0
 #define stb_osk_keys		0
-#define stb_frame_link_keys		0
+#define stb_frame_link_keys	0
+#define stb_external_popup_keys	0
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -365,6 +367,7 @@ static key_list nc_movement1_keys[] =
 #define nc_codec_keys	0
 #define nc_osk_keys	0
 #define nc_frame_link_keys	0
+#define nc_external_popup_keys	0
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -555,6 +558,18 @@ static key_list rca_frame_link_keys[] =
     { 0 }
 };
 
+static key_list rca_external_popup_keys[] =
+{
+    { akbd_LeftK,           fevent_HIGHLIGHT_BACK, key_list_REPEAT },
+    { akbd_RightK,          fevent_HIGHLIGHT_FORWARD, key_list_REPEAT },
+    { akbd_UpK,             fevent_HIGHLIGHT_UP, key_list_REPEAT },
+    { akbd_DownK,           fevent_HIGHLIGHT_DOWN, key_list_REPEAT },
+
+    { 13,                   fevent_HIGHLIGHT_ACTIVATE },
+
+    { 0 }
+};
+
 /* ------------------------------------------------------------------------------------- */
 
 /* Mode dependant special keys */
@@ -594,6 +609,7 @@ static key_list platform_trial_keys[] =
 #define key_map_WEB		7
 #define key_map_OSK		8
 #define key_map_FRAME_LINK	9
+#define key_map_EXTERNAL_POPUP	10
 
 static key_list *get_key_map(int map)
 {
@@ -622,6 +638,8 @@ static key_list *get_key_map(int map)
 	    return stb_osk_keys;
 	case key_map_FRAME_LINK:
 	    return stb_frame_link_keys;
+	case key_map_EXTERNAL_POPUP:
+	    return stb_external_popup_keys;
 	}
 	break;
 
@@ -648,6 +666,8 @@ static key_list *get_key_map(int map)
 	    return nc_osk_keys;
 	case key_map_FRAME_LINK:
 	    return nc_frame_link_keys;
+	case key_map_EXTERNAL_POPUP:
+	    return nc_external_popup_keys;
 	}
 	break;
 
@@ -674,6 +694,8 @@ static key_list *get_key_map(int map)
 	    return rca_osk_keys;
 	case key_map_FRAME_LINK:
 	    return rca_frame_link_keys;
+	case key_map_EXTERNAL_POPUP:
+	    return rca_external_popup_keys;
 	}
 	break;
     }
@@ -730,6 +752,13 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
         event = fe_key_lookup(chcode, get_key_map(key_map_MAP));
         if (event == -1)
             event = 0;
+    }
+
+    if (event == -1 && fe_external_popup_open())
+    {
+	event = fe_key_lookup(chcode, get_key_map(key_map_EXTERNAL_POPUP));
+	if (event == -1)
+	    event = 0;
     }
 
     if (event == -1 && on_screen_kbd)

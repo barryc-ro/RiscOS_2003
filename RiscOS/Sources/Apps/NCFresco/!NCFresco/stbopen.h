@@ -26,6 +26,7 @@ extern fe_view fe_find_target(fe_view start, const char *target);
 extern fe_view fe_find_top_popup(fe_view v);
 extern fe_view fe_find_top_nopopup(fe_view v);
 extern int fe_popup_open(void);
+extern int fe_external_popup_open(void);
 
 extern fe_view fe_frame_specifier_decode(fe_view top, const char *spec);
 extern char *fe_frame_specifier_create(fe_view v, char *buf, int len);

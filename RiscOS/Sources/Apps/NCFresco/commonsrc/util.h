@@ -31,6 +31,8 @@ extern char *strcatx(char **s1, const char *s2);
 extern int strncasecomp(const char *a, const char *b, size_t n);
 extern int strcasecomp(const char *s1, const char *s2);
 extern char *strcasestr(const char *s1, const char *s2);
+extern BOOL strnearly( const char *s1, size_t len1,
+                       const char *s2, size_t len2, size_t hownear );
 
 /* Copy a string without overrunning but make sure it is terminated */
 void strncpysafe(char *s1, const char *s2, int n);

@@ -1089,7 +1089,8 @@ BOOL tb_status_unstack(void)
 
 void tb_status_unstack_all(void)
 {
-    tb_status_unstack();
+    tb_bar_dispose();
+    tb_status_new(NULL, BAR_MAIN);
 }
 
 void tb_status_new(fe_view v, int bar_num)

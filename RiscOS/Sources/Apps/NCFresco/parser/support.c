@@ -8,6 +8,7 @@
 #endif
 
 #include "gbf.h"
+#include "util.h"
 
 STRING empty_string = { NULL, 0 },
     space_string = { " ", 1 },
@@ -89,7 +90,7 @@ static void dump_stack(SGMLCTX *ctx)
 	PRSDBG(("This %p, outer %p(%p), inner %p(%p)\n",
 		item, item->outer, &item->outer, item->inner, &item->inner));
 #else
-	PRSDBG(("%s %p, fx %08x, outer %p, inner %p: %s\n", 
+	PRSDBG(("%s %p, fx %08x, outer %p, inner %p: %s\n",
 		dir, item, item->effects_active[0], item->outer, item->inner, ctx->elements[abs (item->element)].name.ptr));
 #endif
 
@@ -632,30 +633,30 @@ extern int find_element(SGMLCTX *context, STRING s)
 	if (element == NULL)
 	{
 	    /* Linear search, but only in user-error cases */
-	    
+
 	    int best_ix, best_len, ix;
-	    
+
 	    PRSDBGN(("Attempting to guess-match '%.*s'\n", s.bytes, s.ptr));
-	    
-	    for (ix = 0, element = context->elements, best_ix = best_len = -1; 
-		 ix < NUMBER_SGML_ELEMENTS; 
+
+	    for (ix = 0, element = context->elements, best_ix = best_len = -1;
+		 ix < NUMBER_SGML_ELEMENTS;
 		 ix++, element++)
 	    {
 		int x;
-		
+
 		for (x = 1; x <= s.bytes; x++)
 		{
 		    if (x > element->name.bytes)
 			break;
-		    
+
 		    if ( strnicmp(element->name.ptr, s.ptr, x) != 0 )
 			continue;
-		    
+
 		    PRSDBG(("%.*s against %.*s, x %d, best_ix %d, best_len %d\n",
-			    s.bytes, s.ptr, 
+			    s.bytes, s.ptr,
 			    element->name.bytes, element->name.ptr,
 			    x, best_ix, best_len));
-		    
+
 		    if (x > best_len)
 		    {
 			best_len = x;
@@ -663,7 +664,7 @@ extern int find_element(SGMLCTX *context, STRING s)
 		    }
 		}
 	    }
-	    
+
 	    if (best_ix != -1)
 	    {
 		element = &context->elements[best_ix];
@@ -699,7 +700,7 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *gu
 {
     int ix = 0;
     ATTRIBUTE **attributep = element->attributes, *attribute;
-    int len;
+/*     int len; */
 
     while ( (attribute = *attributep)->name.ptr != NULL )
     {
@@ -719,26 +720,44 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s, BOOL *gu
     {
 	PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.bytes, s.ptr));
 
+#if 1
+        /* pdh: less keen on giving out-of-control matches */
+        attributep = element->attributes;
+        ix = 0;
+        while ( (attribute = *attributep)->name.ptr != NULL )
+        {
+            if ( strnearly( s.ptr, s.bytes,
+                            attribute->name.ptr, attribute->name.bytes,
+                            2 ) )
+            {
+                *guessed = TRUE;
+                return ix;
+            }
+            ix++;
+            attributep++;
+        }
+#else
 	for (len = s.bytes; len > 0; len--)
 	{
 	    attributep = element->attributes;
 	    ix = 0;
-	    
+
 	    while ( (attribute = *attributep)->name.ptr != NULL )
 	    {
 		if ( strnicmp(s.ptr, attribute->name.ptr, len) == 0 )
 		{
-		    PRSDBGN(("Guessed attribute '%.*s' is %d ('%.*s')\n", 
+		    PRSDBGN(("Guessed attribute '%.*s' is %d ('%.*s')\n",
 			     s.bytes, s.ptr, ix, attribute->name.bytes, attribute->name.ptr));
 
 		    *guessed = TRUE;
 		    return ix;
 		}
-		
+
 		ix++;
 		attributep++;
 	    }
 	}
+#endif
 
 	PRSDBGN(("Failed to make any form of guess on the attribute!\n"));
     }
@@ -941,7 +960,7 @@ extern void pop_stack(SGMLCTX *context)
 
 #if DEBUG
     new_tos = context->tos;
-    PRSDBGN(("pop_stack(): tos %p, inner %p, outer %p\n", 
+    PRSDBGN(("pop_stack(): tos %p, inner %p, outer %p\n",
 	     new_tos, new_tos->inner, new_tos->outer));
     dump_stack(context);
 #endif
@@ -953,7 +972,7 @@ extern STACK_ITEM *find_element_in_stack (SGMLCTX *context, ELEMENT *element)
 {
     STACK_ITEM *tos;
 
-    for (tos = context -> tos; tos != NULL; tos = tos->outer) 
+    for (tos = context -> tos; tos != NULL; tos = tos->outer)
         if (tos->element == element->id) break;
 
     return tos;
@@ -964,7 +983,7 @@ static void apply_effects (BITS *new, BITS *old, BITS *fx, BITS *app, BITS *mask
     int i;
     new[0] = (new[0] & ~mask[0]) | ((old[0] | (fx[0] & app[0])) & STYLE_OR_MASK  & mask[0])
                                  | ((old[0] ^ app[0]) & STYLE_XOR_MASK & mask[0]);
-    for (i = 1; i < words_of_effects_bitpack; i++) 
+    for (i = 1; i < words_of_effects_bitpack; i++)
     {
         new[i] = (new[i] & ~mask[i]) | ((old[i] | (fx[i] & app[i])) & mask[i]);
     }
@@ -979,7 +998,7 @@ static void apply_effects_without (STACK_ITEM *item, STACK_ITEM *tos)
     BITS *prior = item->outer->effects_active;
     BITS *mask  = item->effects_applied;
     STACK_ITEM *next;
-    for (next=item->inner; next != NULL && next->outer != tos; next=next->inner) 
+    for (next=item->inner; next != NULL && next->outer != tos; next=next->inner)
     {
         BITS *this  = next->effects_active;
 #if DEBUG_STACK
@@ -990,7 +1009,7 @@ static void apply_effects_without (STACK_ITEM *item, STACK_ITEM *tos)
 #if DEBUG_STACK
         PRSDBG(("After apply_effects: this: %08x\n", this[0]));
 #endif
-    
+
         prior = this;
     }
 }
@@ -999,7 +1018,7 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
 {
     ASSERT (context->tos != NULL);
 
-    if (item != NULL && item != context->tos) 
+    if (item != NULL && item != context->tos)
     {
         STACK_ITEM *tos   = context->tos;
         STACK_ITEM *inner = tos->inner;
@@ -1021,12 +1040,12 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
 #endif
         if (above != NULL) above->inner = below;
         if (below != NULL) below->outer = above;
-    
+
         item->outer = tos;
         item->inner = inner;
 
         tos->inner = item;
-    
+
         if (inner != NULL) inner->outer = item;
 
         context->tos = item;
@@ -1041,7 +1060,7 @@ extern void pull_stack_item_to_top_correcting_effects (SGMLCTX *context, STACK_I
 {
     ASSERT (context->tos != NULL);
 
-    if (item != NULL && item != context->tos) 
+    if (item != NULL && item != context->tos)
     {
         memcpy (item->effects_active, context->tos->effects_active, sizeof (item->effects_active));
         apply_effects_without (item, context->tos);
@@ -1224,7 +1243,7 @@ extern void set_effects_fn (STACK_ITEM *st, unsigned shift, unsigned mask, BITS 
 {
     pack_fn (st->effects_active, shift, mask, value);
     pack_fn (st->effects_applied, shift, mask, mask);
-    PRSDBGN(("set_effects_fn(): st: %p shift: %d mask: %08x value: %08x\n -> %08x %08x %08x\n", 
+    PRSDBGN(("set_effects_fn(): st: %p shift: %d mask: %08x value: %08x\n -> %08x %08x %08x\n",
              st, shift, mask, value, st->effects_active[0], st->effects_active[1], st->effects_active[2]));
 }
 
@@ -1236,7 +1255,7 @@ extern void set_effects_wf_flag_fn (STACK_ITEM *st, BITS value)
     v ^= (value & (STYLE_XOR_MASK >> STYLE_WF_INDEX_SHIFT));
     pack_fn (st->effects_active, STYLE_WF_INDEX_SHIFT, STYLE_WF_INDEX_MASK, v);
     pack_fn (st->effects_applied, STYLE_WF_INDEX_SHIFT, STYLE_WF_INDEX_MASK, value);
-    PRSDBGN(("set_effects_wf_flag_fn(): st: %p value: %08x\n -> %08x %08x %08x\n", 
+    PRSDBGN(("set_effects_wf_flag_fn(): st: %p value: %08x\n -> %08x %08x %08x\n",
              st, value, st->effects_active[0], st->effects_active[1], st->effects_active[2]));
 }
 

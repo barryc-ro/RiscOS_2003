@@ -4,6 +4,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
+#include <time.h>
 
 #include "msgs.h"
 #include "wimp.h"
@@ -48,7 +50,9 @@ struct fe_history_item
 {
     fe_history_item *next, *prev;
 
-    int n_frames;   	    	    /* number of frames appended */
+    char n_frames;   	    	    /* number of frames appended */
+    char is_offline;
+    char reserved[2];
     char *title;		    /* if top frame then this is it's title */
 
     fe_history_frame_item frame[1];
@@ -69,7 +73,9 @@ struct fe_global_history_item
 
     char *url;
     char *title;
-    unsigned int url_hash;            /* hash lookup of title string */
+    unsigned int url_hash;		/* hash lookup of title string */
+
+    time_t date;			/* time added to list */
 };
 
 /* --------------------------------------------------------------------------------------------- */
@@ -84,6 +90,7 @@ static void dump_frames(const fe_history_item *hist)
 {
     int i;
     STBDBG(("history: frame list for %p\n", hist));
+    STBDBG(("         prev %p next %p n %d offline %d title '%s'\n", hist->prev, hist->next, hist->n_frames, hist->is_offline, strsafe(hist->title)));
     for (i = 0; i < hist->n_frames; i++)
     {
 	STBDBG(("  %d: '%s' = '%s'\n", i, hist->frame[i].specifier, hist->frame[i].url));
@@ -155,6 +162,34 @@ static void fe_global_free_item(fe_global_history_item *i)
     global_count--;
 }
 
+static void fe_global_remove_oldest(void)
+{
+    fe_global_history_item *item, *last;
+
+    time_t oldest_date = INT_MAX;
+    fe_global_history_item *oldest_item = NULL, *oldest_last = NULL;
+    
+    for (last = NULL, item = global_hist_list; item; last = item, item = item->next)
+    {
+	if (oldest_date > item->date)
+	{
+	    oldest_date = item->date;
+	    oldest_item = item;
+	    oldest_last = last;
+	}
+    }
+
+    if (oldest_item)
+    {
+	if (oldest_last)
+	    oldest_last->next = oldest_item->next;
+	else
+	    global_hist_list = oldest_item->next;
+	
+	fe_global_free_item(oldest_item);
+    }
+}
+
 /* ---------------------------------------------------------------------------------------------*/
 
 static void fe_global__add(const char *bare_url, const char *fragment, const char *title)
@@ -208,6 +243,7 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
         new_item->title = strdup(title);
         new_item->url = strdup(bare_url);
         new_item->url_hash = h;
+	new_item->date = time(NULL);
 
         if (prev)
         {
@@ -248,6 +284,9 @@ static void fe_global_add(const char *url, const char *title)
 
     mm_free(bare_url);
     mm_free(fragment);
+
+    if (config_history_global_length > 0 && global_count > config_history_global_length)
+	fe_global_remove_oldest();
 }
 
 /* Write out the global history items
@@ -265,14 +304,7 @@ os_error *fe__global_write_list(FILE *f)
     for (item = global_hist_list, i = 0; item; item = item->next, i++)
     {
 	char *s = item->title ? item->title : item->url;
-/* 	int split; */
-/* 	char *suffix; */
 
-/* 	split = str_split_point(webfonts[WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_MENU + WEBFONT_SIZE(4)].handle, s, ITEM_WIDTH*2 - ITEM_WIDTH_PADDING); */
-/* 	suffix = split == strlen(s) ? "" : "..."; */
-
-/* 	STBDBG(("hist: write list '%s' split %d suffix '%s'\n", s, split, suffix)); */
-	
 	fprintf(f, msgs_lookup("histAI"), i, ITEM_WIDTH, i, s);
 
         fputc('\n', f);
@@ -419,7 +451,7 @@ os_error *fe_history_write_list(FILE *f, const fe_history_item *start, const fe_
 
     /* only write out top level frame changes */
     for (i = 0, item = start; item; i++, item = item->prev)
-	if (item->title /* strcmp(item->frame[0].specifier, "_0") == 0 */)
+	if (!item->is_offline && /*item->title*/ strcmp(item->frame[0].specifier, "_0") == 0)
 	    fe_hist_write_item(f, item, i);
 
     fputs(msgs_lookup("histRF"), f);
@@ -812,12 +844,15 @@ int fe_history_visit(fe_view v, const char *url, const char *title)
     fe_frame_specifier_create(v, specifier, sizeof(specifier));
 
     /* don't bother with title if not the top frame */
-    item = fe_history_add(top, url, v == top ? title : NULL, specifier);
+    item = fe_history_add(top, v->real_url ? v->real_url : url, v == top ? title : NULL, specifier);
     if (item)
+    {
+	item->is_offline = v->offline_mode == fe_keyboard_OFFLINE;
         top->hist_at = item;
-
+    }
+    
     /* and to the global history if not a frame element */
-    if (v == top)
+    if (v == top && v->offline_mode == fe_keyboard_ONLINE)
         fe_global_add(url, title);
 
     return 0;
@@ -938,6 +973,7 @@ void fe_history_update_current_state(fe_view v)
 	memcpy(hfi->specifier, specifier, sizeof(specifier));
 
 	qsort(hist->frame, hist->n_frames, sizeof(hist->frame[0]), compare_specifiers);
+	STBDBG(("history: top first %p last %p at %p\n", top->first, top->last, top->hist_at));
 #if DEBUG
 	dump_frames(hist);
 #endif

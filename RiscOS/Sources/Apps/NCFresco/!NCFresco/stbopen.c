@@ -158,6 +158,11 @@ int fe_popup_open(void)
     return main_view->next != NULL;
 }
 
+int fe_external_popup_open(void)
+{
+    return main_view->next != NULL && strcmp(main_view->next->name, TARGET_DBOX) == 0;
+}
+
 /* ------------------------------------------------------------------------------------------- */
 
 /*
@@ -338,7 +343,8 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     session_log(url, session_REQUESTED);
 
     /* open the fetch status*/
-    fe_status_open_fetch_only(parent);
+    if (keyboard_state == fe_keyboard_ONLINE)
+	fe_status_open_fetch_only(parent);
 
     if (flags & fe_open_url_NO_CACHE)
         oflags = parent->flags | be_openurl_flag_NOCACHE;
@@ -389,6 +395,9 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     }
     else
     {
+	if (keyboard_state == fe_keyboard_OFFLINE && parent->fetching)
+	    fe_status_open_fetch_only(parent);
+
 	/* if there was no error then check to see if download has finished */
 /*  	fe_check_download_finished(parent); */
     }
@@ -443,7 +452,7 @@ os_error *fe_internal_url_with_source(fe_view v, const char *internal, const cha
 {
     char buffer[256];
 
-    strcpy(buffer, "ncfrescointernal:");
+    strcpy(buffer, "ncint:");
     strlencat(buffer, internal, sizeof(buffer));
     strlencat(buffer, "&source=", sizeof(buffer));
     fe_frame_specifier_create(v, buffer, sizeof(buffer));

@@ -72,6 +72,20 @@ static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
     else
 	whichfont = ti->st.wf_index;
 
+    /* pdh: autofit bodge */
+    if ( gbf_active( GBF_AUTOFIT ) )
+    {
+        if ( doc->scale_value < 100
+             && ( (whichfont & WEBFONT_FLAG_SPECIAL) == 0 )
+             && ( (whichfont & WEBFONT_FLAG_FIXED) == WEBFONT_FLAG_FIXED )
+             && ( (whichfont & WEBFONT_SIZE_MASK) > 0 ) )
+        {
+           /* make it one size smaller */
+           TASSERT( WEBFONT_SIZE_SHIFT == 0 );
+           whichfont -= 1;
+        }
+    }
+
     antweb_doc_ensure_font( doc, whichfont );
 
     return &webfonts[whichfont];

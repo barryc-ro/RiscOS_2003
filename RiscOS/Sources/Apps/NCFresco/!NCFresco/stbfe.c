@@ -182,7 +182,7 @@ static void check_pending_scroll(fe_view v);
 
 /* static int fe_check_resize(fe_view start, int x, int y, wimp_box *box, int *handle, fe_view *resizing_v); */
 static void fe_update_page_info(fe_view v);
-static void fe_force_fit(fe_view v, BOOL force);
+/* static void fe_force_fit(fe_view v, BOOL force); */
 static void fe_keyboard_close(void);
 
 /* -------------------------------------------------------------------------- */
@@ -725,6 +725,9 @@ void fe_no_new_page(fe_view v, os_error *e)
 
     /* hide progress indicator if popped up */
     fe_status_clear_fetch_only();
+
+    /* ensure highlight is somewhere */
+    fe_ensure_highlight(v, 0);
 }
 
 enum
@@ -737,12 +740,13 @@ enum
     content_tag_NOHISTORY,
     content_tag_SOLIDHIGHLIGHT,
     content_tag_NOSCROLL,
-    content_tag_FASTLOAD
+    content_tag_FASTLOAD,
+    content_tag_URL
 };
 
 static const char *content_tag_list[] =
 {
-    "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD"
+    "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD", "URL"
 };
 
 /*
@@ -864,6 +868,11 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     mode = fe_browser_mode_WEB;
     toolbar_state = -1;
 
+    mm_free(v->real_url);
+    v->real_url = NULL;
+
+    v->offline_mode = keyboard_state;
+    
     /* check for special page instructions - not all relevant to child pages */
     {
 	if ((ncmode = strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
@@ -893,9 +902,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 		    /* set mode (keyboard) state */
 		    if ((new_keyboard_state = decode_string(vals[content_tag_MODE].value, keyboard_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]))) != -1)
-			keyboard_state = new_keyboard_state;
+			v->offline_mode = keyboard_state = new_keyboard_state;
 		    else
-			keyboard_state = fe_keyboard_ONLINE;
+			v->offline_mode = keyboard_state = fe_keyboard_ONLINE;
 	    
 		    /* set up a pending line drop */
 		    if (vals[content_tag_LINEDROP].value)
@@ -952,6 +961,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		/* check nohistory flag */
 		if (vals[content_tag_NOHISTORY].value)
 		    v->dont_add_to_history = TRUE;
+
+		/* check for override URL for ncoptions pages */
+		v->real_url = strdup(vals[content_tag_URL].value);
 	    }
 
 	    /* check highlight flag */
@@ -974,7 +986,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    v->fast_load = FALSE;
 	    v->dont_add_to_history = FALSE;
 	    v->transient_position = fe_position_UNSET;
-	    keyboard_state = fe_keyboard_ONLINE;
+
+	    v->offline_mode = keyboard_state = fe_keyboard_ONLINE;
 	}
     }
 
@@ -1033,6 +1046,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     else
     {
         fe_status_mode(v, v->parent->browser_mode, -1);
+
+	v->dont_add_to_history = v->parent->dont_add_to_history;
     }
 
 
@@ -1688,11 +1703,13 @@ int fe_check_download_finished(fe_view v)
 
 		frontend_view_redraw(top, NULL); /* put inside because of ncint:select */
 	    }
+
+/* 	    if (strcmp(top->name, "TARGET_DBOX") == 0) */
 	}
 	else
 	{
-	    if (config_display_scale_fit)
-		fe_force_fit(top, TRUE);
+/* 	    if (config_display_scale_fit) */
+/* 		fe_force_fit(top, TRUE); */
 	}
     }
 
@@ -2297,6 +2314,7 @@ void fe_beeps_set(int state, BOOL sound)
  * Force this window to have no horizontal scrolling
  */
 
+#if 0
 static void fe_force_fit(fe_view v, BOOL force)
 {
     int scale_value = 100;
@@ -2349,6 +2367,7 @@ static void fe_force_fit(fe_view v, BOOL force)
     visdelay_end();
 
 }
+#endif
 
 void fe_scaling_set(int state)
 {
@@ -2362,7 +2381,10 @@ void fe_scaling_set(int state)
     else
 	gbf_flags &= ~GBF_AUTOFIT;
 
-    fe_force_fit(main_view, config_display_scale_fit);
+    if (main_view->displaying)
+	backend_reset_width(main_view->displaying, 0);
+
+/*  fe_force_fit(main_view, config_display_scale_fit); */
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -2779,7 +2801,6 @@ static os_error *fe_status_state(fe_view v, int state)
     {
 	int movement = fe_status_set_margins(v, state);
 
-
         if (new_state_open)
         {
             tb_status_update_fades(v);
@@ -2962,8 +2983,11 @@ os_error *fe_status_unstack(fe_view source_v)
 
 	if (v && v->open_transient)
 	{
-	    fe_internal_deleting_view(v);
-	    fe_dispose_view(v);
+	    if (strcmp(v->name, TARGET_DBOX) != 0) /* can't close external dboxes */
+	    {
+		fe_internal_deleting_view(v);
+		fe_dispose_view(v);
+	    }
 	}
 	else if (tb_status_unstack())
 	{
@@ -3006,6 +3030,29 @@ os_error *fe_status_open_toolbar(fe_view v, int bar)
     tb_status_new(v, bar);
     tb_status_update_fades(v);
     return NULL;
+}
+
+void fe_status_unstack_all(void)
+{
+    fe_view v;
+    
+    if (stbmenu_is_open())
+	stbmenu_close();
+
+    if (on_screen_kbd)
+	fe_keyboard_close();
+
+    fe_passwd_abort();
+
+    v = fe_find_top_popup(main_view);
+
+    if (v && v->open_transient)
+    {
+	fe_internal_deleting_view(v);
+	fe_dispose_view(v);
+    }
+
+    tb_status_unstack_all();
 }
 
 /* ------------------------------------------------------------------------------------------- */

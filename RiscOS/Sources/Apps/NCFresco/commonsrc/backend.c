@@ -3502,6 +3502,10 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 			changed |= (1 << 1); /* Set bit for above */
 		    else
 			changed |= (1 << 0); /* Set bit for in view */
+
+                    DICDBG(("im%p: has changed (%d-%d %d-%d %d-%d %s)\n",
+                            i, ow, ti->width, omu, ti->max_up,
+                            omd, ti->max_down, fvpr ? "yes" : "no" ));
 		}
 	    }
 

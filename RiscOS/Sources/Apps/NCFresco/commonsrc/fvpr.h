@@ -11,6 +11,8 @@
 extern BOOL fvpr_progress_stream(rid_text_stream *stream);
 extern BOOL fvpr_progress_stream_flush(rid_text_stream *stream);
 
+extern void fvpr_forget( rid_text_stream *stream );
+
 #endif /* included_fvpr_h */
 
 /* eof fvpr.h */

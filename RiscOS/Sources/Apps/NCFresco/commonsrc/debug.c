@@ -7,10 +7,42 @@
 #include "debug.h"
 
 #define DBGPROTO(x) extern void x(const char *fmt, ...)
+
+#ifdef REMOTE_DEBUG
+
+#include "debug/remote.h"
+
+static debug_session *db_sess = NULL;
+
+static void cleanup(void)
+{
+    remote_debug_close(db_sess);
+}
+
+static int debug_cmd_handler(int argc, char *argv[], void *handle)
+{
+    if (argc == 2)
+    {
+	debug_set(argv[0], atoi(argv[1]));
+	return 0;
+    }
+    return 1;
+    handle = handle;
+}
+
+#define DBGFNDEF(x,y) extern void x(const char *fmts, ...) \
+{ if (dbg_conf[y].present) \
+{ va_list arglist; va_start(arglist, fmts); debug_vprintf(db_sess, fmts, arglist); \
+va_end(arglist); } }
+
+#else
+
 #define DBGFNDEF(x,y) extern void x(const char *fmts, ...) \
 { if (dbg_conf[y].present) \
 { va_list arglist; va_start(arglist, fmts); vfprintf(stderr, fmts, arglist); \
 fflush(stderr);	va_end(arglist); } }
+
+#endif
 
 #if DEBUG
 
@@ -151,6 +183,12 @@ extern void dbginit(void)
     LNKDBGN(("Excessive link debugging present\n"));
     LAYDBG(("Frame debugging present\n"));
     LAYDBGN(("Excessive frame debugging present\n"));
+
+#ifdef REMOTE_DEBUG
+    remote_debug_open("NCFresco", &db_sess);
+    remote_debug_register_cmd_handler(db_sess, debug_cmd_handler, NULL);
+    atexit(cleanup);
+#endif
 }
 
 extern void debug_set(const char *feature, int enable)

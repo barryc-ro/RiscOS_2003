@@ -609,8 +609,8 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
 	
 	if (config_display_control_top)
 	{
-	    if (ws.o.box.y1 > sbox.y0)
-		ws.o.box.y1 = sbox.y0;
+/* 	    if (ws.o.box.y1 > sbox.y0) */
+/* 		ws.o.box.y1 = sbox.y0; */
 	}
 	else
 	{

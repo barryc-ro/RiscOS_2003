@@ -245,6 +245,43 @@ extern char *strcasestr(const char *s1, const char *s2)
 }
 #endif
 
+
+/*---------------------------------------------------------------------------*
+ * strnearly(s1,s2,n)                                                        *
+ * Returns TRUE if s1 is within edit distance n of s2, where edit distance   *
+ * is defined as number of additions or deletions of characters. O(mn) where *
+ * m is length of shorter string and n is n.                                 *
+ *---------------------------------------------------------------------------*/
+
+BOOL strnearly( const char *input, size_t ilen,
+                const char *pattern, size_t plen, size_t hownear )
+{
+    while ( ilen && plen )
+    {
+        if ( toupper(*input) != toupper(*pattern) )
+        {
+            if ( !hownear )
+                return FALSE;
+
+            /* case bgXcolor */
+            if ( strnearly( input+1, ilen-1, pattern, plen, hownear-1 ) )
+                return TRUE;
+            /* case bgcolr */
+            if ( strnearly( input, ilen, pattern+1, plen-1, hownear-1 ) )
+                return TRUE;
+
+            /* case bgcoXor */
+            hownear--;
+        }
+        input++;
+        ilen--;
+        pattern++;
+        plen--;
+    }
+
+    return hownear >= (ilen + plen);
+}
+
 char encode_table[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 void uuencode(char *in, char *out, int out_len)
@@ -1353,7 +1390,7 @@ extern input_key_action lookup_key_action(int key)
     while (ikm->key != -1 && ikm->key != key)
 	ikm++;
     return ikm->action;
-}    
+}
 
 /*****************************************************************************/
 
