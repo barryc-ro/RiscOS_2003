@@ -51,6 +51,7 @@
 /* Local functions */
 
 static _kernel_oserror * setup_add_transport_header (session * s);
+static _kernel_oserror * setup_add_destination      (session * s);
 static _kernel_oserror * setup_read_loop_option     (session * s, unsigned int vcid);
 static _kernel_oserror * setup_read_extension_block (session * s, vc_setup * setup);
 static _kernel_oserror * setup_convert_url          (session * s);
@@ -197,13 +198,50 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
 
     if (r->r[3] != 0)
     {
-      if (
-           headers_add_header(&s->headers,
-                              Headers_HeaderName_Transport,
-                              (const char *) r->r[3])
-           == NULL
-         )
-         fail = true;
+      const char * r3 = (const char*) r->r[3];
+
+      /* If the custom header doesn't have a destination specifier, then */
+      /* we still need to add one ourselves.                             */
+
+      if (strstr(r3, Headers_HeaderValue_TransportDst) == NULL)
+      {
+        char * value = malloc(strlen(r3) + sizeof(Headers_HeaderValue_TransportDst)); /* sizeof() includes NUL */
+
+        if (value == NULL)
+        {
+          fail = true;
+        }
+        else
+        {
+          sprintf(value, "%s%s", r3, Headers_HeaderValue_TransportDst);
+
+          if (
+               headers_add_header(&s->headers,
+                                  Headers_HeaderName_Transport,
+                                  value)
+               == NULL
+             )
+          {
+            fail = true;
+          }
+          else
+          {
+            s->connected_cb = setup_add_destination;
+          }
+
+          free(value);
+        }
+      }
+      else
+      {
+        if (
+             headers_add_header(&s->headers,
+                                Headers_HeaderName_Transport,
+                                (const char *) r->r[3])
+             == NULL
+           )
+           fail = true;
+      }
     }
     else
     {
@@ -452,8 +490,8 @@ static _kernel_oserror * setup_add_transport_header(session * s)
 
       char * port = getenv(Headers_UDP_Port);
 
-      if (!port || !*port) sprintf(value, "%s%s",    Headers_HeaderValue_Transport, ip);
-      else                 sprintf(value, "%s%s:%s", Headers_HeaderValue_Transport, ip, port);
+      if (!port || !*port || strlen(port) > 5) sprintf(value, "%s%s",    Headers_HeaderValue_Transport, ip);
+      else                                     sprintf(value, "%s%s:%s", Headers_HeaderValue_Transport, ip, port);
 
       /* Add the new header */
 
@@ -496,6 +534,108 @@ static _kernel_oserror * setup_add_transport_header(session * s)
   }
 
   dprintf(("", "setup_add_transport_header: Finished\n"));
+
+  return NULL;
+}
+
+/**************************************************************/
+/* setup_add_destination()                                    */
+/*                                                            */
+/* As setup_add_transport_header, but only adds in a missing  */
+/* destination to an existing Transport item.                 */
+/*                                                            */
+/* Parameters: Pointer to the session struct.                 */
+/**************************************************************/
+
+static _kernel_oserror * setup_add_destination(session * s)
+{
+  struct        sockaddr_in name;
+  int           namelen = sizeof(name);
+  rtsp_header * current;
+
+  dprintf(("", "setup_add_destination: Called for %p\n", s));
+
+  /* Find the existing header */
+
+  current = headers_find_header(s->headers, Headers_HeaderName_Transport);
+
+  if (current == NULL)
+  {
+    dprintf(("", "setup_add_destination: Cannot find an existing Transport header\n"));
+    return NULL;
+  }
+
+  /* Use getsockname to get our IP address for the destination part */
+  /* of the Transport header, and add it in.                        */
+
+  if (getsockname(s->sd, (struct sockaddr *) (&name), &namelen) >= 0)
+  {
+    bool          fail = false;
+    char        * value;
+    char        * ip;
+
+    ip = inet_ntoa(name.sin_addr);
+
+    dprintf(("", "setup_add_destination: Our IP address is %s\n", ip));
+
+    /* Construct the value. 7 is for adding ":<port>" and NUL. */
+
+    value = malloc(strlen(ip) + strlen(current->header) + 7);
+
+    if (value == NULL) fail = true;
+    else
+    {
+      /* Compile the full header value, including port */
+
+      char * port = getenv(Headers_UDP_Port);
+
+      if (!port || !*port || strlen(port) > 5) sprintf(value, "%s%s",    current->value, ip);
+      else                                     sprintf(value, "%s%s:%s", current->value, ip, port);
+
+      /* Delete the old and add the new header */
+
+      headers_delete_header(&s->headers, current);
+
+      if (
+           s->headers == NULL ||
+           headers_add_below_head(&s->headers,
+                                  Headers_HeaderName_Transport,
+                                  value)
+           == NULL
+         )
+      {
+        fail = true;
+      }
+
+      /* Are we maintaining a copy of the SETUP command? */
+
+      if (s->setup_copy != NULL && fail == false)
+      {
+        if (
+             headers_add_below_head(&s->setup_copy,
+                                    Headers_HeaderName_Transport,
+                                    value)
+             == NULL
+           )
+        {
+          fail = true;
+        }
+      }
+    }
+
+    free(value);
+
+    /* Handle failure, else the headers are all assembled correctly now. */
+
+    if (fail)
+    {
+      dprintf(("", "setup_add_destination: Failed (out of memory)\n"));
+
+      return make_error(rtspovs_ERROR_MEMORY_EXHAUSTED, 0);
+    }
+  }
+
+  dprintf(("", "setup_add_destination: Finished\n"));
 
   return NULL;
 }
