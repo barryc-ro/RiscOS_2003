@@ -13,6 +13,8 @@
 #                         can pass in assembly-time constants to control
 #                         fake podule header for Funai 5 Ethernet NC
 #                         which doesn't have a podule ROM. Paul Skirrow.
+# 13-Jan-00  PMS          Creates/deletes o dir, (ie don't keep o in cvs)
+# 13-Jan-00  PMS          Passes Options from MakeFile to ObjAsm 
 #
 # Paths
 #
@@ -29,9 +31,12 @@ CP      = copy
 MODGEN   = modgen
 LD      = link
 RM      = remove
+WIPE    = wipe
+
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -PreDefine ${OPTIONS} -To $@ -From
+ASFLAGS = -depend !Depend -Stamp -quit -module ${OPTIONS}
 CPFLAGS = ~cfr~v
+WFLAGS		= ~c~v
 
 TOKENISE = tokenise
 TOKENS   = Hdr:Tokens
@@ -79,11 +84,14 @@ resources-: resources_common
 	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 clean:
-        ${RM} ${TARGET}
-        ${RM} ${MESSAGESMOD}
-        ${RM} s.HelpTokens
-        ${RM} setversion
-        @echo ${COMPONENT}: cleaned
+	${rm} o.Podule
+        ${rm} o
+        ${rm} linked
+        ${rm} ${TARGET}
+        ${rm} ${MESSAGESMOD}
+        ${rm} s.HelpTokens
+        ${rm} setversion
+        @echo ${COMPONENT}: cleaned 
 
 s.HelpTokens: ${TOKENS} HelpTexts
         ${TOKENISE} ${TOKENS} HelpTexts $@
@@ -98,7 +106,8 @@ ${EXP_CHDR}.${COMPONENT}: h.${COMPONENT}
 # Target 
 #
 ${TARGET}: ${SOURCE}
-        ${AS} ${AFLAGS} GetAll.s Podule.o 
+	${MKDIR} o
+        ${AS} ${ASFLAGS} GetAll.s Podule.o 
         ${MKDIR} rm.${MACHINE}
         ${LD} -o $@ -bin Podule.o
 	SetType $@ &FFA
@@ -129,6 +138,7 @@ ${MESSAGESMOD}: ${MESSAGES} setversion
         unset Version
 
 setversion: Time+Date
+	${MKDIR} o
         ${AS} ${ASFLAGS} utils.getversion
         settype setversion obey
 
