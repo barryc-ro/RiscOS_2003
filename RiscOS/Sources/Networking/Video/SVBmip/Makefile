@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 17-Mar-99  SNB          Created
+# 20-Sep-99  SAR          Forced fussy compilation
 
 COMPONENT = SVBmip
 RAM_MODULE = rm.${COMPONENT}
@@ -35,8 +36,8 @@ LD      = link
 RM      = remove
 MODSQZ  = modsqz
 WIPE    = -wipe
-CD	= dir
-TOUCH	= stamp
+CD      = dir
+TOUCH   = stamp
 AWK     = awk
 
 CPFLAGS = ~cfr~v
@@ -45,48 +46,48 @@ WFLAGS = ~c~v
 #
 # Include files
 #
-INCLUDES=	-ITCPIPLibs:,C:
+INCLUDES=       -ITCPIPLibs:,C:
 
 #
 # Libraries
 #
-CLIB		= Clib:o.Stubs
-ROMCSTUBS	= RISCOSLIB:o.romcstubs
-ABSSYM		= RISC_OSLib:o.AbsSym
-INETLIB		= TCPIPLibs:o.inetlibzm
-SOCKLIB		= TCPIPLibs:o.socklibzm
+CLIB            = Clib:o.Stubs
+ROMCSTUBS       = RISCOSLIB:o.romcstubs
+ABSSYM          = RISC_OSLib:o.AbsSym
+INETLIB         = TCPIPLibs:o.inetlibzm
+SOCKLIB         = TCPIPLibs:o.socklibzm
 
-DEPEND		= -depend !Depend
+DEPEND          = -depend !Depend
 DBGFLAGS        = -DTRACE
 DEFINES         = -DRISCOS -DCOMPAT_INET4 -DRISCOS_ATM25 -DRISCOS_MPEG
 
-ASFLAGS		= ${DEPEND} ${THROWBACK}
-CFLAGS		= -c -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${DEPEND} ${THROWBACK}
-CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
+ASFLAGS         = ${DEPEND} ${THROWBACK}
+CFLAGS          = -c -fussy -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${DEPEND} ${THROWBACK}
+CMHGFLAGS       = ${DEPEND} ${THROWBACK} -p
 LDFLAGS         = -rmf -c++
 
-ROM_OBJS	= or.mip or.module or.vspc o.SVBmip
-RAM_OBJS	= o.mip  o.module  o.vspc  o.SVBmip
-DBG_OBJS	= od.mip od.module od.vspc o.SVBmip
+ROM_OBJS        = or.Module or.mipSWI or.Parser or.Channels o.SVBmip
+RAM_OBJS        = o.Module  o.mipSWI  o.Parser  o.Channels  o.SVBmip
+DBG_OBJS        = od.Module od.mipSWI od.Parser od.Channels o.SVBmip
 
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .od .or .s .c .cmhg .h
-.c.o:;		${CC} ${CFLAGS} -o $@ $<
-.c.or:;		${CC} ${CFLAGS} -DROM -o $@ $<
-.c.od:;		${CC} ${CFLAGS} ${DBGFLAGS} -o $@ $<
-.cmhg.o:;	${CMHG} ${CMHGFLAGS} -o $@ $< -d h.SVBmip
-.cmhg.h:;	${CMHG} ${CMHGFLAGS} -d $@ $<
-.cmhg.od:;	${CMHG} ${CMHGFLAGS} -o $@ $<
-.s.o:;		${AS} ${ASFLAGS} -o $@ $<
+.SUFFIXES:      .o .od .or .s .c .cmhg .h
+.c.o:;          ${CC} ${CFLAGS} -o $@ $<
+.c.or:;         ${CC} ${CFLAGS} -DROM -o $@ $<
+.c.od:;         ${CC} ${CFLAGS} ${DBGFLAGS} -o $@ $<
+.cmhg.o:;       ${CMHG} ${CMHGFLAGS} -o $@ $< -d h.SVBmip
+.cmhg.h:;       ${CMHG} ${CMHGFLAGS} -d $@ $<
+.cmhg.od:;      ${CMHG} ${CMHGFLAGS} -o $@ $<
+.s.o:;          ${AS} ${ASFLAGS} -o $@ $<
 
 SVBmip.h: o.SVBmip
-	${TOUCH} $@
-	
+        ${TOUCH} $@
+
 IPConfHdrD.h: od.IPConfHdr
-	${TOUCH} $@
-	
+        ${TOUCH} $@
+
 o.IPConfHdr: VersionNum
 
 od.IPConfHdr: VersionNum
@@ -99,7 +100,7 @@ all: ${RAM_MODULE} o._dirs
         @echo ${COMPONENT}: Module built (RAM)
 
 ramtrace: ${DBG_MODULE} o._dirs
-	@echo ${COMPONENT}: Module built (TRACE)
+        @echo ${COMPONENT}: Module built (TRACE)
 
 rom: ${ROM_MODULE} o._dirs
         @echo ${COMPONENT}: Module built (ROM)
@@ -122,10 +123,10 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 o._dirs:
-	${MKDIR} o
-	${MKDIR} od
-	${MKDIR} or
-	create $@
+        ${MKDIR} o
+        ${MKDIR} od
+        ${MKDIR} or
+        create $@
 
 export:
         @echo ${COMPONENT}: export complete
@@ -134,19 +135,19 @@ export:
 #
 # Targets
 #
-${RAM_MODULE}:	${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
-	${MKDIR} rm
-	$(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+${RAM_MODULE}:  ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+        ${MKDIR} rm
+        $(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
         ${MODSQZ} $@
         Access $@ RW/R
 
-${ROM_MODULE}:	${ROM_OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
-	${MKDIR} aof
-	$(LD) -o $@ -aof ${ROM_OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
+${ROM_MODULE}:  ${ROM_OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
+        ${MKDIR} aof
+        $(LD) -o $@ -aof ${ROM_OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
 
-${DBG_MODULE}:	${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
-	${MKDIR} rm
-	$(LD) -o $@ ${LDFLAGS} ${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+${DBG_MODULE}:  ${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+        ${MKDIR} rm
+        $(LD) -o $@ ${LDFLAGS} ${DBG_OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
         Access $@ RW/R
 
 #
