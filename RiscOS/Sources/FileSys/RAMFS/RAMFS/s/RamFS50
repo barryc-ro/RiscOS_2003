@@ -2,6 +2,56 @@
 
  TTL    "Initialisation and FS star commands"
 
+ [ BigDir
+; the disc record here will be much more complete
+SkeletonDiscRec		;fields marked * need filling in
+	=  	10	; sector size 2^10
+	=  	1	; sectors per track (this is a RAM disc, after all)
+	=  	1	; heads
+	=  	0	; density
+	=  	0	; * LinkBits
+	=  	0	; * BitSize
+	=  	0	; skew
+	=  	0	; lowsector
+	=  	0	; * nzones
+	=  	0,0	; * ZoneSpare
+	DCD 	0	; * RootDir
+	DCD 	0	; * DiscSize
+	DCD 	0,0,0	; disc cycle id + disc name
+	DCD 	0	; DiscType
+	DCD 	0	; DiscSize2
+	DCD 	0	; ShareSize,BigFlag,Zones2,Reserved
+	DCD 	1   	; DiscVersion
+	DCD 	2048 	; RootSize
+
+	ASSERT	.-SkeletonDiscRec = DiscRecSig2
+
+; the disc record here will be much more complete
+SkeletonDiscRecOld		;fields marked * need filling in
+	=  	10	; sector size 2^10
+	=  	1	; sectors per track (this is a RAM disc, after all)
+	=  	1	; heads
+	=  	0	; density
+	=  	0	; * LinkBits
+	=  	0	; * BitSize
+	=  	0	; skew
+	=  	0	; lowsector
+	=  	0	; * nzones
+	=  	0,0	; * ZoneSpare
+	DCD 	0	; * RootDir
+	DCD 	0	; * DiscSize
+	DCD 	0,0,0	; disc cycle id + disc name
+	DCD 	0	; DiscType
+	DCD 	0	; DiscSize2
+	DCD 	0	; ShareSize,BigFlag,Zones2,Reserved
+	DCD 	0   	; DiscVersion
+	DCD 	0 	; RootSize
+
+	ASSERT	.-SkeletonDiscRecOld = DiscRecSig2
+
+OldFileCoreVersion	DCD	298
+ |
+
 SkeletonDiscRec ;those marked * need filling in
         =  10   ;  sector size 2^10     R2
         =  1    ;  sectors per track
@@ -23,6 +73,7 @@ SkeletonDiscRec ;those marked * need filling in
         =  0,0  ;* id                   R7-R9
         =  "RamDisc0",0,0
         ASSERT  .-SkeletonDiscRec = DiscRecSig - 3*4
+ ]
 
 RamFSString     = "RAM",0
  ALIGN
@@ -45,12 +96,21 @@ EmptyDefectList
 InitEntry ROUT
         Push    "R0-R11,SB,LR"
 
-        baddr   LR, SkeletonDiscRec
+ [ Debug3
+	DLINE	"RAMFS Init"
+ ]
+
+        ADRL    LR, SkeletonDiscRec
         LDMIA   LR, {R2,R5,R7-R9}
 
         SWI     XOS_ReadRAMFsLimits     ;(->R0,R1)
         SUB     R6, R1, R0              ;RAM disc size
+ [ BigDir
+	SUB	SP, SP, #DiscRecSig2
+	Push	"R0"
+ |
         Push    "R0,R2-R9"
+ ]
 
         MOV     R9, #0                  ;error flag
         MOV     R10,#1                  ;init flag
@@ -63,6 +123,9 @@ InitEntry ROUT
         BVS     %FT95
         MOV     SB, R2
 
+
+
+
 ; OSS Flag that the message file is closed.
 
         MOV     r0, #0
@@ -71,6 +134,88 @@ InitEntry ROUT
         CMPS    R6, #8*K                ;Only initialise if at least 8K of RAM disc
         BCC     %FT60                   ; OSS Moved error handle code out of line - flags problem
 
+ [ BigDir
+        ASSERT  :INDEX: BufferStart=0
+        ASSERT  :INDEX: BufferSize=4
+        STMIA   SB, {R4,R6}
+
+	STR	R11, MyPrivate
+
+	LDR	R0, BufferStart
+	MOV	R1, #1024
+	BL	ZeroRam
+
+	ADD	r0, r0, #&C00
+	BL	ZeroRam
+
+        STR     SB, [R11]
+
+        baddr   R0, FSCreateBlock
+        baddr   R1, org
+        LDR	r2, MyPrivate
+        MOV	R3, #1                  ;1 floppy, 0 winnies, default drive 0, dir
+        MOV	R4, #65536              ;dir cache size
+        MOV	R5, #0                  ;File cache buffers
+        MOV	R6, #0                  ;winnie sizes
+        SWI	XFileCore_Create      ;(R0-R6->R0-R2,V)
+        BVS     %FT85			; filecore_create failed
+
+        STR     R0, FileCorePrivate
+
+	BL	FileCoreVersion		; check the filecore version
+	LDR	lr, OldFileCoreVersion	; and see if things are ok
+	CMPS	r0, lr			;
+
+	BHI	%FT01
+
+	ADRL	r0, SkeletonDiscRecOld
+  	B	%FT02
+01
+	ADRL	R0, SkeletonDiscRec	; source
+02
+
+	MOV	R1, SP			; dest
+	MOV	R2, #DiscRecSig2	; length
+	BL	BlockMove		; (R0, R1, R2)
+	LDR	R6, BufferSize
+	STR	R6, [SP, #DiscSize]	;store away the size
+
+	MOV	r5, SP
+	BL	InitDiscRec		; fill in the disc record fields which need calculation
+
+	MOV	r1, #WriteTrkOp
+	ORR	r1, r1, r5, LSL #6
+	MOV	r2, #0
+	LDR	r3, BufferStart
+	MOV	r4, #1024
+	LDR	r8, FileCorePrivate
+	SWI	XFileCore_DiscOp
+
+	BVS	%FT75
+
+	MOV	r0, #&CF
+	ADRL	r1, RAMdisc0Name	; name ptr
+	SWI	XOS_Find		; find it
+
+	BVS	%FT75			; failed to do so
+
+	MOV	R3, R0
+
+	MOV	r0, sp
+	ADRL	r1, EmptyBBList		; no bad block list
+	ADRL	r2, JustDiscName	; disc name
+
+	SWI	XFileCore_LayoutStructure
+
+	BVS	%FT75	  		; if failed to init the disc
+
+; finally, dismount the disc
+	ADRL	r0, DismountStr
+	SWI	XOS_CLI
+
+	BVS	%FT75
+  	ADD	SP, SP, #DiscRecSig2
+ |
         MOV     R0, #7
 05
         MOV     R1, R6, LSR R0
@@ -109,8 +254,10 @@ InitEntry ROUT
         STR     R0, FileCorePrivate
 
         STR     SB, [R11]
-
         ADD     SP, SP, #DiscRecSig
+
+ ]
+
         Pull    "R0-R11,SB,PC",,^
 
 
@@ -131,25 +278,66 @@ RAMdiscName
         DCB     "RAM::RamDisc0",0
         ALIGN
 
+ [ BigDir
+EmptyBBList
+	DCD	-1
+JustDiscName
+	DCB	"RamDisc0",0
+	ALIGN
+RAMdisc0Name
+        DCB     "RAM::0",0
+        ALIGN
+DismountStr
+	DCB	"RAM:Dismount :0",0
+	ALIGN
+ ]
+
+ [ BigDir
+
+ ]
+
+
 ; >>>>>>>>
 ; DieEntry
 ; >>>>>>>>
 
-DieEntry 
+DieEntry
         Push    "R0-R11,SB,LR"
+
+ [ Debug3
+	DLINE	"RAMFS Die"
+ ]
+ [ BigDir
+	SUB	SP, SP, #DiscRecSig2
+ |
         SUB     SP, SP, #DiscRecSig
+ ]
         getSB
 
 ; Dismount the disk so filer windows close
 
         MOV     R1, #Service_DiscDismounted
-        ADR     R2, RAMdiscName                 ; Disc to dismount
+        ADRL    R2, RAMdiscName                 ; Disc to dismount
         SWI     XOS_ServiceCall                 ; Dismount RAM
 
         MOV     R10,#0
+ [ BigDir
+75
+  	MOVVS	R9, R0				; hang on to any earlier error
+ ]
+
+ [ Debug3
+	DLINE	"Killing parent"
+ ]
+
         MOV     R0, #ModHandReason_Delete
         baddr   R1, FullTitle
         SWI     XOS_Module
+ [ Debug3
+	DLINE	"killed parent"
+	DebugError	"Kill filecore: "
+ ]
+
 85
 
 ; OSS Close the Messages file if it is open, and then flag it as closed.
@@ -179,7 +367,11 @@ DieEntry
         mess    VS,"Error",NL
  ]
 
+ [ BigDir
+	ADD	SP, SP, #DiscRecSig2
+ |
         ADD     SP, SP, #DiscRecSig
+ ]
         MOVS    R0, R9
         MOVNES  R10,R10         ;only error on init
         Pull    "R0-R11,SB,PC",EQ,^
@@ -187,6 +379,198 @@ DieEntry
         BL      SetV
         ADD     SP, SP, #4
         Pull    "R1-R11,SB,PC"
+
+
+ [ BigDir
+
+; >>>>>>>>>>>
+; InitDiscRec
+; >>>>>>>>>>>
+
+; this routine generates the values in the disc record to suit the
+; chosen size of the RAM disc.  We need to work out the values, and
+; place them in a disc record
+
+; in:
+;
+;    r5 -> disc record
+
+; out:
+;
+;   disc record fields filled in: zones, zonespare, LinkBits and bitsize
+
+; here's some definitions used by this routine:
+
+Min_LinkBits	*	13	; minimum allowed LinkBits (with 1024 byte zones)
+Max_LinkBits	*	19	; maximum allowed LinkBits (unlikely!)
+Min_BitSize	*	7	; minimum allowed bitsize
+Max_BitSize	*	12	; max allowed bitsize
+Min_ZoneSpare	*	32	; min allowed zonespare
+Max_ZoneSpare	*	64	; max allowed zonespare
+Min_Zones	*	1	; min allowed zones
+Max_Zones	*	16	; max allowed zones
+
+; internal register allocation:
+
+; r5 -> disc record
+
+; r0 = current bitsize
+; r1 = current zonespare
+; r2 = current zones
+; r3 = current LinkBits
+; r4 = map allocation bits required to cover disc
+; r6 = number of bits in a zone
+; r7 = number of allocation bits in the map
+; r8 = ids per zone
+
+
+InitDiscRec	ROUT
+	Push	"R0-R11,LR"
+
+	MOV	r0, #Min_BitSize	; init BitSize
+
+10	; loop on BitSize
+	LDR	r4, [r5, #DiscSize]
+	MOV	r4, r4, LSR r0		; map bits for disc
+
+	MOV	r1, #Min_ZoneSpare	; init ZoneSpare
+20	; loop on zonespare
+
+	LDR	lr, [r5, #SectorSize]
+	MOV	r6, #8
+	MOV	r6, r6, LSL lr		; bits in a zone
+	SUB	r6, r6, r1		; minus sparebits
+
+	; choose number of zones to suit
+
+	MOV	r2, #Min_Zones		; minimum of one zone
+	SUB	r7, r6, #Zone0Bits	; bits in zone 0
+
+30	; loop for zones
+	CMP	r7, r4			; do we have enough allocation bits yet?
+	BHS	%FT35			; if we do, then accept this number of zones
+
+	ADD	r7, r7, r6		; more map bits
+	ADD	r2, r2, #1		; and another zone
+	CMPS	r2, #Max_Zones
+	BLS	%BT30			; still ok
+
+	; here when too many zones; try a higher BitSize
+
+	B	%FT80
+
+35
+	; now we have to choose LinkBits.  we want LinkBits to be
+	; the smallest it can be for the disc.
+
+	MOV	r3, #Min_LinkBits		; minimum value of LinkBits
+
+40	; loop for LinkBits
+
+	Push	"R0, R1"
+	MOV	r0, r6			; allocation bits in a zone
+	ADD	r1, r3, #1		; LinkBits+1
+	BL	Divide			; (R0,R1->R0,R1)
+	MOV	r8, r0			; r8 = ids per zone
+	Pull	"R0, R1"
+
+	; check that LinkBits is enough for total possible ids
+	MOV	r9, #1			; work out 1<<LinkBits
+	MOV	r9, r9, LSL r3		;
+
+	MUL	lr, r8, r2		; total ids needed
+	CMPS	lr, r9			; LinkBits too small?
+	BHI	%FT60			; yes!
+
+	; we're nearly there.  now work out if the last zone
+	; can be handled correctly.
+
+	SUBS	lr, r7, r4
+	BEQ	%FT50
+
+	CMPS	lr, r3			; must be at least LinkBits+1 bits
+	BLE	%FT60
+
+	; check also that we're not too close to the start of the zone
+
+	SUB	lr, r7, r6		; get the start of the zone
+
+	SUB	lr, r4, lr		;
+	CMPS	lr, r3
+	BLE	%FT60
+
+
+50	; we've found a result - fill in the disc record!
+
+	; first, store the things we know about
+
+	STRB	r3,[r5, #LinkBits]
+	MOV	r1, r1, LSL #16
+	ORR	r1, r1, r2, LSL #8
+
+	STR	r1, [r5, #ZoneSpare-2]
+
+	STRB	r0, [r5, #BitSize]
+
+	LDR	lr, [r5, #DiscVersion]
+
+	TEQS	lr, lr
+
+	BEQ	%FT01			; do we have long filenames?
+
+	; here when long filenames
+
+	; the root dir's ID is the first available ID in the middle
+	; zone of the map
+
+
+	MOVS	r2, r2, LSR #1		; zones/2
+
+	MULNE	lr, r2, r8		; *idsperzone
+	MOVEQ	lr, #3			; if if zones/2=0, then only one zone, so the id is 3 (0,1,2 reserved)
+
+	MOV	lr, lr, LSL #8		; construct full indirect disc address
+	ORR	lr, lr, #1		; with sharing offset of 1
+
+01
+	; here when not long filenames
+
+	; root dir is &2nn where nn is ((zones<<1)+1)
+
+	MOV	lr, r2, LSL #1
+	ADD	lr, lr, #1
+	ADD	lr, lr, #&200
+
+02
+
+	STR	lr, [r5, #RootDir]	; root dir disc addr
+
+
+	B	%FT90
+
+; other fields in the disc record are fixed-value
+
+60	; NEXT LinkBits
+	ADD	r3, r3, #1
+	CMPS	r3, #Max_LinkBits
+	BLS	%BT40
+
+70	; NEXT zonespare
+	ADD	r1, r1, #1
+	CMPS	r1, #Max_ZoneSpare
+	BLS	%BT20
+
+
+80	; NEXT BitSize
+	ADD	r0, r0, #1
+	CMPS	r0, #Max_BitSize	; is it too much?
+	BLS	%BT10			; back around
+
+90
+	Pull	"R0-R11,PC",,^
+
+
+ ]
 
  [ F
 
@@ -257,7 +641,7 @@ FirstUnusedSwi  * (.-%BT05)/4
 BadSwi
         ;  Bad SWI
         Push    r1
-        ADR     r0, ErrorBlock_ModuleBadSWI
+        ADRL    r0, ErrorBlock_ModuleBadSWI
         baddr   r1, RamFSTitle
         BL      copy_error_one
         Pull    r1
@@ -308,5 +692,71 @@ DoRam
         baddr   R1, RamFSString
         SWI     XOS_FSControl
         Pull    "PC"
+
+ [ BigDir
+; >>>>>>>>>>>>>>>
+; FileCoreVersion
+; <<<<<<<<<<<<<<<
+
+; this function returns 100* the version number of FileCore, in r0, or
+; zero if it's not found
+
+; entry: nothing
+
+; exit:
+;	R0=100* filecore version or 0 if it's not found
+
+FileCoreTitle
+	DCB	"FileCore",0
+	ALIGN
+
+FileCoreVersion ROUT
+	Push	"R1-R5,LR"
+
+	MOV	r0, #ModHandReason_LookupName
+	ADR	r1, FileCoreTitle
+
+	SWI	XOS_Module	; r3=module code
+
+	MOVVS	R0, #0
+	BVS	%FT95
+
+	LDR	lr, [r3, #&14]
+
+	ADD	r3, r3, lr
+
+10
+	LDRB	lr, [r3], #1
+	TEQS	lr, #'.'
+	BEQ	%FT20
+
+	TEQS	lr, #0		; not end of string
+	BNE	%BT10
+
+	MOV	r0, #0
+	B	%FT95
+
+20	; found '.'
+
+	LDRB	r1, [r3, #-2]	; first digit
+	SUB	r1, r1, #'0'
+
+	MOV	lr, #100
+	MUL	r0, r1, lr	; 100*first
+
+	LDRB	r1, [r3, #0]	; first part of next bit
+	SUB	r1, r1, #'0'
+	MOV	lr, #10
+	MLA	r0, r1, lr, r0	; second
+
+	LDRB	r1, [r3, #1]
+	SUB	r1, r1, #'0'
+
+	ADD	r0, r0, r1
+	B	%FT95
+
+95
+	Pull	"R1-R5,PC",,^
+ ]
 
         END
