@@ -62,6 +62,7 @@ caseless_strcmp(char *a, char *b)
 int
 debug_poll(debug_session *sess)
 {
+  static char sbuff[REMOTE_DEBUG_MAX_LINE];
   fd_set read_set;
   struct timeval tv;
   char	 *argv[20];
@@ -85,15 +86,18 @@ debug_poll(debug_session *sess)
     {
       if (FD_ISSET(sess->sock,&read_set))
       {
-        if (recv(sess->sock, debug_line, REMOTE_DEBUG_MAX_LINE,MSG_PEEK)>0)
-          if ((cp=strchr(debug_line,'\n'))!=NULL)
-            if (recv(sess->sock, debug_line, (cp-debug_line+1),0)>0)
+        int recv_len = recv(sess->sock, sbuff, REMOTE_DEBUG_MAX_LINE-1,MSG_PEEK);
+        if (recv_len>0)
+        {
+          if ((cp=memchr(sbuff,'\n', recv_len))!=NULL)
+          {
+            if (recv(sess->sock, sbuff, (cp-sbuff+1),0)>0)
             {
-              debug_line[cp-debug_line]='\0'; /* remove the new line char */
+              sbuff[cp-sbuff]='\0'; /* remove the new line char */
               /*
                * break down string
                */
-              cp = debug_line;
+              cp = sbuff;
               while (*cp != '\0')
               {
                 while (*cp == ' ')
@@ -135,11 +139,19 @@ debug_poll(debug_session *sess)
 		  rc = sess->cmd_handler(argc, argv, sess->cmd_handle);
 		  debug_printf(sess,"(6) cmd '%s' returns %d\n", name, rc);
               }
+              else if (caseless_strcmp(argv[0], ":ack")==0)
+              {
+                  /* Discard these silently */
+              }
               else
-                debug_printf(sess,"(6) unknown command '%s'\n",argv[0]);
+              {
+                  debug_printf(sess,"(6) unknown command '%s'\n",argv[0]);
+              }
 
               more = 1; /* try for more input */
             }
+          }
+        }
       }
     }
   } while (more);
@@ -280,13 +292,16 @@ remote_debug_open(char *info, debug_session **db_sess)
   do
   {
     debug_socket = socket(AF_INET, SOCK_STREAM, 0);
-  } while (debug_socket == 0);
+  } while (debug_socket == -1);
 
   hostent = gethostbyname(host);
   if (hostent == NULL)
     goto exit_gracefully;
 
   sockaddr.sin_family = AF_INET;
+#ifndef COMPAT_INET4
+  sockaddr.sin_len = sizeof(sockaddr);
+#endif
   sockaddr.sin_addr.s_addr = *(u_long*)hostent->h_addr;
 
   rc = connect(debug_socket, (struct sockaddr *)&sockaddr, sizeof(sockaddr) );
@@ -300,8 +315,10 @@ remote_debug_open(char *info, debug_session **db_sess)
     goto exit_gracefully;
 
   sess->sock = debug_socket;
+  sess->cmd_handler = NULL;
+  sess->cmd_handle = NULL;
 
-  if ((sess->info=malloc(strlen(info)+/*2 - No, you need + 3 JBeranek */ 3))==NULL)
+  if ((sess->info=malloc(strlen(info)+sizeof(": ")))==NULL)
     goto exit_gracefully;
 
   strcpy(sess->info, info);
@@ -321,6 +338,7 @@ remote_debug_open(char *info, debug_session **db_sess)
 exit_gracefully:
   if (debug_socket >= 0)
     socketclose(debug_socket);
+  debug_socket = -1;
 
   if (sess)
   {
