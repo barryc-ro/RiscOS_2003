@@ -20,7 +20,7 @@
 
 #define USB_DELAY_RESET   20
 #define USB_DELAY_ADDRESS 1
-#define USB_DELAY_CONFIG  1
+#define USB_DELAY_CONFIG  5
 
 #define NUM_LOCK 0x01
 #define CAPS_LOCK 0x02
@@ -32,8 +32,13 @@
 #define OHCIEmulator_ReleaseDeviceVector  0x054a82
 #define OHCIEmulator_ReadWord           0x054a83
 #define OHCIEmulator_WriteWord          0x054a84
-#define OREAD(ADDRESS,VALUE) \
-_swix (OHCIEmulator_ReadWord, _IN(0) | _OUT(1), ADDRESS, VALUE)
+
+int OREAD(int ADDRESS)
+{
+    int VALUE;
+    _swix (OHCIEmulator_ReadWord, _IN(0) | _OUT(1), ADDRESS, &VALUE)
+    return VALUE;
+}
 
 #define OWRITE(ADDRESS,VALUE) \
 _swix (OHCIEmulator_WriteWord, _INR(0,1), ADDRESS, VALUE)
@@ -54,8 +59,8 @@ static volatile int* const ohci_base = (volatile int*) 0xf9020000;
 static volatile int* const ohci_base = (volatile int*) 0xf99f6000;
 #endif
 
-#define OREAD(ADDRESS,VALUE) (*VALUE = ohci_base[ADDRESS / 4])
-#define OWRITE(ADDRESS,VALUE) (ohci_base[ADDRESS / 4] = (int) VALUE)
+#define OREAD(ADDRESS) (ohci_base[(ADDRESS) / 4])
+#define OWRITE(ADDRESS,VALUE) (ohci_base[(ADDRESS) / 4] = (int) VALUE)
 
 #define CLAIM(FUNCTION,WS) \
 _swix (OS_ClaimDeviceVector, _INR(0,2), DevNo_USB, FUNCTION, WS); \
@@ -112,14 +117,14 @@ static char* completion_codes[16] =
     "Not Accessed (15)"
 };
 
-static void* vtophys (void* v)
+static void* vtophys (volatile void* v)
 {
     struct {
         uint32_t    page;
         void*       logical;
         void*       physical;
     } block;
-    block.logical = v;
+    block.logical = (void *) v;
 
     _swix (OS_Memory,
 
@@ -234,7 +239,7 @@ static uint32_t status[8];
 
 /* host controller communications area must be 256 byte aligned */
 static OHCI_Hcca hcca[2];
-static OHCI_Hcca* hccap;
+static volatile OHCI_Hcca* hccap;
 
 /* we'll need 4 endpoints and transfer descriptors */
 static OHCI_ED ed[5];
@@ -283,20 +288,12 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 
     callx_init (pw);
 
-    /* Reset the controller, and turn on global power */
-    OWRITE(OHCI_COMMAND_STATUS, OHCI_HCR);
-    OWRITE(OHCI_RH_STATUS, OHCI_LPSC);
-
-    /* disable all list processing */
-    OREAD(OHCI_CONTROL, &w);
-    OWRITE(OHCI_CONTROL, w & ~(OHCI_PLE | OHCI_CLE | OHCI_BLE));
-
     /* HCCA must be 256 byte aligned */
     hccap = (OHCI_Hcca*) (((uintptr_t) &hcca[1]) & ~0xff);
     edp = (OHCI_ED*) (((uintptr_t) &ed[1]) & ~0xf);
     tdp = (OHCI_TD*) (((uintptr_t) &td[1]) & ~0xf);
 
-    memset (hccap, 0, sizeof *hccap);
+    memset ((void *) hccap, 0, sizeof *hccap);
     memset (&ed[0], 0, sizeof ed);
     memset (&td[0], 0, sizeof td);
 
@@ -305,8 +302,6 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 
     for (w = 4; w < OHCI_NUM_INTERRUPTS; w += 8)
         hccap->interruptTable[w] = vtophys(&edp[3]);
-
-    OWRITE(OHCI_HCCA, vtophys (hccap));
 
     /* endpoint[0] is for the keyboard data */
     edp[0].functionAddress = 1;
@@ -392,9 +387,6 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
     tdp[5].currentBuffer = vtophys (&mouse_data);
     tdp[5].bufferEnd = (char*) tdp[5].currentBuffer + sizeof mouse_data - 1;
 
-
-    OWRITE(OHCI_CONTROL_HEAD_ED, vtophys (&edp[1]));
-
     memset (&status[0], 0, sizeof status);
 
     buttons = 0;
@@ -403,18 +395,22 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 
     if (!e) e = _swix (OS_Claim, _INR(0,2), KeyV, keyv_entry, pw);
 
-#ifndef ALBA2
     if (!e) e = _swix (OS_Claim, _INR(0,2), PointerV, pointerv_entry, pw);
-#endif
 
     if (!e) e = _swix (OS_Pointer, _IN(0) | _OUT(0), 0, &prev_pointer);
 
-    /* put the controller into operational mode */
-    OWRITE(OHCI_CONTROL, OHCI_HCFS_OPERATIONAL);
+    /* To ensure <1ms start-up */
+    _kernel_irqs_off();
 
-    /* enable periodic list processing */
-    OREAD(OHCI_CONTROL, &w);
-    OWRITE(OHCI_CONTROL, w | OHCI_PLE | OHCI_CLE);
+    /* Reset the controller, and turn on global power */
+    OWRITE(OHCI_COMMAND_STATUS, OHCI_HCR);
+    do {
+        w = OREAD(OHCI_COMMAND_STATUS);
+    } while (w & OHCI_HCR);
+    /* Now in SUSPEND state */
+    OWRITE(OHCI_HCCA, vtophys (hccap));
+
+    OWRITE(OHCI_CONTROL_HEAD_ED, vtophys (&edp[1]));
 
     /* enable hc interrupts */
     OWRITE(OHCI_INTERRUPT_DISABLE, OHCI_ALL_INTRS);
@@ -424,8 +420,19 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
     OWRITE(OHCI_INTERRUPT_ENABLE, OHCI_MIE |  OHCI_WDH | OHCI_RHSC | OHCI_SF);
 #endif
 
+    /* put the controller into operational mode */
+    OWRITE(OHCI_CONTROL, OHCI_HCFS_OPERATIONAL | OHCI_PLE | OHCI_CLE);
+
+    _kernel_irqs_on();
+
+    OWRITE(OHCI_RH_STATUS, OHCI_LPSC);
+
     /* force a port reset so that we latch on (after a delay) */
-    callx_add_callafter (USB_DELAY_RESET, reset_cb, 0);
+   /* w = OREAD(OHCI_RH_PORT_STATUS(1));
+    if (w & UPS_CURRENT_CONNECT_STATUS) {
+        port_state = port_powered;
+        callx_add_callafter (USB_DELAY_RESET, reset_cb, 0);
+    }*/
 
     return e;
 }
@@ -437,24 +444,30 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
     NOTUSED(fatal);
     NOTUSED(podule);
 
-    OREAD(OHCI_CONTROL, &w);
+    w = OREAD(OHCI_CONTROL);
     OWRITE(OHCI_CONTROL, w & ~(OHCI_PLE | OHCI_CLE | OHCI_BLE));
 
 
     _swix (OS_Release, _INR(0,2), KeyV, keyv_entry, pw);
-#ifndef ALBA2
     _swix (OS_Release, _INR(0,2), PointerV, pointerv_entry, pw);
-#endif
 
     callx_remove_all_callbacks ();
 
+    OWRITE(OHCI_INTERRUPT_ENABLE, OHCI_SF);
     /* wait until the next frame, and time out after a centisecond */
     w = sofs;
     while (sofs == w && clock () - t < 1);
+    OWRITE(OHCI_INTERRUPT_DISABLE, OHCI_MIE);
     RELEASE(usb_irq_entry, pw);
 
     /* turn off the controller when we exit */
+    _kernel_irqs_off();
+    OWRITE(OHCI_COMMAND_STATUS, OHCI_HCR);
+    do {
+        w = OREAD(OHCI_COMMAND_STATUS);
+    } while (w & OHCI_HCR);
     OWRITE(OHCI_CONTROL, OHCI_HCFS_RESET);
+    _kernel_irqs_on();
 
     /* turn off any keys that are pressed */
     memset (&data, 0, sizeof data);
@@ -508,7 +521,7 @@ int keyv (_kernel_swi_regs* r, void* pw)
         tdp[3].dataToggle = 3; /* force DATA1 */
         tdp[3].conditionCode = OHCI_CC_NOT_ACCESSED;
         tdp[3].errorCount = 0;
-        OREAD(OHCI_COMMAND_STATUS, &w);
+        w = OREAD(OHCI_COMMAND_STATUS);
         OWRITE(OHCI_COMMAND_STATUS, w | OHCI_CLF);
 
         break;
@@ -601,14 +614,12 @@ _kernel_oserror *module_commands(const char *arg_string, int argc, int cmd_no, v
         _swix (OS_CallAVector, _INR(0, 1) | _IN(9),
             KeyV_KeyboardPresent, KeyboardID_PC, KEYV);
 
-#ifndef ALBA2
         _swix (OS_Claim, _INR(0,2), PointerV, pointerv_entry, pw);
-#endif
 
         _swix (OS_Pointer, _IN(0) | _OUT(0), 0, &prev_pointer);
 
         /* enable periodic list processing */
-        OREAD(OHCI_CONTROL, &argc);
+        argc = OREAD(OHCI_CONTROL);
         OWRITE(OHCI_CONTROL,argc | OHCI_PLE | OHCI_CLE);
         break;
     }
@@ -624,11 +635,7 @@ _kernel_oserror* pointer_cb (_kernel_swi_regs* r, void* pw, void* cur_pointer)
     _swix (OS_CallAVector, _INR(0, 1) | _IN(9),
         KeyV_KeyboardPresent, KeyboardID_PC, KEYV);
 
-#ifdef ALBA2
-    return NULL;
-#else
     return _swix (OS_Pointer, _INR(0,1), 1, cur_pointer);
-#endif
 }
 
 _kernel_oserror* reset_cb (_kernel_swi_regs* r, void* pw, void* data)
@@ -664,7 +671,7 @@ _kernel_oserror* set_config_cb (_kernel_swi_regs* r, void* pw, void* data)
     tdp[3].conditionCode = OHCI_CC_NOT_ACCESSED;
     tdp[3].errorCount = 0;
 
-    OREAD(OHCI_COMMAND_STATUS, &w);
+    w = OREAD(OHCI_COMMAND_STATUS);
     OWRITE(OHCI_COMMAND_STATUS, w | OHCI_CLF);
 
     return 0;
@@ -693,7 +700,7 @@ _kernel_oserror* set_address_cb (_kernel_swi_regs* r, void* pw, void* data)
     tdp[3].conditionCode = OHCI_CC_NOT_ACCESSED;
     tdp[3].errorCount = 0;
 
-    OREAD(OHCI_COMMAND_STATUS, &w);
+    w = OREAD(OHCI_COMMAND_STATUS);
     OWRITE(OHCI_COMMAND_STATUS, w | OHCI_CLF);
     return 0;
 }
@@ -818,18 +825,29 @@ static void read_mouse_data (void)
 _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
 {
     int w;
+    OHCI_TD *dh;
+
+
     NOTUSED(pw);
     NOTUSED(r);
-    OREAD(OHCI_INTERRUPT_STATUS, &w);
+
+    dh = hccap->donehead.pointer;
+    if (dh) {
+        w = (unsigned int) dh & 1;
+        dh = (OHCI_TD*) ((unsigned int) dh & ~1);
+        if (w) {
+            w = OREAD(OHCI_INTERRUPT_STATUS);
+        }
+        else
+            w = OHCI_WDH;
+    }
+    else {
+        w = OREAD(OHCI_INTERRUPT_STATUS);
+    }
 
     if (w & OHCI_WDH) {
-        OHCI_TD* dh = hccap->donehead.pointer;
-
-        /* we have to clear the bottom bit of the RDH because it signifies
-        that there are other interrupts */
-        dh = (OHCI_TD*) ((int) dh & ~1);
-
         wdh++;
+        hccap->donehead.pointer = 0;
         OWRITE(OHCI_INTERRUPT_STATUS, OHCI_WDH);
         dprintf(("", "writeback done, condition = %d\n",
             tdp[0].conditionCode));
@@ -889,7 +907,7 @@ _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
         int w;
 
         /* find out what's happened */
-        OREAD(OHCI_RH_PORT_STATUS(1), &w);
+        w = OREAD(OHCI_RH_PORT_STATUS(1));
 
         /* turn off the interrupt in case we cause any more */
         OWRITE(OHCI_INTERRUPT_STATUS, OHCI_RHSC);
@@ -909,6 +927,7 @@ _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
                 port_state = port_detached;
                 edp[0].skip = 1;
             }
+
 
             OWRITE(OHCI_RH_PORT_STATUS(1), w & UPS_C_CONNECT_STATUS);
         }
