@@ -113,6 +113,11 @@ install_rom: ${TARGET} dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
+resources:
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
+
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
