@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.06 for RISC OS
+#	VERSION:	0.07 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -19,6 +19,8 @@
 #					Changes from BAL.
 #	27/01/98	0.05	RDW	Support added to output preprocessed source for McCabe tool
 #	17/03/98	0.06	RDW	Now creates and deletes dirs. aof, o and rm
+#	18/03/98	0.07	RDW	Forgot to add local_dir dependancy to export rules.
+#					-ffah added back to CFLAGS.  Got lost at some point in the past
 
 #
 # Paths
@@ -81,7 +83,7 @@ DEBUG=		#-DMEMCHECK #-DDEBUG -DTRACE
 COMPAT=		-DCOMPAT_INET4
 
 # CFLAGS=		-fnah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}
-CFLAGS=		-zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
+CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -Wp -depend !Depend -Fn -c -throwback ${TINYSTUBS}\
 		${OTHERDEFS}
 
@@ -119,16 +121,16 @@ all: ${TARGET}
 rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom module built
 
-analyse: ${OBJSCP}
+analyse: ${OBJSCP} local_dirs
 	@echo ${COMPONENT}: analysis build complete
 
 export:	export_${PHASE}
 
-export_hdrs: h.AcornSMTP
+export_hdrs: h.AcornSMTP local_dirs
 	${CP}	h.AcornSMTP	${EXP_C_H}.AcornSMTP	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: o.AcornSMTP
+export_libs: o.AcornSMTP local_dirs
 	${CP}	o.AcornSMTP	${EXP_C_O}.AcornSMTP	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (libs)
 
