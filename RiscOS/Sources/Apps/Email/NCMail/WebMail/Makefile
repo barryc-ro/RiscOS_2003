@@ -1,5 +1,5 @@
-# Makefile for NCMail Engine
-# =========================================
+# Makefile for NCMail WebMail
+# ===========================
 #
 
 # -----------------------------------------------------------------------------
@@ -12,7 +12,7 @@
 # 1998-09-22	RDW	Modified to fit into build structure
 # 1998-10-20	RDW	RAM module target added
 # 1998-10-20	RDW	resources now exports the HTML templates
-
+# 1998-11-02	RDW	Change over to Ben's cunning 2 level makefile
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -29,11 +29,12 @@ LIBDIR	= <Lib$Dir>
 
 COMPONENT       = NCMailUI
 RES_COMPONENT   = NCMail
-APP             = !NCMail
-LPATH            = LocalUserIFRes:
-MODULE		= rm.!NCMail
-ROM_MODULE	= aof.NCMail
-LPATH            = LocalUserIFRes:
+NORMAL_TARGET	= $(COMPONENT)
+MEMCHECK_TARGET	= $(COMPONENT)MC
+HIERPROF_TARGET	= $(COMPONENT)HP
+MODULE_TARGET	= $(COMPONENT)zm
+DEBUG_TARGET	= $(COMPONENT)d
+
 
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
@@ -59,15 +60,6 @@ RM              = remove
 SQUEEZE         = squeeze
 WIPE            = -wipe
 
-AFLAGS          = $(THROWBACK) -depend !Depend -nocache -stamp -quit
-CFLAGS          = $(THROWBACK) -depend !Depend -ffah $(INCLUDES) -wp
-C++FLAGS        = $(THROWBACK) -depend !Depend -ffa $(INCLUDES) -wp
-LDFLAGS		= -c++ -aof
-CPFLAGS         = ~cfr~v~n
-SQFLAGS         = -f
-WFLAGS          = ~cf~vr
-LBFLAGS		= -c -o
-
 
 # -----------------------------------------------------------------------------
 # Flags
@@ -80,317 +72,99 @@ DDZFLAGS        = $(DZFLAGS) -fn
 
 
 # -----------------------------------------------------------------------------
-# Libraries
+# Build rules
 #
 
+all: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@echo $(COMPONENT): build complete
 
+debug: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXT=od
+	@echo $(COMPONENT): debug build complete
 
-LIBS = 
-
-
-#these are not complete
-LIBSM = 
-
-
-
-LIBSD = 
-
-
-
-# -----------------------------------------------------------------------------
-# Include files (libraries and resources)
-#
-
-INCLUDES        = -Itbox:,C:,<Lib$Dir>,<Lib$Dir>.Email.Mailbox
-
-FILES = \
- $(LPATH)Messages \
- $(TARGET)
-
-
-# -----------------------------------------------------------------------------
-# Include files (objects)
-#
-
-OBJS = 	o.EscapeHTML 	\
-        o.InBox 	\
-        o.Parser 	\
-        o.WebMail	\
-	o.BrowserIF	\
-	o.Entry		\
-	o.ReadMsg	\
-	o.PopUp		\
-	o.Feedback	\
- 	o.Compose	\
-	o.SendMsg	\
-	o.MailTo 	\
-	o.Reply		\
-	o.UserSel	\
-	o.Errors
-
-OBJSD = od.EscapeHTML 	\
-        od.InBox 	\
-        od.Parser 	\
-        od.WebMail	\
-	od.BrowserIF	\
-	od.Entry	\
-	od.ReadMsg	\
-	od.Feedback	\
-	od.PopUp	\
-	od.SendMsg	\
-	od.Compose	\
-	od.MailTo 	\
-	od.Reply	\
-	od.UserSel	\
-	od.Errors
-
-OBJSZ = oz.EscapeHTML 	\
-        oz.InBox 	\
-        oz.Parser 	\
-        oz.WebMail	\
-	oz.BrowserIF	\
-	oz.Entry	\
-	oz.ReadMsg	\
-	oz.Feedback	\
-	oz.Compose	\
-	oz.PopUp	\
-	oz.SendMsg	\
-	oz.MailTo 	\
-	oz.Reply	\
-	oz.UserSel	\
-	oz.Errors
-
-OBJSZSL=ozsl.EscapeHTML \
-        ozsl.InBox 	\
-        ozsl.Parser 	\
-        ozsl.WebMail	\
-	ozsl.BrowserIF	\
-	ozsl.Entry	\
-	ozsl.ReadMsg	\
-	ozsl.Feedback	\
-	ozsl.Compose	\
-	ozsl.PopUp	\
-	ozsl.SendMsg	\
-	ozsl.MailTo 	\
-	ozsl.Reply	\
-	ozsl.UserSel	\
-	ozsl.Errors
-
-
-# -----------------------------------------------------------------------------
-# Rule patterns
-#
-
-.SUFFIXES: .o .oz .ozsl .od .odz .s .c .c++
-
-.c.o:;          @echo
-                @echo Compiling $<
-                @echo $(DFLAGS)
-                @$(CC) $(CFLAGS) $(DFLAGS)        -c -o $@ $<
-
-.c.oz:;         @echo
-                @echo Compiling $<
-                @echo $(DZFLAGS)
-                @$(CC) $(CFLAGS) $(DZFLAGS)       -c -zM -DROM -o $@ $<
-
-.c.ozsl:;	@echo
-		@echo Compiling $<
-		@echo $(DZFLAGS)
-		@${CC} ${CFLAGS} ${DZFLAGS} -c -zM -o $@ $<
-
-.c.od:;         @echo
-                @echo Compiling $<
-                @echo $(DDFLAGS)
-                @$(CC) $(CFLAGS) $(DDFLAGS)       -c -g -o $@ $<
-
-.c.odz:;        @echo
-                @echo Compiling $<
-                @echo $(DDZFLAGS)
-                @$(CC) $(CFLAGS) $(DDZFLAGS)      -c -zM -DROM -o $@ $<
-
-.c++.o:;        @echo
-                @echo Compiling $<
-                @echo $(DFLAGS)
-                @$(C++) $(C++FLAGS) $(DFLAGS)     -c -o $@ $<
-
-.c++.oz:;       @echo
-                @echo Compiling $<
-                @echo $(DZFLAGS)
-                @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -DROM -o $@ $<
-
-.c++.od:;       @echo
-                @echo Compiling $<
-                @echo $(DDFLAGS)
-                @$(C++) $(C++FLAGS) $(DDFLAGS)    -c +g -o $@ $<
-
-.c++.ozsl:;     @echo
-                @echo Compiling $<
-                @echo $(DZFLAGS)
-                @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -o $@ $<
-
-.c++.odz:;      @echo
-                @echo Compiling $<
-                @echo $(DDZFLAGS)
-                @$(C++) $(C++FLAGS) $(DDZFLAGS)   -c -zM -DROM -o $@ $<
-
-.s.o:;          @echo
-                @echo Assembling $<
-                @echo $(AFLAGS)
-                @$(AS) $(AFLAGS) $< $@
-
-.s.oz:;         @echo
-                @echo Assembling $<
-                @echo $(AFLAGS)
-                @$(AS) $(AFLAGS) $< $@
-
-.s.od:;         @echo
-                @echo Assembling $<
-                @echo $(AFLAGS)
-                @$(AS) $(AFLAGS) -g $< $@
-
-.s.odz:;        @echo
-                @echo Assembling $<
-                @echo $(AFLAGS)
-                @$(AS) $(AFLAGS) -g $< $@
-
-
-# -----------------------------------------------------------------------------
-# Main rules
-#
+preprocess:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@echo $(COMPONENT): preprocessing complete
 
 export: export_$(PHASE)
 
-export_hdrs: 
-	@$(CP)	h.NCMailUI	^.Build.h.NCMailUI			$(CPFLAGS)
-	@echo $(COMPONENT): export complete (hdrs)		$(CPFLAGS)
+export_hdrs:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
+	@echo $(COMPONENT): export complete (hdrs)
 
-export_libs: 
+export_libs:
 	@echo $(COMPONENT): export complete (libs)
+	
+export_libsMC:
+	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
+	@echo $(COMPONENT): export complete (MemCheck libs)
+	
+export_libsHP:
+	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
+	@echo $(COMPONENT): export complete (HierProf libs)
 
-ram: $(MODULE)
-	@echo $(COMPONENT): Module built (RAM)
-
-rom: $(ROM_MODULE)
+rom: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=oz
         @echo $(COMPONENT): Module built (ROM)
 
-all: library
-        @echo $(COMPONENT): all built (Disc)
+ram: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=ozsl
+	@echo $(COMPONENT): Module built (RAM)
 
-library: $(TARGET) $(TARGETZ) o.dirs
-		@echo ${COMPONENT}: complete
+install_rom: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=oz
 
-debug: $(TARGETD)
-		@echo ${COMPONENT}: debug complete
-
-install_rom: $(ROM_MODULE)
-	$(CP) $(ROM_MODULE) ^.Build.oz.NCMailUI	$(CPFLAGS)
-
-install_common: $(FILES)
+install: 
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
         @echo
-	$(MKDIR)^.Build.$(INSTDIR).NCMail
-        $(CP) $(LPATH)*                  ^.Build.$(INSTDIR).NCMail.* $(CPFLAGS)
-	$(RM) ^.Build.$(INSTDIR).NCMail.!BootDUI
-	$(RM) ^.Build.$(INSTDIR).NCMail.!BootROMUI
-	$(RM) ^.Build.$(INSTDIR).NCMail.!BootUI
-	$(RM) ^.Build.$(INSTDIR).NCMail.!RunDUI
-	$(RM) ^.Build.$(INSTDIR).NCMail.!RunROMUI
-	$(RM) ^.Build.$(INSTDIR).NCMail.!RunUI
+        @echo $(COMPONENT): $(TARGET) installed
 
-install: install_common
+installd:
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXT=od
         @echo
-        $(CP) $(LPATH)!BootUI           ^.Build.$(INSTDIR).!BootUI      $(CPFLAGS)
-        $(CP) $(LPATH)!RunUI            ^.Build.$(INSTDIR).!RunUI       $(CPFLAGS)
-        @echo $(COMPONENT): Application installed to ^.Build.$(INSTDIR)
+        @echo $(COMPONENT): $(TARGET) (Debug) installed
 
-
-installd: install_common
+installMC:
+	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
         @echo
-        $(CP) $(LPATH)!BootDUI          ^.Build.$(INSTDIR).!BootUI      $(CPFLAGS)
-        $(CP) $(LPATH)!RunDUI           ^.Build.$(INSTDIR).!RunUI       $(CPFLAGS)
-        @echo $(COMPONENT): Debug application installed ^.Build.$(INSTDIR)
+        @echo $(COMPONENT): $(TARGET) (MemCheck) installed
+
+installHP:
+	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
+        @echo
+        @echo $(COMPONENT): $(TARGET) (HierProf) installed
 
 resources:
-	@echo    $(RESDIR)
-        $(MKDIR) $(RESDIR)
-        $(MKDIR) $(RESAPP)
-        $(CP) $(LPATH)!BootROMUI  $(RESAPP).!BootUI       $(CPFLAGS)
-        $(CP) $(LPATH)!RunROMUI   $(RESAPP).!RunUI        $(CPFLAGS)
-        $(CP) $(LPATH)Compose     $(RESDIR).Compose       $(CPFLAGS)
-        $(CP) $(LPATH)ERROR       $(RESDIR).ERROR         $(CPFLAGS)
-        $(CP) $(LPATH)Inbox       $(RESDIR).Inbox         $(CPFLAGS)
-        $(CP) $(LPATH)Inbox_Hc    $(RESDIR).Inbox_Hc      $(CPFLAGS)
-        $(CP) $(LPATH)Inbox_Hd    $(RESDIR).Inbox_Hd      $(CPFLAGS)
-        $(CP) $(LPATH)Inbox_L     $(RESDIR).Inbox_L       $(CPFLAGS)
-        $(CP) $(LPATH)Messages    $(RESDIR).Messages      $(CPFLAGS)
-        $(CP) $(LPATH)PopUp       $(RESDIR).PopUp         $(CPFLAGS)
-        $(CP) $(LPATH)PopUp_1     $(RESDIR).PopUp_1       $(CPFLAGS)
-        $(CP) $(LPATH)PopUp_2     $(RESDIR).PopUp_2       $(CPFLAGS)
-        $(CP) $(LPATH)Read        $(RESDIR).Read          $(CPFLAGS)
-        $(CP) $(LPATH)Read_B      $(RESDIR).Read_B        $(CPFLAGS)
-        $(CP) $(LPATH)Read_H      $(RESDIR).Read_H        $(CPFLAGS)
-        $(CP) $(LPATH)UserSel     $(RESDIR).UserSel       $(CPFLAGS)
-        $(MKDIR) $(RESDIR).pics
-        $(CP) $(LPATH)pics.*     $(RESDIR).pics.*        $(CPFLAGS)
-        @echo
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
         @echo $(COMPONENT): Resource files copied to Messages module
 
-clean:
-        @echo starting
-        $(WIPE) o               $(WFLAGS)
-        $(WIPE) od              $(WFLAGS)
-        $(WIPE) oz              $(WFLAGS)
-        $(WIPE) ozsl            $(WFLAGS)
-        $(WIPE) odz             $(WFLAGS)
-        $(RM)   o.dirs
-	$(RM) ^.Build.h.NCMailUI
-        @echo
-        @echo $(COMPONENT): Cleaned
+clean: clean_common
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oHP
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=od
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oz
+	@echo $(COMPONENT): cleaned
 
-o.dirs:
-        @$(MKDIR) ^.Build.h
-        @$(MKDIR) ^.Build.o
-        @$(MKDIR) ^.Build.od
-        @$(MKDIR) ^.Build.oz
-        @$(MKDIR) ^.Build.ozsl
-        @$(MKDIR) o
-        @$(MKDIR) od
-        @$(MKDIR) oz
-        @$(MKDIR) ozsl
-        @$(MKDIR) odz
-        create o.dirs
-        stamp  o.dirs
+clean_common:
+	@$(RM) $(NORMAL_TARGET)
+	@$(RM) $(MEMCHECK_TARGET)
+	@$(RM) $(HIERPROF_TARGET)
+	@$(RM) $(MODULE_TARGET)
+	@$(RM) $(DEBUG_TARGET)
 
 
 # -----------------------------------------------------------------------------
 # Development rules
 #
 
-clean_all: clean
+clean_all: clean_common
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=oHP
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=od
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=oz
         @echo $(COMPONENT): Cleaned all
-
-
-# -----------------------------------------------------------------------------
-# Final linkfor ROM Image (using given base address)
-#
-
-
-# -----------------------------------------------------------------------------
-# Static dependencies
-#
-
-
-abs.!RI: $(OBJS) o.dirs
-	$(LB) $(LBFLAGS) ^.Build.o.NCMailUI $(OBJS)
-
-$(ROM_MODULE): $(OBJSZ) o.dirs
-	$(LB) $(LBFLAGS) ^.Build.oz.NCMailUI $(OBJSZ)
-
-$(MODULE): $(OBJSZSL) o.dirs
-	$(LB) $(LBFLAGS) ^.Build.ozsl.NCMailUI $(OBJSZSL)
-
-abs.!RI_D: $(OBJSD) o.dirs
-	$(LB) $(LBFLAGS) ^.Build.od.NCMailUI $(OBJSD)
-
-
-# -----------------------------------------------------------------------------
-# Dynamic dependencies:
