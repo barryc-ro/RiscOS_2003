@@ -71,9 +71,9 @@ OBJS		= o.debug o.inits o.quits o.output
 
 OBJSZ		= z.debug z.inits z.quits z.output
 
-LIBS		= libs.pd_pl libs.svcprint libs.t_m_pl libs.t_pl libs.remote
+LIBS		= libs.pd_pl libs.svcprint libs.t_pl libs.lremote
 
-LIBSZ		= ${LIBS}
+LIBSZ		= libs.pd_m_pl libs.svcprint libs.t_m_pl libs.lremotezm
 
 # ------------------------------------------------------------------------------
 # Rule patterns
@@ -89,7 +89,7 @@ LIBSZ		= ${LIBS}
 # Build all the library
 #
 
-all:	${TARGET} ${TARGETZ}
+all:	${TARGET}
 
 
 # ------------------------------------------------------------------------------
@@ -135,10 +135,16 @@ dirs:
 #
 
 ${TARGET}: ${OBJS} local_dirs
-	${LB} ${LBFLAGS} -o ${TARGET} ${OBJS} ${LIBS}
-        
+	${LD} ${LNFLAGS} -o ${TARGET} -aof ${OBJS} ${LIBS}
+
 ${TARGETZ}: ${OBJSZ} local_dirs
-	${LB} ${LBFLAGS} -o ${TARGETZ} ${OBJSZ} ${LIBSZ}
+	${LD} ${LNFLAGS} -o ${TARGETZ} -aof ${OBJSZ} ${LIBSZ}
+
+#${TARGET}: ${OBJS} local_dirs
+#	${LB} ${LBFLAGS} -l -o ${TARGET} ${OBJS} ${LIBS}
+        
+#${TARGETZ}: ${OBJSZ} local_dirs
+#	${LB} ${LBFLAGS} -l -o ${TARGETZ} ${OBJSZ} ${LIBSZ}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
