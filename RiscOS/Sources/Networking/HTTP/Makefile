@@ -39,14 +39,16 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-INETLIB=InetInc:^.^.libs.inetlib.inetlibzm
-SOCKLIB=InetInc:^.^.libs.socklib.socklibzm
+INETLIB   = InetInc:^.^.libs.inetlib.inetlibzm
+SOCKLIB   = InetInc:^.^.libs.socklib.socklibzm
+UNIXLIB   = InetInc:^.^.libs.unixlib.unixlibzm
+
+INSECURELIBS= ${INETLIB} ${SOCKLIB} 
+SECURELIBS= ssleay.o.sslzm ssleay.o.cryptozm ${UNIXLIB} ${INSECURELIBS}
 #
 # Include files
 #
-INCLUDES = -IC:,InetInc:,InetInc:^.^.libs.socklib
-
-DFLAGS   = -DNO_SECURE
+INCLUDES  = -IC:,InetInc:,InetInc:^.^.libs.socklib,ssleay
 
 #
 # Program specific options:
@@ -54,19 +56,23 @@ DFLAGS   = -DNO_SECURE
 COMPONENT = http
 TARGET    = aof.${COMPONENT}
 OBJS      = mimemap.o files.o http.o modhead.o
+SECUREOBJS= os.mimemap os.files os.http modheadS.o
 EXPORTS   = h.httppub
+
+.SUFFIXES:   .os
 
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.c.o:;      ${CC} ${CFLAGS} -o $@ $< -DNO_SECURE
+.c.os:;     ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
-all: rm.${COMPONENT}mod
+all: rm.${COMPONENT}mod rm.${COMPONENT}smod 
 
 #
 # RISC OS ROM build rules:
@@ -82,8 +88,9 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-install: rm.${COMPONENT} 
-	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT}mod ${CPFLAGS}
+install: rm.${COMPONENT}mod rm.${COMPONENT}smod 
+	${CP} rm.${COMPONENT}mod ${INSTDIR}.${COMPONENT}mod ${CPFLAGS}
+	${CP} rm.${COMPONENT}smod ${INSTDIR}.${COMPONENT}smod ${CPFLAGS}
         @echo ${COMPONENT}: installed
 
 clean:
@@ -102,8 +109,8 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -114,8 +121,11 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}mod: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB}
+rm.${COMPONENT}mod: ${OBJS} ${CLIB} ${INSECURELIBS}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${INSECURELIBS}
+
+rm.${COMPONENT}smod: ${SECUREOBJS} ${CLIB} ${SECURELIBS}
+        ${LD} -o $@ -module ${SECUREOBJS} ${CLIB} ${SECURELIBS}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
