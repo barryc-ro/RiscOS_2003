@@ -89,6 +89,8 @@ translate: dirs
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC2 -o $(RESAPP).HTML.ISPCapture.ISPC2
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC3 -o $(RESAPP).HTML.ISPCapture.ISPC3
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC4 -o $(RESAPP).HTML.ISPCapture.ISPC4
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC5 -o $(RESAPP).HTML.ISPCapture.ISPC5
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC6 -o $(RESAPP).HTML.ISPCapture.ISPC6
         @echo ** Translating NCMALite...
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badurldbox -o $(RESAPP).HTML.MA.badurldbox
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.connect -o $(RESAPP).HTML.MA.connect
@@ -136,6 +138,7 @@ resources: translate
         $(CP) LazUILocalRes:$(APP).Palette $(RESAPP).Palette $(CPFLAGS)
         $(CP) LazUILocalRes:NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) LazUILocalRes:STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
+        $(CP) LazUILocalRes:$(APP).bin.command $(RESAPP).bin.command $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
         UnSet LazUILocalRes$path
         
