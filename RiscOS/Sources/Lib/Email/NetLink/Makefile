@@ -6,7 +6,8 @@
 #
 # 1998-10-06: BAL
 # Created, based on Mailbox makefile.
-
+# 1998-11-03: RDW
+# separate MemCheck and HierProf targets added
 
 
 
@@ -24,9 +25,11 @@ RM		= remove
 #
 
 COMPONENT	= NetLink
-NORMAL_TARGET	= NetLink
-DEBUG_TARGET	= NetLinkd
-MODULE_TARGET	= NetLinkzm
+NORMAL_TARGET	= $(COMPONENT)
+MEMCHECK_TARGET	= $(COMPONENT)MC
+HIERPROF_TARGET	= $(COMPONENT)HP
+DEBUG_TARGET	= $(COMPONENT)d
+MODULE_TARGET	= $(COMPONENT)zm
 
 
 
@@ -60,15 +63,27 @@ export_libs:
 	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=z
 	@echo $(COMPONENT): export complete (libs)
 
+export_libsMC:
+	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
+	@echo $(COMPONENT): export complete (MemCheck libs)
+	
+export_libsHP:
+	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
+	@echo $(COMPONENT): export complete (HierProf libs)
+	
 install_rom:
 	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET)
 	@echo $(COMPONENT): rom module installed
 
 clean:
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oHP
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=od
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=z
+	@$(RM) $(MEMCHECK_TARGET)
+	@$(RM) $(HIERPROF_TARGET)
 	@$(RM) $(NORMAL_TARGET)
 	@$(RM) $(DEBUG_TARGET)
 	@$(RM) $(MODULE_TARGET)
