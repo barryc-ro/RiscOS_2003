@@ -13,8 +13,6 @@
 #include "kernel.h"
 
 #include "os.h"
-#include "wimp.h"
-#include "werr.h"
 
 #include "memflex.h"
 #include "subflex.h"

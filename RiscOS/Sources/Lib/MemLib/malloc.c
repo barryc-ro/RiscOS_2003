@@ -15,7 +15,6 @@
 #include <stdlib.h>
 
 #include "os.h"
-#include "werr.h"
 
 #include "memflex.h"
 #include "dynamic.h"

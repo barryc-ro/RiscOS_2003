@@ -13,9 +13,8 @@
 #include <string.h>
 #include "kernel.h"
 
-#include "os.h"
-#include "wimp.h"
-#include "werr.h"
+#include "swis.h"
+#include "os.h"			/* for os_error */
 
 #include "memflex.h"
 #include "memheap.h"
@@ -35,7 +34,7 @@ extern char *caller(int);
 
 static os_error *MemFlex__Insert( char *at, int by, int *relocatesize );
 
-#define xos_swi(__x,__r) os_swix ( XOS_Bit | (__x), __r )
+/* #define xos_swi(__x,__r) os_swix ( XOS_Bit | (__x), __r ) */
 
 #ifdef MEM_DEBUG
 typedef struct { char ** anchor; int size; char *caller1; char *caller2; } flex__str;
@@ -59,6 +58,14 @@ BOOL MemFlex_Dynamic( void )
     return flex__da != dynamicarea_NONE;
 }
 
+static os_error *setslot(int *current, int *free)
+{
+    return (os_error *)_swix(Wimp_SlotSize,
+			     _INR(0,1) | _OUT(0) | _OUT(2),
+			     current ? *current : -1, -1,
+			     current, free);
+}
+
 /*------------------------*
  * Initialise flex system *
  *------------------------*/
@@ -73,9 +80,9 @@ void MemFlex__atexit( void )
 
 os_error *MemFlex_Initialise2( const char *areaname )
 {
-    int currentslot = -1;
-    int nextslot = -1;
-    int freepool;
+     int currentslot = -1;
+/*   int nextslot = -1; */
+/*   int freepool; */
 
     if ( !flex__inited )
     {
@@ -90,7 +97,8 @@ os_error *MemFlex_Initialise2( const char *areaname )
         }
         else
         {
-            er( wimp_slotsize( &currentslot, &nextslot, &freepool ) );
+/*          er( wimp_slotsize( &currentslot, &nextslot, &freepool ) ); */
+	    er( setslot(&currentslot, NULL) );
             flexptr__base =
                 flexptr__slot = ApplicationBase + currentslot;
         }
@@ -124,11 +132,12 @@ BOOL MemFlex_InFlexArea( void *block )
 
 int MemFlex_TotalFree( void )
 {
-    int currentslot = -1;
-    int nextslot = -1;
+/*  int currentslot = -1; */
+/*  int nextslot = -1; */
     int freepool;
 
-    wimp_slotsize( &currentslot, &nextslot, &freepool );
+/*  wimp_slotsize( &currentslot, &nextslot, &freepool ); */
+    setslot(NULL, &freepool);
 
     return (flexptr__slot - flexptr__free) + freepool - sizeof(flex__str);
 }
@@ -142,7 +151,13 @@ int MemFlex_TotalFree( void )
 
 void MemFlex__Err( char *message )
 {
-    werr ( FALSE, "Flex error: %s", message );
+    os_error e;
+    
+    e.errnum = 0;
+    sprintf(e.errmess, "Flex error: %s (%s/%s)", message, caller(2), caller(3));
+
+    _swix(Wimp_ReportError, _INR(0,5), &e, 1 | (1<<8), "MemLib", NULL, NULL, 0);
+
     *((int *)-1) = 0;
 }
 
@@ -397,7 +412,7 @@ os_error *MemFlex_MoveAnchor( flex_ptr dst, flex_ptr src )
 
 os_error *MemFlex__SetSlot( char *newslot )
 {
-    int change, nextslot, freepool;
+    int change; /* , nextslot, freepool */
     os_error *e;
 
     if ( MemFlex_Dynamic() )
@@ -412,8 +427,9 @@ os_error *MemFlex__SetSlot( char *newslot )
     else
     {
         change = newslot - ApplicationBase;
-        nextslot = -1;
-        e = wimp_slotsize( &change, &nextslot, &freepool );
+/*      nextslot = -1; */
+/*      e = wimp_slotsize( &change, &nextslot, &freepool ); */
+	e = setslot(&change, NULL);
         if (!e)
             flexptr__slot = ApplicationBase + change;
     }
@@ -510,11 +526,14 @@ int MemFlex_budge( int n, void **a )
     if ( MemFlex_Dynamic() )
     {
 #ifdef MEM_DEBUG
+	char buf[256];
         char *c1 = caller(1),
              *c2 = c1 ? caller(2) : 0,
              *c3 = c2 ? caller(3) : 0;
-        werr( 0, "Error: MemFlex_budge called (for %d) in DA case."
+
+        sprintf(buf, "Error: MemFlex_budge called (for %d) in DA case."
                  "Callers %s,%s,%s", n, c1, c2, c3 );
+	MemFlex__Err(buf);
 #endif
         return 0;
     }
