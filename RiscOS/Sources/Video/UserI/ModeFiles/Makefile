@@ -80,7 +80,7 @@ BBETYPE = modefiles
 bbe-modefiles: bbe-generic-resources-get-alias
         BBE_Export_Dir Resources.${LOCALE}.${MACHINE}
 
-${TDIR}.MFPAL: ${SOURCE} s.PAL
+${TDIR}.MF ${TDIR}.MFPAL: ${SOURCE} s.PAL
         ${MKDIR} ${ODIR}
         ${MKDIR} ${TDIR}
         ${AS} ${ASFLAGS} s.PAL
@@ -92,14 +92,6 @@ ${TDIR}.MFNTSC: ${SOURCE} s.NTSC
         ${MKDIR} ${ODIR}
         ${MKDIR} ${TDIR}
         ${AS} ${ASFLAGS} s.NTSC
-        ${LD} ${LDFLAGS} ${OBJECT}
-        SetType $@ Module
-        Access $@ rw/r
-
-${TDIR}.MF: ${SOURCE} s.ModeFiles
-        ${MKDIR} ${ODIR}
-        ${MKDIR} ${TDIR}
-        ${AS} ${ASFLAGS} s.ModeFiles
         ${LD} ${LDFLAGS} ${OBJECT}
         SetType $@ Module
         Access $@ rw/r
