@@ -267,12 +267,14 @@ install_rom: ${ROM_MODULE}
 	@echo
 	@echo ${COMPONENT}: Module installed (ROM)
 
+
 resources:
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESDIR}.User
 	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
-	${CP} ${LDIR}.!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
+	${CP} ${LDIR}.ROM.!Boot		${RESAPP}.!Boot		${CPFLAGS}
+	${CP} ${LDIR}.!Sprites		${RESAPP}.!Sprites	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
 	@echo
