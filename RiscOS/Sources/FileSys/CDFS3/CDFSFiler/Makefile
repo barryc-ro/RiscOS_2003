@@ -45,19 +45,14 @@ TOKENS   = Hdr:Tokens
 #
 # Libraries
 #
-CLIB      = CLIB:o.stubs
+include Makefiles:ModuleLibs
+ABSSYM    = ${C_ABSSYM}
 TGRLIB    = C:tgrlib.o.tgrlib
-TBOXLIB   = tbox:o.eventlibm tbox:o.toolboxlib tbox:o.renderlib tbox:o.wimplib
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.c_AbsSym
 
 #
 # Include files
 #
-INCLUDES = -ITbox:,C:
+INCLUDES = -IC:AsmUtils -ITbox:,C:
 
 #
 # Export Paths for Messages module
@@ -65,7 +60,6 @@ INCLUDES = -ITbox:,C:
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 
 OBJS = aux.o\
-       base.o\
        cdfiler.o\
        events.o\
        globals.o\
@@ -130,13 +124,13 @@ local_dirs:
         ${MKDIR} linked
 
 ${MODULE}: ${OBJS} ${TGRLIB} local_dirs
-        ${LD} -rmf -o $@ ${OBJS} ${TGRLIB} ${CLIB} ${TBOXLIB}
+        ${LD} -rmf -o $@ ${OBJS} ${TGRLIB} ${CLIB} ${ASMUTILS} ${TBOXLIBS}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} local_dirs
-        ${LD} -o $@ -aof ${OBJS} ${TGRLIB} ${TBOXLIB} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${TGRLIB} ${TBOXLIBS} ${ASMUTILS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
