@@ -89,6 +89,9 @@ static multicast_file *multicast_file_create(const char *filename, bmc_status *s
                                         *status = bmc_SYSCALL;
                                         return NULL;
                                 }
+				if (madvise(mf->buffer, mf->bufsize, MADV_SEQUENTIAL) != 0) {
+					platform_log(LOG_ERR, "madvise() failed (%d)\n",errno);
+				}
                                 return mf;
                         }
                         else {
