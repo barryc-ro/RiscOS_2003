@@ -31,6 +31,7 @@ WIPE    = -wipe
 CD	= dir
 CHMOD	= access
 
+#FEATURES   = -zM -zps1 -g ${DFLAGS}
 FEATURES   = -zM -zps1 -ffah ${DFLAGS}
 AFLAGS     = ${THROWBACK} -depend !Depend
 CFLAGS     = ${THROWBACK} -depend !Depend -c ${FEATURES} ${INCLUDES}
