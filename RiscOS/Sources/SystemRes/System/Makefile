@@ -14,6 +14,11 @@
 # 31-Jan-95      AMcC No longer installs !Sprites23. Modules writable by owner
 #
 # 03-Jul-96      KJB  Added 370 directory
+#
+# 24-Apr-97      KJB  Made all copies file-by-file to prevent copying CVS
+#                     directories. Removed 200 and 300 directories.
+#                     Made SysPaths set Boot$OSVersion if not already set,
+#                     and correct "3.50" to "350".
 
 VPATH = @ <Support$Dir>
 
@@ -57,20 +62,19 @@ OSLIB     = OSLib:o.OSLib
 INCLUDES  = -ISupport:,OS:
 
 MODULES = \
-      200.Modules.CLib \
-      200.Modules.Colours \
-      200.Modules.FPEmulator \
-      300.Modules.BASIC64 \
-      300.Modules.SCSIFiler \
-      300.Modules.SerialUtil \
-      310.Modules.Colours \
       310.Modules.ABCLib \
       310.Modules.ABIMod \
+      310.Modules.BASIC64 \
+      310.Modules.Colours \
       310.Modules.DDEUtils \
       310.Modules.DDT \
       310.Modules.FrontEnd \
       310.Modules.Network.URL.File \
-      310.Modules.Network.URL.URL
+      310.Modules.Network.URL.URL \
+      310.Modules.SCSIFiler \
+      310.Modules.SerialUtil \
+      370.Modules.DDEUtils \
+      370.Modules.DDT
 
 FILES =\
  ${LDIR}.!Boot\
@@ -109,25 +113,32 @@ install: ${FILES}
         ${CP} abs.SysPaths       ${INSTDIR}.SysPaths   ${CPFLAGS}
         |
         ${MKDIR} ${INSTDIR}.Modules
-        ${MKDIR} ${INSTDIR}.200
-        ${MKDIR} ${INSTDIR}.300
         ${MKDIR} ${INSTDIR}.310
+        ${MKDIR} ${INSTDIR}.310.Modules
         ${MKDIR} ${INSTDIR}.350
+        ${MKDIR} ${INSTDIR}.350.Modules
         ${MKDIR} ${INSTDIR}.360
+        ${MKDIR} ${INSTDIR}.360.Modules
         ${MKDIR} ${INSTDIR}.370
-        ${CP} 200 ${INSTDIR}.200 ${CPFLAGS}
-        ${CP} 300 ${INSTDIR}.300 ${CPFLAGS}
-        ${CP} 310 ${INSTDIR}.310 ${CPFLAGS}
-        ${CP} 350 ${INSTDIR}.350 ${CPFLAGS}
-        ${CP} 360 ${INSTDIR}.360 ${CPFLAGS}
-        ${CP} 370 ${INSTDIR}.370 ${CPFLAGS}
-        ${CP} Modules ${INSTDIR}.Modules ${CPFLAGS} #shouldn't really be anything in Modules, but SSound currently is
+        ${MKDIR} ${INSTDIR}.370.Modules
+        ${CP} 310.Modules.ABCLib           ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.ABIMod           ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.BASIC64          ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.Colours          ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.DDEUtils         ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.DDT              ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.FrontEnd         ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.SCSIFiler        ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.SerialUtil       ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.Network.URL.File ${INSTDIR}.310.Modules.Network.URL.* ${CPFLAGS}
+        ${CP} 310.Modules.Network.URL.URL  ${INSTDIR}.310.Modules.Network.URL.* ${CPFLAGS}
+        ${CP} 370.Modules.DDEUtils         ${INSTDIR}.370.Modules.* ${CPFLAGS}
+        ${CP} 370.Modules.DDT              ${INSTDIR}.370.Modules.* ${CPFLAGS}
+        ${CP} Modules.SSound               ${INSTDIR}.Modules.*     ${CPFLAGS} # shouldn't be in here
         |
         ${ATTR} -directories +wr ${INSTDIR}
         ${ATTR} -files +ol +or -ow +wr -ww ${INSTDIR}
         ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.Modules
-        ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.200
-        ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.300
         ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.310
         ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.350
         ${ATTR} -files -ol +or +ow +wr -ww ${INSTDIR}.360
@@ -180,6 +191,7 @@ o.main:	OS:h.os
 o.main:	OS:h.types
 o.main:	OS:h.osgbpb
 o.main:	OS:h.fileswitch
+o.main:	OS:h.osmodule
 o.main:	Support:h.x
 o.x:	<Support$Dir>.c.x
 o.x:	C:h.kernel
