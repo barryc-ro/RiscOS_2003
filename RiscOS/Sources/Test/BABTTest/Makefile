@@ -106,9 +106,11 @@ resources: ${APPLICATION}
 	${CP} Resources.!Boot ${APP}.* ${CPFLAGS}
 	${CP} Resources.!Help ${APP}.* ${CPFLAGS}
 	${CP} Resources.!Sprites ${APP}.* ${CPFLAGS}
-	${CP} Defaults.${LOCALE}.!Run ${APP}.!Run ${CPFLAGS}
+	SetMacro LocalDefaults$Path Defaults.${LOCALE}.,Defaults.UK.
+  	  ${CP} LocalDefaults:!Run ${APP}.!Run ${CPFLAGS}
+	UnSet LocalDefaults$Path
 	${MKDIR} ${APP}.Defaults
-	${CP} Defaults.${LOCALE}.${LOCALE} ${APP}.Defaults.${LOCALE} ${CPFLAGS}
+	IfThere Defaults.${LOCALE}.${LOCALE} Then ${CP} Defaults.${LOCALE}.${LOCALE} ${APP}.Defaults.${LOCALE} ${CPFLAGS} Else ${CP} Defaults.UK.UK ${APP}.Defaults.${LOCALE} ${CPFLAGS}
 	${MKDIR} ${RESDIR}
 	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
 	@echo ${COMPONENT}: built & installed
