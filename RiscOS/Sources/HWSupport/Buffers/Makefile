@@ -5,74 +5,14 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 07-Mar-01  SNB          Recreated
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT = BufferManager
+TARGET    = Buffers
+HEADER1   = Buffer
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
-COMPONENT = Buffers
-SOURCE    = s.Buffers
-TARGET    = rm.Buffers
-TARGETSA  = rm.BuffersSA
-EXPORTS   = ${EXP_HDR}.Buffer
-
-RESOURCES = Resources.UK.Messages
-
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        ${RM} ${TARGETSA}
-        @echo ${COMPONENT}: cleaned
-
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.Buffer: hdr.Buffer
-        ${CP} hdr.Buffer $@ ${CPFLAGS}
-
-#
-# Makes a stand-alone version with messages bound in
-#
-standalone: ${TARGETSA}
-        @echo ${COMPONENT}: standalone module built
-
-
-${TARGETSA}: s.StandAlone ${RESOURCES}
-        ${AS} ${ASFLAGS} s.StandAlone
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
