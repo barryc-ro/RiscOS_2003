@@ -244,29 +244,37 @@ static os_error *fe_print_options_write_file(FILE *f)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-#if 0
-static os_error *fe__print_frames_write_file(fe_view v, void *handle)
-{
-    int *vals = handle;
-    FILE *f = (FILE *)vals[0];
+static const char *print_size = NULL;
 
-    return NULL;
+static void fe__print_frames(FILE *f, const char *spec)
+{
+    fe_view v = fe_frame_specifier_decode(main_view, spec);
+
+    STBDBG(("fe__printframes: spec %s v%p children %p\n", spec, v, v ? v->children : NULL));
+    
+    if (!v)
+	return;
+    
+    if (v->children)
+	backend_layout_write_table(f, v->displaying, fe__print_frames, spec);
+    else
+	fprintf(f, msgs_lookup("printf1"), spec, strsafe(print_size));
 }
 
-static os_error *fe_print_frames_write_file(FILE *f, fe_view v)
+static os_error *fe_print_frames_write_file(FILE *f, fe_view v, const char *size)
 {
-    int vals[0];
+    STBDBG(("fe__print_frames_write_file: size %s v%p children %p\n", size, v, v->children));
 
     fputs(msgs_lookup("printfT"), f);
 
-    vals[0] = (int)f;
-    iterate_frames(v, fe__print_frames_write_file, NULL);
-    
+    print_size = size;
+    backend_layout_write_table(f, v->displaying, fe__print_frames, "_0");
+    print_size = NULL;
+
     fputs(msgs_lookup("printfF"), f);
 
     return NULL;
 }
-#endif
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -1017,8 +1025,13 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}
 	else if (strcasecomp(panel_name, "printframes") == 0)
 	{
-	    v = get_source_view(query, FALSE);
-/* 	    e = fe_print_frames_write_file(f, v); */
+	    char *size = extract_value(query, "size=");
+
+	    v = get_source_view(query, TRUE);
+	    
+ 	    e = fe_print_frames_write_file(f, v, size);
+
+	    mm_free(size);
 	}
 	else if (strcasecomp(panel_name, "password") == 0)
 	{
@@ -1335,15 +1348,20 @@ static int internal_action_favoritesremove(const char *query, const char *bfile,
 static int internal_action_printpage(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
     fe_view v = get_source_view(query, TRUE);
-    char *size = extract_value(query, "size=");
-    BOOL legal = size && strcasecomp(size, "legal") == 0;
+    char *size;
+    int generated = fe_internal_url_NO_ACTION;
+    BOOL legal;
 
-    if (v)
-	frontend_complain(fe_print(v, legal ? fe_print_LEGAL : fe_print_LETTER));
+    if (!v)
+	return fe_internal_url_NO_ACTION;
+
+    size = extract_value(query, "size=");
+    legal = size && strcasecomp(size, "legal") == 0;
+    frontend_complain(fe_print(v, legal ? fe_print_LEGAL : fe_print_LETTER));
     
     mm_free(size);
     
-    return fe_internal_url_NO_ACTION;
+    return generated;
     NOT_USED(bfile);
     NOT_USED(referer);
     NOT_USED(file);

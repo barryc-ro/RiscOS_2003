@@ -153,6 +153,8 @@ static os_error *fe__locate_view_by_position(fe_view v, void *handle)
     int *vals = handle;
     int pdist, sdist, s1, s2;
 
+    STBDBG(("fe__locate_view_by_position: v%p box %d,%d,%d,%d\n", v, v->box.x0, v->box.y0, v->box.x1, v->box.y1));
+
     if (v->children)
 	return NULL;
     
@@ -162,38 +164,44 @@ static os_error *fe__locate_view_by_position(fe_view v, void *handle)
     case 0:			/* -> */
 	pdist = v->box.x0 - vals[2];
 
-	s1 = abs(v->box.y0 - vals[3]);
-	s2 = abs(v->box.y1 - vals[3]);
+	s1 = vals[3] - v->box.y0;
+	s2 = v->box.y1 - vals[3];
 	break;
 
     case be_link_VERT:		/* \/ */
 	pdist = vals[3] - v->box.y1;
 
-	s1 = abs(v->box.x0 - vals[2]);
-	s2 = abs(v->box.x1 - vals[2]);
+	s1 = vals[2] - v->box.x0;
+	s2 = v->box.x1 - vals[2];
 	break;
 
     case be_link_VERT | be_link_BACK: /* /\ */
 	pdist = v->box.y0 - vals[3];
 
-	s1 = abs(v->box.x0 - vals[2]);
-	s2 = abs(v->box.x1 - vals[2]);
-	sdist = s1 < s2 ? s1 : s2;
+	s1 = vals[2] - v->box.x0;
+	s2 = v->box.x1 - vals[2];
 	break;
 
     case be_link_BACK:		/* <- */
 	pdist = vals[2] - v->box.x1;
 
-	s1 = abs(v->box.y0 - vals[3]);
-	s2 = abs(v->box.y1 - vals[3]);
+	s1 = vals[3] - v->box.y0;
+	s2 = v->box.y1 - vals[3];
 	break;
     }
 
-    sdist = s1 < s2 ? s1 : s2;
+    STBDBG(("fe__locate_view_by_position: pdist %d s1 %d s2 %d\n", pdist, s1, s2));
 
-    if (pdist > 0 &&
-	(pdist < vals[0] || (pdist == vals[0] && sdist > 0 && sdist < vals[1])))
+    /* in wrong direction or not overlapping  */
+    if (pdist < 0 || s1 < 0 || s2 < 0)
+	return NULL;
+
+    sdist = abs(s1 - s2);
+
+    if (pdist < vals[0] || (pdist == vals[0] && sdist < vals[1]))
     {
+	STBDBG(("fe__locate_view_by_position: closest\n"));
+
 	vals[0] = pdist;
 	vals[1] = sdist;
 	vals[5] = (int)v;
@@ -206,6 +214,8 @@ static fe_view fe_locate_view_by_position(wimp_box *box, int flags)
 {
     int vals[6];
     fe_view v = main_view;
+
+    STBDBG(("fe_locate_view_by_position: v%p box %d,%d,%d,%d flags %x\n", v, box->x0, box->y0, box->x1, box->y1, flags));
 
     /* travel to top most popup */
     while (v->next)
@@ -480,7 +490,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
     new_link = NULL;
     new_v = NULL;
 
-    STBDBG(( "fe_move_highlight: old_link %p old_v %p new_link %p new_v %p\n", old_link, v, new_link, new_v));
+    STBDBG(( "fe_move_highlight: old_link %p old_v %p new_link %p new_v %p scrolling %d\n", old_link, v, new_link, new_v, v->scrolling));
 
 /*     pointer_mode = pointermode_ON;  */ /* so that scroll_changed doesn't reposition highlight  */
 
@@ -753,7 +763,7 @@ static os_error *fe_frame_link_array__build(fe_view v, void *handle)
     }
 
     /* if it is then add to list */
-    if (side != -1)
+    if (side != -1 && (target->dividers[side] & fe_divider_BORDERLESS) == 0)
     {
 	frame_link *fl = mm_calloc(sizeof(*fl), 1);
 

@@ -4017,12 +4017,12 @@ static void image_animation_render_frame(image i, int flags)
 	{
 	    if (flags & image_frame_CLEAR_MASK)
 	    {
-		e = os_swi2(os_X | OS_SetColour, 0, 0);	/* set fg colour */
+		e = (os_error *)_swix(OS_SetColour, _INR(0,1), 0, 0);	/* set fg colour */
 		if (!e) e = bbc_rectanglefill(x, y, rec->x*2, rec->y*2);
 	    }
 	    else
 	    {
-		e = os_swi2(os_X | OS_SetColour, (1<<4) + 0, i->cache_mask); /* set bg colour */
+		e = (os_error *)_swix(OS_SetColour, _INR(0,1), (1<<4) + 0, i->cache_mask); /* set bg colour */
 		if (!e) e = sprite_put_mask_scaled(*i->areap, &our_id, x, y, &facs);
 	    }
 

@@ -290,10 +290,10 @@ char *reduce_file_name(char *fname, char *temp, char *pathname)
     char temp2[256];
     int len;
 
-    if (os_swi6(XOS_Bit | OS_FSControl, 37, (int) (long) pathname, (int) (long) temp, 0, 0, 256) != NULL)
+    if (_swix(OS_FSControl, _INR(0,5), 37, (int) (long) pathname, (int) (long) temp, 0, 0, 256) != NULL)
 	return NULL;
 
-    if (os_swi6(XOS_Bit | OS_FSControl, 37, (int) (long) fname, (int) (long) temp2, 0, 0, 256) != NULL)
+    if (_swix(OS_FSControl, _INR(0,5), 37, (int) (long) fname, (int) (long) temp2, 0, 0, 256) != NULL)
 	return NULL;
 
     len = strlen(temp);

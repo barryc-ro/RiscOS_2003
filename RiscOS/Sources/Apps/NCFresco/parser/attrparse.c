@@ -665,4 +665,25 @@ extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, STRING s
 
 /*****************************************************************************/
 
+extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, STRING string)
+{
+    VALUE v = sgml_do_parse_colour_tuple(context, attribute, string);
+
+    if (v.type == value_tuple)
+	return v;
+
+    v = colour_lookup(string);
+
+    if (v.type == value_tuple)
+	return v;
+
+#if SGML_REPORTING
+    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string.bytes, MAXSTRING), string.ptr);
+#endif
+
+    return v;
+}
+
+/*****************************************************************************/
+
 /* eof attrparse.c */

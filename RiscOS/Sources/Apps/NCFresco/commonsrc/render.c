@@ -492,7 +492,7 @@ int render_caret_colour(be_doc doc, int back, int cursor)
 	wimp_paletteword fg_rgb, bg_rgb;
 	int fg, bg;
 
-	bg_rgb.word = back == -1 ? render_get_colour(render_colour_INPUT_B, doc).word : back;
+	bg_rgb.word = back == -1 ? render_get_colour(render_colour_WRITE, doc).word : back;
 	colourtran_returnGCOL(bg_rgb, &bg);
 
 	fg_rgb.word = cursor == -1 ? 0x0000FF00 : cursor;

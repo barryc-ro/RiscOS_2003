@@ -80,7 +80,7 @@ POSTACTS=
 #############################################################################
 
 SGML_OBJS=	attrparse.o elements.o entities.o sgmlparser.o statemach.o \
-		support.o portutil.o genproc.o chopper.o
+		support.o portutil.o genproc.o chopper.o colours.o
 
 HTML_OBJS=	block.o builders.o deliver.o frames.o fonts.o forms.o head.o \
 		hparse.o htmldefs.o lists.o misc.o phrase.o reports.o special.o \
@@ -664,6 +664,13 @@ NCFRESCO_TEST_DIR=		bungle:/export/ftp/Custom/
 
 
 NCFRESCO_INCS=			-I../\!NCFresco
+NCFRESCO_BUILD_INCS=		-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
+				-I$(RISCOS_BUILD_EXPORT)/C \
+				-J$(RISCOS_BUILD_EXPORT)/Lib/CLib
+
 NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 $(NCFRESCO_INCS)
 
 # several alternative flag sets
@@ -675,29 +682,22 @@ NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -
 # choose one here
 NCFRESCO_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS)
 
-NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
-				-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
-				-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
-				-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
-				-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
-				-I$(RISCOS_BUILD_EXPORT)/C \
-				$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
+NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn  -DSTBWEB_ROM=0 \
+				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
-NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
-				-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
-				-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
-				-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
-				-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
-				-I$(RISCOS_BUILD_EXPORT)/C \
-				$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
+NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
+				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
+
+NCFRESCO_RAM_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
+				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
 NCFRESCO_ANT_ASFLAGS=		-Ihdr
 NCFRESCO_BUILD_ASFLAGS=		-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
 NCFRESCO_ROM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS)
-NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine "REMOVE_RAMLOAD_CHECK SETL {TRUE}"
+NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine \"REMOVE_RAMLOAD_CHECK SETL {TRUE}\"
 
 NCFRESCO_ANT_LDFLAGS=
-NCFRESCO_BUILD_LDFLAGS=
+NCFRESCO_BUILD_LDFLAGS=		-d -v
 NCFRESCO_ROM_LDFLAGS=	
 NCFRESCO_RAM_LDFLAGS=	
 
@@ -705,7 +705,7 @@ NCFRESCO_VPATH=			../!NCFresco
 
 NCFRESCO_BASE_OBJS=		clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 				stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
-				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o \
+				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o rlib_alloc.o \
 				$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 
 
@@ -719,10 +719,12 @@ NCFRESCO_ANT_LIBS=		../webimage/webimage1
 
 NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
+				../RISC_OSLib/risc_oslib \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
+
+#				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 
 NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
@@ -732,7 +734,7 @@ NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 
 NCFRESCO_RAM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslibzm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/riscoslibm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
@@ -822,9 +824,9 @@ NCFRESCO_RAM:	$(PREDEPS)
 		@echo "Making NCFRESCO module for RISCOS"
 		@cd ./ncfresco; $(MAKE) NCFRESCO_MODULE \
 		LIBS="$(NCFRESCO_RAM_LIBS)" \
-		OBJS="$(NCFRESCO_RAM_OBJS) $(RISCOS_OBJS)" \
+		OBJS="$(NCFRESCO_RAM_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(NCFRESCO_RAM_CFLAGS) $(RISCOS_CFLAGS)" \
+		CFLAGS="$(NCFRESCO_RAM_CFLAGS)" \
 		ASFLAGS="$(NCFRESCO_RAM_ASFLAGS)" \
 		LDFLAGS="$(NCFRESCO_RAM_LDFLAGS)"
 		$(POSTACTS)

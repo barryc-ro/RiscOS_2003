@@ -1071,7 +1071,7 @@ const char *fe_printer_name(void)
 
 #define PPrimer_ChangePrinter	0x4B100
 
-os_error *fe_print(fe_view v, int size)
+static os_error *fe__print(fe_view v, int size)
 {
     char *s;
     os_error *e = NULL;
@@ -1111,6 +1111,25 @@ os_error *fe_print(fe_view v, int size)
 	_swix(PPrimer_ChangePrinter, 0);
     }
 
+    return e;
+}
+
+os_error *fe_print(fe_view v, int size)
+{
+    os_error *e;
+
+    STBDBG(("fe_print: v%p size %d children %p\n", v, size, v->children));
+
+    if (v->children)
+    {
+	char buffer[64];
+	sprintf(buffer, "ncint:openpanel?name=printframes&size=%s", size == fe_print_LEGAL ? "legal" : "letter");
+	e = frontend_open_url(buffer, NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+    }
+    else
+    {
+	e = fe__print(v, size);
+    }
     return e;
 }
 
@@ -2531,18 +2550,12 @@ void fe_scroll_changed(fe_view v, int x, int y)
         statuswin_refresh_slider(v);
     }
 
-    if (pointer_mode == pointermode_OFF && v && v->displaying && v->current_link)
+    if (pointer_mode == pointermode_OFF && v && v->displaying/*  && v->current_link */)
     {
-        wimp_box box, bb;
         int dir;
 
-        if (backend_doc_item_bbox(v->displaying, v->current_link, &box) == NULL)
-        {
-            frontend_view_bounds(v, &bb);
-
-            dir = box.y1 < bb.y0 ? be_link_BACK : 0;
-            v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise() | movepointer());
-        }
+	dir = y < 0 ? 0 : be_link_BACK;
+	v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise() | movepointer());
     }
 }
 
@@ -4792,7 +4805,7 @@ static BOOL fe_initialise(void)
 
         info.name = TARGET_VERY_TOP;
         info.noresize = TRUE;
-        info.scrolling = fe_scrolling_NO;
+        info.scrolling = 0xff;	/* nasty - means can scroll but no scroll bars */
         *(wimp_box *)&info.margin = margin_box;
 
 	for (i = 0; i < 4; i++)
@@ -4840,7 +4853,7 @@ static BOOL fe_initialise(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if STBWEB_ROM
+#if 0 //STBWEB_ROM
 int __root_stack_size = 32*1024;
 extern int disable_stack_extension;
 #endif
@@ -4849,7 +4862,7 @@ int main(int argc, char **argv)
 {
     int init_ok;
 
-#if STBWEB_ROM
+#if 0 //STBWEB_ROM
     disable_stack_extension = 1;
 #endif
 
@@ -4874,6 +4887,9 @@ int main(int argc, char **argv)
     argv++;
     argc--;
 
+#if 1
+    use_toolbox = TRUE;
+#else
     if (argc > 0 && (strncmp(argv[0], "-x", 2)==0) )
     {
 	debug_level = atoi(argv[0] + 2);
@@ -4881,9 +4897,6 @@ int main(int argc, char **argv)
 	argv++;
     }
 
-#if STBWEB_ROM
-    use_toolbox = TRUE;
-#else
     if (argc > 0 && strcmp(argv[0], "-t") == 0)
     {
         use_toolbox = TRUE;
@@ -4958,6 +4971,25 @@ char *fe_msgs_lookup(char *tag)
 {
     return use_toolbox ? tb_msgs_lookup(tag) : msgs_lookup(tag);
 }
+
+/* ----------------------------------------------------------------------------------------------------- */
+
+#if 0
+os_error *os_swix(int swi, os_regset *r)
+{
+    return (os_error *)_kernel_swi(swi, (_kernel_swi_regs *)r, (_kernel_swi_regs *)r);
+}
+
+void os_read_var_val(char *name, char *buf /*out*/, int bufsize)
+{
+    _kernel_getenv(name, buf, bufsize);
+}
+
+os_error *os_byte(int a, int *x /*inout*/, int *y /*inout*/)
+{
+    return (os_error *)_swix(OS_Byte, _INR(0,2) | _OUTR(0,1), a, *x, *y, x, y);
+}
+#endif
 
 /* ----------------------------------------------------------------------------------------------------- */
 

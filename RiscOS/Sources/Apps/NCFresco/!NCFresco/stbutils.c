@@ -60,17 +60,21 @@ BOOL is_a_tv(void)
 	os_regset r;
 	os_error *e;
 	
+#if !DEBUG
 	r.r[0] = 0;
 	e = os_swix(ModeFiles_MonitorType, &r);
 	if (e)
+#endif
 	{
 	    char *s = getenv("TV$Type");
 	    is_a_tv_var = s && (strcasecomp(s, "PAL") == 0 || strcasecomp(s, "NTSC") == 0);
 	}
+#if !DEBUG
 	else
 	{
 	    is_a_tv_var = r.r[0] == 0 || r.r[0] == 8;
 	}
+#endif
     }
 
     return is_a_tv_var;
@@ -920,7 +924,7 @@ os_error *fe_file_to_url(char *file, char **url_out)
         return NULL;
 
     /* gstrans it*/
-    if ((ep = os_swi3(XOS_Bit | OS_GSTrans, (int)file, (int)buffer1, sizeof(buffer1))) != NULL)
+    if ((ep = (os_error *)_swix(OS_GSTrans, _INR(0,2), (int)file, (int)buffer1, sizeof(buffer1))) != NULL)
         return ep;
 
     /* if still has "-URL" prefixed then just return the URL*/
@@ -931,7 +935,7 @@ os_error *fe_file_to_url(char *file, char **url_out)
     }
 
     /* otherwise canonicalise and convert to URL*/
-    if ((ep = (os_swi6(XOS_Bit | OS_FSControl, 37, (int) buffer1, (int) buffer2, 0, 0, sizeof(buffer2)))) != NULL)
+    if ((ep = ((os_error *)_swix(OS_FSControl, _INR(0, 5), 37, (int) buffer1, (int) buffer2, 0, 0, sizeof(buffer2)))) != NULL)
 	return ep;
 
     path = url_riscos_to_path(buffer2);

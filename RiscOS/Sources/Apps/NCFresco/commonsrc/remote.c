@@ -17,8 +17,14 @@
 #include <time.h>
 
 #include "tcplibs.h"
-#include "win.h"
-#include "event.h"
+
+#ifdef STBWEB
+# include "alarm.h"
+# include "wimp.h"
+#else
+# include "win.h"
+# include "event.h"
+#endif
 
 #include "debug.h"
 #include "version.h"
@@ -37,6 +43,7 @@ static int sock = -1;
  */
 
 void RemoteControl__Poll( wimp_eventstr*, void* );
+static void RemoteControl__Poll1( int called_at, void *handle);
 
 BOOL RemoteControl_Open( void )
 {
@@ -113,6 +120,9 @@ BOOL RemoteControl_Open( void )
 
     fprintf( stderr, "remote control enabled\n" );
 
+#ifdef STBWEB
+    alarm_set(0, RemoteControl__Poll1, NULL);
+#else
     /* Look, right. I want idle events. But I don't have a window. And
      * RiscOS_Lib (as opposed to RiscOS) won't let me get idle events without
      * one. So therefore this. Blame & flame for this filth to be directed at
@@ -122,7 +132,7 @@ BOOL RemoteControl_Open( void )
     win_register_event_handler( BOGUS_WINDOW_HANDLE, &RemoteControl__Poll, 0 );
     win_claim_idle_events( BOGUS_WINDOW_HANDLE );
     event_setmask( 0 );
-
+#endif
     return TRUE;
 }
 
@@ -157,6 +167,16 @@ void RemoteControl__Poll( wimp_eventstr *e, void *f )
         }
     }
 }
+
+#ifdef STBWEB
+static void RemoteControl__Poll1( int called_at, void *handle)
+{
+    RemoteControl__Poll(0, 0);
+
+    alarm_set(0, RemoteControl__Poll1, handle);
+    called_at = called_at;
+}
+#endif
 
 void RemoteControl_Close( void )
 {

@@ -13,6 +13,10 @@
 #include "wimp.h"
 #endif
 
+#ifndef __stdio_h
+# include <stdio.h>
+#endif
+
 /* Describe the interface between the front and back of Fresco */
 
 /***************************************************************************/
@@ -223,6 +227,7 @@ void frontend_menu_update_item(fe_menu mh, int i);
 #define fe_divider_TOP		1
 #define fe_divider_RIGHT	2
 #define fe_divider_BOTTOM	3
+#define fe_divider_BORDERLESS	0x00010000
 
 typedef struct
 {
@@ -536,6 +541,13 @@ extern be_item backend_locate_id(be_doc doc, const char *id);
 #define be_encoding_EUC		9
 
 extern int backend_doc_encoding(be_doc doc, int encoding);
+
+/* Functions in layout.c */
+/* Write out frame layout as a table, return the number of frames */
+
+typedef void (*be_layout_write_table_fn)(FILE *f, const char *frame_specifier);
+
+extern void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix);
 
 #endif /* __interface_h */
 

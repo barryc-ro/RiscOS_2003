@@ -595,6 +595,19 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 
     if (ti)
     {
+	/* amazingly this didn't seem to get called before
+	 *
+	 * pdh: moved out of "if" below, as we always need imh in order
+	 * to set be_item_info_IMAGE ... Fresco uses this to know whether
+	 * to offer an Image-> submenu eg Image->Save
+
+	 * sjm: moved out further so that its use can be shared and so that
+	 * it is correctly set for all types that use images.
+	 */
+
+	if (object_table[ti->tag].imh != NULL)
+	    imh = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
+
         if (ti->tag == rid_tag_IMAGE)
 	{
 	    rid_text_item_image *tii = (rid_text_item_image *)ti;
@@ -604,15 +617,6 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	    image_os_to_pixels((image)tii->im, &xx, &yy, doc->scale_value);
 	    *px = xx;
 	    *py = yy;
-
-            /* amazingly this didn't seem to get called before
-             *
-             * pdh: moved out of "if" below, as we always need imh in order
-             * to set be_item_info_IMAGE ... Fresco uses this to know whether
-             * to offer an Image-> submenu eg Image->Save
-             */
-	    if (object_table[ti->tag].imh != NULL)
-	        imh = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
 
 	    if (((rid_text_item_image *)ti)->usemap)
 	    {
@@ -669,10 +673,6 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	    rid_text_item_input *tii = (rid_text_item_input *) ti;
 	    rid_input_item *ii = tii->input;
 
-	    /* do this first so we can check imh in switch */
-	    if (object_table[ti->tag].imh != NULL)
-		imh = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
-
 	    switch (ii->tag)
 	    {
 	    case rid_it_TEXT:
@@ -700,6 +700,7 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 		}
 		break;
 	    case rid_it_RESET:
+	    case rid_it_BUTTON:
 	    case rid_it_RADIO:
 	    case rid_it_CHECK:
 	    default:
@@ -717,8 +718,12 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	if (ti->tag == rid_tag_OBJECT)
 	{
 	    rid_text_item_object *tio = (rid_text_item_object *)ti;
-	    imh = tio->object->state.plugin.pp;
-	    f |= be_item_info_PLUGIN;
+	    switch (tio->object->type)
+	    {
+	    case rid_object_type_PLUGIN:
+		f |= be_item_info_PLUGIN;
+		break;
+	    }
 	}
 
     }
@@ -1364,7 +1369,7 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 
 
 	/* render frame borders */
-	layout_render_bevels(rr, doc);
+ 	layout_render_bevels(rr, doc);
     }
 
     if (doc->encoding != be_encoding_LATIN1)

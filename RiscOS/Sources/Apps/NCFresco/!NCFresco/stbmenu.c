@@ -258,6 +258,9 @@ static os_error *fe_menu_window(fe_menu mh)
 
         win.workflags = (wimp_iconflags)(wimp_IBTYPE*wimp_BCLICKDEBOUNCE);
 
+	if (!config_display_frames_scrollbars)
+	    win.flags &= ~wimp_WVSCR;
+	
 	/* Create the window, dealing with errors */
 	ep = frontend_complain(wimp_create_wind(&win, &(mh->wh)));
 	if (ep)

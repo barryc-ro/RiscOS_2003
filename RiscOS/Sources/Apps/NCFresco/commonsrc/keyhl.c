@@ -334,7 +334,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
     LKDBG((stderr, "antweb_highlight_scan_xy: bounds from x=%d-%d y=%d-%d\n", bounds->x0, bounds->x1, bounds->y0, bounds->y1));
 
     /* see if there is an aref we mustn't match */
-    start_aref = initial && initial->tag == doc_selection_tag_AREF ? initial->data.aref : NULL;
+    start_aref = (flags & be_link_INCLUDE_CURRENT) == 0 && initial && initial->tag == doc_selection_tag_AREF ? initial->data.aref : NULL;
 
     LKDBG((stderr, "antweb_highlight_scan_xy: start_aref %p\n", start_aref));
 
@@ -741,15 +741,24 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
     
 	ti = descriptor_to_item(link);
     }
-    else if ((flags & (be_link_ONLY_CURRENT|be_link_TEXT)) == 0)
-    {
-	ti = scan_links_2D(doc, item, flags, &bounds);
-    }
     else
     {
-	ti = scan_links_linear(doc, item, flags, &bounds);
-    }
-    
+	if ((flags & be_link_INCLUDE_CURRENT) && item)
+	{
+	    if ((flags & be_link_VISIBLE) == 0 ||
+		be_item_onscreen(doc, item, &bounds, flags))
+		return item;
+	}
+
+	if ((flags & (be_link_ONLY_CURRENT|be_link_TEXT)) == 0)
+	{
+	    ti = scan_links_2D(doc, item, flags, &bounds);
+	}
+	else
+	{
+	    ti = scan_links_linear(doc, item, flags, &bounds);
+	}
+    }    
     /* check for highlighting needed */
     if ((flags & be_link_DONT_HIGHLIGHT) == 0)
     {
@@ -1033,7 +1042,12 @@ void backend_set_caret(be_doc doc, be_item ti, int offset)
 void backend_remove_highlight(be_doc doc)
 {
     /* see if anyone had the caret */
-    be_item old_ti = be_doc_read_caret(doc);
+    be_item old_ti;
+
+    if (!doc)
+	return;
+
+    old_ti = be_doc_read_caret(doc);
 
     /* redraw the selected links */
     be_update_link(doc, &doc->selection, FALSE);

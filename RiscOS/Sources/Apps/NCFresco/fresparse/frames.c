@@ -17,6 +17,10 @@
 
 #define USE_NOFRAMES	1
 
+#define DEFAULT_BORDER_WIDTH	8		/* OS units */
+#define DEFAULT_BORDER_3D	TRUE
+#define DEFAULT_BORDER_COLOUR	plinth_col_HL_D;
+
 /*****************************************************************************/
 
 #if USE_NOFRAMES
@@ -182,13 +186,9 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     }
     else
     {
-        frameset->bwidth = 8;
-	container->border = FALSE;
-#ifdef STBWEB
-	container->bordercolour = 0;						/* default of black is better for TVs */
-#else
-	container->bordercolour = config_colours[render_colour_BACK].word;	/* default is the standard default */
-#endif
+        frameset->bwidth = DEFAULT_BORDER_WIDTH;
+	container->border = DEFAULT_BORDER_3D;
+	container->bordercolour = DEFAULT_BORDER_COLOUR;
     }
 
     /* Netscape 3/MSIE3 features */
@@ -209,12 +209,15 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     }
 
     /* use the outermost frameset to set the background colour for the page */
+#if STBWEB
     if (me->frameset == NULL)
     {
 	me->rh->bgt |= rid_bgt_COLOURS;
-	me->rh->colours.back = container->bordercolour;
-    }    /* save last frameset for when we unstack */
+	me->rh->colours.back = 0; /* container->bordercolour; */
+    }
+#endif
 
+    /* save last frameset for when we unstack */
     frameset->old_frameset = me->frameset;
 
     /* link into the list of framesets */

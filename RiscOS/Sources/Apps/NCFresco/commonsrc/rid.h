@@ -1128,6 +1128,8 @@ struct rid_frameset_item
 #define rid_frame_divider_RIGHT		2
 #define rid_frame_divider_BOTTOM	3
 
+#define rid_frame_divider_BORDERLESS	0x00010000
+
 struct rid_frame
 {
         rid_frame               *next;

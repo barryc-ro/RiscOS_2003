@@ -249,4 +249,9 @@ extern void sound_event(sound_event_t event_num);
 
 extern void pointer_set_position(int x, int y);
 
+#if defined(STBWEB) && !STBWEB_ROM
+#define tmpnam(a) my_tmpnam(a)
+extern char *my_tmpnam(char *s);
+#endif
+
 /* eof util.h */

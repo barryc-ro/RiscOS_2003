@@ -267,6 +267,29 @@ static void draw_border(wimp_redrawstr *r, fe_view v)
 		       v->displaying);
 }
 
+static os_error *draw_bevels(fe_view v, void *handle)
+{
+    wimp_redrawstr *r = handle;
+
+    /* if a frameset document then render the bevels */
+    if (v->w == 0)
+    {
+	wimp_redrawstr rr;
+
+	STBDBG(("draw_bevels: v%p box %d,%d,%d,%d rr %d,%d,%d,%d scroll %d%d\n",
+		v, v->box.x0, v->box.y0, v->box.x1, v->box.y1,
+		r->box.x0, r->box.y0, r->box.x1, r->box.y1,
+		r->scx, r->scy));
+
+	rr.box = v->box;
+	rr.scx = rr.scy = 0;
+	rr.g = r->g;
+	backend_render_rectangle(&rr, v->displaying, TRUE);
+    }
+    
+    return NULL;
+}
+
 /* ----------------------------------------------------------------------------*/
 
 int frontend_view_redraw(fe_view v, wimp_box *bb)
@@ -332,13 +355,20 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	 */
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
 
-	/* if we are top view above a selected view and are in web mode and the pointer is off */
-        if (selected && pointer_mode == pointermode_OFF)
-	    draw_frame_links(&r, v, selected->frame_links);
-
 	/* if we are transient then draw a border */
 	if (v->open_transient)
 	    draw_border(&r, v);
+
+	/* if we are the top frameset and this is a call to
+           render_rectangle then render the bevels for all the
+           frameset documents */
+	
+	if (v->parent == NULL && v->children && fn == backend_render_rectangle)
+	    iterate_frames(v, draw_bevels, &r);
+	
+	/* if we are top view above a selected view and are in web mode and the pointer is off */
+        if (selected && pointer_mode == pointermode_OFF)
+	    draw_frame_links(&r, v, selected->frame_links);
 
 	/* antitwitter if not in the middle of image rendering */
         if ((flags & fe_update_IMAGE_RENDERING) == 0)

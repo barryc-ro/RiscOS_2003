@@ -108,6 +108,7 @@ extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, 
 extern VALUE sgml_do_parse_enum_string(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
 extern VALUE sgml_do_parse_enum_case(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
 extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
+extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, STRING string);
 
 /* chopper.c *****************************************************************
 

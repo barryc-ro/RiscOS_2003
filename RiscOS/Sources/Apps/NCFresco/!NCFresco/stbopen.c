@@ -46,14 +46,14 @@ fe_view fe_frame_specifier_decode(fe_view top, const char *spec)
     s = strtok(ss, "_");
     v = NULL;
 
-    STBDBG(("framespec_decode: from %p for '%s'\n", top, spec));
+    STBDBGN(("framespec_decode: from %p for '%s'\n", top, spec));
     if (s)
     {
 	do
 	{
 	    int index = atoi(s);
 
-	    STBDBG(("framespec_decode: index %d", index));
+	    STBDBGN(("framespec_decode: index %d", index));
 
 	    if (v == NULL)
 		v = top;
@@ -63,7 +63,7 @@ fe_view fe_frame_specifier_decode(fe_view top, const char *spec)
 	    while (index--)
 		v = v->next;
 
-	    STBDBG((" yields %p\n", v));
+	    STBDBGN((" yields %p\n", v));
 	}
 	while ((s = strtok(NULL, "_")) != NULL);
     }
@@ -590,7 +590,7 @@ void fe_dispose_view(fe_view v)
     else if (--v->delete_pending > 0)
 	return;
 
-/*     fe_internal_deleting_view(v); */
+     fe_internal_deleting_view(v);
     
 #if 1
     /* unlink from chain before deleting */

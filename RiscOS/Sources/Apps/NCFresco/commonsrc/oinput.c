@@ -1079,7 +1079,7 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	cy += doc->margin.y1;
 #endif
 	h = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
-	h |= render_caret_colour(doc, ii->base.colours.back, ii->base.colours.cursor);
+	h |= render_caret_colour(doc, ii->base.colours.select != -1 ? ii->base.colours.select : ii->base.colours.back, ii->base.colours.cursor);
 
 	frontend_view_caret(doc->parent, cx, cy, h, repos == object_caret_REPOSITION || repos == object_caret_FOCUS);
 

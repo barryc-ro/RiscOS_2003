@@ -911,7 +911,7 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	tbi->window_handle = window_handle(object_handle);
 
 
-#if DEBUG
+#if 0
 	{
 	    wimp_winfo info;
 	    info.w = tbi->window_handle;
@@ -1998,13 +1998,6 @@ void tb_status_init(void)
     STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
 
     tb_bar_init(config_display_control_initial);
-
-/*     if (bar_list) */
-/*     { */
-/* 	wimp_box box; */
-/* 	frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &box)); */
-/* 	tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - box.x1, 0); */
-/*     } */
 }
 
 /* --------------------------------------------------------------------------*/
@@ -2033,151 +2026,6 @@ void tb_open_url_and_close(void)
 {
     tb_open_url();
 }
-
-/* --------------------------------------------------------------------------*/
-
-#if 0
-static os_error *tb_show_centered(int obj, const wimp_box *bbox)
-{
-    os_coord coord;
-    coord.x = ((screen_box.x1 - screen_box.x0) - (bbox->x1 - bbox->x0)) / 2;
-    coord.y = text_safe_box.y1 + (tb_is_status_showing() ? status_box.y0 : 0);
-    return (os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 1, obj, 2, &coord, tb_block[4], tb_block[5]);
-}
-
-static wimp_caretstr saved_caret;
-#endif
-
-#if 0
-static int find_object = 0;
-static int print_object = 0;
-
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "findW", &find_object));
-    frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, find_object, 16, &find_box));
-
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "printW", &print_object));
-    frontend_fatal_error((os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3), 0, print_object, 16, &print_box));
-#endif
-
-/* --------------------------------------------------------------------------*/
-
-#if 0
-
-#define I_FIND_TEXT         0x0
-#define I_FIND_BACKWARDS    0x4
-#define I_FIND_CASE         0x5
-
-os_error *tb_find_open(fe_view v)
-{
-    os_error *e;
-
-    wimp_get_caret_pos(&saved_caret);
-
-    e = (os_error *)_swix(Toolbox_SetClientHandle, _INR(0,2), 0, find_object, v);
-
-    return e ? e : tb_show_centered(find_object, &find_box);
-}
-
-static void tb_find(void)
-{
-    char *text;
-    BOOL backwards, casesense;
-    fe_view v;
-
-    text = getwriteable(find_object, I_FIND_TEXT);
-    backwards = getstate(find_object, I_FIND_BACKWARDS);
-    casesense = getstate(find_object, I_FIND_CASE);
-
-    frontend_complain((os_error *)_swix(Toolbox_GetClientHandle, _INR(0,1) | _OUT(0), 0, find_object, &v));
-    fe_find(v, text, backwards, casesense);
-
-    mm_free(text);
-}
-
-static void tb_find_closed(void)
-{
-    wimp_set_caret_pos(&saved_caret);
-}
-
-int tb_find_redraw(wimp_redrawstr *r)
-{
-    if (r->w == window_handle(find_object))
-    {
-        thickenborder(find_object, I_FIND_TEXT, r);
-        return TRUE;
-    }
-    return FALSE;
-}
-
-#endif
-/* --------------------------------------------------------------------------*/
-
-#if 0
-#define I_PRINT_OPTIONS_TYPE        0
-#define I_PRINT_OPTIONS_COPIES      1
-#define I_PRINT_OPTIONS_SCALE       2
-#define I_PRINT_OPTIONS_SIDEWAYS    4
-#define I_PRINT_OPTIONS_NOPICS      5
-#define I_PRINT_OPTIONS_NOBG        6
-#define I_PRINT_OPTIONS_NOCOL       8
-#define I_PRINT_OPTIONS_COLLATED    9
-#define I_PRINT_OPTIONS_REVERSED    10
-
-/* pass in which frame to print at this point*/
-
-os_error *tb_print_options_open(fe_view v)
-{
-    wimp_get_caret_pos(&saved_caret);
-
-    setfield(print_object, I_PRINT_OPTIONS_TYPE, fe_printer_name(), FALSE);
-
-    setstate(print_object, I_PRINT_OPTIONS_NOPICS, config_print_nopics);
-    setstate(print_object, I_PRINT_OPTIONS_NOBG, config_print_nobg);
-    setstate(print_object, I_PRINT_OPTIONS_NOCOL, config_print_nocol);
-    setstate(print_object, I_PRINT_OPTIONS_SIDEWAYS, config_print_sideways);
-    setstate(print_object, I_PRINT_OPTIONS_COLLATED, config_print_collated);
-    setstate(print_object, I_PRINT_OPTIONS_REVERSED, config_print_reversed);
-
-    setval(print_object, I_PRINT_OPTIONS_SCALE, config_print_scale);
-
-    (os_error *)_swix(Toolbox_SetClientHandle, _INR(0,2), 0, print_object, v);
-
-    return tb_show_centered(print_object, &print_box);
-}
-
-static void tb_print(void)
-{
-    fe_view v;
-
-    config_print_nopics = getstate(print_object, I_PRINT_OPTIONS_NOPICS);
-    config_print_nobg = getstate(print_object, I_PRINT_OPTIONS_NOBG);
-    config_print_nocol = getstate(print_object, I_PRINT_OPTIONS_NOCOL);
-    config_print_sideways = getstate(print_object, I_PRINT_OPTIONS_SIDEWAYS);
-    config_print_collated = getstate(print_object, I_PRINT_OPTIONS_COLLATED);
-    config_print_reversed = getstate(print_object, I_PRINT_OPTIONS_REVERSED);
-
-    config_print_scale = getval(print_object, I_PRINT_OPTIONS_SCALE);
-
-    frontend_complain((os_error *)_swix(Toolbox_GetClientHandle, _INR(0,1) | _OUT(0), 0, print_object, &v));
-    frontend_complain(fe_print(v));
-}
-
-static void tb_print_closed(void)
-{
-    wimp_set_caret_pos(&saved_caret);
-}
-
-int tb_print_redraw(wimp_redrawstr *r)
-{
-    if (r->w == window_handle(print_object))
-    {
-        thickenborder(print_object, I_PRINT_OPTIONS_SCALE, r);
-        thickenborder(print_object, I_PRINT_OPTIONS_COPIES, r);
-        return TRUE;
-    }
-    return FALSE;
-}
-#endif
 
 /* --------------------------------------------------------------------------*/
 
@@ -2221,23 +2069,6 @@ void tb_events(int *event, fe_view v)
             frontend_complain((os_error *)e->data.bytes);
             break;
 
-#if 0
-    case 0xf20:     /* find activated*/
-            tb_find();
-            break;
-
-        case 0xf21:     /* find closed*/
-            tb_find_closed();
-            break;
-
-        case 0xf22:     /* print activated from print options box*/
-            tb_print();
-            break;
-
-        case 0xf23:     /* print close*/
-            tb_print_closed();
-            break;
-#endif
         default:
             if ((e->action_no & 0xff0) == 0xf00)
                 mshow_handler(e->action_no, tb_block);
