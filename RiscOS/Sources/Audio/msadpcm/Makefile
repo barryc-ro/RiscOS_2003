@@ -116,27 +116,3 @@ rm.${COMPONENT}: ${OBJS}
         ${LD} -o $@ -module ${OBJS}
 
 # Dynamic dependencies:
-o.modhdr: s.modhdr
-o.modhdr: os:hdr.types
-o.modhdr: os:hdr.os
-o.modhdr: os:hdr.osmodule
-o.modhdr: hdr:soundfile
-o.modhdr: OS:Hdr.OSGBPB
-o.modhdr: hdr.Proc
-o.modhdr: hdr.msadpcm
-o.modhdrz: s.modhdr
-o.modhdrz: os:hdr.types
-o.modhdrz: os:hdr.os
-o.modhdrz: os:hdr.osmodule
-o.modhdrz: hdr:soundfile
-o.modhdrz: OS:Hdr.OSGBPB
-o.modhdrz: hdr.Proc
-o.modhdrz: hdr.msadpcm
-o.msadpcmasm: s.msadpcmasm
-o.msadpcmasm: os:hdr.types
-o.msadpcmasm: os:hdr.os
-o.msadpcmasm: os:hdr.osmodule
-o.msadpcmasm: hdr:soundfile
-o.msadpcmasm: OS:Hdr.OSGBPB
-o.msadpcmasm: hdr.proc
-o.msadpcmasm: hdr.msadpcm

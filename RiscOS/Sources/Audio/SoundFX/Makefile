@@ -128,6 +128,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.SoundFX:	c.SoundFX
-o.SoundFX:	C:h.kernel
-o.SoundFX:	C:h.swis

@@ -75,5 +75,3 @@ symgen: symgen.o
         ${LD} -o $@ symgen.o ${CLIB}
 
 # Dynamic dependencies:
-o.xtentries:	c.xtentries
-o.symgen:	c.symgen
