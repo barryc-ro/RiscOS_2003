@@ -20,7 +20,7 @@ INSTDIR    = ${INSTDIR}.${APP}
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -67,7 +67,7 @@ FILES = \
 
 OBJS = AUN.o Detect.o Diagnose.o event.o FileUtils.o IfsDbox.o Load.o\
        Main.o ModUtils.o Save.o SmallDrag.o swis.o tbevent.o wimpevent.o\
-       wimpmsg.o x.o
+       wimpmsg.o o.x
 
 #
 # Rule patterns
@@ -110,6 +110,8 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aif ${WFLAGS}
         @echo ${COMPONENT}: cleaned
+
+o.x: c.x
 
 #
 # Static dependencies:
