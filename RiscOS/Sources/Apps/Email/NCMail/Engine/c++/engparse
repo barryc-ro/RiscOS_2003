@@ -1,0 +1,515 @@
+/*
+** Email Client
+** EmailLib interface
+*/
+
+#include "stdlib.h"
+#include "time.h"
+#include "string.h"
+#include "ctype.h"
+
+#include "DebugLib/DebugLib.h"
+
+#include "Email/EmailLib/rfc822msg.h"
+#include "Email/EmailLib/MIMEentity.h"
+#include "Email/EmailLib/MIMEmultip.h"
+#include "Email/EmailLib/date.h"
+#include "Email/EmailLib/entity.h"
+
+#include "engtypes.h"
+#include "engmanager.h"
+#include "engfile.h"
+#include "engdownld.h"
+#include "engstr.h"
+#include "enguiapi.h"
+
+
+eng_rcode FinishParseMessage(MessageDescriptor *msgptr);
+
+eng_rcode GetHeader(char **dest, headers *hdrs, ELIB_HDR_TYPE type)
+{
+
+  ELib_rcode code;
+  uint32 len;
+  char *ptr;
+
+  *dest = 0;
+  header *h = hdrs->FindHdr(type);
+  code = h->GetBodyLen(len);
+  dprintf(("", "Got BodyLen, len=%d, code=%d\n",len,code));
+  if (!len)
+    return ENG_COMPLETED;
+
+  ++len;
+  if (code < 0)
+    return (eng_rcode) code;
+
+  else
+  {
+    if (!(ptr = malloc(len + 1)))
+    {
+      dprintf(("", "Malloc failure\n"));
+      return ENG_ENOSPACEFORMSG;
+    }
+        
+    code = h->GetUnfoldedNoCommentsBody(ptr, len);
+    dprintf(("", "Got Body, len=%d, code=%d\n",len,code));
+    if (code < 0)
+      return (eng_rcode) code;
+
+  }
+
+  *dest = ptr;
+  return ENG_COMPLETED;
+
+}
+
+
+/*
+** GetDate() gets a date header from a message
+** and puts it into a tm structure.
+*/
+
+eng_rcode GetDate(struct tm **dest, headers *hdrs, ELIB_HDR_TYPE type)
+{
+  
+  ELib_rcode code;
+  struct tm *tim;
+  date *d;
+
+  if ((tim = (struct tm *) malloc(sizeof(struct tm))) == 0)
+  {
+    dprintf(("", "Malloc failure\n"));
+    return ENG_ENOSPACEFORMSG;
+  }
+    
+  d = (date *) hdrs->FindHdr(type);
+  code = d->GetDate(*tim);
+  if (code < 0)
+  {
+    dprintf(("", "Error getting date, code=%d\n",code));
+    return (eng_rcode) code;
+  }
+  
+  *dest = tim;
+  return ENG_COMPLETED;
+
+}
+
+
+/*
+** StartParseHeader() starts off the process of parsing a header.
+** It creates a context and an entity in a temporary file.
+*/
+
+void StartParseHeader(void)
+{
+
+  uint32 len;
+  char *file;
+  eng_rcode code;
+
+  if ((code = (eng_rcode) new_context(&state.download.context)) < 0)
+  {
+    /* error setting up context */
+    dprintf(("", "Error setting up context, code=%d\n",code));
+    state.download.substate = downloadfailure;
+    state.download.rc = code;
+  }
+  else
+  {
+    file = SetFilename(state.download.msg->ID, true);
+    len = GetFileLength(file);
+    state.download.ent = new entity(true, file, 0, len, ELIB_ENTITY_UNKNOWN, true);
+    state.download.substate = parsing;
+  }
+
+}
+
+
+/*
+** ParseHeaderSlice() is called on null events while parsinghdr
+** substate is active. It time-slices the call to EmailLib
+** to parse the header.
+*/
+
+void ParseHeaderSlice(void)
+{
+
+  clock_t t = clock();
+  
+  ELib_rcode code = state.download.ent->ParseData(state.download.context, t + 25);
+  if (code < 0)
+  {
+    /* error has occurred during parsing */
+    dprintf(("", "Error while parsing\n"));
+    state.download.substate = downloadfailure;
+    state.download.rc = (eng_rcode) code;
+  }
+  else if (code != ELIB_RUNNING)
+  {
+    /* parsing has finished */
+    state.download.substate = parsedone;
+  }
+  else
+    dprintf(("", "Parsing a slice\n"));
+  
+}
+
+
+/*
+** FinishParseHeader() puts the required header info into the
+** message descriptor once EmailLib has parsed the header.
+** It then moves on to the next header.
+*/
+
+void FinishParseHeader(void)
+{
+
+  eng_rcode code;
+  char *file;
+  bool errorflag = false;
+  MessageDescriptor *msg = state.download.msg;
+
+  dprintf(("", "Finished parsing header for message %d\n",msg->ID));
+  /* get headers into descriptor */
+  headers *hdrs = state.download.ent->GetHdrs();
+  dprintf(("", "About to get From\n"));
+  if ((code = GetHeader(&msg->from, hdrs, ELIB_HDR_FROM)) < 0)
+  {
+    errorflag = true;
+    state.download.rc = code;
+  }
+  else
+    dprintf(("", "From = %s\n",msg->from));
+  dprintf(("", "About to get Subject\n"));
+  if ((code = GetHeader(&msg->subject, hdrs, ELIB_HDR_SUBJECT)) < 0)
+  {
+    errorflag = true;
+    state.download.rc = code;
+  }
+  else
+    dprintf(("", "Subject = %s\n",(msg->subject) ? msg->subject : "none"));
+  dprintf(("", "About to get Date\n"));
+  if ((code = GetDate(&msg->datestruct, hdrs, ELIB_HDR_DATE)) < 0)
+  {
+    errorflag = true;
+    state.download.rc = code;
+  }
+  else
+    dprintf(("", "Time is %s\n",asctime(msg->datestruct)));
+
+  /* clean up */
+  destroy_context(&state.download.context);
+  delete state.download.ent;
+  file = SetFilename(msg->ID, true);
+  UnlockFile(msg->ID, true);
+  remove(file);
+  if (errorflag)
+    state.download.substate = downloadfailure;
+  else
+  {
+    state.download.msg = msg->next;
+    state.download.substate = readytodownload;
+    msg->flags &= ~NEWLYCREATED;
+  }
+
+}
+
+
+eng_rcode GetRFC822Body(rfc822msg *rfc, MessageDescriptor *msgptr)
+{
+
+  EntityDescriptor *e = NewEntity(msgptr);
+  dprintf(("", "Content type is not multipart\n"));
+  if (e == 0)
+  {
+    /* wasn't enough memory */
+    return ENG_ENOSPACEFORMSG;
+  }
+
+  e->ent = (entity *) rfc;
+
+  return ENG_COMPLETED;
+}
+
+
+eng_rcode ParseMime(MIMEentity *ent, MessageDescriptor *msgptr)
+{
+
+  eng_rcode code = ENG_COMPLETED;
+  ELIB_CT major_content_type;
+  int num = 1;
+
+  dprintf(("", "Entering ParseMime()\n"));
+  ent->GetMajorType(major_content_type);
+  dprintf(("", "major content type = %d\n",major_content_type));
+  if (major_content_type == ELIB_CT_MULTIPART)
+  {
+    MIMEmultip *multipart;
+    int current = 0;
+    dprintf(("", "Content type is multipart\n"));
+    multipart = (MIMEmultip*) ent;
+    num = multipart->GetNumEntities();
+    dprintf(("", "Number of entities = %d\n",num));
+    while ((current < num) && (code >= 0))
+      code = ParseMime(multipart->GetEntity(current++), msgptr);
+  }
+  else if (num)
+  {
+    /* Create an entity descriptor for the entity */
+    EntityDescriptor *e = NewEntity(msgptr);
+    dprintf(("", "Content type is not multipart\n"));
+    if (e == 0)
+    {
+      /* wasn't enough memory */
+      return ENG_ENOSPACEFORMSG;
+    }
+
+    headers *hdrs = ent->GetHdrs();
+    e->ent = (entity *) ent;
+    code = GetHeader(&e->typestr, hdrs, ELIB_HDR_CONTENT_TYPE);
+
+    dprintf(("", "Number of entities in message = %d\n",msgptr->entity_num));
+    /*
+    ** If charset for message is not already set,
+    ** set it to this entity's charset if it has one.
+    */
+
+    if (!msgptr->charset)
+    {
+/*     code = GetHeader(&e->charset, hdrs, ELIB_HDR_CHARSET); */
+      if (e->charset)
+        msgptr->charset = e->charset;
+    }
+  }
+
+  return code;
+}
+
+
+void StartParseMessage(void)
+{
+
+  int len;
+  char *file;
+  eng_rcode code;
+
+  if ((code = (eng_rcode) new_context(&state.download.context)) < 0)
+  {
+    /* error setting up context */
+    dprintf(("", "Error creating new context\n"));
+    state.download.substate = downloadfailure;
+    state.download.rc = code;
+  }
+  else
+  {
+    file = SetFilename(state.download.msg->ID, false);
+    len = GetFileLength(file);
+    state.download.rfc = new rfc822msg(true, file, 0, len, true);
+    state.download.substate = parsing;
+    dprintf(("", "About to parse message %d\n",state.download.msg->ID));
+  }
+}
+
+
+void ParseMessageSlice(void)
+{
+
+  clock_t t = clock();
+  
+  ELib_rcode code = state.download.rfc->ParseData(state.download.context, t + 25);
+  if (code < 0)
+  {
+    /* error has occurred during parsing */
+    dprintf(("", "Error in parsing, rc=%d\n",code));
+    state.download.substate = downloadfailure;
+    state.download.rc = (eng_rcode) code;
+  }
+  else if (code != ELIB_RUNNING)
+  {
+    /* parsing has finished */
+    dprintf(("", "Parsing done\n"));
+    state.download.substate = parsedone;
+  }
+  else
+    dprintf(("", "Still parsing\n"));
+
+}
+
+
+void FinishParseMessage(void)
+{
+
+  eng_rcode code;
+  MIMEentity *ent = state.download.rfc->GetMIMEentity();
+  MessageDescriptor *msg = state.download.msg;
+  headers *hdrs = state.download.rfc->GetHdrs();
+
+  dprintf(("", "Entering FinishParseMessage(), ent=0x%x\n",ent));
+  msg->entity_num = 0;
+  msg->entity_list = 0;
+  msg->elibobj = state.download.rfc;
+
+  /* get remaining headers */
+  if ((code = GetHeader(&msg->to, hdrs, ELIB_HDR_TO)) < 0)
+    state.download.rc = code;
+  else
+    dprintf(("", "To = %s\n",msg->to));
+
+#ifdef gorilla
+  /* to be added when CC and charset are handled by Elib */
+  if ((code = GetHeader(&msg->cc, hdrs, ELIB_HDR_CC)) < 0)
+  {
+    errorflag = true;
+    state.download.rc = code;
+  }
+  else
+    dprintf(("", "CC = %s\n",msg->cc));
+
+  if ((code = GetHeader(&msg->charset, hdrs, ELIB_HDR_CHARSET)) < 0)
+    state.download.rc = code;
+  else
+    dprintf(("", "charset = %s\n",msg->charset));
+#endif
+
+  if ((code = GetHeader(&msg->datestr, hdrs, ELIB_HDR_DATE)) < 0)
+    state.download.rc = code;
+  else
+    dprintf(("", "Date = %s\n",msg->datestr));
+
+  if (ent == NULL)
+    code = (eng_rcode) GetRFC822Body(state.download.rfc, msg);
+  else
+    code = ParseMime(ent, msg);
+
+  if (code >= 0)
+  {
+    /* if descriptor doesn't now have a charset, set a default */
+    if (!msg->charset)
+    {
+      if ((msg->charset = malloc(9)) == 0)
+        code = ENG_ENOSPACEFORMSG;
+      else
+        strcpy(msg->charset, "us-ascii");
+    }
+  }
+
+  /* clean up */
+  destroy_context(&state.download.context);
+
+  if (code < 0)
+  {
+    state.download.rc = code;
+    state.download.substate = downloadfailure;
+  }
+
+  else if (state.disconnectpending)
+  {
+    state.state &= ~(RETRIEVEMSG + DOWNLOADMSG);
+    DisconnectFromISP();
+  }
+
+  else
+    state.download.substate = finished;
+
+}
+
+
+void WriteOutSlice(void)
+{
+
+  ELib_rcode code = state.retrieve.msgbody->WriteOut(state.retrieve.context, 25, state.retrieve.file);
+  dprintf(("", "Entering WriteOutSlice\n"));
+  if (code < 0)
+  {
+    /* error has occurred during writing out */
+    dprintf(("", "Error while writing out body\n"));
+    (*callbacklist.getentfunc)(ENG_ECANTFETCHENT, 0, callbacklist.getenthandle);
+    state.state &= ~RETRIEVEENT;
+  }
+  else if (code != ELIB_RUNNING)
+  {
+    /* writing out has finished */
+    dprintf(("", "Finished writing out body\n"));
+    state.state &= ~RETRIEVEENT;
+    fclose(state.retrieve.file);
+    (*callbacklist.getentfunc)(ENG_COMPLETED, state.retrieve.ent, callbacklist.getenthandle);
+  }
+
+  else
+  {
+    dprintf(("", "Writing out entity body\n"));
+  }
+
+}
+
+
+void StartRetrieve(void)
+{
+
+  eng_rcode code;
+
+  if ((code = (eng_rcode) new_context(&state.retrieve.context)) < 0)
+  {
+    /* error setting up context */
+    dprintf(("", "Error creating new context\n"));
+    (*callbacklist.getentfunc)(ENG_ECANTFETCHENT, 0, callbacklist.getenthandle);
+  }
+
+  else
+  {
+    state.state |= RETRIEVEENT;
+    dprintf(("", "Starting to retrieve attachment\n"));
+    state.retrieve.file = fopen(callbacklist.getentfile, "w");
+    state.retrieve.msgbody = state.retrieve.ent->ent->GetBody();
+  }
+
+}
+
+
+void DoCreateMessage(void)
+{
+
+  switch (state.create.substate)
+  {
+    case readytocreate :
+
+      dprintf(("", "Substate is readytocreate\n"));
+      if (state.state & CREATE)
+      {
+        state.state &= ~CREATE;
+        dprintf(("", "Calling back UI with new message %d\n",state.create.msg->ID));
+        (*callbacklist.createfunc)(ENG_COMPLETED, state.create.msg, callbacklist.createhandle);
+      }
+
+      else
+      {
+        /* get EmailLib to parse the message and return a reply
+           correctly formatted */
+        dprintf(("", "Asking EmailLib to prepare reply\n"));
+        state.create.substate = readytoparse;
+      }
+
+      break;
+
+    case readytoparse :
+
+      break;
+  }
+
+}
+
+
+void DoSend(void)
+{
+
+  switch (state.send.substate)
+  {
+    case readytoparse :
+
+      /* create message object from data in descriptor */
+      break;
+  }
+
+}
