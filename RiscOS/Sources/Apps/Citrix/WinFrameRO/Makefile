@@ -45,17 +45,17 @@ resources:
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
 	${MKDIR} ${RESRES}.ini
-	${CP} ${SRC}.!Boot       ${RESAPP}.!Boot    ${CPFLAGS}
-	${CP} ${SRC}.!Help       ${RESAPP}.!Help    ${CPFLAGS}
-	${CP} ${SRC}.!Run        ${RESAPP}.!Run     ${CPFLAGS}
-	${CP} ${SRC}.!Sprites    ${RESAPP}.!Sprites ${CPFLAGS}
-	${CP} ${SRC}.EnsureTB    ${RESRES}.EnsureTB ${CPFLAGS}
-	${CP} ${SRC}.Messages    ${RESRES}.Messages ${CPFLAGS}
-	${CP} ${SRC}.Res         ${RESRES}.Res      ${CPFLAGS}
-	${CP} ${SRC}.Splash      ${RESRES}.Splash   ${CPFLAGS}
-	${CP} ${SRC}.ini.AppSrv   ${RESRES}.ini.AppSrv   ${CPFLAGS}
-	${CP} ${SRC}.ini.Module   ${RESRES}.ini.Module   ${CPFLAGS}
-	${CP} ${SRC}.ini.WFClient ${RESRES}.ini.WFClient ${CPFLAGS}
+	${CP} ${SRC}!Boot       ${RESAPP}.!Boot    ${CPFLAGS}
+	${CP} ${SRC}!Help       ${RESAPP}.!Help    ${CPFLAGS}
+	${CP} ${SRC}!Run        ${RESAPP}.!Run     ${CPFLAGS}
+	${CP} ${SRC}!Sprites    ${RESAPP}.!Sprites ${CPFLAGS}
+	${CP} ${SRC}EnsureTB    ${RESRES}.EnsureTB ${CPFLAGS}
+	${CP} ${SRC}Messages    ${RESRES}.Messages ${CPFLAGS}
+	${CP} ${SRC}Res         ${RESRES}.Res      ${CPFLAGS}
+	${CP} ${SRC}Splash      ${RESRES}.Splash   ${CPFLAGS}
+	${CP} ${SRC}ini.AppSrv   ${RESRES}.ini.AppSrv   ${CPFLAGS}
+	${CP} ${SRC}ini.Module   ${RESRES}.ini.Module   ${CPFLAGS}
+	${CP} ${SRC}ini.WFClient ${RESRES}.ini.WFClient ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 export: export_${PHASE}
