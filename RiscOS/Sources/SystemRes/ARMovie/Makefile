@@ -588,6 +588,10 @@ clean:
         @stripdepnd
         @Up 2
         |
+        $(RM) Fetchers.AVI_QT_WSS.Universal
+        |
+        $(RM) Fetchers.PNA.PNA
+        |
         @echo $(COMPONENT): cleaned
 
 Core_Decode:          Resources.!Boot \
@@ -3192,6 +3196,8 @@ Video.Decomp902.Decompress:
 AVI_QT_WSS_Decode:    Fetchers.AVI_QT_WSS.Universal
         MMD $(FETCHDIR)
         CMF Fetchers.AVI_QT_WSS.Universal          $(FETCHDIR).Universal
+Fetchers.AVI_QT_WSS.Universal: Fetchers.AVI_QT_WSS.bas.MakeFetch
+        /Fetchers.AVI_QT_WSS.bas.MakeFetch
 
 MFSStream_Decode:     Fetchers.MFSStream.Stream
         MMD $(FETCHDIR)
@@ -3200,6 +3206,8 @@ MFSStream_Decode:     Fetchers.MFSStream.Stream
 PNA_Decode:           Fetchers.PNA.PNA
         MMD $(FETCHDIR)
         CMF Fetchers.PNA.PNA                       $(FETCHDIR).PNA
+Fetchers.PNA.PNA: Fetchers.PNA.bas.MakeFetch
+        /Fetchers.PNA.bas.MakeFetch
 
 VPhone_Decode:        Fetchers.VPhone.VPhone
         MMD $(FETCHDIR)
