@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.14 for RISC OS
+#	VERSION:	0.15 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -36,6 +36,7 @@
 #	18/11/98	0.13	RDW	queue.o added to OBJS
 #	23/02/99	0.14	RDW	reset.o added to OBJS
 #					added s option to -W flags on CFLAGS and C++FLAGS
+#	23/02/99	0.15	RDW	abort.o added to OBJS
 
 #
 # Paths
@@ -109,19 +110,19 @@ HDR=		h.header
 OBJS=		swihndlers.o handlers.o logon.o logout.o pop_utils.o module.o header.o \
 		errortable.o get.o send.o cmdresp.o getnummsgs.o \
 		getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o queue.o \
-		reset.o $(LIBS)
+		reset.o abort.o ${LIBS}
 
 OBJSI=		i.swihndlers i.handlers i.logon i.logout i.pop_utils i.module o.header \
 		i.errortable i.get i.send i.cmdresp i.getnummsgs \
 		i.getlistmsg i.getmsgfile i.deletemsg i.getuniquei i.getlistuid i.queue \
-		i.reset $(LIBS)
+		i.reset i.abort ${LIBS}
 
 OBJSINST=	inst.swihndlers inst.handlers inst.logon inst.logout inst.pop_utils inst.module \
 		o.header \
 		inst.errortable inst.get inst.send inst.cmdresp inst.getnummsgs \
 		inst.getlistmsg inst.getmsgfile inst.deletemsg inst.getuniquei inst.getlistuid \
-		inst.queue inst.reset \
-		$(LIBS)
+		inst.queue inst.reset inst.abort \
+		${LIBS}
 
 EXTRAS=		acornpop3.o
 
