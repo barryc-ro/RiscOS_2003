@@ -100,7 +100,6 @@ resources_NCFresco_base:
 	${CP} NCFrescoRORes:fontmap/txt 	${RESRES}.fontmap/txt ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${RESRES}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.alert     -o ${RESRES}.html.alert     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.badurl    -o ${RESRES}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.error     -o ${RESRES}.html.error     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favmove   -o ${RESRES}.html.favmove   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favrename -o ${RESRES}.html.favrename ${TRFLAGS}
@@ -117,10 +116,6 @@ resources_NCFresco_base:
 	${TR} -i NCFrescoROTransRes:html.password  -o ${RESRES}.html.password  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.printopts -o ${RESRES}.html.printopts ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.prompt    -o ${RESRES}.html.prompt    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${RESRES}.html.sslcert   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslpin    -o ${RESRES}.html.sslpin    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${RESRES}.html.sslserv   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${RESRES}.html.ssltoken  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.url       -o ${RESRES}.html.url       ${TRFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
@@ -171,7 +166,6 @@ install_NCFresco_common:
 	${CP} <Lib$Dir>.LocaleRes.LocaleRes	${INSTALLDIR}.LocaleRes         ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLRESLOCALEDIR}.html.alert     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLRESLOCALEDIR}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.error     -o ${INSTALLRESLOCALEDIR}.html.error     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favmove   -o ${INSTALLRESLOCALEDIR}.html.favmove   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favrename -o ${INSTALLRESLOCALEDIR}.html.favrename ${TRFLAGS}
@@ -188,10 +182,6 @@ install_NCFresco_common:
 	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTALLRESLOCALEDIR}.html.password  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTALLRESLOCALEDIR}.html.printopts ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.prompt    -o ${INSTALLRESLOCALEDIR}.html.prompt    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslcert   -o ${INSTALLRESLOCALEDIR}.html.sslcert   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslpin    -o ${INSTALLRESLOCALEDIR}.html.sslpin    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLRESLOCALEDIR}.html.sslserv   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLRESLOCALEDIR}.html.ssltoken  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLRESLOCALEDIR}.html.url       ${TRFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
