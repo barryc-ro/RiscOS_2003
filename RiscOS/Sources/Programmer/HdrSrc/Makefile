@@ -9,7 +9,8 @@
 # 28-Jul-94  AMcC   removed build rules for h.swis (done by RISC_OSLib)
 # 11-Aug-94  AMcC   Don't create an Arthur directory in Export.Hdr.Global
 # 19-Oct-94  AMcC   Export ImageSize hdrs
-# 31-Oct-94  AMcC   Export IO.IOMDL (IOMD for Morris)    
+# 31-Oct-94  AMcC   Export IO.IOMDL (IOMD for Morris)
+# 03-Dec-96  RWB    Don't derive headers, import them instead.
 #
 
 #
@@ -50,6 +51,7 @@ EXPORTS   = \
  ${HDRDIR}.Heap \
  ${HDRDIR}.ImageSize.2048K \
  ${HDRDIR}.ImageSize.4096K \
+ ${HDRDIR}.ImageSize.8192K \
  ${HDRDIR}.IO.GenericIO \
  ${HDRDIR}.IO.IOC \
  ${HDRDIR}.IO.IOC-A1 \
@@ -60,8 +62,7 @@ EXPORTS   = \
  ${HDRDIR}.ListOpts \
  ${HDRDIR}.MEMM.ARM600 \
  ${HDRDIR}.MEMM.MEMC1 \
- ${HDRDIR}.Machine.Jordan \
- ${HDRDIR}.Machine.Morris \
+ ${HDRDIR}.Machine.<Machine> \
  ${HDRDIR}.Macros \
  ${HDRDIR}.Messages \
  ${HDRDIR}.NdrDebug \
@@ -83,25 +84,21 @@ EXPORTS   = \
  ${HDRDIR}.VIDC.VIDC20
 
 #
-# Derived hdr files
-#
-FILETYPES = derived.FileTypes
-SWIS      = derived.SWIs
-
-#
 # Generic rules:
 #
-all: ${FILETYPES} ${SWIS}
-        @echo all derived hdrs are up to date
 
 export: ${EXPORTS} Dirs
         @echo ${COMPONENT}: export complete
 
 Dirs:
         ${MKDIR} <build$dir>.Export
+        ${MKDIR} <build$dir>.Export.C
+        ${MKDIR} <build$dir>.Export.C.h
+        ${MKDIR} <build$dir>.Export.C.o
         ${MKDIR} <build$dir>.Export.Hdr
         ${MKDIR} <build$dir>.Export.Hdr.Global
         ${MKDIR} <build$dir>.Export.Hdr.Interface
+        ${MKDIR} <build$dir>.Export.Hdr.Interface2
         ${MKDIR} ${HDRDIR}.CPU
         ${MKDIR} ${HDRDIR}.FDC
         ${MKDIR} ${HDRDIR}.IO
@@ -111,82 +108,62 @@ Dirs:
         ${MKDIR} ${HDRDIR}.VIDC
 
 clean:
-         @echo ${COMPONENT}: NOT cleaning derived headers
-
-#clean:
-#        ${RM} ${SWIS}
-#        ${RM} ${FILETYPES}
-#        @echo ${COMPONENT}: cleaned
-
-#
-# Rules for deriving headers:
-#
-${FILETYPES}: Register.ISV-Types s.DoTypes
-        ${AS} ${AFLAGS} -from s.DoTypes -to $@ 
-        settype $@ text
-
-${SWIS}: Register.ISV-SWIs s.DoSWIs
-        ${AS} ${AFLAGS} -from s.DoSWIs -to $@ 
-        settype $@ text
+         @echo ${COMPONENT}: NOT cleaning imported headers
 
 #
 # Rules for exporting:
 #
-${HDRDIR}.SWIs: ${SWIS};                       ${CP} ${SWIS} $@ ${CPFLAGS}
-${HDRDIR}.FileTypes: ${FILETYPES};             ${CP} ${FILETYPES} $@ ${CPFLAGS}
 
 # Registration headers:
-${HDRDIR}.FSNumbers: Register.FSNumbers;       ${CP} Register.FSNumbers $@ ${CPFLAGS}
-${HDRDIR}.PDriverReg: Register.PDriverReg;     ${CP} Register.PDriverReg $@ ${CPFLAGS}
-${HDRDIR}.PDumperReg: Register.PDumperReg;     ${CP} Register.PDumperReg $@ ${CPFLAGS}
-${HDRDIR}.PoduleReg: Register.PoduleReg;       ${CP} Register.PoduleReg $@ ${CPFLAGS}
-${HDRDIR}.NewErrors: Register.NewErrors;       ${CP} Register.NewErrors $@ ${CPFLAGS}
-${HDRDIR}.Services: Register.Services;         ${CP} Register.Services $@ ${CPFLAGS}
-${HDRDIR}.UpCall: Register.UpCall;             ${CP} Register.UpCall $@ ${CPFLAGS}
+${HDRDIR}.SWIs:       Import.Global.SWIs;           ${CP} Import.Global.SWIs       $@ ${CPFLAGS}
+${HDRDIR}.FileTypes:  Import.Global.FileTypes;      ${CP} Import.Global.FileTypes  $@ ${CPFLAGS}
+${HDRDIR}.FSNumbers:  Import.Global.FSNumbers;      ${CP} Import.Global.FSNumbers  $@ ${CPFLAGS}
+${HDRDIR}.PDriverReg: Import.Global.PDriverReg;     ${CP} Import.Global.PDriverReg $@ ${CPFLAGS}
+${HDRDIR}.PDumperReg: Import.Global.PDumperReg;     ${CP} Import.Global.PDumperReg $@ ${CPFLAGS}
+${HDRDIR}.PoduleReg:  Import.Global.PoduleReg;      ${CP} Import.Global.PoduleReg  $@ ${CPFLAGS}
+${HDRDIR}.NewErrors:  Import.Global.NewErrors;      ${CP} Import.Global.NewErrors  $@ ${CPFLAGS}
+${HDRDIR}.Services:   Import.Global.Services;       ${CP} Import.Global.Services   $@ ${CPFLAGS}
+${HDRDIR}.UpCall:     Import.Global.UpCall;         ${CP} Import.Global.UpCall     $@ ${CPFLAGS}
 
 # Machine/hardware specific headers:
-${HDRDIR}.Machine.Jordan: hdr.Machine.Jordan;  ${CP} hdr.Machine.Jordan $@ ${CPFLAGS}
-${HDRDIR}.Machine.Morris: hdr.Machine.Morris;  ${CP} hdr.Machine.Morris $@ ${CPFLAGS}
-${HDRDIR}.ImageSize.2048K: hdr.ImageSize.2048K; ${CP} hdr.ImageSize.2048K $@ ${CPFLAGS}
-${HDRDIR}.ImageSize.4096K: hdr.ImageSize.4096K; ${CP} hdr.ImageSize.4096K $@ ${CPFLAGS}
-${HDRDIR}.CPU.ARM600: hdr.CPU.ARM600;          ${CP} hdr.CPU.ARM600 $@ ${CPFLAGS}
-${HDRDIR}.CPU.Generic26: hdr.CPU.Generic26;    ${CP} hdr.CPU.Generic26 $@ ${CPFLAGS}
-${HDRDIR}.FDC.FDC711: hdr.FDC.FDC711;          ${CP} hdr.FDC.FDC711 $@ ${CPFLAGS}
-${HDRDIR}.IO.GenericIO: hdr.IO.GenericIO;      ${CP} hdr.IO.GenericIO $@ ${CPFLAGS}
-${HDRDIR}.IO.IOC: hdr.IO.IOC;                  ${CP} hdr.IO.IOC $@ ${CPFLAGS}
-${HDRDIR}.IO.IOC-A1: hdr.IO.IOC-A1;            ${CP} hdr.IO.IOC-A1 $@ ${CPFLAGS}
-${HDRDIR}.IO.IOEB: hdr.IO.IOEB;                ${CP} hdr.IO.IOEB $@ ${CPFLAGS}
-${HDRDIR}.IO.IOMD: hdr.IO.IOMD;                ${CP} hdr.IO.IOMD $@ ${CPFLAGS}
-${HDRDIR}.IO.IOMDL: hdr.IO.IOMDL;              ${CP} hdr.IO.IOMDL $@ ${CPFLAGS}
-${HDRDIR}.MEMM.ARM600: hdr.MEMM.ARM600;        ${CP} hdr.MEMM.ARM600 $@ ${CPFLAGS}
-${HDRDIR}.MEMM.MEMC1: hdr.MEMM.MEMC1;          ${CP} hdr.MEMM.MEMC1 $@ ${CPFLAGS}
-${HDRDIR}.VIDC.VIDC1a: hdr.VIDC.VIDC1a;        ${CP} hdr.VIDC.VIDC1a $@ ${CPFLAGS}
-${HDRDIR}.VIDC.VIDC20: hdr.VIDC.VIDC20;        ${CP} hdr.VIDC.VIDC20 $@ ${CPFLAGS}
+${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>; ${CP} hdr.Machine.<Machine>    $@ ${CPFLAGS}
+${HDRDIR}.ImageSize.2048K:   hdr.ImageSize.2048K;   ${CP} hdr.ImageSize.2048K      $@ ${CPFLAGS}
+${HDRDIR}.ImageSize.4096K:   hdr.ImageSize.4096K;   ${CP} hdr.ImageSize.4096K      $@ ${CPFLAGS}
+${HDRDIR}.ImageSize.8192K:   hdr.ImageSize.8192K;   ${CP} hdr.ImageSize.8192K      $@ ${CPFLAGS}
+${HDRDIR}.CPU.ARM600:        hdr.CPU.ARM600;        ${CP} hdr.CPU.ARM600           $@ ${CPFLAGS}
+${HDRDIR}.CPU.Generic26:     hdr.CPU.Generic26;     ${CP} hdr.CPU.Generic26        $@ ${CPFLAGS}
+${HDRDIR}.FDC.FDC711:        hdr.FDC.FDC711;        ${CP} hdr.FDC.FDC711           $@ ${CPFLAGS}
+${HDRDIR}.IO.GenericIO:      hdr.IO.GenericIO;      ${CP} hdr.IO.GenericIO 	   $@ ${CPFLAGS}
+${HDRDIR}.IO.IOC:            hdr.IO.IOC;            ${CP} hdr.IO.IOC               $@ ${CPFLAGS}
+${HDRDIR}.IO.IOC-A1:         hdr.IO.IOC-A1;         ${CP} hdr.IO.IOC-A1            $@ ${CPFLAGS}
+${HDRDIR}.IO.IOEB:           hdr.IO.IOEB;           ${CP} hdr.IO.IOEB              $@ ${CPFLAGS}
+${HDRDIR}.IO.IOMD:           hdr.IO.IOMD;           ${CP} hdr.IO.IOMD              $@ ${CPFLAGS}
+${HDRDIR}.IO.IOMDL:          hdr.IO.IOMDL;          ${CP} hdr.IO.IOMDL             $@ ${CPFLAGS}
+${HDRDIR}.MEMM.ARM600:       hdr.MEMM.ARM600;       ${CP} hdr.MEMM.ARM600          $@ ${CPFLAGS}
+${HDRDIR}.MEMM.MEMC1:        hdr.MEMM.MEMC1;        ${CP} hdr.MEMM.MEMC1           $@ ${CPFLAGS}
+${HDRDIR}.VIDC.VIDC1a:       hdr.VIDC.VIDC1a;       ${CP} hdr.VIDC.VIDC1a          $@ ${CPFLAGS}
+${HDRDIR}.VIDC.VIDC20:       hdr.VIDC.VIDC20;       ${CP} hdr.VIDC.VIDC20          $@ ${CPFLAGS}
 
 # Macros:
-${HDRDIR}.DDVMacros: hdr.DDVMacros;            ${CP} hdr.DDVMacros $@ ${CPFLAGS}
-${HDRDIR}.Debug: hdr.Debug;                    ${CP} hdr.Debug $@ ${CPFLAGS}
-${HDRDIR}.ExtraLong: hdr.ExtraLong;            ${CP} hdr.ExtraLong $@ ${CPFLAGS}
-${HDRDIR}.Macros: hdr.Macros;                  ${CP} hdr.Macros $@ ${CPFLAGS}
-${HDRDIR}.NdrDebug: hdr.NdrDebug;              ${CP} hdr.NdrDebug $@ ${CPFLAGS}
-${HDRDIR}.Proc: hdr.Proc;                      ${CP} hdr.Proc $@ ${CPFLAGS}
+${HDRDIR}.DDVMacros:         hdr.DDVMacros;         ${CP} hdr.DDVMacros            $@ ${CPFLAGS}
+${HDRDIR}.Debug:             hdr.Debug;             ${CP} hdr.Debug                $@ ${CPFLAGS}
+${HDRDIR}.ExtraLong:         hdr.ExtraLong;         ${CP} hdr.ExtraLong            $@ ${CPFLAGS}
+${HDRDIR}.Macros:            hdr.Macros;            ${CP} hdr.Macros               $@ ${CPFLAGS}
+${HDRDIR}.NdrDebug:          hdr.NdrDebug;          ${CP} hdr.NdrDebug             $@ ${CPFLAGS}
+${HDRDIR}.Proc:              hdr.Proc;              ${CP} hdr.Proc                 $@ ${CPFLAGS}
 
 # The rest:
-${HDRDIR}.CMOS: hdr.CMOS;                      ${CP} hdr.CMOS $@ ${CPFLAGS}
-${HDRDIR}.DevNos: hdr.DevNos;                  ${CP} hdr.DevNos $@ ${CPFLAGS}
-${HDRDIR}.Heap: hdr.Heap;                      ${CP} hdr.Heap $@ ${CPFLAGS}
-${HDRDIR}.KEYV: hdr.KEYV;                      ${CP} hdr.KEYV $@ ${CPFLAGS}
-${HDRDIR}.ListOpts: hdr.ListOpts;              ${CP} hdr.ListOpts $@ ${CPFLAGS}
-${HDRDIR}.Messages: hdr.Messages;              ${CP} hdr.Messages $@ ${CPFLAGS}
-${HDRDIR}.PaletteV: hdr.PaletteV;              ${CP} hdr.PaletteV $@ ${CPFLAGS}
-${HDRDIR}.Pointer: hdr.Pointer;                ${CP} hdr.Pointer $@ ${CPFLAGS}
-${HDRDIR}.Sprite: hdr.Sprite;                  ${CP} hdr.Sprite $@ ${CPFLAGS}
-${HDRDIR}.Symbols: hdr.Symbols;                ${CP} hdr.Symbols $@ ${CPFLAGS}
-${HDRDIR}.System: hdr.System;                  ${CP} hdr.System $@ ${CPFLAGS}
-${HDRDIR}.Tokens: hdr.Tokens;                  ${CP} hdr.Tokens $@ ${CPFLAGS}
+${HDRDIR}.CMOS:              hdr.CMOS;              ${CP} hdr.CMOS                 $@ ${CPFLAGS}
+${HDRDIR}.DevNos:            hdr.DevNos;            ${CP} hdr.DevNos               $@ ${CPFLAGS}
+${HDRDIR}.Heap:              hdr.Heap;              ${CP} hdr.Heap                 $@ ${CPFLAGS}
+${HDRDIR}.KEYV:              hdr.KEYV;              ${CP} hdr.KEYV                 $@ ${CPFLAGS}
+${HDRDIR}.ListOpts:          hdr.ListOpts;          ${CP} hdr.ListOpts             $@ ${CPFLAGS}
+${HDRDIR}.Messages:          hdr.Messages;          ${CP} hdr.Messages             $@ ${CPFLAGS}
+${HDRDIR}.PaletteV:          hdr.PaletteV;          ${CP} hdr.PaletteV             $@ ${CPFLAGS}
+${HDRDIR}.Pointer:           hdr.Pointer;           ${CP} hdr.Pointer              $@ ${CPFLAGS}
+${HDRDIR}.Sprite:            hdr.Sprite;            ${CP} hdr.Sprite               $@ ${CPFLAGS}
+${HDRDIR}.Symbols:           hdr.Symbols;           ${CP} hdr.Symbols              $@ ${CPFLAGS}
+${HDRDIR}.System:            hdr.System;            ${CP} hdr.System               $@ ${CPFLAGS}
+${HDRDIR}.Tokens:            hdr.Tokens;            ${CP} hdr.Tokens               $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-derived.FileTypes: Hdr:ListOpts
-derived.FileTypes: register.ISV-Types
-derived.SWIs: Hdr:ListOpts
-derived.SWIs: register.ISV-SWIs
