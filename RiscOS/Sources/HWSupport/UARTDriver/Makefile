@@ -32,8 +32,8 @@ CPFLAGS = ~cfr~v
 COMPONENT  = UART
 SOURCE     = s.init
 SOURCESA   = s.standalone
-TARGET     = rm.UART
-TARGETSA   = rm.UARTDriver
+TARGET     = rm.${MACHINE}.UART
+TARGETSA   = rm.${MACHINE}.UARTDriver
 RESOURCES  = Resources.${LOCALE}.Messages
 
 #
@@ -69,14 +69,16 @@ all: ${TARGETSA}
         @echo ${COMPONENT}: Stand alone module built
 
 ${TARGET}: ${SOURCE}
+        ${MKDIR} rm.${MACHINE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 ${TARGETSA}: ${SOURCESA}
+        ${MKDIR} rm.${MACHINE}
         ${AS} ${ASFLAGS} ${SOURCESA}
 #
 # Exported headers
 #
-        
+
 # Dynamic dependencies:
 rm.UART_SA: s.init
 rm.UART_SA: Hdr:ListOpts
@@ -181,3 +183,145 @@ rm.UARTDriver: s.devicecall
 rm.UARTDriver: s.swicall
 rm.UARTDriver: s.interrupts
 rm.UARTDriver: s.upcall
+rm.Omega.UARTDriver: s.init
+rm.Omega.UARTDriver: Hdr:ListOpts
+rm.Omega.UARTDriver: Hdr:NdrDebug
+rm.Omega.UARTDriver: Hdr:Macros
+rm.Omega.UARTDriver: Hdr:System
+rm.Omega.UARTDriver: Hdr:SWIs
+rm.Omega.UARTDriver: Hdr:CPU.Generic26
+rm.Omega.UARTDriver: Hdr:IO.GenericIO
+rm.Omega.UARTDriver: Hdr:RISCOS
+rm.Omega.UARTDriver: Hdr:Machine.<Machine>
+rm.Omega.UARTDriver: Hdr:Machine.Machine
+rm.Omega.UARTDriver: Hdr:ModHand
+rm.Omega.UARTDriver: Hdr:HighFSI
+rm.Omega.UARTDriver: Hdr:DevNos
+rm.Omega.UARTDriver: Hdr:Services
+rm.Omega.UARTDriver: Hdr:Symbols
+rm.Omega.UARTDriver: Hdr:UpCall
+rm.Omega.UARTDriver: Hdr:CMOS
+rm.Omega.UARTDriver: Hdr:DeviceFS
+rm.Omega.UARTDriver: Hdr:Serial
+rm.Omega.UARTDriver: Hdr:RS423
+rm.Omega.UARTDriver: Hdr:Buffer
+rm.Omega.UARTDriver: Hdr:MsgTrans
+rm.Omega.UARTDriver: Hdr:Proc
+rm.Omega.UARTDriver: Hdr:ResourceFS
+rm.Omega.UARTDriver: Hdr:Podule
+rm.Omega.UARTDriver: Hdr:IO.IOMDL
+rm.Omega.UARTDriver: Version
+rm.Omega.UARTDriver: s.errors
+rm.Omega.UARTDriver: s.main
+rm.Omega.UARTDriver: s.macros
+rm.Omega.UARTDriver: s.hardware
+rm.Omega.UARTDriver: s.devicecall
+rm.Omega.UARTDriver: s.swicall
+rm.Omega.UARTDriver: s.interrupts
+rm.Omega.UARTDriver: s.upcall
+rm.Boca.UARTDriver: s.init
+rm.Boca.UARTDriver: Hdr:ListOpts
+rm.Boca.UARTDriver: Hdr:NdrDebug
+rm.Boca.UARTDriver: Hdr:Macros
+rm.Boca.UARTDriver: Hdr:System
+rm.Boca.UARTDriver: Hdr:SWIs
+rm.Boca.UARTDriver: Hdr:CPU.Generic26
+rm.Boca.UARTDriver: Hdr:IO.GenericIO
+rm.Boca.UARTDriver: Hdr:RISCOS
+rm.Boca.UARTDriver: Hdr:Machine.<Machine>
+rm.Boca.UARTDriver: Hdr:Machine.Machine
+rm.Boca.UARTDriver: Hdr:ModHand
+rm.Boca.UARTDriver: Hdr:HighFSI
+rm.Boca.UARTDriver: Hdr:DevNos
+rm.Boca.UARTDriver: Hdr:Services
+rm.Boca.UARTDriver: Hdr:Symbols
+rm.Boca.UARTDriver: Hdr:UpCall
+rm.Boca.UARTDriver: Hdr:CMOS
+rm.Boca.UARTDriver: Hdr:DeviceFS
+rm.Boca.UARTDriver: Hdr:Serial
+rm.Boca.UARTDriver: Hdr:RS423
+rm.Boca.UARTDriver: Hdr:Buffer
+rm.Boca.UARTDriver: Hdr:MsgTrans
+rm.Boca.UARTDriver: Hdr:Proc
+rm.Boca.UARTDriver: Hdr:ResourceFS
+rm.Boca.UARTDriver: Hdr:Podule
+rm.Boca.UARTDriver: Hdr:IO.IOMDL
+rm.Boca.UARTDriver: Version
+rm.Boca.UARTDriver: s.errors
+rm.Boca.UARTDriver: s.main
+rm.Boca.UARTDriver: s.macros
+rm.Boca.UARTDriver: s.hardware
+rm.Boca.UARTDriver: s.devicecall
+rm.Boca.UARTDriver: s.swicall
+rm.Boca.UARTDriver: s.interrupts
+rm.Boca.UARTDriver: s.upcall
+rm.Boca.UART: Hdr:ListOpts
+rm.Boca.UART: Hdr:NdrDebug
+rm.Boca.UART: Hdr:Macros
+rm.Boca.UART: Hdr:System
+rm.Boca.UART: Hdr:SWIs
+rm.Boca.UART: Hdr:CPU.Generic26
+rm.Boca.UART: Hdr:IO.GenericIO
+rm.Boca.UART: Hdr:RISCOS
+rm.Boca.UART: Hdr:Machine.<Machine>
+rm.Boca.UART: Hdr:Machine.Machine
+rm.Boca.UART: Hdr:ModHand
+rm.Boca.UART: Hdr:HighFSI
+rm.Boca.UART: Hdr:DevNos
+rm.Boca.UART: Hdr:Services
+rm.Boca.UART: Hdr:Symbols
+rm.Boca.UART: Hdr:UpCall
+rm.Boca.UART: Hdr:CMOS
+rm.Boca.UART: Hdr:DeviceFS
+rm.Boca.UART: Hdr:Serial
+rm.Boca.UART: Hdr:RS423
+rm.Boca.UART: Hdr:Buffer
+rm.Boca.UART: Hdr:MsgTrans
+rm.Boca.UART: Hdr:Proc
+rm.Boca.UART: Hdr:ResourceFS
+rm.Boca.UART: Hdr:Podule
+rm.Boca.UART: Hdr:IO.IOMDL
+rm.Boca.UART: Version
+rm.Boca.UART: s.errors
+rm.Boca.UART: s.main
+rm.Boca.UART: s.macros
+rm.Boca.UART: s.hardware
+rm.Boca.UART: s.devicecall
+rm.Boca.UART: s.swicall
+rm.Boca.UART: s.interrupts
+rm.Boca.UART: s.upcall
+rm.Omega.UART: Hdr:ListOpts
+rm.Omega.UART: Hdr:NdrDebug
+rm.Omega.UART: Hdr:Macros
+rm.Omega.UART: Hdr:System
+rm.Omega.UART: Hdr:SWIs
+rm.Omega.UART: Hdr:CPU.Generic26
+rm.Omega.UART: Hdr:IO.GenericIO
+rm.Omega.UART: Hdr:RISCOS
+rm.Omega.UART: Hdr:Machine.<Machine>
+rm.Omega.UART: Hdr:Machine.Machine
+rm.Omega.UART: Hdr:ModHand
+rm.Omega.UART: Hdr:HighFSI
+rm.Omega.UART: Hdr:DevNos
+rm.Omega.UART: Hdr:Services
+rm.Omega.UART: Hdr:Symbols
+rm.Omega.UART: Hdr:UpCall
+rm.Omega.UART: Hdr:CMOS
+rm.Omega.UART: Hdr:DeviceFS
+rm.Omega.UART: Hdr:Serial
+rm.Omega.UART: Hdr:RS423
+rm.Omega.UART: Hdr:Buffer
+rm.Omega.UART: Hdr:MsgTrans
+rm.Omega.UART: Hdr:Proc
+rm.Omega.UART: Hdr:ResourceFS
+rm.Omega.UART: Hdr:Podule
+rm.Omega.UART: Hdr:IO.IOMDL
+rm.Omega.UART: Version
+rm.Omega.UART: s.errors
+rm.Omega.UART: s.main
+rm.Omega.UART: s.macros
+rm.Omega.UART: s.hardware
+rm.Omega.UART: s.devicecall
+rm.Omega.UART: s.swicall
+rm.Omega.UART: s.interrupts
+rm.Omega.UART: s.upcall
