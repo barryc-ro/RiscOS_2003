@@ -64,7 +64,6 @@ clean:
 
 local_dirs:
         ${MKDIR} o
-        -${MKDIR} ${INSTDIR}
 
 #
 # Dynamic dependencies:
