@@ -85,13 +85,12 @@ OBJS =\
  o.jutils\
  o.jerror\
  o.jmemmgr\
- o.jmemnobs
+ o.jmemflex
 
 OBJSZ =\
  z.jdapimin\
  z.jdapistd\
  z.jdtrans\
- z.jdatasrc\
  z.jdmaster\
  z.jdinput\
  z.jdmarker\
@@ -110,7 +109,7 @@ OBJSZ =\
  z.jutils\
  z.jerror\
  z.jmemmgr\
- z.jmemnobs
+ z.jmemflex
 
 #
 # Rule patterns

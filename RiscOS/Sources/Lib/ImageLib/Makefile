@@ -72,6 +72,7 @@ OBJS =\
  o.imagetrans\
  o.jpeg\
  o.jpeg_int\
+ o.jpeg_parse\
  o.lzw_comp\
  o.lzw_decomp\
  o.png\
@@ -87,6 +88,7 @@ OBJSZ =\
  z.imagetrans\
  z.jpeg\
  z.jpeg_int\
+ z.jpeg_parse\
  z.lzw_comp\
  z.lzw_decomp\
  z.png\

@@ -1,0 +1,265 @@
+/*-------------------------------------------------------------------------------------------*/
+/* File:    c.jpeg_parse                                                                     */
+/* Purpose: Decide whether SpriteExtend can handle a JPEG.                                   */
+/* Author:  Kevin Bracey                                                                     */
+/*-------------------------------------------------------------------------------------------*/
+
+/*
+ * Copyright (c) 1998 Acorn Computers Ltd. All rights reserved.
+ */
+
+#include "imagetrans.h"
+#include "jpeg.h"
+
+#define FALSE 0
+#define TRUE 1
+
+#define MAKESTMT(stuff)	do { stuff } while (0)
+
+/* Declare and initialize local copies of input pointer/count */
+#define INPUT_VARS()  \
+	const char *data = *dataptr;  \
+	int len = *lenptr
+
+/* Unload the local copies --- do this only at a restart boundary */
+#define INPUT_SYNC()  \
+	( *dataptr = data,  \
+	  *lenptr = len )
+
+/* Read a byte into variable V.
+ * If must suspend, take the specified action (typically "return FALSE").
+ */
+#define INPUT_BYTE(V,action)  \
+	MAKESTMT( if (len < 1) { action; } \
+	          len--; \
+		  V = *data++; )
+
+/* As above, but read two bytes interpreted as an unsigned 16-bit integer.
+ * V should be declared unsigned int or perhaps INT32.
+ */
+#define INPUT_2BYTES(V,action)  \
+	MAKESTMT( if (len < 2) { action; } \
+		  V = ((unsigned int) *data++) << 8; \
+		  V += *data++; )
+
+
+#define M_SOI   0xD8    /* Start Of Image */
+#define M_EOI   0xD9    /* End Of Image */
+
+#define M_SOF0  0xC0    /* Start Of Frame (Baseline DCT, Huffman coding) */
+#define M_SOF1  0xC1    /* Start Of Frame (Extended sequential DCT, Huffman coding) */
+#define M_SOF2  0xC2    /* Start Of Frame (Progressive DCT, Huffman coding) */
+#define M_SOF3  0xC3    /* Start Of Frame (Spatial (sequential) lossless, Huffman coding) */
+#define M_SOF5  0xC5    /* Start Of Frame (Differential sequential DCT, Huffman coding) */
+#define M_SOF6  0xC6    /* Start Of Frame (Differential progressive DCT, Huffman coding) */
+#define M_SOF7  0xC7    /* Start Of Frame (Differential spatial, Huffman coding) */
+#define M_JPG   0xC8    /* Start Of Frame (Reserved for JPEG extensions) */
+#define M_SOF9  0xC9    /* Start Of Frame (Extended sequential DCT, arithmetic coding) */
+#define M_SOF10 0xCA    /* Start Of Frame (Progressive DCT, arithmetic coding) */
+#define M_SOF11 0xCB    /* Start Of Frame (Spatial (sequential) lossless, arithmetic coding) */
+#define M_SOF13 0xCD    /* Start Of Frame (Differential sequential DCT, arithmetic coding) */
+#define M_SOF14 0xCE    /* Start Of Frame (Differential progressive DCT, arithmetic coding) */
+#define M_SOF15 0xCF    /* Start Of Frame (Differential spatial, arithmetic coding) */
+
+#define M_DHT   0xC4    /* Define Huffman Table(s) */
+#define M_DAC   0xCC    /* Define Arithmetic Coding conditioning(s) */
+
+#define M_SOS   0xDA    /* Start Of Scan */
+
+#define M_APP0  0xE0
+#define M_APP15 0xEF
+
+#define JS_WANT_JFIF     1
+#define JS_CHECKING_APP0 2
+#define JS_GOT_JFIF      3
+#define JS_SKIP_MARKER   4
+
+static int first_marker(const char **dataptr, int *lenptr, int *state)
+{
+    INPUT_VARS();
+
+    int c1, c2;
+
+    INPUT_BYTE(c1, return FALSE);
+    INPUT_BYTE(c2, return FALSE);
+
+    if (c1 != 0xFF || c2 != M_SOI)
+      *state = JS_DECIDED | JS_NOT_A_JPEG;
+
+    INPUT_SYNC();
+    return TRUE;
+}
+
+static int next_marker(const char **dataptr, int *lenptr, int *state, int *cout)
+{
+    INPUT_VARS();
+
+    int c;
+
+    /* Find 0xFF byte; count and skip any non-FFs. */
+    INPUT_BYTE(c, return FALSE);
+    while (c != 0xFF)
+    {
+        INPUT_BYTE(c, return FALSE);
+    }
+
+    /* Get marker code byte, swallowing any duplicate FF bytes.  Extra FFs
+     * are legal.
+     */
+    do
+    {
+        INPUT_BYTE(c, return FALSE);
+    }
+    while (c == 0xFF);
+
+    *cout = c;
+
+    INPUT_SYNC();
+    return TRUE;
+}
+
+static int check_app0(const char **dataptr, int *lenptr, int *state)
+{
+    INPUT_VARS();
+
+    unsigned int l;
+    char buf[5] = "JFIF";
+    int i, c;
+
+    INPUT_2BYTES(l, return FALSE);
+
+    if (l < 7)
+    {
+        *state = JS_DECIDED;
+        return FALSE;
+    }
+
+    /* Check the JFIF */
+    for (i=0; i<5; i++)
+    {
+        INPUT_BYTE(c, return FALSE);
+        if (c != buf[i])
+        {
+            *state = JS_DECIDED;
+            return FALSE;
+        }
+    }
+
+    /* Swallow the rest */
+    for ( ; i<l-2; i++)
+    {
+        INPUT_BYTE(c, return FALSE);
+    }
+
+    INPUT_SYNC();
+    return TRUE;
+}
+
+static int skip_marker(const char **dataptr, int *lenptr, int *state)
+{
+    INPUT_VARS();
+
+    unsigned int l;
+    int i, c;
+
+    INPUT_2BYTES(l, return FALSE);
+
+    if (l < 2)
+    {
+        *state = JS_DECIDED;
+        return FALSE;
+    }
+
+    /* Swallow the rest */
+    for (i=2; i<l; i++)
+    {
+        INPUT_BYTE(c, return FALSE);
+    }
+
+    INPUT_SYNC();
+    return TRUE;
+}
+
+int parse_jpeg(const char **dataptr, int *lenptr, int *state)
+{
+    int c;
+
+    for (;;)
+    {
+        switch (*state & 0xFF)
+        {
+        case JS_UNKNOWN:
+            if (!first_marker(dataptr, lenptr, state))
+                return FALSE;
+            *state = JS_WANT_JFIF;
+            /* fall through */
+
+        case JS_WANT_JFIF:
+            if (!next_marker(dataptr, lenptr, state, &c))
+                return FALSE;
+            if (c != M_APP0)
+            {
+                *state = JS_DECIDED;
+                return TRUE;
+            }
+            *state = JS_CHECKING_APP0;
+            /* fall through */
+
+        case JS_CHECKING_APP0:
+            if (!check_app0(dataptr, lenptr, state))
+                return FALSE;
+            *state = JS_GOT_JFIF;
+            /* fall through */
+
+        case JS_GOT_JFIF:
+            if (!next_marker(dataptr, lenptr, state, &c))
+                return FALSE;
+            switch (c)
+            {
+            case M_SOF0:
+            case M_SOF1:
+                *state = JS_DECIDED | JS_SPRITEEXTEND_CAN_DO_IT;
+                return TRUE;
+
+            case M_SOF2:
+            case M_SOF3:
+            case M_SOF5:
+            case M_SOF6:
+            case M_SOF7:
+            case M_JPG:
+            case M_SOF9:
+            case M_SOF10:
+            case M_SOF11:
+            case M_SOF13:
+            case M_SOF14:
+            case M_SOF15:
+            case M_EOI:
+                *state = JS_DECIDED;
+                return TRUE;
+
+            default:
+                *state = JS_SKIP_MARKER;
+                break;
+            }
+            /* fall through */
+
+        case JS_SKIP_MARKER:
+            if (!skip_marker(dataptr, lenptr, state))
+                return FALSE;
+            *state = JS_GOT_JFIF;
+            break;
+        }
+    }
+}
+
+int ParseJPEG(const char *data, int len, int *state)
+{
+    const char *data_start = data;
+
+    if (*state & JS_DECIDED)
+        return 0;
+
+    parse_jpeg(&data, &len, state);
+
+    return data - data_start;
+}
