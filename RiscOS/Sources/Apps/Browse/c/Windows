@@ -1,12 +1,13 @@
 /***************************************************/
 /* File   : Windows.c                              */
+/*                                                 */
 /* Purpose: Window related functions for the       */
 /*          browser (open, close, create, etc.).   */
+/*                                                 */
 /* Author : A.D.Hodgkinson                         */
-/* History: 20-Nov-96: Created                     */
-/*          15-Mar-97: Browser.c created from all  */
-/*                     browser_ prefixed functions */
-/*                     to reduce source file size  */
+/*                                                 */
+/* History: 20-Nov-96: Created.                    */
+/*          15-Mar-97: Split up to form Browser.c. */
 /***************************************************/
 
 #include <stdlib.h>
@@ -33,7 +34,8 @@
 #include "Utils.h"
 
 #include "Browser.h"
-#include "Fetch.h"
+#include "Fetch.h" /* (Which itself includes URLstat.h) */
+#include "FetchHTML.h"
 #include "FetchPage.h"
 #include "FontManage.h"
 #include "Forms.h"
@@ -107,8 +109,10 @@ static int hscroll_height = 0;
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the browser;          */
+/*                                               */
 /*             Pointer to a BBox describing the  */
 /*             new visible area of the window;   */
+/*                                               */
 /*             The old display_width field of    */
 /*             the browser_data struct to        */
 /*             compare against the width defined */
@@ -130,9 +134,28 @@ static void windows_check_reformat(browser_data * b, BBox * size, int old_width)
     reformat_format_from(b, -1, 1, -1);
   }
 
-  /* Otherwise just check the tools are up to date */
+  /* Otherwise just force a redraw (to make sure centred objects */
+  /* are OK) and check the tools are up to date.                 */
 
-  else windows_check_tools(b, NULL);
+  else
+  {
+    WimpGetWindowStateBlock state;
+
+    state.window_handle = b->window_handle;
+
+    if (!wimp_get_window_state(&state))
+    {
+      coords_box_toworkarea(&state.visible_area, (WimpRedrawWindowBlock *) &state);
+
+      wimp_force_redraw(state.window_handle,
+                        state.visible_area.xmin,
+                        state.visible_area.ymin,
+                        state.visible_area.xmax,
+                        state.visible_area.ymax);
+    }
+
+    windows_check_tools(b, NULL);
+  }
 }
 
 /*************************************************/
@@ -146,14 +169,14 @@ static void windows_check_reformat(browser_data * b, BBox * size, int old_width)
 
 int windows_new_browser(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  if (handle) ChkError(windows_create_browser((char *) handle, NULL, NULL, NULL));
+  if (handle) ChkError(windows_create_browser((char *) handle, NULL, NULL, NULL, 0));
   else
   {
-    char home[2048];
+    char home[Limits_URL];
 
     urlutils_create_home_url(home, sizeof(home));
 
-    ChkError(windows_create_browser(home, NULL, NULL, NULL));
+    ChkError(windows_create_browser(home, NULL, NULL, NULL, 0));
   }
 
   return 1;
@@ -184,10 +207,17 @@ int windows_new_browser(int eventcode, ToolboxEvent * event, IdBlock * idb, void
 /*             block, so it can come from pretty */
 /*             much anywhere that isn't going to */
 /*             shift over a function call        */
-/*             boundary (i.e. not flex!).        */
+/*             boundary (i.e. not flex!);        */
+/*                                               */
+/*             1 if the inital page fetch, if    */
+/*             any, should be directed to a file */
+/*             (via. a save dialogue) else 0 -   */
+/*             i.e., the inital value of the     */
+/*             savelink flag.                    */
 /*************************************************/
 
-_kernel_oserror * windows_create_browser(char * url, browser_data * real_parent, BBox * size, char * name)
+_kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
+                                         BBox * size, char * name, int savelink)
 {
   ObjectId          o;
   browser_data    * b;
@@ -232,7 +262,7 @@ _kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
   {
     #ifdef TRACE
       malloccount += (sizeof(browser_data) + sizeof(reformat_cell));
-      if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+      if (tl & (1u<<13)) Printf("** malloccount (windows_create_browser): \0216%d\0217\n",malloccount);
     #endif
 
     /* The allocation succeeded, so create the object, fill in the browser_data */
@@ -325,7 +355,7 @@ _kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
     b->leading     = choices.leading;
     b->leftindent  = choices.leftindent;
 
-    /* Prime the reformat queue */
+    /* Set up the deferred reformatter */
 
     b->refotime = 0;
     b->refoline = 0x1000000;
@@ -381,6 +411,7 @@ _kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
     b->backimage   = -1;
     b->full_screen = !real_parent ? choices.full_screen : 0;
     b->full_size   = 0;
+    b->savelink    = savelink;
 
     /* Register some browser-specific Wimp event handlers */
 
@@ -417,11 +448,11 @@ _kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
     {
       ObjectId ttop, tbot;
       int      scrap;
-      char     text[MaxUrlLen];
+      char     text[Limits_DisplayURL];
 
       /* Set the window title to contain the default URL for rendering. */
 
-      e = window_set_title(0,o,lookup_token("BlankPage:Blank page",0,0));
+      e = window_set_title(0, o, lookup_token("BlankPage:Blank page",0,0));
       if (e) return e;
 
       /* Set various toolbar flags up, and make */
@@ -765,12 +796,16 @@ _kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
 /* necessary. Parameters are as standard for a   */
 /* Wimp event handler.                           */
 /*                                               */
-/* Assumes: The poll block and ID block pointers */
-/*          may be NULL, though in the latter    */
-/*          case only for full screen opening.   */
-/*          The event code is not read and can   */
-/*          be any int value; the browser_data   */
-/*          pointer must NOT be NULL.            */
+/* Assumes:    The poll block and ID block       */
+/*             pointers may be NULL, though in   */
+/*             the latter case only for full     */
+/*             screen opening;                   */
+/*                                               */
+/*             The event code is not read and    */
+/*             can by any integer value;         */
+/*                                               */
+/*             That the browser_data pointer is  */
+/*             not NULL.                         */
 /*************************************************/
 
 int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle)
@@ -827,7 +862,7 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
     state.window_handle = handle->window_handle;
     ChkError(wimp_get_window_state(&state));
 
-    ChkError(frames_resize_frameset(handle, (WimpOpenWindowBlock *) &state));
+    ChkError(frames_resize_frameset(handle, &state.visible_area));
 
     windows_check_reformat(handle, &state.visible_area, handle->display_width);
   }
@@ -967,7 +1002,7 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
 
         /* Resize any child frames and reformat if necessary */
 
-        ChkError(frames_resize_frameset(handle, (WimpOpenWindowBlock *) b));
+        ChkError(frames_resize_frameset(handle, &b->open_window_request.visible_area));
         windows_check_reformat(handle, &b->open_window_request.visible_area, old_display_width);
       }
       else
@@ -1049,7 +1084,7 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
 
         /* Resize any child frames and reformat if needed */
 
-        ChkError(frames_resize_frameset(handle, (WimpOpenWindowBlock *) b));
+        ChkError(frames_resize_frameset(handle, &b->open_window_request.visible_area));
 
         windows_check_reformat(handle, &b->open_window_request.visible_area, old_display_width);
       }
@@ -1093,7 +1128,7 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
 
       if (handle->ancestor || !nested_wimp)
       {
-        ChkError(frames_resize_frameset(handle, (WimpOpenWindowBlock *) b));
+        ChkError(frames_resize_frameset(handle, &b->open_window_request.visible_area));
       }
 
       /* Claim null events, if they aren't already being claimed */
@@ -1125,7 +1160,7 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
 
         if (nested_wimp && !handle->ancestor)
         {
-          ChkError(frames_resize_frameset(handle, (WimpOpenWindowBlock *) b));
+          ChkError(frames_resize_frameset(handle, &b->open_window_request.visible_area));
         }
 
         if (modechanged)
@@ -1210,15 +1245,15 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
 /*                                               */
 /* This event handler is registered when an Open */
 /* Window request is received by the event       */
-/* handler windows_open_browser(), which should  */
-/* be referred to for more information. This     */
+/* handler windows_open_browser, which should be */
+/* referred to for more information. This        */
 /* handler is called on null polls, and when no  */
 /* mouse buttons are being pressed, deregisters  */
 /* itself and looks at the browser window it is  */
 /* associated with. If the window is not open    */
 /* full size, the size is remembered so that the */
-/* toggle size code in windows_open_browser()    */
-/* can operate correctly.                        */
+/* toggle size code in windows_open_browser can  */
+/* operate correctly.                            */
 /*************************************************/
 
 int windows_remember_size(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
@@ -1445,6 +1480,10 @@ int windows_close_browser(browser_data * handle)
   if (handle->meta_refresh_at) deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) meta_check_refresh, handle);
   handle->meta_refresh_at = 0;
 
+  if (handle->dragging) deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) handle_drags, handle);
+  handle->dragging = 0;
+  drag_in_progress = 0;
+
   /* If watching the dialler's status changed service call,   */
   /* or displaying online time, remove the relevant handlers. */
 
@@ -1504,6 +1543,14 @@ int windows_close_browser(browser_data * handle)
 //    }
 //  }
 
+  /* Delete any related run-time created objects */
+
+  if (handle->save_dbox)
+  {
+    ChkError(toolbox_delete_object(0, handle->save_dbox));
+    handle->save_dbox = 0;
+  }
+
   /* Get rid of the fetched source / stream */
 
   browser_destroy_source(handle);
@@ -1520,10 +1567,10 @@ int windows_close_browser(browser_data * handle)
 
   /* Close any saving files */
 
-  if (handle->savefile)
+  if (handle->save_file)
   {
-    fclose(handle->savefile);
-    handle->savefile = NULL;
+    fclose(handle->save_file);
+    handle->save_file = NULL;
   }
 
   /* Get rid of forms related data */
@@ -1623,7 +1670,7 @@ int windows_close_browser(browser_data * handle)
   #ifdef TRACE
     if (tl & (1u<<12)) Printf("windows_close_browser: free block %p, which held 'reformat_cell' structure\n",handle->cell);
     malloccount -= sizeof(reformat_cell);
-    if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+    if (tl & (1u<<13)) Printf("** malloccount (windows_close_browser): \0216%d\0217\n",malloccount);
   #endif
 
   free(handle->cell);
@@ -1631,7 +1678,7 @@ int windows_close_browser(browser_data * handle)
   #ifdef TRACE
     if (tl & (1u<<12)) Printf("windows_close_browser: free block %p, which held 'browser_data' structure\n",handle);
     malloccount -= sizeof(browser_data);
-    if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+    if (tl & (1u<<13)) Printf("** malloccount (windows_close_browser): \0216%d\0217\n",malloccount);
   #endif
 
   free(handle);
@@ -1664,73 +1711,17 @@ int windows_redraw_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, brow
   WimpRedrawWindowBlock * redraw = (WimpRedrawWindowBlock *) b;
   int                     more;
 
-//  #ifndef ANTI_TWITTER
+  ChkError(wimp_redraw_window(redraw, &more));
 
-    ChkError(wimp_redraw_window(redraw, &more));
+  if (more)
+  {
+    ChkError(redraw_draw(handle,
+                         redraw,
+                         0,
+                         0));
+  }
 
-    if (more)
-    {
-      ChkError(redraw_draw(handle,
-                           redraw,
-                           0,
-                           0));
-    }
-
-    return 1;
-
-//  #else
-//
-//    /* For anti-twittered redraws, need to stretch the vertical */
-//    /* redraw size if it is less than 4 pixels high as the      */
-//    /* anti-twitter module can't work with anything that small. */
-//
-//
-// // This doesn't work! And it doesn't work in Fresco either!
-//
-//
-//    ChkError(wimp_redraw_window(redraw, &more));
-//
-//    if (more)
-//    {
-//      if (!handle->taller_redraw)
-//      {
-//        BBox boxes[128];
-//        int  i, box = 0;
-//
-//        do
-//        {
-//          boxes[box] = redraw->redraw_area;
-//          box++;
-//
-//          ChkError(wimp_get_rectangle(redraw, &more));
-//        }
-//        while (more);
-//
-//        for (i = 0; i < box; i++)
-//        {
-//          ChkError(wimp_force_redraw(-1,
-//                                     boxes[i].xmin,
-//                                     boxes[i].ymin,
-//                                     boxes[i].xmax,
-//                                     boxes[i].ymax));
-//        }
-//
-//        handle->taller_redraw = 1;
-//      }
-//      else
-//      {
-//        ChkError(redraw_draw(handle,
-//                             redraw,
-//                             0,
-//                             0));
-//
-//        handle->taller_redraw = 0;
-//      }
-//    }
-//
-//    return 1;
-//
-//  #endif
+  return 1;
 }
 
 /*************************************************/
@@ -1906,12 +1897,16 @@ void windows_show_browser(browser_data * b)
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the window;           */
+/*                                               */
 /*             1 for Full Screen, else 0;        */
+/*                                               */
 /*             1 to record the size, else 0;     */
+/*                                               */
 /*             Position in window stack for      */
 /*             use if recording the small size;  */
 /*             1 to leave a vertical scroll bar  */
 /*             visible, else 0;                  */
+/*                                               */
 /*             1 to leave a horizontal scroll    */
 /*             bar visible, else 0.              */
 /*************************************************/
@@ -2105,7 +2100,7 @@ _kernel_oserror * windows_open_full_screen(browser_data * b, int full_screen, in
     if (tl & (1u<<3)) Printf("windows_open_full_screen: Exitting through frames_resize_frameset\n");
   #endif
 
-  return frames_resize_frameset(b, &o);
+  return frames_resize_frameset(b, &o.visible_area);
 }
 
 /*************************************************/
@@ -2288,7 +2283,7 @@ _kernel_oserror * windows_process_component_text(ObjectId o, ComponentId c, char
 /* windows_initialise_tool_sizes()               */
 /*                                               */
 /* Sets up local copies of the current window    */
-/* tool sizes through find_tool_sizes().         */
+/* tool sizes through find_tool_sizes.           */
 /*************************************************/
 
 _kernel_oserror * windows_initialise_tool_sizes(void)
@@ -2305,14 +2300,16 @@ _kernel_oserror * windows_initialise_tool_sizes(void)
 /* border).                                      */
 /*                                               */
 /* This will only work correctly if a call to    */
-/* windows_initialise_tool_sizes() has been made */
+/* windows_initialise_tool_sizes has been made   */
 /* at least once before.                         */
 /*                                               */
 /* Parameters: Pointer to an int, in which the   */
 /*             title bar height is placed;       */
+/*                                               */
 /*             Pointer to an int, in which the   */
 /*             horizontal scroll bar bar height  */
 /*             is placed;                        */
+/*                                               */
 /*             Pointer to an int, in which the   */
 /*             vertical scroll bar width is      */
 /*             placed.                           */
@@ -2494,15 +2491,15 @@ _kernel_oserror * windows_set_tools(browser_data * b, BBox * box, int title, int
 
       if (must_redraw)
       {
-        e = _swix(Wimp_ForceRedraw,
-                  _INR(0,4),
+        BBox workarea = s.visible_area;
 
-                  -1,
-                  s.visible_area.xmin,
-                  s.visible_area.ymin,
-                  s.visible_area.xmax,
-                  s.visible_area.ymax);
+        coords_box_toworkarea(&workarea, (WimpRedrawWindowBlock *) &s);
 
+        e = wimp_force_redraw(s.window_handle,
+                              workarea.xmin,
+                              workarea.ymin,
+                              workarea.xmax,
+                              workarea.ymax);
         if (e) return e;
 
         /* May well need to move the toolbar gadgets, too */
@@ -2524,7 +2521,7 @@ _kernel_oserror * windows_set_tools(browser_data * b, BBox * box, int title, int
 
     /* If there are children and this is an ancestor window, resize the children */
 
-    if (!b->ancestor && b->nchildren) frames_resize_frameset(b, (WimpOpenWindowBlock *) &s);
+    if (!b->ancestor && b->nchildren) frames_resize_frameset(b, &s.visible_area);
 
     return NULL;
   }
@@ -2539,7 +2536,8 @@ _kernel_oserror * windows_set_tools(browser_data * b, BBox * box, int title, int
 /* needed).                                      */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the window.           */
+/*             relevant to the window;           */
+/*                                               */
 /*             Pointer to a BBox, passed on to   */
 /*             windows_set_tools (see that       */
 /*             function for details).            */
@@ -2617,47 +2615,3 @@ _kernel_oserror * windows_check_tools(browser_data * b, BBox * box)
 
   return NULL;
 }
-
-/*************************************************/
-/* windows_url_to_be_shown()                     */
-/*                                               */
-/* Called when the EOpenURLWindow event is       */
-/* generated, typically when the Open URL window */
-/* is about to be shown. Handles any icon        */
-/* processing commands in the writable.          */
-/*                                               */
-/* Parameters are as standard for a Toolbox      */
-/* event handler.                                */
-/*************************************************/
-
-int windows_url_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  char text[MaxUrlLen];
-
-  ChkError(windows_process_component_text(idb->self_id, OpenWritable, text, sizeof(text), 0, 1));
-
-  return 1;
-}
-
-/*************************************************/
-/* windows_find_to_be_shown()                    */
-/*                                               */
-/* Called when the EOpenFindWindow event is      */
-/* generated, typically when the Find window is  */
-/* about to be shown. Handles any icon           */
-/* processing commands in the writable.          */
-/*                                               */
-/* Parameters are as standard for a Toolbox      */
-/* event handler.                                */
-/*************************************************/
-
-int windows_find_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  char text[MaxFindLen];
-
-  ChkError(windows_process_component_text(idb->self_id, FindWritable, text, sizeof(text), 0, 1));
-
-  return 1;
-}
-
-/*************************************************/

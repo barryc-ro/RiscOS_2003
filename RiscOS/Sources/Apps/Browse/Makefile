@@ -1,10 +1,13 @@
 # Makefile for Browser
+# ====================
 #
-# ***********************************
-# ***    C h a n g e   L i s t    ***
-# ***********************************
+
+# -----------------------------------------------------------------------------
+# Change List
+#
+
 # Date		Name	Description
-# ----		----	-----------
+# ====		====	===========
 # 1997-06-24	BAL	Created
 # 1997-07-18	BAL	Tidied up for CVS.  Hooks are in place for a debug
 #			build, but I'm not sure exactly what's required for
@@ -24,9 +27,15 @@
 #			all the time to see what was compiling, so played
 #			around with the SUFFIXES (rule patterns) section
 #			to make the run-time output more readable.
+# 1997-08-17	ADH	Adding object files was a nightmare, so the objects
+#			list has been unrolled to one per line. This makes
+#			the MakeFile very tall, so a consistent comment
+#			syntax has been ensured to allow folding text
+#			editors to fold the text sensibly - start on
+#			NL, hash, NL; end on '# -'.
+#
 
-
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Program specific options
 #
 
@@ -37,7 +46,7 @@ ROM_MODULE	= aof.Browse
 LDIR		= Resources.${LOCALE}.${SYSTEM}
 
 
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Export Paths for Messages module
 #
 
@@ -45,7 +54,7 @@ RESDIR		= <resource$dir>.Resources2.${COMPONENT}
 RESAPP		= <resource$dir>.Apps.${APP}
 
 
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Generic options
 #
 
@@ -65,7 +74,12 @@ CPFLAGS		= ~cfr~v
 SQFLAGS		= -f
 WFLAGS		= ~cf~vr
 
-# Flags for the standard Desktop build (plus debug), the Surfboard ROM
+
+# -----------------------------------------------------------------------------
+# Flags
+#
+
+# These are for the standard Desktop build (plus debug), the Surfboard ROM
 # build (plus debug), the Surfboard RAM build (plus debug), and the
 # Intertalk build (plus debug).
 
@@ -79,7 +93,7 @@ D_ITALKFLAGS	= -DCOMPAT_INET4 -DALIAS_URLS
 DD_ITALKFLAGS	= ${D_ITALKFLAGS} -DSTRICT_PARSER -DTRACE
 
 
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Libraries
 #
 
@@ -138,8 +152,8 @@ LIBSD = \
  ${ZLIB}
 
 
-# ------------------------------------------------------------------------------
-# Include files
+# -----------------------------------------------------------------------------
+# Include files (libraries and resources)
 #
 
 INCLUDES	= -Itbox:,C:,HTMLLib:,ImageLib:,Libraries.URILib.,TCPIPLibs:
@@ -159,97 +173,325 @@ RESFILES = \
  ${LDIR}.!Sprites \
  ${LDIR}.!Sprites22
 
+
+# -----------------------------------------------------------------------------
+# Include files (objects)
+#
+
 OBJS = \
- o.Authorise	o.Browser	o.Fetch		o.FetchPage	\
- o.FontManage	o.Forms		o.Frames	o.FromROSLib	\
- o.Global	o.Handlers	o.History	o.Images	\
- o.Main		o.Memory	o.Menus		o.Mouse		\
- o.Printing	o.Redraw	o.Reformat	o.ROSLib	\
- o.Save		o.Tables	o.TokenUtils	o.Toolbars	\
- o.URLutils	o.Utils		o.Windows	o.JavaScript	\
- o.LineOne	o.Meta		o.Cookies
+ o.Authorise		\
+ o.Browser		\
+ o.Cookies		\
+ o.Fetch		\
+ o.FetchHTML		\
+ o.FetchPage		\
+ o.Find			\
+ o.FontManage		\
+ o.Forms		\
+ o.Frames		\
+ o.FromROSLib		\
+ o.Global		\
+ o.Handlers		\
+ o.History		\
+ o.Images		\
+ o.JavaScript		\
+ o.LineOne		\
+ o.Main			\
+ o.Memory		\
+ o.Menus		\
+ o.Meta			\
+ o.Mouse		\
+ o.OpenURL		\
+ o.Printing		\
+ o.Redraw		\
+ o.Reformat		\
+ o.Save			\
+ o.Tables		\
+ o.TokenUtils		\
+ o.Toolbars		\
+ o.URLstat		\
+ o.URLutils		\
+ o.URLveneer		\
+ o.Utils		\
+ o.Windows		\
+ o.ROSLib
 
 OBJSZ = \
- oz.Authorise	oz.Browser	oz.Fetch	oz.FetchPage	\
- oz.FontManage	oz.Forms	oz.Frames	oz.FromROSLib	\
- oz.Global	oz.Handlers	oz.History	oz.Images	\
- oz.Main	oz.Memory	oz.Menus	oz.Mouse	\
- oz.Printing	oz.Redraw	oz.Reformat	o.ROSLib	\
- oz.Save	oz.Tables	oz.TokenUtils	oz.Toolbars	\
- oz.URLutils	oz.Utils	oz.Windows	oz.JavaScript	\
- oz.LineOne	oz.Meta		oz.Cookies
+ oz.Authorise		\
+ oz.Browser		\
+ oz.Cookies		\
+ oz.Fetch		\
+ oz.FetchHTML		\
+ oz.FetchPage		\
+ oz.Find		\
+ oz.FontManage		\
+ oz.Forms		\
+ oz.Frames		\
+ oz.FromROSLib		\
+ oz.Global		\
+ oz.Handlers		\
+ oz.History		\
+ oz.Images		\
+ oz.JavaScript		\
+ oz.LineOne		\
+ oz.Main		\
+ oz.Memory		\
+ oz.Menus		\
+ oz.Meta		\
+ oz.Mouse		\
+ oz.OpenURL		\
+ oz.Printing		\
+ oz.Redraw		\
+ oz.Reformat		\
+ oz.Save		\
+ oz.Tables		\
+ oz.TokenUtils		\
+ oz.Toolbars		\
+ oz.URLstat		\
+ oz.URLutils		\
+ oz.URLveneer		\
+ oz.Utils		\
+ oz.Windows		\
+ o.ROSLib
 
 OBJSD = \
- od.Authorise	od.Browser	od.Fetch	od.FetchPage	\
- od.FontManage	od.Forms	od.Frames	od.FromROSLib	\
- od.Global	od.Handlers	od.History	od.Images	\
- od.Main	od.Memory	od.Menus	od.Mouse	\
- od.Printing	od.Redraw	od.Reformat	o.ROSLib	\
- od.Save	od.svcprint	od.Tables	od.TokenUtils	\
- od.Toolbars	od.Trace	od.URLutils	od.Utils	\
- od.Windows	od.JavaScript	od.LineOne	od.Meta		\
- od.Cookies
+ od.Authorise		\
+ od.Browser		\
+ od.Cookies		\
+ od.Fetch		\
+ od.FetchHTML		\
+ od.FetchPage		\
+ od.Find		\
+ od.FontManage		\
+ od.Forms		\
+ od.Frames		\
+ od.FromROSLib		\
+ od.Global		\
+ od.Handlers		\
+ od.History		\
+ od.Images		\
+ od.JavaScript		\
+ od.LineOne		\
+ od.Main		\
+ od.Memory		\
+ od.Menus		\
+ od.Meta		\
+ od.Mouse		\
+ od.OpenURL		\
+ od.Printing		\
+ od.Redraw		\
+ od.Reformat		\
+ od.Save		\
+ od.svcprint		\
+ od.Tables		\
+ od.TokenUtils		\
+ od.Toolbars		\
+ od.Trace		\
+ od.URLstat		\
+ od.URLutils		\
+ od.URLveneer		\
+ od.Utils		\
+ od.Windows		\
+ o.ROSLib
 
 OBJSDZ = \
- odz.Authorise	odz.Browser	odz.Fetch	odz.FetchPage	\
- odz.FontManage	odz.Forms	odz.Frames	odz.FromROSLib	\
- odz.Global	odz.Handlers	odz.History	odz.Images	\
- odz.Main	odz.Memory	odz.Menus	odz.Mouse	\
- odz.Printing	odz.Redraw	odz.Reformat	o.ROSLib	\
- odz.Save	odz.svcprint	odz.Tables	odz.TokenUtils	\
- odz.Toolbars	odz.Trace	odz.URLutils	odz.Utils	\
- odz.Windows	odz.JavaScript	odz.LineOne	odz.Meta	\
- odz.Cookies
+ odz.Authorise		\
+ odz.Browser		\
+ odz.Cookies		\
+ odz.Fetch		\
+ odz.FetchHTML		\
+ odz.FetchPage		\
+ odz.Find		\
+ odz.FontManage		\
+ odz.Forms		\
+ odz.Frames		\
+ odz.FromROSLib		\
+ odz.Global		\
+ odz.Handlers		\
+ odz.History		\
+ odz.Images		\
+ odz.JavaScript		\
+ odz.LineOne		\
+ odz.Main		\
+ odz.Memory		\
+ odz.Menus		\
+ odz.Meta		\
+ odz.Mouse		\
+ odz.OpenURL		\
+ odz.Printing		\
+ odz.Redraw		\
+ odz.Reformat		\
+ odz.Save		\
+ odz.svcprint		\
+ odz.Tables		\
+ odz.TokenUtils		\
+ odz.Toolbars		\
+ odz.Trace		\
+ odz.URLstat		\
+ odz.URLutils		\
+ odz.URLveneer		\
+ odz.Utils		\
+ odz.Windows		\
+ o.ROSLib
 
 OBJS_SURF = \
- o_surf.Authorise	o_surf.Browser		o_surf.Fetch		o_surf.FetchPage	\
- o_surf.FontManage	o_surf.Forms		o_surf.Frames		o_surf.FromROSLib	\
- o_surf.Global		o_surf.Handlers		o_surf.History		o_surf.Images		\
- o_surf.Main		o_surf.Memory		o_surf.Menus		o_surf.Mouse		\
- o_surf.Printing	o_surf.Redraw		o_surf.Reformat		o.ROSLib		\
- o_surf.Save		o_surf.Tables		o_surf.TokenUtils	o_surf.Toolbars		\
- o_surf.URLutils	o_surf.Utils		o_surf.Windows		o_surf.JavaScript	\
- o_surf.LineOne		o_surf.Meta		o_surf.Cookies
+ o_surf.Authorise	\
+ o_surf.Browser		\
+ o_surf.Cookies		\
+ o_surf.Fetch		\
+ o_surf.FetchHTML	\
+ o_surf.FetchPage	\
+ o_surf.Find		\
+ o_surf.FontManage	\
+ o_surf.Forms		\
+ o_surf.Frames		\
+ o_surf.FromROSLib	\
+ o_surf.Global		\
+ o_surf.Handlers	\
+ o_surf.History		\
+ o_surf.Images		\
+ o_surf.JavaScript	\
+ o_surf.LineOne		\
+ o_surf.Main		\
+ o_surf.Memory		\
+ o_surf.Menus		\
+ o_surf.Meta		\
+ o_surf.Mouse		\
+ o_surf.OpenURL		\
+ o_surf.Printing	\
+ o_surf.Redraw		\
+ o_surf.Reformat	\
+ o_surf.Save		\
+ o_surf.Tables		\
+ o_surf.TokenUtils	\
+ o_surf.Toolbars	\
+ o_surf.URLstat		\
+ o_surf.URLutils	\
+ o_surf.URLveneer	\
+ o_surf.Utils		\
+ o_surf.Windows		\
+ o.ROSLib
 
 OBJSD_SURF = \
- od_surf.Authorise	od_surf.Browser		od_surf.Fetch		od_surf.FetchPage	\
- od_surf.FontManage	od_surf.Forms		od_surf.Frames		od_surf.FromROSLib	\
- od_surf.Global		od_surf.Handlers	od_surf.History		od_surf.Images		\
- od_surf.Main		od_surf.Memory		od_surf.Menus		od_surf.Mouse		\
- od_surf.Printing	od_surf.Redraw		od_surf.Reformat	o.ROSLib		\
- od_surf.Save		od_surf.svcprint	od_surf.Tables		od_surf.TokenUtils	\
- od_surf.Toolbars	od_surf.Trace		od_surf.URLutils	od_surf.Utils		\
- od_surf.Windows	od_surf.JavaScript	od_surf.LineOne		od_surf.Meta		\
- od_surf.Cookies
+ od_surf.Authorise	\
+ od_surf.Browser	\
+ od_surf.Cookies	\
+ od_surf.Fetch		\
+ od_surf.FetchHTML	\
+ od_surf.FetchPage	\
+ od_surf.Find		\
+ od_surf.FontManage	\
+ od_surf.Forms		\
+ od_surf.Frames		\
+ od_surf.FromROSLib	\
+ od_surf.Global		\
+ od_surf.Handlers	\
+ od_surf.History	\
+ od_surf.Images		\
+ od_surf.JavaScript	\
+ od_surf.LineOne	\
+ od_surf.Main		\
+ od_surf.Memory		\
+ od_surf.Menus		\
+ od_surf.Meta		\
+ od_surf.Mouse		\
+ od_surf.OpenURL	\
+ od_surf.Printing	\
+ od_surf.Redraw		\
+ od_surf.Reformat	\
+ od_surf.Save		\
+ od_surf.svcprint	\
+ od_surf.Tables		\
+ od_surf.TokenUtils	\
+ od_surf.Toolbars	\
+ od_surf.Trace		\
+ od_surf.URLstat	\
+ od_surf.URLutils	\
+ od_surf.URLveneer	\
+ od_surf.Utils		\
+ od_surf.Windows	\
+ o.ROSLib
 
 OBJS_ITALK = \
- o_italk.Authorise	o_italk.Browser		o_italk.Fetch		\
- o_italk.FetchPage	o_italk.FontManage	o_italk.Forms		\
- o_italk.Frames		o_italk.FromROSLib	o_italk.Global		\
- o_italk.Handlers	o_italk.History		o_italk.Images		\
- o_italk.Main		o_italk.Memory		o_italk.Menus		\
- o_italk.Mouse		o_italk.Printing	o_italk.Redraw		\
- o_italk.Reformat	o.ROSLib		o_italk.Save		\
- o_italk.Tables		o_italk.TokenUtils	o_italk.Toolbars	\
- o_italk.URLutils	o_italk.Utils		o_italk.Windows		\
- o_italk.JavaScript	o_italk.LineOne		o_italk.Meta		\
- o_italk.Cookies
+ o_italk.Authorise	\
+ o_italk.Browser	\
+ o_italk.Cookies	\
+ o_italk.Fetch		\
+ o_italk.FetchHTML	\
+ o_italk.FetchPage	\
+ o_italk.Find		\
+ o_italk.FontManage	\
+ o_italk.Forms		\
+ o_italk.Frames		\
+ o_italk.FromROSLib	\
+ o_italk.Global		\
+ o_italk.Handlers	\
+ o_italk.History	\
+ o_italk.Images		\
+ o_italk.JavaScript	\
+ o_italk.LineOne	\
+ o_italk.Main		\
+ o_italk.Memory		\
+ o_italk.Menus		\
+ o_italk.Meta		\
+ o_italk.Mouse		\
+ o_italk.OpenURL	\
+ o_italk.Printing	\
+ o_italk.Redraw		\
+ o_italk.Reformat	\
+ o_italk.Save		\
+ o_italk.Tables		\
+ o_italk.TokenUtils	\
+ o_italk.Toolbars	\
+ o_italk.URLstat	\
+ o_italk.URLutils	\
+ o_italk.URLveneer	\
+ o_italk.Utils		\
+ o_italk.Windows	\
+ o.ROSLib
 
 OBJSD_ITALK = \
- od_italk.Authorise	od_italk.Browser	od_italk.Fetch		\
- od_italk.FetchPage	od_italk.FontManage	od_italk.Forms		\
- od_italk.Frames	od_italk.FromROSLib	od_italk.Global		\
- od_italk.Handlers	od_italk.History	od_italk.Images		\
- od_italk.Main		od_italk.Memory		od_italk.Menus		\
- od_italk.Mouse		od_italk.Printing	od_italk.Redraw		\
- od_italk.Reformat	o.ROSLib		od_italk.Save		\
- od_italk.svcprint	od_italk.Tables		od_italk.TokenUtils	\
- od_italk.Toolbars	od_italk.Trace		od_italk.URLutils	\
- od_italk.Utils		od_italk.Windows	od_italk.JavaScript	\
- od_italk.LineOne	od_italk.Meta		od_italk.Cookies
+ od_italk.Authorise	\
+ od_italk.Browser	\
+ od_italk.Cookies	\
+ od_italk.Fetch		\
+ od_italk.FetchHTML	\
+ od_italk.FetchPage	\
+ od_italk.Find		\
+ od_italk.FontManage	\
+ od_italk.Forms		\
+ od_italk.Frames	\
+ od_italk.FromROSLib	\
+ od_italk.Global	\
+ od_italk.Handlers	\
+ od_italk.History	\
+ od_italk.Images	\
+ od_italk.JavaScript	\
+ od_italk.LineOne	\
+ od_italk.Main		\
+ od_italk.Memory	\
+ od_italk.Menus		\
+ od_italk.Meta		\
+ od_italk.Mouse		\
+ od_italk.OpenURL	\
+ od_italk.Printing	\
+ od_italk.Redraw	\
+ od_italk.Reformat	\
+ od_italk.Save		\
+ od_italk.svcprint	\
+ od_italk.Tables	\
+ od_italk.TokenUtils	\
+ od_italk.Toolbars	\
+ od_italk.Trace		\
+ od_italk.URLstat	\
+ od_italk.URLutils	\
+ od_italk.URLveneer	\
+ od_italk.Utils		\
+ od_italk.Windows	\
+ o.ROSLib
 
 
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Rule patterns
 #
 
@@ -301,7 +543,8 @@ OBJSD_ITALK = \
 		@${AS} ${AFLAGS} $< $@
 
 
-# ------------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
 # Main rules
 #
 
@@ -415,7 +658,7 @@ o.dirs:
 	stamp  o.dirs
 
 
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Development rules
 #
 
@@ -430,7 +673,28 @@ clean_all: clean
 	@echo ${COMPONENT}: Cleaned all
 
 
-# ------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Final link for ROM Image (using given base address)
+#
+
+rom_link:
+	${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} \
+		${ROM_MODULE} ${ABSSYM} -map > map.${COMPONENT}
+	truncate map.${COMPONENT} linked.${COMPONENT}
+	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+	@echo ${COMPONENT}: rom_link complete
+
+oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
+	${AS} ${AFLAGS} s.ModuleWrap $@
+
+s.ModuleWrap: ${WRAPPER}
+	${CP} ${WRAPPER} $@ ${CPFLAGS}
+
+s.AppName: ${LDIR}.Messages
+	awk -f awk.AppName ${LDIR}.Messages > $@
+
+
+# -----------------------------------------------------------------------------
 # Static dependencies
 #
 
@@ -472,22 +736,6 @@ rm.!BrowseD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
 	@echo
 	${LD} -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
 
-# final link for ROM Image (using given base address)
-rom_link:
-	${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} \
-		${ROM_MODULE} ${ABSSYM} -map > map.${COMPONENT}
-	truncate map.${COMPONENT} linked.${COMPONENT}
-	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-	@echo ${COMPONENT}: rom_link complete
 
-oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
-	${AS} ${AFLAGS} s.ModuleWrap $@
-
-s.ModuleWrap: ${WRAPPER}
-	${CP} ${WRAPPER} $@ ${CPFLAGS}
-
-s.AppName: ${LDIR}.Messages
-	awk -f awk.AppName ${LDIR}.Messages > $@
-
-
+# -----------------------------------------------------------------------------
 # Dynamic dependencies:

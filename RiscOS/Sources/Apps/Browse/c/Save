@@ -1,8 +1,11 @@
 /***************************************************/
 /* File   : Save.c                                 */
-/* Purpose: Save functions for the browser         */
+/*                                                 */
+/* Purpose: Save functions for the browser.        */
+/*                                                 */
 /* Author : A.D.Hodgkinson                         */
-/* History: 04-Dec-96: Created                     */
+/*                                                 */
+/* History: 04-Dec-96: Created.                    */
 /***************************************************/
 
 #include <stdlib.h>
@@ -25,6 +28,7 @@
 #include "TBEvents.h"
 #include "Utils.h"
 
+#include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "URLutils.h"
 
 #include "Save.h"
@@ -93,7 +97,7 @@ int save_fill_in(int eventcode, ToolboxEvent * event, IdBlock * idb, void * hand
       {
         erb.errnum = 0;
         StrNCpy0(erb.errmess,
-                 "WhatSve:Internal error - Save dialogue origin not understood in save_fill_in().");
+                 "WhatSve:Internal error - Save dialogue origin not understood in save_fill_in.");
 
         show_error_cont(&erb);
       }
@@ -144,19 +148,20 @@ int save_fill_for_html(IdBlock *idb)
 
   /* Reset the transferred data counter */
 
-  b->savetransferred = 0;
+  b->save_transferred = 0;
 
   /* Only fill it in if there's document source */
 
   if (b->source)
   {
-    char test[1024];
+    char test[Limits_OS_Pathname];
 
     ChkError(saveas_get_file_name(0,
                                   idb->self_id,
                                   test,
                                   sizeof(test),
                                   NULL));
+    test[sizeof(test) - 1] = 0;
 
     /* If there's not already a path filled in, then set just the file name */
 
@@ -192,18 +197,238 @@ int save_fill_for_html(IdBlock *idb)
 }
 
 /*************************************************/
+/* save_fill_for_object()                        */
+/*                                               */
+/* Creates and initialises a Save As dialogue    */
+/* for an object of type determined by the       */
+/* save_type field of the given browser_data     */
+/* structure.                                    */
+/*                                               */
+/* Because these dialogues can persist, so that  */
+/* if several fetches come in at once they       */
+/* won't keep closing one another, a different   */
+/* (browser local) scheme is used to keep track  */
+/* of the dialogue.                              */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the object save fetch */
+/*             (which should be in progress);    */
+/*                                               */
+/*             The URL being fetched, from which */
+/*             a leafname will be derived (or    */
+/*             NULL for a generic response).     */
+/*************************************************/
+
+_kernel_oserror * save_fill_for_object(browser_data * b, char * url)
+{
+  _kernel_oserror * e;
+  char              test[Limits_OS_Pathname];
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_fill_for_object: Called for browser %p and url '%s'\n",b,url);
+  #endif
+
+  if (!b) return NULL;
+
+  if (!b->save_dbox)
+  {
+    e = toolbox_create_object(0, "SaveObject", &b->save_dbox);
+    if (e) return e;
+  }
+
+  /* Cancel any existing menu-based save */
+
+  if (save_origin)
+  {
+    e = _swix(Wimp_CreateMenu,
+              _IN(1),
+
+              -1);
+    if (e) return e;
+
+    save_origin = NULL;
+
+    /* Don't clear save_dbox as this is used to distinguish */
+    /* between the box we're about to open being closed and */
+    /* the one above being closed.                          */
+  }
+
+  /* Get the filename in the dialogue (as we could be */
+  /* reusing an old one)                              */
+
+  *test = 0;
+
+  e = saveas_get_file_name(0,
+                           b->save_dbox,
+                           test,
+                           sizeof(test),
+                           NULL);
+  if (e) return e;
+
+  test[sizeof(test) - 1] = 0;
+
+  /* If there's not already a path filled in, then set just the file name */
+
+  if (!strstr(test,"."))
+  {
+    e = saveas_set_file_name(0,
+                             b->save_dbox,
+                             urlutils_leafname_from_url(url ? url : lookup_token("NoURLobje:PageObject", 0, 0),
+                                                        test,
+                                                        sizeof(test)));
+    if (e) return e;
+  }
+
+  /* Set the filetype and estimated file size (-1, it's unknown) */
+
+  e = saveas_set_file_type(0,
+                           b->save_dbox,
+                           b->save_type);
+  if (e) return e;
+
+  e = saveas_set_file_size(0, b->save_dbox, -1);
+  if (e) return e;
+
+  /* Set the clint handle so we know where this came from */
+
+  e = toolbox_set_client_handle(0, b->save_dbox, b);
+  if (e) return e;
+
+  /* Show the window */
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_fill_for_object: Exitting through toolbox_show_object\n");
+  #endif
+
+  return toolbox_show_object(0,
+                             b->save_dbox,
+                             Toolbox_ShowObject_AtPointer,
+                             NULL,
+                             0,
+                             -1);
+}
+
+/*************************************************/
 /* save_save_to_file()                           */
 /*                                               */
-/* Saves document source to a file. Parameters   */
-/* are as standard for a Toolbox event handler   */
-/* responding to a SaveAs_SaveToFile event.      */
+/* Called on reception of a Save_SaveToFile      */
+/* event. Handles saving document source to a    */
+/* file, saving page objects, etc.               */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
 int save_save_to_file(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  int file_type;
+  int               file_type;
+  _kernel_oserror * e;
 
-  if (!save_origin) return 0;
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_to_file: Called\n");
+  #endif
+
+  if (!save_origin)
+  {
+    if (save_dbox && save_dbox == idb->self_id)
+    {
+      /* This was a menu-opened save dialogue being closed */
+
+      #ifdef TRACE
+        if (tl & (1u<<26)) Printf("save_save_to_file: No origin but menu save case\n");
+      #endif
+
+      save_dbox = 0;
+    }
+    else
+    {
+      browser_data * b;
+      char           filename[Limits_OS_Pathname];
+
+      #ifdef TRACE
+        if (tl & (1u<<26)) Printf("save_save_to_file: No origin no menu save case\n");
+      #endif
+
+      /* If save_origin is NULL and save_dbox is 0, this must be the */
+      /* completion of an object save dialogue                       */
+
+      ChkError(toolbox_get_client_handle(0, idb->self_id, (void *) &b));
+
+      /* Quick sanity check */
+
+      if (!b || b->save_dbox != idb->self_id)
+      {
+        #ifdef TRACE
+          if (tl & (1u<<26)) Printf("save_save_to_file: Exitting - no browser, or dbox ID didn't match\n");
+        #endif
+
+        return 0;
+      }
+
+      ChkError(saveas_get_file_name(0, b->save_dbox, filename, sizeof(filename), NULL));
+      filename[sizeof(filename) - 1] = 0;
+
+      /* App to app transfer? */
+
+      if (!strstr(filename, ".")) strcpy(filename, "<Wimp$Scrap>");
+
+      /* Don't need the dialogue now */
+
+      toolbox_delete_object(0, b->save_dbox);
+      b->save_dbox = 0;
+
+      /* Open the file */
+
+      b->save_file = fopen(filename, "wb");
+
+      if (!b->save_file)
+      {
+        fetch_stop(b, 0);
+        show_error_ret(_kernel_last_oserror());
+      }
+      else if (b->source)
+      {
+        int bytes;
+
+        /* Any data in the source store represents already */
+        /* fetched bits of the file                        */
+
+        flex_set_budge(0);
+
+        bytes = fwrite(b->source,
+                       1,
+                       flex_size((flex_ptr) &b->source),
+                       b->save_file);
+
+        flex_set_budge(1);
+
+        if (bytes != flex_size((flex_ptr) &b->source))
+        {
+          /* Report any errors */
+
+          fetch_stop(b, 0);
+
+          show_error_ret(_kernel_last_oserror());
+        }
+        else
+        {
+          /* Otherwise, get rid of the data in the source store */
+          /* as it's been written to the file                   */
+
+          flex_free((flex_ptr) &b->source);
+          b->source = NULL;
+        }
+      }
+    }
+
+    return 1;
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_to_file: Origin menu save case\n");
+  #endif
+
+  /* Otherwise, this is a defined save for something from a menu */
 
   ChkError(saveas_get_file_type(0, idb->self_id, &file_type));
 
@@ -212,14 +437,20 @@ int save_save_to_file(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
   /* I/O system and return errors in a more useful */
   /* fashion than the standard C functions.        */
 
-  ChkError(_swix(OS_File,
-                 _INR(0,2) | _INR(4,5),
+  flex_set_budge(0);
 
-                 10, /* Save block of memory as a typed file */
-                 ((SaveAsSaveToFileEvent *) event)->filename,
-                 file_type,
-                 save_origin->source,
-                 ((char *) save_origin->source) + flex_size((flex_ptr) &save_origin->source)));
+  e = _swix(OS_File,
+            _INR(0,2) | _INR(4,5),
+
+            10, /* Save block of memory as a typed file */
+            ((SaveAsSaveToFileEvent *) event)->filename,
+            file_type,
+            save_origin->source,
+            ((char *) save_origin->source) + flex_size((flex_ptr) &save_origin->source));
+
+  flex_set_budge(1);
+
+  if (e) show_error_cont(e);
 
   /* Tell the SaveAs dialogue that the save has been done */
 
@@ -273,10 +504,10 @@ int save_fill_buffer(int eventcode, ToolboxEvent * event, IdBlock * idb, void * 
 
   ChkError(saveas_buffer_filled(0,
                                 idb->self_id,
-                                ((char *) save_origin->source) + save_origin->savetransferred,
+                                ((char *) save_origin->source) + save_origin->save_transferred,
                                 copy));
 
-  save_origin->savetransferred += copy;
+  save_origin->save_transferred += copy;
 
   return 1;
 }
@@ -292,10 +523,82 @@ int save_fill_buffer(int eventcode, ToolboxEvent * event, IdBlock * idb, void * 
 
 int save_save_completed(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_completed: Called\n");
+  #endif
+
   save_origin = NULL;
   save_dbox   = 0;
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_completed: Successful\n");
+  #endif
 
   return 1;
 }
 
 /*************************************************/
+/* save_dialogue_completed()                     */
+/*                                               */
+/* Called when a save dialogue is cancelled.     */
+/* Parameters are as standard for a Toolbox      */
+/* event handler responding to a                 */
+/* SaveAs_DialogueCompleted event.               */
+/*************************************************/
+
+int save_dialogue_completed(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_dialogue_completed: Called\n");
+  #endif
+
+  if (!save_origin)
+  {
+    if (save_dbox && save_dbox == idb->self_id)
+    {
+      /* This was a menu-opened save dialogue being closed */
+
+      #ifdef TRACE
+        if (tl & (1u<<26)) Printf("save_dialogue_completed: No origin but menu save case\n");
+      #endif
+
+      return save_save_completed(eventcode, event, idb, handle);
+    }
+    else
+    {
+      browser_data * b;
+
+      #ifdef TRACE
+        if (tl & (1u<<26)) Printf("save_dialogue_completed: No origin no menu save case\n");
+      #endif
+
+      /* If save_origin is NULL and save_dbox is 0, this must be the */
+      /* cancellation of an object save dialogue.                    */
+
+      ChkError(toolbox_get_client_handle(0, idb->self_id, (void *) &b));
+
+      /* Quick sanity check */
+
+      if (!b || b->save_dbox != idb->self_id)
+      {
+        #ifdef TRACE
+          if (tl & (1u<<26)) Printf("save_dialogue_completed: Exitting - no browser, or dbox ID didn't match\n");
+        #endif
+
+        return 0;
+      }
+
+      /* Cancel the fetch (this deletes the dialogue too) */
+
+      fetch_stop(b, 0);
+    }
+
+    return 1;
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_dialogue_completed: Origin menu save case\n");
+  #endif
+
+  return save_save_completed(eventcode, event, idb, handle);
+}

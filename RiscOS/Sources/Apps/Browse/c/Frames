@@ -1,9 +1,12 @@
 /***************************************************/
 /* File   : Frames.c                               */
+/*                                                 */
 /* Purpose: Frame handling functions for the       */
 /*          browser.                               */
+/*                                                 */
 /* Author : A.D.Hodgkinson                         */
-/* History: 19-Mar-97: Created                     */
+/*                                                 */
+/* History: 19-Mar-97: Created.                    */
 /***************************************************/
 
 #include <stdlib.h>
@@ -31,10 +34,11 @@
 #include "Utils.h"
 
 #include "Browser.h"
-#include "Fetch.h"
+#include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "FetchPage.h"
 #include "Images.h"
 #include "Memory.h"
+#include "Mouse.h"
 #include "Reformat.h"
 #include "Toolbars.h"
 #include "URLutils.h"
@@ -56,6 +60,7 @@ static ObjectId       highlight_right  = 0;
 static _kernel_oserror * frames_find_widths            (browser_data * b, int available);
 static _kernel_oserror * frames_find_heights           (browser_data * b, int available);
 static int               frames_check_recursion        (browser_data * parent, browser_data * child, HStream * token);
+static _kernel_oserror * frames_reopen_frame           (browser_data * cb, browser_data * parent, BBox * frame_box);
 static void              frames_collapse_child_tree    (browser_data * base, browser_data * real_parent, browser_data * close);
 
 static browser_data    * frames_find_next_frame        (browser_data * check, browser_data * current, int * found);
@@ -77,9 +82,9 @@ static int               frames_remove_highlight_timer (int eventcode, WimpPollB
 /* border and scroll bar size considerations     */
 /* must therefore be done externally.            */
 /*                                               */
-/*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the frameset;         */
+/*                                               */
 /*             The available width the frameset  */
 /*             must fit inside, in OS units.     */
 /*************************************************/
@@ -134,7 +139,7 @@ static _kernel_oserror * frames_find_widths(browser_data * b, int available)
     }
     else if (units & ROWCOL_STAR)
     {
-      stars ++;
+      stars += tw;
     }
     else
     {
@@ -151,6 +156,7 @@ static _kernel_oserror * frames_find_widths(browser_data * b, int available)
   if (stars)
   {
     int remaining;
+    int rem_stars = stars;
 
     remaining = left;
 
@@ -162,7 +168,11 @@ static _kernel_oserror * frames_find_widths(browser_data * b, int available)
 
       if (units & ROWCOL_STAR)
       {
-        tw = (remaining * tw / stars) & ~(wimpt_dx() - 1);
+        rem_stars -= tw;
+
+        if (rem_stars) tw = (remaining * tw / stars) & ~(wimpt_dx() - 1);
+        else           tw = left;
+
         if (tw < choices.minfrmwidth) tw = choices.minfrmwidth;
 
         left -= tw;
@@ -192,7 +202,7 @@ static _kernel_oserror * frames_find_widths(browser_data * b, int available)
     }
 
     /* 'left2' is in OS units, but represents a whole number of */
-    /* pixels due to careful use of wimpt_dx() above. To cope   */
+    /* pixels due to careful use of wimpt_dx above. To cope     */
     /* with rounding correctly during rescaling the widths      */
     /* (see below), want this now in pixel values.              */
 
@@ -236,9 +246,9 @@ static _kernel_oserror * frames_find_widths(browser_data * b, int available)
 /* border and scroll bar size considerations     */
 /* must therefore be done externally.            */
 /*                                               */
-/*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the frameset;         */
+/*                                               */
 /*             The available height the frameset */
 /*             must fit inside, in OS units.     */
 /*************************************************/
@@ -293,7 +303,7 @@ static _kernel_oserror * frames_find_heights(browser_data * b, int available)
     }
     else if (units & ROWCOL_STAR)
     {
-      stars ++;
+      stars += th;
     }
     else
     {
@@ -310,6 +320,7 @@ static _kernel_oserror * frames_find_heights(browser_data * b, int available)
   if (stars)
   {
     int remaining;
+    int rem_stars = stars;
 
     remaining = left;
 
@@ -321,7 +332,11 @@ static _kernel_oserror * frames_find_heights(browser_data * b, int available)
 
       if (units & ROWCOL_STAR)
       {
-        th = (remaining * th / stars) & ~(wimpt_dy() - 1);
+        rem_stars -= th;
+
+        if (rem_stars) th = (remaining * th / stars) & ~(wimpt_dy() - 1);
+        else           th = left;
+
         if (th < choices.minfrmheight) th = choices.minfrmheight;
 
         left -= th;
@@ -351,7 +366,7 @@ static _kernel_oserror * frames_find_heights(browser_data * b, int available)
     }
 
     /* 'left2' is in OS units, but represents a whole number of */
-    /* pixels due to careful use of wimpt_dy() above. To cope   */
+    /* pixels due to careful use of wimpt_dy above. To cope     */
     /* with rounding correctly during rescaling the heights     */
     /* (see below), want this now in pixel values.              */
 
@@ -408,8 +423,6 @@ static _kernel_oserror * frames_find_heights(browser_data * b, int available)
 /*             column the child lies in is       */
 /*             placed.                           */
 /*                                               */
-/* Returns:    See parameters list.              */
-/*                                               */
 /* Assumes:    Any of the four int pointers may  */
 /*             be NULL.                          */
 /*************************************************/
@@ -443,6 +456,336 @@ void frames_get_rc_info(browser_data * parent, int child,
   if (retcols) *retcols = cols;
   if (retrow)  *retrow  = row;
   if (retcol)  *retcol  = col;
+}
+
+/*************************************************/
+/* frames_find_pointer_in_frameset()             */
+/*                                               */
+/* Works out where in a frameset a given screen  */
+/* coordinate is. The returned row and column    */
+/* values are -1 if the coordinate lies within   */
+/* a row or column, or are the row below, or     */
+/* column to the right of the coordinate if it   */
+/* lies in the border between two rows or        */
+/* columns. So the value 0 would never be        */
+/* returned for either.                          */
+/*                                               */
+/* In the event that the pointer lies between a  */
+/* row or column but that row or column edge     */
+/* cannot be resized due to specifiers in the    */
+/* HTML source for the frameset, -2 will be      */
+/* returned.                                     */
+/*                                               */
+/* Given that this is likely to be called by     */
+/* routines handling border-driven resizing of   */
+/* frames, the routine can constrain the pointer */
+/* to a bounding box appropriate to the frames   */
+/* surrounding it if required. This may be done  */
+/* via. a mouse_rectangle or Wimp_DragBox.       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             representing the parent frame;    */
+/*                                               */
+/*             X screen coordinate to check;     */
+/*                                               */
+/*             Y screen coordinate to check;     */
+/*                                               */
+/*             Pointer to an int, into which the */
+/*             row number (see above) will be    */
+/*             written;                          */
+/*                                               */
+/*             Pointer to an int, into which the */
+/*             column number (see above) will be */
+/*             written;                          */
+/*                                               */
+/*             Pointer to an int, into which the */
+/*             pointer's x offset from the left  */
+/*             edge of the frame left of it, if  */
+/*             applicable, is returned;          */
+/*                                               */
+/*             Pointer to an int, into which the */
+/*             pointer's y offset from the top   */
+/*             edge of the frame below it, if    */
+/*             applicable, is returned;          */
+/*                                               */
+/*             1 to constrain the pointer (again */
+/*             see above for more details) with  */
+/*             Wimp_DragBox, 2 to constrain with */
+/*             mouse_rectangle, 0 to not do any  */
+/*             pointer constraint.               */
+/*                                               */
+/* Assumes:    Either of the four int pointers   */
+/*             may be NULL.                      */
+/*************************************************/
+
+_kernel_oserror * frames_find_pointer_in_frameset(browser_data * handle, int x, int y, int * retrow, int * retcol,
+                                                  int * offset_left, int * offset_top, int constrain)
+{
+  _kernel_oserror           * e;
+  browser_data              * child;
+  WimpGetWindowOutlineBlock   co;
+  int                         oft,  ofl;
+  int                         rows, cols;
+  int                         row,  col;
+  int                         i,    c;
+  BBox                        span;
+
+  if (offset_left) *offset_left = 0;
+  if (offset_top)  *offset_top  = 0;
+
+  oft = ofl = 0;
+
+  /* Find the number of rows and columns */
+
+  rows = handle->frameset->rows;
+  cols = handle->frameset->cols;
+
+  if (!rows) rows = 1;
+  if (!cols) cols = 1;
+
+  /* First find the row that the pointer lies between */
+
+  row = -1, col = -1;
+
+  for (i = 0; i < rows; i++)
+  {
+    /* What child number are we on? */
+
+    c = i * cols;
+
+    if (c < handle->nchildren)
+    {
+      /* Get this child frame's outline coordinates */
+
+      child            = handle->children[c];
+      co.window_handle = child->window_handle;
+
+      e = wimp_get_window_outline(&co);
+      if (e) return e;
+
+      /* First case - pointer y coord lies within the bounding y */
+      /* coords of the window, so it lies in this row. In this   */
+      /* case, we've a column-only drag, so don't care about the */
+      /* row. We can just exit, leaving row at -1.               */
+
+      if (co.outline.ymax > y && co.outline.ymin < y) break;
+
+      /* Second case - pointer y coord lies above the top of the */
+      /* frame. So we've gone past it; in that case, the pointer */
+      /* must lie between this row and the previous one.         */
+
+      if (co.outline.ymax <= y)
+      {
+        row = i; /* So row points to the row below the pointer */
+        oft = y - co.outline.ymax;
+
+        if (offset_top) *offset_top = oft;
+
+        break;
+      }
+    }
+  }
+
+  /* Right, next find the column the pointer lies between */
+
+  for (i = 0; i < cols; i++)
+  {
+    if (i < handle->nchildren)
+    {
+      /* Get this child frame's outline coordinates */
+
+      child            = handle->children[i];
+      co.window_handle = child->window_handle;
+
+      e = wimp_get_window_outline(&co);
+      if (e) return e;
+
+      /* As for rows, first case is the x coord lying within the */
+      /* bounding x coords of the window.                        */
+
+      if (co.outline.xmin < x && co.outline.xmax > x) break;
+
+      /* Second case, the pointer x coord lies left of the left  */
+      /* hand side of the frame, so we've gone past it.          */
+
+      if (co.outline.xmin >= x)
+      {
+        col = i;
+        ofl = co.outline.xmin - x;
+
+        if (offset_left) *offset_left = ofl;
+
+        break;
+      }
+    }
+  }
+
+  /* At this point, row holds -1 if the pointer lies within a  */
+  /* particular row, or holds the row number below the pointer */
+  /* if it lies between two rows. Similarly, col holds -1 if   */
+  /* the pointer lies within a particular column, or holds the */
+  /* column number to the right of the pointer if it lies      */
+  /* between two columns.                                      */
+
+  if (
+       row == 0        ||
+       col == 0        ||
+       row >= rows ||
+       col >= cols
+     )
+  {
+    if (retrow) *retrow = -1;
+    if (retcol) *retcol = -1;
+
+    return NULL;
+  }
+
+  /* Are we allowed to resize this edge? */
+
+  if (row > 0 && !frames_can_resize_top(handle, row * cols)) row = -2;
+  if (col > 0 && !frames_can_resize_left(handle, col))       col = -2;
+
+  /* Set the return values */
+
+  if (retrow) *retrow = row;
+  if (retcol) *retcol = col;
+
+  /* If required, constrain the pointer */
+
+  if (constrain)
+  {
+    int th, hh, vw;
+    int bx, by;
+
+    /* Find the tool sizes; we reduce the size of the bounding box */
+    /* for the pointer by the relevant tool size times two to make */
+    /* sure the frames don't get squashed too small, as well as    */
+    /* considering the border width and original drag position.    */
+
+    windows_return_tool_sizes(&th, &hh, &vw);
+
+    span.xmin = x;
+    span.xmax = x + 1;
+    span.ymin = y;
+    span.ymax = y + 1;
+
+    bx = by = handle->frameset->indent; /* Not *2 - we want half for top left and half for bottom right */
+
+    bx -= ofl;
+    by -= oft;
+
+    /* Finding the outlines again for four frames  */
+    /* may duplicate some, or even all of the work */
+    /* done above but this keeps the code clear    */
+    /* and easy to understand. This is a very      */
+    /* infrequent operation (only at the start of  */
+    /* a drag, for example) so it doesn't need to  */
+    /* be that fast.                               */
+
+    if (row > 0)
+    {
+      /* Get the top frame outline coordinates */
+
+      c = (row - 1) * cols;
+
+      if (c < handle->nchildren)
+      {
+        child            = handle->children[c];
+        co.window_handle = child->window_handle;
+
+        e = wimp_get_window_outline(&co);
+        if (e) return e;
+
+        span.ymax = co.outline.ymax - hh * 2 - by;
+      }
+
+      /* Get the bottom frame outline coordinates */
+
+      c = row * cols;
+
+      if (c < handle->nchildren)
+      {
+        child            = handle->children[c];
+        co.window_handle = child->window_handle;
+
+        e = wimp_get_window_outline(&co);
+        if (e) return e;
+
+        span.ymin = co.outline.ymin + hh * 2 - by;
+      }
+
+      if (span.ymax < span.ymin) span.ymax = span.ymin = y;
+    }
+
+    if (col > 0)
+    {
+      /* Get the left frame outline coordinates */
+
+      c = col - 1;
+
+      if (c < handle->nchildren)
+      {
+        child            = handle->children[c];
+        co.window_handle = child->window_handle;
+
+        e = wimp_get_window_outline(&co);
+        if (e) return e;
+
+        span.xmin = co.outline.xmin + vw * 2 + bx;
+      }
+
+      /* Get the right hand frame outline coordinates */
+
+      c = col;
+
+      if (c < handle->nchildren)
+      {
+        child            = handle->children[c];
+        co.window_handle = child->window_handle;
+
+        e = wimp_get_window_outline(&co);
+        if (e) return e;
+
+        span.xmax = co.outline.xmax - vw * 2 + bx;
+      }
+
+      if (span.xmax < span.xmin) span.xmax = span.xmin = x;
+    }
+
+    /* Set the bounding box */
+
+    if (constrain == 1)
+    {
+      WimpDragBox drag;
+
+      drag.wimp_window       = handle->window_handle;
+      drag.drag_type         = Wimp_DragBox_DragPoint;
+
+      drag.dragging_box.xmin = 0;
+      drag.dragging_box.ymin = 0;
+      drag.dragging_box.xmax = 0;
+      drag.dragging_box.ymax = 0;
+      drag.parent_box        = span;
+
+      drag.workspace         = NULL;
+      drag.draw              = NULL;
+      drag.remove            = NULL;
+      drag.move              = NULL;
+
+      wimp_drag_box(&drag);
+    }
+
+    /* Whether or not a drag has been started by the above, need */
+    /* to also set the constraint this way as Wimp_DragBox won't */
+    /* allow (say) a zero width rectangle; so the pointer can    */
+    /* 'wobble' from side to side.                               */
+
+    if (constrain) mouse_rectangle(&span, 1);
+  }
+
+  /* Finished */
+
+  return NULL;
 }
 
 /*************************************************/
@@ -524,6 +867,7 @@ int frames_can_resize_top(browser_data * parent, int child)
 /* Parameters: Pointer to a browser_data struct  */
 /*             which is the parent of the set of */
 /*             frames in question;               */
+/*                                               */
 /*             Number of the child to check.     */
 /*                                               */
 /* Returns:    1 if the frame's bottom edge can  */
@@ -594,6 +938,7 @@ int frames_can_resize_bottom(browser_data * parent, int child)
 /* Parameters: Pointer to a browser_data struct  */
 /*             which is the parent of the set of */
 /*             frames in question;               */
+/*                                               */
 /*             Number of the child to check.     */
 /*                                               */
 /* Returns:    1 if the frame's left edge can be */
@@ -663,8 +1008,8 @@ int frames_can_resize_left(browser_data * parent, int child)
 /* Parameters: Pointer to a browser_data struct  */
 /*             which is the parent of the set of */
 /*             frames in question;               */
-/*             Number of the child to check.     */
 /*                                               */
+/*             Number of the child to check.     */
 /*                                               */
 /* Returns:    1 if the frame's right edge can   */
 /*             be dragged to resize it, else 0   */
@@ -736,6 +1081,7 @@ int frames_can_resize_right(browser_data * parent, int child)
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             representing the parent;          */
+/*                                               */
 /*             Pointer to a token defining the   */
 /*             frameset.                         */
 /*                                               */
@@ -840,8 +1186,8 @@ _kernel_oserror * frames_define_frameset(browser_data * b, HStream * token)
 
   /* Account for frame spacing */
 
-  available_w -= token->indent * wimpt_dx() * (num_cols - 1);
-  available_h -= token->indent * wimpt_dy() * (num_rows - 1);
+  available_w -= token->indent * 2 * (num_cols - 1); /* Scale to 2 OS units/pixel */
+  available_h -= token->indent * 2 * (num_rows - 1);
 
   #ifdef TRACE
     if (tl & (1u<<17))
@@ -931,7 +1277,7 @@ _kernel_oserror * frames_define_frameset(browser_data * b, HStream * token)
       frame_box.xmax = frame_box.xmin + width  - vw;
       frame_box.ymin = frame_box.ymax - height + hh;
 
-      windows_create_browser("", b, &frame_box, NULL);
+      windows_create_browser("", b, &frame_box, NULL, 0);
       windows_set_tools(last_browser, &frame_box, 0, 0, 0, 0);
 
       /* Make the child inherit the parent's display characteristics */
@@ -947,10 +1293,10 @@ _kernel_oserror * frames_define_frameset(browser_data * b, HStream * token)
 
       /* Increment the position counters and loop round again */
 
-      frame_box.xmin += width + token->indent * wimpt_dx();
+      frame_box.xmin += width + token->indent * 2; /* Scale to 2 OS units/pixel */
     }
 
-    frame_box.ymax -= height + token->indent * wimpt_dy();
+    frame_box.ymax -= height + token->indent * 2;
   }
 
   /* Finally, do a redraw of the parent to ensure borders are */
@@ -980,7 +1326,7 @@ _kernel_oserror * frames_define_frameset(browser_data * b, HStream * token)
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             which is the parent of the frame  */
-/*             being checked.                    */
+/*             being checked;                    */
 /*                                               */
 /*             Pointer to a browser_data struct  */
 /*             which represents the frame being  */
@@ -1016,6 +1362,7 @@ static int frames_check_recursion(browser_data * parent, browser_data * child, H
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             representing the parent;          */
+/*                                               */
 /*             Pointer to the token that is to   */
 /*             define the child characteristics. */
 /*                                               */
@@ -1106,20 +1453,102 @@ _kernel_oserror * frames_define_frame(browser_data * b, HStream * token)
 }
 
 /*************************************************/
+/* frames_reopen_frame()                         */
+/*                                               */
+/* Reopens a given frame to a given outline      */
+/* size.                                         */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             representing the frame;           */
+/*                                               */
+/*             Pointer to a browser_data struct  */
+/*             representing the parent, or NULL  */
+/*             if not known;                     */
+/*                                               */
+/*             Pointer to a BBox describing the  */
+/*             new outline (screen coordinates)  */
+/*             for the frame.                    */
+/*************************************************/
+
+static _kernel_oserror * frames_reopen_frame(browser_data * cb, browser_data * parent, BBox * frame_box)
+{
+  _kernel_oserror         * e = NULL;
+  WimpGetWindowStateBlock   frame_state;
+  IdBlock                   idb;
+  WimpPollBlock             block;
+  int                       title_height, hscroll_height, vscroll_width;
+
+  if (!cb) return NULL;
+  if (!parent) parent = cb->parent;
+  if (!parent) parent = cb->real_parent;
+  if (!parent) parent = cb->ancestor;
+  if (!parent) return NULL;
+
+  /* Get the tool sizes */
+
+  windows_return_tool_sizes(&title_height, &hscroll_height, &vscroll_width);
+
+  /* Get the frame's window details */
+
+  frame_state.window_handle = cb->window_handle;
+
+  e = wimp_get_window_state(&frame_state);
+  if (e) return e;
+
+  /* Fill in the open window request block with the new size */
+  /* details, etc.                                           */
+
+  block.open_window_request.window_handle = frame_state.window_handle;
+
+  if (frame_state.flags & WimpWindow_VScroll) frame_box->xmax -= vscroll_width;
+  if (frame_state.flags & WimpWindow_HScroll) frame_box->ymin += hscroll_height;
+
+  block.open_window_request.visible_area = *frame_box;
+  block.open_window_request.xscroll      = frame_state.xscroll;
+  block.open_window_request.yscroll      = frame_state.yscroll;
+
+  /* Sort out the window to open behind. */
+
+  block.open_window_request.behind = find_behind(block.open_window_request.window_handle);
+
+  /* Fill in the ID block and call the open window function */
+
+  idb.self_id   = cb->self_id;
+  idb.parent_id = parent->self_id;
+
+  windows_open_browser(0, &block, &idb, cb);
+
+  /* If the frame was highlighted, move the highlight too */
+
+  if (cb == highlight_frame)
+  {
+    e = frames_highlight_frame(cb);
+    if (e) return e;
+  }
+
+  return NULL;
+}
+
+/*************************************************/
 /* frames_resize_frameset()                      */
 /*                                               */
 /* For a given parent browser_data structure,    */
-/* resize a frameset within its window.          */
+/* resize a frameset within its window. Compare  */
+/* with frames_resize_frame(), which also        */
+/* resizes the parent (which is useful when the  */
+/* natural progression of a calling function     */
+/* would not include this itself).               */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             representing the parent;          */
 /*                                               */
-/*             A WimpOpenWindowBlock pointer,    */
-/*             with the block holding the new    */
-/*             BBox of the parent.               */
+/*             Pointer to a BBox describing the  */
+/*             required new window outline (in   */
+/*             screen coordinates) of the parent */
+/*             frame.                            */
 /*************************************************/
 
-_kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock * o)
+_kernel_oserror * frames_resize_frameset(browser_data * b, BBox * new_outline)
 {
   _kernel_oserror         * e;
   WimpGetWindowStateBlock   s;
@@ -1144,11 +1573,11 @@ _kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock *
 
   /* Get the frame window details and tool sizes */
 
-  s.window_handle = o->window_handle;
+  s.window_handle = b->window_handle;
   e = wimp_get_window_state(&s);
   if (e) return e;
 
-  s.visible_area = o->visible_area;
+  s.visible_area = *new_outline;
 
   windows_return_tool_sizes(&th, &hh, &vw);
 
@@ -1186,15 +1615,15 @@ _kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock *
   token = b->frameset;
 
   num_rows = token->rows;
-  if (!num_rows) num_rows = 1;
-
   num_cols = token->cols;
+
+  if (!num_rows) num_rows = 1;
   if (!num_cols) num_cols = 1;
 
   /* Account for frame spacing */
 
-  available_w -= token->indent * wimpt_dx() * (num_cols - 1);
-  available_h -= token->indent * wimpt_dy() * (num_rows - 1);
+  available_w -= token->indent * 2 * (num_cols - 1); /* Scale to 2 OS units/pixel */
+  available_h -= token->indent * 2 * (num_rows - 1);
 
   #ifdef TRACE
     if (tl & (1u<<17))
@@ -1281,54 +1710,16 @@ _kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock *
 
       /* Handle reopening the frame */
 
-      {
-        browser_data            * cb;
-        WimpGetWindowStateBlock   frame_state;
-        IdBlock                   idb;
-        WimpPollBlock             block;
-
-        cb = b->children[child];
-
-        frame_state.window_handle = cb->window_handle;
-
-        e = wimp_get_window_state(&frame_state);
-        if (e) return e;
-
-        /* Fill in the open window request block with the new size */
-        /* details, etc.                                           */
-
-        block.open_window_request.window_handle = frame_state.window_handle;
-
-        if (frame_state.flags & WimpWindow_VScroll) frame_box.xmax -= vw;
-        if (frame_state.flags & WimpWindow_HScroll) frame_box.ymin += hh;
-
-        block.open_window_request.visible_area = frame_box;
-        block.open_window_request.xscroll      = frame_state.xscroll;
-        block.open_window_request.yscroll      = frame_state.yscroll;
-
-        /* Sort out the window to open behind. */
-
-        block.open_window_request.behind = find_behind(block.open_window_request.window_handle);
-
-        /* Fill in the ID block and call the open window function */
-
-        idb.self_id   = cb->self_id;
-        idb.parent_id = b->self_id;
-
-        windows_open_browser(0, &block, &idb, cb);
-
-        /* If the frame was highlighted, move the highlight too */
-
-        if (cb == highlight_frame) frames_highlight_frame(cb);
-      }
+      e = frames_reopen_frame(b->children[child], b, &frame_box);
+      if (e) return e;
 
       /* Prepare for the next frame */
 
-      frame_box.xmin += width + token->indent * wimpt_dx();
+      frame_box.xmin += width + token->indent * 2; /* Scale to 2 OS units/pixel */
       child++;
     }
 
-    frame_box.ymax -= height + token->indent * wimpt_dy();
+    frame_box.ymax -= height + token->indent * 2;
   }
 
   /* Now do a redraw of the parent, to ensure that borders are up to date */
@@ -1347,6 +1738,174 @@ _kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock *
   #endif
 
   return NULL;
+}
+
+/*************************************************/
+/* frames_resize_frame()                         */
+/*                                               */
+/* Resizes a given frame and its contents (e.g.  */
+/* any nested frames). Compare with              */
+/* frames_resize_frameset(), which doesn't       */
+/* resize the parent - just the contents (which  */
+/* is useful when the natural progression of a   */
+/* calling function would resize the parent      */
+/* anyway).                                      */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             representing the frame;           */
+/*                                               */
+/*             Pointer to a BBox describing the  */
+/*             required new frame outline (in    */
+/*             screen coordinates).              */
+/*************************************************/
+
+_kernel_oserror * frames_resize_frame(browser_data * b, BBox * new_outline)
+{
+  _kernel_oserror * e;
+
+  /* Update any child frames first, if needed */
+
+  if (b->nchildren)
+  {
+    e = frames_resize_frameset(b, new_outline);
+    if (e) return e;
+  }
+
+  /* Now resize the given frame */
+
+  return frames_reopen_frame(b, NULL, new_outline);
+}
+
+/*************************************************/
+/* frames_lock_frameset()                        */
+/*                                               */
+/* Examines the window sizes of a collection of  */
+/* frames in a frameset, and rewrites the size   */
+/* descriptions in the frameset representing     */
+/* HStream structures. This, then, would mean    */
+/* that for example, subsequent resizes of the   */
+/* ancestor window would maintain that new       */
+/* relative layout, rather than 'snapping back'  */
+/* to values specified in the HStream structure. */
+/*                                               */
+/* Where possible, the nature of the value is    */
+/* maintained - e.g. a pixel value will stay     */
+/* as such, as will a percentage value (they     */
+/* don't all become pixel sizes). At present,    */
+/* all units are preserved though note that      */
+/* significant rounding errors can occur with    */
+/* percentage values.                            */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             representing the parent for the   */
+/*             frameset to lock.                 */
+/*************************************************/
+
+void frames_lock_frameset(browser_data * b)
+{
+  browser_data              * child;
+  WimpGetWindowOutlineBlock   co;
+  int                         units;
+  int                         av_w, av_h;
+  int                         wid,  hei;
+  int                         col,  cols;
+  int                         row,  rows;
+  int                         tw,   th;
+
+  if (!b->nchildren) return;
+
+  rows = b->frameset->rows;
+  cols = b->frameset->cols;
+
+  /* Get the parent width/height to find available space. */
+
+  co.window_handle = b->window_handle;
+  if (wimp_get_window_outline(&co)) return;
+
+  av_w = co.outline.xmax - co.outline.xmin;
+  av_h = co.outline.ymax - co.outline.ymin;
+
+  /* Now go through the columns. */
+
+  for (col = 0; col < cols; col++)
+  {
+    tw    = ((int *) (b->frameset->value))[col];
+    units = tw & ~ROWCOL_VALUE;
+
+    /* Find the child and get information on it */
+
+    child            = b->children[col];
+    co.window_handle = child->window_handle;
+
+    if (!wimp_get_window_outline(&co))
+    {
+      wid = co.outline.xmax - co.outline.xmin;
+
+      /* Work out what the widths should be in the */
+      /* given units.                              */
+
+      if (units & ROWCOL_PERCENT)
+      {
+        tw = (100 * wid) / av_w;
+      }
+      else if (units & ROWCOL_STAR)
+      {
+        /* This works as 2*,* is the same as 422*,211*; */
+        /* it's just fractions. So we can maintain the  */
+        /* units but keep full accuracy here.           */
+
+        tw = wid;
+      }
+      else
+      {
+        tw = wid / wimpt_dx();
+      }
+
+      /* Put the units field back in */
+
+      tw |= units;
+
+      /* Write the value to the token */
+
+      ((int *) (b->frameset->value))[col] = tw;
+    }
+  }
+
+  /* Now do rows - code is directly analogous to the  */
+  /* columns stuff above, hence the lack of comments. */
+
+  for (row = 0; row < rows; row++)
+  {
+    th    = ((int *) (b->frameset->name))[row];
+    units = th & ~ROWCOL_VALUE;
+
+    child            = b->children[row * (cols ? cols : 1)];
+    co.window_handle = child->window_handle;
+
+    if (!wimp_get_window_outline(&co))
+    {
+      hei = co.outline.ymax - co.outline.ymin;
+
+      if (units & ROWCOL_PERCENT)
+      {
+        th = (100 * hei) / av_h;
+      }
+      else if (units & ROWCOL_STAR)
+      {
+        th = hei;
+      }
+      else
+      {
+        th = hei / wimpt_dy();
+      }
+
+      th |= units;
+
+      ((int *) (b->frameset->name))[row] = th;
+    }
+  }
+
+  /* ...and that's it. */
 }
 
 /*************************************************/
@@ -1440,24 +1999,11 @@ void frames_abort_fetching(browser_data * b, int stop_images)
 /* frames_collapse_child_tree()                  */
 /*                                               */
 /* Used during traversal of the child tree to    */
-/* close down unwanted frames.                   */
+/* close down unwanted frames. See the parameter */
+/* list for the three browser_data structs       */
+/* required.                                     */
 /*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             for the base browser - that is,   */
-/*             the one that won't be closed;     */
-/*             Pointer to a browser_data struct  */
-/*             that has the entry in its array   */
-/*             of children for the browser given */
-/*             in the next parameter;            */
-/*             Pointer to a browser_data struct  */
-/*             that may have children, which     */
-/*             is one of those that will be      */
-/*             closed (unless it's the same as   */
-/*             the base structure, which will    */
-/*             tend to be the case on first      */
-/*             call of the function).            */
-/*                                               */
-/* If the second browser has children the        */
+/* If the third browser has children the         */
 /* function will call itself with the given base */
 /* browser until the browser to close has no     */
 /* children. It then closes it (unless it's the  */
@@ -1465,6 +2011,24 @@ void frames_abort_fetching(browser_data * b, int stop_images)
 /* final exit condition is reached) and          */
 /* decrements the parent's child counter.        */
 /* Recursion then collapses a level.             */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             for the base browser - that is,   */
+/*             the one that won't be closed;     */
+/*                                               */
+/*             Pointer to a browser_data struct  */
+/*             that has the entry in its array   */
+/*             of children for the browser given */
+/*             in the next parameter, i.e. the   */
+/*             parent browser;                   */
+/*                                               */
+/*             Pointer to a browser_data struct  */
+/*             that may have children, which     */
+/*             is one of those that will be      */
+/*             closed (unless it's the same as   */
+/*             the base structure, which will    */
+/*             tend to be the case on first      */
+/*             call of the function).            */
 /*************************************************/
 
 static void frames_collapse_child_tree(browser_data * base, browser_data * real_parent, browser_data * close)
@@ -1526,6 +2090,7 @@ void frames_collapse_set(browser_data * b)
 /*             representing the parent (it and   */
 /*             all its children are searched for */
 /*             the name);                        */
+/*                                               */
 /*             Pointer to the name.              */
 /*                                               */
 /* Returns:    Pointer to the browser_data       */
@@ -1904,9 +2469,8 @@ static browser_data * frames_find_previous_frame(browser_data * check, browser_d
 /* objects in the Res file. The highlight is     */
 /* removed by a NULL poll timer.                 */
 /*                                               */
-/* Currently, the highlight will not move with   */
-/* the parent browser window and will only show  */
-/* if keyboard control is enabled.               */
+/* Won't highlight ancestor windows, and only    */
+/* highlights if keyboard control is enabled.    */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the frame to be       */
@@ -1924,6 +2488,10 @@ _kernel_oserror * frames_highlight_frame(browser_data * b)
   /* Don't do anything if not using keyboard control */
 
   if (!choices.keyboardctl) return NULL;
+
+  /* Don't do anything if an ancestor */
+
+  if (!b->ancestor) return NULL;
 
   /* Otherwise, proceed */
 
@@ -2191,5 +2759,3 @@ _kernel_oserror * frames_remove_highlight_if_present(browser_data * b)
 
   return NULL;
 }
-
-/*************************************************/
