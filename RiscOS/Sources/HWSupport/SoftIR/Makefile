@@ -146,9 +146,9 @@ ${DIRS}:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${DIRS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${DIRS} 
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${ASMUTILS}
 
 #
 # Final link for the ROM Image (using given base address)
