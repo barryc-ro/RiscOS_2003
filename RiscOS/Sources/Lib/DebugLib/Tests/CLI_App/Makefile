@@ -37,7 +37,7 @@ LIBS = \
 
 LIBSMC = \
  C:o.stubs \
- ${DEBUGLIB}MC \
+ ${DEBUGLIB}MCD \
  TCPIPLibs:o.socklib5 \
  TCPIPLibs:o.inetlib \
  ${MEMCHECKLIB} \

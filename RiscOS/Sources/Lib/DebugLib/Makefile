@@ -87,6 +87,7 @@ OBJS =\
  o.socket\
  o.tml\
  o.tracker\
+ o.parse\
 
 OBJSZ =\
  oz.debug\
@@ -102,6 +103,7 @@ OBJSZ =\
  oz.socket\
  oz.tml\
  oz.tracker\
+ oz.parse\
 
 OBJSD =\
  od.debug\
@@ -117,6 +119,7 @@ OBJSD =\
  od.socket\
  od.tml\
  od.tracker\
+ od.parse\
 
 OBJSMC =\
  oMC.debug\
@@ -132,6 +135,7 @@ OBJSMC =\
  oMC.socket\
  oMC.tml\
  oMC.tracker\
+ oMC.parse\
 
 OBJSMCD =\
  oMCD.debug\
@@ -147,6 +151,7 @@ OBJSMCD =\
  oMCD.socket\
  oMCD.tml\
  oMCD.tracker\
+ oMCD.parse\
 
 LIBS = \
  $(PDEBUG) \

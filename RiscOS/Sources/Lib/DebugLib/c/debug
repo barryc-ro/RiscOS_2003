@@ -30,6 +30,7 @@
 #include "tml.h"
 #include "tracker.h"
 #include "buffering.h"
+#include "parse.h"
 #include "globals.h"
 #include "debug.h"
 
@@ -52,13 +53,13 @@ static debug_device sysvar_provided_raw_device = UNSET_OUTPUT; /* The variable t
 static debug_device sysvar_provided_tracedevice = UNSET_OUTPUT;  /* The variable to hold the trace output device
                                                                     specified by system variable */
 
-static char *level_specifier = NULL;            /* Contents of area-level specifying sys var */
+static char *debug_level_specifier = NULL;            /* Contents of area-level specifying sys var */
 
 static char debug_buffer[Debug_Buffer_Size];     /* Buffer for debug data */
 
-static int global_indent = 0;
+static int debug_global_indent = 0;
 
-static const char *always_ignore = " PDebug_* Trace_* remote_debug_* debug_* _dprintf _dvprintf _dfprintf ddumpbuf send sendto select socket socketclose recv recvfrom connect gethostbyname";
+static const char *debug_always_ignore = " PDebug_* Trace_* remote_debug_* debug_* _dprintf _dvprintf _dfprintf ddumpbuf send sendto select socket socketclose recv recvfrom connect gethostbyname";
 
 typedef struct debug_output_method
 {
@@ -87,6 +88,27 @@ static debug_output_method methods[11] =
   {NULL,               NULL,                 NULL,               FALSE,  TRUE}    /* UNSET_OUTPUT */
 };
 
+typedef struct debug_area_level_pair
+{
+  const char *area;
+  char level;
+}debug_area_level_pair;
+
+typedef struct debug_sysvar_area_allowed_pair
+{
+  const char *area;
+  unsigned int allowed;
+}debug_sysvar_area_allowed_pair;
+
+typedef enum
+{
+  positive_match,
+  negative_match,
+  no_match
+}debug_tristate;
+
+static debug_sysvar_area_allowed_pair debug_sysvar_pairs[32];
+static int debug_sysvar_num_pairs = 0;
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
@@ -108,136 +130,122 @@ static void debug_output_data (const char *, debug_device, const char *);
 /* Returns:    1 or 0.                                                  */
 /*                                                                      */
 /************************************************************************/
-static int debug_check_level (const char *area_level_in, const char *variable)
+static BOOL debug_check_level (const char *area_level_in, const char *variable)
 {
-  char *match;
-  int matched = 0;
-  int area_level_len, area_len, var_len, offset;
-  char *area, *area_level = NULL;
-  int level = 0, var_level = 0;
+  debug_tristate matched = no_match;
+  debug_area_level_pair pairs[16];
+  char *step, *match;
+  int i = 0, j, num_pairs;
+  char *specifier;
 
+#if 0
   /* If variable unset, it's a match */
   if (variable == NULL)
-    return 1;
+    return TRUE;
 
   /* If the variable is set and empty, no match */
   if (strlen (variable) == 0)
-    return 0;
+    return FALSE;
+#else
+  IGNORE (variable);
+#endif
 
-  /* If the area_level is NULL, it's a match */
-  if (area_level_in == NULL)
-    return 1;
+  if (debug_sysvar_num_pairs == 0)
+    return TRUE;
 
-  area_level_len = strlen (area_level_in);
+  /* If the area_level is NULL, or an empty string it's a match */
+  if ((area_level_in == NULL) || strlen (area_level_in) == 0)
+    return TRUE;
 
-  /* If the area_level is empty, it's a match */
-  if (area_level_len == 0)
-    return 1;
+  /*** We're through to here, we're gonna have to do some real matching ***/
 
-  area_level = malloc (strlen (area_level_in) + 1);
-  strcpy (area_level, area_level_in);
-  area = area_level;
+  /* Take a copy so we can locally modify it */
 
-  if ((area_level_len - 2) > 0)
+  specifier = debug_misc_strdup (area_level_in);
+
+  /* Parse the specifier string into a list of tokens of all the area specifiers */
+  step = strtok (specifier, ",");
+  pairs[i++].area = step;
+  while ((step = strtok (NULL, ",")) != NULL)
   {
-    /* It's possible to have "A_5" */
-    if (isdigit (area_level[area_level_len - 1]) != 0)     /* area_level = "Area_4" */
+    pairs[i++].area = step;
+  };
+  num_pairs = i;
+
+  /* Step through the area specifiers */
+  for (i=0; i < num_pairs; i++)
+  {
+    /* First, extract the level from the current specifier */
+
+    /* If there's an _ in the current specifier ... */
+    if ((match = strrchr (pairs[i].area, '_')) != NULL)
     {
-      /* area_level has an explicit level embedded */
-      area_level[area_level_len - 2] = '\0';
-      level = atoi (&area_level[area_level_len - 1]);
-    }
-  }
+      *match = '\0';
 
-  if ((area_level_len - 1) > 0)
-  {
-    /* It's possible to have "A_" */
-    if (area_level[area_level_len - 1] == '_')   /* area_level = "Area_" */
-    {
-      /* area_level has an '_', but no explicit level */
-      area_level[area_level_len - 1] = '\0';
-      level = 0;
-    }
-  }
-  else
-  {
-    /* area_level has no explicit level embedded */
-    level = 0;
-  }
-
-  var_len = strlen (variable);
-  area_len = strlen (area);
-
-  if ((match = strstr (variable, area)) != NULL)
-  {
-    internal_dprintf (("", "match = \"%s\"\n", match));
-    if (match != variable)
-    {
-      if (*(match-1) != ' ' && *(match-1) != ',')
+      /* If there's a number after the _ ... */
+      if ((match+1) != NULL)
       {
-        /* No match */
-        return 0;
-      }
-    }
-
-    offset = (int) match - (int) variable;
-
-    internal_dprintf (("", "offset = %d,  var_len = %d,  area_len = %d\n", offset, var_len, area_len));
-
-    if (area_len + offset > var_len)
-    {
-      /* No match, we've fallen off the end of the system variable */
-      internal_dprintf (("", "Fallen off end\n"));
-      return 0;
-    }
-    else if (area_len + offset == var_len)  /* match = "Area" */
-    {
-      /* No level in variable, we want everything */
-      var_level = 9;
-      matched = 1;
-    }
-    else if (match[area_len] == ',')  /* match = "Area," */
-    {
-      /* No level in variable, we want everything */
-      var_level = 9;
-      matched = 1;
-    }
-    else if (area_len + offset + 1 < var_len)
-    {
-       if ((match[area_len] == '_') && (!isdigit (match[area_len+1]))) /* match = "Area_" */
-      {
-        /* No level in variable, we want everything */
-        var_level = 9;
-        matched = 1;
-      }
-      else if (match[area_len] == '_' && isdigit (match[area_len+1]))  /* match = "Area_4" */
-      {
-        /* level supplied in variable */
-        var_level = atoi (&match[area_len+1]);
-        matched = 1;
+        /* Extract it */
+        pairs[i].level = atoi (match+1);
       }
       else
-        matched = 0;
+      {
+        /* Else, we default to least verbose */
+        pairs[i].level = 0;
+      }
     }
     else
-      matched = 0;
-  }
-  else
-    matched = 0;
+    {
+      /* Else, we default to least verbose */
+      pairs[i].level = 0;
+    }
 
-  if (area_level)
-    free (area_level);
+    /* internal_dprintf (("", "Area = \"%s\", level = %d\n", pairs[i].area, pairs[i].level)); */
 
-  if (matched == 1)
-  {
-    if (var_level >= level)
-      return 1;
-    else
-      return 0;
+    /* Next, step through the system variable areas, checking for matches with the current specifier */
+
+    for (j=0; j < debug_sysvar_num_pairs; j++)
+    {
+      /* internal_dprintf (("", "sysvar[%d] = %s (%x)\n", j, sysvar_pairs[j].area, sysvar_pairs[j].allowed)); */
+      /* If the current sysvar area matches the current debug specifier area ... */
+      if (strcmp (pairs[i].area, debug_sysvar_pairs[j].area) == 0)
+      {
+        /* Check if the specifier level lies in the included level mask of the sysvar area */
+        if ( (debug_sysvar_pairs[j].allowed & _LEVEL_INCLUDED(pairs[i].level)) &&
+            !(debug_sysvar_pairs[j].allowed & _LEVEL_EXCLUDED(pairs[i].level)))
+        {
+          /* Positive match overrides any kind of match */
+          matched = positive_match;
+        }
+        else if ( (debug_sysvar_pairs[j].allowed & _LEVEL_EXCLUDED(pairs[i].level)) &&
+                 !(debug_sysvar_pairs[j].allowed & _LEVEL_INCLUDED(pairs[i].level)))
+        {
+          /* Negative match only overrides a non-match */
+          if (matched == no_match)
+            matched = negative_match;
+        }
+      }
+      /* Else, if the sysvar specifier is the catchall, and we've not yet decided on match/not match ... */
+      else if ((strcmp (debug_sysvar_pairs[j].area, "*") == 0) && (matched == no_match))
+      {
+        /* Check if the specifier level lies in the allowed levels of the sysvar area */
+        if (debug_sysvar_pairs[j].allowed & _LEVEL_INCLUDED(pairs[i].level))
+          matched = positive_match;
+        else if (debug_sysvar_pairs[j].allowed & _LEVEL_EXCLUDED(pairs[i].level))
+          matched = negative_match;
+      }
+    }
   }
+
+  /* Free up some memory */
+  free (specifier);
+
+  if (matched == positive_match)
+    return TRUE;
   else
-    return 0;
+    return FALSE;
 }
+
 
 /************************************************************************/
 /* debug_setup_filename                                                 */
@@ -310,6 +318,13 @@ static void debug_setup_unbuffered (void)
 }
 
 
+static void debug_set_level (const char *area, unsigned int allowed)
+{
+  debug_sysvar_pairs[debug_sysvar_num_pairs].area = area;
+  debug_sysvar_pairs[debug_sysvar_num_pairs++].allowed = allowed;
+}
+
+
 /************************************************************************/
 /* debug_setup_level                                                    */
 /*                                                                      */
@@ -339,13 +354,19 @@ static void debug_setup_level (const char *sysvar)
     sprintf (tmp_sysvar_name, "DebugLib$Level_%s", debug_current_options.taskname);
   }
 
-  if (level_specifier != NULL)
-    free (level_specifier);
-  level_specifier = debug_misc_getenv_malloc (tmp_sysvar_name);
+  if (debug_level_specifier != NULL)
+    free (debug_level_specifier);
+  debug_level_specifier = debug_misc_getenv_malloc (tmp_sysvar_name);
 
   /* Free up the temp string */
   if (tmp_sysvar_name)
     free (tmp_sysvar_name);
+
+  if (debug_level_specifier && strlen (debug_level_specifier))
+  {
+    debug_sysvar_num_pairs = 0;
+    debug_parse_levels (debug_set_level, debug_level_specifier);
+  }
 }
 
 
@@ -627,10 +648,10 @@ void debug_set_device (debug_device device)
       _dprintf ("", "Time:   %s", ctime(&timer));
       {
         char *levels;
-        if (level_specifier == NULL)
+        if (debug_level_specifier == NULL)
           levels = "";
         else
-          levels = level_specifier;
+          levels = debug_level_specifier;
         _dprintf ("", "Levels: %s\n", levels);
       }
       _dprintf ("", "******************************************************************\n");
@@ -669,7 +690,6 @@ static void debug_output_prefix (const char *area_level, debug_device device)
   if (debug_current_options.taskname_prefix == TRUE  && device != TRACKER_OUTPUT)
   {
     methods[device].output (debug_current_options.taskname, strlen (debug_current_options.taskname));
-    methods[device].output (": ", strlen (": "));
   }
   if (debug_current_options.stamp_debug == TRUE)
   {
@@ -681,21 +701,56 @@ static void debug_output_prefix (const char *area_level, debug_device device)
 
     t = localtime (&timer);
 
-    strftime (buf, sizeof (buf), "%H:%M:%S - ", t);
+    strftime (buf, sizeof (buf), " %H:%M:%S", t);
     methods[device].output (buf, strlen (buf));
   }
   if (debug_current_options.area_level_prefix == TRUE)
   {
-    const char *out;
+    const char *str;
+    char *out;
 
     if ((area_level == NULL) || (*area_level == '\0'))
-      out = "ALERT";
+      str = "ALERT";
     else
-      out = area_level;
+      str = area_level;
 
-    methods[device].output ("[", strlen ("["));
+    if (debug_current_options.area_pad_limit > 0)
+    {
+      out = malloc (debug_current_options.area_pad_limit + 1);
+      if (out)
+      {
+        strncpy (out, str, debug_current_options.area_pad_limit);
+        if (strlen(str) < debug_current_options.area_pad_limit)
+        {
+          /* Pad */
+          int i;
+
+          for (i=strlen(str) ; i<debug_current_options.area_pad_limit ; i++)
+            out[i] = ' ';
+          out[i] = '\0';
+        }
+        else
+        {
+          /* Truncate */
+          out[debug_current_options.area_pad_limit] = '\0';
+        }
+      }
+    }
+    else
+      out = (char*)str;
+
+    methods[device].output (" [", strlen (" ["));
     methods[device].output (out, strlen (out));
-    methods[device].output ("] ", strlen ("] "));
+    methods[device].output ("]", strlen ("]"));
+
+    if (debug_current_options.area_pad_limit > 0)
+      free (out);
+  }
+  if ((debug_current_options.taskname_prefix == TRUE  && device != TRACKER_OUTPUT) ||
+      (debug_current_options.stamp_debug == TRUE) ||
+      (debug_current_options.area_level_prefix == TRUE))
+  {
+    methods[device].output (": ", strlen (": "));
   }
 }
 
@@ -837,7 +892,7 @@ static void debug_output_data (const char *area_level, debug_device device, cons
 /************************************************************************/
 void _dvprintf(const char *area_level, const char *format, const va_list arg)
 {
-  if (debug_check_level (area_level, level_specifier) == 1)
+  if (debug_check_level (area_level, debug_level_specifier) == TRUE)
   {
     vsprintf (debug_buffer, format, arg);
     debug_output (0, area_level, debug_current_options.device, debug_buffer);
@@ -906,7 +961,7 @@ void _dfprintf (const char *area_level, debug_device device, const char *format,
 {
   va_list p;
 
-  if (debug_check_level (area_level, level_specifier) == 1)
+  if (debug_check_level (area_level, debug_level_specifier) == TRUE)
   {
     va_start (p, format);
     vsprintf (debug_buffer, format, p);
@@ -931,7 +986,7 @@ void _dfprintf (const char *area_level, debug_device device, const char *format,
 /************************************************************************/
 void ddumpbuf (const char *area_level, const void *buffer, size_t size, size_t offset)
 {
-  if (debug_check_level (area_level, level_specifier) == 1)
+  if (debug_check_level (area_level, debug_level_specifier) == TRUE)
   {
     const size_t width = debug_current_options.dump_width;
     const size_t end = ((size + width - 1) / width) * width;
@@ -1034,13 +1089,13 @@ static void debug_trace_enter (const char *fname)
   char *buffer;
   char buffer2[256];
 
-  buffer = malloc (strlen ("Trace: 999:")+(strlen(" |")*global_indent)+strlen(" \n")+strlen (fname)+1);
+  buffer = malloc (strlen ("Trace: 999:")+(strlen(" |")*debug_global_indent)+strlen(" \n")+strlen (fname)+1);
 
   if (buffer)
   {
-    sprintf (buffer, "Trace: %3d:", global_indent);
+    sprintf (buffer, "Trace: %3d:", debug_global_indent);
 
-    for (i = 0; i < global_indent; i++)
+    for (i = 0; i < debug_global_indent; i++)
     {
       strcat (buffer, " |");
     }
@@ -1052,7 +1107,7 @@ static void debug_trace_enter (const char *fname)
     free (buffer);
   }
 
-  global_indent++;
+  debug_global_indent++;
 }
 
 
@@ -1073,13 +1128,13 @@ static void debug_trace_exit (const char* fname)
   char *buffer;
   char buffer2[256];
 
-  buffer = malloc (strlen ("Trace: 999:")+(strlen(" |")*global_indent)+strlen("~\n")+strlen (fname)+1);
+  buffer = malloc (strlen ("Trace: 999:")+(strlen(" |")*debug_global_indent)+strlen("~\n")+strlen (fname)+1);
 
   if (buffer)
   {
-    sprintf (buffer, "Trace: %3d:", global_indent-1);
+    sprintf (buffer, "Trace: %3d:", debug_global_indent-1);
 
-    for (i=0; i < global_indent-1; i++)
+    for (i=0; i < debug_global_indent-1; i++)
     {
       strcat (buffer, " |");
     }
@@ -1092,7 +1147,7 @@ static void debug_trace_exit (const char* fname)
     free (buffer);
   }
 
-  global_indent--;
+  debug_global_indent--;
 }
 
 
@@ -1117,14 +1172,14 @@ void debug_initialise_trace (debug_device device, const char *fns)
   else
     debug_current_options.trace_device = sysvar_provided_tracedevice;
 
-  global_indent++;
+  debug_global_indent++;
 
   if (fns == NULL)
     len2 = 0;
   else
     len2 = strlen (fns);
 
-  len = len2 + strlen (always_ignore) + 1;
+  len = len2 + strlen (debug_always_ignore) + 1;
 
   if ((ignore_fns = malloc (len)) == NULL)
   {
@@ -1138,7 +1193,7 @@ void debug_initialise_trace (debug_device device, const char *fns)
   else
     ignore_fns[0] = '\0';
 
-  strcat (ignore_fns, always_ignore);
+  strcat (ignore_fns, debug_always_ignore);
 
   Trace_IgnoreFunctions (ignore_fns);
   Trace_SetHandlers (
