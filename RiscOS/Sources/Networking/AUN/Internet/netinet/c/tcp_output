@@ -32,15 +32,18 @@
  *
  */
 
+#include "opt_tcpdebug.h"
+
+#include <stddef.h>
+
 #include <sys/param.h>
-#include <sys/queue.h>
 #include <sys/systm.h>
-#include <sys/malloc.h>
+#include <sys/kernel.h>
+#include <sys/sysctl.h>
 #include <sys/mbuf.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
-#include <sys/errno.h>
 
 #include <net/route.h>
 
@@ -60,13 +63,19 @@
 #include <netinet/tcp_debug.h>
 #endif
 
-#include <string.h>
-
 #include "svcdebug.h"
 #include "module.h"
 
 #ifdef notyet
 extern struct mbuf *m_copypack();
+#endif
+
+#ifdef __riscos
+int path_mtu_discovery = 1;
+#else
+static int path_mtu_discovery = 1;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, path_mtu_discovery, CTLFLAG_RW,
+	&path_mtu_discovery, 1, "Enable Path MTU Discovery");
 #endif
 
 
@@ -83,7 +92,7 @@ tcp_output(tp)
 	register struct mbuf *m;
 	register struct tcpiphdr *ti;
 	u_char opt[TCP_MAXOLEN];
-	unsigned optlen, hdrlen;
+	unsigned ipoptlen, optlen, hdrlen;
 	int idle, sendalot;
 	struct rmxp_tao *taop;
 	struct rmxp_tao tao_noncached;
@@ -130,7 +139,7 @@ again:
 			 * clear the FIN bit.  Usually this would
 			 * happen below when it realizes that we
 			 * aren't sending all the data.  However,
-			 * if we have exactly 1 byte of unset data,
+			 * if we have exactly 1 byte of unsent data,
 			 * then it won't clear the FIN bit below,
 			 * and if we are in persist state, we wind
 			 * up sending the packet without recording
@@ -150,7 +159,7 @@ again:
 		}
 	}
 
-	len = min(so->so_snd.sb_cc, win) - off;
+	len = (long)ulmin(so->so_snd.sb_cc, win) - off;
 
 	if ((taop = tcp_gettaocache(tp->t_inpcb)) == NULL) {
 		taop = &tao_noncached;
@@ -225,7 +234,8 @@ again:
 	if (len) {
 		if (len == tp->t_maxseg)
 			goto send;
-		if ((idle || tp->t_flags & TF_NODELAY) &&
+		if (!(tp->t_flags & TF_MORETOCOME) &&
+		    (idle || tp->t_flags & TF_NODELAY) &&
 		    (tp->t_flags & TF_NOPUSH) == 0 &&
 		    len + off >= so->so_snd.sb_cc)
 			goto send;
@@ -330,16 +340,13 @@ send:
 			opt[0] = TCPOPT_MAXSEG;
 			opt[1] = TCPOLEN_MAXSEG;
 			mss = htons((u_short) tcp_mssopt(tp));
-#ifdef DEBUG_MTUDISC
-			Printf("TCP connect: sending maxseg=%d\n", ntohs(mss));
-#endif
 			(void)memcpy(opt + 2, &mss, sizeof(mss));
 			optlen = TCPOLEN_MAXSEG;
 
 			if ((tp->t_flags & TF_REQ_SCALE) &&
 			    ((flags & TH_ACK) == 0 ||
 			    (tp->t_flags & TF_RCVD_SCALE))) {
-				*((u_long *) (opt + optlen)) = htonl(
+				*((u_int32_t *)(opt + optlen)) = htonl(
 					TCPOPT_NOP << 24 |
 					TCPOPT_WINDOW << 16 |
 					TCPOLEN_WINDOW << 8 |
@@ -358,7 +365,7 @@ send:
  	    (flags & TH_RST) == 0 &&
 	    ((flags & TH_ACK) == 0 ||
 	     (tp->t_flags & TF_RCVD_TSTMP))) {
-		u_long *lp = (u_long *)(opt + optlen);
+		u_int32_t *lp = (u_int32_t *)(opt + optlen);
 
  		/* Form timestamp option as shown in appendix A of RFC 1323. */
  		*lp++ = htonl(TCPOPT_TSTAMP_HDR);
@@ -440,18 +447,25 @@ send:
 
  	hdrlen += optlen;
 
+	if (tp->t_inpcb->inp_options) {
+		ipoptlen = tp->t_inpcb->inp_options->m_len -
+				offsetof(struct ipoption, ipopt_list);
+	} else {
+		ipoptlen = 0;
+	}
+
 	/*
 	 * Adjust data length if insertion of options will
 	 * bump the packet length beyond the t_maxopd length.
 	 * Clear the FIN bit because we cut off the tail of
 	 * the segment.
 	 */
-	 if (len + optlen > tp->t_maxopd) {
+	 if (len + optlen + ipoptlen > tp->t_maxopd) {
 		/*
 		 * If there is still more to send, don't close the connection.
 		 */
 		flags &= ~TH_FIN;
-		len = tp->t_maxopd - optlen;
+		len = tp->t_maxopd - optlen - ipoptlen;
 		sendalot = 1;
 	}
 
@@ -570,7 +584,7 @@ send:
 		ti->ti_seq = htonl(tp->snd_max);
 	ti->ti_ack = htonl(tp->rcv_nxt);
 	if (optlen) {
-		(void)memcpy(ti + 1, opt, optlen);
+		bcopy(opt, ti + 1, optlen);
 		ti->ti_off = (sizeof (struct tcphdr) + optlen) >> 2;
 	}
 	ti->ti_flags = flags;
@@ -580,10 +594,10 @@ send:
 	 */
 	if (win < (long)(so->so_rcv.sb_hiwat / 4) && win < (long)tp->t_maxseg)
 		win = 0;
-	if (win > (long)TCP_MAXWIN << tp->rcv_scale)
-		win = (long)TCP_MAXWIN << tp->rcv_scale;
 	if (win < (long)(tp->rcv_adv - tp->rcv_nxt))
 		win = (long)(tp->rcv_adv - tp->rcv_nxt);
+	if (win > (long)TCP_MAXWIN << tp->rcv_scale)
+		win = (long)TCP_MAXWIN << tp->rcv_scale;
 	ti->ti_win = htons((u_short) (win>>tp->rcv_scale));
 	if (SEQ_GT(tp->snd_up, tp->snd_nxt)) {
 		ti->ti_urp = htons((u_short)(tp->snd_up - tp->snd_nxt));
@@ -673,19 +687,11 @@ send:
 	 * the template, but need a way to checksum without them.
 	 */
 	m->m_pkthdr.len = hdrlen + len;
-#ifdef TUBA
-	if (tp->t_tuba_pcb)
-		error = tuba_output(m, tp);
-	else
-#endif
     {
-#if 1
 	struct rtentry *rt;
-#endif
 	((struct ip *)ti)->ip_len = m->m_pkthdr.len;
-	((struct ip *)ti)->ip_ttl = tp->t_inpcb->inp_ip.ip_ttl;	/* XXX */
-	((struct ip *)ti)->ip_tos = tp->t_inpcb->inp_ip.ip_tos;	/* XXX */
-#if 1
+	((struct ip *)ti)->ip_ttl = tp->t_inpcb->inp_ip_ttl;	/* XXX */
+	((struct ip *)ti)->ip_tos = tp->t_inpcb->inp_ip_tos;	/* XXX */
 	/*
 	 * See if we should do MTU discovery.  We do it only if the following
 	 * are true:
@@ -693,15 +699,12 @@ send:
 	 *	2) the MTU is not locked (if it is, then discovery has been
 	 *	   disabled)
 	 */
-	if ((rt = tp->t_inpcb->inp_route.ro_rt)
+	if (path_mtu_discovery
+	    && (rt = tp->t_inpcb->inp_route.ro_rt)
 	    && rt->rt_flags & RTF_UP
 	    && !(rt->rt_rmx.rmx_locks & RTV_MTU)) {
-#ifdef DEBUG_MTUDISC
-                Printf("Outputting with DF, len=%d\n", m->m_pkthdr.len);
-#endif
 		((struct ip *)ti)->ip_off |= IP_DF;
 	}
-#endif
 	error = ip_output(m, tp->t_inpcb->inp_options, &tp->t_inpcb->inp_route,
 	    so->so_options & SO_DONTROUTE, 0);
     }
@@ -711,7 +714,6 @@ out:
 			tcp_quench(tp->t_inpcb, 0);
 			return (0);
 		}
-#if 1
 		if (error == EMSGSIZE) {
 			/*
 			 * ip_output() will have already fixed the route
@@ -722,7 +724,6 @@ out:
 			tcp_mtudisc(tp->t_inpcb, 0);
 			return 0;
 		}
-#endif
 		if ((error == EHOSTUNREACH || error == ENETDOWN)
 		    && TCPS_HAVERCVDSYN(tp->t_state)) {
 			tp->t_softerror = error;
@@ -751,7 +752,7 @@ void
 tcp_setpersist(tp)
 	register struct tcpcb *tp;
 {
-	register t = ((tp->t_srtt >> 2) + tp->t_rttvar) >> 1;
+	register int t = ((tp->t_srtt >> 2) + tp->t_rttvar) >> 1;
 
 	if (tp->t_timer[TCPT_REXMT]) {
 		panic("tcp_output REXMT");

@@ -33,6 +33,9 @@
  * Initial revision
  *
  */
+
+#define _IP_VHL
+
 #include <string.h>
 #include <stddef.h>
 #include "kernel.h"
@@ -45,6 +48,7 @@
 #include "sys/time.h"
 #include "sys/mbuf.h"
 #include "sys/socket.h"
+#include "sys/socketvar.h"
 #include "sys/errno.h"
 #include "sys/ioctl.h"
 #include "sys/kernel.h"
@@ -515,9 +519,8 @@ static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp, int flags)
     struct sockaddr_in *sin;
     char devname[16];
     struct in_addr in;
-    struct in_addr netmask;
-
-    netmask.s_addr = 0L;
+    struct in_addr netmask = { 0 };
+    struct in_aliasreq ifra;
 
   do {
 
@@ -598,34 +601,35 @@ static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp, int flags)
         if (tmp) _kernel_setenv(BOOTPACORNVAR, buf);
     }
 
-    memset(&ifr, 0, sizeof ifr);
-    sin = (struct sockaddr_in *)&ifr.ifr_addr;
-    sin->sin_family = AF_INET;
-    sin->sin_len = sizeof *sin;
-
-    if (netmask.s_addr)
+    if (!(flags & bif_DONT_SET_INTERFACE_ADDRESSES))
     {
-      /* Whilst it it might seem strange, setting the netmask *before*
-       * setting the interface's address, it is necessary to do so to
-       * ensure that the routing information generated when the address
-       * *is* set is correct wrt its netmask value, and does not simply use
-       * an appropriate 'class' mask - RCE:981030
-       */
-       sin->sin_addr.s_addr = netmask.s_addr;
-       (void) in_control((struct socket *)0, SIOCSIFNETMASK, (caddr_t)&ifr, ifp);
+        /* Better have a real socket here to be on the safe side. */
+        struct socket *so;
+
+        socreate(PF_INET, &so, SOCK_DGRAM, 0);
+
+        /* Delete current address */
+        memset(&ifra, 0, sizeof ifra);
+        sprintf(ifra.ifra_name, "%s%d", ifp->if_name, ifp->if_unit);
+        in_control(so, SIOCDIFADDR, (caddr_t) &ifra, ifp);
+
+        /* Add new address */
+        memset(&ifra, 0, sizeof ifra);
+        sprintf(ifra.ifra_name, "%s%d", ifp->if_name, ifp->if_unit);
+        ifra.ifra_addr.sin_family = AF_INET;
+        ifra.ifra_addr.sin_len = sizeof ifra.ifra_addr;
+        ifra.ifra_addr.sin_addr.s_addr = pkt->yiaddr;
+        if (netmask.s_addr)
+        {
+            ifra.ifra_mask.sin_len = sizeof ifra.ifra_mask;
+            ifra.ifra_mask.sin_addr = netmask;
+        }
+        in_control(so, SIOCAIFADDR, (caddr_t) &ifra, ifp);
+        ifp->if_flags &= ~IFF_NEED_IPADDR;
+
+        sofree(so);
     }
 
-    if (!(flags & bif_DONT_SET_INTERFACE_ADDRESSES)) {
-      sin->sin_addr.s_addr = pkt->yiaddr;
-      (void) in_control((struct socket *)0, SIOCSIFADDR, (caddr_t)&ifr, ifp);
-      ifp->if_flags &= ~IFF_NEED_IPADDR;
-    }
-
-    if (netmask.s_addr)
-    {
-       sin->sin_addr.s_addr = (netmask.s_addr & pkt->yiaddr) | ~netmask.s_addr;
-       (void) in_control((struct socket *)0, SIOCSIFBRDADDR, (caddr_t)&ifr, ifp);
-    }
     sprintf(devname, "%s%d", ifp->if_name, ifp->if_unit);
     if (flags & bif_DONT_SET_INTERFACE_ADDRESSES) {
       service_internetstatus_dynamicboot_inform((char *) pkt, sizeof(*pkt));
@@ -652,10 +656,9 @@ bootp_ip_output(m, ifp)
     struct sockaddr_in dst;
 
     ip = mtod(m, struct ip *);
-    ip->ip_v = IPVERSION;
+    ip->ip_vhl = IP_VHL_BORING;
     ip->ip_off &= IP_DF;
     ip->ip_id = htons(ip_id++);
-    ip->ip_hl = sizeof(struct ip) >> 2;
 
     dst.sin_family = AF_INET;
     dst.sin_len = sizeof dst;
@@ -707,6 +710,8 @@ static int bootp_udp_output(register struct mbuf *m, struct ifnet *ifp, u_long l
     ui->ui_dport = htons(fport);
     ui->ui_ulen = ui->ui_len;
     ui->ui_sum = 0;
+    if ((ui->ui_sum = in_cksum(m, sizeof (struct udpiphdr) + len)) == 0)
+        ui->ui_sum = 0xffff;
     ((struct ip *)ui)->ip_len = sizeof (struct udpiphdr) + len;
     ((struct ip *)ui)->ip_ttl = ip_defttl;
 
@@ -1268,8 +1273,7 @@ request_netmask(ifp, flag)
     m->m_pkthdr.len = sizeof (struct ip);
     m->m_pkthdr.rcvif = ifp;
     ip = mtod(m, struct ip *);
-    ip->ip_v = IPVERSION;
-    ip->ip_hl = 5;
+    ip->ip_vhl = IP_VHL_BORING;
     ip->ip_tos = 0;
     ip->ip_len = htons(sizeof(struct ip));
     ip->ip_id = 0;
@@ -1363,7 +1367,7 @@ if_sdhcpreq(struct ifnet *ifp, struct ifdhcpreq *ifd)
         m0->m_pkthdr.rcvif = 0;
         m0->m_flags = M_PKTHDR | M_BCAST;
 
-        res = bootp_udp_output(m0, &ac->ac_if, 0, BOOTPclient,
+        res = bootp_udp_output(m0, &ac->ac_if, ifd->packet.ciaddr, BOOTPclient,
     			    INADDR_BROADCAST, BOOTPserver);
     }
 
