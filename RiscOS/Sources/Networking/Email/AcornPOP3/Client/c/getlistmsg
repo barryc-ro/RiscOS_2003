@@ -1,0 +1,505 @@
+/*	Project Post (769) - AcornPOP3
+	Acorn Risc Technologies
+	Copyright © 1996. All Rights Reserved.
+
+	FILE:		getlistmsg.c
+	AUTHOR:		Richard D. Warren
+	VERSION:	0.05 for RISC OS
+
+	OVERVIEW
+	========
+	Source file for implementation of function to perform POP3 STAT to get
+	the number of messages and total size from a server
+
+	HISTORY
+	=======
+	21/02/97	0.01	RDW	Initial version
+	11/07/97	0.02	RDW	Tidy up when moving to correct build environment
+	14/07/97	0.03	RDW	Tidy up
+	01/10/97	0.04	RDW	Fix so that if list on server is greater than
+					the space available we continue to d/load
+					and through away these 'extra' list nodes.
+					Return the actual number of nodes in the list
+					we got from the server.
+	20/10/97	0.05	RDW	Changed to new non-blocking
+*/
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - System                                              */
+/*                                                                            */
+/* ************************************************************************** */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - External Libraries                                  */
+/*                                                                            */
+/* ************************************************************************** */
+#include "DebugLib.h"
+#include "Elib_priv.h"
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - Project defined                                     */
+/*                                                                            */
+/* ************************************************************************** */
+#include "common.h"
+#include "getlistmsg.h"
+#include "get.h"
+#include "send.h"
+#include "cmdresp.h"
+#include "pop_utils.h"
+#include "errortable.h"
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* External globals                                                           */
+/*                                                                            */
+/* ************************************************************************** */
+extern process_details process1;						// This client's process details
+extern errno;									// From Internet
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Constants                                                                  */
+/*                                                                            */
+/* ************************************************************************** */
+static const int TIME_SLICE    = 50;						/* Time slice to use                                                   */
+static char LISTCMD[] = "LIST";
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* New enumerated types                                                       */
+/*                                                                            */
+/* ************************************************************************** */
+typedef enum
+{
+  LIST,
+  LIST_RESPONSE,
+  GET_LINE,
+  STORE_LINE,
+  COMPLETED,
+  ERROR
+} STATES;									/* GetListofMessages FSM states                        */
+
+typedef struct
+{
+  time_t              t_slice;							/* timeslice, time to exit FSM by for re-entracy later */
+  _kernel_oserror    *error;							/* OS error                                            */
+  int                 errno;							/* Internet errno copy                                 */
+  BOOL                end;							/* has the FSM ended?                                  */
+  BOOL                exit;							/* exit FSM without setting callback                   */
+  MSG_LIST           *list;							/* address to store list at                            */
+  unsigned int        num_entries;						/* address to store num of list elements at            */
+  int                 sock;							/* socket descriptor                                   */
+  char               *response;							/* response line from server                           */
+  STATES              state;							/* GetListOfMessages FSM state                         */
+  int                 list_timeout;						/* timeout for waiting for server response to LIST cmd */
+  unsigned int        pos;							/* position in list                                    */
+} getlistofmsgs_context;
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Function Prototypes - Private to this file                                 */
+/*                                                                            */
+/* ************************************************************************** */
+static getlistofmsgs_context *new_getlistofmsgs_context(void);
+static void get_list_of_messages_FSM_LIST(getlistofmsgs_context *c);
+static void get_list_of_messages_FSM_LIST_RESPONSE(getlistofmsgs_context *c);
+static void get_list_of_messages_FSM_GET_LINE(getlistofmsgs_context *c);
+static void get_list_of_messages_FSM_STORE_LINE(getlistofmsgs_context *c);
+static void get_list_of_messages_FSM_COMPLETED(getlistofmsgs_context *c);
+static void get_list_of_messages_FSM_ERROR(getlistofmsgs_context *c);
+extern _kernel_oserror *get_list_of_messages_FSM(getlistofmsgs_context *context);
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Functions                                                                  */
+/*                                                                            */
+/* ************************************************************************** */
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static getlistofmsgs_context *new_getlistofmsgs_context(void)
+{
+  getlistofmsgs_context *c = malloc(sizeof(getlistofmsgs_context));
+  dprintf(("", "new_getlistofmsgs_context\n"));
+  
+  if (c)
+  {
+    memset(c, 0, sizeof(getlistofmsgs_context));
+    c->sock = -1;
+    c->state = LIST;
+  }
+  
+  return c;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       getlistmsg
+   DESCRIPTION:    Function to get list of messages with their IDs and SIZE
+   		   from server connection
+   DEPENDENCIES:      			errortable	errortable.h
+   DEPENDED ON BY: function		handle_swi_AcornPOP3_GetListOfMessages	swihndlers.c
+   INPUT PARAMS:   void*		data		memory area to write into with list data
+   		   unsigned int*	num_entries	number of MSG_LIST structs there is space for in data area
+   		   int			timeout_LIST	timeout for LIST (UNUSED)
+   OUTPUT PARAMS:  unsigned int*	num_entries	number of actual entries read into data area
+   		   int*			internet_error	Internet errno
+   RETURN VALUE:   			NULL		if handled successfully,
+   							else ptr to error block
+   CONSTANTS:      NONE
+   VARIABLES:      _kernel_oserror*	error		result to return
+   		   int			sock		socket descriptor to use
+   		   char*		response	response string from server
+   		   BOOL			end		end of list reached?
+   		   MSG_LIST*		list		typecast to data address in memory
+   		   unsigned int		pos		position in array of MSG_LISTs
+   		   int			rc		return code from sscanf
+ */
+/* ************************************************************************** */
+extern _kernel_oserror* get_list_of_messages(void         *data,
+                                             unsigned int  num_entries,
+                                             int           timeout_LIST)
+{
+  _kernel_oserror    *error           = 0;					/* result to return                                              */
+  getlistofmsgs_context *context = new_getlistofmsgs_context();			/* create a new logon context for this operation                 */
+  
+  if (context == 0)								/* if failed to create new context, return error                 */
+    error = ERROR(MALLOCFAILED);
+  else										/* else make copies of the given parameters                      */
+  {
+    context->list         = (MSG_LIST*)data;
+    context->num_entries  = num_entries;
+    context->list_timeout = timeout_LIST;
+    context->sock         = process1.socknum;
+//    error = get_list_of_messages_FSM(context);					/* enter the GetNumOfMessages FSM                                */
+    error = set_callback(//CB_CALLER_FSM,
+                         //EVENT_NONE,
+                         &get_list_of_messages_CBhandler,
+                         context);						/* set a callback to re-enter the FSM later   */
+  }
+  
+  return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+extern _kernel_oserror *get_list_of_messages_FSM(getlistofmsgs_context *context)
+{
+  _kernel_oserror *error = 0;
+  
+  dprintf(("", "get_list_of_messages_FSM: context: %x\n", context));
+  if (context == 0)								/* make sure we've been given a context */
+    error = ERROR(INTERNALERR);
+  
+  if (!error)
+  {
+    context->t_slice = clock() + TIME_SLICE;
+    do										/* FSM do-while loop                    */
+    {
+      if (context->error)
+        context->state = ERROR;
+      switch (context->state)
+      {
+        case LIST:
+          dprintf(("", "get_list_of_messages: LIST\n"));
+          get_list_of_messages_FSM_LIST(context);
+          break;
+        case LIST_RESPONSE:
+          dprintf(("", "get_list_of_messages: LIST_RESPONSE\n"));
+          get_list_of_messages_FSM_LIST_RESPONSE(context);
+          break;
+        case GET_LINE:
+          dprintf(("", "get_list_of_messages: GET_LINE\n"));
+          get_list_of_messages_FSM_GET_LINE(context);
+          break;
+        case STORE_LINE:
+          dprintf(("", "get_list_of_messages: STORE_LINE\n"));
+          get_list_of_messages_FSM_STORE_LINE(context);
+          break;
+        case ERROR:
+          dprintf(("", "get_list_of_messages: ERROR\n"));
+          get_list_of_messages_FSM_ERROR(context);
+          break;
+        case COMPLETED:
+          dprintf(("", "get_list_of_messages: COMPLETED\n"));
+          get_list_of_messages_FSM_COMPLETED(context);
+          break;
+        default:
+          dprintf(("", "get_list_of_messages: INTERNAL ERROR\n"));
+          error = ERROR(INTERNALERR);
+          context->end = TRUE;
+          break;
+      } /* end switch */
+    } while ((!expired(context->t_slice)) && (!context->end) && (!context->exit));
+  } /* endif */
+  
+  if (!error)
+  {
+    if (context->end)								/* if end of the FSM                          */
+    {
+      free(context);								/* destroy the context                        */
+//      process1.pollword = &(process1.getlistofmessages);			/* tell caller that data is ready for reading */
+      notify_client(&(process1.getlistofmessages));
+    }
+    else if (!context->exit)							/* else, if not told to exit FSM, then        */
+      error = set_callback(//CB_CALLER_FSM,
+                           //EVENT_NONE,
+                           &get_list_of_messages_CBhandler,
+                           context);						/* set a callback to re-enter the FSM later   */
+    else									/* else we were told to exit the FSM as it    */
+      context->exit = FALSE;							/* will be called back by anothe event        */
+  }
+  
+  return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+extern _kernel_oserror *get_list_of_messages_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
+{
+/*  _kernel_oserror *error = 0;
+  
+  if (data)
+  {
+    CB_DATA *cb_data = (CB_DATA*)data;
+    getlistofmsgs_context *c = (getlistofmsgs_context*)cb_data->data;
+    
+    free(cb_data);
+    error = get_list_of_messages_FSM(c);
+  }
+  else
+    error = ERROR(INTERNALERR);
+  
+  return error;*/
+  return get_list_of_messages_FSM(data);
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static void get_list_of_messages_FSM_LIST(getlistofmsgs_context *c)
+{
+  c->error = command_response(c->sock,
+                              LISTCMD,
+                              4,
+                              &(c->response),
+                              c->list_timeout,
+                              &(c->errno),
+                              &(c->error),
+                              (function)&get_list_of_messages_FSM,
+                              c);
+  if (!c->error)
+  {
+    c->state = LIST_RESPONSE;
+    c->exit = TRUE;
+  }
+  else
+    c->state = ERROR;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static void get_list_of_messages_FSM_LIST_RESPONSE(getlistofmsgs_context *c)
+{
+  if (!positive_response(c->response))
+    c->error = ERROR(FAILED);
+  
+  destroy_response(&(c->response));
+  if (c->error)
+    c->state = ERROR;
+  else
+    c->state = GET_LINE;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static void get_list_of_messages_FSM_GET_LINE(getlistofmsgs_context *c)
+{
+  c->state = STORE_LINE;
+  c->error = get_line_from_server(c->sock,
+                                  &(c->response),
+                                  c->list_timeout,
+                                  &(c->errno),
+                                  &(c->error),
+                                  (function)&get_list_of_messages_FSM,
+                                  c);
+  if (c->error)
+    c->state = ERROR;
+  else
+    c->exit = TRUE;
+}
+
+  
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static void get_list_of_messages_FSM_STORE_LINE(getlistofmsgs_context *c)
+{
+  if (c->response)
+  {
+    if (strncmp(c->response, ".\r\n", 3) == 0)					/* is this the end of the list? */
+      c->state = COMPLETED;
+    else if (c->pos < c->num_entries)
+    {
+      int rc = sscanf(c->response, "%lu %lu", &(c->list[c->pos].msg_id), &(c->list[c->pos].msg_size));	/* read in ID and SIZE into array */
+      dprintf(("", "get_list_of_messages_FSM_STORE_LINE: msg_id: %u\nmsg_size: %u\n", c->list[c->pos].msg_id, c->list[c->pos].msg_size));
+      c->pos++;									/* increment position in array */
+      if (rc != 2)								/* if sscanf failed, then return failed. */
+        c->error = ERROR(FAILED);
+      c->state = GET_LINE;
+    }
+    else
+    {
+      c->pos++;
+      c->state = GET_LINE;
+    }
+  }
+  destroy_response(&(c->response));						/* deallocate response */
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static void get_list_of_messages_FSM_COMPLETED(getlistofmsgs_context *c)
+{
+  if (c->pos > c->num_entries)
+    c->error = ERROR(NOSPACE);
+  c->num_entries = c->pos;
+  process1.getlistofmessages.flags = 0;
+  process1.getlistofmessages.error = c->error;
+  process1.getlistofmessages.errno = 0;
+  process1.getlistofmessages.num_entries = c->num_entries;
+  
+  c->end = TRUE;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static void get_list_of_messages_FSM_ERROR(getlistofmsgs_context *c)
+{
+  c->num_entries = c->pos;
+  process1.getlistofmessages.flags = 0;
+  process1.getlistofmessages.error = c->error;
+  process1.getlistofmessages.errno = c->errno;
+  process1.getlistofmessages.num_entries = c->num_entries;
+  
+  c->end = TRUE;
+}
