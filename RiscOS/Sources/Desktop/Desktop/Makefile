@@ -43,10 +43,19 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: resources-${CMDHELP}
+        @echo ${COMPONENT}: resource files copied
+
+resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         ${CP} Resources.${LOCALE}.Templates  ${RESDIR}.${COMPONENT}.Templates  ${CPFLAGS}
+
+resources-None: resources_common
+        @echo ${COMPONENT}: resource files copied
+
+resources-: resources_common
+	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
