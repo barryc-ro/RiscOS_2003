@@ -42,8 +42,8 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.c_AbsSym
-SOCKLIB	   = TCPIPLibs:o.socklibzm
-INETLIB	   = TCPIPLibs:o.inetlibzm
+SOCKLIB    = TCPIPLibs:o.socklibzm
+INETLIB    = TCPIPLibs:o.inetlibzm
 UNIXLIB    = TCPIPLibs:o.unixlibzm
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
@@ -108,14 +108,7 @@ ${DIRS}:
 resources:
         TokenCheck LocalRes:Messages
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} LocalRes:infile ${RESDIR}.${COMPONENT}.infile ${CPFLAGS}
-        ${CP} LocalRes:infile2 ${RESDIR}.${COMPONENT}.infile2 ${CPFLAGS}
-        ${CP} LocalRes:netcomm ${RESDIR}.${COMPONENT}.netcomm ${CPFLAGS}
-        ${CP} LocalRes:infileinc ${RESDIR}.${COMPONENT}.infileinc ${CPFLAGS}
-        ${CP} LocalRes:test ${RESDIR}.${COMPONENT}.test ${CPFLAGS}
-        ${CP} LocalRes:passwords ${RESDIR}.${COMPONENT}.passwords ${CPFLAGS}
-        ${CP} LocalRes:usage ${RESDIR}.${COMPONENT}.usage ${CPFLAGS}
-        ${CP} LocalRes:exclude ${RESDIR}.${COMPONENT}.exclude ${CPFLAGS}
+        ${CP} LocalRes:* ${RESDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 
