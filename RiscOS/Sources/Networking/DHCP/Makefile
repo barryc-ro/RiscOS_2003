@@ -17,7 +17,7 @@ EXP_HDR = <cexport$dir>
 # Generic options:
 #
 AWK     = awk
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -109,6 +109,12 @@ OBJS      =	\
 all: ${TARGET}
         @echo ${COMPONENT}: all complete
 
+install: ${TARGET} dirs
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: all complete
+
+dirs:
+	${MKDIR} ${INSTDIR}
 #
 # RISC OS ROM build rules:
 #
