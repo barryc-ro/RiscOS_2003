@@ -29,7 +29,7 @@ RESDIR = <resource$dir>.Resources2.URL
 # Generic options:
 #
 MKDIR   = cdir
-CC      = cc
+CC      = ${MEMCHECKCC} cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
