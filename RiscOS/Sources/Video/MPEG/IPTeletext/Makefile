@@ -44,12 +44,12 @@ INCLUDES = -Itbox:,C:
 CLIB      = CLIB:o.stubs
 
 OBJS =\
- o.modhdr\
  o.swihandlers\
  o.pehandlers\
  o.freepacket\
  o.messages\
- o.main
+ o.main\
+ o.modhdr
 
 RESF=o.msgs
 
@@ -68,8 +68,9 @@ all: ${RAM_MODULE}
         @echo ${COMPONENT}: Module built (RAM)
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm ${WFLAGS}
+        ${WIPE} o        ${WFLAGS}
+        ${WIPE} rm       ${WFLAGS}
+        ${WIPE} h.module ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 #
@@ -77,7 +78,6 @@ clean:
 #
 
 h.module: o.modhdr
-c.main: h.module
 
 ${RESF}: LocalRes:Messages
         resgen messages_file ${RESF} LocalRes:Messages Resources.${COMPONENT}.Messages
@@ -93,6 +93,7 @@ install: ${RAM_MODULE}
 
 dirs:
         ${MKDIR} rm
+        ${MKDIR} o
         ${MKDIR} ${INSTDIR}
 
 
