@@ -39,6 +39,7 @@ EXPORTS   = ${EXP_HDR}.AV110 \
             ${EXP_HDR}.MPEGVideo \
             ${EXP_HDR}.L64002 \
             ${EXP_HDR}.MPEG2Card \
+            ${EXP_HDR}.MPEG2bCard \
             ${EXP_HDR}.DVBControl \
             ${EXP_HDR}.VSP \
             ${EXP_HDR}.Macrovisio
@@ -84,6 +85,9 @@ ${EXP_HDR}.L64002: hdr.L64002
 
 ${EXP_HDR}.MPEG2Card: hdr.MPEG2Card
         ${CP} hdr.MPEG2Card $@ ${CPFLAGS}
+
+${EXP_HDR}.MPEG2bCard: hdr.MPEG2bCard
+        ${CP} hdr.MPEG2bCard $@ ${CPFLAGS}
 
 ${EXP_HDR}.DVBControl: hdr.DVBControl
         ${CP} hdr.DVBControl $@ ${CPFLAGS}
