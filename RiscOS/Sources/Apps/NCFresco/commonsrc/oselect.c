@@ -206,11 +206,21 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
         sel->menuh = frontend_menu_create(doc->parent, select_menu_callback, ti, height, sel->items, sel->size, width);
          */
 
-    sel->count = height;
+	sel->count = height;
+    }
+    else
+    {
+	for (oi = sel->options; oi; oi = oi->next)
+	{
+	    if (oi->flags & rid_if_CHECKED)
+		oi->flags |= rid_if_SELECTED;
+	    else
+		oi->flags &= ~rid_if_SELECTED;
+	}
     }
 
     ti->width = width + 16;
-
+    
     /* add on width for the the POPUP icon */
     if ((sel->flags & rid_if_NOPOPUP) == 0)
 	ti->width += 48;

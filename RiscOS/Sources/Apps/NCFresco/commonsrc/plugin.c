@@ -8,6 +8,7 @@
 #include "rid.h"
 #include "antweb.h"
 #include "util.h"
+#include "files.h"
 #include "interface.h"
 #include "status.h"
 #include "url.h"
@@ -436,6 +437,12 @@ static void fillin_stream(wimp_msgstr *msg, plugin_stream_private *psp, plugin_s
     stream->notify_data = psp->notify_data;
 }
 
+static void close_stream_file(plugin_stream_private *psp)
+{
+    ro_fclose(psp->file_handle);
+    psp->file_handle = 0;
+}
+
 /* ----------------------------------------------------------------------------- */
 
 /*
@@ -832,6 +839,7 @@ static void plugin_stream_completing(plugin_stream_private *psp)
 	    plugin_stream_progress(psp, status_COMPLETED_FILE, psp->size, psp->size, psp->file_handle, psp->file_type, psp->url);
 	else
 	{
+	    close_stream_file(psp); /* close before sending stream as file to avoid multiple open errors */
 	    plugin_send_stream_as_file(psp, 0, psp->file_name);
 	    plugin_send_stream_destroy(psp, 0, plugin_reason_DONE);
 	    plugin_stream_dispose(psp);
@@ -839,6 +847,7 @@ static void plugin_stream_completing(plugin_stream_private *psp)
 	break;
 
     case plugin_stream_TYPE_ASFILEONLY:
+	close_stream_file(psp); /* close before sending stream as file to avoid multiple open errors */
 	plugin_send_stream_as_file(psp, 0, psp->file_name);
 	plugin_send_stream_destroy(psp, 0, plugin_reason_DONE);
 	plugin_stream_dispose(psp);
@@ -863,7 +872,6 @@ static void plugin_stream_completing(plugin_stream_private *psp)
 static access_complete_flags plugin_stream_complete(void *h, int status, char *cfile, char *url)
 {
     plugin_stream_private *psp = h;
-    os_regset r;
     os_error *e;
     os_filestr fs;
        
@@ -887,12 +895,9 @@ static access_complete_flags plugin_stream_complete(void *h, int status, char *c
     /* if there is more to go then reopen file  */
     if (psp->size > psp->offset)
     {
-	r.r[0] = 0x4f;
-	r.r[1] = (int)cfile;
-	e = os_find(&r);
+	psp->file_handle = ro_fopen(cfile, RO_OPEN_READ);
 
 	/* and store away useful values */
-	psp->file_handle = r.r[2];
 	psp->file_name = strdup(cfile);
 	psp->file_type = file_type(cfile);
     }
@@ -924,7 +929,7 @@ static void plugin_stream__detach(plugin_stream_private *psp)
 
 static void plugin_stream__dispose(plugin_stream_private *psp)
 {
-    OBJDBG(("plugin: stream dispose psp %p\n", psp));
+    OBJDBG(("plugin: stream dispose psp %p ah %p fh %d\n", psp, psp->ah, psp->file_handle));
 
     /* kill and free */
     if (psp->ah)
@@ -933,14 +938,8 @@ static void plugin_stream__dispose(plugin_stream_private *psp)
 	psp->ah = NULL;
     }
 
-    /* file handle non-null if we opened it */
-    if (psp->file_handle)
-    {
-	os_regset r;
-	r.r[0] = 0;
-	r.r[1] = psp->file_handle;
-	os_find(&r);
-    }
+    /* ensure file closed */
+    close_stream_file(psp);
     
     mm_free(psp->file_name);
     mm_free(psp->url);
@@ -1398,6 +1397,10 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			psp->stream_type = stream_new->flags & plugin_stream_TYPE;
 			psp->plugin_instance = stream_new->stream.instance.plugin;
 
+			/* set the streaming type */
+			if (psp->ah)
+			    access_set_streaming(psp->ah, psp->stream_type != plugin_stream_TYPE_ASFILEONLY);
+			
 			if (psp->status == status_COMPLETED_FILE)
 			    plugin_stream_completing(psp);
 		    }

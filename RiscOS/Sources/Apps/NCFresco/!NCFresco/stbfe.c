@@ -2266,11 +2266,17 @@ void fe_move_highlight_frame(fe_view v, BOOL next)
     }
 }
 
-void fe_move_highlight(fe_view v, int flags)
+/*
+ * The coordinates passed here are in screen coordinates
+ */
+
+void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
 {
     be_item old_link, new_link;
     fe_view new_v;
     BOOL scrolled;
+
+    STBDBG(("fe_move_highlight_xy: v %p x=%d-%d y=%d-%d flags %x\n", v, box->x0, box->x1, box->y0, box->y1, flags));
 
     if (!v)
         return;
@@ -2282,14 +2288,32 @@ void fe_move_highlight(fe_view v, int flags)
 
     if (v->displaying)
     {
-	/* if we had a caret shown then move from here  */
-	/* else from previous selection */
-	old_link = backend_place_caret(v->displaying, backend_place_caret_READ);
-	if (old_link == NULL)
-	    old_link = v->current_link;
+	if ((flags & be_link_XY) && box)
+	{
+	    wimp_box cbox;
+	    wimp_wstate state;
+	    
+	    /* if given a position then search from that position */
+	    cbox = *box;
 
-	/* try to move to next highlight if there is one    */
-	new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP | be_link_DONT_HIGHLIGHT);
+	    wimp_get_wind_state(v->w, &state);
+	    coords_box_toworkarea(&cbox, (coords_cvtstr *)&state.o.box);
+
+	    old_link = NULL;
+	    new_link = backend_highlight_link_xy(v->displaying, NULL, &cbox, flags | be_link_XY | be_link_DONT_HIGHLIGHT);
+	}
+	else
+	{
+	    /* if we had a caret shown then move from here  */
+	    /* else from previous selection */
+	    old_link = backend_place_caret(v->displaying, backend_place_caret_READ);
+	    if (old_link == NULL)
+		old_link = v->current_link;
+
+	    /* try to move to next highlight if there is one */
+	    new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP | be_link_DONT_HIGHLIGHT);
+	}
+
 	new_v = v;
     }
     else
@@ -2302,7 +2326,7 @@ void fe_move_highlight(fe_view v, int flags)
     STBDBG(( "fe_move_highlight: old_link %p old_v %p new_link %p new_v %p\n", old_link, v, new_link, new_v));
 
     /* check for moving to the status bar */
-    if (new_link == NULL && config_mode_cursor_toolbar && (flags & be_link_VERT) &&
+    if (new_link == NULL && config_mode_cursor_toolbar &&/*  (flags & be_link_VERT) && */
 	((config_display_control_top && (flags & be_link_BACK)) || (!config_display_control_top && (flags & be_link_BACK) == 0)))
     {
 	if (tb_status_highlight(TRUE))
@@ -2386,6 +2410,11 @@ void fe_move_highlight(fe_view v, int flags)
     }
 
     fe_pointer_mode_update(pointermode_OFF);
+}
+
+void fe_move_highlight(fe_view v, int flags)
+{
+    fe_move_highlight_xy(v, NULL, flags);
 }
 
 /* ------------------------------------------------------------------------------------------- */

@@ -11,6 +11,9 @@
 
 #include "layout.h"
 
+#define DEFAULT_MARGIN_X	8 /* frame inner margins in OS units */
+#define DEFAULT_MARGIN_Y	8
+
 /*
  * Note PX is now OS units due to the parser change so all values are held accordingly
  */
@@ -260,9 +263,9 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
                 info->box.y0 = - bb.y1;   /* reverse the signs at this point */
                 info->box.y1 = - bb.y0;
 
-                info->margin.x0 = f->marginwidth != -1 ? f->marginwidth : 2;       /* marginwidth and height are converted to OS in parsing */
+                info->margin.x0 = f->marginwidth != -1 ? f->marginwidth : DEFAULT_MARGIN_X;       /* marginwidth and height are converted to OS in parsing */
                 info->margin.x1 = -info->margin.x0;
-                info->margin.y0 = f->marginheight != -1 ? f->marginheight : 2;
+                info->margin.y0 = f->marginheight != -1 ? f->marginheight : DEFAULT_MARGIN_Y;
                 info->margin.y1 = -info->margin.y0;
 
                 /* also fill in the url of this frame */

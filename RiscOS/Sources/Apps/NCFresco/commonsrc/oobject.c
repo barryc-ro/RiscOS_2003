@@ -133,6 +133,9 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 #ifndef BUILDERS
     case rid_object_type_PLUGIN:
+	width = obj->ww == -1 ? 128 : obj->ww;
+	height = obj->hh == -1 ? 128 : obj->hh;
+
 	if (obj->state.plugin.pp == NULL &&
 	    (obj->classid_ftype != -1 || obj->data_ftype != -1))
 	{
@@ -153,6 +156,8 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    if (doc->object_handler_count++ == 0)
 		frontend_message_add_handler(plugin_message_handler, doc);
 	}
+	else
+	    oimage_size_image(obj->standby, obj->ww, obj->hh, obj->iflags, config_defer_images, doc->scale_value, &width, &height);
 	break;
 #endif
 	

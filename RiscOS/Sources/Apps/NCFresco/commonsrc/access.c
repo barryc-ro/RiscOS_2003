@@ -601,10 +601,13 @@ static int access_progress_flush(void *handle, const char *cfile, const char *ur
     if ((fh = ro_fopen(cfile, RO_OPEN_READ)) == 0)
 	return FALSE;
 
+    ACCDBG(("access_progress_flush: file %s fh %d\n", cfile, fh));
+
     size = ro_get_extent(fh);
     progress(handle, status_GETTING_BODY, size, size, fh, file_type_real(cfile), (char *)url);
 
     ro_fclose(fh);
+    ACCDBG(("access_progress_flush: close %d error '%s'\n", fh, ro_ferror()));
 
     return TRUE;
 }
@@ -2001,7 +2004,9 @@ static void access_copy_data(int inf, int outf, int start, int end)
 
 static BOOL access_file_fetch(access_handle d)
 {
-    if ( !(d->progress) || (d->data.file.so_far + d->data.file.chunk >= d->data.file.size))
+    access_progress_fn progress = d->flags & access_NO_STREAM ? 0 : d->progress;
+    
+    if ( !progress || (d->data.file.so_far + d->data.file.chunk >= d->data.file.size))
     {
 	ACCDBGN(("file_fetch(): d %p fname '%s' from %d to %d last transfer\n", d, d->data.file.fname, d->data.file.so_far, d->data.file.size));
 
@@ -2012,10 +2017,10 @@ static BOOL access_file_fetch(access_handle d)
 	}
 
 	/* SJM addition */
-	if (d->progress)
+	if (progress)
 	{
 	    d->data.file.so_far = d->data.file.size;
-	    d->progress(d->h, status_GETTING_BODY,
+	    progress(d->h, status_GETTING_BODY,
 		    d->data.file.size, d->data.file.so_far,
 		    d->data.file.ofh ? d->data.file.ofh : d->data.file.fh,
 		    d->ftype, d->url );
@@ -2024,12 +2029,14 @@ static BOOL access_file_fetch(access_handle d)
 	/* We are done */
 	if (d->data.file.fh)
 	{
+	    ACCDBGN(("access_file_fetch: close %d\n", d->data.file.fh));
 	    ro_fclose(d->data.file.fh);
 	    d->data.file.fh = 0;
 	}
 
 	if (d->data.file.ofh)
 	{
+	    ACCDBGN(("access_file_fetch: close %d\n", d->data.file.ofh));
 	    ro_fclose(d->data.file.ofh);
 	    d->data.file.ofh = 0;
 	}
@@ -2057,7 +2064,7 @@ static BOOL access_file_fetch(access_handle d)
 
 	d->data.file.so_far += d->data.file.chunk;
 
-	d->progress(d->h, status_GETTING_BODY,
+	progress(d->h, status_GETTING_BODY,
 		    d->data.file.size, d->data.file.so_far,
 		    d->data.file.ofh ? d->data.file.ofh : d->data.file.fh,
 		    d->ftype, d->url );
@@ -2086,6 +2093,8 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
     os_error *ep = NULL;
     int fh = ro_fopen(file, RO_OPEN_READ);
     
+    ACCDBG(("access_new_file: file %s fh %d ft %03x flags %x\n", file, fh, ft, flags));
+
     if (fh)
     {
 	d = mm_calloc(1, sizeof(*d));
@@ -2096,7 +2105,10 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	if (ofile)
 	{
 	    d->ofile = strdup(ofile);
+	    d->data.file.ofh = ro_fopen(ofile, RO_OPEN_WRITE);
 	    set_file_type(ofile, ft);
+	
+	    ACCDBG(("access_new_file: ofile %s fh %d\n", ofile, d->data.file.ofh));
 	}
 
 	d->progress = progress;
@@ -2107,7 +2119,6 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	d->data.file.fname = strdup(file);
 	d->ftype = ft;
 	d->data.file.fh = fh;
-	d->data.file.ofh = ofile ? ro_fopen(ofile, RO_OPEN_WRITE) : 0;
 		
 	d->data.file.size = ro_get_extent(fh);
 	d->data.file.last_modified = file_last_modified(file);
@@ -2758,7 +2769,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	}
 	else if (strcasecomp(scheme, "file") == 0)
 	{
-	    int ft;
+	    int ft = -1;
 
 	    cfile = url_path_to_riscos(path);
 	    if (cfile[strlen(cfile)-1] == '.')
@@ -2889,7 +2900,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	    else if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))
 	    {
-		access_progress_flush(h, cfile, url, progress);
+ 		access_progress_flush(h, cfile, url, progress);
 		complete(h, status_COMPLETED_FILE, cfile, url);
 		    
 		*result = NULL;
@@ -3318,6 +3329,7 @@ static void access_abort_item(access_handle d)
     case access_type_FILE:
 	if (d->data.file.fh)
 	{
+	    ACCDBGN(("access_abort_item: close %d\n", d->data.file.fh));
 	    ro_fclose(d->data.file.fh);
 	    d->data.file.fh = 0;
 	}
@@ -3519,5 +3531,13 @@ BOOL access_is_scheme_supported(const char *scheme)
     return FALSE;
 }
 #endif
+
+void access_set_streaming(access_handle d, int stream)
+{
+    if (stream)
+	d->flags &= ~access_NO_STREAM;
+    else
+	d->flags |= access_NO_STREAM;
+}
 
 /* eof access.c */
