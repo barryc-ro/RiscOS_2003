@@ -30,6 +30,7 @@ CMHG    = cmhg
 CP      = copy
 LD      = link
 TLD	= tlink
+MODSQZ  = modsqz
 RM      = remove
 WIPE    = -wipe
 
@@ -83,7 +84,7 @@ RESF=o.msgs
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.cmhg.o:; ${CMHG} -depend !Depend -p -o $@ $<
 
 #
 # Main rules:
@@ -119,10 +120,7 @@ ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -132,6 +130,7 @@ ${RESF}: @.Resources.${LOCALE}.Messages
 ${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
 	${mkdir} rm
         ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
+        ${MODSQZ} $@
         Access $@ RW/R
 
 o.mainRAM: main.c
