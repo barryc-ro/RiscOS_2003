@@ -1,92 +1,174 @@
-# Project:   FrontEnd
+# Makefile for FrontEnd
+#
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name         Description
+# ----       ----         -----------
+# 17-Mar-99  SNB          Created
+
+COMPONENT = FrontEnd
+RAM_MODULE = rm.${COMPONENT}
+ROM_MODULE = aof.${COMPONENT}
+DBG_MODULE = rm.${COMPONENT}D
+
+#
+# Paths
+#
+EXP_HDR = <export$dir>
+
+#
+# Export Paths for Messages module
+#
+RESDIR = <resource$dir>.Resources2.${COMPONENT}
+RESFSDIR   = Resources.${COMPONENT}
+
+#
+# Generic options:
+#
+MKDIR   = cdir
+AS      = objasm
+CC      = cc
+CMHG    = cmhg
+CP      = copy
+LD      = link
+RM      = remove
+MODSQZ  = modsqz
+WIPE    = -wipe
+CD	= dir
+TOUCH	= stamp
+AWK     = awk
+
+CPFLAGS = ~cfr~v
+WFLAGS = ~c~v
+
+#
+# Include files
+#
+INCLUDES=	-IC:
+
+#
+# Libraries
+#
+CLIB		= Clib:o.Stubs
+RLIB            = RISC_OSLib:o.riscoslibm
+FLEXLIB         = C:tboxlibs.o.flexlibzm
+ROMCSTUBS	= RISCOSLIB:o.romcstubs
+ABSSYM		= RISC_OSLib:o.AbsSym
+
+LIBS            = ${FLEXLIB} ${RLIB}
+
+DEPEND		= -depend !Depend ${THROWBACK}
+DBGFLAGS        = -DTRACE
+DEFINES         = -DTEST_RELEASE
+
+ASFLAGS		= ${DEPEND}
+CFLAGS		= -c -ffah -Wc -zM -zps0 ${INCLUDES} ${DEFINES} ${DEPEND}
+CMHGFLAGS	= ${DEPEND} -p
+LDFLAGS         = -rmf -c++
+
+RAM_OBJS        = o.FEbkg  o.FEcmdline  o.FEdbox  o.FEexit  o.FEfileicon \
+                  o.FEhelp  o.FEiconbar  o.FEinfo  o.FEinit  o.FEinterr  o.FEmem \
+                  o.FEmenus  o.FEmsg  o.FEoptions  o.FEoutput  o.FEsaveas  o.FEtask \
+                  o.FEtxtwin  o.frontend  o.gen  o.lexer  o.parser  o.slist  o.utils \
+                  o.base o.FEHdr
+
+ROM_OBJS        = or.FEbkg or.FEcmdline or.FEdbox or.FEexit or.FEfileicon \
+                  or.FEhelp or.FEiconbar or.FEinfo or.FEinit or.FEinterr or.FEmem \
+                  or.FEmenus or.FEmsg or.FEoptions or.FEoutput or.FEsaveas or.FEtask \
+                  or.FEtxtwin or.frontend or.gen or.lexer or.parser or.slist or.utils \
+                  o.base o.FEHdr
+
+ROM_OBJS        = od.FEbkg od.FEcmdline od.FEdbox od.FEexit od.FEfileicon \
+                  od.FEhelp od.FEiconbar od.FEinfo od.FEinit od.FEinterr od.FEmem \
+                  od.FEmenus od.FEmsg od.FEoptions od.FEoutput od.FEsaveas od.FEtask \
+                  od.FEtxtwin od.frontend od.gen od.lexer od.parser od.slist od.utils \
+                  o.base o.FEHdr
 
 
-# Toolflags:
-CCflags = -c -depend !Depend -IC: -zM -ffah -DTEST_RELEASE 
-Linkflags = -m -o $@ 
-ObjAsmflags = -depend !Depend -Stamp -quit -CloseExec
-CMHGflags = 
-LibFileflags = -c -o $@
-Squeezeflags = -o $@
-AAsmflags = -depend !Depend -quit -CloseExec -To $@ -From
+#
+# Rule patterns
+#
+.SUFFIXES:	.o .od .or .s .c .cmhg .h
+.c.o:;		${CC} ${CFLAGS} -o $@ $<
+.c.or:;		${CC} ${CFLAGS} -DROM -o $@ $<
+.c.od:;		${CC} ${CFLAGS} ${DBGFLAGS} -o $@ $<
+.cmhg.o:;	${CMHG} ${CMHGFLAGS} -o $@ $< -d h.FEHdr
+.cmhg.h:;	${CMHG} ${CMHGFLAGS} -d $@ $<
+.cmhg.od:;	${CMHG} ${CMHGFLAGS} -o $@ $<
+.s.o:;		${AS} ${ASFLAGS} -o $@ $<
 
+FEHdr.h: o.FEHdr
+	${TOUCH} $@
+	
+o.FEHdr: VersionNum
 
-# Final targets:
-@.FrontEnd:   @.FrontEndU 
-        Squeeze $(Squeezeflags) @.FrontEndU 
-@.FrontEndU:   @.o.FEbkg @.o.FEcmdline @.o.FEdbox @.o.FEexit @.o.FEfileicon \
-        @.o.FEhelp @.o.FEiconbar @.o.FEinfo @.o.FEinit @.o.FEinterr @.o.FEmem @.o.FEmenus \
-        @.o.FEmsg @.o.FEoptions @.o.FEoutput @.o.FEsaveas @.o.FEtask @.o.FEtxtwin @.o.frontend \
-        @.o.gen @.o.lexer @.o.parser @.o.slist @.o.utils @.o.base \
-        C:rm.RISC_OSLib C:o.Stubs @.o.FEhdr @.o.dirs
-        Link $(Linkflags) -via objfiles 
+#
+# Main rules:
+#
+#
+all: ${RAM_MODULE} o._dirs
+        @echo ${COMPONENT}: Module built (RAM)
 
+ramtrace: ${DBG_MODULE} o._dirs
+	@echo ${COMPONENT}: Module built (TRACE)
 
-# User-editable dependencies:
-clean:; remove FrontEndU
-        remove FrontEnd
-        wipe o.*
+rom: ${ROM_MODULE} o._dirs
+        @echo ${COMPONENT}: Module built (ROM)
 
-@.o.dirs:
-	cdir @.o
+install_rom: ${ROM_MODULE}
+        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: Module installed (ROM)
+
+resources:
+        @echo ${COMPONENT}: resource files copied to Messages module
+
+clean:
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
+        ${WIPE} or ${WFLAGS}
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} h.FEHdr ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        @echo ${COMPONENT}: cleaned
+
+o._dirs:
+	${MKDIR} o
+	${MKDIR} od
+	${MKDIR} or
 	create $@
 
-release: @.FrontEnd
-        delete @.o.FEhdr
+export:
+        @echo ${COMPONENT}: export complete
 
-# Static dependencies:
-@.o.FEbkg:   @.c.FEbkg
-        cc $(ccflags) -o @.o.FEbkg @.c.FEbkg 
-@.o.FEcmdline:   @.c.FEcmdline
-        cc $(ccflags) -o @.o.FEcmdline @.c.FEcmdline 
-@.o.FEdbox:   @.c.FEdbox
-        cc $(ccflags) -o @.o.FEdbox @.c.FEdbox 
-@.o.FEexit:   @.c.FEexit
-        cc $(ccflags) -o @.o.FEexit @.c.FEexit 
-@.o.FEfileicon:   @.c.FEfileicon
-        cc $(ccflags) -o @.o.FEfileicon @.c.FEfileicon 
-@.o.FEhelp:   @.c.FEhelp
-        cc $(ccflags) -o @.o.FEhelp @.c.FEhelp 
-@.o.FEiconbar:   @.c.FEiconbar
-        cc $(ccflags) -o @.o.FEiconbar @.c.FEiconbar 
-@.o.FEinfo:   @.c.FEinfo
-        cc $(ccflags) -o @.o.FEinfo @.c.FEinfo 
-@.o.FEinit:   @.c.FEinit
-        cc $(ccflags) -o @.o.FEinit @.c.FEinit 
-@.o.FEinterr:   @.c.FEinterr
-        cc $(ccflags) -o @.o.FEinterr @.c.FEinterr 
-@.o.FEmem:   @.c.FEmem
-        cc $(ccflags) -o @.o.FEmem @.c.FEmem 
-@.o.FEmenus:   @.c.FEmenus
-        cc $(ccflags) -o @.o.FEmenus @.c.FEmenus 
-@.o.FEmsg:   @.c.FEmsg
-        cc $(ccflags) -o @.o.FEmsg @.c.FEmsg 
-@.o.FEoptions:   @.c.FEoptions
-        cc $(ccflags) -o @.o.FEoptions @.c.FEoptions 
-@.o.FEoutput:   @.c.FEoutput
-        cc $(ccflags) -o @.o.FEoutput @.c.FEoutput 
-@.o.FEsaveas:   @.c.FEsaveas
-        cc $(ccflags) -o @.o.FEsaveas @.c.FEsaveas 
-@.o.FEtask:   @.c.FEtask
-        cc $(ccflags) -o @.o.FEtask @.c.FEtask 
-@.o.FEtxtwin:   @.c.FEtxtwin
-        cc $(ccflags) -o @.o.FEtxtwin @.c.FEtxtwin 
-@.o.frontend:   @.c.frontend
-        cc $(ccflags) -o @.o.frontend @.c.frontend 
-@.o.gen:   @.c.gen
-        cc $(ccflags) -o @.o.gen @.c.gen 
-@.o.lexer:   @.c.lexer
-        cc $(ccflags) -o @.o.lexer @.c.lexer 
-@.o.parser:   @.c.parser
-        cc $(ccflags) -o @.o.parser @.c.parser 
-@.o.slist:   @.c.slist
-        cc $(ccflags) -o @.o.slist @.c.slist 
-@.o.utils:   @.c.utils
-        cc $(ccflags) -o @.o.utils @.c.utils 
-@.o.base:   @.s.base
-        objasm $(objasmflags) -from @.s.base -to @.o.base
-@.o.FEhdr:   @.cmhg.FEhdr
-        cmhg @.cmhg.FEhdr -o @.o.FEhdr
+
+#
+# Targets
+#
+${RAM_MODULE}:	${RAM_OBJS} ${CLIB} ${LIBS}
+	${MKDIR} rm
+	$(LD) -o $@ -rmf ${RAM_OBJS} ${CLIB} ${LIBS}
+        ${MODSQZ} $@
+        Access $@ RW/R
+
+${ROM_MODULE}:	${ROM_OBJS} ${ROMCSTUBS} ${LIBS}
+	${MKDIR} aof
+	$(LD) -o $@ -aof ${ROM_OBJS} ${ROMCSTUBS} ${LIBS}
+
+${DBG_MODULE}:	${DBG_OBJS} ${CLIB} ${LIBS}
+	${MKDIR} rm
+	$(LD) -o $@ ${LDFLAGS} ${DBG_OBJS} ${CLIB} ${LIBS}
+        Access $@ RW/R
+
+#
+# Final link for the ROM Image (using given base address)
+#
+rom_link:
+        ${MKDIR} linked
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
 
 
 # Dynamic dependencies:
