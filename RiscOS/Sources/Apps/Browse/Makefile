@@ -70,6 +70,10 @@
 #			anything in 'User' dir and wipes CVS control files
 #			from the exported copy. 'resources' rule updated
 #			similarly for both 'User' and 'About' directories.
+# 1999-01-05	ADH	clean_all now also removes syms directory.
+# 1999-03-30	ADH	HTMLLib: and ${LIBDIR}.ImageLib. don't exist as paths
+#			anymore so now use LIBDIR etc. Now exports mono
+#			sprites ([!]Sprites23). Tweaked CC args (-Wpc).
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -93,6 +97,7 @@ RESAPP		= <resource$dir>.Apps.${APP}
 # Generic options
 #
 
+LIBDIR		= <Lib$Dir>
 MKDIR		= cdir
 AS		= objasm
 CC		= cc
@@ -104,7 +109,7 @@ SQUEEZE		= squeeze
 WIPE		= -wipe
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
-CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -wp
+CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -Wpc
 CPFLAGS		= ~cfr~v
 SQFLAGS		= -f
 WFLAGS		= ~cf~vr
@@ -147,12 +152,12 @@ CLIB		= CLib:o.stubs
 ROMCSTUBS	= RISC_OSLib:o.romcstubs
 ABSSYM		= RISC_OSLib:o.c_abssym
 WRAPPER		= RISC_OSLib:s.ModuleWrap
-HTMLLIB		= HTMLLib:o.HTMLLib
-IMAGELIB	= ImageLib:o.ImageLib
-PNGLIB		= ImageLib:o.libpng-lib
-PNGLIBZ		= ImageLib:o.libpng-lzm
-JPEGLIB		= ImageLib:o.libjpeg
-JPEGLIBZ	= ImageLib:o.libjpeg-zm
+HTMLLIB		= ${LIBDIR}.HTMLLib.o.HTMLLib
+IMAGELIB	= ${LIBDIR}.ImageLib.o.ImageLib
+PNGLIB		= ${LIBDIR}.ImageLib.o.libpng-lib
+PNGLIBZ		= ${LIBDIR}.ImageLib.o.libpng-lzm
+JPEGLIB		= ${LIBDIR}.ImageLib.o.libjpeg
+JPEGLIBZ	= ${LIBDIR}.ImageLib.o.libjpeg-zm
 ZLIB		= C:zlib.o.zlib
 URILIB		= Libraries.URILib.o.URILib
 FLEXLIB		= tbox:o.flexlib
@@ -227,7 +232,7 @@ LIBSD = \
 # Include files (libraries and resources)
 #
 
-INCLUDES	= -Itbox:,C:,HTMLLib:,ImageLib:,Libraries.URILib.,TCPIPLibs:,C:NSPRLib.,C:JSLib.
+INCLUDES	= -Itbox:,C:,${LIBDIR}.HTMLLib.,${LIBDIR}.ImageLib.,Libraries.URILib.,TCPIPLibs:,C:NSPRLib.,C:JSLib.
 
 FILES = \
  ${LDIR}.!Boot \
@@ -282,6 +287,7 @@ OBJS = \
  o.JSutils		\
  o.JSwindow		\
  o.LineOne		\
+ o.List			\
  o.Main			\
  o.Markers		\
  o.Memory		\
@@ -350,6 +356,7 @@ OBJSZ = \
  oz.JSutils		\
  oz.JSwindow		\
  oz.LineOne		\
+ oz.List		\
  oz.Main		\
  oz.Markers		\
  oz.Memory		\
@@ -418,6 +425,7 @@ OBJSD = \
  od.JSutils		\
  od.JSwindow		\
  od.LineOne		\
+ od.List		\
  od.Main		\
  od.Markers		\
  od.Memory		\
@@ -488,6 +496,7 @@ OBJSDZ = \
  odz.JSutils		\
  odz.JSwindow		\
  odz.LineOne		\
+ odz.List		\
  odz.Main		\
  odz.Markers		\
  odz.Memory		\
@@ -557,6 +566,7 @@ OBJS_SURF = \
  o_surf.JSutils		\
  o_surf.JSwindow	\
  o_surf.LineOne		\
+ o_surf.List		\
  o_surf.Main		\
  o_surf.Markers		\
  o_surf.Memory		\
@@ -624,6 +634,7 @@ OBJSD_SURF = \
  od_surf.JSutils	\
  od_surf.JSwindow	\
  od_surf.LineOne	\
+ od_surf.List		\
  od_surf.Main		\
  od_surf.Markers	\
  od_surf.Memory		\
@@ -694,6 +705,7 @@ OBJS_ITALK = \
  o_italk.JSutils	\
  o_italk.JSwindow	\
  o_italk.LineOne	\
+ o_italk.List		\
  o_italk.Main		\
  o_italk.Markers	\
  o_italk.Memory		\
@@ -762,6 +774,7 @@ OBJSD_ITALK = \
  od_italk.JSutils	\
  od_italk.JSwindow	\
  od_italk.LineOne	\
+ od_italk.List		\
  od_italk.Main		\
  od_italk.Markers	\
  od_italk.Memory	\
@@ -868,12 +881,14 @@ install_common: ${FILES}
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
 	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}n
 	${CP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
+	-${CP} ${LDIR}.!Sprites23		${INSTDIR}.!Sprites23		${CPFLAGS}n
 	${CP} ${LDIR}.8desktop			${INSTDIR}.8desktop		${CPFLAGS}n
 	${CP} ${LDIR}.Choices			${INSTDIR}.Choices		${CPFLAGS}n
 	${CP} ${LDIR}.Controls			${INSTDIR}.Controls		${CPFLAGS}n
 	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}n
 	${CP} ${LDIR}.Sprites			${INSTDIR}.Sprites		${CPFLAGS}n
 	-${CP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
+	-${CP} ${LDIR}.Sprites23		${INSTDIR}.Sprites23		${CPFLAGS}n
 	-${CP} ${LDIR}.User			${INSTDIR}.User			${CPFLAGS}n
 	${WIPE} ${INSTDIR}.User.CVS	${WFLAGS}
 
@@ -923,11 +938,14 @@ resources:
 	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
 	${CP} ${LDIR}.!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
 	${CP} ${LDIR}.!Sprites22	${RESDIR}.!Sprites22	${CPFLAGS}
+	-${CP} ${LDIR}.!Sprites23	${RESDIR}.!Sprites23	${CPFLAGS}
 	${CP} ${LDIR}.Choices		${RESDIR}.Choices	${CPFLAGS}
 	${CP} ${LDIR}.Controls		${RESDIR}.Controls	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
 	${CP} ${LDIR}.Sprites		${RESDIR}.Sprites	${CPFLAGS}
+	-${CP} ${LDIR}.Sprites22	${RESDIR}.Sprites22	${CPFLAGS}
+	-${CP} ${LDIR}.Sprites23	${RESDIR}.Sprites23	${CPFLAGS}
 	${CP} ${LDIR}.User		${RESDIR}.User		${CPFLAGS}
 	${CP} ${LDIR}.About		${RESDIR}.About		${CPFLAGS}
 	${WIPE} ${RESDIR}.User.CVS	${WFLAGS}
@@ -1000,6 +1018,7 @@ map:
 
 clean_all: clean
 	${WIPE}	Targets		${WFLAGS}
+	${WIPE}	Syms		${WFLAGS}
 	@echo ${COMPONENT}: Cleaned all
 
 

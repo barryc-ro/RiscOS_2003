@@ -81,6 +81,9 @@ static int               openurl_radio_group_one (int eventcode, ToolboxEvent * 
 static int               openurl_click           (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
 static int               openurl_key_handler     (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
 
+static unsigned int      openurl_url_completion  (char * url, unsigned int size, int key);
+static unsigned int      openurl_protocol_cycle  (ObjectId o, int key);
+
 /*************************************************/
 /* openurl_read_contents()                       */
 /*                                               */
@@ -412,6 +415,16 @@ static int openurl_ok(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
 
   ChkError(openurl_read_contents(idb->self_id, &localcontents));
 
+  /* If the URL lacks a '.', '/' or ':', try auto-completion (as if Ctrl+Tab */
+  /* had been pressed).                                                      */
+
+  if (
+       !strchr(localcontents.url, ':') &&
+       !strchr(localcontents.url, '.') &&
+       !strchr(localcontents.url, '/')
+     )
+     openurl_url_completion(localcontents.url, sizeof(localcontents.url), akbd_TabK + akbd_Ctl);
+
   /* If Select was pressed, the dialogue will close, so */
   /* remember the current contents for future reference */
   /* (no button => Return was pressed)                  */
@@ -676,6 +689,116 @@ static int openurl_click(int eventcode, WimpPollBlock * b, IdBlock * idb, void *
 }
 
 /*************************************************/
+/* openurl_url_completion()                      */
+/*                                               */
+/* Take a partial URL string and look through    */
+/* the hotlist then history titles then URLs for */
+/* a match.                                      */
+/*                                               */
+/* Once one match is found successive calls may  */
+/* be made to cycle through the list generated   */
+/* by the first search.                          */
+/*                                               */
+/* Parameters: Pointer to the URL to begin with; */
+/*                                               */
+/*             Size of the buffer the URL is in; */
+/*                                               */
+/*             Key number used - Ctrl+Tab will   */
+/*             search forwards, add Shift to     */
+/*             search backwards.                 */
+/*                                               */
+/* Returns:    1 if a URL was written back to    */
+/*             the dialogue box, else 0.         */
+/*************************************************/
+
+static unsigned int openurl_url_completion(char * url, unsigned int size, int key)
+{
+  #ifndef REMOTE_HOTLIST
+
+    if (!url || size < 2) return 0;
+
+    /* Try and find something appropriate in the hotlist, */
+    /* then the history.                                  */
+
+    if (key == akbd_TabK + akbd_Ctl)
+    {
+      if (browser_find_matching_url((flex_ptr) &match_list, url, size))
+      {
+        return 1;
+      }
+    }
+    else
+    {
+      if (browser_find_match_backwards((flex_ptr) &match_list, url, size))
+      {
+        return 1;
+      }
+    }
+
+  #endif
+
+  return 0;
+}
+
+/*************************************************/
+/* openurl_protocol_cycle()                      */
+/*                                               */
+/* Cycle the protocol string at the front of a   */
+/* URL through the known protocols. The URL      */
+/* string is assumed to be in the Open URL       */
+/* dialogue box and will be written back there.  */
+/*                                               */
+/* Parameters: ObjectID of dialogue box to use   */
+/*             (component used is the predefined */
+/*             'OpenWrit');                      */
+/*                                               */
+/*             Key number used - currently       */
+/*             always akbd_TabK + akbd_Sh.       */
+/*                                               */
+/* Returns:    1 if the URL was changed, else    */
+/*             zero.                             */
+/*************************************************/
+
+static unsigned int openurl_protocol_cycle(ObjectId o, int key)
+{
+  _kernel_oserror * e;
+  char              url[Limits_URLBarWrit];
+  int               changed = 0;
+
+  /* Read whatever is in the URL bar writable */
+
+  *url = 0;
+
+  e = writablefield_get_value(0,
+                              o,
+                              OpenWrit,
+                              url,
+                              sizeof(url),
+                              NULL);
+
+  if (!e)
+  {
+    url[sizeof(url) - 1] = 0; /* (Ensure termination) */
+
+    /* Cycle the protocol specifier (adding one in if not already present) */
+
+    changed = urlutils_cycle_protocol(url, sizeof(url));
+
+    if (changed)
+    {
+      /* Update the URL writable */
+
+      writablefield_set_value(0,
+                              o,
+                              OpenWrit,
+                              url);
+    }
+  }
+
+  return changed;
+}
+
+/*************************************************/
 /* openurl_key_handler()                         */
 /*                                               */
 /* Handles a few key pressed events in the Open  */
@@ -687,8 +810,7 @@ static int openurl_click(int eventcode, WimpPollBlock * b, IdBlock * idb, void *
 
 static int openurl_key_handler(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
 {
-  _kernel_oserror * e;
-  int               key;
+  int key;
 
   key = ((WimpKeyPressedEvent *) b)->key_code;
 
@@ -697,13 +819,12 @@ static int openurl_key_handler(int eventcode, WimpPollBlock * b, IdBlock * idb, 
     case akbd_TabK + akbd_Ctl:
     case akbd_TabK + akbd_Ctl + akbd_Sh:
     {
+      _kernel_oserror * e;
+      char              url[Limits_URLBarWrit];
+
       #ifndef REMOTE_HOTLIST
 
-        char url[Limits_URLBarWrit];
-
-        /* Read whatever is in the URL bar writable */
-
-        *url = 0;
+        *url = '\0';
 
         e = writablefield_get_value(0,
                                     idb->self_id,
@@ -714,34 +835,14 @@ static int openurl_key_handler(int eventcode, WimpPollBlock * b, IdBlock * idb, 
 
         if (!e)
         {
-          url[sizeof(url) - 1] = 0; /* (Ensure termination) */
+          url[sizeof(url) - 1] = '\0'; /* (Ensure termination) */
 
-          /* Try and find something appropriate in the hotlist, */
-          /* then the history.                                  */
-
-          if (key == akbd_TabK + akbd_Ctl)
+          if (openurl_url_completion(url, sizeof(url), key))
           {
-            if (browser_find_matching_url((flex_ptr) &match_list, url, sizeof(url)))
-            {
-              /* Update the URL writable */
-
-              writablefield_set_value(0,
-                                      idb->self_id,
-                                      OpenWrit,
-                                      url);
-            }
-          }
-          else
-          {
-            if (browser_find_match_backwards((flex_ptr) &match_list, url, sizeof(url)))
-            {
-              /* Update the URL writable */
-
-              writablefield_set_value(0,
-                                      idb->self_id,
-                                      OpenWrit,
-                                      url);
-            }
+            writablefield_set_value(0,
+                                    idb->self_id,
+                                    OpenWrit,
+                                    url);
           }
         }
 
@@ -753,39 +854,7 @@ static int openurl_key_handler(int eventcode, WimpPollBlock * b, IdBlock * idb, 
 
     case akbd_TabK + akbd_Sh:
     {
-      char url[Limits_URLBarWrit];
-      int  changed;
-
-      /* Read whatever is in the URL bar writable */
-
-      *url = 0;
-
-      e = writablefield_get_value(0,
-                                  idb->self_id,
-                                  OpenWrit,
-                                  url,
-                                  sizeof(url),
-                                  NULL);
-
-      if (!e)
-      {
-        url[sizeof(url) - 1] = 0; /* (Ensure termination) */
-
-        /* Cycle the protocol specifier (adding one in if not already present) */
-
-        changed = urlutils_cycle_protocol(url, sizeof(url));
-
-        if (changed)
-        {
-          /* Update the URL writable */
-
-          writablefield_set_value(0,
-                                  idb->self_id,
-                                  OpenWrit,
-                                  url);
-        }
-      }
-
+      openurl_protocol_cycle(idb->self_id, key);
       key = 0;
     }
     break;

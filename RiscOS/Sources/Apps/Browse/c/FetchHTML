@@ -37,6 +37,7 @@
 #include "Filetypes.h"
 #include "History.h"
 #include "JavaScript.h"
+#include "List.h"
 #include "Save.h" /* (For Save_ScrapFile only)*/
 #include "URLutils.h"
 #include "URLveneer.h"
@@ -77,6 +78,8 @@ static fetcher_state   fetch_state;
 static _kernel_oserror * html_allocate_fetch_buffer (void);
 
 static void              html_set_proxy             (unsigned int handle,  const char * url);
+
+static void              html_extract_header_info   (browser_data * b, flex_ptr source);
 
 static _kernel_oserror * html_build_internal_page   (browser_data * b, flex_ptr source, urlstat * up, char * url, char * ref_url, int ref_size);
 static _kernel_oserror * html_transfer_to_store     (browser_data * b, flex_ptr source, urlstat * up, int r, int * size);
@@ -163,58 +166,43 @@ static void html_set_proxy(unsigned int handle,  const char * url)
 
   if (d && d->host && d->protocol)
   {
+    char * exclusions;
+    int    result;
+
     /* First thing; see if the domain is listed as one we should not proxy. */
     /* lookup_choice is defined as looking up into a local buffer, so we    */
-    /* can write zero terminators in this to make the searching easier.     */
+    /* can write zero terminators in this to make the searching easier. Do  */
+    /* need to make sure the buffer contents are invalidated first.         */
 
-    char * exclusions = lookup_choice("ProxyExclusions", 0, 0);
+    exclusions = list_get_malloc_list_string("ProxyExclusions");
 
-    if (*exclusions && strcmp(exclusions, "!"))
+    if (exclusions)
     {
-      char * next;
-      int    offset;
-      int    hlen = strlen(d->host);
-
-      /* Go through each item in the comma-separated list */
-
-      do
-      {
-        next = strstr(exclusions, ",");
-        if (next) *next = '\0';
-
-        /* Compare only the right hand side of the host name */
-        /* if the entry starts with a '.', or compare the    */
-        /* whole thing if not.                               */
-
-        if (*exclusions == '.')
-        {
-          offset = hlen - strlen(exclusions);
-
-          if (offset >= 0 && !utils_strcasecmp(d->host + offset, exclusions))
-          {
-            /* A domain match - exit without proxying */
-
-            goto html_set_proxy_exit;
-          }
-        }
-        else
-        {
-          if (!utils_strcasecmp(d->host, exclusions))
-          {
-            /* Whole host matches - exit without proxying */
-
-            goto html_set_proxy_exit;
-          }
-        }
-
-        /* If we have another item, advance to read it */
-
-        if (next) exclusions = next + 1;
-      }
-      while (next);
+      result = urlutils_matches_special(d, exclusions);
+      free(exclusions), exclusions = NULL;
+      if (result) goto html_set_proxy_exit;
     }
 
-    /* These are the names we use for HTTP (backwards compatible...) */
+    /* Any protocol specific exclusions? */
+
+    strcpy(t1, "ProxyExclude");
+
+    if (strlen(t1) + strlen(d->protocol) + 1 < sizeof(t1))
+    {
+      strcat(t1, d->protocol);
+
+      exclusions = list_get_malloc_list_string(t1);
+
+      if (exclusions)
+      {
+        result = urlutils_matches_special(d, exclusions);
+        free(exclusions), exclusions = NULL;
+        if (result) goto html_set_proxy_exit;
+      }
+    }
+
+    /* Now shift from things that exclude proxies, to things that specify  */
+    /* them. These are the names we use for HTTP (backwards compatible...) */
 
     strcpy(t1, "UseProxy");
     strcpy(t2, "ProxyAddress");
@@ -839,6 +827,141 @@ _kernel_oserror * html_close(int handle)
   #endif
 
   return NULL;
+}
+
+/*************************************************/
+/* html_extract_header_info()                    */
+/*                                               */
+/* Get information from HTTP response headers,   */
+/* e.g. the Last-modified date.                  */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the headers;          */
+/*                                               */
+/*             Flex anchor for a block holding   */
+/*             the HTTP response headers to look */
+/*             through.                          */
+/*************************************************/
+
+static void html_extract_header_info(browser_data * b, flex_ptr headers)
+{
+  int     size, current;
+  int     found;
+  char ** cast = (char **) headers;
+
+  /* Sanity check */
+
+  if (!b || !b->bcx || !headers || !*headers) return;
+
+  /* May not have a zero terminator; must not go off end of block */
+
+  size = flex_size(headers);
+
+  /* Look for header entries either from offset zero, or after */
+  /* a '\r\n'. The Fetcher specs say we'll get back HTTP 1.0   */
+  /* compliant headers, so we know it'll be CR+LF at the end   */
+  /* of each item.                                             */
+
+  found = 0;
+
+  for (current = 0; current < size; current ++)
+  {
+    if (current == 0)
+    {
+      /* A header line is either at the top of the block... */
+
+      found = 1;
+    }
+    else
+    {
+      /* ...or we have to look for it */
+
+      found = 0;
+
+      /* Keep looping around until we run out of block or */
+      /* stop getting '\r\n' pairs.                       */
+
+      while (current < size && (*cast)[current] == '\r')
+      {
+        /* If we have '\r', look for a '\n' after it */
+
+        current++;
+        if (current >= size) break;
+
+        if ((*cast)[current] == '\n') found ++;
+
+        current++;
+      }
+
+      /* If we ran off the block or had more than one consecutive */
+      /* '\r\n' (end of headers), exit.                           */
+
+      if (current >= size || found > 1) break;
+    }
+
+    /* Did we find a header line? */
+
+    if (found == 1)
+    {
+      int old_budge;
+      int lm_len = sizeof("last_modified: ") - 1;
+
+      /* Only do the case insensitive comparisons if we won't fall out of */
+      /* the buffer! Lock flex as we'll be passing in a pointer to a flex */
+      /* block and the heap might want to shift across the function call. */
+
+      old_budge = flex_set_budge(0);
+
+      if (
+           lm_len + current < size &&
+           !utils_strncasecmp((*cast) + current,
+                              "last-modified: ",
+                              lm_len)
+         )
+      {
+        int lm_contents_len = 0;
+        int local_current   = current + lm_len;
+
+        flex_set_budge(old_budge);
+
+        /* Since there's only the one string extraction going on here, */
+        /* I'll keep this inline. You'd want to take it out as a       */
+        /* function if more header entries were to be thus parsed of   */
+        /* course.                                                     */
+
+        while (local_current < size)
+        {
+          if ((*cast)[local_current++] >= ' ') lm_contents_len ++;
+          else break;
+        }
+
+        free (b->last_modified);
+
+        if (lm_contents_len > 0) b->last_modified = malloc(lm_contents_len + 1);
+        else                     b->last_modified = NULL;
+
+        if (b->last_modified)
+        {
+          strncpy(b->last_modified, (*cast) + current + lm_len, lm_contents_len);
+          b->last_modified[lm_contents_len] = '\0';
+
+          #ifdef JAVASCRIPT
+
+            /* Try to help JavaScript out with funny last modified dates */
+
+            javascript_fix_invalid_date_format(b->last_modified);
+
+          #endif
+        }
+      }
+      else /* if (...), else if (...), etc. for other checks - none for now though */
+      {
+        /* Restore flex budge state either way */
+
+        flex_set_budge(old_budge);
+      }
+    }
+  }
 }
 
 /*************************************************/
@@ -1742,6 +1865,11 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
           }
         #endif
 
+        /* We may have some local interest in the headers, e.g. for */
+        /* last modified dates.                                     */
+
+        html_extract_header_info(b, (flex_ptr) source);
+
         /* There are HTTP style headers in the data */
         /* stream; try to identify that stream.     */
 
@@ -2180,27 +2308,76 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
                 /* be that the server is sending garbage Content-Type    */
                 /* headers, and we'll choose the filename extension over */
                 /* this (initially for "http://www.batalarms.co.uk/").   */
+                /* However, some servers really do mean text/plain when  */
+                /* they say it; others send text/plain for HTML and      */
+                /* plain text but get other bits right. It's a mess, so  */
+                /* use the 'Faith' Choices option to determine the final */
+                /* behaviour here.                                       */
                 /*                                                       */
                 /* If the server says something is HTML, we'll trust it. */
 
                 case TYPE_TEXTFILE:
                 {
-                  type = urlutils_filetype_from_url(browser_fetch_url(b));
+                  /* No faith in the server */
 
-                  if (type == FileType_TEXT)
+                  if (choices.faith == Choices_Faith_Never)
+                  {
+                    type = urlutils_filetype_from_url(browser_fetch_url(b));
+
+                    /* If the URL indicates that it's text, display it as text */
+
+                    if (type == FileType_TEXT)
+                    {
+                      b->page_is_text = 1;
+                      *waiting        = 1;
+                    }
+
+                    /* If the URL indicates that it's HTML, display it as HTML */
+
+                    else if (type == FileType_HTML)
+                    {
+                      parseable = TYPE_HTMLFILE;
+                      *waiting  = 1;
+                    }
+
+                    /* For anything else, treat it as an unknown object */
+
+                    else
+                    {
+                      parseable = TYPE_UNKNOWN,
+                      *waiting  = 3;
+                    }
+                  }
+
+                  /* Some faith in the server */
+
+                  else if (choices.faith == Choices_Faith_Sometimes)
+                  {
+                    type = urlutils_filetype_from_url(browser_fetch_url(b));
+
+                    /* If the URL indicates that it's text, display it as text */
+
+                    if (type == FileType_TEXT)
+                    {
+                      b->page_is_text = 1;
+                      *waiting        = 1;
+                    }
+
+                    /* For anything else, treat it as HTML */
+
+                    else
+                    {
+                      parseable = TYPE_HTMLFILE;
+                      *waiting  = 1;
+                    }
+                  }
+
+                  /* Complete faith in the server - if it says this is text, display it as text */
+
+                  else
                   {
                     b->page_is_text = 1;
                     *waiting        = 1;
-                  }
-                  else if (type == FileType_HTML)
-                  {
-                    parseable = TYPE_HTMLFILE;
-                    *waiting  = 1;
-                  }
-                  else
-                  {
-                    parseable = TYPE_UNKNOWN,
-                    *waiting  = 3;
                   }
                 }
                 break;

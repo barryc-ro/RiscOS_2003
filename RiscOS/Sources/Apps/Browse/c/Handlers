@@ -83,12 +83,17 @@ static int  last_click_y;
 
 /* Static function prototypes */
 
-static void handlers_get_call_info   (browser_data ** bp, ObjectId * op, IdBlock * idb, ComponentId button);
-static int  handlers_menu_or_toolbar (IdBlock * idb);
-static void handle_go_to_with_key    (browser_data * b, char c, int clear);
+static int          handle_menu_or_toolbar (IdBlock * idb);
+static void         handle_get_call_info   (browser_data ** bp, ObjectId * op, IdBlock * idb, ComponentId button);
+
+static unsigned int handle_url_completion  (browser_data * b, char * url, unsigned int size, int key);
+static unsigned int handle_protocol_cycle  (browser_data * b, int key);
+static void         handle_url_submission  (browser_data * b, int key);
+
+static void         handle_go_to_with_key  (browser_data * b, char c, int clear);
 
 /*************************************************/
-/* handlers_menu_or_toolbar()                    */
+/* handle_menu_or_toolbar()                      */
 /*                                               */
 /* Returns 1 if an event came from a menu, else  */
 /* 0 if it was a toolbar (only call this where   */
@@ -100,7 +105,7 @@ static void handle_go_to_with_key    (browser_data * b, char c, int clear);
 /*             else 0.                           */
 /*************************************************/
 
-static int handlers_menu_or_toolbar(IdBlock * idb)
+static int handle_menu_or_toolbar(IdBlock * idb)
 {
   _kernel_oserror * e;
   ObjectId          tt, tb, sw;
@@ -127,7 +132,7 @@ static int handlers_menu_or_toolbar(IdBlock * idb)
 }
 
 /*************************************************/
-/* handlers_get_call_info()                      */
+/* handle_get_call_info()                        */
 /*                                               */
 /* For button handlers, a standard set of calls  */
 /* is used for each handler - find out the       */
@@ -153,7 +158,7 @@ static int handlers_menu_or_toolbar(IdBlock * idb)
 /*             values are sensible.              */
 /*************************************************/
 
-static void handlers_get_call_info(browser_data ** bp, ObjectId * op, IdBlock * idb, ComponentId button)
+static void handle_get_call_info(browser_data ** bp, ObjectId * op, IdBlock * idb, ComponentId button)
 {
   browser_data * b;
   ObjectId       t;
@@ -423,6 +428,218 @@ int handle_ack(int eventcode, WimpPollBlock * block, IdBlock * idb, void * handl
 }
 
 /*************************************************/
+/* handle_url_completion()                       */
+/*                                               */
+/* Take a partial URL string and look through    */
+/* the hotlist then history titles then URLs for */
+/* a match. The URL string is assumed to be in   */
+/* the browser URL bar and will be written back  */
+/* there.                                        */
+/*                                               */
+/* Once one match is found successive calls may  */
+/* be made to cycle through the list generated   */
+/* by the first search on a per-browser basis.   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the URL bar;          */
+/*                                               */
+/*             Pointer to the URL to begin with; */
+/*                                               */
+/*             Size of the buffer the URL is in; */
+/*                                               */
+/*             Key number used - Ctrl+Tab will   */
+/*             search forwards, add Shift to     */
+/*             search backwards.                 */
+/*                                               */
+/* Returns:    1 if a URL was written back to    */
+/*             the URL bar, else 0.              */
+/*************************************************/
+
+static unsigned int handle_url_completion(browser_data * b, char * url, unsigned int size, int key)
+{
+  #ifndef REMOTE_HOTLIST
+
+    /* For Ctrl+Tab, do URL completion on the URL bar */
+    /* writeble contents or cycle through previously  */
+    /* found matches. For Ctrl+Shift+Tab, cycle       */
+    /* backwards through matches, if found.           */
+
+    if (key == akbd_TabK + akbd_Ctl)
+    {
+      if (
+           b &&
+           browser_find_matching_url((flex_ptr) &b->match_list,
+                                     url,
+                                     size)
+         )
+         return 1;
+    }
+    else
+    {
+      if (
+           b &&
+           browser_find_match_backwards((flex_ptr) &b->match_list,
+                                        url,
+                                        size)
+         )
+         return 1;
+    }
+
+  #endif
+
+  return 0;
+}
+
+/*************************************************/
+/* handle_protocol_cycle()                       */
+/*                                               */
+/* Cycle the protocol string at the front of a   */
+/* URL through the known protocols. The URL      */
+/* string is assumed to be in the browser URL    */
+/* bar and will be written back there.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the URL bar;          */
+/*                                               */
+/*             Key number used - currently       */
+/*             always akbd_TabK + akbd_Sh.       */
+/*                                               */
+/* Returns:    1 if the URL was changed, else    */
+/*             zero.                             */
+/*************************************************/
+
+static unsigned int handle_protocol_cycle(browser_data * b, int key)
+{
+  char     url[Limits_URLBarWrit];
+  int      changed;
+
+  ObjectId i = toolbars_get_upper(b);
+
+  /* Read whatever is in the URL bar writable */
+
+  *url = 0;
+  ChkError(writablefield_get_value(0, i, URLBarWrit, url, sizeof(url), NULL));
+  url[sizeof(url) - 1] = 0; /* (Ensure termination) */
+
+  /* Cycle the protocol specifier (adding one in if not already present) */
+
+  changed = urlutils_cycle_protocol(url, sizeof(url));
+
+  if (changed)
+  {
+    /* Update the URL writable */
+
+    writablefield_set_value(0, i, URLBarWrit, url);
+
+    return 1;
+  }
+
+  return 0;
+}
+
+/*************************************************/
+/* handle_url_submission()                       */
+/*                                               */
+/* Take necessary actions to submit a URL typed  */
+/* into the browser URL bar. This may include    */
+/* expanding it through a match search, adding   */
+/* best guess protocol specifiers, etc.          */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the URL bar;          */
+/*                                               */
+/*             Key number used - currently       */
+/*             always 0x00d.                     */
+/*************************************************/
+
+static void handle_url_submission(browser_data * b, int key)
+{
+  char     url[Limits_URLBarWrit];
+  ObjectId i = toolbars_get_upper(b);
+
+  /* Read the new URL from the URL bar writable */
+
+  *url = 0;
+  ChkError(writablefield_get_value(0, i, URLBarWrit, url, sizeof(url), NULL));
+  url[sizeof(url) - 1] = 0; /* (Ensure termination) */
+
+  #ifdef ALIAS_URLS
+  // Not implemented yet...
+  #endif
+
+  /* If we're displaying a temporary file and the URL hasn't changed, */
+  /* treat this as an attempt to reload the page.                     */
+
+  if (
+       b->displayed == Display_Scrap_File   &&
+       !strcmp(browser_current_url(b), url)
+     )
+  {
+    erb.errnum = Utils_Error_Custom_Message;
+
+    StrNCpy0(erb.errmess,
+             lookup_token("CantReload:This page cannot be reloaded, as it was sent directly from another application.",
+                          0,
+                          0));
+
+    show_error_ret(&erb);
+  }
+  else
+  {
+    #ifdef JAVASCRIPT
+
+      /* If this is a JavaScript URL, the script will end up    */
+      /* being executed. Tell the JavaScript interface routines */
+      /* that it came from the URL writable.                    */
+
+      if (javascript_url(url)) javascript_set_source(JavaScript_Source_URLWritable);
+
+    #endif
+
+    #ifdef HIDE_CGI
+
+      /* If HIDE_CGI is defined, the URL bar may have only part of    */
+      /* the URL in it - the CGI information could be stripped off.   */
+      /* In that case, check if the URL matches the browser's current */
+      /* one with the exception of the CGI stuff, and only do the     */
+      /* fetch if not.                                                */
+
+      if (
+           browser_current_url(b) &&                               /* If there *is* a current URL, and            */
+           !strncmp(browser_current_url(b), url, strlen(url)) &&   /* the URL bar matches the start of it...      */
+           strlen(browser_current_url(b)) > strlen(url) &&         /* ...but there's more of the current URL left */
+           browser_current_url(b)[strlen(url)] == '?'              /* ...and the first extra character is a '?',  */
+
+         )
+         ChkError(fetchpage_new(b, browser_current_url(b), 1, 1)); /* ...then fetch the current URL instead.      */
+
+      else ChkError(fetchpage_new(b, url, 1, 1)); /* Otherwise do what the user asked! */
+
+    #else
+
+      #ifndef REMOTE_HOTLIST
+
+        /* One last check - auto Ctrl+Tab; if there's no '.', '/' or ':'   */
+        /* in the given URL, jump to the Ctrl+Tab routine.                 */
+
+        if (
+             !strchr(url, ':') &&
+             !strchr(url, '.') &&
+             !strchr(url, '/')
+           )
+           handle_url_completion(b, url, sizeof(url), akbd_TabK + akbd_Ctl);
+
+      #endif
+
+      /* Start the new fetch */
+
+      ChkError(fetchpage_new(b, url, 1, 1));
+
+    #endif
+  }
+}
+
+/*************************************************/
 /* handle_keys()                                 */
 /*                                               */
 /* Deal with keyboard pressed events from the    */
@@ -616,45 +833,15 @@ int handle_keys(int eventcode, WimpPollBlock * block, IdBlock * idb, void * hand
           case akbd_TabK + akbd_Ctl:
           case akbd_TabK + akbd_Ctl + akbd_Sh:
           {
-            /* For Ctrl+Tab, do URL completion on the URL bar */
-            /* writeble contents or cycle through previously  */
-            /* found matches. For Ctrl+Shift+Tab, cycle       */
-            /* backwards through matches, if found.           */
-
             #ifndef REMOTE_HOTLIST
 
               char url[Limits_URLBarWrit];
-
-              /* Read whatever is in the URL bar writable */
 
               *url = 0;
               ChkError(writablefield_get_value(0, i, URLBarWrit, url, sizeof(url), NULL));
               url[sizeof(url) - 1] = 0; /* (Ensure termination) */
 
-              if (key == akbd_TabK + akbd_Ctl)
-              {
-                if (
-                     b &&
-                     browser_find_matching_url((flex_ptr) &b->match_list,
-                                               url,
-                                               sizeof(url))
-                   )
-                {
-                  writablefield_set_value(0, i, URLBarWrit, url);
-                }
-              }
-              else
-              {
-                if (
-                     b &&
-                     browser_find_match_backwards((flex_ptr) &b->match_list,
-                                                  url,
-                                                  sizeof(url))
-                   )
-                {
-                  writablefield_set_value(0, i, URLBarWrit, url);
-                }
-              }
+              if (handle_url_completion(b, url, sizeof(url), key)) writablefield_set_value(0, i, URLBarWrit, url);
 
               key = 0;
 
@@ -664,101 +851,14 @@ int handle_keys(int eventcode, WimpPollBlock * block, IdBlock * idb, void * hand
 
           case akbd_TabK + akbd_Sh:
           {
-            char url[Limits_URLBarWrit];
-            int  changed;
-
-            /* Read whatever is in the URL bar writable */
-
-            *url = 0;
-            ChkError(writablefield_get_value(0, i, URLBarWrit, url, sizeof(url), NULL));
-            url[sizeof(url) - 1] = 0; /* (Ensure termination) */
-
-            /* Cycle the protocol specifier (adding one in if not already present) */
-
-            changed = urlutils_cycle_protocol(url, sizeof(url));
-
-            if (changed)
-            {
-              /* Update the URL writable */
-
-              writablefield_set_value(0, i, URLBarWrit, url);
-            }
-
+            handle_protocol_cycle(b, key);
             key = 0;
           }
           break;
 
           case 0x00d:
           {
-            char url[Limits_URLBarWrit];
-
-            /* Read the new URL from the URL bar writable */
-
-            *url = 0;
-            ChkError(writablefield_get_value(0, i, URLBarWrit, url, sizeof(url), NULL));
-            url[sizeof(url) - 1] = 0; /* (Ensure termination) */
-
-            #ifdef ALIAS_URLS
-            // Not implemented yet...
-            #endif
-
-            /* If we're displaying a temporary file and the URL hasn't changed, */
-            /* treat this as an attempt to reload the page.                     */
-
-            if (
-                 b->displayed == Display_Scrap_File   &&
-                 !strcmp(browser_current_url(b), url)
-               )
-            {
-              erb.errnum = Utils_Error_Custom_Message;
-
-              StrNCpy0(erb.errmess,
-                       lookup_token("CantReload:This page cannot be reloaded, as it was sent directly from another application.",
-                                    0,
-                                    0));
-
-              show_error_ret(&erb);
-            }
-            else
-            {
-              #ifdef JAVASCRIPT
-
-                /* If this is a JavaScript URL, the script will end up    */
-                /* being executed. Tell the JavaScript interface routines */
-                /* that it came from the URL writable.                    */
-
-                if (javascript_url(url)) javascript_set_source(JavaScript_Source_URLWritable);
-
-              #endif
-
-              #ifdef HIDE_CGI
-
-                /* If HIDE_CGI is defined, the URL bar may have only part of    */
-                /* the URL in it - the CGI information could be stripped off.   */
-                /* In that case, check if the URL matches the browser's current */
-                /* one with the exception of the CGI stuff, and only do the     */
-                /* fetch if not.                                                */
-
-                if (
-                     browser_current_url(b) &&                               /* If there *is* a current URL, and            */
-                     !strncmp(browser_current_url(b), url, strlen(url)) &&   /* the URL bar matches the start of it...      */
-                     strlen(browser_current_url(b)) > strlen(url) &&         /* ...but there's more of the current URL left */
-                     browser_current_url(b)[strlen(url)] == '?'              /* ...and the first extra character is a '?',  */
-
-                   )
-                   ChkError(fetchpage_new(b, browser_current_url(b), 1, 1)); /* ...then fetch the current URL instead.      */
-
-                else ChkError(fetchpage_new(b, url, 1, 1)); /* Otherwise do what the user asked! */
-
-              #else
-
-                /* Start the new fetch */
-
-                ChkError(fetchpage_new(b, url, 1, 1));
-
-              #endif
-            }
-
+            handle_url_submission(b, key);
             key = 0;
           }
           break;
@@ -2131,8 +2231,8 @@ int handle_home(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handl
   browser_data * b;
   char           home[Limits_URL];
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarHome);
-  from_menu = handlers_menu_or_toolbar(idb);
+  handle_get_call_info(&b, NULL, idb, ButtonBarHome);
+  from_menu = handle_menu_or_toolbar(idb);
 
   urlutils_create_home_url(home, sizeof(home));
 
@@ -2177,8 +2277,8 @@ int handle_back(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handl
   int            from_menu = 0;
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarBack);
-  from_menu = handlers_menu_or_toolbar(idb);
+  handle_get_call_info(&b, NULL, idb, ButtonBarBack);
+  from_menu = handle_menu_or_toolbar(idb);
 
   #ifdef JAVASCRIPT
 
@@ -2212,8 +2312,8 @@ int handle_forwards(int eventcode, ToolboxEvent * event, IdBlock * idb, void * h
   int            from_menu = 0;
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarForward);
-  from_menu = handlers_menu_or_toolbar(idb);
+  handle_get_call_info(&b, NULL, idb, ButtonBarForward);
+  from_menu = handle_menu_or_toolbar(idb);
 
   #ifdef JAVASCRIPT
 
@@ -2263,7 +2363,7 @@ int handle_stop(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handl
 
   /* Find out where we were called from */
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarStop);
+  handle_get_call_info(&b, NULL, idb, ButtonBarStop);
 
   /* If using the tristate TriState_Go_GoTo_Stop, */
   /* then stop kills everything first time. Else, */
@@ -2336,7 +2436,7 @@ int handle_reload(int eventcode, ToolboxEvent * event, IdBlock * idb, void * han
   int               new_view;
   int               from_menu = 0;
 
-  handlers_get_call_info(&b, &t, idb, ButtonBarReload);
+  handle_get_call_info(&b, &t, idb, ButtonBarReload);
 
   /* If the browser is displaying a temporary file, can't reload it */
 
@@ -2354,7 +2454,7 @@ int handle_reload(int eventcode, ToolboxEvent * event, IdBlock * idb, void * han
     return 0;
   }
 
-  from_menu = handlers_menu_or_toolbar(idb);
+  from_menu = handle_menu_or_toolbar(idb);
   new_view  = (from_menu || controls.ignore_adjust) ? 0 : adjust();
 
   #ifdef JAVASCRIPT
@@ -2443,7 +2543,7 @@ int handle_view_hotlist(int eventcode, ToolboxEvent * event, IdBlock * idb, void
 {
   #ifndef REMOTE_HOTLIST
 
-    int from_menu = handlers_menu_or_toolbar(idb);
+    int from_menu = handle_menu_or_toolbar(idb);
     int adjust    = 0;
 
   #else
@@ -2491,8 +2591,8 @@ int handle_view_hotlist(int eventcode, ToolboxEvent * event, IdBlock * idb, void
 
   #else
 
-    handlers_get_call_info(&b, NULL, idb, ButtonBarViewHotlist);
-    from_menu = handlers_menu_or_toolbar(idb);
+    handle_get_call_info(&b, NULL, idb, ButtonBarViewHotlist);
+    from_menu = handle_menu_or_toolbar(idb);
 
     /* Create the hotlist URL */
 
@@ -2585,8 +2685,8 @@ int handle_add_hotlist(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
     int            from_menu = 0;
     int            adjust    = 0;
 
-    handlers_get_call_info(&b, NULL, idb, ButtonBarAddToHotlist);
-    from_menu = handlers_menu_or_toolbar(idb);
+    handle_get_call_info(&b, NULL, idb, ButtonBarAddToHotlist);
+    from_menu = handle_menu_or_toolbar(idb);
 
     /* If not from a menu, allow Adjust to add to the other end of the */
     /* hotlist compared to that specified in the AddHotlist Choices    */
@@ -2672,9 +2772,9 @@ int handle_view_resources(int eventcode, ToolboxEvent * event, IdBlock * idb, vo
 
     browser_data * b;
     ObjectId       t;
-    int            from_menu = handlers_menu_or_toolbar(idb);
+    int            from_menu = handle_menu_or_toolbar(idb);
 
-    handlers_get_call_info(&b, &t, idb, ButtonBarViewResources);
+    handle_get_call_info(&b, &t, idb, ButtonBarViewResources);
 
     if (is_known_browser(b))
     {
@@ -2732,7 +2832,7 @@ int handle_load_images(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
   browser_data * b;
   ObjectId       t;
 
-  handlers_get_call_info(&b, &t, idb, ButtonBarLoadImages);
+  handle_get_call_info(&b, &t, idb, ButtonBarLoadImages);
 
   ChkError(browser_set_look(b, 0, -1, -1, 1, 1));
 
@@ -2755,7 +2855,7 @@ int handle_view_source(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
   FILE         * file;
   int            len, bytes;
 
-  handlers_get_call_info(&b, &t, idb, ButtonBarViewSource);
+  handle_get_call_info(&b, &t, idb, ButtonBarViewSource);
 
   if (!is_known_browser(b) || !b->source) return 1;
 
@@ -2840,7 +2940,7 @@ int handle_go_to(int eventcode, ToolboxEvent * event, IdBlock * idb, void * hand
   browser_data * b;
   ObjectId       t;
 
-  handlers_get_call_info(&b, &t, idb, ButtonBarGoTo);
+  handle_get_call_info(&b, &t, idb, ButtonBarGoTo);
 
   /* Ensure the URL bar is up to date, if the URL writable and */
   /* status displays are merged then change to the URL display */
@@ -2939,7 +3039,7 @@ int handle_go(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
   WimpKeyPressedEvent   keys;
   IdBlock               id;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarGo);
+  handle_get_call_info(&b, NULL, idb, ButtonBarGo);
 
   // Nasty... But then robust, as quite a lot goes on in the key handler
   // and duplicating the code would lead to problems if it gets out of
@@ -2967,7 +3067,7 @@ int handle_cancel(int eventcode, ToolboxEvent * event, IdBlock * idb, void * han
 {
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarCancel);
+  handle_get_call_info(&b, NULL, idb, ButtonBarCancel);
 
   /* If the URL writable and status display are merged, switch to */
   /* status display. Update the URL bar with the original text,   */
@@ -3001,7 +3101,7 @@ int handle_bistate(int eventcode, ToolboxEvent * event, IdBlock * idb, void * ha
 {
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarBistate);
+  handle_get_call_info(&b, NULL, idb, ButtonBarBistate);
 
   /* Deal with each button type individually */
 
@@ -3033,7 +3133,7 @@ int handle_tristate(int eventcode, ToolboxEvent * event, IdBlock * idb, void * h
 {
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarTristate);
+  handle_get_call_info(&b, NULL, idb, ButtonBarTristate);
 
   /* Deal with each button type individually */
 
@@ -3068,7 +3168,7 @@ int handle_save_source(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
 {
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarSaveSource);
+  handle_get_call_info(&b, NULL, idb, ButtonBarSaveSource);
 
   if (is_known_browser(b) && b->source) ChkError(savefile_open_for(b, save_as_html));
 
@@ -3087,7 +3187,7 @@ int handle_print(int eventcode, ToolboxEvent * event, IdBlock * idb, void * hand
 {
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarPrint);
+  handle_get_call_info(&b, NULL, idb, ButtonBarPrint);
 
   if (is_known_browser(b) && b->cell && b->cell->nlines) ChkError(print_open_for(b, idb->self_id));
 
@@ -3106,7 +3206,7 @@ int handle_save_as_text(int eventcode, ToolboxEvent * event, IdBlock * idb, void
 {
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarSaveAsText);
+  handle_get_call_info(&b, NULL, idb, ButtonBarSaveAsText);
 
   if (is_known_browser(b) && b->cell && b->cell->nlines) ChkError(savefile_open_for(b, save_as_text));
 
@@ -3126,7 +3226,7 @@ int handle_save_as_draw(int eventcode, ToolboxEvent * event, IdBlock * idb, void
 {
   browser_data * b;
 
-  handlers_get_call_info(&b, NULL, idb, ButtonBarSaveAsDraw);
+  handle_get_call_info(&b, NULL, idb, ButtonBarSaveAsDraw);
 
   if (is_known_browser(b) && b->cell && b->cell->nlines) ChkError(savefile_open_for(b, save_as_draw));
 
