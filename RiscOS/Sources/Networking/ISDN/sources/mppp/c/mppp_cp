@@ -62,6 +62,10 @@
 	void	mppp_c_prot_state_ack_sent			(void);
 	void	mppp_c_prot_state_opened			(void);
 
+	uchar FAR *mppp_find_lcp_opt				(uchar FAR *p_start, ushort data_size, uchar opt_code);
+	uchar	mppp_check_lcp_opt_order			(uchar FAR *p_data, ushort size);
+	uchar	mppp_restore_lcp_opt_order			(uchar FAR * FAR *pp_data, struct buffer FAR * FAR *pp_buffer, ushort opt_size, uchar packet_id);
+
 #else
 
 	uchar	check_user_configure_request		();
@@ -83,6 +87,10 @@
 	void	mppp_c_prot_state_ack_received		();
 	void	mppp_c_prot_state_ack_sent			();
 	void	mppp_c_prot_state_opened			();
+
+	uchar FAR *mppp_find_lcp_opt				();
+	uchar	mppp_check_lcp_opt_order			();
+	uchar	mppp_restore_lcp_opt_order			();
 
 #endif
 
@@ -2886,7 +2894,7 @@ uchar check_user_configure_request ()
 			Let's go through the options
 		*/
 
-	p_next_opt		= Mppp_c_prot_p_data;
+	p_next_opt	= p_octet = Mppp_c_prot_p_data;
 
 		/* Loop until no more option to process */
 
@@ -3261,9 +3269,14 @@ uchar check_user_configure_ack_nak_rej ()
 	ulong		opt_val_ulong;	/* option 'ulong' value */
 	ushort		opt_val_ushort; /* option 'ushort' value */
 	uchar		opt_val_uchar;  /* option 'uchar' value */
+	uchar		update_lcp_pack_header;
 	int			lgth;			/* length left to parse */
 
 	MPPP_DBG_ENTER ();
+
+		/* Set the flag of LCP packet header information update */
+
+	update_lcp_pack_header	= ON;
 
 		/*
 			At this stage, the packet header is valid.
@@ -3283,7 +3296,7 @@ uchar check_user_configure_ack_nak_rej ()
 			Let's go through the options
 		*/
 
-	p_next_opt		= Mppp_c_prot_p_data;
+	p_next_opt	= p_octet = Mppp_c_prot_p_data;
 
 		/* Loop until no more option to process */
 
@@ -3570,7 +3583,8 @@ uchar check_user_configure_ack_nak_rej ()
 		/* The local PPP accepted the Configure-Request */
 
 	if ((mppp_c_prot_event_id == MPPP_CP_EV_RCV_CFG_ACK) &&
-		(Mppp_cep_mp_rejected == OFF)) {
+		(Mppp_cep_mp_rejected == OFF) &&
+		(Mppp_cep_mp_disabled == OFF)) {
 
 			/*
 				We add our Multilink specific configuration options
@@ -3623,6 +3637,43 @@ uchar check_user_configure_ack_nak_rej ()
 #		endif	/* MPPP_BAP == ON } */
 
 
+			/*
+				Check if the MP LCP options are in the same
+				order than they were in the Configure-Request
+			*/
+
+		if (mppp_check_lcp_opt_order (Mppp_c_prot_p_data, Mppp_c_prot_data_size) != OK) {
+
+				/* Let's compute the length of the formatted packet */
+
+			Mppp_c_prot_data_size	= (ushort)(p_octet - Mppp_c_prot_p_data);
+
+				/* Load the final packet length */
+
+			Mppp_put_short ((Mppp_c_prot_data_size+PPP_PACKET_HEADER_LGTH), p_lgth);
+
+				/*
+					Restore the original LCP options order.
+					A new buffer will be used, then the
+					Mppp_c_prot_p_data pointer will change!
+				*/
+
+			mppp_restore_lcp_opt_order (&Mppp_c_prot_p_data, &p_buffer, Mppp_c_prot_data_size, Mppp_c_prot_r_packet_id);
+
+				/* Link the message to the new buffer */
+
+			R_msg_p_buffer	= P_NIL;
+
+			R_msg_init_link_buffer;
+
+				/* Unset the flag of LCP packet header information update */
+
+			update_lcp_pack_header = OFF;
+
+
+		}
+
+
 	}
 
 		/*
@@ -3633,13 +3684,17 @@ uchar check_user_configure_ack_nak_rej ()
 
 	Mppp_cep_ack_negot	= Sppp_cep_ack_negot;
 
-		/* Let's compute the length of the formatted packet */
+	if (update_lcp_pack_header == ON) {
 
-	Mppp_c_prot_data_size	= (ushort)(p_octet - Mppp_c_prot_p_data);
+			/* Let's compute the length of the formatted packet */
 
-		/* Load the final packet length */
+		Mppp_c_prot_data_size	= (ushort)(p_octet - Mppp_c_prot_p_data);
 
-	Mppp_put_short ((Mppp_c_prot_data_size+PPP_PACKET_HEADER_LGTH), p_lgth);
+			/* Load the final packet length */
+
+		Mppp_put_short ((Mppp_c_prot_data_size+PPP_PACKET_HEADER_LGTH), p_lgth);
+
+	}
 
 		/*
 			We are not responsible for Acking/Naking/Rejecting the
@@ -3650,6 +3705,7 @@ uchar check_user_configure_ack_nak_rej ()
 
 	return (OK);
 }
+
 
 /*-------------------------------------------------------------------------*/
 
@@ -3706,7 +3762,7 @@ uchar check_peer_configure_ack_nak_rej ()
 			Let's go through the options
 		*/
 
-	p_next_opt		= Mppp_c_prot_p_data;
+	p_next_opt	= p_octet = Mppp_c_prot_p_data;
 
 		/* Loop until no more option to process */
 
@@ -4367,6 +4423,263 @@ void mppp_c_prot_send_pap_auth_request ()
 	MPPP_DBG_LEAVE ();
 
 }
+
+
+/*--------------------------------------------------------------------------*/
+
+
+		/*
+						==== CHECK-LCP-OPT-ORDER ====
+
+			This routine checks if the formatted LCP-Configure-Ack packet
+			to be sent to the peer respects the original ordering of
+			LCP options.
+			The return code is NOK if any option has been reordered.
+		*/
+
+uchar mppp_check_lcp_opt_order (p_data, size)
+	uchar	FAR *p_data;	/* pointer to the beginning of LCP options */
+	ushort		size;		/* options total size */
+{
+	MPPP_DBG_FUNC ("mppp_check_lcp_opt_order()")
+
+	uchar	FAR *p_octet;		/* parsing pointer */
+	uchar	FAR *p_data_end;	/* pointer to the end of data */
+	uchar		idx;			/* loop index */
+
+	MPPP_DBG_ENTER ();
+
+	p_octet		= p_data;
+	p_data_end	= (uchar FAR *)(p_data + size);
+	idx			= 0;
+
+	for (idx = 0; (idx < Mppp_cep_rcv_lcp_opt_nb); idx++)  {
+
+
+		if (*p_octet != Mppp_cep_rcv_lcp_opt_tab (idx)) {
+
+			MPPP_DBG_WARNING ("LCP options has been reordered");
+
+			MPPP_DBG_LEAVE ();
+
+			return (NOK);
+		}
+
+			/* Set up the pointer to the next option */
+
+		p_octet		+= (*(p_octet + 1));
+
+	}
+
+	if (p_octet > p_data_end) {
+
+		MPPP_DBG_ERROR ("LCP packet exceeds indicated size");
+		MPPP_DBG_LEAVE ();
+
+		return (NOK);
+
+	}
+
+	MPPP_DBG_LEAVE ();
+
+	return (OK);
+}
+
+
+/*--------------------------------------------------------------------------*/
+
+		/*
+						==== FIND-LCP-OPT ====
+
+			This routine searchs for a given LCP option into a PPP packet.
+			If the option is found, then this routine returns the pointer
+			to the option code, else it returns P_NIL.
+
+		*/
+
+
+uchar FAR *mppp_find_lcp_opt (p_start, data_size, opt_code)
+	uchar	FAR *p_start;
+	ushort		data_size;
+	uchar		opt_code;
+{
+
+	MPPP_DBG_FUNC ("mppp_find_lcp_opt")
+
+	uchar	FAR *p_octet;		/* parsing pointer */
+	uchar	FAR *p_data_end;	/* address of the end of data */
+
+	MPPP_DBG_ENTER ();
+
+	p_data_end	= (uchar FAR *)(p_start + data_size);
+
+		/* Searc for a given LCP option code */
+
+	for (p_octet = p_start; p_octet < p_data_end; ) {
+
+		if (*p_octet == opt_code) {
+
+				/* LCP option found */
+
+			MPPP_DBG_LEAVE ();
+
+			return (p_octet);
+		}
+
+		p_octet	+= (*(p_octet + 1));
+
+	}
+
+
+		/* LCP option not found in the packet */
+
+	MPPP_DBG_LEAVE ();
+
+	return (P_NIL);
+}
+
+
+/*--------------------------------------------------------------------------*/
+
+		/*
+						==== RESTORE-LCP-OPT-ORDER ====
+
+			This routine moves LCP options from a buffer where LCP options
+			was reordered to a buffer with LCP options in their original
+			order.
+
+		*/
+
+
+uchar mppp_restore_lcp_opt_order (pp_data, pp_buffer, opt_size, packet_id)
+	uchar			FAR *	FAR *pp_data;	/* address of the location of options */
+	struct buffer	FAR *	FAR *pp_buffer;	/* address of the location of the source buffer */
+	ushort						opt_size;	/* total options size */
+	uchar						packet_id;	/* packet ID to send */
+{
+
+	MPPP_DBG_FUNC ("mppp_restore_lcp_opt_order()")
+
+	uchar			FAR *p_octet_from;		/* source parsing pointer */
+	uchar			FAR *p_octet_to;		/* destination parsing pointer */
+	uchar			FAR *p_start_octet_to;	/* start of destination area */
+	struct buffer	FAR *p_buffer;			/* pointer to a local buffer */
+	uchar				curr_opt;			/* current LCP option to move */
+	uchar				opt_lgth;			/* option length */
+	uchar				idx;				/* loop index */
+
+	MPPP_DBG_ENTER ();
+
+		/*
+			Allocate a new buffer for an ordered options storage.
+			The final buffer data size is updated outside this routine.
+		*/
+
+	p_buffer	= Alloc_buffer ();
+
+		/* Reserve a hole for PPP frame and packet headers */
+
+	Buffer_data_offset	+= (PPP_FRAME_HEADER_LGTH+PPP_PACKET_HEADER_LGTH+Sppp_cep_data_hole_size);
+
+	p_octet_from		= *pp_data;
+	p_start_octet_to	=
+	p_octet_to			= Buffer_a_start_data;
+
+	idx				= 0;
+
+	for (idx = 0; (idx < Mppp_cep_rcv_lcp_opt_nb); idx++)  {
+
+
+		curr_opt	= Mppp_cep_rcv_lcp_opt_tab (idx);
+		opt_lgth	= 0;
+
+		if ((p_octet_from = mppp_find_lcp_opt (*pp_data, opt_size, curr_opt)) == P_NIL) {
+
+				/*
+					This SHOULD never occur.
+
+					This option was present in Configure-Request, but
+					we cannot find it in the Configure-Ack !!!
+				*/
+
+
+			MPPP_DBG_ERROR ("lost an LCP option(");
+			MPPP_DBG_ERROR_INT (curr_opt);
+			MPPP_DBG_ERROR_STR (")");
+
+			MPPP_DBG_LEAVE ();
+
+			return (NOK);
+
+		}
+
+			/* Get the option length */
+
+		opt_lgth	= (uchar)*(p_octet_from + 1);
+
+
+			/* Copy this option from the source to the destination */
+
+		Memcpy_far ((char FAR *)p_octet_to, (char FAR *)p_octet_from, opt_lgth);
+
+			/* Increment the destination pointer */
+
+		p_octet_to	+= opt_lgth;
+
+	}
+
+
+#	if ASSERT == ON
+
+			/* We must have the same size as before */
+
+		if ((ushort)(p_octet_to - p_start_octet_to) != opt_size) {
+
+			MPPP_DBG_ERROR ("LCP packets sizes are not equal");
+
+			Trap (TRAP_MPPP_ERROR, "mppp_restore_lcp_opt_order");
+
+			MPPP_DBG_LEAVE ();
+
+			return (NOK);
+
+		}
+
+#	endif
+
+
+		/* Set the returned pointer to the options location */
+
+	*pp_data	= Buffer_a_start_data;
+
+		/* Free the original buffer */
+
+	if (*pp_buffer != P_NIL) {
+		Free_buffer (*pp_buffer);
+	}
+
+		/* Set the actual buffer */
+
+	*pp_buffer	= p_buffer;
+
+
+		/* Load the whole PPP frame header and packet header information */
+
+	Buffer_data_offset	-= (PPP_FRAME_HEADER_LGTH+PPP_PACKET_HEADER_LGTH);
+
+	mppp_prepare_packet_to_send (PPP_PROT_LCP,
+									MPPP_CP_PCK_CONFIG_ACK,
+									packet_id,
+									Buffer_a_start_data,
+									opt_size);
+
+
+	MPPP_DBG_LEAVE ();
+
+	return (OK);
+
+}
+
 
 /*--------------------------------------------------------------------------*/
 
