@@ -31,6 +31,7 @@ CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -zps1 -ff -wpc ${INCLUDES} ${DFLAG
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p ${DFLAGS} ${INCLUDES} ${THROWBACK}
+LDFLAGS =
 
 #
 # Libraries
@@ -150,19 +151,19 @@ resources:
 #
 
 rom_pkcs11_strong: ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECURELIBS} ${DIRS}
-        ${LD} -o ${TARGET} -aof ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECURELIBS}
+        ${LD} ${LDFLAGS} -o ${TARGET} -aof ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECURELIBS}
 
 rom_pkcs11_secure: ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECUREXLIBS} ${DIRS}
-        ${LD} -o ${TARGET} -aof ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECUREXLIBS}
+        ${LD} ${LDFLAGS} -o ${TARGET} -aof ${PKCS11OBJS} ${ROMCSTUBS} ${PKCS11LIB} ${SECUREXLIBS}
 
 rom_strong: ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS} ${DIRS}
-        ${LD} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
+        ${LD} ${LDFLAGS} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
 
 rom_secure: ${SECUREOBJS} ${ROMCSTUBS} ${SECUREXLIBS} ${DIRS}
-        ${LD} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECUREXLIBS}
+        ${LD} ${LDFLAGS} -o ${TARGET} -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECUREXLIBS}
 
 rom_ rom_insecure: ${OBJS} ${ROMCSTUBS} ${INSECURELIBS} ${DIRS}
-        ${LD} -o ${TARGET} -aof ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
+        ${LD} ${LDFLAGS} -o ${TARGET} -aof ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -173,23 +174,23 @@ rom_link: ${DIRS}
         @echo ${COMPONENT}: rom_link complete
 
 rm.${COMPONENT}mod: ${OBJS} ${DEBUGLIB} ${CLIB} ${INSECURELIBS} ${DIRS}
-        ${LD} -o $@ -module ${OBJS} ${DEBUGLIB} ${CLIB} ${INSECURELIBS}
+        ${LD} ${LDFLAGS} -o $@ -module ${OBJS} ${DEBUGLIB} ${CLIB} ${INSECURELIBS}
         Access $@ RW/R
 
 rm.${COMPONENT}smod: ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECURELIBS} ${DIRS}
-        ${LD} -o $@ -module ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECURELIBS}
+        ${LD} ${LDFLAGS} -o $@ -module ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECURELIBS}
         Access $@ RW/R
 
 rm.${COMPONENT}sxmod: ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECUREXLIBS} ${DIRS}
-        ${LD} -o $@ -module ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECUREXLIBS}
+        ${LD} ${LDFLAGS} -o $@ -module ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECUREXLIBS}
         Access $@ RW/R
 
 rm.${COMPONENT}spmod: ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECURELIBS} ${DIRS}
-        ${LD} -o $@ -module ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECURELIBS}
+        ${LD} ${LDFLAGS} -o $@ -module ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECURELIBS}
         Access $@ RW/R
 
 rm.${COMPONENT}spxmod: ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS} ${DIRS}
-        ${LD} -o $@ -module ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS}
+        ${LD} ${LDFLAGS} -o $@ -module ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS}
         Access $@ RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
