@@ -1,10 +1,12 @@
-; > coresrc.s.fpadefs
-;
 ; Assembler source for FPA support code and emulator
 ; ==================================================
-; Definitions for FPA instructions and registers
+; Definitions for FPA instructions and registers. Also used by "fplib".
 ;
-; Copyright (C) Advanced RISC Machines Limited, 1992-3. All rights reserved.
+; Copyright (C) Advanced RISC Machines Limited, 1992-7. All rights reserved.
+;
+; RCS $Revision$
+; Checkin $Date$
+; Revising $Author$
 
 ;===========================================================================
 
@@ -44,10 +46,10 @@ IXE_bit         EQU     1:SHL:IXE_pos
 SysID_pos       EQU     24
 SysID_mask      EQU     &FF:SHL:SysID_pos
 
-SysID_oldFPE    EQU     &00
-SysID_FPE       EQU     &01
-SysID_FPPC      EQU     &80
-SysID_FPA       EQU     &81
+SysID_oldFPE    EQU     0x00
+SysID_FPE       EQU     0x01
+SysID_FPPC      EQU     0x80
+; SysID_FPA       EQU     0x81    ;Already defined in "optcheck" file
 
 ;===========================================================================
 
@@ -274,34 +276,291 @@ RPWnotPOW_bit   EQU     1:SHL:RPWnotPOW_pos
 
 ;===========================================================================
 
-; The following table summarises the standard internal format for numbers:
-;   Uncommon   Units   Exponent   Fraction   What it is
+;
+; Floating point formats.
+;
+; There are four floating point formats: Single, Double, Extended and
+; Internal.  Single, Double and Extended are memory formats and
+; Internal is the floating point register format.  (The FPE keeps the
+; floating pointer registers in Internal format even through they are
+; actually in memory somewhere.)  The FPE uses precisely the same
+; Internal format as the FPA chip in order to allow the FPASC and FPE
+; to share code.  STF converts from Internal format to Single, Double
+; or Extended format.  LDF converts from Single, Double or Extended
+; format to Internal format.
+;
+; All floating point values in memory must be aligned on 4 byte
+;  boundaries.
+;
+; The Single and Double formats are specified by the ANSI/IEEE
+; standard 754-1985.  They look like this:
+;
+; The Single format is 32 bits wide:
+;
+;  | Sign | Exponent | Fraction |
+;
+; The sign field is 1 bit wide the exponent field is 8 bits wide and
+; the fraction field is 23 bits wide.  The exponent field is biased by
+; 127 (i.e. an exponent of 1 is encoded as 0x80).  The fraction has an
+; implicit leading 1 unless the number is denormalised (see table
+; below).
+;
+; The following table summarises the Single format:
+; Where: 's' is -1 if the sign bit is set and 1 if the sign bit is clear.
+;        'e' is the value of the exponent field interpreted as unsigned.
+;        'f' is the fraction field interpreted as binary digits
+;
+;  Exponent   Fraction   What it is       Value
+;      0         0       signed zero      +0 or -0
+;      0       non-zero  denorm. number   s * (0.f) * (2**(-126))
+;    255         0       infinity         s * infinity
+;    255       non-zero  NaN
+;       otherwise        normal number    s * (1.f) * (2**(e-127))
+;
+; The Double format is 64 bits wide:
+;
+;     address:  | Sign | Exponent | Fraction high |
+; address + 4:  |          Fraction low           |
+;
+; The sign field is 1 bit wide the exponent field is 11 bits wide and
+; the fraction field is 52 bits wide (20 bits in Fraction high and 32
+; in Fraction low).  The exponent is biased by 1023.  The fraction has
+; an implicit leading 1 unless the number is denormalised (see table
+; below).
+;
+; The following table summarises the Double format:
+;
+;  Exponent   Fraction   What it is       Value
+;      0          0      signed zero      +0 or -0
+;      0      non-zero   denorm. number   s * (0.f) * (2**(-1022))
+;   2047          0      infinity         s * infinity
+;   2047      non-zero   NaN
+;       otherwise        normal number    s * (1.f) * (2**(e-1023))
+;
+; Extended format implements the IEEE Double Extended format. People
+; wanting an IEEE Single Extended format should either use Double or
+; Extended. Since the reasons the standard suggests for wanting to
+; have Single Extended as well as Double Extended are upwards
+; compatibility and speed, and the former doesn't really apply in our
+; world, and some Double precision operations are faster than Extended
+; ones (e.g. multiplication), I would actually recommend someone who
+; wanted an IEEE Single Extended format to use Double, not Extended.
+;
+; The Extended format is 96 bits wide:
+;
+;     address:  | Sign | Reserved  | Exponent |
+; address + 4:  | Units |    Fraction high    |
+; address + 8:  |        Fraction low         |
+;
+; The sign field is 1 bit wide, the reserved field is 16 bits wide,
+; the exponent field is 15 bits wide, the units field is 1 bit wide
+; and the fraction is 63 bits wide (31 bits in Fraction high and 32 in
+; Fraction low).  The exponent is biased by 16383 = 0x3FFF.  The Units
+; bit is used instead of having the fraction have an implicit leading
+; 1.  The Reserved bits are ignored when read and always written as 0.
+;
+; The floating point registers are kept in Internal format.  This is
+; the same as Extended format except that the first word contains a
+; new field:
+;
+; The Internal format is 96 bits wide:
+;
+;     address:  | Sign | Uncommon | Reserved  | Exponent |
+; address + 4:  | Units |          Fraction high         |
+; address + 8:  |              Fraction low              |
+;
+; The sign field is 1 bit wide, the uncommon field is 1 bit wide, the
+; reserved field is 15 bits wide, the exponent field is 15 bits wide,
+; the units field is 1 bit wide and the fraction is 63 bits wide (31
+; bits in Fraction high and 32 in Fraction low).  The exponent is
+; biased by 16383 = 0x3FFF.  The Units bit is used instead of having
+; the fraction have an implicit leading 1.  The Reserved bits are
+; ignored when read and always written as 0.
+;
+; SFM stores in Internal format.  When LFM is loading if the uncommon
+; bit is set the memory is loaded unchanged.  If the uncommon bit is
+; clear LFM will load it as an Extended number possibly setting the
+; uncommon bit in the process.Another way of putting this is that LFM
+; ORs the uncommon bit from memory with an uncommon bit calculated
+; from the other fields of the number in memory.
+;
+; Extended numbers are interpreted as Internal numbers with the
+; uncommon bit clear (which it is).
+;
+; The following table summarises the Exteded and Internal formats:
+;
+;  Exponent  Unit  Fraction   What it is       Value
+;        0    0       0       signed zero      +0 or -0
+;        0    0    non-zero   denorm. number   s * (0.f) * (2**(-16383))
+;    32767    0       0       infinity         s * infinity
+;    32767    1       0       *** Not a valid bit pattern (see note 1) ***
+;    32767    x    non-zero   NaN              NaN
+;    other    0    anything   *** Not a valid bit pattern (see note 2) ***
+;    other    1    anything   normal number    s * (1.f) * (2**(e-16383))
+;
+;
+;  Notes: 1. This bit pattern is known as an "anomalous infinity" in these
+;            sources and is actually treated as s * infinity.
+;         2. These bit patterns are known as "unnormalised numbers" in these
+;            sources, and are actually treated as representing the value
+;            s * (0.f) * (2**(e-16383)). While this behaviour is not part of
+;            the architectural specification and should not be relied upon by
+;            programmers, it is important to the correct treatment of the
+;            intermediate result in the URD/NRM instruction pair in this
+;            implementation, and so should not be changed.
+;
+;   Uncommon   Units   Exponent  Fraction  Notes   What it is
 ;     bit       bit
-;      0         0      0x0000       0        A zero
-;      0         0      0x0000    non-zero    Should not happen
-;      0         0      0x4016       x        Result of URD
-;      0         0      0x4033       x        Result of URD
-;      0         0      0x403E       x        Result of URD
-;      0         0      other        x        Should not happen
-;      0         1      0x7FFF       x        Should not happen
-;      0         1      other        x        Normalised number
-;      1         0      0x0000       0        Should not happen
-;      1         0      0x0000    non-zero    Extended denorm. number
-;      1         0      0x7FFF       0        Extended infinity
-;      1         0      0x7FFF    non-zero    Extended NaN
-;      1         0      other        0        Extended unnormalised zero
-;      1         0      other     non-zero    Extended unnorm. number
-;      1         1      0x3C00       0        Should not happen
-;      1         1      0x3C00    non-zero    Double denormalised number
-;      1         1      0x3F80       0        Should not happen
-;      1         1      0x3F80    non-zero    Single denormalised number
-;      1         1      0x407F       0        Single infinity
-;      1         1      0x407F    non-zero    Single NaN
-;      1         1      0x43FF       0        Double infinity
-;      1         1      0x43FF    non-zero    Double NaN
-;      1         1      0x7FFF       0        Anomalous ext. infinity
-;      1         1      0x7FFF    non-zero    Extended NaN
-;      1         1      other        x        Should not happen
+;      0         0      0x0000      0      (a)     A zero
+;      0         0      0x0000   non-zero          Should not happen
+;      0         0      0x4016      x      (b)     Result of URD
+;      0         0      0x4033      x      (b)     Result of URD
+;      0         0      0x403E      x      (b)     Result of URD
+;      0         0      other       x              Should not happen
+;      0         1      0x7FFF      x              Should not happen
+;      0         1      other       x      (a)     Normalised number
+;      1         0      0x0000      0              Should not happen
+;      1         0      0x0000   non-zero  (a)     Extended denorm. number
+;      1         0      0x7FFF      0      (a)     Extended infinity
+;      1         0      0x7FFF   non-zero  (a,d-f) Extended NaN
+;      1         0      other       0      (c)     Extended unnormalised zero
+;      1         0      other    non-zero  (c)     Extended unnorm. number
+;      1         1      0x3C00      0              Should not happen
+;      1         1      0x3C00   non-zero  (a)     Double denormalised number
+;      1         1      0x3F80      0              Should not happen
+;      1         1      0x3F80   non-zero  (a)     Single denormalised number
+;      1         1      0x407F      0      (a)     Single infinity
+;      1         1      0x407F   non-zero  (a,e)   Single NaN
+;      1         1      0x43FF      0      (a)     Double infinity
+;      1         1      0x43FF   non-zero  (a,e)   Double NaN
+;      1         1      0x7FFF      0      (c)     Anomalous ext. infinity
+;      1         1      0x7FFF   non-zero  (a,d-f) Extended NaN
+;      1         1      other       x              Should not happen
+;
+; Notes:
+;
+; (a) These bit patterns occur normally.
+;     The original format is kept for NaNs because exceptions are
+;     generated for signalling NaNs only when converting to a
+;     different format.  The original format is kept for denormalised
+;     numbers and infinites just because it is convenient.
+;
+; (b) These bit patterns  are the intermediate result of URD before NRM.
+;     They are treated as unnormalized numbers.  URD followed by NRM
+;     implements RND, or the IEEE "Round a floating point number to
+;     another floating point number whose value is an integer"
+;     operation (see section 5.5 "Round Floating-Point Number to
+;     Integer Value" on page 11 of the standard).  If one of these
+;     numbers is saved (SFM) and restored (LFM) the uncommon bit may
+;     become set.  ("may" rather than "will" because the URD
+;     instruction generally doesn't change numbers which are
+;     sufficiently large to already have an integer value). The same
+;     applies to STFE followed by LDFE (for the benefit of programs
+;     which use that pair for register preservation &
+;     restoration). This setting of the uncommon bit is OK because the
+;     URD results are chosen so that setting the uncommon bit
+;     transforms them into extended unnormalised numbers which have
+;     the correct values for the results.
+;
+; (c) Bit patterns that technically have no meaning.
+;     These can only be generated by abusing LDFE and LFM. See Notes 1
+;     & 2 above.
+;
+; (d) These are indeed both "Extended NaN": the units bit is effectively a
+;     "don't care" bit for extended NaNs. This is basically just a
+;     consequence of extended precision having a units bit, while single and
+;     double precision don't: the "anomalous extended infinity" is a similar
+;     consequence.
+;
+; (e) The general rules about NaN processing are:
+;
+;     * If the top fraction bit is a 1, the NaN is a quiet NaN; if a 0, the
+;       NaN is a signalling NaN. (N.B. This is the top fraction bit - i.e.
+;       the second bit of the mantissa - rather than the units bit because
+;       the units bit does not exist in all formats.)
+;
+;     * A format conversion on a NaN will truncate the fraction at the
+;       appropriate point for a format narrowing, or extend it with zeros
+;       for a format widening. If the original NaN was a signalling NaN, an
+;       invalid operation exception is generated. If this exception is
+;       untrapped, the result is also "quietened" by having its top fraction
+;       bit set. (The net result of this is that the result always ends up
+;       having its top fraction bit set and thus being a NaN rather than an
+;       infinity, unless the result is generated by a trap handler - in this
+;       latter case, the trap handler has the responsibility for producing
+;       the "correct" result.)
+;
+;     * An operation on NaN operand(s) will generate an invalid operation
+;       exception if any operand is a signalling NaN, as mandated by the
+;       IEEE standard. If this doesn't happen, or if the exception is
+;       untrapped, the result is produced by the following rules:
+;
+;       - If the operation is monadic, the result is obtained by
+;         format-converting the operand NaN to the destination format of the
+;         operation. (For some versions of the code, the invalid operation
+;         exception is suppressed if the operation is MVF, MNF, ABS or STF
+;         and no change of format occurs; for others, this doesn't happen.
+;         See the discussion under "FPESigNaNCopy_Invalid" in the "main.s"
+;         source file for more details of this.)
+;
+;       - If the operation is dyadic, the result is obtained by
+;         format-converting the first operand to the destination format of
+;         the operation if the first operand is a NaN, and otherwise by
+;         format-converting the second operand similarly. (Note that this
+;         rule pays no attention to which NaNs are signalling. In
+;         particular, if the first operand is a quiet NaN and the second one
+;         a signalling NaN, the second operand will generate the invalid
+;         operation exception - but if the exception is untrapped, the first
+;         operand will generate the result. This is done to match likely
+;         future hardware behaviour.)
+;
+;     * If an invalid operation exception occurs for other reasons than a
+;       NaN operand, and the exception is untrapped, the resulting quiet NaN
+;       has units bit 0, top fraction bit 1, all other fraction bits 0, and
+;       sign bit equal to what the operation would normally have produced -
+;       e.g. EOR of the operand signs for infinity * 0; ((rounding mode =
+;       "to -infinity") ? 1 : 0) for infinity - infinity; etc. (This is
+;       again to match likely future hardware behaviour.)
+;
+; (f) The NE bit in the FPSR modifies the rules about extended NaNs when it
+;     is 0. Basically, these rules cause extended precision to no longer be
+;     a fully supported IEEE format, but are necessary to allow code that
+;     uses STFE/LDFE for register preservation and restoration to use
+;     signalling NaNs effectively. (I.e. basically code that uses the
+;     "/fpe2" APCS option and some other legacy code.)
+;
+;     The problem for such code is that if extended precision is treated as
+;     a fully supported IEEE precision, a register-preserving STFE normally
+;     contains an implicit format conversion and so *must* generate an
+;     exception. Having a procedure call generate an exception merely
+;     because the calling procedure happens to have a signalling NaN in a
+;     register isn't very desirable...
+;
+;     To deal with this, NE=0 provides a "legacy code compatibility" option
+;     in which an extended precision NaN is regarded as being "really
+;     single" or "really double", depending on whether the bottom bit of the
+;     extended precision mantissa is 0 or 1 (respectively). Format
+;     conversions from single or double precision to extended precision then
+;     clear or set this bit appropriately in addition to the operations
+;     described above, and never generate an invalid operation exception.
+;     Format conversions from a "really single" extended signalling NaN to
+;     single precision or from a "really double" extended signalling NaN to
+;     double precision are regarded as not involving a change of precision
+;     and thus not generating an invalid operation exception; ones from a
+;     "really single" extended NaN to double precision or a "really double"
+;     extended NaN to single precision still operate as normal.
+;
+;     NE=1 provides full IEEE compatibility, in which any conversion of a
+;     signalling NaN from one of single, double or extended precision to
+;     another will generate an invalid operation exception.
+;
+;     Note also that all this only applies to current systems like the
+;     FPA+FPASC which don't generate invalid operation exceptions for copies
+;     of signalling NaNs without change of format. Possible future hardware
+;     systems which generate invalid operation exceptions on any copy of a
+;     signalling NaN by an MVF, MNF, ABS or STF instruction will pay no
+;     attention to the NE bit and only supply the full IEEE compatibility
+;     option.
 
 ;===========================================================================
 
@@ -418,17 +677,98 @@ Comp_Un_Alt     EQU     &30000000
 
 ;===========================================================================
 
+; Floating point condition codes
+;
+; Here are the FPE/ARM condition code maps.  The FPE has an FPSR bit
+; called AC that determines if the old mapping or new is used:
+;
+; With AC=0:
+;
+; Relation         Z  C  N  V
+; ---------------------------
+; EQUAL            1  1  0  0
+; LESS THAN        0  0  1  0
+; GREATER TNAN     0  1  0  0
+; UNORDERED        0  0  0  1
+;
+; Code Nm Flags        Meaning           Floating point meaning
+; ------------------------------------------------------------------
+; 0000 EQ Z==1         equal             equal
+; 0001 NE Z==0         not equal         not equal (includes unordered)
+; 0010 HS C==1         higher or same    greater or equal
+; 0011 LO C==0         lower than        less than or unordered
+; 0100 MI N==1         negative          less than
+; 0101 PL N==0         nonnegative       greater, equal, or unordered
+; 0110 VS V==1         overflow          unordered
+; 0111 VC V==0         not overflow      less, greater, or equal
+; 1000 HI C==1 && Z==0 higher than       greater than
+; 1001 LS C==0 || Z==1 lower or same     less, equal, or unordered
+; 1010 GE N==V         greater or equal  greater or equal (same as 0010)
+; 1011 LT N!=V         less than         less than or unordered (same as 0011)
+; 1100 GT Z==0 && N==V greater than      greater than (same as 1000)
+; 1101 LE Z==1 || N!=V less or equal     less, equal, or unordered (same as 1001)
+; 1110 AL don't care   always            always
+; 1111    don't care   never             never
+;
+; With AC=1:
+;
+; Relation         Z  C  N  V
+; --- ------------------------
+; EQUAL            1  1  0  0
+; LESS THAN        0  0  1  0
+; GREATER TNAN     0  1  0  0
+; UNORDERED        0  1  0  1
+;
+; The only difference is the UNORDERED now sets both C and V.
+; Now: C <==> greater than or equal or unordered
+;
+; This changes the  condition code table to:
+;
+; Code Nm Flags        Meaning           Floating point meaning
+; --- ---------------------------------------------------------------
+; 0000 EQ Z==1         equal             equal
+; 0001 NE Z==0         not equal         not equal (includes unordered)
+; 0010 HS C==1         higher or same    greater, equal, or unordered
+; 0011 LO C==0         lower than        less than
+; 0100 MI N==1         negative          less than
+; 0101 PL N==0         nonnegative       greater, equal, or unordered
+; 0110 VS V==1         overflow          unordered
+; 0111 VC V==0         not overflow      less, greater, or equal
+; 1000 HI C==1 && Z==0 higher than       greater or unordered
+; 1001 LS C==0 || Z==1 lower or same     less or equal
+; 1010 GE N==V         greater or equal  greater or equal
+; 1011 LT N!=V         less than         less than or unordered
+; 1100 GT Z==0 && N==V greater than      greater than
+; 1101 LE Z==1 || N!=V less or equal     less, equal, or unordered
+; 1110 AL don't care   always            always
+; 1111    don't care   never             never
+;
+; Only the entries for 0010, 0011, 1000 and 1001 have changed.
+;
+; Now all floating point conditionals that can be expressed in C are
+; available in one test.
+;
+; The ARM C compiler does not yet do the right thing for floating
+; point comparisons.
+
+;===========================================================================
+
 ; Invalid operation reason codes
 ; ------------------------------
+;   These were once used to construct quiet NaNs which would give some
+; indication what sort of operation created the NaN. They are now only used
+; for some internal purposes, having been removed because it is very
+; unlikely that any future hardware which handles NaNs will mimic this
+; behaviour.
 ;   InvReas_InitNaN is not an invalid operation reason code; however, like
-; all the others, it is used to construct NaNs. It is therefore placed in
-; the same set of numbers.
+; all the others, it is related to a NaN that the system can generate. It is
+; therefore placed in the same set of numbers.
 ;   InvReas_MsvOverflow and InvReas_MsvUnderflow are similar: NaNs
-; constructed from them are used on entry to overflow and underflow trap
-; handlers respectively to indicate that the result is so massively out of
-; range that the IEEE-specified exponent bias adjustment (&C0 for single,
-; &600 for double and &6000 for extended) is not enough to bring it in
-; range.
+; (originally constructed from them) are used on entry to overflow and
+; underflow trap handlers respectively to indicate that the result is so
+; massively out of range that the IEEE-specified exponent bias adjustment
+; (&C0 for single, &600 for double and &6000 for extended) is not enough to
+; bring it in range.
 
 InvReas_SigNaN          EQU     0       ;An operand is a signalling NaN
 InvReas_InitNaN         EQU     1       ;(Used to generate initial NaNs)

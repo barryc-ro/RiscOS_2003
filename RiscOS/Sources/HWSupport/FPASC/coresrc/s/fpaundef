@@ -1,10 +1,12 @@
-; > coresrc.s.fpaundef
-;
 ; Assembler source for FPA support code and emulator
 ; ==================================================
 ; Undefined instruction handler for FPA support code
 ;
-; Copyright (C) Advanced RISC Machines Limited, 1992-3. All rights reserved.
+; Copyright (C) Advanced RISC Machines Limited, 1992-7. All rights reserved.
+;
+; RCS $Revision$
+; Checkin $Date$
+; Revising $Author$
 
         [ FPASCWanted           ;Scope: the whole of this source file
 
@@ -30,6 +32,9 @@
 ;     free.
 
 FPASCUndefHandler
+        [ :DEF:AssumedHardware
+FPUndefHandler
+        ]
 
 ; We start by preserving *user* registers R0-R14 in the available stack
 ; space. Note that if we need to emulate an instruction which uses R13 or
@@ -128,6 +133,9 @@ FPASCUndefHandler
 FPASCUndefHandler_Coproc1
 
         [ UndefHandBranchTable
+          [ :DEF:AssumedHardware
+FPUndefHandler1
+          ]
           STMFD   Rsp!,{Rins,LR}
           AdrWS   Rwp
         ]
@@ -160,7 +168,7 @@ FPASCUndefHandler_Coproc1
         RFC     Rtmp2
         AND     Rtmp,Rtmp2,#SB_bit+AB_bit+RE_bit+DA_bit
         RFS     Rfpsr
-        ADD     PC,PC,Rtmp,LSR #(DA_pos-2)
+        BiShift ADD,PC,PC,Rtmp,LSR #DA_pos,LSL #2
 
         BranchTablePad
 
@@ -199,6 +207,9 @@ FPASCMaybeCoproc2
 FPASCUndefHandler_Coproc2
 
         [ UndefHandBranchTable
+          [ :DEF:AssumedHardware
+FPUndefHandler2
+          ]
           STMFD   Rsp!,{Rins,LR}
           AdrWS   Rwp
         ]
@@ -226,7 +237,7 @@ FPASCUndefHandler_Coproc2
         RFC     Rtmp2
         AND     Rtmp,Rtmp2,#SB_bit+AB_bit+RE_bit+DA_bit
         RFS     Rfpsr
-        ADD     PC,PC,Rtmp,LSR #(DA_pos-2)
+        BiShift ADD,PC,PC,Rtmp,LSR #DA_pos,LSL #2
 
         BranchTablePad
 
@@ -528,9 +539,10 @@ FPASC_PutDstRoutines
 FPASCFltBounce
 
 ; This is a bounce caused by a FLT instruction. We need to pick up the
-; integer register concerned: this involves the usual split into picking it
-; up from the stack, changing mode to pick it up and reconstructing it from
-; the return address.
+; integer register concerned: this involves a split into picking it up from
+; the stack and changing mode to pick it up. (The usual third option of
+; reconstructing it from the return address isn't needed: FLT Fn,PC is no
+; longer an architecturally defined instruction.)
 ;
 ; Get the register number and split according to it.
 
@@ -549,7 +561,7 @@ FPASCFltBounce_Common
 ; The value to be FLTed is now in Rarith. Call the FLT subroutine to convert
 ; it to pre-rounding form.
 
-        BL      FltFPASC
+        BL      FltSC
 
 ; Annoyingly, FLT has a different destination register field to most
 ; instructions with an arithmetic result, so we cannot share code...
@@ -603,8 +615,13 @@ FPASCFltBounce_Common
         B       FPASCWriteFPSRAndReturn
 
 FPASCFltBounce_R13to15
-        CMP     Rregno,#R15:SHL:RT_ARMreg_pos
-        BEQ     FPASCFltBounce_R15
+
+; We can assume that the operand is in fact R13 or R14: MCR instructions
+; with R15 as an operand are no longer architecturally defined. Before this
+; was the case, the following code appeared here:
+;
+;         CMP     Rregno,#R15:SHL:RT_ARMreg_pos
+;         BEQ     FPASCFltBounce_R15
 
 ; If caller was in user mode, we get the address from the stack. Otherwise,
 ; we will have to change mode, get the register required and change mode
@@ -639,25 +656,29 @@ FPASCFltBounce_R13to15
 
         B       FPASCFltBounce_Common
 
-FPASCFltBounce_R15
-
-; Get the instruction address plus 12. Note that we *don't* clear the PSR
-; bits in 26-bit code, but do protect them from having a carry propagate
-; into them.
-
-        LDR     Rarith,[Rfp,#15*4]              ;Get (instr. address)+4
-
-        [ {CONFIG}=26
-          MOV     Rarith,Rarith,ROR #26         ;Put it at top of word
-          ADD     Rarith,Rarith,#8:SHL:6        ;Now (instr. address)+12
-          MOV     Rarith,Rarith,ROR #6          ;Put back in normal place
-        ]
-
-        [ {CONFIG}=32
-          ADD     Rarith,Rarith,#8              ;Now (instr. address)+12
-        ]
-
-        B       FPASCFltBounce_Common
+; The following is the original code for implementing FLT Fn,PC. This
+; instruction is no longer architurally defined and so the code has been
+; commented out.
+;
+; FPASCFltBounce_R15
+;
+; ; Get the instruction address plus 12. Note that we *don't* clear the PSR
+; ; bits in 26-bit code, but do protect them from having a carry propagate
+; ; into them.
+;
+;         LDR     Rarith,[Rfp,#15*4]              ;Get (instr. address)+4
+;
+;         [ {CONFIG}=26
+;           MOV     Rarith,Rarith,ROR #26         ;Put it at top of word
+;           ADD     Rarith,Rarith,#8:SHL:6        ;Now (instr. address)+12
+;           MOV     Rarith,Rarith,ROR #6          ;Put back in normal place
+;         ]
+;
+;         [ {CONFIG}=32
+;           ADD     Rarith,Rarith,#8              ;Now (instr. address)+12
+;         ]
+;
+;         B       FPASCFltBounce_Common
 
 ;===========================================================================
 
@@ -721,6 +742,26 @@ FPASCConstTable
 
 ;===========================================================================
 
+FPASCPendingExc
+
+; There is a pending exception whose FPCR value has previously been stored
+; away in 'DisableInfo'. We simply have to pick this information up and use
+; it in place of the real FPCR, which is currently in Rtmp2.
+;   Note that we know that this information has to relate to an asynchronous
+; exception, so there is no point in giving it the full branch table
+; treatment. Note also that if this information relates to a pending
+; exception from a FIX or compare, it has to be a spurious bounce. So we
+; branch to FPASCPrepStage2 or FPASCRoundStage2 according to the setting of
+; the RE bit.
+
+        LDR     Rtmp2,DisableInfo
+        TST     Rtmp2,#RE_bit
+        BNE     FPASCRoundStage2
+
+; Fall through to FPASCPrepStage2...
+
+;===========================================================================
+
 FPASCPrepStage2
 
 ; This is a Prepare stage exception - i.e. a potential invalid operation or
@@ -732,11 +773,11 @@ FPASCPrepStage2
 ; and Rtmp2 contains the FPCR value.
 ;
 ; This is treated just like FPASCPrepStage1 below, with one exception: if
-; the FPCR information indicates that the bounce is caused by a FIX, we
-; already know that this must be a spurious bounce, since the coprocessor 2
-; instruction that actually bounced cannot be a FIX. So in these
-; circumstances, we immediately retry the instruction that bounced, in order
-; to make the problem go away.
+; the FPCR information indicates that the bounce is caused by a FIX or
+; compare, we already know that this must be a spurious bounce, since the
+; coprocessor 2 instruction that actually bounced cannot be a FIX or
+; compare. So in these circumstances, we immediately retry the instruction
+; that bounced, in order to make the problem go away.
 
         TST     Rtmp2,#RTnotDO_bit
         TSTNE   Rtmp2,#RT_SnotL_bit
@@ -837,27 +878,27 @@ FPASC_CPDO_Dyadic
 
         BranchTablePad
 
-        B       AddSubFPASC     ;ADF
-        B       MultFPASC       ;MUF
-        B       AddSubFPASC     ;SUF
-        B       AddSubFPASC     ;RSF
-        B       DivFPASC        ;DVF
-        B       DivFPASC        ;RDF
+        B       AddSubSC        ;ADF
+        B       MultSC          ;MUF
+        B       AddSubSC        ;SUF
+        B       AddSubSC        ;RSF
+        B       DivSC           ;DVF
+        B       DivSC           ;RDF
         [ NoTranscendentals
           B       NotForUs1     ;POW is undefined
           B       NotForUs1     ;RPW is undefined
         |
-          B       PowFPASC      ;POW
-          B       PowFPASC      ;RPW
+          B       PowSC         ;POW
+          B       PowSC         ;RPW
         ]
-        B       RemFPASC        ;RMF
-        B       MultFPASC       ;FML
-        B       DivFPASC        ;FDV
-        B       DivFPASC        ;FRD
+        B       RemSC           ;RMF
+        B       MultSC          ;FML
+        B       DivSC           ;FDV
+        B       DivSC           ;FRD
         [ NoTranscendentals
           B       NotForUs1     ;POL is undefined
         |
-          B       PolFPASC      ;POL
+          B       PolSC         ;POL
         ]
         B       NotForUs1       ;Undefined
         B       NotForUs1       ;Undefined
@@ -892,11 +933,11 @@ FPASC_CPDO_Monadic
 
         BranchTablePad
 
-        B       MoveFPASC               ;MVF
-        B       MoveFPASC               ;MNF
-        B       MoveFPASC               ;ABS
-        B       RndFPASC                ;RND
-        B       SqrtFPASC               ;SQT
+        B       MoveSC                  ;MVF
+        B       MoveSC                  ;MNF
+        B       MoveSC                  ;ABS
+        B       RndSC                   ;RND
+        B       SqrtSC                  ;SQT
         [ NoTranscendentals
           B       NotForUs1             ;LOG is undefined
           B       NotForUs1             ;LGN is undefined
@@ -908,18 +949,18 @@ FPASC_CPDO_Monadic
           B       NotForUs1             ;ACS is undefined
           B       NotForUs1             ;ATN is undefined
         |
-          B       LgnLogFPASC           ;LOG
-          B       LgnLogFPASC           ;LGN
-          B       ExpFPASC              ;EXP
-          B       SinCosFPASC           ;SIN
-          B       SinCosFPASC           ;COS
-          B       TanFPASC              ;TAN
-          B       AsnAcsFPASC           ;ASN
-          B       AsnAcsFPASC           ;ACS
-          B       AtnFPASC              ;ATN
+          B       LgnLogSC              ;LOG
+          B       LgnLogSC              ;LGN
+          B       ExpSC                 ;EXP
+          B       SinCosSC              ;SIN
+          B       SinCosSC              ;COS
+          B       TanSC                 ;TAN
+          B       AsnAcsSC              ;ASN
+          B       AsnAcsSC              ;ACS
+          B       AtnSC                 ;ATN
         ]
-        B       UrdFPASC                ;URD
-        B       NormFPASC               ;NRM
+        B       UrdSC                  ;URD
+        B       NormSC                 ;NRM
 
 ; Note that execution will resume at the label FPASC_CPDO_Continue after the
 ; "subroutine call" above, assuming it returns at all.
@@ -928,11 +969,12 @@ FPASC_CPDO_Monadic
 
 FPASCFixCompareBounce
 
-; We've had an arithmetic exception in a FIX instruction. We don't try to
-; distinguish Round stage from Prepare stage bounces here - indeed, we have
-; merged the two code lines. This is because we cannot access F8 and so
-; cannot do any better on a Round Stage bounce than we can on a Prepare
-; stage one: we simply have to emulate the instruction either way.
+; We've had an arithmetic exception in a FIX or compare instruction. We
+; don't try to distinguish Round stage from Prepare stage bounces here -
+; indeed, we have merged the two code lines. This is because we cannot
+; access F8 and so cannot do any better on a Round Stage bounce than we can
+; on a Prepare stage one: we simply have to emulate the instruction either
+; way.
 ;
 ; The following registers have their correct contents at this point:
 ;   Rsp, Rfp, Rwp, Rins, Rfpsr
@@ -949,8 +991,8 @@ FPASCFixCompareBounce
 ;   We can actually get to this point in the code if (a) the instruction has
 ; generated an arithmetic bounce - which implies it is a CPRT or CPDO; (b)
 ; the instruction is a coprocessor 1 instruction; (c) the RTnotDO_bit in the
-; FPCR is set - which implies it is a CPDO; (d) the RT_SnotL_bit in the FPCR
-; is set - which implies it is a store-type CPDO. Under these circumstances,
+; FPCR is set - which implies it is a CPRT; (d) the RT_SnotL_bit in the FPCR
+; is set - which implies it is a store-type CPRT. Under these circumstances,
 ; the FPPipe instruction decoder has:
 ;   Left bits 23:16,7:0 unchanged;
 ;   Put bit 15 into an undefined state;
@@ -975,7 +1017,7 @@ FPASCFixCompareBounce
 ;   We already know that the instruction is a store-type CPRT, which
 ; restricts us to just eight opcodes (some of which cannot occur). This
 ; could be done by a branch table, but the whole thing is really too simple
-; - ones with the top opcode bit set are branches, ones with it clear are
+; - ones with the top opcode bit set are compares, ones with it clear are
 ; FIXes or instructions that don't produce arithmetic bounces (RFS, RFC or
 ; CPRT 0111).
 ;   We can enable interrupts at this point, since we know the return address
@@ -993,7 +1035,7 @@ FPASCCompareBounce
 ; instruction. First, we need to get the two operands and do the compare.
 
         GetS12  FPASC,OP1regs,OP2regs,Rins,Rtmp,Rtmp2
-        BL      CompareFPASC
+        BL      CompareSC
 
 ; We need to write the integer result back to the destination register. The
 ; rules for doing this are described under 'FPASCFixBounce' below.
@@ -1036,7 +1078,7 @@ FPASCFixBounce
 ; FIX.
 
         GetS2   FPASC,OP1regs,Rins,Rtmp,Rtmp2
-        BL      FixFPASC
+        BL      FixSC
 
 ; The integer result of this operation needs to be written back to the
 ; destination register. This is a somewhat tricky business:
@@ -1083,11 +1125,14 @@ FPASCIntegerRes_R13to15
         TEQ     Rregno,#R15:SHL:RT_ARMreg_pos
         BEQ     FPASCIntegerRes_R15
 
-; This result is for R13 or R14. If the caller was in a User mode, we write
-; the result to the stack; otherwise, we need to change modes to write the
-; result back to the right register.
+; This result is for R13 or R14. If the caller was in a User mode or System
+; mode, we write the result to the stack; otherwise, we need to change modes
+; to write the result back to the right register.
 
         GetMode Rtmp
+        [ {CONFIG}=32
+          TEQNE   Rtmp,#Mode_SYS32
+        ]
         BEQ     FPASCIntegerRes_Stack
 
 ; We need to change mode, put the result in the correct register and change
@@ -1151,7 +1196,7 @@ FPASCSyncBounce
 
 ; Now we simply have to emulate the instruction that has been bounced. The
 ; first step is to split according to the type of the instruction. We do at
-; least know that it is an FPA instruction.
+; least know that it is an FP instruction.
 
         [ CoreDebugging >= 5
           MOV     LR,Rsp
@@ -1188,7 +1233,7 @@ FPASCSyncBounce
 
 ; Now convert the value to the correct word(s) to be stored to memory.
 
-        BL      STFConvertFPASC
+        BL      STFConvertSC
 
 ; We've now got the correct words to store in OP1sue, OP1mhi and OP1mlo,
 ; with OP1mhi only being used, or indeed valid, if the destination precision
@@ -1208,6 +1253,11 @@ FPASCSyncBounce
 ;   register and changing back. (If called from the appropriate one of
 ;   Supervisor26 and Undefined32, this will produce inappropriate results -
 ;   however, this is another thing we don't even try to get right.)
+;
+;   As a special case, use of R13 or R14 in System mode will be treated like
+;   use of R0-R12 in System mode, since it is important that writeback
+;   should occur to the "live" copy of the user mode registers on the stack
+;   rather than the "dead" copy in the registers themselves.
 ;
 ; * Register is R15 in any mode: in this case, we need to use the address of
 ;   the instruction that bounced plus 8, and we don't do writeback even if
@@ -1380,6 +1430,11 @@ FPASCSyncBounce_STF_NonUser_R15
 
 FPASCSyncBounce_STF_NonUser_ModeChanges
 
+        [ {CONFIG}=32
+          TEQ     Rtmp,#Mode_SYS32
+          BEQ     FPASCSyncBounce_STF_NonUser_Stacked
+        ]
+
 ; Change to the caller's mode and preserve original mode in Rtmp2. Note that
 ; Rtmp still holds the caller's mode.
 
@@ -1388,7 +1443,7 @@ FPASCSyncBounce_STF_NonUser_ModeChanges
           MRS     Rtmp2,CPSR                    ; and ensure interrupts become
           BIC     Rregval,Rtmp2,#Mode_mask      ; disabled temporarily
           ORR     Rtmp,Rregval,Rtmp
-          MSR     CPSR_c,Rtmp                 ;Change to mode just calculated
+          MSR     CPSR_c,Rtmp                   ;Change to mode just calculated
         ]
 
         [ {CONFIG}=26
@@ -1469,7 +1524,7 @@ FPASCSyncBounce_STFP
 
 ; Now convert the value to the correct word(s) to be stored to memory.
 
-        BL      STFConvertFPASC_Packed
+        BL      STFConvertSC_Packed
 
 ; We've now got the correct words to store in OP1sue, OP1mhi and OP1mlo, and
 ; Rarith if the EP bit is set in the FPSR. We've now got to work out the
@@ -1487,6 +1542,11 @@ FPASCSyncBounce_STFP
 ;   register and changing back. (If called from the appropriate one of
 ;   Supervisor26 and Undefined32, this will produce inappropriate results -
 ;   however, this is another thing we don't even try to get right.)
+;
+;   As a special case, use of R13 or R14 in System mode will be treated like
+;   use of R0-R12 in System mode, since it is important that writeback
+;   should occur to the "live" copy of the user mode registers on the stack
+;   rather than the "dead" copy in the registers themselves.
 ;
 ; * Register is R15 in any mode: in this case, we need to use the address of
 ;   the instruction that bounced plus 8, and we don't do writeback even if
@@ -1661,6 +1721,11 @@ FPASCSyncBounce_STFP_NonUser_R15
 
 FPASCSyncBounce_STFP_NonUser_ModeChanges
 
+        [ {CONFIG}=32
+          TEQ     Rtmp,#Mode_SYS32
+          BEQ     FPASCSyncBounce_STFP_NonUser_Stacked
+        ]
+
 ; Change to the caller's mode and preserve original mode in Rtmp2. Note that
 ; Rtmp still holds the caller's mode.
 
@@ -1751,6 +1816,11 @@ FPASCSyncBounce_LDFP
 ;   Supervisor26 and Undefined32, this will produce inappropriate results -
 ;   however, this is another thing we don't even try to get right.)
 ;
+;   As a special case, use of R13 or R14 in System mode will be treated like
+;   use of R0-R12 in System mode, since it is important that writeback
+;   should occur to the "live" copy of the user mode registers on the stack
+;   rather than the "dead" copy in the registers themselves.
+;
 ; * Register is R15 in any mode: in this case, we need to use the address of
 ;   the instruction that bounced plus 8, and we don't do writeback even if
 ;   it is specified in the instruction.
@@ -1808,7 +1878,7 @@ FPASCSyncBounce_LDFP_Shared
 
 ; Convert the number and store it in the correct register.
 
-        BL      LDFConvertFPASC_Packed
+        BL      LDFConvertSC_Packed
 
         PutDst  FPASC,OP1regs,Rins,Rtmp,L
 
@@ -1919,6 +1989,11 @@ FPASCSyncBounce_LDFP_NonUser_R15
 
 FPASCSyncBounce_LDFP_NonUser_ModeChanges
 
+        [ {CONFIG}=32
+          TEQ     Rtmp,#Mode_SYS32
+          BEQ     FPASCSyncBounce_LDFP_NonUser_Stacked
+        ]
+
 ; Change to the caller's mode and preserve original mode in Rtmp2. Note that
 ; Rtmp still holds the caller's mode.
 
@@ -1980,26 +2055,7 @@ FPASCSyncBounce_LDFP_NonUser_WritebackDone
 
         B       FPASCSyncBounce_LDFP_NonUser_Shared
 
-        ]
-
-;===========================================================================
-
-FPASCPendingExc
-
-; There is a pending exception whose FPCR value has previously been stored
-; away in 'DisableInfo'. We simply have to pick this information up and use
-; it in place of the real FPCR, which is currently in Rtmp2.
-;   Note that we know that this information has to relate to an asynchronous
-; exception, so there is no point in giving it the full branch table
-; treatment. Note also that if this information relates to a pending
-; exception from a FIX or compare, it has to be a spurious bounce. So we
-; branch to FPASCPrepStage2 or FPASCRoundStage2 according to the setting of
-; the RE bit.
-
-        LDR     Rtmp2,DisableInfo
-        TST     Rtmp2,#RE_bit
-        BNE     FPASCRoundStage2
-        B       FPASCPrepStage2
+        ]                                       ;End of :LNOT:NoPacked section
 
 ;===========================================================================
 
@@ -2012,26 +2068,26 @@ FPASCDisabledAndPE
 ; we've got to put the FPA into another "disabled" state, so that we can
 ; intervene again when an attempt is made to execute a floating point
 ; instruction.
-;   Using the terminology defined in "src.core.interf", we must change the
-; DISABLED_PE state to the INACTIVE_PE state, which involves clearing the SB
-; bit and storing the FPSR and register values.
+;   Using the terminology defined in the "interf.s" source file, we must
+; change the DISABLED_PE state to the INACTIVE_PE state, which involves
+; clearing the SB bit and storing the FPSR and register values.
 
         RFS     Rtmp2
         STR     Rtmp2,MemFPSR
 
-Tempa   SETA            :BASE:FPASC_RegDump
+Tempa   SETA            :BASE:SC_RegDump
         [ Tempa = 15
-Tempa2    SETA            FPASC_RegDump-({PC}+8)
+Tempa2    SETA            SC_RegDump-({PC}+8)
         |
-Tempa2    SETA            :INDEX:FPASC_RegDump
+Tempa2    SETA            :INDEX:SC_RegDump
         ]
         SFM     F0,4,[R$Tempa,#Tempa2]
 
-Tempa   SETA            :BASE:FPASC_RegDump
+Tempa   SETA            :BASE:SC_RegDump
         [ Tempa = 15
-Tempa2    SETA            FPASC_RegDump-({PC}+8)
+Tempa2    SETA            SC_RegDump-({PC}+8)
         |
-Tempa2    SETA            :INDEX:FPASC_RegDump
+Tempa2    SETA            :INDEX:SC_RegDump
         ]
         SFM     F4,4,[R$Tempa,#Tempa2+48]
 
@@ -2055,6 +2111,6 @@ FPASCDisabled
 
 ;===========================================================================
 
-        ]
+        ]               ; For FPASCWanted condition covering whole file
 
         END

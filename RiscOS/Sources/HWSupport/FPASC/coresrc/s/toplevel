@@ -1,11 +1,13 @@
-; > coresrc.s.toplevel
-;
 ; Assembler source for FPA support code and emulator
 ; ==================================================
-; Core top level assembler source file
+; Core top level assembler source file.
 ;
-; Copyright (C) Advanced RISC Machines Limited, 1992-3. All rights reserved.
+; Copyright (C) Advanced RISC Machines Limited, 1992-7. All rights reserved.
 ;
+; RCS $Revision$
+; Checkin $Date$
+; Revising $Author$
+
 ; Core release and change log
 ; ===========================
 ;
@@ -117,6 +119,54 @@
 ;                         respectively. The actual effects were probably
 ;                         problems for some trap handlers. Fixed.
 ; 08-Dec-1993  1.07     Byte array veneer changes made.
+; 17-May-1995  1.08     Bug [014], reported by lbond: the trap handler
+;                         routines contained some WFS instructions which
+;                         were not "protected" by being between an
+;                         EnterRecursive macro and an ExitRecursive macro.
+;                         These have been replaced by code which only does
+;                         the WFS if this is a hardware implementation, and
+;                         otherwise loads Rfpsr from the MemFPSR location.
+;                       Bug [015], reported by mwilliams: the underflow
+;                         routines were assuming that a small exponent was
+;                         enough to mean that "tininess" had occurred,
+;                         ignoring the fact that the result also had to be
+;                         non-zero. This made no difference to untrapped
+;                         underflows (since a zero result never causes "loss
+;                         of accuracy"), but meant that exact zero results
+;                         caused an underflow when the underflow trap was
+;                         enabled. Fixed by adding a test for a zero result.
+; 16-Oct-1995  1.09     Bug [016], reported by amerritt: NaN conversions
+;                         for STFs were producing incorrect results. Due to
+;                         use of CPDO precision bits by the conversion
+;                         routine rather than CPDT ones. Fixed.
+;                       Inefficiencies in STF format conversions fixed.
+; 17-May-1995  1.10     Bug [017], found during ARM7500fe validation: the
+;                         "ConvertNaN1_ForSTF" routine in the "nans" source
+;                         file contained a branch to "ConvertNaN1_Quieten".
+;                         If this branch was taken, the resulting conversion
+;                         would be done in accordance with the CPDO/CPRT
+;                         precision bits (19 and 7) rather than the CPDT
+;                         precision bits (22 and 15) as it should be. Fixed.
+; 22-Apr-1997  1.11     Bug [018], reported by Acorn: With MultipleContexts
+;                         = {TRUE}, core_changecontext didn't return the old
+;                         context in R0. This was a simple coding error and
+;                         is fixed.
+;                       Bug [019], reported by Acorn: With MultipleContexts
+;                         = {TRUE}, core_deactivatecontext corrupts R1 if
+;                         both FPE and FPASC are included. This was also a
+;                         simple coding error and is fixed.
+;                       PowerDrainFix option removed.
+;                       "AssumedHardware" and "FPESigNaNCopy_Invalid"
+;                         options added.
+;                       NaN conversion and generation rules simplified.
+;                       Placeholder "transsw" source file removed.
+; 30-Sep-1997  1.12     Bug [020], found by inspection: Instructions that
+;                         write to R13 or R14 from system mode didn't work.
+;                         Now fixed.
+; 10-June-1998 1.13     Bug mls-3284, found by inspection:incorrect precision
+;                         FLTEQ instruction in RangeRedByMod caused range
+;                         reduction inaccuracies.
+;                         Now fixed.
 
 ;===========================================================================
 
@@ -124,8 +174,9 @@
 
                         GBLA    CoreMajorVersion
 CoreMajorVersion        SETA    1
+
                         GBLA    CoreMinorVersion
-CoreMinorVersion        SETA    7
+CoreMinorVersion        SETA    13
 
 ; Create the version number string.
 
@@ -142,10 +193,13 @@ CoreVersion     SETS    CoreVersion:CC:((:STR:(CoreMajorVersion:MOD:10)):RIGHT:1
 CoreVersion     SETS    CoreVersion:CC:"."
 CoreVersion     SETS    CoreVersion:CC:((:STR:(CoreMinorVersion/10)):RIGHT:1)
 CoreVersion     SETS    CoreVersion:CC:((:STR:(CoreMinorVersion:MOD:10)):RIGHT:1)
+        [ :DEF:AssumedHardware
+CoreVersion     SETS    CoreVersion:CC:"A"
+        ]
         [ UndefHandBranchTable
 CoreVersion     SETS    CoreVersion:CC:"B"
         ]
-        [ :LNOT:FPASCWanted
+        [ :LNOT:SCWanted
 CoreVersion     SETS    CoreVersion:CC:"E"
         ]
         [ :LNOT:EnableInterrupts
@@ -171,12 +225,6 @@ CoreVersion     SETS    CoreVersion:CC:"z"
 ;===========================================================================
 
 ; Options decided at the core level.
-
-; Whether a MUF will be executed during initialisation to stop the power
-; drain bug in early FPA10s.
-
-                GBLL    PowerDrainFix
-PowerDrainFix   SETL    {TRUE}
 
 ; The level of core debugging - 0 = none; 1 = most important messages only,
 ; etc. If any core debugging is on, the veneer must define suitable macros:
@@ -364,7 +412,7 @@ FP_UndefHandlers_Start
 
 ;===========================================================================
 
-; Now the actual FPA and FPE undefined instruction handlers.
+; Now the undefined instruction handlers themselves.
 
         GET     $CoreDir.fpaundef$FileExt
         GET     $CoreDir.fpeundef$FileExt
@@ -387,8 +435,8 @@ NotForUs
 
           [ {CONFIG}=32
             LDMDB   Rfp,{Rtmp,Rtmp2}    ;Restore SPSR & CPSR (note that the
-            MSR     CPSR_cxsf,Rtmp2     ; order must be right: interrupts
-            MSR     SPSR_cxsf,Rtmp      ; re-disabled before SPSR valid)
+            MSR     CPSR_csxf,Rtmp2     ; order must be right: interrupts
+            MSR     SPSR_csxf,Rtmp      ; re-disabled before SPSR valid)
             LDR     R11,NextHandler     ;Get correct PC for handler entry,
             LDR     R11,[R11]           ; via indirection
             LDR     R10,[Rfp,#15*4]     ;Correct R14 for handler entry
@@ -496,8 +544,6 @@ NotForUs2
         GET     $CoreDir.arith$FileExt      ;Routines to deal with basic
                                             ; arithmetic functions
         GET     $CoreDir.transhw$FileExt    ;Hardware-optimised routines to
-                                            ; do transcendental functions
-        GET     $CoreDir.transsw$FileExt    ;Software-optimised routines to
                                             ; do transcendental functions
 
 ;===========================================================================

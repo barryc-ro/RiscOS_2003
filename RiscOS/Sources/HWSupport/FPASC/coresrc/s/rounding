@@ -1,10 +1,12 @@
-; > coresrc.s.rounding
-;
 ; Assembler source for FPA support code and emulator
 ; ==================================================
 ; Routines to round numbers and deal with Round stage exceptions
 ;
-; Copyright (C) Advanced RISC Machines Limited, 1992-3. All rights reserved.
+; Copyright (C) Advanced RISC Machines Limited, 1992-7. All rights reserved.
+;
+; RCS $Revision$
+; Checkin $Date$
+; Revising $Author$
 
 ;===========================================================================
 
@@ -228,21 +230,21 @@ RoundTable BytesStart
 ; register. These are in the standard 3-word internal format.
 
 Overflow_Results
-OFR_pinf        DCD     &40007FFF,&00000000,&00000000
+OFR_pinf        DCD     Uncommon_bit+NaNInfExp_Extended,&00000000,&00000000
 OFR_pinf_o      EQU     OFR_pinf - Overflow_Results     ;+ infinity
-OFR_pSmax       DCD     &0000407E,&FFFFFF00,&00000000
+OFR_pSmax       DCD     SMax_Exp,&FFFFFF00,&00000000
 OFR_pSmax_o     EQU     OFR_pSmax - Overflow_Results    ;+ single maxnorm
-OFR_pDmax       DCD     &000043FE,&FFFFFFFF,&FFFFF800
+OFR_pDmax       DCD     DMax_Exp,&FFFFFFFF,&FFFFF800
 OFR_pDmax_o     EQU     OFR_pDmax - Overflow_Results    ;+ double maxnorm
-OFR_pEmax       DCD     &00007FFE,&FFFFFFFF,&FFFFFFFF
+OFR_pEmax       DCD     EMax_Exp,&FFFFFFFF,&FFFFFFFF
 OFR_pEmax_o     EQU     OFR_pEmax - Overflow_Results    ;+ extended maxnorm
-OFR_minf        DCD     &C0007FFF,&00000000,&00000000
+OFR_minf        DCD     Sign_bit+Uncommon_bit+NaNInfExp_Extended,&00000000,&00000000
 OFR_minf_o      EQU     OFR_minf - Overflow_Results     ;- infinity
-OFR_mSmax       DCD     &8000407E,&FFFFFF00,&00000000
+OFR_mSmax       DCD     Sign_bit+SMax_Exp,&FFFFFF00,&00000000
 OFR_mSmax_o     EQU     OFR_mSmax - Overflow_Results    ;- single maxnorm
-OFR_mDmax       DCD     &800043FE,&FFFFFFFF,&FFFFF800
+OFR_mDmax       DCD     Sign_bit+DMax_Exp,&FFFFFFFF,&FFFFF800
 OFR_mDmax_o     EQU     OFR_mDmax - Overflow_Results    ;- double maxnorm
-OFR_mEmax       DCD     &80007FFE,&FFFFFFFF,&FFFFFFFF
+OFR_mEmax       DCD     Sign_bit+EMax_Exp,&FFFFFFFF,&FFFFFFFF
 OFR_mEmax_o     EQU     OFR_mEmax - Overflow_Results    ;- extended maxnorm
 
 ; Table of correct register results from overflows. Each line gives the
@@ -339,9 +341,12 @@ OverflowTrap
         MOVGT   RNDdir,#1
         MOVLT   RNDdir,#-1
 
-; Make certain the real FPSR contains the correct value.
+; Make certain the real FPSR contains the correct value, taking care not to
+; produce a recursive entry to the FPE.
 
-        WFS     Rfpsr
+        TEQ     Rfpsr,#0
+        WFSMI   Rfpsr                     ;Real hardware FPSR
+        STRPL   Rfpsr,MemFPSR             ;Real software FPSR
 
 ; Make enough space on the stack for our purposes.
 
@@ -349,8 +354,8 @@ OverflowTrap
 
 ; Determine whether this is a precise or imprecise trap.
 
-        [ FPASCWanted
-          TestImp Rtmp2,Rtmp,ImpreciseTable_rounding
+        [ SCWanted
+          TestImp Rtmp2,Rtmp,ImpreciseTableR_fpa
         ]
 
 ; Split according to precision.
@@ -404,7 +409,7 @@ RoundingTrapCommon_Single
           LDFS    F0,[Rtmp]
           B       RoundingTrapCommon
         ]
-        
+
 OverflowTrap_Double
 
 ; Construct the potential result. We do this by subtracting the exponent
@@ -479,7 +484,7 @@ OverflowTrap_Extended
         ASSERT  R3 = RNDexp
 
 ; Call the veneer-defined trap handler.
-                                         
+
         [ :LNOT:TrapsCanReturn
           B       veneer_overflow_extended
         |
@@ -495,9 +500,12 @@ RoundingTrapCommon_Extended
 
 RoundingTrapCommon
 
-; Get the possibly changed FPSR.
+; Get the possibly changed FPSR, taking care not to produce a recursive
+; entry to the FPE.
 
-          RFS     Rfpsr
+          LDR     Rfpsr,MemFPSR ;Proper FPSR for FPE, top bit set if FPASC
+          TEQ     Rfpsr,#0      ;Check whether FPASC
+          RFSMI   Rfpsr         ;If so, get real FPSR
 
 ; Transfer the internal format result to OP1regs and exit the recursive
 ; region, then return. Note that we throw away 4 words in the
@@ -511,17 +519,17 @@ RoundingTrapCommon
 ;===========================================================================
 
 OverflowTrap_MassiveNaN
-        DCD     &40007FFF,(InvReas_MsvOverflow<<8)+EIFracTop_bit,&00000000
+        DCD     Uncommon_bit+NaNInfExp_Extended,EIFracTop_bit,&00000000
 
         LTORG
 
-        [ FPASCWanted
+        [ SCWanted
 ; A table indicating which instructions yield imprecise exceptions. The
 ; first word relates to CPDOs, the second to CPRTs. Within each word, the
 ; bits are indexed by the 5-bit number consisting of bits 15,23,22,21,20 of
 ; the instruction, in that order.
 
-ImpreciseTable_rounding
+ImpreciseTableR_fpa
           DCD     &C0070E3F,&00010001
         ]
 
@@ -550,11 +558,20 @@ UnderflowForReg
 ; This is more complicated than the overflow case, since we don't know yet
 ; whether IEEE underflow has occurred - indeed, whether it has done so
 ; depends, among other things, on whether the underflow trap is enabled.
-; However, we do know that we have IEEE tininess (the "after rounding"
-; variety): this means that if the underflow trap *is* enabled, we
-; definitely have IEEE underflow. If it isn't, we will have to denormalise
-; the number and then decide whether we've also got IEEE loss of accuracy.
-; So is the underflow trap enabled?
+; The first thing we need to do is make certain that we've got IEEE
+; "tininess". We already know that the exponent is too small, so all we
+; still have to check is that the result is non-zero.
+;   If the result is zero, all registers contain their correct values for
+; return.
+
+        ORRS    Rarith,OP1mhi,OP1mlo
+        MOVEQ   PC,LR
+
+; We now know that we have IEEE tininess (the "after rounding" variety):
+; this means that if the underflow trap *is* enabled, we definitely have
+; IEEE underflow. If it isn't, we will have to denormalise the number and
+; then decide whether we've also got IEEE loss of accuracy. So is the
+; underflow trap enabled?
 
         STMFD   Rsp!,{LR}
         TST     Rfpsr,#UFE_bit
@@ -649,9 +666,12 @@ UnderflowTrap
         MOVGT   RNDdir,#1
         MOVLT   RNDdir,#-1
 
-; Make certain the real FPSR contains the correct value.
+; Make certain the real FPSR contains the correct value, taking care not to
+; produce a recursive entry to the FPE.
 
-        WFS     Rfpsr
+        TEQ     Rfpsr,#0
+        WFSMI   Rfpsr                     ;Real hardware FPSR
+        STRPL   Rfpsr,MemFPSR             ;Real software FPSR
 
 ; Make enough space on the stack for our purposes.
 
@@ -659,8 +679,8 @@ UnderflowTrap
 
 ; Determine whether this is a precise or imprecise trap.
 
-        [ FPASCWanted
-          TestImp Rtmp2,Rtmp,ImpreciseTable_rounding
+        [ SCWanted
+          TestImp Rtmp2,Rtmp,ImpreciseTableR_fpa
         ]
 
 ; Split according to precision.
@@ -706,7 +726,7 @@ UnderflowTrap_Single
           BL      veneer_underflow_single
           B       RoundingTrapCommon_Single
         ]
-        
+
 UnderflowTrap_Double
 
 ; Construct the potential result. We do this by adding the exponent bias
@@ -784,7 +804,7 @@ UnderflowTrap_Extended
 ;===========================================================================
 
 UnderflowTrap_MassiveNaN
-        DCD     &40007FFF,(InvReas_MsvUnderflow<<8)+EIFracTop_bit,&00000000
+        DCD     Uncommon_bit+NaNInfExp_Extended,EIFracTop_bit,&00000000
 
         LTORG
 
@@ -800,6 +820,7 @@ UnderflowTrap_MassiveNaN
 ; guarantee: in particular, trap handlers can produce denormalised numbers
 ; in either form, and these routines will simply return them in whatever
 ; form they receive them in.
+;
 ; Entry: OP1sue holds the number's sign (remaining bits are zeros);
 ;        OP1mhi, OP1mlo hold the number's mantissa;
 ;        RNDexp holds the number's exponent;
@@ -821,11 +842,20 @@ UnderflowForMem
 ; This is more complicated than the overflow case, since we don't know yet
 ; whether IEEE underflow has occurred - indeed, whether it has done so
 ; depends, among other things, on whether the underflow trap is enabled.
-; However, we do know that we have IEEE tininess (the "after rounding"
-; variety): this means that if the underflow trap *is* enabled, we
-; definitely have IEEE underflow. If it isn't, we will have to denormalise
-; the number and then decide whether we've also got IEEE loss of accuracy.
-; So is the underflow trap enabled?
+; The first thing we need to do is make certain that we've got IEEE
+; "tininess". We already know that the exponent is too small, so all we
+; still have to check is that the result is non-zero.
+;   If the result is zero, all registers contain their correct values for
+; return.
+
+        ORRS    Rarith,OP1mhi,OP1mlo
+        MOVEQ   PC,LR
+
+; We now know that we have IEEE tininess (the "after rounding" variety):
+; this means that if the underflow trap *is* enabled, we definitely have
+; IEEE underflow. If it isn't, we will have to denormalise the number and
+; then decide whether we've also got IEEE loss of accuracy. So is the
+; underflow trap enabled?
 
         STMFD   Rsp!,{LR}
         TST     Rfpsr,#UFE_bit
@@ -959,9 +989,12 @@ InexactTrap_Entry
         MOVGT   RNDdir,#1
         MOVLT   RNDdir,#-1
 
-; Make certain the real FPSR contains the correct value.
+; Make certain the real FPSR contains the correct value, taking care not to
+; produce a recursive entry to the FPE.
 
-        WFS     Rfpsr
+        TEQ     Rfpsr,#0
+        WFSMI   Rfpsr                     ;Real hardware FPSR
+        STRPL   Rfpsr,MemFPSR             ;Real software FPSR
 
 ; Make enough space on the stack for our purposes and put the potential
 ; result on the stack.
@@ -971,8 +1004,8 @@ InexactTrap_Entry
 
 ; Determine whether this is a precise or imprecise trap.
 
-        [ FPASCWanted
-          TestImp R3,Rtmp,ImpreciseTable_rounding
+        [ SCWanted
+          TestImp R3,Rtmp,ImpreciseTableR_fpa
         |
           MOV     R3,#0
         ]
@@ -996,7 +1029,7 @@ InexactTrap_Single
 
           BL      veneer_inexact_single
           B       RoundingTrapCommon_Single
-        
+
 InexactTrap_Double
 
 ; Call the veneer-defined trap handler.
@@ -1038,9 +1071,12 @@ InexactTrapForI
         MOVGT   RNDdir,#1
         MOVLT   RNDdir,#-1
 
-; Make certain the real FPSR contains the correct value.
+; Make certain the real FPSR contains the correct value, taking care not to
+; produce a recursive entry to the FPE.
 
-        WFS     Rfpsr
+        TEQ     Rfpsr,#0
+        WFSMI   Rfpsr                     ;Real hardware FPSR
+        STRPL   Rfpsr,MemFPSR             ;Real software FPSR
 
 ; Reserve some space on the stack for the result.
 
@@ -1059,9 +1095,12 @@ InexactTrapForI
         |
           BL      veneer_inexact_integer
 
-; Get the possibly changed FPSR.
+; Get the possibly changed FPSR, taking care not to produce a recursive
+; entry to the FPE.
 
-          RFS     Rfpsr
+          LDR     Rfpsr,MemFPSR ;Proper FPSR for FPE, top bit set if FPASC
+          TEQ     Rfpsr,#0      ;Check whether FPASC
+          RFSMI   Rfpsr         ;If so, get real FPSR
 
 ; Obtain the integer result from the stack, discard the surplus stack space
 ; and return.
@@ -1069,7 +1108,7 @@ InexactTrapForI
           LDR     Rarith,[Rsp],#16
           LDMFD   Rsp!,{RNDexp,RNDprm,Rwp,Rins,PC}
         ]
-        
+
 ;===========================================================================
 
 ; Routine to deal with an inexact trap for an operation producing a packed
@@ -1096,9 +1135,12 @@ InexactTrapForP
         MOVGT   RNDdir,#1
         MOVLT   RNDdir,#-1
 
-; Make certain the real FPSR contains the correct value.
+; Make certain the real FPSR contains the correct value, taking care not to
+; produce a recursive entry to the FPE.
 
-        WFS     Rfpsr
+        TEQ     Rfpsr,#0
+        WFSMI   Rfpsr                     ;Real hardware FPSR
+        STRPL   Rfpsr,MemFPSR             ;Real software FPSR
 
 ; Reserve some space on the stack for the result.
 
@@ -1117,9 +1159,12 @@ InexactTrapForP
         |
           BL      veneer_inexact_packed
 
-; Get the possibly changed FPSR.
+; Get the possibly changed FPSR, taking care not to produce a recursive
+; entry to the FPE.
 
-          RFS     Rfpsr
+          LDR     Rfpsr,MemFPSR ;Proper FPSR for FPE, top bit set if FPASC
+          TEQ     Rfpsr,#0      ;Check whether FPASC
+          RFSMI   Rfpsr         ;If so, get real FPSR
 
 ; Obtain the packed result from the stack, discard the surplus stack space
 ; and return.
@@ -1128,7 +1173,7 @@ InexactTrapForP
           ADD     Rsp,Rsp,#16
           LDMFD   Rsp!,{RNDexp,RNDprm,Rwp,Rins,PC}
         ]
-        
+
 ;===========================================================================
 
 ; Routine to deal with an inexact trap for an operation producing an
@@ -1155,9 +1200,12 @@ InexactTrapForX
         MOVGT   RNDdir,#1
         MOVLT   RNDdir,#-1
 
-; Make certain the real FPSR contains the correct value.
+; Make certain the real FPSR contains the correct value, taking care not to
+; produce a recursive entry to the FPE.
 
-        WFS     Rfpsr
+        TEQ     Rfpsr,#0
+        WFSMI   Rfpsr                     ;Real hardware FPSR
+        STRPL   Rfpsr,MemFPSR             ;Real software FPSR
 
 ; Reserve some space on the stack for the result.
 
@@ -1176,9 +1224,12 @@ InexactTrapForX
         |
           BL      veneer_inexact_xpacked
 
-; Get the possibly changed FPSR.
+; Get the possibly changed FPSR, taking care not to produce a recursive
+; entry to the FPE.
 
-          RFS     Rfpsr
+          LDR     Rfpsr,MemFPSR ;Proper FPSR for FPE, top bit set if FPASC
+          TEQ     Rfpsr,#0      ;Check whether FPASC
+          RFSMI   Rfpsr         ;If so, get real FPSR
 
 ; Obtain the expanded packed result from the stack, discard the surplus
 ; stack space and return.
@@ -1186,7 +1237,7 @@ InexactTrapForX
           LDMFD   Rsp!,{OP1sue,OP1mhi,OP1mlo,Rarith}
           LDMFD   Rsp!,{RNDexp,RNDprm,Rwp,Rins,PC}
         ]
-        
+
 ;===========================================================================
 
         END

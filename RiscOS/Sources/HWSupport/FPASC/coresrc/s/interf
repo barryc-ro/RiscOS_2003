@@ -1,10 +1,12 @@
-; > coresrc.s.interf
-;
 ; Assembler source for FPA support code and emulator
 ; ==================================================
 ; Core routines to implement the core/veneer interface
 ;
-; Copyright (C) Advanced RISC Machines Limited, 1992-3. All rights reserved.
+; Copyright (C) Advanced RISC Machines Limited, 1992-7. All rights reserved.
+;
+; RCS $Revision$
+; Checkin $Date$
+; Revising $Author$
 
 ;===========================================================================
 
@@ -120,17 +122,22 @@
 
 ; The value with which registers are initialised.
 
-        ASSERT  (FPRegInitValue="SigNaN"):LOR:(FPRegInitValue="Zero")
+        GBLL    RegInitOK
+RegInitOK SETL  {FALSE}
 
         [ FPRegInitValue="SigNaN"
+RegInitOK SETL  {TRUE}
 Initialisation_RegValue
-          DCD     &40007FFF,(InvReas_InitNaN << 8),&00000000
+          DCD     0x40007FFF,0x3FFFFFFF,0xFFFFFFFF
         ]
 
         [ FPRegInitValue="Zero"
+RegInitOK SETL  {TRUE}
 Initialisation_RegValue
-          DCD     &00000000,&00000000,&00000000
+          DCD     0x00000000,0x00000000,0x00000000
         ]
+
+        ASSERT  RegInitOK
 
 ; The value with which the FPSR is initialised, excluding the SysID.
 
@@ -157,23 +164,29 @@ Initialisation_FPSRValue        EQU     FPSRInitValue:AND:(:NOT:SysID_mask)
 
 core_abort
 
-        [ FPASCWanted:LAND:FPEWanted
+        [ SCWanted
 
-; First thing to do is find out whether we're dealing with a hardware or
-; software context.
+; Get the memory copy of the FPSR.
 
-          LDR     R2,MemFPSR
-          TEQ     R2,#0
-          BPL     core_abort_FPE
+          LDR     R6,MemFPSR
 
-        ]
+          [ FPEWanted
 
-        [ FPASCWanted
+; First thing to do is split according to whether we're dealing with a
+; hardware or software context.
 
-core_abort_FPASC
+            TEQ     R6,#0
+            BPL     core_abort_FPE
+          ]
+
+core_abort_SC
+
+; Make R6 hold the correct system ID.
+
+          AND     R6,R6,#SysID_mask
 
 ; If this is the current floating point context, clear any pending exception
-; in the FPA hardware.
+; in the hardware.
 
           ASSERT  (:BASE:CurrentContext) = Rwp
           AdrWS   R2
@@ -200,7 +213,7 @@ core_abort_FPASC
           CMPGE   R3,R1
           MOVLT   PC,LR
 
-core_abort_FPASC_loop
+core_abort_SC_loop
 
 ; We are inside the undefined instruction handlers, so R0 contains a frame
 ; pointer. Pick up the new PC value and check whether it lies inside the
@@ -238,11 +251,11 @@ core_abort_FPASC_loop
 
 ; Restore the FPSR, get the new frame pointer and repeat.
 
-          MOV     R5,R5,LSR #8                          ; KJB 991206 - was LSR #5
-          ORR     R5,R5,#SysID_FPA:SHL:SysID_pos
+          MOV     R5,R5,LSR #8
+          ORR     R5,R5,R6              ;Insert system ID byte
           WFS     R5
           LDR     R0,[R0,#Rfp*4]
-          B       core_abort_FPASC_loop
+          B       core_abort_SC_loop
 
         ]
 
@@ -345,7 +358,7 @@ core_abort_FPE_loop
 ; Restore the FPSR, get the new frame pointer and repeat.
 
           ADRL    R3,FP_UndefHandlers_End-4     ;Retrieve the value we lost
-          MOV     R5,R5,LSR #5
+          MOV     R5,R5,LSR #8
           ORR     R5,R5,#SysID_FPE:SHL:SysID_pos
           STR     R5,MemFPSR
           LDR     R0,[R0,#Rfp*4]
@@ -359,7 +372,9 @@ core_abort_FPE_loop
 
 ;===========================================================================
 
-; A special-purpose undefined instruction handler used below. If an FPA
+        [ :LNOT::DEF:AssumedHardware
+
+; A special-purpose undefined instruction handler used below. If an FP
 ; instruction bounces, it simply puts -1 into R0 and continues with the next
 ; instruction. It may optionally do the same with other coprocessors'
 ; instructions (it does for the "StandAlone" linkage convention, doesn't for
@@ -375,8 +390,8 @@ UndefMakesR0Minus1
         [       UndefHandBranchTable
           [ {CONFIG} = 32
             LDMDB   Rfp,{Rtmp,Rtmp2}    ;Recover the SPSR and CPSR
-            MSR     CPSR_cxsf,Rtmp2     ; (restoring the CPSR re-disables
-            MSR     SPSR_cxsf,Rtmp      ; interrupts, so the SPSR isn't ever
+            MSR     CPSR_csxf,Rtmp2     ; (restoring the CPSR re-disables
+            MSR     SPSR_csxf,Rtmp      ; interrupts, so the SPSR isn't ever
                                         ; valid when interrupts are enabled)
           ]
           ADD     Rsp,Rfp,#4            ;Discard now-spurious stack contents
@@ -387,6 +402,8 @@ UndefMakesR0Minus1
           ADD     Rsp,Rsp,#14*4         ;Do the write-back
           LDMFD   Rsp!,{PC}^            ;Restore R13_svr/R13_und, PC and PSR
         ]
+
+        ]               ;End of :LNOT::DEF:AssumedHardware section
 
 ;===========================================================================
 
@@ -414,40 +431,49 @@ core_initws
           MOV     LR,#0
           STR     LR,CurrentContext
 
+        [ :DEF:AssumedHardware
+
+; We simply assume that the right hardware is present.
+
+          MOV     R0,#AssumedHardware
+          STR     R0,HardwareID
+
+        |               ;IF :LNOT::DEF:AssumedHardware
+
 ; Find out whether any hardware is present and if so, what hardware. Context
 ; switches or coprocessor instructions during the following would be
 ; embarrassing, so we disable interrupts for the duration.
 
-        [ {CONFIG} = 26
-          MOV     R3,PC
-          ORR     R0,R3,#I_bit
-          TEQP    PC,R0
-        ]
+          [ {CONFIG} = 26
+            MOV     R3,PC
+            ORR     R0,R3,#I_bit
+            TEQP    PC,R0
+          ]
 
-        [ {CONFIG} = 32
-          MRS     R3,CPSR
-          ORR     R0,R3,#I_bit
-          MSR     CPSR_c,R0
-        ]
+          [ {CONFIG} = 32
+            MRS     R3,CPSR
+            ORR     R0,R3,#I_bit
+            MSR     CPSR_c,R0
+          ]
 
 ; Now we install a special undefined instruction handler, which will set R0
 ; to -1 if the instruction bounces.
 
-        [       UndefHandStandAlone
-        ADR     R1,UndefMakesR0Minus1
-        ]
+          [       UndefHandStandAlone
+            ADR     R1,UndefMakesR0Minus1
+          ]
 
-        [       UndefHandBranchTable
-        ADR     R1,UndefMakesR0Minus1
-        ADR     R2,UndefMakesR0Minus1
-        ]
+          [       UndefHandBranchTable
+            ADR     R1,UndefMakesR0Minus1
+            ADR     R2,UndefMakesR0Minus1
+          ]
 
-        BL      veneer_newhandlers
+          BL      veneer_newhandlers
 
 ; Now we're ready to test for the presence of the hardware.
 
-        MOV     R0,#0           ;Assume hardware is present
-        RFC     R4              ;Read the control register
+          MOV     R0,#0           ;Assume hardware is present
+          RFC     R4              ;Read the control register
 
 ; If hardware *is* present, we will assume (a) that reading the control
 ; register has enabled it, so that we can read the status register; (b) that
@@ -461,50 +487,45 @@ core_initws
 ; the Acorn FPPC system (the undefined instruction handler will also set R0
 ; to -1, but this value will be overwritten anyway).
 
-        TEQ     R0,#0
-        STRNE   R0,HardwareID
-        BNE     core_initws_backtonormal
+          TEQ     R0,#0
+          STRNE   R0,HardwareID
+          BNE     core_initws_backtonormal
 
-        MOV     R2,#SysID_FPPC:SHL:SysID_pos
-        RFS     R2
+          MOV     R2,#SysID_FPPC:SHL:SysID_pos
+          RFS     R2
 
 ; Extract the SysId.
 
-        MOV     R0,R2,LSR #SysID_pos
-        STR     R0,HardwareID
+          MOV     R0,R2,LSR #SysID_pos
+          STR     R0,HardwareID
 
 ; If this is the FPA, we will actually force it to become disabled;
-; otherwise, we'll make the assumption described above. We may also need to
-; perform a multiplication to deal with the FPA power drain bug at this
-; point.
+; otherwise, we'll make the assumption described above.
 
-        TEQ     R0,#SysID_FPA
-        MOVEQ   R4,#SB_bit+AB_bit+DA_bit
-
-        [ PowerDrainFix
-        MVFEQS  F0,#1
-        MUFEQS  F0,F0,F0
-        ]
+          TEQ     R0,#SysID_FPA
+          MOVEQ   R4,#SB_bit+AB_bit+DA_bit
 
 ; Now return the hardware to its disabled state.
 
-        WFC     R4
+          WFC     R4
 
 core_initws_backtonormal
 
 ; Restore the undefined instruction handlers to their normal state.
 
-        BL      veneer_restorehandlers
+          BL      veneer_restorehandlers
 
 ; Now we can re-enable the interrupts.
 
-        [ {CONFIG} = 26
-          TEQP    PC,R3
-        ]
+          [ {CONFIG} = 26
+            TEQP    PC,R3
+          ]
 
-        [ {CONFIG} = 32
-          MSR     CPSR_c,R3
-        ]
+          [ {CONFIG} = 32
+            MSR     CPSR_c,R3
+          ]
+
+        ]               ;End of :LNOT::DEF:AssumedHardware section
 
 ; Return or fall through to 'core_initcontext', as appropriate.
 
@@ -531,32 +552,15 @@ core_initcontext
         MOV     R0,#0
         STR     R0,DisableInfo
 
-        [ FPEWanted :LAND: FPASCWanted
+        [ UndefHandCount > 1
           ASSERT  (:BASE:HardwareID) = Rwp
           AdrWS   R0
           LDR     R0,[R0,#:INDEX:HardwareID]
-          TEQ     R0,#SysID_FPA
-          BNE     core_initcontext_FPE
-        ]
 
-        [ FPASCWanted
-
-core_initcontext_FPASC
-
-          ADR     R0,Initialisation_RegValue
-          LDMIA   R0,{R1,R2,R3}
-          ADR     R0,FPASC_RegDump
-          STMIA   R0!,{R1,R2,R3}
-          STMIA   R0!,{R1,R2,R3}
-          STMIA   R0!,{R1,R2,R3}
-          STMIA   R0!,{R1,R2,R3}
-          STMIA   R0!,{R1,R2,R3}
-          STMIA   R0!,{R1,R2,R3}
-          STMIA   R0!,{R1,R2,R3}
-          STMIA   R0!,{R1,R2,R3}
-          LDR     R0,=(SysID_FPA:SHL:SysID_pos):OR:Initialisation_FPSRValue
-          STR     R0,MemFPSR
-          LDMFD   Rsp!,{R0-R3,PC}
+          [ FPASCWanted
+            TEQ     R0,#SysID_FPA
+            BEQ     core_initcontext_FPASC
+          ]
 
         ]
 
@@ -592,6 +596,27 @@ core_initcontext_FPE
 
         ]
 
+        [ FPASCWanted
+
+core_initcontext_FPASC
+
+          ADR     R0,Initialisation_RegValue
+          LDMIA   R0,{R1,R2,R3}
+          ADR     R0,SC_RegDump
+          STMIA   R0!,{R1,R2,R3}
+          STMIA   R0!,{R1,R2,R3}
+          STMIA   R0!,{R1,R2,R3}
+          STMIA   R0!,{R1,R2,R3}
+          STMIA   R0!,{R1,R2,R3}
+          STMIA   R0!,{R1,R2,R3}
+          STMIA   R0!,{R1,R2,R3}
+          STMIA   R0!,{R1,R2,R3}
+          LDR     R0,=(SysID_FPA:SHL:SysID_pos):OR:Initialisation_FPSRValue
+          STR     R0,MemFPSR
+          LDMFD   Rsp!,{R0-R3,PC}
+
+        ]
+
 ;===========================================================================
 
         LTORG
@@ -603,19 +628,14 @@ core_initcontext_FPE
 
 core_changecontext
 
+        STMFD   Rsp!,{R1,R2,R3,LR}
+
 ; We just need to do a call to core_deactivatecontext followed by one to
 ; core_activatecontext. Ensure that core_deactivatecontext will return to
 ; the correct point in core_activatecontext, then fall through to
 ; core_deactivatecontext.
 
-	AdrWS	R0				; KJB
-	LDR	R0,[R0,#:INDEX:CurrentContext]
-
-        STMFD   Rsp!,{R0,R1,R2,LR} ; KJB
-
-        ADR     LR,core_activatecontext_common ; KJB
-
-	B	core_deactivatecontext_common
+        ADR     LR,core_activatecontext_common
 
 ;===========================================================================
 
@@ -638,15 +658,16 @@ core_deactivatecontext
 
 ; If it is zero, we're done.
 
-core_deactivatecontext_common ; KJB
         TEQ     R0,#0
         MOVEQ   PC,LR
 
-        [ FPASCWanted:LAND:FPEWanted
+; Store away return link and a scratch register.
+
+        STMFD   Rsp!,{R1,LR}
+
+        [ SCWanted:LAND:FPEWanted
 
 ; Split according to whether this is a hardware or software context.
-
-	  STMFD   Rsp!,{R1,LR}        ; KJB
 
           ASSERT  (:BASE:MemFPSR) = Rwp
           LDR     R1,[R0,#:INDEX:MemFPSR]
@@ -655,13 +676,9 @@ core_deactivatecontext_common ; KJB
 
         ]
 
-        [ FPASCWanted
+        [ SCWanted
 
-core_deactivatecontext_FPASC
-
-        [ :LNOT:FPEWanted   ; KJB
-          STMFD   Rsp!,{R1,LR}
-        ]
+core_deactivatecontext_SC
 
 ; It's a hardware context. Start by getting the FPCR value.
 
@@ -697,15 +714,15 @@ core_deactivatecontext_FPASC
           RFS     R1
           STR     R1,[R0,#:INDEX:MemFPSR]
 
-          ASSERT  (:BASE:FPASC_RegDump) = Rwp
-          SFM     F0,4,[R0,#:INDEX:FPASC_RegDump]
-          SFM     F4,4,[R0,#(:INDEX:FPASC_RegDump)+48]
+          ASSERT  (:BASE:SC_RegDump) = Rwp
+          SFM     F0,4,[R0,#:INDEX:SC_RegDump]
+          SFM     F4,4,[R0,#(:INDEX:SC_RegDump)+48]
 
 ; Finally, write the value calculated earlier to the real FPCR.
 
           WFC     LR
 
-          LDMFD Rsp!,{R1,PC}
+          LDMFD   Rsp!,{R1,PC}
 
         ]
 
@@ -713,17 +730,11 @@ core_deactivatecontext_FPASC
 
 core_deactivatecontext_FPE
 
-        [ :LNOT:FPASCWanted  ; KJB
-          STMFD   Rsp!,{LR}
-        ]
           MOV     LR,#0
           ASSERT  (:BASE:DisableInfo) = Rwp
           STR     LR,[R0,#:INDEX:DisableInfo]
-        [ FPASCWanted ; KJB
+
           LDMFD   Rsp!,{R1,PC}
-        |
-          LDMFD   Rsp!,{PC}
-        ]
 
         ]
 
@@ -735,26 +746,26 @@ core_deactivatecontext_FPE
 
 core_activatecontext
 
-        STMFD   Rsp!,{R0,R1,R2,LR}
+        STMFD   Rsp!,{R1,R2,R3,LR}
 
 core_activatecontext_common
 
 ; Store away the new context.
 
         ASSERT  (:BASE:CurrentContext) = Rwp
-        AdrWS   R0
-        STR     Rwp,[R0,#:INDEX:CurrentContext]
+        AdrWS   R3
+        STR     Rwp,[R3,#:INDEX:CurrentContext]
 
 ; Get the hardware ID.
 
         ASSERT  (:BASE:HardwareID) = Rwp
-        LDR     R0,[R0,#:INDEX:HardwareID]
+        LDR     R3,[R3,#:INDEX:HardwareID]
 
 ; If this is the FPA hardware, ensure it is enabled by reading the FPCR.
 ; (Note that this is necessary in order to ensure we can do subsequent
 ; operations on it, including disabling it!)
 
-        TEQ     R0,#SysID_FPA
+        TEQ     R3,#SysID_FPA
         RFCEQ   R1
 
 ; If this is a null context, we want to have no handlers present.
@@ -766,8 +777,60 @@ core_activatecontext_common
 ; If both FPA hardware and software are available, we want to load up the
 ; FPA with the context and start up the FPASC handlers.
 
-          TEQ     R0,#SysID_FPA
-          BNE     core_activatecontext_nothardware
+          TEQ     R3,#SysID_FPA
+          BEQ     core_activatecontext_FPASChandlers
+        ]
+
+        [ FPEWanted
+; If the FPE software is present, we want to start up the FPE handlers and
+; disable the FPA if it is present.
+
+core_activatecontext_FPEhandlers
+
+; Ensure the FPA is disabled, then install the FPE handlers.
+
+          TEQ     R3,#SysID_FPA
+          MOVEQ   R1,#SB_bit+AB_bit+DA_bit
+          WFCEQ   R1
+
+          [ :LNOT::DEF:AssumedHardware
+            [ UndefHandStandAlone
+              ADRL    R1,FPEUndefHandler
+            ]
+
+            [ UndefHandBranchTable
+              ADRL    R1,FPEUndefHandler_Coproc1
+              ADRL    R2,FPEUndefHandler_Coproc2
+            ]
+
+            BL      veneer_newhandlers
+          ]
+
+          LDMFD   Rsp!,{R1,R2,R3,PC}
+
+        ]
+
+core_activatecontext_nohandlers
+
+; We get here if either a null context was requested (Rwp=0), or the wrong
+; hardware was present and no FPE was assembled. The latter is basically
+; just a "fail-safe": a veneer that doesn't include the FPE ought to go
+; seriously wrong if the wrong hardware is present.
+
+; Ensure the FPA is disabled, then put back the previous owner's handler.
+
+        TEQ     R3,#SysID_FPA
+        MOVEQ   R1,#SB_bit+AB_bit+DA_bit
+        WFCEQ   R1
+
+        [ :DEF:AssumedHardware
+          LDMFD   Rsp!,{R1,R2,R3,PC}
+        |
+          LDMFD   Rsp!,{R1,R2,R3,LR}
+          B       veneer_restorehandlers
+        ]
+
+        [ FPASCWanted
 
 core_activatecontext_FPASChandlers
 
@@ -777,32 +840,34 @@ core_activatecontext_FPASChandlers
           LDR     R1,MemFPSR
           WFS     R1
 
-Tempa     SETA            :BASE:FPASC_RegDump
+Tempa     SETA            :BASE:SC_RegDump
           [ Tempa = 15
-Tempa2      SETA            FPASC_RegDump-({PC}+8)
+Tempa2      SETA            SC_RegDump-({PC}+8)
           |
-Tempa2      SETA            :INDEX:FPASC_RegDump
+Tempa2      SETA            :INDEX:SC_RegDump
           ]
           LFM     F0,4,[R$Tempa,#Tempa2]
 
-Tempa     SETA            :BASE:FPASC_RegDump
+Tempa     SETA            :BASE:SC_RegDump
           [ Tempa = 15
-Tempa2      SETA            FPASC_RegDump-({PC}+8)
+Tempa2      SETA            SC_RegDump-({PC}+8)
           |
-Tempa2      SETA            :INDEX:FPASC_RegDump
+Tempa2      SETA            :INDEX:SC_RegDump
           ]
           LFM     F4,4,[R$Tempa,#Tempa2+48]
 
-          [ UndefHandStandAlone
-            ADRL    R1,FPASCUndefHandler
-          ]
+          [ :LNOT::DEF:AssumedHardware
+            [ UndefHandStandAlone
+              ADRL    R1,FPASCUndefHandler
+            ]
 
-          [ UndefHandBranchTable
-            ADRL    R1,FPASCUndefHandler_Coproc1
-            ADRL    R2,FPASCUndefHandler_Coproc2
-          ]
+            [ UndefHandBranchTable
+              ADRL    R1,FPASCUndefHandler_Coproc1
+              ADRL    R2,FPASCUndefHandler_Coproc2
+            ]
 
-          BL      veneer_newhandlers
+            BL      veneer_newhandlers
+          ]
 
 ; Finally, put the system into the correct state. This simply involves
 ; leaving it enabled if the context does not contain a pending exception,
@@ -814,49 +879,9 @@ Tempa2      SETA            :INDEX:FPASC_RegDump
           MOVNE   R1,#DA_bit+AB_bit
           WFCNE   R1
 
-          LDMFD   Rsp!,{R0,R1,R2,PC}
-
-core_activatecontext_nothardware
+          LDMFD   Rsp!,{R1,R2,R3,PC}
 
         ]
-
-        [ FPEWanted
-; If the FPE software is present, we want to start up the FPE handlers and
-; disable the FPA if it is present.
-
-core_activatecontext_FPEhandlers
-
-; Ensure the FPA is disabled, then install the FPE handlers.
-
-          TEQ     R0,#SysID_FPA
-          MOVEQ   R1,#SB_bit+AB_bit+DA_bit
-          WFCEQ   R1
-
-          [ UndefHandStandAlone
-            ADRL    R1,FPEUndefHandler
-          ]
-
-          [ UndefHandBranchTable
-            ADRL    R1,FPEUndefHandler_Coproc1
-            ADRL    R2,FPEUndefHandler_Coproc2
-          ]
-
-          BL      veneer_newhandlers
-
-          LDMFD   Rsp!,{R0,R1,R2,PC}
-
-        ]
-
-core_activatecontext_nohandlers
-
-; Ensure the FPA is disabled, then put back the previous owner's handler.
-
-        TEQ     R0,#SysID_FPA
-        MOVEQ   R1,#SB_bit+AB_bit+DA_bit
-        WFCEQ   R1
-
-        LDMFD   Rsp!,{R0,R1,R2,LR}
-        B       veneer_restorehandlers
 
 ;===========================================================================
 
@@ -892,7 +917,7 @@ core_disable
         TEQ     R0,#0
         MOVEQ   PC,LR
 
-        [ FPASCWanted:LAND:FPEWanted
+        [ SCWanted:LAND:FPEWanted
 
 ; Split according to whether this is a hardware or software context.
 
@@ -903,9 +928,9 @@ core_disable
 
         ]
 
-        [ FPASCWanted
+        [ SCWanted
 
-core_disable_FPASC
+core_disable_SC
 
 ; Read the FPCR.
 
@@ -957,7 +982,7 @@ core_enable
         TEQ     R0,#0
         MOVEQ   PC,LR
 
-        [ FPASCWanted:LAND:FPEWanted
+        [ SCWanted:LAND:FPEWanted
 
 ; Split according to whether this is a hardware or software context.
 
@@ -968,9 +993,9 @@ core_enable
 
         ]
 
-        [ FPASCWanted
+        [ SCWanted
 
-core_enable_FPASC
+core_enable_SC
 
 ; Read the FPCR.
 
@@ -1002,9 +1027,9 @@ core_enable_FPASC
           RFS     R1
           STR     R1,[R0,#:INDEX:MemFPSR]
 
-          ASSERT  (:BASE:FPASC_RegDump) = Rwp
-          SFM     F0,4,[R0,#:INDEX:FPASC_RegDump]
-          SFM     F4,4,[R0,#(:INDEX:FPASC_RegDump)+48]
+          ASSERT  (:BASE:SC_RegDump) = Rwp
+          SFM     F0,4,[R0,#:INDEX:SC_RegDump]
+          SFM     F4,4,[R0,#(:INDEX:SC_RegDump)+48]
 
 ; Write back the FPCR value we calculated earlier and return.
 
@@ -1037,7 +1062,7 @@ core_savecontext
 
         STMFD   Rsp!,{R1-R7,LR}
 
-        [ FPASCWanted:LAND:FPEWanted
+        [ SCWanted:LAND:FPEWanted
 
 ; First thing to do is find out whether we're dealing with a hardware or
 ; software context.
@@ -1048,11 +1073,11 @@ core_savecontext
 
         ]
 
-        [ FPASCWanted
+        [ SCWanted
 
-core_savecontext_FPASC
+core_savecontext_SC
 
-; FPASC context register "stride" is 3 words.
+; SC context register "stride" is 3 words.
 
           MOV     R7,#3*4
 
@@ -1065,7 +1090,7 @@ core_savecontext_FPASC
 
           TEQ     R2,R10
           LDRNE   R6,DisableInfo
-          BNE     core_savecontext_FPASC_common
+          BNE     core_savecontext_SC_common
 
 ; Read the FPCR, which enables the FPA.
 
@@ -1076,9 +1101,9 @@ core_savecontext_FPASC
           RFS     R2
           STR     R2,MemFPSR
 
-          ASSERT  (:BASE:FPASC_RegDump) = Rwp
-          SFM     F0,4,[Rwp,#:INDEX:FPASC_RegDump]
-          SFM     F4,4,[Rwp,#(:INDEX:FPASC_RegDump)+48]
+          ASSERT  (:BASE:SC_RegDump) = Rwp
+          SFM     F0,4,[Rwp,#:INDEX:SC_RegDump]
+          SFM     F4,4,[Rwp,#(:INDEX:SC_RegDump)+48]
 
 ; We can return to the original state simply by writing the value we read
 ; for the FPCR back to the chip - only the DA, AB and SB bits will be
@@ -1086,14 +1111,14 @@ core_savecontext_FPASC
 
           WFC     R6
 
-core_savecontext_FPASC_common
+core_savecontext_SC_common
 
 ; There's a pending exception if R6 has the AB bit set at this point.
 
           AND     R6,R6,#AB_bit
 
-          ASSERT  (:BASE:FPASC_RegDump) = Rwp
-          ASSERT  (:INDEX:FPASC_RegDump) = 0
+          ASSERT  (:BASE:SC_RegDump) = Rwp
+          ASSERT  (:INDEX:SC_RegDump) = 0
 
           [ FPEWanted
             B       core_savecontext_combined
@@ -1205,35 +1230,49 @@ core_loadcontext
 
         STMFD   Rsp!,{R0-R7,LR}
 
-        [ FPASCWanted:LAND:FPEWanted
+        [ SCWanted
 
-; First thing to do is find out whether we're dealing with a hardware or
-; software context, then determine the "stride".
+; Get the memory copy of the FPSR - we're only interested in the system ID
+; byte.
 
           LDR     R1,MemFPSR
-          TEQ     R1,#0
-          [ FPE4WordsPerReg
+
+          [ FPEWanted :LAND: FPE4WordsPerReg
+
+; Determine the "stride" required if it differs between hardware and
+; software contexts.
+
+            ANDS    R1,R1,#SysID_mask
             MOVPL   R7,#4*4
             MOVMI   R7,#3*4
+
+          |
+
+            AND     R1,R1,#SysID_mask
+
           ]
 
-        ]
+; Transfer the loaded values to the memory context. Start with the FPSR,
+; which should have the value specified by the user, except that the system
+; ID byte should come from the memory copy of the FPSR.
 
-; Transfer the loaded values to the memory context. Start with the FPSR.
+          LDR     R2,[R0],#4
+          BIC     R2,R2,#SysID_mask
+          ORR     R2,R2,R1
+          STR     R2,MemFPSR
 
-        LDR     R2,[R0],#4
-        BIC     R2,R2,#SysID_mask
-        [ :LNOT:FPASCWanted
+        |               ;IF :LNOT:SCWanted
+
+; Transfer the loaded values to the memory context. Start with the FPSR.,
+; which should have the value specified by the user, except that the system
+; ID byte should be the correct one for the FPE.
+
+          LDR     R2,[R0],#4
+          BIC     R2,R2,#SysID_mask
           ORR     R2,R2,#SysID_FPE:SHL:SysID_pos
+          STR     R2,MemFPSR
+
         ]
-        [ :LNOT:FPEWanted
-          ORR     R2,R2,#SysID_FPA:SHL:SysID_pos
-        ]
-        [ FPASCWanted:LAND:FPEWanted
-          ORRPL   R2,R2,#SysID_FPE:SHL:SysID_pos
-          ORRMI   R2,R2,#SysID_FPA:SHL:SysID_pos
-        ]
-        STR     R2,MemFPSR
 
 ; Now the registers.
 
@@ -1246,25 +1285,29 @@ core_loadcontext_loop
         ASSERT  OP2mlo = R5
         LDMIA   R0!,OP2regs
 
+        [       FPEWanted :LOR: FPASCWanted
+
 ; We've got to calculate an appropriate uncommon bit to go with each number.
 ; The uncommon bit should be one if the exponent is &7FFF or if the units
 ; bit is 0, except that the uncommon bit should be zero if the number is in
 ; fact zero.
 
-        ORR     R6,OP2mhi,OP2mlo        ;Test for zero
-        ORRS    R6,R6,OP2sue,LSL #1
-        BEQ     core_loadcontext_converted
-        ASSERT  EIExp_pos = 0
-        MOV     R6,OP2sue,LSL #32-EIExp_len
-        ADDS    R6,R6,#1:SHL:(32-EIExp_len)
-        TSTNE   OP2mhi,#EIUnits_bit
-        ORREQ   OP2sue,OP2sue,#Uncommon_bit
+          ORR     R6,OP2mhi,OP2mlo        ;Test for zero
+          ORRS    R6,R6,OP2sue,LSL #1
+          BEQ     core_loadcontext_converted
+          ASSERT  EIExp_pos = 0
+          MOV     R6,OP2sue,LSL #32-EIExp_len
+          ADDS    R6,R6,#1:SHL:(32-EIExp_len)
+          TSTNE   OP2mhi,#EIUnits_bit
+          ORREQ   OP2sue,OP2sue,#Uncommon_bit
 
 core_loadcontext_converted
 
-        [ FPASCWanted
-          ASSERT  (:BASE:FPASC_RegDump) = Rwp
-          ASSERT  (:INDEX:FPASC_RegDump) = 0
+        ]
+
+        [ SCWanted
+          ASSERT  (:BASE:SC_RegDump) = Rwp
+          ASSERT  (:INDEX:SC_RegDump) = 0
         ]
         [ FPEWanted
           ASSERT  (:BASE:FPE_Regs) = Rwp
@@ -1273,7 +1316,7 @@ core_loadcontext_converted
 
         [ FPEWanted:LAND:FPE4WordsPerReg
           STMIA   Rwp,OP2regs
-          [ FPASCWanted
+          [ SCWanted
             ADD     Rwp,Rwp,R7
           |
             ADD     Rwp,Rwp,#16
@@ -1286,7 +1329,7 @@ core_loadcontext_converted
         BNE     core_loadcontext_loop
 
         [ FPEWanted:LAND:FPE4WordsPerReg
-          [ FPASCWanted
+          [ SCWanted
             SUB     Rwp,Rwp,R7,LSL #3
           |
             SUB     Rwp,Rwp,#128
@@ -1298,11 +1341,11 @@ core_loadcontext_converted
 ; We're done if this is a software context; otherwise, we must check whether
 ; it is the current context and load the FPA itself if so.
 
-        [ FPASCWanted
+        [ SCWanted
 
           [ FPEWanted
             TEQ     R1,#0
-            LDMPLFD Rsp!,{R0-R7,PC}
+            LDMPLFD Rsp!,{R0-R7,PC}         ;PL here if a software context
           ]
 
           ASSERT  (:BASE:CurrentContext) = Rwp
@@ -1321,9 +1364,9 @@ core_loadcontext_converted
           LDR     R2,MemFPSR
           WFS     R2
 
-          ASSERT  (:BASE:FPASC_RegDump) = Rwp
-          LFM     F0,4,[Rwp,#:INDEX:FPASC_RegDump]
-          LFM     F4,4,[Rwp,#(:INDEX:FPASC_RegDump)+48]
+          ASSERT  (:BASE:SC_RegDump) = Rwp
+          LFM     F0,4,[Rwp,#:INDEX:SC_RegDump]
+          LFM     F4,4,[Rwp,#(:INDEX:SC_RegDump)+48]
 
 ; We can return to the original state simply by writing the value we read
 ; for the FPCR back to the chip - only the DA, AB and SB bits will be
