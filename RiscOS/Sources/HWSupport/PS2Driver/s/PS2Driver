@@ -484,6 +484,19 @@ Disable
         EXITS
 
 ;-----------------------------------------------------------------------------
+; SuspendChannel
+;
+;       In:     channel (R10) points to channel workspace block
+;
+SuspendChannel
+        ENTRY
+        ADR     lr, PS2_SinkBytes
+        STR     lr, RXStateHandler
+        MOV     lr, #0
+        STRB    lr, DeviceType                  ;DeviceType Unknown
+        EXITS
+
+;-----------------------------------------------------------------------------
 ; SendRESET
 ;
 ;       In:     channel (R10) points to channel workspace block
@@ -493,10 +506,14 @@ Disable
 SendRESET
         ENTRY   "r0"
        ;DLINE   "PS2driver SendRESET"
+
+        IRQOff  lr
+
         LDR     r0, TxInsert                    ;Flush any unsent commands
         STR     r0, TxPtr
 
-        IRQOff  lr
+        MOV     r0, #0
+        STRB    r0, DeviceType                  ;DeviceType Unknown
 
         ADRL    r0, PS2_GetACKforRESET
         STR     r0, RXStateHandler
@@ -1010,11 +1027,7 @@ PS2_GetByte3
         ADR     lr, MouseData
         LDMIA   lr, {r3,r9}                     ;Accumulate DeltaX,DeltaY and Buttons.
         ADD     r0, r3, r0
- [ true
         ADD     r1, r9, r1
- |
-        SUB     r1, r9, r1
- ]
         STMIA   lr, {r0-r2}
 
         LDRB    r3, KBState             ;reloaded by continue???
@@ -1042,7 +1055,11 @@ ForceRESET
        ;DLINE   "PS2 mouse ForceRESET"
         LDR     r0, TxInsert                    ;Flush any unsent commands
         STR     r0, TxPtr
-        MOV     r0, #command_RESET              ;Reset the mouse
+
+        MOV     r0, #0
+        STRB    r0, DeviceType                  ;DeviceType Unknown
+
+        MOV     r0, #command_RESET              ;Reset the device
         BL      SendByte
         ADR     r2, PS2_GetACKforRESET
         B       continue
@@ -1105,35 +1122,6 @@ keyboard
         B       continue
  ]
 
- [ 1 = 0
-gotBAT
- [ 1 = 1
-        BIC     r3, r3, #state_WANTBAT          ;   no longer want BAT
-        STRB    r3, KBState                     ; Store state as KEYV call may change it.
- |
-        TST     r3, #state_RESET                ; If already in reset state then
-        BICNE   r3, r3, #state_WANTBAT          ;   no longer want BAT
-        MOVEQ   r3, #state_RESET                ;   else keyboard plugged in so go into reset (and clear all other flags).
-        STRB    r3, KBState                     ; Store state as KEYV call may change it.
- ]
-        SVCMode r11
-        MOV     r0, #0                          ; Notify keyboard present (may call our enable entry).
-        MOV     r1, #2
-        MOV     r9, #KEYV
-        Push    "lr"
-        SWI     XOS_CallAVector
-        Pull    "lr"
-        SetPSR  r11
-
-        MOV     r0, #command_SETRATE            ; Queue up set rate/delay command (repeat as slow as possible).
-        BL      SendByte
-        MOV     r0, #&7F
-        BL      SendByte
-
-        LDRB    r3, KBState
-        B       RXIRQExit
- ]
-
 ;
 ; main keyboard handler
 ;
@@ -1141,11 +1129,7 @@ PS2_GetKBD
        ;DREG    r0, "PS2_GetKBD &",,LongWord
 PS2_GetKBD_NP                                   ;EP from keyboard, to avoid duplicate debug output
         TEQ     r0, #keybd_BAT                  ; If BAT complete code then
- [ 1 = 0
-        BEQ     gotBAT                          ;   handle it.
- |
-        BEQ     PS2_GetBAT
- ]
+        BEQ     PS2_GetBAT                      ;   handle it.
 
         TEQ     r0, #keybd_ACK                  ; If ACK then
         BEQ     RXIRQExitState                  ;   we can send the next byte.
@@ -1174,7 +1158,13 @@ PS2_GetKBD_NP                                   ;EP from keyboard, to avoid dupl
         ORREQ   r3, r3, #state_BREAK            ;   mark as break key.
         BEQ     RXIRQExitState
 
+ [ StorkExtraKeys
+        ASSERT (SpecialTable - KeyTable) = &A0
+        CMP     r0, #&A0                        ; If outside table then
+ |
+        ASSERT (SpecialTable - KeyTable) = &88
         CMP     r0, #&88                        ; If outside table then
+ ]
         MOVCS   r3, #0                          ;   reset state
         BCS     RXIRQExitState                  ;   and throw away code.
 
@@ -1232,14 +1222,15 @@ PS2_GetKBD_NP                                   ;EP from keyboard, to avoid dupl
         LDRB    r3, KBState
         B       RXIRQExit
 
- [ 1 = 0
-PS2_SinkBytes
-        TEQ     r0, #keybd_BAT                  ; If BAT complete code then
-        BEQ     PS2_GetBAT                      ;   handle it.
 
+;
+; Absorb any bytes that arrive. Used when a device is
+; being powered down, to suppress any spurious data.
+;
+PS2_SinkBytes
         ADR     r2, PS2_SinkBytes
         B       continue
- ]
+
 
 ;-----------------------------------------------------------------------------
 ;       Table for converting PC-AT codes to key numbers.
@@ -1262,6 +1253,11 @@ KeyTable
         DCB     &65, &66, &5B, &49, &4A, &38, &00, &22  ; 70-77
         DCB     &0B, &4B, &5C, &3A, &24, &39, &0E, &FF  ; 78-7F
         DCB     &FF, &FF, &FF, &07, &0D, &FF, &FF, &FF  ; 80-87
+ [ StorkExtraKeys
+        DCB     &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF  ; 88-8F
+        DCB     &75, &76, &77, &78, &79, &7A, &7B, &7C  ; 90-97
+        DCB     &7D, &7F, &73, &74, &6E, &6F, &FF, &FF  ; 98-9F
+ ]
 
 SpecialTable
         DCB     &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF  ; 00-07
@@ -1281,6 +1277,11 @@ SpecialTable
         DCB     &1F, &34, &63, &FF, &64, &59, &FF, &0F  ; 70-77
         DCB     &FF, &FF, &36, &FF, &0D, &21, &0F, &FF  ; 78-7F
         DCB     &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF  ; 80-87
+ [ StorkExtraKeys
+        DCB     &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF  ; 88-8F
+        DCB     &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF  ; 90-97
+        DCB     &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF  ; 98-9F
+ ]
 
 ;-----------------------------------------------------------------------------
 

@@ -157,3 +157,16 @@ rm.Morris4.Messages: Hdr:Proc
 rm.Morris4.Messages: Hdr:ResourceFS
 rm.Morris4.Messages: Version
 rm.Morris4.Messages: Hdr:NDRDebug
+rm.Omega4.Messages: Hdr:ListOpts
+rm.Omega4.Messages: Hdr:Macros
+rm.Omega4.Messages: Hdr:System
+rm.Omega4.Messages: Hdr:SWIs
+rm.Omega4.Messages: Hdr:CPU.Generic26
+rm.Omega4.Messages: Hdr:IO.GenericIO
+rm.Omega4.Messages: Hdr:RISCOS
+rm.Omega4.Messages: Hdr:ModHand
+rm.Omega4.Messages: Hdr:Services
+rm.Omega4.Messages: Hdr:Proc
+rm.Omega4.Messages: Hdr:ResourceFS
+rm.Omega4.Messages: Version
+rm.Omega4.Messages: Hdr:NDRDebug

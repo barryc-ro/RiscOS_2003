@@ -128,7 +128,6 @@ o.module:	h.error
 o.flashprog:	c.flashprog
 o.flashprog:	C:h.kernel
 o.flashprog:	C:h.swis
-o.flashprog:	C:h.time
 o.flashprog:	h.module
 o.flashprog:	h.flashprog
 o.flashprog:	h.error

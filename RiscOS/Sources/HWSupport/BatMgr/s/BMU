@@ -426,6 +426,48 @@ BMUEvent        ENTRY   "R0-R2"
 
         B       StarShutdown
 
+ [ HotKeyTasks
+KeyEvent1               ;HotKey_ToolBox
+        ENTRY   "R1"
+        MOV     R1,#PollWordReason_Task1
+        STR     R1,PollWord
+        EXITS
+
+KeyEvent2               ;HotKey_Heart
+        ENTRY   "R1"
+        MOV     R1,#PollWordReason_Task2
+        STR     R1,PollWord
+        EXITS
+
+KeyEvent3               ;HotKey_Battery
+        ENTRY   "R1,TWP"
+        LDR     TWP,TaskWorkspacePtr            ; set task workspace ptr
+        LDRB    R1,Task_Flags                   ; icon already present?
+        TSTS    R1,#F_IconPresent
+        MOVEQ   R1,#PollWordReason_AddIcon      ;EQ - no, so request its creation
+        MOVNE   R1,#PollWordReason_DelIcon      ;NE - yes, so request its deletion
+        STR     R1,PollWord
+        EXITS
+
+KeyEvent4               ;HotKey_Off
+        ENTRY   "R0,R1"
+  [ 1 = 0
+; Find out if Wimp is running.
+;    If it is, ask the TaskManager to shutdown the machine
+;    ???If not, we must shutdown the machine here???
+        MOV     R0,#3                           ; read Wimp state
+        SWI     XWimp_ReadSysInfo
+        MOVVS   R0,#0                           ; if error, assume no Wimp
+        TEQS    R0,#0                           ; Wimp?
+        EXITS   EQ                              ; if no, exit
+;EQ, Wimp is not running
+;NE, Wimp is running
+  ]
+        MOV     R1,#PollWordReason_Task4
+        STR     R1,PollWord
+        EXITS
+ ]
+
 ;******************************************************************************
 
 Event   ROUT
@@ -440,6 +482,10 @@ Event   ROUT
 ; Exit:
 ;    All registers and flags preserved
 
+ [ HotKeyTasks
+        TEQS    R0,#Event_Keyboard
+        BEQ     %FT10
+ ]
         TEQS    R0,#Event_PortableBMU           ; our event?
         MOVNES  PC,LR                           ; if no, quit
 
@@ -481,8 +527,33 @@ Event   ROUT
 
         Pull    "R0,PC",,^
 
+ [ HotKeyTasks
+10
+        TEQS    R1, #1                          ;Only interested in keyboard key down event
+        MOVNES  PC,LR                           ; if not, quit
+
+        TEQS    R2, #HotKey_ToolBox             ;One of our keys?
+        TEQNES  R2, #HotKey_Heart
+        TEQNES  R2, #HotKey_Battery
+        TEQNES  R2, #HotKey_Off
+        MOVNES  PC,LR                           ; if not, quit
+
+        Push    "R0,LR"
+        ADR     R0, KeyEvent1
+        TEQS    R2, #HotKey_ToolBox
+        ADRNE   R0, KeyEvent2
+        TEQNES  R2, #HotKey_Heart
+        ADRNE   R0, KeyEvent3
+        TEQNES  R2, #HotKey_Battery
+        ADRNE   R0, KeyEvent4
+        TEQNES  R2, #HotKey_Off
+        BL      AddCallBack
+        Pull    "R0,PC",,^
+ ]
+
 ;******************************************************************************
 
+ [ EstimateSetting
 TickerCB_UpdateBMU      ENTRY   "R0-R3"
 ;
 ; Callback from the ticker routine for maintaining the BMU variables.
@@ -596,9 +667,11 @@ TickerCB_UpdateBMU      ENTRY   "R0-R3"
         DREG    R0," remainder "
  ]
         B       %B10
+ ]
 
 ;******************************************************************************
 
+ [ EstimateSetting
 Ticker_UpdateBMU        ENTRY   "R0"
 ;
 ; Ticker routine to update BMU variables
@@ -643,6 +716,7 @@ Ticker_UpdateBMU        ENTRY   "R0"
  ]
 
         EXITS
+ ]
 
 ;******************************************************************************
 
@@ -685,6 +759,12 @@ ReleaseEvent    ENTRY   "R1-R2"
 ;    VS => R0 -> error
 ;    VC => R0 undefined
 
+ [ OnStork
+; tell BMU to stop sending BMU event interrupts
+        MOV     R0, #PortableBMUC_DisablePMInts
+        SWI     XPortable_CommandBMU            ;
+ ]
+
 ; disable BMU event
 
         MOV     R0,#13                          ; disable
@@ -714,10 +794,12 @@ InitBMUVars     ENTRY   "R1"
 ;    VS => R0 -> error
 ;    VC => R0 undefined
 
+ [ EstimateSetting
 ; Initialise remainder for Estimate code
 
         MOV     R0,#0
         STR     R0,Previous_Remainder
+ ]
 
 ; Read BMU flags: we can do this with IRQs disabled and it will not
 ; enable IRQs. We'll then receive any changes via the event
@@ -731,11 +813,13 @@ InitBMUVars     ENTRY   "R1"
         MOV     R0,#PortableBMUF_LidOpen
         STRB    R0,Module_BMU_Flags
 
+ [ EstimateSetting
 ; Initialise Previous_UsedCapacity (will enable IRQs but restore on exit)
 
         MOV     R0,#PortableBMUV_UsedCapacity   ; read BMU variable
         SWI     XPortable_ReadBMUVariable
         STRVC   R1,Previous_UsedCapacity
+ ]
 
 ; Read and process flags
 
@@ -776,15 +860,17 @@ BMUBegin        ENTRY   "R1-R2"
 
 ; clear locks
 
+ [ EstimateSetting
         STRB    R0,InTicker
+ ]
         STRB    R0,InEvent
 
  ]
 
  [ CycleBattery
-        STRB    R0,CycleState                   ; normal machine use, ie not
-        STRB    R0,CycleCount                   ; discharge/charge cycling the battery
-        STR     R0, CyclePowered
+        ASSERT  CycleStateReason_Charging = 0
+        STRB    R0, CycleState                  ; normal machine use, ie not
+        STRB    R0, CycleCount                  ; discharge/charge cycling the battery
         MOV     R0, #PortableBMUC_ConnectCharger ;ensure charger is actually on
         SWI     XPortable_CommandBMU            ;
  ]
@@ -799,12 +885,20 @@ BMUBegin        ENTRY   "R1-R2"
         BL      InitBMUVars
         BVS     %FT10                           ; branch if error
 
+ [ OnStork
+; tell BMU to start sending BMU event interrupts when power state changes
+        MOV     R0, #PortableBMUC_EnablePMInts
+        SWI     XPortable_CommandBMU            ;
+ ]
+
+ [ EstimateSetting
 ; set up a CallEvery to update the time variables in the BMU
 
         LDIMM   R0,BMUTicks - 1                 ; call frequency (-1 for OS bug)
         addr    R1,Ticker_UpdateBMU             ; R1 -> code
         MOV     R2,MWP                          ; R2 = R12 value to pass
         SWI     XOS_CallEvery
+ ]
         PullEnv VC                              ; quit if all ok
         BICVCS  PC,LR,#V_bit
 10
@@ -831,12 +925,13 @@ BMUEnd  ENTRY   "R1"
 ;    VS => R0 -> error
 ;    VC => R0 undefined
 
+ [ EstimateSetting
 ; remove ticker event
 
         addr    R0,Ticker_UpdateBMU             ; R0 -> code
         MOV     R1,MWP                          ; R1 = R12 value
         SWI     XOS_RemoveTickerEvent
-
+ ]
 ; remove beeping call every
 ; R1 preserved
 
@@ -856,10 +951,29 @@ BMUEnd  ENTRY   "R1"
         addr    R0,BMUEvent
         SWI     XOS_RemoveCallBack
 
-        addr    R0,TickerCB_UpdateBMU
+ [ HotKeyTasks
+        ADR     R0, KeyEvent1           ;HotKey_ToolBox
         MOV     R1,MWP
         SWI     XOS_RemoveCallBack
 
+        ADR     R0, KeyEvent2           ;HotKey_Heart
+        MOV     R1,MWP
+        SWI     XOS_RemoveCallBack
+
+        ADR     R0, KeyEvent3           ;HotKey_Battery
+        MOV     R1,MWP
+        SWI     XOS_RemoveCallBack
+
+        ADR     R0, KeyEvent4           ;HotKey_Off
+        MOV     R1,MWP
+        SWI     XOS_RemoveCallBack
+ ]
+
+ [ EstimateSetting
+        addr    R0,TickerCB_UpdateBMU
+        MOV     R1,MWP
+        SWI     XOS_RemoveCallBack
+ ]
         addr    R0,TickerCB_LidClosedBeep
         MOV     R1,MWP
         SWI     XOS_RemoveCallBack
@@ -923,19 +1037,18 @@ DischargeBattery ENTRY "R1"                     ;Part of battery discharge/charg
 
         MOV     R0, #PortableBMUC_DisconnectCharger ;turn charger off
         SWI     XPortable_CommandBMU
-
+ [ 1=0
         MOV     R0, #PowerWasters
         MOV     R1, #:NOT:PowerWasters
         SWI     XPortable_Control
- [ 1=1
+
         EORVC   R0, R0, R1                      ;bits that changed
         ANDVC   R0, R0, R1                      ;bits that we forced on
- |
-        MOVVC   R0, #PowerWasters
- ]
+
         STRVC   R0, CyclePowered                ;bits that are on at our request
                                                 ;NB its our responsibility to attempt to turn
                                                 ;   them off once discharge completes or aborts
+ ]
 10
         MOV     R0, #CycleStateReason_Discharging
         STRB    R0, CycleState
@@ -953,7 +1066,7 @@ ChargeBattery ENTRY "R1"                        ;Part of battery discharge/charg
 
         MOV     R0,#CycleStateReason_Charging   ;must remove discharge indication or our service handler
         STRB    R0, CycleState                  ;will prevent powerdown
-
+  [ 1=0
         LDR     R1, CyclePowered                ;try to power down those units that we powered up in DischargeBattery
         MOV     R0, #&FFFFFFFF
         EOR     R1, R1, R0      
@@ -962,9 +1075,9 @@ ChargeBattery ENTRY "R1"                        ;Part of battery discharge/charg
 
         MOV     R1, #0                          ;we are no longer holding units powered up
         STR     R1, CyclePowered                ;
+  ]
 
-        ;>>>Issue SWI to turn charger on
-        MOV     R0, #PortableBMUC_ConnectCharger ;turn charger on
+        MOV     R0,#PortableBMUC_ConnectCharger ;turn charger on
         SWI     XPortable_CommandBMU            ;
 
         EXITS

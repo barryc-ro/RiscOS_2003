@@ -2,8 +2,7 @@
 ;
 ; ATAPIStuff.s
 ;
-; Author:               Mark Watson (EESOX)
-; Largely rewritten by: Christopher Partington (Cambridge Systems Design)
+; Author: Mark Watson (EESOX)
 ;
 ; Description
 ; ===========
@@ -68,40 +67,16 @@
 ;   NOTE: some reads of regs are byte, others word - this should be sorted
 ;   out.
 ;
-; 06-Apr-95  17:45  cpartington (Cambridge Systems Design)
-; * Added debugging code so caller can detect how many bytes were not
-;   transferred.
-;
-; 12-Jun-95  11:33  cpartington (Cambridge Systems Design)
-; * Added conditional code to use TIMEOUT__COMMAND_COMPLETE instead of
-;   literal when calling WaitForIRQ to wait for command completion. Should
-;   always have used constant rather than literal but this change forced by
-;   trying to adjust timeout values to try to cope with slow Sony CDU50E.
-;
-; 13-Jun-95  16:09  cpartington (Cambridge Systems Design)
-; * Conditionally disable poll for !BSY before selecting drive to try to
-;   cope with Sony master drive with no slave connected.
-;
-; 19-Jun-95  16:36  cpartington (Cambridge Systems Design)
-; * Change ATAPI_Reset to use constant for timeout rather than literal.
-;
-; 06-Jul-95  10:37  cpartington (Cambridge Systems Design)
-; * Added code conditional on bodge_50e_sole_drive and full_drive_detection
-;   including new routine ATAPI_CheckForDrive and mechanism to call it via
-;   ATAPI_Control) to try to address SONY CDU50E sole drive problem.
-;
 ;*end of change record*
 
 
 ; Routines in thisfile
 ;           ATAPI_Control
+;           ATAPI_LockUnlockIDE
 ;           ATAPI_Op
 ;           WaitForIRQ
 ;           ATAPI_Reset
-;           ATAPI_CheckForDrive
 ;           DoMicroDelay
-;           ATAPI_LockUnlockIDE
-;
 ; ONLY EVER USE THE ATAPI_Control function with reason codes.
 ; NEVER call the functions directly
 
@@ -153,9 +128,6 @@ ATAPI_Control   ROUT
 ATAPIC_StartOfJumpTable
         B       ATAPI_Op
         B       ATAPI_Reset
- [ full_drive_detection
-        B       ATAPI_CheckForDrive
- ]
 ATAPIC_EndOfJumpTable
 
 ATAPIC_UnknownReason
@@ -221,10 +193,11 @@ ATAPI_Op        ROUT
         STASH   "r0-r10,r14"
 
  [ cdebug
-        CDebug_Time
-        CDebug_StrReg8  ": Op ",r0,cc
-;;;;        CDebug_StrReg8  ", addr ",r3,cc
+        CDebug_StrReg8  "DoOp ",r0,cc
+        CDebug_StrReg8  ", addr ",r3,cc
         CDebug_StrReg8  ", len ",r4,cc
+        LDRB    r6,[r2]
+        CDebug_StrReg2  ", PCmd ",r6
         MOV     r1,#12
 00
         LDRB    r0,[r2],#1
@@ -267,8 +240,6 @@ AO_GotDrive
         SWI     XOS_ReadMonotonicTime
         ADD     r5,r0,#TIMEOUT__SELECTION_PHASE         ; r5 = time to give up
         LDR     r1,TBA                                  ; r1 -> IDE
-
- [ :LNOT: bodge_sony_selection
 01
         LDR     r0,[r1,#TASKFILE__R_ALTERNATE_STATUS]
         TSTS    r0,#STATUSFLAGS__BSY
@@ -279,7 +250,6 @@ AO_GotDrive
         B       %F04                                    ; give up
 
 ;;;;;;;;;;;;;;;;;
- ]
 
 02
 ; drive is no longer busy - select it and check status again
@@ -329,25 +299,9 @@ AO_GotDrive
 
 05
 ; drive is ready
-; r1 -> registers
-
- [ Version < 125
-        LDR     r1,TBA
- ]
-
- [ bodge_50e_sole_drive
-
-; Enable IRQ in digital output (device control) register so can poll for it
-; in IOC - this is OK as the IRQ is not enabled. Ideally, would
-; enable/disable it around each access but this will now upset ADFS which
-; assumes it is always enabled
-
-        MOV     r0,#2_1000                              ; -SRST IEN
-        STRB    r0,[r1,#TASKFILE__W_DIGITAL_OUTPUT]
- ]
-
 ; send command to drive via task file registers
 
+        LDR     r1,TBA
         MOV     r0,#FEATUREBITS__PIO
         STRB    r0,[r1,#TASKFILE__W_FEATURES]
 
@@ -385,16 +339,6 @@ AO_GotDrive
         MOV     r0,#1*2                         ; 1/2 us units
         BL      DoMicroDelay
 
- [ faster_startup
-
-; if IDENTIFY device, skip wait for !BSY and DRQ and go straight to command
-; complete. Normal code should do this, not just faster_startup but only
-; faster_startup code shows problem because its timeouts are shorter
-
-        TSTS    r6,#ATAPIOP__IDENTIFY_DEVICE
-        BNE     ACOD_WaitForCommandComplete     ; branch if IDENTIFY
-
- ]
 ; need to send CDB to drive so wait for it to be not busy
 
         SWI     XOS_ReadMonotonicTime
@@ -422,16 +366,10 @@ AO_GotDrive
         MOV     r0,#1*2                                 ; 1/2 us units
         BL      DoMicroDelay
 
- [ :LNOT: faster_startup
-
 ; if IDENTIFY, move straight onto waiting for command complete (no CDB)
-; See comments above to see why this code is not necessary if faster_startup
-; is enabled
 
         TSTS    r6,#ATAPIOP__IDENTIFY_DEVICE    ; identify?
         BNE     ACOD_WaitForCommandComplete     ; branch if IDENTIFY
- ]
-
 13
 ; check if drive is "Interrupt DRQ" type and wait for IRQ if so
 ; "Accelerated DRQ" drives do not provide an IRQ at this point
@@ -512,11 +450,7 @@ ACOD_SendLoop
 ACOD_WaitForCommandComplete
 
         SWI     XOS_ReadMonotonicTime
- [ long_command_timeout
-        ADD     r5,r0,#TIMEOUT__COMMAND_COMPLETE
- |
         ADD     r5,r0,#512                      ; MEW says NEC needs this long
- ]
         LDR     r1,TBA
         BL      WaitForIRQ              ; (r1,r5->r0,r2,r3,Z)
  [ cdebug
@@ -616,13 +550,8 @@ ACOD_WaitForCommandComplete
 
         CMPS    r5,r10
         MOVGT   r5,r10
- [ cdebug
+ [ cdebug2
         CDebug_StrReg4   "copy ",r5
- ]
- [ cdebug
-        LDR     r0,inbytes
-        ADD     r0,r0,r5
-        STR     r0,inbytes
  ]
 
 ; fall through
@@ -750,12 +679,6 @@ ACOD_AnyMoreData
 
 ; r5 = bytes in drive - buffer size = bytes to discard
 
- [ cdebug
-        BLE     %F00
-        CDebug_StrReg8  "Discard ",r5
-00
- ]
-
 40
 ; be careful only to read drive if necessary; in particular watch out for
 ; odd transfer lengths e.g. drive wants 512 bytes read, caller only wants
@@ -798,18 +721,12 @@ ACOD_ExitError
 ; r0 = Internal error number
 
  [ cdebug
-        CDebug_Time
-        CDebug_StrReg8  ": #err ",r0,cc
+        CDebug_StrReg8  "#err ",r0,cc
         LDR     r14,[sp]                ; get original r0
         CDebug_StrReg8  ", op=",r14,cc
-        LDR     r2,[sp,#2*4]            ; get original r2
-        MOV     r1,#12
-00
-        LDRB    r14,[r2],#1
-        CDebug_StrReg2  " ",r14,cc
-        SUBS    r1,r1,#1
-        BNE     %B00
-        CDebug_NewLine
+        LDR     r14,[sp,#2*4]           ; get original r2
+        LDR     r14,[r14]
+        CDebug_StrReg8  ", cmd=",r14
  ]
 
 ; Does the error signal a disc change ?
@@ -834,18 +751,9 @@ change_of_disc
 ; r6 = r0 on entry + bit 0 = drive 0 or 1
 
  [ cdebug
-        CDebug_StrReg8  "change of disc? ",r0,cc
-        LDR     r14,[sp]                ; get original r0
-        CDebug_StrReg8  ", op=",r14,cc
-        LDR     r2,[sp,#2*4]            ; get original r2
-        MOV     r1,#12
-00
-        LDRB    r14,[r2],#1
-        CDebug_StrReg2  " ",r14,cc
-        SUBS    r1,r1,#1
-        BNE     %B00
-        CDebug_NewLine
+        CDebug_StrReg8  "change of disc? ",r0
  ]
+
  [ fix_slow_when_no_drives
 
 ; if IDENTIFY, don't retry as drive probably not there
@@ -925,8 +833,8 @@ AR_WriteDataToDrive     ROUT
 ; r5  = amount to send to the drive (can corrupt)
 ; r9 -> start of transfer
 
- [ cdebug
-        CDebug_WriteS "data out",cc
+ [ cdebug2
+        CDebug_WriteS "send",cc
  ]
 
 10
@@ -935,13 +843,13 @@ AR_WriteDataToDrive     ROUT
         ORR     r0,r0,r2,LSL #8
         ORR     r0,r0,r0,LSL #16
         STR     r0,[r1]
- [ cdebug
+ [ cdebug2
         CDebug_StrReg4  " ",r0,cc
  ]
         SUBS    r5,r5,#2
         BGT     %B10
 
- [ cdebug
+ [ cdebug2
         CDebug_NewLine
  ]
 
@@ -980,8 +888,7 @@ WaitForIRQ      ROUT
         BLO     %B20                    ; branch if no
 
  [ cdebug
-        CDebug_Time
-        CDebug_WriteS   ": No IRQ"
+        CDebug_WriteS   "No IRQ"
  ]
 
 ; no IRQ before timeout
@@ -1042,12 +949,6 @@ WaitForIRQ      ROUT
         BICS    pc,r14,#Zero_Flag       ; return NE
 
 ;------------------------------------------------------------------------------
-
- [ Version > 124
-        LTORG
- ]
-
-;------------------------------------------------------------------------------
 ; ATAPI_Reset
 ;
 ; on entry:
@@ -1066,8 +967,7 @@ WaitForIRQ      ROUT
 ATAPI_Reset     ROUT
 
  [ cdebug
-        CDebug_Time
-        CDebug_WriteS   ": Reset.."
+        CDebug_WriteS   "Reset.."
  ]
         STASH   "r0-r2,r14"
 
@@ -1098,11 +998,7 @@ ATAPI_Reset     ROUT
 ; wait for up to 10 seconds for drive to be not BSY
 
         SWI     XOS_ReadMonotonicTime
- [ Version >= 124
-        ADD     r2,r0,#TIMEOUT__RESET_RECOVERY  ; r2 = finish time
- |
         ADD     r2,r0,#10*100                   ; r2 = finish time
- ]
 
 20
         LDRB    r0,[r1,#TASKFILE__R_STATUS]     ; get status
@@ -1118,235 +1014,6 @@ ATAPI_Reset     ROUT
 
         GRAB    "r0-r2,r14"
         BICS    pc,r14,#Overflow_Flag
-
-;------------------------------------------------------------------------------
-
- [ full_drive_detection
-
-; ATAPI_CheckForDrive
-;
-; This routine checks to see if a particular drive is an ATAPI drive by
-; looking for the special signature in the cylinder/byte_count registers.
-; NOTE: this also enables the IRQ output from the drive.
-;
-; Entry:
-;       r0 = b0 = ATA drive number
-;       r12 -> workspace
-;       r13 -> stack
-;
-; Exit:
-;       VC => this drive is an ATAPI drive
-;       VS => this drive is NOT an ATAPI drive or we couldn't do the stuff
-;             necessary to determine it
-;       Would like to have used Z flag but calling sequence only passes V
-;       back to caller
-;       Other flags undefined
-;       All registers preserved
-;
-;------------------------------------------------------------------------------
-
-ATAPI_CheckForDrive     ROUT
-
- [ cdebug2
-        CDebug_StrReg2  "CheckForDrive ",r0
- ]
-        STASH   "r0-r2,r5,r14"
-
-        LDR     r1,TBA                          ; r1 -> IDE registers
-        MOV     r2,r0,LSL #4                    ; put drive bit in place
-        ORR     r2,r2,#DRIVESELECT__ALWAYS      ; mandatory bits
-        SWI     XOS_ReadMonotonicTime
-        ADD     r5,r0,#TIMEOUT__SELECTION_PHASE ; r5 = time to give up
-
-; r1 -> IDE registers
-; r2 = drive selection value
-; r5 = time to abandon selection
-
- [ :LNOT: bodge_sony_selection
-
-; poll for !BSY before selecting drive - ATA requirement
-
-05
-        LDR     r0,[r1,#TASKFILE__R_ALTERNATE_STATUS]
-        TSTS    r0,#STATUSFLAGS__BSY
-        BEQ     %F08                            ; branch if not busy
-        SWI     XOS_ReadMonotonicTime
-        CMPS    r0,r5                           ; time to stop?
-        BLO     %B05
-
-; drive stayed busy so give up
-
- [ cdebug
-        CDebug_WriteS   "Drive busy (1)"
- ]
-        GRAB    "r0-r2,r5,r14"
-        ORRS    pc,r14,#Overflow_Flag           ; return VS
-
-;;;;;;;;;;;;;;;;;
-08
- ]
-
-10
-; select drive
-; r2 = drive selection value
-
-        STRB    r2,[r1,#TASKFILE__W_DRIVE_SELECT]
-
-; wait for other status bits (and regs?) to become valid - 400ns
-
-        MOV     r0,#1*2                         ; 1/2 us units
-        BL      DoMicroDelay
-
-; have tried to select drive - check status
-
-        LDR     r0,[r1,#TASKFILE__R_ALTERNATE_STATUS]
-
-; want BSY=0 - ignore DRDY
-
-        TSTS    r0,#STATUSFLAGS__BSY
-        BEQ     %F30
-        SWI     XOS_ReadMonotonicTime
-        CMPS    r0,r5                           ; time to stop?
-        BLO     %B10                            ; branch if not
-
-; timeout - drive is busy
-
- [ cdebug
-        CDebug_WriteS   "Drive busy (2)"
- ]
-        GRAB    "r0-r2,r5,r14"
-        ORRS    pc,r14,#Overflow_Flag           ; return VS
-
-;;;;;;;;;;;;;;;;;
-
-30
-; drive is not busy
-; if DRDY=0, check signature in cylinder selection registers
-; Spec seems to suggest that even if DRDY=1 we should check signature but
-; this could lead to false detection with a hard disc whose last access left
-; the cylinder registers containing the signature. Anyway, issuing the
-; IDENTIFY should sort things out.
-
- [ cdebug
-        CDebug_StrReg2  "Status after drive select = ",r0
- ]
-        TSTS    r0,#STATUSFLAGS__DRDY           ; if DRDY=1
- [ cdebug
-        BEQ     %F00
-        CDebug_WriteS   "DRDY=1 so skipping to IDENTIFY"
-00
- ]
-        BNE     %F35                            ; ...skip to IDENTIFY
-        LDRB    r0,[r1,#TASKFILE__W_BYTE_COUNT_LOW]
-        TEQS    r0,#ATAPI_Signature :AND: &FF
-        LDREQB  r14,[r1,#TASKFILE__W_BYTE_COUNT_HIGH]
-        TEQEQS  r14,#ATAPI_Signature >> 8
- [ cdebug
-        BNE     %F00
-        CDebug_WriteS   "Signature found (1)"
-00
- ]
-        GRAB    "r0-r2,r5,r14",EQ               ; if signature found
-        BICEQS  pc,r14,#Overflow_Flag           ; ...return VC
-
- [ cdebug
-        CDebug_StrReg2  "Signature not found (1): ",r14,cc
-        CDebug_StrReg2  " ",r0
- ]
-
-35
-; either DRDY=1 or signature is not present so issue an ATA IDENTIFY to
-; cause drive to reset its registers and try again
-
- [ cdebug
-        CDebug_WriteS   "ATA IDENTIFY"
- ]
-        MOV     r0,#FEATUREBITS__PIO
-        STRB    r0,[r1,#TASKFILE__W_FEATURES]
-
-; do a quick read of status register to clear any pending IRQ
-; shouldn't be necessary but may get us out of trouble later
-
-        LDRB    r0,[r1,#TASKFILE__R_STATUS]
-
-; now send the command to the drive
-
-        MOV     r0,#IDE__IDENTIFY
-        STRB    r0,[r1,#TASKFILE__W_COMMAND]
-
-; wait 400ns for BSY to be asserted
-
-        MOV     r0,#1*2                         ; 1/2 us units
-        BL      DoMicroDelay
-
-; wait for BSY to be deasserted
-
-        SWI     XOS_ReadMonotonicTime
-        ADD     r5,r0,#TIMEOUT__COMMAND_COMPLETE        ; r5 = time to give up
-40
-        LDR     r0,[r1,#TASKFILE__R_ALTERNATE_STATUS]
-        TSTS    r0,#STATUSFLAGS__BSY
-        BEQ     %F50
-        SWI     XOS_ReadMonotonicTime
-        CMPS    r0,r5                           ; time to stop?
-        BLO     %B40                            ; branch if not
-
-; drive did not deassert BSY
-
- [ cdebug
-        CDebug_WriteS   "Drive busy (3)"
- ]
-        GRAB    "r0-r2,r5,r14"
-        ORRS    pc,r14,#Overflow_Flag           ; return VS
-
-;;;;;;;;;;;;;;;;;
-50
-; drive no longer busy - wait 400ns and then check status
-
-        MOV     r0,#1*2                         ; 1/2 us units
-        BL      DoMicroDelay
-
-        LDR     r0,[r1,#TASKFILE__R_STATUS]     ; also clears IRQ
- [ cdebug
-        CDebug_StrReg2  "ATA IDENTIFY status ",r0
- ]
-        TSTS    r0,#STATUSFLAGS__CHECK          ; error?
-        BNE     %F70                            ; branch if so
-
-; no error - ATAPI devices should cause an error but we don't really care;
-; the catch is that we now have to read any data that the drive has returned
-
-        TSTS    r0,#STATUSFLAGS__DRQ            ; data waiting?
-        BNE     %F70                            ; branch if not
-
-; OK: read 512 bytes and then move on
-
-        MOV     r0,#512
-60
-        LDR     r14,[r1,#TASKFILE__R_DATA]      ; get 16 bits
-        SUBS    r0,r0,#2
-        BNE     %B60
-70
-; IDENTIFY caused error or there was no data or we've read the data
-; Now look for the ATAPI signature again
-
-        LDRB    r0,[r1,#TASKFILE__W_BYTE_COUNT_LOW]
-        TEQS    r0,#ATAPI_Signature :AND: &FF
-        LDREQB  r14,[r1,#TASKFILE__W_BYTE_COUNT_HIGH]
-        TEQEQS  r14,#ATAPI_Signature >> 8
- [ cdebug
-        BNE     %F00
-        CDebug_WriteS   "Signature found (2)"
-        B       %F01
-00
-        CDebug_StrReg2  "Signature not found (2): ",r14,cc
-        CDebug_StrReg2  " ",r0
-01
- ]
-        GRAB    "r0-r2,r5,r14"
-        BICEQS  pc,r14,#Overflow_Flag
-        ORRNES  pc,r14,#Overflow_Flag
- ]
 
 ;------------------------------------------------------------------------------
 ;

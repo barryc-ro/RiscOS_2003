@@ -81,6 +81,19 @@ ${EXP_HDR}.BASICTrans: hdr.BASICTrans
         ${CP} hdr.BASICTrans $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+rm.BASIC64: BASIC
+rm.BASIC64: Fp
+rm.BASIC64: Fp2
+rm.BASIC64: Expr
+rm.BASIC64: Factor
+rm.BASIC64: Funct
+rm.BASIC64: Stmt
+rm.BASIC64: Stmt2
+rm.BASIC64: Array
+rm.BASIC64: Assembler
+rm.BASIC64: Lexical
+rm.BASIC64: Command
+rm.BASIC64: ErrorMsgs
 rm.BASIC105: BASIC
 rm.BASIC105: Fp
 rm.BASIC105: Fp2
@@ -108,16 +121,3 @@ rm.BASICTrans: Hdr:Proc
 rm.BASICTrans: Hdr:FSNumbers
 rm.BASICTrans: Hdr:NewErrors
 rm.BASICTrans: Hdr:MsgTrans
-rm.BASIC64: BASIC
-rm.BASIC64: Fp
-rm.BASIC64: Fp2
-rm.BASIC64: Expr
-rm.BASIC64: Factor
-rm.BASIC64: Funct
-rm.BASIC64: Stmt
-rm.BASIC64: Stmt2
-rm.BASIC64: Array
-rm.BASIC64: Assembler
-rm.BASIC64: Lexical
-rm.BASIC64: Command
-rm.BASIC64: ErrorMsgs

@@ -10,6 +10,7 @@
 ;
 ;       bit 0 set   => perform compression on data section
 ;       bit 1 set   => don't perform start of page feed (for roll devices)
+;       bit 2 set   => if colour then CMY device, rather than CMYK
 ;
 ; Assumes that graphics mode has been entered using:
 ; ESC ( G 1 0 1  - put into graphics mode
@@ -27,11 +28,11 @@
 ;------------------------------------------------------------------------------
 
         GET     ^.Generic.s.OutputDump
+
 ;Macro to perform bit transforms on the data about to be sent to the
 ;device, this should be called proir to doing a counted string output
 ;it will preserve the start and size registers but will destory
 ;the three temporary registers.
-
         MACRO
 $l      E2Transpose $start,$size,$temp1,$temp2,$temp3
 $l
@@ -55,6 +56,7 @@ $l
 20
         Pull    "$start,$size"
         MEND
+
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -95,7 +97,6 @@ sendE2_compressoff ROUT
 
 ;Send the data
         LDMIA   SP,{R0}         ;Get the length and the width
-        E2Transpose R0,R3,R1,R2,R4
         PDumper_PrintLengthString R0,R3,R1
 
         Pull    "R0-R4,R7,PC",,^
@@ -151,7 +152,6 @@ sendE2_compressed
         PDumper_PrintBinaryPair R2,R0   ; Say how many bits involved
 
         LDMIA   SP,{R0-R3}
-        E2Transpose R0,R3, R1,R2,R4
 
         MOV     R8,#-1          ;This time output the real data
         BL      compressE2
@@ -334,13 +334,21 @@ compressE2_flushskip
 ;
 ; out: -
 
+output_mono_sprite ROUT
+        Push    "R1-R4"
+        MUL     R3,R5,R4
+        E2Transpose R0,R3,R1,R2,R4
+        Pull    "R1-R4"
+        B       output_mono_sprite_norev
+
+;all the following entries assume bit-reversal-within-byte not needed
 output_mono_spriteR ROUT
 ;version without ribbon setting
         Push    "R1,R9,LR"
         MOV     R3,R5
         B       output_mono_altentryR
 
-output_mono_sprite ROUT
+output_mono_sprite_norev ROUT
 
         Push    "LR"
         MOV     R3,R5           ;Get the byte width of the image correct
@@ -411,8 +419,12 @@ output_mono_altentryR ROUT
 30
 ;only send one line-return, count line-ends and convert to vertical move later
         Push    "R0"
+        LDRB    R3,[R7,#pd_private_flags - pd_data]
+        TST     R3,#df_ThreePlanes
+        MOVEQ   R3,#4
+        MOVNE   R3,#3
         TEQ     R6,#0
-        TEQNE   R6,#4
+        TEQNE   R6,R3
         BEQ     %FT32
 ;we have a line-return
         LDR     R9, pending_line_ends
@@ -433,11 +445,15 @@ output_mono_altentryR ROUT
         B       %FT45
 
 35
-;And finally output the line_end, or a line_return if ribbon number not 0 or 4
+;And finally output the line_end, or a line_return if ribbon number not 0 or 4 (3 for ThreePlanes)
         Push    "R0"
+        LDRB    R0,[R7,#pd_private_flags - pd_data]
+        TST     R0,#df_ThreePlanes
+        MOVEQ   R3,#4
+        MOVNE   R3,#3
         MOV     R0,#pd_data_line_end
         TEQ     R6,#0
-        TEQNE   R6,#4
+        TEQNE   R6,R3
         MOVNE   R0,#pd_data_line_return
 40
         BL      SendAString
@@ -494,34 +510,7 @@ colourE2_lineloop
 
         Push    "R0,R3-R5,R7"         ;will need this again
 
-        CMP     R3,#5           ;fewer than 5 bytes to store in?
-        BGT     longE2_colour   ;enough for a general algorithm
-        BLT     vshortE2_colour ;bit of a stupid bloody picture
-        BL      shortE2_colour
-        B       colourE2_rearranged
-
-vshortE2_colour
-;Oh hell I'll have to use the stack!
-        SUB     SP,SP,#8
-        MOV     R1,#0
-        STR     R1,[SP]
-        LDRB    R1,[R0,#0]      ;At least one byte (see above)
-        STRB    R1,[SP,#0]
-        CMP     R3,#2
-        LDRGEB  R1,[R0,#1]
-        STRGEB  R1,[SP,#1]
-        CMP     R3,#3
-        LDRGEB  R1,[R0,#2]
-        STRGEB  R1,[SP,#2]
-        CMP     R3,#4
-        LDRGEB  R1,[R0,#3]
-        STRGEB  R1,[SP,#3]
-        MOV     R0,SP
-        BL      shortE2_colour
-        BL      colourE2_colourstrip
-        ADD     SP,SP,#8        ;Balance the stack
-        B       colourE2_nextline
-
+;assumes width (pixels) is multiple of 8 (should be ensured by PDriverDP)
 longE2_colour
         Push    "R0,R3,R7,R9"   ;Need to keep position of strip for output
         Push    "R0,R3"         ;and for CMYK scanning
@@ -529,24 +518,56 @@ longE2_colour
         ADD     R0,R0,R3        ;->Scan line end to shuffle up
         MOV     R1,R0           ;second pointer for save
 
-        TST     R3,#1           ;Is the line length odd?
-        SUBNE   R0,R0,#1        ;if so the last byte stays the same
-        SUBNE   R1,R1,#1
-        SUBNE   R3,R3,#1        ;Length is now definitely even
-
         MOV     R9, #1          ;R9 will be set false if we notice whole row is not white
-                                ;(excluding last pixel of odd row - tough!)
 
-10      LDRB    R4,[R0,#-1]!    ;Load colours
-        LDRB    R7,[R0,#-1]!
+;first phase - pack nibbles into bytes
+        LDRB    R4,[R7,#pd_private_flags]
+        TST     R4,#df_ThreePlanes
+        BEQ     %FT10
 
-        ORRS    R4,R7,R4,LSL#4  ;Munge together as a single byte
-        MOVNE   R9, #0          ;some non-white found
-        STRB    R4,[R1,#-1]!    ;and keep for next pass
+;three plane case - replace K with CMY
+5  SUB   R0,R0,#8
+   LDMIA R0,{R4,R7}             ;load next 8 pixels
+   ORRS  R4,R4,R7,LSL #4        ;munge together (8 KCMY nibbles)
+   BEQ   %FT08
+   MOV   R9,#0                  ;reset whole-row white flag
+;replace any K's with CMY's
+   TST   R4,#&80000000
+   ORRNE R4,R4,#&70000000
+   TST   R4,#&08000000
+   ORRNE R4,R4,#&07000000
+   TST   R4,#&00800000
+   ORRNE R4,R4,#&00700000
+   TST   R4,#&00080000
+   ORRNE R4,R4,#&00070000
+   TST   R4,#&00008000
+   ORRNE R4,R4,#&00007000
+   TST   R4,#&00000800
+   ORRNE R4,R4,#&00000700
+   TST   R4,#&00000080
+   ORRNE R4,R4,#&00000070
+   TST   R4,#&00000008
+   ORRNE R4,R4,#&00000007
+   BIC   R4,R4,#&88000000
+   BIC   R4,R4,#&00880000
+   BIC   R4,R4,#&00008800
+   BIC   R4,R4,#&00000088
+8
+   STR   R4,[R1,#-4]!           ;store for next pass
+   SUBS  R3,R3,#8
+   BNE   %BT5
+   B     %FT12
 
-        SUBS    R3,R3,#2        ;Finished the even bit yet?
+;four plane case - K allowed
+10      SUB     R0,R0,#8
+        LDMIA   R0,{R4,R7}      ;load next 8 pixels
+        ORRS    R4,R4,R7,LSL #4 ;munge together (8 KCMY nibbles)
+        MOVNE   R9, #0          ;reset whole-row white flag if necessary
+        STR     R4,[R1,#-4]!    ;store for next pass
+        SUBS    R3,R3,#8
         BNE     %BT10
 
+12
         Pull    "R0,R3"         ;Restore the line start, count
         CMP     R9, #1          ;was whole row white?
         BNE     %FT15
@@ -559,38 +580,61 @@ longE2_colour
         Pull    "R0,R3,R7,R9"
         B       colourE2_nextline
 
+;second phase - separate out each plane
 15
-        MOV     R4,#1:SHL:0     ;Current ribbon (start at Y!)
+        MOV     R4,#1           ;Current ribbon, start at Y
+        ORR     R9,R4,R4,LSL #4
+        ORR     R9,R9,R9,LSL #8
+        ORR     R9,R9,R9,LSL #16;ribbon bits, all 8 nibbles, start at Y (&11111111)    
 20
-        MOV     R2,#1:SHL:0     ;Bit to modify output
-        MOV     R6,#0           ;Current bit to set
-        MOV     R7,#0           ;Byte so far
+        MOV     R7,#0           ;byte so far
         Push    "R1,R3"         ;Read from here for each pass
+        B       %FT30
+25
+        STRB    R7,[R0],#1
+        SUBS    R3,R3,#8
+        BLE     %FT35
 30
-        LDRB    R8,[R1],#1      ;Get two CMYK clusters
-        TST     R8,R4           ;Check the "ribbon"
-        ORRNE   R7,R7,R2,LSL R6 ;and set a bit if required
-        ADD     R6,R6,#1
-        TST     R8,R4,LSL#4
-        ORRNE   R7,R7,R2,LSL R6
-        ADD     R6,R6,#1
-        ANDS    R6,R6,#7
-        STREQB  R7,[R0],#1      ;Write a destination byte if finished a complete one
-        MOVEQ   R7,#0
-        SUBS    R3,R3,#2        ;May go to 0 or -1
+        LDR     R8,[R1],#4      ;get 8 KCMY nibbles
+        TST     R8,R9           ;check for none of 8 nibbles set against ribbon
+        BEQ     %BT25           ;skip nibble-wise checks if none
+        TST     R8,R4           ;check for nibble 0 set against ribbon
+        ORRNE   R7,R7,#1:SHL:7  ;set bit 7 if match (bits required reversed in byte)
+        TST     R8,R4,LSL #8    ;repeat for other 7 nibbles
+        ORRNE   R7,R7,#1:SHL:6
+        TST     R8,R4,LSL #16
+        ORRNE   R7,R7,#1:SHL:5
+        TST     R8,R4,LSL #24
+        ORRNE   R7,R7,#1:SHL:4
+        TST     R8,R4,LSL #4
+        ORRNE   R7,R7,#1:SHL:3
+        TST     R8,R4,LSL #12
+        ORRNE   R7,R7,#1:SHL:2
+        TST     R8,R4,LSL #20
+        ORRNE   R7,R7,#1:SHL:1
+        TST     R8,R4,LSL #28
+        ORRNE   R7,R7,#1:SHL:0
+        STRB    R7,[R0],#1      ;a byte of ribbon colour now ready to store
+        MOV     R7, #0          ;clear ribbon colour bits again
+        SUBS    R3,R3,#8
         BGT     %BT30
-
-        ANDS    R6,R6,#7
-        STRNEB  R7,[R0],#1      ;Store the byte if bit index >0
+35
         Pull    "R1,R3"         ;Get the input data back
-        MOV     R4,R4,LSL#1     ;Next ribbon
+        MOV     R4,R4,LSL #1    ;Next ribbon (1 bit mask)
+        MOV     R9,R9,LSL #1    ;Next ribbon (8 bit mask)
         ANDS    R4,R4,#15       ;Check if bit is in range
         BNE     %BT20
 
         Pull    "R0,R3,R7,R9"
 
 colourE2_rearranged
-        BL      colourE2_colourstrip
+        Push    "R4"
+        LDRB    R4,[R7,#pd_private_flags]
+        TST     R4,#df_ThreePlanes
+        BLNE    colourE2_colourstrip3
+        TST     R4,#df_ThreePlanes
+        BLEQ    colourE2_colourstrip4
+        Pull    "R4"
 
 colourE2_nextline
 
@@ -602,16 +646,17 @@ colourE2_nextline
 colourE2_exit
         Pull    "R0-R2,R4,R6-R8,PC",,^
 
-colourE2_colourstrip
+;for four planes case
 ;So now can do four output_mono_strip's from R0 width R3 job R7 ribbon R1
-        Push    "LR"
+colourE2_colourstrip4
+        Push    "R4,LR"
 
         ADD     R5,R3,#7
         MOV     R5,R5,LSR#3
         MOV     R4,#1
         MOV     R6,#1                          ;Ribbon number
 10
-        Push    "R0,R3,R4,R5,R6,R7"               ;Keep this lot for each pass
+        Push    "R0,R3,R4,R5,R6,R7"            ;Keep this lot for each pass
 
 ;        Debug   DumpMJS,"output_monospriteR ribbon ",R6
         BL      output_mono_spriteR
@@ -623,70 +668,33 @@ colourE2_colourstrip
         CMP     R6,#4
         BLE     %BT10
 20
-        Pull    "PC"
+        Pull    "R4,PC"
 
-shortE2_colour
-;Exactly 4 bytes to store in!
-        Push    "R5,R6,R7,LR"
-        LDRB    R1,[R0,#0]
-        LDRB    R2,[R0,#1]
-        LDRB    R4,[R0,#2]
-        LDRB    R5,[R0,#3]
-        LDRB    R6,[R0,#4]
-;Yellow 
-        MOV     R7,#0
-        TST     R1,#(1:SHL:0)
-        ORRNE   R7,R7,#1:SHL:0
-        TST     R2,#(1:SHL:0)
-        ORRNE   R7,R7,#1:SHL:1
-        TST     R4,#(1:SHL:0)
-        ORRNE   R7,R7,#1:SHL:2
-        TST     R5,#(1:SHL:0)
-        ORRNE   R7,R7,#1:SHL:3
-        TST     R6,#(1:SHL:0)
-        ORRNE   R7,R7,#1:SHL:4
-        STRB    R7,[R0,#0]
-;Magenta
-        MOV     R7,#0
-        TST     R1,#(1:SHL:1)
-        ORRNE   R7,R7,#1:SHL:0
-        TST     R2,#(1:SHL:1)
-        ORRNE   R7,R7,#1:SHL:1
-        TST     R4,#(1:SHL:1)
-        ORRNE   R7,R7,#1:SHL:2
-        TST     R5,#(1:SHL:1)
-        ORRNE   R7,R7,#1:SHL:3
-        TST     R6,#(1:SHL:1)
-        ORRNE   R7,R7,#1:SHL:4
-        STRB    R7,[R0,#1]
-;Cyan
-        MOV     R7,#0
-        TST     R1,#(1:SHL:2)
-        ORRNE   R7,R7,#1:SHL:0
-        TST     R2,#(1:SHL:2)
-        ORRNE   R7,R7,#1:SHL:1
-        TST     R4,#(1:SHL:2)
-        ORRNE   R7,R7,#1:SHL:2
-        TST     R5,#(1:SHL:2)
-        ORRNE   R7,R7,#1:SHL:3
-        TST     R6,#(1:SHL:2)
-        ORRNE   R7,R7,#1:SHL:4
-        STRB    R7,[R0,#2]
-;Key
-        MOV     R7,#0
-        TST     R1,#(1:SHL:3)
-        ORRNE   R7,R7,#1:SHL:0
-        TST     R2,#(1:SHL:3)
-        ORRNE   R7,R7,#1:SHL:1
-        TST     R4,#(1:SHL:3)
-        ORRNE   R7,R7,#1:SHL:2
-        TST     R5,#(1:SHL:3)
-        ORRNE   R7,R7,#1:SHL:3
-        TST     R6,#(1:SHL:3)
-        ORRNE   R7,R7,#1:SHL:4
-        STRB    R7,[R0,#3]
 
-        Pull    "R5,R6,R7,PC"
+;for three planes case
+;So now can do three output_mono_strip's from R0 width R3 job R7 ribbon R1
+colourE2_colourstrip3
+        Push    "R4,LR"
+
+        ADD     R5,R3,#7
+        MOV     R5,R5,LSR#3
+        MOV     R4,#1
+        MOV     R6,#1                          ;Ribbon number
+10
+        Push    "R0,R3,R4,R5,R6,R7"            ;Keep this lot for each pass
+
+;        Debug   DumpMJS,"output_monospriteR ribbon ",R6
+        BL      output_mono_spriteR
+
+        Pull    "R0,R3,R4,R5,R6,R7"
+        BVS     %FT20                          ;Bombed already
+        ADD     R0,R0,R5
+        ADD     R6,R6,#1
+        CMP     R6,#3
+        BLE     %BT10
+20
+        Pull    "R4,PC"
+
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -699,8 +707,7 @@ shortE2_colour
 ;
 ; Output and 8BPP strip for the current device, this is done by converting
 ; the data from the 8BPP data to the 1BPP data suitable for printing via
-; the monochrome output routines, we need not attempt to perform bit
-; reversal.
+; the monochrome output routines
 ;
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -716,29 +723,39 @@ output_grey_sprite ROUT
         Debug   Dump,", Workspace at",R7
        
         MOV     R1,R0           ;->Scan line to convert
-        MOV     R2,#1:SHL:0     ;Bit to modify in source data
+        MOV     R2,#1:SHL:7     ;Bit to modify in source data
 10
         Push    "R1,R3-R5"      ;Store the byte width of the line
-        
-        MOV     R4,#0           ;Reset the pixel to write
-        MOV     R6,#0
+
+;we know width is a multiple of 8, so gulp 8 pixels at a time
 15
-        SUBS    R3,R3,#1        ;Decrease the pixel count along the scan line
-        BLT     %FT20           ;If <min width then exit
-        
-        LDRB    R7,[R1],#1      ;Get a byte from the source and check to see if K bit set
-        TST     R7,#1:SHL:3     
-        ORRNE   R4,R4,R2,LSL R6
-
-        ADD     R6,R6,#1
-        ANDS    R6,R6,#7
-        STREQB  R4,[R0],#1      ;Write a destination byte if finished a complete one
-        MOVEQ   R4,#0           ;...and then reset the byte to write
+        SUBS    R3,R3,#8
+        BLT     %FT20
+        LDMIA   R1!,{R6,R7}     ;next 8 pixels
+        ORRS    R4,R6,R7        ;all white?
+        STREQB  R4,[R0],#1
+        BEQ     %BT15           ;fast route if so
+        MOV     R4,#0
+        TST     R6,#1:SHL:3     ;K bit of 1st pixel
+        ORRNE   R4,R4,#1:SHL:7
+        TST     R6,#1:SHL:11    ;K bit of 2nd pixel
+        ORRNE   R4,R4,#1:SHL:6
+        TST     R6,#1:SHL:19
+        ORRNE   R4,R4,#1:SHL:5
+        TST     R6,#1:SHL:27
+        ORRNE   R4,R4,#1:SHL:4
+        TST     R7,#1:SHL:3
+        ORRNE   R4,R4,#1:SHL:3
+        TST     R7,#1:SHL:11
+        ORRNE   R4,R4,#1:SHL:2
+        TST     R7,#1:SHL:19
+        ORRNE   R4,R4,#1:SHL:1
+        TST     R7,#1:SHL:27
+        ORRNE   R4,R4,#1:SHL:0
+        STRB    R4,[R0],#1
         B       %BT15
-20
-        ANDS    R6,R6,#7
-        STRNEB  R4,[R0],#1      ;Store the byte if bit index >0
 
+20
         ADD     R0,R0,#3
         BIC     R0,R0,#3        ;Align to a word boundary (nb - pad bytes contain crap!)
 

@@ -8,6 +8,8 @@
 # 25-May-94  AMcC    Created.
 # 18-Oct-94  AMcC    Template3D now copied to Resources as 'Templates'
 #                    Now correctly copies Tools3D to Resources:...Tools
+# 26-Jun-95  JRH     Now copies STB (ie hacked-down) versions of Tools,
+#                    Templates and Sprites. Doesn't copy Sprites22
 #
 
 #
@@ -54,11 +56,12 @@ clean:
 
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages   ${RESDIR}.${COMPONENT}.Messages   ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.Template3D ${RESDIR}.${COMPONENT}.Templates  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.Sprites    ${RESDIR}.${COMPONENT}.Sprites    ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.Sprites22  ${RESDIR}.${COMPONENT}.Sprites22  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.Tools3d    ${RESDIR}.${COMPONENT}.Tools      ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.<Machine>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.<Machine>.Sprites ${RESDIR}.${COMPONENT}.Sprites ${CPFLAGS}
+       -${CP} Resources.${LOCALE}.<Machine>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
+       -${CP} Resources.${LOCALE}.<Machine>.TileV ${RESDIR}.${COMPONENT}.TileV ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.<Machine>.Tools ${RESDIR}.${COMPONENT}.Tools ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}

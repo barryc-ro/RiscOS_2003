@@ -324,8 +324,10 @@ pagebox_memory_setup ROUT
         MUL     r0, r2, r0
         BL      Divide
         [ Libra1
-        ADD     R0, R0, #3
-        BIC     R0, R0, #3
+;make width a multiple of 8 (may be assumed by newer, faster
+;code in PDumperSpt and dumper modules)
+        ADD     R0, R0, #7
+        BIC     R0, R0, #7
         ]
         STR     r0, job_linelength
 
@@ -445,11 +447,11 @@ no_allocate1
         ADD     R3, R0, #2
         LDRB    R0, job_strip_type
         CMP     R0, #1
-        MOVEQ   R3, R3, LSL #2
+        MOVEQ   R3, R3, LSL #2  ;for grey strip type - 4 bytes per pixel
         BEQ     skip_past
         CMP     R0, #0
         BEQ     skip_past
-        MOV     R3, R3, LSL #4
+        MOV     R3, R3, LSL #4  ;for colour strip types - 16 bytes per pixel (4 per component)
 skip_past
         LDR     R0, job_halftoneX
         AND     LR, R0, #255
@@ -471,9 +473,14 @@ halftoned
         Pull    "R0,R3"
         ]
 
+; r3 pulled, now = memory required for dump depth * required row width
+
 ; Account for multiple passes. These are the output dumps.
       [ MultiplePasses
-        LDRB    lr, job_no_passes
+        LDRB    lr, job_strip_type
+        CMP     lr, #3              ;multiple pass 16m colour
+        LDRB    lr, job_no_passes   ;no_passes 8-bit buffers
+        ADDEQ   lr,lr,#4            ;strip type 3: + one '32-bit' buffer (4x sized buffer)
         MUL     r3, lr, r3
       ]
 
@@ -504,10 +511,10 @@ halftoned
 ; r7 := absolute maximum size of sprite area
       [ MultiplePasses
         LDR     lr, job_sprheadsize
-        MOV     r7, #max_passes+1
+        MOV     r7, #max_passes+2
         MLA     r7, lr, r7, r0
         ADD     r7, r7, #SpriteAreaCBsize
-;<<     ADD     r7, r0, #SpriteCBsize*(max_passes+1) + SpriteAreaCBsize
+;<<     ADD     r7, r0, #SpriteCBsize*(max_passes+2) + SpriteAreaCBsize
       |
         LDR     lr, job_sprheadsize
         ADD     lr, r0, lr, LSL #1
@@ -532,7 +539,10 @@ halftoned
         ADD     r1, r3, #SpriteAreaCBsize
         LDR     r5, job_sprheadsize
 ;<<     MOV     r5, #SpriteCBsize
+        LDRB    lr, job_strip_type
+        CMP     lr,#3              ;multiple-pass 16m colour
         LDRB    lr, job_no_passes
+        ADDEQ   lr,lr,#1           ;plus 1 for 32bpp buffer
         MLA     r1, lr, r5, r1
       |
         LDR     lr, job_sprblocksize
@@ -549,6 +559,39 @@ halftoned
         Debug PageBoxMem,"min bytes needed, after JPEG, =",R1
 
         MOV     r5, r1                  ;; keep for later
+
+; mjs fudge - respond to system variable 'PDriverDP$MaxMem' - assumed
+; to be maximum grabbable in Kbytes
+  Debug PageBoxMem,"before PDriverDP$MaxMem, min max = ",R5,R7
+  Push "R0-R4"
+  ADRL R0, PDriverDPMaxMemName
+  ADRL R1, PDriverDPMaxMemBuff
+  MOV  R2,#31
+  MOV  R3,#0
+  MOV  R4,#0
+  SWI  XOS_ReadVarVal
+  BVS  no_dpmaxmem
+  CMP  R4,#0      ;must be string
+  BNE  no_dpmaxmem
+  CMP  R2,#0
+  BLE  no_dpmaxmem
+  CMP  R2,#31
+  BGE  no_dpmaxmem
+  MOV  R4,#0
+  STRB R4,[R1,R2] ;terminate it
+  MOV  R0,#10
+  SWI  XOS_ReadUnsigned
+  BVS  no_dpmaxmem
+  MOV  R4,R2      ;value
+  Debug PageBoxMem,"PDriverDP$MaxMem (kbytes) = ",R4
+  MOV   R4,R4,LSL #10 ;it's in kbytes
+  CMP   R4,R5
+  MOVLT R4,R5 ;can't use less than minimum
+  CMP   R7,R4
+  MOVGT R7,R4 ;ok, so set max useful to read value
+  Debug PageBoxMem,"after PDriverDP$MaxMem, min max = ",R5,R7
+no_dpmaxmem
+  Pull  "R0-R4" ;ignore errors - treat as variable not there
 
         Debug PageBoxMem,"try Wimp_ClaimFreeMemory, bytes = ",R1
         SWI     XWimp_ClaimFreeMemory
@@ -633,7 +676,10 @@ is_a_Medusa
         SUB     r6, r6, #SpriteAreaCBsize
         LDR     r0, job_sprheadsize
 ;<<     MOV     r0, #SpriteCBsize
+        LDRB    lr, job_strip_type
+        CMP     lr, #3
         LDRB    lr, job_no_passes
+        ADDEQ   lr, lr,#1
         MUL     r0, lr, r0
         SUB     r6, r6, r0
       |
@@ -703,7 +749,10 @@ no_wimp_slot
         SUB     r2, r2, #SpriteAreaCBsize ;Grab enough space for both control block
         LDR     r6, job_sprheadsize
 ;<<     MOV     r6, #SpriteCBsize
+        LDRB    lr, job_strip_type
+        CMP     lr, #3
         LDRB    lr, job_no_passes       ;Get size of the control block and the number of passes
+        ADDEQ   lr,lr,#1
         MUL     r6, lr, r6              ;Yeilds: Control block size*number of passes
         SUBS    r2, r2, r6              ;Remove from the remaining space
       |
@@ -732,7 +781,10 @@ retry_buffer_claim
         ADD     r3, r3, #SpriteAreaCBsize
         LDR     r0, job_sprheadsize
 ;<<     MOV     r0, #SpriteCBsize
+        LDRB    lr, job_strip_type
+        CMP     lr, #3
         LDRB    lr, job_no_passes
+        ADDEQ   lr,lr,#1
         MUL     r0, lr, r0
         ADD     r3, r3, r0
       |
@@ -803,14 +855,30 @@ buffer_area_set
         MultiplyByDumpDepth r5, r6
 
       [ MultiplePasses
-; Create no_passes sprites
+; Create no_passes(+1) sprites; the extra one (strip type 3 only) is 4x sized, used to
+; create 32bpp format for new 16m colour code in PDumperSpt
+        LDRB    r8, job_strip_type
+        CMP     r8, #3              ;multiple pass 16m colour mode
         LDRB    r8, job_no_passes
+        ADDEQ   r8,r8,#1
         ADD     r2, r2, #12
 01
+        Push    "r8"
+        LDRB    r8, job_strip_type
+        CMP     r8, #3
+        Pull    "r8"
+        CMPEQ   r8,#0
+        MOVEQ   r4,r4,LSL #2 ; 4x size for last one, strip type 3
       ]
         BLVC    create_buffer_sprite
         BVS     %FT99
       [ MultiplePasses
+        Push    "r8"
+        LDRB    r8, job_strip_type
+        CMP     r8, #3
+        Pull    "r8"
+        CMPEQ   r8,#0
+        MOVEQ   r4,r4,LSR #2  ;undo 4x for last one, strip type 3
         ADD     r2, r2, #12
         SUBS    r8, r8, #1
         BGT     %BT01
@@ -923,6 +991,48 @@ set_sprite_background ROUT
         Pull    "R0-R2,PC"
         ]
 
+;
+;uses fast code if possible
+;
+do_copysprite_withrotate
+     Push    "LR"
+     LDRB    R14,job_strip_type
+     CMP     R14,#1             ;8bpp
+     CMPNE   R14,#3             ;24bpp multipass (3x8bpp)
+     BEQ     do_cswr_8bpp
+     CMP     R14,#5
+     BNE     do_cswr_slow
+     LDRB    R14,job_rotation_id
+     AND     R14,R14,#7
+     CMP     R14,#1
+     BEQ     do_cswr_fast_90
+     CMP     R14,#7
+     BEQ     do_cswr_fast_270
+do_cswr_slow
+     BL      copysprite_withrotate
+     Pull    "PC"
+do_cswr_fast_90
+     BL      copysprite_withrotate_32bpp90
+     Pull    "PC"
+do_cswr_fast_270
+     BL      copysprite_withrotate_32bpp270
+     Pull    "PC"
+do_cswr_8bpp
+     LDRB    R14,job_rotation_id
+     AND     R14,R14,#7
+     CMP     R14,#1
+     BEQ     do_cswr_fast8_90
+     CMP     R14,#7
+     BEQ     do_cswr_fast8_270
+     B       do_cswr_slow
+do_cswr_fast8_90
+     BL      copysprite_withrotate_8bpp90
+     Pull    "PC"
+do_cswr_fast8_270
+     BL      copysprite_withrotate_8bpp270
+     Pull    "PC"
+
+
 ; entered with R0 = number of pages
 ; returns with R0 modified to contain the real number of copies.
 start_page
@@ -949,8 +1059,24 @@ pagebox_real_nextbox ROUT
 
 ; see &.Text.RectMaths for an explanation of this code.
 ; first flip the buffer so that it is correctly aligned for output
+
+;skip flips if simple rotation in 8bpp grey or 24bpp multipass or 32bpp mode (flips
+;will be accounted for in fast rotate code)
+     LDRB    R7,job_strip_type
+     CMP     R7,#1   ;8bpp
+     CMPNE   R7,#3   ;24bpp multipass (3x8bpp)
+     CMPNE   R7,#5   ;32bpp
+     BNE     %FT50
+     LDRB    R7,job_rotation_id
+     AND     R7,R7,#7
+     CMP     R7,#1
+     CMPNE   R7,#7
+     BEQ     %FT51
+50
+  Debug PageBoxMem,"pagebox_real_nextbox calling flip_buffer"
         BL      flip_buffer
         BVS     %FT99
+51
         LDR     r7, job_currentbuffer
         ADR     r2, job_linebuffer
         CMP     r7, r2                       ; test for rotated output
@@ -969,7 +1095,7 @@ pagebox_real_nextbox ROUT
         STR     r1, job_clipwidth
         MOV     r0, r7
         MOV     r1, r2
-        BL      copysprite_withrotate
+        BL      do_copysprite_withrotate
         Pull   "r0, r1"
 
 01      MOV     r3, #0
@@ -1760,5 +1886,8 @@ calculate_pixel_memory ROUT
         ]
         Pull   "pc",,^
 
+PDriverDPMaxMemName
+  DCB "PDriverDP$MaxMem",0
+  ALIGN
 
         END

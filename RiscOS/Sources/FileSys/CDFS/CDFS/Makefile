@@ -52,7 +52,7 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 resources:
-        @echo ${COMPONENT}: resource files copied to Messages module
+        @echo ${COMPONENT}: Resources are in CDFSRes
 
 clean:
         ${RM} ${TARGET}

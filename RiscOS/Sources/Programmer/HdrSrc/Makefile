@@ -60,8 +60,7 @@ EXPORTS   = \
  ${HDRDIR}.ListOpts \
  ${HDRDIR}.MEMM.ARM600 \
  ${HDRDIR}.MEMM.MEMC1 \
- ${HDRDIR}.Machine.Jordan \
- ${HDRDIR}.Machine.Morris \
+ ${HDRDIR}.Machine.<Machine> \
  ${HDRDIR}.Macros \
  ${HDRDIR}.Messages \
  ${HDRDIR}.NdrDebug \
@@ -99,9 +98,13 @@ export: ${EXPORTS} Dirs
 
 Dirs:
         ${MKDIR} <build$dir>.Export
+        ${MKDIR} <build$dir>.Export.C
+        ${MKDIR} <build$dir>.Export.C.h
+        ${MKDIR} <build$dir>.Export.C.o
         ${MKDIR} <build$dir>.Export.Hdr
         ${MKDIR} <build$dir>.Export.Hdr.Global
         ${MKDIR} <build$dir>.Export.Hdr.Interface
+        ${MKDIR} <build$dir>.Export.Hdr.Interface2
         ${MKDIR} ${HDRDIR}.CPU
         ${MKDIR} ${HDRDIR}.FDC
         ${MKDIR} ${HDRDIR}.IO
@@ -145,8 +148,7 @@ ${HDRDIR}.Services: Register.Services;         ${CP} Register.Services $@ ${CPFL
 ${HDRDIR}.UpCall: Register.UpCall;             ${CP} Register.UpCall $@ ${CPFLAGS}
 
 # Machine/hardware specific headers:
-${HDRDIR}.Machine.Jordan: hdr.Machine.Jordan;  ${CP} hdr.Machine.Jordan $@ ${CPFLAGS}
-${HDRDIR}.Machine.Morris: hdr.Machine.Morris;  ${CP} hdr.Machine.Morris $@ ${CPFLAGS}
+${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>;  ${CP} hdr.Machine.<Machine> $@ ${CPFLAGS}
 ${HDRDIR}.ImageSize.2048K: hdr.ImageSize.2048K; ${CP} hdr.ImageSize.2048K $@ ${CPFLAGS}
 ${HDRDIR}.ImageSize.4096K: hdr.ImageSize.4096K; ${CP} hdr.ImageSize.4096K $@ ${CPFLAGS}
 ${HDRDIR}.CPU.ARM600: hdr.CPU.ARM600;          ${CP} hdr.CPU.ARM600 $@ ${CPFLAGS}

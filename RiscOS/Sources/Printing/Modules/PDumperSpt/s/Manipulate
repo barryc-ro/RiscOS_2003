@@ -55,7 +55,12 @@ prepflag_Allowed                * 2_11111111
 preptype_Mask                   * 2_11111111
 
 SWIPDumper_PrepareStrip ROUT
-                  
+
+;make sure width is multiple of 8 (assumed by some newer code), ie. catch case
+;when old PDriverDP might cause crash
+        TST     R3,#7
+        BNE     %FT81
+               
         Push    "R0-R1,R8,LR"
        
         Debug   prepstrip,"(prepstrip) anchor word",R0
@@ -73,15 +78,28 @@ SWIPDumper_PrepareStrip ROUT
         MOVVC   R8,R0                   ;->Pointer to anchor word
         MOVVC   R0,R1                   ;->Strip data
         BLVC    preproutine             ;Despatch to a suitable routine for prep work
-
+        MOVVC   R8,#0
+        STRVC   R8,FirstStrip           ;reset flag
         STRVS   R0,[SP]                 ;Balance the stack and then exit
         STRVC   R0,[SP,#4]              ;<<<<AND KEEP NEW STRIP POINTER
         Pull    "R0-R1,R8,PC"
+
 80
         Debug   prepstrip,"(prepstrip) reserved bits set"
 
         ADRL    R0,ErrorBlock_PDumperReserved
         B       LookupError             ;Convert token to a suitable error 
+
+;sod it - this is a very rare error, so forget internationalisation
+81
+       ADR      R0,old_pdriverdp_error
+       SETV
+       MOV      PC,LR
+
+old_pdriverdp_error
+       DCD      0
+       DCB      "PDumperSpt needs newer PDriverDP (illegal strip width)",0
+       ALIGN
 
 ;..............................................................................           
 
@@ -93,45 +111,8 @@ InvalidateGammaTable
         STRB    R1, [R0]
         Pull    "R0-R1,PC"
 
-BuildGammaTable32
-        Push    "R0-R11,LR"
-
-        LDR     R2, =BlockType_Palette
-        SWI     XPDumper_Find
-        BVS     builttable32
-
-        LDR     R3, [R2, #palette_Calibration]
-        TEQ     R3, #0
-        ADDNE   R3, R2, R3
-
-        Push    "R7,R0"
-        MOV     R11, #&FF
-        MOV     R0, #&FF
-01      MOV     R1, R0, LSL #8
-        ORR     R1, R1, R0, LSL #16
-        ORR     R1, R1, R0, LSL #24
-        SWI     XColourTrans_ConvertDeviceColour
-
-        ADRL    R6, RedGammaTable
-        AND     R7, R11, R2, LSR #8
-        STRB    R7, [R6, R0]
-
-        ADRL    R6, GreenGammaTable 
-        AND     R7, R11, R2, LSR #16
-        STRB    R7, [R6, R0]
-
-        ADRL    R6, BlueGammaTable
-        AND     R7, R11, R2, LSR #24
-        STRB    R7, [R6, R0] 
-
-        SUBS    R0, R0, #1
-;version 1.18 - make sure table includes proper 0 correction (eg. for ink density)
-        BPL     %BT01
-
-        Pull    "R7,R0"
-builttable32
-        Pull    "R0-R11,PC"
-
+;32bit case removed - replaced by code in s.Calib32
+;BuildGammaTable32
 
 BuildGammaTable16
         Push    "R0-R11,LR"
@@ -184,114 +165,14 @@ BuildGammaTable16
 builttable16
         Pull    "R0-R11,PC"
  
-gamma_correctstrip32
-        Push    "R0-R11,LR"
 
-        ; R0 = location of pixel strip
-        ; R3 = width of strip
-        ; R4 = height of strip
+;32bit case removed - replaced by code in s.Calib32
+;gamma_correctstrip32
 
-        Push    "R0-R3"
-        
-        ADR     R3, RedGammaTable
-        LDRB    R1, [R3]
-        CMP     R1, #&FF
-        MOVEQ   R0, R8
-        BLEQ    BuildGammaTable32
-        Pull    "R0-R3"
+        GET     s.Calib32
 
-        MUL     R5, R3, R4              ; r5 = number pixels to convert
-        MOV     R7, #&FF                ; r7 = byte mask for extracting rgb components
-        ADR     R8,  RedGammaTable
-        ADR     R9,  GreenGammaTable
-        ADR     R10, BlueGammaTable
-
-        LDRB    R4,[R9,#0] ; = corrected-green[0] , detects ink-density-correcting palette
-        CMP     R4,#0
-        ADRNEL  R4,two_ink_correction   ; fixed table, optimised for 62.5% 1-ink, 62.5% 2-ink
-
-        MOV     R14, #&FFFFFF00         ; initialise initial value of last corrected pixel (=white)
-        MOV     R1,R14,LSR #8           ; initialise corrected value of last corrected pixel (=white)
-        B       %FT01
-
-next_pixel32
-        SUBS    R5, R5, #1
-        Pull    "R0-R11,PC",EQ,^
-
-01      LDR     R6, [R0], #4
-; version 1.18 - stop the optimise which doesn't look-up 0 (black) - may need correction
-        MOV     R6, R6, LSL #8
-        CMP     R6, #&FFFFFF00
-        BEQ     next_pixel32            ; don't gamma correct if pure white
-
-        TEQ     R14, R6                 ; is it the same colour as the last one corrected
-        MOVNE   R14, R6
-        STREQ   R1, [R0, #-4]           ; if it is there use the last computed colour
-        BEQ     next_pixel32
-
-        AND     R11, R7, R6, LSR #8     ; extract red
-        LDRB    R1, [R8, R11]           ; look up gamma corrected red
-
-        AND     R11, R7, R6, LSR #16    ; extract green
-        LDRB    R2, [R9, R11]           ; look up gamma corrected green
-
-        LDRB    R3, [R10, R6, LSR #24]  ; extract + gamma correct blue
-
-        CMP     R4,#0 ; if R4=0, no ink density correction
-        BEQ     %FT09
-;additional correction for use of two inks (fixed at 62.5%)
-;first, do a sort (swaps remembered in R6), to give R1 <= R2 <= R3
-;wish I could make this neater/faster
-        MOV     R6,#0
-        CMP     R1,R2
-        ORRGT   R1,R1,R2,LSL #8
-        ANDGT   R2,R1,#255
-        MOVGT   R1,R1,LSR #8
-        ORRGT   R6,R6,#1        ;flags 1st r1,r2 swap
-        CMP     R2,R3
-        ORRGT   R2,R2,R3,LSL #8
-        ANDGT   R3,R2,#255
-        MOVGT   R2,R2,LSR #8
-        ORRGT   R6,R6,#2        ;flags r2,r3 swap
-        CMP     R1,R2
-        ORRGT   R1,R1,R2,LSL #8
-        ANDGT   R2,R1,#255
-        MOVGT   R1,R1,LSR #8
-        ORRGT   R6,R6,#4        ;flags 2nd r1,r2 swap
-;now adjust values - call initial R1,R2,R3 values u,v,w (w stays the same)
-        SUB     R1,R1,R2        ;R1 := u - v
-        SUB     R2,R3,R2        ;R2 := w - v (always +ve)
-        LDRB    R2,[R4,R2]      ;look-up 2-ink correction
-        SUB     R2,R3,R2        ;R2 := w - corrected(w - v) = corrected_v
-        ADD     R1,R1,R2        ;R1 := u - v + corrected_v = corrected_u
-;now we have to undo the sort, to move back to proper r,g,b
-        TST     R6,#4           ;check for 2nd r1,r2 swap
-        ORRNE   R1,R1,R2,LSL #8
-        ANDNE   R2,R1,#255
-        MOVNE   R1,R1,LSR #8
-        TST     R6,#2           ;check for r2,r3 swap
-        ORRNE   R2,R2,R3,LSL #8
-        ANDNE   R3,R2,#255
-        MOVNE   R2,R2,LSR #8
-        TST     R6,#1           ;check for 1st r1,r2 swap
-        ORRNE   R1,R1,R2,LSL #8
-        ANDNE   R2,R1,#255
-        MOVNE   R1,R1,LSR #8
-;done adjustment!
-09
-        ORR     R1, R1, R2, LSL #8      ; combine components to give colour number
-        ORR     R1, R1, R3, LSL #16
-
-        STR     R1, [R0, #-4]          ; store corrected colour
-
-        B       next_pixel32
-
-; *** MJS bug fix: this code was swapping pairs of pixels horizontally, except
-;     where pixels are white or black! This is fault MED-03675 on database.
-;     New code deals with 2 pixels at once, to allow valid word-wise load/store
-;     (hope number of pixels in row is even...)
-;     Note: we skip pairs of black or white for speed: individual black or
-;     white will be 'corrected' to same value, via table
+;8 bit gr8rey calib
+        GET     s.Calib8
 
 gamma_correctstrip16
         Push    "R0-R11,LR"
@@ -378,6 +259,7 @@ next_pixel16
         STR     R4, [R0, #-4]            ; store corrected 1 and 2
         B       next_pixel16
 
+
 preproutine
         AND     R1,R2,#preptype_Mask    ;Extract suitable bits for execution
 
@@ -387,12 +269,15 @@ preproutine
 
         [ {TRUE}
         Push    "R14"
+        CMP     R1, #0
+        CMPNE   R1, #1
+        BLEQ    cmyk_convert_strip8     ;grey->k conversion (also finds whitespace margins)
         CMP     R1, #6                  ; Is it a 16bpp output
         CMPNE   R1, #7                  ; or is it a 32bpp output
-        BLEQ    gamma_correctstrip16      ; then gamma correct output strip
+        BLEQ    gamma_correctstrip16    ; then gamma correct output strip
         CMP     R1, #8
         CMPNE   R1, #9
-        BLEQ    gamma_correctstrip32
+        BLEQ    cmyk_convert_strip32    ;combined (fast) calibration, rgb->cmyk conversion
         Pull    "R14"
         ]
 
@@ -643,6 +528,56 @@ dithergrey_return
         STRVS   R0,[SP]                 ;Store suitable error pointer if required
         Pull    "R0-R11,PC"
 
+;routine used in multi-pass case to convert 3-plane 24bpp format into 32bpp
+;(deep sprite) format for new code
+;
+;entry: R0->descriptor
+;           R0+0  -> red plane
+;           R0+4  -> green plane
+;           R0+8  -> blue plane
+;           R0+12 -> 32bpp buffer
+;       R3 = width in pixels
+;       R4 = height in pixels
+conv_24bpp_to_32bpp ROUT
+        Push    "R0-R9,LR"
+   Debug prepstrip,"conv_24bpp_to_32bpp R0 w h ",R0,R3,R4
+        LDMIA R0,{R5-R8}
+   Debug prepstrip,"conv_24bpp_to_32bpp buffers ",R5,R6,R7,R8
+        MUL   R3,R4,R3
+01
+        LDR   R0,[R5],#4
+        LDR   R1,[R6],#4
+        LDR   R2,[R7],#4
+        CMN   R0,#1
+        CMNEQ R1,#1
+        CMNEQ R2,#1
+        BEQ   %FT03  ;all 4 pixels white
+        MOV   LR,#4
+02
+        AND   R4,R0,#255
+        AND   R9,R1,#255
+        ORR   R4,R4,R9,LSL #8
+        AND   R9,R2,#255
+        ORR   R4,R4,R9,LSL #16
+        STR   R4,[R8],#4
+        MOV   R0,R0,LSR #8
+        MOV   R1,R1,LSR #8
+        MOV   R2,R2,LSR #8
+        SUBS  LR,LR,#1
+        BNE   %BT02
+        SUBS  R3,R3,#4
+        BNE   %BT01
+        Pull  "R0-R9,PC"
+03
+        MOV   R0,R0,LSR #8   ; &FFFFFFFF => &00FFFFFF (= 32bpp white)
+        MOV   R1,R0
+        MOV   R2,R0
+        MOV   R4,R0
+        STMIA R8!,{R0-R2,R4}
+        SUBS  R3,R3,#4
+        BNE   %BT01
+        Pull  "R0-R9,PC"
+
 ;------------------------------------------------------------------------------
 ;
 ; HalftoneColourSprite implementation
@@ -667,13 +602,19 @@ HalftoneMultiRGB ROUT
         Push    "R0-R11,LR"
         MOV     R1,#0
         STR     R1,KCMYTable
-        MOV     R10,#1
-        LDR     R1,[R0,#4]
-        STR     R1,greenbuffer
-        LDR     R1,[R0,#8]
-        STR     R1,bluebuffer
-        LDR     R0,[R0]
+        BL      conv_24bpp_to_32bpp         ;convert to 32bpp pixels
+        LDR     R0,[R0,#12]                 ;pick up the 32bpp pointer
+        Push    "R1"
+        MOV     R1,#8 ;flags halftone mode
+        BL      cmyk_convert_strip32
+        Pull    "R1"
+;now everything looks like ordinary 24BitRGB case
+        MOV     R10,#4
         STR     R0,redbuffer
+        ADD     R1,R0,#1
+        STR     R1,greenbuffer
+        ADD     R1,R0,#2
+        STR     R1,bluebuffer
         STR     R0,[SP]                     ;See note below...
         B       HalftoneColourSprite2
 Halftone16BitRGB ROUT
@@ -711,6 +652,7 @@ HalftoneColourSprite2
         BVS     halftonecolour_return   ;If unable to find the palette block then exit
 
         LDR     R11,FirstStrip
+  Debug mjs,"HalftoneColourSprite, FirstStrip = ",R11
         TEQ     R11,#0
         BEQ     halftonecolour_start         ;Initialisation has been done
         MOV     R11,#0
@@ -812,14 +754,20 @@ DitherMultiRGB ROUT
         Push    "R0-R11,LR"
         MOV     R1,#0
         STR     R1,KCMYTable
-        MOV     R10,#1
-        LDR     R1,[R0,#4]
-        STR     R1,greenbuffer
-        LDR     R1,[R0,#8]
-        STR     R1,bluebuffer
-        LDR     R0,[R0]
+        BL      conv_24bpp_to_32bpp         ;convert to 32bpp pixels
+        LDR     R0,[R0,#12]                 ;pick up the 32bpp pointer
+        Push    "R1"
+        MOV     R1,#9 ;flags diffused mode
+        BL      cmyk_convert_strip32
+        Pull    "R1"
+;now everything looks like ordinary 24BitRGB
+        MOV     R10,#4
         STR     R0,redbuffer
-        STR     R0,[SP]                ;System picks this up later...
+        ADD     R1,R0,#1
+        STR     R1,greenbuffer
+        ADD     R1,R0,#2
+        STR     R1,bluebuffer
+        STR     R0,[SP]                     ;System picks this up later...
         B       DitherColourSprite2    ;I.e. this returns output buffer address
 Dither16BitRGB ROUT
         Push    "R0-R11,LR"
@@ -872,7 +820,7 @@ DitherColourSprite2
         LDR     R1,=BlockType_ErrorDiffuse
         BL      findblock               ;Attempt to locate the error diffusion block
         BVC     %FT10                   ;Found it Ok
-                  
+  
         Push    "R3,R4"
         MOV     R0,R8                   ;Fix to ensure that the anchor word is correctly quoted!
         ADD     R3,R5,#2                ;Size and two blanks
@@ -924,25 +872,5 @@ dithercolour_return
 
         STRVS   R0,[SP]                 ;Store the error pointer if needed
         Pull    "R0-R11,PC"
-
-
-;2-ink correction table assuming 62.5% 1-ink (0..159 in) and 62.5% 2-ink
-two_ink_correction
-  DCB   0,  1,  2,  3,  3,  4,  5,  6,  7,  7,  8,  9, 10, 11, 12, 12
-  DCB  13, 14, 15, 16, 16, 17, 18, 19, 20, 20, 21, 22, 23, 24, 24, 25
-  DCB  26, 27, 27, 28, 29, 30, 30, 31, 32, 33, 33, 34, 35, 35, 36, 37
-  DCB  38, 38, 39, 40, 40, 41, 42, 43, 43, 44, 45, 45, 46, 47, 47, 48
-  DCB  49, 49, 50, 51, 51, 52, 53, 53, 54, 55, 55, 56, 56, 57, 58, 58
-  DCB  59, 60, 60, 61, 61, 62, 63, 63, 64, 65, 65, 66, 66, 67, 67, 68
-  DCB  69, 69, 70, 70, 71, 72, 72, 73, 73, 74, 74, 75, 75, 76, 76, 77
-  DCB  77, 78, 79, 79, 80, 80, 81, 81, 82, 82, 83, 83, 84, 84, 85, 85
-  DCB  86, 86, 87, 87, 88, 88, 88, 89, 89, 90, 90, 91, 91, 92, 92, 93
-  DCB  93, 94, 94, 94, 95, 95, 96, 96, 96, 97, 97, 98, 98, 99, 99, 99
-  DCB  99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99
-  DCB  99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99
-  DCB  99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99
-  DCB  99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99
-  DCB  99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99
-  DCB  99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99
 
         END

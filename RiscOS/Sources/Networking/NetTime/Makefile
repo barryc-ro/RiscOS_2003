@@ -113,10 +113,6 @@ rom_link:
 
 #
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	h.nettime
-o.module:	C:h.swis
-o.module:	C:h.kernel
 o.mul64: s.mul64
 o.machine:	c.machine
 o.machine:	INetInc:^.^.libs.socklib.h.socklib
@@ -139,3 +135,7 @@ o.machine:	C:h.kernel
 o.machine:	INetInc:h.netdb
 o.machine:	h.nettime
 o.machine:	C:h.swis
+o.module:	c.module
+o.module:	h.nettime
+o.module:	C:h.swis
+o.module:	C:h.kernel

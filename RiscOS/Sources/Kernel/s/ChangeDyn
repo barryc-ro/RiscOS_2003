@@ -90,6 +90,7 @@ DAHandler_PreGrow       *       0
 DAHandler_PostGrow      *       1
 DAHandler_PreShrink     *       2
 DAHandler_PostShrink    *       3
+DAHandler_TestShrink	*	4	; new reason added to find amount area could shrink by
 
 ; Number of entries in page block on stack
 
@@ -1694,7 +1695,8 @@ DAReason_Remove *       1
 DAReason_GetInfo *      2
 DAReason_Enumerate *    3
 DAReason_Renumber *     4
-DAReason_Limit  *       5
+DAReason_ReturnFree *   5
+DAReason_Limit  *       6
 
 DynArea_NewAreas *      &100            ; Allocated area numbers start here
 DynArea_NewAreasBase *  &04000000       ; Allocated area addresses start here
@@ -1709,17 +1711,18 @@ DynAreaFlags_NotUserDraggable * 1 :SHL: 7
  [ DAF_SpecifyBit
 DynAreaFlags_NeedsSpecificPages *  1 :SHL: 8    ; whether area will ever require particular physical pages
  ]
+DynAreaFlags_Shrinkable	*	1 :SHL: 9	; whether area should be shrunk when need more space in free pool
 DynAreaFlags_AccessMask *       DynAreaFlags_APBits :OR: DynAreaFlags_NotBufferable :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_DoublyMapped
 
 ; The following bits are only present in page flags
 
-TempUncacheableShift    *       9
+TempUncacheableShift    *       10
 PageFlags_TempUncacheableBits   * 15 :SHL: TempUncacheableShift    ; temporary count of uncacheability, used by DMA mgr
-PageFlags_Unavailable   *       1 :SHL: 13      ; physical page may not be requested by a PreShrink handler
+PageFlags_Unavailable   *       1 :SHL: 14      ; physical page may not be requested by a PreShrink handler
 
 ; Temporary flags only used by kernel
 
-PageFlags_Required      *       1 :SHL: 14      ; physical page asked for by handler
+PageFlags_Required      *       1 :SHL: 15      ; physical page asked for by handler
 
 DynamicAreaSWI ENTRY
         BL      DynAreaSub
@@ -1736,6 +1739,7 @@ DynAreaSub
         B       DynArea_GetInfo
         B       DynArea_Enumerate
         B       DynArea_Renumber
+	B	DynArea_ReturnFree
 
 ; unknown OS_DynamicArea reason code
 
@@ -2136,6 +2140,45 @@ DynArea_Renumber ALTENTRY
 
 ;**************************************************************************
 ;
+;	DynArea_ReturnFree - Return total free space, including shrinkables
+;
+;	Internal routine called by DynamicAreaSWI
+;
+; in:	r0 = reason code (5)
+;	r1 = area number to exclude, or -1 to include all shrinkable areas
+;
+; out:	r2 = total amount of free memory
+;
+
+DynArea_ReturnFree ALTENTRY
+	CMP	r1, #-1				; if no excluded area,
+	MOVEQ	r10, r1				; then point r10 nowhere
+	BEQ	%FT10
+
+	BL	CheckAreaNumber			; else check area number is valid
+	BCC	UnknownDyn			; [unknown area]
+10
+	MOV	r11, #DAList
+	MOV	r2, #0
+	LDR	r2, [r2, #FreePoolDANode + DANode_Size] ; start with current size of free pool
+20
+	LDR	r11, [r11, #DANode_Link]	; load next area
+	TEQ	r11, #0				; if end of list
+	EXIT	EQ				; then exit, with r2 = correct value
+
+	LDR	lr, [r11, #DANode_Flags]	; load area flags
+	TST	lr, #DynAreaFlags_Shrinkable	; must be shrinkable
+	TEQNE	r11, r10			; and not excluded area
+	BEQ	%BT20				; [don't try this one]
+
+        Push    r3
+	BL	CallTestShrink
+	ADD	r2, r2, r3			; add on amount if any
+	Pull    r3
+	B	%BT20				; then go back for more
+
+;**************************************************************************
+;
 ;       CheckAreaNumber - Try to find area with number r1
 ;
 ;       Internal routine called by DynArea_Create
@@ -2501,8 +2544,6 @@ AllocateBackingLevel2 ENTRY "r0-r8,r11"
         CLRV
         EXIT
 
-        LTORG
-
 ; Come here if not enough space in free pool to allocate level2
 
 90
@@ -2599,6 +2640,8 @@ InitDynamicAreas ENTRY "r0-r8,r11"
  ]
 
         EXIT
+
+	LTORG
 
 InitFreePoolTable
         &       0                               ; link: no more nodes on list
@@ -2723,16 +2766,21 @@ AreaShrink
         LDMIA   r2, {r2, r3}
         SUB     lr, r3, r2                      ; lr = amount dest could grow
 
-        LDR     r2, [r11, #DANode_Size]         ; amount src could shrink
-        CMP     r2, lr
-        MOVCC   lr, r2                          ; lr = min(amount dest could grow, amount src could shrink)
+	CMP	r1, lr
+	MOVHI	r1, lr				; r1 = the most we want to move if we could
+	BLHI	GenNotAllMovedError		; but if not all we still want error
+        SUB     lr, r5, #1                      ; lr = pagesize mask
+        BICS    r1, r1, lr                      ; a pagesize multiple
+        BEQ     IssueServiceMemoryMoved
 
-        CMP     r1, lr
-        BLS     %FT15
+        LDR     r2, [r11, #DANode_Size]         ; amount src could shrink
+	CMP	r2, r1
+	BLCC	TryToShrinkShrinkables
+	BCS	%FT15				; [we can now do it all]
 
 ; we can't move all that is required, so move smaller amount
 
-        MOV     r1, lr                          ; move smaller amount
+        MOV     r1, r2                          ; move smaller amount
         BL      GenNotAllMovedError
         SUB     lr, r5, #1                      ; lr = pagesize mask
         BICS    r1, r1, lr                      ; a pagesize multiple
@@ -2888,6 +2936,23 @@ AreaGrow
         B       %FT65
 
 62
+
+; growing another area from free pool
+; insert code here to check for shrinking shrinkable areas
+
+	CMP	r1, lr				; if dest can't grow by this amount,
+	BHI	%FT64				; we're definitely not doing anything
+
+	CMP	r2, r1				; this should definitely set C=0 as required by TryToShrinkShrinkables
+	Push	"lr"
+	BLCC	TryToShrinkShrinkables
+	Pull	"lr"
+	MOVCS	r3, r1				; if succeeded set r3 to number of bytes to do
+	BCS	%FT65				; and do it
+64
+
+; end of inserted code
+
         MOV     r4, #AppSpaceDANode
         LDR     r6, [r4, #DANode_Size]          ; get current size of apl space
         SUB     r6, r6, #&8000                  ; can't take away 0-&7FFF
@@ -3048,6 +3113,53 @@ IssueServiceMemoryMoved
  ]
         Pull    "r0, r2-r9, r10, lr"
         ExitSWIHandler
+
+; ***********************************************************************************
+;
+;	TryToShrinkShrinkables - Attempt to make more space by shrinking shrinkable areas if appropriate
+;
+; in:	r1 = total amount we wish to have in src area (already limited by max_size of destination area)
+;	r2 = current size of src area
+;	r11 -> src area node (we don't do anything unless this is the free pool)
+;	r12 -> dst area node
+;	C = 0
+;
+; out:	r2 = new size of src area
+;	C=0 => failed to move as much as we wanted
+;	C=1 => succeeded in moving as much as we wanted
+
+TryToShrinkShrinkables Entry "r0,r1,r10"
+	LDR	lr, [r11, #DANode_Number]
+	TEQ	lr, #ChangeDyn_FreePool
+	EXITS	NE				; if src <> free pool, exit with flags intact
+
+        MOV     r10, #DAList
+        ASSERT  DANode_Link = 0                 ; because DAList has only link
+10
+        LDR     r10, [r10, #DANode_Link]        ; and load next
+        CMP     r10, #1                         ; any more nodes?
+        EXIT    CC                              ; no, then no match
+	TEQ	r10, r12			; check area <> dest
+	LDRNE	lr, [r10, #DANode_Flags]	; and area is shrinkable
+	TSTNE	lr, #DynAreaFlags_Shrinkable
+	BEQ	%BT10				; if not, try next area
+
+	SUBS	r1, r1, r2			; r1 = amount we still need
+	LDR	lr, [r10, #DANode_Size]		; available size of this area
+	CMP	lr, r1
+	MOVCC	r1, lr				; min(amount we need, size of this area)
+	RSB	r1, r1, #0			; make negative - it's a shrink
+	MOV	r0, #0
+	STR	r0, [r0, #CDASemaphore]		; momentarily pretend we're not threaded
+	LDR	r0, [r10, #DANode_Number]
+	SWI	XOS_ChangeDynamicArea
+	MOV	r0, #1
+	STR	r0, [r0, #CDASemaphore-1]	; we're threaded again
+	LDR	r1, [sp, #4]			; reload original r1
+	LDR	r2, [r11, #DANode_Size]		; get new size of src area
+	CMP	r2, r1
+	BCC	%BT10				; if still too small, loop
+	EXIT					; exit CS indicating success
 
 ; ***********************************************************************************
 ;
@@ -3758,6 +3870,46 @@ CallPostGrow ENTRY "r0,r3,r4, r12"
         ADD     r12, r12, #DANode_Workspace
         MOV     lr, pc
         LDMIA   r12, {r12, pc}                          ; load workspace pointer and jump to handler
+        EXIT
+
+; ***********************************************************************************
+;
+;       CallTestShrink - Call test-shrink routine
+;
+; in:   r11 -> area node
+;
+; out:  If handler exits VC, then r3 = no. of bytes area can shrink by
+;       else r0 -> error block or 0 for generic error, and r3=0
+;
+
+CallTestShrink ENTRY "r0,r4,r5, r12"
+        LDR     r0, [r11, #DANode_Handler]              ; check if no handler
+        CMP     r0, #0                                  ; if none (V=0)
+        EXIT    EQ                                      ; then exit
+
+        MOV     r0, #DAHandler_TestShrink               ; r0 = reason code
+        LDR     r4, [r11, #DANode_Size]                 ; r4 = current size
+	MOV	r5, #0
+	LDR	r5, [r5, #Page_Size]			; set r5 = page size
+        ASSERT  DANode_Handler = DANode_Workspace +4
+        ADD     r12, r11, #DANode_Workspace
+        MOV     lr, pc
+        LDMIA   r12, {r12, pc}                          ; load workspace pointer and jump to handler
+
+; shrink amount returned by handler may not be page multiple (according to spec),
+; so we'd better make it so.
+
+        SUBVC   lr, r5, #1
+        BICVC   r3, r3, lr                              ; make page multiple
+        EXIT    VC
+        TEQ     r0, #0                                  ; if generic error returned
+        ADREQL  r0, ErrorBlock_ChDynamNotAllMoved       ; then substitute real error message
+ [ International
+        BLEQ    TranslateError
+ ]
+        STR     r0, [sp]
+	MOV	r3, #0					; indicate no shrink possible
+        SETV
         EXIT
 
 ; ***********************************************************************************

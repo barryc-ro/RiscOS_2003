@@ -234,12 +234,6 @@ data.CFSIjpeg: sources.jrevdct
 data.CFSIjpeg: sources.jcconv
 data.CFSIjpeg: sources.diffuse
 data.CFSIjpeg: s.rojpeg
-o.genpalette:	c.genpalette
-o.makejhdr:	c.makejhdr
-o.makejhdr:	h.jinclude
-o.makejhdr:	h.jconfig
-o.makejhdr:	h.jpegdata
-o.genyuvtabs:	c.genyuvtabs
 rm.SprExtendM: Sources.SprExtend
 rm.SprExtendM: Hdr:ListOpts
 rm.SprExtendM: Hdr:Macros
@@ -319,6 +313,7 @@ rm.SprExtend: s.yuvtabs
 rm.SprExtend: sources.jcconv
 rm.SprExtend: sources.diffuse
 rm.SprExtend: sources.swiv2
+o.genpalette:	c.genpalette
 o.putscaled:	c.putscaled
 o.putscaled:	c.rojpeg
 o.putscaled:	h.rojpeg
@@ -333,3 +328,8 @@ o.putscaled:	c.jdhuff
 o.putscaled:	h.jinclude
 o.putscaled:	c.jcconv
 o.putscaled:	c.SpriteOp
+o.makejhdr:	c.makejhdr
+o.makejhdr:	h.jinclude
+o.makejhdr:	h.jconfig
+o.makejhdr:	h.jpegdata
+o.genyuvtabs:	c.genyuvtabs

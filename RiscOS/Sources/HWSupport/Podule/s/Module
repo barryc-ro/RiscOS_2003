@@ -47,13 +47,16 @@ FixLoaderBug    SETL    True
 NumberOfPodules SETA    8
 
                 GBLL    NetworkPodule
-NetworkPodule   SETL    True
+NetworkPodule   SETL    NetPodSupport			; System build option
 
                 GBLL    EASISpace
 EASISpace       SETL    True
 
                 GBLL    ExtensionROMs
-ExtensionROMs   SETL    False
+ExtensionROMs   SETL    ExtROMSupport			; System build option
+
+	; We only know how to fake up STB2 MPEG1 (and MPEG0) podules
+	ASSERT (FakePodule0 = 0) :LOR: (FakePodule0 = ProdType_STB2_MPEG1)
 
         [       :LNOT: ReleaseVersion
         !       0, "This version supports " :CC: ((:STR:NumberOfPodules) :RIGHT: 1) :CC: " podules"
@@ -149,22 +152,28 @@ NetworkFIQRequest       *       &03200034
 NetworkFIQMask          *       &03200038
 NetworkFIQValue         *       &02
 
-        [       NetworkPodule
+ [ NetworkPodule
 MaximumPodule           *       NumberOfPodules + 1
 NumberOfNetworkPodule   *       MaximumPodule - 1
 IOTCR                   *       &032000C4
-        |
+ |
 MaximumPodule           *       NumberOfPodules
-        ]
+ ]
 
-        [       ExtensionROMs
-  [  False                                              ; Victoria
-StartOfROM      *       &03500000                       ; VIDC moved out of way
+ [ ExtensionROMs
+   [ {TRUE}
+StartOfROM      *       &03800000
 EndOfROM        *       &04000000
-  |
+   |
 StartOfROM      *       &03400000
 EndOfROM        *       &04000000
-  ]
+   ]
+ ]
+
+ [ FakePodule0 = ProdType_STB2_MPEG1
+MachineConfig   *       (IOMD_Base + IOMD_CLINES)
+MPEGfittedbit   *       IOMD_C_MPEGfitted
+MPEGIDByte      *       0
         ]
 
 maxint          *       &7FFFFFFF
@@ -334,6 +343,34 @@ $PoduleString
         ]
 PoduleString    SETS    "ROMNodeChainHead * Podule" :CC: ((:STR: PoduleInstance) :RIGHT: 1) :CC: " + PoduleNode_Link"
 $PoduleString
+
+        [       FakePodule0 = ProdType_STB2_MPEG1
+MPEG0descoff	*       (MPEG0desc - MPEG0contents)/4		; offset of description from start
+MPEG0desclen	*       (MPEG0end  - MPEG0desc)/4		; length of description
+MPEG0contents	DCD     &00, &02, &00, (ProdType_STB2_MPEG0 :AND: &FF), (ProdType_STB2_MPEG0 :SHR: 8)
+		DCD	(Manf_OnlineMedia :AND: &FF), (Manf_OnlineMedia :SHR: 8), &00
+                DCD     0, 0, 0, 0, 0, 0, 0, 0
+                DCD     &f5, MPEG0desclen, &00, &00, MPEG0descoff, &00, &00, &00
+                DCD     0, 0, 0, 0, 0, 0, 0, 0
+MPEG0desc	DCD     'I', 'n', 't', 'e', 'r', 'n', 'a', 'l'
+                DCD     ' ', 'v', 'i', 'd', 'e', 'o', ' ', 'h'
+                DCD     'a', 'r', 'd', 'w', 'a', 'r', 'e',  0
+MPEG0end
+                ALIGN
+
+MPEG1descoff	*       (MPEG1desc - MPEG1contents)/4		; offset of description from start
+MPEG1desclen	*       (MPEG1end  - MPEG1desc)/4		; length of description
+MPEG1contents	DCD     &00, &02, &00, (ProdType_STB2_MPEG1 :AND: &FF), (ProdType_STB2_MPEG1 :SHR: 8)
+		DCD	(Manf_OnlineMedia :AND: &FF), (Manf_OnlineMedia :SHR: 8), &00
+                DCD     0, 0, 0, 0, 0, 0, 0, 0
+                DCD     &f5, MPEG1desclen, &00, &00, MPEG1descoff, &00, &00, &00
+                DCD     0, 0, 0, 0, 0, 0, 0, 0
+MPEG1desc	DCD     'I', 'n', 't', 'e', 'r', 'n', 'a', 'l'
+                DCD     ' ', 'M', 'P', 'E', 'G', '1', ' ', 'h'
+                DCD     'a', 'r', 'd', 'w', 'a', 'r', 'e',  0
+MPEG1end
+                ALIGN
+        ]
 
 ; *****************************************************************************************************************
 ;
@@ -578,9 +615,37 @@ InitialisationLoop
         INC     r3, 4                                   ; at the start of workspace
         CMP     r3, # :INDEX: EndOfInitialisationArea
         BLT     InitialisationLoop
-        [       ExtensionROMs
+ [ ExtensionROMs
         BL      FindExtensionROMs
-        ]
+ ]
+;	If this is a Set-Top Box, then we know we've got MPEG hardware fitted as Podule0 but without the (EP)ROM
+;	We'll make if look like its a real podule
+ [ FakePodule0 = ProdType_STB2_MPEG1
+        ADRL    r0, NormalPoduleNodeOffsets		; work out address of podule0 node
+        LDR     r0, [r0]
+        ADD     r0, r0, r2				; make it an absolute address
+
+        MOV     r1, #MPEGIDByte
+        STRB    r1, [ r0, #PoduleNode_IDByte ]		; set ID byte to make ConvertR3ToPoduleNode happy
+
+        MOV     r1, #BitZero
+        STRB    r1, [ r0, #PoduleNode_Flags ]		; This is a (fake) Podule
+
+	MOV	r1, #PoduleCMOS
+	STR	r1, [ r0,  #PoduleNode_CMOS ]		; We don't have no CMOS
+
+	MOV	r1, #-1
+	STR	r1, [ r0,  #PoduleNode_DMA ]		; We don't do DMA
+
+;	See if MPEG is fitted and point the podule ROM address to the appropriate fake header
+;	The description string will be extracted from this block in the normal way when chunks get enumerated
+        LDR     r3, =MachineConfig
+        LDRB    r1, [r3]
+        TST     r1, #MPEGfittedbit
+        ADREQ	r1, MPEG0contents
+        ADRNE	r1, MPEG1contents
+        STR     r1, [ r0, #PoduleNode_ROMAddress ]	; Location to read header from
+ ]
         BL      LoadAllLoaders                          ; ensure all loaders are loaded
 
 ReInitialisation ; Address of workspace in R2, Address of Private word in R12
@@ -705,27 +770,27 @@ TryNextPodule
         ADD     r8, r8, #1                              ; Go to the next podule
         CMP     r8, #MaximumPodule
         BCC     LoadLoadersLoop
-        [       ExtensionROMs
-        LDR     r10, number_of_extension_roms
-  [  DebugModule
-        BREG    r10, "There are &", cc
+  [  ExtensionROMs
+        LDR     r9, number_of_extension_roms		; jharris: was r10, but r10 gets trashed by EnumerateChunks
+   [  DebugModule
+        BREG    r9, "There are &", cc
         DLINE   " extension ROMs"
-  ]
-        TEQ     r10, #0
-        BEQ     %99
+   ]
+        TEQ     r9, #0
+        BEQ     ExitLoadLoaders				; jharris: was BEQ to (non-existent) 99
         MOV     r8, #-2
 LoadExtensionROMLoop
-  [  DebugModule
+   [  DebugModule
         BREG    r8, "Doing extension ROM &"
-  ]
+   ]
         MOV     r3, r8
         BL      ConvertR3ToPoduleNode
-  [  DebugModule
+   [  DebugModule
         BVC     %74
         ADD     r14, r0, #4
         DSTRING r14, "Error from ConvertR3ToPoduleNode: "
 74
-  ]
+   ]
         BVS     NextExtensionROM
         MOV     r0, #0                                  ; Start with chunk zero
 ExtensionChunkLoop
@@ -736,19 +801,19 @@ ExtensionChunkLoop
         BNE     ExtensionChunkLoop                      ; No, so get another one
 NextExtensionROM
         DEC     r8
-        DECS    r10
+        DECS    r9					; jharris
         BNE     LoadExtensionROMLoop
-        ]
+  ]
 ExitLoadLoaders
         ADD     sp, sp, #16                             ; Remove frame
         Pull    "r8-r12, lr"
         LDR     r2, [ r12 ]                             ; reload workspace ptr from priv word
         MOV     pc, lr
 
-        [       NetworkPodule
+  [  NetworkPodule
 AddressOfNetworkBaseROM
         DCD     NetworkBaseROM
-        ]
+  ]
 
 EasyLookup ROUT
         ;       In:  R1 Pointer to token

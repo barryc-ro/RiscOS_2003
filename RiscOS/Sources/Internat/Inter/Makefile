@@ -81,6 +81,7 @@ rm.Inter: Hdr:Proc
 rm.Inter: Hdr:FSNumbers
 rm.Inter: Hdr:NewErrors
 rm.Inter: Hdr:MsgTrans
+rm.Inter: Hdr:ResourceFS
 rm.Inter: s.IntHelpTok
 rm.Inter: Hdr:Tokens
 rm.Inter: s.InterFonts

@@ -150,6 +150,28 @@ s.ModuleWrap: ${WRAPPER}
         ${CP} ${WRAPPER} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+o.utils:	c.utils
+o.utils:	h.utils
+o.main:	c.main
+o.main:	C:h.swis
+o.main:	C:h.kernel
+o.main:	OS:h.os
+o.main:	OS:h.types
+o.main:	OS:h.wimp
+o.main:	OS:h.osspriteop
+o.main:	OS:h.font
+o.main:	C:h.soundfile
+o.main:	OS:h.osgbpb
+o.main:	h.play_scode
+o.main:	h.utils
+o.play_scode:	c.play_scode
+o.play_scode:	OS:h.osgbpb
+o.play_scode:	OS:h.types
+o.play_scode:	OS:h.os
+o.play_scode:	C:h.replay
+o.play_scode:	OS:h.osspriteop
+o.play_scode:	C:h.soundfile
+o.play_scode:	h.play_scode
 oz.ModuleWrap: s.ModuleWrap
 oz.ModuleWrap: s.AppName
 oz.ModuleWrap: Hdr:ListOpts
@@ -181,6 +203,7 @@ oz.main:	OS:h.font
 oz.main:	C:h.soundfile
 oz.main:	OS:h.osgbpb
 oz.main:	h.play_scode
+oz.main:	h.utils
 oz.play_scode:	c.play_scode
 oz.play_scode:	OS:h.osgbpb
 oz.play_scode:	OS:h.types
@@ -189,25 +212,5 @@ oz.play_scode:	C:h.replay
 oz.play_scode:	OS:h.osspriteop
 oz.play_scode:	C:h.soundfile
 oz.play_scode:	h.play_scode
-o.utils:	c.utils
-o.utils:	h.utils
-o.main:	c.main
-o.main:	C:h.swis
-o.main:	C:h.kernel
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.wimp
-o.main:	OS:h.osspriteop
-o.main:	OS:h.font
-o.main:	C:h.soundfile
-o.main:	OS:h.osgbpb
-o.main:	h.play_scode
-o.main:	h.utils
-o.play_scode:	c.play_scode
-o.play_scode:	OS:h.osgbpb
-o.play_scode:	OS:h.types
-o.play_scode:	OS:h.os
-o.play_scode:	C:h.replay
-o.play_scode:	OS:h.osspriteop
-o.play_scode:	C:h.soundfile
-o.play_scode:	h.play_scode
+oz.utils:	c.utils
+oz.utils:	h.utils

@@ -18,7 +18,7 @@
 ; 13-Dec-95      DDV Reduced workspace usage, tidied some variables
 ; 13-Dec-95	 DDV Now uses dynamic areas properly for storing inverse and distance tables.
 ; 13-Dec-95 0.03 DDV Dynamic area sized to contain distance table and reduced after use.
-;
+; 01-Jul-96 0.04 SJM With standard palette it checks for one in resourcefs before creating.
 
         GET     hdr:ListOpts
         GET     hdr:Macros
@@ -59,6 +59,9 @@ false		SETL 	{FALSE}
 debug		SETL	false
 hostvdu		SETL	false
 
+		GBLL	UseResourceTable
+UseResourceTable	SETL	true
+
 ; . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 
 ; Constants used for computing table
@@ -79,11 +82,19 @@ iFlags		# 4				; = flags ( f_xxx )
 f_PaletteV	 * &00000001			; = 1 => palette vector has been claimed
 f_TableValid	 * &00000002			; = 1 => inverse table is valid for current destination
 f_SwitchInvalid	 * &00000004			; = 1 => Switched to a sprite, therefore if calculating the table is invalid
-
+ [ UseResourceTable
+f_StandardPal	 * &00000008			; = 1 => The current palette is the standard one
+ |
+f_StandardPal	 * &00000000
+ ]
 iDynamicArea	# 4				; = ID of our dynamic area
 
 pInverseTable	# 4				; -> current inverse table
 pDistanceTable	# 4				; -> distance table
+
+ [ UseResourceTable
+pResourceTable	# 4
+ ]
 
 iPalette555	# 4 * 256			; = palette quanitised down to 5,5,5 RGB
 
@@ -135,7 +146,6 @@ SWINames
 	= 0
 	ALIGN
 
-
 ;; ------------------------------------------------------------------------------
 ;; Initialise, claim our workspace and set to a sensible state!
 ;; ------------------------------------------------------------------------------
@@ -168,6 +178,12 @@ Init	ENTRY 	"R1-R3"
 	STRGE	R0, [ R1 ], # 4
 	BGE	%BT20
 
+	Debug_Open	pipe:itable
+
+ [ UseResourceTable :LAND: {FALSE}
+ 	BL	check_resource			; deliberately don't check error return
+ ]
+
 	BL	claim_vectors			; try to claim the vectors
 	EXIT					;   and return any possible errors
 
@@ -191,6 +207,8 @@ Die	ENTRY	"R1-R2"
 
 	BL	release_area			; if we have a dynamic area then discard it
 
+	Debug_Close
+
 	EXIT
 
 
@@ -203,7 +221,14 @@ Service	ROUT
 	TEQ	R1, # Service_Reset		; filter out only the ones we want
 	TEQNE	R1, # Service_ModeChange
 	TEQNE	R1, # Service_SwitchingOutputToSprite
+ [ UseResourceTable
+	TEQNE	R1, # Service_ResourceFSStarted
+	TEQNE	R1, # Service_ResourceFSDying
+	TEQNE   R1, # Service_PostInit
+ ]
 	MOVNES	PC, LR
+
+;	Debug	,"Service",R1
 
 	ENTRY	"R0-R1"
 
@@ -215,20 +240,40 @@ Service	ROUT
 
 ; It was a reset - therefore reset flags / mark as no dynamic area etc
 
-	BIC	R0, R0, # f_TableValid :OR: f_PaletteV
+	BIC	R0, R0, # f_TableValid :OR: f_PaletteV :OR: f_StandardPal
 	STR	R0, iFlags
 
 	MOV	R0, # 0				; remove the dynamic area
 	STR	R0, iDynamicArea
 	STR	R0, pInverseTable
 	STR	R0, pDistanceTable
-
+ [ UseResourceTable :LAND: {FALSE}
+	STR	R0, pResourceTable
+ ]
 	BL	claim_vectors			; must claim the vectors again
 
 	EXITS
-10
+
+10						; if resourcefs changed get the new ptr
+ [ UseResourceTable
+	TEQ	R1, # Service_ResourceFSStarted
+	TEQNE	R1, # Service_ResourceFSDying
+	TEQNE   R1, # Service_PostInit
+	BNE	%ft20
+
+	BL	check_resource
+
+	LDR	R1, pResourceTable		; if table has vanished then clear the StandardPal bit
+	CMP	R1, #0				; and set the table to invalid
+	BICEQ	R0, R0, # f_TableValid
+	STREQ	R0, iFlags
+
+	EXITS
+
+20
+ ]
 	TEQ	R1, # Service_ModeChange
-	BICEQ	R0, R0, # f_TableValid		; mode change, therefore table bad
+	BICEQ	R0, R0, # f_TableValid 		; mode change, therefore table bad
 	TEQ	R1, # Service_SwitchingOutputToSprite
 	EOREQ	R0, R0, # f_SwitchInvalid	; output gone to sprite - maybe invalid
 
@@ -309,6 +354,53 @@ palVhandler ROUT
 
 	EXITS
 
+;;-----------------------------------------------------------------------------
+;;
+;; Check on the resource file presence
+
+ [ UseResourceTable
+ResourceFile	= "Resources:$.Resources.ITable.Tables.8desktop", 0
+	ALIGN
+
+check_resource
+	ENTRY	"r0-r11"
+
+	Debug1	,"check_resource"
+
+	MOV	R0, #0				; zero the pointer first
+	STR	R0, pResourceTable
+
+	MOV	R0, # &47			; open the file
+	ADR	R1, ResourceFile
+	SWI	XOS_Find
+	EXIT	VS
+
+	MOVS	R11, R0				; save the file handle in R11
+	EXITS	EQ				; exit if zero (can't open file)
+
+	MOV	R1, R0				; get the fs number
+	MOV	R0, # 254
+	SWI	XOS_Args
+	BVS	%ft99
+
+	AND	R0, R2, # &FF			; is it ResourceFS?
+	CMP	R0, # &2E
+	BNE	%ft99
+
+	MOV	R0, # 21			; get the internal handle
+	SWI	XOS_FSControl
+	BVS	%ft99
+
+	STR	R1, pResourceTable		; save the direct pointer to the file
+
+	Debug	,"pResourceTable",R1
+
+99	MOV	R0, #0				; close the file
+	MOV	R1, R11
+	SWI	XOS_Find
+
+	EXITS
+ ]
 
 ;;-----------------------------------------------------------------------------
 ;; InverseTable_Calculate implementation
@@ -367,8 +459,21 @@ ITable_Calculate ENTRY "R2"
 	TST	R2, # f_TableValid
 	BLEQ	build_itable			; if not valid then build the inverse table
 
+ [ UseResourceTable
+ 	EXIT	VS
+
+	LDR	R2, iFlags			; reload flags as they may have changed
+	ADR	R0, iPalette555			; -> RGB 5,5,5 table ( index => 5,5,5 )
+	TST	R2, # f_StandardPal
+	LDRNE	R1, pResourceTable		; if bit is not set
+	CMPNE	R1, #0				; or resource table is not present
+	LDREQ	R1, pInverseTable		; use the built table
+
+	Debug	,"ITable_Calculate",R0,R1,R2
+ |
 	ADRVC	R0, iPalette555			; -> RGB 5,5,5 table ( index => 5,5,5 )
 	LDRVC	R1, pInverseTable		; -> inverse table (5,5,5 => colour number)
+ ]
 90
 	EXIT
 
@@ -396,9 +501,8 @@ claim_area ENTRY "R1-R8"
 	LDR	R5, = da_MaximumSize		; maximum size (inverse table + distance table)
 	MOV	R6, # 0
 	MOV	R7, # 0
-	ADR	R8, Title			; -> name for dynamic area (Task Manager)
+	ADRL	R8, Title			; -> name for dynamic area (Task Manager)
 	SWI	XOS_DynamicArea
-
 	STRVC	R1, iDynamicArea
 	STRVC	R3, pInverseTable
 
@@ -487,7 +591,6 @@ percent_table
  	= 76, 79, 83, 86, 89, 92, 95, 99
 	ALIGN
 
-
 ; Do it....
 
 build_itable ENTRY "R1-R11"
@@ -509,7 +612,12 @@ build_itable ENTRY "R1-R11"
 	LDR	R0, = scratch_palette
 	ADRL	R1, iPalette555
 	LDR	R2, = ?scratch_palette
-	MOV	R5, # 0				; table has not been modified yet
+	MOV	R5, # 1				; table has not been modified yet
+
+ [ UseResourceTable
+	ADRL	R6, StandardPalette		; standard 8 bit palette
+	MOV	R7, # 1				; 1 = palette matches standard
+ ]
 10
 	LDR	R3, [ R0 ], #4			; pick up 24 bit palette entry
 	AND 	R4, R3, #&f8000000		;   and convert to 5,5,5 RGB
@@ -521,14 +629,45 @@ build_itable ENTRY "R1-R11"
 
 	LDR	LR, [ R1 ]
 	TEQ	LR, R3				; has the colour changed?
-	MOVNE	R5, # 1				;   yes, so must re-compute the inverse table
+	MOVNE	R5, # 0				;   yes, so must re-compute the inverse table
 	STR	R3, [ R1 ], #4
 
+ [ UseResourceTable
+	LDR	LR, [ R6 ], #4
+	TEQ	LR, R3				; is the colour different from the standard
+	MOVNE	R7, # 0				;   yes, then we can't use the standard table
+ ]
 	SUBS	R2, R2, # 4
 	BGT	%BT10				; loop until *ENTIRE* palette converted
 
+	Debug	,"build_itable changed",R5
+
 	CMP	R5, #0				; has the palette actually changed?
-	BEQ	%FT85				;   if not then don't bother re-calculating the colour table
+ [ UseResourceTable
+	LDRNE	LR, pInverseTable		;   if not then is there a table presetn
+	CMPNE	LR, #0
+ ]
+	BNE	%FT85				;   if so then don't bother re-calculating the colour table
+
+ [ UseResourceTable
+	Debug	,"build_itable standard",R7
+
+	LDR	LR, iFlags
+
+	CMP	R7, # 0				; is it actually the standard palette?
+	BICEQ	LR, LR, #f_StandardPal		;   no - clear flag, store and carry on
+	STREQ	LR, iFlags
+	BEQ	%FT20
+
+	ORR	LR, LR, #f_StandardPal		;   yes - set flag
+	LDR	R7, pResourceTable		;   check if we have the resource table
+	CMP	R7, # 0
+	ORRNE	LR, LR, # f_TableValid		;     yes - then table is now valid
+	STR	LR, iFlags
+
+	BNE	%FT90				;     and exit, else carry on
+20
+ ]
 
 ; Ensure that we have the dynamic area
 
@@ -678,6 +817,74 @@ end_green_loop
 
 	EXIT
 
+ [ UseResourceTable
+
+StandardPalette
+    DCD     &0,&842,&1084,&18C6
+    DCD     &8,&84A,&108C,&18CE
+    DCD     &2000,&2842,&3084,&38C6
+    DCD     &2008,&284A,&308C,&38CE
+    DCD     &11,&853,&1095,&18D7
+    DCD     &19,&85B,&109D,&18DF
+    DCD     &2011,&2853,&3095,&38D7
+    DCD     &2019,&285B,&309D,&38DF
+    DCD     &100,&942,&1184,&19C6
+    DCD     &108,&94A,&118C,&19CE
+    DCD     &2100,&2942,&3184,&39C6
+    DCD     &2108,&294A,&318C,&39CE
+    DCD     &111,&953,&1195,&19D7
+    DCD     &119,&95B,&119D,&19DF
+    DCD     &2111,&2953,&3195,&39D7
+    DCD     &2119,&295B,&319D,&39DF
+    DCD     &220,&A62,&12A4,&1AE6
+    DCD     &228,&A6A,&12AC,&1AEE
+    DCD     &2220,&2A62,&32A4,&3AE6
+    DCD     &2228,&2A6A,&32AC,&3AEE
+    DCD     &231,&A73,&12B5,&1AF7
+    DCD     &239,&A7B,&12BD,&1AFF
+    DCD     &2231,&2A73,&32B5,&3AF7
+    DCD     &2239,&2A7B,&32BD,&3AFF
+    DCD     &320,&B62,&13A4,&1BE6
+    DCD     &328,&B6A,&13AC,&1BEE
+    DCD     &2320,&2B62,&33A4,&3BE6
+    DCD     &2328,&2B6A,&33AC,&3BEE
+    DCD     &331,&B73,&13B5,&1BF7
+    DCD     &339,&B7B,&13BD,&1BFF
+    DCD     &2331,&2B73,&33B5,&3BF7
+    DCD     &2339,&2B7B,&33BD,&3BFF
+    DCD     &4400,&4C42,&5484,&5CC6
+    DCD     &4408,&4C4A,&548C,&5CCE
+    DCD     &6400,&6C42,&7484,&7CC6
+    DCD     &6408,&6C4A,&748C,&7CCE
+    DCD     &4411,&4C53,&5495,&5CD7
+    DCD     &4419,&4C5B,&549D,&5CDF
+    DCD     &6411,&6C53,&7495,&7CD7
+    DCD     &6419,&6C5B,&749D,&7CDF
+    DCD     &4500,&4D42,&5584,&5DC6
+    DCD     &4508,&4D4A,&558C,&5DCE
+    DCD     &6500,&6D42,&7584,&7DC6
+    DCD     &6508,&6D4A,&758C,&7DCE
+    DCD     &4511,&4D53,&5595,&5DD7
+    DCD     &4519,&4D5B,&559D,&5DDF
+    DCD     &6511,&6D53,&7595,&7DD7
+    DCD     &6519,&6D5B,&759D,&7DDF
+    DCD     &4620,&4E62,&56A4,&5EE6
+    DCD     &4628,&4E6A,&56AC,&5EEE
+    DCD     &6620,&6E62,&76A4,&7EE6
+    DCD     &6628,&6E6A,&76AC,&7EEE
+    DCD     &4631,&4E73,&56B5,&5EF7
+    DCD     &4639,&4E7B,&56BD,&5EFF
+    DCD     &6631,&6E73,&76B5,&7EF7
+    DCD     &6639,&6E7B,&76BD,&7EFF
+    DCD     &4720,&4F62,&57A4,&5FE6
+    DCD     &4728,&4F6A,&57AC,&5FEE
+    DCD     &6720,&6F62,&77A4,&7FE6
+    DCD     &6728,&6F6A,&77AC,&7FEE
+    DCD     &4731,&4F73,&57B5,&5FF7
+    DCD     &4739,&4F7B,&57BD,&5FFF
+    DCD     &6731,&6F73,&77B5,&7FF7
+    DCD     &6739,&6F7B,&77BD,&7FFF
+ ]
 
       [ debug
 	InsertNDRDebugRoutines

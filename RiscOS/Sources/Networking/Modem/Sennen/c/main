@@ -5,20 +5,20 @@
 #include <time.h>
 
 #include "defs.h"
+/* #include "heap.h" */
 #include "inlines.h"
+/* #include "objects.h" */
 #include "screen.h"
 #include "SmartCard.h"
+#include "swicall.h"
 #include "wimp.h"
 
-#define __VERSION__ "0.19 Compiled " __TIME__ " " __DATE__
+#define __VERSION__ "0.14 Compiled " __TIME__ " " __DATE__
 
 #define _BROWSER_ "NCFresco"
 
-extern void kill_task(void);
-
 static int this_task;
 static int web_handle = 0;
-static int paranoia   = 0;
 
 char *version = __VERSION__;
 
@@ -29,7 +29,6 @@ static int wimp_messages[] =
   0x400C1, /* Message_ModeChange */
   0x400C2, /* Message_TaskInitialise */
   0x400C3, /* Message_TaskCloseDown */
-  0x4AF80, /* Message_URL */
   NULL
 };
 
@@ -43,9 +42,6 @@ ErrorPtr err;
 BOOL tv = TRUE;
 
 BOOL card_in = FALSE;
-
-BOOL debug_status = FALSE;
-BOOL debug_allow  = FALSE;
 
 int matrix[6] = {1 << 16, 0, 0, 1 << 16, 0, 0};
 
@@ -62,15 +58,9 @@ static void run_something(char *what, BOOL message)
   memset(&msg, '\0', sizeof(message_block));
   msg.header.size   = 256;
 
-  if (debug_status)
-  {
-    vdu4();
-    printf("> %s\n", what);
-  }
-
   if (message)
   {
-    msg.header.action = 0x4AF80;  /* Message_URL */
+    msg.header.action = 0x4AF80;  /* Message_DataOpen */
     strcpy(msg.data.bytes, what);
   }
   else
@@ -80,7 +70,8 @@ static void run_something(char *what, BOOL message)
     msg.data.dataload.filetype = 0xFAF;
     strcpy(msg.data.dataload.filename, what);
   }
-  _swix(Wimp_SendMessage, _IN(0) | _IN(1) | _IN(2), 18, &msg, web_handle);
+  swi(Wimp_SendMessage, R0, 18, R1, &msg, R2, 0, END);
+  kill_task();
 }
 
 static void WimpStop(void)
@@ -89,9 +80,10 @@ static void WimpStop(void)
   wimp_closedown(this_task, 0x4B534154);
 }
 
-static void Icon_BarIcon(void)
+static int Icon_BarIcon(void)
 {
   int  icreate[10];
+  int  icon;
 
   icreate[0] = -1;
   icreate[5] = 0x17003019;
@@ -100,13 +92,14 @@ static void Icon_BarIcon(void)
   icreate[1] = icreate[2] = 0;
   icreate[3] = icreate[4] = 68;
 
-  _swix(Wimp_CreateIcon, _IN(0) | _IN(1), 0x60000000, icreate);
+  swi(Wimp_CreateIcon, R0, 0x60000000, R1, icreate, END);
+  return(icon);
 }
 
 static void WimpStart(void)
 {
-  _swix(Wimp_Initialise, _IN(0) | _IN(1) | _IN(2) | _IN(3) | _OUT(1),
-        350, 0x4B534154, _APPNAME_, wimp_messages, &this_task);
+  swi(Wimp_Initialise, R0, 350, R1, 0x4B534154, R2, _APPNAME_,
+      R3, wimp_messages, OUT, R1, &this_task, END);
   Icon_BarIcon();
   windowdata = malloc(mainwindowlen);
   memcpy(windowdata, &mainwindowdata[10], mainwindowlen);
@@ -116,89 +109,103 @@ static void WimpStart(void)
   wimp_openwindow(0, windowdata);
   atexit(WimpStop);
 }
+#if FALSE
+static void redraw_action(int *block)
+{
+  BOOL bMore;
+
+  if (block[0])
+  {
+    swi(Wimp_RedrawWindow, R1, block, OUT, R0, &bMore, END);
+
+    while (bMore)
+    {
+      swi(Wimp_GetRectangle, R1, block, OUT, R0, &bMore, END);
+    }
+  }
+}
+#endif
+static int paranoia = 0;
 
 static void null_action(void)
 {
   paranoia = 0;
   kill_task();
-  if (getenv("Sennen$Newpage") && strlen(getenv("Sennen$Newpage")))
+  if (getenv("Sennen$Newpage"))
   {
     run_something(getenv("Sennen$Newpage"), TRUE);
 
     oscli("Unset Sennen$Newpage");
   }
 }
-
+#ifndef REALSYSTEM
 static void key_action(int c)
 {
-  unsigned int reason;
-  
-  _swix(NCRegistry_Enquiry, _IN(0) | _IN(1) | _IN(2), "SYSTEM_FLAGS3",
-            &reason, 4);
-  debug_allow |= ((reason & (1U << 31)) != 0);
-
-  if (debug_allow)
+  switch(c)
   {
-    switch(c)
+  case 'q':
+  case 'Q':
+    if (paranoia == 'q')
     {
-    case 'd':
-    case 'D':
-      if (paranoia == 'd')
-      {
-        char buffer[20];
-  
-        sprintf(buffer, "CDN_Silent %d", debug_status);
-        debug_status = !debug_status;
-        oscli(buffer);
-      }
-      else
-      {
-        paranoia = 'd';
-      }
-      break;
-  
-    case 's':
-    case 'S':
-      if (paranoia == 's')
-      {
-        vdu4();
-        oscli("Type <Wimp$ScrapDir>.Sennen.Files.Service");
-      }
-      else
-      {
-        paranoia = 's';
-      }
-      break;
-  
-    case 'x':
-    case 'X':
-      if (paranoia == 'x')
-      {
-        message_block msg;
-        
-        memset(&msg, '\0', sizeof(message_block));
-        msg.header.size   = 20;
-        msg.header.action = 0;  /* Message_Quit */
-        _swix(Wimp_SendMessage, _IN(0) | _IN(1) | _IN(2), 17, &msg, web_handle);
-        exit(0);
-      }
-      else
-      {
-        paranoia = 'x';
-      }
-      break;
-  
-    default:
-      wimp_processkey(c);
-      break;
+      run_something("WWWRoot:InsertC", FALSE);
     }
-  }
-  else
-  {
+    else
+      paranoia = 'q';
+    break;
+
+  case 'x':
+  case 'X':
+    if (paranoia == 'x')
+    {
+      message_block msg;
+      
+      memset(&msg, '\0', sizeof(message_block));
+      msg.header.size   = 20;
+      msg.header.action = 0;  /* Message_Quit */
+      swi(Wimp_SendMessage, R0, 17, R1, &msg, R2, web_handle, END);
+      exit(0);
+    }
+    else
+    {
+      paranoia = 'x';
+    }
+    break;
+
+  case 0x1A8: /* Ctrl-F8 */
+    card_in = !card_in;
+
+    if (card_in)
+    {
+      oscli("sce_loadindex SmartCard:index");
+      oscli("sce_load SmartCard:SCBB");
+      oscli("sce_loadhotlist SmartCard:fd");
+      oscli("sce_setauth BANANA!");
+      oscli("sce_cardok");
+    }
+    else
+    {
+/*       oscli("sce_save SmartCard:SCBBN"); */
+      oscli("sce_clrauth");
+      oscli("sce_cardremoved");
+    }
+    break;
+
+  case 0x1A9: /* Ctrl-F9 */
+    card_in = !card_in;
+    if (card_in)
+    {
+      oscli("sce_loadindex SmartCard:index");
+      oscli("sce_load SmartCard:SCBB");
+      oscli("sce_clrauth");
+      oscli("sce_cardbad");
+    }
+
+  default:
     wimp_processkey(c);
+    break;
   }
 }
-
+#endif
 static void message_action(int *block)
 {
   switch(block[4])
@@ -216,7 +223,7 @@ static void message_action(int *block)
     break;
 
   case 0x400C2:
-    if (strcmp(((char *) &block[7]), _BROWSER_) == 0)
+    if (strcmp(((char *) &block[7]), "NCFresco") == 0)
     {
       web_handle = block[1];
     }
@@ -228,93 +235,61 @@ static void message_action(int *block)
       wimp_starttask(taskname);
     }
     break;
-
-  case 0x4AF80:
-    if (debug_status)
-    {
-      message_block *msg = (message_block *) block;
-
-      vdu4();
-      printf("* %s\n", msg->data.bytes);
-    }
-    break;
   }
 }
 
 int main (int argc, char **argv)
 {
   int pollblock[64];
-  unsigned int reason, scstatus;
+  int reason, scstatus;
+
+/*   Heap_Create(_APPNAME_" heap area", DYN_FIX); */
+/*   Heap_Create(_APPNAME_" volatiles", DYN_VOL); */
+
+  srand(monotonic_time());
 
   WimpStart();
   Screen_CacheModeInfo(matrix);
-  _swix(Wimp_SetCaretPosition, _IN(0) | _IN(1) | _IN(2) | _IN(3) | _IN(4)
-        | _IN(5), windowdata[0], -1, 0, 0, -1, 0);
+  swi(Wimp_SetCaretPosition, R0, windowdata[0], R1, -1, R2, 0, R3, 0,
+                             R4, -1, R5, 0, END);
 
-  oscli("nfs:packetsize 1");
-  oscli("nfs:timeout 60 20");
 
-  if (getenv("Sennen$Newpage"))
+  swi(NCRegistry_Status, OUT, R0, &scstatus, END);
+  card_in = TRUE;
+
+  if ((scstatus & 0x01) == 0) /* No card */
   {
-    char buffer[256];
+    oscli("Set " _BROWSER_ "$Welcome WWWRoot:InsertC");
+    card_in = FALSE;
+  }
+  else if ((scstatus & 0x10) != 0) /* Card Locked */
+  {
+    oscli("Set " _BROWSER_ "$Welcome WWWRoot:EnterC");
+  }
+  else if ((scstatus & 0x04) != 0) /* Card inserted and valid */
+  {
+    char loginid[40], pstnnum[40];
+    int cardwrite;
+
+    oscli("CDN_MakeFiles");
     
-    sprintf(buffer, "Set " _BROWSER_ "$Welcome -url %s", getenv("Sennen$Newpage"));
-    oscli(buffer);
-    oscli("Unset Sennen$Newpage");
+    swi(NCRegistry_Enquiry, R0, "CLIENT_UPDATE", R1, &cardwrite, R2, 4, END);
+
+    swi(NCRegistry_Enquiry, R0, "LOGIN_ID", R1, loginid, R2, 40, END);
+    swi(NCRegistry_Enquiry, R0, "PSTN_NUM", R1, pstnnum, R2, 40, END);
+
+    if (strlen(loginid) == 0 || strlen(pstnnum) == 0)
+      oscli("Set " _BROWSER_ "$Welcome WWWDyn:EnterNNPC");
+    else if (cardwrite)
+      oscli("Set " _BROWSER_ "$Welcome WWWDyn:ProceedC");
+    else
+      oscli("Set " _BROWSER_ "$Welcome WWWDyn:Proceed");
   }
   else
   {
-    _swix(NCRegistry_Status, _OUT(0), &scstatus);
-    if ((scstatus & 0x01) == 0) /* No card */
-    {
-      if ((screen_size.x >> screen_eig.x) >= 1024)
-      {
-        oscli("Set " _BROWSER_ "$Welcome WWWRoot:InsertCVB");
-      }
-      else if ((screen_size.x >> screen_eig.x) >= 800)
-      {
-        oscli("Set " _BROWSER_ "$Welcome WWWRoot:InsertCB");
-      }
-      else
-      {
-        oscli("Set " _BROWSER_ "$Welcome WWWRoot:InsertC");
-      }
-      card_in = FALSE;
-    }
-    else if ((scstatus & 0x10) != 0) /* Card Locked */
-    {
-      oscli("Set " _BROWSER_ "$Welcome WWWRoot:EnterC");
-    }
-    else if ((scstatus & 0x04) != 0) /* Card inserted and valid */
-    {
-      char loginid[40], pstnnum[40];
-      int cardwrite;
-  
-      oscli("CDN_MakeFiles");
-      
-      _swix(NCRegistry_Enquiry, _IN(0) | _IN(1) | _IN(2), "CLIENT_UPDATE",
-            &cardwrite, 4);
-      _swix(NCRegistry_Enquiry, _IN(0) | _IN(1) | _IN(2), "LOGIN_ID",
-            loginid, 40);
-      _swix(NCRegistry_Enquiry, _IN(0) | _IN(1) | _IN(2), "LOGIN_SECRET",
-            pstnnum, 40);
-  
-      if (strlen(loginid) == 0 || strlen(pstnnum) == 0)
-        oscli("Set " _BROWSER_ "$Welcome WWWDyn:EnterNNPC");
-      else if (cardwrite)
-        oscli("Set " _BROWSER_ "$Welcome WWWDyn:ProceedC");
-      else
-        oscli("Set " _BROWSER_ "$Welcome WWWDyn:Proceed");
-    }
-    else
-    {
-      oscli("Set " _BROWSER_ "$Welcome WWWRoot:InvalidCrd");
-    }
+    oscli("Set " _BROWSER_ "$Welcome WWWRoot:InvalidCrd");
   }
-  _swix(NCRegistry_Enquiry, _IN(0) | _IN(1) | _IN(2), "SYSTEM_FLAGS3",
-            &reason, 4);
-  debug_allow |= ((reason & (1U << 31)) != 0);
-
+ 
   if (argc > 1)
     strcpy(taskname, argv[1]);
   else
@@ -331,13 +306,21 @@ int main (int argc, char **argv)
     case 0:
       null_action();
       break;
-
+#if FALSE
+    case 1:
+      redraw_action(pollblock);
+      break;
+#endif
     case 2:
       wimp_openwindow(0, pollblock);
       break;
 
     case 8:
+#ifdef REALSYSTEM    
+      wimp_processkey(c);
+#else      
       key_action(pollblock[6]);
+#endif      
       break;
 
     case 17:
@@ -351,6 +334,7 @@ int main (int argc, char **argv)
   
         sprintf(runit, "%s %s", cprefix, (char *) &pollblock[11]);
         wimp_starttask(runit);
+        kill_task();
       }
       break;
     }

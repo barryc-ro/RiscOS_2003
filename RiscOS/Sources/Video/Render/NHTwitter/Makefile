@@ -68,7 +68,6 @@ rm.NHTwitter: Hdr:SWIs
 rm.NHTwitter: Hdr:CPU.Generic26
 rm.NHTwitter: Hdr:IO.GenericIO
 rm.NHTwitter: Hdr:RISCOS
-rm.NHTwitter: Hdr:Machine.<Machine>
 rm.NHTwitter: Hdr:CMOS
 rm.NHTwitter: Hdr:ModHand
 rm.NHTwitter: Hdr:Services

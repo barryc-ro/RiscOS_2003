@@ -57,9 +57,10 @@ paint_length    *       1 :SHL: 7       ; if 1, R7 = length of string
 paint_font      *       1 :SHL: 8       ; if 1, R0 = initial font handle
 paint_kern      *       1 :SHL: 9       ; if 1, do kerning
 paint_rightleft *       1 :SHL: 10      ; if 1, paint from right to left
+paint_blended	*	1 :SHL: 11	; if 1, paint blending to background present
 
 paint_notyetimp *       0
-paint_res1      EqBits  11,31           ; bits 11..31 (inclusive)
+paint_res1      EqBits  12,31           ; bits 12..31 (inclusive)
 paint_reserved  *       paint_res1 :OR: paint_notyetimp
 
 ; for Font_Caret
@@ -79,6 +80,10 @@ invalid_flag    *       &80
 
 setout_invalid  *       0
 setout_valid    *       1
+
+	      [ blending
+setout_badblending * 	&80		; if 1, then blending data is not valid
+	      ]
 
 ; escape codes within a string to be printed
 
@@ -671,7 +676,7 @@ storeoutput Entry "R1-R3,R9"
 ;       VS => R0 ->error block
 
 setrealpalette Entry "R1-R4,R9"
-               
+
       [ usesetpalette
         ORR     R4,R1,#16 << 24         ; R4 bits 24..31 <> 0 => set a single entry
         MOV     R2,R0                   ; R2 = first flash state
@@ -889,7 +894,32 @@ setmodedata PEntry Paint_Mode,"R0-R11"
 
 trysetoutputdata Entry ""
 
+;; David De Vorchik (18dec95)
+;; --------------------------
+;; We must ensure that although the output data is currently valid, the blending
+;; information has been correctly initialised as-well.  The only way this can become
+;; confused is if the client calls Font_SetColourTable which allows them to directly
+;; abused the colour information, yet leave the setout_valid flag set.
+;;
+;; Therefore we have introduced a flag bit which when set indicates that although
+;; the data is valid, the blending information is not, therefore 'setblendingdata'
+;; should be called.
+
+      [ blending
+	LDRB	R14,setoutputdataflag
+	TST	R14,#setout_badblending		; are the blend_putdata vectors valid?
+	BEQ	%FT10
+
+	BIC	R14,R14,#setout_badblending	; blending data will now be validated
+	STRB	R14,setoutputdataflag		; therefore clear the marker bit
+
+	TEQ	R14,#setout_invalid
+	BLNE	setblendingdata			; don't call more than once!
+	EXITS	NE
+10
+      |
         LDRB    R14,setoutputdataflag
+      ]
         TEQ     R14,#setout_invalid
         EXITS   NE
 
@@ -938,6 +968,17 @@ setoutputdata PEntry Paint_Colours, "R0-R12"    ; on the safe side
 
         BL      correctaliascolours             ; work out number of distinct colours
 
+    [ blending
+      [ blendingOn
+	MOV	LR, # 14			; always enable blending
+	STRB	LR, aliascolours
+      |
+	LDR	LR, plottype
+	TST	LR, #paint_blended		; is blending enabled?
+	MOVNE	LR, # 14			;   if so tweek alias colours
+	STRNEB	LR, aliascolours
+      ]
+    ]
         B       endsetoutputdata
         LTORG
 
@@ -1025,6 +1066,10 @@ endsetoutputdata
         SUBS    R14,R14,#1
         BNE     %BT01
         STR     outdata,rubdata
+
+      [ blending
+	BL	setblendingdata		; prepare the data for the blending engine
+      ]
 
         PExitS
 
@@ -1123,8 +1168,15 @@ calcjustify Entry "R6-R7"
         MOV     R2,#bignum
         MOV     R3,#bignum
         MOV     R4,#" "                 ; split on spaces
-        MOV     R5,#bignum
+;        MOV     R5,#bignum
+        LDR     R5,paintendaddress
+        CMP     R5,#0
+        MOVLT   R5,#bignum
+        SUBGT   R5,R5,R1
+
+        Debug   just,"++ scanstring params R1-R7 = ",R1,R2,R3,R4,R5,R6,R7
         BL      scanstring
+        Debug   just,"++ scanstring exit R1-R7 = ",R1,R2,R3,R4,R5,R6,R7
         EXIT    VS
 
         Debug   just,"++ x-size, y-size, n-spaces =",R2,R3,R4
@@ -1138,9 +1190,15 @@ calcjustify Entry "R6-R7"
 
         LDR     R2,xco72
         SUB     R3,R3,R2                ; get offset
+        CMP     R3,#0
+        RSBLT   R3,R3,#0                ; *GPS* temp...
         Pull    "R2,R4"
+        CMP     R2,#0
+        RSBLT   R2,R2,#0                ; *GPS* temp...
         SUB     R2,R3,R2                ; work out gap
+        Debug   just,"++ total space, num spaces =",R2,R4
         BL      getratio
+        Debug   just,"++ xspaceadd before =",R5
         STR     R5,xspaceadd
         Debug   just,"++ xspaceadd =",R5
 
@@ -1233,7 +1291,7 @@ findcaret Entry "R6-R7"
 scanstring      ROUT
         LDRB    R0,currentfont
         Push    "R0,pixelsptr,metricsptr,LR"
-        
+
         Debug   scanstring,"Scanstring entered with",R1,R2,R3,R4,R5,R6,R7
 
         STR     R6,xspaceadd
@@ -1271,15 +1329,18 @@ scanstring      ROUT
         ASSERT  futuredata-currentdata = 16             ; convenient!
         ADR     R14,currentdata
         LDMIA   R14!,{R0,R2,R3,R4}      ; grab some spare registers!
-        STMIA   R14,{R0,R2,R3,R4}
-
+        STMIA   R14!,{R0,R2,R3,R4}      ; store in futuredata workspace
+        STMIA   R14,{R0,R2,R3,R4}       ; store in tfuturedata workspace
+        MOV     R0, #0
+        STR     R0, futurechanged
+        Debug   scanstring,"** Cleared futureflag on entry = ", R0
 ; initialise currbbox and scanbbox
 
         MOV     R0,#bignum              ; start with null bbox (both copies)
         MOV     R2,#bignum
         MOV     R3,#-bignum
         MOV     R4,#-bignum
-        ADR     R14,scanbboxx0                                
+        ADR     R14,scanbboxx0
         Debug   scanstring,"Setting currbbox and scanbbox to",R0,R2,R3,R4
         STMIA   R14,{R0,R2,R3,R4}
         ADR     R14,currbboxx0
@@ -1325,7 +1386,7 @@ scanjlp
         LDRB    R0,[R1]                 ; see if next char is 'split' char
         LDR     R14,splitchar
         TEQ     R0,#0                   ; match if:
-        TEQNE   R0,#lf                  ; 
+        TEQNE   R0,#lf                  ;
         TEQNE   R0,#cr                  ;  1) R0 = terminator
         TEQNE   R0,R14                  ;  2) R0 = split char
         CMPNE   R14,#-1                 ;  3) split char = -1
@@ -1333,13 +1394,26 @@ scanjlp
 
 02      ADR     R0,scanstrpars
         STMIA   R0,{R1-R4}              ; save pars for later
-        ADR     R14,currbboxx0
+        LDR     R14,futurechanged
+        CMP     R14,#0
+        BEQ     %FT03
+        ADR     R14,tfuturedata          ; copy temp future data to future data
+        LDMIA   R14,{R1-R4}              ; when you get a splitchar...
+        ADR     R14,futuredata
+        STMIA   R14,{R1-R4}
+        Debug   scanstring,"** Copied tfuturedata to futuredata"
+        MOV     R14, #0
+        STR     R14, futurechanged
+        Debug   scanstring,"** Cleared futureflag"
+03
+        Debug   scanstring,"** In split char bit"
+         ADR     R14,currbboxx0
         LDMIA   R14,{R1-R4}
         ADR     R14,scanbboxx0
         STMIA   R14,{R1-R4}
         LDMIA   R0,{R1-R4}              ; recover pars
 
-01      LDRB    R0,[R1],#1    
+01      LDRB    R0,[R1],#1
         Debug   scanstring,"Character",R0
         CMP     R0,#32
         BCC     scanctrl
@@ -1348,11 +1422,11 @@ scanjlp
         TEQ     R0,R14                  ; equal to 'split' char?
         CMPNE   R14,#-1
         ADDEQ   R4,R4,#1                ; add 1 for any printable if R14 = -1
-                      
+
         Debug   scanstring,"Calling Addwidth"
         BL      addwidth                ; metricsptr, pixelsptr may be set up / relocated
 
-        BVC     scanjlp                      
+        BVC     scanjlp
         Debug   scanstring,"Jumping to exitscanstr"
         B       exitscanstr
 
@@ -1401,7 +1475,7 @@ scanfindcaret
         Pull    "R1-R4"
         B       %BT01
 
-scanctrl                  
+scanctrl
         Debug   scanstring,"scanctrl - character =",R0
         TEQ     R0,#Comment
         BEQ     scanComment
@@ -1430,7 +1504,7 @@ scanctrl
 
         BL      xerr_FontBadCtrlChar
 
-exitscanstr                                           
+exitscanstr
         Debug   scanstring,"Leaving scanstring"
         MOV     R14,#0                  ; indicate that Font_ScanString has finished
         STRB    R14,inscanstring
@@ -1463,7 +1537,11 @@ scansetfont
         LDRB    R0,[R1],#1
         ASSERT  maxf = 256              ; must be in range
         STRB    R0,currentfont          ; will be restored later
-        STRB    R0,futurefont
+        STRB    R0,tfuturefont
+        Debug   scanstring,"** Stored future value at tfuturefont"
+        MOV     R14,#1
+        STR     R14,futurechanged
+        Debug   scanstring,"** Set futureflag"
         MOV     R14,#-1                 ; ensure metrics matrix is recalculated
         STR     R14,oldpaintmatrix
         BL      SetMetricsPtrs          ; must also reset pointers
@@ -1484,15 +1562,19 @@ scansetcolour
         LDRB    R0,[R1],#1
         CMP     R0,#&80
         AND     R0,R0,#&7F
-        STRLTB  R0,futurefcol
-        STRGEB  R0,futurebcol
+        STRLTB  R0,tfuturefcol
+        STRGEB  R0,tfuturebcol
+        Debug   scanstring,"** Stored future value at tfuturefcol/bcol"
+        MOV     R14,#1
+        STR     R14,futurechanged
+        Debug   scanstring,"** Set futureflag"
         B       scanjlp
 
 scansetcolour3
         LDRB    R0,[R1],#1
-        STRB    R0,futurebcol
+        STRB    R0,tfuturebcol
         LDRB    R0,[R1],#1
-        STRB    R0,futurefcol
+        STRB    R0,tfuturefcol
 
 ; Bug fix by Chris:
 ;
@@ -1504,12 +1586,20 @@ scansetcolour3
         LDRB    R0,[R1],#1              ; extract colour offset (can be -ve)
         MOV     R0,R0,LSL #24           ; sign-extend byte to 32-bit word
         MOV     R0,R0,ASR #24
-        STRB    R0,futureacol
+        STRB    R0,tfutureacol
+        Debug   scanstring,"** Stored future value at tfuturefcol/bcol/acol"
+        MOV     R14,#1
+        STR     R14,futurechanged
+        Debug   scanstring,"** Set futureflag"
         B       scanjlp
 
 scanrgb
-        ADR     R0,futuredata
+        ADR     R0,tfuturedata
+        MOV     R14,#1
+        Debug   scanstring,"** Set futureflag"
+        STR     R14,futurechanged
         BL      getrgb_fromstring       ; updates R1, [R0,#0..2]
+        Debug   scanstring,"** Stored future value at tfutureRGB"
         BVC     scanjlp
         B       exitscanstr
 
@@ -1558,7 +1648,7 @@ scanstrdone
         LDMIA   R14,{R1-R4}
         LDR     R14,scanstrptr          ; original value of R1
         SUB     R5,R1,R14
-        
+
         Debug   scanstring,"recovered R1-R4 and derived R5",R1,R2,R3,R4,R5
 
         Pull    "R0,pixelsptr,metricsptr,LR"
@@ -1590,7 +1680,7 @@ addwidth Entry "R1,R4,R5"
 
         Debug   scanstring,"Arrived in addwidth",R0,R2,R3
 
-        ADR     R14,xglueadd                   
+        ADR     R14,xglueadd
         LDMIA   R14,{R4,R5}             ; R4,R5 = glue width from last time
 
         LDR     R14,plottype
@@ -1601,15 +1691,15 @@ addwidth Entry "R1,R4,R5"
         ADD     R5,R3,R5
 
         BL      getcharwidth            ; out: R2,R3 = width of this character (excluding glue)
-        EXIT    VS                              
-        
+        EXIT    VS
+
         Debug   scanstring,"getcharwidth returned",R2,R3
 
         ADD     R2,R4,R2
         ADD     R3,R5,R3
 
 ; R2,R3 = coords for next time
-; R4,R5 = coords of this char (if going left to right, else use R2,R3)       
+; R4,R5 = coords of this char (if going left to right, else use R2,R3)
 
         Debug   scanstring,"next/this coords",R2,R3,R4,R5
 
@@ -1644,7 +1734,7 @@ getcharwidth Entry "R4,R5"
 
         Debug   scanstring,"getcharwdith called for",R0
 
-        TEQ     metricsptr,#0                          
+        TEQ     metricsptr,#0
         Debug   scanstring,"metricsptr is",metricsptr
         CacheHit Metrics,NE
         BLEQ    SetMetricsPtrs
@@ -1653,7 +1743,7 @@ getcharwidth Entry "R4,R5"
         LDRB    R6,[metricsptr,R0]      ; look up char in table
         Debug   scanstring,"lookup gave",R6
 
-        LDR     R5,xoffset                 
+        LDR     R5,xoffset
         Debug   scanstring,"xoffset",R5
         TEQ     R5,#0
         LDRNE   R2,[R5,R6,ASL #2]
@@ -1668,7 +1758,7 @@ getcharwidth Entry "R4,R5"
         Debug   scanstring,"yoffset",R3
 
         LDR     R14,metricsmatrix
-        TEQ     R14,#0                 
+        TEQ     R14,#0
         Debug   scanstring,"Calling transformwidth if NE",R14
         BLNE    transformwidth          ; R2,R3 transformed by metricsmatrix
 
@@ -1677,11 +1767,11 @@ getcharwidth Entry "R4,R5"
         LDMEQIA R14,{R4,R5}
         ADDEQ   R2,R2,R4
         ADDEQ   R3,R3,R5
-                                                             
+
         Debug   scanstring,"Calling getgluewidth",R2,R3
-        
+
         BL      getgluewidth            ; inter-letter spacing is treated as glue
-        
+
         Debug   scanstring,"Finished",R2,R3
 
         EXITS                           ; preserves flags
@@ -1743,7 +1833,7 @@ computebbox Entry "R0-R8"
         Debug   scanstring,"If NE, branching to computebbox_transformed",R5
         TEQ     R5,#0
         BNE     computebbox_transformed
-         
+
         Pull    "R2,R3"                 ; R2,R3 = origin of this character
         Debug   scanstring,"Character origin",R2,R3
         Debug   scanstring,"Character max ",R7,R8
@@ -1751,11 +1841,11 @@ computebbox Entry "R0-R8"
         LDRB    R6,[metricsptr,R0]
 
         LDR     R5,bboxx0
-        LDR     R5,[R5,R6,LSL #2]                  
-        
+        LDR     R5,[R5,R6,LSL #2]
+
         Debug   scanstring,"bboxx0 adding, to",R2,R5
         ADD     R5,R2,R5
-        LDR     R14,currbboxx0    
+        LDR     R14,currbboxx0
         Debug   scanstring,"currbboxx0 was",R14
         CMP     R5,R14
         STRLT   R5,currbboxx0
@@ -1809,7 +1899,7 @@ computebbox Entry "R0-R8"
 
         EXITS
 
-computebbox_fromoutlines        
+computebbox_fromoutlines
         MOV     R1,R0                   ; R1 = character code
         PushP   "metricsptr",metricsptr
         BL      getoutlines_metricsbbox ; R1-R4 = bbox (millipoints)
@@ -1858,10 +1948,10 @@ getgluewidth Entry "R0-R8"
         STMIA   R14,{R5,R6}
 
 ; optimise non-kerning case
-                     
+
         LDR     R14,plottype
         TST     R14,#paint_kern
-        EXITS   EQ               
+        EXITS   EQ
 
 ; work out which is the next printable letter in the string
 
@@ -1885,15 +1975,15 @@ getgluewidth Entry "R0-R8"
 13      TST     R14,#paint_rightleft
         MOVEQ   R1,R7                   ; R0 = left (1st) char, R1 = right (2nd) char
         MOVNE   R1,R0
-        MOVNE   R0,R7                   ; R0 = left (2nd) char, R1 = right (1st) char    
-        
+        MOVNE   R0,R7                   ; R0 = left (2nd) char, R1 = right (1st) char
+
 ; metricsptr, pixelsptr must be correctly relocated by the following code
 
         LDR     R8,cacheindex
         LDRB    R14,currentfont
         LDR     R8,[R8,R14,LSL #2]      ; R8 -> font header
         LDR     R7,[R8,#hdr_Kerns]!     ; R7 -> kerning block (if present)
-        TEQ     R7,#0                       
+        TEQ     R7,#0
         BLEQ    CacheKerns              ; R7 -> kern block; metricsptr, pixelsptr relocated
         BVS     %FT99
 
@@ -1912,12 +2002,12 @@ getgluewidth Entry "R0-R8"
         LDR     R8,[R8,#4]              ; R8 = offset to start of next set
         SUBS    R8,R8,R5                ; R8 = size of this set
         EXITS   LS                      ; quick cop-out
-                                                     
+
 
         ADD     R5,R7,R5
         ADD     R5,R5,#kern_index       ; R5 -> first kern pair
-        ADD     R8,R5,R8                ; R8 -> end       
-        
+        ADD     R8,R5,R8                ; R8 -> end
+
         TST     R6,#flg_shortkerns
         BEQ     longkerns
 
@@ -2041,7 +2131,7 @@ kblk_size       #       0
 CacheKerns Entry "R0-R6,R11"
 
         BL      grabblock_init                  ; start using scratch space and expand into RMA if required
-                              
+
         PushP   "CacheKerns: metricsptr",metricsptr
         PushP   "CacheKerns: pixelsptr",pixelsptr
 
@@ -2263,7 +2353,7 @@ endkloop
         MUL     R14,R6,R0                       ; R14 = space taken up by kern pairs
         ADD     R6,R14,#kern_data               ; R6 = size of block required
         BL      reservecache                    ; R6 -> new block, R8 relocated
-95                
+95
         PullP   "Start of master kerns",R7      ; R7 -> start of master kern data
         PullP   "CacheKerns: Master metrics",R1
         BL      unlockblock                     ; don't need to lock this any more
@@ -2631,7 +2721,7 @@ scaleyco Entry ""
 ;;----------------------------------------------------------------------------
 
 paintchars PEntry Painting, ""                  ; NB: several bits later on go ' Pull "PC" '
-                                   
+
         Debug   ch2,"Paintchars"
 
       [ debugxx
@@ -2677,8 +2767,8 @@ paintchars PEntry Painting, ""                  ; NB: several bits later on go '
         BLNE    scalexco                        ; obtain xco72,yco72
         STRNE   R3,xco72
         BLNE    scaleyco
-        STRNE   R3,yco72                     
-        
+        STRNE   R3,yco72
+
 ; set up flags for setoutputdata and setrubout (delayed until a char is printed)
 
         MOV     R0,#0
@@ -2715,7 +2805,7 @@ paintchars PEntry Painting, ""                  ; NB: several bits later on go '
         BLT     %FT01                           ; (if there was a rubout box, that is!)
 
 11      ADR     R0,y_old0
-                                                     
+
         TST     R2,#paint_justify               ; set up justifyx, justifyy
         LDMNEDA R0!,{R1,R3}
         STRNE   R1,justifyx
@@ -2752,7 +2842,7 @@ paintchars PEntry Painting, ""                  ; NB: several bits later on go '
         BLEQ    calcjustify                     ; works out x/yspaceadd from justifyx/y (if R2 bit 0 set)
 
 ; read initial setting of matrix (if any)
-                                  
+
         LDR     R14,plottype
         TST     R14,#paint_matrix
         MOVEQ   R6,#0
@@ -2781,7 +2871,7 @@ Profile_Last SETS "Painting"                    ; restore correct value for PExi
 
 ; metricsptr, pixelsptr, wrchbase, xcoord, ycoord used in the following loop
 
-paintlp                                   
+paintlp
         LDR     R14,paintendaddress
         CMP     wrchbase,R14                    ; unsigned comparison
         BHS     %FT98                           ; V not set if this test succeeds (I hope!)
@@ -2815,15 +2905,15 @@ paintlp
         TEQ     pchar,#0                        ; check for legal terminator
         TEQNE   pchar,#cr
         TEQNE   pchar,#lf
-        BLNE    xerr_FontBadCtrlChar       
+        BLNE    xerr_FontBadCtrlChar
         PExit   VS
 
 ; ensure rest of rubout box is dealt with
 
-98      
+98
         BL      calcxcoord                      ; x/ycoord <- x/yco72
         BL      ruboutrest
-99      
+99
         PExit
         LTORG
 
@@ -3096,7 +3186,12 @@ setfont
         ASSERT  maxf = 256
         LDRB    pchar,[wrchbase],#1     ; must be in range 0..255
         STRB    pchar,currentfont
-        STRB    pchar,futurefont
+        STRB    pchar,tfuturefont
+        Debug   scanstring,"** Stored future value at tfuturefont 2"
+        MOV     R14,#1
+        STR     R14,futurechanged
+        Debug   scanstring,"** Set futureflag"
+;        STRB    pchar,futurefont
         MOV     R14,#-1                 ; force rendermatrix to be recalculated
         STR     R14,oldpaintmatrix
 
@@ -3584,13 +3679,13 @@ changebox Entry "gx0,gy0,gx1,gy1"
         MOVGT   y1,gy1
 
         CMP     x0,x1
-        CMPLE   y0,y1    
-        
+        CMPLE   y0,y1
+
         BLE      %FT10
-        
+
         CLRV
         Pull    "gx0,gy0,gx1,gy1,PC"
-10        
+10
 
         LDR     R14,changedbox
         ADD     R14,R14,#4
@@ -3845,7 +3940,7 @@ ruboutonly
 
 ; do underlining (if enabled) - note that [sp,#0] = char to print
 ; note that this doesn't call addcharwidth, as that can cause cacheing
-                                    
+
         LDR     R14,ul_word
         TEQ     R14,#0
         BLNE    underline               ; optimise for non-underline
@@ -3858,7 +3953,7 @@ ruboutonly
         BEQ     justmove
 
 ; check whether this is an outline, to be passed to the Draw module
-                 
+
         LDRB    R14,charflags
         TST     R14,#chf_outlines
         BNE     paintdraw               ; inptr -> outline char
@@ -3876,7 +3971,7 @@ ruboutonly
         MakeErrorBlock FontNoBitmaps2
 11
 
-; check for 4-bpp magnified font            
+; check for 4-bpp magnified font
         TST     R14,#chf_1bpp
         BNE     %FT01
         LDR     R14,xmag
@@ -3912,7 +4007,7 @@ ruboutonly
 
 ; now calculate addresses and masks - comes back here if only vertical clipping
 
-quickclip                 
+quickclip
         BL      getaddr
         LDR     R14,log2bpp
         MOV     outcount,outcount,ASL R14       ; release pixelsperword
@@ -3926,7 +4021,11 @@ quickclip
 ; set up pointers etc. needed by the inner loop
 
         LDRB    bpp,bitsperpixel                ; should be set up by mode
+      [ blending
+	LDR	outputarray,blend_outputdata	; set up ptr into output data for blended output
+      |
         ADR     outputarray,outputdata          ; set up ptr into output data
+      ]
         LDR     Fmask,outputmask
 
 ; loop, plotting each row in turn (from the bottom)
@@ -3944,7 +4043,7 @@ quickclip
         MOV     outmask,#0
         LDR     rowcounter,rowcount
         LDR     colcount,xsize
-                                 
+
       [ fix5
         CMP     colcount,#?ScratchSpace*2    ; Patch by Chris to trap ScratchSpace overflow
        [ debugunpack
@@ -3987,10 +4086,10 @@ $lab    ANDS    R14,indata,#((1:SHL:in_bpp)-1):SHL:$bit
       [ fast1bpp
         AND     R14,inptr,#31                   ; R14 = bit posn within word
         MOV     inptr,inptr,LSR #3              ; inptr = byte address
-        
+
         LDR     indata,paint_inptr
         ORR     inptr,inptr,indata
-        
+
         LDR     indata,[inptr,-R14,LSR #3]!     ; inptr -> word address, indata = data
         ADD     inptr,inptr,#4
         ASSERT  lp1-lp0 = 32
@@ -4049,8 +4148,8 @@ nextpixelrow Entry ""
 ;------------------------------------------------------
 
 justmove
-        ProfOut Paint_Char           
-        
+        ProfOut Paint_Char
+
         Debug   co2,"justmove: about to pull registers"
 
         ASSERT  pchar = R0
@@ -4063,7 +4162,7 @@ justmove
         LDR     ycoord,saved_nextycoord
         STR     xcoord,xco72
         STR     ycoord,yco72
-                                
+
         B       paintlp
 
 ;............................................................................
@@ -4072,7 +4171,7 @@ justmove
 ;       [x/yco72] = current position in 1/72000"
 ;       metricsptr -> metrics info (or 0 => not done yet)
 ;       wrchbase -> next character in string
-;       [plottype] :AND: paint_rightleft = 1 => 
+;       [plottype] :AND: paint_rightleft = 1 =>
 ; Out   [x/yco72] = coordinate before printing this character
 ;       [switch_nextx/ycoord] = position after printing this character
 ;       [ul_nextxcoord] = x pixel coordinate of next position (for underlining)
@@ -4081,7 +4180,7 @@ justmove
 addcharwidth PEntry Paint_Metrics, "R1,R5,ycoord,xcoord"
 
         LDR     xcoord,xco72
-        LDR     ycoord,yco72         
+        LDR     ycoord,yco72
 
         ADR     R14,xglueadd                    ; R2,R3 = glue offset from last time
         LDMIA   R14,{R2,R3}
@@ -4206,8 +4305,8 @@ unpack_1bpp_firstrow_clipped
         STR     R14,currentstate
 
         Debug   ch,"unpack_1bpp_firstrow in: inptr,colcount =",inptr,colcount
-                           
-        BL      unpack_1bpp 
+
+        BL      unpack_1bpp
 
         Debug   ch,"unpack_1bpp_firstrow postcall: inptr,colcount =",inptr,colcount
 
@@ -4503,7 +4602,13 @@ putdata1
         MOVS    outdata,outdata,LSR bpp         ; shift to correct position
         BCC     putdata1
 putdata
+      [ blending
+	LDR	PC, blend_putdata		; call the blending functions
+	AlignCd Urk:MOD:16
+putdata_mono
+     |
         ASSERT  ((.-Module_BaseAddr):MOD:16)=Urk
+     ]
         LDR     pchar,[outptr]
         BIC     pchar,pchar,outmask
         ORR     pchar,pchar,outdata
@@ -4517,6 +4622,11 @@ putdata1M
         MOVS    outdata,outdata,LSR bpp         ; shift to correct position
         BCC     putdata1M
 putdataM
+      [ blending
+	LDR	PC, blend_putdataM
+
+putdataM_mono
+      ]
         Push    "R1,R2,LR"
         LDR     R1,linelen
         MOV     R2,outptr
@@ -4539,7 +4649,7 @@ putdataM
 ; Exit:   [[changedbox]+4..] updated
 
 changedchar Entry "x0,y0,x1,y1"
-                                            
+
         ASSERT  x0=ycoord
         ASSERT  y0=xcoord
         MOV     x0,xcoord               ; swap them over!
@@ -4550,7 +4660,7 @@ changedchar Entry "x0,y0,x1,y1"
         LDR     R14,rowcount
         ADD     y1,y0,R14
         SUB     y1,y1,#1
-        BL      changebox      
+        BL      changebox
 
         EXIT
 
@@ -4609,10 +4719,10 @@ paintchar_1bpp_fast ROUT
         RSB     R9,R5,#32               ; R9 = 32-r5
         AND     R8,R4,#31               ; R8 = bit position within first word
         MOV     R4,R4,LSR #3
-        
+
         LDR     R0,paint_inptr
         ORR     R4,R4,R0
-        
+
         LDR     R0,[R4,-R8,LSR #3]!     ; R0 = input word
 
         Debug   ch,"R11,R6,R1,R2 =",R11,R6,R1,R2
@@ -4809,7 +4919,11 @@ paintclipped ROUT
 ; set up pointers etc. needed by the inner loop
 
         LDRB    bpp,bitsperpixel                ; should be set up by mode
+      [ blending
+	LDR	outputarray, blend_outputdata
+      |
         ADR     outputarray,outputdata          ; set up ptr into output data
+      ]
         LDR     Fmask,outputmask
 
 ; loop, plotting each row in turn (from the bottom)
@@ -4818,7 +4932,7 @@ paintclipped ROUT
 
         LDRB    fvalue,charflags                ; NB: fvalue must be set up on entry to unpack_1bpp_firstrow
         TST     fvalue,#chf_1bpp
-          
+
         BLNE    unpack_1bpp_firstrow_clipped    ; NB: can't branch off to optimised routine
 
         Debug ch,"came back as",inptr
@@ -4829,7 +4943,7 @@ paintclipped ROUT
         MOV     inptr,inptr,LSR #3
         LDR     indata,paint_inptr
         ORR     inptr,inptr,indata
-        
+
         LDR     indata,[inptr,-incount,LSR #3]! ; indata = first word
         ADD     inptr,inptr,#4
       |
@@ -4919,7 +5033,7 @@ getclipping PEntry Paint_CharClip, "inptr,xcoord,ycoord"
         SUBS    R14,xsiz,R14
         MOVLE   R14,#1
         STR     R14,clipx1                      ; min counter (inclusive)
- 
+
         LDR     R14,grafy0                      ; set up y-clipping
         SUBS    R14,R14,ycoord
         MOVLT   R14,#0
@@ -4999,11 +5113,11 @@ paintmagnified ROUT
         ASSERT  in_bpp=4
         AND     incount,inptr,#7
         MOV     incount,incount,LSL #2          ; 2^2 bits per pixel
-        MOV     inptr,inptr,LSR #3               
-        
+        MOV     inptr,inptr,LSR #3
+
         LDR     indata,paint_inptr
         ORR     inptr,inptr,indata
-        
+
         MOV     inptr,inptr,LSL #2              ; inptr --> input word
         LDR     indata,[inptr],#4               ; cache pixel data in a reg.
         MOV     indata,indata,LSR incount
@@ -5034,7 +5148,11 @@ mxloop2
 
         MOVCCS  R14,#0
         ANDCSS  R14,indata,#(1:SHL:in_bpp)-1    ; get next pixel
+      [ blending
+     	LDRNE	outputarray,blend_outputdata
+      |
         ADRNE   outputarray,outputdata
+      ]
         LDRNE   R14,[outputarray,R14,ASL #2]    ; get appropriate output
 
         MOVEQ   outmask,outmask,LSR bpp
@@ -5134,7 +5252,7 @@ SavedColourSize * 10*4
         MOV     r0, #&80                ; record the graphics foreground colour
         ADD     r1, sp, #2*4
         SWI     XOS_SetColour
-        STRVS   r0, [sp, #SavedColourSize]! ; correct stack - sneaky!   
+        STRVS   r0, [sp, #SavedColourSize]! ; correct stack - sneaky!
         BVS     %FT99
         STMIA   sp, {r0,r1}
         ; Now set the colour we want
@@ -5144,7 +5262,7 @@ SavedColourSize * 10*4
         ;therefore we need to shift it right by 32-bpp
         LDRB    R14,bitsperpixel                ; outputdata invalid now if bpp has changed
         RSBS    R14,R14,#32
-        MOVNE   R1,R1,LSR R14 
+        MOVNE   R1,R1,LSR R14
         SWI     XOS_SetColour
         |
         ADR     R0,vduin2               ; get current GCOL/TINT values
@@ -5176,7 +5294,7 @@ SavedColourSize * 10*4
         BL      setgcoltint
 01
         ]
-        
+
 ; calculate matrix to map character into the correct position
 
 paintdraw_common
@@ -5254,7 +5372,7 @@ paintdraw_common
 
         Push    "R1-R6"
         MOV     R2,sp                   ; R2 -> matrix
-        
+
         [ paintnogcol
 ; don't ask me how these were worked out. but they're wrong now! (amg)
         LDR     R3,[sp,#SavedColourSize+((6+4)*4)]      ; R3 -> character outline
@@ -5347,13 +5465,13 @@ paintbuffer_in
 
         ;amg: fix bug MED-01996. This test is flawed when the last character of a string
         ;is a space, since it causes us to exceed the length of our buffer!
-            
+
         [ false
         LDR     R2,[R1,#4]              ; size remaining
         SUBS    R2,R2,#pathobj_header
         BLT     err_bufferoverflow      ; 3 words not stacked here
         ]
-                               
+
         [ paintnogcol
         STR     R1, [sp,#-10*4]!         ; save character header
         |
@@ -5366,9 +5484,9 @@ paintbuffer_in
         STR     R14,[R1,#pathobj_linewidth]
         MOV     R14,#-1
         STR     R14,[R1,#pathobj_linecolour]
-    
+
       [ nonzerofilling
-                     
+
 ; decode the font file to suss which fill algorithm is being used and
 ; then write a suitable record into the draw object.
 
@@ -5380,7 +5498,7 @@ paintbuffer_in
         TST     R0,#pp_fillnonzero      ; should I use the non-zero fill algorithm?
         MOVEQ   R14,#style_evenodd
         MOVNE   R14,#style_nonzero
-        STR     R14,[R1,#pathobj_style] ; store a style record                                  
+        STR     R14,[R1,#pathobj_style] ; store a style record
         Pull    "R0"                    ; preserve that all important R0
 
       |
@@ -5389,7 +5507,7 @@ paintbuffer_in
 
         MOV     R14,#style_evenodd
         STR     R14,[R1,#pathobj_style]
-       
+
       ]
 
         ASSERT  obj_type = 0
@@ -5407,7 +5525,7 @@ paintbuffer_in
 ; R1 -> terminator at end of character just output
 ; NB: 3 words on stack rather than one, for paintdraw_common
 
-paintbuffer_out             
+paintbuffer_out
         [ paintnogcol
         LDR     R2,[sp],#10*4            ; R2 -> character header
         |
@@ -5448,7 +5566,7 @@ paintbuffer_out
         MOV     R6,#-bignum
 01
         LDR     R14,[R1],#4
-        TEQ     R14,#path_move  
+        TEQ     R14,#path_move
         TEQNE   R14,#path_line
         BEQ     %FT02
         TEQ     R14,#path_close
@@ -6113,7 +6231,7 @@ setnorubout
 ; Out   rectangle object created, with the full rubout coordinates in it
 
 rubout_rectangle
-        ADR     R14,rubx0               ; no rubout if 
+        ADR     R14,rubx0               ; no rubout if
         LDMIA   R14,{x0,y0,x1,y1}
         CMP     x0,x1
         CMPLE   y0,y1

@@ -141,19 +141,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.LZW:	c.LZW
-o.LZW:	C:h.kernel
-o.LZW:	C:h.swis
-o.LZW:	C:h.s_card
-o.LZW:	C:h.sc_const
-o.LZW:	h.regss_scrp
-o.LZW:	h.module
-o.LZW:	h.LZW
-o.LZW:	h.DBUG
-o.DBUG:	c.DBUG
-o.DBUG:	H.DBUG
-o.regss_util: s.regss_util
-o.regss_util: s.registers
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -167,10 +154,6 @@ o.module:	h.dynalloc
 o.module:	h.regss_defs
 o.module:	h.LZW
 o.module:	h.DBUG
-o.dynalloc:	c.dynalloc
-o.dynalloc:	C:h.kernel
-o.dynalloc:	C:h.swis
-o.dynalloc:	h.dynalloc
 o.regss_swis:	c.regss_swis
 o.regss_swis:	C:h.swis
 o.regss_swis:	C:h.kernel
@@ -187,6 +170,10 @@ o.regss_swis:	h.LZW
 o.regss_swis:	h.dynalloc
 o.regss_swis:	C:h.scinter
 o.regss_swis:	h.DBUG
+o.dynalloc:	c.dynalloc
+o.dynalloc:	C:h.kernel
+o.dynalloc:	C:h.swis
+o.dynalloc:	h.dynalloc
 o.regss_scrp:	c.regss_scrp
 o.regss_scrp:	C:h.kernel
 o.regss_scrp:	C:h.swis
@@ -197,3 +184,16 @@ o.regss_scrp:	h.regss_scrp
 o.regss_scrp:	C:h.reg_scbb
 o.regss_scrp:	h.module
 o.regss_scrp:	h.DBUG
+o.LZW:	c.LZW
+o.LZW:	C:h.kernel
+o.LZW:	C:h.swis
+o.LZW:	C:h.s_card
+o.LZW:	C:h.sc_const
+o.LZW:	h.regss_scrp
+o.LZW:	h.module
+o.LZW:	h.LZW
+o.LZW:	h.DBUG
+o.DBUG:	c.DBUG
+o.DBUG:	H.DBUG
+o.regss_util: s.regss_util
+o.regss_util: s.registers
