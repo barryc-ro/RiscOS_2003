@@ -62,7 +62,7 @@ C_ABSSYM  = RISCOSLIB:o.c_abssym
 
 FSLIB     = ^.fslib.o.fslib
 RMALIB    = ^.rmalib.o.rmalib
-TCPLIB	  = TCPIPLibs:o.socklibzm
+TCPLIB	  = TCPIPLibs:o.socklibzm TCPIPLibs:o.inetlibzm
 
 # sharefsBITS
 OBJS =\
@@ -148,27 +148,6 @@ rom_link:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.window:	c.window
-o.window:	^.fslib.h.debug
-o.window:	^.fslib.h.ker
-o.window:	C:h.kernel
-o.window:	C:h.swis
-o.window:	^.fslib.h.interface
-o.window:	^.fslib.h.ModuleWrap
-o.window:	C:h.kernel
-o.window:	^.fslib.h.util
-o.window:	^.fslib.h.lookup
-o.window:	^.fslib.h.fscore
-o.window:	^.fslib.h.evil
-o.window:	^.rmalib.h.ralloc
-o.window:	^.fslib.h.visdelay
-o.window:	^.fslib.h.esc
-o.window:	h.remswis
-o.window:	h.errnum
-o.window:	h.stream
-o.window:	h.window
-o.window:	h.msgproc
-o.window:	^.fslib.h.ticker
 o.irqs: s.irqs
 o.irqs: <Hdr$Dir>.Global.ListOpts
 o.irqs: <Hdr$Dir>.Global.Macros
@@ -351,3 +330,24 @@ o.shareinet:	C:h.kernel
 o.shareinet:	TCPIPLibs:h.inetlib
 o.shareinet:	TCPIPLibs:sys.h.types
 o.shareinet:	TCPIPLibs:netinet.h.in
+o.window:	c.window
+o.window:	^.fslib.h.debug
+o.window:	^.fslib.h.ker
+o.window:	C:h.kernel
+o.window:	C:h.swis
+o.window:	^.fslib.h.interface
+o.window:	^.fslib.h.ModuleWrap
+o.window:	C:h.kernel
+o.window:	^.fslib.h.util
+o.window:	^.fslib.h.lookup
+o.window:	^.fslib.h.fscore
+o.window:	^.fslib.h.evil
+o.window:	^.rmalib.h.ralloc
+o.window:	^.fslib.h.visdelay
+o.window:	^.fslib.h.esc
+o.window:	h.remswis
+o.window:	h.errnum
+o.window:	h.stream
+o.window:	h.window
+o.window:	h.msgproc
+o.window:	^.fslib.h.ticker

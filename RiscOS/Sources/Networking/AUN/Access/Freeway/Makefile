@@ -31,12 +31,12 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS  = -depend !Depend -I<Hdr$Dir>.Global.,<Hdr$Dir>.Interface. -Stamp -quit
-CFLAGS  = -ansi -zM -zps1 -ffah ${INCLUDES} ${DFLAGS}
-DFLAGS  = -DAUTH32
+CFLAGS  = -ansi -zM -zps1 -Wp -ffah ${INCLUDES} ${DFLAGS}
+DFLAGS  = -DAUTH32 -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
-INCLUDES  = -IINetInc:
+INCLUDES  = -ITCPIPLibs:
 
 #
 # Libraries
@@ -48,7 +48,9 @@ ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
 C_ABSSYM  = RISCOSLIB:o.c_abssym
 
-SOCKLIBZM = ^.^.libs.socklib.socklibzm
+SOCKLIBZM = TCPIPLibs:o.socklibzm
+INETLIBZM = TCPIPLibs:o.inetlibzm
+UNIXLIBZM = TCPIPLibs:o.unixlibzm
 
 OBJS =\
  o.fwhdr\
@@ -91,12 +93,12 @@ clean_all: clean
         ${WIPE} o.* ${WFLAGS}
         @echo ${COMPONENT}: imported objects removed
 
-${ROM_MODULE}: ${OBJS} ${SOCKLIBZM} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${UNIXLIBZM} ${INETLIBZM} ${SOCKLIBZM} ${ROMCSTUBS}
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${SOCKLIBZM} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${UNIXLIBZM} ${INETLIBZM} ${SOCKLIBZM} ${ROMCSTUBS}
 
-rm.Freeway: ${OBJS} ${SOCKLIBZM} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${SOCKLIBZM} ${CLIB}
+rm.Freeway: ${OBJS} ${UNIXLIBZM} ${INETLIBZM} ${SOCKLIBZM} ${CLIB}
+        ${LD} -o $@ -module ${OBJS} ${UNIXLIBZM} ${INETLIBZM} ${SOCKLIBZM} ${CLIB}
 
 
 # final link for ROM Image (using given base address)
@@ -112,63 +114,12 @@ rom_link:
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
 o.inetfn:	c.inetfn
-o.inetfn:	INetInc:sys.h.types
-o.inetfn:	INetInc:netinet.h.in
+o.inetfn:	TCPIPLibs:sys.h.types
+o.inetfn:	TCPIPLibs:sys.h.cdefs
+o.inetfn:	TCPIPLibs:machine.h.endian
+o.inetfn:	TCPIPLibs:machine.h.ansi
+o.inetfn:	TCPIPLibs:machine.h.types
+o.inetfn:	TCPIPLibs:netinet.h.in
 o.inetfn:	h.module
 o.inetfn:	C:h.kernel
-o.inetfn:	INetInc:netinet.h.in
-o.irqs: s.irqs
-o.irqs: <Hdr$Dir>.Global.ListOpts
-o.irqs: <Hdr$Dir>.Global.Macros
-o.irqs: <Hdr$Dir>.Global.System
-o.irqs: Hdr:SWIs
-o.irqs: Hdr:CPU.Generic26
-o.irqs: Hdr:IO.GenericIO
-o.irqs: Hdr:RISCOS
-o.module:	c.module
-o.module:	INetInc:sys.h.types
-o.module:	INetInc:sys.h.uio
-o.module:	INetInc:sys.h.socket
-o.module:	INetInc:sys.h.time
-o.module:	INetInc:sys.h.time
-o.module:	INetInc:sys.h.ioctl
-o.module:	INetInc:sys.h.ttychars
-o.module:	INetInc:sys.h.ttydev
-o.module:	INetInc:sys.h.errno
-o.module:	INetInc:sys.^.h.errno
-o.module:	C:h.kernel
-o.module:	INetInc:sys.h.dcistructs
-o.module:	INetInc:netinet.h.in
-o.module:	INetInc:net.h.if
-o.module:	INetInc:sys.h.mbuf
-o.module:	INetInc:net.h.if_arp
-o.module:	INetInc:sys.h.socket
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	C:h.kernel
-o.module:	INetInc:netinet.h.in
-o.module:	h.stubs
-o.module:	C:h.kernel
-o.module:	INetInc:sys.h.types
-o.module:	INetInc:sys.h.socket
-o.module:	INetInc:sys.h.socketvar
-o.objects:	c.objects
-o.objects:	C:h.kernel
-o.objects:	C:h.swis
-o.objects:	INetInc:sys.h.types
-o.objects:	INetInc:sys.h.uio
-o.objects:	INetInc:sys.h.socket
-o.objects:	INetInc:netinet.h.in
-o.objects:	INetInc:net.h.if
-o.objects:	INetInc:sys.h.mbuf
-o.objects:	INetInc:net.h.if_arp
-o.objects:	INetInc:sys.h.socket
-o.objects:	h.module
-o.objects:	C:h.kernel
-o.objects:	INetInc:netinet.h.in
-o.objects:	h.stubs
-o.objects:	C:h.kernel
-o.objects:	INetInc:sys.h.types
-o.objects:	INetInc:sys.h.socket
-o.objects:	INetInc:sys.h.socketvar
+o.inetfn:	TCPIPLibs:netinet.h.in
