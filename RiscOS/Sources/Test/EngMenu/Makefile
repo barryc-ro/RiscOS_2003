@@ -21,7 +21,7 @@ I_TARGET  = ${RDIR}.!RunImagI
 
 # Resources paths
 #
-RESAPP = <resource$dir>.${USERIF}.Apps.${APP}
+RESAPP = <resource$dir>.Apps.${APP}
 #
 # Generic options:
 #
