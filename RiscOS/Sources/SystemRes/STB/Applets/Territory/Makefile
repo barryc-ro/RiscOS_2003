@@ -8,6 +8,7 @@ INSTAPP   = ${INSTDIR}.!${COMPONENT}
 INSTOPTS  = ${INSTAPP}.<STB$OS>.${Locale}
 INSTPICS  = ${INSTOPTS}.pics
 HTMLDIR   = ${INSTHTML}.<STB$OS>.${Locale}
+CMNRESDIR = ${INSTAPP}.Resources
 
 IFTHERE    = IfThere
 IFTHEN     = Then
@@ -28,6 +29,12 @@ dirs:
 	${MKDIR} ${INSTOPTS}
 	${MKDIR} ${INSTPICS}
 	${MKDIR} ${HTMLDIR}
+	${MKDIR} ${CMNRESDIR}
+	${MKDIR} ${CMNRESDIR}.Canada1
+	${MKDIR} ${CMNRESDIR}.France
+	${MKDIR} ${CMNRESDIR}.Germany
+	${MKDIR} ${CMNRESDIR}.Norway
+	${MKDIR} ${CMNRESDIR}.Spain
 
 set_vars: set_paths_${BROWSER} set_OS_${Machine}
 	@echo Set OS for ${Machine} to <STB$OS>
@@ -59,6 +66,11 @@ resources:
 	${IFTHERE} TerrRes:banners   ${IFTHEN} ${CP} TerrRes:banners   ${INSTOPTS}.pics.banners  ${CPFLAGS}
 	${IFTHERE} TerrRes:misc      ${IFTHEN} ${CP} TerrRes:misc      ${INSTOPTS}.pics.misc     ${CPFLAGS}
 	${IFTHERE} TerrRes:teleopts  ${IFTHEN} ${CP} TerrRes:teleopts  ${INSTOPTS}.pics.teleopts ${CPFLAGS}
+	${IFTHERE} TerrRes:Canada1   ${IFTHEN} ${CP} TerrRes:Canada1   ${CMNRESDIR}.Canada1.Messages ${CPFLAGS}
+	${IFTHERE} TerrRes:France    ${IFTHEN} ${CP} TerrRes:France    ${CMNRESDIR}.France.Messages  ${CPFLAGS}
+	${IFTHERE} TerrRes:Germany   ${IFTHEN} ${CP} TerrRes:Germany   ${CMNRESDIR}.Germany.Messages ${CPFLAGS}
+	${IFTHERE} TerrRes:Norway    ${IFTHEN} ${CP} TerrRes:Norway    ${CMNRESDIR}.Norway.Messages  ${CPFLAGS}
+	${IFTHERE} TerrRes:Spain     ${IFTHEN} ${CP} TerrRes:Spain     ${CMNRESDIR}.Spain.Messages   ${CPFLAGS}
 
 translate:
 	${IFTHERE} TerrTrans:Acknow            ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Acknow            -o ${INSTOPTS}.Acknow
