@@ -47,7 +47,6 @@ INCLUDES = -Itbox:,C:
 
 
 FILES =\
- ${RDIR}.!Boot \
  ${RDIR}.!Run \
  ${RDIR}.!RunImage \
  ${LDIR}.Messages \
@@ -76,7 +75,6 @@ install: ${FILES}
          @echo
          @echo ${COMPONENT}: Creating application ${APP}
          ${MKDIR} ${INSTDIR}.${APP}
-         ${CP} ${RDIR}.!Boot      ${INSTDIR}.${APP}.!Boot      ${CPFLAGS}
          ${CP} ${RDIR}.!Run       ${INSTDIR}.${APP}.!Run       ${CPFLAGS}
          ${CP} ${RDIR}.!RunImage  ${INSTDIR}.${APP}.!RunImage  ${CPFLAGS} 
          ${CP} ${LDIR}.Messages   ${INSTDIR}.${APP}.Messages   ${CPFLAGS}
