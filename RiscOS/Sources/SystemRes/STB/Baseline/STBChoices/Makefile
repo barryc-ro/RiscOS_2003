@@ -15,9 +15,9 @@
 #
 MKDIR           = mkdir -p
 CP              = copy
-generate       = generate
+generate        = generate
 RM              = remove
-WIPE            = -wipe
+WIPE            = wipe
 MODGEN          = modgen
 MODSQZ          = modsqz -f
 APPEND          = echo
@@ -28,7 +28,7 @@ APPFLAGS        = { >> rm.Via }
 #
 # Program specific options:
 #
-COMPONENT       = NCOptRes
+COMPONENT       = Choices<Locale>
 
 #
 # Resources directories:
@@ -36,8 +36,9 @@ COMPONENT       = NCOptRes
 LOCALRES        = LocalUserIFRes:
 
 
-INVIA           = Resources.General.UK.ViaFile
-INMOD           = rm.$(COMPONENT)
+INVIA           = Resources.General.<Locale>.ViaFile
+INDIR           = rm.$(MACHINE)
+INMOD           = $(INDIR).$(COMPONENT)
 
 #
 # Output files and directories:
@@ -51,6 +52,9 @@ OUTMOD          = $(INSTDIR).$(COMPONENT)
 rom: $(TARGET)
         @echo $(COMPONENT): ROM module built
 
+ram: generate dirs
+        @echo $(COMPONENT): RAM module built
+
 export: $(EXPORTS)
         @echo $(COMPONENT): export complete
 
@@ -63,22 +67,22 @@ install: generate dirs
         @echo $(COMPONENT): RAM module installed
 
 clean:
-        $(WIPE) rm $(WFLAGS)
+        ifthere rm then $(WIPE) rm $(WFLAGS)
         @echo $(COMPONENT): cleaned
 
 local_clean:
         @echo $(COMPONENT): cleaned local resources directory
 
 dirs:
-        $(MKDIR) rm
+        $(MKDIR) $(INDIR)
         $(MKDIR) $(INSTDIR)
 
 generate: dirs
         @echo Creating the Via file...
         $(CP) $(INVIA) $(OUTVIA) $(CPFLAGS)
-        $(APPEND) $(LOCALRES)Options Resources.NCOptions.Options$(APPFLAGS)
+        $(APPEND) $(LOCALRES)Options !Boot.HTML.Setup.Options$(APPFLAGS)
         @echo Generating the ResourcesFS archive module...
-        $(MODGEN) $(INMOD) $(COMPONENT) $(COMPONENT) 1.00 -via $(OUTVIA)
+        @do $(MODGEN) $(INMOD) $(COMPONENT) $(COMPONENT) 1.05 -via $(OUTVIA)
         @echo Squeezing the module...
         $(MODSQZ) $(INMOD)
         @echo Module generation complete.
