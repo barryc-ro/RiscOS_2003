@@ -241,6 +241,7 @@ install_common: ${FILES}
 	${CP} LocalRes:WebPages.04   		${INSTDIR}.WebPages.04   ${CPFLAGS}
 	${CP} LocalRes:WebPages.05   		${INSTDIR}.WebPages.05   ${CPFLAGS}
 	${CP} LocalRes:WebPages.06   		${INSTDIR}.WebPages.06   ${CPFLAGS}
+	${CP} LocalRes:WebPages.07   		${INSTDIR}.WebPages.07   ${CPFLAGS}
 	${CP} LocalRes:WebPages.11   		${INSTDIR}.WebPages.11   ${CPFLAGS}
 	${CP} LocalRes:WebPages.21   		${INSTDIR}.WebPages.21   ${CPFLAGS}
 	${CP} LocalRes:WebPages.22   		${INSTDIR}.WebPages.22   ${CPFLAGS}

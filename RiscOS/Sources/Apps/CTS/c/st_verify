@@ -34,6 +34,7 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
 
   static cts_statetable_states_verify state = S_Verify_Idle;
   static cts_server_message *verify_message = NULL;
+  static const char *response_sts = "999"; /* Set it to an invalid sts, so we spot when it's not set */
 
 #ifdef DEBUGLIB
   static cts_statetable_states_verify last_state = S_Verify_Idle;
@@ -73,7 +74,7 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
       {
         case AC_BrowserMessage:
           /* Close password dbox */
-          cts_ui_close_dbox (bm->plugin);
+          cts_ui_close_dbox (verify_message->plugin);
 
           /* Check it's a dbox message */
           if (strcmp (bm->command, "dbox") == 0)
@@ -81,11 +82,46 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
             /* Check for "OK" action */
             if (cts_browser_parameter_lookup_by_tag (bm, btag_OK))
             {
+              size_t length;
+              void *command;
+              const cts_command_parameter *param;
+              const cts_browser_parameter *b_param;
+              int key_id;
+
               /* Open "Accessing smartcard" dialogue (code 01-02) */
-              cts_ui_open_dbox (sm->plugin, NULL, ui_code_01_2);
-              /* send "verify" command -- TODO */
-              state = S_Verify_ReceiveResponse;
-              rc = RC_Verify_Pending;
+              cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_01_2);
+
+              /* Send "verify" command */
+
+              /* Extract the password from the dbox message */
+              b_param = cts_browser_parameter_lookup_by_tag (bm, btag_PASSWORD);
+
+              /* Extract KeyID from verify message */
+              param = cts_command_parameter_lookup_by_tag (verify_message, tag_KEYID);
+              key_id = atoi (param->value);
+
+              /* Construct the Verify command */
+              command = cts_sc_construct_pin_op_apdu (cts_sc_pin_op_VERIFY, b_param->value,
+                                                      b_param->value_length, key_id, &length);
+
+              if (command != NULL)
+              {
+                /* And send it */
+                cts_sc_send_apdu (command, length);
+
+                /* Then free the command */
+                free (command);
+
+                state = S_Verify_ReceiveResponse;
+                rc = RC_Verify_Pending;
+              }
+              else
+              {
+                /* malloc failed in cts_sc_construct_pin_op_apdu()!! */
+                dprintf (("StateMachine", "SM> Verify - malloc failed in construct_pin_op_apdu()!!\n"));
+                rc = RC_Verify_Error;
+                state = S_Verify_Idle;
+              }
             }
             /* Check for "Cancel" action */
             else if (cts_browser_parameter_lookup_by_tag (bm, btag_CANCEL))
@@ -126,7 +162,7 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
 
         case AC_Cancel:
           /* Close password dbox */
-          cts_ui_close_dbox (bm->plugin);
+          cts_ui_close_dbox (verify_message->plugin);
           /* Free the "verify" command message */
           cts_server_message_destroy (verify_message);
           verify_message = NULL;
@@ -148,7 +184,7 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
 #ifdef CANCELACTION_ALLOWED
         case AC_BrowserMessage:
           /* Close "accessing smart card" dbox */
-          cts_ui_close_dbox (bm->plugin);
+          cts_ui_close_dbox (verify_message->plugin);
 
           /* Check it's a dbox message */
           if (strcmp (bm->command, "dbox") == 0)
@@ -158,7 +194,7 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
             {
 
               /* Open cancel confirm dbox (code 05) */
-              cts_ui_open_dbox (sm->plugin, NULL, ui_code_05);
+              cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_05);
               rc = RC_Verify_CancelDialogue;
             }
             else
@@ -182,68 +218,125 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
           break;
 #endif
         case AC_Continue:
-          /* poll for response completion -- TODO */
-          if (/*finished*/1)
+        {
+          cts_sc_status status;
+          cts_sc_pin_op_response_codes response;
+          size_t tries_remaining;
+          char sw1sw2_response[2];
+          char *buffer;
+          size_t length;
+
+          /* Check for response completion -- TODO */
+          cts_sc_read_data (NULL, 0, &length, NULL);
+          buffer = malloc (length);
+          status = cts_sc_read_data (buffer, length, NULL, sw1sw2_response);
+          switch (status)
           {
-            /* Close "accessing smart card" dbox */
-            cts_ui_close_dbox (verify_message->plugin);
+            case cts_sc_status_COMPLETE:
+              /* Finished "verify" command */
+              /* Close "accessing smart card" dbox */
+              cts_ui_close_dbox (verify_message->plugin);
 
-            if (/*key lock, or command error*/0)
-            {
-              ui_code_identifiers code;
-              int err_num = 0;
+              /* Decode response ... */
+              cts_sc_pin_op_response (cts_sc_pin_op_VERIFY, sw1sw2_response, &response, &tries_remaining);
+              /* And act on it */
+              switch (response)
+              {
+                case pin_op_SUCCESS:
+                  /* Verify finished successfully */
+                  /* Open "communicating with server" dbox (code 01-1) */
+                  cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_01_1);
+                  /* Send response (includes verify result) */
+                  cts_statetable_aux_sendresult_verify (verify_message, "00");
+                  /* Free the "verify" command message */
+                  cts_server_message_destroy (verify_message);
+                  verify_message = NULL;
+                  state = S_Verify_Idle;
+                  rc = RC_Verify_Finished;
+                  break;
 
-              if (/*password locked -- TODO */0)
-                code = ui_code_23;
-              else if (/*password wrong and locked -- TODO*/0)
-                code = ui_code_24;
+                case pin_op_FAIL_RETRY_INVALID:
+                  /* Open error message dbox (code 25-2) */
+                  cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_25_2);
+                  state = S_Verify_RetryPasswordDialogue;
+                  rc =  RC_Verify_Pending;
+                  break;
+
+                case pin_op_FAIL_RETRY_VALID:
+                  /* Open error message dbox (code 25-1) */
+                  cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_25_1, tries_remaining);
+                  state = S_Verify_RetryPasswordDialogue;
+                  rc =  RC_Verify_Pending;
+                  break;
+
+                case pin_op_FAIL_WAS_LOCKED:
+                  /* Open error message dbox (code 23) */
+                  cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_23);
+                  response_sts = "02";
+                  state = S_Verify_SpecialErrorDialogue;
+                  rc =  RC_Verify_Pending;
+                  break;
+
+                case pin_op_FAIL_NOW_LOCKED:
+                  /* Open error message dbox (code 24) */
+                  cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_24);
+                  response_sts = "03";
+                  state = S_Verify_SpecialErrorDialogue;
+                  rc =  RC_Verify_Pending;
+                  break;
+
+                case pin_op_FAIL_NO_EFID:
+                case pin_op_FAIL_UNKNOWN:
+                default:
+                {
+                  int err_num;
+
+                  /* Smart card error */
+                  err_num = sw1sw2_response[0] | (sw1sw2_response[1] << 2);
+
+                  /* Open error message dbox (code 30) */
+                  cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_30, err_num);
+
+                  if (response == pin_op_FAIL_NO_EFID)
+                    response_sts = "01";
+                  else
+                    response_sts = "99";
+                  state = S_Verify_SpecialErrorDialogue;
+                  rc =  RC_Verify_Pending;
+                }
+              }
+              break;
+
+            case cts_sc_status_INPROGRESS:
+              rc = RC_Verify_Pending;
+              break;
+
+            case cts_sc_status_FAILED:
+              if (/*communication error -- TODO*/0)
+              {
+                /* Close "accessing smart card" dbox */
+                cts_ui_close_dbox (verify_message->plugin);
+                /* Open error message dbox (code 03) */
+                cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_03);
+                /* Free the "verify" command message */
+                cts_server_message_destroy (verify_message);
+                verify_message = NULL;
+                rc =  RC_Verify_ErrorDialogue;
+                state = S_Verify_Idle;
+              }
               else
               {
-                /* Smart card error */
-                err_num = /* from smart card -- TODO*/1;
-                code = ui_code_30;
+                state = S_Verify_Idle;
+                rc = RC_Verify_Error;
               }
-              /* Open error message dbox (code 23,24,30) */
-              cts_ui_open_dbox (sm->plugin, NULL, code, err_num);
-              state = S_Verify_SpecialErrorDialogue;
-              rc =  RC_Verify_Pending;
-            }
-            else if (/*communication error*/0)
-            {
-              /* Open error message dbox (code 03) */
-              cts_ui_open_dbox (sm->plugin, NULL, ui_code_03);
-              /* Free the "verify" command message */
-              cts_server_message_destroy (verify_message);
-              verify_message = NULL;
-              rc =  RC_Verify_ErrorDialogue;
+              break;
+
+            default:
               state = S_Verify_Idle;
-            }
-            else if (/*key comparison failed*/0)
-            {
-              /* Open error message dbox (code 25) */
-              cts_ui_open_dbox (sm->plugin, NULL, ui_code_25_1, /* num of tries left -- TODO */999);
-              state = S_Verify_RetryPasswordDialogue;
-              rc =  RC_Verify_Pending;
-            }
-            else
-            {
-              /* Finished */
-              /* Open "communicating with server" dbox (code 01-1) */
-              cts_ui_open_dbox (sm->plugin, NULL, ui_code_01_1);
-              /* Send response (includes verify result) */
-              cts_statetable_aux_sendresult_verify (verify_message, NULL/*TODO*/);
-              /* Free the "verify" command message */
-              cts_server_message_destroy (verify_message);
-              verify_message = NULL;
-              state = S_Verify_Idle;
-              rc = RC_Verify_Finished;
-            }
-          }
-          else
-          {
-            rc = RC_Verify_Pending;
+              rc = RC_Verify_Error;
           }
           break;
+        }
 
       default:
         /* Any other action in this state is illegal */
@@ -258,7 +351,7 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
       {
         case AC_BrowserMessage:
           /* Close dbox */
-          cts_ui_close_dbox (bm->plugin);
+          cts_ui_close_dbox (verify_message->plugin);
 
           /* Check it's a dbox message */
           if (strcmp (bm->command, "dbox") == 0)
@@ -267,9 +360,9 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
             if (cts_browser_parameter_lookup_by_tag (bm, btag_OK))
             {
               /* Open "communicating with server" dbox (code 01-1) */
-              cts_ui_open_dbox (sm->plugin, NULL, ui_code_01_1);
+              cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_01_1);
               /* Send response (includes verify result) */
-              cts_statetable_aux_sendresult_verify (verify_message, NULL/*TODO*/);
+              cts_statetable_aux_sendresult_verify (verify_message, response_sts);
               state = S_Verify_Idle;
               rc = RC_Verify_Finished;
             }
@@ -311,7 +404,7 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
       {
         case AC_BrowserMessage:
           /* Close dbox */
-          cts_ui_close_dbox (bm->plugin);
+          cts_ui_close_dbox (verify_message->plugin);
 
           /* Check it's a dbox message */
           if (strcmp (bm->command, "dbox") == 0)
@@ -320,7 +413,7 @@ cts_statetable_result_verify cts_statetable_verify_SM (cts_statetable_action act
             if (cts_browser_parameter_lookup_by_tag (bm, btag_OK))
             {
               /* Re-open "enter password" dbox (code 21) */
-              cts_ui_open_dbox (sm->plugin, NULL, ui_code_21);
+              cts_ui_open_dbox (verify_message->plugin, NULL, ui_code_21);
               state = S_Verify_WaitingOKCancel;
               rc = RC_Verify_Pending;
             }
