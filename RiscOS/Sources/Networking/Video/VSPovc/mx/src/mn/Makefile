@@ -3,8 +3,6 @@
 # debug directives:
 #
 # NDEBUG - should disable ALL debugging when defined
-#
-# NOTICK - turns off periodic call to mnIdle (and hence the heartbeat)
 
 TARGET=lib.mnlib
 
@@ -24,7 +22,7 @@ OBJASM=objasm
 LIB=libfile
 LIBFLAGS=-c -o
 
-CFLAGS = -c -depend !Depend -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG -DNOTICK
+CFLAGS = -c -depend !Depend -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG
 
 
 

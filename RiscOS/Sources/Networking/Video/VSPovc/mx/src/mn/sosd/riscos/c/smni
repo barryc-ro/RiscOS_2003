@@ -22,6 +22,11 @@ Date      Who     Description of change
 
 22mar99   CP      Made the MN tick dependent on NOTICK not being defined
 
+15apr99   CP      Fixed possible problem with the periodic call to mnIdle;
+                  CallEvery sits on an interrupt handler, so really should only
+                  set up a callback to the required function unless it is
+                  reentrant.
+
 ***************************************************************************/
 /* Copyright (c) Oracle Corporation 1995.  All Rights Reserved. */
 
@@ -93,11 +98,15 @@ int mn_started = 0;
 extern void *module_wsp;
 extern char gw_phy_adr[64];
 
+static int static_CallbackSet = FALSE;
+
 #define MNIDLETICK 1500  /* time between calls to mnIdle (cs) */
 
 /* 9FEB99:CP: DANGER!  These should really be pulled in from cmhg.h */
 extern void mnIdle_entry(void); /* from CMHG */
+extern void mnIdle_CBentry(void);
 _kernel_oserror *mnIdle_handler(_kernel_swi_regs *, void *);
+_kernel_oserror *mnIdle_CBhandler(_kernel_swi_regs *, void *);
 
 /* ARGSUSED */
 boolean smniInit( void *osdCtx, mnLogger logger )
@@ -153,7 +162,29 @@ int pollnio(void)
 
 _kernel_oserror *mnIdle_handler(_kernel_swi_regs *r, void *pw)
 {
+  _kernel_oserror *err = NULL;
+
+  if (static_CallbackSet != TRUE)
+  {
+    static_CallbackSet = TRUE;
+
+    err = _swix(OS_AddCallBack,
+                _IN(0)        | _IN(1),
+                mnIdle_CBentry, (int)module_wsp);
+
+    if (err != NULL)
+    {
+      static_CallbackSet = FALSE;
+    }
+  }
+
+  return err;
+}
+
+_kernel_oserror *mnIdle_CBhandler(_kernel_swi_regs *r, void *pw)
+{
   mnIdle();
+  static_CallbackSet = FALSE;
 
   return NULL;
 }
@@ -169,11 +200,9 @@ void Fire_Up_MediaNet(void)
     (void) smniInit(ctxbuf, (mnLogger) 0 );
     yoInit();
 
-#ifndef NOTICK
     _swi (OS_CallEvery,
          _IN(0)     | _IN(1)           | _IN(2),
          MNIDLETICK, (int)mnIdle_entry, (int)module_wsp );
-#endif
 
    return;
 }
@@ -183,11 +212,16 @@ void Close_Down_MediaNet(void)
     if (!mn_started)
         return;
 
-#ifndef NOTICK
     _swi (OS_RemoveTickerEvent,
          _IN(0)            | _IN(1),
          (int)mnIdle_entry, (int)module_wsp );
-#endif
+
+    if (TRUE == static_CallbackSet)
+    {
+      _swi (OS_RemoveCallBack,
+            _IN(0)            | _IN(1),
+            mnIdle_CBentry, (int)module_wsp);
+    }
 
    yoTerm();
     mnTerm();
