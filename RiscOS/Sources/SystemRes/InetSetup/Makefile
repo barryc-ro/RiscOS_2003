@@ -19,7 +19,7 @@ INSTDIR    = ${INSTDIR}.${APP}
 
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 ATTR    = -attr
 CP      = copy
 RM      = remove
