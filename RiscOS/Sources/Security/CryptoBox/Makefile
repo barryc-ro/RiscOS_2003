@@ -59,21 +59,26 @@ TARGET     = aof.${COMPONENT}
 SOURCE     = 
 EXPORTS    = 
 LIB        = CryptoLib
+LIBD       = CryptoLibD
 
 OBJS = pkcs11.o rsa_id2.o
+OBJSD = od.pkcs11 od.rsa_id2
 HDRS = pkcs11.h pkcs11f.h pkcs11t.h rsa_id2.h
 
 #
 # Rule patterns
 #
-.c.o:;     ${CC} ${CCFLAGS} -ff -zM -o $@ $<
+.SUFFIXES: .od
+
+.c.o:;     ${CC} ${CCFLAGS} -ffah -zM -o $@ $<
+.c.od:;    ${CC} ${CCFLAGS} -zM -o $@ $< -DDEBUG
 .cmhg.o:;  ${CM} ${CMFLAGS} -o $@ $<
 .cmhg.h:;  ${CM} ${CMFLAGS} -d $@ $<
 
 #
 # build a the library:
 #
-all:	${LIB} ${TARGET}
+all:	${LIB} ${LIBD} ${TARGET}
 
 #
 # RISC OS ROM build rules:
@@ -88,7 +93,9 @@ install_rom: ${TARGET}
 
 clean:
         ${WIPE} o ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
         ${RM} ${LIB}
+        ${RM} ${LIBD}
         @echo ${COMPONENT}: cleaned
 
 export_hdrs: ${HDRS} export_dirs
@@ -98,12 +105,14 @@ export_hdrs: ${HDRS} export_dirs
 	${CP} h.rsa_id2 ${CRYPTOLIBDIR}.h.* ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${LIB} export_dirs
+export_libs: ${LIB} ${LIBD} export_dirs
 	${CP} ${LIB}  ${CRYPTOLIBDIR}.o.* ${CPFLAGS}
+	${CP} ${LIBD} ${CRYPTOLIBDIR}.o.* ${CPFLAGS}
         @echo ${COMPONENT}: export complete (libs)
 
 o.local_dirs:
 	${MKDIR} o
+	${MKDIR} od
 	${TOUCH} $@
 
 export_dirs:
@@ -123,5 +132,8 @@ rom_link:
 
 ${LIB}: ${OBJS} o.local_dirs
         ${LB} ${LBFLAGS} -o ${LIB} ${OBJS}
+
+${LIBD}: ${OBJSD} o.local_dirs
+        ${LB} ${LBFLAGS} -o ${LIBD} ${OBJSD}
 
 # Dynamic dependencies:
