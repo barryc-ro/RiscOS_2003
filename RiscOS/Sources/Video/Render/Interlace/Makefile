@@ -11,6 +11,7 @@
 # 17-Mar-95  JRH	  Stopped all target from doing an install
 # 17-Oct-95  TMD	  Removed obsolete variants 't','u','v' from disc build
 # 18-Jul-96  TMD	  Added 'y' variant for STB1 MPEG2
+# 05-Feb-97  TMD	  Added 'z' variant for ART
 #
 
 #
@@ -38,14 +39,16 @@ ROMTARGET =	rm.${MACHINE}.Interlace
 DISCTARGETS =	rm.Interls \
 		rm.Interlw \
 		rm.Interlx \
-		rm.Interly
+		rm.Interly \
+		rm.Interlz
 
 INSTROMTARGET = ${INSTDIR}.${COMPONENT}
 
 INSTALLTARGETS = ${INSTDIR}.Interls \
 		 ${INSTDIR}.Interlw \
 		 ${INSTDIR}.Interlx \
-		 ${INSTDIR}.Interly
+		 ${INSTDIR}.Interly \
+		 ${INSTDIR}.Interlz
 
 .SUFFIXES: .Hdr .rm
 
@@ -84,6 +87,9 @@ ${INSTDIR}.Interlw: rm.Interlw
 	${CP} $? $@ ${CPFLAGS}
 
 ${INSTDIR}.Interly: rm.Interly
+	${CP} $? $@ ${CPFLAGS}
+
+${INSTDIR}.Interlz: rm.Interlz
 	${CP} $? $@ ${CPFLAGS}
 
 
@@ -189,6 +195,34 @@ rm.Interlv: Hdr:MPEGCard
 rm.Interlv: Hdr:MEMM.ARM600
 rm.Interlv: Hdr.Modes
 rm.Interlv: s.Common
+rm.Interly: Hdr.GetAll
+rm.Interly: Hdr:ListOpts
+rm.Interly: Hdr:Macros
+rm.Interly: Hdr:System
+rm.Interly: Hdr:SWIs
+rm.Interly: Hdr:CPU.Generic26
+rm.Interly: Hdr:IO.GenericIO
+rm.Interly: Hdr:RISCOS
+rm.Interly: Hdr:Machine.<Machine>
+rm.Interly: Hdr:Machine.<Machine>
+rm.Interly: Hdr:IO.IOMDL
+rm.Interly: Hdr:PublicWS
+rm.Interly: Hdr.GrubbyWS
+rm.Interly: Hdr:CMOS
+rm.Interly: Hdr:ModHand
+rm.Interly: Hdr:Services
+rm.Interly: Hdr:Proc
+rm.Interly: Hdr:FSNumbers
+rm.Interly: Hdr:NewErrors
+rm.Interly: Hdr:MsgTrans
+rm.Interly: Hdr:Debug
+rm.Interly: Hdr:VduExt
+rm.Interly: Hdr:Podule
+rm.Interly: Hdr:PoduleReg
+rm.Interly: Hdr:MPEG2Card
+rm.Interly: Hdr:MEMM.ARM600
+rm.Interly: Hdr.Modes
+rm.Interly: s.Common
 rm.Interls: Hdr.GetAll
 rm.Interls: Hdr:ListOpts
 rm.Interls: Hdr:Macros
@@ -244,6 +278,33 @@ rm.Interlw: Hdr:MPEGCard
 rm.Interlw: Hdr:MEMM.ARM600
 rm.Interlw: Hdr.Modes
 rm.Interlw: s.Common
+rm.Interlz: Hdr.GetAll
+rm.Interlz: Hdr:ListOpts
+rm.Interlz: Hdr:Macros
+rm.Interlz: Hdr:System
+rm.Interlz: Hdr:SWIs
+rm.Interlz: Hdr:CPU.Generic26
+rm.Interlz: Hdr:IO.GenericIO
+rm.Interlz: Hdr:RISCOS
+rm.Interlz: Hdr:Machine.<Machine>
+rm.Interlz: Hdr:Machine.<Machine>
+rm.Interlz: Hdr:IO.IOMDL
+rm.Interlz: Hdr:PublicWS
+rm.Interlz: Hdr.GrubbyWS
+rm.Interlz: Hdr:CMOS
+rm.Interlz: Hdr:ModHand
+rm.Interlz: Hdr:Services
+rm.Interlz: Hdr:Proc
+rm.Interlz: Hdr:FSNumbers
+rm.Interlz: Hdr:NewErrors
+rm.Interlz: Hdr:MsgTrans
+rm.Interlz: Hdr:Debug
+rm.Interlz: Hdr:VduExt
+rm.Interlz: Hdr:Podule
+rm.Interlz: Hdr:PoduleReg
+rm.Interlz: Hdr:MEMM.ARM600
+rm.Interlz: Hdr.Modes
+rm.Interlz: s.Common
 rm.Interlx: Hdr.GetAll
 rm.Interlx: Hdr:ListOpts
 rm.Interlx: Hdr:Macros
@@ -252,7 +313,6 @@ rm.Interlx: Hdr:SWIs
 rm.Interlx: Hdr:CPU.Generic26
 rm.Interlx: Hdr:IO.GenericIO
 rm.Interlx: Hdr:RISCOS
-rm.Interlx: Hdr:Machine.<Machine>
 rm.Interlx: Hdr:Machine.<Machine>
 rm.Interlx: Hdr:IO.IOMDL
 rm.Interlx: Hdr:PublicWS
@@ -272,31 +332,3 @@ rm.Interlx: Hdr:MPEGCard
 rm.Interlx: Hdr:MEMM.ARM600
 rm.Interlx: Hdr.Modes
 rm.Interlx: s.Common
-rm.Interly: Hdr.GetAll
-rm.Interly: Hdr:ListOpts
-rm.Interly: Hdr:Macros
-rm.Interly: Hdr:System
-rm.Interly: Hdr:SWIs
-rm.Interly: Hdr:CPU.Generic26
-rm.Interly: Hdr:IO.GenericIO
-rm.Interly: Hdr:RISCOS
-rm.Interly: Hdr:Machine.<Machine>
-rm.Interly: Hdr:Machine.<Machine>
-rm.Interly: Hdr:IO.IOMDL
-rm.Interly: Hdr:PublicWS
-rm.Interly: Hdr.GrubbyWS
-rm.Interly: Hdr:CMOS
-rm.Interly: Hdr:ModHand
-rm.Interly: Hdr:Services
-rm.Interly: Hdr:Proc
-rm.Interly: Hdr:FSNumbers
-rm.Interly: Hdr:NewErrors
-rm.Interly: Hdr:MsgTrans
-rm.Interly: Hdr:Debug
-rm.Interly: Hdr:VduExt
-rm.Interly: Hdr:Podule
-rm.Interly: Hdr:PoduleReg
-rm.Interly: Hdr:MPEG2Card
-rm.Interly: Hdr:MEMM.ARM600
-rm.Interly: Hdr.Modes
-rm.Interly: s.Common
