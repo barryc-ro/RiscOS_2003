@@ -46,6 +46,9 @@ MemReturn
         B       MemoryReadPhys
         B       MemoryAmounts
         B       MemoryIOSpace
+        B       %BT20                           ; Reason code 10 reserved (for MemoryFreePoolLock).
+        B       %BT20                           ; Reason code 11 reserved (for PCImapping).
+        B       RecommendPage
 40
 
 
@@ -396,7 +399,7 @@ MemoryReadPhys  ROUT
         LDR     r3, =NotPresent :OR: NotAvailable
         BL      fill_words
 
-        ; &02000000 to &02200000 is VRAM or not present.
+        ; &02000000 to &02400000 is VRAM or not present.
         MOV     r4, #0
         LDR     r4, [r4, #VRAMSize]     ; Get amount of VRAM (in bytes).
         TEQ     r4, #0
@@ -496,10 +499,11 @@ fill_words
 ;       In:     r0 = flags
 ;                       bit     meaning
 ;                       0-7     8 (reason code)
-;                       8-11    1=return amount of DRAM
+;                       8-11    1=return amount of DRAM (excludes any soft ROM)
 ;                               2=return amount of VRAM
 ;                               3=return amount of ROM
 ;                               4=return amount of I/O space
+;                               5=return amount of soft ROM (ROM loaded into hidden DRAM)
 ;                       12-31   reserved (set to 0)
 ;
 ;       Out:    r1 = number of pages of the specified type of memory
@@ -513,6 +517,19 @@ MemoryAmounts   ROUT
         BICS    lr, r0, #&FF            ; Get type of memory required (leave bits 12-31, non-zero => error).
         BEQ     %FT30                   ; Don't understand 0 (so the spec says).
 
+        TEQ     lr, #5:SHL:8            ; Check for soft ROM
+        BNE     %FT10
+        LDR     r1, =L1PT
+        MOV     r2, #ROM
+        ADD     r1, r1, r2, LSR #(20-2)   ; L1PT address for ROM
+        LDR     r2, [r1]
+        MOV     r2, r2, LSR #12
+        TEQ     r2, #PhysROM :SHR: 12     ; see if we have hard or soft ROM
+        MOVEQ   r1, #0                    ; no soft ROM
+        MOVNE   r1, #OSROM_ImageSize*1024 ; this much soft ROM
+        B       %FT20
+
+10
         TEQ     lr, #4:SHL:8            ; Check for IO space.
         LDREQ   r1, =136*1024*1024      ; Just return 136M (includes VIDC and EASI space).
         BEQ     %FT20
@@ -616,5 +633,110 @@ easi_space_table
         DCD     PhysSpace + IOMD_EASI_Base6
         DCD     PhysSpace + IOMD_EASI_Base7
  ]
+
+;----------------------------------------------------------------------------------------
+; MemoryFreePoolLock
+;
+; See code on Ursula branch
+
+;----------------------------------------------------------------------------------------
+;PCImapping - reserved for Acorn use (PCI manager)
+;
+; See code on Ursula branch
+
+
+;----------------------------------------------------------------------------------------
+;RecommendPage
+;
+;       In:     r0 bits 0..7  = 12 (reason code 12)
+;               r0 bits 8..31 = 0 (reserved flags)
+;               r1 = size of physically contiguous RAM region required (bytes)
+;               r2 = log2 of required alignment of base of region (eg. 12 = 4k, 20 = 1M)
+;
+;       Out:    r3 = page number of first page of recommended region that could be
+;                    grown as specific pages by dynamic area handler (only guaranteed
+;                    if grow is next page claiming operation)
+;        - or error if not possible (eg too big, pages unavailable)
+;
+RecommendPage ROUT
+        Push    "r0-r2,r4-r10,lr"
+        CMP     r2,#30
+        BHI     RP_failed            ;refuse to look for alignments above 1G
+;
+        ADD     r1,r1,#&1000
+        SUB     r1,r1,#1
+        MOV     r1,r1,LSR #12
+        MOVS    r1,r1,LSL #12     ;size rounded up to whole no. of pages
+;
+        CMP     r2,#12
+        MOVLO   r2,#12            ;log2 alignment must be at least 12 (4k pages)
+        MOV     r0,#1
+        MOV     r4,r0,LSL r2      ;required alignment-1
+;
+        MOV     r0,#PhysRamTable
+        MOV     r3,#0            ;page number, starts at 0
+        LDR     r5,=CamEntriesPointer
+        LDR     r5,[r5]
+        ADD     r5,r5,#4         ; [r5,<page no.>,LSL #3] addresses flags word in CAM
+        LDMIA   r0!,{r7,r8}      ;address,size of video chunk (skip this one)
+;
+RP_nextchunk
+        ADD     r3,r3,r8,LSR #12 ;page no. of first page of next chunk
+        LDMIA   r0!,{r7,r8}      ;address,size of next physical chunk
+        CMP     r8,#0
+        BEQ     RP_failed
+;
+        ADD     r6,r7,r4
+        SUB     r6,r6,#1         ;round up
+        MOV     r6,r6,LSR r2
+        MOV     r6,r6,LSL r2
+        SUB     r6,r6,r7         ;adjustment to first address of acceptable alignment
+        CMP     r6,r8
+        BHS     RP_nextchunk     ;negligible chunk
+        ADD     r7,r3,r6,LSR #12 ;first page number of acceptable alignment
+        SUB     r9,r8,r6         ;remaining size of chunk
+;
+;find first available page
+RP_nextpage
+        CMP     r9,r1
+        BLO     RP_nextchunk
+        LDR     r6,[r5,r7,LSL #3]  ;page flags from CAM
+        ;must not be marked Unavailable or Required
+        TST     r6,#PageFlags_Unavailable :OR: PageFlags_Required
+        BEQ     RP_checkotherpages
+RP_nextpagecontinue
+        CMP     r9,r4
+        BLS     RP_nextchunk
+        ADD     r7,r7,r4,LSR #12   ;next page of suitable alignment
+        SUB     r9,r9,r4
+        B       RP_nextpage
+;
+RP_checkotherpages
+        ADD     r10,r7,r1,LSR #12
+        SUB     r10,r10,#1         ;last page required
+RP_checkotherpagesloop
+        LDR     r6,[r5,r10,LSL #3] ;page flags from CAM
+        TST     r6,#PageFlags_Unavailable :OR: PageFlags_Required
+        BNE     RP_nextpagecontinue
+        SUB     r10,r10,#1
+        CMP     r10,r7
+        BHI     RP_checkotherpagesloop
+;
+;success!
+;
+        MOV     r3,r7
+        Pull    "r0-r2,r4-r10,pc"
+
+RP_failed
+        MOV     r3,#0
+        ADR     r0,RP_error
+        SETV
+        STR     r0,[sp]
+        Pull    "r0-r2,r4-r10,pc"
+
+RP_error
+        DCD     0
+        DCB     "No chunk available (OS_Memory 12)",0
+        ALIGN
 
         END
