@@ -89,34 +89,34 @@ resources_NCFresco_base:
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESRES}
 	${MKDIR} ${RESRES}.html
-	${CP} NCFrescoRORes:!BootROM    	${RESAPP}.!Boot    ${CPFLAGS}
-	${CP} NCFrescoRORes:!RunROM     	${RESAPP}.!Run     ${CPFLAGS}
-	${CP} NCFrescoRORes:!Sprites    	${RESAPP}.!Sprites ${CPFLAGS}
-	${CP} NCFrescoRORes:Sprites     	${RESRES}.Sprites  ${CPFLAGS}
-	${TR} -i NCFrescoROTransRes:Messages -o ${RESRES}.Messages ${TRFLAGS}
-	${CP} NCFrescoRORes:Res         	${RESRES}.Res      ${CPFLAGS}
-	${CP} NCFrescoRORes:MimeMap     	${RESRES}.MimeMap  ${CPFLAGS}
-	${CP} NCFrescoRORes:Config      	${RESRES}.Config   ${CPFLAGS}
-	${CP} NCFrescoRORes:fontmap/txt 	${RESRES}.fontmap/txt ${CPFLAGS}
+	${CP} NCFrescoRORes:!BootROM    	       ${RESAPP}.!Boot           ${CPFLAGS}
+	${CP} NCFrescoRORes:!RunROM     	       ${RESAPP}.!Run            ${CPFLAGS}
+	${CP} NCFrescoRORes:!Sprites    	       ${RESAPP}.!Sprites        ${CPFLAGS}
+	${CP} NCFrescoRORes:Sprites     	       ${RESRES}.Sprites         ${CPFLAGS}
+	${TR} -i NCFrescoROTransRes:Messages        -o ${RESRES}.Messages        ${TRFLAGS}
+	${CP} NCFrescoRORes:Res         	       ${RESRES}.Res             ${CPFLAGS}
+	${CP} NCFrescoRORes:MimeMap     	       ${RESRES}.MimeMap         ${CPFLAGS}
+	${CP} NCFrescoRORes:Config      	       ${RESRES}.Config          ${CPFLAGS}
+	${CP} NCFrescoRORes:fontmap/txt 	       ${RESRES}.fontmap/txt     ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${RESRES}.Welcome VersionNum
-	${TR} -i NCFrescoROTransRes:html.alert     -o ${RESRES}.html.alert     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.error     -o ${RESRES}.html.error     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favmove   -o ${RESRES}.html.favmove   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favrename -o ${RESRES}.html.favrename ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favs      -o ${RESRES}.html.favs      ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favscatr  -o ${RESRES}.html.favscatr  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favscats  -o ${RESRES}.html.favscats  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favsd     -o ${RESRES}.html.favsd     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.alert      -o ${RESRES}.html.alert      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.error      -o ${RESRES}.html.error      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favmove    -o ${RESRES}.html.favmove    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favrename  -o ${RESRES}.html.favrename  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favs       -o ${RESRES}.html.favs       ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscatr   -o ${RESRES}.html.favscatr   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscats   -o ${RESRES}.html.favscats   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favsd      -o ${RESRES}.html.favsd      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.global/css -o ${RESRES}.html.global/css ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.hista     -o ${RESRES}.html.hista     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.histr     -o ${RESRES}.html.histr     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.histt     -o ${RESRES}.html.histt     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.message    -o ${RESRES}.html.message   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${RESRES}.html.okcncl    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.password  -o ${RESRES}.html.password  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.printopts -o ${RESRES}.html.printopts ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.prompt    -o ${RESRES}.html.prompt    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.url       -o ${RESRES}.html.url       ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.hista      -o ${RESRES}.html.hista      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histr      -o ${RESRES}.html.histr      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histt      -o ${RESRES}.html.histt      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.message    -o ${RESRES}.html.message    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.okcncl     -o ${RESRES}.html.okcncl     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.password   -o ${RESRES}.html.password   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.printopts  -o ${RESRES}.html.printopts  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.prompt     -o ${RESRES}.html.prompt     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.url        -o ${RESRES}.html.url        ${TRFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
 	@echo ${COMPONENT}: base resource files copied
@@ -154,35 +154,35 @@ install_NCFresco_common:
 	${MKDIR} ${INSTALLRESDIR}
 	${MKDIR} ${INSTALLRESLOCALEDIR}
 	${MKDIR} ${INSTALLRESLOCALEDIR}.html
-	${CP} NCFrescoRORes:!Boot		${INSTALLDIR}.!Boot             ${CPFLAGS}
-	IfThere NCFrescoRORes:!Help Then ${CP} NCFrescoRORes:!Help ${INSTALLDIR}.!Help  ${CPFLAGS}
-	${CP} NCFrescoRORes:!Sprites		${INSTALLDIR}.!Sprites ${CPFLAGS}
-	${CP} NCFrescoRORes:Sprites		${INSTALLRESLOCALEDIR}.Sprites  ${CPFLAGS}
-	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLRESLOCALEDIR}.Messages ${TRFLAGS}
-	${CP} NCFrescoRORes:Res			${INSTALLRESLOCALEDIR}.Res      ${CPFLAGS}
-	${CP} NCFrescoRORes:MimeMap		${INSTALLDIR}.MimeMap           ${CPFLAGS}
-	${CP} NCFrescoRORes:Config		${INSTALLDIR}.Config            ${CPFLAGS}
-	${CP} NCFrescoRORes:fontmap/txt		${INSTALLDIR}.fontmap/txt       ${CPFLAGS}
-	${CP} <Lib$Dir>.LocaleRes.LocaleRes	${INSTALLDIR}.LocaleRes         ${CPFLAGS}
+	${CP} NCFrescoRORes:!Boot		${INSTALLDIR}.!Boot                    ${CPFLAGS}
+	IfThere NCFrescoRORes:!Help Then ${CP} NCFrescoRORes:!Help ${INSTALLDIR}.!Help ${CPFLAGS}
+	${CP} NCFrescoRORes:!Sprites		${INSTALLDIR}.!Sprites                 ${CPFLAGS}
+	${CP} NCFrescoRORes:Sprites		${INSTALLRESLOCALEDIR}.Sprites         ${CPFLAGS}
+	${TR} -i NCFrescoROTransRes:Messages -o ${INSTALLRESLOCALEDIR}.Messages        ${TRFLAGS}
+	${CP} NCFrescoRORes:Res			${INSTALLRESLOCALEDIR}.Res             ${CPFLAGS}
+	${CP} NCFrescoRORes:fontmap/txt		${INSTALLRESLOCALEDIR}.fontmap/txt     ${CPFLAGS}
+	${CP} NCFrescoRORes:MimeMap		${INSTALLDIR}.MimeMap                  ${CPFLAGS}
+	${CP} NCFrescoRORes:Config		${INSTALLDIR}.Config                   ${CPFLAGS}
+	${CP} <Lib$Dir>.LocaleRes.LocaleRes	${INSTALLDIR}.LocaleRes                ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
-	${TR} -i NCFrescoROTransRes:html.alert     -o ${INSTALLRESLOCALEDIR}.html.alert     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.error     -o ${INSTALLRESLOCALEDIR}.html.error     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favmove   -o ${INSTALLRESLOCALEDIR}.html.favmove   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favrename -o ${INSTALLRESLOCALEDIR}.html.favrename ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLRESLOCALEDIR}.html.favs      ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favscatr  -o ${INSTALLRESLOCALEDIR}.html.favscatr  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favscats  -o ${INSTALLRESLOCALEDIR}.html.favscats  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLRESLOCALEDIR}.html.favsd     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.alert      -o ${INSTALLRESLOCALEDIR}.html.alert      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.error      -o ${INSTALLRESLOCALEDIR}.html.error      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favmove    -o ${INSTALLRESLOCALEDIR}.html.favmove    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favrename  -o ${INSTALLRESLOCALEDIR}.html.favrename  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favs       -o ${INSTALLRESLOCALEDIR}.html.favs       ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscatr   -o ${INSTALLRESLOCALEDIR}.html.favscatr   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscats   -o ${INSTALLRESLOCALEDIR}.html.favscats   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favsd      -o ${INSTALLRESLOCALEDIR}.html.favsd      ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.global/css -o ${INSTALLRESLOCALEDIR}.html.global/css ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLRESLOCALEDIR}.html.hista     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.histr     -o ${INSTALLRESLOCALEDIR}.html.histr     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.histt     -o ${INSTALLRESLOCALEDIR}.html.histt     ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.message   -o ${INSTALLRESLOCALEDIR}.html.message   ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.okcncl    -o ${INSTALLRESLOCALEDIR}.html.okcncl    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.password  -o ${INSTALLRESLOCALEDIR}.html.password  ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.printopts -o ${INSTALLRESLOCALEDIR}.html.printopts ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.prompt    -o ${INSTALLRESLOCALEDIR}.html.prompt    ${TRFLAGS}
-	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLRESLOCALEDIR}.html.url       ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.hista      -o ${INSTALLRESLOCALEDIR}.html.hista      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histr      -o ${INSTALLRESLOCALEDIR}.html.histr      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.histt      -o ${INSTALLRESLOCALEDIR}.html.histt      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.message    -o ${INSTALLRESLOCALEDIR}.html.message    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.okcncl     -o ${INSTALLRESLOCALEDIR}.html.okcncl     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.password   -o ${INSTALLRESLOCALEDIR}.html.password   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.printopts  -o ${INSTALLRESLOCALEDIR}.html.printopts  ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.prompt     -o ${INSTALLRESLOCALEDIR}.html.prompt     ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.url        -o ${INSTALLRESLOCALEDIR}.html.url        ${TRFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
 	@echo ${COMPONENT}: common files installed
