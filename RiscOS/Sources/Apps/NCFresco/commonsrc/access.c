@@ -3837,4 +3837,9 @@ BOOL access_was_directory( access_handle d )
     return ( d->flags & access_IS_DIRECTORY ) != 0;
 }
 
+int access_get_ftype(access_handle d)
+{
+    return d ? d->ftype : -1;
+}
+
 /* eof access.c */

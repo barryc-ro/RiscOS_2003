@@ -751,7 +751,8 @@ enum
     content_tag_ENSURETOOLBAR,
     content_tag_ONBLUR,
     content_tag_SUBMITONUNLOAD,
-    content_tag_SELECTBUTTON
+    content_tag_SELECTBUTTON,
+    content_tag_SPECIALSELECT
 };
 
 static const char *content_tag_list[] =
@@ -760,7 +761,7 @@ static const char *content_tag_list[] =
     "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL",
     "FASTLOAD", "URL", "USER", "USERNAME",
     "BLANKRESET", "ONLOAD", "ONUNLOAD", "ENSURETOOLBAR",
-    "ONBLUR", "SUBMITONUNLOAD", "SELECTBUTTON"
+    "ONBLUR", "SUBMITONUNLOAD", "SELECTBUTTON", "SPECIALSELECT"
 };
 
 /*
@@ -1038,6 +1039,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	    STBDBG(("selectbutton: 0x%x\n", v->select_button));
 	    
+	    mm_free(v->specialselect);
+	    v->specialselect = strdup(vals[content_tag_SPECIALSELECT].value);
+
 	    mm_free(ncmode);
 	}
 	else
@@ -1790,7 +1794,8 @@ static os_error *reopen_frames(fe_view v)
 
     if (changed)
     {
-	backend_reset_width(v->displaying, 0);
+	if (v->displaying)
+	    backend_reset_width(v->displaying, 0);
 
 	/* resize again in case document got longer */
 	feutils_resize_window(&v->w, &v->margin, &v->box, &v->x_scroll_bar, &v->y_scroll_bar, v->doc_width, -v->doc_height, fe_scrolling_NO, fe_bg_colour(v));
@@ -4382,7 +4387,8 @@ static void fe_keyboard__open(void)
 	n = sprintf(buffer, "NCKeyboard %s",
 		    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
 
-	tb_status_box(&box);
+	if (tb_is_status_showing())
+	    tb_status_box(&box);
 
 	/* add in open url box if present */
 	if ((v = fe_locate_view("__url")) != NULL)
@@ -4612,7 +4618,10 @@ static void fe_url_bounce(wimp_msgstr *msg)
 	else
 	{    /* give error  */
 	    char tag[32], *s;
-	    sprintf(tag, "noscheme_%s:", scheme);
+	    strcpy(tag, "noscheme_");
+	    strlencat(tag, scheme, sizeof(tag));
+	    strlwr(tag);
+	    
 	    s = msgs_lookup(tag);
 	    if (s && s[0])
 	    {

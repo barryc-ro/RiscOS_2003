@@ -366,6 +366,7 @@ static os_error *fe_print_options_write_file(FILE *f)
 /* ----------------------------------------------------------------------------------------------------- */
 
 static const char *print_size = NULL;
+static BOOL print__first;
 
 static void fe__print_frames(FILE *f, const char *spec, int w, int h)
 {
@@ -379,14 +380,29 @@ static void fe__print_frames(FILE *f, const char *spec, int w, int h)
     if (v->children)
 	backend_layout_write_table(f, v->displaying, fe__print_frames, spec, w, h);
     else
-	fprintf(f, msgs_lookup("printf1"), spec, strsafe(print_size));
+    {
+	fprintf(f, msgs_lookup("printf1"), spec, print__first ? "CHECKED" : "");
+	print__first = FALSE;
+    }
 }
 
 static os_error *fe_print_frames_write_file(FILE *f, fe_view v, const char *size)
 {
+    int button = 0;
+
     STBDBG(("fe__print_frames_write_file: size %s v%p children %p\n", size, v, v->children));
 
-    fprintf(f, msgs_lookup("printfT"), size);
+    print__first = TRUE;
+    
+    /* Yuk! But can't think of a better way at the moment */
+    if (size == NULL || size[0] == '\0')
+	button = fevent_PRINT;
+    else if (strcmp(size, "legal") == 0)
+	button = fevent_PRINT_LEGAL;
+    else if (strcmp(size, "letter") == 0)
+	button = fevent_PRINT_LETTER;
+
+    fprintf(f, msgs_lookup("printfT"), button, size, size);
 
     print_size = size;
     backend_layout_write_table(f, v->displaying, fe__print_frames, "_0", DBOX_SIZE_X-40, DBOX_SIZE_Y - 160);
@@ -1714,10 +1730,21 @@ static int internal_action_printpage(const char *query, const char *bfile, const
     char *size;
     int generated = fe_internal_url_NO_ACTION;
     BOOL legal;
+    char *s;
+    BOOL cancel;
 
     if (!v)
 	return fe_internal_url_NO_ACTION;
 
+    /* when called from the printframes dialogue box, this may have a
+       cancel button */
+    s = extract_value(query, "action=");
+    cancel = strcasestr(s, "cancel") != 0;
+    mm_free(s);
+
+    if (cancel)
+	return fe_internal_url_NO_ACTION;
+    
     size = extract_value(query, "size=");
     legal = size && strcasecomp(size, "legal") == 0;
     frontend_complain(fe_print(v, legal ? fe_print_LEGAL : fe_print_LETTER));
@@ -2339,6 +2366,20 @@ void fe_internal_optimise(void)
 {
     loadurl_last = optimise_string(loadurl_last);
     find__string = optimise_string(find__string);
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+void fe_special_select(fe_view v)
+{
+    if (v && v->displaying && v->specialselect)
+    {
+	be_item ti = backend_locate_id(v->displaying, v->specialselect);
+	if (ti)
+	    frontend_complain(backend_activate_link(v->displaying, ti, 0));
+	else
+	    backend_submit_form(v->displaying, v->specialselect, 0);
+    }
 }
 
 /* ------------------------------------------------------------------------------------------- */

@@ -66,10 +66,21 @@ int url_parse(const char *url, char **scheme, char **netloc, char **path, char *
 	url++;
 
     /* Strip off any leading "URL:" */
+#if 1
+    if (strncasecomp(url, "url:", 4) == 0)
+	url += 4;
+#else
     strncpysafe(temp, url, 5);
     if (strcasecomp(temp, "URL:") == 0)
 	url += 4;
-
+#endif
+    
+    /* or any leading "-url " (can happen in NCFresco due to bad
+       setups. Not ever going to message up a real life URL so it's
+       convenient to put it in here. */
+    if (strncasecomp(temp, "-url ", 5) == 0)
+	url += 5;
+    
     copy = strdup(url);
 
     /* Strip trailing white space.  Do this on the copy to avoid altering the original */

@@ -181,6 +181,7 @@
 #define fevent_SCALING_TOGGLE		    0x20BA
 #define fevent_SCALING_ON		    0x20BB
 #define fevent_SCALING_OFF		    0x20BC
+#define fevent_SPECIAL_SELECT		    0x20BD
 
 /* The order here must match the table in stbevent.c */
 #define fevent_CODEC_STOP		    0x20C0

@@ -131,6 +131,8 @@ extern BOOL access_was_directory( access_handle d );
  */
 extern void *access_get_headers(access_handle d);
 
+extern int access_get_ftype(access_handle d);
+
 #ifdef ACCESS_INTERNAL
 
 typedef struct

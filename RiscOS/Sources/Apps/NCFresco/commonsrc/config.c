@@ -1151,7 +1151,7 @@ static int config_read_int(const char *p)
     {
 	val = (int) strtol(p+2, NULL, 16);
     }
-    else if (isdigit(*p))
+    else if (isdigit(*p) || *p == '-')
     {
 	val = (int) strtol(p, NULL, 10);
     }

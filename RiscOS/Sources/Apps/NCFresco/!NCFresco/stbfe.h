@@ -169,6 +169,7 @@ extern os_error *fe_internal_open_page(fe_view v, const char *page_name, int cle
 typedef void (*write_list_fn)(FILE *f, void *handle);
 extern void fe_internal_write_page(FILE *f, const char *base_tag, int initial, int frame, write_list_fn write_list, void *handle);
 extern BOOL fe_internal_check_popups(BOOL clear);
+extern void fe_special_select(fe_view v);
 
 /* from stbredraw.c*/
 

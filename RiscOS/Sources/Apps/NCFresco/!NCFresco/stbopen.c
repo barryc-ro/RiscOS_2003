@@ -733,6 +733,7 @@ void fe_dispose_view(fe_view v)
 
     fe_frame_link_array_free(v);
     
+    mm_free(v->specialselect);
     mm_free(v->selected_id);
     mm_free(v->name);
     mm_free(v->return_page);

@@ -172,7 +172,8 @@ struct _frontend_view
 
     char *submitonunload;
 
-    int select_button;		/* event number of probabl;e triggering event, button should be selected */
+    int select_button;		/* event number of probable triggering event, button should be selected */
+    char *specialselect;	/* ID of element to select when special event received */
 };
 
 /* ----------------------------------------------------------------------------- */

@@ -182,7 +182,6 @@ typedef struct _antweb_doc
     int encoding;		/* charset encoding - defined in interface.h */
 
     unsigned int fontusage[8];  /* 8x32=256-bit array of font usage */
-
 } antweb_doc;
 
 #define SETFONTUSED(doc,n) doc->fontusage[n>>5] |= (1 << (n&31))

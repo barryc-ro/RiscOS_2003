@@ -3735,7 +3735,6 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
     PPDBG(("doc%p: adp, so_far=%d ftype=%d fh=%d status=%d\n",
            doc, so_far, ftype, fh, status ));
 
-
     /* SJM: 18Jul97: don't allow COMPLETED_PART here so that we don't read data until we've switched files */
     if (so_far > 0 && ftype != -1 && fh &&
          ((status == status_GETTING_BODY)/*  || (status == status_COMPLETED_PART) */ ) )
@@ -3892,8 +3891,6 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 #endif
     }
 
-    doc->ah = NULL;
-
     if (status != status_COMPLETED_FILE || doc->file_size == 0)
     {
 	/* if failed to connect pass cfile (actually error message) in the title field
@@ -3910,7 +3907,8 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 #ifndef BUILDERS
 	frontend_view_visit(doc->parent, NULL, url,
 			    status == status_BAD_FILE_TYPE ?
-			    (char *)makeerror(ERR_BAD_FILE_TYPE) :			/* unsupported file type */
+			    (char *)makeerrorf(ERR_BAD_FILE_TYPE,
+					       get_file_type_name(access_get_ftype(doc->ah))) : /* unsupported file type */
 			    status == status_FAIL_LOCAL ?
 			    (char *)makeerror(ERR_NO_DISC_SPACE) :			/* local error (probably out of disc space) */
 			    status == status_FAIL_DNS ?
@@ -3918,9 +3916,13 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 			    (char *)makeerror(ERR_UNSUPORTED_SCHEME));			/* cannot display the web page */
 #endif
 
+	doc->ah = NULL;
+
 	backend_dispose_doc(doc);
 	return 0;
     }
+
+    doc->ah = NULL;
 
     doc->cfile = strdup(cfile);
     if (doc->url == NULL)
@@ -4195,7 +4197,7 @@ int antweb_doc_abort_all(int level)
 		if (doc->rh && gbf_active(GBF_FVPR) )
 		    fvpr_progress_stream_flush( &doc->rh->stream );
 
-		frontend_view_status(doc->parent, sb_status_ABORTED);
+/* 		frontend_view_status(doc->parent, sb_status_ABORTED); */
 
 		count++;
 	    }

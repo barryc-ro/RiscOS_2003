@@ -36,6 +36,7 @@ extern int strcasecomp(const char *s1, const char *s2);
 extern char *strcasestr(const char *s1, const char *s2);
 extern BOOL strnearly( const char *s1, size_t len1,
                        const char *s2, size_t len2, size_t hownear );
+extern char *strlwr(char *s);
 
 extern char *strcatx_with_leeway(char *s, const char *s1, int leeway);
 extern char *strcatx1(char *s, const char *s1);

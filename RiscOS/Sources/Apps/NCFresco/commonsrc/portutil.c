@@ -282,6 +282,16 @@ BOOL strnearly( const char *input, size_t ilen,
     return hownear >= (ilen + plen);
 }
 
+char *strlwr(char *s)
+{
+    int c;
+    char *ss = s;
+    while ((c = *ss) != 0)
+	*ss++ = tolower(c);
+    return s;
+}
+
+
 char encode_table[65] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 void uuencode(char *in, char *out, int out_len)
