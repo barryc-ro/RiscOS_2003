@@ -15,59 +15,21 @@
 ;       R1 set to bytes moved.
 ;******************************************************************************
 
-; The following flag controls the operation of ReadCMOSAndConfigure and FudgeConfigureRMA
-;
-; If false, then no memory is in the free pool to start off, and these routines just allocate pages
-; starting at page R2, and update this on exit.
-;
-; If true, then routine InitDynamicAreas initially moves all non-static free memory into the free pool,
-; and then the above routines just take pages off the end of that.
-
-        GBLL    GetPagesFromFreePool    ; whether ReadCMOSAndConfigure extract pages from the free pool
-GetPagesFromFreePool SETL NewCDA :LAND: {TRUE}
-
- [ ExpandedCamMap
 AP_AppSpace     *       0                                       ; user r/w, CB
 AP_SysHeap      *       0                                       ; user r/w, CB
 AP_RMA          *       0                                       ; user r/w, CB
-  [ NewStyle_Screen
-   [ DAF_SpecifyBit
 AP_Screen       *       0 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_DoublyMapped :OR: DynAreaFlags_NeedsSpecificPages
-   |
-AP_Screen       *       0 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_DoublyMapped
-   ]
-  |
-AP_Screen       *       0 :OR: DynAreaFlags_NotCacheable        ; user r/w, ~CB
-  ]
 AP_Sprites      *       0                                       ; user r/w, CB
 AP_FontArea     *       2                                       ; user none, CB
 AP_RAMDisc      *       2 :OR: DynAreaFlags_NotCacheable        ; user none, ~CB
 AP_Duff         *       2 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_NotBufferable ; user none, ~C~B
-  [ UseFreePool
 AP_FreePool     *       2 :OR: DynAreaFlags_NotCacheable        ; user none, ~CB
-  ]
 AP_CursorChunk  *       1 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_NotBufferable :OR: PageFlags_Unavailable
 AP_PageZero     *       0
-  [ MEMM_Type = "ARM600"
+
 AP_L2PT         *       2 :OR: DynAreaFlags_NotCacheable :OR: DynAreaFlags_NotBufferable ; user none, ~C~B
 AP_L1PT         *       AP_L2PT :OR: PageFlags_Unavailable
 AP_UndStackSoftCam *    PageFlags_Unavailable
-  ]
- |
-AP_AppSpace     *       0                                       ; user r/w
-AP_SysHeap      *       0                                       ; user r/w
-AP_RMA          *       0                                       ; user r/w
-AP_Screen       *       0                                       ; user r/w
-AP_Sprites      *       0                                       ; user r/w
-AP_FontArea     *       2                                       ; user none
-AP_RAMDisc      *       2                                       ; user none
-AP_Duff         *       2
-  [ UseFreePool
-AP_FreePool     *       2                                       ; user none
-  ]
-AP_CursorChunk  *       1                                       ; user r-o
-AP_PageZero     *       0                                       ; user r/w
- ]
 
 ChangeDyn_FreeAndApl * -2               ; special reason code for when we're sucking out of free pool and apl space
 ChangeDyn_AplSpace   * -1
@@ -78,11 +40,7 @@ ChangeDyn_SpriteArea * 3
 ChangeDyn_FontArea   * 4
 ChangeDyn_RamFS      * 5
 ChangeDyn_FreePool   * 6
- [ UseFreePool
 ChangeDyn_MaxArea    * 6
- |
-ChangeDyn_MaxArea    * 5
- ]
 
 ; Area handler reason codes
 
@@ -100,856 +58,15 @@ NumPageBlockEntries *   32
 PageBlockSize   *       NumPageBlockEntries * 12
 PageBlockChunk  *       NumPageBlockEntries * 4096
 
+
         InsertDebugRoutines
 
-; *** Start of old style code ***
-
- [ :LNOT: NewStyle_All
-
-ChangeDynamicSWI ROUT
-        Push    "r0, r2-r9, r10, lr"        ; r10 is workspace
-
-  [ NewCDA2
-        B       CheckForNewArea
-IsOldArea
-  ]
-
-        CMP     r0, #ChangeDyn_MaxArea
-        MOVLS   r10, #0
-        LDRLS   r10, [r10, #IRQsema]
-        CMPLS   r10, #0
-        BHI     noboff_IRQgoing
-
- [ DebugCDA
-        DLINE   "Entering OS_ChangeDynamicArea"
-        DREG    r0, "r0 = "
-        DREG    r1, "r1 = "
- ]
-
- [ :LNOT: NewStyle_RAMDisc
-        CMP     r0, #ChangeDyn_RamFS
-        BEQ     CheckRAMFSChangeOK
-AllowRAMFSChange
- ]
-
-        MOV     r6, #0
-        LDR     r6, [r6, #Page_Size]
-        SUB     r12, r6, #1
-        ADD     r1, r1, r12
-        BICS    r1, r1, r12                     ; round up to nearest page.
-        MOVEQ   r11, r0                         ; area
-        MOVEQ   r10, #0                         ; amount moved
-        BEQ     CDS_PostService                 ; zero pages!
-
-; Now form source (r11) and destination (r12) registers
-
- [ UseFreePool
-
-        CMP     r0, #ChangeDyn_FreePool         ; if specified area is free pool
-        MOVEQ   r11, #ChangeDyn_AplSpace        ; then "other" area is aplspace
-        MOVNE   r11, #ChangeDyn_FreePool        ; else other area is free pool
-
-        CMP     r1, #0                          ; if growing area
-        MOVPL   r12, r0                         ; then dest is specified area, and src is other
-        MOVMI   r12, r11                        ; else dest is other
-        MOVMI   r11, r0                         ; and src is specified
-        RSBMI   r1, r1, #0                      ; and make change positive
- |
-        MOVMI   r12, #ChangeDyn_AplSpace        ; dest := ApplWork
-        MOVMI   r11, r0                         ; source := R0
-        MOVPL   r12, r0                         ; dest := R0
-        MOVPL   r11, #ChangeDyn_AplSpace        ; source := ApplWork
-        RSBMI   r1, r1, #0
- ]
-
- [ DebugCDA
-        DREG    r11, "Initially, src = "
-        DREG    r12, "and dest = "
- ]
-
-; amount movable = current size(source) - shrink limit(source)
-
- [ :LNOT: NewStyle_SpriteArea
-        CMP     r11, #ChangeDyn_SpriteArea
-        LDREQ   r10, [r11, #SpriteSize-ChangeDyn_SpriteArea]
-        TEQEQ   r10, #0                 ; May have no sprite area ...
-        MOVEQ   r5, #0                  ; Shrink limit := 0
-        BEQ     gotsizeandshrink
- ]
-
-; need to lock the heap if we are shrinking the SysHeap or the RMA
-; lock by setting the heap end to be the same as the current base;
-; this ensures that no claims will use memory about to disappear
-
-        ADRL    r10, Current_Size+4
-        LDR     r10, [r10, r11, LSL #2]                 ; get pointer to current size of area
-
- [ NewStyle_RMA :LAND: NewStyle_SysHeap                 ; if both new
-        LDR     r10, [r10]                              ; then just get current size
- |
-  [ NewStyle_SysHeap                                    ; if sys heap new
-        CMP     r11, #ChangeDyn_RMA                     ; then RMA must be old
-  |
-        CMP     r11, #ChangeDyn_SysHeap                 ; else sys heap is old
-   [ :LNOT: NewStyle_RMA
-        CMPNE   r11, #ChangeDyn_RMA                     ; and if RMA old as well, do 2 CMPs
-   ]
-  ]
-        LDRNE   r10, [r10]
-        BNE     CDA_GotSize
-
-; its a heap, so munge it to prevent anyone stealing memory while we are
-
-        MOV     lr, pc                                  ; save I_bit
-        TEQP    pc, #SVC_mode + I_bit                   ; disable IRQs round this bit
-        LDR     r5, [r10]                               ; current size
-        LDR     r2, [r10, #hpdbase-hpdend]              ; remove all of the contiguous free chunk from the heap
-        STR     r2, [r10]                               ; so that noone can steal any of it under IRQs
-        MOV     r10, r5
-        STR     r10, [stack, #4*9]                      ; but save the old size on stack to restore later
-        TEQP    lr, #0                                  ; restore state
-
-CDA_GotSize
- ]
- [ :LNOT: NewStyle_FontArea
-        CMP     r11, #ChangeDyn_FontArea
-        BNE     %FT04                                   ; source not font area
-
-        MOV     r5, r1
-        MOV     r1, #-1
-        MOV     r2, #0                                  ; in case font manager dead
-        SWI     XFont_ChangeArea
-        MOV     r1, r5                                  ; preserve r1
-        MOV     r5, r2
-        B       %FT05
-04
- ]
-        ADR     r5, Shrink_Limits+4                     ; now see how much we can remove from src
-        LDR     r5, [r5, r11, LSL #2]                   ; load shrink limit address
-        LDR     r5, [r5]                                ; and contents
-05
- [ :LNOT: NewStyle_SpriteArea
-        CMP     r11, #ChangeDyn_SpriteArea
-        CMPEQ   r5, #saExten                            ; if no sprites defined, can delete hdr
-        MOVEQ   r5, #0
- ]
-
-gotsizeandshrink
-        SUB     r10, r10, r5                            ; amount removable from source
-06
-        ADR     r5, Grow_LimitsPtrs+4
-        LDR     r5, [r5, r12, LSL #2]                   ; get ptr to maximum size of destination area
-        LDR     r5, [r5]                                ; maximum size of dest area
-
- [ MEMC_Type = "IOMD"
-        CMP     r12, #ChangeDyn_Screen                  ; if screen
-        MOVEQ   r5, #0
-        LDREQ   r5, [r5, #VideoSize]                    ; then maximum size depends on how much video RAM there is
- ]
-
-        ADRL    r4, Current_Size+4
-        LDR     r4, [r4, r12, LSL #2]                   ; pointer to destination current size
-        LDR     r4, [r4]                                ; current size of dest
-        SUB     r5, r5, r4                              ; maximum amount we can add to destination
-
-; r10 = amount removable from src, r5 = amount addable to dest
-
-        MOV     r2, r10                                 ; save amount removable from src, in case we need it again
-        CMP     r10, r5
-        MOVHI   r10, r5                                 ; min(max removable from src, max addable to dest)
-
-; r10 is now the amount we can move
-;  IF removing from ApplWork AND amount moveable < size requested
-;    Then Error NotAllMoved
-
-        CMP     r10, r1
-        BCS     %FT10                                   ; can move all reqd (TMD 15-Oct-91; was GE)
-
-; we can't move all that is required - there are two cases to be considered
-;  a) if (src = AplSpace) and (dest <> FreePool) then give error (this can only happen in old world)
-;  b) if (src = FreePool) AND (dest <> AplSpace) then check if adding aplspace would allow us to succeed -
-;        if it does then adjust registers, else give error
-
-        CMP     r11, #ChangeDyn_AplSpace                ; if src = aplspace
-        BNE     %FT08                                   ; [not, so skip]
-        CMP     r12, #ChangeDyn_FreePool                ; and dest <> freepool
-        BNE     noboff_IRQgoing                         ; then fail (case (a))
-08
- [ UseFreePool
-        CMP     r11, #ChangeDyn_FreePool                ; if src = FreePool
-        BNE     %FT10                                   ; [skip if not]
-        CMP     r12, #ChangeDyn_AplSpace                ; and dest <> AplSpace
-        BEQ     %FT10                                   ; [skip if not]
-
-; now see if we would have enough if we had aplspace as well (r2 = amount we could remove from free pool)
-
-  [ DebugCDA
-        DLINE   "Not enough in just free pool"
-  ]
-
-        LDR     r4, Current_Size+4+(ChangeDyn_AplSpace :SHL: 2)
-        LDR     r4, [r4]                                ; r4 = current apl size
-        LDR     lr, Shrink_Limits+4+(ChangeDyn_AplSpace :SHL: 2)
-        LDR     lr, [lr]                                ; lr = shrink limit for aplspace
-        SUB     r4, r4, lr                              ; r4 = amount we could remove from aplspace
-
-        ADD     r10, r2, r4                             ; add on to amount we could remove from free pool
-        CMP     r10, r5                                 ; if more than amount area can grow
-        MOVHI   r10, r5                                 ; then limit to that
-
-        CMP     r10, r1                                 ; if still can't do it now
-        BCC     noboff_IRQgoing                         ; then give error
-
-        TEQ     r2, #0                                  ; else check to see if there was any at all in free pool
-        MOVEQ   r11, #ChangeDyn_AplSpace                ; if not then just take from aplspace
-        MOVEQ   r5, r10                                 ; and do all
-
-        MOVNE   r11, #ChangeDyn_FreeAndApl              ; else make src indicator reflect that we need both
-        MOVNE   r5, r2                                  ; but save amount we are taking from freepool
-        B       %FT10
- ]
-
- [ (:LNOT: NewStyle_SysHeap) :LOR: (:LNOT: NewStyle_RMA)
-testrestoreheapend
-  [ NewStyle_SysHeap                                    ; if sys heap new
-        CMP     r11, #ChangeDyn_RMA                     ; then RMA must be old
-  |
-        CMP     r11, #ChangeDyn_SysHeap                 ; else sys heap is old
-   [ :LNOT: NewStyle_RMA
-        CMPNE   r11, #ChangeDyn_RMA                     ; and if RMA old as well, do 2 CMPs
-   ]
-  ]
-        LDREQ   r2, [stack, #4*9]
-        ADREQL  r3, Current_Size + 4
-        LDREQ   r3, [r3, r11, LSL #2]
-        STREQ   r2, [r3]
-        MOV     pc, lr
- ]
-
-UserMemStartAddr & UserMemStart
-
-Shrink_Limits                                   ; locations to look at
-        &       UserMemStartAddr                ; AplWork - unfudged
- [ NewStyle_SysHeap
-        &       &FE000000                       ; cause abort
- |
-        &       SysHeapStart + :INDEX: hpdbase  ; SysHeap
- ]
- [ NewStyle_RMA
-        &       &FE000000                       ; cause abort
- |
-        &       RMAAddress + :INDEX: hpdbase    ; RMA
- ]
-        &       VduDriverWorkSpace + ScreenSize ; Screen
- [ NewStyle_SpriteArea
-        &       &FE000000                       ; cause abort
- |
-        &       SpriteSpaceAddress + saFree     ; Sprites
- ]
- [ NewStyle_FontArea
-        &       &FE000000                       ; cause abort
- |
-        &       0                               ; Fonts not needed
- ]
- [ NewStyle_RAMDisc
-        &       &FE000000                       ; cause abort
- |
-        &       MinRamFSSize                    ; RAMFS
- ]
-        &       MinFreePoolSize                 ; Free pool
-
- [ :LNOT: NewStyle_RAMDisc
-MinRamFSSize
- ]
-MinFreePoolSize
-        &       0
-
-
-
-Grow_LimitsPtrs
- [ NewCDA
-        &       AppSpaceDANode + DANode_MaxSize ; AplWork
- |
-        &       AppSpaceMaxSizePtr
- ]
- [ NewStyle_SysHeap
-        &       &FE000000                       ; cause abort
- |
-        &       SysHeapMaxSizePtr               ; SysHeap
- ]
- [ NewStyle_RMA
-        &       &FE000000                       ; cause abort
- |
-        &       RMAMaxSizePtr                   ; RMA
- ]
-        &       ScreenMaxSizePtr                ; Screen
- [ NewStyle_SpriteArea
-        &       &FE000000                       ; cause abort
- |
-        &       SpriteSpaceMaxSizePtr           ; Sprites
- ]
- [ NewStyle_FontArea
-        &       &FE000000                       ; cause abort
- |
-        &       FontCacheMaxSizePtr             ; Fonts
- ]
- [ NewStyle_RAMDisc
-        &       &FE000000                       ; cause abort
- |
-        &       RAMDiscMaxSizePtr               ; RAMFS
- ]
- [ UseFreePool
-        &       FreePoolDANode + DANode_MaxSize ; Free pool
- ]
-
-; The following will eventually become redundant as more and more areas become new ones
-; Ultimately the whole lot can be removed when no old areas exist (perhaps in my grandson's lifetime!)
-
- [ :LNOT: NewStyle_SysHeap
-SysHeapMaxSizePtr       &       SysHeapMaxSize
- ]
- [ :LNOT: NewStyle_RMA
-RMAMaxSizePtr           &       RMAMaxSize
- ]
-ScreenMaxSizePtr        &       ScreenMaxSize
- [ :LNOT: NewStyle_SpriteArea
-SpriteSpaceMaxSizePtr   &       SpriteSpaceMaxSize
- ]
- [ :LNOT: NewStyle_FontArea
-FontCacheMaxSizePtr     &       FontCacheMaxSize
- ]
- [ :LNOT: NewStyle_RAMDisc
-RAMDiscMaxSizePtr       &       RAMDiscMaxSize
- ]
- [ :LNOT: NewCDA
-AppSpaceMaxSizePtr      &       AplWorkMaxSize
- ]
-
-
-Access_Rights
-        &       AP_AppSpace
-        &       AP_SysHeap
-        &       AP_RMA
-        &       AP_Screen
-        &       AP_Sprites
-        &       AP_FontArea
-        &       AP_RAMDisc
- [ UseFreePool
-        &       AP_FreePool
- ]
-
-10
-        CMP     r10, r1                         ; if can move more than asked for
-        MOVHI   r10, r1                         ; then move requested amount (TMD 15-Oct-91; was GT)
-        BCS     %FT15                           ; (TMD 15-Oct-91); was GE)
-
-; moving less than asked for: set up an error for exit
-        ADR     r0, ErrorBlock_ChDynamNotAllMoved
-        STR     r0, [stack]
-        LDR     r0, [stack, #4*10]
-        ORR     r0, r0, #V_bit
-        STR     r0, [stack, #4*10]
-        SUB     r0, r6, #1                      ; and make amount moveable
-        BICS    r10, r10, r0                    ; a pagesize multiple
-        BEQ     CDS_PostServiceWithRestore
-
-; IF CAO in ApplWork AND UpCall not claimed THEN Error ChDynamCAO
-
-15
- [ UseFreePool
-        MOV     r1, #0                          ; default value if apl space not involved
-        CMP     r11, #ChangeDyn_AplSpace        ; if source = aplspace
-        RSBEQ   r1, r10, #0                     ; then make amount -ve
-        CMP     r11, #ChangeDyn_FreeAndApl      ; if source = free and apl
-        SUBEQ   r1, r5, r10                     ; then make it -(amount removing from apl space)
-        MOVNE   r5, r10                         ; else set up r5 to be total amount (wasn't set up above)
-        CMP     r12, #ChangeDyn_AplSpace        ; if dest = aplspace
-        MOVEQ   r1, r10                         ; then make amount +ve
-
-        TEQ     r1, #0                          ; if none of the above
-        BEQ     %FT25                           ; then skip this
- |
-        MOV     r5, r10                         ; r5 = total amount moving (since no split removes)
-        CMP     r11, #ChangeDyn_AplSpace        ; old code - if src = apl
-        RSBEQ   r1, r10, #0                     ; then -ve
-        MOVNE   r1, r10                         ; else +ve
- ]
-
- [ DebugCDA
-        DREG    r11, "After checking, src = "
-        DREG    r12, "and dest = "
-        DREG    r10, "Amount moving (total) = "
-        DREG    r5,  "Amount moving (partial) = "
-
-        DLINE   "Consulting application about change"
- ]
-
-        MOV     r2, #0
-        LDR     r3, [r2, #AplWorkSize]
-        LDR     r2, [r2, #Curr_Active_Object]
-        CMP     r2, r3                          ; check if CAO outside application space
-        BHI     %FT20                           ; [it is so issue Service not UpCall]
-
-; CAO in application space, so issue UpCall to check it's OK
-
-        MOV     r0, #UpCall_MovingMemory :AND: &FF
-        ORR     r0, r0, #UpCall_MovingMemory :AND: &FFFFFF00
-        TEQ     r1, #0
-        RSBMI   r1, r1, #0                      ; r1 passed in is always +ve (probably a bug, but should be compat.)
-
-        SWI     XOS_UpCall                      ; r1 already set up above
-        CMP     r0, #UpCall_Claimed
-        BEQ     %FT25
-
-        ADRL    r0, ErrorBlock_ChDynamCAO
-        B       ChangeDynamic_Error
-
-; IF service call claimed Then Error AplWSpaceInUse
-
-20
-        MOV     r0, r1                          ; amount removing from aplspace
-        MOV     r1, #Service_Memory
-        BL      Issue_Service
-        CMP     r1, #Service_Serviced
-        BNE     %FT25
-
-        ADRL    r0, ErrorBlock_AplWSpaceInUse
-        B       ChangeDynamic_Error
-
-; Right! r10 is amount of memory we will move
-; (if moving from free pool + apl space then r5 is amount removing from free pool)
-; r11 is the source
-; r12 is the destination
-
-25
- [ DebugCDA
-        DLINE   "Change is going ahead"
- ]
- [ :LNOT: NewStyle_FontArea
-        CMP     r11, #ChangeDyn_FontArea
-        LDREQ   r1, [r11, #FontCacheSize-ChangeDyn_FontArea]
-        SUBEQ   r1, r1, r10                     ; new size
-        SWIEQ   XFont_ChangeArea
- ]
-
-; remove the cursors if screen moving: might flash during modechange wrch
-
-        CMP     r11, #ChangeDyn_Screen
-        CMPNE   r12, #ChangeDyn_Screen
-        SWIEQ   XOS_RemoveCursors
-
-        CMP     r11, #ChangeDyn_Screen
-        RSBEQ   r0, r10, #0
-
-        MOV     r9, pc
-        TEQEQP  pc, #SVC_mode+I_bit+Z_bit
-        NOP
-    ; disable interrupts while sorting out the screen, in case (e.g) screen
-    ; start address is being reprogrammed under interrupt
-
-        BLEQ    RemovePages
-
-        TEQP    pc, r9          ; restore interrupt state
-
-; calculate addresses of blocks
-
-        MOV     r9, #0
-        LDR     r9, [r9, #MEMC_CR_SoftCopy]
-
-        MOV     r3, r11
-        BL      GetBlockEndSource
-        MOV     r0, r3                  ; R0 := blockend(source)
-
-        CMP     r12, #ChangeDyn_Screen
-        BEQ     ExtendScreen            ; dest=screen: perversion needed
-
-        MOV     r3, r12
-        BL      GetBlockEnd             ; R3 := blockend(dest)
-
-; move memory: r5 bytes from r0 backwards to r3 forwards
-        MOV     r1, #0
-30
-        SUB     r0, r0, r6
-        Push    "r5,r11"
-        ADR     r11, Access_Rights+4
-        LDR     r11, [r11, r12, LSL #2] ; get access privs (+ CB bits in new world)
- [ DebugCDA
-        DREG    r0, "Moving page at ", cc
-        DREG    r3, " to ", cc
-        DREG    r11, " with PPL "
- ]
-        BL      MoveCAMatR0toR3
-        Pull    "r5,r11"
-        BVS     camfucked
-        ADD     r1, r1, r6
-        ADD     r3, r3, r6
-
-        CMP     r1, r5                  ; have we done all (of this lot at least)?
-        BNE     %BT30                   ; [no, so loop]
-
-        CMP     r5, r10                 ; have we done all of both lots?
-        BEQ     %FT33                   ; yes, so finished
-
-        Push    "r1,r3"
-        MOV     r3, #ChangeDyn_AplSpace ; else we have more to do, from aplspace
-        BL      GetBlockEnd             ; so get apl block end
-        MOV     r0, r3                  ; and put into src register
-        Pull    "r1,r3"
-        MOV     r5, r10
-        B       %BT30
-
-33
-        CMP     r11, #ChangeDyn_Screen
-        BNE     %FT40
-
-; source=screen: need to shuffle rest of screen down.
-
-        VDWS    r5
-        LDR     r5, [r5, #TotalScreenSize]
-        MOV     r3, #ScreenEndAdr
-35
-        SUB     r0, r0, r6
-        SUB     r3, r3, r6
-        Push    "r5"
-        MOV     r11, #AP_Screen
-        BL      MoveCAMatR0toR3
-        Pull    "r5"
-        BVS     camfucked
-        SUBS    r5, r5, r6
-        BGT     %BT35
-        MOV     r11, #ChangeDyn_Screen
-
-40
-; now need to restore sizes if we have locked a heap
-
- [ (:LNOT: NewStyle_SysHeap) :LOR: (:LNOT: NewStyle_RMA)
-        BL      testrestoreheapend
- ]
-
-; update object sizes: current size(dest)   +:= r10
-;                      current size(source) -:= r10
-
-        MOV     r4, #0                          ; remember for later
-        LDR     r4, [r4, #SpriteSize]
-
-        CMP     r11, #ChangeDyn_FreeAndApl
-        BNE     %FT41
-        LDR     r2, Current_Size+4+(ChangeDyn_FreePool :SHL: 2)         ; r2 -> old size of free pool
-        LDR     lr, [r2]                                                ; lr = old size
-        LDR     r3, Shrink_Limits+4+(ChangeDyn_FreePool :SHL: 2)        ; r3 -> shrink limit of free pool
-        LDR     r3, [r3]                                                ; r3 = shrink limit
-        SUB     lr, lr, r3                                              ; how much we took out of it
-        STR     r3, [r2]                                                ; put shrink limit into current size
-
-        LDR     r2, Current_Size+4+(ChangeDyn_AplSpace :SHL: 2)         ; r2 -> old size of apl space
-        LDR     r3, [r2]                                                ; r3 = old size of apl space
-        SUB     r3, r3, r10                                             ; how much we would have taken out of it
-        ADD     r3, r3, lr                                              ; but don't take out the stuff which came out of free
-        STR     r3, [r2]
-        ADR     r0, Current_Size+4
-        B       %FT42
-
-41
-        ADR     r0, Current_Size+4
-        CMP     r11, #ChangeDyn_Screen          ; don't update TotalScreenSize
-        LDRNE   r2, [r0, r11, LSL #2]
-        LDRNE   r3, [r2]
-        SUBNE   r3, r3, r10
-        STRNE   r3, [r2]
-42
-        CMP     r12, #ChangeDyn_Screen          ; don't update TotalScreenSize
-        LDRNE   r2, [r0, r12, LSL #2]
-        LDRNE   r3, [r2]
-        ADDNE   r3, r3, r10
-        STRNE   r3, [r2]
-
- [ :LNOT: NewStyle_SpriteArea
-        CMP     r11, #ChangeDyn_SpriteArea      ; watch out for sprite area creation
-        CMPNE   r12, #ChangeDyn_SpriteArea      ; or deletion
-        BNE     %FT45
-
-        MOV     r1, #0                          ; used later also!!
-        LDR     r3, [r1, #SpriteSize]
-        CMP     r3, #0                          ; if sprite area deleted
-        LDRNE   r3, =SpriteSpaceAddress         ; tell the vdu drivers
-        MOV     r14, #VduDriverWorkSpace
-        STR     r3, [r14, #SpAreaStart]
-        BEQ     %FT45                           ; and don't touch non-existent memory
-
-        CMP     r4, #0                          ; if area was null,
-        LDMNEIB r3, {r4-r6}                     ; (skip size)
-        MOVEQ   r4, #0                          ; initialise variables if was null
-        MOVEQ   r5, #saExten
-        MOVEQ   r6, #saExten
-        LDR     r0, [r1, #SpriteSize]           ; set up earlier
-        STMIA   r3, {r0,r4-r6}                  ; stash new set of variables
-45
- ]
- [ UseFreePool
-        CMP     r11, #ChangeDyn_AplSpace        ; if apl space involved in transfer
-        CMPNE   r11, #ChangeDyn_FreeAndApl
-        CMPNE   r12, #ChangeDyn_AplSpace
-        MOVEQ   r0, #0
-        LDREQ   r2, [r0, #AplWorkSize]          ; then reset memlimit to aplworksize
-        STREQ   r2, [r0, #MemLimit]             ; MemLimit := AplWorkSize
- |
-        MOV     r0, #0
-        LDR     r2, [r0, #AplWorkSize]
-        STR     r2, [r0, #MemLimit]             ; MemLimit := AplWorkSize
- ]
-
-        CMP     r12, #ChangeDyn_Screen
-        MOVEQ   r0, r10
-
-        MOV     r9, pc
-        TEQEQP  pc, #SVC_mode+I_bit+Z_bit
-    ; disable interrupts while sorting out the screen, in case (e.g) screen
-    ; start address is being reprogrammed under interrupt
-
-        BLEQ    InsertPages
-
-        TEQP    pc, r9       ; restore interrupt state
-
-        CMP     r11, #ChangeDyn_Screen
-        CMPNE   r12, #ChangeDyn_Screen
-        SWIEQ   XOS_RestoreCursors
-
- [ :LNOT: NewStyle_FontArea
-        CMP     r12, #ChangeDyn_FontArea
-        LDREQ   r1, [r12, #FontCacheSize-ChangeDyn_FontArea]
-        SWIEQ   XFont_ChangeArea
- ]
-
- [ :LNOT: NewStyle_RAMDisc
-        CMP     r11, #ChangeDyn_RamFS
-        CMPNE   r12, #ChangeDyn_RamFS
-        BEQ     reinitialise_RAMFS
- ]
-        B       CDS_PostService
-
-Current_Size
-        &       AplWorkSize                             ; AplWork
- [ NewStyle_SysHeap
-        &       &FE000000                               ; cause abort
- |
-        &       SysHeapStart + :INDEX: hpdend           ; SysHeap
- ]
- [ NewStyle_RMA
-        &       &FE000000                               ; cause abort
- |
-        &       RMAAddress + :INDEX: hpdend             ; RMA
- ]
-        &       VduDriverWorkSpace + TotalScreenSize    ; Screen
- [ NewStyle_SpriteArea
-        &       &FE000000                               ; cause abort
- |
-        &       SpriteSize                              ; sprites
- ]
- [ NewStyle_FontArea
-        &       &FE000000                               ; cause abort
- |
-        &       FontCacheSize                           ; fonts
- ]
- [ NewStyle_RAMDisc
-        &       &FE000000                               ; cause abort
- |
-        &       RAMDiscSize                             ; RAMFS
- ]
- [ UseFreePool
-        &       FreePoolDANode + DANode_Size            ; Free pool
- ]
-
-GetBlockEndSource
-        CMP     r3, #ChangeDyn_FreeAndApl               ; if removing from free + apl
-        MOVEQ   r3, #ChangeDyn_FreePool                 ; then start by removing from free pool
- [ (:LNOT: NewStyle_RMA) :LOR: (:LNOT: NewStyle_SysHeap) ; none of this needed if both sysheap+RMA new
-  [ NewStyle_SysHeap                                    ; if sys heap new
-        CMP     r3, #ChangeDyn_RMA                      ; then RMA must be old
-  |
-        CMP     r3, #ChangeDyn_SysHeap                  ; else sys heap is old
-   [ :LNOT: NewStyle_RMA
-        CMPNE   r3, #ChangeDyn_RMA                      ; and if RMA old as well, do 2 CMPs
-   ]
-  ]
-        BNE     GetBlockEnd
-        ADR     r4, StartAddrs+4
-        LDR     r3, [r4, r3, LSL #2]
-        LDR     r4, [stack, #4*9]
-        ADD     r3, r3, r4                              ; start + size = end
-        MOV     pc, lr
- ]
-
-GetBlockEnd   ; R3 is area to get end of: return address in R3
-        MOV     r1, r3
-        ADR     r4, StartAddrs+4
-        LDR     r3, [r4, r3, LSL #2]
-        CMP     r1, #ChangeDyn_Screen                   ; screen ?
-        MOVEQ   pc, lr
-        ADR     r4, Current_Size+4
-        LDR     r4, [r4, r1, LSL #2]
-        LDR     r4, [r4]
-        ADD     r3, r3, r4                              ; start + size = end
-        MOV     pc, lr
-
-StartAddrs
-        &       0                               ; AplWork
- [ NewStyle_SysHeap
-        &       &FE000000                       ; cause abort
- |
-        &       SysHeapStart                    ; SysHeap
- ]
- [ NewStyle_RMA
-        &       &FE000000                       ; cause abort
- |
-        &       RMAAddress                      ; RMA
- ]
-        &       ScreenEndAdr                    ; Screen
- [ NewStyle_SpriteArea
-        &       &FE000000                       ; cause abort
- |
-        &       SpriteSpaceAddress              ; sprites
- ]
- [ NewStyle_FontArea
-        &       &FE000000                       ; cause abort
- |
-        &       FontCacheAddress                ; fonts
- ]
- [ NewStyle_RAMDisc
-        &       &FE000000                       ; cause abort
- |
-        &       RAMDiscAddress                  ; RAMFS
- ]
- [ UseFreePool
-        &       FreePoolAddress                 ; Free pool
- ]
-
-; ExtendScreen - move memory into screen area
-;
-; in:   r0 -> logical address of end of first source area (either free pool or aplspace)
-;       r5 = amount of memory being moved from first source area
-;       r6 = page size
-;       r9 = MEMC CR
-;       r10 = total amount of memory being moved
-;       r11 = number of source area
-;       r12 = number of dest area
-
-
-ExtendScreen
-
-; screenpos -:= r10 (move all current blocks down)
-
-        Push    "r5,r11"                ; save partial amount and src area number
-        MOV     r2, #0
-        VDWS    r5
-        LDR     r5, [r5, #TotalScreenSize]
-        RSB     r3, r5, #ScreenEndAdr
-        SUB     r3, r3, r10             ; where new screen start is
-50
-        MOV     r11, #AP_Screen         ; access privileges for screen (includes CB bits in new world)
-        BL      Call_CAM_Mapping
-        ADD     r2, r2, #1
-        ADD     r3, r3, r6
-        SUBS    r5, r5, r6
-        BNE     %BT50
-        Pull    "r5,r11"
-
-        ADD     r5, r3, r5              ; logaddr of end of first part (if split) or both otherwise
-
-; r0 -> end of the source (AplSpace or FreePool)
-        Push    "r7, r8, r10-r12"
-55
-        Push    "r2, r3, r5, pc"        ; save flags, etc. too
-        ADRL    r3, PageShifts-1
-        LDRB    r3, [r3, r6, LSR #12]
-        MOV     r3, r2, LSL r3          ; r3 = pagesize*r2
-        ADD     r3, r3, #ScreenEndAdr   ; physram addr of next screen block
-
-        SUB     r0, r0, r6              ; address of last src block
-
-        MOV     r1, #Service_ClaimFIQ   ; we may be moving FIQ workspace
-        BL      Issue_Service
-        ADD     r1, r0, r6              ; end marker
-
-        TEQP    pc, #SVC_mode+I_bit     ; disable IRQs as we may be moving
-        NOP                             ; IRQ workspace
-
-; copy R6 bytes from nextscreenblock to last src block; the last
-; src block MUST NOT be doubly mapped.
-
-60
-        LDMIA   r3!, {r2, r4, r5, r7, r8, r10, r11, r12}
-        STMIA   r0!, {r2, r4, r5, r7, r8, r10, r11, r12}
-        CMP     r0, r1
-        BLT     %BT60
-
-        LDR     r2, [stack]
-        SUB     r0, r0, r6
-        MOV     r3, #0
-        LDR     r3, [r3, #CamEntriesPointer]    ; get address of soft CAM copy
- [ ExpandedCamMap
-        ADD     r3, r3, r2, LSL #3              ; point at (address, PPL) for this page
-        LDMIA   r3, {r3, r11}                   ; and load them
- |
-        LDR     r3, [r3, r2, LSL #2]            ; curr addr of next screen block
-        MOV     r11, r3, LSR #28                ; protection level
-        BIC     r3, r3, #&F0000000
- ]
-
- [ UseFreePool
-        BL      MoveCAMatR0toR3issuingPagesSafe
- |
-        BL      MoveCAMatR0toR3                 ; last aplblock := nextscreenblock
- ]
-
-        Pull    "r2, r3, r5, r7"                ; r7 has IRQ state to restore
-        BVS     camfucked2
-                                                ; entry no in r2, logaddr in r3
-        MOV     r11, #AP_Screen
-        BL      Call_CAM_Mapping                ; nextscreenblock moves into place
-
-        TEQP    pc, r7                          ; restore IRQ state
-        NOP
-
-        MOV     r1, #Service_ReleaseFIQ
-        BL      Issue_Service
-        ADD     r3, r3, r6
-        ADD     r2, r2, #1
-
-        CMP     r3, r5                          ; have we got to end of this part
-        BNE     %BT55                           ; [no, so loop]
-
-        CMP     r3, #ScreenEndAdr
-        BEQ     %FT65
-
-        MOV     r3, #ChangeDyn_AplSpace
-        BL      GetBlockEnd                     ; get end of aplspace
-        MOV     r0, r3                          ; r0 -> end of aplspace
-        MOV     r3, r5                          ; continue dest where we left off
-        MOV     r5, #ScreenEndAdr               ; finish only at end this time
-        B       %BT55
-
-65
-        Pull    "r7, r8, r10-r12"
-        B       %BT40
-
-camfucked2
-        Pull    "r7, r8, r10-r12"
-camfucked
-        STR     r0, [stack]
-        Pull    "r0, r2-r6, r9, r10, lr"
-        B      SLVK_SetV
-
- ]
-
-; *** End of old style code ***
 
 ; Exit from ChangeDynamicArea with error Not all moved
 
- [ NewStyle_All
 noboff_IRQgoingClearSemaphore
         MOV     r0, #0
         STR     r0, [r0, #CDASemaphore]
- ]
 noboff_IRQgoing
         ADR     r0, ErrorBlock_ChDynamNotAllMoved
 ChangeDynamic_Error
@@ -959,14 +76,9 @@ ChangeDynamic_Error
         ORR     lr, lr, #V_bit
         STR     lr, [stack, #4*10]
 CDS_PostServiceWithRestore
- [ (:LNOT: NewStyle_SysHeap) :LOR: (:LNOT: NewStyle_RMA)
-        BL      testrestoreheapend
- ]
-      [ International
         LDR     r0, [stack]
         BL      TranslateError
         STR     r0, [stack]
-      ]
 
 ; and drop thru to ...
 
@@ -987,21 +99,15 @@ CDS_PostService
 
         MOV     r1, r10                ; amount moved
 
-     [ International
         Pull    "r0"
         LDR     lr, [sp, #9*4]
         TST     lr, #V_bit
         BLNE    TranslateError
         Pull    "r2-r9, r10, lr"
-     |
-        Pull    "r0, r2-r9, r10, lr"
-     ]
         ExitSWIHandler
 
         MakeErrorBlock ChDynamNotAllMoved
 
- [ MEMM_Type = "ARM600"
-  [ 1 = 1
 ; in:   r0 = logical address where page is now
 
 GetPageFlagsForR0IntoR6 ENTRY "R0-R2, R4-R5, R7"
@@ -1060,9 +166,6 @@ GetPageFlagsForR0IntoR6 ENTRY "R0-R2, R4-R5, R7"
         B       %BT95
 
 
-  ]
- ]
-
 ; MoveCAMatR0toR3
 ; in:   r0 = old logaddr
 ;       r3 = new logaddr
@@ -1073,7 +176,6 @@ GetPageFlagsForR0IntoR6 ENTRY "R0-R2, R4-R5, R7"
 ;       r0,r1,r3,r6-r12 preserved
 ;       r4,r5 corrupted
 
- [ MEMM_Type = "ARM600"
 MoveCAMatR0toR3 ENTRY "r0,r1,r6,r7"
         LDR     r5, =L2PT
         ADD     r4, r5, r0, LSR #10             ; r4 -> L2PT for log addr r0
@@ -1143,27 +245,6 @@ PhysicalAddressNotFoundError
         &       0
         =       "Memory Corrupt: Physical address not found", 0
         ALIGN
- |
-
-MoveCAMatR0toR3 ROUT
-        MOV     r2, #0
-        LDR     r4, [r2, #CamEntriesPointer]
-        LDR     r2, [r2, #MaxCamEntry]
-10
- [ ExpandedCamMap
-        LDR     r5, [r4, r2, LSL #3]
- |
-        LDR     r5, [r4, r2, LSL #2]
-        BIC     r5, r5, #&F0000000
- ]
-        CMP     r5, r0
-        BEQ     Call_CAM_Mapping
-        SUBS    r2, r2, #1
-        BGE     %BT10
-
-        ADR     r0, CamMapBroke
-        ORRS    pc, lr, #V_bit
- ]
 
 CamMapBroke
         &       0
@@ -1173,156 +254,6 @@ Call_CAM_Mapping
         Push    "r0, r1, r4, r6, lr"
         BL      BangCamUpdate
         Pull    "r0, r1, r4, r6, pc"
-
- [ UseFreePool :LAND: :LNOT: NewStyle_All
-
-; MoveCAMatR0toR3issuingPagesSafe
-; in:   r0 = old logaddr
-;       r2 = old physical page number
-;       r3 = new logaddr
-;       r9 = MEMC CR
-;       r11 = page protection level
-;
-; out:  r0,r1,r3,r6-r12 preserved
-;       r2,r4,r5 corrupted
-;
-; Note: this still needs some serious work done to it to cope with doubly-mapped areas
-
-MoveCAMatR0toR3issuingPagesSafe ENTRY "r0,r1,r3,r6,r7,r12", 6*4
-        STR     r2, [sp, #0*4]                  ; store old page number at offset 0 in frame
-        LDR     r5, =L2PT
-        ADD     r4, r5, r0, LSR #10             ; r4 -> L2PT for log addr r0
-        MOV     r2, r4, LSR #12
-        LDR     r2, [r5, r2, LSL #2]            ; r2 = L2PT entry for r4
-        TST     r2, #3                          ; if no page there
-        BEQ     %FT90                           ; then cam buggered
-
-        LDR     r4, [r4]                        ; r4 = L2PT entry for r0
-        TST     r4, #3                          ; check entry OK too
-        BEQ     %FT91
-        MOV     r12, r4, LSR #12                ; r12 = phys addr >> 12
-
-        MOV     r2, #0
-        LDR     r6, [r2, #MaxCamEntry]
-        MOV     r5, #PhysRamTable
-10
-        CMP     r2, r6                          ; if page we've got to is >= max
-        BHI     %FT92                           ; then buggered
-        LDMIA   r5!, {r7, lr}                   ; get phys.addr, size
-        SUB     r7, r12, r7, LSR #12             ; number of pages into this bank
-        CMP     r7, lr, LSR #12                 ; if too many
-        ADDCS   r2, r2, lr, LSR #12             ; then advance physical page no.
-        BCS     %BT10                           ; and loop
-
-        ADD     r2, r2, r7                      ; add on number of pages within bank
-        STR     r2, [sp, #3*4]                  ; store new page number at offset 3 in frame
-        BL      BangCamUpdate
-        EXIT    VS
-
-; now check if page being snaffled is a L2 page, and if so, change L1 contents to point to new page
-
-        SUBS    lr, r3, #L2PT                   ; check if destination page points in L2PT area
-        BCC     %FT20                           ; below L2PT, so OK
-        CMP     lr, #4*1024*1024                ; is offset into L2PT less than size of L2PT?
-        BCS     %FT20                           ; no, so OK
-
-        LDR     r1, =L1PT
-        ADD     r1, r1, lr, LSR #(12-4)         ; address in L1 of 4 consecutive words to update
-        LDR     r2, [r1]                        ; load 1st word, to get AP etc bits
-        MOV     r2, r2, LSL #(31-9)             ; junk other bits
-        MOV     r2, r2, LSR #(31-9)
-        ORR     r2, r2, r12, LSL #12            ; merge with address bits
-        STR     r2, [r1], #4
-        ADD     r2, r2, #&400
-        STR     r2, [r1], #4
-        ADD     r2, r2, #&400
-        STR     r2, [r1], #4
-        ADD     r2, r2, #&400
-        STR     r2, [r1], #4
-20
-; now issue the service
-
-        MOV     r1, #Service_PagesSafe
-        MOV     r2, #1                          ; 1 page at a time
-        MOV     r3, sp                          ; 1st frame starts at sp
-        ADD     r4, r3, #3*4                    ; 2nd frame starts at sp +12
-        BL      Issue_Service
-        CLRV
-        EXIT
-
-90
-        ADR     lr, NoL2ForPageBeingRemovedError
-95
-        STR     lr, [sp]                        ; update returned r0
-        BL      StoreDebugRegs
-        PullEnv                                 ; seriously broken memory
-        SETV
-        MOV     pc, lr
-
-91
-        ADR     lr, PageBeingRemovedNotPresentError
-        B       %BT95
-
-92
-        ADR     lr, PhysicalAddressNotFoundError
-        B       %BT95
-
- ]
-
- [ :LNOT: NewStyle_RAMDisc
-;........................................
-; Old style RAMFS bashing
-
-CheckRAMFSChangeOK
-      Push   "r0-r5"
-      MOV     r0, #5
-      ADR     r1, ramcolondollardotstar
-      SWI     XOS_File
-      CMPVC   r0, #0
-      Pull   "r0-r5"
-      BVS     AllowRAMFSChange             ; ramfs not present
-      BEQ     AllowRAMFSChange             ; ramfs empty
-      ADR     r0, ErrorBlock_RAMFsUnchangeable
-      B       ChangeDynamic_Error
-      MakeErrorBlock RAMFsUnchangeable
-
-ramcolondollardotstar = "ram:$.*",0
-ramfsname = "ramfs",0
-
-      ALIGN
-
-reinitialise_RAMFS
-      Push   "r0-r6"
-      MOV     r0, #ModHandReason_EnumerateROM_Modules
-      MOV     r1, #0
-      MOV     r2, #-1
-look_for_RAMFS
-      SWI     XOS_Module
-      BVS     OKtoreinitRAMFS        ; can't find it: may be in ram
-      ADR     r5, ramfsname
-nameloop
-      LDRB    r6, [r3], #1
-      CMP     r6, #" "
-      BLE     foundramfs
-      LowerCase r6, lr
-      LDRB    lr, [r5], #1
-      CMP     lr, r6
-      BEQ     nameloop
-      B       look_for_RAMFS
-
-foundramfs
-      CMP     r4, #-1
-      BNE     OKtoreinitRAMFS
-      Pull   "r0-r6"
-      B       CDS_PostService
-
-OKtoreinitRAMFS
-      MOV     r0, #ModHandReason_ReInit
-      ADR     r1, ramfsname
-      SWI     XOS_Module
-      Pull   "r0-r6"
-      B       CDS_PostService
- ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In    r0 bits 0..6 = area number
@@ -1348,7 +279,6 @@ ReadDynamicArea ROUT
 readdyn_returnR2bit     *       &80
         ASSERT  ChangeDyn_MaxArea < readdyn_returnR2bit
 
- [ NewCDA
         CMP     r0, #-1                         ; if finding out about app space
         LDREQ   r1, [r0, #AplWorkSize+1]        ; then r1 = current size
         LDREQ   r2, =AplWorkMaxSize             ; and r2 = max size
@@ -1377,46 +307,12 @@ readdyn_returnR2bit     *       &80
         SUBNE   r0, r0, r1                      ; then return start of 1st copy for compatibility
         ExitSWIHandler
 05
- ]
- [ :LNOT: NewStyle_All
-        BIC     r10, r0, #readdyn_returnR2bit
-        CMP     r10, #ChangeDyn_MaxArea
-        BLS     %FT07
- ]
         ADRL    r0, ErrorBlock_BadDynamicArea
-      [ International
         Push    "lr"
         BL      TranslateError
         Pull    "lr"
-      ]
         B       SLVK_SetV
 
- [ :LNOT: NewStyle_All
-07
-        TST     r0, #readdyn_returnR2bit        ; if bit 7 set, R2 = max size of area
-  [ MEMC_Type = "IOMD"
-        BEQ     %FT10
-        EORS    r11, r10, #ChangeDyn_Screen     ; if screen
-        LDREQ   r2, [r11, #VideoSize]           ; then use video size
-        ADRNEL  r11, Grow_LimitsPtrs+4
-        LDRNE   r2, [r11, r10, LSL #2]          ; else use grow limits
-        LDRNE   r2, [r2]                        ; (grow limits are pointers to max sizes now)
-10
-  |
-        ADRNEL  r11, Grow_LimitsPtrs+4
-        LDRNE   r2, [r11, r10, LSL #2]
-        LDRNE   r2, [r2]                        ; (grow limits are pointers to max sizes now)
-  ]
-
-        CMP     r10, #ChangeDyn_Screen    ; screen?
-        ADRL    r0, Current_Size+4
-        ADRL    r11, StartAddrs+4
-        LDR     r1, [r0, r10, LSL #2]
-        LDR     r1, [r1]                  ; r1 = current size of area
-        LDR     r0, [r11, r10, LSL #2]    ; r0 = start address of area
-        SUBEQ   r0, r0, r1                ; screen goes wackbords
-        B       SLVK
- ]
 
         MakeErrorBlock  BadDynamicArea
 
@@ -1453,14 +349,8 @@ ReadMemMapEntries_Code  ROUT
         CMP     r12, r14
         Pull    "r0,r14", HI
         ExitSWIHandler HI
- [ ExpandedCamMap
         ADD     r11, r10, r12, LSL #3
         LDMIA   r11, {r11, r12}
- |
-        LDR     r11, [r10, r12, LSL #2]
-        MOV     r12, r11, LSR #28               ; PPL
-        BIC     r11, r11, #&F0000000
- ]
         STMIA   r0!, {r11, r12}
         B       %BT01
 
@@ -1481,7 +371,6 @@ ReadMemMapEntries_Code  ROUT
 ; ************************************************************************
 
 FindMemMapEntries_Code  ROUT
- [ ExpandedCamMap
 
 ; Code for expanded CAM map version
 
@@ -1556,87 +445,6 @@ FindMemMapEntries_Code  ROUT
 
         STMIA   r0!, {r10-r12}                  ; store all 3 words
         B       %BT10                           ; and go back for another one
- |
-
-; Code for non-expanded CAM map version
-
-        Push    "r0, r9, r14"
-        MOV     r14, #0
-        LDR     r9, [r14, #MaxCamEntry]
-        LDR     r14, [r14, #CamEntriesPointer]  ; r14 -> start of cam map
-        ADD     r9, r14, r9, LSL #2             ; r9 -> last entry in cam map
-10
-        LDR     r10, [r0, #0]                   ; r10 = guess page number (or -1)
-        CMP     r10, #-1                        ; if -1 then end of list
-        Pull    "r0, r9, r14", EQ               ; so restore registers
-        ExitSWIHandler EQ                       ; and exit
-
-        LDR     r11, [r0, #4]                   ; r11 = logical address
-        MOV     r11, r11, LSL #4                ; shift up so we can compare with
-                                                ; shifted up addresses
-        ADD     r10, r14, r10, LSL #2           ; form address with 'guess' page
-        CMP     r10, r9                         ; if off end of CAM
-        BHI     %FT15                           ; then don't try to use the guess
-
-        LDR     r12, [r10]                      ; load address+ppl from guessed page
-        TEQ     r11, r12, LSL #4                ; compare address
-        BEQ     %FT30                           ; if equal, then guessed page was OK
-15
- [ MEMM_Type = "ARM600"
-
-; for now, cheat by looking in L2PT, to see if we can speed things up
-
-        Push    "r5-r8"                         ; need some registers here!
-        LDR     r10, =L2PT
-        CMP     r11, #256*1024*1024*4           ; if address >= 256M
-        BCS     %FT17                           ; then invalid, so search from last one
-
-        MOV     r8, r11, LSR #16                ; r8 = logaddr / 4K
-        LDR     r8, [r10, r8, LSL #2]           ; get page table entry
-        MOV     r8, r8, LSR #12                 ; r8 = physaddr / 4K
-
-        MOV     r5, #VideoPhysAddr
-        SUB     r10, r14, #4
-16
-        CMP     r10, r9                         ; have we run out of RAM banks?
-        BCS     %FT17                           ; then fail
-        LDMIA   r5!, {r6,r7}                    ; load next address, size
-        SUB     r6, r8, r6, LSR #12             ; number of pages into this bank
-        CMP     r6, r7, LSR #12                 ; if more than there are
-        ADDCS   r10, r10, r7, LSR #12-2         ; then advance CAM entry position (bank size must be multiple of 4K)
-        BCS     %BT16                           ; and loop to next bank
-
-        ADD     r10, r10, r6, LSL #2            ; advance by 1 word for each page in this bank
-17
-        SUBCS   r10, r9, #4                     ; search from last one, to fail quickly (if CS)
-        Pull    "r5-r8"
- |
-        SUB     r10, r14, #4                    ; move pointer to start of CAM -4
- ]
-
-20
-        CMP     r10, r9                         ; if not just done last one, get
-        LDRNE   r12, [r10, #4]!                 ; address in bits 0..27, PPL in 28..31
-        TEQNE   r11, r12, LSL #4                ; compare address
-        BNE     %BT20                           ; loop if not same and not at end
-
-; either found page or run out of pages
-
-        TEQ     r11, r12, LSL #4                ; see if last one matched
-                                                ; (we always load at least one!)
-30
-        SUBEQ   r10, r10, r14                   ; if match, then
-        MOVEQ   r10, r10, LSR #2                ; page number=(r10-r14)>>2
-        MOVEQ   r12, r12, LSR #28               ; and PPL=r12>>28
-
-        MOVNE   r10, #-1                        ; else unknown page number indicator
-        MOVNE   r12, #3                         ; and PPL=3 (no user access)
-
-        MOV     r11, r11, LSR #4                ; restore r11 to original value
-
-        STMIA   r0!, {r10-r12}                  ; store all 3 words
-        B       %BT10                           ; and go back for another one
- ]
 
 ;**************************************************************************
 ; SWI SetMemMapEntries: R0 pointer to list of CAM page/address/PPL triads,
@@ -1661,11 +469,8 @@ SetMemMapEntries_Code  ROUT
         BHI     %FT02                   ; finished
         LDMIA   r12!, {r3, r11}
         AND     r11, r11, #3
- [ MEMM_Type = "ARM600"
+
         CMP     r3, #-1
- |
-        CMP     r3, #32*1024*1024
- ]
         LDRHS   r3, =DuffEntry
         MOVHS   r11, #AP_Duff
         BL      BangCamUpdate
@@ -1676,11 +481,7 @@ SetMemMapEntries_Code  ROUT
 
         LTORG
 
- [ :LNOT: NewCDA
-InitDynamicAreas        MOV     pc, lr          ; if not new world then nothing to initialise
- ]
 
- [ NewCDA
 
 ;**************************************************************************
 ;
@@ -1714,9 +515,7 @@ DynAreaFlags_NotBufferable *    1 :SHL: 4
 DynAreaFlags_NotCacheable *     1 :SHL: 5
 DynAreaFlags_DoublyMapped *     1 :SHL: 6
 DynAreaFlags_NotUserDraggable * 1 :SHL: 7
- [ DAF_SpecifyBit
 DynAreaFlags_NeedsSpecificPages *  1 :SHL: 8    ; whether area will ever require particular physical pages
- ]
  ; amg: renaissance... this is a mess!
  [ ShrinkableDAs
 DynAreaFlags_Shrinkable *       1 :SHL: 9       ; whether area should be shrunk when need more space in free pool
@@ -1769,11 +568,9 @@ DynAreaSub
 DynArea_Unknown
         ADRL    r0, ErrorBlock_HeapBadReason
 DynArea_TranslateAndReturnError
-      [ International
         Push    lr
         BL      TranslateError
         Pull    lr
-      ]
 DynArea_ReturnError
         SETV
         MOV     pc, lr
@@ -2045,9 +842,7 @@ DynArea_Remove ENTRY
 
 UnknownDyn
         ADRL    r0, ErrorBlock_BadDynamicArea
- [ International
         BL      TranslateError
- ]
 90
         SETV
         EXIT
@@ -2155,9 +950,7 @@ DynArea_Renumber ALTENTRY
 
 90
         ADRL    r0, ErrorBlock_AreaAlreadyExists
- [ International
         BL      TranslateError
- ]
         SETV
         EXIT
 
@@ -2274,9 +1067,7 @@ CheckForOverlappingAreas ENTRY "r0-r5"
 
 20
         ADRL    r0, ErrorBlock_OverlappingAreas
- [ International
         BL      TranslateError
- ]
         STR     r0, [sp]
         SETV
         EXIT
@@ -2310,28 +1101,10 @@ CheckForOverlappingAreas ENTRY "r0-r5"
 
 FixedAreasTable                                         ; table of fixed areas (address, size)
         &       0,                      AplWorkMaxSize  ; application space
- [ :LNOT: NewStyle_RMA
-        &       RMAAddress,             RMAMaxSize      ; RMA (to be removed from here eventually)
- ]
- [ :LNOT: NewStyle_SysHeap
-        &       SysHeapChunkAddress,    SysHeapMaxSize+SVCStackSize   ; system heap (to be removed eventually)
- ]
         &       UndStackSoftCamChunk,   1024*1024               ; undefined stack / soft cam map
         &       CursorChunkAddress,     64*1024                 ; 32K for cursor, 32K for "nowhere"
         &       L2PT,                   4*1024*1024             ; L2PT (and L1PT)
         &       &03000000,              16*1024*1024            ; I/O + ROM
- [ :LNOT: NewStyle_Screen
-        &       ScreenEndAdr-16*1024*1024, 32*1024*1024         ; Screen (removable later)
- ]
- [ :LNOT: NewStyle_FontArea
-        &       FontCacheAddress,      FontCacheMaxSize ; Font cache (removable later)
- ]
- [ :LNOT: NewStyle_SpriteArea
-        &       SpriteSpaceAddress,  SpriteSpaceMaxSize ; Sprite area (removable later)
- ]
- [ :LNOT: NewStyle_RAMDisc
-        &       RAMDiscAddress,         RAMDiscMaxSize  ; RAM disc (removable later)
- ]
         &       PhysSpace,              512*1024*1024   ; PhysSpace
         &       &FF800000,              &007FFFFF       ; Shadow ROM (length has been bodged to avoid wrap problems)
         &       -1,                     0               ; termination
@@ -2386,9 +1159,7 @@ AllocateAreaAddress ENTRY "r0-r2,r4-r7"
 
 90
         ADRL    r0, ErrorBlock_CantAllocateArea
-  [ International
         BL      TranslateError
-  ]
         STR     r0, [sp]
         SETV
         EXIT                                    ; say we can't do it
@@ -2573,9 +1344,7 @@ AllocateBackingLevel2 ENTRY "r0-r8,r11"
 
 90
         ADRL    r0, ErrorBlock_CantAllocateLevel2
-  [ International
         BL      TranslateError
-  ]
         STR     r0, [sp]
         SETV
         EXIT
@@ -2603,7 +1372,6 @@ InitDynamicAreas ENTRY "r0-r8,r11"
         LDR     r5, [lr, #RAMLIMIT-FreePoolDANode] ; max size is RAMLIMIT
         STMIA   lr, {r0-r8}
 
- [ GetPagesFromFreePool
 
 ; We have to move all free pages (ie ones not occupied by the static pages) into the free pool
 ; The lowest numbered physical pages must be put in last, so that when ReadCMOSAndConfigure is
@@ -2650,19 +1418,14 @@ InitDynamicAreas ENTRY "r0-r8,r11"
 
         MOV     r0, #0                          ; initialise module list to empty
         STR     r0, [r0, #Module_List]
- ]
- [ NewStyle_SysHeap
         MOV     lr, #SysHeapDANode              ; initialise system heap node
         ADR     r0, InitSysHeapTable
         LDMIA   r0, {r0-r8}
         STMIA   lr, {r0-r8}
- ]
         MOV     r0, #0
         STR     lr, [r0, #DAList]               ; store pointer to 1st node on list (either free pool or sys heap)
 
- [ NewStyle_All
         STR     r0, [r0, #CDASemaphore]         ; clear CDASemaphore
- ]
 
         EXIT
 
@@ -2709,15 +1472,11 @@ SysHeapString
         =       "System heap", 0
         ALIGN
 
- ]
 
- [ NewCDA2
-  [ NewStyle_All
 ChangeDynamicSWI ROUT
         Push    "r0, r2-r9, r10, lr"
 
 ; and drop thru to ...
-  ]
 
 ;**************************************************************************
 ;
@@ -2736,15 +1495,11 @@ CheckForNewArea ROUT
         MOV     r10, #0                         ; check we're not in an IRQ
         LDR     r10, [r10, #IRQsema]
         TEQ     r10, #0
- [ NewStyle_All
         LDREQ   r10, [r10, #CDASemaphore]       ; now also check whether ChangeDynamicArea is already threaded
         TEQEQ   r10, #0
         BNE     noboff_IRQgoing
         MOV     r10, #1
         STR     r10, [r10, #CDASemaphore-1]     ; store non-zero value in CDASemaphore, to indicate we're threaded
- |
-        BNE     noboff_IRQgoing
- ]
 
  [ DebugCDA2
         DLINE   "Entering OS_ChangeDynamicArea (new code)"
@@ -2757,11 +1512,7 @@ CheckForNewArea ROUT
  ]
         BL      CheckAreaNumber                 ; check area number is on list
         Pull    "r1"
- [ NewStyle_All
         BCC     noboff_IRQgoingClearSemaphore
- |
-        BCC     IsOldArea                       ; if not, then use old code
- ]
 
  [ DebugCDA2
         DLINE   "Found entry on list"
@@ -2907,17 +1658,12 @@ AreaShrink
 
         SUB     r0, r0, r3                      ; move r0 back to end of 1st copy of pages remaining
         ADD     r1, r0, r2                      ; r1 is end of where they're moving to (should be src base address!)
- [ 1 = 1
- |
-        AND     r6, r6, #DynAreaFlags_AccessMask
- ]
+
         MOV     r9, #0                          ; no funny stuff while moving these pages
 25
         SUB     r0, r0, r5
         SUB     r1, r1, r5
- [ 1 = 1
         BL      GetPageFlagsForR0IntoR6
- ]
         BL      MovePageAtR0ToR1WithAccessR6
         SUBS    r4, r4, r5
         BNE     %BT25
@@ -3080,7 +1826,6 @@ AreaGrow
         Push    "r3"                            ; save original total amount
         TEQ     r11, #0                         ; if taking from both free + apl
         MOVEQ   r11, #FreePoolDANode            ; then start with free
- [ DAF_SpecifyBit
         LDR     lr, [r12, #DANode_Flags]        ; could this area require particular physical pages at all?
         TST     lr, #DynAreaFlags_NeedsSpecificPages
         BNE     %FT70                           ; [yes it could, so do it in lumps]
@@ -3109,7 +1854,6 @@ AreaGrow
         BL      CallPostGrow
         BVS     %FT95
         B       %FT80
- ]
 
 70
         Push    "r3, r7"
@@ -3146,9 +1890,7 @@ AreaGrow
 
 GenNotAllMovedError ENTRY "r0"
         ADRL    r0, ErrorBlock_ChDynamNotAllMoved
- [ International
         BL      TranslateError
- ]
         STR     r0, [sp, #2*4]          ; sp -> r0,lr, then stacked r0,r2-r9,r10,lr
         LDR     lr, [sp, #12*4]
         ORR     lr, lr, #V_bit
@@ -3189,10 +1931,8 @@ IssueServiceMemoryMoved
         TEQ     r1, #0
         RSBMI   r1, r1, #0              ; r1 on exit = unsigned amount
 
- [ NewStyle_All
         MOV     r0, #0
         STR     r0, [r0, #CDASemaphore] ; clear CDASemaphore
- ]
         Pull    "r0, r2-r9, r10, lr"
         ExitSWIHandler
 
@@ -3271,9 +2011,7 @@ TotalAmount     #       4                       ; Total size of grow for this ch
 SavedPSR        #       4                       ; PC+PSR before IRQs disabled
 Offset1To2      #       4                       ; Offset from 1st to 2nd bank
 
- [ DAF_SpecifyBit
 DoTheGrowNotSpecifiedStackSize * :INDEX: @      ; amount of stack needed for 'not specified' version
- ]
 
 PageBlock1      #       PageBlockSize           ; 1st page block, for original page numbers and phys. addrs
 PageBlock2      #       PageBlockSize           ; 2nd page block, for new page numbers and phys. addrs
@@ -3400,9 +2138,7 @@ DoTheGrow ENTRY "r3,r5,r10-r12", DoTheGrowStackSize
         BL      CallPostGrow
 
         ADR     r0, ErrorBlock_CantGetPhysMem
- [ International
         BL      TranslateError
- ]
         SETV
         EXIT
 
@@ -3450,25 +2186,24 @@ DoTheGrowPagesSpecified
         MOV     r1, #Service_PagesUnsafe
         BL      Issue_Service
 
-  [ StrongARM
-    ;
-    ;Ahem! The data is moved to new pages by reading old pages via 'physical address' (flat copy of
-    ;      physical space at virtual addr. 2G). This means data read may not be up to date wrt data in
-    ;      StrongARM's write-back cache, and is a potential cache incoherency anyway (two virtual mappings
-    ;      to one physical).
-    ;      So, clean/flush StrongARM data cache wrt to pages first. Incidentally, since StrongARM does
-    ;      not support burst read LDMs from uncacheable areas, the read is going to be a little slow anyway).
-    ;
-    ;
-    ARM_number r0
-    CMP     r0,#&A
-    BLEQ    dtgps_SAcleanflush
-  ]
+    ;StrongARM - see comments below for ARM810support, and in different scheme for StrongARM
+    ;            copy, further down. RISC OS 3.7 had a grotty fix here that has a hole
+    ;            for pages involved in interrupts (only showed up occasionally with PC card s/w)
 
   [ ARM810support
     ;
-    ; ARM810 has writeback cache too
+    ;Ahem! The data is moved to new pages by reading old pages via 'physical address' (flat copy of
+    ;      physical space at virtual addr. 2G). This means data read may not be up to date wrt data in
+    ;      ARM810's write-back cache. Here, we do a clean flush, which fixes the problem for any pages
+    ;      that will not be updated by interrupts.
     ;
+    ;      *** IT DOES NOT FIX THE PROBLEM FOR PAGES AFFECTED BY INTERRUPTS ***
+    ;
+    ;      There is a proper fix for StrongARM (similar problem) below. ARM810 support could do
+    ;      similar, but effort of writing and testing not warranted at this time
+    ;
+ ! 0,"mjs: ARM810support WARNING! Pages_Unsafe/Pages_Safe copying code does NOT cope with"
+ ! 0,"     pages that may be updated by interrupt code. Bug may cause problems in 'rare' cases."
     ARM_number r0
     CMP     r0,#8
     BLEQ    dtgps_810cleanflush
@@ -3600,7 +2335,8 @@ DoTheGrowPagesSpecified
         MOV     r1, #Service_ClaimFIQ
         BL      Issue_Service
 
-        TEQP    pc, #SVC_mode + I_bit           ; disable IRQs round here
+        TEQP    pc, #SVC_mode + I_bit           ; disable IRQs round here (we don't want interrupt code to update
+                                                ; the old mapping behind us while we're trying to copy it)
         NOP
 
         LDR     r6, [r8, #0]                    ; r6 = page number required
@@ -3608,6 +2344,91 @@ DoTheGrowPagesSpecified
         TEQ     r6, lr                          ; if the same
         Pull    "r0-r4,r7-r12", EQ              ; then restore registers
         BEQ     %FT76                           ; and skip copy and first page move
+
+  [ StrongARM
+
+    ;we use a different scheme on StrongARM, because:
+    ;  (1) we need to ensure cache coherency of a *writeback* data cache, so cannot use a second mapping of page in
+    ;      old scheme without doing cache cleaning (physical copy of page is used)
+    ;  (2) speed of copy from/to uncacheable space is diabolical on StrongARM (remember, IRQs are off!)
+    ;so the scheme is:
+    ;   -  if  the old page is currently not mapped, or is mapped uncacheable, create a temporary cacheable mapping
+    ;      (at address of Nowhere, used merely as convenient temporary place) - this ensures that we have a valid mapping
+    ;      without using (uncacheable) physical copy, and that our LDMs will be fast, whatever the cacheable status of the
+    ;      original mapping - there is no cache coherency issue, because the temporary mapping is only created if that
+    ;      original mapping is non-existent or uncacheable
+    ;   -  create a temporary cacheable,bufferable mapping of the replacement page (at address of Nowhere+PageSize, used
+    ;      merely as convenient temporary place) - this ensures that our STMs are fast, whatever the status of the original
+    ;      mapping (SA110 needs cacheable as well as bufferable for burst STMs) - there is no cache coherency issue because
+    ;      this address will not have been read, nor be read during this scheme
+    ;   -  do the copy, a cache line at a time, flushing the cache behind us for the src - there is no need to clean,
+    ;      because either the mapping is never written (temp mapping), or the mapping is to be discarded and it is only
+    ;      necessary for the up-to-date data to reach the replacement page
+    ;   -  remove the temporary mapping(s), and flush the DTLB entries
+    ;
+        ARM_read_ID r2
+        AND     r2, r2, #&F000
+        CMP     r2, #&A000
+        BNE     cda_pagecopy_notSA
+        LDR     r4, [r8, #4]            ;logical address of src page
+        MOV     r3, #L2PT
+        ADD     r3, r3, r4, LSR #(12-2) ;L2PT addr for logical page (assumes 4k page size)
+        LDR     r7, [r3]                ;L2PT entry, will be 0 if page not mapped, else bit 3 will be cacheable bit
+        TST     r7, #8                  ;will be NE if we do have a valid, cacheable mapping
+        BNE     cda_pagecopy_mapdest
+
+;make a temporary cacheable,bufferable mapping of src at Nowhere
+        MOV     r3, #L2PT
+        LDR     r4, =DuffEntry          ;address of Nowhere
+        ADD     r3, r3, r4, LSR #(12-2) ;L2PT addr
+        LDR     r7, [r8, #8]            ;physical address of src page
+        ORR     r7, r7, #&550
+        ORR     r7, r7, #&00E           ;&55E = L2PT bits for svc access, C=1, B=1
+        STR     r7, [r3]                ;update L2PT
+
+;make a temporary cacheable,bufferable mapping of dest (replacement page) at Nowhere+PageSize
+cda_pagecopy_mapdest
+        MOV     r3, #L2PT
+        LDR     r7, =DuffEntry
+        ADD     r7, r7, r5              ;address of Nowhere+PageSize
+        ADD     r3, r3, r7, LSR #(12-2) ;L2PT address for logical page at Nowhere+PageSize
+        LDR     r10, [r0, lr, LSL #3]   ;log. address for replacement page
+        MOV     r9, #L2PT
+        ADD     r9, r9, r10, LSR #(12-2)
+        LDR     r9, [r9]
+        MOV     r9, r9, LSR #12
+        MOV     r9, r9, LSL #12         ;physical address of replacement page (looked up from L2PT entry)
+        ORR     r9, r9, #&550
+        ORR     r9, r9, #&00E           ;&55E = L2PT bits for svc access, C=1, B=1
+        STR     r9, [r3]                ;update L2PT
+
+        MOV     r0, r7                  ;r0 := log. address for dest (temp mapping at Nowhere+PageSize)
+        MOV     r6, r4                  ;r6 := log. address for src  (either addr of page, or of temp mapping at Nowhere)
+        ADD     lr, r6, r5              ;lr := end src address
+cda_pagecopy_copyloop
+        LDMIA   r6,  {r2, r3, r4, r7, r9, r10, r11, r12}
+        STMIA   r0!, {r2, r3, r4, r7, r9, r10, r11, r12}
+        ARMA_flush_DCentry r6           ;flush behind us for reads (no need to clean)
+        ADD     r6, r6, #32             ;next cache line
+        TEQ     r6, lr
+        BNE     cda_pagecopy_copyloop
+
+        LDR     r6, =DuffEntry
+        MOV     r4, #L2PT
+        ADD     r4, r4, r6, LSR #(12-2) ;L2PT address for logical page at Nowhere (assumes page size 4k)
+        MOV     r7, #0                  ;means translation fault in L2PT
+        STR     r7, [r4]                ;update L2PT to remove 1st temporary mapping (if any)
+        ARMA_flush_DTLBentry r6         ;must flush DTLB entry
+        STR     r7, [r4,#4]             ;update L2PT to remove 2nd temporary mapping
+        ADD     r6, r6, r5
+        ARMA_flush_DTLBentry r6         ;must flush DTLB entry
+        B       %FT73                   ;carry on with common scheme for all ARMs
+cda_pagecopy_notSA
+
+  ] ;StrongARM
+
+;traditional scheme of copying via physical space copy of page - not adequate for StrongARM (nor
+;ARM810 - see comments above under ARM810support
 
         LDR     r0, [r0, lr, LSL #3]            ; r0 = log. address for replacement page (NB use logical address to write to, for cache consistency)
         LDR     r6, [r8, #8]                    ; r6 = physical address of src for copy
@@ -3619,6 +2440,7 @@ DoTheGrowPagesSpecified
         TEQ     r6, lr
         BNE     %BT72
 
+73
 ; now check if page we're replacing is in L2PT, and if so then adjust L1PT entries (4 of these)
 
         LDR     r6, [r8, #4]                    ; look at logical address of page being replaced
@@ -3694,7 +2516,6 @@ DoTheGrowPagesSpecified
         CLRV
         EXIT
 
- [ DAF_SpecifyBit
 ; ***********************************************************************************
 ;
 ;       DoTheGrowNotSpecified - Do one chunk of growing, with no page block crap
@@ -3778,7 +2599,6 @@ DoTheGrowNotSpecified ENTRY "r3,r5,r10-r12", DoTheGrowNotSpecifiedStackSize
         CLRV
         EXIT
 
- ] ; DAF_SpecifyBit
 
 ; ***********************************************************************************
 ;
@@ -3824,9 +2644,7 @@ CheckAppSpace ENTRY "r0-r3"
 
         ADR     r0, ErrorBlock_ChDynamCAO
 10
- [ International
         BL      TranslateError
- ]
         STR     r0, [sp]
         SETV
         EXIT
@@ -3856,10 +2674,8 @@ Do_AMB_MakeSparse ROUT
     ] ;ChocolateAMB
 
 
- ]
         MakeErrorBlock AplWSpaceInUse
         MakeErrorBlock ChDynamCAO
- [ NewCDA2
 
 ; ***********************************************************************************
 ;
@@ -3894,9 +2710,7 @@ CallPreShrink ENTRY "r0,r3,r4, r12"
         EXIT    VC
         TEQ     r0, #0                                  ; if generic error returned
         ADREQL  r0, ErrorBlock_ChDynamNotAllMoved       ; then substitute real error message
- [ International
         BLEQ    TranslateError
- ]
         STR     r0, [sp]
         SETV
         EXIT
@@ -3963,9 +2777,7 @@ CallPreGrow ENTRY "r0,r4, r12"
 
         TEQ     r0, #0                                  ; if generic error returned
         ADREQL  r0, ErrorBlock_ChDynamNotAllMoved       ; then substitute real error message
- [ International
         BLEQ    TranslateError
- ]
         STR     r0, [sp]
         SETV
         EXIT
@@ -4029,9 +2841,7 @@ CallTestShrink ENTRY "r0,r4,r5, r12"
         EXIT    VC
         TEQ     r0, #0                                  ; if generic error returned
         ADREQL  r0, ErrorBlock_ChDynamNotAllMoved       ; then substitute real error message
- [ International
         BLEQ    TranslateError
- ]
         STR     r0, [sp]
         MOV     r3, #0                                  ; indicate no shrink possible
         SETV
@@ -4115,20 +2925,14 @@ AreaName_RMA
         =       "Module area", 0
         ALIGN
 
- ]
 
- [ NewCDA
 UnknownHandlerError
         Push    "lr"
         ADRL    r0, ErrorBlock_UnknownAreaHandler
-  [ International
         BL      TranslateError
-  ]
         SETV
         Pull    "pc"
- ]
 
- [ NewStyle_SpriteArea
 DynAreaHandler_Sprites
         CMP     r0, #4
         ADDCC   pc, pc, r0, LSL #2
@@ -4189,9 +2993,7 @@ AreaName_SpriteArea
         =       "System sprites", 0
         ALIGN
 
- ]
 
- [ NewStyle_RAMDisc
 DynAreaHandler_RAMDisc
         CMP     r0, #4
         ADDCC   pc, pc, r0, LSL #2
@@ -4258,9 +3060,7 @@ PreShrink_RAMDisc ENTRY "r0-r5"
         BVS     %FT90                   ; if no RAMFS then change OK
         BEQ     %FT90                   ; or if no files, then change OK
         ADR     r0, ErrorBlock_RAMFsUnchangeable
- [ International
         BL      TranslateError
- ]
         STR     r0, [sp]
         SETV
         EXIT
@@ -4279,9 +3079,7 @@ ramfsname
         =       "ramfs", 0
         ALIGN
 
- ]
 
- [ NewStyle_FontArea
 DynAreaHandler_FontArea
         CMP     r0, #4
         ADDCC   pc, pc, r0, LSL #2
@@ -4329,7 +3127,6 @@ AreaName_FontArea
         =       "Font cache", 0
         ALIGN
 
- ]
 
 ; **** New screen stuff ****
 ;
@@ -4370,7 +3167,6 @@ AreaName_FontArea
 ; Entry requirements
 ; none
 
-        [ NewStyle_Screen
 AreaName_Screen
         =       "Screen memory",0               ;needs replacing with message token
         ALIGN
@@ -4631,6 +3427,5 @@ Screen_makevanilla ROUT
 
    ] ;ChocolateScreen
 
- ]
 
         END

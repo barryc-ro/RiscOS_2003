@@ -28,30 +28,10 @@
 ;
 ;exit: addr0 updated to end of range ( = addr1)
 ;
-    [ SAcleanflushbroken
         MACRO
         AMB_ARMAcleanflushrange $addr0,$addr1
 01
-        ARMA_clean_DCentry $addr0
-        ARMA_flush_DCentry $addr0
-        ADD     $addr0,$addr0,#32
-        ARMA_clean_DCentry $addr0
-        ARMA_flush_DCentry $addr0
-        ADD     $addr0,$addr0,#32
-        ARMA_clean_DCentry $addr0
-        ARMA_flush_DCentry $addr0
-        ADD     $addr0,$addr0,#32
-        ARMA_clean_DCentry $addr0
-        ARMA_flush_DCentry $addr0
-        ADD     $addr0,$addr0,#32
-        CMP     $addr0,$addr1
-        BLO     %BT01
-        MEND
-    |
-        MACRO
-        AMB_ARMAcleanflushrange $addr0,$addr1
-01
-        ARMA_cleanflush_DCentry $addr0 ;when are bleedin' Digital going to restore this?
+        ARMA_cleanflush_DCentry $addr0
         ADD     $addr0,$addr0,#32
         ARMA_cleanflush_DCentry $addr0
         ADD     $addr0,$addr0,#32
@@ -62,7 +42,6 @@
         CMP     $addr0,$addr1
         BLO     %BT01
         MEND
-    ]
 
   [ AMB_LazyMapIn
 
@@ -151,71 +130,6 @@ AMB_LazyFixUp ROUT
 
   ] ;AMB_LazyMapIn
 
-  [ {FALSE} ;debug :LAND: debugAMB
-
-; ----------------------------------------------------------------------------------
-;
-;AMB_ConsistencyCheck
-;
-; entry: r0 = arbitrary tag (identifies caller in trace)
-;
-AMB_ConsistencyCheck ROUT
-        Push    "r0-r12,lr"
-        MOV     r12,#AMBControl_ws
-        LDR     r12,[r12]
-        CMP     r12,#0
-        BEQ     %FT90
-        LDR     r1,AMBMappedInNpages
-        LDR     r2,AMBMappedInNode
-        CMP     r2,#0
-        MOVEQ   r3,#0
-        LDRNE   r3,[r2,#AMBNode_Npages]
-        MOV     r4,#0
-        MOV     r5,#0
-        Push    "r3"
-        ADD     r3,r3,#1
-        ADR     r6,AMBMappedInRegister
-        LDR     r7,[r6],#4
-        MOV     r8,#1
-10
-        SUBS    r3,r3,#1
-        BEQ     %FT20
-        TST     r7,r8
-        ADDNE   r4,r4,#1
-        MOVS    r8,r8,LSL #1
-        LDREQ   r7,[r6],#4
-        MOVEQ   r8,#1
-        B       %BT10
-20
-        LDR     r3,[sp]
-        ADD     r3,r3,#1
-        MOV     r6,#L2PT
-        ADD     r6,r6,#ApplicationStart:SHR:(Log2PageSize-2)
-30
-        SUBS    r3,r3,#1
-        BEQ     %FT40
-        LDR     r7,[r6],#4
-        CMP     r7,#0
-        ADDNE   r5,r5,#1
-        B       %BT30
-40
-        Pull    "r3"
-        CMP     r1,r4
-        CMPEQ   r1,r5
-        BEQ     %FT90
-        CMP     r2,#0
-        MOVEQ   r4,#-1
-        MOVEQ   r5,#-1
-
-  Debug AMB,"AMB_ConsistencyCheck **OOPS**, tag = ",r0
-  Debug AMB,"  MappedInNode, Npages = ",r2,r3
-  Debug AMB,"  MappedInNpages value,found in bitmap,found in L2PT = r1,r4,r5
-
-90
-        Pull    "r0-r12,pc"
-
-
-  ] ;debug :LAND: debugAMB
 
 ; ----------------------------------------------------------------------------------
 ;
@@ -491,8 +405,13 @@ AMB_SetMemMapEntries ROUT
         LDR     r2,[r10]                    ;page number of 1st page
         MOV     r7,#0
         LDR     r7,[r7,#CamEntriesPointer]  ;r7 -> CAM
-        ADD     r1,r7,r2,LSL #3
+        ADD     r1,r7,r2,LSL #3             ;r1 -> CAM entry for 1st page
+  [ AMB_LimpidFreePool
         LDR     r4,[r1]                     ;fetch old logical addr. of 1st page from CAM
+        LDR     r3,[r1,#4]                  ;fetch old PPL of 1st page from CAM
+  |
+        LDR     r4,[r1]                     ;fetch old logical addr. of 1st page from CAM
+  ]
 
         CMP     r5,#-1
         BEQ     AMB_smme_mapout
@@ -502,9 +421,24 @@ AMB_SetMemMapEntries ROUT
         BEQ     AMB_smme_mapin
 
 ;map from somewhere to somewhere (should be App Space <-> Free Pool)
-;could be an optimise here if source is FreePool and we know that FreePool
-;has not been used - ie. no need to clean/flush cache(s) - not done yet (requires
-;sorting of Wimp_ClaimFreeMemory)
+;
+  [ AMB_LimpidFreePool
+    ;can avoid cache clean/flush for moving pages out from FreePool, since FreePool pages are uncacheable
+    ;
+        TST     r3, #&20                    ;test NotCacheable bit of PPL of 1st page
+        BEQ     AMB_smme_mapnotlimpid       ;if clear, must do full map somewhere with cache clean/flush
+    ;
+    ;this should be map FreePool -> App Space then
+    ;
+        MOV     r3,r5
+        BL      AMB_movepagesout_L2PT
+        BL      AMB_movepagesin_L2PT
+        BL      AMB_movepagesin_CAM
+        ARM_flush_TLB r0                    ;no cache clean/flush, just TLB flush
+        Pull    "r0-r4,r7-r11, pc"
+AMB_smme_mapnotlimpid
+  ]
+;
   [ ARM810support
         BL      AMB_cachecleanflush_ifARM810
   ]
@@ -519,20 +453,12 @@ AMB_smme_mapin
         MOV     r3,r5
         BL      AMB_movepagesin_L2PT
         BL      AMB_movepagesin_CAM
-
+;
 ;don't need to flush cache at end of mapin (already coherent, since
 ;nothing mapped in before), but do need to flush TLBs (eg. TLBs will cache
 ;access denial for app space after mapout)
-  [ ARM810support
-    ;there is a general macro, should have used this before anyway
+;
         ARM_flush_TLB r0
-  |
-        ARM_read_ID r0
-        AND     r0,r0,#&F000
-        CMP     r0,#&A000
-        ARM67_flush_TLB NE
-        ARMA_flush_TLBs EQ
-  ]
         Pull    "r0-r4,r7-r11, pc"
 
 ;all pages destined for same new logical page 'nowhere'
@@ -658,12 +584,6 @@ AMB_ccf_StrongARM_flushrange
 ;
 AMB_SetMemMapEntries_SparseMapOut ROUT
 
- [ {FALSE} ;debug :LAND: debugAMB
-   Push "r0,lr"
-   MOV  r0,#1
-   BL   AMB_ConsistencyCheck
-   Pull "r0,lr"
- ]
         CMP     r3,#0
         MOVEQ   pc,lr
         Push    "r0-r11,lr"
