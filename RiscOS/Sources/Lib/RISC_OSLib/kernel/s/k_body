@@ -9,6 +9,7 @@
 
         GET     s.h_stack
         GET     s.h_workspc
+        GET     s.h_StrongA
 
         EXPORT  |_kernel_exit|
         EXPORT  |_kernel_setreturncode|
@@ -411,6 +412,12 @@ movne_sl_sla
         ADR     r5, AEHandlerInDataInitValue
         BL      CopyHandler
 
+ [ StrongARM   ;CopyHandler does some dynamic code
+   ;r0,lr are free to use here
+   MOV   r0, #0
+   SWI   XOS_SynchroniseCodeAreas
+ ]
+
         MOV     r0, #0
         BL      InstallHandlers
 
@@ -457,6 +464,8 @@ NoMainProgram
 FatalError Keep
         SWI     GenerateError
 
+;StrongARM - there is dynamic code here, but this is sorted in _kernel_init, after
+;all calls to CopyHandler
 CopyHandler
         LDMIA   r5!, {r6, r7}
         STMIA   r4!, {r6, r7}
@@ -752,7 +761,15 @@ Aborted Keep
         STMFD   r13!, {r14}         ; remember the abort pc
         BL      |_kernel_copyerror|
         ADD     r14, r12, #O_registerDump
+  [ SAnaffsilicon
+    NOP
+    NOP
+  ]
         STMIB   r14, {r1-r14}^
+  [ SAnaffsilicon
+    NOP
+    NOP
+  ]
         LDMFD   r13!, {r1, r2, r3}
         TST     r1, #3
         LDRNE   r1, [r14, #lr * 4]
@@ -1336,6 +1353,10 @@ ErrorHandler Keep
 ; we switch back to SWI mode to save the registers.
         SWI     EnterSVC
         ADD     r14, r0, #O_registerDump
+  [ SAnaffsilicon
+    NOP
+    NOP
+  ]
         STMIA   r14, {r0-r14}^
         MOV     r12, r0
         ADD     r0, r0, #O_errorNumber
@@ -1368,6 +1389,10 @@ EventHandler Keep
         STR     r0, [r12, #O_eventCode]
         ADD     r11, r12, #O_eventRegisters
         STMIA   r11, {r0-r10, r13}
+  [ SAnaffsilicon
+    NOP
+    NOP
+  ]
         STMDB   r11, {r13}^
         MOV     v6, r12
         MOV     v2, r11
@@ -1587,6 +1612,9 @@ ReloadUserState
         NOOP
         ADD     r14, r0, #pc*4
         LDMDB   r14, {r0-r14}^
+  [ SAnaffsilicon
+    NOP
+  ]
         NOOP
         LDMIA   r14, {pc}^
 
@@ -1701,7 +1729,18 @@ default_unwind_handler Keep
 
         LDR     a3, [a4, #frame_entrypc]
         BIC     a3, a3, #PSRBits
+        [ StrongARM
+        STMFD   sp!, {a1-a2}
+        MOV     a1, #0
+        SWI     XOS_PlatformFeatures
+        MOVVS   a1, #0
+        TST     a1, #8
+        LDREQ   v1, [a3, #-12]
+        LDRNE   v1, [a3, #-8]
+        LDMFD   sp!, {a1-a2}
+        |
         LDR     v1, [a3, #-12]
+        ]
 
         ; check that the save mask instruction is indeed the right sort of STM
         ; If not, return indicating stack corruption.
@@ -1793,6 +1832,25 @@ duh_corrupt
         ExitLeafProcContainingSWI
 
 |_kernel_swi_c|
+  [ StrongARM
+        MOV     ip, sp
+        STMFD   sp!, {a3, a4, v1-v6, fp, ip, r14, pc}
+        SUB     fp, ip, #4
+        BIC     r12, a1, #&80000000
+        TST     a1, #&80000000          ; non-X bit requested?
+        ORREQ   r12, r12, #X
+        LDMIA   r1, {r0-r9}
+        SWI     XOS_CallASWIR12
+        LDMFD   sp!, {ip, lr}
+        STMIA   ip, {r0 - r9}
+        MOV     ip, #0
+        MOVCS   ip, #1 
+        MOVVS   ip, #0
+        STR     ip, [lr]
+        BLVS    CopyError
+        MOVVC   a1, #0
+        LDMDB   fp, {v1-v6, fp, sp, pc}^
+  |
         ; Set up a proper frame here, so if an error happens (and not X)
         ; a sensible traceback can be given.
         MOV     ip, sp
@@ -1808,6 +1866,9 @@ duh_corrupt
         ORR     a1, a1, #&EF000000      ; SWI + Always
         ORREQ   a1, a1, #X
         STMFD   sp!, {a1, a4}
+  [ {TRUE}
+    SyncStackCode 2
+  ]
         LDMIA   a2, {r0 - r9}
         MOV     pc, sp
 AfterSWI
@@ -1821,17 +1882,34 @@ AfterSWI
         BLVS    CopyError
         MOVVC   a1, #0
         LDMDB   fp, {v1-v6, fp, sp, pc}^
+  ]
 
 swi_ret_inst
         MOV     pc, ip
 
 |_kernel_swi|
+  [ StrongARM
+        STMDB   sp!, {a3, v1-v6, lr}
+        BIC     r12, a1, #&80000000
+        TST     a1, #&80000000
+        ORREQ   r12, r12, #X
+        LDMIA   r1, {r0-r9}
+        SWI     XOS_CallASWIR12
+        LDR     ip, [sp]
+        STMIA   ip, {r0-r9}
+        BLVS    CopyError
+        MOVVC   a1, #0
+        LDMIA   sp!, {a3, v1-v6, pc}^
+  |
         STMDB   sp!, {a3, v1-v6, lr}
         LDR     a4, swi_ret_inst
         TST     a1, #&80000000
         ORR     a1, a1, #&ef000000
         ORREQ   a1, a1, #X
         STMDB   sp!, {a1, a4}
+  [ {TRUE}
+    SyncStackCode 2
+  ]
         LDMIA   a2, {r0-r9}
         MOV     ip, pc
         MOV     pc, sp
@@ -1840,6 +1918,8 @@ swi_ret_inst
         BLVS    CopyError
         MOVVC   a1, #0
         LDMIA   sp!, {a3, v1-v6, pc}^
+  ]
+
 
 |_kernel_command_string|
         LoadStaticBase a1
@@ -2038,12 +2118,21 @@ CopyUp  CMP     r14, #0
         STMDB   v5!, {r0,r2-r4}
         CMP     r1, v4                  ; r1 < %B01 ?
         BGT     %B01                    ; no, so keep going...
+  [ StrongARM
+    ;in case we are jumping to code we have just copied here (ie not shared Clib)...
+    CMP   v2, #0
+    MOVNE r0, #0
+    SWINE XOS_SynchroniseCodeAreas
+  ]
         ADD     r0, pc, v2              ; ... go to moved image
         MOV     pc, r0                  ; and continue copying up...
 01      LDMDB   r1!, {r0,r2-r4}
         STMDB   v5!, {r0,r2-r4}
         CMP     r1, v3                  ; src > imageBase ?
         BGT     %B01                    ; yes, so continue
+
+  ;StrongARM - no need to synchronise for rest of copied code here, since we will not
+  ;be executing it (we have to synchronise later, after copying down)
 
 CopyUpDone
         ; ip is the relocated sp.
@@ -2122,6 +2211,14 @@ CopyDn
         STMIA   v2!, {r1-r3,ip}
         CMP     r0, v3                  ; copied the copy code?
         BLT     %B01                    ; no, so continue...
+  [ StrongARM
+    ;in case we are jumping to code we have just copied here (ie not shared Clib)...
+    MOV   r1, r0
+    CMP   v1, #0
+    MOVNE r0, #0
+    SWINE XOS_SynchroniseCodeAreas
+    MOV   r0, r1
+  ]
         SUB     ip, pc, v1              ; yes => copied this far ...
         MOV     pc, ip                  ; ... so branch to copied copy loop
 01      LDMIA   r0!, {r1-r3,ip}
@@ -2130,6 +2227,11 @@ CopyDn
         BLT     %B01                    ; no, so continue...
 02
 CopyDnDone
+  [ StrongARM
+    ;you've guessed it
+    MOV    r0, #0
+    SWI    XOS_SynchroniseCodeAreas
+  ]
         LDMFD   sp!, {r0}               ; old memoryLimit
         BL      InstallHandlers
 
@@ -2412,7 +2514,18 @@ alloc_return_block
 ; v1 is save area in old frame... will be temp sp in old frame
         ADD     a1, v1, #4*4            ; temp fp in old frame
         LDMDA   fp, {v3-v6}             ; old fp, sp,lr, pc
+        [ StrongARM
+        STMFD   sp!,{a1-a2}
+        MOV     a1,#0
+        SWI     XOS_PlatformFeatures
+        MOVVS   a1,#0
+        TST     a1,#8
+        ADREQ   v6, StkOvfPseudoEntry+12
+        ADRNE   v6, StkOvfPseudoEntry+8
+        LDMFD   sp!,{a1-a2}
+        |
         ADR     v6, StkOvfPseudoEntry+12
+        ]
         STMDA   a1, {v3-v6}             ; new return frame in old chunk...
         ADR     lr, StackOverflowExit
         MOV     a2, sp                  ; saved sp in old frame = NEW sp
@@ -2483,7 +2596,16 @@ DoneArgumentCopy
         LDMDA   v1!, {a1, a2, v2-v6}    ; and the 2nd 7 regs
         STMFD   sp!, {a1, a2, v2-v6}    ; copied to the new frame
 ; Now adjust the PC value saved in the old chunk to say "no registers"
+        [ StrongARM
+        MOV     a1,#0
+        SWI     XOS_PlatformFeatures
+        MOVVS   a1,#0
+        TST     a1,#8
+        ADREQ   v2, StkOvfPseudoEntry+12
+        ADRNE   v2, StkOvfPseudoEntry+8
+        |
         ADR     v2, StkOvfPseudoEntry+12
+        ]
         STR     v2, [v1, #26*4]
 ; Set the SP to be FP - requiredFrameSize and return by reloading regs
 ; from where they were saved in the old chunk on entry to STKOVF/N
@@ -2897,6 +3019,9 @@ dividebyzero
         SWI     EnterSVC
         LDR     r14, [ip, #pc * 4]
         LDMIB   ip, {r1-r14}^
+  [ SAnaffsilicon
+    NOP
+  ]
         NOOP
         STMDB   sp!, {r10, r11, r12}
         STMDB   sp!, {r14}
