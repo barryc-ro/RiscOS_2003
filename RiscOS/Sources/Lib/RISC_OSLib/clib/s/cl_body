@@ -125,6 +125,15 @@ $Label  RFS     r1
         EXPORT  |_ldfp|
         EXPORT  |_stfp|
 
+        EXPORT  |__fpclassifyf|
+        EXPORT  |__fpclassifyd|
+        EXPORT  |__signbitf|
+        EXPORT  |__signbitd|
+        EXPORT  copysign
+        EXPORT  copysignf
+        EXPORT  nextafter
+        EXPORT  nextafterf
+
         EXPORT  |__rt_stkovf_split_small|
         EXPORT  |__rt_stkovf_split_big|
         EXPORT  |__rt_divtest|
@@ -134,6 +143,11 @@ $Label  RFS     r1
         EXPORT  |__rt_wr1chk|
         EXPORT  |__rt_wr2chk|
         EXPORT  |__rt_wr4chk|
+
+        EXPORT  fmin
+        EXPORT  fminf
+        EXPORT  fmax
+        EXPORT  fmaxf
 
         EXPORT  sin
         EXPORT  cos
@@ -295,6 +309,15 @@ Raised
         B       |_postmortem|       ; and if user insists on returning from
                                     ; signal handler, give him hell!
 
+div
+ldiv
+imaxdiv
+        FunctionEntry "a1"
+        MOV     a1, a3
+        BL      _kernel_sdiv        ; a1 := a2 / a1, a2 := a2 % a1
+        Pull    "ip,lr"
+        STMIA   ip, {a1,a2}
+        Return  ,LinkNotStacked
 
 
 |x$multiply|
@@ -802,6 +825,312 @@ chunks_deallocated
         ]
         Return  ,LinkNotStacked
 
+FP_ZERO      * 0
+FP_SUBNORMAL * 1
+FP_NORMAL    * 2
+FP_INFINITY  * 3
+FP_NAN       * 4
+
+; These functions always take arguments in registers, to prevent
+; signalling NaN problems. The wrapper macros ensure they are
+; passed the correct type, so the initial store can't cause an
+; exception.
+|__fpclassifyf|
+        STFS    f0, [sp, #-4]!
+        LDR     r0, [sp], #4
+        BICS    r0, r0, #&80000000      ; ignore sign; EQ if Exp and M == 0 (and r0 == 0 == FP_ZERO)
+        ASSERT  FP_ZERO = 0
+        Return  ,LinkNotStacked,EQ
+        MOVS    r2, r0, LSR #23         ; R2 := Exp; EQ if Exp == 0
+        MOVEQ   r0, #FP_SUBNORMAL
+        Return  ,LinkNotStacked,EQ
+        TEQ     r2, #&ff
+        MOVNE   r0, #FP_NORMAL
+        Return  ,LinkNotStacked,NE
+        MOVS    r2, r0, LSL #9          ; R2 := M; EQ if M == 0
+        MOVEQ   r0, #FP_INFINITY
+        MOVNE   r0, #FP_NAN
+        Return  ,LinkNotStacked
+
+|__fpclassifyd|
+        STFD    f0, [sp, #-8]!
+        LDMIA   sp!, {r0, r1}
+        BICS    r0, r0, #&80000000      ; ignore sign; EQ if Exp and MHi == 0
+        TEQEQS  r1, #0                  ; EQ if Exp and M == 0 (and r0 == 0 == FP_ZERO)
+        ASSERT  FP_ZERO = 0
+        Return  ,LinkNotStacked,EQ
+        MOVS    r2, r0, LSR #20         ; R2 := Exp; EQ if Exp == 0
+        MOVEQ   r0, #FP_SUBNORMAL
+        Return  ,LinkNotStacked,EQ
+        ADDS    r0, r0, #&00100000      ; If Exp = &7FF then R0 := &800xxxxx, so MI
+        MOVPL   r0, #FP_NORMAL
+        Return  ,LinkNotStacked,PL
+        ORRS    r0, r1, r0, LSL #1      ; Look for any non-zero bits (except top bit of R0)
+        MOVEQ   r0, #FP_INFINITY
+        MOVNE   r0, #FP_NAN
+        Return  ,LinkNotStacked
+
+|__signbitf|
+        STFS    f0, [sp, #-4]!
+        LDR     r0, [sp], #4
+        MOV     r0, r0, LSR #31
+        Return  ,LinkNotStacked
+
+|__signbitd|
+        STFD    f0, [sp, #-8]!
+        LDR     r0, [sp], #8
+        MOV     r0, r0, LSR #31
+        Return  ,LinkNotStacked
+
+copysign
+        STFD    f1, [sp, #-8]!
+        LDR     r2, [sp], #8
+        TEQ     r2, #0              ; MI if y negative
+        ABSD    f0, f0
+        MNFMID  f0, f0
+        Return  ,LinkNotStacked
+
+copysignf
+        STFS    f1, [sp, #-4]!
+        LDR     r1, [sp], #4
+        TEQ     r1, #0              ; MI if y negative
+        ABSS    f0, f0
+        MNFMIS  f0, f0
+        Return  ,LinkNotStacked
+
+; Back to normal calling conventions
+
+nextafter
+        [ :LNOT:FloatingPointArgsInRegs
+        STMFD   sp!, {r0-r3}
+        LDFD    f0, [sp], #8
+        LDFD    f1, [sp], #8
+        ]
+        CMF     f1, f0
+        BEQ     copysign
+        BGT     nextup
+        BMI     nextdown
+        ; unordered
+        ADFD    f0, f0, f1              ; do the NaN propagation + exceptions
+        Return  ,LinkNotStacked
+
+nextup
+        [ FloatingPointArgsInRegs
+        STFD    f0, [sp, #-8]!
+        LDMFD   sp!, {r0, r1}
+        ]
+        TEQ     r0, #0
+        BPL     nextbigger
+        BMI     nextsmaller_neg
+
+nextdown
+        [ FloatingPointArgsInRegs
+        STFD    f0, [sp, #-8]!
+        LDMFD   sp!, {r0, r1}
+        ]
+        TEQ     r0, #0
+        BPL     nextsmaller_pos
+        BMI     nextbigger
+
+nextbigger
+        CMN     r0, #&00100000
+        Return  ,LinkNotStacked,CS      ; catch infinity (NaN already done)
+        Return  ,LinkNotStacked,VS
+
+nextbigger_finite
+; For all finite cases (both +ve and -ve), it's just a 64-bit +1:
+;
+; 00000000 00000000 -> 00000000 00000001   0 => smallest subnormal
+; 000FFFFF FFFFFFFF -> 00100000 00000000   largest subnormal => smallest normal
+; 7FEFFFFF FFFFFFFF -> 7FF00000 00000000   largest normal => infinity
+        ADDS    r1, r1, #1
+        ADC     r0, r0, #0
+retval  STMFD   sp!, {r0, r1}
+        LDFD    f0, [sp], #8
+        Return  ,LinkNotStacked
+
+nextsmaller_pos
+; 7FF00000 00000000 -> 7FEFFFFF FFFFFFFF   +infinity => largest +ve normal
+; 00100000 00000000 -> 000FFFFF FFFFFFFF   smallest +ve normal => largest +ve subnormal
+; 00000000 00000001 -> 00000000 00000000   smallest +ve subnormal => +0
+; 00000000 00000000 -> FFFFFFFF FFFFFFFF      clears carry, so we can catch +0 => -ve case
+        SUBS    r1, r1, #1
+        SBCS    r0, r0, #0
+        STMCSFD sp!, {r0, r1}
+        LDFCSD  f0, [sp], #8
+        LDFCCD  f0, tiny_neg            ; -0 => smallest +ve subnormal
+        Return  ,LinkNotStacked
+
+nextsmaller_neg
+; FFF00000 00000000 -> FFEFFFFF FFFFFFFF   -infinity => largest -ve normal
+; 80100000 00000000 -> 800FFFFF FFFFFFFF   smallest -ve normal => largest -ve subnormal
+; 80000000 00000001 -> 80000000 00000000   smallest -ve subnormal => -0
+; 80000000 00000000 -> 7FFFFFFF FFFFFFFF      sets overflow, so we can catch -0 => +ve case
+        SUBS    r1, r1, #1
+        SBCS    r0, r0, #0
+        STMVCFD sp!, {r0, r1}
+        LDFVCD  f0, [sp], #8
+        LDFVSD  f0, tiny_pos            ; -0 => smallest +ve subnormal
+        Return  ,LinkNotStacked
+
+nexttowardf
+        [ :LNOT:FloatingPointArgsInRegs
+        STMFD   sp!, {r0-r3}
+        LDFD    f0, [sp], #8
+        LDFD    f1, [sp], #8
+        ]
+        MVFS    f0, f0
+        CMF     f1, f0
+        BEQ     copysignf
+        BGT     nextupf
+        BMI     nextdownf
+        ; unordered
+        ADFS    f0, f0, f1              ; do the NaN propagation + exceptions
+        Return  ,LinkNotStacked
+
+nextafterf
+        [ :LNOT:FloatingPointArgsInRegs
+        STMFD   sp!, {r0-r3}
+        LDFD    f0, [sp], #8
+        LDFD    f1, [sp], #8
+        ]
+        MVFS    f0, f0
+        MVFS    f1, f1
+        CMF     f1, f0
+        BEQ     copysignf
+        BGT     nextupf
+        BMI     nextdownf
+        ; unordered
+        ADFS    f0, f0, f1              ; do the NaN propagation + exceptions
+        Return  ,LinkNotStacked
+
+nextupf
+        STFS    f0, [sp, #-4]!
+        LDR     r0, [sp], #4
+        TEQ     r0, #0
+        BPL     nextbiggerf
+        BMI     nextsmallerf_neg
+
+nextdownf
+        STFS    f0, [sp, #-4]!
+        LDR     r0, [sp], #4
+        TEQ     r0, #0
+        BPL     nextsmallerf_pos
+        BMI     nextbiggerf
+
+nextbiggerf
+        ADD     r1, r0, #&00800000      ; spot infinities - NaNs already
+        TEQ     r0, r1                  ; caught in nexttowardf. Return
+                                        ; them unchanged (MI if +/-inf)
+
+; For all finite cases (both +ve and -ve), it's just a 32-bit +1:
+;
+; 00000000 -> 00000001   0 => smallest subnormal
+; 007FFFFF -> 00800000   largest subnormal => smallest normal
+; 7F7FFFFF -> 7F800000   largest normal => infinity
+        ADDPL   r0, r0, #1
+        STRPL   r0, [sp, #-4]!
+        LDFPLS  f0, [sp], #4
+        Return  ,LinkNotStacked
+
+nextsmallerf_pos
+; 7F800000 -> 7F7FFFFF   +infinity => largest +ve normal
+; 00800000 -> 007FFFFF   smallest +ve normal => largest +ve subnormal
+; 00000001 -> 00000000   smallest +ve subnormal => +0
+; 00000000 -> FFFFFFFF      clears carry, so we can catch +0 => -ve case
+        SUBS    r0, r0, #1
+        STRCS   r0, [sp, #-4]!
+        LDFCSS  f0, [sp], #4
+        LDFCCS  f0, tiny_negf           ; -0 => smallest +ve subnormal
+        Return  ,LinkNotStacked
+
+nextsmallerf_neg
+; FF800000 -> FF7FFFFF   -infinity => largest -ve normal
+; 80800000 -> 807FFFFF   smallest -ve normal => largest -ve subnormal
+; 80000001 -> 80000000   smallest -ve subnormal => -0
+; 80000000 -> 7FFFFFFF      sets overflow, so we can catch -0 => +ve case
+        SUBS    r0, r0, #1
+        STRVC   r0, [sp, #-4]!
+        LDFVCS  f0, [sp], #4
+        LDFVSS  f0, tiny_posf           ; -0 => smallest +ve subnormal
+        Return  ,LinkNotStacked
+
+tiny_neg
+        DCD     &80000000
+        DCD     &00000001
+tiny_pos
+        DCD     &00000000
+tiny_posf
+        DCD     &00000001
+tiny_negf
+        DCD     &80000001
+
+fmax
+        [ :LNOT:FloatingPointArgsInRegs
+        STMFD   sp!, {r0-r3}
+        LDFD    f0, [sp], #8
+        LDFD    f1, [sp], #8
+        ]
+        CMF     f1, f0
+        MVFGTD  f0, f1
+        Return  ,LinkNotStacked,VC
+fcmpnan CMF     f0, #0
+        MVFVSD  f0, f1
+        Return  ,LinkNotStacked
+
+fmaxf
+        [ :LNOT:FloatingPointArgsInRegs
+        STMFD   sp!, {r0-r3}
+        LDFD    f0, [sp], #8
+        LDFD    f1, [sp], #8
+        ]
+        MVFS    f0, f0
+        MVFS    f1, f1
+        CMF     f1, f0
+        MVFGTS  f0, f1
+        Return  ,LinkNotStacked,VC
+        B       fcmpnan
+
+fmin
+        [ :LNOT:FloatingPointArgsInRegs
+        STMFD   sp!, {r0-r3}
+        LDFD    f0, [sp], #8
+        LDFD    f1, [sp], #8
+        ]
+        CMF     f1, f0
+        MVFMID  f0, f1
+        Return  ,LinkNotStacked,VC
+        B       fcmpnan
+
+fminf
+        [ :LNOT:FloatingPointArgsInRegs
+        STMFD   sp!, {r0-r3}
+        LDFD    f0, [sp], #8
+        LDFD    f1, [sp], #8
+        ]
+        MVFS    f0, f0
+        MVFS    f1, f1
+        CMF     f1, f0
+        MVFMIS  f0, f1
+        Return  ,LinkNotStacked,VC
+        B       fcmpnan
+
+ [ {FALSE}
+fmaf
+        [ :LNOT:FloatingPointArgsInRegs
+        STMFD   sp!, {r0-r3}
+        LDFD    f0, [sp], #8
+        LDFD    f1, [sp], #8
+        ]
+        LDFD    f2, [sp, #0]
+        MVFS    f0, f0
+        MVFS    f1, f1
+        MVFS    f2, f2
+        MUFE    f0, f0, f1              ; totally accurate result
+        ADFS    f0, f0, f2
+        Return  ,LinkNotStacked
+ ]
+
 sin
         [ :LNOT: FloatingPointArgsInRegs
         STMFD   sp!, {r0, r1}
@@ -810,6 +1139,17 @@ sin
         SIND    f0, f0
         Return  ,LinkNotStacked
 
+ [ {FALSE}
+sinf
+        [ :LNOT: FloatingPointArgsInRegs
+        STMFD   sp!, {r0, r1}
+        LDFD    f0, [sp], #8
+        ]
+        MVFS    f0, f0
+        SINS    f0, f0
+        Return  ,LinkNotStacked
+ ]
+
 cos
         [ :LNOT: FloatingPointArgsInRegs
         STMFD   sp!, {r0, r1}
@@ -817,6 +1157,17 @@ cos
         ]
         COSD    f0, f0
         Return  ,LinkNotStacked
+
+ [ {FALSE}
+cosf
+        [ :LNOT: FloatingPointArgsInRegs
+        STMFD   sp!, {r0, r1}
+        LDFD    f0, [sp], #8
+        ]
+        MVFS    f0, f0
+        COSS    f0, f0
+        Return  ,LinkNotStacked
+ ]
 
 exp
         [ :LNOT: FloatingPointArgsInRegs
@@ -857,14 +1208,28 @@ huge_val
         DCD     &7FEFFFFF               ; put constant where it is easy to find
         DCD     &FFFFFFFF
 
+huge_errorf
+        MOV     r0, #ERANGE
+        LDFS    f0, huge_valf
+        B       Set_errno
+huge_valf
+        DCD     &7F800000
+
 negative_error
         MOV     r0, #EDOM
         LDFD    f0, negative_huge_val   ; @@@@!!!!
         B       Set_errno
 
+negative_errorf
+        MOV     r0, #EDOM
+        LDFS    f0, negative_huge_valf  ; @@@@!!!!
+        B       Set_errno
+negative_huge_valf
+        DCD     &FF800000               ; put constant where it is easy to find
+
 underflow_error
         MOV     r0, #ERANGE
-        MVFD    f0, #0
+;        MVFD    f0, #0
         B       Set_errno
 
 log10
@@ -899,6 +1264,19 @@ sqrt
         SQTD    f0, f0
         Return  ,LinkNotStacked
 
+ [ {FALSE}
+sqrtf
+        [ :LNOT: FloatingPointArgsInRegs
+        STMFD   sp!, {r0, r1}
+        LDFD    f0, [sp], #8
+        ]
+        MVFS    f0, f0
+        CMFE    f0, #0
+        BMI     negative_errorf
+        SQTS    f0, f0
+        Return  ,LinkNotStacked
+ ]
+
 tan
         [ :LNOT: FloatingPointArgsInRegs
         STMFD   sp!, {r0, r1}
@@ -912,6 +1290,23 @@ tan
         TST     r1, #&07
         Return  ,LinkNotStacked, EQ
         B       huge_error
+
+ [ {FALSE}
+tanf
+        [ :LNOT: FloatingPointArgsInRegs
+        STMFD   sp!, {r0, r1}
+        DisableFPInterrupts
+        LDFD    f0, [sp], #8
+        |
+        DisableFPInterrupts
+        ]
+        MVFS    f0, f0
+        TANS    f0, f0
+        ReEnableFPInterrupts
+        TST     r1, #&07
+        Return  ,LinkNotStacked, EQ
+        B       huge_errorf
+ ]
 
 atan
         [ :LNOT: FloatingPointArgsInRegs

@@ -26,6 +26,7 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <limits.h>
+#include <fenv.h>
 
 /* HIDDEN IMPORT from stdio.c */
 extern int __backspace(FILE *stream);  /* a strict R-inverse of getc() */
@@ -40,6 +41,7 @@ extern int __backspace(FILE *stream);  /* a strict R-inverse of getc() */
 #define NEGEXP     0200    /* internal to rd_real */
 #define NUMOK      0400    /* ditto + rd_int */
 #define NUMNEG    01000    /* ditto + rd_int */
+#define CHAR      02000
 
 #define countgetc(p) (charcount++, getc(p))
 
@@ -48,6 +50,7 @@ extern int __backspace(FILE *stream);  /* a strict R-inverse of getc() */
 /* test for LONG and SHORT properly, but not general extra code.       */
 #define isLONG_(flag) ((flag) & LONG && sizeof(int) != sizeof(long))
 #define isSHORT_(flag) ((flag) & SHORT)
+#define isCHAR_(flag) ((flag) & CHAR)
 #define isLONGDOUBLE_(flag) \
     ((flag) & LONGDOUBLE && sizeof(double) != sizeof(long double))
 
@@ -117,13 +120,15 @@ case '+':   ch = countgetc(p);
       if (flag & ALLOWSIGN)
       { long int m = flag & NUMNEG ? -n : n;
         int *p = va_arg(res, int *);  /* rely on sizeof(int*)=sizeof(short*) */
-        if isSHORT_(flag) *(short *)p = (short)m;
+        if isCHAR_(flag) *(signed char *)p = (signed char)m;
+        else if isSHORT_(flag) *(short *)p = (short)m;
         else if isLONG_(flag) *(long *)p = m;
         else *(int *)p = (int)m;
       }
       else  /* pointer case comes here too - with quite some type pun!  */
       { unsigned int *p = va_arg(res, unsigned int *);
             /* rely on sizeof(unsigned int *)==sizeof(unsigned short *) */
+        if isCHAR_(flag) *(unsigned char *)p = (unsigned char)n;
         if isSHORT_(flag) *(unsigned short *)p = (unsigned short)n;
         else if isLONG_(flag) *(unsigned long *)p = n;
         else *(unsigned int *)p = (unsigned int)n;
@@ -134,50 +139,182 @@ case '+':   ch = countgetc(p);
 
 #ifndef NO_FLOATING_POINT
 
-#ifdef IBMFLOAT
 static float carefully_narrow(double l)
 {
-/* Maybe in scanf I should ROUND rather than TRUNCATE here...            */
-    static const int amax = 0x7fffffff, amin = 0xffffffff;
-    if (l >= (double)*(float *)&amax ||
-        l <= (double)*(float *)&amin) return (float)l;
-    else                                  /* above line avoids overflow  */
-    {   float f = (float) l;              /* narrower version            */
-        double lost = l - (double)f;      /* amount that was chopped off */
-        return (float)(l + +(lost + lost));
-    }
-}
-#else /* IBMFLOAT */
-
-static float carefully_narrow(double l)
 /* All the trouble I went to to detect potential overflow has to be re-  */
 /* done here so that underflow and overflow do not occur during the      */
 /* narrowing operation that is about to be done.                         */
-/* *********** machine dependent code ************* (should not go here) */
-    {   int w;
-        (void)frexp(l, &w);     /* extract exponent */
-        w = w + 0x7e;           /* exponent for single precision version */
-        if (w<=0 && l!=0.0)
-        {   errno = ERANGE;
-            return 0.0f;
-        }
-        else if (w >= 0xff)
-/* Overflow of single-precision values - fudge single precision infinity */
-/* *********** machine dependent code ************* (should not go here) */
-        {   static int posinf = 0x7f800000, neginf = 0xff800000;
-            errno = ERANGE;
-            return *(float *)(l >= 0.0 ? &posinf : &neginf);
-        }
-        else return (float)l;  /* what we really wanted to do */
+    #pragma STDC FENV_ACCESS ON
+    fenv_t env;
+    float f;
+    feholdexcept(&env);
+    f = (float) l;
+    if (fetestexcept(FE_UNDERFLOW|FE_OVERFLOW))
+        errno = ERANGE;
+    fesetenv(&env);
+    return f;
+}
+
+/* Do the conversion work from hex to a double/float.
+ * a[] is up to 19 hex digits, fed in at the bottom.
+ * x is the exponent so far. Assumes non-zero input.
+ */
+static double cvthex(unsigned *a, int x, int flag)
+{
+    unsigned round, sticky;
+    unsigned msb, lsw;
+    int minx, maxx;
+
+    /* Note parameters of the destination type */
+    if (flag & LONG)
+        msb = 0x00100000, lsw = 1, minx = -1022, maxx=1023, x += 20 + 64;
+    else
+        msb = 0x00800000, lsw = 0, minx = -126, maxx=127, x += 23 + 64;
+
+    /* Normalise the input digits */
+    if (a[0]==0 && a[1]==0)
+    {   a[1] = a[2];
+        a[2] = 0;
+        x -= 32;
     }
-#endif /* IEEE */
+
+    while ((a[0] & msb)==0)
+    {   a[0] = (a[0]<<1) | (a[1]>>31);
+        a[1] = (a[1]<<1) | (a[2]>>31);
+        a[2] = a[2]<<1;
+        x -= 1;
+    }
+
+    /* Check for total underflow */
+    if (x < minx - 64)
+    {   errno = ERANGE;
+        return 0.0;
+    }
+
+    /* Denormalise if necessary */
+    if (x < minx)
+    {   do
+        {   a[2] = (a[1]<<31) | (a[2]>>1) | (a[2]&1);
+            a[1] = (a[0]<<31) | (a[1]>>1);
+            a[0] =              (a[0]>>1);
+        } while (++x < minx);
+        x = minx - 1;
+    }
+
+    /* Proceed to round */
+    round = a[lsw+1] >> 31;
+    sticky = a[lsw+1] & 0x7fffffff;
+    if (lsw == 0)
+        sticky |= a[2];
+
+    /* Round up if necessary */
+    if (round)
+    {   if (sticky || (a[lsw] & 1))
+        {   if (++a[lsw] == 0)
+                a[0]++;
+            /* Renormalise if necessary */
+            if (a[0] & (msb<<1))
+            {   a[1] = (a[0]<<31) | (a[1]>>1);
+                a[0] = (a[0]>>1);
+                x += 1;
+            }
+            /* or convert denormalised to normalised */
+            else if (x < minx && (a[0] & msb)) /* x will be minx-1 */
+            {   x = minx;
+                errno = ERANGE;
+            }
+        }
+    }
+
+    /* Indicate underflow (denormalised, and inaccurate - really should only
+     * report underflow if inaccuracy DUE TO DENORMALISATION, but hey) */
+    if (x < minx && (round || sticky))
+        errno = ERANGE;
+
+    /* Check for overflow */
+    if (x > maxx)
+    {   errno = ERANGE;
+        return (flag & NUMNEG) ? -HUGE_VAL : HUGE_VAL;
+    }
+
+    if (flag & NUMNEG) a[0] |= 0x80000000;
+
+    if (flag & LONG)
+    {   a[0] = (a[0] &~ msb) | ((x+1023) << 20);
+        return *(double *) a;
+    }
+    else
+    {   a[0] = (a[0] &~ msb) | ((x+127) << 23);
+        return *(float *) a;
+    }
+}
+
+static double rd_naninf(FILE *p, int ch, int *flagp, int field, long int *charcountp)
+{
+    double l;
+    long int charcount = *charcountp;
+    int flag = *flagp;
+    const char *match = (ch == 'n' || ch == 'N') ? "NAN" : "INFINITY";
+    const char *m = match;
+
+    while (field > 0)
+    {   if (ch >= 'a' && ch <= 'z') ch += 'A'-'a';
+        if (ch == *m && *m != '\0') {
+           ch = countgetc(p);
+           field--;
+        }
+        else break;
+        m++;
+    }
+
+    if (*m == '\0' || (match[0] == 'I' && m == match+3))
+    {
+        flag |= NUMOK;
+        if (match[0] == 'N')
+        {
+            if (field > 0 && ch == '(')
+            {
+                flag &=~ NUMOK;
+                ch = countgetc(p);
+                field--;
+                while (field > 0)
+                {    if (ch >= 'a' && ch <= 'z' ||
+                         ch >= 'A' && ch <= 'Z' ||
+                         ch >= '0' && ch <= '9' ||
+                         ch == '_')
+                     { ch = countgetc(p);
+                       field--;
+                     }
+                     else if (ch == ')')
+                     { ch = countgetc(p);
+                       field--;
+                       flag |= NUMOK;
+                       break;
+                     }
+                     else break;
+                }
+            }
+            l = flag & NUMNEG ? -NAN : NAN;
+        }
+        else
+            l = flag & NUMNEG ? -INFINITY : INFINITY;
+    }
+    else
+        l = HUGE_VAL;
+
+    __backspace(p);
+
+    *charcountp = charcount;
+    *flagp = flag;
+    return l;
+}
 
 #ifdef HOST_HAS_BCD_FLT
 
 static long int rd_real(FILE *p, va_list res, int flag, int field)
 {
     long int charcount = -1;                     /* allow for always ungetc */
-    int ch, x = 0;
+    int ch, x = 0, ishex = 0;
     unsigned int a[3];            /* IEEE 'packed' format as per ACORN FPE2 */
     double l = 0.0;
     a[0] = a[1] = a[2] = 0;
@@ -191,24 +328,45 @@ case '+':   ch = countgetc(p);
             field--;
             break;
     }
+    if (field > 0 && (ch == 'n' || ch == 'N' || ch == 'i' || ch == 'I'))
+    {   l = rd_naninf(p, ch, &flag, field, &charcount);
+        goto lready;
+    }
+    if (field >= 2 && ch == '0')
+    {   ch = countgetc(p);
+        field--;
+        if (ch == 'x' || ch == 'X')
+        {   ch = countgetc(p);
+            field--;
+            ishex = 1;
+        }
+        else
+            /* We've swallowed the 0. No-one will care if we do this: */
+            flag |= NUMOK;
+    }
     while (field > 0)
     {   if ((ch==*decimal_point || ch=='.') && !(flag & DOTSEEN))
             flag |= DOTSEEN, field--;
-        else if (isdigit(ch))
+        else if (isdigit(ch) || ishex && isxdigit(ch))
         {   flag |= NUMOK, field--;
             if ((a[0] & 0xf00) == 0)
             {   a[0] = (a[0]<<4) | (a[1]>>28);
                 a[1] = (a[1]<<4) | (a[2]>>28);
-                a[2] = (a[2]<<4) | scanf_intofdigit(ch);
+                a[2] = (a[2]<<4) | (ishex ? ch_val(ch, 16) : scanf_intofdigit(ch));
                 if (flag & DOTSEEN) x -= 1;
             }
-            else if (!(flag & DOTSEEN)) x += 1;
+            else
+            {   if (ishex && ch != '0') a[2] |= 1;
+                if (!(flag & DOTSEEN)) x += 1;
+            }
         }
         else break;
         ch = countgetc(p);
     }
+    if (ishex) x *= 4;
     /* we must unread the 'e' in (say) "+.e" as cannot be valid */
-    if (field > 0 && (ch == 'e' || ch == 'E') && (flag & NUMOK))
+    if (field > 0 && (ishex && (ch == 'p' || ch == 'P') ||
+                     !ishex && (ch == 'e' || ch == 'E')) && (flag & NUMOK))
     {   int x2 = 0;
         flag &= ~(NUMOK+NEGEXP), field--;
         switch (ch = countgetc(p))
@@ -226,7 +384,8 @@ case '+':   ch = countgetc(p);
         if (flag & NEGEXP) x -= x2; else x += x2;
     }
     __backspace(p);
-    if (a[0]==0 && a[1]==0 && a[2]==0) l = 0.0;
+    if (a[0]==0 && a[1]==0 && a[2]==0) l = (flag & NUMNEG) ? -0.0 : 0.0;
+    else if (ishex) l = cvthex(a, x, flag);
     else
     {   if (a[0]==0 && a[1]==0)
         {   a[1] = a[2];
@@ -260,6 +419,7 @@ case '+':   ch = countgetc(p);
             l = _ldfp(a);       /* sets errno if necessary */
         }
     }
+  lready:
     if (!(flag & NUMOK)) return CVTFAIL;
     if (flag & LONG)
     {   if (!(flag & NOSTORE))
@@ -475,8 +635,7 @@ static long int rd_string_map(FILE *p, va_list res, int flag, int field,
     return charcount;
 }
 
-/* It seems amazing that vfscanf is not available externally in ANSI */
-static int vfscanf(FILE *p, const char *sfmt, va_list argv)
+int vfscanf(FILE *p, const char *sfmt, va_list argv)
 {
 /* The next line is essential (see isspace() ANSI doc. and also use of
  * charmap[] below) if char is signed by default.
@@ -528,7 +687,11 @@ case '%':   {   int field = 0, flag = 0;
                 if (!(flag & FIELDGIVEN)) field = INT_MAX;
                 if (fch == 'l') fch = *fmt++, flag |= LONG;
                 else if (fch == 'L') fch = *fmt++, flag |= LONG | LONGDOUBLE;
-                else if (fch == 'h') fch = *fmt++, flag |= SHORT;
+                else if (fch == 'h')
+                {   fch = *fmt++, flag |= SHORT;
+                    if (fch == 'h') fch = *fmt++, flag |= CHAR;
+                }
+                else if (fch == 'j' || fch == 'z' || fch == 't') fch = *fmt++;
                 switch (fch)
                 {
         default:    return cnt;         /* illegal conversion code       */
@@ -562,8 +725,11 @@ case '%':   {   int field = 0, flag = 0;
         case 'e':
         case 'E':
         case 'f':
+        case 'F':
         case 'g':
         case 'G':
+        case 'a':
+        case 'A':
 #ifndef NO_FLOATING_POINT
                     worked = rd_real(p, argv, flag, field);
 #else
@@ -575,14 +741,15 @@ case '%':   {   int field = 0, flag = 0;
 /* %n assigns the number of characters read from the input so far - NOTE */
 /* that this assignment is NOT influenced by the * flag and does NOT     */
 /* count towards the value returned by scanf.  Note that h and l apply.  */
-        case 'n':   if isSHORT_(flag) *va_arg(argv, short *) = (short)charcount;
+        case 'n':   if isCHAR_(flag) *va_arg(argv, char *) = (char)charcount;
+                    else if isSHORT_(flag) *va_arg(argv, short *) = (short)charcount;
                     else if isLONG_(flag) *va_arg(argv, long *) = charcount;
                     else *va_arg(argv, int *) = (int)charcount;
                     continue;
         case 'o':   worked = rd_int(p, argv, flag | ALLOWSIGN, 8, field);
                     break;
                     /* pointers are displayed in hex, but h,l,L ignored */
-        case 'p':   worked = rd_int(p, argv, flag & ~(LONG|SHORT), 16, field);
+        case 'p':   worked = rd_int(p, argv, flag & ~(LONG|SHORT|CHAR), 16, field);
                     break;
         case 's':   worked = rd_string(p, argv, flag, field);
                     break;
@@ -634,6 +801,11 @@ int scanf(const char *fmt, ...)
     return n;
 }
 
+int vscanf(const char *fmt, va_list a)
+{
+    return vfscanf(stdin, fmt, a);
+}
+
 typedef struct __extradata {
   /*
    * BODGE BODGE BODGE BODGE
@@ -647,19 +819,17 @@ typedef struct __extradata {
   int __f;
 } _extradata, *_extradatap;
 
-int sscanf(const char *buff, const char *fmt, ...)
+int vsscanf(const char *buff, const char *fmt, va_list a)
 {
 /*************************************************************************/
 /* Note that this code interacts in a dubious way with the getc macro.   */
 /* Also ungetc.                                                          */
 /*************************************************************************/
 
-    va_list a;
     FILE hack;
     _extradata extra;
     _extradatap extrap = &extra;
     int n;
-    va_start(a, fmt);
     memclr(&hack, sizeof(FILE));
     memclr(extrap, sizeof(_extradata));
     hack.__flag = _IOSTRG+_IOREAD;
@@ -667,6 +837,15 @@ int sscanf(const char *buff, const char *fmt, ...)
     hack.__icnt = strlen(buff);
     hack.__extrap = extrap;
     n = vfscanf(&hack, fmt, a);
+    return n;
+}
+
+int sscanf(const char *buff, const char *fmt, ...)
+{
+    va_list a;
+    int n;
+    va_start(a, fmt);
+    n = vsscanf(buff, fmt, a);
     va_end(a);
     return n;
 }

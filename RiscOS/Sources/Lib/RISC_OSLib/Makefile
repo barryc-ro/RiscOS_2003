@@ -263,7 +263,7 @@ EXPORTS   = ${MODWRAP} \
 ANSI_OBJS =\
  o.alloc o.armprof o.armsys o.clib o.ctype o.error o.fpprintf \
  o.kernel o.locale o.math o.memcpset o.overmgr o.printf o.scanf \
- o.signal o.sort o.stdio o.stdlib o.string o.swiv o.time
+ o.signal o.sort o.stdio o.stdlib o.string o.swiv o.time o.fenv
 
 RM_OBJS =\
  rm_o.k_modbody \
@@ -285,6 +285,7 @@ RM_OBJS =\
  rm_o.stdlib \
  rm_o.string \
  rm_o.time \
+ rm_o.fenv \
  rm_o.swiv \
  rm_o.cl_spare
 
@@ -591,6 +592,7 @@ CLIB:h.swis: derived.swis
 CLIB:h.assert: clib.h.assert  ;   ${CP} clib.h.assert $@ ${CPFLAGS}
 CLIB:h.ctype: clib.h.ctype;       ${CP} clib.h.ctype $@ ${CPFLAGS}
 CLIB:h.errno: clib.h.errno;       ${CP} clib.h.errno $@ ${CPFLAGS}
+CLIB:h.fenv: clib.h.fenv;         ${CP} clib.h.fenv $@ ${CPFLAGS}
 CLIB:h.float: clib.h.float;       ${CP} clib.h.float $@ ${CPFLAGS}
 CLIB:h.inttypes: clib.h.inttypes; ${CP} clib.h.inttypes $@ ${CPFLAGS}
 CLIB:h.iso646: clib.h.iso646;     ${CP} clib.h.iso646 $@ ${CPFLAGS}
