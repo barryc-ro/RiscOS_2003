@@ -7,34 +7,21 @@
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
 # 10-Mar-95  GPS          Changed method for building ROM tables.
+# 14-May-01  SNB          Changed to used fragment makefiles
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT = ColourTrans
+TARGET    = Colours
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-CC      = cc
-RM      = remove
-WIPE    = -wipe
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-WFLAGS  = ~CR~V
-CLIB    = CLIB:o.stubs
-#
-# Program specific options:
-#
-COMPONENT = Colours
-SOURCE    = MakeNew
-TARGET    = rm.Colours
-EXPORTS   = ${EXP_HDR}.ColourTran
+ROM_SOURCE = MakeNew
+HEADER1   = ColourTran
+
+RESOURCEEXTRA = resources-colourtrans
+
+
+include StdTools
+include AAsmModule
+include AppLibs
 
 #
 # Binary build environment
@@ -49,50 +36,27 @@ bbe-local: bbe-generic
 #
 # Generic rules:
 #
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
+clean::
         ${WIPE} Tables.* ${WFLAGS}
         ${WIPE} MkTables.o.* ${WFLAGS}
         ${WIPE} Palettes.* ${WFLAGS}
         ${RM} MkTables.maketables
         @echo ${COMPONENT}: cleaned
 
-resources: Palettes.8desktop
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
-        ${CP} Palettes ${RESDIR}.${COMPONENT}.Palettes ${CPFLAGS}
-        ${CP} Tables   ${RESDIR}.${COMPONENT}.Tables   ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.ColourTran: hdr.ColourTran
-        ${CP} hdr.ColourTran $@ ${CPFLAGS}
-
-Colours200: MakeOld
-        ${AS} ${ASFLAGS} MakeOld
-        @echo ${COMPONENT}: Colours200 built
+resources-colourtrans: Palettes.8desktop
+        ${MKDIR} ${RESFSDIR}
+        ${CP} Palettes ${RESFSDIR}.* ${CPFLAGS}
+        ${CP} Tables   ${RESFSDIR}.* ${CPFLAGS}
+        @echo ${COMPONENT}: extra resource files copied
 
 MkTables.o.maketables: MkTables.c.maketables
-        ${CC} $(ccflags) -o $@ MkTables.c.maketables
+        ${CC} $(ccflags) -c -o $@ MkTables.c.maketables
 
 MkTables.maketables:   MkTables.o.maketables ${CLIB} MkTables.o._dirs
         link $(linkflags) -o $@ MkTables.o.maketables ${CLIB}
 
-Palettes.8desktop: MkTables.maketables rm.Colours
-        rmload rm.Colours
+Palettes.8desktop: MkTables.maketables ${ROM_MODULE}
+        rmload ${ROM_MODULE}
         MkTables.maketables @  
         settype Tables.8greys text
         settype Tables.4greys text
