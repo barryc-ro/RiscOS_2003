@@ -57,6 +57,9 @@ TARGET     = ${COMPONENT}
 SOURCE     =
 EXPORTS    =
 
+INTERNALHEADERS =\
+ h.assert h.ctype h.errno h.float h.inttypes h.iso646 h.limits h.locale h.math\
+ h.setjmp h.signal h.stdarg h.stdbool h.stddef h.stdint h.stdio h.stdlib h.string h.time
 
 OBJS= o.driver o.aaof o.asd o.asm o.gen o.mcdep o.peephole o.aetree o.bind \
     o.builtin o.cg o.codebuf o.compiler o.cse o.csescan o.sr o.flowgraf \
@@ -91,7 +94,7 @@ ccacorn.h.errors: mip.h.miperrs cfe.h.feerrs arm.h.mcerrs genhdrs
         genhdrs -eccacorn.h.errors -qmip.h.miperrs -qcfe.h.feerrs -qarm.h.mcerrs -s
 
 ccacorn.c.headers: $(HDRPATHS) genhdrs
-        genhdrs -occacorn.c.headers -Icl.stdh. h.assert h.ctype h.errno h.float h.limits h.locale h.math h.setjmp  h.signal h.stdarg h.stddef h.stdio h.stdlib h.string h.time
+        genhdrs -occacorn.c.headers -Icl.stdh. ${INTERNALHEADERS}
 
 genhdrs: util.c.genhdrs
         ${CC} -c -o o.genhdrs util.c.genhdrs
