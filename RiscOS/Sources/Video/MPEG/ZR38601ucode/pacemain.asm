@@ -12,15 +12,21 @@
 //      13-12-01 Veriosn 1.2 s corby
 //      modifications per integration visit to Cambridge
 //
+//      16-01-02 Version 1.3 b avison
+//      moved version string to 0x2600 to avoid the AC-3 centre channel buffer
+//      PLL settings now appropriate for dongle PCB
+//      VCXO moved to GPIO2, and given sensible mark/gap defaults
+//      TOGGLE_DBG_ON_FRAME turned off (also added as an option on AC-3 as well as MPEG)
+//
 //*****************************************************************************************
 
 #include "macros.inc"
 
 // code revision
-#define VERSION                 {0x4132,0x3331,0x7631,0x2e32 } // A231v1.2
+#define VERSION                 {0x4132,0x3331,0x7631,0x2e33 } // A231v1.3
 
 // hard coded locations
-#define VERSION_LOC     0x600
+#define VERSION_LOC     0x2600
 #define MPEG_EXEC_DUMMY 0xD0000
 #define AC3_EXEC_DUMMY  0xD0100
 
@@ -151,11 +157,11 @@
 #define FS_44                   1
 #define FS_48                   0
 #define FS_UNKNOWN              0x0c
-#define FS_32_DIV               0x0001
+#define FS_32_DIV               0x0002
 #define FS_32_MUL               0x0001
-#define FS_44_DIV               0x0140
-#define FS_44_MUL               0x01b9
-#define FS_48_DIV               0x0002
+#define FS_44_DIV               0x0500
+#define FS_44_MUL               0x0372
+#define FS_48_DIV               0x0004
 #define FS_48_MUL               0x0003
 #define RST_AUDPLL_BIT          1
 // SPDIF channel status bits sample rates
@@ -164,10 +170,10 @@
 #define SPDIF_32KHZ             0x30000
 
 #define IRQ_PIN                 0
-#define VCXO_PIN                1
+#define VCXO_PIN                2
 #define DBG_PIN                 3
 
-#define TOGGLE_DBG_ON_FRAME
+//#define TOGGLE_DBG_ON_FRAME
 
 FORWARD D3_TO_SRG;
 FORWARD INCA7_INCA7;
@@ -225,7 +231,7 @@ DATA    last_rate       {0};                // used for determining sample rate 
 DATA    pktLength       {0};                // used by input packet parser
 DATA    timerLoInterval {0};                // variables required for VCXO driver
 DATA    timerHiInterval {0};
-DATA    VCXOclocks    2 {0};
+DATA    VCXOclocks    2 {0x1388};
 DATA    VCXO_Upd        {0};
 
 DATA Osc_Cfs {              // Ftone = 206 Hz
@@ -370,6 +376,19 @@ init:
 
 ORG AC3_EXEC_DUMMY;
 SUBROUTINE AC3_exec_dummy {
+#ifdef TOGGLE_DBG_ON_FRAME
+    setb    #DBG_PIN,gpioc;                     // It is an output.
+    tstb    #DBG_PIN,gpio;                      // 
+    dbeq    pinToHi;                            // 
+     nop;
+     nop;
+    clrb    #DBG_PIN,gpio;                      // 
+    jmp     endToggle;
+pinToHi:
+    setb    #DBG_PIN,gpio;                      // 
+endToggle:
+#endif
+//  jmp     #AC3_exec;
     move    (process_status),d0;                // test init flag
     cmpi    #INIT,d0;                           // is it INIT ?
     dbne    #AC3_exec;                          // no, decode next block of samples
