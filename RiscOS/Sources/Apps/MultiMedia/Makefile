@@ -22,15 +22,16 @@ WFLAGS  = ~cr~v
 #
 COMPONENT = MultiMedia
 SOURCE    = s.Messages
-TDIR      = rm.<UserIF>
+TDIR      = rm.<Build>
 TARGET    = ${TDIR}.${COMPONENT}
-RESDIR    = ShrunkRes.<UserIF>
+RESDIR    = ShrunkRes.<Build>
 UTILS     = Utils
-DATA      = Data.<UserIF>
+DATA      = Data.<Build>
 # Note: RESDATA mustn't be in RESDIR !!
 RESDATA   = ${DATA}.Data
 SHRINKFILE = ${DATA}.MkShrink
 SPECIALFILE = ${DATA}.MkSpecial
+SPECIALMFILE = ${DATA}.MkSpecialM
 
 #
 # Utility programs:
@@ -65,10 +66,11 @@ ${TARGET}: ${SOURCE} ${RESDATA} dirs
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
-${RESDATA}: ${SHRINKFILE} ${SPECIALFILE}
+${RESDATA}: ${SHRINKFILE} ${SPECIALFILE} ${SPECIALMFILE}
         @RMEnsure ShrinkWrap 0.00 Error *** ShrinkWrap must be loaded ***
         Run ${SHRINKFILE}
         IfThere ${SPECIALFILE} Then Run ${SPECIALFILE}
+        IfThere ${SPECIALMFILE} Then Run ${SPECIALMFILE}
         ${SCANRES} ${RESDIR} $@
 
 ${SHRINKFILE}:
@@ -77,35 +79,12 @@ ${SHRINKFILE}:
 ${SPECIALFILE}:
         IfThere Special.<UserIF> Then ${BUILDWRAP} Special.<UserIF> ${RESDIR} $@
 
+${SPECIALMFILE}:
+        IfThere SpecialM.<Machine> Then ${BUILDWRAP} SpecialM.<Machine> ${RESDIR} $@
+
 dirs:
         ${MKDIR} ${TDIR}
         ${MKDIR} ${RESDIR}
         ${MKDIR} ${DATA}
 
 # Dynamic dependencies:
-rm.MultiMedia: Hdr:ListOpts
-rm.MultiMedia: Hdr:Macros
-rm.MultiMedia: Hdr:System
-rm.MultiMedia: Hdr:SWIs
-rm.MultiMedia: Hdr:CPU.Generic26
-rm.MultiMedia: Hdr:IO.GenericIO
-rm.MultiMedia: Hdr:RISCOS
-rm.MultiMedia: Hdr:ModHand
-rm.MultiMedia: Hdr:Services
-rm.MultiMedia: Hdr:Proc
-rm.MultiMedia: Hdr:ResourceFS
-rm.MultiMedia: Version
-rm.MultiMedia: Hdr:NDRDebug
-rm.<UserIF>.MultiMedia: Hdr:ListOpts
-rm.<UserIF>.MultiMedia: Hdr:Macros
-rm.<UserIF>.MultiMedia: Hdr:System
-rm.<UserIF>.MultiMedia: Hdr:SWIs
-rm.<UserIF>.MultiMedia: Hdr:CPU.Generic26
-rm.<UserIF>.MultiMedia: Hdr:IO.GenericIO
-rm.<UserIF>.MultiMedia: Hdr:RISCOS
-rm.<UserIF>.MultiMedia: Hdr:ModHand
-rm.<UserIF>.MultiMedia: Hdr:Services
-rm.<UserIF>.MultiMedia: Hdr:Proc
-rm.<UserIF>.MultiMedia: Hdr:ResourceFS
-rm.<UserIF>.MultiMedia: Version
-rm.<UserIF>.MultiMedia: Hdr:NDRDebug
