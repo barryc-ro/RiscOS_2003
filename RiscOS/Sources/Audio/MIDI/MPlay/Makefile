@@ -48,7 +48,7 @@ clean:
 resources:
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${OBJS} vars
+${TARGET}: ${SOURCE}.MPlayCode ${OBJS} vars
         Run ${SOURCE}.MPlayCode
 
 vars:
