@@ -128,7 +128,7 @@ LIBS = ${TARGET} ${TARGETD} ${TARGETZ}
 #
 # build the library:
 #
-all:	${LIBS} unictype.c
+all:	${LIBS}
 
 #
 # RISC OS ROM build rules:
@@ -195,13 +195,13 @@ links:
 #
 # Final link
 #
-${TARGET}: ${OBJS} local_dirs
+${TARGET}: ${OBJS} unictype.c local_dirs
         ${LB} ${LBFLAGS} -o ${COMPONENT} ${OBJS}
 
-${TARGETZ}: ${OBJSZ} local_dirs
+${TARGETZ}: ${OBJSZ} unictype.c local_dirs
 	${LB} ${LBFLAGS} -o ${COMPONENTZ} ${OBJSZ}
 
-${TARGETD}: ${OBJSD} local_dirs
+${TARGETD}: ${OBJSD} unictype.c local_dirs
 	${LB} ${LBFLAGS} -o ${COMPONENTD} ${OBJSD}
 
 # Dynamic dependencies:
