@@ -99,7 +99,7 @@ resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.ScreenMode.Messages }
 
 #
 # ROM target (re-linked at ROM Image build time)
