@@ -39,34 +39,19 @@ ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p -depend !Depend ${THROWBACK} ${OPTS}
-INCLUDES= -IC: -ITCPIPLibs: -IC:AsmUtils
+INCLUDES= -IC: -ITCPIPLibs: -IC:AsmUtils -IC:NCMAlib
 
 DIRS    = o._dirs
 
 #
 # Different compile options - choose one
 #
-# use REMOTE_DEBUG to enable remote debugging
-# use ENABLE_DEBUGGING if you want to enable debugging!
 # use LOCAL_URL_PATHS to get pages from ispc: instead of ispcScr:
 # use DIAL_ON_COMPLETION to dial immediately ISPCapture is completed
 #  (orthogonal behaviour is to return to the connect to service screen)
 
-# debugging
 
-ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DLOCAL_URL_PATHS -UDIAL_ON_COMPLETION
-
-ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
-
-NODB  =         -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
-
-#
-# select one of these
-#
-
-#NCTARGETARCH = ${ETHERNETDB}
-#NCTARGETARCH = ${ZIPDB}
-NCTARGETARCH = ${NODB}
+NCTARGETARCH = -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
 
 # OPTS flag in build options allows several options to be used :
 
@@ -94,6 +79,7 @@ INETLIB	   = TCPIPLibs:o.inetlibzm
 UNIXLIB    = TCPIPLibs:o.unixlibzm
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
+NCMALIB    = ${LIBDIR}.ncmalib.o.ncmalibzm
 LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
 ASMUTILS   = C:AsmUtils.o.AsmUtilsZM
 
@@ -119,8 +105,8 @@ TARGETSA  = rm.ISPCapture
 EXPORTS   =
 
 # Normal targets
-BASEOBJS  = module.o header.o ispc_cmds.o dynalloc.o ispc_ispc.o \
-            ispc_url.o kprintf.o ispc_utils.o ispc_file.o \
+BASEOBJS  = module.o header.o ispc_cmds.o ispc_ispc.o \
+            ispc_url.o kprintf.o ispc_file.o \
             dbugzm.o
 
 # Preprocess targets.
@@ -232,15 +218,15 @@ bbe-ispcapture: bbe-generic-resources-get-alias
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${DIRS} header.h 
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${NCMALIB} ${DIRS} header.h 
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${NCMALIB} ${RLIB} ${ASMUTILS}
 
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${DIRS} header.h
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${ASMUTILS} ${LIBSD}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${NCMALIB} ${DIRS} header.h
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${ASMUTILS} ${NCMALIB} ${LIBSD}
 
 
 #
@@ -248,7 +234,7 @@ ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${DIRS} head
 #
 rom_link:
         ${MKDIR} linked
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} ${LIBSD} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} ${LIBSD} ${LIBS} ${NCMALIB} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
