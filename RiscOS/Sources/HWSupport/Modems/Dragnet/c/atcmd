@@ -1,6 +1,6 @@
-/*name and version number:@(#)atcmd.c	1.397*/
-/*date of get: 		  12/15/00 10:10:15*/
-/*date of delta:	  12/05/00 11:40:09*/
+/*name and version number:@(#)atcmd.c	1.408*/
+/*date of get: 		  05/11/01 16:42:17*/
+/*date of delta:	  05/11/01 16:42:14*/
 /****************************************************************
 File : atcmd.c
 Description :
@@ -36,7 +36,7 @@ Procedures Contained :
 #include "llglob_d.h"
 #include "atglob.h"
 #include "iouart_d.h"	// extern for UART_dtr_blocked()
-//msm// #include "z80glob.h"
+#include "z80glob.h"
 #if defined(CLASS2_FAX) || defined(CLASS20_FAX)
 	#include "fax_c2.h"
 #endif
@@ -46,6 +46,7 @@ Procedures Contained :
 extern void at_output_hex(word w);
 extern void at_percent_f(void);
 extern void at_diagnostics(void);		// ATI11
+extern byte dp_v92mh_queue_ato(void);
 
 const char at_idstring[] = IDSTRING;	// defined in llglob_d.h
 
@@ -57,18 +58,6 @@ Description : Display the product-specific ID string.
 void at_display_id(void)
 {
 	byte ptr[160];
-#if defined(VPCM_SERVER) && !defined(CS_4)
-	x_strcpy(ptr,"120899/1.68/257");
-#ifdef CS_LAPM_DEBUG
-	x_strcat(ptr,"/LAPM Dbg");
-#endif
-#ifdef CS_ETC
-	x_strcat(ptr,"/ETC");
-#endif
-#ifdef CS_V110
-	x_strcat(ptr,"/V110");
-#endif
-#else	// CLIENT
 	x_strcpy(ptr, (byte *) at_idstring);
 #if defined(VOICE)
 	x_strcat(ptr, (byte *) " Voice");
@@ -79,71 +68,55 @@ void at_display_id(void)
 	{
 		x_strcat(ptr, (byte *) " V2");
 	}
+
 	if (z80_v92cap & 1)
 	{
-		x_strcat(ptr, (byte *) " V92cap");
+		x_strcat(ptr, (byte *) " V92cap");		// V.92 capable
 	}
-
-	if (z80_v92cap & 2)
+	if (z80_v92cap & 4)
+	{
+		x_strcat(ptr, (byte *) " 10ns RAM");
+	}
+	else if (z80_v92cap & 2)
 	{
 		x_strcat(ptr, (byte *) " 12ns RAM");
 	}
 #endif // MODEM_Z80
 
+	if (G(dp_daa_is_perseus))
+		x_strcat(ptr, (byte *) " Perseus");
+	else
+		x_strcat(ptr, (byte *) " Mercury");
+	
+#if defined(DRAGNET)
+# if defined(DRAGNET2)
+	x_strcat(ptr, (byte *) " DRAGNET2");
+# else
+	x_strcat(ptr, (byte *) " DRAGNET");
+# endif // DRAGNET2
+#endif // DRAGNET
+
+#if defined(MODEM_ARM) && !defined(CS_4)
+	// Add OCM details to information.
+	{
+		extern byte arm_board_type();
+		extern char *arm_board_str[];
+		extern const char arm_boot_mode_str[];
+		extern const char arm_rom_config_str[];
+
+		x_strcat(ptr, (byte *) " ");
+		x_strcat(ptr, (byte *) arm_board_str[arm_board_type()]);
+		x_strcat(ptr, (byte *) " ");
+		x_strcat(ptr, (byte *) arm_rom_config_str);
+		x_strcat(ptr, (byte *) " ");
+		x_strcat(ptr, (byte *) arm_boot_mode_str);
+	}
+#endif // MODEM_ARM
+
 	// For debug purposes you may overwrite ptr[] here.
 	//x_strcpy(ptr, "test version id string");
-#endif
     at_output_msg2(ptr);
-
 }
-
-#if defined(CS_V110)
-#define V110_RATE_38400		3
-#define V110_RATE_19200		6
-#define V110_RATE_9600		9
-#define V110_RATE_4800		11
-#define V110_RATE_2400		13
-
-/****************************************************************
-Routine : config_v110
-Description :
-	Configure the modem for receiving v.110 call
-*****************************************************************/
-void config_v110( void )
-{
-	byte correct_speed;
-	
-	correct_speed = TRUE;
-
-	switch (G(S).ModemOptions.V110Speed)
-	{
-		case 58:
-			G(v110_uChannelRate) = V110_RATE_2400;
-			break;
-		case 59:
-			G(v110_uChannelRate) = V110_RATE_4800;
-			break;
-		case 61:
-		 	G(v110_uChannelRate) = V110_RATE_9600;
-			break;
-		case 64:
-		 	G(v110_uChannelRate) = V110_RATE_19200;
-			break;
-		case 67:
-		 	G(v110_uChannelRate) = V110_RATE_38400;
-			break;
-		default:	// wrong speed
-			correct_speed = FALSE;
-			break;
-	}
-
-	if (correct_speed == TRUE)		// no error, so start v.110
-	{
-		G(cs_v110_on) = 1;		// receiving v.110 call but not yet connected
-		x_send_mail_dp1(MC_V110_ANSWER);
-	}
-}
-#endif // CS_V110
 
 /****************************************************************
 Routine : at_cmd_err_ret
@@ -412,13 +385,6 @@ void at_a(void)
 		at_cmd_err_ret();
 		return;
 	}
-#if defined(CS_V110)
-	if (G(S).ModemOptions.V110Speed)	// V.110 receive mode
-	{
-		config_v110();
-		return;
-	}			
-#endif
 	if (G(x_modem_mode) == MODEM_FAX)
 	{
 		G(x_fax_state) = FAX_TX_HDLC;
@@ -575,7 +541,7 @@ byte at_hangup(void)
 	{
 		x_send_mail_dp1(MC_ONHOOK);
 	}
-	G(io_at_esc_detect) = FALSE ;
+	G(io_at_esc_detect) = FALSE;
 	return FALSE;
 }
 
@@ -638,12 +604,17 @@ void at_i(void)
     switch (ATE4BN)
 	{
     case 1: /* calculate ROM checksum and display it on DTE */
+#if defined(MODEM_Z80)
 		at_output_hex(z80_checksum(TRUE));
+#elif defined(MODEM_ARM)
+		at_output_hex(arm_rom_checksum());
+#endif
 		break ;
 	
-    case 2: /* verify checksum */
-		x_send_mail(DSP_VERSION, DP_TASK, (byte *)&version, 2);
-		if (version == 0)
+    case 2:
+		// (DSP) ROM check & calculate and verify checksum.
+		x_send_mail(DSP_CHECKSUM, DP_TASK, (byte *) &version, 2);
+		if (DSPCHECKSUM != version)
 		{
 			at_cmd_err_ret();
 			return;
@@ -655,7 +626,8 @@ void at_i(void)
 		at_display_id();
 		break;
 	    
-    case 4: /* return data pump firmware version */
+    case 4:
+		// return data pump firmware version
 		x_send_mail (DSP_VERSION, DP_TASK, (byte *)&version, 2);
 		len = (byte)at_itoa((word)version, ver, DECIMAL);
 		at_output_msg (ver, (word)len);
@@ -769,6 +741,10 @@ Description :
 *****************************************************************/
 void at_o(void)
 {
+#if defined(V92_MODEM_ON_HOLD)
+	if (dp_v92mh_queue_ato())
+		return;
+#endif
 	if ( (G(x_modem_state) == MS_ON_DIAL) ||
 		 (G(x_modem_state) == MS_LOCAL_TEST) ||
 		 (G(x_modem_state) == MS_REM_TEST) )
@@ -815,6 +791,9 @@ void at_p (void)
 Routine : at_q
 Description :
 	ATQ - Result Code Control
+
+	Q0 - enable modem to send results (default)
+	Q1 - disable modem from sending results
 *****************************************************************/
 void at_q(void)
 {
@@ -918,7 +897,7 @@ void at_x(void)
 	atparse_cmd();
 }
 
-#if defined (DC0) || defined (CS_ETC)
+#if defined (DC0)
 /****************************************************************/
 //
 //	init_ETC_defaults()
@@ -1025,7 +1004,8 @@ void at_and_d(void)
 /****************************************************************
 Routine : at_init_defaults
 Description :
-	Common routine for and_and_f command
+	Common routine for _and_f command.
+	Initialize the modem to factory defaults.
 ****************************************************************/
 void at_init_defaults(void)
 {
@@ -1047,7 +1027,7 @@ Description :
 *****************************************************************/
 void at_and_f(void)
 {
-#if defined(DC0) || defined(CS_ETC)
+#if defined(DC0)
 	if (!at_error_for_bad(6))
 		return;
 
@@ -1232,6 +1212,8 @@ void at_and_s(void)
 	x_send_mail(MC_OPTION_CHANGE, IO_TASK, NULL, 0);
 }
 
+extern void z80_user_does_and_w(void);
+
 /****************************************************************
 Routine : at_and_w
 Description :
@@ -1248,6 +1230,10 @@ void at_and_w(void)
 #endif
 	if (!at_error_for_bad(1))
 		return;
+
+#if defined(MODEM_Z80) && defined(VPCM_CLIENT)
+	z80_user_does_and_w();		// V.92 capabilities updated in EEPROM
+#endif // MODEM_Z80
 
 	// if eeprom present - save options - else return error
 	if (ll_save_modem_options())
@@ -1625,7 +1611,7 @@ void at_percent_c(void)
 		// don't allow V.44 unless V92 capable
 		if (1 & z80_v92cap)
 #endif // MODEM_Z80
-			G(S).ModemOptions.Compression |= V44_COMP;
+			G(S).ModemOptions.Compression |= (V44_COMP|V44S_COMP);
 #endif // V44
 	}
 

@@ -8,20 +8,27 @@
 # 30-03-01      MSM          Original
 # 05-04-01      MSM          Dragnet2 initial version
 
+
+# possibly still needed
+# dpdraco.o
+
+
+
 COMPONENT       = CtrlsModem
 TARGET          = CtrlsModem
 
 DIRS            = o._dirs
 RAM_OBJS        = allglobs.o atcmd.o atcmd1.o atfax.o atmain.o atparse.o ats.o atsync.o \
 		atv25ter.o atv9x.o atvoice.o cpcptini.o dp56clnt.o dp56kv.o dp56kv1.o dpcall.o \
-		dpcmd1.o dpcntlv.o dpdl56v0.o dpdl56v1.o dpdl56v2.o dpdlv8bv.o dpdraco.o \
+		dpcmd1.o dpcntlv.o dpdl56v0.o dpdl56v1.o dpdl56v2.o dpdlv8bv.o \
 		dpdspinc.o dpdspinv.o dpfax.o dpfdsp.o dpiov.o dpmain.o dpsync.o dptest.o \
 		dpv8bis.o dpv8bis1.o dpvoice.o dpvpcmd0.o dpvpcmd3.o dpvpcmd4.o dpvts.o \
 		iocid.o iodata.o iodce.o iodte.o iodte1.o iofax.o ioiadpcm.o iomain.o \
 		iosync.o iovoice.o lapm_bg.o lapm_ctl.o lapm_dc1.o lapm_dce.o lapm_dte.o \
 		lapm_lbb.o lapm_lib.o llmain.o llutil.o llutil1v.o mnp_5a.o mnp_bg.o mnp_ctl.o \
 		mnp_dce.o mnp_dte.o mnp_lib.o v42bis.o vp_slice.o vpcm.o vpcmcnst.o vpgetgn.o \
-		riscos.o riscosutil.o riscosasm.o modulehdr.o
+		riscos.o riscosutil.o riscosasm.o modulehdr.o \
+		v44ram.o v44nb.o v44.o llshared.o iofax_c2.o fax2util.o atfax_c2.o dpv92mhi.o
 ROM_OBJS        = ${RAM_OBJS}
 RAM_LIBS        = ${DEBUGLIB} ${NET5LIBS} ${CALLXLIB} ${ASMUTILS}
 ROM_LIBS        = ${RAM_LIBS}
@@ -29,8 +36,10 @@ ROM_LIBS        = ${RAM_LIBS}
 #CFLAGS          = -zM -zps1 -ffah
 CFLAGS = -zM -zps1 -ff -Wbd
 #CDEFINES = -DDEBUGLIB -DEMULATE
-CDEFINES = -DDEBUGLIB -DPODULEBASED
+#CDEFINES = -DDEBUGLIB -DPODULEBASED
+CDEFINES = -DPODULEBASED
 #CDEFINES = -DDEBUGLIB
+#CDEFINES =
 
 CINCLUDES = -I. -IOS: -IC:
 

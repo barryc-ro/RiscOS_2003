@@ -1,39 +1,34 @@
-/*name and version number:@(#)dpdspinv.c	1.33*/
-/*date of get: 		  09/06/00 16:59:01*/
-/*date of delta:	  03/23/00 16:50:18*/
+/*name and version number:@(#)dpdspinv.c	1.34*/
+/*date of get: 		  04/12/01 11:56:25*/
+/*date of delta:	  04/09/01 14:23:04*/
 /****************************************************************
 File :  dpdspinv.c
 Description :
-	Venus DSP download for k56
+	Venus/Dragnet DSP download routines including decompression.
 
 Procedures Contained :
-
-Revision History :
-	Initials    Date        Change
-		MAH		9/24/96			created
+	dp_download_K56VenWk
+	dp_write_dsp_block
+	dp_write_dsp_array
+	dp_download_dsp
+	decode_word_long
+	init_ptrs_long
+	dp_download_cp_dsp_long
+	dp_download_cp_dsp_slow
+	dp_download_dspk56_long
 *****************************************************************/
 
 //#define Z80_DEBUG_THIS_FILE
 
 #include "llglob_d.h"
-
 #include "dpglob.h"
-//msm// #include "z80glob.h"
+#include "z80glob.h"
 #include "z80flash.h"
-
-#ifdef CS_DEBUG
-# include "dpdspinv.h"
-#endif
 #include "allglobs.h"
 
-
 #if defined(K56FLEX)
-# if defined(VENUS_AT_CS) || defined(CS_MODEM)
-#  if defined(CS_MODEM)
-#   include "cs56vwkd.h"
-#  else
+# if defined(VENUS_AT_CS)
 #   include "dp56vwkd.h"
-#  endif //CS_MODEM
 # else
 #  include "dp56vwk0.h"
 # endif
@@ -43,14 +38,14 @@ Routine : dp_download_K56VenWk()
 Description : 
 	Download K56FLEX "venus workaround" into DPRAM
 *****************************************************************/
-void dp_download_K56VenWk( void )
+void dp_download_K56VenWk(void)
 {
 	#if defined(NEW_QMP_AUX_INTFC)
 	dp_modem_idle_cmd();
 	#endif
 
-	DOWNLOAD_DSP( wK56VenWk0 ) ;
-	dp_modem_command_long ( PDM, ASYNC_MARK, 0x01, 0x87, 0 ) ;
+	DOWNLOAD_DSP( wK56VenWk0 );
+	dp_modem_command_long ( PDM, ASYNC_MARK, 0x01, 0x87, 0 );
 }
 #endif // K56FLEX
 
@@ -65,13 +60,13 @@ Description : Write a block of data to dsp ram
 *****************************************************************/
 void dp_write_dsp_block ( const word *bp, word len )
 {
-	word i, j ;
+	word i, j;
 
 	do {
-		i = *bp++ ; 
-		j = *bp++ ;
-		dp_write_dsp_ram ( i, j ) ;
-	} while ( --len ) ;
+		i = *bp++; 
+		j = *bp++;
+		dp_write_dsp_ram ( i, j );
+	} while ( --len );
 }
 
 #if !defined(CS_4)
@@ -89,12 +84,91 @@ Description : Write to continous array of data to dsp ram
 void dp_write_dsp_array ( word loc, const word *bp, byte len )
 {
 	do {
-		dp_write_dsp_ram ( loc++, *bp++ ) ;
-	} while ( --len ) ;
+		dp_write_dsp_ram ( loc++, *bp++ );
+	} while ( --len );
 
 	DP_WITHIN_WRITE_RAM(0);
 }
 #endif // !CS_4
+
+#if !defined(COMPRESS_TABLES)
+/****************************************************************
+Routine : dp_download_dsp
+Description : download dsp code by using dsp download command
+		through mailbox - 6 bytes at a time.
+*****************************************************************/
+void dp_download_dsp(const byte *DspFilePtr, word wSize)
+{
+	byte *bPtr = (byte *) DspFilePtr;
+	word wCntr;
+	byte i, k, tmp_rd7;
+
+	tmp_rd7 = G(dp_bamil_rd7);
+
+	G(dp_bamil_rd7) = 0xff;
+	dp_regwrite ( 0xd8, 0xff );	// clear all interrupts on camil
+	dp_regwrite ( 0xd7, 0xff );	// disable all interrupts on camil
+
+	// disable parallel data mode
+	dp_modem_command_long ( PDM, 0, 0, 0, 0 );
+	dp_write_dsp_ram ( 0x39, 0x0 );		// clear fax options word
+
+	
+	while (wSize)
+	{
+		wCntr = ((DspFileHdr *)bPtr)->wFileSize;
+		wSize -= (wCntr+3);
+		// copy address, length and checksum.
+		dp_regwrite ( 0x30, 0x01 ); // for external ram download set to 1
+		for (i = 0; i < 6; i++ )
+		{	
+			dp_regwrite ( (byte)(i+0x31), *bPtr++ );
+		}
+		dp_regwrite ( 0xd8, 0x18 );	// clear core read/write bank bit - CRBNKI
+		dp_regwrite ( 0x37, 0x1a ); // initial program download.
+		wait_for_core_read();
+
+		while ( wCntr )
+		{
+			if ( wCntr >= 3 )
+			{
+				k = 6;
+				wCntr -= 3;
+			}
+			else
+			{
+				k = (byte)(2*wCntr);
+				wCntr = 0;
+			}
+		
+			// copy 6 bytes of data
+			for (i = 0; i < k; i++ )
+			{
+				dp_regwrite ( (byte)(0x30+i), *bPtr++ );
+			}
+			dp_regwrite ( 0xd8, 0x18 ); // clear core read/write bank bit - CRBNKI
+			if ( wCntr )
+			{
+				dp_regwrite ( 0x37, (byte)(0xc0|k) );
+			}
+			else
+			{
+				dp_regwrite ( 0x37, (byte)(0xc8|k) );//end of section
+			}
+			wait_for_core_read();
+		}
+	}
+
+	dp_regwrite ( 0xb7, 0xff );	// clear interrupt NCWTB
+	dp_regwrite ( 0xd8, 0xff );	// clear all interrupts on camil
+
+	// enable the dsp interrupts
+	G(dp_bamil_rd7) = tmp_rd7;
+	dp_regwrite ( 0xd7, G(dp_bamil_rd7) );
+
+	DP_WRITE_IOC();		// set ioc back to correct value for venus
+}
+#endif //!COMPRESS_TABLES
 
 #if defined(COMPRESS_TABLES) && defined(MODEM_Z80)
 /****************************************************************
@@ -105,71 +179,71 @@ Description : download dsp code by using dsp download command
 *****************************************************************/
 void dp_download_dsp ( const byte *DspFilePtr, word wSize )
 {
-	byte *bPtr = (byte *) DspFilePtr ;
-	word wCntr ;
-	byte i, k, tmp_rd7 ;
+	byte *bPtr = (byte *) DspFilePtr;
+	word wCntr;
+	byte i, k, tmp_rd7;
 
-	tmp_rd7 = G(dp_bamil_rd7) ;
+	tmp_rd7 = G(dp_bamil_rd7);
 
-	G(dp_bamil_rd7) = 0xff ;
-	dp_regwrite ( 0xd8, 0xff ) ;	// clear all interrupts on camil
-	dp_regwrite ( 0xd7, 0xff ) ;	// disable all interrupts on camil
+	G(dp_bamil_rd7) = 0xff;
+	dp_regwrite ( 0xd8, 0xff );	// clear all interrupts on camil
+	dp_regwrite ( 0xd7, 0xff );	// disable all interrupts on camil
 
 	// disable parallel data mode
-	dp_modem_command_long ( PDM, 0, 0, 0, 0 ) ;
-	dp_write_dsp_ram ( 0x39, 0x0 ) ;		// clear fax options word
+	dp_modem_command_long ( PDM, 0, 0, 0, 0 );
+	dp_write_dsp_ram ( 0x39, 0x0 );		// clear fax options word
 	
 	while (wSize)
 	{
-		wCntr = ((DspFileHdr *)bPtr)->wFileSize ;
-		wSize -= (wCntr+3) ;
+		wCntr = ((DspFileHdr *)bPtr)->wFileSize;
+		wSize -= (wCntr+3);
 		// copy address, length and checksum.
-		dp_regwrite ( 0x30, 0x01 ) ; // for external ram download set to 1
-		for (i = 0; i < 6 ; i++ )
+		dp_regwrite ( 0x30, 0x01 ); // for external ram download set to 1
+		for (i = 0; i < 6; i++ )
 		{	
-			dp_regwrite ( (byte)(i+0x31), *bPtr++ ) ;
+			dp_regwrite ( (byte)(i+0x31), *bPtr++ );
 		}
 		dp_regwrite ( 0xd8, 0x18 ); // clear core read/write bank bit - CRBNKI
 		dp_regwrite ( 0x37, 0x1a ); // initial program download.
-		wait_for_core_read () ;
+		wait_for_core_read();
 
 		while ( wCntr )
 		{
 			if ( wCntr >= 3 )
 			{
-				k = 6 ;
-				wCntr -= 3 ;
+				k = 6;
+				wCntr -= 3;
 			}
 			else
 			{
-				k = (byte)(2*wCntr) ;
-				wCntr = 0 ;
+				k = (byte)(2*wCntr);
+				wCntr = 0;
 			}
 		
 			// copy 6 bytes of data
-			for (i = 0; i < k ; i++ )
+			for (i = 0; i < k; i++ )
 			{
-				dp_regwrite ( (byte)(0x30+i), *bPtr++ ) ;
+				dp_regwrite ( (byte)(0x30+i), *bPtr++ );
 			}
-			dp_regwrite ( 0xd8, 0x18 ) ; // clear core read/write bank bit - CRBNKI
+			dp_regwrite ( 0xd8, 0x18 ); // clear core read/write bank bit - CRBNKI
 			if ( wCntr )
 			{
-				dp_regwrite ( 0x37, (byte)(0xc0|k) ) ;
+				dp_regwrite ( 0x37, (byte)(0xc0|k) );
 			}
 			else
 			{
-				dp_regwrite ( 0x37, (byte)(0xc8|k) ) ;//end of section
+				dp_regwrite ( 0x37, (byte)(0xc8|k) );//end of section
 			}
-			wait_for_core_read () ;
+			wait_for_core_read();
 		}
 	}
 
 	dp_regwrite(0xb7, 0xff); // clear interrupt NCWTB
-	dp_regwrite ( 0xd8, 0xff ) ;	// clear all interrupts on camil
+	dp_regwrite ( 0xd8, 0xff );	// clear all interrupts on camil
 
 	// enable the dsp interrupts
-	G(dp_bamil_rd7) = tmp_rd7 ;
-	dp_regwrite ( 0xd7, G(dp_bamil_rd7) ) ;
+	G(dp_bamil_rd7) = tmp_rd7;
+	dp_regwrite ( 0xd7, G(dp_bamil_rd7) );
 
 	// set ioc back to correct value for venus
 	DP_WRITE_IOC();
@@ -181,9 +255,9 @@ void dp_download_dsp ( const byte *DspFilePtr, word wSize )
 sfr ramlbr_port=0xe7;
 
 extern non_banked word dp_getROMwd1(long *srcLong);
-extern non_banked word dp_getROMwd( byte, byte * ) ;
-extern non_banked void dp_putRAMwd( byte, byte *, word ) ;
-extern non_banked word dp_getRAMwd( byte, byte * ) ;
+extern non_banked word dp_getROMwd( byte, byte * );
+extern non_banked void dp_putRAMwd( byte, byte *, word );
+extern non_banked word dp_getRAMwd( byte, byte * );
 
 extern short decode_word_long(word *ptr);
 extern non_banked short decode_word_l2(word *ptr, byte n);
@@ -206,7 +280,7 @@ short decode_word_long(word *ptr)
 {
 	if ((cp_cur--) <= cp_next)
 	{
-		cp_next = dp_getROMwd1( &pcp_pcnt ) ;
+		cp_next = dp_getROMwd1( &pcp_pcnt );
 		cp_zero_zone = (!cp_zero_zone);
 	}
 	if (cp_cur < 0)
@@ -221,7 +295,7 @@ short decode_word_long(word *ptr)
 		if (!cp_cur_flag_ctr)
 		{
 			cp_cur_flag_ctr = 16;
-			cp_flag = dp_getROMwd1( &pcp_pflag ) ;
+			cp_flag = dp_getROMwd1( &pcp_pflag );
 		}
 		cp_cur_flag_ctr--;
 		if (cp_flag&0x1)
@@ -257,8 +331,8 @@ Description :
 void init_ptrs_long(long in)
 {
   pcp_pcnt = in;
-  cp_cur = dp_getROMwd( pcp_pcnt>>16 , (byte *)pcp_pcnt ) ; pcp_pcnt +=2;   
-  cp_next = dp_getROMwd( pcp_pcnt>>16 , (byte *)pcp_pcnt ) ; pcp_pcnt +=2;   
+  cp_cur = dp_getROMwd( pcp_pcnt>>16 , (byte *)pcp_pcnt ); pcp_pcnt +=2;   
+  cp_next = dp_getROMwd( pcp_pcnt>>16 , (byte *)pcp_pcnt ); pcp_pcnt +=2;   
 
   while (dp_getROMwd( in >>16 , (byte *)in ))
 	  in +=2;
@@ -289,19 +363,19 @@ Description : decompress and download DSP code
 void dp_download_cp_dsp_long(long addr24)
 {
 	word bPtrBuf[3];
-	byte *bPtr ;
-	word wCntr ;
-	byte i, k, tmp_rd7 ;
+	byte *bPtr;
+	word wCntr;
+	byte i, k, tmp_rd7;
 
-	tmp_rd7 = G(dp_bamil_rd7) ;
+	tmp_rd7 = G(dp_bamil_rd7);
 
-	G(dp_bamil_rd7) = 0xff ;
-	dp_regwrite ( 0xd8, 0xff ) ;	// clear all interrupts on camil
-	dp_regwrite ( 0xd7, 0xff ) ;	// disable all interrupts on camil
+	G(dp_bamil_rd7) = 0xff;
+	dp_regwrite ( 0xd8, 0xff );	// clear all interrupts on camil
+	dp_regwrite ( 0xd7, 0xff );	// disable all interrupts on camil
 
 	// disable parallel data mode
-	dp_modem_command_long ( PDM, 0, 0, 0, 0 ) ;
-	dp_write_dsp_ram ( 0x39, 0x0 ) ;		// clear fax options word
+	dp_modem_command_long ( PDM, 0, 0, 0, 0 );
+	dp_write_dsp_ram ( 0x39, 0x0 );		// clear fax options word
 
 	init_ptrs_long(addr24);
 	
@@ -309,60 +383,60 @@ void dp_download_cp_dsp_long(long addr24)
 		   decode_word_long(&bPtrBuf[1]) &&
 		   decode_word_long(&bPtrBuf[2]))
 	{
-		bPtr = (byte *)bPtrBuf ;
-		wCntr = ((DspFileHdr *)bPtr)->wFileSize ;
+		bPtr = (byte *)bPtrBuf;
+		wCntr = ((DspFileHdr *)bPtr)->wFileSize;
 		
 		// copy address, length and checksum.
-		dp_regwrite ( 0x30, 0x01 ) ; // for external ram download set to 1
-		for (i = 0; i < 6 ; i++ )
+		dp_regwrite ( 0x30, 0x01 ); // for external ram download set to 1
+		for (i = 0; i < 6; i++ )
 		{	
-			dp_regwrite ( (byte)(i+0x31), *bPtr++ ) ;
+			dp_regwrite ( (byte)(i+0x31), *bPtr++ );
 		}
 		dp_regwrite ( 0xd8, 0x18 );	// clear core read/write bank bit - CRBNKI
 		dp_regwrite ( 0x37, 0x1a ); // initial program download.
-		wait_for_core_read () ;
+		wait_for_core_read();
 
 		while ( wCntr )
 		{
 			if ( wCntr >= 3 )
 			{
-				k = 6 ;
-				wCntr -= 3 ;
+				k = 6;
+				wCntr -= 3;
 			}
 			else
 			{
-				k = (byte)(2*wCntr) ;
-				wCntr = 0 ;
+				k = (byte)(2*wCntr);
+				wCntr = 0;
 			}
 		
-			bPtr = (byte *)bPtrBuf ;
-			for (i = 0; i < (k>>1) ; i++ )
+			bPtr = (byte *)bPtrBuf;
+			for (i = 0; i < (k>>1); i++ )
 				decode_word_long(&bPtrBuf[i]);
 
 			// copy 6 bytes of data
-			for (i = 0; i < k ; i++ )
+			for (i = 0; i < k; i++ )
 			{
-				dp_regwrite ( (byte)(0x30+i), *bPtr++ ) ;
+				dp_regwrite ( (byte)(0x30+i), *bPtr++ );
 			}
 			dp_regwrite(0xd8, 0x18); // clear core read/write bank bit - CRBNKI
 			if ( wCntr )
 			{
-				dp_regwrite ( 0x37, (byte)(0xc0|k) ) ;
+				dp_regwrite ( 0x37, (byte)(0xc0|k) );
 			}
 			else
 			{
-				dp_regwrite ( 0x37, (byte)(0xc8|k) ) ;//end of section
+				dp_regwrite ( 0x37, (byte)(0xc8|k) );//end of section
 			}
-			wait_for_core_read () ;
+			wait_for_core_read();
 		}
 	}
 
-	dp_regwrite ( 0xb7, 0xff ) ; // clear interrupt NCWTB
-	dp_regwrite ( 0xd8, 0xff ) ;	// clear all interrupts on camil
+	dp_regwrite ( 0xb7, 0xff ); // clear interrupt NCWTB
+	dp_regwrite ( 0xd8, 0xff );	// clear all interrupts on camil
 
 	// enable the dsp interrupts
-	G(dp_bamil_rd7) = tmp_rd7 ;
-	dp_regwrite ( 0xd7, G(dp_bamil_rd7) ) ;
+	G(dp_bamil_rd7) = tmp_rd7;
+	dp_regwrite ( 0xd7, G(dp_bamil_rd7) );
 
 	// set ioc back to correct value for venus
 	DP_WRITE_IOC();
@@ -408,8 +482,8 @@ Description :
 *****************************************************************/
 void dp_download_dspk56_long ( long srcadr, byte dstBank )
 {
-	byte currlb ;
-	word data, data2 ;
+	byte currlb;
+	word data, data2;
 	word datBuf[32], *dbptr;
 	byte *dstPtr, len;
 	word dl_timer = x_current_time();
@@ -417,7 +491,7 @@ void dp_download_dspk56_long ( long srcadr, byte dstBank )
 	//---------------------------------------------
 	// save RAM lower boundary register
 	//---------------------------------------------
-	currlb = ramlbr_port ;
+	currlb = ramlbr_port;
 
 #if defined(PCMCIA_MODEM) && !defined(ROM_FLASH)
 	//------------------------------------------
@@ -425,13 +499,13 @@ void dp_download_dspk56_long ( long srcadr, byte dstBank )
 	// adjust the RAMLBR
 	// to gain access to "hidden" DSP RAM
 	//------------------------------------------
-	ramlbr_port = 0xf0 ;
+	ramlbr_port = 0xf0;
 #endif
 
 	//------------------------------------------
 	// set dest starting offset
 	//------------------------------------------
-    dstPtr = (byte *)BANKOFFSET ;
+    dstPtr = (byte *)BANKOFFSET;
 
 	init_ptrs_long(srcadr);
 
@@ -449,30 +523,31 @@ void dp_download_dspk56_long ( long srcadr, byte dstBank )
 	{
 		// For debugging, check that everything was written correctly.
 		init_ptrs_long(srcadr);
-		dstPtr = (byte *)BANKOFFSET ;
+		dstPtr = (byte *)BANKOFFSET;
 
 		while (decode_word_long(&data))  // get decompressed word from far ROM
 		{
 			//------------------------------------------
 			// compare the data 
 			//------------------------------------------
-			data2 = dp_getRAMwd( dstBank, dstPtr ) ;
+			data2 = dp_getRAMwd( dstBank, dstPtr );
 			if ( data != data2 )
 			{
-				x_debug_msg( "DSP EXT RAM download FAILED at adr=" ) ;
+				x_debug_msg( "DSP EXT RAM download FAILED at adr=" );
 				sendHexWord( (word)dstPtr );
-				x_debug_msg( "\r\nROM =" ) ; sendHexWord( (word)data );
-				x_debug_msg( "\r\nRAM =" ) ; sendHexWord( (word)data2 );
-				x_debug_msg( "\r\n" ) ;
-				break ;
+				x_debug_msg( "\r\nROM =" ); sendHexWord( (word)data );
+				x_debug_msg( "\r\nRAM =" ); sendHexWord( (word)data2 );
+				x_debug_msg( "\r\n" );
+				break;
 			}
-			dstPtr +=2 ;
+			dstPtr +=2;
 		}
 	}
 	x_debug_msg("dp_download_dspk56_long time=");
 	sendHexWord(x_elapsed_time(dl_timer));
 	sendCrLf();
 #endif // Z80_DEBUG_PRINT
-	ramlbr_port = currlb ;
+	ramlbr_port = currlb;
 }
 #endif  // COMPRESS_TABLES && MODEM_Z80
+

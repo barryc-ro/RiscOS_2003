@@ -1,0 +1,967 @@
+/*name and version number:@(#)dpv92mhi.c	1.56*/
+/*date of get: 		  05/03/01 11:36:02*/
+/*date of delta:	  05/03/01 10:48:58*/
+/****************************************************************
+File :	dpv92mhi.c
+Description :
+	V.92 VENUS Modem_on_hold state machine
+	both initiator and respondent are included
+	as well as caller-id on call waiting
+
+*****************************************************************/
+
+#define Z80_DEBUG_THIS_FILE
+
+#include "llglob_d.h"
+#include "dpglob.h"
+#include "z80glob.h"
+#include "allglobs.h"
+#include "z80flash.h"
+
+#if defined(CALLER_ID)
+# include "dpvcid2.h"
+#endif // CALLER_ID
+
+#if defined(CIDCW)
+ #include "ioglob_d.h"
+#endif // CIDCW
+
+#define KfEnable		0x1ff1
+#define	PcmV_Version	0x10b5
+extern void at_o(void);
+extern void dp_56k_setFill(byte);
+extern void dp_run_rom(void);
+extern void dp_print_state_pointers(void);
+extern void dp_cid_disable(void);
+#if defined(MODEM_Z80)
+ extern non_banked word dp_getdataword_24 ( long );
+# define getd24(A,i) dp_getdataword_24(address_24_of(&A)+i*2)
+#else
+# define getd24(A,i) A[i]
+#endif
+#if defined(V92_MODEM_ON_HOLD) || defined(CIDCW)
+extern void dp_v90_retrain_from_idle(void);
+#endif
+
+#if defined(V92_MODEM_ON_HOLD)
+
+extern void vpcm_set_calling_mode(void);
+extern void vpcm_set_answering_mode (void) ;
+extern void dp_mh_bg(void);
+
+ #include "dpv92mh0.h"	// v.92 modem-on-hold on call-waiting
+ #define Ctrl_save		0x24cf
+ #define TX_control		0x24d0
+ #define TX_dpsk		0x24d1
+ #define RX_status		0x24d2
+ #define RX_dpsk		0x24d3
+ #define MH_cntr		0x24d4
+ #define MH_WK			0xe4cc
+ #define MH_TxANSam		0xe4cd
+ #define MH_RxANSam		0xe4ce
+
+word mh_temp;
+byte mh_tidx;
+// translation table to convert MOH granted timeout periods
+const word T_val[16]={0,10,20,30,40,60,120,180,240,360,480,720,960,2500,0,0};
+
+/****************************************************************
+Routine : dp_download_mh()
+		Download DSP code for Modem on Hold
+*****************************************************************/
+void dp_download_mh(void)
+{
+	dp_disable_workaround(); // DPRAM_BAUD(0xf20) = DSP_NUL(0x8ece)
+	DOWNLOAD_DSP_SLOW(wMdmHld0);
+	x_debug_msg("after dp_download_mh()");
+}
+
+/****************************************************************
+Routine : dp_modem_on_hold()
+		When call waiting tone is detected, download and
+		start MOH state machine
+*****************************************************************/
+void dp_modem_on_hold(void)
+{
+	// avoid recurrent MOH calls
+	if ((G(dp_mh_state) == MH_NULL) || (G(dp_mh_state) == MH_WAIT_FOR_ATO))
+	{
+		dp_modem_command(MODEM_IDLE,0,0); // idle is inital condition for MOH
+		dp_download_mh();
+		G(dp_mh_state)=MH_I_INIT; // start initiator mode
+	}
+}
+
+/****************************************************************
+Routine : dp_v92mh_queue_ato()
+		Check if ATO can be executed without disturbing MOH
+		Return TRUE if ATO has to be queued
+*****************************************************************/
+byte dp_v92mh_queue_ato(void)
+{
+	if (G(dp_mh_state) == MH_WAIT_FOR_ATO)
+	{
+		G(dp_mh_state)=MH_CALL_ATO;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/****************************************************************
+Routine : mh_start_ANSam_detect()
+		start ANSam_detect if modem is on its way to MOH
+*****************************************************************/
+void mh_start_ANSam_detect(void)
+{
+	dp_write_dsp_ram(0x0f22,MH_RxANSam);
+	dp_modem_command(STARTUP,0x01,0x00);
+}
+
+/****************************************************************
+Routine : dp_do_flash()
+		Toggle hook switch to signal CO change of line
+*****************************************************************/
+void dp_do_flash(void)
+{
+	if (G(dp_mh_state) == MH_I_IDLE) // stop ANSam detection
+	{
+		dp_modem_command(MODEM_IDLE,0,0);
+	}
+    if( G( dp_daa_is_perseus ))
+    {
+	    x_output(IO_ON_HOOK);
+    }
+    else
+    {
+	    // bypass IO_ON_HOOK call to avoid DSP reseting vectors
+	    dp_regwrite(0x19,(byte) (dp_regread(0x19) & 0xEF)); // on_hook
+    }
+	if (G(S).ModemOptions.HookFlashTime)
+	 x_sleep((word) (10 * G(S).ModemOptions.HookFlashTime)); // avoid x_sleep(0)
+
+    if( G( dp_daa_is_perseus ))
+    {
+	    x_output(IO_OFF_HOOK);
+    }
+    else
+    {
+	    // bypass IO_OFF_HOOK call to avoid DSP reseting vectors
+	    dp_regwrite(0x19,(byte) (dp_regread(0x19) | 0x10)); // off_hook
+    }
+	if (G(dp_mh_state) == MH_I_IDLE) // stop ANSam detection
+	{
+		mh_start_ANSam_detect();
+	}
+}
+
+/****************************************************************
+Routine : dp_mh_timer_idx()
+		return index of granted hold time
+		and loop if needed (wait for MOH to be ready)
+*****************************************************************/
+byte dp_mh_timer_idx(void)
+{
+	word mh_t;
+	
+	if (G(dp_mh_state) == MH_NULL) // not in MOH
+		return 0;
+	// wait some time to have MOH in a known state
+	mh_t=x_current_time();
+	while (x_elapsed_time(mh_t) < 3000)
+	{
+		dp_mh_bg(); // process moh
+		if (G(dp_mh_state) == MH_I_IDLE || G(dp_mh_state) == MH_I_START_ANSam)
+			return mh_tidx;
+	}
+	x_debug_msg("dp_mh_timer_idx() timeout");
+	return 0;
+}
+
+/****************************************************************
+Routine : mh_wait_for_idle()
+		wait for dsp to stop MOH engine
+*****************************************************************/
+void mh_wait_for_idle(void)
+{
+	dp_mh_timer=x_current_time();
+	while (!(dp_read_dsp_ram(0x0f22) == AP_DSP_NUL 
+		&& dp_read_dsp_ram(S_PTR) == 0x21cf)
+		&& x_elapsed_time(dp_mh_timer) < 1500)
+	{
+		dp_print_state_pointers();
+	}
+
+	if (dp_read_dsp_ram(S_PTR) != 0x21cf)
+		x_debug_msg("dsp NOT idle");
+}
+
+/****************************************************************
+Routine : mh_elapsed_secs()
+		count number of elapsed secs - not very accurate though
+*****************************************************************/
+word mh_elapsed_secs(word *timer)
+{
+	word etime;
+	
+	etime=x_elapsed_time(*timer);
+	if (etime >= 1000)
+	{
+		send_debug_char('.');
+		*timer=x_current_time();
+		return etime/1000;
+	}
+	return 0;
+}
+
+/****************************************************************
+Routine : dp_mh_setIdleFill()
+		Set DpIdleFillChar based on current conditions.
+*****************************************************************/
+void dp_mh_setIdleFill(void)
+{
+	// simplistic view of which mode we're in.  This covers
+	// buffered mode, MNP4,5 and LAPM.
+	if (EC_NO == G(x_modem_ec))
+		G(DpIdleFillChar) = 0xff;
+	else
+		G(DpIdleFillChar) = 0x7e;
+}
+
+/****************************************************************
+Routine : dp_mh_bg()
+		Do MOH backgroung tasks
+		called by dpmain.c
+*****************************************************************/
+void dp_mh_bg(void)
+{
+	byte i,n;
+
+	switch ( G(dp_mh_state) )
+	{
+		case MH_NULL: // just return
+			return;
+
+		case MH_I_INIT: // initiator entry state
+			sendCrLf();
+			x_debug_msg("MH_INIT");
+			dp_run_rom();
+			dp_modem_command(MODEM_IDLE,0,0); // idle is inital condition for MOH
+			dp_write_dsp_ram(0x0f22, MH_WK); // init MDH vector
+			dp_write_dsp_ram(TX_control, 0x0001); // tx RT
+
+			dp_write_dsp_ram(S_PTR, 0x254d); // enable MOH workaround
+			G(dp_state) = DP_NULL ;
+			x_send_mail(DP_IO_RETRAIN_START, IO_TASK, NULL, 1);
+			dp_mh_timer=x_current_time(); // start main timer
+			G(dp_mh_state) = MH_I_WAIT_FOR_RT;
+			break;
+
+		case MH_I_WAIT_FOR_RT : // wait for RT before requesting Hold
+			if (x_elapsed_time(dp_mh_timer) < 50) // ignore 50 ms
+			{
+				break;
+			}
+			if (x_elapsed_time(dp_mh_timer) >= SECOND5) 
+				G(dp_mh_state) = MH_DROP_DATA;
+			if ( !(dp_read_dsp_ram(RX_status) & 0x01) )
+				break; // no RT detected yet
+			x_debug_msg("RT detected");
+			dp_mh_timer=x_current_time(); // reset timer
+			if (G(S).ModemOptions.MHOptions & MH_L2DEF)
+			{
+				// line 2 definite
+				dp_write_dsp_ram(TX_dpsk, 0x00A9); // MHclrd
+				dp_write_dsp_ram(TX_control, 0x0002); // tx dpsk
+				G(dp_mh_state) = MH_I_WAIT_FOR_CLEAR;
+				x_debug_msg("MHclrd sent");
+			}
+			else
+			{
+				// line 2 preferred
+				dp_write_dsp_ram(TX_dpsk, 0x00CC); // MHreq
+				dp_write_dsp_ram(TX_control, 0x0002); // tx dpsk
+				G(dp_mh_state) = MH_I_RCV_DPSK;
+				x_debug_msg("MHreq sent");
+			}
+			break;
+
+		case MH_I_WAIT_FOR_CLEAR : // be nice and wait for MHcda
+			if (x_elapsed_time(dp_mh_timer) > SECOND1)
+				G(dp_mh_state) = MH_DROP_DATA;
+
+			if (dp_read_dsp_ram(RX_status) & 0x02) // dpsk detected
+			{
+				mh_temp = (byte)dp_read_dsp_ram(RX_dpsk);
+				if (mh_temp == 0xDD)
+				{
+					G(dp_mh_state) = MH_DROP_DATA;
+					x_debug_msg("MHcda received");
+				}
+			}
+			break;
+
+		case MH_I_RCV_DPSK : // receive dpsk and process it
+			if (x_elapsed_time(dp_mh_timer) > 1500)
+			{
+				dp_write_dsp_ram(TX_control,0x0004); // dsp->idle
+				mh_wait_for_idle();
+				G(dp_mh_state) = MH_I_RETRAIN_PH2;
+				break;
+			}
+			if (dp_read_dsp_ram(RX_status) & 0x02) // dpsk detected
+			{
+				mh_temp=(byte)dp_read_dsp_ram(RX_dpsk);
+				if ((mh_temp&0x0F) == 0x0A) // MHack
+				{
+					dp_mh_timer=x_current_time(); // reset timer
+					x_debug_msg("MHack received");
+					dp_write_dsp_ram( TX_control, 0x0000 ); // tx silence
+					x_output(IO_DV_RLY_OFF); // connect parallel HS
+					mh_temp=mh_temp>>4; // mh_temp becomes timeout index
+					mh_tidx=0;
+					for (i=0;i<4;i++) // 4-bit mirror
+					{
+						mh_tidx=mh_tidx<<1;
+						if (mh_temp&0x01) mh_tidx++;
+						mh_temp=mh_temp>>1;
+					}
+					mh_temp=getd24(T_val,mh_tidx); // and then our timeout
+
+					x_debug_msg("Connection ON-HOLD");
+					dp_mh_T1=0; // reset T1 timer
+					G(dp_mh_state) = MH_I_START_ANSam;
+				}
+				else if (mh_temp==0xEE) // MHnack
+				{
+					x_debug_msg("MHnack received");
+					if (G(S).ModemOptions.MHOptions & MH_L2PREF)
+					{
+						// line 2 preferred - request to drop line
+						dp_write_dsp_ram(TX_dpsk, 0x00A9); // MHclrd
+						dp_write_dsp_ram(TX_control, 0x0002); // tx dpsk
+						G(dp_mh_state) = MH_I_WAIT_FOR_CLEAR;
+						x_debug_msg("MHclrd sent");
+					}
+					else
+					{
+						// request retrain
+						dp_write_dsp_ram(TX_dpsk, 0x00BB); // MHfrr
+						dp_write_dsp_ram(TX_control, 0x0002); // tx dpsk
+						x_debug_msg("MHfrr sent");
+						x_sleep(200); // wait for signal to reach server
+						dp_write_dsp_ram(TX_control,0x0004); // dsp->idle
+						mh_wait_for_idle();
+						G(dp_mh_state) = MH_I_RETRAIN_PH1;
+					}
+				}
+				else
+				{
+					x_debug_msg("Invalid DPSK - ignored");
+					sendHexWord(mh_temp);sendCrLf();
+				}
+			}
+			break;
+			
+		case MH_I_START_ANSam :
+			// Wait up to 8 seconds for the host application
+			// to switch to the incoming call.
+			// After that, we'll look for ANSam regardless
+			// of what the host has done.
+			dp_mh_T1 += mh_elapsed_secs(&dp_mh_timer);
+			if (dp_mh_T1 >= 8) 
+			{
+				dp_write_dsp_ram(TX_control,0x0004); // dsp->idle
+				mh_wait_for_idle();
+				mh_start_ANSam_detect();
+				G(dp_mh_state) = MH_I_IDLE;
+			}
+			break;
+
+		case MH_I_IDLE :
+			// Looking for ANSam.  (or timeout based on MOH granted time)
+			dp_mh_T1 += mh_elapsed_secs(&dp_mh_timer);
+			if (dp_mh_T1 >= mh_temp) 
+			{
+				// timeout - drop the line
+				G(dp_mh_state) = MH_DROP_DATA;
+			}
+			if (dp_read_dsp_ram(RX_status) & 0x08)
+			{
+				// got ANSam, start retraining
+				dp_mh_timer=x_current_time();
+				mh_wait_for_idle();
+				G(dp_mh_state) = MH_I_RETRAIN_PH1;
+			}
+			break;
+
+		case MH_I_RETRAIN_PH1 : // phase 1 retrain and back to data mode
+		case MH_I_RETRAIN_PH2 : // phase 2
+			x_output(IO_DV_RLY_ON); // disconnect parallel HS
+			x_debug_msg("RETRAIN");
+			dp_mh_setIdleFill();	// set DpIdleFillChar for async/hdlc mode
+			if (G(dp_mh_state) == MH_I_RETRAIN_PH1)
+			{
+				x_debug_msg("Phase 1");
+				if (G(S).ModemOptions.Rate56K) // S38!=0
+				{
+					if (G(S).ModemOptions.VpcmOption & BIT2)
+				{
+					// QC is enabled - tell DSP
+					dp_write_dsp_ram(K56Opt,
+						 (word) ((dp_read_dsp_ram(K56Opt)|0x0100)&~0x0200));
+				}
+				vpcm_set_calling_mode();
+				vpcm_startup();				// (overwrites DpIdleFillChar)
+				G(dp_56k_connected) = 1;
+				G(dp_56k_user_retrain) = 0;	// we don't want a connect message
+					// already connected, no new protocol negotiation
+					dp_mh_setIdleFill();		// set DpIdleFillChar
+				}
+				else
+				{
+					dp_modem_command(STARTUP, ORIGINATE, 0);
+					G(dp_state) = DP_V34_RETRAIN;
+					G(dp_line_state) = DP_LINE_RETRAINING;
+				}
+			}
+			else // phase 2
+			{
+				x_debug_msg("Phase 2");
+				if (G(vpcm_mode)) // v90/v92 retrain
+				{
+					dp_write_dsp_ram(0x0003,0x000e);
+					dp_write_dsp_ram(0x000c,0x000f);
+					dp_v90_retrain_from_idle();
+				}
+				else
+				{
+					// V.34 retrain.
+					dp_write_dsp_ram(0x0080, 0x254d);	// s_ptr = 0x254d
+					dp_retrain_cmd();
+					G(dp_state) = DP_ON_DIAL;
+					x_send_mail(DP_IO_RETRAIN_OVER, IO_TASK, NULL, 1);
+				}
+			}
+			dp_mh_timer=x_current_time(); // reset timer to avoid race problem
+			G(dp_mh_state) = MH_WAIT_FOR_ATO;
+			break;
+
+		case MH_R_INIT: // respondent init sequence
+			x_debug_msg("dp_mhrsp_state - MH_INIT");
+			dp_run_rom();
+			dp_modem_command(MODEM_IDLE,0,0);		// inital condition for MOH
+			dp_write_dsp_ram(TX_control, 0x0001);	// tx RT
+			dp_write_dsp_ram(0x0f22, MH_WK);		// init MDH vector
+			dp_write_dsp_ram(S_PTR,0x254d);
+			G(dp_state) = DP_NULL ;
+			dp_mh_timer=x_current_time();			// start main timer
+			G(dp_mh_state) = MH_R_RCV_DPSK;
+			break;
+
+		case MH_R_RCV_DPSK : // wait for a dspk cmmd
+			if (x_elapsed_time(dp_mh_timer)>=SECOND5)
+				G(dp_mh_state) = MH_R_RETRAIN_PH2;
+			if (dp_read_dsp_ram(RX_status) & 0x02) // dpsk detected
+			{
+				dp_mh_timer=x_current_time(); // restart main timer
+				mh_temp = (byte)dp_read_dsp_ram(RX_dpsk);
+				if (mh_temp == 0xCC) // MHreq
+				{
+					x_debug_msg("MHreq received");
+					if (G(S).ModemOptions.MHOptions & MH_GRANT)
+					{
+						mh_temp=G(S).ModemOptions.MHOptions&0xF0; // T1
+						dp_write_dsp_ram(TX_dpsk, (word) (0x000A|mh_temp)); // MHack
+						dp_write_dsp_ram(TX_control, 0x0002); // tx dpsk
+						mh_temp = mh_temp >> 4; // mh_temp becomes timeout index
+						for (i=0,n=0;i<4;i++) // 4-bit mirror
+						{
+							n= n << 1;
+							if (mh_temp&0x01)
+								n++;
+							mh_temp = mh_temp >> 1;
+						}
+						mh_temp = getd24(T_val,n); // and then our timeout
+						G(dp_mh_state) = MH_R_WAIT_FOR_SILENCE;
+						break;
+					}
+					x_debug_msg("MHnack sent");
+					dp_write_dsp_ram(TX_dpsk, 0x00EE); // MHnack
+					dp_write_dsp_ram(TX_control, 0x0002); // tx dpsk
+					G(dp_mh_state) = MH_R_WAIT_FOR_CLEAR;
+					break;
+				}
+				else 
+					if ((mh_temp&0x0F)==0x09) // MHclrd, we ignore reason
+				{
+					G(dp_mh_state) = MH_R_WAIT_FOR_CLEAR;
+					break;
+				}
+				else 
+					if (mh_temp==0xBB) // MHfrr
+				{
+					x_debug_msg("MHfrr received");
+					G(dp_mh_state) = MH_R_WAIT_FOR_CLEAR; // handle at next state
+				}
+				else
+				{
+					x_debug_msg("Invalid DPSK - ignored");
+					sendHexWord(mh_temp);sendCrLf();
+				}
+			}
+			break;
+
+		case MH_R_WAIT_FOR_CLEAR : // wait for MHclrd or MHfrr or RT
+			if (x_elapsed_time(dp_mh_timer)>=SECOND5)
+				G(dp_mh_state) = MH_DROP_DATA;
+			if (dp_read_dsp_ram(RX_status) & 0x01) // RT detected
+			{
+				G(dp_mh_state) = MH_R_RETRAIN_PH2;
+				x_debug_msg("RT detected");
+			}
+			if (dp_read_dsp_ram(RX_status)&0x02) // dpsk detected
+				mh_temp=(byte)dp_read_dsp_ram(RX_dpsk);
+
+			if ((mh_temp & 0x0F) == 0x09) // MHclrd, we ignore reason
+			{
+				x_debug_msg("MHclrd received");
+				dp_write_dsp_ram(TX_dpsk, 0x00DD); // MHcda
+				dp_write_dsp_ram(TX_control, 0x0002); // tx dpsk
+				dp_mh_timer=x_current_time(); // restart main timer
+				mh_temp=0xFF; // flag next event
+				G(dp_mh_state) = MH_R_WAIT_FOR_SILENCE;
+				break;
+			}
+			else if (mh_temp==0xBB) // MHfrr
+			{
+				x_debug_msg("MHfrr received");
+				mh_temp=1; // 10 sec. controller timeout
+				dp_mh_timer=x_current_time(); // restart main timer
+				dp_mh_T1=0; // start T1 timer
+				dp_write_dsp_ram(MH_cntr, 0x0000); // init ANSam
+				dp_write_dsp_ram(0x0f22, MH_TxANSam);
+				if (G(vpcm_mode)==0)
+					dp_modem_command(STARTUP,0x01,0x00);
+				else // v90
+				{
+					dp_write_dsp_ram(0x003d,0x4186);
+					dp_write_dsp_ram(0x0003,0x000d);
+					dp_write_dsp_ram(0x080d,0xbfff);
+					dp_write_dsp_ram(0x0823,0x0fff);
+					dp_write_dsp_ram(0x000c,0x007f);
+					dp_write_dsp_ram(0x1ff6,0x0016);
+					dp_modem_command(GOTO_CMD,0xd5,0x00);
+				}
+				x_debug_msg("goto MH_idle");
+				G(dp_mh_state) = MH_R_IDLE;
+			}
+			break;
+
+		case MH_R_WAIT_FOR_SILENCE :
+			// wait till neither RT nor dpsk are detected to continue
+			if (x_elapsed_time(dp_mh_timer)>=SECOND2 ||
+				!dp_read_dsp_ram(RX_status))
+			{
+				if (mh_temp==0xFF) 
+				{
+					G(dp_mh_state) = MH_DROP_DATA; //end call
+				}
+				else
+				{
+					x_debug_msg("Connection ON-HOLD");
+					x_send_mail(AT_OK, AT_TASK, NULL, 0 );
+					x_sleep(500); // don't rush to send ANSam yet
+					dp_mh_T1=0; // start T1 timer
+					dp_write_dsp_ram(MH_cntr, 0x0000); // init ANSam
+					dp_write_dsp_ram(0x0f22, MH_TxANSam);
+					if (G(vpcm_mode)==0)
+					{
+						// init PH1 and send ANSam
+						dp_modem_command(STARTUP,ANSWER,0x00);
+					}
+					else // v90/v92
+					{
+						dp_write_dsp_ram(0x003d,0x4186);
+						dp_write_dsp_ram(0x0003,0x000d);
+						dp_write_dsp_ram(0x080d,0xbfff);
+						dp_write_dsp_ram(0x0823,0x0fff);
+						dp_write_dsp_ram(0x000c,0x007f);
+						dp_write_dsp_ram(0x1ff6,0x0016);
+						dp_modem_command(GOTO_CMD,0xd5,0x00); // -> SwitchBackDone
+					}
+					dp_write_dsp_ram(MH_cntr, 0x8000); // a very long timeout
+					//dp_write_dsp_ram(TX_control, 0x0001); // tx RT
+					G(dp_mh_state) = MH_R_IDLE;
+					x_debug_msg("goto MH_idle");
+				}
+			}
+			break;
+
+		case MH_R_IDLE : // wait for T1 timer
+			dp_mh_T1 += mh_elapsed_secs(&dp_mh_timer);
+			if (dp_mh_T1>=mh_temp) 
+				G(dp_mh_state) = MH_DROP_DATA;
+			if ( (dp_read_dsp_ram(RX_status) & 0x04) ) // RT detected!
+				G(dp_mh_state) = MH_R_RETRAIN_PH1;
+			break;
+
+		case MH_R_RETRAIN_PH1 : // phase 1 retrain and back to data mode
+		case MH_R_RETRAIN_PH2 : // phase 2
+			x_debug_msg("RETRAIN");
+			if (G(dp_mh_state) == MH_R_RETRAIN_PH2)
+			{
+				dp_write_dsp_ram(0x0081, 0x8ece);	// AuxVector0 = null
+				dp_write_dsp_ram(0x0080, 0x254d);	// s_ptr = 0x254d
+				dp_write_dsp_ram(0x0f22, 0x8ece);
+				if (G(vpcm_mode))
+				{
+					dp_write_dsp_ram(0x0f20,0xd0c8); // prepare a v.90 retrain
+				}
+				dp_56k_setFill(G(DpIdleFillChar));
+				dp_regwrite(0x0037, 0x000f); // retrain
+				G(dp_state) = DP_ON_DIAL;
+			}
+			else
+				x_send_mail_dp1(DSP_RETRAIN); // take care of both v90/v34 retrain
+			dp_mh_timer=x_current_time(); // reset timer to avoid race problem
+			G(dp_mh_state) = MH_EXIT;
+			break;
+
+		case MH_WAIT_FOR_ATO:
+			dp_mh_timer=x_current_time(); // reset timer
+			break;
+
+		case MH_CALL_ATO:
+			// wait up to 30 secs for reconnect to be over
+			if ((G(dp_line_state) == DP_LINE_CONNECTED)
+				|| (x_elapsed_time(dp_mh_timer) > SECOND30))
+			{
+				G(dp_mh_state)=MH_EXIT;
+				at_o();
+			}
+			break;
+
+		case MH_DROP_DATA : // switch line and drop data mode
+			x_debug_msg("Drop data mode...");
+			dp_modem_command(MODEM_IDLE,0,0); // stop DSP
+			dp_write_dsp_ram(0x0081, 0x8ece);	// AuxVector0 = null
+			dp_write_dsp_ram(0x80,0x21cf);
+			dp_write_dsp_ram(0x0f22, 0x8ece);
+			G(dp_state) = DP_CALL_FAILURE ;
+			G(x_status).ud_TerminationCause = UD_TC_NO_CARRIER;
+			G(x_dial_residual) = MR_CD_DISCONNECT ;
+			G(x_status).TerminationCause = 1 ;	// remote terminate
+			G(dp_mh_state) = MH_NULL;
+			return;
+
+		case MH_EXIT : // exit state machine
+			x_debug_msg("MH_EXIT");
+			x_send_mail(DP_IO_RETRAIN_OVER, IO_TASK, NULL, 1);
+			G(dp_mh_state) = MH_NULL;
+			return;
+
+	} // switch
+
+	if (x_elapsed_time(dp_mh_timer)>=MINUTE1)
+	{
+		x_debug_msg("Timer expired");
+		dp_mh_state=MH_DROP_DATA; // terminate state machine
+	}
+}
+#endif // V92_MODEM_ON_HOLD
+
+#if (defined(V92_MODEM_ON_HOLD) || defined(CIDCW)) && defined(VPCM_CLIENT)
+/****************************************************************
+Routine : dp_v90_retrain_from_idle()
+
+	Do V.90 retrain starting with DSP in idle.
+*****************************************************************/
+void dp_v90_retrain_from_idle(void)
+{
+#if defined(DRAGNET2)
+	word i;
+#endif
+
+	x_debug_msg("dp_v90_retrain_from_idle");
+#if defined(DRAGNET2)
+	dp_write_dsp_ram(0x00dc,0x0000);
+	dp_write_dsp_ram(0x0802,0x20ff);
+	dp_write_dsp_ram(0x0828,0x0004);
+	dp_write_dsp_ram(0x0827,0x00dd);
+	dp_write_dsp_ram(0x082a,0x0003);
+	dp_update_rate();
+
+	dp_write_dsp_ram(0x0083,0x0000);	// we're answer mode for v.90
+	dp_write_dsp_ram(0x0823,0x0100);
+	dp_write_dsp_ram(0x082f,0x0080);    // herb agc
+
+	dp_write_dsp_ram(S_PTR,0x254d);
+
+	i=x_current_time();
+	while (dp_read_dsp_ram(S_PTR)!=0x7652 && x_elapsed_time(i)<1500)
+		dp_print_state_pointers();
+
+	dp_write_dsp_ram(KfEnable, 0x0001);
+
+	vpcm_download_phase3_phase4 () ;
+	dp_write_dsp_ram(0x0f20,0xd0c8);
+	dp_write_dsp_ram(0x10b4,0x0000);
+	dp_write_dsp_ram(0x1ff0, 0x0000);
+	dp_write_dsp_ram(0x20cb,0x0000);
+	dp_write_dsp_ram(0x1ff6,0x0016);
+	dp_write_dsp_ram(0x1e57,0x0001);
+#else // VENUS
+	dp_write_dsp_ram(0x080d,0xbfff);
+	dp_write_dsp_ram(0x0823,0x03ff);
+	dp_write_dsp_ram(KfEnable, 0x0001);
+	dp_write_dsp_ram(0x0ee4,0x00a0);
+	dp_write_dsp_ram(0x0ee5,0xffa0);
+	dp_modem_command(GOTO_CMD,0xd1,0x19);
+	dp_download_PCM_V92P2();
+	dp_write_dsp_ram(V92DnLdCtr, 0x2); // ram 0x1ff8
+#endif // DRAGNET2
+	G(k56_timer) = G(dp_timer1) = G(dp_timer) = x_current_time ();
+	dp_mh_setIdleFill();
+	G(lastRetrain) = 0;
+	G(dp_56k_user_retrain) = 0;
+	G(dp_count) = 1;
+	G(dp_line_state) = DP_LINE_RETRAINING;
+	G(dp_state) = DP_56K ;
+	G(dp_56k_state) = VPCM_DOWNLOAD_SLICER_TABLE ;
+}
+#endif
+
+#if defined(CIDCW)
+const word loc_addr[]={1,2,3,0xc,0x80d,0x828,0x82f};
+/****************************************************************
+Routine : dp_cidcw()
+
+	Caller ID on Call Waiting
+*****************************************************************/
+void dp_cidcw(void)
+{
+	word i,loc_sav[7],sas_stat,cas_stat;
+
+	// save retrain values.  (will restore these later)
+	for (i=0;i < sizeof(loc_addr)/2;i++)
+	{
+		loc_sav[i] = dp_read_dsp_ram(getd24(loc_addr,i));
+	}
+	// sas/cas detection flags are located at different
+	// addresses (v34 vs. v90/v92)
+	if (G(vpcm_mode))
+	{
+		sas_stat=0x1e2d;
+		cas_stat=0x1e47;
+	}
+	else
+	{
+		sas_stat=0x182c;
+		cas_stat=0x1829;
+	}
+	// if SAS tone was detected, wait for CAS
+	if (dp_read_dsp_ram(sas_stat))
+	{
+		x_debug_msg("SAS detected");
+		i=x_current_time();
+		while (!dp_read_dsp_ram(cas_stat) && x_elapsed_time(i)<900);
+		if (x_elapsed_time(i)<900)
+			x_debug_msg("CAS detected");
+	}
+	else 
+	{
+		x_debug_msg("only CAS detected");
+	}
+	// clear SAS/CAS status
+	dp_write_dsp_ram(sas_stat,0);
+	dp_write_dsp_ram(cas_stat,0);
+	// clear cw bit
+	dp_write_dsp_ram(DSP_STATUS_RAM, (word) (dp_read_dsp_ram(DSP_STATUS_RAM) & 0x7fff));
+	dp_disable_workaround(); // DPRAM_BAUD(0xf20) = DSP_NUL(0x8ece)
+	dp_modem_command(MODEM_IDLE,0,0);
+	if (G(vpcm_mode))
+	{
+		dp_run_rom(); // switch bank
+	}
+	x_sleep(50); // wait for bank switch
+
+	// send ACK
+	dp_write_dsp_ram(0x0005, 0x2ed8); // sin of 941 Hz
+	dp_write_dsp_ram(0x0006, 0x2b9b); // cos of 941 Hz
+	dp_write_dsp_ram(0x0007, 0x3f52); // sin of 1633 Hz
+	dp_write_dsp_ram(0x0008, 0x094b); // cos of 1644 Hz
+	dp_write_dsp_ram(0x0011, 0x000a); // -10dB 941 Hz tone
+	dp_write_dsp_ram(0x0012, 0x0008); // -8dB 1644 Hz tone
+	dp_write_dsp_ram(0x0017, 0x003c); // duration of ACK tone (60ms)
+	dp_modem_command(GENERATE_TONES, 0x02, 0x00);
+
+	// wait for end of tone
+	i=x_current_time();
+	while (x_elapsed_time(i) < 100 &&
+		dp_read_dsp_ram(0x3a) & 0x10)
+		;
+
+	x_debug_msg("ACK tone sent!");
+
+	dp_cid_cmd();
+
+#if defined(CID_POLLING)
+	dp_bamil_rd7 |= BIT2; // disable DSP core ints (after STARTUP)
+	dp_regwrite(0xd7,dp_bamil_rd7);
+#endif
+
+	io_cid_init(); 
+#if defined(CID_POLLING)
+	// get data by polling - camil_rd7_bit2 should be 1
+	do
+	{
+		byte byte_count;
+
+		if ((dp_regread(0xb7) & 0x10) == 0x10)
+		{
+			byte_count=dp_regread(0xb0)&0x1f;
+			for (i=0;i < byte_count;i++)
+			{
+				*io_dce_rx_wptr = (byte)dp_regread(i+0x90);
+				sendHexByte(*io_dce_rx_wptr);
+				sendCrLf();
+				io_dce_rx_wptr++;
+				if (io_dce_rx_wptr >= io_dce_rx_eptr)
+					io_dce_rx_wptr = io_dce_rx_sptr;
+			}
+			dp_regread(0xb0); // next interrupt
+		}
+	}
+#endif
+	// wait for caller id to completely come in
+	while(io_rx_cid())
+		;
+	dp_cid_disable();
+	x_debug_msg("caller id processed");
+
+	dp_modem_command(MODEM_IDLE,0,0);
+#if defined(CID_POLLING)
+	dp_bamil_rd7&=~BIT2; // enable DSP core ints
+	dp_regwrite(0xd7,dp_bamil_rd7);
+#endif
+	io_cid_init(); // continue with a clean buffer 
+	// restore values before continuing
+	for (i=0;i < sizeof(loc_addr)/2; i++) 
+		dp_write_dsp_ram(getd24(loc_addr,i), loc_sav[i]);
+
+	if (G(dp_CallWaitingEnable) == 1) // disconnect
+	{
+		G(dp_state) = DP_CALL_FAILURE ;
+		G(x_status).ud_TerminationCause = UD_TC_NO_CARRIER;
+		G(x_dial_residual) = MR_CD_DISCONNECT ;
+		G(x_status).TerminationCause = 1 ;	// remote terminate
+#if defined(V92_MODEM_ON_HOLD)
+		G(dp_mh_state) = MH_NULL;
+#endif
+		return;
+	}
+#if defined(VPCM_CLIENT)
+	if (G(vpcm_mode))
+	{
+		// V90/V92
+		dp_v90_retrain_from_idle();
+	}
+	else 
+#endif // VPCM_CLIENT
+	{
+		// V.34 mode
+		dp_write_dsp_ram(0x003f,0x0000);
+		dp_write_dsp_ram(0x0080,0x24d5);
+		dp_write_dsp_ram(0x0083,0x0001);
+		dp_write_dsp_ram(0x00dc,0x0000);
+		dp_write_dsp_ram(0x0802,0x21ff);
+		dp_write_dsp_ram(0x0827,0x00dd);
+		dp_write_dsp_ram(0x0828,0x0004);
+		dp_write_dsp_ram(0x082a,0x0003);
+		dp_write_dsp_ram(0x082f,0x0045);
+#if defined(VPCM_CLIENT)
+		dp_56k_setFill(G(DpIdleFillChar));
+#endif
+		dp_retrain_cmd();
+	}
+}
+#endif // CIDCW
+
+#if defined(CALL_WAITING)
+#include "dpclwait.h"			// DSP download for call waiting
+#include "dpv34rt0.h"			// v34 retrain work around
+
+/****************************************************************
+Routine : dp_download_call_waiting
+Description : Download the V.34 call waiting workaround
+		Must later write BR_PTR to enable it.
+*****************************************************************/
+void dp_download_call_waiting()
+{
+	x_debug_msg("dp_download_call_waiting()");
+	DOWNLOAD_DSP_SLOW(wCallWait0);
+}
+
+/****************************************************************
+Routine : dp_enable_call_waiting
+Description : Enable and/or download CW detection
+*****************************************************************/
+void dp_enable_call_waiting(void)
+{
+
+	if ( (G(dp_CallWaitingEnable) != 2)
+#if defined(MODEM_Z80)
+		&& z80_venus2			// don't allow call waiting for Venus1
+#endif // MODEM_Z80
+		)
+	{
+		x_debug_msg("CW enabled");
+		if (G(vpcm_mode))
+		{
+			// enable V.90 call waiting
+			// only if we are not connected pcm upstream for now
+			dp_write_dsp_ram(K56Opt, (word) (dp_read_dsp_ram (K56Opt) | 1));
+		}
+		else
+		{ 
+			dp_disable_workaround();		// DPRAM_BAUD(0xf20) = DSP_NUL(0x8ece)
+			dp_download_call_waiting();
+			dp_write_dsp_ram(BR_PTR,DSP_CW_INIT_V34); // init CW w/o v34RT
+		}
+	}
+}
+
+/****************************************************************
+Routine : dp_call_waiting
+Description : We've received a call waiting tone.
+		Take care of platform-specific actions.  This
+		function does not need to take care of the retrain.
+*****************************************************************/
+void dp_call_waiting( void )
+{
+	x_debug_msg("dp_call_waiting() - call waiting tone detected");
+	z80_uart_ri_on(); // ring indicator ON
+#if defined(CIDCW)
+	if (G(S).ModemOptions.CallerId)
+	{
+		dp_cidcw(); // collect Caller ID info.
+	}
+#endif
+	x_sleep(250); // give ring indicator some time
+	z80_uart_ri_off(); // ring indicator OFF
+}
+#endif // CALL_WAITING
+
+#if defined(CALLER_ID)
+/****************************************************************
+Routine : dp_download_cid_patch
+Description : Download the cid patch to improve fsk decoding
+*****************************************************************/
+void dp_download_cid_patch(void)
+{
+	DOWNLOAD_DSP(wVCIDpatch0);
+}
+#endif // CALLER_ID
+
+
+

@@ -1,6 +1,6 @@
-/*name and version number:@(#)faxecm.c	1.30*/
-/*date of get: 		  12/15/00 10:10:45*/
-/*date of delta:	  11/30/00 19:25:14*/
+/*name and version number:@(#)faxecm.c	1.36*/
+/*date of get: 		  04/30/01 10:13:24*/
+/*date of delta:	  04/27/01 17:11:09*/
 /****************************************************************
 File :	faxecm.c
 
@@ -73,8 +73,6 @@ Revision History :
 	#include "allglobs.h"
 
 //	#define x_debug_msg(x) (ddputs_24l(x))  // ***DEBUG***
-
-typedef	int* fptr;
 
 #define DLE_DLE 0x10
 #define DLE_PRI 0x21
@@ -178,6 +176,7 @@ struct ECM_PPR
 	byte dte_xfer;      // State variable for DCE-DTE data transfers
 	byte dte_cnt;       // Number of frame bytes to send to DTE
 	byte last_rsp;      // Last response sent
+	word frm_len;       // Number of bytes in received frame
 };
 
 #ifdef TEST_RR_RNR // ***DEBUG***
@@ -216,7 +215,6 @@ struct ECM_PPR
 #define ECM_ACTIVE 0x01
 
 #define FRAME_SIZE (G(ecm_stat) & FRM_256 ? 256 : 64)
-#define V42BIS_FRAG_SIZE	(12*1024)	// Need at least 12K from v42bis mem
 #define NUM_BUF_FRAGS	(sizeof(sbuf_tx)/sizeof(const byte *))
 #define LAST_BUF_FRAG	(NUM_BUF_FRAGS - 1)
 
@@ -226,20 +224,18 @@ struct ECM_PPR
 	#define BUFF(x)  ( &BGlobArray[ModemNum].x[0] )
 	#define RD_BASE  (G(ecm_buf.idx_rd) == LAST_BUF_FRAG ? (unsigned long)&BGlobArray[ModemNum] : (unsigned long)GlobPtr) +
 	#define WR_BASE  (G(ecm_buf.idx_wr) == LAST_BUF_FRAG ? (unsigned long)&BGlobArray[ModemNum] : (unsigned long)GlobPtr) +
-	#define V42BIS_FRAG_START	( G_VAR(v42bis_tree) )
 #else
 	#define G_VAR(x) x
 	#define B_VAR(x) x
 	#define BUFF(x)  x    
 	#define RD_BASE
 	#define WR_BASE  
-	#define V42BIS_FRAG_START	( V42BIS_MEM_START )
 #endif
 
 /* ------------------------ */
 /* Declaration of constants */
 /* ------------------------ */
-#if defined(MODEM_ARM)
+#if defined(MODEM_ARM) || defined(DRAGNET)
 	#define FRAGMENT_END 2047
 #else
 // Check if 16K of RAM is available for the ECM buffer (See comment at beginning of file)
@@ -247,7 +243,7 @@ struct ECM_PPR
 	#if ( (sizeof (G_VAR(lapm_transmit_frame)) >= 2048) &&  \
 			(sizeof (B_VAR(io_dte_tx_buff)) >= 2100) && \
 			(sizeof (B_VAR(io_dte_rx_buff)) >= 2100) && \
-			(V42BIS_MEM_SIZE >= V42BIS_FRAG_SIZE) )
+			(sizeof (SHARED_RAM) >= FAX_ECM_SHARED_FRAG_SIZE) )
 
 		#define FRAGMENT_END 2047
 
@@ -259,28 +255,28 @@ struct ECM_PPR
 
 static const byte* const sbuf_tx [] =  /* Starting address of fragments for TX */
 {
-	(const byte*) V42BIS_FRAG_START,
+	(const byte*) shared_ram.fax_ecm_buf,
 	(const byte*) G_VAR(lapm_transmit_frame),
 	(const byte*) B_VAR(io_dte_tx_buff)         /* NOTE: Use DTE Tx buffer when transmitting a FAX */
 };
 
 static const byte* const ebuf_tx [] =  /* Ending address of fragments for TX */
 {
-	(const byte*) V42BIS_FRAG_START + V42BIS_FRAG_SIZE - 1,
+	(const byte*) shared_ram.fax_ecm_buf + FAX_ECM_SHARED_FRAG_SIZE - 1,
 	(const byte*) G_VAR(lapm_transmit_frame) + FRAGMENT_END,
 	(const byte*) B_VAR(io_dte_tx_buff) + FRAGMENT_END
 };
 
 static const byte* const sbuf_rx [] =  /* Starting address of fragments for RX */
 {
-	(const byte*) V42BIS_FRAG_START,
+	(const byte*) shared_ram.fax_ecm_buf,
 	(const byte*) G_VAR(lapm_transmit_frame),
 	(const byte*) B_VAR(io_dte_rx_buff)         /* NOTE: Use DTE Rx buffer when receiving a FAX */
 };
 
 static const byte* const ebuf_rx [] =  /* Ending address of fragments for RX */
 {
-	(const byte*) V42BIS_FRAG_START + V42BIS_FRAG_SIZE - 1,
+	(const byte*) shared_ram.fax_ecm_buf + FAX_ECM_SHARED_FRAG_SIZE - 1,
 	(const byte*) G_VAR(lapm_transmit_frame) + FRAGMENT_END,
 	(const byte*) B_VAR(io_dte_rx_buff) + FRAGMENT_END
 };
@@ -289,21 +285,21 @@ static const byte* const ebuf_rx [] =  /* Ending address of fragments for RX */
 /* State Table for ECM Transmission */
 /* -------------------------------- */
 
-static const fptr ecm_tx [] = /* States for Transmission using ECM */
+static const PFV ecm_tx [] = /* States for Transmission using ECM */
 {
-	(fptr) tx_pp_setup,         /* ECM_ORG1:  0-Setup to transmit a partial page       */
-	(fptr) ecm_buf_ctrl,        /* ECM_ORG3:  1-Xfer data between DTE/ECM/DCE buffers  */
-	(fptr) send_ecm_pms,        /* ECM_ORG5:  2-Send post-message status               */
-	(fptr) get_ecm_pmr,         /* ECM_ORG4:  3-Get the post-message response          */
-	(fptr) tx_pp_setup,         /* ECM_ORG2:  4-Setup to re-transmit a partial page    */
-	(fptr) resend_err_frames,   /*            5-Resend error frames                    */
-	(fptr) send_rr,             /* ECM_ORG6:  6-Send the RR query to the remote FAX    */
-	(fptr) get_rr_rsp,          /*            7-Get response to RR query               */
-	(fptr) send_ctc,            /* ECM_ORG7:  8-Send the CTC command to remote FAX     */
-	(fptr) get_ctc_rsp,         /*            9-Get response to CTC command            */
-	(fptr) send_eor,            /* ECM_ORG8: 10-Send the EOR command to remote FAX     */
-	(fptr) get_eor_rsp,         /* ECM_ORG10:11-Get response to EOR command            */
-	(fptr) ecm_dcn              /* ECM_ORG9: 12-Return to state machine in iofax_c2.c  */
+	tx_pp_setup,         /* ECM_ORG1:  0-Setup to transmit a partial page       */
+	ecm_buf_ctrl,        /* ECM_ORG3:  1-Xfer data between DTE/ECM/DCE buffers  */
+	send_ecm_pms,        /* ECM_ORG5:  2-Send post-message status               */
+	get_ecm_pmr,         /* ECM_ORG4:  3-Get the post-message response          */
+	tx_pp_setup,         /* ECM_ORG2:  4-Setup to re-transmit a partial page    */
+	resend_err_frames,   /*            5-Resend error frames                    */
+	send_rr,             /* ECM_ORG6:  6-Send the RR query to the remote FAX    */
+	get_rr_rsp,          /*            7-Get response to RR query               */
+	send_ctc,            /* ECM_ORG7:  8-Send the CTC command to remote FAX     */
+	get_ctc_rsp,         /*            9-Get response to CTC command            */
+	send_eor,            /* ECM_ORG8: 10-Send the EOR command to remote FAX     */
+	get_eor_rsp,         /* ECM_ORG10:11-Get response to EOR command            */
+	ecm_dcn              /* ECM_ORG9: 12-Return to state machine in iofax_c2.c  */
 };
 
 /* Labels for various ECM Transmit states */
@@ -323,23 +319,23 @@ static const fptr ecm_tx [] = /* States for Transmission using ECM */
 // State Table for ECM Reception //
 // ----------------------------- //
 
-static const fptr ecm_rx [] =
+static const PFV ecm_rx [] =
 {
-	(fptr) rx_pp_setup,      // ECM_ANS1: 0: Set pump to receive ECM frames
-	(fptr) rx_ecm_frms,      //           1: Receive ECM frames
-	(fptr) get_ecm_rsp,      // ECM_ANS6: 2: Wait for the post-message status
-	(fptr) process_pps,      //           3: Process the post-message status
-	(fptr) send_mcf_rsp,     // ECM_ANS4: 4: Send MCF response to remote FAX modem
+	rx_pp_setup,      // ECM_ANS1: 0: Set pump to receive ECM frames
+	rx_ecm_frms,      //           1: Receive ECM frames
+	get_ecm_rsp,      // ECM_ANS6: 2: Wait for the post-message status
+	process_pps,      //           3: Process the post-message status
+	send_mcf_rsp,     // ECM_ANS4: 4: Send MCF response to remote FAX modem
 
-	(fptr) send_ppr_rsp,     // ECM_ANS2: 5: Send partial-page report to remote FAX modem
-	(fptr) get_ecm_rsp,      // ECM_ANS7: 6: Get CTC or EOR command
-	(fptr) send_ctr_err,     // ECM_ANS5: 7: Send CTR or ERR response
+	send_ppr_rsp,     // ECM_ANS2: 5: Send partial-page report to remote FAX modem
+	get_ecm_rsp,      // ECM_ANS7: 6: Get CTC or EOR command
+	send_ctr_err,     // ECM_ANS5: 7: Send CTR or ERR response
 
-	(fptr) send_rnr_rsp,     // ECM_ANS3: 8: Do RNR/RR flow control sequence
-	(fptr) get_ecm_rsp,      //           9: Get response to RNR
-	(fptr) chk_rnr_rsp,      //          10: Process response to RNR
+	send_rnr_rsp,     // ECM_ANS3: 8: Do RNR/RR flow control sequence
+	get_ecm_rsp,      //           9: Get response to RNR
+	chk_rnr_rsp,      //          10: Process response to RNR
 
-	(fptr) exit_ecm_rx       // ECM_ANSX:11: Return to Class 2/2.0 non-ECM state machine
+	exit_ecm_rx       // ECM_ANSX:11: Return to Class 2/2.0 non-ECM state machine
 };
 
 #define ECM_ANS1 0
@@ -2370,7 +2366,7 @@ void chk_ecm_timeout (byte state)
 		x_debug_msg("\nECM Time-out!");   // ***DEBUG***
 		ddputs_nnl("state & substate: "); // ***DEBUG***
 		sendDecByte(G(ecm_state));           // ***DEBUG***
-		sendDumbChar (' ');               // ***DEBUG***
+		send_debug_char (' ');               // ***DEBUG***
 		sendDecByte(G(ecm_ss));              // ***DEBUG***
 		x_debug_msg(" ");                 // ***DEBUG***
 #endif
@@ -2414,7 +2410,7 @@ void chk_ecm_abort (byte state)
 			x_debug_msg("\nECM Aborted!");    // ***DEBUG***
 			ddputs_nnl("state & substate: "); // ***DEBUG***
 			sendDecByte(G(ecm_state));           // ***DEBUG***
-			sendDumbChar (' ');               // ***DEBUG***
+			send_debug_char (' ');               // ***DEBUG***
 			sendDecByte(G(ecm_ss));              // ***DEBUG***
 			x_debug_msg(" ");                 // ***DEBUG***
 #endif
@@ -2438,7 +2434,7 @@ void chk_ecm_abort (byte state)
 				x_debug_msg("\nECM Aborted!");    // ***DEBUG***
 				ddputs_nnl("state & substate: "); // ***DEBUG***
 				sendDecByte(G(ecm_state));           // ***DEBUG***
-				sendDumbChar (' ');               // ***DEBUG***
+				send_debug_char (' ');               // ***DEBUG***
 				sendDecByte(G(ecm_ss));              // ***DEBUG***
 				x_debug_msg(" ");                 // ***DEBUG***
 #endif
@@ -2657,6 +2653,11 @@ void rx_pp_setup (void)
 
 				if (ch == 0x12)  // <DC2> from host?
 				{
+				#ifdef V34_FAX
+					if (G(x_fax_v34mode) == NON_V34)   // Not using V.34 modulation?
+				#endif
+						G(dp_fax_status) = G(dp_fax_status) | IGNORE_CARRIER_LOSS;  // Look for V.21 as end
+
 					G(ecm_stat) = G(ecm_stat) | DC2_RCVD;
 					G(ecm_stat) = G(ecm_stat) & ~END_PAGE;  // Send DLE-ETX if DCN received
 					reset_ecm_timer ();
@@ -2762,6 +2763,7 @@ void rx_ecm_frms (void)
 						else
 #endif
 						{
+							G(dp_fax_status) = G(dp_fax_status) & ~IGNORE_CARRIER_LOSS; 
 							G(ecm_state)++;         // Get post-message status
 							G(ecm_ss) = 0;          // Reset sub-state variable
 							return;              // Exit function now
@@ -2779,6 +2781,7 @@ void rx_ecm_frms (void)
 	 // *********************************** //
 			case 3: // Get the ECM Frame Number //
 	 // *********************************** //
+				pp->frm_len = 0;                    // Count bytes in frame
 				G(ecm_fc) = (byte)data;             // Save frame number
 				pp->idx = G(ecm_fc) / 8;            // Locate byte in PPR bit maps
 				pp->mask = 1 << (G(ecm_fc) % 8);    // Locate bit in that byte
@@ -2802,20 +2805,29 @@ void rx_ecm_frms (void)
 	 // ********************************** //
 			case 4: // Save the ECM Frame Data //
 	 // ********************************** //
-				write_ecm_buf ((byte)data);     // Store data in ECM buffer
+				if (pp->frm_len < 256) 
+				{
+					pp->frm_len++;
+					write_ecm_buf ((byte)data);     // Store data in ECM buffer
+				}
 
 				if (data >= HDLC_END_OF_FRAME)  // Last byte of frame received?
 				{
 					pp->frm_cnt++;                // Increment the number of data frames received
 
 					if ( (data & HDLC_CRC_ERROR) != HDLC_CRC_ERROR) // Good frame?
+					{
 						pp->bad_frm[pp->idx] = pp->bad_frm[pp->idx] & ~pp->mask;  // Indicate data frame was received okay
+						send_to_dte ();      // Send "good" data to DTE
+					}
 
 					else                                            // FCS error
-						G(ecm_buf.rd_cnt) = G(ecm_buf.rd_cnt) - FRAME_SIZE; // Remove this frame from read count
-
+#if defined(CS_4) || defined(ECM_64K_BUFF)
+						G(ecm_buf.rd_cnt) = G(ecm_buf.rd_cnt) - (unsigned long)pp->frm_len; // Remove this frame from read count
+#else
+						G(ecm_buf.rd_cnt) = G(ecm_buf.rd_cnt) - pp->frm_len; // Remove this frame from read count
+#endif
 					G(ecm_ss) = 0;          // Look for HDLC address
-					send_to_dte ();      // Send "good" data to DTE
 				}
 
 				break;
@@ -2857,11 +2869,12 @@ void rx_ecm_frms (void)
 	}
 	else
 #endif
-	if (!(dp_regread (DP_EIA_REGISTER) & 0x04) &&  // Carrier gone?
-			!io_get_dce_rx_count () )                  // DCE Rx buffer empty?
+	if (dp_fax_carrier_loss () &&                    // V.21 detected?
+			 !io_get_dce_rx_count () )                   // DCE Rx buffer empty?
 	{
 		G(ecm_state)++;         // Get post-message status
 		G(ecm_ss) = 0;          // Reset sub-state variable
+		G(dp_fax_status) = G(dp_fax_status) & ~IGNORE_CARRIER_LOSS; 
 	}
 
 	chk_ecm_abort ('R');      // Check for application abort
@@ -3032,11 +3045,8 @@ void send_to_dte (void)
 	 // ******************************************** //
 			case 2:  // Flush "zero padding" from buffer //
 	 // ******************************************** //
-				while (G(ecm_buf.rd_cnt))
-					read_ecm_buf ();
-
+				G(ecm_buf.rd_cnt) = 0;      
 				pp->dte_xfer = 3;  // Send DLE-ETX
-
 				break;
 
 	 // ******************************** //
@@ -3172,7 +3182,7 @@ byte load_frm_data (struct ECM_PPR *pp)
 			}
 		}
 
-		if (!dte_cnt--) // End of this frame's data?
+		if (!dte_cnt-- || (G(ecm_buf.rd_cnt) == 0) ) // End of this frame's data or ECM buffer empty?
 		{
 			G(ecm_ppr_fc)++;          // Point to next frame
 			pp->dte_xfer = 0;  // Check if next frame is ready to send
@@ -3515,10 +3525,10 @@ void dte_end_of_page (void)
 	if ( (G(c2p.fet) != 3) &&        // Not end of partial page? (End of page?)
 			 !(G(ecm_stat) & FDR_RCVD) ) // MCF hasn't been released?
 	{
-		if (!G(ecm_buf.rd_cnt))        // Buffer empty?
-		{
-			struct ECM_PPR *pp = (void *) &G(lapm_receive_frame);    // Pointer to line count
+		struct ECM_PPR *pp = (void *) &G(lapm_receive_frame);    // Pointer to line count
 
+		if (pp->dte_xfer == 4)  // DLE-ETX sent to host?
+		{
 			dte_response_tx (11);  // Send +FPTS:n, +FET:n and "OK" to DTE
 			pp->line_cnt = 0;      // Reset line count
 		}
@@ -3693,8 +3703,8 @@ void send_ctr_err (void)
 						}
 					}
 
-					else
-						pp->bad_frm[i] = pp->rcvd_frm[i] & pp->bad_frm[i];  // Clear error flag for all received frames
+//					else
+//						pp->bad_frm[i] = pp->rcvd_frm[i] & pp->bad_frm[i];  // Clear error flag for all received frames
 				}
 
 				G(ecm_stat) = G(ecm_stat) | EOR_RCVD;  // Indicate an EOR was received for RNR/RR
@@ -4198,3 +4208,4 @@ byte dte_at_cmd (void)
 	return (cmd);     // Return command received, if any
 }
 #endif   // FAX_ECM
+

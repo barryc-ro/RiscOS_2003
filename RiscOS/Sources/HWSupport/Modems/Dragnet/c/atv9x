@@ -1,6 +1,6 @@
-/*name and version number:@(#)atv9x.c	1.23*/
-/*date of get: 		  11/22/00 14:16:14*/
-/*date of delta:	  11/21/00 17:24:54*/
+/*name and version number:@(#)atv9x.c	1.28*/
+/*date of get: 		  05/02/01 16:31:00*/
+/*date of delta:	  05/02/01 08:44:55*/
 /****************************************************************
 File : atv9x.c
 Description :
@@ -14,13 +14,11 @@ Description :
 
 #include "v25ter.h"
 #include "dpglob.h"
-//msm// #include "z80glob.h"
+#include "z80glob.h"
 #include "allglobs.h"
 
-#if defined(V92_MODEM_ON_HOLD)
 extern void dp_do_flash(void), dp_modem_on_hold(void);
 extern byte dp_mh_timer_idx(void);
-#endif
 extern const word io_line_rate[];
 typedef const byte *CBP;
 
@@ -288,6 +286,8 @@ Description :
 	*pStr - input string
 	*val - value.  input with maximum allowed value.  The new
 		value is the value entered by the user.
+	defaultVal - default value if the user leaves this field blank
+		(enters ',' and skips the field)
 
 Return Value:
 	TRUE - success.  the value entered is less than
@@ -295,10 +295,18 @@ Return Value:
 	FALSE - parsing problem or value too big.
 		In this case, an error message has been taken care of.
 *****************************************************************/
-BOOL at_OneByte(byte **pStr, byte *val)
+BOOL at_OneByte(byte **pStr, byte *val, byte defaultVal)
 {
 	byte maxVal = *val, count;
 	word userVal;
+
+	// check to see if user skipped this field
+	// and entered ','
+	if (',' == **pStr || 0 == **pStr)
+	{
+		*val = defaultVal;
+		return TRUE;
+	}
 
 	count = (byte) at_atoi(*pStr, &userVal, DECIMAL);
 
@@ -329,7 +337,7 @@ Returns:
 	TRUE - success
 	FALSE - failure.  error message given to user.
 *****************************************************************/
-BOOL at_v250_OneByte(byte *str, byte maxVal, byte *val)
+BOOL at_v250_OneByte(byte *str, byte maxVal, byte *val, byte defaultVal)
 {
 	byte buf[20], *bp = &buf[1];
 
@@ -388,7 +396,7 @@ BOOL at_v250_OneByte(byte *str, byte maxVal, byte *val)
 	// one more case to deal with, '+xx=value'.
 	// Parse the value, make sure it's in range
 	// and then store in *val below.
-	if (!at_OneByte(&str, &maxVal))
+	if (!at_OneByte(&str, &maxVal, defaultVal))
 		return FALSE;
 
 	// If there are more characters on the line
@@ -554,9 +562,15 @@ AT_MOD_INDEX at_current_mod(byte *str)
 	// Use modulation/connection type set when the data pump connected.
 	x_strcpy(str, (CBP) at_mod_tbl[G(x_status).Connection].modName);
 
-#if defined(V92) && defined (VPCM_CLIENT)
+#if defined(VPCM_CLIENT)
 	if (AT_MOD_V92 == G(x_status).Connection)
 	{
+		// Add vpcm upstream info to mod string
+		if (G(vpcm_connect_mode) == 5)
+		{
+			x_strcat(str, (CBP) " PCM");
+		}
+
 		// Add quick connect info to mod string
 		if (BIT4 & G(vpcm_connection_status))
 		{
@@ -604,7 +618,7 @@ void at_v25ter_p(byte *ch)
 			er = 1;
 			break;
 		}
-		at_v250_OneByte(ch, 2, &G(dp_CallWaitingEnable));
+		at_v250_OneByte(ch, 2, &G(dp_CallWaitingEnable), 0);
 		break;
 #if defined(V92_MODEM_ON_HOLD)
 	case 'M':	// +PMHx - V.92 Modem on Hold commands
@@ -618,7 +632,7 @@ void at_v25ter_p(byte *ch)
 		if ('T' == ch[3])			// +PMHT - Modem on Hold Timer
 		{
 			val = 0;
-			if (at_v250_OneByte(ch, 13, &val))
+			if (at_v250_OneByte(ch, 13, &val, 0))
 			{
 			}
 			return;
@@ -651,7 +665,7 @@ void at_v25ter_p(byte *ch)
 
 		// +PMH - enable/disable modem on hold
 		val = (byte) ((G(S).ModemOptions.MHOptions & MH_ENABLED) ? 0 : 1);
-		if (at_v250_OneByte(ch, 1, &val))
+		if (at_v250_OneByte(ch, 1, &val, 1))
 		{
 			if (!val)
 				G(S).ModemOptions.MHOptions |= MH_ENABLED; // 0=enable
@@ -679,7 +693,7 @@ void at_v25ter_p(byte *ch)
 			val |= 1;
 		}
 
-		if (at_v250_OneByte(ch, 3, &val))
+		if (at_v250_OneByte(ch, 3, &val, 3))
 		{
 			G(S).ModemOptions.VpcmOption &= ~(BIT2|BIT5);
 			if (0 == (val & 2))
@@ -703,13 +717,29 @@ void at_v25ter_p(byte *ch)
 		}
 		// +PIG
 		val = (byte) ((G(S).ModemOptions.VpcmOption & BIT3) ? 1 : 0);
-		//if (at_v250_OneByte(ch, 1, &val))
-		if (at_v250_OneByte(ch, 0, &val)) // PCM upstream not allowed now
 		{
-			if (val)
-				G(S).ModemOptions.VpcmOption |= BIT3;	// enable PCM upstream
-			else
-				G(S).ModemOptions.VpcmOption &= ~BIT3;	// disable
+			byte maxPIG = 0;
+
+			// if PCM upstream is allowed on this platform
+			// then set maxPIG to 1
+#if !defined(DRAGNET2)
+# if defined(MODEM_Z80)
+			// For Venus, we'll examine capabilities to make sure this
+			// platform can handle this DSP clock speed.
+			// RAM must be fast enough
+			if (z80_v92cap & 4 || (z80_v92cap & 2 && !G(dp_daa_is_perseus)))
+				maxPIG = 1;
+# else
+			maxPIG = 1;	// don't worry about RAM speeds for DRAGNET1
+# endif // MODEM_Z80
+#endif // !DRAGNET2
+			if (at_v250_OneByte(ch, maxPIG, &val, 0))
+			{
+				if (val)
+					G(S).ModemOptions.VpcmOption |= BIT3;	// enable PCM up
+				else
+					G(S).ModemOptions.VpcmOption &= ~BIT3;	// disable
+			}
 		}
 		return;
 	default:
@@ -758,8 +788,8 @@ void at_v25ter_mod_carrier(void)
 }
 
 #define MS		   "+MS: "
-#define MS_RANGE	MS "i(BELL103,V21,BELL212A,V22,V22B,V23C,V32,V32B,V34,V90,V92,K56),(0,1),(0),i(0-33600),(0),i(0-56000)"
-#define MS_RANGE_NO_BELL	MS "i(V21,V22,V22B,V23C,V32,V32B,V34,V90,V92,K56),(0,1),(0),i(0-33600),(0),i(0-56000)"
+#define MS_RANGE	MS "i(BELL103,V21,BELL212A,V22,V22B,V23C,V32,V32B,V34,V90,V92),(0,1),(0),i(0-33600),(0),i(0-56000)"
+#define MS_RANGE_NO_BELL	MS "i(V21,V22,V22B,V23C,V32,V32B,V34,V90,V92),(0,1),(0),i(0-33600),(0),i(0-56000)"
 
 /****************************************************************
 Routine : at_set_max_rate
@@ -954,13 +984,13 @@ void at_display_ms_rate(byte *buf)
 	at_cat_num(buf, G(S).ModemOptions.AutoMode, 0);
 	x_strcat(buf, (CBP) ",0,");			// min_rate
 
-	at_dce_speed_code((MODEM_LINE_RATE)wMax_rate); //msm//
+	at_dce_speed_code((MODEM_LINE_RATE)wMax_rate);
 	at_form_connect_rate(sRate);
 	x_strcat(buf, (CBP) sRate);			// max_rate
 
 	x_strcat(buf, (CBP) ",0,");			// min_rx_rate
 
-	at_dce_speed_code((MODEM_LINE_RATE)wMax_rx_rate); //msm//
+	at_dce_speed_code((MODEM_LINE_RATE)wMax_rx_rate);
 	at_form_connect_rate(sRate);
 	x_strcat(buf, (CBP) sRate);			// max_rx_rate
 
@@ -1155,7 +1185,7 @@ void at_modulation(byte *ch)
 		ptr++;	// skip ','
 		// take care of auto mode
 		G(at_v25ter_AutoMode) = 1;
-		if (!at_OneByte(&ptr, &G(at_v25ter_AutoMode)))
+		if (!at_OneByte(&ptr, &G(at_v25ter_AutoMode), 1))
 			return;
 
 		if (at_check_end_of_parameter(ptr) < 2)
@@ -1164,7 +1194,7 @@ void at_modulation(byte *ch)
 		// min tx rate, must be '0'
 		ptr++;	// skip ','
 		bVal = 0;
-		if (!at_OneByte(&ptr, &bVal))
+		if (!at_OneByte(&ptr, &bVal, 0))
 			return;
 
 		if (at_check_end_of_parameter(ptr) < 2)
@@ -1184,7 +1214,7 @@ void at_modulation(byte *ch)
 		// min rx rate, must be '0'
 		ptr++;	// skip ','
 		bVal = 0;
-		if (!at_OneByte(&ptr, &bVal))
+		if (!at_OneByte(&ptr, &bVal, 0))
 			return;
 
 		if (at_check_end_of_parameter(ptr) < 2)

@@ -1,6 +1,6 @@
-/*name and version number:@(#)dp56clnt.c	1.52*/
-/*date of get: 		  12/15/00 10:10:44*/
-/*date of delta:	  11/29/00 10:17:30*/
+/*name and version number:@(#)dp56clnt.c	1.71*/
+/*date of get: 		  05/03/01 11:54:53*/
+/*date of delta:	  05/03/01 11:52:51*/
 /****************************************************************
 File :	dp56clnt.c
 Description :
@@ -29,7 +29,7 @@ vp_slice c		slicer tables - startup and retrain
 #include "llglob_d.h"
 #include "atglob.h"
 #include "dpglob.h"
-//msm// #include "z80glob.h"
+#include "z80glob.h"
 #include "sync.h"
 #include "lapm.h"
 #include "allglobs.h"
@@ -51,8 +51,7 @@ extern void dp_56k_v34_training_state(void);
 extern void dp_56k_setFill(byte);
 extern byte lapm_disconnecting(void);
 extern byte dp_recent_call_waiting(void);
-extern word dp_check_call_waiting(word ram3a);
-extern void dp_call_waiting(void);
+extern byte dp_check_call_waiting(void);
 extern byte vp_slice();
 
 
@@ -66,8 +65,10 @@ void dp_restore_v34_dsp_ram(void)
 {
 	dp_write_dsp_ram(MSE_SCALE, V34_MSE_SCALE); // BER threshold for v34
 
+#if defined (DRAGNET2)
 	// restore the v.34 transmit level
 	dp_transmit_level(G(S).ModemOptions.TxLevel);
+#endif	// DRAGNET2
 
 	// clear bit 5 - transmit slave timing - not used in normal v.34
 	dp_write_dsp_ram(0x38, (word) (0xdf & dp_read_dsp_ram(0x38)));
@@ -173,7 +174,13 @@ void dp_56k_fallback(void)
 	// in a v.90 call waiting situation, we don't
 	// fallback to v.34 if a call waiting tone has
 	// recently been issued.
+
+	#if 0
+	//---------------------------------------------------
+	// No K56 flex anymore - if we're here it must be v90
+	//---------------------------------------------------
 	if (G(vpcm_mode))
+	#endif
 	{
 		if (dp_recent_call_waiting())
 		{
@@ -193,6 +200,12 @@ void dp_56k_fallback(void)
 	// fine tune the echo cancellers ( system delay ) for v34 and u-test
 	dp_write_dsp_ram(0x0ee4, 0x00ab);
 	dp_write_dsp_ram(0x0ee5, 0xffab);
+
+	// *** due to some A-law problem with some servers in Germany & UK ***
+	// ignore G(wSymbolRate) options upon v34 fallback, 
+	// and enable all symbol rates except 2800 in 0x823
+	//	- V.34 Receive Symbol Rate and Carrier Frequency
+	dp_write_dsp_ram(DP_V34_SYMBOLRATE, 0x3cf);
 
 	dp_restore_v34_dsp_ram();
 
@@ -241,32 +254,36 @@ byte dp_k56_retrain_detect(void)
 	if (x_elapsed_time(G(dp_timer)) < MS10)
 		return FALSE;
     
-    if( G( dp_daa_is_perseus ))
+    if (G(dp_daa_is_perseus))
     {
 	    // check if parallel set has gone offhook
-	    if (dp_read_dsp_ram(0x19f2) < 0x0800)
-	    {
-		    x_debug_msg("PSD offhook:dc_filt_out=");
-		    sendHexWord(dp_read_dsp_ram(0x19f2));sendCrLf();
-		    G(dp_state) = DP_CALL_FAILURE;
-		    G(x_status).ud_TerminationCause = UD_TC_NO_CARRIER;
-		    G(x_dial_residual) = MR_CD_DISCONNECT;
-		    G(x_status).TerminationCause = 1;	// remote terminate
-		    return TRUE;
-	    }
+#if !defined(DRAGNET2) && defined(PERSEUS_PSD)
+		// frank took this out because he said it was a problem
+		if (dp_read_dsp_ram(0x19f2+DP_PERSEUS_RAM_OFFSET) < 0x1000)
+		{
+			x_debug_msg("PSD offhook:dc_filt_out=");
+			sendHexWord(dp_read_dsp_ram(0x19f2+DP_PERSEUS_RAM_OFFSET));
+			sendCrLf();
+			G(dp_state) = DP_CALL_FAILURE;
+			G(x_status).ud_TerminationCause = UD_TC_NO_CARRIER;
+			G(x_dial_residual) = MR_CD_DISCONNECT;
+			G(x_status).TerminationCause = 1;	// remote terminate
+			return TRUE;
+		}
+#endif  // !DRAGNET2 && PERSEUS_PSD
     }
 
 	G(dp_timer) = x_current_time();
-
-	r = dp_read_dsp_ram(DSP_STATUS_RAM);
 
 #if defined(CALL_WAITING) && defined(COMPRESS_TABLES)
 	if (G(dp_CallWaitingEnable) != 2)
 	{
 		// V.90 call waiting detection
-		r = dp_check_call_waiting(r);	// check, reset bit, return modified 3a
+		if (dp_check_call_waiting()) return FALSE;
 	}
 #endif // CALL_WAITING && COMPRESS_TABLES
+
+	r = dp_read_dsp_ram(DSP_STATUS_RAM);
 
 	// Check for retrain or rate reneg.
 	// Use RAM location because sometimes it seems
@@ -341,7 +358,10 @@ void dp_56k_data_mode(void)
 	if ((1 == G(S).ModemOptions.Rate56K) && dp_lapm_error_check() &&
 		G(S).ModemOptions.AutoRate)
 	{
-		if ( ( G(vpcm_mode ) ) && ( rate >= 1 ) )
+		//---------------------------------------------------
+		// No K56 flex anymore - if we're here it must be v90
+		//---------------------------------------------------
+		if ( /* ( G(vpcm_mode ) ) && */ ( rate >= 1 ) )
 		{
 			// in v90 mode, step down one rate at a time
 			G(dp_pcm_max_rate) = (byte) (rate - 1);
@@ -382,7 +402,7 @@ void dp_56k_data_mode(void)
 		G(k56_timer) = x_current_time();
 	}
 
-	G(x_status).NoiseLevel = dp_read_dsp_ram(DP_MSE_LOC);
+	G(x_status).MeanSquareError = dp_read_dsp_ram(DP_MSE_LOC);
 
 	// look to see if we've been getting
 	// lots of bad CRC's on incoming HDLC packets.
@@ -400,7 +420,7 @@ void dp_56k_data_mode(void)
 		G(dp_count)++;
 		x_debug_msg("dp_count++=");dp_puts_dec(G(dp_count));
 		x_debug_msg("bad_crc_count=");dp_puts_dec(G(dp_bad_crc_count));
-		x_debug_msg("mse=");dp_puts_hex(G(x_status).NoiseLevel);
+		x_debug_msg("mse=");dp_puts_hex(G(x_status).MeanSquareError);
 		sendCrLf();
 		dp_v90_bad_sec();
 
@@ -417,7 +437,7 @@ void dp_56k_data_mode(void)
 
 				// if MSE has blown up we want to retrain,
 				// otherwise fast rate change.  
-				if (G(x_status).NoiseLevel > 0x500)
+				if (G(x_status).MeanSquareError > 0x500)
 				{
 					x_debug_msg("MSE too high - retraining");
 					retrainCmd = 0x11;	// retrain
@@ -530,6 +550,7 @@ byte dp_vpcm_dsp_timeout ( void )
 			vpcm_count_1ff9++;
 			if ( (6 != dp_read_dsp_ram(0x1ffe)) &&
 				 ( vpcm_count_1ff9 < 2 ) && ( timeout != 0xbad )
+				 && (timeout > 3) 
 				 && (G(vpcm_getgain_fail) ==0) )
 			{
 				// try one more retrain cmd before fallback to v.34
@@ -741,9 +762,14 @@ void dp_56k_background ( void )
 					G(dp_56k_state) = VPCM_CK_V90;
 					G(k56_timer) = x_current_time();
 
-					// Now that we've determined we're really heading
-					// for V.90, we'll adjust the transmit level.
-					dp_transmit_level(14);
+#if defined(DRAGNET2)
+					if (!G(dp_daa_is_perseus))
+					{
+						// Now that we've determined we're really heading
+						// for V.90, we'll adjust the transmit level.
+						dp_transmit_level(14);
+					}
+#endif	// DRAGNET2
 				}
 				else
 				{
@@ -796,6 +822,10 @@ void dp_56k_background ( void )
 
 		if (1 == dp_read_dsp_ram(KfEnable))
 		{
+#if !defined (DRAGNET2)
+			// Wait for download until dsp set bit 0 in 0x1ff8
+			if (dp_read_dsp_ram(V92DnLdCtr) & 0x1) 
+#else
 			// Wait for download until after TA_A1_3 so we can respond
 			// to info0 error recovery.
 			// Check for TA_LP1 in case we miss TA_A1_3.
@@ -804,12 +834,19 @@ void dp_56k_background ( void )
 				 || (G(dp_s_ptr) == TA_LP1)
 				 || ( (dp_read_dsp_ram(BR_PTR)) == 0x2730)
 				)
+#endif
 			{
+#if defined(DRAGNET2)
 				// Change tx level for phase 3.
 				dp_transmit_level(14);
+#endif	// DRAGNET2
 
 				// download vpcm phase 3 & 4 & E-RAM
+				G(dp_timer) = x_current_time();
 				vpcm_download_phase3_phase4();
+				x_debug_msg("vpcm_download_phase3_phase4 time=");
+				dp_puts_dec(x_elapsed_time(G(dp_timer)));
+				sendCrLf();
 				G(k56_timer) = x_current_time();
 				G(dp_56k_state) = VPCM_WAIT_FOR_PHASE3 ;
 				x_debug_msg("v90-VPCM_WAIT_FOR_PHASE3");
@@ -871,7 +908,8 @@ void dp_56k_background ( void )
 			break;
 		}
 
-		if (1 != dp_read_dsp_ram(KfEnable))
+		if  ( (1 != dp_read_dsp_ram(KfEnable))
+			&& (5 != dp_read_dsp_ram(KfEnable)) )
 		{
 			// Joe said that controller should not issue v34 retrain
 			//   if the DSP falls back to v34 by itself
@@ -911,7 +949,7 @@ void dp_56k_background ( void )
 
 		if (dp_vpcm_dsp_timeout())			// timeout from DSP?
 		{
-            if( G( dp_daa_is_perseus ))
+            if (G(dp_daa_is_perseus))
             {
 			//this line will cause v90 retrain failure in Venus/Mercury
 			dp_write_dsp_ram(KfEnable, 0); //signal dp_vpcm_restore_v34
@@ -947,6 +985,14 @@ void dp_56k_background ( void )
 			break;
 
 		dp_timer = x_current_time();
+
+		if (x_elapsed_time(G(k56_timer)) >= SECOND30)
+		{
+			x_debug_msg("VPCM_WAIT_FOR_CONNECT timeout");
+			dp_56k_fallback();
+			break;
+		}
+
 		if ((dp_read_dsp_ram(DSP_STATUS_RAM) & 0x0008)		// data mode bit
 			&& dp_read_dsp_ram(0x0a55))						// wait for E
 		{
@@ -987,9 +1033,26 @@ void dp_56k_background ( void )
 			vpcm_connect();
 		}
 		break;
+		
+#if !defined (DRAGNET2) && defined (HOMOL) && defined (MODEM_Z80)
+	case VPCM_HOMOL_TESTING_START:
+		// Wait for download until dsp set bit 0 in 0x1ff8
+		if (dp_read_dsp_ram(V92DnLdCtr) & 0x1) 
+		{
+			// download vpcm phase 3 & 4 & E-RAM
+			vpcm_download_phase3_phase4();
+			x_debug_msg("vpcm_download_phase3_phase4 time=");
+			sendCrLf();
+			G(dp_56k_state) = VPCM_HOMOL_TESTING ;
+			x_debug_msg("v90-VPCM_HOMOL_TESTING");
+		}
+		break;
+
+	case VPCM_HOMOL_TESTING:
+		break;
+#endif	// !DRAGNET2 && HOMOL && MODEM_Z80
 	}
 }
-
 #endif  // VPCM_CLIENT
 
 #if !defined(VPCM_SERVER)
@@ -1019,27 +1082,35 @@ BOOL dp_lapm_error_check( void )
 
 	if (G(S).ModemOptions.AutoRate == 1)
 	{
-		if ( G(lapm_frames) != RX_LAPM_FRAMES) 
+		if ( G(lapm_frames) != RX_LAPM_FRAMES )
 			G(lapm_counter)++ ;
 
 		if ( G(lapm_counter) > 400 )
-			G(lapm_counter) = 400 ; 
+			G(lapm_counter) = 400 ;
 
 		G(lapm_frames) = RX_LAPM_FRAMES ;
 
-		if ( G(lapm_errors) != RX_LAPM_ERRORS)
+		if ( G(lapm_errors) != RX_LAPM_ERRORS )
 		{
-#if defined(VPCM_CLIENT)
+			#if defined(VPCM_CLIENT)
 			dp_v90_bad_sec();
-#endif
+			#endif
+
 			G(lapm_errors) = RX_LAPM_ERRORS ;
-			if ( G(lapm_counter) >= 50  )
+			if ( G(lapm_counter) >= 50 )
 			{
-				G(lapm_counter) -= 10;
+				if ( G(lapm_srej_negotiated) )
+				{
+					G(lapm_counter) -= 10;
+				}
+				else
+				{
+					G(lapm_counter) -= 2;
+				}
 			}
 			else
 			{
-				x_debug_msg("dp - rx lapm errors.. retrain");  
+				x_debug_msg("dp - rx lapm errors.. retrain");
 				return TRUE;
 			}
 		}
@@ -1047,9 +1118,5 @@ BOOL dp_lapm_error_check( void )
 
 	return FALSE;
 }
-
 #endif // !VPCM_SERVER
-
-
-
 

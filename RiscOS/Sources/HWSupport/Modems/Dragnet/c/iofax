@@ -1,6 +1,6 @@
-/*name and version number:@(#)iofax.c	1.135*/
-/*date of get: 		  01/10/01 16:57:56*/
-/*date of delta:	  01/04/01 09:29:13*/
+/*name and version number:@(#)iofax.c	1.142*/
+/*date of get: 		  05/02/01 16:30:56*/
+/*date of delta:	  05/01/01 16:39:34*/
 /****************************************************************
 File :	iofax.c
 Description :
@@ -31,57 +31,23 @@ Revision History :
 #include "llglob_d.h"
 #include "ioglob_d.h"
 #include "v42bis.h"		// use the v42bis buffer
-//#if defined (CLASS2_FAX) || defined (CLASS20_FAX)
 #include "fax_c2.h"
-	#ifndef CS_MODEM
-		#include "atglob.h"
-	#endif                
-//#endif
+#include "atglob.h"
 
 #if defined(V34_FAX)
-
-//#include "dpglob.h"
-#include "lapm.h"
-#include "faxv34.h"
+# include "lapm.h"
+# include "faxv34.h"
 #endif
 
-void dp_fax_modem_idle_cmd( void );
-extern byte dp_regread ( byte ) ;
-
 #include "fax.h"
-//msm// #include "z80glob.h"
+#include "z80glob.h"
 #include "dpglob.h"
 #include "allglobs.h"
 
-//#define FRAME_DEB_PRINT		// print frames for debug
-
-#if defined(V34_FAX)
-		// max frame in words, plus control, block/page/frame numbers, FCS.
-		// also, allow for rcv frames to be 2*256 to accomodate <dle><subs>
-		// Caution:  Note WORDS and BYTES.
-	#define V34FAX_MAX_FRAME_SIZE	((2*256)+3+3+2+2)
-		// make sure there is room for 2 frames (xmit and receive)
-	//#if( sizeof(lapm_receive_queue) < (V34FAX_MAX_FRAME_SIZE * 2) )
-#if !defined(MODEM_ARM)
-//msm:begin//
-//	#if( sizeof(G(io_rx_queue)) < (V34FAX_MAX_FRAME_SIZE * 2) )
-//		#error LAPM Queue Insufficient Size for V34 DTE Frame Buf
-//	#endif
-#define COMPILE_TIME_ASSERT(cond) \
-  { extern void *_assertion_check[-1+2*!!(cond)]; (void) _assertion_check; }
-static void _iofax_assertions(void)
-{
- COMPILE_TIME_ASSERT( sizeof(G(io_rx_queue)) < (V34FAX_MAX_FRAME_SIZE * 2) );
-}
-#undef COMPILE_TIME_ASSERT
-//msm:end//
-#endif
-#endif // V34_FAX
-
-#define FAX_HDLC_FINAL_FRAME	0x10
-
-#if !defined(CS_MODEM) || defined (CLASS2_FAX)
 /*****************************************************************************
+	pww moved this up out of the #if !defined(NO_FAX)
+
+	  
 	Function : io_compute_crc
 	compute 16bit ccitt crc using the shift register method.
 	using global variable io_crc.
@@ -102,9 +68,41 @@ void io_compute_crc ( byte data_byte )
 			G(io_crc) = G(io_crc) ^ 0x8408 ;	// crc ccitt 16 - feedback mask
 	} while ( --i ) ;
 }
-#endif
 
-#ifndef CS_MODEM
+
+#if !defined(NO_FAX)
+
+void dp_fax_modem_idle_cmd( void );
+extern byte dp_regread ( byte ) ;
+
+//#define FRAME_DEB_PRINT		// print frames for debug
+
+
+#if defined(V34_FAX)
+		// max frame in words, plus control, block/page/frame numbers, FCS.
+		// also, allow for rcv frames to be 2*256 to accomodate <dle><subs>
+		// Caution:  Note WORDS and BYTES.
+	#define V34FAX_MAX_FRAME_SIZE	((2*256)+3+3+2+2)
+		// make sure there is room for 2 frames (xmit and receive)
+	//#if( sizeof(lapm_receive_queue) < (V34FAX_MAX_FRAME_SIZE * 2) )
+#if !defined(MODEM_ARM) && !defined(DRAGNET)
+//msm:begin//
+//      #if( sizeof(G(io_rx_queue)) < (V34FAX_MAX_FRAME_SIZE * 2) )
+//		#error LAPM Queue Insufficient Size for V34 DTE Frame Buf
+//	#endif
+#define COMPILE_TIME_ASSERT(cond) \
+  { extern void *_assertion_check[-1+2*!!(cond)]; (void) _assertion_check; }
+static void _iofax_assertions(void)
+{
+ COMPILE_TIME_ASSERT( sizeof(G(io_rx_queue)) < (V34FAX_MAX_FRAME_SIZE * 2) );
+}
+#undef COMPILE_TIME_ASSERT
+//msm:end//
+#endif
+#endif // V34_FAX
+
+#define FAX_HDLC_FINAL_FRAME	0x10
+
 
 /****************************************************************
 Routine : io_fax_sub_to_buf
@@ -234,7 +232,7 @@ byte io_fax_hdlc_dte_to_buf ( word * io_fax_buf, word * io_hdlc_byte_count )
 					io_fax_buf[ (*io_hdlc_byte_count)++] = (word)XOFF ;
 					break;
 
-#if defined(MODEM_Z80)
+#if defined(MODEM_Z80) || defined(MODEM_ARM)
 				case XON :			// <DLE><DC1> - enable SW FC
 					z80_swfc_on();
 					break;
@@ -251,6 +249,23 @@ byte io_fax_hdlc_dte_to_buf ( word * io_fax_buf, word * io_hdlc_byte_count )
 						// finish sending any outstanding frame
 					G(io_timer) = x_current_time() ;
 					G(io_fax_state) = IO_V34FAX_FRAMEWAIT ;
+
+					{  // Define scope of auto variables:
+						byte i;
+						word *wptr = G(io_dce_tx_wptr);
+
+						for (i = 0; i < 10; i++)  // Load "40 1's" (really 80 1's) into DCE Tx buffer
+						{
+							*wptr++ = 0xFF | HDLC_TX_ANY_CHAR;  // Suppress bit stuffing to eliminate flags
+
+							if (wptr >= G(io_dce_tx_eptr))
+								wptr = G(io_dce_tx_sptr);
+						}
+
+						G(io_dce_tx_wptr) = wptr;
+						io_start_dce_transmit ();
+					}
+
 					break;
 
 				case CTRL_V34:	// switch to control channel <DLE><CTRL>
@@ -316,8 +331,9 @@ byte io_fax_hdlc_dte_to_buf ( word * io_fax_buf, word * io_hdlc_byte_count )
 					break;
 
 				case RTNC_V34 :	// <rtnc> - request control channel retrain
-					// not supported in V1.137 DP release.
-					//G( x_fax_train ) = CC_RETRAIN;
+					if ( (G(io_fax_state) == IO_V34FAX_ONLINE) &&    // In data mode?
+							 (G(x_fax_v34channel) == CONTROL_CHANNEL) )  // Using control channel?
+						G(dp_fax_status) = G(dp_fax_status) | DO_CC_RETRAIN;  // Do control channel retrain
 					break;
 
 				case RTN_V34 :		// <rtn> - request duplex retrain
@@ -350,9 +366,7 @@ byte io_fax_hdlc_dte_to_buf ( word * io_fax_buf, word * io_hdlc_byte_count )
 		return ( FALSE ) ;
 } // io_fax_hdlc_dte_to_buf()
 
-#endif
 
-#if !defined(CS_MODEM) || defined (CLASS2_FAX)
 /****************************************************************
 Routine : ld_trailing_flags
 Description :
@@ -402,7 +416,7 @@ word ld_trailing_flags (byte load)
 	return (i);
 }
 
-#if (defined (CLASS2_FAX) || defined (CLASS20_FAX)) && !defined (CS_MODEM)
+#if defined (CLASS2_FAX) || defined (CLASS20_FAX)
 // ------------------------------------------------------------------------------------ //
 // Display the contents of a transmitted or received HDLC frame for Class 2/2.0/2.1 FAX //
 // ------------------------------------------------------------------------------------ //
@@ -492,9 +506,9 @@ byte io_fax_hdlc_buf_to_dce ( word * io_fax_buf, word * io_hdlc_byte_count)
 				ld_trailing_flags (TRUE);
 
 #ifdef FRAME_DEB_PRINT
-			sendDumbChar( 'T' ); sendDumbChar( '(' );
+			send_debug_char( 'T' ); send_debug_char( '(' );
 			sendHexWord( *io_hdlc_byte_count );
-			sendDumbChar( ')' ); sendDumbChar( ':' );
+			send_debug_char( ')' ); send_debug_char( ':' );
 			if(
 #if defined(V34_FAX)
 				CONTROL_CHANNEL == G(x_fax_v34channel) || 	// only print CC...
@@ -504,12 +518,12 @@ byte io_fax_hdlc_buf_to_dce ( word * io_fax_buf, word * io_hdlc_byte_count)
 			{
 				for( i = 0 ; i < *io_hdlc_byte_count ; ++i )
 				{
-					sendDumbChar(' ');
+					send_debug_char(' ');
 					sendHexWord( io_fax_buf[i] );
 				}
 			}
-			sendDumbChar(0x0A);
-			sendDumbChar(0x0D);
+			send_debug_char(0x0A);
+			send_debug_char(0x0D);
 #endif // FRAME_DEB_PRINT
 
 #if defined(V34_FAX)
@@ -626,7 +640,7 @@ byte io_fax_sync_dte_to_dce ( void )
 		else if( DLE == G(io_dte_rx_last_ch) )	// process <DLE><command>
 		{
 			if( rx_ch == ETX
-#if defined(IWF_FAX) || defined(CLASS20_FAX)
+#if defined(CLASS20_FAX)
 				|| rx_ch == DLE_MPS
 				|| rx_ch == DLE_EOM
 				|| rx_ch == DLE_EOP
@@ -634,7 +648,7 @@ byte io_fax_sync_dte_to_dce ( void )
 				)
 			{
 
-#if defined(IWF_FAX) || defined(CLASS20_FAX)
+#if defined(CLASS20_FAX)
 					// Class 2.0/2.1?
 					// Conversion: MPS:0x2C->0; EOM:0x3B->1; EOP:0x2E->2
 				if (G(c2p.fclass) == 0x20)
@@ -720,9 +734,6 @@ byte io_fax_sync_dte_to_dce ( void )
 
 	return ( end_of_data ) ;
 }
-#endif  
-
-#ifndef CS_MODEM   
 
 /****************************************************************
 Routine : io_fax_sync_dce_to_dte
@@ -784,9 +795,7 @@ byte io_fax_sync_dce_to_dte ( void )
 	else
 		return ( TRUE ) ;
 }
-#endif 
 
-#if !defined(CS_MODEM) || defined (CLASS2_FAX) 
 /****************************************************************
 Routine : io_fax_hdlc_dce_to_buf
 Description :
@@ -807,6 +816,7 @@ Revision History :
 byte io_fax_hdlc_dce_to_buf(word *io_fax_buf, word *io_hdlc_byte_count)
 {
 	word rx_ch ;
+	byte start = G(dp_fax_status) & START_HDLC_FRM ? TRUE : FALSE;  // Convert to TRUE/FALSE
 
 	while ( G(io_dce_rx_rptr) != G(io_dce_rx_wptr) )
 	{
@@ -816,81 +826,90 @@ byte io_fax_hdlc_dce_to_buf(word *io_fax_buf, word *io_hdlc_byte_count)
 			G(io_dce_rx_rptr) = G(io_dce_rx_sptr) ;            // Wrap to beginning
 
 		else                                                 // Not end of buffer
-    	G(io_dce_rx_rptr)++;                               // Point to next location
+			G(io_dce_rx_rptr)++;                               // Point to next location
 
-		if ( *io_hdlc_byte_count >= (2 * V42bisP1) ||
-			 ( rx_ch & HDLC_START_OF_FRAME ) )
+		if (!start)  // Looking for start of HDLC frame?
 		{
-			*io_hdlc_byte_count = 0 ;
-			G(io_crc) = 0xffff ;		// initalize crc
+			if ( (rx_ch & HDLC_START_OF_FRAME) &&
+					 ((byte)rx_ch == 0xFF) )
+			{
+				G(dp_fax_status) = G(dp_fax_status) | START_HDLC_FRM;  // Found start of frame
+				start = TRUE;                                          // Get rest of frame
+				*io_hdlc_byte_count = 0;
+				G(io_crc) = 0xFFFF;		// initalize CRC
+				*io_hdlc_byte_count = io_sub_into_buf (rx_ch, io_fax_buf, *io_hdlc_byte_count);
+				io_compute_crc ((byte) rx_ch);
+			}
 		}
 
-			// do required DLE-subs
-		*io_hdlc_byte_count = io_sub_into_buf( rx_ch, io_fax_buf, *io_hdlc_byte_count);
-
-		io_compute_crc ( (byte) rx_ch ) ;
-		if ( rx_ch & HDLC_END_OF_FRAME ) 
+		else  // Already found start of HDLC frame
 		{
-			byte frm_stat = TRUE;  // No CRC error
-
-#if defined (CLASS2_FAX) || defined (CLASS20_FAX)
-			send_fhx(io_fax_buf, *io_hdlc_byte_count, 'R');  // Display +FHR: is enabled
-
-	#if defined (V34_FAX)
-			if( (rx_ch & HDLC_CRC_ERROR) && CLASS_2_OR_20 && (G(x_fax_v34mode) != NON_V34) )  // CRC error using V.34, Class 2/2.0/2.1 interface?
-			{
-//				x_debug_msg("iofax - HDLC crc error detected") ;
-				*io_hdlc_byte_count = 0 ;
-				return ( FALSE ) ;        // V.34, Class 2.x should time out for FCS errors
-			}
-	#endif 
-#endif
-			G(io_crc) = ~G(io_crc) ;		// 1's complement of crc
-				// least significant byte of crc - FCS
 				// do required DLE-subs
-			*io_hdlc_byte_count =
-				io_sub_into_buf( (word) (G(io_crc) & 0x00FF),
-							io_fax_buf, *io_hdlc_byte_count);
+			*io_hdlc_byte_count = io_sub_into_buf( rx_ch, io_fax_buf, *io_hdlc_byte_count);
 
-				// most significant byte of crc - FCS
-			G(io_crc) = (byte) (G(io_crc) >> 8) ;
-				// do required DLE-subs
-			*io_hdlc_byte_count =
-				io_sub_into_buf( G(io_crc), io_fax_buf, *io_hdlc_byte_count);
-
-#if defined(V34_FAX)
-			if (G(x_fax_v34mode) == NON_V34)  // Class 1, non-V.34?
-#endif
+			io_compute_crc ( (byte) rx_ch ) ;
+			if ( rx_ch & HDLC_END_OF_FRAME )
 			{
-				if (rx_ch & HDLC_CRC_ERROR)  // CRC error?
+				byte frm_stat = TRUE;  // No CRC error
+
+				G(dp_fax_status) = G(dp_fax_status) & ~START_HDLC_FRM;  // Look for start of HDLC frame next time
+	#if defined (CLASS2_FAX) || defined (CLASS20_FAX)
+				send_fhx(io_fax_buf, *io_hdlc_byte_count, 'R');  // Display +FHR: is enabled
+
+		#if defined (V34_FAX)
+				if( (rx_ch & HDLC_CRC_ERROR) && CLASS_2_OR_20 && (G(x_fax_v34mode) != NON_V34) )  // CRC error using V.34, Class 2/2.0/2.1 interface?
 				{
-					frm_stat++;  // Indicate CRC error
-//					x_debug_msg ("iofax - CRC error");
+	//				x_debug_msg("iofax - HDLC crc error detected") ;
+					*io_hdlc_byte_count = 0 ;
+					return ( FALSE ) ;        // V.34, Class 2.x should time out for FCS errors
+				}
+		#endif
+	#endif
+				G(io_crc) = ~G(io_crc) ;		// 1's complement of crc
+					// least significant byte of crc - FCS
+					// do required DLE-subs
+				*io_hdlc_byte_count =
+					io_sub_into_buf( (word) (G(io_crc) & 0x00FF),
+								io_fax_buf, *io_hdlc_byte_count);
+
+					// most significant byte of crc - FCS
+				G(io_crc) = (byte) (G(io_crc) >> 8) ;
+					// do required DLE-subs
+				*io_hdlc_byte_count =
+					io_sub_into_buf( G(io_crc), io_fax_buf, *io_hdlc_byte_count);
+
+	#if defined(V34_FAX)
+				if (G(x_fax_v34mode) == NON_V34)  // Class 1, non-V.34?
+	#endif
+				{
+					if (rx_ch & HDLC_CRC_ERROR)  // CRC error?
+					{
+						frm_stat++;  // Indicate CRC error
+	//					x_debug_msg ("iofax - CRC error");
+					}
+
+					rx_ch = rx_ch & ~HDLC_CRC_ERROR;  // Always terminate with a DLE-ETX for non-V.34
 				}
 
-				rx_ch = rx_ch & ~HDLC_CRC_ERROR;  // Always terminate with a DLE-ETX for non-V.34
-			}
+					// tack on <DLE><ETX> or <DLE><ferr> to end frame.
+				io_fax_buf[ (*io_hdlc_byte_count)++ ] = DLE ;
+				if( rx_ch & HDLC_CRC_ERROR )	// bad FCS for frame
+				{
+					io_fax_buf[ (*io_hdlc_byte_count)++ ] = FERR ;
+					send_debug_char('C');
+				}
+				else							// good FCS
+				{
+					io_fax_buf[ (*io_hdlc_byte_count)++ ] = ETX ;
+				}
 
-				// tack on <DLE><ETX> or <DLE><ferr> to end frame.
-			io_fax_buf[ (*io_hdlc_byte_count)++ ] = DLE ;
-			if( rx_ch & HDLC_CRC_ERROR )	// bad FCS for frame
-			{
-				io_fax_buf[ (*io_hdlc_byte_count)++ ] = FERR ;
-				sendDumbChar('C');
-			}
-			else							// good FCS
-			{
-				io_fax_buf[ (*io_hdlc_byte_count)++ ] = ETX ;
-			}
-
-			return (frm_stat);  // Return frame status
-		} // if(EOF)
-	} // while(space in buffer)
+				return (frm_stat);  // Return frame status
+			} // if(EOF)
+		}  // if (!start) ... else
+	}   // while(space in buffer)
 	return( FALSE );
 } // io_fax_hdlc_dce_to_buf()
-#endif  
 
-#ifndef CS_MODEM  
 /****************************************************************
 Routine : io_fax_hdlc_buf_to_dte
 Description :
@@ -916,9 +935,9 @@ byte io_fax_hdlc_buf_to_dte ( word * io_fax_buf, word * io_hdlc_byte_count)
 			io_write_dte_fifo ( *io_hdlc_byte_count, io_fax_buf ) ;
 
 #ifdef FRAME_DEB_PRINT
-			sendDumbChar( 'R' ); sendDumbChar( '(' );
+			send_debug_char( 'R' ); send_debug_char( '(' );
 			sendHexWord( *io_hdlc_byte_count );
-			sendDumbChar( ')' ); sendDumbChar( ':' );
+			send_debug_char( ')' ); send_debug_char( ':' );
 			if(
 #if defined(V34_FAX)
 			CONTROL_CHANNEL == G(x_fax_v34channel) || // only print CC...
@@ -928,12 +947,12 @@ byte io_fax_hdlc_buf_to_dte ( word * io_fax_buf, word * io_hdlc_byte_count)
 			{
 				for( i = 0 ; i < *io_hdlc_byte_count ; ++i )
 				{
-					sendDumbChar(' ');
+					send_debug_char(' ');
 					sendHexWord( io_fax_buf[i]);
 				}
 			}
-			sendDumbChar(0x0A);
-			sendDumbChar(0x0D);
+			send_debug_char(0x0A);
+			send_debug_char(0x0D);
 #endif	// FRAME_DEB_PRINT
 
 			*io_hdlc_byte_count = 0 ;
@@ -943,9 +962,7 @@ byte io_fax_hdlc_buf_to_dte ( word * io_fax_buf, word * io_hdlc_byte_count)
 	else
 		return (FALSE);
 } // io_fax_hdlc_buf_to_dte()
-#endif  
 
-#if !defined(CS_MODEM) || defined (CLASS2_FAX) 
 /****************************************************************
 Routine : io_fax_init
 Description :
@@ -957,6 +974,7 @@ Parameters out :
 *****************************************************************/
 void io_fax_init ( FAX_STATE state )
 {
+	G(dp_fax_status) = G(dp_fax_status) & ~START_HDLC_FRM;  // Look for start of Rx HDLC frame
 	G(io_hdlc_byte_count) = 0 ;
 	G(io_fax_buf) = (void *) IO_FAX_BUF_START; // use V.42bis buffer
 	G(io_dte_rx_last_ch) = 0xff ;
@@ -1024,9 +1042,7 @@ void io_fax_init ( FAX_STATE state )
 			break ;
 	}
 }
-#endif 
 
-#ifndef CS_MODEM  
 /****************************************************************
 Routine : io_fax_inactivity_check
 Description :
@@ -1204,13 +1220,9 @@ byte io_fax_background ( void )
 
 #ifdef V34_FAX // {
 		case IO_V34FAX_CCSTART :	// control channel started...
-				// source modem sends <DLE><pri> on success (T.31A1/B.8.4)
-				// (ans sends on attempt in DETECT1S)
-			if( V34_SOURCE == G(x_fax_v34mode) )
-			{
-				io_put_dte_tx_char( DLE );
-				io_put_dte_tx_char( CTRL_V34 );
-			}
+			G(dp_fax_status) = G(dp_fax_status) & ~DO_CC_RETRAIN;   // Clear CC retrain flag
+			io_put_dte_tx_char( DLE );
+			io_put_dte_tx_char( CTRL_V34 );
 				// send <DLE><prate> to DTE
 			io_put_dte_tx_char( DLE );
 			G(x_fax_rate) = getActualPRate() ;	// get rate....
@@ -1233,13 +1245,8 @@ byte io_fax_background ( void )
 			break;
 
 		case IO_V34FAX_PRISTART :	// primary channel started...
-				// source modem sends <DLE><pri> on success (T.31A1/B.8.4)
-				// (ans sends on attempt in DETECT1S)
-			if( V34_SOURCE == G(x_fax_v34mode) )
-			{
-				io_put_dte_tx_char( DLE );
-				io_put_dte_tx_char( PRI_V34 );
-			}
+			io_put_dte_tx_char( DLE );
+			io_put_dte_tx_char( PRI_V34 );
 				// send <DLE><prate>
 			io_put_dte_tx_char( DLE );
 			G(x_fax_rate) = getActualPRate() ;	// get rate....
@@ -1308,26 +1315,36 @@ byte io_fax_background ( void )
 				// Monitor 1s detect flag.
 				// Only check for 1s detect if frames have been
 				// processed (empty frame and DCE-rcv buffers).
-			if(	!G(rx_frame_in_buf) && !G(tx_frame_in_buf)
-				&& G(io_dce_rx_rptr) == G(io_dce_rx_wptr)
-				&& dp_read_dsp_ram( 0x1fff )
-			  )
+			if (!G(rx_frame_in_buf) && !G(tx_frame_in_buf) &&
+					(G(io_dce_rx_rptr) == G(io_dce_rx_wptr)))
 			{
-				if( V34_RECEIVE == G(x_fax_v34mode) )
-				{		// Receive modem detects channel switch.
-					x_debug_msg("goto DETECT1S");
-					x_send_mail(FAXV34_DETECT1S, DP_TASK, NULL, 0);
-					G(io_fax_state) = IO_V34FAX_WAIT;
-				}
-				else if( V34_SOURCE == G(x_fax_v34mode) )
-				{		// source modem detects turnaround poll.
-					x_debug_msg("TurnAround");
-					G(x_fax_v34channel) = NO_ACTIVE_CHANNEL;
-					G(io_fax_state) = IO_V34FAX_FRAMEWAIT;
-				}
-				dp_write_dsp_ram( 0x1fff, 0 );		// clear flag
-			} // if(1s detect)
+				if (dp_read_dsp_ram (0x1FFF))                   
+				{
+					if( V34_RECEIVE == G(x_fax_v34mode) )
+					{		// Receive modem detects channel switch.
+						x_debug_msg("goto DETECT1S");
+						x_send_mail(FAXV34_DETECT1S, DP_TASK, NULL, 0);
+						G(io_fax_state) = IO_V34FAX_WAIT;
+					}
+					else if( V34_SOURCE == G(x_fax_v34mode) )
+					{		// source modem detects turnaround poll.
+						x_debug_msg("TurnAround");
+						G(x_fax_v34channel) = NO_ACTIVE_CHANNEL;
+						G(io_fax_state) = IO_V34FAX_FRAMEWAIT;
+					}
+					dp_write_dsp_ram( 0x1fff, 0 );		// clear flag
+				} // if(1s detect)
 
+				if ( (G(x_fax_v34channel) == CONTROL_CHANNEL) &&  // Control channel is active?
+						 ( (dp_read_dsp_ram (0x3A) & 0x0002) ||       // CC Retrain detected?
+							 (G(dp_fax_status) & DO_CC_RETRAIN) ) )     // CC Retrain requested?
+				{
+					io_put_dte_tx_char (DLE);
+					io_put_dte_tx_char (RTNC_V34);
+					G(io_fax_state) = IO_V34FAX_WAIT;
+					x_send_mail (V34FAX_DATAWAIT, DP_TASK, NULL, 0);
+				}
+			}
 			break;
 
 			case IO_V34FAX_FRAMEWAIT :	// wait for DCE buf to empty
@@ -1382,9 +1399,7 @@ byte io_fax_background ( void )
 	else 
 		return ( TRUE ) ;
 }
-#endif   // #ifndef CS_MODEM
 
-#if !defined(CS_MODEM) || defined (CLASS2_FAX)
 /****************************************************************
 Routine : io_fax_disconnect
 Description :
@@ -1413,7 +1428,6 @@ void io_fax_disconnect ( void )
 		x_send_mail ( IO_AT_DISCONNECT, AT_TASK, NULL, 0 ) ;  // Send "No Carrier" resposne
 	}
 }
-#endif
 
 #if defined (CLASS2_FAX) || defined (CLASS20_FAX)
 
@@ -1438,7 +1452,7 @@ byte chk_mslt (byte rx_ch)
 	byte i, r = 0;
 	byte loop = 1;
 
-#if defined(IWF_FAX) || defined(CLASS20_FAX)
+#if defined(CLASS20_FAX)
 	if (G(c2p.sbf) & FND)                  // Sending non-standard data?
 		return (0);                      // Don't check MSLT for non-standard data
 #endif
@@ -1480,7 +1494,7 @@ byte chk_mslt (byte rx_ch)
 							read_dte_fifo (); // Dump character -- Don't pass consecutive EOLs
 							r = 1;			   // Finish this byte, but cause calling function to exit
 						}
-	#if defined(IWF_FAX) || defined(CLASS20_FAX)
+	#if defined(CLASS20_FAX)
 						else if ( (G(c2_ps_eol) <= 1) && !(G(c2rf.flag) & END_OF_PAGE) )  // Only 1 EOL and Not end of page?
 							return (1);                                      // Wait for another EOL from DTE
 	#endif
@@ -1521,3 +1535,5 @@ byte chk_mslt (byte rx_ch)
 	return (r);						 // Indicate if delay for MSLT
 }
 #endif
+
+#endif // !NO_FAX

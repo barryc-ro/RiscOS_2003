@@ -1,6 +1,6 @@
-/*name and version number:@(#)dpfax.c	1.140*/
-/*date of get: 		  09/20/00 14:48:44*/
-/*date of delta:	  09/20/00 12:47:00*/
+/*name and version number:@(#)dpfax.c	1.142*/
+/*date of get: 		  04/26/01 17:48:06*/
+/*date of delta:	  04/25/01 15:57:22*/
 /****************************************************************
 File :	dpfax.c
 Description :
@@ -24,8 +24,9 @@ Revision History :
 //#define Z80_DEBUG_THIS_FILE
 
 #include "llglob_d.h"
+#include "ioglob_d.h"
 #include "dpglob.h"
-//msm// #include "z80glob.h"
+#include "z80glob.h"
 #include "atglob.h"
 #include "faxv34.h"  
 #if defined (CLASS2_FAX) || defined (CLASS20_FAX)
@@ -33,7 +34,7 @@ Revision History :
 #endif                  
 #include "allglobs.h"
 
-#if !defined(CS_MODEM) || defined(CLASS2_FAX)
+#if !defined(NO_FAX)
 /*****************************************************************************
 	Local Bit definitions
 *****************************************************************************/
@@ -97,12 +98,11 @@ void dp_fax_startup ( byte param2 )
 	dp_write_dsp_ram ( VF_BAUD, 0x0 ) ;       /* clear VF_BAUD(0x82a) */
 	dp_write_dsp_ram ( VF_AUTOMODE, 0x0 ) ;   /*clear VF_AUTOMODE(0x828) */
 
-	G(cl1_flag) = 0;		//clear the dropout flag
 	dp_write_dsp_ram ( 0x01, 0x0 ) ;	/* clear v.32 rate selection */
 	dp_write_dsp_ram ( 0x2, 0x0 ) ;		/* clear low-speed */
 	dp_write_dsp_ram ( 0xc, 0x0 ) ;		/* clear v.17 rate selection*/
 	dp_write_dsp_ram ( 0x39, 0x800) ;	/* set DP_RTS to be H_RTS*/
-	dp_write_dsp_ram ( 0x48, 2000) ;	/* drop out timeout set to 2 secs*/
+	dp_write_dsp_ram (0x48, G(dp_fax_dropout_time));  // Set dropout time
 
 	// rev signal threshold - actual threshold is off 
 	// the dsp - real value = 43dB
@@ -173,6 +173,13 @@ void dp_fax_startup ( byte param2 )
 		x_debug_msg ( "DP - Fax SYNC" ) ;
 		dp_sync_mode () ;
 	}
+
+// Workaround for satellite delay (Samsung issue)
+	if ( (G(x_fax_rate) != MR_300) &&                 // High-speed rate?
+			 (  (G(x_fax_state) == FAX_RX_HDLC) ||        // Receive?
+					(G(x_fax_state) == FAX_RX) ) &&
+			 (G(dp_v21_rx_thresh) != 0) )                 // V.21 Receive threshold recorded?
+		dp_write_dsp_ram (0x45, G(dp_v21_rx_thresh));   // Set V.21 threshold based last Rx level
 
 	if ( (G(x_fax_state) == FAX_TX_HDLC) || (G(x_fax_state) == FAX_TX) )
 	{
@@ -245,139 +252,115 @@ byte dp_fax_connect_success ( void )
 /*****************************************************************************
 	Function : dp_fax_carrier_loss
 *****************************************************************************/
+/* 
+	This function is used only for non-V.34, Class 1 FAX.  Generally, the
+	loss of carrier will be used for the end of TCF and the detection of
+	V.21 carrier will be used for the end of Phase C page data.  The host
+	controls the method by issuing AT%T71 and AT%T72 commands respectively.
+	The	default dropout time of 2 seconds can be changed by AT%T70,<time(ms)>.
+*/
+
 byte dp_fax_carrier_loss ( void )
 {
-	// check bit 1 in FSK_CTRL - carrier detect 
-	if( (dp_read_dsp_ram( 0x8e ) & 0x02) == 0)
-		return ( TRUE ) ;
+	byte rslt = 0;
 
-	// read ram location 0x1ad every 50ms, if it is set for
-	// continuous 100ms, carrier loss is detected.
-	if ( x_elapsed_time (G(dp_timer1)) > MS50 )
+	if ( ( (G(x_fax_v17) == NON_V17) && (dp_read_dsp_ram (0x80) == 0xD24E) ) ||  // V.29/V.27 idle?
+			 ( (G(x_fax_v17) != NON_V17) && (dp_read_dsp_ram (0x80) == 0x80D4) ) )   // V.17 idle?
 	{
-		if ( dp_read_dsp_ram ( FAX_DOUT_FLAG ) == 1 )
+	#ifdef Z80_DEBUG_THIS_FILE
+		x_debug_msg ("DSP is idle!");
+		sendHexWord (x_elapsed_time (G(cd_dropout_timer)));
+		x_debug_msg (" seconds (hex)");
+	#endif
+		rslt = 1;
+	}
+
+	else if (!(G(dp_fax_status) & IGNORE_CARRIER_LOSS))  // Look for loss of carrier?
+	{
+		if ( ( !(dp_regread (DP_EIA_REGISTER) & 0x04) ||  // Carrier gone?
+					 dp_read_dsp_ram (0x1AD) ) &&               // or Dropout flag set?
+				 (io_get_dce_rx_count () == 0 ) )             // All DCE data sent to host?
+			rslt = 1;
+	}
+
+	else  // Look for V.21 as end of signal
+	{
+		if (dp_read_dsp_ram (0x3B) & 0x0800)      // V.21 detected in non-V.21 mode?
 		{
-			if ( !(G(cl1_flag) & CD_DROPOUT_BIT) )
+			if (x_elapsed_time (G(dp_timer1)) > 60)  // Present for 60ms?
 			{
-				G(cl1_flag) |= CD_DROPOUT_BIT;
-				G(cl1_flag) &= ~CD_RETURNED_BIT;
-				G(cd_dropout_timer) = x_current_time();	//setup CD dropout timer for
-								//a 920 ms timeout
-								//800ms + 120 ms carrier validation
-				G(cl1_flag) &= ~V21_VALID_TIMER_BIT;
-					G(cl1_flag) &= ~CD_RETURNED_TIMER_BIT;
-				//turn off receiver
-				//dp_write_dsp_ram( 0x3d, (dp_read_dsp_ram(0x3d) & ~0x0100) );
-	
-				//setup a threshold of 6 dB less than current rx level
-				G(fax_cd_threshold) = (word) (dp_read_dsp_ram(LINEAR_RCV_LVL)/2);
-				if(G(x_fax_v17) == NON_V17)
-				{
-					//renable the v.21 tone detector
-					//At this point tone 1 detector is set for 1800 Hz
-					//and tone 2 detector is set for 1650 Hz.  So to enble
-					//tone detectors by simply writing 3 to td_ena
-					dp_write_dsp_ram(TONE_DETECT_ENABLE,0x3);
-				}
+				x_debug_msg ("V.21 for 60ms");
+				rslt = 1;
 			}
-			if(G(x_fax_v17) == NON_V17)
+		}
+
+		else
+			G(dp_timer1) = x_current_time ();
+
+		if (dp_read_dsp_ram (0x1AD))      // DSP dropout flag set?
+		{
+			if (!(G(dp_fax_status) & DROPOUT_FLAG))  // Status flag cleared?
 			{
-				//is v.21 detected??
-				if( (dp_read_dsp_ram(DETECTED_TONES) & 0x02) )
-				{
-					//v.21 validation timer active?
-					if( !(G(cl1_flag) & V21_VALID_TIMER_BIT) )
-					{
-						G(cl1_flag) |= V21_VALID_TIMER_BIT;
-						G(v21_valid_timer) = x_current_time();
-					}
-					if( x_elapsed_time(G(v21_valid_timer)) > 60 )
-					{
-						//v21 has come on so carrier dropped
-						return(TRUE);
-					}
-				}
-				else
-				{
-					G(cl1_flag) &= ~V21_VALID_TIMER_BIT;
-				}
+				if (G(x_fax_v17) == NON_V17)      // Do this only for V.29 & V.27
+					dp_write_dsp_ram (0xAA, 0x03);  // Restart tone detectors
+
+				G(dp_fax_status) = G(dp_fax_status) | DROPOUT_FLAG;  // Indicate dropout
+
+	#ifdef Z80_DEBUG_THIS_FILE
+				x_debug_msg ("Dropout...");
+				G(cd_dropout_timer) = x_current_time ();
+				G(fax_cd_threshold) = 0;
+	#endif
 			}
-			//has carrier returned?
-			if( dp_read_dsp_ram(LINEAR_RCV_LVL2) > G(fax_cd_threshold) )
-			{
-				if( !(G(cl1_flag) & CD_RETURNED_TIMER_BIT) )
-				{
-					//activate the cd_returned_timer
-					G(cl1_flag) |= CD_RETURNED_TIMER_BIT;
-					G(cd_returned_timer) = x_current_time();
-				}
-				//has carrier been back for 120 msec?
-				if( x_elapsed_time(G(cd_returned_timer)) > 120 )
-				{
-					if( !(G(cl1_flag) & CD_RETURNED_BIT) )
-					{
-						G(cl1_flag) |= CD_RETURNED_BIT;
-						//dp_write_dsp_ram( 0x3d, (dp_read_dsp_ram(0x3d) | 0x0100) );
-					}
-					return(FALSE);	//carrier is now valid
-				}
-			}
+	#ifdef Z80_DEBUG_THIS_FILE
 			else
 			{
-				//deactivate the cd_returned_timer
-				G(cl1_flag) &= ~CD_RETURNED_TIMER_BIT;
+				if ( (x_elapsed_time (G(cd_dropout_timer)) / 1000) != G(fax_cd_threshold) )
+				{
+					G(fax_cd_threshold)++;
+					sendDecByte ((byte)G(fax_cd_threshold));
+					x_debug_msg (" sec.");
+				}
 			}
-			if( x_elapsed_time(G(cd_dropout_timer)) > 920 )
-			{
-				//carrier has been gone for 800 + 120 msec
-				return(TRUE);
-			}
+	#endif
+		}
 
-		}
-		else
+		else  // DSP dropout flag is cleared
 		{
-			G(cl1_flag) &= ~CD_DROPOUT_BIT;
+			if (G(dp_fax_status) & DROPOUT_FLAG)  // Set status flag
+			{
+	#ifdef Z80_DEBUG_THIS_FILE
+				x_debug_msg ("Dropout End.");
+				sendHexWord (x_elapsed_time (G(cd_dropout_timer)));
+				x_debug_msg (" seconds (hex)");
+	#endif
+				G(dp_fax_status) = G(dp_fax_status) & ~DROPOUT_FLAG;  // Indicate no dropout
+			}
 		}
+
 #ifdef HOMOL
-		/*
-		 * If MSE continuously high for 500ms, release line
-		 */
+// If MSE continuously high for 500ms, release line
 		if ( G(S).ModemOptions.CountryId == PORTUGAL )
 		{
 			if ( (G(x_line_rate) != MR_300) &&
-		    	 (dp_read_dsp_ram(0x4c) >= G(fax_mse_thresh)) )
+					 (dp_read_dsp_ram(0x4c) >= G(fax_mse_thresh)) )
 			{
-				x_debug_msg("dp - fax mse high") ;
-				if ( G(fax_mse_count)++ >= 10 )
-					return ( TRUE ) ;
+				if (x_elapsed_time (G(cd_returned_timer)) >= 500)
+				{
+					x_debug_msg("dp - fax mse high") ;
+					rslt = TRUE;
+				}
 			}
+
 			else
-				G(fax_mse_count) = 0 ;
+				G(cd_returned_timer) = x_current_time();  // Reset 500 ms timer
 		}
 #endif
-		G(dp_timer1) = x_current_time () ;
 	}
-	return(FALSE);	//CD_VALID
+
+	return (rslt);
 }
 
-/****************************************************************
-Routine : dp_init_local_phone_timer
-*****************************************************************/
-void dp_init_local_phone_timer ( void )
-{
-	G(dp_local_phone_timer) = x_current_time () ;
-}
-
-/****************************************************************
-Routine : dp_init_local_phone_state
-Description : init local phone hook state & detection timer
-*****************************************************************/
-void dp_init_local_phone_state ( void )
-{
-	G(dp_local_phone_state) = DP_PHONE_INIT ;
-	dp_init_local_phone_timer () ;
-	G(S).ModemOptions.LocalHandset = 0 ;
-}
 
 /****************************************************************
 Routine : dp_init_local_phone_onhook
@@ -385,11 +368,9 @@ Description : init local phone hook state to onhook
 *****************************************************************/
 void dp_init_local_phone_onhook ( void )
 {
-#if !defined(CS_MODEM)
 	G(dp_local_phone_state) = DP_PHONE_ONHOOK ;
 	dp_init_local_phone_timer () ;
 	G(S).ModemOptions.LocalHandset = 0 ;
-#endif //if !defined(CS_MODEM)
 }
 
 /****************************************************************
@@ -447,7 +428,6 @@ void dp_report_voice_event ( byte event )
 #endif
 }
 
-#if !defined(CS_MODEM)
 /****************************************************************
 Routine : dp_local_phone_detect
 Description : detect local phone hook condition.
@@ -530,7 +510,6 @@ byte dp_local_phone_detect ( void )
 	}
 	return ( DONTKNOW ) ;
 }
-#endif
 
 /*****************************************************************************
 	Function : dp_fax_silence_detect
@@ -558,23 +537,23 @@ void dp_fax_silence_detect ( void )
 }
 
 /*****************************************************************************
-	Function : init_cng_detect
+	Function : dp_init_cng_detect
 *****************************************************************************/
-void init_cng_detect ( void )
+void dp_init_cng_detect(void)
 {
 	if ( (G(x_modem_mode) == MODEM_FAX) ||       // FAX mode?
 			((G(x_modem_mode) == MODEM_DATA ) && ((G(S).ModemOptions.AdaptiveAnswer == TRUE))))  // Class 1/1.0 to data Auto-answer?
 	{
-		dp_write_dsp_ram (0x26, 40);              // Detect threshold @ -40 dbm
-		dp_write_dsp_ram (0x1C, 9162);	          // 16,384 * cos( (2*pi*1120)/7200)
-		dp_write_dsp_ram (0x1D, 9397);	          // 16,384 * cos( (2*pi*1100)/7200)
-		dp_write_dsp_ram (0x1E, 9630);	          // 16,384 * cos( (2*pi*1080)/7200)
-    dp_write_dsp_ram (0x1F, 6924);            // 16,384 * cos( (2*pi*1300)/7200) -- Data calling tone
+		dp_write_dsp_ram (0x26, 40);	// Detect threshold @ -40 dbm
+		dp_write_dsp_ram (0x1C, 9162);	// 16,384 * cos( (2*pi*1120)/7200)
+		dp_write_dsp_ram (0x1D, 9397);	// 16,384 * cos( (2*pi*1100)/7200)
+		dp_write_dsp_ram (0x1E, 9630);	// 16,384 * cos( (2*pi*1080)/7200)
+		dp_write_dsp_ram (0x1F, 6924);	// 16,384 * cos( (2*pi*1300)/7200) -- Data calling tone
 		dp_modem_command (DETECT_TONES, 4, 0); // Detect four tones
 		G(dp_fax_tone_on) = 0 ;
 		G(dp_fax_tone_off) = 0 ;
 		G(dp_fax_tone_state) = 0 ; 
-		G(dp_timer1) = x_current_time ();			  // Start timer
+		G(dp_timer1) = x_current_time();			  // Start timer
 	}
 }
 
@@ -585,8 +564,11 @@ Description : Set data mode or FAX Class.  Provide the necessary
 *****************************************************************/
 /*
 	Modem is in Data Mode; +FAA=0 (No auto-answer)
-		Data modem calls: Connect as data modems. No indication (look_4_cng returns TRUE immediately)
-		FAX modem calls: No connection; time-out in dpmain.c (look_4_cng returns TRUE immediately)
+		Data modem calls: Connect as data modems.
+		No indication (dp_look_4_cng returns TRUE immediately)
+		FAX modem calls:
+		 No connection; time-out in dpmain.c
+		 (dp_look_4_cng returns TRUE immediately)
 
 	Modem is in Data Mode; +FAA=1 (Auto-answer)
 		Data modem calls: Connect as data modems.  DATA/+A8C: indication
@@ -758,7 +740,7 @@ byte valid_call_tone (void)
 }
 
 /****************************************************************
-Routine : look_4_cng
+Routine : dp_look_4_cng
 Description : See if a fax calling tone (1100Hz) or data calling
 							tone (1300Hz) is present
 *****************************************************************/
@@ -779,7 +761,7 @@ Description : See if a fax calling tone (1100Hz) or data calling
 	with a tolerance of +/- 38Hz.
 */
 
-byte look_4_cng ( void )
+byte dp_look_4_cng(void)
 {
 	byte r = 0;
 	word tone_det;
@@ -900,5 +882,24 @@ byte look_4_cng ( void )
 
 	return (r);	 // Indicate status of search
 }
-#endif
 
+#endif // !NO_FAX
+
+/****************************************************************
+Routine : dp_init_local_phone_timer
+*****************************************************************/
+void dp_init_local_phone_timer(void)
+{
+	G(dp_local_phone_timer) = x_current_time();
+}
+
+/****************************************************************
+Routine : dp_init_local_phone_state
+Description : init local phone hook state & detection timer
+*****************************************************************/
+void dp_init_local_phone_state(void)
+{
+	G(dp_local_phone_state) = DP_PHONE_INIT;
+	dp_init_local_phone_timer ();
+	G(S).ModemOptions.LocalHandset = 0;
+}

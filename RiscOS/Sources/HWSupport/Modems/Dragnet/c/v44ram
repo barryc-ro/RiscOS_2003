@@ -1,0 +1,1054 @@
+/*name and version number:@(#)v44ram.c	1.17*/
+/*date of get: 		  02/28/01 14:17:29*/
+/*date of delta:	  02/27/01 16:19:31*/
+/****************************************************************
+* NOTICE *** NOTICE *** NOTICE *** NOTICE *** NOTICE *** NOTICE *
+*                                                               *
+*                  CONFIDENTIAL INFORMATION                     *
+*                  ------------------------                     *
+*    This Document contains Confidential Information or         *
+*    Trade Secrets, or both, which are the property of Lucent   *
+*    Technologies, Inc.  This document may not be  copied,      *
+*    reproduced, reduced to any electronic medium or machine    *
+*    readable form or otherwise duplicated and the information  *
+*    herein may not be used, disseminated or otherwise          *
+*    disclosed, except with the prior written consent of Lucent *
+*    Technologies, Inc.                                         *
+*                                                               *
+* NOTICE *** NOTICE *** NOTICE *** NOTICE *** NOTICE *** NOTICE *
+*                                                               *
+* Copyright (c) 2000 Lucent Technologies, Inc.                  *
+* All rights reserved.                                          *
+* Use of copyright notice does not imply publication.           *
+****************************************************************/
+
+/****************************************************************
+File :	v44ram.c
+Description :
+	Implements the V.44 decoder.
+
+PUBLIC (non-static) Procedures Contained :
+	v44_decode
+	v44_decode_init
+
+Revision History :
+	Author		Date		Change
+	J. Apgar   	07/10/00	Initial
+*****************************************************************/
+//#define Z80_DEBUG_THIS_FILE
+
+// If we are running out of 32-bit ROM,
+// make sure ARM mode is used for max performance
+#if defined(MODEM_ARM) && defined(__MET__) && defined(INT_ROM)
+#pragma Off(Thumb)
+#endif
+
+
+#if defined(WINMODEM)
+# include <stdio.h>
+# include <io.h>
+# include <fcntl.h>
+# pragma warning( push )
+# pragma warning( disable : 4761 )
+#endif	// WINMODEM
+
+// LOCAL BUILD OPTIONS
+//#  define V44_CONTROL_DEBUG	// report FLUSH, STEPUP, RESET, ETM, ECM etc.
+//#  define V44_ASSERT		// enable debug build assertions in this file (slow)
+//#  define V44_DECODE_DEBUG	// byte-level operations around DTE buffer
+
+#if defined(WINMODEM) || defined(MODEM_ARM)
+//#  define V44_DTE_DEBUG	// byte-level operations around DTE buffer
+//#  define V44_LOOP_COUNT	// count number of memcmp loops in match_right_node_string()
+#endif	// WINMODEM || MODEM_ARM
+
+// Uncomment to enable encode-to-decode hairpin loopback
+//# define	V44_LOCAL_LOOP
+
+
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include "llglob_d.h"
+
+#if defined(V44)
+
+#ifndef CLES_MODEM
+#include "z80glob.h"
+#else
+#define __EXTERN
+//#define EXTERN
+#endif // CLES_MODEM
+#include "ioglob_d.h"
+#include "dpglob.h"
+#include "lapm.h"
+#include "v44.h"
+#include "v44local.h"
+#include "v42bis.h"
+#ifndef CLES_MODEM
+#include "allglobs.h"
+#endif // CLES_MODEM
+
+#ifdef CLES_MODEM
+#pragma intrinsic(memset,memcpy,memcmp)
+#define _Inline _inline
+#define G(x) x
+#define I(x) x
+#define STATIC static
+#define sendCrLf() ((void)0)
+#define sendDecByte( byte ) ((void)0)
+#define sendHexByte( byte ) ((void)0)
+#define sendHexByte( byte ) ((void)0)
+#define sendHexWord( word ) ((void)0)
+#define printf (char *) ((void)0)
+#endif // CLES_MODEM
+
+#if 0
+# if defined(V44_ASSERT)
+#  if defined(SA_MULTI_INSTANCE)
+#   define io_dte_tx_buff	BGlobArray[ ModemNum ].io_dte_tx_buff
+#   define io_dte_rx_buff	BGlobArray[ ModemNum ].io_dte_rx_buff
+#   define assert(x) \
+	if (!(x)) {		\
+		printf("ASSERT file %s, line %d\n", __FILE__, __LINE__);		\
+		_mqx_exit(0);	\
+	}
+#  else
+//#   include <assert.h>
+#   define assert(x) \
+	if (!(x)) {		\
+		printf("ASSERT file %s, line %d\n", __FILE__, __LINE__);		\
+	}
+#  endif // MODEM_ARM
+# else
+#  define assert(x) ((void)0)
+# endif // V44_ASSERTIONS
+#endif
+
+
+
+#if defined(MODEM_Z80)
+NON_BANKED void v44_ram_start(void) {}	// Must be the first function!!
+#endif
+
+// ENCODER FUNCS START HERE
+
+NON_BANKED void
+v44_encode_insert_child( byte * seg_ptr, byte seg_len )
+{
+	// Put segment in new node
+	V44_TREE_NODE *new_node = v44_encode_get_node( seg_ptr, seg_len );
+
+	// Add new_node as child to last_match in tree
+	if ( get_child( G(v44_en_last_match_ptr) ) == NULL ) {
+		// First child
+		set_child( G(v44_en_last_match_ptr), new_node );
+	}
+	else {
+		// Not first child, insert between old_last_node_ptr and last_node_ptr
+		// Assumed to be set properly in match funcs
+		if ( G(v44_en_old_last_node_ptr) == NULL ) {
+			// New node is left-most child of last_match
+			set_child( G(v44_en_last_match_ptr), new_node );
+			set_right( new_node, G(v44_en_last_node_ptr) );
+		}
+		else {
+			// New node is between old_last_node_ptr and last_node_ptr
+			// last_node_ptr may be NULL
+			set_right( G(v44_en_old_last_node_ptr), new_node );
+			set_right( new_node, G(v44_en_last_node_ptr) );
+		}
+	}
+
+	// v44_encode_audit_dict();
+}
+
+NON_BANKED byte
+v44_encode_match_right_node_first_byte()
+{
+	// Find node to right of last_node_ptr that has first char
+	// in segment matching inval
+	// Assumes sorted order of right nodes
+	byte first_seg_byte = *G(v44_en_last_node_ptr)->hist_ptr;
+
+	G(v44_en_old_last_node_ptr) = NULL;
+	// log_loop_init();
+
+	while (1) {
+		//log_loop_increment();
+
+		// Done if current segment is beyond inval in order
+		if ( G(v44_en_inval) < first_seg_byte ) {
+			// New node goes between old_last_node_ptr and last_node_ptr
+			//log_loop_count();
+			return FALSE;
+		}
+
+		// Done if found match
+		if ( G(v44_en_inval) == first_seg_byte ) {
+			//log_loop_count();
+			return TRUE;
+		}
+
+		// Done if no right neighbor
+		if ( get_right( G(v44_en_last_node_ptr) ) == NULL ) {
+			// New node goes to right of old_last_node_ptr
+			G(v44_en_old_last_node_ptr) = G(v44_en_last_node_ptr);
+			G(v44_en_last_node_ptr) = NULL;
+			//log_loop_count();
+			return FALSE;
+		}
+
+		// link to right neighbor for next iteration
+		G(v44_en_old_last_node_ptr) = G(v44_en_last_node_ptr);
+		G(v44_en_last_node_ptr) = get_right( G(v44_en_last_node_ptr) );
+		first_seg_byte = *G(v44_en_last_node_ptr)->hist_ptr;
+	}
+
+}
+
+NON_BANKED V44_TREE_NODE *
+v44_encode_get_node( byte *hist_ptr, byte length )
+{
+	V44_TREE_NODE *node;
+	
+	node = G(v44_en_c1_ptr);
+	assert( (byte *) node > G(v44_en_c4_ptr) );
+	assert( valid_node_ptr( G(v44_en_c1_ptr) ) );
+	
+	node->down = node->right = NULL;
+	node->hist_ptr = hist_ptr;
+	node->len = length;
+	G(v44_en_c1_ptr)--;
+	
+	assert( valid_node_ptr( G(v44_en_c1_ptr) ) );
+	return node;
+}
+
+#if !defined(MODEM_Z80)
+NON_BANKED void
+v44_encode_pack_bits ( word val, byte bitlen )
+{ 
+#if defined(V44_LAPM_DEBUG)
+	//printf("v44_encode: packing val=%04x, bitlen=%d\n", val, bitlen );
+#endif // V44_LAPM_DEBUG
+
+	if ( G(v44_en_transparent) ) {
+		// In transparent mode just keep track of compressed byte count
+		// without actually doing anything
+		G(v44_en_bitbuff_count) += bitlen;
+		while ( G(v44_en_bitbuff_count) >= 8 ) {
+#if defined(V44_LAPM_DEBUG)
+			// printf("v44_encode_pack_bits: would write LAPM: %02x\n", (byte) G(v44_en_bitbuff) );
+#endif // V44_LAPM_DEBUG
+			G(v44_en_bitbuff_count) -= 8;
+
+			// Keep track of total byte count of compressed data stream
+			G(v44_en_comp_bytes)++;
+		}
+	}
+	else {
+		// Compressed mode
+		// Add new bits to high-order end of existing bits
+		G(v44_en_bitbuff) |= ( (dword) val << G(v44_en_bitbuff_count) );
+		G(v44_en_bitbuff_count) += bitlen;
+		
+		// While there is at least a byte of encoded data in the bit buffer
+		// push a byte out to LAPM
+		while ( G(v44_en_bitbuff_count) >= 8 ) {
+			// Push out next byte to current LAPM frame
+			v44_encode_write_lapm ( (byte) G(v44_en_bitbuff) );
+
+			// Remove byte from bit buffer
+			G(v44_en_bitbuff) >>= 8;
+			G(v44_en_bitbuff_count) -= 8;
+
+			// Keep track of total byte count of compressed data stream
+			G(v44_en_comp_bytes)++;
+		}
+	}
+}
+#endif // !MODEM_Z80
+
+
+_Inline NON_BANKED void
+v44_encode_send_ordinal( byte ordinal )
+{
+	// Check for need to send step-up
+	if ( G(v44_en_c5) == 7 && ordinal > 127 ) {
+#if defined(V44_CONTROL_DEBUG)
+		x_debug_msg("v44_encode: ORD STEPUP");
+#endif // V44_CONTROL_DEBUG
+		G(v44_en_c5)++;
+		v44_encode_send_control( V44_STEPUP );
+	}
+
+#if defined(V44_DTE_DEBUG)
+	printf("v44_encode: sending ORD %02x (%c)\n",
+		   ordinal, isprint(ordinal) ? ordinal : '.' );
+#endif // V44_DTE_DEBUG
+
+	if ( G(v44_en_sent_codeword) ) {
+		// Send 2 prefix bits = 0
+		v44_encode_pack_bits( (word) ordinal << 2, G(v44_en_c5) + 2 );
+		G(v44_en_sent_codeword) = FALSE;
+	}
+	else {
+		// Send 1 prefix bit = 0
+		v44_encode_pack_bits( (word) ordinal << 1, G(v44_en_c5) + 1 );
+	}
+}
+
+_Inline NON_BANKED void
+v44_encode_send_codeword( V44_TREE_NODE *node )
+{
+	word cw;
+	assert ( valid_node_ptr( node ) );
+	cw = get_node_index( node );
+
+	// Check for possible codeword step-up
+	while ( cw >= G(v44_en_c3) ) {
+#if defined(V44_CONTROL_DEBUG)
+		x_debug_msg("v44_encode: CW STEPUP");
+#endif // V44_CONTROL_DEBUG
+		v44_encode_send_control( V44_STEPUP );
+		G(v44_en_c2)++;
+		G(v44_en_c3) *= 2;
+	}
+#if defined(V44_DTE_DEBUG)
+	printf("v44_encode: send CW %d\n", cw);
+#endif // V44_DTE_DEBUG
+
+	// Pack prefix bit into lsb of cw
+	v44_encode_pack_bits( (cw << 1) | 0x0001, G(v44_en_c2) + 1 );
+	G(v44_en_sent_codeword) = TRUE;
+}
+
+NON_BANKED void
+v44_encode_process_root_byte()
+{
+	V44_TREE_NODE *down_ptr = G(v44_en_root)[ G(v44_en_inval) ];
+#if defined(V44_DTE_DEBUG)
+	printf("v44_encode: processing root byte 0x%02x\n",  G(v44_en_inval) );
+#endif // V44_DTE_DEBUG
+
+	// New string, check if root down pointer exists
+	if ( down_ptr == NULL ) {
+		// No down pointer, link in a new node to the root
+		G(v44_en_root)[  G(v44_en_inval)  ] = v44_encode_get_node( G(v44_en_c4_ptr), 1 );
+		v44_encode_send_ordinal( G(v44_en_inval) );
+	}
+	else {
+		// Have valid down pointer,
+		// inval is first char of string,
+		// try to match the next char
+		G(v44_en_state) = STR_FIRST_CHAR_STATE;
+		G(v44_en_last_node_ptr) = down_ptr;
+		G(v44_en_seg_len) = 0;
+		G(v44_en_last_match_ptr) = NULL;
+		G(v44_en_old_last_node_ptr) = NULL;
+		G(v44_en_str_len) = 1;
+	}
+}
+
+NON_BANKED void
+v44_encode_process_first_byte( )
+{
+	STATIC byte root_index;
+	STATIC V44_TREE_NODE *new_node;
+
+#if defined(V44_DTE_DEBUG)
+	printf("v44_encode_process_first_byte: inval=0x%02x\n", G(v44_en_inval) );
+#endif // V44_DTE_DEBUG
+
+	// Compare inval to char in first level node
+	// then to side nodes to try to find match
+	if ( G(v44_en_inval) == *G(v44_en_last_node_ptr)->hist_ptr ||
+		 v44_encode_match_right_node_first_byte() ) {
+		// Since we only get here from root node,
+		// we know that the segment has length 1,
+		G(v44_en_str_len) = 2;
+
+		// Remember string match
+		G(v44_en_last_match_ptr) = G(v44_en_last_node_ptr);
+
+		// so always check down pointer after a match
+		if ( get_child( G(v44_en_last_node_ptr) ) == NULL ) {
+			// No down pointer, have matched longest string
+			// Send codeword and start string extension procedure
+			// with next input byte
+			v44_encode_send_codeword( G(v44_en_last_node_ptr) );
+			G(v44_en_state) = STR_EXT_START_STATE;
+			G(v44_en_seg_len) = 0;
+		}
+		else {
+			// Continue matching at start of next segment
+			G(v44_en_last_node_ptr) = get_child( G(v44_en_last_node_ptr) );
+			G(v44_en_old_last_node_ptr) = NULL;
+			G(v44_en_state) = STR_FIRST_SEG_CHAR_STATE;
+		}
+	}
+	else {
+		// No match with side node(s),
+		// send ordinal for previous root char
+		root_index = * ( G(v44_en_c4_ptr) - 2 );
+		v44_encode_send_ordinal( root_index );
+
+		// Add unmatched char as neighbor to last_node_ptr
+		// Put inval in new node
+		new_node = v44_encode_get_node( G(v44_en_c4_ptr) - 1, 1 );
+
+		// Add child node to specified root
+		if ( G(v44_en_root)[ root_index ] == NULL ) {
+			// First child of this root
+			G(v44_en_root)[ root_index ] = new_node;
+		}
+		else {
+			// Not first child, insert between old_last_node_ptr and last_node_ptr
+			// Assumed to be set properly in match funcs
+			if ( G(v44_en_old_last_node_ptr) == NULL ) {
+				// New node is left-most child of root
+				G(v44_en_root)[ root_index ] = new_node;
+				set_right( new_node, G(v44_en_last_node_ptr) );
+			}
+			else {
+				// New node is between old_last_node_ptr and last_node_ptr
+				// last_node_ptr may be NULL
+				set_right( G(v44_en_old_last_node_ptr), new_node );
+				set_right( new_node, G(v44_en_last_node_ptr) );
+			}
+		}
+		//v44_encode_audit_dict();
+
+		// Use unmatched char as first char for string matching
+		G(v44_en_state) = STR_ROOT_STATE;
+		v44_encode_process_root_byte();
+	}
+}
+
+NON_BANKED void
+v44_encode_process_middle_seg_byte()
+{
+	// Compare inval to last_node_ptr segment at seg_len
+
+#if defined(V44_DTE_DEBUG)
+	printf("v44_encode_process_middle_seg_byte: inval=0x%02x\n", G(v44_en_inval) );
+#endif // V44_DTE_DEBUG
+
+	// Compare inval to next byte of string segment,
+	// then to side nodes to try to find match
+	if ( G(v44_en_inval)  ==
+		*( G(v44_en_last_node_ptr)->hist_ptr + G(v44_en_seg_len) )
+		|| v44_encode_match_right_node_string( 
+			 G(v44_en_c4_ptr) - 1 - G(v44_en_seg_len),
+			 G(v44_en_seg_len) + 1 ) ) {
+		// Matches, last_node_ptr might have changed in match funcs
+		G(v44_en_seg_len)++;
+		// Test for end of segment
+		if ( G(v44_en_seg_len) >= G(v44_en_last_node_ptr)->len ) {
+			G(v44_en_str_len) += G(v44_en_seg_len);
+			G(v44_en_last_match_ptr) = G(v44_en_last_node_ptr);
+			// At end of segment, check down pointer
+			if ( get_child( G(v44_en_last_node_ptr) ) == NULL ) {
+				// No down pointer, have matched longest string
+				// Send codeword and start string extension procedure
+				// with next input byte
+				v44_encode_send_codeword( G(v44_en_last_node_ptr) );
+				G(v44_en_state) = STR_EXT_START_STATE;
+				G(v44_en_seg_len) = 0;
+			}
+			else {
+				// Continue matching at start of next segment
+				G(v44_en_last_node_ptr) = get_child( G(v44_en_last_node_ptr) );
+				G(v44_en_old_last_node_ptr) = NULL;
+				G(v44_en_seg_len) = 0;
+				G(v44_en_state) = STR_FIRST_SEG_CHAR_STATE;
+			}
+		}
+		else {
+			// Still more chars in segment,
+			// keep comparing with next inval
+		}
+	}
+	else {
+		// No match with side node(s), last_match is longest string
+		// old_last_node_ptr, last_node_ptr points to insert point for new node,
+		// will be used later when done with extension
+
+		// Send code for longest matching string found
+		v44_encode_send_codeword( G(v44_en_last_match_ptr) );
+
+		// Send string ext procedure using
+		// partial match already received (at least 1 byte)
+		G(v44_en_str_len) += G(v44_en_seg_len);
+		v44_encode_process_ext(); 
+	}
+}
+
+NON_BANKED void					  
+v44_encode_process_bytes ( byte maxLen, byte setParity ) 
+{
+	STATIC byte *rptr;
+	STATIC byte *wptr;
+	wptr = (byte *) I(io_dte_rx_wptr);
+	rptr = (byte *) I(io_dte_rx_rptr);
+
+	// Encode until the LAPM frame is full or
+	// until there is nothing left in the DTE ring buffer
+	while ( ( G(lapm_iframe_ptr)->len < maxLen) && (rptr != wptr ) ) {
+		G(v44_en_inval) = *rptr;
+		if ( ++rptr >= I(io_dte_rx_eptr) ) {
+			rptr = (byte *) I(io_dte_rx_sptr) ;
+		}
+
+		if ( setParity ) {
+			G(v44_en_inval) = x_parity( G(v44_en_inval) ) ;
+		}
+
+#if defined(V44_DTE_DEBUG)
+		printf("v44_encode: processing inval=0x%02x, hist_index=%d\n",
+			   G(v44_en_inval), G(v44_en_c4_ptr) - G(v44_en_history));
+#endif // V44_DTE_DEBUG
+		assert( G(v44_en_c4_ptr) < (byte *) G(v44_en_c1_ptr) );
+		assert( valid_node_ptr( G(v44_en_c1_ptr) ) );
+
+		// Store in encoder history
+		*G(v44_en_c4_ptr)++ = G(v44_en_inval);
+
+		// Keep track of total transparent byte stream count
+		G(v44_en_trans_bytes)++;
+
+		// Run the appropriate encoder function
+		// Switch statement would be nice,
+		// function look-up table is clean,
+		// but IAR generates the best Z180 code with if-else-if-else :-(
+		// Call in order of frequency of usage for compressible data
+		if ( G(v44_en_state) == STR_EXT_STATE ) {	// 5
+			// String extension continues
+			// as long as the input continues to match
+			// history beyond the last codeword match.
+			// Compare inval to next byte of string segment
+			if ( G(v44_en_inval) == *G(v44_en_str_cmp_ptr)++
+				 && G(v44_en_str_len)++ < G(v44_en_n7) ) {
+				// Matched, continue string extension
+				G(v44_en_seg_len)++;
+				#if defined(V44_DTE_DEBUG)
+				printf("v44_encode: string extension found MATCH inval=0x%02x, ext_len=%d, str_len=%d\n",
+					   G(v44_en_inval), G(v44_en_seg_len), G(v44_en_str_len) );
+				#endif // V44_DTE_DEBUG
+			}
+			else {
+				v44_encode_process_ext();
+			}
+		}
+		else if ( G(v44_en_state) == STR_FIRST_CHAR_STATE ) {	// 1
+			v44_encode_process_first_byte();
+		}
+		else if ( G(v44_en_state) == STR_MIDDLE_SEG_CHAR_STATE ) {	// 3
+			v44_encode_process_middle_seg_byte();
+		}
+		else if ( G(v44_en_state) == STR_EXT_START_STATE ) {	// 4
+			v44_encode_process_ext_start_byte();
+		}
+		else if ( G(v44_en_state) == STR_FIRST_SEG_CHAR_STATE ) {  // 2
+			v44_encode_process_first_seg_byte();
+		}
+		else if ( G(v44_en_state) == STR_ROOT_STATE ) {	// 0
+			v44_encode_process_root_byte();
+		}
+		else {
+			v44_encode_error(8);
+		}
+
+		/* output character if in transparent mode */
+		if ( G(v44_en_transparent) ) {
+			v44_encode_write_lapm( G(v44_en_inval) );
+
+			// check for escape character
+			if ( G(v44_en_inval) == G(v44_en_esc_char) ) {
+				v44_encode_write_lapm( V44_EID );
+
+				/* cycle escape character if in data stream */
+				G(v44_en_esc_char) += 51;
+			}
+		}
+
+		// Check for encoder history/dictionary full
+		// as indicated by
+		// 1) imminent collision of c1_ptr and c4_ptr;
+		// 2) history usage beyond that supported by decoder.
+		// 3) codeword allocation beyond that supported by decoder;
+		// Might allocate two nodes as result of next input byte,
+		// so check for c1 >= n2 - 1 instead of n2
+		// Assume the -1 is taken into account in n2_ptr init
+		assert( valid_node_ptr( G(v44_en_c1_ptr) ) );
+
+		if ( ( (byte *) G(v44_en_c1_ptr) <=
+			   ( G(v44_en_c4_ptr) + 1 + 2*sizeof(V44_TREE_NODE) ) ) ||
+			 G(v44_en_c4_ptr) >= G(v44_en_hist_end_ptr) ||
+			 G(v44_en_c1_ptr) <= G(v44_en_dict_end_ptr) 
+			 ) {
+			// Per V.44/7.10.3 and 7.10.4:
+			// When the dictionary or history buffer is full
+			// 1) terminate string-matching or string-extension in progress
+			// 2) transfer the code or codes that result;
+			// 3) reinitialize the dictionary
+#if defined(V44_CONTROL_DEBUG)
+#if defined(MODEM_Z80) && defined(Z80_DEBUG_THIS_FILE)
+			x_debug_msg("v44_encode: Dict/hist full, c1_ptr=");
+			sendHexWord( (word) G(v44_en_c1_ptr) );
+			x_debug_msg(" c4_ptr=");
+			sendHexWord( (word) G(v44_en_c4_ptr) );
+			sendCrLf();
+#else
+			printf("v44_encode_process_byte: Dictionary or history full: c1=%d, c4=%d\n\tc1_ptr=0x%x, c4_ptr=0x%x\n\tn2=%d, n8=%d, n7=%d\n",
+				   get_node_index( G(v44_en_c1_ptr) ), G(v44_en_c4_ptr) - G(v44_en_history),
+				   G(v44_en_c1_ptr), G(v44_en_c4_ptr),
+				   G(v44_en_n2),
+				   G(v44_en_n8),
+				   G(v44_en_n7) );
+#endif
+#endif // V44_CONTROL_DEBUG
+			v44_encode_complete();
+			if ( !G(v44_en_transparent) ) {
+				// Tell decoder to reset its dictionary and history
+				v44_encode_send_control( V44_RESET );
+			}
+			v44_encode_dict_init();
+		}
+		else {
+			// time to check for ECM/ETM mode change ???
+			if ( G(v44_en_trans_bytes) > G(v44_en_test_delay) ) {
+				v44_encode_check_compressibility();
+			}
+		}
+	}
+	I(io_dte_rx_rptr) = rptr;
+}
+
+// DECODER FUNCS START HERE
+
+
+#if !defined(MODEM_Z80)
+
+_Inline static void
+v44_decode_write_block( byte *val_ptr, byte num_bytes )
+{
+	// Write a block to the DTE ring buffer
+	// and decoder history in same loop
+	STATIC byte *dte_wptr;
+	STATIC byte *dte_eptr;
+	STATIC byte *val_eptr;
+	STATIC byte *hist_ptr;
+
+	assert ( G(lapm_dte_wptr) >= &io_dte_tx_buff[0] );
+	assert ( G(lapm_dte_wptr) < &io_dte_tx_buff[ IO_DTE_TX_BUFF_SIZE ] );
+
+	dte_wptr = G(lapm_dte_wptr);
+	dte_eptr = (byte *) I(io_dte_tx_eptr);
+	val_eptr = val_ptr + num_bytes;
+	hist_ptr = G(v44_de_c4_ptr);
+
+	while ( val_ptr < val_eptr ) {
+#if defined(V44_DECODE_DEBUG)
+		//printf("decode_write_block: DTE/hist write %02x (%c)\n", *val_ptr, isprint(*val_ptr) ? *val_ptr : '.' );
+#endif // V44_DECODE_DEBUG
+		// Write history
+		*hist_ptr++ = *val_ptr;
+
+		// Write DTE buffer
+		*dte_wptr = *val_ptr ;
+		val_ptr++ ;
+		if ( ++dte_wptr >= dte_eptr )
+			dte_wptr = (byte *) I(io_dte_tx_sptr);
+	}
+	// Update write pointer
+	G(lapm_dte_wptr) = dte_wptr;
+
+	// Update history position
+	G(v44_de_c4_ptr) += num_bytes;
+
+	// Remember how much of DTE buffer used
+	G(v44_de_dte_write_count) += num_bytes;
+	assert ( G(lapm_dte_wptr) >= &io_dte_tx_buff[0] );
+	assert ( G(lapm_dte_wptr) < &io_dte_tx_buff[ IO_DTE_TX_BUFF_SIZE ] );
+}
+
+#endif
+
+_Inline NON_BANKED static void
+v44_decode_write_byte( byte val )
+{
+	// Write byte to decoder history
+	*G(v44_de_c4_ptr)++ = val;
+
+	// Write byte to the DTE ring buffer
+	write_dte_byte(val);
+
+	// Remember how much of DTE buffer used
+	G(v44_de_dte_write_count)++;
+}
+_Inline NON_BANKED static void
+v44_decode_create_string( byte *str_end_ptr, word len )
+{
+	// We expect to be called with len == n7 + 1,
+	// but anything greater than that is an error
+	if ( len > G(v44_de_n7) ) {
+#if defined(V44_DECODE_DEBUG) && !defined(MODEM_Z80)
+		printf("v44_decode: IGNORING attempt to create string len %d > max %d!!!!\n",
+			   len, G(v44_de_n7) );
+#endif // V44_DECODE_DEBUG
+		return;
+	}
+	else {
+		// Allocate the next codeword
+		G(v44_de_str_end_ptr)[ G(v44_de_c1) ] = str_end_ptr;
+		G(v44_de_str_len)[ G(v44_de_c1)++ ] = (byte) len;
+	}
+
+}
+NON_BANKED void
+v44_decode_process_ordinal( word val )
+{
+	byte *old_hist_ptr = G(v44_de_c4_ptr);
+#if defined(V44_DECODE_DEBUG)
+# if defined(MODEM_Z80) && defined(Z80_DEBUG_THIS_FILE)
+	x_debug_msg("D: ORD=");
+	sendHexByte( (byte) val );
+	sendCrLf();
+# else
+	printf("v44_decode: processing ordinal 0x%02x (%c)\n",
+		   val, isprint(val) ? val : '.');
+# endif
+#endif // V44_DECODE_DEBUG
+
+//x_debug_msg("in process_ord");
+	// Input processing
+	v44_decode_write_byte( (byte) val );
+
+	// String processing
+	if ( G(v44_de_str_state) == V44_ORDINAL_CODE ) {
+		// Append char to previous char
+		// to create 2 char string
+		// associated with next avail codeword
+		v44_decode_create_string( old_hist_ptr, 2 );
+	}
+	else if ( G(v44_de_str_state) == V44_CODEWORD_CODE ) {
+		// Append char to previous string
+		// to create longer string
+		v44_decode_create_string( old_hist_ptr, (word) G(v44_de_str_len)[ G(v44_de_last_cw) ] + 1 );
+	}
+	G(v44_de_str_state) = V44_ORDINAL_CODE;
+}
+
+#if defined(MODEM_Z80)
+# define v44_decode_send_str(cw)	\
+	v44_decode_write_block( G(v44_de_str_end_ptr)[ cw ] - G(v44_de_str_len)[ cw ] + 1, G(v44_de_str_len)[ cw ] );
+#else
+_Inline static void
+v44_decode_send_str( word cw )
+{
+	// Copy string represented by code word into output
+	// and into history
+	v44_decode_write_block( G(v44_de_str_end_ptr)[ cw ] - G(v44_de_str_len)[ cw ] + 1, G(v44_de_str_len)[ cw ] );
+}
+#endif // MODEM_Z80
+
+NON_BANKED void
+v44_decode_process_codeword( word cw )
+{
+	byte *old_hist_ptr = G(v44_de_c4_ptr);
+
+#if defined(V44_DECODE_DEBUG)
+# if defined(MODEM_Z80) && defined(Z80_DEBUG_THIS_FILE)
+	x_debug_msg("D: CW=");
+	sendHexWord( cw );
+	sendCrLf();
+# else
+	printf("v44_decode: processing codeword %d\n", cw);
+# endif
+#endif // V44_DECODE_DEBUG
+
+	// Input processing
+	if ( cw < G(v44_de_c1) ) {
+		// Copy string represented by code word into output
+		// and into history
+		v44_decode_send_str( cw );
+	}
+	else if ( cw == G(v44_de_c1) ) {
+		if ( G(v44_de_str_state) == V44_CODEWORD_CODE ) {
+			// Copy the string represented by the previous codeword into output
+			// and into history;
+			v44_decode_send_str( G(v44_de_last_cw) );
+
+			// Then place the first char of the string represented by
+			// the previous code into output and into history
+			// It has been copied to history at the original index.
+			v44_decode_write_byte(  *old_hist_ptr );
+		}
+		else if ( G(v44_de_str_state) == V44_ORDINAL_CODE ) {
+			// Handle same as codeword, treating the previous ordinal
+			// as a string of length 1
+			byte last_char = *( old_hist_ptr - 1 );	// previous ordinal
+			// Copy str represented by previous ordinal to history
+			v44_decode_write_byte( last_char );
+			// Copy first char of string represented by previous ordinal to history
+			v44_decode_write_byte( last_char );
+		}
+	}
+	else {
+		// Codeword >c1 ==> procedural error
+		#if defined(V44_DECODE_DEBUG) && defined(Z80_DEBUG_THIS_FILE)
+		x_debug_msg("D: c1=");
+		sendHexWord( G(v44_de_c1) );
+		sendCrLf();
+		#endif
+		v44_decode_error(1);
+		return;
+	}
+
+	// String processing
+	if ( G(v44_de_str_state) == V44_ORDINAL_CODE ) {
+		// Append first char of the codeword's string
+		// to previous char to create 2-char string
+		v44_decode_create_string( old_hist_ptr, 2 );
+	}
+	else if ( G(v44_de_str_state) == V44_CODEWORD_CODE ) {
+		// Append first char of the codeword's string
+		// to previous string to create longer string
+		v44_decode_create_string( old_hist_ptr, (word) G(v44_de_str_len)[ G(v44_de_last_cw) ] + 1 );
+	}
+	G(v44_de_last_cw) = cw;
+	G(v44_de_str_state) = V44_CODEWORD_CODE;
+}
+NON_BANKED void
+v44_decode_process_string_extension( byte ext_len )
+{
+	// Starting from the first char after the end of the string in history
+	// associated with the previous codeword,
+	// copy ext_len chars into output and into history
+	word new_len;
+
+#if defined(V44_DECODE_DEBUG)
+# if defined(MODEM_Z80) && defined(Z80_DEBUG_THIS_FILE)
+	x_debug_msg("D: STR EXT=");
+	sendDecByte( ext_len );
+	sendCrLf();
+# else
+	printf("v44_decode: processing string ext len=%d\n", ext_len);
+# endif
+#endif // V44_DECODE_DEBUG
+	v44_decode_write_block( G(v44_de_str_end_ptr)[ G(v44_de_last_cw) ] + 1, ext_len );
+
+	if ( G(v44_de_str_state) == V44_CODEWORD_CODE ) {
+		// Extend previous string to create new and longer string
+		new_len = (word) G(v44_de_str_len)[ G(v44_de_last_cw) ] + (word) ext_len;
+		v44_decode_create_string( G(v44_de_c4_ptr) - 1, new_len );
+	}
+	G(v44_de_str_state) = V44_STR_EXT_CODE;
+}
+
+#if !defined(MODEM_Z80)
+
+_Inline static word
+v44_decode_get_mask( byte i )
+{
+	assert( i < 16 );
+	// processors with a decent shifter do better this way
+	return ( 1 << i ) - 1;
+}
+
+NON_BANKED byte
+v44_decode_process_bytes( byte *rptr, word max_dte_write, byte lapm_frame_len )
+{
+	STATIC byte len;
+	len = lapm_frame_len;
+	/* Add big outer loop previously in lapm_dte.c.  */
+	do {
+		// Get byte to decode, and decode it
+		// May result in up to 2*V44_P2R decoded bytes written to DTE buffer
+		byte inval = *rptr++;
+
+#if defined(V44_DECODE_DEBUG) // defined(MODEM_Z80)
+		//I(io_dte_tx_wptr) = G(lapm_dte_wptr) ;	// save dte transmit buffer pointer
+		send_debug_char('>');
+		sendHexByte(inval);
+		send_debug_char(':');
+		sendCrLf();
+		// G(v44_de_dte_write_count) += 5;
+		//G(lapm_dte_wptr) = (byte *) I(io_dte_tx_wptr) ;	// dte transmit buffer
+#endif
+
+		if ( G(v44_de_state) >= TM_ECM) {
+			/* insert the new 8 bits into the top of the bit buffer */
+			G(v44_de_bitbuff) |= ( (dword) inval << G(v44_de_bitbuff_count) );
+			G(v44_de_bitbuff_count) += 8;
+
+			// Try to take next step in the decoder state machine
+			log_loop_init();
+			// Decode the incoming compressed bit stream
+			// into ordinals, codewords, control codes, and string extensions.
+			// While there are enough bits to take the next step, do it
+			while ( G(v44_de_bitbuff_count) >= G(v44_de_next_bits_length) ) {
+				// Get the next sequence desired by decoder
+				// With 32k - 1 codewords, next_bit_length should never be greater than 15
+				STATIC word bits;
+				bits = ( (word) G(v44_de_bitbuff) ) & v44_decode_get_mask( G(v44_de_next_bits_length) );
+
+				log_loop_increment();
+				// Remove sequence from bit buffer
+				// Do this first in case processing flushes bitbuff
+				G(v44_de_bitbuff) >>= G(v44_de_next_bits_length);
+				G(v44_de_bitbuff_count) -= G(v44_de_next_bits_length);
+
+				// Process the sequence, return val is how many bits to look for next
+				// G(v44_de_next_bits_length) = v44_decode_process_bits ( bits );
+				// Process in order of state frequency
+				if ( G(v44_de_state) == TM_ECM) {
+					// Also CM_ORDINAL_DATA, CM_STR_EXT_LENGTH_COMPLETE, CM_CW_CONTROL
+					// Next bit is single-bit prefix
+					if ( bits ) {
+						// Found codeword prefix, look for codeword
+						G(v44_de_state) = CM_CW_PREFIX;
+						G(v44_de_next_bits_length) = G(v44_de_c2);
+					}
+					else {
+						// Found ordinal prefix, look for ordinal
+						G(v44_de_state) = CM_ORDINAL_PREFIX;
+						G(v44_de_next_bits_length) = G(v44_de_c5);
+					}
+				}
+				else if ( G(v44_de_state) == CM_CW_PREFIX ) {
+					// Codeword prefix received, next C2 bits are codeword value
+					if ( bits >= V44_N5 ) {
+						// Valid codeword
+						G(v44_de_state) = CM_CW_DATA;
+						v44_decode_process_codeword(bits);
+					}
+					else {
+						// Control code found
+						G(v44_de_state) = CM_CW_CONTROL;
+						v44_decode_process_control(bits);
+					}
+					G(v44_de_next_bits_length) = 1;
+				}
+				else if ( G(v44_de_state) == CM_CW_DATA ) {
+					// Codeword received, next bits tell if codeword prefix or not
+					if ( bits ) {
+						// Found codeword prefix, look for codeword
+						G(v44_de_state) = CM_CW_PREFIX;
+						G(v44_de_next_bits_length) = G(v44_de_c2);
+					}
+					else {
+						// Might be ordinal or string-extension prefix,
+						// have to get next bit to tell
+						G(v44_de_state) = CM_ORD_OR_STR_EXT_AFTER_CW;
+						G(v44_de_next_bits_length) = 1;
+					}
+				}
+				else if ( G(v44_de_state) == CM_ORDINAL_PREFIX ) {
+					// Ordinal prefix received, next C5 bits are ordinal value
+					//x_debug_msg("before process_ord");
+					v44_decode_process_ordinal(bits);
+					//x_debug_msg("after process_ord");
+					G(v44_de_state) = CM_ORDINAL_DATA;
+					G(v44_de_next_bits_length) = 1;
+				}
+				else if ( G(v44_de_state) == CM_ORD_OR_STR_EXT_AFTER_CW ) {
+					if ( bits ) {
+						// Found string extension prefix,
+						// next bit begins extension length
+						G(v44_de_state) = CM_STR_EXT_PREFIX;
+						G(v44_de_next_bits_length) = 1;
+					}
+					else {
+						// Found ordinal prefix, look for ordinal
+						G(v44_de_state) = CM_ORDINAL_PREFIX;
+						G(v44_de_next_bits_length) = G(v44_de_c5);
+					}
+				}
+				else if ( G(v44_de_state) == CM_STR_EXT_PREFIX ) {
+					// String extension prefix received,
+					// now start figuring out extension length
+					// Refer to Table 3/V.44
+					if ( bits ) {
+						// Extension length is 1
+						v44_decode_process_string_extension(1);
+						G(v44_de_state) = CM_STR_EXT_LENGTH_COMPLETE;
+						G(v44_de_next_bits_length) = 1;
+					}
+					else {
+						// Extension legth > 1
+						G(v44_de_state) = CM_STR_EXT_GREATER_THAN_ONE;
+						G(v44_de_next_bits_length) = 2;
+					}
+				}
+				else if ( G(v44_de_state) == CM_STR_EXT_GREATER_THAN_ONE ) {
+					if ( bits == 0 ) {
+						// Extension length is >4, get more bits
+						G(v44_de_state) = CM_STR_EXT_GREATER_THAN_FOUR;
+						G(v44_de_next_bits_length) = 1;
+					}
+					else {
+						// Extension length is 2, 3, or 4
+						v44_decode_process_string_extension( (byte) (bits + 1) );
+						G(v44_de_state) = CM_STR_EXT_LENGTH_COMPLETE;
+						G(v44_de_next_bits_length) = 1;
+					}
+				}
+				else if ( G(v44_de_state) == CM_STR_EXT_GREATER_THAN_FOUR ) {
+					// Next bit determines if we are in the 5-12 range or >12
+					if ( bits ) {
+						// Extension length is >12, get more bits
+						G(v44_de_state) = CM_STR_EXT_GREATER_THAN_TWELVE;
+						G(v44_de_next_bits_length) = G(v44_de_ext_len_field_width);
+					}
+					else {
+						// Extension length is in 5-12 range,
+						// next 3 bits will tell
+						G(v44_de_state) = CM_STR_EXT_BETWEEN_FIVE_AND_TWELVE;
+						G(v44_de_next_bits_length) = 3;
+					}
+				}
+				else if ( G(v44_de_state) == CM_STR_EXT_BETWEEN_FIVE_AND_TWELVE ) {
+					// Now we have the complete length,
+					// Map bits range of 0-7 into length range 5-12
+					v44_decode_process_string_extension( (byte) (bits + 5) );
+					G(v44_de_state) = CM_STR_EXT_LENGTH_COMPLETE;
+					G(v44_de_next_bits_length) = 1;
+				}
+				else if ( G(v44_de_state) == CM_STR_EXT_GREATER_THAN_TWELVE ) {
+					// Now we have the complete length,
+					// Ext len = N + 13
+					v44_decode_process_string_extension( (byte) (bits + 13) );
+					G(v44_de_state) = CM_STR_EXT_LENGTH_COMPLETE;
+					G(v44_de_next_bits_length) = 1;
+				}
+				else if ( G(v44_de_state) == CM_CW_CONTROL_STEPUP ) {
+					// Just received a STEPUP control code,
+					// next bit (prefix) determines if it is a
+					// codeword or ordinal step
+					v44_decode_process_stepup( (byte) bits );
+				}
+				else {
+					v44_decode_error(8);
+					G(v44_de_next_bits_length) = 1;
+				}
+			}
+			log_loop_count();
+		}
+		else {
+			v44_decode_process_tm_byte( inval );
+		}
+	} while ( --len > 0 &&  ( G(v44_de_dte_write_count) + 2*V44_P2R ) < max_dte_write );
+
+	// Return length of the portion we did not process
+	return len;
+}
+#endif	// !MODEM_Z80
+
+#endif // V44
+
+#if defined(WINMODEM)
+# pragma warning( pop )
+#endif	// WINMODEM

@@ -1,6 +1,6 @@
-/*name and version number:@(#)llmain.c	1.104*/
-/*date of get: 		  01/12/01 11:49:17*/
-/*date of delta:	  01/11/01 13:14:23*/
+/*name and version number:@(#)llmain.c	1.121*/
+/*date of get: 		  04/30/01 10:13:24*/
+/*date of delta:	  04/30/01 08:21:13*/
 /****************************************************************
 File :	llmain.c
 Description :
@@ -15,8 +15,8 @@ Procedures Contained :
 	x_elapsed_time
 	x_send_mail
 	x_send_cmd_to_all_tasks
-	UART_reset
-	UART_background
+    dp_enable_patch
+    dp_task_patch
 	UART_init
 
 Revision History :
@@ -27,7 +27,7 @@ Revision History :
 #include "llglob_d.h"
 #include "ioglob_d.h"
 #include "dpglob.h"
-//msm// #include "z80glob.h"
+#include "z80glob.h"
 //msm// #include "z80usb.h"
 #include "allglobs.h"
 
@@ -35,16 +35,12 @@ Revision History :
 	Extern Functions
 *****************************************************************/
 
-extern void ll_init_modem_variables ( void ) ;
+extern void ll_init_modem_variables(void);
 extern void venus_init(void);
 
-#if !defined(CS_MODEM)
-extern void at_task ( MODEM_COMMAND cmd, byte *text_ptr, word text_len ) ;
-#else
-extern void cs_task ( MODEM_COMMAND cmd, byte *text_ptr, word text_len ) ;
-#endif
-extern void dp_task ( MODEM_COMMAND cmd, byte *text_ptr, word text_len ) ;
-extern void io_task ( MODEM_COMMAND cmd, byte *text_ptr, word text_len ) ;
+extern void at_task ( MODEM_COMMAND cmd, byte *text_ptr, word text_len );
+extern void dp_task ( MODEM_COMMAND cmd, byte *text_ptr, word text_len );
+extern void io_task ( MODEM_COMMAND cmd, byte *text_ptr, word text_len );
 
 #if defined( MODEM_Z80 )
 // ********************************************
@@ -134,15 +130,15 @@ Parameters out : time elapsed in millseconds since start time.
 *****************************************************************/
 non_banked word x_elapsed_time ( word timer )
 {
-#if defined( USB_POLLED_MODE )
-	byte dp_regbc ;
+#if defined(USB_POLLED_MODE)
+	byte dp_regbc;
 
 	//------------------------------------------------
 	// for polled mode check if atlas needs attention
 	//------------------------------------------------
 	if ( dp_regread( 0xd8 ) & BIT6 )
 	{
-		dp_regbc = dp_regread( 0xbc ) ;
+		dp_regbc = dp_regread( 0xbc );
 
 		if ( dp_regbc & BIO_BIT )
 		{
@@ -152,15 +148,22 @@ non_banked word x_elapsed_time ( word timer )
 			// clear the interrupt only after the
 			// call to the ISR.
 			//-------------------------------------
-			z80_usbir() ;
+			z80_usbir();
 
-			dp_regwrite( 0xbd, dp_regbc ) ;
-			dp_regwrite( 0xbd, ~dp_regbc ) ;
+			dp_regwrite( 0xbd, dp_regbc );
+			dp_regwrite( 0xbd, ~dp_regbc );
 		}
+	}
+#elif defined(ARM_USB_POLLED_MODE)
+	if ( arm_usb_int )
+	{
+		disable_interrupt();
+			arm_usb_isr(0);
+		enable_interrupt();
 	}
 #endif
 
-	return ( (word) (x_timer - timer) ) ;
+	return (word) (x_timer - timer);
 }
 
 #if !defined(DRAGNET)
@@ -170,9 +173,9 @@ Description : Used to initialize a long timer.
 Parameters in : none
 Parameters out : the present time.
 *****************************************************************/
-non_banked dword x_current_time_long ( void )
+non_banked dword x_current_time_long(void)
 {
-	return ( (dword)x_timer ) ;
+	return (dword) x_timer;
 }
 
 /****************************************************************
@@ -184,36 +187,110 @@ Parameters out : time elapsed in millseconds since start time.
 *****************************************************************/
 non_banked dword x_elapsed_time_long ( dword timer )
 {
-	return ( (dword) (x_timer - (word)timer) ) ;
+	return (dword) (x_timer - (word)timer);
 }
 #endif	// !DRAGNET
 #endif	// MODEM_Z80
+
+#if defined(MODEM_ARM)
+
+/****************************************************************
+Routine : dp_task_patch
+Description : Example patch code used to patch the dp_task.
+Parameters in : MODEM_COMMAND cmd, byte *mail_ptr, word mail_len 
+Parameters out : NONE
+*****************************************************************/
+#if 0 // example of patch code
+byte foo;
+void dp_task_patch ( MODEM_COMMAND cmd, byte *mail_ptr, word mail_len )
+{
+	switch ( cmd )
+	{
+		// PATCH case we want to change
+	case MC_PERIODIC :   /* off hook command     */
+		// call old dp_task (optional)
+		//dp_task( cmd, mail_ptr, mail_len );
+
+		// do patch functionality here
+		//if (dp_state == DP_WAIT_FOR_RING) {
+			// Patch a particular state of dp_periodic
+		//}
+		if (++foo >= 50) {
+			foo = 0;
+			printf("dp_task_patch: hello world\n");
+		}
+
+		// call old dp_task (optional)
+		dp_task( cmd, mail_ptr, mail_len );
+
+		break;
+
+	default:
+		// ALL OTHERS run old functionality
+		dp_task( cmd, mail_ptr, mail_len );
+		break;
+	}
+}
+#endif //example
+
+// pointer to a func returning void, w/ appropriate params
+typedef void (*TASK_FUNC)(MODEM_COMMAND,  byte *, word);
+
+TASK_FUNC task_table[] = {
+	dp_task,
+	at_task,
+    io_task
+};
+
+/****************************************************************
+Routine : dp_enable_patch
+Description : Download patch code to RAM via AT cmd, then
+                call this func from AT cmd to turn on patch
+Parameters in : byte who, TASK_FUNC f
+Parameters out : NONE
+*****************************************************************/
+void dp_enable_patch( byte who, TASK_FUNC f )
+{
+	disable_interrupt();
+
+	task_table[ who ] = f;
+
+	enable_interrupt();
+}
+
+
+#endif // MODEM_ARM
 
 /****************************************************************
 Routine : x_send_mail
 Description :
 	Send mail from one task to another.
 *****************************************************************/
-non_banked void x_send_mail ( MODEM_COMMAND cmd, MBOX send_to, byte *text_ptr, word text_len )
+non_banked void x_send_mail(MODEM_COMMAND cmd,
+							MBOX send_to,
+							byte *text_ptr,
+							word text_len)
 {
+#if defined(MODEM_ARM)
+	if ( send_to < MAX_TASK ) {
+		task_table[ send_to ] ( cmd, text_ptr, text_len );
+	}
+#else
 	switch ( send_to )
 	{
-		case DP_TASK :
-			dp_task ( cmd, text_ptr, text_len ) ;
-			break ;
+	case DP_TASK :
+		dp_task ( cmd, text_ptr, text_len );
+		break;
 
-		case IO_TASK :
-			io_task ( cmd, text_ptr, text_len ) ;
-			break ;
+	case IO_TASK :
+		io_task ( cmd, text_ptr, text_len );
+		break;
 
-      case AT_TASK :
-#if !defined(CS_MODEM)
-			at_task ( cmd, text_ptr, text_len ) ;
-#else
-			cs_task ( cmd, text_ptr, text_len ) ;
-#endif
-         break ;
+	case AT_TASK :
+		at_task ( cmd, text_ptr, text_len );
+		break;
 	}
+#endif
 }
 
 /****************************************************************
@@ -224,8 +301,25 @@ Description :
 *****************************************************************/
 non_banked void x_send_mail_dp1(MODEM_COMMAND cmd)
 {
+#if defined(MODEM_ARM)
+	task_table[ DP_TASK ] ( cmd, NULL, 0 );
+#else
 	dp_task(cmd, NULL, 0);
+#endif
 }
+
+#if defined(MODEM_ARM)
+/****************************************************************
+Routine : x_send_mail_io1
+Description :
+	Quick way to send mail to IO_TASK with only 'cmd'
+	as a parameter.  Other things 0.
+*****************************************************************/
+non_banked void x_send_mail_io1(MODEM_COMMAND cmd)
+{
+	task_table[ IO_TASK ] ( cmd, NULL, 0 );
+}
+#endif	// MODEM_ARM
 
 /****************************************************************
 Routine : x_send_at_io_data()
@@ -268,40 +362,22 @@ non_banked void x_send_at_io_crlf()
 	x_send_at_io_data(msg);
 }
 
-extern void dp_first_init_perseus(void);
-
 /****************************************************************
 Routine : UART_init
 Description :
 	initialize the modem controller code.
 	initialize all tasks, all variables etc.
 *****************************************************************/
-non_banked byte UART_init ( void )
+non_banked byte UART_init(void)
 {
-#if !defined(SA_DSP_STUBBED_OUT)
-	byte modem_initialized ;
+	byte modem_initialized;
 
-	ll_init_modem_variables () ;
-#endif
-	io_task ( MC_INIT, NULL, 0 ) ;
-#if !defined(CS_MODEM)
-	at_task ( MC_INIT, NULL, 0 ) ;
-#else
-	cs_task ( MC_INIT, NULL, 0 ) ;
-#endif
+	ll_init_modem_variables();
+	x_send_mail(MC_INIT, IO_TASK, NULL, 0);
+	x_send_mail(MC_INIT, AT_TASK, NULL, 0);
 
-#if defined(SA_DSP_STUBBED_OUT)
-	x_debug_msg ( "LL - Data pump init stubbed out\r\n" ) ;
-#else
 	venus_init();
-
-	dp_task ( MC_INIT, &modem_initialized, 1 ) ;
-
-    if( G( dp_daa_is_perseus ))
-    {
-	    dp_first_init_perseus();// load perseus code and measure line
-    }
-#endif
+	x_send_mail(MC_INIT, DP_TASK, &modem_initialized, 1);
 
 	// After everything's said and done we want to make
 	// sure that the EIA leads are in their proper places.
@@ -310,15 +386,10 @@ non_banked byte UART_init ( void )
 	x_send_mail(MC_OPTION_CHANGE, IO_TASK, NULL, 0);
 
 	// if modem hardware failed to initialize - then return failure
-#if defined( SA_DSP_STUBBED_OUT )
-	return TRUE ;
-#else
 	return modem_initialized;
-#endif
 }
 
 #if defined(MODEM_Z80)	// {
-#if !defined(CS_MODEM)	// {
 #if !defined(USB_MODEM)	// {
 /****************************************************************
 	Function : z80_check_stall
@@ -335,7 +406,7 @@ non_banked byte UART_init ( void )
 non_banked void z80_check_stall(void)
 {
 # if defined(THUNDER)
-	if ( z80_modem_type == USB_INTERFACE )
+	if ( dte_modem_type == USB_INTERFACE )
 		return;
 # endif
 
@@ -351,9 +422,9 @@ non_banked void z80_check_stall(void)
 				// It's been 500 ms since we set CTS and the
 				// app hasn't sent any data yet.  Assume it is
 				// stuck and give it a kick.
-				disable_interrupt () ;
+				disable_interrupt ();
 					z80_uart_cts_off();
-				enable_interrupt () ;
+				enable_interrupt ();
 				ddputs_24l("\n*** Toggle CTS ***\r\n");
 				x_sleep(MS75);
 				z80_uart_cts_on();
@@ -369,52 +440,52 @@ non_banked void z80_check_stall(void)
 	to be duplicated in both z80ser.c and z80main.c
 	and is now here.
 *****************************************************************/
-non_banked void z80_flow_off ( void )
+non_banked void z80_flow_off(void)
 {
 #if defined(USB_MODEM) || defined(THUNDER)
-	byte ndx ;
+	byte ndx;
 
 # if defined(THUNDER)
-	if ( z80_modem_type == USB_INTERFACE )
+	if ( dte_modem_type == USB_INTERFACE )
 # endif
 	{
-		output8( PEND_USB, 1 ) ;
-		output8( SBIE_USB, input8( SBIE_USB ) | SBI_RX_2 ) ;
-		ndx = input8( EPINDEX_USB ) ;
-		output8( EPINDEX_USB, 2 ) ;
+		output8( PEND_USB, 1 );
+		output8( SBIE_USB, input8( SBIE_USB ) | SBI_RX_2 );
+		ndx = input8( EPINDEX_USB );
+		output8( EPINDEX_USB, 2 );
 		if ( (input8( RXFLG_USB ) & (RX_FIF1|RX_FIF0)) &&
 			!(input8( SBI_USB ) & SBI_RX_2) )
 		{
 			// cause a USB ep2 interrupt
-			output8( SBI_USB, input8( SBI_USB ) | SBI_RX_2 ) ;
-			lstusbEvent = ~USB_EVENT() ;
-			//sendDumbChar( '_' );  // mah 9/10 don't need this debug
+			output8( SBI_USB, input8( SBI_USB ) | SBI_RX_2 );
+			lstusbEvent = ~usbEvent;
+			//send_debug_char( '_' );  // mah 9/10 don't need this debug
 		}
-		output8( EPINDEX_USB, ndx ) ;
-		output8( PEND_USB, 0 ) ;
+		output8( EPINDEX_USB, ndx );
+		output8( PEND_USB, 0 );
 
 		// turn off unconditionally for USB MR238
-		uart_flow_control = FC_OFF ;
+		uart_flow_control = FC_OFF;
 	}
 #endif // USB || THUNDER
 
 	if ( G(S).ModemOptions.FlowControl == NO_FLOWCTRL )
 	{
-		return ;
+		return;
 	}
-	uart_flow_control = FC_OFF ;
+	uart_flow_control = FC_OFF;
 	if ( G(S).ModemOptions.FlowControl == SW_FLOWCTRL )
 	{
-		io_put_dte_tx_char ( 0x11 ) ;	// XON host
-		sendDumbChar( 'X' ) ;
+		io_put_dte_tx_char ( 0x11 );	// XON host
+		send_debug_char( 'X' );
 	}
 	else // if ( G(S).ModemOptions.FlowControl == HW_FLOWCTRL )
 	{
-		z80_uart_cts_on () ;
+		z80_uart_cts_on ();
 
-#if !defined(USB_MODEM) && !defined(THUNDER)
+#if !defined(USB_MODEM)
 # if defined(THUNDER)
-		if ( z80_modem_type == EXT_INTERFACE )
+		if ( dte_modem_type != USB_INTERFACE )
 # endif
 		{
 			// Record current time and dte_rx_wptr for later checking
@@ -424,16 +495,15 @@ non_banked void z80_flow_off ( void )
 		}
 #endif
 
-//		sendDumbChar( 'C' ) ;
+//		send_debug_char( 'C' );
 	}
 #if defined(UART_DEBUG_PRINT) && (defined(INT_MODEM) || defined(PCMCIA_MODEM))
-	if ( dumbPortPresent )
+	if ( debug_port_present )
 	{
-		output8 ( DUMB_MCR, input8 ( DUMB_MCR ) | BIT3 ) ;
+		output8 ( DUMB_MCR, input8 ( DUMB_MCR ) | BIT3 );
 	}
 #endif
 }
-#endif // } !CS_MODEM
 
 sfr bank_port=0x39;
 /****************************************************************
@@ -445,7 +515,7 @@ sfr bank_port=0x39;
 non_banked
 void strcpy_24 ( byte *dest, long src )
 {
-	byte i ;
+	byte i;
 	byte *ptr = (byte *)src;	// get loc in bank
 	byte bankvar = bank_port;	// save old bank pointer
 
@@ -453,13 +523,32 @@ void strcpy_24 ( byte *dest, long src )
 	bank_port = src >> 16;	// switch to correct bank
 
 	// copy string from code bank to ram
-	for ( i=0 ; ptr[i] ; i++ )
+	for ( i=0; ptr[i]; i++ )
 	{
-		dest[i] = ptr[i] ;
+		dest[i] = ptr[i];
 	}
-	dest[i] = 0 ;
+	dest[i] = 0;
 
 	bank_port = bankvar;		// restore bank pointer
+}
+
+/****************************************************************
+	Function : dp_getdataword_24
+	Parameters in :
+		src		-	24-bit source pointer (anywhere in ROM)
+*****************************************************************/
+non_banked
+word dp_getdataword_24 ( long src )
+{
+	word *ptr = (word *)src;	// get loc in bank
+	byte bankvar = bank_port;	// save old bank pointer
+	word result;
+
+	// switch to correct bank
+	bank_port = src >> 16;	// switch to correct bank
+	result = ptr[0]; // get data
+	bank_port = bankvar;		// restore bank pointer
+	return result;
 }
 
 #if defined(Z80_DEBUG_PRINT)	// {
@@ -477,7 +566,7 @@ non_banked byte ddputs_24_nnl(long adr24)
 	bank_port = adr24 >> 16;	// switch to correct bank
 
 	while (*ptr)
-		sendDumbChar(*ptr++);
+		send_debug_char(*ptr++);
 
 	rv =*(ptr-1);
 
@@ -492,69 +581,67 @@ non_banked byte ddputs_24_nnl(long adr24)
 *****************************************************************/
 non_banked void ddputs_24(long adr24)
 {
-	if(ddputs_24_nnl(adr24) != '=')
+	if (ddputs_24_nnl(adr24) != '=')
 	{
-		sendDumbChar(0x0A); sendDumbChar(0x0D);
+		send_debug_char(0x0A); send_debug_char(0x0D);
 	}
 }
 
-#if !defined(HOMOL)	// {
+#if defined(ROM_FLASH) && !defined(HOMOL)	// {
 /****************************************************************
 	Function : ddgets_24 -
+
+	Dump next 0x20 bytes of ROM to debug terminal
 *****************************************************************/
-non_banked
-void ddgets_24 ( long adr24 )
+non_banked void ddgets_24(long adr24)
 {
 	byte *ptr = (byte *)adr24;	// get loc in bank
 	byte bankvar = bank_port;	// save old bank pointer
-	byte i ;
+	byte i;
 
 	// switch to correct bank
 	bank_port = adr24 >> 16;	// switch to correct bank
 
 	for ( i=0; i<32; i++ )
 	{
-		sendHexByte( *ptr++ ) ;		// print loc
+		sendHexByte( *ptr++ );		// print loc
 	}
 
 	bank_port = bankvar;		// restore bank pointer
 
-	sendDumbChar(0x0A);
-	sendDumbChar(0x0D);
+	send_debug_char(0x0A);
+	send_debug_char(0x0D);
 }
-#endif  // } !defined(HOMOL)
-#endif  // } Z80_DEBUG_PRINT
 
-#if defined(ROM_FLASH) && !defined(HOMOL)	// {
 /****************************************************************
 	Function : z80_sector1 -
-*****************************************************************/
-non_banked void z80_sector1 ( void )
-{
-	word data ;
-	byte ch ;
-	extern word getCheckSum ( void ) ;
-	extern word getLastPara ( void ) ;
-	extern byte getFirstBank ( void ) ;
 
-#if defined(Z80_DEBUG_PRINT)	// {
-	data = getCheckSum () ;
+	Dump first sector parameters for ROM resident flash loader
+*****************************************************************/
+non_banked void z80_sector1(void)
+{
+	word data;
+	byte ch;
+	extern word getCheckSum(void);
+	extern word getLastPara(void);
+	extern byte getFirstBank(void);
+
+	data = getCheckSum ();
 	ddputs_24l("Chksum="); sendHexWord(data);
 	sendCrLf();
 
-	data = getLastPara () ;
+	data = getLastPara ();
 	ddputs_24l("Lst Para="); sendHexWord(data);
 	sendCrLf();
 
-	ch = getFirstBank () ;
+	ch = getFirstBank ();
 	ddputs_24l("First Bank="); sendHexByte(ch);
 	sendCrLf();
-#endif	// } Z80_DEBUG_PRINT
 }
 #endif	// } ROM_FLASH && !HOMOL
+#endif  // } Z80_DEBUG_PRINT
 #endif	// } MODEM_Z80
 
-//oos++
 /****************************************************************
 Routine : x_strcpy
 Description :
@@ -568,8 +655,8 @@ Parameters out :
 non_banked void x_strcpy ( byte *dest, const byte *src )
 {
 	while ( *src != 0 )
-		*dest++ = *src++ ;
-	*dest = 0 ;
+		*dest++ = *src++;
+	*dest = 0;
 }
 
 /****************************************************************
@@ -583,11 +670,11 @@ Parameters out :
 *****************************************************************/
 non_banked word x_strlen ( const byte *src )
 {
-	word len = 0 ;
+	word len = 0;
 
 	while ( *src++ != 0 )
-		++len ;
-	return ( len ) ;
+		++len;
+	return len;
 }
 
 /****************************************************************
@@ -602,11 +689,10 @@ Parameters out :
 *****************************************************************/
 non_banked void x_strcat ( byte *src, const byte *catstr )
 {
-	src = src + ( x_strlen ( src ) ) ;
+	src = src + ( x_strlen ( src ) );
 
 	while ( *catstr != 0 )
-		*src++ = *catstr++ ;
-	*src = 0 ;
+		*src++ = *catstr++;
+	*src = 0;
 }
 
-//oos--

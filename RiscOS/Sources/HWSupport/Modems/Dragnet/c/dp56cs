@@ -1,6 +1,6 @@
-/*name and version number:@(#)dp56cs.c	1.31*/
-/*date of get: 		  12/15/00 10:10:40*/
-/*date of delta:	  11/30/00 16:56:28*/
+/*name and version number:@(#)dp56cs.c	1.34*/
+/*date of get: 		  04/12/01 11:56:34*/
+/*date of delta:	  04/04/01 09:40:22*/
 /****************************************************************
 File :	dp56cs.c
 Description :
@@ -18,31 +18,16 @@ Description :
 #include "z80glob.h"
 #include "sync.h"
 #include "lapm.h"
-#ifdef CS_DEBUG
-# include "dp56kv.h"
-#endif
-
-#if defined(CS_MODEM)
-# include "csglob.h"
-#endif
 #include "allglobs.h"
 
 #if defined(HCF_WORKAROUND)
 byte dp_k56_rbs_check ( void );
 #endif
 
-#if defined(CS_MODEM)
-extern word cs_lineprob_buf[100];		
-extern word *cs_lineprob_ptr;
-#endif // CS_MODEM
-
-#ifdef COP_ADV_DEBUG					//Ro
-void dp_print_mse_debug_values (void);
-#endif
-
 extern byte dp_copernicus_hangup(void);
 extern void dp_56k_connect(void);
-extern byte dp_56k_dial_connect_success ( void );
+extern byte dp_56k_dial_connect_success(void);
+extern void dp_pcm_common_connect(void);
 
 // In the venus base map (normal V.34)
 #if !defined(DRAGNET)
@@ -163,11 +148,7 @@ void dp_56k_startup_cmd(void)
 	
 	G(dp_56k_state) = DP_56K_ANS_PHASE1 ;
 	
-#if defined(CS_MODEM)
-	dp_write_dsp_ram(MSE_SCALE, G(S).ModemOptions.wV34MSEScale);
-#else
 	dp_write_dsp_ram(MSE_SCALE, V34_MSE_SCALE);
-#endif
 
 	// Set up MP words for fallback to V.34
 	if ( G(x_line_rate) == MR_33600 )
@@ -283,34 +264,14 @@ void dp_56k_data_mode(void)
 
 		if (retrain_status & 0x2) // retrain 
 		{
-#if defined(CS_MODEM)
-			//update msi retain count and remote/local
-			cs_k56_remote_or_local(RETRAIN);	
-#else
 			REMOTE_RET_INCREMENT;
-#endif
+
 			// clear retrain bit
 			dp_write_dsp_ram(0x3a, (word) (retrain_status & ~0x0002));
 			dp_56k_retrain();
 		}
 		else if (retrain_status & 0x4) // fast rate change 
 		{
-			#if defined(CS_MODEM)
-			if (G(k56_ratechange_detected) == NO)
-			{
-				if (G(dp_cs_local_retrain_ratechange))
-				{
-					cs_k56_remote_or_local(RETRAIN);	
-				}
-				else
-				{
-					//update msi retain count and remote/local
-					cs_k56_remote_or_local(FAST_RATE_CHANGE);
-					G(k56_ratechange_detected) = YES;
-				}
-			}
-			#endif // CS_MODEM
-
 			if (!G(fastRateChangeMessagePrinted))
 			{
 				// - this value is non-zero for Rockwell client
@@ -328,9 +289,7 @@ void dp_56k_data_mode(void)
 					G(dp_cs_local_retrain_ratechange) = 0;
 				else
 				{
-					#if !defined(CS_MODEM) 
 					REMOTE_RR_INCREMENT;
-					#endif
 				}
 			}
 
@@ -338,7 +297,6 @@ void dp_56k_data_mode(void)
 			// for too long then issue a retrain.
 			if (x_elapsed_time (G(dp_timer)) >= (SECOND3))
 			{
-				cs_insert_error_tag ( 0xf500 , 0 );
 				x_debug_msg ("dp - too long in fast rate change");
 				dp_56k_retrain();
 			}
@@ -362,7 +320,6 @@ void dp_56k_data_mode(void)
 		G(p_rock_client) = G(dp_v8bis_rockwell_client);
 		if (G(dp_v8bis_rockwell_client) == 2)
 		{
-			cs_insert_error_tag (0xd700 , 0);
 			x_debug_msg ("dp - k56flex ratechange with Rockwell client, drop 1 rate and do retrain");
 			temp = dp_read_dsp_ram( 0x1ff6 );  // decrement flex rate by 1
             if (temp > 1)
@@ -370,34 +327,14 @@ void dp_56k_data_mode(void)
 		}
 		else
 		{
-			cs_insert_error_tag (0xd600 , 0);
 			x_debug_msg ("dp - k56flex ratechange with Rockwell client, do retrain");
 		}
-		#if defined(CS_MODEM)
-		//update msi retain count and remote/local
-		G(dp_cs_local_retrain_ratechange) = 1; 
-		cs_k56_remote_or_local(RETRAIN);	
-		#else
 		LOCAL_RET_INCREMENT;
-		#endif
 		dp_56k_retrain();
 	}
 	#endif // HCF_WORKAROUND
 	else
 	{
-		#if defined(CS_MODEM)
-		cs_msi_update();	//NewMSI update MSI and reset msi timer
-		if (G(k56_ratechange_detected) == YES)
-		{
-			if (dp_read_dsp_ram(0x3A) & 0x0008)
-			{
-				G(k56_ratechange_detected) = NO;
-				dp_get_line_rate();
-				cs_msi_update();	
-				cs_compose_forward_or_back();
-			}
-		}
-		#endif
 		G(dp_timer) = x_current_time();
 		G(fastRateChangeMessagePrinted) = 0;
 	}
@@ -406,16 +343,12 @@ void dp_56k_data_mode(void)
 	{
 		G(k56_timer) = x_current_time () ;
 
-		#if !defined(CS_MODEM)
-		G(x_status).NoiseLevel = dp_read_dsp_ram(0x4c);
-		#endif
+		G(x_status).MeanSquareError = dp_read_dsp_ram(DP_MSE_LOC);
 		if (dp_read_dsp_ram(0x835) & 0x4)
 		{
 			if (G(dp_count) > 6)
 			{
-				#if !defined(CS_MODEM)
 				LOCAL_RET_INCREMENT; 
-				#endif
 				dp_56k_retrain();
 			}
 			else
@@ -435,6 +368,48 @@ void dp_56k_data_mode(void)
 			}
 		}
 	}
+}
+
+/****************************************************************
+Routine : dp_56k_connect
+	Connecting in 56k mode - (supported for server only)
+*****************************************************************/
+void dp_56k_connect(void)
+{
+	if ((0 == dp_read_dsp_ram(K56V_MODE_RAM)) ||
+		(0 == dp_read_dsp_ram(K56V_VERSION_RAM)))
+	{
+		// We're not in K56FLEX mode!
+		dp_56k_v34_mode();
+		return;
+	}
+	else
+	{
+		x_debug_msg("dp_56k_connect() - K56FLEX");
+		G(dp_56k_state) = DP_56K_DATA_MODE;
+		G(x_status).Connection = AT_MOD_K56;	// K56FLEX
+	}
+
+	dp_pcm_common_connect();
+}
+
+/****************************************************************
+Routine: dp_56k_dial_connect_success() - have we made
+		it into data mode?
+*****************************************************************/
+byte dp_56k_dial_connect_success(void)
+{
+	// check DP_RR - carrier detect first before reading dsp ram
+	if ( ( dp_regread(DP_EIA_REGISTER) & EIA_DP_RR ) == 0 )
+		return FALSE;
+
+	if (dp_read_dsp_ram(DSP_STATUS_RAM) & 0x0008)	// data mode
+	{
+		x_debug_msg("dp_56k_dial_connect_success() - data mode");
+		return TRUE;
+	}
+
+	return FALSE;
 }
 
 /****************************************************************
@@ -472,7 +447,6 @@ void dp_56k_background ( void )
 		// Wait here for data mode or timeout
 		if (x_elapsed_time (G(dp_timer)) >= (SECOND10))
 		{
-			cs_insert_error_tag ( 0xff00 , 0 );
 			x_debug_msg("dp - timeout waiting for K56 data mode");
 			dp_56k_retrain();
 		}
@@ -501,7 +475,6 @@ void dp_56k_background ( void )
 		// Wait here for data mode or timeout
 		if (x_elapsed_time (G(dp_timer)) >= (15*SECOND1))
 		{
-			cs_insert_error_tag ( 0xfe00 , 0 );
 			x_debug_msg("dp - timeout waiting for MP");
 			dp_56k_retrain();
 		}
@@ -513,7 +486,6 @@ void dp_56k_background ( void )
 			// to looking for phase 3 and reset the timers.
 			if (dp_read_dsp_ram(STARTUP_PHASE) < 3)
 			{
-				cs_insert_error_tag ( 0xca00 , 0 );
 				G(dp_timer1) = G(dp_timer) = x_current_time();
 				G(dp_56k_state) = DP_56K_ANS_PHASE1;
 				x_debug_msg("dp - back to previous phase - resetting timer");
@@ -531,18 +503,12 @@ void dp_56k_background ( void )
 			// and if so, issue a retrain
 			if (dp_read_dsp_ram(0x1ff2))
 			{
-				cs_insert_error_tag ( 0xf300 , 0 );
 				x_debug_msg("dp - error recovery case.  0x1ff2=");
 				sendHexWord(dp_read_dsp_ram(0x1ff2));
 				sendCrLf();
 				dp_write_dsp_ram(0x1ff2, 0);	// clear indication
 				dp_56k_retrain();
-#if defined(CS_MODEM)
-				G(dp_cs_local_retrain_ratechange) = 2; 
-				cs_k56_remote_or_local(RETRAIN);	
-#else
 				REMOTE_RET_INCREMENT ; 
-#endif
 			}
 
 		}
@@ -552,7 +518,6 @@ void dp_56k_background ( void )
 		// Wait here for data mode or timeout
 		if (x_elapsed_time (G(dp_timer)) >= (20*SECOND1))
 		{
-			cs_insert_error_tag ( 0xfd00 , 0 );
 			x_debug_msg("dp - timeout waiting for phase 3");
 			G(triedEvenThoughBad)++;
 
@@ -581,7 +546,6 @@ void dp_56k_background ( void )
 				// processing.
 				if (0 == dp_read_dsp_ram(K56V_MODE_RAM))
 				{
-					cs_insert_error_tag ( 0xcb00 , 0 );
 					x_debug_msg("dp - in V.34 mode - exiting k56 code...");
 					dp_56k_v34_mode();
 					dp_56k_v34_training_state();
@@ -592,7 +556,6 @@ void dp_56k_background ( void )
 
 	case VPCM_MONITOR_V8 :
 		G(k56_timer) = G(dp_timer) = x_current_time ();
-		cs_insert_error_tag(0xd400 , 0);
 		G(dp_56k_state) = VPCM_CK_V8;
 		x_debug_msg("vpcm - goto CK_V8");
 		break;
@@ -610,7 +573,6 @@ void dp_56k_background ( void )
 			temp = DP_READ_DSP_K56V();
 			if (temp == 1)		// V90 capable client
 			{
-				cs_insert_error_tag ( 0xe500 , 0 );
 				x_debug_msg("vpcm - got 0x1ff1 = 1, goto VPCM_CK_V90");
 				G(dp_56k_state) = VPCM_CK_V90 ;
 				G(dp_timer) = x_current_time () ;
@@ -621,7 +583,6 @@ void dp_56k_background ( void )
 			}
 			else if (temp == 2)	  // V34 only client
 			{
-				cs_insert_error_tag ( 0xe400 , 0 );
 				x_debug_msg("vpcm - got 0x1ff1 = 2, goto DP_TRAINING");
 				dp_download_monitor_nc_gain(0xdc00); // near canceller
 				// clear dp_56k_state so that dp_v34_workaround()
@@ -641,7 +602,6 @@ void dp_56k_background ( void )
 					x_debug_msg ("vpcm - got A_75MS");
 				}
 				x_debug_msg("vpcm - timeout for v34 in v8 satatus");
-				cs_insert_error_tag(0xd200 , 0);
 				dp_56k_retrain();	
 
 				x_debug_msg("*** v8 status *** 800=") ;
@@ -681,9 +641,7 @@ void dp_56k_background ( void )
 				else
 				{
 					x_debug_msg("vpcm - KfEnable (0x1ff1) == 0, back to v34");
-					#ifndef CS_MODEM
 					dp_56k_v34_mode(); 
-					#endif
 					G(dp_state) = DP_TRAINING ;
 					x_debug_msg("vpcm - goto DP_TRAINING");
 
@@ -694,11 +652,8 @@ void dp_56k_background ( void )
 			}
 			if ( x_elapsed_time( G(dp_timer) ) >= SECOND4 )
 			{
-				cs_insert_error_tag ( 0xfc00 , 0 );
 				x_debug_msg("vpcm - timeout for PcmdTC_75MS_2");
-				#ifndef CS_MODEM
 				dp_56k_v34_mode(); 
-				#endif
 				G(dp_state) = DP_TRAINING ;
 				x_debug_msg("vpcm - goto DP_TRAINING") ;
 			}
@@ -725,13 +680,8 @@ void dp_56k_background ( void )
 		{
 			x_debug_msg("vpcm - got TC_B2_3 - goto WAIT_FOR_PHASE3");
 			dp_56k_adjust_mse(0);	  
-			#ifdef CS_MODEM
-			dp_dsp_int_regwrite(8, 0x0084);	// x-y page for V.90 CS
-			DP_WRITE_IOC();
-			#endif
 			// download vpcm phase 3 & 4 & E-RAM
 			vpcm_download_phase3_phase4();
-			cs_insert_error_tag(0xd100 , 0);
 			G(dp_56k_state) = VPCM_WAIT_FOR_PHASE3 ;
 			G(dp_timer) = x_current_time () ;
 		}
@@ -749,7 +699,6 @@ void dp_56k_background ( void )
 	case VPCM_WAIT_FOR_PHASE3 :
 		if ( (dp_read_dsp_ram (STARTUP_PHASE)) == 3)
 		{
-			cs_insert_error_tag(0xd000 , 0);
 			x_debug_msg("vpcm - phase3 - goto WAIT_FOR_CONNECT");
 			G(dp_56k_state) = VPCM_WAIT_FOR_CONNECT ;
 			G(dp_timer) = x_current_time () ;
@@ -759,7 +708,6 @@ void dp_56k_background ( void )
 			// V90 capable client chooses V34
 			if (4 == DP_READ_DSP_K56V())
 			{
-				cs_insert_error_tag ( 0xfa00 , 0 );
 				x_debug_msg("vpcm - timeout for PHASE3, got 0x1ff1 = 4");
 				x_debug_msg("MSE scale to 3300");
 				dp_write_dsp_ram(0x0825, 0x3300); // MSE_SCALE
@@ -772,7 +720,6 @@ void dp_56k_background ( void )
 				temp = dp_read_dsp_ram(0x1ff2);
 				if (temp)	//error recovery timeout
 				{
-					cs_insert_error_tag ( 0xe300 , 0 );
 					x_debug_msg("vpcm - timeout for PHASE3, 0x1ff2 =");
 					sendHexWord(temp);sendCrLf();
 
@@ -807,15 +754,9 @@ void dp_56k_background ( void )
 			temp = dp_read_dsp_ram (0x833);
 			if ( ( temp < 7 ) && ( temp > 1 ) )  // if range is 29333 - 34666
 			{
-				cs_insert_error_tag (0xd800 , 0);
 				x_debug_msg ("vpcm - initial connect rate is 29333 to 34666, retrain to 28000");
 				dp_write_dsp_ram(0x1ff6,1);			   // force to 28000
 				dp_write_dsp_ram(0x3a, (dp_read_dsp_ram(0x3a) & ~0x0002));
-#ifdef CS_MODEM
-				//update msi retain count and remote/local
-				G(dp_cs_local_retrain_ratechange) = 1;  
-				cs_k56_remote_or_local(RETRAIN);	
-#endif
 				G(dp_56k_state) = VPCM_RETRAIN ;
 				x_debug_msg("vpcm_data - go to VPCM_RETRAIN state");
 				dp_56k_retrain_cmd(1) ;
@@ -831,7 +772,6 @@ void dp_56k_background ( void )
 		}
 		else if ( DP_READ_DSP_K56V() == 4 )
 		{
-			cs_insert_error_tag ( 0xe100 , 0 );
 			x_debug_msg("vpcm - startup wait for connect, got 0x1ff1 =4"); 
 			dp_write_dsp_ram(0x000c, 0x0000);	
 			x_debug_msg("vpcm - setting MSE scale to 3300");
@@ -842,29 +782,17 @@ void dp_56k_background ( void )
 		}	
 		else if (dp_read_dsp_ram(0x1ff2))
 		{
-			cs_insert_error_tag ( 0xf200 , 0 );
 			x_debug_msg("dp - v90 startup error recovery case.  0x1ff2=");
 			sendHexWord(dp_read_dsp_ram(0x1ff2));sendCrLf();
 			dp_write_dsp_ram(0x1ff2, 0);	// clear indication
-#if defined(CS_MODEM)
-			G(dp_cs_local_retrain_ratechange) = 2; 
-			cs_k56_remote_or_local(RETRAIN);	
-#else
 			REMOTE_RET_INCREMENT ; 
-#endif
 			G(dp_56k_state) = VPCM_RETRAIN ;
 			dp_56k_retrain();	
 		}
 		else if ( x_elapsed_time ( G(dp_timer) ) >= SECOND20+SECOND5 )
 		{
-			cs_insert_error_tag ( 0xf900 , 0 );
 			x_debug_msg("vpcm - timeout for connect, issue retrain");
-#if defined(CS_MODEM)
-			G(dp_cs_local_retrain_ratechange) = 1; 
-			cs_k56_remote_or_local(RETRAIN);	
-#else
 			LOCAL_RET_INCREMENT ; // update the retrain status
-#endif
 			G(dp_56k_state) = VPCM_RETRAIN ;
 			dp_56k_retrain ( ) ;
 		}
@@ -881,7 +809,6 @@ void dp_56k_background ( void )
 	case VPCM_RETRAIN :
 		G(dp_line_state) = DP_LINE_RETRAINING ;
 		G(k56_timer) = x_current_time () ;
-		cs_insert_error_tag(0xce00 , 0);
 		G(dp_56k_state) = VPCM_RETRAIN_WAIT_FOR_CONNECT ;
 		x_debug_msg("vpcm - goto WAIT_FOR_CONNECT state ") ;
 		break ;
@@ -896,7 +823,6 @@ void dp_56k_background ( void )
 		}
 		else if ( DP_READ_DSP_K56V() == 4 )
 		{
-			cs_insert_error_tag ( 0xe200 , 0 );
 			x_debug_msg("vpcm - retrain wait for connect, got 0x1ff1 =4"); 
 			dp_write_dsp_ram(0x000c, 0x0000);	
 			x_debug_msg("vpcm - setting MSE scale to 3300");
@@ -907,39 +833,25 @@ void dp_56k_background ( void )
 		}
 		else if (dp_read_dsp_ram(0x1ff2))
 		{
-			cs_insert_error_tag ( 0xf400 , 0 );
 			x_debug_msg("dp - v90 retrain error recovery case.  0x1ff2=");
 			sendHexWord(dp_read_dsp_ram(0x1ff2));sendCrLf();
 			dp_write_dsp_ram(0x1ff2, 0);	// clear indication
-			#if defined(CS_MODEM)
-			G(dp_cs_local_retrain_ratechange) = 2; 
-			cs_k56_remote_or_local(RETRAIN);	
-			#else
 			REMOTE_RET_INCREMENT ; 
-			#endif
 			G(dp_56k_state) = VPCM_RETRAIN ;
 			dp_56k_retrain();	
 		}
 		else if ( x_elapsed_time ( G(k56_timer) ) >= SECOND30 ) 
 		{
-			cs_insert_error_tag ( 0xf600 , 0 );
 			x_debug_msg("vpcm - retrain, 30 second timeout, issue retrain");
 			G(vpcm_retrain_count)++;
 			if ( G(vpcm_retrain_count) > 1 )
 			{
 				x_debug_msg ( "vpcm - retrain failure, > 60 sec" ) ;
-				#ifndef CS_MODEM
 				G(x_status).ud_TerminationCause = UD_TC_RETRAIN_FAIL;
-				#endif
 				G(dp_state) = DP_CALL_FAILURE ;
 				G(x_dial_residual) = MR_CD_DISCONNECT ;
 			}
-			#if defined(CS_MODEM)
-			G(dp_cs_local_retrain_ratechange) = 1; 
-			cs_k56_remote_or_local(RETRAIN);	
-			#else
 			LOCAL_RET_INCREMENT ; // update the retrain status
-			#endif
 			G(dp_56k_state) = VPCM_RETRAIN ;
 			dp_56k_retrain ( ) ;
 		}
@@ -953,7 +865,6 @@ void dp_56k_background ( void )
 		//to complete.
 	case VPCM_RATECHANGE :
 		G(k56_timer) = x_current_time () ;
-		cs_insert_error_tag(0xcd00 , 0);
 		G(dp_56k_state) = VPCM_RATECHANGE_WAIT_FOR_CONNECT ;
 		G(dp_line_state) = DP_LINE_RETRAINING ;
 		x_debug_msg("vpcm - goto VPCM_RATECHANGE_WAIT_FOR_CONNECT state");
@@ -969,30 +880,18 @@ void dp_56k_background ( void )
 		}
 		else if (dp_read_dsp_ram(0x1ff2))
 		{
-			cs_insert_error_tag ( 0xf100 , 0 );
 			x_debug_msg("v90 ratechange error recovery case.  0x1ff2=");
 			sendHexWord(dp_read_dsp_ram(0x1ff2));sendCrLf();
 			dp_write_dsp_ram(0x1ff2, 0);	// clear indication
-			#if defined(CS_MODEM)
-			G(dp_cs_local_retrain_ratechange) = 2; 
-			cs_k56_remote_or_local(RETRAIN);	
-			#else
 			REMOTE_RET_INCREMENT ; 
-			#endif
 			G(dp_56k_state) = VPCM_RETRAIN ;
 			dp_56k_retrain();	
 		}
 		else if ( x_elapsed_time ( G(k56_timer) ) >= SECOND10 ) 
 		{
-			cs_insert_error_tag ( 0xf800 , 0 );
 			G(vpcm_ratechange_count) = 0; 
 			x_debug_msg("vpcm - ratechange 10 second timeout, V.90 retrain");
-			#if defined(CS_MODEM)
-			G(dp_cs_local_retrain_ratechange) = 1; 
-			cs_k56_remote_or_local(RETRAIN);	
-			#else
 			LOCAL_RET_INCREMENT ; // update the retrain status
-			#endif
 			G(dp_56k_state) = VPCM_RETRAIN ;
 			dp_56k_retrain ( ) ;
 		}
@@ -1004,7 +903,7 @@ void dp_56k_background ( void )
 	}
 }
 
-#if defined(COPERNICUS) && !defined(CS_MODEM)
+#if defined(COPERNICUS)
 /****************************************************************
 Routine : dp_copernicus_hangup
 Description :
@@ -1085,7 +984,7 @@ dp_copernicus_ring(void)
 		}
 	}
 }
-#endif // COPERNICUS && !CS_MODEM
+#endif // COPERNICUS
 
 /****************************************************************
 Routine : read_dpram_d500
@@ -1100,8 +999,8 @@ void read_dpram_d500(void)
 	for (i=0x1500; i<0x150a; i++)
 	{
 		temp = dp_read_dsp_ram ( i ) ;
-		sendHexWord(i);sendDumbChar('=');
-		sendHexWord(temp);sendDumbChar(' ');
+		sendHexWord(i);send_debug_char('=');
+		sendHexWord(temp);send_debug_char(' ');
 		sendCrLf();
 	}
 	sendCrLf();
@@ -1122,8 +1021,8 @@ void dp_56k_adjust_mse(byte v34call)
 	temp1 = dp_read_dsp_ram(0x8de);
 	temp2 = dp_read_dsp_ram(0x8fb);
 
-	sendHexWord(0x8de);sendDumbChar('=');sendHexWord(temp1);sendCrLf();	   
-	sendHexWord(0x8fb);sendDumbChar('=');sendHexWord(temp2);sendCrLf();	   
+	sendHexWord(0x8de);send_debug_char('=');sendHexWord(temp1);sendCrLf();	   
+	sendHexWord(0x8fb);send_debug_char('=');sendHexWord(temp2);sendCrLf();	   
 
 	if(temp1 > temp2)			
 	{								
@@ -1148,8 +1047,8 @@ void dp_56k_adjust_mse(byte v34call)
 	temp1 = dp_read_dsp_ram(0x8ee);
 	temp2 = dp_read_dsp_ram(0x905);
 
-	sendHexWord(0x8ee);sendDumbChar('=');sendHexWord(temp1);sendCrLf();	   
-	sendHexWord(0x905);sendDumbChar('=');sendHexWord(temp2);sendCrLf();	   
+	sendHexWord(0x8ee);send_debug_char('=');sendHexWord(temp1);sendCrLf();	   
+	sendHexWord(0x905);send_debug_char('=');sendHexWord(temp2);sendCrLf();	   
 
 	if(temp1 > temp2)				
 	{								
@@ -1359,7 +1258,7 @@ BOOL dp_tx_lapm_error_check( void )
 				if ( G(sa_lapm_debug) != SA_LAPM_DEBUG_OFF )
 				{
 					PM_PRINTING_ON(0);
-						sendDumbChar('-');
+						send_debug_char('-');
 					PM_PRINTING_OFF();
 				}
 				#endif // SA_LAPM_DEBUG
@@ -1377,7 +1276,7 @@ BOOL dp_tx_lapm_error_check( void )
 			if ( G(sa_lapm_debug) != SA_LAPM_DEBUG_OFF )
 			{
 				PM_PRINTING_ON(0);
-					sendDumbChar('+');
+					send_debug_char('+');
 				PM_PRINTING_OFF();
 			}
 			#endif // SA_LAPM_DEBUG
