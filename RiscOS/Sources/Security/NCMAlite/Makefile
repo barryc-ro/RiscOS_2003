@@ -39,50 +39,7 @@ WFLAGS  = ~c~v
 CMHGFLAGS = -p -depend !Depend -throwback
 INCLUDES= -IC:,TCPIPLibs: 
 
-#
-# Different compile options - choose one
-#
-# use REMOTE_DEBUG to enable remote debugging
-# use ENABLE_DEBUGGING if you want to enable debugging!
-# use POINTLESS_BUTTONS if you want managed access to ignore the card going in and out and wait for the user
-#                       to click on various 'continue' buttons. Undefine this for any sane implementation
-# use SHOW_BOOTBLOCK_TRANSITIONS if you want really verbose debugging of what NCBootblock's doing with your data
-# use CHIMPANZEE_INTERFACE if you're a big American corporation and you need special hacks in Managed Access to accomodate
-# the fact that you bought 40,000 of the wrong type of smartcard
-# use DEFEAT_BROWSER_LIMIT to prevent MA parsing NCIBrowserMode tags for restricting URLs
-# use LIMIT_RUNAWAY_UIDS if you've got development NVRAM/OTP, otherwise weird stuff may happen
-# use HIDEOUS_PROXY_HACK if you want https proxy to always be set to whatever the http proxy is (undef to use real
-#                        security proxy information, if available in your area
-# use NVRAM_DEBUG if you know what it does, otherwise don't
-# use ETHERNET to disable all the modem crap and use a proper network interface
-# use SEND_SERIALID_LENGTH to include length data as first 2 bytes of the serial ID string
-# use ENABLE_HTTP_PROXY / ENABLE_HTTPS_PROXY to enable ROM based proxies for http and/or SSL http
-# use DEBUG_DISCONNECTS to set all PPP line drop timeouts to a minute
-# use ISP_CAPTURE to run ISPcapture on invalid smartcards
-# use TRAP_PPP_TIMEOUTS if you want a "disconnect?" OSD to sit on PPPTimeout events. Undef to just drop the line
-# use USE_NETINIT to invoke the NetInit module instead of bringing the network stuff up ourself
-# use SILENT_HUP to ignore the line dropping out from under us, otherwise return to the 'Connect' screen
-# use VERIFY_URL to check the home URL before sending it to the browser and generating an error if it seems bogus
-# use DISALLOW_USER_CONFIRMATION_OF_LOGOUTS to disallow user confirmation of logouts. If this is defined, performing a logout will just go ahead and log the user out without bringing up the confirmation dialogue.
-# use DISALLOW_USER_CONFIRMATION_OF_STANDBY to disallow user confirmation of standby. If this is defined, pressing standby will just go into standby without bringing up the confirmation dialogue.
-
-# Override any options by setting the OPTS in the Build options
-
-# debugging
-
-
-NODB  =         -UREMOTE_DEBUG -DCHIMPANZEE_INTERFACE \
-		-UPOINTLESS_BUTTONS -UAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
-		-USHOW_BOOTBLOCK_TRANSITIONS  \
-		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
-		-DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
-		-DISP_CAPTURE -UTRAP_PPP_TIMEOUTS -UUSE_NETINIT \
-		-DSILENT_HUP -UVERIFY_URL ${TYPE}
-
-NCTARGETARCH = ${NODB}
-
-CCFLAGS = -Wp -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS} ${DEBUG} -DUserIF_${USERIF}
+CCFLAGS = -Wp -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${TYPE} ${OPTS} ${DEBUG} -DUserIF_${USERIF}
 
 
 
@@ -97,9 +54,9 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.c_AbsSym
-SOCKLIB	   = TCPIPLibs:o.socklib5 
-INETLIB	   = TCPIPLibs:o.inetlib
-UNIXLIB    = TCPIPLibs:o.unixlib
+SOCKLIB	   = TCPIPLibs:o.socklibzm
+INETLIB	   = TCPIPLibs:o.inetlibzm
+UNIXLIB    = TCPIPLibs:o.unixlibzm
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
 LIBSD      = ${LIBDIR}.DebugLib.o.debuglibzm
