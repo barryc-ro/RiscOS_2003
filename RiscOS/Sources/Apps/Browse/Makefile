@@ -74,6 +74,7 @@
 # 1999-03-30	ADH	HTMLLib: and ${LIBDIR}.ImageLib. don't exist as paths
 #			anymore so now use LIBDIR etc. Now exports mono
 #			sprites ([!]Sprites23). Tweaked CC args (-Wpc).
+# 2000-11-10	ADH	DebugLib support added.
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -124,7 +125,7 @@ WFLAGS		= ~cf~vr
 # ROM build (plus debug), the Surfboard RAM build (plus debug), and the
 # Intertalk build (plus debug).
 
-BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20
+BASEFLAGS	= -DCOMPAT_INET4 "-DSYSTEM=\"${SYSTEM}\"" -DRISCOS -DNSPR20
 
 # Examples of other possibly useful BASEFLAGS settings
 
@@ -166,10 +167,12 @@ TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
 RENDERLIB	= tbox:o.renderlib
 INETLIB		= TCPIPLibs:o.inetlib
+SOCKLIB		= TCPIPLibs:o.socklib
 UNICODELIB	= C:Unicode.o.ucodelib
 MEMLIB		= C:MemLib.o.MemLib
 NSPRLIB		= C:NSPRLib.o.NSPRLib
 JSLIB		= C:JSLib.o.JSLib
+DEBUGLIB	= <Lib$Dir>.Debuglib.o.debuglib
 
 LIBSM = \
  ${HTMLLIB}zm \
@@ -216,7 +219,6 @@ LIBSD = \
  ${EVENTLIB} \
  ${TOOLBOXLIB} \
  ${WIMPLIB} \
- ${INETLIB} \
  ${IMAGELIB} \
  ${PNGLIB} \
  ${JPEGLIB} \
@@ -225,7 +227,10 @@ LIBSD = \
  ${JSLIB} \
  ${NSPRLIB} \
  ${MEMLIB} \
- ${RENDERLIB}
+ ${RENDERLIB} \
+ ${DEBUGLIB} \
+ ${SOCKLIB} \
+ ${INETLIB}
 
 
 # -----------------------------------------------------------------------------
@@ -313,7 +318,6 @@ OBJS = \
  o.SaveSHelp		\
  o.SaveText		\
  o.SetPBoxes		\
- od.svcprint		\
  o.Tables		\
  o.TGutils		\
  o.TokenUtils		\
@@ -458,7 +462,6 @@ OBJSD = \
  od.SaveSHelp		\
  od.SaveText		\
  od.SetPBoxes		\
- od.svcprint		\
  od.Tables		\
  od.TGutils		\
  od.TokenUtils		\
@@ -532,7 +535,6 @@ OBJSDZ = \
  odz.SaveSHelp		\
  odz.SaveText		\
  odz.SetPBoxes		\
- odz.svcprint		\
  odz.Tables		\
  odz.TGutils		\
  odz.TokenUtils		\
@@ -676,7 +678,6 @@ OBJSD_SURF = \
  od_surf.SaveSHelp	\
  od_surf.SaveText	\
  od_surf.SetPBoxes	\
- od_surf.svcprint	\
  od_surf.Tables		\
  od_surf.TGutils	\
  od_surf.TokenUtils	\
@@ -822,7 +823,6 @@ OBJSD_ITALK = \
  od_italk.SaveSHelp	\
  od_italk.SaveText	\
  od_italk.SetPBoxes	\
- od_italk.svcprint	\
  od_italk.Tables	\
  od_italk.TGutils	\
  od_italk.TokenUtils	\
