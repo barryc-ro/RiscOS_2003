@@ -16,7 +16,7 @@ include Makefiles:ModStdRule
 include Makefiles:ModuleLibs
 include Makefiles:RAMCModule
 
-C++FLAGS = ${CFLAGS} -zM -Wp -ws -zps1 -D_LITTLE_ENDIAN
+C++FLAGS = ${CFLAGS} ${HPDEFINES} -zM -Wp -ws -zps1 -D_LITTLE_ENDIAN
 CINCLUDES += -ICPP:
 ARFLAGS += -o
 
