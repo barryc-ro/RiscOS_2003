@@ -399,7 +399,7 @@ void multicaster_run(multicaster_object *mo)
 
             current_delay = (unsigned long) (new_delay + 0.5);
 
-            platform_log(LOG_INFO,
+            platform_log(LOG_DEBUG,
                     "tick; usecs:%8u; bit dev:%7d (%6.4f); total_dev:%7.0f; "
                     "old_delay:%5.0f; new_delay:%5.0f (%6.3f%%); ppl:%2d (%3d) corrected:%4d:%4d",
                      sample_time_usec, sample_bit_deviation, sample_bit_ratio, total_bit_deviation,                    
