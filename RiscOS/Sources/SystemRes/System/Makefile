@@ -180,6 +180,14 @@ abs.SysPathsD: ${OBJSD} ${OSLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.main:	c.main
+o.main:	OS:h.macros
+o.main:	OS:h.os
+o.main:	OS:h.types
+o.main:	OS:h.osgbpb
+o.main:	OS:h.fileswitch
+o.main:	OS:h.osmodule
+o.main:	Support:h.x
 o.x:	<Support$Dir>.c.x
 o.x:	C:h.kernel
 o.x:	C:h.swis
@@ -187,19 +195,3 @@ o.x:	OS:h.macros
 o.x:	OS:h.os
 o.x:	OS:h.types
 o.x:	<Support$Dir>.h.x
-o.main:	c.main
-o.main:	OS:h.macros
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.osgbpb
-o.main:	OS:h.fileswitch
-o.main:	OS:h.osmodule
-o.main:	Support:h.x
-o.main:	c.main
-o.main:	OS:h.macros
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.osgbpb
-o.main:	OS:h.fileswitch
-o.main:	OS:h.osmodule
-o.main:	Support:h.x
