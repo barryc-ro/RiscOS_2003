@@ -8,6 +8,7 @@
 # 20 Sep 1996 Rich Buckley  Created
 # 24 Apr 1997 Rich Buckley  Made machine aware
 # 23 May 1997 Rich Buckley  Changed debug build
+# 22 Apr 1999 David Cotton  Altered to use LocalRes
 #
 
 #
@@ -62,7 +63,7 @@ clean:
 
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 all: ${TARGETSA}
@@ -87,36 +88,3 @@ ${TARGETD}: ${SOURCED}
         ${AS} ${ASFLAGS} ${SOURCED}
 
 # Dynamic dependencies:
-rm.Boca.ModemSA: s.init
-rm.Boca.ModemSA: Hdr:ListOpts
-rm.Boca.ModemSA: Hdr:NdrDebug
-rm.Boca.ModemSA: Hdr:Macros
-rm.Boca.ModemSA: Hdr:System
-rm.Boca.ModemSA: Hdr:SWIs
-rm.Boca.ModemSA: Hdr:CPU.Generic26
-rm.Boca.ModemSA: Hdr:IO.GenericIO
-rm.Boca.ModemSA: Hdr:RISCOS
-rm.Boca.ModemSA: Hdr:Machine.<Machine>
-rm.Boca.ModemSA: Hdr:Machine.Machine
-rm.Boca.ModemSA: Hdr:ModHand
-rm.Boca.ModemSA: Hdr:HighFSI
-rm.Boca.ModemSA: Hdr:DevNos
-rm.Boca.ModemSA: Hdr:Services
-rm.Boca.ModemSA: Hdr:Symbols
-rm.Boca.ModemSA: Hdr:MsgTrans
-rm.Boca.ModemSA: Hdr:Proc
-rm.Boca.ModemSA: Hdr:Buffer
-rm.Boca.ModemSA: Hdr:ResourceFS
-rm.Boca.ModemSA: Hdr:Podule
-rm.Boca.ModemSA: Hdr:DeviceFS
-rm.Boca.ModemSA: Hdr:IO.IOEB
-rm.Boca.ModemSA: Hdr:IO.IOC
-rm.Boca.ModemSA: Hdr:RS423
-rm.Boca.ModemSA: Hdr:IO.IOMDL
-rm.Boca.ModemSA: VersionNum
-rm.Boca.ModemSA: s.errors
-rm.Boca.ModemSA: s.macros
-rm.Boca.ModemSA: s.main
-rm.Boca.ModemSA: s.hardware
-rm.Boca.ModemSA: s.interrupts
-rm.Boca.ModemSA: s.devicecall
