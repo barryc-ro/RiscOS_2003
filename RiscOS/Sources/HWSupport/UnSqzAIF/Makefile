@@ -9,19 +9,22 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
-AS      = aasm
+AS      = objasm
 CP      = copy
+LD      = link
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
+LDFLAGS = -bin -base 0
 
 #
 # Program specific options:
 #
 COMPONENT = UnSqzAIF
-SOURCE    = s.Front
+SOURCE    = s.ModHead
 TARGET    = rm.UnSqzAIF
+OBJECT    = o.ModHead
 
 #
 # Generic rules:
@@ -35,22 +38,15 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${RM} o
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+${TARGET}: ${OBJECT}
+        ${LD} ${LDFLAGS} -o $@ ${OBJECT}
+        settype $@ Module
+
+${OBJECT}: ${SOURCE}
+        ${MKDIR} o
+        ${AS} ${ASFLAGS} -o $@ ${SOURCE}
 
 # Dynamic dependencies:
-rm.UnSqzAIF: Hdr:ListOpts
-rm.UnSqzAIF: Hdr:Macros
-rm.UnSqzAIF: Hdr:System
-rm.UnSqzAIF: Hdr:SWIs
-rm.UnSqzAIF: Hdr:CPU.Generic26
-rm.UnSqzAIF: Hdr:IO.GenericIO
-rm.UnSqzAIF: Hdr:RISCOS
-rm.UnSqzAIF: Hdr:Services
-rm.UnSqzAIF: Hdr:ModHand
-rm.UnSqzAIF: Hdr:MsgTrans
-rm.UnSqzAIF: Hdr:NdrDebug
-rm.UnSqzAIF: Version
-rm.UnSqzAIF: s.ModHead

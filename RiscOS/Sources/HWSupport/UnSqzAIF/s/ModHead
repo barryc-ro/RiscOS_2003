@@ -1,8 +1,32 @@
 ; > Sources.ModHead
-        LEADR   Module_LoadAddr
 
-        ASSERT  (.=Module_BaseAddr)
+;;-----------------------------------------------------------------------------
+;; Decompression module for squeezed AIF files with intact AIF header
+;;-----------------------------------------------------------------------------
 
+        GET     Hdr:ListOpts
+        GET     Hdr:Macros
+        GET     Hdr:System
+        GET     Hdr:Services
+        GET     Hdr:ModHand
+        GET     Hdr:MsgTrans
+        GET     Hdr:NdrDebug
+
+        GET     VersionASM
+
+        GBLL    hostvdu
+        GBLL    debugwt
+debug    SETL   false
+debugwt  SETL   false
+hostvdu  SETL   false
+
+        ! 0, "Module workspace is &":CC:(:STR:(:INDEX:@)):CC:" bytes"
+
+; ----------------------------------------------------------------------------------------------------------------------
+
+        AREA    |!!!ModuleHeader|, CODE, READONLY, PIC
+
+Module_BaseAddr
         DCD     0
         DCD     Initialise     - Module_BaseAddr
         DCD     0
@@ -10,17 +34,28 @@
         DCD     Title          - Module_BaseAddr
         DCD     Helpstr        - Module_BaseAddr
         DCD     0                                       ; Helptable
+  [ :LNOT: No32bitCode
         DCD     0                                       ; SWIbase
-        DCD     0
-        DCD     0
+        DCD     0                                       ; SWI handler code
+        DCD     0                                       ; SWI decode table
         DCD     0                                       ; SWIdecode
-        DCD     0
-        DCD     0
+        DCD     0                                       ; International messages
+        DCD     ModuleFlags    - Module_BaseAddr        ; Module flags
+  ]
 
 ; ---------------------------------------------------------------------------------------------------
 Title   DCB     "UnSqueezeAIF",0
-Helpstr DCB     "UnSqueezeAIF",9,"$VString ($Date)",0
-                ALIGN
+Helpstr DCB     "UnSqueezeAIF",9,"$Module_MajorVersion ($Module_Date)"
+  [ Module_MinorVersion <> ""
+        DCB     " $Module_MinorVersion"
+  ]
+        DCB     0
+        ALIGN
+
+  [ :LNOT: No32bitCode
+ModuleFlags
+        DCD     1       ; Module is 32-bit safe
+  ]
 
 ; ---------------------------------------------------------------------------------------------------
 
@@ -55,27 +90,30 @@ notneedederror
         DCB     "UnSqueezeAIF not needed on this platform",0
         ALIGN
 
-
-Service
-        ROUT
+ServiceTable
+        DCD     0                                ;flags
+        DCD     UService - Module_BaseAddr
+        DCD     Service_UKCompression
+        DCD     0                                ;terminator
+        DCD     ServiceTable - Module_BaseAddr
+Service ROUT
+        MOV     r0, r0                           ;magic instruction
         TEQ     r1, #Service_UKCompression
-        MOVNES  pc, lr                  ;Not our service.
-
-        CMP     r0, #0                  ;Is it the pre-decompression call?
-        MOVNES  pc, lr                  ;No, so we're not interested.
+        MOVNE   pc, lr                           ;Not our service.
+UService
+        CMP     r0, #0                           ;Is it the pre-decompression call?
+        MOVNE   pc, lr                           ;No, so we're not interested.
 
         Push    "r0,r2-r6,lr"
 
         LDR     r0,[r12]
         ANDS    r0,r0,#1
-        Pull    "r0,r2-r6,pc",EQ,^      ; forget it if not needed
+        Pull    "r0,r2-r6,pc",EQ        ; forget it if not needed
 
         ;Check whether the file is an AIF-headered file.
         LDR     lr, [r2, #&10]          ; We know R2 is &8000, 'cos it's an app
-        MOV     r0, #&EF000000          ; 'SWI'
-        ORR     r0, r0, #&0011          ; 'OS_Exit'
-
-        CMP     r0, lr                  ; Is the 5th word a 'SWI OS_Exit'?
+        EOR     r0, lr, #&EF000000      ; 'SWI'
+        EORS    r0, r0, #&0011          ; 'OS_Exit'  Is the 5th word a 'SWI OS_Exit'?
         MOVEQ   r6,#1
         MOVNE   r6,#0                   ;flag AIF/non-AIF
   [ :LNOT: AllowNonAIF
@@ -93,12 +131,13 @@ Service
         ;there's nothing to do, so quit, unclaimed.
 01      MOV     r1, #Service_UKCompression
         Debug   wt,"give up 1"
-        Pull    "r0,r2-r6,pc",,^
+        Pull    "r0,r2-r6,pc"
 
 02
         LDR     lr,[r2]
-        BIC     lr,lr,#&FF000000
-        ADD     r0,r2,lr,LSL #2         ;add offset of branch in bytes (should be +ve)
+        MOVS    lr, lr, LSL #8          ;remove top 8 bits
+        BMI     %BT01                   ;negative?  nasty branch - forget this code
+        ADD     r0,r2,lr,ASR #6         ;add offset of branch in bytes (should be +ve)
         ADD     r0,r0,#8                ;and account for PC+8
 
         ADR     r4,UnsqSignature
@@ -120,7 +159,7 @@ Service
 ;give up
 04      MOV     r1, #Service_UKCompression
         Debug   wt,"give up 2"
-        Pull    "r0,r2-r6,pc",,^
+        Pull    "r0,r2-r6,pc"
 
 05      ;found 1st word of signature
         MOV     r3,#UnsqSigSize-4
@@ -145,7 +184,7 @@ Service
         ADR     r5,CopySyncAndGoR4
         STR     r5,[r4],#4
 
-        ;if non-AIF, can't fix-up header to unsqueeze first, so cliam and return now
+        ;if non-AIF, can't fix-up header to unsqueeze first, so claim and return now
         ;this means code can't really be patched after unsqueeze, but at least the
         ;unsqueeze is fixed
         ;
@@ -153,22 +192,19 @@ Service
         ;because we know FileSwitch does a sychronise, after this service call (after
         ;the next service call, for patching, in fact)
 
-        CMP     r6,#0                   
-        MOVEQ   r1, #0                  ; Mark it as claimed.
-        Pull    "r0,r2-r6,pc",EQ,^      ; That's all folks!
+        ANDS    r1, r6, #1              ; AIF bit set?  If not, set Z, R1=0
+        Pull    "r0,r2-r6,pc",EQ        ; That's all folks!
 
         ;Now calculate the B needed to get back here once it's unsqueezed
         Debug   wt,"It's a squeezed AIF file which we can handle!"
         ADR     r0, retfrmunsq
-        MOV     r2, #&8000
-        ADD     r2, r2, #&14
+        MOV     r1, #&8000
+        ADD     r2, r1, #&14
         SUB     r0, r0, r2              ; R0 is the offset, accounting for PC+8
         MOV     r2, #&EA000000          ; Create the BAL bit of the instruction
         ORR     r0, r2, r0, LSR #2      ; OR in the offset
 
-        MOV     r1, #&8000
-        ADD     r1, r1, #&0C
-        LDR     lr, [r1]                ; Grab what was at the ImageEntryPoint
+        LDR     lr, [r1, #&0C]!         ; Grab what was at the ImageEntryPoint
         STR     r0, [r1]                ; Replace it with the branch
         Push    "lr"                    ; Stuff it safe on the stack, along with the cache status
   Debug wt,"synchronise"
@@ -176,9 +212,13 @@ Service
         SWI     XOS_SynchroniseCodeAreas ; we've been poking code
         LDR     lr,[sp]
         ;Now go do the unsqueeze
-        TEQP    pc, #0                  ; USR mode, all ints on
-        MOV     r12, #&80000000         ; Cause address extinction if used
-        MOV     r13, #&80000000         ; (keep 1.20 compat capable)
+        MOV     r0, #0
+        MRS     r0, CPSR
+        BICS    r0, r0, #&F             ; SVC32->USR32; SVC26->USR26
+        TEQEQP  pc, #Z_bit              ; USR26, retain Z set
+        MSRNE   CPSR_c, r0              ; USR mode, all ints on
+        MVN     r12, #0                 ; Cause address extinction if used
+        MOV     r13, r12                ; (keep 1.20 compat capable)
         MOV     pc, #&8000              ; Away the noo!
 
 retfrmunsq
@@ -186,17 +226,15 @@ retfrmunsq
         SWI     XOS_EnterOS             ; Back into SVC mode
         Pull    "r1"
   Debug wt,"back from unsqueeze",r1
-        MOV     r0, #&8000
-        ADD     r0, r0, #&0C
-        STR     r1, [r0]                ; Put the ImageEntryPoint instruction back!
-        MOV     r4, r0                  ; This is the new execution point
+        MOV     r4, #&8000              ; Construct the new execution point
+        STR     r1, [r4, #&C]!          ; Put the ImageEntryPoint instruction back!
         MOV     r0,#1
         MOV     r1,r4
         MOV     r2,r4
         SWI     XOS_SynchroniseCodeAreas ;we've been poking again
         STR     r4,[sp,#12]             ; update the stacked r4
         MOV     r1, #0                  ; Mark it as claimed.
-        Pull    "r0,r2-r6,pc",,^        ;That's all folks!
+        Pull    "r0,r2-r6,pc"           ;That's all folks!
 
 
 ;code to look for
