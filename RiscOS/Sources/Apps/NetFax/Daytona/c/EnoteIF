@@ -1,0 +1,157 @@
+/*
+ * EnoteIF.c - Interface to !Enote
+ *
+ * R C Manby
+ *
+ * Started 19 November 1997
+ */
+
+
+#include "StdTypes.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "kernel.h"
+#include "FileOps.h"
+
+#include "StateKicker.h"
+#include "SendQ.h"
+#include "PrintQ.h"
+
+#include "wimp.h"
+#include "wimplib.h"
+
+#include "AddrBookIF.h"
+#include "EnoteIF.h"
+
+
+
+int configured_enote_hardcopy_required = TRUE;
+
+static void DataRelease(int data_area_id);
+
+
+/*
+ * Process wimp messages from !Enote
+ */
+
+extern int EnoteIF_WimpMessageHandler(WimpMessage *message, void *handle)
+{
+	static unsigned int stash_SendQ_pid = 0;	/* pid of document in SendQ */
+	static unsigned int stash_PrintQ_pid = 0;	/* pid of document in PrintQ */
+	
+	switch (message->hdr.action_code)
+    {
+    	case DayNote_SendMail:
+	    	{
+				DayNote_SendNote *send = (DayNote_SendNote *)message;
+				DayNote_Path      reply;
+	
+				/* DayNote_SendMail messages are paired, the first specifies whether the Enote is to  */
+				/* be emailed, printed or both. We create one document in the SendQ or PrintQ or both */
+				/* telling !Enote the directory name(s). The second message arrives when !Enote       */
+				/* has written the file(s) to the directory(s) and marks the document(s) as complete. */
+	
+	            /* bit encoding in send->data.send_methods */
+	            /*   bit 1  bit 0                                                    */
+	            /*    1      1     Print & Email (to address in send->email_address) */
+	            /*    1      0     Print                                             */
+	            /*    0      1             Email (to address in send->email_address) */
+	            /*    0      0     File(s) created, start print and/or email now     */
+/*>>>RCM says bit 1 may not be implemented - check wuth JB*/
+/*>>>RCM says this doesn't matter as spec calls for print out AFTER enote is send, which we request as a parameter to SendQ_ExtIF_NewDocument() */
+				if ((send->data.send_methods & 3) != 0)
+				{
+					if (send->data.send_methods & 1)
+					{
+						if ((stash_SendQ_pid = SendQ_ExtIF_NewDocument(reply.data.path_data, "" /*email_address*/, configured_enote_hardcopy_required)) != 0)
+						{
+							AddressRec *pAddressRecord;
+							
+							if ((pAddressRecord = SendQ_AddressRecord_from_pid(stash_SendQ_pid)) != NULL)
+							{
+								if (send->data.data_area)
+							    {
+		    						strcpy(pAddressRecord->ContactName, send->data.data_area->contact_name);
+									strcpy(pAddressRecord->EmailAddress, send->data.data_area->email_address);
+	    							strcpy(pAddressRecord->DirectPhoneNumber, send->data.data_area->fax_number);
+	     		            		pAddressRecord->DeviceClass = send->data.data_area->device_class;
+	     		            		pAddressRecord->LocalRouting = RouteISP;	/*>>>should this be RouteISP always??? check EmailAddress valid???*/									
+
+                                	DataRelease(send->data.data_area_id);
+                                }
+                                else
+                                {
+                                	strcpy(pAddressRecord->EmailAddress, send->data.string_data.email_address);
+                                	/*>>>pAddressRecord->DeviceClass do we care?*/
+                                	pAddressRecord->LocalRouting = RouteISP;	/* we've only got an email address, so must RouteISP */
+                                }
+							}
+
+							reply.Hdr.size        = sizeof(DayNote_Path);
+							reply.Hdr.your_ref    = send->Hdr.my_ref;	/* replying to senders message      */
+							reply.Hdr.action_code = DayNote_PathReply;	/* supplying a directory to...      */
+							reply.data.method     = 1;					/* ...put the file to be emailed in */
+	
+							/* reply directly to task that sent the message */
+							(void)wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&reply, send->Hdr.sender, 0, 0);
+							/* we don't care about errors */
+						}
+					}
+	
+					if (send->data.send_methods & 2)
+					{
+						if ((stash_PrintQ_pid = PrintQ_ExtIF_NewDocument(reply.data.path_data)) != 0)
+						{
+							reply.Hdr.size        = sizeof(DayNote_Path);
+							reply.Hdr.your_ref    = send->Hdr.my_ref;	/* replying to senders message      */
+							reply.Hdr.action_code = DayNote_PathReply;	/* supplying a directory to...      */
+							reply.data.method     = 2;					/* ...put the file to be printed in */
+	
+							/* reply directly to task that sent the message */
+							(void)wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&reply, send->Hdr.sender, 0, 0);
+	                        /* we don't care about errors */
+						}
+					}
+				}
+				else
+				{
+	            	/* !Enote is telling us that the files to send and/or print have been created */
+	
+					if (stash_SendQ_pid != 0)
+					{
+						SendQ_ExtIF_Subject(stash_SendQ_pid, send->data.string_data.subject);
+	                	SendQ_ExtIF_FileComplete(stash_SendQ_pid, "Enote", FILETYPE_TEXT);	/* count 1 file - restricted text email */
+	                	SendQ_ExtIF_DocumentComplete(stash_SendQ_pid);	/* ready to send */
+	                }
+	
+					if (stash_PrintQ_pid != 0)
+					{
+	                	PrintQ_ExtIF_FileComplete(stash_PrintQ_pid, "Enote", FILETYPE_TEXT);	/* count 1 text-file */
+	                	PrintQ_ExtIF_DocumentComplete(stash_PrintQ_pid);  /* ready to print */
+	                }
+				}
+			}
+			break;
+	}
+
+	return(1);	/* processed */
+}
+
+
+static void DataRelease(int data_area_id)
+{
+	Dayt_SearchDataRelease_Message reply;
+
+	reply.hdr.size = sizeof(Dayt_SearchDataRelease_Message);
+	reply.hdr.your_ref    = 0;		 /* original message */
+	reply.hdr.action_code = Dayt_SearchDataRelease_MessageNum;
+	reply.data_area_id = data_area_id;
+
+	/* reply needs to go to AddressBook, rather than Enote editor */
+	(void)wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&reply, 0, 0, 0);	/* broadcast, so AddressBook receives message */
+    /* we don't care about errors */
+}
+
+/* end of EnoteIF.c */

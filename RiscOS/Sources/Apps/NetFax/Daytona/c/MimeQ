@@ -1,0 +1,714 @@
+/*
+ *
+ * MimeQ.c - Daytona Mime mail encoder
+ *
+ * R C Manby
+ *
+ * Started 11 September 1997
+ */
+
+/*
+ *
+ * RemXfers interface to the MIME encoder
+ */
+
+
+#include "BuildFlags.h"
+#include "StdTypes.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "kernel.h"
+
+#include "StateKicker.h"
+#include "RemXfer.h"
+#include "SendQ.h"
+#include "PrintQ.h"
+#include "MimeQ.h"
+
+#include "NFELib.h"
+#include "MimeIF.h"
+
+#include "functions.h"
+
+#include "DebugLib.h"
+
+#include "SetupIF.h"
+#include "FileOps.h"
+
+#define SPLIT 1
+
+int configured_pages_per_email = 3;
+int configured_max_message_size = 100*1024;
+
+static int estimate_mime_size(int original_filesize);
+
+/* A multi-page document is delivered as one or more email messages, */
+/* each email message holding one or more pages.                     */
+
+/* We try to encode documents as email messages well in advance of */
+/* the time that SMTP is ready to take them. This ensures that     */
+/* on-line time is not wasted by the encode process. The encode is */
+/* kicked off as the ISP dial-up starts, which gives a good        */
+/* 30 seconds to queue up a number of messages.                    */
+
+/*
+ * A circular queue of email messages, each message holding one (or part of one) document.
+ */
+struct _mail_queue_element
+{
+	int	processID;	/* a given document (uniquely identified by its ProcessId) */
+	int loPage;     /* first page in this message */
+	int hiPage;     /* last page in this message */
+	int fileNo;		/* complete email message is <mailqueue>.<fileNo> */
+};
+
+typedef struct _mail_queue_element mail_queue_element;
+
+/* The circular queue itself */
+#define MAIL_QUEUE_SIZE 20
+struct
+{                                       		/* empty when (qhead == qtail), full when (qhead == (qtail+1)) */
+	int	qhead, qtail;                   		/* first item to remove is at [qhead+1], last item entered is at [qtail]  */
+	mail_queue_element queue[MAIL_QUEUE_SIZE];	/* only (QSIZE - 1) entries usable at any time */
+} mail = { 0, 0};                       		/* initialised to empty */
+
+
+/*
+ * A list of pages encoded as mime entities, destined to form the next email message.
+ */
+struct _entity_list_element
+{
+	int page;
+	int fileNo;	/* entity file is <entityqueue>.<fileNo> */
+};
+
+typedef struct _entity_list_element entity_list_element;
+
+/* The list itself */
+#define ENTITY_LIST_SIZE 3
+struct
+{
+	int count;
+	int total_size;
+	entity_list_element list[ENTITY_LIST_SIZE];
+	NFE_MIME object[ENTITY_LIST_SIZE];			/*>>>would be cleaner to abstract this so that we don't import NFELib */
+	NFE_NF_msg_class class[ENTITY_LIST_SIZE];
+} entity = { 0, 0};
+
+
+
+
+
+enum _ME_States { ME_IDLE = 0, ME_S2, ME_extra, ME_S4, ME_S5, ME_S6, ME_S2_stopping, ME_extra_stopping, ME_S4_stopping, ME_S5_stopping, ME_S6_stopping };
+typedef enum _ME_States ME_States;
+
+
+static BOOL ME_MQ_MIMEENCODE_ACTIVE = FALSE;	/* when TRUE, tells MailQ_StateMachine that it should wait for MimeEncode_StateMachine to */
+                                                /* produce another mailfile if the MailQ is empty, rather that reporting 'no more mailfiles' */
+
+extern void MimeEncode_StateMachine(int messageNumber, messageDataBlock *messageData)
+{
+	static ME_States state = ME_IDLE;
+	static BOOL flush_entities = FALSE;	/* set TRUE to flush entity list on going idle - used after errors or some RX_ME_PREFETCH_STOP messages */
+	static BOOL stopping = FALSE;       /* set TRUE to flush mail queue then send ME_RX_STOPPED - used after all RX_ME_PREFETCH_STOP messages */  
+
+    static unsigned int ProcessId = 0;
+    static char directory[255];
+    static char stash_to_emailaddress[256];
+    static char stash_to_realname[256];
+    static char stash_subject[256];
+    static unsigned int stash_document_number;
+    static unsigned int stash_hiPage;
+	static BOOL stash_pageStream;
+
+	static int  mailfileNo;
+
+    static unsigned int current_page, loPage, hiPage;
+
+	ME_States nextstate = state;
+
+	switch (state)
+	{
+    	case ME_IDLE:
+			switch (messageNumber)
+			{
+				case RX_ME_PREFETCH_START:
+					/* tell MailQ_StateMachine that it should wait for mailfiles if the queue is empty */
+					ME_MQ_MIMEENCODE_ACTIVE = TRUE;
+					flush_entities = FALSE;
+					stopping = FALSE;
+
+					/* ask SendQ for the first document */
+	        		StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_WHICH_DOCUMENT, NULL);
+    	    		nextstate = ME_S2;
+    	    		break;
+
+				case RX_ME_PREFETCH_STOP:
+					stopping = TRUE;		/* indicates flush queue, then send ME_RX_STOPPED */
+					nextstate = ME_IDLE;	/* already idle, so won't send ME_MQ_GOING_IDLE */
+					break;
+        	}
+        	break;
+
+        case ME_S2:
+        	switch (messageNumber)
+        	{
+				case RX_ME_PREFETCH_STOP:
+					nextstate = ME_S2_stopping;
+				    /* must wait for the response to the ME_SQ_WHICH_DOCUMENT or ME_SQ_NEXT_DOCUMENT we sent */
+				    /* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
+                    break;
+
+        		case SQ_ME_NO_NORE_DOCUMENTS:
+        			/* tell MailQ we can't supply any more mailfiles */
+#if 0
+					ME_MQ_MIMEENCODE_ACTIVE = FALSE;
+        			StateKicker_SendMessage(MailQ_StateMachine, ME_MQ_GOING_IDLE, NULL);	/* if MailQ_StateMachine is stalled, this will release it to report 'no more mailfiles' */
+#endif
+        			nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */
+        			break;
+
+                case SQ_ME_THIS_DOCUMENT:
+                	{
+	                	_kernel_oserror *error = NULL;
+	                	char current_page_leafname[32];
+	        			int objecttype, filelength, filetype;
+
+	                	ProcessId = messageData->data.this_document.pid;
+	                	strcpy(directory, messageData->data.this_document.directory);
+						SendQ_emailaddress_from_pid(stash_to_emailaddress, ProcessId);
+						SendQ_contactname_from_pid(stash_to_realname, ProcessId);
+						SendQ_subject_from_pid(stash_subject, ProcessId);
+						SendQ_documentnumber_from_pid(&stash_document_number, ProcessId);
+
+						current_page     = messageData->data.this_document.loPage;	/* usually 1 */
+						stash_hiPage     = messageData->data.this_document.hiPage;
+						stash_pageStream = messageData->data.this_document.pageStream;
+
+	                    /* clear entity list (should be empty, but make sure) */
+						entity.count = 0;
+						entity.total_size = 0;
+
+						/* no pages encoded yet */
+	                    loPage = 0;
+	                    hiPage = 0;
+
+					/* encode first entity of email message */
+#if SPLIT
+						/* encode first page of new document as first entity of an email message */
+						StateKicker_SendMessage(MimeEncode_StateMachine, ME_ME_FIRST_ENTITY, NULL);
+						nextstate = ME_extra;
+#else					
+						sprintf(current_page_leafname, "%d", current_page);
+	                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
+	                    error = osfile_ReadCatInfoDL(directory, current_page_leafname, &objecttype, &filelength, &filetype);
+
+						/*>>>for now, checking that a file exists is enough - we should do size checking (and possibly type checks?) */
+	                    if ((error == NULL) && (objecttype == 1/*file found*/))
+	                    {
+	                    	/* MIME encode <directory>.<current_page> to <EntityQ>.<current.page> */
+	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname, filetype, stash_document_number, current_page,
+	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
+	                    	                         );
+
+	                    	nextstate = ME_S4;
+	                    }
+	                    else
+	                    {
+	                    	/* appears to be an empty document - is there another document we can encode */
+	                    	StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_NEXT_DOCUMENT, NULL);
+	                    	nextstate = ME_S2;
+	                    }
+#endif
+                    }
+        			break;
+        	}
+        	break;
+
+	    /* must wait for the response to the ME_SQ_WHICH_DOCUMENT or ME_SQ_NEXT_DOCUMENT we sent */
+	    /* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
+		case ME_S2_stopping:
+			switch (messageNumber)
+			{
+				case SQ_ME_NO_NORE_DOCUMENTS:
+				case SQ_ME_THIS_DOCUMENT:
+					stopping = TRUE;		/* indicates flush mail queue, then send ME_RX_STOPPED */
+					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */
+					break;
+			}
+			break;
+#if SPLIT
+		case ME_extra:
+			switch (messageNumber)
+			{
+				case RX_ME_PREFETCH_STOP:
+					nextstate = ME_extra_stopping;
+					break;
+
+				case ME_ME_FIRST_ENTITY:
+					{
+	                	_kernel_oserror *error = NULL;
+	        			int objecttype, filelength, filetype;
+	                	char current_page_leafname[32];
+	        			
+						sprintf(current_page_leafname, "%d", current_page);
+	                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
+	                    error = osfile_ReadCatInfoDL(directory, current_page_leafname, &objecttype, &filelength, &filetype);
+
+						/*>>>for now, checking that a file exists is enough - we should do size checking (and possibly type checks?) */
+	                    if ((error == NULL) && (objecttype == 1/*file found*/))
+	                    {
+	                    	/* MIME encode <directory>.<current_page> to <EntityQ>.<current.page> */
+	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname, filetype, stash_document_number, current_page,
+	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
+	                    	                         );
+
+	                    	nextstate = ME_S4;
+	                    }
+	                    else
+	                    {
+	                    	/* appears to be an empty document - is there another document we can encode */
+	                    	StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_NEXT_DOCUMENT, NULL);
+	                    	nextstate = ME_S2;
+	                    }
+
+
+                    }
+					break;
+			}
+			break;
+
+		case ME_extra_stopping:
+			switch (messageNumber)
+			{
+				case ME_ME_FIRST_ENTITY:
+					stopping = TRUE;		/* indicates flush mail queue, then send ME_RX_STOPPED */
+					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */
+					break;
+			}		
+			break;
+#endif
+        case ME_S4:
+        	switch (messageNumber)
+        	{
+				case RX_ME_PREFETCH_STOP:
+					nextstate = ME_S4_stopping;
+				    /* must wait for the response to the MimeIF_create_MIME_entity() call */
+				    /* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
+					break;
+
+				case MI_ME_CREATE_MIME_ENTITY_ERROR:
+				    /*>>>should we parcel up the earlier entities and try this one later???*/
+				    flush_entities = TRUE;	/* indictes flush entity list, leaves mail queue intact */
+					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */					
+					break;
+
+        		case MI_ME_CREATE_MIME_ENTITY_DONE:
+        			{
+        				BOOL do_another = FALSE;
+        				_kernel_oserror *error = NULL;
+        				char current_page_leafname[32];
+        				int objecttype, filelength, filetype;
+#if 1
+						error = osfile_ReadCatInfoDL(ENTITYQ_DIR, current_page_leafname /*dst_leafname*/, &objecttype, &filelength, &filetype); 
+#endif
+	        		    {
+	        		    	/* put entity file in entity list - list WILL have space */
+							entity.list[entity.count].page   = current_page;	/* src_leafname */
+							entity.list[entity.count].fileNo = current_page;  	/* dst_leafname */
+
+							entity.count += 1;
+	                  		entity.total_size += filelength;
+	                    }
+
+	                    if (loPage == 0)
+	                    	loPage = current_page;	/* record first page in this group */
+
+						hiPage = current_page;		/* we've encoded pages loPage..hiPage inclusive */
+
+	        			current_page += 1;    		/* next page to encode */
+	                    sprintf(current_page_leafname, "%d", current_page);
+
+	                    do_another = FALSE;
+
+	                    if ((entity.count < ENTITY_LIST_SIZE) && (entity.count < configured_pages_per_email))
+	                    {
+
+
+		                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
+		                    error = osfile_ReadCatInfoDL(directory, current_page_leafname, &objecttype, &filelength, &filetype);
+
+							/*>>>for now, checking that a file exists is enough - we should do size checking (and possibly type checks?) */
+		                    if ((error == NULL) && (objecttype == 1/*file found*/))
+	                    	{
+	                    	    if ((entity.total_size + estimate_mime_size(filelength)) < configured_max_message_size)
+	                    	    	do_another = TRUE;
+							}
+	                    }
+
+	                    if (do_another)
+	                    {
+	                    	MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname, filetype, stash_document_number, current_page,
+	                    	                          &(entity.object[entity.count]), &(entity.class[entity.count])
+	                    	                         );
+
+	                        nextstate = ME_S4;
+	                    }
+	                    else
+	                    {
+	                    	char mailfileNo_leafname[32];
+
+							mailfileNo = mail.qtail + 1; /*N.B. when queue wraps this gives MAIL_QUEUE_SIZE rather than 0*/
+                            sprintf(mailfileNo_leafname, "%d", mailfileNo);
+
+							MimeIF_create_RFC822_msg(MAILQ_DIR, mailfileNo_leafname,
+							                         stash_to_emailaddress, stash_to_realname, setup_from_mailaddress, setup_domainname,
+                                                     stash_subject,
+                                                     stash_document_number, stash_hiPage, ((BOOL)(stash_pageStream == FALSE)), loPage, hiPage,
+							                         entity.count, &entity.object[0], &entity.class[0]
+							                        );
+	                        nextstate = ME_S5;
+	                    }
+                    }
+        			break;
+        	}
+        	break;
+
+        /* must wait for the response to the MimeIF_create_MIME_entity() call */
+		/* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
+		case ME_S4_stopping:
+			switch (messageNumber)
+			{
+				case MI_ME_CREATE_MIME_ENTITY_ERROR:
+					/* report the error??? maybe not, since a later try may succeed */
+				case MI_ME_CREATE_MIME_ENTITY_DONE:
+                    flush_entities = TRUE;	/* indicates flush entity list */
+					stopping = TRUE;        /* indicates flush queue, then send ME_RX_STOPPED */
+					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */					
+					break;
+			}
+			break;
+
+		case ME_S5:	/* waiting for MimeIF_create_RFC822_msg to complete */
+			switch (messageNumber)
+			{
+				case RX_ME_PREFETCH_STOP:
+					nextstate = ME_S5_stopping;
+					/* must wait for MimeIF_create_RFC822_msg to complete */
+					/* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
+					break;
+
+				case MI_ME_CREATE_RFC822_MSG_ERROR:
+					/*>>>report the error*/
+					flush_entities = TRUE;	/* indictes flush entity list, leaves mail queue intact */
+					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */					
+					break;
+
+				case MI_ME_CREATE_RFC822_MSG_DONE:
+        		    /* put mail file in mail queue - queue WILL have space */
+        		    {
+        				int qtail = mail.qtail;
+
+						qtail += 1;
+						if (qtail >= MAIL_QUEUE_SIZE)
+							qtail = 0;
+
+						/* we don't do a queue full check here (ie qtail == mail.qhead) as the queue is either: */
+						/*  1) known to be empty - initialised so in state ME_IDLE                              */
+						/*  2) has been checked in state ME_S6 before starting an encode sequence               */
+
+                    	mail.qtail = qtail;
+                    	mail.queue[qtail].processID    = ProcessId;
+						mail.queue[qtail].loPage = loPage;
+						mail.queue[qtail].hiPage = hiPage;
+						mail.queue[qtail].fileNo = mailfileNo;
+						/*mail.queue[qtail].filesize = ???*/
+                    }
+/*>>>
+                    mail_count += 1;
+                    mail_size  += latest_file_size;
+<<<*/
+					/* purge the entity queue/list */
+					purge_directory(ENTITYQ_DIR, loPage, hiPage);
+                    entity.count = 0;
+                    entity.total_size = 0;
+
+					/* no pages encoded yet */
+	                loPage = 0;
+	                hiPage = 0;
+
+					StateKicker_SendMessage(MailQ_StateMachine, ME_MQ_MAILFILE_AVAILABLE, NULL);	/* MailQ may be stalled awaiting the next mailfile, this will restart it */
+					StateKicker_SendMessage(MimeEncode_StateMachine, ME_ME_TRYAGAIN, NULL);			/* share code - tell ourselves to try creating another mailfile */
+					nextstate = ME_S6;
+                    break;
+            }
+            break;
+
+		/* must wait for MimeIF_create_RFC822_msg to complete */
+		/* then flush the queues and send ME_RX_STOPPED & ME_MQ_GOING_IDLE */
+		case ME_S5_stopping:
+			switch (messageNumber)
+			{
+				case MI_ME_CREATE_RFC822_MSG_ERROR:
+					/* report the error??? maybe not, since a later try may succeed */
+
+				case MI_ME_CREATE_RFC822_MSG_DONE:
+                    flush_entities = TRUE;	/* indicates flush entity list */
+					stopping = TRUE;        /* indicates flush queue, then send ME_RX_STOPPED */
+					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */
+					break;
+            }
+			break;
+
+		case ME_S6:
+			switch (messageNumber)
+			{
+				case RX_ME_PREFETCH_STOP:
+					nextstate = ME_S6_stopping;
+					break;
+
+            	case ME_ME_TRYAGAIN:                    /* continuation of state ME_S5 MI_ME_MESSAGE_DONE */
+            	case MQ_ME_SPACE_AVAILABLE:             /* a mailfile has been deleted from the queue - try creating the next one */
+                    {
+                    	BOOL do_another = TRUE;
+
+
+                        {
+        					int qtail = mail.qtail;
+
+							qtail += 1;
+							if (qtail >= MAIL_QUEUE_SIZE)
+								qtail = 0;
+
+							if (qtail == mail.qhead)
+								do_another = FALSE;		/* queue already full (we've got MAIL_QUEUE_SIZE-1 entries) */
+                        }
+/*>>>
+                    	if (mail_size >= configured_max_message_size)
+                    		do_another= FALSE;
+<<<*/
+						if (do_another)
+						{
+        					_kernel_oserror *error = NULL;
+        					int objecttype, filelength, filetype;
+        				    char current_page_leafname[32];
+
+						/* encode first entity of another email message */
+#if SPLIT
+							/* encode next page of document as first entity of another email message */
+							StateKicker_SendMessage(MimeEncode_StateMachine, ME_ME_FIRST_ENTITY, NULL);
+							nextstate = ME_extra;
+#else
+							sprintf(current_page_leafname, "%d", current_page);
+		                    /* object "<directory>.<current_page_leafname>" may not exist, but if it does, it will be a file of type TIFF */
+		                    error = osfile_ReadCatInfoDL(directory, current_page_leafname, &objecttype, &filelength, &filetype);
+
+							/*>>>for now, checking that a file exists is enough - we should do size checking (and possibly type checks?) */
+		                    if ((error == NULL) && (objecttype == 1/*file found*/))
+		                    {
+		                    	/* new mailfile is a continuation of the current document */
+  		                    	/* MIME encode <directory>.<current_page> to <EntityQ>.<current.page> */
+	                    		MimeIF_create_MIME_entity(directory, current_page_leafname, ENTITYQ_DIR, current_page_leafname, filetype, stash_document_number, current_page,
+	                    		                          &(entity.object[entity.count]), &(entity.class[entity.count])
+	                    		                         );
+
+		                    	nextstate = ME_S4;
+		                    }
+		                    else
+		                    {
+		                    	/* current document complete - is there another document we can encode */
+		                    	StateKicker_SendMessage(SendQ_MessageHandler, ME_SQ_NEXT_DOCUMENT, NULL);
+		                    	nextstate = ME_S2;
+		                    }
+#endif
+	                    }
+	                    else
+	                    	nextstate = ME_S6;	/* stall in this state until an item is removed from head of the queue ie MQ_ME_SPACE_AVAILABLE */
+	                }
+        			break;
+			}
+			break;
+
+		case ME_S6_stopping:
+			switch (messageNumber)
+			{
+				case ME_ME_TRYAGAIN:
+				case MQ_ME_SPACE_AVAILABLE:
+                    flush_entities = TRUE;	/* indicates flush entity list */
+					stopping = TRUE;        /* indicates flush queue, then send ME_RX_STOPPED */
+					nextstate = ME_IDLE;	/* common code below clears ME_MQ_MIMEENCODE_ACTIVE and sends ME_MQ_GOING_IDLE */
+					break;			
+			}
+			break;
+    } /* switch (state) */
+
+
+    /* if responding to RX_ME_PREFETCH_STOP or xxxx_ERROR, flush entity list */
+    if ((nextstate == ME_IDLE) && (flush_entities))
+    {
+        /* purge the entity list */
+		purge_directory(ENTITYQ_DIR, loPage, current_page); /* use current_page not hiPage as we may have converted a page but not formally accepted it yet */
+		/*>>>what about the entity.object NFE things*/
+    }
+
+	/* if responding to RX_ME_PREFETCH_STOP, flush queues then issue ME_RX_STOPPED */
+    if ((nextstate == ME_IDLE) && (stopping))
+    {
+        /* purge the mailQ */
+#if 1
+		/* this SHOULD be compiled in */
+        purge_directory(MAILQ_DIR, 0, MAIL_QUEUE_SIZE);		/*>>>N.B. relies on mail.queue[xxxx].fileNo holding 0..MAIL_QUEUE_SIZE<<<*/
+#endif
+        mail.qhead = mail.qtail;
+
+    	StateKicker_SendMessage(RemXfer_StateMachine, ME_RX_STOPPED, NULL);
+    	stopping = FALSE;
+    }
+
+
+	/* report ME_MQ_GOING_IDLE if going idle from a non-idle state */
+	if ((nextstate == ME_IDLE) && (state != ME_IDLE))
+	{
+        /* tell MailQ we can't supply any more mailfiles */
+		ME_MQ_MIMEENCODE_ACTIVE = FALSE;
+        StateKicker_SendMessage(MailQ_StateMachine, ME_MQ_GOING_IDLE, NULL);	/* if MailQ_StateMachine is stalled, this will release it to report 'no more mailfiles' */
+    }
+
+	state = nextstate;
+} /*MimeEncode_StateMachine*/
+
+
+enum _MQ_States { MQ_IDLE = 0, MQ_S2, MQ_S3 };
+typedef enum _MQ_States MQ_States;
+
+extern void MailQ_StateMachine(int messageNumber, messageDataBlock *messageData)
+{
+	static MQ_States state = MQ_IDLE;
+
+	MQ_States nextstate = state;
+
+	switch (state)
+	{
+    	case MQ_IDLE:
+    		switch (messageNumber)
+    		{
+#if 0
+				case ME_MQ_GOING_IDLE:
+					/* we don't care */
+					break;
+
+				case ME_MQ_MAILFILE_AVAILABLE:
+					/* we don't care */
+					break;
+#endif
+				case MQ_MQ_TRYAGAIN:
+    			case RX_MQ_WHICH_MAILFILE:
+#if 0
+					{
+						messageDataBlock *sendMessage;
+
+    			        StateKicker_SendMessage(RemXfer_StateMachine, MQ_RX_THIS_MAILFILE, &sendMessage);
+    			        sendMessage->data.this_mailfile.pid = 42;
+    			        sendMessage->data.this_mailfile.loPage = 1;
+    			        sendMessage->data.this_mailfile.hiPage = 1;
+    			        sprintf(sendMessage->data.this_mailfile.filename, "%s.%s", "ADFS::RCManby.$.Work.Daytona.Software.TestFiles", "EmailMessa");
+
+
+					}
+#endif
+    				if (mail.qhead == mail.qtail)
+    				{
+    					/* queue is empty */
+    					if (ME_MQ_MIMEENCODE_ACTIVE)
+    						nextstate = MQ_S3;			/* MimeEncoder MAY provide us with another file sometime soon */
+    					else
+    						StateKicker_SendMessage(RemXfer_StateMachine, MQ_RX_NO_MORE_MAIL, NULL);	/* MimeEncoder inactive, so report 'no more mail' */
+    				}
+    				else
+    				{
+    					messageDataBlock *sendMessage;
+    					int qhead = mail.qhead;		/* NB one element before the head */
+
+						qhead += 1;
+						if (qhead >= MAIL_QUEUE_SIZE)
+							qhead = 0;
+
+						StateKicker_SendMessage(RemXfer_StateMachine, MQ_RX_THIS_MAILFILE, &sendMessage);
+    			        sendMessage->data.this_mailfile.pid = mail.queue[qhead].processID;
+    			        sendMessage->data.this_mailfile.loPage = mail.queue[qhead].loPage;
+    			        sendMessage->data.this_mailfile.hiPage = mail.queue[qhead].hiPage;
+    			        sprintf(sendMessage->data.this_mailfile.filename, "%s.%d", MAILQ_DIR, mail.queue[qhead].fileNo);
+    			        nextstate = MQ_S2;
+    			    }
+    				break;
+            }
+            break;
+
+        case MQ_S2:
+    		switch (messageNumber)
+    		{
+#if 0
+				case ME_MQ_GOING_IDLE:
+					/* we don't care */
+					break;
+
+				case ME_MQ_MAILFILE_AVAILABLE:
+					/* we don't care */
+					break;
+#endif
+    			case RX_MQ_MAILFILE_SENT:
+    				{
+						int qhead = mail.qhead;
+
+						if (qhead != mail.qtail)
+						{
+					    	qhead += 1;
+							if (qhead >= MAIL_QUEUE_SIZE)
+								qhead = 0;
+
+					    	mail.qhead = qhead;
+					    	/* use purge_directory to delete one file! */
+#if 1
+		/* this SHOULD be compiled in */
+							purge_directory(MAILQ_DIR, mail.queue[qhead].fileNo, mail.queue[qhead].fileNo);
+#endif
+					    	/* MimeEncoder may be stalled awaiting a space in the MailQ, this will restart it */
+					    	StateKicker_SendMessage(MimeEncode_StateMachine, MQ_ME_SPACE_AVAILABLE, NULL);
+					    }
+					    nextstate = MQ_IDLE;
+    				}
+    				break;
+            }
+            break;
+
+        case MQ_S3:	/* Stalled after a RX_MQ_WHICH_MAILFILE message with an empty MailQ - waiting for MailQ_StateMachine to either produce another file, or go idle */
+        	switch (messageNumber)
+        	{
+        		case ME_MQ_GOING_IDLE:
+        			StateKicker_SendMessage(RemXfer_StateMachine, MQ_RX_NO_MORE_MAIL, NULL);	/* MimeEncoder inactive, so report 'no more mail' */
+        			nextstate = MQ_IDLE;
+        			break;
+
+				case ME_MQ_MAILFILE_AVAILABLE:
+				    StateKicker_SendMessage(MailQ_StateMachine, MQ_MQ_TRYAGAIN, NULL);	/* repeat the RX_MQ_WHICH_MAILFILE which will now succeed */
+                    nextstate = MQ_IDLE;
+        			break;
+        	}
+        	break;
+    } /* switch (state) */
+
+	state = nextstate;
+}
+
+
+
+static int estimate_mime_size(int original_filesize)
+{
+	return(((original_filesize / 3) + 1) * 4);	/*>>>no allowence for CR/LF every 75ish characters*/
+
+}
+
+
+/* end of MimeQ.c */
