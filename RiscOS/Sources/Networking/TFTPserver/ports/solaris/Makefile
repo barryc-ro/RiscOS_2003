@@ -39,6 +39,7 @@ DEFINES = ${COMPAT} ${OPTIONS} -DARCHTYPES="\"${ARCH}.h\""
 
 CFLAGS  = -c -g ${DEFINES} ${INCLUDES} ${DEPENDS}
 WFLAGS  = -rf
+LDFLAGS = -g
 LEXFLAGS= -i
 
 #
