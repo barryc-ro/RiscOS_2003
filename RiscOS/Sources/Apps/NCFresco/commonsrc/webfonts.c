@@ -25,20 +25,25 @@ webfont webfonts[WEBFONT_COUNT];
 
 static char *webfont_font_name(int n, char *buffer)
 {
-    if (n & WEBFONT_TYPE_SYMBOL)
+    if (n & WEBFONT_FLAG_SPECIAL)
     {
-	switch (n & WEBFONT_FLAG_MASK)
+	switch (n & WEBFONT_SPECIAL_TYPE_MASK)
 	{
-	case 0:
+	case WEBFONT_SPECIAL_TYPE_SYMBOL:
 	    strcpy(buffer, "Selwyn");
 	    break;
+#ifdef STBWEB
+	case WEBFONT_SPECIAL_TYPE_MENU:
+	    strcpy(buffer, "Lucida.Sans");
+	    break;
+#endif
 	default:
 	    return NULL;
 	}
     }
     else
     {
-	strcpy(buffer, config_font_names[n & WEBFONT_FLAG_MASK]);
+	strcpy(buffer, config_font_names[(n & WEBFONT_FLAG_MASK) >> WEBFONT_FLAG_SHIFT]);
     }
 
     return buffer;
@@ -63,7 +68,11 @@ os_error *webfonts_init_font(int n)
 	return NULL;
 
     size = (n & WEBFONT_SIZE_MASK) >> WEBFONT_SIZE_SHIFT;
-    size = config_font_sizes[size] * config_display_scale/100;
+    size = config_font_sizes[size];
+#ifdef STBWEB
+    if ((n & (WEBFONT_SPECIAL_TYPE_MASK|WEBFONT_FLAG_SPECIAL)) != (WEBFONT_SPECIAL_TYPE_MENU|WEBFONT_FLAG_SPECIAL))
+#endif
+	size = size*config_display_scale/100;
 
 #if 0
     fprintf(stderr, "Font index %d, size %d, name %s\n", n, size, buffer);
@@ -119,7 +128,7 @@ os_error *webfonts_init(void)
 	{
 	    /* */
 	}
-	else if (i & WEBFONT_TYPE_SYMBOL)
+	else if (i & WEBFONT_FLAG_SPECIAL)
 	{			/* if no symbol font then we will work around */
 	    e = NULL;
 	}
@@ -226,9 +235,10 @@ os_error *webfont_declare_printer_fonts(void)
     r.r[1] = 0;
     r.r[2] = 0;
 
-    for(i=0;ep == NULL && i<8; i++)
+    /* declare standard fonts */
+    for(i = 0 ; ep == NULL && i < WEBFONT_FLAG_COUNT; i++)
     {
-	item = webfonts + i;
+	item = webfonts + (i << WEBFONT_FLAG_SHIFT);
 
 	if (item->handle)
 	{
@@ -237,14 +247,19 @@ os_error *webfont_declare_printer_fonts(void)
 	}
     }
 
-    /* declare the symbol font if there */
-    item = &webfonts[WEBFONT_SYMBOL(1)];
-    if (item->handle > 0)
+    /* declare special fonts */
+    for (i = 0; i < WEBFONT_SPECIAL_COUNT && ep == NULL; i++)
     {
-	r.r[0] = item->handle;
-	ep = os_swix(PDriver_DeclareFont, &r);
+	item = webfonts + WEBFONT_FLAG_SPECIAL + (i << WEBFONT_SPECIAL_TYPE_SHIFT);
+
+	if (item->handle > 0)
+	{
+	    r.r[0] = item->handle;
+	    ep = os_swix(PDriver_DeclareFont, &r);
+	}
     }
 
+    /* terminate */
     if (ep == NULL)
     {
 	r.r[0] = 0;
@@ -254,8 +269,6 @@ os_error *webfont_declare_printer_fonts(void)
     return ep;
 }
 
-#define RND(x) (((x)+3)&(~3))
-
 os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
 {
     int i;
@@ -264,19 +277,19 @@ os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
     int word;
 
     size = 0;
-    for(i=0; i < (1 << WEBFONT_SIZE_SHIFT); i++)
+    for (i = 0; i < WEBFONT_FLAG_COUNT; i++)
     {
-	webfont_font_name(i, buffer);
+	webfont_font_name(i << WEBFONT_FLAG_SHIFT, buffer);
 	size += strlen(buffer)+2;
     }
 
-    if (webfonts[WEBFONT_SYMBOL(1)].handle > 0)
+    for (i = 0; i < WEBFONT_SPECIAL_COUNT; i++)
     {
-	webfont_font_name(WEBFONT_SYMBOL(1), buffer);
+	webfont_font_name(WEBFONT_FLAG_SPECIAL + (i << WEBFONT_SPECIAL_TYPE_SHIFT), buffer);
 	size += strlen(buffer)+2;
     }
 
-    size = RND(size);
+    size = ROUND4(size);
 
     size += 2 * sizeof(int);	/* Two word header */
 
@@ -288,24 +301,24 @@ os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
 
     size -= 2 * sizeof(int);	/* Two word header */
 
-    for (i=0; i < 8; i++)
+    for (i=0; i < WEBFONT_FLAG_COUNT; i++)
     {
 	int len;
 
 	buffer[0] = (char) i+1;
-	webfont_font_name(i, buffer+1);
+	webfont_font_name(i << WEBFONT_FLAG_SHIFT, buffer+1);
 	len = strlen(buffer+1) + 2;
 	df_write_data(fh, *writeptr, buffer, len);
 	*writeptr += len;
 	size -= len;
     }
-
-    if (webfonts[WEBFONT_SYMBOL(1)].handle > 0)
+    
+    for (i=0; i < WEBFONT_SPECIAL_COUNT; i++)
     {
 	int len;
 
-	buffer[0] = (char) WEBFONT_SYMBOL(1)+1;
-	webfont_font_name(WEBFONT_SYMBOL(1), buffer+1);
+	buffer[0] = (char) i+1;
+	webfont_font_name(WEBFONT_FLAG_SPECIAL + (i << WEBFONT_SPECIAL_TYPE_SHIFT), buffer+1);
 	len = strlen(buffer+1) + 2;
 	df_write_data(fh, *writeptr, buffer, len);
 	*writeptr += len;
@@ -316,6 +329,22 @@ os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
     *writeptr += size;
 
     return NULL;
+}
+
+int webfont_lookup(const char *font_name)
+{
+#ifdef STBWEB
+    if (strcasecomp(font_name, "ncoffline") == 0)
+	return WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_MENU;
+#endif
+    
+    if (strcasecomp(font_name, "dingbats") == 0)
+	return WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_SYMBOL;
+
+    if (strcasecomp(font_name, "courier") == 0)
+	return WEBFONT_FLAG_FIXED;
+
+    return 0;
 }
 
 /* eof webfonts.c */

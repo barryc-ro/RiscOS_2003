@@ -174,6 +174,7 @@ static fe_view fe_next_frame(fe_view v, BOOL next);
 /* -------------------------------------------------------------------------- */
 
 static wimp_t task_handle;
+int wimp_version;
 
 BOOL use_toolbox = FALSE;
 static char *progname;
@@ -4282,8 +4283,10 @@ void fe_event_process(void)
 	    v_old = fe_selected_view();
 	    v_new = find_view(e.data.c.w);
 
-	    v_old->is_selected = FALSE;
-	    v_new->is_selected = TRUE;
+	    if (v_old)
+		v_old->is_selected = FALSE;
+	    if (v_new)
+		v_new->is_selected = TRUE;
 
 #if 0
             fe_view v_top;
@@ -4437,17 +4440,18 @@ static void signal_init(void)
     oldhandler = signal(SIGTERM, &handler);
 }
 
-static int my_wimp_initialise(int *message_list)
+static int my_wimp_initialise(int *message_list, int *wimp_version)
 {
     os_regset r;
-    r.r[0] = 350;
-/*     r.r[1] = *(int *) "TASK"; */
-    r.r[1] = 0x4B534154;
+    r.r[0] = *wimp_version;
+    r.r[1] = TASK_MAGIC;
     r.r[2] = (int) program_title;
     r.r[3] = (int) message_list;
 
     frontend_fatal_error(os_swix(Wimp_Initialise,&r));
 
+    *wimp_version = r.r[0];
+    
     return r.r[1];
 }
 
@@ -4567,9 +4571,15 @@ static BOOL fe_initialise(void)
 
     dbginit();
 
+    _swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 7, &wimp_version);
+    if (wimp_version < 380)
+	wimp_version = 350;
+    else
+	wimp_version = 380;
+
     if (use_toolbox)
     {
-        task_handle = tb_init(message_codes);
+        task_handle = tb_init(message_codes, &wimp_version);
 
         tb_res_init(program_name);
         tb_resspr_init();
@@ -4577,7 +4587,7 @@ static BOOL fe_initialise(void)
     }
     else
     {
-        task_handle = my_wimp_initialise(message_codes);
+        task_handle = my_wimp_initialise(message_codes, &wimp_version);
 
         res_init(program_name);
         resspr_init();

@@ -493,13 +493,13 @@ static os_error *setval(int obj, int cmp, int val)
     }
     return (os_error *)e;
 }
-
+#if 0
 static int getstate(int obj, int cmp)
 {
     int val = getval(obj, cmp);
     return val != 0;
 }
-
+#endif
 static os_error *setstate(int obj, int cmp, int state)
 {
     return setval(obj, cmp, state);
@@ -518,7 +518,7 @@ static os_error *movegadget(int obj, int cmp, int x0diff, int x1diff)
     }
     return (os_error *)e;
 }
-
+#if 0
 static os_error *thickenborder(int obj, int cmp, const wimp_redrawstr *r)
 {
     wimp_box box;
@@ -537,6 +537,7 @@ static os_error *thickenborder(int obj, int cmp, const wimp_redrawstr *r)
         box.x1-box.x0+2, box.y1-box.y0+2);
     return e;
 }
+#endif
 
 static wimp_w window_handle(int obj)
 {
@@ -744,11 +745,6 @@ static void tb_bar_codec_exit_fn(void)
 static void tb_bar_custom_exit_fn(void)
 {
     fe_dispose_view(fe_locate_view(TARGET_CUSTOM));
-}
-
-static void tb_bar_related_exit_fn(void)
-{
-    fe_dispose_view(fe_locate_view(TARGET_INFO));
 }
 
 static void tb_bar_details_entry_fn(fe_view v)
@@ -1023,15 +1019,17 @@ static char *menu_list[] =
 
 /* returns wimp task handle */
 
-int tb_init(int *m_list)
+int tb_init(int *m_list, int *wimp_version)
 {
     int i, t;
     MemCheck_checking checking = MemCheck_SetChecking(0, 0);
 
     STBDBG(("tb_init():\n"));
     
-    frontend_fatal_error((os_error *)_swix(Toolbox_Initialise, _INR(0,6) | _OUT(1), 0, 310,
-        m_list, tb_list, "<" PROGRAM_NAME "$Dir>", m_block, tb_block, &t));
+    frontend_fatal_error((os_error *)_swix(Toolbox_Initialise, _INR(0,6) | _OUTR(0,1),
+					   0, *wimp_version, m_list, tb_list, "<" PROGRAM_NAME "$Dir>",
+					   m_block, tb_block,
+					   wimp_version, &t));
 
     /* register the message block with MemCheck for debugging */
     if (m_block[2])

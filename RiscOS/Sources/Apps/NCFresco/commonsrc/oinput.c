@@ -185,7 +185,7 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     {
     case rid_it_IMAGE:
 	if (ii->data.image.im == NULL)
-	    ii->data.image.im = oimage_fetch_image(doc, ii->src);
+	    ii->data.image.im = oimage_fetch_image(doc, ii->src, ii->ww == -1 || ii->hh == -1);
 
 	image_info((image) ii->data.image.im, &width, &height, 0, &fl, 0, 0);
 
@@ -229,10 +229,10 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	if (ii->src)
 	{
 	    if (ii->data.button.im == NULL)
-		ii->data.button.im = oimage_fetch_image(doc, ii->src);
+		ii->data.button.im = oimage_fetch_image(doc, ii->src, ii->ww == -1 || ii->hh == -1);
 
 	    if (ii->src_sel && ii->data.button.im_sel == NULL)
-		ii->data.button.im_sel = oimage_fetch_image(doc, ii->src_sel);
+		ii->data.button.im_sel = oimage_fetch_image(doc, ii->src_sel, FALSE);
 	
 	    image_info((image) ii->data.button.im, &width, &height, 0, &fl, 0, 0);
 
@@ -261,10 +261,10 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	if (ii->src && ii->src_sel)
 	{
 	    if (ii->data.radio.im_off == NULL)
-		ii->data.radio.im_off = oimage_fetch_image(doc, ii->src);
+		ii->data.radio.im_off = oimage_fetch_image(doc, ii->src, ii->ww == -1 || ii->hh == -1);
 
 	    if (ii->data.radio.im_on == NULL)
-		ii->data.radio.im_on = oimage_fetch_image(doc, ii->src_sel);
+		ii->data.radio.im_on = oimage_fetch_image(doc, ii->src_sel, FALSE);
 	
 	    image_info((image) ii->data.radio.im_off, &width, &height, 0, &fl, 0, 0);
 

@@ -498,38 +498,24 @@ os_error *feutils_window_create(wimp_box *box, const wimp_box *margin, const fe_
     /* open a full screen window to display onto*/
     memset(&bg_win, 0, sizeof(bg_win));
 
-#if 1
     bg_win.box = *box;
-#else
-    if (!ip || (ip->name && strcmp(ip->name, "__top") == 0))
-    {
-        bg_win.box = *box;
-    }
-    else
-    {
-        bg_win.box.x0 = box->x0+2;
-        bg_win.box.x1 = box->x1-2;
-        bg_win.box.y0 = box->y0+2;
-        bg_win.box.y1 = box->y1-2;
-    }
-#endif
     bg_win.behind = fe_status_window_handle();
     bg_win.flags = (wimp_wflags)(wimp_WNEW + wimp_WTRESPASS);
     bg_win.colours[wimp_WCWKAREABACK] = 255;
     bg_win.colours[wimp_WCSCROLLOUTER] = 3;
     bg_win.colours[wimp_WCSCROLLINNER] = 1;
 
-#if 1
-    if (ip && ip->scrolling == fe_scrolling_YES)
+    if (ip && ip->scrolling == fe_scrolling_YES && config_display_frames_scrollbars)
     {
         bg_win.flags = (wimp_wflags)((int)bg_win.flags | (int)wimp_WHSCR | (int)wimp_WVSCR);
-        bg_win.colours[wimp_WCTITLEFORE] = bgcol;
+        bg_win.colours[wimp_WCTITLEFORE] = wimp_version >= 380 ? 255 : bgcol;
         bg_win.box.x1 -= toolsprite_width-2;
         bg_win.box.y0 += toolsprite_height;
     }
     else
-#endif
+    {
 	bg_win.colours[wimp_WCTITLEFORE] = 255;
+    }
 
     *box = bg_win.box;
 
@@ -574,8 +560,8 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
 {
     int width = op->box.x1 - op->box.x0;
     int height = op->box.y1 - op->box.y0;
-    BOOL x_scroll_bar = width >= MIN_WIN_WIDTH && extent->x1 - extent->x0 > width + (*old_y_scroll_bar ? toolsprite_width : 0);
-    BOOL y_scroll_bar = height >= MIN_WIN_HEIGHT && extent->y1 - extent->y0 > height + (*old_x_scroll_bar ? toolsprite_height : 0);
+    BOOL x_scroll_bar = config_display_frames_scrollbars && width >= MIN_WIN_WIDTH && extent->x1 - extent->x0 > width + (*old_y_scroll_bar ? toolsprite_width : 0);
+    BOOL y_scroll_bar = config_display_frames_scrollbars && height >= MIN_WIN_HEIGHT && extent->y1 - extent->y0 > height + (*old_x_scroll_bar ? toolsprite_height : 0);
 
     STBDBG(("feutils_check_window_bars\n"));
 
@@ -585,54 +571,86 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
         wimp_caretstr c;
         BOOL has_caret;
 
-        winfo.w = op->w;
-        wimp_get_wind_info((wimp_winfo *)((int)&winfo | 1));
-
+        wimp_wstate state;
+	wimp_w parent_w;
+	int align_flags;
+	int wflags;
+	
         wimp_get_caret_pos(&c);
         has_caret = c.w == op->w;
 
-        wimp_delete_wind(op->w);
+	/* read either entire window block or just the current state */
+	if (wimp_version < 380)
+	{
+	    winfo.w = op->w;
+	    wimp_get_wind_info((wimp_winfo *)((int)&winfo | 1));
 
-        /* update window structure*/
+	    wimp_delete_wind(op->w);
+	    wflags = (int)winfo.info.flags;
+	}
+	else
+	{
+	    state.o.w = op->w;
+	    _swix(Wimp_GetWindowState, _INR(1,2) | _OUTR(3,4), &state, *(int *)"TASK", &parent_w, &align_flags);
+	    wflags = (int)state.flags;
+	}
+
+        /* update window structure and flags */
         if (y_scroll_bar && !*old_y_scroll_bar)
         {
-            winfo.info.flags = (wimp_wflags)((int)winfo.info.flags | (int)wimp_WVSCR);
+            wflags |= (int)wimp_WVSCR;
             op->box.x1 -= toolsprite_width-2;
         }
         else if (!y_scroll_bar && *old_y_scroll_bar)
         {
-            winfo.info.flags = (wimp_wflags)((int)winfo.info.flags &~ (int)wimp_WVSCR);
+            wflags &=~ (int)wimp_WVSCR;
             op->box.x1 += toolsprite_width-2;
             if (extent->x1 - extent->x0 < op->box.x1 - op->box.x0)
                 extent->x1 = extent->x0 + (op->box.x1 - op->box.x0);
         }
         if (x_scroll_bar && !*old_x_scroll_bar)
         {
-            winfo.info.flags = (wimp_wflags)((int)winfo.info.flags | (int)wimp_WHSCR);
+            wflags |= (int)wimp_WHSCR;
             op->box.y0 += toolsprite_height;
         }
         else if (!x_scroll_bar && *old_x_scroll_bar)
         {
-            winfo.info.flags = (wimp_wflags)((int)winfo.info.flags &~ (int)wimp_WHSCR);
+            wflags &= ~(int)wimp_WHSCR;
             op->box.y0 -= toolsprite_height;
             if (extent->y1 - extent->y0 < op->box.y1 - op->box.y0)
                 extent->y0 = extent->y1 - (op->box.y1 - op->box.y0);
         }
 
-        winfo.info.ex = *extent;
-        winfo.info.colours[wimp_WCTITLEFORE] = x_scroll_bar || y_scroll_bar ? bgcol : 255;
-        wimp_create_wind(&winfo.info, &op->w);
+	/* either recreate the window or just adjust the flags, and set the extent */
+	if (wimp_version < 380)
+	{
+	    winfo.info.ex = *extent;
+	    winfo.info.colours[wimp_WCTITLEFORE] = x_scroll_bar || y_scroll_bar ? bgcol : 255;
+	    winfo.info.flags = (wimp_wflags)wflags;
+	    wimp_create_wind(&winfo.info, &op->w);
 
-	STBDBG(("recreate win %x as %x\n", winfo.w, op->w));
+	    STBDBG(("recreate win %x as %x\n", winfo.w, op->w));
 
-        wimp_open_wind(op);
+	    wimp_open_wind(op);
+	}
+	else
+	{
+	    _swix(Wimp_SetExtent, _INR(1,2), op->w, &extent);
 
+	    state.o = *op;
+	    state.flags = (wimp_wflags)wflags;
+
+	    _swix(Wimp_OpenWindow, _INR(1,4), &state, *(int *)"TASK", parent_w, align_flags | 1);
+	}
+
+	/* reposition the caret */
         if (has_caret)
         {
             c.w = op->w;
             wimp_set_caret_pos(&c);
         }
 
+	/* update the scroll bar values */
         *old_x_scroll_bar = x_scroll_bar;
         *old_y_scroll_bar = y_scroll_bar;
 

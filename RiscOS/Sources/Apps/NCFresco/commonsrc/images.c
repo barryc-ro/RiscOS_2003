@@ -1254,13 +1254,18 @@ static void image_fetch_next(void)
 	if ((i->flags & (image_flag_WAITING | image_flag_DEFERRED)) == image_flag_WAITING)
 	{
 	    os_error *ep;
-	    int reload;
+	    int aflags;
 
-	    reload = (i->flags & image_flag_TO_RELOAD) ? access_NOCACHE : 0;
+	    aflags = 0;
+	    if (i->flags & image_flag_TO_RELOAD)
+		aflags |= access_NOCACHE;
 
-	    /* only check for expiry if image_find() was called with CHECK_EXPIRE on */
-	    if (i->find_flags & image_find_flag_CHECK_EXPIRE)
-		reload |= access_CHECK_EXPIRE;
+	    if (i->find_flags & image_find_flag_CHECK_EXPIRE) /* only check for expiry if image_find() was called with CHECK_EXPIRE on */
+		aflags |= access_CHECK_EXPIRE;
+	    if (i->find_flags & image_find_flag_NEED_SIZE)
+		aflags |= access_IMAGE;
+	    if (i->find_flags & image_find_flag_URGENT)
+		aflags |= access_PRIORITY;
 
 	    i->flags &= ~(image_flag_WAITING | image_flag_TO_RELOAD);
 
@@ -1268,7 +1273,7 @@ static void image_fetch_next(void)
 
 	    IMGDBG(("Incremented fetching count, now %d\n", being_fetched));
 
-	    ep = access_url(i->url, reload | access_IMAGE, 0, 0, i->ref,
+	    ep = access_url(i->url, aflags, 0, 0, i->ref,
 			    &image_progress, &image_completed, i, &(i->ah));
 
 	    if (ep)
@@ -1533,7 +1538,10 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	    /* If the file is already around then we don't care if it was deferred, do we? */
 	    i->flags &= ~(image_flag_WAITING | image_flag_DEFERRED);
 
-	    ep = access_url( url, access_IMAGE, 0, 0, i->ref, &image_progress,
+	    ep = access_url( url,
+			     (flags & image_find_flag_NEED_SIZE ? access_IMAGE : 0) |
+			     (flags & image_find_flag_URGENT ? access_PRIORITY : 0),
+			     0, 0, i->ref, &image_progress,
 	                     &image_completed, i, &(i->ah));
 	    if (ep)
 	    {

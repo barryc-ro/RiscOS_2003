@@ -21,7 +21,7 @@ extern void config_write_file_by_name(const char *file_name);
 extern void config_read_file_by_name(const char *file_name);
 extern int config_colour_number(char *p);
 
-#define config_SCALES	4
+#define config_SCALES	3
 
 struct config_str
 {
@@ -67,6 +67,7 @@ struct config_str
     wimp_box display_margin;
     int display_margin_auto;
     int display_frames;
+    int display_frames_scrollbars;
     int display_smooth_scrolling;
 
     int display_time_activate;
@@ -191,6 +192,7 @@ extern struct config_str config_array;
 #else
 #define config_display_frames (config_array.display_frames)
 #endif
+#define config_display_frames_scrollbars (config_array.display_frames_scrollbars)
 #define config_display_smooth_scrolling (config_array.display_smooth_scrolling)
 #define config_display_time_activate (config_array.display_time_activate)
 #define config_display_time_background (config_array.display_time_background)

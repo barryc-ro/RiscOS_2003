@@ -152,6 +152,7 @@ extern void add_italic_to_font(SGMLCTX *context);
 extern void add_underline(SGMLCTX *context);
 extern void add_strike(SGMLCTX *context);
 extern void set_font_size(SGMLCTX *context, int size);
+extern void set_font_type(SGMLCTX *context, int type);
 extern void std_lcr_align(SGMLCTX *context, VALUE *align);
 extern void htmlriscos_colour(VALUE *col, int *word);
 /*extern void must_have_a_word_pushed(HTMLCTX *htmlctx);*/

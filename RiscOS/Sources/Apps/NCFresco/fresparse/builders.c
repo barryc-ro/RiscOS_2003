@@ -144,7 +144,8 @@ extern void bump_current_rindent(SGMLCTX *context)
 extern void add_fixed_to_font(SGMLCTX *context)
 {
     BITS x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
-    x |= WEBFONT_FLAG_FIXED;
+    if ((x & WEBFONT_FLAG_SPECIAL) == 0)
+	x |= WEBFONT_FLAG_FIXED;
     PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
     PRSDBGN(("add_fixed_to_font(%p)\n", context));
 }
@@ -152,7 +153,8 @@ extern void add_fixed_to_font(SGMLCTX *context)
 extern void add_bold_to_font(SGMLCTX *context)
 {
     BITS x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
-    x |= WEBFONT_FLAG_BOLD;
+    if ((x & WEBFONT_FLAG_SPECIAL) == 0)
+	x |= WEBFONT_FLAG_BOLD;
     PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
     PRSDBGN(("add_bold_to_font(%p)\n", context));
 }
@@ -161,8 +163,9 @@ extern void add_italic_to_font(SGMLCTX *context)
 {
     BITS x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
 
-    /* pdh: was "|=" */
-    x ^= WEBFONT_FLAG_ITALIC;
+    if ((x & WEBFONT_FLAG_SPECIAL) == 0)
+	x ^= WEBFONT_FLAG_ITALIC;    /* pdh: was "|=" */
+
     PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
     PRSDBGN(("add_italic_to_font(%p)\n", context));
 }
@@ -188,6 +191,23 @@ extern void set_font_size(SGMLCTX *context, int size)
     int x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
     x &= ~WEBFONT_SIZE_MASK;
     x |= (size - 1) << WEBFONT_SIZE_SHIFT;
+    PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+}
+
+/* This can set the SPECIAL bit and the FIXED bit.
+ */
+
+extern void set_font_type(SGMLCTX *context, int type)
+{
+    int x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
+
+    if (type & WEBFONT_FLAG_SPECIAL)
+	x &= WEBFONT_SIZE_MASK;
+    else
+	x &= WEBFONT_SIZE_MASK | WEBFONT_FLAG_BOLD | WEBFONT_FLAG_ITALIC;
+    
+    x |= type;
+    
     PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
 }
 

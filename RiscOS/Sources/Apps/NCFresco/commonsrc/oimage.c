@@ -201,7 +201,7 @@ void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags 
     *ih = height;
 }
 
-image oimage_fetch_image(antweb_doc *doc, const char *src)
+image oimage_fetch_image(antweb_doc *doc, const char *src, BOOL need_size)
 {
     char *url, *base;
     int ffl;
@@ -210,7 +210,9 @@ image oimage_fetch_image(antweb_doc *doc, const char *src)
     ffl = (doc->flags & doc_flag_DEFER_IMAGES) ? image_find_flag_DEFER : 0;
     if ((doc->flags & doc_flag_FROM_HISTORY) == 0)
 	ffl |= image_find_flag_CHECK_EXPIRE;
-
+    if (need_size)
+	ffl |= image_find_flag_NEED_SIZE;
+    
     base = BASE(doc);
     url = url_join(base, src);
 
@@ -410,17 +412,21 @@ void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     int width, height;
     image_flags fl;
 
+    IMGDBG(("oimage_size: src '%s' im %p size %dx%d bwidth %d, hspace %d, vspace %d\n", tii->src, tii->im, tii->ww, tii->hh, tii->bwidth, tii->hspace, tii->vspace));
+
     if (tii->im == NULL)
-	tii->im = oimage_fetch_image(doc, tii->src);
+	tii->im = oimage_fetch_image(doc, tii->src, tii->ww == -1 || tii->hh == -1);
 
     image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
     
+    IMGDBG(("oimage_size: real %d width %d height %d\n", fl & image_flag_REALTHING ? 1 : 0, width, height));
+
     if (fl & image_flag_REALTHING)
 	tii->flags |= rid_image_flag_REAL;
 
     oimage_size_image(tii->alt, tii->ww, tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
     
-    IMGDBG(("bwidth %d, hspace %d, vspace %d\n", tii->bwidth, tii->hspace, tii->vspace));
+    IMGDBG(("oimage_size:       width %d height %d\n", width, height));
 
     width += (tii->bwidth + tii->hspace) * 4;
     height += (tii->bwidth + tii->vspace) * 4;

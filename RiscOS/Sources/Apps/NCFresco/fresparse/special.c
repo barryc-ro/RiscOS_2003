@@ -203,7 +203,6 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
     if (HAVEATTR(HTML_FONT_SIZE, value_string))
     {
 	int size = (me->rh->bgt & rid_bgt_BASEFONT) ? me->rh->basefont : 3; /* Default font size is 3 */
-	unsigned int x;
 
 	char *cp = attributes->value[HTML_FONT_SIZE].u.s.ptr;
 	if (cp[0] == '+')
@@ -253,9 +252,12 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 
     if (attributes->value[HTML_FONT_FACE].type == value_string)
     {
-/*  	fonth = webfont_init_font(attributes->value[HTML_FONT_FACE].u.s); */
+	char *font = stringdup(attributes->value[HTML_FONT_FACE].u.s);
+	int index = webfont_lookup(font);
 
-/* 	index = webfont_claim_font(fonth, size, i, b); */
+	set_font_type(context, index);
+
+	mm_free(font);
     }
 }
 

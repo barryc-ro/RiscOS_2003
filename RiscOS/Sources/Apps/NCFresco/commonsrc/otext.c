@@ -418,7 +418,7 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 
     l2 = (len + 4) & (~3);
 
-    size = (ti->st.wf_index & WEBFONT_SIZE_MASK) >> WEBFONT_SIZE_SHIFT;
+    size = WEBFONT_SIZEOF(ti->st.wf_index);
     size = config_font_sizes[size];
     size *= 640;
 
@@ -430,7 +430,7 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     txt.bbox.y1 = (y + ti->max_up) << 8;
     txt.textcolour = (int) render_get_colour(render_link_colour(ti, doc), doc).word;
     txt.background = (int) render_get_colour(render_colour_BACK, doc).word;
-    dts.fontref = (ti->st.wf_index & ((1 << WEBFONT_SIZE_SHIFT) - 1)) + 1;
+    dts.fontref = ((ti->st.wf_index & WEBFONT_FLAG_MASK) >> WEBFONT_FLAG_SHIFT) + 1;
     txt.textstyle = dts;
     txt.fsizex = size;
     txt.fsizey = size;

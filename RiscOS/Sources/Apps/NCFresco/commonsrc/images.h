@@ -43,6 +43,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 #define image_find_flag_DEFER	(1 << 0) /* Make the image structure but don't start fetching the image */
 #define image_find_flag_CHECK_EXPIRE (1 << 1) /* if coming from cache check expiry date first */
 #define image_find_flag_URGENT  (1 << 2) /* Add to head of queue, not tail */
+#define image_find_flag_NEED_SIZE  (1 << 3) /* We need the image size */
 
 /* Loose an image */
 os_error *image_loose(image i, image_callback cb, void *h);

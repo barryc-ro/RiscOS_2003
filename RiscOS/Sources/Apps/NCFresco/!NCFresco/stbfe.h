@@ -14,6 +14,9 @@ typedef enum
 
 extern pointermode_t pointer_mode;
 extern BOOL use_toolbox;
+extern int wimp_version;
+
+#define TASK_MAGIC	0x4B534154
 
 extern void fe_pointer_mode_update(pointermode_t mode);
 extern void fe_set_pointer(int item_flags);

@@ -1092,11 +1092,11 @@ struct rid_frame_unit_totals
 struct rid_frame_item
 {
         char                    *src;           /* url of frame contents */
-        char                    *name;
+        char                    *name;		/* name for TARGET's */
         int                     marginwidth;    /* pixels */
         int                     marginheight;   /* pixels */
-        rid_frame_scrolling     scrolling;
-        char                    noresize;       /* boolean */
+        rid_frame_scrolling     scrolling;	/* char, show scroll bars? */
+        char                    noresize;       /* boolean, can we resize */
 };
 
 struct rid_frameset_item
@@ -1106,7 +1106,7 @@ struct rid_frameset_item
         rid_frame_unit_totals   width_totals, height_totals;
         rid_frame               *frame_list, *frame_last;
         int                     bwidth;             /* pixel width */
-        rid_frame               *old_frameset;
+	rid_frame               *old_frameset;
 };
 
 struct rid_frame
@@ -1114,8 +1114,8 @@ struct rid_frame
         rid_frame               *next;
         int                     tag;
 
-        char                    border;             /* boolean */
-        int                     bordercolour;       /* standard colour */
+        char                    border;             /* boolean, display border on frame or frames within frameset */
+        int                     bordercolour;       /* standard colour for border region */
 
         union
         {

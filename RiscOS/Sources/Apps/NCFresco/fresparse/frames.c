@@ -97,7 +97,8 @@ extern void startframe (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 
     if ( (attr = &attributes->value[HTML_FRAME_NAME])->type == value_string)
 	frame->name = stringdup(attr->u.s);
-    if ( attributes->value[HTML_FRAME_NORESIZE].type == value_void)
+
+    if ( attributes->value[HTML_FRAME_NORESIZE].type != value_none)
 	frame->noresize = TRUE;
 
     frame->scrolling = rid_scrolling_AUTO;
@@ -113,17 +114,17 @@ extern void startframe (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	frame->src = stringdup(attr->u.s);
 
     /* Netscape 3 features */
-    if (attributes->value[HTML_FRAME_FRAMEBORDER].type == value_enum &&
-        attributes->value[HTML_FRAME_FRAMEBORDER].u.i == HTML_FRAME_FRAMEBORDER_YES)
-    {
-        container->border = TRUE;
-    }
-
-    if (attributes->value[HTML_FRAME_BORDERCOLOR].type != value_none)
-	htmlriscos_colour( &attributes->value[HTML_FRAME_BORDERCOLOR], &container->bordercolour);
-
-    if (attributes->value[HTML_FRAME_BORDERCOLOUR].type != value_none)
-	htmlriscos_colour( &attributes->value[HTML_FRAME_BORDERCOLOUR], &container->bordercolour);
+    if ((attr = &attributes->value[HTML_FRAME_FRAMEBORDER])->type == value_integer)
+        container->border = attr->u.i != 0;
+    else
+	container->border = me->frameset->border;
+    
+    if ((attr = &attributes->value[HTML_FRAME_BORDERCOLOR])->type == value_none)
+	attr = &attributes->value[HTML_FRAME_BORDERCOLOUR];
+    if (attr->type != value_none)
+	htmlriscos_colour( attr, &container->bordercolour);
+    else
+	container->bordercolour = me->frameset->bordercolour;
 
     /* link into the list of frames */
     rid_frame_connect(me->frameset, container);
@@ -143,6 +144,7 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     HTMLCTX *me = htmlctxof(context);
     rid_frame *container;
     rid_frameset_item *frameset;
+    VALUE *attr;
 
     generic_start (context, element, attributes);
 
@@ -171,21 +173,46 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
 					  &frameset->heights,
 					  &frameset->height_totals);
 
-    /* Netscape 3 features */
-    if (attributes->value[HTML_FRAMESET_BORDER].type == value_integer)
-        frameset->bwidth = attributes->value[HTML_FRAMESET_BORDER].u.i;
-
-    if (attributes->value[HTML_FRAMESET_FRAMEBORDER].type == value_enum &&
-        attributes->value[HTML_FRAMESET_FRAMEBORDER].u.i == HTML_FRAMESET_FRAMEBORDER_YES)
+    /* set some defaults based on parent frameset */
+    if (me->frameset)
     {
-        container->border = TRUE;
+        frameset->bwidth = me->frameset->data.frameset.bwidth;
+	container->border = me->frameset->border;
+	container->bordercolour = me->frameset->bordercolour;
+    }
+    else
+    {
+        frameset->bwidth = 8;
+	container->border = FALSE;
+#ifdef STBWEB
+	container->bordercolour = 0;						/* default of black is better for TVs */
+#else
+	container->bordercolour = config_colours[render_colour_BACK].word;	/* default is the standard default */
+#endif
     }
 
-    if (attributes->value[HTML_FRAMESET_BORDERCOLOR].type != value_none)
-	htmlriscos_colour( &attributes->value[HTML_FRAMESET_BORDERCOLOR], &container->bordercolour);
+    /* Netscape 3/MSIE3 features */
+    if ((attr = &attributes->value[HTML_FRAMESET_BORDER])->type == value_absunit)
+        frameset->bwidth = (int)attr->u.f;
+    else if ((attr = &attributes->value[HTML_FRAMESET_FRAMESPACING])->type == value_integer)
+        frameset->bwidth = attr->u.i*2;
 
-    if (attributes->value[HTML_FRAMESET_BORDERCOLOUR].type != value_none)
-	htmlriscos_colour( &attributes->value[HTML_FRAMESET_BORDERCOLOUR], &container->bordercolour);
+    if ((attr = &attributes->value[HTML_FRAMESET_FRAMEBORDER])->type == value_integer)
+        container->border = attr->u.i != 0;
+
+    if ((attr = &attributes->value[HTML_FRAMESET_BORDERCOLOR])->type == value_none)
+	attr = &attributes->value[HTML_FRAMESET_BORDERCOLOUR];
+    if (attr->type != value_none)
+    {
+	htmlriscos_colour( attr, &container->bordercolour);
+
+	/* use the outermost frameset to set the background colour for the page */
+	if (me->frameset == NULL)
+	{
+	    me->rh->bgt |= rid_bgt_COLOURS;
+	    me->rh->colours.back = container->bordercolour;
+	}
+    }
 
     /* save last frameset for when we unstack */
     frameset->old_frameset = me->frameset;

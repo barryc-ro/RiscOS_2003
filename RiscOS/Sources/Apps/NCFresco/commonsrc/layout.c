@@ -163,8 +163,8 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
     PRSDBG(( "layout: %p/%p %dx%d sizes @%p,%p\n", frameset, fs, fs->ncols, fs->nrows, fs->widths, fs->heights));
 
     /* build the arrays of widths and heights */
-    xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, bbox->x0, bbox->x1 - bbox->x0, XSPACING);
-    ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, bbox->y0, bbox->y1 - bbox->y0, YSPACING);
+    xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, bbox->x0, bbox->x1 - bbox->x0, fs->bwidth);
+    ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, bbox->y0, bbox->y1 - bbox->y0, fs->bwidth);
 
     for (i = 0, frame = fs->frame_list; i < nframes && frame; i++, frame = frame->next)
     {
@@ -178,23 +178,23 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
         /* build the bounding box for this frame/frameset */
         /* offset from the boundary points if not at the edge of a frameset */
         /* the frameset will already have had spacing added so this is correct */
-        bb.x0 = xpos[col] + (col == 0 ? 0 : XSPACING);
-        bb.x1 = xpos[col+1] - (col == fs->ncols-1 ? 0 : XSPACING);
-        bb.y0 = ypos[row] + (row == 0 ? 0 : YSPACING);
-        bb.y1 = ypos[row+1] - (row == fs->nrows-1 ? 0 : YSPACING);
+        bb.x0 = xpos[col] + (col == 0 ? 0 : fs->bwidth);
+        bb.x1 = xpos[col+1] - (col == fs->ncols-1 ? 0 : fs->bwidth);
+        bb.y0 = ypos[row] + (row == 0 ? 0 : fs->bwidth);
+        bb.y1 = ypos[row+1] - (row == fs->nrows-1 ? 0 : fs->bwidth);
 
         /* can we resize this current frame, if treated alone */
         this_can_resize = (frame->tag != rid_frame_tag_FRAME || !frame->data.frame.noresize);
 
-    PRSDBG(( "layout: frame %d resize %d\n", i, this_can_resize));
+	PRSDBG(( "layout: frame %d resize %d\n", i, this_can_resize));
 
         if (row > 0 && this_can_resize)
         {
             layout_spacing_info *spacing = mm_calloc(sizeof(struct layout_spacing_info), 1);
 
             /* bounding box of draggable area */
-            spacing->box.y0 = - ypos[row] - YSPACING;
-            spacing->box.y1 = - ypos[row] + YSPACING;
+            spacing->box.y0 = - ypos[row] - fs->bwidth;
+            spacing->box.y1 = - ypos[row] + fs->bwidth;
             spacing->box.x0 = bb.x0;
             spacing->box.x1 = bb.x1;
 
@@ -202,7 +202,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             spacing->bbox.x0 = bb.x0;
             spacing->bbox.x1 = bb.x1;
             spacing->bbox.y0 = - bb.y1;
-            spacing->bbox.y1 = - (ypos[row-1] + ((row-1) == 0 ? 0 : YSPACING));
+            spacing->bbox.y1 = - (ypos[row-1] + ((row-1) == 0 ? 0 : fs->bwidth));
 
             spacing->container_box = *bbox;
 
@@ -214,7 +214,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             spacing->next = doc->spacing_list;
             doc->spacing_list = spacing;
 
-    PRSDBG(( "layout: spacing %d,%d %d,%d i %d\n", spacing->box.x0, spacing->box.y0, spacing->box.x1, spacing->box.y1, spacing->index));
+	    PRSDBG(( "layout: spacing %d,%d %d,%d i %d\n", spacing->box.x0, spacing->box.y0, spacing->box.x1, spacing->box.y1, spacing->index));
         }
 
         if (col > 0 && this_can_resize)
@@ -224,11 +224,11 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             /* bounding box of draggable area */
             spacing->box.y0 = - bb.y1;
             spacing->box.y1 = - bb.y0;
-            spacing->box.x0 = xpos[col] - XSPACING;
-            spacing->box.x1 = xpos[col] + XSPACING;
+            spacing->box.x0 = xpos[col] - fs->bwidth;
+            spacing->box.x1 = xpos[col] + fs->bwidth;
 
             /* parent box in work area coords */
-            spacing->bbox.x0 = xpos[col-1] + ((col-1) == 0 ? 0 : XSPACING);
+            spacing->bbox.x0 = xpos[col-1] + ((col-1) == 0 ? 0 : fs->bwidth);
             spacing->bbox.x1 = bb.x1;
             spacing->bbox.y0 = - bb.y1;
             spacing->bbox.y1 = - bb.y0;
@@ -243,11 +243,11 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             spacing->next = doc->spacing_list;
             doc->spacing_list = spacing;
 
-    PRSDBG(( "layout: spacing %d,%d %d,%d i %d\n", spacing->box.x0, spacing->box.y0, spacing->box.x1, spacing->box.y1, spacing->index));
+	    PRSDBG(( "layout: spacing %d,%d %d,%d i %d\n", spacing->box.x0, spacing->box.y0, spacing->box.x1, spacing->box.y1, spacing->index));
         }
 
 
-    PRSDBG(( "layout: i %d frame %p tag %d box %d,%d %d,%d\n", i, frame, frame->tag, bb.x0, bb.y0, bb.x1, bb.y1));
+	PRSDBG(( "layout: i %d frame %p tag %d box %d,%d %d,%d\n", i, frame, frame->tag, bb.x0, bb.y0, bb.x1, bb.y1));
 
         switch (frame->tag)
         {
@@ -406,8 +406,8 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
         fix_frame_sizes(fs->heights, fs->nrows, &fs->height_totals,
             spc->container_box.y1 - spc->container_box.y0, YSPACING);
 
-        fs->heights[spc->index - 1].u.f = (spc->bbox.y1 - (double)y - YSPACING)/PX_TO_OS;
-        fs->heights[spc->index].u.f     = ((double)y - spc->bbox.y0 - YSPACING)/PX_TO_OS;
+        fs->heights[spc->index - 1].u.f = (spc->bbox.y1 - (double)y - fs->bwidth)/PX_TO_OS;
+        fs->heights[spc->index].u.f     = ((double)y - spc->bbox.y0 - fs->bwidth)/PX_TO_OS;
 
 #if DEBUG >=2
 {
@@ -429,8 +429,8 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
         fix_frame_sizes(fs->widths, fs->ncols, &fs->width_totals,
             spc->container_box.x1 - spc->container_box.x0, XSPACING);
 
-        fs->widths[spc->index - 1].u.f  = ((double)x - spc->bbox.x0 - XSPACING)/PX_TO_OS;
-        fs->widths[spc->index].u.f      = (spc->bbox.x1 - (double)x - XSPACING)/PX_TO_OS;
+        fs->widths[spc->index - 1].u.f  = ((double)x - spc->bbox.x0 - fs->bwidth)/PX_TO_OS;
+        fs->widths[spc->index].u.f      = (spc->bbox.x1 - (double)x - fs->bwidth)/PX_TO_OS;
 
 #if DEBUG >= 2
 {

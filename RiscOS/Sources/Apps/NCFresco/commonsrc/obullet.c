@@ -234,7 +234,7 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     /* check and see if thew symbol font is available */
     if (tib->list_type == HTML_UL && tib->item_type != HTML_UL_TYPE_DISC)
     {
-	font fhsym = webfonts[WEBFONT_SYMBOL(((ti->st.wf_index & WEBFONT_SIZE_MASK) >> WEBFONT_SIZE_SHIFT) + 1)].handle;
+	font fhsym = webfonts[WEBFONT_SYMBOL(WEBFONT_SIZEOF(ti->st.wf_index))].handle;
 	if (fhsym > 0)
 	{
 	    fh = fhsym;
@@ -334,7 +334,7 @@ void obullet_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     fstr.s = buffer;
     font_strwidth(&fstr);
 
-    size = (ti->st.wf_index & WEBFONT_SIZE_MASK) >> WEBFONT_SIZE_SHIFT;
+    size = WEBFONT_SIZEOF(ti->st.wf_index);
     size = config_font_sizes[size];
     size *= 640;
 
@@ -348,7 +348,7 @@ void obullet_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     txt.bbox.y1 = (y + ti->max_up) << 8;
     txt.textcolour = (int) render_get_colour(render_link_colour(ti, doc), doc).word;
     txt.background = (int) render_get_colour(render_colour_BACK, doc).word;
-    dts.fontref = (ti->st.wf_index & ((1 << WEBFONT_SIZE_SHIFT) - 1)) + 1;
+    dts.fontref = ((ti->st.wf_index & WEBFONT_FLAG_MASK) >> WEBFONT_FLAG_SHIFT) + 1;
     txt.textstyle = dts;
     txt.fsizex = size;
     txt.fsizey = size;

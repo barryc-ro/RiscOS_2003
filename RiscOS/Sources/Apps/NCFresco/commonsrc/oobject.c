@@ -120,7 +120,7 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     {
 	image_flags fl;
 	if (obj->state.image.im == NULL)
-	    obj->state.image.im = oimage_fetch_image(doc, obj->data);
+	    obj->state.image.im = oimage_fetch_image(doc, obj->data, obj->ww == -1 || obj->hh == -1);
    
 	image_info((image) obj->state.image.im, &width, &height, 0, &fl, 0, 0);
 
@@ -158,8 +158,8 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	
     default:
 	/* Get values for text_item */
-	width = obj->ww != -1 ? 128 : obj->ww;
-	height = obj->hh != -1 ? 128 : obj->hh;
+	width = obj->ww == -1 ? 128 : obj->ww;
+	height = obj->hh == -1 ? 128 : obj->hh;
 	break;
     }
     

@@ -450,7 +450,7 @@ static char *access_host_name_only(char *url)
 
 static void access_free_item(access_handle d)
 {
-    ACCDBG(("access; free item d=%p dest_host '%s 'url '%s'\n", d, strsafe(d->dest_host), d->url));
+    ACCDBG(("access; free item d=%p dest_host '%s' url '%s'\n", d, strsafe(d->dest_host), d->url));
 
     FREE(d->dest_host);
     FREE(d->request_string);
@@ -1995,15 +1995,16 @@ static void access_copy_data(int inf, int outf, int start, int end)
     }
 }
 
-static void access_file_fetch_alarm(int at, void *h)
+/* Returns TRUE if there is more data to come
+ * FALSE if that is the end and 'd' has been freed
+ */
+
+static BOOL access_file_fetch(access_handle d)
 {
-    access_handle d = (access_handle) h;
-    os_regset r;
-
-/*     visdelay_begin(); */
-
     if ( !(d->progress) || (d->data.file.so_far + d->data.file.chunk >= d->data.file.size))
     {
+	ACCDBGN(("file_fetch(): d %p fname '%s' from %d to %d last transfer\n", d, d->data.file.fname, d->data.file.so_far, d->data.file.size));
+
 	if (d->data.file.ofh)
 	{
 	    access_copy_data(d->data.file.fh, d->data.file.ofh,
@@ -2023,17 +2024,13 @@ static void access_file_fetch_alarm(int at, void *h)
 	/* We are done */
 	if (d->data.file.fh)
 	{
-	    r.r[0] = 0;
-	    r.r[1] = d->data.file.fh;
-	    os_find(&r);
+	    ro_fclose(d->data.file.fh);
 	    d->data.file.fh = 0;
 	}
 
 	if (d->data.file.ofh)
 	{
-	    r.r[0] = 0;
-	    r.r[1] = d->data.file.ofh;
-	    os_find(&r);
+	    ro_fclose(d->data.file.ofh);
 	    d->data.file.ofh = 0;
 	}
 
@@ -2044,9 +2041,13 @@ static void access_file_fetch_alarm(int at, void *h)
 
 	access_unlink(d);
 	access_free_item(d);
+
+	return FALSE;
     }
     else
     {
+	ACCDBGN(("file_fetch(): d %p fname '%s' from %d to %d\n", d, d->data.file.fname, d->data.file.so_far, d->data.file.so_far + d->data.file.chunk));
+
 	/* More to do */
 	if (d->data.file.ofh)
 	{
@@ -2067,23 +2068,26 @@ static void access_file_fetch_alarm(int at, void *h)
 	access_reschedule(&access_file_fetch_alarm, d, FILE_POLL_INTERVAL);
     }
 
-/*     visdelay_end(); */
+    return TRUE;
 }
 
+static void access_file_fetch_alarm(int at, void *h)
+{
+    access_handle d = (access_handle) h;
+    ACCDBGN(("access_file_fetch_alarm(): at %d\n", at));
+    access_file_fetch(d);
+}
 
-static os_error *access_new_file(const char *file, char *url, access_url_flags flags, char *ofile, 
+static os_error *access_new_file(const char *file, int ft, char *url, access_url_flags flags, char *ofile, 
 				 access_progress_fn progress, access_complete_fn complete,
 				 void *h, access_handle *result)
 {
     access_handle d = NULL;
-    int ft = file_type(file);
-    int fh = ro_fopen(file, RO_OPEN_READ);
     os_error *ep = NULL;
+    int fh = ro_fopen(file, RO_OPEN_READ);
     
     if (fh)
     {
-	BOOL do_reschedule;
-
 	d = mm_calloc(1, sizeof(*d));
 
 	d->access_type = access_type_FILE;
@@ -2107,29 +2111,26 @@ static os_error *access_new_file(const char *file, char *url, access_url_flags f
 		
 	d->data.file.size = ro_get_extent(fh);
 	d->data.file.last_modified = file_last_modified(file);
-#if 0		
+
 	/* if this is an image then immediately process the first 256 bytes of the image to get the size */
-	if (flags & access_IMAGE)
+	if (flags & access_PRIORITY)
+	{
+	    d->data.file.chunk = d->data.file.size;
+	    if (!access_file_fetch(d))
+		d = NULL;
+	}
+	else if (flags & access_IMAGE)
 	{
 	    d->data.file.chunk = 256;
-	    do_reschedule = d->data.file.chunk > d->data.file.size;
-
-	    access_file_fetch_alarm(0, d);
+	    if (access_file_fetch(d))
+		d->data.file.chunk = FILE_INITIAL_CHUNK;
+	    else
+		d = NULL;
 	}
 	else
-#endif
-	{
-	    do_reschedule = TRUE;
-	}
-
-	if (do_reschedule)
 	{
 	    d->data.file.chunk = FILE_INITIAL_CHUNK;
 	    access_reschedule(&access_file_fetch_alarm, d, FILE_POLL_INTERVAL);
-	}
-	else
-	{
-	    d = NULL;
 	}
     }
     else
@@ -2658,7 +2659,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
     access_handle d;
     char *cfile;
     os_error *ep = NULL;
-
+    BOOL file_missing;
+	
     visdelay_begin();
 
     /* this prevents internal state flags from being passed back in from relocates (like proxy and secure flags) */
@@ -2681,8 +2683,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
     if (cfile)
     {
-	access_complete_flags fl;
-	BOOL file_missing = FALSE;
+	file_missing = FALSE;
 
 	if (ofile)
 	{
@@ -2703,51 +2704,38 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	}
 
-	/* if the file is in cache then
-	 * if it is an image then we want to load only the start (to get the size)
-	 * and then let the rest come in its own time.
-	 * if it is HTML then we want to load it all at once.
+	/* if the file is in cache then feed to the file routines
 	 */
 
 	if (ep == NULL && !file_missing)
 	{
-#if 1
-	    ep = access_new_file(cfile, url, flags, ofile, progress, complete, h, result);
+	    ep = access_new_file(cfile, file_type(cfile), url, flags, ofile, progress, complete, h, result);
 	    if (ep)
 		file_missing = TRUE;
-#else
-	    if (!access_progress_flush(h, cfile, url, progress))
-		file_missing = TRUE;
-	    else
-	    {
-		fl = complete(h, status_COMPLETED_FILE, ofile ? ofile : cfile, url);
-
-		if (fl & access_KEEP)
-		    cache->keep(url);
-	    }
-#endif
 	}
 
 	if (file_missing)
 	{
 	    ACCDBGN(("Cache hit '%s', file missing, removing the cache entry.\n", cfile));
 	    cache->remove(url);
-	    cache->lookup_free_name(cfile);
-	    cfile = NULL;
 	}
-#if 0
 	else
 	{
-	    ACCDBGN(("Cache hit '%s' returning the cache file\n", cfile));
-	    *result = NULL;
+	    ACCDBGN(("Cache hit '%s', streaming the cache file\n", cfile));
 	}
-#endif
-    }
 
+	/* cache file is not needed at this point, either it doesn't exist or we've fed it to new_file() */
+	cache->lookup_free_name(cfile);
+	cfile = NULL;
+    }
+    else
+	file_missing = TRUE;
+#else
+    file_missing = TRUE;
 #endif /*ndef FILEONLY */
 
     /* if cache is no good then go and fetch it for real */
-    if (cfile == NULL)
+    if (file_missing)
     {
 	char *scheme, *netloc, *path, *params, *query, *fragment;
 
@@ -2769,8 +2757,6 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	else if (strcasecomp(scheme, "file") == 0)
 	{
 	    int ft;
-	    os_regset r;
-	    int fh, ofh=0;
 
 	    cfile = url_path_to_riscos(path);
 	    if (cfile[strlen(cfile)-1] == '.')
@@ -2842,7 +2828,32 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    {
 		ft = file_type(cfile);
 
-		if (ft == FILETYPE_URL)
+		/* if file is not found try looking for file of correct filetype without extension */
+		if (ft == -1)
+		{
+		    char *slash = strrchr(cfile, '/');
+		    char *dot = strrchr(cfile, '.');
+
+		    if (slash && (dot == NULL || dot < slash))
+		    {
+			*slash = 0;
+			
+			if (suffix_to_file_type(slash+1) == (ft = file_type(cfile)) )
+			    ep = NULL;
+			else
+			    ep = makeerror(ERR_CANT_READ_FILE);
+		    }
+		    else
+		    {
+			ep = makeerror(ERR_CANT_READ_FILE);
+		    }
+		}
+
+		if (ft == -1)
+		{
+		    /* error will be reported */
+		}
+		else if (ft == FILETYPE_URL)
 		{
 		    char new_url[256];
 		    FILE *fh;
@@ -2874,46 +2885,18 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    if (fh)
 			fclose(fh);
 		}
-		else /* if (ft != FILETYPE_URL) */
+		else if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))
 		{
-		    /* what does this bit do? */
-		    if (ft == -1)
-		    {
-			char *slash = strrchr(cfile, '/');
-			char *dot = strrchr(cfile, '.');
-
-			if (slash && (dot == NULL || dot < slash))
-			{
-			    *slash = 0;
-
-			    if (suffix_to_file_type(slash+1) == (ft = file_type(cfile)) )
-				ep = NULL;
-			    else
-				ep = makeerror(ERR_CANT_READ_FILE);
-			}
-			else
-			{
-			    ep = makeerror(ERR_CANT_READ_FILE);
-			}
-		    }
-
-		    /* SJM: changed #if to be based on file type */
-		    if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))
-		    {
-			if (ep == NULL)
-			{
-			    access_progress_flush(h, cfile, url, progress);
-			    complete(h, status_COMPLETED_FILE, cfile, url);
-			}
-
-			*result = NULL;
-		    }
-		    else
-		    {
-			ep = access_new_file(cfile, url, flags, ofile, progress, complete, h, result);
-		    }
-		} /* ft == FILETYPE_URL */
-	    } /* path_is_directory(cfile) */
+		    access_progress_flush(h, cfile, url, progress);
+		    complete(h, status_COMPLETED_FILE, cfile, url);
+		    
+		    *result = NULL;
+		}
+		else if (ft != -1)
+		{
+		    ep = access_new_file(cfile, ft, url, flags, ofile, progress, complete, h, result);
+		}
+	    } /* end !path_is_directory(cfile) */
 
 	    mm_free(cfile);
 	}
@@ -3256,6 +3239,9 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	ACCDBGN(( "Freeing parts\n"));
 	url_free_parts(scheme, netloc, path, params, query, fragment);
     }
+
+    if (ep)
+	*result = NULL;
 
     visdelay_end();
 
