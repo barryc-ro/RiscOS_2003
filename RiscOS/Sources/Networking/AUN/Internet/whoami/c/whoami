@@ -8,6 +8,18 @@
  * Copyright(c) 1994 Acorn Computers Ltd., Cambridge, England
  *
  * $Log$
+ * Revision 1.5  95/11/14  12:08:41  pwain
+ * Check in for jdavies@csd
+ * 
+ * Added use of AUN_state flag to control AUN REVARP behaviour.
+ *
+ * Revision 1.4  95/07/06  08:50:39  kwelton
+ * Fixed the case for REVARP_REPLY in revarpinput() - only bother setting
+ * the interface address if actively looking for an address, and the reply
+ * is to a request from the local machine; *always* raise an internet event
+ * for the revarp reply, as this is used (and needed) by the Net module when
+ * talking to Gateway machines.
+ * 
  * Revision 1.3  95/01/24  17:17:46  kwelton
  * Whoops - missed an occurence of MMAXOFF within revarp_broadcastclientaddrs,
  * which should have been changed to MAXOFF(m) in the new mbuf scheme.
@@ -590,30 +602,63 @@ revarpinput(struct arpcom *ac, struct mbuf *m)
     {
       case REVARP_REPLY:
 	/*
-	 * don't bother, unless we are actively looking for an address
+	 * don't bother, unless we are actively looking for an
+	 * address, otherwise test whether this is a reply to a packet
+	 * sent from local machine, by comparing hardware addresses
 	 */
-	if( (ifp->if_flags & IFF_NEED_IPADDR) == 0 )
-	    goto out;
-
-	if (bcmp((caddr_t)ea->arp_tha, (caddr_t)&ac->ac_enaddr[0], 6) == 0)
+	if( (ifp->if_flags & IFF_NEED_IPADDR) != 0 &&
+	   bcmp((caddr_t)ea->arp_tha, (caddr_t)&ac->ac_enaddr[0], 6) == 0 )
 	{
+	    /*
+	     * this duplicates an action taken within the in_control()
+	     * call to set the interface address.
+	     */
 	    bcopy((caddr_t)ea->arp_tpa, (caddr_t)&ac->ac_ipaddr,
 		  sizeof(ac->ac_ipaddr));
+
+	    /*
+	     * this is most odd, as nobody sleeps on revarp!
+	     */
 	    wakeup((caddr_t)&revarp);
+
+	    /*
+	     * prepare for, and make a call to in_control() to set
+	     * the interface address from the reply in the packet
+	     */
+	    bzero((caddr_t)&ifr, sizeof(ifr));
+	    sin = (struct sockaddr_in *)&ifr.ifr_addr;
+	    sin->sin_family = AF_INET;
+	    sin->sin_addr = ac->ac_ipaddr;
+	    (void)in_control((struct socket *)0, SIOCSIFADDR,
+			      (caddr_t)&ifr, ifp);
+
+	    /*
+	     * this interface has had an address set, so we aren't
+	     * looking for an address any more
+	     */
+	    ifp->if_flags &= ~IFF_NEED_IPADDR;
+
+	    /*
+	     * this is for the benfit of dickless booting technology
+	     */
+	    setriscosvar(BOOTPSERVERVAR, inet_ntoa(serverip));
+
+	    /*
+	     * this will wakeup if_whoamiaddr(), which sets
+	     * IFF_NEED_IPADDR before sleeping.
+	     */
+	    bootwakeup();
 	}
 
-	bzero((caddr_t)&ifr, sizeof(ifr));
-	sin = (struct sockaddr_in *)&ifr.ifr_addr;
-	sin->sin_family = AF_INET;
-	sin->sin_addr = ac->ac_ipaddr;
-	(void) in_control((struct socket *)0, SIOCSIFADDR, (caddr_t)&ifr, ifp);
-	ifp->if_flags &= ~IFF_NEED_IPADDR;
-
-	bcopy((caddr_t)ea->arp_spa, &serverip, sizeof(serverip));
-	bcopy((caddr_t)ea->arp_tpa, &thisip, sizeof(thisip));
-	revarp_event(serverip, thisip);
-	setriscosvar(BOOTPSERVERVAR, inet_ntoa(serverip));
-	bootwakeup();
+	if (AUN_state == AUN_CLIENT)
+	{
+	    /*
+	     * raise an Internet event for the benefit of the Net module
+	     */
+	    bcopy((caddr_t)ea->arp_spa, &serverip, sizeof(serverip));
+	    bcopy((caddr_t)ea->arp_tpa, &thisip, sizeof(thisip));
+	    revarp_event(serverip, thisip);
+	}
 
 	break;
 
@@ -664,6 +709,42 @@ revarpinput(struct arpcom *ac, struct mbuf *m)
 	    sa.sa_family = AF_UNSPEC;
 	    (*ac->ac_if.if_output)(&ac->ac_if, m, &sa);
 	    return;
+	}
+	else
+	    if ((AUN_state == AUN_CLIENT) || (AUN_state == AUN_GATEWAY))
+	    {
+		eh = (struct ether_header *)sa.sa_data;
+		memcpy(eh->ether_dhost, ea->arp_sha, sizeof(ea->arp_sha));
+		for (ifa = ifp->if_addrlist; ifa; ifa = ifa->ifa_next)
+		{
+		    if (ifa->ifa_ifp == ifp)
+		    {
+			if (AUN_state == AUN_CLIENT)
+			    memset (ea->arp_spa, 0, sizeof(ea->arp_spa));
+			if (AUN_state == AUN_GATEWAY)
+			    memcpy(ea->arp_spa,
+			    (caddr_t)&((struct sockaddr_in *)&ifa->ifa_addr)->sin_addr,
+			    sizeof(ea->arp_spa));
+			memcpy(ea->arp_tpa, 
+			    (caddr_t)&((struct sockaddr_in *)&ifa->ifa_addr)->sin_addr,
+			    sizeof(ea->arp_tpa));
+			ea->arp_tpa[3] = 0; /* MNS station id */
+			break;
+		    }
+		}
+		if (ifa != 0)
+		{
+		    memcpy((caddr_t)ea->arp_sha,
+		        (caddr_t)ac->ac_enaddr, sizeof(ea->arp_sha));
+		    memcpy((caddr_t)eh->ether_shost,
+		        (caddr_t)ac->ac_enaddr, sizeof(ea->arp_sha));
+		    eh->ether_type = ETHERTYPE_REVARP;
+		    ea->arp_op = htons(REVARP_REPLY);
+		    sa.sa_family = AF_UNSPEC;
+		    (*ac->ac_if.if_output)(&ac->ac_if, m, &sa);
+
+		    return;
+	    }
 	}
 
 	break;
