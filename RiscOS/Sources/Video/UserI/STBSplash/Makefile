@@ -41,7 +41,7 @@ INCLUDES = -IC:
 
 LIBS     =
 
-DFLAGS   =
+DFLAGS   = -DUserIF_${USERIF}
 
 #
 # Program specific options:
@@ -50,7 +50,7 @@ COMPONENT = STBSplash
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
 OBJS      = o.dynamiclib o.main o.ModHead
-EXPORTS   = 
+EXPORTS   =
 RDIR      = ${RESDIR}.${COMPONENT}
 
 #
