@@ -31,12 +31,13 @@ RESGEN		= resgen
 WIPE		= -wipe
 
 ASMFLAGS	= -depend !Depend -Stamp -quit -throwback
-CFLAGS		= -c -depend !Depend -strict -wp -zM -zps1 -ffah -throwback ${INCLUDES} ${DFLAGS}
+CFLAGS		= -c -depend !Depend -strict -wp -zM -zps1 -ffah -throwback ${INCLUDES}
 CMHGFLAGS	= -depend !Depend -p -throwback ${DFLAGS}
 CPFLAGS		= ~cfr~v
 WFLAGS		= ~c~v
 
-DFLAGS		= #-DDEBUG #-DTEST
+DFLAGS		= -DTEST
+DDFLAGS		= ${DFLAGS} -DTrace_TRACE -DDEBUGLIB
 
 
 # ------------------------------------------------------------------------------
@@ -65,20 +66,20 @@ INCLUDES	= -Itbox:,C:,<Lib$Dir>
 COMPONENT	= DaytonaHW
 RAMTARGET	= rm.DaytonaHW
 ROMTARGET	= aof.DaytonaHW
+DEBUGTARGET	= rm.DaytonaHWD
 EXPORTS		= ${EXP_C_H}.${COMPONENT}
 
 OBJS = \
  o.bufman \
  o.bufmanlo \
  o.buzzer \
- o.callfax \
  o.eeprom\
  o.error\
  o.fakeexch \
  o.fakeexchlo \
- o.faxreceivr \
  o.interrupts \
  o.led \
+ o.localfax\
  o.modem \
  o.module \
  o.modulehdr \
@@ -86,18 +87,35 @@ OBJS = \
  o.watchdog \
  o.wimpmsg
 
+OBJSD = \
+ od.bufman \
+ od.bufmanlo \
+ od.buzzer \
+ od.eeprom\
+ od.error\
+ od.fakeexch \
+ od.fakeexchlo \
+ od.interrupts \
+ od.led \
+ od.localfax\
+ od.modem \
+ od.module \
+ o.modulehdr \
+ od.pio_reg \
+ od.watchdog \
+ od.wimpmsg
+
 OBJSSA = \
  o.bufman \
  o.bufmanlo \
  o.buzzer \
- o.callfax \
  o.eeprom\
  o.error\
  o.fakeexch \
  o.fakeexchlo \
- o.faxreceivr \
  o.interrupts \
  o.led \
+ o.localfax\
  o.modem \
  o.module \
  o.modulehdr \
@@ -109,14 +127,23 @@ HDRS = h.modulehdr
 
 LIBS = <Lib$Dir>.callx.o.callx
 
+LIBSD =\
+ <Lib$Dir>.callx.o.callx\
+ <Lib$Dir>.Trace.o.T_M_PL\
+ <Lib$Dir>.DebugLib.o.debuglibzm\
+ TCPIPLibs:o.inetlibzm\
+ TCPIPLibs:o.socklib5zm\
+ TCPIPLibs:o.unixlibzm\
 
 # ------------------------------------------------------------------------------
 # Rule patterns
 #
-.SUFFIXES:	.o .oSA .h .s .c .cmhg
-.c.o:;		${CC} ${CFLAGS} -o $@ $<
-.c.oSA:;	${CC} ${CFLAGS} -DSTANDALONE -o $@ $<
+.SUFFIXES:	.o .od .oSA .h .s .c .cmhg
+.c.o:;		${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c.oSA:;	${CC} ${CFLAGS} ${DFLAGS} -DSTANDALONE -o $@ $<
+.c.od:;		${CC} ${CFLAGS} -fn ${DDFLAGS} -DSTANDALONE -o $@ $<
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
+.s.od:;		$(AS) ${ASMFLAGS} -o $@ $<
 .cmhg.o:;	${CMHG} ${CMHGFLAGS} $< -o $@
 .cmhg.h:;	${CMHG} ${CMHGFLAGS} $< -d $@
 
@@ -130,6 +157,9 @@ ram: ${RAMTARGET}
 
 rom: ${ROMTARGET}
 	@echo ${COMPONENT}: rom module built
+
+debug: ${DEBUGTARGET}
+	@echo ${COMPONENT}: debug build complete
 
 export: ${EXPORTS}
 	@echo ${COMPONENT}: export complete
@@ -153,13 +183,16 @@ clean:
 resources:
         @echo ${COMPONENT}: resource files copied
 
-dirs:
-	${MKDIR} aof
-	${MKDIR} linked
-	${MKDIR} map
-	${MKDIR} o
-	${MKDIR} oSA
-	${MKDIR} rm
+o.dirs:
+	@${MKDIR} aof
+	@${MKDIR} linked
+	@${MKDIR} map
+	@${MKDIR} o
+	@${MKDIR} od
+	@${MKDIR} oSA
+	@${MKDIR} rm
+	create o.dirs
+	stamp o.dirs
 
 
 # ------------------------------------------------------------------------------
@@ -169,24 +202,23 @@ dirs:
 
 # Target 
 
-${RAMTARGET}: ${OBJSSA} ${HDRS} ${CLIB} dirs
+${RAMTARGET}: ${OBJSSA} ${HDRS} ${LIBS} ${CLIB} o.dirs
 	${LD} -rmf -symbols @.syms -o $@ ${OBJSSA} ${LIBS} ${CLIB}
 
-
-#	${MODSQZ} $@
+${DEBUGTARGET}: ${OBJSD} ${HDRS} ${LIBSD} ${CLIB} o.dirs
+	${LD} -rmf -symbols @.syms -o $@ ${OBJSD} ${LIBSD} ${CLIB}
 
 o.res: Resources.<Locale>.Messages
 	${RESGEN} resources_area o.res -via Res.List
 
+${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
+        ${CP} h.${COMPONENT} $@ ${CPFLAGS}
+
 
 # ROM Target (re-linked at ROM Image build time)
 
-${ROMTARGET}: ${OBJS} ${HDRS} ${ROMCSTUBS} dirs
+${ROMTARGET}: ${OBJS} ${HDRS} ${LIBS} ${ROMCSTUBS} o.dirs
 	${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
-
-
-${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
-        ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
 # Final link for the ROM Image (using given base address)
 
