@@ -17,6 +17,7 @@
 #include "window.h"
 #include "event.h"
 
+#include "m.h"
 #include "plugclient.h"
 #include "client.h"
 #include "utils.h"
@@ -45,16 +46,19 @@
 #define REPLAY_MULTI_PAINTIFPAUSED          (1<<8)
 #define REPLAY_MULTI_ENDOFPLAY              (1<<9)
 
-/* #define REPLAY_START_COMMAND                "/<ARMovie$Dir>.Player" */
-#define REPLAY_START_COMMAND                "@RunType_AE7"	/* SJM: this is the correct use */
+#define REPLAY_START_COMMAND                "/<ARMovie$Dir>.Player" /*must
+                                            run Player direct, or we will
+                                            reenter ourselves JRC 19 Jun
+                                            1997*/
 
-#define CMD_LINE_LIMIT                      1024 /* buffer size for command buffer */
-#define SLACK_SPACE			    80   /* slack space to ensure we don't overrun */
+#define CMD_LINE_LIMIT                      256  /*longest command line possible for RISC O S*/
+#define EXTRA_ARGS_LIMIT                    1024 /*buffer size for command buffer*/
+#define SLACK_SPACE                         80   /*slack space to ensure we don't overrun*/
 
 static
    _kernel_oserror
-      Error_Too_Long = {1, "Replay command line too long"},
-      Error_No_Task  = {1, "Replay task exited unexpectedly"};
+      Error_Too_Long  = {1, "Replay command line too long"},
+      Error_Not_Found = {1, "File %s not found"};
 
 /* ----------------------------------------------------------------------
  * TYPE DEFINITIONS
@@ -146,7 +150,7 @@ static void replay_multi_end(client_replay_control *crc)
     {
 	if (crc->rma != NULL)
 	    rma_free(crc->rma);
-	free(crc);
+	m_FREE(crc, sizeof *crc);
     }
     
     TRACE1 ("-replay_multi_end\n");
@@ -312,7 +316,8 @@ static _kernel_oserror *show_own_window(ObjectId window_handle, const char *file
    if ((replay_file = fopen (file_name, "r")) == NULL)
    {
       TRACE4("show_own_window(): error opening file\n");
-      return utils_last_oserror ();
+      sprintf (Error_Not_Found.errmess, "File %s not found", file_name);
+      return &Error_Not_Found;
    } /* if */
  
    /* ignore first 4 lines */
@@ -389,7 +394,8 @@ static _kernel_oserror *centre_in_window(int wimp_window, const char *file_name,
   if ( (replay_file=fopen(file_name, "r"))==NULL )
   {
     TRACE4("centre_in_window(): error opening file\n");
-    return utils_last_oserror ();
+    sprintf (Error_Not_Found.errmess, "File %s not found", file_name);
+    return &Error_Not_Found;
   } /* if */
 
   /* ignore first 4 lines */
@@ -446,83 +452,95 @@ static _kernel_oserror *centre_in_window(int wimp_window, const char *file_name,
 static client_replay_control *replay_multi_start(client_replay_ptr crp)
 {
    client_replay_control *crc;
+   char cmd_line [CMD_LINE_LIMIT]; /* only the filename and run commmand go in here */
+   char extra_args [EXTRA_ARGS_LIMIT + SLACK_SPACE]; /* all other parameters go in here */
+   char *msg;
    int n, x = 0, y = 0, len;
    _kernel_oserror *error = NULL; /*error indicator*/
    FILE *temp_file;
-   char cmd_line1 [256];		/* only the filename and run commmand go in here */
-   char cmd_line [CMD_LINE_LIMIT + SLACK_SPACE];	/* all other parameters go in here */
 
-   static _kernel_oserror Local_Error; /*error buffer*/
-   
+   static _kernel_oserror Local_Error = {1, ""}; /*error buffer*/
+
    TRACE1 ("+replay_multi_start\n");
 
-   if ((crc = calloc (sizeof *crc, 1)) == NULL)
+   if ((crc = m_CALLOC (sizeof *crc, 1)) == NULL)
    {
       error = &Error_No_Mem;
+      TRACE2 ("finish\n");
       goto finish;
    }
 
-   if ((crc->rma = rma_alloc (sizeof *crc->rma)) == NULL)
+   if ((crc->rma = rma_malloc (sizeof *crc->rma)) == NULL)
    {
       error = &Error_No_Mem;
+      TRACE2 ("finish\n");
       goto finish;
    }
 
-   /* we are only putting the filename in cmd_line1 so assume it fit */
-   strcpy(cmd_line1, REPLAY_START_COMMAND " ");
-   strcat(cmd_line1, crp->file_name);
+   /* we are only putting the filename in cmd_line so assume it fits */
+   strcpy(cmd_line, REPLAY_START_COMMAND " ");
+   strcat(cmd_line, crp->file_name);
 
    /* if type isn't ARMOVIE, assume MovieFS is involved */
    if (crp->file_type != osfile_TYPE_ARMOVIE)
    {
-       char *temp_str = cmd_line; /* use this buffer for now as it si not in use  */
-       
       /* Check for MovieFS Error file */
-      sprintf (temp_str, "%s.Error", crp->file_name);
-      temp_file = fopen (temp_str, "r");
+      sprintf (extra_args, "%s.Error", crp->file_name);
+      temp_file = fopen (extra_args, "r");
  
       if (temp_file != NULL) /* error file exists! */
       {
-         TRACE4 ("%s found\n" _ temp_str);
-         Local_Error.errnum = 0;
+         TRACE4 ("%s found\n" _ extra_args);
          strcpy (Local_Error.errmess, "Could not play multimedia file: ");
          len = strlen (Local_Error.errmess);
          fgets (Local_Error.errmess + len, sizeof Local_Error.errmess - len - 1, temp_file);
          fclose (temp_file);
 
          error = &Local_Error;
+         TRACE2 ("finish\n");
          goto finish;
       } /* if */
- 
+
       /* check existence of .ARMovie file */
- 
-      sprintf (temp_str, "%s.ARMovie", crp->file_name);
-      temp_file = fopen (temp_str, "r");
- 
+      sprintf (extra_args, "%s.ARMovie", crp->file_name);
+      temp_file = fopen (extra_args, "r");
+
       if (temp_file == NULL) /* not found */
       {
-         TRACE4 ("%s not found\n" _ temp_str);
-         error = utils_last_oserror ();
+         TRACE4 ("%s not found\n" _ extra_args);
+         sprintf (Error_Not_Found.errmess, "Could not play multimedia file: File %s not found",
+               extra_args);
+         error = &Error_Not_Found;
+         TRACE2 ("finish\n");
          goto finish;
       } /* if */
  
       fclose (temp_file);
 
-      /* add to the real file name ie cmd_line1 */
-      strcat (cmd_line1, ".ARMovie");
+      /* add to the real file name ie cmd_line */
+      strcat (cmd_line, ".ARMovie");
    } /* if */
 
+   TRACE2 ("crp->show_own_window %s\n" _ crp->show_own_window? "TRUE": "FALSE");
    if (crp->show_own_window)
    {
       if (!crp->hidden)
          if ((error = show_own_window (crp->window_handle,
-               cmd_line1 + sizeof REPLAY_START_COMMAND, &x, &y)) != NULL)
+               cmd_line + sizeof REPLAY_START_COMMAND, &x, &y)) != NULL)
+         {
+            TRACE2 ("finish\n");
             goto finish;
+         }
    }
    else
+   {
       if ((error = centre_in_window (crp->wimp_window,
-            cmd_line1 + sizeof REPLAY_START_COMMAND, &x, &y)) != NULL)
+            cmd_line + sizeof REPLAY_START_COMMAND, &x, &y)) != NULL)
+      {
+         TRACE2 ("finish\n");
          goto finish;
+      }
+   }
 
    crc->rma->mywindow.wimp_handle = crp->wimp_window;
    crc->rma->mywindow.task_handle = crp->task_handle;
@@ -530,83 +548,108 @@ static client_replay_control *replay_multi_start(client_replay_ptr crp)
    memset (&crc->rma->multi_flags, '\0', sizeof crc->rma->multi_flags);
 
    /* initialise the cmd buffer here */
-   n = sprintf(cmd_line, " -noerror -pollword -noadjust -nomenu");
+   n = sprintf(extra_args, " -noerror -pollword -noadjust -nomenu");
 
    /* NB Resources (in file Res) set up so that bottom left of window is 0,0 */
-   if ((n += sprintf (cmd_line + n, " -at %d,%d -multi %d -mywindow %d",
+   if ((n += sprintf (extra_args + n, " -at %d,%d -multi %d -mywindow %d",
          x, y,
          (int) &crc->rma->multi_flags,
-         (int) &crc->rma->mywindow)) >= CMD_LINE_LIMIT)
+         (int) &crc->rma->mywindow)) >= EXTRA_ARGS_LIMIT)
    {
       error = &Error_Too_Long;
+      TRACE2 ("finish\n");
       goto finish;
    }
 
+   TRACE2 ("crp->loop %d\n" _ crp->loop);
    if (crp->loop == -1)
    {
-      if ((n += sprintf (cmd_line + n, " -loop")) >= CMD_LINE_LIMIT)
+      if ((n += sprintf (extra_args + n, " -loop")) >= EXTRA_ARGS_LIMIT)
       {
          error = &Error_Too_Long;
+         TRACE2 ("finish\n");
          goto finish;
       }
    }
    else if (crp->loop > 1)
    {
-      if ((n += sprintf (cmd_line + n, " -loop %d", crp->loop - 1)) >=
-            CMD_LINE_LIMIT)
+      if ((n += sprintf (extra_args + n, " -loop %d", crp->loop - 1)) >=
+            EXTRA_ARGS_LIMIT)
       {
          error = &Error_Too_Long;
+         TRACE2 ("finish\n");
          goto finish;
       }
    }
 
+   TRACE2 ("crp->starttime %d\n" _ crp->starttime);
    if (crp->starttime != 0)
       /* replay wants time in centiseconds */
-      if ((n += sprintf (cmd_line + n, " -startat %d", crp->starttime*100))
-            >= CMD_LINE_LIMIT)
+      if ((n += sprintf (extra_args + n, " -startat %d", crp->starttime*100))
+            >= EXTRA_ARGS_LIMIT)
       {
          error = &Error_Too_Long;
+         TRACE2 ("finish\n");
          goto finish;
       }
 
+   TRACE2 ("crp->endtime %d\n" _ crp->endtime);
    if (crp->endtime != -1)
        /* replay wants time in centiseconds */
-       if ((n += sprintf (cmd_line + n, " -playfor %d",
-             (crp->endtime - crp->starttime)*100)) >= CMD_LINE_LIMIT)
+       if ((n += sprintf (extra_args + n, " -playfor %d",
+             (crp->endtime - crp->starttime)*100)) >= EXTRA_ARGS_LIMIT)
        {
           error = &Error_Too_Long;
+          TRACE2 ("finish\n");
           goto finish;
        }
 
+   TRACE2 ("crp->hidden %d\n" _ crp->hidden);
    if (crp->hidden)
    {
-       if ((n += sprintf (cmd_line + n, " -novideo")) >= CMD_LINE_LIMIT)
+       if ((n += sprintf (extra_args + n, " -novideo")) >= EXTRA_ARGS_LIMIT)
        {
           error = &Error_Too_Long;
+          TRACE2 ("finish\n");
           goto finish;
        }
    }
 
    /*Close the window when the movie finishes. (Deleted code |else {if ((n +=
-      sprintf (cmd_line + n, " -pauseatend")) >= CMD_LINE_LIMIT) {error =
+      sprintf (extra_args + n, " -pauseatend")) >= EXTRA_ARGS_LIMIT) {error =
       &Error_Too_Long; goto finish;}}|.) JRC 5 Jun 1997*/
 
+   TRACE2 ("crp->volume %d\n" _ crp->volume);
    if (crp->volume == 0) /* volume on or off is all replay supports :-( */
-      if ((n += sprintf (cmd_line + n, " -mute")) >= CMD_LINE_LIMIT)
+      if ((n += sprintf (extra_args + n, " -mute")) >= EXTRA_ARGS_LIMIT)
       {
          error = &Error_Too_Long;
+         TRACE2 ("finish\n");
          goto finish;
       }
 
-   TRACE4("Starting replay, cmdline = %s, cmdbuf = %s\n" _ cmd_line _ cmd_line1);
-   set_system_variable("ARMovie$ExtraArgs", cmd_line);
-   
-   if ((error = wimp_start_task (cmd_line1, &crc->replay_task)) != NULL)
+   TRACE2("Starting replay, cmd_line \"%s\", extra_args \"%s\"\n" _ cmd_line _ extra_args);
+   set_system_variable("ARMovie$ExtraArgs", extra_args);
+   if ((error = utils_start_task (cmd_line, REPLAY_SLOT, &crc->replay_task)) != NULL)
+   {
+      TRACE2 ("finish\n");
       goto finish;
+   }
 
+   TRACE2 ("crc->replay_task 0x%X\n" _ crc->replay_task);
    if (crc->replay_task == 0)
    {
-      error = &Error_No_Task;
+      error = &Local_Error;
+
+      strcpy (error->errmess, "Replay task exited unexpectedly");
+      if ((msg = getenv ("ARMovie$ReturnCode")) != NULL && msg [0] != '\0')
+      {
+         strcat (error->errmess, ": ");
+         len = strlen (error->errmess);
+         sprintf (error->errmess + len, "%.*s", sizeof error->errmess - len - 1, msg);
+      }
+
+      TRACE2 ("finish\n");
       goto finish;
    }
 
@@ -615,32 +658,41 @@ static client_replay_control *replay_multi_start(client_replay_ptr crp)
    crc->replay_running = TRUE;
 
    /* register handler so we know when replay closes */
-   event_register_message_handler (Wimp_MTaskCloseDown,
-         &client_replay_closedown_handler, crp);
+   if ((error = event_register_message_handler (Wimp_MTaskCloseDown,
+         &client_replay_closedown_handler, crp)) != NULL)
+   {
+      TRACE2 ("finish\n");
+      goto finish;
+   }
 
    /* register open window event */
-   event_register_wimp_handler (crp->wimp_window, Wimp_EOpenWindow,
-         client_replay_open_win_handler, crc);
+   if ((error = event_register_wimp_handler (crp->wimp_window, Wimp_EOpenWindow,
+         client_replay_open_win_handler, crc)) != NULL)
+   {
+      TRACE2 ("finish\n");
+      goto finish;
+   }
 
    pluginclient_send_busy (crp->plugin, 0, plugin_state_PLAY);
 
 finish:
    if (error != NULL)
    {
+      TRACE1 ("error finish \"%s\"\n" _ error->errmess);
       pluginclient_send_closed(crp->plugin, 0, error, 0);
 
       /* deregister handler */
-      event_deregister_message_handler (Wimp_MTaskCloseDown,
+      (void) event_deregister_message_handler (Wimp_MTaskCloseDown,
             &client_replay_closedown_handler, crp);
 
       if (crc != NULL)
       {
          /* deregister open window event */
-         event_deregister_wimp_handler (crp->wimp_window, Wimp_EOpenWindow,
+         (void) event_deregister_wimp_handler (crp->wimp_window, Wimp_EOpenWindow,
                client_replay_open_win_handler, crc);
 
          if (crc->rma != NULL) rma_free (crc->rma);
-         free (crc);
+         m_FREE (crc, sizeof *crc);
       }
 
       TRACE1 ("-replay_multi_start\n");
@@ -784,7 +836,7 @@ static void client_replay_init(int argc, char *argv[])
 static int client_replay_open(pluginclient_instance *plugin, client_ptr *client_data,
                               int *opening_flags)
 {
-    client_replay_ptr crp = calloc(sizeof(*crp), 1);
+    client_replay_ptr crp = m_CALLOC (sizeof *crp, 1);
     _kernel_swi_regs r;
 
     TRACE1 ("+client_replay_open\n");
@@ -848,9 +900,9 @@ static void client_replay_close(client_ptr cp)
          &client_replay_closedown_handler, crp);
 
    if (crp->file_name != NULL)
-      free(crp->file_name);
+      m_FREE(crp->file_name, strlen (crp->file_name) + 1);
 
-   free(crp);
+   m_FREE(crp, sizeof *crp);
 
    TRACE1("-client_replay_close()\n");
 } /* client_replay_close */
@@ -980,6 +1032,7 @@ static int client_replay_action(client_ptr cp, int reason)
                return 0;
             }
          } /* else */
+
          pluginclient_send_busy(crp->plugin, 0, plugin_state_PLAY);
       break;
 
@@ -1188,7 +1241,7 @@ static client_ptr client_replay_play_file(const char *file_name, int filetype,
          "window_handle 0x%X\n" _ file_name _ filetype _ plugin _ window_handle);
 
    /* create and clear crp */
-   if ((crp = calloc (sizeof *crp, 1)) == NULL)
+   if ((crp = m_CALLOC (sizeof *crp, 1)) == NULL)
    {
       TRACE1("-client_replay_play_file()\n");
       return NULL;
@@ -1196,7 +1249,7 @@ static client_ptr client_replay_play_file(const char *file_name, int filetype,
      
    if ((crp->file_name = strdup(file_name)) == NULL)
    {
-      free(crp);
+      m_FREE(crp, sizeof *crp);
       TRACE1("-client_replay_play_file()\n");
       return NULL;
    } /* if */
@@ -1215,11 +1268,11 @@ static client_ptr client_replay_play_file(const char *file_name, int filetype,
    crp->href[0] = '\0';
    crp->volume = -1;
    crp->plugin = plugin;
-
+   
    if ((crp->replay = replay_multi_start(crp)) == NULL)
    {
-      free (crp->file_name);
-      free (crp);
+      m_FREE (crp->file_name, strlen (crp->file_name) + 1);
+      m_FREE (crp, sizeof *crp);
       TRACE1("-client_replay_play_file()\n");
       return NULL;
    } /* if */
