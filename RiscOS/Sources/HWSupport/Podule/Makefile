@@ -42,7 +42,7 @@ EXPORTS   = ${EXP_HDR}.${COMPONENT} \
             ${EXP_CHDR}.${COMPONENT}
 
 MESSAGESMOD = rm.PoduleMsgs
-MESSAGES  = Resources.${LOCALE}.Messages
+MESSAGES  = LocalRes:Messages
 RESPATH   = Resources.Podule.Messages
 MODNAME   = PoduleManagerMessages
 MODHELP   = PoduleManagerMessages
@@ -71,7 +71,7 @@ resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 clean:
         ${RM} ${TARGET}
