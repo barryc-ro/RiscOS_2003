@@ -56,10 +56,13 @@ extern int errno;
 #include "msgnos.h"
 #include "aof.h"
 #include "prgname.h"
+#include "symdefs.h"
 
 #ifdef LINKING_ON_ACORN_RISC_OS
 #include "riscos.dem.h"
 #include <assert.h>
+#else
+#include "dem.h"
 #endif
 
 #ifdef TARGET_HAS_AOUT
@@ -157,6 +160,11 @@ typedef int (*PFI)(const char *, const char *);
 typedef char *(*PFCS)();            /* halloc / salloc switch */
 typedef int (*PFI)();               /* string compare function */
 #endif
+
+typedef struct symdeffile {
+  struct symdeffile *next;
+  char name[4];
+} symdeffile;
 
 struct sym;                         /* defence against C++ scoping... */
 struct globsym
@@ -461,6 +469,8 @@ static char *first_area;       /* name of object(area) to place first */
 static char *last_area;        /* name of object(area) to place last  */
 static char *ro_ext = "";      /* file extension for -RO-base -SPLIT  */
 static char *rw_ext = "";      /* file extension for -RW-base/-DATA -SPLIT */
+
+static symdeffile *symdefs;    /* files to take symdefs global symbol output */
 
 static char *level_strs[4];
     /* msglevel_info, msglevel_warning, msglevel_error, msglevel_fatal */
@@ -5695,12 +5705,29 @@ static void print_map(struct oventry *ov)
     }
 }
 
+/* This routine is called back by the CLX library to insert the global symbols into
+ * the symbol tables.  It must return NULL, whether addition of the symbol succeeded
+ * or failed.
+ */
+static SymDefSymbol *sfcallback(SymDefsFile *sf, char *name, int32 val, SymDefSymbolType t)
+{
+  struct sym sy;
+  (void) sf;
+  zmem((char *)&sy, sizeof(sy));
+  sy.value = val;
+  sy.area = NULL;
+  sy.flags = SYM_GLOBALDEFAT;
+  if (t == symdef_DATA) sy.flags |= SYM_DATAAT;
+  globinsert(name, &sy, "!!");
+  return NULL;
+}
 
 static struct fentry **addfile(struct fentry **next, char *fname, int lflag)
 {
     struct fentry *fep;
     char *buffer;
     FILE *fp;
+    SymDefsFile *sf;
 
     for (fep = clifilelist;  fep != NULL;  fep = fep->next)
     {   if (CiStrEQ(fname, fep->fname))
@@ -5708,6 +5735,19 @@ static struct fentry **addfile(struct fentry **next, char *fname, int lflag)
             return next;
         }
     }
+
+    sf = sf_new();
+    if (sf)
+    {
+      int was_sf = 0;
+      if (sf_open(fname, sf, SFOPEN_INPUT)) {
+        sf_parse(sf, sfcallback);
+        was_sf = 1;
+      }
+      sf_delete(sf);
+      if (was_sf) return next;
+    }
+
     fep = (struct fentry *)
         halloc((int32)(size_t)(sizeof(struct fentry) + strlen(fname)));
     *next = fep;
@@ -6584,6 +6624,19 @@ RW_base:        if (rw_baseflag) msg(fatal_multflag(ap));
                 else
                     symfile = static_copy(symfile);
             }
+            else if (CiStrEQ(ap, "symdefs"))
+            {   char *symdef;
+                if ((symdef = *++argv) == NULL)
+                    msg(fatal_noarg(ap));
+                else
+                {
+                  size_t req = sizeof(symdeffile) + strlen(symdef);
+                  symdeffile *sdf = (symdeffile *)halloc(req); /* No +1 needed for zero */
+                  sdf->next = symdefs;
+                  symdefs = sdf;
+                  strcpy(sdf->name, symdef);
+                }
+            }
             else if (CiStrEQ(ap, "split"))
                 splitflag = 1;
 /* XXX: The space in "scat ter" ensures there can never be a match, which is */
@@ -6663,6 +6716,85 @@ scatter_format_image:
     return nextfile;
 }
 
+static void sort_glob_insert(struct hentry **list, struct hentry *newsym)
+{
+    struct globsym *gs;
+    struct globsym *ns = newsym->h_un.globval;
+    struct hentry *h;
+    int is_defat = (ns->symval.flags & SYM_DEFAT) != 0;
+    int32 new_val = ns->symval.value;
+    static char *sbuf = 0;
+
+    if (!sbuf) sbuf = halloc(MAXDBUF);
+
+#ifdef LINKING_ON_ACORN_RISC_OS
+    if (cplusplusflag) {
+      strcpy(sbuf, cplusplusname(newsym->name + 2));
+    }
+    else
+#endif
+      strcpy(sbuf, newsym->name + 2);
+
+    while ((h = *list) != NULL)
+    {
+      gs = h->h_un.globval;
+      if (!is_defat) {
+        /* Keep all the definitions together */
+        if (!(gs->symval.flags & SYM_DEFAT)) {
+          /* Alphabetic order then for the weak/undef symbols */
+          if (strcmp(h->name + 2, sbuf) < 0) {
+            /* Found the insertion point */
+            break;
+          }
+        }
+        /* Carry on searching ... */
+      }
+      else {
+        /* Compare on symbol value */
+        if (new_val < gs->symval.value) {
+          /* Found the insertion point */
+          break;
+        }
+      }
+
+      list = &gs->next;
+    }
+
+    /* *list points to the insertion point (could be start, middle or end of the list) */
+    newsym->h_un.globval->next = *list;
+    *list = newsym;
+}
+
+static void sort_global_syms(void)
+{
+    struct globsym *gs;
+    struct hentry *h, *next;
+    struct hentry *new_head = firstglobsym;
+
+    if (!firstglobsym || !firstglobsym->h_un.globval->next) return;
+
+    new_head = firstglobsym;
+    h = new_head->h_un.globval->next;
+    new_head->h_un.globval->next = NULL;
+
+    while (h != NULL)
+    {
+      gs = h->h_un.globval;
+      next = gs->next;
+      gs->next = NULL;
+      sort_glob_insert(&new_head, h);
+      h = next;
+    }
+
+    firstglobsym = new_head;
+    for (h = firstglobsym; h != NULL; h = gs->next) {
+      gs = h->h_un.globval;
+      if (gs->next == NULL) {
+        nextglobsym = &gs->next;
+      }
+    }
+}
+
 static void list_syms(void)
 {
     FILE *f;
@@ -6677,6 +6809,9 @@ static void list_syms(void)
         f = stdout;
     else if ((f = fopen(symfile, "w")) == 0)
         msg(fatal_openerr(symfile));
+
+    /* Don't call this for now */
+    (void) sort_global_syms;
 
     fprintf(f, msgtext(misc_sym_hdr));
     h = firstglobsym;
@@ -6711,6 +6846,43 @@ skip_unused:
     }
     if (ferror(f)) msg(fatal_writeerr(symfile));
     if (f != stdout) fclose(f);
+}
+
+static void list_symdefs(void)
+{
+    struct globsym *gs;
+    struct hentry *h;
+    struct aentry *aep;
+    SymDefsFile *sf;  /* Output symbol definitions file */
+    symdeffile *sdf;
+
+    for (sdf = symdefs; sdf; sdf = sdf->next) {
+        sf = sf_new();
+        if (!sf) msg(fatal_nosymdefs_open(sdf->name));
+        if (!sf_open(sdf->name, sf, SFOPEN_OUTPUT)) msg(fatal_nosymdefs_open(sdf->name));
+
+        h = firstglobsym;
+        while (h != NULL)
+        {   gs = h->h_un.globval;
+            aep = gs->symval.area;
+            if (aep == NULL || (aep->flags & UNUSEDAREA) == 0)
+            { if ((gs->symval.flags & SYM_REFDEFMASK) == SYM_GLOBALDEFAT)
+              {  (void) sf_update_symbol(sf, h->name + 2, gs->symval.value,
+                   ((gs->symval.flags & SYM_DATAAT) ||
+                   (aep != NULL && ((aep->attrs & (AOF_CODEAT|AOF_DEBUGAT)) == 0)))
+                   ? symdef_DATA : symdef_ARM);
+              }
+            }
+            h = gs->next;
+        }
+        if (sf_rewrite(sf, NULL, SELF IDFNSTR)) {
+          msg(fatal_nosymdefs_open(sdf->name));
+        }
+        sf_delete(sf);
+#       ifdef LINKING_ON_RISCOS
+        settype(sdf->name, 0xFFF);
+#       endif
+    }
 }
 
 static void lib_scan(struct fentry *fep, struct fentry *end)
@@ -6956,6 +7128,7 @@ int main(int argc, char **argv)
     strtsize = 4;
     middle();
     if (symfile) list_syms();
+    if (symdefs) list_symdefs();
 
     if (error_count == 0)
     {   if (mapflag)
