@@ -252,7 +252,6 @@ _kernel_oserror* render_start(char type, int w, int h, int i, int tp, render_fla
     im->scanline      = 0;                  // current scanline of block being recompressed
     im->subscanline   = 0;                  // current scanline in block
     im->interlace     = i;                  // interlace flag
-    im->row           = 0;                  // row being plotted (not = scanline if interlaced)
     im->blk_off[0]    = 0;                  // first block offset is zero
     im->no_blks       = 1;                  // number of blocks is 1 to start with
     im->scale.x_mul   = 2;                  // Image scale, x multiplier
@@ -266,7 +265,7 @@ _kernel_oserror* render_start(char type, int w, int h, int i, int tp, render_fla
     im->last_sprite_row = -1;
 
     /* Get memory to store lpb row of uncompressed data (for recompression) */
-    size=((w/4)*4)*lpb + 16;
+    size=((w*lpb/4)*4) + 16;
     if (!flex_alloc((flex_ptr)&im->rgb_data, size))
         return render_error_and_abandon(handle, "Can't allocate memory for rgb_data.");
 
@@ -437,7 +436,7 @@ _kernel_oserror* render_row(int handle, char **return_address, int *inc)
 {
     _kernel_oserror *e;
     internal_header *im=images[handle];
-    int              nb, y, size, spare, extend;
+    int              nb, size, spare, extend;
     int              oldscanline = im->scanline;
 
     debug_value("  render row ",handle);
@@ -455,31 +454,11 @@ _kernel_oserror* render_row(int handle, char **return_address, int *inc)
         return NULL;
     }
 
-    /* Calculate plotting position */
-    y = (im->height - im->row) * yos;
-
-    /* If image not interlaced, then the next lot of data will be for the next row */
-    if (!im->interlace) im->row++;
-    /* If interlaced, then calculate where on the image the next row is */
-    else
-    {
-        im->row += interlace_gap[im->interlace];
-        if (im->row > im->height)
-        {
-            /* If we've reached the bottom of the image, start the next pass */
-            im->interlace++;
-            if (im->interlace==2) im->row=4;
-            if (im->interlace==3) im->row=2;
-            if (im->interlace==4) im->row=1;
-        }
-    }
-
     im->subscanline++;
-    if ((im->subscanline) % im->flags.lpb == 0 || im->scanline+im->subscanline >= im->height)
+    if (im->subscanline == im->flags.lpb || im->scanline+im->subscanline >= im->height)
     {
-        /* If we're running low on space for the lzw data, try and extend it... */
         /* ... so how many bytes do we need to have spare to be sure of fitting a block of data? */
-        spare  = (im->width*im->flags.lpb < 256) ? 4096 : (im->width * LinesInBlock * 2);
+        spare  = (im->width < 256) ? 4096*im->subscanline : (im->width * LinesInBlock * 2 * im->subscanline);
         /* and if this isn't free, how much should we extend the area by? */
         extend = 2 * spare;
 
@@ -493,7 +472,7 @@ _kernel_oserror* render_row(int handle, char **return_address, int *inc)
         }
 
         /* If this is the first row, then start the compressor */
-        if (im->lzw_handle==-1)
+        if (im->scanline==0)
         {
             im->lzw_handle = LZW_compress_new();
             if (im->lzw_handle==-1)
@@ -503,32 +482,32 @@ _kernel_oserror* render_row(int handle, char **return_address, int *inc)
         }
 
         /* Compress these rows */
-        LZW_compress_next( (uint8*)im->lzw_data + im->lzw_ptr, (uint8*)im->rgb_data, im->width * im->flags.lpb, im->lzw_handle);
+        LZW_compress_next( (uint8*)im->lzw_data + im->lzw_ptr, (uint8*)im->rgb_data, im->width * im->subscanline, im->lzw_handle);
 
-        /* Flush compression table, so beginning a new block */
-        LZW_compress_flush(&nb, im->lzw_handle, (uint8*)im->lzw_data + im->lzw_ptr);
-        /* Move the data pointer on */
-        im->lzw_ptr += nb;
-
-        /* Update the table of block offsets */
-        im->blk_off[im->no_blks++] = im->lzw_ptr;
-        /* Restart compression (as long as this isn't the last row) */
-        if (im->scanline < im->height)
+        if (im->subscanline == im->flags.lpb)
         {
-            e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, im->lzw_handle);
-            if (e) return render_error_and_abandon(handle, e->errmess);
+            /* Flush compression table, so beginning a new block */
+            LZW_compress_flush(&nb, im->lzw_handle, (uint8*)im->lzw_data + im->lzw_ptr);
+            /* Move the data pointer on */
+            im->lzw_ptr += nb;
+
+            /* Update the table of block offsets */
+            im->blk_off[im->no_blks++] = im->lzw_ptr;
+            /* Restart compression (as long as this isn't the last row) */
+            if (im->scanline+im->subscanline < im->height)
+            {
+                e=LZW_compress_start( (uint8*)im->lzw_data + im->lzw_ptr, LZWDataSize, im->lzw_handle);
+                if (e) return render_error_and_abandon(handle, e->errmess);
+            }
         }
 
         /* Increment scanline */
-        im->scanline+=im->flags.lpb;
+        im->scanline+=im->subscanline;
         im->subscanline = 0;
 
         /* Check if this is the bottom of the image */
         if (im->scanline>=im->height)
-        {
-            im->scanline = im->height;
             render_end(handle);
-        }
     }
 
     *return_address = im->rgb_data + im->width * im->subscanline;
@@ -1401,7 +1380,7 @@ static _kernel_oserror* render_between(int handle, int first_line, int last_line
         /* Setup mask */
         if (tp!=-1)
         {
-            for (x=width; x; x--)
+            for (x=width-1; x>=0; x--)
                 row_msk[x] = row_img[x] == tp ? 0 : 255;
         }
 
