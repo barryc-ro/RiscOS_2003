@@ -152,7 +152,6 @@ o.eventqueue:	h.debug
 o.eventqueue:	h.msgs
 o.eventqueue:	h.List
 o.eventqueue:	h.EventQueue
-o.init: s.init
 o.init: hdr:ListOpts
 o.init: hdr:Macros
 o.init: hdr:System
