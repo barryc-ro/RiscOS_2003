@@ -81,6 +81,8 @@ ROM_OBJS =		\
  o.Lists		\
  o.Module		\
  o.Utils		\
+ o.VeneerMgr            \
+ o.VeneerTmpl           \
  o.${CMHG_HDR}
 
 # oSL -> Soft Load
@@ -94,6 +96,8 @@ RAM_OBJS =		\
  oSL.Lists		\
  oSL.Module		\
  oSL.Utils		\
+ oSL.VeneerMgr          \
+ oSL.VeneerTmpl         \
  o.${CMHG_HDR}
 
 # oSLd -> Soft Load deug
@@ -107,6 +111,8 @@ DBG_OBJS =		\
  oSLd.Module		\
  oSLd.Lists		\
  oSLd.Utils		\
+ oSLd.VeneerMgr         \
+ oSLd.VeneerTmpl        \
  o.${CMHG_HDR}
 
 # Defining TRACE just does debuglib based message outputting. Defining
