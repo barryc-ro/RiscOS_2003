@@ -342,7 +342,7 @@ EmulInfo( PWD pWd, PDLLINFO pWdInfo )
     PWD_C2H pWdData;
     PMODULE_C2H pHeader;
     USHORT ByteCount;
-    USHORT VCByteCount = iVc_Map * sizeof(WD_VCBIND);
+    USHORT VCByteCount = iVc_Map * sizeof_WD_VCBIND;
     PWDICA pIca;
 #ifdef DOS
     struct dosdate_t dosdate;
@@ -398,10 +398,16 @@ EmulInfo( PWD pWd, PDLLINFO pWdInfo )
      */
     if ( iVc_Map ) {
         LPBYTE  pVcBindData;
+	int i;
+
         pWdData->VcBindCount = iVc_Map;
         pWdData->oVcBind = sizeof(WD_C2H) + ByteCount;
         pVcBindData = (LPBYTE)pWdData + pWdData->oVcBind;
-        memcpy( pVcBindData, (LPBYTE)paWD_VcBind, iVc_Map * sizeof(WD_VCBIND) );
+
+	/* need to copy item by item as the paWD_VcBind array isn't packed */
+	//memcpy( pVcBindData, (LPBYTE)paWD_VcBind, iVc_Map * sizeof_WD_VCBIND) );
+	for (i = 0; i < iVc_Map; i++, pVcBindData += sizeof_WD_VCBIND)
+	    memcpy(pVcBindData, &paWD_VcBind[i], sizeof_WD_VCBIND );
         // We're done with array so free it/NULL it.
         // we get queries multiple times so we shouldn't free this
         // free( paWD_VcBind );

@@ -599,6 +599,36 @@ static int session__open(Session sess)
     return rc;
 }
 
+static void session__close(Session sess)
+{
+    TRACE((TC_UI, TT_API1, "session_close: %p", sess));
+
+    /*
+     *  Unload script driver
+     */
+    if ( sess->fSdLoaded ) {
+        sdUnload();
+	sess->fSdLoaded = FALSE;
+    }
+
+    srvWFEngDisconnect(sess->hWFE);
+    
+    /*
+     * These APIs are called automatically on exit
+     * (The APIs called by the UI are handled in WFCWINx.DLL)
+     */
+    TRACE((TC_UI, TT_API1, "session_close: unload drivers"));
+    srvWFEngUnloadDrivers( sess->hWFE );
+
+    TRACE((TC_UI, TT_API1, "session_close: close"));
+    srvWFEngClose( sess->hWFE );
+
+    TRACE((TC_UI, TT_API1, "session_close: unload engine"));
+    srvWFEngUnload( (PMINIDLL)NULL );  // Call the WFEngUnload API
+
+    connect_close(sess);
+}
+
 Session session_open_url(const char *url)
 {
     char *host = NULL;
@@ -766,32 +796,7 @@ int session_poll(Session sess)
 
 void session_close(Session sess)
 {
-    TRACE((TC_UI, TT_API1, "session_close: %p", sess));
-
-    /*
-     *  Unload script driver
-     */
-    if ( sess->fSdLoaded ) {
-        sdUnload();
-	sess->fSdLoaded = FALSE;
-    }
-
-    srvWFEngDisconnect(sess->hWFE);
-    
-    /*
-     * These APIs are called automatically on exit
-     * (The APIs called by the UI are handled in WFCWINx.DLL)
-     */
-    TRACE((TC_UI, TT_API1, "session_close: unload drivers"));
-    srvWFEngUnloadDrivers( sess->hWFE );
-
-    TRACE((TC_UI, TT_API1, "session_close: close"));
-    srvWFEngClose( sess->hWFE );
-
-    TRACE((TC_UI, TT_API1, "session_close: unload engine"));
-    srvWFEngUnload( (PMINIDLL)NULL );  // Call the WFEngUnload API
-
-    connect_close(sess);
+    session__close(sess);
 
     if (!sess->HaveFocus)
 	restore_desktop();
@@ -828,13 +833,18 @@ void session_run(const char *file, int file_is_url)
 
     TRACE((TC_UI, TT_API1, "session_run: entering close"));
 
-    session_close(sess);
+    session__close(sess);
+
+    if (!sess->HaveFocus)
+	restore_desktop();
 
     TRACE((TC_UI, TT_API1, "session_run: going for cleanup Focus %d", sess->HaveFocus));
 
     // allow cleanup
     while (session_poll(sess))
 	;
+
+    session_free(sess);
 }
 
 /* --------------------------------------------------------------------------------------------- */

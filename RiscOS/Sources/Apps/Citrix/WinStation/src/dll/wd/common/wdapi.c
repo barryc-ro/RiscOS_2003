@@ -155,6 +155,7 @@ void WriteTTY( LPVOID pIca, LPBYTE pTTYData, USHORT cbTTYData );
 
 /*
  *  Array of virtual channels built during init.
+ * This array isn't packed, when it is sent to the server it is though.
  */
 PWD_VCBIND  paWD_VcBind = NULL;
 
@@ -520,6 +521,8 @@ WdClose( PWD pWd, PDLLCLOSE pWdClose )
 	paWD_VcBind = NULL;
     }
 
+    iVc_Map = 0;
+    
     OutBufPoolFree( pWd );
     free( pWd->pInputBuffer );
 

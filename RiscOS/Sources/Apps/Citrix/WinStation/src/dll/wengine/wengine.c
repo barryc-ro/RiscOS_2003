@@ -385,6 +385,8 @@ srvWFEngUnload( PMINIDLL pLink )
      MouseUnload();
 //     XmsUnload();
 
+     ModuleUnload(&gExeLink);
+     
     TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngUnload (exit)" ));
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -462,6 +464,9 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
     ENCRYPTEDPASSWORD szEncryptedPassword;
     PASSWORD szPassword;
     KEYBOARDLAYOUT szKeyboardLayout;
+    
+    /* initialise some static variables here */
+    G_Encrypted = FALSE;
     
     /* check for script file and script driver */
     if ( ((gScriptFile   = malloc( FILEPATH_LENGTH+1 )) != NULL) &&

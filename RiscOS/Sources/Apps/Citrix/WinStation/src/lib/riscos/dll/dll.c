@@ -198,6 +198,8 @@ int ModuleLoad( char * pName, PDLLLINK pLink )
     int (*fnLoad)(PDLLLINK);
     int rc;
 
+    TRACE(( TC_LIB, TT_API1, "ModuleLoad: %s", pName ));
+
     strcpy(gszLoadDllFileName, pName);
 
     if ((rc = ModuleLookup( pName, (PPLIBPROCEDURE)&fnLoad, NULL )) != CLIENT_STATUS_SUCCESS)
@@ -374,8 +376,11 @@ ModuleCall( PDLLLINK pLink, USHORT ProcIndex, PVOID pParam )
 	return( CLIENT_ERROR_BAD_PROCINDEX );
 #endif
     pProcedure = ((PDLLPROCEDURE *) pLink->pProcedures)[ ProcIndex ];
-    ASSERT( pProcedure, 0 );
 
+    ASSERT( pProcedure, 0 );
+    if (pProcedure == 0)
+	return CLIENT_STATUS_SUCCESS;
+	
     return( (*pProcedure)( pLink->pData, pParam ) );
 }
 
