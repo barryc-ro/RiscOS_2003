@@ -28,6 +28,7 @@ LIBDIR	= <Lib$Dir>
 #
 
 COMPONENT       = NCMailUI
+RES_COMPONENT   = NCMail
 APP             = !NCMail
 LPATH            = LocalUserIFRes:
 MODULE		= rm.!NCMail
@@ -38,7 +39,7 @@ LPATH            = LocalUserIFRes:
 # Export Paths for Messages module
 #
 
-RESDIR          = $(RESDIR).$(COMPONENT)
+RESDIR          = $(RESDIR).$(RES_COMPONENT)
 RESAPP          = <Resource$Dir>.Apps.$(APP)
 
 
