@@ -178,6 +178,16 @@ ClearKbd
         STR     r0, [lr], #4
         STR     r0, [lr], #4
         STR     r0, [lr], #4
+  [ RCASupport
+	ASSERT ?KeyFlags = 20
+        STR     r0, [lr], #4	; extended for RCA
+	ADR	lr, FunkyDigits
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+	STR	r0, [lr], #4
+  |
+	ASSERT ?KeyFlags = 16
+  ]
         EXIT
  ]
 
@@ -490,7 +500,7 @@ Disable
 ;
 SuspendChannel
         ENTRY
-        ADR     lr, PS2_SinkBytes
+        ADRL    lr, PS2_SinkBytes
         STR     lr, RXStateHandler
         MOV     lr, #0
         STRB    lr, DeviceType                  ;DeviceType Unknown
@@ -1154,10 +1164,11 @@ PS2_GetKBD_NP                                   ;EP from keyboard, to avoid dupl
         ORREQ   r3, r3, #state_SPECIAL          ;   mark code as special.
         BEQ     RXIRQExitState
 
+ [ RCASupport
 	TEQ	r0, #keybd_RCA			; If this is an RCA special sequence then
 	ORREQ	r3, r3, #state_RCA		;   mark code as RCA.
 	BEQ	RXIRQExitState
-
+ ]
         TEQ     r0, #keybd_BREAK                ; If break key start code then
         ORREQ   r3, r3, #state_BREAK            ;   mark as break key.
         BEQ     RXIRQExitState
@@ -1172,6 +1183,7 @@ PS2_GetKBD_NP                                   ;EP from keyboard, to avoid dupl
         MOVCS   r3, #0                          ;   reset state
         BCS     RXIRQExitState                  ;   and throw away code.
 
+ [ RCASupport
 	TST	r3, #state_RCA			; If not in RCA code sequence
 	BEQ	%FT10				; then skip this
 
@@ -1183,6 +1195,7 @@ PS2_GetKBD_NP                                   ;EP from keyboard, to avoid dupl
 	BIC	r3, r3, #state_RCA		; clear RCA bit
 	B	%FT20				; and jump to table index code
 10
+ ]
         TST     r3, #state_SPECIAL              ; If in special code sequence then
         ADRNEL  r2, SpecialTable                ;   use special code table
         BICNE   r3, r3, #state_SPECIAL          ;   and clear special code flag
@@ -1193,16 +1206,79 @@ PS2_GetKBD_NP                                   ;EP from keyboard, to avoid dupl
         MOVEQ   r3, #0                          ;   reset state
         BEQ     RXIRQExitState                  ;   and throw away code.
 
- [ KillAutoRepeat
+ [ RCASupport
+  [ KillAutoRepeat
+; check KeyFlags and update, *before* FUNCification
         ADR     r9, KeyFlags
         MOV     r2, r1, LSR #5
         LDR     r0, [r9, r2, LSL #2]!           ; Load appropriate key flags word.
         MOV     r2, #&80000000
- ]
+	TST	r3, #state_KEYUP
+	BICNE	r0, r0, r2, ROR r1		; if UP, then knock out of KeyFlags
+	STRNE	r0, [r9]			; store it back
+	BNE	%FT25				; and skip
+
+; it's a key down, so see if already down
+
+	TST	r0, r2, ROR r1
+	BNE	RXIRQExitState			; throw away code, it's an auto-repeat
+	ORR	r0, r0, r2, ROR r1		; set bit
+	STR	r0, [r9]			; and store back
+25
+  ]
+
+; Now perform FUNCification
+
+	TEQ	r1, #keyupdown_FUNC
+	BNE	%FT30
+	TST	r3, #state_KEYUP		; FUNC key pressed or released
+	ORREQ	r3, r3, #state_FUNCDOWN		; if pressed then set bit
+	BICNE	r3, r3, #state_FUNCDOWN		; if released then clear bit
+	B	%FT40				; but still send code
+
+30
+	SUB	r9, r1, #keyupdown_1		; now check for a digit key
+	CMP	r9, #10
+	BCS	%FT40				; [not a digit, so skip]
+
+	ADR	r2, FunkyDigits
+	ADD	r2, r2, r9			; point at entry in FunkyDigits table
+	TST	r3, #state_KEYUP		; if a key up
+	BNE	%FT35				; then skip
+
+; digit down (and not an auto-repeat)
+
+	TST	r3, #state_FUNCDOWN		; if FUNC is down
+	ADDNE	r1, r9, #keyupdown_F1		; then convert code to function key
+	MOVEQ	r9, #0
+	MOVNE	r9, #1
+	STRB	r9, [r2]			; store whether this key was FUNC'd
+	B	%FT40
+35
+
+; digit up
+
+	LDRB	r2, [r2]			; check appropriate FUNC'd flag
+	TEQ	r2, #0
+	ADDNE	r1, r9, #keyupdown_F1		; if FUNC'd, modify key up flag too
+40
+	TST	r3, #state_KEYUP
+	BICNE	r3, r3, #state_KEYUP
+	MOVNE	r0, #1				; signal 'up' to KEYV
+	MOVEQ	r0, #2				; signal 'down' to KEYV
+
+ | ; RCASupport
+
+  [ KillAutoRepeat
+        ADR     r9, KeyFlags
+        MOV     r2, r1, LSR #5
+        LDR     r0, [r9, r2, LSL #2]!           ; Load appropriate key flags word.
+        MOV     r2, #&80000000
+  ]
 
         TST     r3, #state_KEYUP                ; If key has gone up then
         BICNE   r3, r3, #state_KEYUP            ;   clear flag for next byte,
- [ KillAutoRepeat
+  [ KillAutoRepeat
         BICNE   r0, r0, r2, ROR r1              ;   clear key flag
         STRNE   r0, [r9]
         MOVNE   r0, #1                          ;   and signal key up to KEYV
@@ -1214,11 +1290,11 @@ PS2_GetKBD_NP                                   ;EP from keyboard, to avoid dupl
         STR     r0, [r9]
         MOV     r0, #2                          ;   and signal key down to KEYV.
 05
- |
+  |
         MOVNE   r0, #1                          ;   and signal up to KEYV
         MOVEQ   r0, #2                          ; else signal down to KEYV.
- ]
-
+  ]
+ ] ; RCASupport
         STRB    r3, KBState                     ; Store new state as it may get changed by KEYV call.
 
         MOV     r9, #KEYV                       ; Call KEYV.
@@ -1294,6 +1370,7 @@ SpecialTable
         DCB     &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF  ; 98-9F
  ]
 
+ [ RCASupport
 ; Special table for extra RCA keys
 
 RCATable
@@ -1301,7 +1378,7 @@ RCATable
 	DCB	&87, &88, &89, &8A, &FF, &8C, &8E, &8F  ; 08-0F
 	DCB	&90, &91, &92, &93, &94, &8D, &FF, &FF	; 10-17
 RCATableEnd
-
+ ]
 
 ;-----------------------------------------------------------------------------
 
