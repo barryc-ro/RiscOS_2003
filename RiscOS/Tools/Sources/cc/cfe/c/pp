@@ -201,8 +201,9 @@ typedef struct hashentry {
 /* I limit the reference count to 16 bits so that there can not be any     */
 /* trouble on machines with sizeof(int)==2                                 */
   unsigned int uses:16,   /* incremented on reference */
-/* ismagic is 14 bits so that this whole field is 32 bits wide */
-               ismagic:13,/* things like __TIME__     */
+/* ismagic is 12 bits so that this whole field is 32 bits wide */
+               ismagic:12,/* things like __TIME__     */
+               variadic:1,/* variadic (final ...=__VA_ARGS__ parameter) */
                noifdef:1, /* 1 if not allowed to #ifdef xxx */
                noargs:1,  /* 1 if noargs              */
                alive:1;   /* 0 => undef'd, 1 => def'd */
@@ -228,6 +229,7 @@ typedef struct hashentry {
 #define pp_hashchain_(p) ((p)->chain)
 #define pp_hashnoargs_(p) ((p)->noargs)
 #define pp_hashalive_(p) ((p)->alive)
+#define pp_hashvariadic_(p) ((p)->variadic)
 #define pp_hashismagic_(p) ((p)->ismagic)
 #define pp_noifdef_(p) ((p)->noifdef)
 #define pp_hashuses_(p)  ((p)->uses)
@@ -554,33 +556,37 @@ static void pp_sleep_name(PP_HASHENTRY *p, int32 n)
  * Support for built-in header files
  */
 
-static bool string_file_active = NO;
+static int string_file_active = 0;
 
 #ifndef NO_INSTORE_FILES
 
+/* We allow stacking depth of 2 for <inttypes.h>, which */
+/* #includes <stdint.h> */
 static struct pp_uncompression_record
 {
     char *pointer;              /* /* some of these should be unsigned */
     char compressed;
     unsigned char height;
     char stack[HDRSTACKDEPTH];
-} hdrfile;
+} hdrfilestack[2];
+
+static struct pp_uncompression_record *hdrfile;
 
 static int pp_fetch_string_char()
 {
     int c, k;
-    if (hdrfile.height == 0) c = *hdrfile.pointer++;
-    else c = hdrfile.stack[--hdrfile.height];
+    if (hdrfile->height == 0) c = *hdrfile->pointer++;
+    else c = hdrfile->stack[--hdrfile->height];
     for (;;)
     {   c &= 0xff;
         k = compression_info[c];
-        if (k == c || hdrfile.compressed == 0) return c;
+        if (k == c || hdrfile->compressed == 0) return c;
 /*
  * When genhdrs is establishes the greatest possible depth needed in
  * this stack and arranges to define HDRSTACKDEPTH suitably - thus no
  * run-time check for stack overflow is needed.
  */
-        hdrfile.stack[hdrfile.height++] = k;
+        hdrfile->stack[hdrfile->height++] = k;
         c = k >> 8;
     }
 }
@@ -592,9 +598,10 @@ FILE *open_builtin_header(char *name, bool *sf)
     for (count=0; builtin_headers[count].name != 0; count++) {
         if (strcmp(name, builtin_headers[count].name) == 0)
         {   *sf = YES;
-            hdrfile.height = 0;
-            hdrfile.compressed = 1;
-            hdrfile.pointer = &string_data[builtin_headers[count].content];
+            hdrfile = &hdrfilestack[string_file_active];
+            hdrfile->height = 0;
+            hdrfile->compressed = 1;
+            hdrfile->pointer = &string_data[builtin_headers[count].content];
 /*
  * The result (which is of type FILE *) must be handed back as a non-zero
  * value since it is compared against zero to check for success here.  But
@@ -1513,7 +1520,9 @@ ansitoksep:     if (pp_abufptr != pp_abufbase+abufarg)
       case '\'':
       case '"': (void)pp_copystring(ch); break;
       case '(': parcnt++; pp_wrch(ch); break;
-      case ',': if (parcnt > 0) { pp_wrch(ch); break; }
+      case ',': if (parcnt > 0 ||
+                    pp_argchain_(a)==0 && pp_hashvariadic_(p))
+                { pp_wrch(ch); break; }
                 pp_trimarg(pp_abufbase+abufarg);
                 pp_wrch(0);
                 if (a != 0) pp_arg_link(a, abufarg),
@@ -1539,14 +1548,14 @@ ansitoksep:     if (pp_abufptr != pp_abufbase+abufarg)
                             a = pp_argchain_(a);
                 if (a != 0)
                 { cc_err(pp_err_few_args, pp_hashname_(p), (long)uselinect);
-                    while (a != 0)
-                    {   /* default missing arguments to "" */
-                        pp_arg_align();
-                        abufarg = pp_abufptr - pp_abufbase;
-                        pp_wrch(0);
-                        pp_arg_link(a, abufarg);
-                        a = pp_argchain_(a);
-                    }
+                  while (a != 0)
+                  {   /* default missing arguments to "" */
+                      pp_arg_align();
+                      abufarg = pp_abufptr - pp_abufbase;
+                      pp_wrch(0);
+                      pp_arg_link(a, abufarg);
+                      a = pp_argchain_(a);
+                  }
                 }
                 return;
     }
@@ -1802,10 +1811,26 @@ static void pp_define(int pp_ch, bool noifdef)
       p = (PP_HASHENTRY *) pp_new_(sizeof(PP_HASHENTRY));
       pp_hashnoargs_(p) = 0;
       pp_hasharglist_(p) = 0;
+      pp_hashvariadic_(p) = 0;
       do
        { pp_ch = pp_skipb0();
          if (!pp_macstart(pp_ch))
          { if (pp_ch == ')' && params == 0) break;
+           if (pp_ch == '.')
+           { int ch = pp_rdch();
+             if (ch == '.')
+             { ch = pp_rdch();
+               if (ch == '.')
+               { pp_hasharglist_(p) = arglist =
+                     pp_addtoarglist("__VA_ARGS__", pp_hasharglist_(p));
+                 pp_ch = pp_skipb1(pp_rdch());
+                 pp_hashvariadic_(p) = 1;
+                 break;
+               }
+               else pp_unrdch(ch);
+             }
+             else pp_unrdch(ch);
+           }
            cc_err(pp_err_missing_parameter, name);
            pp_skip_linetokens(pp_ch);
            feature |= feature_comment;
@@ -2072,14 +2097,15 @@ void pp_push_include(char *fname, int lquote)
   FILE *fp;
   int rquote = (lquote == '<' ? '>' : lquote);
   char *hostname;
+  bool sf = NO;
 
   if (lquote == '<' &&
       !(feature & FEATURE_PCC || suppress & D_PPNOSYSINCLUDECHECK))
   {   static char *ansiheaders[] = {
-            "assert.h", "ctype.h",  "errno.h",   "float.h",  "inttypes.h",
-            "iso646.h", "limits.h", "locale.h",  "math.h",   "setjmp.h",
-            "signal.h", "stdarg.h", "stdbool.h", "stddef.h", "stdint.h",
-            "stdio.h",  "stdlib.h", "string.h",   "time.h"
+            "assert.h",   "ctype.h",  "errno.h",  "fenv.h",    "float.h",
+            "inttypes.h", "iso646.h", "limits.h", "locale.h",  "math.h",
+            "setjmp.h",   "signal.h", "stdarg.h", "stdbool.h", "stddef.h",
+            "stdint.h",   "stdio.h",  "stdlib.h", "string.h",  "time.h"
       };
       bool found = 0;
       int i;
@@ -2115,13 +2141,14 @@ void pp_push_include(char *fname, int lquote)
 
   if (fname[0] != 0 &&
       (fp = pp_inclopen(fname, lquote=='<',
-                        &string_file_active, &hostname)) != NULL)
+                        &sf, &hostname)) != NULL)
   {
   /* the following block is notionally a recursive call to pp_process()
      but that would mean a co-routine structure if used with the cc. */
       PP_FILESTACK *fs = pp_freefilestack;
       if (fs) pp_freefilestack = pp_filchain_(fs);
       else fs = (PP_FILESTACK *) pp_new_(sizeof(PP_FILESTACK));
+      if (sf) string_file_active++;
       pp_filchain_(fs) = pp_filestack;    pp_filestack = fs;
       pp_filstream_(fs) = pp_cis;         pp_cis = fp;
       pp_fileline_(fs)  = *pp_fl;
@@ -2257,6 +2284,8 @@ static pragma_spelling pragma_words[] =
     { "check_memory_accesses",      'c', 1},
     { "warn_deprecated",            'd', 1},
     { "continue_after_hash_error",  'e', 1},
+    { "disable_fpargs_in_regs",     'g', 1},
+    { "force_fpargs_in_regs",       'g', 2},
     { "include_only_once",          'i', 1}, /* @@@ freeze soon!        */
     { "optimise_crossjump",         'j', 1},
 #ifdef TARGET_IS_ARM
@@ -2579,7 +2608,7 @@ static int pp_process(void)
     {   pp_ch = pp_rdch();
         switch (pp_ch)
         {
-    case PP_EOF: if (string_file_active) string_file_active = NO;
+    case PP_EOF: if (string_file_active) string_file_active--, hdrfile--;
               else fclose(pp_cis);    /* see pp_include() */
 /* @@@ ANSI do not specify whether #if's must match in a #include file.   */
 /* hence only check all #if's closed on real EOF.                         */
@@ -2807,7 +2836,7 @@ void pp_init(FileLine *fl)
   {  int i;     /* @@@ AM migrated to mip/compiler.c, going again... */
      for (i=0; i <= 'z'-'a'; i++) pp_pragmavec[i] = -1;
   }
-  string_file_active = NO;
+  string_file_active = 0;
   (void)pp_predefine2("__LINE__", PP__LINE);
   (void)pp_predefine2("__FILE__", PP__FILE);
   (void)pp_predefine2("__DATE__", PP__DATE);

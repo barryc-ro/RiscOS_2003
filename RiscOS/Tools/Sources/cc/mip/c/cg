@@ -709,6 +709,12 @@ case s_greater:
 case s_greaterequal:
 case s_less:
 case s_lessequal:
+case s_less_ieee:
+case s_lessequal_ieee:
+case s_greater_ieee:
+case s_greaterequal_ieee:
+case s_lessgreater_ieee:
+case s_unordered_ieee:
             if (!valneeded) return cg_diadvoid(x);
 
             /* boolnot is unary, but is treated the same */
@@ -1511,8 +1517,8 @@ static int32 cg_fnargs(ExprList *a, ArgInfo arg[], int32 n, int32 resultregs,
 #endif
     {   int32 argoff = 0, narg = 0;
 #ifdef TARGET_FP_ARGS_IN_FP_REGS
-        if ((config & CONFIG_FPREGARGS) &&
-            !(fnflags & f_nofpregargs))
+        if (((config & CONFIG_FPREGARGS) && !(fnflags & f_oppfpregargs)) ||
+            (!(config & CONFIG_FPREGARGS) && (fnflags & f_oppfpregargs)))
         {   ExprList *p, *q = 0;
 /* Reorder the argument list, by destructively extracting the first     */
 /* up to NFLTARGREGS float args, and then dropping through to handle    */
@@ -2275,7 +2281,7 @@ case s_block:
 static void cg_test1(Expr *x, bool branchtrue, LabelNumber *dest)
 {
     VRegnum r;
-    int32 bc, bcl;
+    int32 bc=-1, bcl=-1, bcf;
     if (x == 0) { syserr(syserr_missing_expr); return; }
     verify_integer(x);
     if (usrdbg(DBG_LINE) && hasfileline_(h0_(x)) && x->fileline != 0)
@@ -2349,37 +2355,51 @@ case s_and:    may turn into J_BIT
 */
 
 case s_equalequal:
-            bc = Q_NE, bcl = Q_UNE;
+            bc = Q_NE, bcl = Q_UNE, bcf = Q_FULG;
             break;
-
 case s_notequal:
-            bc = Q_EQ, bcl = Q_UEQ;
+            bc = Q_EQ, bcl = Q_UEQ, bcf = Q_FE;
             break;
-
 case s_greater:
-            bc = Q_LE, bcl = Q_LS;
+            bc = Q_LE, bcl = Q_LS, bcf = Q_FULEX;
             break;
-
 case s_greaterequal:
-            bc = Q_LT, bcl = Q_LO;
+            bc = Q_LT, bcl = Q_LO, bcf = Q_FULX;
             break;
-
 case s_less:
-            bc = Q_GE, bcl = Q_HS;
+            bc = Q_GE, bcl = Q_HS, bcf = Q_FUGEX;
             break;
-
 case s_lessequal:
-            bc = Q_GT, bcl = Q_HI;
+            bc = Q_GT, bcl = Q_HI, bcf = Q_FUGX;
             break;
-
+case s_less_ieee:
+            bcf = Q_FUGE;
+            break;
+case s_lessequal_ieee:
+            bcf = Q_FUG;
+            break;
+case s_greater_ieee:
+            bcf = Q_FULE;
+            break;
+case s_greaterequal_ieee:
+            bcf = Q_FUL;
+            break;
+case s_lessgreater_ieee:
+            bcf = Q_FUE;
+            break;
+case s_unordered_ieee:
+            bcf = Q_FLEG;
+            break;
     }
     {   int32 rep = mcrepofexpr(arg1_(x));
         if (rep==0x02000008 || rep==0x02000008+MCR_ALIGN_DOUBLE)
             cg_condjump(J_CMPDR, arg1_(x), arg2_(x), DBLREG,
-                        (branchtrue ? Q_NEGATE(bc) : bc), dest);
+                        (branchtrue ? Q_NEGATE(bcf) : bcf), dest);
         else if (rep==0x02000004)
             cg_condjump(J_CMPFR, arg1_(x), arg2_(x), FLTREG,
-                        (branchtrue ? Q_NEGATE(bc) : bc), dest);
+                        (branchtrue ? Q_NEGATE(bcf) : bcf), dest);
+        else if (bc == -1)
+            syserr(syserr_cg_badrep, (long)rep);
         else if ((rep >> MCR_SORT_SHIFT) == 1 ||    /* unsigned */
                   rep == 0x04000001)                /* plain char */
             cg_condjump(J_CMPR, arg1_(x), arg2_(x), INTREG,
@@ -2516,6 +2536,9 @@ default:
 /*     0<=x<2^31.                                                        */
 /* The trick only works if I use double precision, so for                */
 /* float I start off by widening the input.                              */
+/*                                                                       */
+/* If the back-end has a rounding-down fix, then we can omit the         */
+/* condition. This gives correct overflow checking.                      */
 /* THIS MUST BE DONE BY THE BACK-END SOON                                */
             {   VRegnum r2;
                 LabelNumber *l1, *l2;
@@ -2525,10 +2548,16 @@ default:
                     bfreeregister(r);
                     r = rx;             /* Now treat as double case      */
                 }
+            #ifdef TARGET_HAS_FIXM
+                emitfloat1(J_MOVDK, r2 = fgetregister(DBLREG), GAP, fc_two_31);
+                emitreg(J_SUBDR, r, r, r2);
+                emitreg(J_FIXDR, r1 = fgetregister(INTREG), GAP, r); /* No J_SIGNED => round down */
+                emit(J_ADDK, r1, r1, 0x80000000);
+            #else
                 blkflags_(bottom_block) |= BLKREXPORTED;
                 emitfloat1(J_MOVDK, r2 = fgetregister(DBLREG), GAP, fc_two_31);
-                emitreg(J_CMPDR + Q_GE, GAP, r, r2);
-                emitbranch(J_B + Q_GE, l1 = nextlabel());
+                emitreg(J_CMPDR + Q_FGEX, GAP, r, r2);
+                emitbranch(J_B + Q_FGEX, l1 = nextlabel());
                 emitreg(J_FIXDR+J_SIGNED, r1 = fgetregister(INTREG), GAP, r);
                 emitbranch(J_B, l2 = nextlabel());
                 start_new_basic_block(l1);
@@ -2536,6 +2565,7 @@ default:
                 emitreg(J_FIXDR+J_SIGNED, r1, GAP, r);
                 emit(J_EORK, r1, r1, 0x80000000);
                 start_new_basic_block(l2);
+            #endif
                 bfreeregister(r2);
             }
         }
@@ -3011,12 +3041,23 @@ J_OPCODE Q_swap(J_OPCODE op)
     /* be cheaper.  As it stands more cases coalesce than the code admits.  */
     switch (op & Q_MASK)
     {   default: syserr(syserr_Q_swap, (long)op);
+        case Q_FE: case Q_FULG:
+        case Q_FU: case Q_FLEG:
+        case Q_FUE: case Q_FLG:
         case Q_UEQ: case Q_UNE:
         case Q_EQ: case Q_NE: return op;
         case Q_LT: case Q_GT: return op ^ (Q_LT ^ Q_GT);
         case Q_LE: case Q_GE: return op ^ (Q_LE ^ Q_GE);
         case Q_LO: case Q_HI: return op ^ (Q_LO ^ Q_HI);
         case Q_LS: case Q_HS: return op ^ (Q_LS ^ Q_HS);
+        case Q_FGX: case Q_FLX:
+        case Q_FG: case Q_FL: return op ^ (Q_FG ^ Q_FL);
+        case Q_FGEX: case Q_FLEX:
+        case Q_FGE: case Q_FLE: return op ^ (Q_FGE ^ Q_FLE);
+        case Q_FUGX: case Q_FULX:
+        case Q_FUG: case Q_FUL: return op ^ (Q_FUG ^ Q_FUL);
+        case Q_FUGEX: case Q_FULEX:
+        case Q_FUGE: case Q_FULE: return op ^ (Q_FUGE ^ Q_FULE);
     }
 }
 
@@ -3071,6 +3112,12 @@ static bool is_same(Expr *a, Expr *b)
     case s_greaterequal:
     case s_less:
     case s_lessequal:
+    case s_less_ieee:
+    case s_lessequal_ieee:
+    case s_greater_ieee:
+    case s_greaterequal_ieee:
+    case s_lessgreater_ieee:
+    case s_unordered_ieee:
     case s_comma:
     case s_and:
     case s_times:
@@ -3760,6 +3807,12 @@ case s_greater:
 case s_greaterequal:
 case s_less:
 case s_lessequal:
+case s_less_ieee:
+case s_lessequal_ieee:
+case s_greater_ieee:
+case s_greaterequal_ieee:
+case s_lessgreater_ieee:
+case s_unordered_ieee:
 case s_comma:
 case s_and:
 case s_plus:
@@ -3856,6 +3909,17 @@ static VRegnum cg_binary_1(J_OPCODE op, Expr *a1, Expr *a2,
         a2 = t;
         if (condP) *condP = cond = Q_swap(cond);
     }
+#ifdef TARGET_CANT_ALWAYS_COND_EXEC
+    if (commutesp && condP && !target_can_condexec(cond))
+    {   J_OPCODE condopp = Q_swap(cond);
+        if (target_can_condexec(condopp))
+        {   Expr *t = a1;
+            a1 = a2;
+            a2 = t;
+            *condP = cond = condopp;
+        }
+    }
+#endif
 #ifdef TARGET_HAS_SCALED_OPS
 /* The following code has come here as the best place for it.             */
 /* One might wonder whether the test for is_shifted or s_integer should   */

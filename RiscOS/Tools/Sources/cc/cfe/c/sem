@@ -1270,10 +1270,14 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
                     break;
                 case '+': case '-': case ' ': case '#':
                     state = state==1 ? 2 : 99; break;
+                case 'h':
+                    if (state == 6) { state = 5; break; }
+                    state = state < 5 ? 6 : 99;
+                    break;
                 case 'l':
                     xint = FMT_LINT;
                     /* drop through */
-                case 'h': case 'L':
+                case 'L': case 'j': case 'z': case 't':
                     /* not treated properly yet */
                     state = state < 5 ? 5 : 99;
                     break;
@@ -1289,7 +1293,8 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
                     }
                     state = 0;
                     break;
-                case 'f': case 'e': case 'E': case 'g': case 'G':
+                case 'f': case 'F': case 'e': case 'E':
+                case 'g': case 'G': case 'a': case 'A':
                     no_fp_conversions = 0;
                     if (state == 9) { state = 0; break; } /* scanf suppressed */
                     nformals++;
@@ -1391,6 +1396,8 @@ static Expr *formatcheck(Expr *e, ExprList *l, FormTypeList *d, int32 flavour)
                                 e = mkaddr(arg1_(sim.xfprintf));
                             else if (fname == sim.ysprintf)
                                 e = mkaddr(arg1_(sim.xsprintf));
+                            else if (fname == sim.ysnprintf)
+                                e = mkaddr(arg1_(sim.xsnprintf));
                             /* this is a valid drop through place, for */
                             /* scanf, eprintf (norcroft internal) &c.  */
                         }
@@ -1743,10 +1750,13 @@ static void fltrep_to_widest(DbleBin *dest, FloatCon *src)
 
 void flt_report_error(int failure) {
     switch (failure) {
-    case flt_very_small:   cc_warn(fp_rerr_very_small); break;
-    case flt_very_big:     cc_rerr(fp_err_very_big); break;
-    case flt_big_single:   cc_rerr(fp_err_big_single); break;
-    case flt_small_single: cc_warn(fp_rerr_small_single); break;
+    case flt_very_small:     cc_warn(fp_rerr_very_small); break;
+    case flt_very_big:       cc_rerr(fp_err_very_big); break;
+    case flt_big_single:     cc_rerr(fp_err_big_single); break;
+    case flt_small_single:   cc_warn(fp_rerr_small_single); break;
+    case flt_inexact:        cc_warn(fp_rerr_inexact); break;
+    case flt_inexact_single: cc_warn(fp_rerr_inexact_single); break;
+    case flt_invalidop:      cc_warn(fp_rerr_invalid_op); break;
     }
 }
 
@@ -1921,13 +1931,24 @@ static Expr *trydiadreduce(Expr *c, SET_BITMAP flag)
         case s_times: failed = flt_multiply(&r,&d,&e); break;
         case s_div:   failed = flt_divide(&r,&d,&e); break;
         case s_power: return c;
-#define SEM_FLTCMP(op) mkintconst(type_(c),flt_compare(&d,&e) op 0,c);
-        case s_equalequal:   return SEM_FLTCMP(==);
-        case s_notequal:     return SEM_FLTCMP(!=);
-        case s_less:         return SEM_FLTCMP(<);
-        case s_lessequal:    return SEM_FLTCMP(<=);
-        case s_greater:      return SEM_FLTCMP(>);
-        case s_greaterequal: return SEM_FLTCMP(>=);
+#define SEM_FLTCMP(test, x) \
+                          { int cmp = flt_compare2(&d,&e); \
+                            if (x && (cmp & flt_cmp_U)) \
+                                flt_report_error(flt_invalidop); \
+                            return mkintconst(type_(c), (cmp & (test)) != 0, c); \
+                          }
+        case s_equalequal:        SEM_FLTCMP(flt_cmp_E, 0);
+        case s_notequal:          SEM_FLTCMP(flt_cmp_U|flt_cmp_L|flt_cmp_G, 0);
+        case s_less:              SEM_FLTCMP(flt_cmp_L, 1);
+        case s_lessequal:         SEM_FLTCMP(flt_cmp_L|flt_cmp_E, 1);
+        case s_greater:           SEM_FLTCMP(flt_cmp_G, 1);
+        case s_greaterequal:      SEM_FLTCMP(flt_cmp_G|flt_cmp_E, 1);
+        case s_less_ieee:         SEM_FLTCMP(flt_cmp_L, 0);
+        case s_lessequal_ieee:    SEM_FLTCMP(flt_cmp_L|flt_cmp_E, 0);
+        case s_greater_ieee:      SEM_FLTCMP(flt_cmp_G, 0);
+        case s_greaterequal_ieee: SEM_FLTCMP(flt_cmp_G|flt_cmp_E, 0);
+        case s_lessgreater_ieee:  SEM_FLTCMP(flt_cmp_L|flt_cmp_G, 0);
+        case s_unordered_ieee:    SEM_FLTCMP(flt_cmp_U, 0);
 #undef SEM_FLTCMP
         default: syserr(syserr_trydiadicreduce2, (long)op);
                  return c;
@@ -2301,6 +2322,12 @@ static Expr *nonconst1(Expr *e)
         case s_lessequal:
         case s_greater:
         case s_greaterequal:
+        case s_less_ieee:
+        case s_lessequal_ieee:
+        case s_greater_ieee:
+        case s_greaterequal_ieee:
+        case s_lessgreater_ieee:
+        case s_unordered_ieee:
         case s_comma: if ((e1 = nonconst1(arg1_(e))) != 0) return e1;
                       e = arg2_(e); break;
         case s_cond:  if ((e1 = nonconst1(arg1_(e))) != 0) return e1;
@@ -3229,6 +3256,13 @@ clash:      typeclash(op);
         default:
             if (isrelational_(op))
             {   /* unify code with mkcond()... */
+                if (isrelational_ieee_(op))
+                {   TypeExpr *x1 = princtype(t1), *x2 = princtype(t2);
+                    SET_BITMAP m1 = typespecmap_(x1), m2 = typespecmap_(x2);
+                    if (h0_(x1) != s_typespec || h0_(x2) != s_typespec ||
+                        !((m1 & m2) & bitoftype_(s_double)))
+                    { typeclash(op); return errornode; }
+                }
                 if (indexable(t1) && indexable(t2))
                 {   /* ignore top-level qualifiers as vals are rvalues  */
                     TypeExpr *t1a = indexee(t1);

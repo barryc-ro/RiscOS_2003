@@ -970,6 +970,24 @@ static int32 resultregs(RealRegister r2r) {
 static const int32 arm_cc[] = { C_EQ, C_NE, C_HS, C_LO, C_PL, C_MI, C_VS, C_VC,
                                 C_HI, C_LS, C_GE, C_LT, C_GT, C_LE, 0,    C_NEVER};
 
+/* This is tricky. We can't rely on the AC bit being set, and further, we don't want
+ * to go wrong if it IS set. So, 12 of these are conditions that work fine with or
+ * without AC. The other four are "complex" conditions that break into two tests
+ * (again valid with or without AC) - only possible in conditional branches, not
+ * conditional execution or return.
+ * We rely on cg.c to avoid hard forms where possible by transposition (a <= b
+ * becoming b >= a), and to not attempt conditional execution with them.
+ *
+ *                                =     ?<>   ?>=   <     ?=    <>    ?     <=>
+ *                                ?>    <=    >=    ?<    >     ?<=               */
+static const int32 arm_fpcc[] = { C_EQ, C_NE, C_PL, C_MI, C_UE, C_LG, C_VS, C_VC,
+                                  C_UG, C_EL, C_GE, C_LT, C_GT, C_LE, 0,    C_NEVER};
+
+int target_can_condexec(int32 cond)
+{
+    return !(C_FROMQ(cond) & C_TOOHARD);
+}
+
 static void tailcallxk(RealRegister r4, int32 m, int32 inst) {
     inst |= F_RN(r4) | m;
     if (!((regmask & (M_VARREGS|M_LR)) & regbit(r4))) {
@@ -1091,7 +1109,7 @@ case J_CMPK:
 /* N.B. that CMPK can use R_IP as a work register               */
         ldm_c_flush(regsused | regbit(frameregs[R_IP]), 1);
         compare_integer(r2r, m, frameregs[R_IP], op & Q_MASK, 0);
-        illbits &= ~Q_MASK;
+        illbits &= ~(Q_MASK&~Q_FBIT);
         break;
 
 #ifdef RANGECHECK_SUPPORTED
@@ -1244,7 +1262,7 @@ case J_CMPR:
             int32 opc = (mask == Q_EQ || mask == Q_NE) ? F_TEQ : F_CMP;
             outinstr(OP_RXR | opc | F_SCC | F_RN(r2r) | mr | msh);
         }
-        illbits &= ~(Q_MASK|J_SHIFTMASK);
+        illbits &= ~((Q_MASK&~Q_FBIT)|J_SHIFTMASK);
         peep &= ~P_RSHIFT;
         break;
 
@@ -1593,7 +1611,10 @@ case J_CONDEXEC:
              conditionalisation is in gen.c instead.
            */
           condition_mask = C_FROMQ(cond) ^ C_ALWAYS;
-          illbits &= ~Q_MASK;
+          if (condition_mask & C_TOOHARD)
+              condition_mask = C_FROMQ(Q_NOT);
+          else
+              illbits &= ~Q_MASK;
           break;
         }
 case J_B:
@@ -2215,13 +2236,10 @@ case J_ADCOND:
         }
 case J_CMPFR:
 case J_CMPDR:
-/* Note that in FPE2 it is not necessary to specify the width of         */
-/* numbers to be compared.                                               */
-        {   int32 test = op & Q_MASK;
-            outinstr(OP_CPOP | ((test==C_EQ || test==C_NE) ? F_CMF : F_CMFE) |
-                     F_REGOP | F_RN(checkfreg(r2r)) | (checkfreg(mr)));
-        }
-        illbits &= ~Q_MASK;
+        outinstr(OP_CPOP | ((op & Q_UBIT) ? F_CMFE : F_CMF) |
+                 F_REGOP | F_RN(checkfreg(r2r)) | (checkfreg(mr)));
+        illbits ^= Q_FBIT;
+        illbits &= ~(Q_MASK&~Q_FBIT);
         break;
 case J_MOVFDR:   /* With FPE2 conversion to double is a noop */
         /* drop through */
@@ -2237,10 +2255,12 @@ case J_NEGDR:
                  F_RD(checkfreg(r1r)) | (checkfreg(mr)));
         break;
 case J_FIXFR:
-case J_FIXDR:    /* C 'fix' is truncate towards zero */
-        outinstr(OP_CPOP | F_FIX | CPDO_RNDZ | F_RD(r1r) |
-                           (checkfreg(mr)));
-        illbits ^= J_SIGNED;   /* only signed version acceptable */
+case J_FIXDR:
+/* C 'fix' is truncate towards zero, but we also supply towards infinity */
+/* (for unsigned fix code)                                               */
+        outinstr(OP_CPOP | F_FIX | (op & J_SIGNED ? CPDO_RNDZ : CPDO_RNDDN) |
+                           F_RD(r1r) | (checkfreg(mr)));
+        illbits &=~ J_SIGNED;
         break;
 case J_FLTFR:
 case J_FLTDR:
@@ -2435,10 +2455,10 @@ case J_RDVDK:
         break;
 case J_CMPFK:
 case J_CMPDK:
-        {   int32 test = op & Q_MASK;
-            outinstr(OP_CPOP | ((test==C_EQ || test==C_NE) ? F_CMF : F_CMFE) |
-                     F_RN(checkfreg(r2r)) | xposfpliteral((FloatCon *) m)); }
-        illbits &= ~Q_MASK;
+        outinstr(OP_CPOP | ((op & Q_UBIT) ? F_CMFE : F_CMF) |
+                 F_RN(checkfreg(r2r)) | xposfpliteral((FloatCon *) m));
+        illbits ^= Q_FBIT;
+        illbits &= ~(Q_MASK&~Q_FBIT);
         break;
 
 case J_INLINE1F:
@@ -3696,11 +3716,29 @@ static void routine_exit(int32 condition, bool to_pc)
     }
 }
 
+static void maketwoconditions(int32 *cond1, int32 *cond2)
+{
+    switch (*cond1)
+    {
+        case C_UE: *cond1 = C_EQ; *cond2 = C_VS; break;
+        case C_LG: *cond1 = C_MI; *cond2 = C_GT; break;
+        case C_EL: *cond1 = C_MI; *cond2 = C_EQ; break;
+        case C_UG: *cond1 = C_HI; *cond2 = C_VS; break; /* HI is UG if AC set, else G */
+        default: syserr(syserr_maketwocond, (long) *cond1); break;
+    }
+}
+
 static void conditional_branch_to(int32 condition,
                                   LabelNumber *destination,
                                   bool bxxcase)
 {
+    int32 condition2 = -1;
     condition = C_FROMQ(condition);
+    if (condition & C_TOOHARD)
+    {   if (bxxcase)
+            syserr(syserr_condbto, (long) condition);
+        maketwoconditions(&condition, &condition2);
+    }
     if (destination == RETLAB)
 /* The test here is expected to detect all cases where the return ought    */
 /* to expand into just one instruction.  Such cases are: 1. in a switch    */
@@ -3712,7 +3750,7 @@ static void conditional_branch_to(int32 condition,
 /* will probably be an unconditional one (main reason) and (b) slow on ARM-1 */
             ((condition != (C_ALWAYS^C_ALWAYS) || condition_mask != C_ALWAYS
                                                || lab_isset_(returnlab)) &&
-             (regmask & M_FVARREGS)!=0))
+             (regmask & M_FVARREGS)!=0) || condition2!=-1)
         {   destination = returnlab;
         }
         else
@@ -3731,10 +3769,18 @@ static void conditional_branch_to(int32 condition,
     {   int32 w = destination->u.defn;          /* ->frefs */
         outinstr(OP_B | condition |
                  ((((w & 0x00ffffff) - codep - 8) >> 2) & 0x00ffffff));
+        if (condition2 != -1)
+            outinstr(OP_B | condition2 |
+                 ((((w & 0x00ffffff) - codep - 8) >> 2) & 0x00ffffff));
+
     }
     else
     {   addfref_(destination, codep | LABREF_BRANCH);
         outinstr(OP_B | condition);
+        if (condition2 != -1)
+        {   addfref_(destination, codep | LABREF_BRANCH);
+            outinstr(OP_B | condition2);
+        }
     }
 }
 

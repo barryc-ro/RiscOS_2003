@@ -63,7 +63,7 @@ SOURCE     =
 EXPORTS    =
 
 INTERNALHEADERS =\
- h.assert h.ctype h.errno h.float h.inttypes h.iso646 h.limits h.locale h.math\
+ h.assert h.ctype h.errno h.fenv h.float h.inttypes h.iso646 h.limits h.locale h.math\
  h.setjmp h.signal h.stdarg h.stdbool h.stddef h.stdint h.stdio h.stdlib h.string h.time
 
 OBJS= o.driver o.aaof o.asd o.asm o.gen o.mcdep o.peephole o.aetree o.bind \

@@ -128,8 +128,12 @@ static unsigned32 lexclass[1+255];
 /* lex 'semantic' routines... */
 
 /* make_floating uses GLOBAL store for its value.  Is this reasonable? */
-static AEop make_floating(char *s, int32 flag)
-{   FloatCon *x = real_of_string(s,flag);
+static AEop make_floating(char *s, int radix, int32 flag)
+{   FloatCon *x;
+    if (radix == 16)
+        x = real_of_hexstring(s,flag);
+    else
+        x = real_of_string(s,flag);
     curlex.a1.fc = x;
     return x->h0;
 }
@@ -248,13 +252,54 @@ static int nextchar(void)
 #define is_e(c)                         /* e or E (exponent marker) */ \
     (((c) == 'e') || ((c) == 'E'))
 
+#define is_p(c)                         /* p or P (binary exponent marker) */ \
+    (((c) == 'p') || ((c) == 'P'))
+
 #define is_x(c)                         /* x or X (hex num marker)  */ \
     (((c) == 'x') || ((c) == 'X'))
 
+static AEop read_ieee_float(void)
+{   int len = curchar == 'd' ? 16 : 8;
+    int k = 0;
+    FloatCon *x;
+    unsigned32 hi, lo;
+    nextchar();
+    if (curchar == '_')
+    {   nextchar();
+        while (isxdigit(curchar))
+        {    if (k < len)
+                 namebuf[k] = curchar;
+             k++;
+             nextchar();
+        }
+    }
+    if (k != len)
+    {   cc_err(lex_err_bad_ieee);
+        memset(namebuf, '0', len);
+    }
+    namebuf[len]='\0';
+    for (k=0, hi=0; k<8; k++)
+         hi = (hi<<4) | intofxdigit(namebuf[k]);
+    for (lo=0; k<len; k++)
+         lo = (lo<<4) | intofxdigit(namebuf[k]);
+    x = GlobAlloc(SU_Const, offsetof(FloatCon,floatstr[0]) + padstrlen(3+len));
+    _sprintf(x->floatstr, "0%c_%s", len==16 ? 'd' : 'f', namebuf);
+    if (len == 16)
+    {    x->floatlen = NUM_FLOAT;
+         x->floatbin.db.msd = hi;
+         x->floatbin.db.lsd = lo;
+    }
+    else
+    {    x->floatlen = NUM_FLOAT|NUM_SHORT;
+         x->floatbin.fb.val = hi;
+    }
+    curlex.a1.fc = x;
+    return x->h0 = s_floatcon;
+}
 
-static int32 read_floating(int32 k)
+static int32 read_floating(int radix, int32 k)
 {   int32 flag = NUM_FLOAT;
-    while (isdigit(curchar))
+    while (radix == 16 && isxdigit(curchar) || isdigit(curchar))
     {   if (k < NAMEMAX)
         {   namebuf[k++] = curchar;
             nextchar();
@@ -264,9 +309,11 @@ static int32 read_floating(int32 k)
             while (isdigit(curchar)) nextchar();
         }
     }
-    if (is_e(curchar))
-    {
-        namebuf[k++] = 'e';  /* normalize case of the exponent mark */
+    if (radix == 16 && !is_p(curchar))
+       cc_err(lex_err_need_hex_exp);
+    if (radix == 16 && is_p(curchar) || is_e(curchar))
+    {   /* normalize case of the exponent mark */
+        namebuf[k++] = radix == 16 ? 'p' : 'e';
         nextchar();
         if ((curchar == '+') | (curchar=='-'))
         {   namebuf[k++] = curchar;
@@ -314,11 +361,26 @@ static AEop read_number(int radix)
                 while (isxdigit(curchar)) nextchar();
             }
         }
-        if (k==0)
-        {   cc_err(lex_err_need_hex_dig);
-            namebuf[k++] = '0';         /* treat as 0x0 */
+        if (curchar=='.')
+        {   nextchar();
+            if (k == 0)
+            {   namebuf[k++] = '0'; /* consider '0x0.' */
+                if (!isxdigit(curchar))
+                    cc_err(lex_err_need_hex_dig);
+            }
+            namebuf[k++] = '.';
+            flag = read_floating(radix, k);
         }
-        namebuf[k] = '\0';
+        else
+        {   if (k==0)
+            {   cc_err(lex_err_need_hex_dig);
+                namebuf[k++] = '0';         /* treat as 0x0 */
+            }
+            if (is_p(curchar))
+                flag = read_floating(radix, k);
+            else
+                namebuf[k] = '\0';
+        }
 /* ANSI (Dec 88 draft) require a diagnostic for 0xee+1 or 0xee+spqr.    */
         if (is_e(namebuf[k-1]) && (curchar == '+' || curchar == '-'))
             cc_ansi_rerr(lex_rerr_hex_exponent);
@@ -338,18 +400,18 @@ static AEop read_number(int radix)
         {   nextchar();
             if (k == 0) namebuf[k++] = '0'; /* consider '0.' */
             namebuf[k++] = '.';
-            flag = read_floating(k);
+            flag = read_floating(radix, k);
         }
         else if (is_e(curchar))
         {   if (k == 0) namebuf[k++] = '0'; /* consider '0e5' */
-            flag = read_floating(k);
+            flag = read_floating(radix, k);
         }
         else
         {   if (k == 0) namebuf[k++] = '0'; /* consider '0'   */
             namebuf[k] = '\0';
         }
     }
-    if (flag & NUM_FLOAT) return make_floating(namebuf,flag);
+    if (flag & NUM_FLOAT) return make_floating(namebuf,radix,flag);
     for (;;)
     {
         if ((curchar == 'l' || curchar == 'L') && !(flag & NUM_LONG))
@@ -660,6 +722,9 @@ case l_digit0:                  /* octal or hex or floating     */
             {   nextchar();
                 curlex.sym = read_number(16);   /* hex */
             }
+            else if (curchar=='d' || curchar=='f')
+                curlex.sym = read_ieee_float();
+
             else
                 curlex.sym = read_number(8);    /* octal or float */
             break;
@@ -678,8 +743,8 @@ case l_dot:     nextchar();
                     namebuf[k++] = '.';
                     namebuf[k++] = curchar;
                     nextchar();
-                    flag = read_floating(k); /* change to use read_number()? */
-                    curlex.sym = make_floating(namebuf, flag);
+                    flag = read_floating(10, k); /* change to use read_number()? */
+                    curlex.sym = make_floating(namebuf, 10, flag);
                 }
                 else
                 {   int32 n = 1;
@@ -1004,7 +1069,14 @@ void lex_init()         /* C version  */
         { "__global_reg", s_globalreg },
         { "__global_freg", s_globalfreg },
 
-#define N_PCC_FUSSY_KEYWORDS 41 /* everything above!  Bad style!!!      */
+        { "__less",         s_less_ieee },
+        { "__lessequal",    s_lessequal_ieee },
+        { "__greater",      s_greater_ieee },
+        { "__greaterequal", s_greaterequal_ieee },
+        { "__lessgreater",  s_lessgreater_ieee },
+        { "__unordered",    s_unordered_ieee },
+
+#define N_PCC_FUSSY_KEYWORDS 47 /* everything above!  Bad style!!!      */
 /* The following are ANSI C keywords, but old PCC (unix) sources        */
 /* (compile with -pcc -fussy) may treat them as identifiers!            */
         { "const",    s_const },
