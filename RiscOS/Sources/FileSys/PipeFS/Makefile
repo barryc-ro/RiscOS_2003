@@ -43,7 +43,7 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources: resource-${CMDHELP}
+resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
 
 resources_common:
