@@ -5,6 +5,7 @@
 ;; Wimp utility:  Task Manager
 ;;
 ;; mjs changes for Ursula - updated from RISC OS 3.71 source (see there for old history)
+;; rml change for Ursula - added TaskManager_StartTask and *StartDesktopTask
 ;;
 ;;------------------------------------------------------------------------------------
 
@@ -43,10 +44,16 @@ UseOSD6and7     SETL    {TRUE}
                 GBLL    OldRAMFS        ;if FALSE, don't do ramfsfile reinit etc (FALSE for Ursula)
 OldRAMFS        SETL    {FALSE}
 
+                GBLL    ProvideStartTask
+ProvideStartTask SETL    {TRUE}         ; Include TaskManager_StartTask SWI?
 
    [ UseOSD6and7
      ! 0, ""
      ! 0, "WARNING - this version only suitable for Ursula kernel or later"
+     ! 0, ""
+   |
+     ! 0, ""
+     ! 0, "WARNING - Why aren't you using OS_DynamicArea 6 & 7?"
      ! 0, ""
    ]
 
@@ -140,6 +147,9 @@ cy0     RN      R3
 cx0     RN      R2
 
 
+TaskManager_StartTask * &42683
+XTaskManager_StartTask * &62683
+
 ;;-----------------------------------------------------------------------------
 ;; Constants
 ;;-----------------------------------------------------------------------------
@@ -218,11 +228,24 @@ filertaskhandle #       4
 shutdownflags   #       4
 lastshutdown    #       4
 
+ [ ProvideStartTask
+starttask_ptr   #       4               ; pointer to data for first task in queue tht has been started via TaskManager_StartTask
+ ]
+
 pollword        #       0               ; encompasses file handle and memoryupdated
 savedesk_handle #       1               ; file handle of deskboot file
 memoryupdated   #       1               ; flags set => Service_MemoryMoved called
 changetext      #       1               ; non-zero then update text icon
+ [ ProvideStartTask
+misc_pollbyte   #       1
+ |
 shutdown_swi    #       1               ; non-zero to indicate shutdown SWI issued
+ ]
+
+ [ ProvideStartTask
+mp_shutdown_swi *       1               ; set to indicate shutdown SWI issued
+mp_starttask    *       2               ; set to indicate task waiting to be started via TaskManager_StartTask
+ ]
 
 savedesk_taskhandle     #       4       ; handle of task to send dataload to
 savedesk_loadmess       #       4       ; pointer to dataload message block
@@ -424,12 +447,20 @@ switchercommand
   [ ProvideCDA
         Command ChangeDynamicArea,255,0,International_Help
   ]
+  [ ProvideStartTask
+        Command StartDesktopTask,255,1,International_Help
+  ]
         DCB     0
 
   [ International_Help <> 0
     [ ProvideCDA
 ChangeDynamicArea_Help          DCB     "HTMGCDA",0
 ChangeDynamicArea_Syntax        DCB     "STMGCDA",0
+    ]
+
+    [ ProvideStartTask
+StartDesktopTask_Help           DCB     "HTMGSDT",0
+StartDesktopTask_Syntax         DCB     "STMGSDT",0
     ]
 
 Desktop_TaskManager_Help        DCB     "HTMGDTM",0
@@ -441,6 +472,15 @@ ChangeDynamicArea_Help
         DCB     13
 ChangeDynamicArea_Syntax
         DCB     "Syntax: *ChangeDynamicArea [-FontSize <n>[K]] [-SpriteSize <n>[K]] [-RamFsSize <n>[K]]"
+        DCB     0
+    ]
+    
+    [ ProvideStartTask
+StartDesktopTask_Help
+        DCB     "Cause a task to start next time the desktop environment is entered."
+        DCB     13
+StartDesktopTask_Syntax
+        DCB     "Syntax: *StartDesktopTask <*command>"
         DCB     0
     ]
 
@@ -589,6 +629,18 @@ Desktop_TaskManager_Code  ROUT
         MyError CantStartSwitcher,,,L
         Pull    "PC"
 
+
+ [ ProvideStartTask
+StartDesktopTask_Code  ROUT
+        Push    "lr"
+
+        LDR     r14, [r12]
+        SWI     XTaskManager_StartTask
+
+        Pull    "pc"
+ ]
+
+
 ;------------------------------------------------------------------------------
 ; Decode SWIs recieved by the module.
 ;------------------------------------------------------------------------------
@@ -610,6 +662,9 @@ Switcher_SWIdecode ROUT
         B       SWITaskManager_TaskNameFromHandle
         B       SWITaskManager_EnumerateTasks
         B       SWITaskManager_Shutdown
+        [ ProvideStartTask
+        B       SWITaskManager_StartTask
+        ]
 10
         MyError NaffSWI
         Pull    "PC"                    ; return an error if the SWI is invalid
@@ -625,6 +680,9 @@ Switcher_SWInames
         =       "TaskNameFromHandle",0
         =       "EnumerateTasks",0
         =       "Shutdown",0
+ [ ProvideStartTask
+        =       "StartTask",0
+ ]
         =       0
         ALIGN
 
@@ -740,8 +798,14 @@ SWITaskManager_Shutdown Push "R0-R2"
         LDR     R0,=state_exit
         STR     R0,lastshutdown         ; internal state to indicate we need to close down
 ;
+ [ ProvideStartTask
+        LDRB    r0, misc_pollbyte
+        ORR     r0, r0, #mp_shutdown_swi
+        STRB    r0, misc_pollbyte
+ |
         MOV     r0, #&ff
         STRB    r0, shutdown_swi
+ ]
 ;
         MOV     R0,#UpCallV             ; its about to go bang!
         ADR     R1,upcallroutine
@@ -749,6 +813,79 @@ SWITaskManager_Shutdown Push "R0-R2"
         SWI     XOS_Claim               ; claim the UpCall routine
 ;
         Pull    "R0-R2,PC"
+
+
+ [ ProvideStartTask
+
+;------------------------------------------------------------------------------
+;
+; TaskManager_StartTask
+;
+; This call allows a WIMP task to be launched from within a non-WIMP task or a
+; module. A *command string is passed in and this will be passed to
+; Wimp_StartTask by the wimp part of the Switcher. The SWI below  achieves this
+; by setting a bit in the pollword which causes a pollword event to be delivered
+; to the Switcher task. The task then looks through a linked list which contains
+; any strings passed to TaskManager_StartTask since the last pollword event.
+; The first item in the linked list is pointed to by starttask_ptr and each entry
+; is of the form:
+;    ptr + 0 : Pointer to next item in list or 0 for end.
+;    ptr + 4 : String passed to TaskManager_StartTask
+;
+; In: r0 -> *command to be executed
+;
+; Out: all regs preserved.
+;
+;------------------------------------------------------------------------------
+
+SWITaskManager_StartTask Push "r0-r4"
+
+        MOV     r4, r0                  ; store pointer to string in r4
+        
+        ; Find out how large the string is
+        MOV     r3, #0
+02      LDRB    r0, [r4, r3]
+        ADD     r3, r3, #1
+        CMP     r0, #0
+        BEQ     %FT04
+        CMP     r3, #1024               ; Check if we've gone past 1024 characters
+        BLT     %BT02       
+        Pull    "r0-r4,pc"              ; If >1024, exit
+         
+04      ; Get memory
+        ADD     r3, r3, #4             ; we want string length + 4 bytes (for next pointer)
+        MOV     r0, #6
+        SWI     XOS_Module
+        Pull    "r0-r4,pc", VS         ; unsuccessful - exit
+
+        ; Find bottom of list
+        ADR     r0, starttask_ptr
+06      LDR     r1, [r0]
+        CMP     r1, #0
+        MOVNE   r0, r1
+        BNE     %BT06
+        
+        ; Fill in next pointer
+        STR     r2, [r0]
+        MOV     r0, #0
+        STR     r0, [r2], #4
+     
+        ; Copy the string into our newly created buffer
+        SUB     r3, r3, #4        
+08      LDRB    r0, [r4], #1
+        STRB    r0, [r2], #1
+        SUBS    r3, r3, #1
+        BNE     %BT08
+
+        ; Set pollword bit
+        LDRB    r0, misc_pollbyte
+        ORR     r0, r0, #mp_starttask
+        STRB    r0, misc_pollbyte
+
+        Pull    "r0-r4,pc"
+
+ ]
+ 
 
 ; . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 
@@ -817,8 +954,13 @@ Service ROUT
         TEQNE   R1,#Service_DynamicAreaCreate
         TEQNE   R1,#Service_DynamicAreaRemove
         TEQNE   R1,#Service_DynamicAreaRenumber
+        
+      [ ProvideStartTask
+        BEQ     svc_memorymoved
+      |
         STREQB  R1,memoryupdated                  ; non-0 ==> has been changed
         MOVEQS  pc, lr
+      ]
 
         TEQ     R1,#Service_MessageFileClosed
         BEQ     svc_messagefileclosed
@@ -840,6 +982,16 @@ Service ROUT
 
 ;end of service handler
 
+ [ ProvideStartTask
+svc_memorymoved
+        Push    "r0, lr"
+        
+        LDR     r0, dragBar
+        CMP     r0, #0
+        STRNEB  r1, memoryupdated                ; only if window open do we set pollword bit for memory moved
+        
+        Pull    "r0, pc",,^
+ ]
 
       [ standalone
 svc_resourcefsstarting
@@ -955,6 +1107,9 @@ get_err
         BVS     get_err
 
         MOV     r0, #0
+ [ ProvideStartTask
+        STR     r0, starttask_ptr
+ ]       
         STR     r0, mytaskhandle
         STR     r0, messagedata
         STR     r0, filertaskhandle     ; for RAMFS Filer stuff
@@ -1591,10 +1746,14 @@ repollwimp
         BICNE   R0,R0,#null_bit         ; need null events if task window open or previous shutdown was a failure
 
  [ DisablePollWordIfWindowShut
+      [ ProvideStartTask
+        ORR     r0, r0, #pollword_enable
+      |
         LDR     R14, dragBar
         CMP     r14, #0
         ORREQ   R0,R0,#pollword_bit     ;Disable pollwords if the window is shut
         ORRNE   R0,R0,#pollword_enable
+      ]
  |
         ORR     R0,R0,#pollword_enable
  ]
@@ -4544,12 +4703,63 @@ pollword_event
         TEQ     R14,#0
         BLNE    abortsavedesk
 
+        [ ProvideStartTask
+        LDRB    r14, misc_pollbyte
+        TST     r14, #mp_starttask
+        BLNE    start_task
+        Pull    "PC", NE        
+        TST     r14, #mp_shutdown_swi
+        EORNE   r14, r14, #mp_shutdown_swi
+        STRNEB  r14, misc_pollbyte
+        |
         LDRB    R14, shutdown_swi
         TEQ     R14, #0
         MOVNE   R14, #0
         STRNEB  R14, shutdown_swi
+        ]
 
         Pull    "PC"
+
+
+ [ ProvideStartTask
+;------------------------------------------------------------------------------
+; start_task
+;
+; Called when starttask bit of the pollword is set to indicate that there are
+; tasks waiting to be started ie. user has issued SWI TaskManager_StartTask
+; since last Wimp_Poll. All tasks in the linked list (first item pointed to by
+; starttask_ptr in global workspace) will be Wimp_StartTask'ed.
+;
+; In: Nothing.
+; Out: All registers preserved.
+
+start_task        Push    "r0-r3, lr"
+
+        ; Unset starttask pollword bit
+        LDRB    r0, misc_pollbyte
+        EOR     r0, r0, #mp_starttask
+        STRB    r0, misc_pollbyte
+
+        ; Go through list and issue Wimp_StartTasks
+        LDR     r2, starttask_ptr       ; R2 is pointer to data blocks
+        CMP     r2, #0
+        Pull    "r0-r3, pc", EQ, ^      ; Nothing in the list - strange!
+        
+10      ADD     r0, r2, #4              ; The first four bytes are the next pointer, the rest the input for StartTask
+        SWI     XWimp_StartTask         ; Start this task
+        LDR     r1, [r2]                ; Load the next pointer in R1
+        MOV     r0, #7
+        SWI     XOS_Module              ; Free the memory block for this task
+        MOV     r2, r1
+        CMP     r2, #0                  ; Is there a next entry?
+        BNE     %BT10
+        
+        MOV     r0, #0
+        STR     r0, starttask_ptr       ; Store a zero in starttask_ptr to indicate no tasks queued
+        
+        Pull    "r0-r3, pc",,^
+ ]
+
 
 ; if Message_SaveDesk is acknowledged, abort the save and delete the file
 
@@ -5077,6 +5287,9 @@ gotask
         BNE     %FT01
 
 openswitcher
+ [ ProvideStartTask
+        BL      calc_dynamicareas
+ ]
         BL      calc_memorymap          ; recalculate for good measure
         BL      calc_slotsize
         BL      calc_rmasize
