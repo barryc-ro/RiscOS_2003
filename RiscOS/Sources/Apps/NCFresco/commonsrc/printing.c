@@ -468,8 +468,6 @@ static os_error *awp_start_job(be_doc doc, int scale, int flags, awp_job *job)
 
 	antweb_document_format(doc, fvd.user_width);
     }
-
-    visdelay_end();
     
     mm_free(new_job);
     return ep;

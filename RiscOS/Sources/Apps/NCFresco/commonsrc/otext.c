@@ -127,7 +127,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	flags |= (1<<8) | (1<<7);
 
 	_swix(Font_ScanString, _INR(0,7) | _OUT(3),
-	      wf->handle, s, flags,
+	      wf->handle, s, flags,	      
 	      INT_MAX, INT_MAX,
 	      NULL, NULL, str_len,
 	      &width1);
@@ -146,7 +146,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 	ti->pad = (width1 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT - ti->width;
 
-#if 0
+#if DEBUG
 	fprintf(stderr, "otext: scanstring '%s' str_len %d width1 %d width2 %d\n", s, str_len, width1, width2);
 #endif
     }
@@ -266,15 +266,12 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    if (update == object_redraw_HIGHLIGHT)
-	return;
-    
     /* quick exit if there is no text to display */
     if (rh->texts.data[tit->data_off] == 0)
 	return;
-
-    tfc = render_text_link_colour(ti, doc);
-    tbc = render_background(ti, doc);
+    
+    tfc = render_text_link_colour(rh, ti, doc);
+    tbc = render_background(rh, ti, doc);
 
 #ifdef STBWEB
     draw_highlight_box = ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL) &&
@@ -302,7 +299,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     {
 	fs->lfc = tfc;
 	fs->lbc = tbc;
-	render_set_font_colours(tfc, tbc, doc);
+	render_set_font_colours(fs->lfc, fs->lbc, doc);
     }
 
     /* adjust base line for subscipts and superscripts */
@@ -328,7 +325,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 #if 0
     dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off));
 #endif
-
+    
     no_text = !render_text(doc, rh->texts.data + tit->data_off, hpos, b);
     if (ti->pad)
 	no_text = FALSE;
@@ -473,8 +470,8 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     l2 = (len + 4) & (~3);
 
     size = WEBFONT_SIZEOF(ti->st.wf_index);
-    size = config_font_sizes[size-1];
-    size *= 640 * config_display_scale/100;
+    size = config_font_sizes[size];
+    size *= 640;
 
     txt.tag = draw_OBJTEXT;
     txt.size = sizeof(txt) + l2;
@@ -509,14 +506,13 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 #endif /* BUILDERS */
 }
 
-int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
+void otext_update_highlight(rid_text_item *ti, antweb_doc *doc)
 {
-    memset(box, 0, sizeof(*box));
+    wimp_box trim;
+    memset(&trim, 0, sizeof(trim));
 
-    if (box)
-	box->x1 = ti->pad + 2;
-
-    return FALSE;
+    trim.x1 = ti->pad + 2;
+    antweb_update_item_trim(doc, ti, &trim, TRUE);
 }
 
 /* eof otext.c */

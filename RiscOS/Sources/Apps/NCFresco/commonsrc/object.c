@@ -38,11 +38,11 @@ object_methods object_table[rid_tag_LAST_TAG] = {
 { &otextarea_size,	&otextarea_redraw,	&otextarea_dispose,
       &otextarea_click,	&otextarea_astext,
       &otextarea_caret,	&otextarea_key,		0,
-      0,                otextarea_update_highlight },	/* TEXTAREA */
+      0,                oinput_update_highlight },	/* TEXTAREA */
 { &oselect_size,	&oselect_redraw,	&oselect_dispose,
       &oselect_click,	&oselect_astext,
       0,		0,			0,
-      0,                oselect_update_highlight },	/* SELECT */
+      0,                oinput_update_highlight },	/* SELECT */
 { &otable_size,		&otable_redraw,		&otable_dispose,
       0,		&otable_astext,
       0,		0,			0,
@@ -50,9 +50,6 @@ object_methods object_table[rid_tag_LAST_TAG] = {
 { &oobject_size,	&oobject_redraw,	&oobject_dispose,
       oobject_click,	&oobject_astext,
       0,		0,			oobject_image_handle,
-      &oobject_asdraw,  0			},	/* OBJECT */
-{ &oscaff_size,		&oscaff_redraw,		0,
-      0,		&oscaff_astext,
-      0,		0,			0,
-      &oscaff_asdraw,   0			},	/* SCAFF */
+      &oobject_asdraw,  0			}	/* OBJECT */
+
 };

@@ -50,9 +50,10 @@
 /* ----------------------------------------------------------------------------- */
 
 /* 
+ * FIXME: This should cope with %age values
  */
 
-static int get_value(rid_text_item *ti, rid_stdunits *val, int def, int fwidth)
+static int get_value(rid_text_item *ti, rid_stdunits *val, int def)
 {
     switch (val->type)
     {
@@ -63,7 +64,7 @@ static int get_value(rid_text_item *ti, rid_stdunits *val, int def, int fwidth)
     case value_absunit:
 	return (int)val->u.f;
     case value_pcunit:
-	return (int)(val->u.f*fwidth/100);
+	return 0;
     }
     return 0;
 }
@@ -82,7 +83,7 @@ static BOOL oobject_renderable(rid_object_item *obj, antweb_doc *doc)
     if (fl & image_flag_REALTHING)
 	return TRUE;
 
-    if (obj->standby == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (obj->userheight.type == value_none && obj->userwidth.type == value_none)))
+    if (obj->standby == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (obj->hh == -1 && obj->ww == -1)))
 	return TRUE;
     
     return FALSE;
@@ -94,22 +95,25 @@ static BOOL oobject_renderable(rid_object_item *obj, antweb_doc *doc)
  * OBJECT METHODS
  */
 
-void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth)
+void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_object *tio = (rid_text_item_object *) ti;
     rid_object_item *obj = tio->object;
     int width, height;
 
-     OBJDBG(("oobject_size_allocate: ti%p fwidth %d\n", ti, width));
-/*     OBJDBG(("oobject: sizing line %p fwidth %d floats %p\n", ti->line,  */
-/* 	    ti->line && ti->line->st ? ti->line->st->fwidth : 0,  */
-/* 	    ti->line ? ti->line->floats : 0)); */
+    OBJDBG(("oobject: sizing line %p fwidth %d floats %p\n", ti->line, 
+	    ti->line && ti->line->st ? ti->line->st->fwidth : 0, 
+	    ti->line ? ti->line->floats : 0));
+
+    /* Convert from user values to OS unit values */
+    obj->ww = get_value(ti, &obj->userwidth, -1);
+    obj->hh = get_value(ti, &obj->userheight, -1);
 
     /* no border specified implies thin border - but only if this is a link */
-    obj->bwidth = get_value(ti, &obj->userborder, tio->base.aref || obj->usemap ? 2 : 0, fwidth);
+    obj->bwidth = get_value(ti, &obj->userborder, tio->base.aref || obj->usemap ? 2 : 0);
 
-    obj->hspace = get_value(ti, &obj->userhspace, 0, fwidth);
-    obj->vspace = get_value(ti, &obj->uservspace, 0, fwidth);
+    obj->hspace = get_value(ti, &obj->userhspace, 0);
+    obj->vspace = get_value(ti, &obj->uservspace, 0);
 
     switch (obj->type)
     {
@@ -117,54 +121,51 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
     {
 	image_flags fl;
 	if (obj->state.image.im == NULL)
-	    obj->state.image.im = oimage_fetch_image(doc, obj->data, obj->userwidth.type == value_none || obj->userheight.type == value_none);
+	    obj->state.image.im = oimage_fetch_image(doc, obj->data, obj->ww == -1 || obj->hh == -1);
    
 	image_info((image) obj->state.image.im, &width, &height, 0, &fl, 0, 0);
 
 	if (fl & image_flag_REALTHING)
 	    obj->iflags |= rid_image_flag_REAL;
 
-	oimage_size_image(obj->standby, &obj->userwidth, &obj->userheight, obj->iflags, config_defer_images, doc->scale_value, fwidth, &width, &height);
+	oimage_size_image(obj->standby, obj->ww, obj->hh, obj->iflags, config_defer_images, doc->scale_value, &width, &height);
 	break;
     }
 
 #ifndef BUILDERS
     case rid_object_type_PLUGIN:
-	/* Convert from user values to OS unit values */
-	width = get_value(ti, &obj->userwidth, 0, fwidth);
-	height = get_value(ti, &obj->userheight, 0, fwidth);
+	width = obj->ww == -1 ? 128 : obj->ww;
+	height = obj->hh == -1 ? 128 : obj->hh;
 
 	if (obj->state.plugin.pp == NULL &&
-	    (obj->classid_ftype != -1 || obj->data_ftype != -1) &&
-	    width > 0 && height > 0)
+	    (obj->classid_ftype != -1 || obj->data_ftype != -1))
 	{
 	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
-	    
+
 	    /* position plugin initially off screen */
+
 	    if (!objects_bbox(doc, ti, (wimp_box *)obj->state.plugin.box))
 	    {
 		obj->state.plugin.box[0] = 0;
 		obj->state.plugin.box[1] = 0x1000;
-		obj->state.plugin.box[2] = obj->state.plugin.box[0] + width;
-		obj->state.plugin.box[3] = obj->state.plugin.box[1] + height;
+		obj->state.plugin.box[2] = obj->state.plugin.box[0] + obj->ww;
+		obj->state.plugin.box[3] = obj->state.plugin.box[1] + obj->hh;
 	    }
 
 	    plugin_send_open(obj->state.plugin.pp, (wimp_box *)obj->state.plugin.box, 0 /* open_flags */);
-	    
+
 	    if (doc->object_handler_count++ == 0)
 		frontend_message_add_handler(plugin_message_handler, doc);
 	}
 	else
-	{
-	    oimage_size_image(obj->standby, &obj->userwidth, &obj->userheight, obj->iflags, config_defer_images, doc->scale_value, fwidth, &width, &height);
-	}
+	    oimage_size_image(obj->standby, obj->ww, obj->hh, obj->iflags, config_defer_images, doc->scale_value, &width, &height);
 	break;
 #endif
 	
     default:
 	/* Get values for text_item */
-	width = get_value(ti, &obj->userwidth, 0, fwidth);
-	height = get_value(ti, &obj->userheight, 0, fwidth);
+	width = obj->ww == -1 ? 128 : obj->ww;
+	height = obj->hh == -1 ? 128 : obj->hh;
 	break;
     }
     
@@ -180,10 +181,6 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
     OBJDBG(("oobject: size to w=%d,u=%d,d=%d\n", ti->width, ti->max_up, ti->max_down));
 }
 
-void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
-{
-    oobject_size_allocate(ti, rh, doc, 0);
-}
 
 void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update)
 {
@@ -197,12 +194,6 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    if (update == object_redraw_HIGHLIGHT)
-    {
-	highlight_render_outline(ti, doc, hpos, bline);
-	return;
-    }
-
     bw = obj->bwidth;
 
     bbox.x0 = hpos + obj->hspace + bw;
@@ -210,7 +201,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     bbox.x1 = bbox.x0 + ti->width - obj->hspace*2 - bw*2;
     bbox.y1 = bbox.y0 + ti->max_up + ti->max_down - obj->vspace*2 - bw*2;
 
-/*  OBJDBG(("oobject: plugin type %d\n", obj->type)); */
+    OBJDBG(("oobject: plugin type %d\n", obj->type));
 
     switch (obj->type)
     {
@@ -257,6 +248,10 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     if (do_alt)
 	oimage_render_text(ti, doc, fs, &bbox, obj->standby);
+
+    if ((ti->flag & rid_flag_SELECTED) || bw)
+	oimage_render_border(ti, doc, &bbox, bw);
+
 #endif /* BUILDERS */
 }
 

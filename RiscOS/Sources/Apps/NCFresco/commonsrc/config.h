@@ -38,7 +38,6 @@ struct config_str
     char *deny_file;
     char *help_file;
     char *cookie_file;
-    char *history_file;
 
     int auth_file_crypt;
     char *animation_name;
@@ -63,7 +62,6 @@ struct config_str
     int display_scale;
     int display_scale_image;
     int display_scales[config_SCALES];
-    int display_scale_fit;
     int display_width;
     int display_blending;
     wimp_box display_margin;
@@ -80,7 +78,7 @@ struct config_str
     int display_leading_percent;
     int display_char_password;
     int display_encoding;
-
+    
     int proxy_http_on;
     int proxy_https_on;
     int proxy_gopher_on;
@@ -114,7 +112,6 @@ struct config_str
 
     int history_length;
     int history_global_length;
-    int history_persist;
 
     char *sound_click;
     int sound_fx;
@@ -168,7 +165,6 @@ extern struct config_str config_array;
 #define config_deny_file (config_array.deny_file)
 #define config_help_file (config_array.help_file)
 #define config_cookie_file (config_array.cookie_file)
-#define config_history_file (config_array.history_file)
 
 #define config_auth_file_crypt (config_array.auth_file_crypt)
 #define config_doc_default (config_array.doc_default)
@@ -188,7 +184,6 @@ extern struct config_str config_array;
 #define config_display_fancy_ptr (config_array.display_fancy_ptr)
 
 #define config_display_scale (config_array.display_scale)
-#define config_display_scale_fit (config_array.display_scale_fit)
 #define config_display_scale_image (config_array.display_scale_image)
 #define config_display_scales (config_array.display_scales)
 #define config_display_width (config_array.display_width)
@@ -250,7 +245,6 @@ extern struct config_str config_array;
 
 #define config_history_length (config_array.history_length)
 #define config_history_global_length (config_array.history_global_length)
-#define config_history_persist (config_array.history_persist)
 
 #define config_sound_click (config_array.sound_click)
 #define config_sound_fx (config_array.sound_fx)

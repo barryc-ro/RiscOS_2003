@@ -196,7 +196,6 @@ char *access_schemes[] = {
     "file",
 #ifndef FILEONLY
     "http",
-    "https",            /* pdh: added this */
     "gopher",
     "ftp",
     "icontype",
@@ -204,6 +203,10 @@ char *access_schemes[] = {
 
     NULL
     };
+
+#ifdef STBWEB
+http_header_item *last_http_headers = NULL;
+#endif
 
 /***************************************************************************/
 
@@ -800,6 +803,7 @@ static os_error *access_http_fetch_start(access_handle d)
 	authenticate_hdr.next = hlist;
 
 	hlist = &authenticate_hdr;
+	ACCDBGN(( "%s: %s\n", hlist->key, hlist->value));
 	d->data.http.had_auth = 1;
     }
 
@@ -815,6 +819,7 @@ static os_error *access_http_fetch_start(access_handle d)
 	proxy_authenticate_hdr.next = hlist;
 
 	hlist = &proxy_authenticate_hdr;
+	ACCDBGN(( "%s: %s\n", hlist->key, hlist->value));
 	d->data.http.had_proxy_auth = 1;
     }
 
@@ -860,25 +865,12 @@ static os_error *access_http_fetch_start(access_handle d)
 	if ( d->flags & access_PROXY )
 	    httpo.in.flags |= http_open_flags_TUNNEL;
     }
-    if ( d->flags & (access_PRIORITY | access_MAX_PRIORITY))
+    if ( d->flags & access_PRIORITY )
         httpo.in.flags |= http_open_flags_PRIORITY;
     if ( d->flags & access_IMAGE )
         httpo.in.flags |= http_open_flags_IMAGE;
 
-#if DEBUG
-    {
-	http_header_item *h;
-	ACCDBG(("HTTP_Open flags %x\n", httpo.in.flags));
-	for (h = hlist; h; h = h->next)
-	{
-	    ACCDBGN(( " %s: %s\n", h->key, h->value));
-	}
-    }
-#endif
-
     ep = os_swix(HTTP_Open, (os_regset *) &httpo);
-
-    ACCDBG(("HTTP_Open returned %p\n", ep ));
 
 #if SEND_HOST
     /* pdh: HTTP module takes copies of these, obviously, so we can free what
@@ -1164,6 +1156,10 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     /* The http close does not need to delete the file as we have already if it was removed from the cache */
     access_http_close(d->transport_handle, http_close_DELETE_BODY );
 
+#ifdef STBWEB
+    last_http_headers = si->out.headers;
+#endif
+
     /* What? A bug, in some Netscape software? Surely not.
      * If we've got an error, but we were in a server-push situation and
      * the previous part finished fine, kid ourselves that the previous part
@@ -1180,6 +1176,10 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
 	cache_it = d->complete(d->h, si->out.status, si->out.status == status_COMPLETED_FILE ? cfile : NULL, d->url);
     else
 	cache_it = 0;
+
+#ifdef STBWEB
+    last_http_headers = NULL;
+#endif
 
     access_done_flag = 1;
 
@@ -1240,13 +1240,10 @@ static void memcheck_register_list(http_header_item *list)
 
 static void memcheck_unregister_list(http_header_item *list)
 {
-    http_header_item *next = NULL;
-
-    for (; list; list = next)
+    for (; list; list = list->next)
     {
 	MemCheck_UnRegisterMiscBlock(list->key);
 	MemCheck_UnRegisterMiscBlock(list->value);
-	next = list->next;
 	MemCheck_UnRegisterMiscBlock(list);
     }
 }
@@ -1380,8 +1377,6 @@ static void access_http_fetch_alarm(int at, void *h)
 		}
 	    }
 
-            memcheck_unregister_list(si.out.headers);
-
 	    /* don't do the location till finished scanning in case there are any cookies */
 	    if (new_url)
 	    {
@@ -1439,13 +1434,13 @@ static void access_http_fetch_alarm(int at, void *h)
 		    d->data.http.date = (unsigned)HTParseTime(list->value);
 		}
 	    }
+	}
 
-
-	    /* 401 is UNAUTHORIZED, 407 is PROXY-AUTHENTICATE */
-	    if (si.out.rc == 401 || si.out.rc == 407)
-	    {
-	        char *type;
-	        char *realm_name;
+	/* 401 is UNAUTHORIZED, 407 is PROXY-AUTHENTICATE */
+	if (si.out.rc == 401 || si.out.rc == 407)
+	{
+	    char *type;
+	    char *realm_name;
 
 	    /* Authentication failed.  There are three cases: a) we
 	     * have no idea about this realm and we need a new realm
@@ -1456,59 +1451,51 @@ static void access_http_fetch_alarm(int at, void *h)
 	     * realm but it seems to be wrong.
 	     */
 
-	        if (access_http_find_realm(si.out.headers, &realm_name, &type, si.out.rc == 401 ? auth_req_WWW : auth_req_PROXY))
-	        {
-		    realm rr;
+	    if (access_http_find_realm(si.out.headers, &realm_name, &type, si.out.rc == 401 ? auth_req_WWW : auth_req_PROXY))
+	    {
+		realm rr;
 
-		    rr = auth_lookup_realm(realm_name);
+		rr = auth_lookup_realm(realm_name);
 
-		    mm_free(type);
+		mm_free(type);
 
-		    if (rr)
+		if (rr)
+		{
+		    if ((si.out.rc == 401 && d->data.http.had_auth) || (si.out.rc == 407 && d->data.http.had_proxy_auth))
 		    {
-		        if ((si.out.rc == 401 && d->data.http.had_auth) || (si.out.rc == 407 && d->data.http.had_proxy_auth))
-		        {
-			    frontend_complain(makeerror(ERR_BAD_PASSWD));
-			    rr = NULL;
-		        }
+			frontend_complain(makeerror(ERR_BAD_PASSWD));
+			rr = NULL;
 		    }
+		}
 
-		    if (rr == NULL)
-		    {
-		        char *hname = si.out.rc == 401 ? access_host_name_only(d->url) : strdup(d->dest_host);
-		        d->data.http.pw = frontend_passwd_raise(access_http_passwd_callback,
+		if (rr == NULL)
+		{
+		    char *hname = si.out.rc == 401 ? access_host_name_only(d->url) : strdup(d->dest_host);
+		    d->data.http.pw = frontend_passwd_raise(access_http_passwd_callback,
 							    d, NULL, realm_name, hname);
-		        mm_free(hname);
-		    }
-		    else
-		    {
-		        access_http_auth_rerequest(d, rr, si.out.rc == 401 ? auth_req_WWW : auth_req_PROXY);
-		    }
+		    mm_free(hname);
+		}
+		else
+		{
+		    access_http_auth_rerequest(d, rr, si.out.rc == 401 ? auth_req_WWW : auth_req_PROXY);
+		}
 
-		    mm_free(realm_name);
+		mm_free(realm_name);
 
-    		    done = FALSE;
-                }
-
-	        /* If we can't authenticate, just show the error to the user */
+		done = FALSE;
 	    }
 
-            memcheck_unregister_list(si.out.headers);
+	    /* If we can't authenticate, just show the error to the user */
 	}
+
+	memcheck_unregister_list(si.out.headers);
 
 	if (done)
 	    access_http_fetch_done(d, &si);
     }
     else
     {
-        /* pdh: removed the rc=2xx condition, 'cos long 404 pages weren't
-         * being displayed. (e.g. www.infoseek.com, all of whose pages are
-         * 404 in some kind of lumpen attempt at cache evasion)
-         *
-         * pdh: me again, reinstated condition (it meant bits of 302 redirect
-         * pages turned up in the main document) but rephrased it as rc != 3xx
-         */
-	int readable = d->ft_is_set && ((si.out.rc / 100) != 3);
+	int readable = d->ft_is_set && ((si.out.rc / 100) == 2);
 
         ACCDBG(("Calling progress function (st=%d data=%d/%d rd=%d ft=%d)\n",
                 si.out.status, si.out.data_so_far, si.out.data_size, readable,
@@ -2118,11 +2105,11 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 {
     access_handle d = NULL;
     os_error *ep = NULL;
-    int fh = _kernel_osfind(0x4f, (char *)file); /* use kernel_osfind deliberately so we can get the error properly */
+    int fh = ro_fopen(file, RO_OPEN_READ);
 
     ACCDBG(("access_new_file: file %s fh %d ft %03x flags %x\n", file, fh, ft, flags));
 
-    if (fh > 0)
+    if (fh)
     {
 	d = mm_calloc(1, sizeof(*d));
 
@@ -2151,7 +2138,7 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	d->data.file.last_modified = file_last_modified(file);
 
 	/* if it is a priority item then fetch the whole thing right now (eg background image) */
-	if (flags & access_MAX_PRIORITY)
+	if (flags & access_PRIORITY)
 	{
 	    d->data.file.chunk = d->data.file.size;
 	    if (!access_file_fetch(d))
@@ -2166,7 +2153,7 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	    else
 		d = NULL;
 	}
-	/* otherwise schedule a read for sometime later (this includes PRIORITY items) */
+	/* otherwise schedule a read for sometime later */
 	else
 	{
 	    d->data.file.chunk = FILE_INITIAL_CHUNK;
@@ -2665,7 +2652,7 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 	    frontend_url_punt(NULL, d->url, bfile);
 	    ep = makeerror(ERR_NO_ACTION);
 	}
-
+	
 	ACCDBG(("access_new_internal(): error, freeing access handle %p\n", d));
 	access_unlink(d);
 	access_free_item(d);
@@ -2790,9 +2777,12 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	url_parse(url, &scheme, &netloc, &path, &params, &query, &fragment);
 	ACCDBGN(( "Cache miss... trying to fetch file\n"));
 
-	if (netloc && netloc[0] && !auth_check_allow_deny(netloc))
+	if (netloc && netloc[0] && (config_allow_file || config_deny_file))
 	{
-	    ep = makeerror(ERR_ACCESS_DENIED);
+	    if (!auth_check_allow_deny(netloc))
+	    {
+		ep = makeerror(ERR_ACCESS_DENIED);
+	    }
 	}
 
 	if (ep)
@@ -2851,26 +2841,6 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 			ep = makeerror(ERR_CANT_READ_FILE);
 		    }
 		}
-
-#ifndef STBWEB
-                /* pdh: Desktop Fresco wanted this, I don't know whether
-                 * NCFresco does or not
-		 * sjm: well it might but that's what the chunk of code above does (or was meant to)
-                 */
-		if ( ft == FILETYPE_DOS || ft == FILETYPE_DATA
-		     || ft == FILETYPE_TEXT )
-                {
-                    char *slash = strrchr( cfile, '/' );
-		    char *dot = strrchr(cfile, '.');
-
-		    if (slash && (dot == NULL || dot < slash))
-		    {
-		        int newft = suffix_to_file_type( slash+1 );
-		        if ( newft != -1 )
-		            ft = newft;
-		    }
-                }
-#endif
 
 		/* if an image fs then guess whether we should treat it as a file or directory */
 		if (!ep && obj_type == 3 && !frontend_can_handle_file_type(ft) && !frontend_plugin_handle_file_type(ft))
@@ -3249,7 +3219,6 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    {
 	    case '&':
 	    case '?':
-	    case '=':
 		break;
 	    default:
 		strcat(buffer, "?");
@@ -3258,10 +3227,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 	    /* add on the mailto details */
 	    if (path)
-	    {
-		strcat(buffer, "to=");
 		strcat(buffer, path);
-	    }
 
 	    if (query)
 	    {
@@ -3447,12 +3413,7 @@ os_error *access_tidyup(void)
 
 os_error *access_abort(access_handle d)
 {
-    BOOL threaded;
-
-    if ( !d )
-        return NULL;
-
-    threaded = !alarm_anypending(d);
+    BOOL threaded = !alarm_anypending(d);
 
     ACCDBG(("Access_abort called\n"));
 
@@ -3485,21 +3446,6 @@ os_error *access_abort(access_handle d)
 
     return NULL;
 }
-
-void *access_get_headers(access_handle d)
-{
-    http_status_args si;
-
-    if (!d)
-	return NULL;
-    
-    si.in.handle = d->transport_handle;
-    if (os_swix(HTTP_Status, (os_regset *) &si) != NULL)
-	return NULL;
-
-    return si.out.headers;
-}
-
 
 /* wrappers for exporting cache functions */
 
@@ -3566,6 +3512,7 @@ void access_set_header_info(char *url, unsigned date, unsigned last_modified, un
 }
 #endif
 
+#ifdef STBWEB
 BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
 {
 #ifndef FILEONLY
@@ -3574,6 +3521,7 @@ BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, 
 #endif
     return FALSE;
 }
+#endif
 
 void access_optimise_cache(void)
 {

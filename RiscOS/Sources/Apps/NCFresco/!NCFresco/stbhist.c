@@ -8,7 +8,6 @@
 #include "msgs.h"
 #include "wimp.h"
 
-#include "config.h"
 #include "access.h"
 #include "interface.h"
 #include "makeerror.h"
@@ -22,58 +21,11 @@
 #include "stbutils.h"
 #include "stbopen.h"
 
-/* --------------------------------------------------------------------------------------------- */
+#define HISTORY_LEN	32
 
 #define N_RECENT_SITES  7
 
-#define MAX_SPECIFIER_SIZE	16
-
-/* --------------------------------------------------------------------------------------------- */
-
-typedef struct fe_global_history_item fe_global_history_item;
-typedef struct fe_global_history_fragment fe_global_history_fragment;
-typedef struct fe_history_frame_item fe_history_frame_item;
-
-struct fe_history_frame_item
-{
-    char specifier[MAX_SPECIFIER_SIZE];	/* which frame this is */
-    char *url;				/* url without fragment */
-    int url_hash;
-    int x_scroll, y_scroll;		/* offsets */
-};    
-
-struct fe_history_item
-{
-    fe_history_item *next, *prev;
-
-    int n_frames;   	    	    /* number of frames appended */
-    char *title;		    /* if top frame then this is it's title */
-
-    fe_history_frame_item frame[1];
-};
-
-/* --------------------------------------------------------------------------------------------- */
-
-struct fe_global_history_fragment
-{
-    fe_global_history_fragment *next;
-    char fragment[1];                   /* resize block to hold fragment */
-};
-
-struct fe_global_history_item
-{
-    fe_global_history_item *next;       /* next history item */
-    fe_global_history_fragment *frag_list;   /* linked list of fragments in this page visited */
-
-    char *url;
-    char *title;
-    unsigned int url_hash;            /* hash lookup of title string */
-};
-
-/* --------------------------------------------------------------------------------------------- */
-
 static fe_global_history_item *global_hist_list = NULL;
-static int global_count = 0;
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -106,8 +58,6 @@ static void fragment_parse(const char *url, char **url_out, char **fragment_out)
     }
 }
 
-/* --------------------------------------------------------------------------------------------- */
-
 static fe_global_history_fragment *check_frag_list(fe_global_history_fragment *list, const char *fragment)
 {
     fe_global_history_fragment *f;
@@ -137,8 +87,6 @@ static void fe_global_free_item(fe_global_history_item *i)
     mm_free(i->url);
     mm_free(i->title);
     mm_free(i);
-
-    global_count--;
 }
 
 /* ---------------------------------------------------------------------------------------------*/
@@ -162,7 +110,7 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
     {
         diff = strcmp(strsafe(item->title), strsafe(title));
 
-	STBDBG(("hist: compare %s %s diff=%d\n", strsafe(item->title), strsafe(title), diff));
+    STBDBG(("hist: compare %s %s diff=%d\n", strsafe(item->title), strsafe(title), diff));
 
         /* if the title and the URL are the same */
         if (diff == 0 && item->url_hash == h && strcmp(item->url, bare_url) == 0)
@@ -221,8 +169,6 @@ static void fe_global__add(const char *bare_url, const char *fragment, const cha
         f->next = new_item->frag_list;
         new_item->frag_list = f;
     }
-
-    global_count++;
 }
 
 static void fe_global_add(const char *url, const char *title)
@@ -239,18 +185,17 @@ static void fe_global_add(const char *url, const char *title)
 os_error *fe__global_write_list(FILE *f)
 {
     fe_global_history_item *item;
-    int i;
 
-    for (item = global_hist_list, i = 0; item; item = item->next, i++)
+    for (item = global_hist_list; item; item = item->next)
     {
 #if 0
         fe_global_history_fragment *fp;
-        STBDBG(("hist: write %p '%s'\n", item, item->url));
+        fprintf(stderr, "hist: write %p '%s'\n", item, item->url);
         for (fp = item->frag_list; fp; fp = fp->next)
-            STBDBG(("hist: frag '%s'\n", fp->fragment));
+            fprintf(stderr, "hist: frag '%s'\n", fp->fragment);
 #endif
 
-	fprintf(f, msgs_lookup("histAIa"), i);
+	fprintf(f, msgs_lookup("histAIa"));
 
 	url_escape_to_file(item->url, f);
 
@@ -264,11 +209,9 @@ os_error *fe__global_write_list(FILE *f)
 os_error *fe_global_write_list(FILE *f)
 {
     os_error *e;
-    char *s;
 
-    fprintf(f, msgs_lookup("histAT"), 0);
-    s = getenv(PROFILE_NAME_VAR);
-    fprintf(f, msgs_lookup("histA1"), strsafe(s));
+    fputs(msgs_lookup("histAT"), f);
+    fputs(msgs_lookup("histA1"), f);
 
     e = fe__global_write_list(f);
     
@@ -326,23 +269,15 @@ void fe_global_history_dispose(void)
 
 /* ---------------------------------------------------------------------------------------------*/
 
-static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
+static void fe_hist_write_item(FILE *f, const fe_history_item *item)
 {
-    const fe_history_frame_item *hfi;
+    fprintf(f, msgs_lookup("histRIa"));
 
-    /* only wirte out an item if there are no frames */
-    if (item->n_frames > 1)
-	return FALSE;
-    
-    fprintf(f, msgs_lookup("histRIa"), i);
-
-    hfi = &item->frame[0];
-
-    url_escape_to_file(hfi->url, f);
+    url_escape_to_file(item->url, f);
 
     if (item->title)
     {
-        char *frag = strrchr(hfi->url, '#');
+        char *frag = strrchr(item->url, '#');
         if (frag)
             fprintf(f, msgs_lookup("histRIb"), item->title, frag);
         else
@@ -350,52 +285,41 @@ static int fe_hist_write_item(FILE *f, const fe_history_item *item, int i)
     }
     else
     {
-        fprintf(f, msgs_lookup("histRIb"), hfi->url);
+        fprintf(f, msgs_lookup("histRIb"), item->url);
     }
 
     fputc('\n', f);
-
-    return TRUE;
 }
 
-os_error *fe_history_write_list(FILE *f, const fe_history_item *start, const fe_history_item *current)
+os_error *fe_history_write_list(FILE *f, void *handle)
 {
     const fe_history_item *item;
-    int i;
-    char *s;
+    const fe_history_item *current = (const fe_history_item *)handle;
 
-    /* count how far through the list we are */
-    for (i = 0, item = start; item && item != current; i++, item = item->prev)
-	;
-	
-    fprintf(f, msgs_lookup("histRT"), i);
-    s = getenv(PROFILE_NAME_VAR);
-    fprintf(f, msgs_lookup("histR1"), strsafe(s));
+    fputs(msgs_lookup("histRT"), f); 
+    fputs(msgs_lookup("histR1"), f);
 
-    /* onyl write out top level frame changes */
-    for (i = 0, item = start; item; i++, item = item->prev)
-	if (strcmp(item->frame[0].specifier, "_0") == 0)
-	    fe_hist_write_item(f, item, i);
+    for (item = current; item; item = item->next)
+        fe_hist_write_item(f, item);
 
     fputs(msgs_lookup("histRF"), f);
     fputc('\n', f);
     return NULL;
 }
 
-os_error *fe_history_write_combined_list(FILE *f, const fe_history_item *start, const fe_history_item *current)
+os_error *fe_history_write_combined_list(FILE *f, void *handle)
 {
     const fe_history_item *item;
+    const fe_history_item *current = (const fe_history_item *)handle;
     int i;
-    char *s;
+
+    fputs(msgs_lookup("histCT"), f);
+    fputs(msgs_lookup("histC1"), f);
 
     /* back track to place to start */
     /* ANC-00288: added check on item in case current == NULL */
     for (i = 0, item = current; i < N_RECENT_SITES/2 && item && item->next; i++, item = item->next)
         ;
-
-    fprintf(f, msgs_lookup("histCT"), i);
-    s = getenv(PROFILE_NAME_VAR);
-    fprintf(f, msgs_lookup("histC1"), strsafe(s));
 
     /* write current places */
     for (i = 0; i < N_RECENT_SITES && item; i++, item = item->prev)
@@ -403,13 +327,14 @@ os_error *fe_history_write_combined_list(FILE *f, const fe_history_item *start, 
         if (item == current && i != 0)
             fputs(msgs_lookup("histS1"), f);
 
-        fe_hist_write_item(f, item, i);
+        fe_hist_write_item(f, item);
 
         if (item == current && i != N_RECENT_SITES - 1)
             fputs(msgs_lookup("histS2"), f);
     }
 
-    fprintf(f, msgs_lookup("histC2"), strsafe(s));
+    fputs(msgs_lookup("histC2"), f);
+    fputc('\n', f);
 
     /* write global list */
     fe__global_write_list(f);
@@ -428,40 +353,35 @@ os_error *fe_history_show(fe_view v)
 
 /* history functions */
 
-static void fe_free_hist_item(fe_history_item *item)
+static void fe_free_hist_item(fe_history_item *i)
 {
-    if (item)
-    {
-	int i;
+    if (i == NULL)
+	return;
 
-	for (i = 0; i < item->n_frames; i++)
-	{
-/* 	    mm_free(item->frame[i].specifier); */
-	    mm_free(item->frame[i].url);
-	}
-
-	mm_free(item->title);
-	mm_free(item);
-    }
+    mm_free(i->url);
+    mm_free(i->title);
+    mm_free(i);
 }
 
 static void fe_history_truncate(fe_view v)
 {
     fe_history_item *chop, *c2;
 
-    STBDBGN(("Truncate: last=%p, at=%p at->next=%p\n", v->last, v->hist_at, v->hist_at->next));
+#if 0
+fprintf(stderr, "Truncate: last=%p, at=%p(%d) at->next=%p\n",
+	v->last, v->hist_at, v->hist_at->seq_no, v->hist_at->next);
+#endif
 
     if (v->hist_at == v->last)
 	return;
 
-    for (chop = v->hist_at->next; chop; chop = c2)
+    for(chop = v->hist_at->next; chop; chop = c2)
     {
 	c2 = chop->next;
-
-	STBDBGN(("Chop=%p, c2=%p\n", chop, c2));
-
+#if 0
+	fprintf(stderr, "Chop=%p(%d), c2=%p\n", chop, chop->seq_no, c2);
+#endif
 	fe_free_hist_item(chop);
-	v->hist_count--;
     }
 
     v->last = v->hist_at;
@@ -469,20 +389,19 @@ static void fe_history_truncate(fe_view v)
 }
 
 /*
- * This url may have a fragment in it.
- * This doesn't take account of the extra frames in the block.
+ * This url may have a fragment in it
  */
 
 static fe_history_item *find_entry(const char *url, fe_history_item *start, int direction)
 {
     fe_history_item *item;
-    int h = string_hash(url);
+    int h = string_hash((char *)url);
 
     item = start;
     while (item)
     {
-        if (h == item->frame[0].url_hash &&
-            strcmp(url, item->frame[0].url) == 0)
+        if (h == item->url_hash &&
+            strcmp(url, item->url) == 0)
             return item;
 
         item = direction == history_PREV ? item->prev : item->next;
@@ -490,7 +409,7 @@ static fe_history_item *find_entry(const char *url, fe_history_item *start, int 
     return NULL;
 }
 
-static fe_history_item *fe_history_add(fe_view v, const char *url, const char *title, const char *specifier)
+static fe_history_item *fe_history_add(fe_view v, const char *url, const char *title)
 {
     fe_history_item *h;
 
@@ -498,42 +417,45 @@ static fe_history_item *fe_history_add(fe_view v, const char *url, const char *t
     /* This should be trimmed in local history but still kept in global history */
     fe_history_truncate(v);
 
-    if ((h = mm_calloc(1, sizeof(*h))) == NULL)
+    h = mm_calloc(1, sizeof(*h));
+
+    if (h == 0)
 	return NULL;
 
-    h->frame[0].url = strdup(url);
-    h->frame[0].url_hash = string_hash(url);
-    strcpy(h->frame[0].specifier, specifier);
-
-    h->n_frames = 1;
+    h->url = strdup(url);
     h->title = strdup(title);
+    h->url_hash = string_hash((char *)url);
 
-    v->hist_count++;
-    
-    STBDBG(("history: %p add '%s' spec '%s' total %d\n", h, url, specifier, v->hist_count));
+/*    h->scroll_pos = fe_get_cvt(v->w).scy;*/
+
+    STBDBG(("history: %p add '%s'\n", h, url));
 
     if (v->first)
     {
-	STBDBGN(("h=%p, first=%p, last=%p\n", h, v->first, v->last));
-
+#if 0
+	fprintf(stderr, "h=%p, first=%p, last=%p\n", h, v->first, v->last);
+#endif
 	v->last->next = h;
 	h->prev = v->last;
+	h->seq_no = v->last->seq_no + 1;
 	v->last = h;
-
-	if (v->hist_count > config_history_length)
+#if 0
+	fprintf(stderr, "Last#=%d, first#=%d\n", v->last->seq_no, v->first->seq_no);
+#endif
+	if ( (v->last->seq_no - v->first->seq_no) > HISTORY_LEN )
 	{
 	    fe_history_item *chop;
 
 	    chop = v->first;
-
-	    STBDBGN(("Chop=%p\n", chop));
-
+#if 0
+	    fprintf(stderr, "Chop=%p\n", chop);
+#endif
 	    v->first = v->first->next;
 	    v->first->prev = NULL;
 
 	    fe_free_hist_item(chop);
-	    v->hist_count--;
 	}
+
     }
     else
     {
@@ -545,7 +467,7 @@ static fe_history_item *fe_history_add(fe_view v, const char *url, const char *t
 
 /* ---------------------------------------------------------------------------------------------*/
 
-static fe_history_item *fe_history_get_item(fe_view v, int a)
+char *fe_history_get_url(fe_view v, int a)
 {
     fe_history_item *dest;
 
@@ -576,17 +498,10 @@ static fe_history_item *fe_history_get_item(fe_view v, int a)
 	}
     }
 
-    return dest;
-}
-
-static char *fe_history_get_url(fe_view v, int a)
-{
-    fe_history_item *dest = fe_history_get_item(v, a);
-
     if (dest == NULL)
 	return NULL;
 
-    return dest->frame[0].url;
+    return dest->url;
 }
 
 int fe_history_possible(fe_view v, int direction)
@@ -595,57 +510,27 @@ int fe_history_possible(fe_view v, int direction)
 }
 
 /*
- * This should use hist_at if it is different to the current page
- * we assume v is top here
+ * This should use hist_at if it is differnet to the current page
+
  */
 
 os_error *fe_history_move(fe_view v, int direction)
 {
-    fe_history_item *dest = fe_history_get_item(v, direction);
-    fe_view vv;
-    int index;
+    char *url = fe_history_get_url(v, direction);
 
-    if (!dest)
-	return makeerror(ERR_NO_HISTORY);
-    
-    switch (direction)
+    if (url) switch (direction)
     {
     case history_FIRST:
     case history_PREV:
 	sound_event(snd_HISTORY_BACK);
 	break;
-
     case history_NEXT:
     case history_LAST:
 	sound_event(snd_HISTORY_FORWARD);
 	break;
     }
 
-    index = 0;
-#if 1
-    do
-    {
-	vv = fe_frame_specifier_decode(v, dest->frame[index].specifier);
-	if (!vv)
-	    dest = dest->prev;
-    }
-    while (!vv && dest);
-#else    
-    vv = fe_frame_specifier_decode(v, dest->frame[index].specifier);
-#endif
-    if (vv)
-    {
-	/* set scroll offsets in target frame */
-	vv->fetching_data.xscroll = dest->frame[index].x_scroll;
-	vv->fetching_data.yscroll = dest->frame[index].y_scroll;
-
-	/* set new hist in top frame */
-	v->fetching_data.hist = dest;
-    
-	/* open the new url */
-	return frontend_open_url(dest->frame[index].url, vv, NULL, 0, fe_open_url_FROM_HISTORY | fe_open_url_NO_REFERER);
-    }
-    return makeerror(ERR_NO_HISTORY);
+    return url == NULL ? makeerror(ERR_NO_HISTORY) : frontend_open_url(url, v, NULL, 0, fe_open_url_FROM_HISTORY);
 }
 
 void fe_history_dispose(fe_view v)
@@ -653,14 +538,12 @@ void fe_history_dispose(fe_view v)
     if (v->first)
     {
 	v->hist_at = v->first;
-
 	fe_history_truncate(v);
 	fe_free_hist_item(v->first);
-
 	v->first = v->hist_at = v->last = 0;
-	v->hist_count = 0;
     }
 }
+
 
 /*
  * This is called whenever any page is visited.
@@ -672,213 +555,59 @@ void fe_history_dispose(fe_view v)
 
 int fe_history_visit(fe_view v, const char *url, const char *title)
 {
-    fe_history_item *item;
-    fe_view top;
-    char specifier[MAX_SPECIFIER_SIZE];
+    fe_history_item *item = v->hist_at;
 
     STBDBG(("history: visit '%s'\n", url));
 
     if (v->dont_add_to_history)
         return 0;
 
-    top = fe_find_top(v);
-    item = top->hist_at;
-    
-#if 0
     if (item)
     {
 	STBDBG(("history: prev '%s' current '%s' next '%s'\n", 
-		item->prev ? strsafe(item->prev->frame[0].url) : "", 
-		strsafe(item->frame[0].url), 
-		item->next ? strsafe(item->next->frame[0].url) : ""));
+		item->prev ? strsafe(item->prev->url) : "", 
+		strsafe(item->url), 
+		item->next ? strsafe(item->next->url) : ""));
 
         /* If the url is of the current page, ignore it */
-        if (item->frame[0].url && strcmp(url, item->frame[0].url) == 0)
+        if (item->url && strcmp(url, item->url) == 0)
 	    return 0;
 
         /* If the user went back and then follow the same link, move forward */
-        if (item->next && item->next->frame[0].url && strcmp(item->next->frame[0].url, url) == 0)
+        if (item->next && item->next->url && strcmp(item->next->url, url) == 0)
         {
 	    v->hist_at = item->next;
-	    return 0;
+	    return item->next->scroll_pos;
         }
 
         /* If the user is going back, move back */
-        if (item->prev && item->prev->frame[0].url && strcmp(item->prev->frame[0].url, url) == 0)
+        if (item->prev && item->prev->url && strcmp(item->prev->url, url) == 0)
         {
 	    v->hist_at = item->prev;
-	    return 0;
+	    return item->prev->scroll_pos;
         }
     }
-#endif
-    
-    /* otherwise add it to the history */
-    specifier[0] = 0;
-    fe_frame_specifier_create(v, specifier, sizeof(specifier));
 
-    /* don't bother with title if not the top frame */
-    item = fe_history_add(top, url, v == top ? title : NULL, specifier);
+/* if it is in the history somewhere then set history to that page
+    item = find_entry(url, v->last, history_PREV);
     if (item)
-        top->hist_at = item;
+    {
+    STBDBG(("history: %p found '%s' scroll %d\n", item, url, item->scroll_pos));
+        v->hist_at = item;
+        return item->scroll_pos;
+    }
+ */
+
+    /* otherwise add it to the history */
+    item = fe_history_add(v, url, title);
+    if (item)
+        v->hist_at = item;
 
     /* and to the global history if not a frame element */
-    if (v == top)
+    if (v->parent == NULL)
         fe_global_add(url, title);
 
     return 0;
-}
-
-static int locate_item(fe_history_item *hist, const char *specifier)
-{
-    fe_history_frame_item *hfi;
-    int i;
-
-    STBDBG(("locate_item: hist %p n %d\n", hist, hist->n_frames));
-
-    for (i = 0, hfi = hist->frame; i < hist->n_frames; i++, hfi++)
-    {
-	STBDBG(("locate_item: i %d hfi %p spec '%s' '%s'\n", i, hfi, specifier, hfi->specifier));
-	if (strcmp(specifier, hfi->specifier) == 0)
-	    return i;
-    }
-    return -1;
-}
-
-#if 1
-static int count_sections(const char *s)
-{
-    int c, count = 0;
-    while ((c = *s++) != 0)
-	if (c == '_')
-	    count++;
-    return count;
-}
-
-static int compare_specifiers(const void *o1, const void *o2)
-{
-    const fe_history_frame_item *f1 = (fe_history_frame_item *)o1;
-    const fe_history_frame_item *f2 = (fe_history_frame_item *)o2;
-    const char *s1 = f1->specifier;
-    const char *s2 = f2->specifier;
-    int s1count = count_sections(s1);
-    int s2count = count_sections(s2);
-
-    /* if different lengths then the shorter is -ve */
-    if (s1count != s2count)
-	return s1count - s2count;
-
-    for (;;)
-    {
-	int c1, c2;
-
-	c1 = (int)strtoul(s1+1, (char **)&s1, 0);
-	c2 = (int)strtoul(s2+1, (char **)&s2, 0);
-
-	if (c1 != c2)
-	    return c1 - c2;
-	if (*s1 == 0 || *s2 == 0)
-	    return 0;
-    }
-
-    return 0;
-}
-
-#if DEBUG
-static void dump_frames(const fe_history_item *hist)
-{
-    int i;
-    STBDBG(("history: frame list for %p\n", hist));
-    for (i = 0; i < hist->n_frames; i++)
-    {
-	STBDBG(("  %d: '%s' = '%s'\n", i, hist->frame[i].specifier, hist->frame[i].url));
-    }
-}
-#endif
-#endif
-    
-/* Store the current state of the view in 'hist_at' */
-
-void fe_history_update_current_state(fe_view v)
-{
-    fe_view top;
-    fe_history_item *hist;
-    fe_history_frame_item *hfi;
-    wimp_wstate state;
-    int index;
-    char specifier[MAX_SPECIFIER_SIZE];
-
-    if (v->dont_add_to_history || v->open_transient)
-	return;
-    
-    /* must store state for all documents even framesets */
-/*     if (!v->w) */
-/* 	return; */
-
-    top = fe_find_top(v);
-    hist = top->hist_at;
-    
-    if (!hist)
-	return;
-
-    /* see if we have values for this frame */
-    specifier[0] = 0;
-    fe_frame_specifier_create(v, specifier, sizeof(specifier));
-    if ((index = locate_item(hist, specifier)) == -1)
-    {
-	/* if not then need to extend block */
-	char *url;
-
-	STBDBG(("history: %p add new frame for '%s'\n", hist, specifier));
-
-	/* resize block - *newh includes 1 frame */
-	hist = mm_realloc(hist, sizeof(*hist) + hist->n_frames * sizeof(hist->frame[0]));
-
-	/* update various forward and back pointers */
-	if (hist->prev)
-	    hist->prev->next = hist;
-	else
-	    top->first = hist;
-
-	if (hist->next)
-	    hist->next->prev = hist;
-	else
-	    top->last = hist;
-
-	top->hist_at = hist;
-	
-	/* set new index and increment count */
-	index = hist->n_frames++;
-
-	hfi = &hist->frame[index];
-
-	/* write in initial type values */
-	backend_doc_info(v->displaying, NULL, NULL, &url, NULL);
-	hfi->url = strdup(url);
-	memcpy(hfi->specifier, specifier, sizeof(specifier));
-
-#if 1
-	qsort(hist->frame, hist->n_frames, sizeof(hist->frame[0]), compare_specifiers);
-#if DEBUG
-	dump_frames(hist);
-#endif
-#endif
-    }
-    else
-    {
-	hfi = &hist->frame[index];
-	STBDBG(("history: %p frame found at %d\n", hist, index));
-    }
-    
-    /* write updated values in */
-    if (v->w)
-    {
-	wimp_get_wind_state(v->w, &state);
-
-	hfi->x_scroll = state.o.x + v->margin.x0;
-	hfi->y_scroll = state.o.y + v->margin.y1;
-    }
-    
-    STBDBG(("history: %p '%s' write scroll pos %d\n", hist, hfi->url, state.o.y));
 }
 
 /* ---------------------------------------------------------------------------------------------*/
@@ -893,5 +622,47 @@ int fe_test_history(fe_view v, const char *url)
 }
 
 /* ---------------------------------------------------------------------------------------------*/
+
+#if 0
+static int cache_enumerate(int *context, char **purl, char **ptitle)
+{
+    BOOL found_file = FALSE;
+
+    do
+    {
+        int dir, i;
+        cache_dir *dp;
+        cache_item *ip;
+
+        dir = *context / N_FILES_PER_DIR;
+        i   = *context % N_FILES_PER_DIR;
+
+        dp = &cache_dirs[dir];
+        if (dp->items == NULL)
+        {
+            *context = -1;
+            return 0;
+        }
+
+        ip = &dp->items[i];
+        if (ip->file_num != NO_FILE)
+        {
+            if (purl)
+                *purl = ip->url;
+            if (ptitle)
+                *purl = ip->title;
+
+            found_file = TRUE;
+        }
+
+        (*context)++;
+    }
+    while (!found_file);
+
+    return 1;
+}
+#endif
+
+/* ----------------------------------------------------------------------------------------------- */
 
 /* eof stbhist.c*/

@@ -45,11 +45,6 @@
 #endif
 #endif
 
-#define SELECT_BORDER_X		4 /* border size in OS units on each side */
-#define SELECT_BORDER_Y		4
-
-#define GRIGHT_SIZE		48
-
 #ifndef BUILDERS
 static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 {
@@ -225,18 +220,18 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	}
     }
 
-    ti->width = width + 8 + 2*SELECT_BORDER_X;
+    ti->width = width + 16;
     
     /* add on width for the the POPUP icon */
     if ((sel->flags & rid_if_NOPOPUP) == 0)
-	ti->width += GRIGHT_SIZE;
+	ti->width += 48;
 
 #ifndef SELECT_CURRENT_FONT
     ti->max_up = webfonts[WEBFONT_TTY].max_up + 6;
     ti->max_down = webfonts[WEBFONT_TTY].max_down + 8;
 #else
-    ti->max_up = wf->max_up + 2*SELECT_BORDER_Y - 2;
-    ti->max_down = wf->max_down + 2*SELECT_BORDER_Y;
+    ti->max_up = wf->max_up + 6;
+    ti->max_down = wf->max_down + 8;
 #endif
 #endif /* BUILDERS */
 }
@@ -249,51 +244,28 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     int checked = 0;
     char *str = NULL;
     font_string fstr;
+    BOOL draw_selection_box = (ti->flag & rid_flag_SELECTED);
     int fg, bg;
-    BOOL selected = backend_is_selected(doc, ti);
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    if (update == object_redraw_HIGHLIGHT)
+    if (draw_selection_box && sel->base.colours.select != -1)
     {
-	if (oselect_update_highlight(ti, doc, 0, NULL))
-	    highlight_render_outline(ti, doc, hpos, bline);
-	return;
-    }
-    
-    if (selected)
-    {
-	if (sel->base.colours.select != -1)
-	    bg = sel->base.colours.select | render_colour_RGB;
-	else
-	    bg = render_colour_INPUT_S;
+	draw_selection_box = FALSE;
+	bg = sel->base.colours.select | render_colour_RGB;
     }
     else
     {
 	bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back | render_colour_RGB;
     }
 
-    fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
+    fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
 
-    
-#ifdef STBWEB
-    render_plinth_full(bg,
-		       selected ? plinth_col_HL_M : plinth_col_M, 
-		       selected ? plinth_col_HL_L : plinth_col_L, 
-		       selected ? plinth_col_HL_D : plinth_col_D,
-		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
-		       hpos + SELECT_BORDER_X, bline - ti->max_down + SELECT_BORDER_Y,
-		       ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_BORDER_X*2,
-		       (ti->max_up + ti->max_down) - SELECT_BORDER_Y*2,
-		       doc );
-#else
     render_plinth(bg, render_plinth_IN,
-		  hpos + SELECT_BORDER_X, bline - ti->max_down + SELECT_BORDER_Y,
-		  ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - SELECT_BORDER_X*2,
-		  (ti->max_up + ti->max_down) - SELECT_BORDER_Y*2,
-		  doc );
-#endif
+		  hpos, bline - ti->max_down,
+		  ti->width - (sel->flags & rid_if_NOPOPUP ? 4 : 52),
+		  (ti->max_up + ti->max_down), doc );
 
     for(oi = sel->options; oi; oi = oi->next)
     {
@@ -323,11 +295,10 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     }
 #endif
 
-    if (fs->lfc != fg || fs->lbc != bg)
+    if (fs->lfc != fg)
     {
 	fs->lfc = fg;
-	fs->lbc = bg;
-	render_set_font_colours(fg, bg, doc);
+	render_set_font_colours(fs->lfc, bg, doc);
     }
 
     fstr.s = str;
@@ -336,13 +307,17 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     font_strwidth(&fstr);
 
-    font_paint(str, font_OSCOORDS,
-	       hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - 20 - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1) + 10,
-	       bline);
+    font_paint(str, font_OSCOORDS, hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 20 : 68) - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1) + 10, bline);
 
     if ((sel->flags & rid_if_NOPOPUP) == 0)
-	render_plot_icon("gright", hpos + ti->width - GRIGHT_SIZE, bline + ((ti->max_up - ti->max_down) >> 1) - 22);
+	render_plot_icon("gright", hpos + ti->width - 48, bline + ((ti->max_up - ti->max_down) >> 1) - 22);
 
+    /* SJM */
+    if (draw_selection_box)
+    {
+	render_set_colour(render_colour_HIGHLIGHT, doc);
+	render_item_outline(ti, hpos, bline);
+    }
 #endif /* BUILDERS */
 }
 
@@ -405,7 +380,7 @@ char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
             sel->menuh = frontend_menu_create( doc->parent,
                                                select_menu_callback, ti,
                                                sel->count, sel->items,
-                                               sel->size, ti->width-GRIGHT_SIZE-16 );
+                                               sel->size, ti->width-48-16 );
         }
 
 	frontend_menu_raise(((rid_text_item_select *)ti)->select->menuh, box.x1, box.y1);
@@ -417,20 +392,6 @@ char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 void oselect_astext(rid_text_item *ti, rid_header *rh, FILE *f)
 {
     fputs("[Selection menu]", f);
-}
-
-int oselect_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
-{
-    rid_select_item *sel = ((rid_text_item_select *) ti)->select;
-    BOOL draw_box;
-
-    if (box)
-	memset(box, 0, sizeof(*box));
-
-    draw_box = sel->base.colours.select == -1 &&
-	config_colours[render_colour_INPUT_S].word == config_colours[render_colour_INPUT_B].word;
-
-    return draw_box;
 }
 
 /* eof oselect.c */

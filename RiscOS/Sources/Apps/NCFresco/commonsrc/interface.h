@@ -13,10 +13,6 @@
 #include "wimp.h"
 #endif
 
-#ifndef __stdio_h
-# include <stdio.h>
-#endif
-
 /* Describe the interface between the front and back of Fresco */
 
 /***************************************************************************/
@@ -223,12 +219,6 @@ void frontend_menu_update_item(fe_menu mh, int i);
 #define fe_scrolling_YES    1
 #define fe_scrolling_NO     2
 
-#define fe_divider_LEFT		0 /* must match with values in rid.h */
-#define fe_divider_TOP		1
-#define fe_divider_RIGHT	2
-#define fe_divider_BOTTOM	3
-#define fe_divider_BORDERLESS	0x00010000
-
 typedef struct
 {
     char *name;         /* this pointer can be copied */
@@ -240,8 +230,7 @@ typedef struct
     int dividers[4];
 } fe_frame_info;
 
-void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refresh_only, int dividers_max);
-extern int frontend_view_get_dividers(fe_view v, int *dividers);
+void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refresh_only);
 
 int frontend_test_history(char *url);
 
@@ -295,7 +284,6 @@ os_error *backend_open_url(fe_view v, be_doc *docp,
 #define be_openurl_flag_BODY_COLOURS	(1 << 3)
 #define be_openurl_flag_HISTORY		(1 << 4) /* url was pulled from history list */
 #define be_openurl_flag_SOLID_HIGHLIGHT	(1 << 5)
-#define be_openurl_flag_FAST_LOAD	(1 << 6)
 
 /* Jump the document to the fragment given */
 extern os_error *backend_goto_fragment(be_doc doc, char *frag);
@@ -324,11 +312,6 @@ os_error *backend_doc_click(be_doc doc, int x, int y, wimp_bbits bb);
 /* Inform the backend that a key has been pressed.  The backend will
  * update the 'used' value if to indicate the truth of whether the key
  * press was used */
-
-#define be_doc_key_NOT_USED	0
-#define be_doc_key_USED		1
-#define be_doc_key_SUBMIT	2 /* key was used and submitted a form */
-
 os_error *backend_doc_key(be_doc doc, int key, int *used);
 
 /* Inform the backend that the user wants to move the caret. */
@@ -438,12 +421,6 @@ extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_bo
 #define be_link_CARETISE	(1 << 11)	/* if a writeabnle ends up with the highlight then caretise it */
 #define be_link_MOVE_POINTER	(1 << 12)	/* move the pointer with the highlight */
 
-extern void backend_remove_highlight(be_doc doc);
-extern be_item backend_read_highlight(be_doc doc, BOOL *had_caret);
-extern void backend_set_caret(be_doc doc, be_item ti, int offset);
-extern void backend_set_highlight(be_doc doc, be_item item);
-extern int backend_is_selected(be_doc doc, be_item ti);
-
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);
 
@@ -453,12 +430,9 @@ extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);
  * returns old position of caret
  */
 
-#if 0
 #define backend_place_caret_READ	((be_item)-1)
 
 extern be_item backend_place_caret(be_doc doc, be_item item);
-extern be_item backend_read_highlight(be_doc doc);
-#endif
 
 /* Get a name for a file in the cache */
 
@@ -478,12 +452,13 @@ extern void backend_temp_file_register(char *url, char *file_name);
 
 extern const char *backend_check_meta(be_doc doc, const char *name);
 
-#if 0
 /* Clear selection from all items */
 extern void backend_clear_selected(be_doc doc);
 
+#if 0
 /* Select an item, whatever its type */
 extern void backend_select_item(be_doc doc, be_item ti, int select);
+#endif
 
 /* return the first item with SELETED bit set */
 extern be_item backend_find_selected(be_doc doc);
@@ -492,7 +467,6 @@ extern be_item backend_find_selected(be_doc doc);
  * It returns item or if item is a link then the first item in that anchor sequence
  */
 extern be_item backend_update_link(be_doc doc, be_item item, int selected);
-#endif
 
 /* this takes 0 or 1 to change the ACTIVATED flag status */
 extern void backend_update_link_activate(be_doc doc, be_item item, int activated);
@@ -508,10 +482,7 @@ extern void backend_frame_resize(be_doc doc, int x, int y, int handle);
 extern void backend_set_margin(be_doc doc, wimp_box *margin);
 #endif
 
-#if 0
 extern void backend_image_expire(be_doc doc, void *imh);
-#endif
-
 extern void backend_doc_reformat(be_doc doc);
 extern void backend_doc_set_scaling(be_doc doc, int scale_value);
 
@@ -541,13 +512,6 @@ extern be_item backend_locate_id(be_doc doc, const char *id);
 #define be_encoding_EUC		9
 
 extern int backend_doc_encoding(be_doc doc, int encoding);
-
-/* Functions in layout.c */
-/* Write out frame layout as a table, return the number of frames */
-
-typedef void (*be_layout_write_table_fn)(FILE *f, const char *frame_specifier, int w, int h);
-
-extern void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix, int w, int h);
 
 #endif /* __interface_h */
 

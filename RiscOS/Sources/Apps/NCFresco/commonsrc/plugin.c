@@ -132,8 +132,7 @@ static void plugin_stream_dispose(plugin_stream_private *psp);
 /* ----------------------------------------------------------------------------- */
 
 static plugin_string_rma_ptr *rma_ptr_list = NULL;
-static plugin helper_list = NULL; /* all helpers */
-static plugin plugin_list = NULL; /* all plugins */
+static plugin helper_list = NULL;
 
 /* ----------------------------------------------------------------------------- */
 
@@ -209,35 +208,6 @@ static void *get_fsptr(int fh)
     void *ptr;
     _swix(OS_FSControl, _IN(0)|_IN(1)|_OUT(1), 21, fh, &ptr);
     return ptr;
-}
-
-/* ----------------------------------------------------------------------------- */
-
-static void link(plugin *root, plugin pp)
-{
-    pp->next = *root;
-    *root = pp;
-}
-
-static void unlink(plugin *root, plugin pp)
-{
-    /* unlink from list */
-    if (pp == *root)
-	*root = pp->next;
-    else
-    {
-	plugin prev = *root;
-	while (prev)
-	{
-	    if (prev->next == pp)
-	    {
-		prev->next = pp->next;
-		break;
-	    }
-	    
-	    prev = prev->next;
-	}
-    }
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -1052,7 +1022,7 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
 
     OBJDBG(("plugin: new pp %p from obj %p doc %p\n", pp, obj, doc));
 
-    pp->parameter_file = strdup(rs_tmpnam(NULL));
+    pp->parameter_file = strdup(tmpnam(NULL));
 
     f = fopen(pp->parameter_file, "wb");
     if (!f)
@@ -1078,8 +1048,6 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
     pp->parent_item = ti;
     pp->doc = doc;
 
-    link(&plugin_list, pp);
-    
     return pp;
 }
 
@@ -1107,10 +1075,22 @@ void plugin_destroy(plugin pp)
 	mm_free(pp->helper.cfile);
 
 	/* unlink from list */
-	if (pp->priv_flags & plugin_priv_HELPER)
-	    unlink(&helper_list, pp);
+	if (pp == helper_list)
+	    helper_list = pp->next;
 	else
-	    unlink(&plugin_list, pp);
+	{
+	    plugin prev = helper_list;
+	    while (prev)
+	    {
+		if (prev->next == pp)
+		{
+		    prev->next = pp->next;
+		    break;
+		}
+		
+		prev = prev->next;
+	    }
+	}
 	
 	/* remove the message handler for helpers */
 	if (helper_list == NULL)
@@ -1154,7 +1134,8 @@ plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *pa
 	    frontend_message_add_handler(plugin_message_handler, NULL);
 
 	/* add to helper list */
-	link(&helper_list, pp);
+	pp->next = helper_list;
+	helper_list = pp;
 
 	pp->helper.parent = parent;
 	pp->helper.cfile = strdup(cfile);
@@ -1227,7 +1208,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
     msg = &e->data.msg;
 
-    /* Check that we have legal object pointer for this document or helper list */
+	/* Check that we have legal object pointer for this document or helper list */
     if ((pp = locate_object(doc, ((message_plugin_base *)&msg->data)->instance.parent)) == NULL)
 	return FALSE;
 
@@ -1271,9 +1252,9 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    /* if it wasn't asked to be a helper but it is  */
 		    if ((opening->flags & plugin_opening_HELPER) && (pp->priv_flags & plugin_priv_HELPER) == 0)
 		    {
-			/* then swap list */
-			unlink(&plugin_list, pp);
-			link(&helper_list, pp);
+			/* then add to helper list */
+			pp->next = helper_list;
+			helper_list = pp;
 
 			/* remove from the page */
 			if (pp->parent_item)
@@ -1534,7 +1515,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 		OBJDBG(("plugin: msg focus %p state %d\n", pp, pp->state));
 
-		backend_set_highlight(pp->doc, pp->parent_item);
+		backend_place_caret(pp->doc, NULL);
+		backend_update_link(pp->doc, pp->parent_item, 1);
 	    }	    
 	    break;
 
@@ -1586,22 +1568,9 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		/* Plugin open message has bounced, run task and try again */
 		if (pp->state == plugin_state_SENT_OPEN)
 		{
-		    plugin ppp;
+		    frontend_plugin_start_task(open->file_type);
 
-		    /* check and see if an application is in the process of being run for this file type already */
-		    for (ppp = plugin_list; ppp; ppp = ppp->next)
-			if (open->file_type == (ppp->objd.classid_ftype != -1 ? ppp->objd.classid_ftype : ppp->objd.data_ftype) &&
-			    ppp->state == plugin_state_SENT_OPEN_2)
-			{
-			    OBJDBG(("plugin: plugin %p already started task for %03x\n", ppp, open->file_type));
-			    break;
-			}
-			
-		    if (!ppp)
-		    {
-			frontend_plugin_start_task(open->file_type);
-			OBJDBG(("plugin: msg open run filetype %03x\n", open->file_type));
-		    }
+		    OBJDBG(("plugin: msg open run filetype %03x\n", open->file_type));
 
 		    plugin_send_open(pp, (wimp_box *)&pp->box, open->flags);
 		    pp->state = plugin_state_SENT_OPEN_2;

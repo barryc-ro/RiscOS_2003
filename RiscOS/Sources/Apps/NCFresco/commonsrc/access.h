@@ -24,7 +24,6 @@ typedef int access_url_flags;
 #define access_PRIORITY         0x10    /* jump the HTTP keep-alive queue? */
 #define access_IMAGE            0x20    /* http fetch prefix first? */
 #define access_NO_STREAM        0x40    /* don't need data streamed - just file */
-#define access_MAX_PRIORITY     0x80    /* load whole image if possible */
 #define access_INTERNAL_FLAGS	0x0ffff
 /* Flags used internally but not used in the initial call */
 #define access_SECURE		0x10000	/* The access will be started on a secure socket */
@@ -109,12 +108,6 @@ extern void access_optimise_cache( void );
 extern void access_abort_all_items(void);
 extern BOOL access_is_scheme_supported(const char *scheme);
 extern void access_set_streaming(access_handle d, int stream);
-
-/*
- * Calls HTTP_Status to read the headers for the current connection
- * Actually returns http_header_item *
- */
-extern void *access_get_headers(access_handle d);
 
 #ifdef ACCESS_INTERNAL
 

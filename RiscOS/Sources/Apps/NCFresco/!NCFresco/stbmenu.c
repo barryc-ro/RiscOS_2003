@@ -35,12 +35,6 @@
 
 #define MENU_FONT   WEBFONT_BASE
 
-#define col_HIGHLIGHT	render_colour_HIGHLIGHT	/* the highlight box colour */
-#define col_FG		render_colour_PLAIN
-#define col_FG_HL	render_colour_INPUT_B
-#define col_BG		render_colour_INPUT_B
-#define col_BG_HL	render_colour_PLAIN
-
 /* ------------------------------------------------------------------------------------------- */
 
 static fe_menu current_menu = 0;
@@ -123,18 +117,9 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 
 	for( ; i < mh->n && h >= bot; h -= line_space, i++)
 	{
-	    int junk, nfc, opcol;
-
-	    if (mh->items[i].flags & fe_menu_flag_CHECKED)
-	    {
-		nfc = col_FG_HL;
-		opcol = col_BG_HL;
-	    }
-	    else
-	    {
-		nfc = col_FG;
-		opcol = col_BG;
-	    }
+	    int junk;
+	    int nfc = (mh->items[i].flags & fe_menu_flag_CHECKED) ? render_colour_WRITE : render_colour_INPUT_F;
+	    int opcol = (nfc == render_colour_WRITE) ? render_colour_INPUT_F : render_colour_WRITE;
 
 	    if (lfc != nfc)
 	    {
@@ -151,9 +136,9 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 		colourtran_setfontcolours(&fh, &bb, &ff, &maxcols);
 	    }
 
-	    colourtran_setGCOL(config_colours[col_BG], 0, 0, &junk);
+	    colourtran_setGCOL(config_colours[render_colour_WRITE], 0, 0, &junk);
 	    bbc_rectanglefill(ox - X_BORDER, h + oy - line_space, X_BORDER, line_space-1);
-	    bbc_rectanglefill(ox - X_BORDER*2 + width, h + oy - line_space, X_BORDER, line_space-1);
+	    bbc_rectanglefill(ox - width, h + oy - line_space, X_BORDER, line_space-1);
 
 	    colourtran_setGCOL(config_colours[opcol], 0, 0, &junk);
 	    bbc_rectanglefill(ox, h + oy - line_space, width, line_space-1);
@@ -162,8 +147,7 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 
             if (i == mh->highlight && pointer_mode == pointermode_OFF)
             {
-                colourtran_setGCOL(config_colours[col_HIGHLIGHT], 0, 0, &junk);
-
+                colourtran_setGCOL(config_colours[render_colour_HIGHLIGHT], 0, 0, &junk);
                 bbc_rectangle(ox-2, h + oy - line_space, width+4-1, line_space-1);
                 bbc_rectangle(ox, h + oy - line_space+2, width-1, line_space-4-1);
             }
@@ -236,7 +220,7 @@ static os_error *fe_menu_window(fe_menu mh)
 
         win.behind = -1;
         win.flags = wimp_WNEW;
-        win.colours[wimp_WCWKAREABACK] = 3;
+        win.colours[wimp_WCWKAREABACK] = 0;
         win.colours[wimp_WCWKAREAFORE] = 7;
         win.colours[wimp_WCTITLEFORE] = 7;
 
@@ -274,9 +258,6 @@ static os_error *fe_menu_window(fe_menu mh)
 
         win.workflags = (wimp_iconflags)(wimp_IBTYPE*wimp_BCLICKDEBOUNCE);
 
-	if (!config_display_frames_scrollbars)
-	    win.flags &= ~wimp_WVSCR;
-	
 	/* Create the window, dealing with errors */
 	ep = frontend_complain(wimp_create_wind(&win, &(mh->wh)));
 	if (ep)

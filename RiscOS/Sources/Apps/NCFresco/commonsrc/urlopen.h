@@ -54,16 +54,6 @@ typedef struct
 
 #define ncfresco_reason_LOAD_DATA	0
 #define ncfresco_reason_DIE		1
-/* 2 is reserved */
-#define ncfresco_reason_READ_CONFIG	3
-
-/* LOAD_DATA flags */
-#define ncfresco_loaddata_NOT_ALL	0x00000001
-#define ncfresco_loaddata_CONFIG	0x00000002
-#define ncfresco_loaddata_COOKIES	0x00000004
-#define ncfresco_loaddata_PASSWORDS	0x00000008
-#define ncfresco_loaddata_HOTLIST	0x00000010
-#define ncfresco_loaddata_PLUGINS	0x00000020
-#define ncfresco_loaddata_ALLOW		0x00000040
+#define ncfresco_reason_READ_CONFIG	2
 
 #endif /* __urlopen_h */

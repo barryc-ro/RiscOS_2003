@@ -90,7 +90,6 @@ config_item citems[] = {
 { config_INT,	"display.scale.1",	(void *)offsetof(struct config_str, display_scales[0]),	"Scale level 1", (void *)  80 },
 { config_INT,	"display.scale.2",	(void *)offsetof(struct config_str, display_scales[1]),	"Scale level 2", (void *) 100 },
 { config_INT,	"display.scale.3",	(void *)offsetof(struct config_str, display_scales[2]),	"Scale level 3", (void *) 125 },
-{ config_BOOL,	"display.scale.fit",	(void *)offsetof(struct config_str, display_scale_fit),		"Force page to fit", (void *) 0  },
 { config_INT,	"display.width",	(void *)offsetof(struct config_str, display_width),		"Default page width in characters", (void *) 71  },
 { config_BOOL,	"display.blending",	(void *)offsetof(struct config_str, display_blending),	"Blend fonts to background", (void *) 0  },
 { config_INT,	"display.margin.left",	(void *)offsetof(struct config_str, display_margin.x0),		"Margin left (%)", (void *) 0 },
@@ -117,15 +116,14 @@ config_item citems[] = {
 { config_URL,	"document.search",	(void *)offsetof(struct config_str, document_search),	       "URL to search from",		NULL  },
 { config_URL,	"document.offline",	(void *)offsetof(struct config_str, document_offline),	       "URL of offline menu",		NULL  },
 { config_COMMENT, NULL, NULL, "", NULL },
-{ config_FILE, "files.hots", 		(void *)offsetof(struct config_str, hotlist_file),		"Hotlist file",		"InetDBase:Hotlist"  },
-{ config_FILE, "files.passwords", 	(void *)offsetof(struct config_str, auth_file),		"File to store passwords in",	"<Fresco$Dir>.Users"  },
-{ config_BOOL, "files.passwords.encrypted", 	(void *)offsetof(struct config_str, auth_file_crypt),"Store passwords scrambled",	(void *) 0  },
-{ config_FILE, "files.runable", (void *)offsetof(struct config_str, runable_file),  "This file lists the file types of files that will be run when fetched.",	"<"PROGRAM_NAME"$Dir>.Runables" },
-{ config_FILE, "files.allow", 	(void *)offsetof(struct config_str, allow_file),    "If given, only allow access to sites listed in this file.",	NULL },
-{ config_FILE, "files.deny", 	(void *)offsetof(struct config_str, deny_file),	    "If given, don't allow access to sites listed in this file.",	NULL },
-{ config_FILE, "files.Help",	(void *)offsetof(struct config_str, help_file),     "URL of help pages",	                NULL  }, /* SJM */
-{ config_FILE, "files.cookie",	(void *)offsetof(struct config_str, cookie_file),   "Where to store cookies",	                "<"PROGRAM_NAME"$Dir>.Cookies" },
-{ config_FILE, "files.history", (void *)offsetof(struct config_str, history_file),  "Where to store the persistent history",    "<"PROGRAM_NAME"$Dir>.History" },
+{ config_FILE,	"files.hots", 		(void *)offsetof(struct config_str, hotlist_file),		"Hotlist file",		"InetDBase:Hotlist"  },
+{ config_FILE,	"files.passwords", 	(void *)offsetof(struct config_str, auth_file),		"File to store passwords in",	"<Fresco$Dir>.Users"  },
+{ config_BOOL,	"files.passwords.encrypted", 	(void *)offsetof(struct config_str, auth_file_crypt),"Store passwords scrambled",	(void *) 0  },
+{ config_FILE,	"files.runable",	(void *)offsetof(struct config_str, runable_file),		"This file lists the file types of files that will be run when fetched.",	"<"PROGRAM_NAME"$Dir>.Runables" },
+{ config_FILE,	"files.allow", 	(void *)offsetof(struct config_str, allow_file),		"If given, only allow access to sites listed in this file.",	NULL },
+{ config_FILE,	"files.deny", 	(void *)offsetof(struct config_str, deny_file),		"If given, don't allow access to sites listed in this file.",	NULL },
+{ config_FILE, "files.Help",	(void *)offsetof(struct config_str, help_file),              "URL of help pages",	NULL  }, /* SJM */
+{ config_FILE,  "files.cookie",	(void *)offsetof(struct config_str, cookie_file),              "Where to store the users cookies",	"<"PROGRAM_NAME"$Dir>.Cookies" },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_INT,	"truncate.length", 	(void *)offsetof(struct config_str, truncate_length),	"Number of chars to truncate file names to", 0  },
 { config_BOOL,	"truncate.suffix", 	(void *)offsetof(struct config_str, truncate_suffix),	"Do we remove the file extension when we choose a file name?", 0  },
@@ -152,19 +150,18 @@ config_item citems[] = {
 { config_FONT, "font.fixed.i",	(void *)offsetof(struct config_str, font_names[6]),	"... the italic form",	"Corpus.Medium.Oblique"  },
 { config_FONT, "font.fixed.bi",	(void *)offsetof(struct config_str, font_names[7]),	"... bold and italic",	"Corpus.Bold.Oblique"  },
 { config_COMMENT, NULL, NULL, "", NULL },
-{ config_COLOUR, "colour.plain",	(void *)offsetof(struct config_str, colours[0]), "Colour for normal text", 			(void *) 0x00000000  },
+{ config_COLOUR, "colour.plain",	(void *)offsetof(struct config_str, colours[0]), "Colour for normal text", 				(void *) 0x00000000  },
 { config_COLOUR, "colour.anchor",	(void *)offsetof(struct config_str, colours[1]), "Colour for text in hypertext links",		(void *) 0xdd220000  },
 { config_COLOUR, "colour.visited",	(void *)offsetof(struct config_str, colours[2]), "Colour for text in links that have been visited",	(void *) 0x88220000  },
 { config_COLOUR, "colour.back",		(void *)offsetof(struct config_str, colours[3]), "Background colour",				(void *) 0xdddddd00  },
-{ config_COLOUR, "colour.action",	(void *)offsetof(struct config_str, colours[4]), "Colour for activating buttons",		(void *) 0x00bbff00  },
+{ config_COLOUR, "colour.action",	(void *)offsetof(struct config_str, colours[4]), "Colour for for action buttons",			(void *) 0x00bbff00  },
 { config_COLOUR, "colour.write",	(void *)offsetof(struct config_str, colours[5]), "Colour for writable areas",			(void *) 0xffffff00  },
 { config_COLOUR, "colour.line.light",	(void *)offsetof(struct config_str, colours[6]), "Colour for the light side of rules",		(void *) 0xffffff00  },
 { config_COLOUR, "colour.line.dark",	(void *)offsetof(struct config_str, colours[7]), "Colour for the dark side of rules",		(void *) 0x55555500  },
 { config_COLOUR, "colour.button.text",	(void *)offsetof(struct config_str, colours[8]), "Colour for text on buttons",			(void *) 0x00000000  },
-{ config_COLOUR, "colour.button.back",	(void *)offsetof(struct config_str, colours[9]), "Background colour for buttons",		(void *) 0xdddddd00  },
-{ config_COLOUR, "colour.button.select",(void *)offsetof(struct config_str, colours[10]), "Colour for selected button",			(void *) 0xdddddd00  },
-{ config_COLOUR, "colour.highlight",	(void *)offsetof(struct config_str, colours[11]), "Colour for highlighted link",		(void *) 0xff000000  },
-{ config_COLOUR, "colour.activated",	(void *)offsetof(struct config_str, colours[12]), "Colour for activating link",			(void *) 0x0000ff00  },
+{ config_COLOUR, "colour.button.back",	(void *)offsetof(struct config_str, colours[9]), "Background colour for buttons",			(void *) 0xdddddd00  },
+{ config_COLOUR, "colour.highlight",	(void *)offsetof(struct config_str, colours[10]), "Colour for highlighted link",			(void *) 0xff000000  },
+{ config_COLOUR, "colour.activated",	(void *)offsetof(struct config_str, colours[10]), "Colour for activating link",			(void *) 0x0000ff00  },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_BOOL,	"proxy.http.enable",	(void *)offsetof(struct config_str, proxy_http_on),	"Enable proxies",	(void *) 0  },
 { config_BOOL,	"proxy.https.enable",	(void *)offsetof(struct config_str, proxy_https_on),	NULL,	                (void *) 0  },
@@ -188,9 +185,9 @@ config_item citems[] = {
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_INT,	"print.scale",	(void *)offsetof(struct config_str, print_scale),	"Printing magnification in %",		(void *) 100  },
 { config_INT,	"print.border",	(void *)offsetof(struct config_str, print_border),	"Border, in points, around the printed page",	(void *) 36  },
-{ config_BOOL,	"print.nopics",	(void *)offsetof(struct config_str, print_nopics),	"Suppress pictures in printout",	(void *) 0  },
-{ config_BOOL,	"print.noback",	(void *)offsetof(struct config_str, print_nobg),	"Suppress backgrouds in printout",	(void *) 0  },
-{ config_BOOL,	"print.nocols",	(void *)offsetof(struct config_str, print_nocol),	"Suppress text colours in printout",	(void *) 0  },
+{ config_BOOL,	"print.nopics",	(void *)offsetof(struct config_str, print_nopics),	"Surpress pictures in printout",	(void *) 0  },
+{ config_BOOL,	"print.noback",	(void *)offsetof(struct config_str, print_nobg),	"Surpress backgrouds in printout",	(void *) 0  },
+{ config_BOOL,	"print.nocols",	(void *)offsetof(struct config_str, print_nocol),	"Surpress text colours in printout",	(void *) 0  },
 { config_BOOL,	"print.sideways",	(void *)offsetof(struct config_str, print_sideways),	"Print pages sideways",		(void *) 0  },
 { config_BOOL,	"print.collated",	(void *)offsetof(struct config_str, print_collated),	"Collate multiple copies",	(void *) 0  },
 { config_BOOL,	"print.reversed",	(void *)offsetof(struct config_str, print_reversed),	"Print pages in reverse order",	(void *) 0  },
@@ -200,9 +197,8 @@ config_item citems[] = {
 { config_INT, "mode.keyboard", 	(void *)offsetof(struct config_str, mode_keyboard),	"Are we mouseless", (void *)1  },
 { config_BOOL, "mode.cursor.toolbar", 	(void *)offsetof(struct config_str, mode_cursor_toolbar),	"Move cursor to toolbar", (void *)1  },
 { config_INT, "mode.platform", 	(void *)offsetof(struct config_str, mode_platform),	"Platform type", (void *)0  },
-{ config_INT,  "history.length",	(void *)offsetof(struct config_str, history_length),	"The number of pages in the per-view history list",	(void *) 50 },
-{ config_INT,  "history.global.length",	(void *)offsetof(struct config_str, history_global_length),	"The number of unique pages in the global history list",	(void *) 250 },
-{ config_BOOL, "history.persist",       (void *)offsetof(struct config_str, history_persist),   "Should the history list be kept across closedowns?", (void*) 0 },
+{ config_INT,	"history.length",	(void *)offsetof(struct config_str, history_length),	"The number of pages in the per-view history list",	(void *) 50 },
+{ config_INT,	"history.global.length",	(void *)offsetof(struct config_str, history_global_length),	"The number of unique pages in the global history list",	(void *) 250 },
 { config_BOOL, "broken.formpost", 	(void *)offsetof(struct config_str, broken_formpost),	"Set this to use Netscape POST redirections", (void *)0  },
 { config_BOOL, "cookie.enable", 	(void *)offsetof(struct config_str, cookie_enable),	"Shall we receive and send cookies", (void *)1 },
 { config_BOOL, "cookie.uptodate", 	(void *)offsetof(struct config_str, cookie_uptodate),	"Save cookies on every update", (void *)0 },
@@ -214,21 +210,11 @@ config_item citems[] = {
 { config_LAST, NULL, NULL, NULL, 0 }
 };
 
-#ifdef __acorn
-/* According to the Dr Smiths documentation, there's a bug in Norcroft 5
- * when zpc1 is active which stops *((int*)foo) from working properly.
- * Sadly we must thus turn off checking in this file (or everything ends
- * up shades of light blue -- no, that's not a metaphor, it *does*).
- */
-#pragma -c0
-#endif
 
 /**********************************************************************/
 /* This gets called to set up all the config */
 extern void config_init(void)
 {
-    int font_version;
-
     config_default_first();
     config_read_file();
 #ifdef STBWEB
@@ -249,16 +235,11 @@ extern void config_init(void)
     }
 #endif
 
-#ifdef RISCOS
-    /* get font version number the nicer way */
-    _swix(Font_CacheAddr, _OUT(0), &font_version);
-    if (font_version < 336)
+    /* SJM */
+    os_cli("Unset "PROGRAM_NAME"$Temp");
+    os_cli("RMEnsure FontManager 3.36 Set "PROGRAM_NAME"$Temp 1");
+    if (getenv(PROGRAM_NAME"$Temp") != NULL)
         config_display_blending = FALSE;
-    if (font_version < 340)
-    {
-	/* 16bit fonts not available */
-    }
-#endif
 }
 
 extern void config_tidyup(void)

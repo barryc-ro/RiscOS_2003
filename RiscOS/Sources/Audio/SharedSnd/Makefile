@@ -21,7 +21,7 @@ WFLAGS  = ~cfr~v
 #
 # Program specific options:
 #
-COMPONENT = SharedSnd
+COMPONENT = SSound
 TARGET    = Modules.${COMPONENT}
 SOURCE    = Source
 SL        = ${SOURCE}.SSLib

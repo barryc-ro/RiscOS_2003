@@ -11,7 +11,6 @@
 #include "jmpbuf.h"
 
 #include "memwatch.h"
-#include "myassert.h"
 
 #ifndef DEBUG
 #define DEBUG 0
@@ -37,7 +36,6 @@ static main_function tmp_mf;
 
 extern void thread_exit(int rc)
 {
-    IMGDBG(("thrd%p: in thread_exit\n", running_thread));
     running_thread->rc = rc;
     running_thread->halt_point = "<DEAD via exit>";
 
@@ -57,8 +55,6 @@ extern void thread_starter(void)
 #if DEBUG >= 3
     fprintf(stderr, "Thread main returned\n");
 #endif
-
-    IMGDBG(("thrd%p: main() returned\n", running_thread));
 
 #ifdef RISCOS
     running_thread->rc = rc;
@@ -87,13 +83,6 @@ thread thread_start(main_function fn, int argc, char **argv, int stack_size)
     /* NOT mm_malloc as this MUST be in application space, not a dynamic
      * area, in case someone is misguided enough to call os_swi or _kernel_swi
      */
-
-    if ( !new->stack )      /* quite possible */
-    {
-        mm_free( new );
-        IMGDBG(("thread_start: malloc FAILED\n"));
-        return NULL;
-    }
 
 #if DEBUG >= 3
     fprintf(stderr, "Got a stack\n");
@@ -131,8 +120,6 @@ thread thread_start(main_function fn, int argc, char **argv, int stack_size)
     tmp_argc = argc;
     tmp_argv = argv;
 
-    IMGDBG(("thrd%p: starting\n",new));
-
     if ((new->status = (thread_status) setjmp(return_point)) == 0)
     {
 #if DEBUG >= 3
@@ -145,15 +132,12 @@ thread thread_start(main_function fn, int argc, char **argv, int stack_size)
 	new->exec_point[jmpbuf_lr] &= ~3;
 	new->exec_point[jmpbuf_lr] |= (return_point[jmpbuf_lr]  & 3);
 
-        IMGDBG(("running_thread = %p\n", new));
-
 	running_thread = new;
 	longjmp(new->exec_point, 1);
 #if DEBUG >= 3
 	fprintf(stderr, "Thread start long jump returned\n");
 #endif
 
-        IMGDBG(("running_thread = 0\n"));
 	running_thread = 0;
     }
 
@@ -162,14 +146,10 @@ thread thread_start(main_function fn, int argc, char **argv, int stack_size)
 
 thread thread_run(thread t)
 {
-    IMGDBG(("thrd%p: being run\n",t));
     if ((t->status = (thread_status) setjmp(return_point)) == 0)
     {
-        IMGDBG(( "running_thread = %p\n", t ));
 	running_thread = t;
 	longjmp(t->exec_point, 1);
-
-	IMGDBG(( "running_thread = 0\n" ));
 	running_thread = 0;
     }
 
@@ -181,8 +161,6 @@ void thread_destroy(thread t)
     /* Free up thread information */
     _kernel_stack_chunk *sc, *sc2;
     MemCheck_checking checking = MemCheck_SetChecking(0, 0);
-
-    IMGDBG(("thrd%p: being destroyed\n", t ));
 
     sc = (_kernel_stack_chunk*) t->stack;
 
@@ -197,23 +175,16 @@ void thread_destroy(thread t)
     }
 
     MemCheck_RestoreChecking(checking);
-
+    
     free((void*)t->stack);      /* NOT mm_free as this was allocated with
                                  * (SharedCLibrary's) malloc
                                  */
 
     mm_free(t);
-
-    if ( t == running_thread )
-    {
-        IMGDBG(( "running_thread = 0\n" ));
-        running_thread = 0;
-    }
 }
 
 void thread_wait(char *s)
 {
-    IMGDBG(("thrd%p: wait(%s)\n", running_thread, s ));
     running_thread->halt_point = s;
 
     if (setjmp(running_thread->exec_point) == 0)

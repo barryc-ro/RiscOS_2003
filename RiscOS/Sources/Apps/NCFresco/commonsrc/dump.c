@@ -225,22 +225,10 @@ extern void dump_float_item(rid_float_item *ptr)
     enter();
     FIELD(ptr, ti, "%p");
     FIELD(ptr, pi, "%p");
-    FIELD(ptr, height, "%d");
-    FIELD(ptr, height_left, "%d");
-    FIELD(ptr, entry_margin, "%d");
     leave();
 #else
     my_print("rid_float_item");
 #endif
-}
-
-extern void dump_float_items(rid_float_item *ptr)
-{
-    while (ptr != NULL)
-    {
-	dump_float_item(ptr);
-	ptr = ptr->next;
-    }
 }
 
 extern void dump_floats_link(rid_floats_link *ptr)
@@ -251,23 +239,14 @@ extern void dump_floats_link(rid_floats_link *ptr)
     my_print("rid_floats_link");
 #endif
     enter();
-    FIELD(ptr, right_margin, "%d");
 #ifndef NO_PTRS
     FIELD(ptr, left, "%p");
     FIELD(ptr, right, "%p");
 #endif
     if (ptr->left)
-    {
-	my_print("left links");
-	dump_float_items(ptr->left);
-    }
-
+	dump_float_item(ptr->left);
     if (ptr->right)
-    {
-	my_print("right links");
-	dump_float_items(ptr->right);
-    }
-
+	dump_float_item(ptr->right);
     leave();
 }
 
@@ -290,22 +269,6 @@ extern void dump_pos(rid_pos_item *pi)
                 FIELD(pi, left_margin, "%d");
                 FIELD(pi, max_up, "%d");
                 FIELD(pi, max_down, "%d");
-
-		switch (pi->leading)
-		{
-		case MAGIC_LEADING_PENDING:
-		    my_print("Magic leading pending");
-		    break;
-		case -1:
-		    my_print("Leading - generic MAGIC -1");
-		    break;
-		case 0:
-		    break;
-		default:
-		    FIELD(pi, leading, "%d");
-		    break;
-		}
-
 #ifndef NO_PTRS
                 FIELD(pi, first, "%p");
 		FIELD(pi, floats, "%p");
@@ -345,8 +308,7 @@ char *item_names[] =
     "TEXTAREA",
     "SELECT",
     "TABLE",
-    "OBJECT",
-    "SCAFF"
+    "OBJECT"
 };
 
 extern void dump_item(rid_text_item *item, char *base)
@@ -728,10 +690,10 @@ extern void dump_table(rid_table_item *ptr, char *base)
 #endif
         	my_print("cells %d %d", ptr->cells.x, ptr->cells.y);
         	my_print("size %d %d", ptr->size.x, ptr->size.y);
-/*        	my_print("width_info");*/
-/*        	dump_width_info(ptr->width_info);*/
+        	my_print("width_info");
 /*        	FIELD(ptr, hwidths, "%p");*/
 /*        	FIELD(ptr, vheights, "%p"); */
+        	dump_width_info(ptr->width_info);
         	FIELD(ptr, state, "%d");
         	my_print("scaff %d %d", ptr->scaff.x, ptr->scaff.y);
                 my_print("Column groups and headers");
@@ -981,11 +943,7 @@ extern void dump_cell(rid_table_cell *ptr, char *base)
 */		my_print("cell %d %d", ptr->cell.x, ptr->cell.y);
 		my_print("span %d %d", ptr->span.x, ptr->span.y);
 		my_print("size %d %d", ptr->size.x, ptr->size.y);
-#if NEWGROW
-		my_print("want %d %d", ptr->swant.x, ptr->swant.y);
-#else
 		my_print("sleft %d", ptr->sleft);
-#endif
 		dump_props(ptr->props);
   		dump_stream(&ptr->stream, base);
 	leave();

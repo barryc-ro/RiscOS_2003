@@ -66,15 +66,9 @@ static void draw_cornerLT(int x, int y, int w, int h, int thickness)
 
 void render_plinth(int bcol, int flags, int x, int y, int w, int h, antweb_doc *doc)
 {
-    render_plinth_full(bcol, render_colour_PLAIN,
-		       flags & render_plinth_IN ? render_colour_LINE_D : render_colour_LINE_L,
-		       flags & render_plinth_IN ? render_colour_LINE_L : render_colour_LINE_D,
-		       flags, x, y, w, h, doc);
-    
-}
-
-void render_plinth_full(int bcol, int rim_col, int top_col, int bottom_col, int flags, int x, int y, int w, int h, antweb_doc *doc)
-{
+#if !ANTI_TWITTER
+    const int dx = frontend_dx, dy = frontend_dy;
+#endif
     int off;
 
     /* If it is too small we have to make it thin */
@@ -93,30 +87,28 @@ void render_plinth_full(int bcol, int rim_col, int top_col, int bottom_col, int 
     if ((h < off*2) || (w < off*2))
 	flags &= ~render_plinth_DOUBLE;
 
+#if !ANTI_TWITTER
     if ((flags & render_plinth_RIM) && w > 13 && h > 13)
     {
-	render_set_colour(rim_col, doc);
-	bbc_rectangle(x + 6, y + 6, w - (frontend_dx + 12), h - (frontend_dy + 12));
-
-	if (flags & render_plinth_DOUBLE_RIM)
-	    bbc_rectangle(x+off, y+off, w-2*off - frontend_dx, h-2*off - frontend_dy);
+	render_set_colour(render_colour_PLAIN, doc);
+	bbc_rectangle(x + 6, y + 6, w - (dx + 12), h - (dy + 12));
     }
+#endif
 
-    render_set_colour(bottom_col, doc);
+    render_set_colour((flags & render_plinth_IN) ? render_colour_LINE_L : render_colour_LINE_D, doc);
 
     draw_cornerBR(x, y, w, h, off);
     if (flags & render_plinth_DOUBLE)
 	draw_cornerLT(x+off, y+off, w-off*2, h-off*2, off);
 
 
-    render_set_colour(top_col, doc);
+    render_set_colour((flags & render_plinth_IN) ? render_colour_LINE_D : render_colour_LINE_L, doc);
 
     draw_cornerLT(x, y, w, h, off);
     if (flags & render_plinth_DOUBLE)
 	draw_cornerBR(x+off, y+off, w-off*2, h-off*2, off);
 }
 
-#if 0
 static int colour_distance(wimp_paletteword c1, wimp_paletteword c2)
 {
     int r,g,b;
@@ -125,7 +117,6 @@ static int colour_distance(wimp_paletteword c1, wimp_paletteword c2)
     b = (c1.bytes.blue - c2.bytes.blue);
     return (r*r + g*g + b*b)/3;
 }
-#endif
 
 wimp_paletteword render_get_colour(int colour, be_doc doc)
 {
@@ -134,16 +125,7 @@ wimp_paletteword render_get_colour(int colour, be_doc doc)
     switch (colour)
     {
     case render_colour_BACK:
-#ifdef STBWEB
-	/* make colour whilst loading black as it looks much better on TV's */
-	if (doc == NULL || doc->rh == NULL)
-	{
-	    pw.word = 0x00000000;
-	    return pw;
-	}
-	else
-#endif
-	    if (doc &&
+	if (doc &&
 	    (doc->flags & doc_flag_DOC_COLOURS) &&
 	    doc->rh &&
 	    (doc->rh->bgt & rid_bgt_COLOURS) )
@@ -223,7 +205,7 @@ wimp_paletteword render_get_colour(int colour, be_doc doc)
 	    return pw;
 	}
 #endif
-
+	
     case render_colour_ACTIVATED:
 	if (doc &&
 	    (doc->flags & doc_flag_DOC_COLOURS) &&
@@ -302,12 +284,12 @@ void render_set_font_colours(int f, int b, antweb_doc *doc)
 int render_link_colour(rid_text_item *ti, antweb_doc *doc)
 {
     int rcol;
-    if (ti->flag & rid_flag_ACTIVATED)
-	rcol = render_colour_ACTIVATED;
-    else if (backend_is_selected(doc, ti))
+    if (ti->flag & rid_flag_SELECTED)
 	rcol = render_colour_HIGHLIGHT;
+    else if (ti->flag & rid_flag_ACTIVATED)
+	rcol = render_colour_ACTIVATED;
     else
-        rcol = render_text_link_colour(ti, doc);
+        rcol = render_text_link_colour(NULL, ti, doc);
     return rcol;
 }
 
@@ -316,7 +298,7 @@ int render_link_colour(rid_text_item *ti, antweb_doc *doc)
  * as NULL (in this case aref should never be null though)
  */
 
-int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
+int render_text_link_colour(rid_header *rh, rid_text_item *ti, antweb_doc *doc)
 {
     int rcol;
 
@@ -325,8 +307,8 @@ int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
         /* pdh: It's not a link -- but what colour is it? */
         int no = RID_COLOUR(ti);    /* defined in rid.h */
 
-        if ( no && doc && (doc->flags & doc_flag_DOC_COLOURS) )
-            rcol = render_colour_RGB | doc->rh->extracolourarray[no];
+        if ( no && rh && doc && (doc->flags & doc_flag_DOC_COLOURS) )
+            rcol = render_colour_RGB | rh->extracolourarray[no];
         else
             rcol = render_colour_PLAIN;
     }
@@ -371,7 +353,7 @@ int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
  * background colours, is not as easy as it used to be
  */
 
-int render_background(rid_text_item *ti, antweb_doc *doc )
+int render_background( rid_header *rh, rid_text_item *ti, antweb_doc *doc )
 {
     if ( doc && !( doc->flags & doc_flag_DOC_COLOURS ) )
         return render_colour_BACK;
@@ -379,16 +361,10 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
     if ( ti && ti->line )
     {
         struct rid_text_stream *st = ti->line->st;
-#if 1
-        if ( st->bgcolour )
-            return render_colour_RGB | ( st->bgcolour & ~1 );
-        /* wonder whether cc realises that render_colour_RGB has its bottom
-         * bit set?
-         */
-#else
+        /* The shin-bone's connected to the ... ankle-bone */
+
         if ( st && st->parent )
         {
-            /* The shin-bone's connected to the ... ankle-bone */
             void *parent = st->parent;
             rid_table_props *props = NULL;
 
@@ -416,7 +392,6 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
                  && ( props->flags & rid_tpf_BGCOLOR ) )
                     return render_colour_RGB | props->bgcolor;
         }
-#endif
     }
 
     if ( doc && doc->rh && ( doc->rh->bgt & rid_bgt_COLOURS) )
@@ -427,7 +402,7 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
 
 os_error *render_plot_icon(char *sprite, int x, int y)
 {
-    sprite_pixtrans pt[16], *ptp;
+    sprite_pixtrans pt[16];
     sprite_factors facs;
     sprite_header *sph;
     sprite_area *area;
@@ -466,15 +441,12 @@ os_error *render_plot_icon(char *sprite, int x, int y)
     id.tag = sprite_id_addr;
     id.s.addr = sph;
 
-    if ((ep = wimp_readpixtrans(area, &id, &facs, pt)) != NULL)
+    ep = wimp_readpixtrans(area, &id, &facs, pt);
+
+    if (ep)
 	return ep;
 
-    if (bbc_modevar(sph->mode, bbc_Log2BPP) > 2)
-	ptp = NULL;
-    else
-	ptp = pt;
-
-    return sprite_put_scaled(area, &id, 0x8, x, y, &facs, ptp);
+    return sprite_put_scaled(area, &id, 0x8, x, y, &facs, pt);
 }
 
 
@@ -508,7 +480,7 @@ int render_caret_colour(be_doc doc, int back, int cursor)
 	wimp_paletteword fg_rgb, bg_rgb;
 	int fg, bg;
 
-	bg_rgb.word = back == -1 ? render_get_colour(render_colour_WRITE, doc).word : back;
+	bg_rgb.word = back == -1 ? render_get_colour(render_colour_INPUT_B, doc).word : back;
 	colourtran_returnGCOL(bg_rgb, &bg);
 
 	fg_rgb.word = cursor == -1 ? 0x0000FF00 : cursor;
@@ -530,7 +502,7 @@ int render_text(be_doc doc, const char *text, int x, int y)
 
     if (text == NULL || *text == 0)
 	return FALSE;
-
+    
     /* do we need font blending? */
     if (config_display_blending &&
 	(doc->flags & doc_flag_DOC_COLOURS) &&
@@ -549,7 +521,7 @@ int render_text(be_doc doc, const char *text, int x, int y)
 	flags |= 1<<12;
     }
 #endif
-
+    
     font_paint((char *)text, flags, x, y);
 
     return TRUE;

@@ -30,12 +30,8 @@
 #define RFLAGS (render_plinth_NOFILL | render_plinth_THIN)
 #endif
 
-#ifdef BUILDERS
-extern
-#else
-static
-#endif
-void obreak_get_sizes(rid_text_item_hr *tih, int *left, int *right)
+#ifndef BUILDERS
+static void obreak_get_sizes(rid_text_item_hr *tih, int *left, int *right)
 {
     int leftend = *left;
     int rightend = *right;
@@ -72,13 +68,13 @@ void obreak_get_sizes(rid_text_item_hr *tih, int *left, int *right)
     *left = leftend;
     *right = rightend;
 }
-
+#endif
 
 void obreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_hr *tih = (rid_text_item_hr *)ti;
 
-    ti->width = MAGIC_WIDTH_HR;
+    ti->width = -1;
     ti->pad = 0;
     ti->max_up = tih->size/2 + PBREAK_SPACING/2;
     ti->max_down = ti->max_up;
@@ -86,7 +82,7 @@ void obreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 void opbreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
-    ti->width = MAGIC_WIDTH_HR;
+    ti->width = -1;
     ti->pad = 0;
     ti->max_up = PBREAK_HEIGHT;
     ti->max_down = 0;
@@ -98,9 +94,6 @@ void obreak_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    if (update == object_redraw_HIGHLIGHT)
-	return;
-    
     if (ti->tag == rid_tag_HLINE)
     {
         rid_text_item_hr *tih = (rid_text_item_hr *)ti;
@@ -109,11 +102,11 @@ void obreak_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
         antweb_get_edges(ti, &leftend, &rightend);
 
 #if 1
-	obreak_get_sizes(tih, &leftend, &rightend);
+        obreak_get_sizes(tih, &leftend, &rightend);
 
 	if (tih->noshade)
 	{
-	    render_set_colour(render_colour_LINE_D, doc);
+	render_set_colour(render_colour_LINE_D, doc);
 	    bbc_move(ox + leftend, bline - tih->size/2);
 	    bbc_plot(bbc_RectangleFill + bbc_DrawRelFore, rightend - leftend, tih->size);
 	}

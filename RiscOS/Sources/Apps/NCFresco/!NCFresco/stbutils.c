@@ -758,16 +758,12 @@ void fe_click_sound(void)
 void fe_get_wimp_caret(wimp_w w)
 {
     wimp_caretstr c;
-    wimp_get_caret_pos(&c);
-    if (c.w != w)
-    {
-	c.w = w;
-	c.i = -1;
-	c.x = -0x4000;
-	c.y = -0x4000;
-	c.height = -1;
-	wimp_set_caret_pos(&c);
-    }
+    c.w = w;
+    c.i = -1;
+    c.x = -0x4000;
+    c.y = -0x4000;
+    c.height = -1;
+    wimp_set_caret_pos(&c);
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -920,7 +916,7 @@ os_error *fe_file_to_url(char *file, char **url_out)
         return NULL;
 
     /* gstrans it*/
-    if ((ep = (os_error *)_swix(OS_GSTrans, _INR(0,3), (int)file, (int)buffer1, sizeof(buffer1))) != NULL)
+    if ((ep = os_swi3(XOS_Bit | OS_GSTrans, (int)file, (int)buffer1, sizeof(buffer1))) != NULL)
         return ep;
 
     /* if still has "-URL" prefixed then just return the URL*/
@@ -931,7 +927,7 @@ os_error *fe_file_to_url(char *file, char **url_out)
     }
 
     /* otherwise canonicalise and convert to URL*/
-    if ((ep = ((os_error *)_swix(OS_FSControl, _INR(0,5), 37, (int) buffer1, (int) buffer2, 0, 0, sizeof(buffer2)))) != NULL)
+    if ((ep = (os_swi6(XOS_Bit | OS_FSControl, 37, (int) buffer1, (int) buffer2, 0, 0, sizeof(buffer2)))) != NULL)
 	return ep;
 
     path = url_riscos_to_path(buffer2);
@@ -1074,11 +1070,6 @@ os_error *frontend_complain(os_error *e)
         usrtrc("complain '%s'\n", e->errmess);
         usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
 #endif
-
-#if 1
-	pending_error = e;
-#else
-
 #if 1
         if ((e->errnum &~ 0xff000000) != 0x288)
 #endif
@@ -1086,7 +1077,6 @@ os_error *frontend_complain(os_error *e)
 	    wimp_reporterror(e, wimp_EOK, PROGRAM_NAME);
 #else
             fe_report_error(e->errmess);
-#endif
 #endif
     }
     return e;

@@ -249,7 +249,7 @@ os_error *stream_find_item_at_location(rid_text_stream *st, int *x, int *y, be_i
 			hpos += ti2->pad;
 			hpos += pi->leading;
 
-			if (*x < hpos || ti2->width == MAGIC_WIDTH_HR)
+			if (*x < hpos || ti2->width == -1)
 			{
 			    *y -= (pi->top - pi->max_up);         /* Relative to baseline */
 			    *x -= ohpos ;
@@ -418,10 +418,6 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
  * from the backend and from the code for rendering tables to render
  * the caption and each cell. */
 
-#if DEBUG
-extern char *item_names[];
-#endif
-
 void stream_render(rid_text_stream *stream, antweb_doc *doc,
 		   const int ox, const int oy, /* screen origin of text stream */
 		   const int left, const int top, /* Area being redrawn in local coords */
@@ -503,6 +499,9 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 
 	for (ti = pi->first; ti && ti != pi->next->first; ti = rid_scanf(ti) /*ti->next*/ )
 	{
+#if DEBUG
+	    extern char *item_names[];
+#endif
 	    RENDBGN(("%s item at %p hpos=%d, width=%d\n", item_names[ti->tag], ti, hpos, ti->width));
 
 	    if (hpos >= right)
@@ -510,7 +509,7 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 	    if ((ti->flag & rid_flag_CLEARING) ||
 		(ti->flag & (rid_flag_LEFTWARDS | rid_flag_RIGHTWARDS)) == 0)
 	    {
-		if ((ti->width == MAGIC_WIDTH_HR) || ((hpos + ti->width + ti->pad) >= left) )
+		if ((ti->width == -1) || ((hpos + ti->width + ti->pad) >= left) )
 		{
 		    RENDBGN(("Rendering item at %d,%d\n", hpos, bline));
 

@@ -9,9 +9,16 @@
 
 int ro_fopen(const char *fname, int mode)
 {
-    int e = _kernel_osfind( (mode == RO_OPEN_READ) ? 0x4f: 0x8f , (char *)fname);
-    if (e < 0)			/* tell osfind to retiurn errors so that _kernel_lastoserror() has something to pick up on */
+    int e = _kernel_osfind( (mode == RO_OPEN_READ) ? 0x43: 0x83 , (char *)fname);
+    if (e == _kernel_ERROR)
+    {
+	_kernel_oserror *ep = _kernel_last_oserror();
+	if (ep)
+	    usrtrc("fopen: %s - %x %s\n", fname, ep->errnum, ep->errmess);
+	else
+	    usrtrc("fopen: %s - error\n", fname);
 	e = 0;
+    }
     return e;
 }
 
@@ -86,10 +93,6 @@ int ro_get_extent(int fh)
 char *ro_ferror(void)
 {
     _kernel_oserror *e = _kernel_last_oserror();
-#if DEBUG
-    if (e)
-	usrtrc("ro_ferror: %x %s\n", e->errnum, e->errmess);
-#endif
     return e ? e->errmess : "";
 }
 

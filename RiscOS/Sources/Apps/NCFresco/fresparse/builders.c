@@ -13,7 +13,6 @@
  * 02/08/96: SJM: changed bwidth to 0 if no anchor around it.
  * 11/09/96: SJM: new_area_item was checking for valid coords which obviously don't exist for SHAPE=DEFAULT
  * 27/02/97: SJM: Added new attributes to INPUT, TEXTAREA, SELECT for background colours and images
- * 29/04/97: SJM: Changed IMG ww and hh to being VALUEs.
  */
 
 #include <stdlib.h>
@@ -594,10 +593,6 @@ extern void text_item_push_image(HTMLCTX * me,
     if ( ismap->type == value_void )
 	new->flags |= rid_image_flag_ISMAP;
 
-#if 1
-    new->ww = *ww;
-    new->hh = *hh;
-#else
     if ( ww->type == value_absunit )
 	new->ww = (int)(ww->u.f/2);    /* convert back to pixels to avoid confusing users of this */
     else if ( ww->type == value_pcunit )
@@ -607,18 +602,19 @@ extern void text_item_push_image(HTMLCTX * me,
     }
     else
 	new->ww = -1;
-    
+
     if ( hh->type == value_integer )
 	new->hh = hh->u.i;
     else
 	new->hh = -1;
-#endif
     if ( border->type == value_integer )
 	new->bwidth = border->u.i;
     else
 	new->bwidth = (me->aref && me->aref->href) || new->usemap ? 1 : 0;	/* Default is border if link else not */
 
-    PRSDBGN(("Image %s, border=%d\n", new->src ? new->src : "", new->bwidth));
+#if DEBUG
+    fprintf (stderr, "Image %s, border=%d\n", new->src ? new->src : "", new->bwidth);
+#endif
 
     if (hspace->type == value_integer)
         new->hspace = hspace->u.i;
@@ -1225,8 +1221,6 @@ extern void text_item_push_hr(HTMLCTX *me, VALUE *align, VALUE *noshade, VALUE *
     rid_text_item_hr *item;
     rid_text_item *ti;
 
-    /* This implies LINE_BREAK overrides NO_BREAK. Don't forget this
-       when altering the formatter! */
     if ( (ti = me->rh->curstream->text_last) != NULL )
 	ti->flag |= rid_flag_LINE_BREAK;
 

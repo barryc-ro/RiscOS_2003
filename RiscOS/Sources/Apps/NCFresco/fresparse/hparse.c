@@ -209,7 +209,7 @@ static HTMLCTX * core_HTMLToRiscos (void /*HTStream * output */ )
 
     me->magic = HTML_MAGIC;
 
-#if 0
+#if DEBUG
     fprintf(stderr, "HTMLCTX created at %p, magic %x\n", me, me->magic);
 #endif
 

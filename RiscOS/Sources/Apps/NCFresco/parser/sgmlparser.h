@@ -69,9 +69,7 @@ enum
     PARSE_STDUNIT_VOID,
     PARSE_STDUNIT_LIST,		/* For coords */
     PARSE_ENUM_STRING,
-    PARSE_ENUM_CASE,             /* For case sensitive enums (OL TYPE) */
-    PARSE_BOOL,
-    PARSE_COLOUR
+    PARSE_ENUM_CASE             /* For case sensitive enums (OL TYPE) */
 
 #if 0
     PARSE_COLOUR_TUPLE,		/* Value is #abcdef colour tuple */
@@ -92,9 +90,7 @@ enum
     value_absunit,
     value_relunit,
     value_pcunit,
-    value_stdunit_list,
-    value_bool,			/* 0 or 1 */
-    value_colour		/* always returns tuple, recognises X colours */
+    value_stdunit_list
 };
 
 /* Modes of recognition the parser may be in. */

@@ -110,13 +110,13 @@ static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, con
 
     /* SJM: 4/3/96: remove check for whether we know about plugin or not */
     ftype = classid_ftype != -1 ? classid_ftype : data_ftype;
-#if 1
+#if 0
     if (ftype == -1)		/* Unknonw mime type or extension */
 	return NULL;
 #endif
 				/* Known type but no plugin present */
     objtype = objects_type_test(ftype);
-#if 1
+#if 0
     if (objtype == rid_object_type_UNKNOWN)
 	return NULL;
 #endif
@@ -634,14 +634,9 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
 	/* oracle video server */
 	add_param(obj, &(element->attributes[HTML_EMBED_AUTOSTART])->name, &attributes->value[HTML_EMBED_AUTOSTART], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_AUTOPLAY])->name, &attributes->value[HTML_EMBED_AUTOPLAY], &none, &param);
 	add_param(obj, &(element->attributes[HTML_EMBED_LOOP])->name, &attributes->value[HTML_EMBED_LOOP], &none, &param);
 	add_param(obj, &(element->attributes[HTML_EMBED_MDSFILE])->name, &attributes->value[HTML_EMBED_MDSFILE], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_MEDIAFILE])->name, &attributes->value[HTML_EMBED_MEDIAFILE], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_PLAYFROM])->name, &attributes->value[HTML_EMBED_PLAYFROM], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_PLAYTO])->name, &attributes->value[HTML_EMBED_PLAYTO], &none, &param);
 	add_param(obj, &(element->attributes[HTML_EMBED_SERVER])->name, &attributes->value[HTML_EMBED_SERVER], &none, &param);
-	add_param(obj, &(element->attributes[HTML_EMBED_TYPE])->name, &attributes->value[HTML_EMBED_TYPE], &none, &param);
 
 	me->discard_noembed = 1;
     }

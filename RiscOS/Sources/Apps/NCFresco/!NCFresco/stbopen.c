@@ -4,7 +4,6 @@
 
  */
 
-#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -47,24 +46,24 @@ fe_view fe_frame_specifier_decode(fe_view top, const char *spec)
     s = strtok(ss, "_");
     v = NULL;
 
-    STBDBGN(("framespec_decode: from %p for '%s'\n", top, spec));
+    STBDBG(("framespec_decode: from %p for '%s'\n", top, spec));
     if (s)
     {
 	do
 	{
 	    int index = atoi(s);
 
-	    STBDBGN(("framespec_decode: index %d", index));
+	    STBDBG(("framespec_decode: index %d", index));
 
 	    if (v == NULL)
 		v = top;
 	    else
 		v = v->children;
 	    
-	    while (v && index--)
+	    while (index--)
 		v = v->next;
 
-	    STBDBGN((" yields %p\n", v));
+	    STBDBG((" yields %p\n", v));
 	}
 	while ((s = strtok(NULL, "_")) != NULL);
     }
@@ -146,11 +145,6 @@ fe_view fe_find_top_nopopup(fe_view v)
 	v = v->prev;
 
     return v;
-}
-
-int fe_popup_open(void)
-{
-    return main_view->next != NULL;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -236,17 +230,12 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
         {
             parent = fe_find_top(parent);
         }
-        else if (target[0] == '_' && isdigit(target[1]))
-	{
-	    parent = fe_frame_specifier_decode(fe_find_top(parent), target);
-	}
-	else
+        else
         {
             parent = fe_find_target(fe_find_top(parent), target);
         }
     }
 
-#if 1
     /* Special targets open up a transient window */
     if (target && parent == NULL && strncmp(target, "__", 2) == 0 && strcasecomp(target, "__top") != 0)
     {
@@ -254,12 +243,11 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	if (!parent)
 	    parent = fe_dbox_view(target);
     }
-#endif
     
     /* don't check recursion unless this was initiated from a frameset */
     if (parent && (flags & fe_open_url_FROM_FRAME) && check_recursion(parent->parent, url))
     {
-	STBDBG(("Frame recursion detected - aborting fetch"));
+/*         werr(0, "Frame recursion detected - aborting fetch"); */
 	return NULL;
     }
 
@@ -285,6 +273,8 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
         if (!ep && fetching && strcmp(fetching, url) == 0)
 	{
+/*             werr(0, "Already fetching this URL"); */
+
 	    STBDBG(("already fetching returning\n"));
 	    return NULL;
 	}
@@ -302,16 +292,18 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     if (parent->displaying)
     {
-	if (backend_doc_info(parent->displaying, NULL, NULL, &referer, &title) != NULL)
+	int f, ft;
+	ep = backend_doc_info(parent->displaying, &f, &ft, &referer, &title);
+	if (ep)
 	    referer = NULL;
-
-/* 	if (parent->hist_at) */
-/* 	{ */
-/* 	    wimp_wstate state; */
-/* 	    wimp_get_wind_state(parent->w, &state); */
-/* 	    STBDBG(("history: %p '%s' write scroll pos %d\n", parent->hist_at, parent->hist_at->url, state.o.box.y1)); */
-/* 	    parent->hist_at->scroll_pos = state.o.y + parent->margin.y1; */
-/* 	} */
+	STBDBG(("Moving on...\n"));
+	if (parent->hist_at)
+	{
+	    wimp_wstate state;
+	    wimp_get_wind_state(parent->w, &state);
+	    STBDBG(("history: %p '%s' write scroll pos %d\n", parent->hist_at, parent->hist_at->url, state.o.box.y1));
+	    parent->hist_at->scroll_pos = state.o.y + parent->margin.y1;
+	}
     }
 
     STBDBG(("check referer '%s'\n", strsafe(referer)));
@@ -343,9 +335,9 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
     if ((flags & fe_open_url_FROM_HISTORY) || (parent->browser_mode == fe_browser_mode_HISTORY))
 	oflags |= be_openurl_flag_HISTORY;
         
-     if (strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0 ||
-	 strncmp(url, "ncint:", sizeof("ncint:")-1) == 0)
+    if (strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0)
         oflags |= be_openurl_flag_BODY_COLOURS;
+
 #if 0
     if (bfile)
     {
@@ -366,11 +358,9 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     ep = backend_open_url(parent, &parent->fetching, url, bfile, referer, oflags);
 
-#if 1
     if (ep && parent->open_transient)
 	fe_dispose_view(parent);
     else 
-#endif
 	fe_check_download_finished(parent);
 
     parent->threaded--;
@@ -540,16 +530,14 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
 
     view->scrolling = ip->scrolling;
 
+#if 1
     if (ip->scrolling == fe_scrolling_YES)
         view->x_scroll_bar = view->y_scroll_bar = TRUE;
+#endif
 
     view->name = strdup(ip->name);
     view->parent = parent;
 
-    if (ip->dividers)
-	memcpy(view->dividers, ip->dividers, sizeof(view->dividers));
-    view->dividers_max = 4;	/* ??? */
-    
     /* add to end of chain in parent */
     /* if this changes then frontend_frame_layout(refresh) may have to change */
     if (parent)
@@ -566,10 +554,7 @@ os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_frame_inf
     }
 
     if (vp)
-    {
-/* 	fe_internal_opening_view(view); */
         *vp = view;
-    }
 
     return NULL;
 }
@@ -599,18 +584,10 @@ void fe_dispose_view(fe_view v)
     if (v->threaded)
     {
 	v->delete_pending++;
-	STBDBG(("fe_dispose_view: threaded pending %d\n", v->delete_pending));
 	return;
     }
     else if (--v->delete_pending > 0)
-    {
-	STBDBG(("fe_dispose_view: unthreading pending %d\n", v->delete_pending));
 	return;
-    }
-
-    STBDBG(("fe_dispose_view: disposing\n"));
-
-    fe_internal_deleting_view(v);
 
 #if 1
     /* unlink from chain before deleting */

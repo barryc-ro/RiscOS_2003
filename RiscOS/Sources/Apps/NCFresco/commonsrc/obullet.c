@@ -5,9 +5,6 @@
 /*
  * 21/3/96: SJM: obullet_size comes from indent.h, bullet character from BULLET_CHAR
  * 04/7/96: SJM: added list types
-
-Borris totally dislikes the use of ti->width for bullets!
-
  */
 
 /* Methods for bullet objects */
@@ -41,6 +38,7 @@ Borris totally dislikes the use of ti->width for bullets!
 /* You don't want to set this to 1 */
 #define DEBUG_DLCOMPACT 0
 
+#ifndef BUILDERS
 static void roman_one_five_ten(char *s, int n, char *oft)
 {
     char *p = s + strlen(s);
@@ -70,9 +68,9 @@ static void roman_one_five_ten(char *s, int n, char *oft)
 
     *p = 0;
 }
+#endif
 
-
-
+#ifndef BUILDERS
 static char *roman_numeral(int n, int caps)
 {
     /* Worst case 3888 = "MMMDCCCLXXXVIII" = 15 chars */
@@ -102,9 +100,9 @@ static char *roman_numeral(int n, int caps)
 
     return buffer;
 }
+#endif
 
-
-
+#ifndef BUILDERS
 static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 {
     static char buffer[24];		/* Big enough that it can be padded to a full word. */
@@ -182,7 +180,7 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 
     return buffer;
 }
-
+#endif
 
 void obullet_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
@@ -225,14 +223,11 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
-            
+
 #if !DEBUG_DLCOMPACT
     if ( tib->list_type == HTML_DL )
         return;
 #endif
-
-    if (update == object_redraw_HIGHLIGHT)
-	return;
 
     symfont = FALSE;
     fh = webfonts[ti->st.wf_index].handle;
@@ -264,14 +259,14 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     fstr.s = buffer;
     font_strwidth(&fstr);
 
-    tfc = render_text_link_colour(ti, doc);
-    tbc = render_background(ti, doc);
+    tfc = render_text_link_colour(rh, ti, doc);
+    tbc = render_background(rh, ti, doc);
 
     if ( fs->lfc != tfc || fs->lbc != tbc )
     {
 	fs->lfc = tfc;
 	fs->lbc = tbc;
-	render_set_font_colours(tfc, tbc, doc);
+	render_set_font_colours(fs->lfc, fs->lbc, doc);
     }
 
     font_paint(buffer, font_OSCOORDS | (config_display_blending ? 0x800 : 0),
@@ -341,7 +336,7 @@ void obullet_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     font_strwidth(&fstr);
 
     size = WEBFONT_SIZEOF(ti->st.wf_index);
-    size = config_font_sizes[size-1];
+    size = config_font_sizes[size];
     size *= 640;
 
     hp = x + ti->width - (fstr.x / MILIPOINTS_PER_OSUNIT);

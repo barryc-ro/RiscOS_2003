@@ -34,10 +34,6 @@
 #include "sgmlparser.h"
 #include "gbf.h"
 
-#ifdef PLOTCHECK
-#include "rectplot.h"
-#endif
-
 /*****************************************************************************
 
     Parse a void value - this is used for attributes that do not have any
@@ -512,7 +508,7 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
 
 #ifdef PLOTCHECK
     {
-	/*extern int fwidth_scale;*/
+	extern int fwidth_scale;
 	if (v.type == value_absunit)
 	    v.u.f /= fwidth_scale;
     }
@@ -628,66 +624,5 @@ extern VALUE sgml_do_parse_enum_string(SGMLCTX *context, ATTRIBUTE *attribute, S
     return sgml_do_parse_string(context, attribute, string);
 }
 
-/*****************************************************************************/
-
-extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, STRING string)
-{
-    VALUE v;
-
-    if (string.bytes == 0)
-    {
-	v.type = value_void;
-	return v;
-    }
-
-    switch (string.ptr[0])
-    {
-    case 'n':
-    case 'N':
-    case '0':
-	v.type = value_bool;
-	v.u.i = 0;
-	break;
-	
-    case 'y':
-    case 'Y':
-    case '1':
-	v.type = value_bool;
-	v.u.i = 1;
-	break;
-
-    default:
-#if SGML_REPORTING
-	sgml_note_bad_attribute(context, "Bad bool value '%.*s'",  min(string.bytes, MAXSTRING), string.ptr);
-#endif
-	v.type = value_none;
-	break;
-    }	
-
-    return v;
-}
-
-/*****************************************************************************/
-
-extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, STRING string)
-{
-    VALUE v = sgml_do_parse_colour_tuple(context, attribute, string);
-
-    if (v.type == value_tuple)
-	return v;
-
-    v = colour_lookup(string);
-
-    if (v.type == value_tuple)
-	return v;
-
-#if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string.bytes, MAXSTRING), string.ptr);
-#endif
-
-    return v;
-}
-
-/*****************************************************************************/
 
 /* eof attrparse.c */

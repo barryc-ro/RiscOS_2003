@@ -106,11 +106,6 @@ extern void init_usrtrc(void);
 /* Always exists, might do nothing */
 extern void dbginit(void);
 
-#if DEBUG
-extern void debug_set(const char *feature, int enable);
-extern int debug_get(const char *feature);
-#endif
-
 /*****************************************************************************/
 
 /* Basic level debugging functions */
@@ -129,8 +124,7 @@ extern int debug_get(const char *feature);
 #define CKIDBG(x)
 #define ACCDBG(x)
 #define STBDBG(x)
-#define BENDBG(x)
-#define LNKDBG(x)
+#define HTSDBG(x)
 
 #else	/* DEBUG < 1 */
 
@@ -146,8 +140,7 @@ extern int debug_get(const char *feature);
 #define CKIDBG(x)	ckidbg x
 #define ACCDBG(x)	accdbg x
 #define STBDBG(x)	stbdbg x
-#define BENDBG(x)	bendbg x
-#define LNKDBG(x)	lnkdbg x
+#define HTSDBG(x)	htsdbg x
 
 /* -v1 and -v0 are NorCroft printf() checking indicators */
 #ifdef __acorn
@@ -165,8 +158,7 @@ DBGPROTO(imgdbg);
 DBGPROTO(ckidbg);
 DBGPROTO(accdbg);
 DBGPROTO(stbdbg);
-DBGPROTO(bendbg);
-DBGPROTO(lnkdbg);
+DBGPROTO(htsdbg);
 #ifdef __acorn
 #pragma -v0
 #endif
@@ -191,8 +183,7 @@ DBGPROTO(lnkdbg);
 #define CKIDBGN(x)
 #define ACCDBGN(x)
 #define STBDBGN(x)
-#define BENDBGN(x)
-#define LNKDBGN(x)
+#define HTSDBGN(x)
 
 #else	/* DEBUG < 2 */
 
@@ -208,8 +199,7 @@ DBGPROTO(lnkdbg);
 #define CKIDBGN(x)	ckidbgn x
 #define ACCDBGN(x)	accdbgn x
 #define STBDBGN(x)	stbdbgn x
-#define BENDBGN(x)	bendbgn x
-#define LNKDBGN(x)	lnkdbgn x
+#define HTSDBGN(x)	htsdbgn x
 
 #pragma -v1
 DBGPROTO(tabdbgn);
@@ -224,8 +214,7 @@ DBGPROTO(imgdbgn);
 DBGPROTO(ckidbgn);
 DBGPROTO(accdbgn);
 DBGPROTO(stbdbgn);
-DBGPROTO(bendbgn);
-DBGPROTO(lnkdbgn);
+DBGPROTO(htsdbgn);
 #pragma -v0
 
 #endif	/* DEBUG < 2 */

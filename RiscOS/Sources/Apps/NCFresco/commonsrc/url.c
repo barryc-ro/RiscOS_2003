@@ -26,13 +26,6 @@
 /* static char *hexchars = "0123456789abcdef"; */
 static char *hexchars = "0123456789ABCDEF";
 
-#if defined(MemCheck_MEMCHECK) && defined(__acorn)
-/* Something in here gets it wrong, and I can't be bothered finding out
- * what.
- */
-#pragma -c0
-#endif
-
 #define MALLOC_MAGIC	0x3e694c3c
 
 #if 0
@@ -330,7 +323,7 @@ char *url_join(const char *base, const char *url)
 	while (p && *p)
 	{
 	    char *q;
-
+	    
 	    q = strchr(p, '/');
 	    if (q)
 		*q++ = 0;
@@ -343,12 +336,12 @@ char *url_join(const char *base, const char *url)
 		/* No '/' on the end */
 	    }
 	    else if (p[0] != '.' || p[1] != 0) /* The '/' has by now been turned to a 0 */
-	    {
+	    {	
 		strcat(buffer, "/");
 		strcat(buffer, p);
 		/* No '/' on the end */
 	    }
-
+	    
 	    p = q;
 	}
 
@@ -360,7 +353,7 @@ char *url_join(const char *base, const char *url)
 
 	upath = buffer;
     }
-
+    
 
  done:
     {
@@ -374,7 +367,7 @@ char *url_join(const char *base, const char *url)
     }
     url_free_parts(bscheme, bnetloc, bpath, bparams, bquery, bfragment);
     url_free_parts(scheme, netloc, path, params, query, fragment);
-
+    
     return result;
 }
 
@@ -466,7 +459,7 @@ char *url_leaf_name(const char *url)
     url_parse(url, &scheme, &netloc, &path, &params, &query, &fragment);
 
     if (path)
-    {
+    {       
 	slash = strrchr(path, '/');
 	if (slash && slash[1] == 0)
 	{
@@ -513,10 +506,10 @@ char *url_leaf_name(const char *url)
 	if (*dot == '.')
 	    *dot = '/';
     }
-
+   
     if (config_truncate_length > 0 && strlen(result) > config_truncate_length)
 	result[config_truncate_length] = 0;
-
+ 
     url_free_parts(scheme, netloc, path, params, query, fragment);
 
     return result;
@@ -557,7 +550,7 @@ char *url_escape_chars(const char *s, const char *escapes)
 }
 
 #define URL_UNRESERVED_CHARS	"$-_.+!*'(),"
-/* #define FORM_UNRESERVED_CHARS	"$-_.!*'()," */ /* don't want + as it is used for ' ' */
+/* #define FORM_UNRESERVED_CHARS	"$-_.!*'()," */ /* don't want + as it is used for ' ' */ 
 #define FORM_UNRESERVED_CHARS	"*-.@_"
 
 int url_escape_cat(char *buffer, const char *in, int len)
@@ -683,7 +676,7 @@ int url_canonicalise_path(const char *path, char **path_out_ptr)
     fprintf(stderr, "path_in %p, %s, length %d\n", path, path, strlen(path)+1);
     fprintf(stderr, "path_out %p, length %d\n", path_out, strlen(path_out)+1);
 #endif
-
+    
     state = state_NEW;
     changed = FALSE;
 /*     while ((c = *s++) != 0) */

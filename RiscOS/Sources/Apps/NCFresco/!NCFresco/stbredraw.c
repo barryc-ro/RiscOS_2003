@@ -11,11 +11,9 @@
 #include "colourtran.h"
 #include "wimp.h"
 
-#include "interface.h"
-#include "render.h"
-
 #include "config.h"
 #include "consts.h"
+#include "interface.h"
 #include "util.h"
 #include "stbview.h"
 #include "stbutils.h"
@@ -197,27 +195,20 @@ static void draw_view_outline(wimp_w w)
 
 /* ----------------------------------------------------------------------------*/
 
-int fe_view_scroll_x(fe_view v, int val, BOOL ensure_highlight)
+int fe_view_scroll_x(fe_view v, int val)
 {
-    STBDBG(("fe_view_scroll_x: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
-    if (v->w && v->scrolling != fe_scrolling_NO)
+    if (v->w)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
-        if (fe_scroll_request(v, &state.o, val, 0))
-	{
-	    if (ensure_highlight)
-		fe_ensure_highlight(v, val < 0 ? be_link_BACK : 0);
-	    return 1;
-	}
+        return fe_scroll_request(v, &state.o, val, 0);
     }
     return 0;
 }
 
-int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight)
+int fe_view_scroll_y(fe_view v, int val)
 {
-    STBDBG(("fe_view_scroll_y: v%p w%x val %d ensure %d\n", v, v->w, val, ensure_highlight));
-    if (v->w && v->scrolling != fe_scrolling_NO)
+    if (v->w)
     {
         wimp_wstate state;
         wimp_get_wind_state(v->w, &state);
@@ -225,80 +216,9 @@ int fe_view_scroll_y(fe_view v, int val, BOOL ensure_highlight)
 	if (use_toolbox)
 	    tb_status_set_direction(val > 0);
 
-	if (fe_scroll_request(v, &state.o, 0, val))
-	{
-	    if (ensure_highlight)
-		fe_ensure_highlight(v, be_link_VERT | (val > 0 ? be_link_BACK : 0));
-	    return 1;
-	}
+	return fe_scroll_request(v, &state.o, 0, val);
     }
     return 0;
-}
-
-/* ----------------------------------------------------------------------------*/
-
-static char *frame_link_sprite_uhl[] =
-{
-    "flleft",
-    "fltop",
-    "flright",
-    "flbottom"
-};
-
-static char *frame_link_sprite_hl[] =
-{
-    "flleft1",
-    "fltop1",
-    "flright1",
-    "flbottom1"
-};
-
-static void draw_frame_links(wimp_redrawstr *r, fe_view v, const frame_link *fl)
-{
-    while (fl)
-    {
-/* 	STBDBG(("draw_frame_links: fl %p ", fl)); */
-/* 	STBDBG(("side %d pos %d,%d\n", fl->side, fl->box.x0, fl->box.y0)); */
-
-	render_plot_icon(
-	    fl->flags & frame_link_flag_SELECTED ? frame_link_sprite_hl[fl->side] : frame_link_sprite_uhl[fl->side],
-	    fl->box.x0, fl->box.y0);
-
-	fl = fl->next;
-    }
-}
-
-/* ----------------------------------------------------------------------------*/
-
-static void draw_border(wimp_redrawstr *r, fe_view v)
-{
-    render_plinth_full(0, plinth_col_M, plinth_col_L, plinth_col_D,
-		       render_plinth_RIM | render_plinth_NOFILL,
-		       v->box.x0, v->box.y0, v->box.x1 - v->box.x0, v->box.y1 - v->box.y0,
-		       v->displaying);
-}
-
-static os_error *draw_bevels(fe_view v, void *handle)
-{
-    wimp_redrawstr *r = handle;
-
-    /* if a frameset document then render the bevels */
-    if (v->w == 0)
-    {
-	wimp_redrawstr rr;
-
-	STBDBG(("draw_bevels: v%p box %d,%d,%d,%d rr %d,%d,%d,%d scroll %d%d\n",
-		v, v->box.x0, v->box.y0, v->box.x1, v->box.y1,
-		r->box.x0, r->box.y0, r->box.x1, r->box.y1,
-		r->scx, r->scy));
-
-	rr.box = v->box;
-	rr.scx = rr.scy = 0;
-	rr.g = r->g;
-	backend_render_rectangle(&rr, v->displaying, TRUE);
-    }
-    
-    return NULL;
 }
 
 /* ----------------------------------------------------------------------------*/
@@ -328,8 +248,6 @@ int frontend_view_redraw(fe_view v, wimp_box *bb)
 	r.box.y1 = -v->margin.y1;
 	r.box.x1 = 1 << 30;
 	r.box.y0 = - r.box.x1;
-
-/* 	STBDBG(("frontend_view_redraw: whole v %p from %s/%s\n", v, caller(1), caller(2))); */
     }
 
     wimp_force_redraw(&r);
@@ -341,9 +259,6 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 {
     int            more;
     wimp_redrawstr r;
-    fe_view selected;
-
-    STBDBG(("frontend_view_update: v%p box %d,%d %d,%d flags %x\n", v, bb->x0, bb->y0, bb->x1, bb->y1, flags));
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;
@@ -361,8 +276,6 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 
     frontend_fatal_error(wimp_update_wind(&r, &more));
 
-    selected = v->parent == NULL && v->children ? fe_selected_view() : NULL;
-    
     while (more)
     {
 	/* 3rd param must be 0 if we want the background to be redrawn by the backend redraw function 
@@ -370,22 +283,10 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	 */
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
 
-	/* if we are transient and can't scroll then draw a border */
-	if (v->open_transient && v->scrolling == fe_scrolling_NO)
-	    draw_border(&r, v);
+	/* if we are top view above a selected view and are in web mode */
+/*         if (fe_find_top(selected_view) == v && v->browser_mode == fe_browser_mode_WEB) */
+/*             draw_view_outline(selected_view->w); */
 
-	/* if we are the top frameset and this is a call to
-           render_rectangle then render the bevels for all the
-           frameset documents */
-	
-	if (v->parent == NULL && v->children && fn == backend_render_rectangle)
-	    iterate_frames(v, draw_bevels, &r);
-	
-	/* if we are top view above a selected view and are in web mode and the pointer is off */
-        if (selected && pointer_mode == pointermode_OFF)
-	    draw_frame_links(&r, v, selected->frame_links);
-
-	/* antitwitter if not in the middle of image rendering */
         if ((flags & fe_update_IMAGE_RENDERING) == 0)
             fe_anti_twitter(&r.g);
 
@@ -416,6 +317,7 @@ static void get_dimensions(fe_view v, const wimp_openstr *op, fe_view_dimensions
     fvd->doc_height = v->doc_height;
     /* This looks the wrong way around because height goes down from the top */
     fvd->wa_height = fvd->min_height < fvd->doc_height ? fvd->min_height : fvd->doc_height;
+/*    fvd->wa_height = fvd->min_height + fvd->doc_height;*/
 
     if (v->parent == NULL)
     {
@@ -424,8 +326,13 @@ static void get_dimensions(fe_view v, const wimp_openstr *op, fe_view_dimensions
     }
     else
     {
+#if 1
         fvd->layout_width  =    v->box.x1 - v->box.x0;
         fvd->layout_height = - (v->box.y1 - v->box.y0);
+#else
+        fvd->layout_width = op->box.x1 - op->box.x0 + (v->y_scroll_bar ? toolsprite_width : 0);/* + 2*2;*/
+        fvd->layout_height = - (op->box.y1 - op->box.y0) - (v->y_scroll_bar ? toolsprite_height : 0);/* + 2*2);*/
+#endif
     }
 }
 
@@ -714,15 +621,6 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
         need_to_set_dims = 1;
     }
 
-#if 0
-    if (bottom - h < -mh /*- sbh*/)
-    {
-        v->stretch_document = (-mh/* - sbh*/) - (bottom - h);
-        need_to_set_dims = 1;
-
-	STBDBGN(("ensure_visible: stretch\n"));
-    }
-#else
     if (top == bottom && top - h < -mh /*- sbh*/)
     {
         v->stretch_document = (-mh/* - sbh*/) - (top - h);
@@ -730,8 +628,7 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 
 	STBDBGN(("ensure_visible: stretch\n"));
     }
-#endif
-    
+
     if (top == bottom ||	/* Special case: force to the top is top and bottom equal */
 	top > (state.o.y - bbh))
     {
@@ -823,7 +720,10 @@ int frontend_view_caret(fe_view v, int x, int y, int hh, int on_screen)
     r = frontend_complain(wimp_set_caret_pos(&cs)) == NULL;
 
     if (height >= 0 && v->current_link)
-        v->current_link = backend_read_highlight(v->displaying, NULL);
+    {
+        backend_update_link(v->displaying, v->current_link, 0);
+        v->current_link = backend_place_caret(v->displaying, backend_place_caret_READ);
+    }
 
     STBDBGN(("viewcaret: end %p \n", v->current_link));
 

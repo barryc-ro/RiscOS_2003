@@ -3,18 +3,11 @@
 
 #include <stdio.h>
 
-#include "bbc.h"
-#include "coords.h"
-
 #include "antweb.h"
 #include "interface.h"
 #include "memwatch.h"
 #include "rid.h"
 #include "url.h"
-#include "util.h"
-
-#include "render.h"
-#include "rcolours.h"
 
 #include "layout.h"
 
@@ -29,10 +22,6 @@
 
 typedef struct layout_spacing_info layout_spacing_info;
 
-#define layout_spacing_HORIZONTAL	0x01 /* horizontal or vertical space */
-#define layout_spacing_RESIZE		0x02 /* can this space be dragged */
-#define layout_spacing_BEVEL		0x04 /* should we draw the 3D bevel thing */
-
 struct layout_spacing_info
 {
     layout_spacing_info *next;      /* next in list */
@@ -41,9 +30,8 @@ struct layout_spacing_info
     wimp_box container_box;         /* bounding box of parent frameset */
     rid_frameset_item *container;   /* the containing frameset */
     int index;                      /* row or column number */
-    int flags;
+    BOOL resize_heights;
     int divider_index;			/* reference for the frame divider array[] */
-    int colour;				/* colour to draw it in (BGR0) */
 };
 
 /* ---------------------------------------------------------------------------------------------------------- */
@@ -167,26 +155,24 @@ static int divider_current_index = 0;
 static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe_frame_info *info, char **urls, antweb_doc *doc)
 {
     const rid_frameset_item *fs = &frameset->data.frameset;
-    rid_frame *frame, *frame_previous_row;
+    rid_frame *frame;
     int nframes = fs->ncols*fs->nrows;
     int frames_added = 0;
     int *xpos, *ypos;
     int i;
     int last_row_divider = 0, last_col_divider = 0;
-    int bdflag = fs->bwidth ? 0 : rid_frame_divider_BORDERLESS;
-    
+
     PRSDBG(( "layout: %p/%p %dx%d sizes @%p,%p\n", frameset, fs, fs->ncols, fs->nrows, fs->widths, fs->heights));
 
     /* build the arrays of widths and heights */
     xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, bbox->x0, bbox->x1 - bbox->x0, fs->bwidth);
     ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, bbox->y0, bbox->y1 - bbox->y0, fs->bwidth);
 
-    frame_previous_row = NULL;
-    
     for (i = 0, frame = fs->frame_list; i < nframes && frame; i++, frame = frame->next)
     {
         wimp_box bb;
         int row, col;
+        BOOL this_can_resize;
 
         col = i%fs->ncols;
         row = i/fs->ncols;
@@ -199,28 +185,32 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
         bb.y0 = ypos[row] + (row == 0 ? 0 : fs->bwidth);
         bb.y1 = ypos[row+1] - (row == fs->nrows-1 ? 0 : fs->bwidth);
 
-	PRSDBG(( "layout: frame %d\n", i));
+        /* can we resize this current frame, if treated alone */
+        this_can_resize = (frame->tag != rid_frame_tag_FRAME || !frame->data.frame.noresize);
+
+	PRSDBG(( "layout: frame %d resize %d\n", i, this_can_resize));
 
 	/* set up dividers */
-	frame->dividers[rid_frame_divider_TOP] = bdflag | (row == 0 ?
-	    frameset->dividers[rid_frame_divider_TOP] :			/* copy top from parent */
-	    frame_previous_row->dividers[rid_frame_divider_BOTTOM]);	/* use the divider from the row above */
+	frame->dividers[rid_frame_divider_TOP] = row == 0 ?
+	    frameset->dividers[rid_frame_divider_TOP] :		/* copy top from parent */
+	    last_row_divider;					/* use the divider created last time around */
 	
-	frame->dividers[rid_frame_divider_BOTTOM] = bdflag | (row == fs->nrows-1 ?
-	    frameset->dividers[rid_frame_divider_BOTTOM] :		/* copy bottom from parent */
-	    (last_row_divider = divider_current_index++));		/* create new divider and store */
+	frame->dividers[rid_frame_divider_BOTTOM] = row == fs->nrows-1 ?
+	    frameset->dividers[rid_frame_divider_BOTTOM] :	/* copy bottom from parent */
+	    (last_row_divider = divider_current_index++);		/* create new divider and store */
 
 	
-	frame->dividers[rid_frame_divider_LEFT] = bdflag | (col == 0 ?
+	frame->dividers[rid_frame_divider_LEFT] = col == 0 ?
 	    frameset->dividers[rid_frame_divider_LEFT] :		/* copy left from parent */
-	    last_col_divider);						/* use the divider created last time around */
+	    last_col_divider;					/* use the divider created last time around */
 	
-	frame->dividers[rid_frame_divider_RIGHT] = bdflag | (col == fs->ncols-1 ?
-	    frameset->dividers[rid_frame_divider_RIGHT] :		/* copy right from parent */
-	    (last_col_divider = divider_current_index++));		/* create new divider and store */
+	frame->dividers[rid_frame_divider_RIGHT] = row == fs->ncols-1 ?
+	    frameset->dividers[rid_frame_divider_RIGHT] :	/* copy right from parent */
+	    (last_col_divider = divider_current_index++);		/* create new divider and store */
+
 
 	/* set up spacing array */
-	if (row > 0 && fs->bwidth)
+	if (row > 0 && this_can_resize)
         {
             layout_spacing_info *spacing = mm_calloc(sizeof(struct layout_spacing_info), 1);
 
@@ -241,19 +231,15 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             spacing->container = (rid_frameset_item *)&frameset->data.frameset;
             spacing->index = row;
 
-	    spacing->divider_index = frame->dividers[rid_frame_divider_TOP];
-	    
-            spacing->flags = layout_spacing_HORIZONTAL | layout_spacing_RESIZE;
+            spacing->resize_heights = TRUE;
 
-	    spacing->colour = frame->bordercolour;
-	    
             spacing->next = doc->spacing_list;
             doc->spacing_list = spacing;
 
 	    PRSDBG(( "layout: spacing %d,%d %d,%d i %d\n", spacing->box.x0, spacing->box.y0, spacing->box.x1, spacing->box.y1, spacing->index));
         }
 
-        if (col > 0 && fs->bwidth)
+        if (col > 0 && this_can_resize)
         {
             layout_spacing_info *spacing = mm_calloc(sizeof(struct layout_spacing_info), 1);
 
@@ -274,12 +260,8 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             spacing->container = (rid_frameset_item *)&frameset->data.frameset;
             spacing->index = col;
 
-	    spacing->divider_index = frame->dividers[rid_frame_divider_LEFT];
+            spacing->resize_heights = FALSE;
 
-	    spacing->flags = layout_spacing_RESIZE;
-
-	    spacing->colour = frame->bordercolour;
-	    
             spacing->next = doc->spacing_list;
             doc->spacing_list = spacing;
 
@@ -332,13 +314,6 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
                 break;
             }
         }
-
-
-	/* incement on the previous row ptr or kick it off if at the end of the first row */
-	if (frame_previous_row)
-	    frame_previous_row = frame_previous_row->next;
-	else if (i == fs->ncols-1)
-	    frame_previous_row = fs->frame_list;
     }
 
     mm_free(xpos);
@@ -349,75 +324,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 
 /* ---------------------------------------------------------------------------------------------------------- */
 
-/* Set the BEVEL and RESIZE flags correctly now that all the frames have
- * been allocated and positioned.
- */
-
-static void set_spacing_flags_frame(layout_spacing_info *spacing, rid_frame *frameset)
-{
-    rid_frame *frame;
-
-    /* for all frames in the frameset */
-    for (frame = frameset->data.frameset.frame_list; frame; frame = frame->next)
-    {
-	BOOL match;
-
-	PRSDBG(("set_spacing_flags_frame: frame%p tag %d dividers %d,%d,%d,%d border %d\n",
-		frame, frame->tag,
-		frame->dividers[rid_frame_divider_LEFT],
-		frame->dividers[rid_frame_divider_TOP],
-		frame->dividers[rid_frame_divider_RIGHT],
-		frame->dividers[rid_frame_divider_BOTTOM],
-		frame->border));
-
-	/* see if this frame borders this spacing unit */
-	if (spacing->flags & layout_spacing_HORIZONTAL)
-	{
-	    match = spacing->divider_index == frame->dividers[rid_frame_divider_TOP] ||
-		spacing->divider_index == frame->dividers[rid_frame_divider_BOTTOM];
-	}
-	else
-	{
-	    match = spacing->divider_index == frame->dividers[rid_frame_divider_LEFT] ||
-		spacing->divider_index == frame->dividers[rid_frame_divider_RIGHT];
-	}
-
-	/* if matches and this frame wants a 3D border then give it to it */
-	if (match && frame->border)
-	    spacing->flags |= layout_spacing_BEVEL;
-	
-	switch (frame->tag)
-        {
-	case rid_frame_tag_FRAME:
-	    /* if it matches and this frame ois not resizable then the spacer is not moveable */
-	    if (match && frame->data.frame.noresize)
-		spacing->flags &= ~layout_spacing_RESIZE;
-	    break;
-
-	case rid_frame_tag_FRAMESET:
-	    /* if a frameset then recurse */
-	    set_spacing_flags_frame(spacing, frame);
-	    break;
-	}
-    }
-}
-
-static void set_spacing_flags(antweb_doc *doc)
-{
-    layout_spacing_info *spacing;
-
-    /* for each spacing unit in turn, check all the frames */
-    for (spacing = doc->spacing_list; spacing; spacing = spacing->next)
-    {
-	PRSDBG(("set_spacing_flags: doc%p spacer%p divindex %d flags %x\n", doc, spacing, spacing->divider_index, spacing->flags));
-
-	set_spacing_flags_frame(spacing, doc->rh->frames);
-    }
-}
-
-/* ---------------------------------------------------------------------------------------------------------- */
-
-void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only, int *dividers, int max)
+void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only)
 {
     fe_frame_info *info;
     wimp_box box;
@@ -441,29 +348,23 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only, in
     /* the initial frame count is the maximum there could be not counting nesting */
 
     /* initialise the outermost divider array */
-    if (!refresh_only)
-    {
-	divider_current_index = max;
-	memcpy(doc->rh->frames->dividers, dividers, sizeof(doc->rh->frames->dividers));
-    }
-    
+    divider_current_index = 0;
+    for (i = 0; i < 4; i++)
+	doc->rh->frames->dividers[i] = divider_current_index++;
+
     /* kick off the layout with the outer frameset */
     doc->rh->nframes = be_frame_layout_1(doc->rh->frames, &box, info, urls, doc);
 
-    /* allocate the spacing flags */
-    set_spacing_flags(doc);
-    
-#if DEBUG
+#if DEBUG >= 2
 {
     fprintf(stderr, "layout: actually %d frames\n", doc->rh->nframes);
     for (i = 0; i < doc->rh->nframes; i++)
     {
         fe_frame_info *ip = &info[i];
-        fprintf(stderr, "'%16s' %4d,%4d %4d,%4d div %d,%d,%d,%d '%s'\n",
-		ip->name ? ip->name : "<none>",
-		ip->box.x0, ip->box.y0, ip->box.x1, ip->box.y1,
-		ip->dividers[0], ip->dividers[1], ip->dividers[2], ip->dividers[3], 
-		urls && urls[i] ? urls[i] : "<none>");
+        fprintf(stderr, "'%16s' %4d,%4d %4d,%4d '%s'\n",
+            ip->name ? ip->name : "<none>",
+            ip->box.x0, ip->box.y0, ip->box.x1, ip->box.y1,
+            urls && urls[i] ? urls[i] : "<none>");
     }
 }
 #endif
@@ -471,7 +372,7 @@ void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_only, in
     if (!refresh_only) for (i = 0; i < doc->rh->nframes; i++)
         info[i].src = urls[i] ? url_join(BASE(doc), urls[i]) : NULL;
 
-    frontend_frame_layout(doc->parent, doc->rh->nframes, info, refresh_only, divider_current_index);
+    frontend_frame_layout(doc->parent, doc->rh->nframes, info, refresh_only);
 
     if (!refresh_only) for (i = 0; i < doc->rh->nframes; i++)
         mm_free(info[i].src);
@@ -487,8 +388,7 @@ int layout_frame_resize_bounds(antweb_doc *doc, int x, int y, wimp_box *box, int
     for (spc = doc->spacing_list; spc; spc = spc->next)
     {
         PRSDBGN(("layout: check %d,%d against %d,%d %d,%d\n", x, y, spc->box.x0, spc->box.y0, spc->box.x1, spc->box.y1));
-        if ((spc->flags & layout_spacing_RESIZE) &&
-	    x >= spc->box.x0 && x <= spc->box.x1 && y >= spc->box.y0 && y <= spc->box.y1)
+        if (x >= spc->box.x0 && x <= spc->box.x1 && y >= spc->box.y0 && y <= spc->box.y1)
         {
             /* use this pointer as a handle */
             if (handle)
@@ -498,7 +398,7 @@ int layout_frame_resize_bounds(antweb_doc *doc, int x, int y, wimp_box *box, int
             if (box)
                 *box = spc->bbox;
 
-            return spc->flags & layout_spacing_HORIZONTAL ? be_resize_HEIGHT : be_resize_WIDTH;
+            return spc->resize_heights ? be_resize_HEIGHT : be_resize_WIDTH;
         }
     }
     return be_resize_NONE;
@@ -517,8 +417,8 @@ void layout_free_spacing_list(antweb_doc *doc)
     doc->spacing_list = NULL;
 }
 
-#define MIN_X_SIZE  16
-#define MIN_Y_SIZE  16
+#define MIN_X_SIZE  0
+#define MIN_Y_SIZE  0
 
 #if DEBUG >= 2
 static void dump_list(int n, VALUE *list)
@@ -541,7 +441,7 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
 
     PRSDBG(( "layout: resize doc %p handle %x to %d,%d\n", doc, handle, x, y));
 
-    if (spc->flags & layout_spacing_HORIZONTAL)
+    if (spc->resize_heights)
     {
         if (y < spc->bbox.y0 + MIN_Y_SIZE)
             y = spc->bbox.y0 + MIN_Y_SIZE;
@@ -575,122 +475,6 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
     backend_reset_width(doc, 0);
 }
 #endif
-
-/* ---------------------------------------------------------------------------------------------------------- */
-
-/* Render the bevels for one document */
-
-void layout_render_bevels(wimp_redrawstr *r, antweb_doc *doc)
-{
-    layout_spacing_info *spc;
-    for (spc = doc->spacing_list; spc; spc = spc->next)
-    {
-	wimp_box box;
-
-	box = spc->box;
-	coords_box_toscreen(&box, (coords_cvtstr *)&r->box);
-	
-	if (coords_boxesoverlap(&box, &r->g))
-	{
-	    if (spc->flags & layout_spacing_BEVEL)
-	    {
-		render_plinth_full(0, 0, plinth_col_HL_L, plinth_col_D,
-				   render_plinth_NOFILL,
-				   box.x0, box.y0, box.x1-box.x0, box.y1-box.y0,
-				   doc);
-
-/* 		render_plinth_full(plinth_col_HL_M, 0, plinth_col_L, plinth_col_HL_D, */
- 		render_plinth_full(spc->colour | render_colour_RGB, /* plinth_col_HL_D, */
-				   0, plinth_col_HL_M, plinth_col_M,
-				   0,
-				   box.x0 + 4, box.y0 + 4, box.x1-box.x0 - 8, box.y1-box.y0 - 8,
-				   doc);
-	    }
-	    else
-	    {
-		render_set_colour(spc->colour | render_colour_RGB, doc);
-		bbc_rectanglefill(box.x0, box.y0, box.x1-box.x0, box.y1-box.y0);
-	    }
-	}
-    }
-}
-
-/* ---------------------------------------------------------------------------------------------------------- */
-
-/* Write the layout of the frames as a table */
-
-static int layout__write_table(FILE *f, const rid_frame *frameset, be_layout_write_table_fn fn, const char *prefix, int base_count, int fmt_w, int fmt_h, int width, int height)
-{
-    const rid_frame *frame;
-    const rid_frameset_item *fs = &frameset->data.frameset;
-    int i, count = base_count;
-
-    int *xpos = be_build_frame_sizes(fs->widths, fs->ncols, &fs->width_totals, 0, fmt_w, fs->bwidth);
-    int *ypos = be_build_frame_sizes(fs->heights, fs->nrows, &fs->height_totals, 0, fmt_h, fs->bwidth);
-
-    PRSDBG(("layout__writetable: frameset %p prefix '%s' fn %p base count %d\n", frameset, strsafe(prefix), fn, base_count));
-    
-    fprintf(f, "<TABLE BORDER CELLSPACING=0 CELLPADDING=0>\n");
-   
-    /* for all frames in the frameset */
-    for (frame = frameset->data.frameset.frame_list, i = 0; frame; frame = frame->next, i++)
-    {
-        int row, col, w, h, scaled_w, scaled_h;
-	char spec[64];
-
-	PRSDBG(("layout__writetable: frame %p\n", frame));
-
-        col = i%fs->ncols;
-        row = i/fs->ncols;
-
-	if (col == 0)
-	    fprintf(f, "<TR>");
-
-	w = xpos[col+1] - xpos[col];
-	h = ypos[row+1] - ypos[row];
-
-	scaled_w = w * width / fmt_w;
-	scaled_h = h * height / fmt_h;
-
-	fprintf(f, "<TD WIDTH=%d HEIGHT=%d ALIGN=CENTER VALIGN=MIDDLE>", scaled_w/2, scaled_h/2);
-
-	switch (frame->tag)
-        {
-	case rid_frame_tag_FRAME:		/* if a frame then call back to frontend */
-	    sprintf(spec, "%s_%d", strsafe(prefix), count);
-	    if (fn)
-		fn(f, spec, scaled_w, scaled_h);
-	    count++;
-	    break;
-
-	case rid_frame_tag_FRAMESET:		/* if a frameset then recurse */
-	    count += layout__write_table(f, frame, fn, prefix, count, w, h, scaled_w, scaled_h);
-	    break;
-	}
-    }
-
-    fprintf(f, "</TABLE>\n");
-
-    mm_free(xpos);
-    mm_free(ypos);
-    
-    return count;
-}
-
-void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix, int width, int height)
-{
-    int w, h;
-
-    w = doc->rh->stream.widest;
-    h = doc->rh->stream.height;
-
-#if USE_MARGINS
-    w += doc->margin.x0 - doc->margin.x1;
-    h -= doc->margin.y0 - doc->margin.y1;
-#endif
-
-    layout__write_table(f, doc->rh->frames, fn, prefix, 0, w, -h, width, height);
-}
 
 /* ---------------------------------------------------------------------------------------------------------- */
 

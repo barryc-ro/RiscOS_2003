@@ -48,7 +48,7 @@ POSS_TARGETS=	br bu cu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX CHECKERS_UNIX clea
 		memlib mu \
 		MOST MOST_UNIX realclean sanity srclist sr NCFRESCO \
 		NCFRESCO_RISCOS riscoslib TAGS TESTS xref \
-		pu PLOTCHECK PLOTCHECK_UNIX ru RECONS
+		pu PLOTCHECK PLOTCHECK_UNIX
 
 all:
 		@echo
@@ -74,13 +74,13 @@ RM=		rm -f
 
 #PREDEPS=	builddate.h sanity
 #POSTACTS=	@$(RM) $(PREDEPS)
-PREDEPS=        #sanity
+PREDEPS=        sanity
 POSTACTS=
 
 #############################################################################
 
 SGML_OBJS=	attrparse.o elements.o entities.o sgmlparser.o statemach.o \
-		support.o portutil.o genproc.o chopper.o colours.o
+		support.o portutil.o genproc.o chopper.o
 
 HTML_OBJS=	block.o builders.o deliver.o frames.o fonts.o forms.o head.o \
 		hparse.o htmldefs.o lists.o misc.o phrase.o reports.o special.o \
@@ -91,12 +91,12 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		images.o layout.o licence.o makeerror.o memwatch.o \
 		myassert.o object.o obreak.o obullet.o oimage.o oinput.o \
 		oselect.o otable.o otext.o otextarea.o printing.o render.o \
-		resolve.o rid.o tables.o threads.o gbf.o oscaff.o \
+		resolve.o rid.o tables.o threads.o gbf.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
 		files.o fvpr.o remote.o coalesce.o keyhl.o \
-		buildtime.o format.o colspan.o loformat.o cs2.o highlight.o
+		buildtime.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -108,11 +108,8 @@ BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
 RISCOS_INCS=	-I../RISC_OSLib -I../include/unix -I../tcpiplibs $(BASE_INCS)  -I../memlib -J../clib
 #RISCOS_INCS=	-I../RISC_OSLib -I../tcpiplibs $(BASE_INCS) -I../clib
 # -Fn *includes* function names (at least for this option set)
-
-RISCOS_CFLAGS_DBG=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
-RISCOS_CFLAGS_REL=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
-
-RISCOS_CFLAGS=  $(RISCOS_CFLAGS_DBG)
+RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
+# RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
 RISCOS_VPATH=	$(BASE_VPATH)
 RISCOS_OBJS=	$(BASE_OBJS)
 RISCOS_LIBS=	../RISC_OSLib/risc_oslib \
@@ -177,11 +174,8 @@ PC_CFLAGS =     -apcs 3/26/hardfp
 
 FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
-FRESCO_CFLAGS_REL=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DNEWGROW=1
-FRESCO_CFLAGS_DBG=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DNEWGROW=1
-
-FRESCO_CFLAGS=  $(FRESCO_CFLAGS_DBG)
-
+#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
+FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
@@ -197,7 +191,7 @@ FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 CBFRESCO_VPATH = ../!CBFresco/source
 
 CBFRESCO_INCS=	-I../plingcbfresco/source
-CBFRESCO_BASECFLAGS= -DSTBWEB $(CBFRESCO_INCS) $(RISCOS_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0 -DCBPROJECT -Duse_toolbox=1 -DNEWGROW=1
+CBFRESCO_BASECFLAGS= -DSTBWEB $(CBFRESCO_INCS) $(RISCOS_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=0 -DCBPROJECT -Duse_toolbox=1
 
 # Production flag set
 CBFRESCO_CFLAGSN= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
@@ -211,25 +205,23 @@ CBFRESCO_CFLAGSD= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML
 # -------------
 
 BUILDERS_INCS=	-I../bunix -I../RISC_OSLib
-BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -g -DNEWGROW=1
+BUILDERS_CFLAGS=-DBUILDERS -DNEW_UNEXP_TABLE $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -g
 BUILDERS_VPATH=	$(RISCOS_VPATH)
 BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
-		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
-		loformat.o cs2.o oscaff.o
-BUILDERS_LIBS=
+		coalesce.o fvpr.o gbf.o
+BUILDERS_LIBS=	-lefence
 
-CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1  -DNEWGROW=1
+CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNEW_UNEXP_TABLE -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1
 CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
-		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
-		loformat.o cs2.o oscaff.o
+		coalesce.o fvpr.o gbf.o
 CHECKERS_LIBS=
 
 HTMLCHECK_INCS=	-I../stdalone
@@ -240,40 +232,26 @@ HTMLCHECK_OBJS=	$(SGML_OBJS) htmlcheck.o debug.o memwatch.o myassert.o \
 HTMLCHECK_LIBS=
 
 MOST_INCS=	-I../unix  -I../RISC_OSLib -I../\!Fresco -I../tcpiplibs -I../memlib
-MOST_CFLAGS=	-DMOST $(MOST_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -DUSE_MARGINS=1 -DOLD_COMMENTS=0 -DNEWGROW=1
+MOST_CFLAGS=	-DMOST $(MOST_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -DUSE_MARGINS=1 -DOLD_COMMENTS=0
 MOST_VPATH=	$(FRESCO_VPATH):../commonsrc
 MOST_OBJS=	$(FRESCO_OBJS)
 MOST_LIBS=
 
 FIXL_INCS=	-I../!Fresco -I../commonsrc
-FIXL_CFLAGS=	$(FIXL_INCS) -DNEWGROW=1
+FIXL_CFLAGS=	$(FIXL_INCS)
 FIXL_VPATH=	../!Fresco ../commonsrc
 FIXL_OBJS=	SerialEnc.o bittabenc.o fixlicence.o
 
 PLOTCHECK_INCS=	-I../plotcheck -I../RISC_OSLib
-PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -UNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -DBE_DEBUG=0 -O9 -g $(UNIX_CFLAGS) -DNEWGROW=1
+PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -DNEW_UNEXP_TABLE -DNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=0 -O9
 PLOTCHECK_VPATH=$(RISCOS_VPATH)
 PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
-		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
-		loformat.o cs2.o oscaff.o
-PLOTCHECK_LIBS=
-#PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
-
-
-RECONS_INCS=	-I../reconsparse -I../RISC_OSLib
-RECONS_CFLAGS=-DBUILDERS -DRECONS -DHTMLCHECK -DNO_PTRS $(RECONS_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=1 -O9 -DNEWGROW=1
-RECONS_VPATH=$(RISCOS_VPATH)
-RECONS_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
-		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
-		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
-		otext.o otextarea.o basic2.o stream.o object.o config.o \
-		oobject.o objects.o usrtrc.o rectplot.o \
 		coalesce.o fvpr.o gbf.o
-RECONS_LIBS=
+PLOTCHECK_LIBS=
 
 #############################################################################
 
@@ -387,7 +365,6 @@ clean:		sanity
 		-@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
 		-@cd ./abs && $(RM) *
 		-@cd ./aof && $(RM) *
-		-@cd ./rm && $(RM) *
 		-@cd ./plotcheck ; $(RM) plotcheck *.o
 		@echo "Removing some build control files"
 		@$(RM) */builddate.h $(PREDEPS)
@@ -462,16 +439,7 @@ FRESCO_RISCOS:	$(PREDEPS)
 		CFLAGS="$(FRESCO_CFLAGS) $(RISCOS_CFLAGS)"
 		$(POSTACTS)
 
-FRESCO_MC:      $(PREDEPS)
-		@echo "Making FRESCO_MC for RISCOS"
-		@cd ./fresco; $(MAKE) FRESCO_RISCOS \
-		LIBS="$(FRESCO_LIBS) ../memcheck/mclib $(RISCOS_LIBS)" \
-		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS) sprite.o" \
-		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(FRESCO_CFLAGS_DBG) $(RISCOS_CFLAGS_DBG) -zpc1 -DMemCheck_MEMCHECK -fw"
-		$(POSTACTS)
-
-FRESCO_NT:
+FRESCO_NT:	$(PREDEPS)
 		@echo Making FRESCO on NT
 		@cd fresco_pc
 		@nmake /nologo /f Makepc FRESCO_PC \
@@ -479,15 +447,6 @@ FRESCO_NT:
 		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(FRESCO_CFLAGS) $(RISCOS_CFLAGS) $(PC_CFLAGS)"
-
-FRESCO_NTREL:
-		@echo Making FRESCO on NT
-		@cd fresco_pc
-		@nmake /nologo /f Makepc FRESCO_PC \
-		LIBS="$(FRESCO_LIBS) $(RISCOS_LIBS)" \
-		OBJS="$(FRESCO_OBJS) $(RISCOS_OBJS)" \
-		VPATH="$(FRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(FRESCO_CFLAGS_REL) $(RISCOS_CFLAGS_REL) $(PC_CFLAGS)"
 
 hr:		HTMLCHECK_RISCOS
 
@@ -613,16 +572,12 @@ FIXL:
 		VPATH="$(FIXL_VPATH):$(UNIX_VPATH)" \
 		CFLAGS="$(FIXL_CFLAGS) $(UNIX_CFLAGS)"
 
-# Go for all files these days so tags-replace is certain to work.
-# Use a better build script I swiped - it handles the very long
-# command line problem and also places a TAGS symlink in each
-# subdirectory for convenience.
+# This is ordered to get matches in the main files first. Note that !Fresco
+# starts with a !, which find takes as meaninga predicate. Hence ./
 TAGS:		srclist_fresco
 		@echo "Building emacs TAGS file for fresco"
-		@./MAKE_ETAGS
-
-#		@etags `cat srclist`
-#		@$(RM) srclist
+		@etags `cat srclist`
+		@$(RM) srclist
 
 TESTS:
 		@echo "Performing parser tests."
@@ -648,21 +603,6 @@ WEBGOPHER:
 
 #############################################################################
 
-# This runs checks that look for potential problems with the source/CVS
-# tree. Please use every so often.
-
-# NB: CURE THE PROBLEM - DON'T JUST STOP THIS REPORTING IT!
-
-sanity:		cvs-checks.py cvs-checks
-		@./cvs-checks
-
-#############################################################################
-
-fresh:		HTML TAGS
-		./makelinks
-
-#############################################################################
-
 pu:		PLOTCHECK
 
 PLOTCHECK:	PLOTCHECK_UNIX
@@ -678,20 +618,21 @@ PLOTCHECK_UNIX:	$(PREDEPS)
 
 #############################################################################
 
-ru:		RECONS
+# This runs checks that look for potential problems with the source/CVS
+# tree. Please use every so often.
 
-RECONS:		RECONS_UNIX
+# NB: CURE THE PROBLEM - DON'T JUST STOP THIS REPORTING IT!
 
-RECONS_UNIX:	$(PREDEPS)
-		@echo "Making RECONS for UNIX"
-		@cd ./reconsparse; $(MAKE) $@ \
-		LIBS="$(RECONS_LIBS) $(UNIX_LIBS)" \
-		OBJS="$(RECONS_OBJS) $(UNIX_OBJS)" \
-		VPATH="$(RECONS_VPATH):$(UNIX_VPATH)" \
-		CFLAGS="$(RECONS_CFLAGS) $(UNIX_CFLAGS)"
-		$(POSTACTS)
+sanity:		cvs-checks.py cvs-checks
+		@./cvs-checks
 
 #############################################################################
+
+fresh:		HTML TAGS
+		./makelinks
+
+#############################################################################
+
 
 # ===========================================================================
 #
@@ -707,12 +648,7 @@ RECONS_UNIX:	$(PREDEPS)
 
 #uncomment this to build dependencies...
 #RISCOS_BUILD_EXPORT=../../../../Export
-
-#Two possibilities for exporting to
 #RISCOS_BUILD_RESOURCES=../../../../Install
-#RISCOS_BUILD_OBJECTS=../../../../Objects
-RISCOS_BUILD_RESOURCES=../NCFrescoRO/Resources
-RISCOS_BUILD_OBJECTS=../NCFrescoRO/aof
 
 CP=				cp
 CPOPTIONS=			-p
@@ -723,68 +659,65 @@ NCFRESCO_TEST_DIR=		bungle:/export/ftp/Custom/
 
 
 NCFRESCO_INCS=			-I../\!NCFresco
-NCFRESCO_BUILD_INCS=		-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
+NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 $(NCFRESCO_INCS)
+
+# several alternative flag sets
+NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
+NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=1 -DOI_DEBUG=1
+NCFRESCO_MEMCHECK_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -zpc1 -DMemCheck_MEMCHECK -fw -g
+NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
+
+# choose one here
+NCFRESCO_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS)
+
+NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 				-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
 				-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
 				-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
 				-I$(RISCOS_BUILD_EXPORT)/C \
-				-J$(RISCOS_BUILD_EXPORT)/Lib/CLib
-
-NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DNEWGROW=1 -DCOMPAT_INET4 $(NCFRESCO_INCS)
-
-# several alternative flag sets
-NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
-NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1
-NCFRESCO_MEMCHECK_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -zpc1 -DMemCheck_MEMCHECK -fw -g
-NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
-
-# choose one here
-NCFRESCO_ANT_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -DSTBWEB_ROM=0 \
-				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
-
-NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
-				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
+				$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
 NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
-				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
-
-NCFRESCO_RAM_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
-				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
+				-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
+				-I$(RISCOS_BUILD_EXPORT)/C \
+				$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
 NCFRESCO_ANT_ASFLAGS=		-Ihdr
 NCFRESCO_BUILD_ASFLAGS=		-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
 NCFRESCO_ROM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS)
-NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine \"REMOVE_RAMLOAD_CHECK SETL {TRUE}\"
+NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine "REMOVE_RAMLOAD_CHECK SETL {TRUE}"
 
 NCFRESCO_ANT_LDFLAGS=
-NCFRESCO_BUILD_LDFLAGS=		-v
-NCFRESCO_ROM_LDFLAGS=
-NCFRESCO_RAM_LDFLAGS=
+NCFRESCO_BUILD_LDFLAGS=
+NCFRESCO_ROM_LDFLAGS=	
+NCFRESCO_RAM_LDFLAGS=	
 
 NCFRESCO_VPATH=			../!NCFresco
 
 NCFRESCO_BASE_OBJS=		clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 				stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
-				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o \
+				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o \
 				$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 
 
 NCFRESCO_ANT_OBJS=		$(NCFRESCO_BASE_OBJS)
-NCFRESCO_BUILD_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o
+NCFRESCO_BUILD_OBJS=		$(NCFRESCO_BASE_OBJS)
 NCFRESCO_ROM_OBJS=		$(NCFRESCO_BASE_OBJS) rolib.o ModuleWrap.o
-NCFRESCO_RAM_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o ModuleWrap.o
+NCFRESCO_RAM_OBJS=		$(NCFRESCO_BASE_OBJS) ModuleWrap.o
 
 
 NCFRESCO_ANT_LIBS=		../webimage/webimage1
 
 NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-				../RISC_OSLib/risc_oslib \
+				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
-
-#				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 
 NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
@@ -794,7 +727,7 @@ NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 
 NCFRESCO_RAM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-				../RISC_OSLib/risc_oslibzm \
+				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
@@ -810,7 +743,8 @@ NCFRESCO_DEPENDS:
 		@echo NCFresco dependencies generated
 
 # Export the NCFresco resources for ROM building
-NCFRESCO_BUILD_ROM_EXPORT:
+
+NCFRESCO_BUILD_ROM_RESOURCES:
 		@-mkdir $(RISCOS_BUILD_RESOURCES)
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
@@ -825,12 +759,9 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Config	$(NCFRESCO_BUILD_RESOURCES)
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Messages	$(NCFRESCO_BUILD_RESOURCES)
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/MimeMap	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Welcome,faf	$(NCFRESCO_BUILD_RESOURCES)
-		@-mkdir $(RISCOS_BUILD_OBJECTS)
-		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
 
 
-# NCFresco application in the new style CVS controlled RISC OS build tree
+# This one is for NCFresco in the new style CVS controlled RISC OS build tree
 NCFRESCO_BUILD:		$(PREDEPS)
 		@echo "Making NCFRESCO for RISCOS in the build tree"
 		@-mkdir abs
@@ -843,7 +774,6 @@ NCFRESCO_BUILD:		$(PREDEPS)
 		LDFLAGS="$(NCFRESCO_BUILD_LDFLAGS)"
 		$(POSTACTS)
 
-# NCFresco ROM aof file in the new style CVS controlled RISC OS build tree
 NCFRESCO_ROM:	$(PREDEPS)
 		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
 		@-mkdir aof
@@ -855,8 +785,8 @@ NCFRESCO_ROM:	$(PREDEPS)
 		ASFLAGS="$(NCFRESCO_ROM_ASFLAGS)" \
 		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
 		$(POSTACTS) \
+		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
 
-# NCFresco application in ANT build tree
 NCFRESCO_RISCOS:	$(PREDEPS)
 		@echo "Making NCFRESCO for RISCOS"
 		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
@@ -868,7 +798,6 @@ NCFRESCO_RISCOS:	$(PREDEPS)
 		$(POSTACTS)
 
 
-# NCFresco application cross build on NT
 NCFRESCO_NT:
 		@echo Making NCFRESCO on NT
 		@cd ncfresco_pc
@@ -880,21 +809,20 @@ NCFRESCO_NT:
 		LDFLAGS="$(NCFRESCO_ANT_LDFLAGS)" \
 		$(POSTACTS)
 
-# NCFresco softload module in the new style CVS controlled RISC OS build tree
 NCFRESCO_RAM:	$(PREDEPS)
 		@echo "Making NCFRESCO module for RISCOS"
 		@cd ./ncfresco; $(MAKE) NCFRESCO_MODULE \
 		LIBS="$(NCFRESCO_RAM_LIBS)" \
-		OBJS="$(NCFRESCO_RAM_OBJS)" \
+		OBJS="$(NCFRESCO_RAM_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(NCFRESCO_RAM_CFLAGS)" \
+		CFLAGS="$(NCFRESCO_RAM_CFLAGS) $(RISCOS_CFLAGS)" \
 		ASFLAGS="$(NCFRESCO_RAM_ASFLAGS)" \
 		LDFLAGS="$(NCFRESCO_RAM_LDFLAGS)"
 		$(POSTACTS)
 
 ncfresco_srclist:
 		@for dir in fresparse parser commonsrc ./!NCFresco \
-		http webftp webgopher webimage \
+		http ebftp webgopher webimage \
 		 ; do find $$dir -type f \
 		\( -name \*.h -o -name \*.c \) ; done > srclist
 
@@ -917,6 +845,9 @@ NCFRESCO_DIST:  NCFRESCO_BUILD
 		@cp -p \!NCFresco/Resources/UK/\!Sprites3,ff9 $(RELS)/\!Sprites,ff9
 		@cp -p \!NCFresco/Resources/UK/Res,fae $(RELS)
 		@cp -p \!NCFresco/Resources/UK/Sprites3,ff9 $(RELS)/Sprites,ff9
+		@cp -p \!NCFresco/Resources/UK/TileV,ff9 $(RELS)
+		@cp -p \!NCFresco/Resources/UK/TileN,ff9 $(RELS)
+		@cp -p \!NCFresco/Resources/UK/\!Help $(RELS)
 		@cp -p \!NCFresco/Resources/UK/MimeMap $(RELS)
 		@cp -p \!NCFresco/Resources/UK/Config $(RELS)
 		@cp -p \!NCFresco/Resources/UK/Messages $(RELS)
@@ -924,6 +855,7 @@ NCFRESCO_DIST:  NCFRESCO_BUILD
 		@cp -p \!NCFresco/Resources/UK/Welcome,faf $(RELS)
 		@cp -p \!NCFresco/Resources/UK/SetScrap,ffb $(RELS)
 
+		@chmod 644 $(RELS)/\!Help
 		@chmod 644 $(RELS)/MimeMap
 		@chmod 644 $(RELS)/Config
 		@chmod 644 $(RELS)/Messages
@@ -947,7 +879,7 @@ NCFRESCO_RELEASE: NCFRESCO_BUILD FIXL
 
 NCFRESCO_TEST:	NCFRESCO_DIST
 		@echo "Installing NCFresco release on bungle"
-		@rcp -pr RELEASE/\!NCFresco '$(NCFRESCO_TEST_DIR)/Apps'
+		@rcp -r RELEASE/\!NCFresco '$(NCFRESCO_TEST_DIR)/Apps'
 		@echo "Done"
 		@echo ""
 
@@ -958,6 +890,7 @@ NCFRESCO_BINARIES:
 		@uuencode ~/tmp/ncfrescobin.tar.gz ~/tmp/ncfrescobin.tar.gz > ~/tmp/ncfrescobin.tar.gz.uue
 
 # ========================================================================================================================
+
 
 
 # eof fresco/Makefile

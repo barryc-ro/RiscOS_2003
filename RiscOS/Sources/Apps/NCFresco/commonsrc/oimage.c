@@ -52,12 +52,12 @@
 #include "object.h"
 #include "version.h"
 #include "oimage.h"
-#include "gbf.h"
 
 /* ----------------------------------------------------------------------------- */
 
 #ifndef DRAW_AREA_HIGHLIGHT
 #define DRAW_AREA_HIGHLIGHT 0
+#include "gbf.h"
 #endif
 
 #define PLINTH_PAD 16
@@ -66,10 +66,9 @@
 
 #define ALT_FONT    (WEBFONT_SIZE(2) + WEBFONT_FLAG_FIXED)
 
-
 /* ----------------------------------------------------------------------------- */
 
-static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int fwidth, int *iw, int *ih)
+static void oimage_size_alt_text(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int *iw, int *ih)
 {
     font_string fs;
     struct webfont *wf;
@@ -78,22 +77,12 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
     IMGDBG(("Sizing alt text: %d,%d\n", *iw, *ih));
 
     /* if we are not deferring images and either have alt text or both sizes are specified then use what we've got */
-    if (alt == NULL || (!defer_images && req_ww->type != value_none && req_hh->type == value_absunit))
+    if (alt == NULL || (!defer_images && req_ww != -1 && req_hh != -1))
     {
-	switch (req_ww->type)
-	{
-	case value_pcunit:
-	    if (fwidth)
-		*iw = (int)(req_ww->u.f * fwidth / 100);
-	    break;
-
-	case value_absunit:
-	    *iw = (int)req_ww->u.f;
-	    break;
-	}
-
-	if (req_hh->type == value_absunit)
-	    *ih = (int)req_hh->u.f;
+	if (req_ww != -1)
+	    *iw = req_ww * 2;
+	if (req_hh != -1)
+	    *ih = req_hh * 2;
         return;
     }
 
@@ -103,8 +92,8 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 
 	font_setfont(wf->handle);
 
-        /* if no width given then use what we need */
-        if (defer_images || req_ww->type == value_none)
+        /* if no width given (currently this includes havig a percentage width) then use what we need */
+        if (defer_images || req_ww == -1 || (flags & rid_image_flag_PERCENT))
         {
 	    fs.x = 1 << 30;
 	    fs.y = 1 << 30;
@@ -117,25 +106,23 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
 	    fs.x /= MILIPOINTS_PER_OSUNIT;
 
 	    imw = fs.x + PLINTH_PAD;
-	    imh = defer_images || req_hh->type != value_absunit ? (wf->max_up + wf->max_down + PLINTH_PAD) : (int)(req_hh->u.f*2);
+	    imh = defer_images || req_hh == -1 ? wf->max_up + wf->max_down + PLINTH_PAD : req_hh*2;
         }
         else
         {
             /* else wrap the text into the space given */
-            int ww = 0, height = 0;
+            int ww, height = 0;
 
-    	    switch (req_ww->type)
+#if 0
+    	    if (flags & rid_image_flag_PERCENT)
 	    {
-	    case value_pcunit:
-    	        ww = (int)(req_ww->u.f * fwidth / 100);
+    	        ww = req_ww*2*antweb_get_edges(ti, NULL, NULL)/100;
 		if (ww == 0)
 		    ww = *iw;
-		break;
-
-	    case value_absunit:
-    	        ww = (int)req_ww->u.f;
-		break;
 	    }
+            else
+#endif
+    	        ww = req_ww*2;
 
             write_text_in_box_height(alt, ww - PLINTH_PAD, wf->handle, &height);
 
@@ -153,14 +140,15 @@ static void oimage_size_alt_text(const char *alt, const rid_stdunits *req_ww, co
     IMGDBG(("Done sizing alt text: %d,%d\n", *iw, *ih));
 }
 
-void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int fwidth, int *iw, int *ih)
+void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int *iw, int *ih)
 {
     int width, height;
 
-    width = (*iw * scale_value)/100;
-    height = (*ih * scale_value)/100;
+    width = *iw * scale_value/100;
+    height = *ih * scale_value/100;
 
-    IMGDBG(("oimage_size_image: old width %d, height %d, scale %d%% rid flags 0x%x\n", *iw, *ih, scale_value, flags));
+    IMGDBG(("Old width %d, height %d, scale %d%% rid flags 0x%x\n", *iw, *ih, scale_value, flags));
+    IMGDBG(("Image object given width %d, height %d\n", req_ww, req_hh));
 
     /* if we have an image
      *   if two sizes specified then use those
@@ -176,46 +164,36 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
 
     if (flags & rid_image_flag_REAL)
     {
-        /* if a width or height is specified */
-	if (req_ww->type != value_none || req_hh->type == value_absunit)
+        /* if a width or height is specified, for now a percent width means not specified  */
+	if ((req_ww != -1 && (flags & rid_image_flag_PERCENT) == 0) || req_hh != -1)
 	{
             double aspect = (double)width/height;
 
-#ifdef BUILDERS
-	    aspect = 1.0;
+    	    if (req_ww != -1)
+    	    {   /* If width is specified, use that */
+#if 0
+    	        if (flags & rid_image_flag_PERCENT)
+		{
+    	            int ww = req_ww*2*antweb_get_edges(ti, NULL, NULL)/100;
+		    if (ww == 0)
+			width = ww;
+		}
+                else
 #endif
-
-    	    switch (req_ww->type)
-    	    {
-	    case value_pcunit:
-	    {
-		int ww = (int)(req_ww->u.f * fwidth/100);
-		if (ww != 0)
-		    width = ww;
-		break;
-	    }
-            case value_absunit:
-		width = (int)(req_ww->u.f * scale_value/100);
-		break;
-		
-    	    case value_none:
-    	       /* If width is not specified, calculate from height */
-    	        width = (int)(req_hh->u.f * aspect * scale_value/100);
-		break;
+    	            width = req_ww*2 * scale_value/100;
+    	    }
+    	    else
+    	    {   /* If width is not specified, calculate from height */
+    	        width = (int)(req_hh * aspect * scale_value/100) * 2;
     	    }
 
-    	    height = req_hh->type == value_absunit ? (int)req_hh->u.f : (int)((double)width * scale_value/100 / aspect);
+    	    height = req_hh != -1 ? req_hh*2 : (int)((double)width * scale_value/100 / aspect);
     	}
     }
     else
     {
         /* if not real then size from the text */
-#ifndef BUILDERS
-	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, fwidth, &width, &height);
-#else
-	width = 16;
-	height = 16;
-#endif
+	oimage_size_alt_text(alt, req_ww, req_hh, flags, defer_images, &width, &height);
     }
 
     IMGDBG(("Now width %d, height %d\n", width, height));
@@ -279,11 +257,9 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
 	    font_setfont(fs->lf);
 	}
 
-	if (fs->lfc != (tfc = render_link_colour(ti, doc) ) || fs->lbc != render_colour_BACK)
+	if (fs->lfc != (tfc = render_link_colour(ti, doc) ) )
 	{
 	    fs->lfc = tfc;
-	    fs->lbc = render_colour_BACK;
-
 	    render_set_font_colours(fs->lfc, render_colour_BACK, doc);
 	}
 
@@ -296,13 +272,14 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
 }
 #endif
 
+#ifndef BUILDERS
 void oimage_render_border(rid_text_item *ti, antweb_doc *doc, wimp_box *bbox, int bw)
 {
     int dx = frontend_dx;
     int dy = frontend_dy;
     int x, y, w, h;
 
-    render_set_colour(render_text_link_colour(ti, doc), doc);
+    render_set_colour(render_link_colour(ti, doc), doc);
 
     x = bbox->x0 - bw;
     y = bbox->y0 - bw;
@@ -322,6 +299,7 @@ void oimage_render_border(rid_text_item *ti, antweb_doc *doc, wimp_box *bbox, in
 	bbc_rectanglefill(x + w - bw, y + bw, bw-dx, h - (bw*2)-dy);
     }
 }
+#endif
 
 int oimage_decode_align(rid_image_flags flags, int height)
 {
@@ -374,7 +352,7 @@ BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp
 	    BOOL follow_link = TRUE;
 	    if (config_display_time_activate)
 	    {
-		int was_selected = backend_is_selected(doc, ti);
+		int was_selected = ti->flag & rid_flag_SELECTED;
 
 		/* highlight the area (and dehighlight image) */
 /* 		tii->data.usemap.selection = area; */
@@ -390,7 +368,7 @@ BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp
 /* 		tii->data.usemap.selection = NULL; */
 #ifndef BUILDERS
 		if (was_selected)
-		    backend_set_highlight(doc, ti);
+		    backend_update_link(doc, ti, 1);
 #endif
 	    }
 
@@ -426,7 +404,7 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
     if (fl & image_flag_REALTHING)
 	return TRUE;
 
-    if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (tii->hh.type == value_none && tii->ww.type == value_none)))
+    if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (tii->hh == -1 && tii->ww == -1)))
 	return TRUE;
     
     return FALSE;
@@ -434,42 +412,27 @@ static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
 
 /* ----------------------------------------------------------------------------- */
 
-/* size function called from format.c for percentage sized images */
-void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int fwidth)
+void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_image *tii = (rid_text_item_image *) ti;
     int width, height;
     image_flags fl;
 
-    IMGDBG(("oimage_size: src '%s' im %p bwidth %d, hspace %d, vspace %d, fwidth %d\n",
-	    tii->src, tii->im, tii->bwidth, tii->hspace, tii->vspace, fwidth));
+    IMGDBG(("oimage_size: src '%s' im %p size %dx%d bwidth %d, hspace %d, vspace %d\n", tii->src, tii->im, tii->ww, tii->hh, tii->bwidth, tii->hspace, tii->vspace));
 
-#ifndef BUILDERS
-    /* Borris sez doing this here is a good way of wasting
-       time. Between adding the object to the tree (parsing), and
-       formatting (which triggers the sizing), there could be quite a
-       time lag. This will impact the latency of image fetching,
-       especially with a fast turnaround server. */
     if (tii->im == NULL)
-	tii->im = oimage_fetch_image(doc, tii->src, tii->ww.type == value_none || tii->hh.type == value_none);
-#endif
+	tii->im = oimage_fetch_image(doc, tii->src, tii->ww == -1 || tii->hh == -1);
 
     image_info((image) tii->im, &width, &height, 0, &fl, 0, 0);
-
+    
     IMGDBG(("oimage_size: real %d width %d height %d\n", fl & image_flag_REALTHING ? 1 : 0, width, height));
 
     if (fl & image_flag_REALTHING)
 	tii->flags |= rid_image_flag_REAL;
 
-    oimage_size_image(tii->alt, &tii->ww, &tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, fwidth, &width, &height);
+    oimage_size_image(tii->alt, tii->ww, tii->hh, tii->flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
     
     IMGDBG(("oimage_size:       width %d height %d\n", width, height));
-
-    /* DAF: Formatter doesn't invisible objects please */
-    if (width < 1)
-	width = 1;
-    if (height < 1)
-	height = 1;
 
     width += (tii->bwidth + tii->hspace) * 4;
     height += (tii->bwidth + tii->vspace) * 4;
@@ -481,11 +444,6 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     ti->max_down = height - ti->max_up;
 }
 
-/* size method */
-void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
-{
-    oimage_size_allocate(ti, rh, doc, 0);
-}
 
 void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 		   int hpos, int bline, object_font_state *fs,
@@ -498,12 +456,6 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
-
-    if (update == object_redraw_HIGHLIGHT)
-    {
-	highlight_render_outline(ti, doc, hpos, bline);
-	return;
-    }
 
     bbox.x0 = hpos + tii->hspace*2 + bw*2;
     bbox.y0 = bline - ti->max_down + tii->vspace*2 + bw*2;
@@ -532,9 +484,9 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	oimage_render_text(ti, doc, fs, &bbox, tii->alt);
     }
 
-    if (bw)
+    if ((ti->flag & rid_flag_SELECTED) || bw)
     {
- 	oimage_render_border(ti, doc, &bbox, bw*2);
+	oimage_render_border(ti, doc, &bbox, bw*2);
 
 #if DRAW_AREA_HIGHLIGHT
         if (tii->usemap && tii->data.usemap.selection)
@@ -698,21 +650,51 @@ void oimage_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 #endif /* BUILDERS */
 }
 
-int oimage_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
+void oimage_update_highlight(rid_text_item *ti, antweb_doc *doc)
 {
     rid_text_item_image *tii = (rid_text_item_image *)ti;
+    wimp_box trim;
+    int bw;
 
-    if (box)
+    memset(&trim, 0, sizeof(trim));
+
+    bw = tii->bwidth < 2 ? 2*2 : tii->bwidth*2;
+
+    trim.x0 =   tii->hspace*2;
+    trim.x1 = - tii->hspace*2;
+    trim.y0 =   tii->vspace*2;
+    trim.y1 = - tii->vspace*2;
+
+#if DRAW_AREA_HIGHLIGHT
+    if (tii->data.usemap.selection)
     {
-	memset(box, 0, sizeof(*box));
-#if 0
-	box->x0 =   tii->hspace*2 + tii->bwidth*2;
-	box->x1 = - box->x0;
-	box->y0 =   tii->vspace*2 + tii->bwidth*2;
-	box->y1 = - box->y0;
-#endif
+        image_flags fi;
+        image_info((image) tii->im, 0, 0, 0, &fi, NULL, NULL);
+        antweb_update_item_trim(doc, ti, &trim, fi & image_flag_MASK ? 1 : 0);
     }
-    return TRUE;
+    else
+#endif
+    if (!oimage_renderable(tii, doc))
+    {
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+    }
+    else
+    {
+        trim.x0 = ti->width - tii->hspace*2 - bw;
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+        trim.x0 = tii->hspace*2;
+
+        trim.y0 = ti->max_up + ti->max_down - tii->vspace*2 - bw;
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+        trim.y0 = tii->vspace*2;
+
+        trim.x1 = - (ti->width - tii->hspace*2 - bw);
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+        trim.x1 = - tii->hspace*2;
+
+        trim.y1 = - (ti->max_up + ti->max_down - tii->vspace*2 - bw);
+        antweb_update_item_trim(doc, ti, &trim, TRUE);
+    }
 }
 
 /* ----------------------------------------------------------------------------- */

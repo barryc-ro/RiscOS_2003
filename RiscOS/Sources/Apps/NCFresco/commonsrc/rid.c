@@ -34,18 +34,6 @@
 #define RID_FREE_DEBUG 0
 #endif
 
-/*****************************************************************************
-
-  We now do a lot of freeing and allocating of rid_pos_item chains. To speed
-  this up, and induce less heap fragmentation, we cache pos chains and 
-  allocate from this list if possible.
-
- */
-
-static rid_pos_item *pos_cache_head, *pos_cache_tail;
-
-/*****************************************************************************/
-
 /*static void rid_free_table(rid_table_item *table);*/
 static rid_text_item *scanfwd_recurse_if_table(rid_text_item *item);
 static rid_text_item *scanfwd_recurse_first_in_caption(rid_table_item *table);
@@ -198,7 +186,7 @@ extern void rid_free_pos_tree(rid_pos_item *p)
     rid_text_item *ti;
     rid_float_item *fl = NULL, *fr = NULL;
 
-    /*FMTDBGN(("rid_free_pos_tree(%p)\n", p));*/
+    FMTDBGN(("rid_free_pos_tree(%p)\n", p));
 
     if (p == NULL)
 	return;
@@ -737,28 +725,19 @@ extern void rid_text_item_connect(rid_text_stream *st, rid_text_item *t)
     if (st->text_list)
     {
 	st->text_last->next = t;
+#if 0
+	t->prev = st->text_last;
+#endif
 	st->text_last = t;
     }
     else
     {
-	/* This is the first item in the stream. Insert a magic
-           scaffold object first. */
-	rid_text_item *scaff = mm_calloc(1, sizeof(*scaff));
-
-	FMTDBGN(("rid_text_item_connect: inserted rid_tag_SCAFF object\n"));
-
-	scaff->tag = rid_tag_SCAFF;
-	scaff->flag = rid_flag_NO_BREAK;
-	scaff->next = t;
-	st->text_list = scaff;
-	st->text_last = t;
+	st->text_list = st->text_last = t;
     }
 }
 
 extern void rid_pos_item_connect(rid_text_stream *st, rid_pos_item *p)
 {
-    /*FMTDBGN(("rid_pos_item_connect(%p, %p)\n", st, p));*/
-
     if (st->pos_list)
     {
 	st->pos_last->next = p;
@@ -1266,35 +1245,6 @@ extern rid_text_item * rid_scan(rid_text_item * item, int action)
 
 /*****************************************************************************
 
-  Given a rid_text_item that is floating and a rid_pos_item that it is
-  believed to be floating on, return either NULL or the rid_float_item
-  on the line referencing the floater.  */
-
-extern rid_float_item * rid_get_float_item(rid_text_item *ti, rid_pos_item *pi)
-{
-    rid_float_item *fi;
-
-    ASSERT(ti != NULL);
-    ASSERT(pi != NULL);
-    TASSERT( FLOATING_ITEM(ti) );
-
-    /* No floaters, so dumb question */
-    if (pi->floats == NULL)
-	return NULL;
-
-    if ( (ti->flag & rid_flag_LEFTWARDS) != 0 )
-	fi = pi->floats->left;
-    else
-	fi = pi->floats->right;
-
-    while (fi != NULL && fi->ti != ti)
-	fi = fi->next;
-    
-    return fi;
-}
-
-/*****************************************************************************
-
     Support routine for when about to reformat.  Previously, we would set
     stream->widest = stream->height = 0. This does much the same over any
     contained text streams as well.
@@ -1404,28 +1354,6 @@ extern void form_element_enumerate(rid_form_item *form, int element_type, int ta
 	}
     }
 }
-
-/*****************************************************************************/
-
-#if 0
-extern rid_pos_item *rid_pos_alloc(void)
-{
-    return mm_malloc(sizeof(rid_pos_item));
-}
-
-extern void rid_pos_free(rid_pos_item *pi)
-{
-    rid_free_pos(pi);
-}
-
-extern void rid_pos_free_chain(rid_pos_item *pi)
-{
-}
-
-extern void rid_pos_cache_flush(void)
-{
-}
-#endif
 
 /*****************************************************************************/
 

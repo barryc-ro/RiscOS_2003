@@ -2,22 +2,7 @@
 
 /* view.h */
 
-/* ----------------------------------------------------------------------------- */
-
-typedef struct frame_link frame_link;
-
-#define frame_link_flag_SELECTED	0x01
-
-struct frame_link
-{
-    frame_link *next;		/* next link in chain */
-    fe_view v;			/* the frame this link goes to */
-    int side;			/* the side that this link is on (so we know which arrow to display) */
-    wimp_box box;		/* bounding box of this link, in parent relative coordinates */
-    int flags;			/* see above */
-};
-
-/* ----------------------------------------------------------------------------- */
+/* This describes what is in a view.  Only the front end needs to know. */
 
 typedef struct fe_message_handler_item fe_message_handler_item;
 
@@ -29,8 +14,6 @@ struct fe_message_handler_item
     void *handle;
 };
 
-/* ----------------------------------------------------------------------------- */
-
 struct _frontend_passwd_handle
 {
     backend_passwd_callback cb; /* values passed in originally */
@@ -38,14 +21,36 @@ struct _frontend_passwd_handle
     char *realm, *site, *user;
 };
 
-/* ----------------------------------------------------------------------------- */
-
+typedef struct fe_global_history_item fe_global_history_item;
+typedef struct fe_global_history_fragment fe_global_history_fragment;
 typedef struct fe_history_item fe_history_item;
 typedef struct _frontend_view frontend_view;
 
-/* ----------------------------------------------------------------------------- */
+struct fe_history_item
+{
+    fe_history_item *next, *prev;
+    char *url;
+    char *title;
+    unsigned int url_hash;
+    unsigned int seq_no;
+    int scroll_pos;
+};
 
-/* This describes what is in a view.  Only the front end needs to know. */
+struct fe_global_history_fragment
+{
+    fe_global_history_fragment *next;
+    char fragment[1];                   /* resize block to hold fragment */
+};
+
+struct fe_global_history_item
+{
+    fe_global_history_item *next;       /* next history item */
+    fe_global_history_fragment *frag_list;   /* linked list of fragments in this page visited */
+
+    char *url;
+    char *title;
+    unsigned int url_hash;            /* ash lookup of title string */
+};
 
 #define ANTWEB_VIEW_MAGIC	0x469034fb
 
@@ -79,8 +84,6 @@ struct _frontend_view
     be_doc displaying;
     be_doc fetching;
     fe_history_item *first, *last, *hist_at;
-    int hist_count;
-
     char last_search[64];
 
     int current_object_type;
@@ -103,7 +106,7 @@ struct _frontend_view
     int y_scroll_bar;
     int scrolling;          /* 0 = auto, 1 = yes, 2 = no */
 
-/*     int pending_scroll; */
+    int pending_scroll;
 
     int dont_add_to_history;
     int pending_download_finished;
@@ -144,31 +147,7 @@ struct _frontend_view
     int frame_index;		/* frame number from 0 */
 
     int dividers[4];
-    int dividers_max;
-
-    frame_link *frame_links;
-
-    int fast_load;
-
-    int transient_position;
-
-    struct
-    {
-	int xscroll, yscroll;	/* scroll positions to move to - used in check_pending_scroll */
-	fe_history_item *hist;	/* history item to be current  - used in visit */
-    } fetching_data;
 };
-
-/* ----------------------------------------------------------------------------- */
-
-#define PROFILE_NAME_VAR	"User$Name"
-
-#define NVRAM_FONTS_TAG		"BrowserFontSize"
-#define NVRAM_SOUND_TAG		"BrowserMusicStatus"
-#define NVRAM_BEEPS_TAG		"BrowserBeepStatus"
-#define NVRAM_SCALING_TAG	"BrowserScaling"
-
-/* ----------------------------------------------------------------------------- */
 
 #define fe_keyboard_UNKNOWN	(-1)
 #define fe_keyboard_ONLINE	0
@@ -187,15 +166,3 @@ struct _frontend_view
 #define STATUS_TOP_MARGIN		0 /* 16 */
 
 extern fe_view fe_find_top(fe_view v);
-
-/* ----------------------------------------------------------------------------- */
-
-#define fe_position_COORDS	3
-#define fe_position_TOOLBAR	2
-#define fe_position_CENTERED	1
-#define fe_position_FULLSCREEN	0
-#define fe_position_UNSET	(-1)
-	    
-/* ----------------------------------------------------------------------------- */
-
-/* eof stbview.h */

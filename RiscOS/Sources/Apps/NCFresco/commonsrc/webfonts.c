@@ -293,7 +293,7 @@ os_error *webfont_declare_printer_fonts(void)
 
 os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
 {
-    int i, handle;
+    int i;
     int size;
     char buffer[256];
     int word;
@@ -323,25 +323,23 @@ os_error *webfont_drawfile_fontlist(int fh, int *writeptr)
 
     size -= 2 * sizeof(int);	/* Two word header */
 
-    handle = 1;
-
-    for (i=0; i < WEBFONT_FLAG_COUNT; i++, handle++)
+    for (i=0; i < WEBFONT_FLAG_COUNT; i++)
     {
 	int len;
 
-	buffer[0] = (char) handle;
+	buffer[0] = (char) i+1;
 	webfont_font_name(i << WEBFONT_FLAG_SHIFT, buffer+1);
 	len = strlen(buffer+1) + 2;
 	df_write_data(fh, *writeptr, buffer, len);
 	*writeptr += len;
 	size -= len;
     }
-
-    for (i=0; i < WEBFONT_SPECIAL_COUNT; i++, handle++)
+    
+    for (i=0; i < WEBFONT_SPECIAL_COUNT; i++)
     {
 	int len;
 
-	buffer[0] = (char) handle;
+	buffer[0] = (char) i+1;
 	webfont_font_name(WEBFONT_FLAG_SPECIAL + (i << WEBFONT_SPECIAL_TYPE_SHIFT), buffer+1);
 	len = strlen(buffer+1) + 2;
 	df_write_data(fh, *writeptr, buffer, len);
@@ -361,7 +359,7 @@ int webfont_lookup(const char *font_name)
     if (strcasecomp(font_name, "ncoffline") == 0)
 	return WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_MENU;
 #endif
-
+    
     if (strcasecomp(font_name, "dingbats") == 0)
 	return WEBFONT_FLAG_SPECIAL + WEBFONT_SPECIAL_TYPE_SYMBOL;
 

@@ -90,7 +90,7 @@ static void hs_fetch_complete(httpsave_t h, const char *cfile)
     char *cfile_buf, *s;
     int cfile_size;
     
-    h->temp_file = strdup(rs_tmpnam(NULL));
+    h->temp_file = strdup(tmpnam(NULL));
 
     /* read file in */
     f = fopen(cfile, "r");
@@ -201,7 +201,7 @@ httpsave_t httpsave_open(httpsave_sent_fn fn, void *handle)
     h->callback_sent = fn;
     h->callback_handle = handle;
 
-    h->temp_file = strdup(rs_tmpnam(NULL));
+    h->temp_file = strdup(tmpnam(NULL));
     h->temp_f = fopen(h->temp_file, "w");
 
     h->fetch = FALSE;

@@ -23,7 +23,7 @@ os_error *makeerror(int n)
 	strncpy(err.errmess, m, 251);
     err.errmess[251] = 0;
 
-    return (os_error *)_swix(MessageTrans_CopyError, _IN(0), &err);
+    return os_swi1(os_X | MessageTrans_CopyError, (int)&err);
 }
 
 /* SJM */
@@ -39,5 +39,5 @@ os_error *makeerrorf(int n, ...)
     vsprintf(err.errmess, msgs_lookup(err.errmess), ap);
     va_end(ap);
 
-    return (os_error *)_swix(MessageTrans_CopyError, _IN(0), &err);
+    return os_swi1(os_X | MessageTrans_CopyError, (int)&err);
 }
