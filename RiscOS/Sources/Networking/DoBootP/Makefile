@@ -43,14 +43,18 @@ ROMTARGET = aof.DoBootP
 # You may want to link with TinyStubs. if you do, set LD to tlink and
 # uncomment this TINYSTUBS, and comment out the STUBS
 
-STUBS=		C:o.Stubs
+CLIB		= C:o.Stubs
+ROMCSTUBS	= RISCOSLIB:o.romcstubs
+ABSSYM		= RISC_OSLib:o.AbsSym
+INETLIB		= TCPIPLibs:o.inetlibzm
+SOCKLIB		= TCPIPLibs:o.socklibzm
 
 DEBUG=		#-DDEBUG
 
-CFLAGS=		-pcc -ffh -zM -I${INCLUDES} -D_rosmodule -DUSECMOS ${DEBUG}\
+CFLAGS=		-pcc -ffh -zM -I${INCLUDES} -D_rosmodule -DUSECMOS -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -depend !Depend -c
 
-OBJS=		o.module o.stubs o.ifrconfig o.inetfn o.irqs o.dobootphdr
+OBJS=		o.module o.ifrconfig o.irqs o.dobootphdr
 
 #
 # Rule patterns
@@ -86,13 +90,13 @@ clean:
 # Target 
 #
 ${TARGET}:	$(OBJS)
-		$(LD) -rmf -o $@ $(OBJS) $(STUBS)
+		$(LD) -rmf -o $@ $(OBJS) $(CLIB) $(SOCKLIB) $(INETLIB)
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${ROMTARGET}: ${OBJS} $(SOCKLIB) $(INETLIB)
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} $(SOCKLIB) $(INETLIB)
 
 #
 # Final link for the ROM Image (using given base address)
@@ -106,52 +110,3 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	TCPIPLibs:sys.h.types
-o.module:	TCPIPLibs:sys.h.uio
-o.module:	TCPIPLibs:sys.h.socket
-o.module:	TCPIPLibs:sys.h.time
-o.module:	TCPIPLibs:sys.h.time
-o.module:	TCPIPLibs:sys.h.ioctl
-o.module:	TCPIPLibs:sys.h.ttychars
-o.module:	TCPIPLibs:sys.h.ttydev
-o.module:	TCPIPLibs:netinet.h.in
-o.module:	TCPIPLibs:net.h.if
-o.module:	TCPIPLibs:sys.h.mbuf
-o.module:	TCPIPLibs:net.h.if_arp
-o.module:	TCPIPLibs:sys.h.socket
-o.module:	TCPIPLibs:sys.h.errno
-o.module:	TCPIPLibs:sys.^.h.errno
-o.module:	C:h.kernel
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.dci4
-o.stubs:	c.stubs
-o.stubs:	TCPIPLibs:sys.h.types
-o.stubs:	TCPIPLibs:sys.h.uio
-o.stubs:	TCPIPLibs:sys.h.errno
-o.stubs:	TCPIPLibs:sys.^.h.errno
-o.stubs:	C:h.kernel
-o.stubs:	TCPIPLibs:sys.h.socket
-o.stubs:	TCPIPLibs:sys.h.socketvar
-o.stubs:	C:h.kernel
-o.inetfn:	c.inetfn
-o.inetfn:	TCPIPLibs:sys.h.types
-o.inetfn:	TCPIPLibs:netinet.h.in
-o.ifrconfig:	c.ifrconfig
-o.ifrconfig:	TCPIPLibs:sys.h.types
-o.ifrconfig:	TCPIPLibs:sys.h.socket
-o.ifrconfig:	TCPIPLibs:sys.h.ioctl
-o.ifrconfig:	TCPIPLibs:sys.h.ttychars
-o.ifrconfig:	TCPIPLibs:sys.h.ttydev
-o.ifrconfig:	TCPIPLibs:net.h.route
-o.ifrconfig:	TCPIPLibs:netinet.h.in
-o.ifrconfig:	TCPIPLibs:net.h.if
-o.ifrconfig:	TCPIPLibs:sys.h.mbuf
-o.ifrconfig:	TCPIPLibs:net.h.if_arp
-o.ifrconfig:	TCPIPLibs:sys.h.socket
-o.ifrconfig:	TCPIPLibs:sys.h.errno
-o.ifrconfig:	TCPIPLibs:sys.^.h.errno
-o.ifrconfig:	C:h.kernel
-o.ifrconfig:	C:h.kernel
-o.ifrconfig:	C:h.swis
