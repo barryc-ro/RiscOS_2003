@@ -1,0 +1,578 @@
+/*	Project Post (769)
+	Acorn Computers Ltd
+	Copyright © 1997. All Rights Reserved.
+
+	FILE:		parameter.c++
+	AUTHOR:		Richard D. Warren
+	VERSION:	0.05 for RISC OS
+
+	OVERVIEW
+	========
+	Source file for implementation of parameter object
+
+	HISTORY
+	=======
+	20/08/97	0.01	RDW	initial version
+	26/09/97	0.02	RDW	temp buffer name in GetAttributeType
+					is now destroyed after use. Fixed
+					memory leak
+	29/10/97	0.03	RDW	fixed parse method which didn't parse
+					values correctly if they are a quoted
+					string.
+	24/11/97	0.04	RDW	support for charset added to
+					GetAttributeType and fixed parse
+					method for non-quoted strings
+	18/02/98	0.05	RDW	#include DebugLib path added
+*/
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - System                                              */
+/*                                                                            */
+/* ************************************************************************** */
+extern "C"
+{
+  #include <stdio.h>
+  #include <string.h>
+  #include <ctype.h>
+  #include "DebugLib/DebugLib.h"
+}
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - Project defined                                     */
+/*                                                                            */
+/* ************************************************************************** */
+#include "parameter.h"
+#include "elibbase.h"
+extern "C"
+{
+  #include "ELib.h"
+  #include "ELib_priv.h"
+}
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* New enumerated types                                                       */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Function Prototypes - Private to this file                                 */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Object methods                                                             */
+/*                                                                            */
+/* ************************************************************************** */
+
+/* ************************************************************************** */
+/*
+   METHOD:         Constructor for a parameter object (memory based)
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   NONE
+   CONSTANTS:      NONE
+   VARIABLES:      NONE
+ */
+/* ************************************************************************** */
+parameter::parameter(BOOL f, char *membase, uint32 offset, uint32 length, NFE_CT_PARAM_TYPE t, BOOL owner) : elibbase(f, membase, offset, length, owner),
+                                           attribute_start(0),
+                                           attribute_len(0),
+                                           value_start(0),
+                                           value_len(0),
+                                           type(t),
+                                           attribute(0),
+                                           value(0)
+{
+  
+}
+
+
+parameter::parameter(void) : elibbase(),
+                       attribute_start(0),
+                       attribute_len(0),
+                       value_start(0),
+                       value_len(0),
+                       type(NFE_CT_PARAM_UNKNOWN),
+                       attribute(0),
+                       value(0)
+{
+  
+}
+
+
+// copy constructor
+parameter::parameter(const parameter &object) : elibbase(object),
+                                           attribute_start(0),
+                                           attribute_len(0),
+                                           value_start(0),
+                                           value_len(0),
+                                           type(NFE_CT_PARAM_UNKNOWN),
+                                           attribute(0),
+                                           value(0)
+{
+  copyparameterobject(object);
+}
+
+
+// assignment operator
+parameter& parameter::operator=(const parameter &object)
+{
+  elibbase::operator=(object);
+  if (this != &object)
+  {
+    // do destructor type things
+    copyparameterobject(object);
+  }
+  return *this;
+}
+
+
+void parameter::copyparameterobject(const parameter &object)
+{
+  attribute_start = object.attribute_start;
+  attribute_len = object.attribute_len;
+  value_start = object.value_start;
+  value_len = object.value_len;
+  type = object.type;
+  if (object.attribute)
+  {
+    attribute = new char[strlen(object.attribute)+1];
+    if (attribute) strcpy(attribute, object.attribute);
+  }
+  if (object.value)
+  {
+    value = new char[strlen(object.value)+1];
+    if (value) strcpy(value, object.value);
+  }
+}
+
+
+// Implementation of destructor for parameter
+parameter::~parameter()
+{
+  // nothing to do
+  if (attribute)	delete[] attribute;
+  if (value)	delete[] value;
+}
+
+
+NFE_rcode parameter::GetAttribute(char *n, uint32 &length) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  rc = param_check_Get(n, length);
+  if (rc >= 0)
+  {
+    if (length < attribute_len+1)
+      rc = NFE_NOSPACE;
+    else
+    {
+      n = get_data(attribute_start, attribute_len, n);
+      if (!n)
+        rc = NFE_FAILED;
+    }
+  }
+  length = attribute_len+1;
+
+  return rc;
+}
+
+
+NFE_rcode parameter::GetValue(char *n, uint32 &length) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  rc = param_check_Get(n, length);
+  
+  if (rc >= 0)
+  {
+    if (length < value_len+1)
+      rc = NFE_NOSPACE;
+    else
+    {
+      n = get_data(value_start, value_len, n);
+      if (!n)
+        rc = NFE_FAILED;
+    }
+  }
+  length = value_len+1;
+  
+  return rc;
+}
+
+
+NFE_rcode parameter::param_check_Get(char *n, uint32 &len) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (!n)
+    rc = NFE_NULLADDR;
+  
+  if (rc >= 0)
+    if (len == 0)
+      rc = NFE_NOSPACE;
+  
+  if (!data_present())
+    rc = NFE_NODATAPRESENT;
+  
+  if (rc >= 0)
+  {
+    if (!parsed)
+      rc = NFE_DATAMUSTBEPARSED;
+  }
+  
+  return rc;
+}
+
+
+NFE_rcode parameter::parse(NFE_CONTEXT &context, clock_t t_slice)
+{
+  NFE_rcode rc    = NFE_COMPLETED;
+  BOOL      error = FALSE;
+
+  BOOL startok = goto_start();
+  if (!startok)
+    error = TRUE;
+  if ((error) && (file))
+    rc = NFE_INVALIDFILENAME;
+  else
+  {
+    attribute_start = curpos;							// attribute must start at the start of the parameter field
+    // traverse until ':' found or CRLF(error) of we go off the end of the data
+    while ( (curchar != '=') && (!error))
+    {
+      dprintf(("", "parameter: curchar: %c\n", curchar));
+      if ((iscntrl(curchar)) || (curchar == 32) || (end_of_data()) )
+        error = TRUE;
+      next_char();
+    }
+  }
+  
+  if (!error)
+  {
+    BOOL quotes = FALSE;
+    BOOL endreached = FALSE;
+    attribute_len = curpos - attribute_start;
+    next_char();								// consume the '='
+    value_start = curpos;							// set value_start
+    dprintf(("", "parameter: value_start: %d\n", value_start));
+    if (curchar == '"')
+    {
+      quotes = TRUE;
+      next_char();
+    }
+    while ( (!endreached) && (!end_of_data()) )					// traverse until whitespace found
+    {
+      if (!quotes)
+      {
+        if (isspace(curchar))
+          endreached = TRUE;
+        else
+          next_char();
+      }
+      else if (curchar == '"')
+      {
+        next_char();
+        endreached = TRUE;
+      }
+      else
+        next_char();
+    }
+    value_len   = len - value_start;						// set value_len
+  }
+  dprintf(("","body error %d\n", error));
+  if (!error)
+  {
+    value_len = curpos - value_start;					// set value_len
+    len = curpos - attribute_start;						// set length to actual length of parameter field
+  }
+  dprintf(("", "value_len: %d\n", value_len));
+  stop();									// we've stopped processing data, tidy up by closing file if this is a file version
+  
+  if ((error) && (rc == NFE_COMPLETED))
+    rc = NFE_FAILED;
+  else
+  {
+    parsed = TRUE;
+    GetAttributeType(); 	// will set this parameters type data member
+  }
+    
+  return rc;
+}
+
+
+NFE_rcode parameter::GetAttributeLen(uint32 &len) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (data_present())
+  {
+    if (!parsed)
+      rc = NFE_DATAMUSTBEPARSED;
+    else
+      len = attribute_len;
+  }
+  else
+    rc = NFE_NODATAPRESENT;
+  
+  return rc;
+}
+
+
+NFE_rcode parameter::GetValueLen(uint32 &len) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (data_present())
+  {
+    if (!parsed)
+      rc = NFE_DATAMUSTBEPARSED;
+    else
+      len = value_len;
+  }
+  else
+    rc = NFE_NODATAPRESENT;
+  
+  return rc;
+}
+
+
+void parameter::Display(void)
+{
+  uint32 i;
+  
+  BOOL startok = goto_pos(attribute_start);
+  if (startok)
+  {
+    printf("parameter: ");
+    for (i = 0; i<attribute_len; i++)
+    {
+      printf("%c", curchar);
+      next_char();
+    }
+    printf("\nValue: ");
+  }
+  startok = goto_pos(value_start);
+  {
+    for (i = 0; i<value_len; i++)
+    {
+      printf("%c", curchar);
+      next_char();
+    }
+    printf("\n");
+    stop();
+  }
+}
+
+
+NFE_rcode parameter::SetAttribute(char *c)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (c)
+  {
+    if (file)
+    {
+      rc = NFE_FAILED;			// I'M NOT GOING TO SUPPORT A FILE VERSION OF parameterS FOR CREATION OR UPDATE JUST NOW!  USE MEMORY, HDRS ARE SMALL!
+/*      if (mem_base)			// check we have a filename
+      {
+        
+        fd = fopen(filename, "wb");	// openfile for writing and wipe it clean
+        if (fd)				// if opened OK then
+        {
+          
+        }
+        else				// else
+          rc = NFE_WRITEFAIL;		// return error can't open file
+      }
+      else
+        rc = NFE_INVALIDFILENAME;*/
+    }
+    else
+    {
+      char *new_memory = 0;							// temp pointer to new memory block
+
+      mem_size = strlen(c)+2+value_len+4;					// calculate storage attribute length +':'+' '+value_len+CRLF+NULLCHAR
+      new_memory = new char[mem_size];						// allocate space
+      if (new_memory)								// if storage allocated OK, then
+      {
+        sprintf(new_memory, "%s: ", c);						// copy in new field name
+        if (value_len)							// if value present in old memory, then
+          strncat(new_memory, mem_base+start+value_start, value_len);	// copy in old value into new memory
+        strcat(new_memory, "\r\n");						// write in terminating in CRLF+NULLCHAR
+        start = 0;								// start offset is 0 as we own this memory
+        len = mem_size-1;							// set length to size of the memory area (-1 for the NULLCHAR)
+        attribute_start = 0;							// start of attribute is at the start of the memory
+        attribute_len   = strlen(c);						// set length of attribute
+        if (value_len)							// if value present, then
+          value_start = attribute_len+2;					// set value start to the new correct offset
+        value_len   = value_len;					// set value len as before
+        parsed = TRUE;								// parsed = TRUE as all the offsets above are now correct
+
+        if ((mem_base) && (ownership))						// if there was previous storage and we owned it, then
+          delete[] mem_base;							// delete it
+        mem_base = new_memory;							// use the new memory
+        ownership = TRUE;							// set ownership as we own this new memory
+      }
+      else
+        rc = NFE_MALLOCFAILED;
+    } // endif memory version
+  }
+  else
+    rc = NFE_NULLADDR;								// c parameter is NULL, so return error
+    
+  return rc;
+}
+
+
+NFE_rcode parameter::SetValue(char *c)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (c)
+  {
+    if (file)
+    {
+      rc = NFE_FAILED;			// I'M NOT GOING TO SUPPORT A FILE VERSION OF parameterS FOR CREATION OR UPDATE JUST NOW!  USE MEMORY, HDRS ARE SMALL!
+/*      if (mem_base)			// check we have a filename
+      {
+        
+        fd = fopen(filename, "wb");	// openfile for writing and wipe it clean
+        if (fd)				// if opened OK then
+        {
+          
+        }
+        else				// else
+          rc = NFE_WRITEFAIL;		// return error can't open file
+      }
+      else
+        rc = NFE_INVALIDFILENAME;*/
+    }
+    else
+    {
+      char *new_memory = 0;							// temp pointer to new memory block
+
+      mem_size = attribute_len+2+strlen(c)+4;					// calculate storage attribute_len+':'+' '+value length+CRLF+NULLCHAR
+      new_memory = new char[mem_size];						// allocate space
+      if (new_memory)								// if storage allocated OK, then
+      {
+        if (attribute_len)							// if attribute present in old memory, then
+        {
+          strncpy(new_memory, mem_base+start+attribute_start, attribute_len);	// copy in old attribute into new memory
+          new_memory[attribute_len] = 0;
+        }
+        strcat(new_memory, c);							// copy in new field body
+        strcat(new_memory, "\r\n");						// write in terminating in CRLF+NULLCHAR
+        start = 0;								// start offset is 0 as we own this memory
+        len = mem_size-1;							// set length to size of the memory area (-1 for the NULLCHAR)
+        attribute_start = attribute_start;					// start of attribute is as before
+        attribute_len   = attribute_len;					// set length of attribute as before
+        value_start = attribute_start+attribute_len;			// set value start
+        value_len   = strlen(c);						// set value len to length of new value
+        parsed = TRUE;								// parsed = TRUE as all the offsets above are now correct
+
+        if ((mem_base) && (ownership))						// if there was previous storage and we owned it, then
+          delete[] mem_base;							// delete it
+        mem_base = new_memory;							// use the new memory
+        ownership = TRUE;							// set ownership as we own this new memory
+      }
+      else
+        rc = NFE_MALLOCFAILED;
+    } // endif memory version
+  }
+  else
+    rc = NFE_NULLADDR;								// c parameter is NULL, so return error
+    
+  return rc;
+}
+
+
+// function to write out the object to file
+NFE_rcode parameter::WriteOut(NFE_CONTEXT &context, clock_t t_slice, FILE *f)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (f)
+  {
+    rc = write_to_file(context, t_slice, f, attribute_start, attribute_len);
+    if (rc == NFE_COMPLETED)
+      fwrite("=", 1, 1, f);
+    if (rc == NFE_COMPLETED)
+      rc = write_to_file(context, t_slice, f, value_start, value_len);
+  }
+  else
+    rc = NFE_NULLADDR;
+  
+  return rc;
+}
+
+
+// function to write out the object to memory
+NFE_rcode parameter::WriteOut(NFE_CONTEXT &context, clock_t t_slice, char *mem, uint32 &l)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (mem)
+  {
+    if (l >= attribute_len + 2 + value_len + 3)
+    {
+      rc = write_to_mem(context, t_slice, mem, l, attribute_start, attribute_len);
+      if (rc == NFE_COMPLETED)
+        strcat(mem, "=");
+      if (rc == NFE_COMPLETED)
+        write_to_mem(context, t_slice, mem, l, value_start, value_len);
+    }
+    else
+    {
+      l = attribute_len + 2 + value_len + 3;
+      rc = NFE_NOSPACE;
+    }
+  }
+  else
+    rc = NFE_NULLADDR;
+    
+  return rc;
+}
+
+
+NFE_CT_PARAM_TYPE parameter::GetAttributeType(void)
+{
+  if ((data_present()) && (parsed))
+  {
+    uint32 l = attribute_len+1;
+    char *name = new char[l];
+    if (name)
+    {
+      if (GetAttribute(name, l) == NFE_COMPLETED)
+      {
+        dprintf(("", "GetAttributeType:attribute: %s\n", name));
+        // case insensitive compare
+        if (incase_comp("name", name) == 0)
+          type = NFE_CT_PARAM_NAME;
+        else if (incase_comp("boundary", name) == 0)
+          type = NFE_CT_PARAM_BOUNDARY;
+        else if (incase_comp("charset", name) == 0)
+          type = NFE_CT_PARAM_CHARSET;
+        else
+          type = NFE_CT_PARAM_UNKNOWN;
+      }
+      delete[] name;
+    }
+  }
+  return type;
+}
+
+

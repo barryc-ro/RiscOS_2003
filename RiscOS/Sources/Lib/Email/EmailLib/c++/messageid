@@ -1,0 +1,446 @@
+/*	Project Post (769)
+	Acorn Computers Ltd
+	Copyright © 1997. All Rights Reserved.
+
+	FILE:		messageid.c++
+	AUTHOR:		Richard D. Warren
+	VERSION:	0.06 for RISC OS
+
+	OVERVIEW
+	========
+	Source file for implementation of messageid object
+
+	HISTORY
+	=======
+	20/08/97	0.01	RDW	initial version
+	12/09/97	0.02	RDW	Merged file and memory constructors into one
+	21/09/97	0.03	RDW	Added SetDomain, UpdateBody and SetLocalpart methods
+	23/09/97	0.04	RDW	set parsed data member to true in constructor
+					for when object is created from scratch
+	29/11/97	0.05	RDW	Fix memory leak in UpdateBody (temp not deleted)
+	18/02/98	0.06	RDW	#include DebugLib path added
+*/
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - System                                              */
+/*                                                                            */
+/* ************************************************************************** */
+extern "C"
+{
+  #include <string.h>
+  #include <ctype.h>
+  #include "DebugLib/DebugLib.h"
+}
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - Project defined                                     */
+/*                                                                            */
+/* ************************************************************************** */
+#include "messageid.h"
+#include "header.h"
+#include "822parser.h"
+extern "C"
+{
+  #include "ELib.h"
+}
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* New enumerated types                                                       */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Globals to this file                                                       */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Function Prototypes - Private to this file                                 */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Object methods                                                             */
+/*                                                                            */
+/* ************************************************************************** */
+
+/* ************************************************************************** */
+/*
+   METHOD:         Constructor for a messageid object (memory based)
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   NONE
+   CONSTANTS:      NONE
+   VARIABLES:      NONE
+ */
+/* ************************************************************************** */
+messageid::messageid(BOOL f, char *membase, uint32 offset, uint32 length, BOOL owner) : header(f, membase, offset, length, NFE_HDR_MESSAGE_ID, owner),
+                                                                      localpart(0),
+                                                                      domain(0),
+                                                                      parsed(FALSE)
+{
+  if ((owner) && (length==0))
+  {
+    SetName("Message-ID");
+    parsed = TRUE;
+  }
+}
+
+
+// copy constructor
+messageid::messageid(const messageid &object) : header(object),
+                                 localpart(0),
+                                 domain(0),
+                                 parsed(FALSE)
+{
+  copymessageidobject(object);
+}
+
+
+// copy constructor messageid header object
+messageid::messageid(const header &object) : header(object),
+                                   localpart(0),
+                                   domain(0),
+                                   parsed(FALSE)
+{
+  type = NFE_HDR_MESSAGE_ID;
+}
+
+
+messageid &messageid::operator=(const messageid &object)
+{
+  header::operator=(object);
+  if (this != &object)
+  {
+    // do destructor things
+    if (localpart)
+      delete[] localpart;
+    if (domain)
+      delete[] domain;
+    copymessageidobject(object);
+  }
+  return *this;
+}
+
+
+messageid &messageid::operator=(const header &object)
+{
+  header::operator=(object);
+  if (this != &object)
+  {
+    // do destructor things
+    if (localpart)
+      delete[] localpart;
+    localpart = 0;
+    if (domain)
+      delete[] domain;
+    domain = 0;
+    parsed = FALSE;
+  }
+  return *this;
+}
+
+
+void messageid::copymessageidobject(const messageid &object)
+{
+  if (object.localpart)
+  {
+    localpart = new char[strlen(object.localpart)+1];
+    strcpy(localpart, object.localpart);
+  }
+  if (object.domain)
+  {
+    domain = new char[strlen(object.domain)+1];
+    strcpy(domain, object.domain);
+  }
+  parsed = object.parsed;
+}
+
+
+// constructor, file version
+/*messageid::messageid(char *filename, uint32 offset, BOOL owner) : header(filename, offset, NFE_HDR_MESSAGE_ID, owner),
+                                                        localpart(0),
+                                                        domain(0),
+                                                        parsed(FALSE)
+{
+
+}
+*/
+
+// Implementation of destructor for messageid
+messageid::~messageid()
+{
+  // nothing to do
+  if (localpart)
+    delete[] localpart;
+  if (domain)
+    delete[] domain;
+}
+
+
+NFE_rcode messageid::parse(NFE_CONTEXT &context, clock_t t_slice)
+{
+  NFE_rcode rc    = NFE_COMPLETED;
+  BOOL      error = FALSE;
+
+  if (!header::Parsed())
+    rc = header::parse(context, t_slice);
+  if (rc != NFE_COMPLETED)
+    error = TRUE;
+    
+  if (!error)
+  {
+    uint32 size = 0;
+    rc = GetBodyLen(size);
+    size+=2;
+    char *temp = new char[size];
+    if (temp)
+    {
+      rc = GetUnfoldedNoCommentsBody(temp, size);
+      dprintf(("", "GetUnfoldedNoCommentsBody(): %s   size:%d\n", temp, size));
+      if (rc == NFE_COMPLETED)
+      {
+        uint32 realsize = size;
+        char *ptr = temp;
+        char *localpart_start = 0;
+        char *localpart_end = 0;
+        char *domain_start = 0;
+        char *domain_end = 0;
+        
+        error = consume_all_LWSP(ptr, size);
+        char *start = ptr;
+        if (*ptr != '<')
+          error = TRUE;
+        else
+        {
+          ptr++;
+          size--;
+          localpart_start = ptr;
+          
+          while ((*ptr != '@') && (size))					// search for @.
+          {
+            ptr++;
+            size--;
+          }
+          if (size)							// if not off end of the data
+          {
+            localpart_end = ptr;
+            ptr++;
+            size--;
+            domain_start = ptr;
+          }
+          else
+            error = TRUE;
+          if (!error)
+          {
+            while ((*ptr != '>') && (size))
+            {
+              ptr++;
+              size--;
+            }
+            if (size)
+              domain_end = ptr;
+            else
+              error = TRUE;
+          }
+        }
+        if ((domain_start) && (domain_end))
+        {
+          *domain_end = 0;  // terminate the string
+          domain = new char[strlen(domain_start)+1];
+          strcpy(domain, domain_start);
+        }
+        if ((localpart_end) && (localpart_start))
+        {
+          *localpart_end = 0;	// terminate the string
+          localpart = new char[strlen(localpart_start)+1];
+          strcpy(localpart, localpart_start);
+        }
+      }
+      delete[] temp;
+      temp = 0;
+    }
+    else
+      rc = NFE_MALLOCFAILED;
+  }
+  if (rc == NFE_COMPLETED)
+    parsed = TRUE;
+    
+  return rc;
+}
+
+
+void messageid::Display(void)
+{
+  header::Display();
+  uint32 i = 0;
+  
+  if (localpart)
+    printf("LOCALPART: %sEND\n", localpart);
+  if (domain)
+    printf("DOMAIN:    %sEND\n", domain);
+  printf("\n");
+}
+
+
+NFE_rcode messageid::GetLocalpart(char *n, uint32 &len) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (parsed)
+  {
+    if (localpart)
+    {
+      if (n)
+      {
+        uint32 length = strlen(localpart+1);
+        if (len < length)
+          rc = NFE_NOSPACE;
+        else
+          strcpy(n, localpart);
+      }
+      else
+        rc = NFE_NULLADDR;
+    }
+    else
+      rc = NFE_INVALIDDATA;
+  }
+  else
+    rc = NFE_DATAMUSTBEPARSED;
+    
+  return rc;
+}
+
+     
+NFE_rcode messageid::GetDomain(char *n, uint32 &len) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (parsed)
+  {
+    if (domain)
+    {
+      if (n)
+      {
+        uint32 length = strlen(domain+1);
+        if (len < length)
+          rc = NFE_NOSPACE;
+        else
+          strcpy(n, domain);
+      }
+      else
+        rc = NFE_NULLADDR;
+    }
+    else
+      rc = NFE_INVALIDDATA;
+  }
+  else
+    rc = NFE_DATAMUSTBEPARSED;
+    
+  return rc;
+}
+
+     
+char* messageid::GetLocalpart(void) const
+{
+  return localpart;
+}
+
+
+char* messageid::GetDomain(void) const
+{
+  return domain;
+}
+
+
+NFE_rcode messageid::SetLocalpart(char *n)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (n)
+  {
+    if (localpart)
+      delete[] localpart;
+    localpart = new char[strlen(n)+1];
+    if (localpart)
+    {
+      strcpy(localpart, n);
+      rc = UpdateBody();
+    }
+    else
+      rc = NFE_MALLOCFAILED;
+  }
+  else
+    rc = NFE_NULLADDR;
+    
+  return rc;
+}
+
+
+NFE_rcode messageid::SetDomain(char *n)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (n)
+  {
+    if (domain)
+      delete[] domain;
+    domain = new char[strlen(n)+1];
+    if (domain)
+    {
+      strcpy(domain, n);
+      rc = UpdateBody();
+    }
+    else
+      rc = NFE_MALLOCFAILED;
+  }
+  else
+    rc = NFE_NULLADDR;
+    
+  return rc;
+}
+
+
+NFE_rcode messageid::UpdateBody(void)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  uint32 localpartlen = 0;
+  uint32 domainlen = 0;
+  char *temp = 0;
+  
+  if (localpart)	localpartlen = strlen(localpart);
+  if (domain)		domainlen  = strlen(domain);
+  
+  temp = new char[localpartlen + domainlen + 4];		// < + @ + > + NULL = 4 chars!
+  if (temp)
+  {
+    if ((localpart) && (domain))
+    {
+      sprintf(temp, "<%s@%s>", localpart, domain);
+      if (rc == NFE_COMPLETED)
+        rc = SetBody(temp);
+    }
+    delete[] temp;
+  }
+  else
+    rc = NFE_NULLADDR;
+    
+  return rc;
+}
+
+

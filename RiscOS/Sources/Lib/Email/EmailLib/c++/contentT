@@ -1,0 +1,678 @@
+/*	Project Post (769)
+	Acorn Computers Ltd
+	Copyright © 1997. All Rights Reserved.
+
+	FILE:		contentT.c++
+	AUTHOR:		Richard D. Warren
+	VERSION:	0.07 for RISC OS
+
+	OVERVIEW
+	========
+	Source file for implementation of contentT object
+
+	HISTORY
+	=======
+	20/08/97	0.01	RDW	initial version
+	12/09/97	0.02	RDW	Merged file and memory constructors into one
+	15/09/97	0.03	RDW	Added list data member for list of parameters
+					Added methods FindParam, GetParam, ReplaceParam,
+					InsertParam, AddParam and WriteOut
+					parse method modified to include parsing of parameters
+	22/09/97	0.04	RDW	set parsed data member to TRUE in constructor for
+					when object is created from scratch
+					WriteOut methods changed: removed call to
+					header::WriteOut and replaced with
+					code copied from header::WriteOut, then
+					do the parameter WriteOuts and finally
+					write out the CRLF
+	26/09/97	0.05	RDW	Destructor now destroys the parameters
+					in the list, as does the copy constructors
+					copycontentTobject now makes copies of the
+					parameter objects in the other
+					contentT object
+					
+	27/10/97	0.06	RDW	GetMajorandMinorTypes method added
+	18/02/98	0.07	RDW	#include DebugLib path added
+*/
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - System                                              */
+/*                                                                            */
+/* ************************************************************************** */
+extern "C"
+{
+  #include <string.h>
+  #include <ctype.h>
+  #include "DebugLib/DebugLib.h"
+}
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - Project defined                                     */
+/*                                                                            */
+/* ************************************************************************** */
+#include "contentT.h"
+#include "header.h"
+#include "822parser.h"
+#include "parameter.h"
+extern "C"
+{
+  #include "ELib.h"
+  #include "ELib_priv.h"
+}
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* New enumerated types                                                       */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Globals to this file                                                       */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Function Prototypes - Private to this file                                 */
+/*                                                                            */
+/* ************************************************************************** */
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Object methods                                                             */
+/*                                                                            */
+/* ************************************************************************** */
+
+/* ************************************************************************** */
+/*
+   METHOD:         Constructor for a contentT object (memory based)
+   DESCRIPTION:    
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   NONE
+   CONSTANTS:      NONE
+   VARIABLES:      NONE
+ */
+/* ************************************************************************** */
+contentT::contentT(BOOL f, char *membase, uint32 offset, uint32 length, NFE_CT ct, uint32 min, BOOL owner) : header(f, membase, offset, length, NFE_HDR_CONTENT_TYPE, owner),
+                                                                      contenttype(ct),
+                                                                      minortype(min),
+                                                                      parsed(FALSE),
+                                                                      first(TRUE)
+{
+  if ((owner) && (length==0))
+  {
+    SetName("Content-Type");
+    parsed = TRUE;
+  }
+}
+
+
+// copy constructor
+contentT::contentT(contentT &object) : header(object),
+                                 contenttype(NFE_CT_UNKNOWN),
+                                 minortype(0),
+                                 parsed(FALSE),
+                                 first(TRUE)
+{
+  copycontentTobject(object);
+}
+
+
+// copy constructor from header object
+contentT::contentT(const header &object) : header(object),
+                                  contenttype(NFE_CT_UNKNOWN),
+                                  minortype(0),
+                                  parsed(FALSE),
+                                  first(TRUE)
+{
+  type = NFE_HDR_CONTENT_TYPE;
+}
+
+
+contentT &contentT::operator=(contentT &object)
+{
+  header::operator=(object);
+  if (this != &object)
+  {
+    // do destructor things
+    TRAVERSE(list)
+    {
+      parameter *p = (parameter*)list.Current();
+      if (p)
+        delete p;
+    }
+    copycontentTobject(object);
+  }
+  return *this;
+}
+
+
+contentT &contentT::operator=(const header &object)
+{
+  header::operator=(object);
+  if (this != &object)
+  {
+    // do destructor things
+    TRAVERSE(list)
+    {
+      parameter *p = (parameter*)list.Current();
+      if (p)
+        delete p;
+    }
+    parsed = FALSE;
+  }
+  return *this;
+}
+
+
+void contentT::copycontentTobject(contentT &object)
+{
+  int32 pos = object.list.Rank();
+  TRAVERSE(object.list)
+  {
+    parameter *p2 = 0;
+    parameter *p = (parameter*)(object.list.Current());
+    if (p)
+      p2 = new parameter(*p);
+    if (p2)
+      list.Insert(p2);
+  }
+      
+  contenttype = object.contenttype;
+  minortype = object.minortype;
+  parsed = object.parsed;
+  first = object.first;
+}
+
+
+// Implementation of destructor for contentT
+contentT::~contentT()
+{
+  TRAVERSE(list)
+  {
+    parameter *p = (parameter*)list.Current();
+    if (p)
+      delete p;
+  }
+}
+
+
+NFE_rcode contentT::parse(NFE_CONTEXT &context, clock_t t_slice)
+{
+  NFE_rcode rc    = NFE_COMPLETED;
+  BOOL      error = FALSE;
+
+  if (!header::Parsed())
+    rc = header::parse(context, t_slice);
+  if (rc != NFE_COMPLETED)
+    error = TRUE;
+    
+  if (!error)
+  {
+    uint32 size = 0;
+    rc = GetBodyLen(size);
+    size+=2;
+    char *temp = new char[size];
+    if (temp)
+    {
+      rc = GetUnfoldedNoCommentsBody(temp, size);
+      dprintf(("", "GetUnfoldedNoCommentsBody(): %s   size:%d\n", temp, size));
+      if (rc == NFE_COMPLETED)
+      {
+        char *ptr = temp;
+        uint32 len;
+        char *tptr = ptr;
+        
+        error = consume_all_LWSP(ptr, size);
+        if (!error)
+        {
+          uint32 tsize = size;
+          while ((tsize) && (*tptr != '/'))
+          {
+            tsize--;
+            tptr++;
+          }
+          if (tsize)
+            len = tptr - ptr;
+          else
+            error = TRUE;
+        }
+        if (incase_n_comp("text", ptr, len) == 0)
+          contenttype = NFE_CT_TEXT;
+        else if (incase_n_comp("multipart", ptr, len) == 0)
+          contenttype = NFE_CT_MULTIPART;
+        else if (incase_n_comp("message", ptr, len) == 0)
+          contenttype = NFE_CT_MESSAGE;
+        else if (incase_n_comp("application", ptr, len) == 0)
+          contenttype = NFE_CT_APPLICATION;
+        else if (incase_n_comp("image", ptr, len) == 0)
+          contenttype = NFE_CT_IMAGE;
+        else if (incase_n_comp("audio", ptr, len) == 0)
+          contenttype = NFE_CT_AUDIO;
+        else if (incase_n_comp("video", ptr, len) == 0)
+          contenttype = NFE_CT_VIDEO;
+        else if (incase_n_comp("model", ptr, len) == 0)
+          contenttype = NFE_CT_MODEL;
+        else
+          contenttype = NFE_CT_UNKNOWN;
+        
+        // skip minor type		// Christ, what a mess this is becoming!
+        while((size>0) && (*tptr!=';'))
+        {
+          tptr++;
+          size--;
+        }
+        dprintf(("", "contentT:parse before while get parameters:tptr: %s\n", tptr));
+        error = consume_all_LWSP(tptr, size);
+        dprintf(("", "contentT:parse before while get parameters:tptr: %s\n", tptr));
+        size = strlen(tptr);
+        while ((size > 0) && (!error))			// get parameters
+        {
+          char *param_start = 0;
+          uint32 param_len = 0;
+
+          BOOL found = FALSE;
+          while ((size > 0) && (!found))
+          {
+            if (*tptr == ';')
+            {
+              found = TRUE;
+              tptr++;
+              size--;
+            }
+            else
+            {
+              tptr++;
+              size--;
+            }
+          }
+          error = consume_all_LWSP(tptr, size);
+          param_start = tptr;
+          found = FALSE;
+          while ((size > 0) && (!found))
+          {
+            if (*tptr == ';')
+            {
+              found = TRUE;
+            }
+            else
+            {
+              tptr++;
+              size--;
+            }
+          }
+          consume_all_LWSP(tptr, size);
+
+          NFE_CONTEXT c;
+          param_len = tptr - param_start - 1; // -1 for the ';' we are now pointing at
+          parameter *p = 0;
+          dprintf(("", "contentT:parse before parameter(),temp:'%s'\nparam_start:'%s'\nparam_start-temp:%d\nparam_len:%d\nfirst:%d\n\n", temp, param_start, param_start-temp, param_len, first));
+          p = new parameter(FALSE, temp, param_start-temp, param_len, NFE_CT_PARAM_UNKNOWN, first);
+          if (p)
+            rc = p->ParseData(c, 0);	// parse the parameter
+          else
+            rc = NFE_MALLOCFAILED;
+          if (rc != NFE_COMPLETED)
+          {
+            error = TRUE;
+            p->SetOwnership(FALSE);
+            if (p)	delete p;
+              p = 0;
+          }
+          else
+          {
+            uint32 l;
+            p->GetLen(l);
+            dprintf(("", "p->GetLen(l):%d\n", l));
+/*            size -= l;
+            if (size <= 0)
+            {
+              tptr-=size;		// size is -ve so we'll move forward to the end! (I hope!)
+              size = 0;
+            }
+            else
+              tptr+= l;*/
+            dprintf(("", "size:%d\ntptr:'%s'\n", size, tptr));
+            first=FALSE;
+            list.Insert(p);		// add parameter to list
+          }
+        } // endwhile
+        
+//        delete[] temp;	// removed 'cos ownership of this memory is given to the first parameter object]
+//        temp = 0;
+        if (rc != NFE_COMPLETED)
+        {
+          if (first)
+            delete[] temp;
+        }
+        else
+          parsed = TRUE;
+      }
+    }
+    else
+      rc = NFE_MALLOCFAILED;
+  }
+    
+  return rc;
+}
+
+
+void contentT::Display(void)
+{
+  header::Display();
+  switch (contenttype)
+  {
+    case NFE_CT_TEXT:
+      printf("contenttype is TEXT\n");
+      break;
+    case NFE_CT_MULTIPART:
+      printf("contenttype is MULTIPART\n");
+      break;
+    case NFE_CT_MESSAGE:
+      printf("contenttype is MESSAGE\n");
+      break;
+    case NFE_CT_APPLICATION:
+      printf("contenttype is APPLICATION\n");
+      break;
+    case NFE_CT_IMAGE:
+      printf("contenttype is IMAGE\n");
+      break;
+    case NFE_CT_AUDIO:
+      printf("contenttype is AUDIO\n");
+      break;
+    case NFE_CT_VIDEO:
+      printf("contenttype is VIDEO\n");
+      break;
+    case NFE_CT_MODEL:
+      printf("contenttype is MODEL\n");
+      break;
+    case NFE_CT_UNKNOWN:
+      printf("contenttype is UNKNOWN\n");
+      break;
+    default:
+      printf("type INTERNALERR\n");
+      break;
+  }
+  TRAVERSE(list)								// Traverse this list
+  {
+    ((parameter*)list.Current())->Display();					// Call Display method for each object
+  }
+  printf("\n");
+}
+
+
+NFE_rcode contentT::GetMajorType(NFE_CT &ct) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (data_present())
+  {
+    if (parsed)
+      ct = contenttype;
+    else
+      rc = NFE_DATAMUSTBEPARSED;
+  }
+  else
+    rc = NFE_NODATAPRESENT;
+    
+  return rc;
+}  
+
+
+/* ************************************************************************** */
+/*
+   METHOD:         FindParam
+   DESCRIPTION:    Method for finding a parameter of the given type t and returning
+   		   a pointer to that parameter object and it's position in the
+   		   parameters list.  This method will only return the first parameter
+   		   of the type requested found.  Later in development, I may
+   		   find I need to get other parameters which occur more than once.
+   		   eg. Received parameter.
+   DEPENDENCIES:   NONE
+   DEPENDED ON BY: 
+   INPUT PARAMS:   NFE_PARAM_TYPE	t		type of parameter to look for
+   OUTPUT PARAMS:  int32&		index		position of parameter in list
+   RETURN VALUE:   parameter*				NULL if not found
+   CONSTANTS:      NONE
+   VARIABLES:      NONE
+ */
+/* ************************************************************************** */
+parameter* contentT::FindParam(NFE_CT_PARAM_TYPE t, int32 &index)
+{
+  parameter *p = 0;
+  
+  if ((data_present()) && (parsed))						// check this parameters object has data which is parsed
+  {
+    BOOL found = FALSE;
+    list.Start();								// Goto start of list
+    while ((!list.Nul()) && (!found))						// while not found parameter and not off end of list, do
+    {
+      p = (parameter*)list.Current();						// Get current parameter in list
+      if (p)
+      {
+        if (p->GetAttribute() == t)						// Get parameter type and if == t, then
+        {
+          found = TRUE;								// set found
+          index = list.Rank();							// and set index
+        }
+        else
+          list.Next();
+      }
+    }
+    if (!found)
+      p = 0;
+  }
+    
+  return p;
+}
+
+
+/* ************************************************************************** */
+/*
+   METHOD:         FindParam
+   DESCRIPTION:    Method to find a parameter of a given type, but called doesn't
+   		   what the index position it is.
+   DEPENDENCIES:   NONE
+   DEPENDED ON BY: 
+   INPUT PARAMS:   NFE_PARAM_TYPE	t		type of parameter to look for
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   parameter*				NULL if not found
+   CONSTANTS:      NONE
+   VARIABLES:      NONE
+ */
+/* ************************************************************************** */
+parameter* contentT::FindParam(NFE_CT_PARAM_TYPE t)
+{
+  int32 unused = 0;
+  return FindParam(t, unused);
+}
+
+
+/* ************************************************************************** */
+/*
+   METHOD:         GetParam
+   DESCRIPTION:    Method to get the parameter object at the position pos in the
+   		   list.
+   DEPENDENCIES:   NONE
+   DEPENDED ON BY: 
+   INPUT PARAMS:   uint32		pos		index position to get from
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   parameter*				NULL if not found
+   CONSTANTS:      NONE
+   VARIABLES:      NONE
+ */
+/* ************************************************************************** */
+parameter* contentT::GetParam(uint32 pos)
+{
+  parameter *p = 0;
+  list.GoTo(pos);
+  p = (parameter*)list.Current();
+  return p;
+}
+
+
+// function to write out the object to file
+NFE_rcode contentT::WriteOut(NFE_CONTEXT &context, clock_t t_slice, FILE *f)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (f)
+  {
+    rc = write_to_file(context, t_slice, f, fieldname_start, fieldname_len);
+    if (rc == NFE_COMPLETED)
+      fwrite(": ", 2, 1, f);
+    if (rc == NFE_COMPLETED)
+      rc = write_to_file(context, t_slice, f, fieldbody_start, fieldbody_len);
+    if (rc == NFE_COMPLETED)
+    {
+      TRAVERSE(list)
+      {
+        parameter *p = (parameter*)list.Current();
+        if (p)
+        {
+          fwrite("; ", 2, 1, f);
+          rc = p->WriteOut(context, t_slice, f);
+        }
+      }
+    }
+    if (rc == NFE_COMPLETED)
+      fwrite("\r\n", 2, 1, f);
+  }
+  else
+    rc = NFE_NULLADDR;
+  
+  return rc;
+}
+
+
+// function to write out the object to memory
+NFE_rcode contentT::WriteOut(NFE_CONTEXT &context, clock_t t_slice, char *mem, uint32 &l)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  if (mem)
+  {
+    if (l >= len + 1)
+    {
+      rc = write_to_mem(context, t_slice, mem, l, fieldname_start, fieldname_len);
+      if (rc == NFE_COMPLETED)
+        strcat(mem, ": ");
+      if (rc == NFE_COMPLETED)
+        write_to_mem(context, t_slice, mem, l, fieldbody_start, fieldbody_len);
+      if (rc == NFE_COMPLETED)
+      {
+        TRAVERSE(list)
+        {
+          parameter *p = (parameter*)list.Current();
+          if (p)
+          {
+            strcat(mem, "; ");
+            rc = p->WriteOut(context, t_slice, mem, l);
+          }
+        }
+      }
+      if (rc == NFE_COMPLETED)
+      strcat(mem, "\r\n");
+    }
+    else
+    {
+      l = len + 1;
+      rc = NFE_NOSPACE;
+    }
+  }
+  else
+    rc = NFE_NULLADDR;
+    
+  return rc;
+}
+
+// Replace the parameter at position index with this parameter
+NFE_rcode contentT::ReplaceParam(const parameter& p, int32 index)
+{
+  NFE_rcode rc    = NFE_COMPLETED;
+  parameter *current = 0;
+
+  InsertParam(p, index);					// Insert the parameter at the requested position
+  list.Next();							// Goto the next position, ie. the parameter we are to replace
+  current = (parameter*)list.Current();				// Get that parameter
+  if (current)							// if we've got it, then
+  {
+    list.Delete();						// remove it from the list
+    delete current;						// destroy that parameter object
+  }
+
+  return rc;
+}
+
+// Insert parameter at position index in the list
+NFE_rcode contentT::InsertParam(const parameter& p, int32 index)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  index--;
+  if (index <= 0)
+    list.Start();						// make sure the list is at the start
+  else								// else
+    list.GoTo(index);						// goto the item before the one we are to replace
+  list.Insert(&p);						// Insert the replacement parameter after the current position
+  list.Next();							// Goto the next position, ie. the parameter we've just added
+
+  return rc;
+}
+
+// Add parameter onto the end of the list of parameters
+NFE_rcode contentT::AddParam(const parameter& p)
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  list.End();
+  list.Insert(&p);
+  
+  return rc;
+}
+
+
+// Get a string with the major/minor type in it
+NFE_rcode contentT::GetMajorandMinorTypes(char *string, uint32 &len) const
+{
+  NFE_rcode rc = NFE_COMPLETED;
+  
+  rc = GetUnfoldedNoCommentsBody(string, len);
+  if (rc == NFE_COMPLETED)
+  {
+    uint32 i = 0;
+    BOOL end = FALSE;
+    while ((i<len) && (!end))
+    {
+      switch (string[i])
+      {
+        case ';':
+        case 32:
+        case '\r':
+        case '\n':
+        case '\t':
+          end = TRUE;
+          break;
+        default:
+          i++;
+          break;
+      }
+    }
+    string[i] = 0;
+    len = strlen(string);
+  }
+  
+  return rc;
+}
