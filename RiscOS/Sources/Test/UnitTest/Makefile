@@ -46,7 +46,7 @@ CFLAGS  = -c -depend !Depend ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${D
 LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-DFLAGS  = ${DEBUG} -g
+DFLAGS  = ${DEBUG}
 BFLAGS  = 31
 
 #
@@ -138,6 +138,7 @@ install:
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
 	${CP} ${CRUNCHED}.TestCard ${APP}.TestCard ${CPFLAGS}
+	${CP} ${CRUNCHED}.Gen_Lib ${APP}.Gen_Lib ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 dirs:
@@ -154,6 +155,7 @@ ${TARGET}: ${OBJS} dirs
         ${LD} ${LDFLAGS} -o $@ ${OBJS} ${CLIB}
         @echo ${COMPONENT}: link stage complete
         ${CRUNCH} ${BFLAGS} @.b.TestCard @.${CRUNCHED}.TestCard
+        ${CRUNCH} ${BFLAGS} @.b.Gen_Lib @.${CRUNCHED}.Gen_Lib
 
 
 # Dynamic dependencies:
