@@ -24,6 +24,7 @@ CD        = dir
 DEFMOD    = DefMod
 AR        = LibFile
 THROWBACK = -Throwback
+STRIP     = stripdepnd
 
 
 CPFLAGS   = ~cfr~v
@@ -114,6 +115,7 @@ clean:
         ${RM} targets
         ${RM} linked
         ${RM} inst
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 local_dirs:
@@ -132,23 +134,3 @@ ${TARGETSA}: ${OBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${EX
 
 
 # Dynamic dependencies:
-o.dbug:	c.dbug
-o.dbug:	H.DBUG
-o.display:	c.display
-o.display:	C:h.os
-o.display:	C:h.kernel
-o.display:	h.typedefs
-o.display:	h.display
-o.display:	C:h.kernel
-o.display:	C:h.swis
-o.display:	C:h.assert
-o.display:	h.dbug
-o.filecrc:	c.filecrc
-o.filecrc:	C:h.kernel
-o.filecrc:	C:h.swis
-o.filecrc:	C:h.os
-o.filecrc:	h.CRC
-o.filecrc:	h.Display
-o.filecrc:	h.FileCRC
-o.filecrc:	h.DBUG
-o.filecrc:	h.types
