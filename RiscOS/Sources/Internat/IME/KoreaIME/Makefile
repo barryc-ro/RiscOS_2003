@@ -23,7 +23,7 @@ AR	= libfile
 TOUCH   = create
 MODSQZ  = modsqz
 
-CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ffa -ec -Wp ${INCLUDES} ${OPTIONS}
+CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ffa -Wp ${INCLUDES} ${OPTIONS}
 CMHGFLAGS = -p
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
