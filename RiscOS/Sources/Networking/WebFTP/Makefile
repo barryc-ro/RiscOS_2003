@@ -28,7 +28,7 @@ STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -Wc -depend !Depend ${THROWBACK} -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} -wp
-CMHGFLAGS = -depend !Depend -p ${THROWBACK} ${DFLAGS} ${INCLUDES}
+CMHGFLAGS = -depend !Depend -p ${THROWBACK} ${CSFS_ENABLED} ${INCLUDES}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 #
@@ -56,7 +56,8 @@ DIRS      = o._dirs
 
 # enable malloc debugging using the following define.
 #-DDEBUG_MALLOC
-DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -DFTP_PUT -DCSFS ${FTP_DB} ${FTP_REMOTE_DB} -DCMHG_FINALISE=1
+CSFS_ENABLED = -DCSFS
+DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -DFTP_PUT ${CSFS_ENABLED} ${FTP_DB} ${FTP_REMOTE_DB} -DCMHG_FINALISE=1
 
 #
 # Program specific options:
