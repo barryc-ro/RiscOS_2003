@@ -27,6 +27,9 @@ Date		Who	Change
 18/02/2000	BJGA	Implemented trickle-decoding of audio data during slow-motion play (but only
 			when video is also present); various flagging added to ensure that *VideoInfo
 			only prints audio header info for audio-only streams
+06/04/2000	BJGA	New counters initialised; audio play-out now depends upon video speed;
+			audio restart moved to same time as audio reset; hardware audio attenuation
+			initialised correctly
 
 ***************************************************************************/
 
@@ -114,11 +117,14 @@ _kernel_oserror *Audio_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   Stream.rs_flags.trick_play_mode = false;
   Stream.audio.since_open.amount_received = 0;
   Stream.audio.since_open.amount_sent = 0;
+  Stream.audio.since_open.PES_packets_sent = 0;
+  Stream.audio.since_open.PTSs_in = 0;
+  Stream.audio.since_open.PTSs_out = 0;
   Stream.audio.since_open.slows = 0;
   Stream.audio.since_open.fasts = 0;
   Stream.audio.since_open.underruns = 0;
   Stream.audio.since_open.crc_errors = 0;
-  Stream.audio_header.word = 0;
+  Stream.audio.since_open.sync_losses = 0;
   Stream.audio_buffer_prefill = static_ReadBufferVariable ("MPEG2$AudioBufferPreFill", DEFAULT_AUDIO_BUFFER_PREFILL);
   Stream.audio_buffer_low_water_mark = static_ReadBufferVariable ("MPEG2$AudioBufferLowWaterMark", DEFAULT_AUDIO_BUFFER_LOW_WATER_MARK);
   Stream.audio_buffer_high_water_mark = static_ReadBufferVariable ("MPEG2$AudioBufferHighWaterMark", DEFAULT_AUDIO_BUFFER_HIGH_WATER_MARK);
@@ -215,7 +221,7 @@ _kernel_oserror *Audio_SWICloseStream (unsigned int flags, stream_handle_t ash)
   dprintf (("Audio", "SWICloseStream\n"));
   
   /* Stop playing the old stream, only playing out the old data if we were playing at normal speed */
-  static_AudioStop (Stream.audio.speed_indicator == 1 && Stream.audio.state == stream_open);
+  static_AudioStop (Stream.rs_flags.video_present && Stream.video.speed_indicator == 1 && Stream.audio.state == stream_open);
   
   Stream.s_flags.audio_present = false;
   return e;
@@ -232,28 +238,26 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWIPlay (unsigned int flags, stream_handle_t ash)
 {
   _kernel_oserror *e = NULL;
-  int retry_count = 200;
-  int dummy_counter;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
   IGNORE(flags);
   IGNORE(ash);
   dprintf (("Audio", "SWIPlay\n"));
+  
+  AUD_PLY = 1; /* start decoding */
+  
+  e = IRQ_EnableAudioIRQs ();
+  
+  /* Initialise synchronisation clock */
+  Stream.reference_PCR = Stream.audio.first_PTS;
+  if (irqs_were_enabled) _kernel_irqs_off ();
+  Stream.reference_STC = Clk_ReadRawSTC ();
+  if (irqs_were_enabled) _kernel_irqs_on ();
   
   /* Update state machine - audio starts immediately */
   Stream.audio.state = stream_open;
   dprintf (("Audio", "SWIPlay: audio.state = stream_open\n"));
   
-  AUD_RST = 1;
-  /* Ensure the restart bit clears itself - if it doesn't then try writing the register again */
-  while ((retry_count-- > 0) && ((AUD_RST & 1) == 0))
-  {
-    for (dummy_counter = 0; dummy_counter < 100; dummy_counter++); /* wait a while */
-  }
-  if (retry_count == 0) dprintf (("Audio", "SWIPlay: audio restart failed\n"));
-  
-  AUD_PLY = 1; /* start decoding */
   IRQ_UpdateMuteState ();
-  
-  e = IRQ_EnableAudioIRQs ();
   
   return e;
 }
@@ -515,18 +519,30 @@ static _kernel_oserror *static_AudioStart (void)
   Stream.audio.state = stream_prefilling;
   Stream.audio.prefill_state = ps_searching_for_first_PES_header;
   Stream.audio.speed_indicator = 1;
+  Stream.audio.fast_slow_state = fss_normal_speed;
   Stream.audio.packet_list_head = NULL;
   Stream.audio.packet_list_tail = NULL;
   Stream.audio.since_reset.amount_received = 0;
   Stream.audio.since_reset.amount_sent = 0;
+  Stream.audio.since_reset.PES_packets_sent = 0;
+  Stream.audio.since_reset.PTSs_in = 0;
+  Stream.audio.since_reset.PTSs_out = 0;
   Stream.audio.since_reset.slows = 0;
   Stream.audio.since_reset.fasts = 0;
   Stream.audio.since_reset.underruns = 0;
   Stream.audio.since_reset.crc_errors = 0;
+  Stream.audio.since_reset.sync_losses = 0;
+  Stream.audio.first_PTS.msb = 0x80; /* flag that no PTS has been found yet */
+  Stream.audio.first_PTS.lsw = 0;
+  Stream.audio_header.word = 0;
   Stream.aud_flags.muted = false;
   Stream.aud_flags.first_header_received = false;
   Stream.aud_flags.muted_across_sampling_frequency_transition = false;
+  Stream.aud_flags.PTS_valid = false;
+  Stream.aud_flags.recovering_from_underrun = false;
   Stream.volume = 256;
+  AUD_LCA = AUD_RCA = 256 - Stream.volume;
+  Stream.audio_resync_delay = 100; /* wait a second before we start doing stream sync */
   Stream.discarded_audio_bit_buffer_data = -1; /* flag that VID_ABL should be read on the next Audio_ResetStream */
   IRQ_UpdateMuteState ();
   AUD_CRC = Stream.audio_parms.mute_audio_on_errors;

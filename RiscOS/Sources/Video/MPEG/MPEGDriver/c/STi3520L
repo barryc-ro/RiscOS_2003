@@ -30,6 +30,12 @@ Date		Who	Change
 			added CLOCK() macro to simplify clock specifcations;
 			implemented STi3520L_SetPCMClock()
 16/02/2000	BJGA	No longer blanks the MPEG video on soft reset (eg when doing a ResetStream)
+10/04/2000	BJGA	Now sets up 3520 to accept twin PES streams rather than elementary streams;
+			soft reset now resets PES parser, and does audio restart (some audio data can
+			be lost if it is done later); no attempt is now made to set up the internal STC
+			(it doesn't work, so I'm using Timer0 instead now); uses Timer0 instead of
+			Timer1 for microsecond waits (Timer1 might not be set up); sets audio decoder
+			clock to 25MHz rather than 27MHz - fixes temperature problem!
 
 ***************************************************************************/
 
@@ -45,6 +51,7 @@ Date		Who	Change
 #include "Global/IO/GenericIO.h"
 #include "Global/IO/IOMD.h"
 
+#include "Clk.h"
 #include "Mess.h"
 #include "Registers.h"
 #include "STi3520L.h"
@@ -175,7 +182,7 @@ void STi3520L_HardReset (void)
   WRITE_AUD_FFL(0); /* free-format frame length is unknown */
   AUD_IDE = 0;      /* ignore AUD_SID */
   AUD_IFT = 0;      /* input FIFO threshold not used in this driver (set to 0) */
-  AUD_ISS = 0;      /* input is elementary stream (for now) */
+  AUD_ISS = 4;      /* input is MPEG-2 PES stream */
   AUD_LCA = 0;      /* left channel attenuation = 0 */
   AUD_LCK = 3;      /* sync words until lock = 3 (default) */
   AUD_MUT = 1;      /* muted */
@@ -195,6 +202,8 @@ void STi3520L_HardReset (void)
   AUD_P18 = 1;      /*  |                                      */
   AUD_SCP = 0;      /*  /                                      */
   VID_CTL = VID_CTL_ERU | VID_CTL_ERS | VID_CTL_ERP;  /* automatic pipeline resets on any error type */
+  PES_CF1 = PES_CF1_IVI;                                         /* ignore video stream ID */
+  PES_CF2 = (2 << PES_CF2_MOD_SHIFT) | PES_CF2_SS | PES_CF2_IAI; /* accept twin MPEG-2 PES streams, ignore audio stream ID */
   
   /* Initialise the display */
   WRITE_VID_DFP(SDRAM_FRAME_BUFFER_1_START/256);
@@ -232,6 +241,9 @@ void STi3520L_SoftReset (bool reset_video, bool reset_audio)
     static_WaitMicroseconds(1);
     VID_CTL &= ~VID_CTL_SRS; /* disengage reset */
     static_WaitMicroseconds(1);
+    PES_CF2 &= ~PES_CF2_SS; /* reset PES parser */
+    static_WaitMicroseconds(1);
+    PES_CF2 |= PES_CF2_SS;
   }
   if (reset_audio & !reset_video)
   {
@@ -239,6 +251,25 @@ void STi3520L_SoftReset (bool reset_video, bool reset_audio)
     static_WaitMicroseconds(1);
     VID_ABT_8 = temp; /* disengage reset */
     static_WaitMicroseconds(1);
+  }
+  if (reset_audio)
+  {
+    int reset_count = 100;
+    int counter = 0;
+    AUD_RST = 1;
+    /* Ensure the restart bit clears itself - if it doesn't then try writing the register again */
+    while (reset_count > 0 && (AUD_RST & 1) != 0)
+    {
+      counter ++;
+      if ((counter % 200) == 0)
+      {
+        AUD_RST = 0;
+        AUD_RST = 1;
+        reset_count --;
+      }
+    }
+    if (reset_count == 0) dprintf (("STi3520L", "SoftReset: audio restart failed\n"));
+    else dprintf (("STi3520L", "SoftReset: took %d writes and %d reads to clear AUD_RST\n", (100 - reset_count) + 1, (counter % 200) + 1));
   }
 }
 
@@ -314,6 +345,11 @@ Notes:		Normally, we also maintain STC at 90 kHz (STC is derived
 
 void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
 {
+  dprintf (("Sync", "SetPCMClock: rate = %s kHz, %s\n",
+      rate == sr_48k ? "48" : rate == sr_44k1 ? "44.1" : "32",
+      fast ? "fast" : slow ? "slow" : "normal"));
+  
+  /* Set up PCMCLK */
   switch (rate)
   {
     case sr_48k:
@@ -330,8 +366,6 @@ void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
       {
         WRITE_CKG_PCM(CLOCK(1,1,9,586,745));
       }
-      WRITE_STC_DIV(2048); /* 90 kHz = 12288 kHz / 2048 * 15 */
-      WRITE_STC_INC(15);   /* STC granularity = 15 */
       break;
     case sr_44k1:
       /* 256 * 44.1 kHz = 11.2896 MHz */
@@ -347,8 +381,6 @@ void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
       {
         WRITE_CKG_PCM(CLOCK(1,1,10,331,447));
       }
-      WRITE_STC_DIV(3136); /* 90 kHz = 11289.6 kHz / 3136 * 25 */
-      WRITE_STC_INC(25);   /* STC granularity = 25 */
       break;
     case sr_32k:
     default:
@@ -365,8 +397,6 @@ void STi3520L_SetPCMClock (sample_rate rate, bool fast, bool slow)
       {
         WRITE_CKG_PCM(CLOCK(1,1,15,293,1629));
       }
-      WRITE_STC_DIV(4096); /* 90 kHz = 8192 kHz / 4096 * 45 */
-      WRITE_STC_INC(45);   /* STC granularity = 45 */
       break;
   }
 }
@@ -394,9 +424,9 @@ static void static_WaitMicroseconds (unsigned int wait)
     
   do
   {
-    * (volatile unsigned char *) (IOC + Timer1LR) = 0;              /* latch Timer1 value */
-    newtime = * (volatile unsigned char *) (IOC + Timer1CL) +
-             (* (volatile unsigned char *) (IOC + Timer1CH) << 8);  /* read Timer1 value */
+    * (volatile unsigned char *) (IOC + Timer0LR) = 0;              /* latch Timer0 value */
+    newtime = * (volatile unsigned char *) (IOC + Timer0CL) +
+             (* (volatile unsigned char *) (IOC + Timer0CH) << 8);  /* read Timer0 value */
     diff = newtime - oldtime;
     if (diff < 0) count += diff;   /* if time has decreased (ie no wraparound) then apply it to |count| too */
     oldtime = newtime;
@@ -415,17 +445,17 @@ Purpose:	Stops the PLL itself, but initialises its inputs and outputs
 static void static_InitialisePLL (void)
 {
   /* Stop the PLL */
-  WRITE_CKG_PLL(0x20);              /* discharge the capacitor */
+  WRITE_CKG_PLL(0x20);               /* discharge the capacitor */
   static_WaitMicroseconds (100);
   /* Set up inputs/outputs and PLL dividers */
   WRITE_CKG_CFG(0x23);    /* SDRAMCLK, PCMCLK pins set as outputs, AUDCLK, PIXCLK pins as inputs, video/audio decoder clocks generated internally */
-  WRITE_CKG_VID(CLOCK(1,0,3,0,1));  /* 60.750 MHz  (must be 3/2 SDRAMCLK for 32Mbit SDRAM configuration) */
-  WRITE_CKG_AUD(CLOCK(1,0,8,0,1));  /* 27.000 MHz  */
-  WRITE_CKG_MCK(CLOCK(0,0,0,0,1));  /* reset DIV3  */
-  WRITE_CKG_MCK(CLOCK(1,1,2,0,1));  /* 40.500 MHz  (most conservative SDRAMCLK frequency for 32Mbit SDRAM configuration) */
-  WRITE_CKG_AUX(CLOCK(0,0,0,0,1));  /* disabled    */
-  WRITE_CKG_PIX(CLOCK(0,0,0,0,1));  /* disabled    */
-  STi3520L_SetPCMClock (sr_44k1, false, false);   /* audio unit only generates an IRQ when sample rate changes from 44.1 kHz */
+  WRITE_CKG_VID(CLOCK(1,0,3,0,1));   /* 60.750 MHz  (must be 3/2 SDRAMCLK for 32Mbit SDRAM configuration) */
+  WRITE_CKG_AUD(CLOCK(1,0,8,18,25)); /* 25.000 MHz  (audio decode locks up below 10°C if we use 27MHz!) */
+  WRITE_CKG_MCK(CLOCK(0,0,0,0,1));   /* reset DIV3  */
+  WRITE_CKG_MCK(CLOCK(1,1,2,0,1));   /* 40.500 MHz  (most conservative SDRAMCLK frequency for 32Mbit SDRAM configuration) */
+  WRITE_CKG_AUX(CLOCK(0,0,0,0,1));   /* disabled    */
+  WRITE_CKG_PIX(CLOCK(0,0,0,0,1));   /* disabled    */
+  STi3520L_SetPCMClock (sr_44k1, false, false);  /* nominal value, just to get the clock going */
 }
 
 /******	static_SelectPLLFreq() *********************************************

@@ -45,6 +45,9 @@ Date		Who	Change
 			audio flags and current volume setting
 17/02/2000	BJGA	Changes to support audio error counting, and deferred SetSpeed calls
 18/02/2000	BJGA	Added audio_slowmo_field_count
+07/04/2000	BJGA	Added all clock references and clock-valid flags, PES parsing flags,
+			presentation_error, going_faster, going_slower, internal_reset,
+			recovering_from_underrun; moved fast_slow_state to apply to video too
 
 ***************************************************************************/
 
@@ -102,7 +105,9 @@ typedef struct bitstream_packet
   unsigned PTS_valid: 1;
   unsigned DTS_valid: 1;
   unsigned full_length_unknown: 1;
-  unsigned reserved: 27;
+  unsigned reserved1: 11;
+  unsigned private_PES_header_flag: 1;
+  unsigned reserved2: 15;
   unsigned int BSn;
   clk PTS;
   clk DTS;
@@ -232,16 +237,20 @@ audio_parameters_structure_t;
 
 struct accumulated_data
 {
-  int amount_received; /* from control unit */
-  int amount_sent;     /* to chip */
-  int slows;           /* frame-repeats for video */
-  int fasts;           /* frame-skips for video */
-  int stalls;                /*                           */
-  int picture_decode_errors; /* only used in video struct */
-  int severe_errors;         /*                           */
-  int pipeline_errors;       /*                           */
-  int underruns;       /* bit buffer empty for video, PCM buffer underflow for audio */
-  int crc_errors;      /* only used in audio struct */
+  unsigned int amount_received;  /* from control unit */
+  unsigned int amount_sent;      /* to chip */
+  unsigned int PES_packets_sent; /* to chip */
+  unsigned int PTSs_in;          /* to chip */
+  unsigned int PTSs_out;         /* from chip */
+  unsigned int slows;            /* frame-repeats for video */
+  unsigned int fasts;            /* frame-skips for video */
+  unsigned int stalls;                /*                           */
+  unsigned int picture_decode_errors; /* only used in video struct */
+  unsigned int severe_errors;         /*                           */
+  unsigned int pipeline_errors;       /*                           */
+  unsigned int underruns;        /* bit buffer empty for video, PCM buffer underflow for audio */
+  unsigned int crc_errors;       /* only used in audio struct */
+  unsigned int sync_losses;      /* only used in audio struct */
 };
 
 typedef struct
@@ -255,15 +264,25 @@ typedef struct
   enum {
     ps_searching_for_first_PES_header,
     ps_initialising,
+    ps_pre_decoding, /* video only */
     ps_waiting_for_play_command,
     ps_waiting_for_presentation_start
   } prefill_state;
   int speed_indicator;          /* As passed to SetSpeed */
   int deferred_speed_indicator; /* Actual speed change can be deferred until the next stall */
+  enum {
+    fss_next_frame_fast,
+    fss_this_frame_fast,
+    fss_normal_speed,
+    fss_this_frame_slow,
+    fss_next_frame_slow
+  } fast_slow_state;
   bitstream_packet_t *packet_list_head;
   bitstream_packet_t *packet_list_tail;
   struct accumulated_data since_open;
   struct accumulated_data since_reset;
+  clk latched_STC;
+  clk first_PTS;
   co_routine header_parser;
 }
 a_v_state_t;
@@ -353,15 +372,27 @@ typedef struct frame
   /* Other frame-related things */
   struct frame *decode_link;  /* decoding list (and unused list) */
   struct frame *display_link; /* display list */
+  unsigned int frame_buffer;
+  clk PTS;
   unsigned on_decode_list: 1;
   unsigned on_display_list: 1;
-  unsigned int frame_buffer;
+  unsigned PTS_valid: 1;
 }
 frame_t;
+
+typedef enum
+{
+  pe_presented_early,
+  pe_acceptable,
+  pe_presented_late
+}
+presentation_error;
 
 typedef struct
 {
   /* General stuff */
+  clk reference_PCR;    /* for calculating PCRs from STCs            */
+  clk reference_STC;    /* KEEP THESE TWO AT THE START OF THE STRUCT */
   control_stream_handle_t csh;
   stream_flags_t s_flags;
   reset_stream_flags_t rs_flags;
@@ -379,7 +410,7 @@ typedef struct
   struct {
     unsigned default_intra_quantizer_matrix_loaded: 1;
     unsigned default_non_intra_quantizer_matrix_loaded: 1;
-    unsigned parsing_headers: 1;
+    unsigned started_parsing_headers: 1;
     unsigned sequence_header_received_since_picture_header: 1;
     unsigned gop_header_received_since_picture_header: 1;
     unsigned had_phoney_pipeline_idle_IRQ: 1;
@@ -390,6 +421,9 @@ typedef struct
     unsigned last_instruction_was_a_decode: 1; /* ie not a skip */
     unsigned final_instruction_has_been_written_during_this_AU: 1;
     unsigned stalled_while_closing: 1; /* the condition for exiting CloseStream */
+    unsigned going_faster: 1;
+    unsigned going_slower: 1;
+    unsigned internal_reset: 1;
   } vid_flags;
   int field_to_trigger_second_decode_on;
   int fields_into_this_PU;
@@ -401,6 +435,7 @@ typedef struct
   frame_t *unused_frames;  /* list of currently unused frame structs */
   unsigned int next_anchor_frame_buffer;
   unsigned int next_B_frame_buffer;
+  presentation_error video_presentation_error;
   /* Audio stuff */
   audio_parameters_structure_t audio_parms;
   a_v_state_t audio;
@@ -422,24 +457,16 @@ typedef struct
       unsigned syncword: 12;
     } fields;
   } audio_header;
+  clk audio_PTS;
   struct {
     unsigned muted: 1;
     unsigned first_header_received: 1;
     unsigned muted_across_sampling_frequency_transition: 1;
+    unsigned PTS_valid: 1;
+    unsigned recovering_from_underrun: 1;
   } aud_flags;
   unsigned int volume;
-  enum {
-    aps_searching_for_first_PES_header,
-    aps_reaching_buffer_threshold,
-    aps_waiting_for_decode_start
-  } audio_prefill_state;
-  enum {
-    afss_next_frame_fast,
-    afss_this_frame_fast,
-    afss_normal_speed,
-    afss_this_frame_slow,
-    afss_next_frame_slow
-  } audio_fast_slow_state;     /* default afss_normal_speed */
+  int audio_resync_delay;
   int audio_slowmo_field_count;
   int discarded_audio_bit_buffer_data; /* for use in ResetStream */
   int audio_buffer_prefill;         /* in bytes */

@@ -102,6 +102,22 @@ Date		Who	Change
 			trick-play ResetStream flag or low_delay bitstream flag is set;
 			delays enabling BBE interrupt until prefill end, rather than end of
 			initial header parsing
+10/04/2000	BJGA	Removed IRQ_AudioFast() and IRQ_AudioSlow() - not used;
+			implemented deferred video start when first video PTS is significantly
+			later than first audio PTS; implemented clock reference latching,
+			relatching (on speed transitions) and comparisons, and triggering and
+			performing frame skips and repeats for frame- and field-picture streams;
+			implemented PCM clock adjustment on VSyncs, in order to effect audio
+			sync-to-stream; removed old deferred set-speed code, as it only worked
+			for cases when we moved to a slower speed; issues internal resets when
+			decoder is judged to have locked up beyond the ability of pipeline resets
+			to recover the situation; video threshold checking is no longer performed
+			when playing normal speed video, in order to avoid skip-stall-skip-stall
+			patterns; emergency fallback framebuffer pointers corrected (had been a
+			factor of 256 out); audio decoding is stopped and audio is muted after an
+			underrun, pending reattainment of a minimal audio buffer level; now counts
+			audio frame-sync losses; manually searches for start-code prefixes between
+			adjacent video headers - works around unreliability of VID_SCM
 
 ***************************************************************************/
 
@@ -149,10 +165,11 @@ static void static_INT_BBE (void);
 static void static_INT_PER (void);
 static void static_INT_SER (void);
 static void static_INT_PDE (void);
+static void static_INT_CSS (void);
 static void static_INT_VHR (void);
+static void static_INT_VPR (void);
 static void static_INT_CRC (void);
 static void static_INT_POU (void);
-static void static_INT_FNP (void);
 static void static_ProcessVideoHdr (void *argument);
 static void static_NewPictureDecode (void);
 static void static_ProcessVideoSequenceHdr (void);
@@ -184,13 +201,15 @@ static void static_SetNextDisplayField (bool top_field);
 
 static int CommonIRQsClaimedCount = 0;
 static int VideoPrefillSize = -1; /* in units of 256 bytes */
+static char Deferred_VID_TIS;
 
 /*********************/
 /* Private constants */
 /*********************/
 
 #define PICTURE_START_CODE      0x00
-#define SLICE_START_CODE        0x01
+#define SLICE_START_CODE_MIN    0x01
+#define SLICE_START_CODE_MAX    0xAF
 #define USER_DATA_START_CODE    0xB2
 #define SEQUENCE_HEADER_CODE    0xB3
 #define SEQUENCE_ERROR_CODE     0xB4
@@ -331,9 +350,9 @@ void IRQ_HandleAudioIRQ (void)
     
     if (audio_ints != 0)  /* quick reject if no audio interrupts */
     {
-/*    if (audio_ints & AUDIO_INT_CSS) static_INT_CSS ();*/
+      if (audio_ints & AUDIO_INT_CSS) static_INT_CSS ();
       if (audio_ints & AUDIO_INT_VHR) static_INT_VHR ();
-/*    if (audio_ints & AUDIO_INT_VPR) static_INT_VPR ();*/
+      if (audio_ints & AUDIO_INT_VPR) static_INT_VPR ();
       if (audio_ints & AUDIO_INT_CRC) static_INT_CRC ();
 /*    if (audio_ints & AUDIO_INT_ADF) static_INT_ADF ();*/
       if (audio_ints & AUDIO_INT_POU) static_INT_POU ();
@@ -341,7 +360,7 @@ void IRQ_HandleAudioIRQ (void)
 /*    if (audio_ints & AUDIO_INT_DCH) static_INT_DCH ();*/
 /*    if (audio_ints & AUDIO_INT_IFT) static_INT_IFT ();*/
 /*    if (audio_ints & AUDIO_INT_IFF) static_INT_IFF ();*/
-      if (audio_ints & AUDIO_INT_FNP) static_INT_FNP ();
+/*    if (audio_ints & AUDIO_INT_FNP) static_INT_FNP ();*/
     }
   }
   /* Only exit when we're satisfied that we're not about to raise another IRQ. */
@@ -425,6 +444,7 @@ _kernel_oserror *IRQ_EnableVideoPrefillIRQs (void)
     /* Initialise things local to this source file */
     Stream.video.header_parser = Co_Create (&static_ProcessVideoHdr); /* initialise coroutine */
     VideoPrefillSize = -1; /* special value to flag that it hasn't been calculated yet */
+    Deferred_VID_TIS = 0;
     
     /* Enable appropriate interrupts (BBE is deferred until we've parsed the first headers, PSD until we enable decoding) */
     WRITE_VID_ITM(VID_ITM | VIDEO_INT_SCH | VIDEO_INT_BBF | VIDEO_INT_PER | VIDEO_INT_PID | VIDEO_INT_SER | VIDEO_INT_PDE);
@@ -515,7 +535,7 @@ _kernel_oserror *IRQ_EnableAudioPrefillIRQs (void)
     if (irqs_were_enabled) _kernel_irqs_on ();
     
     /* Enable appropriate interrupts */
-    WRITE_AUD_ITM(AUDIO_INT_VHR | AUDIO_INT_CRC | AUDIO_INT_POU | AUDIO_INT_FNP);
+    WRITE_AUD_ITM(AUDIO_INT_CSS | AUDIO_INT_VHR | AUDIO_INT_VPR | AUDIO_INT_CRC | AUDIO_INT_POU);
   }
   
   return e;
@@ -568,49 +588,14 @@ void IRQ_UpdateMuteState (void)
       Stream.aud_flags.muted == true ||
       Stream.volume == 0 ||
       Stream.audio.speed_indicator != 1 ||
-      Stream.aud_flags.muted_across_sampling_frequency_transition == true)
+      Stream.aud_flags.muted_across_sampling_frequency_transition == true ||
+      Stream.aud_flags.recovering_from_underrun == true)
   {
     AUD_MUT = 1;
   }
   else
   {
     AUD_MUT = 0;
-  }
-}
-
-/******	IRQ_AudioFast() ****************************************************
-
-Purpose:	Flags that the next time an audio frame decode starts, it
-		must be played fast
-Notes:		It is the caller's responsibility to ensure that audio
-		fasts or slows are not requested so frequently that they
-		cause hysteresis
-
-***************************************************************************/
-
-void IRQ_AudioFast (void)
-{
-  if (Stream.audio_fast_slow_state == afss_normal_speed)
-  {
-    Stream.audio_fast_slow_state = afss_next_frame_fast;
-  }
-}
-
-/******	IRQ_AudioSlow() ****************************************************
-
-Purpose:	Flags that the next time an audio frame decode starts, it
-		must be played slow
-Notes:		It is the caller's responsibility to ensure that audio
-		fasts or slows are not requested so frequently that they
-		cause hysteresis
-
-***************************************************************************/
-
-void IRQ_AudioSlow (void)
-{
-  if (Stream.audio_fast_slow_state == afss_normal_speed)
-  {
-    Stream.audio_fast_slow_state = afss_next_frame_slow;
   }
 }
 
@@ -636,6 +621,8 @@ static void static_INT_SCH (unsigned int *video_ints)
 {
   dprintf (("IRQ", "INT_SCH\n"));
   VID_ITM_0 &= ~(VIDEO_INT_SCH>>0); /* disable start-code hit IRQ */
+  static_GetVideoHdrBits (0); /* discard any cached header FIFO data */
+  if ((VID_SCM & 1) == 0) static_GetVideoHdrBits (8); /* skip the leading '\1' byte if neccesary */
   /* Enter coroutine */
   Co_SwitchTo (&Stream.video.header_parser, video_ints);
   /* Clear out our bit in |video_ints| */
@@ -671,22 +658,63 @@ Notes:		This is enabled when video goes into normal play mode. It is used
 
 static void static_INT_VS (bool field, unsigned int *video_ints)
 {
+// PAL
+  clk one_frame_time = { 3600, 0 };
+// NTSC
+//clk one_frame_time = { 3003, 0 };
+  
   dprintf (("IRQ", "INT_VS%c\n", field ? 'T' : 'B'));
+  
+  /* Latch STC as soon as possible after receipt of VSync interrupt */
+  Stream.video.latched_STC = Clk_ReadRawSTC ();
+  
+#ifdef DEBUGLIB
+  {
+    frame_t *frame = Stream.display_frames;
+    int items = 0;
+    dprintf (("IRQ", "INT_VS: display frames list = "));
+    while (frame != NULL)
+    {
+      dprintf (("IRQ", "%d ", ((int) frame - (int) Stream.frame) / sizeof (frame_t)));
+      frame = frame->display_link;
+      if (++items > 10) break;
+    }
+  }
+  dprintf (("IRQ", "\n"));
+#endif
+  
+  /* See if it's time to start */
   if (Stream.video.state == stream_prefilling)
   {
+    /* Do nothing if we're still waiting for the video play command */
     if (Stream.video.prefill_state == ps_waiting_for_presentation_start)
     {
-      /* If the *next* VSync is the correct interlace phase for our */
-      /* first frame, then kickstart the video play state machine   */
-      if (Stream.display_frames->top_field_first != field)
+      /* Do nothing if there is an audio stream, but the audio play command hasn't yet been received (because that's when PCR is initialised) */
+      if (!Stream.rs_flags.audio_present || Stream.audio.state == stream_open)
       {
-        /* Update state machine */
-        Stream.fields_till_next_AU = 1;
-        Stream.vid_flags.first_frame_displayed = false;
-        Stream.video.state = stream_open;
-        dprintf (("IRQ", "INT_VS: video.state = stream_open\n"));
-        /* Decode the first B-frame */
-        static_PerhapsWriteNewInstruction ();
+        /* If both video and audio PTSs have been received, but there's more than 1 frame-time until first video PTS, then wait */
+        clk time_to_wait = Clk_Subtract (Stream.video.first_PTS, Clk_ConvertSTCtoPCR (Stream.video.latched_STC));
+        clk two_seconds = { 180000, 0 }; /* in case of badly corrupted timestamps */
+        if (!Stream.rs_flags.audio_present || (Stream.video.first_PTS.msb & 0xFE) || (Stream.audio.first_PTS.msb & 0xFE) || Stream.vid_flags.internal_reset ||
+            Clk_Less (time_to_wait, one_frame_time) || Clk_Greater (time_to_wait, two_seconds))
+        {
+          /* If the *next* VSync is the correct interlace phase for our */
+          /* first frame, then kickstart the video play state machine   */
+          if (Stream.display_frames->top_field_first != field)
+          {
+            /* Update state machine */
+            Stream.fields_till_next_AU = 1;
+            Stream.vid_flags.first_frame_displayed = false;
+            Stream.video.state = stream_open;
+            dprintf (("IRQ", "INT_VS: video.state = stream_open\n"));
+            if (!Stream.rs_flags.trick_play_mode)
+            {
+              WRITE_VID_VBT(0); /* remove the threshold from now on, to limit skip-stall-skip-stall loops */
+            }
+            /* Decode the first B-frame */
+            static_PerhapsWriteNewInstruction ();
+          }
+        }
       }
     }
   }
@@ -698,6 +726,16 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
     /* Now more generic stuff */
     Stream.fields_into_this_PU ++;
     Stream.fields_till_next_AU --;
+    
+    if (Stream.video.fast_slow_state == fss_this_frame_fast && Deferred_VID_TIS)
+    {
+      /* Kick the decoder back into life after a video skip */
+      dprintf (("IRQ", "INT_VS: Kicking decoder\n"));
+      VID_TIS = Deferred_VID_TIS;
+      Deferred_VID_TIS = 0;
+      Stream.video.fast_slow_state = fss_normal_speed;
+      dprintf (("IRQ", "INT_VS: video.fast_slow_state = normal_speed\n"));
+    }
     
     if (Stream.current_picture_structure == ps_frame_picture || Stream.current_picture_structure == ps_frame_picture_extension)
     {
@@ -729,7 +767,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
     if (Stream.rs_flags.audio_present)
     {
       /* Deal with audio slow-motion start/stop */
-      if (Stream.audio.speed_indicator != 1)
+      if (Stream.audio.speed_indicator != 1 && !Stream.aud_flags.recovering_from_underrun)
       {
         Stream.audio_slowmo_field_count ++;
         if (Stream.audio_slowmo_field_count == Stream.audio.speed_indicator)
@@ -747,11 +785,42 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
       {
         if (Stream.video.speed_indicator != Stream.audio.speed_indicator)
         {
+          /* First adjust the reference timestamps so that we get a smooth transition between speeds */
+          clk new_reference_PCR = Clk_ConvertSTCtoPCR (Stream.video.latched_STC);
+          Stream.reference_PCR = new_reference_PCR;
+          Stream.reference_STC = Stream.video.latched_STC;
+          /* Then actually change the audio state */
           Stream.audio.speed_indicator = Stream.video.speed_indicator;
           Stream.audio_slowmo_field_count = 0;
-          AUD_PLY = 1;
+          if (!Stream.aud_flags.recovering_from_underrun)
+          {
+            AUD_PLY = 1;
+          }
           IRQ_UpdateMuteState ();
         }
+      }
+      /* Deal with audio sync-to-stream */
+      switch (Stream.audio.fast_slow_state)
+      {
+        case fss_next_frame_fast:
+          if (AUD_PLY == 1) /* don't go fast yet if we're in slow-motion stop state */
+          {
+            STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, true, false);
+            Stream.audio.fast_slow_state = fss_this_frame_fast;
+          }
+          break;
+        case fss_next_frame_slow:
+          if (AUD_PLY == 1) /* don't go slow yet if we're in slow-motion stop state */
+          {
+            STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, false, true);
+            Stream.audio.fast_slow_state = fss_this_frame_slow;
+          }
+          break;
+        case fss_this_frame_fast:
+        case fss_this_frame_slow:
+          STi3520L_SetPCMClock ((sample_rate) Stream.audio_header.fields.sampling_frequency, false, false);
+          Stream.audio.fast_slow_state = fss_normal_speed;
+          break;
       }
     }
     
@@ -766,17 +835,26 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
         Stream.fields_till_next_AU = 2;
         if (Stream.current_picture_structure == ps_second_field_picture) /* ie first decode within the PU */ Stream.field_to_trigger_second_decode_on += 2;
         if (Stream.video.state == stream_closing) Stream.vid_flags.stalled_while_closing = true;
-        Stream.video.speed_indicator = Stream.video.deferred_speed_indicator; /* may start slow-mo at this point */
-        if ((VID_VBL & 0x3FFF) >= (VID_VBT & 0x3FFF))
+        
+        /* If this happens too many times, we assume the chip has entered a locked state, and apply a reset */
+        Stream.consecutive_pipeline_stalls ++;
+        if (Stream.consecutive_pipeline_stalls % 40 == 0)
         {
-          /* The pipeline has stalled, but there's plenty of data in the buffer. */
-          /* If this happens too many times, we assume the chip has entered a locked state, and apply a pipeline reset */
-          
-          Stream.consecutive_pipeline_stalls ++;
-          if (Stream.consecutive_pipeline_stalls % 8 == 0)
+          /* Badly locked up - do a complete video reset */
+          _swix (OS_AddCallBack, _INR(0,1), video_reset_callback, Module_PrivateWord);
+        }
+        else if (Stream.consecutive_pipeline_stalls % 8 == 0)
+        {
+          STi3520L_PipelineReset ();
+          /* Force re-use of the current frame struct, if any */
+          if (Stream.vid_flags.started_parsing_headers)
           {
-            STi3520L_PipelineReset ();
-            Stream.vid_flags.parsing_headers = true; /* to force re-use of the current frame struct */
+            if (Stream.decode_frames->on_display_list)
+            {
+              static_RemoveFrameFromList (Stream.decode_frames, false);
+              Stream.decode_frames->on_display_list = false;
+            }
+            Stream.vid_flags.next_frames_headers_have_been_decoded = false;
           }
         }
       }
@@ -784,12 +862,60 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
       {
         dprintf (("IRQ", "INT_VS: current_picture_structure = %d\n", Stream.current_picture_structure));
         Stream.consecutive_pipeline_stalls = 0;
-        if (Stream.current_picture_structure == ps_second_field_picture || Stream.current_picture_structure == ps_frame_picture_extension) /* ie first of two decodes within the PU */
+        if (Stream.fields_into_this_PU == 0)
         {
+          /* First or only decode within the PU */
+          /* Check to see if lipsync has to be done - only if there's audio in the stream, */
+          /* and we're playing at normal speed, and a skip/repeat isn't already pending    */
+          if (Stream.rs_flags.audio_present && /*Stream.audio.speed_indicator == 1 && */Stream.video.fast_slow_state == fss_normal_speed
+              && Stream.display_frames->PTS_valid && !Stream.s_flags.no_lip_sync)
+          {
+            /* Check PTS of display frame, to see if we need to set a pending skip or repeat */
+            presentation_error old_presentation_error = Stream.video_presentation_error;
+            clk PTS_error = Clk_Subtract (Clk_ConvertSTCtoPCR (Stream.video.latched_STC), Stream.display_frames->PTS);
+            dprintf (("IRQ", "INT_VS: PTS_error = %c%08X\n", PTS_error.msb ? '1' : '0', PTS_error.lsw));
+            if (Clk_Greater (PTS_error, one_frame_time))
+            {
+              Stream.video_presentation_error = pe_presented_late;
+              if (old_presentation_error == pe_presented_late && /* only skip if there's a reasonable amount of data to skip */ ((VID_VBL & 0x3FFF) > 10))
+              {
+                /* Need to do a frame skip */
+                Stream.video.fast_slow_state = fss_next_frame_fast;
+                dprintf (("IRQ", "INT_VS: video.fast_slow_state = next_frame_fast\n"));
+                Stream.video.since_open.fasts ++;
+                Stream.video.since_reset.fasts ++;
+              }
+            }
+            else
+            {
+              clk zero = { 0, 0 };
+              if (Clk_Less (Clk_Add (PTS_error, one_frame_time), zero))
+              {
+                Stream.video_presentation_error = pe_presented_early;
+                if (old_presentation_error == pe_presented_early)
+                {
+                  /* Need to do a frame repeat */
+                  Stream.video.fast_slow_state = fss_next_frame_slow;
+                  dprintf (("IRQ", "INT_VS: video.fast_slow_state = next_frame_slow\n"));
+                  Stream.video.since_open.slows ++;
+                  Stream.video.since_reset.slows ++;
+                }
+              }
+              else
+              {
+                Stream.video_presentation_error = pe_acceptable;
+              }
+            }
+          }
+        }
+        if (Stream.current_picture_structure == ps_second_field_picture || Stream.current_picture_structure == ps_frame_picture_extension)
+        {
+          /* First of two decodes within the PU */
           Stream.fields_till_next_AU = 1; /* ideally, we want this done in one field only, irrespective of pause etc. */
         }
         else
         {
+          /* Last or only decode within the PU */
           /* Set countdown to next frame, taking slow-mo, pause etc into account */
           Stream.fields_till_next_AU = 2; /* default */
           if (Stream.display_frames->seq.progressive_sequence == true)
@@ -813,6 +939,13 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
               }
             }
           }
+          if (Stream.video.fast_slow_state == fss_next_frame_slow)
+          {
+            /* To implement video repeats, we simply extend the display time by 2 */
+            Stream.fields_till_next_AU += 2;
+            Stream.video.fast_slow_state = fss_normal_speed;
+dprintf (("IRQ", "INT_VS: video.fast_slow_state = normal_speed\n"));
+          }
           Stream.fields_till_next_AU *= Stream.video.speed_indicator;
           if (Stream.fields_till_next_AU == 0)
           {
@@ -820,7 +953,6 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
             /* For pause mode, we rely upon this not reaching 0 for a long time! */
             /* We use -2 instead of -1 so that the field polarity can be preserved when exiting pause */
           }
-          /***** Add on two fields here if there's a repeat-frame pending (and not pause!!) */
           if (Stream.current_picture_structure == ps_first_field_picture || (Stream.current_picture_structure == ps_frame_picture && Stream.prev_picture_structure != ps_frame_picture))
           {
             Stream.fields_till_next_AU --; /* account for different field polarity of next picture */
@@ -893,6 +1025,11 @@ static void static_INT_PID (unsigned int *video_ints)
       {
         static_RemoveFrameFromList (Stream.decode_frames, false);
         static_RemoveFrameFromList (Stream.decode_frames, true);
+        if (Stream.video.fast_slow_state == fss_next_frame_fast)
+        {
+          Stream.video.fast_slow_state = fss_this_frame_fast; /* flag that next decode has to be manually latched (yuck) */
+          dprintf (("IRQ", "INT_PID: video.fast_slow_state = this_frame_fast\n"));
+        }
       }
       /* Force a header search (won't have been done automatically in this case) */
       VID_HDS = VID_HDS_SOS | VID_HDS_HDS;
@@ -989,6 +1126,23 @@ static void static_INT_PDE (void)
   Stream.video.since_reset.picture_decode_errors += 1;
 }
 
+/******	static_INT_CSS() ***************************************************
+
+Purpose:	Handles Change in Synchronisation Status audio IRQ
+Notes:		This is enabled throughout prefill and normal play.
+
+***************************************************************************/
+
+static void static_INT_CSS (void)
+{
+  dprintf (("IRQ", "INT_CSS\n"));
+  if ((AUD_SYS & 3) == 1)
+  {
+    Stream.audio.since_open.sync_losses += 1;
+    Stream.audio.since_reset.sync_losses += 1;
+  }
+}
+
 /******	static_INT_VHR() ***************************************************
 
 Purpose:	Handles Valid Header Registered audio IRQ
@@ -1044,6 +1198,37 @@ static void static_INT_VHR (void)
   Stream.aud_flags.first_header_received = true;
 }
 
+/******	static_INT_VPR() ***************************************************
+
+Purpose:	Handles Valid PTS Registered audio IRQ
+Notes:		This is enabled throughout prefill and normal play.
+
+***************************************************************************/
+
+static void static_INT_VPR (void)
+{
+  dprintf (("IRQ", "INT_VPR\n"));
+  /* Latch STC as soon as possible after receipt of interrupt */
+  Stream.audio.latched_STC = Clk_ReadRawSTC ();
+#ifdef DEBUGLIB
+  {
+    clk diff;
+    static clk old_STC;
+    diff = Clk_Subtract (Stream.audio.latched_STC, old_STC);
+    dprintf (("Sync", "Audio PTS STC diff = %d\n", diff.lsw));
+    old_STC = Stream.audio.latched_STC;
+  }
+#endif
+  READ_AUD_PTS(Stream.audio_PTS);
+  dprintf (("IRQ,Sync", "Audio PTS received: %c%08X\n", Stream.audio_PTS.msb ? '1' : '0', Stream.audio_PTS.lsw));
+  Stream.audio.since_open.PTSs_out += 1;
+  Stream.audio.since_reset.PTSs_out += 1;
+  
+  /* Now set up the reference clock */
+  Stream.reference_STC = Stream.audio.latched_STC;
+  Stream.reference_PCR = Stream.audio_PTS;
+}
+
 /******	static_INT_CRC() ***************************************************
 
 Purpose:	Handles CRC error detected audio IRQ
@@ -1070,18 +1255,9 @@ static void static_INT_POU (void)
   dprintf (("IRQ", "INT_POU\n"));
   Stream.audio.since_open.underruns += 1;
   Stream.audio.since_reset.underruns += 1;
-}
-
-/******	static_INT_FNP() ***************************************************
-
-Purpose:	Handles First bit of New frame at PCM output audio IRQ
-Notes:		This is enabled throughout prefill and normal play.
-
-***************************************************************************/
-
-static void static_INT_FNP (void)
-{
-  dprintf (("IRQ", "INT_FNP\n"));
+  Stream.aud_flags.recovering_from_underrun = true;
+  AUD_PLY = 0;
+  IRQ_UpdateMuteState ();
 }
 
 /******	static_ProcessVideoHdr() *******************************************
@@ -1097,67 +1273,78 @@ static void static_ProcessVideoHdr (void *argument)
   unsigned int *video_ints = argument;
   while (true)
   {
-    /* Flush any cached data */
-    static_GetVideoHdrBits (0);
-    
-    /* Header data FIFO contains a start code in one or other of its two bytes */
-    if ((VID_SCM & 1) == 0) static_GetVideoHdrBits (8);
     data = static_GetVideoHdrBits (8);
-    switch (data)
+    if (data <= SLICE_START_CODE_MAX && data >= SLICE_START_CODE_MIN)
     {
-      case SEQUENCE_HEADER_CODE:
-        /* Start a new picture struct */
-        if (!Stream.vid_flags.parsing_headers) static_NewPictureDecode ();
-        static_ProcessVideoSequenceHdr ();
-        break;
-      case GROUP_START_CODE:
-        /* If this is the first header for this picture, start a new picture struct */
-        if (!Stream.vid_flags.parsing_headers) static_NewPictureDecode ();
-        static_ProcessVideoGOPHdr ();
-        break;
-      case PICTURE_START_CODE:
-        /* If this is the first header for this picture, start a new picture struct */
-        if (!Stream.vid_flags.parsing_headers) static_NewPictureDecode ();
-        static_ProcessVideoPictureHdr ();
-        break;
-      case EXTENSION_START_CODE:
-        switch (static_GetVideoHdrBits (4))
-        {
-          case SEQUENCE_EXTENSION:
-            static_ProcessVideoSequenceExt ();
-            break;
-          case SEQUENCE_DISPLAY_EXTENSION:
-            static_ProcessVideoSequenceDisplayExt ();
-            break;
-          case PICTURE_CODING_EXTENSION:
-            static_ProcessVideoPictureCodingExt ();
-            break;
-          case QUANT_MATRIX_EXTENSION:
-            static_ProcessVideoQuantMatrixExt ();
-            break;
-          case PICTURE_DISPLAY_EXTENSION:
-            static_ProcessVideoPictureDisplayExt ();
-            break;
-        }
-        break;
-      case USER_DATA_START_CODE:
-        static_ProcessVideoUserData ();
-        break;
-      case SLICE_START_CODE:
-        /* Now we've processed all the headers, take any necessary actions */
-        static_ProcessVideoSliceHdr ();
-        /* Sort out interrupt state between sets of headers */
-        VID_ITM_8 &= ~(VIDEO_INT_HFF>>8); /* disable header fifo full IRQ, so we only return when the start-code detector has hit the next picture */
-        *video_ints = (*video_ints | VID_ITS) & VID_ITM & ~VIDEO_INT_SCH & ~VIDEO_INT_HFF; /* clear the SCH and HFF bits in both VID_ITS and |video_ints| */
-        /* Wait until the next set of headers arrive */
-        Co_SwitchTo (Co_MainRoutine, NULL);
-        break;
+      /* Now we've processed all the headers, take any necessary actions */
+      static_ProcessVideoSliceHdr ();
+      /* Sort out interrupt state between sets of headers */
+      VID_ITM_8 &= ~(VIDEO_INT_HFF>>8); /* disable header fifo full IRQ, so we only return when the start-code detector has hit the next picture */
+      *video_ints = (*video_ints | VID_ITS) & VID_ITM & ~VIDEO_INT_SCH & ~VIDEO_INT_HFF; /* clear the SCH and HFF bits in both VID_ITS and |video_ints| */
+      /* Wait until the next set of headers arrive */
+      Co_SwitchTo (Co_MainRoutine, NULL);
+      /* By the time we return from Co_SwitchTo(), picture decoding is complete and an automatic header search has already been launched and completed. */
     }
-    /* If the last-read header was a slice header, then by the time we get here, picture decoding is complete and an       */
-    /* automatic header search has already been launched and completed. Otherwise, we have to launch the search ourselves: */
-    if (data != SLICE_START_CODE)
+    else
     {
-      VID_HDS = VID_HDS_SOS | VID_HDS_HDS;      
+      switch (data)
+      {
+        case SEQUENCE_HEADER_CODE:
+          /* Start a new picture struct */
+          if (!Stream.vid_flags.started_parsing_headers) static_NewPictureDecode ();
+          static_ProcessVideoSequenceHdr ();
+          break;
+        case GROUP_START_CODE:
+          /* If this is the first header for this picture, start a new picture struct */
+          if (!Stream.vid_flags.started_parsing_headers) static_NewPictureDecode ();
+          static_ProcessVideoGOPHdr ();
+          break;
+        case PICTURE_START_CODE:
+          /* If this is the first header for this picture, start a new picture struct */
+          if (!Stream.vid_flags.started_parsing_headers) static_NewPictureDecode ();
+          static_ProcessVideoPictureHdr ();
+          break;
+        case EXTENSION_START_CODE:
+          switch (static_GetVideoHdrBits (4))
+          {
+            case SEQUENCE_EXTENSION:
+              static_ProcessVideoSequenceExt ();
+              break;
+            case SEQUENCE_DISPLAY_EXTENSION:
+              static_ProcessVideoSequenceDisplayExt ();
+              break;
+            case PICTURE_CODING_EXTENSION:
+              static_ProcessVideoPictureCodingExt ();
+              break;
+            case QUANT_MATRIX_EXTENSION:
+              static_ProcessVideoQuantMatrixExt ();
+              break;
+            case PICTURE_DISPLAY_EXTENSION:
+              static_ProcessVideoPictureDisplayExt ();
+              break;
+          }
+          break;
+        case USER_DATA_START_CODE:
+          static_ProcessVideoUserData ();
+          break;
+      }
+      /* Unfortunately, we can't rely on an automatic header search at *this* point, because I've      */
+      /* observed VID_SCM returning the wrong value from time to time, especially when the header FIFO */
+      /* empties somewhere near a start code prefix. Instead, we have to perform the search ourselves: */
+      {
+        enum { unlocked, first_zero, second_zero, one } stage = unlocked;
+        unsigned char byte;
+        static_GetVideoHdrBits (0xFF); /* realign to byte boundary */
+        do
+        {
+          byte = static_GetVideoHdrBits (8);
+          if (stage == unlocked && byte == 0) stage = first_zero;
+          else if ((stage == first_zero || stage == second_zero) && byte == 0) stage = second_zero;
+          else if (stage == second_zero && byte == 1) stage = one;
+          else stage = unlocked;
+        }
+        while (stage != one);
+      }
     }
   }
 }
@@ -1181,7 +1368,9 @@ static void static_NewPictureDecode (void)
     /* Add it on the front of the decoding list */
     new_frame->decode_link = Stream.decode_frames;
     Stream.decode_frames = new_frame;
-    new_frame->on_decode_list = true;
+    Stream.decode_frames->on_decode_list = true;
+    Stream.decode_frames->on_display_list = false;
+    Stream.decode_frames->PTS_valid = false;
     /* Write picture parameters into the first picture_t struct */
     Stream.decode_frames->lastpic = &Stream.decode_frames->pic1;
   }
@@ -1191,7 +1380,7 @@ static void static_NewPictureDecode (void)
     /* Write picture parameters into the second picture_t struct */
     Stream.decode_frames->lastpic = &Stream.decode_frames->pic2;
   }
-  Stream.vid_flags.parsing_headers = true;
+  Stream.vid_flags.started_parsing_headers = true;
 #ifdef DEBUGLIB
   {
     frame_t *frame = Stream.decode_frames;
@@ -1381,6 +1570,20 @@ static void static_ProcessVideoPictureHdr (void)
   }
   /* Ignore extra_bit_picture and extra_information_picture */
   
+  /* Get the PTS for this frame, if any */
+  if (Stream.current_picture_structure != ps_first_field_picture)
+  {
+    READ_PES_TSx(Stream.decode_frames->PTS);
+    if (Stream.decode_frames->PTS.msb & PES_TSx_32_TSA)
+    {
+      Stream.decode_frames->PTS_valid = true;
+      Stream.decode_frames->PTS.msb &= 1;
+      Stream.video.since_open.PTSs_out ++;
+      Stream.video.since_reset.PTSs_out ++;
+      dprintf (("IRQ", "ProcessVideoPictureHdr: New PTS received: %c%08X\n", Stream.decode_frames->PTS.msb ? '1' : '0', Stream.decode_frames->PTS.lsw));
+    }
+  }
+  
   /* Set sensible values in case the picture extensions are absent */
   Stream.next_picture_structure = ps_frame_picture; /* for MPEG-1 */
   Stream.decode_frames->lastpic->intra_dc_precision = 0;  /**/
@@ -1411,8 +1614,8 @@ static void static_ProcessVideoPictureHdr (void)
   {
     frame_t *frame;
     int anchor_frames_found = 0;
-    unsigned int BFP = SDRAM_FRAME_BUFFER_1_START; /* these are as good as anything for use as defaults */
-    unsigned int FFP = SDRAM_FRAME_BUFFER_2_START; /* in the case of serious bitstream corruption!!     */
+    unsigned int BFP = SDRAM_FRAME_BUFFER_1_START/256; /* these are as good as anything for use as defaults */
+    unsigned int FFP = SDRAM_FRAME_BUFFER_2_START/256; /* in the case of serious bitstream corruption!!     */
     for (frame = Stream.decode_frames->decode_link; frame != NULL; frame = frame->decode_link)
     {
       if (frame->lastpic->picture_coding_type != B_PICTURE)
@@ -1431,8 +1634,34 @@ static void static_ProcessVideoPictureHdr (void)
   }
   dprintf (("IRQ", "ProcessVideoPictureHdr: RFP = %04X, FFP = %04X, BFP = %04X\n", Stream.decode_frames->frame_buffer, VID_FFP & 0x3FFF, VID_BFP & 0x3FFF));
   
+#ifdef DEBUGLIB
+  {
+    frame_t *frame = Stream.display_frames;
+    int items = 0;
+    dprintf (("IRQ", "ProcessVideoPictureHdr: display frames list = "));
+    while (frame != NULL)
+    {
+      dprintf (("IRQ", "%d ", ((int) frame - (int) Stream.frame) / sizeof (frame_t)));
+      frame = frame->display_link;
+      if (++items > 10) break;
+    }
+  }
+  dprintf (("IRQ", "\n"));
+  {
+    frame_t *frame = Stream.decode_frames;
+    int items = 0;
+    dprintf (("IRQ", "ProcessVideoPictureHdr: decode frames list = "));
+    while (frame != NULL)
+    {
+      dprintf (("IRQ", "%d ", ((int) frame - (int) Stream.frame) / sizeof (frame_t)));
+      frame = frame->decode_link;
+      if (++items > 10) break;
+    }
+  }
+  dprintf (("IRQ", "\n"));
+#endif
   /* Add the frame into the display list (this depends upon the picture_coding_type too) */
-  if (Stream.current_picture_structure != ps_first_field_picture /* note that this still refers to the previous picture */)
+  if (!Stream.decode_frames->on_display_list /* may be set if this is the second field picture, or if we lost data and re-used the struct */)
   {
     frame_t *frame_to_insert_after = NULL;
     frame_t *previous = NULL;
@@ -1798,9 +2027,14 @@ static void static_ProcessVideoSliceHdr (void)
     VideoPrefillSize = MIN(VideoPrefillSize, Stream.decode_frames->seq.vbv_buffer_size * (16 * 1024 / 2048));
     /* Now cap the value by the size of our allocated bit buffer */
     VideoPrefillSize = MIN(VideoPrefillSize, (SDRAM_VIDEO_BIT_BUFFER_END - SDRAM_VIDEO_BIT_BUFFER_START - 256) / 256);
+    VideoPrefillSize = MAX(VideoPrefillSize, 200);
     WRITE_VID_VBT(VideoPrefillSize);
   }
-  Stream.vid_flags.parsing_headers = false;
+  if (Stream.video.state == stream_prefilling && Stream.video.prefill_state == ps_initialising)
+  {
+    Stream.video.prefill_state = ps_pre_decoding;
+    dprintf (("IRQ", "ProcessVideoSliceHdr: video.prefill_state = pre_decoding\n"));
+  }
   Stream.vid_flags.next_frames_headers_have_been_decoded = true;
   static_PerhapsWriteNewInstruction ();
 }
@@ -1810,6 +2044,7 @@ static void static_ProcessVideoSliceHdr (void)
 Purpose:	Fetches the next few bits from the video header FIFO
 In:		Number of bits to fetch (up to 32, may cross byte/word boundaries)
 		or 0 to discard cached data and force a fresh data fetch next time
+		or 0xFF to align to a byte boundary
 Out:		Value of bits (unused bits are zero)
 Notes:		The coroutine can exited through this function
 
@@ -1825,6 +2060,10 @@ static unsigned int static_GetVideoHdrBits (unsigned char bits)
   {
     cached_bits = 0;
   }
+  else if (bits == 0xFF)
+  {
+    cached_bits &= 8; /* align to byte boundary */
+  }
   else
   {
     while (bits > 0)
@@ -1839,6 +2078,7 @@ static unsigned int static_GetVideoHdrBits (unsigned char bits)
         fifo = VID_HDF;
         fifo = (fifo << 8) | (fifo >> 8); /* switch bytesex to little-endian */
         cached_bits = 16;
+//        dprintf (("IRQ", "GetVideoHdrBits: data = %02X %02X\n", fifo >> 8, fifo & 0xFF));
       }
       bits_this_time = MIN(bits, cached_bits);
       data <<= bits_this_time;
@@ -1870,8 +2110,7 @@ static void static_PerhapsWriteNewInstruction (void)
       Stream.vid_flags.this_frames_data_have_been_decoded &&
       (VID_VBL & 0x3FFF) >= (VID_VBT & 0x3FFF))
   {
-    if (Stream.video.state == stream_prefilling)
-    /* or if we want to skip the next frame */
+    if (Stream.video.state == stream_prefilling || (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE && Stream.video.fast_slow_state == fss_next_frame_fast))
     {
       time_to_write_instruction = true;
       use_FIS_bit = true;
@@ -1926,8 +2165,7 @@ static void static_PerhapsWriteNewInstruction (void)
       }
       else
       {
-        if (Stream.video.state == stream_prefilling && Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE)
-        /* or if a skip-next-frame is pending */
+        if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE && (Stream.video.state == stream_prefilling || Stream.video.fast_slow_state == fss_next_frame_fast))
         {
           static_WriteSkipInstruction (use_FIS_bit);
         }
@@ -1946,6 +2184,7 @@ static void static_PerhapsWriteNewInstruction (void)
         /* Set state flags */
         Stream.vid_flags.next_frames_headers_have_been_decoded = false;
         Stream.vid_flags.this_frames_data_have_been_decoded = false;
+        Stream.vid_flags.started_parsing_headers = false;
       }
     }
   }
@@ -2053,7 +2292,15 @@ static void static_WriteDecodeInstruction (bool FIS)
   VID_PFV = (Stream.decode_frames->lastpic->backward_vertical_f_code << 4) | Stream.decode_frames->lastpic->forward_vertical_f_code;
   VID_PPR1 = (picture_coding_type << 4) | (Stream.decode_frames->lastpic->intra_dc_precision << 2) | Stream.decode_frames->lastpic->picture_structure;
   VID_PPR2 = Stream.decode_frames->lastpic->picture_flags.byte;
-  VID_TIS = (Stream.decode_frames->seq.mpeg2 ? VID_TIS_MP2 : 0) | ((Stream.next_picture_structure != ps_frame_picture || FIS) ? 0 : VID_TIS_RPT) | (FIS ? VID_TIS_FIS : 0) | VID_TIS_EXE;
+  if (Stream.video.fast_slow_state == fss_this_frame_fast)
+  {
+    /* When recovering from a frame skip, we have to kick the decoder after the following VSync to get it to start again! */
+    Deferred_VID_TIS = (Stream.decode_frames->seq.mpeg2 ? VID_TIS_MP2 : 0) | ((Stream.next_picture_structure != ps_frame_picture || FIS) ? 0 : VID_TIS_RPT) | VID_TIS_FIS | VID_TIS_EXE;
+  }
+  else
+  {
+    VID_TIS = (Stream.decode_frames->seq.mpeg2 ? VID_TIS_MP2 : 0) | ((Stream.next_picture_structure != ps_frame_picture || FIS) ? 0 : VID_TIS_RPT) | (FIS ? VID_TIS_FIS : 0) | VID_TIS_EXE;
+  }
   Stream.vid_flags.last_instruction_was_a_decode = true;
   
   if (Stream.next_picture_structure != ps_second_field_picture)
@@ -2103,7 +2350,7 @@ static void static_WriteDecodeInstruction (bool FIS)
   }
   
   /* Set state flags/variables */
-  Stream.vid_flags.final_instruction_has_been_written_during_this_AU = true; /* but not if we're to be followed by skip(s) */
+  Stream.vid_flags.final_instruction_has_been_written_during_this_AU = true;
   Stream.prev_picture_structure = Stream.current_picture_structure;
   Stream.current_picture_structure = Stream.next_picture_structure;
 }
@@ -2120,6 +2367,8 @@ static void static_WriteSkipInstruction (bool FIS)
   dprintf (("IRQ", "WriteSkipInstruction%s\n", FIS ? ", FIS" : ""));
   VID_TIS = (3 << VID_TIS_SKP_SHIFT) | (FIS ? VID_TIS_FIS : 0) | VID_TIS_EXE; 
   Stream.vid_flags.last_instruction_was_a_decode = false;
+  Stream.prev_picture_structure = Stream.current_picture_structure;
+  Stream.current_picture_structure = Stream.next_picture_structure;
 }
 
 /******	static_RemoveFrameFromList() ***************************************
