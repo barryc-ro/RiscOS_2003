@@ -113,7 +113,7 @@ install: ${FILES}
          @echo
          @echo ${COMPONENT}: Application installed {Disc}
 
-resources-C:
+resources-ASM:
 	${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
         |
@@ -148,7 +148,7 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
        ${LD} -o $@ ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${OBJS}
 
 ${MODULE}: ${FILES}
-           ${MODGEN} $@ ${MODULE} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
+           ${MODGEN} $@ ${COMPONENT} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
