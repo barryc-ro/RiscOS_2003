@@ -26,6 +26,7 @@ Date		Who	Change
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include "kernel.h"
 #include "swis.h"
 
@@ -37,6 +38,7 @@ Date		Who	Change
 #include "MPEG/MPEGAudio.h"
 #include "MPEG/MPEGCtrl.h"
 #include "PRISM/PRISM.h"
+#include "NVRAM.h"
 
 #include "AudGeneric.h"
 #include "Defs.h"
@@ -50,8 +52,6 @@ Date		Who	Change
 #include "Stuffing.h"
 #include "Sync.h"
 #include "Types.h"
-                                 #include "Zoran.h"
-                                 // !!!!!!!!!!!! //
 
 #include "ZoranPara.h"
 
@@ -71,9 +71,10 @@ typedef struct
 }
 protocol_module_t;
 
-typedef struct
+typedef struct audio_structure
 {
   unsigned int magic;
+  struct audio_structure *next;
   
   control_stream_handle_t csh;
   stream_handle_t clock_handle;
@@ -86,12 +87,11 @@ typedef struct
     unsigned eos_callback_requested: 1;
     unsigned suppress_sync_to_stream: 1;
   } aud_flags;
-  unsigned int volume;
+  unsigned int base_peak_volume; /* fixed at stream start; 16.16 fixed point attenuation */
+  unsigned int line_mode; /* affects dialogue volume relative to peak volume */
+  unsigned int relative_volume; /* as exposed by MPEGAudio_Volume API */
   int audio_resync_delay;
   int discarded_audio_bit_buffer_data; /* for use in ResetStream */
-  int audio_buffer_prefill;
-  int audio_buffer_low_water_mark;
-  int audio_buffer_high_water_mark;
   
   unsigned int current_data_type;
   bool commenced;
@@ -109,9 +109,9 @@ static _kernel_oserror *static_DeregisterMe (unsigned int flags, protocol_fns_t 
 static _kernel_oserror *static_HowMuchData (unsigned int flags, void *handle, unsigned int max, unsigned int *bytes);
 static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle);
 static _kernel_oserror *static_Underrun (unsigned int flags, void *handle);
+static _kernel_oserror *static_StreamInfo (void *handle, unsigned int tag, unsigned int *result);
 static _kernel_oserror *static_StreamInfoChanging (unsigned int flags, void *handle);
 
-static unsigned int static_ReadBufferVariable (const char *name, unsigned int default_value);
 static _kernel_oserror *static_AudioStart (audio_structure_t *stream);
 static unsigned int static_AudioStop (audio_structure_t *stream, bool play_out);
 static _kernel_oserror *static_CheckHandle (audio_structure_t *stream);
@@ -124,6 +124,8 @@ static _kernel_oserror *static_CheckHandle (audio_structure_t *stream);
 /* Private variables */
 /*********************/
 
+static audio_structure_t *static_Streams = NULL;
+
 static protocol_module_t MPEG_Decoder [2]; /* Just make these arrays for now, for simplicity */
 static unsigned int MPEG_Decoders = 0;
 static protocol_module_t AC3_Decoder [2];
@@ -132,7 +134,7 @@ static unsigned int AC3_Decoders = 0;
 static const common_toplevel_fns_t TopLevel = { static_RegisterMe, static_DeregisterMe };
 static const buffer_fns_t Buffer = { static_HowMuchData, static_GiveMeData };
 static const scheduler_fns_t Scheduler = { static_Underrun };
-static const presentation_fns_t Presentation = { static_StreamInfoChanging };
+static const presentation_fns_t Presentation = { static_StreamInfo, static_StreamInfoChanging };
 
 /*********************/
 /* Private constants */
@@ -141,14 +143,6 @@ static const presentation_fns_t Presentation = { static_StreamInfoChanging };
 #define MAGIC_WORD      (0x4D647541)
 
 #define STREAM_ID_AUDIO (0xC0)
-
-#define DEFAULT_AUDIO_BUFFER_PREFILL         (16*1024)
-#define DEFAULT_AUDIO_BUFFER_LOW_WATER_MARK  (8*1024)
-#define DEFAULT_AUDIO_BUFFER_HIGH_WATER_MARK (24*1024)
-
-#define DEFAULT_AUDIO_PREFILL_TIME         (66) /* centiseconds */
-#define DEFAULT_AUDIO_LOW_WATER_MARK_TIME  (33)
-#define DEFAULT_AUDIO_HIGH_WATER_MARK_TIME (100)
 
 #define NULL_DATA_TYPE ((unsigned int) 0xFFFFFFFF)
 
@@ -377,13 +371,6 @@ static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle)
   {
     if (list_head->mpeg_start)
     {
-//      if (stream->audio.state == stream_prefilling && (stream->audio.first_PTS.msb & 0xFE) && stream->audio.packet_list_head->PTS_valid)
-//      {
-//        /* Store only the first PTS received */
-//        stream->audio.first_PTS.msb = stream->audio.packet_list_head->PTS.msb & 1;
-//        stream->audio.first_PTS.lsw = stream->audio.packet_list_head->PTS.lsw;
-//Stream.audio.first_PTS = stream->audio.first_PTS;
-//      }
       if (flags & 1)
       {
         /* Insert PES header into bitstream packet list */
@@ -397,6 +384,12 @@ static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle)
     {
       not_consumed = list_head->length; /* assume nothing consumed */
       e = NULL; /* swallow error (but dropping through with not_consumed nonzero will cause us to return) */
+    }
+    if (list_head->private_PES_header_flag == false) /* don't count the PES headers in the amount that we've sent to the chip */
+    {
+      uint32_t amount_consumed = list_head->length - not_consumed;
+      *(uint64_t *)&stream->audio.since_open.amount_sent += amount_consumed;
+      *(uint64_t *)&stream->audio.since_reset.amount_sent += amount_consumed;
     }
     if (not_consumed == 0)
     {
@@ -447,33 +440,33 @@ static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle)
 //      if (list_head->length == 0) Stuffing_FreePacket (&stream->audio);
 //    }
 
-#if 0    
-    /* Now test for the various audio buffer thresholds */
-#if 1
-    total_audio_queueing = stream->audio.since_reset.amount_received.lsw - stream->audio.since_reset.amount_sent.lsw;
-#else
-    {
-      bitstream_packet_t *packet = stream->audio.packet_list_head;
-      total_audio_queueing = 0;
-      for (; packet != NULL; packet = packet->link)
-      {
-        total_audio_queueing += packet->length;
-      }
-    }
-#endif
-    
-    /* If we've reached prefill buffer-fullness, tell control unit so */
-    if (stream->audio.state == stream_prefilling && stream->audio.prefill_state == ps_initialising/* && total_audio_queueing > stream->audio_buffer_prefill*/)
-    {
-      /* Update state machine */
-      stream->audio.prefill_state = ps_waiting_for_play_command;
-      dprintf (("AudGeneric", "Stuff: audio.prefill_state = waiting_for_play_command\n"));
-      /* Note, we may be re-entered via SWI MPEGAudio_Play at this point */
-      _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, stream->csh);
-    }
-  }
-//  return bytes;
-#endif
+//#if 0    
+//    /* Now test for the various audio buffer thresholds */
+//#if 1
+//    total_audio_queueing = stream->audio.since_reset.amount_received.lsw - stream->audio.since_reset.amount_sent.lsw;
+//#else
+//    {
+//      bitstream_packet_t *packet = stream->audio.packet_list_head;
+//      total_audio_queueing = 0;
+//      for (; packet != NULL; packet = packet->link)
+//      {
+//        total_audio_queueing += packet->length;
+//      }
+//    }
+//#endif
+//    
+//    /* If we've reached prefill buffer-fullness, tell control unit so */
+//    if (stream->audio.state == stream_prefilling && stream->audio.prefill_state == ps_initialising/* && total_audio_queueing > stream->audio_buffer_prefill*/)
+//    {
+//      /* Update state machine */
+//      stream->audio.prefill_state = ps_waiting_for_play_command;
+//      dprintf (("AudGeneric", "Stuff: audio.prefill_state = waiting_for_play_command\n"));
+//      /* Note, we may be re-entered via SWI MPEGAudio_Play at this point */
+//      _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, stream->csh);
+//    }
+//  }
+////  return bytes;
+//#endif
   return e;
 }
 
@@ -493,6 +486,129 @@ static _kernel_oserror *static_Underrun (unsigned int flags, void *handle)
   return e;
 }
 
+/******	static_StreamInfo() ************************************************
+
+Purpose:	Returns stream information
+In:		handle:         audio stream handle
+		tag:		information tag
+		result:		address at which to return value
+Out:		Error pointer
+
+***************************************************************************/
+
+static _kernel_oserror *static_StreamInfo (void *handle, unsigned int tag, unsigned int *result)
+{
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) handle;
+  switch (tag)
+  {
+    case ptlaudio_STREAM_INFO_MUTE_RAW:
+      *result = stream->aud_flags.muted;
+      break;
+      
+    case ptlaudio_STREAM_INFO_LEFT_ATTENUATION_RAW:
+    case ptlaudio_STREAM_INFO_RIGHT_ATTENUATION_RAW:
+      if (stream->relative_volume == 0)
+      {
+        *result = -1; /* ie muted for all intents and purposes */
+      }
+      else
+      {
+        *result = (256 - stream->relative_volume) * 0x8000;
+      }
+      break;
+      
+    case ptlaudio_STREAM_INFO_LEFT_DIALOGUE_ATTENUATION:
+    case ptlaudio_STREAM_INFO_RIGHT_DIALOGUE_ATTENUATION:
+      if (stream->aud_flags.muted || stream->relative_volume == 0)
+      {
+        *result = -1; /* ie muted for all intents and purposes */
+        if (!stream->line_mode)
+        {
+          *result -= 0xB0000; /* maintain the delta between peak and dialogue */
+        }
+      }
+      else
+      {
+        *result = stream->base_peak_volume + (256 - stream->relative_volume) * 0x8000;
+        if (stream->line_mode)
+        {
+          *result += 0xB0000;
+        }
+      }
+      break;
+      
+    case ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION:
+    case ptlaudio_STREAM_INFO_RIGHT_PEAK_ATTENUATION:
+      if (stream->aud_flags.muted || stream->relative_volume == 0)
+      {
+        *result = -1; /* ie muted for all intents and purposes */
+      }
+      else
+      {
+        *result = stream->base_peak_volume + (256 - stream->relative_volume) * 0x8000;
+      }
+      break;
+      
+    case ptlaudio_STREAM_INFO_LEFT_DIALOGUE_ATTENUATION_LINEAR:
+    case ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION_LINEAR:
+    case ptlaudio_STREAM_INFO_RIGHT_DIALOGUE_ATTENUATION_LINEAR:
+    case ptlaudio_STREAM_INFO_RIGHT_PEAK_ATTENUATION_LINEAR:
+      ;unsigned int log_value;
+      e = static_StreamInfo (handle, tag + (ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION - ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION_LINEAR), &log_value);
+      if (!e)
+      {
+        log_value /= 6; /* now a 16.16 fixed point number of amplitude halvings */
+                        /* bits 31-16 are shift, bits 15-12 are index into LogTable, bits 11-0 are interpolation coefficient */
+        if (log_value > 0x100000)
+        {
+          /* Shift > 16 => must be 0 */
+          *result = 0;
+        }
+        else
+        {
+          static const unsigned short LogTable[17] = { 0xFFFF, 0xF525, 0xEAC0, 0xE0CC, 0xD744, 0xCE24, 0xC567, 0xBD08, 0xB504, 0xAD58, 0xA5FE, 0x9EF5, 0x9837, 0x91C3, 0x8B95, 0x85AA, 0x7FFF };
+          unsigned int index = (log_value >> 12) & 0xF;
+          unsigned int factor = LogTable[index] - (((LogTable[index] - LogTable[index+1]) * (log_value & 0xFFF)) >> 12);
+          factor >>= log_value >> 16;
+          *result = factor;
+        }
+      }
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_PCM:
+      *result = 0; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutPCM", result, 0);
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_MPEG:
+      *result = 2; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutMPEG", result, 0);
+      *result ^= 2; /* compensate for default */
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_AC3:
+      *result = 0; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutAC3", result, 0);
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_DTS:
+      *result = 0; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutDTS", result, 0);
+      break;
+      
+    case ptlaudio_STREAM_INFO_SPDIF_MODE_SDDS:
+      *result = 0; /* default if error */
+      _swix (NVRAM_Read, _INR(0,2), "SPDIFOutSDDS", result, 0);
+      break;
+      
+    default:
+      e = Mess_GenerateError ("Err_UkTag", errno_UK_TAG, 0);
+      break;
+  }
+  return e;
+}
+
 /******	static_StreamInfoChanging() ****************************************
 
 Purpose:	Stream information has been initialised or updated
@@ -508,6 +624,192 @@ static _kernel_oserror *static_StreamInfoChanging (unsigned int flags, void *han
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) handle;
   return e;
+}
+
+/******	AudGeneric_CLIAudioInfo() ******************************************
+
+Purpose:	Handles *AudioInfo when generic audio is in use
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_CLIAudioInfo (void)
+{
+  audio_structure_t *stream = static_Streams;
+  if (stream == NULL)
+  {
+    printf ("No audio streams are open\n");
+  }
+  for (; stream != NULL; stream = stream->next)
+  {
+    printf ("AUDIO STREAM %08"PRIX32"  (control stream %08"PRIX32")\n", (uint32_t) stream, (uint32_t) stream->csh);
+    printf ("\n");
+    printf ("                           Since open    Since reset\n");
+    printf ("Bytes received:       %15"PRIu64"%15"PRIu64"\n", *(uint64_t *)&stream->audio.since_open.amount_received, *(uint64_t *)&stream->audio.since_reset.amount_received);
+    printf ("Bytes delivered:      %15"PRIu64"%15"PRIu64"\n", *(uint64_t *)&stream->audio.since_open.amount_sent, *(uint64_t *)&stream->audio.since_reset.amount_sent);
+    printf ("PES packets delivered:     %10"PRIu32"     %10"PRIu32"\n", stream->audio.since_open.PES_packets_sent, stream->audio.since_reset.PES_packets_sent);
+    printf ("PTSs delivered:            %10"PRIu32"     %10"PRIu32"\n", stream->audio.since_open.PTSs_in, stream->audio.since_reset.PTSs_in);
+    uint32_t temp1;
+    uint32_t temp2;
+    _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_TOTAL_CORRECTIONS, stream->clock_handle, &temp1);
+    _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_CORRECTIONS, stream->clock_handle, &temp2);
+    printf ("Clock corrections:         %10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_TOTAL_SLOWS, stream->clock_handle, &temp1);
+    _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_SLOWS, stream->clock_handle, &temp2);
+    printf ("Slows:                     %10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_TOTAL_FASTS, stream->clock_handle, &temp1);
+    _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_FASTS, stream->clock_handle, &temp2);
+    printf ("Fasts:                     %10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    temp1 = temp2 = 0;
+    if (stream->decoder)
+    {
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_TOTAL_ERRORS, &temp1);
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_ERRORS, &temp2);
+    }
+    printf ("Errors:                    %10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    temp1 = temp2 = 0;
+    if (stream->decoder)
+    {
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_TOTAL_UNDERRUNS, &temp1);
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_UNDERRUNS, &temp2);
+    }
+    printf ("Underruns:                 %10"PRIu32"     %10"PRIu32"\n", temp1, temp2);
+    printf ("\n");
+    
+    printf ("State:                          ");
+    if (stream->current_data_type == NULL_DATA_TYPE)
+    {
+      printf ("Prefill (waiting for data to arrive)\n");
+    }
+    else
+    {
+      if (stream->decoder == NULL)
+      {
+        printf ("Unable to allocate decoding resource\n");
+      }
+      else
+      {
+        switch (stream->audio.state)
+        {
+          case stream_prefilling: /* now includes "open" state */
+          {
+            uint32_t open = false;
+            stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_DECODING_ACTIVE, &open);
+            if (!open)
+            {
+              printf ("Prefill (");
+              switch (stream->audio.prefill_state)
+              {
+                case ps_searching_for_first_PES_header:
+                  printf ("searching for first PES header)\n");
+                  break;
+                case ps_initialising:
+                  printf ("buffering data)\n");
+                  break;
+                default:
+                  printf ("unknown)\n");
+                  break;
+              }
+            }
+            else
+            {
+              printf ("Open\n");
+            }
+            break;
+          }
+          case stream_closing:
+            printf ("Closing\n");
+            break;
+          case stream_closed:
+            printf ("Closed\n");
+            break;
+          default:
+            printf ("Unknown\n");
+            break;
+        }
+        
+        printf ("\nHeader information:\n");
+        uint32_t result;
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_FULL_NAME, &result);
+        printf ("    encoding:           %s\n", (const char *) result);
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_SAMPLING_RATE, &result);
+        printf ("    sampling rate:      %d", result / 1000);
+        if ((result %= 1000) != 0)
+        {
+          if (result % 10 == 0) result /= 10;
+          if (result % 10 == 0) result /= 10;
+          printf (".%d", result);
+        }
+        printf (" kHz\n");
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_BITRATE, &result);
+        printf ("    bitrate:            %d", result / 1000);
+        if ((result %= 1000) != 0)
+        {
+          if (result % 10 == 0) result /= 10;
+          if (result % 10 == 0) result /= 10;
+          printf (".%d", result);
+        }
+        printf (" kbit/s\n");
+        uint32_t result2;
+        uint32_t result3;
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_MAIN_CHANNELS, &result);
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_SURROUND_CHANNELS, &result2);
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_LFE_CHANNELS, &result3);
+        printf ("    audio channels:     %d.%d (%d/%d)\n", result + result2, result3, result, result2);
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_DOWNMIX_AVAILABLE, &result);
+        printf ("    downmix options:    %s\n", result ? "available" : "not available");
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_COPYRIGHTED, &result);
+        printf ("    copyright:          %s\n", result ? "copyright protected" : "no copyright");
+        stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_ORIGINAL_NOT_COPY, &result);
+        printf ("    original/copy:      %s\n", result ? "original" : "copy");
+      }
+    }
+    
+    if (stream->next != NULL)
+    {
+      printf ("\n\n");
+    }
+  }
+  return NULL;
+}
+
+/******	AudGeneric_CLIPacketInfo() ******************************************
+
+Purpose:	Handles half of *PacketInfo when generic audio is in use
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *AudGeneric_CLIPacketInfo (void)
+{
+  audio_structure_t *stream = static_Streams;
+  if (stream == NULL)
+  {
+    printf ("No audio streams are open\n");
+  }
+  for (; stream != NULL; stream = stream->next)
+  {
+    printf ("Audio stream %08"PRIX32"  (control stream %08"PRIX32")\n", (uint32_t) stream, (uint32_t) stream->csh);
+    unsigned int audio_packets = 0;
+    unsigned int audio_packets_length = 0;
+    bool irqs_were_disabled = _kernel_irqs_disabled ();
+    if (!irqs_were_disabled) _kernel_irqs_off ();
+    for (bitstream_packet_t *packet = stream->audio.packet_list_head; packet != NULL; packet = packet->link)
+    {
+      audio_packets ++;
+      audio_packets_length += packet->length;
+    }
+    if (!irqs_were_disabled) _kernel_irqs_on ();
+    printf ("  Number of audio packets:  %d packets\n", audio_packets);
+    printf ("  Audio packet data length: %d bytes\n", audio_packets_length);
+    unsigned int audio_in_bitbuffer = 0;
+    if (stream->decoder)
+    {
+      stream->decoder->readfullness (0, stream->decoder_session_id, &audio_in_bitbuffer);
+    }
+    printf ("  Audio data in bitbuffer:  %d bytes\n", audio_in_bitbuffer);
+  }
+  return NULL;
 }
 
 /******	AudGeneric_SWIOpenStream() *****************************************
@@ -572,25 +874,30 @@ _kernel_oserror *AudGeneric_SWIOpenStream (stream_flags_t *flags, control_stream
     stream->audio.since_open.amount_sent.lsw = stream->audio.since_open.amount_sent.msw = 0;
     stream->audio.since_open.PES_packets_sent = 0;
     stream->audio.since_open.PTSs_in = 0;
-    stream->audio.since_open.PTSs_out = 0;
-    stream->audio.since_open.slows = 0;
-    stream->audio.since_open.fasts = 0;
-    stream->audio.since_open.underruns = 0;
-//    stream->audio.since_open.crc_errors = 0;
-//    stream->audio.since_open.sync_losses = 0;
     stream->aud_flags.muted = false;
     stream->aud_flags.suppress_sync_to_stream = false;
-    stream->volume = 256;
-//    AUD_LCA = AUD_RCA = 256 - Stream.volume;
-    stream->audio_buffer_prefill = static_ReadBufferVariable ("MPEG2$AudioBufferPreFill", DEFAULT_AUDIO_BUFFER_PREFILL);
-    stream->audio_buffer_low_water_mark = static_ReadBufferVariable ("MPEG2$AudioBufferLowWaterMark", DEFAULT_AUDIO_BUFFER_LOW_WATER_MARK);
-    stream->audio_buffer_high_water_mark = static_ReadBufferVariable ("MPEG2$AudioBufferHighWaterMark", DEFAULT_AUDIO_BUFFER_HIGH_WATER_MARK);
-    dprintf (("AudGeneric", "SWIOpenStream: prefill = %d, LWM = %d, HWM = %d bytes\n", stream->audio_buffer_prefill, stream->audio_buffer_low_water_mark, stream->audio_buffer_high_water_mark));
+    stream->base_peak_volume = 127; /* default if error */
+    _swix (Sound_Volume, _IN(0)|_OUT(0), 0, &stream->base_peak_volume); /* read system setting */
+    stream->line_mode = 0; /* default if error */
+    _swix (NVRAM_Read, _INR(0,2), "DolbyAudioMode", &stream->line_mode, 0);
+    if (stream->line_mode == 1)
+    {
+      stream->base_peak_volume = (stream->base_peak_volume < 127-29) ? stream->base_peak_volume + 29 : 127;
+    }
+    stream->base_peak_volume = (127 - stream->base_peak_volume) * 0x6000;
+    stream->relative_volume = 256;
     stream->current_data_type = NULL_DATA_TYPE; /* don't know what it is yet */
     
     /* Initialise the new stream */
     e = static_AudioStart (stream);
   }
+  
+  /* Link new audio struct into global list */
+  bool irqs_were_disabled = _kernel_irqs_disabled ();
+  if (!irqs_were_disabled) _kernel_irqs_off ();
+  stream->next = static_Streams;
+  static_Streams = stream;
+  if (!irqs_were_disabled) _kernel_irqs_on ();
   
   if (!e)
   {
@@ -689,22 +996,6 @@ _kernel_oserror *AudGeneric_SWIFullPackets (unsigned int type, unsigned int flag
       {
         stream->audio.prefill_state = ps_initialising;
         dprintf (("AudGeneric", "SWIFullPackets: audio.prefill_state = initialising\n"));
-//        /* Ideally, we'd wait until the decoder notified us that it had received the first frame start */
-//        /* before we go ahead and decide what the initial timestamp of the stream is, but for now, as */
-//        /* a bodge, assume that every PES packet contains at least one frame start */
-//        if (stream->audio.packet_list_head->PTS_valid)
-//        {
-//          stream->audio.first_PTS.msb = stream->audio.packet_list_head->PTS.msb & 1;
-//          stream->audio.first_PTS.lsw = stream->audio.packet_list_head->PTS.lsw;
-//          stream->clock->SetEvent(0, 
-//        }
-//        else
-//        {
-//        }
-        // Determination of the initial timestamp needs to be part of the stream characterisation process
-        // This is going to take a while to implement, so just estimate high for the time being
-        // BODGE ALERT!
-//        _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, stream->csh);
       }
       else
       {
@@ -734,7 +1025,7 @@ _kernel_oserror *AudGeneric_SWIFullPackets (unsigned int type, unsigned int flag
     while (packets != NULL)
     {
       unsigned int old_value;
-      /* Add the length of each bitstream packet to the amnount we've received */
+      /* Add the length of each bitstream packet to the amount we've received */
       old_value = stream->audio.since_open.amount_received.lsw;
       stream->audio.since_open.amount_received.lsw += packets->length;
       if (stream->audio.since_open.amount_received.lsw < old_value) stream->audio.since_open.amount_received.msw ++;
@@ -788,7 +1079,12 @@ _kernel_oserror *AudGeneric_SWICloseStream (unsigned int flags, mpeg_stream_hand
 #ifdef BODGEOVS
     static_AudioStop (stream, false);
 #else
-    static_AudioStop (stream, stream->rs_flags.video_present && Stream.video.speed_indicator == 1 && stream->audio.state == stream_open);
+    uint32_t play_out = false;
+    if (stream->rs_flags.video_present && Stream.video.speed_indicator == 1 && stream->decoder)
+    {
+      stream->decoder->streaminfo (stream->decoder_session_id, ptlaudio_STREAM_INFO_DECODING_ACTIVE, &play_out);
+    }
+    static_AudioStop (stream, play_out);
 #endif
     
     if (stream->current_data_type != NULL_DATA_TYPE && stream->decoder)
@@ -809,6 +1105,28 @@ _kernel_oserror *AudGeneric_SWICloseStream (unsigned int flags, mpeg_stream_hand
   
   if (!e)
   {
+    bool irqs_were_disabled = _kernel_irqs_disabled ();
+    audio_structure_t *prev = NULL;
+    if (!irqs_were_disabled) _kernel_irqs_off ();
+    audio_structure_t *ptr = static_Streams;
+    while (ptr != stream && ptr!= NULL)
+    {
+      prev = ptr;
+      ptr = ptr->next;
+    }
+    if (ptr != NULL)
+    {
+      if (prev == NULL)
+      {
+        static_Streams = ptr->next;
+      }
+      else
+      {
+        prev->next = ptr->next;
+      }
+    }
+    if (!irqs_were_disabled) _kernel_irqs_on ();
+    
     stream->magic = 0;
     free (stream);
   }
@@ -827,7 +1145,7 @@ _kernel_oserror *AudGeneric_SWIPlay (unsigned int flags, mpeg_stream_handle_t as
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
-  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+//  bool irqs_were_enabled = !_kernel_irqs_disabled ();
   e = static_CheckHandle (stream);
   dprintf (("AudGeneric", "SWIPlay\n"));
 #if Debugging==1 && DebugSWIs==1
@@ -971,7 +1289,10 @@ _kernel_oserror *AudGeneric_SWIMuteSound (unsigned int flags, mpeg_stream_handle
   if (!e)
   {
     stream->aud_flags.muted = flags & 1;
-//    IRQ_UpdateMuteState ();
+    if (stream->decoder)
+    {
+      stream->decoder->volume (0, stream->decoder_session_id);
+    }
   }
   return e;
 }
@@ -990,23 +1311,21 @@ _kernel_oserror *AudGeneric_SWISoundVolume (unsigned int flags, mpeg_stream_hand
 {
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
-  unsigned char attenuation;
   IGNORE(flags);
   e = static_CheckHandle (stream);
   
   if (!e)
   {
-    *return_old_volume = stream->volume;
+    *return_old_volume = stream->relative_volume;
     if (volume != -1)
     {
       volume = MAX(volume, 0);
       volume = MIN(volume, 256);
-      stream->volume = volume;
-      attenuation = (256 - volume) / 4;
-      if (attenuation == 64) attenuation = 63;
-//      AUD_LCA = attenuation;
-//      AUD_RCA = attenuation;
-//      IRQ_UpdateMuteState (); /* if maximum attenuation is selected, mute instead */
+      stream->relative_volume = volume;
+      if (stream->decoder)
+      {
+        stream->decoder->volume (0, stream->decoder_session_id);
+      }
     }
   }
   return e;
@@ -1076,7 +1395,7 @@ _kernel_oserror *AudGeneric_SWISetAudioParameters1 (mpeg_stream_handle_t ash, du
   _kernel_oserror *e = NULL;
   audio_structure_t *stream = (audio_structure_t *) ash;
   audio_channel_type mode;
-  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+//  bool irqs_were_enabled = !_kernel_irqs_disabled ();
   e = static_CheckHandle (stream);
   
   if (!e)
@@ -1110,7 +1429,7 @@ _kernel_oserror *AudGeneric_SWISetAudioParameters1 (mpeg_stream_handle_t ash, du
 //      }
 //    }
 //    
-    if (irqs_were_enabled) _kernel_irqs_on ();
+//    if (irqs_were_enabled) _kernel_irqs_on ();
   }
   return e;
 }
@@ -1142,38 +1461,81 @@ _kernel_oserror *AudGeneric_SWISetAudioParameters2 (mpeg_stream_handle_t ash, in
   return e;
 }
 
-/*********************/
-/* Private functions */
-/*********************/
+/******	AudGeneric_SWIReadParameters3() ************************************
 
-/******	static_ReadBufferVariable() ****************************************
-
-Purpose:	Attempts to read one of the MPEG2$AudioBuffer system
-		variables, and returns the defaulkt value if it can't
-In:		System variable name, default value
-Out:		Value to use
+Purpose:	Handles MPEGAudio_ReadParameters 3 when generic audio is in use
+In:		Audio stream handle;
+		address to write least significant 32 bits of STC into;
+		address to write most significant 1 bit of STC into
+Out:		Pointer to error block
 
 ***************************************************************************/
 
-static unsigned int static_ReadBufferVariable (const char *name, unsigned int default_value)
+_kernel_oserror *AudGeneric_SWIReadParameters3 (mpeg_stream_handle_t ash, unsigned int *return_STC_lo, unsigned int *return_STC_hi)
 {
-  _kernel_oserror *e;
-  char variable_value_buffer [64];
-  unsigned int variable_value_length;
-  unsigned int result;
+  _kernel_oserror *e = NULL;
+  audio_structure_t *stream = (audio_structure_t *) ash;
+  e = static_CheckHandle (stream);
   
-  e = _swix (OS_ReadVarVal, _INR(0,4)|_OUT(2), name, variable_value_buffer, sizeof variable_value_buffer, 0, 3, &variable_value_length);
   if (!e)
   {
-    * (variable_value_buffer + variable_value_length) = '\0'; /* terminate string */
-    e = _swix (OS_ReadUnsigned, _INR(0,1)|_OUT(2), 0, variable_value_buffer, &result);
+    mpeg_time_t time;
+    e = _swix (PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_STC, stream->clock_handle, &time);
+    if (e)
+    {
+      *return_STC_lo = 0;
+      *return_STC_hi = 0;
+    }
+    else
+    {
+      *return_STC_lo = time.word.lo;
+      *return_STC_hi = time.word.hi;
+    }
+    return NULL;
   }
-  if (e)
-  {
-    result = default_value;
-  }
-  return result;
+  return e;
 }
+
+/******	AudGeneric_ChangeAudioMode() ***************************************
+
+Purpose:	Responds to a change in Dolby audio operational mode
+
+***************************************************************************/
+
+void AudGeneric_ChangeAudioMode (bool line_mode)
+{
+  audio_structure_t *stream = static_Streams;
+  for (; stream != NULL; stream = stream->next)
+  {
+    stream->line_mode = line_mode;
+    if (stream->decoder)
+    {
+      stream->decoder->volume (0, stream->decoder_session_id);
+    }
+  }
+}
+
+/******	AudGeneric_ChangeSPDIF() *******************************************
+
+Purpose:	Responds to a change in a S/PDIF setting
+
+***************************************************************************/
+
+void AudGeneric_ChangeSPDIF (void)
+{
+  audio_structure_t *stream = static_Streams;
+  for (; stream != NULL; stream = stream->next)
+  {
+    if (stream->decoder)
+    {
+      stream->decoder->spdif (0, stream->decoder_session_id);
+    }
+  }
+}
+
+/*********************/
+/* Private functions */
+/*********************/
 
 /******	static_AudioStart() ************************************************
 
@@ -1187,9 +1549,6 @@ static _kernel_oserror *static_AudioStart (audio_structure_t *stream)
 {
   _kernel_oserror *e = NULL;
   
-  /* Perform a soft reset on the 3520 */
-//  STi3520L_SoftReset (false, true);
-  
   /* Initialise various variables */
   stream->audio.state = stream_prefilling;
   stream->audio.prefill_state = ps_searching_for_first_PES_header;
@@ -1201,15 +1560,6 @@ static _kernel_oserror *static_AudioStart (audio_structure_t *stream)
   stream->audio.since_reset.amount_sent.lsw = stream->audio.since_reset.amount_sent.msw = 0;
   stream->audio.since_reset.PES_packets_sent = 0;
   stream->audio.since_reset.PTSs_in = 0;
-  stream->audio.since_reset.PTSs_out = 0;
-  stream->audio.since_reset.slows = 0;
-  stream->audio.since_reset.fasts = 0;
-  stream->audio.since_reset.underruns = 0;
-//  stream->audio.since_reset.crc_errors = 0;
-//  stream->audio.since_reset.sync_losses = 0;
-  stream->audio.first_PTS.msb = 0x80; /* flag that no PTS has been found yet */
-  stream->audio.first_PTS.lsw = 0;
-//  stream->audio_header.word = 0;
 //  stream->aud_flags.first_header_received = false;
 //  stream->aud_flags.muted_across_sampling_frequency_transition = false;
 //  stream->aud_flags.PTS_valid = false;
@@ -1245,11 +1595,6 @@ Out:		Number of data bytes that were not played
 static unsigned int static_AudioStop (audio_structure_t *stream, bool play_out)
 {
   unsigned int discarded_data = 0; /* default if we're playing out, or if there are no queuing packets */
-  
-  if (stream->audio.state == stream_open)
-  {
-    stream->decoder->stop (0, stream->decoder_session_id);
-  }
   
   if (stream->commenced)
   {

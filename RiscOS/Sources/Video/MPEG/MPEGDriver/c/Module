@@ -66,6 +66,7 @@ Date		Who	Change
 #include "MPEG/MPEGCtrl.h"
 #include "MPEG/MPEGVideo.h"
 #include "PRISM/PRISM.h"
+#include "NVRAM.h"
 
 #include "AudGeneric.h"
 #include "Audio.h"
@@ -166,6 +167,8 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
   bool AudGenericInitialised = false;
   bool VideoInitialised = false;
 #endif
+  bool VolumeAdjustedForLineMode = false;
+  int OriginalVolume = 127;
   IGNORE(podule_base);
   IGNORE(cmd_tail);
   
@@ -237,6 +240,15 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
   {
 #endif
     
+    int audiomode = -1;
+    _swix (NVRAM_Read, _INR(0,2), "DolbyAudioMode", &audiomode, 0);
+    if (audiomode == 1)
+    {
+      _swix (Sound_Volume, _IN(0)|_OUT(0), 0, &OriginalVolume);
+      _swix (Sound_Volume, _IN(0), (OriginalVolume > 29) ? OriginalVolume - 29 : 1);
+      VolumeAdjustedForLineMode = true;
+    }
+    
     /* Initialise the program_element_structure_t */
     Stream.csh = NULL_CSH;                        /* signals no streams are open yet */
 #ifndef GENERIC
@@ -285,6 +297,7 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
     CallBack_Pending = true;
   }
   
+  if (e && VolumeAdjustedForLineMode) _swix (Sound_Volume, _IN(0), OriginalVolume);
 #ifdef GENERIC
   if (e && Module_UseGenericAudio) PCompos_MPEGDriverDying ();
   if (e && VideoInitialised) Video_Finalise ();
@@ -392,6 +405,15 @@ extern _kernel_oserror *Module_Final(int fatal, int podule, void *pw)
     }
 #endif
     
+    int audiomode = -1;
+    _swix (NVRAM_Read, _INR(0,2), "DolbyAudioMode", &audiomode, 0);
+    if (audiomode == 1)
+    {
+      int OriginalVolume = 127;
+      _swix (Sound_Volume, _IN(0)|_OUT(0), 0, &OriginalVolume);
+      _swix (Sound_Volume, _IN(0), (OriginalVolume < 127-29) ? OriginalVolume + 29 : 127);
+    }
+    
     _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
         (2 << PEHFlags_RequiredFlag_Shift) | PEHFlags_StreamIdentifiedByStreamId | PEHFlags_StreamIdentifiedByPID,
         0x80, ac3_dvd_program_element_handler, pw);
@@ -482,6 +504,12 @@ extern _kernel_oserror *Module_Commands(const char *arg_string, int argc, int cm
         case CMD_TVViewingMode:
           printf ("%s\n", (char *) _swi (MessageTrans_Lookup, _INR(0,2)|_RETURN(2), Module_MessageFD, "CMPDTVV", 0));
           break;
+        case CMD_SPDIF:
+          printf ("%s\n", (char *) _swi (MessageTrans_Lookup, _INR(0,2)|_RETURN(2), Module_MessageFD, "CMPDSPD", 0));
+          break;
+        case CMD_DolbyAudioMode:
+          printf ("%s\n", (char *) _swi (MessageTrans_Lookup, _INR(0,2)|_RETURN(2), Module_MessageFD, "CMPDDAM", 0));
+          break;
       }
       break;
     case (int) arg_STATUS:
@@ -496,6 +524,12 @@ extern _kernel_oserror *Module_Commands(const char *arg_string, int argc, int cm
         case CMD_TVViewingMode:
           CLI_TVViewingMode_Status ();
           break;
+        case CMD_SPDIF:
+          CLI_SPDIF_Status ();
+          break;
+        case CMD_DolbyAudioMode:
+          CLI_DolbyAudioMode_Status ();
+          break;
       }
       break;
     default:
@@ -505,7 +539,12 @@ extern _kernel_oserror *Module_Commands(const char *arg_string, int argc, int cm
           e = CLI_VideoInfo ();
           break;
         case CMD_AudioInfo:
-          e = CLI_AudioInfo ();
+#ifdef GENERIC
+          if (Module_UseGenericAudio)
+            e = AudGeneric_CLIAudioInfo();
+          else
+#endif
+            e = CLI_AudioInfo ();
           break;
         case CMD_PacketInfo:
           e = CLI_PacketInfo ();
@@ -526,9 +565,6 @@ extern _kernel_oserror *Module_Commands(const char *arg_string, int argc, int cm
         case CMD_ZPoke:
           e = ZoranPara_Poke (arg_string);
           break;
-        case CMD_VCXO:
-          e = ZoranPara_VCXO (arg_string);
-          break;
 #endif
         case CMD_TVAspect:
           e = CLI_TVAspect (arg_string);
@@ -538,6 +574,12 @@ extern _kernel_oserror *Module_Commands(const char *arg_string, int argc, int cm
           break;
         case CMD_TVViewingMode:
           e = CLI_TVViewingMode (arg_string);
+          break;
+        case CMD_SPDIF:
+          e = CLI_SPDIF (arg_string);
+          break;
+        case CMD_DolbyAudioMode:
+          e = CLI_DolbyAudioMode (arg_string);
           break;
       }
       break;
@@ -631,7 +673,8 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
     case MPEGVideo_ReadParameters - MPEGVideoSWI_Base:
       switch (r->r[0])
       {
-        case 0:
+        case ReadParametersReason_TimeCode:
+        case ReadParametersReason_TimeCode|ReadParametersReason_HandleProvided:
           e = Video_SWIReadParameters0 (
               (signed int *) &(rout.r[1]),
               (signed int *) &(rout.r[2])
@@ -639,7 +682,8 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
           r->r[1] = rout.r[1];
           r->r[2] = rout.r[2];
           break;
-        case 3:
+        case ReadParametersReason_ReadSTC:
+        case ReadParametersReason_ReadSTC|ReadParametersReason_HandleProvided:
           e = Video_SWIReadParameters3 (
               (unsigned int *) &(rout.r[1]),
               (unsigned int *) &(rout.r[2])
@@ -647,13 +691,15 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
           r->r[1] = rout.r[1];
           r->r[2] = rout.r[2];
           break;
-        case 4:
+        case ReadParametersReason_ReadBufferFullness:
+        case ReadParametersReason_ReadBufferFullness|ReadParametersReason_HandleProvided:
           e = Video_SWIReadParameters4 (
               (unsigned int *) &(rout.r[1])
               );
           r->r[1] = rout.r[1];
           break;
-        case 5:
+        case ReadParametersReason_CheckDisplayReady:
+        case ReadParametersReason_CheckDisplayReady|ReadParametersReason_HandleProvided:
           e = Video_SWIReadParameters5 (
               (unsigned int *) &(rout.r[1])
               );
@@ -910,6 +956,29 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
         default:
           sprintf (reason_string, "%d", r->r[0]);
           e = Mess_GenerateError ("Err_InvReason", errno_INV_REASON, 2, "MPEGAudio_SetAudioParameters", reason_string);
+          break;
+      }
+      break;
+    case MPEGAudio_ReadParameters - MPEGVideoSWI_Base:
+      switch (r->r[0])
+      {
+        case AudioReadParametersReason_ReadSTC:
+#ifdef GENERIC
+          if (Module_UseGenericAudio) fn = AudGeneric_SWIReadParameters3; else fn = Audio_SWIReadParameters3;
+          e = fn (
+#else
+          e = Audio_SWIReadParameters3 (
+#endif
+              (mpeg_stream_handle_t) (r->r[1]),
+              (unsigned int *) &(rout.r[1]),
+              (unsigned int *) &(rout.r[2])
+              );
+          r->r[1] = rout.r[1];
+          r->r[2] = rout.r[2];
+          break;
+        default:
+          sprintf (reason_string, "%d", r->r[0]);
+          e = Mess_GenerateError ("Err_InvReason", errno_INV_REASON, 2, "MPEGAudio_ReadParameters", reason_string);
           break;
       }
       break;

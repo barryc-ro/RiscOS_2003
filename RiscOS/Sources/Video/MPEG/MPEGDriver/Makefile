@@ -29,6 +29,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = wipe
+NOP     = @|
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -78,6 +79,12 @@ ram: ${RAM_MODULE}
 
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
+
+install: install_${TYPE}
+        ${NOP}
+
+install_: install_ram
+        ${NOP}
 
 install_ram: ${RAM_MODULE}
         ${MKDIR} ${INSTDIR}

@@ -276,6 +276,7 @@ static void static_ProcessVideoQuantMatrixExt (void);
 static void static_ProcessVideoPictureDisplayExt (void);
 static bool static_ProcessVideoUserData (void);
 static void static_ProcessVideoDTG1UserData (void);
+static void static_ProcessVideoGA94UserData (void);
 static void static_ProcessVideoDiviComUserData (unsigned char dataLength, unsigned char dataType, unsigned char extDataType);
 static void static_ProcessVideoSliceHdr (void);
 static unsigned int static_GetVideoHdrBits (unsigned char bits);
@@ -289,6 +290,7 @@ static void static_PositionVideo (signed short frame_centre_horizontal_offset, s
 static void static_SetUpScalingRegisters (signed int centre_x, signed int centre_y, fixed horizontal_downscaling, vertical_scaling_factor vertical_scaling_index);
 static void static_SetDFP (void);
 static void static_ProcessCCData (unsigned int handler, unsigned int flags, const char *data);
+static unsigned int static_ReadBufferVariable (const char *name, unsigned int default_value);
 
 /********************/
 /* Public variables */
@@ -941,7 +943,7 @@ void IRQ_UpdateMuteState (void)
       Stream.audio.state == stream_closed ||
       Stream.audio.state == stream_prefilling ||
       Stream.aud_flags.muted == true ||
-      Stream.volume == 0 ||
+      Stream.effective_volume == 0 ||
       Stream.audio.speed_indicator != 1 ||
       Stream.aud_flags.muted_across_sampling_frequency_transition == true ||
       Stream.aud_flags.recovering_from_underrun == true)
@@ -1077,9 +1079,7 @@ Notes:		This is enabled when video goes into normal play mode. It is used
 
 static void static_INT_VS (bool field, unsigned int *video_ints)
 {
-  static const clk PAL_frame_time = { 3600, 0 };
-  static const clk NTSC_frame_time = { 3003, 0 };
-  clk one_frame_time = Module_Display525_60 ? NTSC_frame_time : PAL_frame_time;
+  clk one_frame_time = Module_Display525_60 ? (const clk) { 3003, 0 } : (const clk) { 3600, 0 };
   
   dprintf (("IRQ", "INT_VS%c\n", field ? 'T' : 'B'));
   
@@ -1087,7 +1087,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
 #ifdef GENERIC
   if (Module_UseGenericAudio)
   {
-    Stream.clock->StreamInfo(12, Stream.clock_handle, (mpeg_time_t *) &Stream.video.latched_STC);
+    Stream.clock->StreamInfo(pfcclock_STREAM_INFO_STC, Stream.clock_handle, (mpeg_time_t *) &Stream.video.latched_STC);
   }
   else
 #endif
@@ -1121,7 +1121,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
       {
         clk time_to_wait = Clk_Subtract (Stream.video.first_PTS, Clk_ConvertSTCtoPCR (Stream.video.latched_STC));
         if (Module_UseGenericAudio || !Stream.rs_flags.audio_present || (Stream.video.first_PTS.msb & 0xFE) || (Stream.audio.first_PTS.msb & 0xFE) || Stream.vid_flags.internal_reset ||
-            Clk_Less (time_to_wait, one_frame_time) || Clk_Greater (time_to_wait, (clk) { 180000, 0}))
+            Clk_Less (time_to_wait, one_frame_time) || Clk_Greater (time_to_wait, (const clk) { 180000, 0}))
 #else
       /* Do nothing if there is an audio stream, but the audio play command hasn't yet been received (because that's when PCR is initialised) */
       if (!Stream.rs_flags.audio_present || Stream.audio.state == stream_open)
@@ -1361,7 +1361,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
 #endif
                 Clk_ConvertSTCtoPCR (Stream.video.latched_STC), Stream.display_frames->PTS);
             dprintf (("IRQ", "INT_VS: PTS_error = %c%08X\n", Stream.video_PTS_error.msb ? '1' : '0', Stream.video_PTS_error.lsw));
-            if (Clk_Greater (Stream.video_PTS_error, one_frame_time))
+            if (Clk_Greater (Stream.video_PTS_error, one_frame_time) && Clk_Less (Stream.video_PTS_error, (const clk) { 180000, 0 }))
             {
               Stream.video_presentation_error = pe_presented_late;
               if (old_presentation_error == pe_presented_late && /* only skip if there's a reasonable amount of data to skip */ ((VID_VBL & 0x3FFF) > 10))
@@ -1375,8 +1375,8 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
             }
             else
             {
-              clk zero = { 0, 0 };
-              if (Clk_Less (Clk_Add (Stream.video_PTS_error, one_frame_time), zero))
+              clk negative_PTS_error = Clk_Subtract ((const clk) { 0, 0 }, Stream.video_PTS_error);
+              if (Clk_Greater (negative_PTS_error, one_frame_time) && Clk_Less (negative_PTS_error, (const clk) { 180000, 0 }))
               {
                 Stream.video_presentation_error = pe_presented_early;
                 if (old_presentation_error == pe_presented_early)
@@ -2584,6 +2584,19 @@ static bool static_ProcessVideoUserData (void)
         /* Either way, we want to exit the function now. */
         return false;
       }
+      else if (dataType == 0x41 && dataLength == 0x47)
+      {
+        /* This is highly unlikely to be used by DiviCom or C-Cube, but check the rest of the GA94 (ATSC) magic word, to be sure */
+        if (static_GetVideoHdrBits (16) == 0x3934)
+        {
+          /* It *is* GA94 format */
+          static_ProcessVideoGA94UserData ();
+        }
+        /* If it wasn't GA94 then we've messed things up by reading 16 bits. */
+        /* If it was GA94, then don't try to interpret any remaining user data. */
+        /* Either way, we want to exit the function now. */
+        return false;
+      }
       else if ((dataType == 0x02 && dataLength == 0x05) ||
                (dataType == 0x04 && dataLength == 0x05) ||
                (dataType == 0x05 && dataLength == 0x01) ||
@@ -2646,6 +2659,62 @@ static void static_ProcessVideoDTG1UserData (void)
   {
     static_GetVideoHdrBits (4); /* skip reserved bits */
     Stream.decode_frames->lastpic->active_format = static_GetVideoHdrBits (4);
+  }
+}
+
+/******	static_ProcessVideoGA94UserData() **********************************
+
+Purpose:	Parses GA94 format MPEG user_data()
+
+***************************************************************************/
+
+static void static_ProcessVideoGA94UserData (void)
+{
+  dprintf (("IRQ", "ProcessVideoGA94UserData\n"));
+  if (static_GetVideoHdrBits (8) == 0x03)
+  {
+    /* user_data_type_code 0x03 means ATSC closed captioning user data - we don't know about any other uses */
+    bool process_em_data_flag;
+    unsigned int cc_count;
+    static_GetVideoHdrBits (1); /* skip process_em_data_flag */
+    process_em_data_flag = static_GetVideoHdrBits (1);
+    static_GetVideoHdrBits (1); /* skip additional_data_flag */
+    cc_count = static_GetVideoHdrBits (5);
+    static_GetVideoHdrBits (8); /* skip em_data */
+    while (cc_count-- > 0)
+    {
+      if (static_GetVideoHdrBits (5) != 0x1F) return; /* bail out if data corrupt */
+      if (static_GetVideoHdrBits (1))
+      {
+        char *buffer = Stream.decode_frames->CC_even_data;
+        switch (static_GetVideoHdrBits (2))
+        {
+          case 0: /* odd field closed captions */
+            buffer -= (char *)&((frame_t *) NULL)->CC_even_data - (char *)&((frame_t *) NULL)->CC_odd_data;
+            /* drop through... */
+          case 1: /* even field closed captions */
+            if (buffer[0] != 0 || buffer[1] != 0)
+            {
+              buffer += 2; /* allow for multiple entries per field, eg due to 3:2 pulldown */
+              if (buffer[0] != 0 || buffer[1] != 0)
+              {
+                static_GetVideoHdrBits (16);
+                break; /* buffer is full */
+              }
+            }
+            buffer[0] = static_GetVideoHdrBits (8);
+            buffer[1] = static_GetVideoHdrBits (8);
+            break;
+          default: /* don't know what to do with other cc_types, ignore them */
+            static_GetVideoHdrBits (16);
+            break;
+        }
+      }
+      else
+      {
+        static_GetVideoHdrBits (18); /* cc_valid was false, so just ignore these bits */
+      }
+    }
   }
 }
 
@@ -2830,9 +2899,17 @@ static void static_ProcessVideoSliceHdr (void)
   /* Calculate the video buffer prefill threshold if we haven't done so already */
   if (VideoPrefillSize == -1)
   {
+#if 1
+    VideoPrefillSize = static_ReadBufferVariable ("MPEG2$VideoPrefillBitrateCap", 15000);
+    VideoPrefillSize = (VideoPrefillSize << 1) + (VideoPrefillSize >> 1); /* convert kbits/s to 400bits/s */
+    VideoPrefillSize = MIN (VideoPrefillSize, Stream.decode_frames->seq.bit_rate);
+    VideoPrefillSize *= Stream.decode_frames->lastpic->vbv_delay;
+    VideoPrefillSize /= 2048 * 90000 / 400;
+#else
     VideoPrefillSize = (Stream.decode_frames->seq.bit_rate * Stream.decode_frames->lastpic->vbv_delay) / (2048 * 90000 / 400);
+#endif
     /* The multiplication should be 32-bit safe, because even the 15Mbit/s theoretical maximum rate of */
-    /* the 3520 equates to &9999 (16 bits) * 400bits/s, and vbv_delay is also a 16 bit value.          */
+    /* the 3520 equates to &927C (16 bits) * 400bits/s, and vbv_delay is also a 16 bit value.          */
     /* Now cap the value by vbv_buffer_size, in case one of the above values was silly */
     VideoPrefillSize = MIN(VideoPrefillSize, Stream.decode_frames->seq.vbv_buffer_size * (16 * 1024 / 2048));
     /* Now cap the value by the size of our allocated bit buffer */
@@ -4038,4 +4115,33 @@ static void static_ProcessCCData (unsigned int handler, unsigned int flags, cons
       MiscAsm_CallHandler (handler, flags, data, length);
     }
   }
+}
+
+/******	static_ReadBufferVariable() ****************************************
+
+Purpose:	Attempts to read a numeric system variable, and returns the
+		default value if it can't
+In:		System variable name, default value
+Out:		Value to use
+
+***************************************************************************/
+
+static unsigned int static_ReadBufferVariable (const char *name, unsigned int default_value)
+{
+  _kernel_oserror *e;
+  char variable_value_buffer [64];
+  unsigned int variable_value_length;
+  unsigned int result;
+  
+  e = _swix (OS_ReadVarVal, _INR(0,4)|_OUT(2), name, variable_value_buffer, sizeof variable_value_buffer, 0, 3, &variable_value_length);
+  if (!e)
+  {
+    * (variable_value_buffer + variable_value_length) = '\0'; /* terminate string */
+    e = _swix (OS_ReadUnsigned, _INR(0,1)|_OUT(2), 0, variable_value_buffer, &result);
+  }
+  if (e)
+  {
+    result = default_value;
+  }
+  return result;
 }

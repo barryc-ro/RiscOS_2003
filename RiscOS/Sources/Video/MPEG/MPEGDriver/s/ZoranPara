@@ -122,6 +122,7 @@ InterfaceFlags_OldPTCValid                      *       1 :SHL: 7
 InterfaceFlags_OldPTCErrValid                   *       1 :SHL: 8
 InterfaceFlags_Resetting                        *       1 :SHL: 9
 InterfaceFlags_IRQSincePoll                     *       1 :SHL: 10
+InterfaceFlags_LineMode                         *       1 :SHL: 11
 InterfaceFlags_DongleFitted                     *       1 :SHL: 31 ; private flag
 
 ; Layout of common_toplevel_fns_t C struct
@@ -153,14 +154,12 @@ Buffer_GiveMeData       #       4
         IMPORT  Zoran_ConsumeData
         IMPORT  Zoran_ReadFullness
         IMPORT  Zoran_Start
-        IMPORT  Zoran_Stop
         IMPORT  Zoran_Volume
         IMPORT  Zoran_Downmix
         IMPORT  Zoran_SPDIF
-        IMPORT  Zoran_ReadStreamInfo
+        IMPORT  Zoran_StreamInfo
         IMPORT  Zoran_Peek
         IMPORT  Zoran_Poke
-        IMPORT  Zoran_VCXO
 
 
         AREA    |Asm$$Code|, CODE, READONLY
@@ -181,12 +180,10 @@ ProtocolFunctions_MPEG
         DCD     Zoran_DataAvailable
         DCD     ZoranPara_ConsumeData
         DCD     Zoran_ReadFullness
-        DCD     Zoran_Start
-        DCD     Zoran_Stop
         DCD     Zoran_Volume
         DCD     Zoran_Downmix
         DCD     Zoran_SPDIF
-        DCD     Zoran_ReadStreamInfo
+        DCD     Zoran_StreamInfo
 
 ProtocolFunctions_AC3
         DCD     ZoranPara_ComponentInfo
@@ -197,12 +194,10 @@ ProtocolFunctions_AC3
         DCD     Zoran_DataAvailable
         DCD     ZoranPara_ConsumeData
         DCD     Zoran_ReadFullness
-        DCD     Zoran_Start
-        DCD     Zoran_Stop
         DCD     Zoran_Volume
         DCD     Zoran_Downmix
         DCD     Zoran_SPDIF
-        DCD     Zoran_ReadStreamInfo
+        DCD     Zoran_StreamInfo
 
 
 ; extern _kernel_oserror *ZoranPara_Init (common_toplevel_fns_t *toplevel, buffer_fns_t *buffer, scheduler_fns_t *scheduler, const presentation_fns_t *presentation);
@@ -335,7 +330,7 @@ ZoranPara_Init
         B       %FT00
         LTORG
 PLLTAB_Params
-        DCB     0, 2, 0, 1, 9, 33
+        DCB     0, 3, 0, 1, 9, 33
 PLLCFG_Params1
         DCB     3
 PLLCFG_Params2
@@ -704,37 +699,6 @@ ZoranPara_Poke
         Return  "a1,v1"
 
 
-; _kernel_oserror *ZoranPara_VCXO (const char *arg_string);
-
-        EXPORT  ZoranPara_VCXO
-ZoranPara_VCXO
-        FunctionEntry "a1,v1"
-        StaticBaseFromSL ip
-        ADRVar  a1, ip, Interface
-        LDR     a1, [a1, #Interface_Flags]
-        TST     a1, #InterfaceFlags_DongleFitted
-        BEQ     StarCommandWithNoDongle
-        LDRVar  v1, ip, InUseSemaphore
-        TEQ     v1, #0
-        BNE     %FT01
-        BL      ActivateDongle
-        TEQ     a1, #0
-        BEQ     %FT01
-        BL      DeactivateDongle
-        ADD     sp, sp, #4
-        Return  "v1"
-01
-        StaticBaseFromSL ip
-        LDR     a1, [sp]
-        ADRVar  a2, ip, Interface       ; set up necessary extra parameter
-        BL      Zoran_VCXO
-
-        StaticBaseFromSL ip
-        TEQ     v1, #0
-        BLEQ    DeactivateDongle
-        Return  "a1,v1"
-
-
 
 ; _kernel_oserror * (*establish) (unsigned int flags, void *handle, stream_handle_t clock_handle, void **session_id);
 
@@ -861,12 +825,47 @@ ZoranPara_ConsumeData
         LDR     lr, [sp, #1*4]          ; retrieve not_consumed pointer
         STR     a1, [lr]
         SUBS    a1, a4, a1              ; a1 = bytes we're actually going to transfer
+ [ {TRUE} ; bodge to add 2^22 to every PTS
+        BEQ     %FT12
+        TEQ     a4, #14
+        LDREQB  lr, [a3]
+        TEQEQ   lr, #0
+        LDREQB  lr, [a3, #1]
+        TEQEQ   lr, #0
+        LDREQB  lr, [a3, #2]
+        TEQEQ   lr, #1
+        BEQ     %FT19
+11
+        SUB     a2, a2, a1
+        STRVar  a2, ip, StuffingBytesRemaining, lr
+        MOV     a2, a3
+        BL      IntConsumeData
+12
+ |
         SUBNE   a2, a2, a1
         STRVar  a2, ip, StuffingBytesRemaining, lr, NE
         MOVNE   a2, a3
         BLNE    IntConsumeData
+ ]
         MOV     a1, #0                  ; no error
         Return
+
+ [ {TRUE} ; bodge to add 2^22 to every PTS
+19      ; Massage the PTS to reduce the chances of the wraparound (buggy) case happening at the stream start
+        ; ie add on &400000 ticks = approx 47 seconds
+        ; Alas, it's held big-endian, so we have to do it in pieces
+        LDRB    lr, [a3, #10]           ; PTS bits 22-29
+        ADD     lr, lr, #1
+        STRB    lr, [a3, #10]
+        TST     lr, #&100               ; overflowed into next field?
+        BEQ     %BT11                   ; no
+        LDRB    lr, [a3, #9]            ; marker bit, PTS bits 30-32, PTS_marker_bits
+        MOV     lr, lr, ROR #4          ; put PTS bits at top of word
+        ADD     lr, lr, #1:SHL:29
+        MOV     lr, lr, ROR #28
+        STRB    lr, [a3, #9]
+        B       %BT11
+ ]
 
 60      ; During a reset, flush all data away
         LDR     a2, [sp, #4*0]          ; retrieve not_consumed pointer
@@ -1916,9 +1915,8 @@ FunctionDescriptorTable
         DCD     0
         DCD     ZoranPara_AdjustRate
         DCD     0
- IMPORT Zoran_BodgePlay
- DCD Zoran_BodgePlay
- DCD 0
+        DCD     Zoran_Start
+        DCD     0
 FunctionDescriptorTableEnd
 
 
