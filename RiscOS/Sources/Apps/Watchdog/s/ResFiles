@@ -1,5 +1,0 @@
-; > ResFiles
-;
-;	(none)
-
-        END
