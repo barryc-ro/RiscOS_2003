@@ -5,9 +5,7 @@
 #include "Desk.Coord.h"
 #include "Desk.KernelSWIs.h"
 
-//#include "^.Desk.Filter2.h"
 #include "^.Desk.Window2.h"
-//#include "^.Desk.ModHand.h"
 
 #include "MemCheck.MemCheck.h"
 
@@ -19,10 +17,12 @@
 #include "WindInfo2.h"
 #include "PtrV.h"
 #include "DrawHL.h"
+#include "Toggle.h"
+
+#include "CMHGHead.h"
 
 #define	TaskModule_SendMessage	0x4d300
 
-#include "CMHGHead.h"
 
 
 
@@ -116,12 +116,31 @@ _kernel_oserror*	HighlighCheck_handler( _kernel_swi_regs* r, void* pw)
 	}
 
 
+#ifdef TIME_PTRV
+	#include "Timer1.Timer1.h"
+	
+	static char		time_ptrv_buffer[ 1024] = "";
+	static char*		time_ptrv_bufferend = NULL;
+	
+	_kernel_oserror*	SaveDtInfo_handler( _kernel_swi_regs* r, void* pw)
+		{
+		Desk_Debug_SetNestingIndentation( "");
+		Desk_Debug_Print( time_ptrv_buffer);
+		Desk_Debug_SetNestingIndentation( "  ");
+		time_ptrv_buffer[ 0] = 0;
+		time_ptrv_bufferend = time_ptrv_buffer;
+		return NULL;
+		Desk_UNUSED( pw);
+		Desk_UNUSED( r);
+		}
+#endif
 
 int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 	{
 	MemCheck_checking	oldchecking = MemCheck_SetChecking( 0, 0);
 	
 	if ( r->r[0]==0)	{
+		
 		Desk_wimp_point	dpos = { 0, 0};
 		// Request status of device
 		
@@ -131,6 +150,7 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 		if ( IconHigh_globals.currentemulation == IconHigh_newemulation_default_HIGHLIGHTING)	{
 			// mouse_dpos is not actually used - when highlighting is moved, the mouse is
 			// moved directly, as moving here is subsequently scaled by Wimp.
+			// Note that this moving of highlight is still done even when paused.
 			if ( r->r[2]!=0 || r->r[3]!=0)	{
 				// Mouse has already moved, so we should check location of pointer and move/remove highlight
 				if ( !callback_set_for_highlightcheck)	{
@@ -140,7 +160,7 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 				}
 			}
 		
-		if ( IconHigh_globals.currentemulation == IconHigh_newemulation_default_POINTER)	{
+		if ( !IconHigh_globals.paused && IconHigh_globals.currentemulation==IconHigh_newemulation_default_POINTER)	{
 			if ( keydown_left)	dpos.x -= mouse_speed / mousespeed_SCALE;
 			if ( keydown_right)	dpos.x += mouse_speed / mousespeed_SCALE;
 			if ( keydown_down)	dpos.y -= mouse_speed / mousespeed_SCALE;
@@ -154,8 +174,35 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 				// Stops accelaration immediately if all buttons are released.
 				}
 			
-			r->r[2] += dpos.x;
-			r->r[3] += dpos.y;
+				{
+				#ifdef TIME_PTRV
+					{
+					static unsigned int	last_t = 0;
+					
+					unsigned int	t;
+					unsigned int	dt;
+					
+					t = Timer1_GetTime();
+					
+					dt = t-last_t;
+					last_t = t;
+					
+					if ( time_ptrv_bufferend==NULL)	time_ptrv_bufferend = time_ptrv_buffer;
+					
+					time_ptrv_bufferend += sprintf( time_ptrv_bufferend, "dt=%8i	stack approx= 0x%p  %s\n", 
+						dt, 
+						r, 
+						(dt < 30000) ? "*" : ""
+						);
+					if ( time_ptrv_bufferend-time_ptrv_buffer > 256)	{
+						_swix( OS_AddCallBack, _INR(0,1), SaveDtInfo, pw);
+						}
+					}
+				#endif
+					
+				r->r[2] += dpos.x;
+				r->r[3] += dpos.y;
+				}
 			IconHigh_globals.lastmovement = dpos;
 			}
 		
@@ -221,6 +268,8 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 int	Pointer_KeyV_handler( _kernel_swi_regs* r, void* pw)
 	{
 	MemCheck_RegisterMiscBlock( r, sizeof( _kernel_swi_regs));
+	
+	if ( IconHigh_globals.paused)	return 1;	// pass on call.
 	
 	if ( r->r[0]==1 || r->r[0]==2)	{	// key release/press.
 		
@@ -431,12 +480,6 @@ _kernel_oserror*	HighlightInsV2_handler( _kernel_swi_regs* r, void* pw)
 		else if ( IconHigh_globals.currentemulation==IconHigh_newemulation_default_POINTER)	{
 			
 			if ( !keydown_detected_from_keyv)	{	// Only interested in mouse movements via kbd buffer if none detected from KeyV
-				/*
-				keydown_left	= Desk_bool_FALSE;
-				keydown_right	= Desk_bool_FALSE;
-				keydown_up	= Desk_bool_FALSE;
-				keydown_down	= Desk_bool_FALSE;
-				*/
 				// Set a callback to cancel this keydown after a delay.
 				if ( keydown_left || keydown_right || keydown_up || keydown_down)
 					_swix( OS_RemoveTickerEvent, _INR(0,1), CancelIRKeyDown, pw);
@@ -462,12 +505,12 @@ _kernel_oserror*	HighlightInsV2_handler( _kernel_swi_regs* r, void* pw)
 			}
 		}
 	
+	
 	else if ( global_lastkey==KEY_BUFFER_TOGGLE || global_lastkey==KEY_IRH_BUFFER_TOGGLE)	{
-		if ( IconHigh_globals.currentemulation==IconHigh_newemulation_default_NONE)	{
-			EmulationStartAuto( NULL, pw);
-			}
-		else	EmulationPointerStop( pw);
+		IconHigh_globals.paused = (IconHigh_globals.paused) ? Desk_bool_FALSE : Desk_bool_TRUE;
+		Desk_Debug_Printf( Desk_error_PLACE "Just toggled pause - new status is %i\n", IconHigh_globals.paused);
 		}
+	
 	
 	else if ( IconHigh_globals.currentemulation!=IconHigh_newemulation_default_NONE)	{
 		
@@ -503,9 +546,14 @@ int	HighlightInsV_handler( _kernel_swi_regs* r, void* pw)
 	if ( r->r[1]==0)	{	//	kbd buffer
 		Desk_bool	ignore = Desk_bool_TRUE;
 		
-		if ( r->r[0]==KEY_BUFFER_TOGGLE || r->r[0]==KEY_IRH_BUFFER_TOGGLE)	ignore = Desk_bool_FALSE;
+		if ( r->r[0]==KEY_BUFFER_TOGGLE || r->r[0]==KEY_IRH_BUFFER_TOGGLE)	{
+			Desk_Debug_Printf( Desk_error_PLACE "Intercepted insertion of toggle\n");
+			ignore = Desk_bool_FALSE;
+			}
 		
 		else if ( IconHigh_globals.currentemulation==IconHigh_newemulation_default_NONE)	;
+		
+		else if ( IconHigh_globals.paused)	;
 		
 		else if ( ignore_next_key)	{
 			ignore_next_key = Desk_bool_FALSE;
@@ -531,134 +579,9 @@ int	HighlightInsV_handler( _kernel_swi_regs* r, void* pw)
 	return 1;
 	}
 
-/*
-static int	HighlightInsVHandler( _kernel_swi_regs* r, void* pw, void* reference)
-	{
-	return HighlightInsV_handler( r, pw);
-	Desk_UNUSED( reference);
-	}
-*/
-
-
-/*
-static void	WimpKeyPressHandler( Desk_filter2_postblock *eventinfo, void* pw, void* reference)
-	{
-	// If cursor key, convert to one of '2468' and pass to MoveHighlight.
-	//return;
-	Desk_Error2_Try	{
-		
-		Desk_Debug_Printf( Desk_error_PLACE "WimpKeyPressHandler called for wimp key 0x%x\n", eventinfo->eventdata->key.code);
-		
-		if ( IconHigh_globals.currentemulation == IconHigh_newemulation_default_HIGHLIGHTING)	{
-			Desk_wimp_point	pos;
-			Desk_wimp_point	oldpos;
-			
-			GetMousePos( &pos);
-			oldpos = pos;
-			
-			// We only move the highlight if the key is still down, otherwise autorepeat
-			// can cause lots of key events to be delivered to use well after the key has
-			// been released, causing all sorts of confusion.
-			
-			if ( 0)	;
-			
-			else if ( eventinfo->eventdata->key.code==KEY_WIMP_LEFT	 && KeyDown( KEY_INTERNAL_LEFT))
-				MoveHighlight( &pos, iconhigh_direction_LEFT, pw);
-			
-			else if ( eventinfo->eventdata->key.code==KEY_WIMP_RIGHT && KeyDown( KEY_INTERNAL_RIGHT))
-				MoveHighlight( &pos, iconhigh_direction_RIGHT, pw);
-			
-			else if ( eventinfo->eventdata->key.code==KEY_WIMP_DOWN  && KeyDown( KEY_INTERNAL_DOWN))
-				MoveHighlight( &pos, iconhigh_direction_DOWN, pw);
-			
-			else if ( eventinfo->eventdata->key.code==KEY_WIMP_UP    && KeyDown( KEY_INTERNAL_UP))
-				MoveHighlight( &pos, iconhigh_direction_UP, pw);
-			
-			SetMousePos( pos.x, pos.y);
-			IconHigh_globals.lastmovement.x = pos.x - oldpos.x;
-			IconHigh_globals.lastmovement.y = pos.y - oldpos.y;
-			
-			//_swix( 0x107, 0);
-			}
-		
-		if	(
-			   eventinfo->eventdata->key.code==KEY_WIMP_LEFT 
-			|| eventinfo->eventdata->key.code==KEY_WIMP_RIGHT
-			|| eventinfo->eventdata->key.code==KEY_WIMP_DOWN 
-			|| eventinfo->eventdata->key.code==KEY_WIMP_UP
-			)
-			{
-			eventinfo->eventtype = (Desk_event_type) -1;
-			// Stops filtered task from receiving this key press.
-			}
-		}
-	Desk_Error2_Catch	{
-		}
-	Desk_Error2_EndCatch
-	
-	
-	Desk_Debug_Printf( Desk_error_PLACE "WimpKeyPressHandler returning\n");
-	
-	Desk_UNUSED( reference);
-	}
-*/
 
 
 
-/*
-static void	PtrEnterLeaveHandler( Desk_filter2_postblock *eventinfo, void* pw, void* reference)
-	{
-	Desk_Debug_Printf( Desk_error_PLACE "PtrEnterLeaveHandler entered\n");
-	
-	Desk_Error2_Try	{
-		Desk_Debug_Printf( Desk_error_PLACE "Event %i, pointer %s window 0x%08x (task 0x%08x\n", 
-			eventinfo->eventtype, 
-			(eventinfo->eventtype==Desk_event_PTRLEAVE) ? "leaving"
-			: (eventinfo->eventtype==Desk_event_PTRENTER) ? "entering"
-			: "???",
-			eventinfo->eventdata->openblock.window,
-			eventinfo->task
-			);
-		
-		if ( Desk_event_PTRLEAVE==eventinfo->eventtype)	EmulationStartAuto( NULL, pw);	// Unknown window.
-		
-		if ( Desk_event_PTRENTER==eventinfo->eventtype)	EmulationStartAuto( eventinfo->eventdata->openblock.window, pw);
-		}
-	Desk_Error2_Catch	{
-		}
-	Desk_Error2_EndCatch
-	
-	Desk_Debug_Printf( Desk_error_PLACE "PtrEnterLeaveHandler returning\n");
-	
-	Desk_UNUSED( reference);
-	}
-*/
-
-
-//static Desk_filter2_post2handle	ptrenterleavehandle	= NULL;
-//static Desk_modhand_vhandle	highlightinsvhandle	= NULL;
-//static Desk_filter2_post2handle	keyeventhandle		= NULL;
-
-
-/*
-_kernel_oserror*	KeyFilter_handler( _kernel_swi_regs* r, void* pw)
-	{
-	Desk_event_type		type;
-	Desk_event_data*	data;
-	MemCheck_RegisterMiscBlock( r, sizeof( *r));
-	type = (Desk_event_type) r->r[0];
-	data = (Desk_event_data*) r->r[1];
-	MemCheck_RegisterMiscBlock( data, 256);
-	
-	//WimpKeyPressHandler( (Desk_filter2_postblock*) r, pw, NULL);
-	
-	MemCheck_UnRegisterMiscBlock( data);
-	MemCheck_UnRegisterMiscBlock( r);
-	return NULL;
-	
-	Desk_UNUSED( pw);
-	}
-*/
 static Desk_event_pollmask	global_premask = {0};
 
 _kernel_oserror*	PtrPreFilter_handler( _kernel_swi_regs* r, void* pw)
@@ -697,25 +620,13 @@ _kernel_oserror*	PtrPostFilter_handler( _kernel_swi_regs* r, void* pw)
 	}
 
 
-/*
-static void	PtrEnterLeaveHandler( Desk_filter2_postblock *eventinfo, void* pw, void* reference)
-	{
-	PtrPostFilter_handler( (_kernel_swi_regs*) eventinfo, pw);
-	return;
-	Desk_UNUSED( reference);
-	}
-*/
 
 static char*	filtername_pre_ptr	= "IconHigh pre ptr";
 static char*	filtername_post_ptr	= "IconHigh post ptr";
-//static char*	filtername_post_key	= "IconHigh key";
 
 
 void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
 	{
-	
-	//if ( !highlightinsvhandle)	highlightinsvhandle	= Desk_ModHand_AddVHandler( HighlightInsVHandler, pw, NULL);
-	
 	if ( emulation==IconHigh_newemulation_default_NONE)	{
 		Desk_Debug_Printf( Desk_error_PLACE "EmulationPointerStart, emulation==IconHigh_newemulation_default_NONE\n");
 		EmulationPointerStop( pw);
@@ -729,15 +640,17 @@ void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
         	return;
         	}
         
+        if ( IconHigh_globals.currentemulation == IconHigh_newemulation_default_NONE)	IconHigh_globals.paused = Desk_bool_FALSE;
+        	// If we are starting emulation rather than changing to a different emulation type, then reset the paused flag.
+        
         EmulationPointerStop( pw);
         
-	IconHigh_globals.currentemulation = emulation;
+	IconHigh_globals.currentemulation	= emulation;
 	
 	Desk_Debug_Printf( Desk_error_PLACE "EmulationPointerStart called, pw=0x%p, type=%s\n", 
 		pw,
 		(emulation==IconHigh_newemulation_default_POINTER) ? "pointer"
 		:(emulation==IconHigh_newemulation_default_HIGHLIGHTING) ? "highlighting"
-		:(emulation==IconHigh_newemulation_default_PAUSED) ? "paused"
 		: "-"
 		);
 	
@@ -748,31 +661,10 @@ void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
 	keydown_up	= KeyDown( KEY_INTERNAL_UP);
 	keydown_down	= KeyDown( KEY_INTERNAL_DOWN);
 	
-	if ( emulation!=IconHigh_newemulation_default_PAUSED)	{
-		_swix( OS_Claim, _INR(0,2), 0x26, Pointer_PtrV_Handler2, pw);
-		_swix( OS_Claim, _INR(0,2), 0x13, Pointer_KeyV, pw);
-		}
+	_swix( OS_Claim, _INR(0,2), 0x26, Pointer_PtrV_Handler2, pw);
+	_swix( OS_Claim, _INR(0,2), 0x13, Pointer_KeyV, pw);
+	_swix( OS_Claim, _INR(0,2), 0x14, HighlightInsV, pw);
 	
-	/*
-	keyeventhandle = Desk_Filter2_ClaimPost(
-				~( 1<<Desk_event_KEY),
-				0,
-				WimpKeyPressHandler,
-				NULL,
-				"IconHigh wimp keypress",
-				pw
-				);
-	*/
-	/*
-	ptrenterleavehandle = Desk_Filter2_ClaimPost2(
-			~( (1<<Desk_event_PTRLEAVE) | (1<<Desk_event_PTRENTER)),
-			0,
-			PtrEnterLeaveHandler,
-			(void*) 0x12345,
-			filtername_pre_ptr,
-			pw
-			);
-	*/
 	_swix( Filter_RegisterPreFilter, _INR(0,3), 
 		filtername_pre_ptr,
 		PtrPreFilter,
@@ -788,18 +680,7 @@ void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
 		~((1<<Desk_event_PTRLEAVE) | (1<<Desk_event_PTRENTER))
 		);
 	
-	//_swix( OS_Claim, _INR(0,2), 0x14, HighlightInsV, pw);	// This handler is now always registered.
-	//_swix( OS_Claim, _INR(0,2), 0x14, Desk_ModHand_Handler, highlightinsvhandle);
-	
-	/*
-	_swix( Filter_RegisterPostFilter, _INR(0,4), 
-		filtername_post_key,
-		KeyFilter,
-		pw,
-		0,
-		~(1<<Desk_event_KEY)
-		);
-	*/
+	ToggleInit( pw);
 	
 	/*
 	Now send a dummy OpenWindow message so that the window's tasks calls Wimp_Poll.
@@ -839,6 +720,8 @@ void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
 
 
 
+
+
 void	EmulationPointerStop( void* pw)
 	{
 	Desk_Debug3_Printf( Desk_error_PLACE "EmulationPointerStop called, pw=0x%p\n", pw);
@@ -846,25 +729,6 @@ void	EmulationPointerStop( void* pw)
 	SetHighlight( 0, 0, NULL, pw);
 	
 	if ( IconHigh_globals.currentemulation == IconHigh_newemulation_default_NONE)	return;
-	
-	/*
-	Desk_Error2_TryCatch(
-		if (ptrenterleavehandle)	Desk_Filter2_ReleasePost2( ptrenterleavehandle);
-		ptrenterleavehandle = NULL;
-		,
-		)
-	Desk_Error2_TryCatch(
-		if (keyeventhandle)	Desk_Filter2_ReleasePost( keyeventhandle);
-		keyeventhandle = NULL;
-		,
-		)
-	*/
-	/*
-	Desk_Error2_TryCatch(
-		Desk_Filter2_ReleasePost2( ptrenterleavehandle);
-		,
-		)
-	*/
 	
 	_swix( Filter_DeRegisterPreFilter, _INR(0,3), 
 		filtername_pre_ptr,
@@ -881,35 +745,24 @@ void	EmulationPointerStop( void* pw)
 		~((1<<Desk_event_PTRLEAVE) | (1<<Desk_event_PTRENTER))
 		);
 	
-	/*
-	_swix( Filter_DeRegisterPostFilter, _INR(0,4), 
-		filtername_post_key,
-		KeyFilter,
-		pw,
-		0,
-		~(1<<Desk_event_KEY)
-		);
-	*/
 	_swix( OS_Release, _INR(0,2), 0x26, Pointer_PtrV_Handler2, pw);
-	//_swix( OS_Release, _INR(0,2), 0x26, Desk_ModHand_Handler, ptrvhandler);
 	
 	_swix( OS_Release, _INR(0,2), 0x13, Pointer_KeyV, pw);
-	
-	//_swix( OS_Release, _INR(0,2), 0x14, HighlightInsV, pw);	// This handler is now always registered.
-	//_swix( OS_Release, _INR(0,2), 0x14, Desk_ModHand_Handler, highlightinsvhandle);
 	
 	// This is to clean up any callafter handlers for cancelling IRHandset cursor presses.
 	_swix( OS_RemoveTickerEvent, _INR(0,1), CancelIRKeyDown, pw);
 	
-	
 	_swix( OS_RemoveCallBack, _INR(0,1), HighlighCheck, pw);
 	_swix( OS_RemoveCallBack, _INR(0,1), HighlightInsV2, pw);
+	_swix( OS_Release, _INR(0,2), 0x14, HighlightInsV, pw);
 	
 	callback_set_for_highlightcheck = Desk_bool_FALSE;
 	
 	SetHighlight( 0, 0, NULL, pw);
 	
 	IconHigh_globals.currentemulation = IconHigh_newemulation_default_NONE;
+	
+	ToggleFinal( pw);
 	
 	Desk_Debug3_Printf( Desk_error_PLACE "EmulationPointerStop called2, pw=0x%p\n", pw);
 	}
@@ -918,12 +771,20 @@ void	EmulationPointerStop( void* pw)
 
 void	Emulation_Init( void* pw)
 	{
-	_swix( OS_Claim, _INR(0,2), 0x14, HighlightInsV, pw);
+	#ifdef TIME_PTRV
+		Timer1_Wind();
+	#endif
+	//_swix( OS_Claim, _INR(0,2), 0x14, HighlightInsV, pw);
+	Desk_UNUSED( pw);
 	}
 
 
 void	Emulation_Final( void* pw)
 	{
-	_swix( OS_Release, _INR(0,2), 0x14, HighlightInsV, pw);
+	#ifdef TIME_PTRV
+		Timer1_Unwind();
+	#endif
+	//_swix( OS_Release, _INR(0,2), 0x14, HighlightInsV, pw);
+	Desk_UNUSED( pw);
 	}
 
