@@ -90,7 +90,7 @@ static task_block *root_task = 0;
 /* need this to find out if we are the CAO */
 extern void __module_header (void);
 
-static void vtcommand (const char* com);
+static void rawsend (const char* com);
 
 
 /* turn off stack limit checking for the SVC part of the code */
@@ -173,9 +173,6 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
     if (!e) e = _swix (OS_Claim, _INR(0, 2), EventV, internetv_entry, pw);
     if (!e) _kernel_osbyte (Event_Enable, Event_Internet, 0);
 
-    /* claim upcallv for media not present */
-    if (!e) e = _swix (OS_Claim, _INR(0,2), UpCallV, upcallv_entry, pw);
-
     /* if there was an error, close the socket */
     if (e) socketclose (sock);
 
@@ -210,8 +207,6 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 
 _kernel_oserror *module_final(int fatal, int podule, void *pw)
 {
-    /* deregister for upcallv */
-    _swix (OS_Release, _INR(0,2), UpCallV, upcallv_entry, pw);
 
     /* disable and deregister for the internet event */
     _kernel_osbyte (Event_Disable, Event_Internet, 0);
@@ -221,20 +216,20 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
     if (sock != -1) socketclose (sock);
 
     /* if we started as a wimp task, stop ourselves */
-    if (task_id) {
-        wimp_close_down (task_id);
-        task_id = 0;
-    }
+    if (task_id) wimp_close_down (task_id);
+
+    /* deregister for upcallv */
+    _swix (OS_Release, _INR(0,2), UpCallV, upcallv_entry, pw);
 
     /* remove task structures close sockets and kill tasks */
     if (root_task != 0) {
         task_block* tsk = root_task, *ntsk;
         while (tsk) {
+            int tid = tsk->task_id;
             dprintf(("", "closing task %p\n", tsk));
-            socketclose (tsk->sock);
-            wimp_close_down (tsk->task_id);
+            taskwindow_morio (tsk);
+            wimp_close_down (tid);
             ntsk = tsk->next;
-            _kernel_RMAfree (tsk);
             tsk = ntsk;
         }
     }
@@ -270,16 +265,28 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
 int internetv(_kernel_swi_regs *r, void *pw)
 {
     /* we're not interested in out of band or other events */
-    if (r->r[1] != 1) return 1;
+    if (r->r[1] != Socket_Async_Event && r->r[1] != Socket_Broken_Event)
+        return 1;
 
     /* set the pollword to our socket if it's for us. */
-    if (r->r[2] == sock) pollword |= TServer_PollWord_RecvSock;
-    else if (root_task) {
+    if (r->r[2] == sock) {
+        pollword |= TServer_PollWord_RecvSock;
+    } else if (root_task) {
         task_block *tsk = root_task;
         while (tsk) {
             if (r->r[2] == tsk->sock) {
                 pollword |= TServer_PollWord_MsgSock;
-                tsk->flags |= Task_InternetEvent;
+
+                switch (r->r[1]) {
+                case Socket_Async_Event:
+                    tsk->flags |= Task_DataReceived;
+                    break;
+
+                case Socket_Broken_Event:
+                    tsk->flags |= Task_ConnectionBroken;
+                    break;
+                }
+
                 break;
                 dprintf(("",
                     "Internet event received on socket %d, pollword set to %x\n",
@@ -401,7 +408,14 @@ void module_services(int service_number, _kernel_swi_regs *r, void *pw)
     /* if our task is inadvertantly killed, zero our task id */
     case Service_WimpCloseDown:
         if (task_id != 0 && r->r[2] == task_id) {
+
+            /* deregister for upcallv */
+            _swix (OS_Release, _INR(0,2), UpCallV, upcallv_entry, pw);
+
+            /* zero our task_id so that we can start again */
             task_id = 0;
+
+            /* free the stack we claimed from RMA */
             if (appstack != 0) {
                 _kernel_RMAfree (appstack);
                 appstack = 0;
@@ -463,8 +477,8 @@ _kernel_oserror *commands(const char *arg_string, int argc, int cmd_no, void *pw
         return _swix (DebugIt_DeRegister, _IN(1), task_id);
         break;
 
-    case CMD_TServer_VTCommand:
-        vtcommand (arg_string);
+    case CMD_TServer_RawSend:
+        rawsend (arg_string);
         return 0;
     }
 
@@ -638,7 +652,9 @@ gotiac:
          * Begin option subnegotiation...
          */
         case SB:
+            dprintf (("", "begin subnegotiation\n"));
             tsk->state = TS_SB;
+            tsk->telopt_ptr = 0;
                 return -1;
 
         case WILL:
@@ -683,6 +699,8 @@ gotiac:
         if (c == IAC) {
             tsk->state = TS_SE;
         } else {
+            if (tsk->telopt_ptr < 8)
+                tsk->telopt[tsk->telopt_ptr++] = c;
 //            SB_ACCUM(c);
         }
         break;
@@ -696,6 +714,15 @@ gotiac:
 //            SB_ACCUM(c);
             tsk->state = TS_SB;
         } else {
+            switch (tsk->telopt[0]) {
+
+            case TELOPT_NAWS:
+                tsk->width =
+                    ((tsk->telopt[2] - 1) << 16) |
+                    ((tsk->telopt[4] - 1) << 8);
+                break;
+            }
+
             tsk->state = TS_DATA;
         }
         break;
@@ -743,7 +770,8 @@ gotiac:
 static void new_connection (void) {
     char buf[256];
     task_block* new_task = 0;
-    static const char iwillecho[3] = { IAC, WILL, TELOPT_ECHO };
+    static const char iwillechoandnaws[6] =
+        { IAC, WILL, TELOPT_ECHO, IAC, DO, TELOPT_NAWS };
 
     new_task = _kernel_RMAalloc (sizeof *new_task);
 
@@ -755,6 +783,7 @@ static void new_connection (void) {
     new_task->state = TS_DATA;
     new_task->esc_state = -1;
     new_task->flags = 0;
+    new_task->width = 0x00280000;
 
     /* accept the connection */
     if ((new_task->sock = accept (sock, 0, 0)) == 0) return;
@@ -765,8 +794,9 @@ static void new_connection (void) {
     /* mark it non-blocking */
     if (socketioctl(new_task->sock, FIONBIO, &i) < 0) return;
 
-    /* tell the telnet terminal that we echo characters */
-    socketwrite(new_task->sock, iwillecho, 3);
+    /* tell the telnet terminal that we echo characters and want terminal
+       size updates */
+    if (socketwrite(new_task->sock, iwillechoandnaws, 6) < 0) return;
 
     /* start the taskwindow */
     sprintf (buf, "TaskWindow -name TServerTW -ctrl -txt %d -task %d",
@@ -805,7 +835,7 @@ static void data_received (WimpPollBlock* block) {
     while (tsk) {
 
         /* Don't do anything if we've not received anything */
-        if ((tsk->flags & Task_InternetEvent) == 0) {
+        if (tsk->flags & Task_EventFlags == 0) {
             tsk = tsk->next;
             continue;
         }
@@ -847,8 +877,7 @@ static void data_received (WimpPollBlock* block) {
             }
         }
 
-        /* Clear the flag */
-        tsk->flags ^= Task_InternetEvent;
+        tsk->flags &= ~Task_EventFlags;
         tsk = tsk->next;
     }
 }
@@ -874,12 +903,12 @@ static void data_received (WimpPollBlock* block) {
 
 static void pollword_nonzero (WimpPollBlock* block)
 {
-    int temp = pollword;
+    int temp;
 
-    dprintf (("","pollword is: %x\n", pollword));
+    /* this call atomically reads the pollword and zeros it */
+    temp = atomic_swap (0, &pollword);
 
-    /* zero the pollword as soon as possible */
-    pollword = 0;
+    dprintf (("","pollword is: %x\n", temp));
 
     /* If we receive a message on our listening socket: */
     if (temp & TServer_PollWord_RecvSock) new_connection ();
@@ -976,17 +1005,17 @@ static void taskwindow_output (WimpPollBlock* block)
                 char buf[20];
                 int l = 0;
                 switch (ptr[j]) {
-                case 6:
+                case 6:  /* enable VDU output */
                     tsk->flags &= ~Task_OutputDisabled;
                     dprintf (("", "Output enabled\n"));
                     break;
-                case 9:
+                case 9:  /* HTAB */
                     l = sprintf (buf, "\x1b[C");
                     break;
-                case 12:
+                case 12: /* CLS */
                     l = sprintf (buf, "\x1b[2J\x1b[H");
                     break;
-                case 17:
+                case 17: /* COLOUR */
                     /* pray that we've got enough chars! */
                     if (j + 1 < size)
                     {
@@ -1003,14 +1032,14 @@ static void taskwindow_output (WimpPollBlock* block)
                         j += 1;
                     }
                     break;
-                case 21:
+                case 21: /* disable VDU output */
                     tsk->flags |= Task_OutputDisabled;
                     dprintf (("", "Output disabled\n"));
                     break;
-                case 30:
+                case 30: /* home cursor */
                     l = sprintf (buf, "\x1b[H");
                     break;
-                case 31:
+                case 31: /* TAB(x,y) */
                     /* pray that we've got enough chars! */
                     if (j + 2 < size)
                     {
@@ -1046,11 +1075,10 @@ static void taskwindow_output (WimpPollBlock* block)
 
 /*****************************************************************************
 * FunctionName
-*  vtcommand
+*  rawsend
 *
 * Description of the function
-*  Send a VT type command from the current task window
-*  Does nothing if not sent from a registered task window.
+*  Send raw data to the terminal
 *
 * Assumptions
 *
@@ -1063,10 +1091,10 @@ static void taskwindow_output (WimpPollBlock* block)
 *  void
 *****************************************************************************/
 
-static void vtcommand (const char* com) {
+static void rawsend (const char* com) {
     int task, len;
     task_block* tsk;
-    char our_com[32];
+    char our_com[32] = "";
 
     /* find current task handle */
     if (_swix (Wimp_ReadSysInfo, _IN(0) | _OUT(0), 5, &task)) return;
@@ -1080,20 +1108,39 @@ static void vtcommand (const char* com) {
 
     if (tsk->task_id != task) return;
 
-    /* count the length to a control character */
-    dprintf (("", "String:\n"));
-    for (len = 0; com[len] > 31; len++) dprintf (("", "%d\n", com[len]));
-    dprintf (("", "Length = %d, str = '%.*s'\n", len, len, com));
+    _swix (OS_GSTrans, _INR(0,2) | _OUT(2), com, our_com+1, 32, &len);
 
-    /* limit command size */
-    if (len > 30) len = 30;
-
-    sprintf (our_com, "\x1b%.*s", len, com);
-
-    dprintf(("", "Writing: '%s'\n", our_com));
-    socketwrite(tsk->sock, our_com, 1 + len);
+    dprintf(("", "Writing:\n"));
+    ddumpbuf("", our_com, len, 0);
+    socketwrite(tsk->sock, our_com, len);
 }
 
+static void taskwindow_ego (task_block* tsk, int new_id) {
+    dprintf (("", "Taskwindow started, txt = %x, task = %x\n",
+        (int) tsk, new_id));
+
+    tsk->task_id = new_id;
+
+    _swix (Filter_RegisterPostFilter, _INR(0,4),
+        "TServer",
+         taskwindow_postfilter,
+         &tsk->width,
+         tsk->task_id,
+         0);
+}
+
+void taskwindow_morio (task_block* tsk) {
+    _swix (Filter_DeRegisterPostFilter, _INR(0,4),
+        "TServer",
+         taskwindow_postfilter,
+         &tsk->width,
+         tsk->task_id,
+         0);
+
+    socketclose (tsk->sock);
+
+    _kernel_RMAfree (tsk);
+}
 
 /*****************************************************************************
 * FunctionName
@@ -1113,7 +1160,7 @@ static void vtcommand (const char* com) {
 *  void
 *****************************************************************************/
 
-void tserver (void) {
+void tserver (void* pw) {
     WimpPollBlock block;
     int event_code;
     int messages[] = {TaskWindow_Output, TaskWindow_Ego, TaskWindow_Morio, 0};
@@ -1123,6 +1170,9 @@ void tserver (void) {
         dprintf (("", "Not starting tserver: task_id = %d\n", task_id));
         return;
     }
+
+    /* claim upcallv for media not present */
+    _swix (OS_Claim, _INR(0,2), UpCallV, upcallv_entry, pw);
 
     wimp_initialise (310, "TServer", messages, 0, &task_id);
 
@@ -1141,18 +1191,20 @@ void tserver (void) {
         case Wimp_EUserMessage:
         case Wimp_EUserMessageRecorded:
             switch (block.user_message.hdr.action_code) {
+
             case Wimp_MQuit:
                 return;
+
             case TaskWindow_Output:
                 taskwindow_output (&block);
                 break;
+
             case TaskWindow_Ego:
-                dprintf (("", "Taskwindow started, txt = %x, task = %x\n",
-                    block.user_message.data.words[0],
-                    block.user_message.hdr.sender));
-                ((task_block*)(block.user_message.data.words[0]))->task_id =
-                    block.user_message.hdr.sender;
+                taskwindow_ego (
+                    (task_block*)(block.user_message.data.words[0]),
+                    block.user_message.hdr.sender);
                 break;
+
             case TaskWindow_Morio:
                 {
                     task_block* tsk = root_task, *last_tsk = 0;
@@ -1161,10 +1213,9 @@ void tserver (void) {
                     while (tsk) {
                         dprintf (("", "scanning tsk %p\n", tsk));
                         if (tsk->task_id == block.user_message.hdr.sender) {
-                            socketclose (tsk->sock);
                             if (last_tsk) last_tsk->next = tsk->next;
                             else root_task = tsk->next;
-                            _kernel_RMAfree (tsk);
+                            taskwindow_morio (tsk);
                             break;
                         }
                         last_tsk = tsk;
