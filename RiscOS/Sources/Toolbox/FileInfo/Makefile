@@ -37,6 +37,7 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
+CMHGFLAGS= -depend !Depend -p
 DFLAGS   = -D${SYSTEM}
 ROMFLAGS = -DROM
 INCLUDES = -I<Lib$Dir>.tboxlibint.,<Lib$Dir>.tboxlibs:,C:
@@ -84,7 +85,7 @@ RESF=o.res
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.cmhg.o:; ${CMHG} ${CMHGFLAGS} -o $@ $<
 
 #
 # Main rules:
