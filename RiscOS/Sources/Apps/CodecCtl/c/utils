@@ -2,24 +2,24 @@
  *
  */
 
+#include <kernel.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <swis.h>
 #include <time.h>
 
-#include "swis.h"
+#include "m.h"
 #include "wimp.h"
 #include "wimplib.h"
-#include "kernel.h"
 #include "version.h"
-
 #include "utils.h"
 
 static _kernel_oserror Error_Unknown = {1, "C library error"};
 
-_kernel_oserror Error_No_Mem = {1, "No memory"};
+_kernel_oserror Error_No_Mem = {1, "Not enough memory"};
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -52,72 +52,84 @@ void dbg (char const *file, int line, const char *fmt, ...)
 
 /* --------------------------------------------------------------------------------------------- */
 
-#if DEBUG
-static void add_file_and_line(_kernel_oserror *e, const char *file, int line)
-{
-    int len = strlen(e->errmess);
-    sprintf(e->errmess + len, " (%s: %d)", file, line);
-}
-#endif
-
-/* --------------------------------------------------------------------------------------------- */
-
-#if DEBUG
-void err_fatal_(_kernel_oserror *e, const char *file, int line)
-#else
-void err_fatal(_kernel_oserror *e)
-#endif
+void utils_fatal (_kernel_oserror *e)
 {
     if (e)
     {
-	_kernel_oserror ee = *e;
-#if DEBUG
-	add_file_and_line(&ee, file, line);
-	dbg ("error 0x%x %s\n", ee.errnum, ee.errmess);
-#endif
-	wimp_report_error(&ee, Wimp_ReportError_OK, APP_NAME " " VERSION_STRING);
+        TRACE1 ("utils_fatal wimp_report_error \"%s\"\n" _ e->errmess);
+	wimp_report_error(e, Wimp_ReportError_OK, APP_NAME " " VERSION_STRING);
 	exit(EXIT_FAILURE);
     }
 }
 
 /* --------------------------------------------------------------------------------------------- */
 
-#if DEBUG
-_kernel_oserror *err_report_(_kernel_oserror *e, const char *file, int line)
-#else
-_kernel_oserror *err_report(_kernel_oserror *e)
-#endif
+_kernel_oserror *utils_report (_kernel_oserror *e)
 {
     if (e)
     {
-	_kernel_oserror ee = *e;
+        TRACE1 ("utils_report wimp_report_error \"%s\"\n" _ e->errmess);
+	wimp_report_error(e, Wimp_ReportError_OK, APP_NAME " " VERSION_STRING);
+    }
+
+    return e;
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
+void utils_message (char *s)
+{
+    _kernel_oserror e;
+
+    TRACE1 ("utils_message wimp_report_error \"%s\"\n" _ s);
+    e.errnum = 1;
+    sprintf (e.errmess, "%.*s", sizeof e.errmess - 1, s);
+    wimp_report_error(&e, Wimp_ReportError_OK, APP_NAME " " VERSION_STRING);
+}
+
 #if DEBUG
-	add_file_and_line(&ee, file, line);
-	dbg ("error 0x%x %s\n", ee.errnum, ee.errmess);
-#endif
-	wimp_report_error(&ee, Wimp_ReportError_OK, APP_NAME " " VERSION_STRING);
+/* --------------------------------------------------------------------------------------------- */
+
+void err_fatal_ (const char *file, int line, _kernel_oserror *e)
+{
+    if (e)
+    {
+	_kernel_oserror ee;
+
+	ee.errnum = e->errnum;
+	sprintf (ee.errmess, "%s,%d: ", file, line);
+	strncat (ee.errmess, e->errmess, sizeof ee.errmess - strlen (ee.errmess) - 1);
+	utils_fatal (&ee);
+    }
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
+_kernel_oserror *err_report_ (const char *file, int line, _kernel_oserror *e)
+{
+    if (e)
+    {
+	_kernel_oserror ee;
+
+	ee.errnum = e->errnum;
+	sprintf (ee.errmess, "%s,%d: ", file, line);
+	strncat (ee.errmess, e->errmess, sizeof ee.errmess - strlen (ee.errmess) - 1);
+	utils_report (&ee);
     }
     return e;
 }
 
 /* --------------------------------------------------------------------------------------------- */
 
-#if DEBUG
-void msg_report_(char *s, const char *file, int line)
-#else
-void msg_report(char *s)
-#endif
+void msg_report_ (const char *file, int line, char *s)
 {
-    _kernel_oserror e;
+   char ss [1024];
 
-    e.errnum = 0;
-    sprintf (e.errmess, "%.*s", sizeof e.errmess - 1, s);
-
-#if DEBUG
-    dbg (file, line, "msg_report \"%s\"\n", e.errmess);
-#endif
-    wimp_report_error(&e, Wimp_ReportError_OK, APP_NAME " " VERSION_STRING);
+   sprintf (ss, "%s,%d: ", file, line);
+   strncat (ss, s, sizeof ss - strlen (ss) - 1);
+   utils_message (ss);
 }
+#endif
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -179,7 +191,7 @@ char *strdup(const char *s)
     if (s == NULL)
 	return NULL;
 
-    ss = malloc(strlen(s)+1);
+    ss = m_MALLOC (strlen(s)+1);
     if (ss)
 	strcpy(ss, s);
 
@@ -197,7 +209,7 @@ const char *strsafe(const char *s)
 
 /* --------------------------------------------------------------------------------------------- */
 
-void *rma_alloc(int size)
+void *rma_malloc(int size)
 {
     char *ptr;
     if (_swix(OS_Module, _IN(0)|_IN(3)|_OUT(2),
@@ -205,6 +217,7 @@ void *rma_alloc(int size)
 	      &ptr) != NULL)
 	return NULL;
 
+    memset (ptr, '\0', size); /*"For safety" JRC 16 Jun 1997*/
     return ptr;
 }
 
@@ -213,6 +226,54 @@ void *rma_alloc(int size)
 void rma_free(void *ptr)
 {
     _swix(OS_Module, _IN(0)|_IN(2), 7, ptr);
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
+_kernel_oserror *utils_start_task (char *cmd, int slot, int *task_out)
+{
+   _kernel_oserror *error = NULL;
+   int next, task, free;
+   BOOL set_slot = FALSE;
+
+   TRACE1 ("+utils_start_task\n");
+
+   /*Get the current "next slot size" and "free pool size".*/
+   if ((error = _swix (Wimp_SlotSize, _IN (0) | _IN (1) | _OUT (1) |
+         _OUT (2), -1, -1, &next, &free)) != NULL)
+      goto finish;
+   TRACE2 ("next %dK, free %dK\n" _ next/1024 _ free/1024);
+      
+   if (slot > free)
+   {
+      error = &Error_No_Mem;
+      goto finish;
+   }
+   
+   /*Set the "next slot size" to the desired amount.*/
+   if ((error = _swix (Wimp_SlotSize, _IN (0) | _IN (1), -1, slot)) != NULL)
+      goto finish;
+   set_slot = TRUE;
+
+   /*Start the new task. This will get the "next slot size" allocated to
+      it.*/
+   if ((error = wimp_start_task (cmd, &task)) != NULL)
+      goto finish;
+
+   if (task_out != NULL) *task_out = task;
+
+finish:
+   if (set_slot)
+   {
+      /*Set the "next slot size" back to the old amount, in case someone
+         else is relying on it.*/
+      _kernel_oserror *e = _swix (Wimp_SlotSize, _IN (0) | _IN (1), -1, next);
+      if (error == NULL) error = e;
+   }
+
+   TRACE1 ("-utils_start_task\n");
+
+   return error;
 }
 
 /* --------------------------------------------------------------------------------------------- */

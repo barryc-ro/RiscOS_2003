@@ -20,6 +20,7 @@
 #include "event.h"
 #include "wimplib.h"
 
+#include "m.h"
 #include "plugin.h"
 #include "plugclient.h"
 #include "version.h"
@@ -63,6 +64,7 @@ static int ToolBox_EventList[] =
 static int Wimp_MessageList[] =
 
 {
+    Wimp_MPreQuit,
     Wimp_MDataOpen,
     Wimp_MTaskCloseDown,
     Wimp_MHelpRequest,
@@ -76,7 +78,7 @@ static int Wimp_MessageList[] =
     MESSAGE_PLUGIN_STREAM_DESTROY,
     MESSAGE_PLUGIN_ACTION,
     MESSAGE_PLUGIN_ABORT,
-    0
+    Wimp_MQuit
 };
 
 static int event_mask =
@@ -206,15 +208,15 @@ static void patch_all_pluginclients( void )
 
 /* --------------------------------------------------------------------------------------------- */
 
-static pluginclient_instance *find_plugin(ObjectId id, int wimp_window)
+static pluginclient_instance *find_plugin (int wimp_window)
 {
     pluginclient_instance *plugin;
-    for (plugin = plugin_list; plugin; plugin = plugin->next)
-    {
-	if (id == plugin->window || wimp_window == plugin->wimp_window)
-	    break;;
-    }
-    return plugin;
+
+    for (plugin = plugin_list; plugin != NULL; plugin = plugin->next)
+	if (wimp_window == plugin->wimp_window)
+	    return plugin;
+
+    return NULL;
 }
 
 /* find the pluginclient that handles this file type, or NULL if not found */
@@ -252,7 +254,7 @@ static char *read_string(FILE *f)
     if (string_size == 0)
 	return NULL;
 
-    if ((string = malloc(string_size+1)) != NULL)
+    if ((string = m_MALLOC(string_size+1)) != NULL)
     {
 	fread(string, string_size, 1, f);
 	string[string_size] = 0;
@@ -296,7 +298,7 @@ static void parse_parameter_file(pluginclient_instance *plugin, const char *file
 		TRACE4 ("param: string size %d \n" _ size);
 
 		/* read in the strings */
-		if ((param = calloc(sizeof(*param), 1)) != NULL)
+		if ((param = m_CALLOC(sizeof *param, 1)) != NULL)
 		{
 		    /* store type */
 		    param->type = type;
@@ -306,7 +308,7 @@ static void parse_parameter_file(pluginclient_instance *plugin, const char *file
 		    param->value = read_string(f);
 		    param->value_type = read_string(f);
 
-		    TRACE1 ("param: '%s' '%s' '%s' \n" _ strsafe(param->name) _ strsafe(param->value) _ strsafe(param->value_type));
+		    TRACE3 ("param: '%s' '%s' '%s' \n" _ strsafe(param->name) _ strsafe(param->value) _ strsafe(param->value_type));
 
 		    /* attach to list */
 		    param->next = plugin->param_list;
@@ -338,10 +340,10 @@ static void free_params(pluginclient_param *param)
     {
 	pluginclient_param *next = param->next;
 
-	free(param->name);
-	free(param->value);
-	free(param->value_type);
-	free(param);
+	m_FREE(param->name, strlen (param->name) + 1);
+	m_FREE(param->value, strlen (param->value) + 1);
+	m_FREE(param->value_type, sizeof *param->value_type);
+	m_FREE(param, sizeof *param);
 
 	param = next;
     }
@@ -352,7 +354,7 @@ pluginclient_param *pluginclient_param_lookup(pluginclient_instance *plugin, con
 {
     pluginclient_param *param;
 
-    TRACE2 ("pluginclient_param_lookup(): instance %p name %s mask %x case %d\n" _ plugin _ name _ mask _ case_sensitive);
+    TRACE3 ("pluginclient_param_lookup(): instance %p name %s mask %x case %d\n" _ plugin _ name _ mask _ case_sensitive);
 
     for (param = plugin->param_list; param; param = param->next)
     {
@@ -371,7 +373,7 @@ pluginclient_param *pluginclient_param_lookup(pluginclient_instance *plugin, con
 	}
     }
 
-    TRACE2 ("pluginclient_param_lookup(): returns '%s'\n" _ param ? strsafe(param->value) : "");
+    TRACE3 ("pluginclient_param_lookup(): returns '%s'\n" _ param ? strsafe(param->value) : "");
 
     return param;
 }
@@ -427,7 +429,7 @@ static void *rma_dup(const char *s)
     pluginclient_string_rma_ptr *ptr;
     int len = strlen(s) + 1;
 
-    if ((ptr = rma_alloc(len + sizeof(pluginclient_string_rma_ptr))) == NULL)
+    if ((ptr = rma_malloc(len + sizeof (pluginclient_string_rma_ptr))) == NULL)
 	return NULL;
 
     ptr->prev = NULL;
@@ -446,9 +448,12 @@ static void *rma_dup(const char *s)
 
 static void free_rma_strings(int msgref, pluginclient_instance *pp)
 {
-    pluginclient_string_rma_ptr *psrp;
-    for (psrp = rma_ptr_list; psrp; psrp = psrp->next)
+    pluginclient_string_rma_ptr *psrp, *next;
+
+    for (psrp = rma_ptr_list; psrp; psrp = next)
     {
+        next = psrp->next; /* prevent use when freed */
+
 	/* if either the msgref or pointer match then
 	 * remove from the list and free
 	 */
@@ -518,7 +523,7 @@ void pluginclient_send_closed(pluginclient_instance *plugin, int your_ref,
     WimpMessage message;
     message_plugin_closed *msg = (message_plugin_closed *)message.data.bytes;
 
-    TRACE4("pluginclient_send_closed() closed message sent before = %d\n" _
+    TRACE1("+pluginclient_send_closed() closed message sent before = %d\n" _
            plugin->closed_message_sent);
 
     if (plugin->closed_message_sent) /* don't send >1 closed to browser */
@@ -543,6 +548,8 @@ void pluginclient_send_closed(pluginclient_instance *plugin, int your_ref,
     send_message(&message, plugin);
 
     plugin->closed_message_sent=TRUE;
+
+    TRACE1("-pluginclient_send_closed\n");
 }
 
 /*
@@ -688,13 +695,17 @@ static void remove_window_handlers(ObjectId id, void *handle)
 
 static void close_child_window(pluginclient_instance *plugin)
 {
-    TRACE4("close_child_window() : plugin %p\n" _ plugin);
+   TRACE1("+close_child_window() : plugin %p\n" _ plugin);
+    
+   if (plugin->window != NULL_ObjectId) /*HACK JRC 18 Jun 1997*/
+   {
+      remove_window_handlers(plugin->window, plugin);
 
-    remove_window_handlers(plugin->window, plugin);
-
-    /* remove window */
-    err_report(toolbox_delete_object(0, plugin->window));
-    plugin->window = 0;
+      /* remove window */
+      err_report(toolbox_delete_object(0, plugin->window));
+      plugin->window = 0;
+   }
+   TRACE1("-close_child_window\n");
 }
 
 /*
@@ -705,7 +716,7 @@ static void close_child_window(pluginclient_instance *plugin)
 
 static void dispose_plugin_info(pluginclient_instance *plugin)
 {
-    TRACE1("dispose_plugin_info(): instance %p\n" _ plugin);
+    TRACE1("+dispose_plugin_info(): instance %p\n" _ plugin);
 
     /* free memory and zero pointers */
     free_params(plugin->param_list);
@@ -726,7 +737,9 @@ static void dispose_plugin_info(pluginclient_instance *plugin)
     pluginclient_decrement_count();
 
     /* free */
-    free(plugin);
+    m_FREE (plugin, sizeof *plugin);
+
+    TRACE1("-dispose_plugin_info\n");
 }
 
 /* send a busy message to browser. If no reason, set reason to -1 */
@@ -894,14 +907,14 @@ static void add_window_handlers(ObjectId id, void *handle)
 /* --------------------------------------------------------------------------------------------- */
 
 /*
- * open the child window in the parent
+ * open the child window in the parent. Returns TRUE iffz a window was opened.
  */
 
 static int open_child_window(pluginclient_instance *plugin, BOOL subwindow)
 {
     WindowShowObjectBlock full_spec;
     WimpGetWindowStateBlock state;
-    int ret_code=0;
+    BOOL ret_code = FALSE;
 
     TRACE4("open_child_window(): plugin %p subwindow %d\n" _ plugin _ subwindow);
     /* create the window if not already there */
@@ -941,7 +954,7 @@ static int open_child_window(pluginclient_instance *plugin, BOOL subwindow)
 	  err_fatal(toolbox_show_object(Toolbox_ShowObject_AsSubWindow,
 	                                plugin->window, Toolbox_ShowObject_FullSpec,
 	                                &full_spec, 0, -1));
- 	  ret_code=1;
+	  ret_code=TRUE;
       } /* if */
     } /* if */
 
@@ -952,7 +965,6 @@ static int open_child_window(pluginclient_instance *plugin, BOOL subwindow)
                                             &full_spec.visible_area, subwindow);
     return ret_code;
 }
-
 
 /* Check if the application that's quit was responsible for any of the
    plugins that we've started. In practice, this means that if the task
@@ -991,7 +1003,7 @@ static int closedown_handler(WimpMessage *message, void *handle)
 
 static void dispose_plugin_all(void)
 {
-    TRACE1("dispose_plugin_all():\n");
+    TRACE1("+dispose_plugin_all\n");
     while (plugin_list)
     {
 	/* notify host */
@@ -1007,33 +1019,34 @@ static void dispose_plugin_all(void)
 	/* dispose of stuff */
 	dispose_plugin_info(plugin_list);
     }
+    TRACE1("-dispose_plugin_all\n");
 }
 
 static void kill_old_helper(pluginclient_instance *except)
 {
-  pluginclient_instance *curr_inst=plugin_list;
+  pluginclient_instance *instance, *next;
 
-  while (curr_inst)		/* SJM: changed from for to while as curr_inst was being accessed after being freed */
+  for (instance = plugin_list; instance != NULL; instance = next)
   {
-    pluginclient_instance *next=curr_inst->next;
-    if (curr_inst->helper && curr_inst != except)
-    {
-      TRACE4("Killing helper %p\n" _ curr_inst);
+    next = instance->next; /* prevent use when freed */
 
-      pluginclient_send_closed(curr_inst, 0, NULL, 0);
+    if (instance->helper != NULL && instance != except)
+    {
+      TRACE4("Killing helper %p\n" _ instance);
+
+      pluginclient_send_closed(instance, 0, NULL, 0);
 
       /* dispose of window and plugin info */
-      close_child_window(curr_inst);
+      close_child_window(instance);
 
       /* call client specific code */
-      if (curr_inst->plugin_fns->client_close)
-        curr_inst->plugin_fns->client_close(curr_inst->client_data);
+      if (instance->plugin_fns->client_close != NULL)
+        instance->plugin_fns->client_close(instance->client_data);
 
       /* dispose of stuff */
-      dispose_plugin_info(curr_inst);
+      dispose_plugin_info (instance);
     } /* if */
-    curr_inst = next;
-  } /* while */
+  } /* for */
 } /* kill_old_helper */
 
 /* --------------------------------------------------------------------------------------------- */
@@ -1057,7 +1070,7 @@ static int plugin_open_handler(WimpMessage *message, void *handle)
     }
 
     /* allocate block */
-    if ((plugin = calloc(sizeof(struct pluginclient_instance), 1)) == NULL)
+    if ((plugin = m_CALLOC(sizeof (struct pluginclient_instance), 1)) == NULL)
     {
         TRACE1("-plugin_open_handler\n");
 	return 0;
@@ -1080,12 +1093,10 @@ static int plugin_open_handler(WimpMessage *message, void *handle)
     plugin->parent_box      = *(BBox *) &msg->box;
     plugin->parent_task     = message->hdr.sender;
 
-#if FORCE_OWN_WINDOW
     /* if we have a non-hidden box then force it to be a helper */
     if (msg->box.x1 - msg->box.x0 > 1 && msg->box.y1 - msg->box.y0 > 1)
-	plugin->helper = TRUE;
-#endif
-    
+        plugin->helper = TRUE;
+
     if (plugin->helper)
       kill_old_helper(plugin);  /* kills all helpers _except_ plugin */
 
@@ -1099,15 +1110,11 @@ static int plugin_open_handler(WimpMessage *message, void *handle)
           plugin->plugin_fns->client_open (plugin, &plugin->client_data, &opening_flags))
     {
 	/* open the window - must be after client_open() */
-#if 0	/* FORCE_OWN_WINDOW - SJM: this is done above now */
-	if (!open_child_window(plugin, FALSE))
+	if (open_child_window(plugin, FALSE))
 	{
 	  kill_old_helper(plugin); /* kills all helpers _except_ plugin */
- 	  plugin->helper = TRUE;   /* SJM: mark it now as being a helper */
+          plugin->helper = TRUE;   /* SJM: mark it now as being a helper */
 	} /* if */
-#else
-	open_child_window(plugin, !plugin->helper);
-#endif
 
 	err_fatal(window_get_wimp_handle(0, plugin->window, &plugin->wimp_window));
 
@@ -1180,11 +1187,7 @@ static int plugin_reshape_handler(WimpMessage *message, void *handle)
 
     /* reopen the window */
     /* SJM: don't need the #ifdef as we set helper correctly in opening */
-/* #if FORCE_OWN_WINDOW */
-/*     open_child_window(plugin, FALSE); */
-/* #else */
     open_child_window(plugin, !plugin->helper);
-/* #endif */
 
     TRACE1("-plugin_reshape_handler\n");
     return 1;
@@ -1198,9 +1201,9 @@ static int plugin_focus_handler(WimpMessage *message, void *handle)
     
     TRACE1 ("+plugin_focus_handler\n");
 
-/* Think about when one of our things needs focus. Currently it doesn't. By
-   rights, the browser shouldn't send this if the flag in plugin opening message
-  isn't set, but... */
+// Think about when one of our things needs focus. Currently it doesn't. By
+// rights, the browser shouldn't send this if the flag in plugin opening message
+// isn't set, but...
 #if 0
     err_report(wimp_set_caret_position(plugin->wimp_window, -1, 0, 0, -1, -1));
 
@@ -1341,7 +1344,7 @@ static int plugin_abort_handler(WimpMessage *message, void *handle)
 static int help_request_handler(WimpMessage *message, void *handle)
 {
     WimpHelpRequestMessage *help_request = &message->data.help_request;
-    pluginclient_instance *plugin = find_plugin(NULL, help_request->window_handle);
+    pluginclient_instance *plugin = find_plugin (help_request->window_handle);
 
     TRACE1 ("+help_request_handler\n");
 
@@ -1371,7 +1374,9 @@ static int help_request_handler(WimpMessage *message, void *handle)
 
 static void cleanup_task(void)
 {
+    TRACE1 ("+cleanup_task\n");
     dispose_plugin_all();
+    TRACE1 ("-cleanup_task\n");
 }
 
 static void cleanup(void)
@@ -1379,6 +1384,7 @@ static void cleanup(void)
     pluginclient **curr_pluginclient;
     time_t tp;
 
+    TRACE1 ("+cleanup\n");
     for (curr_pluginclient=all_pluginclients; *curr_pluginclient;
          curr_pluginclient++)
     {
@@ -1390,7 +1396,8 @@ static void cleanup(void)
 
     time(&tp);
     TRACE1("*** " APP_NAME " exiting at %s" _ ctime(&tp));
-
+    m_SUMMARY ();
+    TRACE1 ("-cleanup\n");
 }
 
 static int quit_handler(WimpMessage *message, void *handle)
@@ -1427,8 +1434,8 @@ static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block,
 	clock()/CLK_TCK >= last_checkpoint + cli_timeout)
     {
         TRACE4("Exiting due to inactivity\n");
-        TRACE1 ("-null_handler\n");
 	exit(EXIT_SUCCESS);
+        TRACE1 ("-null_handler\n");
     }
 
     for (curr_inst=plugin_list; curr_inst; curr_inst=curr_inst->next)
@@ -1450,7 +1457,7 @@ static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block,
 /* Start playing file automatically when we start - I thought about pretending
  * to be a browser and do a plugin_open and plugin_stream things, but it was
  * far too complex in comparison */
-
+#if 1
 static int immediate_file_play(char *file_name)
 {
   pluginclient *pluginclient_fns;
@@ -1506,10 +1513,96 @@ static int immediate_file_play(char *file_name)
 
   return 1;
 } /* immediate_file_play */
-
-
-static int dataopen_handler(WimpMessage *message, void *handle)
+#else
+static int immediate_file_play(char *file_name)
 {
+   pluginclient *pluginclient_fns;
+   pluginclient_instance *plugin = NULL;
+   int file_type;
+   BOOL handled = TRUE; /*error indicator*/
+ 
+   TRACE1("+immediate_file_play(): file type = &%X\n" _ file_type);
+ 
+   /* first get file type so we know which client to use */
+   file_type = get_file_type(file_name);
+ 
+   if ( (pluginclient_fns = handle_file_type(file_type)) == NULL)
+   {
+      handled = FALSE;
+      goto finish;
+   }
+ 
+   /* create a plugin so we can close down later in the same way */
+   if ((plugin = m_CALLOC(sizeof(struct pluginclient_instance), 1)) == NULL)
+   {
+      handled = FALSE;
+      goto finish;
+   }
+ 
+   plugin->plugin_fns = pluginclient_fns;
+ 
+   pluginclient_increment_count();
+ 
+   if (toolbox_create_object (0, OUR_OBJECT, &plugin->window) != NULL)
+   {
+      handled = FALSE;
+      goto finish;
+   }
+ 
+   add_window_handlers(plugin->window, plugin);
+ 
+   kill_old_helper(plugin);  /* kills all helpers _except_ plugin */
+   plugin->helper = TRUE;
+
+   if (plugin->plugin_fns->client_play_file == NULL)
+   {
+      handled = FALSE;
+      goto finish;
+   }
+      
+   if ((plugin->client_data = plugin->plugin_fns->client_play_file
+         (file_name, file_type, plugin->window, plugin)) == NULL)
+   {
+      handled = FALSE;
+      goto finish;
+   }
+
+   /* add to list */
+   plugin->next = plugin_list;
+   if (plugin_list)
+      plugin_list->prev = plugin;
+   plugin_list = plugin;
+   
+finish:
+   if (!handled)
+   {
+      /*Something went wrong---tidy up.*/
+      if (plugin != NULL)
+      {
+         if (plugin->window != NULL_ObjectId)
+         {
+            close_child_window (plugin);
+            pluginclient_decrement_count();
+         }
+         m_FREE (plugin, sizeof *plugin);
+      }
+      /*Don't call client specific code---if something went wrong, the window
+         was never opened! Deleted code |if (plugin->plugin_fns->client_close
+         != NULL) plugin->plugin_fns->client_close (plugin->client_data); JRC
+         18 Jun 1997*/
+
+      /* free memory and zero pointers */
+      free_params(plugin->param_list);
+      plugin->param_list = NULL;
+
+      free_rma_strings(NULL, plugin);
+   }
+
+   return handled;
+} /* immediate_file_play */
+#endif
+
+static int dataopen_handler(WimpMessage *message, void *handle) {
   WimpDataOpen *msg = (WimpDataOpen *) &message->data;
   WimpMessage reply;
 
@@ -1679,6 +1772,7 @@ static void initialise(int argc, char *argv[])
     err_fatal(event_register_wimp_handler(0, Wimp_ENull, null_handler, NULL));
 
     err_fatal (event_register_message_handler (Wimp_MQuit,              quit_handler,      NULL));
+    err_fatal (event_register_message_handler (Wimp_MPreQuit,           quit_handler,      NULL));
     err_fatal (event_register_message_handler (Wimp_MDataOpen,          dataopen_handler,  NULL));
     err_fatal (event_register_message_handler (Wimp_MTaskCloseDown,     closedown_handler, NULL));
     err_fatal (event_register_message_handler (MESSAGE_BROWSER_OPENURL, openurl_handler,   NULL));
@@ -1713,6 +1807,7 @@ int main(int argc, char *argv[])
     } /* if */
 
     TRACE4("Entering poll loop\n");
+    m_SUMMARY ();
     while (TRUE)
     {
 	int event_code;
