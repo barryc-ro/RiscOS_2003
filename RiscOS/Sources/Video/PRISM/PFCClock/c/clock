@@ -56,6 +56,7 @@
 *****************************************************************************/
 #define DEFAULT_JITTER_BUFFER_SIZE (600)
 #define DEFAULT_MIN_PRE_BUFFER (300)
+#define SPEED_CHECK_INTERVAL (2) /* cs */
 
 
 /*****************************************************************************
@@ -67,6 +68,7 @@
 * Function prototypes - Private to this file
 *****************************************************************************/
 static const char *ReturnInfoString(prism_id_t id, uint32_t tag);
+static void DispatchSpeedChange(clock_t *clock);
 
 
 /*****************************************************************************
@@ -265,11 +267,11 @@ _kernel_oserror *clock_Register(uint32_t flags, prism_id_t unwrap_id, stream_han
   {
     clock->clock_handle.client_handle = unwrap_handle.client_handle;
     clock->clock_handle.local_handle = local_handle;
-    clock->sync_to_stream = flags & 1;
+    clock->sync_to_stream = flags & PFCCLOCK_REGISTER_STREAM_SYNC;
     clock->session_active = false;
     clock->unwrap_id = unwrap_id;
     clock->unwrap_handle = unwrap_handle;
-    if (flags & 2)
+    if (flags & PFCCLOCK_REGISTER_DEJITTER)
     {
       e = _swix(OS_ReadUnsigned, _INR(0,1)|_OUT(2),
                 0,
@@ -453,6 +455,10 @@ _kernel_oserror *clock_EndSession(uint32_t flags, stream_handle_t clock_handle)
   
   _swix (OS_RemoveTickerEvent, _INR(0,1),
          global_Veneers->clock_SyncToStream,
+         clock);
+  
+  _swix (OS_RemoveTickerEvent, _INR(0,1),
+         global_Veneers->clock_CheckSpeed,
          clock);
   
   clock->session_active = false;
@@ -675,9 +681,131 @@ _kernel_oserror *clock_StreamInfo(uint32_t reason, stream_handle_t clock_handle,
 _kernel_oserror *clock_SpeedChange(uint32_t flags, stream_handle_t clock_handle, int32_t new_speed)
 {
   IGNORE(flags);
-  IGNORE(clock_handle);
-  IGNORE(new_speed);
+  
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "EndSession");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  
+  if (flags & PFCCLOCK_SPEED_CHANGE_DEFERRED)
+  {
+    clock->next_STC_speed = new_speed;
+  }
+  else
+  {
+    if (new_speed != clock->pending_STC_speed)
+    {
+      clock->pending_STC_speed = new_speed;
+      if (clock->sync_to_stream && clock->sync_master != NULL)
+      {
+        /* Remove CallAfter if already pending */
+        _swix(OS_RemoveTickerEvent, _INR(0,1), global_Veneers->clock_CheckSpeed, clock);
+        /* Set (possibly first of many) CallAfters to determine when data receipt rate has changed */
+        _swix(OS_CallAfter, _INR(0,2), SPEED_CHECK_INTERVAL, global_Veneers->clock_CheckSpeed, clock);
+      }
+      else
+      {
+        DispatchSpeedChange(clock);
+      }
+    }
+  }
+  
   return NULL;
+}
+
+/*****************************************************************************
+* clock_CheckSpeed
+*
+* CallAfter routine to implement speed changes slaved to data rate
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  clock: pointer to relevant clock struct
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+_kernel_oserror *clock_CheckSpeed(clock_t *clock)
+{
+  if (clock->sync_master /* ie it's not gone away */ && clock->pending_STC_speed != clock->current_STC_speed)
+  {
+    uint32_t length;
+    /* Get the time that data is languishing in buffers */
+    clock->sync_master->function_table->GetBufferLength(0, clock->sync_master->decoder_handle, &length);
+    /* Add on the delay between extraction from buffer and presentation */
+    length += clock->sync_master->latency * (90000 / 1000);
+    uint32_t half_jitter_buffer = clock->jitter_buffer * (90000 / 1000 / 2);
+    
+    bool change_happened = false;
+    if (clock->pending_STC_speed < clock->current_STC_speed) /* slowing down (worry about reverse some other day) */
+    {
+      change_happened = (length < clock->sync_master->pre_buffer - half_jitter_buffer);
+    }
+    else
+    {
+      change_happened = (length > clock->sync_master->pre_buffer + half_jitter_buffer);
+    }
+    if (change_happened)
+    {
+      DispatchSpeedChange(clock);
+    }
+    else
+    {
+      _swix(OS_CallAfter, _INR(0,2), SPEED_CHECK_INTERVAL, global_Veneers->clock_CheckSpeed, clock);
+    }
+  }
+  return NULL;
+}
+
+/*****************************************************************************
+* DispatchSpeedChange
+*
+* Once a speed change has been confirmed, this applies it, then informs all
+* interested decoders
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  clock: pointer to relevant clock struct
+*
+* Outputs
+*  NOTHING
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void DispatchSpeedChange(clock_t *clock)
+{
+  bool irqs_were_off = _kernel_irqs_disabled();
+  if (!irqs_were_off) _kernel_irqs_off();
+  
+  int64_t stc = time_ReadMonotonicTime();
+  clock->STC_ref = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+  clock->STC_ref_mono = stc;
+  clock->current_STC_speed = clock->pending_STC_speed;
+  
+  if (!irqs_were_off) _kernel_irqs_on();
+  
+  llist_step_t step;
+  llist_StartWalk(&step, &clock->decoder_list, false);
+  while (step.data != NULL)
+  {
+    decoder_t *decoder = (decoder_t *) step.data;
+    if (decoder->function_table->SpeedChange != NULL)
+    {
+      decoder->function_table->SpeedChange(0, decoder->decoder_handle);
+    }
+    llist_NextStep(&step, false);
+  }
+  return;
 }
 
 /*****************************************************************************
