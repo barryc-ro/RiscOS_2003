@@ -25,7 +25,7 @@
 
 ReadUnsigned_Routine ENTRY "r0-r1, r3-r4, r9"
 
-        TEQP    PC, #SVC_mode
+        WritePSRc SVC_mode, r9
 
 ; first set range limit
         MOV     r9, r2            ; limit value
@@ -244,17 +244,31 @@ VecInitLoop
 ; Call_vector (n)
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; In:   r10 = vector number
+  [ No26bitCode
+;       lr contains return address
+;       cpsr contains flags/int state to set up before calling
+  |
 ;       lr contains return address + flags/int state to set up before calling
+  ]
 
 ; Out:  r10, r12, lr corrupted
 
 CallVector ROUT
 
+  [ No26bitCode
+        mrs     AL, r12, CPSR
+        CMP     r10, #NVECTORS
+        BHS     CallVecTooHigh          ; return - silly value
+
+        msr     AL, CPSR_f, r12         ; put back caller's flags + int state
+        Push    lr                      ; claimed return goes back to caller
+  |
         CMP     r10, #NVECTORS
         MOVCSS  pc, lr                  ; return - silly value
 
         Push    lr                      ; claimed return goes back to caller
         TEQP    lr, #0                  ; put back caller's flags + int state
+  ]
 
         LDR     r14, =VecPtrTab         ; Point at table of head pointers
         LDR     r10, [r14, r10, LSL #2] ; nextblock:=vecptrtab!(n*4)
@@ -270,9 +284,17 @@ CallVecLoop
         TEQ     r10, #0                 ; until nextblock points to zero
         BNE     CallVecLoop
 
+  [ No26bitCode
+        Pull    pc                      ; can't restore all flags. CV will be preserved
+
+CallVecTooHigh
+        msr     AL, CPSR_f, r12
+        MOV     pc, lr
+  |
         Pull    pc,,^                   ; we don't expect to get to here
                                         ; (should always be claimed),
                                         ; but return to caller, restoring flags
+  ]
 
 ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;Add_To_vector(n, Addressess)
@@ -297,11 +319,7 @@ ClaimVector_SWICode   ROUT
 
       Push "R0-R4, link"
 
- [ IrqsInClaimRelease
-        MOV     R4, #I_bit
-        TST     R4, PC                  ; is I_bit set ?
-        TEQEQP  R4, PC                  ; No, then set it, save changed bits
-        MOVNE   R4, #0                  ; Else no changed bits
+        PHPSEI  R4, R14                 ; Disable IRQs
 
         MOV     R3, #0                  ; List of de-linked nodes is empty
         LDR     R11, =VecPtrTab         ; Get ptr to table of head pointers
@@ -311,7 +329,7 @@ ClaimVector_SWICode   ROUT
         MOVVC   R3, R12                 ; New head of de-linked nodes
         BVC     %BT01                   ; Repeat until all nodes de-linked
 
-        TEQP    R4, PC                  ; Restore IRQ state
+        PLP     R4                      ; Restore IRQ state
 
 ; Free the list of de-linked nodes, pointed to by R3, enter with VS
 
@@ -319,14 +337,7 @@ ClaimVector_SWICode   ROUT
         BLVC    FreeNode                ; Free the node pointed to by R12
         SUBS    R12, R3, #0             ; Any more nodes to free?
         BNE     %BT02                   ; Yes then jump
- |
-      TEQP  PC, #SVC_mode+I_bit     ; IRQs off while holding context.
-      LDR   R11, =VecPtrTab         ; Point at table of head pointers
-      LDR   R10, [R11, R0, LSL #2]! ; R10 "nextblock" := !oldptr,
-                                    ; point R11 at the table entry "oldptr"
-01    BL    FreeLink
-      BVC   %BT01                   ; loop with chain pointers still set
- ]
+
 GoForAddToVec
       LDR   R11, =VecPtrTab         ; Point at table of head pointers
 
@@ -347,7 +358,7 @@ GoForAddToVec
   ]
       BVS   BadClaimVector          ; Failed : Exit
 
-      TEQP  PC, #SVC_mode+I_bit     ; force noirq
+      WritePSRc SVC_mode+I_bit, R3  ; force noirq
       LDR   R3, [R11]               ; "nextblock" :=vecptrtab!(n*4)
       STMIA R2, {R3, R4, R10}       ; Atomic Operation thus links in the new
                                     ; routine
@@ -378,31 +389,17 @@ ReleaseVector_SWICode
       SETV  CS
       BVS   BadVectorRelease
 
- [ IrqsInClaimRelease
         Push    "R0-R2,R9,link"
 
-        MOV     R9, #I_bit
-        TST     R9, PC                  ; is I_bit set ?
-        TEQEQP  R9, PC                  ; No, then set it, R9 = changed bits
-        MOVNE   R9, #0                  ; Else R9=0 for no change
+        PHPSEI  R9, R14                 ; Disable IRQs
 
         LDR     R11, =VecPtrTab         ; Get ptr to table of head pointers
         LDR     R10, [R11, R0, LSL #2]! ; R10 "nextblock" := *oldptr, R11= root ptr
         BL      FindAndDelinkNode       ; R10,R11->R10,R11,R12
-        TEQP    R9, PC                  ; Restore IRQ state
+        PLP     R9                      ; Restore IRQ state
         BLVC    FreeNode                ; If found, free the node in R12
 
         Pull    "R0-R2,R9,link"
- |
-      Push "R0-R2, link"
-
-      TEQP  PC, #SVC_mode+I_bit     ; IRQs off while holding context.
-      LDR   R11, =VecPtrTab         ; Point at table of head pointers
-      LDR   R10, [R11, R0, LSL #2]! ; R10 "nextblock" := !oldptr,
-                                    ; point R11 at the table entry "oldptr"
-      BL    FreeLink
-      Pull "R0-R2, link"
- ]
 
 BadVectorRelease
       ADRVS R0, ErrorBlock_NaffRelease
@@ -435,7 +432,7 @@ BadVectorRelease
 
 FindAndDelinkNode
         CMP     R10, #0                 ; End of chain?
-        ORREQS  PC, lr, #V_bit          ; Yes, return error
+        RETURNVS EQ                     ; Yes, return error
 
         LDR     R12, [R10, #VecWSpace]
         CMP     R12, R2                 ; Workspace matches?
@@ -448,7 +445,7 @@ FindAndDelinkNode
         MOV     R12, R10                ; R12-> node to de-link
         LDR     R10, [R12, #TailPtr]    ; Get link to next node
         STR     R10, [R11]              ; Previous node's link -> next node
-        BICS    PC, lr, #V_bit          ; Return no error
+        RETURNVC EQ                     ; Return no error
 
 ; Return node to heap space
 ; In:
@@ -578,8 +575,10 @@ defaultvectab
 
 NaffVector ROUT
 Def_100HZ
-        Pull    lr                      ; Claim vector, do nowt
-        BICS    pc, lr, #V_bit
+        mrs     AL, lr, CPSR
+        BIC     lr, lr, #V_bit
+        msr     AL, CPSR_f, lr          ; Clear V, preserve rest
+        LDR     pc, [sp], #4            ; Claim vector, do nowt
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SWIs to save any vector entries pointing into application workspace
@@ -598,7 +597,7 @@ Application_Delink ROUT
 
       MOV   R3, #NVECTORS-1
       LDR   R4, [R3, #AplWorkSize-(NVECTORS-1)]
-      TEQP  PC, #SVC_mode+I_bit     ; IRQs off while holding context.
+      SETPSR I_bit, R3           ; IRQs off while holding context.
 
 03    LDR   R11, =VecPtrTab         ; Point at table of head pointers
       ADD   R10, R11, R3, LSL #2
@@ -727,8 +726,8 @@ Issue_Service ROUT             ; R1 is service number, R2 may be a parameter
        CMP      R1,#ServMinUsrNumber
        BHS      %FT84
 ;call anyone on the appropriate Sys chain
-       LDR      R10,=Serv_SysChains
-       LDR      R10,[R10]
+       MOV      R10,#0
+       LDR      R10,[R10,#Serv_SysChains]
        CMP      R10,#0
        BEQ      %FT88
        LDR      R11,[R10,R1,LSL #2]             ;pick up the chain anchor
@@ -783,8 +782,8 @@ Issue_Service ROUT             ; R1 is service number, R2 may be a parameter
 ;
 ;call everyone on the chain of Awkward modules, always passing service number in R1
 88
-       LDR      R10,=Serv_AwkwardChain
-       LDR      R11,[R10]
+       MOV      R10,#0
+       LDR      R11,[R10,#Serv_AwkwardChain]
        CMP      R11,#0
        BEQ      %FT01
        LDR      R10,[R11,#ServChain_Size]
@@ -898,17 +897,11 @@ sam001
        STRNEB   R10, [R10, #MOShasFIQ]
        MOVNE    r1, #Service_Serviced
 fakeservicecall
-       [ {FALSE}
-       Push     PC, EQ                         ; return address
-       SUBEQ    stack, stack, #4*4             ; pseudo- r9-r12
-       BEQ      %BT05                          ; wacky pseudo-BL!
-	|
 	; do it this way to cope with ARM v4/v3 differences on storing PC
        SUBEQ    stack,stack,#20
        STREQ    PC,[stack,#16]
        BEQ      %BT05
-       MOV	R0,R0
-	]
+       MOV      r0, r0
        MOV      r10, #0
        LDRB     r9, [r10, #FIQclaim_interlock]
        STRB     r10, [r10, #FIQclaim_interlock]
@@ -979,15 +972,15 @@ checkmoshandlers
 ; SWI to call a vector
 ;************************************************
 CallAVector_SWI  ; R9 is the vector number (!!)
-       Push     "lr"
+       STR       lr, [sp, #-4]!         ; save caller PSR on stack
        MOV       R10, R9
-       ORR       R14, R14, #SVC_mode
-       TEQP      PC, R14             ; restore caller CCs
+       msr       AL, CPSR_f, R14        ; restore caller CCs
        BL        CallVector
-       MOV       R10, PC, LSR #28    ; restore CCs
-       Pull     "lr"
+       mrs       AL, r10, CPSR          ; restore CCs
+       LDR       lr, [sp], #4
+       AND       r10, r10, #&F0000000
        BIC       lr, lr, #&F0000000
-       ORR       lr, lr, R10, LSL #28
+       ORR       lr, lr, r10
        ExitSWIHandler
 
 ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1085,60 +1078,14 @@ ValidateAddress_Code ROUT
         LDR     R12, [R10, #AplWorkSize]
         BL      RangeCheck
 
- [ :LNOT: NewStyle_Screen
-        VDWS    R11
-        MOV     R12, #ScreenEndAdr
-        LDR     R11, [R11, #TotalScreenSize]
-        ADD     R12, R12, R11
-        SUB     R11, R12, R11, LSL #1
-        BL      RangeCheck
- ]
-
- [ NewStyle_SysHeap
         MOV     r11, #SysHeapChunkAddress       ; need to still check 1st 8K
         ADD     r12, r11, #SysHeapStart-SysHeapChunkAddress
         BL      RangeCheck
- |
-        LDR     R11, =SysHeapStart
-        LDR     R12, [R11, #:INDEX: hpdend]
-        ADD     R12, R11, R12
-        MOV     R11, #SysHeapChunkAddress
-        BL      RangeCheck
- ]
-
- [ :LNOT: NewStyle_RMA
-        MOV     R11, #RMAAddress
-        LDR     R12, [R11, #:INDEX: hpdend]
-        ADD     R12, R11, R12
-        BL      RangeCheck
- ]
-
- [ :LNOT: NewStyle_SpriteArea
-        LDR     R12, [R10, #SpriteSize]
-        ADD     R12, R12, #SpriteSpaceAddress
-        MOV     R11, #SpriteSpaceAddress
-        BL      RangeCheck
- ]
-
- [ :LNOT: NewStyle_RAMDisc
-        LDR     R12, [R10, #RAMDiscSize]
-        ADD     R12, R12, #RAMDiscAddress
-        MOV     R11, #RAMDiscAddress
-        BL      RangeCheck
- ]
-
- [ :LNOT: NewStyle_FontArea
-        LDR     R12, [R10, #FontCacheSize]
-        ADD     R12, R12, #FontCacheAddress
-        MOV     R11, #FontCacheAddress
-        BL      RangeCheck
- ]
 
         MOV     R11, #CursorChunkAddress
         ADD     R12, R11, #32*1024
         BL      RangeCheck
 
- [ NewCDA
 ; not in one of those ranges, so check against dynamic area list
         MOV     r10, #DAList
 10
@@ -1160,7 +1107,6 @@ ValidateAddress_Code ROUT
         CMP     r1, r12                 ; else if range ends before end+1 of this area
         BCC     AddressIsValid          ; then it's valid
 20
- ]
 
 ; not in one of those ranges, so issue service so modules can add other valid areas
 

@@ -120,11 +120,15 @@ EndReadLine
         MOVS    R5, R5, LSL #(32-6)     ; shift esc bit into carry
 
         MOV     R1, R6                  ; R1 := length
+ [ No26bitCode
+        Pull    "R4-R7, pc"             ; Always claiming vector
+ |
         Pull    "R4-R7, lr"             ; Always claiming vector
         BIC     lr, lr, #V_bit :OR: C_bit
         MOV     r12, pc
         AND     r12, r12, #V_bit :OR: C_bit
         ORRS    pc, lr, r12             ; back with C, V affected.
+ ]
 
 ReadLine_Vset
         SETV
@@ -135,7 +139,7 @@ ReadLine_Vset
 
 SCTRL   Push    "R0-R3, lr"
 
-        TEQP    PC, #SVC_mode+I_bit ; need IRQs off to get consistent state
+        WritePSRc SVC_mode+I_bit, R0    ; need IRQs off to get consistent state
         MOV     R0, #EventHandler
         MOV     R1, R3
         BL      CallCESWI
@@ -166,7 +170,7 @@ CallCESWI
 ; SWI OS_SetEnv (deprecated): Environment setting
 
 SSTENV  Push    "R0, R1, lr"
-        TEQP    PC, #SVC_mode+I_bit     ; no irqs - want consistent set.
+        WritePSRc SVC_mode+I_bit, R0    ; no irqs - want consistent set.
         MOV     R0, #AddressExceptionHandler
         MOV     R1, R7
         SWI     XOS_ChangeEnvironment
@@ -208,13 +212,17 @@ SSTENV  Push    "R0, R1, lr"
 ; Change user state SWIs
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-SINTON  BIC     lr, lr, #I_bit
+SINTON  BIC     lr, lr, #I32_bit
         ExitSWIHandler
 
-SINTOFF ORR     lr, lr, #I_bit
+SINTOFF ORR     lr, lr, #I32_bit
         ExitSWIHandler
 
-SENTERSWI ORR   lr, lr, #SVC_mode
+SENTERSWI
+        TST   lr, #2_11100
+        ORREQ lr, lr, #SVC26_mode       ; 26-bit modes -> SVC26
+        BICNE lr, lr, #2_11111
+        ORRNE lr, lr, #SVC32_mode       ; others -> SVC32
         ExitSWIHandler
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -225,10 +233,17 @@ SBRKPT ROUT
         ADD     sp, sp, #4              ; discard stacked R11
         MOV     r12, #0
         LDR     r12, [r12, #BrkBf]
+  [ No26bitCode
+        STR     r14, [r12, #16*4]       ; PSR
+        TST     r14, #&0F
+        Pull    R14
+  |
+        FakeLR  r11
+        TST     r14, #SVC_mode
+  ]
         SUB     r14, R14, #4
         STR     r14, [r12, #15*4]       ; PC of the SWI put in.
-        TST     r14, #SVC_mode
-        BNE     %FT01
+        BNE     %FT01                   ; NE if not in user mode
         STMIA   r12!, {r0}
         MOV     r0, r12
         LDMFD   sp, {r10-r12}
@@ -247,17 +262,16 @@ SBRKPT ROUT
         LDMIA   r12, {r12, pc}          ; call breakpoint handler
 
 
-01      TST     r14, #1                 ; SWI mode?
-        TSTNE   r14, #2
-        BNE     %FT02                   ; [yes]
+01      AND     r11, r14, #&0F          ; SWI mode?
+        TEQ     r11, #SVC_mode
+        BEQ     %FT02                   ; [yes]
 
         STMIA   r12!, {r0}
         MOV     r0, r12
         LDMFD   sp, {r10-r12}           ; Not banked if IRQ mode
-        TEQP    pc, R14                 ; get at registers
-        NOP
+        msr    ,CPSR_c, R14             ; get at registers
         STMIA   r0, {r1-r14}
-        TEQP    pc, #SVC_mode
+        WritePSRc SVC_mode, r12
         B       %BT10
 
 
@@ -282,28 +296,27 @@ SUNUSED Push    "R1, lr"
 
 SSETCALL ROUT
 
-        TEQP    pc, #SVC_mode+I_bit
+        msr    ,CPSR_c, #I32_bit + SVC32_mode
         MOV     r10, #0
         LDRB    r11, [r10, #CallBack_Flag]
         ORR     r11, r11, #CBack_OldStyle
         STRB    r11, [r10, #CallBack_Flag]
-        Pull    "r11"
-        Pull    "r10-r12"
-        MOVS    pc, lr                  ; Do NOT exit via normal mechanism
+        ADD     sp, sp, #4              ; Skip saved R11
+        B       back_to_user_irqs_already_off
+                                        ; Do NOT exit via normal mechanism
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SWI read mouse information
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 VecMouse
+     WritePSRc SVC_mode+I_bit, R10
      MOV   R10, #MouseV
-     TEQP  PC, #SVC_mode+I_bit ; no irqs
      Push "lr"
      BL    CallVector
      Pull "lr"
      ExitSWIHandler
 
- [ :LNOT: DriversInKernel
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SWI OS_SerialOp when not in kernel
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -316,7 +329,6 @@ SerialOp ROUT
         BICCC   lr, lr, #C_bit
         ORRCS   lr, lr, #C_bit
         B       SLVK_TestV
- ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Supervisor routines to set default handlers
@@ -375,6 +387,10 @@ EVENTH  MOV     pc, lr
 
 NOCALL  MOV     r0, #0                  ; default callback routine
         LDR     r14, [r0, #CallBf]
+ [ No26bitCode
+        LDR     r0, [r14, #4*16]
+        msr    ,SPSR_cxsf, r0
+ ]
         LDMIA   r14, {r0-r12, r13_usr, r14_usr}^ ; load user's regs
         NOP
         LDR     r14, [r14, #4*15]
@@ -453,7 +469,7 @@ ErrorText       =       "Error: %0 (Error Number &%1)",0
 
 DEFBRK
       [ International
-        TEQP    pc, #0
+        WritePSRc 0, lr
         MOV     r0, r0
         MOV     r13, #0
         LDR     r13, [r13, #BrkBf]
@@ -479,7 +495,7 @@ DEFBRK
         SWI     OS_WriteS
         = "Stopped at break point at &", 0
         ALIGN
-        TEQP    pc, #0
+        WritePSRc 0, lr
         MOV     r0, r0
         MOV     r13, #0
         LDR     r13, [r13, #BrkBf]
@@ -558,7 +574,7 @@ PrintError
         SWIVC  XOS_WriteI+")"
       ]
         SWIVC  XOS_NewLine
-02      MOVS   PC, R12
+02      MOV    PC, R12
 
       [ International
 PrintErrorString
@@ -572,9 +588,16 @@ PrintErrorString
 ; Exception handling
 
 DumpyTheRegisters  ROUT
+  [ No26bitCode
+; In ABT32 or UND32, PC, PSR already stored, PSR in R1
+        MOV     R4, R14                 ; put error address into unbanked register
+        TST     R1, #&0F
+  |
+; In SVC26, fake 26-bit PC at 0
         LDR     R1, [R0, -R0]         ; PC when exception happened
         STR     R1, [R0, #(15-8)*4]   ; In the right slot now ...
         TST     R1, #SVC_mode
+  ]
   [ SASTMhatbroken
         STMEQIA R0!,{R8-R12}
         STMEQIA R0, {R13,R14}^        ; user mode case done.
@@ -582,8 +605,25 @@ DumpyTheRegisters  ROUT
   |
         STMEQIA R0, {R8-R14}^         ; user mode case done.
   ]
-        BEQ     UNDEF1
+        BEQ     UNDEF2
 
+  [ No26bitCode
+        ORR     R2, R1, #I32_bit :OR: F32_bit
+        BIC     R2, R2, #T32_bit
+        msr    ,CPSR_c, R2              ; change into original mode
+        STMIA   R0, {R8-R14}            ; save the banked registers
+
+        AND     R2, R1, #&0F
+        EORS    R2, R2, #FIQ_mode       ; Was we in FIQ ? Zero if so
+        MOVEQ   R3, #IOC
+        STREQB  R2, [R3, #IOCFIQMSK]    ; Blow away all FIQ sources
+UNDEF2
+        msr    ,CPSR_c, #I32_bit+F32_bit+SVC32_mode ; into SVC mode
+
+        MOV     R14, R4                 ; corrupt R14_SVC (but already saved if we were in SVC)
+; ... and fall into
+UNDEF1
+  |
         TST     R1, #1                ; SWI mode?
         TSTNE   R1, #2
         BNE     %FT02
@@ -600,12 +640,12 @@ DumpyTheRegisters  ROUT
         B       UNDEF1
 
 02      STMIA   R0, {R8-R14}
-
 ; ... and fall into
+UNDEF2
+UNDEF1
+  ]
+        LDR     sp, =SVCSTK             ; Flatten superstack
 
-UNDEF1  LDR     sp, =SVCSTK             ; Flatten superstack
-
- [ ExceptionsAreErrors
         MOV     R0, #0
         LDR     R0, [R0, #ExceptionDump]
         ADD     R1, R0, #10*4           ; point at dumped R10
@@ -617,7 +657,9 @@ UNDEF1  LDR     sp, =SVCSTK             ; Flatten superstack
         LDR     R0, BranchThroughZeroInstruction ; load the B RESET1 instr.
         STR     R0, [R1, -R1]           ; and store it at zero again
 
+       [ :LNOT:No26bitCode
         BIC     R14, R14, #ARM_CC_Mask
+       ]
         LDR     R0, =GeneralMOSBuffer+128 ; so can do deviant sharing !
 
        [ International
@@ -644,7 +686,9 @@ UNDEF1  LDR     sp, =SVCSTK             ; Flatten superstack
         MOV     R0, #0
         LDR     R0, [R0, #ExceptionDump]
         LDR     R0, [R0, #15*4]         ; saved PC
+      [ :LNOT: No26bitCode
         BIC     R0, R0, #ARM_CC_Mask
+      ]
         SWI     XOS_ConvertHex8
 
       [ International
@@ -659,88 +703,118 @@ UNDEF1  LDR     sp, =SVCSTK             ; Flatten superstack
         LDR     R0, =GeneralMOSBuffer+128
       ]
 
+      [ No26bitCode
+        ; Flatten UND and ABT stacks, jic
+        mrs    ,R2, CPSR
+        BIC     R2, R2, #F32_bit + &1F
+        ORR     R3, R2, #ABT32_mode
+        msr    ,CPSR_c, R3                      ; FIQs back on
+        LDR     r13_abort, =ABTSTK
+        ORR     R3, R2, #UND32_mode
+        msr    ,CPSR_c, R3
+        LDR     r13_undef, =UNDSTK
+        ORR     R3, R2, #IRQ32_mode
+        msr    ,CPSR_c, R3
+      |
         TEQP    PC, #IRQ_mode+I_bit
+      ]
         MOV     R1, #0
         STR     R1, [R1, #IRQsema]
         LDR     SPIRQ, =IRQSTK
         SWI     OS_GenerateError
-   |
-        Push    R14
-        BL      DEFHAN
-        BL      DEFHN2
-        Pull    R0
-        TEQP    PC, #IRQ_mode
-        NOP
-        LDR     SPIRQ, =IRQSTK
-        BIC     R0, R0, #ARM_CC_Mask
-        SWI     OS_Write0
-        B       UNDEF3
-    ]
 
         LTORG
 
 UNDEF ROUT
+ [ No26bitCode
+        ; In UND32 mode, with a stack
+        Push    R14
+        SETPSR  F_bit :OR: I_bit, R14
+ |
         TEQP    pc, #F_bit :OR: I_bit :OR: SVC_mode ; FIQ off too
         STR     R14, [R0, -R0]
+ ]
         MOV     R14, #0
         LDR     R14, [R14, #ExceptionDump]
         STMIA   R14!, {R0-R7}
+ [ No26bitCode
+        mrs    ,R1, SPSR
+        STR     R1, [R14, #(16-8)*4]            ; save PSR
+        Pull    R0
+        STR     R0, [R14, #(15-8)*4]            ; save PC
+ ]
         MOV     R0, R14
         BL      DumpyTheRegisters
- [ ExceptionsAreErrors
         MakeErrorBlock UndefinedInstruction
- |
-        =       "Undefined instruction at ", 0
-        ALIGN
- ]
 
 ABORTP ROUT
+ [ No26bitCode
+        ; In ABT32 mode, with a stack
+        Push    R14
+        SETPSR  F_bit :OR: I_bit, R14
+ |
         TEQP    pc, #F_bit :OR: I_bit :OR: SVC_mode ; FIQ off too
         STR     R14, [R0, -R0]
+ ]
         MOV     R14, #0
         LDR     R14, [R14, #ExceptionDump]
         STMIA   R14!, {R0-R7}
+ [ No26bitCode
+        mrs    ,R1, SPSR
+        STR     R1, [R14, #(16-8)*4]            ; save PSR
+        Pull    R0
+        STR     R0, [R14, #(15-8)*4]            ; save PC
+ ]
         MOV     R0, R14
         BL      DumpyTheRegisters
 
- [ ExceptionsAreErrors
         MakeErrorBlock InstructionAbort
- |
-        =       "Abort on instruction fetch at ", 0
-        ALIGN
- ]
 
 ABORTD ROUT
+ [ No26bitCode
+        ; In ABT32 mode, with a stack
+        Push    R14
+        SETPSR  F_bit :OR: I_bit, R14
+ |
         TEQP    pc, #F_bit :OR: I_bit :OR: SVC_mode ; FIQ off too
         STR     R14, [R0, -R0]
+ ]
         MOV     R14, #0
         LDR     R14, [R14, #ExceptionDump]
         STMIA   R14!, {R0-R7}
+ [ No26bitCode
+        mrs    ,R1, SPSR
+        STR     R1, [R14, #(16-8)*4]            ; save PSR
+        Pull    R0
+        STR     R0, [R14, #(15-8)*4]            ; save PC
+ ]
         MOV     R0, R14
         BL      DumpyTheRegisters
- [ ExceptionsAreErrors
         MakeErrorBlock DataAbort
- |
-        =       "Abort on data transfer at ", 0
-        ALIGN
- ]
 
 
 ADDREX ROUT
+; This really can't happen. Honest
+ [ No26bitCode
+        msr    ,CPSR_c, #F32_bit :OR: I32_bit :OR: SVC32_mode ; FIQ off too
+        STR     R14, [R0, -R0]
+ |
         TEQP    pc, #F_bit :OR: I_bit :OR: SVC_mode ; FIQ off too
         STR     R14, [R0, -R0]
+ ]
         MOV     R14, #0
         LDR     R14, [R14, #ExceptionDump]
         STMIA   R14!, {R0-R7}
         MOV     R0, R14
+ [ No26bitCode
+        mrs    ,R1, SPSR
+        STR     R1, [R14, #(16-8)*4]            ; save PSR
+        LDR     R14, [R0, -R0]
+        STR     R14, [R14, #(15-8)*4]
+ ]
         BL      DumpyTheRegisters
 
- [ ExceptionsAreErrors
         MakeErrorBlock AddressException
- |
-        =       "Address exception at ", 0
-        ALIGN
- ]
 
 
 ; Can branch through zero in any mode
@@ -750,25 +824,19 @@ RESET1 ROUT
         STR     R1, [R0, -R0]
         MOV     R1, #0
         LDR     R1, [R1, #ExceptionDump]
-        STMIA   R1, {R0-R15}
+        STMIA   R1, {R0-R14}
+        MOV     R0, #0
+        STR     R0, [R1, #15*4]
+ [ No26bitCode
+        mrs    ,R0, CPSR
+        STR     R0, [R1, #16*4]
+ ]
         LDR     R0, [R0, -R0]
         STR     R0, [R1, #1*4]
         SWI     XOS_EnterOS
 
- [ ExceptionsAreErrors
         BL      UNDEF1
         MakeErrorBlock BranchThrough0
- |
-        LDR     sp, =SVCSTK
-        TEQP    PC, #IRQ_mode
-        LDR     SPIRQ, =IRQSTK
-        TEQP    PC, #0
-        BL      DEFHAN
-        BL      DEFHN2
-        SWI     OS_WriteS
-        =      "Entering Supervisor because of branch through 0", 0
-        B       UNDEF2
- ]
 
 BranchThroughZeroInstruction
  [ ProcessorVectors
@@ -785,13 +853,27 @@ BranchThroughZeroInstruction
 DoAnUpCall ROUT
 
         Push    lr                  ; better have one of these to pull later !
+ [ No26bitCode
+        mrs    ,r12, CPSR
+        BIC     r12, r12, #&F0000000
+        BIC     r12, r12, #I32_bit:OR:F32_bit
+        AND     r10, lr, #&F0000000 ; copy user flags (I bit clear)
+        ORR     r10, r10, r12
+        msr    ,CPSR_cf, r10        ; ints on, stay in SVC mode, flags in psr
+ |
         AND     r10, lr, #&F0000000 ; copy user flags (I_bit clear)
         TEQP    r10, #SVC_mode      ; ints on, stay in SVC mode, flags in psr
+ ]
         MOV     r10, #UpCallV
         BL      CallVector
         Pull    lr
         BIC     lr, lr, #&F0000000
+ [ No26bitCode
+        mrs    ,R10, CPSR
+        MOV     R10, R10, LSR #(32-4)
+ |
         MOV     R10, PC, LSR #(32-4)
+ ]
         ORR     lr, lr, R10, LSL #(32-4)
         ExitSWIHandler
 
@@ -811,7 +893,7 @@ ChangeEnvironment ROUT
 ; ..... and the default handler .....
 
 AdjustOurSet
-        TEQP    PC, #SVC_mode+I_bit
+        WritePSRc SVC_mode+I_bit, R14
         CMP     R0, #MaxEnvNumber
         BHI     AOS_Silly
 
@@ -845,7 +927,11 @@ AdjustOurSet
         CMPNE   R12, #0
         STRNE   R12, [R11]
 
+ [ No26bitCode
+        Pull    pc
+ |
         Pull    pc,,^
+ ]
 
 AOS_Silly
         ADR     r0, ErrorBlock_BadEnvNumber
@@ -853,8 +939,13 @@ AOS_Silly
         BL      TranslateError
       ]
 exit_AOS
+ [ No26bitCode
+        SETV
+        Pull    "pc"
+ |
         Pull    "lr"
         ORRS    pc, lr, #V_bit
+ ]
         MakeErrorBlock BadEnvNumber
 
    [ False
@@ -1379,7 +1470,7 @@ GetMachineAddressCMOS
 	MOVNE	r1, #0
 
 20
-	EXITS
+	EXIT
 
 NVRAM_TAG_MACAddress
 	= "MACAddress", 0

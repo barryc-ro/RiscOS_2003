@@ -32,6 +32,8 @@ DebugAborts SETL {FALSE}
 ;
 ; * Undefined32 mode stack (8K)
 ;
+; * Abort32 mode stack (8K)
+;
 ; * Soft CAM map (variable size = memsize/4K*8, rounded up to 4K)
 ;
 ; In order to make the memory models for MEMC1 and IOMD harmonious, the MEMC1 system is considered as a section of
@@ -68,6 +70,10 @@ DebugAborts SETL {FALSE}
 DRAMOffset_CursorChunk  #       32*1024         ; ie on MEMC1 this is the last 32K of DAG-addressable memory
 DRAMOffset_PageZero     #       32*1024         ; 32K at location zero
 DRAMOffset_SystemHeap   #       32*1024         ; system heap/svc stack
+ [ No26bitCode
+DRAMOffset_AbortStack   #        8*1024
+ ]
+        AlignSpace      16*1024                 ; L1PT (and hence L2PT) must be 16K-aligned
 DRAMOffset_L2PT         #       0               ; static L2PT (variable size, with embedded L1PT)
 DRAMOffset_L1PT         *       DRAMOffset_L2PT + 48*1024
 
@@ -85,8 +91,13 @@ FixedAreasL2Size        *       96*1024        ; amount of L2 to cover fixed are
 
 UndStackSoftCamChunk    *       &01E00000
 UndStackSize            *       8*1024
-CamEntriesForVicky      *       UndStackSoftCamChunk + &2000
+CamEntriesForVicky      *       UndStackSoftCamChunk + UndStackSize
 UNDSTK                  *       CamEntriesForVicky ; points to end of stack
+ [ No26bitCode
+AbtStack                *       &02000000
+AbtStackSize            *       8*1024
+ABTSTK                  *       AbtStack + AbtStackSize
+ ]
 PhysSpace               *       &80000000       ; Map of MEMC/IOMD physical space (64M/512M in size)
 
 
@@ -94,14 +105,16 @@ PhysSpace               *       &80000000       ; Map of MEMC/IOMD physical spac
 ; - the two areas are used in strict rotation for each full clean, so that we can do a full
 ;   clean (and not flush) with interrupts on
 ; - the address must be aligned such that EOR with 16*1024 flipflops between the two addresses
-ARMA_Cleaners_address  * 31*1024*1024 + 64*1024
+ARMA_Cleaners_address  * &01F10000
 
 
+ [ {FALSE}
 arm600stuff_before_align
          ALIGN   4096     ;align to page boundary to allow for easy ROMpatch
 
 arm600stuff_startofstuff
   ! 0, "-- start of (4k aligned) ARM600+ stuff at ":CC::STR:(arm600stuff_startofstuff)
+ ]
 
 ;note that we use the R bit if supported (not 610), so that we can write protect ROM space
 ;fully (user and supervisor)
@@ -157,7 +170,6 @@ ARM_cacheoff_MMU_CR_table
 OneMByte                EQU     (1024*1024)
 SixteenMByte            EQU     (1024*1024 * 16)
 
- [ MEMC_Type = "IOMD"
 ; *****************************************************************************
 ;
 ;       SetDAG - Program DMA address generator R1 with physical address R0
@@ -251,52 +263,6 @@ SetDAG  ENTRY   "r0-r1,r12"
         STR     r0, [r12, #IOMD_CURSINIT]
         EXIT
 
- |
-
-; DMA address generators - still controlled by MEMC1 currently
-
-VInit   * &03600000
-VStart  * &03620000
-VEnd    * &03640000
-CInit   * &03660000
-
-; *****************************************************************************
-;
-;       SetDAG - Program DMA address generator R1 with physical address R0
-;
-; in:   r0 = physical address offset from 32M
-;       r1 = index of DMA address generator to program, as defined in vdudecl
-;
-; out:  All registers preserved, operation ignored if illegal
-;
-
-SetDAG  ENTRY   "r0"
-        CMP     r1, #MEMCDAG_MaxReason
-        EXIT    HI
-        ADR     r14, DAGAddressTable
-        LDR     r14, [r14, r1, LSL #2]          ; load base address in MEMC1
-        MOV     r0, r0, LSR #4                  ; bottom 4 bits irrelevant
-        CMP     r0, #(1 :SHL: 15)               ; ensure in range
-        ORRCC   r14, r14, r0, LSL #2
-        STRCC   r14, [r14]                      ; any old data will do
-        EXIT
-
-        GBLA    DAGIndex
-DAGIndex SETA   0
-
-        MACRO
-        DAGTab  $reason, $address
-        ASSERT  ($reason)=DAGIndex
-        &       $address
-DAGIndex SETA   DAGIndex + 1
-        MEND
-
-DAGAddressTable
-        DAGTab  MEMCDAG_VInit, VInit
-        DAGTab  MEMCDAG_VStart, VStart
-        DAGTab  MEMCDAG_VEnd, VEnd
-        DAGTab  MEMCDAG_CInit, CInit
- ]
 
 
 ; **************** CAM manipulation utility routines ***********************************
@@ -398,7 +364,7 @@ UsePPLCBBits    SETL    {TRUE}
 
 ;if we can assume no code above 64Mb (ie. 26bit code space), big optimise for StrongARM
         GBLL    AssumeNoCodeAbove64Mb
-AssumeNoCodeAbove64Mb  SETL    {TRUE}
+AssumeNoCodeAbove64Mb  SETL    No32bitCode
 
 ;if we just use sledgehammer approach anyway
         GBLL    AlwaysSledgehammer
@@ -646,7 +612,7 @@ SSETMEMC ROUT
 
         AND     r10, r0, r1
         MOV     r12, #0
-        TEQP    pc, #SVC_mode+I_bit+F_bit
+        WritePSRc SVC_mode+I_bit+F_bit, r0
         LDR     r0, [r12, #MEMC_CR_SoftCopy] ; return old value
         BIC     r11, r0, r1
         ORR     r11, r11, R10
@@ -666,7 +632,6 @@ SSETMEMC ROUT
 ; bit 11   => Sound DMA enable
 ; bit 12   => OS mode
 
- [ MEMC_Type = "IOMD"
         Push    "r10"
         MOV     r12, #IOMD_Base
         TST     r11, #1 :SHL: 10   ; see if video DMA wants to be enabled
@@ -681,15 +646,8 @@ SSETMEMC ROUT
   ]
         Pull    "r10"
         STRB    r11, [r12, #IOMD_VIDCR]
- |
 
-; Just change the page size to the real MEMC page size and leave other bits alone
-
-        ORR     r11, r11, #&0C          ; force 32K page size
-        STR     r11, [r11]              ; any old data will do
- ]
-
-        TEQP    pc, #SVC_mode+I_bit
+        WritePSRc SVC_mode+I_bit, r11
         ExitSWIHandler
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -878,9 +836,6 @@ lastregion SETA   lastregion +1
 ; Tim says "Yuk, yuk, yuk!!"
 
 RamSkipTable
- [ :LNOT: NewStyle_Screen
-        MakeSkipTable   0, 0, 32                        ; in video RAM skip 1st 32 bytes (kbd workspace)
- ]
  [ ClearPhysRAMspeedup ; allow some workspace to speed up ClearPhysRAM  Mike says whoosh
         MakeSkipTable   1, DRAMOffset_PageZero + 0, 64  ; skip 1st 32 bytes of LogRAM, so IRQs work!
                                                         ; additional 32 bytes for workspace
@@ -905,7 +860,6 @@ RamSkipTable
 ;       endif
 
 InitMEMC ROUT
- [ MEMC_Type = "IOMD"
 
 ; Note: On IOMD, all accesses go to ROM until the first write cycle.
 
@@ -1261,10 +1215,6 @@ MedusaInit
         MOV     r0, #0                          ; Podule manager wants TypeA setting by default for all podules
         STRB    r0, [r12, #IOMD_ECTCR]
 
- |
-        LDR     R0, ResetMemC_Value
-        STR     R0, [R0]     ; set ROM access times, refresh on flyback, no DMA
- ]
 CommonInit
 ; On breaks (ie software resets) we have to turn the MMU off.
 ; This is slightly tricky if we've been soft-loaded!
@@ -1288,7 +1238,7 @@ CommonInit
 ; In both cases we want to end up in 32-bit config with MMU off, in 32-bit mode
 
         SetMode SVC32_mode, r1, r0      ; try to select SVC32 mode
-        mrs     AL, r2, CPSR_all        ; read back PSR
+        mrs     AL, r2, CPSR            ; read back PSR
         AND     r2, r2, #&1F            ; extract mode bits from PSR we tried to modify
         TEQ     r2, #SVC32_mode         ; and see if we made it into SVC32
         BEQ     %FT05                   ; [we made it so must be a Break]
@@ -1343,8 +1293,10 @@ CommonInit
 
 ; we're now in RAM, so it's safe to turn the MMU off, but leave us in 32-bit config (and 32-bit mode)
 
+ [ :LNOT:No26bitCode
         BIC     lr, lr, #&FC000003              ; knock out PSR bits from return address
                                                 ; (we know we were in 32-bit config, 26-bit mode on entry)
+ ]
         ADD     lr, lr, r0                      ; and add on offset - NB this may now be above 64MB (on IOMD)
 
 ;mjs - the MMU off values are ok for all ARMs; some will ignore P,D,L bits
@@ -1424,8 +1376,6 @@ funnypatterns
 
 MemSize ROUT
         MOV     r13, lr                                 ;save in a register, cos we've got no stack
-
- [ MEMC_Type = "IOMD"
 
         MOV     r12, #IOMD_Base
 
@@ -1693,153 +1643,6 @@ MemSizeTotalRAM
                                                         ; (it's probably irrelevant)
 	ADRL	r4, ROM
 
- |
-
-; MEMC based memory sizing
-
-        MOV     r0, #PhysRamPhys
-
-        ADD     r1, r0, #A13
-        BL      DistinctAddresses
-        BNE     %05
-        ADD     r1, r0, #A21
-        BL      DistinctAddresses
-        MOVNE   r0, #Page32K
-        MOVNE   r1, #2048*1024
-        BNE     MemSizeDone
-
-        ADD     r1, r0, #4*1024*1024
-        BL      DistinctAddresses
-        MOVNE   r0, #Page32K
-        MOVNE   r1, #4*1024*1024
-        BNE     MemSizeDone
-
-        ADD     r1, r0, #8*1024*1024
-        BL      DistinctAddresses
-        MOVNE   r0, #Page32K
-        MOVNE   r1, #8*1024*1024
-        BNE     MemSizeDone
-
-        ADD     r1, r0, #12*1024*1024
-        BL      DistinctAddresses
-        MOV     r0, #Page32K
-        MOVNE   r1, #12*1024*1024
-        MOVEQ   r1, #16*1024*1024
-        B       MemSizeDone
-
-05
-        ADD     r1, r0, #A20
-        BL      DistinctAddresses
-        BNE     %10
-        MOV     r0, #Page16K
-        MOV     r1, #2048*1024
-        B       MemSizeDone
-
-10
-        ADD     r1, r0, #A19
-        BL      DistinctAddresses
-        BEQ     %15
-        MOV     r0, #Page8K
-        MOV     r1, #512*1024
-        B       MemSizeDone
-
-15
-        ADD     r1, r0, #A18
-        BL      DistinctAddresses
-        BEQ     %20
-        MOV     r0, #Page4K
-        MOV     r1, #256*1024
-        B       MemSizeDone
-
-20
-        ADD     r1, r0, #A12
-        BL      DistinctAddresses
-        BEQ     %25
-        MOV     r0, #Page4K
-        MOV     r1, #512*1024
-        B       MemSizeDone
-
-25
-        MOV     r0, #Page8K
-        MOV     r1, #1024*1024
-
-MemSizeDone
-        LDR     r3, =PhysRamPhys                ; Base of "video RAM"
-        MOV     r4, #480*1024                   ; 480K of "video RAM"
-        ADD     r5, r3, r4                      ; Base of "1st bank of DRAM"
-        SUB     r6, r1, r4                      ; Size of "1st bank of DRAM"
-
-        LDR     r2, =DRAMOffset_PageZero + PhysRamTable
-        ADD     r2, r5, r2                      ; physical address of table of physical RAM addresses/sizes
-        STMIA   r2, {r3-r6}
-
-        ADD     r3, r2, #4*4                    ; indicate just 2 areas
-
-        LDR     r4, =38400000                   ; indicate 38.4E6 bytes/sec video bandwidth
-        STR     r4, [r2, #VideoBandwidth-PhysRamTable]
-
-        ADRL    r4, ROM                         ; use PC-relative addressing to get to start of image
-        TEQ     r4, #PhysROM                    ; then see if it's the normal ROM address
-  [ STB
-	TEQNE	r4, #PhysExtROM			; or if it's the 2nd ROM bank
-  ]
-        BEQ     %FT55                           ; if so, then we're OK
-
-        SUB     r1, r1, #OSROM_ImageSize*1024   ; if we've been soft-loaded, then we have ?M less than we thought
-        ADD     r5, r4, #OSROM_ImageSize*1024   ; point r5 at end of ROM
-
-; now go through the declared RAM areas looking for our image (we assume it's not split across two banks)
-
-        MOV     r6, r2                          ; make copy of start pointer
-30
-        TEQ     r6, r3
-        BEQ     %FT55
-        LDMIA   r6!, {r7,r8}                    ; load address, size
-        ADD     r8, r8, r7                      ; r8 -> end
-        SUBS    r9, r8, r5
-        SUBCSS  r10, r4, r7                     ; test for r4>=r7 and r5<=r8
-        BCC     %BT30
-
-; we've found where the ROM is
-
-        BNE     %FT40                           ; if NE from last comparison then r4<>r7 ie start(ROM)<>start(region)
-                                                ; else start(ROM)=start(region), so modify region to be end(ROM)..end(region)
-        TEQ     r9, #0                          ; test if region completely removed
-        STMNEDB r6, {r5, r9}                    ; if region not completely removed, store updated (address, size)
-        BNE     %FT55
-
-; region completely removed, so shunt down remaining ones
-
-35
-        TEQ     r6, r3                          ; if not got to end
-        LDMNEIA r6, {r7, r8}                    ; then load next pair
-        STMNEDB r6, {r7, r8}                    ; and store in last
-        ADD     r6, r6, #8                      ; advance pointer
-        BNE     %BT35
-        SUB     r3, r3, #8                      ; move back end pointer
-        B       %FT55
-
-; there is a lump at the start
-
-40
-        STMDB   r6, {r7, r10}                   ; reduce start bit
-        TEQ     r9, #0                          ; is there an end bit?
-        BEQ     %FT55                           ; [no, so we've finished]
-
-; now shunt up all remaining areas, to make room for new one
-
-        MOV     r8, r3
-45
-        TEQ     r8, r6
-        LDMNEDB r8, {r7, r10}
-        STMNEIA r8, {r7, r10}
-        SUBNE   r8, r8, #8
-        BNE     %BT45
-        STMIA   r8, {r5, r9}                    ; store end lump
-        ADD     r3, r3, #8                      ; advance end pointer
-
- ]
-
 ; r0 = Page size
 ; r1 = Total memory size (bytes)
 ; r2 = PhysRamTable
@@ -2048,26 +1851,27 @@ CritEnd                                         ; 2 words after we go up into RO
         SetMode UND32_mode, r7
         LDR     r13_undef, =UNDSTK              ; set up undefined mode stack pointer
 
+ [ No26bitCode
+        SetMode ABT32_mode, r7
+        LDR     r13_abort, =ABTSTK              ; set up abort mode stack pointer
+
+        SetMode SVC32_mode, r7                  ; RISC OS is 32 bit now. yay!
+ |
         SetMode SVC26_mode, r7                  ; switch into 26-bit mode
+ ]
         ADD     r13, r13, r4                    ; adjust return address
 
         LDR     r2, ResetMemC_Value
         BIC     r2, r2, #&C
         ORR     r2, r2, r0
- [ MEMC_Type <> "IOMD"
-        STR     r2, [r2]                        ; set MEMC to right state
- ]
         MOV     r0, #4*1024                     ; r0 = true page size (now split off
                                                 ; from MEMC control register)
- [ MEMC_Type = "IOMD"
   [ Simulator
         TubeString r4, r5, r6, "Got through all of MemSize, and we're still here!"
         TubeChar r4, r5, "MOV r5, #4", NoStack
   ]
- ]
         MOV     pc, r13
 
- [ MEMC_Type = "IOMD"
 ; add_dram_bank
 ;   Entry: r10 -> workspace (initially 0)
 ;          r0  =  bank address
@@ -2247,7 +2051,6 @@ Allocate_DRAM_fragment
 	MOV	pc, lr			; We've done with this block now.
 
 
- ]
 
 ; Memory map initialisation table
 ; Consists of word triplets (size,logaddr,type)
@@ -2342,15 +2145,14 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
   ]
  ]
 
- [ :LNOT: NewStyle_Screen
-        MemInitVideo    16, 1, 0, 1, &05000000, AP_None                 ; real screen (section-mapped)
- ]
         MemInitSection PSS, 1, 0, 0, PhysSpace, AP_None, &00000000      ; map of physical space
 
+ [ ShadowROM
         MemInitROMs      2, 1, 1, 1, &FF800000, AP_Read                 ; ROM
         MemInitROMs      2, 1, 1, 1, &FFA00000, AP_Read                 ; ROM
         MemInitROMs      2, 1, 1, 1, &FFC00000, AP_Read                 ; ROM
         MemInitROMs      2, 1, 1, 1, &FFE00000, AP_Read                 ; ROM
+ ]
 
 ; Now explicit initialisation of L2 for static pages
 
@@ -2367,6 +2169,9 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
 ;and fix things up later (see L1L2PTenhancements)
 ;
         MemInitPagesL2  &8000, 1, 1, ARMA_Cleaners_address, AP_Read, DRAMOffset_PageZero
+  ]
+  [ No26bitCode
+        MemInitPagesL2  AbtStackSize, 1, 1, AbtStack, AP_Read, DRAMOffset_AbortStack
   ]
 
         MemInitPagesL2     -1, 1, 1, UndStackSoftCamChunk, AP_Full, 0   ; variable offset and size
@@ -2514,7 +2319,7 @@ timecpuriscpc
 ;preserves registers _and_ flags
 ;
 finalmemoryspeed ROUT
-        Push    "r0,lr"
+        EntryS  r0
         MOV     lr, #IOC
         LDRB    r0, [lr, #IOMD_ID0]     ; Is
         CMP     r0, #&E7                ; It
@@ -2527,7 +2332,7 @@ finalmemoryspeed ROUT
         MOVEQ   r0, #&06                ; clock dividers: /1 for CPU, /1 for memory, /2 for I/O
         STREQB  r0, [lr, #IOMD_CLKCTL]
 fmspeed_done
-        Pull    "r0,pc",,^
+        EXITS                           ; ***KJB - flag preservation necessary?
 
   | ; else if not RO371Timings
 
@@ -2769,9 +2574,7 @@ MMUControl_ModifyControl ROUT
         CMP     r1,#0
         CMPEQ   r2,#&FFFFFFFF
         BEQ     MMUC_modcon_readonly
-        MOV     r4, pc
-        ORR     lr, r4, #I_bit
-        TEQP    lr, #0                  ; disable IRQs while we modify soft copy
+        PHPSEI  r4                      ; disable IRQs while we modify soft copy
         ARM_number r5
         MOV     r3, #0
         LDR     lr, [r3, #MMUControlSoftCopy]
@@ -2869,7 +2672,7 @@ MMUControl_ModifyControl ROUT
         BEQ     %FT20
         ARM_flush_cache r3
 20
-        TEQP    r4, #0                  ; restore IRQ state
+        PLP     r4                      ; restore IRQ state
         Pull    "r3,r4,r5,pc"
 
 MMUC_modcon_readonly
@@ -2940,6 +2743,7 @@ MMUC_flush_done
 ;
 ;       Exception veneers
 
+ [ :LNOT:No26bitCode
 ; Undefined instruction trap pre-veneer
 ; in:   r13_undef -> a FD stack
 ;       r14_undef -> undefined instruction +4
@@ -2947,54 +2751,45 @@ MMUC_flush_done
 
 UndPreVeneer    ROUT
 
-; entered in undef32, and we've branched up to &FF80xxxx, so we need to jump
-; back to normal ROM space
-
-        BIC     pc, pc, #&FC000000      ; remove silly bits from pc
-        NOP                             ; (this instruction skipped)
-
         Push    "r0-r7,r14"             ; push r0-r7 on undef stack, and make room for return address
         MOV     r0, r13_undef
 
 ; for the time being just merge lr and psr
 
-        mrs     AL, r1, SPSR_all                        ; r1 = saved PSR
+        mrs     AL, r1, SPSR                            ; r1 = saved PSR
         AND     r2, r1, #&F0000003                      ; get saved NZCV and 26 bit modes
         ORR     lr_undef, lr_undef, r2
         AND     r2, r1, #I32_bit + F32_bit              ; extract I and F from new place
         ORR     r1, lr_undef, r2, LSL #IF32_26Shift     ; r1 = combined lr and psr
 
-        mrs     AL, r2, CPSR_all        ; now switch into SVC26
+        mrs     AL, r2, CPSR            ; now switch into SVC26
         BIC     r3, r2, #&1F
         ORR     r3, r3, #SVC26_mode
-        msr     AL, SPSR_all, r3        ; set SPSR_undef to be CPSR but with SVC26
-        msr     AL, CPSR_all, r3        ; and select this mode now
+        msr     AL, SPSR_cxsf, r3       ; set SPSR_undef to be CPSR but with SVC26
+        msr     AL, CPSR_c, r3          ; and select this mode now
 
         MOV     lr_svc, r1              ; lr_svc = PC + PSR from exception
 
-        msr     AL, CPSR_all, r2        ; go back into undef mode
+        msr     AL, CPSR_c, r2          ; go back into undef mode
 
         LDR     r1, =UndHan             ; work out address of undefined instruction handler
         LDR     r1, [r1]
         STR     r1, [r0, #8*4]          ; and store it as return address
         Pull    "r0-r7, pc",,^          ; exit to handler, restoring sp_undef and entering SVC26 mode
+ ]
 
+ [ :LNOT:No26bitCode
 ; Instruction fetch abort pre-veneer
 
 PAbPreVeneer    ROUT
 
-; entered in abort32, and we've branched up to &FF80xxxx, so we need to jump
-; back to normal ROM space
-
-        BIC     pc, pc, #&FC000000      ; remove silly bits from pc
-        NOP                             ; (this instruction skipped)
         LDR     r13_abort, =PreVeneerRegDump
         STMIA   r13_abort, {r0-r7}
         MOV     r0, r13_abort
 
 ; for the time being just merge lr and psr
 
-        mrs     AL, r1, SPSR_all                        ; r1 = saved PSR
+        mrs     AL, r1, SPSR                            ; r1 = saved PSR
 
         LDR     r2, =Abort32_dumparea
         STMIA   r2, {r1,lr_abort}                       ;dump 32-bit PSR, fault address (PC)
@@ -3005,16 +2800,17 @@ PAbPreVeneer    ROUT
         AND     r2, r1, #I32_bit + F32_bit              ; extract I and F from new place
         ORR     r1, lr_abort, r2, LSL #IF32_26Shift     ; r1 = combined lr and psr
 
-        mrs     AL, r2, CPSR_all        ; now switch into SVC26
+        mrs     AL, r2, CPSR            ; now switch into SVC26
         BIC     r2, r2, #&1F
         ORR     r2, r2, #SVC26_mode
-        msr     AL, CPSR_all, r2
+        msr     AL, CPSR_c, r2
 
         MOV     lr_svc, r1              ; lr_svc = PC + PSR from exception
         LDR     r1, =PAbHan
         LDR     r1, [r1]
         STR     r1, [r0, #8*4]
         LDMIA   r0, {r0-r7, pc}         ; jump to prefetch abort handler
+ ]
 
 ; Preliminary layout of abort indirection nodes
 
@@ -3027,18 +2823,16 @@ AI_Addr #       4
 
 DAbPreVeneer    ROUT
 
-; entered in abort32, and we've branched up to &FF80xxxx, so we need to jump
-; back to normal ROM space
-
-        BIC     pc, pc, #&FC000000              ; remove silly bits from pc
-        NOP                                     ; (this instruction skipped)
-
+ [ No26bitCode
+        SUB     r13_abort, r13_abort, #17*4     ; we use stacks, dontcherknow
+ |
         LDR     r13_abort, =PreVeneerRegDump
+ ]
         STMIA   r13_abort, {r0-r7}              ; save unbanked registers anyway
         STR     lr_abort, [r13_abort, #15*4]    ; save old PC, ie instruction address
 
-        mrs     AL, r0, SPSR_all                ; r0 = PSR when we aborted
-        mrs     AL, r1, CPSR_all                ; r1 = CPSR
+        mrs     AL, r0, SPSR                    ; r0 = PSR when we aborted
+        mrs     AL, r1, CPSR                    ; r1 = CPSR
         ADD     r2, r13_abort, #8*4             ; r2 -> saved register bank for r8 onwards
 
         LDR     r4, =Abort32_dumparea+3*4       ;use temp area (avoid overwriting main area for expected aborts)
@@ -3059,33 +2853,40 @@ DAbPreVeneer    ROUT
         BEQ     %FT05
 
         ORR     r3, r3, r1                      ; and put in user's
-        msr     AL, CPSR_all, r3                ; switch to user's mode
+        msr     AL, CPSR_c, r3                  ; switch to user's mode
 
         STMIA   r2, {r8-r14}                    ; save the banked registers
 
-        mrs     AL, r5, SPSR_all                ; get the SPSR for the aborter's mode
+        mrs     AL, r5, SPSR                    ; get the SPSR for the aborter's mode
         STR     r5, [r2, #8*4]                  ; and store away in the spare slot on the end
                                                 ; (this is needed for LDM with PC and ^)
+  [ No26bitCode
+        ORR     r1, r1, #ABT32_mode
+        msr     AL, CPSR_c, r1                  ; back to abort mode for the rest of this
 05
-        ORR     r1, r1, #SVC26_mode
-        msr     AL, CPSR_all, r1                ; then switch to SVC26 for the rest of this
-
-        Push    "r0, lr_svc"                    ; save SPSR_abort and lr_svc
-        SUB     sp_svc, sp_svc, #8*4            ; make room for r8_usr to r14_usr and PC
-  [ SASTMhatbroken
-        STMIA   sp_svc!,{r8-r12}
-        STMIA   sp_svc, {r13,r14}^
-        NOP
-        STR     pc, [sp_svc,#2*4]
-        SUB     sp_svc, sp_svc, #5*4            ; save USR bank in case STM ^, and also so we can corrupt them
+        Push    "r0"                            ; save SPSR_abort
   |
-        STMIA   sp_svc, {r8-r15}^               ; save USR bank in case STM ^, and also so we can corrupt them
+05
+        ORR     r1, r1, #SVC26_mode             ; then switch to SVC for the rest of this
+        msr     AL, CPSR_c, r1
+        Push    "r0, lr_svc"                    ; save SPSR_abort and lr_svc
+  ]
+
+  [ SASTMhatbroken
+        SUB     sp, sp, #3*4
+        STMIA   sp, {r13,r14}^                  ; save USR bank in case STM ^, and also so we can corrupt them
+        NOP
+        STMDB   sp!, {r8-r12}
+  |
+        SUB     sp, sp, #8*4                    ; make room for r8_usr to r14_usr and PC
+        STMIA   sp, {r8-r15}^                   ; save USR bank in case STM ^, and also so we can corrupt them
   ]
 
         SUB     r11, r2, #8*4                   ; r11 -> register bank
-        STR     r4, [sp_svc, #7*4]              ; store aborter's PC in user register bank
+        STR     r4, [sp, #7*4]                  ; store aborter's PC in user register bank
 
 ;ARM 810 or StrongARM allow signed byte load or half-word load/stores - not supported at present
+;***KJB - need to think about LDRH family
         LDR     r10, [r4, #-8]!                 ; r10 = actual instruction that aborted, and r4 points to it
         AND     r9, r10, #&0E000000
         TEQ     r9, #&08000000                  ; test for LDM/STM
@@ -3211,7 +3012,7 @@ DAbPreVeneer    ROUT
         TST     r10, #1 :SHL: 22                ; is it LDM with ^
         BEQ     %FT34                           ; no, then use main bank for all registers
         LDR     r2, [r1, #8*4]                  ; get SPSR
-        ANDS    r2, r2, #3                      ; get bottom 2 bits of mode (EQ => USR26 or USR32)
+        ANDS    r2, r2, #15                     ; get bottom 4 bits of mode (EQ => USR26 or USR32)
         BEQ     %FT34                           ; if USR mode then use main bank for all
         TEQ     r2, #FIQ26_mode                 ; if FIQ mode then put r8-r14 in user bank
         LDREQ   lr, =&7F00                      ; then put r8-r14 in user bank
@@ -3246,7 +3047,7 @@ DAbPreVeneer    ROUT
         AND     r8, r9, #&1F                    ; r8 = aborter's mode
         TEQ     r8, #USR32_mode                 ; if in USR32
         BEQ     %FT70                           ; then the ^ has no effect (actually uses CPSR)
-        TST     r8, #&10                        ; if 32-bit mode
+        TST     r8, #&1C                        ; if 32-bit mode
         LDRNE   r7, [r11, #16*4]                ; then use SPSR for the aborter's mode else use updated r15 in r2 (26-bit format)
         ANDEQ   r7, r2, #&F0000003              ; flag and mode bits in same place
         ANDEQ   r2, r2, #&0C000000              ; but I and F have to move to bits 7 and 6
@@ -3435,28 +3236,36 @@ DAbPreVeneer    ROUT
         NOP                                     ; don't access banked registers after LDM^
         ADD     sp, sp, #8*4                    ; junk user bank stack frame
 
+ [ No26bitCode
+        Pull    "r0"                            ; r0 = (possibly updated) SPSR_abort
+        mrs     AL, r1, CPSR
+ |
         Pull    "r0, lr"                        ; r0 = (possibly updated) SPSR_abort, restore lr_svc
 
         SetMode ABT32_mode, r1                  ; leaves r1 = current PSR
+ ]
 
-        mrs     AL, r6, SPSR_all                ; get original SPSR, with aborter's original mode
-        AND     r7, r6, #&1F
-        TEQ     r7, #USR26_mode
-        TEQNE   r7, #USR32_mode                 ; test also for USR32
+        mrs     AL, r6, SPSR                    ; get original SPSR, with aborter's original mode
+        AND     r7, r6, #&0F
+        TEQ     r7, #USR26_mode                 ; also matches USR32
         LDMEQIA r2, {r8-r14}^                   ; if user mode then just use ^ to reload registers
         NOP
         BEQ     %FT80
 
         ORR     r6, r6, #I32_bit                ; use aborter's flags and mode but set I
-        msr     AL, CPSR_all, r6                ; switch to aborter's mode
+        BIC     r6, r6, #T32_bit                ; and don't set Thumb bit
+        msr     AL, CPSR_c, r6                  ; switch to aborter's mode
         LDMIA   r2, {r8-r14}                    ; reload banked registers
-        msr     AL, CPSR_all, r1                ; switch back to ABT32
+        msr     AL, CPSR_c, r1                  ; switch back to ABT32
 
 80
         LDR     lr_abort, [r13_abort, #15*4]    ; get PC to return to
-        msr     AL, SPSR_all, r0                ; set up new SPSR (may have changed for LDM {PC}^)
+        msr     AL, SPSR_cxsf, r0               ; set up new SPSR (may have changed for LDM {PC}^)
 
         LDMIA   r13_abort, {r0-r7}              ; reload r0-r7
+ [ No26bitCode
+        ADD     r13_abort, r13_abort, #17*4     ; we use stacks, dontcherknow
+ ]
         SUBS    pc, lr_abort, #4                ; go back 8 to adjust for PC being 2 words out,
                                                 ; then forward 4 to skip instruction we've just executed
 
@@ -3474,6 +3283,46 @@ DAbPreVeneer    ROUT
         LDR     r1, [r0,#5*4]
         STR     r1, [r0,#2*4]
 
+ [ No26bitCode
+        MOV     r0, #0                                  ; we're going to call abort handler
+        STR     r0, [r0, #CDASemaphore]                 ; so allow recovery if we were in CDA
+
+        LDR     r0, =DAbHan
+        LDR     r0, [r0]                                ; get address of data abort handler
+ [ DebugAborts
+        DREG    r0, "Handler address = "
+ ]
+
+        ADD     r2, r11, #8*4                   ; point r2 at 2nd half of main register bank
+        LDMIA   sp, {r8-r14}^                   ; reload user bank registers
+        NOP                                     ; don't access banked registers after LDM^
+        ADD     sp, sp, #9*4                    ; junk user bank stack frame + saved SPSR
+
+        mrs     AL, r1, CPSR
+
+        mrs     AL, r6, SPSR                    ; get original SPSR, with aborter's original mode
+        AND     r7, r6, #&0F
+        TEQ     r7, #USR26_mode                 ; also matches USR32
+        LDMEQIA r2, {r8-r14}^                   ; if user mode then just use ^ to reload registers
+        NOP
+        BEQ     %FT80
+
+        ORR     r6, r6, #I32_bit                ; use aborter's flags and mode but set I
+        BIC     r6, r6, #T32_bit                ; and don't set Thumb
+        msr     AL, CPSR_c, r6                  ; switch to aborter's mode
+        LDMIA   r2, {r8-r14}                    ; reload banked registers
+        msr     AL, CPSR_c, r1                  ; switch back to ABT32
+
+80
+        STR     r0, [r13_abort, #16*4]          ; save handler address at top of stack
+        LDR     lr_abort, [r13_abort, #15*4]    ; get abort address back in R14
+
+        LDMIA   r13_abort, {r0-r7}              ; reload r0-r7
+        ADD     r13_abort, r13_abort, #16*4     ; we use stacks, dontcherknow
+
+        Pull    pc
+
+ |
 ; for the time being just merge lr and psr
 
         LDR     r0, [sp, #8*4]                          ; r0 = original SPSR (can't have been modified)
@@ -3497,16 +3346,13 @@ DAbPreVeneer    ROUT
         DREG    r0, "PSR going to exit with = "
  ]
         STR     r0, [sp, #8*4]                          ; overwrite stacked SPSR
-
- [ NewStyle_All
-        MOV     r0, #0                                  ; we're going to call abort handler
-        STR     r0, [r0, #CDASemaphore]                 ; so allow recovery if we were in CDA
  ]
 
-        CMP     r2, #&20                                ; if aborting address <&20
-        ADRCCL  r0, ABORTD                              ; then use MOS's default abort handler
-        LDRCS   r0, =DAbHan                             ; else use current handler
-        LDRCS   r0, [r0]                                ; get address of data abort handler
+        MOV     r0, #0                                  ; we're going to call abort handler
+        STR     r0, [r0, #CDASemaphore]                 ; so allow recovery if we were in CDA
+
+        LDR     r0, =DAbHan
+        LDR     r0, [r0]                                ; get address of data abort handler
  [ DebugAborts
         DREG    r0, "Handler address = "
  ]
@@ -3527,7 +3373,7 @@ DAbPreVeneer    ROUT
 ;       r2 = illegal address
 ;       r3 = length of transfer in bytes
 ;       r4 -> instruction which aborted
-;       SVC26 mode
+;       SVC26/32 mode
 ;
 ; out:  V=0 => transfer accomplished
 ;       V=1 => transfer not accomplished
@@ -3626,7 +3472,9 @@ ProcessTransfer ENTRY "r1-r7,r12"
         BCC     Fault                                   ; and check user list
   ]
 
+  [ :LNOT:No26bitCode
         SetMode SVC32_mode, lr                          ; go into SVC32 so we can poke or peek vector area
+  ]
 
         TST     r0, #1                                  ; test for peek/poke
         BEQ     %FT30
@@ -3670,7 +3518,9 @@ ProcessTransfer ENTRY "r1-r7,r12"
         BNE     %BT40                                   ; no, then loop
 
 50
+  [ :LNOT:No26bitCode
         SetMode SVC26_mode, lr
+  ]
         CMP     r3, #0
         BNE     %BT10
         EXIT                                            ; exit (VC from CMP)
@@ -3964,7 +3814,6 @@ ARMA_IMBrange_threshold * 128*1024
 ;    - the clean is either whole cache or range as appropriate
 ;
 SyncCodeAreasSWI ROUT
-        BIC     LR,LR,#V_bit                 ;clear return V
         ARM_read_ID R10
         AND     R10,R10,#&F000
         CMP     R10,#&A000
@@ -3985,17 +3834,11 @@ SyncCodeAreasSWI ROUT
         MOV     R0,R0
         B       SLVK
 01      ;full IMB required
-        MOV     R10,PC
-        ORR     R12,R10,#I_bit
-        TEQP    R12,#0                     ;disable IRQs to read-modify-write semaphore
-        MOV     R12,#0
-        LDRB    R11,[R12,#SyncCodeA_sema]
-        CMP     R11,#0
-        TEQNEP  R10,#0                     ;restore and...
-        BNE     SLVK                       ;semaphore set, avoid reentrancy, let first call do it
-        MOV     R11,#1
-        STRB    R11,[R12,#SyncCodeA_sema]  ;set semaphore
-        TEQP    R10,#0                     ;restore IRQ state
+        LDR     R12,=SyncCodeA_sema
+        MOV     R10,#1                  ;set semaphore
+        SWPB    R11,R10,[R12]
+        CMP     R11,#0                  ;was it already set?
+        BNE     SLVK                    ;semaphore set, avoid reentrancy, let first call do it
         MOV     R12,#ARMA_Cleaner_flipflop
         LDR     R11,[R12]
         EOR     R11,R11,#16*1024
@@ -4090,10 +3933,12 @@ dtgps_810cleanflush                     ;entry point also used during pages_unsa
   ]
 ;
 
+ [ {FALSE}
         DCB     "GROT"                  ;spare words marker
         ALIGN   4096                    ;align to page boundary for easy ROMpatch
 arm600stuff_endofstuff
   ! 0,"-- size of ARM600+ stuff (4k aligned) is ":CC::STR:(arm600stuff_endofstuff - arm600stuff_startofstuff)
+ ]
 
 
  [ DebugAborts

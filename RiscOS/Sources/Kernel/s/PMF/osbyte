@@ -20,16 +20,6 @@ ArthurINKEY256 * &A7    ; INKEY-256 value
 
 ; *****************************************************************************
 
-        GBLS    ByteRegs
-        GBLA    StackOffset
-        [ AssemblingArthur :LOR: Module
-ByteRegs SETS    ""
-StackOffset SETA 4*4            ; stack offset in osbyte routines to user pc
-        |
-ByteRegs SETS    "R11, WsPtr,"
-StackOffset SETA 6*4            ; stack offset in osbyte routines to user pc
-        ]
-
         MACRO
         MyOsbyte $cond
         B$cond  GoMyOsbyte
@@ -47,27 +37,20 @@ StackOffset SETA 6*4            ; stack offset in osbyte routines to user pc
 
         MACRO
         ByteReturnV $cond
-        [ AssemblingArthur :LOR: ErrorsInR0
-
         ASSERT  "$cond"="" :LOR: "$cond"="VS"
 
         [ "$cond"=""
-        Pull    "R0,R3,$ByteRegs R14,PC", VC
+        Pull    "R0,R3,R14,PC", VC
         ]
         ADDVS   R13, R13, #4                    ; junk stacked R0
-        Pull    "R3,$ByteRegs R14,PC", VS
-
-        |
-        Pull    "R0,R3,$ByteRegs R14,PC", $cond        ; for GenError systems
-        ]
+        Pull    "R3,R14,PC", VS
         MEND
 
 ; Main OSbyte entry point
 ; R0,R1,R2 are parameters
 
 OsByte
-        [       AssemblingArthur :LOR: Module
-        Push    "R0, R3, $ByteRegs R14"
+        Push    "R0, R3, R14"
         BL      OsByteGo                        ; Call the subsid entry pt.
         Pull    "R0,R3"
         Push    "R0-R4"
@@ -85,26 +68,18 @@ OsByte
         BLNE    TranslateError
       ]
         SWINE   XOS_GenerateError               ; set V if not claimed
-        Pull    "R1-R4, $ByteRegs R14, PC"
+        Pull    "R1-R4, R14, PC"
 
 BadCommandError MakeErrorBlock BadCommand
-        |
-        Push    "R0, R3, $ByteRegs R14"
-        BL      OsByteGo
-        Pull    "R0, R3, $ByteRegs PC"        ; no services, so pass it on
-        ]
 
 GoMyOsbyte
         CLRPSR  V_bit, R3
-        Pull    "R0,R3, $ByteRegs R14,PC" ; pull the world AND the PC to return
+        Pull    "R0,R3, R14,PC"           ; pull the world AND the PC to return
 
 
 ; *****************************************************************************
 
 OsByteGo ROUT
-        [ :LNOT: AssemblingArthur :LAND: :LNOT: Module
-        BYTEWS  WsPtr
-        ]
         AND     R0, R0, #&FF            ; no funny business!
         SUBS    R3, R0, #OsbyteLowLimit ; is it a low one ?
         BCS     HiOsbyte
@@ -333,11 +308,17 @@ V2B34
 ; Write Printer driver type
 Osbyte05 ROUT
         BL      MakePrinterDormant      ; for netprint
-        MOV     R14, PC                 ; for restoring I afterwards
+        SavePSR R14                     ; for restoring I afterwards
 10
-        MVN     R3, #I_bit
-        TSTP    R3, PC                  ; CLI
-        TEQP    R14, #0                 ; restore old I
+        CLRPSR  I_bit, R3
+ [ StrongARM
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+ ]
+        RestPSR R14                     ; restore old I
 
         MOV     R3, #0
         LDRB    R3, [R3, #ESC_Status]
@@ -626,7 +607,7 @@ Osbyte12 ROUT
 
 Osbyte13 ROUT
 
-        MOV     R3, PC
+        SavePSR R3                      ; Interrupts disabled at the moment
 
         ; bug fix for MED-03165. Having a DPMS-blanked screen stopped printing.
         ; The reason is that HSyncs stop and VSyncs stop as a consequence,
@@ -647,7 +628,8 @@ Osbyte13 ROUT
 
         LDRB    R2, CFStime
 10
-        TEQP    R3, #I_bit              ; CLI
+        BIC     R1, R3, #I32_bit
+        msr    ,CPSR_c, R1              ; CLI
 
    ;StrongARM core will not see interrupt unless disable is cleared for at least 5 cycles,
    ;in order to fill synchroniser pipe
@@ -658,8 +640,7 @@ Osbyte13 ROUT
         NOP
         NOP
  ]
-
-        TEQP    R3, #0                  ; SEI
+        RestPSR R3                      ; SEI
         LDRB    R1, CFStime
         TEQ     R1, R2
         MyOsbyte NE
@@ -805,7 +786,7 @@ NewKeyboard
         STRB    R4, KeyAlphabet
         MOV     R2, #Inter_Keyboard
         BL      OfferInternationalService
-        Pull    "R1,R4,PC",,^
+        Pull    "R1,R4,PC"
 
 ; *****************************************************************************
 
@@ -868,64 +849,22 @@ DoOsbyteSetAlphKey ROUT
 ; R1 = 1..4     => use pointer shape 1..4, linked to mouse
 ; R1 = &81..&84 => use pointer shape 1..4, unlinked
 ;
- [ LCDSupport           ;Must copy the shape from the buffer image into the 'current' buffer (ie create 4 instances)
-Osbyte6A
-
-;;;don't do a wait for vsync
-;;; [ Fix8
-;;;        CLRPSR  I_bit, R0                       ; could take some time
-;;; ]
-;;;        MOV     R3, R1                          ; OS_Byte 19 corrupts R1 & R2 (why oh why oh why oh why oh why...)
-;;;        MOV     R0, #19                         ; wait for vsync, so we change
-;;;        SWI     XOS_Byte                        ; cleanly (ignore errors)
-;;;        MOV     R1, R3
-
-        VDWS    R0
-        LDRB    R3, [R0, #PointerShapeNumber]   ; get old shape number
-        AND     R2, R1, #&7F                    ; allow 0..4, &80..&84
-        CMP     R2, #4+1
-        STRCCB  R1, [R0, #PointerShapeNumber]
-        MOV     R1, R3
-        MyOsbyte CS                             ;Leave if pointer shape was out of range
-        CMP     R2, #0
-        MyOsbyte EQ                             ;Leave if pointer shape was 'off'
-
-        Push    "r0-r12,r14"
-        SUB     R2, R2, #1                      ;Now in range 0-3
-        LDR     R0, =CursorData
-        MOV     R1, R0                          ;R1 points to 1st current image
-        ADD     R0, R0, #&400                   ;R0 points to the start of the buffer images
-        ADD     R0, R0, R2, LSL #8              ;Now, it points to the source buffer image
-        ADD     R2, R1, #&100                   ;R2 points to 2nd current image
-        ADD     R3, R2, #&F8                    ;R3 points to 3rd current image (top line will get lost, on purpose!)
-        ADD     R4, R3, #&100                   ;R4 points to 4th current image (correct wrt 3rd image)
-
-;StrongARM note: cursor area is now marked cacheable/bufferable (so that SWI despatch etc. is also)
-;However, since the area for the current cursor (@ CursorData, &400 bytes) is never read by RISC OS,
-;it can never be in the cache, so there is no need to clean the write-back cache to force the new data
-;out. All that remain is the write buffer, but this will drain quickly without help.
-;
-        ADD     R5, R0, #&100                   ;R5 is the end address.
-11      LDMIA   R0!, {R6-R12,R14}
-        STMIA   R1!, {R6-R12,R14}
-        STMIA   R2!, {R6-R12,R14}
-        STMIA   R3!, {R6-R12,R14}
-        STMIA   R4!, {R6-R12,R14}
-        CMP     R0, R5
-        BNE     %BT11                           ;Keep going, more to do
-
-        Pull    "r0-r12,r14"
-        MyOsbyte                                ;This is a silly macro!
- |
 Osbyte6A
         VDWS    R0
         LDRB    R3, [R0, #PointerShapeNumber]   ; get old shape number
         AND     R2, R1, #&7F                    ; allow 0..4, &80..&84
-        CMP     R2, #4+1
-        STRCCB  R1, [R0, #PointerShapeNumber]
-        MOV     R1, R3
+        CMP     R2, #4
+        BHI     %FT90                           ; ignore change if too high
+
+        TEQ     R1, R3
+        STRNEB  R1, [R0, #PointerShapeNumber]
+        MOVNE   R1, #1
+        STRNEB  R1, [R0, #PointerShapeChanged]
+
+        ; the shape will change on the next vsync
+
+90      MOV     R1, R3
         MyOsbyte
- ]
 
 ; Set vdu driver's screen number
 Osbyte70
@@ -998,32 +937,22 @@ DoOsbyte7D
         Push    "R11, R14"
         MOV     R11, #&FF
 Osbyte7C7D
-        [ AssemblingArthur :LOR: Module
         MOV     R12, #EscHan_ws
         STRB    R11, [R12, #ESC_Status-EscHan_ws]   ; set escape flag
         MOV     R14, PC
         LDMIA   R12, {R12, PC}
-        |
-        MOV     R12, #0
-        STRB    R11, [R12, #ESC_Status]         ; set escape flag
-        MOV     R14, PC                         ; ADRS R14, Exit7D
-        LDR     PC, [R12, #EscHan]
-        ]
 Exit7D
         TEQ     R12, #1
  [ Version >= 201
         Pull    "R11, PC", NE
 
-        MOV     R11, PC                         ; Preserve old processor state
+        mrs    ,R11, CPSR                       ; Preserve old processor state
         ORR     R12, R11, #SVC_mode             ; Switch to SVC mode preserving IRQ_bit
-        TEQP    R12, #0
-        NOP
+        msr    ,CPSR_c, R12
         Push    R14                             ; Preserve SVC_R14
         SWI     XOS_SetCallBack
-        ORRVS   R11, R11, #V_bit                ; Preserve V_bit
         Pull    R14                             ; Restore SVC_R14
-        TEQP    R11, #0                         ; Switch back to original mode, with V_bit intact from SWI
-        NOP
+        msr    ,CPSR_c, R11                     ; Switch back to original mode, with V_bit intact from SWI
 
         Pull    "R11, PC"
  |
@@ -1045,7 +974,6 @@ Osbyte7E ROUT
         CLRPSR  I_bit, R0               ; enable interrupts (doing SOUNDs and
                                         ; closing files may take some time!)
 
-        [ AssemblingArthur :LOR: Module
         SWI     XSound_QInit
         BVS     %FT99                           ; no noises anyway!
         LDR     R0, =&01010008                  ; channel 8, amplitude &101
@@ -1058,7 +986,6 @@ Osbyte7E ROUT
         BNE     %BT10
 99
         MOV     R0, #0
-        ]
 
         STRB    R0, PageModeLineCount           ; zero line count
 
@@ -1183,11 +1110,28 @@ Osbyte86
 
 ; Read Screen Mode and Character at text cursor position
 Osbyte87
- [ Fix6
+ [ {FALSE}
+ ; The user's PSR is no longer there. In fact, it never was (or hasn't been
+ ; for a long time), because the return address passed to the vector always
+ ; had the I bit set.
         LDR     R3, [R13, #StackOffset] ; get user's psr
         ANDS    R3, R3, #I_bit          ; EQ => irqs were on
         CLRPSR  I_bit, R3, EQ           ; so clear I_bit now
  ]
+ ; However, the SPSR _should_ have the user's interrupt state. If he had
+ ; IRQs off, we will not have turned them back on, so neither we nor an
+ ; interrupt routine will have called a a SWI, so SPSR will still be the
+ ; SPSR from the original OS_Byte, with I set.
+ ;
+ ; If someone else is on ByteV, and passed it on, the rules say that they
+ ; mustn't have enabled interrupts either, in which case any corrupted SPSR
+ ; must still have I set.
+ ;
+ ; If the caller had interrupts enabled, an interrupt may have corrupted SPSR
+ ; the worst effect of this is that we may not enable interrupts. So...
+        mrs    ,R3, SPSR
+        TST     R3, #I32_bit            ; EQ => IRQs were on
+        msr EQ ,CPSR_c, #SVC2632        ; so turn them on
         ByteToNosbod DoOSBYTE87         ; Results in R1, R2 (i.e. char, mode)
         MyOsbyte
 
