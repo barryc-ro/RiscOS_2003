@@ -103,7 +103,12 @@ EXPORTS   = \
  ${HDIR}.Global.h.PoduleReg \
  ${HDIR}.Global.h.Services \
  ${HDIR}.Global.h.SWIs \
- ${HDIR}.Global.h.Upcall
+ ${HDIR}.Global.h.Upcall \
+ ${HDIR}.Global.h.DevNos \
+ ${HDIR}.Global.h.EnvNumbers \
+ ${HDIR}.Global.h.Heap \
+ ${HDIR}.Global.h.KeyV \
+ ${HDIR}.Global.h.PaletteV
 
 #
 # Generic rules:
@@ -156,7 +161,7 @@ ${HDRDIR}.Services:   Import.Global.Services;       ${CP} Import.Global.Services
 ${HDRDIR}.SWIs:       Import.Global.SWIs;           ${CP} Import.Global.SWIs       $@ ${CPFLAGS}
 ${HDRDIR}.UpCall:     Import.Global.UpCall;         ${CP} Import.Global.UpCall     $@ ${CPFLAGS}
 
-# The C versions
+# The C versions of imported files.
 ${HDIR}.Global.h.AUN:        Import.Global.AUN;            perl perl.Hdr2H Import.Global.AUN        $@
 ${HDIR}.Global.h.Countries:  Import.Global.Countries;      perl perl.Hdr2H Import.Global.Countries  $@
 ${HDIR}.Global.h.Devices:    Import.Global.Devices;        perl perl.Hdr2H Import.Global.Devices    $@
@@ -174,6 +179,18 @@ ${HDIR}.Global.h.PoduleReg:  Import.Global.PoduleReg;      perl perl.Hdr2H Impor
 ${HDIR}.Global.h.Services:   Import.Global.Services;       perl perl.Hdr2H Import.Global.Services   $@
 ${HDIR}.Global.h.SWIs:       Import.Global.SWIs;           perl perl.Hdr2H Import.Global.SWIs       $@
 ${HDIR}.Global.h.UpCall:     Import.Global.UpCall;         perl perl.Hdr2H Import.Global.UpCall     $@
+
+# The C versions of local header files.
+# Files which don't work yet:
+#   CMOS        Sprite      Tokens      Pointer     Messages
+# Files which have no equivalent.
+#   DDVMacros   Debug       ExtraLong   ListOpts    Macros      NdrDebug    Proc        Symbols
+${HDIR}.Global.h.DevNos:     Hdr.DevNos;         perl perl.Hdr2H Hdr.DevNos     $@
+${HDIR}.Global.h.EnvNumbers: Hdr.EnvNumbers;     perl perl.Hdr2H Hdr.EnvNumbers $@
+${HDIR}.Global.h.Heap:       Hdr.Heap;           perl perl.Hdr2H Hdr.Heap       $@
+${HDIR}.Global.h.KeyV:       Hdr.KeyV;           perl perl.Hdr2H Hdr.KeyV       $@
+${HDIR}.Global.h.PaletteV:   Hdr.PaletteV;       perl perl.Hdr2H Hdr.PaletteV   $@
+
 
 # Machine/hardware specific headers:
 ${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>; ${CP} hdr.Machine.<Machine>    $@ ${CPFLAGS}
