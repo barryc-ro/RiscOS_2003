@@ -68,6 +68,25 @@ VIDDIR          = $(ROOTDIR)
 # Build rules
 #
 
+#
+# For what it's worth, this is how I'm deciding which video codec files to
+# include in each build:
+#
+# * All files are included in encode+decode builds
+# * For decode-only builds:
+#     FastDec*, Dec2#xxx, Dec2# (RGB source): only if 32bpp modes supported
+#     Dec2# (non-RGB source): not included
+#     Dec8/Dec16: always included
+#     DecompresB: included if 1-8bpp modes are supported
+#     DecompresH: included if 4-16bpp modes are supported
+#     Decompress: included if 8-32bpp modes are supported
+#
+# I've deduced this by a quick examination of Player; they don't tally exactly
+# with the files included in the MultiMedia module, so beware!
+#
+# Ben Avison, 09 Jan 2001
+#
+
 all:
         @echo $(COMPONENT): all complete
 
@@ -75,6 +94,15 @@ install:
         @echo Starting ARMovie install phase
         @set Alias$MMD $(MKDIR) $(INSTDIR).%0
         @set Alias$CMF $(CP) %0 $(INSTDIR).%1 $(CPFLAGS)
+        @setmacro Alias$If1bpp If "<Mk1bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If2bpp If "<Mk2bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If4bpp If "<Mk4bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If8bpp If "<Mk8bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If16bpp If "<Mk16bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If32bpp If "<Mk32bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If1˜8bpp If "<Mk1bpp>"="1" OR "<Mk2bpp>"="1" OR "<Mk4bpp>"="1" OR  "<Mk8bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If4˜16bpp If "<Mk4bpp>"="1" OR "<Mk8bpp>"="1" OR "<Mk16bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If8˜32bpp If "<Mk8bpp>"="1" OR "<Mk16bpp>"="1" OR "<Mk32bpp>"="1" OR "<MkEncoders>"="1" then %*0
         @set Alias$MkARMovie /Options.!MkMovie %*0
         @set Alias$MkARSound /Options.!MkSound %*0
         @obey -v-c Options.$(BUILD)
@@ -84,6 +112,12 @@ install:
         @unset Alias$MkARSound
         @unset MkEncoders
         @unset Mk8bitSound
+        @unset Mk1bpp
+        @unset Mk2bpp
+        @unset Mk4bpp
+        @unset Mk8bpp
+        @unset Mk16bpp
+        @unset Mk32bpp
         @echo $(COMPONENT): installed
 
 resources:
@@ -91,22 +125,46 @@ resources:
         @RMEnsure ShrinkWrap 0.00 Error *** ShrinkWrap must be loaded ***
         @set Alias$MMD $(MKDIR) $(RESDIR).%0
         @set Alias$CMF ShrinkWrapZipCompress %0 $(RESDIR).%1
+        @setmacro Alias$If1bpp If "<Mk1bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If2bpp If "<Mk2bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If4bpp If "<Mk4bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If8bpp If "<Mk8bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If16bpp If "<Mk16bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If32bpp If "<Mk32bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If1˜8bpp If "<Mk1bpp>"="1" OR "<Mk2bpp>"="1" OR "<Mk4bpp>"="1" OR  "<Mk8bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If4˜16bpp If "<Mk4bpp>"="1" OR "<Mk8bpp>"="1" OR "<Mk16bpp>"="1" OR "<MkEncoders>"="1" then %*0
+        @setmacro Alias$If8˜32bpp If "<Mk8bpp>"="1" OR "<Mk16bpp>"="1" OR "<Mk32bpp>"="1" OR "<MkEncoders>"="1" then %*0
         @set Alias$MkARMovie /Options.!MkMovie %*0
         @set Alias$MkARSound /Options.!MkSound %*0
         @obey -v-c Options.$(BUILD)
         @unset Alias$MMD
         @unset Alias$CMF
+        @unset Alias$If1bpp
+        @unset Alias$If2bpp
+        @unset Alias$If4bpp
+        @unset Alias$If8bpp
+        @unset Alias$If16bpp
+        @unset Alias$If32bpp
+        @unset Alias$If1˜8bpp
+        @unset Alias$If4˜16bpp
+        @unset Alias$If8˜32bpp
         @unset Alias$MkARMovie
         @unset Alias$MkARSound
         @unset MkEncoders
         @unset Mk8bitSound
+        @unset Mk1bpp
+        @unset Mk2bpp
+        @unset Mk4bpp
+        @unset Mk8bpp
+        @unset Mk16bpp
+        @unset Mk32bpp
         @echo $(COMPONENT): resource files copied
 
 clean:
+        $(RM) !Help
+        |
         $(RM) Player
         $(RM) crunched.Player
-        $(RM) Colour.8yuv11
-        $(RM) Colour.8yuv22
         |
         $(RM) Filters.DirectY
         $(RM) Filters.SharpenY
@@ -122,11 +180,16 @@ clean:
         $(RM) Filters.TClamp8
         @Dir Tools.Extract
         @amu_machine clean
+        @stripdepnd
         @Up 2
         @Dir Tools.Join
         @amu_machine clean
+        @stripdepnd
         @Up 2
         $(RM) crunched.CompLib
+        |
+        $(RM) Colour.8yuv11
+        $(RM) Colour.8yuv22
         |
         $(WIPE) Resources.Shapes.Cubes2.Cube* $(WFLAGS)
         $(RM) Resources.Shapes.Cubes2.ReplayMap'
@@ -140,6 +203,7 @@ clean:
         |
         @Dir Sound16.Type1
         @amu_machine clean
+        @stripdepnd
         @Up 2
         |
         $(RM) Video.MovingLine.DecompresB
@@ -223,10 +287,12 @@ clean:
         |
         @Dir Video.Decomp18
         @amu_machine clean
+        @stripdepnd
         @Up 2
         |
         @Dir Video.Decomp18.BatchComp
         @amu_machine clean
+        @stripdepnd
         @Up 3
         |
         $(RM) Video.Decomp19.Dec16
@@ -288,100 +354,40 @@ clean:
         |
         @Dir Video.Decomp901
         @amu_machine clean
+        @stripdepnd
         @Up 2
         |
         @Dir Video.Decomp902
         @amu_machine clean
+        @stripdepnd
         @Up 2
         |
         @echo $(COMPONENT): cleaned
 
 Core_Decode:          Resources.!Boot \
-                      LocalRes:!Help \
                       Resources.!Run \
-                      Resources.!Sprites \
-                      Resources.!Sprites22 \
-                      Resources.Default \
                       Player \
-                      Resources.Sprites \
-                      Resources.Sprites22 \
                       Resources.Access \
-                      Colour.bas.6Y5CC16 \
-                      Colour.bas.6Y5CC24 \
-                      Colour.bas.6Y5UV16 \
-                      Colour.bas.6Y5UV24 \
-                      Colour.bas.6Y6UV16 \
-                      Colour.bas.C6Y5UV16 \
-                      Colour.bas.C6Y5UV24 \
-                      Colour.bas.C6Y6UV16 \
-                      Colour.bas.CYUV16 \
-                      Colour.bas.CYUV24 \
-                      Colour.bas.Delete \
-                      Colour.bas.MarkUnused \
-                      Colour.bas.RGB16 \
-                      Colour.bas.RGB8 \
-                      Colour.bas.Tidy \
-                      Colour.bas.ULTI16 \
-                      Colour.bas.YCC24 \
-                      Colour.bas.YUV16 \
-                      Colour.bas.YUV24 \
                       LocalRes:Messages \
-                      Colour.8rgb11 \
-                      Colour.8rgb22 \
-                      Colour.8yuv11 \
-                      Colour.8yuv22 \
                       bas.SetSndDir
+        /bas.MakeHelp
         MMD $(ROOTDIR)
         CMF Resources.!Boot                        $(ROOTDIR).!Boot
-        CMF LocalRes:!Help                         $(ROOTDIR).!Help
+        CMF !Help                                  $(ROOTDIR).!Help
         CMF Resources.!Run                         $(ROOTDIR).!Run
-        CMF Resources.!Sprites                     $(ROOTDIR).!Sprites
-        CMF Resources.!Sprites22                   $(ROOTDIR).!Sprites22
-        CMF Resources.Default                      $(ROOTDIR).Default
         CMF Player                                 $(ROOTDIR).Player
-        CMF Resources.Sprites                      $(ROOTDIR).Sprites
-        CMF Resources.Sprites22                    $(ROOTDIR).Sprites22
         MMD $(ACCESSDIR)
         CMF Resources.Access                       $(ACCESSDIR).Access
-        MMD $(COLMAPDIR)
-        CMF Colour.bas.6Y5CC16                     $(COLMAPDIR).6Y5CC16
-        CMF Colour.bas.6Y5CC24                     $(COLMAPDIR).6Y5CC24
-        CMF Colour.bas.6Y5UV16                     $(COLMAPDIR).6Y5UV16
-        CMF Colour.bas.6Y5UV24                     $(COLMAPDIR).6Y5UV24
-        CMF Colour.bas.6Y6UV16                     $(COLMAPDIR).6Y6UV16
-        CMF Colour.bas.C6Y5UV16                    $(COLMAPDIR).C6Y5UV16
-        CMF Colour.bas.C6Y5UV24                    $(COLMAPDIR).C6Y5UV24
-        CMF Colour.bas.C6Y6UV16                    $(COLMAPDIR).C6Y6UV16
-        CMF Colour.bas.CYUV16                      $(COLMAPDIR).CYUV16
-        CMF Colour.bas.CYUV24                      $(COLMAPDIR).CYUV24
-        CMF Colour.bas.Delete                      $(COLMAPDIR).Delete
-        CMF Colour.bas.MarkUnused                  $(COLMAPDIR).MarkUnused
-        CMF Colour.bas.RGB16                       $(COLMAPDIR).RGB16
-        CMF Colour.bas.RGB8                        $(COLMAPDIR).RGB8
-        CMF Colour.bas.Tidy                        $(COLMAPDIR).Tidy
-        CMF Colour.bas.ULTI16                      $(COLMAPDIR).ULTI16
-        CMF Colour.bas.YCC24                       $(COLMAPDIR).YCC24
-        CMF Colour.bas.YUV16                       $(COLMAPDIR).YUV16
-        CMF Colour.bas.YUV24                       $(COLMAPDIR).YUV24
         MMD $(MSGSDIR)
         CMF LocalRes:Messages                      $(MSGSDIR).Messages
-        MMD $(PALETTEDIR)
-        CMF Colour.8rgb11                          $(PALETTEDIR).8rgb11
-        CMF Colour.8rgb22                          $(PALETTEDIR).8rgb22
-        CMF Colour.8yuv11                          $(PALETTEDIR).8yuv11
-        CMF Colour.8yuv22                          $(PALETTEDIR).8yuv22
         MMD $(SETSNDDIR)
         CMF bas.SetSndDir                          $(SETSNDDIR).SetSndDir
 Player: crunched.Player
-        squish -nolist -warn 0 -from crunched.Player -to $@
+        squish -nolist -warn 0 -keep crunch.Keep -from crunched.Player -to $@
 crunched.Player: bas.Player
         $(MKDIR) crunched
         /crunch.Player
         BASIC
-Colour.8yuv11: Colour.bas.Make8yuv11
-        /Colour.bas.Make8yuv11
-Colour.8yuv22: Colour.bas.Make8yuv22
-        /Colour.bas.Make8yuv22
 
 Core_Encode:          Filters.DirectY \
                       Filters.SharpenY \
@@ -452,6 +458,222 @@ crunched.CompLib: bas.CompLib
         /crunch.CompLib
         BASIC
 
+Application_Decode:   Resources.!Sprites \
+                      Resources.!Sprites22 \
+                      Resources.Default \
+                      Resources.Sprites \
+                      Resources.Sprites22
+        MMD $(ROOTDIR)
+        CMF Resources.!Sprites                     $(ROOTDIR).!Sprites
+        CMF Resources.!Sprites22                   $(ROOTDIR).!Sprites22
+        CMF Resources.Default                      $(ROOTDIR).Default
+        CMF Resources.Sprites                      $(ROOTDIR).Sprites
+        CMF Resources.Sprites22                    $(ROOTDIR).Sprites22
+
+Render_Decode:        Painters.1bpp.bas.d11x1y \
+                      Painters.1bpp.bas.d12x1y \
+                      Painters.1bpp.bas.d12x2y \
+                      Painters.2bpp.bas.d21x1y \
+                      Painters.2bpp.bas.d22x1y \
+                      Painters.2bpp.bas.d22x2y \
+                      Painters.4bpp.bas.d41x1y \
+                      Painters.4bpp.bas.d42x1y \
+                      Painters.4bpp.bas.d42x2y \
+                      Painters.8bpp.bas.d81x1y \
+                      Painters.8bpp.bas.d81x2y \
+                      Painters.8bpp.bas.d82x1y \
+                      Painters.8bpp.bas.d82x2y \
+                      Painters.8bpp.bas.d82x4y \
+                      Painters.16bpp.bas.d161x1y \
+                      Painters.16bpp.bas.d161x2y \
+                      Painters.16bpp.bas.d162x1y \
+                      Painters.16bpp.bas.d162x2y \
+                      Painters.16bpp.bas.d162x4y \
+                      Painters.16bpp.bas.d162xI1y \
+                      Painters.16bpp.bas.d162xI2y \
+                      Painters.16bpp.bas.d162xI2yI \
+                      Painters.16bpp.bas.d162xI4y \
+                      Painters.16bpp.bas.d162xI4yI \
+                      Painters.16bpp.bas.d163÷2x1y \
+                      Painters.16bpp.bas.d163÷2xI1y \
+                      Painters.16bpp.bas.d163÷2xIy \
+                      Painters.16bpp.bas.d163÷2xIyI \
+                      Painters.16bpp.bas.d163÷2xy \
+                      Painters.16bpp.bas.d164÷3x1y \
+                      Painters.16bpp.bas.d164÷3xI1y \
+                      Painters.16bpp.bas.d165÷3x1y \
+                      Painters.16bpp.bas.d165÷3xI1y \
+                      Painters.16bpp.bas.d165÷4x1y \
+                      Painters.16bpp.bas.d165÷4xI1y \
+                      Painters.16bpp.bas.d165÷4xIy \
+                      Painters.16bpp.bas.d165÷4xy \
+                      Painters.16bpp.bas.d167÷4x1y \
+                      Painters.16bpp.bas.d167÷4xI1y \
+                      Painters.16bpp.bas.d16Anyxy \
+                      Painters.32bpp.bas.CLd32s÷8 \
+                      Painters.32bpp.bas.d3211÷8x1y \
+                      Painters.32bpp.bas.d3211÷8xI1 \
+                      Painters.32bpp.bas.d3213÷8x1y \
+                      Painters.32bpp.bas.d3213÷8xI1 \
+                      Painters.32bpp.bas.d3215÷8x1y \
+                      Painters.32bpp.bas.d3215÷8xI1 \
+                      Painters.32bpp.bas.d321x1y \
+                      Painters.32bpp.bas.d321x2y \
+                      Painters.32bpp.bas.d322x1y \
+                      Painters.32bpp.bas.d322x2y \
+                      Painters.32bpp.bas.d322x4y \
+                      Painters.32bpp.bas.d322xI1y \
+                      Painters.32bpp.bas.d322xI2y \
+                      Painters.32bpp.bas.d322xI2yI \
+                      Painters.32bpp.bas.d322xI4y \
+                      Painters.32bpp.bas.d322xI4yI \
+                      Painters.32bpp.bas.d323÷2x1y \
+                      Painters.32bpp.bas.d323÷2xI1y \
+                      Painters.32bpp.bas.d323÷2xIy \
+                      Painters.32bpp.bas.d323÷2xIyI \
+                      Painters.32bpp.bas.d323÷2xy \
+                      Painters.32bpp.bas.d325÷4x1y \
+                      Painters.32bpp.bas.d325÷4xI1y \
+                      Painters.32bpp.bas.d325÷4xIy \
+                      Painters.32bpp.bas.d325÷4xy \
+                      Painters.32bpp.bas.d327÷4x1y \
+                      Painters.32bpp.bas.d327÷4xI1y \
+                      Painters.32bpp.bas.d327÷8x1y \
+                      Painters.32bpp.bas.d327÷8xI1y \
+                      Painters.32bpp.bas.d329÷8x1y \
+                      Painters.32bpp.bas.d329÷8xI1y \
+                      Painters.32bpp.bas.d32Anyxy \
+                      Colour.bas.6Y5CC16 \
+                      Colour.bas.6Y5CC24 \
+                      Colour.bas.6Y5UV16 \
+                      Colour.bas.6Y5UV24 \
+                      Colour.bas.6Y6UV16 \
+                      Colour.bas.C6Y5UV16 \
+                      Colour.bas.C6Y5UV24 \
+                      Colour.bas.C6Y6UV16 \
+                      Colour.bas.CYUV16 \
+                      Colour.bas.CYUV24 \
+                      Colour.bas.Delete \
+                      Colour.bas.MarkUnused \
+                      Colour.bas.RGB16 \
+                      Colour.bas.RGB8 \
+                      Colour.bas.Tidy \
+                      Colour.bas.ULTI16 \
+                      Colour.bas.YCC24 \
+                      Colour.bas.YUV16 \
+                      Colour.bas.YUV24
+        MMD $(PAINTDIR)
+        If1bpp CMF Painters.1bpp.bas.d11x1y        $(PAINTDIR).d11x1y
+        If1bpp CMF Painters.1bpp.bas.d12x1y        $(PAINTDIR).d12x1y
+        If1bpp CMF Painters.1bpp.bas.d12x2y        $(PAINTDIR).d12x2y
+        If2bpp CMF Painters.2bpp.bas.d21x1y        $(PAINTDIR).d21x1y
+        If2bpp CMF Painters.2bpp.bas.d22x1y        $(PAINTDIR).d22x1y
+        If2bpp CMF Painters.2bpp.bas.d22x2y        $(PAINTDIR).d22x2y
+        If4bpp CMF Painters.4bpp.bas.d41x1y        $(PAINTDIR).d41x1y
+        If4bpp CMF Painters.4bpp.bas.d42x1y        $(PAINTDIR).d42x1y
+        If4bpp CMF Painters.4bpp.bas.d42x2y        $(PAINTDIR).d42x2y
+        If8bpp CMF Painters.8bpp.bas.d81x1y        $(PAINTDIR).d81x1y
+        If8bpp CMF Painters.8bpp.bas.d81x2y        $(PAINTDIR).d81x2y
+        If8bpp CMF Painters.8bpp.bas.d82x1y        $(PAINTDIR).d82x1y
+        If8bpp CMF Painters.8bpp.bas.d82x2y        $(PAINTDIR).d82x2y
+        If8bpp CMF Painters.8bpp.bas.d82x4y        $(PAINTDIR).d82x4y
+        If16bpp CMF Painters.16bpp.bas.d161x1y     $(PAINTDIR).d161x1y
+        If16bpp CMF Painters.16bpp.bas.d161x2y     $(PAINTDIR).d161x2y
+        If16bpp CMF Painters.16bpp.bas.d162x1y     $(PAINTDIR).d162x1y
+        If16bpp CMF Painters.16bpp.bas.d162x2y     $(PAINTDIR).d162x2y
+        If16bpp CMF Painters.16bpp.bas.d162x4y     $(PAINTDIR).d162x4y
+        If16bpp CMF Painters.16bpp.bas.d162xI1y    $(PAINTDIR).d162xI1y
+        If16bpp CMF Painters.16bpp.bas.d162xI2y    $(PAINTDIR).d162xI2y
+        If16bpp CMF Painters.16bpp.bas.d162xI2yI   $(PAINTDIR).d162xI2yI
+        If16bpp CMF Painters.16bpp.bas.d162xI4y    $(PAINTDIR).d162xI4y
+        If16bpp CMF Painters.16bpp.bas.d162xI4yI   $(PAINTDIR).d162xI4yI
+        If16bpp CMF Painters.16bpp.bas.d163÷2x1y   $(PAINTDIR).d163/2x1y
+        If16bpp CMF Painters.16bpp.bas.d163÷2xI1y  $(PAINTDIR).d163/2xI1y
+        If16bpp CMF Painters.16bpp.bas.d163÷2xIy   $(PAINTDIR).d163/2xIy
+        If16bpp CMF Painters.16bpp.bas.d163÷2xIyI  $(PAINTDIR).d163/2xIyI
+        If16bpp CMF Painters.16bpp.bas.d163÷2xy    $(PAINTDIR).d163/2xy
+        If16bpp CMF Painters.16bpp.bas.d164÷3x1y   $(PAINTDIR).d164/3x1y
+        If16bpp CMF Painters.16bpp.bas.d164÷3xI1y  $(PAINTDIR).d164/3xI1y
+        If16bpp CMF Painters.16bpp.bas.d165÷3x1y   $(PAINTDIR).d165/3x1y
+        If16bpp CMF Painters.16bpp.bas.d165÷3xI1y  $(PAINTDIR).d165/3xI1y
+        If16bpp CMF Painters.16bpp.bas.d165÷4x1y   $(PAINTDIR).d165/4x1y
+        If16bpp CMF Painters.16bpp.bas.d165÷4xI1y  $(PAINTDIR).d165/4xI1y
+        If16bpp CMF Painters.16bpp.bas.d165÷4xIy   $(PAINTDIR).d165/4xIy
+        If16bpp CMF Painters.16bpp.bas.d165÷4xy    $(PAINTDIR).d165/4xy
+        If16bpp CMF Painters.16bpp.bas.d167÷4x1y   $(PAINTDIR).d167/4x1y
+        If16bpp CMF Painters.16bpp.bas.d167÷4xI1y  $(PAINTDIR).d167/4xI1y
+        If16bpp CMF Painters.16bpp.bas.d16Anyxy    $(PAINTDIR).d16Anyxy
+        If32bpp MMD $(PAINTDIR).d32
+        If32bpp CMF Painters.32bpp.bas.CLd32s÷8    $(PAINTDIR).d32.CLd32s/8
+        If32bpp CMF Painters.32bpp.bas.d3211÷8x1y  $(PAINTDIR).d32.d3211/8x1y
+        If32bpp CMF Painters.32bpp.bas.d3211÷8xI1  $(PAINTDIR).d32.d3211/8xI1
+        If32bpp CMF Painters.32bpp.bas.d3213÷8x1y  $(PAINTDIR).d32.d3213/8x1y
+        If32bpp CMF Painters.32bpp.bas.d3213÷8xI1  $(PAINTDIR).d32.d3213/8xI1
+        If32bpp CMF Painters.32bpp.bas.d3215÷8x1y  $(PAINTDIR).d32.d3215/8x1y
+        If32bpp CMF Painters.32bpp.bas.d3215÷8xI1  $(PAINTDIR).d32.d3215/8xI1
+        If32bpp CMF Painters.32bpp.bas.d321x1y     $(PAINTDIR).d32.d321x1y
+        If32bpp CMF Painters.32bpp.bas.d321x2y     $(PAINTDIR).d32.d321x2y
+        If32bpp CMF Painters.32bpp.bas.d322x1y     $(PAINTDIR).d32.d322x1y
+        If32bpp CMF Painters.32bpp.bas.d322x2y     $(PAINTDIR).d32.d322x2y
+        If32bpp CMF Painters.32bpp.bas.d322x4y     $(PAINTDIR).d32.d322x4y
+        If32bpp CMF Painters.32bpp.bas.d322xI1y    $(PAINTDIR).d32.d322xI1y
+        If32bpp CMF Painters.32bpp.bas.d322xI2y    $(PAINTDIR).d32.d322xI2y
+        If32bpp CMF Painters.32bpp.bas.d322xI2yI   $(PAINTDIR).d32.d322xI2yI
+        If32bpp CMF Painters.32bpp.bas.d322xI4y    $(PAINTDIR).d32.d322xI4y
+        If32bpp CMF Painters.32bpp.bas.d322xI4yI   $(PAINTDIR).d32.d322xI4yI
+        If32bpp CMF Painters.32bpp.bas.d323÷2x1y   $(PAINTDIR).d32.d323/2x1y
+        If32bpp CMF Painters.32bpp.bas.d323÷2xI1y  $(PAINTDIR).d32.d323/2xI1y
+        If32bpp CMF Painters.32bpp.bas.d323÷2xIy   $(PAINTDIR).d32.d323/2xIy
+        If32bpp CMF Painters.32bpp.bas.d323÷2xIyI  $(PAINTDIR).d32.d323/2xIyI
+        If32bpp CMF Painters.32bpp.bas.d323÷2xy    $(PAINTDIR).d32.d323/2xy
+        If32bpp CMF Painters.32bpp.bas.d325÷4x1y   $(PAINTDIR).d32.d325/4x1y
+        If32bpp CMF Painters.32bpp.bas.d325÷4xI1y  $(PAINTDIR).d32.d325/4xI1y
+        If32bpp CMF Painters.32bpp.bas.d325÷4xIy   $(PAINTDIR).d32.d325/4xIy
+        If32bpp CMF Painters.32bpp.bas.d325÷4xy    $(PAINTDIR).d32.d325/4xy
+        If32bpp CMF Painters.32bpp.bas.d327÷4x1y   $(PAINTDIR).d32.d327/4x1y
+        If32bpp CMF Painters.32bpp.bas.d327÷4xI1y  $(PAINTDIR).d32.d327/4xI1y
+        If32bpp CMF Painters.32bpp.bas.d327÷8x1y   $(PAINTDIR).d32.d327/8x1y
+        If32bpp CMF Painters.32bpp.bas.d327÷8xI1y  $(PAINTDIR).d32.d327/8xI1y
+        If32bpp CMF Painters.32bpp.bas.d329÷8x1y   $(PAINTDIR).d32.d329/8x1y
+        If32bpp CMF Painters.32bpp.bas.d329÷8xI1y  $(PAINTDIR).d32.d329/8xI1y
+        If32bpp CMF Painters.32bpp.bas.d32Anyxy    $(PAINTDIR).d32.d32Anyxy
+        MMD $(COLMAPDIR)
+        CMF Colour.bas.6Y5CC16                     $(COLMAPDIR).6Y5CC16
+        CMF Colour.bas.6Y5CC24                     $(COLMAPDIR).6Y5CC24
+        CMF Colour.bas.6Y5UV16                     $(COLMAPDIR).6Y5UV16
+        CMF Colour.bas.6Y5UV24                     $(COLMAPDIR).6Y5UV24
+        CMF Colour.bas.6Y6UV16                     $(COLMAPDIR).6Y6UV16
+        CMF Colour.bas.C6Y5UV16                    $(COLMAPDIR).C6Y5UV16
+        CMF Colour.bas.C6Y5UV24                    $(COLMAPDIR).C6Y5UV24
+        CMF Colour.bas.C6Y6UV16                    $(COLMAPDIR).C6Y6UV16
+        CMF Colour.bas.CYUV16                      $(COLMAPDIR).CYUV16
+        CMF Colour.bas.CYUV24                      $(COLMAPDIR).CYUV24
+        CMF Colour.bas.Delete                      $(COLMAPDIR).Delete
+        CMF Colour.bas.MarkUnused                  $(COLMAPDIR).MarkUnused
+        CMF Colour.bas.RGB16                       $(COLMAPDIR).RGB16
+        CMF Colour.bas.RGB8                        $(COLMAPDIR).RGB8
+        CMF Colour.bas.Tidy                        $(COLMAPDIR).Tidy
+        CMF Colour.bas.ULTI16                      $(COLMAPDIR).ULTI16
+        CMF Colour.bas.YCC24                       $(COLMAPDIR).YCC24
+        CMF Colour.bas.YUV16                       $(COLMAPDIR).YUV16
+        CMF Colour.bas.YUV24                       $(COLMAPDIR).YUV24
+
+Render_Encode:        Colour.16yuv \
+                      Colour.8rgb11 \
+                      Colour.8rgb22 \
+                      Colour.8yuv11 \
+                      Colour.8yuv22
+        MMD $(PALETTEDIR)
+        CMF Colour.16yuv                           $(PALETTEDIR).16yuv
+        CMF Colour.8rgb11                          $(PALETTEDIR).8rgb11
+        CMF Colour.8rgb22                          $(PALETTEDIR).8rgb22
+        CMF Colour.8yuv11                          $(PALETTEDIR).8yuv11
+        CMF Colour.8yuv22                          $(PALETTEDIR).8yuv22
+Colour.8yuv11: Colour.bas.Make8yuv11
+        /Colour.bas.Make8yuv11
+Colour.8yuv22: Colour.bas.Make8yuv22
+        /Colour.bas.Make8yuv22
+
 FrontEnd_Decode:      bas.FrontEnd
         MMD $(FRONTENDDIR)
         CMF bas.FrontEnd                           $(FRONTENDDIR).FrontEnd
@@ -467,6 +689,9 @@ Documents_Decode:     Resources.Documents.601vsSquar \
                       Resources.Documents.PrefBig \
                       Resources.Documents.ProgIf \
                       Resources.Documents.ToUseSound
+        /bas.MakeHelp LocalRes:!Help
+        MMD $(ROOTDIR)
+        CMF !Help                                  $(ROOTDIR).!Help
         MMD $(DOCSDIR)
         CMF Resources.Documents.601vsSquar         $(DOCSDIR).601vsSquar
         CMF Resources.Documents.AE7doc             $(DOCSDIR).AE7doc
@@ -1459,165 +1684,6 @@ Resources.Shapes.ZoomUp.Scale04: Resources.Shapes.ZoomUp.bas.MakeScale
 Resources.Trajectory.Circle: Resources.Trajectory.bas.MakeCircle
         /Resources.Trajectory.bas.MakeCircle
 
-Paint1bpp_Decode:     Painters.1bpp.bas.d11x1y \
-                      Painters.1bpp.bas.d12x1y \
-                      Painters.1bpp.bas.d12x2y
-        MMD $(PAINTDIR)
-        CMF Painters.1bpp.bas.d11x1y               $(PAINTDIR).d11x1y
-        CMF Painters.1bpp.bas.d12x1y               $(PAINTDIR).d12x1y
-        CMF Painters.1bpp.bas.d12x2y               $(PAINTDIR).d12x2y
-
-Paint2bpp_Decode:     Painters.2bpp.bas.d21x1y \
-                      Painters.2bpp.bas.d22x1y \
-                      Painters.2bpp.bas.d22x2y
-        MMD $(PAINTDIR)
-        CMF Painters.2bpp.bas.d21x1y               $(PAINTDIR).d21x1y
-        CMF Painters.2bpp.bas.d22x1y               $(PAINTDIR).d22x1y
-        CMF Painters.2bpp.bas.d22x2y               $(PAINTDIR).d22x2y
-
-Paint4bpp_Decode:     Painters.4bpp.bas.d41x1y \
-                      Painters.4bpp.bas.d42x1y \
-                      Painters.4bpp.bas.d42x2y
-        MMD $(PAINTDIR)
-        CMF Painters.4bpp.bas.d41x1y               $(PAINTDIR).d41x1y
-        CMF Painters.4bpp.bas.d42x1y               $(PAINTDIR).d42x1y
-        CMF Painters.4bpp.bas.d42x2y               $(PAINTDIR).d42x2y
-
-Paint8bpp_Decode:     Painters.8bpp.bas.d81x1y \
-                      Painters.8bpp.bas.d81x2y \
-                      Painters.8bpp.bas.d82x1y \
-                      Painters.8bpp.bas.d82x2y \
-                      Painters.8bpp.bas.d82x4y
-        MMD $(PAINTDIR)
-        CMF Painters.8bpp.bas.d81x1y               $(PAINTDIR).d81x1y
-        CMF Painters.8bpp.bas.d81x2y               $(PAINTDIR).d81x2y
-        CMF Painters.8bpp.bas.d82x1y               $(PAINTDIR).d82x1y
-        CMF Painters.8bpp.bas.d82x2y               $(PAINTDIR).d82x2y
-        CMF Painters.8bpp.bas.d82x4y               $(PAINTDIR).d82x4y
-
-Paint16bpp_Decode:    Painters.16bpp.bas.d161x1y \
-                      Painters.16bpp.bas.d161x2y \
-                      Painters.16bpp.bas.d162x1y \
-                      Painters.16bpp.bas.d162x2y \
-                      Painters.16bpp.bas.d162x4y \
-                      Painters.16bpp.bas.d162xI1y \
-                      Painters.16bpp.bas.d162xI2y \
-                      Painters.16bpp.bas.d162xI2yI \
-                      Painters.16bpp.bas.d162xI4y \
-                      Painters.16bpp.bas.d162xI4yI \
-                      Painters.16bpp.bas.d163÷2x1y \
-                      Painters.16bpp.bas.d163÷2xI1y \
-                      Painters.16bpp.bas.d163÷2xIy \
-                      Painters.16bpp.bas.d163÷2xIyI \
-                      Painters.16bpp.bas.d163÷2xy \
-                      Painters.16bpp.bas.d164÷3x1y \
-                      Painters.16bpp.bas.d164÷3xI1y \
-                      Painters.16bpp.bas.d165÷3x1y \
-                      Painters.16bpp.bas.d165÷3xI1y \
-                      Painters.16bpp.bas.d165÷4x1y \
-                      Painters.16bpp.bas.d165÷4xI1y \
-                      Painters.16bpp.bas.d165÷4xIy \
-                      Painters.16bpp.bas.d165÷4xy \
-                      Painters.16bpp.bas.d167÷4x1y \
-                      Painters.16bpp.bas.d167÷4xI1y \
-                      Painters.16bpp.bas.d16Anyxy
-        MMD $(PAINTDIR)
-        CMF Painters.16bpp.bas.d161x1y             $(PAINTDIR).d161x1y
-        CMF Painters.16bpp.bas.d161x2y             $(PAINTDIR).d161x2y
-        CMF Painters.16bpp.bas.d162x1y             $(PAINTDIR).d162x1y
-        CMF Painters.16bpp.bas.d162x2y             $(PAINTDIR).d162x2y
-        CMF Painters.16bpp.bas.d162x4y             $(PAINTDIR).d162x4y
-        CMF Painters.16bpp.bas.d162xI1y            $(PAINTDIR).d162xI1y
-        CMF Painters.16bpp.bas.d162xI2y            $(PAINTDIR).d162xI2y
-        CMF Painters.16bpp.bas.d162xI2yI           $(PAINTDIR).d162xI2yI
-        CMF Painters.16bpp.bas.d162xI4y            $(PAINTDIR).d162xI4y
-        CMF Painters.16bpp.bas.d162xI4yI           $(PAINTDIR).d162xI4yI
-        CMF Painters.16bpp.bas.d163÷2x1y           $(PAINTDIR).d163/2x1y
-        CMF Painters.16bpp.bas.d163÷2xI1y          $(PAINTDIR).d163/2xI1y
-        CMF Painters.16bpp.bas.d163÷2xIy           $(PAINTDIR).d163/2xIy
-        CMF Painters.16bpp.bas.d163÷2xIyI          $(PAINTDIR).d163/2xIyI
-        CMF Painters.16bpp.bas.d163÷2xy            $(PAINTDIR).d163/2xy
-        CMF Painters.16bpp.bas.d164÷3x1y           $(PAINTDIR).d164/3x1y
-        CMF Painters.16bpp.bas.d164÷3xI1y          $(PAINTDIR).d164/3xI1y
-        CMF Painters.16bpp.bas.d165÷3x1y           $(PAINTDIR).d165/3x1y
-        CMF Painters.16bpp.bas.d165÷3xI1y          $(PAINTDIR).d165/3xI1y
-        CMF Painters.16bpp.bas.d165÷4x1y           $(PAINTDIR).d165/4x1y
-        CMF Painters.16bpp.bas.d165÷4xI1y          $(PAINTDIR).d165/4xI1y
-        CMF Painters.16bpp.bas.d165÷4xIy           $(PAINTDIR).d165/4xIy
-        CMF Painters.16bpp.bas.d165÷4xy            $(PAINTDIR).d165/4xy
-        CMF Painters.16bpp.bas.d167÷4x1y           $(PAINTDIR).d167/4x1y
-        CMF Painters.16bpp.bas.d167÷4xI1y          $(PAINTDIR).d167/4xI1y
-        CMF Painters.16bpp.bas.d16Anyxy            $(PAINTDIR).d16Anyxy
-
-Paint32bpp_Decode:    Painters.32bpp.bas.CLd32s÷8 \
-                      Painters.32bpp.bas.d3211÷8x1y \
-                      Painters.32bpp.bas.d3211÷8xI1 \
-                      Painters.32bpp.bas.d3213÷8x1y \
-                      Painters.32bpp.bas.d3213÷8xI1 \
-                      Painters.32bpp.bas.d3215÷8x1y \
-                      Painters.32bpp.bas.d3215÷8xI1 \
-                      Painters.32bpp.bas.d321x1y \
-                      Painters.32bpp.bas.d321x2y \
-                      Painters.32bpp.bas.d322x1y \
-                      Painters.32bpp.bas.d322x2y \
-                      Painters.32bpp.bas.d322x4y \
-                      Painters.32bpp.bas.d322xI1y \
-                      Painters.32bpp.bas.d322xI2y \
-                      Painters.32bpp.bas.d322xI2yI \
-                      Painters.32bpp.bas.d322xI4y \
-                      Painters.32bpp.bas.d322xI4yI \
-                      Painters.32bpp.bas.d323÷2x1y \
-                      Painters.32bpp.bas.d323÷2xI1y \
-                      Painters.32bpp.bas.d323÷2xIy \
-                      Painters.32bpp.bas.d323÷2xIyI \
-                      Painters.32bpp.bas.d323÷2xy \
-                      Painters.32bpp.bas.d325÷4x1y \
-                      Painters.32bpp.bas.d325÷4xI1y \
-                      Painters.32bpp.bas.d325÷4xIy \
-                      Painters.32bpp.bas.d325÷4xy \
-                      Painters.32bpp.bas.d327÷4x1y \
-                      Painters.32bpp.bas.d327÷4xI1y \
-                      Painters.32bpp.bas.d327÷8x1y \
-                      Painters.32bpp.bas.d327÷8xI1y \
-                      Painters.32bpp.bas.d329÷8x1y \
-                      Painters.32bpp.bas.d329÷8xI1y \
-                      Painters.32bpp.bas.d32Anyxy
-        MMD $(PAINTDIR)
-        MMD $(PAINTDIR).d32
-        CMF Painters.32bpp.bas.CLd32s÷8            $(PAINTDIR).d32.CLd32s/8
-        CMF Painters.32bpp.bas.d3211÷8x1y          $(PAINTDIR).d32.d3211/8x1y
-        CMF Painters.32bpp.bas.d3211÷8xI1          $(PAINTDIR).d32.d3211/8xI1
-        CMF Painters.32bpp.bas.d3213÷8x1y          $(PAINTDIR).d32.d3213/8x1y
-        CMF Painters.32bpp.bas.d3213÷8xI1          $(PAINTDIR).d32.d3213/8xI1
-        CMF Painters.32bpp.bas.d3215÷8x1y          $(PAINTDIR).d32.d3215/8x1y
-        CMF Painters.32bpp.bas.d3215÷8xI1          $(PAINTDIR).d32.d3215/8xI1
-        CMF Painters.32bpp.bas.d321x1y             $(PAINTDIR).d32.d321x1y
-        CMF Painters.32bpp.bas.d321x2y             $(PAINTDIR).d32.d321x2y
-        CMF Painters.32bpp.bas.d322x1y             $(PAINTDIR).d32.d322x1y
-        CMF Painters.32bpp.bas.d322x2y             $(PAINTDIR).d32.d322x2y
-        CMF Painters.32bpp.bas.d322x4y             $(PAINTDIR).d32.d322x4y
-        CMF Painters.32bpp.bas.d322xI1y            $(PAINTDIR).d32.d322xI1y
-        CMF Painters.32bpp.bas.d322xI2y            $(PAINTDIR).d32.d322xI2y
-        CMF Painters.32bpp.bas.d322xI2yI           $(PAINTDIR).d32.d322xI2yI
-        CMF Painters.32bpp.bas.d322xI4y            $(PAINTDIR).d32.d322xI4y
-        CMF Painters.32bpp.bas.d322xI4yI           $(PAINTDIR).d32.d322xI4yI
-        CMF Painters.32bpp.bas.d323÷2x1y           $(PAINTDIR).d32.d323/2x1y
-        CMF Painters.32bpp.bas.d323÷2xI1y          $(PAINTDIR).d32.d323/2xI1y
-        CMF Painters.32bpp.bas.d323÷2xIy           $(PAINTDIR).d32.d323/2xIy
-        CMF Painters.32bpp.bas.d323÷2xIyI          $(PAINTDIR).d32.d323/2xIyI
-        CMF Painters.32bpp.bas.d323÷2xy            $(PAINTDIR).d32.d323/2xy
-        CMF Painters.32bpp.bas.d325÷4x1y           $(PAINTDIR).d32.d325/4x1y
-        CMF Painters.32bpp.bas.d325÷4xI1y          $(PAINTDIR).d32.d325/4xI1y
-        CMF Painters.32bpp.bas.d325÷4xIy           $(PAINTDIR).d32.d325/4xIy
-        CMF Painters.32bpp.bas.d325÷4xy            $(PAINTDIR).d32.d325/4xy
-        CMF Painters.32bpp.bas.d327÷4x1y           $(PAINTDIR).d32.d327/4x1y
-        CMF Painters.32bpp.bas.d327÷4xI1y          $(PAINTDIR).d32.d327/4xI1y
-        CMF Painters.32bpp.bas.d327÷8x1y           $(PAINTDIR).d32.d327/8x1y
-        CMF Painters.32bpp.bas.d327÷8xI1y          $(PAINTDIR).d32.d327/8xI1y
-        CMF Painters.32bpp.bas.d329÷8x1y           $(PAINTDIR).d32.d329/8x1y
-        CMF Painters.32bpp.bas.d329÷8xI1y          $(PAINTDIR).d32.d329/8xI1y
-        CMF Painters.32bpp.bas.d32Anyxy            $(PAINTDIR).d32.d32Anyxy
-
 adpcm_Decode_16:      Sound16.Type1.adpcm.play \
                       Sound16.Type1.Resources.Info
         MMD $(AUD16DIR).adpcm
@@ -1983,9 +2049,9 @@ Sound16.Type1.SoundU16:
 MovingLine_Decode:    Video.MovingLine.Decompress \
                       Video.MovingLine.Resources.Info
         MMD $(VIDDIR).MovingLine
-        CMF Video.MovingLine.DecompresB            $(VIDDIR).MovingLine.DecompresB
-        CMF Video.MovingLine.DecompresH            $(VIDDIR).MovingLine.DecompresH
-        CMF Video.MovingLine.Decompress            $(VIDDIR).MovingLine.Decompress
+        If1˜8bpp CMF Video.MovingLine.DecompresB   $(VIDDIR).MovingLine.DecompresB
+        If4˜16bpp CMF Video.MovingLine.DecompresH  $(VIDDIR).MovingLine.DecompresH
+        If8˜32bpp CMF Video.MovingLine.Decompress  $(VIDDIR).MovingLine.Decompress
         CMF Video.MovingLine.Resources.Info        $(VIDDIR).MovingLine.Info
 Video.MovingLine.Decompress: Video.MovingLine.bas.MakeDecomp
         /Video.MovingLine.bas.MakeDecomp
@@ -2000,8 +2066,8 @@ Decomp2_Decode:       Video.Decomp2.Decompress \
                       Video.Decomp2.Resources.Info
         MMD $(VIDDIR).Decomp2
         CMF Video.Decomp2.Dec16                    $(VIDDIR).Decomp2.Dec16
-        CMF Video.Decomp2.DecompresB               $(VIDDIR).Decomp2.DecompresB
-        CMF Video.Decomp2.Decompress               $(VIDDIR).Decomp2.Decompress
+        If1˜8bpp CMF Video.Decomp2.DecompresB      $(VIDDIR).Decomp2.DecompresB
+        If8˜32bpp CMF Video.Decomp2.Decompress     $(VIDDIR).Decomp2.Decompress
         CMF Video.Decomp2.Resources.Info           $(VIDDIR).Decomp2.Info
 Video.Decomp2.Decompress: Video.Decomp2.bas.MakeDecomp
         /Video.Decomp2.bas.MakeDecomp
@@ -2013,8 +2079,8 @@ Decomp3_Decode:       Video.Decomp3.Decompress \
                       Video.Decomp3.Resources.Info
         MMD $(VIDDIR).Decomp3
         CMF Video.Decomp3.Dec16                    $(VIDDIR).Decomp3.Dec16
-        CMF Video.Decomp3.DecompresB               $(VIDDIR).Decomp3.DecompresB
-        CMF Video.Decomp3.Decompress               $(VIDDIR).Decomp3.Decompress
+        If1˜8bpp CMF Video.Decomp3.DecompresB      $(VIDDIR).Decomp3.DecompresB
+        If8˜32bpp CMF Video.Decomp3.Decompress     $(VIDDIR).Decomp3.Decompress
         CMF Video.Decomp3.Resources.Info           $(VIDDIR).Decomp3.Info
 Video.Decomp3.Decompress: Video.Decomp3.bas.MakeDecomp
         /Video.Decomp3.bas.MakeDecomp
@@ -2026,7 +2092,7 @@ Decomp4_Decode:       Video.Decomp4.Decompress \
                       Video.Decomp4.Resources.Info
         MMD $(VIDDIR).Decomp4
         CMF Video.Decomp4.Dec8                     $(VIDDIR).Decomp4.Dec8
-        CMF Video.Decomp4.Decompress               $(VIDDIR).Decomp4.Decompress
+        If8˜32bpp CMF Video.Decomp4.Decompress     $(VIDDIR).Decomp4.Decompress
         CMF Video.Decomp4.Resources.Info           $(VIDDIR).Decomp4.Info
 Video.Decomp4.Decompress: Video.Decomp4.bas.MakeDecomp
         /Video.Decomp4.bas.MakeDecomp
@@ -2035,8 +2101,8 @@ Decomp5_Decode:       Video.Decomp5.Decompress \
                       Video.Decomp5.Resources.Info
         MMD $(VIDDIR).Decomp5
         CMF Video.Decomp5.Dec16                    $(VIDDIR).Decomp5.Dec16
-        CMF Video.Decomp5.DecompresB               $(VIDDIR).Decomp5.DecompresB
-        CMF Video.Decomp5.Decompress               $(VIDDIR).Decomp5.Decompress
+        If1˜8bpp CMF Video.Decomp5.DecompresB      $(VIDDIR).Decomp5.DecompresB
+        If8˜32bpp CMF Video.Decomp5.Decompress     $(VIDDIR).Decomp5.Decompress
         CMF Video.Decomp5.Resources.Info           $(VIDDIR).Decomp5.Info
 Video.Decomp5.Decompress: Video.Decomp5.bas.MakeDecomp
         /Video.Decomp5.bas.MakeDecomp
@@ -2048,8 +2114,8 @@ Decomp6_Decode:       Video.Decomp6.Decompress \
                       Video.Decomp6.Resources.Info
         MMD $(VIDDIR).Decomp6
         CMF Video.Decomp6.Dec16                    $(VIDDIR).Decomp6.Dec16
-        CMF Video.Decomp6.DecompresB               $(VIDDIR).Decomp6.DecompresB
-        CMF Video.Decomp6.Decompress               $(VIDDIR).Decomp6.Decompress
+        If1˜8bpp CMF Video.Decomp6.DecompresB      $(VIDDIR).Decomp6.DecompresB
+        If8˜32bpp CMF Video.Decomp6.Decompress     $(VIDDIR).Decomp6.Decompress
         CMF Video.Decomp6.Resources.Info           $(VIDDIR).Decomp6.Info
 Video.Decomp6.Decompress: Video.Decomp6.bas.MakeDecomp
         /Video.Decomp6.bas.MakeDecomp
@@ -2060,9 +2126,9 @@ Decomp6_Encode:       Video.Decomp6.bas.BatchComp
 Decomp7_Decode:       Video.Decomp7.Decompress \
                       Video.Decomp7.Resources.Info
         MMD $(VIDDIR).Decomp7
-        CMF Video.Decomp7.DecompresB               $(VIDDIR).Decomp7.DecompresB
-        CMF Video.Decomp7.DecompresH               $(VIDDIR).Decomp7.DecompresH
-        CMF Video.Decomp7.Decompress               $(VIDDIR).Decomp7.Decompress
+        If1˜8bpp CMF Video.Decomp7.DecompresB      $(VIDDIR).Decomp7.DecompresB
+        If4˜16bpp CMF Video.Decomp7.DecompresH     $(VIDDIR).Decomp7.DecompresH
+        If8˜32bpp CMF Video.Decomp7.Decompress     $(VIDDIR).Decomp7.Decompress
         CMF Video.Decomp7.Resources.Info           $(VIDDIR).Decomp7.Info
 Video.Decomp7.Decompress: Video.Decomp7.bas.MakeDecomp
         /Video.Decomp7.bas.MakeDecomp
@@ -2076,13 +2142,13 @@ Video.Decomp7.BatchComp: Video.Decomp7.bas.BatchComp
 Decomp8_Decode:       Video.Decomp8.Decompress \
                       Video.Decomp8.Resources.Info
         MMD $(VIDDIR).Decomp8
-        CMF Video.Decomp8.Dec21                    $(VIDDIR).Decomp8.Dec21
-        CMF Video.Decomp8.Dec24                    $(VIDDIR).Decomp8.Dec24
-        CMF Video.Decomp8.DecompresB               $(VIDDIR).Decomp8.DecompresB
-        CMF Video.Decomp8.DecompresH               $(VIDDIR).Decomp8.DecompresH
-        CMF Video.Decomp8.Decompress               $(VIDDIR).Decomp8.Decompress
-        CMF Video.Decomp8.FastDec21                $(VIDDIR).Decomp8.FastDec21
-        CMF Video.Decomp8.FastDec24                $(VIDDIR).Decomp8.FastDec24
+        If32bpp CMF Video.Decomp8.Dec21            $(VIDDIR).Decomp8.Dec21
+        If32bpp CMF Video.Decomp8.Dec24            $(VIDDIR).Decomp8.Dec24
+        If1˜8bpp CMF Video.Decomp8.DecompresB      $(VIDDIR).Decomp8.DecompresB
+        If4˜16bpp CMF Video.Decomp8.DecompresH     $(VIDDIR).Decomp8.DecompresH
+        If8˜32bpp CMF Video.Decomp8.Decompress     $(VIDDIR).Decomp8.Decompress
+        If32bpp CMF Video.Decomp8.FastDec21        $(VIDDIR).Decomp8.FastDec21
+        If32bpp CMF Video.Decomp8.FastDec24        $(VIDDIR).Decomp8.FastDec24
         CMF Video.Decomp8.Resources.Info           $(VIDDIR).Decomp8.Info
 Video.Decomp8.Decompress: Video.Decomp8.bas.MakeDecomp
         /Video.Decomp8.bas.MakeDecomp
@@ -2091,13 +2157,12 @@ Decomp9_Decode:       Video.Decomp9.Decompress \
                       Video.Decomp9.FastDec21 \
                       Video.Decomp9.Resources.Info
         MMD $(VIDDIR).Decomp9
-        CMF Video.Decomp9.Dec24                    $(VIDDIR).Decomp9.Dec24
-        CMF Video.Decomp9.DecompresB               $(VIDDIR).Decomp9.DecompresB
-        CMF Video.Decomp9.DecompresH               $(VIDDIR).Decomp9.DecompresH
-        CMF Video.Decomp9.Decompress               $(VIDDIR).Decomp9.Decompress
-        CMF Video.Decomp9.FastDec21                $(VIDDIR).Decomp9.FastDec21
-        CMF Video.Decomp9.FastDec24                $(VIDDIR).Decomp9.FastDec24
-        CMF Video.Decomp9.FastDecYUV               $(VIDDIR).Decomp9.FastDecYUV
+        If1˜8bpp CMF Video.Decomp9.DecompresB      $(VIDDIR).Decomp9.DecompresB
+        If4˜16bpp CMF Video.Decomp9.DecompresH     $(VIDDIR).Decomp9.DecompresH
+        If8˜32bpp CMF Video.Decomp9.Decompress     $(VIDDIR).Decomp9.Decompress
+        If32bpp CMF Video.Decomp9.FastDec21        $(VIDDIR).Decomp9.FastDec21
+        If32bpp CMF Video.Decomp9.FastDec24        $(VIDDIR).Decomp9.FastDec24
+        If32bpp CMF Video.Decomp9.FastDecYUV       $(VIDDIR).Decomp9.FastDecYUV
         CMF Video.Decomp9.Resources.Info           $(VIDDIR).Decomp9.Info
 Video.Decomp9.Decompress: Video.Decomp9.bas.MakeDecomp
         /Video.Decomp9.bas.MakeDecomp
@@ -2106,37 +2171,38 @@ Video.Decomp9.FastDec21: Video.Decomp9.bas.MakFastDec
 
 Decomp9_Encode:       Video.Decomp9.bas.BatchComp
         CMF Video.Decomp9.bas.BatchComp            $(VIDDIR).Decomp9.BatchComp
+        CMF Video.Decomp9.Dec24                    $(VIDDIR).Decomp9.Dec24
 
 Decomp10_Decode:      Video.Decomp10.Decompress \
                       Video.Decomp10.Resources.Info
         MMD $(VIDDIR).Decomp10
-        CMF Video.Decomp10.Dec24                   $(VIDDIR).Decomp10.Dec24
-        CMF Video.Decomp10.DecompresB              $(VIDDIR).Decomp10.DecompresB
-        CMF Video.Decomp10.DecompresH              $(VIDDIR).Decomp10.DecompresH
-        CMF Video.Decomp10.Decompress              $(VIDDIR).Decomp10.Decompress
-        CMF Video.Decomp10.FastDec21               $(VIDDIR).Decomp10.FastDec21
-        CMF Video.Decomp10.FastDec24               $(VIDDIR).Decomp10.FastDec24
-        CMF Video.Decomp10.FastDecYUV              $(VIDDIR).Decomp10.FastDecYUV
+        If1˜8bpp CMF Video.Decomp10.DecompresB     $(VIDDIR).Decomp10.DecompresB
+        If4˜16bpp CMF Video.Decomp10.DecompresH    $(VIDDIR).Decomp10.DecompresH
+        If8˜32bpp CMF Video.Decomp10.Decompress    $(VIDDIR).Decomp10.Decompress
+        If32bpp CMF Video.Decomp10.FastDec21       $(VIDDIR).Decomp10.FastDec21
+        If32bpp CMF Video.Decomp10.FastDec24       $(VIDDIR).Decomp10.FastDec24
+        If32bpp CMF Video.Decomp10.FastDecYUV      $(VIDDIR).Decomp10.FastDecYUV
         CMF Video.Decomp10.Resources.Info          $(VIDDIR).Decomp10.Info
 Video.Decomp10.Decompress: Video.Decomp10.bas.MakeDecomp
         /Video.Decomp10.bas.MakeDecomp
 
 Decomp10_Encode:      Video.Decomp10.bas.BatchComp
         CMF Video.Decomp10.bas.BatchComp           $(VIDDIR).Decomp10.BatchComp
+        CMF Video.Decomp10.Dec24                   $(VIDDIR).Decomp10.Dec24
 
 Decomp11_Decode:      Video.Decomp11.Decompress \
                       Video.Decomp11.Resources.Info
         MMD $(VIDDIR).Decomp11
-        CMF Video.Decomp11.Dec24                   $(VIDDIR).Decomp11.Dec24
-        CMF Video.Decomp11.DecompresB              $(VIDDIR).Decomp11.DecompresB
-        CMF Video.Decomp11.DecompresH              $(VIDDIR).Decomp11.DecompresH
-        CMF Video.Decomp11.Decompress              $(VIDDIR).Decomp11.Decompress
+        If1˜8bpp CMF Video.Decomp11.DecompresB     $(VIDDIR).Decomp11.DecompresB
+        If4˜16bpp CMF Video.Decomp11.DecompresH    $(VIDDIR).Decomp11.DecompresH
+        If8˜32bpp CMF Video.Decomp11.Decompress    $(VIDDIR).Decomp11.Decompress
         CMF Video.Decomp11.Resources.Info          $(VIDDIR).Decomp11.Info
 Video.Decomp11.Decompress: Video.Decomp11.bas.MakeDecomp
         /Video.Decomp11.bas.MakeDecomp
 
 Decomp11_Encode:      Video.Decomp11.bas.BatchComp
         CMF Video.Decomp11.bas.BatchComp           $(VIDDIR).Decomp11.BatchComp
+        CMF Video.Decomp11.Dec24                   $(VIDDIR).Decomp11.Dec24
 
 Decomp12_Decode:      Video.Decomp12.bas.!RunImage \
                       Video.Decomp12.bas.!RunImageM \
@@ -2172,13 +2238,13 @@ Decomp15_Decode:      Video.Decomp15.Resources.Info \
         MMD $(VIDDIR).Decomp15.Uncomp15
         MMD $(VIDDIR).Decomp15.Uncomp16
         CMF Video.Decomp15.Resources.Info          $(VIDDIR).Decomp15.Info
-        CMF Video.Decomp15.Uncomp15.DecompresB     $(VIDDIR).Decomp15.Uncomp15.DecompresB
-        CMF Video.Decomp15.Uncomp15.DecompresH     $(VIDDIR).Decomp15.Uncomp15.DecompresH
-        CMF Video.Decomp15.Uncomp15.Decompress     $(VIDDIR).Decomp15.Uncomp15.Decompress
+        If1˜8bpp CMF Video.Decomp15.Uncomp15.DecompresB $(VIDDIR).Decomp15.Uncomp15.DecompresB
+        If4˜16bpp CMF Video.Decomp15.Uncomp15.DecompresH $(VIDDIR).Decomp15.Uncomp15.DecompresH
+        If8˜32bpp CMF Video.Decomp15.Uncomp15.Decompress $(VIDDIR).Decomp15.Uncomp15.Decompress
         CMF Video.Decomp15.Uncomp15.Resources.Info $(VIDDIR).Decomp15.Uncomp15.Info
         CMF Video.Decomp15.Uncomp16.Dec16          $(VIDDIR).Decomp15.Uncomp16.Dec16
-        CMF Video.Decomp15.Uncomp16.DecompresB     $(VIDDIR).Decomp15.Uncomp16.DecompresB
-        CMF Video.Decomp15.Uncomp16.Decompress     $(VIDDIR).Decomp15.Uncomp16.Decompress
+        If1˜8bpp CMF Video.Decomp15.Uncomp16.DecompresB $(VIDDIR).Decomp15.Uncomp16.DecompresB
+        If8˜32bpp CMF Video.Decomp15.Uncomp16.Decompress $(VIDDIR).Decomp15.Uncomp16.Decompress
         CMF Video.Decomp15.Uncomp16.Resources.Info $(VIDDIR).Decomp15.Uncomp16.Info
 Video.Decomp15.Uncomp15.Decompress: Video.Decomp15.Uncomp15.bas.MakeDecomp
         /Video.Decomp15.Uncomp15.bas.MakeDecomp
@@ -2188,24 +2254,24 @@ Video.Decomp15.Uncomp16.Decompress: Video.Decomp15.Uncomp16.bas.MakeDecomp
 Decomp16_Decode:      Video.Decomp16.Decompress \
                       Video.Decomp16.Resources.Info
         MMD $(VIDDIR).Decomp16
-        CMF Video.Decomp16.Dec24                   $(VIDDIR).Decomp16.Dec24
-        CMF Video.Decomp16.DecompresB              $(VIDDIR).Decomp16.DecompresB
-        CMF Video.Decomp16.DecompresH              $(VIDDIR).Decomp16.DecompresH
-        CMF Video.Decomp16.Decompress              $(VIDDIR).Decomp16.Decompress
+        If1˜8bpp CMF Video.Decomp16.DecompresB     $(VIDDIR).Decomp16.DecompresB
+        If4˜16bpp CMF Video.Decomp16.DecompresH    $(VIDDIR).Decomp16.DecompresH
+        If8˜32bpp CMF Video.Decomp16.Decompress    $(VIDDIR).Decomp16.Decompress
         CMF Video.Decomp16.Resources.Info          $(VIDDIR).Decomp16.Info
 Video.Decomp16.Decompress: Video.Decomp16.bas.MakeDecomp
         /Video.Decomp16.bas.MakeDecomp
 
 Decomp16_Encode:      Video.Decomp16.bas.BatchComp
         CMF Video.Decomp16.bas.BatchComp           $(VIDDIR).Decomp16.BatchComp
+        CMF Video.Decomp16.Dec24                   $(VIDDIR).Decomp16.Dec24
 
 Decomp17_Decode:      Video.Decomp17.Decompress \
                       Video.Decomp17.Resources.Info
         MMD $(VIDDIR).Decomp17
         CMF Video.Decomp17.Dec16                   $(VIDDIR).Decomp17.Dec16
-        CMF Video.Decomp17.DecompresB              $(VIDDIR).Decomp17.DecompresB
-        CMF Video.Decomp17.DecompresH              $(VIDDIR).Decomp17.DecompresH
-        CMF Video.Decomp17.Decompress              $(VIDDIR).Decomp17.Decompress
+        If1˜8bpp CMF Video.Decomp17.DecompresB     $(VIDDIR).Decomp17.DecompresB
+        If4˜16bpp CMF Video.Decomp17.DecompresH    $(VIDDIR).Decomp17.DecompresH
+        If8˜32bpp CMF Video.Decomp17.Decompress    $(VIDDIR).Decomp17.Decompress
         CMF Video.Decomp17.Resources.Info          $(VIDDIR).Decomp17.Info
 Video.Decomp17.Decompress: Video.Decomp17.bas.MakeDecomp
         /Video.Decomp17.bas.MakeDecomp
@@ -2218,22 +2284,18 @@ Video.Decomp17.BatchComp: Video.Decomp17.bas.BatchComp
 
 Decomp18_Decode:      Video.Decomp18.Dec \
                       Video.Decomp18.Dec16 \
-                      Video.Decomp18.Dec21 \
                       Video.Decomp18.Dec216Y5UV \
-                      Video.Decomp18.Dec24 \
                       Video.Decomp18.Dec246Y5UV \
                       Video.Decomp18.DecB \
                       Video.Decomp18.DecH \
                       Video.Decomp18.Resources.Info
         MMD $(VIDDIR).Decomp18
-        CMF Video.Decomp18.Dec                     $(VIDDIR).Decomp18.Decompress
+        If8˜32bpp CMF Video.Decomp18.Dec           $(VIDDIR).Decomp18.Decompress
         CMF Video.Decomp18.Dec16                   $(VIDDIR).Decomp18.Dec16
-        CMF Video.Decomp18.Dec21                   $(VIDDIR).Decomp18.Dec21
-        CMF Video.Decomp18.Dec216Y5UV              $(VIDDIR).Decomp18.Dec216Y5UV
-        CMF Video.Decomp18.Dec24                   $(VIDDIR).Decomp18.Dec24
-        CMF Video.Decomp18.Dec246Y5UV              $(VIDDIR).Decomp18.Dec246Y5UV
-        CMF Video.Decomp18.DecB                    $(VIDDIR).Decomp18.DecompresB
-        CMF Video.Decomp18.DecH                    $(VIDDIR).Decomp18.DecompresH
+        If32bpp CMF Video.Decomp18.Dec216Y5UV      $(VIDDIR).Decomp18.Dec216Y5UV
+        If32bpp CMF Video.Decomp18.Dec246Y5UV      $(VIDDIR).Decomp18.Dec246Y5UV
+        If1˜8bpp CMF Video.Decomp18.DecB           $(VIDDIR).Decomp18.DecompresB
+        If4˜16bpp CMF Video.Decomp18.DecH          $(VIDDIR).Decomp18.DecompresH
         CMF Video.Decomp18.Resources.Info          $(VIDDIR).Decomp18.Info
 Video.Decomp18.Dec:
         @Dir Video.Decomp18
@@ -2243,17 +2305,9 @@ Video.Decomp18.Dec16:
         @Dir Video.Decomp18
         @amu_machine VARIANT=16
         @Up 2
-Video.Decomp18.Dec21:
-        @Dir Video.Decomp18
-        @amu_machine VARIANT=21
-        @Up 2
 Video.Decomp18.Dec216Y5UV:
         @Dir Video.Decomp18
         @amu_machine VARIANT=216Y5UV
-        @Up 2
-Video.Decomp18.Dec24:
-        @Dir Video.Decomp18
-        @amu_machine VARIANT=24
         @Up 2
 Video.Decomp18.Dec246Y5UV:
         @Dir Video.Decomp18
@@ -2270,24 +2324,36 @@ Video.Decomp18.DecH:
 
 Decomp18_Encode:      Video.Decomp18.BatchComp.BatchComp \
                       Video.Decomp18.Resources.Args \
+                      Video.Decomp18.Dec21 \
+                      Video.Decomp18.Dec24 \
                       Video.Decomp18.Resources.BatchComp \
                       Video.Decomp18.Resources.EBatchComp
         CMF Video.Decomp18.BatchComp.BatchComp     $(VIDDIR).Decomp18.RBatchComp
         CMF Video.Decomp18.Resources.Args          $(VIDDIR).Decomp18.Args
         CMF Video.Decomp18.Resources.BatchComp     $(VIDDIR).Decomp18.BatchComp
+        CMF Video.Decomp18.Dec21                   $(VIDDIR).Decomp18.Dec21
+        CMF Video.Decomp18.Dec24                   $(VIDDIR).Decomp18.Dec24
         CMF Video.Decomp18.Resources.EBatchComp    $(VIDDIR).Decomp18.EBatchComp
 Video.Decomp18.BatchComp.BatchComp:
         @Dir Video.Decomp18.BatchComp
         @amu_machine
         @Up 3
+Video.Decomp18.Dec21:
+        @Dir Video.Decomp18
+        @amu_machine VARIANT=21
+        @Up 2
+Video.Decomp18.Dec24:
+        @Dir Video.Decomp18
+        @amu_machine VARIANT=24
+        @Up 2
 
 Decomp19_Decode:      Video.Decomp19.Decompress \
                       Video.Decomp19.Resources.Info
         MMD $(VIDDIR).Decomp19
         CMF Video.Decomp19.Dec16                   $(VIDDIR).Decomp19.Dec16
-        CMF Video.Decomp19.DecompresB              $(VIDDIR).Decomp19.DecompresB
-        CMF Video.Decomp19.DecompresH              $(VIDDIR).Decomp19.DecompresH
-        CMF Video.Decomp19.Decompress              $(VIDDIR).Decomp19.Decompress
+        If1˜8bpp CMF Video.Decomp19.DecompresB     $(VIDDIR).Decomp19.DecompresB
+        If4˜16bpp CMF Video.Decomp19.DecompresH    $(VIDDIR).Decomp19.DecompresH
+        If8˜32bpp CMF Video.Decomp19.Decompress    $(VIDDIR).Decomp19.Decompress
         CMF Video.Decomp19.Resources.Info          $(VIDDIR).Decomp19.Info
 Video.Decomp19.Decompress: Video.Decomp19.bas.MakeDecomp
         /Video.Decomp19.bas.MakeDecomp
@@ -2299,36 +2365,35 @@ Video.Decomp19.BatchComp: Video.Decomp19.bas.BatchComp
         BASIC
 
 Decomp20_Decode:      Video.Decomp20.Decompress \
-                      Video.Decomp20.D4tab \
                       Video.Decomp20.Resources.Info
         MMD $(VIDDIR).Decomp20
-        CMF Video.Decomp20.D4tab                   $(VIDDIR).Decomp20.D4tab
-        CMF Video.Decomp20.DecompresB              $(VIDDIR).Decomp20.DecompresB
-        CMF Video.Decomp20.DecompresH              $(VIDDIR).Decomp20.DecompresH
-        CMF Video.Decomp20.Decompress              $(VIDDIR).Decomp20.Decompress
+        If1˜8bpp CMF Video.Decomp20.DecompresB     $(VIDDIR).Decomp20.DecompresB
+        If4˜16bpp CMF Video.Decomp20.DecompresH    $(VIDDIR).Decomp20.DecompresH
+        If8˜32bpp CMF Video.Decomp20.Decompress    $(VIDDIR).Decomp20.Decompress
         CMF Video.Decomp20.Resources.Info          $(VIDDIR).Decomp20.Info
-Video.Decomp20.D4tab: Video.Decomp20.bas.GenD4Table
-        /Video.Decomp20.bas.GenD4Table
 Video.Decomp20.Decompress: Video.Decomp20.bas.MakeDecomp
         /Video.Decomp20.bas.MakeDecomp
 
-Decomp20_Encode:      Video.Decomp20.BatchComp
+Decomp20_Encode:      Video.Decomp20.BatchComp \
+                      Video.Decomp20.D4tab
         CMF Video.Decomp20.BatchComp               $(VIDDIR).Decomp20.BatchComp
+        CMF Video.Decomp20.D4tab                   $(VIDDIR).Decomp20.D4tab
 Video.Decomp20.BatchComp: Video.Decomp20.bas.BatchComp
         /Video.Decomp20.crunch.BatchComp
         BASIC
+Video.Decomp20.D4tab: Video.Decomp20.bas.GenD4Table
+        /Video.Decomp20.bas.GenD4Table
 
 Decomp21_Decode:      Video.Decomp21.Decompress \
                       Video.Decomp21.FastDec21 \
                       Video.Decomp21.Resources.Info
         MMD $(VIDDIR).Decomp21
-        CMF Video.Decomp21.Dec24                   $(VIDDIR).Decomp21.Dec24
-        CMF Video.Decomp21.DecompresB              $(VIDDIR).Decomp21.DecompresB
-        CMF Video.Decomp21.DecompresH              $(VIDDIR).Decomp21.DecompresH
-        CMF Video.Decomp21.Decompress              $(VIDDIR).Decomp21.Decompress
-        CMF Video.Decomp21.FastDec21               $(VIDDIR).Decomp21.FastDec21
-        CMF Video.Decomp21.FastDec24               $(VIDDIR).Decomp21.FastDec24
-        CMF Video.Decomp21.FastDecYUV              $(VIDDIR).Decomp21.FastDecYUV
+        If1˜8bpp CMF Video.Decomp21.DecompresB     $(VIDDIR).Decomp21.DecompresB
+        If4˜16bpp CMF Video.Decomp21.DecompresH    $(VIDDIR).Decomp21.DecompresH
+        If8˜32bpp CMF Video.Decomp21.Decompress    $(VIDDIR).Decomp21.Decompress
+        If32bpp CMF Video.Decomp21.FastDec21       $(VIDDIR).Decomp21.FastDec21
+        If32bpp CMF Video.Decomp21.FastDec24       $(VIDDIR).Decomp21.FastDec24
+        If32bpp CMF Video.Decomp21.FastDecYUV      $(VIDDIR).Decomp21.FastDecYUV
         CMF Video.Decomp21.Resources.Info          $(VIDDIR).Decomp21.Info
 Video.Decomp21.Decompress: Video.Decomp21.bas.MakeDecomp
         /Video.Decomp21.bas.MakeDecomp
@@ -2337,31 +2402,32 @@ Video.Decomp21.FastDec21: Video.Decomp21.bas.MakFastDec
 
 Decomp21_Encode:      Video.Decomp21.bas.BatchComp
         CMF Video.Decomp21.bas.BatchComp           $(VIDDIR).Decomp21.BatchComp
+        CMF Video.Decomp21.Dec24                   $(VIDDIR).Decomp21.Dec24
 
 Decomp22_Decode:      Video.Decomp22.Decompress \
-                      Video.Decomp22.D4tab \
                       Video.Decomp22.Resources.Info
         MMD $(VIDDIR).Decomp22
-        CMF Video.Decomp22.D4tab                   $(VIDDIR).Decomp22.D4tab
-        CMF Video.Decomp22.Dec24                   $(VIDDIR).Decomp22.Dec24
-        CMF Video.Decomp22.DecompresB              $(VIDDIR).Decomp22.DecompresB
-        CMF Video.Decomp22.DecompresH              $(VIDDIR).Decomp22.DecompresH
-        CMF Video.Decomp22.Decompress              $(VIDDIR).Decomp22.Decompress
+        If1˜8bpp CMF Video.Decomp22.DecompresB     $(VIDDIR).Decomp22.DecompresB
+        If4˜16bpp CMF Video.Decomp22.DecompresH    $(VIDDIR).Decomp22.DecompresH
+        If8˜32bpp CMF Video.Decomp22.Decompress    $(VIDDIR).Decomp22.Decompress
         CMF Video.Decomp22.Resources.Info          $(VIDDIR).Decomp22.Info
-Video.Decomp22.D4tab: Video.Decomp22.bas.GenD4Table
-        /Video.Decomp22.bas.GenD4Table
 Video.Decomp22.Decompress: Video.Decomp22.bas.MakeDecomp
         /Video.Decomp22.bas.MakeDecomp
 
-Decomp22_Encode:      Video.Decomp22.bas.BatchComp
+Decomp22_Encode:      Video.Decomp22.bas.BatchComp \
+                      Video.Decomp22.D4tab
         CMF Video.Decomp22.bas.BatchComp           $(VIDDIR).Decomp22.BatchComp
+        CMF Video.Decomp22.D4tab                   $(VIDDIR).Decomp22.D4tab
+        CMF Video.Decomp22.Dec24                   $(VIDDIR).Decomp22.Dec24
+Video.Decomp22.D4tab: Video.Decomp22.bas.GenD4Table
+        /Video.Decomp22.bas.GenD4Table
 
 Decomp23_Decode:      Video.Decomp23.Decompress \
                       Video.Decomp23.Resources.Info
         MMD $(VIDDIR).Decomp23
         CMF Video.Decomp23.Dec16                   $(VIDDIR).Decomp23.Dec16
-        CMF Video.Decomp23.DecompresB              $(VIDDIR).Decomp23.DecompresB
-        CMF Video.Decomp23.Decompress              $(VIDDIR).Decomp23.Decompress
+        If1˜8bpp CMF Video.Decomp23.DecompresB     $(VIDDIR).Decomp23.DecompresB
+        If8˜32bpp CMF Video.Decomp23.Decompress    $(VIDDIR).Decomp23.Decompress
         CMF Video.Decomp23.Resources.Info          $(VIDDIR).Decomp23.Info
 Video.Decomp23.Decompress: Video.Decomp23.bas.MakeDecomp
         /Video.Decomp23.bas.MakeDecomp
@@ -2373,8 +2439,8 @@ Decomp24_Decode:      Video.Decomp24.Decompress \
                       Video.Decomp24.Resources.Info
         MMD $(VIDDIR).Decomp24
         CMF Video.Decomp24.Dec16                   $(VIDDIR).Decomp24.Dec16
-        CMF Video.Decomp24.DecompresB              $(VIDDIR).Decomp24.DecompresB
-        CMF Video.Decomp24.Decompress              $(VIDDIR).Decomp24.Decompress
+        If1˜8bpp CMF Video.Decomp24.DecompresB     $(VIDDIR).Decomp24.DecompresB
+        If8˜32bpp CMF Video.Decomp24.Decompress    $(VIDDIR).Decomp24.Decompress
         CMF Video.Decomp24.Resources.Info          $(VIDDIR).Decomp24.Info
 Video.Decomp24.Decompress: Video.Decomp24.bas.MakeDecomp
         /Video.Decomp24.bas.MakeDecomp
@@ -2383,109 +2449,122 @@ Decomp24_Encode:      Video.Decomp24.bas.BatchComp
         CMF Video.Decomp24.bas.BatchComp           $(VIDDIR).Decomp24.BatchComp
 
 Decomp25_Decode:      Video.Decomp25.Decompress \
-                      Video.Decomp25.D4tab \
-                      Video.Decomp25.D4tabU \
                       Video.Decomp25.Resources.Info
         MMD $(VIDDIR).Decomp25
+        If4˜16bpp CMF Video.Decomp25.DecompresH    $(VIDDIR).Decomp25.DecompresH
+        If8˜32bpp CMF Video.Decomp25.Decompress    $(VIDDIR).Decomp25.Decompress
+        If32bpp CMF Video.Decomp25.FastDecYUV      $(VIDDIR).Decomp25.FastDecYUV
+        CMF Video.Decomp25.Resources.Info          $(VIDDIR).Decomp25.Info
+Video.Decomp25.Decompress: Video.Decomp25.bas.MakeDecomp
+        /Video.Decomp25.bas.MakeDecomp
+
+Decomp25_Encode:      Video.Decomp25.bas.BatchComp \
+                      Video.Decomp25.D4tab \
+                      Video.Decomp25.D4tabU
+        CMF Video.Decomp25.bas.BatchComp           $(VIDDIR).Decomp25.BatchComp
         CMF Video.Decomp25.D4tab                   $(VIDDIR).Decomp25.D4tab
         CMF Video.Decomp25.D4tabU                  $(VIDDIR).Decomp25.D4tabU
         CMF Video.Decomp25.Dec24                   $(VIDDIR).Decomp25.Dec24
-        CMF Video.Decomp25.DecompresH              $(VIDDIR).Decomp25.DecompresH
-        CMF Video.Decomp25.Decompress              $(VIDDIR).Decomp25.Decompress
-        CMF Video.Decomp25.FastDecYUV              $(VIDDIR).Decomp25.FastDecYUV
-        CMF Video.Decomp25.Resources.Info          $(VIDDIR).Decomp25.Info
 Video.Decomp25.D4tab: Video.Decomp25.bas.GenD4Table
         /Video.Decomp25.bas.GenD4Table
 Video.Decomp25.D4tabU: Video.Decomp25.bas.GenD4Uns
         /Video.Decomp25.bas.GenD4Uns
-Video.Decomp25.Decompress: Video.Decomp25.bas.MakeDecomp
-        /Video.Decomp25.bas.MakeDecomp
-
-Decomp25_Encode:      Video.Decomp25.bas.BatchComp
-        CMF Video.Decomp25.bas.BatchComp           $(VIDDIR).Decomp25.BatchComp
 
 Decomp26_Decode:      Video.Decomp26.Decompress \
-                      Video.Decomp26.D4tab \
-                      Video.Decomp26.D4tabU \
                       Video.Decomp26.Resources.Info
         MMD $(VIDDIR).Decomp26
+        If4˜16bpp CMF Video.Decomp26.DecompresH    $(VIDDIR).Decomp26.DecompresH
+        If8˜32bpp CMF Video.Decomp26.Decompress    $(VIDDIR).Decomp26.Decompress
+        CMF Video.Decomp26.Resources.Info          $(VIDDIR).Decomp26.Info
+Video.Decomp26.Decompress: Video.Decomp26.bas.MakeDecomp
+        /Video.Decomp26.bas.MakeDecomp
+
+Decomp26_Encode:      Video.Decomp26.bas.BatchComp \
+                      Video.Decomp26.D4tab \
+                      Video.Decomp26.D4tabU
+        CMF Video.Decomp26.bas.BatchComp           $(VIDDIR).Decomp26.BatchComp
         CMF Video.Decomp26.D4tab                   $(VIDDIR).Decomp26.D4tab
         CMF Video.Decomp26.D4tabU                  $(VIDDIR).Decomp26.D4tabU
         CMF Video.Decomp26.Dec24                   $(VIDDIR).Decomp26.Dec24
-        CMF Video.Decomp26.DecompresH              $(VIDDIR).Decomp26.DecompresH
-        CMF Video.Decomp26.Decompress              $(VIDDIR).Decomp26.Decompress
-        CMF Video.Decomp26.Resources.Info          $(VIDDIR).Decomp26.Info
 Video.Decomp26.D4tab: Video.Decomp26.bas.GenD4Table
         /Video.Decomp26.bas.GenD4Table
 Video.Decomp26.D4tabU: Video.Decomp26.bas.GenD4Uns
         /Video.Decomp26.bas.GenD4Uns
-Video.Decomp26.Decompress: Video.Decomp26.bas.MakeDecomp
-        /Video.Decomp26.bas.MakeDecomp
-
-Decomp26_Encode:      Video.Decomp26.bas.BatchComp
-        CMF Video.Decomp26.bas.BatchComp           $(VIDDIR).Decomp26.BatchComp
 
 Decomp27_Decode:      Video.Decomp27.Decompress \
-                      Video.Decomp27.D4tab \
-                      Video.Decomp27.D4tabU \
                       Video.Decomp27.Resources.Info
         MMD $(VIDDIR).Decomp27
+        If4˜16bpp CMF Video.Decomp27.DecompresH    $(VIDDIR).Decomp27.DecompresH
+        If8˜32bpp CMF Video.Decomp27.Decompress    $(VIDDIR).Decomp27.Decompress
+        CMF Video.Decomp27.Resources.Info          $(VIDDIR).Decomp27.Info
+Video.Decomp27.Decompress: Video.Decomp27.bas.MakeDecomp
+        /Video.Decomp27.bas.MakeDecomp
+
+Decomp27_Encode:      Video.Decomp27.bas.BatchComp \
+                      Video.Decomp27.D4tab \
+                      Video.Decomp27.D4tabU
+        CMF Video.Decomp27.bas.BatchComp           $(VIDDIR).Decomp27.BatchComp
         CMF Video.Decomp27.D4tab                   $(VIDDIR).Decomp27.D4tab
         CMF Video.Decomp27.D4tabU                  $(VIDDIR).Decomp27.D4tabU
         CMF Video.Decomp27.Dec24                   $(VIDDIR).Decomp27.Dec24
-        CMF Video.Decomp27.DecompresH              $(VIDDIR).Decomp27.DecompresH
-        CMF Video.Decomp27.Decompress              $(VIDDIR).Decomp27.Decompress
-        CMF Video.Decomp27.Resources.Info          $(VIDDIR).Decomp27.Info
 Video.Decomp27.D4tab: Video.Decomp27.bas.GenD4Table
         /Video.Decomp27.bas.GenD4Table
 Video.Decomp27.D4tabU: Video.Decomp27.bas.GenD4Uns
         /Video.Decomp27.bas.GenD4Uns
-Video.Decomp27.Decompress: Video.Decomp27.bas.MakeDecomp
-        /Video.Decomp27.bas.MakeDecomp
-
-Decomp27_Encode:      Video.Decomp27.bas.BatchComp
-        CMF Video.Decomp27.bas.BatchComp           $(VIDDIR).Decomp27.BatchComp
 
 Decomp100_Decode:     Video.Decomp100.Decompress \
                       Video.Decomp100.Resources.Info
         MMD $(VIDDIR).Decomp100
-        CMF Video.Decomp100.Decompress             $(VIDDIR).Decomp100.Decompress
+        If8˜32bpp CMF Video.Decomp100.Decompress   $(VIDDIR).Decomp100.Decompress
         CMF Video.Decomp100.Resources.Info         $(VIDDIR).Decomp100.Info
+
+Decomp500_Decode:     Video.Decomp500.bas.!RunImage \
+                      Video.Decomp500.Resources.Info \
+                      Video.Decomp500.Resources.ReadMe \
+                      Video.Decomp500.rm.EuclidX \
+                      Video.Decomp500.rm.IotaSound
+        MMD $(VIDDIR).Decomp500
+        CMF Video.Decomp500.bas.!RunImage          $(VIDDIR).Decomp500.!RunImage
+        CMF Video.Decomp500.Resources.Info         $(VIDDIR).Decomp500.Info
+        CMF Video.Decomp500.Resources.ReadMe       $(VIDDIR).Decomp500.ReadMe
+        CMF Video.Decomp500.rm.EuclidX             $(VIDDIR).Decomp500.EuclidX
+        CMF Video.Decomp500.rm.IotaSound           $(VIDDIR).Decomp500.IotaSound
 
 Decomp600_Decode:     Video.Decomp600.DecompresH \
                       Video.Decomp600.Decompress \
                       Video.Decomp600.Resources.Info
         MMD $(VIDDIR).Decomp600
-        CMF Video.Decomp600.DecompresH             $(VIDDIR).Decomp600.DecompresH
-        CMF Video.Decomp600.Decompress             $(VIDDIR).Decomp600.Decompress
+        If4˜16bpp CMF Video.Decomp600.DecompresH   $(VIDDIR).Decomp600.DecompresH
+        If8˜32bpp CMF Video.Decomp600.Decompress   $(VIDDIR).Decomp600.Decompress
         CMF Video.Decomp600.Resources.Info         $(VIDDIR).Decomp600.Info
 
 Decomp601_Decode:     Video.Decomp601.DecompresH \
                       Video.Decomp601.Decompress \
                       Video.Decomp601.Resources.Info
         MMD $(VIDDIR).Decomp601
-        CMF Video.Decomp601.DecompresH             $(VIDDIR).Decomp601.DecompresH
-        CMF Video.Decomp601.Decompress             $(VIDDIR).Decomp601.Decompress
+        If4˜16bpp CMF Video.Decomp601.DecompresH   $(VIDDIR).Decomp601.DecompresH
+        If8˜32bpp CMF Video.Decomp601.Decompress   $(VIDDIR).Decomp601.Decompress
         CMF Video.Decomp601.Resources.Info         $(VIDDIR).Decomp601.Info
 
-Decomp602_Decode:     Video.Decomp602.Dec21 \
-                      Video.Decomp602.Dec24 \
-                      Video.Decomp602.DecompresH \
+Decomp602_Decode:     Video.Decomp602.DecompresH \
                       Video.Decomp602.Decompress \
                       Video.Decomp602.Resources.Info
         MMD $(VIDDIR).Decomp602
+        If4˜16bpp CMF Video.Decomp602.DecompresH   $(VIDDIR).Decomp602.DecompresH
+        If8˜32bpp CMF Video.Decomp602.Decompress   $(VIDDIR).Decomp602.Decompress
+        CMF Video.Decomp602.Resources.Info         $(VIDDIR).Decomp602.Info
+
+Decomp602_Encode:     Video.Decomp602.Dec21 \
+                      Video.Decomp602.Dec24
         CMF Video.Decomp602.Dec21                  $(VIDDIR).Decomp602.Dec21
         CMF Video.Decomp602.Dec24                  $(VIDDIR).Decomp602.Dec24
-        CMF Video.Decomp602.DecompresH             $(VIDDIR).Decomp602.DecompresH
-        CMF Video.Decomp602.Decompress             $(VIDDIR).Decomp602.Decompress
-        CMF Video.Decomp602.Resources.Info         $(VIDDIR).Decomp602.Info
 
 Decomp603_Decode:     Video.Decomp603.DecompresH \
                       Video.Decomp603.Decompress \
                       Video.Decomp603.Resources.Info
         MMD $(VIDDIR).Decomp603
-        CMF Video.Decomp603.DecompresH             $(VIDDIR).Decomp603.DecompresH
-        CMF Video.Decomp603.Decompress             $(VIDDIR).Decomp603.Decompress
+        If4˜16bpp CMF Video.Decomp603.DecompresH   $(VIDDIR).Decomp603.DecompresH
+        If8˜32bpp CMF Video.Decomp603.Decompress   $(VIDDIR).Decomp603.Decompress
         CMF Video.Decomp603.Resources.Info         $(VIDDIR).Decomp603.Info
 
 Decomp604_Decode:     Video.Decomp604.Dec8 \
@@ -2494,8 +2573,8 @@ Decomp604_Decode:     Video.Decomp604.Dec8 \
                       Video.Decomp604.Resources.Info
         MMD $(VIDDIR).Decomp604
         CMF Video.Decomp604.Dec8                   $(VIDDIR).Decomp604.Dec8
-        CMF Video.Decomp604.DecompresH             $(VIDDIR).Decomp604.DecompresH
-        CMF Video.Decomp604.Decompress             $(VIDDIR).Decomp604.Decompress
+        If4˜16bpp CMF Video.Decomp604.DecompresH   $(VIDDIR).Decomp604.DecompresH
+        If8˜32bpp CMF Video.Decomp604.Decompress   $(VIDDIR).Decomp604.Decompress
         CMF Video.Decomp604.Resources.Info         $(VIDDIR).Decomp604.Info
 
 Decomp605_Decode:     Video.Decomp605.DecompresB \
@@ -2503,9 +2582,9 @@ Decomp605_Decode:     Video.Decomp605.DecompresB \
                       Video.Decomp605.Decompress \
                       Video.Decomp605.Resources.Info
         MMD $(VIDDIR).Decomp605
-        CMF Video.Decomp605.DecompresB             $(VIDDIR).Decomp605.DecompresB
-        CMF Video.Decomp605.DecompresH             $(VIDDIR).Decomp605.DecompresH
-        CMF Video.Decomp605.Decompress             $(VIDDIR).Decomp605.Decompress
+        If1˜8bpp CMF Video.Decomp605.DecompresB    $(VIDDIR).Decomp605.DecompresB
+        If4˜16bpp CMF Video.Decomp605.DecompresH   $(VIDDIR).Decomp605.DecompresH
+        If8˜32bpp CMF Video.Decomp605.Decompress   $(VIDDIR).Decomp605.Decompress
         CMF Video.Decomp605.Resources.Info         $(VIDDIR).Decomp605.Info
 
 Decomp606_Decode:     Video.Decomp606.Dec8 \
@@ -2514,8 +2593,8 @@ Decomp606_Decode:     Video.Decomp606.Dec8 \
                       Video.Decomp606.Resources.Info
         MMD $(VIDDIR).Decomp606
         CMF Video.Decomp606.Dec8                   $(VIDDIR).Decomp606.Dec8
-        CMF Video.Decomp606.DecompresH             $(VIDDIR).Decomp606.DecompresH
-        CMF Video.Decomp606.Decompress             $(VIDDIR).Decomp606.Decompress
+        If4˜16bpp CMF Video.Decomp606.DecompresH   $(VIDDIR).Decomp606.DecompresH
+        If8˜32bpp CMF Video.Decomp606.Decompress   $(VIDDIR).Decomp606.Decompress
         CMF Video.Decomp606.Resources.Info         $(VIDDIR).Decomp606.Info
 
 Decomp607_Decode:     Video.Decomp607.Dec8 \
@@ -2523,7 +2602,7 @@ Decomp607_Decode:     Video.Decomp607.Dec8 \
                       Video.Decomp607.Resources.Info
         MMD $(VIDDIR).Decomp607
         CMF Video.Decomp607.Dec8                   $(VIDDIR).Decomp607.Dec8
-        CMF Video.Decomp607.Decompress             $(VIDDIR).Decomp607.Decompress
+        If8˜32bpp CMF Video.Decomp607.Decompress   $(VIDDIR).Decomp607.Decompress
         CMF Video.Decomp607.Resources.Info         $(VIDDIR).Decomp607.Info
 
 Decomp608_Decode:     Video.Decomp608.Dec24 \
@@ -2531,45 +2610,45 @@ Decomp608_Decode:     Video.Decomp608.Dec24 \
                       Video.Decomp608.Decompress \
                       Video.Decomp608.Resources.Info
         MMD $(VIDDIR).Decomp608
-        CMF Video.Decomp608.Dec24                  $(VIDDIR).Decomp608.Dec24
-        CMF Video.Decomp608.DecompresH             $(VIDDIR).Decomp608.DecompresH
-        CMF Video.Decomp608.Decompress             $(VIDDIR).Decomp608.Decompress
+        If32bpp CMF Video.Decomp608.Dec24          $(VIDDIR).Decomp608.Dec24
+        If4˜16bpp CMF Video.Decomp608.DecompresH   $(VIDDIR).Decomp608.DecompresH
+        If8˜32bpp CMF Video.Decomp608.Decompress   $(VIDDIR).Decomp608.Decompress
         CMF Video.Decomp608.Resources.Info         $(VIDDIR).Decomp608.Info
 
 Decomp609_Decode:     Video.Decomp609.DecompresH \
                       Video.Decomp609.Decompress \
                       Video.Decomp609.Resources.Info
         MMD $(VIDDIR).Decomp609
-        CMF Video.Decomp609.DecompresH             $(VIDDIR).Decomp609.DecompresH
-        CMF Video.Decomp609.Decompress             $(VIDDIR).Decomp609.Decompress
+        If4˜16bpp CMF Video.Decomp609.DecompresH   $(VIDDIR).Decomp609.DecompresH
+        If8˜32bpp CMF Video.Decomp609.Decompress   $(VIDDIR).Decomp609.Decompress
         CMF Video.Decomp609.Resources.Info         $(VIDDIR).Decomp609.Info
 
 Decomp610_Decode:     Video.Decomp610.Decompress \
                       Video.Decomp610.Resources.Info
         MMD $(VIDDIR).Decomp610
-        CMF Video.Decomp610.Decompress             $(VIDDIR).Decomp610.Decompress
+        If8˜32bpp CMF Video.Decomp610.Decompress   $(VIDDIR).Decomp610.Decompress
         CMF Video.Decomp610.Resources.Info         $(VIDDIR).Decomp610.Info
 
 Decomp613_Decode:     Video.Decomp613.Decompress \
                       Video.Decomp613.Resources.Info
         MMD $(VIDDIR).Decomp613
-        CMF Video.Decomp613.Decompress             $(VIDDIR).Decomp613.Decompress
+        If8˜32bpp CMF Video.Decomp613.Decompress   $(VIDDIR).Decomp613.Decompress
         CMF Video.Decomp613.Resources.Info         $(VIDDIR).Decomp613.Info
 
 Decomp614_Decode:     Video.Decomp614.DecompresH \
                       Video.Decomp614.Decompress \
                       Video.Decomp614.Resources.Info
         MMD $(VIDDIR).Decomp614
-        CMF Video.Decomp614.DecompresH             $(VIDDIR).Decomp614.DecompresH
-        CMF Video.Decomp614.Decompress             $(VIDDIR).Decomp614.Decompress
+        If4˜16bpp CMF Video.Decomp614.DecompresH   $(VIDDIR).Decomp614.DecompresH
+        If8˜32bpp CMF Video.Decomp614.Decompress   $(VIDDIR).Decomp614.Decompress
         CMF Video.Decomp614.Resources.Info         $(VIDDIR).Decomp614.Info
 
 Decomp615_Decode:     Video.Decomp615.DecompresH \
                       Video.Decomp615.Decompress \
                       Video.Decomp615.Resources.Info
         MMD $(VIDDIR).Decomp615
-        CMF Video.Decomp615.DecompresH             $(VIDDIR).Decomp615.DecompresH
-        CMF Video.Decomp615.Decompress             $(VIDDIR).Decomp615.Decompress
+        If4˜16bpp CMF Video.Decomp615.DecompresH   $(VIDDIR).Decomp615.DecompresH
+        If8˜32bpp CMF Video.Decomp615.Decompress   $(VIDDIR).Decomp615.Decompress
         CMF Video.Decomp615.Resources.Info         $(VIDDIR).Decomp615.Info
 
 Decomp622_Decode:     Video.Decomp622.Dec8 \
@@ -2577,7 +2656,7 @@ Decomp622_Decode:     Video.Decomp622.Dec8 \
                       Video.Decomp622.Resources.Info
         MMD $(VIDDIR).Decomp622
         CMF Video.Decomp622.Dec8                   $(VIDDIR).Decomp622.Dec8
-        CMF Video.Decomp622.Decompress             $(VIDDIR).Decomp622.Decompress
+        If8˜32bpp CMF Video.Decomp622.Decompress   $(VIDDIR).Decomp622.Decompress
         CMF Video.Decomp622.Resources.Info         $(VIDDIR).Decomp622.Info
 
 Decomp623_Decode:     Video.Decomp623.Dec8 \
@@ -2585,7 +2664,7 @@ Decomp623_Decode:     Video.Decomp623.Dec8 \
                       Video.Decomp623.Resources.Info
         MMD $(VIDDIR).Decomp623
         CMF Video.Decomp623.Dec8                   $(VIDDIR).Decomp623.Dec8
-        CMF Video.Decomp623.Decompress             $(VIDDIR).Decomp623.Decompress
+        If8˜32bpp CMF Video.Decomp623.Decompress   $(VIDDIR).Decomp623.Decompress
         CMF Video.Decomp623.Resources.Info         $(VIDDIR).Decomp623.Info
 
 Decomp624_Decode:     Video.Decomp624.DecompresB \
@@ -2593,9 +2672,9 @@ Decomp624_Decode:     Video.Decomp624.DecompresB \
                       Video.Decomp624.Decompress \
                       Video.Decomp624.Resources.Info
         MMD $(VIDDIR).Decomp624
-        CMF Video.Decomp624.DecompresB             $(VIDDIR).Decomp624.DecompresB
-        CMF Video.Decomp624.DecompresH             $(VIDDIR).Decomp624.DecompresH
-        CMF Video.Decomp624.Decompress             $(VIDDIR).Decomp624.Decompress
+        If1˜8bpp CMF Video.Decomp624.DecompresB    $(VIDDIR).Decomp624.DecompresB
+        If4˜16bpp CMF Video.Decomp624.DecompresH   $(VIDDIR).Decomp624.DecompresH
+        If8˜32bpp CMF Video.Decomp624.Decompress   $(VIDDIR).Decomp624.Decompress
         CMF Video.Decomp624.Resources.Info         $(VIDDIR).Decomp624.Info
 
 Decomp626_Decode:     Video.Decomp626.Dec21 \
@@ -2603,27 +2682,27 @@ Decomp626_Decode:     Video.Decomp626.Dec21 \
                       Video.Decomp626.Decompress \
                       Video.Decomp626.Resources.Info
         MMD $(VIDDIR).Decomp626
-        CMF Video.Decomp626.Dec21                  $(VIDDIR).Decomp626.Dec21
-        CMF Video.Decomp626.Dec24                  $(VIDDIR).Decomp626.Dec24
-        CMF Video.Decomp626.Decompress             $(VIDDIR).Decomp626.Decompress
+        If32bpp CMF Video.Decomp626.Dec21          $(VIDDIR).Decomp626.Dec21
+        If32bpp CMF Video.Decomp626.Dec24          $(VIDDIR).Decomp626.Dec24
+        If8˜32bpp CMF Video.Decomp626.Decompress   $(VIDDIR).Decomp626.Decompress
         CMF Video.Decomp626.Resources.Info         $(VIDDIR).Decomp626.Info
 
 Decomp627_Decode:     Video.Decomp627.Decompress \
                       Video.Decomp627.Resources.Info
         MMD $(VIDDIR).Decomp627
-        CMF Video.Decomp627.Decompress             $(VIDDIR).Decomp627.Decompress
+        If8˜32bpp CMF Video.Decomp627.Decompress   $(VIDDIR).Decomp627.Decompress
         CMF Video.Decomp627.Resources.Info         $(VIDDIR).Decomp627.Info
 
 Decomp628_Decode:     Video.Decomp628.Decompress \
                       Video.Decomp628.Resources.Info
         MMD $(VIDDIR).Decomp628
-        CMF Video.Decomp628.Decompress             $(VIDDIR).Decomp628.Decompress
+        If8˜32bpp CMF Video.Decomp628.Decompress   $(VIDDIR).Decomp628.Decompress
         CMF Video.Decomp628.Resources.Info         $(VIDDIR).Decomp628.Info
 
 Decomp629_Decode:     Video.Decomp629.Decompress \
                       Video.Decomp629.Resources.Info
         MMD $(VIDDIR).Decomp629
-        CMF Video.Decomp629.Decompress             $(VIDDIR).Decomp629.Decompress
+        If8˜32bpp CMF Video.Decomp629.Decompress   $(VIDDIR).Decomp629.Decompress
         CMF Video.Decomp629.Resources.Info         $(VIDDIR).Decomp629.Info
 
 Decomp630_Decode:     Video.Decomp630.Resources.!RunImage \
@@ -2635,7 +2714,7 @@ Decomp630_Decode:     Video.Decomp630.Resources.!RunImage \
 Decomp699_Decode:     Video.Decomp699.Decompress \
                       Video.Decomp699.Resources.Info
         MMD $(VIDDIR).Decomp699
-        CMF Video.Decomp699.Decompress             $(VIDDIR).Decomp699.Decompress
+        If8˜32bpp CMF Video.Decomp699.Decompress   $(VIDDIR).Decomp699.Decompress
         CMF Video.Decomp699.Resources.Info         $(VIDDIR).Decomp699.Info
 Video.Decomp699.Decompress: Video.Decomp699.bas.MakeDecomp
         /Video.Decomp699.bas.MakeDecomp
@@ -2643,7 +2722,7 @@ Video.Decomp699.Decompress: Video.Decomp699.bas.MakeDecomp
 Decomp800_Decode:     Video.Decomp800.Decompress \
                       Video.Decomp800.Resources.Info
         MMD $(VIDDIR).Decomp800
-        CMF Video.Decomp800.Decompress             $(VIDDIR).Decomp800.Decompress
+        If8˜32bpp CMF Video.Decomp800.Decompress   $(VIDDIR).Decomp800.Decompress
         CMF Video.Decomp800.Resources.Info         $(VIDDIR).Decomp800.Info
 
 Decomp800_Encode:     Video.Decomp800.bas.BatchComp \
@@ -2659,7 +2738,7 @@ Decomp800_Encode:     Video.Decomp800.bas.BatchComp \
 Decomp802_Decode:     Video.Decomp802.Decompress \
                       Video.Decomp802.Resources.Info
         MMD $(VIDDIR).Decomp802
-        CMF Video.Decomp802.Decompress             $(VIDDIR).Decomp802.Decompress
+        If8˜32bpp CMF Video.Decomp802.Decompress   $(VIDDIR).Decomp802.Decompress
         CMF Video.Decomp802.Resources.Info         $(VIDDIR).Decomp802.Info
 
 Decomp802_Encode:     Video.Decomp802.bas.BatchComp \
@@ -2675,13 +2754,13 @@ Decomp802_Encode:     Video.Decomp802.bas.BatchComp \
 Decomp900_Decode:     Video.Decomp900.Decompress \
                       Video.Decomp900.Resources.Info
         MMD $(VIDDIR).Decomp900
-        CMF Video.Decomp900.Decompress             $(VIDDIR).Decomp900.Decompress
+        If8˜32bpp CMF Video.Decomp900.Decompress   $(VIDDIR).Decomp900.Decompress
         CMF Video.Decomp900.Resources.Info         $(VIDDIR).Decomp900.Info
 
 Decomp901_Decode:     Video.Decomp901.Decompress \
                       Video.Decomp901.Resources.Info
         MMD $(VIDDIR).Decomp901
-        CMF Video.Decomp901.Decompress             $(VIDDIR).Decomp901.Decompress
+        If8˜32bpp CMF Video.Decomp901.Decompress   $(VIDDIR).Decomp901.Decompress
         CMF Video.Decomp901.Resources.Info         $(VIDDIR).Decomp901.Info
 Video.Decomp901.Decompress:
         @Dir Video.Decomp901
@@ -2693,7 +2772,7 @@ Decomp902_Decode:     Video.Decomp902.Dec16 \
                       Video.Decomp902.Resources.Info
         MMD $(VIDDIR).Decomp902
         CMF Video.Decomp902.Dec16                  $(VIDDIR).Decomp902.Dec16
-        CMF Video.Decomp902.Decompress             $(VIDDIR).Decomp902.Decompress
+        If8˜32bpp CMF Video.Decomp902.Decompress   $(VIDDIR).Decomp902.Decompress
         CMF Video.Decomp902.Resources.Info         $(VIDDIR).Decomp902.Info
 Video.Decomp902.Decompress:
         @Dir Video.Decomp902

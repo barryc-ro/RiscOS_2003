@@ -189,30 +189,3 @@ $(TARGETMEM): $(OBJSMEM) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.quant: c.quant h.sim h.config h.macros
-o.Logger: c.Logger h.logger h.bool h.error h.bool C:h.stdlib
-o.inkey: c.inkey C:h.swis C:h.kernel h.error
-o.flushc: s.flushc
-o.filestuff: c.filestuff h.bool C:h.ctype h.filestuff h.bool h.flt h.flt h.error
-o.mainplan: c.mainplan h.HierProf h.reader h.flt h.filestuff h.bool h.flt h.cdir h.sim h.config h.macros h.error h.batchcomp h.bool h.flt h.Logger h.bool h.tmnarg h.config h.checkpoint h.bool h.setenv h.compIF h.bool h.batchcomp h.Tmnarg
-o.reader: c.reader h.filestuff h.bool h.flt h.blatasm h.decerr C:h.string h.do8YUV2CIF h.reader h.flt h.error h.decerr
-o.do8YUV2CIF: c.do8YUV2CIF
-o.blatasm: s.blatasm
-o.coder: c.coder h.sim h.config h.macros h.error
-o.countbit: c.countbit h.sim h.config h.macros h.sactbls h.indices h.putvlc
-o.dct: c.dct h.macros h.sim h.config h.macros
-o.io: c.io h.sim h.config h.macros h.reader h.flt
-o.mot_est: c.mot_est h.sim h.config h.macros
-o.pred: c.pred h.sim h.config h.macros
-o.putvlc: c.putvlc h.sim h.config h.macros h.vlc
-o.putbits: c.putbits h.sim h.config h.macros
-o.ratectrl: c.ratectrl h.Logger h.bool h.sim h.config h.macros
-o.sac: c.sac h.sim h.config h.macros
-o.snr: c.snr h.sim h.config h.macros
-o.tmnmain: c.tmnmain h.sim h.config h.macros h.tmnarg h.config h.logger h.bool h.checkpoint h.bool
-o.tmnarg: c.tmnarg h.tmnarg h.config h.sim h.config h.macros
-o.getargs: c.getargs h.getargs C:h.swis C:h.kernel h.error
-o.batchcomp: c.batchcomp h.getargs h.error h.bool h.batchcomp h.bool h.flt C:h.stdlib C:h.stdio h.filestuff h.bool h.flt h.compIF h.bool h.batchcomp h.Tmnarg h.config
-o.checkpoint: c.checkpoint h.inkey h.checkpoint h.bool h.bool h.error h.Logger h.bool h.setenv C:h.stdlib h.reader h.flt
-o.setenv: c.setenv h.setenv C:h.swis C:h.kernel
-o.h263_compif: c.h263_compif h.bool h.batchcomp h.bool h.flt h.error h.tmnarg h.config h.t_init h.compIF h.bool h.batchcomp h.Tmnarg h.filestuff h.bool h.flt h.h263_pict

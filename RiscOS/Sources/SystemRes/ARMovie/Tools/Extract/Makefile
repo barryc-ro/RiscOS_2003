@@ -70,4 +70,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.extract: c.extract C:h.kernel h.extract OSLibInclude:h.osgbpb OSLibInclude:h.types OSLibInclude:h.os OSLibInclude:h.fileswitch OSLibInclude:h.osfind OSLibInclude:h.osfile OSLibInclude:h.osargs OSLibInclude:h.os

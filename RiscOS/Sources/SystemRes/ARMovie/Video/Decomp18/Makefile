@@ -197,21 +197,3 @@ op.testven$(VARIANT): s.testven
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.getvlc: c.getvlc h.HierProf h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits h.getvlc h.DISCLAIM h.DISCLAIM
-o.sac: c.sac h.hierProf h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits h.profile
-o.gethdr: c.gethdr h.HierProf h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits
-o.ady_malloc: s.ady_malloc
-o.veneer246Y5UV: s.veneer s.entries s.dosetxy hdr.D<Decomp18$Variant> s.tryout hdr.plook
-o.control: c.control h.err h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits C:h.swis C:h.kernel h.DISCLAIM h.dy_malloc h.mallarr h.amemset64
-o.getblk: c.getblk h.HierProf h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits h.indices h.sactbls h.profile
-o.getbits: c.getbits h.HierProf h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits
-o.recon: c.recon h.Hierprof h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits h.arecon h.profile
-o.store: c.store h.HierProf h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits
-o.getpic: c.getpic h.Hierprof h.config h.global h.DISCLAIM h.tmndec h.DISCLAIM h.getbits h.indices h.sactbls h.profile h.aaddb h.amemset64 c.bblock c.bblock c.bblock c.bblock
-o.mallarr: c.mallarr h.dy_malloc
-o.idct: c.idct h.config
-o.amemset64: s.amemset64
-o.miniClib: s.miniClib Hdr:ListOpts Hdr:APCS.<APCS> Hdr:APCS.Common Hdr:Macros Hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS
-o.veneerB: s.veneer s.entries s.dosetxy hdr.D<Decomp18$Variant> s.tryout hdr.plook
-o.veneer216Y5UV: s.veneer s.entries s.dosetxy hdr.D<Decomp18$Variant> s.tryout hdr.plook
-o.veneer: s.veneer s.entries s.dosetxy hdr.D<Decomp18$Variant> s.tryoutd16 hdr.plook

@@ -70,4 +70,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.join: c.join C:h.swis C:h.kernel C:h.kernel h.join h.my_adpcm

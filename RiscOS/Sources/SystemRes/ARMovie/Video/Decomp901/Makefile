@@ -73,6 +73,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.veneer: s.veneer
-o.control: c.control h.err h.datatype
-o.YRGB16: c.YRGB16 h.datatype

@@ -75,7 +75,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.ModPred: c.ModPred h.datatype
-o.dx_plane: s.dx_plane
-o.control: c.control h.datatype h.indeodefs h.datatype
-o.yuvblit: s.yuvblit hdr.plook
