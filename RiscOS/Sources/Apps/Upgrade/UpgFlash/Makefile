@@ -94,7 +94,8 @@ resources: ${TARGET}
 	${MKDIR} ${RESDIR}.^.Apps.${APP}
         SetMacro UpgFlashRes$path Resources.$(USERIF).$(LOCALE).,Resources.$(USERIF).UK.
         ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} UpgFlashRes:* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+        ${CP} UpgFlashRes:!Boot ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+        ${CP} UpgFlashRes:!Run ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
         UnSet UpgFlashRes$path
         @echo ${COMPONENT}: all complete
 
