@@ -10,7 +10,9 @@
 #                         Moved macros to CPPFLAGS from CPFLAGS, added -Wp
 #                         to disable non-ANSI includes warning.  Needs latest c++
 #                         wrapper.
-#
+# 28-Oct-98  RDW          Fixed export libs phase so that the module version is
+#                         actually build and exported! (and TARGETZ added to LIBS
+#                         so it gets built)
 
 #
 # Paths
@@ -83,7 +85,7 @@ OBJSZ=  oz.abs oz.arg oz.cos oz.error oz.exp oz.io oz.log \
 	oz.oldformat oz.out oz.rawin oz.sbuf_dbp oz.stdiobuf oz.stream oz.streambuf \
 	oz.strstream oz.swstdio
 
-LIBS = ${TARGET}
+LIBS = ${TARGET} ${TARGETZ}
 
 #
 # Rule patterns
@@ -140,7 +142,8 @@ export_hdrs: ${HDRS} dirs
 	@echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${LIBS} dirs
-	${CP} ${TARGET}  ${CPPLIBDIR}.o.* ${CPFLAGS}
+	${CP} ${TARGET}   ${CPPLIBDIR}.o.* ${CPFLAGS}
+	${CP} ${TARGETZ}  ${CPPLIBDIR}.o.* ${CPFLAGS}
         @echo ${COMPONENT}: export complete (libs)
 
 local_dirs:
