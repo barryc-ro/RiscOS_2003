@@ -11,7 +11,7 @@ BLOCKDRIVERS=	-DBLOCKDRIVERS
 CCFLAGS=	-Wp -depend !Depend -c -ITCPIPLibs:,C: -ffah\
                 -DNO_DRAND48 -DCOMPAT_INET4\
                 -DVJC -zM -zps1 ${BLOCKDRIVERS}\
-                #-DDEBUG -DDEBUGMAIN -DDEBUGCHAP -DDEBUG_TML
+                -DDEBUGMAIN -DREHOSTHACK #-DDEBUG -DDEBUGCHAP -DDEBUG_TML
                 
 LDFLAGS=	-aof -o $@
 OBJS=		o.main o.magic o.fsm o.lcp o.ipcp o.upap o.chap \

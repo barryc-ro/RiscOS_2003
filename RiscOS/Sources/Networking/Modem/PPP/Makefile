@@ -68,7 +68,7 @@ COMPAT=		-DCOMPAT_INET4
 
 CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -Wp -depend !Depend -c -DVJC ${TINYSTUBS}\
-		${BLOCKDRIVERS}
+		${BLOCKDRIVERS} -DREHOSTHACK
 
 ASMFLAGS=       -PreDefine "BlockDrivers SETL {TRUE}"
 
