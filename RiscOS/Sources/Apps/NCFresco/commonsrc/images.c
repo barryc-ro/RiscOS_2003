@@ -364,7 +364,7 @@ static int new_image_get_bytes(char *buf, int buf_len, void *h, BOOL *flush)
 {
     int rc;
 
-    IMGDBG(("get_bytes: in: Asked for %d bytes, have %d bytes\n", buf_len, image_thread_data_size));
+    IMGDBGN(("get_bytes: in: Asked for %d bytes, have %d bytes\n", buf_len, image_thread_data_size));
 
     if (image_thread_data_size == 0)
     {
@@ -388,7 +388,7 @@ static int new_image_get_bytes(char *buf, int buf_len, void *h, BOOL *flush)
 
     *flush = (image_thread_data_size == 0);
 
-    IMGDBG(("get_bytes: out: rc=%d\n", rc));
+    IMGDBGN(("get_bytes: out: rc=%d\n", rc));
 
     return rc;
 }

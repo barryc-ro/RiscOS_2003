@@ -198,6 +198,9 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     char *t;
     BOOL draw_selection_box = (ti->flag & rid_flag_SELECTED) != 0;
 
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
+
     switch (ii->tag)
     {
     case rid_it_IMAGE:

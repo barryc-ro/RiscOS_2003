@@ -224,6 +224,9 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     int bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back;
     int fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
 
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
+
     render_plinth(bg, render_plinth_IN,
 		  hpos, bline - ti->max_down,
 		  ti->width - (sel->flags & rid_if_NOPOPUP ? 4 : 52),

@@ -204,6 +204,9 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     rid_text_item_bullet *tib = (rid_text_item_bullet*) ti;
     BOOL symfont;
 
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
+
     symfont = FALSE;
     fh = webfonts[ti->st.wf_index].handle;
 

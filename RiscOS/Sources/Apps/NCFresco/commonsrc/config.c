@@ -215,7 +215,7 @@ extern void config_init(void)
     config_read_variables();
 #endif
 
-#ifndef STBWEB
+#if ! defined(STBWEB) && ! defined(BUILDERS)
     /* If this assert fails then SOMEBODY has been adding items to the above
      * array without adding corresponding ones in the array in
      * !Fresco/configgui.c ...

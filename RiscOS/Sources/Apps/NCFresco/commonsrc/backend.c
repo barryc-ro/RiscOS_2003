@@ -41,6 +41,7 @@
    10-09-96 SJM rectangle_fn now returns int so render_background can return a bg identifier.
    11-09-96 SJM split backend_doc_click into two parts so that activate_link doesn't have to go to x,y and badk to a pointer
    18-09-96 SJM changed backend_update_link to only redraw links that change state
+   26-02-97 DAF FVPR changes.
 */
 
 /* WIMP code for the ANTWeb WWW browser */
@@ -106,6 +107,7 @@
 #include "access.h"
 
 #include "objects.h"
+#include "fvpr.h"
 #include "pluginfn.h"
 
 #ifndef PP_DEBUG
@@ -1137,6 +1139,23 @@ static void be_view_redraw(antweb_doc *doc, wimp_box *box)
     bb.x1 += doc->margin.x0;
     bb.y0 += doc->margin.y1;
     bb.y1 += doc->margin.y1;
+#endif
+
+    /* 
+
+       Having update the display tree, update our notion of what can
+       be displayed progressively (FVPR-wise). We place this here so
+       that changes from image data receiving (don't know size to
+       knowing size state change specifically) can correctly propogate
+       their changes.
+    
+       */
+/*
+#ifndef BUILDERS
+    fvpr_progress_stream(&doc->rh->stream);
+#endif
+*/
+#if USE_MARGINS
     frontend_view_redraw(doc->parent, &bb);
 #else
     frontend_view_redraw(doc->parent, box);
@@ -1895,7 +1914,7 @@ static void fudge_prev_for_floating_items(rid_text_stream *st)
 {
     rid_text_item *ti, *lastti = NULL;
 
-    FMTDBG(("fudge_prev_for_floating_items(%p)\n", st));
+    FMTDBGN(("fudge_prev_for_floating_items(%p)\n", st));
 
     for (ti = st->text_list; ti; ti = ti->next)
     {
@@ -2031,7 +2050,7 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 
     FMTDBG(("be_formater_loop_core(%p, %p, %p, %x)\n", st, this_item, fmt, flags));
 
-#if DEBUG
+#if DEBUG && 0
     if (flags & rid_fmt_MIN_WIDTH  )
     {
 	FMTDBG(("rid_fmt_MIN_WIDTH  \n"));
@@ -2153,19 +2172,19 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 	    /* Deal with float left not yet used */
 	    if (fl.ti && (fl.used == 0))
 	    {
-		FMTDBG(("Connecting left float\n"));
+		FMTDBGN(("Connecting left float\n"));
 		be_float_connect(&fl, pos, flags);
 	    }
 	    /* Deal with float right not yet used */
 	    if (fr.ti && (fr.used == 0))
 	    {
-		FMTDBG(("Connecting right float\n"));
+		FMTDBGN(("Connecting right float\n"));
 		be_float_connect(&fr, pos, flags);
 	    }
 	    /* This link is built even if it is not the first line the float is seen on */
 	    if (((flags & rid_fmt_BUILD_POS)!=0) && (fl.fi || fr.fi))
 	    {
-		FMTDBG(("Building floats link.\n"));
+		FMTDBGN(("Building floats link.\n"));
 		pos->floats = mm_calloc(1, sizeof(rid_floats_link));
 		pos->floats->left = fl.fi;
 		pos->floats->right = fr.fi;
@@ -2176,13 +2195,13 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 	    if (fl.ti)
 	    {
 		TASSERT(fl.ti->width >= 0);
-		FMTDBG(("Add left floater with width %d\n", fl.ti->width));
+		FMTDBGN(("Add left floater with width %d\n", fl.ti->width));
 		width += fl.ti->width;
 	    }
 	    if (fr.ti)
 	    {
 		TASSERT(fr.ti->width >= 0);
-		FMTDBG(("Add right floater with width %d\n", fl.ti->width));
+		FMTDBGN(("Add right floater with width %d\n", fl.ti->width));
 		width += fr.ti->width;
 	    }
 
@@ -2198,7 +2217,7 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 		 (this_item->flag & rid_flag_RIGHTWARDS) ) &&
 		((this_item->flag & rid_flag_CLEARING) == 0) )
 	    {
-		FMTDBG(("Floating item %p, flags=0x%02x, ", this_item, this_item->flag));
+		FMTDBGN(("Floating item %p, flags=0x%02x, ", this_item, this_item->flag));
 
 		/* We connect it now to stop it getting lost.  It will be reconnected later */
 		if ( (flags & rid_fmt_BUILD_POS) != 0 )
@@ -2209,26 +2228,26 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 		/* A floating item, some special action needed */
 		if (this_item->flag & rid_flag_LEFTWARDS)
 		{
-		    FMTDBG(("LEFT, "));
+		    FMTDBGN(("LEFT, "));
 
 		    /* Floating left, either add now, add on the next line or clear left */
 		    if (fl.ti)
 		    {
-			FMTDBG(("already left floater, clearing.\n"));
+			FMTDBGN(("already left floater, clearing.\n"));
 
 			state = CLEAR_L;
 			break;
 		    }
 		    else
 		    {
-			FMTDBG(("initing new left floater, "));
+			FMTDBGN(("initing new left floater, "));
 			fl.ti = this_item;
 			fl.used = 0;
 
 			if ((this_item == line_first) ||
 			    (fr.ti == line_first && this_item == line_first->next))
 			{
-			    FMTDBG(("connecting.\n"));
+			    FMTDBGN(("connecting.\n"));
 			    /* Nothing visable on the line so far so we can go on this line */
 			    be_float_connect(&fl, pos, flags);
 			    TASSERT(fl.ti->width >= 0);
@@ -2236,30 +2255,30 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 			}
 			else
 			{
-			    FMTDBG(("defering.\n"));
+			    FMTDBGN(("defering.\n"));
 			}
 		    }
 		}
 		else
 		{
-		    FMTDBG(("RIGHT, "));
+		    FMTDBGN(("RIGHT, "));
 		    /* Floating right, either add now, add on the next line or clear right */
 		    if (fr.ti)
 		    {
-			FMTDBG(("already right floater, clearing.\n"));
+			FMTDBGN(("already right floater, clearing.\n"));
 			state = CLEAR_R;
 			break;
 		    }
 		    else
 		    {
-			FMTDBG(("initing new right floater, "));
+			FMTDBGN(("initing new right floater, "));
 			fr.ti = this_item;
 			fr.used = 0;
 
 			if ((this_item == line_first) ||
 			    (fl.ti == line_first && this_item == line_first->next))
 			{
-			    FMTDBG(("connecting.\n"));
+			    FMTDBGN(("connecting.\n"));
 			    /* Nothing visable on the line so far so we can go on this line */
 			    be_float_connect(&fr, pos, flags);
 			    TASSERT(fr.ti->width >= 0);
@@ -2267,7 +2286,7 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 			}
 			else
 			{
-			    FMTDBG(("defering.\n"));
+			    FMTDBGN(("defering.\n"));
 			}
 		    }
 		}
@@ -2276,24 +2295,24 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 		{
 		    if (pos->floats == NULL)
 		    {
-			FMTDBG(("Making new floats link\n"));
+			FMTDBGN(("Making new floats link\n"));
 			pos->floats = mm_calloc(1, sizeof(rid_floats_link));
 		    }
 
-		    FMTDBG(("Connecting float items.\n"));
+		    FMTDBGN(("Connecting float items.\n"));
 		    /* Exactly one of these is redundent but the operations are idempotent */
 		    pos->floats->left = fl.fi;
 		    pos->floats->right = fr.fi;
 		}
 
-		FMTDBG(("Floating done.\n"));
+		FMTDBGN(("Floating done.\n"));
 	    }
 	    else
 	    {
 		if ( (flags & rid_fmt_CHAR_ALIGN) != 0 && pad + width > *fmt->left)
 		{
 		    *fmt->left = pad + width;
-		    FMTDBG(("Increased left by %d to %d\n", \
+		    FMTDBGN(("Increased left by %d to %d\n", \
 			    align_margin, *fmt->left));
 		}
 
@@ -2364,20 +2383,20 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 		     this_item->tag == rid_tag_TEXT &&
 		     fmt->text_data[ ((rid_text_item_text *)this_item)->data_off] == fmt->align_char )
 		{
-		    FMTDBG(("Character alignment triggered\n"));
+		    FMTDBGN(("Character alignment triggered\n"));
 		    flags |= rid_fmt_HAD_ALIGN;
 		    if (pad + width < *fmt->left)
 		    {
 			align_margin = *fmt->left - width - pad;
-			FMTDBG(("%d padding due to character alignment\n",\
+			FMTDBGN(("%d padding due to character alignment\n",\
 				align_margin));
 		    }
 		}
 		else if (this_item->tag == rid_tag_TABLE)
 		{
-		    FMTDBG(("Calling table proc\n"));
+		    FMTDBGN(("Calling table proc\n"));
 		    (*fmt->table_proc) (st, this_item, fmt);
-		    FMTDBG(("Called table proc\n"));
+		    FMTDBGN(("Called table proc\n"));
 		}
 	    }
 	    else
@@ -2444,7 +2463,7 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 		    else
 		    {
 			left_margin += *fmt->left - width;
-			FMTDBG(("Increased left_margin by %d to %d\n",\
+			FMTDBGN(("Increased left_margin by %d to %d\n",\
 				*fmt->left - width, left_margin));
 			width = *fmt->left;
 		    }
@@ -2698,8 +2717,11 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
 
     be_formater_loop(doc->rh, ti, doc->scale_value);
 
+    fvpr_progress_stream(&doc->rh->stream);
+
     objects_check_movement(doc);
 
+    
 #if DEBUG
     FMTDBG(("antweb_document_format() done doc %p, rid_header %p\n", doc, doc->rh));
 
@@ -2820,6 +2842,8 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
     FMTDBG(("Calling the formatter loop\n"));
 
     be_formater_loop(doc->rh, ti, doc->scale_value);
+
+    fvpr_progress_stream(&doc->rh->stream);
 
     FMTDBG(("be_formater_loop() done\n"));
 
@@ -3385,7 +3409,7 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* If told to UPDATE when we don't need a full redraw */
 	do_redraw = (status == image_cb_status_UPDATE || status == image_cb_status_UPDATE_ANIM) ? 0 : 1;
 
-	DICDBG(("Updating images with no size change.  Top=%d, borrom=%d, redraw = %d\n",
+	DICDBGN(("Updating images with no size change.  Top=%d, borrom=%d, redraw = %d\n",
 		top, bottom, do_redraw));
 
 	/* The new image must be the same size.  Redraw the image when on the screen. 	*/
@@ -4129,7 +4153,6 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
     return access_CACHE;
 }
-
 
 
 os_error *backend_doc_abort(be_doc doc)

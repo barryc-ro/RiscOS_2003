@@ -129,6 +129,9 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	2 * (table->border + table->cellspacing + table->cellpadding);
     int oy_top, oy_bot;
 
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
+
     ox = hpos;
     oy = bline + ti->max_up;
     oy_top = oy;
@@ -148,9 +151,9 @@ void otable_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
     left = g->x0;
     right = g->x1;
 
-    RENDBG(("Rendering table.  ox=%d, oy=%d. size = %dx%d\n", ox, oy, table->size.x, table->size.y));
-    RENDBG(("Top work area = %d, bottom = %d\n", top, bot));
-    RENDBG(("Left = %d, right = %d, capt_size = %d\n", left, right, capt_size));
+    RENDBGN(("Rendering table.  ox=%d, oy=%d. size = %dx%d\n", ox, oy, table->size.x, table->size.y));
+    RENDBGN(("Top work area = %d, bottom = %d\n", top, bot));
+    RENDBGN(("Left = %d, right = %d, capt_size = %d\n", left, right, capt_size));
 
     if (/*table->border > 0 &&*/ table->frame != HTML_TABLE_FRAME_VOID)
     {

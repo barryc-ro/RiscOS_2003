@@ -4,6 +4,7 @@
 /* 19-03-96 DAF         Added rid_sf_RIGHTALIGN. Some tidying up. */
 /* 02-04-96 SJM         Added meta_list, remove windowname */
 /* 19/07/06 SJM		Change form element structures */
+/* 26/02/97 DAF		FVPR changes */
 
 /* rid.h */
 
@@ -188,6 +189,8 @@ typedef SHORTISH rid_flag;
 
 #define rid_flag_COLOUR_MASK   0xF00    /* Up to 16 colours per page */
 #define rid_flag_COLOUR_SHIFT      8
+
+#define rid_flag_FVPR		0x1000	/* Item reach FVPR style final values */
 
 #define RID_COLOUR(rid) ( ( (rid)->st.flags >> STYLE_COLOURNO_SHIFT ) \
                          & STYLE_COLOURNO_MASK )
@@ -774,9 +777,14 @@ struct rid_fmt_state
 #define rid_pt_CAPTION          1       /* rid_table_caption */
 #define rid_pt_CELL             2       /* rid_table_cell */
 
+/* pos_fvpr and text_fvpr only for top level stream */
 struct rid_text_stream {
-    rid_pos_item *pos_list, *pos_last;
-    rid_text_item *text_list, *text_last; /* First and last in list */
+    rid_pos_item *pos_list,	/* First in list */
+	*pos_last,		/* Last in list */
+	*pos_fvpr;		/* FVPR ptr */
+    rid_text_item *text_list,	/* First in list */
+	*text_last,		/* Last in list */
+	*text_fvpr;		/* FVPR ptr */
     void *parent;               /* The object in which this text flows, if any */
     int partype;                /* Type of parent we are in */
     int fwidth;                 /* Width to format to */

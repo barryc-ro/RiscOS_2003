@@ -438,7 +438,7 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 
     for (pi = stream->pos_list; pi->next && pi->next->top > top; pi = pi->next)
     {
-	RENDBG(("Skipping line, top=%d\n", pi->top));
+	RENDBGN(("Skipping line, top=%d\n", pi->top));
     }
 
     float_l = float_r = NULL;
@@ -447,7 +447,7 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
     {
 	int hpos, bline;
 
-	RENDBG(("Got line in range, top=%d\n", pi->top));
+	RENDBGN(("Got line in range, top=%d\n", pi->top));
 
 	hpos = ox + pi->left_margin;
 	bline = pi->top - pi->max_up + oy;
@@ -492,14 +492,14 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 		hpos += float_l->width;
 	}
 
-	RENDBG(("Base line at %d, hpos starts at %d\n", bline, hpos));
+	RENDBGN(("Base line at %d, hpos starts at %d\n", bline, hpos));
 
 	for (ti = pi->first; ti && ti != pi->next->first; ti = rid_scanf(ti) /*ti->next*/ )
 	{
 #if DEBUG
 	    extern char *item_names[];
 #endif
-	    RENDBG(("%s item at %p hpos=%d, width=%d\n", item_names[ti->tag], ti, hpos, ti->width));
+	    RENDBGN(("%s item at %p hpos=%d, width=%d\n", item_names[ti->tag], ti, hpos, ti->width));
 
 	    if (hpos >= right)
 		break;
@@ -508,7 +508,7 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
 	    {
 		if ((ti->width == -1) || ((hpos + ti->width + ti->pad) >= left) )
 		{
-		    RENDBG(("Rendering item at %d,%d\n", hpos, bline));
+		    RENDBGN(("Rendering item at %d,%d\n", hpos, bline));
 
 		    (object_table[ti->tag].redraw)(ti, doc->rh, doc, hpos, bline,
 						   fs, g, ox, oy, update);

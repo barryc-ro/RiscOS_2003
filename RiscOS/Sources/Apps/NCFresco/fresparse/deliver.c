@@ -152,14 +152,14 @@ static void fmt_deliver_space(SGMLCTX *context, int reason, STRING item, ELEMENT
 	    }
 	    else
 	    {
-		PRSDBG(("fmt_deliver_space(): have previous word without line-break flag\n"));
-		PRSDBG(("Setting this to no-break and pushing a space-only word\n"));
+		PRSDBGN(("fmt_deliver_space(): have previous word without line-break flag\n"));
+		PRSDBGN(("Setting this to no-break and pushing a space-only word\n"));
 		/*stream->text_last->flag |= rid_flag_NO_BREAK;*/
 		htmlctx->inhand_reason = DELIVER_SPACE;
 	    }
 #else
-	    PRSDBG(("fmt_deliver_space(): have previous word without line-break flag\n"));
-	    PRSDBG(("Setting this to no-break and pushing a space-only word\n"));
+	    PRSDBGN(("fmt_deliver_space(): have previous word without line-break flag\n"));
+	    PRSDBGN(("Setting this to no-break and pushing a space-only word\n"));
 	    /*stream->text_last->flag |= rid_flag_NO_BREAK;*/
 	    htmlctx->inhand_reason = DELIVER_SPACE;
 #endif
@@ -341,7 +341,7 @@ static void fmt_deliver_post_close_markup(SGMLCTX *context, int reason, STRING i
 	htmlctx->rh->curstream->text_last != NULL && 
 	htmlctx->rh->curstream->text_last != htmlctx->rh->curstream->text_list )
     {
-	PRSDBG(("fmt_deliver_post_close_markup(): setting rid_flag_LINE_BREAK\n"));
+	PRSDBGN(("fmt_deliver_post_close_markup(): setting rid_flag_LINE_BREAK\n"));
 	htmlctx->rh->curstream->text_last->flag |= rid_flag_LINE_BREAK;
     }
 
@@ -410,7 +410,7 @@ static void deliver_unexpected(SGMLCTX *context, int reason, STRING orig_item, E
     HTMLCTX *me = htmlctxof(context);
     STRING item = orig_item;
 
-    PRSDBG(("deliver_unexpected(): '%.*s'\n", item.bytes, item.ptr ));
+    PRSDBGN(("deliver_unexpected(): '%.*s'\n", item.bytes, item.ptr ));
 
     while (item.bytes > 0)
     {

@@ -90,7 +90,7 @@ extern void sgml_stream_finished (SGMLCTX *context)
     {
 	ELEMENT *closing = &context->elements[context->tos->element];
 
-	PRSDBG(("End of document implies </%s>", closing->name.ptr));
+	PRSDBGN(("End of document implies </%s>", closing->name.ptr));
 	sgml_note_missing_close(context, closing);
 
 	perform_element_close(context, closing);
@@ -197,7 +197,7 @@ extern void sgml_install_deliver(SGMLCTX *context, sgml_deliver_fn new)
 {
     sgml_deliver_list *dp = mm_calloc(1, sizeof(*dp));
 
-    PRSDBG(("sgml_install_deliver(%p, %p)\n", context, new));
+    PRSDBGN(("sgml_install_deliver(%p, %p)\n", context, new));
 
     dp->this_fn = context->deliver;
     context->deliver = new;
@@ -209,7 +209,7 @@ extern void sgml_remove_deliver(SGMLCTX *context, sgml_deliver_fn current)
 {
     sgml_deliver_list *dp = context->dlist;
 
-    PRSDBG(("sgml_remove_deliver(%p, %p)\n", context, current));
+    PRSDBGN(("sgml_remove_deliver(%p, %p)\n", context, current));
 
     ASSERT(dp != NULL);
     ASSERT(current == context->deliver);
@@ -221,7 +221,7 @@ extern void sgml_remove_deliver(SGMLCTX *context, sgml_deliver_fn current)
 
 extern void sgml_unwind_deliver(SGMLCTX *context)
 {
-    PRSDBG(("sgml_unwind_deliver(%p)\n", context));
+    PRSDBGN(("sgml_unwind_deliver(%p)\n", context));
 
     while (context->dlist)
 	sgml_remove_deliver(context, context->deliver);	/* SJM: is this right? */

@@ -53,7 +53,7 @@
 
   @@@@ Maybe we should change the use of environment variable so that
   we use FMTDBG is the FMTDBG variable is >=1 and use FMTDBGN is the
-  variable is >= 2.
+  variable is >= 2. Could do - I want for the ultra simple approach!
 
  */
 

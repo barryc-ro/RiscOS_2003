@@ -518,7 +518,7 @@ static rid_table_colhdr * add_new_colhdr(rid_table_item *table)
 {
     const int x = table->cells.x++;
 
-    TABDBG(("add_new_colhdr(%p): from %d to %d columns, %p\n",
+    TABDBGN(("add_new_colhdr(%p): from %d to %d columns, %p\n",
 	    table, x, table->cells.x, table->colhdrs));
 
     ASSERT(table->cells.x == 1 || table->colhdrs != NULL);
@@ -577,7 +577,7 @@ static rid_table_rowgroup * add_new_rowgroup(rid_table_item *table)
 {
     const int y = table->num_groups.y++;
 
-    TABDBG(("add_new_rowgroup(%p): from %d to %d rowgroups\n", table, y, table->num_groups.y));
+    TABDBGN(("add_new_rowgroup(%p): from %d to %d rowgroups\n", table, y, table->num_groups.y));
 
     table->rowgroups = mm_realloc(table->rowgroups, (y+1) * sizeof(rid_table_rowgroup *) );
     table->rowgroups[y] = mm_calloc(1, sizeof(rid_table_rowgroup));
@@ -624,7 +624,7 @@ static void add_retro_col(rid_table_item *table)
     size_t dsts, srcs, cpys, size;
     int x, y;
 
-    TABDBG(("add_retro_col(%p) - from %d to %d columns\n",
+    TABDBGN(("add_retro_col(%p) - from %d to %d columns\n",
 	    table, table->cells.x, table->cells.x+1));
 
     if (table->state == tabstate_BAD)
@@ -640,7 +640,7 @@ static void add_retro_col(rid_table_item *table)
 
     if ( table->cells.x > 1 && (table->colhdrs[table->cells.x-2]->flags & rid_chf_REPLICATE) != 0 )
     {
-	TABDBG(("Replicating previous colhdr properties\n"));
+	TABDBGN(("Replicating previous colhdr properties\n"));
 	copy_colhdr_props(table->colhdrs[table->cells.x-2], colhdr);
     }
 
@@ -666,7 +666,7 @@ static void add_retro_col(rid_table_item *table)
     if (table->cells.y == 0)
     {
 	/* no rows yet - no actual size to cell array */
-	TABDBG(("No rows, so done add_retro_col()\n"));
+	TABDBGN(("No rows, so done add_retro_col()\n"));
 	return;
     }
 
@@ -703,11 +703,11 @@ static void add_retro_col(rid_table_item *table)
     x = table->cells.x - 1;
     if (x < 1)
     {
-	TABDBG(("Not enough columns to have any replication\n"));
+	TABDBGN(("Not enough columns to have any replication\n"));
 	return;
     }
 
-    TABDBG(("Replicating any necessary cells\n"));
+    TABDBGN(("Replicating any necessary cells\n"));
 
     for (y = 0; y < table->cells.y; y++)
     {
@@ -716,7 +716,7 @@ static void add_retro_col(rid_table_item *table)
 	{
 	    * CELLFOR(table, x, y) = cell;
 	    cell->span.x += 1;
-	    TABDBG(("Cell %d,%d is replicated from %d,%d\n", x, y, cell->cell.x, cell->cell.y));
+	    TABDBGN(("Cell %d,%d is replicated from %d,%d\n", x, y, cell->cell.x, cell->cell.y));
 	}
     }
 }
@@ -767,7 +767,7 @@ static void add_new_row(rid_table_item *table)
     table->rowhdrs = mm_realloc(table->rowhdrs, (y+1) * sizeof(rid_table_rowhdr *));
     table->rowhdrs[y] = mm_calloc(1, sizeof(rid_table_rowhdr));
 
-    TABDBG(("new hdrs %p, contents for %d is %p\n",
+    TABDBGN(("new hdrs %p, contents for %d is %p\n",
 	    table->rowhdrs, y, table->rowhdrs[y]));
 
     rowhdr = table->rowhdrs[y];
@@ -787,19 +787,19 @@ static void add_new_row(rid_table_item *table)
 	     (y > 1 && (table->rowhdrs[y-1]->flags & rid_rhf_TBODY) != 0) ||
 	     table->rowgroups[0]->span > 0)
 	{
-	    TABDBG(("add_new_row(): setting above/below flags (%d)\n", y));
+	    TABDBGN(("add_new_row(): setting above/below flags (%d)\n", y));
 	    rowhdr->flags |= rid_rhf_GROUP_ABOVE;
 	    if ( (table->rowhdrs[y-1]->rowgroup->flags & rid_rgf_TFOOT) == 0)
 		table->rowhdrs[y-1]->flags |= rid_rhf_GROUP_BELOW;
 	}
 	else
 	{
-	    TABDBG(("add_new_row(): NOT setting above/below flags (%d)\n", y));
+	    TABDBGN(("add_new_row(): NOT setting above/below flags (%d)\n", y));
 	}
     }
     else
     {
-	TABDBG(("add_new_row(): not considering doing group seperators\n"));
+	TABDBGN(("add_new_row(): not considering doing group seperators\n"));
     }
 
     /* then add another row */
@@ -1475,7 +1475,7 @@ static BOOL find_empty_cell_this_line(rid_table_item *table)
     int x = table->scaff.x;
     rid_table_cell *cell;
 
-    TABDBG(("find_empty_cell_this_line(): looking from (%d,%d)\n",
+    TABDBGN(("find_empty_cell_this_line(): looking from (%d,%d)\n",
 	    table->scaff.x, table->scaff.y));
 
     for (; x < table->cells.x; x++)
@@ -1498,7 +1498,7 @@ static BOOL find_empty_cell_this_line(rid_table_item *table)
 	ASSERT(cell != NULL);
 	if ( (cell->flags & rid_cf_INF_HORIZ) != 0 )
 	{
-	    TABDBG(("This row has an INF_HORIZ cell ending it\n"));
+	    TABDBGN(("This row has an INF_HORIZ cell ending it\n"));
 	    return FALSE;
 	}
     }
@@ -1515,7 +1515,7 @@ static BOOL find_empty_cell(HTMLCTX *htmlctx, rid_table_item *table)
     /* Shouldn't get here if flagged as being full */
     ASSERT( (table->flags & rid_tf_NO_MORE_CELLS) == 0 );
 
-    TABDBG(("find_empty_cell(): start from (%d,%d)\n",
+    TABDBGN(("find_empty_cell(): start from (%d,%d)\n",
 	    table->scaff.x, table->scaff.y));
 
     while (TRUE)
@@ -1526,7 +1526,7 @@ static BOOL find_empty_cell(HTMLCTX *htmlctx, rid_table_item *table)
 
 	if ( find_empty_cell_this_line(table) )
 	{
-	    TABDBG(("Found an empty cell\n"));
+	    TABDBGN(("Found an empty cell\n"));
 	    return TRUE;
 	}
 
@@ -1535,7 +1535,7 @@ static BOOL find_empty_cell(HTMLCTX *htmlctx, rid_table_item *table)
 	/* cells have infinite height, in which case leave the */
 	/* current cell selected. */
 
-	TABDBG(("Cell won't fit - earlier COLSPAN=0 on this row\n"));
+	TABDBGN(("Cell won't fit - earlier COLSPAN=0 on this row\n"));
 
 	for (x = 0; inf && x < table->cells.x; x++)
 	{
@@ -1549,11 +1549,11 @@ static BOOL find_empty_cell(HTMLCTX *htmlctx, rid_table_item *table)
 
 	if (inf)
 	{
-	    TABDBG(("Infinite cells occupy rest of table - no more room\n"));
+	    TABDBGN(("Infinite cells occupy rest of table - no more room\n"));
 	    return FALSE;
 	}
 
-	TABDBG(("Growing table to create an empty cell\n"));
+	TABDBGN(("Growing table to create an empty cell\n"));
 
 	/* sets scaff.x and scaff.y */
 	pseudo_html(htmlctx, "<TR>");
@@ -1575,7 +1575,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
     switch (reason)
     {
     case DELIVER_WORD:
-	PRSDBG(("table_deliver(): got DELIVER_WORD !! '%.*s'\n", item.bytes, item.ptr));
+	PRSDBGN(("table_deliver(): got DELIVER_WORD !! '%.*s'\n", item.bytes, item.ptr));
 	string_free(&item);
 	break;
 
@@ -1619,25 +1619,25 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
         break;
 
     case DELIVER_SGML:
-	PRSDBG(("table_deliver(): passing on <%.*s>\n", item.bytes, item.ptr));
+	PRSDBGN(("table_deliver(): passing on <%.*s>\n", item.bytes, item.ptr));
 	(*context->dlist->this_fn) (context, reason, item, element);
 	break;
 
     case DELIVER_PRE_OPEN_MARKUP:
 	if (element->flags & FLAG_DONT_STACK)
 	{
-	    PRSDBG(("table_deliver(): passing PRE_OPEN for dont_stack item <%s>\n", element->name.ptr));
+	    PRSDBGN(("table_deliver(): passing PRE_OPEN for dont_stack item <%s>\n", element->name.ptr));
 	    context->force_deliver = TRUE;
 	    (*context->dlist->this_fn) (context, reason, item, element);
 	    break;
 	}
 
-	PRSDBG(("table_deliver(): removing table_deliver for pre open <%s>\n", element->name.ptr));
+	PRSDBGN(("table_deliver(): removing table_deliver for pre open <%s>\n", element->name.ptr));
 	sgml_remove_deliver(context, &table_deliver);
 
 	if ( context->applying_rules )
 	{
-	    PRSDBG(("Applying rules - preventing <TD> consideration\n"));
+	    PRSDBGN(("Applying rules - preventing <TD> consideration\n"));
 	}
 
 	if ( context->applying_rules == 0 )
@@ -1654,42 +1654,42 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 	    if (include)
 	    {
 		/* Element is either <TABLE> or not a table element */
-		PRSDBG(("table_deliver(): <%s> implies <TD>\n", element->name.ptr));
+		PRSDBGN(("table_deliver(): <%s> implies <TD>\n", element->name.ptr));
 		pseudo_html(htmlctx, "<td>");
 	    }
 	}
 
-	PRSDBG(("table_deliver(): <%s> now having it's PRE_OPEN delivered\n", element->name.ptr));
+	PRSDBGN(("table_deliver(): <%s> now having it's PRE_OPEN delivered\n", element->name.ptr));
 	(*context->deliver) (context, reason, item, element);
 	break;
 
     case DELIVER_POST_OPEN_MARKUP:
-	PRSDBG(("table_deliver(): passing POST OPEN <%s> onwards\n", element->name.ptr));
+	PRSDBGN(("table_deliver(): passing POST OPEN <%s> onwards\n", element->name.ptr));
 	(*context->dlist->this_fn) (context, reason, item, element);
 	break;
 
     case DELIVER_PRE_CLOSE_MARKUP:
 	if (element->flags & FLAG_DONT_STACK)
 	{
-	    PRSDBG(("table_deliver(): passing PRE_CLOSE for dont_stack item <%s>\n", element->name.ptr));
+	    PRSDBGN(("table_deliver(): passing PRE_CLOSE for dont_stack item <%s>\n", element->name.ptr));
 	    context->force_deliver = TRUE;
 	    (*context->dlist->this_fn) (context, reason, item, element);
 	    break;
 	}
 
-	PRSDBG(("table_deliver(): removing table_deliver before closing <%s>\n", element->name.ptr));
+	PRSDBGN(("table_deliver(): removing table_deliver before closing <%s>\n", element->name.ptr));
 	sgml_remove_deliver(context, &table_deliver);
 	(*context->deliver) (context, reason, item, element);
 	break;
 
     case DELIVER_POST_CLOSE_MARKUP:
-	PRSDBG(("table_deliver(): passing on post closure for <%s>\n", element->name.ptr));
+	PRSDBGN(("table_deliver(): passing on post closure for <%s>\n", element->name.ptr));
 	(*context->dlist->this_fn) (context, reason, item, element);
 	break;
 
 	/* This cannot be ignored and must be correctly delivered. */
     case DELIVER_EOS:
-	PRSDBG(("table_deliver(): EOS forcing restoration of original delivery handler\n"));
+	PRSDBGN(("table_deliver(): EOS forcing restoration of original delivery handler\n"));
 	sgml_unwind_deliver(context);
 	PRSDBG(("table_deliver(): doing the real EOS delivery now\n"));
 	(*context->deliver) (context, reason, item, element);

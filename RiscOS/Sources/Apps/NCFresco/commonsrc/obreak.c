@@ -90,6 +90,9 @@ void opbreak_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 void obreak_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, int bline, object_font_state *fs, wimp_box *g, int ox, int oy, int update)
 {
 #ifndef BUILDERS
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
+
     if (ti->tag == rid_tag_HLINE)
     {
         rid_text_item_hr *tih = (rid_text_item_hr *)ti;

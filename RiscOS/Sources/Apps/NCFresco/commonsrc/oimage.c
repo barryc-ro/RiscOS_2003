@@ -317,6 +317,9 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
     int bw = tii->bwidth;
     int x, y, w, h;
 
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
+
     x = hpos + tii->hspace*2;
     y = bline - ti->max_down + tii->vspace*2;
     w = ti->width - tii->hspace*2*2;

@@ -123,7 +123,7 @@ IF these are not kept in sync, then incorrect results *will* be obtained.
 
 /*****************************************************************************/
 
-/* 8..10 */
+/* 8,9 */
 
 #define STYLE_SUB		0x0001
 #define STYLE_SUB_MASK		0x0001
@@ -135,12 +135,12 @@ IF these are not kept in sync, then incorrect results *will* be obtained.
 #define STYLE_SUP_SHIFT		9
 #define rid_sf_SUP		( STYLE_SUP << STYLE_SUP_SHIFT )
 
-/* Defined for completeness */
+/* 10 RESERVED !! (Borris might have a use for it during progressive rendering) */
 #if 0
-#define STYLE_ADJUSTED_SIZE		0x0001
-#define STYLE_ADJUSTED_SIZE_MASK	0x0001
-#define STYLE_ADJUSTED_SIZE_SHIFT	10
-#define rid_sf_ADJUSTED_SIZE		( STYLE_ADJUSTED_SIZE << STYLE_ADJUSTED_SIZE_SHIFT )
+#define RESERVED_SIZE		0x0001
+#define RESERVED_SIZE_MASK	0x0001
+#define RESERVED_SIZE_SHIFT	10
+#define rid_sf_ADJUSTED_SIZE		( RESERVED_SIZE << RESERVED_SIZE_SHIFT )
 #endif
 
 /* 11 strikethrough */

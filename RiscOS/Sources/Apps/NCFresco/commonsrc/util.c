@@ -1,12 +1,13 @@
 /* -*-c-*- */
 
 /*
- * 21/3/96: SJM: added wait_for_release
- * 26/3/96: SJM: added parse_http_header
- * 23/4/96: SJM: merged path_is_directory() and file_type() changes
- * 17/7/96: SJM: added write_text_in_box function
- * 02/8/96: SJM: write_text_in_box now centres text vertically.
- * 13/8/96: SJM: added mimemap lookup
+ * 21/03/96: SJM: added wait_for_release
+ * 26/03/96: SJM: added parse_http_header
+ * 23/04/96: SJM: merged path_is_directory() and file_type() changes
+ * 17/07/96: SJM: added write_text_in_box function
+ * 02/08/96: SJM: write_text_in_box now centres text vertically.
+ * 13/08/96: SJM: added mimemap lookup
+ * 25/02/97: DAF: Moved lookup_key_action to portutil.c
  */
 
 #include <string.h>
@@ -665,64 +666,5 @@ extern os_error *ensure_modem_line(void)
     return e;
 }
 #endif
-
-typedef struct
-{
-    int key;
-    input_key_action action;
-} input_key_map;
-
-#ifdef STBWEB
-static input_key_map key_map[] =
-{
-    { 10, key_action_NEWLINE },
-    { 13, key_action_NEWLINE },
-    { 8, key_action_DELETE_LEFT },
-    { 127, key_action_DELETE_RIGHT },
-    { 21, key_action_DELETE_ALL },
-    { akbd_Ctl + akbd_CopyK, key_action_DELETE_TO_END },
-    { akbd_LeftK, key_action_LEFT },
-    { akbd_RightK, key_action_RIGHT },
-    { 0x1E, key_action_START_OF_LINE },
-    { akbd_Ctl + akbd_LeftK, key_action_START_OF_LINE },
-    { akbd_CopyK, key_action_END_OF_LINE },
-    { akbd_Ctl + akbd_RightK, key_action_END_OF_LINE },
-    { akbd_UpK, key_action_UP },
-    { akbd_DownK, key_action_DOWN },
-    { -1, key_action_NO_ACTION }
-};
-#else
-static input_key_map key_map[] =
-{
-    { 10, key_action_NEWLINE },
-    { 13, key_action_NEWLINE },
-    { 8, key_action_DELETE_LEFT },
-    { 127, key_action_DELETE_LEFT },
-    { 4, key_action_DELETE_RIGHT },
-    { akbd_CopyK, key_action_DELETE_RIGHT },
-    { 21, key_action_DELETE_ALL },
-    { akbd_Ctl + akbd_CopyK, key_action_DELETE_TO_END },
-    { 11, key_action_DELETE_TO_END },
-    { 2, key_action_LEFT },
-    { akbd_LeftK, key_action_LEFT },
-    { 6, key_action_RIGHT },
-    { akbd_RightK, key_action_RIGHT },
-    { akbd_Ctl + akbd_LeftK, key_action_START_OF_LINE },
-    { 1, key_action_START_OF_LINE },
-    { akbd_Ctl + akbd_RightK, key_action_END_OF_LINE },
-    { 5, key_action_END_OF_LINE },
-    { akbd_UpK, key_action_UP },
-    { akbd_DownK, key_action_DOWN },
-    { -1, key_action_NO_ACTION }
-};
-#endif
-
-extern input_key_action lookup_key_action(int key)
-{
-    input_key_map *ikm = key_map;
-    while (ikm->key != -1 && ikm->key != key)
-	ikm++;
-    return ikm->action;
-}    
 
 /* eof util.c */

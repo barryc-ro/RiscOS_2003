@@ -180,7 +180,7 @@ extern void rid_free_pos_tree(rid_pos_item *p)
     rid_text_item *ti;
     rid_float_item *fl = NULL, *fr = NULL;
 
-    FMTDBG(("rid_free_pos_tree(%p)\n", p));
+    FMTDBGN(("rid_free_pos_tree(%p)\n", p));
 
     if (p == NULL)
 	return;
@@ -1238,7 +1238,7 @@ extern rid_text_item * rid_scan(rid_text_item * item, int action)
 
 extern void rid_zero_widest_height_from_item(rid_text_item *item)
 {
-    FMTDBG(("rid_zero_widest_height_from_item(%p)\n", item));
+    FMTDBGN(("rid_zero_widest_height_from_item(%p)\n", item));
 
     for (; item != NULL; item = rid_scanf(item))
     {
@@ -1257,7 +1257,7 @@ extern void rid_zero_widest_height_from_item(rid_text_item *item)
 
 extern void rid_zero_widest_height(rid_text_stream *stream)
 {
-    FMTDBG(("rid_zero_widest_height(%p)\n", stream));
+    FMTDBGN(("rid_zero_widest_height(%p)\n", stream));
 
     if (stream != NULL)
     {

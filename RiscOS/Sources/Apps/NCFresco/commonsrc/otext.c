@@ -211,6 +211,9 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     int b;
     BOOL no_text;
 
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
+
     wf = &webfonts[ti->st.wf_index];
 
     if (fs->lf != wf->handle)

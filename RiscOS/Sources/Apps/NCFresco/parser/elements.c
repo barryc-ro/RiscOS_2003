@@ -221,7 +221,7 @@ extern void ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 	case PRECEEDED_BY:
 	    if ( element_bit_clear (context->tos->elements_seen, tag) )
 	    {
-		PRSDBG(("ensure_pre_requisites(%s): %s not preceeded by %s\n",
+		PRSDBGN(("ensure_pre_requisites(%s): %s not preceeded by %s\n",
 			element->name.ptr,element->name.ptr,  other_elem->name.ptr));
 		if (! init_dummy)
 		    init_dummy = default_attributes(context, other_elem, &dummy_values);
@@ -236,7 +236,7 @@ extern void ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 	    while ( is_element_open(context, tag) )
 	    {
 		ELEMENT *oe = &context->elements[context->tos->element];
-		PRSDBG(("ensure_pre_requisite(%s): implied closure </%s>\n",
+		PRSDBGN(("ensure_pre_requisite(%s): implied closure </%s>\n",
 			element->name.ptr, oe->name.ptr));
 		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
 		    sgml_note_missing_close (context, oe);
@@ -247,7 +247,7 @@ extern void ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 	    if ( open_within_container(context, tag) )
 	    if ( is_element_open(context, tag) )
 	    {
-		PRSDBG(("ensure_pre_requisite%s(): quiet implied closure </%s>\n",
+		PRSDBGN(("ensure_pre_requisite%s(): quiet implied closure </%s>\n",
 			element->name.ptr, other_elem->name.ptr));
 		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
 		    sgml_note_missing_close (context, other_elem);
@@ -262,7 +262,7 @@ extern void ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 		     within->group == element->group &&
 		     within != other_elem)
 		{
-		    PRSDBG(("ensure_pre_requisites(%s): container enclosed within: inserting <%s>\n",
+		    PRSDBGN(("ensure_pre_requisites(%s): container enclosed within: inserting <%s>\n",
 			    element->name.ptr, other_elem->name.ptr));
 		    if (! init_dummy)
 			init_dummy = default_attributes(context, other_elem, &dummy_values);
@@ -304,7 +304,7 @@ extern void ensure_post_requisites (SGMLCTX *context, ELEMENT *element)
 	case SHOULD_CONTAIN:
 	    if ( element_bit_clear (context->tos->elements_seen, other_elem->id) )
 	    {
-		PRSDBG(("ensure_post_requisites(%s): inserting <%s></%s>\n",
+		PRSDBGN(("ensure_post_requisites(%s): inserting <%s></%s>\n",
 			element->name.ptr, other_elem->name.ptr, other_elem->name.ptr));
 		if (! init_dummy)
 		    init_dummy = default_attributes(context, other_elem, &dummy_values);
@@ -696,12 +696,12 @@ extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 		    /* Note that this means an element may be closed */
 		    /* when it's *NOT* the context->tos element. */
 
-		    PRSDBG(("perform_element_close(%s): phantom closing ungrouped element </%s>\n",
+		    PRSDBGN(("perform_element_close(%s): phantom closing ungrouped element </%s>\n",
 			    element->name.ptr, elem->name.ptr));
 		    perform_element_close(context, elem);
 		    *phantom = - *phantom;
 		    sgml_note_missing_close(context, elem);
-		    PRSDBG(("perform_element_close(%s): done phantom close </%s>\n",
+		    PRSDBGN(("perform_element_close(%s): done phantom close </%s>\n",
 			    element->name.ptr, elem->name.ptr));
 #if 1	/* Leave this in: Borris: 10/9/96 */
 		    if (b)
@@ -721,7 +721,7 @@ extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 		    b &= elem->group == element->group;
 		    if (elem->id != element->id)
 		    {
-			PRSDBG(("perform_element_close(%s): phantom closing </%s>\n",
+			PRSDBGN(("perform_element_close(%s): phantom closing </%s>\n",
 				element->name.ptr, elem->name.ptr));
 			sgml_note_missing_close(context, elem);
 		    }
@@ -777,7 +777,7 @@ extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 	}
 	else
 	{
-	    PRSDBG(("perform_element_close(%s): close without open!\n",
+	    PRSDBGN(("perform_element_close(%s): close without open!\n",
 		    element->name.ptr));
 	    sgml_note_close_without_open (context, element);
 	}

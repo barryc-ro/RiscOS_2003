@@ -85,7 +85,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
-		files.o rlib_alloc.o
+		files.o rlib_alloc.o fvpr.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -159,8 +159,8 @@ PC_CFLAGS =     -apcs 3/26/hardfp
 
 FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
-FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
-#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
+#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
+FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
@@ -242,7 +242,7 @@ HTMLCHECK_OBJS=	$(SGML_OBJS) htmlcheck.o debug.o memwatch.o myassert.o \
 		reports.o htmldefs.o baseprocs.o deliver.o
 HTMLCHECK_LIBS=
 
-MOST_INCS=	-I../unix  -I../RISC_OSLib -I../\!Fresco -I../tcpiplibs
+MOST_INCS=	-I../unix  -I../RISC_OSLib -I../\!Fresco -I../tcpiplibs -I../memlib
 MOST_CFLAGS=	-DMOST $(MOST_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -DUSE_MARGINS=1
 MOST_VPATH=	$(FRESCO_VPATH):../commonsrc
 MOST_OBJS=	$(FRESCO_OBJS)

@@ -6,6 +6,7 @@
  * 10/07/96: SJM: fixed translate_escaped_text to behave as it used to.
  * 29/08/96: SJM: changed isalpha to isalnum in parse_http_header
  * 18/09/96: DAF: Added shuffle_array.
+ * 25/02/97: DAF: lookup_key_action moved here from util.c
  */
 
 #include <string.h>
@@ -16,6 +17,8 @@
 #include "memwatch.h"
 #include "util.h"
 #include "sgmlparser.h"
+#include "akbd.h"
+
 #define MAX_LINE	256
 
 /* pmatch2 always does a case sensitive match and calls itself recursively */
@@ -1331,6 +1334,68 @@ extern void shuffle_array(void *base, size_t esize, size_t xsize, size_t asize, 
 
 
 
+/*****************************************************************************/
 
+
+typedef struct
+{
+    int key;
+    input_key_action action;
+} input_key_map;
+
+#ifdef STBWEB
+static input_key_map key_map[] =
+{
+    { 10, key_action_NEWLINE },
+    { 13, key_action_NEWLINE },
+    { 8, key_action_DELETE_LEFT },
+    { 127, key_action_DELETE_RIGHT },
+    { 21, key_action_DELETE_ALL },
+    { akbd_Ctl + akbd_CopyK, key_action_DELETE_TO_END },
+    { akbd_LeftK, key_action_LEFT },
+    { akbd_RightK, key_action_RIGHT },
+    { 0x1E, key_action_START_OF_LINE },
+    { akbd_Ctl + akbd_LeftK, key_action_START_OF_LINE },
+    { akbd_CopyK, key_action_END_OF_LINE },
+    { akbd_Ctl + akbd_RightK, key_action_END_OF_LINE },
+    { akbd_UpK, key_action_UP },
+    { akbd_DownK, key_action_DOWN },
+    { -1, key_action_NO_ACTION }
+};
+#else
+static input_key_map key_map[] =
+{
+    { 10, key_action_NEWLINE },
+    { 13, key_action_NEWLINE },
+    { 8, key_action_DELETE_LEFT },
+    { 127, key_action_DELETE_LEFT },
+    { 4, key_action_DELETE_RIGHT },
+    { akbd_CopyK, key_action_DELETE_RIGHT },
+    { 21, key_action_DELETE_ALL },
+    { akbd_Ctl + akbd_CopyK, key_action_DELETE_TO_END },
+    { 11, key_action_DELETE_TO_END },
+    { 2, key_action_LEFT },
+    { akbd_LeftK, key_action_LEFT },
+    { 6, key_action_RIGHT },
+    { akbd_RightK, key_action_RIGHT },
+    { akbd_Ctl + akbd_LeftK, key_action_START_OF_LINE },
+    { 1, key_action_START_OF_LINE },
+    { akbd_Ctl + akbd_RightK, key_action_END_OF_LINE },
+    { 5, key_action_END_OF_LINE },
+    { akbd_UpK, key_action_UP },
+    { akbd_DownK, key_action_DOWN },
+    { -1, key_action_NO_ACTION }
+};
+#endif
+
+extern input_key_action lookup_key_action(int key)
+{
+    input_key_map *ikm = key_map;
+    while (ikm->key != -1 && ikm->key != key)
+	ikm++;
+    return ikm->action;
+}    
+
+/*****************************************************************************/
 
 /* eof portutil.c */

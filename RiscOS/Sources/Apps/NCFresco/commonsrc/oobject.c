@@ -195,6 +195,7 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     OBJDBG(("oobject: size to w=%d,u=%d,d=%d\n", ti->width, ti->max_up, ti->max_down));
 
+#ifndef BUILDERS
 #if 1
     if (obj->type == rid_object_type_PLUGIN)
     {
@@ -219,6 +220,7 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	}
     }
 #endif
+#endif /* BUILDERS */
 }
 
 
@@ -230,6 +232,9 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     wimp_box bbox;
     int bw;
     BOOL do_alt = FALSE, do_plinth = TRUE;
+
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
 
     bw = obj->bwidth;
 
@@ -350,9 +355,11 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 	break;
 
 	/* This is received when the highlight is moved to the plugin and enter pressed */
+#ifndef BUILDERS
     case rid_object_type_PLUGIN:
 	plugin_send_focus(obj->state.plugin.pp);
 	break;
+#endif /* BUILDERS */
 
     case rid_object_type_UNKNOWN:
 	break;

@@ -164,6 +164,9 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     wimp_box ta_box, gwind_box;
     int fg, bg;
 
+    if ((ti->flag & rid_flag_FVPR) == 0)
+	return;
+
     tai = ((rid_text_item_textarea *)ti)->area;
 
     fg = tai->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(rh, ti, doc);
