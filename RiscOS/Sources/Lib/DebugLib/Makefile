@@ -23,7 +23,6 @@ RM		= remove
 LD		= link
 LB		= libfile
 WIPE		= -wipe
-STRIPDEPEND	= stripdepnd
 
 CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS		= -depend !Depend -Stamp -quit
@@ -125,7 +124,6 @@ clean:
 	${WIPE} oz ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${TARGETZ}
-	${STRIPDEPEND} Makefile
 	@echo ${COMPONENT}: cleaned
 
 export_hdrs: h.DebugLib dirs
