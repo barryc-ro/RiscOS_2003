@@ -66,6 +66,7 @@ INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 DEBUGLIB  = C:DebugLib.o.DebugLibZM
+ASMLIB    = C:AsmUtils.o.AsmUtilsZM
 
 
 #
@@ -76,7 +77,7 @@ COMPAT= -DCOMPAT_INET4
 #
 # Include files
 #
-INCLUDES = -ITCPIPLibs:,C:
+INCLUDES = -ITCPIPLibs:,C:,C:AsmUtils
 
 #
 # Debug flag
@@ -107,7 +108,6 @@ OBJS      =	  \
   o._Open         \
   o._PutBytes     \
   o.Interface     \
-  o.RMInfo        \
   o.Static        \
   o.allerrs       \
   o.Hourglass     \
@@ -121,7 +121,6 @@ OBJS      =	  \
   o.pcnfsd_xdr    \
   o.mount_clnt    \
   o.mount_xdr     \
-  o.SixtyFour     \
   o.ModuleWrap    \
   o.Commands      \
   o.Utils         \
@@ -132,7 +131,6 @@ OBJS      =	  \
   o.Cache         \
   o.V2support     \
   o.memory        \
-  o.memswis       \
   o.fh3
 
 DEBOBJS      =	  \
@@ -150,7 +148,6 @@ DEBOBJS      =	  \
   od._Open         \
   od._PutBytes     \
   o.Interface     \
-  o.RMInfo        \
   od.Static        \
   o.allerrs       \
   od.Hourglass     \
@@ -164,7 +161,6 @@ DEBOBJS      =	  \
   o.pcnfsd_xdr    \
   od.mount_clnt    \
   o.mount_xdr     \
-  o.SixtyFour     \
   od.ModuleWrap    \
   od.Commands      \
   od.Utils         \
@@ -175,7 +171,6 @@ DEBOBJS      =	  \
   od.Cache         \
   od.V2support     \
   od.memory        \
-  o.memswis       \
   od.fh3
 
 HDRS = \
@@ -237,14 +232,14 @@ clean: autogen-clean
 #
 # Target 
 #
-${TARGET}: ${XTARGET} ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
-        ${LD} -o $@ -rmf ${OBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB}
+${TARGET}: ${XTARGET} ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ASMLIB}
+        ${LD} -o $@ -rmf ${OBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB} ${ASMLIB}
         $(MODSQZ) $(TARGET)
         Access $@ RW/R
 
 
-${DTARGET}: ${DEBOBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
-        ${LD} -o $@ -rmf ${DEBOBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB}
+${DTARGET}: ${DEBOBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ASMLIB}
+        ${LD} -o $@ -rmf ${DEBOBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB} ${ASMLIB}
         $(MODSQZ) $(DTARGET)
         Access $@ RW/R
 
@@ -256,8 +251,8 @@ ${DIRS}:
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
-        ${LD} -o $@ -aof ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ROMCSTUBS}
+${ROMTARGET}: ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ASMLIB}
+        ${LD} -o $@ -aof ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ROMCSTUBS} ${ASMLIB}
 
 #
 # Final link for the ROM Image (using given base address)
