@@ -18,6 +18,8 @@
 #   Separated out export of headers and library object to prevent headers
 #   being exported twice.
 #   Aliased off the various different targets.
+# 1998-10-24: RDW
+#   MEMCHECK_TARGET added
 
 
 
@@ -38,6 +40,8 @@ RM		= remove
 
 COMPONENT	= Mailbox
 NORMAL_TARGET	= Mailbox
+MEMCHECK_TARGET	= MailboxMC
+HIERPROF_TARGET	= MailboxHP
 MODULE_TARGET	= Mailboxzm
 DEBUG_TARGET	= Mailboxd
 
@@ -71,12 +75,24 @@ export_libs:
 	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=z
 	@echo $(COMPONENT): export complete (libs)
 	
+export_libsMC:
+	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
+	@echo $(COMPONENT): export complete (MemCheck libs)
+	
+export_libsHP:
+	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
+	@echo $(COMPONENT): export complete (HierProf libs)
+	
 clean:
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oHP
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=od
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
 	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=z
 	@$(RM) $(NORMAL_TARGET)
+	@$(RM) $(MEMCHECK_TARGET)
+	@$(RM) $(HIERPROF_TARGET)
 	@$(RM) $(MODULE_TARGET)
 	@$(RM) $(DEBUG_TARGET)
 	@echo $(COMPONENT): cleaned
