@@ -8,6 +8,7 @@ CC=gcc
 TOLOCAL=cp
 OBJALL=cmhg.o outaof.o gen.o
 DERIVED=gen.c gen.h
+DERIVED_SRC=veneers.o
 
 EXTDIR1=${CLXPATH}
 EXTLIB1=${CLX}
@@ -25,8 +26,9 @@ gen.h gen.c: veneers.o
 
 cmhg.o: gen.h
 
-armcmhg: $(OBJALL)
+armcmhg: $(DERIVED_SRC)
 armcmhg: $(DERIVED)
+armcmhg: $(OBJALL)
 armcmhg: $(EXTLIB1)
 	$(CC) -o armcmhg $(OBJALL) $(EXTLIB1)
 	@echo "Made armcmhg"
@@ -35,6 +37,7 @@ clean:
 	-rm ${OBJALL}
 	-rm armcmhg
 	-rm $(DERIVED)
+	-rm $(DERIVED_SRC)
 	@echo cleaned cmhg
 
 realclean: clean
