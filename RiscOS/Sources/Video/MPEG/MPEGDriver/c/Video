@@ -321,7 +321,7 @@ _kernel_oserror *Video_SWIFullPackets (unsigned int flags, stream_handle_t vsh, 
     
     /* Disable IRQs for the rest of this SWI */
     if (irqs_were_enabled) _kernel_irqs_off ();
-  
+    
     /* If packet list is empty, point list head at the first new packet, otherwise add it to the end */
     if (Stream.video.packet_list_tail == NULL)
     {
@@ -336,7 +336,47 @@ _kernel_oserror *Video_SWIFullPackets (unsigned int flags, stream_handle_t vsh, 
     while (packets != NULL)
     {
       unsigned int old_value;
-      /* Add the length of each bitstream packet to the amnount we've received */
+      
+#if SkipDataAfterDiscontinuity
+      if (packets->discontinuity)
+      {
+        Stream.vid_flags.skipping_data_after_discontinuity = true;
+      }
+      if (Stream.vid_flags.skipping_data_after_discontinuity)
+      {
+        /* Discard data until the next non-slice (and non-error) start code. */
+        /* It's very hard to cope with start-codes that straddle packets - we'd need  */
+        /* some mechanism to tell stuffer not to proceed with a packet until the next */
+        /* one had come along and we had verified that it didn't contain a start-code */
+        /* of interest - so for now we'll only check within individual packets        */
+        enum {
+          unlocked,
+          first_zero,
+          second_zero,
+          one,
+          start_code
+        } search_stage = unlocked;
+        while (search_stage != start_code && packets->length > 0)
+        {
+          unsigned char byte = *packets->start;
+          packets->start ++;
+          packets->length --;
+          if (search_stage == unlocked && byte == 0) search_stage = first_zero;
+          else if ((search_stage == first_zero || search_stage == second_zero) && byte == 0) search_stage = second_zero;
+          else if (search_stage == second_zero && byte == 1) search_stage = one;
+          else if (search_stage == one && ((byte > 0xAF && byte != 0xB4) || byte == 0x00)) search_stage = start_code;
+          else search_stage = unlocked;
+        }
+        if (search_stage == start_code)
+        {
+          packets->start -= 4;
+          packets->length += 4;
+          Stream.vid_flags.skipping_data_after_discontinuity = false;
+        }
+      }
+#endif
+      
+      /* Add the length of each bitstream packet to the amount we've received */
       old_value = Stream.video.since_open.amount_received.lsw;
       Stream.video.since_open.amount_received.lsw += packets->length;
       if (Stream.video.since_open.amount_received.lsw < old_value) Stream.video.since_open.amount_received.msw ++;
@@ -1209,6 +1249,9 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.vid_flags.display_needs_setting_up = true;
   Stream.vid_flags.display_idle = true;
   Stream.vid_flags.eos_callback_requested = false;
+#if SkipDataAfterDiscontinuity
+  Stream.vid_flags.skipping_data_after_discontinuity = false;
+#endif
   Stream.fields_till_next_AU = -1; /* can't accidentally take value +1 before display is properly initialised */
   Stream.consecutive_pipeline_stalls = 0;
   Stream.decode_frames = NULL;

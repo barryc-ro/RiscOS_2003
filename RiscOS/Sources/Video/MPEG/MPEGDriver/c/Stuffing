@@ -65,6 +65,11 @@ Date		Who	Change
 #include "Types.h"
 #include "Registers.h"
 
+#include "Debug.h"
+#if Debugging==1
+#include "DWrite.h"
+#endif
+
 /*****************/
 /* Private types */
 /*****************/
@@ -120,7 +125,7 @@ static void static_InsertPESHeader (a_v_state_t *av, bitstream_packet_t *private
 static bool video_callback_requested = false;
 static bool audio_callback_requested = false;
 static PES_header_t audio_PES_header;
-static bitstream_packet_t audio_PES_header_packet = { NULL, NULL, NULL, NULL, 0, NULL, 0, 0, 0, 0, 0, 0, 1 };
+static bitstream_packet_t audio_PES_header_packet = { NULL, NULL, NULL, NULL, 0, NULL, 0, 0, 0, 0, 0, 0, 0, 1 };
 
 /*********************/
 /* Private constants */
@@ -180,6 +185,51 @@ void Stuffing_VideoCallback (void)
     /* bearing in mind that VID_VBL is rounded down to the nearest 2 kilobit boundary */
     space_in_bit_buffer = (SDRAM_VIDEO_BIT_BUFFER_END - SDRAM_VIDEO_BIT_BUFFER_START) - ((VID_VBL & 0x3FFF) * 256 + 256);
     
+#if Debugging==1 && DebugBufferLevels==1
+    if (Stream.audio.state != stream_closed)
+    {
+      int empty, full, total_audio;
+      bitstream_packet_t *packet;
+      DWrite_SetPos(5,8);
+      DWrite_Write0("AUDQUE: ");
+      full = 0;
+      for (packet = Stream.audio.packet_list_head; packet != NULL; packet = packet->link)
+      {
+        full += packet->length;
+      }
+      total_audio = full;
+      full = (full + (VID_ABL & 0x3FFF) * 256) * 50 / Stream.audio_buffer_high_water_mark;
+      if (full > 50) full = 50;
+      empty = 50 - full;
+      while ( full-- > 0 ) DWrite_WriteC('*');
+      while ( empty-- > 0 ) DWrite_WriteC(' ');
+      DWrite_SetPos(5,9);
+      DWrite_Write0("VIDQUE: ");
+      full = 0;
+      for (packet = Stream.video.packet_list_head; packet != NULL; packet = packet->link)
+      {
+        full += packet->length;
+      }
+      full = (full + (VID_VBL & 0x3FFF) * 256 + 256) * 50 / (1572864 - total_audio);
+      if (full > 50) full = 50;
+      empty = 50 - full;
+      while ( full-- > 0 ) DWrite_WriteC('*');
+      while ( empty-- > 0 ) DWrite_WriteC(' ');
+      DWrite_SetPos(5,10);
+      DWrite_Write0("AUDSLW: ");
+      DWrite_WriteHex8(Stream.audio.since_open.slows);
+      DWrite_SetPos(5,11);
+      DWrite_Write0("AUDFST: ");
+      DWrite_WriteHex8(Stream.audio.since_open.fasts);
+      DWrite_SetPos(5,12);
+      DWrite_Write0("VIDSLW: ");
+      DWrite_WriteHex8(Stream.video.since_open.slows);
+      DWrite_SetPos(5,13);
+      DWrite_Write0("VIDFST: ");
+      DWrite_WriteHex8(Stream.video.since_open.fasts);
+    }
+#endif
+
     while (Stream.video.packet_list_head != NULL && space_in_bit_buffer > 0)
     {
       if (Stream.video.packet_list_head->mpeg_start)
@@ -218,6 +268,30 @@ void Stuffing_VideoCallback (void)
           }
         }
       }
+      
+#if SkipDataAfterDiscontinuity
+      {
+//        #define BLOCKLENGTH 136
+        #define BLOCKLENGTH 4
+        static unsigned int zero_bytes_to_send = 0;
+//        static unsigned char zero_block [BLOCKLENGTH];
+        static unsigned char zero_block [BLOCKLENGTH]={0,0,1,0xB4};
+        if (Stream.video.packet_list_head->discontinuity)
+        {
+          /* Insert some zeroes to pull the decoder out of its old state */
+          zero_bytes_to_send = BLOCKLENGTH; /* enough to pull us out of even a sequence header at its start */
+          Stream.video.packet_list_head->discontinuity = false; /* don't do it next time if we overflow the MPEG chip video buffer */
+        }
+        if (zero_bytes_to_send > 0)
+        {
+          bytes_to_send_this_time = MIN(space_in_bit_buffer, zero_bytes_to_send);
+          MiscAsm_Stuff ((void *) (MPEG_Base_Address + Offset_MPEG_Video_Data_Write_32), zero_block, bytes_to_send_this_time);
+          zero_bytes_to_send -= bytes_to_send_this_time;
+          space_in_bit_buffer -= bytes_to_send_this_time;
+          /* Don't count these bytes in the total sent to the MPEG chip */
+        }
+      }
+#endif
       
       bytes_to_send_this_time = MIN(space_in_bit_buffer, Stream.video.packet_list_head->length);
       
@@ -334,7 +408,18 @@ void Stuffing_AudioCallback (void)
     }
     
     /* Now test for the various audio buffer thresholds */
+#if 1
     total_audio_queueing = ((VID_ABL & 0x3FFF) * 256) + (Stream.audio.since_reset.amount_received.lsw - Stream.audio.since_reset.amount_sent.lsw);
+#else
+    {
+      bitstream_packet_t *packet = Stream.audio.packet_list_head;
+      total_audio_queueing = (VID_ABL & 0x3FFF) * 256;
+      for (; packet != NULL; packet = packet->link)
+      {
+        total_audio_queueing += packet->length;
+      }
+    }
+#endif
     
     /* If we've reached prefill buffer-fullness, tell control unit so */
     if (Stream.audio.state == stream_prefilling && Stream.audio.prefill_state == ps_initialising && total_audio_queueing > Stream.audio_buffer_prefill)

@@ -271,7 +271,7 @@ static void static_ProcessVideoPictureHdr (void);
 static void static_ProcessVideoPictureCodingExt (void);
 static void static_ProcessVideoQuantMatrixExt (void);
 static void static_ProcessVideoPictureDisplayExt (void);
-static void static_ProcessVideoUserData (void);
+static bool static_ProcessVideoUserData (void);
 static void static_ProcessVideoDTG1UserData (void);
 static void static_ProcessVideoDiviComUserData (unsigned char dataLength, unsigned char dataType, unsigned char extDataType);
 static void static_ProcessVideoSliceHdr (void);
@@ -314,6 +314,9 @@ static unsigned int Working_IRQTime [profileirq_LIMIT];
 #endif
 #if DebugReentrancy==1
 static unsigned int IrqStackDepthOnEntry;
+#endif
+#if DebugVideoHeaderFIFO==1
+static void (*DADebug_WriteC) (char);
 #endif
 #endif
 
@@ -709,6 +712,21 @@ _kernel_oserror *IRQ_EnableVideoPrefillIRQs (void)
   bool irqs_were_enabled = !_kernel_irqs_disabled ();
   int discard;
   dprintf (("IRQ", "EnableVideoPrefillIRQs\n"));
+  
+#if Debugging==1 && DebugVideoHeaderFIFO==1
+  {
+    void (*routine) (char);
+    if (_swix(0x531C0, _OUT(0), &routine))
+    {
+      DADebug_WriteC = NULL;
+    }
+    else
+    {
+      DADebug_WriteC = routine;
+    }
+    _swix (OS_CLI, _IN(0), "DADReset");
+  }
+#endif
   
   /* Set a CallAfter to catch cases where the MPEG chip jams during prefill */
   e = _swix (OS_CallAfter, _INR(0,2), 1000, video_prefill_stiff_detected, Module_PrivateWord);
@@ -1228,30 +1246,35 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
         Stream.consecutive_pipeline_stalls ++;
         if (Stream.video.speed_indicator != 0) /* don't risk divide-by-zero condition!! */
         {
-          if (Stream.consecutive_pipeline_stalls % (40 * Stream.video.speed_indicator) == 0)
+          unsigned int timeout;
+          if (Stream.rs_flags.trick_play_mode)
           {
-            if ((VID_VBL & 0x3FFF) != 0) /* don't need an internal reset if it's just an extended underrun */
+            timeout = 8 * Stream.video.speed_indicator;
+          }
+          else
+          {
+            timeout = 2 * Stream.video.speed_indicator;
+          }
+          if ((VID_VBL & 0x3FFF) != 0) /* if bitbuffer is empty, then it probably doesn't need kicking (yet) */
+          {
+            if (Stream.consecutive_pipeline_stalls % (3 * timeout) == 0)
             {
+#if Debugging==1 && DebugDecoderErrors==1
+              DWrite_Write0("SR ");
+#endif
               /* Badly locked up - do a complete video reset */
               _swix (OS_AddCallBack, _INR(0,1), video_reset_callback, Module_PrivateWord);
               Stream.video.since_open.internal_resets ++;
               Stream.video.since_reset.internal_resets ++;
             }
+            else if ((Stream.consecutive_pipeline_stalls % timeout == 0) && ((VID_STA_8 & (VIDEO_INT_PID >> 8)) == 0))
+            {
+#if Debugging==1 && DebugDecoderErrors==1
+              DWrite_Write0("PR ");
+#endif
+              STi3520L_PipelineReset ();
+            }
           }
-//          else if (Stream.consecutive_pipeline_stalls % (8 * Stream.video.speed_indicator) == 0)
-//          {
-//            STi3520L_PipelineReset ();
-//            /* Force re-use of the current frame struct, if any */
-//            if (Stream.vid_flags.started_parsing_headers)
-//            {
-//              if (Stream.decode_frames->on_display_list)
-//              {
-//                static_RemoveFrameFromList (Stream.decode_frames, false);
-//                Stream.decode_frames->on_display_list = false;
-//              }
-//              Stream.vid_flags.next_frames_headers_have_been_decoded = false;
-//            }
-//          }
         }
       }
       else
@@ -1507,9 +1530,15 @@ Notes:		This is enabled throughout prefill and normal play, in order
 
 static void static_INT_PER (void)
 {
+#if Debugging==1 && DebugDecoderErrors==1
+  DWrite_Write0("PER ");
+#endif
   dprintf (("IRQ", "INT_PER\n"));
   Stream.video.since_open.pipeline_errors += 1;
   Stream.video.since_reset.pipeline_errors += 1;
+#if ManualPipelineResets==1
+  STi3520L_PipelineReset ();
+#endif
 }
 
 /******	static_INT_SER() ***************************************************
@@ -1522,9 +1551,15 @@ Notes:		This is enabled throughout prefill and normal play, in order to
 
 static void static_INT_SER (void)
 {
+#if Debugging==1 && DebugDecoderErrors==1
+  DWrite_Write0("SER ");
+#endif
   dprintf (("IRQ", "INT_SER\n"));
   Stream.video.since_open.severe_errors += 1;
   Stream.video.since_reset.severe_errors += 1;
+#if ManualPipelineResets==1
+  STi3520L_PipelineReset ();
+#endif
 }
 
 /******	static_INT_PDE() ***************************************************
@@ -1537,9 +1572,15 @@ Notes:		This is enabled throughout prefill and normal play, in order to
 
 static void static_INT_PDE (void)
 {
+#if Debugging==1 && DebugDecoderErrors==1
+  DWrite_Write0("PDE ");
+#endif
   dprintf (("IRQ", "INT_PDE\n"));
   Stream.video.since_open.picture_decode_errors += 1;
   Stream.video.since_reset.picture_decode_errors += 1;
+#if ManualPipelineResets==1
+  STi3520L_PipelineReset ();
+#endif
 }
 
 /******	static_INT_CSS() ***************************************************
@@ -1713,9 +1754,11 @@ static void static_ProcessVideoHdr (void *argument)
 {
   unsigned int data;  /* for holding the results of static_GetVideoHdrBits */
   unsigned int *video_ints = argument;
+  enum { unlocked, first_zero, second_zero, one } stage;
   while (true)
   {
     data = static_GetVideoHdrBits (8);
+    stage = unlocked; /* Default start state for next header search */
     if (Stream.vid_flags.started_parsing_headers && data <= SLICE_START_CODE_MAX && data >= SLICE_START_CODE_MIN)
     {
       /* Now we've processed all the headers, take any necessary actions */
@@ -1724,6 +1767,13 @@ static void static_ProcessVideoHdr (void *argument)
       VID_ITM_8 &= ~(VIDEO_INT_HFF>>8); /* disable header fifo full IRQ, so we only return when the start-code detector has hit the next picture */
       *video_ints = (*video_ints | VID_ITS) & VID_ITM & ~VIDEO_INT_SCH & ~VIDEO_INT_HFF; /* clear the SCH and HFF bits in both VID_ITS and |video_ints| */
       /* Wait until the next set of headers arrive */
+#if Debugging==1 && DebugVideoHeaderFIFO==1
+      if (DADebug_WriteC != NULL)
+      {
+        DADebug_WriteC (0); DADebug_WriteC (0); DADebug_WriteC (0);
+        DADebug_WriteC ('#'); DADebug_WriteC ('#'); DADebug_WriteC ('#');
+      }
+#endif
       Co_SwitchTo (Co_MainRoutine, NULL);
       /* By the time we return from Co_SwitchTo(), picture decoding is complete and an automatic header search has already been launched and completed. */
     }
@@ -1783,7 +1833,10 @@ static void static_ProcessVideoHdr (void *argument)
           }
           break;
         case USER_DATA_START_CODE:
-          static_ProcessVideoUserData ();
+          if (static_ProcessVideoUserData ())
+          {
+            stage = first_zero;
+          }
           break;
         case SEQUENCE_END_CODE:
           Stream.vid_flags.sequence_headers_locked = false;
@@ -1792,20 +1845,16 @@ static void static_ProcessVideoHdr (void *argument)
       /* Unfortunately, we can't rely on an automatic header search at *this* point, because I've      */
       /* observed VID_SCM returning the wrong value from time to time, especially when the header FIFO */
       /* empties somewhere near a start code prefix. Instead, we have to perform the search ourselves: */
+      static_GetVideoHdrBits (0xFF); /* realign to byte boundary */
+      do
       {
-        enum { unlocked, first_zero, second_zero, one } stage = unlocked;
-        unsigned char byte;
-        static_GetVideoHdrBits (0xFF); /* realign to byte boundary */
-        do
-        {
-          byte = static_GetVideoHdrBits (8);
-          if (stage == unlocked && byte == 0) stage = first_zero;
-          else if ((stage == first_zero || stage == second_zero) && byte == 0) stage = second_zero;
-          else if (stage == second_zero && byte == 1) stage = one;
-          else stage = unlocked;
-        }
-        while (stage != one);
+        data = static_GetVideoHdrBits (8);
+        if (stage == unlocked && data == 0) stage = first_zero;
+        else if ((stage == first_zero || stage == second_zero) && data == 0) stage = second_zero;
+        else if (stage == second_zero && data == 1) stage = one;
+        else stage = unlocked;
       }
+      while (stage != one);
     }
   }
 }
@@ -2374,10 +2423,12 @@ static void static_ProcessVideoPictureDisplayExt (void)
 /******	static_ProcessVideoUserData() **************************************
 
 Purpose:	Parses MPEG user_data()
+Out:		true if we've extracted an extra byte-aligned zero byte
+		from the header FIFO
 
 ***************************************************************************/
 
-static void static_ProcessVideoUserData (void)
+static bool static_ProcessVideoUserData (void)
 {
   /* This code is designed to expect DiviCom/C-Cube (closed captions) or DTG1 (AFD) format user data. */
   /* This is achieved by assuming DiviCom/C-Cube format, and treating DTG1 format as a special instance of it! */
@@ -2393,8 +2444,7 @@ static void static_ProcessVideoUserData (void)
     if (dataLength == 0)
     {
       /* End of data - don't pull any more from header FIFO */
-      /* It would make the code messy not to use break in this function */
-      break;
+      return true;
     }
     dataType = static_GetVideoHdrBits (8);
     if (dataType == 0xFF)
@@ -2419,7 +2469,7 @@ static void static_ProcessVideoUserData (void)
         /* If it wasn't DTG1 then we've messed things up by reading 16 bits. */
         /* If it was DTG1, then don't try to interpret any remaining user data. */
         /* Either way, we want to exit the function now. */
-        break;
+        return false;
       }
       else if ((dataType == 0x02 && dataLength == 0x05) ||
                (dataType == 0x04 && dataLength == 0x05) ||
@@ -2450,7 +2500,7 @@ static void static_ProcessVideoUserData (void)
       else
       {
         /* Unknown format - just exit function (data will be skipped by the next header search) */
-        break;
+        return false;
       }
       first_chunk = false;
     }
@@ -2462,6 +2512,8 @@ static void static_ProcessVideoUserData (void)
     static_ProcessVideoDiviComUserData (dataLength, dataType, extDataType);
   }
   while (dataLength != 0);
+  /* We won't actually get here */
+  return true;
 }
 
 /******	static_ProcessVideoDTG1UserData() **********************************
@@ -2729,6 +2781,13 @@ static unsigned int static_GetVideoHdrBits (unsigned char bits)
         READ_VID_HDF(fifo);
         cached_bits = 16;
 //        dprintf (("IRQ", "GetVideoHdrBits: data = %02X %02X\n", fifo >> 8, fifo & 0xFF));
+#if Debugging==1 && DebugVideoHeaderFIFO==1
+        if (DADebug_WriteC != NULL)
+        {
+          DADebug_WriteC (fifo >> 8);
+          DADebug_WriteC (fifo & 0xFF);
+        }
+#endif
       }
       bits_this_time = MIN(bits, cached_bits);
       data <<= bits_this_time;
