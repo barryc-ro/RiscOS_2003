@@ -210,7 +210,7 @@ static int tftpserver_is_packet_valid(struct tftphdr *tftp, int length, char **f
 		/* Respond to write requests with a device-full error - effectively
 		 * this imposes a quota of zero on the filespace.
 		 */
-		tftpserver_error(tftp, ENOSPACE, NULL);
+		tftpserver_error(tftp, EBADOP, "Write not supported");
 		return 0;
 	}
 
@@ -308,20 +308,19 @@ static int tftpserver_was_packet_unicasted(struct in_addr *local_if)
 static void tftpserver_examine_new_rrq(struct tftphdr *tftp, char *buffer, int length,
 		struct sockaddr_in *sender, struct in_addr *local_if, char *filename)
 {
-        char response[packet_buffer];
-	struct tftphdr *rsp = (struct tftphdr *) response;
 	const char *optval;
-	char *rspoptions;
 	bmc_status status;
 	multicaster_object *mo;
 	size_t bufsize;
+	tftp_client *client;
 	int unicast = 0;
+	int send_oack;
 
 	if (ntohs(tftp->th_opcode) != RRQ) {
 		/* Ignore anything that's not a read request */
 		return;
 	}
-	/* Require the multicast option */
+
 	optval = tftpserver_locate_option(tftp, length, "multicast");
 	if (!optval) {
 	        if (!configure_support_unicast_clients()) {
@@ -364,7 +363,7 @@ static void tftpserver_examine_new_rrq(struct tftphdr *tftp, char *buffer, int l
 		}
 		if (bufsize < SEGSIZE) {
 		        /* Not contrary to the specification - but client is stupid if they
-		         * want it this small */
+		         * want it this small -*/
 		        tftpserver_error(tftp, EBADOPTS, "blksize too small (<512)");
 		        tftpserver_unicast_error(tftp, sender);
 		        return;
@@ -394,51 +393,41 @@ static void tftpserver_examine_new_rrq(struct tftphdr *tftp, char *buffer, int l
 	        return;
 	}
 
+	client = multicaster_lookup_client(mo, sender);
+	if (client == NULL) {
+	        platform_log(LOG_CRIT, "TFTP: Internal error - unable to locate new client");
+	        return;
+	}
+
 	/* Construct the OACK reply to the RRQ. */
-	rspoptions = rsp->th_stuff;
-	rsp->th_opcode = htons(ACK); /* Dummy value */
+	send_oack = 0;
 
-	optval = tftpserver_locate_option(tftp, length, "multicast");
-	if (optval) {
-		rsp->th_opcode = htons(OACK);
-		rspoptions += sprintf(rspoptions, "multicast%c%s,%d,%d%c", '\0',
-			inet_ntoa(multicaster_get_target(mo)->sin_addr),
-			ntohs(multicaster_get_target(mo)->sin_port),
-			multicaster_is_this_the_master_client(mo, sender) ? 1 : 0,
-			'\0');
+	if (tftpserver_locate_option(tftp, length, "multicast")) {
+		send_oack = 1;
 	}
 
-	optval = tftpserver_locate_option(tftp, length, "tsize");
-	if (optval) {
-		rsp->th_opcode = htons(OACK);
-        	rspoptions += sprintf(rspoptions, "tsize%c%u%c", '\0',
-	                multicaster_get_total_size(mo), '\0');
+	if (tftpserver_locate_option(tftp, length, "tsize")) {
+		send_oack = 1;
+                multicaster_oack_includes_tsize(mo, client);
 	}
 
-	optval = tftpserver_locate_option(tftp, length, "blksize");
-	if (optval) {
-		/* Must ask the multicaster object for the block size - in case we
+	if (tftpserver_locate_option(tftp, length, "blksize")) {
+		/* Must rely on the multicaster object for the block size - in case we
 		 * aren't going to offer the size that was requested
 		 */
-		rsp->th_opcode = htons(OACK);
-	        rspoptions += sprintf(rspoptions, "blksize%c%u%c", '\0',
-	        	multicaster_get_buffer_size(mo), '\0');
+	        send_oack = 1;
+                multicaster_oack_includes_blksize(mo, client);
 	}
 
-	if (rsp->th_opcode == htons(ACK)) {
+	if (send_oack) {
+		multicaster_transmit_oack(mo, client);
+	}
+	else {
 	        /* A client that doesn't do any options (we know) so we skip the OACK stage and pretend
 	         * we received an ACK of block zero from it, and hence cause data block 1 to be sent to it
 	         * as a reply to its RRQ
 	         */
 	        multicaster_process_ack(mo, 0, sender);
-	        return;
-	}
-
-	status = platform_unicast(multicaster_get_socket(mo), sender, response, rspoptions - response);
-	if (status == bmc_SYSCALL) {
-	        platform_log(LOG_NOTICE, "%s unicast (to multicast client %s) failed: %s\n",
-	        	i18n_translate_tftp_opcode(ntohs(rsp->th_opcode)),
-	        	inet_ntoa(sender->sin_addr), platform_translate_errno());
 	}
 }
 

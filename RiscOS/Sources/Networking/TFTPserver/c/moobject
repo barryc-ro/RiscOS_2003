@@ -40,22 +40,37 @@
 #include "multicaster.h"
 
 
-typedef struct tftp_client {
+/* This data structure holds all the information necessary to track interaction
+ * with a given client.  Clients are identified by their full network address
+ * held in the client field.  The multicaster object holds an array of these
+ * records.
+ */
+struct tftp_client {
 	struct sockaddr_in	client;
 	unsigned int		oack_acked:1;
 	unsigned int		connected:1;
 	unsigned int		unicast_only:1;
 	unsigned int		timeout_pending:1;
 	unsigned int		timing:1;
+	unsigned int		oack_send_blksize:1;
+	unsigned int		oack_send_tsize:1;
+	short			discard_lives;
 	int			current_part_number;
+	unsigned long		packet_count;
 	platform_time   	rtt_average_8;
 	platform_time   	rtt_deviation_4;
 	platform_time   	last_rtt;
 	platform_time   	rto;
 	platform_time		last_transmission;
+	platform_time		elected_at;
 	platform_time		timeout;
 	platform_time		discard_time;
-} tftp_client;
+};
+
+/* Multicaster object structure details are private to this source file.
+ * Do not change this - add accessor/mutator functions to the header file
+ * and implement them here.
+ */
 
 struct multicaster_object {
 	multicaster_object	*next;
@@ -93,8 +108,14 @@ struct multicaster_object {
 	int			clients_alloc; 	/* size of currently allocated client array */
 	tftp_client		*master_client;	/* ID of the master client */
 	tftp_client		*client;	/* Array of known clients */
+
+	/* Extra client tracking - statistics held for short-circuiting calculations only */
+	int			multicast_clients;
+	int			unicast_clients;
 };
 
+
+static void multicaster_demote_client(multicaster_object *mo, tftp_client *client);
 
 multicast_socket multicaster_get_socket(multicaster_object *mo)
 {
@@ -124,6 +145,16 @@ size_t multicaster_get_total_size(multicaster_object *mo)
 struct sockaddr_in *multicaster_get_target(multicaster_object *mo)
 {
 	return &mo->target;
+}
+
+void multicaster_oack_includes_blksize(multicaster_object *mo, tftp_client *client)
+{
+        client->oack_send_blksize = 1;
+}
+
+void multicaster_oack_includes_tsize(multicaster_object *mo, tftp_client *client)
+{
+        client->oack_send_tsize = 1;
 }
 
 static void multicaster_timeout_retransmitted(multicaster_object *mo, tftp_client *client)
@@ -156,7 +187,10 @@ static void multicaster_initialise_rtt(multicaster_object *mo, tftp_client *clie
 	client->rto = 300;
 	client->last_rtt = 0;
 	client->last_transmission = now;
-	platform_log(LOG_DEBUG, "Initialising: RTT=%.1f, Var=%.1f, RTO=%d\n", client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto);
+	client->elected_at = now;
+	client->packet_count = 0;
+	platform_log(LOG_DEBUG, "Initialising: RTT=%.1f, Var=%.1f, RTO=%d\n",
+		client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto);
 }
 
 static void multicaster_start_rtt(multicaster_object *mo, tftp_client *client)
@@ -214,7 +248,8 @@ static void multicaster_timeout_ack_received(multicaster_object *mo, tftp_client
         client->timeout = now + client->rto;
  	client->last_transmission = now;
         client->timing = 1;
-	platform_log(LOG_DEBUG, "RTT=%.1f, Var=%.1f, RTO=%d, Last RTT=%d\n", client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto, client->last_rtt);
+	platform_log(LOG_DEBUG, "RTT=%.1f, Var=%.1f, RTO=%d, Last RTT=%d\n",
+		client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto, client->last_rtt);
 }
 
 
@@ -264,7 +299,7 @@ void multicaster_determine_select_timeout(multicaster_object *mo, struct timeval
 
 }
 
-static tftp_client *multicaster_lookup_client(multicaster_object *mo, struct sockaddr_in *sin)
+tftp_client *multicaster_lookup_client(multicaster_object *mo, struct sockaddr_in *sin)
 {
 	int i;
 
@@ -314,6 +349,10 @@ bmc_status multicaster_object_ctor(multicaster_object *mo, multicast_file *mf,
 	mo->clients_alloc = 0;
 	mo->master_client = NULL;
 	mo->client = NULL;
+
+	/* Initialise the stats */
+	mo->multicast_clients = 0;
+	mo->unicast_clients = 0;
 
 	/* Set up the source address for the packets */
 	platform_init_sockaddr_in(&mo->source, *interface, 0);
@@ -383,27 +422,71 @@ void multicaster_object_dtor(multicaster_object *mo)
 	free(mo);
 }
 
+size_t multicaster_format_full_oack(multicaster_object *mo, tftp_client *client, char *buffer)
+{
+        size_t length = 0;
+
+	if (client->oack_send_blksize) {
+	        length += sprintf(buffer + length, "blksize%c%d%c", '\0',
+	        	multicaster_get_buffer_size(mo), '\0');
+	}
+	if (client->oack_send_tsize) {
+	        length += sprintf(buffer + length, "tsize%c%d%c", '\0',
+	        	multicaster_get_total_size(mo), '\0');
+	}
+	if (!client->unicast_only) {
+	        const struct sockaddr_in *const target = multicaster_get_target(mo);
+	        length += sprintf(buffer + length, "multicast%c%s,%d,%d%c", '\0',
+	        	inet_ntoa(target->sin_addr),
+	        	ntohs(target->sin_port),
+	        	mo->master_client == client,
+	        	'\0');
+	}
+
+	return length;
+}
+
+
 static size_t multicaster_format_oack(char *buffer, int is_master)
 {
 	return sprintf(buffer, "multicast%c,,%d%c", '\0', is_master?1:0, '\0');
 }
 
-static void multicaster_activate_master_client(multicaster_object *mo)
+static tftp_client *multicaster_find_most_eligible_client(multicaster_object *mo)
 {
-	int idx;
+        if (!mo->multicast_clients) {
+                return NULL;
+        }
+        else {
+                int idx;
 
-	for (idx=0; idx<mo->clients; ++idx) {
-		if (!mo->client->unicast_only && mo->client[idx].connected) {
-			mo->master_client = &mo->client[idx];
-			mo->master_client->current_part_number = -1;
-			mo->iov[0].iov_len = offsetof(struct tftphdr, th_stuff);
-			mo->iov[1].iov_len = multicaster_format_oack(mo->buffer, 1);
-			mo->header.th_opcode = htons(OACK);
-			platform_transmit_to(mo, &mo->master_client->client);
-			multicaster_start_rtt(mo, mo->master_client);
-			multicaster_set_discard_timeout(mo, mo->master_client);
-			break;
-		}
+                for (idx=0; idx<mo->clients; ++idx) {
+			if (!mo->client->unicast_only && mo->client[idx].connected) {
+			        return &mo->client[idx];
+			}
+                }
+
+                return NULL;
+        }
+}
+
+static void multicaster_activate_master_client(multicaster_object *mo, tftp_client *prefer)
+{
+        tftp_client *const elected = prefer ? prefer : multicaster_find_most_eligible_client(mo);
+
+	/* Always reset this - even if we aren't electing any client as master */
+	mo->master_client = elected;
+
+	if (elected) {
+	        elected->elected_at = platform_time_current_time();
+	        elected->packet_count = 0;
+		elected->current_part_number = -1;
+		mo->iov[0].iov_len = offsetof(struct tftphdr, th_stuff);
+		mo->iov[1].iov_len = multicaster_format_oack(mo->buffer, 1);
+		mo->header.th_opcode = htons(OACK);
+		platform_transmit_to(mo, &elected->client);
+		multicaster_start_rtt(mo, elected);
+		multicaster_set_discard_timeout(mo, elected);
 	}
 }
 
@@ -440,6 +523,14 @@ static void multicaster_remove_client(multicaster_object *mo, tftp_client *clien
 	platform_log(LOG_DEBUG, "multicaster_object(%p): Removing client %s\n", mo,
 		inet_ntoa(client->client.sin_addr));
 
+	if (client->unicast_only) {
+	        --mo->unicast_clients;
+	}
+	else {
+	        --mo->multicast_clients;
+	}
+
+
 	if (client == mo->master_client) {
 		mo->master_client = NULL;
 	}
@@ -466,7 +557,7 @@ static void multicaster_remove_client(multicaster_object *mo, tftp_client *clien
 	else {
 		/* If we just killed the master client, allocate a new master client */
 		if (mo->master_client == NULL) {
-			multicaster_activate_master_client(mo);
+			multicaster_activate_master_client(mo, NULL);
 		}
 	}
 }
@@ -479,6 +570,7 @@ static void multicaster_init_client(multicaster_object *mo, tftp_client *c, stru
 	c->connected = 0;
 	c->unicast_only = 0;
 	c->timeout_pending = 0;
+	c->discard_lives = configure_default_lives();
 	multicaster_initialise_rtt(mo, c);
 }
 
@@ -526,19 +618,25 @@ bmc_status multicaster_add_client(multicaster_object *mo, struct sockaddr_in *si
 	multicaster_init_client(mo, client, sin);
 	client->unicast_only = unicast ? 1 : 0;
 
+	if (client->unicast_only) {
+	        ++mo->unicast_clients;
+	}
+	else {
+	        ++mo->multicast_clients;
+	}
+
 	if (mo->master_client == NULL && !client->unicast_only) {
 		/* Elect this new client as the master - tftpserver.c will see to it
 		 * that the client is sent an OACK indicating that it is the master
-		 * client.
+		 * client after having determined which options need to be sent,
+		 * hence we must not form the OACK message at this point.
 		 */
 		mo->master_client = client;
 		client->current_part_number = -1;
 	}
 
-	if (client->unicast_only || mo->master_client == client) {
-		multicaster_start_rtt(mo, mo->master_client);
-		multicaster_set_discard_timeout(mo, client);
-	}
+	multicaster_start_rtt(mo, client);
+	multicaster_set_discard_timeout(mo, client);
 
 	return bmc_OK;
 }
@@ -580,8 +678,8 @@ void multicaster_investigate_error(multicaster_object *mo, int err, struct socka
 	}
 }
 
-/* Shut up an old long-lost master client */
-static void multicaster_gag_client(multicaster_object *mo, tftp_client *c)
+/* Shut up an old long-lost master client or retransmit a lost OACK */
+static void multicaster_transmit_short_oack(multicaster_object *mo, tftp_client *c)
 {
 	struct iovec iov[sizeof(mo->iov)/sizeof(*mo->iov)];
 	struct tftphdr header;
@@ -592,7 +690,7 @@ static void multicaster_gag_client(multicaster_object *mo, tftp_client *c)
 	header.th_opcode = ntohs(OACK);
 
 	multicaster_write_iovec(mo, &header, offsetof(struct tftphdr, th_stuff),
-		&message, multicaster_format_oack(message, 0));
+		message, multicaster_format_oack(message, mo->master_client == c));
 
 	platform_transmit_to(mo, &c->client);
 
@@ -615,7 +713,7 @@ static void multicaster_generate_error(multicaster_object *mo, short ecode, cons
 	strncat(message, msg ? msg : i18n_translate_tftp_error_code(ecode), sizeof(message));
 
 	multicaster_write_iovec(mo, &header, offsetof(struct tftphdr, th_msg),
-		&message, strlen(message) + 1);
+		message, strlen(message) + 1);
 
 	platform_transmit_to(mo, dest);
 
@@ -629,7 +727,7 @@ static void multicaster_send_part(multicaster_object *mo, int block, tftp_client
 	if (multicaster_read_next_part(mo, block, client)) {
 		bmc_status status;
 
-		if (client->unicast_only || mo->clients == 1) {
+		if (client->unicast_only || mo->multicast_clients == 1) {
 			status = platform_transmit_to(mo, &client->client);
 		}
 		else {
@@ -650,6 +748,32 @@ static void multicaster_send_part(multicaster_object *mo, int block, tftp_client
 		 */
 		multicaster_remove_client(mo, client);
 	}
+}
+
+static int multicaster_check_rate_ok(multicaster_object *mo, tftp_client *client)
+{
+        int rate_ok = 1;
+        platform_time now = platform_time_current_time();
+        platform_time elapsed_s = (50 + now - client->elected_at) / 100;
+
+        ++client->packet_count;
+
+        if (elapsed_s >= configure_read_rate_grace_period()) {
+                /* We've had at least 9.5 seconds worth of getting over startup delays */
+                unsigned long bytes_per_sec;
+                bytes_per_sec = (client->packet_count * multicaster_get_buffer_size(mo)) / elapsed_s;
+                if (bytes_per_sec < configure_read_minimum_master_rate()) {
+                        /* Too slow?  Try to demote it.  Will have no effect if this is the
+                         * only multicast client
+                         */
+                        platform_log(LOG_DEBUG, "Demoting client %s due to lack of speed: %.1fKB/sec\n",
+                        	inet_ntoa(client->client.sin_addr), bytes_per_sec / 1024.0);
+                        multicaster_demote_client(mo, client);
+                        rate_ok = 0;
+                }
+        }
+
+        return rate_ok;
 }
 
 /* Handle an ACK packet arriving on this multicaster's port */
@@ -674,9 +798,11 @@ void multicaster_process_ack(multicaster_object *mo, int block, struct sockaddr_
 			return;
 		}
 
-		multicaster_timeout_ack_received(mo, client);
-		multicaster_set_discard_timeout(mo, client);
-		multicaster_send_part(mo, block, client);
+		if (multicaster_check_rate_ok(mo, client)) {
+			multicaster_timeout_ack_received(mo, client);
+			multicaster_set_discard_timeout(mo, client);
+			multicaster_send_part(mo, block, client);
+		}
 	}
 	else {
 		if (block == mo->max_part_number) {
@@ -701,7 +827,7 @@ void multicaster_process_ack(multicaster_object *mo, int block, struct sockaddr_
 			multicaster_cancel_timeouts(mo, client);
 			client->oack_acked = 1;
 			if (mo->master_client == NULL) {
-				multicaster_activate_master_client(mo);
+				multicaster_activate_master_client(mo, NULL);
 			}
 		}
 		else {
@@ -709,10 +835,72 @@ void multicaster_process_ack(multicaster_object *mo, int block, struct sockaddr_
 			 * A buggy client?  Tell it to shut up
 			 */
 			platform_log(LOG_NOTICE, "ACK from a non-master client\n");
-			multicaster_gag_client(mo, client);
+			multicaster_transmit_short_oack(mo, client);
 			client->oack_acked = 0;
 			multicaster_cancel_timeouts(mo, client);
 		}
+	}
+}
+
+void multicaster_transmit_oack(multicaster_object *mo, tftp_client *client)
+{
+	struct iovec iov[sizeof(mo->iov)/sizeof(*mo->iov)];
+	struct tftphdr header;
+	char message[SEGSIZE];
+
+	(void) memcpy(iov, mo->iov, sizeof(iov));
+
+	header.th_opcode = ntohs(OACK);
+
+	multicaster_write_iovec(mo, &header, offsetof(struct tftphdr, th_stuff),
+		message, multicaster_format_full_oack(mo, client, message));
+
+	platform_transmit_to(mo, &client->client);
+
+	/* Restore old contents of iovec */
+	multicaster_write_iovec(mo, iov[0].iov_base, iov[0].iov_len, iov[1].iov_base, iov[1].iov_len);
+}
+
+static int multicaster_am_i_the_only_multicast_client(multicaster_object *mo, tftp_client *client)
+{
+        return (!client->unicast_only && mo->multicast_clients > 1);
+}
+
+/* This function is called whenever a master multicast client has "misbehaved" and is to
+ * be sent to the end of the client list.  It achieves this by shuffling everything up one
+ * place, then putting the client at the end of the list, unmastering it, sending it a new
+ * OACK (indicating loss of master client status) and then calling the routine which elects
+ * a new master client.  Steps are taken to prevent the client being demoted and then
+ * immediately promoted back to master client status.
+ */
+static void multicaster_demote_client(multicaster_object *mo, tftp_client *client)
+{
+	if (!client->unicast_only && client == mo->master_client || mo->multicast_clients > 1) {
+	        /* Makes no sense to demote a unicast client or a non-master or a single m/c client */
+	        tftp_client *last_client = &mo->client[mo->clients - 1];
+
+	        mo->master_client = NULL;
+	        if (client != last_client) {
+		        const tftp_client temp = *client;
+		        (void) memmove(client, client + 1,
+				sizeof(*mo->client) * (mo->client + mo->clients - client));
+		        mo->client[mo->clients - 1] = temp;
+	        }
+
+		/* Determine the client which is about to be elected as the new master */
+	        client = multicaster_find_most_eligible_client(mo);
+	        if (client == last_client) {
+	                /* For some reason we are about to re-elect the demoted client -
+	                 * so don't send it anything
+	                 */
+	        }
+	        else {
+		        /* De-activate nasty client */
+		        multicaster_transmit_short_oack(mo, last_client);
+		        multicaster_cancel_timeouts(mo, last_client);
+		        /* Activate new client (client == NULL is allowed) */
+	        	multicaster_activate_master_client(mo, client);
+	        }
 	}
 }
 
@@ -722,14 +910,37 @@ static int multicaster_process_timeout(multicaster_object *mo, int *pidx, platfo
 	int result = 0;
 
 	if (platform_time_cmp(now, client->discard_time) >= 0) {
-		*pidx -= 1;
-		result = (mo->clients == 1);
-		multicaster_generate_error(mo, EUNDEF, "Timed out", &client->client);
-		multicaster_remove_client(mo, client);
+	        /* Naughty client: lose a life */
+                --client->discard_lives;
+
+	        if (!multicaster_am_i_the_only_multicast_client(mo, client)) {
+	                /* Lose a further life if you're not the only multicast client
+	                 * This means that single multicast clients take twice as long
+	                 * to die, as they need to be timed out eventually, but they
+	                 * can have extra grace periods in which to recover.
+	                 */
+	                --client->discard_lives;
+	        }
+
+                if (client->discard_lives < 0) {
+                        /* Run out of lives - game over! */
+			*pidx -= 1;
+			result = (mo->clients == 1);
+			multicaster_generate_error(mo, EUNDEF, "Timed out", &client->client);
+			multicaster_remove_client(mo, client);
+		}
+		else {
+		        multicaster_demote_client(mo, client);
+		}
 	}
 	else {
 		if (client->current_part_number == -1) {
-			/* XXX: stuffed - need a copy of the OACK for this client; */
+		        if (client->connected) {
+	        	        multicaster_transmit_short_oack(mo, client);
+		        }
+		        else {
+				multicaster_transmit_oack(mo, client);
+		        }
 		}
 		else {
 			multicaster_send_part(mo, client->current_part_number - 1, client);
@@ -759,3 +970,4 @@ void multicaster_check_timeout(multicaster_object *mo, platform_time now)
 		}
 	}
 }
+
