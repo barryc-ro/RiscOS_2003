@@ -63,19 +63,19 @@ EXPORTS    =
 
 OBJS=	o.bytesex o.chunkfls o.disass o.dtos o.err o.fname \
 	o.host o.hash o.ieeeflt o.prgname o.re o.wholefls \
-	o.filestamp o.dir o.wildcard o.dem
+	o.filestamp o.dir o.wildcard o.dem o.symdefs
 
 OBJSD=	od.bytesex od.chunkfls od.disass od.dtos od.err od.fname \
 	od.host od.hash od.ieeeflt od.prgname od.re od.wholefls \
-	od.filestamp od.dir od.wildcard od.dem
+	od.filestamp od.dir od.wildcard od.dem od.symdefs
 
 OBJSZ=	oz.bytesex oz.chunkfls oz.disass oz.dtos oz.err oz.fname \
 	oz.host oz.hash oz.ieeeflt oz.prgname oz.re oz.wholefls \
-	oz.filestamp oz.dir oz.wildcard oz.dem
+	oz.filestamp oz.dir oz.wildcard oz.dem oz.symdefs
 
 HDRS=	h.aif h.aof h.aout h.asdfmt h.asdllfmt h.bytesex h.chunkfls h.chunkfmt \
 	h.disass h.err h.fname h.hash h.host h.ieeeflt h.libflfmt h.ovrflfmt \
-	h.prgname h.re h.wholefls h.filestamp h.dir h.wildcard h.dem
+	h.prgname h.re h.wholefls h.filestamp h.dir h.wildcard h.dem h.symdefs
 
 LIBS = ${TARGET} ${TARGETD} ${TARGETZ}
 
@@ -137,6 +137,7 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.ovrflfmt ${CLXLIBDIR}.h.ovrflfmt ${CPFLAGS}
 	${CP} h.prgname ${CLXLIBDIR}.h.prgname ${CPFLAGS}
 	${CP} h.re ${CLXLIBDIR}.h.re ${CPFLAGS}
+	${CP} h.symdefs ${CLXLIBDIR}.h.symdefs ${CPFLAGS}
 	${CP} h.wholefls ${CLXLIBDIR}.h.wholefls ${CPFLAGS}
 	${CP} h.wildcard ${CLXLIBDIR}.h.wildcard ${CPFLAGS}
 	${CP} VersionNum ${CLXLIBDIR}.CLXVersion ${CPFLAGS}

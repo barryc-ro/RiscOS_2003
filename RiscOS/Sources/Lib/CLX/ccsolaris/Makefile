@@ -7,10 +7,10 @@ CFLAGS=-c -O2 -I. $(CFL)
 CC=gcc
 DERIVED= datenow.h
 OBJALL=bytesex.o chunkfls.o disass.o err.o fname.o prgname.o re.o ieeeflt.o \
-dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o filestamp.o dem.o
+dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o filestamp.o dem.o symdefs.o
 HSOURCE=aif.h disass.h libflfmt.h scr_drv.h aof.h bytesex.h err.h \
 ovrflfmt.h set_host.h aout.h chunkfls.h fname.h prgname.h asdfmt.h \
-chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h dem.h
+chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h dem.h symdefs.h
 
 CFLhost= -I${RISCOS_CLIB_HDRS}
 CFLfilestamp= -I${RISCOS_CLIB_HDRS}
