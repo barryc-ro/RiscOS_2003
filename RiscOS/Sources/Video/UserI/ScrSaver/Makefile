@@ -144,6 +144,7 @@ o.app:	C:h.bbc
 o.app:	C:h.colourtran
 o.app:	C:h.font
 o.app:	C:h.drawmod
+o.app:	C:h.werr
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	h.module
