@@ -202,6 +202,10 @@ char *access_schemes[] = {
     NULL
     };
 
+#ifdef STBWEB
+http_header_item *last_http_headers = NULL;
+#endif
+
 /***************************************************************************/
 
 static void access_free_item(access_handle d);
@@ -1129,10 +1133,19 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     /* The http close does not need to delete the file as we have already if it was removed from the cache */
     access_http_close(d->transport_handle, http_close_DELETE_BODY );
 
+
+#ifdef STBWEB
+    last_http_headers = si->out.headers;
+#endif
+
     if (d->complete)
 	cache_it = d->complete(d->h, si->out.status, si->out.status == status_COMPLETED_FILE ? cfile : NULL, d->url);
     else
 	cache_it = 0;
+
+#ifdef STBWEB
+    last_http_headers = NULL;
+#endif
 
     access_done_flag = 1;
 
@@ -2538,7 +2551,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
     /* this prevents internal state flags from being passed back in from relocates (like proxy and secure flags) */
     flags &= access_INTERNAL_FLAGS;
 
-    usrtrc( "access_url: %s from %s\n", url, referer ? referer : "<none>" );
+    usrtrc( "access_url: %s from %s flags %x\n", url, referer ? referer : "<none>", flags);
 
     *result = 0;
 
@@ -3441,6 +3454,16 @@ void access_set_header_info(char *url, unsigned date, unsigned last_modified, un
 #ifndef FILEONLY
     if (cache->header_info)
 	cache->header_info(url, date, last_modified, expires);
+#endif
+}
+#endif
+
+#ifdef STBWEB
+void access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
+{
+#ifndef FILEONLY
+    if (cache->get_header_info)
+	cache->get_header_info(url, date, last_modified, expires);
 #endif
 }
 #endif

@@ -698,6 +698,9 @@ void feutils_resize_window(wimp_w *w, const wimp_box *margin, const wimp_box *bo
     }
     else
     {
+	if (state.o.behind == -1)
+	    state.o.behind = fe_status_window_handle();
+
         frontend_fatal_error(wimp_open_wind(&state.o));
     }
 }

@@ -571,12 +571,34 @@ static os_error *setfocus(int obj)
     return wimp_set_caret_pos(&cs);
 }
 
+#if 0
+static os_error *toolactionsetpair(int obj, int cmp, const char *off, const char *on)
+{
+    os_error *e;
+    e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x140140, cmp, off);
+    if (!e) e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 1, obj, 0x140140, cmp, on);
+    return e;
+}
+#endif
+
+static os_error *toolactionpress(int obj, int cmp, int pressed)
+{
+    os_error *e;
+    int was_pressed;
+    e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, obj, 0x140149, cmp, &was_pressed);
+    if (!e && was_pressed != pressed)
+	e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x140148, cmp, pressed);
+    return e;
+}
+
+/* --------------------------------------------------------------------------*/
+
 static void tb_bar_set_highlight(tb_bar_info *tbi, int index, int on)
 {
     if (index != -1)
     {
 	STBDBG(("tb_bar_set_highlight(): bar %d index %d on %d obj %x, cmp %x\n", tbi ? tbi->num : -1, index, on, tbi->object_handle, tbi->buttons[index].cmp));
-	setstate(tbi->object_handle, tbi->buttons[index].cmp, on);
+	toolactionpress(tbi->object_handle, tbi->buttons[index].cmp, on);
     }
 }
 
@@ -588,14 +610,6 @@ static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
 	if (but->cmp == cmp)
 	    return i;
     return -1;
-}
-
-static os_error *toolactionsetpair(int obj, int cmp, const char *off, const char *on)
-{
-    os_error *e;
-    e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, obj, 0x140140, cmp, off);
-    if (!e) e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,4), 1, obj, 0x140140, cmp, on);
-    return e;
 }
 
 /* --------------------------------------------------------------------------*/
@@ -771,6 +785,8 @@ static tb_bar_descriptor bar_names[] =
     { "codecT", NULL, 0, tb_bar_codec_exit_fn, I_DIRECTION },
     { "customT", NULL, 0, tb_bar_custom_exit_fn, I_DIRECTION }
 };
+
+#define TOOLBAR_CODEC	9
 
 static tb_bar_info *tb_bar_init(int bar_num)
 {
@@ -962,6 +978,25 @@ BOOL tb_status_highlight(BOOL gain)
 	return TRUE;
     }
     return FALSE;
+}
+
+void tb_status_button(int cmp, BOOL active)
+{
+    tb_bar_info *tbi = bar_list;
+    if (tbi)
+    {
+	if (!active)
+	    setstate(tbi->object_handle, cmp, FALSE);
+	else
+	{
+	    int i;
+	    for (i = 0; i < tbi->n_buttons; i++)
+	    {
+		int this_cmp = tbi->buttons[i].cmp;
+		setstate(tbi->object_handle, this_cmp, cmp == this_cmp);
+	    }
+	}
+    }
 }
 
 /* --------------------------------------------------------------------------*/
@@ -1425,7 +1460,7 @@ void tb_status_show(int small_only)
 		    o.box.y0 += text_safe_box.y0 + bar_list->height;
 		    o.box.y1 += text_safe_box.y0 + bar_list->height;
 
-		    o.y = - text_safe_box.y0 + o.box.y1;
+		    o.y = - text_safe_box.y0 + o.box.y1 - 20;
 		}
 
 
@@ -1629,19 +1664,15 @@ void tb_status_rotate(void)
 {
     if (bar_list)
     {
-	char sprite_name1[40], sprite_name2[40];
+	char sprite_name1[40];
 
 	if (turn_ctr == -1)
 	    turn_start = alarm_timenow();
 	
 	turn_ctr = ((alarm_timenow() - turn_start) * TURN_SPEED / 100) % config_animation_frames;
 	
-/* 	if (++turn_ctr == config_animation_frames) */
-/* 	    turn_ctr = 0; */
-
-	sprintf(sprite_name1, "%suhl%02d", config_animation_name, turn_ctr);
-	sprintf(sprite_name2, "%shl%02d", config_animation_name, turn_ctr);
-	toolactionsetpair(bar_list->object_handle, I_WORLD, sprite_name1, sprite_name2);
+	sprintf(sprite_name1, "%suhl%02d,%shl%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
+	setfield(bar_list->object_handle, I_WORLD, sprite_name1, FALSE);
     }
 }
 
@@ -1650,7 +1681,7 @@ void tb_status_rotate_reset(void)
 {
     turn_ctr = -1;
     if (bar_list)
-	toolactionsetpair(bar_list->object_handle, I_WORLD, WORLD_SPRITE, WORLD_SPRITE_HL);
+	setfield(bar_list->object_handle, I_WORLD, WORLD_SPRITE","WORLD_SPRITE_HL, FALSE);
 }
 
 /*
@@ -2150,13 +2181,14 @@ BOOL tb_status_check_pointer(wimp_mousestr *mp)
 
     if (tbi && tbi->window_handle == mp->w)
     {
+#if 0
 	int cmp;
 
 	if (_swix(Window_WimpToToolbox, _INR(0,2) | _OUT(1), 0, mp->w, mp->i, &cmp) == NULL)
 	{
 	    movehighlightto(tbi, tb_bar_cmp_to_index(tbi, cmp));
 	}
-
+#endif
 	return TRUE;
     }
     
@@ -2167,89 +2199,40 @@ BOOL tb_status_check_pointer(wimp_mousestr *mp)
 
 void tb_status_set_direction(int up)
 {
+#if 0
     if (bar_list)
     {
 	toolactionsetpair(bar_list->object_handle, I_DIRECTION,
 		 up ? UP_SPRITE : DOWN_SPRITE,
 		 up ? UP_SPRITE_HL : DOWN_SPRITE_HL);
     }
+#endif
 }
 
 /* --------------------------------------------------------------------------*/
 
-#if 0
-BOOL tb_key_handler(wimp_caretstr *cs, int key)
+static int codec_component[] =
 {
-    tb_bar_info *tbi = bar_list;
-    int claimed = FALSE;
+    fevent_CODEC_STOP,
+    fevent_CODEC_PLAY,
+    fevent_CODEC_PAUSE,
+    fevent_CODEC_REWIND,
+    fevent_CODEC_FAST_FORWARD,
+    fevent_CODEC_RECORD
+};
 
-    STBDBG(("tb_key_handler(): w %x key %d\n", cs->w, key));
-    
-    if (tbi && tbi->window_handle == cs->w)
+void tb_codec_state_change(int state)
+{
+    if (bar_list && bar_list->num != TOOLBAR_CODEC)
+	tb_status_new(NULL, TOOLBAR_CODEC);
+
+    if (bar_list)
     {
-	fe_view v = fe_selected_view();
-	if (!v)
-	    v = main_view;
-
-	claimed = TRUE;
-
-	fe_pointer_mode_update(pointermode_OFF);
-
-	switch (key)
-	{
-	case akbd_LeftK:
-	    /* move to previous icon */
-	    movehighlight(tbi, -1);
-	    break;
-
-	case akbd_RightK:
-	    /* move to next icon */
-	    movehighlight(tbi, +1);
-	    break;
-
-	case akbd_UpK:
-	    /* transfer focus back to main window */
-	    setstate(tbi->object_handle, tbi->buttons[tbi->highlight].cmp, 0);
-	    fe_move_highlight(v, be_link_VERT | be_link_BACK);
-	    break;
-
-	case akbd_DownK:
-	    pointer_mode = pointermode_ON;
-	    fevent_handler(fevent_SCROLL_DOWN, v);
-	    pointer_mode = pointermode_OFF;
-	    break;
-
-	case akbd_PageUpK:
-	    pointer_mode = pointermode_ON;
-	    fevent_handler(fevent_SCROLL_PAGE_UP, v);
-	    pointer_mode = pointermode_OFF;
-	    break;
-
-	case akbd_PageDownK:
-	    pointer_mode = pointermode_ON;
-	    fevent_handler(fevent_SCROLL_PAGE_DOWN, v);
-	    pointer_mode = pointermode_OFF;
-	    break;
-
-	case 13:
-	{
-	    int cmp = tbi->buttons[tbi->highlight].cmp;
-	    int action;
-	    os_error *e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140143, cmp, &action);
-	    STBDBG(("tb_key_handler(): err '%s' action %x\n", e ? e->errmess : "", action));
-	    if (!e)
-		fevent_handler(action, main_view);
-	    break;
-	}
-	default:
-	    claimed = FALSE;
-	    break;
-
-	}
+	int i;
+	for (i = 0; i < sizeof(codec_component)/sizeof(codec_component[0]); i++)
+	    setstate(bar_list->object_handle, codec_component[state], state == i);
     }
-    return claimed;
 }
-#endif
 
 /* --------------------------------------------------------------------------*/
 

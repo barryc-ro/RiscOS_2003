@@ -217,8 +217,15 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 #ifdef STBWEB
     draw_highlight_box = ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL) &&
 	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED);
-#endif
 
+    if (draw_highlight_box && (doc->flags & doc_flag_SOLID_HIGHLIGHT))
+    {
+	render_set_colour(render_link_colour(ti, doc), doc);
+	bbc_rectanglefill(hpos, bline - ti->max_down, ti->width + ti->pad, ti->max_up + ti->max_down);
+	draw_highlight_box = FALSE;
+    }
+#endif
+    
     wf = &webfonts[ti->st.wf_index];
 
     if (fs->lf != wf->handle)
@@ -252,14 +259,6 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     flexmem_noshift();
 
-#ifdef STBWEB
-    if (draw_highlight_box && 0xdd000000 != -1)
-    {
-	render_set_colour(0xdd000000 | render_colour_RGB, doc);
-	bbc_rectanglefill(hpos, bline - ti->max_down, ti->width + ti->pad, ti->max_up + ti->max_down);
-    }
-#endif
-    
     {
 	char *s = rh->texts.data + tit->data_off;
 
@@ -275,7 +274,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     flexmem_shift();
 
 #ifdef STBWEB
-    if (draw_highlight_box && 0xdd000000 == -1)
+    if (draw_highlight_box)
     {
 	BOOL first = ti->aref->first == ti;
 	BOOL last = ti->next == NULL || ti->next->aref == NULL || ti->next->aref != ti->aref;
@@ -291,11 +290,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	    width = ti->width + (last ? 0 : ti->pad);
 	    height = ti->max_up + ti->max_down - frontend_dy;
 
-	    if (fs->lfc != (tfc = render_link_colour(ti, doc) ) )
-	    {
-		fs->lfc = tfc;
-		render_set_colour(fs->lfc, doc);
-	    }
+	    render_set_colour(render_link_colour(ti, doc), doc);
 
 	    draw_partial_box(first, last, hpos, b - ti->max_down, width, height);
 

@@ -620,10 +620,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	if ((ncmode = strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
 	{
-	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "KEYBOARD", "LINEDROP", "POSITION" };
+	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "KEYBOARD", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT" };
 	    static const char *on_off_list[] = { "OFF", "ON" };
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" }; /* order must agree with #defines in stbview.h */
-	    name_value_pair vals[5];
+	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0])];
 	    wimp_box box;
 
 	    parse_http_header(ncmode, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
@@ -660,6 +660,14 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 		memset(&v->margin , 0, sizeof(v->margin));
 	    }
+
+	    /* check nohistory flag */
+	    if (vals[5].value)
+		v->dont_add_to_history = TRUE;
+
+	    /* check highlight flag */
+	    if (vals[6].value)
+		backend_doc_set_flags(v->displaying, be_openurl_flag_SOLID_HIGHLIGHT, be_openurl_flag_SOLID_HIGHLIGHT);
 	    
 	    mm_free(ncmode);
 	}
@@ -750,6 +758,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+#if 0
 static wimp_caretstr dbox_saved_caret;
 
 void fe_dbox_dispose(void)
@@ -788,6 +797,7 @@ void fe_dbox_dispose(void)
         }
     }
 }
+#endif
 
 fe_view fe_dbox_view(const char *name)
 {
@@ -841,6 +851,7 @@ fe_view fe_dbox_view(const char *name)
     {
 #if 1
 	box = screen_box;
+/* 	box.y0 = text_safe_box.y0 + tb_status_height(); */
 #else
 	box.x0 = text_safe_box.x0;
 	box.x1 = (text_safe_box.x0 + text_safe_box.x1*3)/4;
@@ -879,8 +890,8 @@ void fe_dbox_cancel(void)
 {
     if (fe_current_passwd)
         fe_passwd_abort();
-    else
-        fe_dbox_dispose();
+/*     else */
+/*         fe_dbox_dispose(); */
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -1349,8 +1360,20 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 
     case sb_status_HELPER:
 	break;
+
     case sb_status_HELP:
 	break;
+
+    case sb_status_PLUGIN:
+    {
+	void *pp = va_arg(ap, void *);
+	int busy = va_arg(ap, int);
+	int state = va_arg(ap, int);
+
+	if (use_toolbox)
+	    tb_codec_state_change(state);
+	break;
+    }
     }
 
     va_end(ap);
@@ -3361,6 +3384,10 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
                 backend_doc_click(v->displaying, m->x, m->y, m->bbits);
             }
             break;
+
+    case wimp_BRIGHT:
+	fevent_handler(fevent_INFO_PAGE, v);
+	break;
     }
 
     return TRUE;

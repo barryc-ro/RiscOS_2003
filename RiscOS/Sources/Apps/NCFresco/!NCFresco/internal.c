@@ -61,6 +61,8 @@ static void get_form_size(int *width, int *height)
 static os_error *fe_version_write_file(FILE *f, be_doc doc)
 {
     char *url, *title;
+    const char *s;
+    char *s1, *s2;
 
     if (doc == NULL)
 	return NULL;
@@ -72,10 +74,28 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc)
     backend_doc_info(doc, NULL, NULL, &url, &title);
 
     fprintf(f, msgs_lookup("version1"), fresco_version);
-    fprintf(f, msgs_lookup("version2"),
-        title ? title : "None",
-        url ? url : "None");
-    fprintf(f, msgs_lookup("version3"));
+    if (title)
+	fprintf(f, msgs_lookup("version2"), title);
+    if (url)
+	fprintf(f, msgs_lookup("version3"), url);
+
+    s1 = strdup(backend_check_meta(doc, "last-modified"));
+    s2 = strdup(backend_check_meta(doc, "expires"));
+    if (s1 || s2)
+    {
+	fprintf(f, msgs_lookup("version4"), s1 ? s1 : msgs_lookup("Unknown"), s2 ? s2 : msgs_lookup("Unknown"));
+	mm_free(s1);
+	mm_free(s2);
+    }
+
+    if ((s = backend_check_meta(doc, "author")) != NULL)
+	fprintf(f, msgs_lookup("version6"), s);
+
+    if ((s = backend_check_meta(doc, "description")) != NULL)
+	fprintf(f, msgs_lookup("version7"), s);
+
+    if ((s = backend_check_meta(doc, "copyright")) != NULL)
+	fprintf(f, msgs_lookup("version8"), s);
 
     fputs(msgs_lookup("versionF"), f);
     fputc('\n', f);
@@ -483,7 +503,7 @@ static int vals_to_bits(int n_vals)
 
 static int nvram_do(int bit_start, int n_bits, int new_val)
 {
-    int mask, byte, offset, r;
+    int mask, byte, offset, r, old;
 
     mask = (1<<n_bits) - 1;
     byte = bit_start/8;
@@ -495,6 +515,7 @@ static int nvram_do(int bit_start, int n_bits, int new_val)
 	return -1;
 
     r = (r >> 8) & 0xff;
+    old = (r & mask) >> offset;
 
     if (new_val != -1)
     {
@@ -503,7 +524,7 @@ static int nvram_do(int bit_start, int n_bits, int new_val)
 	_kernel_osbyte(0xA2, byte, r);
     }
     
-    return r;
+    return old;
 }
 
 static int nvram_read(int bit_start, int n_bits)
@@ -547,9 +568,9 @@ static os_error *fe_custom_write_file(FILE *f, const char *tag, int bit_start, i
 
 static int internal_decode_custom(const char *query, char **url, int *flags)
 {
-    char *font = extract_value(query, "font.");
+    char *font = extract_value(query, "fonts.");
     char *sound = extract_value(query, "sound.");
-    char *beeps = extract_value(query, "beep.");
+    char *beeps = extract_value(query, "beeps.");
     int generated = fe_internal_url_NO_ACTION;
     
     if (font)
@@ -823,6 +844,8 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 
 		*new_url = s;
 		generated = fe_internal_url_REDIRECT;
+
+		tb_status_button(fevent_OPEN_RELATED_STUFF, TRUE);
 	    }
 	}
     }
@@ -833,22 +856,27 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 
 	if (strcasecomp(panel_name, "displayoptions") == 0)
 	{
+	    tb_status_button(fevent_OPEN_DISPLAY_OPTIONS, TRUE);
 	    e = fe_display_options_write_file(f);
 	}
 	else if (strcasecomp(panel_name, "favs") == 0)
 	{
+	    tb_status_button(fevent_HOTLIST_SHOW, TRUE);
 	    e = fe_hotlist_write_file(f);
 	}    
 	else if (strcasecomp(panel_name, "favsdelete") == 0)
 	{
+	    tb_status_button(fevent_HOTLIST_SHOW_DELETE, TRUE);
 	    e = fe_hotlist_delete_write_file(f);
 	}    
 	else if (strcasecomp(panel_name, "find") == 0)
 	{
+	    tb_status_button(fevent_OPEN_FIND, TRUE);
 	    e = fe_find_write_file(f);
 	}
 	else if (strcasecomp(panel_name, "historyalpha") == 0)
 	{
+	    tb_status_button(fevent_HISTORY_SHOW_ALPHA, TRUE);
 	    e = fe_global_write_list(f);
 	}    
 	else if (strcasecomp(panel_name, "historyrecent") == 0)
@@ -856,6 +884,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    v = get_source_view(query, TRUE);
 	    if (v)
 	    {
+		tb_status_button(fevent_HISTORY_SHOW_RECENT, TRUE);
 		e = fe_history_write_list(f, v->first);
 	    }
 	}
@@ -864,6 +893,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    v = get_source_view(query, TRUE);
 	    if (v)
 	    {
+		tb_status_button(fevent_HISTORY_SHOW, TRUE);
 		e = fe_history_write_combined_list(f, v->first);
 	    }
 	}    
@@ -872,6 +902,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    v = get_source_view(query, TRUE);
 	    if (v)
 	    {
+		tb_status_button(fevent_INFO_PAGE, TRUE);
 		e = fe_version_write_file(f, v->displaying);
 	    }
 	}
@@ -881,6 +912,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}
 	else if (strcasecomp(panel_name, "printoptions") == 0)
 	{
+	    tb_status_button(fevent_OPEN_PRINT_OPTIONS, TRUE);
 	    e = fe_print_options_write_file(f);
 	}
 	else if (strcasecomp(panel_name, "password") == 0)
@@ -889,22 +921,27 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}
 	else if (strcasecomp(panel_name, "url") == 0)
 	{
+	    tb_status_button(fevent_OPEN_URL, TRUE);
 	    e = fe_openurl_write_file(f);
 	}    
 	else if (strcasecomp(panel_name, "urlfavs") == 0)
 	{
+	    tb_status_button(fevent_HOTLIST_SHOW_WITH_URL, TRUE);
 	    e = fe_hotlist_and_openurl_write_file(f);
 	}    
 	else if (strcasecomp(panel_name, "customfonts") == 0)
 	{
+	    tb_status_button(fevent_OPEN_FONT_SIZE, TRUE);
 	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS, 3);
 	}    
 	else if (strcasecomp(panel_name, "customsound") == 0)
 	{
+	    tb_status_button(fevent_OPEN_SOUND, TRUE);
 	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND, 2);
 	}    
 	else if (strcasecomp(panel_name, "custombeeps") == 0)
 	{
+	    tb_status_button(fevent_OPEN_BEEPS, TRUE);
 	    e = fe_custom_write_file(f, "beeps", NVRAM_BEEPS, 2);
 	}    
     
@@ -934,11 +971,11 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
     
     *new_url = check_url_prefix(url);
 
-/*     if (unstack && atoi(unstack) != 0) */
-/* 	tb_status_unstack(); */
     if (remove)
 	fe_dispose_view(fe_locate_view(remove));
-    
+
+    tb_status_button(fevent_OPEN_URL, TRUE);
+       
     mm_free(url);
     mm_free(nocache);
     mm_free(remove);
@@ -1152,10 +1189,17 @@ static int internal_action_printpage(const char *query, const char *bfile, const
 {
     fe_view v = get_source_view(query, TRUE);
     char *size = extract_value(query, "size=");
+    BOOL legal = size && strcasecomp(size, "legal") == 0;
 
+    if (use_toolbox)
+	tb_status_button(legal ? fevent_PRINT_LEGAL : fevent_PRINT_LETTER, TRUE);
+    
     if (v)
 	fe_print(v);
 
+    if (use_toolbox)
+	tb_status_button(legal ? fevent_PRINT_LEGAL : fevent_PRINT_LETTER, FALSE);
+    
     mm_free(size);
     
     return fe_internal_url_NO_ACTION;

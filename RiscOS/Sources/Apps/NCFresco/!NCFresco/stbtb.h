@@ -58,8 +58,12 @@ extern void tb_status_unstack_all(void);
 
 extern BOOL tb_status_check_pointer(wimp_mousestr *mp);
 
+extern void tb_status_button(int event, int active);
+
 extern void tb_open_url(void);
 extern void tb_open_url_and_close(void);
+
+extern void tb_codec_state_change(int state);
 
 /* menu control */
 extern int tb_menu_showing(void);

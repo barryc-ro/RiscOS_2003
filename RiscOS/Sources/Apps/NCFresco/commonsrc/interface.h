@@ -107,6 +107,8 @@ int frontend_view_status(fe_view v, int status_type, ...);
                                         /* (char *msg) */
 #define sb_status_FINISHED	11	/* Got to the end of doc_complete */
                                         /* (void) */
+#define sb_status_PLUGIN	12	/* A plugin has opened an instance or changed busy or play state */
+                                        /* (plugin instance, int busy, int play_state) */
 
 #define sb_status_PROGRESS_ABORTED  (-1)
 #define sb_status_PROGRESS_LOCAL    (-2)
@@ -270,6 +272,7 @@ os_error *backend_open_url(fe_view v, be_doc *docp,
 #define be_openurl_flag_ANTIALIAS	(1 << 2)
 #define be_openurl_flag_BODY_COLOURS	(1 << 3)
 #define be_openurl_flag_HISTORY		(1 << 4) /* url was pulled from history list */
+#define be_openurl_flag_SOLID_HIGHLIGHT	(1 << 5)
 
 /* Jump the document to the fragment given */
 extern os_error *backend_goto_fragment(be_doc doc, char *frag);

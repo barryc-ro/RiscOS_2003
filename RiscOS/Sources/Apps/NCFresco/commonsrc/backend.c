@@ -52,6 +52,7 @@
 #include <ctype.h>
 #include <assert.h>
 #include <time.h>
+#include <limits.h>
 
 #include "memwatch.h"
 
@@ -109,6 +110,12 @@
 #include "objects.h"
 #include "fvpr.h"
 #include "pluginfn.h"
+
+#ifdef STBWEB_BUILD
+#include "http.h"
+#else
+#include "../http/httppub.h"
+#endif
 
 #ifndef PP_DEBUG
 #define PP_DEBUG 0
@@ -4107,6 +4114,25 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	return 0;
     }
 
+#if 0
+    /* very grubby way of passing information from access.c - to be removed when possible */
+    {
+	extern http_header_item *last_http_headers;
+	http_header_item *list;
+	for (list = last_http_headers; list; list = list->next)
+	{
+	    rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
+
+	    BEDBG((stderr, "doc_complete: add meta rh %p list %p\n", doc->rh, list));
+
+	    m->httpequiv = strdup(list->key);
+	    m->content = strdup(list->value);
+
+	    rid_meta_connect(doc->rh, m);
+	}
+    }
+#endif    
+    
     doc->cfile = strdup(cfile);
     if (doc->url == NULL)
 	doc->url = strdup(url);
@@ -4293,6 +4319,13 @@ extern os_error *backend_doc_set_flags(be_doc doc, int mask, int eor)
     if (mask & be_openurl_flag_DEFER_IMAGES)
 	doc->flags &= ~doc_flag_DEFER_IMAGES;
 
+    if (mask & be_openurl_flag_SOLID_HIGHLIGHT)
+	doc->flags &= ~doc_flag_SOLID_HIGHLIGHT;
+
+    if (mask & be_openurl_flag_HISTORY)
+	doc->flags &= ~doc_flag_FROM_HISTORY;
+
+
     if (eor & be_openurl_flag_ANTIALIAS)
 	doc->flags ^= doc_flag_ANTIALIAS;
 
@@ -4301,6 +4334,12 @@ extern os_error *backend_doc_set_flags(be_doc doc, int mask, int eor)
 
     if (eor & be_openurl_flag_DEFER_IMAGES)
 	doc->flags ^= doc_flag_DEFER_IMAGES;
+
+    if (eor & be_openurl_flag_SOLID_HIGHLIGHT)
+	doc->flags ^= doc_flag_SOLID_HIGHLIGHT;
+
+    if (eor & be_openurl_flag_HISTORY)
+	doc->flags ^= doc_flag_FROM_HISTORY;
 
     return NULL;
 }
@@ -4363,20 +4402,10 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 #endif
 
 #ifndef BUILDERS
+    backend_doc_set_flags(new, -1, flags);
+    
     if (config_display_links_underlined)
 	new->flags |= doc_flag_UL_LINKS;
-
-    if (flags & be_openurl_flag_ANTIALIAS)
-	new->flags |= doc_flag_ANTIALIAS;
-
-    if (flags & be_openurl_flag_BODY_COLOURS)
-	new->flags |= doc_flag_DOC_COLOURS;
-
-    if (flags & be_openurl_flag_DEFER_IMAGES)
-	new->flags |= doc_flag_DEFER_IMAGES;
-
-    if (flags & be_openurl_flag_HISTORY)
-	new->flags |= doc_flag_FROM_HISTORY;
 #endif
     use_url = strdup(url);
     if ( (frag = strrchr(use_url, '#')) != 0)
@@ -4942,17 +4971,41 @@ void backend_temp_file_register(char *url, char *file_name)
 #endif
 
 #ifdef STBWEB
+
+#define TIME_FORMAT	"%a, %d %b %Y %H:%M:%S GMT"
+
 const char *backend_check_meta(be_doc doc, const char *name)
 {
-    char *name2 = (char *) name;
+    static char rbuf[32];
 
     rid_meta_item *m;
     for (m = doc->rh->meta_list; m; m = m->next)
     {
-        if ((m->name && strcasecomp(m->name, name2) == 0) ||
-            (m->httpequiv && strcasecomp(m->httpequiv, name2) == 0))
+        if ((m->name && strcasecomp(m->name, name) == 0) ||
+            (m->httpequiv && strcasecomp(m->httpequiv, name) == 0))
             return m->content;
     }
+
+    if (strcasecomp(name, "expires") == 0)
+    {
+	unsigned expires;
+	access_get_header_info(doc->url, NULL, NULL, &expires);
+	if (expires == UINT_MAX)
+	    return NULL;
+	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime(&expires));
+	return rbuf;
+    }
+
+    if (strcasecomp(name, "last-modified") == 0)
+    {
+	unsigned last_modified;
+	access_get_header_info(doc->url, NULL, &last_modified, NULL);
+	if (last_modified == 0)
+	    return NULL;
+	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime(&last_modified));
+	return rbuf;
+    }
+
     return NULL;
 }
 #endif
@@ -5104,12 +5157,15 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action)
 	if (obj->type == rid_object_type_PLUGIN)
 	    plugin_send_action(obj->state.plugin.pp, action);
     }
+    else
+	plugin_send_action(NULL, action);
+
     NOT_USED(doc);
 }
 
 extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state)
 {
-    plugin_info(pp, flags, state);
+    plugin_get_info(pp, flags, state);
     NOT_USED(doc);
 }
 

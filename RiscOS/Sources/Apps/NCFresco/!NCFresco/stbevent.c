@@ -442,7 +442,7 @@ static void open_event_handler(int event, fe_view v)
 	frontend_open_url("ncfrescointernal:openpanel?name=customfonts", v, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
-    case fevent_OPEN_MUSIC:
+    case fevent_OPEN_SOUND:
 	frontend_open_url("ncfrescointernal:openpanel?name=customsound", v, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 

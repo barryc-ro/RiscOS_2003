@@ -138,7 +138,7 @@
 #define fevent_OPEN_KEYBOARD		    0x2083
 #define fevent_OPEN_RELATED_STUFF	    0x2084
 #define fevent_OPEN_FONT_SIZE		    0x2085
-#define fevent_OPEN_MUSIC		    0x2086
+#define fevent_OPEN_SOUND		    0x2086
 #define fevent_OPEN_BEEPS		    0x2087
 
 #define fevent_STATUS_INFO_LEVEL            0x2090  /* +F */

@@ -209,7 +209,7 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 #endif
 
     tabindex = &attributes->value[HTML_INPUT_TABINDEX];
-    in->base.tabindex = tabindex->type == value_integer ? tabindex->u.i : -1;
+    in->base.tabindex = tabindex->type == value_integer ? tabindex->u.i : -2; /* have to use -2 as default as -1 means unselectable */
     
     width = &attributes->value[HTML_INPUT_WIDTH];
     in->ww = width->type == value_integer ? width->u.i : -1;

@@ -32,6 +32,7 @@ typedef struct awp_page_str {
 #define doc_flag_DOC_COLOURS	(1<<5) /* Use colours from the document */
 #define doc_flag_FROM_HISTORY	(1<<6) /* Document was loaded from the history list (don't check expiry) */
 #define doc_flag_USE_DRAW_MOD	(1<<7) /* Draw lines with the draw module, rather than OS_Plot */
+#define doc_flag_SOLID_HIGHLIGHT (1<<8) /* Draw highlight filled rather than boxed */
 
 #define doc_flag_DISPLAYING	(1<<16)	/* The document is being displayed, it's safe to try updating the view */
 #define doc_flag_INCOMPLETE	(1<<17)	/* The document fetch was haltedc before it was done */

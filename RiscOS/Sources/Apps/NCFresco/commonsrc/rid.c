@@ -798,6 +798,12 @@ extern void rid_option_item_connect(rid_select_item *s, rid_option_item *o)
     }
 }
 
+extern void rid_meta_connect(rid_header *rh, rid_meta_item *m)
+{
+    m->next = rh->meta_list;
+    rh->meta_list = m;
+}
+
 /*****************************************************************************/
 
 extern int memzone_init(memzone *mz, int flags)

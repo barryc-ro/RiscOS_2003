@@ -159,17 +159,11 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
     {
 	rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
 
-	if ( attributes->value[HTML_META_NAME].type == value_string )
-	    m->name = stringdup(attributes->value[HTML_META_NAME].u.s);
+	m->name = valuestringdup(&attributes->value[HTML_META_NAME]);
+	m->httpequiv = valuestringdup(&attributes->value[HTML_META_HTTP_EQUIV]);
+	m->content = valuestringdup(&attributes->value[HTML_META_CONTENT]);
 
-	if ( attributes->value[HTML_META_HTTP_EQUIV].type == value_string )
-	    m->httpequiv = stringdup(attributes->value[HTML_META_HTTP_EQUIV].u.s);
-
-	if ( attributes->value[HTML_META_CONTENT].type == value_string )
-	    m->content = stringdup(attributes->value[HTML_META_CONTENT].u.s);
-
-	m->next = rh->meta_list;
-	rh->meta_list = m;
+	rid_meta_connect(rh, m);
     }
 }
 

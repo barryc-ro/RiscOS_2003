@@ -610,6 +610,20 @@ static void cache_header_info(char *url, unsigned date, unsigned last_modified, 
     }
 }
 
+static void cache_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
+{
+    cache_item *cc = cache_ptr_from_url(url, NULL);
+    if (cc)
+    {
+	if (date)
+	    *date = cc->header.date;
+	if (last_modified)
+	     *last_modified = cc->header.last_modified;
+	if (expires)
+	    *expires = cc->header.expires;
+    }
+}
+
 /* ---------------------------------------------------------------------------------------- */
 
 #define SEPS	" \n\r\t"
@@ -1144,7 +1158,9 @@ cache_functions cachefs_cache_functions =
     cache_header_info,
 
     cache_flush,
-    cache_optimise
+    cache_optimise,
+    
+    cache_get_header_info
 };
 
 /* ----------------------------------------------------------------------------------------------- */

@@ -613,6 +613,10 @@ int plugin_send_action(plugin pp, int new_action)
     wimp_msgstr msg;
     message_plugin_action *action = (message_plugin_action *) &msg.data;
 
+    /* if no plugin specified then use the top of the helper list */
+    if (pp == NULL)
+	pp = helper_list;
+    
     OBJDBG(("plugin: send action %p state %d\n", pp, pp->state));
 
     /* Build message block */
@@ -1104,7 +1108,7 @@ plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *pa
 
 /* ----------------------------------------------------------------------------- */
 
-void plugin_info(plugin pp, int *flags, int *state)
+void plugin_get_info(plugin pp, int *flags, int *state)
 {
     if (!pp)
     {
@@ -1203,8 +1207,6 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    pp->task = msg->hdr.task;
 		    pp->opening_flags = opening->flags;
 
-/* 		    frontend_update_plugin_state(pp->doc->parent, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state); */
-
 		    /* if it wasn't asked to be a helper but it is  */
 		    if ((opening->flags & plugin_opening_HELPER) && (pp->priv_flags & plugin_priv_HELPER) == 0)
 		    {
@@ -1254,6 +1256,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 			mm_free(url);
 		    }
+
+		    frontend_view_status(pp->doc ? pp->doc->parent : NULL, sb_status_PLUGIN, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state);
 
 		    break;
 		}
@@ -1480,7 +1484,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    else
 		pp->opening_flags &= ~plugin_opening_BUSY;
 
-/* 	    frontend_update_plugin_state(pp->doc->parent, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state); */
+	    frontend_view_status(pp->doc ? pp->doc->parent : NULL, sb_status_PLUGIN, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state);
 
 	    break;
 	}
