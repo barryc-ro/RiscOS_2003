@@ -23,6 +23,18 @@
 /* StB 10/10/97 - allow inclusion of cookie code to be a compile time option */
 #ifdef COOKIE
 
+
+/* Defining this will give you a module that passes more of the test suite
+ * but that introduces a serious security risk in the module.
+ * (RFC2109, section 4.3.2)
+ *
+ * Note that this is required to let some sites work though so you must
+ * define it or loads if sites won't work any more :-(
+ */
+#define RELAX_DOMAIN_NEEDS_LEADING_DOT
+
+
+
 /* Set to 1 if you want cookies stored in Choices:WWW. otherwise !Scrap will be used */
 #define SAVE_COOKIES_IN_CHOICES	0
 
@@ -44,10 +56,6 @@
 #define NOT_DOMAIN		0
 #define DOMAIN_TOO		1
 
-/* Tells parse_http_buffer whether to remove header from buffer */
-#define REMOVE_BUFFER		0
-#define PRESERVE_BUFFER		1
-
 
 #define ACCEPT_ALL_ENV "Browse$AcceptAllCookies"
 
@@ -64,6 +72,7 @@ struct _Cookie {
 	int	version;	/* Which state management specification conforms to */
 	int	secure;		/* secure means should be used for transfer if set */
 	int	discard;	/* Should be kept in memory _only_ */
+	int	emptyport;      /* port parameter was empty */
 
 	time_t	last_access;	/* last time cookie was sent */
 
@@ -293,13 +302,11 @@ static cookiedomain_result check_domain_valid(char *host, char *target)
 
 	/* New domain must start with a dot, ie end in dot as stored in reverse */
 	if (target[target_len-1] != '.') {
-	        #if 0
-	        /* undeffing this will give you a module that passed more of the test suite
-	         * but that introduces a serious security risk in the module.  Do not include
-	         * this section is release code.  RFC2109, section 4.3.2
-	         */
-	        if (Strncmp_ci(target, host, target_len-2) == 0 && strchr(target+1, '.') != NULL) {
-	                return cookiedomain_ADD_DOT;
+	        #ifdef RELAX_DOMAIN_NEEDS_LEADING_DOT
+	        if (Strncmp_ci(target, host, target_len-2) == 0) {
+	                if (strchr(target+1, '.') != NULL) {
+		                return cookiedomain_ADD_DOT;
+	                }
 	        }
 	        #endif
 		#ifdef TRACE
@@ -309,6 +316,9 @@ static cookiedomain_result check_domain_valid(char *host, char *target)
 	}
 	/* Must be embedded dot in new domain */
 	else if (strchr(target+1, '.') == target+target_len-1) {
+	        if (Strncmp_ci("local.", target, 6) == 0) {
+
+	        }
 		#ifdef TRACE
 		cookie_debug("Does not have an embedded '.' so failing!\n");
 		#endif
@@ -518,6 +528,9 @@ static void write_cookies_format_2(FILE *fp)
 				if (cookie->port_list != NULL) {
 					fprintf(fp,"%s",cookie->port_list);
 				}
+				else if (cookie->emptyport > 1) {
+				        fprintf(fp,"-%d",cookie->emptyport);
+				}
 				else {
 					fprintf(fp,"-1");
 				}
@@ -565,6 +578,31 @@ static void write_cookies_to_file(void)
 	}
 }
 
+static int cookie_validate_port_number(int port_num, const Cookie *cookie)
+{
+	if (cookie->port_list == NULL) {
+	        if (cookie->emptyport < 2) {
+	                /* No Port specified in cookie - we allow it */
+	                return 1;
+	        }
+	        else {
+	                /* Allow it only if it matches original port number */
+	                return (cookie->emptyport == port_num);
+	        }
+	}
+	else {
+	        char *ptr = (char *) cookie->port_list;
+
+	        while (isdigit(*ptr)) {
+	                if (strtoul(ptr, &ptr, 10) == (unsigned long) port_num) return 1;
+			if (!ptr) return 0;
+	                ptr += strcspn(ptr, "0123456789");
+                }
+		return 0;
+	}
+}
+
+
 static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
 {
 	size_t pointer = 0, max_size = 0;
@@ -611,12 +649,15 @@ static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
 		                #endif
 			}
 
+			if (!cookie_validate_port_number(ses->endport, cookie)) continue;
+
 			size = strlen(cookie->name) + strlen(cookie->value) + sizeof("; = ");
 			if (num_cookies > 0) size += sizeof("; ");
 			if (cookie->version > 0) {
-				size += sizeof("; $Version=XXXXXXXX; $Domain= ; $Path= ;");
+				size += sizeof("; $Version=XXXXXXXX; $Domain= ; $Path= ; $Port=\"\"");
 				size += cookie->domain != NULL ? strlen(cookie->domain) : 0;
 				size += cookie->path != NULL ? strlen(cookie->path) : 0;
+				size += cookie->port_list != NULL ? strlen(cookie->port_list) : 0;
 			}
 
 			if ((pointer + size) >= max_size) {
@@ -656,6 +697,12 @@ static char *cookie_look_for_cookies(char *domain, char *path, Session *ses)
 				}
 				if (strcmp(cookie->path, path) != 0) {
 					pointer += sprintf(buffer+pointer,"; $Path=%s",cookie->path);
+				}
+				if (cookie->port_list != NULL) {
+				        pointer += sprintf(buffer+pointer,"; $Port=\"%s\"",cookie->port_list);
+				}
+				else if (cookie->emptyport > 1) {
+				        pointer += sprintf(buffer+pointer,"; $Port");
 				}
 			}
 			else {
@@ -841,6 +888,7 @@ static Cookie *create_new_cookie(char *host, char *path, char *name,char *value)
 	new_cookie->domain = Strdup(host);
 	new_cookie->path = Strdup(path);
 	new_cookie->port_list = NULL;
+	new_cookie->emptyport = 0;
 	new_cookie->comment = NULL;
 	calculate_expiry_date(new_cookie, DEFAULT_EXPIRY);
 	new_cookie->version = 0;
@@ -1423,6 +1471,20 @@ static void act_on_cookie_giveup(Cookie **pcookie)
 	}
 }
 
+/* This function checks that the specified portlist is syntactically correct
+ * and returns non-zero if it is, and zero if it is not.  If it is not, then
+ * it is vital
+ */
+static int cookie_syntax_check_portlist(const char *value)
+{
+        if (!value) return 1; /* No value = originating port only */
+
+	/* Why should we check all this when the C library provides a nice
+	 * function for it already?
+	 */
+	return (value[strspn(value, "0123456789 ,")] == '\0');
+}
+
 /* Function to deal with cookie header once one is found - also called when loading
  * a version 1 cookie file
  */
@@ -1524,13 +1586,24 @@ static void act_on_cookie(char *string, Session *s, char *host, char *path)
 		}
 		else if (Strcmp_ci(string,"port") == 0 && current_cookie) {
 			/* Set list of permitted access ports */
-			if (current_cookie->port_list != NULL) {
-				free(current_cookie->port_list);
-			}
-			current_cookie->port_list = Strdup(value);
-			if (current_cookie->port_list == NULL) {
+		        if (cookie_syntax_check_portlist(value)) {
+				if (current_cookie->port_list != NULL) {
+					free(current_cookie->port_list);
+				}
+				current_cookie->port_list = Strdup(value?value:"\"\"");
+				if (value == NULL) {
+				        current_cookie->emptyport = s->endport;
+				}
+				if (current_cookie->port_list == NULL && value != NULL) {
+					act_on_cookie_giveup(&current_cookie);
+				}
+		        }
+		        else {
 				act_on_cookie_giveup(&current_cookie);
-			}
+		                #ifdef TRACE
+				cookie_debug("Portlist syntax was *INVALID* (%s)\n", value?value:"<<NULL POINTER>>");
+		                #endif
+		        }
 		}
 		else if (Strcmp_ci(string,"expires") == 0 && current_cookie) {
 			current_cookie->expires = read_new_expiry_date(value);
@@ -1686,18 +1759,17 @@ static void read_cookie_data_from_file(FILE *fp, char *_buffer)
 	else if (atoi(buffer+8) == 2) {
 		/* Deal with format 2 type files */
 		#ifdef TRACE
-		cookie_debug("Correct format in place\n");
+		cookie_debug("Correct format (2) in place\n");
 		#endif
 		while ((buffer = GETLINE()) != NULL) {
 			Cookie *cookie;
 			char *tokens[token_MAX_TOKEN_COUNT];
 			char *portlist;
+		        int port_num = 0;
 			size_t token_count = cookie_tokenise(buffer, tokens, token_MAX_TOKEN_COUNT);
 
 			if (token_count < token_MAX_TOKEN_COUNT) {
 				#ifdef TRACE
-				cookie_debug("Cookie tokeniser only found %d fields - wanted %d\n",
-					token_count, token_MAX_TOKEN_COUNT);
 				cookie_debug("Cookie tokeniser only found %d fields - wanted %d\n",
 					token_count, token_MAX_TOKEN_COUNT);
 				#endif
@@ -1707,6 +1779,17 @@ static void read_cookie_data_from_file(FILE *fp, char *_buffer)
 			portlist = strchr(tokens[token_DOMAIN], ':');
 			if (portlist != NULL) {
 				*portlist++ = '\0';
+			        #ifdef TRACE
+			        cookie_debug("Port list `%s'\n", portlist);
+			        #endif
+				if (*portlist == '-') {
+				        port_num = atoi(portlist+1);
+					if (port_num < 2) port_num = 0;
+				        portlist = "-1";
+				        #ifdef TRACE
+				        cookie_debug("Port_num set to `%d'\n", port_num);
+				        #endif
+				}
 			}
 			else {
 				portlist = "-1";
@@ -1728,9 +1811,14 @@ static void read_cookie_data_from_file(FILE *fp, char *_buffer)
 			if (strcmp(portlist, "-1") != 0) {
 				cookie->port_list = Strdup(portlist);
 			}
+			cookie->discard = FALSE;
+			cookie->emptyport = port_num;
 
 			if ((tokens[token_SECURE])[0] == 'S') cookie->secure = TRUE; /* Default false */
 			cookie->expires = (int) strtol(tokens[token_EXPIRES], NULL, 16);
+			#ifdef TRACE
+			cookie_debug("Setting expiry date on new cookie to %s", ctime(&cookie->expires));
+			#endif
 			cookie->last_access = (int) strtol(tokens[token_LAST_ACCESS], NULL, 16);
 			add_cookie_to_queue(cookie);
 		}
