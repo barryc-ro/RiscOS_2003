@@ -1,7 +1,7 @@
 # This file was created by Megamake.
 # Copyright (C) Advanced RISC Machines 1992.
 
-CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
+#CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
 CLX=${CLXPATH}/clx.a
 
 CFLAGS=-c -O2 -I$(CLXPATH)  $(CFL) -DHOST_WANTS_NO_BANNER=1 -D__acorn
@@ -596,6 +596,10 @@ armasm: $(DERIVED)
 armasm: $(EXTLIB1)
 	$(CC) -o armasm $(OBJALL) $(EXTLIB1) -s
 	@echo "Made armasm"
+
+install: armasm
+	cp -p armasm ${RISCOS_BUILD_TOOLS}/armasm
+	strip ${RISCOS_BUILD_TOOLS}/armasm
 
 clean:
 	-rm ${OBJALL}
