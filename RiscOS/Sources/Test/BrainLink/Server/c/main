@@ -21,6 +21,7 @@ Pace.
 **************************************************************************/
 #include <stdio.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
@@ -67,7 +68,7 @@ Pace.
 *****************************************************************************/
 typedef enum {startMessage, closeMessage} statusMessage;
 typedef enum {mainWindow, wrchv, debug, brainlink, brainlinkData} dataSource;
-typedef enum {immidiate, pause, task} commandMode;
+typedef enum {keyboard, immediate, pause, task} commandMode;
 
 /****************************************************************************
 * Function prototypes
@@ -88,7 +89,8 @@ static volatile int task_handle = 0;
 static volatile int  child_handle = 0;
 
 static volatile bool taskwindow_created = false;
-static volatile commandMode mode = immidiate;
+static volatile commandMode mode = immediate;
+static volatile int slot_size = 64;
 
 char input_data[INPUT_DATA_BUFFER_SIZE];          /* serial input is written to this buffer */
 
@@ -133,6 +135,10 @@ int main (int argc, char* argv[])
    char* ptr;
    int size;
 
+
+   /* set the current wimp slot size to 32k */
+   _swix (Wimp_SlotSize, _INR (0, 1), 32000, -1);
+
    /* initialise as a wimp task */
    _swix (Wimp_Initialise, _INR (0, 3) | _OUT(1), 310, TASK, description, messages, &task_handle);
 
@@ -153,14 +159,13 @@ int main (int argc, char* argv[])
 
    while (true)
    {
-
       if (mode != pause)
       {
          /* create the task window if necessary */
          if (mode == task && taskwindow_created == false)
          {
             /* create the task window */
-            sprintf (task_window_cmd, "TaskWindow -ctrl -txt 1 -task %d", task_handle);
+            sprintf (task_window_cmd, "TaskWindow -wimpslot %dK -ctrl -txt 1 -task %d", slot_size, task_handle);
             if (wimp_start_task (task_window_cmd, 0) == 0)
             {
                taskwindow_created = true;
@@ -168,7 +173,7 @@ int main (int argc, char* argv[])
             else
             {
                writeOutputString ("\n\rUnable to create task.\n\r", brainlink);
-               mode = immidiate; /* task window could not be created, so default to immidiate mode. */
+               mode = immediate; /* task window could not be created, so default to immediate mode. */
             }
          }
 
@@ -187,7 +192,7 @@ int main (int argc, char* argv[])
                          msg.hdr.action_code = TaskWindow_Morite;
                          _swix (Wimp_SendMessage, _INR (0, 2), 17, &msg, child_handle);
                          child_handle = 0;
-                        _swix (OS_ExitAndDie, _IN(0) | _IN(3), 0, module_name);
+                         _swix (OS_ExitAndDie, _IN(0) | _IN(3), 0, module_name);
                      }
                      break;
                   case TaskWindow_Output:     /* send task window output to serial port */
@@ -211,27 +216,30 @@ int main (int argc, char* argv[])
                tw_data_size = 0;
                do
                {
-                  bytes_read = readInputData (input_data, INPUT_DATA_BUFFER_SIZE);
+                  bytes_read = readInputData (input_data, offsetof (WimpPollBlock, user_message.data.words[1]));
+
                   processInputData (input_data, bytes_read, tw_data, &tw_data_size);
+
+                  if ((tw_data_size > 0) && (taskwindow_created == true))
+                  {
+                     wimp_poll_block.user_message.hdr.action_code = TaskWindow_Input;
+                     wimp_poll_block.user_message.hdr.your_ref = 0;
+                     wimp_poll_block.user_message.data.words[0] = tw_data_size;
+                     memcpy (&wimp_poll_block.user_message.data.words[1], tw_data, tw_data_size);
+                     /* write the size of the message */
+                     wimp_poll_block.user_message.hdr.size =
+                        wimp_poll_block.user_message.data.words[0] +
+                        sizeof (wimp_poll_block.user_message.data.words[0]) +
+                        sizeof (wimp_poll_block.user_message.hdr);
+
+
+                     /* make sure it's an integer multiple of words */
+                     wimp_poll_block.user_message.hdr.size = (wimp_poll_block.user_message.hdr.size + 3) & ~3;
+                  }
                }
                while (bytes_read > 0);
 
-
-               if ((tw_data_size > 0) && (taskwindow_created == true))
-               {
-                  wimp_poll_block.user_message.hdr.action_code = TaskWindow_Input;
-                  wimp_poll_block.user_message.data.words[0] = tw_data_size;
-                  memcpy (&wimp_poll_block.user_message.data.words[1], tw_data, tw_data_size);
-                  /* write the size of the message */
-                  wimp_poll_block.user_message.hdr.size = wimp_poll_block.user_message.data.words[0] + 4 +
-                                                                    sizeof (wimp_poll_block.user_message.hdr);
-                  /* make sure it's an integer multiple of words */
-                  if (wimp_poll_block.user_message.hdr.size % 4 != 0)
-                  {
-                     wimp_poll_block.user_message.hdr.size = (wimp_poll_block.user_message.hdr.size & ~3) + 4;
-                  }
-                  wimp_send_message (Wimp_EUserMessage, &wimp_poll_block, child_handle, 0 ,NULL);
-               }
+               wimp_send_message (Wimp_EUserMessage, &wimp_poll_block, child_handle, 0 ,NULL);
                break;
             default:
                break;
@@ -382,8 +390,13 @@ static void processInputData (const char* in_data, unsigned int input_data_size,
    {
       if (in_data[i] >= 0x20 || in_data[i] == 0x08 || in_data[i] == 0x0D || in_data[i] == 0x1B)
       {
+         if (mode == keyboard)
+         {
+            /* insert byte into the keyboard buffer */
+            _swix (OS_Byte, _INR (0, 2), 138, 0, in_data[i]);
+         }
 
-         if (mode == task)
+         else if (mode == task)
          {
             if (in_data[i] == 0x08) /* if the backspace key is detected */
             {
@@ -395,7 +408,7 @@ static void processInputData (const char* in_data, unsigned int input_data_size,
             }
          }
 
-         else if (mode == immidiate)
+         else if (mode == immediate)
          {
             if (data_size < (MAX_COMMAND_LENGTH - 1))
             {
@@ -427,9 +440,13 @@ static void processInputData (const char* in_data, unsigned int input_data_size,
       {
          switch (in_data[i])
          {
+            case 0x0B: /* control K */
+               writeOutputString ("\n\rKEYBOARD MODE.\n\r", brainlink);
+               mode = keyboard;
+               break;
             case 0x09: /* control I */
-               writeOutputString ("\n\rIMMIDIATE MODE.\n\r", brainlink);
-               mode = immidiate;
+               writeOutputString ("\n\rIMMEDIATE MODE.\n\r", brainlink);
+               mode = immediate;
                break;
             case 0x10: /* control P */
                writeOutputString ("\n\rPAUSE MODE.\n\r", brainlink);
@@ -689,7 +706,6 @@ extern _kernel_oserror* commandHandler (const char *arg_string, int argc, int cm
    (void)pw;
 
 
-
    sscanf (arg_string, "%s", &parameters[0][0]);
 
 
@@ -698,9 +714,13 @@ extern _kernel_oserror* commandHandler (const char *arg_string, int argc, int cm
       case CMD_BrainLink_Baud:
          serial_setBaudRate (parameters[0]);
          break;
-      case CMD_BrainLink_Immidiate:
-         mode = immidiate;
-         writeOutputString ("\n\rIMMIDIATE MODE.\n\r", brainlink);
+      case CMD_BrainLink_Keyboard:
+         mode = keyboard;
+         writeOutputString ("\n\rKEYBOARD MODE.\n\r", brainlink);
+         break;
+      case CMD_BrainLink_Immediate:
+         mode = immediate;
+         writeOutputString ("\n\rIMMEDIATE MODE.\n\r", brainlink);
          break;
       case CMD_BrainLink_Pause:
          mode = pause;
@@ -709,6 +729,7 @@ extern _kernel_oserror* commandHandler (const char *arg_string, int argc, int cm
       case CMD_BrainLink_Task:
          mode = task;
          writeOutputString ("\n\rTASK MODE.\n\r", brainlink);
+         sscanf (parameters[0], "%d", &slot_size);
          break;
       case CMD_BrainLink_ZTransmit:
          writeOutputString ("\n\rBrainLink transmitting file using Z-Modem.\n\r", brainlink);
@@ -745,6 +766,13 @@ extern _kernel_oserror* commandHandler (const char *arg_string, int argc, int cm
             _swix (OS_File, _INR (0, 2), 18, pathname, 0XFFA);
             _swix (OS_Module, _INR (0, 1), 0, pathname);
          }
+         break;
+      case CMD_BrainLink_ControlKeys:
+         writeOutputString ("\n\rKeyboard mode:  ctrl-K", mainWindow);
+         writeOutputString ("\n\rImmediate mode: ctrl-I", mainWindow);
+         writeOutputString ("\n\rTask mode:      ctrl-T", mainWindow);
+         writeOutputString ("\n\rPause mode:     ctrl-P\n\r", mainWindow);
+         break;
       default:
          break;
    }
