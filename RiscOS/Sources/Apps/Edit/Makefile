@@ -170,7 +170,7 @@ s.ModuleWrap: ${WRAPPER}
         ${CP} ${WRAPPER} $@ ${CPFLAGS}
 
 ${MSGS}: ${LDIR}Messages awk.Version
-        gawk -f awk.Version ${LDIR}Messages > $@
+        gnu.gawk -f awk.Version ${LDIR}Messages > $@
 
 #---------------------------------------------------------------------------
 # Debugging version:
