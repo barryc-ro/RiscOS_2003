@@ -10,6 +10,14 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:12:50  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.11   15 Apr 1997 18:16:24   TOMA
 *  autoput for remove source 4/12/97
@@ -269,13 +277,19 @@ BOOL fVersionCheck  = FALSE;
       case TW_PT_FIXSIGN:                                               \
          GetNextTWCmdBytes( ((UCHAR *)&ptfxTemp) + SIZE_OF_TWPOINT,     \
                             SIZE_OF_TWPOINTFIXSIGN - SIZE_OF_TWPOINT ); \
-         (p)->x = (SHORT)*(PLONG)&((TWPOINTFIXSIGN *)&ptfxTemp)[1];     \ // SJM: this may just work!!!
-         (p)->y = (SHORT)*(PLONG)&((TWPOINTFIXSIGN *)&ptfxTemp)[5];     \
+         (p)->x = ((TWPOINTFIXSIGN *)&ptfxTemp)->vals[1] |		\
+                  ( ((TWPOINTFIXSIGN *)&ptfxTemp)->vals[2] << 8 ) |	\
+                  ( ((TWPOINTFIXSIGN *)&ptfxTemp)->vals[3] << 16 ) |	\
+	          ( ((TWPOINTFIXSIGN *)&ptfxTemp)->vals[4] << 24 );	\
+         (p)->y = ((TWPOINTFIXSIGN *)&ptfxTemp)->vals[5] |		\
+                  ( ((TWPOINTFIXSIGN *)&ptfxTemp)->vals[6] << 8 ) |	\
+                  ( ((TWPOINTFIXSIGN *)&ptfxTemp)->vals[7] << 16 ) |	\
+	          ( ((TWPOINTFIXSIGN *)&ptfxTemp)->vals[8] << 24 );	\
          break;                                                         \
    }
 
 
-#define GOTLASTPOINT() ptfxTemp.fLast
+#define GOTLASTPOINT() (ptfxTemp.vals[0] & (1<<2))	// ptfxTemp.fLast
 #define GOTLASTRUN() runTemp.fLast
 
 void w_TWCmdStrokePath( HWND hWnd, HDC hdc, BOOL fStraight );
@@ -460,14 +474,14 @@ static TWSPPEN256  Pen256;
 
     if ( Flags.style == TW_LINE_MASK ) {
        // Get StyleMask
-       GetNextTWCmdBytes( &StyleMask, sizeof_TWSPSTYLEMASK );
+       GetNextTWCmdBytes( &StyleMask, sizeof(TWSPSTYLEMASK) );
        TRACE(( TC_TW, TT_TW_STROKE, "TWCmdStrokePath: Received - StyleMask(%02X)",
                                       *((UCHAR *)&StyleMask) ));
     }
 
     if ( (Flags.style != TW_LINE_SOLID) && (Flags.clipping != TW_CLIP_COMPLEX) ) {
        // Get StyleState
-       GetNextTWCmdBytes( &StyleState, sizeof_TWSPSTYLESTATE );
+       GetNextTWCmdBytes( &StyleState, sizeof(TWSPSTYLESTATE) );
        TRACE(( TC_TW, TT_TW_STROKE, "TWCmdStrokePath: Received - StyleState(%02X)",
                                       (USHORT)StyleState ));
     }

@@ -10,6 +10,14 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:12:46  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.2   15 Apr 1997 18:16:14   TOMA
 *  autoput for remove source 4/12/97
@@ -27,6 +35,7 @@
 /*
  *  Get the standard C includes
  */
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -43,11 +52,9 @@
 
 // Note: This file must be modified in sync with TWDATA.C
 
-#if 0
 jmp_buf3  vjmpSuspend;
 jmp_buf3  vjmpResume;
 jmp_buf3  vjmpComplete;
-#endif
 
 THINWIRECAPS vThinWireMode;
 

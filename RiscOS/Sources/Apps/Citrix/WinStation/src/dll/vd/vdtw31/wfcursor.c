@@ -10,6 +10,14 @@
 *   Author: Kurt Perry (kurtp) 15-May-1995
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:02  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.6   15 Apr 1997 18:16:54   TOMA
 *  autoput for remove source 4/12/97
@@ -465,13 +473,13 @@ PointerSetShape( HWND hWnd, HDC hDC )
                 if ( (vColor == Color_Cap_256) && (ChunkType == _2K) ) {
                     memcpy((LPVOID) &bm_header, lpBitmap, sizeof(bm_header));
                     lpBitmap += sizeof(bm_header);
-                    ASSERT(bm_header.flags.color      == 2,  bm_header.flags.color);
-                    ASSERT(bm_header.flags.chained    == 0,  bm_header.flags.chained);   
+                    ASSERT(bitmap_header_flags(bm_header, color)      == 2,  bitmap_header_flags(bm_header, color));
+                    ASSERT(bitmap_header_flags(bm_header, chained)    == 0,  bitmap_header_flags(bm_header, chained));   
                     ASSERT(bm_header.total_scanlines  == 32, bm_header.total_scanlines) 
                     ASSERT(bm_header.cache_bytes_wide == 32, bm_header.cache_bytes_wide);
                     ASSERT(bm_header.pixel_width      == 32, bm_header.pixel_width);
                     ASSERT(bm_header.pixel_offset     == 0,  bm_header.pixel_offset);    
-                    ASSERT(bm_header.flags.size       == 0,  bm_header.flags.size);
+                    ASSERT(bitmap_header_flags(bm_header, size)       == 0,  bitmap_header_flags(bm_header, size));
                 }
             }
             else if ( (iTemp0 & CF_SAVE_BITMAP) ) {
@@ -483,13 +491,13 @@ PointerSetShape( HWND hWnd, HDC hDC )
                  *  Setup bitmap header and write
                  */
                 if ( (vColor == Color_Cap_256) && (ChunkType == _2K) ) {
-                    bm_header.flags.color      = 2;
-                    bm_header.flags.chained    = 0;
+                    bitmap_header_flags(bm_header, color)      = 2;
+                    bitmap_header_flags(bm_header, chained)    = 0;
                     bm_header.total_scanlines  = 32;
                     bm_header.cache_bytes_wide = 32;
                     bm_header.pixel_width      = 32;
                     bm_header.pixel_offset     = 0;
-                    bm_header.flags.size       = 0;
+                    bitmap_header_flags(bm_header, size)       = 0;
                     memcpy(lpBitmap, (LPVOID) &bm_header, sizeof(bm_header));
                     lpBitmap += sizeof(bm_header);
                }
@@ -555,13 +563,13 @@ PointerSetShape( HWND hWnd, HDC hDC )
                 if ( (vColor == Color_Cap_256) && (ChunkType == _2K) ) {
                     memcpy((LPVOID) &bm_header, lpBitmap, sizeof(bm_header));
                     lpBitmap += sizeof(bm_header);
-                    ASSERT(bm_header.flags.color      == 2,  bm_header.flags.color);
-                    ASSERT(bm_header.flags.chained    == 0,  bm_header.flags.chained);   
+                    ASSERT(bitmap_header_flags(bm_header, color)      == 2,  bitmap_header_flags(bm_header, color));
+                    ASSERT(bitmap_header_flags(bm_header, chained)    == 0,  bitmap_header_flags(bm_header, chained));   
                     ASSERT(bm_header.total_scanlines  == 32, bm_header.total_scanlines) 
                     ASSERT(bm_header.cache_bytes_wide == 32, bm_header.cache_bytes_wide);
                     ASSERT(bm_header.pixel_width      == 32, bm_header.pixel_width);
                     ASSERT(bm_header.pixel_offset     == 0,  bm_header.pixel_offset);    
-                    ASSERT(bm_header.flags.size       == 0,  bm_header.flags.size);
+                    ASSERT(bitmap_header_flags(bm_header, size)       == 0,  bitmap_header_flags(bm_header, size));
                 }
             }
         }
@@ -642,14 +650,14 @@ PointerSetShape( HWND hWnd, HDC hDC )
     /*
      *  Find cursor
      */
-    GetCursorPos( &pt );
+//  GetCursorPos( &pt );
 
     /*
      *  Only display cursor if we have focus and mouse is within our window
      */
-    if ( (!IsIconic(hWnd)) && 
+    if ( TRUE /*(!IsIconic(hWnd)) && 
          (hWnd == GetFocus()) && 
-         (hWnd == WindowFromPoint(pt)) ) {
+         (hWnd == WindowFromPoint(pt)) */) {
         SetCursor( vhCursorVis );
     }
 
@@ -740,7 +748,7 @@ CreateColorPointer( HWND   hWnd,
     HCURSOR hCursor   = NULL;
     LPBYTE  lpBuffer  = (LPBYTE) lpstatic_buffer + MAX_BITMAP_DATA;
 
-#ifdef WIN16
+#if defined( WIN16 ) || defined(RISCOS)
 
     int    i;
     int    j;
@@ -1005,9 +1013,9 @@ DestroyPointer( HWND hWnd )
     /*
      *  Do we need to remove pointer
      */
-    if ( (!IsIconic(hWnd)) && 
+    if ( TRUE /*(!IsIconic(hWnd)) && 
          (hWnd == GetFocus()) && 
-         (hWnd == WindowFromPoint(pt)) ) {
+         (hWnd == WindowFromPoint(pt)) */ ) {
         SetCursor( NULL );
     }
 

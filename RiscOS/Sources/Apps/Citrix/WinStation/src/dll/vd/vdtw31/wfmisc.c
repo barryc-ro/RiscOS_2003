@@ -10,6 +10,14 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:06  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.15   15 Apr 1997 18:17:04   TOMA
 *  autoput for remove source 4/12/97
@@ -30,7 +38,10 @@
 
 #include "wfglobal.h"
 #include "twtype.h"
-   extern ULONG   LargeCacheSize;   //jkscaffold bugbug
+#include "../../../inc/clib.h"
+#include <stdlib.h>
+
+extern ULONG   LargeCacheSize;   //jkscaffold bugbug
 
 static int timesinit = 0;      //should only init once if dont destroy
 
@@ -313,10 +324,11 @@ Init16Color()
 
 
     for (i=0; i < (MAXBRUSHREALIZED + 1) ; i++ ) {
-        BrushDIB[i].dib_handle = GlobalAlloc(GMEM_MOVEABLE,
 #ifdef THINPAL
+        BrushDIB[i].dib_handle = GlobalAlloc(GMEM_MOVEABLE,
               sizeof(bitmapinfo_4BPP_PALETTE) + 32);
 #else
+        BrushDIB[i].dib_handle = GlobalAlloc(GMEM_MOVEABLE,
               sizeof(bitmapinfo_4BPP_RGBQUAD) + 32);
 #endif
         ASSERT(BrushDIB[i].dib_handle, 0);

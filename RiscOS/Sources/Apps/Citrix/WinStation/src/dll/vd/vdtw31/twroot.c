@@ -10,7 +10,15 @@
 *
 *   Author: Marc Bloomfield (marcb)
 *
-*   $Log$ 
+*   $Log$
+*   Revision 1.1  1998/01/19 19:12:49  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+* 
 *  
 *     Rev 1.9   04 Aug 1997 19:14:12   kurtp
 *  update
@@ -40,10 +48,13 @@
 /*
  *  Get the standard C includes
  */
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+
+#include "kernel.h"
 
 #include "../../../inc/client.h"
 
@@ -65,6 +76,35 @@
 #include "twdata.h"
 
 
+#ifdef DEBUG
+static char *buf_name(jmp_buf3 jb)
+{
+    if (jb == vjmpComplete)
+	return "Complete";
+    if (jb == vjmpResume)
+	return "Resume";
+    if (jb == vjmpSuspend)
+	return "Suspend";
+    return "unknown";
+}
+#endif
+
+#if 1
+
+#define setjmpNewStack2(jb) setjmp(jb)
+#define setjmpSaveStack(jb) setjmp(jb)
+
+#else
+
+#define setjmpNewStack2(jb) \
+	    (TRACE((TC_TW, TT_TW_PACKET, "setjmpNewStack2: jb %s", buf_name(jb))), \
+	    setjmp(jb))
+
+#define setjmpSaveStack(jb) \
+	    (TRACE((TC_TW, TT_TW_PACKET, "setjmpSaveStack: jb %s", buf_name(jb))), \
+	    setjmp(jb))
+#endif
+		
 /*=============================================================================
 ==   Data
 =============================================================================*/
@@ -86,7 +126,7 @@ NTCMD pfnNTCallTable[] = {
                          TWCmdTextOutRclExtra,            // 0x86
                          TWCmdPalette,                    // 0x87
                          };
-#ifndef DOS
+
 NTCMD pfnCallTable[]   = {
                          TWCmdInitializeThinwireClient,   // 0x01
                          TWCmdBitBltSourceROP3NoClip,     // 0x02
@@ -99,7 +139,7 @@ NTCMD pfnCallTable[]   = {
                          TWCmdBitBltSourceROP3SimpleClip, // 0x09
                          TWCmdBitBltSourceROP3CmplxClip,  // 0x0A
                          };
-#endif
+
 
 HDC  vhdc  = NULL;
 HWND vhWnd = NULL;
@@ -128,9 +168,13 @@ void   MaskLVBToScreen( HDC, BOOL );
 =============================================================================*/
 int WFCAPI TWDisplayPacket(PVD pVd, USHORT uChan,
                                   LPBYTE pBuffer, USHORT Length);
-BOOL far NewNTCommand(CHAR Cmd);
-BOOL far ResumeNTCommand(CHAR DataByte);
+static BOOL far NewNTCommand(CHAR Cmd);
+static BOOL far ResumeNTCommand(CHAR DataByte);
+static void create_stack(void);
 
+static int  far _cdecl setjmpNewStack(jmp_buf3, NTCMD fn);
+//static int  far _cdecl setjmpNewStack2(jmp_buf3);
+//static int  far _cdecl setjmpSaveStack(jmp_buf3);
 
 /**************************************************************************
 *
@@ -163,10 +207,6 @@ int WFCAPI TWDisplayPacket(PVD pVd, USHORT uChan,
    BOOL (far *pfnNewWindowsCommand)(CHAR Cmd);
    BOOL (far *pfnResumeWindowsCommand)(CHAR DataByte);
 
-   pVd;
-   uChan;
-
-
    TRACE((TC_VD, TT_API2, "win: TWDisplayPacket enter sync=%u len=%u",fWindowsSynced,Length));
 
    ASSERT((cbTWPackLen == 0), cbTWPackLen);
@@ -177,6 +217,9 @@ int WFCAPI TWDisplayPacket(PVD pVd, USHORT uChan,
    pTWPackBuf  = pBuffer;
    cbTWPackLen = Length;
 
+   /* Check that the stack chunk exists */
+   create_stack();
+   
    /*
     *  service all commands in packet
     */
@@ -201,18 +244,11 @@ int WFCAPI TWDisplayPacket(PVD pVd, USHORT uChan,
 
          TRACE((TC_VD, TT_API4, "win: resuming %x - count %u - data = %x",
                   bCmdInProg, cbDebugByteCount, ch));
-#ifdef DOS
-         if ( bCmdInProg < TWCMD_NT  ) {
-            pfnResumeWindowsCommand = ResumeWindowsCommand;
-         } else {
-#endif
-            pfnResumeWindowsCommand = ResumeNTCommand;
-            // Put the data byte back in the packet
-            *(--pTWPackBuf) = ch;
-            cbTWPackLen++;
-#ifdef DOS
-         }
-#endif
+	 pfnResumeWindowsCommand = ResumeNTCommand;
+
+	 // Put the data byte back in the packet
+	 *(--pTWPackBuf) = ch;
+	 cbTWPackLen++;
 
          // command in progress is waiting for data, go back
          // and finish it up maybe
@@ -237,16 +273,9 @@ int WFCAPI TWDisplayPacket(PVD pVd, USHORT uChan,
       else {
          // set new command in progress
          bCmdInProg = ch;
-#ifdef DOS
-         if ( ch < TWCMD_NT  ) {
-            pfnNewWindowsCommand = NewWindowsCommand;
-         } else {
-#endif
-            pfnNewWindowsCommand = NewNTCommand;
-#ifdef DOS
-         }
-#endif
-         // save the command ID and use the id as a flag
+	 pfnNewWindowsCommand = NewNTCommand;
+
+	 // save the command ID and use the id as a flag
          // no windows command is 0 so this works and is hot for debugging
          ASSERT((bCmdInProg != 0), bCmdInProg);
          if(bCmdInProg == 0) {
@@ -323,19 +352,18 @@ int WFCAPI TWDisplayPacket(PVD pVd, USHORT uChan,
  *           command packet data it needs.
  *
 \****************************************************************************/
-BOOL far NewNTCommand(CHAR Cmd)
+static BOOL far NewNTCommand(CHAR Cmd)
 {
-    BOOL fComplete;
-static int  cmd;
+    BOOL fComplete = -1;
+    static int  cmd;
+    int rc; 
 
     cmd = (int)Cmd & 0x00FF;
 
 // If we get a bogus command on retail version, we're toast whether or not
 // we return.
     if (  ((cmd < TWCMD_NT) || (cmd > TWCMD_NT_LAST))
-#ifndef DOS
           && ( !cmd || (cmd > TWCMD_LAST))
-#endif
        ) {
         ASSERT( 0, cmd );
         TRACE(( TC_ALL, 0xFFFF, "NewNTCommand: invalid cmd(%02X)", cmd ));
@@ -356,9 +384,17 @@ static int  cmd;
     // to ResumeNTCommand, we need to set up a complete jump point for
     // both routines.
     //=======================================================================
-    if ( TWSetJmpSaveStack( vjmpComplete ) ) {
+    rc = TWSetJmpSaveStack( vjmpComplete );
+
+    if (rc)
+    {
        fComplete = TRUE;
-    } else {
+       TRACE(( TC_TW, TT_TW_PACKET, "NewNTCommand: returning from SaveStack" ));
+       return fComplete;
+    }
+
+    if (!rc)
+    {
        //====================================================================
        // Set up a "Suspend" jmp buffer
        //
@@ -369,42 +405,13 @@ static int  cmd;
        // ResumeNTCommand will then jump to the GetNextTWCmdBytes routine
        // when more thinwire packet command data is available.
        //====================================================================
-       if ( TWSetJmpNewStack( vjmpSuspend ) ) {
-          fComplete = FALSE;
-       } else {
-          //=================================================================
-          // Call the service routine
-          //
-          // The service routine will not return until it is finished
-          // processing all of the data it requires.  Do to the set/longjmp
-          // architecture, this routine will return to the caller of
-          // NewNTCommand only if all of the data was available in the first
-          // packet.  Otherwise, this routine will return to the caller of
-          // ResumeNTCommand.
-          //=================================================================
-#ifdef WIN16
-          RealizePalette(vhdc);
-#endif
-#ifndef DOS
-          // Flush LVB on all calls but the following ...
-          if ( (vpLVB != NULL) ) {
 
-             if( (cmd != 0x82) && 
-                 (cmd != 0x84) && 
-                 (cmd != 0x85) && 
-                 (cmd != 0x86) ) {
-                MaskLVBToScreen( vhdc, TRUE );
-             }
-          }
+	TWSetJmpNewStack( vjmpSuspend, 
+			  cmd <= TWCMD_LAST ? pfnCallTable[cmd-1] : pfnNTCallTable[cmd-TWCMD_NT]);
 
-          if ( cmd <= TWCMD_LAST )
-             (*(pfnCallTable[cmd-1]))( vhWnd, vhdc ); // Never returns from here
-          else
-#endif
-             (*(pfnNTCallTable[cmd-TWCMD_NT]))( vhWnd, vhdc ); // Never returns from here
-       }
+	fComplete = FALSE;
+	TRACE(( TC_TW, TT_TW_PACKET, "NewNTCommand: returning from NewStack" ));
     }
-
     TRACE(( TC_TW, TT_TW_PACKET, "NewNTCommand: returning(%d)", fComplete ));
 
     return( fComplete );
@@ -433,7 +440,7 @@ static int  cmd;
  *     completing its processing of the command packet data.
  *
 \****************************************************************************/
-BOOL far ResumeNTCommand(CHAR DataByte)
+static BOOL far ResumeNTCommand(CHAR DataByte)
 {
     BOOL fComplete = TRUE;
 
@@ -508,7 +515,12 @@ BOOL far GetNextTWCmdBytes( void * pData, int cbData )
 
           cbData      -= cbCopy;
           cbTWPackLen -= cbCopy;
-          while ( cbCopy-- ) *((char *)pData)++ = *pTWPackBuf++;
+          while ( cbCopy-- )
+	  {
+	      char *pDataC = pData;
+	      *pDataC++ = *pTWPackBuf++;
+	      pData = pDataC;
+	  }
        }
 
        if ( cbData ) {
@@ -543,24 +555,184 @@ BOOL far GetNextTWCmdBytes( void * pData, int cbData )
     return( TRUE );
 }
 
+/* ---------------------------------------------------------------------------------------------------- */
+
+/* On RISCOS, we store the _kernel_stack_chunk at the lowest address part
+ * of the redzone. We set the stack limit to point to the top of the
+ * redzone. 
+ */
+
+#define REDZONESIZE	560
+#define BASE_SIZE	(4 * 1024)
+
+typedef struct
+{
+    void *base;			// base of stack (ie top)
+    int size;			// size of useable stack
+} stack_t;
+
+#define jbreg_sp	7
+#define jbreg_sl	8
+#define jbreg_lr	9
+
+// the stack base that will be used for all thinwire processing
+
+static stack_t stack_tw = NULL;
+
+static void create_stack(void)
+{
+    _kernel_stack_chunk *chunk, *curchunk;
+    if (!stack_tw.base)
+    {
+	int size = BASE_SIZE + REDZONESIZE;
+
+	stack_tw.base = malloc(size);
+
+	stack_tw.base = (char *)stack_tw.base + size;
+	stack_tw.size = size - REDZONESIZE;
+    
+	/* Stack allocated successfully. Copy the stack magic from the
+	 * current stack chunk. At the moment, stack_tw.base is the TOP
+	 * of the stack, stack_tw.size is the size of the stack, but it
+	 * does not include the redzone.
+	 */
+	curchunk = _kernel_current_stack_chunk();
+	chunk = (_kernel_stack_chunk *)((char *)stack_tw.base - 
+					(stack_tw.size + REDZONESIZE));
+
+	/* Copy current chunks data and then reset selected fields */
+	memcpy((void *)chunk, (void *)curchunk, REDZONESIZE);
+	chunk->sc_next = chunk->sc_prev = NULL;
+	chunk->sc_size = stack_tw.size + REDZONESIZE/* - sizeof(sys_thread_t)*/;
+
+	/* We never want the root chunk to be deallocated */
+	chunk->sc_deallocate = NULL;
+    }
+}
+
+static NTCMD starter_fn = NULL;
+
+static void starter(void)
+{
+    starter_fn(vhWnd, vhdc);
+
+    DTRACE((TC_TW, TT_TW_PACKET, "starter: %p **** returned ARRRRGGGG", starter_fn));
+}
+
+#define JB_SIZE	sizeof(jmp_buf)
+
+/*
+ * Save current position in 'jb' and Switch to alternate stack.
+ *
+ * Set up a 'Suspend' buffer in NewNTCommand
+ */
+
+static int setjmpNewStack(jmp_buf3 jb, NTCMD fn)
+{
+    int rc;
+
+    DTRACE((TC_TW, TT_TW_PACKET, "setjmpNewStack: jb %s fn %p", buf_name(jb), fn));
+
+    if ((rc = setjmp(jb)) == 0)
+    {
+	jmp_buf3 newjb;
+
+	DTRACE((TC_TW, TT_TW_PACKET, "setjmpNewStack: jb %s rc %d", buf_name(jb), rc));
+	DTRACEBUF((TC_TW, TT_TW_PACKET, jb, JB_SIZE));
+	
+	memset(newjb, 0, JB_SIZE);
+	newjb[jbreg_lr] = (int)starter;
+	newjb[jbreg_sp] = (int)stack_tw.base;
+	newjb[jbreg_sl] = (int)stack_tw.base - stack_tw.size;
+
+	starter_fn = fn;
+	longjmp(newjb, 1);
+	TRACE((TC_TW, TT_TW_PACKET, "setjmpNewStack: jb %s **** returned ARRRRGGGG", buf_name(jb)));
+    }
+
+    DTRACE((TC_TW, TT_TW_PACKET, "setjmpNewStack: jb %s rc %d", buf_name(jb), rc));
+    DTRACEBUF((TC_TW, TT_TW_PACKET, jb, JB_SIZE));
+
+    return rc;
+}
+
 #if 0
-int setjmpNewStack(jmp_buf jb)
+/*
+ * Save current position in 'jb' and Switch to alternate stack.
+ *
+ * Set up a 'Suspend' buffer in ResumeNTCommand
+ */
+
+static int setjmpNewStack2(jmp_buf3 jb)
 {
-    return setjmp(jb);
+    int rc;
+    DTRACE((TC_TW, TT_TW_PACKET, "setjmpNewStack2: jb %s", buf_name(jb)));
+    rc = setjmp(jb);
+    DTRACE((TC_TW, TT_TW_PACKET, "setjmpNewStack2: jb %s rc %d", buf_name(jb), rc));
+    DTRACEBUF((TC_TW, TT_TW_PACKET, jb, JB_SIZE));
+    return rc;
 }
 
-int setjmpNewStack2(jmp_buf jb)
-{
-    return setjmp(jb);
-}
 
-int setjmpSaveStack(jmp_buf jb)
+/*
+ *
+ * Set up a 'Complete' buffer in NewNTCommand or ResumeNTCommand
+ * Set up a 'Resume' buffer GetNextTWCmdBytes
+ */
+static int setjmpSaveStack(jmp_buf3 jb)
 {
-    return setjmp(jb);
-}
-
-void longjmpChangeStack(jmp_buf jb, int rc)
-{
-    longjmp(jb, rc);
+    int rc;
+    DTRACE((TC_TW, TT_TW_PACKET, "setjmpSaveStack: jb %s", buf_name(jb)));
+    rc = setjmp(jb);
+    DTRACE((TC_TW, TT_TW_PACKET, "setjmpSaveStack: jb %s rc %d", buf_name(jb), rc));
+    DTRACEBUF((TC_TW, TT_TW_PACKET, jb, JB_SIZE));
+    return rc;
 }
 #endif
+
+/*
+ * This will jump back to whereever the jump_buf was saved, returning
+ * the given return code.
+ *
+ * TWCommandReturn calls this with 'jmpbufComplete' and a return code
+ * of TRUE of FALSE.
+ *
+ * It is also called internally to
+ *  a) jump to suspend buffer from GetNextTWCmdBytes
+ *  b) jump to resume buffer from ResumeNTCommand
+ *
+ */
+
+void longjmpChangeStack(jmp_buf3 jb, int rc)
+{
+    DTRACE((TC_TW, TT_TW_PACKET, "setjmpChangeStack: jb %s rc %d", buf_name(jb), rc));
+    DTRACEBUF((TC_TW, TT_TW_PACKET, jb, JB_SIZE));
+    longjmp(jb, rc);
+    DTRACE((TC_TW, TT_TW_PACKET, "setjmpChangeStack: jb %s **** returned ARRRRGGGG", buf_name(jb)));
+}
+
+
+/*
+  
+TWDisplayPacket
+	|
+	|---------------------------------------|
+	|					|
+NewNTCommand				ResumeNTCommand
+
+	SaveStack   -> Complete			SaveStack   -> Complete
+	NewStack    -> Suspend			NewStack2   -> Suspend
+						ChangeStack -> Resume
+	|
+	|				
+process function
+	|
+	|---------------------------------------|
+	|					|
+GetNextTWCmdBytes			   ChangeStack -> Complete
+	SaveStack   -> Resume
+	ChangeStack -> Suspend
+	|
+	|
+	
+ */

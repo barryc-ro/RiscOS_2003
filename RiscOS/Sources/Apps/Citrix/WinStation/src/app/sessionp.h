@@ -1,3 +1,5 @@
+
+
 /* > sessionp.h
 
  *
@@ -17,6 +19,10 @@ struct session_
     char *gszICAFile;
 
     HANDLE hWFE;
+
+    int fSdPoll;
+    int fSdLoaded;
+    int HaveFocus;
 
     ObjectId connect_d;		// connection dialogue box
 };

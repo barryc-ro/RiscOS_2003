@@ -10,6 +10,14 @@
 *   Author: Kurt Perry (kurtp) 10-Nov-1995
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:09  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.6   04 Aug 1997 19:19:54   kurtp
 *  update
@@ -126,7 +134,7 @@ w_TWCmdSSBSaveBitmap24BPP( HWND hWnd, HDC device )
 
     TRACE(( TC_TW, TT_TW_ENTRY_EXIT+TT_TW_SSB, "TWCmdSSBSaveBitmap24BPP: entered" ));
  
-    ASSERT(sizeof(ssb_header) == SSB_HEADER_SIZE, 0);
+//  ASSERT(sizeof(ssb_header) == SSB_HEADER_SIZE, 0); not true for RISC OS
  
     GetNextTWCmdBytes((LPBYTE) &word1, 2);    //high order byte bits 7-0 of client
                                               //object cache handle
@@ -221,12 +229,12 @@ w_TWCmdSSBSaveBitmap24BPP( HWND hWnd, HDC device )
         if ((coverlaprect == 1) || (coverlaprect == 2)) {
             //put the rectangle information in the cache
    
-            ((LPBYTE) prcl) = lpcache + sizeof(ssb_header);
+	    prcl = (PWDRCL)(lpcache + SSB_HEADER_SIZE);
    
             //do the first rectangle
             prcl->x = lpoverlaprect->left;
             prcl->y = lpoverlaprect->top;
-            ((LPBYTE) prcl) += 3;
+	    prcl = (PWDRCL)((LPBYTE)prcl + 3);
             prcl->x = lpoverlaprect->right;
             prcl->y = lpoverlaprect->bottom;
    
@@ -236,10 +244,10 @@ w_TWCmdSSBSaveBitmap24BPP( HWND hWnd, HDC device )
    
             if (coverlaprect == 2) {
                 //do the second rectanle
-                ((LPBYTE) prcl) += 3;
+		prcl = (PWDRCL)((LPBYTE)prcl + 3);
                 prcl->x = (lpoverlaprect+1)->left;
                 prcl->y = (lpoverlaprect+1)->top;
-                ((LPBYTE) prcl) += 3;
+		prcl = (PWDRCL)((LPBYTE)prcl + 3);
                 prcl->x = (lpoverlaprect+1)->right;
                 prcl->y = (lpoverlaprect+1)->bottom;
                 TRACE((TC_TW,TT_TW_SSB,"rect 2: left=%u, top=%u, right=%u, bottom=%u",
@@ -264,7 +272,7 @@ w_TWCmdSSBSaveBitmap24BPP( HWND hWnd, HDC device )
          *  Always read one scanline at a time
          */
         scanlines_current_view = 1;
-        memcpy(lpbegincache , &ssb_header, sizeof(ssb_header));
+        memcpy(lpbegincache , &ssb_header, SSB_HEADER_SIZE);
         bytes_current_block = 32;
 
         /*
@@ -430,7 +438,7 @@ w_TWCmdSSBSaveBitmap24BPP( HWND hWnd, HDC device )
             //do special block 0 processing
             if (current_block_number == 0) {
                 ASSERT(bytes_current_block == 0, 0);
-                memcpy(lpcache , &ssb_header, sizeof(ssb_header));
+                memcpy(lpcache , &ssb_header, SSB_HEADER_SIZE);
                 lpcache += 32;    //where to start putting data in the cache
                 bytes_current_block = 32;
             }
@@ -650,7 +658,7 @@ w_TWCmdSSBSaveBitmap24BPP( HWND hWnd, HDC device )
             //also if block 0 then need to stick the header in the cache
             if (current_block_number == 0) {
                 scanlines_current_view = ssb_header.scanlines_in_block0;
-                memcpy(lpcache , &ssb_header, sizeof(ssb_header));
+                memcpy(lpcache , &ssb_header, SSB_HEADER_SIZE);
                 lpcache += 32;    //where to start putting data in the cache
                 bytes_current_block = 32;
             }
@@ -837,7 +845,7 @@ w_TWCmdSSBRestoreBitmap24BPP( HWND hWnd, HDC device )
    TRACE((TC_TW,TT_TW_SSB,"TW: object_handle=%u, cache pointer=%lx",
                         object_handle, lpcache));
 
-   memcpy(&ssb_header, lpcache, sizeof(ssb_header));
+   memcpy(&ssb_header, lpcache, SSB_HEADER_SIZE);
 
    lpcache += 32;
    blocksize -= 32;
@@ -882,15 +890,15 @@ w_TWCmdSSBRestoreBitmap24BPP( HWND hWnd, HDC device )
          wfnEnumRects(hWnd, device, (LPRECT FAR *) &lpoverlaprect, (LPINT) &coverlaprect,
                         (LPRECT) &bounds);
          if (coverlaprect) {
-            ((LPBYTE) prcl) = lpcache - 32 + sizeof(ssb_header);
+	    prcl = (PWDRCL)(lpcache - 32 + SSB_HEADER_SIZE);
             i=0;     //rectangle number in ssb_header
             while ((i < (INT) ssb_header.count_ontop) && !jRepaint) {
                currentcheck.left = (INT) prcl->x;
                currentcheck.top  = (INT) prcl->y;
-               ((LPBYTE) prcl) += 3;
+	       prcl = (PWDRCL)((LPBYTE)prcl + 3);
                currentcheck.right = (INT) prcl->x;
                currentcheck.bottom = (INT) prcl->y;
-               ((LPBYTE) prcl) += 3;
+	       prcl = (PWDRCL)((LPBYTE)prcl + 3);
 
                TRACE((TC_TW,TT_TW_SSB,"currentcheck(%u) left=%u, top=%u, right=%u, bottom=%u",
                         i,(UINT) currentcheck.left, (UINT) currentcheck.top,

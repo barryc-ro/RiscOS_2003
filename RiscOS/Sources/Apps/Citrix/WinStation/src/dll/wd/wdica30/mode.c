@@ -14,7 +14,12 @@
 *
 *   Author: Brad Pedersen (4/9/94)
 *
-*   $Log$
+*   mode.c,v
+*   Revision 1.1  1998/01/12 11:36:22  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.39   30 Apr 1997 14:38:14   terryt
 *  shift states again
@@ -181,6 +186,18 @@ static WDTEXTMODE G_CGATextModes[] = {
 
 static USHORT *G_VideoModes;
        PWDTEXTMODE G_TextModes;
+
+static int lookup_index(int index)
+{
+    int i;
+    for (i = 0; i < NUM_TEXT_MODES; i++)
+    {
+	if (G_TextModes[i].Index == index)
+	    return i;
+    }
+    return -1;
+}
+
 
 /*******************************************************************************
  *
@@ -359,209 +376,17 @@ IcaSetLed( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 {
     int rc = 0;
     PWDICA pIca;
-#ifdef notdef
-    UCHAR  szKeyBuf[6];
-    USHORT iKey = 0;
-#endif
-#ifndef DOS
-    BYTE   pbKeyState[256];
-#endif
-#ifndef DOS
-    BYTE   ShiftState;
-#endif
-
-#ifdef OLD_CODE
-#ifndef DOS
-    static BOOL fIsNT;
-    static BOOL fVersionCheck = FALSE;
-#endif
-#endif //OLD_CODE
 
     pIca = (PWDICA) pWd->pPrivate;
 
     pIca->ShiftState = (USHORT) (*pInputBuffer & 0x70);
 
-//  debug code
-//  {
-//     char szBuf[100];
-//
-//     wsprintf(szBuf,"Shiftstate %x",pIca->ShiftState);
-//     MessageBox(NULL, szBuf, "Shiftstate", MB_OK);
-//  }
-
     TRACE(( TC_WD, TT_API1, "SET_LED: pIca->ShiftState=0x%02x", pIca->ShiftState ));
 
-
-#if 0
-#ifdef DOS
     //
     // for DOS, we let the server control the state of the keyboard
     //
     rc = KbdSetLeds( (int)pIca->ShiftState );
-#else
-    /*
-     * Just send the set led to the host.
-     * Old hosts will ignore the packet.
-     * WF 2.0 hosts will respect the packet.
-     */
-    GetKeyboardState( (LPBYTE) pbKeyState );
-
-    ShiftState = 0;
-
-    if ( pbKeyState[VK_CAPITAL] & 0x01 ) {
-        ShiftState |= 0x40;
-    }
-    if ( pbKeyState[VK_NUMLOCK] & 0x01 ) {
-        ShiftState |= 0x20;
-    }
-    if ( pbKeyState[VK_SCROLL] & 0x01 ) {
-        ShiftState |= 0x10;
-    }
-
-    rc = AppendICAPacket( pWd, PACKET_SET_LED, (LPBYTE)&ShiftState, 1 );
-
-#ifdef notdef
-    // jdm 05/15/96
-    // we have had a major change of heart based on feedback from microsoft
-    // and are now allowing the client to control what the state of num lock,
-    // caps lock, and scroll lock.  Any differences causes the client to
-    // send keystrokes to the server to change its state to match the
-    // client.  We never call SetKeyboardState in this technique.
-    //
-    // also note that we are careful to only change one lock at a time.
-    // if you do not follow this rule, you get into a feedback loop that
-    // goes on forever between the client and server.  In a way, we
-    // have defined an improptu protocol for the state of the keyboard.
-
-
-    //  get current key states
-    GetKeyboardState( (LPBYTE) pbKeyState );
-
-    //  the bit fields of pIca->ShiftState are same as the 40:17 bios data area
-    if ( ( (pIca->ShiftState & 0x40) && !(pbKeyState[VK_CAPITAL] & 0x01)) ||
-         (!(pIca->ShiftState & 0x40) &&  (pbKeyState[VK_CAPITAL] & 0x01)) ) {
-
-        // Caps Lock key down, key up
-        szKeyBuf[iKey++] = 0x3a;
-        szKeyBuf[iKey++] = 0xba;
-    }
-
-    else if ( ( (pIca->ShiftState & 0x20) && !(pbKeyState[VK_NUMLOCK] & 0x01)) ||
-         (!(pIca->ShiftState & 0x20) &&  (pbKeyState[VK_NUMLOCK] & 0x01)) ) {
-
-        // Num Lock key down, key up
-        szKeyBuf[iKey++] = 0x45;
-        szKeyBuf[iKey++] = 0xc5;
-    }
-
-    else if ( ( (pIca->ShiftState & 0x10) && !(pbKeyState[VK_SCROLL] & 0x01)) ||
-         (!(pIca->ShiftState & 0x10) &&  (pbKeyState[VK_SCROLL] & 0x01)) ) {
-
-        // Scroll Lock key down, key up
-        szKeyBuf[iKey++] = 0x46;
-        szKeyBuf[iKey++] = 0xc6;
-    }
-
-    if(iKey)
-       KbdWrite( pWd, szKeyBuf, iKey);
-#endif
-#endif
-#endif
-    
-#ifdef OLD_CODE
-#ifdef DOS
-    //
-    // for DOS, we let the server control the state of the keyboard
-    //
-    rc = KbdSetLeds( (int)pIca->ShiftState );
-#elif WIN16
-
-    //  get current key states
-    GetKeyboardState( (LPBYTE) pbKeyState );
-
-    //  the bit fields of pIca->ShiftState are same as the 40:17 bios data area
-    if ( (pIca->ShiftState & 0x40) )
-        pbKeyState[VK_CAPITAL] |= 0x01;
-    else
-        pbKeyState[VK_CAPITAL] &= ~(0x01);
-
-    if ( (pIca->ShiftState & 0x20) )
-        pbKeyState[VK_NUMLOCK] |= 0x01;
-    else
-        pbKeyState[VK_NUMLOCK] &= ~(0x01);
-
-    if ( (pIca->ShiftState & 0x10) )
-        pbKeyState[VK_SCROLL] |= 0x01;
-    else
-        pbKeyState[VK_SCROLL] &= ~(0x01);
-
-    //  set new key states
-    SetKeyboardState( (LPBYTE) pbKeyState );
-#elif WIN32
-
-    /*
-     *  Did we do the version check call yet?
-     */
-    if ( !fVersionCheck ) {
-
-        OSVERSIONINFO osvi;
-
-        osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-        GetVersionEx( &osvi );
-
-        fIsNT = (osvi.dwPlatformId == VER_PLATFORM_WIN32_NT) ? TRUE : FALSE;
-        fVersionCheck  = TRUE;
-    }
-
-    //  get current key states
-    GetKeyboardState( (LPBYTE) pbKeyState );
-
-    //  if NT do this disgusting hack ... otherwise do it correct
-    if ( fIsNT ) {
-
-        //  the bit fields of pIca->ShiftState are same as the 40:17 bios data area
-        if ( ( (pIca->ShiftState & 0x40) && !(pbKeyState[VK_CAPITAL] & 0x01)) ||
-             (!(pIca->ShiftState & 0x40) &&  (pbKeyState[VK_CAPITAL] & 0x01)) ) {
-            keybd_event( VK_CAPITAL, 0xBA, 0, 0 );
-            keybd_event( VK_CAPITAL, 0xBA, KEYEVENTF_KEYUP, 0 );
-        }
-
-        if ( ( (pIca->ShiftState & 0x20) && !(pbKeyState[VK_NUMLOCK] & 0x01)) ||
-             (!(pIca->ShiftState & 0x20) &&  (pbKeyState[VK_NUMLOCK] & 0x01)) ) {
-            keybd_event( VK_NUMLOCK, 0xC5,  KEYEVENTF_EXTENDEDKEY | 0, 0 );
-            keybd_event( VK_NUMLOCK, 0xC5,  KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0 );
-        }
-
-        if ( ( (pIca->ShiftState & 0x10) && !(pbKeyState[VK_SCROLL] & 0x01)) ||
-             (!(pIca->ShiftState & 0x10) &&  (pbKeyState[VK_SCROLL] & 0x01)) ) {
-            keybd_event( VK_SCROLL, 0xC6, KEYEVENTF_EXTENDEDKEY | 0, 0 );
-            keybd_event( VK_SCROLL, 0xC6, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0 );
-        }
-    }
-    else {
-
-        //  the bit fields of pIca->ShiftState are same as the 40:17 bios data area
-        if ( (pIca->ShiftState & 0x40) )
-            pbKeyState[VK_CAPITAL] |= 0x01;
-        else
-            pbKeyState[VK_CAPITAL] &= ~(0x01);
-
-        if ( (pIca->ShiftState & 0x20) )
-            pbKeyState[VK_NUMLOCK] |= 0x01;
-        else
-            pbKeyState[VK_NUMLOCK] &= ~(0x01);
-
-        if ( (pIca->ShiftState & 0x10) )
-            pbKeyState[VK_SCROLL] |= 0x01;
-        else
-            pbKeyState[VK_SCROLL] &= ~(0x01);
-
-        //  set new key states
-        SetKeyboardState( (LPBYTE) pbKeyState );
-    }
-
-#endif
-#endif //OLD_CODE
 
     ASSERT( rc == 0, rc );
 }
@@ -595,7 +420,7 @@ _GetValidTextModes( PWDTEXTMODE pTextModes,
     int flags;
 
     _swix(OS_CheckModeValid, _IN(0) | _FLAGS, G_VGAVideoModes[0], &flags);
-    if (flags & _C)
+    if ((flags & _C) == 0)
     {
 	G_VideoModes = G_VGAVideoModes;
 	G_TextModes = G_VGATextModes;
@@ -659,8 +484,9 @@ void
 _SetTextMode( PWD pWd, USHORT TextIndex )
 {
     PWDICA pIca;
-#ifdef DOS
+    int i;
     VIOMODEINFO ModeInfo;
+#ifdef DOS
     VIOINTENSITY VideoState;
     struct  SREGS       sregs;
     union   REGS        regs;
@@ -670,8 +496,6 @@ _SetTextMode( PWD pWd, USHORT TextIndex )
 
     pIca->TextIndex = TextIndex;
 
-    TRACE(( TC_WD, TT_API2, "_SetTextMode: Text Index %u", TextIndex ));
-
     /*
      *  Hide the mouse pointer in DOS
      */
@@ -679,9 +503,18 @@ _SetTextMode( PWD pWd, USHORT TextIndex )
     (void) MouseShowPointer( (pIca->fMouseVisible = FALSE) );
 #endif
 
-    _swix(OS_WriteI + 22, 0);
-    _swix(OS_WriteI + G_VideoModes[TextIndex], 0);
+    i = lookup_index(TextIndex);
+
+    TRACE(( TC_WD, TT_API2, "_SetTextMode: Text Index %u array index %d mode %d", TextIndex, i, G_VideoModes[i] ));
     
+    if (i != -1)
+    {
+	ModeInfo.fmt_ID = G_VideoModes[i];
+	ModeInfo.col = G_TextModes[i].Columns;
+	ModeInfo.row = G_TextModes[i].Rows;
+	(void) VioSetMode( &ModeInfo, pIca->hVio );
+    }
+
     /*
      *  Initialize VIO-Win mode, after freeing previous instance
      */

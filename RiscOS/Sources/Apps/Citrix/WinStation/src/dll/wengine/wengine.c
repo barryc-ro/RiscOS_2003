@@ -1990,11 +1990,15 @@ fProcCalled = TRUE;
            break;
 
        case CLIENT_STATUS_KILL_FOCUS :
+           TRACE(( TC_WENG, TT_L1,
+                   "WFEngx.Exe: StatusMsgProc: StatusKillFocus messageHotkey %d", messageHotkey ));
            if ( messageHotkey ) {
                NotifyUI( hWFE, messageHotkey, lParam );
                messageHotkey = 0;
                fProcCalled = FALSE; // Notify UI with the real message
+#ifndef RISCOS
                wdSetFocus();
+#endif
            }
            break;
 

@@ -9,7 +9,12 @@
 *
 *  Author: Kurt Perry (3/28/1994)
 *
-*  $Log$
+*  vioscrll.c,v
+*  Revision 1.1  1998/01/12 11:37:40  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.7   15 Apr 1997 18:51:42   TOMA
 *  autoput for remove source 4/12/97
@@ -331,8 +336,9 @@ int WFCAPI VioScrollLf (USHORT usTopRow, USHORT usLeftCol,
     * Fill the remainder with the requested character.
     */
    if ( pCell[0] || pCell[1] ) {
-      lo = (usRightCol - cbCol + 1) << 1;
+//    lo = (usRightCol - cbCol + 1) << 1;
       for ( i=usTopRow; i<=usBotRow; i++ ) {
+	  WriteCounted(pCell[0], pCell[1], usRightCol - cbCol + 1, i, cbCol);
 #if 0
 	 k = i * lw + lo;
          for ( j=0; j<cb3; j+=2 ) {
@@ -434,6 +440,7 @@ int WFCAPI VioScrollRt (USHORT usTopRow, USHORT usLeftCol,
     */
    if ( pCell[0] || pCell[1] ) {
       for ( i=usTopRow; i<=usBotRow; i++ ) {
+	  WriteCounted(pCell[0], pCell[1], usLeftCol, i, cbCol);
 #if 0
          k = i * lw + lo;
          for ( j=0; j<cb3; j+=2 ) {

@@ -107,6 +107,8 @@ typedef char *LPSTR;
 
 // some typedefs that replace the vaious sized bitfields around
 
+typedef int BWORD;
+typedef int BBYTE;
 typedef int BCHAR;
 typedef int BUCHAR;
 typedef int BSHORT;
@@ -329,18 +331,18 @@ extern int GetSystemMetrics(int nIndex);
 #define SRCCOPY             (DWORD)0x00CC0020 /* dest = source                   */
 #define SRCPAINT            (DWORD)0x00EE0086 /* dest = source OR dest           */
 #define SRCAND              (DWORD)0x008800C6 /* dest = source AND dest          */
-//#define SRCINVERT           (DWORD)0x00660046 /* dest = source XOR dest          */
-//#define SRCERASE            (DWORD)0x00440328 /* dest = source AND (NOT dest )   */
-//#define NOTSRCCOPY          (DWORD)0x00330008 /* dest = (NOT source)             */
-//#define NOTSRCERASE         (DWORD)0x001100A6 /* dest = (NOT src) AND (NOT dest) */
-//#define MERGECOPY           (DWORD)0x00C000CA /* dest = (source AND pattern)     */
-//#define MERGEPAINT          (DWORD)0x00BB0226 /* dest = (NOT source) OR dest     */
-//#define PATCOPY             (DWORD)0x00F00021 /* dest = pattern                  */
-//#define PATPAINT            (DWORD)0x00FB0A09 /* dest = DPSnoo                   */
-//#define PATINVERT           (DWORD)0x005A0049 /* dest = pattern XOR dest         */
-//#define DSTINVERT           (DWORD)0x00550009 /* dest = (NOT dest)               */
-//#define BLACKNESS           (DWORD)0x00000042 /* dest = BLACK                    */
-//#define WHITENESS           (DWORD)0x00FF0062 /* dest = WHITE                    */
+#define SRCINVERT           (DWORD)0x00660046 /* dest = source XOR dest          */
+#define SRCERASE            (DWORD)0x00440328 /* dest = source AND (NOT dest )   */
+#define NOTSRCCOPY          (DWORD)0x00330008 /* dest = (NOT source)             */
+#define NOTSRCERASE         (DWORD)0x001100A6 /* dest = (NOT src) AND (NOT dest) */
+#define MERGECOPY           (DWORD)0x00C000CA /* dest = (source AND pattern)     */
+#define MERGEPAINT          (DWORD)0x00BB0226 /* dest = (NOT source) OR dest     */
+#define PATCOPY             (DWORD)0x00F00021 /* dest = pattern                  */
+#define PATPAINT            (DWORD)0x00FB0A09 /* dest = DPSnoo                   */
+#define PATINVERT           (DWORD)0x005A0049 /* dest = pattern XOR dest         */
+#define DSTINVERT           (DWORD)0x00550009 /* dest = (NOT dest)               */
+#define BLACKNESS           (DWORD)0x00000042 /* dest = BLACK                    */
+#define WHITENESS           (DWORD)0x00FF0062 /* dest = WHITE                    */
 
 /* Pen Styles */
 #define PS_SOLID            0
@@ -374,6 +376,13 @@ extern int GetSystemMetrics(int nIndex);
 /* #define SYSTEM_FIXED_FONT   16 */
 /* #define DEFAULT_GUI_FONT    17 */
 #define STOCK_LAST          17
+
+/* Region Flags */
+#define ERROR               0
+#define NULLREGION          1
+#define SIMPLEREGION        2
+#define COMPLEXREGION       3
+#define RGN_ERROR ERROR
 
 /* CombineRgn() Styles */
 //#define RGN_AND             1
@@ -562,15 +571,19 @@ extern HBRUSH CreateSolidBrush(COLORREF color);
 
 extern BOOL DeleteDC(HDC);
 extern BOOL DeleteObject(LPVOID);
+extern int FillRect(HDC hDC, CONST RECT *lprc, HBRUSH hbr);
 
+extern HDC GetDC(HWND hwnd);
 extern int GetDIBits(HDC, HBITMAP, UINT, UINT, LPVOID, LPBITMAPINFO, UINT);
 extern int GetRgnBox(HRGN, LPRECT);
 extern HGDIOBJ GetStockObject(int);
 extern UINT GetSystemPaletteEntries(HDC, UINT, UINT, LPPALETTEENTRY);
 extern UINT GetSystemPaletteUse(HDC);
+extern BOOL IntersectRect(LPRECT lprcDst, CONST RECT *lprcSrc1, CONST RECT *lprcSrc2);
 
 extern BOOL PatBlt(HDC, int, int, int, int, DWORD);
 extern UINT RealizePalette(HDC);
+extern int ReleaseDC(HWND hwnd, HDC dc);
 extern int SelectClipRgn(HDC, HRGN);
 extern LPVOID SelectObject(HDC, LPVOID);
 extern HPALETTE SelectPalette(HDC, HPALETTE, BOOL);
@@ -586,6 +599,11 @@ extern BOOL MoveToEx(HDC hdc, int x, int y, LPPOINT pPoint);
 extern BOOL LineTo(HDC hdc, int x, int y);
 
 extern void RestoreScreen(void);
+
+extern HCURSOR SetCursor(HCURSOR hCursor);
+//extern BOOL GetCursorPos(LPPOINT lpPoint);
+extern HCURSOR CreateCursor(HINSTANCE hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight, CONST VOID *pvANDPlane, CONST VOID *pvXORPlane);
+extern BOOL DestroyCursor(HCURSOR hCursor);
 
 /* ---------------------------------------------------------------------------------------------------- */
 

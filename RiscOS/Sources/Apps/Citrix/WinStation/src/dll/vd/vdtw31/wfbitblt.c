@@ -10,6 +10,14 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:12:58  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.15   04 Aug 1997 19:18:22   kurtp
 *  update
@@ -37,6 +45,8 @@
 #include <string.h>
 
 #include "wfglobal.h"
+
+#include "../../../inc/clib.h"
 
 //complex clipping enumeraton support
 #define  RECTFULL    0
@@ -132,7 +142,7 @@ UINT   RleDecompress(UINT rlecount, LPBYTE lpinput, LPBYTE lpoutput)
       ASSERT(((INT) rlecount) >= 0,0);
       notfinished = TRUE;     //need because of common processing
 
-      *((LPWORD) &in) = *((LPWORD) lpinput);
+      *((LPWORD) &in) = read_word(lpinput);
       lpinput += 2;
       rlecount -= 2;
 
@@ -141,7 +151,7 @@ UINT   RleDecompress(UINT rlecount, LPBYTE lpinput, LPBYTE lpoutput)
 
          if (in.hibyte != JKC__ESC) {
             //neither bytes are the esc char
-            *((LPWORD) lpoutput) = *((LPWORD) &in);
+            write_word(lpoutput, *((LPWORD) &in));
             lpoutput += 2;
             datacount += 2;
             notfinished = FALSE;    //finished, go to common end point
@@ -283,8 +293,9 @@ UINT  RleInvertedDecompress(UINT rlecount, LPBYTE lpinput, LPBYTE lpoutput,
       ASSERT(((INT) rlecount) >= 0,0);
       notfinished = TRUE;     //need because of common processing
 
-      *((LPWORD) &in) = *((LPWORD) lpinput);
+      *((LPWORD) &in) = read_word(lpinput);
       lpinput += 2;
+
       rlecount -= 2;
 
       if (in.lowbyte != JKC__ESC) {
@@ -293,8 +304,9 @@ UINT  RleInvertedDecompress(UINT rlecount, LPBYTE lpinput, LPBYTE lpoutput,
          if (in.hibyte != JKC__ESC) {
             //neither bytes are the esc char
             if (bytes_left >= 2) {
-               *((LPWORD) lpcurrentoutput) = *((LPWORD) &in);
+	       write_word(lpcurrentoutput, *((LPWORD) &in));
                lpcurrentoutput += 2;
+
                datacount += 2;
                bytes_left -= 2;
             }
@@ -430,7 +442,11 @@ UINT  RleInvertedDecompress(UINT rlecount, LPBYTE lpinput, LPBYTE lpoutput,
       datacount += 1 + delta;
       ASSERT(bytes_left == 1,0);
    }
-   else ASSERT(bytes_left == (INT) input_scanline_bytes,0);
+   else
+   {
+       ASSERT(bytes_left == (INT) input_scanline_bytes,0);
+       TRACE((TC_TW,TT_TW_RLESTATS,"TW: bytes_left %d input_scanline_bytes %d rlecount %d",bytes_left, input_scanline_bytes, rlecount));
+   }
 
    TRACE((TC_TW,TT_TW_RLESTATS,"TW: output count including dib_bytes_wide expansion=%u, ",datacount));
 
@@ -491,7 +507,7 @@ WORD  PaletteMap(LPWORD lpamountPaletteMapCache, LPWORD lphandlePaletteMapCache)
       if (cached == 2) {
          lpcache = lpTWCacheRead((UINT) handle, _512B,
                                  (LPUINT) &cache_bytecount, 0);
-         count = *((LPWORD) lpcache);
+         count = read_word(lpcache);
          ASSERT(!(count & 0xff00),0);  //1 byte per entry and reserved fields
          count++;    //1 base the count
          lpcache += 2;
@@ -535,7 +551,7 @@ void  PaletteMapCache(WORD amountPaletteMapCache, WORD handlePaletteMapCache)
    lpcache = lpTWCacheWrite((UINT) handlePaletteMapCache, _512B,
                   0, (UINT) handlePaletteMapCache);   //do size later!
 
-   *((LPWORD) lpcache) = amountPaletteMapCache - 1;
+   write_word(lpcache, amountPaletteMapCache - 1);
    lpcache += 2;
    for (i=0; i < amountPaletteMapCache ; i++) {
       *(lpcache + i) = (BYTE) bitmapinfo_8BPP_PALETTE_MAP.bmiColors[i];
@@ -903,7 +919,7 @@ HRGN  cmplxRgn()
 
       retcode = CombineRgn(hrgnSum,hrgnSum,hrgnTemp,RGN_OR);
 
-      ASSERT((retcode != ERROR) && (retcode != NULLREGION),0);
+//    ASSERT((retcode != ERROR) && (retcode != NULLREGION),0);
 
       bretcode = DeleteObject(hrgnTemp);
 
@@ -1328,7 +1344,8 @@ void TWCmdBitBltScrToScrROP3( HWND hWnd, HDC device )
       srcbounds.bottom = ySrc + scrtoscrblt_dsdelta.deltay_last;
 
    }
-   //we fall through to here with bRetcode1 having the return code for the operation
+
+//we fall through to here with bRetcode1 having the return code for the operation
    //srcbounds has the source rectangle which is used to determine whether or not there
    //are any overlapping on top rectangles.  If there are then we need to request repaints.
 
@@ -1355,7 +1372,7 @@ void TWCmdBitBltScrToScrROP3( HWND hWnd, HDC device )
       wfnRepaintRects(lpoverlaprect,coverlaprect,TRUE);
       wfnFreeRects(lpoverlaprect);
    }
-
+   
    TRACE((TC_TW,TT_TW_COPY+TT_TW_ENTRY_EXIT,"TW: bitblt_scrtoscr_rop3 EXIT bRetcode1=%u\n", (UINT) bRetcode1));
 
    TWCmdReturn(bRetcode1);
@@ -1707,7 +1724,7 @@ more_data:
       if ((word1 & 0x0030) == 0x0020) {
          //256 color bitmap
          ASSERT(vColor == Color_Cap_256,0);
-         bm_header.flags.color = 2;
+         bitmap_header_flags(bm_header, color) = 2;
          bm_header.pixel_offset = 0;
          //word1 will hold width, word2 will hold height
          word2 &= 0x0700;
@@ -1733,7 +1750,7 @@ more_data:
       }
       else if ((word1 & 0x0030) == 0x0010) {
          //16 color bitmap
-         bm_header.flags.color = 1;
+         bitmap_header_flags(bm_header, color) = 1;
          bm_header.pixel_offset = (BYTE) ((word1 & 0x8000) >> 15);
          //word1 will hold width, word2 will hold height
          word2 &= 0x0700;
@@ -1773,7 +1790,7 @@ more_data:
       }
       else if (!(word1 & 0x0030)){
          //2 color bitmap
-         bm_header.flags.color = 0;
+         bitmap_header_flags(bm_header, color) = 0;
          bm_header.pixel_offset = (BYTE) ((word1 & 0xe000) >> 13);
          //word1 will hold width, word2 will hold height
          word2 &= 0x0300;
@@ -1808,18 +1825,18 @@ more_data:
             total_cache_bytes += 8;  //for control  information
          }
          if (total_cache_bytes > 2048) {
-            bm_header.flags.chained = 1;
-            bm_header.flags.size = 0;
+            bitmap_header_flags(bm_header, chained) = 1;
+            bitmap_header_flags(bm_header, size) = 0;
             parm_chunk_type = _2K;
          }
          else {
-            bm_header.flags.chained = 0;
+            bitmap_header_flags(bm_header, chained) = 0;
             if (total_cache_bytes > 512) {
-               bm_header.flags.size = 0;
+               bitmap_header_flags(bm_header, size) = 0;
                parm_chunk_type = _2K;
             }
             else {
-               bm_header.flags.size = 1;
+               bitmap_header_flags(bm_header, size) = 1;
                parm_chunk_type = _512B;
             }
          }
@@ -1827,13 +1844,13 @@ more_data:
       }
       else {
          //special case
-         bm_header.flags.chained = 0;
+         bitmap_header_flags(bm_header, chained) = 0;
          if (bm_cache_special == 1) {
-            bm_header.flags.size = 1;
+            bitmap_header_flags(bm_header, size) = 1;
             parm_chunk_type = _512B;
          }
          else {
-            bm_header.flags.size = 0;
+            bitmap_header_flags(bm_header, size) = 0;
             parm_chunk_type = _2K;
          }
       }
@@ -1842,15 +1859,15 @@ more_data:
 #ifdef DEBUG
       TRACE((TC_TW,TT_TW_BLT,"TW: rop3=%08x\n", rop3));
 
-      if (bm_header.flags.color == 2) {
+      if (bitmap_header_flags(bm_header, color) == 2) {
          TRACE((TC_TW,TT_TW_BLT,"TW: 256 color bitmap, "));
       }
-      else if (bm_header.flags.color == 1) {
+      else if (bitmap_header_flags(bm_header, color) == 1) {
          TRACE((TC_TW,TT_TW_BLT,"TW: 16 color bitmap, "));
       }
       else TRACE((TC_TW, TT_TW_BLT, "TW: 2 color bitmap, "));
 
-      if (bm_header.flags.size) {
+      if (bitmap_header_flags(bm_header, size)) {
          TRACE((TC_TW, TT_TW_BLT, "_512B size, "));
          ASSERT(bm_cache_special != 2,0);
          if (bm_cache_special == 1) {
@@ -1859,7 +1876,7 @@ more_data:
       }
       else {
          ASSERT(bm_cache_special != 1,0);
-         if (!bm_header.flags.chained) {
+         if (!bitmap_header_flags(bm_header, chained)) {
             TRACE((TC_TW, TT_TW_BLT, "_2K size, not chained, "));
             if (bm_cache_special == 2) {
                TRACE((TC_TW, TT_TW_BLT, "special, "));
@@ -1890,7 +1907,7 @@ more_data:
       //the taking it out of the cache case must initialize the same stuff
 
       //jk256
-      if (bm_header.flags.color == 2) {
+      if (bitmap_header_flags(bm_header, color) == 2) {
          if (use256_256palette == 0) {
             lpbitmapinfo = (LPBITMAPINFO) &bitmapinfo_8BPP_PALETTE;
          }
@@ -1899,7 +1916,7 @@ more_data:
          }
          lpbitmapinfo->bmiHeader.biWidth = dib_bytes_wide;
       }
-      else if (bm_header.flags.color == 1) {
+      else if (bitmap_header_flags(bm_header, color) == 1) {
          //16 color
          if (vColor == Color_Cap_256) {
             if (use16_256palette == 0) {
@@ -1983,7 +2000,7 @@ more_data:
                   TRACE((TC_TW,TT_TW_BLT+TT_TW_DIM,"BltSrcCommon DIM to cache sig %8x%8x(C-1)\n", signatureHI, signatureLO));
 
                   //jk256 - section 0 may have no data
-                  if ((bm_header.flags.color == 2) && (dib_bytes_wide > 2040)) {
+                  if ((bitmap_header_flags(bm_header, color) == 2) && (dib_bytes_wide > 2040)) {
                      lpcache = lpTWDIMCacheWrite( signatureHI, signatureLO, section_count );
                      memcpy(lpcache, (LPVOID) &bm_header, sizeof(bm_header));
                      section_count++;
@@ -1996,7 +2013,7 @@ more_data:
                   chain_handle = cache_handle;
    
                   //jk256 - section 0 may have no data
-                  if ((bm_header.flags.color == 2) && (dib_bytes_wide > 2040)) {
+                  if ((bitmap_header_flags(bm_header, color) == 2) && (dib_bytes_wide > 2040)) {
                      lpcache = lpTWCacheWrite((UINT) cache_handle, parm_chunk_type,
                                     0, (UINT) chain_handle);   //do size later!
                      memcpy(lpcache, (LPVOID) &bm_header, sizeof(bm_header));
@@ -2065,7 +2082,7 @@ more_data:
                                         received_bytes_wide;
 
                   //  go do the unpack
-                  bm_color = (BYTE) bm_header.flags.color;
+                  bm_color = (BYTE) bitmap_header_flags(bm_header, color);
                   section_bytecount = UnpackPixels( (LPBYTE) (lpstatic_buffer+1022), 
                                                     (UINT)   section_bytecount,
                                                     (LPBYTE) lpstatic_buffer,
@@ -2117,7 +2134,7 @@ more_data:
                //data goes directly into the cache if 2 color
                //16 color data must always be treated special
 
-               if (!bm_header.flags.color) {
+               if (!bitmap_header_flags(bm_header, color)) {
                   //move directly into cache and we are done with this section
                   TRACE((TC_TW,TT_TW_BLT,"TW: RleDecompress directly into cache at address=%lx\n",
                                        lpcache));
@@ -2166,7 +2183,7 @@ more_data:
                                            received_bytes_wide;
    
                      //  go do the unpack
-                     bm_color = (BYTE) bm_header.flags.color;
+                     bm_color = (BYTE) bitmap_header_flags(bm_header, color);
                      section_bytecount = UnpackPixels( (LPBYTE) (lpstatic_buffer+1022), 
                                                        (UINT)   section_bytecount,
                                                        (LPBYTE) lpstatic_buffer,
@@ -2275,7 +2292,7 @@ more_data:
                                         received_bytes_wide;
 
                   //  go do the unpack
-                  bm_color = (BYTE) bm_header.flags.color;
+                  bm_color = (BYTE) bitmap_header_flags(bm_header, color);
                   section_bytecount = UnpackPixels( (LPBYTE) (lpstatic_buffer+1022), 
                                                     (UINT)   section_bytecount,
                                                     (LPBYTE) lpstatic_buffer,
@@ -2323,7 +2340,7 @@ more_data:
                //data goes directly into the cache if 2 color
                //16 color data must always be treated special
 
-               if (!bm_header.flags.color) {
+               if (!bitmap_header_flags(bm_header, color)) {
 
                   section_scanlines_left = section_bytecount / received_bytes_wide;
 #ifdef DEBUG
@@ -2370,7 +2387,7 @@ more_data:
                                            received_bytes_wide;
    
                      //  go do the unpack
-                     bm_color = (BYTE) bm_header.flags.color;
+                     bm_color = (BYTE) bitmap_header_flags(bm_header, color);
                      section_bytecount = UnpackPixels( (LPBYTE) (lpstatic_buffer+1022),
                                                        (UINT)   section_bytecount,
                                                        (LPBYTE) lpstatic_buffer,
@@ -2461,7 +2478,7 @@ more_data:
 
 
             //jk256 - code good for both 16 and 256 color bitmaps
-            if (bm_header.flags.color) {
+            if (bitmap_header_flags(bm_header, color)) {
 
 //#ifdef WIN32
 #if 0
@@ -2656,7 +2673,7 @@ more_data:
             memcpy((LPVOID) &bm_header, lpcache, sizeof(bm_header));
          }
          else {
-            bm_header.flags.color = 
+            bitmap_header_flags(bm_header, color) = 
                       (BYTE)  (signatureLO & 0x00000007);
          }
       }
@@ -2670,15 +2687,15 @@ more_data:
    
          if (word1 & 0x0010) {
             //the special no header cached case
-            bm_header.flags.color = 1;
-            bm_header.flags.chained = 0;
+            bitmap_header_flags(bm_header, color) = 1;
+            bitmap_header_flags(bm_header, chained) = 0;
             if (parm_chunk_type == _2K) {
                bm_cache_special = 2;
                bm_header.total_scanlines = 64;
                bm_header.cache_bytes_wide = 32;
                bm_header.pixel_width = 64;
                bm_header.pixel_offset = 0;
-               bm_header.flags.size = 0;
+               bitmap_header_flags(bm_header, size) = 0;
             }
             else {
                //must be _512B
@@ -2687,7 +2704,7 @@ more_data:
                bm_header.cache_bytes_wide = 16;
                bm_header.pixel_width = 32;
                bm_header.pixel_offset = 0;
-               bm_header.flags.size = 1;
+               bitmap_header_flags(bm_header, size) = 1;
             }
          }
          else {
@@ -2706,7 +2723,7 @@ more_data:
       //what 256 color palette to use
 
       if (vColor == Color_Cap_256) {
-         if (bm_header.flags.color == 1) {
+         if (bitmap_header_flags(bm_header, color) == 1) {
             GetNextTWCmdBytes((LPBYTE) &byte1, 1);
             use16_256palette = (WORD) (byte1 >> 6);
             if (use16_256palette == 1) {
@@ -2715,7 +2732,7 @@ more_data:
                }
             }
          }
-         else if (bm_header.flags.color == 2) {
+         else if (bitmap_header_flags(bm_header, color) == 2) {
             use256_256palette = PaletteMap((LPWORD) &amountPaletteMapCache,(LPWORD) &handlePaletteMapCache);
          }
       }
@@ -2741,8 +2758,8 @@ more_data:
             if ( vpVd ) {
                 CACHE_FILE_HANDLE fh;
 
-                (ULONG) *((PULONG)&fh) = signatureHI;
-                (ULONG) *((PULONG)&fh[4]) = signatureLO;
+                *((PULONG)&fh) = signatureHI;
+                *((PULONG)&fh[4]) = signatureLO;
                 twDIMCacheError( vpVd, fh  );
             }
    
@@ -2760,7 +2777,7 @@ more_data:
       //if 16 color bitmap then cached and dib bytes wide the same
 
       //jk256
-      if (bm_header.flags.color == 2) {
+      if (bitmap_header_flags(bm_header, color) == 2) {
          //256 color bitmap
          ASSERT(vColor == Color_Cap_256,0);
 
@@ -2774,7 +2791,7 @@ more_data:
          }
          lpbitmapinfo->bmiHeader.biWidth = dib_bytes_wide;
       }
-      else if (bm_header.flags.color == 1) {
+      else if (bitmap_header_flags(bm_header, color) == 1) {
          //16 color bitmap
 
          dib_bytes_wide = bm_header.cache_bytes_wide;    //cached in dib format
@@ -2858,15 +2875,15 @@ more_data:
 #ifdef DEBUG
    TRACE((TC_TW,TT_TW_BLT,"TW: preparing to display bitmap out of the cache, object_handle=%u\n",
                         (UINT) cache_handle));
-   if (bm_header.flags.color == 2) {
+   if (bitmap_header_flags(bm_header, color) == 2) {
       TRACE((TC_TW,TT_TW_BLT,"TW: 16 color bitmap, "));
    }
-   else if (bm_header.flags.color == 1) {
+   else if (bitmap_header_flags(bm_header, color) == 1) {
       TRACE((TC_TW,TT_TW_BLT,"TW: 16 color bitmap, "));
    }
    else TRACE((TC_TW, TT_TW_BLT, "TW: 2 color bitmap, "));
 
-   if (bm_header.flags.size) {
+   if (bitmap_header_flags(bm_header, size)) {
       TRACE((TC_TW, TT_TW_BLT, "_512B size, "));
       ASSERT(bm_cache_special != 2,0);
       if (bm_cache_special == 1) {
@@ -2875,7 +2892,7 @@ more_data:
    }
    else {
       ASSERT(bm_cache_special != 1,0);
-      if (!bm_header.flags.chained) {
+      if (!bitmap_header_flags(bm_header, chained)) {
          TRACE((TC_TW, TT_TW_BLT, "_2K size, not chained, "));
          if (bm_cache_special == 2) {
             TRACE((TC_TW, TT_TW_BLT, "special, "));
@@ -2907,7 +2924,7 @@ more_data:
    //bitmap and first_section_scanlines will be 0
 
    //if not chained then only 1 section
-   if (!bm_header.flags.chained) {
+   if (!bitmap_header_flags(bm_header, chained)) {
       first_section_scanlines = total_scanlines_left;
       nth_section_scanlines = 0;    //set to zero if only 1 section
       last_section_scanlines = 0;   //  "
@@ -2935,7 +2952,7 @@ more_data:
 
 #ifdef DEBUG
 
-   if (!bm_header.flags.chained) {
+   if (!bitmap_header_flags(bm_header, chained)) {
       TRACE((TC_TW,TT_TW_BLT,"TW: bitmap NOT chained. total_scanlines = %u\n",
                         total_scanlines_left));
    }
@@ -2949,7 +2966,7 @@ more_data:
                         ( (total_scanlines_left - first_section_scanlines -
                          last_section_scanlines) / nth_section_scanlines) ));
 
-      ASSERT((first_section_scanlines > 0) || (bm_header.flags.color == 2),0);
+      ASSERT((first_section_scanlines > 0) || (bitmap_header_flags(bm_header, color) == 2),0);
    }
 
 
@@ -3060,8 +3077,8 @@ more_data:
                 if ( vpVd ) {
                     CACHE_FILE_HANDLE fh;
     
-                    (ULONG) *((PULONG)&fh) = signatureHI;
-                    (ULONG) *((PULONG)&fh[4]) = signatureLO;
+                    *((PULONG)&fh) = signatureHI;
+                    *((PULONG)&fh[4]) = signatureLO;
                     twDIMCacheError( vpVd, fh  );
                 }
        
@@ -3084,7 +3101,7 @@ more_data:
             }
 
 #ifdef DEBUG
-            if (!bm_header.flags.chained) {
+            if (!bitmap_header_flags(bm_header, chained)) {
                ASSERT((cache_bytecount % bm_header.cache_bytes_wide) == 0,0);
             }
 #endif
@@ -3104,7 +3121,7 @@ more_data:
          //where color is nonzero if 256 color or 16 color
          //if 16 color OR 2 color and scanline correct length then
          //display right out of the cache
-         if (bm_header.flags.color ||
+         if (bitmap_header_flags(bm_header, color) ||
                                 (bm_header.cache_bytes_wide == dib_bytes_wide)) {
             lpsection_dib_bytes = lpcache;
          }
@@ -3136,7 +3153,7 @@ more_data:
 
          //jk256 - note that this code should work for 16 color bitmaps
          // as well as 256 color bitmaps
-         if (bm_header.flags.color) {
+         if (bitmap_header_flags(bm_header, color)) {
 
 //#ifdef WIN32
 #if 0
@@ -3408,8 +3425,8 @@ more_data:
                 if ( vpVd ) {
                     CACHE_FILE_HANDLE fh;
     
-                    (ULONG) *((PULONG)&fh) = signatureHI;
-                    (ULONG) *((PULONG)&fh[4]) = signatureLO;
+                    *((PULONG)&fh) = signatureHI;
+                    *((PULONG)&fh[4]) = signatureLO;
                     twDIMCacheError( vpVd, fh  );
                 }
        
@@ -3430,7 +3447,7 @@ more_data:
          //if 2 color then adjust lpcache for start_scanline
          //if 16 color then need to figure out total_section_scanlines
          //256 color code the same as 16 color code
-         if (!bm_header.flags.color) {
+         if (!bitmap_header_flags(bm_header, color)) {
             lpcache += start_scanline * bm_header.cache_bytes_wide;
          }
          else {
@@ -3453,7 +3470,7 @@ more_data:
          //jk256 - 256 color or ...
          //if 16 color OR 2 color and scanline correct length then
          //display right out of the cache
-         if (bm_header.flags.color ||
+         if (bitmap_header_flags(bm_header, color) ||
                                 (bm_header.cache_bytes_wide == dib_bytes_wide)) {
             lpsection_dib_bytes = lpcache;
             TRACE((TC_TW,TT_TW_BLT,"TW: displaying out of cache\n"));
@@ -3486,7 +3503,7 @@ more_data:
 
          //jk256 - 256 color and 16 color bitmap path the same
 
-         if (bm_header.flags.color) {
+         if (bitmap_header_flags(bm_header, color)) {
 
             //readjust global bitmap factors to take into account
             //the starting and ending scanline of this section

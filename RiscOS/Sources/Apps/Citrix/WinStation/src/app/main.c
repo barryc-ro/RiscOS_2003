@@ -40,7 +40,8 @@ static IdBlock event_id_block;      /* declare an event block for use with toolb
 
 static int ToolBox_EventList[] =
 {
-    tbres_event_OPEN_WINDOW,
+    tbres_event_CONNECT,
+    tbres_event_DISCONNECT,
     Quit_Quit,
     0
 };
@@ -53,8 +54,7 @@ static int Wimp_MessageList[] =
 };
 
 static int event_mask =
-      Wimp_Poll_NullMask
-    | Wimp_Poll_PointerLeavingWindowMask
+    Wimp_Poll_PointerLeavingWindowMask
     | Wimp_Poll_PointerEnteringWindowMask
     | Wimp_Poll_PollWordNonZeroMask;
 
@@ -65,6 +65,8 @@ static int event_mask =
 static char *cli_filename = NULL;
 static int cli_iconbar = FALSE;
 static int cli_dopostmortem = FALSE;
+
+static Session current_session = NULL;
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -117,6 +119,43 @@ static void signal_setup(void)
 
 /* --------------------------------------------------------------------------------------------- */
 
+static int connect_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+                         void *handle)
+{
+    DBG(("connect_handler:\n"));
+
+    if (current_session)
+	session_resume(current_session);
+    else
+	msg_report("Run an ICA file to make a connection");
+	    
+    return 1;
+    NOT_USED(event_code);
+    NOT_USED(event);
+    NOT_USED(id_block);
+    NOT_USED(handle);
+}
+
+static int disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
+                         void *handle)
+{
+    DBG(("disconnect_handler:\n"));
+
+    if (current_session)
+    {
+	session_close(current_session);
+	current_session = NULL;
+    }
+
+    return 1;
+    NOT_USED(event_code);
+    NOT_USED(event);
+    NOT_USED(id_block);
+    NOT_USED(handle);
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
 static void cleanup_task(void)
 {
 }
@@ -125,7 +164,13 @@ extern void LogClose(void);
 
 static void cleanup(void)
 {
-    session_close_all();
+    DBG(("cleanup:\n"));
+
+    if (current_session)
+    {
+	session_close(current_session);
+	current_session = NULL;
+    }
     
     _swix(Hourglass_Smash, 0);	/* just in case */
 
@@ -161,6 +206,15 @@ static int quit_handler1(int event_code, ToolboxEvent *event, IdBlock *id_block,
 
 static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
 {
+    if (current_session)
+	if (!session_poll(current_session))
+	{
+	    DBG(("null_handler: poll returned 0\n"));
+
+	    session_close(current_session);
+	    current_session = NULL;
+	}    
+    
     return 0;
     NOT_USED(event_code);
     NOT_USED(event);
@@ -172,6 +226,12 @@ static int dataload_handler(WimpMessage *message, void *handle)
 {
     WimpDataLoadMessage *msg = &message->data.data_load;
 
+    if (current_session)
+    {
+	msg_report(utils_msgs_lookup("conn"));
+	return 0;
+    }
+    
     if (msg->file_type == filetype_ICA)
     {
 	WimpMessage reply;
@@ -183,7 +243,7 @@ static int dataload_handler(WimpMessage *message, void *handle)
 	err_fatal(wimp_send_message(Wimp_EUserMessage, &reply,
 				    message->hdr.sender, 0, NULL));
 
-	session_run(msg->leaf_name);
+	current_session = session_open(msg->leaf_name);
 
 	return 1;
     }
@@ -195,6 +255,12 @@ static int dataopen_handler(WimpMessage *message, void *handle)
 {
     WimpDataOpen *msg = &message->data.data_open;
 
+    if (current_session)
+    {
+	msg_report(utils_msgs_lookup("conn"));
+	return 0;
+    }
+
     if (msg->file_type == filetype_ICA)
     {
 	WimpMessage reply;
@@ -206,7 +272,7 @@ static int dataopen_handler(WimpMessage *message, void *handle)
 	err_fatal(wimp_send_message(Wimp_EUserMessage, &reply,
 				    message->hdr.sender, 0, NULL));
 
-	session_run(msg->path_name);
+	current_session = session_open(msg->path_name);
 
 	return 1;
     }
@@ -299,6 +365,9 @@ static void initialise(int argc, char *argv[])
     err_fatal(event_register_message_handler(Wimp_MDataOpen, dataopen_handler, NULL));
     err_fatal(event_register_message_handler(Wimp_MDataLoad, dataload_handler, NULL));
 
+    err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
+    err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, disconnect_handler, NULL));
+
     /* initialise application components */
 
     /* create iconbar icon */
@@ -325,7 +394,7 @@ int main(int argc, char *argv[])
 
     if (cli_filename && cli_filename[0] != '\0')
     {
-	session_run(cli_filename);
+	current_session = session_open(cli_filename);
 
 	if (!cli_iconbar)
 	    return EXIT_SUCCESS;
@@ -339,7 +408,7 @@ int main(int argc, char *argv[])
 	int event_code;
 	WimpPollBlock poll_block;
 
-        event_poll(&event_code, &poll_block, NULL);
+        event_poll_idle(&event_code, &poll_block, 100, NULL);
 	rdebug_poll();
 
     	if (event_code != 0)

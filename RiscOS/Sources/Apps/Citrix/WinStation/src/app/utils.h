@@ -11,21 +11,11 @@
 
 /* --------------------------------------------------------------------------------------------- */
 
-#ifndef BOOL
-# define BOOL
-#endif
-
-#ifndef TRUE
-# define TRUE 1
-#endif
-
-#ifndef FALSE
-# define FALSE 0
-#endif
-
 #define NOT_USED(x)	x = x
 #define ROUND4(a)	(((a)+3)&~3)
 #define ROUND2(a)	(((a)+1)&~1)
+#define MAX(a,b)	((a) > (b) ? (a) : (b))
+#define MIN(a,b)	((a) < (b) ? (a) : (b))
 
 /* --------------------------------------------------------------------------------------------- */
 

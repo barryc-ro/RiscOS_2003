@@ -1,4 +1,4 @@
-/* > unistd.c
+/* > fileio.c
 
  */
 
@@ -6,7 +6,10 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include "../inc/clib.h"
 #include "fcntl.h"
 
 int open(const char *filename, int mode)
@@ -82,4 +85,88 @@ int mkdir(const char *filename)
     return _swix(OS_File, _INR(0,1) | _IN(4), 8, filename, 0) ? 0 : -1;
 }
 
-/* eof unistd.c */
+typedef struct
+{
+    char *dir;
+    char *leaf;
+    int index;
+} find_context;
+
+long _findfirst(const char *path, struct _finddata_t *info)
+{
+    find_context *fc = calloc(sizeof(find_context), 1);
+    char *dot;
+
+    if (!fc)
+	return -1;
+    
+    fc->dir = strdup(path);
+
+    dot = strrchr(fc->dir, '.');
+    if (dot)
+    {
+	*dot = 0;
+	fc->leaf = dot + 1;
+    }
+
+    if (_findnext((long)fc, info) == -1)
+    {
+	_findclose((long)fc);
+	return -1;
+    }
+    
+    return (long)fc;
+}
+
+int _findnext(long handle, struct _finddata_t *info)
+{
+    find_context *fc = (find_context *)handle;
+    int buffer[128/4];
+    int nread;
+
+    do
+    {
+	if (_swix(OS_GBPB, _INR(0,6) | _OUTR(3,4),
+		  10, fc->dir, buffer, 1, fc->index,
+		  sizeof(buffer), fc->leaf,
+		  &nread, &fc->index) != NULL)
+	    return -1;
+    }
+    while (nread != 1);
+    
+    info->attrib = 0;
+
+    if ((buffer[3] & 3) != 3)
+	info->attrib |= _A_RDONLY;
+
+    if (buffer[4] & 2)
+	info->attrib |= _A_SUBDIR;
+
+    info->time_create = -1;
+    info->time_access = -1;
+    info->time_write = 0;
+    info->size = buffer[2];
+
+    strncpy(info->name, (char *)buffer[6], sizeof(info->name));
+    info->name[sizeof(info->name)-1] = 0;
+
+    return fc->index == -1 ? -1 : 0;
+}
+
+int _findclose(long handle)
+{
+    find_context *fc = (find_context *)handle;
+
+    free(fc->dir);
+    free(fc);
+
+    return 0;
+}
+
+int _filelength(int fd)
+{
+    int ext;
+    return _swix(OS_Args, _INR(0,1)|_OUT(2), 2, fd, &ext) ? -1 : ext;
+}
+
+/* eof fileio.c */

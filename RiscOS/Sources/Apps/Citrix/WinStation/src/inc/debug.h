@@ -8,7 +8,12 @@
 *
 *  $Author: Butch Davis (from Brad Pedersen's logapi.h)
 *
-*   $Log$
+*   debug.h,v
+*   Revision 1.1  1998/01/12 11:36:47  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.5   15 Apr 1997 18:45:02   TOMA
 *  autoput for remove source 4/12/97
@@ -66,6 +71,12 @@
 #define DTRACE(_arg) { }
 #define DTRACEBUF(_arg) { }
 #define DASSERT(exp,rc) { }
+
+#ifdef DEBUG
+#define LOGERR(e) LogErr( e, __FILE__, __LINE__ ); 
+#else
+#define LOGERR(e) e
+#endif
 
 
 #endif //__DEBUG_H__

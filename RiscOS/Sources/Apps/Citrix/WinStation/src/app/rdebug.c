@@ -1,5 +1,7 @@
 /* -*-C-*- commonsrc/rdebug.c */
 
+#include "windows.h"
+
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -16,6 +18,9 @@
 
 #include "../inc/clib.h"
 
+#include "../inc/client.h"
+#include "../inc/logapi.h"
+
 /* ----------------------------------------------------------------------------- */
 
 /* debugging routines that only depend on DEBUG state */
@@ -27,6 +32,9 @@ static const char *dbg__file = NULL;
 
 void vfdbg(void *f, const char *fmts, void *arglist)
 {
+#if 1
+    LogVPrintf(TC_UI, TT_API1, (PCHAR)fmts, arglist);
+#else
 #ifdef REMOTE_DEBUG
     void *r;
     if (f == NULL && (r = rdebug_session()) != 0)
@@ -34,6 +42,7 @@ void vfdbg(void *f, const char *fmts, void *arglist)
     else
 #endif
 	vfprintf(f ? f : stderr, fmts, arglist);
+#endif
 }
 
 void fdbg(void *f, const char *fmts, ...)

@@ -133,13 +133,13 @@
 ==   Functions Defined
 =============================================================================*/
 
-int STATIC DriverOpen( PVD, PVDOPEN );
-int STATIC DriverClose( PVD, PDLLCLOSE );
-int STATIC DriverInfo( PVD, PDLLINFO );
-int STATIC DriverPoll( PVD, PDLLPOLL );
-int STATIC DriverQueryInformation( PVD, PVDQUERYINFORMATION );
-int STATIC DriverSetInformation( PVD, PVDSETINFORMATION );
-int STATIC DriverGetLastError( PVD, PVDLASTERROR );
+static int DriverOpen( PVD, PVDOPEN );
+static int DriverClose( PVD, PDLLCLOSE );
+static int DriverInfo( PVD, PDLLINFO );
+static int DriverPoll( PVD, PDLLPOLL );
+static int DriverQueryInformation( PVD, PVDQUERYINFORMATION );
+static int DriverSetInformation( PVD, PVDSETINFORMATION );
+static int DriverGetLastError( PVD, PVDLASTERROR );
 
 
 int STATIC WFCAPI TWCallSetMouseRanges( USHORT uHoriMin, USHORT uHoriMax,
@@ -162,8 +162,8 @@ PLIBPROCEDURE VdTW31DriverProcedures[VDDRIVER__COUNT] =
     (PLIBPROCEDURE)DriverClose,
     (PLIBPROCEDURE)DriverInfo,
     (PLIBPROCEDURE)DriverPoll,
-    (PLIBPROCEDURE)DriverQueryInformation,
     (PLIBPROCEDURE)DriverSetInformation,
+    (PLIBPROCEDURE)DriverQueryInformation,
     (PLIBPROCEDURE)DriverGetLastError   
 };
 
@@ -208,7 +208,7 @@ STATIC ULONG PrefHRes;
 STATIC ULONG PrefVRes;
 STATIC BOOL  vfFullScreen = FALSE;
 
-#if defined(DOS) || defined(RISCOS)
+#if 1
 
 extern int vwScreen, vhScreen;
 extern int vSVGAmode;
@@ -216,12 +216,13 @@ extern int vSVGAmode;
 int        vSVGAPref = 0;
 int        vVariableRes = FALSE;
 
-#else
+#endif
 
 extern HWND vhWnd;
 extern HDC  vhdc;
 extern COLOR_CAPS vColor;
 
+#if 0
 typedef struct _RESCLIENT {
     USHORT  hres;
     USHORT  vres;
@@ -239,6 +240,7 @@ RESCLIENT aresClient[] = {
     { 1280, 1024 },
 };
 #define MAX_CLIENT_RES  (sizeof(aresClient)/sizeof(aresClient[0]))
+#endif
 
 static int    cHostLevel;
 static int    iColorDepth;
@@ -250,6 +252,7 @@ ULONG  vDimBitmapMin;
 #define CCHMAXPATH 260
 PCHAR  vpszDimCachePath = NULL;
 
+#if 0
 extern LPBYTE vpLVB;
 void   MaskLVBToScreen( HDC, BOOL );
 #endif
@@ -304,7 +307,7 @@ LPBYTE vpTWLocalStackNT  = NULL;
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 {
     WDSETINFORMATION wdsi;
@@ -324,7 +327,6 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     if ( rc = TWReadCacheParameters(pVdOpen->pIniSection) )
        return( rc );
 
-#if 0
     /*
      *  Initizlize thinwire stuff
      */
@@ -333,7 +335,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
         TRACE(( TC_VD, TT_API2, "VdOpen: ThinInitOnce failed!" ));
         goto done;
     }
-#endif
+
     /*
      * Get a virtual channel
      */
@@ -384,7 +386,9 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
                               string, sizeof(string) );
     if (!stricmp(string, "Auto"))
         vSVGAPref = 1;
-#else
+#endif
+    
+#if 0
     // use Screen Percentage first
     iScreenPercent = bGetPrivateProfileInt(pVdOpen->pIniSection,INI_SCREENPERCENT,0); 
 
@@ -427,7 +431,9 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
        PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
                                          INI_DESIREDVRES, DEF_DESIREDVRES );
        }
- 
+#endif
+    
+#if 0
     /*
      *  Force to resonable values (defined in wfengapi.h)
      */
@@ -443,7 +449,8 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
         if((PrefVRes==0) || (PrefVRes > MAX_DESIREDVRES ))
             PrefVRes = DEF_DESIREDVRES;
     }
-
+#endif
+    
     /*
      *  Get preferred color depth
      */
@@ -480,12 +487,11 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
         if ( strlen(pszTemp) ) {
 
-#if 0
             //  remove trailing backslash
-            if ( pszTemp[strlen(pszTemp)-1] == '\\' ) {
+            if ( pszTemp[strlen(pszTemp)-1] == '.' ) {
                 pszTemp[strlen(pszTemp)-1] == '\0';
             }
-#endif
+
             //  just to insure directory is there
             mkdir( pszTemp );
 
@@ -499,7 +505,6 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
         free( pszTemp );
     }
-#endif
  
     /*
      *  Get click ticks
@@ -516,7 +521,7 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
      */
     vdwh.Type  = (UCHAR)VirtualThinWire;
     vdwh.pVdData = pVd;
-//  vdwh.pProc = (PVDWRITEPROCEDURE) TWDisplayPacket;
+    vdwh.pProc = (PVDWRITEPROCEDURE) TWDisplayPacket;
     wdsi.WdInformationClass  = WdVirtualWriteHook;
     wdsi.pWdInformation      = &vdwh;
     wdsi.WdInformationLength = sizeof(VDWRITEHOOK);
@@ -557,7 +562,7 @@ done:
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DriverClose( PVD pVd, PDLLCLOSE pVdClose )
 {
    pVdClose;
@@ -591,7 +596,7 @@ DriverClose( PVD pVd, PDLLCLOSE pVdClose )
  ******************************************************************************/
 
 
-int STATIC 
+static int 
 DriverInfo( PVD pVd, PDLLINFO pVdInfo )
 {
     USHORT ByteCount;
@@ -694,7 +699,15 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
             }
         }
     }
-#else
+
+    pCaps->fColorCaps     |= CCAPS_8_BIT;
+    pCaps->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
+
+    pPref->fColorCaps     |= CCAPS_8_BIT;
+    pPref->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
+
+    viBitsPerPixel = 8;
+#else // defined (DOS) || defined(RISCOS)
 
     /*
      *  Get max system resolution
@@ -717,13 +730,11 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     }
 #endif
        
-#ifndef DOS
   
     /*
      * Plugin window doesn't have to be constrained
      */
     if ( !(pInstanceData->hWndPlugin) ) {
-#endif
 #ifdef WIN32
         if ( !vfFullScreen ) {
             sysVResWorkArea -= GetSystemMetrics( SM_CYCAPTION )-1;
@@ -741,9 +752,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
             PrefVRes = sysVResWorkArea;
             fResViolation = TRUE;
         }
-#ifndef DOS
     }
-#endif
 
     /*
      *  Get client's preference
@@ -875,17 +884,11 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
             ++pCaps->ResCapsCnt;
         }
     }
-#endif
+#endif // defined (DOS) || defined(RISCOS)
 
     /*
      *  Initialize cache data
      */
-#if defined(DOS) || defined(RISCOS)
-    pVdData->CacheXms    = vVdTWCache.ulXms;
-    pVdData->CacheLowMem = vVdTWCache.ulLowMem;
-    pVdData->CacheDASD   = vVdTWCache.ulDASD;
-    pVdData->CacheTiny   = vVdTWCache.ulTiny;
-#else 
     pVdData->CacheXms    = 0;
     pVdData->CacheLowMem = LargeCacheSize;
     pVdData->CacheDASD   = 0;
@@ -894,7 +897,7 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     /*
      *  Initialize dim data
      */
-    pCaps->flGraphicsCaps |= GCAPS_BMPS_PRECACHED;
+    pCaps->flGraphicsCaps &= ~GCAPS_BMPS_PRECACHED;
     if ( vDimCacheEnabled ) {
     
         pCaps->flGraphicsCaps |= GCAPS_BMPS_PRECACHED;
@@ -908,7 +911,6 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
         pVdData->DimSignatureLevel  = DIM_SIGNATURE_LEVEL;
         pVdData->DimFilesysOverhead = DIM_SYSTEM_OVERHEAD;
     }
-#endif
 
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -932,13 +934,12 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DriverPoll( PVD pVd, PDLLPOLL pVdPoll )
 {
     int         rc = CLIENT_STATUS_SUCCESS;
     PTWBUFFER pTWBuffer;
 
-#if !defined(DOS) && !defined(RISCOS)
     /*
      *  If no work then ship out 
      */
@@ -949,6 +950,7 @@ DriverPoll( PVD pVd, PDLLPOLL pVdPoll )
         }
     }
 
+#if !defined(RISCOS)
     /*
      *  Check if LVB need to be flushed
      */
@@ -1025,7 +1027,7 @@ Exit:
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DriverQueryInformation( PVD pVd, PVDQUERYINFORMATION pVdQueryInformation )
 {
     PVDTWCACHE pVdTWCache;
@@ -1069,20 +1071,22 @@ DriverQueryInformation( PVD pVd, PVDQUERYINFORMATION pVdQueryInformation )
  *
  ******************************************************************************/
 
-int STATIC 
+static int 
 DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 {
    PVDTWCACHE pCache;
    int rc = CLIENT_STATUS_SUCCESS;
 
+   TRACE(( TC_UI, TT_API4, "DriverSetInformation: %d", pVdSetInformation->VdInformationClass ));
+   
    switch ( pVdSetInformation->VdInformationClass ) {
 
       case VdSetFocus:
-//       rc = TWWindowsStart(pVd, &vThinWireMode);
+	 rc = TWWindowsStart(pVd, &vThinWireMode);
          break;
 
       case VdKillFocus:
-//       rc = TWWindowsStop(pVd);
+	 rc = TWWindowsStop(pVd);
          break;
 
       case VdMousePosition:
@@ -1109,7 +1113,7 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
 #endif
          break;
 
-#if defined(DOS) || defined(RISCOS)
+#if defined(DOS)
 
       case VdThinWireDeallocateCache :
          // Special function to steal the thinwire cache
@@ -1140,11 +1144,11 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
          break;
 
       case VdDestroyWindow:
-         rc = TWDestroyWindow( (HWND)(ULONG)pVdSetInformation->pVdInformation );
+	 rc = TWDestroyWindow( (HWND)(ULONG)pVdSetInformation->pVdInformation );
          break;
 
       case VdPaint:
-	  rc = TWPaint( pVd, (HWND)(ULONG)pVdSetInformation->pVdInformation );
+//	  rc = TWPaint( pVd, (HWND)(ULONG)pVdSetInformation->pVdInformation );
          break;
 
       case VdThinwireStack:
@@ -1209,7 +1213,7 @@ DriverSetInformation( PVD pVd, PVDSETINFORMATION pVdSetInformation )
  *
  ******************************************************************************/
 
-int STATIC DriverGetLastError( PVD pVd, PVDLASTERROR pLastError )
+static int DriverGetLastError( PVD pVd, PVDLASTERROR pLastError )
 {
    // interpret last error and pass back code and string data
    pLastError->Error = pVd->LastError;
@@ -1235,7 +1239,7 @@ int STATIC DriverGetLastError( PVD pVd, PVDLASTERROR pLastError )
 int STATIC 
 TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
 {
-    int rc;
+    int rc = CLIENT_STATUS_SUCCESS;
 #if !defined( DOS) && !defined(RISCOS)
     ULONG vwScreen = GetWindowLong( vhWnd, GWL_WINDOWWIDTH );
     ULONG vhScreen = GetWindowLong( vhWnd, GWL_WINDOWHEIGHT );
@@ -1248,11 +1252,13 @@ TWSetMousePosition( PVD pVd, USHORT uX, USHORT uY )
     rc = MousePosition( uX, uY );
 #endif
 
+#if 0
     // move our cursor
     uX = (USHORT)(((ULONG)uX * vwScreen)/0x10000);
     uY = (USHORT)(((ULONG)uY * vhScreen)/0x10000);
-//  rc = TWMoveCursor(uX, uY);
-
+    rc = TWMoveCursor(uX, uY);
+#endif
+    
 #if !defined(DOS) && !defined(RISCOS)
     //  save moved to position for wengine
     SetWindowLong( vhWnd, GWL_MOUSE_X, (LONG) uX );

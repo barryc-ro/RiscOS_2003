@@ -12,6 +12,10 @@
 typedef unsigned int size_t;
 #endif
 
+#ifndef __time_t
+#include <time.h>
+#endif
+
 #define O_OMASK     0x00000003
 
 #define O_RDONLY    0
@@ -48,6 +52,36 @@ extern long lseek(int fd, long lpos, int whence);
 typedef unsigned int off_t;
 
 #define fileno(a) (((int *)(a))[5])
+
+#ifndef _FSIZE_T_DEFINED
+typedef unsigned long _fsize_t; /* Could be 64 bits for Win32 */
+#define _FSIZE_T_DEFINED
+#endif
+
+struct _finddata_t {
+    unsigned	attrib;
+    time_t	time_create;	/* -1 for FAT file systems */
+    time_t	time_access;	/* -1 for FAT file systems */
+    time_t	time_write;
+    _fsize_t	size;
+    char	name[260];
+};
+
+/* File attribute constants for _findfirst() */
+
+#define _A_NORMAL	0x00	/* Normal file - No read/write restrictions */
+#define _A_RDONLY	0x01	/* Read only file */
+#define _A_HIDDEN	0x02	/* Hidden file */
+#define _A_SYSTEM	0x04	/* System file */
+#define _A_SUBDIR	0x10	/* Subdirectory */
+#define _A_ARCH 	0x20	/* Archive file */
+
+extern long _findfirst(const char *path, struct _finddata_t *info);
+extern int _findnext(long handle, struct _finddata_t *info);
+extern int _findclose(long handle);
+
+extern int _filelength(int fh);
+#define _unlink(a) remove(a)
 
 #endif
 

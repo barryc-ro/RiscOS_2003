@@ -9,7 +9,12 @@
 *
 *  $Author:      Brad Pedersen
 *
-*  $Log$
+*  logapi.h,v
+*  Revision 1.1  1998/01/12 11:36:51  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.20   15 Apr 1997 18:45:22   TOMA
 *  autoput for remove source 4/12/97
@@ -78,9 +83,11 @@ int WFCAPI LogLoad( PPLIBPROCEDURE );
 int  WFCAPI LogOpen( PLOGOPEN pLogOpen );
 int  WFCAPI LogClose( void );
 void WFCAPI LogPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, ... );
+void WFCAPI LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker);
 void WFCAPI LogBuffer( ULONG LogClass, ULONG LogEnable,
                        LPVOID pBuffer, ULONG ByteCount );
 void WFCAPI LogAssert( PCHAR, PCHAR, int, int );
+void LogErr( void *err, PCHAR pFileName, int LineNumber );
 
 #else
 /*

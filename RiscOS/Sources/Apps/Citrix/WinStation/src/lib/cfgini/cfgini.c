@@ -9,7 +9,12 @@
 *
 *   Author: Butch Davis (5/12/95) [from Kurt Perry's CFG library]
 *
-*   $Log$
+*   cfgini.c,v
+*   Revision 1.1  1998/01/12 11:37:14  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.34   04 Aug 1997 20:11:26   tariqm
 *  Encryption support for web clients
@@ -486,6 +491,7 @@ CfgIniLoad( HANDLE   hClientHandle,
         /*
          *  get the global vd section (optional)
          */
+        TRACE(( TC_LIB, TT_API1, "CfgIniLoad: get global vd section" ));
         GetSection( pList->pElement, pConfigFile, &pVdSectionGlobal );
 
         /*
@@ -1076,8 +1082,11 @@ MergeAndLoadVd( HANDLE   hClientHandle,
     TRACEBUF((TC_LIB, TT_API1, (char far *)pVdSection, 
                (ULONG)bGetSectionLength(pVdSection) ));
     TRACE((TC_LIB, TT_API1, "MergeAndLoadVd: pVdSectionGlobal" ));
-    TRACEBUF((TC_LIB, TT_API1, (char far *)pVdSectionGlobal, 
-               (ULONG)bGetSectionLength(pVdSectionGlobal) ));
+    if (pVdSectionGlobal)
+    {
+	TRACEBUF((TC_LIB, TT_API1, (char far *)pVdSectionGlobal, 
+		  (ULONG)bGetSectionLength(pVdSectionGlobal) ));
+    }
 
     /*
      * Merge the VdSection with the global overrides

@@ -10,6 +10,14 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:11  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.25   14 Aug 1997 20:34:34   kurtp
 *  update
@@ -88,6 +96,7 @@
 #include "twwin.h"
 #include "twdata.h"
 
+#include "swis.h"
 
 ULONG TinyCacheSize  = (ULONG)((USHORT)32*(USHORT)1024);
 ULONG LargeCacheSize;
@@ -99,7 +108,6 @@ extern HDC  vhdc;
 extern HWND vhWnd;
 extern COLOR_CAPS vColor;
 PVD vpVd = NULL;
-
 
 /*=============================================================================
 ==  External Functions Defined
@@ -139,9 +147,9 @@ LRESULT   MOUCALLBACK MouseHookProc( INT nCode, WPARAM wParam, LPARAM lParam );
 #define   TIMER_CLICK_TICK  101
 void      MOUCALLBACK TimerProc( HWND hWnd, UINT msg, UINT idTimer, DWORD dwTime );
 
-//extern HCURSOR vhCursor;
-//extern HCURSOR vhCursorNot;
-//extern HCURSOR vhCursorVis;
+extern HCURSOR vhCursor;
+extern HCURSOR vhCursorNot;
+extern HCURSOR vhCursorVis;
 extern BOOL    fWindowsSynced;
 
 extern ULONG   vcxLVB;
@@ -181,7 +189,8 @@ void far InitThinwire( COLOR_CAPS reqColorCaps, USHORT uWidth, USHORT uHeight )
      */
 static COLOR_CAPS curColorCaps = Color_Cap_Max;
 
-    /*
+#if 0
+/*
      *  Save window size for wengine
      */
     SetWindowLong( vhWnd, GWL_WINDOWWIDTH, (LONG) uWidth );
@@ -231,23 +240,27 @@ static COLOR_CAPS curColorCaps = Color_Cap_Max;
             }
         }
     }
-    
+#endif    
     /*
      *  Add in border size
      */
     cx = uWidth;
     cy = uHeight;
+#if 0
     cx += (INT) GetWindowLong( vhWnd, GWL_CXBORDER );
     cy += (INT) GetWindowLong( vhWnd, GWL_CYBORDER );
 
     if ( GetWindowLong( vhWnd, GWL_TITLEPRESENT ) ) {
         cy += (INT) GetWindowLong( vhWnd, GWL_CYTITLE );
     }
-
+#endif
     TRACE(( TC_TW, TT_L1,
             "InitThinwire: uWidth(%d) uHeight(%d) cx(%d) cy(%d)",
             uWidth, uHeight, cx, cy ));
 
+#if 1
+    SetMode(reqColorCaps, uWidth, uHeight);
+#else
     if ( IsIconic( vhWnd ) ) {
         if ( GetWindowPlacement( vhWnd, &wndpl ) ) {
             wndpl.rcNormalPosition.right  = wndpl.rcNormalPosition.left + cx;
@@ -260,7 +273,7 @@ static COLOR_CAPS curColorCaps = Color_Cap_Max;
         SetWindowPos( vhWnd, NULL, 0, 0, cx, cy,
                       SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER );
     }
-
+#endif
     /*
      *  Do we need to reset or initialize color caps?
      */
@@ -363,11 +376,11 @@ int TWInitWindow( PVD pVd, HWND hWnd )
     /*
      *  Set mouse hook
      */
-    SetMouseHook( hWnd );
+//  SetMouseHook( hWnd );
 
     vpVd = pVd;
 
-    if ( !(vhdc = GetDC( vhWnd = hWnd )) ) {
+    if ( !(vhdc = GetDC(vhWnd = hWnd)) ) {
         rc = CLIENT_ERROR_VD_ERROR;
         TRACE(( TC_TW, TT_ERROR, "TWInitWindow: GetDC failed" ));
         ASSERT( 0, 0 );
@@ -375,6 +388,7 @@ int TWInitWindow( PVD pVd, HWND hWnd )
     return( rc );
 }
 
+#if 0
 /****************************************************************************\
  *  TWPaint
  *
@@ -436,6 +450,7 @@ int TWPaint( PVD pVd, HWND hWnd )
 done:
     return( rc );
 }
+#endif
 
 /****************************************************************************\
  *  TWDestroyWindow
@@ -456,6 +471,7 @@ int TWDestroyWindow( HWND hWnd )
 
     TRACE(( TC_TW, TT_TW_CONNECT, "TWDestroyWindow: entered (%08lX)", (ULONG)hWnd ));
 
+#if 0
     /*
      *  Free any previous LVB
      */
@@ -464,7 +480,8 @@ int TWDestroyWindow( HWND hWnd )
         GlobalFree(h_LVB);
         vpLVB = NULL;
     }
-
+#endif
+    
     if ( vhdc ) {
 
         //deal with cleanup
@@ -480,6 +497,7 @@ int TWDestroyWindow( HWND hWnd )
     vhdc  = NULL;
     vhWnd = NULL;
 
+#if 0
     /*
      *  If a hook was set then free it
      */
@@ -488,7 +506,8 @@ int TWDestroyWindow( HWND hWnd )
         UnhookWindowsHookEx( vhHook );
         vhHook = NULL;
     }
-
+#endif
+    
 #ifdef WIN16
     /*
      *  If timer proc instance exists then destroy it
@@ -500,6 +519,7 @@ int TWDestroyWindow( HWND hWnd )
 #endif
     return( rc );
 }
+
 
 /*******************************************************************************
  *
@@ -599,6 +619,7 @@ USHORT TWReadCacheParameters( PVOID pIniSection )
 USHORT far
 TWMoveCursor(USHORT uX, USHORT uY)
 {
+#if 0
     POINT pt;
 
     /*
@@ -627,9 +648,11 @@ TWMoveCursor(USHORT uX, USHORT uY)
          */
         SetCursorPos( pt.x, pt.y );
     }
+#endif
     return( CLIENT_STATUS_SUCCESS );
 }
 
+#if 0
 /****************************************************************************\
  *  ctx_detect_supervga
  *
@@ -645,6 +668,7 @@ TWMoveCursor(USHORT uX, USHORT uY)
 void far pascal ctx_detect_supervga( void )
 {
 }
+#endif
 
 /****************************************************************************\
  *  TWCmdInitializeThinwireClient (INITIALIZE_THINWIRE_CLIENT service routine)
@@ -664,9 +688,9 @@ void TWCmdInitializeThinwireClient( HWND hWnd, HDC hdc )
 {
    TRACE(( TC_TW, TT_TW_ENTRY_EXIT+TT_TW_CONNECT, "TWCmdInitializeThinwireClient: entered" ));
 
-       ASSERT( 0, 0 );
+   ASSERT( 0, 0 );
 
-//   TWCmdReturn( TRUE ); // return to NewNTCommand or ResumeNTCommand
+   TWCmdReturn( TRUE ); // return to NewNTCommand or ResumeNTCommand
 }
 
 
@@ -707,7 +731,6 @@ void TWCmdInitializeThinwireClient( HWND hWnd, HDC hdc )
 }
 #endif
 
-
 /*******************************************************************************
  *
  *  Function: wfnEnumRects
@@ -724,6 +747,21 @@ void TWCmdInitializeThinwireClient( HWND hWnd, HDC hdc )
  *
  ******************************************************************************/
 
+
+#if 1
+
+int wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pClipRect )
+{
+    ASSERT((pClipRect != NULL), (int)pClipRect);
+
+    *pcRect = 1;
+    *lppRect = malloc(sizeof(RECT));
+    *(*lppRect) = *pClipRect ;
+
+    return 1;
+}
+
+#else
 //  MAX_RECTS must be at least 4 for off screen client areas
 #define MAX_RECTS   64
 
@@ -736,7 +774,7 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
     RECT clientRect;
     RECT screenRect;
     HWND hWndZ;
-    PWFEINSTANCE pInstanceData = (PWFEINSTANCE)GetWindowLong( hWnd, GWL_INSTANCEDATA );
+//  PWFEINSTANCE pInstanceData = (PWFEINSTANCE)GetWindowLong( hWnd, GWL_INSTANCEDATA );
     HWND hWndScreen;
     LONG Style;
 
@@ -746,6 +784,7 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
      */
     *pcRect = 0;
 
+#if 0
     /*
      *  Do not bother if we are iconic
      */
@@ -753,7 +792,8 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
         *lppRect = NULL;
         return( rc );
     }
-
+#endif
+    
     /*
      *  Allocate rectangle array
      */
@@ -768,6 +808,7 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
         goto done;
     }
 
+#if 0
     /*
      *  If no clipping rect is provided use the entire client area
      */
@@ -786,7 +827,7 @@ wfnEnumRects( HWND hWnd, HDC hDC, LPRECT FAR * lppRect, INT * pcRect, LPRECT pCl
         TRACE(( TC_TW, TT_L4, "wfnEnumRects: pClipRect client - top %u, left %u, bottom %u, right %u",
                                 pClipRect->top, pClipRect->left, pClipRect->bottom, pClipRect->right ));
     }
-
+#endif
 
     /*
      *  Map client to screen points
@@ -1096,6 +1137,7 @@ done:
 
     return( rc );
 }
+#endif
 
 /*******************************************************************************
  *
@@ -1122,7 +1164,6 @@ wfnFreeRects( LPRECT lpRect )
         free( lpRect );
     }
 }
-
 
 /****************************************************************************
  *
@@ -1165,9 +1206,10 @@ SetMouseHook( HWND hWnd )
     /*
      *  Setup default mouse pointer
      */
-    vhCursor = vhCursorNot = vhCursorVis = LoadCursor( NULL, IDC_ARROW );
+//  vhCursor = vhCursorNot = vhCursorVis = LoadCursor( NULL, IDC_ARROW );
 }
 
+#if 0
 /****************************************************************************
  *
  *  TimerProc
@@ -1193,10 +1235,11 @@ TimerProc( HWND hWnd, UINT msg, UINT idTimer, DWORD dwTime )
     /*
      *  Kill the timer
      */
-    KillTimer( hWnd, idTimer );
+  KillTimer( hWnd, idTimer );
 }
+#endif
 
-
+#if 0
 /****************************************************************************
  *
  *  MouseHookProc
@@ -1273,7 +1316,14 @@ MouseHookProc( int nCode, WPARAM wParam, LPARAM lParam )
 
     return( CallNextHookEx( vhHook, nCode, wParam, lParam ) );
 }
+#endif
 
+#if 1
+int wfnRepaintRects(LPRECT lpRect, INT cRect, BOOL fScreenToScreen)
+{
+    return 1;
+}
+#else
 /********************************************************************************
  *
  * wfnRepaintRects
@@ -1351,3 +1401,4 @@ done:
 
     return( rc );
 }
+#endif

@@ -10,6 +10,14 @@
 *   Author: Marc Bloomfield (marcb) 15-Apr-1994 (tax day)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:12:55  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.3   15 Apr 1997 18:16:30   TOMA
 *  autoput for remove source 4/12/97
@@ -74,9 +82,11 @@ rcl.bottom = rcl.top  + dyLast;
  * TWTOHCACHECACHE hCacheCache;
 \*****************************************************************************/
 typedef struct _TWTOHCACHECACHE {
-   USHORT hCache          /*: 12*/; // value of the client cache handle
-   USHORT ChunkType       /*: 2*/; // _2k, _512B, _128B, _32B
-   USHORT res             /*: 2*/;
+   BUSHORT hCache          : 12; // value of the client cache handle
+   BUSHORT ChunkType       : 2; // _2k, _512B, _128B, _32B
+   BUSHORT res             : 2;
 } TWTOHCACHECACHE, *PTWTOHCACHECACHE;
+
+#define sizeof_TWTOHCACHECACHE	2
 
 #endif //__TWTEXT_H__

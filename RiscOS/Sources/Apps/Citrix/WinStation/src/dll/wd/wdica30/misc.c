@@ -13,7 +13,12 @@
 *  
 *   Author: Brad Pedersen (4/9/94)
 *  
-*   $Log$
+*   misc.c,v
+*   Revision 1.1  1998/01/12 11:36:21  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.16   15 Jul 1997 15:48:38   davidp
 *  updated headers for hydra/picasso surgery
@@ -101,9 +106,9 @@ void IcaCallback( PWD, LPBYTE, USHORT );
 void
 IcaStopOk( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 {
-    TRACE(( TC_WD, TT_API1, "STOP_OK" ));
+    TRACE(( TC_WD, TT_API1, "STOP_OK: stop req %d", pWd->TimeoutStopRequest ));
 
-    if ( !pWd->TimeoutStopRequest ) {
+    if ( pWd->TimeoutStopRequest ) {	// SJM: this was !pWd... surely showm mishtake??
         /*
          *  Set stop ok received flag
          */

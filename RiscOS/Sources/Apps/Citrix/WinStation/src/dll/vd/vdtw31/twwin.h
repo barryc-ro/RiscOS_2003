@@ -10,6 +10,14 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:12:57  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.7   15 Apr 1997 18:16:36   TOMA
 *  autoput for remove source 4/12/97
@@ -67,7 +75,7 @@ BOOL BltSrcRop3Cmplxclip( HDC hdc );
 #define ABS( a ) ( ((a) < 0 ) ? (-1*(a)) : (a) )
 
 #define TWSetJmpSaveStack( Buf )        setjmpSaveStack( Buf )
-#define TWSetJmpNewStack( Buf )         setjmpNewStack( Buf )
+#define TWSetJmpNewStack( Buf,a )       setjmpNewStack( Buf,a )
 #define TWSetJmpNewStack2( Buf )        setjmpNewStack2( Buf )
 #define TWLongJmpChangeStack( Buf, rc ) longjmpChangeStack( Buf, rc )
 
@@ -82,12 +90,10 @@ BOOL far ResumeWindowsCommand(CHAR DataByte);
 CHAR far SuspendWindowsCommand(void);
 BOOL far GetNextTWCmdBytes( void * pData, int cbData );
 
-#if 0
-int  far _cdecl setjmpNewStack(jmp_buf3);
-int  far _cdecl setjmpNewStack2(jmp_buf3);
-int  far _cdecl setjmpSaveStack(jmp_buf3);
+/* int  far _cdecl setjmpNewStack(jmp_buf3); */
+/* int  far _cdecl setjmpNewStack2(jmp_buf3); */
+/* int  far _cdecl setjmpSaveStack(jmp_buf3); */
 void far _cdecl longjmpChangeStack(jmp_buf3, int);
-#endif
 
 // To temporarily remove a trace statement, add a 'D' in front of the macro
 #define DTRACE( _arg ) { }
@@ -121,6 +127,9 @@ int WdCall( PVD pVd, USHORT ProcIndex, PVOID pParam );
 //
 //  DIM File Header
 //
+// SJM: although our structure won't be the same as a Citrix client one,
+// due to structure padding, this doesn't matter since it is only on the
+// client.
 //#pragma pack(1)
 typedef struct _DIM_HEADER {  
     BYTE    cbHeader;           //  0 - 0
@@ -130,7 +139,7 @@ typedef struct _DIM_HEADER {
     ULONG   sigL;               // 10 - 13
     ULONG   iLastSection;       // 14 - 17
     ULONG   cbLastSection;      // 18 - 21
-    BYTE    reserved[10];       // 22 - 31
+    BYTE    reserved[8];        // 22 - 31 - SJM: was 10, reduced to account for earlier padding
 } DIM_HEADER, *PDIM_HEADER;
 //#pragma pack()
 

@@ -778,7 +778,7 @@ set_text_and_return:
     /*
      *  Set text mode
      */
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
     if (!DefaultMode) {
         IcaSetText( pWd, NULL, 0 );
     }
@@ -823,6 +823,8 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
     PMOUSEINFO pMI;
     BYTE       bLED;
     int rc = CLIENT_STATUS_SUCCESS;
+
+    TRACE(( TC_UI, TT_API4, "EmulSetInformation: %d", pWdSetInformation->WdInformationClass ));
 
     pIca = (PWDICA) pWd->pPrivate;
 
@@ -1021,7 +1023,7 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
 
             break;
 
-#if !defined( DOS ) && !defined( RISCOS )
+#if 1 // !defined( DOS ) && !defined( RISCOS )
         case WdInitWindow :
 
             //  Get window handle
@@ -1034,7 +1036,8 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
             if ( rc == CLIENT_ERROR_VD_NOT_FOUND ) {
 
                 //  BUGBUG: Don't hardcode row/columns
-                rc = VioInitWindow( pIca->hVio, 25, 80, FALSE );
+//                rc = VioInitWindow( pIca->hVio, 25, 80, FALSE );
+		rc = CLIENT_STATUS_SUCCESS;
             }
             break;
 
@@ -1046,7 +1049,8 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
             rc = VdCall( pWd, Virtual_ThinWire, VD__SETINFORMATION, &Info );
             if ( rc == CLIENT_ERROR_VD_NOT_FOUND ) {
 
-                rc = VioDestroyWindow( pIca->hVio );
+//                rc = VioDestroyWindow( pIca->hVio );
+		rc = CLIENT_STATUS_SUCCESS;
             }
 
             //  Destroy window handle
@@ -1066,12 +1070,13 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
                 rc = VdCall( pWd, Virtual_ThinWire, VD__SETINFORMATION, &Info );
                 if ( rc == CLIENT_ERROR_VD_NOT_FOUND ) {
 
-                    rc = VioPaint( pIca->hVio );
+		rc = CLIENT_STATUS_SUCCESS;
+//                    rc = VioPaint( pIca->hVio );
                 }
             }
             else {
 
-                rc = VioPaint( pIca->hVio );
+//                rc = VioPaint( pIca->hVio );
             }
             break;
 

@@ -10,6 +10,14 @@
 *   Author: Marc Bloomfield (marcb) 15-Apr-1994
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:12:54  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.19   08 Aug 1997 18:16:54   kurtp
 *  clipped text optimization
@@ -1398,7 +1406,7 @@ volatile UCHAR  FoxFox = 0xFF; // Note: the compiler is stupid - it compiles
                                // Does the same thing if FoxFox is not volatile
 #else
    USHORT cbScan = vcbScan;
-#endif
+#endif // OLD_WAY
    SHORT cRcl;
    RECTI *prcl;
    RECTI rclTmp;
@@ -1506,7 +1514,7 @@ volatile UCHAR  FoxFox = 0xFF; // Note: the compiler is stupid - it compiles
                    loop nextscan
           }
        }
-#endif
+#endif // OLD_WAY
 
     } while ( cRcl-- );
 
@@ -1515,7 +1523,7 @@ volatile UCHAR  FoxFox = 0xFF; // Note: the compiler is stupid - it compiles
        vClearStrips( DR_SET );
     }
 
-#else
+#else // if !DOS
 
     /*
      *  Fill rectangle with color requested
@@ -1533,7 +1541,7 @@ volatile UCHAR  FoxFox = 0xFF; // Note: the compiler is stupid - it compiles
                   hbrsolid[ (Color == TWCLR_CURRENT) ? vLastColor16.FG : Color ] );
     }
 
-#endif
+#endif // DOS
 
 }
 

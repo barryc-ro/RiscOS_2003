@@ -9,6 +9,14 @@
 * $Author$  Andy (3/15/94)
 *
 * $Log$
+* Revision 1.1  1998/01/19 19:13:36  smiddle
+* Added loads of new files (the thinwire, modem, script and ne drivers).
+* Discovered I was working around the non-ansi bitfield packing in totally
+* the wrong way. When fixed suddenly the screen starts doing things. Time to
+* check in.
+*
+* Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.23   Jun 27 1997 20:24:52   scottc
 *  fixed scrolling to far problem (merge from 1.6)
@@ -590,7 +598,8 @@ ExitExit:
  ******************************************************************************/
 int far  MousePosition( USHORT X, USHORT Y )
 {
-
+    char s[5];
+    
    if(gfNoMouse)
       return(CLIENT_ERROR_NO_MOUSE);
 
@@ -602,8 +611,15 @@ int far  MousePosition( USHORT X, USHORT Y )
    Y = (USHORT)(((ULONG)Y * gHeight)/0x10000);
 
    TRACE(( TC_MOU, TT_API1, "MousePosition: X=%u Y=%u",X,Y ));
-   //  Make a position call to mouse driver
 
+   //  Make a position call to mouse driver
+   s[0] = 3;
+   s[1] = X;
+   s[2] = X >> 8;
+   s[3] = Y;
+   s[4] = Y >> 8;
+   _swix(OS_Word, _INR(0,1), 21, s);
+   
    return(CLIENT_STATUS_SUCCESS);
 }
 /*******************************************************************************
@@ -623,11 +639,22 @@ int far  MousePosition( USHORT X, USHORT Y )
  ******************************************************************************/
 int far  MousePositionAbs( USHORT X, USHORT Y )
 {
-   if(gfNoMouse)
+    char s[5];
+
+    if(gfNoMouse)
       return(CLIENT_ERROR_NO_MOUSE);
 
    TRACE(( TC_MOU, TT_API1, "MousePositionAbs: X=%u Y=%u",X,Y ));
+
    //  Make a position call to mouse driver
+   //  Make a position call to mouse driver
+   s[0] = 3;
+   s[1] = X;
+   s[2] = X >> 8;
+   s[3] = Y;
+   s[4] = Y >> 8;
+   _swix(OS_Word, _INR(0,1), 21, s);
+
    return(CLIENT_STATUS_SUCCESS);
 }
 
@@ -648,16 +675,27 @@ int far  MousePositionAbs( USHORT X, USHORT Y )
 int far  MouseSetRanges( USHORT uHoriMin, USHORT uHoriMax,
                                 USHORT uVertMin, USHORT uVertMax )
 {
-   if(gfNoMouse)
+    char s[9];
+    if(gfNoMouse)
       return(CLIENT_ERROR_NO_MOUSE);
 
    TRACE(( TC_MOU, TT_API1, "MouseSetRanges: hmin=%u hmax=%u vmin=%u vmax=%u",
                                        uHoriMin,uHoriMax,uVertMin,uVertMax ));
 
    //  set horizontal
-
    //  set vertical
 
+   s[0] = 1;
+   s[1] = uHoriMin;
+   s[2] = uHoriMin >> 8;
+   s[3] = uVertMin;
+   s[4] = uVertMin >> 8;
+   s[5] = uHoriMax;
+   s[6] = uHoriMax >> 8;
+   s[7] = uVertMax;
+   s[8] = uVertMax >> 8;
+// _swix(OS_Word, _INR(0,1), 21, s);
+  
    return(CLIENT_STATUS_SUCCESS);
 }
 
@@ -691,7 +729,7 @@ int far  MouseSetScreenDimensions( USHORT uWidth, USHORT uHeight )
       gHeight = uHeight;
    }
 
-   TRACE(( TC_MOU, TT_API1, "MouseSetScreenDimensions: w=%u h=%u",gWidth, gHeight ));
+   TRACE(( TC_MOU, TT_API1, "MouseSetScreenDimensions: in: w=%u h=%u, set: w=%u h=%u",uWidth, uHeight,gWidth, gHeight ));
 
    return(CLIENT_STATUS_SUCCESS);
 }
@@ -716,7 +754,9 @@ int far  MouseShowPointer( BOOL fOn )
       return(CLIENT_ERROR_NO_MOUSE);
 
    TRACE(( TC_MOU, TT_API3, "MouseShowPointer: fOn=%u ",fOn ));
+
    //  Make a position call to mouse driver
+    _swix(OS_Byte, _INR(0,1), 106, fOn ? 1 : 0); // pointer on
 
    return(CLIENT_STATUS_SUCCESS);
 }

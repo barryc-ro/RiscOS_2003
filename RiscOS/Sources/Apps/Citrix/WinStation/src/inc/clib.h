@@ -84,7 +84,12 @@ extern int mkdir(const char *name);
 #define _open(a,b)	open(a,b)
 #define _close(a)	close(a)
 #define _read(a,b,c)	read(a,b,c)
+#define _write(a,b,c)	write(a,b,c)
 #define _lseek(a,b,c)	lseek(a,b,c)
 
+extern int read_word(void *a);
+extern void write_word(void *a, int b);
+extern int read_long(void *a);
+extern void write_long(void *a, int b);
 
 #endif //__CLIB_H__

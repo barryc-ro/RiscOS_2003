@@ -9,6 +9,14 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:00  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.6   15 Apr 1997 18:16:50   TOMA
 *  autoput for remove source 4/12/97
@@ -18,9 +26,10 @@
 *  
 *******************************************************************************/
 
+#include <string.h>
 #include "wfglobal.h"
 
-
+#define WIN32
 
 //makes the objobj entry having index number "index"
 //and pointer lpbrushobjobj the mru on the list

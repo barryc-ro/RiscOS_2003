@@ -92,6 +92,11 @@ static BOOL		bPDError=FALSE;
 
 static int EMLogInit(void);
 
+extern LPBYTE gScriptFile;
+extern LPBYTE gScriptDriver;
+
+extern int gbContinuePolling;
+
 /* --------------------------------------------------------------------------------------------- */
 
 static void MessageBox(const char *message, const char *server)
@@ -307,111 +312,123 @@ static int EMErrorPopup(Session sess, int iError)
  *
  ******************************************************************************/
 
-LRESULT WFCAPI
-WFEngineStatusCallback( HANDLE hWFE, INT message, LPARAM lParam )
+static void WFEngineStatusCallback( Session sess, int message )
 {
     int rc;
     LRESULT lResult = 0;
-    Session sess = global_session;
 
-#if 0
-    // send to plug in if available
-    if(g_hWndPlugin && g_MsgPlugin) {
-       SendMessage( g_hWndPlugin, g_MsgPlugin, message, lParam);
-       }
+#ifdef DEBUG
+    if (message != CLIENT_STATUS_SUCCESS && message != CLIENT_STATUS_NO_DATA)
+	LogPrintf( LOG_CLASS, LOG_CONNECT, "callback: %d", message);
 #endif
-    
-    switch ( message ) {
+   
+    switch ( message )
+    {
+    case CLIENT_STATUS_CONNECTION_BROKEN_HOST:
+    case CLIENT_STATUS_CONNECTION_BROKEN_CLIENT:
 
-        case CLIENT_STATUS_CONNECTION_BROKEN_HOST:
-        case CLIENT_STATUS_CONNECTION_BROKEN_CLIENT:
-
-            if ( (rc = srvWFEngUnloadDrivers( hWFE )) != CLIENT_STATUS_SUCCESS ) {
+	if ( (rc = srvWFEngUnloadDrivers( sess->hWFE )) != CLIENT_STATUS_SUCCESS ) {
     
             // LogStandardErrorMessage(FALSE, rc, IDP_ERROR_WFENGUNLOADDRIVERS);
-            }
-            if ( (rc = srvWFEngClose( sess->hWFE )) != CLIENT_STATUS_SUCCESS ) {
+	}
+	if ( (rc = srvWFEngClose( sess->hWFE )) != CLIENT_STATUS_SUCCESS ) {
 
             // LogStandardErrorMessage(FALSE, rc, IDP_ERROR_WFENGCLOSE);
-            }
-#ifdef DEBUG
-            LogPrintf( LOG_CLASS, LOG_CONNECT, "DISCONNECTED from %s", sess->gszServerLabel);
-#endif
-            break;
-
-        case CLIENT_STATUS_MODEM_INIT:
-        case CLIENT_STATUS_MODEM_DIALING:
-        case CLIENT_STATUS_MODEM_WAITING:
-        case CLIENT_STATUS_MODEM_NO_RESPONSE:
-        case CLIENT_STATUS_MODEM_ERROR:
-        case CLIENT_STATUS_MODEM_NO_DIAL_TONE:
-        case CLIENT_STATUS_MODEM_REDIALING:
-        case CLIENT_STATUS_MODEM_VOICE:
-        case CLIENT_STATUS_MODEM_BUSY:
-        case CLIENT_STATUS_MODEM_TERMINATE:
-        case CLIENT_STATUS_MODEM_TIMEOUT:
-        case CLIENT_STATUS_MODEM_OUT_OF_RETRIES:
-            break;
-
-        case CLIENT_STATUS_QUERY_CLOSE: // ask user to close or not
-//          lResult = EMStatusMessage(message);
-            break;
-
-
-        case CLIENT_STATUS_HOTKEY1:     // invoke local task list
-            break;
-
-        case CLIENT_STATUS_DELETE_CONNECT_DIALOG:
-            connect_close(sess);
-            break;
-
-        case CLIENT_STATUS_CONNECTED:
-#ifdef DEBUG
-            LogPrintf( LOG_CLASS, LOG_CONNECT, "CONNECTED to %s", sess->gszServerLabel);
-#endif
-            break;
-
-        case CLIENT_STATUS_KILL_FOCUS:  // ignore these messages
-            break;
-
-        case CLIENT_STATUS_CONNECTING:
-            break;
-
-        case CLIENT_STATUS_TTY_CONNECTED:
-            break;
-
-        case CLIENT_STATUS_BEEPED:
-            break;
-
-        case CLIENT_STATUS_QUERY_ACCESS:
-//          EMFileSecurityPopup();
-            break;
-
-
-        case CLIENT_ERROR_HOST_NOT_SECURED: 
-        case CLIENT_ERROR_VD_ERROR:
-        case CLIENT_ERROR_PD_ERROR:
-            if(bPDError==FALSE)
-	    {
-		connect_close(sess);
-		EMErrorPopup(sess, message);
-		bPDError=TRUE;
-	    }
-            break;
-
-        default:
-#ifdef DEBUG
-	{
-            char szStatus[80];
-            sprintf(szStatus,"Unknown status message (%d)",message);
-	    MessageBox(szStatus, sess->gszServerLabel);
 	}
+#ifdef DEBUG
+	LogPrintf( LOG_CLASS, LOG_CONNECT, "DISCONNECTED from %s", sess->gszServerLabel);
 #endif
-            break;
+	break;
+
+    case CLIENT_STATUS_MODEM_INIT:
+    case CLIENT_STATUS_MODEM_DIALING:
+    case CLIENT_STATUS_MODEM_WAITING:
+    case CLIENT_STATUS_MODEM_NO_RESPONSE:
+    case CLIENT_STATUS_MODEM_ERROR:
+    case CLIENT_STATUS_MODEM_NO_DIAL_TONE:
+    case CLIENT_STATUS_MODEM_REDIALING:
+    case CLIENT_STATUS_MODEM_VOICE:
+    case CLIENT_STATUS_MODEM_BUSY:
+    case CLIENT_STATUS_MODEM_TERMINATE:
+    case CLIENT_STATUS_MODEM_TIMEOUT:
+    case CLIENT_STATUS_MODEM_OUT_OF_RETRIES:
+	break;
+
+    case CLIENT_STATUS_QUERY_CLOSE: // ask user to close or not
+//          lResult = EMStatusMessage(message);
+	break;
+
+
+    case HOTKEY_UI: // CLIENT_STATUS_HOTKEY1:     // suspend
+#ifdef DEBUG
+	LogPrintf( LOG_CLASS, LOG_CONNECT, "HOTKEY_UI");
+#endif
+	break;
+
+    case HOTKEY_EXIT: // CLIENT_STATUS_HOTKEY2:     // exit
+#ifdef DEBUG
+	LogPrintf( LOG_CLASS, LOG_CONNECT, "HOTKEY_EXIT");
+#endif
+	srvWFEngDisconnect(sess->hWFE);
+	break;
+
+    case CLIENT_STATUS_DELETE_CONNECT_DIALOG:
+	connect_close(sess);
+	break;
+
+    case CLIENT_STATUS_CONNECTED:
+#ifdef DEBUG
+	LogPrintf( LOG_CLASS, LOG_CONNECT, "CONNECTED to %s", sess->gszServerLabel);
+#endif
+	sess->HaveFocus = FALSE;
+	break;
+
+    case CLIENT_STATUS_KILL_FOCUS:  // ignore these messages
+	sess->HaveFocus = TRUE;
+
+	// restore desktop (should work with mode numbers and selectors)
+	{
+	    int mode;
+	    _swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 1, &mode);
+	    _swix(Wimp_SetMode, _IN(0), mode);
+	}
+	break;
+
+    case CLIENT_STATUS_CONNECTING:
+	break;
+
+    case CLIENT_STATUS_TTY_CONNECTED:
+	break;
+
+    case CLIENT_STATUS_BEEPED:
+	break;
+
+    case CLIENT_STATUS_QUERY_ACCESS:
+//          EMFileSecurityPopup();
+	break;
+
+
+    case CLIENT_ERROR_HOST_NOT_SECURED: 
+    case CLIENT_ERROR_VD_ERROR:
+    case CLIENT_ERROR_PD_ERROR:
+	if(bPDError==FALSE)
+	{
+	    connect_close(sess);
+	    EMErrorPopup(sess, message);
+	    bPDError=TRUE;
+	}
+	break;
+
+    default:
+#if 0
+    {
+	char szStatus[80];
+	sprintf(szStatus,"Unknown status message (%d)",message);
+	MessageBox(szStatus, sess->gszServerLabel);
     }
-
-    return(lResult);
-
+#endif
+	break;
+    }
 }  // end WFEngineStatusCallback
 
 /* --------------------------------------------------------------------------------------------- */
@@ -443,7 +460,7 @@ static int EMEngOpen(Session sess)
 				     DEF_DESIREDVRES, gszWfclientIni);
 
     WFEOpen.Version          = WFENG_API_VERSION;
-    WFEOpen.pfnStatusMsgProc = &WFEngineStatusCallback;
+    WFEOpen.pfnStatusMsgProc = NULL; // &WFEngineStatusCallback;
     WFEOpen.pszClientname    = gszClientName;   
     WFEOpen.uInitialWidth    = (int)iHRes;   
     WFEOpen.uInitialHeight   = (int)iVRes;  
@@ -637,23 +654,63 @@ Session session_open(const char *ica_file)
 	return NULL;
     }
 
+    /*
+     *  Load script driver
+     */
+    if ( gScriptFile ) {
+        sess->fSdPoll = sess->fSdLoaded = sdLoad( gScriptFile, gScriptDriver );
+        free( gScriptDriver );
+        free( gScriptFile );
+        gScriptFile = NULL;
+	gScriptDriver = NULL;
+    }
+
     connect_close(sess);
     
     return sess;
 }
 
-void session_poll(Session sess)
+int session_poll(Session sess)
 {
-    DBG(("session_poll: state %x connected %d\n", gState, gState & WFES_CONNECTED ));
+    int rc;
+    
+//  DBG(("session_poll: state %x connected %d\n", gState, gState & WFES_CONNECTED ));
 
-    if ( gState & WFES_CONNECTED )
-	srvWFEngMessageLoop( sess->hWFE );
+//  if ( gState & WFES_CONNECTED )
+//	srvWFEngMessageLoop( sess->hWFE );
+
+    do
+    {
+	rc = srvWFEngPoll( sess->hWFE );
+
+	/*
+	 *  Poll SD
+	 */
+	if ( sess->fSdPoll ) {
+	    sess->fSdPoll = sdPoll();
+	}
+
+	WFEngineStatusCallback(sess, rc);
+    }
+    while (!sess->HaveFocus && gbContinuePolling);
+    
+    return gbContinuePolling;
 }
 
 void session_close(Session sess)
 {
     DBG(("session_close: %p\n", sess));
 
+    /*
+     *  Unload script driver
+     */
+    if ( sess->fSdLoaded ) {
+        sdUnload();
+	sess->fSdLoaded = FALSE;
+    }
+
+    srvWFEngDisconnect(sess->hWFE);
+    
     /*
      * These APIs are called automatically on exit
      * (The APIs called by the UI are handled in WFCWINx.DLL)
@@ -667,20 +724,35 @@ void session_close(Session sess)
     session_free(sess);
 }
 
+#if 0
 void session_close_all(void)
 {
+    DBG(("session_close_all: \n"));
+
     if (global_session)
 	session_close(global_session);
 }
+#endif
 
 /* --------------------------------------------------------------------------------------------- */
 
+void session_resume(Session sess)
+{
+    DBG(("session_resume: %p\n", sess));
+
+    // Give focus back to the engine
+    if (!srvWFEngSetInformation(sess->hWFE, WFESetFocus, NULL, 0))
+	sess->HaveFocus = FALSE;
+}
+
+#if 0
 void session_run(const char *ica_file)
 {
     Session sess = session_open(ica_file);
     session_poll(sess);
     session_close(sess);
 }
+#endif
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -701,7 +773,7 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 //	{ "pdmodem",	(PLIBPROCEDURE)PdLoad, PdModemDeviceProcedures },
 	{ "wdtty",	(PLIBPROCEDURE)WdLoad, WdTTYEmulProcedures },
 	{ "wdica30",	(PLIBPROCEDURE)WdLoad, WdICA30EmulProcedures },
-//	{ "vdtw30",	(PLIBPROCEDURE)VdLoad, VdTW31DriverProcedures },
+	{ "vdtw30",	(PLIBPROCEDURE)VdLoad, VdTW31DriverProcedures },
 	{ "nrtcpro",	(PLIBPROCEDURE)NrLoad, NULL },
 //	{ "neica",	(PLIBPROCEDURE)NeLoad, NeICADeviceProcedures },
 //	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
@@ -744,8 +816,9 @@ int  EMLogInit(void)
    LogClose();
    
    EMLogInfo.LogFlags   = LOG_APPEND;
-   EMLogInfo.LogClass   = TC_ALL;
-   EMLogInfo.LogEnable  = TT_ERROR;
+   EMLogInfo.LogClass   = TC_UI | TC_WD | TC_TW | TC_VD | TC_VIO | LOG_ASSERT | LOG_CLASS;
+// EMLogInfo.LogClass   = TC_ALL;
+   EMLogInfo.LogEnable  = TT_ERROR &~ 0x0040;
    lstrcpy(EMLogInfo.LogFile, "<Wimp$ScrapDir>." APP_NAME);
 
    rc = LogOpen(&EMLogInfo);

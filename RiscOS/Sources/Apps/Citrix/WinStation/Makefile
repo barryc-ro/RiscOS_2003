@@ -26,7 +26,7 @@ CPFLAGS=	-p
 
 # ----------------------------------------------------------------------------------------------------
 
-DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG
+DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -Dsetdibits_ssb=0
 INCLUDES=	-Isrc/sys_inc \
 		-Isrc/sdk \
 		-I${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs \
@@ -81,6 +81,7 @@ APPLIBS=	${WENGINELIB}  ${WDLIB}  ${PDLIB}  ${TDLIB}  ${NRLIB}  ${SDLIB} \
 		${CITRIXLIB}  
 
 APPLIBSD=	${WENGINELIBD} ${WDLIBD} ${PDLIBD} ${TDLIBD} ${NRLIBD} ${SDLIBD} \
+		${VDLIBD} \
 		${CITRIXLIBD}
 
 BASELIBS=	${COMMONLIBS}
@@ -169,7 +170,7 @@ cleaninstall:
 
 CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/cfgload/cfgload.c \
-		src/lib/clib/delay.c src/lib/clib/fileio.c src/lib/clib/loadstr.c src/lib/clib/string.c \
+		src/lib/clib/delay.c src/lib/clib/fileio.c src/lib/clib/loadstr.c src/lib/clib/misc.c src/lib/clib/string.c \
 		src/lib/encrypt/encrypt.c \
 		src/lib/ini/iniapi.c \
 		src/lib/log/logapi.c \
@@ -184,7 +185,7 @@ CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 
 CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/cfgload/cfgload.o \
-		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/string.o \
+		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/misc.o src/lib/clib/string.o \
 		src/lib/encrypt/encrypt.o \
 		src/lib/ini/iniapi.o \
 		src/lib/io/icabrows/icabrows.o src/lib/io/tcpro/tcpro.o \
@@ -198,7 +199,7 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 
 CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/cfgload/cfgload.od \
-		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/string.od \
+		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/misc.od src/lib/clib/string.od \
 		src/lib/encrypt/encrypt.od \
 		src/lib/ini/iniapi.od \
 		src/lib/log/logapi.od \
@@ -408,6 +409,7 @@ VDCOMMONLIBOBJSD=src/dll/vd/common/vdapi.od
 VDTW31LIBSRC=	\
 		src/dll/vd/vdtw31/palette.c \
 		src/dll/vd/vdtw31/pixpack.c \
+		src/dll/vd/vdtw31/tw.c \
 		src/dll/vd/vdtw31/twbez.c \
 		src/dll/vd/vdtw31/twdata.c \
 		src/dll/vd/vdtw31/twro.c \
@@ -415,7 +417,6 @@ VDTW31LIBSRC=	\
 		src/dll/vd/vdtw31/twstroke.c \
 		src/dll/vd/vdtw31/twtext.c \
 		src/dll/vd/vdtw31/twvd.c \
-		src/dll/vd/vdtw31/twwin.c \
 		src/dll/vd/vdtw31/wfbitblt.c \
 		src/dll/vd/vdtw31/wfbrush.c \
 		src/dll/vd/vdtw31/wfcache.c \
@@ -423,6 +424,7 @@ VDTW31LIBSRC=	\
 		src/dll/vd/vdtw31/wfdims.c \
 		src/dll/vd/vdtw31/wfglobal.c \
 		src/dll/vd/vdtw31/wflines.c \
+		src/dll/vd/vdtw31/wfmisc.c \
 		src/dll/vd/vdtw31/wfsavscr.c \
 		src/dll/vd/vdtw31/wfssb256.c \
 		src/dll/vd/vdtw31/wfssbtru.c \
@@ -432,6 +434,7 @@ VDTW31LIBSRC=	\
 VDTW31LIBOBJS=	\
 		src/dll/vd/vdtw31/palette.o \
 		src/dll/vd/vdtw31/pixpack.o \
+		src/dll/vd/vdtw31/tw.o \
 		src/dll/vd/vdtw31/twbez.o \
 		src/dll/vd/vdtw31/twdata.o \
 		src/dll/vd/vdtw31/twro.o \
@@ -439,7 +442,6 @@ VDTW31LIBOBJS=	\
 		src/dll/vd/vdtw31/twstroke.o \
 		src/dll/vd/vdtw31/twtext.o \
 		src/dll/vd/vdtw31/twvd.o \
-		src/dll/vd/vdtw31/twwin.o \
 		src/dll/vd/vdtw31/wfbitblt.o \
 		src/dll/vd/vdtw31/wfbrush.o \
 		src/dll/vd/vdtw31/wfcache.o \
@@ -447,14 +449,17 @@ VDTW31LIBOBJS=	\
 		src/dll/vd/vdtw31/wfdims.o \
 		src/dll/vd/vdtw31/wfglobal.o \
 		src/dll/vd/vdtw31/wflines.o \
+		src/dll/vd/vdtw31/wfmisc.o \
 		src/dll/vd/vdtw31/wfsavscr.o \
 		src/dll/vd/vdtw31/wfssb256.o \
 		src/dll/vd/vdtw31/wfssbtru.o \
+		src/dll/vd/vdtw31/wfstrips.o \
 		src/dll/vd/vdtw31/winonly.o
 
 VDTW31LIBOBJSD=	\
 		src/dll/vd/vdtw31/palette.od \
 		src/dll/vd/vdtw31/pixpack.od \
+		src/dll/vd/vdtw31/tw.od \
 		src/dll/vd/vdtw31/twbez.od \
 		src/dll/vd/vdtw31/twdata.od \
 		src/dll/vd/vdtw31/twro.od \
@@ -462,7 +467,6 @@ VDTW31LIBOBJSD=	\
 		src/dll/vd/vdtw31/twstroke.od \
 		src/dll/vd/vdtw31/twtext.od \
 		src/dll/vd/vdtw31/twvd.od \
-		src/dll/vd/vdtw31/twwin.od \
 		src/dll/vd/vdtw31/wfbitblt.od \
 		src/dll/vd/vdtw31/wfbrush.od \
 		src/dll/vd/vdtw31/wfcache.od \
@@ -470,10 +474,12 @@ VDTW31LIBOBJSD=	\
 		src/dll/vd/vdtw31/wfdims.od \
 		src/dll/vd/vdtw31/wfglobal.od \
 		src/dll/vd/vdtw31/wflines.od \
+		src/dll/vd/vdtw31/wfmisc.od \
 		src/dll/vd/vdtw31/wfsavscr.od \
 		src/dll/vd/vdtw31/wfssb256.od \
 		src/dll/vd/vdtw31/wfssbtru.od \
-		src/dll/vd/vdtw31/winonly.o
+		src/dll/vd/vdtw31/wfstrips.od \
+		src/dll/vd/vdtw31/winonly.od
 
 VDLIBSRC=	${VDCOMMONLIBSRC} ${VDTW31LIBSRC}
 VDLIBOBJS=	${VDCOMMONLIBOBJS} ${VDTW31LIBOBJS}

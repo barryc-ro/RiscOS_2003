@@ -503,7 +503,7 @@ KbdReadChar( int * pChar, int *pShiftState )
 	    *pChar = key;
 
 	if (key == 0x1B)
-	    return HOTKEY_EXIT;
+	    return HOTKEY_UI;
 
         if ( (Hotkey = KbdCheckHotkey( key, 0 )) )
 	{
@@ -666,7 +666,7 @@ KbdReadScan( int * pScanCode, int * pShiftState )
 	    ScanCode = key;
 
 	if (key == 0x1B)
-	    return HOTKEY_EXIT;
+	    return HOTKEY_UI;
 
         if ( (Hotkey = KbdCheckHotkey( ScanCode, *pShiftState )) )
 	{
@@ -731,25 +731,21 @@ done:
 int WFCAPI
 KbdSetLeds( int ShiftState )
 {
-#ifdef DOS
-   union REGS regs;
-   char far * pbKBF = (char far *) 0x00400017;
-   int  iKBF;
+    int state = 0;
 
-   // kbd open?
-   if ( CurrentKbdMode == Kbd_Closed ) {
-      return( CLIENT_ERROR_NOT_OPEN );
-   }
+    if (ShiftState & KSS_SCROLLLOCKON)
+	state |= 1<<1;
 
-   // set the bios flag bits
-   iKBF = (int) *pbKBF & 0x8f;
-   *pbKBF = (char) (iKBF | (ShiftState & 0x70));
+    if ((ShiftState & KSS_NUMLOCKON) == 0)
+	state |= 1<<2;
 
-   // peek to force bios to sync leds with bios
-   regs.h.ah = 1;
-   (void) int86( 0x16, &regs, &regs );
-#endif
-   return( CLIENT_STATUS_SUCCESS );
+    if ((ShiftState & KSS_CAPSLOCKON) == 0)
+	state |= 1<<4;
+
+    _swix(OS_Byte, _INR(0,2), 202, state, ~((1<<1) | (1<<2) | (1<<4)));
+    _swix(OS_Byte, _IN(0), 118);
+
+    return( CLIENT_STATUS_SUCCESS );
 }
 
 /*******************************************************************************

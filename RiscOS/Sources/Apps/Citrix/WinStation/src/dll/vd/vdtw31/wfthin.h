@@ -10,6 +10,14 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:10  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.7   15 Apr 1997 18:17:12   TOMA
 *  autoput for remove source 4/12/97
@@ -29,6 +37,7 @@
 #define __WFTHIN_H__
 
 #include "windows.h"
+#include <string.h>
 #include "../../../inc/client.h"
 #include "../../../inc/logapi.h"
 #include "citrix/ica.h"
@@ -37,7 +46,6 @@
 #include "wfcache.h"
 #include "twdata.h"
 #include "twwin.h"
-
 //define THINPAL to build supporting bitmaps from the default logical palette
 //and the solidcolor array from the default logical palette
 //this is in lieu of absolute RGB colors
@@ -52,9 +60,11 @@
 
 typedef  struct   _INPUT_WORD
 {
-   WORD  lowbyte/* :  8*/;
-   WORD  hibyte /* : 8 */;
+   BWORD  lowbyte : 8;
+   BWORD  hibyte  : 8;
 } INPUT_WORD, near * PINPUT_WORD, far * LPINPUT_WORD;
+
+#define sizeof_INPUT_WORD	2
 
 typedef  struct   _RECT_ULH
 {
@@ -197,20 +207,22 @@ typedef  struct _BRUSHDIB
 //
 typedef  struct _BITMAP_HEADER_FLAGS
 {
-   BYTE  color/* : 2*/;     //0-monochrome bitmap   1-16 color bitmap
+   BBYTE  color : 2;     //0-monochrome bitmap   1-16 color bitmap
                         //10-256 color bitmap
                         //11 reserved for future color stuff
-   BYTE  size/*  : 1*/;     //0-_2K bitmap          1-_512B bitmap
-   BYTE  chained/* : 1*/;   //0-not chained         1-chained
-   BYTE  reserved/* : 4*/;  //not used right now
+   BBYTE  size : 1;     //0-_2K bitmap          1-_512B bitmap
+   BBYTE  chained : 1;   //0-not chained         1-chained
+   BBYTE  reserved : 4;  //not used right now
 } BITMAP_HEADER_FLAGS;
+
+#define sizeof_BITMAP_HEADER_FLAGS	1
 
 //jk256 - move flags to first byte because in future may need to decide how much control
 //       store based on the flags
 //#pragma pack(1)
 typedef struct _BITMAP_HEADER
 {
-   BITMAP_HEADER_FLAGS flags; //# colors, _512 or _2K, chained or not
+   BYTE /*BITMAP_HEADER_FLAGS*/ flags; //# colors, _512 or _2K, chained or not
    BYTE  pixel_offset;        //The pixel offset of the bitmap
    WORD  total_scanlines;     //total number of logical scanlines of bitmap
                               //this is the pixel height
@@ -223,6 +235,8 @@ typedef struct _BITMAP_HEADER
                               //same as assembler which is ddb width
    WORD  pixel_width;         //The width of the bitmap in pixels
 } BITMAP_HEADER, near * PBITMAP_HEADER, far * LPBITMAP_HEADER;
+
+#define bitmap_header_flags(a,b)	(((BITMAP_HEADER_FLAGS*)&(a).flags)-> b)
 
 //#pragma pack()
 
@@ -298,8 +312,6 @@ typedef struct _SSB_HEADER
                               //bytes per rectangle
                               //if the count is >2 then no rectangle information follows
 } SSB_HEADER, near * PSSB_HEADER, far * LPSSB_HEADER;
-
-
 
 //#pragma pack()
 

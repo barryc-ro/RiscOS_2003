@@ -308,7 +308,7 @@ typedef struct _LINESTATE {
  * TWSPHEADER    Flags;     (required field)
 \*****************************************************************************/
 typedef struct _TWSPHEADER {
-   BCHAR clipping  : 2,          // b1 b0
+   BCHAR clipping  : 2;          // b1 b0
 #define   TW_CLIP_TRIVIAL      0 //  0  0
 #define   TW_CLIP_RECT         1 //  0  1
 #define   TW_CLIP_COMPLEX      2 //  1  0
@@ -402,7 +402,7 @@ typedef struct _TWSPPEN256 {
    BCHAR color : 8;     // b7 b6 b5 b4 b3 b2 b1 b0
 } TWSPPEN256, *PTWSPPEN256;
 
-#define sizeof_twsppen256	2
+#define sizeof_TWSPPEN256	2
 
 /*****************************************************************************\
  * TWSPSTYLEMASK StyleMask; (present IFF Flags.style (b2-b4) = TW_LINE_MASK)
@@ -483,17 +483,14 @@ typedef struct _TWPOINTFIX {
 //#pragma pack(1)
 #define SIZE_OF_TWPOINTFIXSIGN 9
 typedef struct _TWPOINTFIXSIGN {
-#if 1
    UCHAR vals[9];
-#else
-   UCHAR fSigned  :  1; // b0   True if x and y are signed values (must be TRUE) 
-   UCHAR fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
-   UCHAR fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
-   UCHAR res      :  5; // b3-b7
+//   UCHAR fSigned  :  1; // b0   True if x and y are signed values (must be TRUE) 
+//   UCHAR fNoFracs :  1; // b1   TRUE/FALSE True if all points are integers
+//   UCHAR fLast    :  1; // b2   TRUE/FALSE True if last point in subpath
+//   UCHAR res      :  5; // b3-b7
 
-   LONG  x;
-   LONG  y;
-#endif
+// LONG  x;
+// LONG  y;
 } TWPOINTFIXSIGN, *PTWPOINTFIXSIGN;
 //#pragma pack()
 
@@ -781,7 +778,7 @@ typedef struct _TWUNPACKTOPOSITION {
  * TWTOPOSITIONSHORT PositionShort;
 \*****************************************************************************/
 typedef struct _TWTOPOSITIONSHORT {
-   CHAR bShortFormat : 1,
+   BCHAR bShortFormat : 1,
         delta        : 7;
 } TWTOPOSITIONSHORT, *PTWTOPOSITIONSHORT;
 
@@ -1119,14 +1116,18 @@ typedef struct _ICA_CACHE_ERROR {
 } ICA_CACHE_ERROR, *PICA_CACHE_ERROR;
 //#pragma pack()
 
+#define sizeof_ICA_CACHE_ERROR	11
+
 
 //#pragma pack(1)
 typedef struct _ICA_CACHE_RESIZE {
     USHORT ByteCount;
     UCHAR Command;
-    ULONG Size;
+    UCHAR Size[4];	// ULONG Size;
 } ICA_CACHE_RESIZE, *PICA_CACHE_RESIZE;
 //#pragma pack()
+
+#define sizeof_ICA_CACHE_RESIZE 7
 
 
 //#pragma pack(1)
@@ -1136,6 +1137,8 @@ typedef struct _ICA_CACHE_DELETE {
     CACHE_FILE_HANDLE FileHandle;
 } ICA_CACHE_DELETE, *PICA_CACHE_DELETE;
 //#pragma pack()
+
+#define sizeof_ICA_CACHE_DELETE	11
 
 
 //#pragma pack(1)
@@ -1148,15 +1151,19 @@ typedef struct _CACHE_FILE_CONTEXT {
 } CACHE_FILE_CONTEXT, *PCACHE_FILE_CONTEXT;
 //#pragma pack()
 
+#define sizeof_CACHE_FILE_CONTEXT 14
+
 
 //#pragma pack(1)
 typedef struct _ICA_CACHE_STREAM {  
     USHORT ByteCount;
     UCHAR  Command;
     UCHAR  Count;
-    /*CACHE_FILE_CONTEXT FileList[0];*/
+    CACHE_FILE_CONTEXT FileList[1];	// SJM: was zero
 } ICA_CACHE_STREAM, *PICA_CACHE_STREAM;
 //#pragma pack()
+
+#define sizeof_ICA_CACHE_STREAM	4	// size with zero array members
 
 
 //#pragma pack(1)
@@ -1166,6 +1173,8 @@ typedef struct _ICA_CACHE_DISABLE {
 } ICA_CACHE_DISABLE, *PICA_CACHE_DISABLE;
 //#pragma pack()
 
+#define sizeof_ICA_CACHE_DISABLE	3
+
 
 //#pragma pack(1)
 typedef struct _ICA_CACHE_ENABLE {
@@ -1174,5 +1183,6 @@ typedef struct _ICA_CACHE_ENABLE {
 } ICA_CACHE_ENABLE, *PICA_CACHE_ENABLE;
 //#pragma pack()
 
+#define sizeof_ICA_CACHE_ENABLE		3
 
 #endif //__TWCOMMON_H__

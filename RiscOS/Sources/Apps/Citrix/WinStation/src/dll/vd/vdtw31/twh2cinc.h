@@ -9,6 +9,14 @@
 * Copyright (c) 1993-4 Citrix Systems, Inc.
 *
 *  $Log$
+*  Revision 1.1  1998/01/19 19:12:48  smiddle
+*  Added loads of new files (the thinwire, modem, script and ne drivers).
+*  Discovered I was working around the non-ansi bitfield packing in totally
+*  the wrong way. When fixed suddenly the screen starts doing things. Time to
+*  check in.
+*
+*  Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.12   21 Apr 1997 16:57:48   TOMA
 *  update
@@ -150,6 +158,9 @@
 #undef _TW_jmp_buf
 #undef TW_jmp_buf
 
+#ifdef RISCOS
+typedef jmp_buf jmp_buf3;
+#else
 typedef struct _TW_jmp_buf {        // keep in sync with tw.asm
 #ifdef WIN32
     long twjb_EBP;
@@ -175,3 +186,4 @@ typedef struct _TW_jmp_buf {        // keep in sync with tw.asm
 
 #undef jmp_buf3
 typedef  int  jmp_buf3[TW_SETJMP_BUFFER_SIZE];
+#endif

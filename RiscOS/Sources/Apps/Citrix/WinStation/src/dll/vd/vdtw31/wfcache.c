@@ -10,6 +10,14 @@
 *   Author: Jeff Krantz (jeffk)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:00  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.3   15 Apr 1997 18:16:52   TOMA
 *  autoput for remove source 4/12/97
@@ -76,10 +84,6 @@ static LPBYTE  lpcurrent_read_control_area;    //points to current 5 byte contro
                                              //and chain_index
 static UINT    current_read_chain_index;
 
-
-
-
-
 //initializes all of the thinwire cache data areas, locks them, and sets
 //everything up so can handle caching requests.
 
@@ -101,7 +105,7 @@ BOOL  TWCache_Init(UINT chunks_2K)
    j = 137;
 #endif
 
-#if defined(WIN32)
+#if defined(WIN32) || defined(RISCOS)
    j = 1;
 #endif
 
@@ -418,10 +422,13 @@ LPBYTE lpTWCacheWrite(UINT object_handle, CHUNK_TYPE chunk_type,
 
          if (size != 0) {
             TRACE((TC_TW,TT_TW_CACHE,"TW: the size is not 0 so must be nochain2K\n"));
-            *((LPWORD) (lpcurrent_write_control_area + 1)) = size - 1;
+            write_word(lpcurrent_write_control_area + 1, size - 1);
          }
-         else *((LPWORD) (lpcurrent_write_control_area + 1)) = 0;
-
+         else
+	 {
+	     write_word(lpcurrent_write_control_area + 1, 0);
+	 }
+	 
          //note that for all cases we break and fall through to get the cache pointer
          //from the chain_handle
          break;
@@ -448,7 +455,7 @@ LPBYTE lpTWCacheWrite(UINT object_handle, CHUNK_TYPE chunk_type,
          TRACE((TC_TW,TT_TW_CACHE,"TW: current_write_object_handle=%u\n",
                                  current_write_object_handle));
 
-         if (*((LPWORD) (lpcurrent_write_control_area + 1)) != 0) {
+         if (read_word(lpcurrent_write_control_area + 1) != 0) {
             TRACE((TC_TW,TT_TW_CACHE,
                "TW:    INVALID because size of previous control area is nonzero\n"));
             ASSERT(0,0);
@@ -463,7 +470,7 @@ LPBYTE lpTWCacheWrite(UINT object_handle, CHUNK_TYPE chunk_type,
             *lpcurrent_write_control_area = begin_chain;
          }
 
-         *((LPWORD) (lpcurrent_write_control_area + 1)) = chain_handle;
+         write_word(lpcurrent_write_control_area + 1, chain_handle);
 
          //point to new control area and then figure out case
          lpcurrent_write_control_area = lpcontrol_area + (chain_handle * 5);
@@ -472,13 +479,13 @@ LPBYTE lpTWCacheWrite(UINT object_handle, CHUNK_TYPE chunk_type,
             //must be middle chain
             *lpcurrent_write_control_area = middle_chain;
             current_write_type = middle_chain;
-            *((LPWORD) (lpcurrent_write_control_area + 1)) = 0;
+            write_word(lpcurrent_write_control_area + 1, 0);
          }
          else {
             //must be end of chain
             *lpcurrent_write_control_area = end_chain;
             current_write_type = end_chain;
-            *((LPWORD) (lpcurrent_write_control_area+ 1)) = size - 1;
+            write_word(lpcurrent_write_control_area+ 1, size - 1);
          }
 
          //note that for all cases we break and fall through to get the
@@ -558,7 +565,7 @@ BOOL finishedTWCacheWrite(UINT size)
       //a size field of 0 means 1 because of 0 base 1
       if (size) {
          //we need to put the size in the current control area
-         *((LPWORD) (lpcurrent_write_control_area + 1)) = size-1;
+         write_word(lpcurrent_write_control_area + 1, size-1);
       }
       break;
 
@@ -569,7 +576,7 @@ BOOL finishedTWCacheWrite(UINT size)
       //a size field of 0 means 1 because of 0 base 1
       if (size) {
          //we need to put the size in the current control area
-         *((LPWORD) (lpcurrent_write_control_area + 1)) = size-1;
+         write_word(lpcurrent_write_control_area + 1, size-1);
       }
       break;
 
@@ -722,7 +729,7 @@ LPBYTE lpTWCacheRead(UINT object_handle, CHUNK_TYPE chunk_type,
             //its the same one again
             if ((*lpcurrent_read_control_area == (BYTE) (CACHE_TYPE) nochain2K) ||
                 (*lpcurrent_read_control_area == (BYTE) (CACHE_TYPE) end_chain) )  {
-               *lpsize = (*((LPWORD) (lpcurrent_read_control_area + 1))) + 1;
+               *lpsize = read_word(lpcurrent_read_control_area + 1) + 1;
             }
             else *lpsize = 0;    //assume begin_chain or middle_chain
 
@@ -740,12 +747,12 @@ LPBYTE lpTWCacheRead(UINT object_handle, CHUNK_TYPE chunk_type,
             ASSERT((*lpcurrent_read_control_area == (BYTE) (CACHE_TYPE) begin_chain)
                    || (*lpcurrent_read_control_area == (BYTE) (CACHE_TYPE) middle_chain),0);
 
-            address_handle = *((LPWORD) (lpcurrent_read_control_area + 1));
+            address_handle = read_word(lpcurrent_read_control_area + 1);
             lpcurrent_read_control_area = lpcontrol_area + (address_handle * 5);
 
             //figure out what size to return
             if (*lpcurrent_read_control_area == (BYTE) (CACHE_TYPE) end_chain) {
-               *lpsize = (*((LPWORD) (lpcurrent_read_control_area + 1))) + 1;
+               *lpsize = read_word(lpcurrent_read_control_area + 1) + 1;
             }
             else *lpsize = 0;
          }
@@ -768,14 +775,14 @@ LPBYTE lpTWCacheRead(UINT object_handle, CHUNK_TYPE chunk_type,
 
 
          while (working_chain_index != chain_index) {
-            address_handle = *((LPWORD) (lpcurrent_read_control_area + 1));
+            address_handle = read_word(lpcurrent_read_control_area + 1);
             lpcurrent_read_control_area = lpcontrol_area + (address_handle * 5);
             working_chain_index++;
          }
 
          if ((*lpcurrent_read_control_area == (BYTE) (CACHE_TYPE) nochain2K) ||
              (*lpcurrent_read_control_area == (BYTE) (CACHE_TYPE) end_chain) )  {
-            *lpsize = (*((LPWORD) (lpcurrent_read_control_area + 1))) + 1;
+            *lpsize = read_word(lpcurrent_read_control_area + 1) + 1;
          }
          else *lpsize = 0;    //assume begin_chain or middle_chain
 

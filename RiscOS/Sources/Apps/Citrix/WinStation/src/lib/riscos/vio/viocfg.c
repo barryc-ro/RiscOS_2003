@@ -9,7 +9,12 @@
 *
 *  Author: Kurt Perry (3/28/1994)
 *
-*  $Log$
+*  viocfg.c,v
+*  Revision 1.1  1998/01/12 11:37:36  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.14   15 Apr 1997 18:51:28   TOMA
 *  autoput for remove source 4/12/97
@@ -38,6 +43,8 @@
 #endif
 #include "../../../inc/clib.h"
 #include "../../../inc/vioapi.h"
+
+#include "swis.h"
 
 //#include "graph.h"
 
@@ -259,10 +266,43 @@ VioGetState (PVOID pState, HVIO hvio)
 *
 ****************************************************************************/
 
+static char Palette16[] =
+{
+    19, 0, 16, 0x00, 0x00, 0x00,
+    19, 1, 16, 0x00, 0x00, 0x88,
+    19, 2, 16, 0x00, 0x88, 0x00,
+    19, 3, 16, 0x00, 0x88, 0x88,
+    19, 4, 16, 0x88, 0x00, 0x00,
+    19, 5, 16, 0x88, 0x00, 0x88,
+    19, 6, 16, 0x88, 0x88, 0x00,
+    19, 7, 16, 0x88, 0x88, 0x88,
+    19, 8,  16, 0x00, 0x00, 0x00,
+    19, 9,  16, 0x00, 0x00, 0xFF,
+    19, 10, 16, 0x00, 0xFF, 0x00,
+    19, 11, 16, 0x00, 0xFF, 0xFF,
+    19, 12, 16, 0xFF, 0x00, 0x00,
+    19, 13, 16, 0xFF, 0x00, 0xFF,
+    19, 14, 16, 0xFF, 0xFF, 0x00,
+    19, 15, 16, 0xFF, 0xFF, 0xFF
+};
+
 int WFCAPI
 VioSetMode (PVIOMODEINFO pvioModeInfo, HVIO hvio)
 {
     int rc = CLIENT_STATUS_SUCCESS;
+
+    // change mode
+    _swix(OS_WriteI + 22, 0);
+    _swix(OS_WriteI + pvioModeInfo->fmt_ID, 0);
+
+    // setup palette
+    _swix(OS_WriteN, _INR(0,1), Palette16, sizeof(Palette16));
+
+    // store mode parameters for routines
+    usMaxRow = pvioModeInfo->row;
+    usMaxCol = pvioModeInfo->col;
+    fMONO = FALSE;
+
 #if 0
     union REGS regs;
     short mode;

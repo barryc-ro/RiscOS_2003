@@ -10,6 +10,14 @@
 *   Author: Kurt Perry (kurtp)
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:13:03  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.10   29 Apr 1997 14:55:54   kurtp
 *  I fixed a bug in this file, update, duh!
@@ -56,7 +64,9 @@
 #include "fcntl.h"
 
 #include "../../../inc/wdapi.h"
+#include "../../../inc/clib.h"
 
+#define WIN32
 
 /*=============================================================================
 ==   Defines and typedefs
@@ -144,6 +154,7 @@ extern PVD   vpVd;
 //#define REPORT_USAGE ReportUsage();
 #define REPORT_USAGE {}
 
+#if 0
 void
 ReportUsage()
 {
@@ -152,7 +163,7 @@ ReportUsage()
     wsprintf( buf, "DiskUsage: %lu bytes of %lu total", vcbDiskUsage, vDimCacheSize );
     MessageBox( NULL, buf, "ReportUsage", MB_OK );
 }
-
+#endif
 
 /*******************************************************************************
  *
@@ -251,7 +262,7 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
     /*
      *  Generate FAT style DIM filename, look for collisions too
      */
-    wsprintf( vszFileName, "%s%08X.DM?", vpszDimCachePath, sigH ); 
+    wsprintf( vszFileName, "%s%08lX_?", vpszDimCachePath, sigH ); 
 
     TRACE((TC_TW, TT_TW_DIM, "OpenCacheFileHandle: filename %s\n",vszFileName));
 
@@ -357,7 +368,7 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
     /*
      *  Generate FAT style DIM filename, look for collisions too
      */
-    wsprintf( vszFileName, "%s%04X%04X.DM?", vpszDimCachePath, 
+    wsprintf( vszFileName, "%s%04X%04X_?", vpszDimCachePath, 
               (USHORT)(sigH>>16), (USHORT)(sigH&0xffff) ); 
 
     TRACE((TC_TW, TT_TW_DIM, "OpenCacheFileHandle: filename %s\n",vszFileName));
@@ -466,7 +477,7 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
     /*
      *  Generate FAT filename
      */
-    wsprintf( vszFileName, "%s%08X.DM?", vpszDimCachePath, sigH ); 
+    wsprintf( vszFileName, "%s%08lX_?", vpszDimCachePath, sigH ); 
     TRACE((TC_TW, TT_TW_DIM, "FindCacheFileName: filename %s\n",vszFileName));
     
     /*
@@ -558,7 +569,7 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
     /*
      *  Generate FAT filename
      */
-    wsprintf( vszFileName, "%s%04X%04X.DM?", vpszDimCachePath, 
+    wsprintf( vszFileName, "%s%04X%04X_?", vpszDimCachePath, 
               (USHORT)(sigH>>16), (USHORT)(sigH&0xffff) ); 
     TRACE((TC_TW, TT_TW_DIM, "FindCacheFileName: filename %s\n",vszFileName));
     
@@ -670,7 +681,7 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
     /*
      *  Find first match
      */
-    wsprintf( vszFileName, "%s%08X.DM?", vpszDimCachePath, sigH); 
+    wsprintf( vszFileName, "%s%08lX_?", vpszDimCachePath, sigH); 
     if( (hFind = _findfirst(vszFileName, &FileInfo)) != -1L ){        
 
         /*
@@ -747,7 +758,7 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
     /*
      *  Find first match
      */
-    wsprintf( vszFileName, "%s%04X%04X.DM?", vpszDimCachePath,
+    wsprintf( vszFileName, "%s%04X%04X_?", vpszDimCachePath,
               (USHORT)(sigH>>16), (USHORT)(sigH&0xffff) ); 
     if( _dos_findfirst(vszFileName,_A_NORMAL, &FileInfo) == 0 ) {
 
@@ -850,8 +861,8 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
      *  Create new cache file
      */
     if ( (hFile = _open( vszFileName, 
-                         O_CREAT|O_TRUNC|O_RDWR|O_BINARY,
-                         S_IREAD|S_IWRITE )) == -1 ) {
+                         O_CREAT|O_TRUNC|O_RDWR|O_BINARY/*,
+                         S_IREAD|S_IWRITE*/ )) == -1 ) {
 
         //  cannot create new file
         TRACE((TC_TW, TT_TW_DIM, 
@@ -1034,7 +1045,7 @@ static BOOL fPriorityDims = TRUE;
     /*
      *  Create and initialize cache file context records
      */
-    if ( !(pcf = (PCACHE_FILE_CONTEXT) malloc(MAX_CACHE_FILE_LIST * sizeof(CACHE_FILE_CONTEXT))) ) {                   
+    if ( !(pcf = (PCACHE_FILE_CONTEXT) malloc(MAX_CACHE_FILE_LIST * sizeof_CACHE_FILE_CONTEXT)) ) {                   
         rc = CLIENT_ERROR_NO_MEMORY;
         ASSERT( 0, rc );
         return(FALSE);
@@ -1059,10 +1070,10 @@ static BOOL fPriorityDims = TRUE;
          *  Stream the DIM handles to host
          */
         if ( (iPriorityDims == DIMS_PRIORITY_0) ) {
-            wsprintf( vszFileName, "%s????????.DM0", vpszDimCachePath ); 
+            wsprintf( vszFileName, "%s????????_0", vpszDimCachePath ); 
         }
         else {
-            wsprintf( vszFileName, "%s????????.DM?", vpszDimCachePath ); 
+            wsprintf( vszFileName, "%s????????_?", vpszDimCachePath ); 
         }
         TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: filename %s\n",vszFileName));
     
@@ -1114,14 +1125,17 @@ static BOOL fPriorityDims = TRUE;
                     if ( (gDIMHeader.flag     == DIM_FILE_FLAG) || 
                          (gDIMHeader.sigLevel == DIM_SIGNATURE_LEVEL) ) {
     
+			CACHE_FILE_CONTEXT tmp_pcf;
                         /*
                          *  Add to context records bound for host
+			 *  SJM: Go via temporay structure due to alignment problems
                          */
-                        pcf[count].Size = FileInfo.size ;
-                        pcf[count].Flags = FileInfo.attrib & _A_RDONLY;      
-                        pcf[count].SignatureLevel = gDIMHeader.sigLevel;
-                        (ULONG) *((PULONG)&(pcf[count].Filehandle[0])) =  DIMHeader.sigH;
-                        (ULONG) *((PULONG)&(pcf[count].Filehandle[4])) =  DIMHeader.sigL;
+                        tmp_pcf.Size = FileInfo.size ;
+                        tmp_pcf.Flags = FileInfo.attrib & _A_RDONLY;      
+                        tmp_pcf.SignatureLevel = gDIMHeader.sigLevel;
+                        *((PULONG)&(tmp_pcf.Filehandle[0])) =  DIMHeader.sigH;
+                        *((PULONG)&(tmp_pcf.Filehandle[4])) =  DIMHeader.sigL;
+			memcpy(pcf + count * sizeof_CACHE_FILE_CONTEXT, &tmp_pcf, sizeof_CACHE_FILE_CONTEXT);
         
                         /*
                          *  Update disk usage
@@ -1230,10 +1244,10 @@ static BOOL fPriorityDims = TRUE;
          *  Stream the DIM handles to host
          */
         if ( (iPriorityDims == DIMS_PRIORITY_0) ) {
-            wsprintf( vszFileName, "%s????????.DM0", vpszDimCachePath ); 
+            wsprintf( vszFileName, "%s????????_0", vpszDimCachePath ); 
         }
         else {
-            wsprintf( vszFileName, "%s????????.DM?", vpszDimCachePath ); 
+            wsprintf( vszFileName, "%s????????_?", vpszDimCachePath ); 
         }
         TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: filename %s\n",vszFileName));
 
@@ -1259,7 +1273,7 @@ static BOOL fPriorityDims = TRUE;
                      (FileInfo.name[strlen(FileInfo.name)-1] == '0') ) {
                     continue;
                 }
-                 
+	       
                 /*
                  *  Read in header
                  */
@@ -1562,7 +1576,7 @@ twDIMCacheError( PVD pvd, CACHE_FILE_HANDLE fh  )
     /*
      *  Allocate ICA packet
      */
-    WdSetInfo.WdInformationLength = sizeof(ICA_CACHE_ERROR);
+    WdSetInfo.WdInformationLength = sizeof_ICA_CACHE_ERROR;
     if ( !(pCacheInfo = (PICA_CACHE_ERROR)malloc( WdSetInfo.WdInformationLength)) ) {
         rc = CLIENT_ERROR_NO_MEMORY;
         ASSERT( 0, rc );
@@ -1629,7 +1643,7 @@ twDIMCacheResize( PVD pvd, ULONG Size )
     /*
      *  Allocate ICA packet
      */
-    WdSetInfo.WdInformationLength = sizeof(ICA_CACHE_RESIZE);
+    WdSetInfo.WdInformationLength = sizeof_ICA_CACHE_RESIZE;
     if ( !(pCacheInfo = (PICA_CACHE_RESIZE)malloc( WdSetInfo.WdInformationLength)) ) {
         rc = CLIENT_ERROR_NO_MEMORY;
         ASSERT( 0, rc );
@@ -1644,7 +1658,7 @@ twDIMCacheResize( PVD pvd, ULONG Size )
      */
     pCacheInfo->ByteCount = (USHORT)(WdSetInfo.WdInformationLength - sizeof(pCacheInfo->ByteCount));
     pCacheInfo->Command = PACKET_COMMAND_CACHE_RESIZE;   
-    pCacheInfo->Size = Size;
+    write_long(pCacheInfo->Size, Size);
  
     TRACE((TC_TW, TT_TW_DIM,
            "twDIMCacheResize: Command %u, size %u\n",
@@ -1695,9 +1709,9 @@ twDIMCacheStream( PVD pvd, UCHAR Count, UCHAR SigLev, PCACHE_FILE_CONTEXT fConte
     /*
      *  Size packet
      */
-    WdSetInfo.WdInformationLength = (USHORT) sizeof(ICA_CACHE_STREAM) +
+    WdSetInfo.WdInformationLength = (USHORT) sizeof_ICA_CACHE_STREAM +
                                     (USHORT) Count * 
-                                    (USHORT) sizeof(CACHE_FILE_CONTEXT);
+                                    (USHORT) sizeof_CACHE_FILE_CONTEXT;
 
     ASSERT(WdSetInfo.WdInformationLength < 2041, WdSetInfo.WdInformationLength);
  
@@ -1720,7 +1734,7 @@ twDIMCacheStream( PVD pvd, UCHAR Count, UCHAR SigLev, PCACHE_FILE_CONTEXT fConte
     pCacheInfo->Command = PACKET_COMMAND_CACHE_STREAM;
     pCacheInfo->Count = Count;
  
-    memcpy(pCacheInfo->FileList, fContextList, Count * sizeof(CACHE_FILE_CONTEXT));
+    memcpy(pCacheInfo->FileList, fContextList, Count * sizeof_CACHE_FILE_CONTEXT);
  
     /* 
      *  Fill in the SetInfo packet
@@ -1767,7 +1781,7 @@ twDIMCacheDisable( PVD pvd )
     /*
      *  Allocate ICA packet
      */
-    WdSetInfo.WdInformationLength = sizeof(ICA_CACHE_DISABLE);
+    WdSetInfo.WdInformationLength = sizeof_ICA_CACHE_DISABLE;
     if ( !(pCacheInfo = (PICA_CACHE_DISABLE)malloc( WdSetInfo.WdInformationLength)) ) {
         rc = CLIENT_ERROR_NO_MEMORY;
         ASSERT( 0, rc );
@@ -1855,8 +1869,10 @@ twGetDiskFreeSpace()
 
     return  freespace;
     
-#elif WIN32
-
+#elif defined(RISCOS)
+   return 10*1024*1024;
+    
+#elif defined(WIN32)
    ULONG freespace;
    static pfGETDISKFREESPACEEX lpfnGetDiskFreeSpaceEx = NULL;
    static BOOL bFirstCall = TRUE;

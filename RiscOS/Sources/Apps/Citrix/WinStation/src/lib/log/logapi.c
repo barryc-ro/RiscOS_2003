@@ -9,7 +9,12 @@
 *
 *   Author:   Brad Pedersen
 *
-*   $Log$
+*   logapi.c,v
+*   Revision 1.1  1998/01/12 11:37:31  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.29   15 Apr 1997 18:52:52   TOMA
 *  autoput for remove source 4/12/97
@@ -60,6 +65,8 @@
 #include "../../inc/client.h"
 #include "../../inc/clib.h"
 #include "../../inc/logapi.h"
+
+#include "kernel.h"
 
 /*=============================================================================
 ==   Functions Defined
@@ -228,6 +235,16 @@ void WFCAPI
 LogPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, ... )
 {
    va_list arg_marker;
+   va_start( arg_marker, pFormat );
+
+   LogVPrintf(LogClass, LogEnable, pFormat, arg_marker);
+
+   va_end( arg_marker);
+}
+
+void WFCAPI
+LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
+{
    char t[5];
 
 #define LOCALBUFSIZE 1024
@@ -265,7 +282,6 @@ LogPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, ... )
                                              (USHORT) Cs);
    }
 
-   va_start( arg_marker, pFormat );
    pBuf += vsprintf( pBuf, pFormat, arg_marker );
 
     //  send to WFDbg before \n is appended
@@ -440,4 +456,17 @@ LogAssert( PCHAR pExpr, PCHAR pFileName, int LineNumber, int rc )
 void
 WinLog( LPVOID pBuffer )
 {
+}
+
+void LogErr( void *err, PCHAR pFileName, int LineNumber )
+{
+    if (err)
+    {
+	char Buffer[256];
+	_kernel_oserror *e = err;
+	
+	sprintf( Buffer, "OSERROR: %s(%u), %s, %u", pFileName, LineNumber, e->errmess, e->errnum );
+
+	LogPrintf( LOG_ASSERT, TT_ERROR, "%s", Buffer );
+    }
 }

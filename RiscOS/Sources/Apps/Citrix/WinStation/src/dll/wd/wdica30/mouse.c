@@ -12,7 +12,12 @@
 *  
 *   Author: Brad Pedersen (4/9/94)
 *  
-*   $Log$
+*   mouse.c,v
+*   Revision 1.1  1998/01/12 11:36:23  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.18   15 Apr 1997 18:17:58   TOMA
 *  autoput for remove source 4/12/97
@@ -116,7 +121,7 @@ IcaSetMousePosition( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 
     Y = (USHORT) *((PUSHORT)pInputBuffer);
 
-#ifdef DOS
+#if defined(DOS) || defined(RISCOS)
     rc = MousePosition( X, Y );
     ASSERT( rc == CLIENT_STATUS_SUCCESS, rc );
 #endif
@@ -161,7 +166,7 @@ IcaSetMousePosition( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 void
 IcaSetMouseAttribute( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
 {
-#ifdef DOS
+#if defined( DOS ) || defined (RISCOS)
     int    rc;
     PWDICA pIca;
 
