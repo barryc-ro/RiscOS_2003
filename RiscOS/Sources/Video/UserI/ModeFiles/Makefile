@@ -69,6 +69,10 @@ resources:
         ${CP} LocalRes:${MACHINE} ${RDIR} ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
+BBETYPE = modefiles
+bbe-modefiles: bbe-generic-resources-get-alias
+        BBE_Export_Dir Resources.${LOCALE}.${MACHINE}
+
 ${TDIR}.MFPAL: ${SOURCE} s.PAL
         ${MKDIR} ${ODIR}
         ${MKDIR} ${TDIR}
