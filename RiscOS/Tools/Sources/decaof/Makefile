@@ -9,6 +9,12 @@
 #
 
 #
+# Paths
+#
+VPATH=  @ riscos
+EXP_DIR		= <Build$Dir>.Library
+
+#
 # Generic options:
 #
 MKDIR   = cdir
@@ -19,6 +25,7 @@ CM      = cmhg
 RM      = remove
 LD      = link
 LB      = libfile
+SQZ	= squeeze
 TOUCH   = create
 WIPE    = -wipe
 
@@ -27,6 +34,7 @@ ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
 WFLAGS  = ~CFR~V
+SQZFLAGS= -f
 
 #
 # Libraries
@@ -42,7 +50,7 @@ CLXLIB    = C:CLX.o.clxlib
 #
 # Include files
 #
-INCLUDES  = -IC:CLX -IC:
+INCLUDES  = -IC:CLX -IC: -Iriscos
 DFLAGS    = 
 
 #
@@ -53,9 +61,9 @@ TARGET     = ${COMPONENT}
 SOURCE     = 
 EXPORTS    = 
 
-OBJS= o.decaof o.decasd 
-OBJSI= i.decaof i.decasd 
-OBJSINST= oi.decaof oi.decasd oi.instlib
+OBJS= o.decaof o.decasd o.dem 
+OBJSI= i.decaof i.decasd i.dem 
+OBJSINST= oi.decaof oi.decasd oi.dem oi.instlib
 
 HDRS=h.decasd 
 
@@ -101,6 +109,9 @@ export_hdrs:
 
 export_libs: 
         @echo ${COMPONENT}: export complete (libs)
+
+install: ${TARGET}
+	${SQZ} ${SQZFLAGS} ${TARGET} ${EXP_DIR}.${COMPONENT}
 
 local_dirs:
 	${MKDIR} o
