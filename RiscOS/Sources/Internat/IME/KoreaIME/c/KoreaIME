@@ -1,0 +1,1086 @@
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <swis.h>
+
+#include <Global/Countries.h>
+
+#include <bitstring.h>
+
+#include <iso10646.h>
+#include <utf8.h>
+#include <IME.h>
+
+#include "CModuleHdr.h"
+#include "hangul.h"
+
+#define XXX 255
+
+/* Error numbers */
+#define         ERR_Base         0x813210
+#define         ERR_NoDict       0
+#define         ERR_BadConfig    1
+#define         ERR_NoCandidates 2
+#define         ERR_BadCandidate 3
+#define         ERR_CorruptDict  4
+#define         ERR_Max          239
+/* the max allows for numbers for other (non-shared) IME messages */
+
+/* Returned error tags with default messages */
+#define         ERR_NoDictMsg        "NoDict:Unable to open IME dictionary"
+#define         ERR_BadConfigMsg     "Config:Unknown IME_Configure reason code"
+#define         ERR_NoCandidatesMsg  "NoCand:No IME candidate list"
+#define         ERR_BadCandidateMsg  "BadCand:Bad IME candidate list number"
+#define         ERR_CorruptDictMsg   "BadDict:Bad IME dictionary"
+
+/* Built in paths to resources and NVRAM */
+#define         KoreaIME_DefaultPath "Resources:$.Resources.KoreaIME."
+#define         KoreaIME_Path        "KoreaIME$Path"
+#define         KoreaIME_Messages    "KoreaIME:Messages"
+
+static bitstr_t *SSet;
+//static unsigned KoreaIME_Flags;
+
+static int      KoreaIME_MsgFile[5] = {0, 0, 0, 0, 0};
+                                       /* flag plus 4 words of file descriptor */
+bool IsH(UCS4 u)
+{
+    return (u >= H_G && u <= H_I);
+}
+
+bool IsC(UCS4 u)
+{
+    return (u >= H_G && u <= H_H);
+}
+
+bool IsL(UCS4 u)
+{
+    return u - L_Base < L_Count;
+}
+
+bool IsV(UCS4 u)
+{
+    return u - V_Base < V_Count;
+}
+
+bool IsT(UCS4 u)
+{
+    return u - T_Base < T_Count;
+}
+
+bool IsJ(UCS4 u)
+{
+    return IsL(u) || IsV(u) || IsT(u);
+}
+
+/* Map a Hangul letter to a Hangul leading consonant */
+UCS4 HtoL(UCS4 letter)
+{
+    static const uint8_t table[] = {        Li_G,  Li_GG, XXX,   Li_N, XXX,  XXX,   Li_D,
+                                     Li_DD, Li_L,  XXX,   XXX,   XXX,  XXX,  XXX,   XXX,
+                                     XXX,   Li_M,  Li_B,  Li_BB, XXX,  Li_S, Li_SS, Li_,
+                                     Li_J,  Li_JJ, Li_C,  Li_K,  Li_T, Li_P, Li_H         };
+
+    letter -= H_G;
+    if (letter > H_H - H_G)
+        return NULL_UCS4;
+
+    letter = table[letter];
+    if (letter == XXX)
+        letter = NULL_UCS4;
+    else
+        letter += L_Base;
+
+    return letter;
+}
+
+/* Map a Hangul letter to a Hangul vowel */
+UCS4 HtoV(UCS4 letter)
+{
+    letter -= H_A;
+    if (letter <= H_I - H_A)
+        return V_Base + letter;
+    else
+        return NULL_UCS4;
+}
+
+/* Map a Hangul letter to a Hangul trailing consonant */
+UCS4 HtoT(UCS4 letter)
+{
+    static const char table[] = {        Ti_G, Ti_GG, Ti_GS, Ti_N,  Ti_NJ, Ti_NH, Ti_D,
+                                  XXX,   Ti_L, Ti_LG, Ti_LM, Ti_LB, Ti_LS, Ti_LT, Ti_LP,
+                                  Ti_LH, Ti_M, Ti_B,  XXX,   Ti_BS, Ti_S,  Ti_SS, Ti_NG,
+                                  Ti_J,  XXX,  Ti_C,  Ti_K,  Ti_T,  Ti_P,  Ti_H          };
+
+    letter -= H_G;
+    if (letter > H_H - H_G)
+        return NULL_UCS4;
+
+    letter = table[letter];
+    if (letter == XXX)
+        letter = NULL_UCS4;
+    else
+        letter += T_Base;
+
+    return letter;
+}
+
+/* Map a single combining Hangul character to an isolated character */
+UCS4 LVTtoH(UCS4 u)
+{
+    static const uint8_t ltab[] = { Hi_G, Hi_GG, Hi_N,  Hi_D, Hi_DD, Hi_L,
+                                    Hi_M, Hi_B,  Hi_BB, Hi_S, Hi_SS, Hi_,
+                                    Hi_J, Hi_JJ, Hi_C,  Hi_K, Hi_T,  Hi_P,
+                                    Hi_H };
+    static const uint8_t ttab[] = { Hi_G,  Hi_GG, Hi_GS, Hi_N,  Hi_NJ, Hi_NH,
+                                    Hi_D,  Hi_L,  Hi_LG, Hi_LM, Hi_LB, Hi_LS,
+                                    Hi_LT, Hi_LP, Hi_LH, Hi_M,  Hi_B,  Hi_BS,
+                                    Hi_S,  Hi_SS, Hi_NG, Hi_J,  Hi_C,  Hi_K,
+                                    Hi_T,  Hi_P,  Hi_H };
+    if (IsL(u)) return H_Base + ltab[u - L_Base];
+    if (IsV(u)) return H_A + u - V_A;
+    if (IsT(u)) return H_Base + ttab[u - T_Base];
+
+    return NULL_UCS4;
+}
+
+/* Attempt to combine two leading consonants */
+UCS4 CombineL(UCS4 L1, UCS4 L2)
+{
+    if (L1 == L2 &&
+        (L1 == L_G || L1 == L_D || L1 == L_B || L1 == L_S || L1 == L_J))
+        return L1 + 1;
+    else
+        return NULL_UCS4;
+}
+
+/* Attempt to combine two vowels */
+UCS4 CombineV(UCS4 V1, UCS4 V2)
+{
+    switch (V2)
+    {
+    case V_I:
+        switch (V1)
+        {
+        case V_A:   return V_AE;
+        case V_YA:  return V_YAE;
+        case V_EO:  return V_E;
+        case V_YEO: return V_YE;
+        case V_WA:  return V_WAE;
+        case V_O:   return V_OE;
+        case V_WEO: return V_WE;
+        case V_U:   return V_WI;
+        case V_EU:  return V_YI;
+        }
+        break;
+    case V_A:
+        switch (V1)
+        {
+        case V_O:   return V_WA;
+        }
+        break;
+    case V_AE:
+        switch (V1)
+        {
+        case V_O:   return V_WAE;
+        }
+        break;
+    case V_EO:
+        switch (V1)
+        {
+        case V_U:   return V_WEO;
+        }
+        break;
+    case V_E:
+        switch (V1)
+        {
+        case V_U:   return V_WE;
+        }
+        break;
+    }
+    return NULL_UCS4;
+}
+
+/* Attempt to combine two trailing consonants */
+UCS4 CombineT(UCS4 T1, UCS4 T2)
+{
+    switch (T1)
+    {
+    case T_G:
+        switch (T2)
+        {
+        case T_G: return T_GG;
+        case T_S: return T_GS;
+        }
+        break;
+    case T_N:
+        switch (T2)
+        {
+        case T_J: return T_NJ;
+        case T_H: return T_NH;
+        }
+        break;
+    case T_L:
+        switch (T2)
+        {
+        case T_G: return T_LG;
+        case T_M: return T_LM;
+        case T_B: return T_LB;
+        case T_S: return T_LS;
+        case T_T: return T_LT;
+        case T_P: return T_LP;
+        case T_H: return T_LH;
+        }
+        break;
+    case T_B:
+        switch (T2)
+        {
+        case T_S: return T_BS;
+        }
+        break;
+    case T_S:
+        switch (T2)
+        {
+        case T_S: return T_SS;
+        }
+        break;
+    }
+    return NULL_UCS4;
+}
+
+/* Attempt to combine two isolated consonants */
+UCS4 CombineC(UCS4 C1, UCS4 C2)
+{
+    switch (C1)
+    {
+    case H_G:
+        switch (C2)
+        {
+        case H_G: return H_GG;
+        case H_S: return H_GS;
+        }
+        break;
+    case H_N:
+        switch (C2)
+        {
+        case H_J: return H_NJ;
+        case H_H: return H_NH;
+        }
+        break;
+    case H_D:
+        switch (C2)
+        {
+        case H_D: return H_DD;
+        }
+        break;
+    case H_L:
+        switch (C2)
+        {
+        case H_G: return H_LG;
+        case H_M: return H_LM;
+        case H_B: return H_LB;
+        case H_S: return H_LS;
+        case H_T: return H_LT;
+        case H_P: return H_LP;
+        case H_H: return H_LH;
+        }
+        break;
+    case H_B:
+        switch (C2)
+        {
+        case H_B: return H_BB;
+        case H_S: return H_BS;
+        }
+        break;
+    case H_S:
+        switch (C2)
+        {
+        case H_S: return H_SS;
+        }
+        break;
+    case H_J:
+        switch (C2)
+        {
+        case H_J: return H_JJ;
+        }
+        break;
+    }
+    return NULL_UCS4;
+}
+
+/* Combine a LVT triplet into a syllable */
+UCS4 LVTtoSyllable(UCS4 L, UCS4 V, UCS4 T)
+{
+    UCS4 S;
+
+    L -= L_Base;
+    V -= V_Base;
+
+    if (L >= L_Count || V >= V_Count) return NULL_UCS4;
+
+    if (T == NULL_UCS4)
+        T = 0;
+    else
+    {
+        T -= T_Base;
+        if (T >= T_Count) return NULL_UCS4;
+        T += 1;
+    }
+
+    S = (L * V_Count + V) * (T_Count+1) + T;
+    if (SSet && !bit_test(SSet, S))
+        return NULL_UCS4;
+    else
+        return S + S_Base;
+}
+
+UCS4 CombineHangul(const UCS4 seq[], int n)
+{
+    int i;
+    UCS4 L, V, T, u;
+
+    if (n < 1)
+        return NULL_UCS4;
+
+    /* Check the entire sequence is Hangul - either vowel or consonant */
+    for (i=0; i<n; i++)
+        if (!IsH(seq[i])) return NULL_UCS4;
+
+    if (IsC(seq[0]))
+    {
+        /* First character is a consonant. Merge in as many
+         * subsequent consonants as we can. Note we do it
+         * in H-space, as neither L or T-space cover all
+         * possibilities.
+         */
+        L = seq[0];
+        for (i=1; i<n; i++)
+        {
+            u = CombineC(L, seq[i]);
+            if (u != NULL_UCS4) L = u; else break;
+        }
+
+        /* A pure consonant sequence - return it */
+        if (i == n)
+            return L;
+
+        /* Convert it to a leading Jamo */
+        L = HtoL(L);
+
+        /* If we can't, any further combination's out - bail */
+        if (L == NULL_UCS4) return L;
+    }
+    else
+    {
+        /* No initial consonant */
+        L = NULL_UCS4;
+        i = 0;
+    }
+
+    /* We know the next character (seq[i]) is a vowel. Merge in
+     * as many subsequent vowels as we can. */
+    V = HtoV(seq[i]);
+    for (i++; i<n; i++)
+    {
+        u = CombineV(V, HtoV(seq[i]));
+        if (u != NULL_UCS4) V = u; else break;
+    }
+
+    /* A pure vowel - return it */
+    if (L == NULL_UCS4 && i == n)
+        return LVTtoH(V);
+
+    if (i < n)
+    {
+        /* More to come. Get a trailing consonant */
+        T = HtoT(seq[i]);
+        if (T == NULL_UCS4) return T;
+
+        /* Keep merging in trailing consonants */
+        for (i++; i<n; i++)
+        {
+            u = CombineT(T, HtoT(seq[i]));
+            if (u != NULL_UCS4) T = u; else break;
+        }
+
+        /* Check we've consumed the whole string */
+        if (i < n) return NULL_UCS4;
+    }
+    else
+        T = NULL_UCS4;
+
+    return LVTtoSyllable(L, V, T);
+}
+
+UCS4 CombineJamo(const UCS4 seq[], int n)
+{
+    int i, iLV, iVT;
+    UCS4 L, V, T;
+
+    if (n < 1)
+        return NULL_UCS4;
+
+    /* Check the entire sequence is Hangul - either vowel or consonant */
+    for (i=0; i<n; i++)
+        if (!IsJ(seq[i])) return NULL_UCS4;
+
+    /* Break it up into L,V,T sections */
+    for (iLV=0; iLV<n && IsL(seq[iLV]); iLV++)
+        ;
+
+    for (iVT=iLV; iVT<n && IsV(seq[iVT]); iVT++)
+        ;
+
+    for (i=iVT; i<n && IsT(seq[i]); i++)
+        ;
+
+    /* Check string fully consumed */
+    if (i < n)
+        return NULL_UCS4;
+
+    /* The string now looks like:
+
+                   L L L L V V V V T T T T T
+                  |       |       |         |
+                  0      iLV     iVT        n
+
+       with 0 <= iLV <= iVT <= n.
+     */
+
+    /* Merge Ls Vs and Ts to give us a final L,V,T triplet.
+     * If any don't merge, give up.
+     */
+    L = NULL_UCS4;
+    if (iLV > 0)
+    {
+        L = seq[0];
+        for (i=1; i<iLV; i++)
+        {
+            L = CombineL(L, seq[i]);
+            if (L == NULL_UCS4) return L;
+        }
+    }
+
+    V = NULL_UCS4;
+    if (iVT > iLV)
+    {
+        V = seq[iLV];
+        for (i=iLV+1; i<iVT; i++)
+        {
+            V = CombineV(V, seq[i]);
+            if (V == NULL_UCS4) return V;
+        }
+    }
+
+    T = NULL_UCS4;
+    if (n > iVT)
+    {
+        T = seq[iVT];
+        for (i=iVT+1; i<n; i++)
+        {
+            T = CombineT(T, seq[i]);
+            if (T == NULL_UCS4) return T;
+        }
+    }
+
+    /* Now, at least 1 of L, V and T must be non-null */
+
+    if (V == NULL_UCS4 && T == NULL_UCS4)
+        return LVTtoH(L);
+
+    if (L == NULL_UCS4 && T == NULL_UCS4)
+        return LVTtoH(V);
+
+    if (L == NULL_UCS4 && V == NULL_UCS4)
+        return LVTtoH(T);
+
+    return LVTtoSyllable(L, V, T);
+}
+
+/*
+ * Combine
+ *
+ * Given a string of n keystrokes, return a single character formed by those strokes.
+ */
+UCS4 Combine(const UCS4 seq[], int n)
+{
+    UCS4 u;
+
+    if (n < 1) return NULL_UCS4;
+
+    u = seq[0];
+
+    if (IsH(u))
+        return CombineHangul(seq, n);
+    else if (IsJ(u))
+        return CombineJamo(seq, n);
+    else
+        return NULL_UCS4;
+}
+
+/*
+ * Split
+ *
+ * Given a string of n keystrokes, find a split point that separates it into an
+ * output character and a composition character.
+ */
+int Split(const UCS4 seq[], int n, UCS4 *pa, UCS4 *pb)
+{
+    int split;
+    UCS4 a, b;
+
+    /* Nice simplistic algorithm - take the longest composition sequence we can. */
+    for (split = 1; split < n; split++)
+    {
+        if ((a = Combine(seq, split)) != NULL_UCS4 &&
+            (b = Combine(seq+split, n-split)) != NULL_UCS4)
+        {
+            if (pa) *pa = a;
+            if (pb) *pb = b;
+            return split;
+        }
+    }
+
+    return -1;
+}
+
+static UCS2 HanjaTable[52*94];
+#define PAGESIZE 9
+
+static void LoadHanjaTable()
+{
+  _kernel_oserror *err;
+  int f;
+
+  err = _swix(OS_Find, _INR(0,1)|_OUT(0), 0x4C, "Unicode:Encodings.ISO2022.G94x94.43*", &f);
+  if (!err)
+  {
+    int ok;
+    err = _swix(OS_GBPB, _INR(0,4)|_OUT(_FLAGS), 3, f, HanjaTable, 52*94*2, 41*94*2, &ok);
+    if (err || (ok & _C))
+      HanjaTable[0] = 0;
+    _swix(OS_Find, _INR(0,1), 0, f);
+  }
+}
+
+#include "Reading.c"
+
+static int HanjaCompare(const void *a, const void *b)
+{
+    UCS4 u = *(UCS4 *) a;
+    const HanjaReadingEntry *r = b;
+
+    return u - r->u;
+}
+
+/*
+ * GetHanjaList
+ *
+ * Given a Hangul syllable, return a list of matching Hanja.
+ */
+int GetHanjaList(UCS4 u, const UCS2 **table)
+{
+    HanjaReadingEntry *r;
+
+    if (!HanjaTable[0])
+    {
+        LoadHanjaTable();
+        if (!HanjaTable[0]) return 0;
+    }
+
+    r = bsearch(&u, HanjaReading,
+                sizeof HanjaReading/sizeof HanjaReading[0],
+                sizeof HanjaReading[0],
+                HanjaCompare);
+
+    if (!r) return 0;
+
+    if (table)
+        *table = HanjaTable + r[0].h;
+
+    return r[1].h - r[0].h;
+}
+
+#define INPUT_BUFFER_SIZE 16
+
+UCS4 input_buffer[INPUT_BUFFER_SIZE];
+int input_len;
+char display_buffer[6+1]; /* UTF8: One character, plus terminator */
+char attr_buffer[1];
+char output_buffer[3*6+1]; /* UTF8: Three characters, plus terminator */
+
+UCS4 current_combined;
+const UCS2 *candidates;
+int no_candidates;
+int highlighted_candidate;
+
+//static int KoreaIME_AlphabetNumber;
+static int KoreaIME_UTF8index;
+static char KoreaIME_UTF8input[8];
+
+/* ----------------------------------------------------------------------- KoreaIME__OpenMessages */
+static void KoreaIME__OpenMessages()
+{
+  /* Initialise the message file in KoreaIME:Messages */
+  if (KoreaIME_MsgFile[0] == 0)
+  {
+    _kernel_oserror *err;
+
+    #ifdef TESTPROG
+    int bufsize;
+    void *buf;
+    err = _swix(MessageTrans_FileInfo, _IN(1)|_OUT(2), KoreaIME_Messages, &bufsize);
+    if (err) return;
+    buf = malloc(bufsize);
+    if (!buf) return;
+    err = _swix(MessageTrans_OpenFile, _INR(0,2), KoreaIME_MsgFile + 1, KoreaIME_Messages, buf);
+    #else
+    err = _swix(MessageTrans_OpenFile, _INR(0,2), KoreaIME_MsgFile + 1, KoreaIME_Messages, 0);
+    #endif
+    if (err == NULL)
+      KoreaIME_MsgFile[0] = 1;
+  }
+}
+
+/* ------------------------------------------------------------------------------ KoreaIME__Fault */
+static _kernel_oserror *KoreaIME__Fault(int errnum, char *tag)
+{
+  /* errnum:  is error number before the error base has been added;              */
+  /* tag:     is a string suitable for passing to MessageTrans to look up        */
+  /* returns: pointer to MessageTrans buffer containing the error number/message */
+
+  _kernel_oserror err_buffer;
+
+  err_buffer.errnum = errnum + ERR_Base;
+  strcpy(err_buffer.errmess, tag);
+
+  KoreaIME__OpenMessages();       /* in case closed? */
+
+  /* translate error message, which because ErrorLookup sets V, is returned as the _swix result   */
+  return _swix(MessageTrans_ErrorLookup,
+               _INR(0,2) | _INR(4,7), &err_buffer,
+               KoreaIME_MsgFile[0] ? KoreaIME_MsgFile + 1 : 0,
+               0, Module_Title /* %0 if needed */, 0, 0, 0);
+}
+
+/* --------------------------------------------------------------------- KoreaIME__Initialisation */
+_kernel_oserror *KoreaIME__Initialisation(const char *cmd_tail, int podule_base, void *pw)
+{
+  _kernel_swi_regs r;
+
+  /* set path variable KoreaIME$Path to point to ResourceFS if not already set */
+  r.r[0] = (int) KoreaIME_Path;
+  r.r[2] = -1;
+  r.r[3] = 0;
+  r.r[4] = 3;
+  _kernel_swi(OS_ReadVarVal, &r, &r);    /* Must use _kernel_swi because of silly error behaviour */
+
+  if (r.r[2] == 0)
+  {
+    r.r[0] = (int) KoreaIME_Path;
+    r.r[1] = (int) KoreaIME_DefaultPath;
+    r.r[2] = sizeof KoreaIME_DefaultPath - 1;
+    r.r[3] = 0;
+    r.r[4] = 0;
+    _kernel_swi(OS_SetVarVal, &r, &r);
+  }
+
+  KoreaIME__OpenMessages();
+
+  return NULL;
+}
+
+/* ----------------------------------------------------------------------- KoreaIME__Finalisation */
+_kernel_oserror *KoreaIME__Finalisation(int fatal, int podule, void *pw)
+{
+  /* close the messages file */
+  if (KoreaIME_MsgFile[0] != 0)
+  {
+    _swix(MessageTrans_CloseFile, _IN(0), KoreaIME_MsgFile + 1);
+    KoreaIME_MsgFile[0] = 0;
+  }
+
+  return NULL;
+}
+
+_kernel_oserror *KoreaIME__ProcessInput(_kernel_swi_regs *r)
+{
+    int inFlags = r->r[0];
+    UCS4 rawKey = r->r[1], combined;
+    int old_input_len = input_len;
+
+    if ((inFlags & IME_UCSinput) == 0)                              /* need to convert from UTF-8 */
+    {
+      /* inCode may be just part of a character. We need to buffer up until a complete            */
+      /* character has been assembled, and convert it to a UCS value. While an incomplete UTF-8   */
+      /* buffer exists return an 'key claimed' result to the caller                               */
+
+      if (rawKey < 0x80)
+      {
+        /* trivial convert to UCS :-) */
+      }
+      else if (rawKey >= 0x100)               /* not a UTF8 code, so must be a Function key, etc. */
+      {
+        rawKey = 0x80000000 + rawKey - 0x100;
+      }
+      else if (KoreaIME_UTF8index == 0 && (rawKey & 0xC0) == 0x80)   /* leading continuation byte */
+        return NULL;
+      else
+      {
+        if (KoreaIME_UTF8index > 0 && (rawKey & 0xC0) != 0x80)        /* start byte in the middle */
+          KoreaIME_UTF8index = 0;
+
+        if (KoreaIME_UTF8index > 6)
+          return NULL;              /* UTF8_to_UCS4 is misbehaving? do this until next start code */
+
+        KoreaIME_UTF8input[KoreaIME_UTF8index++] = rawKey;
+        KoreaIME_UTF8input[KoreaIME_UTF8index] = 0;
+
+        if (UTF8_to_UCS4(KoreaIME_UTF8input, &rawKey) == 1)         /* returns 1 if not ready yet */
+        {
+          r->r[0] = IME_KeyClaimed;
+          if (input_len)
+          {
+              r->r[0] |= IME_ShowDisplay;
+              r->r[2] = (int) display_buffer;
+              r->r[3] = (int) attr_buffer;
+              r->r[4] = -1;
+          }
+          return NULL;                               /* claimed, but we are not processing it yet */
+        }
+      }
+    }
+
+    r->r[0] = 0;
+    output_buffer[0] = 0;
+
+    if (candidates)
+    {
+        int oldhigh = highlighted_candidate;
+        int oldpage = highlighted_candidate / PAGESIZE;
+        int newpage;
+
+        /* Candidate list is up. Special handling */
+        switch (rawKey)
+        {
+            case 13:
+               candidates = NULL;
+               r->r[0] |= IME_CandidatesChanged | IME_SelectionChanged | IME_AttributesChanged |
+                          IME_DisplayChanged | IME_Output | IME_KeyClaimed;
+               r->r[1] = (int) display_buffer;
+               input_len = 0;
+               return NULL;
+
+            case '1': case '2': case '3': case '4': case '5':
+            case '6': case '7': case '8': case '9':
+               r->r[0] |= IME_CandidatesChanged | IME_SelectionChanged | IME_AttributesChanged |
+                          IME_DisplayChanged | IME_Output | IME_KeyClaimed;
+               highlighted_candidate = oldpage*PAGESIZE + rawKey-'1';
+               *UCS4_to_UTF8(output_buffer, candidates[highlighted_candidate]) = '\0';
+               candidates = NULL;
+               r->r[1] = (int) output_buffer;
+               input_len = 0;
+               return NULL;
+
+            case 27:
+               candidates = NULL;
+               r->r[0] |= IME_CandidatesChanged | IME_SelectionChanged | IME_AttributesChanged |
+                          IME_DisplayChanged | IME_KeyClaimed;
+               goto candidates_closed;
+
+            case 0x8000008E: /* Down */
+            case 0x800000C6: /* Convert */
+               highlighted_candidate++;
+               break;
+            case 0x8000008F: /* Up */
+            case 0x800000D6: /* Shift-Convert */
+               highlighted_candidate--;
+               break;
+            case 0x8000009E: /* Page Down */
+               highlighted_candidate+=PAGESIZE;
+               break;
+            case 0x8000009F: /* Page Up */
+               highlighted_candidate-=PAGESIZE;
+               break;
+
+            default:
+               candidates = NULL;
+               r->r[0] |= IME_CandidatesChanged | IME_SelectionChanged | IME_AttributesChanged |
+                          IME_DisplayChanged | IME_Output;
+               r->r[1] = (int) strcpy(output_buffer, display_buffer);
+               input_len = 0;
+               break;
+        }
+
+        if (candidates)
+        {
+            r->r[0] |= IME_ShowCandidates | IME_ShowDisplay | IME_KeyClaimed;
+
+            if (highlighted_candidate < 0)
+                highlighted_candidate = 0;
+            else if (highlighted_candidate >= no_candidates)
+                highlighted_candidate = no_candidates-1;
+
+            if (highlighted_candidate != oldhigh)
+            {
+                r->r[0] |= IME_SelectionChanged | IME_DisplayChanged;
+                *UCS4_to_UTF8(display_buffer, candidates[highlighted_candidate]) = '\0';
+            }
+
+            newpage = highlighted_candidate / PAGESIZE;
+            if (oldpage != newpage) r->r[0] |= IME_CandidatesChanged;
+
+            r->r[2] = (int) display_buffer;
+            r->r[3] = (int) attr_buffer;
+            r->r[4] = -1;
+
+            return NULL;
+        }
+    }
+
+    switch (rawKey)
+    {
+        case 8:
+        case 127:
+          if (input_len > 0 && !(inFlags & IME_OnlyHotKeys))
+              input_len--;
+          else
+              return NULL;
+          break;
+        #if 0
+        case 13:
+          if (input_len > 0 && !(inFlags & IME_OnlyHotKeys))
+          {
+              r->r[0] |= IME_KeyClaimed | IME_Output | IME_DisplayChanged | IME_AttributesChanged |
+                         IME_CaretChanged;
+              r->r[1] = (int) display_buffer; /* Nick the display buffer :) */
+              input_len = 0;
+          }
+          return NULL;
+        #endif
+        case 0x800000C6: /* Convert */
+          if (input_len > 0 && !(inFlags & IME_OnlyHotKeys))
+          {
+              no_candidates = GetHanjaList(current_combined, &candidates);
+              if (no_candidates)
+              {
+                  r->r[0] |= IME_ShowCandidates | IME_CandidatesChanged | IME_SelectionChanged |
+                             IME_DisplayChanged | IME_ShowDisplay | IME_AttributesChanged |
+                             IME_KeyClaimed;
+                  highlighted_candidate = 0;
+                  *UCS4_to_UTF8(display_buffer, candidates[0]) = '\0';
+                  attr_buffer[0] = 3;
+              }
+              else
+              {
+                  r->r[0] |= IME_ShowDisplay | IME_KeyClaimed;
+              }
+              r->r[2] = (int) display_buffer;
+              r->r[3] = (int) attr_buffer;
+              r->r[4] = -1;
+          }
+          return NULL;
+        default:
+          if (rawKey & 0x80000000 || rawKey < 32)
+          {
+              if (input_len > 0 && !(inFlags & IME_OnlyHotKeys))
+              {
+                  r->r[0] |= IME_Output | IME_DisplayChanged | IME_AttributesChanged |
+                             IME_CaretChanged;
+                  r->r[1] = (int) display_buffer; /* Nick the display buffer :) */
+                  input_len = 0;
+              }
+              return NULL;
+          }
+          if (inFlags & IME_OnlyHotKeys)
+              return NULL;
+          input_buffer[input_len++] = rawKey;
+    }
+
+ candidates_closed:
+
+    r->r[0] |= IME_KeyClaimed;
+
+    if (input_len == 0)
+    {
+        r->r[0] |= IME_AttributesChanged | IME_DisplayChanged | IME_CaretChanged;
+        return NULL;
+    }
+
+    combined = Combine(input_buffer, input_len);
+    if (combined == NULL_UCS4)
+    {
+        int split, i;
+        UCS4 a, b;
+        char *out;
+
+        /* Our input no longer forms a complete syllable. Split into output and
+         * a new input.
+         */
+        split = Split(input_buffer, input_len, &a, &b);
+        out = output_buffer;
+        if (split < 0)
+        {
+            /* Unable to break into two either. Output the previous display string
+             * and either ask them to process the last key as normal (if possible)
+             * or append it to the output string.
+             */
+            combined = Combine(input_buffer, input_len - 1);
+            out = output_buffer + strlen(output_buffer);
+            if (combined != NULL_UCS4)
+                out = UCS4_to_UTF8(out, combined);
+            if ((inFlags & IME_UCSinput) || rawKey < 0x80)
+                r->r[0] &=~ IME_KeyClaimed;
+            else
+                out = UCS4_to_UTF8(out, rawKey);
+            *out = '\0';
+
+            if (out != output_buffer)
+            {
+                r->r[0] |= IME_Output;
+                r->r[1] = (int) output_buffer;
+            }
+
+            r->r[0] |= IME_AttributesChanged | IME_DisplayChanged | IME_CaretChanged;
+            input_len = 0;
+
+            return NULL;
+        }
+        else
+        {
+            out = UCS4_to_UTF8(output_buffer + strlen(output_buffer), a);
+            *out = '\0';
+
+            r->r[0] |= IME_Output;
+            r->r[1] = (int) output_buffer;
+
+            for (i = split; i < input_len; i++)
+                input_buffer[i - split] = input_buffer[i];
+            input_len = input_len - split;
+
+            combined = b;
+        }
+    }
+
+    current_combined = combined;
+
+    *UCS4_to_UTF8(display_buffer, combined) = '\0';
+    attr_buffer[0] = 1;
+    r->r[0] |= IME_KeyClaimed | IME_ShowDisplay | IME_DisplayChanged;
+    if (old_input_len == 0)
+        r->r[0] |= IME_AttributesChanged | IME_CaretChanged;
+    r->r[2] = (int) display_buffer;
+    r->r[3] = (int) attr_buffer;
+    r->r[4] = -1;
+
+    return NULL;
+}
+
+_kernel_oserror *KoreaIME__Cancel(_kernel_swi_regs *r)
+{
+    r->r[0] = 0;
+    if (input_len)
+    {
+        r->r[0] |= IME_Output | IME_DisplayChanged | IME_AttributesChanged |
+                   IME_CaretChanged;
+        r->r[1] = (int) display_buffer; /* Again, nick the display buffer */
+
+        input_len = 0;
+    }
+    if (candidates)
+    {
+        r->r[0] |= IME_CandidatesChanged | IME_SelectionChanged;
+        candidates = NULL;
+    }
+
+    return NULL;
+}
+
+_kernel_oserror *KoreaIME__Configure(_kernel_swi_regs *r)
+{
+    switch (r->r[0])
+    {
+      case IME_Config_Dict:
+        return NULL;
+
+      case IME_Config_Status:
+        r->r[1] = 1; /* No flags - indicate always on */
+        return NULL;
+    }
+
+    return KoreaIME__Fault(ERR_BadConfig, ERR_BadConfigMsg);
+}
+
+_kernel_oserror *KoreaIME__GetCandidateListInfo(_kernel_swi_regs *r)
+{
+    static char title[32], *p;
+    int page, c;
+
+    if (!candidates)
+        return KoreaIME__Fault(ERR_NoCandidates, ERR_NoCandidatesMsg);
+
+    page = highlighted_candidate / PAGESIZE;
+    c = highlighted_candidate % PAGESIZE;
+
+    p = UCS4_to_UTF8(title, current_combined);
+    sprintf(p, " %2d/%-2d", highlighted_candidate+1, no_candidates);
+    r->r[0] = 0;
+    r->r[1] = (int) title;
+    r->r[2] = no_candidates;
+    r->r[3] = PAGESIZE;
+    r->r[4] = no_candidates - page * PAGESIZE;
+    if (r->r[4] > PAGESIZE) r->r[4] = PAGESIZE;
+    r->r[5] = page * PAGESIZE + 1;
+    r->r[6] = c + 1;
+
+    return NULL;
+}
+
+_kernel_oserror *KoreaIME__GetCandidateListEntry(_kernel_swi_regs *r)
+{
+    static char entry[4];
+    int page;
+    unsigned c;
+
+    if (!candidates)
+        return KoreaIME__Fault(ERR_NoCandidates, ERR_NoCandidatesMsg);
+
+    page = highlighted_candidate / PAGESIZE;
+    c = page * PAGESIZE + r->r[1] - 1;
+    if (c >= no_candidates)
+        return KoreaIME__Fault(ERR_BadCandidate, ERR_BadCandidateMsg);
+
+    *UCS4_to_UTF8(entry, candidates[c]) = '\0';
+
+    r->r[1] = (int) entry;
+    return NULL;
+}
+
+_kernel_oserror *KoreaIME__SWIHandler(int swi_offset, _kernel_swi_regs *r, void *pw)
+{
+    switch (swi_offset)
+    {
+      case KoreaIME_ProcessInput - KoreaIME_00:
+        return KoreaIME__ProcessInput(r);
+
+      case KoreaIME_Cancel - KoreaIME_00:
+        return KoreaIME__Cancel(r);
+
+      case KoreaIME_Configure - KoreaIME_00:
+        return KoreaIME__Configure(r);
+
+      case KoreaIME_GetCandidateListInfo - KoreaIME_00:
+        return KoreaIME__GetCandidateListInfo(r);
+
+      case KoreaIME_GetCandidateListEntry - KoreaIME_00:
+        return KoreaIME__GetCandidateListEntry(r);
+
+      default:
+        return KoreaIME__Fault(ERR_BadConfig, ERR_BadConfigMsg);
+    }
+
+    return error_BAD_SWI;
+}
