@@ -5,54 +5,13 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 28-Nov-94  AMcC         Created.
-#
+# 14-Mar-01  SNB          Recreated.
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
 COMPONENT = DragAnObj
-SOURCE    = s.DragAnObj
-TARGET    = rm.DragAnObj
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+HEADER1   = DragAnObj
+RESOURCES = no
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
