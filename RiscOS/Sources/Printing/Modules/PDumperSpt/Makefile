@@ -56,36 +56,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
 
 # Dynamic dependencies:
-rm.PDumperSpt: hdr:ListOpts
-rm.PDumperSpt: hdr:Macros
-rm.PDumperSpt: hdr:System
-rm.PDumperSpt: Hdr:SWIs
-rm.PDumperSpt: Hdr:CPU.Generic26
-rm.PDumperSpt: Hdr:IO.GenericIO
-rm.PDumperSpt: Hdr:RISCOS
-rm.PDumperSpt: hdr:ModHand
-rm.PDumperSpt: hdr:Services
-rm.PDumperSpt: hdr:FSNumbers
-rm.PDumperSpt: hdr:HighFSI
-rm.PDumperSpt: hdr:NewErrors
-rm.PDumperSpt: hdr:PDriver
-rm.PDumperSpt: hdr:PDumper
-rm.PDumperSpt: hdr:MsgTrans
-rm.PDumperSpt: hdr:HostFS
-rm.PDumperSpt: hdr:NDRDebug
-rm.PDumperSpt: hdr:DDVMacros
-rm.PDumperSpt: hdr:Proc
-rm.PDumperSpt: hdr:ColourTran
-rm.PDumperSpt: Version
-rm.PDumperSpt: s.Manipulate
-rm.PDumperSpt: s.Calib32
-rm.PDumperSpt: s.Calib8
-rm.PDumperSpt: s.Colour
-rm.PDumperSpt: s.Halftone
-rm.PDumperSpt: s.Halftone32
-rm.PDumperSpt: s.Halftone8
-rm.PDumperSpt: s.Error
-rm.PDumperSpt: s.Error32
-rm.PDumperSpt: s.Error8
-rm.PDumperSpt: s.FullRGB
-rm.PDumperSpt: s.MsgCode

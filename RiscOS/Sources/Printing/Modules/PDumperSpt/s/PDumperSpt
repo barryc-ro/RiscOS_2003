@@ -77,7 +77,7 @@
                 GET     hdr:Proc
                 GET     hdr:ColourTran
 
-                GET     Version
+                GET     VersionASM
 
                 GBLL    debug
                 GBLL    hostvdu
@@ -97,7 +97,7 @@ userandom       SETL    true            ; use random perturbation in error diffu
 Philip          SETD    false
 claim           SETD    false            ;Claiming memory
 free            SETD    false            ;Free memory
-SWI             SETD    false            ;internal SWI debugging            
+SWI             SETD    false            ;internal SWI debugging
 startjob        SETD    false            ;start job decoding
 tidyjob         SETD    false            ;tidying workspace lists
 prepstrip       SETD    false            ;prep strip functions
@@ -105,9 +105,6 @@ colset          SETD    false            ;colour handling
 findblock       SETD    false            ;block finding routines
 mjs             SETD    false
 mjs2            SETD    true
-
-                GBLL    newctrans
-newctrans       SETL    true          ;New colourtrans available
 
 ;------------------------------------------------------------------------------
 ;
@@ -190,18 +187,18 @@ ediff_density           # 4
 CalibrateTables         # 12*256
 ;
 workspace_required      * :INDEX: @
-                                            
+
 ; A block header
 
                         ^ 0
 block_Link              # 4             ;->Next block / =0 if none
 block_Type              # 4             ;ID word for the block allocated
-block_DataStart         * :INDEX: @ 
+block_DataStart         * :INDEX: @
 
 ; Structures hanging from the various blocks
 
 ;***NEW PALETTE FORMAT***
-                        ^ 0 
+                        ^ 0
 palette_Version         # 4
 palette_Palette         # 4             ;8-bit image palette
 palette_Small           # 4*5           ;Small halftones (sizes in tables)
@@ -210,17 +207,6 @@ palette_Calibration     # 4             ;New calibration table
 palette_PalInverse      # 4             ;Inverse 8-bit palette (KCMY calibrated)
 palette_Removal         # 4             ;% under-colour removal
 palette_Calib32         # 4             ;newer 32bit cmyk calibration stuff
-
-                        [ :LNOT:newctrans
-                        ^ 0
-;Calibration table offsets (for colourtrans really)
-calib_Version           # 4              ;Version number (resonably small for checking)
-calib_idealblack        # 4              ;Ideal black (often &00000000)
-calib_idealwhite        # 4              ;Ideal white (often &FFFFFF00)
-calib_SWI               # 4              ;Own SWI for proprietary processing
-calib_tablecount        # 4              ;Number of tables (1 or 3)
-calib_gammatables       # 0              ;calibration tables start here
-                        ]
 
                         ^ 0
 diffuse_RandomSeed      # 4             ;Random seed used for diffusion
@@ -234,13 +220,13 @@ diffuse_LineDataStart   # 4             ;Start of the real line data
 ;------------------------------------------------------------------------------
 
         LEADR   Module_LoadAddr
-        
+
 module_base
         & 0                             ;not an application
-        & init -module_base     
+        & init -module_base
         & final -module_base
         & service -module_base
-        
+
         & title -module_base
         & help -module_base
         & 0                             ;no command table
@@ -249,9 +235,13 @@ module_base
         & despatch -module_base
         & table -module_base
         & 0
+      [ :LNOT: No32bitCode
+        & 0
+        & moduleflags -module_base
+      ]
 
 title   = "PDumperSupport",0
-help    = "PDumper Support",9,"$VString ($Date)"
+help    = "PDumper Support",9,"$Module_MajorVersion ($Module_Date)"
       [ debug
         = " Development version"
       ]
@@ -272,10 +262,15 @@ table   = "PDumper",0
         = "",0
         ALIGN
 
+      [ :LNOT: No32bitCode
+moduleflags DCD ModuleFlag_32bit
+      ]
+
         LTORG
 
+
 ;..............................................................................
-; 
+;
 ; Handle the module initialisation, simply attempt to claim some
 ; workspace.
 
@@ -288,7 +283,7 @@ init    ROUT
       ]
 
   Debug mjs,"PDumperSpt initialise"
-                          
+
         LDR     R2,[WP]
         TEQ     R2,#0                   ;Any workspace already owned?
         BNE     %FT10                   ;Yes, so don't attempt to claim any
@@ -327,15 +322,15 @@ init_pdriver_active
         STR     R2,[WP]
 10      MOV     WP,R2                   ;Setup the workspace pointer
 
-        MOV     R0,#0                   ;Mark as there being no messages files open
+        SUBS    R0,R0,R0                ;(R0=0, V cleared) Mark as there being no messages files open
         STR     R0,SharedMessages
         STR     R0,MessagesOpen
 
-        Pull    "R1-R3,PC",,^
+        Pull    "R1-R3,PC"
 
 ;..............................................................................
-; 
-; Handle the module close down, this simply involves ensuring that the 
+;
+; Handle the module close down, this simply involves ensuring that the
 ; messages files are closed and that any extra workspace has been
 ; released.
 
@@ -349,19 +344,24 @@ final   ROUT
         B       CloseMessages           ;and then attempt to close the messages files
 
 ;..............................................................................
-; 
+;
 ; Handle service calls being passed around.
 
-service ROUT
-
+Ursula_ServiceTable
+        DCD     0
+        DCD     ServiceMessages - module_base
+        DCD     Service_PDriverGetMessages
+        DCD     0
+        DCD     Ursula_ServiceTable - module_base
+service
+        MOV     r0, r0
         TEQ     R1,#Service_PDriverGetMessages
-        LDREQ   WP,[WP]                 ;If it's the service call we are interested
         BEQ     ServiceMessages         ;yup, then resolve workspace and process
 
-        MOVS    PC,LR
+        MOV     PC,LR
 
 ;..............................................................................
-; 
+;
 ; Handle the despatch of SWIs within the module, this involves ensuring the
 ; IRQs are enabled and then despatching via the table.
 
@@ -381,18 +381,22 @@ despatch ROUT
       ]
 
         LDR     WP,[WP]                 ;Resolve the workspace pointer
-        TEQP    PC,#SVC_mode            ;Ensure IRQs are enabled
-
         CMP     R11,#(%10-%00)/4
-        ADDCC   PC,PC,R11,LSL #2        ;Despatch if within a suitable range
-        B       %FT10
+        BCS     %FT10
+        Push    "r9, lr"
+        WritePSRc SVC_mode,r9,,r10      ; enable IRQs; R10=old psr
+        Pull    "r9"
+        Push    "r10"
+        MOV     lr, pc
+        ADD     PC,PC,R11,LSL #2        ;Despatch if within a suitable range
+        B       %FT20
 00
         B       SWIPDumper_Info
         B       SWIPDumper_Claim
         B       SWIPDumper_Free
         B       SWIPDumper_Find
         B       SWIPDumper_StartJob
-        B       SWIPDumper_TidyJob        
+        B       SWIPDumper_TidyJob
         B       SWIPDumper_SetColour
         B       SWIPDumper_PrepareStrip
         B       SWIPDumper_LookupError
@@ -400,7 +404,12 @@ despatch ROUT
 10
         ADR     R0,ErrorBlock_ModuleBadSWI
         ADR     R1,title
-        B       LookupError             ;Setup suitable error string 
+        B       LookupError             ;Setup suitable error string
+20
+        Pull    "r10"
+        ORRVS   r10, r10, #V_bit        ;Restore PSR, preserve V
+        RestPSR r10,,cf
+        Pull    "pc"
 
         MakeErrorBlock ModuleBadSWI
 
@@ -423,13 +432,13 @@ despatch ROUT
 ;                       all other bits zero
 ;
 ; This call simply returns information about the PDumper Support module,
-; ie. which output routines it does support.  All modules support the 
+; ie. which output routines it does support.  All modules support the
 ; basic set of SWIs to allocate, free, start end and tidy jobs.  This
 ; SWI describes the features of new SWIs added in later revisions and
 ; the features of the prepare strip routine.
-; 
+;
 ;------------------------------------------------------------------------------
-         
+
 capflag_HalftoneGrey    * 1:SHL:0
 capflag_DiffuseGrey     * 1:SHL:1
 capflag_HalftoneColour  * 1:SHL:2
@@ -443,9 +452,11 @@ capflag_Supported       * capflag_HalftoneGrey +capflag_DiffuseGrey +capflag_Hal
                         ]
 SWIPDumper_Info ROUT
 
-        LDR     R0,=Version             ;Get version and capabilities 
+        LDR     R0,=Module_Version             ;Get version and capabilities
         LDR     R1,=capflag_Supported
-        MOVS    PC,LR
+        MOV     PC,LR
+
+        LTORG
 
 ;------------------------------------------------------------------------------
 ;
@@ -454,23 +465,23 @@ SWIPDumper_Info ROUT
 ;   Entry: R0 ->anchor word within block
 ;          R3 size of block to be claimed
 ;          R4 tag for the block
-;                     
+;
 ;   Exit:  V =1 => R0 ->Error block
 ;          else,   R2 ->block allocated (on a word boundary)
 ;
 ; This call will allocate a block of memory and then link it into the specified
 ; anchor word.  The size specified need not be a word boundary and the ID
-; is a four byte value stored after the link point. 
+; is a four byte value stored after the link point.
 ;
 ; The block is linked in at the top of the chain, although this need/should
 ; not be assumed.
 ;
 ;------------------------------------------------------------------------------
-                 
+
 SWIPDumper_Claim Entry "r0,r3"
 
         MOV     r10, r0                  ;Copy the pointer to the anchor word
-                     
+
         Debug   claim,"(claim) anchor, size, tag =",R0,R3,R4
 
         MOV     r0, #ModHandReason_Claim
@@ -485,7 +496,7 @@ SWIPDumper_Claim Entry "r0,r3"
 
         LDRVC   lr, [r10]                ;Get the current block pointer
         STRVC   r2, [r10]                ;Store new block link so that linked into the top of the chain
-        STRVC   lr, [r2, #block_Link]   
+        STRVC   lr, [r2, #block_Link]
 
         STRVC   r4, [r2, #block_Type]    ;Store the block type and the type away
         ADDVC   r2, r2, #block_DataStart ;Modify the return pointer so points past header block
@@ -500,7 +511,7 @@ SWIPDumper_Claim Entry "r0,r3"
 ;
 ;   Entry: R0 ->anchor word
 ;          R2 ->block to be released
-;                     
+;
 ;   Exit:  V =1 => R0 ->Error block
 ;
 ; This call will attempt to release a block from the chain, if it is not
@@ -510,7 +521,7 @@ SWIPDumper_Claim Entry "r0,r3"
 ;------------------------------------------------------------------------------
 
         ASSERT  block_Link =0
-              
+
 SWIPDumper_Free Entry "r0,r2"
 
         SUB     r2, r2, #block_DataStart ;Adjust so pointer to actual word we will find
@@ -534,7 +545,7 @@ SWIPDumper_Free Entry "r0,r2"
 90
         ADR     r0, ErrorBlock_PDumperNotLinked
         BL      LookupError             ;Resolve the error
-        B       %BT80       
+        B       %BT80
 
         MakeInternatErrorBlock PDumperNotLinked,,NotLink
 
@@ -544,7 +555,7 @@ SWIPDumper_Free Entry "r0,r2"
 ;
 ;   Entry: R0 ->anchor word
 ;          R2 tag
-;                     
+;
 ;   Exit:  V =1 => R0 ->Error block
 ;          else,   R2 ->tag block found
 ;
@@ -561,7 +572,7 @@ SWIPDumper_Find ROUT
 
         MOV     r10, r0                 ;Setup a copy to the anchor word
 00
-        LDR     r10, [r10, #block_Link]     
+        LDR     r10, [r10, #block_Link]
         TEQ     r10, #0                 ;Has the end of the list been reached?
         BEQ     %FT80                   ;..yup so give an error and exit
 
@@ -573,7 +584,7 @@ SWIPDumper_Find ROUT
 
         CMP     r11, r2                 ;Have I found the block yet?
         BNE     %BT00                   ;..nope so loop back until all blocks checked
-                   
+
         ADD     r2, r10, #block_DataStart ;->Useable area of the block
 
         Debug   findblock,"(find) Found and pointer is",R2
@@ -597,7 +608,7 @@ SWIPDumper_Find ROUT
 ;               all other bits reserved
 ;
 ;          R2 ->Palette filename / =0 if not to load one
-;                     
+;
 ;   Exit:  V =1 => R0 ->Error block
 ;
 ; This is called at the start of a job.  It will attempt to setup any workspace
@@ -605,13 +616,13 @@ SWIPDumper_Find ROUT
 ; is reserved for future expansion, R2 contains the pointer to the name of
 ; a palette file which should be loaded.
 ;
-; If all is susessful then the palette will be loaded and a suitable block 
+; If all is susessful then the palette will be loaded and a suitable block
 ; attached to the specified anchor word.
 ;
 ;------------------------------------------------------------------------------
-               
+
 find_close      * &0
-  
+
 SWIPDumper_StartJob Entry "r0-r4"
 
         Debug   startjob,"startJob: anchor word,flags",R0,R1
@@ -629,7 +640,7 @@ SWIPDumper_StartJob Entry "r0-r4"
         MOV     r11, r0                 ;Take a copy of the anchor word
 
         MOVS    r1, r2                  ;->Filename (may be zero)
-        BEQ     %FT90                  
+        BEQ     %FT90
 
         MOV     r0, #open_mustopen :OR: open_nodir :OR: open_read
         SWI     XOS_Find                ;Attempt to open the file
@@ -642,7 +653,7 @@ SWIPDumper_StartJob Entry "r0-r4"
         Debug   startjob,"startjob: palette file size",R2
 
         MOVVC   r0, r11
-        MOVVC   r3, r2                  
+        MOVVC   r3, r2
         LDRVC   r4, =BlockType_Palette  ;Claim a suitable block for the palette and tag it accordingly
         SWIVC   XPDumper_Claim          ;and then attempt to claim a suitable block of memory
 
@@ -669,12 +680,12 @@ SWIPDumper_StartJob Entry "r0-r4"
         MOV     r2, r10                 ;And get back the old error from r10
         SETV                            ;V will be cleared by XPDumper_Free normally
 10                                      ;only get directly here if V clear so r0 irrelevant
-        MOV     r3, pc                  ;Store the error pointer + PSR
+        SavePSR r3
         MOV     r0, #0
         SWI     XOS_Find                ; Close the stream (assumes R1 =file handle)
         TST     r3, #V_bit              ; leaves V alone
         MOVNE   r0, r2                  ; If there was an error earlier
-        TEQNEP  r3, #0                  ; restore error pointer and PSR
+        RestPSR r3,,f                   ; restore error pointer and PSR
 80
         STRVS   r0, [sp]                 ;Return from the routine returning any error pointers
         MVNVC   r0, #0                   ;Flag to say this is the first strip
@@ -683,7 +694,7 @@ SWIPDumper_StartJob Entry "r0-r4"
         BLVC    InvalidateGammaTable
         ]
         EXIT
-90             
+90
         ADR     r0, ErrorBlock_PDumperBadPalette
 95      BL      LookupError             ;Resolve the error
         B       %BT80                   ;..and then return
@@ -702,7 +713,7 @@ SWIPDumper_StartJob Entry "r0-r4"
 ;               +4 tag for next block
 ;
 ;               ... until null word
-;                         
+;
 ;          R2 flag to indicate if end of document or simple tidy up
 ;               =0 then simply tidy workspace
 ;               >0 then remove all blocks as end of document
@@ -714,11 +725,11 @@ SWIPDumper_StartJob Entry "r0-r4"
 ; the palette block (which is a global job one).
 ;
 ;------------------------------------------------------------------------------
-       
+
 SWIPDumper_TidyJob Entry "r1"
 
         Debug   tidyjob,"tidyjob: anchor word, list at, flags",R0,R1,R2
-             
+
         CMP     r1, #0                  ;Does the caller have a list of blocks? (will clear V)
         BLNE    tidyjob
         EXIT    VS
@@ -731,7 +742,7 @@ SWIPDumper_TidyJob Entry "r1"
         EXIT
 
 ;..............................................................................
-; 
+;
 ; This routine will attempt to remove all the blocks attached to the anchor
 ; point.  The routine scans the blocks hanging from the anchor word and
 ; compares their tags against the ones specified in the list, if they match
@@ -743,12 +754,12 @@ SWIPDumper_TidyJob Entry "r1"
 ; out   V =1 => R0 -> error block
 
         ASSERT  block_Link =0
- 
+
 tidyjob Entry "r0,r3"
 
         Debug   tidyjob,"tidyjob (local) anchor word,list",R0,R1
 
-        SUB     r3, r0, #block_Link                  
+        SUB     r3, r0, #block_Link
 10
         LDR     r2, [r3, #block_Link]   ;Get the pointer to a new block (=0 if none)
         CMP     r2, #0                  ;End of the list reached yet?
@@ -771,7 +782,7 @@ tidyjob Entry "r0,r3"
         STR     lr, [r3, #block_Link]   ;...and then link around the required one
 
         Debug   tidyjob,"tidyjob (local) block at",R2
-           
+
         MOV     r0, #ModHandReason_Free
         SWI     XOS_Module              ;Attempt to free the block
         BVC     %BT10                   ;And continue looping until all released (unless errored)
@@ -794,7 +805,7 @@ internallist
 ;
 ;   Entry: R0 ->error block including token
 ;          R1 ->title of module / =0 for no string
-;                     
+;
 ;   Exit:  V =1 => R0 ->resolved error block
 ;
 ; This routine simply accesses the internal error handling routines within
@@ -814,7 +825,7 @@ SWIPDumper_LookupError ROUT
 ;   Entry: R0 ->Buffer to copy string into
 ;          R1 Size of buffer
 ;          R2 ->String to be copied
-;                     
+;
 ;   Exit:  V =1 => R0 ->Error block
 ;          else,   R0 ->Past terminating character
 ;                  R2 ->Last character copied
@@ -824,13 +835,13 @@ SWIPDumper_LookupError ROUT
 ; routine terminates on any characters <=32 and converts it to a null.
 ;
 ;------------------------------------------------------------------------------
-                                                                      
+
 SWIPDumper_CopyFilename Entry "r1"
 
 10
         LDRB    lr, [r2], #1            ;Get a character
         CMP     lr, #32                 ;Is it within a suitable range?
-        MOVLE   lr, #0   
+        MOVLE   lr, #0
         MOVLE   r1, #0                  ;No, so terminate on a control code
         STRB    lr, [r0],#1
         SUBS    r1, r1, #1              ;Decrease the counter
@@ -859,12 +870,7 @@ SWIPDumper_CopyFilename Entry "r1"
         GET     s.Error
         GET     s.Error32
         GET     s.Error8
-;      [ fullrgb
         GET     s.FullRGB
-;      ]
-      [ :LNOT:newctrans
-        GET     s.CTrans
-      ]
         GET     s.MsgCode
 
         END
