@@ -5,7 +5,7 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 11-Sep-98  SBF          Created from FunaiUI makefile
+# 11-Sep-98  SBF          Created from FunaiUI Makefile
 #
 
 #
@@ -30,25 +30,25 @@ TARGET    =
 #
 # Export Paths for Messages module
 #
-RESAPP = <resource$dir>.${APP}
+RESAPP = <Resource$Dir>.${APP}
 RESRES = <Resource$Dir>.Resources
 #
 # Generic rules:
 #
 rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+        @echo ${COMPONENT}: ROM module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
-        @echo ${COMPONENT}: rom module installed
+        @echo ${COMPONENT}: ROM module installed
 
 clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${CP} Resources.<UserIf>.${LOCALE}.${APP}   ${RESAPP}   ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.${APP} ${RESAPP} ${CPFLAGS}
         ${CP} Resources.<UserIf>.${LOCALE}.NVRAM.Tags ${RESRES}.NVRAM.Tags ${CPFLAGS}
         ${CP} Resources.<UserIf>.${LOCALE}.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
