@@ -20,6 +20,7 @@
 ; 13-Dec-95 0.03 DDV Dynamic area sized to contain distance table and reduced after use.
 ; 01-Jul-96 0.04 SJM With standard palette it checks for one in resourcefs before creating.
 ; 05-Aug-99 0.08 KJB Ursula branch merged. Changed to use srccommit.
+; 12-May-00 0.09 KJB 32-bit compatible.
 
         GET     hdr:ListOpts
         GET     hdr:Macros
@@ -132,6 +133,10 @@ module_base
         & SWIDespatch - module_base
         & SWINames - module_base
         & 0                                     ; SWI name decode
+        & 0                                     ; messages
+      [ :LNOT: No32bitCode
+        & ModuleFlags - module_base
+      ]
 
 Help    = "Inverse Table", 9, "$Module_MajorVersion ($Module_Date)"
       [ Module_MinorVersion <> ""
@@ -142,6 +147,11 @@ Help    = "Inverse Table", 9, "$Module_MajorVersion ($Module_Date)"
       ]
         = 0
         ALIGN
+
+      [ :LNOT: No32bitCode
+ModuleFlags
+        & 1                                     ; 32-bit compatible
+      ]
 
 Title
 SWINames
@@ -199,8 +209,8 @@ Init    ENTRY   "R1-R3"
 Die     ENTRY   "R1-R2"
 
         LDR     WP, [WP]                        ; do we have a workspace pointer currently?
-        TEQ     WP, # 0                         ;   if not then there is nothing to tidy up
-        EXITS   EQ
+        CMP     WP, # 0                         ;   if not then there is nothing to tidy up
+        EXIT    EQ
 
         LDR     R3, iFlags
         TST     R3, # f_PaletteV                ; do we currently have the palette vector claimed?
@@ -253,7 +263,7 @@ Service ROUT
         TEQNE   R1, # Service_ResourceFSDying
         TEQNE   R1, # Service_PostInit
  ]
-        MOVNES  PC, LR
+        MOVNE   PC, LR
 UService
 
 ;       Debug   ,"Service",R1
@@ -280,7 +290,7 @@ UService
  ]
         BL      claim_vectors                   ; must claim the vectors again
 
-        EXITS
+        EXIT
 
 10                                              ; if resourcefs changed get the new ptr
  [ UseResourceTable
@@ -296,7 +306,7 @@ UService
         BICEQ   R0, R0, # f_TableValid
         STREQ   R0, iFlags
 
-        EXITS
+        EXIT
 
 20
  ]
@@ -307,7 +317,7 @@ UService
 
         STR     R0, iFlags
 
-        EXITS
+        EXIT
 
 
 ;; ------------------------------------------------------------------------------
@@ -320,7 +330,7 @@ UService
 SWIDespatch ROUT
 
         LDR     WP, [WP]                        ; de-reference the workspace pointer
-        TEQP    PC, #SVC_mode                   ;   ensure that IRQ's get re-enabled
+        WritePSRc SVC_mode, R10                 ;   ensure that IRQ's get re-enabled
 
         CMP     R11, #( %90-%00 ) / 4           ; is the index valid for our swi table
         ADDCC   PC, PC, R11, LSL # 2            ;   if it is then despatch
@@ -329,11 +339,28 @@ SWIDespatch ROUT
         B       ITable_Calculate
 90
         ADR     R0, ErrorBlock_NaffSWI
+95
+      [ No32bitCode
         ORRS    PC, LR, #V_bit                  ; mark that an error occurred
+      |
+        mrs    ,R10, CPSR                       ; preserve other flags on 26-bit system
+        TST     R10, #2_11100
+        ORREQS  PC, LR, #V_bit                  ; mark that an error occurred (26-bit)
+        SETV                                    ;                             (32-bit)
+        MOV     PC, LR
+     ]
 
 err_badmode
+      [ No32bitCode
         ADR     R0, ErrorBlock_BadMODE
         ORRS    PC, LR, #V_bit                  ; mark that an error occurred
+      |
+        mrs    ,R0, CPSR                        ; take care to preserve other flags
+        ORR     R0, R0, #V_bit
+        msr    ,CPSR_f, R0
+        ADR     R0, ErrorBlock_BadMODE
+        MOV     PC, LR
+      ]
 
         MakeErrorBlock NaffSWI
         MakeErrorBlock BadMODE
@@ -345,9 +372,10 @@ err_badmode
 
 claim_vectors ENTRY "R1-R3"
 
+        CLRV
         LDR     R3, iFlags
         TST     R3, # f_PaletteV                ; is paletteV claimed currently
-        EXITS   EQ
+        EXIT    EQ
 
         MOV     R0, #PaletteV
         ADR     R1, palVhandler
@@ -366,7 +394,7 @@ palVhandler ROUT
         TEQ     R4, # paletteV_Set
         TEQNE   R4, # paletteV_SetDefaultPalette
         TEQNE   R4, # paletteV_BulkWrite
-        MOVNES  PC, LR                          ; not a modifying palette operation
+        MOVNE   PC, LR                          ; not a modifying palette operation
 
         ENTRY   "WP"
 
@@ -374,13 +402,13 @@ palVhandler ROUT
         BNE     %FT01
 
         CMP     R1, # 24                        ; is it the border or cursor colour?
-        EXITS   GE
+        EXIT    GE
 01
         LDR     LR, iFlags
         BIC     LR, LR, # f_TableValid          ; table is no longer valid
         STR     LR, iFlags
 
-        EXITS
+        EXIT
 
 ;;-----------------------------------------------------------------------------
 ;;
@@ -404,7 +432,7 @@ check_resource
         EXIT    VS
 
         MOVS    R11, R0                         ; save the file handle in R11
-        EXITS   EQ                              ; exit if zero (can't open file)
+        EXIT    EQ                              ; exit if zero (can't open file)
 
         MOV     R1, R0                          ; get the fs number
         MOV     R0, # 254
@@ -427,7 +455,7 @@ check_resource
         MOV     R1, R11
         SWI     XOS_Find
 
-        EXITS
+        EXIT
  ]
 
 ;;-----------------------------------------------------------------------------
@@ -456,7 +484,7 @@ check_resource
 ;;                     < b9-5 == G >
 ;;                                  < b4-0 == R >
 ;;
-;; So using a colour number as an index into the table at R0 will yeild
+;; So using a colour number as an index into the table at R0 will yield
 ;; a 32 bit word containing the above data.
 ;;
 ;; To convert that word back to a colour number then the 5,5,5 RGB
@@ -519,7 +547,7 @@ claim_area ENTRY "R1-R8"
 
         LDR     R0, iDynamicArea
         CMP     R0, # 0                         ; have we already allocated our dynamic area?
-        EXITS   NE
+        EXIT    NE
 
         MOV     R0, # 0                         ; = 0 => create dynamic area
         MOV     R1, # -1
@@ -539,12 +567,13 @@ claim_area ENTRY "R1-R8"
 release_area ENTRY "R0-R1"
 
         LDR     R1, iDynamicArea
-        TEQ     R1, # 0                         ; has a dynamic area been created
-        EXITS   EQ
+        CMP     R1, # 0                         ; has a dynamic area been created
+        EXIT    EQ
 
         MOV     R0, # 1                         ; = 1 => discard dynamic area
         SWI     XOS_DynamicArea
-        EXITS
+        CLRV
+        EXIT
 
 
 ;; ------------------------------------------------------------------------------
