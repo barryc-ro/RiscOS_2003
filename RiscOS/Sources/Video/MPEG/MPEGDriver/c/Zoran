@@ -54,15 +54,17 @@ Date		Who	Change
 /* Private prototypes */
 /**********************/
 
-static _kernel_oserror *static_StreamRecognised (unsigned int flags, void *handle);
-static _kernel_oserror *static_HowMuchData (unsigned int flags, void *handle, unsigned int *bytes);
-static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle);
-
 #if 0
 static void static_SetPLLs (zoran_interface_t *zoran, unsigned int samplerate); // only needed if no microcode
 #endif
 static void static_SetSPDIF (zoran_interface_t *zoran, unsigned int samplerate);
 static void static_SendFunctionCommand (zoran_interface_t *zoran);
+
+static _kernel_oserror *static_StreamRecognised (unsigned int flags, void *handle);
+static _kernel_oserror *static_HowMuchData (unsigned int flags, void *handle, unsigned int *bytes);
+static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle);
+
+static _kernel_oserror *static_CallEvery (void *handle);
 
 /********************/
 /* Public variables */
@@ -77,6 +79,8 @@ static const recogniser_fns_t Recogniser = { static_StreamRecognised };
 static void *MPA_Characteriser;
 static void *AC3_Characteriser;
 static zoran_interface_t *Interfaces = NULL;
+
+static void (*CallEvery_Veneer) (void);
 
 /*********************/
 /* Private constants */
@@ -129,14 +133,28 @@ Out:		Error pointer if we can't initialise
 _kernel_oserror *Zoran_Init (zoran_interface_t *zoran)
 {
   _kernel_oserror *e = NULL;
-  /* Set up the recognisers to characterise the streams for us */
-  e = RecogMPA_RegisterCharacterisationClient (0, &Buffer, &Recogniser, &MPA_Characteriser);
-  if (!e)
+  /* Create a veneer for our use */
+  CallEvery_Veneer = MiscAsm_CreateSimpleVeneer (static_CallEvery);
+  if (CallEvery_Veneer == NULL)
   {
-    e = RecogAC3_RegisterCharacterisationClient (0, &Buffer, &Recogniser, &AC3_Characteriser);
+    e = Mess_GenerateError ("NoMem", errno_NO_MEM, 0);
+  }
+  else
+  {
+    /* Set up the recognisers to characterise the streams for us */
+    e = RecogMPA_RegisterCharacterisationClient (0, &Buffer, &Recogniser, &MPA_Characteriser);
     if (e)
     {
-      RecogMPA_DeregisterCharacterisationClient (0, MPA_Characteriser);
+      MiscAsm_DestroySimpleVeneer (CallEvery_Veneer);
+    }
+    else
+    {
+      e = RecogAC3_RegisterCharacterisationClient (0, &Buffer, &Recogniser, &AC3_Characteriser);
+      if (e)
+      {
+        RecogMPA_DeregisterCharacterisationClient (0, MPA_Characteriser);
+        MiscAsm_DestroySimpleVeneer (CallEvery_Veneer);
+      }
     }
   }
   
@@ -361,6 +379,7 @@ _kernel_oserror *Zoran_Final (zoran_interface_t *zoran)
   }
   if (!e)
   {
+    MiscAsm_DestroySimpleVeneer (CallEvery_Veneer);
     free (zoran->hardware_info);
     free (zoran->driver_info);
   }
@@ -968,6 +987,20 @@ static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle)
   return zoran->givemedata (flags, handle);
 }
 
+
+static _kernel_oserror *static_CallEvery (void *handle)
+{
+  _kernel_oserror *e = NULL;
+  zoran_interface_t *zoran = (zoran_interface_t *) handle;
+int temp;
+zoran->command (ZCMD_VER, 0, (char *)&temp);
+#if Debugging==1 && DebugToScreen==1
+if (temp != 0x021020A1) DWrite_WriteHex8 (temp);
+#endif
+  return e;
+}
+
+
 /******	Zoran_Start() ******************************************************
 
 Purpose:	Enable decoding/display
@@ -983,10 +1016,10 @@ _kernel_oserror *Zoran_Start (unsigned int flags, void *session_id)
   _kernel_oserror *e = NULL;
   if (!zoran->flag_characterising) /* else we have to wait! */
   {
-char scratch;
     zoran->completeop (false);
-    zoran->command (ZCMD_PLAY+1, 0, &scratch);
-    zoran->command (ZCMD_UNMUTE+1, 0, &scratch);
+    zoran->command (ZCMD_PLAY, 0, 0);
+    zoran->command (ZCMD_UNMUTE, 0, 0);
+    _swix (OS_CallEvery, _INR(0,2), 1, CallEvery_Veneer, zoran);
   }
   zoran->flag_started = true;
   return e;
@@ -1005,6 +1038,7 @@ _kernel_oserror *Zoran_Stop (unsigned int flags, void *session_id)
 {
   zoran_interface_t *zoran = session_id;
   _kernel_oserror *e = NULL;
+  _swix (OS_RemoveTickerEvent, _INR(0,1), CallEvery_Veneer, zoran);
   zoran->completeop (true);
   zoran->command (ZCMD_STOPF, 0, 0);
   zoran->flag_started = false;

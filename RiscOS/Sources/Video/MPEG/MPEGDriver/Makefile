@@ -26,9 +26,7 @@ ATTR    = attr
 AS      = objasm
 CMHG    = cmhg
 CP      = copy
-#LD      = link
-#LD      = /ATAFS::BAvison.$.link.link
-LD      = /ATAFS::BAvison.$.Incoming.link.link
+LD      = link
 RM      = remove
 WIPE    = wipe
 
@@ -133,7 +131,7 @@ debug: drm ${DOOBJS} do o h.Debug h.Registers messages-${CMDHELP} ${LIBSD} ${CLI
         @echo ${COMPONENT}: Debug module built (RAM)
 
 ${RAM_MODULE}: rm ${RAMOBJS} o h.Debug h.Registers messages-${CMDHELP} ${CLIB}
-        ${LD} -symbols symbols -o $@ -rmf ${RAMOBJS} ${CLIB}
+        ${LD} -o $@ -rmf ${RAMOBJS} ${CLIB}
         ${ATTR} -files +or +ow +wr -ww $@
         ${RM} Messages
 
