@@ -37,10 +37,10 @@
 #define MENU_FONT   WEBFONT_BASE
 
 #define col_HIGHLIGHT	render_colour_HIGHLIGHT	/* the highlight box colour */
-#define col_FG		render_colour_PLAIN
-#define col_FG_HL	render_colour_INPUT_B
-#define col_BG		render_colour_INPUT_B
-#define col_BG_HL	render_colour_PLAIN
+#define col_FG		render_colour_MENU_F
+#define col_FG_HL	render_colour_MENU_FS
+#define col_BG		render_colour_MENU_B
+#define col_BG_HL	render_colour_MENU_BS
 
 /* ------------------------------------------------------------------------------------------- */
 
@@ -116,11 +116,25 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
     more = TRUE;
     while (more)
     {
+	int junk;
+	
 	top = r.g.y1 - oy;
 	bot = r.g.y0 - oy;
 
 	lfc = -1;
 
+	/* draw the top and bottom edges */
+	if (top > 0)
+	{
+	    colourtran_setGCOL(config_colours[col_BG], 0, 0, &junk);
+	    bbc_rectanglefill(ox - X_BORDER, oy, width + 2*X_BORDER-1, Y_BORDER-1);
+	}
+	if (bot < -mh->n*line_space)
+	{
+	    colourtran_setGCOL(config_colours[col_BG], 0, 0, &junk);
+	    bbc_rectanglefill(ox - X_BORDER, oy - mh->n*line_space - Y_BORDER, width + 2*X_BORDER-1, Y_BORDER-1);
+	}
+	
 	if (font_setfont(webfonts[MENU_FONT].handle) != NULL)
 	    continue;
 
@@ -129,7 +143,7 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 
 	for( ; i < mh->n && h >= bot; h -= line_space, i++)
 	{
-	    int junk, nfc, opcol;
+	    int nfc, opcol;
 
 	    if (mh->items[i].flags & fe_menu_flag_CHECKED)
 	    {

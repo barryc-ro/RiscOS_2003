@@ -171,6 +171,8 @@ struct config_str
     int *key;			/* place holders fort NCFresco key and toolbar maps */
     int *toolbar;
     char *toolbar_name;
+
+    int *url_suffix;
 };
 
 extern struct config_str config_array;
@@ -334,6 +336,7 @@ extern struct config_str config_array;
 #define config_browser_version (config_array.browser_version)
 
 #define config_image_blacklist (config_array.image_blacklist)
+#define config_url_suffix (config_array.url_suffix)
 
 #endif
 

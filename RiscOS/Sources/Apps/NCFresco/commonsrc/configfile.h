@@ -14,6 +14,7 @@ typedef enum {
     config_FONT,
     config_INT_LIST,
     config_COLOUR_LIST,
+    config_STRING_LIST,
 
     config_COMMENT,
     config_LAST

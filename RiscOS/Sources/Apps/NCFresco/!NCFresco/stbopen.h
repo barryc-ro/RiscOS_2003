@@ -20,6 +20,7 @@
 /* ;#define TARGET_CUSTOM	"__custom" */
 #define TARGET_ERROR	"__error"
 #define TARGET_FIND	"__find"
+#define TARGET_SSL	"__ssl"
 
 extern fe_view fe_find_window(fe_view start, wimp_w w);
 extern fe_view fe_find_target(fe_view start, const char *target);

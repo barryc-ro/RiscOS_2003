@@ -149,6 +149,8 @@
 #define AUTOSCROLL_DELAY		100	/* delay before auto-scrolling takes affect */
 #define AUTOSCROLL_HOVER_AREA		8	/* space to stay within during DELAY period */
 
+#define NCFRESCO_CURRENT_PAGE		PROGRAM_NAME"$CurrentURL"
+
 /* -------------------------------------------------------------------------- */
 
 #define TaskModule_RegisterService      0x4D302
@@ -844,6 +846,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     /* this is only for STB use really  */
     session_log(url, session_CONNECTED);
 
+    /* set system variable for current page */
+    if (v == main_view)
+	_kernel_setenv(NCFRESCO_CURRENT_PAGE, url);
+    
     previous_url = NULL;
     previous_mode = v->browser_mode;
 
@@ -864,9 +870,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    fe_dispose_view(vv);
 	}
     }
-
-    /* fade down previous displayed frame as long as it's not the same one (server-push) */
-    is_server_push = v->displaying == doc;
+    
     if (v->displaying && !is_server_push)
     {
 	char *durl;
@@ -5788,6 +5792,7 @@ static void handler(int signal)
 
 static void signal_init(void)
 {
+    DBG(("signal_init\n"));
     oldhandler = signal(SIGABRT, &handler);
     oldhandler = signal(SIGFPE, &handler);
     oldhandler = signal(SIGILL, &handler);
@@ -6126,10 +6131,14 @@ static BOOL fe_initialise(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if STBWEB_ROM || 1
-int __root_stack_size = 64*1024;
+#if STBWEB_ROM && 0
+/* int __root_stack_size = 64*1024; */
+int __root_stack_size = 4*1024;
 /* extern int disable_stack_extension; */
 #endif
+
+#undef DBG
+#define DBG(a) usrtrc(a) 
 
 int main(int argc, char **argv)
 {
@@ -6167,12 +6176,17 @@ int main(int argc, char **argv)
 /*   Trace_Stacker_SetOutputFunction((Trace_Stacker_outputfn)vfdbg, db_sess); */
 #endif
     
+    DBG(("main\n"));
+
     init_usrtrc();
+
+    DBG(("main0\n"));
 
     progname = argv[0];
     argv++;
     argc--;
 
+    DBG(("main1\n"));
 #if STBWEB_ROM
     use_toolbox = TRUE;
 #else
@@ -6182,10 +6196,13 @@ int main(int argc, char **argv)
     }
 #endif
 
+    DBG(("main2\n"));
     os_cli("pointer 0");
 
+    DBG(("fe_initialise+\n"));
     init_ok = fe_initialise();
-
+    DBG(("fe_initialise-\n"));
+    
     if (init_ok)
     {
         char *welcome_url = NULL;

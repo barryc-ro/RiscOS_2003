@@ -3168,7 +3168,7 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
     {
 	int flags;
 	int do_redraw;
-	int real_thing_flag;
+/* 	int real_thing_flag; */
 	int imw, imh;
 
 	/* SJM: changes to use frame_info to get right mask value */
@@ -3179,7 +3179,7 @@ static void antweb_doc_image_change2( void *h, void *i, int status,
 	image_info((image)i, &imw, &imh, NULL, &flags, NULL, NULL);
 #endif
 
-	real_thing_flag = (flags & image_flag_REALTHING) ? rid_image_flag_REAL : 0;
+/* 	real_thing_flag = (flags & image_flag_REALTHING) ? rid_image_flag_REAL : 0; */
 
 	/* If told to UPDATE when we don't need a full redraw */
 	do_redraw = (status == image_cb_status_UPDATE || status == image_cb_status_UPDATE_ANIM) ? 0 : 1;
@@ -3906,17 +3906,23 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 	}
 
 #ifndef BUILDERS
-	frontend_view_visit(doc->parent, NULL, url,
+	
+	if (status == status_BAD_FILE_TYPE)
+	{
+	    char *name = get_file_type_name(access_get_ftype(doc->ah));	/* unsupported file type */
+	    frontend_view_visit(doc->parent, NULL, url,	(char *)makeerrorf(ERR_BAD_FILE_TYPE, strsafe(name)));
+	}
+	else
+	{
+	    frontend_view_visit(doc->parent, NULL, url,	
 			    status == status_FAIL_REDIAL ?
 				NULL :								/* don't want to display the error in this case */
-			    status == status_BAD_FILE_TYPE ?
-				(char *)makeerrorf(ERR_BAD_FILE_TYPE,
-					       get_file_type_name(access_get_ftype(doc->ah))) : /* unsupported file type */
 			    status == status_FAIL_LOCAL ?
 				(char *)makeerror(ERR_NO_DISC_SPACE) :				/* local error (probably out of disc space) */
 			    status == status_FAIL_DNS ?
 				(char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile) :	/* cannot find the web page */
 				(char *)makeerror(ERR_UNSUPORTED_SCHEME));			/* cannot display the web page */
+	}
 #endif
 
 	doc->ah = NULL;

@@ -51,6 +51,7 @@ static fe_view get_source_view(const char *query, BOOL default_top);
 static char *auth_code = "U21hcnQga2lkUw==";
 
 fe_passwd fe_current_passwd = NULL;
+static fe_ssl fe_current_ssl = NULL;
 
 static char *loadurl_last = NULL;
 
@@ -1037,6 +1038,87 @@ void frontend_passwd_dispose(fe_passwd pw)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+#if SSL_UI
+static int internal_decode_ssl(const char *query)
+{
+    char *s;
+    fe_ssl fe;
+    BOOL cancel;
+
+    fe = fe_current_ssl;
+    if (!fe)
+        return fe_internal_url_ERROR;
+
+    s = extract_value(query, "action=");
+    cancel = strcasestr(s, "cancel") != 0;
+    mm_free(s);
+
+    if (fe->cb)
+	fe->cb(fe->h, !cancel);
+    
+    frontend_ssl_dispose(fe);
+
+    return fe_internal_url_NO_ACTION;
+}
+
+static os_error *fe_ssl_write_file(FILE *f)
+{
+    fe_ssl fe = fe_current_ssl;
+
+    if (fe)
+    {
+	fputs(msgs_lookup("sslT"), f);
+	fputc('\n', f);
+
+	fprintf(f, msgs_lookup("ssl1"),
+		fe->issuer ? fe->issuer : "unknown", 
+		fe->subject ? fe->subject : "unknown");
+
+	fputs(msgs_lookup("sslF"), f);
+	fputc('\n', f);
+    }
+
+    return NULL;
+}
+
+fe_ssl frontend_ssl_raise(backend_ssl_callback cb, const fe_ssl_info *info, void *handle)
+{
+    fe_ssl fe;
+
+    STBDBG(("ssl_raise subject '%s' issuer '%s' cipher '%s'\n",
+	    strsafe(info->subject), strsafe(info->issuer), strsafe(info->cipher) ));
+
+    fe = mm_calloc(sizeof(*fe), 1);
+
+    fe->cb = cb;
+    fe->h = handle;
+
+    fe->subject = strdup(info->subject);
+    fe->issuer = strdup(info->issuer);
+
+    fe_current_ssl = fe;
+
+    frontend_open_url("ncint:openpanel?name=ssl", NULL, TARGET_SSL, NULL, fe_open_url_NO_CACHE);
+
+    return fe;
+}
+
+void frontend_ssl_dispose(fe_ssl fe)
+{
+    STBDBG(( "ssl_dispose %p\n", fe));
+
+    fe_dispose_view(fe_locate_view(TARGET_SSL));
+
+    mm_free(fe->subject);
+    mm_free(fe->issuer);
+
+    mm_free(fe);
+    fe_current_ssl = NULL;
+}
+#endif
+
+/* ----------------------------------------------------------------------------------------------------- */
+
 static os_error *fe_error_write_file(FILE *f, const char *query)
 {
     char *which = extract_value(query, "error=");
@@ -1397,6 +1479,13 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    sound_event(snd_PASSWORD_SHOW);
 	    e = fe_passwd_write_file(f);
 	}
+#if SSL_UI
+	else if (strcasecomp(panel_name, "ssl") == 0)
+	{
+	    sound_event(snd_PASSWORD_SHOW);
+	    e = fe_ssl_write_file(f);
+	}
+#endif
 	else if (strcasecomp(panel_name, "url") == 0)
 	{
 	    char *def = extract_value(query, "def=");
@@ -2051,6 +2140,10 @@ static int internal_decode_process(const char *query, const char *bfile, const c
     else if (strcasecomp(page, "password") == 0)
     {
 	generated = internal_decode_password(query);
+    }
+    else if (strcasecomp(page, "ssl") == 0)
+    {
+	generated = internal_decode_ssl(query);
     }
     else if (strcasecomp(page, "error") == 0)
     {
