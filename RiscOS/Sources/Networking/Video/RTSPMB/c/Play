@@ -9,6 +9,7 @@
 /*          S.N.Brodie and P. Wain.                           */
 /*                                                            */
 /* History: 01-Dec-2000 (ADH): Imported from RTSP OVS.        */
+/*          08-Mar-2002 (JRB): Updated for MediaBase 6.       */
 /**************************************************************/
 
 #include <stdio.h>
@@ -56,12 +57,21 @@ typedef enum play_state
 }
 play_state;
 
+/* Local definitions */
+
+#define Play_Read_TimeCode_Timer    (100)
+#define Play_Initial_TimeCode_Timer (5)
+#define Play_TimeCode_Margin        (275)
+
 /* Local functions - miscellaneous */
 
-static bool              play_slowmofwd                (const char * scale);
-static int               play_process_speed            (const char * scale);
+static _kernel_oserror * play_return_emulated_response       (session * s, unsigned int response_code);
+static _kernel_oserror * play_alter_playback_characteristics (session * s, int playmode);
+#ifdef CLIENT_LOOPING
+static _kernel_oserror * play_replay                         (session * s);
+#endif
 
-/* Local functions - general command sending assitance */
+/* Local functions - general command sending assistance */
 
 static _kernel_oserror * play_preamble                 (session * s);
 static _kernel_oserror * play_send                     (session * s);
@@ -76,6 +86,8 @@ static _kernel_oserror * play_send_state_command       (session * s, play_state 
 /* Local functions - stuff used to build a set of command headers */
 /* ready for sending out                                          */
 
+static int               play_process_speed            (const char * scale);
+static int               play_determine_playmode       (const char * scale);
 static _kernel_oserror * play_build_pause              (session * s);
 static _kernel_oserror * play_build_set_playmode       (session * s);
 static _kernel_oserror * play_build_play               (session * s);
@@ -85,48 +97,350 @@ static void              play_reconstruct_range_header (session * s, char * temp
 
 /* Local functions - floating point code used within */
 
+static int               play_strtofi                  (const char *str, const char **endptr, int factor);
 static unsigned int      play_get_trick_stream_npt     (session * s, unsigned int npt);
+#ifdef CLIENT_LOOPING
 static void              play_copy_frame_info          (session * dst, session * src);
+#endif
 
 #if 0
   static unsigned int    play_get_frame_number         (session * s, unsigned int npt);
 #endif
 
 /**************************************************************/
-/* play_slowmofwd()                                           */
+/* play_play()                                                */
 /*                                                            */
-/* Work out whether reduced data rate slow motion forwards    */
-/* play should be used for a given scale/speed specifier.     */
+/* Implement RTSPMB_Play. See the Video Control               */
+/* specification, 2501,817/FS, for more.                      */
 /*                                                            */
-/* Parameters: Scale/speed specifier.                         */
-/*                                                            */
-/* Returns:    true to use reduced data rate slow motion      */
-/*             forwards play (send a Speed header rather than */
-/*             Scale), else false.                            */
+/* This function always sends at least one command, which     */
+/* is either PAUSE for zero speed or for a trick play mode    */
+/* transition, or SET_PLAYMODE or PLAY if playback is         */
+/* starting for the first time. A command chain is set up     */
+/* which is dealt with by the state machine calling back into */
+/* play_send_play or play_send_set_playmode.                  */
 /**************************************************************/
 
-static bool play_slowmofwd(const char * scale)
+_kernel_oserror * play_play(_kernel_swi_regs * r)
 {
-  if (
-       scale != NULL &&
+  session * s = session_find_by_id(r->r[1]);
+  int       new_playmode;
 
-       _swix(OS_Module,
-             _INR(0,1),
+  dprintf(("Entry_0", "play_play: Called\n"));
+  dprintf(("Entry_1", " r0=%x\n",r->r[0]));
+  dprintf(("Entry_1", " r1=%x\n",r->r[1]));
+  dprintf(("Entry_1", " r2='%s'\n",r->r[2] ? (char *)r->r[2] : "NULL"));
+  dprintf(("Entry_1", " r3='%s'\n",r->r[3] ? (char *)r->r[3] : "NULL"));
+  #ifdef TRACE
+  if ((r->r[0] & VC_Play_R4ThroughR7AreValid) != 0)
+  {
+    dprintf(("Entry_1", " r4='%s'\n",r->r[4] ? (char *)r->r[4] : "NULL"));
+    dprintf(("Entry_1", " r5=%x\n",r->r[5]));
+    dprintf(("Entry_1", " r6=%x\n",r->r[6]));
+    dprintf(("Entry_1", " r7=%x\n",r->r[7]));
+  }
+  #endif
 
-             18,
-             ReducedRateSlowmoSupportModule) /* Play.h */
+  /* Do the basic checks to see that everything is OK. */
 
-       == NULL
+  RetError(play_preamble(s));
 
-       &&
-       (
-         !strncmp(scale, "0.", 2) ||
-         *scale == '.'
+  /* Ensure everything is reset for a new command. */
+
+  session_reset_session(s);
+
+  /* Copy R2 and R3 away */
+
+  free(s->range_record);
+  s->range_record = Strdup(r->r[2] == 0 ? "" : (char *) r->r[2]);
+
+  free(s->play_record);
+  s->play_record = Strdup(r->r[3] == 0 ? "" : (char *) r->r[3]);
+
+  if (s->play_record == NULL || s->range_record == NULL)
+  {
+    dprintf(("", "play_play: Play or range records NULL -> out of memory\n"));
+    return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+
+  /* Is there a mapping between the request and the server? Not if this */
+  /* is a slow motion play request; in that case return a 501 response. */
+  /* Also return a 501 response for fast forward/rewind of MPEG1, since */
+  /* we can't manage that at the moment either.                         */
+
+  {
+    int type = play_process_speed(s->play_record);
+
+    if (
+        type == MPEGCtrl_MCRS_Trick_SFWD || type == MPEGCtrl_MCRS_Trick_SRWD ||
+        (s->asset_type == assettype_MPEG1 && (type == MPEGCtrl_MCRS_Trick_FRWD || type == MPEGCtrl_MCRS_Trick_FFWD))
        )
-     )
-     return true;
+    {
+      return play_return_emulated_response(s, 501);
+    }
+  }
 
-  return false;
+  /* Parse the range */
+
+  if (!play_filter_range(s, s->range_record, &s->from, &s->to))
+  {
+    /* Range not recognised - return a 457 response */
+
+    return play_return_emulated_response(s, 457);
+  }
+
+  /* Work out the command order required. Possibilities are:                */
+  /* 1) PAUSE                                                               */
+  /*   To pause on any version of MediaBase.                                */
+  /* 2) PLAY                                                                */
+  /*   To start playing or resume from pause on MediaBase 6 with MPEG2.     */
+  /* 3) SET_PLAYMODE; PLAY                                                  */
+  /*   To start playing MPEG1 on MediaBase 6; to start playing or resume    */
+  /*   from pause on MediaBase 5 or earlier.                                */
+  /* 4) PAUSE; PLAY                                                         */
+  /*   To change play mode on MediaBase 6 with MPEG2.                       */
+  /* 5) PAUSE; SET_PLAYMODE; PLAY                                           */
+  /*   To change play mode (or jump to a new position in the same mode) on  */
+  /*   MediaBase 5 or earlier, or with MPEG1 on MediaBase 6.                */
+
+  new_playmode = play_determine_playmode(s->play_record);
+
+  if (new_playmode == Play_MB_Trick_Freeze)
+  {
+    /* Going to pause mode - issue PAUSE */
+
+    dprintf(("", "play_play: Building PAUSE to pause\n"));
+
+    s->next_command_cb = NULL;
+
+    RetError(play_build_pause(s));
+  }
+  else if (
+            s->started != 0 &&
+            s->playmode != Play_MB_Trick_Freeze &&
+            (new_playmode != s->playmode || s->server_majorver < 6)
+          )
+  {
+    /* Changing play mode (or jumping to a new position in the same mode     */
+    /* with MediaBase 5 or earlier) - issue PAUSE (then maybe SET_PLAYMODE), */
+    /* then PLAY.                                                            */
+
+    dprintf(("", "play_play: Building PAUSE to change play mode\n"));
+
+    /* When changing play mode, treat no 'from' as from 'now' */
+
+    if (s->from == Play_MB_Time_Unspecified)
+      s->from = Play_MB_Time_Now;
+
+    if (s->server_majorver >= 6 && s->asset_type != assettype_MPEG1)
+      s->next_command_cb = play_send_play;
+    else
+      s->next_command_cb = play_send_set_playmode;
+
+    RetError(play_build_pause(s));
+  }
+  else
+  {
+    /* Starting, resuming from pause, or jumping within same play mode */
+    /* (for server version 6 or later - earlier versions do not allow  */
+    /* this without doing a PAUSE first.)                              */
+    /* Issue SET_PLAYMODE if required, then PLAY.                      */
+
+    if (s->started == 0)
+    {
+      if (s->from == Play_MB_Time_Unspecified || s->from == Play_MB_Time_Now)
+      {
+        /* If play has not started, treat no 'from' or from 'now' as from */
+        /* the start (for forward play) or end (for reverse play)         */
+
+        if (new_playmode == Play_MB_Trick_FRWD) s->from = s->duration;
+        else                                    s->from = 0;
+      }
+    }
+    else if (s->playmode == Play_MB_Trick_Freeze)
+    {
+      /* When resuming from pause, treat no 'from' as from 'now' */
+
+      if (s->from == Play_MB_Time_Unspecified)
+        s->from = Play_MB_Time_Now;
+    }
+    else
+    {
+      /* If playing in same mode as before, treat from 'now' as no 'from'  */
+
+      if (s->from == Play_MB_Time_Now)
+        s->from = Play_MB_Time_Unspecified;
+    }
+
+    if (
+        s->multicast != 0 ||
+        (s->server_majorver >= 6 && s->asset_type != assettype_MPEG1)
+       )
+    {
+      #ifdef TRACE
+        if (s->multicast != 0) dprintf(("", "play_play: Building PLAY for simulated multicast start\n"));
+        else                   dprintf(("", "play_play: Building PLAY for MediaBase 6 MPEG2\n"));
+      #endif
+
+      s->next_command_cb = NULL;
+  
+      RetError(play_build_play(s));
+    }
+    else
+    {
+      dprintf(("", "play_play: Building SET_PLAYMODE\n"));
+  
+      s->next_command_cb = play_send_play;
+  
+      RetError(play_build_set_playmode(s));
+    }
+  }
+
+  /* Everything is built and ready to go. Now check to make sure that no  */
+  /* background command is in progress. If it is we have to delay sending */
+  /* the new command until the background command has completed.          */
+
+  /* Remove the GET_PARAMETER pinging callout */
+
+  if (s->gp_set != 0)
+  {
+    s->gp_set = 0;
+    untimeout(getparam_proceed_on_callout, s);
+  }
+
+  #ifdef CLIENT_LOOPING
+  /* Remove the looping callout */
+
+  /* The implications of a replay callout occuring at this stage need */
+  /* to be thought through a little more.                             */
+  if (s->loop_ready != 0)
+  {
+    s->loop_ready = 0;
+    untimeout(play_replay_on_callout, s);
+  }
+  #endif
+
+  /* Is a background command in progress? */
+
+  if (s->child != NULL)
+  {
+    dprintf(("", "play_play: Having to wait for background command\n"));
+
+    /* We have to wait */
+
+    s->play_wait = 1;
+    timeout(play_retry_delayed_on_callout, s, Session_State_Retry);
+
+    dprintf(("", "play_play: Play retry timer is set, exiting play_play\n"));
+
+    return NULL;
+  }
+
+  /* Send the command */
+
+  dprintf(("", "play_play: Successful; exitting through play_send\n"));
+
+  return play_send(s);
+}
+
+/**************************************************************/
+/* play_preamble()                                            */
+/*                                                            */
+/* For a given session, check the pointer is not NULL, that   */
+/* no command is currently in progress and that there is a    */
+/* server session.                                            */
+/*                                                            */
+/* This is normally the first thing done in a function that   */
+/* needs to issue a play-related command to a server.         */
+/*                                                            */
+/* Parameters: Pointer to the session struct (may be NULL).   */
+/*                                                            */
+/* Returns:    An error if there is some problem with using   */
+/*             the session for a new PLAY command, else NULL. */
+/**************************************************************/
+
+static _kernel_oserror * play_preamble(session * s)
+{
+  dprintf(("", "play_preamble: Called for &%08X\n", (int) s));
+
+  if (s == NULL)
+  {
+    dprintf(("", "play_preamble: ID not found\n"));
+
+    return make_error(rtspmb_ERROR_CLIENT_ID_NOT_FOUND, 0);
+  }
+
+  if (
+       s->state == protostate_DNS       ||
+       s->state == protostate_CONNECTED ||
+       s->state == protostate_SENDING   ||
+       s->state == protostate_RECEIVING ||
+       s->state == protostate_PUMPING   ||
+       s->play_wait == 1
+     )
+  {
+    dprintf(("", "play_preamble: In progress\n"));
+
+    return make_error(rtspmb_ERROR_IN_PROGRESS, 0);
+  }
+
+  if (s->server_session == NULL)
+  {
+    dprintf(("", "play_preamble: No server session\n"));
+
+    return make_error(rtspmb_ERROR_NO_SERVER_SESSION, 0);
+  }
+
+  /* Be warned - don't do anything destructive to background */
+  /* commands here (e.g. don't call session_reset_session)   */
+
+  dprintf(("", "play_preamble: Successful\n"));
+
+  return NULL;
+}
+
+/**************************************************************/
+/* play_return_emulated_response()                            */
+/*                                                            */
+/* Return an emulated response to a play command.             */
+/*                                                            */
+/* Parameters: Pointer to the session structure.              */
+/*                                                            */
+/* Returns:    NULL or pointer to error.                      */
+/**************************************************************/
+
+static _kernel_oserror * play_return_emulated_response(session * s, unsigned int response_code)
+{
+  rtsp_header * r;
+
+  if (response_code == 457) r = response_build(s->headers, Headers_Supported_Prefix_457);
+  else                      r = response_build(s->headers, Headers_Supported_Prefix_501);
+  
+  if (r == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+  
+  headers_free_headers(&s->headers);
+  
+  s->next_command_cb = NULL;
+  s->headers         = r;
+  s->state           = protostate_COMPLETED;
+  s->response_code   = response_code;
+  s->reported_state  = VC_Status_ConnectionEstablished |
+                       VC_Status_NewStatus;
+  
+  s->data_len = headers_construct_specific_header_buffer(s->headers,
+                                                         &s->data,
+                                                         0,
+                                                         1);
+  
+  if (s->data_len != 0) s->reported_state |= VC_Status_MoreInformationAvailable;
+  
+  if (s->callout_set == 0)
+  {
+    s->callout_set = 1;
+    timeout(status_proceed_on_callout, s, Session_State_Timer);
+  }
+  
+  return NULL;
 }
 
 /**************************************************************/
@@ -144,241 +458,149 @@ static bool play_slowmofwd(const char * scale)
 
 static int play_process_speed(const char * scale)
 {
-  int type;
+  modulefp_buf buf;
+  int          n;
+  const char * endp;
 
-  if (scale == NULL || *scale == '\0') scale = "1";
+  if (scale == NULL || *scale == '\0')
+    return MPEGCtrl_MCRS_Trick_Play;
 
-  if      (!strcmp(scale, "1")) type = MPEGCtrl_MCRS_Trick_Play;
-  else if (!strcmp(scale, "0")) type = MPEGCtrl_MCRS_Trick_Freeze;
+  modulefp_enable(&buf);
+  n = play_strtofi(scale, &endp, 100);
+  modulefp_disable(&buf);
 
-  else if (strstr(scale, "0.") != NULL)
-  {
-    if (*scale == '-')          type = MPEGCtrl_MCRS_Trick_SRWD;
-    else                        type = MPEGCtrl_MCRS_Trick_SFWD;
-  }
-  else if (*scale == '-')       type = MPEGCtrl_MCRS_Trick_FRWD;
-  else                          type = MPEGCtrl_MCRS_Trick_FFWD;
+  if (n <= -100)     return MPEGCtrl_MCRS_Trick_FRWD; /* scale <= -1.0 */
+  if (n < 0)         return MPEGCtrl_MCRS_Trick_SRWD; /* -1.0 < scale < 0 */
+  if (n > 100)       return MPEGCtrl_MCRS_Trick_FFWD; /* scale >= 1.0 */
+  if (n == 100)      return MPEGCtrl_MCRS_Trick_Play; /* scale == 1.0 */
+  if (n > 0)         return MPEGCtrl_MCRS_Trick_SFWD; /* 0 < scale < 1.0 */
+  if (endp == scale) return MPEGCtrl_MCRS_Trick_Play; /* Invalid string */
 
-  return type;
+  return MPEGCtrl_MCRS_Trick_Freeze;                  /* scale == 0 */
 }
 
 /**************************************************************/
-/* play_play()                                                */
+/* play_determine_playmode()                                  */
 /*                                                            */
-/* Implement RTSPMB_Play. See the Video Control               */
-/* specification, 2501,817/FS, for more.                      */
+/* Determine the MediaBase play mode from a playback rate     */
+/* string.                                                    */
 /*                                                            */
-/* This function always sends at least one command, which     */
-/* is either PAUSE for zero speed or for a trick play mode    */
-/* transition, or SET_PLAYMODE if playback is starting for    */
-/* the first time. PLAY is used directly to exit PAUSE. A     */
-/* command chain is set up which is dealt with by the state   */
-/* machine calling back into play_send_play or                */
-/* play_send_set_playmode.                                    */
+/* Parameters: Pointer to the string. If NULL, "1" is used.   */
+/*                                                            */
+/* Returns:    An int containing an indication of play mode   */
+/*             within the string; see play.h.                 */
 /**************************************************************/
 
-_kernel_oserror * play_play(_kernel_swi_regs * r)
+static int play_determine_playmode(const char * scale)
 {
-  session * s         = session_find_by_id(r->r[1]);
-  bool      slowmofwd = false; /* This is true for slowmo forward play     */
-  bool      play      = true;  /* This is true for any non-pause play mode */
-  bool      paused;
-  char    * scale;
-  char    * scale_rec;
-  char    * range_rec;
-
-  dprintf(("", "play_play: Called\n"));
-
-  RetError(play_preamble(s));
-
-  /* We know there's no foreground command in progress and other stuff */
-  /* looks generally sane... But do we need to queue this operation to */
-  /* wait for a background command to complete?                        */
-  /*                                                                   */
-  /* Meanwhile, suppose a background replay command is waiting for a   */
-  /* background GET_PARAMETER to complete. There's a narrow hole when  */
-  /* either it's polled re|try routine could be called or ours could.   */
-  /* No problem; it doesn't really matter who gets called first since  */
-  /* the background replay command would be cancelled if it were       */
-  /* called after this and noticed a foreground operation in progress  */
-  /* or if we get called afterwards then our play command overrides    */
-  /* the replay command.                                               */
-
-  if (s->child != NULL)
+  int mode;
+  
+  /* Rather than modify play_process_speed to spit out MediaBase stuff directly, */
+  /* the full accuracy of play methods is kept, in case future MediaBase servers */
+  /* support features missing at the time of writing (e.g. SFWD play).           */
+  
+  switch (play_process_speed(scale))
   {
-    dprintf(("", "play_play: Having to wait for background command\n"));
-
-    /* We have to wait */
-
-    s->play_r0_record = r->r[0];
-
-    /* Copy away the strings in R2 and R3. We might be for some odd reason */
-    /* being called by the retry routine in which case the strings we are  */
-    /* copying are already held in s->play_r[n]_record - so take care to   */
-    /* copy them, free any original data, then assign the new string.      */
-
-    if (r->r[2] != 0)
-    {
-      char * str = Strdup((char *) r->r[2]);
-
-      if (str == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
-
-      free(s->play_r2_record);
-      s->play_r2_record = str;
-    }
-    else s->play_r2_record = 0;
-
-    if (r->r[3] != 0)
-    {
-      char * str = Strdup((char *) r->r[3]);
-
-      if (str == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
-
-      free(s->play_r3_record);
-      s->play_r3_record = str;
-    }
-    else s->play_r3_record = 0;
-
-    /* Make sure the status details are cleared for clients polling the */
-    /* status SWI                                                       */
-
-    s->state          = protostate_INITIAL;
-    s->reported_state = 0;
-
-    s->play_wait = 1;
-    timeout(play_retry_delayed_on_callout, s, Session_State_Retry);
-
-    dprintf(("", "play_play: Polled timer is set, exiting play_play\n"));
-
-    return NULL;
+    case MPEGCtrl_MCRS_Trick_FFWD:   mode = Play_MB_Trick_FFWD;   break;
+    case MPEGCtrl_MCRS_Trick_SFWD:   mode = Play_MB_Trick_Play;   break; /* No SFWD on MediaBase */
+    case MPEGCtrl_MCRS_Trick_Freeze: mode = Play_MB_Trick_Freeze; break;
+    case MPEGCtrl_MCRS_Trick_FRWD:   mode = Play_MB_Trick_FRWD;   break;
+    case MPEGCtrl_MCRS_Trick_SRWD:   mode = Play_MB_Trick_FRWD;   break; /* No SRWD on MediaBase */
+  
+    default:
+    case MPEGCtrl_MCRS_Trick_Play:   mode = Play_MB_Trick_Play;   break;
   }
+  
+  return mode;
+}
 
-  /* For forwards slow-mo, we can use Speed instead of Scale for slow motion */
-  /* forwards play - if the server ever supports it!                         */
+/**************************************************************/
+/* play_retry_delayed_on_callout()                            */
+/*                                                            */
+/* Retry a delayed foreground command that was waiting for a  */
+/* background command to complete.                            */
+/*                                                            */
+/* Parameters: The handle should point to the session struct  */
+/*             we're interested in.                           */
+/**************************************************************/
 
-  scale = (char *) r->r[3];
+void play_retry_delayed_on_callout(void * handle)
+{
+  session * s = (session *) handle;
 
-  if (scale && !strcmp(scale, "0")) play      = false;
-  else                              slowmofwd = play_slowmofwd(scale);
+  dprintf(("", "play_retry_delayed_on_callout: Called, dying flag is %d\n", s->dying));
 
-  /* Is playback currently paused? */
+  if (s->dying != 0) return;
 
-  if (s->play_record != NULL && !strcmp(s->play_record, "0")) paused = true;
-  else                                                        paused = false;
-
-  /* Ensure everything is reset for a new command, taking copies of  */
-  /* the scale and range strings first since they may be held within */
-  /* the structure we're about to reset if the command was delayed   */
-  /* owing to background activities.                                 */
-
-  range_rec = Strdup(r->r[2] == 0 ? "" : (char *) r->r[2]);
-  scale_rec = Strdup(scale == NULL ? "" : scale);
-
-  session_reset_session(s);
-
-  /* Copy R2 and R3 away */
-
-  free(s->range_record);
-  s->range_record = range_rec;
-
-  free(s->play_record);
-  s->play_record = scale_rec;
-
-  if (s->play_record == NULL || s->range_record == NULL)
+  if (s->play_wait != 0)
   {
-    dprintf(("", "play_play: Play or range records NULL -> out of memory\n"));
-    return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
-  }
+    /* Is there an in-transit foreground or background command already? */
 
-  /* Is there a mapping between the request and the server? Not if this */
-  /* is a slow motion play request; in that case return a 501 response. */
-
-  if (scale_rec != NULL)
-  {
-    int type = play_process_speed(scale_rec);
-
-    if (type == MPEGCtrl_MCRS_Trick_SFWD || type == MPEGCtrl_MCRS_Trick_SRWD)
+    if (s->state != protostate_INITIAL)
     {
-      rtsp_header * r = response_501(s->headers);
+      /* Foreground command in progress! Should never happen... Abandon */
+      /* this wait state.                                               */
 
-      if (r == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+      dprintf(("", "play_retry_delayed_on_callout: Foreground command already running!\n"));
 
-      headers_free_headers(&s->headers);
-
-      s->next_command_cb = NULL;
-      s->headers         = r;
-      s->state           = protostate_COMPLETED;
-      s->response_code   = (unsigned int) strtoul(Headers_Supported_Prefix_NI, NULL, 10);
-      s->reported_state  = VC_Status_ConnectionEstablished |
-                           VC_Status_NewStatus;
-
-      s->data_len = headers_construct_specific_header_buffer(s->headers,
-                                                             &s->data,
-                                                             0,
-                                                             1);
-
-      if (s->data_len != 0) s->reported_state |= VC_Status_MoreInformationAvailable;
-
-      if (s->callout_set == 0)
-      {
-        s->callout_set = 1;
-        timeout(status_proceed_on_callout, s, Session_State_Timer);
-      }
-
-      return NULL;
+      s->play_wait = 0;
     }
-  }
-
-  /* Work out the command order required (SET_PLAYMODE   */
-  /* then PLAY, maybe with a PAUSE first, or just PAUSE) */
-
-  if (!play)
-  {
-    dprintf(("", "play_play: Building PAUSE to pause\n"));
-
-    s->next_command_cb = NULL;
-    s->playmode        = Play_MB_Trick_Freeze;
-
-    RetError(play_build_pause(s));
-  }
-  else
-  {
-    if (s->started != 0 && !paused)
+    else if (s->child != NULL)
     {
-      dprintf(("", "play_play: Building PAUSE to change trick mode\n"));
+      /* Background command - wait for it to finish */
 
-      s->next_command_cb = play_send_set_playmode;
+      dprintf(("", "play_retry_delayed_on_callout: Background command still running...\n"));
 
-      RetError(play_build_pause(s));
-    }
-    else if (paused || s->multicast != 0)
-    {
-      #ifdef TRACE
-        if (paused) dprintf(("", "play_play: Building PLAY to unpause\n"));
-        else        dprintf(("", "play_play: Building PLAY for simulated multicast start\n"));
-      #endif
-
-      s->next_command_cb = NULL;
-      s->playmode        = Play_MB_Trick_Play;
-
-      RetError(play_build_play(s));
+      timeout(play_retry_delayed_on_callout, s, Session_State_Retry);
     }
     else
     {
-      dprintf(("", "play_play: Building SET_PLAYMODE\n"));
+      _kernel_oserror * e;
+      
+      /* Clear to send the command */
 
-      s->next_command_cb = play_send_play;
+      s->play_wait = 0;
 
-      RetError(play_build_set_playmode(s));
+      dprintf(("", "play_retry_delayed_on_callout: Clear to try again, calling play_send().\n"));
+
+      e = play_send(s);
+
+      if (e != NULL)
+      {
+        dprintf(("", "play_retry_delayed_on_callout: Error &%08X, '%s'\n", e->errnum, e->errmess));
+
+        status_record_error(s, e);
+      }
     }
   }
-
-  /* Send the command */
-
-  dprintf(("", "play_play: Successful; exitting through play_send\n"));
-
-  return play_send(s);
 }
+
+#ifdef CLIENT_LOOPING
+
+/* !!! IMPORTANT NOTE ABOUT CLIENT LOOPING !!! */
+
+/* Client looping is compiled out at the moment because it is not working   */
+/* correctly. If you want to reinstate it, you will have to address the     */
+/* points listed below. The decision to leave this functionality out of     */
+/* this version was based on the fact that fully supporting it adds a       */
+/* relatively large amount of complication for relatively little gain.      */
+/* After all, a client can easily do looping explicitly, without the        */
+/* protocol module having to do lots of extra work on its behalf.           */
+/*                                                                          */
+/* The following things need to be done to support client looping:          */
+/*                                                                          */
+/* 1) status_proceed_completed() needs to call play_mode_changed() when the */
+/* background PLAY completes. It won't currently since the s->destruct flag */
+/* is set. This is necessary to make sure the stream is reset and state     */
+/* updated. play_mode_changed() will update the state and set the timecode  */
+/* reading callout on this session. This needs to be done on the parent     */
+/* session instead.                                                         */
+/*                                                                          */
+/* 2) A record needs to be kept of the last explicit range. Currently       */
+/* this will replay using the range from the last play call, but this       */
+/* may have been 'now-' when switching from a trick play mode to            */
+/* normal play. The module will instead need to keep a track of each        */
+/* explicit start and end point specified and loop using these times.       */
 
 /**************************************************************/
 /* play_replay_on_callout()                                   */
@@ -402,10 +624,7 @@ void play_replay_on_callout(void * handle)
   {
     /* Is there an in-transit foreground or background command already? */
 
-    if (
-         s->state != protostate_COMPLETED &&
-         s->state != protostate_INITIAL
-       )
+    if (s->state != protostate_INITIAL)
     {
       /* Foreground command - abandon this background operation */
 
@@ -458,8 +677,8 @@ _kernel_oserror * play_replay(session * s)
 
   if (s->gp_set != 0)
   {
-    untimeout(getparam_proceed_on_callout, s);
     s->gp_set = 0;
+    untimeout(getparam_proceed_on_callout, s);
   }
 
   /* This should never happen if called via. play_replay_on_callout... */
@@ -496,7 +715,6 @@ _kernel_oserror * play_replay(session * s)
     {
       (void) urlutils_return_description(s->url->full, &new_s->url);
     }
-
   }
 
   if (
@@ -516,12 +734,17 @@ _kernel_oserror * play_replay(session * s)
     return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
   }
 
+  new_s->server_majorver = s->server_majorver;
   new_s->server_timeout  = s->server_timeout;
+  new_s->mpegid          = s->mpegid;
   new_s->playmode        = s->playmode;
   new_s->multicast       = s->multicast;
 
+  new_s->approx_fps      = s->approx_fps;
+  new_s->asset_type      = s->asset_type;
   new_s->duration        = s->duration;
-  new_s->cached_npt      = s->cached_npt;
+  new_s->start_time      = s->start_time;
+  new_s->end_time        = s->end_time;
 
   {
     modulefp_buf buf;
@@ -531,9 +754,17 @@ _kernel_oserror * play_replay(session * s)
     modulefp_disable(&buf);
   }
 
-  new_s->next_command_cb = play_send_set_playmode;
+  if ((new_s->server_majorver >= 6) && (new_s->asset_type != assettype_MPEG1))
+  {
+    new_s->next_command_cb = NULL;
+    e = play_build_play(new_s);
+  }
+  else
+  {
+    new_s->next_command_cb = play_send_set_playmode;
+    e = play_build_pause(new_s);
+  }
 
-  e = play_build_pause(new_s);
 
   if (e != NULL)
   {
@@ -587,60 +818,7 @@ _kernel_oserror * play_replay(session * s)
   return NULL;
 }
 
-/**************************************************************/
-/* play_preamble()                                            */
-/*                                                            */
-/* For a given session, check the pointer is not NULL, that   */
-/* no command is currently in progress and that there is a    */
-/* server session.                                            */
-/*                                                            */
-/* This is normally the first thing done in a function that   */
-/* needs to issue a play-related command to a server.         */
-/*                                                            */
-/* Parameters: Pointer to the session struct (may be NULL).   */
-/*                                                            */
-/* Returns:    An error if there is some problem with using   */
-/*             the session for a new PLAY command, else NULL. */
-/**************************************************************/
-
-static _kernel_oserror * play_preamble(session * s)
-{
-  dprintf(("", "play_preamble: Called for &%08X\n", (int) s));
-
-  if (s == NULL)
-  {
-    dprintf(("", "play_preamble: ID not found\n"));
-
-    return make_error(rtspmb_ERROR_CLIENT_ID_NOT_FOUND, 0);
-  }
-
-  if (
-       s->state == protostate_DNS       ||
-       s->state == protostate_CONNECTED ||
-       s->state == protostate_SENDING   ||
-       s->state == protostate_RECEIVING ||
-       s->state == protostate_PUMPING
-     )
-  {
-    dprintf(("", "play_preamble: In progress\n"));
-
-    return make_error(rtspmb_ERROR_IN_PROGRESS, 0);
-  }
-
-  if (s->server_session == NULL)
-  {
-    dprintf(("", "play_preamble: No server session\n"));
-
-    return make_error(rtspmb_ERROR_NO_SERVER_SESSION, 0);
-  }
-
-  /* Be warned - don't do anything destructive to background */
-  /* commands here (e.g. don't call session_reset_session)   */
-
-  dprintf(("", "play_preamble: Successful\n"));
-
-  return NULL;
-}
+#endif
 
 /**************************************************************/
 /* play_send()                                                */
@@ -862,30 +1040,11 @@ static _kernel_oserror * play_build_set_playmode(session * s)
 
     if (playmode != NULL)
     {
-      int type = play_process_speed(s->play_record);
-      int mode;
-
-      /* Rather than modify play_process_speed to spit out MediaBase stuff directly, */
-      /* the full accuracy of play methods is kept, in case future MediaBase servers */
-      /* support features missing at the time of writing (e.g. SFWD play).           */
-
-      switch (type)
-      {
-        case MPEGCtrl_MCRS_Trick_FFWD:   mode = Play_MB_Trick_FFWD;   break;
-        case MPEGCtrl_MCRS_Trick_SFWD:   mode = Play_MB_Trick_Play;   break; /* No SFWD on MediaBase */
-        case MPEGCtrl_MCRS_Trick_Freeze: mode = Play_MB_Trick_Freeze; break;
-        case MPEGCtrl_MCRS_Trick_FRWD:   mode = Play_MB_Trick_FRWD;   break;
-        case MPEGCtrl_MCRS_Trick_SRWD:   mode = Play_MB_Trick_FRWD;   break; /* No SRWD on MediaBase */
-
-        default:
-        case MPEGCtrl_MCRS_Trick_Play:   mode = Play_MB_Trick_Play;   break;
-      }
+      s->next_playmode = play_determine_playmode(s->play_record);
 
       sprintf(playmode,
               Headers_HeaderValue_ContentLength,
-              mode);
-
-      s->playmode = mode;
+              s->next_playmode);
     }
   }
 
@@ -1056,31 +1215,52 @@ static _kernel_oserror * play_build_play(session * s)
 static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
 {
   char * scale;
-  bool   play      = true;
-  bool   fail      = false;
-  bool   slowmofwd = false;
+  bool   play;
+  bool   fail   = false;
 
-  scale = s->play_record == NULL ? "" : s->play_record;
+  /* Determine the new MediaBase playmode */
 
-  /* If forced to go into pause mode, set things up as required; */
-  /* otherwise determine the state from the play scale value.    */
+  if (force_pause)
+    s->next_playmode = Play_MB_Trick_Freeze;
+  else
+    s->next_playmode = play_determine_playmode(s->play_record);
 
-  if (force_pause == false)
+  /* Decide what scale setting to ask MediaBase for */
+
+  if (s->server_majorver >= 6)
   {
-    if (scale && !strcmp(scale, "0")) play      = false;
-    else                              slowmofwd = play_slowmofwd(scale);
+    switch (s->next_playmode)
+    {
+      case Play_MB_Trick_Play:
+        scale = "1";
+        break;
+      case Play_MB_Trick_FFWD:
+      case Play_MB_Trick_FRWD:
+        scale = s->play_record;
+        break;
+      default:
+        scale = NULL;
+    }
   }
   else
   {
-    play  = false;
-    scale = "0";
+    scale = NULL;
   }
+
+  /* Convert range times of 'now' to current NPT */
+
+  if (s->from == Play_MB_Time_Now)
+    s->from = play_read_current_npt(s);
+
+  if (s->to == Play_MB_Time_Now)
+    s->to = play_read_current_npt(s);
+
+
+  play = (s->next_playmode != Play_MB_Trick_Freeze);
 
   /* Start adding headers */
 
-  if (s->play_record == NULL) fail = true;
-
-  else if (
+  if      (
             headers_add_header(&s->headers,
                                play ? Headers_CommandName_Play : Headers_CommandName_Pause,
                                s->url->full)
@@ -1102,9 +1282,24 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
           )
           fail = true;
 
-  /* No sync marks please */
+  /* Scale header */
 
   else if (
+            scale != NULL &&
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Scale,
+                               scale)
+            == NULL
+          )
+          fail = true;
+
+  /* No sync marks please */
+  /* Omitting the 'SyncMark' header should prevent sync marks with all versions     */
+  /* of MediaBase (though sometimes it didn't with 4.01 and some revisions of 5,    */
+  /* but that is a server bug with patches available to fix it.)                    */
+  /* With MediaBase 6, you must leave out the 'SyncMark' header in order to prevent */
+  /* sync marks between assets in a sequence.                                       */
+/*  else if (
             play &&
             headers_add_header(&s->headers,
                                Headers_HeaderName_SyncMark,
@@ -1113,11 +1308,17 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
           )
           fail = true;
 
+*/
+
   /* Range */
 
-  else if (play && s->multicast == 0)
+  else if (
+            play &&
+            s->multicast == 0 &&
+            (s->from != Play_MB_Time_Unspecified || s->to != Play_MB_Time_Unspecified)
+            )
   {
-    char new_range[sizeof("npt = 0-0") + 48]; /* (+48 ensures we overestimate for up to 4 digits) */
+    char new_range[sizeof("npt=0-0") + 48]; /* (+48 ensures we overestimate for up to 4 digits) */
 
     play_reconstruct_range_header(s, new_range);
 
@@ -1141,83 +1342,21 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
      )
      fail = true;
 
+  if (!fail)
+  {
+    /* Note that a play change is pending. A PLAY without a from time */
+    /* does not cause a change - in fact it doesn't do anything, but  */
+    /* we still send it to the server anyway, so that the client sees */
+    /* the server response.                                           */
+
+    if (!play || s->from != Play_MB_Time_Unspecified)
+      s->change_pending = 1;
+  }
+
   /* Did anything fail? */
 
   if (fail) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
   else      return NULL;
-}
-
-/**************************************************************/
-/* play_retry_delayed_on_callout()                            */
-/*                                                            */
-/* Retry a delayed foreground command that was waiting for a  */
-/* background command to complete.                            */
-/*                                                            */
-/* Parameters: The handle should point to the session struct  */
-/*             we're interested in.                           */
-/**************************************************************/
-
-void play_retry_delayed_on_callout(void * handle)
-{
-  session * s = (session *) handle;
-
-  dprintf(("", "play_retry_delayed_on_callout: Called, dying flag is %d\n", s->dying));
-
-  if (s->dying != 0) return;
-
-  if (s->play_wait != 0)
-  {
-    /* Is there an in-transit foreground or background command already? */
-
-    if (
-         s->state != protostate_COMPLETED &&
-         s->state != protostate_INITIAL
-       )
-    {
-      /* Foreground command in progress! Should never happen... Abandon */
-      /* this wait state.                                               */
-
-      dprintf(("", "play_retry_delayed_on_callout: Foreground command already running!\n"));
-
-      s->play_wait = 0;
-
-      return;
-    }
-    else if (s->child != NULL)
-    {
-      /* Background command - wait for it to finish */
-
-      dprintf(("", "play_retry_delayed_on_callout: Background command still running...\n"));
-
-      timeout(play_retry_delayed_on_callout, s, Session_State_Retry);
-      return;
-    }
-    else
-    {
-      _kernel_swi_regs   r;
-      _kernel_oserror  * e;
-
-      /* Clear to send the command */
-
-      s->play_wait = 0;
-
-      r.r[0] = s->play_r0_record;
-      r.r[1] = (int) s->id;
-      r.r[2] = (int) s->play_r2_record;
-      r.r[3] = (int) s->play_r3_record;
-
-      dprintf(("", "play_retry_delayed_on_callout: Clear to try again, calling play_play.\n"));
-
-      e = play_play(&r);
-
-      if (e != NULL)
-      {
-        dprintf(("", "play_retry_delayed_on_callout: Error &%08X, '%s'\n", e->errnum, e->errmess));
-
-        status_record_error(s, e);
-      }
-    }
-  }
 }
 
 /**************************************************************/
@@ -1232,13 +1371,12 @@ void play_retry_delayed_on_callout(void * handle)
 /*             the play mode recorded in the session).        */
 /**************************************************************/
 
-_kernel_oserror * play_alter_playback_characteristics(session * s, int playmode)
+static _kernel_oserror * play_alter_playback_characteristics(session * s, int playmode)
 {
-  _kernel_oserror * e;
-  int               opts[4];
-  unsigned int      mpegid;
+  _kernel_oserror * e = NULL;
   unsigned int      flags;
 
+  /* MediaBase 4.0.1 and 5:                                                      */
   /* The MediaBase server is simple. It streams, say, an MPEG 2 transport stream */
   /* normally, but in trick mode just spews elementary video data out. Eek! Our  */
   /* system can't really handle that. The only thing to do is to leave the       */
@@ -1246,34 +1384,27 @@ _kernel_oserror * play_alter_playback_characteristics(session * s, int playmode)
   /* buffers, and then do an immediate reset on the PLAY command's OK response,  */
   /* to try and get stream-start style auto detection running to redetermine     */
   /* the stream type.                                                            */
+  /*                                                                             */
+  /* MediaBase 6:                                                                */
+  /* The server no longer sends out elementary streams for trick mode, it sends  */
+  /* out a transport stream instead. Unfortunately it still doesn't give us any  */
+  /* easy way of detecting the transition in the stream, so we still have to do  */
+  /* a reset on the OK response as before.                                       */
 
-  opts[0] = vc_tags_control_handle;
-  opts[1] = 1;
-  opts[2] = 0;
-  opts[3] = vc_tags__end;
+  dprintf(("", "play_alter_playback_characteristics called with playmode %d\n", playmode));
 
-  e = _swix(VideoControl_ProtocolOptions,
-            _INR(0,2),
-
-            0,
-            s->vcid,
-            opts);
-
-  if (e != NULL) mpegid = 0;
-  else           mpegid = (unsigned int) opts[2];
-
-  if (mpegid != 0)
+  if (s->mpegid != 0)
   {
     if (playmode == Play_MB_Trick_Freeze)
     {
       /* Immediate set speed to 0 */
 
-      _swix(MPEGControl_SetSpeed,
-            _INR(0,2),
-
-            0,
-            mpegid,
-            0);
+      e = _swix(MPEGControl_SetSpeed,
+                _INR(0,2),
+    
+                0,
+                s->mpegid,
+                0);
     }
     else
     {
@@ -1281,12 +1412,12 @@ _kernel_oserror * play_alter_playback_characteristics(session * s, int playmode)
       {
         /* Immediate set speed to 1 */
 
-        _swix(MPEGControl_SetSpeed,
-              _INR(0,2),
-
-              0,
-              mpegid,
-              1);
+        e = _swix(MPEGControl_SetSpeed,
+                  _INR(0,2),
+    
+                  0,
+                  s->mpegid,
+                  1);
 
         /* Normal play - flag video and audio */
 
@@ -1303,16 +1434,298 @@ _kernel_oserror * play_alter_playback_characteristics(session * s, int playmode)
 
       /* Immediate reset */
 
-      _swix(MPEGControl_ResetStream,
-            _INR(0,2),
-
-            flags,
-            mpegid,
-            MPEGCtrl_MCRS_Trick_Play);
+      e = _swix(MPEGControl_ResetStream,
+                _INR(0,2),
+    
+                flags,
+                s->mpegid,
+                MPEGCtrl_MCRS_Trick_Play);
     }
   }
 
+  return e;
+}
+
+/**************************************************************/
+/* play_mode_changed()                                        */
+/*                                                            */
+/* Note that a play mode change has occurred.                 */
+/*                                                            */
+/* Parameters: Pointer to the session structure for the       */
+/*             playback stream in question;                   */
+/*                                                            */
+/*             Play mode to consider (this allows override of */
+/*             the play mode recorded in the session).        */
+/**************************************************************/
+
+_kernel_oserror * play_mode_changed(session * s, int playmode)
+{
+  dprintf(("", "play_mode_changed called with playmode %d\n", playmode));
+
+  /* If video is playing, tell the MPEG system about the change.      */
+  /* If video is not yet playing, but we are starting in a trick mode */
+  /* we also need to tell the MPEG system, since it does not expect a */
+  /* trick play stream normally.                                      */
+
+  if (
+      s->started != 0 ||
+      playmode == Play_MB_Trick_FFWD ||
+      playmode == Play_MB_Trick_FRWD
+     )
+    play_alter_playback_characteristics(s, playmode);
+
+  if (playmode == Play_MB_Trick_Freeze)
+  {
+    /* When entering pause mode, stop reading the time code regularly and   */
+    /* update the cached npt from the current npt.                          */
+
+    if (s->read_tc_set != 0)
+    {
+      s->read_tc_set = 0;
+      untimeout(play_read_timecode_on_callout, s);
+    }
+
+    s->cached_npt = play_read_current_npt(s);
+  }
+  else
+  {
+    rtsp_header * h;
+
+    /* Remember what the new scale setting is. The server should have told    */
+    /* us in its response. If it didn't, use fixed values depending on the    */
+    /* play mode. Note that we only cope with integer scales currently.       */
+    /* At the time of writing, MediaBase only supports scales of -6, 1 and 6. */
+
+    h = headers_find_header(s->headers,
+                            Headers_HeaderName_Scale);
+  
+    if (h != NULL) s->scale = atoi(h->value);
+    else           s->scale = 0;
+  
+    dprintf(("", "Scale read as %d\n", s->scale));
+  
+    if (s->scale == 0)
+    {
+      if (s->server_majorver >= 6 && s->asset_type != assettype_MPEG1)
+      {
+        switch(playmode)
+        {
+          case Play_MB_Trick_Play:  s->scale =  1; break;
+          case Play_MB_Trick_FFWD:  s->scale =  6; break;
+          case Play_MB_Trick_FRWD:  s->scale = -6; break;
+        }
+      }
+      else
+      {
+        s->scale = 1;
+      }
+    }
+
+    /* Change the cached NPT to the NPT the server is now changing to.     */
+    /* If the user does another state change before video actually starts, */
+    /* this will be used as the 'now' time.                                */
+
+    s->cached_npt = s->from;
+    s->npt_cache_time = utils_read_time();
+    s->time_found = 0;
+
+    if (s->read_tc_set == 0)
+    {
+      s->read_tc_set = 1;
+      timeout(play_read_timecode_on_callout, s, Play_Initial_TimeCode_Timer);
+    }
+  }
+
+  s->playmode = playmode;
+
+  dprintf(("", "Scale is now %d\n", s->scale));
+
   return NULL;
+}
+
+
+/**************************************************************/
+/* play_read_npt_from_timecode()                              */
+/*                                                            */
+/* Try to update the cached_npt value for the session by      */
+/* reading the current time code from the video stream.       */
+/*                                                            */
+/* Parameters: Pointer to a relevant session structure.       */
+/*                                                            */
+/* Returns:    Whether or not the time code was read.         */
+/**************************************************************/
+
+static bool play_read_npt_from_timecode(session * s)
+{
+  if (s->mpegid != 0)
+  {
+    _kernel_oserror * e;
+    unsigned int      time_code, temporal_reference;
+  
+    e = _swix(MPEGControl_ReadParameters,
+              _INR(0,1) | _OUTR(1,2),
+  
+              MPEGControl_MCRP_TimeCode,
+              s->mpegid,
+  
+              &time_code,
+              &temporal_reference);
+  
+    if (e == NULL)
+    {
+      if (time_code != 0xffffffff) /* (indicates unknown time) */
+      {
+        int npt, scaled_npt;
+
+        /* Remember the time now */
+        s->npt_cache_time = utils_read_time();
+
+        /* Time code is in hours, minute, seconds and frames - convert to centiseconds */
+
+        /* Get npt in centiseconds */
+        npt =            100 *((time_code & 0x000FC0) >> 6)  +
+                    60 * 100 *((time_code & 0x03F000) >> 12) +
+               60 * 60 * 100 *((time_code & 0x7C0000) >> 18);
+
+        /* Add frame number time */
+        npt += (100 * ((time_code & 0x00003F) + temporal_reference)) / s->approx_fps;
+
+        /* Adjust for scale and start time */
+        if (s->scale > 1)
+        {
+          scaled_npt = npt * s->scale;
+          npt = scaled_npt - s->start_time;
+        }
+        else if (s->scale < 0)
+        {
+          scaled_npt = npt * s->scale;
+          npt = s->end_time + scaled_npt - s->start_time;
+        }
+        else
+        {
+          scaled_npt = npt;
+          npt = npt - s->start_time;
+        }
+
+        /* If the first NPT calculated from a time code is significantly    */
+        /* different from the expected NPT (which was put in s->cached_npt  */
+        /* when the PLAY request succeeded), assume the start or end time   */
+        /* is wrong and adjust accordingly. Since the server does not       */
+        /* tell us what the end time for a 'clip' is (here 'clip' means a   */
+        /* MediaBase clip, as opposed to a normal asset), this code will    */
+        /* always be executed when rewinding a 'clip' for the first time.   */
+        /* Note that we avoid doing this for trick play modes on MediaBase  */
+        /* 5 or earlier, because our seeking is too inaccurate for this to  */
+        /* work. Also, for MediaBase 5 the end time is not needed (s->scale */
+        /* is always 1).                                                    */
+
+        #ifdef TRACE
+        if (s->time_found == 0)
+          dprintf(("Time_0","*** First NPT from time code=%d, expected=%d, difference=%d\n", npt, s->cached_npt, abs(npt - s->cached_npt)));
+        #endif
+        if (
+            s->time_found == 0 &&
+            abs(npt - s->cached_npt) > Play_TimeCode_Margin &&
+            (s->playmode == Play_MB_Trick_Play || s->server_majorver >= 6)
+           )
+        {
+          if (s->scale < 0)
+          {
+            s->end_time = s->start_time + s->cached_npt - scaled_npt;
+            dprintf(("Time_0", "Calculated NPT %d was not close to expected NPT %d. end_time recalculated as %d\n", npt, s->cached_npt, s->end_time));
+          }
+          else
+          {
+            s->start_time = scaled_npt - s->cached_npt;
+            dprintf(("Time_0", "Calculated NPT %d was not close to expected NPT %d. start_time recalculated as %d\n", npt, s->cached_npt, s->start_time));
+          }
+        }
+        else
+        {
+          if (npt < 0)
+            s->cached_npt = 0;
+          else if (npt > s->duration)
+            s->cached_npt = s->duration;
+          else
+            s->cached_npt = npt;
+        }
+
+        dprintf(("Time_1","play_read_npt_from_timecode: time_code=%08X, temporal_reference=%03X, NPT=%d.%d\n", time_code, temporal_reference, s->cached_npt / 100, s->cached_npt % 100));
+
+        s->time_found = 1;
+
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**************************************************************/
+/* play_read_timecode_on_callout()                            */
+/*                                                            */
+/* A CallOut handler (see CallOut.h) which reads the current  */
+/* time code                                                  */
+/*                                                            */
+/* Parameters: The handle should point to the session struct  */
+/*             we're interested in.                           */
+/**************************************************************/
+
+void play_read_timecode_on_callout(void * handle)
+{
+  session * s = (session *) handle;
+
+  dprintf(("Callout_0", "play_read_timecode_on_callout: Called for %p\n", s));
+
+  if (s->dying != 0 || s->read_tc_set == 0) return;
+
+  play_read_npt_from_timecode(s);
+
+  timeout(play_read_timecode_on_callout, s,
+    (s->time_found == 0) ? Play_Initial_TimeCode_Timer : Play_Read_TimeCode_Timer);
+}
+
+/**************************************************************/
+/* play_read_current_npt()                                    */
+/*                                                            */
+/* Return the current time position in the video in           */
+/* centiseconds.                                              */
+/*                                                            */
+/* Parameters: Pointer to a relevant session structure.       */
+/*                                                            */
+/* Returns:    Time in centiseconds. Time will be 0 if an     */
+/*             error occurred.                                */
+/**************************************************************/
+
+int play_read_current_npt(session * s)
+{
+  int npt;
+
+  /* First try to read the video stream time code */
+
+  if (play_read_npt_from_timecode(s))
+    return s->cached_npt;
+
+  /* If this failed, use the cached NPT value */
+
+  /* If we are paused, at end of stream, or a time code has not been read */
+  /* yet, just return the cached value.                                   */
+
+  dprintf(("", "play_read_current_npt: Using cached time\n"));
+
+  if (s->playmode == Play_MB_Trick_Freeze || s->playmode == Play_MB_Trick_EOS || s->time_found == 0)
+    return s->cached_npt;
+
+  /* Return the cached value, plus the time elapsed since it was read. */
+
+  npt = s->cached_npt + (utils_read_time() - s->npt_cache_time) * s->scale;
+  if (npt < 0)
+    npt = 0;
+  else if (npt > s->duration)
+    npt = s->duration;
+
+  return npt;
 }
 
 /**************************************************************/
@@ -1330,12 +1743,14 @@ _kernel_oserror * play_alter_playback_characteristics(session * s, int playmode)
 /*             in which case true is returned);               */
 /*                                                            */
 /*             Pointer to an int to take starting position,   */
-/*             will be -1 if none is specified, may be NULL   */
-/*             if not interested;                             */
+/*             will be -1 if none is specified, and -2 if     */
+/*             'now' was specified. May be NULL if not        */
+/*             interested;                                    */
 /*                                                            */
 /*             Pointer to an int to take ending position,     */
-/*             will be -1 if none is specified, may be NULL   */
-/*             if not interested.                             */
+/*             will be -1 if none is specified, and -2 if     */
+/*             'now' was specified. May be NULL if not        */
+/*             interested;                                    */
 /*                                                            */
 /* Returns:    true if the item is handleable, else false.    */
 /*             The integers, if given, may be updated even    */
@@ -1344,8 +1759,6 @@ _kernel_oserror * play_alter_playback_characteristics(session * s, int playmode)
 
 static bool play_filter_range(session * s, const char * range, int * start_pos, int * end_pos)
 {
-  bool now      = false;
-  bool start    = false;
   int  d_s, d_e;
 
   /* Ensure we always have start and end positions to write to */
@@ -1355,15 +1768,11 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
 
   /* We expect "npt=..." or just a time (no '"' in the string). We support */
   /* keywords 'now', 'end', 'beginning' and 'current' - well, subject to   */
-  /* whatever is defined in Headers.h anyway. If play mode is backwards,   */
-  /* and the start time is greater than the end time, the values are NOT   */
-  /* reversed if required - this is left up to the caller (MediaBase       */
-  /* at the time of writing expects the value before the '-' to be greater */
-  /* than the value after the '-' regardless of play direction, unlike     */
-  /* OVS, for example).                                                    */
+  /* whatever is defined in Headers.h anyway. Note that we don't handle    */
+  /* npt=hh:mm:ss.nn format times, although MediaBase itself will.         */
 
-  *start_pos = -1;
-  *end_pos   = -1;
+  *start_pos = Play_MB_Time_Unspecified;
+  *end_pos   = Play_MB_Time_Unspecified;
 
   if (range == NULL) return true;
 
@@ -1396,17 +1805,17 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
 
   if (!Strncmp_ci(range, Headers_HeaderValue_Range_Now1, sizeof(Headers_HeaderValue_Range_Now1) - 1))
   {
-    now = true;
+    *start_pos = Play_MB_Time_Now;
     range += sizeof(Headers_HeaderValue_Range_Now1) - 1;
   }
   else if (!Strncmp_ci(range, Headers_HeaderValue_Range_Now2, sizeof(Headers_HeaderValue_Range_Now2) - 1))
   {
-    now = true;
+    *start_pos = Play_MB_Time_Now;
     range += sizeof(Headers_HeaderValue_Range_Now2) - 1;
   }
   else if (!Strncmp_ci(range, Headers_HeaderValue_Range_Start1, sizeof(Headers_HeaderValue_Range_Start1) - 1))
   {
-    start = true;
+    *start_pos = 0;
     range += sizeof(Headers_HeaderValue_Range_Start1) - 1;
   }
   else if (!Strncmp_ci(range, Headers_HeaderValue_Range_End1, sizeof(Headers_HeaderValue_Range_End1) - 1))
@@ -1415,59 +1824,22 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
     range += sizeof(Headers_HeaderValue_Range_End1) - 1;
   }
 
-  /* If there's a number here, it's allowed to be a percentage or zero, and */
+  /* If there's a number here, it's allowed to be a number of seconds, and  */
   /* nothing else.                                                          */
 
   else if (isdigit(*range))
   {
-    unsigned int num;
+    modulefp_buf buf;
 
-    num = atoi(range);
-    while (isdigit(*(++range)));
-
-    *start_pos = (int) num * 100;
+    modulefp_enable(&buf);
+    *start_pos = play_strtofi(range, &range, 100);
+    modulefp_disable(&buf);
   }
 
   /* If there's something before the '-' and we get as far as this check, */
   /* we can't handle it                                                   */
 
   else if (*range != '-') return false;
-
-  /* Otherwise work out time based on 'now', 'beginning' etc. */
-
-  if (start || now)
-  {
-    if      (start)           *start_pos = 0;
-    else if (s->started == 0) *start_pos = -1;
-    else
-    {
-      _kernel_oserror * e;
-      int               opts[4];
-
-      opts[0] = vc_tags_npt;
-      opts[1] = 1;
-      opts[2] = 0;
-      opts[3] = vc_tags__end;
-
-      e = _swix(VideoControl_ProtocolOptions,
-                _INR(0,2),
-
-                0,
-                s->vcid,
-                opts);
-
-      /* If there's an error, just use zero. Otherwise, if the value from VC was zero */
-      /* we could be on a transition point to use the cached value, else use the      */
-      /* value given from Video Control.                                              */
-
-      if (e == NULL)
-      {
-        if (opts[2] != 0) *start_pos = (int) opts[2] * 100;
-        else              *start_pos = (int) s->cached_npt;
-      }
-      else *start_pos = 0;
-    }
-  }
 
   /* Skip white space, ensure we have "-", skip it and white space */
 
@@ -1480,21 +1852,19 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
 
   /* Do we recognise any ending point specifier? */
 
-  start = now = false;
-
   if (!Strncmp_ci(range, Headers_HeaderValue_Range_Now1, sizeof(Headers_HeaderValue_Range_Now1) - 1))
   {
-    now = true;
+    *end_pos = Play_MB_Time_Now;
     range += sizeof(Headers_HeaderValue_Range_Now1) - 1;
   }
   else if (!Strncmp_ci(range, Headers_HeaderValue_Range_Now2, sizeof(Headers_HeaderValue_Range_Now2) - 1))
   {
-    now = true;
+    *end_pos = Play_MB_Time_Now;
     range += sizeof(Headers_HeaderValue_Range_Now2) - 1;
   }
   else if (!Strncmp_ci(range, Headers_HeaderValue_Range_Start1, sizeof(Headers_HeaderValue_Range_Start1) - 1))
   {
-    start = true;
+    *end_pos = 0;
     range += sizeof(Headers_HeaderValue_Range_Start1) - 1;
   }
   else if (!Strncmp_ci(range, Headers_HeaderValue_Range_End1, sizeof(Headers_HeaderValue_Range_End1) - 1))
@@ -1509,52 +1879,17 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
 
   else if (isdigit(*range))
   {
-    unsigned int num;
+    modulefp_buf buf;
 
-    num = atoi(range);
-    while (isdigit(*(++range)));
-
-    *end_pos = (int) num;
+    modulefp_enable(&buf);
+    *end_pos = play_strtofi(range, &range, 100);
+    modulefp_disable(&buf);
   }
 
   /* If there's anything after the specifier, there's something wrong... */
 
   while (*range != '\0' && *range <= ' ') range++;
   if (*range != '\0') return false;
-
-  /* Otherwise work out time, as before */
-
-  if (start || now)
-  {
-    if (start || s->started == 0)
-    {
-      *end_pos = -1;
-    }
-    else
-    {
-      _kernel_oserror * e;
-      int               opts[4];
-
-      opts[0] = vc_tags_npt;
-      opts[1] = 1;
-      opts[2] = 0;
-      opts[3] = vc_tags__end;
-
-      e = _swix(VideoControl_ProtocolOptions,
-                _INR(0,2),
-
-                0,
-                s->vcid,
-                opts);
-
-      if (e == NULL)
-      {
-        if (opts[2] != 0) *end_pos = (int) opts[2] * 100;
-        else              *end_pos = (int) s->cached_npt * 100;
-      }
-      else *end_pos = 0;
-    }
-  }
 
   return true;
 }
@@ -1576,99 +1911,39 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
 
 static void play_reconstruct_range_header(session * s, char * temp)
 {
-  _kernel_oserror * e;
-  int               opts [4];
-  unsigned int      csecs;
-  int               from, to;
-  bool              accept;
+  int from = s->from;
 
-  accept = play_filter_range(s, s->range_record, &from, &to);
+  /* Do we need to do strange adjustments to NPT for MPEG2 on old versions */
+  /* of MediaBase?                                                         */
 
-  if (accept == false || from < -1 || to < -1)
-  {
-    from = to = -1;
-
-    /* Read NPT */
-
-    opts[0] = vc_tags_npt;
-    opts[1] = 1;
-    opts[2] = 0;
-    opts[3] = vc_tags__end;
-
-    e = _swix(VideoControl_ProtocolOptions,
-              _INR(0,2),
-
-              0,
-              s->vcid,
-              opts);
-
-    if (e != NULL) csecs = 0;
-    else           csecs = (unsigned int) opts[2] * 100; /* seconds -> centiseconds */
-
-    /* If NPT is zero, could be at a transition point - use cached value */
-
-    if (csecs == 0) csecs         = s->cached_npt;
-    else            s->cached_npt = csecs;
-  }
-  else
-  {
-    if (from != -1) csecs = from;
-    else            csecs = 0;
-
-    s->cached_npt = csecs;
-
-    if (s->playmode == Play_MB_Trick_FRWD && to == 0)
-    {
-      /* MediaBase raises error 500 (doh) if you say "100-0" for reverse */
-      /* play, but happily accepts "100-"...!                            */
-
-      to = -1;
-    }
-    else if (to != -1)
-    {
-      /* MediaBase seemed to need from < to at all times even for reverse */
-      /* play, but then again it may just not support 'to' at all. Since  */
-      /* it just erroneously raises "500 Internal Server Error" for any   */
-      /* request it doesn't like, I've no idea what the real problem is.  */
-
-      if (csecs > to) Swap(csecs, to); /* See Utils.h */
-    }
-  }
-
-  /* Turn this into a trick mode seek time for MediaBase (ick) */
-
-  if (s->playmode != Play_MB_Trick_Play && s->playmode != Play_MB_Trick_Freeze)
+  if (
+      from != Play_MB_Time_Unspecified &&
+      s->server_majorver < 6 &&
+      s->asset_type == assettype_MPEG2 &&
+      (s->next_playmode == Play_MB_Trick_FFWD || s->next_playmode == Play_MB_Trick_FRWD)
+     )
   {
     modulefp_buf buf;
 
+    dprintf(("", "play_reconstruct_range_header: time before adjustment=%d, ", from));
     modulefp_enable(&buf);
-
-    csecs = play_get_trick_stream_npt(s, csecs);
-    if (to != -1) to = play_get_trick_stream_npt(s, to);
-
+    from = play_get_trick_stream_npt(s, from);
     modulefp_disable(&buf);
+    dprintf(("", "after adjustment=%d\n", from));
   }
 
-  if (from == -1 && to == -1)
+  if (s->to == Play_MB_Time_Unspecified)
   {
-    if (s->playmode == Play_MB_Trick_FRWD) sprintf(temp, "npt=2147483647-");
-    else                                   sprintf(temp, "npt=0-");
+    sprintf(temp, "npt=%d.%d-", from / 100, from % 100);
   }
-  else if (from == -1)
+  else if (from == Play_MB_Time_Unspecified)
   {
-    if (s->playmode == Play_MB_Trick_FRWD) sprintf(temp, "npt=-%d.%d", to / 100, to % 100);
-    else                                   sprintf(temp, "npt=0-");
-  }
-  else if (to == -1)
-  {
-    sprintf(temp, "npt = %d.%d-", csecs / 100, csecs % 100);
+    sprintf(temp, "npt=-%d.%d", s->to / 100, s->to % 100);
   }
   else
   {
-    sprintf(temp, "npt = %d.%d-%d.%d", csecs / 100, csecs % 100, to / 100, to % 100);
+    sprintf(temp, "npt=%d.%d-%d.%d", from / 100, from % 100, s->to / 100, s->to % 100);
   }
-
-  return;
 }
 
 /**************************************************************/
@@ -1701,13 +1976,41 @@ static unsigned int play_get_trick_stream_npt(session * s, unsigned int npt)
     /*                                                                   */
     /*    return (unsigned int) ((double) npt / (s->i_frame_ratio + 1)); */
     /*                                                                   */
-    /* This isn't any less hacky, but works a lot better:                */
+    /* Andrew's solution was to use:                                     */
+    /*                                                                   */
+    /*    return (unsigned int) (((double) npt * (s->i_frame_ratio + 1)) / s->frames_per_sec); */
+    /*                                                                   */
+    /* The following seems to work OK too, but I can't get Kasenna to    */
+    /* give me a proper answer.                                          */
 
-    double d = s->frames_per_sec / (s->i_frame_ratio + 1);
-
-    return (unsigned int) ((double) npt / d);
+    return (unsigned int) (((double) npt / s->i_frame_ratio) * 7.5);
   }
 }
+
+/**************************************************************/
+/* play_strtofi()                                             */
+/*                                                            */
+/* Convert a string to a fixed point integer value.           */
+/*                                                            */
+/* Must only be used after modulefp_enable has been called.   */
+/*                                                            */
+/* Parameters: Pointer to the string.                         */
+/*                                                            */
+/*             Pointer to variable to hold pointer to first   */
+/*             unrecognised character (may be NULL).          */
+/*                                                            */
+/*             Factor to scale by.                            */
+/*                                                            */
+/* Returns:    The converted value. This will be zero if the  */
+/*             conversion failed.                             */
+/**************************************************************/
+
+static int play_strtofi(const char *str, const char **endptr, int factor)
+{
+  return (int)(strtod(str, (char **)endptr) * factor);
+}
+
+#ifdef CLIENT_LOOPING
 
 /**************************************************************/
 /* play_copy_frame_info()                                     */
@@ -1729,6 +2032,8 @@ static void play_copy_frame_info(session * dst, session * src)
 
   return;
 }
+
+#endif
 
 #if 0
 
@@ -1781,5 +2086,42 @@ static void play_copy_frame_info(session * dst, session * src)
       return fps * npt;
     }
   }
+
+/**************************************************************/
+/* play_slowmofwd()                                           */
+/*                                                            */
+/* Work out whether reduced data rate slow motion forwards    */
+/* play should be used for a given scale/speed specifier.     */
+/*                                                            */
+/* Parameters: Scale/speed specifier.                         */
+/*                                                            */
+/* Returns:    true to use reduced data rate slow motion      */
+/*             forwards play (send a Speed header rather than */
+/*             Scale), else false.                            */
+/**************************************************************/
+
+static bool play_slowmofwd(const char * scale)
+{
+  if (
+       scale != NULL &&
+
+       _swix(OS_Module,
+             _INR(0,1),
+
+             18,
+             ReducedRateSlowmoSupportModule) /* Play.h */
+
+       == NULL
+
+       &&
+       (
+         !strncmp(scale, "0.", 2) ||
+         *scale == '.'
+       )
+     )
+     return true;
+
+  return false;
+}
 
 #endif

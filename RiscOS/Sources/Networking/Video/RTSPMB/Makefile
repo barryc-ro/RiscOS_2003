@@ -60,8 +60,10 @@ DIRS		= o._dirs_
 #				defined. Otherwise, it'll only claim it for
 #				as long as any sessions exist (which should
 #				be more efficient).
+#
+# CLIENT_LOOPING		The module supports client looping.
 
-EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV
+EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV -UCLIENT_LOOPING
 
 # -----------------------------------------------------------------------------
 # Libraries and objects lists

@@ -9,6 +9,7 @@
 /*          S.N.Brodie and P. Wain.                           */
 /*                                                            */
 /* History: 01-Dec-2000 (ADH): Imported from RTSP OVS.        */
+/*          08-Mar-2002 (JRB): Updated for MediaBase 6.       */
 /**************************************************************/
 
 #include <stdlib.h>
@@ -39,6 +40,10 @@
 
 #include "TearDown.h"
 
+/* Local functions */
+
+static _kernel_oserror * teardown_tear_down_session(session * s);
+
 /**************************************************************/
 /* teardown_tear_down()                                       */
 /*                                                            */
@@ -49,10 +54,20 @@
 _kernel_oserror * teardown_tear_down(_kernel_swi_regs * r)
 {
   session * s    = session_find_by_id(r->r[1]);
-  bool      fail = false;
-  int       port;
+  bool      wait;
 
-  dprintf(("", "teardown_tear_down: Called\n"));
+  dprintf(("Entry_0", "teardown_tear_down: Called\n"));
+  dprintf(("Entry_1", " r0=%x\n",r->r[0]));
+  dprintf(("Entry_1", " r1=%x\n",r->r[1]));
+  #ifdef TRACE
+  if (r->r[0] & VC_TearDown_R4ThroughR7AreValid)
+  {
+    dprintf(("Entry_1", " r4='%s'\n",r->r[4] ? (char *)r->r[4] : "NULL"));
+    dprintf(("Entry_1", " r5=%x\n",r->r[5]));
+    dprintf(("Entry_1", " r6=%x\n",r->r[6]));
+    dprintf(("Entry_1", " r7=%x\n",r->r[7]));
+  }
+  #endif
 
   if (s == NULL)
   {
@@ -61,51 +76,90 @@ _kernel_oserror * teardown_tear_down(_kernel_swi_regs * r)
     return make_error(rtspmb_ERROR_CLIENT_ID_NOT_FOUND, 0);
   }
 
+  /* Note that we don't use any of the entry parameters. If these need     */
+  /* to be used at some point, extra records will need to be added to      */
+  /* the session structure so that these parameters can be passed through  */
+  /* to teardown_tear_down_session() over any wait for command completion. */
+
+  /* Set the session IDs to zero. This will prevent us from telling   */
+  /* VideoControl anything when any foreground command completes, and */
+  /* will mean that this session number is no longer valid if any of  */
+  /* our entry points are called.                                     */
+
+  s->id = 0;
+  s->vcid = 0;
+
+  /* Set the server timeout value to zero to prevent GET_PARAMETER callouts */
+
+  s->server_timeout = 0;
+
+  /* Clear all outstanding callouts, except the main state machine one */
+
+  session_remove_callouts(s, false);
+
+  /* Do we need to wait for a background command? */
+
+  wait = (s->child != NULL);
+
+  /* Do we need to wait for a foreground command? */
+
   if (
-       (r->r[2] & VC_TearDown_IgnoreErrors) == 0 &&
-       (
-         s->state == protostate_DNS              ||
-         s->state == protostate_CONNECTED        ||
-         s->state == protostate_SENDING          ||
-         s->state == protostate_RECEIVING        ||
-         s->state == protostate_PUMPING
-       )
+      s->state == protostate_DNS              ||
+      s->state == protostate_CONNECTED        ||
+      s->state == protostate_SENDING          ||
+      s->state == protostate_RECEIVING        ||
+      s->state == protostate_PUMPING
      )
   {
-    dprintf(("", "teardown_tear_down: In progress\n"));
+    /* A foreground command is in progress. We need to wait for this to */
+    /* finish before we can send the TEARDOWN.                          */
 
-    return make_error(rtspmb_ERROR_IN_PROGRESS, 0);
+    wait = true;
+
+    /* Clear the command chain because we only want to wait until the */
+    /* current command completes.                                     */
+
+    s->next_command_cb = NULL;
   }
 
-  if (s->server_session == NULL)
+  /* Do we need to wait for a foreground or background command to complete? */
+
+  if (wait)
   {
-    dprintf(("", "teardown_tear_down: No server session so freeing now\n"));
-
-    session_free_item(s);
-    return NULL;
-  }
-
-  /* Have to send a command; is there a background one already though? */
-
-  if (s->child != NULL)
-  {
-    dprintf(("", "teardown_tear_down: Background command running, have to wait\n"));
+    dprintf(("", "teardown_tear_down: Command in progress, have to wait\n"));
 
     /* We have to wait */
-
-    s->td_r0_record = r->r[0];
-
-    /* Make sure the status details are cleared for clients polling the */
-    /* status SWI                                                       */
-
-    s->state          = protostate_INITIAL;
-    s->reported_state = 0;
 
     s->teardown_wait = 1;
     timeout(teardown_retry_delayed_on_callout, s, Session_State_Retry);
 
     dprintf(("", "teardown_tear_down: Retry call set up\n"));
 
+    return NULL;
+  }
+
+  return teardown_tear_down_session(s);
+}
+
+/**************************************************************/
+/* teardown_tear_down_session()                               */
+/*                                                            */
+/* Do the work of tearing down a session. This is called when */
+/* we know there are no server commands in progress.          */
+/**************************************************************/
+
+static _kernel_oserror * teardown_tear_down_session(session * s)
+{
+  bool fail = false;
+  int  port;
+
+  /* Is there a server session to be torn down? */
+
+  if (s->server_session == NULL)
+  {
+    dprintf(("", "teardown_tear_down_session: No server session so freeing now\n"));
+
+    session_free_item(s);
     return NULL;
   }
 
@@ -223,45 +277,32 @@ void teardown_retry_delayed_on_callout(void * handle)
     /* Is there an in-transit foreground or background command already? */
 
     if (
-         s->state != protostate_COMPLETED &&
-         s->state != protostate_INITIAL
+         s->state == protostate_DNS              ||
+         s->state == protostate_CONNECTED        ||
+         s->state == protostate_SENDING          ||
+         s->state == protostate_RECEIVING        ||
+         s->state == protostate_PUMPING          ||
+         s->child != NULL
        )
     {
-      /* Foreground command in progress! Should never happen... Abandon */
-      /* this wait state.                                               */
-
-      dprintf(("", "teardown_retry_delayed_on_callout: Foreground command already running!\n"));
-
-      s->teardown_wait = 0;
-      return;
-    }
-    else if (s->child != NULL)
-    {
-      /* Background command - wait for it to finish */
-
-      dprintf(("", "teardown_retry_delayed_on_callout: Background command still running...\n"));
+      /* Command still in progress - wait for it to finish */
+      dprintf(("", "teardown_retry_delayed_on_callout: Command still running...\n"));
 
       timeout(teardown_retry_delayed_on_callout, s, Session_State_Retry);
-      return;
     }
     else
     {
-      _kernel_swi_regs r;
-
       /* Clear to send the command */
 
       s->teardown_wait = 0;
 
-      r.r[0] = s->td_r0_record;
-      r.r[1] = (int) s->id;
-
-      dprintf(("", "teardown_retry_delayed_on_callout: Clear to try again, calling teardown_tear_down\n"));
+      dprintf(("", "teardown_retry_delayed_on_callout: Clear to try again, calling teardown_tear_down_session\n"));
 
       /* No point trying to deal with errors since the caller will have had */
       /* the SWI return already and since the session is torn down at the   */
       /* Video Control end there's no way to extract further status data.   */
 
-      teardown_tear_down(&r);
+      teardown_tear_down_session(s);
     }
   }
 }

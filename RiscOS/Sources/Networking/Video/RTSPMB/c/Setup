@@ -9,6 +9,7 @@
 /*          S.N.Brodie and P. Wain.                           */
 /*                                                            */
 /* History: 01-Dec-2000 (ADH): Imported from RTSP OVS.        */
+/*          08-Mar-2002 (JRB): Updated for MediaBase 6.       */
 /**************************************************************/
 
 #include <stdio.h>
@@ -55,8 +56,10 @@
 static _kernel_oserror * setup_send_describe         (session * s);
 static _kernel_oserror * setup_send_setup            (session * s);
 static _kernel_oserror * setup_add_transport_header  (session * s);
-static _kernel_oserror * setup_read_loop_option      (session * s, unsigned int vcid);
 static void              setup_read_describe_doubles (session * s, const char * p1, const char * p2);
+#ifdef CLIENT_LOOPING
+static _kernel_oserror * setup_read_loop_option      (session * s, unsigned int vcid);
+#endif
 
 /**************************************************************/
 /* setup_setup()                                              */
@@ -71,7 +74,15 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
   session         * s;
   char            * url;
 
-  dprintf(("", "setup_setup: Called\n"));
+  dprintf(("Entry_0", "setup_setup: Called\n"));
+  dprintf(("Entry_1", " r0=%x\n",r->r[0]));
+  dprintf(("Entry_1", " r1=%x\n",r->r[1]));
+  dprintf(("Entry_1", " r2='%s'\n",r->r[2] ? (char *)r->r[2] : "NULL"));
+  dprintf(("Entry_1", " r3='%s'\n",r->r[3] ? (char *)r->r[3] : "NULL"));
+  dprintf(("Entry_1", " r4='%s'\n",r->r[4] ? (char *)r->r[4] : "NULL"));
+  dprintf(("Entry_1", " r5=%x\n",r->r[5]));
+  dprintf(("Entry_1", " r6=%x\n",r->r[6]));
+  dprintf(("Entry_1", " r7=%x\n",r->r[7]));
 
   /* Just in case, make sure we're not already set up */
 
@@ -100,6 +111,7 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
   s->id   = ++id_counter; /* See Global.h */
   s->vcid = (unsigned int) r->r[1];
 
+  #ifdef CLIENT_LOOPING
   /* Need to ask Video Control what the current loop setting is */
 
   e = setup_read_loop_option(s, s->vcid);
@@ -110,6 +122,7 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
     session_free_item(s);
     return e;
   }
+  #endif
 
   /* Fill in the new item */
 
@@ -290,6 +303,35 @@ static _kernel_oserror * setup_send_setup(session * s)
   bool fail = false;
   int  port;
 
+  /* First see if the server told us its version number in the DESCRIBE response */
+  {
+    rtsp_header * sver = headers_find_header(s->headers, Headers_HeaderName_Server);
+    if (sver != NULL)
+    {
+      if (!strcmp(sver->value, Headers_HeaderValue_ServerOld))
+      {
+        /* This is MediaBase 5 or earlier */
+        s->server_majorver = 5;
+      }
+      else if (!strncmp(sver->value, Headers_HeaderValue_ServerNew, sizeof(Headers_HeaderValue_ServerNew) - 1))
+      {
+        /* This is MediaBase 6 (XMP) or later - get major version number, ignore minor version for now */
+        s->server_majorver = atoi(sver->value + sizeof(Headers_HeaderValue_ServerNew) - 1);
+      }
+      else
+      {
+        /* Unknown server version - may not be MediaBase at all */
+        s->server_majorver = 0;
+      }
+    }
+    else
+    {
+      /* No 'Server' header. Early MediaBase 6 beta versions did this, so assume it is one of those */
+      s->server_majorver = 6;
+    }
+    dprintf(("", "Server major version determined as %d\n", s->server_majorver));
+  }
+
   /* Any DESCRIBE data to parse first? */
 
   if (s->data_len > 0)
@@ -311,6 +353,40 @@ static _kernel_oserror * setup_send_setup(session * s)
       modulefp_disable(&buf);
     }
 
+    if (s->approx_fps == 0 && s->vcid != 0)
+    {
+      _kernel_oserror * e;
+      int               opts[4];
+
+      dprintf(("","Frames per second not specified, using PAL/NTSC flag\n"));
+
+      opts[0] = vc_tags_ntsc;
+      opts[1] = 1;
+      opts[2] = 0;
+      opts[3] = vc_tags__end;
+
+      e = _swix(VideoControl_ProtocolOptions,
+                _INR(0,2),
+
+                0,
+                s->vcid,
+                opts);
+
+      if (e == NULL) s->approx_fps = (opts[2] == 0) ? 25 : 30;
+      else           s->approx_fps = 25;
+    }
+
+    dprintf(("","Decided approx fps is %d\n", s->approx_fps));
+
+    ptr3 = strstr(s->data, Setup_StartTime);
+
+    /* Store start time (originally in microseconds) to centisecond resolution */
+
+    if (ptr3 != NULL)
+    {
+      s->start_time = (unsigned int) (strtoul(ptr3 + sizeof(Setup_StartTime) - 1, NULL, 10) / 10000);
+    }
+
     ptr3 = strstr(s->data, Setup_Duration);
 
     /* Store duration (originally in microseconds) to centisecond resolution */
@@ -318,6 +394,21 @@ static _kernel_oserror * setup_send_setup(session * s)
     if (ptr3 != NULL)
     {
       s->duration = (unsigned int) (strtoul(ptr3 + sizeof(Setup_Duration) - 1, NULL, 10) / 10000);
+    }
+    s->end_time = s->duration;
+
+    /* Determine asset type */
+
+    s->asset_type = assettype_UNKNOWN;
+
+    ptr3 = strstr(s->data, Setup_Type);
+    if (ptr3 != NULL)
+    {
+      ptr3 += sizeof(Setup_Type) - 1;
+      if (!strncmp(ptr3, Setup_TypeMPEG1, sizeof(Setup_TypeMPEG1) - 1))
+        s->asset_type = assettype_MPEG1;
+      else if (!strncmp(ptr3, Setup_TypeMPEG2, sizeof(Setup_TypeMPEG2) - 1))
+        s->asset_type = assettype_MPEG2;
     }
   }
 
@@ -550,6 +641,8 @@ static _kernel_oserror * setup_add_transport_header(session * s)
   return NULL;
 }
 
+#ifdef CLIENT_LOOPING
+
 /**************************************************************/
 /* setup_read_loop_option()                                   */
 /*                                                            */
@@ -584,6 +677,8 @@ static _kernel_oserror * setup_read_loop_option(session * s, unsigned int vcid)
   return e;
 }
 
+#endif
+
 /**************************************************************/
 /* setup_read_describe_doubles()                              */
 /*                                                            */
@@ -610,6 +705,11 @@ static void setup_read_describe_doubles(session * s, const char * p1, const char
   s->frames_per_sec = strtod(p1, NULL);
   s->i_frame_ratio  = strtod(p2, NULL);
 
-  if (s->frames_per_sec == HUGE_VAL) s->frames_per_sec = 0;
-  if (s->i_frame_ratio  == HUGE_VAL) s->i_frame_ratio  = 0;
+  if ((s->frames_per_sec == HUGE_VAL) || (s->frames_per_sec == -HUGE_VAL)) s->frames_per_sec = 0;
+  if ((s->i_frame_ratio  == HUGE_VAL) || (s->i_frame_ratio  == -HUGE_VAL)) s->i_frame_ratio  = 0;
+
+  if (s->frames_per_sec != 0)
+    s->approx_fps = (int)(s->frames_per_sec + 0.5);
+  else
+    s->approx_fps = 0;
 }

@@ -9,6 +9,7 @@
 /*          Adapted by A.D.Hodgkinson.                        */
 /*                                                            */
 /* History: 01-Dec-2000 (ADH): Imported from RTSP OVS.        */
+/*          08-Mar-2002 (JRB): Updated for MediaBase 6.       */
 /**************************************************************/
 
 #include <stdio.h>
@@ -116,6 +117,7 @@ _kernel_oserror * session_new_session(session ** rs)
   }
 
   ses->sd = -1;
+  ses->state = protostate_INITIAL;
 
   e = session_link_new_item(ses);
 
@@ -175,11 +177,69 @@ _kernel_oserror * session_link_new_item(session * ses)
 
     session * s;
 
-    for (s = session_list; s->next; s = s->next) ;;
+    for (s = session_list; s->next; s = s->next);
     s->next = ses;
   }
 
   return NULL;
+}
+
+/**************************************************************/
+/* session_remove_callouts()                                  */
+/*                                                            */
+/* Remove all pending callouts for a session.                 */
+/*                                                            */
+/* Parameters: Pointer to the session structure to process.   */
+/*                                                            */
+/*             Whether or not to remove the main state        */
+/*             machine callout as well as all the others.     */
+/**************************************************************/
+
+void session_remove_callouts(session * s, bool state_machine_too)
+{
+  int irqs_off = _kernel_irqs_disabled();
+
+  _kernel_irqs_off();
+
+  if (s->callout_set != 0 && state_machine_too)
+  {
+    s->callout_set = 0;
+    untimeout(status_proceed_on_callout, s);
+  }
+
+  if (s->gp_set != 0)
+  {
+    s->gp_set = 0;
+    untimeout(getparam_proceed_on_callout, s);
+  }
+
+  #ifdef CLIENT_LOOPING
+  if (s->loop_ready != 0)
+  {
+    s->loop_ready = 0;
+    untimeout(play_replay_on_callout, s);
+  }
+  #endif
+
+  if (s->read_tc_set != 0)
+  {
+    s->read_tc_set = 0;
+    untimeout(play_read_timecode_on_callout, s);
+  }
+
+  if (s->play_wait != 0)
+  {
+    s->play_wait = 0;
+    untimeout(play_retry_delayed_on_callout, s);
+  }
+
+  if (s->teardown_wait != 0)
+  {
+    s->teardown_wait = 0;
+    untimeout(teardown_retry_delayed_on_callout, s);
+  }
+
+  if (!irqs_off) _kernel_irqs_on();
 }
 
 /**************************************************************/
@@ -197,9 +257,7 @@ _kernel_oserror * session_link_new_item(session * ses)
 
 void session_reset_session(session * s)
 {
-  int irqs_off = _kernel_irqs_disabled();
-
-   _kernel_irqs_off();
+  /* Stop the main state machine callout for this session */
 
   if (s->callout_set != 0)
   {
@@ -207,48 +265,32 @@ void session_reset_session(session * s)
     untimeout(status_proceed_on_callout, s);
   }
 
-  if (s->gp_set != 0)
-  {
-    s->gp_set = 0;
-    untimeout(getparam_proceed_on_callout, s);
-  }
+  /* Note that this routine used to remove all callouts and free any      */
+  /* child session. We no longer do this, because we want to allow the    */
+  /* possibility for GET_PARAMETER callouts to occur right up to the      */
+  /* point where we send the next command to the server. The reason for   */
+  /* this is that an error might occur after calling this routine         */
+  /* meaning that no command is actually sent. In this case we don't      */
+  /* want to have removed the GET_PARAMETER callout, since the session    */
+  /* may now time out unintentionally. Routines calling this must be      */
+  /* aware that other callouts remain pending until explicitly cancelled. */
 
-  if (s->loop_ready != 0)
-  {
-    s->loop_ready = 0;
-    untimeout(play_replay_on_callout, s);
-  }
+  /* We used to set the state to protostate_INITIAL here. We no longer do  */
+  /* this since a timer going off between commands in a foreground         */
+  /* sequence could see this and think no foreground command was in        */
+  /* progress. We only change the state when we are sure we have finished. */
 
-  if (s->play_wait != 0)
-  {
-    s->play_wait = 0;
-    untimeout(play_retry_delayed_on_callout, s);
-  }
-
-  if (s->teardown_wait != 0)
-  {
-    s->teardown_wait = 0;
-    untimeout(teardown_retry_delayed_on_callout, s);
-  }
-
-  if (!irqs_off) _kernel_irqs_on();
-
-  s->reported = 0; /* Clear the "we've reported an error to Video Control" flag */
-
-  if (s->child) session_free_item(s->child);
-
-  s->state           = protostate_INITIAL;
+  s->reported        = 0; /* Clear the "we've reported an error to Video Control" flag */
   s->reported_state  = 0;
   s->response_code   = 0;
   s->data_len        = 0, free(s->data),         s->data         = NULL;
+  s->data_to_read    = -1;
   s->reqlen          = 0, free(s->full_request), s->full_request = NULL;
   s->reqptr          = 0;
   s->connected_cb    = NULL;
   s->next_command_cb = NULL;
 
   headers_free_headers(&s->headers), s->headers = NULL;
-
-  return;
 }
 
 /**************************************************************/
@@ -270,41 +312,7 @@ void session_reset_session(session * s)
 
 static void session_free_item_data(session * s)
 {
-  int irqs_off = _kernel_irqs_disabled();
-
-   _kernel_irqs_off();
-
-  if (s->callout_set != 0)
-  {
-    s->callout_set = 0;
-    untimeout(status_proceed_on_callout, s);
-  }
-
-  if (s->gp_set != 0)
-  {
-    s->gp_set = 0;
-    untimeout(getparam_proceed_on_callout, s);
-  }
-
-  if (s->loop_ready != 0)
-  {
-    s->loop_ready = 0;
-    untimeout(play_replay_on_callout, s);
-  }
-
-  if (s->play_wait != 0)
-  {
-    s->play_wait = 0;
-    untimeout(play_retry_delayed_on_callout, s);
-  }
-
-  if (s->teardown_wait != 0)
-  {
-    s->teardown_wait = 0;
-    untimeout(teardown_retry_delayed_on_callout, s);
-  }
-
-  if (!irqs_off) _kernel_irqs_on();
+  session_remove_callouts(s, true);
 
   if (s->child)  session_free_item(s->child);
   if (s->parent) s->parent->child = NULL;
@@ -323,10 +331,10 @@ static void session_free_item_data(session * s)
   free(s->setup_r3_record);
   free(s->setup_r4_record);
   free(s->setup_r5_record);
-  free(s->play_r2_record);
-  free(s->play_r3_record);
 
-  memset(s, '\0', sizeof(*s)); /* Let's be careful */
+  /* Wipe the session block to be on the safe side. The use of 0xff */
+  /* is deliberate - filling with 0 defeats the 'dying' flag.       */
+  memset(s, 0xff, sizeof(*s));
   free(s);
 }
 
