@@ -130,7 +130,7 @@ ${BUILTDIR}.MessData: ${DATA}.Tokenised ${DIRS}
 ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
         Perl Utils.HelpAppend ${PROCESSDIR} ${HELPTOKENS}
         ${MSGTOK} ${HELPTOKENS} ${HELPTAGS} 
-        ${CP} ${DICTIONARY} ${PROCESSDIR}.<Build$LocaleListNumeric>.Resources.Kernel.Dictionary ${CPFLAGS}
+        ${CP} ${DICTIONARY} ${PROCESSDIR}.Common.Resources.Kernel.Dictionary ${CPFLAGS}
         ${MSGTOK2} ${DICTTOKENS} ${DICTTAGS}
         ${TOUCH} ${DATA}.Tokenised; settype ${DATA}.Tokenised fff
 
