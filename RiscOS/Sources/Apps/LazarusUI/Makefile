@@ -135,6 +135,7 @@ resources: translate
         $(CP) LazUILocalRes:$(APP).!BootNet $(RESAPP).!BootNet $(CPFLAGS)
         $(CP) LazUILocalRes:$(APP) $(RESAPP) $(CPFLAGS)
         $(CP) LazUILocalRes:$(APP).!Run $(RESAPP).!Run $(CPFLAGS)
+        $(CP) LazUILocalRes:$(APP).StartFile $(RESAPP).StartFile $(CPFLAGS)
         $(CP) LazUILocalRes:$(APP).Palette $(RESAPP).Palette $(CPFLAGS)
         $(CP) LazUILocalRes:NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) LazUILocalRes:STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
