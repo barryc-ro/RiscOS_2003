@@ -67,7 +67,6 @@ APP       = abs.!RunImage
 OBJS      = o.handlers o.main o.oskbutils o.windowops
 OBJSZ     = oz.handlers oz.main oz.oskbutils oz.windowops oz.ModuleWrap
 OBJSZRAM  = oz.handlers oz.main oz.oskbutils oz.windowops oz.ModuleWra1
-RDIR      = Resources.<UserIF>.${LOCALE}
 EXPORTS   = 
 
 .SUFFIXES: .oz
@@ -119,10 +118,11 @@ clean:
 
 resources:
         ${MKDIR} ${RESAPP}
-        ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot ${CPFLAGS}
-        ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run ${CPFLAGS}
-        ${CP} ${RDIR}.Messages ${RESAPP}.Messages ${CPFLAGS}
-        ${CP} ${RDIR}.Res ${RESAPP}.Res ${CPFLAGS}
+	TokenCheck LocalUserIFRes:Messages
+        ${CP} LocalUserIFRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
+        ${CP} LocalUserIFRes:!RunROM ${RESAPP}.!Run ${CPFLAGS}
+        ${CP} LocalUserIFRes:Messages ${RESAPP}.Messages ${CPFLAGS}
+        ${CP} LocalUserIFRes:Res ${RESAPP}.Res ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
