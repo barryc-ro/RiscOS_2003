@@ -77,7 +77,7 @@ TARGET    = aof.NetTime
 TARGETSA  = rm.NetTime
 EXPORTS   = 
 OBJS      = extralong.o mul64.o machine.o module.o header.o nt_nvram.o dns.o \
-            edst.o ntp.o rtcadjust.o dhcp.o dst.o
+            edst.o ntp.o rtcadjust.o dhcp.o dst.o adst.o
 
 #
 # Generic rules:
