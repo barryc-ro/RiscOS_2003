@@ -52,8 +52,8 @@ DEBUG_TARGET	= Mailboxd
 # Build rules
 #
 
-all:
-	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+all:	export_libs export_libsMC export_libsHP preprocess
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug
 	@echo $(COMPONENT): build complete
 
 debug:

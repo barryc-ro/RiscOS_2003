@@ -91,6 +91,7 @@ WIMPLIB		= $(LIBDIR).tboxlibs.o.wimplib
 
 ACORNPOP3	= $(EXP_C_O).AcornPOP3
 ACORNSMTP	= $(EXP_C_O).AcornSMTP
+COMMON		= $(LIBDIR).Email.Common.o.Common
 ELIB		= $(LIBDIR).Email.EmailLib.o.EmailLib
 MBOXLIB		= $(LIBDIR).Email.Mailbox.o.Mailbox
 
@@ -103,6 +104,7 @@ LIBS = \
  $(ACORNPOP3)\
  $(ACORNSMTP)\
  $(ELIB)\
+ $(COMMON)\
  $(EXTRALIBS)\
  $(C++LIB)\
  $(CLIB)\
@@ -113,6 +115,7 @@ LIBSM = \
  $(TOOLBOXLIB) \
  $(EVENTLIB)m \
  $(ACORNPOP3)\
+ $(COMMON)\
  $(C++LIB)\
 
 
@@ -124,6 +127,7 @@ LIBSD = \
  $(ACORNPOP3)\
  $(ACORNSMTP)\
  $(ELIB)\
+ $(COMMON)\
  $(EXTRALIBS)\
  $(C++LIB)\
  $(CLIB)\
@@ -379,3 +383,4 @@ rm.!MBoxTestD: odz.ModuleWrap $(OBJSDZ) $(LIBSM) o.dirs
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
+
