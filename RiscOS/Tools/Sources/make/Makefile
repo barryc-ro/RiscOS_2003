@@ -15,6 +15,7 @@ COMPONENT = make
 TARGET    = make
 
 CFLAGS    = -Wpc -ffah -IC:
+LDFLAGS   =
 DIRS      = o._dirs
 
 INSTAPP   = ${INSTDIR}.Apps.!Make
@@ -50,6 +51,7 @@ install_rom: ${TARGET}
         
 install: ${TARGET}
 	${MKDIR} ${INSTAPP}.choices.toolflags
+	${CP} LocalRes:tools_def ${INSTAPP}.choices.tools_def ${CPFLAGS}
 	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
 	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
 	${CP} LocalRes:!Sprites ${INSTAPP}.!Sprites ${CPFLAGS}
