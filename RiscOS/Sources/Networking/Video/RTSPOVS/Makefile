@@ -33,7 +33,7 @@ RESDIR		= <resource$dir>.Resources2.VideoCtrl
 # Generic options
 #
 
-MKDIR		= cdir
+MKDIR		= do mkdir -p
 CC		= cc
 CMHG		= cmhg
 CP		= copy
