@@ -45,7 +45,7 @@ extern "C"
 _kernel_swi_regs regs;
 _kernel_oserror  *err;
 IdBlock idblock;
-bool appquit = false, cachefs;
+bool appquit = false, cachefs, quiescent = false;
 int ourhandle;
 char *appname, *msgfilename;
 
@@ -137,7 +137,7 @@ bool AppInit(void)
   debug_output_device(DEBUGIT_OUTPUT);
   debug_atexit();
 
-  if (!SetupState())
+  if (!SetupState(true))
     return false;
 
 #ifdef ALAN
@@ -172,6 +172,8 @@ bool AppInit(void)
 
   event_register_message_handler(Wimp_MQuit, Messages, 0);
   event_register_message_handler(Wimp_MPreQuit, Messages, 0);
+  event_register_message_handler(Wimp_MLogOff, Messages, 0);
+  event_register_message_handler(Wimp_MPreLogOff, Messages, 0);
   event_register_wimp_handler(-1, Wimp_ENull, NullEvent, 0);
 
   event_register_toolbox_handler(-1, Quit_Quit, TBEvents, 0);
@@ -207,8 +209,7 @@ bool AppInit(void)
   ** Otherwise we do nothing and wait for the UI to send
   ** a change_user notification.
   */
-  if (GetSysVar("Inet$EmailPOP3User", false))
-    ChangeUser();
+  CheckUser();
 #endif
 
   return true;
@@ -229,9 +230,9 @@ bool AppInit(void)
 void CleanupApp(bool chuckvars)
 {
 
+  dprintf(("Eng", "Entering CleanupApp\n"));
   ncmui_email_active(false);
-  state = IDLE;
-  if (popstatus == acctcreated)
+  if (popstatus != acctnonexistent)
   {
     dprintf(("Eng", "About to delete POP account\n"));
     if (POPaccount)
@@ -239,7 +240,7 @@ void CleanupApp(bool chuckvars)
     POPaccount = 0;
   }
 
-  if (smtpstatus == acctcreated)
+  if (smtpstatus != acctnonexistent)
   {
     dprintf(("Eng", "About to delete SMTP account\n"));
     if (SMTPaccount)
@@ -253,23 +254,10 @@ void CleanupApp(bool chuckvars)
   UnlockFile("<NCMailStore$Dir>.<NCMail$User>");
   UnlockFile("<NCMailStore$Dir>");
 
-  if (chuckvars)
-  {
-    /* unset user variables */
-    static char popvar[] = "Inet$EmailPOP3User";
-    static char passvar[] = "Inet$EmailPOP3Password";
+  SetupState(false);
 
-    regs.r[0] = (int) popvar;
-    regs.r[1] = -1;
-    regs.r[2] = -1;
-    regs.r[3] = 0;
-    _kernel_swi(OS_SetVarVal,&regs,&regs);
-    regs.r[0] = (int) passvar;
-    regs.r[1] = -1;
-    regs.r[2] = -1;
-    regs.r[3] = 0;
-    _kernel_swi(OS_SetVarVal,&regs,&regs);
-  }
+  if (chuckvars)
+    UnsetVars();
 
 }
 
@@ -280,6 +268,7 @@ bool UnfinishedBusiness(uint32 st)
   if (sendpending)
   {
     /* warn user that messages haven't been sent */
+    dprintf(("Eng", "Unsent mail\n"));
     statusret.code = ENG_UNSENTMAIL;
     (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, ConfirmSend);
     state |= st;
@@ -289,6 +278,7 @@ bool UnfinishedBusiness(uint32 st)
   else if ((popstatus == acctconnected) || (smtpstatus == acctconnected))
   {
     /* object to quit and disconnect from servers if connected */
+    dprintf(("Eng", "Servers are still connected\n"));
     StopTimeoutCount();
     StopReconnectCount();
     state |= st;
@@ -396,6 +386,7 @@ void RestartLogOff(void)
 
   /* if there's still unfinished business, attend to it
      before restarting LogOff */
+  dprintf(("Eng", "Restarting LogOff\n"));
   if (!UnfinishedBusiness(PRELOGOFF))
   {
     if (preflags & 1)
@@ -407,6 +398,7 @@ void RestartLogOff(void)
     {
       WimpMessage msgblk;
 
+      dprintf(("Eng", "Sending RestartPreLogOff message\n"));
       msgblk.hdr.size = 24;
       msgblk.hdr.my_ref = 0;
       msgblk.hdr.action_code = Wimp_MRestartPreLogOff;
