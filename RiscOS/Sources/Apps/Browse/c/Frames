@@ -44,25 +44,24 @@
 
 /* Locals */
 
-static ObjectId highlight_top    = 0;
-static ObjectId highlight_bottom = 0;
-static ObjectId highlight_left   = 0;
-static ObjectId highlight_right  = 0;
-
-static int      highlight_timer  = 0;
-static int      highlight_for    = 0;
+static int            highlight_timer  = 0;
+static int            highlight_for    = 0;
+static ObjectId       highlight_top    = 0;
+static ObjectId       highlight_bottom = 0;
+static ObjectId       highlight_left   = 0;
+static ObjectId       highlight_right  = 0;
 
 /* Static function prototypes */
 
-static _kernel_oserror * frames_find_widths         (browser_data * b, int available);
-static _kernel_oserror * frames_find_heights        (browser_data * b, int available);
-static int               frames_check_recursion     (browser_data * parent, browser_data * child, HStream * token);
-static void              frames_collapse_child_tree (browser_data * base, browser_data * real_parent, browser_data * close);
+static _kernel_oserror * frames_find_widths            (browser_data * b, int available);
+static _kernel_oserror * frames_find_heights           (browser_data * b, int available);
+static int               frames_check_recursion        (browser_data * parent, browser_data * child, HStream * token);
+static void              frames_collapse_child_tree    (browser_data * base, browser_data * real_parent, browser_data * close);
 
-static browser_data    * frames_find_next_frame     (browser_data * check, browser_data * current, int * found);
-static browser_data    * frames_find_previous_frame (browser_data * check, browser_data * current, int * found);
+static browser_data    * frames_find_next_frame        (browser_data * check, browser_data * current, int * found);
+static browser_data    * frames_find_previous_frame    (browser_data * check, browser_data * current, int * found);
 
-static int               frames_remove_highlight    (int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle);
+static int               frames_remove_highlight_timer (int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle);
 
 /*************************************************/
 /* frames_find_widths()                          */
@@ -1098,7 +1097,7 @@ _kernel_oserror * frames_define_frame(browser_data * b, HStream * token)
     if (tl & (1u<<17)) Printf("frames_define_frame: Exitting through fetchpage_new()\n",b);
   #endif
 
-  return fetchpage_new(child, token->src, 1);
+  return fetchpage_new(child, token->src, 1, 0);
 }
 
 /*************************************************/
@@ -1130,13 +1129,15 @@ _kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock *
   int                       th, hh, vw;
   int                       child;
 
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_resize_frameset: Called with browser_data %p\n",b);
+  #endif
+
   /* Nothing to resize if there are no children */
 
   if (!b->nchildren) return NULL;
 
-  #ifdef TRACE
-    if (tl & (1u<<17)) Printf("frames_resize_frameset: Called with browser_data %p\n",b);
-  #endif
+  /* Get the frame window details and tool sizes */
 
   s.window_handle = o->window_handle;
   e = wimp_get_window_state(&s);
@@ -1302,6 +1303,10 @@ _kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock *
         idb.parent_id = b->self_id;
 
         windows_open_browser(0, &block, &idb, cb);
+
+        /* If the frame was highlighted, move the highlight too */
+
+        if (cb == highlight_frame) frames_highlight_frame(cb);
       }
 
       /* Prepare for the next frame */
@@ -1329,6 +1334,41 @@ _kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock *
   #endif
 
   return NULL;
+}
+
+/*************************************************/
+/* frames_fetching()                             */
+/*                                               */
+/* Equivalent to fetch_fetching() in Fetch.c,    */
+/* but returns 1 if any of the frames in a       */
+/* frameset are fetching, else 0.                */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             which is the parent of any frames */
+/*             to check (so for an entire        */
+/*             frameset, pass the ancestor in).  */
+/*                                               */
+/* Returns:    1 if any of the frames are        */
+/*             fetching, else 0.                 */
+/*************************************************/
+
+int frames_fetching(browser_data * b)
+{
+  int i;
+
+  /* Recurse for child frames */
+
+  if (b->nchildren)
+  {
+    for (i = 0; i < b->nchildren; i++)
+    {
+      if (frames_fetching(b->children[i])) return 1;
+    }
+  }
+
+  if (fetch_fetching(b)) return 1;
+
+  return 0;
 }
 
 /*************************************************/
@@ -1607,8 +1647,7 @@ browser_data * frames_find_target(browser_data * b, HStream * t)
       {
         browser_data * named;
 
-        ancestor = b->ancestor;
-        if (!ancestor) ancestor = b;
+        ancestor = utils_ancestor(b);
 
         named = frames_find_named(ancestor, t->target);
 
@@ -1697,8 +1736,7 @@ browser_data * frames_find_another_frame(browser_data * current, int dir)
 
   if (!current) return NULL;
 
-  ancestor = current->ancestor;
-  if (!ancestor) ancestor = current;
+  ancestor = utils_ancestor(current);
 
   /* Finding the logical next frame */
 
@@ -1864,7 +1902,7 @@ static browser_data * frames_find_previous_frame(browser_data * check, browser_d
 
 _kernel_oserror * frames_highlight_frame(browser_data * b)
 {
-  browser_data            * ancestor = b->ancestor;
+  browser_data            * ancestor;
   WimpGetWindowStateBlock   s;
   WindowShowObjectBlock     show;
   _kernel_oserror         * e;
@@ -1876,7 +1914,7 @@ _kernel_oserror * frames_highlight_frame(browser_data * b)
 
   /* Otherwise, proceed */
 
-  if (!ancestor) ancestor = b;
+  ancestor = utils_ancestor(b);
 
   s.window_handle = b->window_handle;
 
@@ -1908,8 +1946,7 @@ _kernel_oserror * frames_highlight_frame(browser_data * b)
 
     /* Register a null claimant to get rid of the objects shortly */
 
-    register_null_claimant(Wimp_ENull, (WimpEventHandler *) frames_remove_highlight, b);
-
+    register_null_claimant(Wimp_ENull, (WimpEventHandler *) frames_remove_highlight_timer, b);
   }
 
   /* Reset the highlight removal timer */
@@ -1958,7 +1995,7 @@ _kernel_oserror * frames_highlight_frame(browser_data * b)
   right.xmax  = s.visible_area.xmax - 2;  /*                                    */
   right.ymax  = s.visible_area.ymax - 2;  /**************************************/
 
-  /* Now show the objects */
+  /* Show the objects */
 
   show.xscroll              = 0;
   show.yscroll              = 0;
@@ -1966,6 +2003,7 @@ _kernel_oserror * frames_highlight_frame(browser_data * b)
   show.visible_area         = top;
   show.parent_window_handle = ancestor->window_handle;
   show.alignment_flags      = 0;
+
 
   e = toolbox_show_object(Toolbox_ShowObject_AsSubWindow, highlight_top,    Toolbox_ShowObject_FullSpec, &show, ancestor->self_id, -1);
   if (e) return e;
@@ -1983,6 +2021,8 @@ _kernel_oserror * frames_highlight_frame(browser_data * b)
 
   e = toolbox_show_object(Toolbox_ShowObject_AsSubWindow, highlight_bottom, Toolbox_ShowObject_FullSpec, &show, ancestor->self_id, -1);
   if (e) return e;
+
+  /* Show them */
 
   show.xscroll              = 0;
   show.yscroll              = 0;
@@ -2004,13 +2044,19 @@ _kernel_oserror * frames_highlight_frame(browser_data * b)
   e = toolbox_show_object(Toolbox_ShowObject_AsSubWindow, highlight_right,  Toolbox_ShowObject_FullSpec, &show, ancestor->self_id, -1);
   if (e) return e;
 
+  /* Remember the highlighted frame, for functions other than */
+  /* the null handler that removes the highlight (which gets  */
+  /* passed the value directly).                              */
+
+  highlight_frame = b;
+
   /* Finished */
 
   return NULL;
 }
 
 /*************************************************/
-/* frames_remove_highlight()                     */
+/* frames_remove_highlight_timer()               */
 /*                                               */
 /* A NULL event handler which times how long the */
 /* frame highlight objects have been visible     */
@@ -2023,7 +2069,7 @@ _kernel_oserror * frames_highlight_frame(browser_data * b)
 /* handler.                                      */
 /*************************************************/
 
-static int frames_remove_highlight(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle)
+static int frames_remove_highlight_timer(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle)
 {
   int time;
 
@@ -2046,12 +2092,65 @@ static int frames_remove_highlight(int eventcode, WimpPollBlock * b, IdBlock * i
 
     highlight_top = highlight_bottom = highlight_left = highlight_right = 0;
 
+    /* Clear the internal record of the highlighted frame */
+
+    highlight_frame = NULL;
+
     /* Remove the handler */
 
-    deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) frames_remove_highlight, handle);
+    deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) frames_remove_highlight_timer, handle);
   }
 
   return 0;
+}
+
+/*************************************************/
+/* frames_remove_highlight()                     */
+/*                                               */
+/* Removes the highlight objects from around a   */
+/* given frame.                                  */
+/*************************************************/
+
+_kernel_oserror * frames_remove_highlight(void)
+{
+  _kernel_oserror * e;
+
+  /* Delete the objects (so removing the highlight) */
+
+  if (highlight_top)
+  {
+    e = toolbox_delete_object(0, highlight_top);
+    if (e) return e;
+  }
+
+  if (highlight_bottom)
+  {
+    e = toolbox_delete_object(0, highlight_bottom);
+    if (e) return e;
+  }
+
+  if (highlight_left)
+  {
+    e = toolbox_delete_object(0, highlight_left);
+    if (e) return e;
+  }
+
+  if (highlight_right)
+  {
+    e = toolbox_delete_object(0, highlight_right);
+    if (e) return e;
+  }
+
+  /* Reset the Object IDs, so that the highlight routine knows it needs */
+  /* to recreate the objects and reinstall this handler                 */
+
+  highlight_top = highlight_bottom = highlight_left = highlight_right = 0;
+
+  /* Clear the internal record of the highlighted frame */
+
+  highlight_frame = NULL;
+
+  return NULL;
 }
 
 /*************************************************/

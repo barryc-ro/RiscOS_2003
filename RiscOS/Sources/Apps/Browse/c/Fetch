@@ -380,6 +380,9 @@ void fetch_preprocess_token(browser_data * b, HStream * tptr)
 {
   int reprocess_table = 0;
 
+  /* finaltoken keeps track of the last token dealt with by this */
+  /* routine, in the main token stream.                          */
+
   if (!tptr->parent) b->finaltoken = tptr;
 
   /* Are we reprocessing the contents of a table tag which has been */
@@ -1377,6 +1380,11 @@ _kernel_oserror * fetch_cancel(browser_data * b)
   if ((b->fetch_handle) && ((b->fetch_handle) != (b->display_handle))) html_close(b->fetch_handle);
   b->fetch_handle = 0;
 
+  /* If a META tag is about to do a reload, cancel this */
+
+  if (b->meta_refresh_at) deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) meta_check_refresh, b);
+  b->meta_refresh_at = 0;
+
   /* If not fetching, exit here */
 
   if (!fetch_fetching(b)) return NULL;
@@ -1387,7 +1395,7 @@ _kernel_oserror * fetch_cancel(browser_data * b)
 
   /* Ensure the page is correctly formatted */
 
-  if (b->cell->nlines) reformat_format_from(b, b->cell->nlines - 2, 1, -1);
+  if (b->cell->nlines) reformat_format_from(b, b->cell->nlines - 1, 1, -1);
 
   return(NULL);
 }
@@ -2516,7 +2524,8 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
   if (!authorising && up->fetched)
   {
-    unsigned int hf  = 0;
+    unsigned int   hf  = 0;
+    HStream      * new = NULL;
 
     /* If the stream has been identified as HTML... */
 
@@ -2549,81 +2558,91 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
       if (r && !e)
       {
-        up->stream = HtmlGetStream(up->context,        /* Parser context, from HtmlParse()          */
-                                   (char **) source,   /* Pointer to start of the complete document */
-                                   r,                  /* Size of the chunk that has been added     */
-                                   &hf);               /* Flags from HTMLLib, e.g. 'have more data' */
+        new = HtmlGetStream(up->context,        /* Parser context, from HtmlParse()          */
+                            (char **) source,   /* Pointer to start of the complete document */
+                            r,                  /* Size of the chunk that has been added     */
+                            &hf);               /* Flags from HTMLLib, e.g. 'have more data' */
+
+        up->stream = new;
 
         #ifdef TRACE
           if (tl & (1u<<18)) Printf("\0211(New stream for %p, %p)\0217\n", b, up->stream);
         #endif
       }
 
-      /* lasttoken holds a pointer to the last HStream returned; fill */
-      /* it in, if it isn't already, with the pointer to the start of */
-      /* the HStream list. Similarly, fill in the int that was passed */
-      /* to the function with this address, and fill in the 'waiting' */
-      /* int with 1 if the urlstat structure indicates that fetching  */
-      /* is taking place, but there's no HStream at present.          */
-
-      if (!up->lasttoken)
+      if (!new)
       {
-        up->lasttoken     = up->stream;
-        if (token) *token = up->lasttoken;
+        /* There are no new HTML library structures */
 
-        *waiting = (!up->stream && up->fetching) ? 1 : 0;
+        if (up->lasttoken)
+        {
+          /* There is no new data, but lasttoken indicates there are more tokens */
+          /* left in the token stream from earlier calls that haven't been dealt */
+          /* with. So move to the next one.                                      */
+
+          up->lasttoken     = up->lasttoken->next;
+          if (token) *token = up->lasttoken;
+        }
       }
       else
       {
-        /* If the lasttoken is in fact filled in, and it's next field */
-        /* is also filled in, it isn't the last one...! So set the    */
-        /* lasttoken field to point to this next HStream, and signal  */
-        /* no waiting (the next HStream was already there and we've   */
-        /* just pointed to it).                                       */
+        /* There are some new HTML library structures. */
 
-        if (up->lasttoken->next)
+        if (!(hf & HTML_GOT_MORE_IN_A_TABLE))
         {
-          up->lasttoken     = up->lasttoken->next;
-          if (token) *token = up->lasttoken;
+          /* The flag is unset, so the structures were added to the main token */
+          /* stream and not to part of a table structure.                      */
 
-          *waiting = 0;
-        }
-        else
-        {
-          /* In this last case, the lasttoken field is not null, but */
-          /* the next field of the HStream it points to is. So this  */
-          /* is indeed the last HStream, but it's an old one (it has */
-          /* been dealt with already).                               */
-
-          if (hf & HTML_GOT_MORE_IN_A_TABLE)
+          if (up->lasttoken)
           {
-            /* However, the HTML library said that it added structures */
-            /* to a table. So whilst this parent token has been looked */
-            /* at once, there are new tokens attached to it. So, set   */
-            /* lasttoken to the same value again and flag we aren't    */
-            /* waiting - the preprocess routines will then rescan this */
-            /* table for the new items.                                */
+            /* Even though there are new structures, we still have older ones */
+            /* that are not dealt with, so move to the next one (the remote   */
+            /* server is sending us data than we're processing it - yay!).    */
 
-            up->lasttoken     = up->stream;
+            up->lasttoken     = up->lasttoken->next;
             if (token) *token = up->lasttoken;
-
-            *waiting = 0;
           }
           else
           {
-            /* We've dealt with all tokens in the stream, so set the */
-            /* waiting flag according to whether or not the urlstat  */
-            /* structure says we're still fetching. If we are        */
-            /* fetching, we must be waiting; else we're not waiting  */
-            /* but there returned token pointer will be NULL, which  */
-            /* callers take to indicate a completed fetch.           */
+            /* There are no earlier structures left to deal with, so start on */
+            /* the first of the new batch.                                    */
 
-            *waiting = (up->fetching) ? 1 : 0;
+            up->lasttoken     = new;
+            if (token) *token = up->lasttoken;
+          }
+        }
+        else
+        {
+          /* The HTML_GOT_MORE_IN_A_TABLE flag is set, so structures were added to */
+          /* a table arrangement, as well as (possibly) the main stream after it.  */
 
-            if (token) *token = NULL;
+          if (!up->lasttoken)
+          {
+            /* We weren't waiting to process anything from an earlier call, so */
+            /* start on this new table structure.                              */
+
+            up->lasttoken     = new;
+            if (token) *token = up->lasttoken;
+          }
+          else
+          {
+            /* We have undealt with structures from a previous fetch. Now, if */
+            /* we are already on the same table structure as returned by the  */
+            /* HtmlGetStream call, then stay there (i.e. process the new data */
+            /* inside the table). Otherwise, move on.                         */
+
+            if (up->lasttoken != new) up->lasttoken = up->lasttoken->next;
+            if (token) *token = up->lasttoken;
           }
         }
       }
+
+      /* If we've moved on to, or were already on no token, then whether or */
+      /* not the fetch is still in progress determines whether or not we're */
+      /* waiting. Otherwise, we aren't waiting for anything.                */
+
+      if (!up->lasttoken) *waiting = !!up->fetching;
+      else                *waiting = 0;
     }
     else if (up->authorised != 1)
     {
@@ -2684,12 +2703,13 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
         /* There are HTTP style headers in the data */
         /* stream; try to identify that stream.     */
 
-        code = HtmlIdentify((char *) *source,            /* Pointer to head of data stream    */
-                            flex_size(source),           /* Amount of data in the stream      */
-                            (s & URL_Status_Done) != 0,  /* Is it a complete stream? 1 = yes  */
-                            &redirect,                   /* Will point to a URL if code = 302 */
-                            &type,                       /* Will hold a filetype              */
-                            &parseable);                 /* Will say if the data is parseable */
+        code = HtmlIdentify(ref_url,                     /* Allow relative redirections to work */
+                            (char *) *source,            /* Pointer to head of data stream      */
+                            flex_size(source),           /* Amount of data in the stream        */
+                            (s & URL_Status_Done) != 0,  /* Is it a complete stream? 1 = yes    */
+                            &redirect,                   /* Will point to a URL if code = 302   */
+                            &type,                       /* Will hold a filetype                */
+                            &parseable);                 /* Will say if the data is parseable   */
 
         /* Discard the stuff before the HTTP style headers by moving the data over them */
 
@@ -2800,24 +2820,12 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
               up->method = URL_Method_http_GET;
             }
 
-            #ifdef TRACE
-              if (up->extradata)
-              {
-                flexcount -= flex_size((flex_ptr) &up->extradata);
-                if (tl & (1u<<13)) Printf("**   flexcount: %d\n",flexcount);
-              }
-            #endif
-
-            if (up->extradata) flex_free((flex_ptr) &up->extradata);
-
-            up->method = URL_Method_http_GET;
-
             /* Retch: Hack Line One's entry... */
 
             #ifdef HACK_LINEONE
 
               if (
-                   !strcmp(redirect,"http://www.lineone.net/login.cgi") ||
+                   !strcmp(redirect,"http://www.lineone.net/login.cgi")  ||
                    !strcmp(redirect,"http://www.lineone.net/index.html")
                  )
               {
@@ -2843,6 +2851,8 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
                             NULL,          /* We're ignoring the returned status  */
                             2);            /* Mode 2 = fetch both header and data */
 
+            /* Return any errors that url_get_url generated */
+
             if (e) return e;
 
             /* This function returns the address of the new URL in   */
@@ -2850,7 +2860,7 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
             /* - and yes, this is quite odd.                         */
 
             *waiting   = 2;
-            *remaining = (int) redirect;
+            *remaining = (int) redirect; /* Not redirect_to, as it may be freed now */
           }
           break;
 

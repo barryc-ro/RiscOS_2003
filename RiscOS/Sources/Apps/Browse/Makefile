@@ -20,6 +20,10 @@
 #			make changing options more flexible. Note that the
 #			same .s directory is still currently used for all
 #			builds. Did lots of other stuff, too.
+# 1997-08-08	ADH	Got sick of having to scroll the task window right
+#			all the time to see what was compiling, so played
+#			around with the SUFFIXES (rule patterns) section
+#			to make the run-time output more readable.
 
 
 # ------------------------------------------------------------------------------
@@ -228,7 +232,7 @@ OBJS_ITALK = \
  o_italk.Reformat	o.ROSLib		o_italk.Save		\
  o_italk.Tables		o_italk.TokenUtils	o_italk.Toolbars	\
  o_italk.URLutils	o_italk.Utils		o_italk.Windows		\
- o_italk.JavaScript	o_italk.LineOne		o_italk.Surf		\
+ o_italk.JavaScript	o_italk.LineOne		o_italk.Meta		\
  o_italk.Cookies
 
 OBJSD_ITALK = \
@@ -242,7 +246,7 @@ OBJSD_ITALK = \
  od_italk.svcprint	od_italk.Tables		od_italk.TokenUtils	\
  od_italk.Toolbars	od_italk.Trace		od_italk.URLutils	\
  od_italk.Utils		od_italk.Windows	od_italk.JavaScript	\
- od_italk.LineOne	od_italk.Surf		od_italk.Cookies
+ od_italk.LineOne	od_italk.Meta		od_italk.Cookies
 
 
 # ------------------------------------------------------------------------------
@@ -250,15 +254,51 @@ OBJSD_ITALK = \
 #
 
 .SUFFIXES: .o .oz .od .odz .o_surf .od_surf .o_italk .od_italk .s .c
-.c.o:;		${CC} ${CFLAGS} ${DFLAGS}        -c -o $@ $<
-.c.oz:;		${CC} ${CFLAGS} ${DZFLAGS}       -c -zM -zps1 -DROM -o $@ $<
-.c.od:;		${CC} ${CFLAGS} ${DDFLAGS}       -c -g -o $@ $<
-.c.odz:;	${CC} ${CFLAGS} ${DDZFLAGS}      -c -zM -zps1 -DROM -o $@ $<
-.c.o_surf:;	${CC} ${CFLAGS} ${D_SURFFLAGS}   -c -o $@ $<
-.c.od_surf:;	${CC} ${CFLAGS} ${DD_SURFFLAGS}  -c -g -o $@ $<
-.c.o_italk:;	${CC} ${CFLAGS} ${D_ITALKFLAGS}  -c -o $@ $<
-.c.od_italk:;	${CC} ${CFLAGS} ${DD_ITALKFLAGS} -c -g -o $@ $<
-.s.o:;		${AS} ${AFLAGS} $< $@
+
+.c.o:;		@echo
+		@echo Compiling $<
+		@echo ${DFLAGS}
+		@${CC} ${CFLAGS} ${DFLAGS}        -c -o $@ $<
+
+.c.oz:;		@echo
+		@echo Compiling $<
+		@echo ${DZFLAGS}
+		@${CC} ${CFLAGS} ${DZFLAGS}       -c -zM -zps1 -DROM -o $@ $<
+
+.c.od:;		@echo
+		@echo Compiling $<
+		@echo ${DDFLAGS}
+		@${CC} ${CFLAGS} ${DDFLAGS}       -c -g -o $@ $<
+
+.c.odz:;	@echo
+		@echo Compiling $<
+		@echo ${DDZFLAGS}
+		@${CC} ${CFLAGS} ${DDZFLAGS}      -c -zM -zps1 -DROM -o $@ $<
+
+.c.o_surf:;	@echo
+		@echo Compiling $<
+		@echo ${D_SURFFLAGS}
+		@${CC} ${CFLAGS} ${D_SURFFLAGS}   -c -o $@ $<
+
+.c.od_surf:;	@echo
+		@echo Compiling $<
+		@echo ${DD_SURFFLAGS}
+		@${CC} ${CFLAGS} ${DD_SURFFLAGS}  -c -g -o $@ $<
+
+.c.o_italk:;	@echo
+		@echo Compiling $<
+		@echo ${D_ITALKFLAGS}
+		@${CC} ${CFLAGS} ${D_ITALKFLAGS}  -c -o $@ $<
+
+.c.od_italk:;	@echo
+		@echo Compiling $<
+		@echo ${DD_ITALKFLAGS}
+		@${CC} ${CFLAGS} ${DD_ITALKFLAGS} -c -g -o $@ $<
+
+.s.o:;		@echo
+		@echo Assembling $<
+		@echo ${AFLAGS}
+		@${AS} ${AFLAGS} $< $@
 
 
 # ------------------------------------------------------------------------------
@@ -272,6 +312,7 @@ rom: ${ROM_MODULE}
 	@echo ${COMPONENT}: Module built (ROM)
 
 install_common: ${FILES}
+	@echo
 	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}
 	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}
 	${CP} ${LDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}
@@ -295,14 +336,17 @@ install: install_common
 	-Access ${INSTDIR}.Res		lr/r
 	-Access ${INSTDIR}.Sprites	lr/r
 	-Access ${INSTDIR}.User.Hotlist	wr/r
+	@echo
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
 
 installd: install_common
 	${CP} ${LDIR}.!RunD		${INSTDIR}.!Run		${CPFLAGS}
+	@echo
 	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
 
 install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+	@echo
 	@echo ${COMPONENT}: Module installed (ROM)
 
 resources:
@@ -318,6 +362,7 @@ resources:
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
 	${CP} ${LDIR}.Sprites		${RESDIR}.Sprites	${CPFLAGS}
 	${CP} ${LDIR}.User.Hotlist	${RESDIR}.User.Hotlist	${CPFLAGS}
+	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
 clean:
@@ -338,6 +383,7 @@ clean:
 	${RM}	s.AppName
 	${RM}	s.ModuleWrap
 	${RM}	o.dirs
+	@echo
 	@echo ${COMPONENT}: Cleaned
 
 o.dirs:
@@ -389,32 +435,41 @@ clean_all: clean
 #
 
 abs.!RI: ${OBJS} ${LIBS} o.dirs
+	@echo
 	${LD} -o $@ ${OBJS} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
 abs.!RI_D: ${OBJSD} ${LIBSD} o.dirs
+	@echo
 	${LD} -debug -o $@ ${OBJSD} ${LIBSD}
 
 abs.!RI_Surf: ${OBJS_SURF} ${LIBS} o.dirs
+	@echo
 	${LD} -o $@ ${OBJS_SURF} ${LIBS}
 
 abs.!RI_DSurf: ${OBJSD_SURF} ${LIBSD} o.dirs
+	@echo
 	${LD} -debug -o $@ ${OBJSD_SURF} ${LIBSD}
 
 abs.!RI_ITalk: ${OBJS_ITALK} ${LIBS} o.dirs
+	@echo
 	${LD} -o $@ ${OBJS_ITALK} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
 abs.!RI_DITalk: ${OBJSD_ITALK} ${LIBSD} o.dirs
+	@echo
 	${LD} -debug -o $@ ${OBJSD_ITALK} ${LIBSD}
 
 ${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB} o.dirs
+	@echo
 	${LD} -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
 
 ${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} o.dirs
+	@echo
 	${LD} -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
 
 rm.!BrowseD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
+	@echo
 	${LD} -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
 
 # final link for ROM Image (using given base address)
