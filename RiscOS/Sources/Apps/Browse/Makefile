@@ -200,6 +200,7 @@ OBJS = \
  o.History		\
  o.Hotlist		\
  o.Images		\
+ o.ImgHistory		\
  o.JavaScript		\
  o.LineOne		\
  o.Main			\
@@ -252,6 +253,7 @@ OBJSZ = \
  oz.History		\
  oz.Hotlist		\
  oz.Images		\
+ oz.ImgHistory		\
  oz.JavaScript		\
  oz.LineOne		\
  oz.Main		\
@@ -304,6 +306,7 @@ OBJSD = \
  od.History		\
  od.Hotlist		\
  od.Images		\
+ od.ImgHistory		\
  od.JavaScript		\
  od.LineOne		\
  od.Main		\
@@ -358,6 +361,7 @@ OBJSDZ = \
  odz.History		\
  odz.Hotlist		\
  odz.Images		\
+ odz.ImgHistory		\
  odz.JavaScript		\
  odz.LineOne		\
  odz.Main		\
@@ -411,6 +415,7 @@ OBJS_SURF = \
  o_surf.Handlers	\
  o_surf.History		\
  o_surf.Images		\
+ o_surf.ImgHistory	\
  o_surf.JavaScript	\
  o_surf.LineOne		\
  o_surf.Main		\
@@ -462,6 +467,7 @@ OBJSD_SURF = \
  od_surf.Handlers	\
  od_surf.History	\
  od_surf.Images		\
+ od_surf.ImgHistory	\
  od_surf.JavaScript	\
  od_surf.LineOne	\
  od_surf.Main		\
@@ -516,6 +522,7 @@ OBJS_ITALK = \
  o_italk.History	\
  o_italk.Hotlist	\
  o_italk.Images		\
+ o_italk.ImgHistory	\
  o_italk.JavaScript	\
  o_italk.LineOne	\
  o_italk.Main		\
@@ -568,6 +575,7 @@ OBJSD_ITALK = \
  od_italk.History	\
  od_italk.Hotlist	\
  od_italk.Images	\
+ od_italk.ImgHistory	\
  od_italk.JavaScript	\
  od_italk.LineOne	\
  od_italk.Main		\
