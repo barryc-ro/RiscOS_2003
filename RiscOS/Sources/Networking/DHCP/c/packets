@@ -1,0 +1,380 @@
+/*
+ *  DHCP (packets.c)
+ *
+ * Copyright (C) Element 14 Ltd. 1999
+ *
+ */
+#include <stdio.h>
+#include <string.h>
+#include <limits.h>
+#include "kernel.h"
+#include "swis.h"
+
+#include "sys/types.h"
+#include "sys/dcistructs.h"
+#include "net/if.h"
+#include "protocols/dhcp.h"
+#include "netinet/in.h"
+
+#include "dhcp.h"
+#include "interfaces.h"
+#include "dhcperrors.h"
+#include "packets.h"
+#include "consts.h"
+#include "sockets.h"
+
+u_char *dhcp_options_start(DHCP *d)
+{
+        /* Return pointer to actual options, skipping the magic cookie.
+         * The Internet module will have already verified the cookie,
+         * so we don't have to worry about it.
+         */
+        return &d->options[4];
+}
+
+/* Locate a specific option in the options body.  Returns pointer to
+ * the code byte if found, NULL if not found.  If the message contained the overload
+ * option, indicating that the file and/or server name parts of the header have been
+ * used as extensions for the options, then search those too, in the order specified
+ * by RFC2131.
+ */
+u_char *dhcp_find_option(DHCP *d, const u_char option)
+{
+        u_char *options = dhcp_options_start(d), *eoo = options + sizeof(d->options) - 4;
+        int overload = 0;
+
+        while (*options != OPTION_END || overload != 0) {
+		if (*options != OPTION_PAD) {
+			if (*options == option) {
+			        return options;
+			}
+			if (*options == OPTION_OPTIONOVERLOAD && options[1] != 0) {
+			        overload = options[2];
+			}
+			if (*options == OPTION_END && overload != 0) {
+			        if (overload & 1) {
+			                overload ^= 1;
+			                options = d->file;
+			                eoo = options + sizeof(d->file);
+			        }
+			        else if (overload & 2) {
+			                overload ^= 2;
+			                options = d->sname;
+			                eoo = options + sizeof(d->sname);
+			        }
+			        else {
+			                /* Don't know */
+			                overload = 0;
+			        }
+			        continue;
+			}
+			options += options[1] + 2;
+		}
+		else {
+			++options;
+			if (options >= eoo) {
+			        return NULL;
+			}
+		}
+        }
+
+	/* By doing this comparison, we can use this routine to find the used length
+	 * of the options buffer.
+	 */
+	return (option == OPTION_END) ? options : NULL;
+}
+
+/* Add an option to a DHCP packet's options field.  Returns pointer to newly added
+ * block (NULL if unable to add it), and ensures that a new END marker is in place.
+ */
+u_char *dhcp_add_option(DHCP *d, const u_char option, const u_char size, const void *opt)
+{
+        u_char *o;
+        int end_index;
+
+	if (dhcp_find_option(d, option) != NULL) {
+	        /* This option was already present! */
+	        return NULL;
+	}
+        o = dhcp_find_option(d, OPTION_END);
+
+	if (o < &d->options[0]) {
+	        /* XXX: Want to overload file and sname? */
+	        return NULL;
+	}
+
+        end_index = size + 2 + o - &d->options[0];
+        if (end_index > sizeof(d->options)) {
+                /* Insufficient space remaining */
+                return NULL;
+        }
+
+        o[0] = option;
+        o[1] = size;
+        if (size > 0) {
+                (void) memcpy(&o[2], opt, size);
+        }
+        o[2+size] = OPTION_END;
+        return o;
+}
+
+/* Routine to byte-reverse a host-order time value and add it as an option
+ * to a DHCP packet to save time everywhere this needs to be done.
+ */
+u_char *dhcp_add_time_option(DHCP *d, dhcp_time t, u_char option)
+{
+        if (t != dhcp_infinite_lease) {
+                t = t / 100;
+        }
+        t = (dhcp_time) htonl(t);
+        return dhcp_add_option(d, option, sizeof(t), &t);
+}
+
+/* Routines to remove an option.  This routine does not validate the option
+ * being removed, so you may cause absolute havoc if you remove things like
+ * the DHCP message type.  dhcp__delete returns non-zero if the extension
+ * section it has deleted the option from is now empty.
+ */
+static int dhcp__delete(u_char *opt, u_char *start, u_char *end)
+{
+        int i;
+
+	for (i=0; i<(2+opt[1]); ++i) {
+	        opt[i] = OPTION_PAD;
+	}
+	while (opt[i] == OPTION_PAD && &opt[i] < end) {
+	        ++i;
+	}
+        opt[1] = OPTION_PAD;
+        opt[0] = OPTION_PAD;
+	/* This was the last option - move END marker further back */
+	if (&opt[i] < end && opt[i] == OPTION_END) {
+	        opt[0] = OPTION_END;
+	        opt[i] = OPTION_PAD;
+	}
+	if (opt == start) {
+	        opt[0] = OPTION_END;
+	}
+
+	return (opt == start);
+}
+
+void dhcp_delete_option(DHCP *d, const u_char option)
+{
+        u_char *opt = dhcp_find_option(d, option);
+
+        if (opt != NULL && option != OPTION_PAD && option != OPTION_END) {
+                /* Was it in the extension section? */
+                if (opt >= d->sname && opt < d->file) {
+                	if (dhcp__delete(opt, d->sname, d->file)) {
+                                opt = dhcp_find_option(d, OPTION_OPTIONOVERLOAD);
+                                if (opt != NULL) {
+	                                /* Clear the sname bit in the extensions */
+	                                opt[2] &= ~dhcpoverload_SNAME;
+                                }
+                        }
+                }
+                else if (opt >= d->file && opt < d->options) {
+                	if (dhcp__delete(opt, d->file, d->options)) {
+                                opt = dhcp_find_option(d, OPTION_OPTIONOVERLOAD);
+                                if (opt != NULL) {
+	                                /* Clear the file bit in the extensions */
+	                                opt[2] &= ~dhcpoverload_FILE;
+                                }
+                        }
+                }
+                else {
+                        dhcp__delete(opt, d->options, &d->options[OPTIONS_MAX]);
+                }
+        }
+}
+
+/* Locates and extracts a given network-order time value from a packet and returns
+ * it in host-byte order and converted into centiseconds.  Returns NULL if the option
+ * was not found, else a pointer to the type byte in the packet and *expiry is filled in
+ */
+u_char *dhcp_find_lease_expiry(DHCP *d, dhcp_time *expiry, u_char option)
+{
+        u_char *opt = dhcp_find_option(d, option);
+        if (opt != NULL) {
+                dhcp_time result;
+                (void) memcpy(&result, opt+2, sizeof(result));
+                result = (dhcp_time) htonl(result);
+                if (result != dhcp_infinite_lease) {
+                        if (result >> 24) {
+                                /* Overflow* - maximise the lease term, but don't set
+                                 * it to the infinite lease magic value, because that's
+                                 * wrong.  The consequence of us storing the wrong value
+                                 * is that we will just attempt reacquisition earlier
+                                 * than the server may be expecting.  * Well almost -
+                                 * close enough for a quick check though.
+                                 */
+                                result = dhcp_maximum_lease;
+                        }
+                        else {
+                                result = result * 100;
+                        }
+                }
+
+                *expiry = result;
+        }
+        return opt;
+}
+
+/* This routine copies an option from the src DHCP packet to the destination
+ * should the option be present in the source.  it returns the address of
+ * the option in the destination, or NULL if the copy did not succeed (either
+ * did not exist in original, or there was no space in the destination)
+ */
+u_char *dhcp_copy_option(DHCP *d, DHCP *src, const u_char option)
+{
+        const u_char *opt = dhcp_find_option(src, option);
+        if (opt != NULL) {
+                return dhcp_add_option(d, opt[0], opt[1], &opt[2]);
+        }
+        return NULL;
+}
+
+/* This routine initialises the di->di_dhcp (di->req.ifd.packet) structure with a header
+ * suitable for sending a DHCP message.  It initialises the options field with the magic
+ * cookie and adds the terminator to it.  If a copy source (dsrc) is provided, the
+ * transaction ID (xid), client address (ciaddr) and parameter request list option are
+ * duplicated into the new packet.
+ */
+void dhcp_init_packet(dhcp_interface *di, DHCP *dsrc, u_char message_type)
+{
+        DHCP *d = &di->di_dhcp;
+
+	memset(d, '\0', sizeof(*d));
+        d->op = BOOTREQUEST;
+        d->htype = ETHERNET_TYPE;
+        d->hlen = ETHERNET_LEN;
+        d->secs = htons(0);
+        d->hops = 0;
+        d->flags = 0;
+        if (di->dib->dib_address != NULL) {
+                (void) memcpy(d->chaddr, di->dib->dib_address, d->hlen);
+        }
+
+	{
+	        /* Initialise the options field */
+	        const u_long cookie = htonl(OPTIONS_COOKIE);
+    		memcpy(d->options, &cookie, sizeof(cookie));
+		d->options[4] = OPTION_END;
+	}
+
+	dhcp_add_option(d, OPTION_DHCPMESSAGETYPE, 1, &message_type);
+
+	if (dsrc != NULL) {
+	        /* Copy the transaction ID */
+	        d->xid = dsrc->xid;
+		/* Pull in the previous client IP address, if known */
+	        d->ciaddr = dsrc->ciaddr;
+		/* Copy the parameter request list from the previous request */
+		if (dhcp_copy_option(d, dsrc, OPTION_PARAMETERREQLIST) == NULL) {
+		        /* There wasn't one.  Create one - if wanted.  We don't. */
+		}
+	}
+	else {
+	        d->xid = (u_long) di;
+	}
+}
+
+/* This routine controls backoff fuzz values, based on the current monotonic time */
+static dhcp_time dhcp_time_fuzz(dhcp_time interval)
+{
+	int now = ((interfaces_current_time() & 7) - 4) * 24;
+        return interval + now;
+}
+
+/* This routine is called to transmit the current packet (di->di_dhcp) on the network.
+ * It calculates the correct value for the secs field, works out the fuzzy intervals
+ * for retries and schedules them, and once it is happy, asks the sockets module to
+ * transmit the packet.
+ */
+void dhcp_transmit(dhcp_interface *di)
+{
+        /* First, calculate how long it was since we started this request */
+        u_char *msgtypeopt = dhcp_find_option(&di->di_dhcp, OPTION_DHCPMESSAGETYPE);
+        u_char msgtype = msgtypeopt ? msgtypeopt[2] : 0;
+        int elapsed_secs;
+
+	if (msgtypeopt == NULL) {
+	        trace(("DHCP (fatal): No DHCP message type option\n"));
+	        return;
+	}
+
+        elapsed_secs = (di->t1 - di->first_send) / 100;
+        if (elapsed_secs > UCHAR_MAX) {
+                elapsed_secs = UCHAR_MAX;
+        }
+        di->di_dhcp.secs = htons(elapsed_secs);
+
+        /* Now calculate the backoff periods.  Add the current interval to cause
+         * the timer to expire in the future */
+        if (di->state == dhcpstate_REQUESTING ||
+            di->state == dhcpstate_REBOOTING ||
+            di->state == dhcpstate_SELECTING) {
+                /* Binary exponential backoff with fuzz in these states */
+	        di->t1 += di->interval;
+        	if (di->t1 <= di->t2) {
+                	/* Re-calculate the backoff period. */
+	                dhcp_time new_interval;
+        	        if (di->interval == 0) {
+                	        new_interval = transmit_DEFAULT_INITIAL_RETRY;
+	                }
+        	        else {
+	        	        new_interval = (di->interval * 3) >> 1;
+	                	if (new_interval == di->interval) ++new_interval;
+	                }
+	                di->interval = dhcp_time_fuzz(new_interval);
+        	        if (di->interval > transmit_BACKOFF_LIMIT) {
+                	        di->interval = transmit_BACKOFF_LIMIT;
+	                }
+        	}
+	        else {
+        	        /* But, we must not exceed the final cutoff point */
+                	/* The timeout would exceed the giveup time anyway - timer expiry
+	                 * code will capture this situation and terminate the retrying anyway
+			 *
+			 * We'll just let it ride - the second timer will expire before the
+			 * first, and the prioritisation in the dispatcher will cause the
+			 * giveup timeout action to be invoked rather than the retry timer.
+			 */
+	        }
+        }
+        else {
+                /* Halfway to next timeout */
+                if (di->t2 == dhcp_infinite_lease) {
+                        di->t1 = (di->t1 * 3) >> 1;
+                }
+                else {
+		        enum {
+		                minute = 5952
+	                	/* OK - 48cs too short, but 5952 == 0x1740 which can be built
+        		         * as an 8-bit constant with an even bit count rotate. :-) */
+		        };
+                        /* Calculate halfway point */
+	                dhcp_time t = (di->t1 >> 1) + (di->t2 >> 1) ;
+
+	                if ((t - di->t1) < minute) {
+		        /* Oh dear - less than a minute into the future.  Things are
+		         * getting tight - adjust timeouts.  At this stage, we can start
+	        	 * panicking because our lease is due to expire in less than one
+		         * minute.  We really really really really really really really
+		         * need a new one extremely precipitously!
+	        	 */
+	                        di->t1 = di->t2;
+	                }
+	                else {
+	                        di->t1 = t;
+	                }
+                }
+        }
+
+	/* This is the icky bit - how to actually send the information.  We'll leave
+	 * that to the sockets module to handle, indicating whether automatically
+	 * claimed frame types should be released again after message is sent :-)
+	 */
+        sockets_transmit(di, msgtype == DHCPDECLINE ? st_RELEASE_FRAMES : st_RETAIN_FRAMES);
+}

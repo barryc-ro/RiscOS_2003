@@ -1,0 +1,663 @@
+/*
+ *  DHCP (dhcp.c)
+ *
+ * Copyright (C) Element 14 Ltd. 1999
+ *
+ */
+#include <stdio.h>
+#include <string.h>
+#include <limits.h>
+#include "kernel.h"
+#include "swis.h"
+
+#include "sys/types.h"
+#include "net/if.h"
+#include "protocols/dhcp.h"
+#include "sys/dcistructs.h"
+#include "netinet/in.h"
+#include "arpa/inet.h"
+
+#include "dhcp.h"
+#include "interfaces.h"
+#include "dhcperrors.h"
+#include "packets.h"
+#include "consts.h"
+#include "module.h"
+#include "sockets.h"
+#include "iparp.h"
+
+
+/* This routine is called whenever we receive the dynamic boot start
+ * service call from the Internet module.  We try to decide what to
+ * do with it, and if we intend to usurp the Internet module's BOOTP
+ * and upgrade it to DHCP, we claim the service call.  Internet 5.20
+ * or later is required to ensure Internet's full co-operation in this.
+ *
+ * We must remember to be careful because we issue this service call
+ * too - and we don't want a nasty loop to develop.
+ */
+int dhcp_prepare_request(dhcp_start_params *dsp, void *private_word)
+{
+        u_char *options;
+        dhcp_interface *di;
+
+	options = dhcp_find_option(dsp->request, OPTION_END);
+	if ((&dsp->request->options[dsp->request_max] - options) < 4) {
+	        /* No room to insert the DHCP message type option!
+	         * The best we can really do is to ignore the request :-(
+	         */
+	        return dhcp_IGNORE;
+	}
+
+	di = interfaces_create(dsp);
+	if (di == NULL) {
+	        /* Unable to create new interface structure - let's just
+	         * leave things and hope that the Internet module manages
+	         * to get things done.  If we already know the interface
+	         * quoted, we are given the existing dhcp_interface back.
+	         */
+	        return dhcp_IGNORE;
+	}
+
+        if (dhcp_find_option(dsp->request, OPTION_DHCPMESSAGETYPE) != NULL) {
+                /* There is already a DHCP message type option!  We'd
+                 * better ignore this message.
+                 */
+                return dhcp_IGNORE;
+        }
+
+	if (&di->di_dhcp == dsp->request) {
+	        /* This was our own service call.  We'd better ignore it */
+	        return dhcp_IGNORE;
+	}
+
+	/* The returned interface may or may not be new, but we are going
+	 * to take control of this one away from the Internet module.  All
+	 * returns after this point must return dhcp_CLAIM.
+	 */
+
+	switch (di->state) {
+		case dhcpstate_INITREBOOT:
+		case dhcpstate_REBOOTING:
+		        /* Hmm.  I doubt that RISC OS will ever get into
+		         * these states, but it's basically needing to send
+		         * a request again, so let's just re-initialise the
+		         * interface back to basics and start again.
+		         */
+		        dhcp_request(di, dhcpstate_REBOOTING, dhcprequest_set_T2);
+		        break;
+
+		case dhcpstate_INIT:
+		case dhcpstate_SELECTING:
+	        	/* It was either new, or a retry from some software
+	        	 * that was prodding the Internet module.  Resend
+	        	 * our broadcasts and tell the Internet module's
+	        	 * caller to piss off.
+		         */
+		        di->state = dhcpstate_INIT;
+		        di->t1 = dhcp_immediate_action;
+		        break;
+
+		default:
+		case dhcpstate_REQUESTING:
+	        case dhcpstate_BOUND:
+	        case dhcpstate_RENEWING:
+		case dhcpstate_REBINDING:
+	                /* Not really interested, frankly - everything is
+	                 * under control and is bouncing along merrily.
+	                 */
+	                break;
+	}
+
+	/* Prod the timers - at least we can claim to have done something
+	 * whatever state we were in at the time this call was made.
+	 */
+	interfaces_reschedule(private_word);
+
+	/* XXX: Need to block here waiting for the expiration of a timeout?
+	 *      Or do we return and rely on Internet's caller to do this.
+	 *      The caller will almost certainly be the IPConfig module, so
+	 *      it should be OK, but behaviour needs to be verified.
+	 */
+
+	/* Tell Internet module not to bother with this request */
+        return dhcp_CLAIM;
+}
+
+/* Callback routine invoked by sockets module when it has read a DHCP
+ * packet from its listening datagram socket.  This routine has to work
+ * out whether we need it and if so for which interface it was for.
+ * Basic intergrity is guaranteed (packet is long enough, well-terminated,
+ * contains a valid magic cookie).
+ */
+void dhcp_deliver_incoming_packet(DHCP *d, void *private_word)
+{
+        dhcp_interface *di = interfaces_find_by_xid(d->xid);
+
+        if (di == NULL) {
+                /* Couldn't match this packet on the transaction ID */
+		#ifdef TRACE
+		struct in_addr a;
+		memcpy(&a, &d->yiaddr, 4);
+                trace(("DHCP: unable to match ID %ld with yiaddr %s\n", d->xid, inet_ntoa(a)));
+                #endif
+        }
+        else if (memcmp(di->dib->dib_address, d->chaddr, d->hlen) != 0) {
+                /* Cross-check the h/w address against the driver failed */
+                trace(("DHCP: h/w address mismatch (%s)\n", di->di_name));
+        }
+        else {
+                dhcp_reply_params p;
+                p.ifname = di->di_name;
+                p.dib = di->dib;
+                p.reply = d;
+                p.reply_len = sizeof(*d);
+                dhcp_interpret_reply(di, &p, private_word);
+        }
+}
+
+/* Second stage dispatch - we've matched up the interfaces and remembered
+ * the details of the incoming packet in a convenient structure.  Now we
+ * need to find the DHCP message type option so we can dispatch it to the
+ * appropriate handler.
+ */
+void dhcp_interpret_reply(dhcp_interface *di, dhcp_reply_params *drp, void *private_word)
+{
+        u_char *msgtype;
+
+	if (drp->reply == &di->binding) {
+	        /* We sent this service call! Therefore this function is
+	         * almost certainly currently threaded (through dhcp_ack)
+	         * so we need to ignore this.
+	         */
+	        return;
+	}
+
+        msgtype = dhcp_find_option(drp->reply, OPTION_DHCPMESSAGETYPE);
+	if (msgtype == NULL || msgtype[1] < 1) {
+        	/* Reply does not contain a valid DHCP message type option,
+	         * hence we must ignore it.
+	         */
+	        return;
+	}
+
+	switch (msgtype[2]) {
+                case DHCPOFFER:
+                        /* May get several of these.  We never claim
+                         * these messages as that would put the Internet
+                         * module into a loop.  But we have to make sure
+                         * that there is an outstanding DHCPDISCOVER for
+                         * the specified interface.
+                         */
+                        dhcp_offer(di, drp);
+	                break;
+
+                case DHCPACK:
+                        /* OK - the server has accepted our DHCPREQUEST
+                         * and we can now tidy up the conversation and
+                         * forget about it (for dynamic leases we need
+                         * to remember it for future renegotiation, but
+                         * we don't do those yet)
+                         */
+                        dhcp_ack(di, drp);
+                	break;
+
+                case DHCPNAK:
+                        /* Oh dear - the server has changed its mind about
+                         * letting us have the previously suggested IP
+                         * address.
+                         */
+                        dhcp_nak(di, drp);
+                	break;
+
+		/* The remaining message types are of no interest to us
+                 * because we're just a client.
+                 */
+                case DHCPDISCOVER:
+                case DHCPREQUEST:
+                case DHCPDECLINE:
+                case DHCPRELEASE:
+                default:
+                        break;
+	}
+
+	/* Prod the timers - at least we can claim to have done something. */
+	interfaces_reschedule(private_word);
+}
+
+void dhcp_discover(dhcp_interface *di)
+{
+	/* Send the DHCP discover datagram for this interface */
+        dhcp_time desired_lease = di->request_lease;
+        trace(("DHCP Discover for interface %s\n", di->di_name));
+
+        /* We need to remember that we haven't seen any offers yet */
+        di->offer.op = BOOTREQUEST; /* Mark offer buffer as unused */
+
+	dhcp_init_packet(di, &di->binding, DHCPDISCOVER);
+	dhcp_add_time_option(&di->di_dhcp, desired_lease, OPTION_IPADDRLEASETIME);
+	module_notify_dynamic_boot_start(di);
+	di->first_send = interfaces_current_time();
+	di->interval = discover_INITIAL_RETRY;
+	di->t1 = di->first_send;
+	di->t2 = di->first_send + discover_TOTAL_TIMEOUT;
+	di->kill_if = dhcp_infinite_lease;
+        di->state = dhcpstate_SELECTING;
+        dhcp_transmit(di);
+}
+
+void dhcp_offer(dhcp_interface *di, dhcp_reply_params *drp)
+{
+        /* We have received an offer of an address allocation service
+         * Ideally, we should remember two or three of these messages if
+         * they arrive in case we get a DHCPNAK in response to the DHCPREQUEST
+         * message that we are about to send, but as it is we'll just
+         * hold on to the "best" offer we get until we timeout.
+         */
+
+	trace(("DHCPOFFER message received\n"));
+
+	if (di->state != dhcpstate_SELECTING) {
+	        /* then we weren't expecting any more offers.  Of course,
+	         * this may just be a "late" offer arriving - so ignore it.
+	         * If we are getting the DHCP packets from our own socket,
+	         * we may well be triggered by the Internet module too,
+	         * so we'll take the first one that comes, thanks.
+	         */
+	        return;
+	}
+	else {
+	        /* At this point, we can examine any previously arrived
+	         * DHCPOFFER messages and see if it or the newly arrived one
+	         * is the best one to keep.  If we prefer the one we've already
+	         * got, ignore the newly arrived offer.  If we prefer it, take
+	         * a copy of it.  The xid has already been matched by the
+	         * dispatcher, so we are safe on that front.
+	         */
+	        if (di->offer.op == BOOTREPLY) {
+	                /* We have already had a reply - use some kind of
+	                 * logic to decide whether we like it or not.  We'll
+	                 * choose the offer that offers the longest lease.
+	                 */
+	                dhcp_time new_expiry;
+	                dhcp_time current_expiry;
+	                int prefer_it = 0;
+
+			if (dhcp_find_lease_expiry(drp->reply, &new_expiry, OPTION_IPADDRLEASETIME) == NULL) {
+			        /* new message didn't have an expiry date suggestion! */
+			        return;
+			}
+
+			if (dhcp_find_lease_expiry(&di->offer, &current_expiry, OPTION_IPADDRLEASETIME) == NULL) {
+			        /* Current reply didn't have an expiry suggestion! */
+			        prefer_it = 1;
+			}
+			else if (new_expiry > current_expiry) {
+			        /* This was a longer lease offer - prefer it */
+			        prefer_it = 1;
+			}
+
+			if (prefer_it) {
+			        /* And check nobody else objects to it ... */
+			        if (module_notify_dhcp_offer(di, drp->reply)) {
+					di->offer = *drp->reply;
+			        }
+			}
+	        }
+	        else {
+	                /* This is the first one, and therefore the best.  Remember it as long as
+	                 * nobody else objects.
+	                 */
+	                if (module_notify_dhcp_offer(di, drp->reply)) {
+				di->offer = *drp->reply;
+	                }
+	        }
+	}
+}
+
+void dhcp_request(dhcp_interface *di, dhcp_state next_state, enum dhcprequest_opts reset_t2)
+{
+        /* The time has arrived to send a DHCPREQUEST message down an
+         * interface.  Once we've sent the message, we go into next_state
+         * to wait for replies.  next_state will be dhcpstate_REQUESTING
+         * dhcpstate_REBINDING, dhcpstate_RENEWING or dhcpstate_REBOOTING.
+         * The server to address is that which is in the interface's DHCP packet buffer,
+         * but the request is still broadcast.  Servers recognise themselves
+         * through the server identifier option.
+         */
+        dhcp_time desired_lease = di->request_lease;
+
+        trace(("DHCP Request message for interface %s\n", di->di_name));
+
+        /* The DHCPOFFER message we have chosen is in di->offer */
+
+        di->temp = di->di_dhcp;
+	dhcp_init_packet(di, &di->temp, DHCPREQUEST);
+	dhcp_add_time_option(&di->di_dhcp, desired_lease, OPTION_IPADDRLEASETIME);
+	dhcp_copy_option(&di->di_dhcp, &di->offer, OPTION_SERVERIDENTIFIER);
+	dhcp_add_option(&di->di_dhcp, OPTION_REQUESTEDIPADDR, sizeof(di->offer.yiaddr), &di->offer.yiaddr);
+	di->di_dhcp.secs = di->temp.secs;
+	if (di->state == dhcpstate_SELECTING) {
+	        /* Only send this service call around if we are in the SELECTING state,
+	         * because if we are simply attempting a renew or rebind, we already
+	         * have the information.
+	         */
+		module_notify_dynamic_boot_start(di);
+	}
+	di->first_send = interfaces_current_time();
+	di->interval = request_INITIAL_RETRY;
+	di->t1 = di->first_send + request_INITIAL_RETRY;
+	if (reset_t2 == dhcprequest_set_T2) {
+	        di->t2 = di->first_send + request_TOTAL_TIMEOUT;
+	}
+        di->state = next_state;
+        dhcp_transmit(di);
+}
+
+/* This routine takes two time values - they are both in centiseconds and
+ * return the result in centiseconds.  If 't' is the infinite lease, the
+ * result is the infinite lease.
+ */
+static dhcp_time dhcp_add_dhcp_time(dhcp_time t, dhcp_time base)
+{
+        if (t == dhcp_infinite_lease) {
+                return t;
+        }
+        else {
+                dhcp_time result = t + base;
+                if (result < t || result == dhcp_infinite_lease) {
+                        /* Overflow */
+                        return dhcp_maximum_lease;
+                }
+                else {
+                        return result;
+                }
+	}
+}
+
+void dhcp_ack(dhcp_interface *di, dhcp_reply_params *drp)
+{
+        /* Server has acknowledged a request for use of an IP address.
+         * Hooray!  Let's update the interface details we've got stored.
+         * We really ought to attempt an ARP resolution for our new address
+         * and send a declination message if we fail ... so we'll ask the
+         * iparp module to do one (accepting that it might not actually
+         * do it ... see the iparp module to see if it does)
+         */
+
+	trace(("DHCPACK message received\n"));
+
+	if (di->state == dhcpstate_BOUND) {
+	        /* Already bound.  Discard this message completely. */
+	        return;
+	}
+
+	if (di->state != dhcpstate_REQUESTING &&
+	    di->state != dhcpstate_REBOOTING &&
+	    di->state != dhcpstate_REBINDING &&
+	    di->state != dhcpstate_RENEWING) {
+		/* Not prepared to receive DHCKACKs in this state. Ignore it. */
+        	return;
+	}
+
+	/* Need to calculate the re-acquisition timer real event times now */
+
+	/* First, get the fields out of the packet - as centisecond relative
+	 * to the first send time.
+	 */
+	dhcp_find_lease_expiry(drp->reply, &di->t1, OPTION_RENEWALTIME);
+	dhcp_find_lease_expiry(drp->reply, &di->t2, OPTION_REBINDINGTIME);
+	dhcp_find_lease_expiry(drp->reply, &di->kill_if, OPTION_IPADDRLEASETIME);
+
+	/* Add in the base time that we sent the DISCOVER message */
+	di->t1 = dhcp_add_dhcp_time(di->t1, di->first_send);
+	di->t2 = dhcp_add_dhcp_time(di->t2, di->first_send);
+	di->kill_if = dhcp_add_dhcp_time(di->kill_if, di->first_send);
+
+	/* Correct ordering to ensure renew before rebind before death */
+	if (di->t1 > di->t2) {
+	        di->t2 = di->t1;
+	}
+	if (di->t2 > di->kill_if) {
+	        di->kill_if = di->t2;
+	}
+
+	if (di->t1 <= interfaces_current_time()) {
+	        /* Address lease has already expired! */
+	        di->offer = *drp->reply;
+	        dhcp_decline(di);
+	        return;
+	}
+
+	/* Perform ARP search verification for proposed IP address */
+	if (arp_for_ip(di, drp->reply) < 0) {
+	        /* ARP cache has detected a duplicate IP address in its cache
+	         * and so believes that initialising this interface with this
+	         * address would cause havoc - the Internet module usually
+	         * panics in this circumstance.  Therefore, we send back a
+	         * message declining to use the offered IP address.
+	         */
+	        di->offer = *drp->reply;
+	        dhcp_decline(di);
+	        return;
+	}
+
+	/* Everything was OK - record the rest of the data */
+	di->state = dhcpstate_BOUND;
+	di->di_dhcp = *drp->reply;
+	di->binding = di->di_dhcp;
+
+	/* Inform Internet module and ask it to parse the standard options
+	 * and then send around the service call announcing the interface
+	 * dynamic boot has succeeded.
+	 */
+	sockets_transmit(di, st_ACK_RECEIVED);
+}
+
+void dhcp_nak(dhcp_interface *di, dhcp_reply_params *drp)
+{
+        /* Server rejected our request for the use of an IP address.
+         * We are stuffed.  We need to re-enter the initialisation state
+         * and send a new discovery request.
+         */
+
+	trace(("DHCPNAK message received\n"));
+
+	/* Ensure that we cancel memory of any binding */
+	di->binding = *drp->reply;
+	di->di_dhcp = di->binding;
+
+	/* Inform Internet that we are abandonning the boot attempt, and that
+	 * it should restore the interface state if it had previously had to
+	 * initialise it.  This is fine, because when the discovery occurs
+	 * again in a moment, it will reclaim the frames again.
+	 */
+	sockets_transmit(di, st_NAK_AND_RELEASE);
+
+	di->state = dhcpstate_INIT;
+	di->t1 = 0;
+}
+
+void dhcp_decline(dhcp_interface *di)
+{
+        dhcp_time desired_lease = dhcp_infinite_lease; /* Default in case read from offer fails */
+
+        /* We need to tell the server we weren't happy with the lease */
+
+        dhcp_init_packet(di, &di->offer, DHCPDECLINE);
+	dhcp_find_lease_expiry(&di->offer, &desired_lease, OPTION_IPADDRLEASETIME);
+	dhcp_add_time_option(&di->di_dhcp, desired_lease, OPTION_IPADDRLEASETIME);
+	dhcp_copy_option(&di->di_dhcp, &di->offer, OPTION_SERVERIDENTIFIER);
+	dhcp_add_option(&di->di_dhcp, OPTION_REQUESTEDIPADDR, sizeof(di->offer.yiaddr), &di->offer.yiaddr);
+	di->di_dhcp.secs = di->temp.secs;
+	di->first_send = interfaces_current_time();
+	di->interval = decline_INITIAL_RETRY;
+	di->t1 = di->first_send + decline_INITIAL_RETRY;
+	di->t2 = di->first_send + decline_TOTAL_TIMEOUT;
+        di->state = dhcpstate_INIT;
+        dhcp_transmit(di);
+}
+
+
+/* The following functions provide the gateway between the external SWI
+ * interface, and the internal DHCP parsing routines.
+ */
+_kernel_oserror *dhcp_swi_getstate(_kernel_swi_regs *r)
+{
+        struct dhcp_swi_getstate_regs {
+                int flags;
+                const char *if_name;
+                dhcp_state out_status;
+                char *buffer;
+                int inout_size;
+        } *args = (struct dhcp_swi_getstate_regs *) r;
+	dhcp_interface *di;
+	DHCP *d;
+
+	di = interfaces_find(args->if_name);
+	if (di == NULL) {
+	        return dhcperror_no_such_interface();
+	}
+	args->out_status = di->state;
+	if (di->state == dhcpstate_BOUND ||
+	    di->state == dhcpstate_REBINDING ||
+	    di->state == dhcpstate_RENEWING) {
+            	d = &di->binding;
+	}
+    	else {
+            	d = &di->di_dhcp;
+        }
+
+        if (args->buffer != NULL) {
+		if (args->inout_size >= sizeof(*d)) {
+	                (void) memcpy(args->buffer, d, sizeof(*d));
+	        }
+		else {
+		        if (args->inout_size != 0) {
+		                (void) memcpy(args->buffer, d, args->inout_size);
+		        }
+	        }
+	}
+
+        args->inout_size -= sizeof(*d);
+
+        return NULL;
+}
+
+_kernel_oserror *dhcp_swi_getoption(_kernel_swi_regs *r)
+{
+        struct dhcp_swi_getoption_regs {
+                int flags;
+                const char *if_name;
+                union {
+                        u_char     option;
+                	dhcp_state out_status;
+                } r2;
+                char *buffer;
+                int inout_size;
+        } *args = (struct dhcp_swi_getoption_regs *) r;
+	dhcp_interface *di;
+	DHCP *d;
+	u_char *option;
+
+	if (args->r2.option == OPTION_PAD || args->r2.option == OPTION_END) {
+	        return dhcperror_bad_option();
+	}
+
+	di = interfaces_find(args->if_name);
+	if (di == NULL) {
+	        return dhcperror_no_such_interface();
+	}
+	if (di->state == dhcpstate_BOUND ||
+	    di->state == dhcpstate_REBINDING ||
+	    di->state == dhcpstate_RENEWING) {
+            	d = &di->binding;
+	}
+    	else {
+            	d = &di->di_dhcp;
+        }
+
+	option = dhcp_find_option(d, args->r2.option);
+	args->r2.out_status = di->state;
+	if (option == NULL) {
+	        return dhcperror_option_not_present();
+	}
+
+	if (args->buffer != NULL) {
+		if (args->inout_size >= option[1]) {
+		        if (option[1] != 0) {
+			        (void) memcpy(args->buffer, option + 2, option[1]);
+		        }
+	        }
+		else {
+		        if (args->inout_size != 0) {
+		        	(void) memcpy(args->buffer, option + 2, args->inout_size);
+		        }
+		}
+	}
+
+	args->inout_size -= option[1];
+
+        return NULL;
+}
+
+_kernel_oserror *dhcp_swi_setoption(_kernel_swi_regs *r)
+{
+        struct dhcp_swi_setoption_regs {
+                int flags;
+                const char *if_name;
+                union {
+                        u_char     option;
+                	dhcp_state out_status;
+                } r2;
+                char *buffer;
+                unsigned size;
+        } *args = (struct dhcp_swi_setoption_regs *) r;
+	dhcp_interface *di;
+	u_char *option = (u_char *)1; /* Initialise to ensure NULL return in the delete case */
+
+	if (args->r2.option == OPTION_PAD || args->r2.option == OPTION_END || args->size > UCHAR_MAX) {
+	        return dhcperror_bad_option();
+	}
+
+	di = interfaces_find(args->if_name);
+	if (di == NULL) {
+	        return dhcperror_no_such_interface();
+	}
+
+        dhcp_delete_option(&di->di_dhcp, args->r2.option);
+        if (args->buffer != NULL) {
+                /* Effect is to delete if buffer pointer is passed as NULL */
+		option = dhcp_add_option(&di->di_dhcp, args->r2.option, args->size, args->buffer);
+        }
+	args->r2.out_status = di->state;
+	if (option != NULL) {
+	        /* We did manage to add it */
+	        return NULL;
+	}
+
+        return dhcperror_option_cannot_add();
+}
+
+_kernel_oserror *dhcp_swi_execute(_kernel_swi_regs *r)
+{
+        struct dhcp_swi_execute_regs {
+                int flags;
+                const char *if_name;
+               	dhcp_state out_status;
+        } *args = (struct dhcp_swi_execute_regs *) r;
+	dhcp_interface *di;
+
+	di = interfaces_find(args->if_name);
+	if (di == NULL) {
+        	/* New work - prod Internet module into causing a dynamic boot.  When
+        	 * it sends around the service call initialising boot, we'll trap it */
+        	sockets_trigger_internet_dhcp(args->if_name);
+        	di = interfaces_find(args->if_name);
+        	if (di == NULL) {
+                        return dhcperror_no_such_interface();
+                }
+	}
+        args->out_status = di->state;
+      	return NULL;
+}
