@@ -29,12 +29,12 @@ SetLED( int flag )
  * Wimp task has objected to the standby.
  */
 static _kernel_oserror *
-EnterStandby2( int flags )
+EnterStandby2( int flags, void *pw )
 {
 	_kernel_oserror *err = NULL;
 	int temp;
 
-	/* Disable handling of standby IRQ while we try to go into standby. */
+	/* Disable handling of standby SWIs while we try to go into standby. */
 	temp = veneer_irqs_off();
 	Flags |= STANDBY_BUSY_FLAG;
 	veneer_irqs_on( temp );
@@ -57,9 +57,6 @@ EnterStandby2( int flags )
 			/* Only enter standby if no-one objects. */
 			if ( (err == NULL) && (temp != 0) )
 			{
-				/* Blank the screen. */
-				(void)_swix( ScreenBlanker_Control, _IN(0), ScreenBlankerReason_StrictBlank );
-
 				/* Disable keyboard buffering. */
 				err = _swix( OS_Byte, _IN(0)|_IN(1)|_IN(2)|_OUT(1), 201, 0xFF, 0, &temp );
 				if ( (err == NULL) && (temp == 0) ) Flags |= STANDBY_ENABLE_KEYBOARD;
@@ -76,20 +73,22 @@ EnterStandby2( int flags )
 				/* Tell the world we're going into standby. */
 				(void)_swix( OS_ServiceCall, _IN(1), Service_ShutDownComplete );
 
-				Flags |= STANDBY_SHUTDOWN_FLAG;
+				/* Blank the screen and turn off the LED. */
+				(void)_swix( ScreenBlanker_Control, _IN(0), ScreenBlankerReason_StrictBlank );
 				SetLED( 0 );
 
-                                /* Tell the world we're now in standby. */
-                                (void)_swix( OS_ServiceCall, _INR(0,1), Flags & STANDBY_SHUTDOWN_FLAG, Service_Standby );
+				Flags |= STANDBY_SHUTDOWN_FLAG;
+
+				/* Tell the world we're now standby. */
+				(void)_swix( OS_ServiceCall, _INR(0,1), Flags & STANDBY_SHUTDOWN_FLAG, Service_Standby );
 				err = NULL;
 			}
 		}
 	}
 
-	/* Allow standby to work again. */
-	temp = veneer_irqs_off();
-	Flags &= ~STANDBY_BUSY_FLAG;
-	veneer_irqs_on( temp );
+	/* Allow standby IRQ to work again after a suitable timeout. */
+	if ( _swix(OS_CallAfter, _INR(0,2), STANDBY_ENABLE_DELAY, veneer_standby_enable, pw) != NULL )
+		standby_enable( NULL, NULL );
 
 	return err;
 }
@@ -97,9 +96,9 @@ EnterStandby2( int flags )
 
 
 static void
-ExitStandby( void )
+ExitStandby( void *pw )
 {
-	/* Disable handling of standby IRQ while we come out of standby. */
+	/* Disable handling of standby SWIs while we come out of standby. */
 	int temp = veneer_irqs_off();
 	Flags |= STANDBY_BUSY_FLAG;
 	veneer_irqs_on( temp );
@@ -109,6 +108,9 @@ ExitStandby( void )
 	{
 		int desktop_state;
 		_kernel_oserror *err;
+
+		/* Tell the world we're coming out. */
+		_swix( OS_UpCall, _IN(0), UpCall_Online );
 
 		/* Re-enable the mouse. */
 		if ( Flags & STANDBY_ENABLE_POINTER )
@@ -124,27 +126,36 @@ ExitStandby( void )
 			Flags &= ~STANDBY_ENABLE_KEYBOARD;
 		}
 
-		/* Unblank the screen. */
+		/* Unblank the screen and turn on the LED. */
 		(void)_swix( ScreenBlanker_Control, _IN(0), ScreenBlankerReason_StrictUnblank );
+		SetLED( LED_ON_FLAG );
 
 		/* Make a noise (but only if we are in the desktop). */
 		err = _swix( Wimp_ReadSysInfo, _IN(0)|_OUT(0), 3, &desktop_state );
 		if ( (err == NULL) && (desktop_state != 0) ) _swix( SoundFX_Play, _INR(0,1), 0, STANDBY_ONLINE_EVENT );
 
-		/* Tell the world we're coming out. */
-		_swix( OS_UpCall, _IN(0), UpCall_Online );
-
 		Flags &= ~STANDBY_SHUTDOWN_FLAG;
-		SetLED( LED_ON_FLAG );
 
-                /* Tell the world we're out. */
-                (void)_swix( OS_ServiceCall, _INR(0,1), Flags & STANDBY_SHUTDOWN_FLAG, Service_Standby );
+		/* Tell the world we're out. */
+		(void)_swix( OS_ServiceCall, _INR(0,1), Flags & STANDBY_SHUTDOWN_FLAG, Service_Standby );
 	}
 
-	/* Allow standby IRQ to work again. */
-	temp = veneer_irqs_off();
+	/* Allow standby IRQ to work again after a suitable timeout. */
+	if ( _swix(OS_CallAfter, _INR(0,2), STANDBY_ENABLE_DELAY, veneer_standby_enable, pw) != NULL )
+		standby_enable( NULL, NULL );
+}
+
+
+/* Handler called to enable the standby SWIs after a timeout. */
+void
+standby_enable( _kernel_swi_regs *r, void *pw )
+{
+	int temp = veneer_irqs_off();
 	Flags &= ~STANDBY_BUSY_FLAG;
 	veneer_irqs_on( temp );
+
+	NOT_USED( r );
+	NOT_USED( pw );
 }
 
 
@@ -158,7 +169,7 @@ void standby_wimpreplyhandler( _kernel_swi_regs* r, void* pw)
 	if ( r->r[0] == 19)
 	{
 		/* Message_PREQUIT has bounced, so we can proceed with shutdown. */
-		if ( EnterStandby2(0) != NULL ) ExitStandby();
+		if ( EnterStandby2(0, pw) != NULL ) ExitStandby( pw );
 	}
 }
 
@@ -171,7 +182,7 @@ EnterStandby( int flags, void* pw )
 	
 	if ( (flags & STANDBY_STANDBY_FORCE_FLAG) || ((err == NULL) && (desktop_state == 0)) )
 	{
-		return EnterStandby2( flags );
+		return EnterStandby2( flags, pw );
 	}
 	else
 	{
@@ -225,12 +236,12 @@ standby_standby( _kernel_swi_regs *r, void* pw )
 
 
 _kernel_oserror *
-standby_online( _kernel_swi_regs *r )
+standby_online( _kernel_swi_regs *r, void *pw )
 {
 	if ( (Flags & STANDBY_BUSY_FLAG) == 0 )
 	{
 		r->r[0] = Flags & STANDBY_SHUTDOWN_FLAG;
-		ExitStandby();
+		ExitStandby( pw );
 	}
 	return NULL;
 }
