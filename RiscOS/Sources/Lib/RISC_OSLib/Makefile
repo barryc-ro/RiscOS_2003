@@ -414,6 +414,11 @@ export_hdrs: ${EXP_HDR}.SharedCLib; @
 
 export_libs: ${EXPORTS} dirs; @
 
+install: lib.clib
+        ${MKDIR}  ${INSTDIR}
+        ${CP} lib.clib ${INSTDIR}.${TARGET} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${OBJECT}
         ${CP} ${OBJECT} ${INSTDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: rom library installed
