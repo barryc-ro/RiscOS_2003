@@ -1,4 +1,4 @@
-# Makefile for errorlib
+# Makefile for MsgLib
 #
 # *****************************************
 # ***       C h a n g e   L i s t       ***
@@ -31,7 +31,7 @@ LD		= link
 LB		= libfile
 WIPE		= -wipe
 
-CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS}
+CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${THROWBACK} ${DFLAGS}
 ASFLAGS		= -depend !Depend -Stamp -quit
 CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
@@ -62,23 +62,23 @@ DFLAGS		=
 # Program specific options:
 #
 
-COMPONENT	= msglib
-TARGET		= msglib
-TARGETZ		= msglibzm
+COMPONENT	= MsgLib
+TARGET		= MsgLib
+TARGETZ		= MsgLibzm
 EXPORTS		= ${EXP_HDR}.${COMPONENT}
 
 OBJS		= o.msghandle
 
-OBJSZ		= z.msghandle
+OBJSZ		= oz.msghandle
 
 
 # ------------------------------------------------------------------------------
 # Rule patterns
 #
 
-.SUFFIXES: .o .z .s .h .c
+.SUFFIXES: .o .oz .s .h .c
 .c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.c.z:;     ${CC} ${CCFLAGS} -zm -zps1 -o $@ $<
+.c.oz:;    ${CC} ${CCFLAGS} -zm -zps1 -o $@ $<
 .s.o:;     ${AS} ${ASFLAGS} -o $@ $<
 
 
@@ -101,40 +101,41 @@ install_rom: ${TARGET}
 
 clean:
 	${WIPE} o ${WFLAGS}
-	${WIPE} z ${WFLAGS}
+	${WIPE} oz ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${TARGETZ}
 	@echo ${COMPONENT}: cleaned
 
-export_hdrs: h.msglib dirs
-	${CP}	h.msglib	${EXPORT_DIR}.h.msglib	${CPFLAGS}
+export_hdrs: h.MsgLib export_dirs
+	${CP}	h.MsgLib	${EXPORT_DIR}.h.MsgLib	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${TARGET} ${TARGETZ} dirs
+export_libs: ${TARGET} ${TARGETZ} export_dirs
 	${CP}	${TARGET}	${EXPORT_DIR}.o.${TARGET}	${CPFLAGS}
 	${CP}	${TARGETZ}	${EXPORT_DIR}.o.${TARGETZ}	${CPFLAGS}
+	${CP}	VersionNum	${EXPORT_DIR}.VersionNum	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (libs)
 
-local_dirs:
+o.dirs:
 	${MKDIR} o
-	${MKDIR} z
+	${MKDIR} oz
+	create o.dirs
+	stamp o.dirs
 
-dirs:
+export_dirs:
 	${MKDIR} ${LIBDIR}
 	${MKDIR} ${EXPORT_DIR}
 	${MKDIR} ${EXPORT_DIR}.h
 	${MKDIR} ${EXPORT_DIR}.o
-	${MKDIR} ${EXPORT_DIR}.z
-        
 
 # ------------------------------------------------------------------------------
 # Final link
 #
 
-${TARGET}: ${OBJS} local_dirs
+${TARGET}: ${OBJS} o.dirs
 	${LB} ${LBFLAGS} -o ${TARGET} ${OBJS}
         
-${TARGETZ}: ${OBJSZ} local_dirs
+${TARGETZ}: ${OBJSZ} o.dirs
 	${LB} ${LBFLAGS} -o ${TARGETZ} ${OBJSZ}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
