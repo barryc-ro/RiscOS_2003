@@ -128,7 +128,7 @@ ${DIRS}:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} dirs
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${DIRS}
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
