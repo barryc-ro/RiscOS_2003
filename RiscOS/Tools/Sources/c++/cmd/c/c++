@@ -1,0 +1,491 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <string.h>
+
+#include "swis.h"
+#include "kernel.h"
+
+#define DDEUtils_Prefix    0x42580
+
+#define VMManager_TaskInfo 0x45c80
+
+typedef struct FName {
+    struct FName *next;
+    char *filename;
+} FName;
+
+FName *fname_list;
+FName **pfname_list = &fname_list;
+int nfiles;
+
+int verbose;
+
+static char cpp_output[L_tmpnam];
+static char cfront_output[L_tmpnam];
+
+
+static void rand_tmpnam (char *filename)
+{
+    if (_kernel_getenv("wimp$scrapdir", filename, L_tmpnam-10) != NULL)
+        strcpy(filename, "$.tmp");
+    filename += strlen(filename);
+    sprintf(filename, ".x%.8x", rand());
+}
+
+
+static void error(char *e)
+{
+    va_list ap;
+
+    va_start(ap, e);
+    fprintf(stderr, "c++: ");
+    vfprintf(stderr, e, ap);
+    va_end(ap);
+    exit(1);
+}
+
+static void do_cmd(char *cmd)
+{
+    int rc;
+
+    if (verbose)
+        fprintf(stderr, "C++: %s\n", cmd);
+    rc = system(cmd);
+    if (rc) {
+        if (rc == -2)
+            _kernel_raise_error(_kernel_last_oserror());
+        fprintf(stderr, "Command failed with return code %d\n", rc);
+        fprintf(stderr, "Command = %s\n", cmd);
+        exit(rc < 0 ? -rc : rc);
+    }
+}
+
+static int cistrcmp(char *s, char *t)
+{
+    for ( ; ((*s | 0x20) == (*t | 0x20)) || (*s < ' ' && *t < ' '); s++, t++)
+        if (*s < ' ')
+            return 0;
+    return 1;
+}
+
+static void munge_filename(char *s, char **extensions)
+{
+    char *extn, *root, *e;
+    int c;
+
+    extn = root = s;
+    while ((c = *s++) != 0) {
+        if (c == ':')
+            extn = root = s;
+        if (c == '.') {
+            root = extn;
+            extn = s;
+        }
+    }
+    if (root != extn) {
+        while (e = *extensions++) {
+            if (cistrcmp(e, extn) == 0) {
+                extn--; s--;
+                do {
+                    *--s = *--extn;
+                } while (extn > root);
+                strcpy(root, e);
+                *(root + strlen(extn)) = '.';
+                break;
+            }
+        }
+    }
+}
+
+static char *tail(char *s)
+{
+    char *extn;
+    int c;
+
+    extn = s;
+    while ((c = *s++) != 0) {
+        if (c == ':' || c == '.')
+            extn = s;
+    }
+    return extn;
+}
+
+static int filetype(char *s, char **extensions, int def)
+{
+    char *extn, *root, *e;
+    int c;
+    int n;
+
+    extn = root = s;
+    while ((c = *s++) != 0) {
+        if (c == ':')
+            extn = root = s;
+        if (c == '.') {
+            root = extn;
+            extn = s;
+        }
+    }
+    if (root == extn)
+        return def;
+    *--extn = 0;
+    n = 0;
+    while (e = *extensions++) {
+        if (cistrcmp(e, root) == 0) {
+            *extn = '.';
+            return n;
+        }
+        n++;
+    }
+    *extn = '.';
+    return def;
+}
+
+char *extensions[] = { "c++", "c", "o" };
+
+static void help(void)
+{
+fprintf(stderr, "\
+\nUsage :         c++ [options] file1 file2 ... fileN\n\
+\n\
+Translator options:\n\
+\n\
++v              Output commands as they are executed\n\
++w              Disable warning messages\n\
++p              Be extra strict about enforcing conformance to standards\n\
++g              Generate code that may be used with the debugger\n\
+-F              Translate the C++ source code only - do not compile or link it\n\
+\n\
+All other options are passed to the preprocessor, the C compiler or the\n\
+linker as appropriate. For a list of all valid options, type 'cc -help';\n\
+the only ones of these we recommend for use with C++ are:\n\
+\n\
+Keyword options: -littleend, -bigend, -apcs, -depend, -throwback, -desktop, -C++ (!)\n\
+Preprocessor options: <any>\n\
+Code generation options: -o, -g, -S, -zM\n\
+Linker options: <any>\n\
+Warning and error message options: -W\n\
+Additional feature options: -zr, -f\n\
+");
+exit(0);
+}
+
+#if 0
+
+static void help(void)
+{
+fprintf(stderr, "\
+Usage:        c++ [options] file1 file2 ... fileN\n\
+\n\
+C++ processes a mixture of C++ source, C source and object files. It invokes\n\
+between one and four of the preprocessor, the cfront translator, the C\n\
+compiler or the linker on each input file. The number of processes and type\n\
+of processing is determined by the types of the input files and the processor\n\
+options.\n\
+\n\
+The input file type is determined as follows\n\
+\n\
+- A C++ source file (extension .c++)\n\
+- A C source file (extension .c)\n\
+- An AOF object file or library (extension .o)\n\
+\n\
+preprocessor options\n\
+\n\
+-D<symbol>    Define <symbol> as a preprocessor symbol\n\
+-U<symbol>    Undefine a predefined preprocessor symbol (eg. __cplusplus)\n\
+-E            Send preprocessor output to stdout, do not compile it\n\
+-C            Prevent the preprocessor from removing comments (use with -E)\n\
+-I<directory> Include <directory> on the #include search path\n\
+-J<directory> Replace the default #include path with <directory>\n\
+\n\
+cfront options\n\
+\n\
++v            Print commands as they are executed\n\
++a0           Tells cfront to generate PCC style code (default), implies -pcc\n\
++a1           Tells cfront to generate ANSI style code, implies +L\n\
++L            Generate ANSI style #line <n> directive instead of PCC # <n>\n\
++f<label>     Use label a unique identifier for this source instead of filename\n\
++w            Disable cfront warnings\n\
++p            Pedantic - compile strict C++\n\
++g            Compile for use with the debugger\n\
+-F            Send cfront output to stdout, do not compile it\n\
+\n\
+cc options\n\
+\n\
+-c            Do not link the files being compiled\n\
+-p            Generate code to produce profile information\n\
+-w            Disable compiler warnings\n\
+-s            Produce ARM assembler output instead of object code\n\
+-f            Enable a selction of compiler feature, see manual for more info\n\
+\n\
+link options\n\
+\n\
+-o <file>     Place the output in <file>\n\
+-L<liblist>   Add a comma-separated list of librarys to be linked with\n\
+");
+exit(0);
+}
+
+#endif
+
+
+
+static char *desktop_dir;
+static int prefix_set;
+
+static void remove_tmps(void)
+{
+    _swix(OS_File, _IN(0)|_IN(1), 6, cpp_output);
+    _swix(OS_File, _IN(0)|_IN(1), 6, cfront_output);
+    if (prefix_set)
+        _swix(DDEUtils_Prefix, _IN(0), 0);
+}
+
+static void prefix_init(char *fname)
+{
+    char *s, *p, *t;
+    char c;
+    char prefix[256];
+
+    if (desktop_dir) {
+        s = fname;
+        p = t = prefix;
+        while ((c = *t++ = *s++) > ' ')
+            if (c == ':' || c == '.')
+                p = t;
+        strcpy(p, desktop_dir);
+        _swix(DDEUtils_Prefix, _IN(0), prefix);
+        prefix_set = 1;
+    }
+}
+
+int main(int argc, char **argv)
+{
+    char *arg;
+    int f_flag = 0;
+    int j_flag = 0;
+    int l_flag = 0;
+    int c_flag = 0;
+    int s_flag = 0;
+    int no_cc = 0;
+    int no_cfront = 0;
+    int ansi = 0;
+    char cpp_args[256];
+    char cfront_args[256];
+    char cc_args[256];
+    char link_args[256];
+    char lib_list[256];
+    char cmd[256];
+    char stdout_file[256];
+    int stdout_handle;
+    char *filename = 0;
+    char *output_filename = 0;
+    char *leaf;
+    int c;
+    FName *nfile;
+    int nfiles = 0;
+    int t;
+    char *s;
+    _kernel_oserror *e;
+
+    stdout_handle = stdout->__file;
+    if (stdout_handle) {
+        if (_swix(OS_Args, _IN(0)|_IN(1)|_IN(2)|_IN(5),
+                  7, stdout_handle, stdout_file, 256))
+            stdout_handle = 0;
+    }
+    fclose(stdout);
+    fprintf(stderr, "Acorn C++ Language System 3.1 [%s]\n", __DATE__);
+    rand_tmpnam(cpp_output);
+    rand_tmpnam(cfront_output);
+    atexit(remove_tmps);
+    strcpy(cpp_args, "cc -C++ -D__cplusplus -E ");
+    cfront_args[0] = 0;
+    cc_args[0] = 0;
+    strcat(cfront_args, "cfront <");
+    strcat(cfront_args, cpp_output);
+    strcat(cc_args, "cc -C++ -c");
+    strcpy(link_args, "link -c++");
+    strcpy(lib_list, "");
+    while (arg = *++argv) {
+        if (arg[0] == '+') {
+            c = arg[1];
+            if (c == 'v') {
+                verbose = 1;
+                continue;
+            }
+            if (c == 'h' || c == 'H')
+                help();
+            if (c == 'f') f_flag = 1;
+            if (c == 'g') {
+                strcat(cc_args, " -g");
+                strcat(link_args, " -d");
+            }
+            if (c == 'a') {
+                if (arg[2] == '1') ansi = 1;
+            }
+            if (c == 'L') l_flag = 1;
+            strcat(cfront_args, " ");
+            strcat(cfront_args, arg);
+        } else if (arg[0] == '-') {
+            if (cistrcmp(arg, "-desktop") == 0) {
+                arg = *++argv;
+                if (!arg) error("No filename on '-Desktop' option");
+                desktop_dir = arg;
+                continue;
+            }
+            if (cistrcmp(arg, "-throwback") == 0) {
+                strcat(cpp_args, " -throwback");
+                strcat(cfront_args, " +throwback");
+                strcat(cc_args, " -throwback");
+                continue;
+            }
+            if (cistrcmp(arg, "-depend") == 0) {
+                arg = *++argv;
+                if (!arg) error("No filename on '-Depend' option");
+                strcat(cpp_args, " -Depend ");
+                strcat(cpp_args, arg);
+                continue;
+            }
+            c = arg[1];
+            if (c == 'h' || c == 'H')
+                help();
+            if (c == 'F') {
+                no_cc = 1;
+                continue;
+            } else if (c == 'C' || c == 'D' || c == 'E' || c == 'I' || c == 'J' || c == 'U') {
+                if (c == 'J') j_flag = 1;
+                if (c == 'E') no_cfront = 1;
+                strcat(cpp_args, " ");
+                strcat(cpp_args, arg);
+            } else if (c == 'L') {
+                strcat(lib_list, " ");
+                s = lib_list + strlen(lib_list);
+                arg += 2;
+                while (c = *arg++) {
+                    if (c == ',') c = ' ';
+                    *s++ = c;
+                }
+                *s = 0;
+            } else {
+                if (c == 's') s_flag = 1;
+                if (c == 'o') {
+                    arg = *++argv;
+                    if (!arg) error("No filename on '-o' flag\n");
+                    output_filename = arg;
+                    continue;
+                }
+                if (c == 'c') {
+                    c_flag = 1;
+                    continue;
+                }
+                strcat(cc_args, " ");
+                strcat(cc_args, arg);
+            }
+        } else {
+            nfiles++;
+            nfile = malloc(sizeof(FName));
+            *pfname_list = nfile;
+            nfile->next = 0;
+            pfname_list = &(nfile->next);
+            if (!nfile)
+                error("Out of memory");
+            munge_filename(arg, extensions);
+            nfile->filename = arg;
+            leaf = tail(arg);
+            if (leaf == arg) {
+                nfile->filename = malloc(sizeof("c++.") - 1 + strlen(arg) + 1);
+                strcpy(nfile->filename, "c++.");
+                strcat(nfile->filename, leaf);
+            }
+        }
+    }
+    if (nfiles == 0)
+        error("No filename specified\n");
+    if (no_cfront) no_cc = 1;
+    if (no_cc) c_flag = 1;
+    nfile = fname_list;
+    while (nfile) {
+        filename = nfile->filename;
+        prefix_init(filename);
+        leaf = tail(filename);
+        t = filetype(filename, extensions, 0);
+        if (t == 0) {
+            strcpy(cmd, cpp_args);
+            strcat(cmd, " ");
+            strcat(cmd, filename);
+            if (!no_cfront || stdout_handle) {
+                strcat(cmd, " >");
+                if (no_cfront) {
+                    strcat(cmd, ">");
+                    strcat(cmd, stdout_file);
+                } else
+                    strcat(cmd, cpp_output);
+            }
+            do_cmd(cmd);
+            if (!no_cfront) {
+                strcpy(cmd, cfront_args);
+                if (!f_flag) {
+                    strcat(cmd, " +f");
+                    strcat(cmd, leaf);
+                }
+                if (ansi && !l_flag)
+                    strcat(cmd, " +L");
+                if (!no_cc || stdout_handle) {
+                    strcat(cmd, " >");
+                    if (no_cc) {
+                        strcat(cmd, ">");
+                        strcat(cmd, stdout_file);
+                    } else
+                        strcat(cmd, cfront_output);
+                }
+                do_cmd(cmd);
+                if (!no_cc) {
+                    t = 1;
+                    filename = cfront_output;
+                }
+            }
+        }
+        if (t == 1) {
+            strcpy(cmd, cc_args);
+            if (!ansi)
+                strcat(cmd, " -pcc");
+            if (s_flag)
+                strcat(cmd, " -o s.");
+            else
+                strcat(cmd, " -o o.");
+            strcat(cmd, leaf);
+            strcat(cmd, " ");
+            strcat(cmd, filename);
+            do_cmd(cmd);
+            strcat(link_args, " o.");
+            strcat(link_args, leaf);
+        }
+        if (t == 2) {
+            strcat(link_args, " ");
+            strcat(link_args, filename);
+        }
+        nfile = nfile->next;
+    }
+    if (!c_flag && !s_flag) {
+        strcat(link_args, lib_list);
+        if (!*lib_list) {
+            if (_kernel_getenv("<c$libroot>", cmd, 256))
+                strcpy(cmd, "c:");
+            c = cmd[strlen(cmd) - 1];
+            if (c != '.' && c != ':')
+                strcat(cmd, ".");
+            strcat(link_args, " ");
+            strcat(link_args, cmd);
+            strcat(link_args, "o.c++lib ");
+            strcat(link_args, cmd);
+            strcat(link_args, "o.stubs");
+        }
+        strcat(link_args, " -o ");
+        if (!output_filename)
+            output_filename = tail(fname_list->filename);
+        strcat(link_args, output_filename);
+        do_cmd(link_args);
+    }
+    return 0;
+}
