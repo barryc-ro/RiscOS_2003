@@ -19,6 +19,7 @@
 #include <ctype.h>                              /* isprint(), isspace()  */
 #include <string.h>                             /* for strlen()          */
 #include <time.h>                               /* for clock             */
+#include <errno.h>
 
 /* IMPORTS */
 extern int main(int argc, char **argv);         /* the point of it all   */
@@ -165,6 +166,14 @@ default: /* a good a place as any for an unknown machine */
 
 /* system dependent I/O routines ... */
 
+/* Riscos has a second distinguished FILEHANDLE value, to indicate that  */
+/* a file is a keyboard and/or vdu, which can't be read or written using */
+/* Riscos file operations (or at any rate, couldn't when the library was */
+/* originally implemented).                                              */
+#define TTYHANDLE 0
+
+#define istty(fh) ((fh) == TTYHANDLE)
+
 static int _error_recursion;
 void _sys_msg(const char *s)
 {   /* write out s carefully for intimate system use.                      */
@@ -194,9 +203,9 @@ static int isttyname(const char *s)
 
 FILEHANDLE _sys_open(const char *filename, int openmode)
 { /* nasty magic number interface for openmode */
-  static const int modtab[6] = { /* r = */ 0x040, /* r+ = */ 0x0c0,
-                                 /* w = */ 0x4c0, /* w+ = */ 0x4c0,
-                                 /* a = */ 0x3c0, /* a+ = */ 0x3c0 };
+  static const int modtab[6] = { /* r = */ 0x04c, /* r+ = */ 0x0cc,
+                                 /* w = */ 0x4cc, /* w+ = */ 0x4cc,
+                                 /* a = */ 0x3cc, /* a+ = */ 0x3cc };
   if (isttyname(filename)) return TTYHANDLE;
   else {
     char *name = (char *)filename;                 /*  yuk yuk yuk yuk yuk  */
@@ -206,45 +215,119 @@ FILEHANDLE _sys_open(const char *filename, int openmode)
     _kernel_osfile_block fb;
 
     /* maybe stamp file with current datestamp */
-    if ((openmode & 16) ||                    /* update timestamp requested */
-        (openmode >= 4 && openmode <= 9))          /* or mode = w, w+, or a */
-    {   if (_kernel_osfile(9, name, &fb) <0) /* (contents of fb irrelevant) */
+    if ((openmode & OPEN_T) ||                /* update timestamp requested */
+        (openmode & OPEN_W) ||
+        (openmode & ~OPEN_B) == OPEN_A)           /* or mode = w, w+, or a */
+    {   if (_kernel_osfile(9, name, &fb) == _kernel_ERROR)
         {   if (_kernel_last_oserror()->errnum == 0x108c9)
             {   (void)_kernel_osfile(9, name, &fb); /* to restore the error */
+                errno = -1;
                 return NONHANDLE;                       /* (Protected disc) */
             }
         }
     }
 retry_open:
     fh = _kernel_osfind(osmode & 0xff, name);
-    if (osmode <= 0x0c0)                                         /* r or r+ */
+    if (osmode <= 0x0cc) {                                       /* r or r+ */
+      if (fh == _kernel_ERROR) errno = -1;
       return (fh <= 0) ? NONHANDLE :                           /* not found */
                          fh;
-    else if (fh > 0) {
-      if ((osmode == 0x4c0) || (size == 0))
+    } else if (fh > 0) {
+      if ((osmode == 0x4cc) || (size == 0))
           if (_kernel_osargs(3, fh, 0) == _kernel_ERROR) {
               _kernel_osfind(0, (char *)fh);
+              errno = -1;
               return NONHANDLE;
           }
       return fh;
-    } else if (fh == 0) {
+    } else if (fh <= 0) {
         /* _kernel_osfile(11) creates an empty file of size 'size', of type */
         /* given by fb.load, stamped with the current date & time           */
       fb.load = (openmode & 1) ? 0xffd : 0xfff;              /* data : text */
       fb.start = 0;
       for (; ; size >>= 1) {
-        if (size < 512) return NONHANDLE;             /* probably Disc Full */
+        if (size < 512) { errno = -1; return NONHANDLE; }
         fb.end = size;
         if (_kernel_osfile(11, name, &fb) > 0) break;
       }
       size = 0;
       goto retry_open;
     }
+    if (fh == _kernel_ERROR) errno = -1;
     return NONHANDLE;
   }
 }
 
-int _ttywrite(unsigned char *buf, unsigned int len, int flag)
+int _sys_istty(FILE *stream)
+{
+    return istty(stream->__file);
+}
+
+int _sys_seek(FILEHANDLE fh, long pos)
+{
+    if istty(fh) return 0;
+    {   int rc = _kernel_osargs(1, fh, (int)pos);
+        if (rc == _kernel_ERROR) errno = -1;
+        return rc;
+    }
+}
+
+long _sys_flen(FILEHANDLE fh)
+{
+    int rc = _kernel_osargs(2, fh, 0);
+    if (rc == _kernel_ERROR) errno = -1;
+    return rc;
+}
+
+int _sys_write(FILEHANDLE fh, const unsigned char *buf, unsigned len, int mode)
+{   if (istty(fh))
+        return _ttywrite(buf, len, mode);
+    else {
+        _kernel_osgbpb_block b;
+        b.dataptr = (void *)buf;
+        b.nbytes = (int)len;
+        if (_kernel_osgbpb(2, fh, &b) == _kernel_ERROR) {
+            errno = -1;
+            return _kernel_ERROR;
+        } else
+            return b.nbytes;
+    }
+}
+
+int _sys_read(FILEHANDLE fh, unsigned char *buf, unsigned len, int mode)
+{
+    if (istty(fh))
+        return _ttyread(buf, (int)len, mode);
+    else {
+        _kernel_osgbpb_block b;
+        b.dataptr = (void *)buf;
+        b.nbytes = (int)len;
+        if (_kernel_osgbpb(4, fh, &b) == _kernel_ERROR) {
+            errno = -1;
+            return _kernel_ERROR;
+        } else
+            return b.nbytes;
+    }
+}
+
+int _sys_ensure(FILEHANDLE fh)
+{
+    if (istty(fh)) return 0;
+    {   int rc = _kernel_osargs(0xFF, fh, 0);
+        if (rc == _kernel_ERROR) errno = -1;
+        return rc;
+    }
+}
+
+int _sys_close(FILEHANDLE fh)
+{   if (istty(fh)) return 0;
+    {   int rc = _kernel_osfind(0, (char *)fh);
+        if (rc == _kernel_ERROR) errno = -1;
+        return rc;
+    }
+}
+
+int _ttywrite(const unsigned char *buf, unsigned int len, int flag)
 /* behaves like Kgbpb, but outputs to console.                              */
 /* if 'flag' has _IOBIN set then LF's ('\n's) do not have CR prefixed.      */
 {   while (len-- > 0)
