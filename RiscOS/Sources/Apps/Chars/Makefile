@@ -113,17 +113,3 @@ ${LDIR}.!RunLink: bas.!RunLink
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-rm.Chars: s.AppName
-rm.Chars: Hdr:ListOpts
-rm.Chars: Hdr:Macros
-rm.Chars: Hdr:System
-rm.Chars: Hdr:SWIs
-rm.Chars: Hdr:CPU.Generic26
-rm.Chars: Hdr:IO.GenericIO
-rm.Chars: Hdr:RISCOS
-rm.Chars: Hdr:ModHand
-rm.Chars: Hdr:Services
-rm.Chars: Hdr:Proc
-rm.Chars: Hdr:ResourceFS
-rm.Chars: Version
-rm.Chars: s.ResFiles
