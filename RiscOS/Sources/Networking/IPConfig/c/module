@@ -55,58 +55,61 @@ static int trace_DO_BOOTP = 0;
 static void *module_wsp = 0;
 static int ifcnt = 0;
 
-/* module_read_command_options
+/* module_set_command_options
  *
- *  This function parses the supplied command-line (if any) and sets the state
+ *  This function parses the supplied command-line and sets the state
  *  flag according to the options which were specified in the command-line.
+ *  It stores the result so that it can be returned via module_read_command_options()
  *
- *  If no command-line is supplied, the stored state is returned.
- *  If a command-line was supplied (only the case during module initialisation), then
- *  the return value is -1 if the module should die, otherwise the stored state is
- *  returned.
+ *  If the return value is non-NULL, an error occurred which should be returned to
+ *  prevent module initialisation.
  *
  */
 static int cli_state = 0;
-int module_read_command_options(const char *cmd_tail)
+int module_read_command_options(void)
 {
-        if (cmd_tail != NULL) {
-                int switches[4];
-                _kernel_oserror *e;
-                const char *msg = 0;
-		char *args = 0;
-                size_t msg_len = 0;
+        return cli_state;
+}
 
-		/* Discover the command-line parameter match string - must be three switches */
-                e = read_message("Args", &msg, &msg_len);
-                if (e != NULL) {
-                        (void) fprintf(stderr, "%s\n", e->errmess);
-                        return -1;
-                }
-                args = malloc(msg_len+1);
-                if (args != NULL) {
-                	memcpy(args, msg, msg_len);
-                        args[msg_len] = '\0';
-                }
-                else {
-                	return -1;
-                }
+static _kernel_oserror *module_set_command_options(const char *cmd_tail)
+{
+        int switches[4];
+        _kernel_oserror *e;
+        const char *msg = 0;
+        char *args = 0;
+        size_t msg_len = 0;
 
-		/* Parse command-tail */
-                e = _swix(OS_ReadArgs, _INR(0,3), args, cmd_tail, switches, sizeof(switches));
-                free(args);
-                /* Error or -help was specified */
-                if (e != NULL || switches[3]) {
-                        e = make_error(error_REFUSE_INIT_SYNTAX_ERROR, 0);
-                	(void) fprintf(stderr, "%s\n", e->errmess);
-                	return -1;
-                }
-                cli_state = 0;
-                if (switches[0]) cli_state |= flag_RUN_EDITOR;
-                if (switches[1]) cli_state |= flag_NO_DO_BOOT;
-                else if (switches[2]) cli_state |= flag_FORCE_BOOT;
+        /* Discover the command-line parameter match string - must be three switches */
+        e = read_message("Args", &msg, &msg_len);
+        if (e != NULL) {
+                return e;
+        }
+        args = malloc(msg_len+1);
+        if (args != NULL) {
+                memcpy(args, msg, msg_len);
+                args[msg_len] = '\0';
+        }
+        else {
+                return 0;
         }
 
-        return cli_state;
+        /* Parse command-tail */
+        e = _swix(OS_ReadArgs, _INR(0,3), args, cmd_tail, switches, sizeof(switches));
+        free(args);
+        /* Error or -help was specified */
+        if (e != NULL || switches[3]) {
+                return make_error(error_REFUSE_INIT_SYNTAX_ERROR, 0);
+        }
+        cli_state = 0;
+        if (switches[0]) cli_state |= flag_RUN_EDITOR;
+        if (switches[1]) {
+                cli_state |= flag_NO_DO_BOOT;
+        }
+        else {
+                if (switches[2]) cli_state |= flag_FORCE_BOOT;
+        }
+
+        return 0;
 }
 
 /* release_module_resources closes and removes the messages file from the RMA
@@ -120,6 +123,20 @@ static void release_module_resources(void)
         #endif
 }
 
+static _kernel_oserror *module_open_messages_leaf(const char *leaf)
+{
+        char name[sizeof("Resources:$.Resources. " Module_Title ".MessagesXXX")];
+
+        if (getenv(Module_Title "$Path")) {
+                (void) sprintf(name, "%s:%s", Module_Title, leaf);
+        }
+        else {
+                (void) sprintf(name, "Resources:$.Resources.%s.%s", Module_Title, leaf);
+        }
+
+        return messages_file_open(name);
+}
+
 /* Module initialisation code
  *
  * Calls the editor's initialisation routine to see if we need to edit the configuration.
@@ -129,10 +146,41 @@ static void release_module_resources(void)
  * otherwise we allow module initialisation to succeed, and wait for service calls to arrive.
  *
  */
-_kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
+static _kernel_oserror *module_init_sub(const char *cmd_tail)
 {
         _kernel_oserror *e;
         int opts;
+
+        e = module_open_messages_leaf("Messages");
+        if (e == NULL) {
+                (void) module_open_messages_leaf("Custom");
+        }
+        if (e == NULL) {
+	        e = module_set_command_options(cmd_tail);
+        }
+        if (e != NULL) {
+                return e;
+        }
+
+	opts = module_read_command_options();
+        if (opts<0) {
+                return make_error(error_REFUSE_INIT_BOOTP_ALREADY_DONE, 0);
+        }
+
+        if (editconfig_initialise() == NULL) {
+                cli_state |= flag_RUN_EDITOR;
+        }
+        else if ((opts & flag_NO_DO_BOOT) && !(opts & flag_FORCE_BOOT)) {
+                /* Do we need to perform our boot operations? */
+                return make_error(error_REFUSE_INIT_BOOTP_ALREADY_DONE, 0);
+        }
+
+        return NULL;
+}
+
+_kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
+{
+        _kernel_oserror *e;
 
         (void) podule_base;
         module_wsp = pw;
@@ -144,56 +192,17 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
         }
         #endif
 
-        if (getenv(Module_Title "$Path") != NULL) {
-                e = messages_file_open(Module_Title ":Messages");
-                if (e == NULL) {
-                        (void) messages_file_open(Module_Title ":Custom");
-                }
+        e = module_init_sub(cmd_tail);
+        if (e != NULL) {
+                release_module_resources();
         }
         else {
-                e = messages_file_open("Resources:$.Resources." Module_Title ".Messages");
-                if (e == NULL) {
-                        (void) messages_file_open("Resources:$.Resources." Module_Title ".Custom");
-                }
-        }
-        if (e != NULL) {
-		#ifndef ROM
-                utils_deregister_msgs();
-		#endif
-                return e;
-        }
-
-	opts = module_read_command_options(cmd_tail);
-        if (opts<0) {
-                _kernel_oserror *e = make_error(error_REFUSE_INIT_BOOTP_ALREADY_DONE, 0);
-		release_module_resources();
-                return e;
-        }
-
-        if (editconfig_initialise() == NULL) {
-                cli_state |= flag_RUN_EDITOR;
                 setcallback();
-                return NULL;
         }
 
-	if (opts & flag_FORCE_BOOT) {
-		setcallback();
-		return NULL;
-	}
-
-	/* Do we need to perform our boot operations? */
-	if (!(opts & flag_NO_DO_BOOT)) {
-#ifdef TRACE
-	        setcallback();
-#endif
-		return NULL;
-	}
-	else {
-                _kernel_oserror *e = make_error(error_REFUSE_INIT_BOOTP_ALREADY_DONE, 0);
-		release_module_resources();
-                return e;
-	}
+        return e;
 }
+
 
 _kernel_oserror *module_final(int fatal, int podule, void *pw)
 {
@@ -201,7 +210,7 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
         (void) podule;
         (void) pw;
 
-	release_module_resources();
+        release_module_resources();
 
         return 0;
 }
@@ -244,7 +253,7 @@ static int getvar(char *var, char *str, int len)
 /* Set the Inet$LocaAddr<n> variable to the given address string */
 static void setadrvar(int ifcnt, struct in_addr in)
 {
-	char hex_address[12];
+        char hex_address[12];
         const char *v = SYSVAR_INET_LOCALADDR;
         char varname[sizeof(SYSVAR_INET_LOCALADDR) + 4];
         const char *val;
@@ -276,18 +285,18 @@ static void read_device_name(char *buf, struct ether_addr *macadr)
         _kernel_oserror *e;
         struct chaindib *d;
 
-	/* Enumerate the network drivers */
+        /* Enumerate the network drivers */
         e = _swix(OS_ServiceCall, _INR(0,1)|_OUT(0), 0, Service_EnumerateNetworkDrivers, &d);
         if( e != 0 || d == NULL) {
                 buf[0] = 0;
                 return;
         }
 
-	/* Construct the complete interface name fom the unit name and the unit number */
+        /* Construct the complete interface name fom the unit name and the unit number */
         (void) strcat(strcpy(buf, (char *) d->chd_dib->dib_name), "0");
 
-	/* Copy the 6-byte Ethernet MAC address */
-	(void) memcpy(macadr, d->chd_dib->dib_address, sizeof(struct ether_addr));
+        /* Copy the 6-byte Ethernet MAC address */
+        (void) memcpy(macadr, d->chd_dib->dib_address, sizeof(struct ether_addr));
 
         while (d) {
                 struct chaindib *d_next = d->chd_next;
@@ -311,10 +320,10 @@ static void module_start_editor(void *pw)
                  * results.  This is in a sub-block so that the call to editconfig_service
                  * is performed tail-recursively and without this baggage on the stack.
                  */
-	        char buf[16];
-        	struct ether_addr macadr;
+                char buf[16];
+                struct ether_addr macadr;
 
-        	read_device_name(buf, &macadr);
+                read_device_name(buf, &macadr);
         }
 
         (void) editconfig_service(pw);
@@ -389,11 +398,17 @@ again:
                 }
                 (void) _swix(Hourglass_On, 0);
                 ifrconfig_result = ifrconfig(s, name);
-		(void) _swix(Hourglass_Off, 0);
+                (void) _swix(Hourglass_Off, 0);
                 switch (ifrconfig_result) {
-                        case 0: return (0);
-                        case -1: module_start_editor(module_wsp); return (0);
-                        default: break;
+                        case 0:
+                                return (0);
+                        case -1:
+                                cli_state |= flag_RUN_EDITOR;
+                                (void) editconfig_initialise();
+                                module_start_editor(module_wsp);
+                                return (0);
+                        default:
+                                break;
                 }
                 retried = 1;
                 goto again;
@@ -438,7 +453,7 @@ _kernel_oserror *callb_handler(_kernel_swi_regs *r, void *pw)
         (void) pw;
         if (callbackflag != 0) {
                 callbackflag = 0;
-                if (module_read_command_options(0) & flag_RUN_EDITOR) {
+                if (module_read_command_options() & flag_RUN_EDITOR) {
                         module_start_editor(pw);
                 }
                 else if (ifcnt == 0) {
@@ -452,12 +467,12 @@ _kernel_oserror *callb_handler(_kernel_swi_regs *r, void *pw)
 static void setcallback(void)
 {
         if (callbackflag == 0) {
-                int opts = module_read_command_options(0);
+                int opts = module_read_command_options();
                 if ((ifcnt == 0 && !(opts & flag_NO_DO_BOOT)) || (opts & flag_FORCE_BOOT)) {
-                	callbackflag = 1;
-	                if (_swix(OS_AddCallBack, _INR(0,1), callb_entry, module_wsp)) {
-        	                callbackflag = 0;
-                	}
+                        callbackflag = 1;
+                        if (_swix(OS_AddCallBack, _INR(0,1), callb_entry, module_wsp)) {
+                                callbackflag = 0;
+                        }
                 }
         }
 }

@@ -67,7 +67,7 @@ CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
 ROM_OBJS	= o.iicpoke or.module or.ifrconfig or.editconfig or.utils   \
 		  or.lineedit or.Strncmp_ci o.ipconfhdr
 RAM_OBJS	= o.iicpoke o.module  o.ifrconfig  o.editconfig  o.utils   \
-		  o.lineedit  o.Strncmp_ci  o.ipconfhdr ${RESF}
+		  o.lineedit  o.Strncmp_ci  o.ipconfhdr  ${RESF}
 DBG_OBJS	= o.iicpoke od.module od.ifrconfig od.editconfig od.utils  \
 		  od.lineedit od.Strncmp_ci od.ipconfhdr ${RESF}
 
@@ -86,10 +86,10 @@ RESF		= o.msgs
 .s.o:;		${AS} ${ASFLAGS} -o $@ $<
 
 IPConfHdr.h: o.IPConfHdr
-	@|
+	${TOUCH} $@
 	
 IPConfHdrD.h: od.IPConfHdr
-	@|
+	${TOUCH} $@
 	
 o.IPConfHdr: VersionNum
 
