@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.03 for RISC OS
+#	VERSION:	0.05 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -20,6 +20,7 @@
 #	17/12/97	0.03	RDW	merged in BALs changes so we export
 #					correctly
 #	18/02/98	0.04	RDW	throwback now from define
+#	24/03/98	0.05	RDW	local_dirs didn't create l dir. does now
 
 #
 # Paths
@@ -108,7 +109,7 @@ clean:
 local_dirs:
 	${MKDIR} o
 	${MKDIR} z
-
+	${MKDIR} l
 
 #
 # Target 
