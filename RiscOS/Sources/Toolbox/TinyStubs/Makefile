@@ -7,6 +7,7 @@
 # ----       ----   -----------
 # 09-Jan-95  AMcC   Created
 # 24-Jan-95  AMcC   Now linked with tboxlib
+# 16-Sep-98  SNB    Disabled TinySupport_Share; srccommit; use cmhg -p
 #
 
 #
@@ -51,15 +52,15 @@ ABSSYM    = RISC_OSLib:o.abssym
 TBOXLIB   = <Lib$Dir>.tboxlibint.o.tboxlibm
 
 OBJS =\
- o.ModHdr\
  o.jcomp\
- o.main
+ o.main\
+ o.ModHdr
 
 #
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.cmhg.o:; ${CMHG} -p -o $@ $<
 .s.o:;    ${AS} ${AFLAGS} -o $@ $<
 
 #
@@ -83,6 +84,7 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
+        ${RM} h.ModHdr
         @echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
@@ -95,6 +97,15 @@ rom_link:
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
+
+o.ModHdr: h.ModHdr
+	@|
+	
+h.ModHdr: cmhg.ModHdr
+	@|
+
+c.main: h.ModHdr
+	${CMHG} -p -o o.ModHdr cmhg.ModHdr -d h.ModHdr
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
