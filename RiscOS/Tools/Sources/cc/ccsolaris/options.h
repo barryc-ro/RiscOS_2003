@@ -19,12 +19,8 @@
  * host-machine issue.
  */
 
-#ifdef __acorn
-# include "VersionNum"
-# define NON_RELEASE_VSN Module_MajorVersion " (Acorn Computers Ltd) " Module_MinorVersion
-#else
-# define NON_RELEASE_VSN "5.08 (Acorn Computers Ltd)"
-#endif
+#include "VersionNum"
+#define NON_RELEASE_VSN Module_MajorVersion " (Acorn Computers Ltd) " Module_MinorVersion
 
 #define TARGET_ENDIANNESS_CONFIGURABLE 1
 #define TARGET_DEFAULT_BIGENDIAN 0       /* 1 => bigendian default */
