@@ -220,19 +220,22 @@ ErrorBlk *Interface::AddError(ErrorBlk *new_error)
 inline error_flag
 Interface::strToAddr(char *string, struct in_addr *addr, ErrorBlk **non_fatal)
 {
+  	// it string is a dotted decimal
 	if ( ! inet_aton(string, addr) ) {
+	  
   		struct hostent *he;
-
+                // look up the string in the host table
   		he = gethostbyname(string);
+  		
                 if (he == NULL)
-                	(*non_fatal) = AddError(new ErrorBlk(IP_BadPortSpecification));
+                	(*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
                 else
-                	       	addr->s_addr = (**he->h_addr_list);
+                	addr->s_addr = (**he->h_addr_list);
         }
         return NoError;
 }
 //  +++++++++++++++++++++++++++++++++++++ SWI interface +++++++++++++++++++++++++++++++++++++
-
+// adds a server to the server list
 error_flag
 Interface::SetServer(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
@@ -257,37 +260,36 @@ Interface::SetServer(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 #ifdef DEBUGLIB  	  
   	  	Debug("set server %s:%i", regs->r[1], regs->r[2]);
 #endif  	  	
-  		// if port specified
-  		if (regs->r[0] & 0x02)
+  		
+  		if (regs->r[0] & 0x02)	// if port specified
   			port_number = regs->r[2];
   		else
   			port_number = EnvPortNum;
   			
-  		if (regs->r[0] & 0x08)
-  			(*non_fatal) = AddError(new ErrorBlk(VSP_Unimplemented));
-  		else {
-  			if (regs->r[1] == NULL){// connect to default server
-    				if (EnvServerString[0] == NULL)
-    					(*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
-    				else 
-    					strToAddr(EnvServerString, &address, non_fatal);
-                	}
-    			else // R1 specified
-    				strToAddr((char*)regs->r[1], &address, non_fatal);
+  		if (regs->r[1] == NULL){// connect to default server
+    			if (EnvServerString[0] == NULL)
+    				(*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
+    			else 
+    				strToAddr(EnvServerString, &address, non_fatal);
                 }
+    		else // R1 specified
+    			strToAddr((char*)regs->r[1], &address, non_fatal);
+    				
     		// we have an ip address and a port number (or an error)
     		if ((*non_fatal) == NULL){
-    		  
-    		  	if (IN_MULTICAST(address.s_addr))
+    		  	// one of three types of server multicast address, TCP (ethernet), TCP (ATM)
+    		  	if (IN_MULTICAST(ntohl(address.s_addr)))
     		  	  	p_ControlStream = new InternetObject(&address, port_number);
     		  	else {
-    		  	  	if (regs->r[0] & 0x08)
+    		  	  	if (regs->r[0] & 0x08) // if ATM address specified
     		  	  		p_ControlStream = (InternetObject*)new ATMServer(&address, port_number, (UBYTE*)regs->r[4], (bool)(regs->r[0] & 0x10), EnvTCPtimeout);
     		  		else
     		  			p_ControlStream = (InternetObject*)new Server(&address, port_number, EnvTCPtimeout);
     		  	}
-    		  		
+    		  	
+			// we now have a server or an error, that error can be in the server object	
     		  	if (p_ControlStream != NULL) {
+    		  	  	// tell the server that it is going on the server list
     		  		p_ControlStream->set_interface_owner();
     		  	
       				if (p_ControlStream->ErrorExists()) {
@@ -296,10 +298,11 @@ Interface::SetServer(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     					p_ControlStream = NULL;
 	                	}
 				else {
+				  	// add it to the list r0 becomes the identifiers
     					if (CurrentServers.Add(p_ControlStream, &(regs->r[0])) == ErrorOccurred)
     						(*non_fatal) = AddError(&CurrentServers.ReturnCopyOfError());	// return identifier
     						
-    					// if an error identifier is given
+    					// if an error identifier is given add a message pipe
     					if ((*non_fatal == NULL)&&(regs->r[0] & 0x04))
 	  					p_ControlStream->create_message_pipe(regs->r[3], regs->r[0]);
 	  					// handle, stream handle
@@ -307,13 +310,14 @@ Interface::SetServer(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     	                }
     	                else
     	                	MakeError(VSP_Alloc); // fatal die	
-                }
-        } // delete element
-  }
+                } // if (non_fatal == Null)
+        } // ! delete element
+  } // R0 flags
+  
 #ifdef DEBUGLIB
 	Debug("server handle %i, error %i", regs->r[0], (*non_fatal));
 #endif
-	  
+
   regs->r[1] = NECServerType;
   return ErrorState();
 }
@@ -334,12 +338,12 @@ Interface::OpenStream(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 #ifdef DEBUGLIB    
     	Debug("open stream server %i, r0 %i", regs->r[4], regs->r[0]);
 #endif    	
-    	
+	// derive a server reference from r[4] or the default server, or multicast ip:port from R1.	
     	if (regs->r[4] != NULL){
     		if (CurrentServers.identify((ListObject**)&server, regs->r[4]) == ErrorOccurred)
     		  		(*non_fatal) = AddError(&CurrentServers.ReturnCopyOfError());
     	}
-    	else {// use default
+    	else {// use default server or attempt to find multicast address
     	  	struct in_addr address;
     	  	ULINT port = EnvPortNum;
     		if (regs->r[0] == 0){ // assume multicast string in R1.
@@ -368,7 +372,7 @@ Interface::OpenStream(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     		else // use default address
     	  		strToAddr(EnvServerString, &address, non_fatal);
     	  	
-    	  	if (*non_fatal == NULL){
+    	  	if (*non_fatal == NULL){// if it is multicast else use default.
     	  		if (IN_MULTICAST(ntohl(address.s_addr))){
     		 		server = new InternetObject(&address, port);
     		 	}
@@ -574,6 +578,10 @@ Interface::GetAssetList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     	(*non_fatal) = AddError(new ErrorBlk(VSP_Unimplemented));
   }// this ensures that no expected functionality is requested
   else {
+#ifdef DEBUGLIB
+	Debug("server handle = %i", regs->r[1]);
+#endif    	
+
     	if (regs->r[1] == NULL){// connect to default server
     		if (EnvServerString[0] == NULL) {
     			(*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
@@ -602,9 +610,15 @@ Interface::GetAssetList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
   			(*non_fatal) = AddError(&CurrentServers.ReturnCopyOfError());
   	}
 
-  	if ((tmp != NULL)&&((*non_fatal) == NULL)&&(!tmp->stream_uses())&&(tmp->GetAssetList(regs) == ErrorOccurred)){
-  		(*non_fatal) = AddError(&tmp->ReturnCopyOfError());
-  	  	tmp->RemoveErr();
+  	if ((tmp != NULL)&&((*non_fatal) == NULL)){
+  	  	if (tmp->stream_uses())
+  	  		(*non_fatal) = AddError(new ErrorBlk(VSP_ObjectInUse));
+  	  	else {
+  	  		if (tmp->GetAssetList(regs) == ErrorOccurred){
+  				(*non_fatal) = AddError(&tmp->ReturnCopyOfError());
+  	  			tmp->RemoveErr();
+  	  	        }
+  	  	}
   	}
   
   	if ( (new_server == 1)&&(!tmp->stream_uses()) )
@@ -629,6 +643,9 @@ Interface::GetSceneList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     	(*non_fatal) = AddError(new ErrorBlk(VSP_Unimplemented));
   }// this ensures that no expected functionality is requested
   else {
+#ifdef DEBUGLIB
+	Debug("server handle = %i", regs->r[1]);
+#endif    	
 	if (regs->r[1] == NULL){// connect to default server
     		if (EnvServerString[0] == NULL) {
     			(*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
@@ -658,9 +675,14 @@ Interface::GetSceneList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
   			(*non_fatal) = AddError(&CurrentServers.ReturnCopyOfError());
   	}
   
-  	if ((tmp != NULL)&&((*non_fatal) == NULL)&&(!tmp->stream_uses())&&(tmp->GetSceneAssetList(regs) == ErrorOccurred)){
-  		(*non_fatal) = AddError(&tmp->ReturnCopyOfError());
-    		tmp->RemoveErr();
+  	if ((tmp != NULL)&&((*non_fatal) == NULL)){
+  	  	if (tmp->stream_uses())
+  	  		(*non_fatal) = AddError(new ErrorBlk(VSP_ObjectInUse));
+  	  	else
+  	  		if (tmp->GetSceneAssetList(regs) == ErrorOccurred){
+  				(*non_fatal) = AddError(&tmp->ReturnCopyOfError());
+    				tmp->RemoveErr();
+    			}
         }
 #ifdef DEBUGLIB
 	else

@@ -129,7 +129,6 @@ Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_
   message_sent = false;
   high_speed_file = false;
   source_flag = free_token;
-  server_flag = claim_token;
   comms_timeout = inet_timeout;
 
   pw = pwork;
@@ -181,7 +180,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   message_sent = false;
   high_speed_file = false;
   source = source_vod;
-  source_flag = server_flag = free_token;
+  source_flag = free_token;
   comms_timeout = inet_timeout;
 
   pw = pwork;
@@ -286,12 +285,25 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   		      	   err = &mysource->ReturnCopyOfError();
  	 	      	   result = ErrorOccurred;
   }
-
+#if 0
+#ifdef DEBUGLIB
+  Debug("pre play ack = 0");
+#endif  
   if ((result != ErrorOccurred)&&
  	(server->SendAck(server->getMaxRequestedBlock(), server->getMaxRequestedBlock()/*, play_preparation*/) == ErrorOccurred)){
   		  err = &server->ReturnCopyOfError();
   		  result = ErrorOccurred;
  	}// send request for play
+#else
+#ifdef DEBUGLIB
+  Debug("pre play ack = -1");
+#endif  
+  if ((result != ErrorOccurred)&&
+ 	(server->SendAck(server->getMaxRequestedBlock(), server->getMaxRequestedBlock(), play_preparation) == ErrorOccurred)){
+  		  err = &server->ReturnCopyOfError();
+  		  result = ErrorOccurred;
+ 	}// send request for play
+#endif 	
   if (result != ErrorOccurred){
         result = change_state(state_play);	// this will make an imediate callback for trickplay.
         if (server != NULL){
@@ -303,14 +315,10 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
 
 Stream::~Stream(void)
 {
-  int used_buffer = 1;		// token used by MPEG module
-  
-  int status = 0;		// this is a code used in the server log.
+  //int used_buffer = 1;		// token used by MPEG module
   
   source_flag = claim_token;
   
-  myserver->AssetEnd(status, (state != state_endreceived));
-
   if ((change_state(state_stop) != ErrorOccurred)||(ErrorNum() != VSP_CantDeleteSharedMemory)){
     	// this is because errors can occur including errors returned from the server not always shared memory
     	delete mysource; mysource = NULL;
@@ -410,6 +418,11 @@ Stream::change_state(state_of_play new_state)
      	break;
      case state_stop:
    	if (state != state_stop){
+  		if ((myserver->streamrunning())&&(myserver->AssetEnd(0, (state != state_endreceived)) == ErrorOccurred)){
+  			err = &(myserver->ReturnCopyOfError());
+  			result = ErrorOccurred;
+  		}
+
    	  	if (callback_pending & callback_timeout){
    			callback_pending -= callback_timeout;
      			_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
@@ -424,7 +437,7 @@ Stream::change_state(state_of_play new_state)
      	}
 #ifdef DEBUGLIB
      	Debug("close stream; flags %2.2X, tokens (%i)(%i)", callback_pending, 
-     	(buffers[0].in_use == claim_token), (buffers[1].in_use== claim_token));
+     	(buffers[0].in_use == claim_token), (buffers[1].in_use == claim_token));
 #endif    				
      	if (used_buffer == true){
      		MakeError(VSP_CantDeleteSharedMemory);
@@ -709,6 +722,9 @@ Stream::stop_stream(ULONG *new_block_number)
     
     (*new_block_number) += (NEC_databurstval << 1);	// ensure that the next block requested is greater than any sent
   
+  if (ErrorExists())
+  	RemoveErr();	// this is no time to complain
+  	
   return change_state(state_stop);
 }
 
@@ -841,13 +857,6 @@ Stream::timeslice(Statistics *stats)
   	// also calculate if we own all the tokens then we are starting the stream
   	// wait for more than buffer blocks
 
-#ifdef DEBUGLIB    	  
-  if (result == ErrorOccurred) {
-    	Debug("stream error");
-    	ErrorDump();
-    	mysource->getMiscInfo(type_debug, NULL);
-  }
-#endif
   if ((result == ErrorOccurred)&&(myserver != NULL)&&(!message_sent)){
     	myserver->send_message_Error(err);
     	message_sent = true;
@@ -1144,23 +1153,19 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
                 } 
     		else 
     		if (((stream->server_sd) == identifier)&&(identifier != -1)) {
-        	   if (code == Socket_Broken_Event){
-        	     	stream->myserver->MakeError(IP_SocketError);
-        	     	err = &stream->ReturnCopyOfError();
-        		stream->myserver->send_message_Error(err);
-        	     	result = ErrorOccurred;
-        	   }
-        	   else {
-     			if (stream->server_flag == free_token){
-      				stream->server_flag = claim_token; 		// in use
+        	   	if (code == Socket_Broken_Event){
+        	   	  	stream->myserver->MakeError(IP_SocketError);
+        	   	  	err = &stream->ReturnCopyOfError();
+        			stream->myserver->send_message_Error(err);
+        		     	result = ErrorOccurred;
+        		}
+        		else {
       				if ( stream->server_inetevent() == ErrorOccurred){
     					err = &stream->ReturnCopyOfError();
     					result = ErrorOccurred;
-      				}
-	       			stream->server_flag = free_token; 	// not in use
-        		}
-        		*claim = claim_event; // claim even if in use
-        	   }
+       			        }
+        			*claim = claim_event; // claim even if in use
+        	        }
     		}
         }
   }
@@ -1186,11 +1191,15 @@ StreamList::TimeSliceCall(void *)
     					result = ErrorOccurred;
       				}
       				if ( stream->state == state_stop) {
+      				  
+      				  	if (stream->ErrorExists()) // don't complain recover
+      				  		stream->RemoveErr();
+      				  		
       		  			if ( stream->change_state(state_stop) == ErrorOccurred )
       		  	  			stream->RemoveErr();
-      		  			else{
+      		  			else
       		  				Remove(identifiers[i]);	// removeit from the list
-      		  			}
+      		  			
       				}     		  	
       				stream->source_flag = free_token; 		// not in use
 	       			
@@ -1201,10 +1210,10 @@ StreamList::TimeSliceCall(void *)
       					Debug("timeslice making callback");
 #endif      			
       					_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, stream->pw);	  	
- 						if (e != NULL){
-  							MakeError(e);
-  							result = ErrorOccurred;
- 	        		                }
+ 					if (e != NULL){
+  						MakeError(e);
+  						result = ErrorOccurred;
+ 	        		        }
  	                        }
 	                }
                 }// callback_pending 		

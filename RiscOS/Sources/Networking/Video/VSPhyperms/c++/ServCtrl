@@ -58,6 +58,7 @@ ServerList::inetEvent(int code, int identifier, claim_flag *claim)
 
 InternetObject::InternetObject(struct in_addr *server, ULINT port)
 {
+  	inuse  = free_token;
   	owners = owner_none;
   	message_pipe = NULL;
   	MAX_requested_block = 0;	// error checking to avoid multilple requests for the same thing
@@ -887,6 +888,7 @@ error_flag
 Server::PeekHeader(UCHAR *command)
 {
   PacketHeader header;
+  *command = 0;
      
     if (SocketDescriptor.read(&header, sizeof(PacketHeader), MSG_PEEK) != sizeof(PacketHeader)) {
     	return ErrorOccurred;
@@ -900,6 +902,7 @@ Server::PeekHeaderWait(UCHAR *command)
 {
   PacketHeader header;
   error_flag result = ErrorState();
+  *command = 0;
   
   ULINT t1, t2;
   	
@@ -934,74 +937,85 @@ error_flag
 Server::inetevent(UCHAR *event, ULINT *result, ULINT play_mode)
 {
   
-  *result = 0;
+  *event = (UCHAR)(*result = 0);
+  error_flag err_result = ErrorState();
   
-  if (PeekHeader(event) == ErrorOccurred){
-    return NoError;	// no data
-  }
-  
-  switch (*event) {
-    	case COMMAND_assetlist_response:
-    	case COMMAND_scenelist_response:
-    	case COMMAND_assetpres_response:	// don't touch
-    		break;
-  	case COMMAND_startend_notification:
-  		{
-  		StartEndNotification notify;
-  		
-  			if (GetData(&notify, sizeof(StartEndNotification)) == ErrorOccurred)
-    				return ErrorOccurred;
-    			if (ntoh_structure(&notify, map_StartEndNotification, StartEndNotification) == ErrorOccurred){
-    				return MakeError(IP_ReadFail);
-    			}
-    			if (notify.special_playbackID == play_mode)
-    				*result = (int)notify.trans_block_num;
-    			else
-    				(*event) = 0;
-    		}
-    	        break;
-    	case COMMAND_playback_response:
-    		if (get_playback_response(result) == ErrorOccurred)
-    			return ErrorOccurred;
-    		break;
-    	case COMMAND_assetend_response:
-   		{
-#ifdef DEBUGLIB   		  
-   		  	Debug("asset end");
-#endif   		  	
-   			AssetEndResponse response;
-   			if ((GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred))
-   				return ErrorOccurred;
-			if ((ntoh_structure(&response, map_AssetEndResponse, AssetEndResponse) == ErrorOccurred)) {
-     				return MakeError(IP_ReadFail);
-   			}
+  if ((err_result != ErrorOccurred)&&(inuse != claim_token)) {
+    	inuse = claim_token;
    	
-   			if ((response.certification_code != certification_code++)){
-   				return MakeError(VSP_ServerCertError);
-   			}
-   			
-   			*result = response.result;
-#ifdef DEBUGLIB
-   			if (ErrorExists())
-				Debug("asset end result (%i)", response.result);
-#endif   
-                }
-    		break;
-    	default:
-
+  	if (PeekHeader(event) == ErrorOccurred){
+    		err_result = NoError;	// no data
+  	}
+  	else
+  	switch (*event) {
+  		case COMMAND_startend_notification:
+	  		{
+		  		StartEndNotification notify;
+  		
+  				if (GetData(&notify, sizeof(StartEndNotification)) == ErrorOccurred)
+    					err_result = ErrorOccurred;
+    				else {
+    				  	if (ntoh_structure(&notify, map_StartEndNotification, StartEndNotification) == ErrorOccurred){
+    						err_result = MakeError(IP_ReadFail);
+    					}
+    					else {
+    						if (notify.special_playbackID == play_mode)
+    							*result = (int)notify.trans_block_num;
+    						else
+    							(*event) = 0;
+    					}
+    				}
+    			}
+    	        	break;
+    		case COMMAND_playback_response:
+    			if (get_playback_response(result) == ErrorOccurred)
+    				err_result = ErrorOccurred;
+    			break;
+    		case COMMAND_assetend_response:
+   			{
+#ifdef DEBUGLIB   		  
+   			  	Debug("asset end");
+#endif   		  	
+   				AssetEndResponse response;
+   				
+   				if ((GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred))
+   					err_result = ErrorOccurred;
+   				else {
+					if ((ntoh_structure(&response, map_AssetEndResponse, AssetEndResponse) == ErrorOccurred)) {
+     						err_result = MakeError(IP_ReadFail);
+   					}
+   	                                else {
+   						if ((response.certification_code != certification_code++)){
+   							err_result = MakeError(VSP_ServerCertError);
+   						}
+   			                        else {
+   			                        	clear_streamrunning();
+   							*result = response.result;
+   						}
+   					}
+   				}
+  
+                	}
+    			break;
+    		default:
 #ifdef DEBUGLIB    
-    		Debug("TCP: inet ignore unknown command %2.2X\n", *event);
-    		ReadDataToDebug();
+    			Debug("TCP: inet ignore unknown command %2.2X\n", *event);
+    				ReadDataToDebug();
 #else
-		{
-  		int buffer;
-    			while (SocketDescriptor.read(&buffer, 4)==4);
-    		}
+			{
+  			int buffer;
+    				while (SocketDescriptor.read(&buffer, 4)==4);
+    			}
 #endif    		
-    		break;
-    		
+    			break;	
+    	}
+    	inuse = free_token;
   }
-  return NoError;
+#ifdef DEBUGLIB    	
+	if (*event != 0)
+    		Debug("inet event(%2.2X)", *event);
+#endif    	
+  return err_result;
 }
 
 error_flag
@@ -1013,8 +1027,12 @@ Server::SendAck(ULINT MAX_storableBlocks, ULINT MAX_complete_block, ACK_type dat
   		
   	comms_flag = true;		// communicated with server;
   	
-  	if (!ErrorExists()){
-  		int size = SocketDescriptor.write((void*)&ack, sizeof(ACK_Block));
+#ifdef DEBUGLIB	
+	if (!streamrunning())
+		Debug("attempt to send Ack out of stream bounds");
+#endif		
+  	if (!ErrorExists() && streamrunning()){
+   		int size = SocketDescriptor.write((void*)&ack, sizeof(ACK_Block));
   		if (size < 0){
 #ifdef DEBUGLIB  	  
   	  		Debug("error sending ACK %i", errno);
@@ -1041,7 +1059,11 @@ Server::SendNak(ULINT BlockStart, LINT DatagramStart, ULINT BlockEnd, LINT Datag
 
 	comms_flag = true;		// communicated with server;
 	
-	if (!ErrorExists()){
+#ifdef DEBUGLIB	
+	if (!streamrunning())
+		Debug("attempt to send NAK out of stream bounds");
+#endif		
+	if (!ErrorExists() && streamrunning()){
   		int size = SocketDescriptor.write((void*)&nak, sizeof(NAK_Block));
   	
   		if (size < 0){
@@ -1067,54 +1089,64 @@ Server::GetAssetList(_kernel_swi_regs *regs)
   // r6 = size of r5
   
   error_flag result = ErrorState();
+
+  if (inuse != claim_token){
+  	inuse = claim_token;	
+  	//Debug("assetlist claim");
   
 #ifdef DEBUGLIB
 	Debug("select %8.8X, start (%i), entries (%i)", regs->r[2], regs->r[3], regs->r[4]);
 #endif 
   
-  if (  (result != ErrorOccurred)&&(regs->r[4] == 0)&&
-  	(( send_assetlist_request(regs->r[2], 0, 0) == ErrorOccurred) ||
-  	    (get_assetlist_response((size_t*)&(regs->r[4]), NULL, 0)== ErrorOccurred)) )
-  		result = ErrorOccurred;		
+  	if (  (result != ErrorOccurred)&&(regs->r[4] == 0)&&
+  		(( send_assetlist_request(regs->r[2], 0, 0) == ErrorOccurred) ||
+  		    (get_assetlist_response((size_t*)&(regs->r[4]), NULL, 0)== ErrorOccurred)) )
+  			result = ErrorOccurred;		
   
-  if ((result != ErrorOccurred)&&(regs->r[5] == 0)){
-    	regs->r[6] = regs->r[4] * sizeof(AssetIDDescriptor);
-  }
-  else {
-  	// read r4 assets whilst avoiding overflowing the socket buffer
-    	size_t expected_num_assets = (size_t)regs->r[4];
-    	AssetIDDescriptor *buffer_offset = (AssetIDDescriptor*)regs->r[5];
+  	if ((result != ErrorOccurred)&&(regs->r[5] == 0)){
+  	  	regs->r[6] = regs->r[4] * sizeof(AssetIDDescriptor);
+  	}
+  	else {
+  		// read r4 assets whilst avoiding overflowing the socket buffer
+  	  	size_t expected_num_assets = (size_t)regs->r[4];
+  	  	AssetIDDescriptor *buffer_offset = (AssetIDDescriptor*)regs->r[5];
     	
-	// this is the number of entries that can be read at once without overflow
-    	int number_entries = (int)((SocketDescriptor.getTCPrecvspace()) - 
+		// this is the number of entries that can be read at once without overflow
+	    	int number_entries = (int)((SocketDescriptor.getTCPrecvspace()) - 
     				(sizeof(PacketHeader)+sizeof(AssetListResponseHeader)))/sizeof(AssetIDDescriptor); 
-    	
-    	while ((result != ErrorOccurred)&&(regs->r[4] > 0)){
+	    	
+    		while ((result != ErrorOccurred)&&(regs->r[4] > 0)){
     	  
-    	  	if (regs->r[4] < number_entries)
-    	  		number_entries = regs->r[4];
+    		  	if (regs->r[4] < number_entries)
+    		  		number_entries = regs->r[4];
     	  		
-  		expected_num_assets = number_entries;	// this is the number of assets that we expect to receive
+  			expected_num_assets = number_entries;	// this is the number of assets that we expect to receive
 
- 		if ((result != ErrorOccurred)&&(( send_assetlist_request(regs->r[2], regs->r[3], expected_num_assets) == ErrorOccurred) ||
-  	    		(get_assetlist_response((size_t*)&expected_num_assets, buffer_offset, (size_t*)&(regs->r[6])) == ErrorOccurred)))
-  			result = ErrorOccurred;
-  		else {
-  		  	regs->r[4] -= expected_num_assets;		// decrement request count
-  		  	if (regs->r[3] == 0)
-  		  		regs->r[3] = 1;
-  		  	regs->r[3] += expected_num_assets;		// increment start position
-  		  	buffer_offset += expected_num_assets;
-  		}
+ 			if ((result != ErrorOccurred)&&(( send_assetlist_request(regs->r[2], regs->r[3], expected_num_assets) == ErrorOccurred) ||
+  		    		(get_assetlist_response((size_t*)&expected_num_assets, buffer_offset, (size_t*)&(regs->r[6])) == ErrorOccurred)))
+  				result = ErrorOccurred;
+  			else {
+  			  	regs->r[4] -= expected_num_assets;		// decrement request count
+  			  	if (regs->r[3] == 0)
+  			  		regs->r[3] = 1;
+  			  	regs->r[3] += expected_num_assets;		// increment start position
+  			  	buffer_offset += expected_num_assets;
+  			}
   				
 #ifdef DEBUGLIB  		
-  		Debug("Asset list: read %i size %i new start %i", expected_num_assets, regs->r[6], regs->r[3]);
+  			Debug("Asset list: read %i size %i new start %i", expected_num_assets, regs->r[6], regs->r[3]);
 #endif
-   		if (expected_num_assets < number_entries)
-  			break;
-  	}
- 	regs->r[4] = (buffer_offset - (AssetIDDescriptor*)regs->r[5]);
+   			if (expected_num_assets < number_entries)
+  				break;
+  		}
+ 		regs->r[4] = (buffer_offset - (AssetIDDescriptor*)regs->r[5]);
+  	}	
+  	//Debug("assetlist free");
+     	inuse = free_token;
   }
+  else
+  	result = MakeError(IP_SendFail);
+
   return result;
 }
 
@@ -1122,20 +1154,29 @@ error_flag
 Server::GetSceneAssetList(_kernel_swi_regs *regs)
 {
   error_flag result = ErrorState();
-   
-  if (  (result != ErrorOccurred)&&(regs->r[5] != 0)&&
-  	(( send_scenelist_request(regs->r[3]) == ErrorOccurred) ||
-  	    (get_scenelist_response((size_t*)&(regs->r[4]), (SceneInformationDescriptor*)regs->r[5], (size_t*)(&regs->r[6])) == ErrorOccurred)) )
-  		result = ErrorOccurred;
-  else {
-    if ((result != ErrorOccurred)&&(regs->r[5] == 0)){
-      if (regs->r[4] != 0)
-      	regs->r[6] = regs->r[4] * sizeof(SceneInformationDescriptor);
-      else
-      	regs->r[6] = MAX_scene_list * sizeof(SceneInformationDescriptor);
-    }
-  }
 
+  if (inuse != claim_token){
+  	inuse = claim_token;
+  	//Debug("scenelist claim");
+   
+  	if (  (result != ErrorOccurred)&&(regs->r[5] != 0)&&
+  		(( send_scenelist_request(regs->r[3]) == ErrorOccurred) ||
+  		 (get_scenelist_response((size_t*)&(regs->r[4]), (SceneInformationDescriptor*)regs->r[5], (size_t*)(&regs->r[6])) == ErrorOccurred)) )
+  			result = ErrorOccurred;
+  	else {
+    	if ((result != ErrorOccurred)&&(regs->r[5] == 0)){
+      		if (regs->r[4] != 0)
+      			regs->r[6] = regs->r[4] * sizeof(SceneInformationDescriptor);
+      		else
+      			regs->r[6] = MAX_scene_list * sizeof(SceneInformationDescriptor);
+    		}
+  	}
+  	//Debug("scenelist free");
+     	inuse = free_token;
+  }
+  else
+  	result = MakeError(IP_SendFail);
+ 
   return result;
 }
 
@@ -1145,21 +1186,31 @@ Server::AssetPresentation(ULINT init_value, PlayElementRequest playlist[], size_
 {
   error_flag result = ErrorState();
   
-  if (  (result != ErrorExists())
-  	&&(
-  	(send_assetpresentation_request(init_value, playlist, size, (*ipaddr), (*port)) == ErrorOccurred ) ||
- 	(get_assetpresentation_response(ipaddr, port, stream_time, dgram_size, bitrate, fast_playback_ratio) == ErrorOccurred) 
- 	) )
-     		result = ErrorOccurred;
-  
-  return result ;
+  if (inuse != claim_token){
+  	inuse = claim_token;
+  	//Debug("pres claim");
+  	
+  	if (  (result != ErrorExists())
+  		&&(
+  		(send_assetpresentation_request(init_value, playlist, size, (*ipaddr), (*port)) == ErrorOccurred ) ||
+ 		(get_assetpresentation_response(ipaddr, port, stream_time, dgram_size, bitrate, fast_playback_ratio) == ErrorOccurred) 
+ 		) )
+ 	    		result = ErrorOccurred;
+ 	    		
+ 	set_streamrunning();
+ 	//Debug("pres free");
+     	inuse = free_token;
+  }
+  else
+  	result = MakeError(IP_SendFail);
+  	
+  return result;
 }
 
 error_flag
-Server::AssetEnd(ULINT status, ULINT endflag)
+Server::AssetEnd(ULINT status, ULINT)
 {
-   AssetEndRequest request;
-   
+   AssetEndRequest request;   
    error_flag result = ErrorState();
    
    if (result == ErrorOccurred){
@@ -1170,7 +1221,7 @@ Server::AssetEnd(ULINT status, ULINT endflag)
         case IP_SocketError:
         case IP_ConnectionRefused:
         case IP_TimeOutOnCommunication:
-             return ErrorOccurred;
+             result = ErrorOccurred;
              
      	default:
   		RemoveErr();	// it doesn't matter now we are trying to get out
@@ -1178,25 +1229,28 @@ Server::AssetEnd(ULINT status, ULINT endflag)
   		break;
      }
    }
-   request.interface_number = 0;
-   request.route_type = 0;
-   request.command_number = COMMAND_assetend_request;
-   request.command_length = sizeof(AssetEndRequest) - 8;
-   request.certification_code = certification_code;
    
-   if (endflag != 0)
-   	request.end_flag = 1;
-   else
-   	request.end_flag = 0;
+   if (result != ErrorOccurred){
+   	request.interface_number = 0;
+   	request.route_type = 0;
+   	request.command_number = COMMAND_assetend_request;
+   	request.command_length = sizeof(AssetEndRequest) - 8;
+   	request.certification_code = certification_code;
+   	//if (endflag != 0)
+   	//	request.end_flag = 1;
+   	//else
+   	   	request.end_flag = 0;
    	
-   request.asset_status = status;
-   request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0;
-
-   if ( hton_structure(&request, map_AssetEndRequest, AssetEndRequest) == ErrorOccurred) {
-     	return MakeError(IP_SendFail);
+   	request.asset_status = status;
+   	request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0;
+   
+   	if ( hton_structure(&request, map_AssetEndRequest, AssetEndRequest) == ErrorOccurred) {
+     		result = MakeError(IP_SendFail);
+   	}
+   	else {
+   		result = SendData(&request, sizeof(AssetEndRequest));
+	
+    	}
    }
-
-   result = SendData(&request, sizeof(AssetEndRequest));
-  
-   return NoError;
+   return result;
 }
