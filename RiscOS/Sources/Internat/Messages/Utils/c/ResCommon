@@ -37,10 +37,13 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <ctype.h>
+
 /* Include RISC OS headers */
 #include "kernel.h"
 #include "swis.h"
 #include "os.h"
+#include "Global/FileTypes.h"
+
 /* Include other headers */
 #include "msgcommon.h"
 #include "debuglib/debuglib.h"
@@ -69,6 +72,17 @@ typedef struct
   char name[1];
 } object;
 
+/* The structure below defines a type that can be used to hold squash file headers as
+    defined in PRM 4 Appendix E */
+typedef struct
+{
+  char id[4];
+  int size;
+  int load_addr;
+  int exec_addr;
+  int reserved;
+} squash_header_struct;
+
 
 /*****************************************************************************
 * Constants
@@ -80,13 +94,13 @@ typedef struct
 *****************************************************************************/
 char* supported_territories[MAX_TERRITORIES] = NULL; /* An array in which territories defined in the Env file can be stored. */
 unsigned int num_of_territories = 0;                 /* The number of territories defined. */
-
 char* root_directory = NULL;
 char* directory_to_copy = NULL;
 char* compared_files[MAX_TERRITORIES] = NULL; /* An array in which to store the filenames of the files t be compared. */
 bool verbose = false; /* Do you wish to see what it is doing */
 bool simulate = false; /* Do not actually delete any files. */
-bool directory_deleted = false; /* A global flag to say whether an empty directory was deleted on this pass. If it was, then the recursive routines have to restart. */
+bool common_directory_deleted = false;  /* A global flag to say whether an empty directory was deleted on this pass. If it was, then the recursive routines have to restart. */
+
 
 /*****************************************************************************
 * Function prototypes - Private to this file
@@ -97,6 +111,8 @@ bool compare_files(const char* filename);
 void exit_handler(void);
 char *strdup(const char *str);
 bool is_directory_empty(const char* directory);
+bool compare_squash_files(void);
+int get_filetype(const char* const obj);
 
 
 
@@ -294,6 +310,8 @@ char *read_env(char *variable)
 }
 
 
+
+
 /* This routine scans through the list of territories and ensures that they
 all exist. It does this by cheking that <root_directory>.<territory_name> is
 a valid directory.
@@ -342,11 +360,12 @@ void create_common(const char* res_to_copy)
 
 
 /* This routine returns the filetype of the object. */
-int get_filetype( char *obj )
+int get_filetype(const char* const obj)
 {
-  int type;
-  _swi( OS_File, _IN(0)|_IN(1)|_OUT(0), 17, obj, &type );
-  return type;
+  int type, load_addr;
+  _swi( OS_File, _IN(0)|_IN(1)|_OUT(2), 17, obj, &load_addr );
+  type = (load_addr>>8)&0xFFF;
+  return (type);
 }
 
 
@@ -401,7 +420,7 @@ bool compare_files(const char* filename)
   length = strlen("Common");
   path_segment+=length+2;
 
-  /* Now create the other filenames using the known path.*/
+  /* Now create the other filenames using the known path. */
   for (loop=0; loop < num_of_territories; loop++)
   {
     if (strcmp(supported_territories[loop], directory_to_copy) != 0) /* Ignore the one we copied, as files must be the same. */
@@ -419,7 +438,6 @@ bool compare_files(const char* filename)
 
   if (verbose)
   {
-    printf("Comparing...\n");
     for (loop=0; loop < num_of_territories; loop++)
     {
        printf ("%s\n", compared_files[loop]);
@@ -432,6 +450,7 @@ bool compare_files(const char* filename)
     /* Delete the files from the 'Common' directory */
     matches = false;
     remove_file(filename);
+    common_directory_deleted = true;
   }
   else
   {
@@ -487,17 +506,6 @@ bool remove_file(const char* file_to_remove)
   file_path = strdup(file_to_remove);
   stripleaf(file_path);
 
-/*
-  if (!simulate)
-  {
-    // Now attempt to delete the directory using OS_File 6. Hacky, but faster than working out if it is empty and then deleting it.
-    printf ("Attempting to delete directory %s\n", file_path);
-    reg.r[0] = 6;		// remove object
-    reg.r[1] = (int) file_path;
-    _kernel_swi(OS_File, &reg, &reg);
-  }
-*/
-
   if (file_path)
   {
     free (file_path);
@@ -520,12 +528,12 @@ bool perform_comparisons(void)
   unsigned int loop;
   bool file_matches = true;
   unsigned int filesize[MAX_OPEN_TERRITORY_FILES] = 0;
-  unsigned long int filetype[MAX_OPEN_TERRITORY_FILES] = 0;
+  unsigned int filetype[MAX_OPEN_TERRITORY_FILES] = 0;
 
   /* Ensure that all the files exist and grab their filesizes and filetypes.*/
   for (loop=0; loop < num_of_territories; loop++)
   {
-    assert (compared_files[loop] != NULL); /* Check we are not going to try to open a NULL string... */
+    assert (compared_files[loop] != NULL); /* Check we are not going to try to open a NULL pointer... */
 
     /* Ensure that all the files exist. */
     if (!file_exists(compared_files[loop]))
@@ -536,7 +544,7 @@ bool perform_comparisons(void)
     }
 
     /* Compare the filetypes and fileseizes */
-    filetype[loop] = filer_object_type(compared_files[loop]);
+    filetype[loop] = get_filetype(compared_files[loop]);
     filesize[loop] = file_size(compared_files[loop]);
     if (loop > 0 && ((filesize[loop] != filesize[loop-1]) || filetype[loop] != filetype[loop-1]))
     {
@@ -547,23 +555,25 @@ bool perform_comparisons(void)
   }
 
   /* Another check - if the files are squash files, then they will always be different. Check the headers of each file to ensure they are the same. */
-
+  if (filetype[0] == FileType_Squash)
+  {
+    return (compare_squash_files()); /* We hsve no need to continue. */
+  }
 
   /* Open all the files. */
   for (loop=0; loop < num_of_territories; loop++)
   {
-    assert (compared_files[loop] != NULL); /* Check we are not going to try to open a NULL string... */
-//    printf ("%s\n", compared_files[loop]);
+    assert (compared_files[loop] != NULL); /* Check we are not going to try to open a NULL pointer... */
     /* Open the file.. */
     if ((file_handles[loop]=fopen(compared_files[loop],"r")) == NULL)
     {
       if (verbose)
         printf("Error opening file %s for reading.\n", compared_files[loop]);
-      return (false); /* If we can't open it, we are no bothered... (atm neway)*/
+      return (false); /* If we can't open it, we are not bothered... (atm neway) */
     }
   }
 
-  /* Now go through the file and do a byte-by-byte comparison... */
+  /* Scan through all the files on a byte-by-byte basis, comparing them. */
   while (!feof(file_handles[0]) && file_matches)
   {
     char bytes[10]; /* To hold the bytes from all the files... */
@@ -573,12 +583,10 @@ bool perform_comparisons(void)
       bytes[loop] = getc(file_handles[loop]);
       if (loop > 0 && (bytes[loop] != bytes[loop-1]))
       {
-        // printf ("File %s do not match!\n", compared_files[loop]);
         file_matches = false;
         break;
       }
     }
-//    printf("%s\n", bytes[9]);
   }
 
   /* Close all the files */
@@ -588,11 +596,6 @@ bool perform_comparisons(void)
     {
       fclose(file_handles[loop]);
     }
-  }
-
-  if (verbose)
-  {
-    // printf ("Files match.\n");
   }
 
   return (file_matches);
@@ -616,14 +619,13 @@ void descend(char *path)
       object *op = (object *)buf;
       int nread;
 
-      /* Slight hack - there is a chance that the directory has been deleted because it was empty.
-          Detect if it has, and, if so, move down one segment of the path. */
-//      if (!file_exists(path))
-//      {
-//        stripleaf(path);
-     //   printf("Stripped leaf from the path. Path is now %s\n", path);
-//      }
-      printf ("Calling OS_GBPB 8 on path %s\n", path);
+      if (common_directory_deleted)
+      {
+        offset = 0; /* Rescan this directory */
+        common_directory_deleted = false;
+      }
+
+      printf ("Comparing files in path %s\n", path);
       _swi( OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5)|_IN(6)|_OUT(3)|_OUT(4),
               10, path, buf, 80, offset, BUFSZ, 0, &nread, &offset );
 
@@ -634,7 +636,6 @@ void descend(char *path)
           case 1:
             /* Text file found so scan it for tags. */
             appendleaf( path, op->name );
-            //printf("File is %s (type %d)\n", path, filetype(op));
             if (compare_files(path))
             {
             }
@@ -666,10 +667,12 @@ void descend(char *path)
   }
   else
   {
-          printf("Couldn't allocate enough memory\n" );
-          exit (EXIT_FAILURE);
+    printf("Couldn't allocate enough memory\n" );
+    exit (EXIT_FAILURE);
   }
 }
+
+
 
 
 
@@ -687,6 +690,8 @@ bool compare_resources(void)
 }
 
 
+
+
 /*
  * compare two strings caselessly
  */
@@ -695,7 +700,7 @@ int cstrcmp(const char *a, const char *b)
   int d;
 
   if (a == NULL && b == NULL)
-    return 0;
+    return (0);
 
   if (a == NULL || b == NULL)
     return (-1);
@@ -703,9 +708,9 @@ int cstrcmp(const char *a, const char *b)
   while (*a || *b) {
     d = tolower(*(a++)) - tolower(*(b++));
     if (d)
-      return d;
+      return (d);
   }
-  return 0;
+  return (0);
 }
 
 
@@ -885,21 +890,133 @@ void exit_handler(void)
 
 
 
-#if 0
+/*
+  This routine scans two squash files and reutrns whether or not they are
+   identical. This is necessary becauyse two identical files can be squahed at
+   different times and end up with different timestamps and load/exec
+   addreses due to when the Squash files were created. Therefore we ignore
+   the timestamp and exec data on the squashed file, and go with the data
+   held in the Squashfile header.
+*/
+
+bool compare_squash_files(void)
+{
+  bool file_matches = true;
+  unsigned int loop;
+  FILE* file_handles[MAX_OPEN_TERRITORY_FILES]; /* An array to hold all the file handles */
+  squash_header_struct hdr[MAX_OPEN_TERRITORY_FILES];
+  /* Squash file header is as follows: (PRM 4 appendix E):
+  char[4] id      (should be SQSH)
+  int size
+  int load_addr
+  int exec_addr
+  int reserved    (should be 0)
+  We would expect exec_addr to be different even if the two files are identical.
+  */
+
+  /* Open all the files. */
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    assert (compared_files[loop] != NULL); /* Check we are not going to try to open a NULL pointer... */
+    /* Open the file.. */
+    if ((file_handles[loop]=fopen(compared_files[loop],"r")) == NULL)
+    {
+      if (verbose)
+        printf("Error opening file %s for reading.\n", compared_files[loop]);
+      return (false); /* If we can't open it, we are no bothered... (atm neway)*/
+    }
+  }
+
+  /* Read in the header for all the files. */
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    printf ("%s is a squash file...\n", compared_files[loop]);
+    if (fread (&hdr[loop], sizeof(squash_header_struct), 1, file_handles[loop]) == 0)
+    {
+      printf("Read of the header for file %s failed.\n", compared_files[loop]);
+    }
+    else
+    {
+      if (loop > 0 && ((hdr[loop].size != hdr[loop-1].size) || (hdr[loop].load_addr != hdr[loop-1].load_addr))) /* We are not bothered with exec_addr as it contains the datestamp */
+      {
+        file_matches = false;
+        break;
+      }
+      printf("Size      for file %d is %0x\n", loop, hdr[loop].size);
+      printf("Load addr for file %d is %0x\n", loop, hdr[loop].load_addr);
+      printf("Exec addr for file %d is %0x\n", loop, hdr[loop].exec_addr);
+      printf("reserved  for file %d is %0x\n", loop, hdr[loop].reserved);
+    }
+  }
+
+  /* Now go through the rest of the file and do a byte-by-byte comparison... */
+  while (!feof(file_handles[0]))
+  {
+    char bytes[MAX_OPEN_TERRITORY_FILES]; // To hold the bytes from all the files...
+    bytes[MAX_OPEN_TERRITORY_FILES-1]='\0';
+    for (loop=0; loop < num_of_territories; loop++)
+    {
+      bytes[loop] = getc(file_handles[loop]);
+      if (loop > 0 && (bytes[loop] != bytes[loop-1]))
+      {
+        // printf ("File %s do not match!\n", compared_files[loop]);
+        file_matches = false;
+        break;
+      }
+    }
+  }
+
+  /* Close all the files */
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    if (file_handles[loop])
+    {
+      fclose(file_handles[loop]);
+    }
+  }
+
+  return (file_matches);
+}
+
+
+
+
+
 /* This routine returns true if the directory is full, false otherwise. */
 /* This routine is currently uncompleted. */
 bool is_directory_empty(const char* directory)
 {
   bool is_empty = false;
 
-  if filer_object_type(directory) == 2)) /* It is a directory. */
+  if (filer_object_type(directory) == 2) /* It is a directory. */
   {
     /* Is directory empty? */
+    char *buf = malloc( BUFSZ );
+    int offset = 0;
+    if ( buf != NULL )
+    {
+      int nread;
+      _swi( OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5)|_IN(6)|_OUT(3)|_OUT(4),
+              10, directory, buf, 80, offset, BUFSZ, 0, &nread, &offset );
+      if (verbose)
+      {
+        printf ("Number of files in directory %s is %d\n", directory, nread);
+      }
+      free (buf);
+      if (nread == 0) /* There were no entries */
+      {
+        is_empty=true;
+      }
+    }
+  }
+  else
+  {
+    printf ("Warning: %s is not a directory.\n", directory);
   }
 
   return (is_empty);
 }
-#endif /* 0 */
+
 
 
 /*****************************************************************************

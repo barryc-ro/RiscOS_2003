@@ -140,7 +140,8 @@ ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
 ${HELPTAGS}: ${TAGEXT} ${DIRS}
         @echo Copying Resources to Processed directory for tokenising ...
         ${CP} Resources Processed ${CPFLAGS}
-        ${RESCOMM} ${PROCESSDIR} -v
+        ${RESCOMM} ${PROCESSDIR}
+        Perl Utils.RemoveEmpt ${PROCESSDIR}
         Do ${TAGEXT} ${PROCESSDIR} ${DICTTAGS} ${HELPTAGS}
 
 #
