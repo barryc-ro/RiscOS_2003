@@ -42,7 +42,9 @@ Chrontel_Reset          # 1
 
 Vert_Step_Size          * 4
 Vert_Stop               * 50            ;how far they can move the display in the vertical in both directions
+ [ NVRAMBodge
         ASSERT (313 - Vert_Stop) > (255 - 60)  ;check that the vertical stop won't allow the screen to be moved into the region we can't encode
+ ]
 Horiz_Step_Size         * 2
 Horiz_Stop              * 50            ;how far they can move the display in the horizontal in both directions
 Start_Active_Video      * 148
@@ -128,8 +130,6 @@ Mod_Init
 
 Mod_Init_GotWorkspace
         MOV     r12,r2                  ;we'll need it at some point
-        MOV     r2,#3
-        STRB    r2,[r12,#MonitorType]   ;this has to reflect whether or not we've claimed paletteV
 
         ;set up the system variable containing our movement command that allows the browser to communicate with us
         ADR     r0,Chrontel_Var
@@ -139,54 +139,9 @@ Mod_Init_GotWorkspace
         MOV     r4,#0
         SWI     XOS_SetVarVal
 
-        ;set up stuff for the code ripped from the kernal
-        ADD     r2,r12,#SoftPalette
-        STR     r2,[r12,#FirPalAddr]
-        ADD     r3,r2,#(256+1+3)*4
-        STR     r3,[r12,#SecPalAddr]
-
-; now initialise entries for pointer palette so they will actually program pointer palettte
-; because VDU20 doesn't change pointer palette
-
-        MOV     r3, #&50000000
-        MOV     r4, #&60000000
-        MOV     r5, #&70000000
-
-        ADD     r2, r2, #260*4          ; store in 1st copy of logical
-        STMDB   r2, {r3-r5}             ; (last 3 entries)
-
-        ADD     r2, r2, #260*4
-        STMDB   r2, {r3-r5}             ; store in 2nd copy of logical
-
- [ GammaCorrection
-        ADD     r2, r2, #260*4
-        STMDB   r2, {r3-r5}             ; store in 1st copy of physical
-
-        ADD     r2, r2, #260*4
-        STMDB   r2, {r3-r5}             ; store in 2nd copy of physical
-
-; r2 now points off end of all 4 copies, ie start of rgb tables
-; initialise red, green and blue transfer function tables to 1-1 mapping
-
-        MOV     r0, #0
-05
-        STRB    r0, [r2, #&200]                 ; store in blue table
-        STRB    r0, [r2, #&100]                 ; store in green table
-        STRB    r0, [r2], #1                    ; store in red table, and advance
-        ADD     r0, r0, #1
-        CMP     r0, #256
-        BCC     %BT05
-  ]
-
-        MOV     r0,#0
-        STRB    r0,[r12,#FlashState]    ;which palette to display
-        STRB    r0,[r12,#ScreenBlankFlag] ;not blanked
-
+        BL      PaletteV_Setup
         BL      IOMD_Setup
         BL      Chrontel_Setup
-
-        ;MVN     r3,#0                   ;force a read of the monitor type
-        ;BL      Chrontel_Mode           ;set-up some stuff before the first call to paletteV
 
         Pull    "pc"
 
@@ -358,10 +313,11 @@ Command_Move_Check
         ;This section of code allows arguments which start the same e.g uplots and upabit
         CMP     r6,#32                  ;\space
         BLE     Command_Move_Do
-        CMP     r6,#63                  ;"?"
+        CMP     r6,#63                  ;"?" - web browser issues the command Chrontel_Move Chrontel_Move:left?
         BNE     Command_Move_Skip_Command
 
 Command_Move_Do
+        ;we get here if the argument matched a command and was terminated by a ASCII code <=32 (space) or =63("?")
         ;we now have a valid command and r3 is pointing at it's code number
         LDRB    r2,[r3,#0]              ;load code number
         ADD     r1,r12,#IIC_Buffer      ;set up r1 to point to a buffer
@@ -442,8 +398,6 @@ Chrontel_Move_Vert
         SUBNE   r3,r3,#Vert_Step_Size
 
 Chrontel_Move_Vert_Program
-        ;this bit is broken - it will save the wrong values to NVRAM and generally get confused
-        ;in particular r3 will have been corrupted by the time it gets to the NVRAM write stage
         CMP     r3,r5                   ;do the old and new values differ
         Pull    "r0,pc",EQ              ;if the same then return
 
@@ -530,131 +484,11 @@ NVRAM_Y
         =       "DisplayYPosition",0
         ALIGN
 
-Chrontel_Setup
-        ; Setup the chrontel hardware using the IIC bus
-        ; this stuff is only done once i.e the stuff that is not mode or monitor dependant
-        ; power up - reset - power up
-        Push    "lr"
-        ADD     r1,r12,#IIC_Buffer
+;*************************************************************
+;Service call stuff, to gather info. when mode is changed
+;*************************************************************
 
-        MOV     r2,#&0E                 ;power register
-        STRB    r2,[r1,#0]
-        MOV     r2,#2_00000011          ;power up and do reset
-        STRB    r2,[r1,#1]
-        MOV     r2,#2                   ;send 2 bytes
-        MOV     r0,#Chrontel_IIC_Write                 ;put device address in r0
-        SWI     XIIC_Control
-        BVS     Chrontel_Failed
-
-        MOV     r2,#&0E                 ;power register
-        STRB    r2,[r1,#0]
-        MOV     r2,#2_00001011          ;power up and clear reset condition
-        STRB    r2,[r1,#1]
-        MOV     r2,#2
-        MOV     r0,#Chrontel_IIC_Write                 ;put device address in r0
-        SWI     XIIC_Control
-        BVS     Chrontel_Failed
-
-        MOV     r2,#64+0                ;display settings register (0) with auto inc (64)
-        STRB    r2,[r1,#0]
-        MOV     r2,#2_10000001          ;800x600 PAL 1-1 (29.5MHz) 640x480=%01100001
-        STRB    r2,[r1,#1]
-        MOV     r2,#Chrontel_Flicker    ;flicker reduction 00=none 01=med 10=low 11=high
-        STRB    r2,[r1,#2]
-        MOV     r2,#3
-        MOV     r0,#Chrontel_IIC_Write                 ;put device address in r0
-        SWI     XIIC_Control
-        BVS     Chrontel_Failed
-
-        MOV     r2,#4                   ;data format register
-        STRB    r2,[r1,#0]
-        MOV     r2,#2_00001000          ;pixel data set to 8bit multiplex 5-5-5
-        STRB    r2,[r1,#1]
-        MOV     r2,#2
-        MOV     r0,#Chrontel_IIC_Write                  ;put device address in r0
-        SWI     XIIC_Control
-        BVS     Chrontel_Failed
-
-        MOV     r2,#6                   ;control register
-        STRB    r2,[r1,#0]
-        MOV     r2,#2_01000000          ;CFRB off, master mode on, x, data is latched on negative edge, xcm1, xcm0, pcm1, pcm0
-                                        ;data latched on negative edge means that the red LUT corresponds to P0b (G2 G1 G0 B4 B3 B2 B1 B0)
-                                        ;                                   and the green LUT corresponds to P0a (xx R4 R3 R2 R1 R0 G4 G3)
-        STRB    r2,[r1,#1]
-        MOV     r2,#2
-        MOV     r0,#Chrontel_IIC_Write                 ;put device address in r0
-        SWI     XIIC_Control
-        BVS     Chrontel_Failed
-
-        ADR     r0,NVRAM_X              ;NVRAM tag
-        MOV     r2,#0                   ;read into first word of r1
-        SWI     XNVRAM_Read
-        CMP     r0,#0                   ;error?
-        MOVLT   r4,#Horiz_Offset        ;default value if there is a problem reading NVRAM
-        BLT     %FT40
-        LDR     r4,[r1,#0]              ;if not load up the value
-        MOV     r4,r4,ASL#24
-        MOV     r4,r4,ASR#24            ;make into a signed value
-        ADD     r4,r4,#Horiz_Offset     ;make 0 equate to a default middle position
-40
-        STRB    r4,[r12,#IIC_Horiz]     ;our soft copy
-
-
-        ;the vertical position ranges between 0 and TVLPF/2 (313 max) which is too big to fit into 8bits
-        ;however we don't use the middle of this range 50-200 (ish) so a cunning bodge allows us to fit the 9bit value into 8bits
-        ;bit 7 clear indicates that the value is in the low range so we simply use the value
-        ;bit 7 set indicates upper range so add 60 which gives a range of 188-315 (min required=262-stop value  max required=313)
-        ADR     r0,NVRAM_Y
-        MOV     r2,#0
-        SWI     XNVRAM_Read
-        CMP     r0,#0
-        LDRGE   r5,[r1,#0]
-        MOVLT   r5,#0                   ;default value
- [ NVRAMBodge
-        TST     r5,#2_10000000          ;is bit 7 set?
-        ADDNE   r5,r5,#60
- ]
-        STR     r5,[r12,#IIC_Vert]      ;our soft copy
-
-        MOV     r2,#64+&07              ;start active video register
-        STRB    r2,[r1,#0]              ;address in block
-        MOV     r2,#Start_Active_Video
-        STRB    r2,[r1,#1]              ;SAV value in block     - limited to <=255
-        MOV     r2,r5,LSR#8             ;make bit 8 into bit 0
-        AND     r2,r2,#1                ;clear other bits
-        STRB    r2,[r1,#2]              ;Overflow value in block
-        MOV     r2,#3
-        MOV     r0,#Chrontel_IIC_Write
-        SWI     XIIC_Control
-        BVS     Chrontel_Failed
-
-        MOV     r2,#64+&0a              ;horizontal register
-        STRB    r2,[r1,#0]              ;address in block
-        STRB    r4,[r1,#1]              ;horizontal
-        STRB    r5,[r1,#2]              ;vertical
-        MOV     r2,#3
-        MOV     r0,#Chrontel_IIC_Write
-        SWI     XIIC_Control
-        BVS     Chrontel_Failed
-
-        ;MOV     r2,#64+&13              ;PLL registers starting (&13) with auto-inc (64)
-        ;STRB    r2,[r1,#0]
-        ;MOV     r2,#2_00000101
-        ;STRB    r2,[r1,#1]
-        ;MOV     r2,#57
-        ;STRB    r2,[r1,#2]
-        ;MOV     r2,#135
-        ;STRB    r2,[r1,#3]
-        ;MOV     r2,#4
-        ;MOV     r0,#Chrontel_IIC_write                  ;put device address in r0
-        ;SWI     XIIC_Control
-        ;BVS     Chrontel_Failed
-
-Chrontel_Failed
-        CLRV                            ;in case one of the IIC_Control caused an error
-
-        Pull    "pc"
-
+;Service_PreModeChange
 PreModeChange
         ;a) check the colour depth <= 256 colours
         ;r2 is mode
@@ -695,6 +529,7 @@ HighColourModeError
         ;Pull    "r0-r4"
 
 
+;Service_ModeChanging code
 ModeChanging
         ;decide, based on monitor type whether we still need to sit on PaletteV and also mark mode info
         ;as invalid so that the modified kernel routines re-read it
@@ -776,15 +611,10 @@ Chrontel_Mode_Claim
 
 Chrontel_Mode_Skip3
         STRB    r3,[r12,#MonitorType]   ;make a record of what we've decided to go with
-
-        ;MOV     r3,#1
-        ;STRB    r3,[r12,#NewMode]
-
-
         Pull    "r0-r4,pc"
 
 
-
+;Service_ModeChange code, can also be called from within module if we find that it needs to do some setting up
 ModeChange
         LDR     r12,[r12]
 
@@ -792,14 +622,11 @@ Chrontel_Mode
         ;choose a black level based on NTSC[-J] or PAL[ M], TV type and territory
         ;choose PLL values to match clock
         ;if TV then look up clock speed and cross reference this to a chrontel mode
-        ;nice if it could be called directly from Service_ModeChange
         ;r3 is monitor type
         ;we'll always be in the mode we are working out values for so we don't need to know the mode
         Push    "r0-r10,lr"
 
         LDRB    r3,[r12,#MonitorType]
-
-        BL      Chrontel_Black_Level
 
         ;when moving the display  around on screen we need to know how many lines per frame
         ;default to 624 lines - this is what will happen with monitors (type 3) but since
@@ -817,41 +644,40 @@ Chrontel_Mode
         STR     r1,[r0]
 
         ;get pixel rate required by this mode
-        ADD     r1,r12,#IIC_Buffer
-        MOV     r0,r1                   ;use the same block for input and output
+        ADD     r1,r12,#IIC_Buffer      ;set up address for output
+        ADD     r0,r1,#8                ;set up address for input
         MOV     r2,#173                 ;clock rate
-        STR     r2,[r1,#0]
+        STR     r2,[r0,#0]
         MVN     r2,#0                   ;current mode r2=-1
-        STR     r2,[r1,#4]
+        STR     r2,[r0,#4]
         SWI     XOS_ReadVduVariables
-        LDR     r4,[r0,#0]              ;r4 = Fpix
+        LDR     r4,[r1,#0]              ;r4 = Fpix
 
         ;pick a mode based on this and PAL/NTSC choice - don't need to bother if it's a monitor
         ;to begin with pick one of two modes
-        ;!!!!!!!!this bit needs 2 changes - i) select from the full range of modes - done
-        ;                                  ii) choose the appropriate sub variant of NTSC or PAL (bits 3 and 4 page 31 of datasheet)
 
         CMP     r3,#3                   ;monitor
         BEQ     Select_Clock
 
-        ADR     r7,TV_Modes
+        ADR     r7,TV_Modes             ;available chrontel modes
         ADR     r8,TV_Modes_End
 
-        ;choose reasonablish defaults
-        CMP     r3,#8
-        MOVEQ   r6,#2_01101001          ;640*480 NTSC 1/1 24.671MHz
-        CMP     r3,#0
-        MOVEQ   r6,#2_10000001          ;800*600 PAL 1/1 29.5MHz
-
 Select_Mode_Loop
-        LDR     r5,[r7,#4]!
+        LDR     r5,[r7],#4
         MOV     r6,r5,LSR#16            ;r6 contains the byte to send to the chrontel
         BIC     r5,r5,#&00ff0000        ;r5 contains an Fpix value
         CMP     r5,r4                   ;have we found the correct mode
         BEQ     Select_Mode_Program
         CMP     r7,r8
         BLT     Select_Mode_Loop
+
         ;no matching frequency found...
+        ;so choose reasonablish defaults?? - maybe we should just try to signal an error some how
+        CMP     r3,#8
+        MOVEQ   r6,#2_01101001          ;640*480 NTSC 1/1 24.671MHz
+        CMP     r3,#0
+        MOVEQ   r6,#2_10000001          ;800*600 PAL 1/1 29.5MHz
+
 
 Select_Mode_Program
         ;r3=monitorType
@@ -859,7 +685,8 @@ Select_Mode_Program
         ;r6=contains a value to program into chrontel register 0
         ;still need to modify r6 to take into account NTSC-J and PAL-M
 
-        ;ADD     r1,r12,#IIC_Buffer
+        BL      Chrontel_Black_Level    ;sets up r1->IIC_Buffer, sets the black level and modifies r6 if in japan or brazil....
+
         MOV     r0,#0                   ;display mode register
         STRB    r0,[r1,#0]
         STRB    r6,[r1,#1]
@@ -933,8 +760,9 @@ Select_Clock_LoopN
         Pull    "r0-r10,pc"
 
 Chrontel_Black_Level
-        ;enter with monitor type in r3
+        ;enter with monitor type in r3 and chosen mode in r6
         ;corrupts r0-r2 (r1 points to IIC buffer though so it might be useful)
+        ;modifies r6 where required
         ;0=PAL
         ;3=Monitor - don't change anything
         ;8=NTSC
@@ -952,11 +780,13 @@ Chrontel_Black_Level
         MOVEQ   r2,#105                 ;PAL level
         ;CMPEQ   r0,#TerritoryNum_Brazil ;this doesn't exist atm 25/07/2000 but there is _LatinAm   for Latin America
         ;MOVEQ   r2,#127                 ;PAL-M  -  used in Brazil apparently
+        ;ORREQ   r6,r6,#2_00010000       ;special PAL-M mode
 
         CMP     r3,#8
         MOVEQ   r2,#127                 ;NTSC level
         CMPEQ   r0,#TerritoryNum_Japan  ;are we in japan
         MOVEQ   r2,#100                 ;NTSC-J
+        ORREQ   r6,r6,#2_00010000       ;special NTSC-J mode
 
         ADD     r1,r12,#IIC_Buffer
         MOV     r0,#&09
@@ -967,6 +797,13 @@ Chrontel_Black_Level
         SWI     XIIC_Control
 
         Pull    "pc"
+
+;*************************************************************
+;Setup type stuff, executed once only
+;*************************************************************
+
+VIDC_Parameters
+        DCD     2_11000000000001010001000000000100
 
 IOMD_Setup
         ; Assume that the processor is in a privilaged mode
@@ -982,44 +819,204 @@ IOMD_Setup
         Pull    "r0-r1"
         MOV     pc,lr
 
-VIDC_Parameters
-        DCD     2_11000000000001010001000000000100
+PaletteV_Setup
+        ;set up stuff for the code ripped from the kernal i.e stuff in vdupal20
+        MOV     r2,#3
+        STRB    r2,[r12,#MonitorType]   ;this has to reflect whether or not we've claimed paletteV
+
+        ;pointers to memory blocks
+        ADD     r2,r12,#SoftPalette
+        STR     r2,[r12,#FirPalAddr]
+        ADD     r3,r2,#(256+1+3)*4
+        STR     r3,[r12,#SecPalAddr]
+
+; now initialise entries for pointer palette so they will actually program pointer palettte
+; because VDU20 doesn't change pointer palette
+
+        MOV     r3, #&50000000
+        MOV     r4, #&60000000
+        MOV     r5, #&70000000
+
+        ADD     r2, r2, #260*4          ; store in 1st copy of logical
+        STMDB   r2, {r3-r5}             ; (last 3 entries)
+
+        ADD     r2, r2, #260*4
+        STMDB   r2, {r3-r5}             ; store in 2nd copy of logical
+
+ [ GammaCorrection
+        ADD     r2, r2, #260*4
+        STMDB   r2, {r3-r5}             ; store in 1st copy of physical
+
+        ADD     r2, r2, #260*4
+        STMDB   r2, {r3-r5}             ; store in 2nd copy of physical
+
+; r2 now points off end of all 4 copies, ie start of rgb tables
+; initialise red, green and blue transfer function tables to 1-1 mapping
+
+        MOV     r0, #0
+05
+        STRB    r0, [r2, #&200]                 ; store in blue table
+        STRB    r0, [r2, #&100]                 ; store in green table
+        STRB    r0, [r2], #1                    ; store in red table, and advance
+        ADD     r0, r0, #1
+        CMP     r0, #256
+        BCC     %BT05
+  ]
+
+        MOV     r0,#0
+        STRB    r0,[r12,#FlashState]            ;which palette to display
+        STRB    r0,[r12,#ScreenBlankFlag]       ;not blanked
+
+        MOV     pc,r14                          ;return
+
+Chrontel_Setup
+        ; Setup the chrontel hardware using the IIC bus
+        ; this stuff is only done once i.e the stuff that is not mode or monitor dependant
+        ; power up - reset - power up
+        Push    "lr"
+        ADD     r1,r12,#IIC_Buffer
+
+        MOV     r2,#&0E                 ;power register
+        STRB    r2,[r1,#0]
+        MOV     r2,#2_00000011          ;power up and do reset
+        STRB    r2,[r1,#1]
+        MOV     r2,#2                   ;send 2 bytes
+        MOV     r0,#Chrontel_IIC_Write  ;put device address in r0
+        SWI     XIIC_Control
+        BVS     Chrontel_Failed
+
+        MOV     r2,#&0E                 ;power register
+        STRB    r2,[r1,#0]
+        MOV     r2,#2_00001011          ;power up and clear reset condition
+        STRB    r2,[r1,#1]
+        MOV     r2,#2
+        MOV     r0,#Chrontel_IIC_Write  ;put device address in r0
+        SWI     XIIC_Control
+        BVS     Chrontel_Failed
+
+        MOV     r2,#64+0                ;display settings register (0) with auto inc (64)
+        STRB    r2,[r1,#0]
+        MOV     r2,#2_10000001          ;800x600 PAL 1-1 (29.5MHz) 640x480=%01100001
+        STRB    r2,[r1,#1]
+        MOV     r2,#Chrontel_Flicker    ;flicker reduction 00=none 01=med 10=low 11=high
+        STRB    r2,[r1,#2]
+        MOV     r2,#3
+        MOV     r0,#Chrontel_IIC_Write
+        SWI     XIIC_Control
+        BVS     Chrontel_Failed
+
+        MOV     r2,#4                   ;data format register
+        STRB    r2,[r1,#0]
+        MOV     r2,#2_00001000          ;pixel data set to 8bit multiplex 5-5-5
+        STRB    r2,[r1,#1]
+        MOV     r2,#2
+        MOV     r0,#Chrontel_IIC_Write
+        SWI     XIIC_Control
+        BVS     Chrontel_Failed
+
+        MOV     r2,#6                   ;control register
+        STRB    r2,[r1,#0]
+        MOV     r2,#2_01000000          ;CFRB off, master mode on, x, data is latched on negative edge, xcm1, xcm0, pcm1, pcm0
+                                        ;data latched on negative edge means that the red LUT corresponds to P0b (G2 G1 G0 B4 B3 B2 B1 B0)
+                                        ;                                   and the green LUT corresponds to P0a (xx R4 R3 R2 R1 R0 G4 G3)
+        STRB    r2,[r1,#1]
+        MOV     r2,#2
+        MOV     r0,#Chrontel_IIC_Write
+        SWI     XIIC_Control
+        BVS     Chrontel_Failed
+
+        ADRL    r0,NVRAM_X              ;NVRAM tag
+        MOV     r2,#0                   ;read into first word of r1
+        SWI     XNVRAM_Read
+        CMP     r0,#0                   ;error?
+        MOVLT   r4,#Horiz_Offset        ;default value if there is a problem reading NVRAM
+        BLT     %FT40
+        LDR     r4,[r1,#0]              ;if not load up the value
+        MOV     r4,r4,ASL#24
+        MOV     r4,r4,ASR#24            ;make into a signed value
+        ADD     r4,r4,#Horiz_Offset     ;make 0 equate to a default middle position
+40
+        STRB    r4,[r12,#IIC_Horiz]     ;our soft copy
+
+
+        ;the vertical position ranges between 0 and TVLPF/2 (313 max) which is too big to fit into 8bits
+        ;however we don't use the middle of this range 50-200 (ish) so a cunning bodge allows us to fit the 9bit value into 8bits
+        ;bit 7 clear indicates that the value is in the low range so we simply use the value
+        ;bit 7 set indicates upper range so add 60 which gives a range of 188-315 (min required=262-stop value  max required=313)
+        ADRL    r0,NVRAM_Y
+        MOV     r2,#0
+        SWI     XNVRAM_Read
+        CMP     r0,#0
+        LDRGE   r5,[r1,#0]
+        MOVLT   r5,#0                   ;default value
+ [ NVRAMBodge
+        TST     r5,#2_10000000          ;is bit 7 set?
+        ADDNE   r5,r5,#60
+ ]
+        STR     r5,[r12,#IIC_Vert]      ;our soft copy
+
+        MOV     r2,#64+&07              ;start active video register
+        STRB    r2,[r1,#0]              ;address in block
+        MOV     r2,#Start_Active_Video
+        STRB    r2,[r1,#1]              ;SAV value in block     - limited to <=255
+        MOV     r2,r5,LSR#8             ;make bit 8 into bit 0
+        AND     r2,r2,#1                ;clear other bits
+        STRB    r2,[r1,#2]              ;Overflow value in block
+        MOV     r2,#3
+        MOV     r0,#Chrontel_IIC_Write
+        SWI     XIIC_Control
+        BVS     Chrontel_Failed
+
+        MOV     r2,#64+&0a              ;horizontal register
+        STRB    r2,[r1,#0]              ;address in block
+        STRB    r4,[r1,#1]              ;horizontal
+        STRB    r5,[r1,#2]              ;vertical
+        MOV     r2,#3
+        MOV     r0,#Chrontel_IIC_Write
+        SWI     XIIC_Control
+        ;BVS     Chrontel_Failed
+
+Chrontel_Failed
+        CLRV                            ;in case one of the XIIC_Control caused an error
+
+        Pull    "pc"
+
 
 TV_Modes
         ;table of frequencies V byte to put in display register
-        DCW     20139
+        DCW     20140
         DCW     2_00001000              ;2
         DCW     21000
         DCW     2_01100000              ;13
-        DCW     21000
+        DCW     21001
         DCW     2_00000000              ;0 - use 13 instead
-        DCW     21146
+        DCW     21147
         DCW     2_01001000              ;10
         DCW     23790
         DCW     2_00101000              ;6
         DCW     24671
         DCW     2_01101001              ;16
-        DCW     24671
+        DCW     24672
         DCW     2_00001001              ;3 - use 16 instead
         DCW     25000
         DCW     2_01000000              ;8
         DCW     26250
         DCW     2_01100001              ;14
-        DCW     26250
+        DCW     26251
         DCW     2_00000001              ;1 - use 14 instead
-        DCW     26433
+        DCW     26434
         DCW     2_01001001              ;11
         DCW     28125
         DCW     2_00100000              ;4
-        DCW     28195
+        DCW     28196
         DCW     2_01101010              ;17
-        DCW     29454
+        DCW     29455
         DCW     2_00101001              ;7
         DCW     29500
         DCW     2_10000001              ;19
-        DCW     30209
+        DCW     30210
         DCW     2_01101011              ;18
-        DCW     30210   ;should also be 30209 but it's been bodged
+        DCW     30209   ;should be same as above but it's been bodged
         DCW     2_01001010              ;12
         DCW     31500
         DCW     2_01100011              ;15
@@ -1031,7 +1028,7 @@ TV_Modes
         DCW     2_10000011              ;20
         DCW     39000
         DCW     2_10000100              ;21
-        DCW     39272
+        DCW     39273
         DCW     2_10001011              ;22
         DCW     43636
         DCW     2_10001100              ;23
@@ -1050,9 +1047,9 @@ Standby_Callback
         Push    "r0-r2,lr"
 
         ADD     r1,r12,#IIC_Buffer
-        LDRB    r0,[r12,#ScreenBlankFlag]
+        LDRB    r0,[r12,#ScreenBlankFlag]       ;what state are we supposed to be in?
         MOV     r2,#&0e
-        STRB    r2,[r1,#0]              ;power register
+        STRB    r2,[r1,#0]              ;chrontel power register
         TST     r0,#1                   ;bit 0 =now in standby mode
         MOVEQ   r2,#2_00001011          ;normal - power on
         MOVNE   r2,#2_00001001          ;00001000 composite off - could also try 00001001 which is power down but if it resets everything i'll not bother
