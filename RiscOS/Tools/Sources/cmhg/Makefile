@@ -24,6 +24,7 @@ LD      = link
 LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
+SQUEEZE = squeeze
 
 CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK}
@@ -103,6 +104,7 @@ local_dirs:
 #
 ${TARGET}: ${OBJS} ${LIBS} local_dirs
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+	${SQUEEZE} ${COMPONENT}
 
 # Dynamic dependencies:
 o.cmhg:	c.cmhg
@@ -111,12 +113,7 @@ o.cmhg:	C:CLX.h.fname
 o.cmhg:	C:h.swis
 o.cmhg:	C:h.kernel
 o.cmhg:	h.throwback
-o.cmhg:	c.cmhg
-o.cmhg:	h.outaof
-o.cmhg:	C:CLX.h.fname
-o.cmhg:	C:h.swis
-o.cmhg:	C:h.kernel
-o.cmhg:	h.throwback
+o.cmhg:	VersionNum
 o.outaof:	c.outaof
 o.outaof:	h.outaof
 o.outaof:	C:CLX.h.aof
