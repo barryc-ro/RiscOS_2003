@@ -53,6 +53,7 @@ install_rom: $(TARGET)
 clean:
         ${WIPE} rm.${MACHINE} ${WFLAGS}
         ${RM} rm.${MACHINE}
+        ${RM} rm
         $(RM) $(TARGET)
         $(RM) TokHelpSrc
         @echo ${COMPONENT}: cleaned
@@ -73,6 +74,7 @@ resources-: resources_common
 	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 local_dirs:
+        ${MKDIR} rm
         ${MKDIR} rm.${MACHINE}
 
 $(TARGET): $(SOURCE) TokHelpSrc
