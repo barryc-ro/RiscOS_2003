@@ -143,6 +143,7 @@ sci_RetrieveATR (int channel, BYTE * hist,
   if (sci_HistLen>0) {
     int i;
     for (i=0; i<sci_HistLen; i++)
+      //printf("(7)    ATR[%d] : 0x%x\n",i,sci_HistData[i]);
       debug_printf(db,"(7)    ATR[%d] : 0x%x\n",i,sci_HistData[i]);
   }
 
@@ -212,10 +213,11 @@ sci_IssueCommand (int channel, BYTE * cmd_hdr,
 
   sci_State = S_S_CMD;
   
+  
   // new to select protocol commands
   switch (card_status.protocol) {
     case 1 :
-      err=t1_StartCommand(channel,cmd_hdr,data_len,data,exp_len);
+      err=t1_StartCommand(SLOT_1, cmd_hdr,data_len,data,exp_len);
       break;
     default :
       err = t0_StartCommand(cmd_hdr, data_len, data, exp_len);
@@ -267,8 +269,10 @@ sci_ReadResponse (int channel, BYTE * buff,
   switch (card_status.protocol) {
     case 1 :
       err = t1_GetData(buff, buff_len, rcv_len, resp);
+      break;
     default :
       err = t0_GetData(buff, buff_len, rcv_len, resp);
+      break;
   }
   if (err != SCI_SUCCESS) {
     if (err == SCI_E_TRUNC) {/* ensure we go back to correct state */
@@ -280,7 +284,10 @@ sci_ReadResponse (int channel, BYTE * buff,
   sci_State = S_S_OPEN;
   
   debug_printf(db,"(7) read response successful (channel %d)",channel);
-
+#if FUNAI_TWINSLOT
+//  printf("ReadResponse terminated\n");
+  g_uc_state = UC_IDLE;	/** Stream completed, so should be able to get card in/outs now **/
+#endif
   return (SCI_SUCCESS);
 }
 
@@ -377,6 +384,114 @@ sci_Error(int channel)
   else
     return (ChannelTable[channel].last_err);
 }
+
+/*
+ * Returns the number of smartcard slots in the system
+ */
+int
+sci_SlotInfo(void)
+{
+  #if FUNAI_TWINSLOT
+    return(2);
+  #else
+    return(1);
+  #endif
+}
+
+/*
+ * Kicks off the background fetch of the slot 2 data
+ */
+int
+sci_InitSlot2(void)
+{
+  #if FUNAI_TWINSLOT
+    if(g_card2_in == TRUE)
+    {
+      g_slot2datablock_state = SCI_E_NODATA;
+      g_slot2_state = VERIFY_SEND;
+//      printf("Calling com_StartReadSlot2\n");
+      com_StartReadSlot2();
+//      printf("Returned from calling com_startreadslot2\n");
+      return(SCI_SUCCESS);
+    }
+    else return(SCI_E_OUT);
+  #else
+    return(SCI_E_ISLOT);
+  #endif
+}
+
+/*
+ * It says it reads slot 2, but that's not quite true. It
+ * just dumps whatever we have in our pre-processed buffer...
+ */
+int
+sci_ReadSlot2
+(
+  _kernel_swi_regs *regblock
+)
+{
+  #if FUNAI_TWINSLOT
+  unsigned char		*ptr;
+  int			copylen;
+  char			blocks = 0;
+    if(g_slot2datablock_state != SCI_SUCCESS) return(g_slot2datablock_state); /** Get out if not got data for any reason **/
+    /** Find the URL block and the CARD block in the data **/
+    ptr = g_slot2datablock;
+    do
+    {
+      if((*ptr) == 0x80)
+      {
+        /** Is a CARD block **/
+/*
+        if(*(ptr+3) != '2')
+        {
+          g_slot2datablock_state = SCI_E_NOTURL;
+          return(SCI_E_NOTURL);
+        }
+*/
+//	printf("Seen 0x80 block at &%08X\n", (unsigned int)ptr);
+	ptr+= (*(ptr+1))+2;
+//	printf("Moved on to &%08X\n", (unsigned int)ptr);
+        blocks++; /** We've seen a 'good' block **/
+      }
+      else if((*ptr) == 0x8B)
+      {
+        /** Is a URL block, so copy data to dest block **/
+//	printf("Seeing 0x8B block at &%08X\n", (unsigned int)ptr);
+        ptr++;
+        if(*ptr > regblock->r[2])
+        {
+          copylen = regblock->r[2];
+          regblock->r[2] = regblock->r[2]-copylen;
+        }
+        else
+        {
+          copylen = *ptr;
+          regblock->r[2] = 0;
+        }
+        memcpy((void *)regblock->r[1], ptr+1, copylen);
+        regblock->r[1] = copylen;
+        blocks++; /** We've seen a 'good' block **/
+      }
+      else
+      {
+//	printf("Seen &%02X block at &%08X\n", *ptr, (unsigned int)ptr);
+        if(*ptr != 0xff) ptr += (*(ptr+1))+2;
+      }
+    } while( (*ptr != 0xff) & (blocks < 2) & (ptr < (g_slot2datablock+DATABLOCK_LEN)) );
+
+    if(blocks == 2)
+    {
+      return(SCI_SUCCESS);
+    }
+    else return(SCI_E_BADDATA); /** Dodgy card **/
+  #else
+    return(SCI_E_ISLOT); /** No such slot **/
+  #endif
+  
+}
+
+
 
 /*
  * Called from sci_Open() the very first time open is invoked to initialise
