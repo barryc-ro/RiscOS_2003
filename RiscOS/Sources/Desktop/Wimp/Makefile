@@ -74,6 +74,7 @@ resources-: resources_common
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
+        Access ${TARGET} rw/rw
 
 ${EXP_HDR}.Wimp: hdr.Wimp
         ${CP} hdr.Wimp $@ ${CPFLAGS}
@@ -121,6 +122,7 @@ rm.Wimp: hdr:Switcher
 rm.Wimp: hdr:PDriver
 rm.Wimp: Version
 rm.Wimp: hdr.WIMPMacros
+rm.Wimp: hdr.IconHigh
 rm.Wimp: s.Options
 rm.Wimp: s.Wimp01
 rm.Wimp: s.!Palette
