@@ -49,18 +49,13 @@ ram_module:
 
 # Now all main targets required during ROM builds.
 
-
-clean:
+clean clean_all:
 	Remove		linked.$(COMPONENT)
 	Remove		map.$(COMPONENT)
 	Remove		$(ROM_AOF_FILE)
 	Remove		$(RAM_MODULE)
-	Echo		Component $(COMPONENT): 'clean' finished.
-
-
-clean_all:	clean
 	Every.Every2	-c "@.!*.Sources @.!*.Output* @.!*.Makefile @.!*.h"	Wipe %0 ~cr~v
-	Echo		Component $(COMPONENT): 'clean_all' finished.
+	Echo		Component $(COMPONENT): '$@' finished.
 
 
 export:
