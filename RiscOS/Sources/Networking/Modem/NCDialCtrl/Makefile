@@ -41,7 +41,7 @@ INCLUDES = -IC:,TCPIPLibs:
 
 LIBS	 = TCPIPLibs:o.inetlibzm
 
-DFLAGS	 =
+DFLAGS	 = ${OPTS}
 
 #
 # Program specific options:
@@ -92,7 +92,7 @@ install: ${TARGETSA}
 	@echo ${COMPONENT}: module installed
 
 clean:
-	${WIPE} aof ${WFLAGS}
+	${WIPE} aof.* ${WFLAGS}
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} rm.* ${WFLAGS}
 	${WIPE} linked ${WFLAGS}
