@@ -35,10 +35,23 @@ static void setup_callback(void);
 static void clear_callback(void);
 
 #if FLAVOUR_PKCS11
-#define Service_SmartCard		0xBA
-#define smartcard_INSERTED		0x01
 
-static void smartcard_service( int delta );
+/*
+ * riscos event numbers used for async notification
+ */
+#define Event_Expansion		    (21)      /* r0 on receipt of an event */
+#define Event_Expansion_SCInterface (0)	      /* r1 on receipt of an event */
+
+/*
+ * event reason codes passed in r2 on receipt of a SCInterface event.
+ */
+#define Event_CardOK      (0) /* card inserted and understood */
+#define Event_CardBad     (1) /* card inserted and not understood */
+#define Event_CardRemoved (2) /* card has been removed */
+#define Event_Complete    (3) /* previous command completed */
+
+static void smartcard_event( int reason );
+
 #endif
 
 /* From http.c */
@@ -52,7 +65,7 @@ extern int stricmp(const char *s1, const char *s2);
  * pick up on the CSFS starting service call and register ourselves
  * or detect smartcard insertion
  */
-#if defined(CSFS ) || defined(FLAVOUR_PKCS11)
+#if defined(CSFS )
 void module_service(int service_number, _kernel_swi_regs *r, void *pw)
 {
     switch (service_number)
@@ -60,11 +73,6 @@ void module_service(int service_number, _kernel_swi_regs *r, void *pw)
 #ifdef CSFS
     case 0xBE:
 	csfs_service();
-	break;
-#endif
-#if FLAVOUR_PKCS11
-    case Service_SmartCard:
-	smartcard_service( r->r[4] );
 	break;
 #endif
     }
@@ -305,7 +313,7 @@ extern os_error *module_initialise(char *cmd_tail, int pbase, void *pw)
                                X509_FILETYPE_PEM );
             SSL_load_verify_locations( ssl_context, NULL, "SSL:certs" );*/
 
-            char *list = getenv( "SSL$CipherList" );
+            char *list;
 
 #ifdef SSLEAY8
             /* Enable all bug workarounds, disable TLS */
@@ -314,13 +322,19 @@ extern os_error *module_initialise(char *cmd_tail, int pbase, void *pw)
 #else
             SSL_set_default_verify_paths( ssl_context );
 #endif
+	    list = getenv( "SSL$CipherList" );
             if ( list )
                 SSL_CTX_set_cipher_list( ssl_context, list );
 	    fdebugf(log_file, "SSL_CTX_set_cipher_list OK\n");
 #if DEBUG
 	    dump_ciphers();
+
+	    fdebugf( log_file, "SSL_CTX_get_session_cache_mode: 0x%x\n", SSL_CTX_get_session_cache_mode( ssl_context ) );
+	    fdebugf( log_file, "SSL_CTX_sess_get_cache_size:      %d\n", SSL_CTX_sess_get_cache_size( ssl_context ) );
+	    fdebugf( log_file, "SSL_CTX_get_timeout:              %d\n", SSL_CTX_get_timeout( ssl_context ) );
 #endif
 
+	    SSL_CTX_set_session_cache_mode( ssl_context, SSL_SESS_CACHE_CLIENT );
 	}
         else
         {
@@ -608,6 +622,18 @@ extern os_error *module_swi_handler(int swinum, _kernel_swi_regs *regs, void *pw
  */
 extern int inetevent_handler(_kernel_swi_regs *regs, void *pw)
 {
+#if FLAVOUR_PKCS11
+    if (regs->r[0] == Event_Expansion)
+    {
+	if (regs->r[1] == Event_Expansion_SCInterface)
+	{
+	    smartcard_event(regs->r[2]);
+	}
+	
+	return VIA_R14;
+    }
+#endif
+
     if ((regs->r[0] == Event_Internet) && (regs->r[1] == 1 || regs->r[1] == 2))	/* data waiting or urgent event, note PRM5a-341 is correct, PRM1 was wrong */
     {
         if ( regs->r[2] >= 0 && regs->r[2] < FD_SETSIZE )
@@ -757,7 +783,10 @@ static os_error *setup_ticker_and_event(void)
         return ep;
 
     _kernel_osbyte(14, Event_Internet, 0);
-
+#if FLAVOUR_PKCS11
+    _kernel_osbyte(14, Event_Expansion, 0);
+#endif
+    
     r.r[0] = TICKER_RATE;
     r.r[1] = (int) timer_entry;
     r.r[2] = (int) private_word;
@@ -778,6 +807,9 @@ static void clear_ticker_and_event(void)
     _kernel_swi_regs r;
 
     _kernel_osbyte(13, Event_Internet, 0);
+#if FLAVOUR_PKCS11
+    _kernel_osbyte(13, Event_Expansion, 0);
+#endif
 
     r.r[0] = 0x10;
     r.r[1] = (int) inetevent_entry;
@@ -832,107 +864,29 @@ static void smartcard_insertion( BOOL inserted )
 
     /* call once globally */
     client_smartcard_insertion( NULL, inserted );
+
+    /* flush all ssl sessions when the smartcard is removed */
+    SSL_CTX_flush_sessions( ssl_context, 0 );
 }
 
-static void smartcard_service( int delta )
+static void smartcard_event( int reason )
 {
-    fdebugf( log_file, "smartcard_service: delta %x", delta);
-
-    if (delta == -1)		/* smartcard removed */
+    switch (reason)
     {
-	smartcard_insertion( FALSE );
-    }
-    else if (delta & smartcard_INSERTED)
-    {
+    case Event_CardOK:		/* card inserted and understood */
+    case Event_CardBad:		/* card inserted and not understood */
 	smartcard_insertion( TRUE );
+	break;
+
+    case Event_CardRemoved:	/* card has been removed */
+	smartcard_insertion( FALSE );
+	break;
+
+    case Event_Complete:	/* previous command completed */
+	break;
     }
 }
-#endif
 
-/* ------------------------------------------------------------------------- */
-
-#if 0
-
-/* SJM: ignore this lot - it's only for testing and will be got rid of */
-
-#define TaskModule_SendMessage 0x4d300
-
-#define wimp_MOPENURL	0x4AF80
-
-typedef union {
-  char *ptr;
-  int offset;
-} string_value;
-
-typedef union {
-    char url[236];
-    struct {
-        int tag;
-        string_value url;
-        int flags;
-        string_value body_file;
-        string_value target;
-        string_value content_type;
-    } indirect;
-} urlopen_data;
-
-typedef struct
-{
-    struct 
-    {
-        int    size;
-        int    sender;
-        int    my_ref;
-        int    your_ref;
-        int    action_code;
-    } hdr;
-
-    union
-    {
-        int                       words[59];
-        char                      bytes[236];
-    } data;
-} WimpMessage;
-
-#define TARGET	"__dbox"
-
-static void dbox_show( const char *target, const char *url )
-{
-    WimpMessage msg;
-    urlopen_data *u = (urlopen_data *)&msg.data;
-    char *s;
-    
-    fdebugf( log_file, "dbox_show: target '%s' url '%s'", target, url );
-
-    u->indirect.tag = 0;
-    u->indirect.flags = 0;
-    u->indirect.body_file.offset = 0;
-    u->indirect.content_type.offset = 0;
-
-    u->indirect.target.offset = sizeof(u->indirect);
-    s = (char *)u + u->indirect.target.offset;
-    strcpy(s, target);
-    
-    u->indirect.url.offset = u->indirect.target.offset + strlen(s) + 1;
-    s = (char *)u + u->indirect.url.offset;
-    strcpy(s, url);
-    
-    msg.hdr.action_code = wimp_MOPENURL;
-    msg.hdr.your_ref = 0;
-    msg.hdr.size = (sizeof(msg.hdr) + (u->indirect.url.offset + strlen(s) + 1 + 3)) &~ 3;
-
-    _swix(TaskModule_SendMessage, _INR(0,5), 0, &msg, 0, 0, 0, 0);
-}
-
-void dbox_open( void )
-{
-    dbox_show( "__dbox", "file:/MAScr:splash.html" );
-}
-
-void dbox_close( void )
-{
-    dbox_show( "__dbox", "ncint:loadurl?remove=__dbox" );
-}
 #endif
 
 /* ------------------------------------------------------------------------- */

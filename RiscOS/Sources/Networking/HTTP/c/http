@@ -222,7 +222,7 @@ static BOOL http_go_ssl( http_connection *c );
 
 /* SJM: This shouldn't be here but I don't know how to get it defined without severe upset otherwise */
 extern int layers_make_socket_asynchronous( int s, void (*cb) (int s, void *cp), void *cp );
-extern int layers_async_change_handle( int s, void *cp );
+extern void layers_async_change_handle( int s, void *cp );
 
 #ifdef NO_SECURE
 #define http_send(c,m,s) send((c)->socket,m,s,0)
@@ -554,13 +554,13 @@ os_error *http_set_file_type(http_connection *c, int *ftptr)
 
         for (hi = c->headers; hi != NULL; hi = hi->next)
         {
-
+#if 0
 	    fdebugf( log_file, "%p: examining header %p, '%p: %p'\n",
 		     c, hi, hi->key, hi->value );
 
 	    fdebugf( log_file, "%p:   that is, \xAB%s: %s\xBB\n",
 		     c, hi->key, hi->value );
-
+#endif
             if (hi->key
 		&& hi->value
 		&& stricmp(hi->key, "CONTENT-TYPE") == 0)
@@ -606,8 +606,13 @@ os_error *http_set_file_type(http_connection *c, int *ftptr)
         fdebugf(log_file, "%p: setting file type of '%s' to 0x%03X\n",
                           c, c->fname, ft);
 
-#if REOPEN_ON_SETTYPE
-	if ( c->fh )
+	
+        if (ftptr)
+            *ftptr = ft;
+
+	/* if the file is open on a relevant file system then close it
+	 * before setting the file type */
+	if ( c->fh && (c->flags & http_flags_NOSETTYPEOPEN) != 0)
 	{
 	    reopen = TRUE;
 
@@ -615,20 +620,28 @@ os_error *http_set_file_type(http_connection *c, int *ftptr)
 	    ro_fclose( c->fh );
 	    c->fh = 0;
 	}
-#endif
-	
-        if (ftptr)
-            *ftptr = ft;
 
         result = file_set_type( c->fname, ft );
 
-#if REOPEN_ON_SETTYPE
+	/* if setting the file type failed and the file is still open,
+	 * close it and retry */
+	if (result != NULL && c->fh)
+	{
+	    reopen = TRUE;
+
+            fdebugf(log_file, "%p: closing fh=%d to reopen due to error\n", c, c->fh );
+	    ro_fclose( c->fh );
+	    c->fh = 0;
+
+	    result = file_set_type( c->fname, ft );
+	}
+	
+	/* if we'd closed the file then reopen it */
 	if ( reopen )
 	{
 	    c->fh = ro_fopen(c->fname, RO_OPEN_RW);
 	    fdebugf(log_file, "%p: reopening %s, fh=%d\n", c, c->fname, c->fh );
 	}
-#endif
         return result;
     }
     return NULL;
@@ -844,8 +857,11 @@ os_error *http_prosecute( http_connection *c )
             verify_error = FALSE;
             rc = SSL_connect( c->SSL );
 
-                fdebugf( log_file, "SSL_connect returned %d (sockerrno=%d sslerrno=%d)\n", rc,
+#if DEBUG
+	    if (socket_errno != EWOULDBLOCK)
+		fdebugf( log_file, "SSL_connect returned %d (sockerrno=%d sslerrno=%d)\n", rc,
                                    socket_errno, SSL_errno() );
+#endif
 
             if ( rc <= 0 )
             {
@@ -1500,6 +1516,11 @@ os_error *http_open(http_open_args *args)
             {
                 new->flags |= http_flags_NETWORKFILE;
             }
+
+	    if (fsno == 99)	  /* ShareFS */
+	    {
+                new->flags |= http_flags_NOSETTYPEOPEN;
+	    }
         }
 #endif
     }
@@ -2422,6 +2443,10 @@ os_error *http_status(http_status_args *args)
 
     args->out.message = c->message ;
 
+#ifndef NO_SECURE
+    client_status_called(c->SSL);
+#endif
+    
     return NULL;
 }
 

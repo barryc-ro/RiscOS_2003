@@ -18,6 +18,7 @@
 /* ------------------------------------------------------------------------- */
 
 extern char *strdup(const char *s);
+extern int X509v3_get_key_usage(X509 *x); /* For some reason this isn't in x509.h */
 
 /* ------------------------------------------------------------------------- */
 
@@ -40,7 +41,8 @@ typedef enum
     state_PIN_REQUIRED,
     state_LOGGED_IN,
     state_GOT_PKEY,
-    state_CANCELLED
+    state_CANCELLED,
+    state_REMOVED
 } certop_state;
 
 #if DEBUG
@@ -73,8 +75,8 @@ static char *transitions[] =
 {
     "NONE",
     "TOKEN_GIVEN",
-    "TOKEN_REMOVED",
     "CERT_CHOSEN",
+    "TOKEN_REMOVED",
     "PIN_ENTERED",
     "CANCEL"
 };
@@ -126,9 +128,12 @@ struct http_cert_context
     CK_RV last_rv;
 #endif /* FLAVOUR_PKCS11 */
 
+    STACK *CA_list;		/* [] X509_NAME * really */
+    
     int token_count;
     int pin_count;
     int threaded;
+    certop_transition pending_transition;
 
     /* when we've successfully read a pair then cache them here */
     X509 *client_x509;
@@ -166,6 +171,20 @@ static void dump_cert(const http_cert_info *cert)
 					 
     X509_free(x509);
 }
+
+static void dump_name_stack(STACK *sk)
+{
+    int i;
+    fdebugf( log_file, "dump_name_stack: n=%d", sk->num );
+    for (i = 0; i < sk->num; i++)
+    {
+	char *s = X509_NAME_oneline((X509_NAME *)sk->data[i], NULL, 0);
+	fdebugf( log_file, "dump_name_stack: '%s'", s );
+	mm_free(s);
+    }
+}
+
+
 #endif /* DEBUG */
 
 static void cert_free( http_cert_info *cert )
@@ -191,7 +210,10 @@ static char *extract_name(const char *dn, const char *field)
 
     if ((s1 = strstr(s, field)) != NULL)
     {
-	s1 += 3;
+	/* inc past the match string */
+	s1 += strlen(field);
+	
+	/* search for the end of this substring */
 	s2 = strchr(s1, '/');
 	if (s2)
 	    *s2 = 0;
@@ -274,7 +296,7 @@ static void cert_list_free( http_cert_info **pcert_list )
 }
 
 #if FLAVOUR_PKCS11
-static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, http_cert_info **pcert_list)
+static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, STACK *CA_list, http_cert_info **pcert_list)
 {
     CK_RV rv, rv2;
 
@@ -342,6 +364,7 @@ static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, 
 		else
 		{
 		    http_cert_info *cert = mm_calloc( sizeof(*cert), 1 );
+		    BOOL add = FALSE;
 
 		    fdebugf( log_file, "get_cert_list: data_len %ld label_len %ld id_len %ld\n",
 			     cert_attributes[0].ulValueLen, cert_attributes[1].ulValueLen, cert_attributes[2].ulValueLen );
@@ -366,23 +389,62 @@ static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, 
 			if ((rv = C_GetAttributeValue(hSession, hObjects[i], cert_attributes,
 						      sizeof(cert_attributes) / sizeof(cert_attributes[0]))) != CKR_OK)
 			{
-			    /* dispose of cert if couldn't read information for it */
-			    cert_free( cert );
-			    cert = NULL;
-			
 			    fdebugf( log_file, "Failed to get cert attributes, rv = 0x%lx\n", rv);
 			}
-			else if (label_mask && cert->label && strcmp(cert->label, label_mask) == 0)
+			/* Compare label with a mask string. The label
+                           length is known and the mask string will be
+                           terminated. */
+			else if (label_mask && cert->label && strncmp(cert->label, label_mask, cert->label_len) != 0)
+			{
+			    fdebugf( log_file, "Failed to get match label mask label '%s'\n", cert->label);
+			}
+			else
 			{
 			    unsigned char *pp = (unsigned char *)cert->data;
 			    X509 *x509 = d2i_X509(NULL, &pp, cert->data_len);
+			    BOOL dsig;
 
-			    fdebugf( log_file, "cert_list_get: subject '%s'", x509->name );
+#if DEBUG
+			    dump_cert(cert);
+#endif
+			    
+			    fdebugf( log_file, "cert_list_get: keyUsage %d", X509v3_get_key_usage( x509 ) );
 
-			    /* extract individual subject item */
-			    if ((cert->descr = extract_name(x509->name, "/S=")) == NULL)
-				cert->descr = extract_name(x509->name, "/CN=");
+			    /* check for digitalSignature keyUsage bit - default to TRUE if not present */
+			    dsig = X509v3_get_key_usage( x509 ) & X509v3_KU_DIGITAL_SIGNATURE ? 1 : 0;
 
+			    if (dsig)
+			    {
+				X509_NAME *issuer = X509_get_issuer_name( x509 ); /* returns pointer to existing issuer field */
+				
+				/* check for matching CA name */
+				fdebugf( log_file, "cert_list_get: check CA_list\n");
+				
+				if ( sk_find( CA_list, (char *)issuer ) != -1 )
+				{
+				    fdebugf( log_file, "cert_list_get: get names\n");
+
+				    /* extract individual subject item */
+				    if ((cert->descr = extract_name(x509->name, "/S=")) == NULL)
+					cert->descr = extract_name(x509->name, "/CN=");
+
+				    add = TRUE;
+				}
+				else
+				{
+				    fdebugf( log_file, "cert CA not in server list\n");
+				}
+			    }
+			    else
+			    {
+				fdebugf( log_file, "DigitalSignature usage bit not set\n");
+			    }
+
+			    X509_free(x509);
+			}
+			
+			if (add)
+			{
 			    /* add to list */
 			    cert->next = cert_list;
 			    cert_list = cert;
@@ -394,8 +456,6 @@ static CK_RV cert_list_get( CK_SESSION_HANDLE hSession, const char *label_mask, 
 			}
 			else
 			{
-			    fdebugf( log_file, "Failed to get match label mask label '%s'\n", cert->label);
-
 			    cert_free( cert );
 			    cert = NULL;
 			}
@@ -621,7 +681,7 @@ static void cert_context_close( http_cert_context *ctx )
 	ctx->last_rv = CKR_OK;
 #endif /* FLAVOUR_PKCS11 */
 	
-	ctx->state = state_UNSET;
+	ctx->state = state_REMOVED;
 
 	ctx->token_count = 0;
 	ctx->pin_count = 0;
@@ -710,11 +770,11 @@ static CK_RV process_token_given( http_cert_context *ctx )
 	    ctx->token_count ++;
 
 	    if ((rv = C_OpenSession(ctx->slot, CKF_SERIAL_SESSION, NULL, NULL, &ctx->session)) == CKR_OK &&
-		(rv = cert_list_get(ctx->session, AUTHENTICATION_MASK, &ctx->cert_list)) == CKR_OK)
+		(rv = cert_list_get(ctx->session, AUTHENTICATION_MASK, ctx->CA_list, &ctx->cert_list)) == CKR_OK)
 	    {
 		if (ctx->cert_list == NULL)
 		{
-		    set_state(ctx, state_TOKEN_REQUIRED);
+		    set_state(ctx, state_ERROR);
 		}
 #if !NO_UI
 		else if (ctx->cert_list->next != NULL)
@@ -1098,6 +1158,23 @@ static CK_RV client_state_machine(http_cert_context *ctx, certop_transition tran
 	    break;
 	}
 	break;
+
+    case state_REMOVED:
+	switch (transition)
+	{
+	case transition_TOKEN_GIVEN:
+	    rv = process_token_given( ctx );
+	    break;
+
+	case transition_NONE:
+	case transition_TOKEN_REMOVED:
+	case transition_CERT_CHOSEN:
+	case transition_PIN_ENTERED:
+	case transition_CANCEL:
+	    /* wrong time - ignore */
+	    break;
+	}
+	break;
     }
 
     /* on a state change, save the rv for the error message */
@@ -1107,17 +1184,10 @@ static CK_RV client_state_machine(http_cert_context *ctx, certop_transition tran
 	fdebugf( log_file, "client_state_machine: ctx %p state %d (%s) rv 0x%x", ctx, ctx->state, states[ctx->state], rv );
 #endif
 	ctx->last_rv = rv;
-
-#if 0
-	if (ctx->state == state_TOKEN_REQUIRED)
-	{
-	    dbox_open();
-	}
-	if (last_state == state_TOKEN_REQUIRED)
-	{
-	    dbox_close();
-	}
-#endif
+    }
+    else
+    {
+	fdebugf( log_file, "client_state_machine: out" );
     }
 
     ctx->threaded--;
@@ -1278,15 +1348,27 @@ static int client_cert_callback( SSL *ssl, X509 **x509, EVP_PKEY **pkey )
 	    cert__ctx = cert_context_create( );
 
 	ctx = cert__ctx;
-	if (ctx)
-	    SSL_set_app_data( ssl, ctx );
-	else
+	if (!ctx)
 	    return rc_FAILED;
+
+	SSL_set_app_data( ssl, ctx );
+
+	/* make a note of the CA list for this connection */
+	ctx->state = state_UNSET;
+	ctx->CA_list = SSL_get_client_CA_list( ssl );
+
+	fdebugf(log_file, "client_cert_callback: get CA list stack %p", ctx->CA_list);
+#if DEBUG
+	dump_name_stack( ctx->CA_list );
+#endif
     }
 
     /* see if the values are cached */
     if (ctx->client_x509 != NULL && ctx->client_pkey != NULL)
     {
+	fdebugf(log_file, "client_cert_callback: using cached x509 %p pkey %p", ctx->client_x509, ctx->client_pkey);
+
+	ctx->state = state_GOT_PKEY;
 	rc = rc_OK;
     }
     /* check and see whether to use file based client authentication
@@ -1294,6 +1376,8 @@ static int client_cert_callback( SSL *ssl, X509 **x509, EVP_PKEY **pkey )
     else if (ctx->state == state_UNSET && 
 	     client_cert_load(&ctx->client_x509, &ctx->client_pkey))
     {
+	fdebugf(log_file, "client_cert_callback: using file based x509 %p pkey %p", ctx->client_x509, ctx->client_pkey);
+
 	rc = rc_OK;
     }
 #if FLAVOUR_PKCS11
@@ -1302,13 +1386,15 @@ static int client_cert_callback( SSL *ssl, X509 **x509, EVP_PKEY **pkey )
 	if (!cryptobox_init)
 	{
 	    if (C_Initialize( NULL_PTR ) != CKR_OK)
+	    {
+		fdebugf(log_file, "client_cert_callback: failed to initialise cryptobox");
 		return rc_FAILED;
+	    }
 
 	    cryptobox_init = TRUE;
 	}
 
-	/* call the state machine, in case anything needs to process */
-	client_state_machine( ctx, transition_NONE, NULL );
+	/* Note state machine is actually triggered only from user generated SWIs */
 
 	/* if we are now logged in we should have all the information we
 	 * need so return the info needed to SSLeay so that it can
@@ -1316,7 +1402,7 @@ static int client_cert_callback( SSL *ssl, X509 **x509, EVP_PKEY **pkey )
 	switch (ctx->state)
 	{
 	case state_GOT_PKEY:
-	    if (ctx->client_x509 != NULL && &ctx->client_pkey != NULL)
+	    if (ctx->client_x509 == NULL && ctx->client_pkey == NULL)
 	    {
 		build_return_values( ctx, cert_lookup(ctx->cert_list, ctx->which_cert), &ctx->client_x509, &ctx->client_pkey);
 		rc = rc_OK;
@@ -1349,6 +1435,13 @@ static int client_cert_callback( SSL *ssl, X509 **x509, EVP_PKEY **pkey )
 	fdebugf(log_file, "client_cert_callback: cert %p key %p", *x509, *pkey);
     }
 
+    /* if exiting for the last time then clear any values that may
+     * become invalid when the SSL structure is disposed of */
+    if (rc != rc_WAITING)
+    {
+	ctx->CA_list = NULL;
+    }
+    
     return rc;
 }
 
@@ -1409,8 +1502,9 @@ static void info_callback( SSL *s, int where, int ret )
 		       str,SSL_state_string_long(s));
 	else if (ret < 0)
 	{
-	    fdebugf(log_file,"%s:error in %s\n",
-		       str,SSL_state_string_long(s));
+	    if (socket_errno != EWOULDBLOCK)
+		fdebugf(log_file,"%s:error in %s\n",
+			str,SSL_state_string_long(s));
 	}
 
 	if (socket_errno != EWOULDBLOCK)
@@ -1525,7 +1619,9 @@ void client_smartcard_insertion( http_connection *c, BOOL inserted )
 	if (c->SSL &&
 	    (ctx = (http_cert_context *) SSL_get_app_data(c->SSL)) != NULL)
 	{
-	    client_state_machine( ctx, inserted ? transition_TOKEN_GIVEN : transition_TOKEN_REMOVED, NULL );
+	    /* Just set a pending so that state machine is only called
+	     * via HTTP_status and HTTP_CertOp not off a callback */
+	    ctx->pending_transition = inserted ? transition_TOKEN_GIVEN : transition_TOKEN_REMOVED;
 	}
     }
     else
@@ -1538,6 +1634,19 @@ void client_smartcard_insertion( http_connection *c, BOOL inserted )
 }
 
 #endif /* FLAVOUR_PKCS11 */
+
+void client_status_called( SSL *ssl )
+{
+    http_cert_context *ctx;
+	
+    if ((ctx = (http_cert_context *) SSL_get_app_data(ssl)) != NULL)
+    {
+	/* call the state machine, in case anything needs to process */
+	client_state_machine( ctx, ctx->pending_transition, NULL );
+
+	ctx->pending_transition = transition_NONE;
+    }    
+}
 
 #endif /* NO_SECURE */
 
