@@ -45,7 +45,7 @@
  * [including the GNU Public Licence.]
  */
 
-#include <errno.h>
+#include <sys/errno.h>
 #include <time.h>
 #include "des_locl.h"
 

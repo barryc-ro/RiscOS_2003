@@ -46,7 +46,7 @@
  */
 
 #include <stdio.h>
-#include <errno.h>
+#include "sys/errno.h"
 #include "des_locl.h"
 
 /* This has some uglies in it but it works - even over sockets. */

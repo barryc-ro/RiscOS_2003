@@ -70,6 +70,7 @@
 #endif
 
 #ifdef RISCOS
+#include "robits.h"
 #define OSTTY
 #endif
 

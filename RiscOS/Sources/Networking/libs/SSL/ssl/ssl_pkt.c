@@ -46,7 +46,7 @@
  */
 
 #include <stdio.h>
-#include <errno.h>
+#include "errno.h"
 #define USE_SOCKETS
 #include "ssl_locl.h"
 #include "ssl_trc.h"

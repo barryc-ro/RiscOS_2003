@@ -6,7 +6,8 @@
 
 #include "sys/types.h"
 #include "sys/time.h"
-#include <errno.h>
+#include "sys/errno.h"
+#define __errno_h
 /*#include <sock_errno.h>*/
 #include "unixlib.h"
 #include "inetlib.h"

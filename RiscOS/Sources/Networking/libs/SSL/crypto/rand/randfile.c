@@ -51,6 +51,10 @@
 #include <sys/types.h>
 #include "rand.h"
 
+#ifdef RISCOS
+#include "kernel.h"
+#endif
+
 #define BUFSIZE	1024
 #define RAND_DATA 1024
 
