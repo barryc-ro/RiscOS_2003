@@ -175,7 +175,7 @@ void DeadPOP(bool b, void *h)
 
   NB_UNUSED(b);
   NB_UNUSED(h);
-  POPAccountDisconnect();
+  ProcessDone(true);
 
 }
 
@@ -190,7 +190,8 @@ void CleanupOutbox(void)
   while (msgptr)
   {
     nextptr = msgptr->next;
-    if (!FileExists(SetFilename(msgptr->ID, true)))
+    SetFilename(msgptr->ID, true);
+    if (!FileExists(msgfilename))
       DestroyDescriptor(msgptr, ourmboxout);
     msgptr = nextptr;
   }
@@ -392,11 +393,155 @@ void DoSMTPProcess(void)
 }
 
 
+void FirstReconcile(void)
+{
+
+/*   popprocessstate.total = popprocessstate.getnumobj->number_messages; */
+/*   dprintf(("Eng", "Number of messages=%d\n",popprocessstate.total)); */
+  RemoveObj((MBoxOpCB**) &popprocessstate.getnumobj);
+  popprocessstate.msglist = &inbox->GetMessages();
+  popprocessstate.msg = ourmboxin->list;
+  statusret.rc = ELIB_RUNNING;  
+  popprocessstate.context = reconcile1;
+
+}
+
+
+void SecondReconcile(void)
+{
+
+  popprocessstate.msglist->Reset();
+
+  if ((tempmbox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
+  {
+    dprintf(("Eng", "***ERROR*** Malloc failure setting up temp list\n"));
+    statusret.rc = ELIB_EMALLOCFAILED;
+    popprocessstate.context = processfailure;
+  }
+  else
+  {
+    tempmbox->total = 0;
+    tempmbox->list = 0;
+    popprocessstate.context = reconcile2;
+  }
+}
+
+
+/*
+** OnMboxList() checks a mailbox object pointer against the
+** mailbox's list to see if it is on the list.
+*/
+
+bool OnMboxList(Message *obj)
+{
+
+  uint32 n = popprocessstate.msglist->Size();
+
+  popprocessstate.msglist->Reset();  
+  while (n--)
+  {
+    popprocessstate.msglist->Next();
+    if ((Message *) popprocessstate.msglist->Current() == obj)
+      return true;
+  }
+
+  return false;
+
+}
+
+
+/*
+** OnOurList() checks a mailbox object pointer against our list
+** to see if it is on the list.
+*/
+
+bool OnOurList(Message *obj)
+{
+
+  MessageDescriptor *msgptr = ourmboxin->list;
+
+  while (msgptr)
+  {
+    if (msgptr->mboxobj == obj)
+      return true;
+    else
+      msgptr = msgptr->next;
+  }
+
+  return false;
+
+}
+
+
+MessageDescriptor *CheckOurList(MessageDescriptor *msg)
+{
+
+  MessageDescriptor *nextptr = msg->next;
+
+  if (!OnMboxList(msg->mboxobj))
+  {
+    /* must have been deleted so destroy descriptor */
+    dprintf(("Eng", "Deleting message %d at 0x%x not on mailbox list\n",msg->ID,msg));
+    DestroyDescriptor(msg, ourmboxin);
+  }
+
+  return nextptr;
+
+}
+
+
+bool CheckMboxList(void)
+{
+
+  MessageDescriptor *msgptr;
+  ELib_rcode rc;
+  Message::Flags flags;
+  Message *obj;
+
+  popprocessstate.msglist->Next();
+  if (popprocessstate.msglist->Nul())
+    return true;
+
+  obj = (Message *) popprocessstate.msglist->Current();
+  if (!OnOurList(obj))
+  {
+    /* must be an unknown message so create new descriptor */
+    if ((msgptr = NewDescriptor(0, tempmbox)) == 0)
+    {
+      /* there was not enough memory to create descriptor */
+      dprintf(("Eng", "***ERROR*** Malloc failure\n"));
+      statusret.rc = ELIB_EMALLOCFAILED;
+      return true;
+    }
+    else
+    {
+      msgptr->mboxobj = obj;
+      rc = obj->GetFlags(flags, Message::Set);
+      if (rc >= 0)
+      {
+        if (flags & Message::Read)
+          msgptr->flags |= READ;
+        if (flags & Message::New)
+        {
+          newmail = true;
+          msgptr->flags |= NEW;
+        }
+      }
+      msgptr->flags |= NEWLYCREATED;
+    }
+  }
+
+  return false;
+
+}
+
+
 void DoPOPProcess(void)
 {
 
   ELib_rcode rc;
-  uint32 n;
+  clock_t t;
+  bool finished;
 
   switch (popprocessstate.context)
   {
@@ -526,6 +671,7 @@ void DoPOPProcess(void)
 
         (*callbacklist.statusfunc)(&popprocessstate.ret, callbacklist.statushandle, DefunctPOP);
       }
+
       break;
 
     case processfailure :
@@ -534,7 +680,7 @@ void DoPOPProcess(void)
       dprintf(("Eng", "POP context = processfailure\n",));
       RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
       popprocessstate.context = idle;
-      statusret.code = ENG_CANTPROCESSPOP;
+      statusret.code = (statusret.rc == ELIB_EMALLOCFAILED) ? ENG_NOMEMORY : ENG_CANTPROCESSPOP;
       (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, DeadPOP);
 
       break;
@@ -594,10 +740,7 @@ void DoPOPProcess(void)
     case gotnumber :
 
       dprintf(("Eng", "POP context = gotnumber\n"));
-      n = popprocessstate.getnumobj->number_messages;
-      dprintf(("Eng", "Number of messages=%d\n",n));
-      RemoveObj((MBoxOpCB**) &popprocessstate.getnumobj);
-      ReconcileMailbox(n);
+      FirstReconcile();
       break;
 
     case getnumfailure :
@@ -608,173 +751,42 @@ void DoPOPProcess(void)
       statusret.code = ENG_CANTPROCESSPOP;
       (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, DeadPOP);
 
-    default :
+    case reconcile1 :
+
+      /* check through our list to see if any are missing
+         from mailbox's list, and destroy them */
+
+      t = clock();
+      while (((clock() - t) < 10) && (popprocessstate.msg))
+        popprocessstate.msg = CheckOurList(popprocessstate.msg);
+
+      if (!popprocessstate.msg)
+      {
+        /* ready to go on to second stage of reconcile */
+        SecondReconcile();
+        break;
+      }
 
       break;
-  }
 
-}
+    case reconcile2 :
 
-
-/*
-** OnOurList() checks a mailbox object pointer against our list
-** to see if it is on the list.
-*/
-
-bool OnOurList(Message *obj)
-{
-
-  MessageDescriptor *msgptr = ourmboxin->list;
-
-  while (msgptr)
-  {
-    if (msgptr->mboxobj == obj)
-      return true;
-    else
-      msgptr = msgptr->next;
-  }
-
-  return false;
-
-}
-
-
-/*
-** OnMboxList() checks a mailbox object pointer against the
-** mailbox's list to see if it is on the list.
-*/
-
-bool OnMboxList(Message *obj, ELib_list& list, int n)
-{
-
-  list.Reset();  
-  while (n--)
-  {
-    list.Next();
-    if ((Message *) list.Current() == obj)
-      return true;
-  }
-
-  return false;
-
-}
-
-
-void PAbort(bool b, void *h)
-{
-  
-  NB_UNUSED(b);
-  NB_UNUSED(h);
-  ProcessDone(true);
-}
-
-
-/*
-** ReconcileMailbox() gets the list of messages in the Inbox
-** after receiving the callback with the number of messages.
-**
-** First it looks through our list to see if any are missing from
-** the mailbox's list. If so, their descriptors are destroyed.
-**
-** Then it scans the messages in the mailbox's
-** list to see if any are missing from our own list.
-** If so, new descriptors are created and the flags are read.
-*/
-
-void ReconcileMailbox(uint32 n)
-{
-
-  MessageDescriptor *nextptr, *msgptr;
-  ELib_rcode rc;
-  uint32 i, temp;
-  Message::Flags flags;
-  Message *obj;
-  bool errorflag = false;
-  ELib_list& msglist = inbox->GetMessages();
-
-  /* check through our list to see if any are missing
-     from mailbox's list, and destroy them */
-
-  temp = n;
-  msglist.Reset();  
-  while (temp--)
-  {
-    msglist.Next();
-/*     dprintf(("Eng", "Mailbox object at 0x%x\n",(Message *) msglist.Current())); */
-  }
-
-
-  msgptr = ourmboxin->list;
-  while (msgptr)
-  {
-    nextptr = msgptr->next;
-    if (!OnMboxList(msgptr->mboxobj, msglist, n))
-    {
-      /* must have been deleted so destroy descriptor */
-      dprintf(("Eng", "Deleting message %d at 0x%x not on mailbox list, obj=0x%x, next = 0x%x, list = 0x%x\n",msgptr->ID,msgptr,msgptr->mboxobj,msgptr->next,ourmboxin->list));
-      DestroyDescriptor(msgptr, ourmboxin);
-    }
-
-    msgptr = nextptr;
-  }
-
-  msglist.Reset();
-
-  if ((tempmbox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
-  {
-    dprintf(("Eng", "***ERROR*** Malloc failure setting up temp list\n"));
-    errorflag = true;
-  }
-  else
-  {
-    uint32 count = 0;
-
-    tempmbox->total = 0;
-    tempmbox->list = 0;
-
-    for (i = 0; i < n; i++)
-    {
-      msglist.Next();
-      obj = (Message *) msglist.Current();
-      if (!OnOurList(obj))
+      t = clock();
+      finished = false;
+      while (((clock() - t) < 10) && (!finished))
+        finished = CheckMboxList();
+      
+      if (finished)
       {
-        /* must be an unknown message so create new descriptor */
-        if ((msgptr = NewDescriptor(0, tempmbox)) == 0)
-        {
-          /* there was not enough memory to create descriptor */
-          dprintf(("Eng", "***ERROR*** Malloc failure\n"));
-          errorflag = true;
-        }
+        if (statusret.rc == ELIB_EMALLOCFAILED)
+          popprocessstate.context = processfailure;
         else
-        {
-          msgptr->mboxobj = obj;
-/*           dprintf(("Eng", "Setting mboxobj to 0x%x\n",obj)); */
-          rc = obj->GetFlags(flags, Message::Set);
-/*           dprintf(("Eng", "Flags=0x%x, rc=%d\n",flags,rc)); */
-          if (rc >= 0)
-          {
-            if (flags & Message::Read)
-              msgptr->flags |= READ;
-            if (flags & Message::New)
-            {
-              newmail = true;
-              msgptr->flags |= NEW;
-            }
-          }
-          msgptr->flags |= NEWLYCREATED;
-        }
+          ProcessDone(true);
       }
-    }
-  }
 
-  if (errorflag)
-  {
-    /* we've had a memory allocation failure */
-    statusret.code = ENG_NOMEMORY;
-    (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, PAbort);
+      break;
+
   }
-  else
-    ProcessDone(true);
 
 }
 
@@ -973,7 +985,6 @@ void DoMark(void)
     case deletedone :
     {
       MessageDescriptor *msg = markstate.msg;
-      char *file = SetFilename(msg->ID, false);
       uint32 flags;
 
       dprintf(("Eng", "Mark context = deletedone\n"));

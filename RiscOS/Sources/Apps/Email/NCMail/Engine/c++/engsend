@@ -30,9 +30,12 @@
 #include "engprocess.h"
 #include "engparse.h"
 #include "enguser.h"
+#include "enguiapi.h"
+#include "enginit.h"
 
 bool sendpending = false;
-static char scrapf[] = "<Wimp$ScrapDir>.TempMime";
+static char scrapf1[] = "<Wimp$ScrapDir>.TempMime";
+static char scrapf2[] = "<Wimp$ScrapDir>.TempMulti";
 
 void CleanupSend(void)
 {
@@ -53,7 +56,6 @@ void SendMessage(void)
 
   ELib_rcode rc;
   MessageDescriptor *msg = sendstate.msg;
-  char *file = SetFilename(msg->ID, true);
   char *reciplist, *sendlist;
   SendQMailbox *outbox;
 
@@ -73,7 +75,8 @@ void SendMessage(void)
   }
   sendstate.context = idle;
   outbox = (SendQMailbox *) SMTPaccount->GetInbox();
-  rc = outbox->AddMessage(file, sendlist, msg->fromaddr);
+  SetFilename(msg->ID, true);
+  rc = outbox->AddMessage(msgfilename, sendlist, msg->fromaddr);
   dprintf(("Eng", "Added message to %s, from %s, cc'd to %s, rc=%d\n",msg->to,msg->fromaddr,msg->cc,rc));
   if (rc < 0)
   {
@@ -94,7 +97,7 @@ void SendMessage(void)
     
   else
   {
-    LockFile(file);
+    LockFile(msgfilename);
     sendpending = true;
     createstate.msg = 0;
     if ((smtpstatus != acctnonexistent) && (online))
@@ -176,7 +179,7 @@ void DoCreateMessage(void)
           dprintf(("Eng", "About to create reply from object at 0x%x into file %s\n",createstate.orig->elibobj,replyent->fname));
           createstate.msg->entity_list = replyent;
           dprintf(("Eng", "Msg is at 0x%x, entitynum=%d, entity list is at 0x%x\n",createstate.msg,createstate.msg->entity_num,createstate.msg->entity_list));
-          rc = createstate.orig->elibobj->CreateReply(createstate.replyobj, replyent->fname, true);
+          rc = createstate.orig->elibobj->CreateReply(createstate.replyobj, replyent->fname, true, createstate.msg->fromaddr);
           dprintf(("Eng", "Creating reply in %s, rc=%d\n",replyent->fname,rc));
           if (rc < 0)
           {
@@ -232,8 +235,26 @@ void DoCreateMessage(void)
 ELib_rcode AssembleMultipart(MIMEmultip *multipart)
 {
 
-  return ELIB_COMPLETED;
-  
+  ELib_rcode rc;
+  MessageDescriptor *msg;
+  uint32 *list = sendstate.msg->forward_list, count = 0;
+  FILE *f;
+
+  do
+  {
+    msg = FindDescriptor(*list++, ourmboxin);
+    dprintf(("Eng", "Getting message %d from forward list to assemble multipart\n",msg->ID));
+    /* parse message and add to multipart */
+    rc = multipart->AddEntity(*msg->elibobj);
+    f = fopen(((count) ? "TestMulti2" : "TestMulti1"), "wr");
+    rc = msg->elibobj->WriteOut(sendstate.elibcontext, clock() + 25, f, ELIB_TE_7BIT);
+    dprintf(("Eng", "Just tried writing out, rc=%d\n",rc));
+    fclose(f);
+  }
+  while (*list);
+
+  return rc;
+
 }
 
 
@@ -243,13 +264,17 @@ ELib_rcode AssembleMessage(MessageDescriptor *msg)
   ELib_rcode rc;
 
   MIMEmultip *multipart = 0;
-  MIMEtext *ent = new MIMEtext(true, scrapf, 0, 0, ELIB_CT_TEXT_PLAIN, true);
+  MIMEtext *ent = new MIMEtext(true, scrapf1, 0, 0, ELIB_CT_TEXT_PLAIN, true);
+
+  if (!ent)
+    return ELIB_EMALLOCFAILED;
 
   if (state & FORWARD)
-    multipart = new MIMEmultip(true, 0, 0, 0, ELIB_CT_MULTIPART_MIXED, true);
-
-  if ((!ent) || (!multipart))
-    return ELIB_EMALLOCFAILED;
+  {
+    multipart = new MIMEmultip(true, scrapf2, 0, 0, ELIB_CT_MULTIPART_MIXED, true);
+    if (!multipart)
+      return ELIB_EMALLOCFAILED;
+  }
 
   rc = ent->ReplaceBody(sendstate.msgbody);
   if (rc < 0)
@@ -285,8 +310,6 @@ ELib_rcode AssembleMessage(MessageDescriptor *msg)
   if ((rc = AddHeader(hdrs, (header *) subhdr, msg->subject)) < 0)
     return rc;
 
-  sendstate.file = fopen(SetFilename(msg->ID, true), "w");
-  dprintf(("Eng", "File handle for writing out is %d\n",sendstate.file));
   if (state & FORWARD)
   {
     if ((rc = multipart->AddEntity(*ent)) < 0)
@@ -304,6 +327,24 @@ ELib_rcode AssembleMessage(MessageDescriptor *msg)
 }
 
 
+void ConfirmGot(eng_return *ret, MessageDescriptor *msg, void *h)
+{
+
+  (void)(msg);
+  (void)(h);
+  if (ret->code < 0)
+  {
+    /* sort out the error */
+  }
+
+  if (*(++sendstate.listptr) == 0)
+    sendstate.context = readytoparse;
+  else
+    sendstate.context = readytoretrieve;
+
+}
+
+
 void DoSend(void)
 {
 
@@ -312,6 +353,14 @@ void DoSend(void)
 
   switch (sendstate.context)
   {
+    case readytoretrieve :
+
+      dprintf(("Eng", "Send context is readytoretrieve\n"));
+
+      sendstate.context = idle;
+      eng_get_message(*sendstate.listptr, 0, ConfirmGot);
+      break;
+
     case readytoparse :
 
       dprintf(("Eng", "Send context is readytoparse\n"));
@@ -340,7 +389,7 @@ void DoSend(void)
     case parsefailure :
 
       /* creation of new message has failed */
-      dprintf(("Eng", "Send context is parsefailure, rc=%d\n",sendstate.ret.code));
+      dprintf(("Eng", "Send context is parsefailure, rc=%d\n",sendstate.ret.rc));
       if (sendstate.ret.code != ENG_NOMEMORY)
         sendstate.ret.code = ENG_SENDFAILED;
       (*callbacklist.sendfunc)(&sendstate.ret, callbacklist.sendhandle);
@@ -368,7 +417,12 @@ void DoSend(void)
       dprintf(("Eng", "Send context is encoded\n"));
       rc = AssembleMessage(msg);
       if (rc >= 0)
+      {
+        SetFilename(msg->ID, true);
+        sendstate.file = fopen(msgfilename, "w");
+        dprintf(("Eng", "File handle for writing out is %d\n",sendstate.file));
         sendstate.context = readytowrite;
+      }
       else
       {
         sendstate.ret.rc = rc;
@@ -394,8 +448,10 @@ void DoSend(void)
 
       dprintf(("Eng", "Send context is writedone\n"));
       fclose(sendstate.file);
-      LockFile(SetFilename(msg->ID, true));
-      remove(scrapf);
+      SetFilename(msg->ID, true);
+      LockFile(msgfilename);
+      remove(scrapf1);
+      remove(scrapf2);
 
       SendMessage();
 
