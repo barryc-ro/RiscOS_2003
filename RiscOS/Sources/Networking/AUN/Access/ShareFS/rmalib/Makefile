@@ -43,7 +43,7 @@ OBJS=           ralloc.o rallocd.o roverwr.o caller.o
 #
 # Rule patterns
 #
-.c.o:;      ${CC} -depend !Depend -c ${CFLAGS} -o $@ $<
+.c.o:;      ${CC} -depend !Depend -IC: -c ${CFLAGS} -o $@ $<
 .s.o:;      ${AS} -depend !Depend ${AFLAGS} $< $@
 
 all:            rmalib.o
@@ -56,6 +56,7 @@ clean:
 
 
 # Dynamic dependencies:
+o.caller: s.caller
 o.ralloc:	c.ralloc
 o.ralloc:	C:h.kernel
 o.ralloc:	C:h.swis
@@ -68,4 +69,3 @@ o.roverwr:	c.roverwr
 o.roverwr:	C:h.kernel
 o.roverwr:	C:h.swis
 o.roverwr:	h.ralloc
-o.caller: s.caller
