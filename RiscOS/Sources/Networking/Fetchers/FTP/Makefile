@@ -6,6 +6,7 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 10-Feb-98  SNB    Created
+# 06-Oct-98  SNB    Updated to use LocalRes and link 5.08
 #
 
 #
@@ -42,7 +43,7 @@ WFLAGS  = ~c~v
 
 AFLAGS   = -depend !Depend -NoCache 
 CFLAGS   = -c -depend !Depend ${INCLUDES} -throwback -zM -Wp -ffah -zps1 ${DFLAGS}
-DFLAGS   = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UTRACE
+DFLAGS   = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UTRACE -DMachine=<Machine>
 ROMFLAGS = -DROM
 INCLUDES = -ITCPIPLibs:,C:
 DEBFLAGS = -DTRACE -DUSE_SYSLOG
@@ -123,6 +124,8 @@ DBG_OBJS =\
 
 MSGSF=o.msgs
 
+IMGFILES=LocalRes:Dir LocalRes:DirGrey LocalRes:File LocalRes:FileGrey
+
 #
 # Rule patterns
 #
@@ -153,10 +156,11 @@ install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
-resources: Resources.${LOCALE}.Messages
+resources: LocalRes:Messages ${IMGFILES}
         ${MKDIR} ${RESDIR}
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
@@ -166,7 +170,6 @@ clean:
         ${WIPE} rm ${WFLAGS}
         ${WIPE} h.${COMPONENT}Hdr ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
-        ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
@@ -176,20 +179,17 @@ ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${MSGSF}: Resources.${LOCALE}.Messages Resources.${LOCALE}.File Resources.${LOCALE}.FileGrey \
-	Resources.${LOCALE}.Dir Resources.${LOCALE}.DirGrey
-	MkRes messages_file ${MSGSF} Resources.${LOCALE} ${RESFSDIR}
+${MSGSF}: LocalRes:Messages ${IMGFILES} MkRes
+        TokenCheck LocalRes:Messages
+	MkRes messages_file ${MSGSF} LocalRes ${RESFSDIR}
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${mkdir} rm
-        ${LD} -o $@ -module -Map -xref ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+        ${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
         Access $@ RW/R
 
 ${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
