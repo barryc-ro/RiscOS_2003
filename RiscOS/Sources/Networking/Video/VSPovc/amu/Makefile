@@ -17,12 +17,18 @@ INCLUDES = c:
 LIBFILES =
 LINKFLAGS=-rmf
 
+CMHGFLAGS=-p
+
+
 CC = cc
 CMHG=cmhg
 OBJASM=objasm
 
-#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG -D#USEOLDREAD_POS
-CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DSOS -DUSEOLDREAD_POS
+#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG -DUSEOLDREAD_POS
+CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG -DSOS -DUSEOLDREAD_POS
+#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG
+
+
 INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
 
 IDLLIB= @.fromidl.lib.libidl
@@ -62,6 +68,6 @@ o.umdn   :  amu.makefile s.umdn
 o.vsphdr :  amu.makefile cmhg.vsphdr
 
 cmhg.h:  amu.makefile cmhg.vsphdr
-         cmhg -d h.cmhg cmhg.VSPhdr
+         cmhg -p -d h.cmhg cmhg.VSPhdr
 
 
