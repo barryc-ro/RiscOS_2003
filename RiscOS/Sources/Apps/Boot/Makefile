@@ -48,7 +48,9 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${CP} Resources.${UserIF}.${LOCALE}.${APP}   ${RESAPP}   ${CPFLAGS}
+	IfThere Resources.${UserIF}.${LOCALE}.${APP} Then \
+        ${CP}   Resources.${UserIF}.${LOCALE}.${APP} ${RESAPP} ${CPFLAGS} Else \
+        ${CP}   Resources.${UserIF}.UK.${APP}        ${RESAPP} ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 # Dynamic dependencies:
