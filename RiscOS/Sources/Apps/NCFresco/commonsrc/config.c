@@ -598,6 +598,29 @@ config_item citems[] = {
       "Colour for highlighted text on buttons",
       (void *) 0x00000000  },
 
+#ifdef STBWEB
+{ config_COLOUR,
+      "colour.menu.text",
+      (void *)offsetof(struct config_str, colours[render_colour_MENU_F]),
+      "Colour for menu foreground",
+      (void *) 0 },
+{ config_COLOUR,
+      "colour.menu.back",
+      (void *)offsetof(struct config_str, colours[render_colour_MENU_B]),
+      "Colour for menu background",
+      (void *) 0xffffff00  },
+{ config_COLOUR,
+      "colour.menu.text.highlight",
+      (void *)offsetof(struct config_str, colours[render_colour_MENU_FS]),
+      "Colour for menu foreground highlighted",
+      (void *) 0xffffff00  },
+{ config_COLOUR,
+      "colour.menu.back.highlight",
+      (void *)offsetof(struct config_str, colours[render_colour_MENU_BS]),
+      "Colour for menu background highlighted",
+      (void *) 0  },
+#endif
+    
 { config_COLOUR_LIST,
       "colour.border.bevel",
       (void *)offsetof(struct config_str, colour_list[render_colour_list_BEVEL]),
@@ -662,27 +685,6 @@ config_item citems[] = {
 #endif
     
 #if 0 /* def STBWEB */
-
-{ config_COLOUR,
-      "colour.select.text",
-      (void *)offsetof(struct config_str, select_col[0]),
-      "Colour for select foreground",
-      (void *) 0 },
-{ config_COLOUR,
-      "colour.select.back",
-      (void *)offsetof(struct config_str, select_col[1]),
-      "Colour for select background",
-      (void *) 0xffffff00  },
-{ config_COLOUR,
-      "colour.select.text.highlight",
-      (void *)offsetof(struct config_str, select_col[2]),
-      "Colour for select foreground highlighted",
-      (void *) 0  },
-{ config_COLOUR,
-      "colour.select.back.highlight",
-      (void *)offsetof(struct config_str, select_col[3]),
-      "Colour for select background highlighted",
-      (void *) 0xffffff00  },
 
 { config_COLOUR,
       "colour.button.text",
@@ -1032,6 +1034,11 @@ config_item citems[] = {
       "Key info",
       (void *)0 },
 #endif
+{ config_STRING_LIST,
+      "url.suffix",
+      (void *)offsetof(struct config_str, url_suffix),
+      "List of possible URL suffixes",
+      (void*)0 },
     
 { config_LAST, NULL, NULL, NULL, 0 }
 };
@@ -1090,24 +1097,43 @@ extern void config_init(void)
 #endif
 }
 
+static void config_free_item(config_item *cp)
+{
+    switch(cp->type)
+    {
+    case config_STRING:
+    case config_FILE:
+    case config_URL:
+    case config_FONT:
+    case config_INT_LIST:
+    case config_COLOUR_LIST:
+	if (*((char**) cp->ptr))
+	{
+	    mm_free(*((char**) cp->ptr));
+	    *(char **)cp->ptr = NULL;
+	}
+	break;
+    case config_STRING_LIST:
+    {
+	int *list = *((int**) cp->ptr);
+	if (list)
+	{
+	    int i;
+	    for (i = 1; i <= list[0]; i++)
+		mm_free((char *)list[i]);
+	    mm_free(list);
+	    *(char **)cp->ptr = NULL;
+	}
+	break;
+    }
+    }
+}
+
 extern void config_tidyup(void)
 {
     int i;
     for (i = 0; citems[i].type != config_LAST; i++)
-    {
-	switch(citems[i].type)
-	{
-	case config_STRING:
-	case config_FILE:
-	case config_URL:
-	case config_FONT:
-	case config_INT_LIST:
-	case config_COLOUR_LIST:
-	    if (*((char**) citems[i].ptr))
-		mm_free(*((char**) citems[i].ptr));
-	    break;
-	}
-    }
+	config_free_item(&citems[i]);
 }
 
 extern int config_colour_number(char *p)
@@ -1242,7 +1268,7 @@ static char *config_read_string(char *p)
 
 #define LIST_CHUNK	8
 
-static int *config_read_list(char *p, BOOL colours)
+static int *config_read_list(char *p, int list_type)
 {
     int count, *list;
 
@@ -1253,7 +1279,20 @@ static int *config_read_list(char *p, BOOL colours)
 	if ((count % LIST_CHUNK) == 0)
 	    list = mm_realloc(list, (count + LIST_CHUNK + 1) * sizeof(int));
 
-	list[++count] = colours ? config_read_colour(p, NULL, NULL) : config_read_int(p);
+	switch (list_type)
+	{
+	case config_INT_LIST:
+	    list[++count] = config_read_int(p);
+	    break;
+
+	case config_COLOUR_LIST:
+	    list[++count] = config_read_colour(p, NULL, NULL);
+	    break;
+	    
+	case config_STRING_LIST:
+	    list[++count] = (int)config_read_string(p);
+	    break;
+	}
 	
 	CNFDBG(("config_read_list:val %08x\n", list[count]));
     }
@@ -1329,14 +1368,13 @@ static void config_read_item(char *p, config_item *citem)
 
     case config_INT_LIST:
     case config_COLOUR_LIST:
+    case config_STRING_LIST:
 	/* unlike above cases, free the string even if there's nothing
           valid to replace it with */
-	if (*((int**) citem->ptr))
-	    mm_free(*((int**) citem->ptr));
-	*((int**) citem->ptr) = 0;
+	config_free_item(citem);
 
 	if (p)
-	    *(int **)citem->ptr = config_read_list(p, citem->type == config_COLOUR_LIST);
+	    *(int **)citem->ptr = config_read_list(p, citem->type);
 	break;
     }
 
@@ -1351,9 +1389,8 @@ static void config_read_item(char *p, config_item *citem)
 	case config_FONT:
 	case config_INT_LIST:
 	case config_COLOUR_LIST:
-	    if (*((void**) citem->ptr))
-		mm_free(*((void**) citem->ptr));
-	    *((void**) citem->ptr) = 0;
+	case config_STRING_LIST:
+	    config_free_item(citem);
 	    break;
 	}
     }
@@ -1494,11 +1531,12 @@ static void config_default_first(void)
 
 	case config_INT_LIST:
 	case config_COLOUR_LIST:
+	case config_STRING_LIST:
             citems[i].ptr = (char *)&config_array + (int) (long) citems[i].ptr;
 	    if ((int*) citems[i].def == 0)
 		*((int**) citems[i].ptr) = 0;
 	    else
-		*((int**) citems[i].ptr) = config_read_list((char *)citems[i].def, citems[i].type == config_COLOUR_LIST);
+		*((int**) citems[i].ptr) = config_read_list((char *)citems[i].def, citems[i].type);
 	    break;
 	}
     }
@@ -1556,6 +1594,19 @@ extern void config_write_file_by_name(const char *file_name)
 		    fprintf(fh, " 0x%08x", *xp++);
 		else
 		    fprintf(fh, " %d", *xp++);
+	    }
+	    fputc('\n', fh);
+	    break;
+	}
+
+	case config_STRING_LIST:
+	{
+	    int count;
+	    int *xp = *((int**) citems[i].ptr);
+	    fprintf(fh, "%s:", citems[i].name);
+	    for (count = *xp++; count; count--)
+	    {
+		fprintf(fh, " %s", (char *)*xp++);
 	    }
 	    fputc('\n', fh);
 	    break;

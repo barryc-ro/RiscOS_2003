@@ -1474,7 +1474,7 @@ char *strcatx_with_leeway(char *s, const char *s1, int leeway)
 	s = new_s;
     }
     
-    if (s1)
+    if (s1 && s)
 	strcpy(s + slen, s1);
 
     return s;

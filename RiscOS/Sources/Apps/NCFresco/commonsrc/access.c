@@ -156,6 +156,8 @@ typedef struct _access_item {
     void *h;
     void *transport_handle;
     BOOL hadwholepart;          /* used for serverpush (see http_fetch_alarm) */
+    BOOL try_prefix, try_suffix;/* used for fancy DNS resolve */
+    int suffix_num;
     struct _access_item *redirect;
     struct _access_item *next, *prev;
     union {
@@ -201,6 +203,7 @@ typedef struct _access_item {
     } redial;
 #endif
 } access_item;
+
 
 /***************************************************************************/
 
@@ -439,6 +442,125 @@ static void access_redial_alarm(int at, void *h)
 # define access_redial_alarm    0
 # define ensure_line()		NULL
 
+#endif
+
+/* ------------------------------------------------------------------------------------- */
+
+#ifndef FILEONLY
+/*
+Fancy DNS resolving
+
+Note prefix is www (http), ftp (ftp), gopher (gopher)
+
+If failure and try suffix and try prefix are both clear
+  If has no dots on it then
+    Set try suffix flag
+    Set try prefix flag
+    Append first suffix
+    Append prefix
+
+  Else If it has dots in it
+    If it doesn't have the correct prefix then
+      Set try prefix flag
+      Append prefix
+    Else
+      fail
+
+Else if try suffix is set
+  If more suffices in list then 
+    Replace suffix with next suffix in list
+  Else
+    fail
+
+Else
+  fail
+*/
+
+static char *suffix_replace(char *name, const char *orig, const char *new)
+{
+    int len = strlen(name);
+    int len_o = strlen(orig);
+    int len_n = strlen(new);
+    char *out;
+
+    if (len_o > 0 && len > len_o && strcmp(name + len - len_o, orig) == 0)
+    {
+	if (len_o >= len_n)
+	{
+	    strcpy(name + len - len_o, new);
+	    return name;
+	}
+
+	name[len - len_o] = 0;
+    }
+
+    out = strdup(name);
+    mm_free(name);
+    out = strcatx(out, new);
+    
+    return out;
+}
+	
+static BOOL access_try_fancy_resolve(access_handle d, const char *prefix)
+{
+    ACCDBG(("access_try_fancy_resolve: d %p prefix %d/'%s' suffix %d/%d)\n", d, d->try_prefix, prefix, d->try_suffix, d->suffix_num));
+
+    if (!d->try_suffix && !d->try_prefix)
+    {
+	if (strchr(d->url, '.') == NULL)
+	{
+	    /* if not dots then add prefix and suffix */
+	    d->try_prefix = TRUE;
+	    d->try_suffix = TRUE;
+	}
+	else if (strncasecomp(d->dest_host, prefix, strlen(prefix)) != 0)
+	{
+	    /* if not correct prefix try adding prefix */
+	    d->try_prefix = TRUE;
+	}
+	else
+	{
+	    /* if dots and correct prefix then can do no more */
+	    ACCDBG(("access_try_fancy_resolve: dots and correct prefix\n"));
+	    return FALSE;
+	}
+
+	if (d->try_prefix)
+	{
+	    char *host = strdup(prefix);
+
+	    host = strcatx(host, d->dest_host);
+
+	    mm_free(d->dest_host);
+	    d->dest_host = host;
+	}
+    }
+    else if (!d->try_suffix)
+    {
+	/* if we had tried just new prefix then can do no more */
+	ACCDBG(("access_try_fancy_resolve: already added prefix\n"));
+	return FALSE;
+    }
+	
+    if (d->try_suffix)
+    {
+	if (d->suffix_num < config_url_suffix[0])
+	{
+	    d->dest_host = suffix_replace(d->dest_host,
+					  d->suffix_num ? (char *)config_url_suffix[d->suffix_num] : "",
+					  (char *)config_url_suffix[d->suffix_num+1]);
+	    d->suffix_num++;
+	}
+	else
+	{
+	    /* if tried all suffixes then can do no more */
+	    ACCDBG(("access_try_fancy_resolve: tried all suffixes\n"));
+	    return FALSE;
+	}
+    }
+
+    return TRUE;
+}
 #endif
 
 /* ------------------------------------------------------------------------------------- */
@@ -1002,6 +1124,9 @@ static void access_http_dns_alarm(int at, void *h)
     {
         return;
     }
+    else if (access_try_fancy_resolve(d, "www."))
+    {
+    }
     else
     {
 	ACCDBG(("HTTP resolve failed, error:%s\n", ep->errmess));
@@ -1350,7 +1475,7 @@ static void access_http_fetch_alarm(int at, void *h)
 
     ep = os_swix(HTTP_Status, (os_regset *) &si);
 
-    ACCDBG(("HTTP status %d, handle %p\n", si.out.status, d));
+    ACCDBG(("HTTP status %d, handle %p, rc %d\n", si.out.status, d, si.out.rc));
 
     if (ep)
     {
@@ -1624,6 +1749,9 @@ static void access_gopher_dns_alarm(int at, void *h)
     {
 	return;
     }
+    else if (access_try_fancy_resolve(d, "gopher."))
+    {
+    }
     else
     {
 	ACCDBG(("Gopher resolve failed, error:%s\n", ep->errmess));
@@ -1798,6 +1926,9 @@ static void access_ftp_dns_alarm(int at, void *h)
     {
 	return;
     }
+    else if (access_try_fancy_resolve(d, "ftp."))
+    {
+    }
     else
     {
 	ACCDBG(("FTP resolve failed, error:%s\n", ep->errmess));
@@ -1819,7 +1950,7 @@ static void access_ftp_dns_alarm(int at, void *h)
 	ep = ensure_line();
 	if (ep == NULL)
 	    ep = access_ftp_fetch_start(d);
-
+	
 	if (ep == NULL)
 	{
 	    if (d->progress)

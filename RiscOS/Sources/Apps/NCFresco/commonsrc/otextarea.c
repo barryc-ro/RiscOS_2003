@@ -515,7 +515,9 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 
 #ifdef STBWEB
     render_plinth_from_list(bg,
-			    has_caret ? config_colour_list[render_colour_list_WRITE_HIGHLIGHT] : config_colour_list[render_colour_list_WRITE],
+			    has_caret && config_colour_list[render_colour_list_WRITE_HIGHLIGHT] ?
+			      config_colour_list[render_colour_list_WRITE_HIGHLIGHT] :
+			      config_colour_list[render_colour_list_WRITE],
 			    0,
 			    hpos, bline - ti->max_down,
 			    ti->width, (ti->max_up + ti->max_down), doc );

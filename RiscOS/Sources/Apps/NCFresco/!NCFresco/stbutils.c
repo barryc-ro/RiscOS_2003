@@ -648,7 +648,9 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
 	    state.o = *op;
 	    state.flags = (wimp_wflags)wflags;
 
-	    _swix(Wimp_OpenWindow, _INR(1,4), &state, *(int *)"TASK", parent_w, align_flags | 1);
+	    STBDBG(("set flags to 0x%x align_flags 0x%x\n", wflags, align_flags));
+
+	    frontend_fatal_error((os_error *)_swix(Wimp_OpenWindow, _INR(1,4), &state, *(int *)"TASK", parent_w, align_flags | 1));
 	}
 
 	/* reposition the caret */

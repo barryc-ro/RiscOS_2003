@@ -37,8 +37,10 @@
 
 #ifdef STBWEB_BUILD
 #include "memheap.h"
+#include "mallinfo.h"
 #else
 #include "../memlib/memheap.h"
+#include "../memlib/mallinfo.h"
 #endif
 
 /* ISTR that ANSI sez you shouldn't do this... */
@@ -713,6 +715,17 @@ void mm__check(FILE *f)
 
 void mm__summary(FILE *f)
 {
+#if MEMLIB
+    struct mallinfo info = MemHeap_mallinfo();
+
+    FDBG((f, "total space:            %dK\n", info.arena/1024));
+    FDBG((f, "total allocated space:  %dK\n", info.uordblks/1024));
+    FDBG((f, "total non-inuse space:  %dK\n", info.fordblks/1024));
+    FDBG((f, "total non-inuse chunks: %d\n", info.ordblks));
+    FDBG((f, "top releasable space:   %dK\n", info.keepcost/1024));
+    FDBG((f, "mmap regions:           %d\n", info.hblks));
+    FDBG((f, "mmap space:             %dK\n", info.hblkhd/1024));
+#endif
     FDBG((f, "Heap function usage counts:\n"
 	    "mm_malloc : %d\n"
 	    "mm_calloc : %d\n"
@@ -950,12 +963,24 @@ extern void mm__dump(FILE *f)
 
 extern void mm__summary(FILE *f)
 {
+#if MEMLIB
+    struct mallinfo info = MemHeap_mallinfo();
+
+    fprintf(f, "total space:            %dK\n", info.arena/1024);
+    fprintf(f, "total allocated space:  %dK\n", info.uordblks/1024);
+    fprintf(f, "total non-inuse space:  %dK\n", info.fordblks/1024);
+    fprintf(f, "total non-inuse chunks: %d\n", info.ordblks);
+    fprintf(f, "top releasable space:   %dK\n", info.keepcost/1024);
+    fprintf(f, "mmap regions:           %d\n", info.hblks);
+    fprintf(f, "mmap space:             %dK\n", info.hblkhd/1024);
+#else
     usrtrc( "Memwatch compiled at too low a level for mm_summary to do anything.\n");
+#endif
 }
 
 extern void mm__check(FILE *f)
 {
-    usrtrc( "Memwatch compiled at too low a level for mm_ckeck to do anything.\n");
+    usrtrc( "Memwatch compiled at too low a level for mm_check to do anything.\n");
 }
 
 #endif

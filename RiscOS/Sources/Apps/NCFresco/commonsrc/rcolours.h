@@ -22,13 +22,17 @@
 #define render_colour_ACTIVATED 12	/* col for activating links (alink) */
 #define render_colour_BEVEL	13	/* col for interior of 3D bevel */
 #define render_colour_INPUT_FS	14	/* selected bg colour for SELECT & SUBMIT, RESET, BUTTON items */
-#define render_colour_RGB       15
+#define render_colour_MENU_F	15	/* menu fg */
+#define render_colour_MENU_B	16	/* menu bg */
+#define render_colour_MENU_FS	17	/* menu fg selected */
+#define render_colour_MENU_BS	18	/* menu bg selected */
+#define render_colour_RGB       19
 
 /* pdh: render_colour_RGB in the bottom byte means that the top three bytes
  * are an RGB colour
  */
 
-#define render_colour_COUNT	16
+#define render_colour_COUNT	19
 
 /* ---------------------------------------------------------------------- */
 
