@@ -17,7 +17,7 @@
 COMPONENT = cmhg
 TARGET    = cmhg
 
-CFLAGS    = -Wpc -ffah -IC:CLX -DDDE ${OPTIONS}
+CFLAGS    = -Wpc -ffah -IC:CLX -DDDE -DUSE32BIT ${OPTIONS}
 DIRS      = o._dirs
 
 INSTAPP   = ${INSTDIR}.Apps.!CMHG
@@ -29,8 +29,8 @@ LIBDIR    = ${INSTDIR}.Library.Acorn
 OBJS       = cmhg.o outaof.o throwback.o veneers.o veneers32.o
 LIBS       = ${CLXLIB} ${CLIB}
 
-include Makefiles:StdTools
-include Makefiles:AppLibs
+include StdTools
+include AppLibs
 
 .SUFFIXES:
 .SUFFIXES: .o .s .c
