@@ -32,11 +32,13 @@ LD      = link
 TLD	= tlink
 RM      = remove
 WIPE    = -wipe
+MODSQZ  = modsqz
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
+CMHGFLAGS= -depend !Depend -p
 DFLAGS   = -D${SYSTEM}
 ROMFLAGS = -DROM
 INCLUDES = -I<Lib$Dir>.tboxlibint.,<Lib$Dir>.tboxlibs:,C:
@@ -84,7 +86,7 @@ RESF=o.res
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.cmhg.o:; ${CMHG} ${CMHGFLAGS} -o $@ $<
 
 #
 # Main rules:
@@ -120,10 +122,7 @@ ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -137,6 +136,7 @@ ${RESF}: @.Resources.${LOCALE}.Res
 ${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF} ${CLIB}
 	${mkdir} rm
         ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF} ${CLIB}
+        ${MODSQZ} $@
         Access $@ RW/R
 
 o.mainRAM: main.c
