@@ -27,10 +27,8 @@ LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
 
-# Defining this macro has the effect of suppressing the warning
-# about use of the UMULL instruction in s.sixtyfour in the case
-# where No26bitCode is true.
-OBJASMCPU = -CPU arm7m
+# No specific preference
+OBJASMCPU =
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit ${OBJASMCPU}
@@ -64,13 +62,15 @@ TARGETZ    = alf.${COMPONENTZ}
 SOURCE     = 
 EXPORTS    = 
 
-OBJS=   o.callbacks o.sixtyfour o.heapswis o.rminfo
+OBJS=   o.callbacks o.sixtyfour o.heapswis o.rminfo o.irqs
 
-OBJSZ=  oz.callbacks oz.sixtyfour oz.heapswis oz.rminfo
+OBJSZ=  oz.callbacks oz.sixtyfour oz.heapswis oz.rminfo oz.irqs
 
-HDRS=	h.callbacks h.sixtyfour h.heapswis h.rminfo
+HDRS=   h.callbacks h.sixtyfour h.heapswis h.rminfo h.irqs
 
 LIBS = ${TARGET} ${TARGETZ}
+
+LOCALDIRS = o._dirs
 
 #
 # Rule patterns
@@ -82,7 +82,7 @@ LIBS = ${TARGET} ${TARGETZ}
 #
 # build a the library:
 #
-all:	${LIBS}
+all:    ${LIBS}
 
 #
 # RISC OS ROM build rules:
@@ -106,17 +106,19 @@ export_hdrs: ${HDRS} export_dirs
 	${CP} h.sixtyfour  ${LIBDIR}.h.sixtyfour ${CPFLAGS}
 	${CP} h.rminfo     ${LIBDIR}.h.rminfo    ${CPFLAGS}
 	${CP} h.heapswis   ${LIBDIR}.h.heapswis  ${CPFLAGS}
-	${CP} VersionNum   ${LIBDIR}.VersionNum ${CPFLAGS}
+	${CP} h.irqs       ${LIBDIR}.h.irqs      ${CPFLAGS}
+	${CP} VersionNum   ${LIBDIR}.VersionNum  ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${LIBS} export_dirs
 	${CP} alf ${LIBDIR}.o ${CPFLAGS}
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs:
+${LOCALDIRS}:
 	${MKDIR} o
 	${MKDIR} oz
 	${MKDIR} alf
+        ${TOUCH} $@
 
 export_dirs:
         ${MKDIR} ${LIBDIR}.h
@@ -124,10 +126,10 @@ export_dirs:
 #
 # Final link
 #
-${TARGET}: ${OBJS} local_dirs
+${TARGET}: ${OBJS} ${LOCALDIRS}
         ${LB} ${LBFLAGS} -o $@ ${OBJS}
 
-${TARGETZ}: ${OBJSZ} local_dirs
+${TARGETZ}: ${OBJSZ} ${LOCALDIRS}
 	${LB} ${LBFLAGS} -o $@ ${OBJSZ}
 
 # Dynamic dependencies:
