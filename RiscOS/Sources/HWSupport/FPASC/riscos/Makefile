@@ -19,7 +19,7 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
-AS      = armasm
+AS      = objasm
 CP      = copy
 LD      = link
 RM      = remove
@@ -56,7 +56,8 @@ clean:
 
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 # ARM600
@@ -93,7 +94,7 @@ o.fpe: Hdr:t.^.Proc
 o.fpe: Hdr:t.^.Services
 o.fpe: Hdr:t.^.ModHand
 o.fpe: ^.coresrc.^.vensrc.riscos.FPEMacros
-o.fpe: ^.coresrc.^.vensrc.riscos.Version
+o.fpe: ^.coresrc.^.vensrc.riscos.^.^.VersionASM
 o.fpe: Hdr:t.^.SWIs
 o.fpe: Hdr:t.^.RISCOS
 o.fpe: ^.coresrc.^.coresrc.s.regnames
