@@ -29,6 +29,7 @@ LD		= link
 RM		= remove
 SQUEEZE		= squeeze
 WIPE		= -wipe
+STRIP		= stripdepnd
 
 AFLAGS		= -depend !Depend -nocache -stamp -quit $(THROWBACK)
 CFLAGS		= -depend !Depend -ffah -I$(INCLUDES) -wp $(THROWBACK)
@@ -70,41 +71,43 @@ TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
 
 MSGLIB		= $(LIBDIR).MsgLib.o.MsgLib
-DEBUGLIB	= $(LIBDIR).DebugLib.o.debuglib
-ERRORLIB	= $(LIBDIR).ErrorLib.o.errorlib
+DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLib
+ERRORLIB	= $(LIBDIR).ErrorLib.o.ErrorLib
 NBLIB		= $(LIBDIR).NBLib.o.NBLib
 MEMCHECKLIB	= MemCheck:o.MC
+EMAILLIB	= $(LIBDIR).Email.EmailLib.o.EmailLib
 
-LIBSM = \
- $(NBLIB)zm \
- $(MSGLIB)zm \
- $(WIMPLIB) \
- $(TOOLBOXLIB) \
- $(EVENTLIB)m \
- $(ERRORLIB)zm \
- $(MEMCHECKLIB) \
- $(DEBUGLIB)zm \
- TCPIPLibs:o.socklib5zm \
- TCPIPLibs:o.inetlibzm \
- $(LIBDIR).Email.EmailLib.o.EmailLib
+LIBSM =\
+ $(NBLIB)zm\
+ $(MSGLIB)zm\
+ $(WIMPLIB)\
+ $(TOOLBOXLIB)\
+ $(EVENTLIB)m\
+ $(ERRORLIB)zm\
+ $(MEMCHECKLIB)\
+ $(DEBUGLIB)zm\
+ TCPIPLibs:o.socklib5zm\
+ TCPIPLibs:o.inetlibzm\
+ $(EMAILLIB)zm\
+ $(CPPLIB)z
 
 
-LIBS = \
- $(NBLIB) \
- $(MSGLIB) \
- $(WIMPLIB) \
- $(TOOLBOXLIB) \
- $(EVENTLIB) \
- $(ERRORLIB) \
- $(CLIB) \
- $(CPPLIB) \
- $(MEMCHECKLIB) \
- $(DEBUGLIB) \
- TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.inetlib \
- $(LIBDIR).Email.EmailLib.o.EmailLib
+LIBS =\
+ $(NBLIB)\
+ $(MSGLIB)\
+ $(WIMPLIB)\
+ $(TOOLBOXLIB)\
+ $(EVENTLIB)\
+ $(ERRORLIB)\
+ $(CLIB)\
+ $(MEMCHECKLIB)\
+ $(DEBUGLIB)\
+ TCPIPLibs:o.socklib5\
+ TCPIPLibs:o.inetlib\
+ $(EMAILLIB)\
+ $(CPPLIB)
 
-#LIBSD = \
+#LIBSD =\
 
 # -----------------------------------------------------------------------------
 # Include files (libraries and resources)
@@ -112,39 +115,42 @@ LIBS = \
 
 INCLUDES	= C:,<Lib$Dir>
 
-FILES = \
- $(LDIR).!Boot \
- $(LDIR).!Run \
- $(LDIR).!Help \
- $(LDIR).!Sprites22 \
- $(LDIR).Messages \
- $(LDIR).Res \
+FILES =\
+ $(LDIR).!Boot\
+ $(LDIR).!Run\
+ $(LDIR).!Help\
+ $(LDIR).!Sprites22\
+ $(LDIR).Messages\
+ $(LDIR).Res\
  $(TARGET)
 
 # Include these in the ROM module
-RESFILES = \
- $(LDIR).!Sprites22 \
+RESFILES =\
+ $(LDIR).!Sprites22\
 
+DIRS = o._dirs
 
 # -----------------------------------------------------------------------------
 # Include files (objects)
 #
 
-OBJS = \
- o.eventmgr \
- o.main \
- o.browserif \
+OBJS =\
+ o.eventmgr\
+ o.main\
+ o.browserif\
+ o.Cmain
 
-OBJSZ = \
- oz.eventmgr \
- oz.main \
- oz.browserif \
+OBJSZ =\
+ oz.eventmgr\
+ oz.main\
+ oz.browserif\
+ oz.Cmain
 
-#OBJSZ = \
+#OBJSZ =\
 
-#OBJSD = \
+#OBJSD =\
 
-#OBJSDZ = \
+#OBJSDZ =\
 
 
 # -----------------------------------------------------------------------------
@@ -246,15 +252,14 @@ clean:
 	$(WIPE)	oz		$(WFLAGS)
 	$(WIPE)	odz		$(WFLAGS)
 	$(WIPE) syms		$(WFLAGS)
-	$(WIPE) rm		$(WFLAGS)
 	$(WIPE) Targets		$(WFLAGS)
 	$(RM)	s.AppName
 	$(RM)	s.ModuleWrap
-	$(RM)	o.dirs
+	$(STRIP)
 	@echo
 	@echo $(COMPONENT): Cleaned
 
-o.dirs:
+$(DIRS):
 	@$(MKDIR) abs
 	@$(MKDIR) aof
 	@$(MKDIR) linked
@@ -266,8 +271,8 @@ o.dirs:
 	@$(MKDIR) syms
 	@$(MKDIR) Targets
 	@$(MKDIR) Targets.!LoadURL
-	create o.dirs
-	stamp  o.dirs
+	create $(DIRS)
+	stamp  $(DIRS)
 
 
 # -----------------------------------------------------------------------------
@@ -309,24 +314,24 @@ s.AppName: $(LDIR).Messages
 # Static dependencies
 #
 
-abs.!RI: $(OBJS) $(LIBS) o.dirs
+abs.!RI: $(OBJS) $(LIBS) $(DIRS)
 	@echo
 	$(LD) $(LDFLAGS) -s syms.!RI -o $@ $(OBJS) $(LIBS)
 	$(SQUEEZE) $(SQFLAGS) $@
 
-abs.!RI_D: $(OBJSD) $(LIBSD) o.dirs
+abs.!RI_D: $(OBJSD) $(LIBSD) $(DIRS)
 	@echo
 	$(LD) $(LDFLAGS) -s syms.!RI_D -o $@ $(OBJSD) $(LIBSD)
 
-$(MODULE): oz.ModuleWrap $(OBJSZ) $(LIBSM) $(CLIB) o.dirs
+$(MODULE): oz.ModuleWrap $(OBJSZ) $(LIBSM) $(CLIB) $(DIRS)
 	@echo
 	$(LD) $(LDFLAGS) -s syms.RAMMod -o $@ -module oz.ModuleWrap $(OBJSZ) $(LIBSM) $(CLIB)
 
-$(ROM_MODULE): oz.ModuleWrap $(OBJSZ) $(ROMCSTUBS) $(LIBSM) o.dirs
+$(ROM_MODULE): oz.ModuleWrap $(OBJSZ) $(ROMCSTUBS) $(LIBSM) $(DIRS)
 	@echo
 	$(LD) $(LDFLAGS) -s syms.ROMMod -o $@ -aof oz.ModuleWrap $(OBJSZ) $(LIBSM) $(ROMCSTUBS)
 
-rm.!GUID: odz.ModuleWrap $(OBJSDZ) $(LIBSM) o.dirs
+rm.!GUID: odz.ModuleWrap $(OBJSDZ) $(LIBSM) $(DIRS)
 	@echo
 	$(LD) $(LDFLAGS) -s syms.ROMDMod -o $@ -module oz.ModuleWrap $(OBJSDZ) $(LIBSM)
 
