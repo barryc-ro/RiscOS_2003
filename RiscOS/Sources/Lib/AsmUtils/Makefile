@@ -112,7 +112,7 @@ export_hdrs: ${HDRS} export_dirs
 	${CP} h.irqs       ${LIBDIR}.h.irqs      ${CPFLAGS}
 	${CP} h.osvarlen   ${LIBDIR}.h.osvarlen  ${CPFLAGS}
 	${CP} h.muldiv     ${LIBDIR}.h.muldiv    ${CPFLAGS}
-	${CP} VersionNum   ${LIBDIR}.VersionNum  ${CPFLAGS}
+	${CP} VersionNum   ${LIBDIR}.LibVersion  ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${LIBS} export_dirs
