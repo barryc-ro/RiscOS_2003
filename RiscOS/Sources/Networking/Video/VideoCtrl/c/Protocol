@@ -7,7 +7,7 @@
 /*          modules; registering, deregistering and assigning */
 /*          requests to the correct SWI base.                 */
 /*                                                            */
-/* Author : A.D.Hodgkinson. Based on URL_Fetcher source by    */
+/* Author:  A.D.Hodgkinson. Based on URL_Fetcher source by    */
 /*          S.N.Brodie and P. Wain.                           */
 /*                                                            */
 /* History: 09-Sep-1999 (ADH): Created.                       */
@@ -17,10 +17,12 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdbool.h>
 #include <ctype.h>
 
 #include <swis.h>
 #include <Global/Services.h>
+#include <CheckURL.h>
 
 #ifdef TRACE2
   #define TRACE
@@ -61,35 +63,95 @@ typedef struct protocol
 
 } protocol;
 
-typedef struct config
-{
-  struct config * next;
-
-  char          * fragment;
-  unsigned int    swi_base;
-
-} config;
-
 /* Local variables */
 
 static protocol * protocols = NULL;
-static config   * configs   = NULL;
 
 /* Local functions */
 
-static _kernel_oserror * protocol_notify_0                      (client * list, unsigned int flags, char * code, unsigned int port);
-static _kernel_oserror * protocol_notify_1                      (client * list);
+static _kernel_oserror * protocol_match               (url_description * d, const char ** param, bool allow_fail);
+static void              protocol_lower_string        (char * ptr);
 
-static int               protocol_skip_white_space_and_comments (FILE * f);
-static int               protocol_read_string                   (FILE * f, char ** string);
-static _kernel_oserror * protocol_read_configuration            (void);
+static _kernel_oserror * protocol_notify_0            (client * list, unsigned int flags, char * code, unsigned int port);
+static _kernel_oserror * protocol_notify_1            (client * list);
 
-static const protocol  * protocol_find_from_swi_base            (unsigned int swi_base);
-static int               protocol_default_flags                 (const char * url);
-static unsigned int      protocol_default_port_number           (const char * url);
+static const protocol  * protocol_find_from_swi_base  (unsigned int swi_base);
+static int               protocol_default_flags       (const char * url);
+static unsigned int      protocol_default_port_number (const char * url);
 
 /**************************************************************/
-/* lower_string()                                             */
+/* protocol_match()                                           */
+/*                                                            */
+/* Match a given URL_Description in the area recorded in      */
+/* 'ConfigArea' through the Check URL module. Caches the area */
+/* ID for speed and will attempt to re-cache if this ID       */
+/* appears to become invalid later via. a recursive call.     */
+/*                                                            */
+/* Parameters: Pointer to the url_description to match;       */
+/*                                                            */
+/*             Pointer to a char * to take a pointer to the   */
+/*             match parameter (will be NULL on exit if the   */
+/*             match fails);                                  */
+/*                                                            */
+/*             true to support the stale ID recovery attempt  */
+/*             else false.                                    */
+/**************************************************************/
+
+static _kernel_oserror * protocol_match(url_description * d, const char ** param, bool allow_fail)
+{
+  static unsigned int   area_id = 0;
+
+  _kernel_oserror     * e;
+  unsigned int          match;
+
+  if (param == NULL) return NULL;
+  *param = NULL;
+
+  /* Ensure we have an area ID */
+
+  if (area_id == 0)
+  {
+    allow_fail = false; /* Make sure we don't try and reread it in a moment */
+
+    e = _swix(CheckURL_ReadAreaID,
+              _INR(0,1) | _OUT(1),
+
+              0,
+              ConfigArea, /* See Protocol.h */
+
+              &area_id);
+
+    if (e != NULL) return e;
+  }
+
+  /* Try the match */
+
+  e = _swix(CheckURL_Check,
+            _INR(0,2) | _OUTR(0,1),
+
+            CU_Check_OnEntry_GivenAreaID | CU_Check_OnEntry_GivenURLDescriptor,
+            area_id,
+            d,
+
+            &match,
+            param);
+
+  if (e != NULL && e->errnum == cu_ERROR_AREA_NOT_KNOWN && allow_fail)
+  {
+    /* Since allow_fail is true, we area allowed to fail on an area ID */
+    /* lookup. This is because we know IDs can become stale. In this   */
+    /* case, try again, but only once.                                 */
+
+    area_id = 0;
+
+    e = protocol_match(d, param, false);
+  }
+
+  return e;
+}
+
+/**************************************************************/
+/* protocol_lower_string()                                    */
 /*                                                            */
 /* Convert a string to lower case, altering only those        */
 /* characters that were already in upper case according to    */
@@ -98,7 +160,7 @@ static unsigned int      protocol_default_port_number           (const char * ur
 /* Parameters: Pointer to the NUL terminated string.          */
 /**************************************************************/
 
-static void lower_string(char * ptr)
+static void protocol_lower_string(char * ptr)
 {
   while (*ptr)
   {
@@ -131,10 +193,10 @@ _kernel_oserror * protocol_register(_kernel_swi_regs * r)
     return make_error(vc_ERROR_MEMORY_EXHAUSTED, 0);
   }
 
-  lower_string(protostr);
+  protocol_lower_string(protostr);
 
   /* Check to see if a protocol already has the same SWI base or same URL */
-  /* base. If the latter, ensure the config file is read in as per spec.  */
+  /* base.                                                                */
 
   proto = protocols;
 
@@ -146,30 +208,6 @@ _kernel_oserror * protocol_register(_kernel_swi_regs * r)
       dprintf(("", "protocol_register: Same SWI base, generating INDISTINGUISHABLE\n"));
       return make_error(vc_ERROR_INDISTINGUISHABLE, 0);
     }
-
-    /* Don't want to check the config file in ROM builds as during module */
-    /* initialisation you probably won't be able to read the config file  */
-    /* anyway; the module wouldn't initialise.                            */
-
-    #ifndef ROM
-
-      if (!Strcmp_ci(proto->url_base, (char *) r->r[2]))
-      {
-        dprintf(("", "protocol_register: Same URL base, checking config file\n"));
-
-        if (configs == NULL)
-        {
-          _kernel_oserror * e = protocol_read_configuration();
-
-          if (e != NULL)
-          {
-            free(protostr);
-            return e;
-          }
-        }
-      }
-
-    #endif
 
     proto = proto->next;
   }
@@ -519,295 +557,6 @@ _kernel_oserror * protocol_options(_kernel_swi_regs * r)
 }
 
 /**************************************************************/
-/* protocol_free_configuration()                              */
-/*                                                            */
-/* Free any data relating to the configuration file.          */
-/**************************************************************/
-
-void protocol_free_configuration(void)
-{
-  config * next;
-  config * head = configs;
-
-  while (head)
-  {
-    next = head->next;
-
-    free(head->fragment);
-    free(head);
-
-    head = next;
-  }
-
-  configs = NULL;
-}
-
-/**************************************************************/
-/* protocol_skip_white_space_and_comments()                   */
-/*                                                            */
-/* Advance the file pointer in the given file past any white  */
-/* space and comment lines in a configuration file. A comment */
-/* line is marked by a '#' as the first character encountered */
-/* or after any space. Comment lines terminate in CR or LF.   */
-/*                                                            */
-/* Parameters: FILE * for the file to read, opened "rb".      */
-/*                                                            */
-/* Returns:    Integer equal to EOF (in which case ignore the */
-/*             file pointer position via. ftell) or the first */
-/*             non-comment, non-whitespace byte encountered   */
-/*             in the file (in which case the file pointer    */
-/*             will be positioned in front of the character   */
-/*             returned, so an fgetc() would re-get that      */
-/*             character).                                    */
-/*                                                            */
-/* Assumes:    Parameter is non-NULL and valid.               */
-/**************************************************************/
-
-static int protocol_skip_white_space_and_comments(FILE * f)
-{
-  int c;
-
-  do
-  {
-    do
-    {
-      c = fgetc(f);
-    }
-    while (c != EOF && c <= ' ');
-
-    /* If we have a hash this is a comment; find a CR or LF */
-
-    if (c == '#')
-    {
-      do
-      {
-        c = fgetc(f);
-      }
-      while (c != EOF && c != '\n' && c != '\r');
-    }
-  }
-  while (c != EOF && c <= ' ');
-
-  /* If we didn't run out of file, back the file pointer up one */
-
-  if (c != EOF) fseek(f, ftell(f) - 1, SEEK_SET);
-
-  return c;
-}
-
-/**************************************************************/
-/* protocol_read_string()                                     */
-/*                                                            */
-/* Read a string from a config file. The string is terminated */
-/* by EOF or any white space.                                 */
-/*                                                            */
-/* Parameters: FILE * for the file to read, opened "rb";      */
-/*                                                            */
-/*             Pointer to a char * which will be updated to   */
-/*             point to a malloced block holding the string,  */
-/*             NUL terminated. It is only NULL if no memory   */
-/*             could be allocated.                            */
-/*                                                            */
-/* Returns:    Zero or EOF if the file ran out. The file      */
-/*             pointer pointS to the first non-white space    */
-/*             character after the string. If a memory        */
-/*             allocation fails (see Parameters above) the    */
-/*             return value is irrelevant and the file        */
-/*             pointer is restored to its on-entry value      */
-/*             where possible.                                */
-/*                                                            */
-/* Assumes:    All parameters are non-NULL and valid. If the  */
-/*             first character the function reads is white    */
-/*             space, results are undefined.                  */
-/**************************************************************/
-
-static int protocol_read_string(FILE * f, char ** string)
-{
-  long int pos = ftell(f);
-  size_t   len = 0;
-  size_t   i;
-  int      c;
-
-  /* Find the length */
-
-  for (;;)
-  {
-    c = fgetc(f);
-
-    if (c != EOF && c > ' ')
-    {
-      len++;
-    }
-    else
-    {
-      break;
-    }
-  }
-
-  /* Put the file pointer back */
-
-  if (len > 0) fseek(f, pos, SEEK_SET);
-
-  /* Allocate space for string plus terminator */
-
-  *string = malloc(len + 1);
-  if (!*string) return '\0';
-
-  /* Read and terminate it */
-
-  for (i = 0; i < len; i++)
-  {
-    (*string)[i] = fgetc(f);
-  }
-
-  (*string)[len] = '\0';
-
-  /* Done */
-
-  if (c == EOF) return EOF;
-  else          return 0;
-}
-
-/**************************************************************/
-/* protocol_read_configuration()                              */
-/*                                                            */
-/* Read the configuration file into a list of config structs  */
-/* (see top of file). This list is file-global and if one     */
-/* aleady exists it will be freed first.                      */
-/**************************************************************/
-
-static _kernel_oserror * protocol_read_configuration(void)
-{
-  FILE   * f;
-  int      c;
-  config * new;
-
-  dprintf(("", "protocol_read_configuration: Called\n"));
-
-  protocol_free_configuration();
-  configs = NULL;
-
-  f = fopen(ConfigFile, "rb");
-
-  if (!f)
-  {
-    dprintf(("", "protocol_read_configuration: Can't open file, generating CANNOT_OPEN_CONFIG\n"));
-    return make_error(vc_ERROR_CANNOT_OPEN_CONFIG, 0);
-  }
-
-  /* Go around entry by entry */
-
-  do
-  {
-    /* Find the start of a URL fragment */
-
-    c = protocol_skip_white_space_and_comments(f);
-
-    if (c != EOF)
-    {
-      char * temp = NULL;
-
-      /* We have the first character of a fragment. */
-      /* Make a config struct for this file entry   */
-
-      new = calloc(1, sizeof(config));
-
-      if (!new)
-      {
-        fclose(f);
-        dprintf(("", "protocol_read_configuration: new is NULL, generating MEMORY_EXHAUSTED\n"));
-        return make_error(vc_ERROR_MEMORY_EXHAUSTED, 0);
-      }
-
-      /* Link in at the head of the list */
-
-      new->next = configs;
-      configs   = new;
-
-      /* Fill in the fragment */
-
-      c = protocol_read_string(f, &temp);
-
-      if (!temp)
-      {
-        fclose(f);
-        protocol_free_configuration();
-        dprintf(("", "protocol_read_configuration: temp is NULL (fragment), generating MEMORY_EXHAUSTED\n"));
-        return make_error(vc_ERROR_MEMORY_EXHAUSTED, 0);
-      }
-
-      new->fragment = temp;
-      temp          = NULL;
-
-      /* If we got EOF with 'temp' holding just a NUL byte the file just  */
-      /* ended normally. If 'temp' holds something, the file is malformed */
-      /* - any fragment should be followed by another entry (SWI base).   */
-
-      if (c != EOF)
-      {
-        /* Didn't run out of file after reading the fragment, so go for the */
-        /* SWI base now.                                                    */
-
-        c = protocol_skip_white_space_and_comments(f);
-
-        if (c != EOF)
-        {
-          c = protocol_read_string(f, &temp);
-
-          if (!temp)
-          {
-            fclose(f);
-            protocol_free_configuration();
-            dprintf(("", "protocol_read_configuration: temp is NULL (SWI base), generating MEMORY_EXHAUSTED\n"));
-            return make_error(vc_ERROR_MEMORY_EXHAUSTED, 0);
-          }
-
-          new->swi_base = (int) strtoul(temp, NULL, 16);
-
-          free(temp);
-          temp = NULL;
-
-          if (new->swi_base == 0)
-          {
-            fclose(f);
-            protocol_free_configuration();
-            dprintf(("", "protocol_read_configuration: SWI base is zero, generating INVALID_CONFIG\n"));
-            return make_error(vc_ERROR_INVALID_CONFIG, 0);
-          }
-        }
-        else
-        {
-          /* Ran out of file after reading some stuff, file is malformed */
-
-          fclose(f);
-          protocol_free_configuration();
-          dprintf(("", "protocol_read_configuration: EOF after reading fragment and white space, generating INVALID_CONFIG\n"));
-          return make_error(vc_ERROR_INVALID_CONFIG, 0);
-        }
-      }
-      else if (*temp)
-      {
-        /* Ran out of file after reading some stuff, file is malformed */
-
-        fclose(f);
-        protocol_free_configuration();
-        dprintf(("", "protocol_read_configuration: EOF after reading fragment, generating INVALID_CONFIG\n"));
-        return make_error(vc_ERROR_INVALID_CONFIG, 0);
-      }
-    }
-  }
-  while (c != EOF);
-
-  /* Finished */
-
-  fclose(f);
-
-  dprintf(("", "protocol_read_configuration: Successful\n"));
-
-  return NULL;
-}
-
-/**************************************************************/
 /* protocol_find_from_swi_base()                              */
 /*                                                            */
 /* Find a protocol struct for a registered protocol module    */
@@ -885,118 +634,69 @@ static _kernel_oserror * protocol_locate(const char * url, const protocol ** fou
   else
   {
     _kernel_oserror * e;
+    url_description * d;
+    const char      * param;
+    const protocol  * find = NULL;
 
-    /* If we reach here there are multiple choices. Use the config file; */
-    /* first off, have we read it?                                       */
+    /* If we reach here there are multiple choices */
 
     dprintf(("", "protocol_locate: Multiple choices\n"));
 
-    if (configs == NULL)
+    e = urlutils_return_description(url, &d);
+    if (e != NULL) return e;
+
+    if (d == NULL)
     {
-      e = protocol_read_configuration();
-      if (e != NULL) return e;
+      dprintf(("", "protocol_locate: d is NULL, generating MEMORY_EXHAUSTED\n"));
+      return make_error(vc_ERROR_MEMORY_EXHAUSTED, 0);
     }
 
-    if (configs != NULL)
+    e = protocol_match(d, &param, true);
+    if (e != NULL) return e;
+
+    if (param != NULL)
     {
-      url_description * d;
-      const config    * current;
-      const protocol  * find = NULL;
+      find = protocol_find_from_swi_base((int) strtoul(param, NULL, 16));
+    }
 
-      e = urlutils_return_description(url, &d);
-      if (e != NULL) return e;
+    if (find == NULL)
+    {
+      dprintf(("", "protocol_locate: No match from CheckURL\n"));
 
-      if (!d)
+      urlutils_free_description(d);
+      return NULL;
+    }
+    else
+    {
+      /* We found one */
+
+      unsigned int l1 = strlen(find->url_base);
+      unsigned int l2 = strlen(d->protocol);
+
+      dprintf(("", "protocol_locate: Check URL led to protocol %p\n", find));
+      dprintf(("", "protocol_locate: Compare found '%s' to URL '%s'\n", find->url_base, d->protocol));
+
+      /* We have to ensure that the protocol matches too. The one from the */
+      /* protocol module includes a ':', the one from the URL won't, hence */
+      /* the check for string lengths as well as content.                  */
+
+      if (
+           (l1 - l2 == 1) &&
+           (!Strncmp_ci(find->url_base, d->protocol, l2))
+         )
       {
-        dprintf(("", "protocol_locate: d is NULL, generating MEMORY_EXHAUSTED\n"));
-        return make_error(vc_ERROR_MEMORY_EXHAUSTED, 0);
-      }
-
-      /* Try and find an item */
-
-      for (current = configs; current; current = current->next)
-      {
-        char * temp = Strdup(current->fragment);
-        int    m;
-
-        dprintf(("", "protocol_locate: Check %p ('%s', %08x)\n", current, current->fragment, current->swi_base));
-
-        if (!temp)
-        {
-          urlutils_free_description(d);
-          dprintf(("", "protocol_locate: d is NULL, generating MEMORY_EXHAUSTED\n"));
-          return make_error(vc_ERROR_MEMORY_EXHAUSTED, 0);
-        }
-
-        m = urlutils_matches_special(d, temp);
-        free(temp);
-
-        if (m)
-        {
-          const protocol * proto;
-
-          dprintf(("", "protocol_locate: Found a match from config file, base %08x\n", current->swi_base));
-
-          proto = protocol_find_from_swi_base(current->swi_base);
-
-          /* There used to be a counter here, and the loop would run to completion. The  */
-          /* code after would then check for multiple matches and complain of an invalid */
-          /* config file. I later decided that this wasn't helpful behaviour, so I've    */
-          /* gone for a first-match-with-module-loaded wins scheme. Of course, what is   */
-          /* defined by "first" depends entirely on how the "configs" list is built...!  */
-
-          if (proto && !find)
-          {
-            dprintf(("", "protocol_locate: The associated module is present, so using this match\n"));
-
-            find = proto;
-            break;
-          }
-        }
-      }
-
-      if (!find)
-      {
-        dprintf(("", "protocol_locate: No match from config file\n"));
+        dprintf(("", "protocol_locate: Match confirmed\n"));
 
         urlutils_free_description(d);
+        *found = find;
         return NULL;
       }
       else
       {
-        /* We got one! */
+        dprintf(("", "protocol_locate: Mismatch, generating METHOD_MISMATCH\n"));
 
-        if (find)
-        {
-          unsigned int l1 = strlen(find->url_base);
-          unsigned int l2 = strlen(d->protocol);
-
-          dprintf(("", "protocol_locate: Exactly one match from config file, %p\n", find));
-          dprintf(("", "protocol_locate: Compare found '%s' to URL '%s'\n", find->url_base, d->protocol));
-
-          /* We have to ensure that the protocol matches too. The one from the */
-          /* protocol module includes a ':', the one from the URL won't, hence */
-          /* the check for string lengths as well as content.                  */
-
-          if (
-               (l1 - l2 == 1) &&
-               (!Strncmp_ci(find->url_base, d->protocol, l2))
-             )
-          {
-            dprintf(("", "protocol_locate: Match confirmed\n"));
-
-            urlutils_free_description(d);
-            *found = find;
-            return NULL;
-          }
-          else
-          {
-            dprintf(("", "protocol_locate: Mismatch, generating METHOD_MISMATCH\n"));
-
-            urlutils_free_description(d);
-            return make_error(vc_ERROR_METHOD_MISMATCH, 0);
-          }
-        }
+        urlutils_free_description(d);
+        return make_error(vc_ERROR_METHOD_MISMATCH, 0);
       }
     }
   }
@@ -1073,10 +773,10 @@ int protocol_get_flags(const char *url)
 /* protocol_get_swi_base()                                    */
 /*                                                            */
 /* Given a URL, check to see if there's a protocol module     */
-/* present that should be able to handle it. Uses the config  */
-/* file if there is more than one protocol module present     */
-/* using the same URL base, and can thus raise a variety of   */
-/* errors related to that.                                    */
+/* present that should be able to handle it. Uses CheckURL if */
+/* there is more than one protocol module present using the   */
+/* same URL base, and can thus raise a variety of errors      */
+/* related to that.                                           */
 /*                                                            */
 /* Parameters: Pointer to the URL to match;                   */
 /*                                                            */

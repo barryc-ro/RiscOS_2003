@@ -12,7 +12,9 @@
 # 05-Nov-1999	ADH	Formatting changed to make it foldable
 # 08-Nov-1999	ADH	Now uses DebugLib
 # 09-Nov-1999	ADH	Reworking for cleaner compile-time messages and
-#			independent ROM / RAM builds. Exports header file.
+#			independent ROM / RAM builds, exports header file
+# 05-Apr-2000	ADH	Corrected path and filenames in ROM resources
+#			export rule
 
 # -----------------------------------------------------------------------------
 # Component specific options
@@ -217,14 +219,14 @@ install_rom: ${ROM_MODULE}
 	@echo
 	@echo ${COMPONENT}: Module installed (ROM)
 
-resources: LocalRes:Messages LocalRes:ResList
+resources: LocalRes:Messages
 	@echo
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESDIR}.${COMPONENT}
 	TokenCheck LocalRes:Messages
-	${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
+	${CP} LocalRes:Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
 	@echo
-	@echo ${COMPONENT}: resource files copied to Messages module
+	@echo ${COMPONENT}: Resource files copied to Messages module
 
 ${DIRS}:
 	@echo
