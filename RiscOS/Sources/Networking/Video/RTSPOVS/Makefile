@@ -50,6 +50,8 @@ ROMFLAGS	= -DROM
 RAMFLAGS	= -UROM
 INCLUDES	= -ITCPIPLibs:,C:
 
+DIRS		= o._dirs_
+
 # Extra compilation options:
 # ALWAYS_CLAIM_EVENTV		The module will sit on EventV from the moment
 #				it starts to the moment it dies if this is
@@ -194,7 +196,7 @@ DBGFLAGS	= -DTRACE2
 # Main rules
 #
 
-all: ${RAM_MODULE} o.dirs
+all: ${RAM_MODULE} ${DIRS}
 	@echo
 	@echo ${COMPONENT}: Module built (RAM)
 
@@ -205,11 +207,11 @@ install: ${RAM_MODULE}
 	@echo
 	@echo ${COMPONENT}: Module installed (Disc)
 
-ramtrace: ${DBG_MODULE} o.dirs
+ramtrace: ${DBG_MODULE} ${DIRS}
 	@echo
 	@echo ${COMPONENT}: Module built (RAM debug)
 
-rom: ${ROM_MODULE} o.dirs
+rom: ${ROM_MODULE} ${DIRS}
 	@echo
 	@echo ${COMPONENT}: Module built (ROM)
 
@@ -227,14 +229,14 @@ resources: LocalRes:Messages LocalRes:ResList
 	@echo
 	@echo ${COMPONENT}: resource files copied to Messages module
 
-o.dirs:
+${DIRS}:
 	@echo
 	${MKDIR} o
 	${MKDIR} oSL
 	${MKDIR} oSLd
 	${MKDIR} i
 	${MKDIR} linked
-	create o.dirs
+	create ${DIRS}
 
 clean:
 	${WIPE} o		${WFLAGS}
@@ -247,7 +249,7 @@ clean:
 	${WIPE} h.RTSPOHdr	${WFLAGS}
 	@echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${ROM_OBJS} ${ROMCSTUBS}
+${ROM_MODULE}: ${ROM_OBJS} ${ROMCSTUBS} ${DIRS}
 	@echo
 	${MKDIR} aof
 	${LD} -o $@ -aof ${ROM_OBJS} ${LIBS} ${ROMCSTUBS}
@@ -256,7 +258,7 @@ ${ROM_MODULE}: ${ROM_OBJS} ${ROMCSTUBS}
 # Final link for ROM Image (using given base address)
 #
 
-rom_link: o.dirs ${ROM_MODULE}
+rom_link: ${DIRS} ${ROM_MODULE}
 	@echo
 	${MKDIR} aof
 	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
