@@ -44,6 +44,7 @@ CP      = copy
 LD      = link
 LIBFILE = libfile
 MKDIR   = cdir
+MODSQZ  = modsqz
 OBJASM  = objasm
 RM      = remove
 WIPE    = -wipe
@@ -526,6 +527,7 @@ lib.romastubs: rlib.s.rl_stub_a
 # Non-exported libraries:
 lib.clib: ${CLIB_MOD_OBJS}
         ${LD} ${LDFLAGS} -o $@ -module ${CLIB_MOD_OBJS}
+        ${MODSQZ} $@
 
 # Derived headers:
 derived.swis: s.makehswis h.swisheader s.swioptions
