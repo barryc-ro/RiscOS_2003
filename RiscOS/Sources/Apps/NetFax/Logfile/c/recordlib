@@ -1,0 +1,596 @@
+/************************************************************************/
+/* File:    recordlib.c                                                 */
+/* Purpose: Declares the functions used to create and update all the    */
+/*          record entries used for the log.                            */
+/* Author:  Hed Simons (mailto:hsimons@acorn.com)                       */
+/* History: Mon 22nd September 1997  ver 0.01 - Created.                */
+/*          Mon 17th November  1997  ver 0.29 - Major changes/additions */
+/*                                    mainly due to an alteration of how*/
+/*                                    records work and how stored (HKS) */
+/*	    Wed 19th November  1997  ver 0.31 - Now handles the email   */
+/*					and printing of the log before  */
+/*					clearing it			*/
+/*	    Thu 27th November  1997  ver 0.33 - Printing now correctly  */
+/*					prints a decoded version of the */
+/*					log to the printer 		*/
+/************************************************************************/
+
+#include <time.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "include.h"
+#include "globals.h"
+#include "main.h"
+#include "misc.h"
+#include "timefunc.h"
+#include "recordlib.h"
+#include "messhandle.h"
+#include "texthandle.h"
+
+/* DEBUG */
+#include "tokencode.h"
+#include <stdio.h>
+
+/*----------------------------------------------------------------------*/
+
+/* Open the log file into Ramdisk */
+void record_open_log(void)
+{
+  _kernel_oserror	*er1, er2;
+  _kernel_swi_regs	regs;
+  FILE			*log_pointer;
+  char			name_buffer[256];
+
+  /* First lets create the directory */
+  strcpy(name_buffer, "RAM:$.LogDir");
+
+  regs.r[0] = 8;
+  regs.r[1] = (int)name_buffer;
+  regs.r[4] = 0;
+  er1 = _kernel_swi(OS_File, &regs, &regs);
+  misc_error_check(er1);
+
+  /* Now create the file, unless there's no RAM in which case, die politely */
+  if ((log_pointer = fopen("RAM:$.LogDir.LogFile", "w")) == 0)
+  {
+    strcpy(er2.errmess, "I cannot operate without RAM. Exiting.");
+    er2.errnum = 1;
+    misc_error_check(&er2);
+    exit(0);
+  }
+
+  dprintf(("", "The log file has succesfully opened\n"));
+
+  fclose(log_pointer);
+}
+
+/* Read the next five records to be displayed in the log screen */
+void record_read_next_records(void)
+{
+  int		test_int, error, date, loop, make_index;
+  FILE		*file_pointer;
+  char		buffer[256], byte;
+  DecLogEntry	*entry[5], *gopher, *gopher2;
+  EncLogEntry	*temp_record;
+
+
+  /* First delete all the records we have */
+  gopher = NULL;
+  gopher = decrec_head;
+  while (gopher != NULL)
+  {
+    gopher2 = gopher->next_record;
+    free(gopher);
+    gopher = gopher2;
+  }
+  free(gopher);
+
+  /* Open the log file */
+  if ((file_pointer = fopen("RAM:$.LogDir.LogFile", "r+")) != 0)
+  {
+    /* Loop to the record we want to search */
+    for (loop = 1; loop < (top_record + 1); loop ++)
+    {
+    	fscanf(file_pointer, "%d", &date);
+    	byte = fgetc(file_pointer); /* Gets rid of the space */
+    	byte = fgetc(file_pointer);
+        make_index = 0;
+        while (byte != '\n')
+        {
+          buffer[make_index] = byte;
+          make_index++;
+          byte = fgetc(file_pointer);
+        }
+        buffer[make_index] = '\0';
+    }
+
+    /* Set the gopher to point to a NULL */
+    gopher = NULL;
+    test_int = top_record;
+    /* Now scan from the top record in the list until the fifth record,
+       or until we run out of records! */
+    while ((test_int != number_records) && (test_int != (top_record+5)))
+    {
+      /* Create new record */
+      entry[test_int - top_record] = malloc(sizeof(DecLogEntry));
+      /* If this is the first record in the pass, set the new head record
+         to be this one, else get the last record to point to this one */
+      if (test_int == top_record)
+      {
+      	decrec_head = entry[test_int - top_record];
+      	entry[test_int - top_record]->next_record = NULL;
+      }
+      else
+        gopher->next_record = entry[test_int - top_record];
+
+      /* Create the temporary encoded record type */
+      temp_record = malloc(sizeof(EncLogEntry));
+
+      /* Grab the date from the log file */
+      fscanf(file_pointer, "%d", &date);
+      /* Now go through the rest of that particular line to grab the
+         log string (this is in encoded form) */
+      byte = fgetc(file_pointer); /* Get rid of the hard space */
+      byte = fgetc(file_pointer);
+      make_index = 0;
+      while (byte != '\n')
+      {
+        buffer[make_index] = byte;
+        make_index++;
+        byte = fgetc(file_pointer);
+      }
+      buffer[make_index] = '\0';
+
+      /* Shove the date/time integer into the temp record, then
+         decode it into the new record for a 'real' time */
+      temp_record->time = date;
+      decode_date_and_time(entry[test_int - top_record], temp_record);
+      free(temp_record);
+
+      /* Now decode the encoded log text into a readable entry */
+      tokencode_decode_new_entry(buffer, entry[test_int - top_record]->log_string);
+      entry[test_int - top_record]->next_record = NULL;
+      gopher = entry[test_int - top_record];
+
+      test_int++;
+    }
+  }
+  error = fclose(file_pointer);
+}
+
+/* Adds a record to the log file, updating it if it's a rolling log */
+void record_new_add(char *record_string)
+{
+  _kernel_oserror	*er;
+  _kernel_swi_regs	regs;
+  DecLogEntry		*new_entry;
+  EncLogEntry		*decode_entry;
+  FILE			*log_pointer, *new_pointer;
+  int			error = 0, error2 = 0, int_index, index, log_size_current;
+  int			time_int, non_open;
+  char			byte, read_string[256], name_buffer[256];
+  char			name_buffer2[256];
+
+  number_records++;
+
+
+  /* If the log file is non-length, make it a length with padded spaces */
+  if (strlen(record_string) == 0)
+  {
+    record_string[0] = ' ';
+    record_string[1] = '\0';
+  }
+
+  /* If we have a rolling log, we need to shuffle the first record out of
+     the log file and add the last one to the end. Otherwise, don't
+     worry about it */
+
+  decode_entry = malloc(sizeof(EncLogEntry));
+  time(&decode_entry->time);
+
+  dprintf(("", "number records:%d\n", record_limit));
+
+  non_open = FALSE;
+
+  /* Count the size of the logfile and decide if it's over our maximum permitted size */
+  strcpy(name_buffer, "RAM:$.LogDir.LogFile");
+  regs.r[0] = 23;
+  regs.r[1] = (int)name_buffer;
+  _kernel_swi(OS_File, &regs, &regs);
+  log_size_current = regs.r[4];
+
+  dprintf(("", "record_new_add : log file size check : %d\n", log_size_current));
+
+  /* If we're over the number of records we can use, delete the first one
+     in the file */
+  if ((log_type == Rolling) && ((log_size_current + sizeof(DecLogEntry)) > max_size))
+  {
+    /* First lets add it to the bottom of the log file */
+    if ((log_pointer = fopen("RAM:$.LogDir.LogFile", "r+")) == 0)
+    {
+        non_open = TRUE;
+	dprintf(("", "Oh dear, the logfile couldn't be re-opened!\n"));
+    }
+
+    if ((new_pointer = fopen("RAM:$.LogDir.UpdateFile", "w")) == 0)
+    {
+        non_open = TRUE;
+	dprintf(("", "Oh dear, the updating file won't open!\n"));
+    }
+
+    if (non_open == FALSE)
+    {
+      index = 0;
+      error = fscanf(log_pointer, "%c", &byte);
+      while (byte != '\n')
+        error = fscanf(log_pointer, "%c", &byte);
+
+      /* Now copy every line in the file into another file ...
+         think of a better way of doing it? No, nor me */
+      while ((error != EOF) && (error2 >= 0))
+      {
+        error = fscanf(log_pointer, "%d", &time_int);
+
+        if (error != EOF)
+        {
+          int_index = 0;
+          error = fscanf(log_pointer, "%c", &read_string[int_index]);
+          while ((read_string[int_index] != '\n') && (error != EOF))
+          {
+            int_index++;
+            error = fscanf(log_pointer, "%c", &read_string[int_index]);
+          }
+          read_string[int_index] = '\0';
+          /* Do we now need to print the space? NO, as it has already been
+             added when we originally added the record!!! */
+          error2 = fprintf(new_pointer, "%d%s\n", time_int, read_string);
+        }
+      }
+
+      /* We really want to try a memory dump here instead if it doesn't work */
+
+      /* If there isn't an error writing to the new file (and I'm thinking of a
+         full ramdisk here), then continue */
+      if (error2 >= 0)
+      {
+        /* First word is *always* the time structure - AND we add the space here, as it is a new record */
+        fprintf(new_pointer, "%d %s\n", decode_entry->time, record_string);
+        error = fclose(log_pointer);
+
+        /* First we add it to the record structure we already have */
+        new_entry = malloc(sizeof(DecLogEntry));
+        new_entry->next_record = NULL;
+
+        decode_date_and_time(new_entry, decode_entry);
+        tokencode_decode_new_entry(record_string, new_entry->log_string);
+        error2 = fclose(new_pointer);
+
+        number_records--;
+
+        /* Delete the old log file */
+        strcpy(name_buffer, "RAM:$.LogDir.LogFile");
+        regs.r[0] = 6;
+        regs.r[1] = (int)name_buffer;
+        _kernel_swi(OS_File, &regs, &regs);
+
+        /* Copy the new log file */
+        regs.r[0] = 26;
+        strcpy(name_buffer, "RAM:$.LogDir.UpdateFile");
+        regs.r[1] = (int)name_buffer;
+        strcpy(name_buffer2, "RAM:$.LogDir.LogFile");
+        regs.r[2] = (int)name_buffer2;
+        regs.r[3] = 1154;   /* Mask for copying */
+        _kernel_swi(OS_FSControl, &regs, &regs);
+      }
+      /* Else we had a write error and there's only one cure... deleting the entire
+         file */
+      else
+      {
+        strcpy(name_buffer, "RAM:$.LogDir.LogFile");
+        regs.r[0] = 6;
+        regs.r[1] = (int)name_buffer;
+        er = _kernel_swi(OS_File, &regs, &regs);
+        misc_error_check(er);
+
+        /* We'd better open a new logfile now, so it doesn't complain */
+        record_open_log();
+      }
+    }
+  }
+  /* Else just add the record */
+  else
+  {
+    /* Re-open the log, this time to append the new entry */
+    if ((log_pointer = fopen("RAM:$.LogDir.LogFile", "a+")) == 0)
+    {
+      non_open = TRUE;
+      dprintf(("", "Oh dear, the logfile couldn't be re-opened!\n"));
+    }
+
+    if (non_open == FALSE)
+    {
+      /* First we add it to the record structure we already have */
+      new_entry = malloc(sizeof(DecLogEntry));
+      new_entry->next_record = NULL;
+
+      /* First word is *always* the time structure */
+      if (new_entry != NULL)
+      {
+        decode_date_and_time(new_entry, decode_entry);
+        fprintf(log_pointer, "%d %s\n", decode_entry->time, record_string);
+        tokencode_decode_new_entry(record_string, new_entry->log_string);
+      }
+      error = fclose(log_pointer);
+    }
+  }
+}
+
+/* Destroys all the records currently in the linked list buffer, before deleting the
+   log file and reopening a new one */
+void record_destroyall(void)
+{
+  _kernel_oserror	*er;
+  _kernel_swi_regs	regs;
+  DecLogEntry		*gopher_bill, *gopher_ted;
+  char			name_buffer[256];
+
+  /* First get the head record */
+  gopher_bill = decrec_head;
+  gopher_ted  = gopher_bill->next_record;
+
+  purged = TRUE;
+
+  dprintf(("", "delete memory records\n"));
+
+  /* Now go through each record until we've free'd them all */
+  while (gopher_ted != NULL)
+  {
+    free(gopher_bill);
+    gopher_bill   = gopher_ted;
+    gopher_ted    = gopher_bill->next_record;
+  }
+
+  /* Finally set the head record to a NULL pointer */
+  decrec_head = NULL;
+  number_records = 0;
+
+  dprintf(("", "About to delete\n"));
+  /* And we want to delete all the entries from the RAM file -
+  	best way to do this? Delete that sucker! */
+  strcpy(name_buffer, "RAM:$.LogDir.LogFile");
+  regs.r[0] = 6;
+  regs.r[1] = (int)name_buffer;
+  er = _kernel_swi(OS_File, &regs, &regs);
+  misc_error_check(er);
+
+  /* And finally open a new log file */
+  record_open_log();
+
+  dprintf(("", "About to write the blank records to the screen\n"));
+
+  /* Rewrite the records to the screen, first resetting the top record */
+  top_record = 0;
+  write_multiple_records();
+
+  dprintf(("", "Get's back from writing the records\n"));
+}
+
+/* Prepares the log for printing and emailing for Daytona */
+void record_prep_log(char *path_name, int eop)
+{
+  /* Indicate we have preped another item */
+  preped_log += 1;
+
+  /* Now do a test to see if we have satisfied all the conditions for clearing
+     the log, and if we have, delete it */
+  if (purged == FALSE)
+  {
+    if ((email_purge == TRUE) && (print_purge == TRUE))
+    {
+      /* If we've preped both email and print then clear the log */
+      if (eop == 1)
+        record_copy_email(path_name);
+      else if (eop == 2)
+        record_decode_print(path_name);
+
+      if (preped_log == 2)
+      {
+        record_destroyall();
+        record_delete_complete();
+      }
+    }
+    else if (email_purge == TRUE)
+    {
+      /* If we only email, and it's been preped, delete the log */
+      if (preped_log == 1)
+      {
+        /* Copy the log file to the designated path to email too */
+        record_copy_email(path_name);
+        record_destroyall();
+  	record_delete_complete();
+      }
+    }
+    else if (print_purge == TRUE)
+    {
+      /* If we only print, and it's been preped, delete the log */
+      if (preped_log == 1)
+      {
+        record_decode_print(path_name);
+        record_destroyall();
+  	record_delete_complete();
+      }
+    }
+  }
+  /* Else if this is just a print */
+  else
+  {
+    record_decode_print(path_name);
+    record_delete_complete();
+  }
+}
+
+/* Sends a message to Daytona to say we're ready to email/print */
+void record_delete_complete(void)
+{
+  DayLog_SendLog	send_message;
+
+  /* Clear the log, reset the flags, open the main window, and send a message
+     to !Daytona saying all is ready */
+  preped_log = 0;
+
+  ui_open_window(3, OptLog_WindowHandle, "Title_6_3", "SK1_6_3", "SK2_6_3",
+    			"SK3_6_3", NULL, -1);
+
+  send_message.Hdr.size = sizeof(DayLog_SendLog);
+  send_message.Hdr.your_ref = 0;
+  send_message.Hdr.action_code = DayLog_SendMail;  /* This is an *email only* send */
+  send_message.data.send_methods = 0;
+  wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&send_message, 0, 0, NULL);
+}
+
+/* Copies the log file to a Daytona destination ready for email */
+void record_copy_email(char *path_name)
+{
+  _kernel_swi_regs	regs;
+  char			copy_name[255], new_name[255];
+
+  strcpy(copy_name, "RAM:$.LogDir.LogFile");
+  strcpy(new_name, path_name);
+  strcat(new_name, ".LogFile");
+  regs.r[0] = 26;
+  regs.r[1] = (int)copy_name;
+  regs.r[2] = (int)new_name;
+  regs.r[3] = 0;
+  _kernel_swi(OS_FSControl, &regs, &regs);
+
+  dprintf(("", "Copy complete\n"));
+}
+
+/* Creates a decoded log file ready for printing */
+void record_decode_print(char *path_name)
+{
+  FILE		*log_file, *print_file;
+  time_t        t_time;
+  struct tm     *time_struct;
+  EncLogEntry	*temp_record;
+  DecLogEntry	*dec_record;
+  char          border1[100], border2[100];
+  char		buffer[255], buffer2[512];
+  char          date_str[255], time_str[255];
+  char		byte;
+  int           year, loop;
+  int		date, error, index;
+
+  log_file = NULL;
+  print_file = NULL;
+
+
+  /* Right, so we open up a new file in the print path first */
+  /* Now create the file */
+  strcpy(buffer, path_name);
+  strcat(buffer, ".LogFile");
+
+
+  /* Open the file, if it doesn't open kick back and don't complete the operation */
+  if ((print_file = fopen(buffer, "w")) != 0)
+  {
+    if ((log_file = fopen("RAM:$.LogDir.LogFile", "r+")) != 0)
+    {
+      /* Get the time and date */
+      time(&t_time);
+      time_struct = localtime(&t_time);
+      year = time_struct->tm_year;
+      year += 1900;
+      sprintf(date_str, "%02d/%02d/%02d", (time_struct->tm_mon + 1), time_struct->tm_mday, year);
+      sprintf(time_str, "%02d:%02d:%02d", time_struct->tm_hour, time_struct->tm_min, time_struct->tm_sec);
+
+      sprintf(buffer2, "%s %s  %s %s", misc_lookup_message_token("Print_Title_1"), date_str,
+              misc_lookup_message_token("Print_Title_2"), time_str);
+
+      /* First print a title at the top of the page */
+      /* First things first, title border bar */
+      for (loop = 1; loop < 78; loop++)
+        border1[loop] = '-';
+      border1[0] = '+';
+      border1[78] = '+';
+      border1[79] = '\n';
+      border1[80] = '\0';
+
+      index = (65 - strlen(buffer2)) + 12;
+      strcpy(border2, "| Daytona Log");
+      border2[0] = '|';
+      for (loop = 13; loop < index; loop++)
+        border2[loop] = ' ';
+      border2[loop] = '\0';
+      strcat(border2, buffer2);
+      strcat(border2, " |\n");
+
+      fprintf(print_file, border1);
+      fprintf(print_file, border2);
+      fprintf(print_file, border1);
+      fprintf(print_file, "\nDate        Time      Event description\n\n");
+
+      dprintf(("", "%s\n%s\n%s", border1, border2, border1));
+
+      error = fscanf(log_file, "%d", &date);
+      while (error != EOF)
+      {
+        /* Right, now we grab each sucker from the logfile and decode it */
+        /* Now the string itself - God I hate C's lack of string handling... roll
+           on Java projects (Yay!) */
+        byte = fgetc(log_file); /* Gets rid of the space */
+        byte = fgetc(log_file);
+        index = 0;
+        while (byte != '\n')
+        {
+          buffer[index] = byte;
+          index++;
+          byte = fgetc(log_file);
+        }
+        buffer[index] = '\0';
+
+        /* Now that we have both a timestamp and an encoded string, lets decode it */
+        temp_record = malloc(sizeof(EncLogEntry));
+        dec_record  = malloc(sizeof(DecLogEntry));
+
+        dec_record->date[0] = '\0';
+        dec_record->time[0] = '\0';
+
+        temp_record->time = date;
+        decode_date_and_time(dec_record, temp_record);
+
+        tokencode_decode_new_entry(buffer, buffer2);
+
+        /* Now lets dump it to the logfile */
+        fprintf(print_file, "%s  %s  %s\n", dec_record->date, dec_record->time,
+        	buffer2);
+
+        /* Finally, free the two record areas ready to start again */
+        free(temp_record);
+        free(dec_record);
+
+        /* Timestamp */
+        error = fscanf(log_file, "%d", &date);
+      }
+    }
+  }
+  fclose(print_file);
+  fclose(log_file);
+}
+
+/* Debug purposes, dump out the contents of the linked list */
+void record_total_dump(void)
+{
+  DecLogEntry *gopher;
+
+  gopher = decrec_head;
+
+  while (gopher != NULL)
+  {
+  	dprintf(("", "Record text:%s\n", gopher->log_string));
+  	gopher = gopher->next_record;
+  }
+}
+
+
