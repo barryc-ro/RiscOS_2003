@@ -101,6 +101,9 @@
 ; ********************  See SrcFiler log file for changes since version 1.41.
 ;
 
+          GBLL    StrongARM
+StrongARM SETL    {TRUE}
+
         GET     Hdr:ListOpts
         OPT     OptNoList
         GET     Hdr:Macros
@@ -193,11 +196,21 @@ SpkrControl     SETL    IO_Type = "IOC-A1" :LOR: IO_Type = "IOC-A500" :LOR: IO_T
         GBLL    StorkPower
 StorkPower      SETL    True
 
-        GBLL    EnableIRQsIn16bit
-EnableIRQsIn16bit       SETL    True
+ [ StorkPower
+        GBLL    AdvancedPower   ;True - power on only whilst buffers hold 'non-quiet' data
+AdvancedPower   SETL    False   ;Switched off cos amps have nasty switch-on click
+ ]
 
+        GBLL    EnableIRQsIn16bit
+EnableIRQsIn16bit       SETL    False
+
+ [ EnableIRQsIn16bit
         GBLL    DisableFlybackIRQ
 DisableFlybackIRQ       SETL    True
+
+        GBLL    DisableHardDiscIRQ
+DisableHardDiscIRQ      SETL    True
+ ]
 
         GBLL    debug
 debug           SETL    False
@@ -258,8 +271,10 @@ ImagesC_N # 4   ; compacted (new) version of Images, for prog'ing SIR or conv. r
 ImagesC_H # 4   ; value which IRQ code will load into VIDC SIRs on next irq
 ImagesC_C # 4   ; softcopy of value currently programmed into VIDC
 SoundRMA  # 4   ; pointer to remaining data/dynamic code items held in RMA
+SoundGain # 1   ; value of additional gain (0..7) -> +0 .. 21dB in 3dB steps, for mu-law
+SoundGain_C # 1 ; value of additional gain as currently compiled into conv code
 
-; CURRENTLY ONE WORD SPARE (FOR VIDC20).
+; CURRENTLY 3(2?) BYTES SPARE (FOR VIDC20).
 
         ASSERT  @ <= SoundLevel0Reserved
 
@@ -268,6 +283,7 @@ SoundRMA  # 4   ; pointer to remaining data/dynamic code items held in RMA
 SCPeriod     * 48                       ; default, i.e. 20.8333 kHz
 SCBufferLen  * 208                      ; 208 bytes/channel (&D0: multiple of 16)
 SCLogChannel * 0                        ; default log2nchan = 0 -> 1 channel
+SCSoundGain  * 0                        ; default soundgain is 0
 
 ; Flags bits in NChannels/Flags byte: bottom 2 bits are log2nchan, next 2 bits are
 ; Lin16 flags, 1 bit for auto-oversampling flag, 1 bit for "oversampling active" flag,
@@ -349,6 +365,14 @@ Help_String
         DCB     "SoundDMA"
         DCB     9
         DCB     "$Version ($CurrentDate)"
+ [ Development
+        DCB     " Development"
+  [ EnableIRQsIn16bit
+        DCB     " IRQs enabled"
+  |
+        DCB     " IRQs disabled"
+  ]
+ ]
  [ VIDC_Type = "VIDC1"
         DCB     " A500 version"
  ]
@@ -397,6 +421,13 @@ Module_Keywords
         DCB     2, 0, 2, 0:OR:(International_Help:SHR:24)   ; all flags clear, two parameters ONLY
         DCD     Stereo_Syntax - Module_Base
         DCD     Stereo_Help   - Module_Base
+
+        DCB     "SoundGain", 0
+        ALIGN
+        DCD     SoundGain_Code   - Module_Base
+        DCB     1, 0, 1, 0:OR:(International_Help:SHR:24)
+        DCD     SoundGain_Syntax - Module_Base
+        DCD     SoundGain_Help   - Module_Base
 
         DCB     "SoundSystem", 0
         ALIGN
@@ -480,6 +511,7 @@ A500CodeSize    * A500CodeEnd - A500CodeStart
 ;         values in the range -3952..+3952.  See below
 ;         for more details on the format of entries.
 ;   r8  = 0xFF - mask for extraction of individual mu-law bytes
+;   r5  = 0x7FFF - constant used for limit operation if soundgain > 0
 ;
 ; during call:
 ;   r7  = 32-bit accumulator for right channel linear data
@@ -677,7 +709,7 @@ stereo_code
 
 ; 100% right: mirror of 100% left
 ; code for first channel
-        MOV     r7, r3, ASR #17
+        MOV     r7,     r3, ASR #17
         ADD     r7, r7, r3, ASR #16
         MOV     r6, #0                  ; initialise left acc to 0
 ; code for remaining channels
@@ -696,27 +728,70 @@ stereo_code
 ; proportion to the number of channels, so the code is the same except for
 ; the N in ASR #N which is 3,4,5,6 for 1,2,4,8 channels.
 
-; (8a): First the *11 code, the same for all configurations
-scale_mul
+; Version 1.52 onwards: supports *soundgain giving 0 to +21dB additional
+; gain, with 3dB increments, in mu-law to linear conversion.  This is
+; achieved by using a multiplier of *11 and a divisor of 64 (ASR #6) to give
+; 0dB for the 8-channel case, with reducing right shifts as channel count
+; decreases or gain is increased in 6dB steps.  For the +3dB steps, don't do
+; the mul by 11, but divide by 4 (ASR #2) for 8-channel case, to give
+; effectively a +3dB increment, and again reduce the right shift constant or
+; go to a left shift for reducing channel count or each extra +6dB gain.
+;
+
+; (8a): First the *11 code, the same for all configurations: this is inserted
+; only when soundgain is even (i.e. 0dB, 6dB, 12dB, 18dB)
+scale_mul_even
         ADD     r0, r6, r6, LSL #1      ; r6 * 3
         ADD     r6, r0, r6, LSL #3      ; + r6 * 8 = r6 * 11
         ADD     r0, r7, r7, LSL #1      ; r7 * 3
         ADD     r7, r0, r7, LSL #3      ; + r7 * 8 = r7 * 11
 
-; (8b): Then the /N code (N=8,16,32,64) which is 2 instructions; table indexed
-; by log2nchan.
-scale_div_TAB
-        MOV     r6, r6, ASR #3          ; 1 channel
-        MOV     r7, r7, ASR #3
+; (8b): gain scaling code, 2 instructions; table indexed by
+;       7+log2nchan-soundgain DIV 2-(soundgain MOD 2 * 4).
+scale_TAB                       ;       1ch     2ch     4ch     8ch
+                                ;----------------------------------
+        MOV     r6, r6, LSL #4  ;0      +21     -       -       -  GAIN (soundgain odd)
+        MOV     r7, r7, LSL #4  ;       -       -       -       -  GAIN (soundgain even)
 
-        MOV     r6, r6, ASR #4          ; 2 channels
-        MOV     r7, r7, ASR #4
+        MOV     r6, r6, LSL #3  ;1      +15     +21     -       -
+        MOV     r7, r7, LSL #3  ;       -       -       -       -
 
-        MOV     r6, r6, ASR #5          ; 4 channels
-        MOV     r7, r7, ASR #5
+        MOV     r6, r6, LSL #2  ;2      +9      +15     +21     -
+        MOV     r7, r7, LSL #2  ;       -       -       -       -
 
-        MOV     r6, r6, ASR #6          ; 8 channels
-        MOV     r7, r7, ASR #6
+        MOV     r6, r6, LSL #1  ;3      +3      +9      +15     +21
+        MOV     r7, r7, LSL #1  ;       -       -       -       -
+
+        DCD     0               ;4      -       +3      +9      +15
+        DCD     0               ;       +18     -       -       -
+
+        MOV     r6, r6, ASR #1  ;5      -       -       +3      +9
+        MOV     r7, r7, ASR #1  ;       +12     +18     -       -
+
+        MOV     r6, r6, ASR #2  ;6      -       -       -       +3
+        MOV     r7, r7, ASR #2  ;       +6      +12     +18     -
+
+        MOV     r6, r6, ASR #3  ;7      -       -       -       -
+        MOV     r7, r7, ASR #3  ;       +0      +6      +12     +18
+
+        MOV     r6, r6, ASR #4  ;8      -       -       -       -
+        MOV     r7, r7, ASR #4  ;       -       +0      +6      +12
+
+        MOV     r6, r6, ASR #5  ;9      -       -       -       -
+        MOV     r7, r7, ASR #5  ;       -       -       +0      +6
+
+        MOV     r6, r6, ASR #6  ;10      -       -       -       -
+        MOV     r7, r7, ASR #6  ;       -       -       -       +0
+
+; Instruction sequence (8c): do limiting (clipping) on output values:
+; only used if soundgain > 0.
+limit
+        MOV     r0, r6, ASR #31         ; get r6 sign bit throughout r0
+        CMP     r0, r6, ASR #15         ; check for overflow
+        EORNE   r6, r0, r5              ; if so, get &00007FFF or &FFFF8000 in r6
+        MOV     r0, r7, ASR #31         ; get r7 sign bit throughout r0
+        CMP     r0, r7, ASR #15         ; check for overflow
+        EORNE   r7, r0, r5              ; if so, get &00007FFF or &FFFF8000 in r7
 
 ; Instruction sequence (9): combine 2 x 16-bit values (sign-ext'd to
 ; 32-bits) from r6 and r7 into r6 ready for storing.  Same for all
@@ -744,9 +819,9 @@ loop_end
 ; Defined maximum size of the conversion code.  This is:
 ;       size of sequence(1;2;3;4)         = 4 * (       (2 + 2 + 1 + 1)
 ; + 8 * size of sequence(5;6;7(max-size))        +  8 * (1 + 1 + 3)
-; +     size of sequence(8a;8b;9;10;11)          +      (4 + 2 + 3 + 1 + 1))
+; +     size of sequence(8a;8b;8c;9;10;11)       +      (4 + 2 + 6 + 3 + 1 + 1))
 
-MAXLinConvCodeSize *  4 * ((2 + 2 + 1 + 1) + 8 * (1 + 1 + 3) + (4 + 2 + 3 + 1 + 1))
+MAXLinConvCodeSize *  4 * ((2 + 2 + 1 + 1) + 8 * (1 + 1 + 3) + (4 + 2 + 6 + 3 + 1 + 1))
 
 
 ; Compile: generate a conversion routine appropriate to current configuration and
@@ -756,7 +831,8 @@ MAXLinConvCodeSize *  4 * ((2 + 2 + 1 + 1) + 8 * (1 + 1 + 3) + (4 + 2 + 3 + 1 + 
 ; Parameters:
 ;   r0 = log2nchan, i.e. 0 -> 1 channel, 1 -> 2 chans, 2 -> 4 chans, 3 -> 8 chans
 ;   r1 = pointer to space for compiled routine, in module workspace
-;   r2 = compacted array of stereo position values, 3 bits each, 1-based.
+;   r2 = compacted array of stereo position values, 8x3 bits each (1-based)
+;        in bits 0..23, with soundgain (0..7) in top byte.
 
 compile
         STMFD   sp!, {r1,r3-r9,lr}      ; save r3-r9,pc', and code start address (r1) for later
@@ -778,6 +854,9 @@ compile
         ; (4): conditional branch back
         LDR     r4, zero_branch         ; get the instruction
         STMIA   r1!, {r4}               ; store it out
+
+        ; preserve soundgain value, for later (r2 gets shifted in next loop)
+        MOV     r7, r2, LSR #24         ;
 
         ; Now the per-channel code.  Get r9 as nchans, and use r8
         ; as loop variable from 0 to nchans-1.
@@ -813,15 +892,30 @@ compile
         CMP     r8, r9
         BLT     %BT10                   ; branch back if more channels to do
 
-        ; (8): scaling code, in two parts.
-        ; (8a): multiply by 11 (same for all) - 4 instructions
-        ADR     r3, scale_mul
-        LDMIA   r3!, {r4,r5,r6,r7}      ; NB. leaves r3 pointing at scale_div_TAB
-        STMIA   r1!, {r4,r5,r6,r7}
-        ; (8b): divide by 8/16/32/64, determined by log2nchan
-        ADD     r3, r3, r0, LSL #3      ; 8 bytes each
-        LDMIA   r3, {r4,r5}             ; get the 2 instructions
-        STMIA   r1!, {r4,r5}            ; store them
+        ; (8): scaling code, in three parts.
+        ; (8a): if soundgain is even, multiply by 11 (same for all modes) - 4 insts
+        ;       note: r7 holds soundgain value from above
+        TST     r7, #1
+        ADREQ   r2, scale_mul_even
+        LDMEQIA r2!, {r3,r4,r5,r6}
+        STMEQIA r1!, {r3,r4,r5,r6}
+
+        ; (8b): next perform scaling (shifting) as required, using
+        ;  scale_TAB[7+log2nchan-soundgain DIV 2-(soundgain MOD 2 * 4)]
+
+        ADR     r2, scale_TAB+7*2*4     ; address scale_TAB[7]
+        SUB     r6, r0, r7, LSR #1      ; compute (log2nchan - soundgain DIV 2)
+        SUBNE   r6, r6, #4              ; if soundgain odd, subtract 4 (c/c still valid)
+        ADD     r2, r2, r6, LSL #3      ; then scale for 2 instructions/entry
+        LDMIA   r2, {r4,r5}             ; get the 2 instructions
+        CMP     r4, #0                  ; if first instr is not 0 (for NOP)...
+        STMNEIA r1!, {r4,r5}            ; ...store them
+
+        ; (8c) perform limiting on sample values if required (i.e. soundgain > 0)
+        ADR     r2, limit
+        CMP     r7, #0
+        LDMNEIA r2,  {r3,r4,r5,r6,r7,r8}  ; 6 instructions (3/channel)
+        STMNEIA r1!, {r3,r4,r5,r6,r7,r8}  ; store them
 
         ; (9): combining two samples into 1 word - 3 fixed instructions
         ADR     r3, combine
@@ -837,6 +931,11 @@ compile
         ; (11): branch back to loop start code.  Need to compute offset here
         LDR     r4, loop_end            ; get the B . instruction (note: bits 23..3 are 1)
         LDMFD   sp!, {r0}               ; pop original code start (loop top)
+  [ StrongARM
+        STMFD   sp!,{r0-r2,lr}
+        BL      Sound0synccode          ;SynchroniseCodeAreas, r0=start addr, r1 = end addr (inclusive)
+        LDMFD   sp!,{r0-r2,lr}
+  ]
         SUB     r0, r1, r0              ; work out offset from there to . now
         SUB     r4, r4, r0, LSR #2      ; subtract offset (in words) to get instr
         STMIA   r1!, {r4}               ; store it out and we're done!
@@ -867,21 +966,21 @@ LinConvCode       #  MAXLinConvCodeSize ; Space for the dynamically-compiled mu-
  ]
 
  [ VIDC_Type = "VIDC1"
-A500Code          #  A500CodeSize              ; Code goes here in RMA
+A500Code          #  A500CodeSize       ; Code goes here in RMA
  ]
 
  [ StorkPower
 portable_present  # 4                   ;  = 0 if we don't think the Portable module is present
                                         ;  = 1 if we do
 power_state       # 4                   ;
-
-PowerControl    #    4                  ;0..PowerContThres2 number of consecutive quiet buffers
-PowerContThres1 *    2                  ;When PowerControl is >=2, both current & next buffers
+  [ AdvancedPower
+PowerControl      # 4                   ;0..PowerContThres2 number of consecutive quiet buffers
+PowerContThres1   * 2                   ;When PowerControl is >=2, both current & next buffers
                                         ; are quiet so allow amplifier to be powered down
                                         ; ie don't reject ServicePortable_PowerDown.
-PowerContThres2 *    100                ;Threshold at which the interrupt routine powers down
+PowerContThres2   * 100                 ;Threshold at which the interrupt routine powers down
                                         ; the amplifier
-
+  ]
 SoundPowerBits  * PortableControl_SoundEnable
  ]
 
@@ -1158,6 +1257,29 @@ skip_spaces
         SUB     r0, r0, #1
         EXIT
 
+
+; .............................................................................
+
+SoundGain_Code  ALTENTRY
+
+        LDR     r12, [r12]              ; Get workspace pointer
+
+        MOV     r1, r0
+        MOV     r0, #10 + (2_100 :SHL: 29) ; Fault bad terminators
+        SWI     XOS_ReadUnsigned        ; complain if not a number or bad term
+        BVS     Bad_Parameter_Error
+        CMP     r2, #7                  ; if >7, complain about range
+        BHI     SoundGain_Error
+        LDR     r1, =SoundLevel0Base
+        STRB    r2, [r1, #SoundGain]   ; else store out for compilation on next irq
+        EXIT
+
+SoundGain_Error
+        ADR     r0, ErrorBlock_BadSoundGain
+        B       ReturnError
+
+        MakeInternatErrorBlock BadSoundGain,,M03
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
         SUBT    Sound DMA Module Data Structure and Constants
@@ -1392,7 +1514,7 @@ WorkOutVIDCParams ROUT
 
         Debug   swi,"16bit output"
 
-        Push    "r4,r5,r6"
+        Push    "r4,r5,r6,r7,r8"
         MOV     r0, r0, LSR #Lin16Shift ; reduce mode to 1..3 range (0 accounted for above)
         ADRL    r1, mtab-1              ; address map table (0th entry)
         LDRB    r0, [r1, r0]            ; pick up map offset for mode
@@ -1403,15 +1525,34 @@ WorkOutVIDCParams ROUT
 22      LDRB    r6, [r0, lr]            ; get index into main freq table
         ADD     r1, r4, r6, LSL #3      ; address entry in table
         LDRB    r3, [r1, #4]            ; pick up nominal period
-        CMP     r3, r2                  ; check against required period
+
+        SUBS    r7, r3, r2              ; place (entry - freq) in r7 
         BEQ     %FT26                   ; if =, go do it
-        BGT     %FT24                   ; if period too large (f too low), try next one.
-                                        ; period lower than req (f higher): use lower one
-        CMP     lr, #1                  ; but if on first, we're stuck with it
-        SUBGT   lr, lr, #1              ; address previous entry if needed
-        LDRGTB  r6, [r0, lr]
-        ADDGT   r1, r4, r6, LSL #3
-        B       %FT26                   ; go accept it (we must)
+        BPL     %FT24                   ; else if freq > entry, then look at next entry 
+
+                                        ; here, freq < entry, so test for closest match ie
+
+                                        ;      (last_entry > freq < this_entry)
+
+        CMP     lr, #1                  ; accept if at start of table
+        BEQ     %FT26     
+        SUB     lr, lr, #1              ; otherwise back up to previous entry
+        LDRB    r6, [r0, lr]            ; get index into main freq table
+        ADD     r1, r4, r6, LSL #3      ; address entry in table
+        LDRB    r3, [r1, #4]            ; pick up nominal period
+
+        SUB     r8, r2, r3              ; place (freq - entry) in r8
+
+        CMP     r7, r8                  ; if r7 > r8 then we have best match
+        BGT     %FT26                   ; so accept the current entry
+
+        ADD     lr, lr, #1              ; otherwise go back up to next entry
+        LDRB    r6, [r0, lr]            ; get index into main freq table
+        ADD     r1, r4, r6, LSL #3      ; address entry in table
+        LDRB    r3, [r1, #4]            ; pick up nominal period
+        B       %FT26                   ; and accept it
+
+
 24      CMP     lr, r5                  ; if at end of list, accept this one
         BEQ     %FT26
         ADD     lr, lr, #1
@@ -1421,7 +1562,7 @@ WorkOutVIDCParams ROUT
         LDRB    r3, [r1, #5]            ; pick up unadjusted SFR value
         LDR     r0, [r1, #0]            ; get frequency value
         LDRB    r1, [r1, #6]            ; and SCR value
-        Pull    "r4,r5,r6"
+        Pull    "r4,r5,r6,r7,r8"
         ; and drop into final code
 
 ; Store computed values and exit:
@@ -1587,10 +1728,14 @@ Sound0Enable ENTRY "r1"
         STR     r14, [r10, #Semaphore]
 
  [ StorkPower
+  [ AdvancedPower
         LDR     r0, [r10, #SoundRMA]
         LDR     r0, [r0, #PowerControl]
         CMP     r0, #PowerContThres1    ; if both buffers are silent, no need to power up the amplifiers
         BLLT    SetPower_On             ; but if not... power up now (corrupts R0)
+  |
+        BL      SetPower_On             ; Power up now (corrupts R0)
+  ]
  ]
 
  [ MEMC_Type = "IOMD"
@@ -2133,15 +2278,12 @@ Initialise_Module ENTRY "r7, r8, r10, r11"
         STR     r0, [r2, #CurSRValue]   ;
  ]
  [ StorkPower
+  [ AdvancedPower
         MOV     r0, #0                          ; indicate amplifier power should be on
         STR     r0, [r2, #PowerControl]
-  [ 1 = 1
         BL      GetPower                        ;
   |
-        MOV     r0, #1                          ; pretend portable module present
-        STR     r0, [r2, #portable_present]     ; at least until we know better
-        MOV     r0, #0
-        STR     r0, [r2, #power_state]          ; show power_state as OFF, to force
+        BL      GetPower                        ;
         BL      SetPower_On                     ; SetPower_On to call XPortable_Control (corrupts R0)
   ]
  ]
@@ -2225,10 +2367,14 @@ Initialise_Module ENTRY "r7, r8, r10, r11"
         AND     r0, r0, #3              ; get log2nchan alone into r0
         LDR     r1, [r10, #SoundRMA]
         ADD     r1, r1, #LinConvCode    ; get address to put code
+        MOV     r2, #SCSoundGain        ; set up default soundgain value
+        STRB    r2, [r10, #SoundGain]
+        STRB    r2, [r10, #SoundGain_C]
         LDR     r2, [r10, #ImagesC_H]   ; address stereo position set
         STR     r2, [r10, #ImagesC_C]   ; mark as current set
         STRB    r0, [r10, #Log2nchan_C] ; do same for log2nchan
-        BL      compile                 ; go call compiler to set it up
+        ORR     r2, r2, #SCSoundGain :SHL: 24 ; combine default soundgain into r2
+        BL      compile                 ; go call compiler to set it all up
         LDR     r1, [r10, #Phys0]       ; reload physical buffer address to r1
         ; set up NSR
         LDR     r7, [r10, #SoundRMA]
@@ -2396,14 +2542,20 @@ ModeChangeCode
         Pull    "r0,r10,r11,pc",EQ,^            ; no then just pass on the service
 
         LDR     r0, [r10, #Semaphore]           ;Its OK to power down if sound IRQ's are off or
-        TST     r0, #&80000000                  ;  sound is quiet
+        TST     r0, #&80000000                  ; sound is quiet
         BNE     %FT32                           ;NE, sound system off
+  [ AdvancedPower
         LDR     r0, [r11, #PowerControl]
         CMP     r0, #PowerContThres1
         BGE     %FT32                           ;GE, playing, but quietly
 ;
 ; Sound system on AND making a noise, so prevent powerdown
 ;
+  |
+;
+; Sound system on, so prevent powerdown
+;
+  ]
         BICS    r3, r3, #SoundPowerBits         ; by clearing the sound bits
         MOVEQ   r1, #0                          ; and if there are no more bits being turned off
         Pull    "r0,r10,r11,pc",,^              ; then claim service to save time
@@ -2731,6 +2883,12 @@ Module_VectorCode ROUT
         STRNEB  r0, [r14, #Log2nchan_C] ; and also update log2nchan
 
  [ VIDC_Type = "VIDC20"
+        LDRB    r1, [r14, #SoundGain_C] ; get current value of mu-law->linear conv gain
+        LDRB    r2, [r14, #SoundGain]   ; get last-set value
+        CMP     r2, r1                  ; check if different, and if so mark fact...
+        ORRNE   r6, r6, #1 :SHL: 31     ; ..by setting sign bit in r6
+        STRNEB  r2, [r14, #SoundGain_C] ; and also update recorded value
+
         ; Handle 16-bit mode conversion routine re-compile if needed.  NB we
         ; change the compiled code directly on THIS interrupt, rather than
         ; with a one-buffer delay as is applied when updating the hardware.
@@ -2752,15 +2910,18 @@ Module_VectorCode ROUT
 
         ; No change in stereo, but check whether number of active channels has
         ; changed, => recompile needed.  This was tested above, and marked in bit
-        ; 31 of r6, so it's easy to re-check.
+        ; 31 of r6, so it's easy to re-check.  This bit may alternatively/also
+        ; indicate change of soundgain value, with same consequence.
         TST     r6, #1 :SHL: 31
-        BEQ     %FT65                   ; no re-compilation needed if bit 13 clear
+        BEQ     %FT65                   ; no re-compilation needed if bit 31 clear
 
-55      ; Compile for updated configuration/stereo position.
+55      ; Compile for updated configuration/stereo position/soundgain value.
         STR     r2, [r14, #ImagesC_C]   ; record req'd ImagesC value as current
+        LDRB    r1, [r14, #SoundGain_C] ; pick up newest soundgain value
+        ORR     r2, r2, r1, LSL #24     ; and combine into r2
         LDR     r1, [r14, #SoundRMA]    ; address code buffer in SoundRMA workspace
         ADD     r1, r1, #LinConvCode    ; ...
-        BL      compile                 ; go compile it
+        BL      compile                 ; go compile it (R0 = log2nchan)
         LDR     r14, =SoundLevel0Base   ; (reset local vars pointer after BL)
         B       %FT65                   ; skip hardware SIR programming
  ]
@@ -2987,11 +3148,13 @@ Module_VectorCode ROUT
         MOVEQ   lr, pc                  ; Call Level1: don't change mode, flags
         LDREQ   pc, [r9, #SoundLevel1FillPtr]
  [ StorkPower
+  [ AdvancedPower
         LDR     r9, =SoundLevel0Base    ; Workspace pointer
         LDR     r9, [r9, #SoundRMA]     ; Address fixup code via RMA pointer
         LDR     r0, [r9, #portable_present]
         CMP     r0, #0
         BLNE    StorkCode
+  ]
  ]
         B       %FT99                   ; all finished with this buffer
 
@@ -3011,8 +3174,18 @@ Module_VectorCode ROUT
         ; (== stiff machine if Timer0 IRQ goes off while VSync IRQ is disabled).
         ;
         LDRB    lr, [r0, #IOCIRQMSKA]           ; Assume IOC base = IOMD base.
+        Push    lr
         BIC     lr, lr, #vsync_bit + timer0_bit
         STRB    lr, [r0, #IOCIRQMSKA]
+  ]
+
+  [ DisableHardDiscIRQ
+        ; Disable IDE interrupt too. Replay doesn't like this being enabled either.
+        ;
+        LDRB    lr, [r0, #IOCIRQMSKB]
+        Push    lr
+        BIC     lr, lr, #IOMD_HardDisc_IRQ_bit
+        STRB    lr, [r0, #IOCIRQMSKB]
   ]
 
         TEQP    pc, #SVC_mode           ; Into SVC mode, enable IRQs.
@@ -3077,13 +3250,14 @@ Module_VectorCode ROUT
  ]
 
  [ StorkPower
+  [ AdvancedPower
         LDR     r9, =SoundLevel0Base    ; Workspace pointer
         LDR     r9, [r9, #SoundRMA]     ; Address fixup code via RMA pointer
         LDR     r0, [r9, #portable_present]
         CMP     r0, #0
         BLNE    StorkCode
+  ]
  ]
-
         LDMFD   sp, {r4,r6,r10,r12}    ; restore saved values. NB leave on stack: no `!'
 
         ; Convert mu-law to 16-bit linear data.
@@ -3092,14 +3266,16 @@ Module_VectorCode ROUT
         ;       logical buffer start in r12
         ; want: r10 and r12 as they are,
         ;       r11 = physical buffer start or end, according to logical buffer size
-        ;       r8 = &FF for byte masking in conversion routine
         ;       r9 = address of 256-entry mu-law to 16-bit conversion table
+        ;       r8 = &FF for byte masking in conversion routine
+        ;       r5 = &7FFF for overflow test
 
         TST     r6, #2 :SHL: 24         ; 4 or 8 channels in use?
         MOVNE   r11, r12                ; write 16-bit data forwards from start if so
         ADDEQ   r11, r12, r4            ; else write 16-bit data backwards from phys buff end
         ADRL    r9, convtable           ; address conversion table for routine to use
         MOV     r8, #&FF                ; set up byte mask used in routine
+        ORR     r5, r8, #&7F00          ; and also mask for limit check
         LDR     r0, =SoundLevel0Base    ; address our local data
         LDR     r0, [r0, #SoundRMA]     ; go get RMA space address
         MOV     r7, #&70000003          ; put impossible 16-bit output value in r7
@@ -3198,10 +3374,20 @@ Module_VectorCode ROUT
         LDRB    lr, [r0, #IOMD_DMAMSK]
         ORR     lr, lr, #IOMD_DMA_SD0
         STRB    lr, [r0, #IOMD_DMAMSK]
+   [ DisableHardDiscIRQ
+        Pull    lr
+        TST     lr, #IOMD_HardDisc_IRQ_bit
+        LDRNEB  lr, [r0, #IOCIRQMSKB]
+        ORRNE   lr, lr, #IOMD_HardDisc_IRQ_bit
+        STRNEB  lr, [r0, #IOCIRQMSKB]
+   ]
    [ DisableFlybackIRQ
-        LDRB    lr, [r0, #IOCIRQMSKA]
-        ORR     lr, lr, #vsync_bit + timer0_bit
-        STRB    lr, [r0, #IOCIRQMSKA]
+        Pull    lr
+        ANDS    lr, lr, #vsync_bit + timer0_bit
+        LDRNEB  r1, [r0, #IOCIRQMSKA]
+        BICNE   r1, r1, #vsync_bit + timer0_bit
+        ORRNE   r1, r1, lr
+        STRNEB  r1, [r0, #IOCIRQMSKA]
    ]
   ]
  ]
@@ -3346,6 +3532,7 @@ SetPower ENTRY "r1,r10,r11"
  ]
 
  [ StorkPower
+  [ AdvancedPower
         ; Check the buffer for being all 0.
 ;
 ; Scan the buffer just filled, to see if it is silent (all zeroes) or noisy (non-zero).
@@ -3390,17 +3577,13 @@ SetPower_
         TEQ     r0, r9
         Pull    "PC",EQ,^
 
-
        ;SVCMode r3
         MOV     r3, pc
         TEQP    pc, #SVC_mode + I_bit
         NOP
 
         Push    "LR"                            ;save SVC_LR
-;;;        MOV     r1, #:NOT:SoundPowerBits
-;;;        SWI     XPortable_Control
         BL      SetPower
-
         Pull    "LR"                            ;restore SVC_LR
 
        ;SetPSR  r3
@@ -3410,7 +3593,10 @@ SetPower_
         Pull    "PC",,^
 StorkCodeEnd
 StorkCodeSize * StorkCodeEnd - StorkCodeStart
+  ]
  ]
+
+    GET s.Sound0_SA
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
