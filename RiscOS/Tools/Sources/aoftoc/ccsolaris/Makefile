@@ -33,4 +33,4 @@ links:
 
 install: ${COMPONENT}
 	cp -p ${COMPONENT} ${RISCOS_BUILD_TOOLS}
-	@echo "Installed $COMPONENT}"
+	@echo "Installed ${COMPONENT}"

@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "aof.h"
+#include "bytesex.h"
 #include "chunkfls.h"
 
 #include "VersionNum"
@@ -28,6 +29,7 @@
 #define HEADER_HEADER	"/* > %s.h -- generated header */\n"
 #define HEADER_FOOTER	"/* eof %s.h -- generated header */\n"
 
+#define hv(v)     bytesex_hostval(v)
 
 static void *load_chunk(ChunkFile *cfp, cf_header *header, char *name)
 {
@@ -47,7 +49,7 @@ static void *load_chunk(ChunkFile *cfp, cf_header *header, char *name)
         return 0;
     }
 
-    size = (int)header->cf_chunks[index].cfe_size;
+    size = cf_entrysize(header, index);
     if ((chunk = malloc((int)size)) == NULL)
     {
         fprintf(stderr, "Out of memory for chunk %d\n", index);
@@ -74,18 +76,18 @@ static void dump_area(FILE *f_data, FILE *f_header, const aof_header *aof, int n
     /* skip to area start */
     area = aof->aof_areas;
     for (i = 0; i < n; i++, area++)
-        areas += area->area_size/4 + area->area_nrelocs*sizeof(aof_reloc);
+        areas += hv(area->area_size)/4 + hv(area->area_nrelocs) * sizeof(aof_reloc);
 
     /* write out data */
-    fprintf(f_data, "/* area %d %s */\n", n, strings + aof->aof_areas[n].area_name);
+    fprintf(f_data, "/* area %d %s */\n", n, strings + hv(aof->aof_areas[n].area_name) );
     fprintf(f_data, "unsigned int %s_area_%d_[] =\n{\n", name, n);
 
-    nwords = area->area_size/4;
+    nwords = hv(area->area_size) /4;
     for (i = 0; i < nwords; i++)
     {
         if (i != 0)
             fputc(',', f_data);
-        fprintf(f_data, "0x%08x", areas[i]);
+        fprintf(f_data, "0x%08x", hv(areas[i]));
         if ((i % 16) == 15)
             fputc('\n', f_data);
     }
@@ -94,27 +96,28 @@ static void dump_area(FILE *f_data, FILE *f_header, const aof_header *aof, int n
     /* write out relocation function */
     fprintf(f_data, "static void %s_area_%d_relocate(void)\n{\n", name, n);
     reloc = (aof_reloc *)&areas[nwords];
-    for (i = 0; i < area->area_nrelocs; i++, reloc++)
+    for (i = 0; i < hv(area->area_nrelocs); i++, reloc++)
     {
-        int type2 = rel_type2(reloc->rel_flags);
+	int rel_flags = hv(reloc->rel_flags);
+        int type2 = rel_type2(rel_flags);
 
         /* if it is an additive relocation*/
-        if (!(type2 ? rel2_R(reloc->rel_flags) : rel1_R(reloc->rel_flags)))
+        if (!(type2 ? rel2_R(rel_flags) : rel1_R(rel_flags)))
         {
-            if (type2 ? rel2_A(reloc->rel_flags) : rel1_A(reloc->rel_flags))
+            if (type2 ? rel2_A(rel_flags) : rel1_A(rel_flags))
             {
                 /* relative to symbol */
                 /*fprintf(stderr, "relocate: symbol %d\n", type2 ? rel2_sid(reloc->rel_flags) : rel1_sid(reloc->rel_flags));*/
 
-                fprintf(f_data, " %s_area_%d_[%ld] += %d;\n", name, n, reloc->rel_offset/4, 0 /* sym_value */);
+                fprintf(f_data, " %s_area_%d_[%ld] += %d;\n", name, n, hv(reloc->rel_offset) / 4, 0 /* sym_value */);
             }
             else
             {
                 /* relative to area */
-                int reloc_area = type2 ? rel2_sid(reloc->rel_flags) : n;
+                int reloc_area = type2 ? rel2_sid(rel_flags) : n;
                 /*fprintf(stderr, "relocate: area %d\n", reloc_area);*/
 
-                fprintf(f_data, " %s_area_%d_[%ld] += (int)%s_area_%d_;\n", name, n, reloc->rel_offset/4, name, reloc_area);
+                fprintf(f_data, " %s_area_%d_[%ld] += (int)%s_area_%d_;\n", name, n, hv(reloc->rel_offset) / 4, name, reloc_area);
             }
         }
     }
@@ -126,9 +129,10 @@ static void dump_area(FILE *f_data, FILE *f_header, const aof_header *aof, int n
 static int lookup_area(const aof_header *aof, const char *strings, const char *name)
 {
     int area;
+    int nareas = hv(aof->aof_nareas);
 
-    for (area = 0; area < aof->aof_nareas; area++)
-        if (strcmp(strings + aof->aof_areas[area].area_name, name) == 0)
+    for (area = 0; area < nareas; area++)
+        if (strcmp(strings + hv(aof->aof_areas[area].area_name), name) == 0)
             return area;
     return -1;
 }
@@ -161,7 +165,7 @@ static int process(FILE *in, FILE *f_data, FILE *f_header, const char *name)
     aof_symbol *symbol;
     int sym, area;
 
-    /* do file header */
+    /* do file header, this also sets up endianness */
     cfp = cf_open(in, &cf);
     if (!cfp)
     {
@@ -204,23 +208,24 @@ static int process(FILE *in, FILE *f_data, FILE *f_header, const char *name)
 
     fprintf(f_header, HEADER_HEADER, name);
 
-    for (area = 0; area < aof->aof_nareas; area++)
+    for (area = 0; area < hv(aof->aof_nareas); area++)
         dump_area(f_data, f_header, aof, area, areas, strings, name);
 
     fprintf(f_header, "extern void %s_area_relocate(void);\n", name);
 
     symbol = syms;
-    for (sym = 0; sym < aof->aof_nsyms; sym++, symbol++)
+    for (sym = 0; sym < hv(aof->aof_nsyms); sym++, symbol++)
     {
-        if ((symbol->sym_AT & SYM_REFDEFMASK) == SYM_GLOBALDEFAT &&
-            (symbol->sym_AT & SYM_ABSAT) == 0)
+	int sym_AT = hv(symbol->sym_AT);
+        if ((sym_AT & SYM_REFDEFMASK) == SYM_GLOBALDEFAT &&
+            (sym_AT & SYM_ABSAT) == 0)
         {
 	    char symname2[256];
-            const char *symname = strings + symbol->sym_name;
-            int32 value = symbol->sym_value;
+            const char *symname = strings + hv(symbol->sym_name);
+            int32 value = hv(symbol->sym_value);
 
             /* get the area index for this symbol */
-            area = lookup_area(aof, strings, strings + symbol->sym_areaname);
+            area = lookup_area(aof, strings, strings + hv(symbol->sym_areaname));
 
 	    make_identifier_safe(symname2, sizeof(symname2), symname);
 	    
@@ -229,7 +234,7 @@ static int process(FILE *in, FILE *f_data, FILE *f_header, const char *name)
     }
 
     fprintf(f_data, "void %s_area_relocate(void) {\n", name);
-    for (area = 0; area < aof->aof_nareas; area++)
+    for (area = 0; area < hv(aof->aof_nareas); area++)
         fprintf(f_data, " %s_area_%d_relocate();\n", name, area);
     fprintf(f_data, "}\n");
 
