@@ -77,13 +77,3 @@ ${APPLICATION}: ${OBJS} ${SERIALLIB}
 
 #
 # Dynamic dependencies:
-o.console:	c.console
-o.console:	C:h.kernel
-o.console:	C:h.swis
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	h.constants
-o.main:	C:h.serial
-o.main:	C:h.serial_ven
-o.main:	h.console
