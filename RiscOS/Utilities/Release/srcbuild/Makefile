@@ -58,7 +58,8 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 install: ${TARGET}
-	${CP} ${TARGET} ${INSTDIR}.Library.Build.${COMPONENT} ${CPFLAGS}
+	${MKDIR} ${INSTDIR}
+	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 ${DIRS}:

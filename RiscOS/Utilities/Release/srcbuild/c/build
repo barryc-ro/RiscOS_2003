@@ -41,6 +41,19 @@
 #include "parse.h"
 #include "riscos.h"
 
+/* Some bits for command line options which set environment variables */
+#define ENVVAR_BUF_LEN 32
+#define LOCALE_STR     "Locale"
+#define LOCALE_TMP     "Locale$tmp"
+#define USERIF_STR     "UserIF"
+#define USERIF_TMP     "UserIF$tmp"
+#define MACHINE_STR    "Machine"
+#define MACHINE_TMP    "Machine$tmp"
+#define ASCII_LowerCase(c) if ((c >= 'A') && ('Z' >= c)) c += 'a' - 'A'
+#define ASCII_UpperCase(c) if ((c >= 'a') && ('z' >= c)) c -= 'a' - 'A'
+static void override_envvar(const char *, const char *, const char *);
+void copy_env(const char *, const char *);
+
 /* The base address of a ROM image */
 unsigned long rom_base_address = 0x03800000ul;
 
@@ -115,8 +128,18 @@ amu_machinef(char *format, ...)
     /* Free the temporary buffer */
     free (full_format);
 
+    /* Allow command line options to override certain environment variables */
+    override_envvar(buffer, LOCALE_STR,  LOCALE_TMP);
+    override_envvar(buffer, USERIF_STR,  USERIF_TMP);
+    override_envvar(buffer, MACHINE_STR, MACHINE_TMP);
+
     /* Call the command */
     ret = sb_system(buffer);
+
+    /* Restore the environment variables to their defaults (as set in the Env file) */
+    copy_env(LOCALE_STR,  LOCALE_TMP);
+    copy_env(USERIF_STR,  USERIF_TMP);
+    copy_env(MACHINE_STR, MACHINE_TMP);
   }
   else
   {
@@ -1562,7 +1585,7 @@ static int joiner_format_romlinker(FILE * fh)
   fprintf(fh, "-imagename\n%s\n-imagesize\n%lu\n", buffer, image_size_num);
 
   for (i = 0; i < join_db_hwm; ++i) {
-    fprintf(fh, "-%s\n%s\n", 
+    fprintf(fh, "-%s\n%s\n",
       (const char *)hash_key(join_db, join_entries[i]), (const char *) hash_value(join_db, join_entries[i]));
   }
 
@@ -1897,4 +1920,183 @@ build_install(void)
   sb_system_sync();
 
   return 0;
+}
+
+
+/************************************************************
+ *
+ * FUNC: strcasecmp()
+ *
+ * IN:  const char*   - pointer to first string
+ *      const char*   - pointer to second string
+ *
+ * OUT: unsigned int  - zero = strings matched, else didn't match
+ *
+ * USE:
+ *
+ *   Compare two ASCII strings, irrespective of case. Will return zero if they
+ *   match and non-zero if they do not.
+ */
+unsigned int strcasecmp(const char *xs, const char *ys)
+{
+  unsigned char xc;
+  unsigned char yc;
+
+  if (*ys == '\0') return(0);
+  do
+  {
+    xc = *xs++;
+    yc = *ys++;
+    ASCII_LowerCase(xc);
+    ASCII_LowerCase(yc);
+    if (xc != yc) return(1);
+  } while (*ys != '\0');
+
+  return (0);
+}
+/************************************************************
+ *
+ * FUNC: strstr_ci()
+ *
+ * IN:   const char*  - pointer to string to search in
+ *       const char*  - pointer to substring to search for
+ *
+ * OUT:  char*        - pointer to first matched substring (NULL if not found)
+ *
+ * USE:
+ *
+ *   Look for a substring within an ASCII string, irrespective of case. Will
+ *   return a pointer to the start of the first matching substring or NULL if
+ *   no matches were found.
+ */
+const char *strstr_ci(const char *source, const char *substr)
+{
+  unsigned int len = strlen(source);
+
+  do
+  {
+    if (strcasecmp(source, substr) == 0) return(source);
+    source++;
+  } while (len--);
+
+  return(0);
+}
+
+
+/************************************************************
+ *
+ * FUNC: last_strstr_ci()
+ *
+ * IN:   const char*  - pointer to string to search in
+ *       const char*  - pointer to substring to search for
+ *
+ * OUT:  char*        - pointer to last matched substring (NULL if not found)
+ *
+ * USE:
+ *
+ *   Look for a substring within an ASCII string, irrespective of case. Will
+ *   return a pointer to the start of the last matching substring or NULL if
+ *   no matches were found.
+ */
+const char *last_strstr_ci(const char *source, const char *substr)
+{
+  const char *sub = NULL;
+  const char *nxt = strstr_ci(source, substr);
+
+  while (nxt)
+  {
+    sub = nxt++;
+    nxt = strstr_ci(nxt, substr);
+  }
+
+  return(sub);
+}
+
+
+/************************************************************
+ *
+ * FUNC: copy_env()
+ *
+ * IN:   const char *  - pointer to environment variable to write
+ *       const char *  - pointer to environment variable to read
+ *
+ * OUT:  None.
+ *
+ * USE:
+ *
+ *   Set an environment variable to contain a copy of the contents of another.
+ *   This will create the variable to write if it does not already exist. It
+ *   will not do anything if the variable to read does not exist.
+ */
+void copy_env(const char *env_wr, const char *env_rd)
+{
+  const char *val = sb_getenv(env_rd);
+
+  if (val) sb_setenv(env_wr, val);
+}
+
+
+/************************************************************
+ *
+ * FUNC: override_envvar()
+ *
+ * IN:   const char*  - options string passed to amu_machine
+ *       const char*  - option/variable to look for (i.e. "Locale", "UserIF", "Machine")
+ *       const char*  - temporary variable to copy variable into (i.e. "Locale$tmp")
+ *
+ * OUT:  None.
+ *
+ * USE:
+ *
+ *   Various options are traditionally set in environment variables, which a
+ *   component can then use in its Makefile. These variables usually have an
+ *   associated parameter which can be passed as an option to amu. This routine
+ *   will ensure that the environment variables reflect the value of any option
+ *   (taking the last instance if it is multiply defined).
+ *
+ *   For example, with a command line of:
+ *
+ *     "amu_machine install Locale=UK INSTDIR=<Install$Dir> Locale=Taiwan"
+ *
+ *   and the variable to scan for is "Locale", the assignment we find will be
+ *   "Locale=Taiwan". Thus, we set "Locale$tmp" to "<Locale>" and then set
+ *   "Locale" to "Taiwan".
+ */
+void override_envvar(const char *source, const char *var, const char *tmpvar)
+{
+  char buffer[ENVVAR_BUF_LEN];
+  const char *end;
+  const char *sub = last_strstr_ci(source, var);
+  unsigned int len;
+
+  /* Copy the value of the specified variable into its tmp partner */
+  copy_env(tmpvar, var);
+
+  /* If we didn't find this var in the options list, simply exit */
+  if (sub == 0) return;
+
+  /* If the match doesn't start with a space, discard it */
+  if (*(sub - 1) != ' ') return;
+
+  /* Given the last 'var=val' assignment in the options list for
+   * the variable specified to this function, look for what value
+   * it is to be set to */
+  sub += strlen(var);
+
+  /* Exit if the assignment is missing the '=' sign */
+  if (*sub++ != '=') return;
+
+  /* Find the end of the  */
+  len = strlen(sub);
+  end = strchr(sub, ' ');
+  if (end != NULL) len = (end - sub);
+
+  /* If the 'var=' assignment is empty, exit */
+  if (len == 0) return;
+
+  /* Set the specified variable to the assigned value */
+  assert(ENVVAR_BUF_LEN >= len);
+  strncpy(buffer, sub, len);
+  *(buffer+len) = '\0';
+  sb_setenv(var, buffer);
 }
