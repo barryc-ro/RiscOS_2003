@@ -82,6 +82,12 @@ Copy_UpCallCode ROUT
 40      ADD     sp, sp, #128
         Pull    "r1-r5, pc"             ; Claim vector
 
+ [ UseDynamicAreas
+copy_areaname
+	DCB	"CC28:*copy buffer",0
+	ALIGN
+ ]
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;                        W i l d c a r d   C o p y
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -247,7 +253,91 @@ CopyEntry NewSwiEntry "r0-r10",copy     ; CopyWildObject destroys all regs
         DSTRING r0, "."
  ]
 
+ [ UseDynamicAreas
+	; we create a dynamic area to use for the copy operation,
+	; which is equal to the size of the Next slot, but we don't
+	; give it any memory.
+
+	Push	"r0-r8"
+
+	SUB 	sp, sp, #32
+
+	ADR	r0, copy_areaname
+	MOV	r1, sp
+	MOV	r2, #32
+
+	BL	message_lookup2_into_buffer
+
+	ADRVS	r8, copy_areaname
+	MOVVC	r8, sp
+
+	MOV	r0, #-1
+	MOV	r1, #-1
+
+	SWI	XWimp_SlotSize	; read the slot size.  if can't read it, choose 640K
+
+	MOVVC	r5, r2
+	MOVVC	r5, #640*1024	; default to 640K if we can't read it
+
+	TEQS	r5, #0		; if no next slot then set all values to 0
+	BNE	%FT15
+
+; here if slot size was zero.  don't create the dynamic area, and write zeroes to all
+; the fields
+
+	STR	r5, copy_dynamicarea
+	STR	r5, copy_dynamicnum
+	STR	r5, copy_dynamicsize
+	STR	r5, copy_dynamicmaxsize
+
+	B	%FT19
+
+15
+	MOV	r0, #0
+	MOV	r1, #-1
+	MOV	r2, #0		; don't actually allocated any memory just yet
+	MOV	r3, #-1
+	MOV	r4, #(1<<7)	; green bar in task manager
+	MOV	r6, #0
+	MOV	r7, #0
+
+	SWI	XOS_DynamicArea	; try to create the area
+
+	BVS	%FT16
+
+	STR	r1, copy_dynamicnum
+	STR	r2, copy_dynamicsize
+	STR	r3, copy_dynamicarea
+	STR	r5, copy_dynamicmaxsize
+	B	%FT18
+
+16
+	MOV	r0, #0
+
+	STR	r0, copy_dynamicarea
+	STR	r0, copy_dynamicnum
+	STR	r0, copy_dynamicsize
+	STR	r0, copy_dynamicmaxsize
+
+18
+	ADD	sp, sp, #32
+	Pull	"r0-r8"
+ ]
+
         BL      CopyWildObject
+
+ [ UseDynamicAreas
+	LDR	r1, copy_dynamicmaxsize
+	TEQS	r1, #0
+	BEQ	%FT19
+
+	; we have an area, get rid of it
+
+	LDR	r1, copy_dynamicnum
+	MOV	r0, #1
+	SWI	XOS_DynamicArea
+19
+ ]
 
         LDR     r14, util_bitset        ; Can't do upcalls if printing not ok
         TST     r14, #util_printok
@@ -782,10 +872,60 @@ CopyFile ENTRY
         BHS     %FT15                   ; [do whole file in user buffer]
 
         MOV     r0, #0
+ [ :LNOT: UseDynamicAreas
         STR     r0, copy_wimpfreearea   ; For eventual deallocation
         STR     r0, copy_wimpfreesize
+ ]
         STR     r0, copy_rmasize
         STR     r0, copy_aplsize
+
+ [ UseDynamicAreas
+
+; code when using dynamic areas
+
+
+	LDR	r1, copy_dynamicsize	; get current dynamic area size
+	CMP	r1, r4			; check if it's already big enough
+	LDRHS	r2, copy_dynamicarea
+	BHS	%FT15			; already big enough
+
+; not right size, attempt to grow or shrink the dynamic area
+
+	LDR	r2, copy_dynamicmaxsize
+	CMP	r2, r4
+	MOVHS	r2, r4			; choose size to set
+
+	SUB	r1, r2, r1		; change in size required
+
+	LDR	r0, copy_dynamicnum	; get the area
+
+	SWI	XOS_ChangeDynamicArea	; change the area
+
+	BVS	%FT01
+
+	Push	"r0-r8"
+
+	LDR	r1, copy_dynamicnum
+	MOV	r0, #2
+
+	SWI	XOS_DynamicArea		; do dynamic area stuff
+
+	STRVC	r2, copy_dynamicsize	; store current size
+
+	Pull	"r0-r8"
+
+01
+
+  	LDR	r1, copy_dynamicsize
+	LDR	r2, copy_dynamicarea
+	CMPS	r1, r4
+	BHS	%FT15			; have found enough memory
+; end of code when using dynamic areas
+
+ |
+
+; code when not using dynamic areas
+
 
         MOV     r0, #1                  ; Then the Window Manager
         MOV     r1, #1
@@ -812,6 +952,13 @@ CopyFile ENTRY
  DREG r1,", r1 = "
  ]
         SWI     XWimp_ClaimFreeMemory   ; Can't give error or fail
+
+
+; end of code when not using dynamic areas
+
+ ]
+
+
 
 
 03      BL      SDescribeRMA
@@ -932,7 +1079,11 @@ CopyFile ENTRY
 ; Some sources won't alter size under interrupt
 
         LDR     r4, copy_userbuffersize
+ [ UseDynamicAreas
+	LDR	r14, copy_dynamicsize
+ |
         LDR     r14, copy_wimpfreesize
+ ]
         CMP     r4, r14
         MOVLO   r4, r14
         LDR     r14, copy_rmasize
@@ -964,10 +1115,18 @@ CopyFile ENTRY
         LDRHS   r14, copy_userbuffer
         BHS     %FT60                   ; [use punter's buffer]
 
+ [ UseDynamicAreas
+        LDR     r14, copy_dynamicsize
+ |
         LDR     r14, copy_wimpfreesize
+ ]
         CMP     r14, r4
         BLO     %FT52
 
+ [ UseDynamicAreas
+	LDR	r1, copy_dynamicsize
+	LDR	r2, copy_dynamicarea
+ |
         MOV     r0, #1
         MOV     r1, r4
  [ debugcopy
@@ -980,11 +1139,14 @@ CopyFile ENTRY
  DREG r1, "WimpSize = "
  ]
         STR     r2, copy_wimpfreearea
+ ]
         CMP     r2, #0
         BNE     %FT60                   ; [use wimp buffer]
 
+ [ :LNOT: UseDynamicAreas
         MOV     r14, #0                 ; The bastard's changed his mind:
         STR     r14, copy_wimpfreesize  ; Don't reconsider this source
+ ]
 
 
 52      LDR     r14, copy_rmasize
@@ -1866,16 +2028,22 @@ SFreeCopy ENTRY "r0-r2"
  [ debugcopy
  DREG r2, "SFreeCopy "
  ]
+ [ UseDynamicAreas
+        LDR     r14, copy_dynamicarea   ; Can be at &8000, but we MUST free it
+ |
         LDR     r14, copy_wimpfreearea  ; Can be at &8000, but we MUST free it
+ ]
         TEQ     r14, r2
         BNE     %FT50                   ; [must be RMA that we used then]
 
+ [ :LNOT: UseDynamicAreas
         MOV     r0, #0
  [ debugcopy
  DREG r0,"Wimp_ClaimFreeMemory: r0 = ",cc
  DREG r1,", r1 = "
  ]
         SWI     XWimp_ClaimFreeMemory   ; Can't give error
+ ]
         EXITS                           ; Restore caller V
 
 50      LDR     r14, copy_userbuffer    ; User buffer ?
