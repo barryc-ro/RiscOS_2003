@@ -68,7 +68,9 @@ MODULES = \
       310.Modules.ABIMod \
       310.Modules.DDEUtils \
       310.Modules.DDT \
-      310.Modules.FrontEnd
+      310.Modules.FrontEnd \
+      310.Modules.Network.URL.File \
+      310.Modules.Network.URL.URL
 
 FILES =\
  ${LDIR}.!Boot\
@@ -119,6 +121,7 @@ install: ${FILES}
         ${CP} 350 ${INSTDIR}.350 ${CPFLAGS}
         ${CP} 360 ${INSTDIR}.360 ${CPFLAGS}
         ${CP} 370 ${INSTDIR}.370 ${CPFLAGS}
+        ${CP} Modules ${INSTDIR}.Modules ${CPFLAGS} #shouldn't really be anything in Modules, but SSound currently is
         |
         ${ATTR} -directories +wr ${INSTDIR}
         ${ATTR} -files +ol +or -ow +wr -ww ${INSTDIR}
