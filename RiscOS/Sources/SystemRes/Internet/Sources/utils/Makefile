@@ -80,7 +80,3 @@ utl.ReadCMOSIP: o.ReadCMOSIP
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.ReadCMOSIP: s.ReadCMOSIP
-o.CheckMem: s.CheckMem
-o.X: s.X
-o.RMFind: s.RMFind
