@@ -1,30 +1,21 @@
-#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "defs.h"
-/* #include "inlines.h" */
-#include "screen.h"
+#include "inlines.h"
 #include "smartcard.h"
-#include "swis.h"
+#include "swicall.h"
 
 #include "Sockets/in.h"
 
 ErrorPtr err;
 
-#ifdef MODEM
 extern char *enternnpc, *proceed, *proceedc;
-#else
-extern char *enternpc;
-#endif
-
-extern BOOL redial;
 
 extern void osmodfree(char *);
 extern char *osmodget(int);
 extern char *cmos_number(void);
 extern int  ncregenq(char *, void *, int);
-extern void oscli(char *);
 
 typedef struct
 {
@@ -35,86 +26,42 @@ typedef struct
 
 BOOL CreateFiles(carddata *scard)
 {
+  char buffer[512], dns2[40];
   FILE *out;
-  int scstatus;
-#ifdef MODEM
-  char buffer[512], dns2[80];
-  int big, byte;
+  int big, scstatus;
   struct in_addr ina, inb;
-#endif
 
-  _swix(NCRegistry_Status, _OUT(0), &scstatus);
-  if ((scstatus & 0x05) == 0) /* No Card or not valid */
+  swi(NCRegistry_Status, OUT, R0, &scstatus, END);
+  if ((scstatus & 0x10) != 0) /* Card Not Locked */
   {
-    if ((screen_size.x >> screen_eig.x) >= 1024)
-    {
-      NewPage("file:/WWWRoot:InsertCVB");
-    }
-    else if ((screen_size.x >> screen_eig.x) >= 800)
-    {
-      NewPage("file:/WWWRoot:InsertCB");
-    }
-    else
-    {
-      NewPage("file:/WWWRoot:InsertC");
-    }
+    oscli("Set Sennen$Newpage file:/WWWRoot:EnterC");
     return(FALSE);
   }
- if ((scstatus & 0x10) != 0) /* Card Locked */
-  {
-    NewPage("file:/WWWRoot:EnterC");
+  if (swi(OS_File, R0, 8, R1, "<Wimp$ScrapDir>", R4, 75, END))
     return(FALSE);
-  }
-  if (_swix(OS_File, _IN(0) | _IN(1) | _IN(4), 8, "<Wimp$ScrapDir>", 75))
+  if (swi(OS_File, R0, 8, R1, "<Wimp$ScrapDir>.Sennen", R4, 75, END))
     return(FALSE);
-  if (_swix(OS_File, _IN(0) | _IN(1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen", 75))
+  if (swi(OS_File, R0, 8, R1, "<Wimp$ScrapDir>.Sennen.Files", R4, 75, END))
     return(FALSE);
-#ifdef MODEM
-  if (_swix(OS_File, _IN(0) | _IN(1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen.Files", 75))
+  if (swi(OS_File, R0, 8, R1, "<Wimp$ScrapDir>.Sennen.Files.PPP", R4, 75, END))
     return(FALSE);
-  if (_swix(OS_File, _IN(0) | _IN(1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen.Files.PPP", 75))
-    return(FALSE);
+
+  ncregenq("DNS_PRIMARY", &ina.s_addr, 16);
+  ncregenq("DNS_BACKUP", &inb.s_addr, 16);
+  strcpy(dns2, inet_ntoa(inb));
+  sprintf(buffer, "Set Inet$Resolvers %s %s", inet_ntoa(ina), dns2);
+  oscli(buffer);
 
   ncregenq("LOGIN_ID", scard->loginid, 40);
   ncregenq("LOGIN_SECRET", scard->loginsecret, 40);
 
-  if (!redial)
-  {
-    ncregenq("DNS_PRIMARY", &ina.s_addr, 16);
-    ncregenq("DNS_BACKUP", &inb.s_addr, 16);
-    if (inb.s_addr == 0)
-      inb.s_addr = ina.s_addr;
-    strcpy(dns2, inet_ntoa(inb));
-    sprintf(buffer, "Set Inet$Resolvers %s %s", inet_ntoa(ina), dns2);
-    oscli(buffer);
-    ncregenq("ISP_DOMAIN", dns2, 80);
-    sprintf(buffer, "Set Inet$LocalDomain %s", dns2);
-    oscli(buffer);
-    strcpy(dns2, scard->loginid);
-    {
-      char *c = dns2;
-  
-      while(*c)
-      {
-        if (!isalnum(*c) && *c != '_')
-          *c = '_';
-        c++;
-      }
-    }
-    sprintf(buffer, "Set Inet$HostName %s", dns2);
-    oscli(buffer);
-    _swix(OS_Module, _IN(0) | _IN(1), 3, "Resolver");
-  }
   if (out = fopen("<Wimp$ScrapDir>.Sennen.Files.PPP.Options", "w"), out)
   {
     fprintf(out, "ModemCard:0\n115200\nname %s\nnoipdefault\n", scard->loginid);
     if (ncregenq("STATIC_IP", &ina.s_addr, 16), ina.s_addr)
       fprintf(out, "%s:\n", inet_ntoa(ina));
     fprintf(out, "defaultroute\nmodem\ncrtscts\n");
-    fprintf(out, "asyncmap 0\nmtu 296\nmru 296\n");
-    _swix(OS_Byte, _IN(0) | _IN(1) | _OUT(2), 161, 0xA2, &byte);
-    if (byte & 0x3F)
-      fprintf(out, "idle-disconnect %d\n", (byte & 0x3F) * 60);
+    fprintf(out, "asyncmap 0\nmtu 296\nmru 296\nidle-disconnect 300\n");
     fclose(out);
   }
   else
@@ -137,7 +84,7 @@ BOOL CreateFiles(carddata *scard)
     for (list = (script_list *) scrbuff; list != NULL; list = list->next)
     {
       if ((list->cntrl & 0xFF) < 3)
-        fprintf(out, "%s\n", list->string ? list->string : "");
+        fprintf(out, "%s\n", list->string);
     }
     osmodfree(scrbuff);
 
@@ -170,7 +117,7 @@ BOOL CreateFiles(carddata *scard)
     ncregenq("PSTN_NUM", scard->pstnnum, 40);
     fprintf(out, enternnpc, scard->pstnnum, scard->loginid, scard->loginsecret);
     fclose(out);
-    _swix(OS_File, _IN(0) | _IN(1) | _IN(2), 18, "<Wimp$ScrapDir>.Sennen.EnterNNPC", 0xFAF);
+    swi(OS_File, R0, 18, R1, "<Wimp$ScrapDir>.Sennen.EnterNNPC", R2, 0xFAF, END);
   }
   else
   {
@@ -180,7 +127,7 @@ BOOL CreateFiles(carddata *scard)
   {
     fprintf(out, proceed, scard->loginid);
     fclose(out);
-    _swix(OS_File, _IN(0) | _IN(1) | _IN(2), 18, "<Wimp$ScrapDir>.Sennen.Proceed", 0xFAF);
+    swi(OS_File, R0, 18, R1, "<Wimp$ScrapDir>.Sennen.Proceed", R2, 0xFAF, END);
   }
   else
   {
@@ -190,34 +137,11 @@ BOOL CreateFiles(carddata *scard)
   {
     fprintf(out, proceedc, scard->loginid);
     fclose(out);
-    _swix(OS_File, _IN(0) | _IN(1) | _IN(2), 18, "<Wimp$ScrapDir>.Sennen.ProceedC", 0xFAF);
+    swi(OS_File, R0, 18, R1, "<Wimp$ScrapDir>.Sennen.ProceedC", R2, 0xFAF, END);
   }
   else
   {
     return(FALSE);
   }
-#else
-#if FALSE
-  ncregenq("DNS_PRIMARY", &ina.s_addr, 16);
-  ncregenq("DNS_BACKUP", &inb.s_addr, 16);
-  strcpy(dns2, inet_ntoa(inb));
-  sprintf(buffer, "Set Inet$Resolvers %s %s", inet_ntoa(ina), dns2);
-  oscli(buffer);
-#endif
-  ncregenq("LOGIN_ID", scard->loginid, 40);
-  ncregenq("LOGIN_SECRET", scard->loginsecret, 40);
-
-  if (out = fopen("<Wimp$ScrapDir>.Sennen.EnterNPC", "w"), out)
-  {
-    ncregenq("PSTN_NUM", scard->pstnnum, 40);
-    fprintf(out, enternpc, scard->loginid, scard->loginsecret);
-    fclose(out);
-    _swix(OS_File, _IN(0) | _IN(1) | _IN(2), 18, "<Wimp$ScrapDir>.Sennen.EnterNPC", 0xFAF);
-  }
-  else
-  {
-    return(FALSE);
-  }
-#endif
   return(TRUE);
 }

@@ -12,7 +12,7 @@ LibFileflags   = -c -o $@
 Squeezeflags   = -f -v $@
 Datatoaofflags = -d data -l len -dp -s -p
 
-FILES = o.main o.mainwindow o.screen o.kill
+FILES = o.main o.swicall o.mainwindow o.screen o.kill
 
 LIBS  = C:o.Stubs
 
@@ -33,18 +33,6 @@ LIBS  = C:o.Stubs
 
 
 # Dynamic dependencies:
-o.screen:	c.screen
-o.screen:	h.defs
-o.screen:	C:h.kernel
-o.screen:	h.inlines
-o.screen:	C:h.swis
-o.kill:	c.kill
-o.kill:	h.defs
-o.kill:	C:h.kernel
-o.kill:	h.inlines
-o.kill:	C:h.swis
-o.kill:	h.wimp
-o.kill:	h.defs
 o.main:	c.main
 o.main:	h.defs
 o.main:	C:h.kernel
@@ -53,5 +41,8 @@ o.main:	C:h.swis
 o.main:	h.screen
 o.main:	h.defs
 o.main:	h.SmartCard
+o.main:	h.swicall
+o.main:	h.defs
+o.main:	C:h.swis
 o.main:	h.wimp
 o.main:	h.defs
