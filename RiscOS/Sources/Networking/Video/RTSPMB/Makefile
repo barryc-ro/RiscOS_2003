@@ -13,6 +13,7 @@
 #			independent ROM / RAM builds
 # 05-Apr-2000	ADH	Corrected path and filenames in ROM resources
 #			export rule
+# 19-Mar-2002	JRB	Added Auth.c, extra compile options
 
 # -----------------------------------------------------------------------------
 # Component specific options
@@ -62,8 +63,11 @@ DIRS		= o._dirs_
 #				be more efficient).
 #
 # CLIENT_LOOPING		The module supports client looping.
+#
+# MB6_GDF_SUPPORT		Support MediaBase putting Good Data Follows
+#				information in the stream (experimental)
 
-EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV -UCLIENT_LOOPING
+EXTRAFLAGS	= -UALWAYS_CLAIM_EVENTV -UCLIENT_LOOPING -UMB6_GDF_SUPPORT
 
 # -----------------------------------------------------------------------------
 # Libraries and objects lists
@@ -83,6 +87,7 @@ LIBS = ${DEBUGLIB} \
        ${ASMUTILS}
 
 ROM_OBJS =	\
+ o.Auth		\
  o.CallOut	\
  o.Connect	\
  o.DNS		\
@@ -106,6 +111,7 @@ ROM_OBJS =	\
 # oSL -> Soft Load
 
 RAM_OBJS =	\
+ oSL.Auth	\
  oSL.CallOut	\
  oSL.Connect	\
  oSL.DNS	\
@@ -129,6 +135,7 @@ RAM_OBJS =	\
 # oSLd -> Soft Load deug
 
 DBG_OBJS =	\
+ oSLd.Auth	\
  oSLd.CallOut	\
  oSLd.Connect	\
  oSLd.DNS	\

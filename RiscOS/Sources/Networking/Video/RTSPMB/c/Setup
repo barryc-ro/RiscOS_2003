@@ -10,6 +10,8 @@
 /*                                                            */
 /* History: 01-Dec-2000 (ADH): Imported from RTSP OVS.        */
 /*          08-Mar-2002 (JRB): Updated for MediaBase 6.       */
+/*          01-Apr-2002 (JRB): Updated to support sequences   */
+/*                             and authorisation.             */
 /**************************************************************/
 
 #include <stdio.h>
@@ -37,6 +39,7 @@
 
 #include <VideoCtrl.h> /* Exported by VideoCtrl's !MkExport */
 
+#include "Auth.h"
 #include "CallOut.h"
 #include "Connect.h"
 #include "Generic.h"
@@ -54,9 +57,12 @@
 /* Local functions */
 
 static _kernel_oserror * setup_send_describe         (session * s);
-static _kernel_oserror * setup_send_setup            (session * s);
+static _kernel_oserror * setup_describe_done         (session * s);
+static bool              setup_read_asset_data(const char * data, asset_data * asset);
+static _kernel_oserror * setup_send_setup            (session * s, const char * auth_value);
 static _kernel_oserror * setup_add_transport_header  (session * s);
-static void              setup_read_describe_doubles (session * s, const char * p1, const char * p2);
+static _kernel_oserror * setup_setup_done            (session * s);
+static void              setup_read_describe_doubles (asset_data * asset, const char * p1, const char * p2);
 #ifdef CLIENT_LOOPING
 static _kernel_oserror * setup_read_loop_option      (session * s, unsigned int vcid);
 #endif
@@ -136,6 +142,38 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
     dprintf(("", "setup_setup: Error '%s' from urlutils_return_description\n", e->errmess));
     session_free_item(s);
     return e;
+  }
+
+  /* If a user name and/or password was specified in the URL, copy it into */
+  /* the session data and remove it from the URL.                          */
+
+  if (s->url->user != NULL && *s->url->user != 0)
+  {
+    s->user = Strdup(s->url->user);
+    if (s->user == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+    urlutils_unescape(s->user);
+  }
+
+  if (s->url->password != NULL && *s->url->password != 0)
+  {
+    s->password = Strdup(s->url->password);
+    if (s->password == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+    urlutils_unescape(s->password);
+  }
+
+  if (s->user != NULL || s->password != NULL)
+  {
+    char * p1, * p2;
+
+    p1 = strstr(s->url->full, ProtocolSeparator);
+    p2 = strchr(s->url->full, '@');
+
+    if (p1 != NULL && p2 != NULL)
+    {
+      p1 += sizeof(ProtocolSeparator) - 1;
+      p2++;
+      memmove(p1, p2, strlen(p2) + 1);
+    }
   }
 
   /* Simulated multicast? */
@@ -268,7 +306,7 @@ static _kernel_oserror * setup_send_describe(session * s)
 
   /* Queue a SETUP command for next */
 
-  s->next_command_cb = setup_send_setup;
+  s->next_command_cb = setup_describe_done;
 
   /* Set the state machine going to see errors and DNS stuff */
 
@@ -281,6 +319,235 @@ static _kernel_oserror * setup_send_describe(session * s)
   /* Finished */
 
   return NULL;
+}
+
+/**************************************************************/
+/* setup_describe_done()                                      */
+/*                                                            */
+/* This is called when the response to the DESCRIBE command   */
+/* is received. It parses the DESCRIBE response, then builds  */
+/* the SETUP command that gets issued next.                   */
+/*                                                            */
+/* Parameters: Pointer to the session structure representing  */
+/*             the session for which a SETUP command needs to */
+/*             be sent.                                       */
+/**************************************************************/
+
+static _kernel_oserror * setup_describe_done(session * s)
+{
+  rtsp_header * sver;
+  bool          success = false;
+
+  /* Clear the command chain */
+
+  s->next_command_cb = NULL;
+
+  /* If the DESCRIBE response was an error, give up now and return this */
+  /* status to the caller.                                              */
+
+  if (s->response_code != 200)
+    return NULL;
+
+  /* First see if the server told us its version number in the DESCRIBE response */
+
+  sver = headers_find_header(s->headers, Headers_HeaderName_Server);
+  if (sver != NULL)
+  {
+    if (!strcmp(sver->value, Headers_HeaderValue_ServerOld))
+    {
+      /* This is MediaBase 5 or earlier */
+      s->server_majorver = 5;
+    }
+    else if (!strncmp(sver->value, Headers_HeaderValue_ServerNew, sizeof(Headers_HeaderValue_ServerNew) - 1))
+    {
+      /* This is MediaBase 6 (XMP) or later - get major version number, ignore minor version for now */
+      s->server_majorver = atoi(sver->value + sizeof(Headers_HeaderValue_ServerNew) - 1);
+    }
+    else
+    {
+      /* Unknown server version - may not be MediaBase at all */
+      s->server_majorver = 0;
+    }
+  }
+  else
+  {
+    /* No 'Server' header. Early MediaBase 6 beta versions did this, so assume it is one of those */
+    s->server_majorver = 6;
+  }
+  dprintf(("", "Server major version determined as %d\n", s->server_majorver));
+
+  /* Any DESCRIBE data to parse first? */
+
+  if (s->data_len > 0)
+  {
+    char * ptr;
+
+    /* Determine asset type. This must be the same for all assets in a */
+    /* sequence, so we only read it once, not per asset.               */
+
+    s->asset_type = assettype_UNKNOWN;
+
+    ptr = strstr(s->data, Setup_Type);
+    if (ptr != NULL)
+    {
+      ptr += sizeof(Setup_Type) - 1;
+      if (!strncmp(ptr, Setup_TypeMPEG1, sizeof(Setup_TypeMPEG1) - 1))
+        s->asset_type = assettype_MPEG1;
+      else if (!strncmp(ptr, Setup_TypeMPEG2, sizeof(Setup_TypeMPEG2) - 1))
+        s->asset_type = assettype_MPEG2;
+    }
+
+    /* See how many assets there are in the sequence */
+
+    ptr = strstr(s->data, Setup_NumStreams);
+
+    if (ptr != NULL)
+      s->num_assets = atoi(ptr + sizeof(Setup_NumStreams) - 1);
+
+    if (s->num_assets > 0)
+    {
+      char * next_ptr;
+      int    i;
+  
+      /* Allocate asset data array */
+
+      s->assets = calloc(s->num_assets, sizeof(asset_data));
+      if (s->assets == NULL)
+        return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+
+      /* Read information on each asset */
+
+      ptr = strstr(ptr, Setup_MediaStreams);
+      if (ptr != NULL)
+        ptr = strstr(ptr + 1, Setup_MediaStream);
+
+      success = true;
+
+      for (i = 0; i < s->num_assets && ptr != NULL && success; i++)
+      {
+        /* Find start of next asset description */
+
+        next_ptr = strstr(ptr + 1, Setup_MediaStream);
+
+        /* Read the asset data */
+
+        if (next_ptr != NULL)
+          *next_ptr = 0;
+
+        success = setup_read_asset_data(ptr, &s->assets[i]);
+
+        if (next_ptr != NULL)
+          *next_ptr++ = Setup_MediaStream[0];
+
+        /* Adjust the start offset for the position in the sequence */
+
+        s->assets[i].start_offset += s->duration;
+
+        /* Update the total duration */
+
+        s->duration += s->assets[i].duration;
+
+        ptr = next_ptr;
+
+        dprintf(("", "Data for asset %d:\n", i));
+        dprintf(("", " approx_fps      = %d\n", s->assets[i].approx_fps));
+        dprintf(("", " duration        = %u\n", s->assets[i].duration));
+        dprintf(("", " parent_duration = %u\n", s->assets[i].parent_duration));
+        dprintf(("", " start_offset    = %d\n", s->assets[i].start_offset));
+      }
+      dprintf(("", "Total duration=%u\n", s->duration));
+
+      /* Make sure we got information for all of the assets */
+
+      if (i < s->num_assets)
+        success = false;
+    }
+  }
+
+  /* Return an error if we failed to read all the data we need */
+
+  if (!success)
+    return make_error(rtspmb_ERROR_BAD_DESCRIBE_RESPONSE, 0);
+
+  /* Success - now send the SETUP */
+
+  return setup_send_setup(s, NULL);
+}
+
+/**************************************************************/
+/* setup_read_asset_data()                                    */
+/*                                                            */
+/* Read information about an asset from the DESCRIBE response */
+/* into an asset_data structure.                              */
+/*                                                            */
+/* Parameters: Pointer to the string containing a description */
+/*             of the asset;                                  */
+/*                                                            */
+/*             Pointer to the asset_data structure to be      */
+/*             filled in.                                     */
+/*                                                            */
+/* Returns:    Whether or not all the data was successfully   */
+/*             read.                                          */
+/**************************************************************/
+
+static bool setup_read_asset_data(const char * data, asset_data * asset)
+{
+  char * ptr1 = strstr(data, Setup_FramesPerSecond);
+  char * ptr2 = strstr(data, Setup_IFrameRatio);
+
+  if (ptr1 != NULL && ptr2 != NULL)
+  {
+    modulefp_buf buf;
+  
+    modulefp_enable(&buf);
+  
+    setup_read_describe_doubles(asset,
+                                ptr1 + sizeof(Setup_FramesPerSecond) - 1,
+                                ptr2 + sizeof(Setup_IFrameRatio)     - 1);
+  
+    modulefp_disable(&buf);
+  }
+  else
+  {
+    return false;
+  }
+
+  ptr1 = strstr(data, Setup_StartTime);
+  
+  /* Store start time (originally in microseconds) to centisecond resolution */
+  
+  if (ptr1 != NULL)
+    asset->start_offset = -(atoi(ptr1 + sizeof(Setup_StartTime) - 1) / 10000);
+  else
+    return false;
+  
+  ptr1 = strstr(data, Setup_Duration);
+  
+  /* Store duration (originally in microseconds) to centisecond resolution */
+  
+  if (ptr1 != NULL)
+    asset->duration = (unsigned int) (strtoul(ptr1 + sizeof(Setup_Duration) - 1, NULL, 10) / 10000);
+  else
+    return false;
+
+  ptr1 = strstr(data, Setup_ParentDuration);
+  
+  /* Store parent duration (originally in microseconds) to centisecond resolution */
+  /* This is only present for clip assets, and only on MediaBase 6 or later */
+  
+  if (ptr1 != NULL)
+    asset->parent_duration = (unsigned int) (strtoul(ptr1 + sizeof(Setup_ParentDuration) - 1, NULL, 10) / 10000);
+  else
+    asset->parent_duration = asset->duration;
+
+  if (
+      asset->approx_fps      == 0 ||
+      asset->duration        == 0 ||
+      asset->parent_duration == 0
+     )
+    return false;
+
+  return true;
 }
 
 /**************************************************************/
@@ -298,119 +565,10 @@ static _kernel_oserror * setup_send_describe(session * s)
 /*             be sent.                                       */
 /**************************************************************/
 
-static _kernel_oserror * setup_send_setup(session * s)
+static _kernel_oserror * setup_send_setup(session * s, const char * auth_value)
 {
   bool fail = false;
   int  port;
-
-  /* First see if the server told us its version number in the DESCRIBE response */
-  {
-    rtsp_header * sver = headers_find_header(s->headers, Headers_HeaderName_Server);
-    if (sver != NULL)
-    {
-      if (!strcmp(sver->value, Headers_HeaderValue_ServerOld))
-      {
-        /* This is MediaBase 5 or earlier */
-        s->server_majorver = 5;
-      }
-      else if (!strncmp(sver->value, Headers_HeaderValue_ServerNew, sizeof(Headers_HeaderValue_ServerNew) - 1))
-      {
-        /* This is MediaBase 6 (XMP) or later - get major version number, ignore minor version for now */
-        s->server_majorver = atoi(sver->value + sizeof(Headers_HeaderValue_ServerNew) - 1);
-      }
-      else
-      {
-        /* Unknown server version - may not be MediaBase at all */
-        s->server_majorver = 0;
-      }
-    }
-    else
-    {
-      /* No 'Server' header. Early MediaBase 6 beta versions did this, so assume it is one of those */
-      s->server_majorver = 6;
-    }
-    dprintf(("", "Server major version determined as %d\n", s->server_majorver));
-  }
-
-  /* Any DESCRIBE data to parse first? */
-
-  if (s->data_len > 0)
-  {
-    char * ptr1 = strstr(s->data, Setup_FramesPerSecond);
-    char * ptr2 = strstr(s->data, Setup_IFrameRatio);
-    char * ptr3;
-
-    if (ptr1 != NULL && ptr2 != NULL)
-    {
-      modulefp_buf buf;
-
-      modulefp_enable(&buf);
-
-      setup_read_describe_doubles(s,
-                                  ptr1 + sizeof(Setup_FramesPerSecond) - 1,
-                                  ptr2 + sizeof(Setup_IFrameRatio)     - 1);
-
-      modulefp_disable(&buf);
-    }
-
-    if (s->approx_fps == 0 && s->vcid != 0)
-    {
-      _kernel_oserror * e;
-      int               opts[4];
-
-      dprintf(("","Frames per second not specified, using PAL/NTSC flag\n"));
-
-      opts[0] = vc_tags_ntsc;
-      opts[1] = 1;
-      opts[2] = 0;
-      opts[3] = vc_tags__end;
-
-      e = _swix(VideoControl_ProtocolOptions,
-                _INR(0,2),
-
-                0,
-                s->vcid,
-                opts);
-
-      if (e == NULL) s->approx_fps = (opts[2] == 0) ? 25 : 30;
-      else           s->approx_fps = 25;
-    }
-
-    dprintf(("","Decided approx fps is %d\n", s->approx_fps));
-
-    ptr3 = strstr(s->data, Setup_StartTime);
-
-    /* Store start time (originally in microseconds) to centisecond resolution */
-
-    if (ptr3 != NULL)
-    {
-      s->start_time = (unsigned int) (strtoul(ptr3 + sizeof(Setup_StartTime) - 1, NULL, 10) / 10000);
-    }
-
-    ptr3 = strstr(s->data, Setup_Duration);
-
-    /* Store duration (originally in microseconds) to centisecond resolution */
-
-    if (ptr3 != NULL)
-    {
-      s->duration = (unsigned int) (strtoul(ptr3 + sizeof(Setup_Duration) - 1, NULL, 10) / 10000);
-    }
-    s->end_time = s->duration;
-
-    /* Determine asset type */
-
-    s->asset_type = assettype_UNKNOWN;
-
-    ptr3 = strstr(s->data, Setup_Type);
-    if (ptr3 != NULL)
-    {
-      ptr3 += sizeof(Setup_Type) - 1;
-      if (!strncmp(ptr3, Setup_TypeMPEG1, sizeof(Setup_TypeMPEG1) - 1))
-        s->asset_type = assettype_MPEG1;
-      else if (!strncmp(ptr3, Setup_TypeMPEG2, sizeof(Setup_TypeMPEG2) - 1))
-        s->asset_type = assettype_MPEG2;
-    }
-  }
 
   /* Reset ready for the next command */
 
@@ -475,6 +633,32 @@ static _kernel_oserror * setup_send_setup(session * s)
       headers_parse_user_header((char *) s->setup_r4_record, strlen((char *) s->setup_r4_record), s);
 
       free(s->setup_r4_record), s->setup_r4_record = NULL;
+    }
+
+    /* Authorisation header? */
+
+    if (fail == false && auth_value != NULL)
+    {
+      if (
+           headers_add_header(&s->headers,
+                              Headers_HeaderName_Authorization,
+                              auth_value)
+           == NULL
+         )
+         fail = true;
+    }
+
+    /* Session header? (will only exist for authorisation retries) */
+  
+    if (fail == false && s->server_session != NULL)
+    {
+      if (
+           headers_add_header(&s->headers,
+                              Headers_HeaderName_Session,
+                              s->server_session)
+           == NULL
+         )
+         fail = true;
     }
 
     /* Support R5 and R6 body data extensions. OVS will object to anything */
@@ -545,9 +729,9 @@ static _kernel_oserror * setup_send_setup(session * s)
 
   dprintf(("", "setup_send_setup: Socket descriptor %d, state %d\n", s->sd, s->state));
 
-  /* Ensure the command queue is cleared */
+  /* Queue the routine that checks the SETUP response */
 
-  s->next_command_cb = NULL;
+  s->next_command_cb = setup_setup_done;
 
   /* Set the state machine going to see errors and DNS stuff */
 
@@ -641,6 +825,69 @@ static _kernel_oserror * setup_add_transport_header(session * s)
   return NULL;
 }
 
+/**************************************************************/
+/* setup_setup_done()                                         */
+/*                                                            */
+/* This is called when the response to the SETUP command is   */
+/* received.                                                  */
+/*                                                            */
+/* Parameters: Pointer to the session structure representing  */
+/*             the session for which the SETUP command was    */
+/*             sent.                                          */
+/**************************************************************/
+
+static _kernel_oserror * setup_setup_done(session * s)
+{
+  _kernel_oserror * e;
+  rtsp_header     * challenge;
+  char            * auth_value = NULL;
+
+  dprintf(("", "setup_setup_done: Response was %d\n", s->response_code));
+
+  /* No more commands to chain */
+
+  s->next_command_cb = NULL;
+
+  /* Nothing more to do, unless we got an Unauthorised error */
+
+  if (s->response_code != 401)
+    return NULL;
+
+  /* We had an Unauthorised error. Do we have a user name or password? */
+
+  if (s->user == NULL && s->password == NULL)
+    return NULL;
+
+  /* Do we have a challenge? */
+
+  challenge = headers_find_header(s->headers, Headers_HeaderName_Authenticate);
+
+  if (challenge == NULL)
+    return NULL;
+
+  /* Generate a response to the challenge */
+
+  e = auth_generate_response(challenge->value, s->user, s->password, s->url->path, &auth_value);
+  if (e == NULL && auth_value != NULL)
+  {
+    /* Now clear the username and password. This will stop us retrying */
+    /* again if we get another 401 error because they were incorrect.  */
+
+    free (s->user);
+    s->user = NULL;
+
+    free (s->password);
+    s->password = NULL;
+
+    /* Send the SETUP again, with the authorisation header. */
+
+    e = setup_send_setup(s, auth_value);
+    free (auth_value);
+  }
+
+  return e;
+}
+
 #ifdef CLIENT_LOOPING
 
 /**************************************************************/
@@ -688,7 +935,7 @@ static _kernel_oserror * setup_read_loop_option(session * s, unsigned int vcid)
 /*                                                            */
 /* Must only be used after modulefp_enable has been called.   */
 /*                                                            */
-/* Parameters: Pointer to the session struct to update;       */
+/* Parameters: Pointer to the asset_data struct to update;    */
 /*                                                            */
 /*             Pointer to the first character of the frames   */
 /*             per second value;                              */
@@ -700,16 +947,16 @@ static _kernel_oserror * setup_read_loop_option(session * s, unsigned int vcid)
 /*             fields of the session structure are updated.   */
 /**************************************************************/
 
-static void setup_read_describe_doubles(session * s, const char * p1, const char * p2)
+static void setup_read_describe_doubles(asset_data * asset, const char * p1, const char * p2)
 {
-  s->frames_per_sec = strtod(p1, NULL);
-  s->i_frame_ratio  = strtod(p2, NULL);
+  asset->frames_per_sec = strtod(p1, NULL);
+  asset->i_frame_ratio  = strtod(p2, NULL);
 
-  if ((s->frames_per_sec == HUGE_VAL) || (s->frames_per_sec == -HUGE_VAL)) s->frames_per_sec = 0;
-  if ((s->i_frame_ratio  == HUGE_VAL) || (s->i_frame_ratio  == -HUGE_VAL)) s->i_frame_ratio  = 0;
+  if ((asset->frames_per_sec == HUGE_VAL) || (asset->frames_per_sec == -HUGE_VAL)) asset->frames_per_sec = 0;
+  if ((asset->i_frame_ratio  == HUGE_VAL) || (asset->i_frame_ratio  == -HUGE_VAL)) asset->i_frame_ratio  = 0;
 
-  if (s->frames_per_sec != 0)
-    s->approx_fps = (int)(s->frames_per_sec + 0.5);
+  if (asset->frames_per_sec != 0)
+    asset->approx_fps = (int)(asset->frames_per_sec + 0.5);
   else
-    s->approx_fps = 0;
+    asset->approx_fps = 0;
 }

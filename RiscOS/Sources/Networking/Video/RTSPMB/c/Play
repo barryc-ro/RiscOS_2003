@@ -10,6 +10,7 @@
 /*                                                            */
 /* History: 01-Dec-2000 (ADH): Imported from RTSP OVS.        */
 /*          08-Mar-2002 (JRB): Updated for MediaBase 6.       */
+/*          01-Apr-2002 (JRB): Updated to support sequences.  */
 /**************************************************************/
 
 #include <stdio.h>
@@ -62,6 +63,7 @@ play_state;
 #define Play_Read_TimeCode_Timer    (100)
 #define Play_Initial_TimeCode_Timer (5)
 #define Play_TimeCode_Margin        (275)
+#define Play_Sequence_Margin        (200)
 
 /* Local functions - miscellaneous */
 
@@ -98,7 +100,7 @@ static void              play_reconstruct_range_header (session * s, char * temp
 /* Local functions - floating point code used within */
 
 static int               play_strtofi                  (const char *str, const char **endptr, int factor);
-static unsigned int      play_get_trick_stream_npt     (session * s, unsigned int npt);
+static unsigned int      play_get_trick_stream_npt     (asset_data * asset, unsigned int npt);
 #ifdef CLIENT_LOOPING
 static void              play_copy_frame_info          (session * dst, session * src);
 #endif
@@ -1294,21 +1296,15 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
           fail = true;
 
   /* No sync marks please */
-  /* Omitting the 'SyncMark' header should prevent sync marks with all versions     */
-  /* of MediaBase (though sometimes it didn't with 4.01 and some revisions of 5,    */
-  /* but that is a server bug with patches available to fix it.)                    */
-  /* With MediaBase 6, you must leave out the 'SyncMark' header in order to prevent */
-  /* sync marks between assets in a sequence.                                       */
-/*  else if (
+
+  else if (
             play &&
             headers_add_header(&s->headers,
                                Headers_HeaderName_SyncMark,
-                               Headers_HeaderValue_SyncMark)
+                               (s->server_majorver < 6) ? Headers_HeaderValue_SyncMark : Headers_HeaderValue_SyncMarkV6)
             == NULL
           )
           fail = true;
-
-*/
 
   /* Range */
 
@@ -1350,7 +1346,22 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
     /* the server response.                                           */
 
     if (!play || s->from != Play_MB_Time_Unspecified)
+    {
       s->change_pending = 1;
+
+      #ifdef MB6_GDF_SUPPORT
+      /* If video is playing, tell the MPEG system to get ready for the     */
+      /* change on the next Good Data Follows. If video is not yet playing, */
+      /* but we are starting in a trick mode we also need to tell the MPEG  */
+      /* system, since it does not expect a trick play stream normally.     */
+    
+      if (
+          play && s->server_majorver >= 6 &&
+          (s->started != 0 || s->next_playmode == Play_MB_Trick_FFWD || s->next_playmode == Play_MB_Trick_FRWD)
+         )
+        play_alter_playback_characteristics(s, s->next_playmode);
+      #endif
+    }
   }
 
   /* Did anything fail? */
@@ -1410,15 +1421,6 @@ static _kernel_oserror * play_alter_playback_characteristics(session * s, int pl
     {
       if (playmode == Play_MB_Trick_Play)
       {
-        /* Immediate set speed to 1 */
-
-        e = _swix(MPEGControl_SetSpeed,
-                  _INR(0,2),
-    
-                  0,
-                  s->mpegid,
-                  1);
-
         /* Normal play - flag video and audio */
 
         flags = MPEGCtrl_MCRS_VideoPresent |
@@ -1432,7 +1434,12 @@ static _kernel_oserror * play_alter_playback_characteristics(session * s, int pl
                 MPEGCtrl_MCRS_NewIsTrickPlay;
       }
 
-      /* Immediate reset */
+      #ifdef MB6_GDF_SUPPORT
+      if (s->server_majorver >= 6)
+        flags |= MPEGCtrl_MCRS_DeferReset;
+      #endif
+
+      /* Reset */
 
       e = _swix(MPEGControl_ResetStream,
                 _INR(0,2),
@@ -1440,6 +1447,16 @@ static _kernel_oserror * play_alter_playback_characteristics(session * s, int pl
                 flags,
                 s->mpegid,
                 MPEGCtrl_MCRS_Trick_Play);
+
+      /* Set speed to 1 */
+
+      if (e == NULL)
+        e = _swix(MPEGControl_SetSpeed,
+                  _INR(0,2),
+    
+                  0,
+                  s->mpegid,
+                  1);
     }
   }
 
@@ -1467,12 +1484,20 @@ _kernel_oserror * play_mode_changed(session * s, int playmode)
   /* we also need to tell the MPEG system, since it does not expect a */
   /* trick play stream normally.                                      */
 
+  #ifdef MB6_GDF_SUPPORT
+
   if (
-      s->started != 0 ||
-      playmode == Play_MB_Trick_FFWD ||
-      playmode == Play_MB_Trick_FRWD
+      (playmode == Play_MB_Trick_Freeze || s->server_majorver < 6) &&
+      (s->started != 0 || playmode == Play_MB_Trick_FFWD || playmode == Play_MB_Trick_FRWD)
      )
     play_alter_playback_characteristics(s, playmode);
+
+  #else
+
+  if (s->started != 0 || playmode == Play_MB_Trick_FFWD || playmode == Play_MB_Trick_FRWD)
+    play_alter_playback_characteristics(s, playmode);
+
+  #endif
 
   if (playmode == Play_MB_Trick_Freeze)
   {
@@ -1502,24 +1527,48 @@ _kernel_oserror * play_mode_changed(session * s, int playmode)
     if (h != NULL) s->scale = atoi(h->value);
     else           s->scale = 0;
   
-    dprintf(("", "Scale read as %d\n", s->scale));
-  
     if (s->scale == 0)
     {
-      if (s->server_majorver >= 6 && s->asset_type != assettype_MPEG1)
+      switch(playmode)
       {
-        switch(playmode)
-        {
-          case Play_MB_Trick_Play:  s->scale =  1; break;
-          case Play_MB_Trick_FFWD:  s->scale =  6; break;
-          case Play_MB_Trick_FRWD:  s->scale = -6; break;
-        }
-      }
-      else
-      {
-        s->scale = 1;
+        case Play_MB_Trick_Play:  s->scale =  1; break;
+        case Play_MB_Trick_FFWD:  s->scale =  6; break;
+        case Play_MB_Trick_FRWD:  s->scale = -6; break;
       }
     }
+
+    if (s->server_majorver >= 6 && s->asset_type != assettype_MPEG1)
+    {
+      /* In MPEG2 trick streams for MediaBase 6, the time codes need to */
+      /* be scaled by the current scale amount.                         */
+
+      s->tc_scale = s->scale;
+    }
+    else
+    {
+      /* For older versions of MediaBase, the time codes do not need to */
+      /* be scaled.                                                     */
+
+      s->tc_scale = 1;
+    }
+  
+    dprintf(("", "Scale read as %d\n", s->scale));
+
+    /* Work out which asset of a sequence we will be playing. */
+
+    if (s->num_assets > 1)
+    {
+      unsigned int end_time = 0;
+
+      for (s->cur_asset = 0; s->cur_asset < (s->num_assets - 1); s->cur_asset++)
+      {
+        end_time += s->assets[s->cur_asset].duration;
+        if (s->from < end_time)
+          break;
+      }
+    }
+
+    dprintf(("", "play_mode_changed: Play will start from npt %d.%d (which is in asset %d)\n", s->from / 100, s->from % 100, s->cur_asset));
 
     /* Change the cached NPT to the NPT the server is now changing to.     */
     /* If the user does another state change before video actually starts, */
@@ -1528,6 +1577,8 @@ _kernel_oserror * play_mode_changed(session * s, int playmode)
     s->cached_npt = s->from;
     s->npt_cache_time = utils_read_time();
     s->time_found = 0;
+
+    /* Set the time code reading callout to start looking for the first time code */
 
     if (s->read_tc_set == 0)
     {
@@ -1538,7 +1589,7 @@ _kernel_oserror * play_mode_changed(session * s, int playmode)
 
   s->playmode = playmode;
 
-  dprintf(("", "Scale is now %d\n", s->scale));
+  dprintf(("", "scale is now %d, tc_scale is %d\n", s->scale, s->tc_scale));
 
   return NULL;
 }
@@ -1575,49 +1626,184 @@ static bool play_read_npt_from_timecode(session * s)
     {
       if (time_code != 0xffffffff) /* (indicates unknown time) */
       {
-        int npt, scaled_npt;
+        int           npt, scaled_npt, expected_npt;
+        int           sequence_margin;
+        unsigned int  time_now = utils_read_time();
+
+        /* Estimate what the NPT should now be */
+        expected_npt = s->cached_npt;
+        if (s->time_found != 0)
+          expected_npt += (time_now - s->npt_cache_time) * s->scale;
 
         /* Remember the time now */
-        s->npt_cache_time = utils_read_time();
+        s->npt_cache_time = time_now;
 
         /* Time code is in hours, minute, seconds and frames - convert to centiseconds */
 
-        /* Get npt in centiseconds */
+        /* Get NPT in centiseconds */
         npt =            100 *((time_code & 0x000FC0) >> 6)  +
                     60 * 100 *((time_code & 0x03F000) >> 12) +
                60 * 60 * 100 *((time_code & 0x7C0000) >> 18);
 
         /* Add frame number time */
-        npt += (100 * ((time_code & 0x00003F) + temporal_reference)) / s->approx_fps;
+        npt += (100 * ((time_code & 0x00003F) + temporal_reference)) / s->assets[s->cur_asset].approx_fps;
 
-        /* Adjust for scale and start time */
-        if (s->scale > 1)
+        /* Adjust for tc_scale and start time */
+        scaled_npt = npt * s->tc_scale;
+        if (s->tc_scale < 0)
+          npt = s->assets[s->cur_asset].parent_duration + scaled_npt + s->assets[s->cur_asset].start_offset;
+        else
+          npt = scaled_npt + s->assets[s->cur_asset].start_offset;
+
+        /* Watch out for sequence transitions */
+
+        /* Note the distinction between s->scale and s->tc_scale. This     */
+        /* allows the code to work both on MediaBase 5 (where trick stream */
+        /* time codes are from the original stream) and MediaBase 6 (where */
+        /* trick stream time codes give the position in the trick stream.) */
+
+        if (s->scale < 0)
         {
-          scaled_npt = npt * s->scale;
-          npt = scaled_npt - s->start_time;
-        }
-        else if (s->scale < 0)
-        {
-          scaled_npt = npt * s->scale;
-          npt = s->end_time + scaled_npt - s->start_time;
+          /* Going backwards */
+
+          if (s->cur_asset > 0)
+          {
+            int   i, start_npt, time_to_start;
+            bool  npt_wrong;
+
+            /* Work out the margin of error we allow for the NPT */
+            sequence_margin = Play_Sequence_Margin * -s->scale / 2;
+
+            /* Find the start time of the current asset */
+            for (i = 0, start_npt = 0; i < s->cur_asset; i++)
+              start_npt += s->assets[i].duration;
+
+            /* How close are we to the start? */
+            time_to_start = expected_npt - start_npt;
+
+            /* Does the NPT look wrong? */
+            npt_wrong = (abs(npt - expected_npt) > sequence_margin);
+
+            if (npt_wrong || time_to_start < -sequence_margin/2)
+            {
+              int   asset = s->cur_asset;
+
+              /* Either we are well beyond the expected asset change point,  */
+              /* or the NPT calculated from the time code doesn't look       */
+              /* right. In the latter case, if our expected NPT is near the  */
+              /* start of the current asset we are probably now actually in  */
+              /* the previous asset in the sequence, so recalculate the NPT  */
+              /* using the times for the previous asset. If things still     */
+              /* look wrong, and we are near the start of the previous asset */
+              /* too (because it was extremely short - not very likely in    */
+              /* practice), try moving on to that one and trying again.      */
+
+              while (
+                     time_to_start < sequence_margin &&
+                     (npt_wrong || time_to_start < -sequence_margin/2) &&
+                     asset > 0
+                    )
+              {
+                dprintf(("", "Detected sequence change - expected_npt=%d, calculated npt=%d\n", expected_npt, npt));
+                asset--;
+                if (s->tc_scale < 0)
+                  npt = s->assets[asset].parent_duration + scaled_npt + s->assets[asset].start_offset;
+                else
+                  npt = scaled_npt + s->assets[asset].start_offset;
+                start_npt -= s->assets[asset].duration;
+                time_to_start = expected_npt - start_npt;
+                dprintf(("", "Now in asset %d, npt=%d\n", asset, npt));
+
+                npt_wrong = (abs(npt - expected_npt) > sequence_margin);
+              }
+
+              /* If the NPT is still not OK, but this is the first time code   */
+              /* we have read, assume the asset number was right but the start */
+              /* time value was wrong. Otherwise, update the asset number.     */
+              if (!npt_wrong || s->time_found != 0)
+                s->cur_asset = asset;
+            }
+          }
         }
         else
         {
-          scaled_npt = npt;
-          npt = npt - s->start_time;
+          /* Going forwards */
+
+          if (s->cur_asset < (s->num_assets - 1))
+          {
+            int   i, end_npt, time_to_end;
+            bool  npt_wrong;
+
+            /* Work out the margin of error we allow for the NPT */
+            if (s->scale == 1)
+              sequence_margin = Play_Sequence_Margin;
+            else
+              sequence_margin = Play_Sequence_Margin * s->scale / 2;
+
+            /* Find the end time of the current asset */
+            for (i = 0, end_npt = 0; i <= s->cur_asset; i++)
+              end_npt += s->assets[i].duration;
+
+            /* How close are we to the end? */
+            time_to_end = end_npt - expected_npt;
+
+            /* Does the NPT look wrong? */
+            npt_wrong = (abs(npt - expected_npt) > sequence_margin);
+
+            if (npt_wrong || time_to_end < -sequence_margin/2)
+            {
+              int   asset = s->cur_asset;
+
+              /* Either we are well beyond the expected asset change point,  */
+              /* or the NPT calculated from the time code doesn't look       */
+              /* right. In the latter case, if our expected NPT is near the  */
+              /* end of the current asset we are probably now actually in    */
+              /* the next asset in the sequence, so recalculate the NPT      */
+              /* using the times for the next asset. If things still look    */
+              /* wrong, and we are near the end of the next asset too        */
+              /* (because it was extremely short - not very likely in        */
+              /* practice), try moving on to that one and trying again.      */
+
+              while (
+                     time_to_end < sequence_margin &&
+                     (npt_wrong || time_to_end < -sequence_margin/2) &&
+                     asset < (s->num_assets - 1)
+                    )
+              {
+                dprintf(("", "Detected sequence change - expected_npt=%d, calculated npt=%d\n", expected_npt, npt));
+                asset++;
+                npt = scaled_npt + s->assets[asset].start_offset;
+                end_npt += s->assets[asset].duration;
+                time_to_end = end_npt - expected_npt;
+                dprintf(("", "Now in asset %d, npt=%d\n", asset, npt));
+
+                npt_wrong = (abs(npt - expected_npt) > sequence_margin);
+              }
+
+              /* If the NPT is still not OK, but this is the first time code   */
+              /* we have read, assume the asset number was right but the start */
+              /* time value was wrong. Otherwise, update the asset number.     */
+              if (!npt_wrong || s->time_found != 0)
+                s->cur_asset = asset;
+            }
+          }
         }
 
         /* If the first NPT calculated from a time code is significantly    */
         /* different from the expected NPT (which was put in s->cached_npt  */
         /* when the PLAY request succeeded), assume the start or end time   */
-        /* is wrong and adjust accordingly. Since the server does not       */
-        /* tell us what the end time for a 'clip' is (here 'clip' means a   */
-        /* MediaBase clip, as opposed to a normal asset), this code will    */
-        /* always be executed when rewinding a 'clip' for the first time.   */
+        /* is wrong and adjust accordingly.                                 */
         /* Note that we avoid doing this for trick play modes on MediaBase  */
         /* 5 or earlier, because our seeking is too inaccurate for this to  */
-        /* work. Also, for MediaBase 5 the end time is not needed (s->scale */
-        /* is always 1).                                                    */
+        /* work. Also, for MediaBase 5 the parent duration is not needed    */
+        /* since s->tc_scale is always 1.                                   */
+        /* Note that this code was originally added to cope with beta       */
+        /* versions of MediaBase 6 which did not report the duration of the */
+        /* parent of a clip (needed for NPT calculation when rewinding).    */
+        /* Now that MediaBase does report this information, it is possible  */
+        /* that this is no longer necessary. The remaining use is to allow  */
+        /* us to cope with an asset where the time codes do not start from  */
+        /* the time we expect, but this has not actually been tested...     */
 
         #ifdef TRACE
         if (s->time_found == 0)
@@ -1625,23 +1811,25 @@ static bool play_read_npt_from_timecode(session * s)
         #endif
         if (
             s->time_found == 0 &&
-            abs(npt - s->cached_npt) > Play_TimeCode_Margin &&
+            abs(npt - expected_npt) > Play_TimeCode_Margin &&
             (s->playmode == Play_MB_Trick_Play || s->server_majorver >= 6)
            )
         {
-          if (s->scale < 0)
+          if (s->tc_scale < 0)
           {
-            s->end_time = s->start_time + s->cached_npt - scaled_npt;
-            dprintf(("Time_0", "Calculated NPT %d was not close to expected NPT %d. end_time recalculated as %d\n", npt, s->cached_npt, s->end_time));
+            s->assets[s->cur_asset].parent_duration = expected_npt - s->assets[s->cur_asset].start_offset - scaled_npt;
+            dprintf(("Time_0", "Calculated NPT %d was not close to expected NPT %d. parent_duration recalculated as %d\n", npt, s->cached_npt, s->assets[s->cur_asset].parent_duration));
           }
           else
           {
-            s->start_time = scaled_npt - s->cached_npt;
-            dprintf(("Time_0", "Calculated NPT %d was not close to expected NPT %d. start_time recalculated as %d\n", npt, s->cached_npt, s->start_time));
+            s->assets[s->cur_asset].start_offset = -(scaled_npt - expected_npt);
+            dprintf(("Time_0", "Calculated NPT %d was not close to expected NPT %d. start_offset recalculated as %d\n", npt, s->cached_npt, s->assets[s->cur_asset].start_offset));
           }
         }
         else
         {
+          /* Success - npt should now hold the correct NPT */
+
           if (npt < 0)
             s->cached_npt = 0;
           else if (npt > s->duration)
@@ -1702,7 +1890,12 @@ int play_read_current_npt(session * s)
 {
   int npt;
 
-  /* First try to read the video stream time code */
+  /* If we're not playing yet, return the cached value */
+
+  if (s->started == 0)
+    return s->cached_npt;
+
+  /* Try to read the video stream time code */
 
   if (play_read_npt_from_timecode(s))
     return s->cached_npt;
@@ -1712,7 +1905,7 @@ int play_read_current_npt(session * s)
   /* If we are paused, at end of stream, or a time code has not been read */
   /* yet, just return the cached value.                                   */
 
-  dprintf(("", "play_read_current_npt: Using cached time\n"));
+  dprintf(("Time_0", "play_read_current_npt: Using cached time\n"));
 
   if (s->playmode == Play_MB_Trick_Freeze || s->playmode == Play_MB_Trick_EOS || s->time_found == 0)
     return s->cached_npt;
@@ -1927,7 +2120,7 @@ static void play_reconstruct_range_header(session * s, char * temp)
 
     dprintf(("", "play_reconstruct_range_header: time before adjustment=%d, ", from));
     modulefp_enable(&buf);
-    from = play_get_trick_stream_npt(s, from);
+    from = play_get_trick_stream_npt(&s->assets[s->cur_asset], from);
     modulefp_disable(&buf);
     dprintf(("", "after adjustment=%d\n", from));
   }
@@ -1962,9 +2155,9 @@ static void play_reconstruct_range_header(session * s, char * temp)
 /*             the normal stream time given, *in cs*.         */
 /**************************************************************/
 
-static unsigned int play_get_trick_stream_npt(session * s, unsigned int npt)
+static unsigned int play_get_trick_stream_npt(asset_data * asset, unsigned int npt)
 {
-  if (s->frames_per_sec == 0 || s->i_frame_ratio == 0)
+  if (asset->frames_per_sec == 0 || asset->i_frame_ratio == 0)
   {
     /* If we're missing any values, assume a 2:1 ratio... :-/ */
 
@@ -1972,18 +2165,19 @@ static unsigned int play_get_trick_stream_npt(session * s, unsigned int npt)
   }
   else
   {
-    /* Kasenna said this - but it's wrong...                             */
-    /*                                                                   */
-    /*    return (unsigned int) ((double) npt / (s->i_frame_ratio + 1)); */
-    /*                                                                   */
-    /* Andrew's solution was to use:                                     */
-    /*                                                                   */
-    /*    return (unsigned int) (((double) npt * (s->i_frame_ratio + 1)) / s->frames_per_sec); */
-    /*                                                                   */
-    /* The following seems to work OK too, but I can't get Kasenna to    */
-    /* give me a proper answer.                                          */
+    /* Kasenna said this - but it's wrong...                                   */
+    /*                                                                         */
+    /*    return (unsigned int) ((double) npt / (asset->i_frame_ratio + 1));   */
+    /*                                                                         */
+    /* Andrew's solution was to use:                                           */
+    /*                                                                         */
+    /*    return (unsigned int) (((double) npt * (asset->i_frame_ratio + 1)) / */
+    /*                           asset->frames_per_sec);                       */
+    /*                                                                         */
+    /* The following seems a little better, but I can't get Kasenna to give    */
+    /* me a proper answer as to why.                                           */
 
-    return (unsigned int) (((double) npt / s->i_frame_ratio) * 7.5);
+    return (unsigned int) (((double) npt * asset->i_frame_ratio) / asset->frames_per_sec);
   }
 }
 
