@@ -19,14 +19,14 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -depend !Depend ${INCLUDES} ${DFLAGS} -wp
+CFLAGS  = -depend !Depend ${INCLUDES} ${DFLAGS} -wp -fk
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 # Swap these lines to choose which version to make (only the second takes effect). Also,
 # m.c is only needed when making a TRACE or CHECK version.
-DFLAGS   = -DTRACE=2 -DCHECK=1 -throwback -fah -strict
 # NB!! This software currently *FAILS* for unexplained reasons if compiled without memory
 # checking.
+DFLAGS   = -DTRACE=5 -DCHECK=1 -throwback -fah -strict
 DFLAGS   = -DCHECK=1 -ff
 
 #
@@ -164,125 +164,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.m:	c.m
-o.m:	C:h.kernel
-o.m:	h.m
-o.m:	h.utils
-o.plugclient:	c.plugclient
-o.plugclient:	C:h.swis
-o.plugclient:	C:h.kernel
-o.plugclient:	tbox:h.toolbox
-o.plugclient:	tbox:h.wimp
-o.plugclient:	tbox:h.window
-o.plugclient:	tbox:h.gadgets
-o.plugclient:	tbox:h.quit
-o.plugclient:	h.event
-o.plugclient:	tbox:h.wimplib
-o.plugclient:	h.m
-o.plugclient:	C:h.plugin
-o.plugclient:	h.plugclient
-o.plugclient:	h.version
-o.plugclient:	h.client
-o.plugclient:	h.utils
-o.plugclient:	h.utils
-o.utils:	c.utils
-o.utils:	C:h.kernel
-o.utils:	C:h.swis
-o.utils:	h.m
-o.utils:	tbox:h.wimp
-o.utils:	tbox:h.wimplib
-o.utils:	h.version
-o.utils:	h.utils
-o.client_rep:	c.client_rep
-o.client_rep:	C:h.swis
-o.client_rep:	C:h.kernel
-o.client_rep:	tbox:h.wimplib
-o.client_rep:	tbox:h.wimp
-o.client_rep:	tbox:h.window
-o.client_rep:	tbox:h.toolbox
-o.client_rep:	tbox:h.gadgets
-o.client_rep:	h.event
-o.client_rep:	h.m
-o.client_rep:	h.plugclient
-o.client_rep:	C:h.plugin
-o.client_rep:	h.client
-o.client_rep:	h.utils
-o.client_rep:	h.utils
-o.clientmidi:	c.clientmidi
-o.clientmidi:	C:h.swis
-o.clientmidi:	C:h.kernel
-o.clientmidi:	tbox:h.wimplib
-o.clientmidi:	tbox:h.wimp
-o.clientmidi:	tbox:h.window
-o.clientmidi:	tbox:h.toolbox
-o.clientmidi:	tbox:h.gadgets
-o.clientmidi:	h.event
-o.clientmidi:	h.m
-o.clientmidi:	h.plugclient
-o.clientmidi:	C:h.plugin
-o.clientmidi:	h.client
-o.clientmidi:	h.utils
-o.clientmidi:	h.version
-o.clientmidi:	h.utils
-o.event:	c.event
-o.event:	C:h.kernel
-o.event:	h.m
-o.event:	h.utils
-o.event:	h.types
-o.event:	tbox:h.wimp
-o.event:	tbox:h.toolbox
-o.event:	h.event
-o.event:	h.event
-o.event:	h.wimpevent
-o.event:	h.tbevent
-o.event:	h.wimpmsg
-o.tbevent:	c.tbevent
-o.tbevent:	C:h.kernel
-o.tbevent:	h.m
-o.tbevent:	h.event
-o.tbevent:	tbox:h.wimp
-o.tbevent:	tbox:h.toolbox
-o.tbevent:	h.utils
-o.tbevent:	h.types
-o.tbevent:	h.tbevent
-o.wimpevent:	c.wimpevent
-o.wimpevent:	C:h.kernel
-o.wimpevent:	h.m
-o.wimpevent:	h.utils
-o.wimpevent:	h.event
-o.wimpevent:	tbox:h.wimp
-o.wimpevent:	tbox:h.toolbox
-o.wimpevent:	h.types
-o.wimpevent:	h.wimpevent
-o.wimpmsg:	c.wimpmsg
-o.wimpmsg:	C:h.kernel
-o.wimpmsg:	h.m
-o.wimpmsg:	h.utils
-o.wimpmsg:	h.event
-o.wimpmsg:	tbox:h.wimp
-o.wimpmsg:	tbox:h.toolbox
-o.wimpmsg:	h.types
-o.wimpmsg:	h.wimpmsg
-oz.ModuleWrap: src.ModuleWrap
-oz.ModuleWrap: hdr.AppName
-oz.ModuleWrap: Hdr:ListOpts
-oz.ModuleWrap: Hdr:Macros
-oz.ModuleWrap: Hdr:System
-oz.ModuleWrap: Hdr:SWIs
-oz.ModuleWrap: Hdr:CPU.Generic26
-oz.ModuleWrap: Hdr:IO.GenericIO
-oz.ModuleWrap: Hdr:RISCOS
-oz.ModuleWrap: Hdr:ModHand
-oz.ModuleWrap: Hdr:EnvNumbers
-oz.ModuleWrap: Hdr:Proc
-oz.ModuleWrap: Hdr:FSNumbers
-oz.ModuleWrap: Hdr:NewErrors
-oz.ModuleWrap: Hdr:Services
-oz.ModuleWrap: Hdr:ResourceFS
-oz.ModuleWrap: Hdr:MsgTrans
-oz.ModuleWrap: Hdr:Variables
-oz.ModuleWrap: Hdr:UpCall
-oz.ModuleWrap: hdr.ResFiles
 oz.plugclient:	c.plugclient
 oz.plugclient:	C:h.swis
 oz.plugclient:	C:h.kernel
@@ -359,6 +240,10 @@ oz.ModuleWra1: Hdr:MsgTrans
 oz.ModuleWra1: Hdr:Variables
 oz.ModuleWra1: Hdr:UpCall
 oz.ModuleWra1: hdr.ResFiles
+oz.m:	c.m
+oz.m:	C:h.kernel
+oz.m:	h.m
+oz.m:	h.utils
 oz.event:	c.event
 oz.event:	C:h.kernel
 oz.event:	h.m
@@ -398,7 +283,3 @@ oz.wimpmsg:	tbox:h.wimp
 oz.wimpmsg:	tbox:h.toolbox
 oz.wimpmsg:	h.types
 oz.wimpmsg:	h.wimpmsg
-oz.m:	c.m
-oz.m:	C:h.kernel
-oz.m:	h.m
-oz.m:	h.utils
