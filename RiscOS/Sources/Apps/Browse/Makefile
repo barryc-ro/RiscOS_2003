@@ -35,6 +35,11 @@
 #			NL, hash, NL; end on hash, space, hyphen.
 # 1997-08-28	ADH	Added Argonet build. Not much to do in the Makefile
 #			but needs the appropriate TaskObey files.
+# 1998-30-04	ADH	Added JavaScript build support, including BASEFLAGS
+#			in the compile-time options.
+# 1998-07-02	ADH	Prior to 2.06 intermediate checkin, took out
+#			-DJAVASCRIPT from DFLAGS and added comment about
+#			needing to increase !Run file WimpSlot values.
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -80,17 +85,25 @@ WFLAGS		= ~cf~vr
 # Flags
 #
 
-# These are for the standard Desktop build (plus debug), the Surfboard ROM
-# build (plus debug), the Surfboard RAM build (plus debug), and the
+# BASEFLAGS holds common compile time options that all builds will use.
+# Others are for the standard Desktop build (plus debug), the Surfboard
+# ROM build (plus debug), the Surfboard RAM build (plus debug), and the
 # Intertalk build (plus debug).
 
-DFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DALIAS_URLS
+BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20
+
+# With JAVASCRIPT defined, you'll need to up the WimpSlot values in !Run
+# files when the export is complete...
+#
+# DFLAGS		= ${BASEFLAGS} -DSINGLE_USER -DJAVASCRIPT
+
+DFLAGS		= ${BASEFLAGS} -DSINGLE_USER
 DDFLAGS		= ${DFLAGS} -fn -DSTRICT_PARSER -DTRACE
-DZFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DHIDE_CGI -DANTI_TWITTER
+DZFLAGS		= ${BASEFLAGS} -DSINGLE_USER -DHIDE_CGI -DANTI_TWITTER
 DDZFLAGS	= ${DZFLAGS} -fn -DSTRICT_PARSER -DTRACE
-D_SURFFLAGS	= -DCOMPAT_INET4 -DSINGLE_USER -DANTI_TWITTER -DREMOTE_HOTLIST -DHIDE_CGI -DHACK_LINEONE
+D_SURFFLAGS	= ${BASEFLAGS} -DSINGLE_USER -DANTI_TWITTER -DREMOTE_HOTLIST -DHIDE_CGI -DALIAS_URLS -DHACK_LINEONE
 DD_SURFFLAGS	= ${D_SURFFLAGS} -fn -DSTRICT_PARSER -DTRACE
-D_ITALKFLAGS	= -DCOMPAT_INET4 -DALIAS_URLS
+D_ITALKFLAGS	= ${BASEFLAGS} -DALIAS_URLS
 DD_ITALKFLAGS	= ${D_ITALKFLAGS} -fn -DSTRICT_PARSER -DTRACE
 
 
@@ -116,6 +129,9 @@ TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
 INETLIB		= TCPIPLibs:o.inetlib
 UNICODELIB	= C:Unicode.o.ucodelib
+MEMLIB		= C:MemLib.o.MemLib
+NSPRLIB		= C:NSPRLib.o.NSPRLib
+JSLIB		= C:JSLib.o.JSLib
 
 LIBSM = \
  ${HTMLLIB}zm \
@@ -129,7 +145,10 @@ LIBSM = \
  ${PNGLIBZ} \
  ${JPEGLIBZ} \
  ${ZLIB}zm \
- ${UNICODELIB}z
+ ${UNICODELIB}z \
+ ${JSLIB}zm \
+ ${NSPRLIB}zm \
+ ${MEMLIB}z
 
 LIBS = \
  ${CLIB} \
@@ -144,7 +163,10 @@ LIBS = \
  ${PNGLIB} \
  ${JPEGLIB} \
  ${ZLIB} \
- ${UNICODELIB}
+ ${UNICODELIB} \
+ ${JSLIB} \
+ ${NSPRLIB} \
+ ${MEMLIB}
 
 LIBSD = \
  ${CLIB} \
@@ -159,14 +181,17 @@ LIBSD = \
  ${PNGLIB} \
  ${JPEGLIB} \
  ${ZLIB} \
- ${UNICODELIB}
+ ${UNICODELIB} \
+ ${JSLIB} \
+ ${NSPRLIB} \
+ ${MEMLIB}
 
 
 # -----------------------------------------------------------------------------
 # Include files (libraries and resources)
 #
 
-INCLUDES	= -Itbox:,C:,HTMLLib:,ImageLib:,Libraries.URILib.,TCPIPLibs:
+INCLUDES	= -Itbox:,C:,HTMLLib:,ImageLib:,Libraries.URILib.,TCPIPLibs:,C:NSPRLib.,C:JSLib.
 
 FILES = \
  ${LDIR}.!Boot \
@@ -213,6 +238,8 @@ OBJS = \
  o.ImgHistory		\
  o.ItemInfo		\
  o.JavaScript		\
+ o.JSconsts		\
+ o.JSwindow		\
  o.LineOne		\
  o.Main			\
  o.Markers		\
@@ -235,6 +262,7 @@ OBJS = \
  o.SaveDraw		\
  o.SaveFile		\
  o.SaveObject		\
+ o.SaveSHelp		\
  o.SaveText		\
  o.SetPBoxes		\
  o.Tables		\
@@ -273,6 +301,9 @@ OBJSZ = \
  oz.ImgHistory		\
  oz.ItemInfo		\
  oz.JavaScript		\
+ oz.JSconsts		\
+ oz.JSURL		\
+ oz.JSwindow		\
  oz.LineOne		\
  oz.Main		\
  oz.Markers		\
@@ -295,6 +326,7 @@ OBJSZ = \
  oz.SaveDraw		\
  oz.SaveFile		\
  oz.SaveObject		\
+ oz.SaveSHelp		\
  oz.SaveText		\
  oz.SetPBoxes		\
  oz.Tables		\
@@ -333,6 +365,8 @@ OBJSD = \
  od.ImgHistory		\
  od.ItemInfo		\
  od.JavaScript		\
+ od.JSconsts		\
+ od.JSwindow		\
  od.LineOne		\
  od.Main		\
  od.Markers		\
@@ -355,6 +389,7 @@ OBJSD = \
  od.SaveDraw		\
  od.SaveFile		\
  od.SaveObject		\
+ od.SaveSHelp		\
  od.SaveText		\
  od.SetPBoxes		\
  od.svcprint		\
@@ -395,6 +430,9 @@ OBJSDZ = \
  odz.ImgHistory		\
  odz.ItemInfo		\
  odz.JavaScript		\
+ odz.JSconsts		\
+ odz.JSURL		\
+ odz.JSwindow		\
  odz.LineOne		\
  odz.Main		\
  odz.Markers		\
@@ -417,6 +455,7 @@ OBJSDZ = \
  odz.SaveDraw		\
  odz.SaveFile		\
  odz.SaveObject		\
+ odz.SaveSHelp		\
  odz.SaveText		\
  odz.SetPBoxes		\
  odz.svcprint		\
@@ -456,6 +495,9 @@ OBJS_SURF = \
  o_surf.ImgHistory	\
  o_surf.ItemInfo	\
  o_surf.JavaScript	\
+ o_surf.JSconsts	\
+ o_surf.JSURL		\
+ o_surf.JSwindow	\
  o_surf.LineOne		\
  o_surf.Main		\
  o_surf.Markers		\
@@ -478,6 +520,7 @@ OBJS_SURF = \
  o_surf.SaveDraw	\
  o_surf.SaveFile	\
  o_surf.SaveObject	\
+ o_surf.SaveSHelp	\
  o_surf.SaveText	\
  o_surf.SetPBoxes	\
  o_surf.Tables		\
@@ -515,6 +558,9 @@ OBJSD_SURF = \
  od_surf.ImgHistory	\
  od_surf.ItemInfo	\
  od_surf.JavaScript	\
+ od_surf.JSconsts	\
+ od_surf.JSURL		\
+ od_surf.JSwindow	\
  od_surf.LineOne	\
  od_surf.Main		\
  od_surf.Markers	\
@@ -537,6 +583,7 @@ OBJSD_SURF = \
  od_surf.SaveDraw	\
  od_surf.SaveFile	\
  od_surf.SaveObject	\
+ od_surf.SaveSHelp	\
  od_surf.SaveText	\
  od_surf.SetPBoxes	\
  od_surf.svcprint	\
@@ -577,6 +624,9 @@ OBJS_ITALK = \
  o_italk.ImgHistory	\
  o_italk.ItemInfo	\
  o_italk.JavaScript	\
+ o_italk.JSconsts	\
+ o_italk.JSURL		\
+ o_italk.JSwindow	\
  o_italk.LineOne	\
  o_italk.Main		\
  o_italk.Markers	\
@@ -599,6 +649,7 @@ OBJS_ITALK = \
  o_italk.SaveDraw	\
  o_italk.SaveFile	\
  o_italk.SaveObject	\
+ o_italk.SaveSHelp	\
  o_italk.SaveText	\
  o_italk.SetPBoxes	\
  o_italk.Tables		\
@@ -637,6 +688,9 @@ OBJSD_ITALK = \
  od_italk.ImgHistory	\
  od_italk.ItemInfo	\
  od_italk.JavaScript	\
+ od_italk.JSconsts	\
+ od_italk.JSURL		\
+ od_italk.JSwindow	\
  od_italk.LineOne	\
  od_italk.Main		\
  od_italk.Markers	\
@@ -659,6 +713,7 @@ OBJSD_ITALK = \
  od_italk.SaveDraw	\
  od_italk.SaveFile	\
  od_italk.SaveObject	\
+ od_italk.SaveSHelp	\
  od_italk.SaveText	\
  od_italk.SetPBoxes	\
  od_italk.svcprint	\
@@ -753,6 +808,7 @@ install_common: ${FILES}
 	-${CP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
 	${MKDIR} ${INSTDIR}.User
 	-${CP} ${LDIR}.User.Hotlist		${INSTDIR}.User.Hotlist		${CPFLAGS}n
+	-${CP} ${LDIR}.About			${INSTDIR}.About		${CPFLAGS}n
 
 install: install_common
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
@@ -768,6 +824,8 @@ install: install_common
 	-Access ${INSTDIR}.Res		wr/r
 	-Access ${INSTDIR}.Sprites	wr/r
 	-Access ${INSTDIR}.User.Hotlist	wr/r
+	-Access ${INSTDIR}.About	wr/r
+	-Access ${INSTDIR}.About.*	wr/r
 	@echo
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
 
