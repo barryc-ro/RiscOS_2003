@@ -19,7 +19,6 @@
  * 13/9/96: SJM: It did assume if no pixtrans then it didn't need scaling, however this isn't case for plotting
  *		 16bpp to 32bpp and vice versa.
  * 19/9/96: SJM: changed hard coded 68 for default images to size read from image
- * 29/5/97: pdh: always use logical sizes
  */
 
 #include <limits.h>
@@ -539,29 +538,6 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     IMGDBG(("im%p: rec_fn: fmt %d size %dx%d logical size %dx%d\n", i,
             ir->format, ir->x, ir->y, ir->x_logical, ir->y_logical));
 
-    i->frames = ir->frames;
-
-    if (ir->frame)
-    {
-	int size = i->frames * sizeof(frame_rec);
-
-	/* pdh: this is still needed even if i->frames = 1 */
-
-	if (i->frame)
-	    i->frame = mm_realloc(i->frame, size);
-	else
-	    i->frame = mm_malloc(size);
-	memcpy(i->frame, ir->frame, size);
-    }
-
-    IMGDBG(("im%p: rec_fn: frames %d frame=%p repeats=%d\n", i,
-            i->frames, ir->frame, ir->repeat ));
-
-    i->repeats = ir->repeat;
-
-    if (i->frames > 1)
-	i->flags |= image_flag_ANIMATION;
-
     if (i->our_area)
     {
 	int OK;
@@ -572,14 +548,31 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 	{
 	    i->our_area->size = size+16;
 	    i->our_area->freeoff = size + 16;
-            i->our_area->number = ir->frames;
+
+	    i->frames = i->our_area->number = ir->frames;
+
+	    if (ir->frame)
+	    {
+		int size = i->frames * sizeof(frame_rec);
+
+		if (i->frame)
+		    i->frame = mm_realloc(i->frame, size);
+		else
+		    i->frame = mm_malloc(size);
+
+		memcpy(i->frame, ir->frame, size);
+	    }
+
+	    i->repeats = ir->repeat;
+
+	    if (i->frames > 1)
+		i->flags |= image_flag_ANIMATION;
 	}
 	else
 	{
 	    IMGDBG(("im%p: flex_extend FAILED\n", i ));
-/*	    SJM: don't free here - wait for panic to do it so that the deferred sprite is set correctly */
-/* 	    flex_free( &i->our_area ); */
-/* 	    i->our_area = NULL; */
+	    flex_free( &i->our_area );
+	    i->our_area = NULL;
 
 	    /* This is a Bad Situation -- we'd like to kill the thread, but
 	     * we're **IN** the thread!
@@ -799,11 +792,9 @@ static int image_thread_start(image i)
     return (i->tt != 0);
 }
 
-#define IMAGE_THREAD_BUFFER_SIZE	4096
-
 static int image_thread_process(image i, int fh, int from, int to)
 {
-    char *buffer;
+    char buffer[4096];
     int from_base = from;
 
     IMGDBGN(("image_thread_process: in: i %p fh %d from %d to %d\n", i, fh, from, to));
@@ -811,13 +802,11 @@ static int image_thread_process(image i, int fh, int from, int to)
     if ( !i->tt )
         return FALSE;
 
-    buffer = mm_malloc(IMAGE_THREAD_BUFFER_SIZE);	/* taken off stack so doesn't affect wimpslot */
-    
     while (from < to && i->tt->status == thread_ALIVE)
     {
 	int len;
 
-	len = (to-from) > IMAGE_THREAD_BUFFER_SIZE ? IMAGE_THREAD_BUFFER_SIZE : (to-from);
+	len = (to-from) > sizeof(buffer) ? sizeof(buffer) : (to-from);
 
 	IMGDBGN(("Reading %d bytes from file %d.\n", len, fh));
 
@@ -833,7 +822,7 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    IMGDBG(("im%p: running thread again (%d..%d, %s)\n",
 	            i, from, from+len, ((from+len)<to) ? "more" : "final"));
 
-	    MemCheck_RegisterMiscBlock(buffer, IMAGE_THREAD_BUFFER_SIZE);
+	    MemCheck_RegisterMiscBlock(buffer, sizeof(buffer));
 	    thread_run(i->tt);
 	    MemCheck_UnRegisterMiscBlock(buffer);
 	}
@@ -852,16 +841,12 @@ static int image_thread_process(image i, int fh, int from, int to)
 
     IMGDBG(("im%p: image_thread_process out: status %d\n", i, i->tt->status));
 
-    mm_free(buffer);
-    
-#ifndef STBWEB
     if ( do_memory_panic )
     {
         image_memory_panic();
         return FALSE;
     }
-#endif
-    
+
     return (i->tt->status == thread_ALIVE);
 }
 
@@ -993,8 +978,6 @@ static void set_default_image(image i, const char *name, BOOL set_size)
 	fillin_scales(i, 27);
     }
 #endif
-
-    i->frames = 1;
 }
 
 static void image_set_error(image i)
@@ -1132,10 +1115,6 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
     i->ah = NULL;
 
-    /* SJM: free thread if it has died */
-    if (i->tt && i->tt->status == thread_DEAD)
-	image_thread_end(i);
-    
     if (status == status_COMPLETED_FILE)
     {
 	os_filestr ofs;
@@ -1168,8 +1147,6 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
 		    /* If we'd used the logical size and it wasn't an animation then go back to the real size */
 		    /* Don't know if this will work from the cache or not */
-
-		    /* pdh
 		    if (i->flags & image_flag_USE_LOGICAL)
 		    {
 			if (i->frame == NULL)
@@ -1180,7 +1157,6 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
 			fillin_scales(i, info.mode);
 		    }
-		    */
 		}
 	    }
 	    else
@@ -1384,7 +1360,7 @@ static void image_fetch_next(void)
 
 	    being_fetched++;	/* In case it comes from the cache we increment this here */
 
-	    IMGDBG(("image_fetch_next: inc fetching %d\n", being_fetched));
+	    IMGDBG(("Incremented fetching count, now %d\n", being_fetched));
 
 	    ep = access_url(i->url, aflags, 0, 0, i->ref,
 			    &image_progress, &image_completed, i, &(i->ah));
@@ -1632,8 +1608,6 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	    {
 		being_fetched++;
 
-		IMGDBG(("image_find: inc fetching %d\n", being_fetched));
-
 		/* If the file is already around then we don't care if it was deferred, do we? */
 		i->flags &= ~(image_flag_WAITING | image_flag_DEFERRED);
 
@@ -1730,7 +1704,7 @@ os_error *image_stream_data(image i, char *buffer, int len, int update)
     int rd;
 
     IMGDBG(("image_stream_data: i%p buffer %p len %d update %d\n", i, buffer, len, update));
-
+    
     if (i == NULL || i->magic != IMAGE_MAGIC)
     {
 	return makeerror(ERR_BAD_IMAGE_HANDLE);
@@ -1760,7 +1734,7 @@ os_error *image_stream_data(image i, char *buffer, int len, int update)
      * This won't work if the file cannot be identified in the first buffer as the previous
      * buffers aren't available and we can't back up.
      */
-
+    
     if (i->tt->status == thread_DEAD &&
 	(i->data_so_far == 0 || i->plotter != plotter_SPRITE) &&
 	i->our_area == NULL &&
@@ -1857,7 +1831,7 @@ os_error *image_stream_end(image i, char *cfile)
 	free_area(&i->our_area);
 	flex_free(&i->data_area);
 	i->data_area = NULL;
-
+	
 	image_set_error(i);
     }
 
@@ -1991,21 +1965,8 @@ int image_memory_panic(void)
 
     for (i=image_list; i != NULL; i = i->next)
     {
-	/* if we have an animation then trim back to a normal image */
-	if (i->frames > 1 && i->our_area)
-	{
-	    int sprite_size = ((sprite_header *)(i->our_area + 1))->next;
-
-	    i->frames = 1;
-	    i->our_area->number = 1;
-	    i->our_area->size = sprite_size + sizeof(sprite_area) + FLEX_FUDGE;
-	    i->our_area->freeoff = sprite_size + sizeof(sprite_area);
-
-	    flex_extend((flex_ptr) &(i->our_area), i->our_area->size);
-	    freed = TRUE;
-	}
 	/* If we already have the image then dispose of it */
-	else if (i->our_area || i->cache_area || i->data_area)
+	if (i->our_area || i->cache_area || i->data_area)
 	{
 	    freed = TRUE;
 
@@ -2304,7 +2265,7 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
     int ex, ey, l2bpp;
     /*int lbit;*/
 
-    IMGDBG(("image_info: im%p\n", i));
+    IMGDBG(("Asked for image info\n"));
 
     if (i == NULL || i->magic != IMAGE_MAGIC)
     {
@@ -2321,28 +2282,19 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
 	if (i->plotter == plotter_SPRITE)
 	{
 	    if (i->id.tag == sprite_id_name)
-	    {
-		IMGDBG(("image_info: areap %p id '%s'\n", i->areap, i->id.s.name));
 		ep = sprite_select_rp(*(i->areap), &(i->id), (sprite_ptr *) &sph);
-	    }
 	    else
-	    {
-		IMGDBG(("image_info: add %p\n", i->id.s.addr));
 		sph = (sprite_header *) i->id.s.addr;
-	    }
 
-	    if (ep == NULL && sph)
-	    {
-		checking = MemCheck_SetChecking(0, 0);
+	    checking = MemCheck_SetChecking(0, 0);
 
-		IMGDBG(("image_info: sprite is at 0x%p, mode value is 0x%x\n", sph, sph ? sph->mode : 0));
+	    IMGDBG(("Sprite is at 0x%p, mode value is 0x%x\n", sph, sph ? sph->mode : 0));
 
-		ex = bbc_modevar(sph->mode, bbc_XEigFactor);
-		ey = bbc_modevar(sph->mode, bbc_YEigFactor);
-		l2bpp = bbc_modevar(sph->mode, bbc_Log2BPP);
+	    ex = bbc_modevar(sph->mode, bbc_XEigFactor);
+	    ey = bbc_modevar(sph->mode, bbc_YEigFactor);
+	    l2bpp = bbc_modevar(sph->mode, bbc_Log2BPP);
 
-		MemCheck_RestoreChecking(checking);
-	    }
+	    MemCheck_RestoreChecking(checking);
 	}
 	else
 #endif
@@ -2458,7 +2410,7 @@ static void check_scaling(image i, sprite_id *id, int w, int h, int scale_image,
 {
     if ((i->flags & image_flag_REALTHING) && (w != -1 && h != -1))
     {
-#if 1   /*pdh*/
+#if 0
 	facs->xmag = w*2;
 	facs->xdiv = i->width * i->dx;
 	facs->ymag = h*2;
@@ -3031,7 +2983,7 @@ static BOOL image_build_cache_tile_sprite(image i, int scale_image)
 #else
                 /* get os sizes */  /* pdh, these were the other way round */
                 i_w_os = i_w << bbc_modevar(our_sph->mode, bbc_XEigFactor);
-                i_h_os = i_h << bbc_modevar(our_sph->mode, bbc_YEigFactor);
+                i_h_os = i_h << bbc_modevar(our_sph->mode, bbc_XEigFactor);
 #endif
                 c_w_os = c_w << bbc_modevar(-1, bbc_XEigFactor);
                 c_h_os = c_h << bbc_modevar(-1, bbc_YEigFactor);
@@ -3120,7 +3072,7 @@ static void image__render(image i, int x, int y, int w, int h, int scale_image)
     {
 	sprite_header *sph;
 
-	IMGDBG(("img: __render frame %p cache %p\n", i->frame, i->cache_area));
+	IMGDBGN(("img: __render frame %p cache %p\n", i->frame, i->cache_area));
 
 	if (i->frame && i->cache_area)
 	{
@@ -3573,8 +3525,8 @@ void image_os_to_pixels(image im, int *px, int *py, int scale_image)
 
 static int image_ave_col_n(image im, int n)
 {
-    int *count;
-    int *palette;
+    int count[256];
+    int palette[256];
     sprite_header *sphp;
     int lbit, rbit;
     int i,j,k;
@@ -3590,9 +3542,6 @@ static int image_ave_col_n(image im, int n)
 
     flexmem_noshift();
 
-    count = mm_calloc(sizeof(int), 256*2); /* moved buffers out of wimpslot */
-    palette = count + 256;
-    
     if (im->id.tag == sprite_id_name)
 	sprite_select_rp(*(im->areap), &(im->id), (sprite_ptr *) &sphp);
     else
@@ -3601,8 +3550,8 @@ static int image_ave_col_n(image im, int n)
     lbit = (sphp->mode > 255) ? 0 : sphp->lbit;
     rbit = sphp->rbit;
 
-/*  for (i = 0; i < cols; i++) */
-/* 	count[i] = 0; */
+    for (i = 0; i < cols; i++)
+	count[i] = 0;
 
     linep = (int*) (((char*) sphp) + sphp->image);
     for (j=0; j < (sphp->height+1); j++)
@@ -3627,7 +3576,7 @@ static int image_ave_col_n(image im, int n)
     r.r[0] = (int) (long) *(im->areap);
     r.r[1] = (int) (long) im->id.s.addr;
     r.r[2] = (int) (long) palette;
-    r.r[3] = 256 * sizeof(int);
+    r.r[3] = sizeof(palette);
     r.r[4] = ((im->id.tag == sprite_id_name) ? 0 : 1);
 
     ep = os_swix(ColourTrans_ReadPalette, &r);
@@ -3655,8 +3604,6 @@ static int image_ave_col_n(image im, int n)
     blues += (pixcount >> 1);
     blues /= pixcount;
 
-    mm_free(count);
-    
     return (reds << 8) + (greens << 16) + (blues << 24);
 }
 
@@ -3719,7 +3666,7 @@ int image_average_colour(image i)
 
 static int image_white_byte(image im, wimp_paletteword colour)
 {
-    int *palette;
+    int palette[256];
     sprite_header *sphp;
     int l2bpp;
     int cols;
@@ -3730,8 +3677,6 @@ static int image_white_byte(image im, wimp_paletteword colour)
 
     IMGDBG(("Finding colour closest to white\n"));
 
-    palette = mm_malloc(sizeof(int)*256);
-    
     flexmem_noshift();
 
     if (im->id.tag == sprite_id_name)
@@ -3748,7 +3693,7 @@ static int image_white_byte(image im, wimp_paletteword colour)
 	r.r[0] = (int) (long) *(im->areap);
 	r.r[1] = (int) (long) im->id.s.addr;
 	r.r[2] = (int) (long) palette;
-	r.r[3] = 256 * sizeof(int);
+	r.r[3] = sizeof(palette);
 	r.r[4] = ((im->id.tag == sprite_id_name) ? (0<<0) : (1<<0) );
 
 	ep = os_swix(ColourTrans_ReadPalette, &r);
@@ -3763,31 +3708,32 @@ static int image_white_byte(image im, wimp_paletteword colour)
     if (l2bpp == 4)
     {
         int c = ((bb & 0xf8) << (10-3)) | ((gg & 0xf8) << (5-3)) | ((rr & 0xf8) >> 3);
-	best = c | (c << 16);
+	return c | (c << 16);
     }
     else if (l2bpp == 5)
     {
-	best = colour.word;
+	return colour.word;
     }
-    else
+
+    if (ep)
     {
-	cols = 1 << (1 << l2bpp);
-
-	best = find_closest_colour(colour.word, palette, cols);
-
-	IMGDBG(("Best colour is 0x%x\n", best));
-
-	while (l2bpp < 3)
-	{
-	    best |= (best << (1 << l2bpp));
-	    l2bpp++;
-	}
-
-	IMGDBG(("Best colour byte is 0x%x\n", best));
+	usrtrc( "Error in best colour: %s\n", ep->errmess);
     }
 
-    mm_free(palette);
-    
+    cols = 1 << (1 << l2bpp);
+
+    best = find_closest_colour(colour.word, palette, cols);
+
+    IMGDBG(("Best colour is 0x%x\n", best));
+
+    while (l2bpp < 3)
+    {
+	best |= (best << (1 << l2bpp));
+	l2bpp++;
+    }
+
+    IMGDBG(("Best colour byte is 0x%x\n", best));
+
     return best;
 }
 

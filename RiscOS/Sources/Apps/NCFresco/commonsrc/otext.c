@@ -367,34 +367,28 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
 	if (!no_text || (first ^ last))
 	{
-	    int i, ypos;
-
 	    first = first || first_in_line;
 	    last = last || last_in_line || ti->next->tag != ti->tag; /* if type changes then coutn as end of line */
 
 	    width = ti->width + (last ? 0 : ti->pad);
 	    height = ti->max_up + ti->max_down - frontend_dy;
 
-	    ypos =  b - ti->max_down;
-	    
 	    render_set_colour(render_link_colour(ti, doc), doc);
 
-	    for (i = 0; i < 4; i++)
+	    draw_partial_box(first, last, hpos, b - ti->max_down, width, height);
+
+#if ANTI_TWITTER
+	    if (first)
 	    {
-		draw_partial_box(first, last, hpos, ypos, width, height);
-
-		if (first)
-		{
-		    hpos += 2;
-		    width -= 2;
-		}
-		
-		if (last)
-		    width -= 2;
-
-		height -= 4;
-		ypos += 2;
+		hpos += 2;
+		width -= 2;
 	    }
+
+	    if (last)
+		width -= 2;
+
+	    draw_partial_box(first, last, hpos, b - ti->max_down + 2, width, height - 4);
+#endif
 	}
     }
     else

@@ -339,13 +339,8 @@ fe_view fe_next_frame(fe_view v, BOOL next)
 
 void fe_move_highlight_frame_direction(fe_view v, int flags)
 {
-    if (v->parent)
-    {
-	wimp_box box = frameutils_get_cvt(v).box;
-	fe_move_highlight_xy(v, &box, flags | be_link_XY | be_link_VISIBLE | be_link_DONT_WRAP_H | be_link_DONT_WRAP);
-    }
-    else
-	sound_event(snd_WARN_BAD_KEY);
+    wimp_box box = frameutils_get_cvt(v).box;
+    fe_move_highlight_xy(v, &box, flags | be_link_XY | be_link_VISIBLE | be_link_DONT_WRAP_H | be_link_DONT_WRAP);
 }
 
 void fe_move_highlight_frame(fe_view v, BOOL next)
@@ -1097,8 +1092,9 @@ os_error *fe_activate_link(fe_view v, int x, int y, int bbits)
 	    last_click_y = box.y0;
 	    last_click_view = v;
 	    
+
 	    if (flags & be_item_info_INPUT)
- 		backend_highlight_link(v->displaying, ti, movepointer() | be_link_TEXT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
+ 		backend_highlight_link(v->displaying, ti, movepointer() | be_link_TEXT | be_link_CARETISE);
 	    else
 		e = backend_activate_link(v->displaying, ti, 0);
 

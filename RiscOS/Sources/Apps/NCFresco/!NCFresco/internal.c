@@ -14,7 +14,6 @@
 
 #include "bbc.h"
 #include "msgs.h"
-#include "swis.h"
 
 #include "access.h"
 #include "config.h"
@@ -41,8 +40,6 @@
 static fe_view get_source_view(const char *query, BOOL default_top);
 
 /* ----------------------------------------------------------------------------------------------------- */
-
-#define PPrimer_ChangePrinter	0x4B100
 
 static char *auth_code = "U21hcnQga2lkUw==";
 
@@ -232,7 +229,6 @@ static int internal_decode_print_options(const char *query)
 	    mm_free(s);
 
 	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
-	    _swix(PPrimer_ChangePrinter, 0);
 	}
 	
 #if 0
@@ -1803,10 +1799,6 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 
 void fe_internal_deleting_view(fe_view v)
 {
-/*     if (pointer_mode == fe_pointermode_OFF) */
-/*     { */
-/*     } */
-
     if (strcasecomp(v->name, "__favs") == 0)
     {
 	tb_status_button(fevent_HOTLIST_SHOW, tb_status_button_INACTIVE);
@@ -1872,9 +1864,6 @@ void fe_internal_deleting_view(fe_view v)
     else if (strcasecomp(v->name, "__printlegal") == 0)
     {
 	tb_status_button(fevent_PRINT_LEGAL, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, TARGET_ERROR) == 0)
-    {
     }
 }
 

@@ -21,7 +21,9 @@ char *fresco_getversion( void )
 {
     char *pos = strchr( versionstr, '(' ) + 1;
 
-    DBG(("Built %s %s\n", fresco_date, fresco_time ));
+#if DEBUG
+    fprintf( stderr, "Built %s %s\n", fresco_date, fresco_time );
+#endif
 
     /* fresco_date is "Mmm dd yyyy" (mandated by ANSI)
      * we want dd-Mmm-yy

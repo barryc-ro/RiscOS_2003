@@ -1187,8 +1187,6 @@ static void be_undate_image_stata(be_doc doc, void *i)
 
     if (f & image_flag_FETCHED)
 	doc->im_fetched++;
-    else if (f & image_flag_DEFERRED)
-	doc->im_deferred++;
     else if (f & image_flag_WAITING)
 	doc->im_unfetched++;
     else if (f & image_flag_ERROR)
@@ -1208,7 +1206,7 @@ static void be_update_image_info(be_doc doc)
 {
     void *i;
     rid_text_item *ti;
-    int o_fd, o_fg, o_un, o_er, o_in, o_so, o_df;
+    int o_fd, o_fg, o_un, o_er, o_in, o_so;
 
     if (doc == NULL || doc->rh == NULL || doc->rh->stream.text_list == NULL)
 	return;
@@ -1217,7 +1215,6 @@ static void be_update_image_info(be_doc doc)
     o_fg = doc->im_fetching;
     o_un = doc->im_unfetched;
     o_er = doc->im_error;
-    o_df = doc->im_deferred;
     o_in = doc->im_in_transit;
     o_so = doc->im_so_far;
 
@@ -1225,7 +1222,6 @@ static void be_update_image_info(be_doc doc)
     doc->im_fetching = 0;
     doc->im_unfetched = 0;
     doc->im_error = 0;
-    doc->im_deferred = 0;
     doc->im_in_transit = 0;
     doc->im_so_far = 0;
 
@@ -1244,13 +1240,12 @@ static void be_update_image_info(be_doc doc)
 	(o_fg != doc->im_fetching) ||
 	(o_un != doc->im_unfetched) ||
 	(o_er != doc->im_error) ||
-	(o_df != doc->im_deferred) ||
 	(o_in != doc->im_in_transit) ||
 	(o_so != doc->im_so_far) )
     {
 	frontend_view_status(doc->parent, sb_status_IMAGE,
 			     doc->im_fetched, doc->im_fetching, doc->im_unfetched,
-			     doc->im_error, doc->im_deferred, doc->im_so_far, doc->im_in_transit);
+			     doc->im_error, doc->im_so_far, doc->im_in_transit);
     }
 
     /* pdh: why was this removed? */

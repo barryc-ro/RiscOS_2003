@@ -82,7 +82,9 @@ os_error *webfonts_init_font(int n)
 #endif
 	size = size*config_display_scale/100;
 
-/*   DBG(("Font index %d, size %d, name %s\n", n, size, buffer)); */
+#if 0
+    fprintf(stderr, "Font index %d, size %d, name %s\n", n, size, buffer);
+#endif
 
     if (e == NULL)
     {
@@ -302,7 +304,9 @@ int webfont_split_point(int f, const char *s, int width)
 	  coords,
 	  &split);
 
-/*  DBG(("split_point: width %d inptr %p outptr %p\n", width, s, split)); */
+#if DEBUG >= 2
+    fprintf(stderr, "split_point: width %d inptr %p outptr %p\n", width, s, split);
+#endif
 
     return split - s;
 }

@@ -35,7 +35,6 @@
 #include "stbhist.h"
 #include "stbopen.h"
 #include "fevents.h"
-#include "hotlist.h"
 
 /* --------------------------------------------------------------------------*/
 
@@ -864,7 +863,6 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
 
 static void tb_bar_favs_exit_fn(void)
 {
-    frontend_complain(hotlist_flush_pending_delete());
 }
 
 static void tb_bar_history_exit_fn(void)
@@ -1002,9 +1000,8 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	tbi->height = box.y1 - box.y0;
 
 	/* move gadgets if necessary */
-	if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD_BORDER, &wbox) == NULL ||
-	    _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &wbox) == NULL)
-	    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - wbox.x1, 0);
+	if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &wbox) == NULL)
+	    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - wbox.x1 - 24, 0);
     
 	/* extend one extent up or down to cover safe area */
 	if (config_display_control_top)
@@ -1146,7 +1143,7 @@ BOOL tb_status_highlight(BOOL gain)
 
     if (tbi)
     {
-	if (gain && !havefocus(tbi))/* get_highlighted(tbi) == -1) */
+	if (gain)
 	{
 	    int active = get_active(tbi);
 

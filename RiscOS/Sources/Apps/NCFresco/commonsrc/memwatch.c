@@ -170,7 +170,7 @@ static mm_chain *mm_first = NULL, *mm_last = NULL;
 static void mm_link(mm_chain *m)
 {
 #if MEMWATCH >= 4
-    DBG(("mm_link: item at %p\n", m));
+    fprintf(stderr, "mm_link: item at %p\n", m);
 #endif
     if (mm_first)
     {
@@ -189,7 +189,7 @@ static void mm_link(mm_chain *m)
 static void mm_unlink(mm_chain *m)
 {
 #if MEMWATCH >= 4
-    DBG(("mm_unlink: item at %p\n", m));
+    fprintf(stderr, "mm_unlink: item at %p\n", m);
 #endif
     if (m->prev)
 	m->prev->next = m->next;
@@ -211,14 +211,14 @@ void *mm_malloc(size_t x)
 
 #if MEMWATCH >= 3
     if (x >= MEMWATCH_MIN_INTEREST)
-	DBG(("mm_malloc: item size 0x%x '%s' '%s'", x, caller(1), caller(2)));
+	fprintf(stderr, "mm_malloc: item size 0x%x '%s' '%s'", x, caller(1), caller(2));
 #endif
 
     newptr = malloc(x + sizeof(mm_chain) + sizeof(mm_tail));
 
 #if MEMWATCH >= 3
     if (x >= MEMWATCH_MIN_INTEREST)
-	DBG((" = %p\n", newptr ? newptr - 1 : NULL));
+	fprintf(stderr, " = %p\n", newptr ? newptr - 1 : NULL);
 #endif
 
     if (newptr == NULL)
@@ -233,13 +233,13 @@ void *mm_malloc(size_t x)
     newptr->size = x;
     newptr->magic = MM_MAGIC_HEAD;
 #if MEMWATCH >= 4 && 0
-    DBG(("about to call caller()\n"));
+    fprintf(stderr, "about to call caller()\n");
 #endif
     newptr->caller = caller(1);
     newptr->caller2 = caller(2);
 
 #if MEMWATCH >= 4 && 0
-    DBG(("caller() called\n"));
+    fprintf(stderr, "caller() called\n");
 #endif
     tail = MM_TAIL(newptr);
     tail->magic = MM_MAGIC_TAIL;
@@ -261,13 +261,13 @@ void *mm_calloc(size_t x, size_t y)
 
 #if MEMWATCH >= 3
     if (size >= MEMWATCH_MIN_INTEREST)
-	DBG(("mm_calloc: item size 0x%x '%s' '%s'", size, caller(1), caller(2)));
+	fprintf(stderr, "mm_calloc: item size 0x%x '%s' '%s'", size, caller(1), caller(2));
 #endif
     new = calloc(1, size + sizeof(mm_chain) + sizeof(mm_tail));
 
 #if MEMWATCH >= 3
     if (size >= MEMWATCH_MIN_INTEREST)
-	DBG((" = %p\n", new ? new - 1 : NULL));
+	fprintf(stderr, " = %p\n", new ? new - 1 : NULL);
 #endif
 
     if (new == NULL)
@@ -282,13 +282,13 @@ void *mm_calloc(size_t x, size_t y)
     new->magic = MM_MAGIC_HEAD;
 
 #if MEMWATCH >= 4 && 0
-    DBG(("about to call caller()\n"));
+    fprintf(stderr, "about to call caller()\n");
 #endif
     new->caller = caller(1);
     new->caller2 = caller(2);
 
 #if MEMWATCH >= 4 && 0
-    DBG(("caller() called\n"));
+    fprintf(stderr, "caller() called\n");
 #endif
     tail = MM_TAIL(new);
     tail->magic = MM_MAGIC_TAIL;
@@ -312,7 +312,7 @@ void *mm_realloc(void *x, size_t y)
 
 #if MEMWATCH >= 3
     if (y >= MEMWATCH_MIN_INTEREST)
-	DBG(("mm_realloc: item at %p, old size 0x%x, new size 0x%x, %s %s\n", x, m->size, y, caller(1), caller(2)));
+	fprintf(stderr, "mm_realloc: item at %p, old size 0x%x, new size 0x%x, %s %s\n", x, m->size, y, caller(1), caller(2));
 #endif
 
     tail = MM_TAIL(m);
@@ -366,7 +366,7 @@ void mm_free(void *x)
     m = ((mm_chain *) x)-1;
 
 #if MEMWATCH >= 3
-    DBG(("mm_free: item at %p\n", x));
+    fprintf(stderr, "mm_free: item at %p\n", x);
 #endif
     tail = MM_TAIL(m);
 
@@ -377,8 +377,8 @@ void mm_free(void *x)
 	char *fnp;
 #endif
 
-	DBG(("Problem freeing block at 0x%p, hmagic=0x%08x, tmagic=0x%08x\n",
-		m, m->magic, tail->magic));
+	fprintf(stderr, "Problem freeing block at 0x%p, hmagic=0x%08x, tmagic=0x%08x\n",
+		m, m->magic, tail->magic);
 
 	i = 1;
 	/* Unfortunately, this isn't so easy on many other platforms! */
@@ -387,7 +387,7 @@ void mm_free(void *x)
 	{
 	    fnp = caller(i);
 	    if (fnp)
-		DBG(("mm_free caller(%d)='%s'\n", i, fnp));
+		fprintf(stderr, "mm_free caller(%d)='%s'\n", i, fnp);
 	    i++;
 	} while (fnp && strcmp(fnp, "main") != 0);
 #endif
@@ -397,8 +397,8 @@ void mm_free(void *x)
     if ( (m->magic == MM_MAGIC_HEAD_FREED)
          || (tail->magic == MM_MAGIC_TAIL_FREED) )
     {
-	DBG(("Double-freed! first by %s from %s\n",
-	                m->caller, m->caller2 ));
+	fprintf(stderr, "Double-freed! first by %s from %s\n",
+	                m->caller, m->caller2 );
 	exit(1);
 	return;
     }
@@ -433,7 +433,7 @@ void mm__check(FILE *f)
     {
 	if (m->magic != MM_MAGIC_HEAD)
 	{
-	    FDBG((f, "### Bad magic number on head of item at %p\n", m));
+	    fprintf(f, "### Bad magic number on head of item at %p\n", m);
 	    err = 1;
 	}
 
@@ -441,7 +441,7 @@ void mm__check(FILE *f)
 
 	if (t->magic != MM_MAGIC_TAIL)
 	{
-	    FDBG((f, "### Bad magic number on tail of item at %p\n", m));
+	    fprintf(f, "### Bad magic number on tail of item at %p\n", m);
 	    err = 1;
 	}
 
@@ -450,13 +450,13 @@ void mm__check(FILE *f)
 
     if (m_last != mm_last)
     {
-	FDBG((f, "### Memory chain ends do not match up (%p != %p)\n", m_last, mm_last));
+	fprintf(f, "### Memory chain ends do not match up (%p != %p)\n", m_last, mm_last);
 	err = 1;
     }
 
     if (err == 0)
     {
-	FDBG((f, "Memory checks OK\n"));
+	fprintf(f, "Memory checks OK\n");
     }
     else
 	exit(1);
@@ -464,13 +464,13 @@ void mm__check(FILE *f)
 
 void mm__summary(FILE *f)
 {
-    FDBG((f, "Heap function usage counts:\n"
+    fprintf(f, "Heap function usage counts:\n"
 	    "mm_malloc : %d\n"
 	    "mm_calloc : %d\n"
 	    "mm_realloc: %d\n"
 	    "mm_free   : %d\n"
 	    "mm_free0  : %d\n",
-	    num_malloc, num_calloc, num_realloc, num_free, num_free0));
+	    num_malloc, num_calloc, num_realloc, num_free, num_free0);
 }
 
 void mm__dump(FILE *f)
@@ -485,7 +485,7 @@ void mm__dump(FILE *f)
     {
 	if (m->magic != MM_MAGIC_HEAD)
 	{
-	    FDBG((f, "Bad magic number on head of item at %p\n", m));
+	    fprintf(f, "Bad magic number on head of item at %p\n", m);
 	    err = 1;
 	}
 
@@ -493,13 +493,13 @@ void mm__dump(FILE *f)
 
 	if (t->magic != MM_MAGIC_TAIL)
 	{
-	    FDBG((f, "Bad magic number on tail of item at %p\n", m));
+	    fprintf(f, "Bad magic number on tail of item at %p\n", m);
 	    err = 1;
 	}
 
         /* pdh: report pointer as known to caller */
-	FDBG((f, "Block at 0x%p, size=%6d, caller='%s', caller2='%s'\n",
-		m+1, m->size, m->caller ? m->caller : none, m->caller2 ? m->caller2 : none));
+	fprintf(f, "Block at 0x%p, size=%6d, caller='%s', caller2='%s'\n",
+		m+1, m->size, m->caller ? m->caller : none, m->caller2 ? m->caller2 : none);
 
 	total_size += m->size;
 	real_total_size += ((m->size + 3) &~ 3) + sizeof(mm_chain) + sizeof(mm_tail) + 8; /* 8 is for the heap itself (guard and size/flags)  */
@@ -507,18 +507,18 @@ void mm__dump(FILE *f)
 	m_last = m;
     }
 
-    FDBG((f, "\nTotal size requested %6d\n", total_size));
-    FDBG((f, "Total size used      %6d\n\n", real_total_size));
+    fprintf(f, "\nTotal size requested %6d\n", total_size);
+    fprintf(f, "Total size used      %6d\n\n", real_total_size);
 
     if (m_last != mm_last)
     {
-	FDBG((f, "Memory chain ends do not match up (%p != %p)\n", m_last, mm_last));
+	fprintf(f, "Memory chain ends do not match up (%p != %p)\n", m_last, mm_last);
 	err = 1;
     }
 
     if (err == 0)
     {
-	FDBG((f, "Memory checks OK\n"));
+	fprintf(f, "Memory checks OK\n");
     }
 
     mm__summary(f);

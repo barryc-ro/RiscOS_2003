@@ -19,7 +19,6 @@
 #include "colspan.h"
 #include "tables.h"
 #include "util.h"
-#include "gbf.h"
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -1959,19 +1958,7 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	    FMTDBG(("colspan_share_extra_space: abs userwidth is present\n"));
 	    if (table->flags & rid_tf_HAVE_WIDTH)
 	    {
-		user_width = ceil(table->userwidth.u.f);
-
-		/* pdh: clip this if necessary */
-		if ( gbf_active( GBF_AUTOFIT )
-		     && user_width > fwidth )
-		{
-		    FMTDBG(("tab%p: user_width %d > fwidth %d, shrinking\n",
-		            table, user_width, fwidth ));
-		    user_width = fwidth;
-		}
-
-		fwidth = user_width;
-
+		user_width = fwidth = ceil(table->userwidth.u.f);
 		FMTDBG(("colspan_share_extra_space: still active - new fwidth %d\n", fwidth));
 	    }
 	    else

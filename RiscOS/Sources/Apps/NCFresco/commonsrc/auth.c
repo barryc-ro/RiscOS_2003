@@ -40,7 +40,11 @@
 
 #include "debug.h"
 
-#define AUTHDBG(a) DBG(a)
+#if DEBUG
+#define AUTHDBG(a) fprintf a
+#else
+#define AUTHDBG(a)
+#endif
 
 extern void translate_escaped_text(char *src, char *dest, int len);
 
@@ -321,20 +325,20 @@ realm auth_lookup_realm(char *realm)
 {
     auth_realm *a;
 
-    AUTHDBG(("Trying to look up realm '%s'... ", realm));
+    AUTHDBG((stderr, "Trying to look up realm '%s'... ", realm));
 
     for(a = realm_first; a; a = a->next)
     {
 	if (strcmp(realm, a->name) == 0)
 	{
 
-	    AUTHDBG(("Hit!\n"));
+	    AUTHDBG((stderr, "Hit!\n"));
 
 	    return a;
 	}
     }
 
-    AUTHDBG(("Miss.\n"));
+    AUTHDBG((stderr, "Miss.\n"));
 
     return NULL;
 }
@@ -344,7 +348,7 @@ auth_lookup_result auth_lookup(char *url, auth_type *type, char **user, char **p
 {
     auth_item *a;
 
-    AUTHDBG(("Trying to authorise URL='%s'", url));
+    AUTHDBG((stderr, "Trying to authorise URL='%s'", url));
 
     for(a = auth_first; a; a = a->next)
     {
@@ -356,20 +360,20 @@ auth_lookup_result auth_lookup(char *url, auth_type *type, char **user, char **p
 		*user = a->realm->data.basic.user;
 		*passwd = a->realm->data.basic.passwd;
 
-		AUTHDBG(("Hit!\n"));
+		AUTHDBG((stderr, "Hit!\n"));
 
 		return auth_lookup_SUCCESS;
 	    }
 	    else
 	    {
-		AUTHDBG(("Miss.\n"));
+		AUTHDBG((stderr, "Miss.\n"));
 
 		return auth_lookup_NEED_DATA;
 	    }
 	}
     }
 
-    AUTHDBG(("Miss.\n"));
+    AUTHDBG((stderr, "Miss.\n"));
 
     return auth_lookup_FAIL;
 }
@@ -421,7 +425,7 @@ os_error *auth_write_realms(char *fname, auth_passwd_store pws)
     FILE *fh;
     auth_realm *rp;
 
-    AUTHDBG(("auth: write '%s' enc %d\n", fname, pws));
+    AUTHDBG((stderr, "auth: write '%s' enc %d\n", fname, pws));
 
     if (!gstrans_not_null(fname))
 	return NULL;
@@ -489,7 +493,7 @@ os_error *auth_load_file(char *fname)
     FILE *fh;
     char buffer[1024];
 
-    AUTHDBG(("auth: read '%s'\n", fname));
+    AUTHDBG((stderr, "auth: read '%s'\n", fname));
 
     if (file_type(fname) == -1)
 	return NULL;
@@ -507,7 +511,7 @@ os_error *auth_load_file(char *fname)
 
 	    r = strtok(buffer, " \t\n\r");
 
-	    AUTHDBG(("Read realm '%s'\n", r ? r : "<none>"));
+	    AUTHDBG((stderr, "Read realm '%s'\n", r ? r : "<none>"));
 
 	    if (r && r[0] != '#' && strcmp(r, "Format:") != 0)
 	    {
@@ -515,7 +519,7 @@ os_error *auth_load_file(char *fname)
 		u = strtok(NULL, " \t\n\r");
 		p = strtok(NULL, " \t\n\r");
 
-		AUTHDBG(("Type='%s', user='%s', passwd='%s'\n", t ? t : "<None>", u ? u : "<None>", p ? p : "<None>"));
+		AUTHDBG((stderr, "Type='%s', user='%s', passwd='%s'\n", t ? t : "<None>", u ? u : "<None>", p ? p : "<None>"));
 
 		if (t && u)
 		{
@@ -528,7 +532,7 @@ os_error *auth_load_file(char *fname)
 			uudecode(p+1, uucode, sizeof(uucode));
 			p = (char *) uucode;
 
-			AUTHDBG(("Password uudecoded to '%s'\n", p));
+			AUTHDBG((stderr, "Password uudecoded to '%s'\n", p));
 
 		    }
 
@@ -551,7 +555,7 @@ static int auth_read_allow_file(char *fname, allow_item **head)
     char buffer[256];
 
 
-    AUTHDBG(("Reading allow file '%s'\n", fname));
+    AUTHDBG((stderr, "Reading allow file '%s'\n", fname));
 
 
     if (file_type(fname) == -1)
@@ -576,7 +580,7 @@ static int auth_read_allow_file(char *fname, allow_item **head)
 	    for(q=p; *q; q++)
 		*q = toupper(*q);
 
-	    AUTHDBG(("Addind list item '%s'\n", p));
+	    AUTHDBG((stderr, "Addind list item '%s'\n", p));
 
 	    new_item = (allow_item*)mm_malloc(sizeof(*new_item) + strlen(p)+1);
 
@@ -611,7 +615,7 @@ static int auth_test_allow(char *site, allow_item *list)
 	*p = toupper(*p);
 
 
-    AUTHDBG(("Checking site '%s'\n", buffer));
+    AUTHDBG((stderr, "Checking site '%s'\n", buffer));
 
 
     hash = string_hash(buffer);
@@ -619,7 +623,7 @@ static int auth_test_allow(char *site, allow_item *list)
     while (list)
     {
 
-	AUTHDBG(("Testing against '%s'\n", &(list->u.ch) + 8));
+	AUTHDBG((stderr, "Testing against '%s'\n", &(list->u.ch) + 8));
 
 	if ((list->u.hash == hash) && (strcmp(buffer, &(list->u.ch) + 8) == 0))
 	    return 1;
@@ -628,7 +632,7 @@ static int auth_test_allow(char *site, allow_item *list)
     }
 
 
-    AUTHDBG(("No match\n"));
+    AUTHDBG((stderr, "No match\n"));
 
 
     return 0;

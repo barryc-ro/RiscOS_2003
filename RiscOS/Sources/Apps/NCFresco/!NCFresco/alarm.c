@@ -67,8 +67,6 @@ void ncalarm_set(int at, alarm_handler proc, void *handle)
     alarm__pending_list = new_p;
   else
     save_p->next = new_p;
-
-/*   STBDBG(("alarm: set  %d: %x %p\n", at, proc, handle)); */
 }
 
 
@@ -100,8 +98,6 @@ void ncalarm_callnext(void)
     proc_to_call = alarm__pending_list->proc;
     called_at = alarm__pending_list->at;
     handle_to_pass = alarm__pending_list->handle;
-
-/*     STBDBG(("alarm: call %d: %x %p\n", called_at, proc_to_call, handle_to_pass)); */
 
     /* farewell and adieu to the next pending alarm */
     next_alarm = alarm__pending_list;

@@ -430,7 +430,7 @@ static key_list rca_web_keys[] =
     { kbd_handset_PRINT,		fevent_PRINT },
     { akbd_PrintK,			fevent_TOOLBAR_PRINT + fevent_WINDOW },
 
-    { kbd_handset_MENU,			fevent_TOGGLE_STATUS },
+    { kbd_handset_MENU,			fevent_TOOLBAR_DETAILS },
 
     { kbd_handset_TOOLBAR,          fevent_TOGGLE_STATUS },
     { kbd_handset_OPEN,             fevent_OPEN_URL+fevent_WINDOW },
@@ -564,9 +564,6 @@ static key_list rca_external_popup_keys[] =
     { akbd_RightK,          fevent_HIGHLIGHT_FORWARD, key_list_REPEAT },
     { akbd_UpK,             fevent_HIGHLIGHT_UP, key_list_REPEAT },
     { akbd_DownK,           fevent_HIGHLIGHT_DOWN, key_list_REPEAT },
-
-    { akbd_Sh + akbd_TabK,              fevent_SCROLL_OR_CURSOR_UP, key_list_REPEAT },
-    { akbd_TabK,                        fevent_SCROLL_OR_CURSOR_DOWN, key_list_REPEAT },
 
     { 13,                   fevent_HIGHLIGHT_ACTIVATE },
 
@@ -709,7 +706,6 @@ static key_list *get_key_map(int map)
 /* ------------------------------------------------------------------------------------- */
 
 /* This view could be null if the caret was in the status bar
- * event = -2 means that the key should go straight to processkey
  * event = -1 means that the key hasn't been handled so pass it on (processkey)
  * event = 0 means the key has been handled somewhere else so do nothing
  * event > 0 means a real event to handle
@@ -741,21 +737,28 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_RESIZING));
         if (event == -1)
-            event = -2;
+            event = 0;
     }
 
     if (event == -1 && stbmenu_is_open())
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_MENU));
         if (event == -1)
-            event = -2;
+            event = 0;
     }
 
     if (event == -1 && fe_map_view() != NULL)
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_MAP));
         if (event == -1)
-            event = -2;
+            event = 0;
+    }
+
+    if (event == -1 && fe_external_popup_open())
+    {
+	event = fe_key_lookup(chcode, get_key_map(key_map_EXTERNAL_POPUP));
+	if (event == -1)
+	    event = 0;
     }
 
     if (event == -1 && on_screen_kbd)
@@ -764,14 +767,6 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     if (event == -1 && fe_writeable_handle_keys(v, chcode))
     {
         event = 0;  /* key handled, no event */
-    }
-
-    /* careful where this one goes as it stops all other keys from working */
-    if (event == -1 && fe_external_popup_open())
-    {
-	event = fe_key_lookup(chcode, get_key_map(key_map_EXTERNAL_POPUP));
-	if (event == -1)
-	    event = -2;
     }
 
     if (event == -1 && fe_frame_link_selected(v))
@@ -814,7 +809,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 	event = fe_key_lookup(chcode, get_key_map(key_map_CODECS));
 
     /* call event handler or pass on */
-    if (event >= 0)
+    if (event != -1)
         fevent_handler(event, v);
     else
         wimp_processkey(chcode);

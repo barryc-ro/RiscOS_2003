@@ -407,8 +407,6 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	fe_no_new_page(parent, NULL);
 /*   	fe_check_download_finished(parent); */
 	fe_dispose_view(parent);
-
-/* 	fe_ensure_highlight(main_view, 0); */
     }
 
     return ep;

@@ -387,8 +387,7 @@ clean:		sanity
 		-@cd ./cbfresco_pc && $(RM) *.o
 		-@cd ./cbfresco_zm && $(RM) *.o
 		-@cd ./unix ; $(RM) *.o
-		-@cd ./ncfresco ; $(RM) *.o
-		-@cd ./ncfresco_zm ; $(RM) *.o
+		-@cd ./ncfresco ; $(RM) *.o *,ff8 *,fd3
 		-@cd ./stdalone; $(RM) *.o htmlcheck
 		-@cd ./bunix ; $(RM) *.o builders
 		-@cd ./cunix ; $(RM) *.o builders parse_check format_check check_all
@@ -863,7 +862,7 @@ NCFRESCO_BUILD:		$(PREDEPS)
 NCFRESCO_ROM:	$(PREDEPS)
 		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
 		@-mkdir aof
-		@cd ./ncfresco_zm; $(MAKE) NCFRESCO_AOF \
+		@cd ./ncfresco; $(MAKE) NCFRESCO_AOF \
 		LIBS="$(NCFRESCO_ROM_LIBS)" \
 		OBJS="$(NCFRESCO_ROM_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \

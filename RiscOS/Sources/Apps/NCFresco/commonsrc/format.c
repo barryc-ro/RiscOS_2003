@@ -1548,7 +1548,6 @@ extern void rid_toplevel_format(antweb_doc *doc,
 				int fheight)
 {
     rid_text_stream *root_stream;
-    int old_scale_value;
 
     FMTDBG(("\n\n\n\n\n\nrid_toplevel_format(%p) entered, fwidth initially %d\n\n", rh, fwidth));
 
@@ -1574,15 +1573,6 @@ extern void rid_toplevel_format(antweb_doc *doc,
     }
     else
     {
-        if ( gbf_active( GBF_AUTOFIT ) )
-        {
-            /* always attempt at standard size first; this ensures we never
-             * re-reformat even if scrunching attempt fails.
-             */
-            old_scale_value = doc->scale_value;
-            doc->scale_value = config_display_scale_image;
-        }
-
 	FMTDBG(("Sizing root stream\n"));
 	basic_size_stream(doc, rh, root_stream, 0);
 	FMTDBG(("\nDone sizing root stream: min %d, max %d\n",
@@ -1608,16 +1598,6 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
                 if ( scale < doc->scale_value )
                 {
-                    if ( scale != old_scale_value
-                         && doc->parent )
-                    {
-                        /* It's all changed -- force a redraw of a view (using
-                         * Wimp_ForceRedraw so it won't actually happen until
-                         * the next poll)
-                         */
-                        frontend_view_redraw( doc->parent, NULL );
-                    }
-
                     doc->scale_value = scale;
 
                     FMTDBG(("st%p: minwidth %d > fwidth %d, autofit to %d%%\n",

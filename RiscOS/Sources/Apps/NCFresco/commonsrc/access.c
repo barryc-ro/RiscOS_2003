@@ -1468,12 +1468,7 @@ static void access_http_fetch_alarm(int at, void *h)
 		    {
 		        if ((si.out.rc == 401 && d->data.http.had_auth) || (si.out.rc == 407 && d->data.http.had_proxy_auth))
 		        {
-#ifndef STBWEB
-			    /* removed this from NCFresco as the new
-                               error reporting scheme causes the
-                               password box to not be displayed */
 			    frontend_complain(makeerror(ERR_BAD_PASSWD));
-#endif
 			    rr = NULL;
 		        }
 		    }

@@ -110,7 +110,7 @@ int frontend_view_status(fe_view v, int status_type, ...);
 #define sb_status_SENT		6	/* Info about the amount of data sent so far */
                                         /* (int so_far, int total_size) */
 #define sb_status_IMAGE		7	/* Image transfer progress info*/
-                                        /* (int fetched, fetching, waiting, error, deferred, sofar, size) */
+                                        /* (int fetched, fetching, waiting, error, sofar, size) */
 #define sb_status_ABORTED	8	/* Indicate that a fetch was aborted */
                                         /* (void) */
 #define sb_status_HELPER	9	/* Tell the user a helper appliaction was used */
