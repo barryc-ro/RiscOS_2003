@@ -769,41 +769,41 @@ s.AppName: ${LDIR}.Messages
 
 abs.!RI: ${OBJS} ${LIBS} o.dirs
 	@echo
-	${LD} -o $@ ${OBJS} ${LIBS}
+	${LD} -s Symbols.!RI -o $@ ${OBJS} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
 abs.!RI_D: ${OBJSD} ${LIBSD} o.dirs
 	@echo
-	${LD} -debug -o $@ ${OBJSD} ${LIBSD}
+	${LD} -debug -s Symbols.!RI_D -o $@ ${OBJSD} ${LIBSD}
 
 abs.!RI_Surf: ${OBJS_SURF} ${LIBS} o.dirs
 	@echo
-	${LD} -o $@ ${OBJS_SURF} ${LIBS}
+	${LD}  -s Symbols.!RI_Surf -o $@ ${OBJS_SURF} ${LIBS}
 
 abs.!RI_DSurf: ${OBJSD_SURF} ${LIBSD} o.dirs
 	@echo
-	${LD} -debug -o $@ ${OBJSD_SURF} ${LIBSD}
+	${LD} -debug -s Symbols.!RI_DSurf -o $@ ${OBJSD_SURF} ${LIBSD}
 
 abs.!RI_ITalk: ${OBJS_ITALK} ${LIBS} o.dirs
 	@echo
-	${LD} -o $@ ${OBJS_ITALK} ${LIBS}
+	${LD} -s Symbols.!RI_ITalk -o $@ ${OBJS_ITALK} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
 abs.!RI_DITalk: ${OBJSD_ITALK} ${LIBSD} o.dirs
 	@echo
-	${LD} -debug -o $@ ${OBJSD_ITALK} ${LIBSD}
+	${LD} -debug -s Symbols.!RI_DITalk -o $@ ${OBJSD_ITALK} ${LIBSD}
 
 ${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB} o.dirs
 	@echo
-	${LD} -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
+	${LD} -s Symbols.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
 
 ${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} o.dirs
 	@echo
-	${LD} -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
+	${LD} -s Symbols.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
 
 rm.!BrowseD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
 	@echo
-	${LD} -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
+	${LD} -s Symbols.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
 
 
 # -----------------------------------------------------------------------------
