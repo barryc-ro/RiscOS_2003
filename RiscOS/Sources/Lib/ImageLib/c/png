@@ -79,6 +79,7 @@ typedef struct png_loaddata
     unsigned int finished:1;
     unsigned int eightbpphack:1; /* Processing 8bpp + alpha data */
     unsigned int have_bkgd:1;
+    unsigned int isreally32bit:1;
     unsigned int bkgd;
     #ifdef TRACE
     FILE *trace;
@@ -117,6 +118,34 @@ static void my_warn_fn(png_struct *png_ptr, png_const_charp errmess)
     wimp_report_error(&er, 0, "LibPNG");
 }
 #endif
+
+/*
+ * Used on RISC OS 3.1, whose ColourTrans can't give us this table.
+ */
+static void load_inversetable(void)
+{
+    char fname[256];
+    extern void colour_table_leaf_to_path(char *path, const char *leaf);
+    _kernel_oserror *e;
+    char *itable;
+
+    colour_table_leaf_to_path(fname, "8desktop");
+
+    itable = malloc(32768);
+    if (!itable)
+        return;
+
+    e = _swix(OS_File, _INR(0,3), 16, fname, itable, 0);
+    if (e)
+    {
+        free(itable);
+        return;
+    }
+
+    ct32k_buffer[0] = 0x2E4B3233;
+    ct32k_buffer[1] = (int) itable;
+    ct32k_buffer[2] = 0x2E4B3233;
+}
 
 int NewPNG(Image *im)
 {
@@ -294,8 +323,8 @@ void info_callback(png_struct *png_ptr, png_info *info)
         }
     }
 
-    if (/*this->flags & IMAGE_FAST ||*/ osver < 0xA5)
-        this->full_alpha = 0;
+    //if (/*this->flags & IMAGE_FAST ||*/ osver < 0xA5)
+       // this->full_alpha = 0;
 
     if (this->full_alpha)
     {
@@ -405,33 +434,27 @@ void info_callback(png_struct *png_ptr, png_info *info)
     if (info->color_type == PNG_COLOR_TYPE_RGB ||
         info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
+        /* Add a filler if alpha missing */
+        if (info->color_type == PNG_COLOR_TYPE_RGB)
+            png_set_filler(png_ptr, 0, PNG_FILLER_AFTER);
+
         if (osver >= 0xA5)
         {
-            /* Add a filler if alpha missing */
-            if (info->color_type == PNG_COLOR_TYPE_RGB)
-                png_set_filler(png_ptr, 0, PNG_FILLER_AFTER);
-
             mode = MODE(6,90,90);
         }
         else
         {
-            /* If on an old OS, get it to spit out 8bpp data :-( */
-            _swix(Hourglass_On, 0);
-            hourglass_on = 1;
-            if (png_get_valid(png_ptr, info, PNG_INFO_PLTE))
+            if (!ct32k_buffer[1])
             {
-                png_uint_16p histogram = NULL;
-                png_get_hIST(png_ptr, info, &histogram);
-                png_set_dither(png_ptr, info->palette, info->num_palette, 256, histogram, 1);
+                load_inversetable();
+                if (!ct32k_buffer[1])
+                    png_error(png_ptr, "Insufficient memory");
             }
+
+            if (this->full_alpha)
+                mode = MODE(6,90,90);
             else
-            {
-                png_set_dither(png_ptr, riscospal, 256, 256, NULL, 1);
-                useropal=1;
-            }
-            _swix(Hourglass_Off, 0);
-            hourglass_on = 0;
-            mode = 28;
+                mode = 28;
         }
     }
     else
@@ -493,7 +516,12 @@ void info_callback(png_struct *png_ptr, png_info *info)
     if (info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
         riscos_rowbytes = info->width;
     else if (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
-        riscos_rowbytes = info->width * 4;
+    {
+        if (osver < 0xA5 && !this->full_alpha)
+            riscos_rowbytes = info->width;
+        else
+            riscos_rowbytes = info->width * 4;
+    }
     else
         riscos_rowbytes = info->rowbytes;
 
@@ -504,14 +532,16 @@ void info_callback(png_struct *png_ptr, png_info *info)
         num_palette = pal_entries = 1 << min(info->bit_depth, 8);
     else if (info->color_type == PNG_COLOR_TYPE_PALETTE)
     {
-        if (useropal)
-            num_palette = 256;
-        else
-            num_palette = info->num_palette;
+        num_palette = info->num_palette;
         if (num_palette > 16)     pal_entries = 256;
         else if (num_palette > 4) pal_entries = 16;
         else if (num_palette > 2) pal_entries = 4;
         else                      pal_entries = 2;
+    }
+    else if (osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
+    {
+        num_palette = 0;
+        pal_entries = 256;
     }
     else
         num_palette = pal_entries = 0;
@@ -554,8 +584,17 @@ void info_callback(png_struct *png_ptr, png_info *info)
     if (e)
         goto error;
 
-    e=_swix(OS_SpriteOp, _INR(0,6), 256+15, this->private_data2, "png", 0,
-                                            this->width, this->height, mode);
+    if (osver < 0xA5 && mode == MODE(6,90,90))
+    {
+        e=_swix(OS_SpriteOp, _INR(0,6), 256+15, this->private_data2, "png", 0,
+                                                this->width * 4, this->height, 28);
+        load->isreally32bit = 1;
+    }
+    else
+    {
+        e=_swix(OS_SpriteOp, _INR(0,6), 256+15, this->private_data2, "png", 0,
+                                                this->width, this->height, mode);
+    }
     if (e)
         goto error;
 
@@ -593,11 +632,11 @@ void info_callback(png_struct *png_ptr, png_info *info)
             png_correct_palette(png_ptr, palette, num_palette);
             png_ptr->transformations &= ~PNG_GAMMA;
         }
-        else if (useropal)
-            palette = riscospal;
         else
             palette = info->palette;
 
+        if (num_palette == 0)
+            goto leave_default_palette;
 
         /* If full_alpha, must be palette data with hard tRNS chunk */
         if (this->full_alpha)
@@ -658,13 +697,24 @@ void info_callback(png_struct *png_ptr, png_info *info)
         }
     }
 
+  leave_default_palette:
+
     if (info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+    {
         if (!flex_alloc((flex_ptr) &load->temp, info->width * 2))
         {
             load->errmess = "Insufficient memory";
             longjmp(png_ptr->jmpbuf, 1);
         }
-
+    }
+    else if (osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
+    {
+        if (!flex_alloc((flex_ptr) &load->temp, info->width * 4))
+        {
+            load->errmess = "Insufficient memory";
+            longjmp(png_ptr->jmpbuf, 1);
+        }
+    }
 
     load->sprite_offset = 16 + this->private_data2[12];
     if (have_mask)
@@ -676,7 +726,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
     load->color_type = info->color_type;
 
-    if (info->valid & PNG_INFO_bKGD)
+    if (info->valid & PNG_INFO_bKGD && !(osver < 0xA5 && mode==MODE(6,90,90)))
     {
         /* Clear the background */
         load->bkgd = ((info->background.blue>>(info->bit_depth-8))<<24) |
@@ -701,6 +751,8 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
 static void convert_trns_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width, int depth, png_bytep trans, int num_trans, const png_color_16 *trans_values, int color_type);
 static void convert_32bit_alpha_to_mask(const png_bytep row, png_bytep mask_row, png_uint_32 width);
+static void convert_row_24bit_to_8bit(const png_byte *row, png_byte *data, png_byte *mask, const char *itable, unsigned int width);
+static void convert_row_8bit_to_24bit(png_byte *row, const png_byte *data, const png_byte *mask, const unsigned int *palette, unsigned int width);
 
 void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, int pass)
 {
@@ -716,9 +768,12 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
                             load->sprite_offset +
                             load->spritewidth * row_num;
 
-    mask_row = (png_byte *) this->private_data2 +
-                            load->mask_offset +
-                            load->maskwidth * row_num;
+    if (load->mask_offset)
+        mask_row = (png_byte *) this->private_data2 +
+                                load->mask_offset +
+                                load->maskwidth * row_num;
+    else
+        mask_row = NULL;
 
     /* Expand our separate mask + color data into the interleaved format the library
        expects... */
@@ -736,6 +791,12 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
             *dp++ = *mp++;
         }
 
+        our_row = row;
+        row = load->temp;
+    }
+    else if (osver < 0xA5 && (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA) && !this->full_alpha)
+    {
+        convert_row_8bit_to_24bit(load->temp, row, mask_row, (unsigned int *) this->private_data2 + 15, info->width);
         our_row = row;
         row = load->temp;
     }
@@ -770,10 +831,18 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
             }
         }
     }
-    else if (info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+    else if (info->color_type == PNG_COLOR_TYPE_RGB || info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
     {
         if (!this->full_alpha)
-            convert_32bit_alpha_to_mask(row, mask_row, info->width);
+        {
+            if (osver >= 0xA5 && info->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
+                convert_32bit_alpha_to_mask(row, mask_row, info->width);
+            else if (osver < 0xA5)
+            {
+                row = our_row;
+                convert_row_24bit_to_8bit(load->temp, row, mask_row, (char *)ct32k_buffer[1], info->width);
+            }
+        }
     }
     else if (info->valid & PNG_INFO_tRNS)
     {
@@ -966,6 +1035,43 @@ static void convert_32bit_alpha_to_mask(const png_bytep row, png_bytep mask_row,
     }
 }
 
+/*
+ * Turn 32-bit RGBA data into 8-bit paletted data with mask.
+ */
+static void convert_row_24bit_to_8bit(const png_byte *row, png_byte *data, png_byte *mask, const char *itable, unsigned int width)
+{
+    unsigned int x;
+    unsigned int r, g, b, a, col;
+
+    for (x = width; x; x--)
+    {
+        r = *row++; g = *row++; b = *row++; a = *row++;
+        col = itable[((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3)];
+        *data++ = col;
+        if (mask)
+            *mask++ = a ? 255 : 0;
+    }
+}
+
+/*
+ * Turn 8-bit paletted data into 32-bit RGBA.
+ */
+static void convert_row_8bit_to_24bit(png_byte *row, const png_byte *data, const png_byte *mask, const unsigned int *palette, unsigned int width)
+{
+    unsigned int x;
+    unsigned int col;
+
+    for (x = width; x; x--)
+    {
+        col = palette[*data++ * 2] >> 8;
+        if (mask)
+            col |= *mask++ << 24;
+
+        *(unsigned int *)row = col;
+        row += 4;
+    }
+}
+
 void png_premultiply_and_gamma_correct(png_row_infop row_info, png_bytep row)
 {
     int a, r, g, b, x;
@@ -1031,7 +1137,18 @@ void png_premultiply_and_gamma_correct(png_row_infop row_info, png_bytep row)
 
 _kernel_oserror *SaveSpritePNG(Image *this, const char *filename, int maxbpp)
 {
-    return _swix(OS_SpriteOp, _INR(0,2), 256+12, this->private_data2, filename);
+    _kernel_oserror *e;
+    PNGloaddata *load = (PNGloaddata *) this->private_data;
+
+    if (load->isreally32bit)
+        this->private_data2[14] = MODE(6,90,90);
+
+    e = _swix(OS_SpriteOp, _INR(0,2), 256+12, this->private_data2, filename);
+
+    if (load->isreally32bit)
+        this->private_data2[14] = 28;
+
+    return e;
 }
 
 static _kernel_oserror *DumpToCache(Image *this, const char *filename, int *justuseorig)
@@ -1139,7 +1256,8 @@ static _kernel_oserror *ModeChange(Image *this)
     _kernel_oserror *e=0;
     int bufsize;
 
-    ct32k_buffer[0] = 0;
+    if (osver >= 0xA5)
+        ct32k_buffer[0] = 0;
 
     e=_swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 9, &log2bpp);
     if (e) return e;
@@ -1187,6 +1305,7 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
 static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size, int y_size)
 {
     _kernel_oserror *e=NULL;
+    PNGloaddata *load = (PNGloaddata *)this->private_data;
     int fac[4];
 
     if (!this || !this->private_data2)
@@ -1217,6 +1336,9 @@ static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size,
         if (job || log2bpp >= 3)
             return RenderWithAlpha(this, x, y, scale, x_size, y_size, job ? (osver >= 0xA5 ? 5 : 3) : log2bpp, job);
     }
+
+    if (load->isreally32bit)
+        return pngError("Unable to render this image in this screen mode");
 
     memcpy(fac, this->factors, sizeof fac);
 
@@ -1275,10 +1397,6 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
     int *bgpal;
     char *bgptr;
     PNGloaddata *load=(PNGloaddata *) this->private_data;
-  #if 0
-    #define imagename "image"
-  #endif
-    /*char imagename[12];*/
     static int imageno;
     int width = this->width, height = this->height;
     int clipoffset = 0, xo = 0, yo = 0;
@@ -1359,70 +1477,10 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
         if (load->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
             clipoffset *= 4;
         clipoffset += (this->height - var.clip.ymax) * load->spritewidth;
-
-        /*_swix(OS_WriteI + 4, 0);
-        _swix(OS_WriteI + 30, 0);
-        printf("width = %d, height = %d, xo = %d, yo = %d, clipoffset = %x                ", width, height, xo, yo, clipoffset);
-        _swix(OS_WriteI + 5, 0);*/
     }
 
   dont_clip:
 
-  #if 0
-    bgmem = 16 + 44;
-    bgwidth = width * (1 << (log2bpp - 3));
-    bgwidth = (bgwidth + 3) &~ 3;
-    bgmem += bgwidth * height;
-    if (log2bpp == 3) bgmem += 2*4*256;
-
-    if (!flex_alloc((flex_ptr)&bgarea, bgmem + SprExtendBonus))
-    /*bgarea = malloc(bgmem);
-    if (!bgarea)*/
-        return pngError("Can't get memory for background image.");
-
-    oldbudge = flex_set_budge(0);
-    oldcompact = flex_set_deferred_compaction(0);
-
-    switch (log2bpp)
-    {
-        case 3: mode = 28;              break;
-        case 4: mode = MODE(5, 90, 90); break;
-        case 5: mode = MODE(6, 90, 90); break;
-    }
-
-    /*sprintf(imagename, "%x", imageno++);*/
-
-    bgarea->size   = bgmem;
-    bgarea->sproff = sizeof(sprite_area);
-    e = _swix(OS_SpriteOp, _INR(0,1), 256+SprInitArea, bgarea);
-    if (e) goto error1;
-    e = _swix(OS_SpriteOp, _INR(0,6), 256+SprCreateSprite, bgarea, imagename,
-                                      0, width, height,
-                                      mode);
-    if (e) goto error1;
-
-    if (log2bpp == 3)
-    {
-        e = _swix(OS_SpriteOp, _INR(0,3), 256+SprAddPalette, bgarea, imagename, (1U<<31)+1);
-        if (e) goto error1;
-        e = _swix(OS_SpriteOp, _INR(0,3)|_OUT(4), 256+SprAddPalette, bgarea, imagename, -1, &palette);
-        if (e) goto error1;
-        e = _swix(ColourTrans_ReadPalette, _INR(0,4), -1, -1, palette, 256*4*2, 2);
-        if (e) goto error1;
-    }
-
-    e =_swix(OS_SpriteOp, _INR(0,2)|_OUT(3), 256+SprSaveAreaSize, bgarea, imagename, &savesize);
-    if (e) goto error1;
-
-    savearea = calloc(savesize, 1);
-
-    e = _swix(OS_SpriteOp, _INR(0,3)|_OUTR(0,3), 256+SprSwitchVdu, bgarea, imagename, savearea,
-                                                 &oldsw0, &oldsw1, &oldsw2, &oldsw3);
-    if (e) goto error2;
-
-    bgptr = (char *) (bgarea + 1) + ((sprite_header *)(bgarea + 1))->image;
-    bgpal = (int *) ((char *) bgarea + 16 + 44)
-  #else
     switch (log2bpp)
     {
         case 3: mode = 28;              break;
@@ -1448,7 +1506,6 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
         bgwidth = out[0];
         bgptr = (char *) out[1];
     }
-  #endif
 
     if (xo != 0 || yo != 0)
     {
@@ -1461,24 +1518,19 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
         e = _swix(OS_WriteN, _INR(0,1), cmd, 5);
     }
 
-    #ifdef RANDOM_BG
-    e = _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), rand() << 8, 0x180, 0);
-    if (e) goto error2;
-
-    e = _swix(OS_WriteI + 16, 0); /* CLG */
-    if (e) goto error2;
-    #else
-
     if (!e) e = load->filler(load->filler_handle1, load->filler_handle2);
-    #endif
 
-  #if 0
-    _swix(OS_SpriteOp, _INR(0,3), oldsw0, oldsw1, oldsw2, oldsw3);
-  #else
     e = SwitchFromBufferSprite();
-  #endif
-
     if (e) goto error2;
+
+    if (!ct32k_buffer[0] && osver < 0xA5)
+    {
+        load_inversetable();
+        if (!ct32k_buffer[0])
+            goto error2;
+    }
+
+    oldbudge = flex_set_budge(0);
 
     blend_image(width, height,
                 (char *) this->private_data2 + load->sprite_offset + clipoffset,
@@ -1490,6 +1542,8 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
                 bgwidth,
                 bgpal,
                 log2bpp);
+
+    flex_set_budge(oldbudge);
 
     memcpy(fac, this->factors, sizeof fac);
 
@@ -1535,18 +1589,8 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
 
     free(table);
  error2:
-  #if 0
-    free(savearea);
-  #endif
  error1:
-  #if 0
-    flex_set_budge(oldbudge);
-    flex_set_deferred_compaction(oldcompact);
-
-    flex_free((flex_ptr) &bgarea);
-  #else
     FreeBufferSprite();
-  #endif
 
     return e;
 }
@@ -1757,7 +1801,7 @@ static void blend_image(int width, int height, char *sprdata, char *maskdata, in
     int error_red, error_green, error_blue;
     #endif
 
-    if (bgdepth == 1 & !ct32k_buffer[0])
+    if (bgdepth == 1 & !ct32k_buffer[0] && osver >= 0xA5)
     {
         _kernel_oserror *e;
 
