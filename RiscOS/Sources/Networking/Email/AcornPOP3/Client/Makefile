@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.13 for RISC OS
+#	VERSION:	0.14 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -34,6 +34,8 @@
 #					changed from o.xxx to inst.xxx
 #	17/09/98	0.12	RDW	-Fn removed from CFLAGS
 #	18/11/98	0.13	RDW	queue.o added to OBJS
+#	23/02/99	0.14	RDW	reset.o added to OBJS
+#					added s option to -W flags on CFLAGS and C++FLAGS
 
 #
 # Paths
@@ -89,10 +91,10 @@ ABSSYM=         RISC_OSLib:o.AbsSym
 COMPAT=		-DCOMPAT_INET4
 
 CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
-		-zps1 -Wp -depend !Depend -c ${THROWBACK} \
+		-zps1 -Wps -depend !Depend -c ${THROWBACK} \
 		-D${SYSTEM} ${EXTRACCFLAGS}
 C++FLAGS=	-ffa -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
-		-zps1 -Wp -depend !Depend -c ${THROWBACK} \
+		-zps1 -Wps -depend !Depend -c ${THROWBACK} \
 		-D${SYSTEM} ${EXTRAC++FLAGS}
 
 
@@ -103,18 +105,18 @@ ASMFLAGS=
 OBJS=		swihndlers.o handlers.o logon.o logout.o pop_utils.o module.o header.o \
                 errortable.o get.o send.o cmdresp.o getnummsgs.o \
                 getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o queue.o \
-		${LIBS}
+		reset.o ${LIBS}
 		
 OBJSI=		i.swihndlers i.handlers i.logon i.logout i.pop_utils i.module o.header \
                 i.errortable i.get i.send i.cmdresp i.getnummsgs \
                 i.getlistmsg i.getmsgfile i.deletemsg i.getuniquei i.getlistuid i.queue \
-		${LIBS}
+		i.reset ${LIBS}
 
 OBJSINST=	inst.swihndlers inst.handlers inst.logon inst.logout inst.pop_utils inst.module \
 		o.header \
                 inst.errortable inst.get inst.send inst.cmdresp inst.getnummsgs \
                 inst.getlistmsg inst.getmsgfile inst.deletemsg inst.getuniquei inst.getlistuid \
-		inst.queue \
+		inst.queue inst.reset \
 		${LIBS}
 
 EXTRAS=         acornpop3.o
