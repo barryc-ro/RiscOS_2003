@@ -92,7 +92,8 @@ translate:
         @echo ** Translating ISPCapture...
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC1 -o $(RESAPP).HTML.ISPCapture.ISPC1
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC2 -o $(RESAPP).HTML.ISPCapture.ISPC2
-        @echo ** Translating NCMALite...
+         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.ISPCapture.ISPC3 -o $(RESAPP).HTML.ISPCapture.ISPC3
+       @echo ** Translating NCMALite...
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badpin -o $(RESAPP).HTML.MA.badpin
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badsvc -o $(RESAPP).HTML.MA.badsvc
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badurl -o $(RESAPP).HTML.MA.badurl
