@@ -136,6 +136,8 @@ dump_struct(int acn)
  * The operation is recursive across all files. All files down-loaded by
  * the update command are locked against deletion in the underlying cache.
  */
+
+
 static _kernel_oserror * syncdir(int acn,int dir,int bits)
 {
  _kernel_oserror * err;
@@ -147,20 +149,32 @@ static _kernel_oserror * syncdir(int acn,int dir,int bits)
  int               code;
  int               incn;
  int               dsize;
+ int               check;
 
-/* printf("CSFS: syncronise %s (%d)\n",(dir>=0)?arc[acn].hdr[dir].name:"$",dir);*/
- 
- err=servicegetdir(acn,dir,&hdr,&size);
-/*  dump_struct(acn); */
+/* printf("CSFS: syncronise %s (%d)\n",
+          (dir>=0)?stringptr(arc[acn].hdr[dir].name):"$",dir); */
+
+ check=(arc[acn].hdr[dir].dirn!=DFLAT);
+ hdr=NULL;
+
+ err=diropen(acn,dir);
  if(!err)
  {
+  if(check) err=servicegetdir(acn,dir,&hdr,&size);
+ }
 
+/*  dump_struct(acn); */
+
+ if(!err)
+ {
   j=0;
   n=dir+1;
   for(i=0;i<((dir<0)?arc[acn].fmain:arc[acn].hdr[dir].dirn);i++)
   {
    incn=1;
 
+   if(!check) code=0;
+   else
    if(j<size)
      code=cstrcmp(stringptr(arc[acn].hdr[n].name),stringptr(hdr[j].name));
    else
@@ -170,10 +184,14 @@ static _kernel_oserror * syncdir(int acn,int dir,int bits)
    {     /* same names - check time stamps */
 /*     printf("CSFS: same\n"); */
 
-    if(arc[acn].hdr[n].dirn==DNFILE && hdr[j].dirn==DNFILE)
+    if(arc[acn].hdr[n].dirn==DNFILE && (!check || hdr[j].dirn==DNFILE))
     {
-     code=(arc[acn].hdr[n].load & 0xFF)-(hdr[j].load & 0xFF);
-     if(!code) code=arc[acn].hdr[n].exec-hdr[j].exec;
+     if(!check) code=-1;
+     else
+     {
+      code=(arc[acn].hdr[n].load & 0xFF)-(hdr[j].load & 0xFF);
+      if(!code) code=arc[acn].hdr[n].exec-hdr[j].exec;
+     }
 
      if(code>0) /* client is newer than server */
      {
@@ -246,7 +264,7 @@ static _kernel_oserror * syncdir(int acn,int dir,int bits)
    if(err) break;
   }
 
-  if(!err)
+  if(!err && check)
   {
    while(j<size)
    {
@@ -288,61 +306,55 @@ static _kernel_oserror * updatedir(int acn,int dir,int bits)
  int               n;
 
 
- err=diropen(acn,dir);
- if (!err)
+          err=diropen(acn,dir);
+ err=syncdir(acn,dir,bits);
+
+ if(!err)
  {
-   err=syncdir(acn,dir,bits);
-   if(!err)
+  level=1;
+  in=0;
+  if(dir<0) ln=arc[acn].fmain;
+  else      ln=arc[acn].hdr[dir].dirn;
+  pn=dir;
+  n=dir+1;
+
+  while(level>0)
+  {
+/*   printf("CSFS: level=%d in=%d ln=%d\n",level,in,ln);  */
+
+   for(i=in;i<ln;i++)
    {
-    level=1;
-    in=0;
-    if(dir<0)
-      ln=arc[acn].fmain;
-    else
-      ln=arc[acn].hdr[dir].dirn;
-    pn=dir;
-    n=dir+1;
-
-    do
+/*     printf("CSFS: n=%d i=%d fm=%d\n",n,i,arc[acn].fmain); */
+    if(arc[acn].hdr[n].dirn>=0 || arc[acn].hdr[n].dirn==DFLAT)
     {
-/*      printf("CSFS: level=%d in=%d ln=%d\n",level,in,ln);  */
-
-     for(i=in;i<ln;i++)
-     {
-/*       printf("CSFS: n=%d i=%d fm=%d\n",n,i,arc[acn].fmain); */
-      if(arc[acn].hdr[n].dirn>=0 || arc[acn].hdr[n].dirn==DFLAT)
-      {
-       err=diropen(acn,n);
-       if(err) break;
-
-       err=syncdir(acn,n,bits);
-       if(err) break;
-
-       posn[level]=pn;
-       lno[level]=ln;
-       fpos[level]=i;
-       pn=n;
-       i=0;
-       in=0;
-       ln=arc[acn].hdr[n].dirn+1;
-       level++;
-      }
-      n++;
-     }
-
+     err=syncdir(acn,n,bits);
      if(err) break;
 
-     level--;
-     if(level)
-     {
-      pn=posn[level];
-      ln=lno[level];
-      in=fpos[level]+1;
-     }
-    } while(level>0);
+     posn2[level]=pn;
+     lno2[level]=ln;
+     fpos2[level]=i;
+     pn=n;
+     i=0;
+     in=0;
+     ln=arc[acn].hdr[n].dirn+1;
+     levelstackcheck(++level);
+    }
+    n++;
    }
- }
 
+   if(err) break;
+
+   level--;
+/*   printf("ex dir level=%d\n",level); */
+
+   if(level)
+   {
+    pn=posn2[level];
+    ln=lno2[level];
+    in=fpos2[level]+1;
+   }
+  }
+ }
  return(err);
 }
 
@@ -360,19 +372,19 @@ static _kernel_oserror * updates(char * path,int bits)
  err=fs_canonicalpath(path,buffer,sizeof(buffer),NULL,NULL);
 
 /* printf("path=%s\n",path);
- printf("buffer=%s\n",buffer); */
+ printf("buffer=%s\n",buffer);  */
 
- err=makepath(buffer,NULL,0,&acn);
+ err=makepath(buffer,NULL,1,&acn);
  if(!err)
  {
   {
    err=findpath(acn,arcpath,&fn,0);
+/*   printf("path=%s name=%s\n",arcpath,arcname);
+   printf("acn=%d fn=%d\n",acn,fn);  */
+
    if(fn<-1) err=&mb_sfserr_FileNotFound;  /* Not found */
    if(!err)
    {
-/*    printf("path=%s name=%s\n",arcpath,arcname);
-    printf("acn=%d fn=%d\n",acn,fn); */
-
     err=updatedir(acn,fn,bits);
     updatedirupcall(acn,fn);
    }
