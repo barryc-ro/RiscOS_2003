@@ -1,0 +1,241 @@
+/*
+  Title:        Chunkfiles - operations on chunkfiles
+  Status:       C Library Extension
+  Copyright:    (C) 1991, Advanced RISC Machines Ltd., Cambridge, England.
+  $Revision$  LDS 13-Feb-91
+*/
+
+#include <stdio.h>
+#include <string.h>
+#ifndef SEEK_SET
+#  define  SEEK_SET  0
+#endif
+
+#include "chunkfls.h"
+#include "bytesex.h"
+
+#define  hv(v)     bytesex_hostval(v)
+
+typedef struct CF {
+    int32 offset, maxchunks, numchunks;
+    cf_header *cfh;
+    FILE *f;
+} CF;
+
+extern int cf_endianness(cf_magic)
+int32 cf_magic;
+{ int rc;
+  static int32 which_end = (CF_BIG << 24) | 0x00ffff00 | CF_LITTLE;
+  static int32 rev_magic = ((CF_MAGIC & 0xff) << 24) |
+                           ((CF_MAGIC & 0x0000ff00) << 8) |
+                           ((CF_MAGIC & 0x00ff0000) >> 8) |
+                           (CF_MAGIC >> 24);
+
+  rc = *((unsigned char *)&which_end);
+  if (rc != (rc & (CF_BIG|CF_LITTLE))) return -1;
+  if (cf_magic == rev_magic)
+    rc = CF_BIG+CF_LITTLE - rc;
+  else if (cf_magic != CF_MAGIC)
+    rc = -1;
+  return rc;
+}
+
+extern ChunkFile *cf_open(f, cfrecptr)
+FILE *f;
+ChunkFile *cfrecptr;
+/*
+ * On entry, 'f' is an open file, positioned at the beginning of
+ * what is assumed to be a chunk file; 'cf' is an uninitialised
+ * ChunkFile record.
+ * On exit, 'cf' has been initialised, 'f' may have been re-positioned,
+ * and the address of 'cf' is returned.
+ * On I/O error, or the file not being a chunk file, NULL is returned.
+ */
+{
+  CF *cf;
+
+  cf = (CF *)cfrecptr;
+  cf->f = NULL;
+  if (fread(cf, sizeof(int32), 3, f) == 3)
+  { if (cf_endianness(cf->offset) < 0) return NULL;
+    bytesex_reverse(cf->offset != CF_MAGIC ? 1 : 0);
+    cf->maxchunks = hv(cf->maxchunks);
+    cf->numchunks = hv(cf->numchunks);
+    cf->f = f;
+    cf->cfh = NULL;
+    cf->offset = ftell(f);
+    return cfrecptr;
+  }
+  return NULL;
+}
+
+extern int32 cf_headersize(cfrecptr)
+ChunkFile *cfrecptr;
+/*
+ * Return the byte size of the chunk file header associated with 'cf'.
+ * Return 0 if 'cf' is not a properly opened chunk file. This function
+ * is intended to be called prior to reading a chunk file header in order
+ * to discover how much space to allocate for it.
+ */
+{
+  CF *cf = (CF *)cfrecptr;
+
+  if (cf->f != NULL)
+    return (cf->maxchunks * sizeof(cf_entry) + 3 * sizeof(int32));
+  return 0;
+}
+
+extern cf_header *cf_readheader(cfrecptr, h, hdrsz)
+ChunkFile *cfrecptr;
+VoidStar h;
+int32 hdrsz;
+/*
+ * Read a chunk file header from 'cf' into 'h' of size 'hdrsz' bytes.
+ * If successfully read, return a pointer to the mapped chunk file header.
+ * Otherwise return NULL (on i/o error, not a chunk file, etc.).
+ */
+{
+  CF *cf = (CF *) cfrecptr;
+  int32 *p;
+
+  if ((cf == NULL) || (cf->f == NULL)) return NULL;
+  if (hdrsz < (sizeof(cf_entry) * cf->maxchunks + 3 * sizeof(int32)))
+    return NULL;
+  p = (int32 *) h;
+  *p++ = hv(CF_MAGIC);
+  *p++ = hv(cf->maxchunks);
+  *p++ = hv(cf->numchunks);
+  if (ftell(cf->f) != cf->offset) fseek(cf->f, cf->offset, SEEK_SET);
+  if (fread(p, sizeof(cf_entry), (int)(cf->maxchunks), cf->f) != cf->maxchunks)
+    return NULL;
+  return cf->cfh = (cf_header *) h;
+}
+
+extern int cf_writeheader(cfrecptr, cfh, hdrsz)
+ChunkFile *cfrecptr;
+cf_header *cfh;
+int32 hdrsz;
+/*
+ * Write a chunk file header to 'cf' from 'cfh' of size 'hdrsz' bytes.
+ * If successfully written, return 0 otherwise return -1.
+ */
+{
+  CF *cf = (CF *) cfrecptr;
+  int32 *p;
+
+  if ((cf == NULL) || (cf->f == NULL)) return -1;
+  if (hdrsz < (sizeof(cf_entry) * cf->maxchunks + 3 * sizeof(int32)))
+    return -1;
+
+  if (ftell(cf->f) != (cf->offset - (sizeof(int32) * 3)))
+    fseek(cf->f, cf->offset - (sizeof(int32) * 3), SEEK_SET);
+  p = (int32 *)cfh;
+  if (fwrite(p, sizeof(int32), 3, cf->f) != 3) return -1;
+  cfh = (cf_header *)(p + 3);
+  if (fwrite(cfh, sizeof(cf_entry), (int)(cf->maxchunks), cf->f) !=
+      cf->maxchunks)
+    return -1;
+  return 0;
+}
+
+extern int cf_index(cfh, name)
+cf_header *cfh;
+char *name;
+/*
+ * Return the index of the (first) named entry in the header.
+ * Return -1 if not found;
+ */
+{ int j;
+  cf_entry *cfe;
+  
+  for (j = 0, cfe = cfh->cf_chunks;  j < hv(cfh->cf_maxchunks);  ++j, ++cfe)
+  { if (hv(cfe->cfe_offset) > 0)
+    { if (strncmp(cfe->cfe_key, name, CF_KEYSIZE) == 0) return j;
+    }
+  }
+  return -1;
+}
+
+extern int32 cf_entrysize(cfh, index)
+cf_header *cfh;
+int index;
+/*
+ * Return the size of the 'index'th entry.
+ * Return 0 if not used, -1 if error (e.g. index out of range).
+ */
+{ cf_entry *cfe;
+  
+  if ((index < 0) || (index >= hv(cfh->cf_maxchunks))) return -1;
+  cfe = cfh->cf_chunks + index;
+  if (hv(cfe->cfe_offset) > 0) return hv(cfe->cfe_size);
+  return 0;
+}
+
+extern void cf_wipeout(cfh, index)
+cf_header *cfh;
+int index;
+/*
+ * Zero the 'index'th entry.
+ */
+{ cf_entry *cfe;
+  
+  if ((index < 0) || (index >= hv(cfh->cf_maxchunks))) return;
+  cfe = cfh->cf_chunks + index;
+  memset(cfe, 0, sizeof(cf_entry));
+}
+
+extern int cf_seek(cfrecptr, index)
+ChunkFile *cfrecptr;
+int index;
+/*
+ * Position 'cf' ready to read the 'index'th entry (or ready to
+ * open another ChunkFile to the 'index'th entry).
+ * Return 0 if succeeded; non-0 if error.
+ */
+{ cf_entry *cfe;
+  CF *cf = (CF *) cfrecptr;
+  int32 cfe_offset;
+
+  if (cf->cfh == NULL) return -1;
+  if ((index < 0) || (index >= hv(cf->cfh->cf_maxchunks))) return -1;
+  cfe = cf->cfh->cf_chunks + index;
+  cfe_offset = hv(cfe->cfe_offset);
+  if (cfe_offset <= 0) return -1;
+  if (ftell(cf->f) == (cfe_offset + cf->offset - (sizeof(int32) * 3)))
+    return 0;
+  return fseek(cf->f, cfe_offset + cf->offset - (sizeof(int32) * 3), SEEK_SET);
+}
+
+extern int cf_loadentry(cfrecptr, e, esize)
+ChunkFile *cfrecptr;
+VoidStar e;
+int32 esize;
+/*
+ * Load the currently selected chunk file entry into 'e' of
+ * byte size 'esize'.
+ * Return 0 if successful; non-0 if i/o error.
+ */
+{
+  CF *cf = (CF *) cfrecptr;
+
+  if (cf->cfh == NULL) return -1;
+  if (fread(e, 1, (int)esize, cf->f) == esize) return 0;
+  return -1;
+}
+
+extern int cf_saveentry(cfrecptr, e, esize)
+ChunkFile *cfrecptr;
+VoidStar e;
+int32 esize;
+/*
+ * save the currently selected chunk file entry 'e' of
+ * byte size 'esize'.
+ * Return 0 if successful; non-0 if i/o error.
+ */
+{
+  CF *cf = (CF *) cfrecptr;
+
+  if (cf->cfh == NULL) return -1;
+  if (fwrite(e, 1, (int)esize, cf->f) == esize) return 0;
+  return -1;
+}
