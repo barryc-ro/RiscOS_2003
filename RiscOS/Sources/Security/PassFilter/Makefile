@@ -24,13 +24,12 @@ RESGEN		= resgen
 WIPE    	= -wipe
 
 AFLAGS		= -depend !Depend -Stamp -quit ${THROWBACK}
-CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} 
+CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} ${DEBUG}
 CPFLAGS		= ~cfr~v
 CMHGFLAGS	= -depend !Depend -p -throwback
 WFLAGS		= ~c~v
 
-#DFLAGS		= -DPASSWORD=${PASSWORD} -DGOTO_URL=${GOTO_URL} -DENABLE_URL=${ENABLE_URL}
-DFLAGS		= "-DPASSWORD=\"${KEY}\"" "-DGOTO_URL=\"${GOTO}\"" "-DENABLE_URL=\"${ENABLE}\""
+DFLAGS		= "-DCONFIG_FILE=\"${CONFIG}\""
 DDFLAGS		= ${DFLAGS} -fn -DDEBUGLIB
 
 DIRS		= o._dirs
@@ -51,8 +50,11 @@ WRAPPER		= ${LIBDIR}.RISC_OSLib.s.ModuleWrap
 
 DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglibzm
 MEMCHECKLIB	= MemCheck:o.MC_M
+UNIXLIB		= TCPIPLibs:o.UnixLib
 
 LIBS =\
+ TCPIPLibs:o.socklib5\
+ TCPIPLibs:o.inetlib\
 
 LIBSD =\
  ${DEBUGLIB}\
@@ -60,11 +62,12 @@ LIBSD =\
  TCPIPLibs:o.inetlib\
 
 
+
 # ------------------------------------------------------------------------------
 # Include files
 #
 
-INCLUDES = -Itbox:,C:
+INCLUDES = -Itbox:,C:,TCPIPLibs: 
 
 
 # ------------------------------------------------------------------------------
@@ -80,14 +83,33 @@ TARGETSA_D	= rm.PassFilteD
 OBJS =\
  o.Header\
  o.Module\
+ o.FilterList\
+ o.FilterErr\
  o.Filter\
  
 
 OBJSD =\
  o.Header\
  od.Module\
+ od.FilterList\
+ od.FilterErr\
  od.Filter\
- 
+
+OBJSI =\
+ o.Header\
+ i.Module\
+ i.FilterList\
+ i.FilterErr\
+ i.Filter\
+
+OBJSIO =\
+ o.Header\
+ io.Module\
+ io.FilterList\
+ io.FilterErr\
+ io.Filter\
+ io.instlib\
+
 
 EXPORTS =
 
@@ -95,12 +117,14 @@ EXPORTS =
 # Rule patterns
 #
 
-.SUFFIXES:	.o .od .s .h .cmhg .c .z
+.SUFFIXES:	.o .od .s .h .cmhg .c .z .i .inst .io 
 .c.o:;		${CC} ${CFLAGS} ${DFLAGS} ${EXTRAFLAGS} -o $@ $<
 .c.od:;		$(CC) ${CFLAGS} ${DDFLAGS} ${EXTRAFLAGS} -o $@ $<
+.c.i:;		${CC} ${CFLAGS} ${DFLAGS} -c -C -E $< >> $@
 .s.o:;		${AS} ${AFLAGS} -to $@ $<
 .cmhg.o:;	${CMHG} ${CMHGFLAGS} -o $@ $<
 .cmhg.h:;	${CMHG} ${CMHGFLAGS} -d $@ $<
+.inst.io:;	${CC} ${CFLAGS} -C++ -W -o $@ $<
 
 # ------------------------------------------------------------------------------
 # Main rules
@@ -108,6 +132,13 @@ EXPORTS =
 
 all: ${TARGETSA}
         @echo ${COMPONENT}: module built
+
+preprocess: ${OBJSI} ${DIRS}
+        @echo ${COMPONENT}: preprocess build complete
+
+instrument: ${OBJSIO} ${DIRS} ${UNIXLIB}
+        ${LD} -o rm.${COMPONENT} -module ${OBJSIO} ${LIBSD} ${EXTRALIBS} ${CLIB} ${UNIXLIB}
+        @echo ${COMPONENT}: instrument build complete
 
 debug: $(TARGETSA_D)
         @echo ${COMPONENT}: debug module built
@@ -132,6 +163,9 @@ install_rom: ${TARGET}
 ${DIRS}:
 	${MKDIR} o
 	${MKDIR} od
+	${MKDIR} i
+	${MKDIR} io
+	${MKDIR} inst
 	${MKDIR} rm
 	${MKDIR} linked
 	${MKDIR} aof
@@ -142,10 +176,16 @@ ${DIRS}:
 clean:
         ${WIPE} o ${WFLAGS}
         ${WIPE} od ${WFLAGS}
+        ${WIPE} i ${WFLAGS}
+        ${WIPE} io ${WFLAGS}
+        ${WIPE} inst ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
+        ${WIPE} Docs.html ${WFLAGS}
+        ${WIPE} Docs.PassFilter ${WFLAGS}
+        ${WIPE} SHelpDocs ${WFLAGS}
         ${RM} h.Header
         @echo ${COMPONENT}: cleaned
 
@@ -192,5 +232,9 @@ o.Module: h.Header
 o.Filter: h.Header
 od.Module: h.Header
 od.Filter: h.Header
+i.Module: h.Header
+i.Filter: h.Header
+io.Module: h.Header
+io.Filter: h.Header
 
 # Dynamic dependencies:
