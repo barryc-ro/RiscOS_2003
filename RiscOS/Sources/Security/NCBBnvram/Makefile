@@ -69,9 +69,9 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 #
 # Program specific options:
 #
-COMPONENT = NCBootBlk
-TARGET    = aof.NCBootBlk
-TARGETSA  = rm.NCBootblk
+COMPONENT = NCBBnvram
+TARGET    = aof.NCBBnvram
+TARGETSA  = rm.NCBBnvram
 EXPORTS   = 
 OBJS      = header.o module.o bootblock.o
 DIRS	  = o._dirs
