@@ -8,66 +8,11 @@
 # 25-May-94  AMcC         Created.
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT = FontManager
+TARGET    = Fonts
+HEADER1   = Font
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
-COMPONENT = Fonts
-SOURCE    = s.Fonts
-TARGET    = rm.Fonts
-EXPORTS   = ${EXP_HDR}.Font
-
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.Font: hdr.Font
-        ${CP} hdr.Font $@ ${CPFLAGS}
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
