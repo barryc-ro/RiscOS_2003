@@ -35,7 +35,6 @@ TRANSLATE	= translate
 #
 INRESDIR	= LocalUserIFRes:Root
 INARMDIR	= LocalUserIFRes:ARMBoot
-INHTMLDIR	= LocalUserIFRes:HTML
 INIMGDIR	= LocalUserIFRes:Images
 INVODDIR	= LocalUserIFRes:VOD
 INMULTIDIR	= LocalUserIFRes:Multicast
@@ -45,8 +44,11 @@ INMULTIDIR	= LocalUserIFRes:Multicast
 #
 OUTRESDIR	= $(INSTDIR)
 OUTARMDIR	= $(OUTRESDIR).!ARMBoot
-OUTHTMLDIR	= $(INSTDIR).Content.HTML
-OUTIMGDIR	= $(OUTHTMLDIR).images
+OUT300DIR	= $(OUTRESDIR).Content.HTML.300
+OUT400DIR	= $(OUTRESDIR).Content.HTML.400
+OUTHELPDIR	= $(OUTRESDIR).Content.HTML.Help
+OUTJSCRDIR	= $(OUTRESDIR).Content.HTML.JScript
+OUTIMGDIR	= $(OUTRESDIR).Content.HTML.images
 OUTVODDIR	= $(OUTIMGDIR).vod
 OUTMULTIDIR	= $(OUTIMGDIR).multicast
 
@@ -60,7 +62,10 @@ CHMODRWFLAGS	= +ow +or +wr -ww
 TRANSFLAGS	= $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë"
 TRANSMAPPINGS	= TranslateRes:Mappings
 TRANSRESDIR	= TranslateRes:Root
-TRANSHTMLDIR	= TranslateRes:HTML
+TRANS300DIR	= TranslateRes:300
+TRANS400DIR	= TranslateRes:400
+TRANSHELPDIR	= TranslateRes:Help
+TRANSJSCRDIR	= TranslateRes:JScript
 
 #
 # Rule patterns:
@@ -86,7 +91,6 @@ install_rom: $(TARGET)
 install: translate dirs
 	$(CP) $(INRESDIR).*      $(OUTRESDIR).*      $(CPFLAGS)
 	$(CP) $(INARMDIR).*      $(OUTARMDIR).*      $(CPFLAGS)
-	$(CP) $(INHTMLDIR).*     $(OUTHTMLDIR).*     $(CPFLAGS)
 	$(CP) $(INIMGDIR).*      $(OUTIMGDIR).*      $(CPFLAGS)
 	$(CP) $(INVODDIR).*      $(OUTVODDIR).*      $(CPFLAGS)
 	$(CP) $(INMULTIDIR).*    $(OUTMULTIDIR).*    $(CPFLAGS)
@@ -106,7 +110,10 @@ dirs:
 	$(MKDIR) $(OUTARMDIR)
 	$(MKDIR) $(OUTRESDIR).Apps
 	$(MKDIR) $(OUTRESDIR).Content
-	$(MKDIR) $(OUTHTMLDIR)
+	$(MKDIR) $(OUT300DIR)
+	$(MKDIR) $(OUT400DIR)
+	$(MKDIR) $(OUTHELPDIR)
+	$(MKDIR) $(OUTJSCRDIR)
 	$(MKDIR) $(OUTIMGDIR)
 	$(MKDIR) $(OUTVODDIR)
 	$(MKDIR) $(OUTMULTIDIR)
@@ -118,14 +125,25 @@ dirs:
 
 translate: dirs
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSRESDIR).!TFTPBoot   -o $(OUTRESDIR).!TFTPBoot
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHTMLDIR).body/html  -o $(OUTHTMLDIR).body/html
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHTMLDIR).ctrl/html  -o $(OUTHTMLDIR).ctrl/html
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHTMLDIR).home/html  -o $(OUTHTMLDIR).home/html
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHTMLDIR).index/html -o $(OUTHTMLDIR).index/html
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHTMLDIR).side/html  -o $(OUTHTMLDIR).side/html
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHTMLDIR).top/html   -o $(OUTHTMLDIR).top/html
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHTMLDIR).tv/html    -o $(OUTHTMLDIR).tv/html
-	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHTMLDIR).vod/html   -o $(OUTHTMLDIR).vod/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS300DIR).body/html   -o $(OUT300DIR).body/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS300DIR).home/html   -o $(OUT300DIR).home/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS300DIR).index/html  -o $(OUT300DIR).index/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS300DIR).side/html   -o $(OUT300DIR).side/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS300DIR).top/html    -o $(OUT300DIR).top/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS400DIR).body/html   -o $(OUT400DIR).body/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS400DIR).home/html   -o $(OUT400DIR).home/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS400DIR).index/html  -o $(OUT400DIR).index/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS400DIR).side/html   -o $(OUT400DIR).side/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANS400DIR).top/html    -o $(OUT400DIR).top/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHELPDIR).body/html  -o $(OUTHELPDIR).body/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHELPDIR).help/html  -o $(OUTHELPDIR).help/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHELPDIR).index/html -o $(OUTHELPDIR).index/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHELPDIR).side/html  -o $(OUTHELPDIR).side/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSHELPDIR).top/html   -o $(OUTHELPDIR).top/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).blank/html -o $(OUTJSCRDIR).blank/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).ctrl/html  -o $(OUTJSCRDIR).ctrl/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).tv/html    -o $(OUTJSCRDIR).tv/html
+	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSJSCRDIR).vod/html   -o $(OUTJSCRDIR).vod/html
         @echo Translation Complete.
 
 resources:
