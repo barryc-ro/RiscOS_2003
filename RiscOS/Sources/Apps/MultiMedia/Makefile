@@ -65,7 +65,7 @@ ${TARGET}: ${SOURCE} ${RESDATA} dirs
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
         unset resdata
 
-${RESDATA}: ${SHRINKFILE} ${OPTIONS} u<UserIf> s<System>
+${RESDATA}: ${SHRINKFILE} ${OPTIONS} u<UserIf> s<Machine>
         @RMEnsure ShrinkWrap 0.00 Error *** ShrinkWrap must be loaded ***
         Run ${SHRINKFILE}
         Repeat Run ${SPECIALBLD} -files -verbose
@@ -78,7 +78,7 @@ ${SHRINKFILE}:
 # to use, set in OPTIONS variable in the main build Config
 # eg OPTIONS="RealAudio Cinepak"
 
-Cinepak RealAudio u<UserIf> s<System>:
+Cinepak RealAudio u<UserIf> s<Machine>:
         IfThere ${SPECIALSRC}.$@ Then ${BUILDWRAP} ${SPECIALSRC}.$@ ${RESDIR} ${SPECIALBLD}.$@
 
 dirs:
