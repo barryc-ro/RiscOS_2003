@@ -3,7 +3,11 @@
 COMPONENT = PDumperHPS
 TARGET = ${COMPONENT}
 
-OBJS = o.PDumpServices o.Init o.Services o.StarCmds o.Routines o.PaceServices o.Variables o.Swi o.modheader
+OBJS = \
+  o.PDumpServices o.Init o.Services o.StarCmds o.Routines o.PaceServices \
+  o.Variables o.Swi o.modheader
+
+DIRS = dirs
 
 LIBS = HP_SDK_LIB.HP_SDK_LIB ${C++LIB} 
        
@@ -17,7 +21,7 @@ LDFLAGS += -c++
 
 # Final targets:
 
-all: ${RAM_MODULE}  h.modheader dirs HP_SDK_LIB.HP_SDK_LIB
+all:    ${RAM_MODULE} HP_SDK_LIB.HP_SDK_LIB dirs
 
 clean:
         ${WIPE} ${WPREFLAGS} o             ${WFLAGS}
@@ -37,7 +41,7 @@ dirs:
 HP_SDK_LIB.HP_SDK_LIB:
         set pdumperhps$dir <obey$dir>
         dir HP_SDK_LIB
-        amu_machine library THROWBACK=-throwback CDEFINES=${CDEFINES}
+        amu_machine library THROWBACK=-throwback CDEFINES="${HPDEFINES}"
         set obey$dir <pdumperhps$dir>
         dir <pdumperhps$dir>
         unset pdumperhps$dir
@@ -49,5 +53,7 @@ export: ${EXPORTS}
 # User-editable dependencies:
 
 # Static dependencies:
+
+o.Swi: h.modheader
 
 # Dynamic dependencies:
