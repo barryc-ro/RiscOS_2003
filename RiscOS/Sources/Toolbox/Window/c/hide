@@ -21,6 +21,7 @@
 
 #include "objects.toolbox.h"
 #include "objects.window.h"
+#include "objects.menu.h"
 
 #include "object.h"
 #include "task.h"
@@ -38,9 +39,12 @@ _kernel_oserror * _hide_raise_hidden(WindowInternal *w)
        event.hdr.event_code = w->hide_event;
        event.hdr.size = sizeof(event);
 
-       if (w->show_balance > 0) w->show_balance--;
        DEBUG debug_output("hide", "Generating HasBeenHidden (or other) event for %p %08x\n",
        	w, w->wimp_window_handle);
+       DEBUG debug_output("hide", "Want to generate HasBeenHidden: balance is %d\n",
+       	w->show_balance);
+
+       if (w->show_balance > 0) w->show_balance--; else return NULL;
 
        return( _swix (Toolbox_RaiseToolboxEvent, _INR(0,3),
                              0,
@@ -54,12 +58,30 @@ _kernel_oserror * _hide_raise_hidden(WindowInternal *w)
 
 extern WindowInternal *ShowingAsMenu;
 
+static void hide_flush_pending_events(int min)
+{
+   TaskDescriptor *t;
+
+   DEBUG debug_output("hide", "Searching pending hide list\n");
+   for (t = task_get_head(); t; t=t->next) {
+      WindowInternal *w;
+      for (w = t->object_list; w; w = w->next) {
+         if (w->show_balance > min) {
+           _kernel_oserror *e;
+	   DEBUG debug_output("hide", "Issuing pending hidden event (show_bal=%d)\n",
+	     w->show_balance);
+           e = _hide_raise_hidden(w);
+           if (e) { DEBUG debug_output("hide", "hide error: %s\n", e->errmess); }
+         }
+      }
+   }
+   DEBUG debug_output("hide", "End search of pending hide list\n");
+}
+
 /* This function is called is a Message_MenusDeleted is ever received.
  */
 void hide_raise_hidden(int object)
 {
-   TaskDescriptor *t;
-
    if (ShowingAsMenu) {
            if (task_find_from_window(ShowingAsMenu) != NULL) {
 	           if (ShowingAsMenu->wimp_window_handle == object) {
@@ -75,23 +97,13 @@ void hide_raise_hidden(int object)
                    ShowingAsMenu = NULL;
            }
    }
-
-   DEBUG debug_output("hide", "Searching pending hide list\n");
-   for (t = task_get_head(); t; t=t->next) {
-      WindowInternal *w;
-      for (w = t->object_list; w; w = w->next) {
-         if (w->show_balance > 0) {
-           _kernel_oserror *e;
-	   DEBUG debug_output("hide", "Issuing pending hidden event\n");
-           e = _hide_raise_hidden(w);
-           if (e) { DEBUG debug_output("hide", "hide error: %s\n", e->errmess); }
-         }
-      }
-   }
+   hide_flush_pending_events(0);
 }
 
 void raise_if_become_hidden(void)
 {
+        hide_flush_pending_events(0);
+        #if 0
    wimp_GetWindowState state;
 
    if (!ShowingAsMenu) return;
@@ -102,8 +114,28 @@ void raise_if_become_hidden(void)
 
    _hide_raise_hidden(ShowingAsMenu);
    ShowingAsMenu = NULL;
+        #endif
 }
 
+extern _kernel_oserror *hide_submenu_autohide (_kernel_swi_regs *r)
+{
+    /*
+     * pre-warning of a sub-menu show being issued
+     * R0 = flags
+     */
+
+    /* This function is invoked as a result of a Window_PreSubMenuShow SWI call
+     * being issued by the Toolbox during its Toolbox_ShowObject code before
+     * the class SWI is issued.
+     */
+
+        if (ShowingAsMenu) {
+          _swix(Toolbox_HideObject, _INR(0,1), 0, ShowingAsMenu->id);
+          hide_raise_hidden(ShowingAsMenu->wimp_window_handle);
+        }
+	r->r[0] = 0;
+	return NULL;
+}
 
 extern _kernel_oserror *hide_object (_kernel_swi_regs *r, TaskDescriptor *t)
 {
@@ -167,8 +199,8 @@ extern _kernel_oserror *hide_object (_kernel_swi_regs *r, TaskDescriptor *t)
               _hide_raise_hidden(window);
               if(ShowingAsMenu == window) ShowingAsMenu = NULL;
             }
-
         }
+        hide_flush_pending_events(0);
     }
     if (window->flags & Window_IsToolBar) {
         _kernel_swi_regs regs;

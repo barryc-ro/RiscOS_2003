@@ -7,7 +7,9 @@
 # ----       ----   -----------
 # 06-Jan-94  AMcC   Created
 # 04-Feb-98  SNB    Updated to allow RAM builds
+# 08-Jun-98  SNB    Added -p flag to cmhg invocation
 #
+.SUFFIXES: .c .o .od .s
 
 VPATH = @ gadgets
 
@@ -17,6 +19,7 @@ VPATH = @ gadgets
 COMPONENT  = Window
 ROM_MODULE = aof.${COMPONENT}
 RAM_MODULE = rm.${COMPONENT}
+DBG_MODULE = rm.D${COMPONENT}
 
 #
 # Export Paths for Messages module
@@ -125,13 +128,50 @@ RAM_OBJS =\
  o.utils\
  o.writable
 
+DBG_OBJS =\
+ o.ModNoDbg\
+ od.actbut\
+ od.adjuster\
+ od.button\
+ od.create\
+ od.delete\
+ od.display\
+ od.draggable\
+ od.events\
+ od.gadgets\
+ od.getstate\
+ od.globals\
+ od.hide\
+ od.label\
+ od.labelbox\
+ od.mainRAM\
+ od.miscop\
+ od.numrange\
+ od.optbut\
+ od.popupmenu\
+ od.radiobut\
+ od.show\
+ od.simple\
+ od.slider\
+ o.slider_ven\
+ od.stringset\
+ od.task\
+ od.toolbar\
+ o.toolbox\
+ od.utils\
+ od.writable
+
+
+
+
 RESF=o.msgs
 
 #
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.c.od:;    ${CC} ${CFLAGS} ${ROMFLAGS} -Ddebugging=1 -o $@ $<
+.cmhg.o:; ${CMHG} -p -o $@ $<
 .s.o:;    ${AS} ${AFLAGS} -o $@ $<
 
 #
@@ -152,6 +192,9 @@ resources: Resources.${LOCALE}.Messages
         ${MKDIR} ${RESDIR}
         ${CP} Resources.${LOCALE}.Messages ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
+
+trace: ${DBG_MODULE}
+       @echo ${COMPONENT}: Debug module build (RAM)
 
 clean:
         ${WIPE} o.* ${WFLAGS}
@@ -190,8 +233,15 @@ ${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${RESF} ${CLIB}
         ${MSQZ} $@
         Access $@ RW/R
 
+${DBG_MODULE}: ${DBG_OBJS} ${TBOXLIB} ${WIMPLIB} ${RESF} ${CLIB}
+	${mkdir} rm
+        ${LD} -o $@ -module ${DBG_OBJS} ${TBOXLIB} ${WIMPLIB} <Lib$Dir>.tboxlibint.o.debuglibm <syslog$dir>.c-veneer.o.syslog ${RESF} ${CLIB}
+        Access $@ RW/R
+
 o.mainRAM: main.c
 	$(CC) ${CFLAGS} -o $@ main.c
+od.mainRAM: main.c
+	$(CC) ${CFLAGS} -Ddebugging=1 -o $@ main.c
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
