@@ -50,13 +50,12 @@ eng_rcode GetHeader(char **dest, headers *hdrs, ELIB_HDR_TYPE type)
   {
     code = h->GetBodyLen(len);
     dprintf(("Eng", "Got BodyLen, len=%d, code=%d\n",len,code));
-    if (!len)
+    if (code < 0)
+      return (eng_rcode) code;
+    else if (!len)
       return ENG_COMPLETED;
 
     ++len;
-    if (code < 0)
-      return (eng_rcode) code;
-
     if ((ptr = malloc(len + 1)) == 0)
     {
       dprintf(("Eng", "Malloc failure\n"));
@@ -88,6 +87,7 @@ eng_rcode GetDate(struct tm **dest, headers *hdrs, ELIB_HDR_TYPE type)
   struct tm *tim;
   date *d;
 
+  *dest = 0;
   if ((tim = (struct tm *) malloc(sizeof(struct tm))) == 0)
   {
     dprintf(("Eng", "Malloc failure\n"));
@@ -108,6 +108,21 @@ eng_rcode GetDate(struct tm **dest, headers *hdrs, ELIB_HDR_TYPE type)
   }
 
   return ENG_COMPLETED;
+
+}
+
+
+void CleanUpParse(void)
+{
+
+  char *file;
+
+  /* clean up */
+  destroy_context(&state.download.context);
+  delete state.download.ent;
+  file = SetFilename(state.download.msg->ID, true);
+  UnlockFile(file);
+  remove(file);
 
 }
 
@@ -136,7 +151,10 @@ void StartParseHeader(void)
     file = SetFilename(state.download.msg->ID, true);
     len = GetFileLength(file);
     state.download.ent = new entity(true, file, 0, len, ELIB_ENTITY_UNKNOWN, true);
-    state.download.substate = parsing;
+    if (state.download.ent == 0)
+      CleanUpParse();
+    else
+      state.download.substate = parsing;
   }
 
 }
@@ -158,6 +176,7 @@ void ParseHeaderSlice(void)
   {
     /* error has occurred during parsing */
     dprintf(("Eng", "Error while parsing\n"));
+    CleanUpParse();
     state.download.substate = downloadfailure;
     state.download.rc = (eng_rcode) code;
   }
@@ -182,41 +201,52 @@ void FinishParseHeader(void)
 {
 
   eng_rcode code;
-  char *file, *ptr;
-  bool errorflag = false;
   uint32 len = 0;
   MessageDescriptor *msg = state.download.msg;
 
   dprintf(("Eng", "Finished parsing header for message %d\n",msg->ID));
   /* get headers into descriptor */
   headers *hdrs = state.download.ent->GetHdrs();
-  dprintf(("Eng", "About to get From\n"));
-  {
+  from *h = (from *) hdrs->FindHdr(ELIB_HDR_FROM);
 
-    from *h = (from *) hdrs->FindHdr(ELIB_HDR_FROM);
+  if (!h)
+    state.download.substate = downloadfailure;
+  else
+  {
     code = (eng_rcode) h->GetRealName(0, len);
-    if ((msg->fromreal = malloc(len + 1)) == 0)
-      errorflag = true;
-    else
+    if (len)
     {
-      code = (eng_rcode) h->GetRealName(msg->fromreal, len);
-      dprintf(("Eng", "From Realname = %s\n",msg->fromreal));
+      if ((msg->fromreal = malloc(len + 1)) == 0)
+        state.download.substate = downloadfailure;
+      else
+      {
+        code = (eng_rcode) h->GetRealName(msg->fromreal, len);
+        dprintf(("Eng", "From Realname = %s\n",msg->fromreal));
+      }
     }
+
     len = 0;
     code = (eng_rcode) h->GetAddress(0, len);
-    if ((msg->fromaddr = malloc(len + 1)) == 0)
-      errorflag = true;
-    else
+    if ((!len) && (!msg->fromreal))
+      state.download.substate = downloadfailure;
+    else if (len)
     {
-      code = (eng_rcode) h->GetAddress(msg->fromaddr, len);
-      dprintf(("Eng", "From Address = %s\n",msg->fromaddr));
+      if ((msg->fromaddr = malloc(len + 1)) == 0)
+        state.download.substate = downloadfailure;
+      else
+      {
+        code = (eng_rcode) h->GetAddress(msg->fromaddr, len);
+        dprintf(("Eng", "From Address = %s\n",msg->fromaddr));
+      }
     }
   }
+  if ((!msg->fromaddr) && (!msg->fromreal))
+    state.download.substate = downloadfailure;
 
   dprintf(("Eng", "About to get Subject\n"));
   if ((code = GetHeader(&msg->subject, hdrs, ELIB_HDR_SUBJECT)) < 0)
   {
-    errorflag = true;
+    state.download.substate = downloadfailure;
     state.download.rc = code;
   }
   else
@@ -224,24 +254,14 @@ void FinishParseHeader(void)
   dprintf(("Eng", "About to get Date\n"));
   if ((code = GetDate(&msg->datestruct, hdrs, ELIB_HDR_DATE)) < 0)
   {
-    errorflag = true;
+    state.download.substate = downloadfailure;
     state.download.rc = code;
   }
   else
     dprintf(("Eng", "Time is %s\n",asctime(msg->datestruct)));
 
-  /* clean up */
-  dprintf(("Eng", "About to destroy context\n"));
-  destroy_context(&state.download.context);
-  dprintf(("Eng", "About to delete entity\n"));
-  delete state.download.ent;
-  dprintf(("Eng", "About to remove file\n"));
-  file = SetFilename(msg->ID, true);
-  UnlockFile(msg->ID, true);
-  remove(file);
-  if (errorflag)
-    state.download.substate = downloadfailure;
-  else
+  CleanUpParse();
+  if (state.download.substate != downloadfailure)
   {
     state.download.msg = msg->next;
     state.download.substate = readytodownload;
@@ -419,7 +439,6 @@ void FinishParseMessage(void)
   /* to be added when CC and charset are handled by Elib */
   if ((code = GetHeader(&msg->cc, hdrs, ELIB_HDR_CC)) < 0)
   {
-    errorflag = true;
     state.retrieve.rc = code;
   }
   else
@@ -567,13 +586,15 @@ void DoSend(void)
       rfc822msg *rfc = new rfc822msg(true, 0, 0, 0, true);
       headers *hdrs = rfc->GetHdrs();
       int len = GetFileLength(state.send.fname);
-      body *msgbody = new body(true, state.send.fname, 0, len, ELIB_TE_UNKNOWN, true);
-      MIMEtext *ent = new MIMEtext(false, 0, 0, 0, ELIB_CT_TEXT_PLAIN, true);
-      FILE *f = fopen("NCMailStore:SendTemp", "w");
-      to *tohdr = new to(false, 0, 0, 0, true);
-      subject *subhdr = new subject(false, 0, 0, 0, true);
-      from *fromhdr = new from(false, 0, 0, 0, true);
+      MIMEtext *ent = new MIMEtext(true, state.send.fname, 0, 0, ELIB_CT_TEXT_PLAIN, true);
+      char *file = SetFilename(msg->ID, true);
+      FILE *f = fopen(file, "w");
+      to tohdr(false, 0, 0, 0, true);
+      subject* subhdr = new subject(false, 0, 0, 0, true);
+      from fromhdr(false, 0, 0, 0, true);
+      char *ptr;
 
+      dprintf(("Eng", "Body is in file %s\n",state.send.fname));
       dprintf(("", "New RFC822 created at 0x%x, headers at 0x%x\n",rfc,hdrs));
 dprintf(("", "About to parse new message body in file %s\n",state.send.fname));
       if ((code = new_context(&state.send.context)) < 0)
@@ -584,23 +605,50 @@ dprintf(("", "About to parse new message body in file %s\n",state.send.fname));
       else
       {
         clock_t t = clock();
-        tohdr->SetAddress(msg->to);
-        code = rfc->SetTo(*tohdr);
-        dprintf(("Eng", "Added To header %s, rc=%d\n",msg->to,code));
-        fromhdr->SetAddress(emailaddr);
-        code = rfc->SetFrom(*fromhdr);
-        dprintf(("Eng", "Added From header, rc=%d\n",code));
-        subhdr->SetBody(msg->subject);
-        code = hdrs->AddHdr(*subhdr);
-        dprintf(("Eng", "Added Subject header, rc=%d\n",code));
-        code = rfc->ReplaceBody(msgbody);
-        dprintf(("Eng", "Added body, rc=%d\n",code));
+/*         code = tohdr.SetAddress("awrigley@acorn.com"); */
+/*         dprintf(("Eng", "To SetAddress, rc=%d\n",code)); */
+/*         code = tohdr.SetRealName(""); */
+/*         dprintf(("Eng", "To SetRealName, rc=%d\n",code)); */
+        code = fromhdr.SetAddress(emailaddr);
+        dprintf(("Eng", "From SetAddress, rc=%d\n",code));
+        code = fromhdr.SetRealName(realname);
+        dprintf(("Eng", "From SetRealName, rc=%d\n",code));
+/*         code = rfc->SetTo(tohdr); */
+/*         dprintf(("Eng", "SetTo, rc=%d\n",code)); */
+        code = rfc->SetFrom(fromhdr);
+        dprintf(("Eng", "SetFrom, rc=%d\n",code));
 
-        code = rfc->WriteOut(state.send.context, t + 500, f);
+        code = tohdr.SetBody("awrigley@acorn.com");
+        dprintf(("Eng", "To SetBody, rc=%d\n",code));
+        dprintf(("Eng", "To SetBody, rc=%d\n",code));
+/*         code = hdrs->AddHdr(tohdr); */
+        code = rfc->SetTo(tohdr);
+        dprintf(("Eng", "Adding to header, rc=%d\n",code));
+        code = subhdr->SetBody(msg->subject);
+        dprintf(("Eng", "Subject SetBody, rc=%d\n",code));
+        code = hdrs->AddHdr(*subhdr);
+        if (code < ELIB_RUNNING)
+          delete subhdr;
+        dprintf(("Eng", "Adding subject header, rc=%d\n",code));
+
+/*         *rfc += *ent; */
+
+        GetHeader(&ptr, hdrs, ELIB_HDR_TO);
+        dprintf(("Eng", "To header = %s\n",ptr));
+        free(ptr);
+/*         GetHeader(&ptr, hdrs, ELIB_HDR_FROM); */
+/*         dprintf(("Eng", "From header = %s\n",ptr)); */
+/*         free(ptr); */
+        GetHeader(&ptr, hdrs, ELIB_HDR_SUBJECT);
+        dprintf(("Eng", "Subject header = %s\n",ptr));
+        free(ptr);
+
+        code = ent->WriteOut(state.send.context, t + 500, f);
         dprintf(("Eng", "Writing out file\n"));
         fclose(f);
+        LockFile(SetFilename(msg->ID, true));
 
-        SendMessage("NCMailStore:SendTemp", msg);
+        SendMessage();
       }
       state.state &= ~SEND;
       break;
