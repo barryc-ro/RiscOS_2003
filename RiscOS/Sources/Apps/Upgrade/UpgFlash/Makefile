@@ -20,6 +20,7 @@ RM      = remove
 WIPE    = -wipe
 CD	= dir
 CHMOD	= access
+STRIP   = -stripdepnd
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS     = -c -Wa -depend !Depend ${THROWBACK} -ff ${INCLUDES} ${DFLAGS}
@@ -94,7 +95,7 @@ resources: ${TARGET}
 install:   ${TARGET}
 	${MKDIR} ${APP}
         ${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} Resources.* ${APP}.* ${CPFLAGS}
+        ${CP} Resources.$(USERIF).$(LOCALE).* ${APP}.* ${CPFLAGS}
         @echo ${COMPONENT}: all complete
 
 clean:
@@ -107,6 +108,8 @@ clean:
         ${RM} o
         ${RM} aof
         ${RM} rm
+        @echo Stripping dependencies from makefile...
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 dirs:
