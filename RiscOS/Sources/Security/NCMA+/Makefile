@@ -43,10 +43,10 @@ INCLUDES= -IC:
 #
 
 # no debugging
-#CCFLAGS  = -c -Throwback -depend !Depend ${INCLUDES} -zM -UENABLE_DEBUGGING 
+CCFLAGS  = -c -Throwback -depend !Depend ${INCLUDES} -zM -UENABLE_DEBUGGING 
 
 # debugging
-CCFLAGS  = -c -Throwback -depend !Depend ${INCLUDES} -zM -DENABLE_DEBUGGING 
+#CCFLAGS  = -c -Throwback -depend !Depend ${INCLUDES} -zM -DENABLE_DEBUGGING 
 
 
 # Libraries
