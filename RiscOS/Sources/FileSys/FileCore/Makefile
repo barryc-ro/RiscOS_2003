@@ -5,77 +5,18 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 14-May-01  SNB          Created.
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -throwback -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
 COMPONENT = FileCore
-SOURCE    = s.FileCore
-TARGET    = rm.FileCore
-EXPORTS   = ${EXP_HDR}.FileCore \
-            ${EXP_HDR}.MultiFS
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+HEADER1 = FileCore
+HEADER2 = MultiFS
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
+TOKHELPSRC = ${TOKENSOURCE}
+HELPSRC    = HelpText
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        ${RM} s.TokenHelp
-        @echo ${COMPONENT}: cleaned
-
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
-
-${TARGET}: ${SOURCE} s.TokenHelp
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-s.TokenHelp: Hdr:Tokens HelpText
-        tokenise Hdr:Tokens HelpText $@
-
-${EXP_HDR}.FileCore: hdr.FileCore
-        ${CP} hdr.FileCore $@ ${CPFLAGS}
-
-${EXP_HDR}.MultiFS: hdr.MultiFS
-        ${CP} hdr.MultiFS $@ ${CPFLAGS}
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
