@@ -679,7 +679,7 @@ o.dirs:
 	@${MKDIR} rm
 	@${MKDIR} Targets
 	@${MKDIR} Targets.Argonet
-	@${MKDIR} Targets.Argonet.!Argo
+	@${MKDIR} Targets.Argonet.!Voyager
 	@${MKDIR} Targets.Browse
 	@${MKDIR} Targets.Browse.!Browse
 	@${MKDIR} Targets.Intertalk

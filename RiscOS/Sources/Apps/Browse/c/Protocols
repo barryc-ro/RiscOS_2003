@@ -83,6 +83,44 @@ static char          leafname[Limits_Leafname];
 #define RTB_Size 2048 /* RAM transfer buffer size */
 
 /*************************************************/
+/* protocols_send_data_open()                    */
+/*                                               */
+/* Broadcasts a Message_DataOpen for the given   */
+/* filetype and given pathname.                  */
+/*                                               */
+/* Parameters: The filetype to use;              */
+/*                                               */
+/*             Pointer to a null-terminated      */
+/*             pathname to use.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_send_data_open(int filetype, char * pathname)
+{
+  _kernel_oserror * e;
+  WimpMessage       dop;
+
+  dop.hdr.your_ref    = 0;
+  dop.hdr.action_code = Wimp_MDataOpen;
+
+  dop.data.data_open.window_handle = 0;
+  dop.data.data_open.x             = 0;
+  dop.data.data_open.y             = 0;
+  dop.data.data_open.file_type     = filetype;
+
+  StrNCpy0(dop.data.data_open.path_name, pathname);
+
+  dop.hdr.size = (int) WordAlign(strlen(dop.data.data_open.path_name) + 45); /* (44 for stuff up to the pathname, plus 1 for terminator) */
+
+  e = wimp_send_message(Wimp_EUserMessageRecorded, &dop, 0, 0, NULL);
+
+  /* Record my_ref in case it bounces */
+
+  recorded_my_ref = dop.hdr.my_ref;
+
+  return e;
+}
+
+/*************************************************/
 /* protocols_atat_got_data_save()                */
 /*                                               */
 /* Handle reception of a Message_DataSave - load */
@@ -137,7 +175,7 @@ _kernel_oserror * protocols_atat_got_data_save(WimpMessage * m)
 
   /* Update the size information */
 
-  pending.hdr.size = (int) WordAlign(strlen(Save_ScrapFile) + 45);
+  pending.hdr.size = (int) WordAlign(strlen(Save_ScrapFile) + 45); /* (44 for stuff up to the pathname, plus 1 for terminator) */
 
   /* For URI / URL files, can use RAM transfer */
 
@@ -246,62 +284,69 @@ _kernel_oserror * protocols_atat_got_data_load(WimpMessage * m)
      )
   {
     WimpMessage * dla = m;
+    char          url[Limits_URL];
+    int           apptoapp = m->hdr.your_ref ? 1 : 0; /* your_ref is zero if from filer, else filled in for app to app */
 
     #ifdef TRACE
       if (tl & (1u<<28)) Printf("protocols_atat_got_data_load: Can handle this filetype (0x%03x)\n", m->data.data_load.file_type);
     #endif
 
-    if (m->data.data_load.destination_window <= 0)
-    {
-      /* Load file to icon bar - i.e. open a new window. */
+    /* Process the file */
 
-      char url[Limits_URL];
+    if (
+         m->data.data_load.file_type != FileType_URI &&
+         m->data.data_load.file_type != FileType_URL
+       )
+    {
+      /* Not a URI or URL file, so text, HTML, image... */
+
+      StrNCpy0(url, m->data.data_load.leaf_name);
+      urlutils_pathname_to_url(url, sizeof(url));
+
+      /* For text and HTML, we can use an internal URL scheme */
+      /* to allow the fetcher to load the scrap file and then */
+      /* remove it, as it should. For other types, the main   */
+      /* fetcher modules must be used; so we can't get rid    */
+      /* of the scrap file. If something else trashes it,     */
+      /* tough.                                               */
 
       if (
-           m->data.data_load.file_type != FileType_URI &&
-           m->data.data_load.file_type != FileType_URL
-         )
-      {
-        /* Not a URI or URL file, so text, HTML, image... */
-
-        StrNCpy0(url, m->data.data_load.leaf_name);
-        urlutils_pathname_to_url(url, sizeof(url));
-
-        /* For text and HTML, we can use an internal URL scheme */
-        /* to allow the fetcher to load the scrap file and then */
-        /* remove it, as it should. For other types, the main   */
-        /* fetcher modules must be used; so we can't get rid    */
-        /* of the scrap file. If something else trashes it,     */
-        /* tough.                                               */
-
-        if (
+           apptoapp &&
+           (
              m->data.data_load.file_type == FileType_TEXT ||
              m->data.data_load.file_type == FileType_HTML
            )
+         )
+      {
+        StrNCpy0(url, Internal_URL ForScrapFile ":");
+
+        /* Append the application suggested leafname */
+
+        if (!*leafname)
         {
-          StrNCpy0(url, Internal_URL ForScrapFile ":");
-
-          /* Append the application suggested leafname */
-
-          if (!*leafname)
-          {
-            if (strlen(url) + 9 <= sizeof(url)) strcat(url, "HTMLfile");
-          }
-          else
-          {
-            if (strlen(url) + strlen(leafname) + 1 <= sizeof(url)) strcat(url, leafname);
-          }
+          if (strlen(url) + 9 <= sizeof(url)) strcat(url, "HTMLfile");
+        }
+        else
+        {
+          if (strlen(url) + strlen(leafname) + 1 <= sizeof(url)) strcat(url, leafname);
         }
       }
-      else
-      {
-        urlutils_load_uri_file(url, sizeof(url), m->data.data_load.leaf_name);
+    }
+    else
+    {
+      urlutils_load_uri_file(url, sizeof(url), m->data.data_load.leaf_name);
 
-        /* Delete scrap if used - we've finished with the */
-        /* file now, certainly.                           */
+      /* Delete scrap if used - we've finished with the */
+      /* file now, certainly.                           */
 
-        if (!strcmp(m->data.data_load.leaf_name, Save_ScrapFile)) remove(Save_ScrapFile);
-      }
+      if (apptoapp) remove(m->data.data_load.leaf_name);
+    }
+
+    /* Take appropriate action */
+
+    if (m->data.data_load.destination_window <= 0)
+    {
+      /* Load file to icon bar - i.e. open a new window. */
 
       ChkError(windows_create_browser(url, NULL, NULL, NULL, 0));
     }
@@ -310,47 +355,11 @@ _kernel_oserror * protocols_atat_got_data_load(WimpMessage * m)
       /* Load file to a browser window. Need to find it's */
       /* browser_data structure.                          */
 
-      char           url[Limits_URL];
       browser_data * b = NULL;
 
       utils_browser_from_window(m->data.data_load.destination_window, &b);
 
-      if (b)
-      {
-        if (
-             m->data.data_load.file_type != FileType_URI &&
-             m->data.data_load.file_type != FileType_URL
-           )
-        {
-          StrNCpy0(url, m->data.data_load.leaf_name);
-          urlutils_pathname_to_url(url, sizeof(url));
-
-          /* As for the case when opening a new window, we can use */
-          /* an internal URL scheme for HTML and text files.       */
-
-          if (
-               m->data.data_load.file_type == FileType_TEXT ||
-               m->data.data_load.file_type == FileType_HTML
-             )
-          {
-            StrNCpy0(url, Internal_URL ForScrapFile ":");
-
-            /* Append the application suggested leafname */
-
-            if (!*leafname)
-            {
-              if (strlen(url) + 9 <= sizeof(url)) strcat(url, "HTMLfile");
-            }
-            else
-            {
-              if (strlen(url) + strlen(leafname) + 1 <= sizeof(url)) strcat(url, leafname);
-            }
-          }
-        }
-        else urlutils_load_uri_file(url, sizeof(url), m->data.data_load.leaf_name);
-
-        ChkError(fetchpage_new(b, url, 1, 0));
-      }
+      if (b && !b->small_fetch) ChkError(fetchpage_new(b, url, 1, 0));
     }
 
     dla->hdr.your_ref    = m->hdr.my_ref;
@@ -623,7 +632,7 @@ _kernel_oserror * protocols_atat_got_ram_transmit(WimpMessage * m)
 
                 utils_browser_from_window(recorded_window, &b);
 
-                if (b) e = fetchpage_new(b, uri_buffer, 1, 0);
+                if (b && !b->small_fetch) e = fetchpage_new(b, uri_buffer, 1, 0);
               }
 
               free(uri_buffer);
@@ -706,6 +715,65 @@ _kernel_oserror * protocols_atat_got_ram_transmit(WimpMessage * m)
   }
 
   return e;
+}
+
+/*************************************************/
+/* protocols_atat_data_open_bounced()            */
+/*                                               */
+/* For a View Source function, the browser       */
+/* broadcasts a Message_DataOpen. If this        */
+/* bounces, attempt to start an editor instead,  */
+/* with the pathname specified in the message.   */
+/*                                               */
+/* See PRM 3-265.                                */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message.         */
+/*************************************************/
+
+_kernel_oserror * protocols_atat_data_open_bounced(WimpMessage * m)
+{
+  if (
+       recorded_my_ref                  &&
+       m->hdr.my_ref == recorded_my_ref
+     )
+  {
+    _kernel_oserror * e;
+    char            * combuf;
+    char            * comstart = "If \"Alias$@RunType_FFF\" <> \"\" Then @RunType_FFF ";
+    int               len;
+
+    /* Want to run '@RunType_FFF' with the given pathname as a parameter;  */
+    /* need to assemble this command string. Work out how long it will be. */
+
+    len = strlen(comstart) + strlen(m->data.data_open.path_name) + 1;
+
+    /* Allocate space for it (complain if this fails). */
+
+    combuf = malloc(len);
+
+    if (!combuf) return make_no_memory_error(9);
+
+    /* Assemble the string */
+
+    strcpy(combuf, comstart);
+    strcat(combuf, m->data.data_open.path_name);
+
+    /* Execute the command */
+
+    e = _swix(Wimp_StartTask,
+              _IN(0),
+
+              combuf);
+
+    /* Free the command buffer and return the value the _swix call gave back */
+
+    free(combuf);
+
+    return e;
+  }
+
+  return NULL;
 }
 
 /*************************************************/
@@ -1235,6 +1303,10 @@ _kernel_oserror * protocols_ih_got_help_reply(WimpMessage * m)
     /* If we haven't got a valid client handle, exit. */
 
     if (!is_known_browser(b)) return NULL;
+
+    /* If this is a small fetch window, don't display anything either */
+
+    if (b->small_fetch) return NULL;
 
     /* If the text is empty, there was no help for that item, */
     /* so restore the old status display, if there was a      */
