@@ -115,6 +115,7 @@ clean:
         ${WIPE} oi ${WFLAGS}
         ${WIPE} inst ${WFLAGS}
         ${WIPE} ${TARGET} ${WFLAGS}
+        ${WIPE} ${d_TARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
         
 #
