@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #include "Unicode/iso10646.h"
 
@@ -14,7 +15,7 @@ char *sourcefilename[MAX_FILE_DEPTH];
 int sourceline[MAX_FILE_DEPTH];
 int filedepth;
 
-const char *ExtraKeys;
+const char *ExtraKeys, *FNKey;
 
 char keypad_codes[]={
           0x23, 0x24, 0x25,
@@ -290,6 +291,13 @@ char *getline(char *p, size_t plen)
                 else
                     goto start_again;
             }
+            if (strcmp(p+9, "@FNKey@") == 0)
+            {
+                if (FNKey)
+                    newinclude = FNKey;
+                else
+                    goto start_again;
+            }
             else
                 newinclude = p+9;
 
@@ -311,27 +319,45 @@ char *getline(char *p, size_t plen)
     return p;
 }
 
-#define K_ScrollLock 0x0E
-#define K_Break      0x0F
-#define K_NumLock    0x22
-#define K_Tab        0x26
-#define K_CtrlL      0x3B
-#define K_ShiftL     0x4C
-#define K_ShiftR     0x58
-#define K_CapsLock   0x5D
-#define K_AltL       0x5E
-#define K_AltR       0x60
-#define K_CtrlR      0x61
-#define K_MSelect    0x70
-#define K_MMenu      0x71
-#define K_MAdjust    0x72
+#define K_ScrollLock  0x0E
+#define K_Break       0x0F
+#define K_NumLock     0x22
+#define K_NumPadSlash 0x23
+#define K_NumPadStar  0x24
+#define K_NumPadHash  0x25
+#define K_Tab         0x26
+#define K_NumPad7     0x37
+#define K_NumPad8     0x38
+#define K_NumPad9     0x39
+#define K_NumPadMinus 0x3A
+#define K_CtrlL       0x3B
+#define K_NumPad4     0x48
+#define K_NumPad5     0x49
+#define K_NumPad6     0x4A
+#define K_NumPadPlus  0x4B
+#define K_ShiftL      0x4C
+#define K_ShiftR      0x58
+#define K_NumPad1     0x5A
+#define K_NumPad2     0x5B
+#define K_NumPad3     0x5C
+#define K_CapsLock    0x5D
+#define K_AltL        0x5E
+#define K_AltR        0x60
+#define K_CtrlR       0x61
+#define K_NumPad0     0x65
+#define K_NumPadDot   0x66
+#define K_NumPadEnter 0x67
+#define K_FN          0x6F
+#define K_MSelect     0x70
+#define K_MMenu       0x71
+#define K_MAdjust     0x72
 
 int is_modifier_key(int key)
 {
     return key == K_Break || key == K_CtrlL || key == K_ShiftL ||
            key == K_ShiftR || key == K_AltL || key == K_AltR ||
-           key == K_CtrlR || key == K_MSelect || key == K_MMenu ||
-           key == K_MAdjust;
+           key == K_CtrlR || key == K_FN ||
+           key == K_MSelect || key == K_MMenu || key == K_MAdjust;
 }
 
 int is_keypad_key(int key)
@@ -392,6 +418,56 @@ void read_keypad(Keyboard *kb)
 
         kb->keypad[0][i]=(char)k;
         kb->keypad[1][i++]=(char)k2;
+    }
+
+    error("Unexpected end of file");
+}
+
+void read_fnkey(Keyboard *kb)
+{
+    int i=0;
+    char buffer[256];
+    char *p;
+    unsigned long k, k2;
+
+    for (i=0; i<MAXKEYS; i++)
+        kb->key[i].fn = -1;
+
+    kb->fnused = false;
+    i = 0;
+
+    while (getline(buffer, 256))
+    {
+        if (buffer[0] == '$')
+        {
+            if (strcmp(buffer, "$EndFNKey")==0)
+            {
+                return;
+            }
+            else
+                error("Unexpected directive");
+        }
+
+        k = strtoul(buffer, &p, 16);
+        if (k >= MAXKEYS)
+            error("Expected key number");
+
+        k2 = strtoul(p, NULL, 16);
+        if (k2 >= MAXKEYS || k == k2)
+            error("Expected key number");
+
+        /* Can only map non-modifier keys to other non-modifier keys */
+        if (is_modifier_key((int) k) && !kb->key[k].defined ||
+            is_modifier_key((int) k2) && !kb->key[k2].defined)
+            error("I'm sorry, I'm afraid I can't do that");
+
+        kb->key[k].defined = 1;
+        kb->key[k2].defined = 1;
+
+        kb->key[k].fn = (int) k2;
+        kb->fnused = true;
+        if (++i > 0xFF)
+            error("Too many FN mappings");
     }
 
     error("Unexpected end of file");
@@ -581,6 +657,8 @@ void read_layout_file(Keyboard *kb)
                 kb->custompad=1;
                 read_keypad(kb);
             }
+            else if (strcmp(buffer, "$FNKey")==0)
+                read_fnkey(kb);
             else
                 error("Unknown directive");
         }
@@ -616,61 +694,73 @@ void output_layer(FILE *out, Keyboard *kb, int layerno)
 
 void output_simples(FILE *out, Keyboard *kb)
 {
-    int i,j,c;
-    int bestmem, best;
-    int specials;
+    int i,j,c, best;
+    int t;
 
-    for (i=0; i<MAXKEYS; i++)
+    if (kb->fnused)
     {
-        kb->key[i].easy = 1;
-        for (j=0; j<kb->layers; j++)
+        /* Sorry lads, if FN's in use we can't have any simple keys */
+        for (i=0; i<MAXKEYS; i++)
+            kb->key[i].easy = 0;
+        best = 0;
+    }
+    else
+    {
+        int bestmem;
+        int specials;
+
+        for (i=0; i<MAXKEYS; i++)
         {
-            if (!kb->key[i].easylayer[j])
+            kb->key[i].easy = 1;
+            for (j=0; j<kb->layers; j++)
             {
-                kb->key[i].easy = 0;
-                break;
-            }
-            for (c=0; c<8; c++)
-                if (kb->key[i].character[j][c] != kb->key[i].character[0][c])
+                if (!kb->key[i].easylayer[j])
                 {
                     kb->key[i].easy = 0;
                     break;
                 }
+                for (c=0; c<8; c++)
+                    if (kb->key[i].character[j][c] != kb->key[i].character[0][c])
+                    {
+                        kb->key[i].easy = 0;
+                        break;
+                    }
+            }
         }
-    }
 
-    /* How many should we put in the "easy" array? Want to
-     * minimise memory usage. The memory usage is basically
-     *      4 * (highest easy key+1)     for the KeyTran table
-     *    + 36 * special keys * layers + special keys.    for SpecialList + UCSList
-     *
-     * Start off supposing every defined key is special,
-     * then try effect of gradually extending the simple table.
-     */
+        /* How many should we put in the "easy" array? Want to
+         * minimise memory usage. The memory usage is basically
+         *      4 * (highest easy key+1)     for the KeyTran table
+         *    + 36 * special keys * layers + special keys.    for SpecialList + UCSList
+         *
+         * Start off supposing every defined key is special,
+         * then try effect of gradually extending the simple table.
+         */
 
-    for (i=0, specials=0; i < MAXKEYS; i++)
-        if (kb->key[i].defined)
-            specials++;
+        for (i=0, specials=0; i < MAXKEYS; i++)
+            if (kb->key[i].defined)
+                specials++;
 
-    bestmem = 36*specials*kb->layers + specials;
-    best = 0;
+        bestmem = 36*specials*kb->layers + specials;
+        best = 0;
 
-    for (i=0; i < MAXKEYS; i++)
-    {
-        int mem;
-        if (kb->key[i].easy && kb->key[i].defined) // we've saved one special code!!
-            specials--;
-        mem = (i+1)*4 + 36*specials*kb->layers + specials;
-        /*printf("%d simple, %d special, mem = %d\n", i, specials, mem);*/
-        if (mem<bestmem)
+        for (i=0; i < MAXKEYS; i++)
         {
-            best = i+1;
-            bestmem = mem;
+            int mem;
+            if (kb->key[i].easy && kb->key[i].defined) // we've saved one special code!!
+                specials--;
+            mem = (i+1)*4 + 36*specials*kb->layers + specials;
+            /*printf("%d simple, %d special, mem = %d\n", i, specials, mem);*/
+            if (mem<bestmem)
+            {
+                best = i+1;
+                bestmem = mem;
+            }
         }
-    }
 
-    for (i=best; i < MAXKEYS; i++)
-        kb->key[i].easy=0;
+        for (i=best; i < MAXKEYS; i++)
+            kb->key[i].easy=0;
+    }
 
     fprintf(out, "KeyTran%d\n", kb->country);
     for (i=0; i < best; i++)
@@ -689,16 +779,19 @@ void output_simples(FILE *out, Keyboard *kb)
                  "        =       SpecialList%dEnd - SpecialList%d - 1\n",
                  kb->country, kb->country, kb->country);
 
-    if (!kb->key[K_ShiftL].defined)     fprintf(out, "        =       K1ShiftLeft\n");
-    if (!kb->key[K_ShiftR].defined)     fprintf(out, "        =       K1ShiftRight\n");
-    if (!kb->key[K_CtrlL].defined)      fprintf(out, "        =       K1CtrlLeft\n");
-    if (!kb->key[K_CtrlR].defined)      fprintf(out, "        =       K1CtrlRight\n");
-    if (!kb->key[K_AltL].defined)       fprintf(out, "        =       K1AltLeft\n");
-    if (!kb->key[K_AltR].defined)       fprintf(out, "        =       K1AltRight\n");
-    if (!kb->key[K_MSelect].defined)    fprintf(out, "        =       K1LeftMouse\n");
-    if (!kb->key[K_MMenu].defined)      fprintf(out, "        =       K1CentreMouse\n");
-    if (!kb->key[K_MAdjust].defined)    fprintf(out, "        =       K1RightMouse\n");
-    if (!kb->key[K_Break].defined)      fprintf(out, "        =       K1Break\n");
+    t=1;
+
+    if (!kb->key[K_ShiftL].defined)     { fprintf(out, "        =       K1ShiftLeft\n");   t++; }
+    if (!kb->key[K_ShiftR].defined)     { fprintf(out, "        =       K1ShiftRight\n");  t++; }
+    if (!kb->key[K_CtrlL].defined)      { fprintf(out, "        =       K1CtrlLeft\n");    t++; }
+    if (!kb->key[K_CtrlR].defined)      { fprintf(out, "        =       K1CtrlRight\n");   t++; }
+    if (!kb->key[K_AltL].defined)       { fprintf(out, "        =       K1AltLeft\n");     t++; }
+    if (!kb->key[K_AltR].defined)       { fprintf(out, "        =       K1AltRight\n");    t++; }
+    if (!kb->key[K_FN].defined)         { fprintf(out, "        =       K1FN\n");          t++; }
+    if (!kb->key[K_MSelect].defined)    { fprintf(out, "        =       K1LeftMouse\n");   t++; }
+    if (!kb->key[K_MMenu].defined)      { fprintf(out, "        =       K1CentreMouse\n"); t++; }
+    if (!kb->key[K_MAdjust].defined)    { fprintf(out, "        =       K1RightMouse\n");  t++; }
+    if (!kb->key[K_Break].defined)      { fprintf(out, "        =       K1Break\n");       kb->key[K_Break].tablenum=t++; }
 
     fprintf(out, "SpecialList%dPad\n"
                  "        =       K1NumPadSlash, K1NumPadStar, K1NumPadHash\n"
@@ -708,10 +801,28 @@ void output_simples(FILE *out, Keyboard *kb)
                  "        =       K1NumPad0, K1NumPadDot, K1NumPadEnter\n",
                  kb->country);
 
-    if (!kb->key[K_ScrollLock].defined) fprintf(out, "        =       K1ScrollLock\n");
-    if (!kb->key[K_NumLock].defined)    fprintf(out, "        =       K1NumLock\n");
-    if (!kb->key[K_Tab].defined)        fprintf(out, "        =       K1Tab\n");
-    if (!kb->key[K_CapsLock].defined)   fprintf(out, "        =       K1CapsLock\n");
+    kb->key[K_NumPadSlash].tablenum=t++;
+    kb->key[K_NumPadStar].tablenum=t++;
+    kb->key[K_NumPadHash].tablenum=t++;
+    kb->key[K_NumPad7].tablenum=t++;
+    kb->key[K_NumPad8].tablenum=t++;
+    kb->key[K_NumPad9].tablenum=t++;
+    kb->key[K_NumPadMinus].tablenum=t++;
+    kb->key[K_NumPad4].tablenum=t++;
+    kb->key[K_NumPad5].tablenum=t++;
+    kb->key[K_NumPad6].tablenum=t++;
+    kb->key[K_NumPadPlus].tablenum=t++;
+    kb->key[K_NumPad1].tablenum=t++;
+    kb->key[K_NumPad2].tablenum=t++;
+    kb->key[K_NumPad3].tablenum=t++;
+    kb->key[K_NumPad0].tablenum=t++;
+    kb->key[K_NumPadDot].tablenum=t++;
+    kb->key[K_NumPadEnter].tablenum=t++;
+
+    if (!kb->key[K_ScrollLock].defined) { fprintf(out, "        =       K1ScrollLock\n");  kb->key[K_ScrollLock].tablenum=t++; }
+    if (!kb->key[K_NumLock].defined)    { fprintf(out, "        =       K1NumLock\n");     kb->key[K_NumLock].tablenum=t++; }
+    if (!kb->key[K_Tab].defined)        { fprintf(out, "        =       K1Tab\n");         kb->key[K_Tab].tablenum=t++; }
+    if (!kb->key[K_CapsLock].defined)   { fprintf(out, "        =       K1CapsLock\n");    kb->key[K_CapsLock].tablenum=t++; }
 
     fprintf(out, "SpecialList%dUCS", kb->country);
 
@@ -720,6 +831,7 @@ void output_simples(FILE *out, Keyboard *kb)
         {
             fprintf(out, "%s&%02X", j==0 ? "\n        =       " : ", ", i);
             j = (j+1)%8;
+            kb->key[i].tablenum = t++;
         }
 
     fprintf(out, "\nSpecialList%dEnd\n"
@@ -734,6 +846,7 @@ void process_keyboard(FILE *in, FILE *out)
     kb->country = -1;
     kb->layers = 0;
     kb->numkeys = 0;
+    kb->fnused = false;
     kb->needcodetable = 0;
     kb->needshiftinglist = 0;
     kb->custompad = 0;
@@ -744,6 +857,7 @@ void process_keyboard(FILE *in, FILE *out)
     for (k=0; k<MAXKEYS; k++)
     {
         kb->key[k].defined = 0;
+        kb->key[k].tablenum = 0;
         kb->key[k].easy = 1;
         for (i=0; i<MAXLAYERS; i++)
         {
@@ -797,6 +911,11 @@ void process_keyboard(FILE *in, FILE *out)
                kb->country, kb->country, kb->country,
                kb->country, kb->country, kb->country);
 
+    if (kb->fnused)
+        fprintf(out, "        &       FNTable%d-KeyStruct%d\n", kb->country, kb->country);
+    else
+        fprintf(out, "        &       0\n");
+
     for (i=0; i < MAXLAYERS; i++)
     {
         int j = i < kb->layers ? i : 0;
@@ -828,6 +947,8 @@ void process_keyboard(FILE *in, FILE *out)
         }
         if (!kb->key[K_AltR].defined)
             fprintf(out, "        &       ProcessKAlt - SpecialCodeTable%d\n", kb->country);
+        if (!kb->key[K_FN].defined)
+            fprintf(out, "        &       ProcessKFN - SpecialCodeTable%d\n", kb->country);
         if (!kb->key[K_MSelect].defined)
             fprintf(out, "        &       ProcessKLeft - SpecialCodeTable%d\n", kb->country);
         if (!kb->key[K_MMenu].defined)
@@ -863,18 +984,38 @@ void process_keyboard(FILE *in, FILE *out)
         if (!kb->key[K_CtrlR].defined)   fprintf(out, "        =       K1CtrlRight\n");
         if (!kb->key[K_AltL].defined)    fprintf(out, "        =       K1AltLeft\n");
         if (!kb->key[K_AltR].defined)    fprintf(out, "        =       K1AltRight\n");
+        if (!kb->key[K_FN].defined)      fprintf(out, "        =       K1FN\n");
         if (!kb->key[K_MAdjust].defined) fprintf(out, "        =       K1RightMouse\n");
         if (!kb->key[K_MMenu].defined)   fprintf(out, "        =       K1CentreMouse\n");
         if (!kb->key[K_MSelect].defined) fprintf(out, "        =       K1LeftMouse\n");
         if (!kb->key[K_Break].defined)   fprintf(out, "        =       K1Break\n");
 
-        fprintf(out, "ShiftingKeyList%dEnd\n"
-                     "        ALIGN\n",
+        fprintf(out, "ShiftingKeyList%dEnd\n",
                      kb->country);
     }
 
     for (i=0; i<kb->layers; i++)
         output_layer(out, kb, i);
+
+    if (kb->fnused)
+    {
+        fprintf(out, "\nFNTable%d\n"
+                     "        =       (FNTable%dEnd - FNTable%d - 1) / 2\n",
+                     kb->country, kb->country, kb->country);
+        for (i=0; i<MAXKEYS; i++)
+            if (kb->key[i].fn != -1)
+            {
+                if (!kb->key[i].tablenum || !kb->key[kb->key[i].fn].tablenum)
+                {
+                    char buffer[128];
+                    sprintf(buffer, "Consistency failure in FN map (%02X->%02X)", i, kb->key[i].fn);
+                    error(buffer);
+                }
+                fprintf(out, "        =       &%02X, &%02X\n", kb->key[i].tablenum,
+                                                               kb->key[kb->key[i].fn].tablenum);
+            }
+        fprintf(out, "FNTable%dEnd\n", kb->country);
+    }
 
     if (kb->custompad)
     {
@@ -888,9 +1029,10 @@ void process_keyboard(FILE *in, FILE *out)
                 j = (j+1)%8;
             }
         }
-        fprintf(out, "\n        ALIGN\n");
+        putc('\n', out);
     }
 
+    fprintf(out, "\n        ALIGN\n");
     fprintf(out, "\n        END\n");
 }
 
@@ -920,9 +1062,16 @@ int main(int argc, char **argv)
         argc-=2;
     }
 
+    if (argc >= 3 && strcmp(argv[1], "-fn")==0)
+    {
+        FNKey = argv[2];
+        argv+=2;
+        argc-=2;
+    }
+
     if (argc != 3)
     {
-        fprintf(stderr, "Usage: keygen [-depend filename] [-throwback] [-extra filename]\n"
+        fprintf(stderr, "Usage: keygen [-depend filename] [-throwback] [-extra filename] [-fn filename]\n"
                         "              layout-file output-file\n");
         exit(1);
     }

@@ -53,6 +53,7 @@
 ;            layout changes to Belgium, Denmark, France, Germany, Greece, Israel,
 ;            LatinAm, Russia, Switzerland and Turkey; and Ctrl-Alt-F1/F2 use a callback.
 ;            Also fixed Japan delete key to be special.
+; 26-Aug-99  Software support for "FN" key.
 ;
 
         GBLL    PCDel           ; option to have Delete key return &8B (Copy) instead
@@ -149,6 +150,7 @@ Alphabet_Latin6 * 113
 Keyboard_A500   * 0
 Keyboard_A1     * 1
 Keyboard_Perth  * 2
+Keyboard_RCMM   * 3
 Keyboard_None   * &FF
 
         MACRO
@@ -292,6 +294,7 @@ K1NoConvert     * &6B
 K1Convert       * &6C
 K1Kana          * &6D
 K1NotFittedRight * &6E
+K1FN            * &6F
 K1LeftMouse     * &70
 K1CentreMouse   * &71
 K1RightMouse    * &72
@@ -316,9 +319,10 @@ KVPendingAltCode     * &1C
 ; Private entries
 KVPadNumTran         * &20 ; offset from structure to new entry for keypad numerics
 KVPadCurTran         * &24 ; offset from structure to new entry for keypad non-numerics
-KVUCSTable0          * &28
-KVUCSTable1          * &2C
-KVSize               * &30 ; size of key structure header
+KVFNTable            * &28
+KVUCSTable0          * &2C
+KVUCSTable1          * &30
+KVSize               * &34 ; size of key structure header
 
 KBStat_NoKanaLock    * KBStat_NoShiftLock  ; we've reassigned this bit
 
@@ -358,6 +362,7 @@ ShiftCount      # 1
 CtrlCount       # 1
 AltCount        # 1
 AltLeftDown     # 1     ; for layouts where Left-Alt + Shift toggles layers
+FNDown          # 1
 MyMouseButtons  # 1     ; bit0=R, bit1=C, bit2=L
 TempAction      # 1     ; to remember the action in ProcessUCS
 KeyReturn       # 2     ; length byte (1), value byte
@@ -365,6 +370,20 @@ KeyNULReturn    # 3     ; length byte (2), NUL, value byte
 NowtReturn      * KeyNULReturn +1 ; zero length list
 KeyUTFReturn    # 13    ; length byte (up to 12), 6 * (NUL, value)
 KeyUTFReturnEnd # 0
+
+; Handy macro to do the FN processing. Good for any non-modifier key.
+; Corrupts R2 - this relies not only EVERY non-modifier handler not
+; using R2, as if we end up calling a different handler, R2 will
+; be corrupted.
+
+        MACRO
+        HandleFN
+        LDRB    R2, FNDown              ; is FN down?
+        TEQ     R2, #0                  ; if not, process as normal
+        Push    "R14", NE
+        BLNE    FindFN
+        Pull    "R14", NE
+        MEND
 
 ; **************** Module code starts here **********************
 
@@ -528,6 +547,7 @@ SetUpKeyStructureAndHandlerIfUs Entry "r0,r1"
         SWI     XOS_InstallKeyHandler
         TEQ     r0, #Keyboard_A1
         TEQNE   r0, #Keyboard_Perth
+        TEQNE   r0, #Keyboard_RCMM
         TEQNE   r0, #Keyboard_None
         BNE     %FT50
 
@@ -566,7 +586,8 @@ SetUpKeyStructureAndHandlerIfUs Entry "r0,r1"
         SUB     r1, r0, r12             ; offset from workspace to structure
 10
         LDR     r3, [r0, r2]
-        TEQ     r2, #&04                ; is it KeyTranSize ?
+        TEQ     r2, #KVKeyTranSize      ; is it KeyTranSize ?
+        TEQNE   r3, #0                  ; or is it 0
         ADDNE   r3, r3, r1              ; if not then relative offset
         STR     r3, [r12, r2]
         SUBS    r2, r2, #4
@@ -678,6 +699,7 @@ KeyStructInit ROUT
         STRB    R0, CtrlCount
         STRB    R0, AltCount
         STRB    R0, AltLeftDown
+        STRB    R0, FNDown
         STRB    R0, MyMouseButtons
         STRB    R0, KeyNULReturn+1      ; NUL for NUL char return
         MOV     R0, #1                  ; string length for single key return
@@ -714,6 +736,10 @@ ProcessKCtrl ROUT
         ADR     R0, CtrlCount
         MOV     R2, #KBStat_CtrlEngaged
         B       ProcessShiftOrCtrl
+
+ProcessKFN ROUT
+        STRB    R1, FNDown
+        MOV     PC, R14
 
 ProcessKRight ROUT
         MOV     R2, #1
@@ -847,6 +873,8 @@ IDDTable
         &       -1, -1
 
 ProcessKCaps ROUT
+        HandleFN
+HandleKCaps
         TEQ     R1, #2                          ; is it first press ?
         MOVNE   PC, R14                         ; don't auto-repeat
 
@@ -859,6 +887,8 @@ ProcessKCaps ROUT
         MOV     PC, R14
 
 ProcessKTab ROUT
+        HandleFN
+HandleKTab
         LDR     R3, R0OsbyteVars
         LDRB    R3, [R3, #OsbyteTABch]          ; TAB key code
         TST     R3, #&80                        ; top bit set ?
@@ -878,6 +908,8 @@ ReturnOneCharAlt
 
 
 ProcessKDelete ROUT
+        HandleFN
+HandleKDelete
  [ PCDel
         LDRB    R1, R0DeleteChar                ; get configured delete character
  |
@@ -886,21 +918,29 @@ ProcessKDelete ROUT
         B       ReturnOneChar
 
 ProcessKNum ROUT
+        HandleFN
+HandleKNum
         TEQ     R1, #2                          ; is it first press ?
         EOREQ   R5, R5, #KBStat_NoNumLock       ; yes, then toggle num lock
         MOV     PC, R14                         ; (don't auto-repeat)
 
 ProcessKScroll ROUT
+        HandleFN
+HandleKScroll
         TEQ     R1, #2                          ; is it first press ?
         EOREQ   R5, R5, #KBStat_ScrollLock      ; yes, then toggle scroll lock
         MOV     PC, R14                         ; (don't auto-repeat)
 
 ProcessKKana ROUT
+        HandleFN
+HandleKKana
         TEQ     R1, #2                          ; is it first press ?
         EOREQ   R5, R5, #KBStat_NoKanaLock      ; yes, then toggle kana lock
         MOV     PC, R14                         ; (don't auto-repeat)
 
 ProcessKShiftCaps ROUT
+        HandleFN
+HandleKShiftCaps
         TEQ     R1, #2                          ; is it first press ?
         MOVNE   PC, R14                         ; (don't auto-repeat)
         EOR     R5, R5, #KBStat_NoCapsLock      ; toggle caps lock
@@ -910,9 +950,11 @@ ProcessKShiftCaps ROUT
         MOV     PC, R14
 
 ProcessKBreak ROUT
+        HandleFN
         ADD     PC, R3, #4                      ; offset for break routine
 
 ProcessK1Pad ROUT
+        HandleFN
         TST     R7, #KBAlt_AltDown
         BNE     AltKeyPad
 
@@ -1021,12 +1063,14 @@ ReturnNULChar
 ;      R7=PendingAltType
 ;      R12->fixed workspace (allocated by kernel) - approx 170 bytes, not aligned
 ;
-; Out: R0-R4 preserved
+; Out: R0-R4 corrupted
 ;      R5 updated
 ;      R6->output (first byte=length, subsequent bytes to insert into buffer)
 ;      R7 updated
 
 ProcessUCS ROUT
+        HandleFN
+
         TST     R5, #KBStat_NoKanaLock
         LDRNE   R2, [R0, #KVUCSTable0]
         LDREQ   R2, [R0, #KVUCSTable1]
@@ -1208,16 +1252,16 @@ SpecialKey
         LDRB    R1, TempAction
         ADDLO   PC, PC, R4, LSL #2
         B       %BT40
-        B       ProcessKScroll
-        B       ProcessKNum
-        B       ProcessKTab
-        B       ProcessKCaps
-        B       ProcessKKana
-        B       ProcessKShiftCaps
-        B       ProcessKDefaultKeyboard
-        B       ProcessKConfiguredKeyboard
-        B       ProcessKDialKeyboard
-        B       ProcessKDelete
+        B       HandleKScroll
+        B       HandleKNum
+        B       HandleKTab
+        B       HandleKCaps
+        B       HandleKKana
+        B       HandleKShiftCaps
+        B       HandleKDefaultKeyboard
+        B       HandleKConfiguredKeyboard
+        B       HandleKDialKeyboard
+        B       HandleKDelete
 
 DeadKey
         SUB     R1, R1, #&20000
@@ -1225,6 +1269,43 @@ DeadKey
         ORR     R7, R7, R1                 ; put in new accent
         ORR     R5, R5, #KBStat_PendingAlt ; and indicate it
         MOV     PC, R14
+
+; Silly entry conditions here. Can return normally,
+; preserving flags to carry on as normal, can pull PC from the stack
+; to ignore the keypress altogether, or can call a new handler
+; in the special table.
+;
+; Note that as in the HandleFN macro we're merrily scrambling R2.
+;
+FindFN  ROUT
+        LDR     R2, [R0, #KVFNTable]    ; if no FN table at all
+        TEQ     R2, #0
+        MOVEQS  PC,R14
+
+        Push    "R1,R3"
+        ADD     R3, R0, R2
+        LDRB    R2, [R3], #1            ; R2 = number of FN entries
+        CMP     R2, #0
+        BEQ     NoFN
+FNLoop  LDRB    R1, [R3], #2            ; R1 = base FN key, advance R3 to next entry
+        CMP     R1, R4
+        LDREQB  R4, [R3, #-1]           ; if R1 = this key, change R4 to new key
+        BEQ     FNContinue
+        BHI     NoFN                    ; if R1 > this key, its not there
+        SUBS    R2, R2, #1
+        BNE     FNLoop
+NoFN
+        Pull    "R1,R3,PC"              ; no FN entry - output nothing
+
+FNContinue
+; Need to call the correct handler...
+        LDR     R2, [R0, #KVSpecialCodeTable]
+        ADD     R2, R2, R0              ; R2 -> special code table
+        SUB     R1, R2, #4              ; 0th entry is for 1st special
+        LDR     R1, [R1, R4, LSL #2]    ; R1 = offset to code
+        ADD     R2, R1, R2              ; R2 = address of code
+        Pull    "R1,R3,LR"
+        MOV     PC, R2
 
 ; **************************************************************************
 ;
@@ -1261,15 +1342,15 @@ ReturnOneOrNUL
         BCS     ReturnNULChar
         B       ReturnOneChar           ; else return 0 char
 
-ProcessKDialKeyboard
+HandleKDialKeyboard
         TST     R7, #KBAlt_AltDown              ; ensure Alt is down...
         ORRNE   R7, R7, #KBAlt_SelectKeyboard   ; set IDD selection flag
         MOV     PC, R14
 
-ProcessKConfiguredKeyboard ROUT
+HandleKConfiguredKeyboard ROUT
         MOV     R1, #&80                        ; select default keyboard
         B       SelectKeyboard
-ProcessKDefaultKeyboard
+HandleKDefaultKeyboard
         MOV     R1, #&81                        ; select UK keyboard
 SelectKeyboard
         MOV     R3, PC
@@ -1324,7 +1405,7 @@ CallBack_SelectKeyboard
 ; 9                Select             70
 ; 10               Menu               71
 ; 11               Adjust             72
-; 12               (not defined)
+; 12               FN                 6F
 ; 13               (not defined)
 ; 14               (not defined)
 ; 15               (not defined)
@@ -1456,7 +1537,7 @@ InkeyTran
         IKT     &1A, &19, &2E, &17, &2B, &29, &28, &0D          ; D8-DF
         IKT     &0E, &0A, &0C, &0B, &37, &4A, &62, &16          ; E0-E7
         IKT     &1B, &07, &18, &04, &15, &14, &13, &27          ; E8-EF
-        IKT     &FF, &FF, &FF, &FF, &72, &71, &70, &60          ; F0-F7
+        IKT     &FF, &FF, &FF, &6F, &72, &71, &70, &60          ; F0-F7
         IKT     &61, &58, &5E, &3B, &4C, &5E60, &3B61, &4C58    ; F8-FF
 
 ; **************************************************************************
@@ -1464,7 +1545,7 @@ InkeyTran
 ShiftingKeyList
         =       ShiftingKeyListEnd-ShiftingKeyList-1
         =       K1ShiftLeft, K1ShiftRight, K1CtrlLeft, K1CtrlRight
-        =       K1AltLeft, K1AltRight
+        =       K1AltLeft, K1AltRight, K1FN
         =       K1RightMouse, K1CentreMouse, K1LeftMouse, K1Break
 ShiftingKeyListEnd
         ALIGN
@@ -1481,6 +1562,7 @@ SpecialCodeTable
         &       ProcessKCtrl - SpecialCodeTable
         &       ProcessKAlt - SpecialCodeTable
         &       ProcessKAlt - SpecialCodeTable
+        &       ProcessKFN - SpecialCodeTable
         &       ProcessKLeft - SpecialCodeTable
         &       ProcessKCentre - SpecialCodeTable
         &       ProcessKRight - SpecialCodeTable
