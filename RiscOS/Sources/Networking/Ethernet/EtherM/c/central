@@ -322,9 +322,7 @@ static struct mbuf *wrap_packet( vifstr *vifp, struct generic_hdr *hdr,
     unsigned int bias;
     unsigned int msize;
     int irqstate;
-    char check[20];
-    int checked = 0;
-    int ok;
+
 
     if (mp == NULL)
     {
@@ -371,33 +369,30 @@ static struct mbuf *wrap_packet( vifstr *vifp, struct generic_hdr *hdr,
     rx_hdr->rx_frame_type  = frame;     /* no frame class info */
     rx_hdr->rx_error_level = hdr->errors;
 
-    do {
-        void *to;
+    bias = packstart;
 
-        bias = packstart;
+    irqstate = disable_irqs();
 
-        irqstate = disable_irqs();
+    setup_read( pifp, bias, packlen );
+    microsecond_delay(10);
 
-        setup_read( pifp, bias, packlen );
-/*         microsecond_delay(50); */
+    for (tp = mp->m_next; tp != NULL; tp = tp->m_next)     /* Skip the rx_hdr holding 1st mbuf */
+    {
+        void *to = mtod( tp, void* );
+/*         int state; */
 
-        for (tp = mp->m_next; tp != NULL; tp = tp->m_next)     /* Skip the rx_hdr holding 1st mbuf */
-        {
-            to = mtod( tp, void* );
-/*          int state; */
+        msize = tp->m_len;
+        if ( msize > packlen )
+            msize = packlen;
 
-            msize = tp->m_len;
-            if ( msize > packlen )
-                msize = packlen;
-
-            tp->m_type = 1; /*MT_DATA;*/    /* Internet should ideally do this! */
+        tp->m_type = 1; /*MT_DATA;*/    /* Internet should ideally do this! */
 
         /* 0.23: try not to read so much in one go? */
-/*          do { */
-/*              state = pifp->chip->ISR; */
+/*         do { */
+/*             state = pifp->chip->ISR; */
 
-/*              setup_read(pifp, bias, msize); */
-                fast_read( to, rp, msize );
+/*             setup_read(pifp, bias, msize); */
+            fast_read( to, rp, msize );
 
             /* 0.25: see whether int during DMA is screwing us */
 /*             if ( state != pifp->chip->ISR ) */
@@ -409,28 +404,13 @@ static struct mbuf *wrap_packet( vifstr *vifp, struct generic_hdr *hdr,
 /*             } */
 /*         } while ( state != pifp->chip->ISR ); */
 
-            packlen -= msize;
-            bias += msize;
-        }
+        packlen -= msize;
+        bias += msize;
+    }
 
-        kill_dma( pifp );
+    kill_dma( pifp );
 
-        setup_read( pifp, packstart, 20 );
-        fast_read( check, rp, 20 );
-        kill_dma( pifp );
-
-        to = mtod( mp->m_next, void* );
-
-        ok = ( memcmp( check, to, 20 ) ) == 0;      /* same twice? */
-
-        if ( !ok )
-            STAT32( INCOMPLETE_RECEIVES, 1 );
-
-        restore_irqs( irqstate );
-
-        checked++;
-
-    } while ( !ok && checked < 3 );
+    restore_irqs( irqstate );
 
     return mp;
 }
@@ -506,9 +486,9 @@ static void zero_rx_buffer(ifstr *ifp)
 
 #define LEVEL(clnt)         ((clnt)->errlvl >= this_error && (clnt)->addrlvl >= this_addr)
 
-#if 0
-static int check_for_bogons( struct mbuf *mp, vifstr *vifp )
+int check_for_bogons( struct mbuf *mp, vifstr *vifp )
 {
+#if 0
     /* WARNING, EXTREME KLUDGE... DO NOT SHIP A DRIVER WITH THIS CODE IN */
 
     struct mbuf *tp = mp->m_next;
@@ -519,49 +499,13 @@ static int check_for_bogons( struct mbuf *mp, vifstr *vifp )
     if ( m_count_bytes( mp ) < 1000 )
         return 1; /* allow these */
 
-/*     if ( !ok ) */
-/*         STAT32( INCOMPLETE_RECEIVES, 1 ); */
+    if ( !ok )
+        STAT32( INCOMPLETE_RECEIVES,1 );
 
     return ok;
-}
 #else
-#define check_for_bogons(m,v) (1)
+    return 1;
 #endif
-
-static void mess_with_ttl( unsigned int ftype, struct mbuf *mp )
-{
-    struct mbuf *tp = mp->m_next;
-    unsigned char *ptr = mtod( tp, unsigned char* );
-
-    if ( ftype == 0x800 )       /* IP */
-    {
-        if ( ptr[9] == 17 )     /* UDP */
-        {
-            unsigned int ttl = ptr[8];
-
-            if ( ttl > 5 )
-            {
-                int n = ((*ptr) & 0xF)*2;       /* number of shorts */
-                unsigned short *buf = (unsigned short*) ptr;
-                unsigned long sum;
-
-                ptr[8] = 5;     /* set ttl=5 */
-
-                /* recalculate header checksum */
-
-                buf[5] = 0;    /* zero out existing checksum */
-#if 0
-                /* cksum from Comer&Stephens volume 2 page 70 */
-                for ( sum = 0; n>0; n-- )
-                    sum += *buf++;
-                sum = ( sum >> 16 ) + ( sum & 0xFFFF );
-                sum += ( sum >> 16 );
-
-                buf[5] = ~sum;
-#endif
-            }
-        }
-    }
 }
 
 typedef struct mbuf *(*GetPacketProc)( vifstr *vifp, void *data );
@@ -597,7 +541,7 @@ static void despatch_packet2( vifstr *vifp, GetPacketProc gpp, void *gppdata,
         }
 
         /* 0.31: */
-        microsecond_delay(200);
+/*         microsecond_delay(200); */
 
         if (clnt != NULL && mp != NULL && check_for_bogons(mp,vifp) )
         {
@@ -611,8 +555,6 @@ static void despatch_packet2( vifstr *vifp, GetPacketProc gpp, void *gppdata,
             debugstr( "Calling rcv_fn (gpp=" );
             debughex( (int)(void*)gpp );
             debugstr( ") ..." );
-
-            mess_with_ttl( ftype, mp );
 
             do_rcv_fn( &vifp->dib, mp, clnt->protocol_handle,
                        clnt->rcv_fn);
@@ -713,14 +655,9 @@ static void received(register pifstr *pifp)
                     hdrptr = (pifp->rx.current << 8),
                     sizeof_generic_hdr );   /* was sizeof(bighdr) */
 
-        /* 0.34 */
-/*         microsecond_delay(50); */
-
         /* Size here is specifically the 6:6:2 header only */
 
         slow_read (&bighdr, rp, sizeof_generic_hdr);
-
-        kill_dma( pifp );
 
 #if DEBUG
 #if !VERBOSEDEBUG
@@ -836,7 +773,7 @@ static void received(register pifstr *pifp)
         debugdeccr(this_error);
 #endif
 
-        if ( check_plenty_mbufs() )
+/*         if ( check_plenty_mbufs() ) */
         {
             card_packetproc_args cpa;
             cpa.hdr = &bighdr;
@@ -852,11 +789,6 @@ static void received(register pifstr *pifp)
                                   &card_packetproc, (void*) &cpa,
                                   bighdr.dest, this_error,
                                   ftype, packlen );
-        }
-        else
-        {
-            STAT32( LACK_OF_MBUFS, 1 );
-            STAT32( UNDELIVERED_PACKETS, 1 );
         }
 
         disable_irqs();
@@ -1064,13 +996,9 @@ static void myson_buffer_stuff(u_char *dest_addr, u_char *src_addr, u_int frmlvl
 
     setup_write(pifp, ptr, ETH_HDRSIZE);
 
-    microsecond_delay(50);
-
     slow_write(dest_addr, rp, ETH_ADDRSIZE);
     slow_write(src_addr, rp, ETH_ADDRSIZE);
     slow_write(&ftype, rp, 2);      /* was ETH_ADDRSIZE (?) */
-
-    kill_dma( pifp );
 
     ptr += ETH_HDRSIZE;
     datalen = 0;
@@ -1081,9 +1009,8 @@ static void myson_buffer_stuff(u_char *dest_addr, u_char *src_addr, u_int frmlvl
 /*         do { */
 /*             state = pifp->chip->ISR; */
             setup_write(pifp, ptr, (mp->m_len + 1) & (~1) );
-            microsecond_delay(50);
+            microsecond_delay(10);
 	    fast_write(mtod(mp, void*), rp, (mp->m_len + 1) & (~1) );
-            kill_dma( pifp );
 /* 	    if ( state != pifp->chip->ISR ) */
 /* 	    { */
 /* 	        vifstr *vifp = pifp->primary; */
@@ -1096,6 +1023,7 @@ static void myson_buffer_stuff(u_char *dest_addr, u_char *src_addr, u_int frmlvl
 	datalen += mp->m_len;
     }
 
+    kill_dma( pifp );
 
     buflen = ETH_HDRSIZE + (datalen < ETH_DATAMINSIZE ? ETH_DATAMINSIZE : datalen);
 
