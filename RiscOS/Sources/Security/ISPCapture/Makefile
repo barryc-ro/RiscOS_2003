@@ -37,7 +37,7 @@ ASFLAGS = -depend !Depend -Stamp -quit -module
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-CMHGFLAGS = -p -depend !Depend ${THROWBACK}
+CMHGFLAGS = -p -depend !Depend ${THROWBACK} ${OPTS}
 INCLUDES= -IC: -ITCPIPLibs:
 
 #
@@ -55,7 +55,7 @@ ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DLOCAL_URL_PATHS -UDIAL_ON_CO
 
 ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
 
-NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DLOCAL_URL_PATHS -UDIAL_ON_COMPLETION
+NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -ULOCAL_URL_PATHS -UDIAL_ON_COMPLETION
 
 #
 # select one of these
@@ -96,7 +96,8 @@ INETLIB	   = TCPIPLibs:o.inetlibzm
 .SUFFIXES:  .oz
 .c.o:;      ${CC} ${CCFLAGS} -o $@ $< ${NCMAFLAGS}
 .c.oz:;     ${CC} ${CCFLAGS} -o $@ $< ${NCMAFLAGS}
-.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ -d h.cmhg $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM_BUILD SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM_BUILD SETL {TRUE}"
 
@@ -129,6 +130,10 @@ o.resources: s.resources ${NOTROMRESDEP}
 
 oz.resources: s.resources ${ROMRESDEP}
 
+o.header: cmhg.header
+
+h.header: cmhg.header
+
 #
 # Generic rules:
 #
@@ -151,6 +156,7 @@ clean:
         ${WIPE} aof.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
+        remove h.cmhg
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -165,7 +171,7 @@ resources:
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB}
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB} header.h
         ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 
 #
@@ -175,7 +181,7 @@ ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB}
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} header.h
         ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
 
 
