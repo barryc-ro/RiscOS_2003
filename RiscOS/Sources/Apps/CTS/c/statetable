@@ -22,6 +22,7 @@
 #include "ctsui.h"
 #include "utils.h"
 #include "plugclient.h"
+#include "smartcard.h"
 #include "statetable.h"
 
 
@@ -304,7 +305,7 @@ static void cts_statetable_aux_sendresult_open (cts_server_message *sm, void *re
 
   reply_sm = cts_server_message_reply_initialise (sm);
 
-  /* Add the smart card open result -- TODO */
+  /* Add the smart card open result */
   cts_server_message_add_parameter (reply_sm, "Sts", sizeof ("Sts")-1, "00", sizeof ("00")-1);
 
   /* Add the "Open" command */
@@ -2128,9 +2129,12 @@ static cts_statetable_result_started cts_statetable_started_SM (cts_statetable_a
                                                                 cts_server_message *sm)
 {
   cts_statetable_result_started rc;
+  cts_command_parameter *param;
+  int num;
 
   static cts_statetable_states_started state = S_Started_Idle;
   static cts_server_message* open_message = NULL;
+  static cts_sc_slot_id card_number = cts_sc__general_info;
 
 #ifdef DEBUGLIB
   static cts_statetable_states_started last_state = S_Started_Idle;
@@ -2165,8 +2169,28 @@ static cts_statetable_result_started cts_statetable_started_SM (cts_statetable_a
               dprintf (("StateMachine", "SM> Started - Received \"Open\" command.\n"));
               cts_ui_open_dbox (sm->plugin, NULL, ui_code_01_2);
               open_message = sm;
-              state = S_Started_OpeningCard;
-              rc = RC_Started_Pending;
+              /* Extract the port number */
+              param = cts_command_parameter_lookup (sm, "Port");
+              num = atoi (param->value);
+              switch (num)
+              {
+                case 1:
+                  card_number = cts_sc_slot1;
+                  state = S_Started_OpeningCard;
+                  rc = RC_Started_Pending;
+                  break;
+                case 2:
+                  card_number = cts_sc_slot2;
+                  state = S_Started_OpeningCard;
+                  rc = RC_Started_Pending;
+                  break;
+                default:
+                  /* Any other card number is illegal */
+                  /* Free the server message */
+                  cts_server_message_destroy (sm);
+                  state = S_Started_Idle;
+                  rc = RC_Started_Error;
+              }
               break;
 
             /* Error command */
@@ -2245,32 +2269,80 @@ static cts_statetable_result_started cts_statetable_started_SM (cts_statetable_a
           break;
 
         case AC_Continue:
-          /* Check card status, and send S block if
-             necessary, blocking in this state -- TODO */
-          if (/*error -- TODO */0)
+        {
+          cts_sc_type type;
+          cts_sc_status status = cts_sc_open (card_number, &type);
+
+          switch (status)
           {
-            /* Open error dbox (code 03) */
-            cts_ui_open_dbox (bm->plugin, NULL, ui_code_03);
-            state = S_Started_Idle;
-            rc = RC_Started_ErrorDialogue;
+            case cts_sc_status_COMPLETE:
+              dprintf (("StateMachine", "SM> Started - Smart card open operation complete\n"));
+              /* Remove "accessing smart card dbox */
+              cts_ui_close_dbox (bm->plugin);
+              /* Open "communicating with server" dbox (code 01-1) */
+              cts_ui_open_dbox (bm->plugin, NULL, ui_code_01_1);
+              /* Send result */
+              cts_statetable_aux_sendresult_open (open_message, NULL/*TODO*/);
+              /* Free the "open" command message */
+              cts_server_message_destroy (open_message);
+              open_message = NULL;
+              state = S_Started_Open;
+              rc = RC_Started_Pending;
+              break;
+
+            case cts_sc_status_INPROGRESS:
+              dprintf (("StateMachine", "SM> Started - Smart card open operation in progress\n"));
+              rc = RC_Started_Pending;
+              break;
+
+            case cts_sc_status_FAILED:
+            {
+              cts_sc_sctrans_errors err = cts_sc_get_last_error (NULL);
+              if (err == SCI_E_BADCARD)
+              {
+                dprintf (("StateMachine", "SM> Started - Smart card open operation failed: bad card\n"));
+                /* Closedown smartcard software (hopefully) */
+                cts_sc_close ();
+                /* Open error dbox (code 03) */
+                cts_ui_open_dbox (bm->plugin, NULL, ui_code_03);
+                state = S_Started_Idle;
+                rc = RC_Started_ErrorDialogue;
+                /* Free the "open" command message */
+                cts_server_message_destroy (open_message);
+                open_message = NULL;
+              }
+              else if (err == SCI_E_OUT)
+              {
+                dprintf (("StateMachine", "SM> Started - Smart card open operation failed: no card\n"));
+                /* Open "request smart card" dbox -- TODO */
+                state = S_Started_RequestCardDialogue;
+                rc = RC_Started_Pending;
+              }
+              else
+              {
+                dprintf (("StateMachine", "SM> Started - Smart card open operation failed: other error\n"));
+                state = S_Started_Idle;
+                rc = RC_Started_Error;
+                /* Free the "open" command message */
+                cts_server_message_destroy (open_message);
+                open_message = NULL;
+              }
+              break;
+            }
+
+            default:
+              state = S_Started_Idle;
+              rc = RC_Started_Error;
+              /* Free the "open" command message */
+              cts_server_message_destroy (open_message);
+              open_message = NULL;
           }
-          else
-          {
-            /* Remove "accessing smart card dbox */
-            cts_ui_close_dbox (bm->plugin);
-            /* Open "communicating with server" dbox (code 01-1) */
-            cts_ui_open_dbox (bm->plugin, NULL, ui_code_01_1);
-            /* Send result */
-            cts_statetable_aux_sendresult_open (open_message, NULL/*TODO*/);
-            state = S_Started_Open;
-            rc = RC_Started_Pending;
-          }
-          /* Free the "open" command message */
-          cts_server_message_destroy (open_message);
-          open_message = NULL;
           break;
+        }
 
         case AC_Cancel:
+          /* Closedown smartcard software (hopefully) */
+          cts_sc_close ();
           /* Remove "accessing smart card dbox */
           cts_ui_close_dbox (open_message->plugin);
           state = S_Started_Idle;
@@ -2342,6 +2414,64 @@ static cts_statetable_result_started cts_statetable_started_SM (cts_statetable_a
       }
       break;
     }
+
+    /* STATE - Waiting for "request card" dialogue box to complete */
+    case S_Started_RequestCardDialogue:
+      switch (action_code)
+      {
+        case AC_BrowserMessage:
+          /* Close dbox */
+          cts_ui_close_dbox (bm->plugin);
+
+          /* Check it's a dbox message */
+          if (strcmp (bm->command, "dbox") == 0)
+          {
+            /* Check for "OK" action */
+            if (cts_browser_parameter_lookup (bm, urlcmd_ok))
+            {
+              /* Re-open "Accessing smartcard" dialogue (code 01-02) */
+              cts_ui_open_dbox (sm->plugin, NULL, ui_code_01_2);
+              state = S_Started_OpeningCard;
+              rc = RC_Started_Pending;
+            }
+            else
+            {
+              /* Any other dbox action in this state is illegal */
+              /* Closedown smartcard software (hopefully) */
+              cts_sc_close ();
+              rc = RC_Started_Error;
+              state = S_Started_Idle;
+              /* Free the "open" command message */
+               cts_server_message_destroy (open_message);
+              open_message = NULL;
+            }
+          }
+          else
+          {
+            /* Any other browser message in this state is illegal */
+            /* Closedown smartcard software (hopefully) */
+            cts_sc_close ();
+            rc = RC_Started_Error;
+            state = S_Started_Idle;
+            /* Free the "open" command message */
+            cts_server_message_destroy (open_message);
+            open_message = NULL;
+          }
+          /* Free the browser message */
+          cts_browser_message_destroy (bm);
+          break;
+
+        case AC_Continue:
+          /* Wait around */
+          rc = RC_Started_Pending;
+          break;
+
+        default:
+          /* Any other action in this state is illegal */
+          state = S_Started_Idle;
+          rc = RC_Started_Error;
+      }
+      break;
 
     /* INVALID STATE */
     default:
