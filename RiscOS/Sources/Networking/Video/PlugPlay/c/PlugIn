@@ -51,6 +51,7 @@
 #include "ModeInfo.h"
 #include "Mouse.h"
 #include "Overlay.h"
+#include "Play.h"
 #include "RMA.h"
 #include "Utils.h"
 
@@ -62,11 +63,13 @@
   #define ModeFiles_SafeArea 0x4D481
 #endif
 
-#define ModeFiles_SafeArea_MagicWord 0x45444957 /* "WIDE" */
+#define ModeFiles_SafeArea_MagicWord  0x45444957 /* "WIDE" */
 
-/* Local definitions and structures */
+/* Local definitions */
 
-#define Magic_PlugIn_Instance    0x47554C50 /* "PLUG" */
+#define Magic_PlugIn_Instance         0x47554C50 /* "PLUG" */
+
+/* Main PlugPlay parameters for OBJECT launching */
 
 #define PlugIn_ParamsName_ID          "id"
 #define PlugIn_ParamsName_Data        "data"
@@ -89,6 +92,19 @@
 #define PlugIn_ParamsName_NoPalette   "nopalette"
 #define PlugIn_ParamsName_NTSC        "ntsc"
 #define PlugIn_ParamsName_HidePointer "hidepointer"
+
+/* Synonyms for Oracle Video Client emulation */
+
+#define PlugIn_OVCEmu_AutoStart       "AutoStart"
+#define PlugIn_OVCEmu_Hidden          "hidden"
+#define PlugIn_OVCEmu_KeepAspectRatio "keepAspectRatio"
+#define PlugIn_OVCEmu_SessionURL      "SessionURL"
+#define PlugIn_OVCEmu_MediaFile       "mediafile"
+#define PlugIn_OVCEmu_PlayFrom        "playFrom"
+#define PlugIn_OVCEmu_PlayTo          "playTo"
+#define PlugIn_OVCEmu_Name            "name"
+
+/* Local structures */
 
 typedef struct plugin_file_entry
 {
@@ -132,6 +148,8 @@ typedef struct plugin_instance
   unsigned int               vid_stream;
   unsigned int               program;
   unsigned int               persist;
+
+  play_session             * play_ses;
 
   unsigned                   redraw_handler :1;
   unsigned                   reopen_handler :1;
@@ -257,6 +275,8 @@ static void plugin_delete_instance(plugin_instance * i)
   #endif
 
   if (i == NULL) return;
+
+  if (i->play_ses != NULL) play_delete_session(i->play_ses);
 
   /* The 'id' and 'url' fields point into the file entries, so we */
   /* do NOT free these individually.                              */
@@ -621,17 +641,33 @@ static _kernel_oserror * plugin_read_params_file(plugin_instance * i, const char
     {
       #define YesNoToFlag(x) (utils_strcasecmp((x), "yes") == 0 ? 1 : 0)
 
-      if      (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_ID))   i->id  = i->entries->data;
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Data)) i->url = i->entries->data;
+      if      (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_ID))     i->id  = i->entries->data;
+      if      (!utils_strcasecmp(i->entries->name, PlugIn_OVCEmu_Name))       i->id  = i->entries->data;
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Data))   i->url = i->entries->data;
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_OVCEmu_MediaFile))  i->url = i->entries->data;
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_OVCEmu_SessionURL)) i->url = i->entries->data;
 
-      /* Now read our various plug-in supported options */
+      /* Full screen / stand-alone? */
 
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Border))      i->border      = atoi(i->entries->data);
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_FS))          i->full_screen = YesNoToFlag(i->entries->data); /* Forces Stand Alone to 'yes', see below */
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_SA))          i->stand_alone = YesNoToFlag(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_OVCEmu_AutoStart))
+      {
+        if (!utils_strcasecmp(i->entries->data, "true")) i->stand_alone = 1;
+        else                                             i->stand_alone = 0;
+      }
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_OVCEmu_Hidden))
+      {
+        if (!utils_strcasecmp(i->entries->data, "true")) i->full_screen = 1, i->stand_alone = 1;
+        else                                             i->full_screen = 0, i->stand_alone = 0;
+      }
+
+      /* Now read some general options */
+
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Border))      i->border      = atoi(i->entries->data);
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Persist))
       {
-        if      (!utils_strcasecmp(i->entries->data, "yes")) i->persist = 0;
+        if      (!utils_strcasecmp(i->entries->data, "yes")) i->persist = 0; /* 0 = forever */
         else if (!utils_strcasecmp(i->entries->data, "no"))  i->persist = Misc_Default_Persist;
         else
         {
@@ -647,8 +683,14 @@ static _kernel_oserror * plugin_read_params_file(plugin_instance * i, const char
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_VidStream))   i->vid_stream  = atoi(i->entries->data);
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Program))     i->program     = atoi(i->entries->data);
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_From))        i->from        = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_OVCEmu_PlayFrom))        i->from        = atoi(i->entries->data);
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_To))          i->to          = atoi(i->entries->data);
-      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Loop))        i->loop        = YesNoToFlag(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_OVCEmu_PlayTo))          i->to          = atoi(i->entries->data);
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Loop))
+      {
+        if (!utils_strcasecmp(i->entries->data, "yes") || !utils_strcasecmp(i->entries->data, "true")) i->loop = 1;
+        else                                                                                           i->loop = 0;
+      }
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_Volume))      i->volume      = atoi(i->entries->data);
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NoAudio))     i->no_audio    = YesNoToFlag(i->entries->data);
       else if (!utils_strcasecmp(i->entries->name, PlugIn_ParamsName_NoVideo))     i->no_video    = YesNoToFlag(i->entries->data);
@@ -662,6 +704,21 @@ static _kernel_oserror * plugin_read_params_file(plugin_instance * i, const char
       {
         if      (!utils_strcasecmp(i->entries->data, "width"))  i->fixed_width  = 1;
         else if (!utils_strcasecmp(i->entries->data, "height")) i->fixed_height = 1;
+      }
+      else if (!utils_strcasecmp(i->entries->name, PlugIn_OVCEmu_KeepAspectRatio))
+      {
+        if (!utils_strcasecmp(i->entries->data, "true"))
+        {
+          i->adjustable   = 1;
+          i->fixed_width  = 0;
+          i->fixed_height = 0;
+        }
+        else
+        {
+          i->adjustable   = 0;
+          i->fixed_width  = 1;
+          i->fixed_height = 1;
+        }
       }
 
       /* Force mouse pointer off, on the head of the web page designer...! */
@@ -1002,12 +1059,37 @@ static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, uns
     i->position = *at;
   }
 
-  e = plugin_move_window(i);
+  /* Stand-alone items should bring up the playback engine now, ready for the */
+  /* window / video position to be moved                                      */
+
+  if (
+       i->stand_alone != 0    &&
+       i->full_screen == 0    &&
+       i->url         != NULL &&
+       *i->url        != '\0'
+     )
+  {
+    e = play_new_session(&i->play_ses);
+
+    if (e == NULL)
+    {
+      i->play_ses->plugin   = i->plugin_instance_handle;
+      i->play_ses->callback = NULL;
+
+      e = play_setup(i->play_ses, i->url);
+
+      if (e == NULL) i->video_control_handle = i->play_ses->handle;
+    }
+  }
+
+  /* Right, now do the move */
+
+  if (e == NULL) e = plugin_move_window(i);
 
   if (e != NULL)
   {
     #ifdef TRACE
-      if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Error from plugin_move_window - '%s'\n", e->errmess));
+      if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Error from plugin_move_window or stand-alone startup - '%s'\n", e->errmess));
     #endif
 
     plugin_delete_instance(i);
