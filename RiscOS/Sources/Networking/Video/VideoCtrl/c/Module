@@ -404,15 +404,38 @@ void callout_handler(void * handle)
 {
   client * c = (client *) handle;
 
-  /* Were we expecting a call for this client? */
+  /* Since this handler could be registered twice, once for a play */
+  /* state and once for a WSS state change, but since we also deal */
+  /* with both cases in one go, the function must know when it has */
+  /* no work to do - hence every action must be flagged.           */
 
-  if (c->semaphore == 1)
+  /* First flag - has play state changed? */
+
+  if (c->callvcpn != 0)
   {
     /* Clear the semaphore and internally call VideoControl_ProtocolNotify 2 */
     /* to handle a change of state to the one held in new_state.             */
 
-    c->semaphore = 0;
+    c->callvcpn = 0;
+
     protocol_notify_2(c, c->new_state);
+  }
+
+  /* Second flag - has WSS state changed? */
+
+  if (c->newwss != 0)
+  {
+    /* Clear the semaphore and raise Service_VideoControl 6 */
+
+    c->newwss = 0;
+
+    _swix(OS_ServiceCall,
+          _INR(0,3),
+
+          VideoControlNewActiveArea,
+          Service_VideoControl,
+          (unsigned int) c,
+          0); /* Flags - all bits currently reserved (0) */
   }
 }
 
@@ -436,27 +459,47 @@ _kernel_oserror * upcall_handler(_kernel_swi_regs * r, void * pw)
     dprintf(("", "upcall_handler: Got UpCall_MPEG, flags %08x, for handle %08x - reason code = %d\n",r->r[1],r->r[2],r->r[3]));
 
     if (
-         r->r[3] == UpCall_MPEG_SubReason_EOS     ||
-         r->r[3] == UpCall_MPEG_SubReason_Reset   ||
-         r->r[3] == UpCall_MPEG_SubReason_Speed   ||
-         r->r[3] == UpCall_MPEG_SubReason_Timeout
+         r->r[3] == UpCall_MPEG_SubReason_EOS     || /*                                                 */
+         r->r[3] == UpCall_MPEG_SubReason_Reset   || /* These all lead to VideoControl_ProtocolNotify 2 */
+         r->r[3] == UpCall_MPEG_SubReason_Speed   || /* being called internally                         */
+         r->r[3] == UpCall_MPEG_SubReason_Timeout || /*                                                 */
+
+         r->r[3] == UpCall_MPEG_SubReason_Area       /* This leads to Service_VideoControl 6 */
        )
     {
       while (c)
       {
         if (c->havectrl && c->ctrlhand == r->r[2])
         {
-          if      (r->r[3] == UpCall_MPEG_SubReason_EOS)     c->new_state = vc_play_state_normal_eos;
-          else if (r->r[3] == UpCall_MPEG_SubReason_Timeout) c->new_state = vc_play_state_timeout_eos;
-          else                                               c->new_state = vc_play_state_streaming;
+          /* This is either a WSS state or play state change */
 
-          /* Don't bother setting a new status callout for this item if there's one */
-          /* present already...                                                     */
-
-          if (c->semaphore == 0)
+          if (r->r[3] == UpCall_MPEG_SubReason_Area)
           {
-            c->semaphore = 1;
-            timeout(callout_handler, (void *) c, 1 /* i.e. ASAP, give or take */);
+            /* Don't bother setting a new active area callout for this item if there's one */
+            /* present already...                                                        */
+
+            if (c->newwss == 0)
+            {
+              c->newwss = 1;
+              timeout(callout_handler, (void *) c, 1 /* i.e. ASAP, give or take */);
+            }
+          }
+          else
+          {
+            /* Play state change */
+
+            if      (r->r[3] == UpCall_MPEG_SubReason_EOS)     c->new_state = vc_play_state_normal_eos;
+            else if (r->r[3] == UpCall_MPEG_SubReason_Timeout) c->new_state = vc_play_state_timeout_eos;
+            else                                               c->new_state = vc_play_state_streaming;
+
+            /* Don't bother setting a new status callout for this item if there's one */
+            /* present already...                                                     */
+
+            if (c->callvcpn == 0)
+            {
+              c->callvcpn = 1;
+              timeout(callout_handler, (void *) c, 1 /* i.e. ASAP, give or take */);
+            }
           }
 
           break;
