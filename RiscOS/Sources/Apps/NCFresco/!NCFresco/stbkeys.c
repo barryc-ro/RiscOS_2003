@@ -784,8 +784,8 @@ static int fe_key_lookup(int chcode, int map)
 
     if (d)
     {
-/*      if (d->flags & key_list_CLICK) */
-/*         fe_click_sound(); */
+	if (d->flags & key_list_CLICK)
+	    fe_click_sound();
 
 	if (d->flags & key_list_REPEAT)
 	{

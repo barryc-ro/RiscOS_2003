@@ -3433,9 +3433,10 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
 
     /* SJM: workaround for OS bug with slow dithering on small images
      * the bug may be more extensive than this...
+     * Note original workaround used plotted size of image. Must actually use original size of image!
      */
     flags = config_display_jpeg & 3;
-    if (flags == 3 && (w == 1 || h == 1))
+    if (flags == 3 && (w == 1 || h == 1 || i->width == 1 || i->height == 1))
 	flags = 0;
 
 #if 0
