@@ -206,7 +206,7 @@ ${ROM_MODULE}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ} ${DIRS}
 
 rom_link:
         ${MKDIR} linked
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} aof.${TARGET} ${ABSSYM} > map.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
