@@ -1,0 +1,354 @@
+/* File:    memory.c
+ * Purpose: Memory allocation for Toolbox client modules
+ * Author:  Kevin Bracey
+ * History: 22-Nov-96: KJB:   created
+ *
+ */
+
+/* Adapted for AcornSSL module */
+
+
+#include <string.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include "swis.h"
+#include "kernel.h"
+
+
+typedef struct Session Session;
+#include "acornssl.h"
+#include "memory.h"
+#include "memswis.h"
+
+/* Declare the maximum dynamic area size.
+ *
+ * Unless there is very good reason, this should not be raised, as there is little
+ * point in doing so.  Claiming large chunks of logical address space may cause trouble
+ * in the future with large memory machines, as logical address space will run out
+ * much faster.
+ */
+#define MAX_DA_SIZE	(4*1024*1024)
+
+static int da_number;
+static void *da_addr;
+static int da_size;
+static int page_size;
+
+static _kernel_oserror *extend_heap(int req);
+static void shrink_heap(void);
+
+/****************************************************************************
+ * memory_initialise
+ *
+ * Prepare the memory library for use - if DAs are available, create a
+ * DA for our use.
+ *
+ * Parameters:
+ *    none
+ *
+ * Result:
+ *    none
+ *
+ * Assumptions:
+ *    Page size >= 16 bytes
+ *
+ */
+static _kernel_oserror *_memory_initialise(void)
+{
+    _kernel_oserror *e;
+    int var_type;
+
+    da_number=-1;
+    da_addr=0;
+    da_size=0;
+
+    /* Check whether we have DAs by trying an enumerate */
+
+    if (_swix(OS_DynamicArea, _INR(0,1), 3, -1))
+        return NULL;
+
+    if ((e = _swix(OS_ReadMemMapInfo, _OUT(0), &page_size)) != NULL)
+        return e;
+
+    /* Check whether a previous incarnation has left a DA for us */
+    if (!_swix(OS_ReadVarVal, _INR(0,4)|_OUT(4),
+                                         "AcornSSL$DynamicArea",
+                                         &da_number,
+                                         sizeof da_number,
+                                         0,
+                                         0,
+                                         &var_type) && var_type == 1)
+    {
+        e = _swix(OS_ReadDynamicArea, _IN(0)|_OUTR(0,1), da_number, &da_addr, &da_size);
+    }
+    else
+    {
+        e = _swix(OS_DynamicArea, _INR(0,8)|_OUT(1)|_OUT(3),
+                                   0,    /* Create DA */
+                                   -1,   /* Any number */
+                                   page_size, /* One page initially */
+                                   -1,   /* Any address */
+                                   128,  /* Not draggable */
+                                   MAX_DA_SIZE,
+                                   0, 0, /* No handler routine */
+                                   "AcornSSL",
+                                   &da_number,
+                                   &da_addr);
+
+	if (e == NULL) {
+	        da_size = page_size;
+        	if ((e = xosheap_initialise(da_addr, da_size)) != NULL)
+	        {
+	            memory_finalise();
+	        }
+	}
+
+    }
+
+    _swix(OS_SetVarVal, _IN(0)|_IN(2), "AcornSSL$DynamicArea", -1);
+
+    return e;
+}
+
+_kernel_oserror *memory_initialise(void)
+{
+        _kernel_oserror *e = _memory_initialise();
+        if (e) return e;
+        acornssl_init_mem_functions(da_addr ? mem_USE_DYNAMIC_AREA : mem_USE_RMA);
+        return NULL;
+}
+
+
+
+/****************************************************************************
+ * memory_finalise
+ *
+ * This function shuts down the memory library, and frees our dynamic
+ * area, but only if no memory is in use. If the memory is in use, it
+ * sets a variable, hoping that a new Toolbox module will come along
+ * to handle the DA.
+ *
+ * Parameters:
+ *    none
+ *
+ * Result:
+ *    none
+ *
+ * Assumptions:
+ *    Heap structure still as described in PRM
+ *
+ */
+_kernel_oserror *memory_finalise(void)
+{
+    if (da_addr)
+    {
+        int heapbase = ((int *)da_addr)[2];
+        if (heapbase == 0x10)
+        {
+            da_addr = NULL;
+            return _swix(OS_DynamicArea, _INR(0,1), 1, da_number);
+        }
+        else
+        {
+            _swix(OS_SetVarVal, _INR(0,4), "AcornSSL$DynamicArea",
+                                           &da_number,
+                                           sizeof da_number,
+                                           0,
+                                           1);
+        }
+    }
+
+    return NULL;
+}
+
+
+
+
+void *acornssl_mem_malloc(size_t size)
+{
+    	void *p;
+    	_kernel_oserror *e;
+
+	e = xosheap_alloc(da_addr, size, &p);
+
+    	if (e && e->errnum != 0x184) return NULL;
+
+    	if (e) {
+        	e = extend_heap(size);
+        	if (e) {
+            		return NULL;
+                }
+
+	        e = xosheap_alloc(da_addr, size, &p);
+        	shrink_heap();
+        }
+
+        if (e || p == NULL) {
+            	return NULL;
+        }
+
+       	return memset(p, 0, size);
+}
+
+void *acornssl_mem_realloc(void *ptr, size_t n)
+{
+        if (ptr == NULL) {
+		return acornssl_mem_malloc(n);
+        }
+        else if (n == 0) {
+                acornssl_mem_free(ptr);
+                return NULL;
+        }
+        else {
+                size_t size;
+                int by;
+                void *answer;
+                _kernel_oserror *e;
+
+                e = xosheap_read_size(da_addr, ptr, &size);
+                if (e != NULL) return NULL;
+                by = n - size;
+                if (by == 0) return ptr;
+
+		e = xosheap_realloc(da_addr, ptr, by, &answer);
+		if (!e) return answer;
+
+    		if (e->errnum != 0x184 && e->errnum != 0x1c1) {
+        		return NULL;
+                }
+
+        	if ((e = extend_heap(n)) != NULL) {
+            		return NULL;
+                }
+
+                return xosheap_realloc(da_addr, ptr, by, &answer) ? NULL : answer;
+        }
+}
+
+void  acornssl_mem_free(void *ptr)
+{
+        (void) xosheap_free(da_addr, ptr);
+        shrink_heap();
+}
+
+/****************************************************************************
+ * extend_heap
+ *
+ * This function extends the dynamic area/heap enough to allocate at least
+ * req bytes
+ *
+ * Parameters:
+ *    req - the space we want to allocate
+ *
+ * Result:
+ *    Returns an error if unable to allocate enough space, else
+ *    the heap/dynamic area is stretched enough to fit at least for bytes
+ *
+ * Assumptions:
+ *    The heap and da are the same size
+ *
+ */
+static _kernel_oserror *extend_heap(int req)
+{
+    int heapbase = ((int *)da_addr)[2];
+    _kernel_oserror *e;
+    int by;
+    int size = req - (da_size-heapbase) + 4;
+
+
+    e = _swix(OS_ChangeDynamicArea, _INR(0,1)|_OUT(1), da_number, size, &by);
+    if (e) {
+        return e;
+    }
+
+    if (size < 0) {
+            by = -by;
+    }
+
+    e = xosheap_resize(da_addr, by);
+    if (e)
+    {
+        shrink_heap();
+        return e;
+    }
+
+    da_size += by;
+
+    return NULL;
+}
+
+/****************************************************************************
+ * shrink_heap
+ *
+ * This function shrinks the dynamic area/heap as much as possible
+ *
+ * Parameters:
+ *    none
+ *
+ * Result:
+ *    DA shrunk
+ *
+ * Assumptions:
+ *    The heap and da are the same size, page_size is a power of 2
+ *
+ */
+static void shrink_heap(void)
+{
+    int by;
+    int heapbase = ((int *)da_addr)[2];
+
+    by = (da_size - heapbase) & ~(page_size-1);
+
+    if (!by)
+        return;
+
+    xosheap_resize(da_addr, -by);
+    _swix(OS_ChangeDynamicArea, _INR(0,1), da_number, -by);
+
+    da_size -= by;
+}
+
+/****************************************************************************
+ * mem_base_addr
+ *
+ * This function returns the base address of the memory allocation pool.
+ * All allocated pointers will be no more than 64M beyond this address.
+ *
+ * Parameters:
+ *    none
+ *
+ * Result:
+ *    memory base address
+ *
+ * Assumptions:
+ *    none
+ *
+ */
+void *mem_base_address(void)
+{
+    return da_addr;
+}
+
+/****************************************************************************
+ * memory_renumber_da
+ *
+ *  This function is called whenever Service_DynamicAreaRenumber is received
+ *  since we need to know if it was our DA that was renumbered
+ *
+ * Parameters:
+ *    DA being renumbered
+ *    New number for the DA
+ *
+ * Result:
+ *    da_number updated.
+ *
+ * Assumptions:
+ *    none
+ */
+void memory_renumber_da(int old_da, int new_da)
+{
+        if (old_da != da_number) return;
+	da_number = new_da;
+}
+
+

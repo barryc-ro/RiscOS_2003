@@ -7,6 +7,11 @@
 # ----       ----   -----------
 # 20-Mar-98  SNB    Created
 #
+#
+# Export Paths for Messages module
+#
+RESDIR = <resource$dir>.Resources2.URL
+EXP_HDR = <cexport$dir>
 
 #
 # Component specific options:
@@ -16,17 +21,15 @@ ROM_MODULE = aof.${COMPONENT}
 RAM_MODULE = rm.${COMPONENT}
 DBG_MODULE = rm.${COMPONENT}tr
 
+EXPORTS    = ${EXP_HDR}.h.${COMPONENT}
 
 RESFSDIR   = Resources.URL.${COMPONENT}
 
-#
-# Export Paths for Messages module
-#
-RESDIR = <resource$dir>.Resources2.URL
 
 #
 # Generic options:
 #
+AS      = objasm
 MKDIR   = cdir
 CC      = cc
 CMHG    = cmhg
@@ -41,8 +44,9 @@ WFLAGS  = ~c~v
 
 CFLAGS   = -c -depend !Depend ${INCLUDES} -wp -zM -ffah -zps1 ${DFLAGS} -Wd
 DFLAGS   = -D${SYSTEM} -DCOMPAT_INET4 -DRISCOS -DNO_DES -DNO_IDEA
+AFLAGS   = -throwback -depend !Depend
 ROMFLAGS = -DROM
-INCLUDES = -ITCPIPLibs:,SSL:,C:
+INCLUDES = -ITCPIPLibs:,C:SSLeay,C:
 DEBFLAGS = -DTRACE -DUSE_SYSLOG
 
 #
@@ -60,6 +64,8 @@ DEBLIBS   = <syslog$dir>.c-veneer.o.syslog
 
 OBJS =\
  o.acornssl\
+ o.memory\
+ o.memswis\
  o.module\
  o.protocol\
  o.ses_ctrl\
@@ -68,6 +74,8 @@ OBJS =\
 
 RAM_OBJS =\
  o.acornssl\
+ o.memory\
+ o.memswis\
  o.moduleRAM\
  o.protocol\
  o.ses_ctrl\
@@ -76,6 +84,8 @@ RAM_OBJS =\
 
 DBG_OBJS =\
  od.acornssl\
+ od.memory\
+ od.memswis\
  od.moduleRAM\
  od.protocol\
  od.ses_ctrl\
@@ -91,6 +101,7 @@ MSGSF=o.msgs
 
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
 .c.od:;	  ${CC} ${CFLAGS} ${ROMFLAGS} ${DEBFLAGS} -o $@ $<
+.s.o:;	  ${AS} ${AFLAGS} -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $< -d $*.h
 
 SSLHdr.h: SSLHdr.o
@@ -107,6 +118,9 @@ ramtrace: ${DBG_MODULE}
 
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
+
+export: ${EXPORTS}
+        @echo ${COMPONENT}: export complete
 
 install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -127,6 +141,9 @@ clean:
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
+
+${EXP_HDR}.h.${COMPONENT}: h.SSLHdr
+        ${CP} h.SSLHdr $@ ${CPFLAGS}
 
 ${ROM_MODULE}: ${OBJS} ${INETLIB} ${ROMCSTUBS}
         ${MKDIR} aof
