@@ -46,7 +46,6 @@ rom_aof:
 
 clean:
 	Remove		linked.$(COMPONENT)
-	Remove		map.$(COMPONENT)
 	Remove		$(ROM_AOF_FILE)
 	Echo		Component $(COMPONENT): 'clean' finished.
 
@@ -61,7 +60,7 @@ export:
 
 
 resources:
-	IfThere		@.resources.$(LOCALE)	Then Copy @.resources.$(LOCALE) <resource$dir>.Resources.$(COMPONENT) ~cfr~v
+	IfThere		LocalRes:	Then Copy LocalRes: <resource$dir>.Resources.$(COMPONENT) ~cfr~v
 	Echo		Component $(COMPONENT): 'resources' finished.
 
 
@@ -76,9 +75,7 @@ install_rom:	rom_aof
 
 rom_link:	rom_aof
 	CDir		linked
-	CDir		map
-        Link		-o linked.$(COMPONENT) -map -bin -base ${ADDRESS} $(ROM_AOF_FILE) RISC_OSLib:o.AbsSym > map.$(COMPONENT)
-        Truncate	map.$(COMPONENT) linked.$(COMPONENT)
+        Link		-o linked.$(COMPONENT) -rmf -base ${ADDRESS} $(ROM_AOF_FILE) RISC_OSLib:o.AbsSym
         Copy		linked.$(COMPONENT) ${LINKDIR}.$(COMPONENT) ~cfr~v
 	Echo		Component $(COMPONENT): 'rom_link' finished.
 
