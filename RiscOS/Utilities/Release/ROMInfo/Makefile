@@ -1,45 +1,26 @@
 # Project:   ROMinfo
 
 #
-# Generic options:
-#
-MKDIR   = mkdir -p
-AS      = objasm
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-RM      = remove
-WIPE    = -wipe
-ROMinfoRESS = squash
-STRIP   = stripdepnd
-
-AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS}
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
-
-#
 # Libraries
 #
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-WRAPPER   = s.ModuleWrap
+include Makefiles:AppLibs
+
+#
+# Include files
+#
+CINCLUDES = -IC:
+CFLAGS    = -ffa -fussy
+
+#
+# Generic options:
+#
+include Makefiles:StdTools
 
 #
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.s.o:;      ${AS} ${AFLAGS} $< $@
 
-#
-# Include files
-#
-INCLUDES = -IC:
 
 #
 # Program specific options:
@@ -47,16 +28,17 @@ INCLUDES = -IC:
 COMPONENT   = ROMinfo
 APPLICATION = ROMinfo
 TARGET      = ROMinfo
-LIBDIR	    = <Lib$Dir>
 LIBINSTDIR  = ${INSTDIR}.Library.Build
-INSTAPP	    = ${INSTDIR}.Apps.!ROMInfo
+INSTAPP     = ${INSTDIR}.Apps.!ROMInfo
 OBJS        = o.ROMinfo
 
 #
 # Build for application:
 #
-ROMinfo:	${OBJS} ${CLIB} dirs
-		${LD} -o $@ ${OBJS} ${CLIB}
+${APPLICATION}: ${OBJS} ${CLIB} dirs
+        ${LD} -o $@ ${OBJS} ${CLIB}
+        ${SQZ} $@
+        
 
 dirs:
         ${MKDIR} o
@@ -65,13 +47,13 @@ dirs:
 # build an application:
 #
 all:	${APPLICATION}
-	@echo ${APPLICATION} built
+	@echo ${APPLICATION}: application built
 
 clean:
         ${RM} ${TARGET}
         ${WIPE} ${OBJS} ${WFLAGS}
         ${WIPE} o ${WFLAGS}
-        ${STRIP}
+	@echo ${APPLICATION}: cleaned
 
 install_tool: ${TARGET}
 	${CP} ${TARGET} ${LIBINSTDIR}.${TARGET} ${CPFLAGS}
@@ -92,6 +74,6 @@ install: install_tool install_dirs
 install_dirs:
 	${MKDIR} ${INSTAPP}
 	${MKDIR} ${LIBINSTDIR}
-	${MKDIR} ${LIBDIR}.Docs
 
 # Dynamic dependencies:
+o.ROMinfo: c.ROMinfo C:h.swis C:h.kernel VersionNum
