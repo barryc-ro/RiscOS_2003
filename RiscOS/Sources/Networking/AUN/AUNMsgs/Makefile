@@ -31,7 +31,7 @@ VERSIONVAR  = AUNMsgs$Version
 VERSION     = <AUNMsgs$Version>
 TARGET      = rm.AUNMsgs
 MODULE_HELP = "AUN Messages"
-FILELIST    = Resources.${LOCALE}.<Machine>
+FILELIST    = Resources.${LOCALE}.<System>
 PLSCRIPT    = build:getversion
 
 
