@@ -17,7 +17,7 @@ CMHGFLAGS 	= -depend !Depend ${THROWBACK}
 WIPEFLAGS 	= ~CFR~V
 
 DEBUGLIB 	= ${LIBDIR}.Debuglib.o.debuglib
-MEMCHECKLIB	= MemCheck:o.MC_M
+MEMCHECKLIB	= MemCheck:o.MC
 
 DFLAGS 		= -DDEBUGLIB
 
