@@ -256,7 +256,7 @@ ${ROM_MODULE}: ${ROM_OBJS} ${ROMCSTUBS}
 # Final link for ROM Image (using given base address)
 #
 
-rom_link: o.dirs
+rom_link: o.dirs ${ROM_MODULE}
 	@echo
 	${MKDIR} aof
 	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
