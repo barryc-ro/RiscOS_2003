@@ -1,4 +1,4 @@
-# Makefile for Finger
+# Makefile for Gopher
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
@@ -68,6 +68,7 @@ OBJS =\
  o.start\
  o.status\
  o.stop\
+ o.URLclient\
  o.utils\
  o.GopherHdr
 
@@ -84,6 +85,7 @@ RAM_OBJS =\
  o.start\
  o.status\
  o.stop\
+ o.URLclient\
  o.utils\
  o.GopherHdr
 
@@ -93,9 +95,12 @@ MSGSF=o.msgs
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $< -d $*.h
+.cmhg.o:; ${CMHG} -p -o $@ $< -d $*.h
 .s.o:;	  ${AS} ${AFLAGS} -o $@ $<
 
+
+cmhg.GopherHdr: VersionNum
+	  @|
 
 GopherHdr.h: GopherHdr.o
 	  @|

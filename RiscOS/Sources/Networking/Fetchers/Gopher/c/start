@@ -18,10 +18,13 @@
 #include "protocol.h"
 #include "utils.h"
 #include "generic.h"
+#include "URLstruct.h"
+#include "URLclient.h"
+#include "connect.h"
 
 #include "MemCheck:MemCheck.h"
 
-static void gopher_get_request(char *url, char **host, int *port, char **uri, char **urlcopy);
+static void gopher_get_request(const char *url, char **host, int *port, char **uri, char **urlcopy);
 static void gopher_encode_selector(Session *ses);
 
 /*************************************************************/
@@ -129,102 +132,108 @@ _kernel_oserror *gopher_start(_kernel_swi_regs *r)
 /* That is, it needs to spot if it is being used as in proxy */
 /* request mode	and thus strip any initial '/' from the URI. */
 /*************************************************************/
-static void gopher_get_request(char *url, char **host, int *port, char **uri, char **urlcopy)
+static void gopher_get_request(const char *url, char **host, int *port, char **uri, char **urlcopy)
 {
-    char *newurl;
-    char *newhost=NULL;
-    char *ptr;
-    char c;
-    int  newport;
+	URL		u;
+	_kernel_oserror	*e;
+	int		i;
+	size_t		path_len, query_len;
 
-    newurl=Strdup(url);
-    /* Catch the out of memory case */
-    if (newurl==NULL)
-    {
-	*host=NULL;
-	return;
-    }
+	*uri = NULL;
+	*host = NULL;
+	*urlcopy = NULL;
+	*port = CONNECT_DEFAULT_PORT_NUMBER;
 
-    newhost=strstr(newurl,"gopher://"); /* The minimum requirement! */
+	e = URL_find_lengths(0, url, NULL, &u);
+	if (e) {
+		#ifdef TRACE
+		protocol_debug("start_get_request> URL_find_lengths> %s\n", e->errmess);
+		#endif
+		return;
+	}
 
-    if (newhost==NULL)
-    {
-	*host=NULL;
-	free(newurl);
-	return;
-    }
-    newhost+=sizeof("gopher://")-1; /* Skip that bit! */
-    ptr=newhost;
+	path_len = u.lengths.path;
+	query_len = u.lengths.query;
 
-    /* Go to the next bit of interest */
-    while ((*ptr != '\0') && (*ptr != ':') && (*ptr != '/'))
-	ptr++;
+	for (i=0; i<URL_fields; ++i) switch (i) {
+		case urlfield_FULL:
+			if (u.len[urlfield_FULL]) {
+				u.field[urlfield_FULL] = malloc(u.len[urlfield_FULL] + 2);
+			}
+			break;
 
-    /* Grab the host name to a unique buffer */
-    c=*ptr; *ptr='\0';
-    *host=Strdup(newhost);
-    *ptr=c;
+			case urlfield_HOST:
+		case urlfield_PORT:
+		case urlfield_SCHEME:
+			if (u.len[i]) {
+				u.field[i] = malloc(u.len[i]);
+			}
+			break;
 
-    #ifdef TML
-      Printf("gopher_get_request> URL:%s host:%s\n",url,*host);
-    #endif
+		case urlfield_PATH:
+			u.data.path = malloc(path_len + query_len + 4);
+			if (u.data.path != NULL) {
+				if (query_len == 0) {
+					u.data.query = NULL;
+				}
+				else {
+					u.data.query = u.data.path + path_len;
+				}
+				if (path_len == 0) {
+					u.data.path[0] = '\0';
+					++path_len;
+					if (query_len > 0) {
+						u.data.query++;
+					}
+				}
+			}
+			else {
+				u.data.query = NULL;
+			}
+			break;
 
-    *urlcopy = malloc(strlen(url) + 2);		/* allow for terminator & possible '/' */
-    if (*urlcopy)
-      strcpy(*urlcopy,url);
+		case urlfield_QUERY:
+			break;
 
-    /* Decide what to do now */
-    if (*ptr == '\0' || (*ptr == '/' && ptr[1] == '\0'))
-    {
-      *port = gopher_INET_PORT;
-	/* I reckon what they really wanted was the root directory */
-	/* sbrodie: For gopher, this means the empty selector - however, we must
-		    ensure that an empty selector is sent.  Gopher servers must
-		    return a menu object (type '1') for the empty selector
-		    so we pretent that the specific part of the URL was  /1
-	 */
-	emergancy_exit:
-	*uri=Strdup("/1");
-	strcat(*urlcopy,"/1");
-	free(newurl);
-	return;
-    }
+		default:
+			u.field[i] = NULL;
+			break;
+	}
 
-    if (*ptr == ':')
-    {
-	ptr++;
-	/* reuse newhost :) */
-	newhost=ptr;
-	while ((*ptr != '/') && (*ptr != '\0'))
-	    ptr++;
-	c=*ptr; *ptr='\0';
-	newport=atoi(newhost);
-	*ptr=c;
-	if (newport==0)
-	    newport=gopher_INET_PORT;
-	*port=newport;
-    }
-    else
-	*port=gopher_INET_PORT;
+	e = URL_find_data(0, url, NULL, &u);
+	if (e) {
+		#ifdef TRACE
+		protocol_debug("start_get_request> URL_find_data> %s\n", e->errmess);
+		#endif
+		for (i=0; i<URL_fields; ++i) {
+			if (i != urlfield_QUERY) free(u.field[i]);
+		}
+		return;
+	}
 
-    /* If we have reached the end of the string break out nicely */
-    if (*ptr=='\0')
-	goto emergancy_exit;
+	if (path_len > 0 && query_len > 0) {
+		u.data.path[path_len - 1] = '?';
+	}
 
-    /*
-     * Finally grab the URI bit - note if the URI is actually a URL
-     * the initial / has to be removed :)
-     */
-    #ifdef TML
-      Printf("URI bit: %s\n",ptr);
-    #endif
-    if ((*ptr=='/') && (strstr(ptr,"://") != NULL))
-	ptr++;
-    if (*ptr == '/' && !ptr[1]) {
-      *uri = Strdup("/1");
-    }
-    else *uri=Strdup(ptr);
-    free(newurl);
+	if (u.data.path[0] == '\0' || (u.data.path[0] == '/' && u.data.path[1] == '\0')) {
+	        u.data.path[0] = '/';
+	        u.data.path[1] = '1';
+	        u.data.path[2] = '\0';
+	        strcat(u.data.full, "/1");
+	}
+
+	*uri = u.data.path;
+	*host = u.data.host;
+	*urlcopy = u.data.full;
+
+	if (u.data.port) {
+		int i = atoi(u.data.port);
+		if (i != 0) *port = i;
+		free(u.data.port);
+	}
+
+	/* Check the scheme here if we handle multiple schemes */
+	free(u.data.scheme);
 }
 
 /*************************************************************/
