@@ -62,6 +62,7 @@
  * Wimp message definitions
  */
 #define Wimp_MTaskInitialise               0x400c2
+#define Wimp_MOpenURL                      0x4af80
 
 
 /* =============================================================================
@@ -71,7 +72,6 @@
 #define Wimp_MPreLogOff                    0x4f000
 #define Wimp_MRestartPreLogOff             0x4f001
 #define Wimp_MLogOff                       0x4f002
-
 
 
 /*
@@ -86,6 +86,7 @@ typedef struct hdr {
    int action_code;
 } Hdr;
 
+
 /* Message_TaskInitialise message.
  * This is used for reading data sent via this message.
  */
@@ -97,6 +98,19 @@ typedef struct ti_message {
       char  name[228];
   } data;
 } Msg_TaskInitialise;
+
+
+/* Message_OpenURL message.
+ * This is used for reading data sent via this message.
+ */
+typedef struct open_url_message
+{
+  Hdr hdr;
+  struct open_url_messagedata
+  {
+    char  url_to_open[236];
+  } data;
+} Msg_OpenURL;
 
 
 
@@ -111,6 +125,8 @@ volatile int  poll_word = 0;
 unsigned int  my_prelogoff_ref = 0;
 /* This variable stores the reference for the logoff sequence. */
 unsigned int  my_logoff_ref = 0;
+/* This variable stores the reference for the last Open_URL message dispatched. */
+unsigned int  my_open_url_message_ref = 0;
 /* This variable stores whether or not the browser has started yet. */
 BOOL browser_started = FALSE;
 
@@ -119,25 +135,27 @@ BOOL browser_started = FALSE;
  * Function prototype declarations
  */
 
-static _kernel_oserror *  handle_user_message_restart_prelogoff (void);
+static _kernel_oserror* handle_user_message_restart_prelogoff (void);
 
-static _kernel_oserror *  handle_poll_word_non_zero (
+static _kernel_oserror* handle_poll_word_non_zero (
      WimpPollWordNonZeroEvent *const  poll_word_non_zero);
 
-static _kernel_oserror *  handle_user_message_acknowledge (
+static _kernel_oserror* handle_user_message_acknowledge (
     WimpUserMessageAcknowledgeEvent *const  user_message_acknowledge);
 
-static _kernel_oserror *  handle_user_message_quit (void);
+static _kernel_oserror* handle_user_message_quit (void);
 
-_kernel_oserror *  send_pre_logoff (void);
+_kernel_oserror*  send_pre_logoff (void);
 
-static _kernel_oserror *  handle_user_message_logoff (WimpUserMessageEvent event);
+static _kernel_oserror* handle_user_message_logoff (WimpUserMessageEvent event);
 
-static _kernel_oserror *  handle_user_message_prelogoff (WimpUserMessageEvent event);
+static _kernel_oserror* handle_user_message_prelogoff (WimpUserMessageEvent event);
 
-static _kernel_oserror *  send_logoff (void);
+static _kernel_oserror* send_logoff (void);
 
-static _kernel_oserror *  handle_user_message_task_initialise(WimpUserMessageEvent event);
+static _kernel_oserror* handle_user_message_task_initialise(WimpUserMessageEvent event);
+
+// static _kernel_oserror* handle_user_message_open_url(WimpUserMessageEvent event);
 
 
 /* =============================================================================
@@ -165,6 +183,7 @@ int  main (int     argc,
         Wimp_MRestartPreLogOff,
         Wimp_MTaskInitialise,
         Wimp_MLogOff,
+        Wimp_MOpenURL,
         0
     };
 
@@ -243,7 +262,6 @@ int  main (int     argc,
                           e = handle_user_message_task_initialise((WimpUserMessageEvent)poll.user_message_recorded);
                           break;
                         }
-
                         default:
                         break;
                 }
@@ -311,6 +329,9 @@ _kernel_oserror *  task_closedown (void)
 
 
 
+char url_to_be_opened[237];
+
+
 
 /* -----------------------------------------------------------------------------
    handle_poll_word_non_zero
@@ -326,15 +347,33 @@ _kernel_oserror *  task_closedown (void)
    failure: pointer to RISC OS error block
  */
 
-static _kernel_oserror *  handle_poll_word_non_zero (
+static _kernel_oserror *handle_poll_word_non_zero (
      WimpPollWordNonZeroEvent *const  poll_word_non_zero)
 {
     /* Only meaning of pollword is when module part wants the PreLogoff
-     * message to be broadcast.
+     * message to be broadcast or a URL has been requested to be opened to
+     * the screen.
      */
-    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_poll_word_non_zero() recieved. Resetiing poll_word_non_zero->poll_word to 0 and calling send_pre_logoff()\n");
-    *(int *) (poll_word_non_zero->poll_word) = 0;
-    return send_pre_logoff ();
+    DBUG_PRINTF(DBUG_LVL_DIAG, "handle_poll_word_non_zero() recieved. Value of poll_word is %d\n", poll_word);
+
+    if (poll_word == 1) /* pre_logoff request */
+    {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "handle_poll_word_non_zero(): Reseting poll_word_non_zero->poll_word to 0 and calling send_pre_logoff()\n");
+      *(int *) (poll_word_non_zero->poll_word) = 0;
+      return (send_pre_logoff ());
+    }
+
+    if (poll_word == 2) /* Open_URL requested */
+    {
+      _kernel_oserror *error;
+      DBUG_PRINTF(DBUG_LVL_DIAG, "handle_poll_word_non_zero() recieved. Reseting poll_word_non_zero->poll_word to 0 and attempting to open the queued URL.\n");
+      *(int *) (poll_word_non_zero->poll_word) = 0;
+      error = send_open_url_message(url_to_be_opened);
+      strcpy (url_to_be_opened, "");
+      return (error);
+    }
+
+    return (NULL);
 }
 
 
@@ -377,6 +416,19 @@ static _kernel_oserror *  handle_user_message_acknowledge (
         /* Continue with the Logoff */
         DBUG_PRINTF(DBUG_LVL_DIAG, "handle_user_message_acknowledge() : Prelogoff message was bounced. Sending message logoff\n");
         e = send_logoff();
+      }
+    }
+
+    /* Handle OpenURL */
+    if (user_message_acknowledge->hdr.action_code == Wimp_MOpenURL)
+    {
+      DBUG_PRINTF(DBUG_LVL_DIAG, "handle_user_message_acknowledge() : Wimp Open URL message recieved (%d, %d).\n", user_message_acknowledge->hdr.my_ref, my_open_url_message_ref);
+      /* Check whether it was a bounce or not. */
+      if (user_message_acknowledge->hdr.my_ref == my_open_url_message_ref)
+      {
+        /* OPen up the bad url screen. */
+        DBUG_PRINTF(DBUG_LVL_DIAG, "handle_user_message_acknowledge() : Open URL message was bounced.\n");
+        ncma_url_open("file:/NCFresco:html/badurl.html");
       }
     }
 
@@ -520,7 +572,7 @@ _kernel_oserror *  send_pre_logoff (void)
 static _kernel_oserror *  send_logoff (void)
 {
     WimpMessage  message;
-    _kernel_oserror *  e = NULL;
+    _kernel_oserror* e = NULL;
 
     DBUG_PRINTF(DBUG_LVL_DIAG, "send_logoff()\n");
 
@@ -618,5 +670,48 @@ static _kernel_oserror*  handle_user_message_task_initialise(WimpUserMessageEven
     return (e);
 }
 
+
+
+
+/* This routine sends a message of type MOpenURL (0x4af80). It replaces a
+call to TaskModule_SendMessage, as the latter does not allow us to record the
+my_ref, and hence bounces cannot be detected. Using a proper Wimp message
+call overcomes this limitation */
+
+_kernel_oserror* send_open_url_message(const char* url)
+{
+  Msg_OpenURL message;
+  _kernel_oserror* e = NULL;
+  unsigned int url_length;
+
+  DBUG_PRINTF(DBUG_LVL_DIAG, "send_open_url_message(): Attempting to open URL %s\n", url);
+
+  url_length = strlen(url);
+  url_length = url_length>236?236:url_length;
+  memset(message.data.url_to_open, 0, 236);
+  strncpy(message.data.url_to_open, url, url_length);
+
+  message.hdr.size = sizeof (message.hdr) + sizeof (message.data);
+  message.hdr.your_ref = 0;
+  message.hdr.action_code = Wimp_MOpenURL;
+
+  e = wimp_send_message (Wimp_EUserMessageRecorded,
+                            &message,
+                            0,
+                            0,
+                            NULL);
+  if (e)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "send_open_url_message(): Error whilst trying to send open url '%s' (message %s).\n", url, e->errmess);
+    return (e);
+  }
+  else
+  {
+    my_open_url_message_ref = message.hdr.my_ref; /* Store the returned reference for later use */
+    DBUG_PRINTF(DBUG_LVL_DIAG, "send_open_url_message(): Open_URL message sent. my_ref was %d\n", my_open_url_message_ref);
+  }
+
+  return (e);
+}
 
 
