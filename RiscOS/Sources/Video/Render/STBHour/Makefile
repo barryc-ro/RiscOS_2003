@@ -5,70 +5,15 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 23-Mar-01  SNB          Recreated.
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT  = STBHourglass
+TARGET     = STBHour
+HEADER1    = Hourglass
+ROM_SOURCE = Module.s
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-WIPE    = wipe
-WFLAGS  = ~CR~V
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
-COMPONENT = STBHour
-SOURCE    = s.Module
-TARGET    = rm.STBHour
-EXPORTS   = ${EXP_HDR}.Hourglass
-
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${WIPE} rm ${WFLAGS}
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${SOURCE}
-	${MKDIR} rm
-        ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
-
-${EXP_HDR}.Hourglass: hdr.Hourglass
-        ${CP} hdr.Hourglass $@ ${CPFLAGS}
-
-#
-# Extra Development rules:
-#
-install: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: ${TARGET} installed
-
-maketime:
-        MakeTime
-
-version:
-        Version
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
