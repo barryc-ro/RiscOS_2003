@@ -14,6 +14,8 @@
 #include "rtcadjust.h"
 #include "ntp.h"
 
+#include <swis.h>
+
 #include <string.h>
 #include <stddef.h>
 
@@ -23,9 +25,14 @@
 int sockno;
 static int attempts;
 static int using_ntp;
+static int guess_protocol;
 char env_time_server[MAX_ENV_TIME_SERVER];
 struct sockaddr_in sockaddr;
 int synchronised;
+
+struct in_addr last_server;
+int last_protocol;
+int poll_period = LONG_TIMER;
 
 #ifdef DEBUGLIB
 char inet_resolvers[128];
@@ -168,6 +175,8 @@ void machine(transition_t transition)
           case 0:
 	    /* Resolve complete - connect to server */
             if (tryconnect(&sockaddr) && probe()) {
+              last_server = sockaddr.sin_addr;
+              last_protocol = using_ntp ? PORT_NTP : PORT_TIME;
               settimer(RETRY_TIMER);
               state = Expecting;
             }
@@ -213,19 +222,22 @@ void machine(transition_t transition)
         if (local_settimeofday())
         {
           canceltimer();
-#ifndef NO_PERIODICAL_TIME_CHECKS
-          state = Sleeping;
-          settimer(LONG_TIMER);
-#else
-          state = Dormant;
-#endif
+          if (poll_period)
+          {
+            state = Sleeping;
+            settimer(poll_period);
+          }
+          else
+            state = Dormant;
         }
         continue;
 
       case Failure:
+        last_protocol = 0;
         rtcadjust_suspend();
         closeconnect();
         settimer(SHORT_TIMER);
+        state = Sleeping;
         continue;
 
       case Timer:
@@ -233,6 +245,7 @@ void machine(transition_t transition)
             rtcadjust_suspend();
             closeconnect();
             settimer(SHORT_TIMER);
+            last_protocol = 0;
             state = Sleeping;
         }
         else
@@ -312,15 +325,17 @@ static int tryresolve(struct sockaddr_in *sockaddr)
   { /* we have a configured time server */
     dprintf(("debug", "read environment variable: %s\n", env_time_server));
     using_ntp = 1;
+    guess_protocol = 0;
   }
   else
   {
-    using_ntp = 0;
     /* Attempt to read from the Inet$TimeServer system variable */
     dprintf(("debug", "checking environment variable %s\n", ENV_TIME_SERVER2));
     if(read_os_var(ENV_TIME_SERVER2, env_time_server, MAX_ENV_TIME_SERVER)>0)
     { /* we have a configured time server */
       dprintf(("debug", "read environment variable: %s\n", env_time_server));
+      using_ntp = 0;
+      guess_protocol = 0;
     }
     else
     {
@@ -329,6 +344,8 @@ static int tryresolve(struct sockaddr_in *sockaddr)
       if(read_os_var(ENV_TIME_SERVER, env_time_server, MAX_ENV_TIME_SERVER)>0)
       { /* we have a configured time server */
         dprintf(("debug", "read environment variable: %s\n", env_time_server));
+        using_ntp = 1;
+        guess_protocol = 1;
       }
       else
       {
@@ -345,8 +362,10 @@ static int tryresolve(struct sockaddr_in *sockaddr)
         if(i == 4) { /* packed IP address */
           ipaddress = *(int *)env_time_server;
           dprintf(("debug", "NCAccessManager says timeserver IP address is %08x\n", ipaddress));
-          if (ipaddress == 0) return 0;
+          if (ipaddress == 0) return -1;
           sockaddr->sin_addr.s_addr = ipaddress; /* address already in network order */
+          using_ntp = 1;
+          guess_protocol = 1;
           return 0; /* complete */
         } else {
           dprintf(("debug", "NCAccessManager says timeserver host is %s\n", env_time_server));
@@ -399,8 +418,12 @@ static int tryconnect(struct sockaddr_in *sa)
 
   dprintf(("debug", "Using time server 0x%x\n", (int)sa->sin_addr.s_addr));
 
+  if (last_server.s_addr == sa->sin_addr.s_addr && last_protocol == PORT_TIME &&
+      guess_protocol)
+      using_ntp = 0;
+
   sa->sin_family = AF_INET;
-  sa->sin_port = ntohs(using_ntp ? 123 : 37);
+  sa->sin_port = ntohs(using_ntp ? PORT_NTP : PORT_TIME);
 
   /* Make a non-blocking async socket */
   sockno = socket(AF_INET, SOCK_DGRAM, 0);
@@ -462,7 +485,24 @@ static int local_settimeofday(void)
     if ((read > 0) || (errno != EWOULDBLOCK))
     {
       dprintf(("debug", "Read error %d\n", errno));
-      machine(Failure);					/* Note! */
+      /* This is a definite failure - it could be an ICMP unreachable message, in which case
+       * we may want to switch protocols on the next retransmit.
+       */
+      if (guess_protocol)
+      {
+          closeconnect();
+          canceltimer();
+          if (using_ntp)
+          {
+              last_protocol = PORT_TIME;
+              state = Sleeping;   /* NTP failed - retry with Time */
+              machine(Timer);
+          }
+          else
+              machine(Failure);   /* Time failed - give up */
+      }
+      else
+          machine(Failure);					/* Note! */
     }
     else
     {
@@ -491,11 +531,7 @@ static int local_settimeofday(void)
   }
 
   if (result == -1)
-#ifdef NO_PERIODICAL_TIME_CHECKS
-    result = rtcadjust_settime(&ltime, 0);
-#else
-    result = rtcadjust_settime(&ltime, LONG_TIMER);
-#endif
+    result = rtcadjust_settime(&ltime, poll_period);
 
   if (result == -1)
   {
@@ -510,11 +546,27 @@ static int local_settimeofday(void)
   return result;
 }
 
+unsigned int timer_at;
+
+void change_poll_period(int p)
+{
+  int time_to;
+  _swix(OS_ReadMonotonicTime, _OUT(0), &time_to);
+  time_to = timer_at - time_to;
+
+  if (state == Sleeping && p < time_to && p != 0)
+      settimer(p);
+
+  poll_period = p;
+}
 
 static void settimer(int duration)
 {
+  _swix(OS_RemoveTickerEvent, _INR(0,1), module_timerentry, privateword);
   _swix(OS_CallAfter, _INR(0,2),
         duration, module_timerentry, privateword);
+  _swix(OS_ReadMonotonicTime, _OUT(0), &timer_at);
+  timer_at += duration;
 }
 
 
