@@ -12,6 +12,7 @@
 #include "Email/Common/bool.h"
 
 #include "DebugLib/DebugLib.h"
+#include "NBLib/NBDefs.h"
 
 #include "Email/Mailbox/Account.h"
 #include "Email/Mailbox/POP3/POP3Account.h"
@@ -34,6 +35,7 @@
 #include "engcbf.h"
 #include "engprocess.h"
 #include "engfile.h"
+#include "engparse.h"
 
 
 Account *POPaccount, *SMTPaccount;
@@ -135,6 +137,7 @@ void StartProcess(void)
   if (popstatus != acctnonexistent)
   {
     popprocessstate.context = readytodisconnect;
+    popprocessstate.changed = false;
     state |= PROCESSPOP;
     inbox = POPaccount->GetInbox();
   }
@@ -148,27 +151,43 @@ void StartProcess(void)
 }
 
 
-void DefunctPOP(bool b)
+void DefunctPOP(bool b, void *h)
 {
+
+  NB_UNUSED(b);
+  NB_UNUSED(h);
   state &= ~PROCESSPOP;
+
 }
 
 
-void DefunctSMTP(bool b)
+void DefunctSMTP(bool b, void *h)
 {
+
+  NB_UNUSED(b);
+  NB_UNUSED(h);
   state &= ~PROCESSSMTP;
+
 }
 
 
-void DeadPOP(bool b)
+void DeadPOP(bool b, void *h)
 {
+
+  NB_UNUSED(b);
+  NB_UNUSED(h);
   POPAccountDisconnect();
+
 }
 
 
-void DeadSMTP(bool b)
+void DeadSMTP(bool b, void *h)
 {
+
+  NB_UNUSED(b);
+  NB_UNUSED(h);
   SMTPAccountDisconnect();
+
 }
 
 
@@ -383,7 +402,6 @@ void DoPOPProcess(void)
 
   eng_rcode code;
   uint32 n;
-  bool changed;
 
   switch (popprocessstate.context)
   {
@@ -395,7 +413,7 @@ void DoPOPProcess(void)
       {
         /* OK, we're not connected, go ahead */
         dprintf(("Eng", "POP not connected\n"));
-        popprocessstate.context = readytoexpunge;
+        popprocessstate.context = readytoconnect;
       }
 
       else
@@ -406,12 +424,13 @@ void DoPOPProcess(void)
 
       break;        
         
-    case readytoexpunge :
+    case readytoconnect :
 
-      dprintf(("Eng", "POP context = readytoexpunge\n"));
+      dprintf(("Eng", "POP context = readytoconnect\n"));
       popprocessstate.context = idle;
+      retrievestate.context = idle;
       markstate.context = idle;
-      POPAccountConnect();
+      code = POPAccountConnect();
       if (code < 0)
       {
         popprocessstate.rc = ENG_POPCONNECTFAIL;
@@ -426,16 +445,24 @@ void DoPOPProcess(void)
       RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
       popstatus = acctconnected;
 
-      popprocessstate.context = idle;
-      markstate.context = idle;
-      popprocessstate.expungeobj = new MBoxOpCB_expunge((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
-      code = (eng_rcode) inbox->Expunge(popprocessstate.expungeobj);
-      dprintf(("Eng", "Expunging POP mailbox, rc=%d\n",code));
-
-      if (code < 0)
+      if (state & RETRIEVEMSG)
       {
-        ourmboxin->flags |= MBOXINCOMPLETE;
-        popprocessstate.context = readytoprocess;
+        state &= ~PROCESSPOP;
+        retrievestate.context = readytoretrieve;
+      }
+      else
+      {
+        popprocessstate.context = idle;
+        markstate.context = idle;
+        popprocessstate.expungeobj = new MBoxOpCB_expunge((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
+        code = (eng_rcode) inbox->Expunge(popprocessstate.expungeobj);
+        dprintf(("Eng", "Expunging POP mailbox, rc=%d\n",code));
+
+        if (code < 0)
+        {
+          ourmboxin->flags |= MBOXINCOMPLETE;
+          popprocessstate.context = readytoprocess;
+        }
       }
 
       break;
@@ -444,7 +471,7 @@ void DoPOPProcess(void)
 
       dprintf(("Eng", "POP context = readytoprocess\n"));
       if (popprocessstate.expungeobj)
-        changed = popprocessstate.expungeobj->mailbox_changed;
+        popprocessstate.changed = popprocessstate.expungeobj->mailbox_changed;
       RemoveObj((MBoxOpCB**) &popprocessstate.expungeobj);
 
       popprocessstate.context = idle;
@@ -466,7 +493,13 @@ void DoPOPProcess(void)
       dprintf(("Eng", "POP context = connectfailure\n",));
       RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
       popprocessstate.context = idle;
-      (*callbacklist.statusfunc)(ENG_POPCONNECTFAIL, callbacklist.statushandle, DefunctPOP);
+      if (state & RETRIEVEMSG)
+      {
+        state &= ~PROCESSPOP;
+        retrievestate.context = connectfailure;
+      }
+      else
+        (*callbacklist.statusfunc)(ENG_POPCONNECTFAIL, callbacklist.statushandle, DefunctPOP);
       break;
 
     case processfailure :
@@ -483,8 +516,8 @@ void DoPOPProcess(void)
 
       dprintf(("Eng", "POP context = popdone\n"));
       /* only set changed if expunge hasn't already set it */
-      if ((popprocessstate.processobj) && (!changed))
-        changed = popprocessstate.processobj->mailbox_changed;
+      if ((popprocessstate.processobj) && (!popprocessstate.changed))
+        popprocessstate.changed = popprocessstate.processobj->mailbox_changed;
       RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
       popprocessstate.context = idle;
       if (state & (DISCONNECT | TIMEOUT | CHANGEUSER))
@@ -492,8 +525,8 @@ void DoPOPProcess(void)
 
       else
       {
-        dprintf(("Eng", "Mailbox has %schanged\n",(changed) ? "" : "not "));
-        if (changed)
+        dprintf(("Eng", "Mailbox has %schanged\n",(popprocessstate.changed) ? "" : "not "));
+        if (popprocessstate.changed)
         {
           popprocessstate.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
           code = (eng_rcode) inbox->GetNumberMessages(popprocessstate.getnumobj);
@@ -538,7 +571,7 @@ void DoPOPProcess(void)
       }
 
       else
-        popprocessstate.context = readytoexpunge;
+        popprocessstate.context = readytoconnect;
 
       break;
 
@@ -610,8 +643,11 @@ bool OnMboxList(Message *obj, ELib_list& list, int n)
 }
 
 
-void PAbort(bool b)
+void PAbort(bool b, void *h)
 {
+  
+  NB_UNUSED(b);
+  NB_UNUSED(h);
   ProcessDone(true);
 }
 
@@ -891,7 +927,7 @@ void DoMark(void)
           {
             /* expunge mailbox now */
             dprintf(("Eng", "About to expunge\n"));
-            popprocessstate.context = readytoexpunge;
+            popprocessstate.context = readytoconnect;
             state |= PROCESSPOP;
           }
           else
@@ -997,26 +1033,49 @@ void SendMessage(void)
   ELib_rcode code;
   MessageDescriptor *msg = sendstate.msg;
   char *file = SetFilename(msg->ID, true);
+  char *reciplist, *sendlist;
 
+  sendstate.rc = ENG_RUNNING;
+  dprintf(("Eng", "About to get recipient list\n"));
+  code = sendstate.rfc->GetRecipients(reciplist);
+  if (code < 0)
+  {
+    /* error getting recipient list - default to To header */
+    dprintf(("Eng", "Error getting recipients, rc=%d\n",code));
+    sendlist = msg->to;
+  }
+  else
+  {
+    dprintf(("Eng", "Got recipient list: %s\n",reciplist));
+    sendlist = reciplist;
+  }
   sendstate.context = idle;
   outbox = (SendQMailbox *) SMTPaccount->GetInbox();
-  code = outbox->AddMessage(file, msg->to, msg->fromaddr);
+  code = outbox->AddMessage(file, sendlist, msg->fromaddr);
   dprintf(("Eng", "Added message to %s, from %s, cc'd to %s, rc=%d\n",msg->to,msg->fromaddr,msg->cc,code));
   if (code < 0)
   {
     /* error adding message to send queue */
+    sendstate.rc = ENG_SENDFAILED;
   }
 
   LockFile(file);
   sendpending = true;
-  UnlockFile(sendstate.bodyname);
-  remove(sendstate.bodyname);
-  free(sendstate.bodyname);
-  if ((smtpstatus != acctnonexistent) && (online))
+  CleanupSend();
+  delete[] reciplist;
+  if (sendstate.rc == ENG_SENDFAILED)
+  {
+    state &= ~SEND;
+    sendpending = false;
+    (*callbacklist.sendfunc)(ENG_SENDFAILED, callbacklist.sendhandle);
+  }
+    
+  else if ((smtpstatus != acctnonexistent) && (online))
   {
     smtpprocessstate.context = readytosend;
     state |= PROCESSSMTP;
   }
+
   else
   {
     state &= ~SEND;
