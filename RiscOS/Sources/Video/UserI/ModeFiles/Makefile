@@ -54,7 +54,14 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-install: 
+install: install_${TYPE}
+
+install_ram: ${TARGET}
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
+install_:
         ${MKDIR} ${INSTDIR}
         ${CP} LocalRes:<UserIF> ${INSTDIR} ${CPFLAGS}
         @echo ${COMPONENT}: module installed
