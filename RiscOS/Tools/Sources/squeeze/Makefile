@@ -45,7 +45,7 @@ ODIR      = o._dirs
 # Include files
 #
 INCLUDES  = -IC: -IC:CLX
-DFLAGS    = -DDDE
+DFLAGS    = -DDDE -DDEBUGGING=0
 
 #
 # Program specific options:
@@ -56,7 +56,7 @@ SOURCE     =
 EXPORTS    = 
 
 SQZOBJS    = squeeze.o unsqueeze.o unsqrm.o ${LIBS}
-XPANDOBJS  = xpand.o asmcall.o ${CLIB}
+XPANDOBJS  = xpand.o asmcall.o ${LIBS}
 
 LIBS=	${CLXLIB} ${CLIB}
 

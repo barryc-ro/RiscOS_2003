@@ -9,27 +9,39 @@
 	      07-Mar-91 add recognition of MOV R0, R0 as well as BLNV $0
  */
 
-#define DEBUGGING  0
-
-#
 #ifdef __STDC__
 #  include <string.h>
 #  include <stdlib.h>
-#  include "VersionNum"
-#  define  DATE       Module_Date
 #else
 #  include <strings.h>
 /* extern char *malloc(); */
-#  define  DATE      "Mar 07 1991"
+/*#  define  DATE      "Mar 07 1991" */
 #endif
+
+#include "VersionNum"
+
 #include <stdio.h>
 #include <time.h>
 #include <signal.h>
+#ifdef __riscos
 #include "kernel.h"
+#else
+typedef struct {
+   int load, exec;       /* load, exec addresses */
+   int start, end;       /* start address/length, end address/attributes */
+} _kernel_osfile_block;
+#endif
 
 #include "err.h"
 #include "host.h"
 #include "hash.h"
+#include "wholefls.h"
+
+#ifndef __riscos
+#include <limits.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#endif
 
 /*
  * squeeze takes an ARM executable image file and compresses it, usually
@@ -50,7 +62,13 @@
  * and encoded in a devious way.
  */
 
-#define VSN	   "5.00"	/* /110 */
+#define DATE Module_Date
+/* If macro value is empty, expression rewrites to "0 * + 1" which is zero. */
+#if 0 * Module_MinorVersion_CMHG + 1 == 0
+#  define VSN  Module_MajorVersion
+#else
+#  define VSN  Module_MajorVersion " (" Module_MinorVersion ")"
+#endif
 #define BRIEF	   "compress an executable ARM-code program"
 #define SELF	   "squeeze"
 #define HASHSIZE   (8*1024)
@@ -58,9 +76,14 @@
 
 #include "squeeze.h"
 
-extern void UnSqueeze_FindUnSqueezeCode(int *base, int *limit);
-
+#ifndef __riscos
+#include "unsqueeze1.h"
+#include "unsqrm1.h"
+#else
+/*extern void UnSqueeze_FindUnSqueezeCode(int *base, int *limit); */
+extern int UnSqueeze_UnSqueezeBase, UnSqueeze_UnSqueezeLimit;
 extern int unsqueeze_base, unsqueeze_limit, unsqueeze_end;
+#endif
 
 static int verbose;
 static int debug;
@@ -68,9 +91,45 @@ static int force;
 
 static clock_t lastticks;
 
+/*
+ * Veneer on file-handling.
+ */
+
+#define SAVE	  0
+#define WRITEINFO 1
+#define READINFO  5
+#define LOAD	  0xff
+
+#define FILEFOUND  1
+
 static int ticks()
 { int last;
   last = lastticks; lastticks = clock(); return(lastticks-last);
+}
+
+static int fileinfo(_kernel_osfile_block *info, const char *name)
+{
+#ifdef __riscos
+  if (_kernel_osfile(READINFO, name, info) != FILEFOUND)
+      return -1;
+#else
+  struct stat buf;
+  int len, ftype;
+
+  if (stat(name, &buf) != 0) return -1;
+
+  len = strlen(name);
+  if (len > 4 && name[len-4] == ',')
+    ftype = (int)strtoul(name + len - 4, NULL, 16);
+  else
+    ftype = 0xfff;
+
+  info->load = 0xfff00000 | (ftype << 8);
+  info->exec = buf.st_mtime * 100 / 256;
+  info->start = buf.st_size;
+  info->end = 0;
+#endif
+  return 0;
 }
 
 /*
@@ -110,6 +169,9 @@ static int ticks()
  * would be slower (I think), viz 10 iterations for each table.
  */
 
+
+#ifdef __riscos
+
 typedef struct Info {
   word nextandcount;
   word value;
@@ -127,6 +189,26 @@ typedef struct Info {
 
 #define inccount(p,n,c)   { if (c < MAXCOUNT) ++c;		      \
 			    p->nextandcount = (((word)n)<<(COUNTBITS-3)) | c; }
+#else /* !__riscos */
+
+typedef struct Info {
+  struct Info *next;
+  word count;
+  word value;
+} Info;
+
+#define MAXCOUNT  INT_MAX
+
+#define unpack(p,n,c)	  { n = p->next;		      \
+			    c = p->count; }
+
+#define pack(p,n,c)	  { p->next = n;  \
+			    p->count = c; }
+
+#define inccount(p,n,c)	  { p->next = n;  \
+			    p->count = ++c; }
+
+#endif /* !__riscos */
 
 typedef Info *HashTab[HASHSIZE];
 
@@ -187,17 +269,6 @@ static void xfree(void *p)
   free(p);
 }
 
-/*
- * Veneer on file-handling.
- */
-
-#define SAVE	  0
-#define WRITEINFO 1
-#define READINFO  5
-#define LOAD	  0xff
-
-#define FILEFOUND  1
-
 static InfoChunk *curchunk;
 
 static void freechunks(void)
@@ -238,18 +309,20 @@ static void countwords(word *code, word *limit, Freqs *ans)
   for (j = 0; j < HASHSIZE; ++j) (*hash)[j] = NULL;
   nzeros = 0;
   while (code < limit) {
+/*    fprintf(stderr, "code %p limit %p\n", code, limit); */
     w = *code++;
     if (w == 0) { ++nzeros; continue; }
     j = (w + (w >> 11) + (w >> 22)) % HASHSIZE; /* simple hash function */
     list = &((*hash)[j]);
     p = *list;
     while (1) {
-      if (p == NULL) { *list = newinfo(*list, w); break; }
+	if (p == NULL) { /*fprintf(stderr, "newinfo\n");*/ *list = newinfo(*list, w); /*fprintf(stderr, "newinfo out\n");*/ break; }
       unpack(p, next, j);
       if (w == p->value) { inccount(p, next, j); break; }
       p = next;
     }
   } /* while code < limit */
+/*fprintf(stderr, "done countwords\n");*/
   /*
    * Now flatten the hash table into a single list, and free the vector.
    */
@@ -533,7 +606,9 @@ static char *writeunsqueeze(char *out, int execoffset)
   word *p;
   int n, rotr, op;
 
-  UnSqueeze_FindUnSqueezeCode(&base, &limit);
+  /* UnSqueeze_FindUnSqueezeCode(&base, &limit); */
+  base = (int)&UnSqueeze_UnSqueezeBase;
+  limit = (int)&UnSqueeze_UnSqueezeLimit;
   n = limit - base;
   memcpy(out, (void *)base, n); out += n;
   /*
@@ -641,7 +716,7 @@ static char *compresscode(word *code, int size, int execoffset)
    */
   *code = B + ((word *)pos - code) + AIFPRELUDE - PREFETCH;
   pos = writeunsqueeze(pos, execoffset);
-  pos += sprintf(pos, "rcc %s\n", VSN);
+  pos += sprintf(pos, "rcc %s\n", Module_MajorVersion);
   /* Pad size to be 15 mod 16 */
   while ((((int)pos - (int)code) & 0xf) != 0xf) *pos++ = ' ';
   return(pos);
@@ -668,11 +743,12 @@ static char *compress(word *code, int size, int execoffset)
   return(top);
 }
 
+#ifdef __riscos
 static void arthurise(_kernel_osfile_block *info, int type)
 { int data[2];
   if ((info->load == info->exec) && (info->load == 0x8000)) {
     /* can we use Arthur 'FF8' filetype ? */
-    if (_kernel_hostos() == _kernel_ARTHUR) {
+      if (_kernel_hostos() == _kernel_ARTHUR) {
       /* This is Arthur - get time of day */
       if (verbose > 1) fprintf(stderr, "-- getting timestamp from Arthur\n");
       data[0] = 3;
@@ -684,10 +760,12 @@ static void arthurise(_kernel_osfile_block *info, int type)
     }
   }
 }
+#endif
 
 static int squeeze(char *in, char *out)
 { _kernel_osfile_block info;
   int rc, size, t, squeezed, isdata;
+  void *load;
   datahdr *d;
   word *code;
   char *top, *p;
@@ -695,7 +773,7 @@ static int squeeze(char *in, char *out)
 
   if (verbose) fprintf(stderr, "-- squeezing '%s' to '%s'\n", in, out);
   squeezed = 0; isdata = 0;
-  if (_kernel_osfile(READINFO, in, &info) != FILEFOUND) err_fail("'%s' does not exist", in);
+  if (fileinfo(&info, in) == -1) err_fail("'%s' does not exist", in);
   size = info.start;
   if ((!force) && (strcmp(in, out) == 0)) {
     /* Check quickly to see if worth loading */
@@ -719,16 +797,15 @@ static int squeeze(char *in, char *out)
       top = ((char *)code) + size+8;
       for (p = top-8; p < top; *p++ = 0); /* Clear the padding space */
       memcpy(code, &unsqueeze_base, header_size);
-      info.load = (int)code + header_size;
+      load = code + header_size;
   } else {
       code = xalloc(size+DATABYTES+8, "code"); /* Pad to even no of words */
       d = (datahdr *)code; code += DATAWORDS;  /* Space for data header */
       top = ((char *)code) + size+8;
       for (p = top-8; p < top; *p++ = 0); /* Clear the padding space */
-      info.load = (int)code;
+      load = code;
   }
-  info.exec = 0;
-  if (_kernel_osfile(LOAD, in, &info) != FILEFOUND)
+  if (wf_load(in, load, info.start) == -1)
       err_fail("can't load '%s'", in);
   if ((info.load & 0xfff00000) == 0xfff00000) {
       type = (info.load & ~0xff);
@@ -767,9 +844,11 @@ static int squeeze(char *in, char *out)
     if (verbose) err_report("can't compress '%s', will copy", in);
   }
   if (squeezed || (strcmp(in, out) != 0)) { /* Write it out */
+#ifdef __riscos
     arthurise(&info, type);
-    info.start = (int)code; info.end = (int)top;
-    if (_kernel_osfile(SAVE, out, &info) < 0) err_fail("failed to write '%s'", out);
+#endif
+    if (wf_save(out, code, top - (char *)code) == -1)
+	err_fail("failed to write '%s'", out);
   }
   xfree(d);
 #if DEBUGGING

@@ -4,13 +4,32 @@
  * Copyright: (C) 1988, Acorn Computers Ltd, Cambridge, England.
  * Date:      24-Mar-88
  * LastEdit:  24-Mar-88
+
+ * 22Feb99: SJM: Note started to convert this to be able to run on
+ * Solaris. However this isn't easily possible since currently it xpands
+ * by running the unsqueeze code embedded in the code.
  */
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include "kernel.h"
 #include <ctype.h>
+
+#include "wholefls.h"
+
+#ifdef __riscos
+#include "kernel.h"
+#else
+typedef struct {
+   int load, exec;       /* load, exec addresses */
+   int start, end;       /* start address/length, end address/attributes */
+} _kernel_osfile_block;
+#endif
+
+#ifndef __riscos
+#include <sys/types.h>
+#include <sys/stat.h>
+#endif
 
 #include "squeeze.h"
 #include "VersionNum"
@@ -26,8 +45,12 @@
 
 typedef int func(int, int, int);
 
+#ifndef __riscos
+# include "asmcall1.h"
+#else
 extern int asmcall_call(func *, int, int, int);
 extern int *asmcall_exit;
+#endif
 
 static int debug;
 static int verbose;
@@ -43,6 +66,7 @@ static int verbose;
 
 #define FILFOUND  1
 
+#ifdef __riscos
 static void arthurise(_kernel_osfile_block *info)
 { if ((info->load == info->exec) && (info->load == 0x8000)) {
     /* can we use Arthur 'FF8' filetype ? */
@@ -57,13 +81,41 @@ static void arthurise(_kernel_osfile_block *info)
     }
   }
 }
+#endif
+
+static int fileinfo(_kernel_osfile_block *info, const char *name)
+{
+#ifdef __riscos
+  if (_kernel_osfile(READINFO, name, info) != FILFOUND)
+      return -1;
+#else
+  struct stat buf;
+  int len, ftype;
+
+  if (stat(name, &buf) != 0) return -1;
+
+  len = strlen(name);
+  if (len > 4 && name[len-4] == ',')
+    ftype = (int)strtoul(name + len - 4, NULL, 16);
+  else
+    ftype = 0xfff;
+
+  info->load = 0xfff00000 | (ftype << 8);
+  info->exec = buf.st_mtime * 100 / 256;
+  info->start = buf.st_size;
+  info->end = 0;
+#endif
+  return 0;
+}
 
 static void fatalerror(const char *format, const char *name) {
   fputs(SELF ": ", stderr);
   fprintf(stderr, format, name);
+#ifdef __riscos
   { _kernel_oserror *e = _kernel_last_oserror();
     if (e != 0) fprintf(stderr, " (host error %#x: %s)", e->errnum, e->errmess);
   }
+#endif
   fputc('\n', stderr);
   exit(1);
 }
@@ -88,13 +140,12 @@ static int xpand(char *in, char *out)
     if (verbose)
       fprintf(stderr, "-- xpanding '%s' to '%s'\n", in, out);
 
-    if (_kernel_osfile(READINFO, in, &info) != FILFOUND)
+    if (fileinfo(&info, in) == -1)
       fatalerror("no file '%s'", in);
     size = info.start;
     ws = (int *)malloc(size + sizeof(int) + (24*1024)); /* allow space for unsqueezing */
     hdr = (aifhdr *)(ws + 1);
-    info.load = (int)hdr; info.exec = 0;
-    if (_kernel_osfile(LOAD, in, &info) != FILFOUND)
+    if (wf_load(in, hdr, size) == -1)
       fatalerror("can't load '%s'", in);
     if ((info.load & 0xfc000000) != 0) { /* Not a valid address */
 	if ((info.load & 0xffffff00) == 0xfffff800) { /* Arthur absolute */
@@ -198,14 +249,16 @@ static int xpand(char *in, char *out)
 	  info.start = (int)(d+1);
 	  info.end = info.start + d->size;
       } else {
+#ifdef __riscos
 	  arthurise(&info);
+#endif
 	  info.start = (int)hdr;
 	  if (isaif)
 	    info.end = info.start + sizeof(*hdr) + realsize;
 	  else
 	    info.end = info.start + realsize;
       }
-      if (_kernel_osfile(SAVE, out, &info) == _kernel_ERROR)
+      if (wf_save(out, (void *)info.start, info.end - info.start) == -1)
 	fatalerror("failed to write '%s'", out);
 
       return(0);
