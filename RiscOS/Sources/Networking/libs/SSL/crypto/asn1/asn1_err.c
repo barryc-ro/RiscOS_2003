@@ -164,6 +164,9 @@ static ERR_STRING_DATA ASN1_str_functs[]=
 {ERR_PACK(0,ASN1_F_X509_SIG_NEW,0),	"X509_SIG_NEW"},
 {ERR_PACK(0,ASN1_F_X509_VAL_FREE,0),	"X509_VAL_FREE"},
 {ERR_PACK(0,ASN1_F_X509_VAL_NEW,0),	"X509_VAL_NEW"},
+{ERR_PACK(0,ASN1_F_D2I_X509_EXTENSION,0),	"D2I_X509_EXTENSION"},
+{ERR_PACK(0,ASN1_F_X509_EXTENSION_NEW,0),	"X509_EXTENSION_NEW"},
+{ERR_PACK(0,ASN1_F_D2I_ASN1_BOOLEAN,0),	"d2i_ASN1_BOOLEAN"},
 {0,NULL},
 	};
 
@@ -216,6 +219,8 @@ static ERR_STRING_DATA ASN1_str_reasons[]=
 {ASN1_R_WRONG_EXPLICIT_TAG               ,"wrong explicit tag"},
 {ASN1_R_WRONG_PRINTABLE_TYPE             ,"wrong printable type"},
 {ASN1_R_WRONG_TAG                        ,"wrong tag"},
+{ASN1_R_BOOLEAN_IS_WRONG_LENGTH          ,"boolean is wrong length"},
+{ASN1_R_EXPECTING_A_BOOLEAN              ,"expecting a boolean"},
 {0,NULL},
 	};
 

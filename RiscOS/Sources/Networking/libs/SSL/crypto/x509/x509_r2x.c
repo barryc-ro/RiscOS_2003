@@ -83,8 +83,8 @@ EVP_PKEY *pkey;
 		{
 		if ((xi->version=ASN1_INTEGER_new()) == NULL) goto err;
 		if (!ASN1_INTEGER_set(xi->version,2)) goto err;
-		xi->attributes=ri->attributes;
-		ri->attributes=NULL;
+/*		xi->extensions=ri->attributes; <- bad, should not ever be done
+		ri->attributes=NULL; */
 		}
 
 	X509_NAME_free(xi->subject); 

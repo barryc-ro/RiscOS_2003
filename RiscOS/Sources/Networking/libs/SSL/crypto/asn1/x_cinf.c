@@ -58,7 +58,7 @@ int i2d_X509_CINF(a,pp)
 X509_CINF *a;
 unsigned char **pp;
 	{
-	int v1=0;
+	int v1=0,v2=0;
 	M_ASN1_I2D_vars(a);
 
 	M_ASN1_I2D_len_EXP_opt(a->version,i2d_ASN1_INTEGER,0,v1);
@@ -70,7 +70,7 @@ unsigned char **pp;
 	M_ASN1_I2D_len(a->key,			i2d_X509_PUBKEY);
 	M_ASN1_I2D_len_IMP_opt(a->issuerUID,	i2d_ASN1_BIT_STRING);
 	M_ASN1_I2D_len_IMP_opt(a->subjectUID,	i2d_ASN1_BIT_STRING);
-	M_ASN1_I2D_len_IMP_set_opt(a->attributes,i2d_X509_ATTRIBUTE,3);
+	M_ASN1_I2D_len_EXP_set_opt(a->extensions,i2d_X509_EXTENSION,3,V_ASN1_SEQUENCE,v2);
 
 	M_ASN1_I2D_seq_total();
 
@@ -83,7 +83,7 @@ unsigned char **pp;
 	M_ASN1_I2D_put(a->key,			i2d_X509_PUBKEY);
 	M_ASN1_I2D_put_IMP_opt(a->issuerUID,	i2d_ASN1_INTEGER,1);
 	M_ASN1_I2D_put_IMP_opt(a->subjectUID,	i2d_ASN1_INTEGER,2);
-	M_ASN1_I2D_put_IMP_set_opt(a->attributes,i2d_X509_ATTRIBUTE,3);
+	M_ASN1_I2D_put_EXP_set_opt(a->extensions,i2d_X509_EXTENSION,3,V_ASN1_SEQUENCE,v2);
 
 	M_ASN1_I2D_finish();
 	}
@@ -105,6 +105,14 @@ long length;
 		if (ret->version->data != NULL)
 			ver=ret->version->data[0];
 		}
+	else
+		{
+		if (ret->version != NULL)
+			{
+ 			ASN1_INTEGER_free(ret->version);
+			ret->version=NULL;
+			}
+ 		}
 	M_ASN1_D2I_get(ret->serialNumber,d2i_ASN1_INTEGER);
 	M_ASN1_D2I_get(ret->signature,d2i_X509_ALGOR);
 	M_ASN1_D2I_get(ret->issuer,d2i_X509_NAME);
@@ -113,6 +121,16 @@ long length;
 	M_ASN1_D2I_get(ret->key,d2i_X509_PUBKEY);
 	if (ver >= 1) /* version 2 extensions */
 		{
+		if (ret->issuerUID != NULL)
+			{
+			ASN1_BIT_STRING_free(ret->issuerUID);
+			ret->issuerUID=NULL;
+			}
+		if (ret->subjectUID != NULL)
+			{
+			ASN1_BIT_STRING_free(ret->subjectUID);
+			ret->issuerUID=NULL;
+			}
 		M_ASN1_D2I_get_IMP_opt(ret->issuerUID,d2i_ASN1_BIT_STRING,  1,
 			V_ASN1_BIT_STRING);
 		M_ASN1_D2I_get_IMP_opt(ret->subjectUID,d2i_ASN1_BIT_STRING, 2,
@@ -120,8 +138,12 @@ long length;
 		}
 	if (ver >= 2) /* version 3 extensions */
 		{
-		M_ASN1_D2I_get_IMP_set_opt(ret->attributes,
-			d2i_X509_ATTRIBUTE,3);
+		if (ret->extensions != NULL)
+			while (sk_num(ret->extensions))
+				X509_EXTENSION_free((X509_EXTENSION *)
+					sk_pop(ret->extensions));
+		M_ASN1_D2I_get_set_EXP_opt(ret->extensions,d2i_X509_EXTENSION,3,
+			V_ASN1_SEQUENCE);
 		}
 	M_ASN1_D2I_Finish(a,X509_CINF_free,ASN1_F_D2I_X509_CINF);
 	}
@@ -140,7 +162,7 @@ X509_CINF *X509_CINF_new()
 	M_ASN1_New(ret->key,X509_PUBKEY_new);
 	ret->issuerUID=NULL;
 	ret->subjectUID=NULL;
-	ret->attributes=NULL;
+	ret->extensions=NULL;
 	return(ret);
 	M_ASN1_New_Error(ASN1_F_X509_CINF_NEW);
 	}
@@ -158,7 +180,7 @@ X509_CINF *a;
 	X509_PUBKEY_free(a->key);
 	ASN1_BIT_STRING_free(a->issuerUID);
 	ASN1_BIT_STRING_free(a->subjectUID);
-	sk_pop_free(a->attributes,	X509_ATTRIBUTE_free);
-	free(a);
+	sk_pop_free(a->extensions,X509_EXTENSION_free);
+	free((char *)a);
 	}
 

@@ -84,6 +84,8 @@ int constructed;
 		sprintf(str,"appl [ %d ]",tag);
 	else if ((tag == V_ASN1_EOC) /* && (xclass == V_ASN1_UNIVERSAL) */)
 		p="EOC";
+	else if (tag == V_ASN1_BOOLEAN)
+		p="BOOLEAN";
 	else if (tag == V_ASN1_INTEGER)
 		p="INTEGER";
 	else if (tag == V_ASN1_BIT_STRING)
@@ -251,6 +253,20 @@ int depth;
 					if (BIO_puts(bp,":BAD OBJECT") <= 0)
 						goto end;
 					}
+				}
+			else if (tag == V_ASN1_BOOLEAN)
+				{
+				int ii;
+
+				opp=op;
+				ii=d2i_ASN1_BOOLEAN(NULL,&opp,len+hl);
+				if (ii < 0)
+					{
+					if (BIO_write(bp,"Bad boolean\n",12))
+						goto end;
+					}
+				sprintf(str,":%d",ii);
+				BIO_puts(bp, str);
 				}
 			else if (tag == V_ASN1_INTEGER)
 				{

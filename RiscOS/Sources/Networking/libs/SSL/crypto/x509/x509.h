@@ -97,6 +97,20 @@ typedef struct X509_name_entry_st
 	int size; 	/* temp variable */
 	} X509_NAME_ENTRY;
 
+typedef struct X509_extension_st
+	{
+	ASN1_OBJECT *object;
+	int critical;
+	ASN1_OCTET_STRING *value;
+	} X509_EXTENSION;
+
+typedef struct X509_extension_method_st
+	{
+	int object;
+	ASN1_METHOD *method;
+	} X509_EXTENSION_METHOD;
+
+
 #define X509_NAME	STACK /* of X509_NAME_ENTRY */
 
 typedef struct X509_req_info_st
@@ -126,9 +140,9 @@ typedef struct x509_cinf_st
 	X509_VAL *validity;
 	X509_NAME *subject;
 	X509_PUBKEY *key;
-	ASN1_BIT_STRING *issuerUID;	/* [ 1 ] optional in v2 */
-	ASN1_BIT_STRING *subjectUID;	/* [ 2 ] optional in v2 */
-	STACK *attributes;		/* [ 3 ] optional in v3 */
+	ASN1_BIT_STRING *issuerUID;		/* [ 1 ] optional in v2 */
+	ASN1_BIT_STRING *subjectUID;		/* [ 2 ] optional in v2 */
+	STACK /* X509_EXTENSION */ *extensions;	/* [ 3 ] optional in v3 */
 	} X509_CINF;
 
 typedef struct x509_st
@@ -394,6 +408,10 @@ typedef struct X509_AUTH_st
 		i2d_X509_NAME_ENTRY, (char *(*)())d2i_X509_NAME_ENTRY,\
 		(char *)ne)
 
+#define X509_EXTENSION_dup(ex) (X509_EXTENSION *)ASN1_dup( \
+		(int (*)())i2d_X509_EXTENSION, \
+		(char *(*)())d2i_X509_EXTENSION,(char *)ex)
+
 #ifndef NOPROTO
 X509 *		X509_get_cert(CERTIFICATE_CTX *ctx,X509_NAME * name,
 		X509 *tmp_x509);
@@ -515,6 +533,12 @@ void		NETSCAPE_SPKAC_free(NETSCAPE_SPKAC *a);
 int		i2d_NETSCAPE_SPKAC(NETSCAPE_SPKAC *a,unsigned char **pp);
 NETSCAPE_SPKAC *d2i_NETSCAPE_SPKAC(NETSCAPE_SPKAC **a,unsigned char **pp,
 		long length);
+
+X509_EXTENSION *X509_EXTENSION_new(void );
+void		X509_EXTENSION_free(X509_EXTENSION *a);
+int		i2d_X509_EXTENSION(X509_EXTENSION *a,unsigned char **pp);
+X509_EXTENSION *d2i_X509_EXTENSION(X509_EXTENSION **a,unsigned char **pp,
+			long length);
 
 #ifdef HEADER_ENVELOPE_H
 X509_INFO *	X509_INFO_new(void);
@@ -682,8 +706,13 @@ void		NETSCAPE_SPKI_free();
 int		i2d_NETSCAPE_SPKI();
 NETSCAPE_SPKI *d2i_NETSCAPE_SPKI();
 
-#endif
+X509_EXTENSION *X509_EXTENSION_new();
+void		X509_EXTENSION_free();
+int		i2d_X509_EXTENSION();
+X509_EXTENSION *d2i_X509_EXTENSION();
 
+#endif
+    
 /* BEGIN ERROR CODES */
 /* Error codes for the X509 functions. */
 
